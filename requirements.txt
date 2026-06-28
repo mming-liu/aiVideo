@@ -1,0 +1,9 @@
+# 核心依赖
+requests
+python-dotenv
+pysrt
+ffmpeg-python
+
+# TTS 语音合成
+dashscope                # dashscope_sdk / dashscope_http 供应商必需
+# openai                 # openai / openai_compat 供应商可选

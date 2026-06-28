@@ -1,0 +1,26 @@
+# API 密钥（包含敏感信息，绝对不能提交）
+.env
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.idea/
+
+# 输出文件（视频/音频/字幕，体积大且可重新生成）
+output/
+*.mp4
+*.mp3
+*.srt
+
+# 小说原文（版权原因，仅保留样本）
+锦衣夜行_77119小说.txt
+
+# Claude Code 本地配置
+.claude/
+
+# OS
+Thumbs.db
+.DS_Store
