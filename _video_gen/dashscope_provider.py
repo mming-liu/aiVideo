@@ -82,7 +82,7 @@ class DashScopeVideoService(VideoGenerationService):
             if rsp.status_code == 403:
                 next_model = self._advance_model()
                 if next_model:
-                    print(f"  [镜头{req.clip_index}] ⚠ 模型 {model} 返回 403（额度耗尽/无权限），"
+                    print(f"  [镜头{req.clip_index}] [!] 模型 {model} 返回 403（额度耗尽/无权限），"
                           f"自动切换到 {next_model}")
                     continue  # 用新模型重试
                 else:

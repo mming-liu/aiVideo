@@ -13,6 +13,8 @@ class VideoGenerationRequest:
     duration: int = 6
     negative_prompt: str = ""
     size: str = "960x1792"  # 9:16 竖屏
+    # 首帧图本地路径（image-to-video）；None 或文件缺失时降级为纯 text-to-video
+    image_path: Optional[str] = None
 
 
 @dataclass

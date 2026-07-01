@@ -52,6 +52,25 @@ class VideoGenCfg:
     )
     OPENAI_VIDEO_MODEL: str = os.getenv("VIDEO_OPENAI_MODEL", "sora")
 
+    # ---- agnes (OpenAI 兼容协议) ----
+    # 视频: POST {base}{endpoint}（提交任务） / GET {base}{endpoint}/{task_id}（轮询）
+    AGNES_API_KEY: str = os.getenv("AGNES_API_KEY", "")
+    AGNES_BASE_URL: str = os.getenv("AGNES_BASE_URL", "")
+    AGNES_VIDEO_MODEL: str = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-1")
+    # 403 回退模型列表（逗号分隔）
+    AGNES_VIDEO_FALLBACK_MODELS: list[str] = [
+        m.strip()
+        for m in os.getenv("AGNES_VIDEO_FALLBACK_MODELS", "").split(",")
+        if m.strip()
+    ]
+    AGNES_VIDEO_ENDPOINT: str = os.getenv("AGNES_VIDEO_ENDPOINT", "/v1/video/generations")
+    # image-to-video: 首帧图在请求体中的字段名
+    AGNES_VIDEO_IMAGE_FIELD: str = os.getenv("AGNES_VIDEO_IMAGE_FIELD", "image")
+    # 视频模式: async（提交任务+轮询，默认）/ sync（同步返回 video_url）
+    AGNES_VIDEO_MODE: str = os.getenv("AGNES_VIDEO_MODE", "async")
+    AGNES_VIDEO_POLL_INTERVAL: int = int(os.getenv("AGNES_VIDEO_POLL_INTERVAL", "8"))
+    AGNES_VIDEO_MAX_POLL_ATTEMPTS: int = int(os.getenv("AGNES_VIDEO_MAX_POLL_ATTEMPTS", "120"))
+
     @classmethod
     def validate(cls) -> None:
         """验证当前供应商所需配置是否完整."""
@@ -59,6 +78,8 @@ class VideoGenCfg:
             raise RuntimeError("VIDEO_PROVIDER=dashscope 需要 DASHSCOPE_API_KEY")
         if cls.PROVIDER in ("openai", "openai_compat") and not cls.OPENAI_API_KEY:
             raise RuntimeError(f"VIDEO_PROVIDER={cls.PROVIDER} 需要 VIDEO_OPENAI_API_KEY")
+        if cls.PROVIDER == "agnes" and not cls.AGNES_API_KEY:
+            raise RuntimeError("VIDEO_PROVIDER=agnes 需要 AGNES_API_KEY")
 
 
 # 单例

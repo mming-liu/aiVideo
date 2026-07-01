@@ -60,6 +60,13 @@ def _auto_register() -> None:
     except ImportError:
         pass  # dashscope 相关依赖未安装
 
+    # agnes ai (OpenAI 兼容协议, image-to-video + 异步轮询)
+    try:
+        from . import agnes_provider as _ag
+        register("agnes", _ag.AgnesVideoService)
+    except ImportError:
+        pass
+
     # OpenAI Sora / 第三方兼容 (待后续扩展)
     # try:
     #     from . import openai_provider as _oa

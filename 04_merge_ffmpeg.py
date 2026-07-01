@@ -118,11 +118,11 @@ def compute_target_durations(
     if audio_duration <= max_video:
         # 情况1: 音频不算太长，拉伸视频匹配音频
         effective_duration = audio_duration
-        mode = "视频拉伸 → 匹配音频"
+        mode = "视频拉伸 -> 匹配音频"
     else:
         # 情况2: 音频太长，截断音频，视频拉到上限
         effective_duration = max_video
-        mode = f"音频截断（{audio_duration:.0f}s → {max_video:.0f}s）"
+        mode = f"音频截断（{audio_duration:.0f}s -> {max_video:.0f}s）"
 
     total_script = sum(script_durations)
     if total_script <= 0:
@@ -149,7 +149,7 @@ def stretch_clip(input_path: Path, output_path: Path, factor: float) -> Path:
     # 已存在则跳过
     if output_path.exists() and output_path.stat().st_size > 20000:
         dur = get_media_duration(output_path)
-        print(f"  ✓ 跳过已拉伸片段 {output_path.name}（{dur:.1f}s）")
+        print(f"  [OK] 跳过已拉伸片段 {output_path.name}（{dur:.1f}s）")
         return output_path
 
     # setpts 拉伸 + fps 固定帧率
@@ -221,7 +221,7 @@ def build_ffmpeg_command(
         concat_lines.append(f"file '{safe_path}'")
     concat_list_path.write_text("\n".join(concat_lines), encoding="utf-8")
 
-    # 2. 视频滤镜链（字幕 → 调色 → 暗角）
+    # 2. 视频滤镜链（字幕 -> 调色 -> 暗角）
     # 使用最简 subtitles 滤镜 + force_style，依赖 ffmpeg 默认 libass 渲染
     # 路径中的冒号（C:）和反斜杠需要转义
     srt_path_abs = srt_path.resolve().as_posix()
@@ -359,11 +359,11 @@ def main() -> None:
     target_durations = compute_target_durations(
         script_durations, audio_duration, video_total,
     )
-    print(f"[INFO] 目标时长分配（脚本比例 → 音频对齐）:")
+    print(f"[INFO] 目标时长分配（脚本比例 -> 音频对齐）:")
     for i, (sd, td, s) in enumerate(
         zip(script_durations, target_durations, shots), 1
     ):
-        print(f"  镜头{i}: 脚本{sd}s → 目标{td:.1f}s "
+        print(f"  镜头{i}: 脚本{sd}s -> 目标{td:.1f}s "
               f"\"{s.get('subtitle', '')[:20]}...\"")
     print(f"  总计: {sum(target_durations):.1f}s（音频 {audio_duration:.1f}s）")
 
@@ -375,7 +375,7 @@ def main() -> None:
         actual_dur = get_media_duration(clip)
         factor = target_dur / actual_dur if actual_dur > 0 else 1.0
         stretched_path = TEMP_DIR / f"stretched_clip_{i+1}.mp4"
-        print(f"  镜头{i+1}: 实际{actual_dur:.1f}s → 目标{target_dur:.1f}s "
+        print(f"  镜头{i+1}: 实际{actual_dur:.1f}s -> 目标{target_dur:.1f}s "
               f"(factor={factor:.2f})")
         stretch_clip(clip, stretched_path, factor)
         stretched_clips.append(stretched_path)

@@ -80,7 +80,7 @@ class DashScopeSDKProvider(TTSServiceInterface):
                 if status == 403:
                     next_model = model_queue[idx + 1] if idx + 1 < len(model_queue) else None
                     if next_model:
-                        print(f"  ⚠ TTS 模型 {model} 返回 403（额度耗尽/无权限），"
+                        print(f"  [!] TTS 模型 {model} 返回 403（额度耗尽/无权限），"
                               f"自动切换到 {next_model}")
                         continue
                     else:
@@ -169,7 +169,7 @@ class DashScopeHttpProvider(TTSServiceInterface):
                 if res.status_code == 403:
                     next_model = model_queue[idx + 1] if idx + 1 < len(model_queue) else None
                     if next_model:
-                        print(f"  ⚠ TTS 模型 {model} 返回 403（额度耗尽/无权限），"
+                        print(f"  [!] TTS 模型 {model} 返回 403（额度耗尽/无权限），"
                               f"自动切换到 {next_model}")
                         continue
                     else:
