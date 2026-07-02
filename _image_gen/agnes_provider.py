@@ -1,12 +1,21 @@
 """agnes ai 图片生成 — OpenAI 兼容协议.
 
-POST {AGNES_BASE_URL}{AGNES_IMAGE_ENDPOINT}，OpenAI images generations 格式.
+POST {AGNES_BASE_URL}/v1/images/generations，OpenAI images generations 格式.
 响应解析: 优先 data[0].url（下载），其次 data[0].b64_json（解码）.
+
 403 自动回退到 AGNES_IMAGE_FALLBACK_MODELS 中的下一个模型.
+5xx/连接错误自动重试（AGNES_IMAGE_SUBMIT_RETRIES 次）.
+
+模型: agnes-image-2.1-flash
+- 文生图: model + prompt + size
+- 图生图: extra_body.image 传入输入图像 URL/Base64
+- response_format 必须放在 extra_body 中，禁止放顶层
+- 不需要 tags: ["img2img"]
 """
 
 import base64
 import os
+import time
 from typing import Optional
 
 import requests
@@ -36,10 +45,41 @@ class AgnesImageService(ImageGenerationService):
             return None
         return idx + 1
 
+    # ------------------------------------------------------------------
+    # 图片编码（图生图用）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _encode_image(path: Optional[str]) -> Optional[str]:
+        """读取本地图片，返回 data URL (base64). 失败返回 None."""
+        if not path:
+            return None
+        try:
+            import mimetypes
+            p = os.path.abspath(path)
+            if not os.path.isfile(p):
+                return None
+            mime, _ = mimetypes.guess_type(p)
+            mime = mime or "image/png"
+            with open(p, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+            return f"data:{mime};base64,{b64}"
+        except Exception:
+            return None
+
     def generate(self, req: ImageGenerationRequest) -> ImageGenerationResult:
-        url = f"{config.AGNES_BASE_URL.rstrip('/')}{config.AGNES_IMAGE_ENDPOINT}"
+        url = f"{config.AGNES_BASE_URL.rstrip('/')}/v1/images/generations"
         idx = 0
         last_error = ""
+
+        # 图生图：编码参考图
+        ref_data_url = None
+        if req.reference_image_path:
+            ref_data_url = self._encode_image(req.reference_image_path)
+            if ref_data_url:
+                print(f"  [镜头{req.shot_index}] 使用参考图做 image-to-image: "
+                      f"{req.reference_image_path}")
+            else:
+                print(f"  [镜头{req.shot_index}] 参考图读取失败，降级为 text-to-image")
 
         while idx < len(self._model_queue):
             model = self._model_queue[idx]
@@ -47,19 +87,58 @@ class AgnesImageService(ImageGenerationService):
                 "Authorization": f"Bearer {config.AGNES_API_KEY}",
                 "Content-Type": "application/json",
             }
+
+            # 基础 payload
             payload: dict = {
                 "model": model,
                 "prompt": req.prompt,
-                "n": 1,
                 "size": req.size,
             }
-            # 部分兼容后端支持 negative_prompt 字段，存在则附带
-            if req.negative_prompt:
-                payload["negative_prompt"] = req.negative_prompt
 
-            print(f"  [镜头{req.shot_index}] 正在生成首帧图 [{model}]...")
+            # extra_body: response_format 必须放这里（禁止放顶层）
+            extra: dict = {
+                "response_format": "url",
+            }
+
+            # 图生图: 在 extra_body.image 传入输入图像
+            if ref_data_url:
+                extra["image"] = [ref_data_url]
+
+            payload["extra_body"] = extra
+
+            print(f"  [镜头{req.shot_index}] 正在生成首帧 [{model}]...")
+            _submit_retry = 0
             try:
-                res = requests.post(url, json=payload, headers=headers, timeout=180)
+                while True:
+                    try:
+                        res = requests.post(url, json=payload, headers=headers, timeout=360)
+                        break
+                    except Exception as e:
+                        _submit_retry += 1
+                        if _submit_retry <= config.AGNES_IMAGE_SUBMIT_RETRIES:
+                            print(f"  [镜头{req.shot_index}] 提交异常: {e}，"
+                                  f"{config.AGNES_IMAGE_SUBMIT_RETRY_DELAY}s 后重试 "
+                                  f"({_submit_retry}/{config.AGNES_IMAGE_SUBMIT_RETRIES})")
+                            time.sleep(config.AGNES_IMAGE_SUBMIT_RETRY_DELAY)
+                        else:
+                            last_error = f"Agnes 图片异常（重试{_submit_retry}次）: {e}"
+                            break
+                if last_error:
+                    idx = len(self._model_queue)
+                    break
+
+                # ---- 5xx: 服务端暂时不可用，等待后重试 ----
+                if 500 <= res.status_code < 600:
+                    _submit_retry += 1
+                    if _submit_retry <= config.AGNES_IMAGE_SUBMIT_RETRIES:
+                        print(f"  [镜头{req.shot_index}] 服务端 {res.status_code}，"
+                              f"{config.AGNES_IMAGE_SUBMIT_RETRY_DELAY}s 后重试 "
+                              f"({_submit_retry}/{config.AGNES_IMAGE_SUBMIT_RETRIES})")
+                        time.sleep(config.AGNES_IMAGE_SUBMIT_RETRY_DELAY)
+                        continue
+                    last_error = f"Agnes 图片失败 [{res.status_code}] (重试{_submit_retry}次): {res.text[:300]}"
+                    idx = len(self._model_queue)
+                    break
 
                 # ---- 200: 解析图片 ----
                 if res.status_code == 200:
@@ -101,7 +180,7 @@ class AgnesImageService(ImageGenerationService):
                 if res.status_code == 403:
                     nxt = self._advance_index(idx)
                     if nxt is not None:
-                        print(f"  [镜头{req.shot_index}] ⚠ 图片模型 {model} 返回 403"
+                        print(f"  [镜头{req.shot_index}] [!] 图片模型 {model} 返回 403"
                               f"（额度耗尽/无权限），自动切换到 {self._model_queue[nxt]}")
                         idx = nxt
                         continue

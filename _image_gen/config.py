@@ -25,7 +25,7 @@ class ImageGenCfg:
     # ---- agnes (OpenAI 兼容) ----
     AGNES_API_KEY: str = os.getenv("AGNES_API_KEY", "")
     AGNES_BASE_URL: str = os.getenv("AGNES_BASE_URL", "")
-    AGNES_IMAGE_MODEL: str = os.getenv("AGNES_IMAGE_MODEL", "agnes-image-1")
+    AGNES_IMAGE_MODEL: str = os.getenv("AGNES_IMAGE_MODEL", "agnes-image-2.1-flash")
     # 403 回退模型列表（逗号分隔）
     AGNES_IMAGE_FALLBACK_MODELS: list[str] = [
         m.strip()
@@ -33,6 +33,9 @@ class ImageGenCfg:
         if m.strip()
     ]
     AGNES_IMAGE_ENDPOINT: str = os.getenv("AGNES_IMAGE_ENDPOINT", "/v1/images/generations")
+    # 提交重试: 5xx/连接错误时的最大重试次数与间隔（秒）
+    AGNES_IMAGE_SUBMIT_RETRIES: int = int(os.getenv("AGNES_IMAGE_SUBMIT_RETRIES", "3"))
+    AGNES_IMAGE_SUBMIT_RETRY_DELAY: int = int(os.getenv("AGNES_IMAGE_SUBMIT_RETRY_DELAY", "30"))
 
     @classmethod
     def validate(cls) -> None:

@@ -36,7 +36,7 @@ class TextGenCfg:
     # ---- agnes (OpenAI 兼容) ----
     AGNES_API_KEY: str = os.getenv("AGNES_API_KEY", "")
     AGNES_BASE_URL: str = os.getenv("AGNES_BASE_URL", "")
-    AGNES_TEXT_MODEL: str = os.getenv("AGNES_TEXT_MODEL", "agnes-text-1")
+    AGNES_TEXT_MODEL: str = os.getenv("AGNES_TEXT_MODEL", "agnes-2.0-flash")
     # 403 回退模型列表（逗号分隔）
     AGNES_TEXT_FALLBACK_MODELS: list[str] = [
         m.strip()
@@ -44,6 +44,10 @@ class TextGenCfg:
         if m.strip()
     ]
     AGNES_TEXT_ENDPOINT: str = os.getenv("AGNES_TEXT_ENDPOINT", "/v1/chat/completions")
+    AGNES_TEXT_ENABLE_THINKING: bool = os.getenv("AGNES_TEXT_ENABLE_THINKING", "1") == "1"
+    # 提交重试: 5xx/连接错误时的最大重试次数与间隔（秒）
+    AGNES_TEXT_SUBMIT_RETRIES: int = int(os.getenv("AGNES_TEXT_SUBMIT_RETRIES", "3"))
+    AGNES_TEXT_SUBMIT_RETRY_DELAY: int = int(os.getenv("AGNES_TEXT_SUBMIT_RETRY_DELAY", "30"))
 
     @classmethod
     def validate(cls) -> None:

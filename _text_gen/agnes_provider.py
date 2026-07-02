@@ -1,9 +1,16 @@
 """agnes ai 文本生成 — OpenAI 兼容协议.
 
-POST {AGNES_BASE_URL}{AGNES_TEXT_ENDPOINT}，OpenAI chat completions 格式.
+POST {AGNES_BASE_URL}/v1/chat/completions，OpenAI chat completions 格式.
 403 自动回退到 AGNES_TEXT_FALLBACK_MODELS 中的下一个模型.
+5xx/连接错误自动重试（AGNES_TEXT_SUBMIT_RETRIES 次）.
+
+模型: agnes-2.0-flash
+上下文窗口: 512K
+最大输出: 65.5K tokens
+支持 Thinking 模式: chat_template_kwargs.enable_thinking
 """
 
+import time
 from typing import Optional
 
 import requests
@@ -18,6 +25,8 @@ class AgnesTextService(TextGenerationService):
 
     403 回退: 主模型返回 403 时，自动切换到 AGNES_TEXT_FALLBACK_MODELS 中的下一个.
     回退在单次调用级别（与 TTS/图片一致）.
+
+    Thinking 模式: 在 .env 中设置 AGNES_TEXT_ENABLE_THINKING=1 启用.
     """
 
     def __init__(self) -> None:
@@ -26,6 +35,7 @@ class AgnesTextService(TextGenerationService):
         self._model_queue: list[str] = [
             config.AGNES_TEXT_MODEL
         ] + config.AGNES_TEXT_FALLBACK_MODELS
+        self._enable_thinking: bool = config.AGNES_TEXT_ENABLE_THINKING
 
     def _advance_index(self, idx: int) -> Optional[int]:
         """返回下一个回退模型的下标，无可用模型时返回 None."""
@@ -34,7 +44,7 @@ class AgnesTextService(TextGenerationService):
         return idx + 1
 
     def generate(self, req: TextGenerationRequest) -> TextGenerationResult:
-        url = f"{config.AGNES_BASE_URL.rstrip('/')}{config.AGNES_TEXT_ENDPOINT}"
+        url = f"{config.AGNES_BASE_URL.rstrip('/')}/v1/chat/completions"
         idx = 0
         last_error = ""
 
@@ -44,7 +54,7 @@ class AgnesTextService(TextGenerationService):
                 "Authorization": f"Bearer {config.AGNES_API_KEY}",
                 "Content-Type": "application/json",
             }
-            payload = {
+            payload: dict = {
                 "model": model,
                 "messages": [
                     {"role": "system", "content": req.system_prompt},
@@ -54,9 +64,44 @@ class AgnesTextService(TextGenerationService):
                 "temperature": req.temperature,
             }
 
-            print(f"[INFO] 正在调用 Agnes ({model}) 生成分镜脚本...")
+            # Thinking 模式: 用于复杂任务（分镜生成属于复杂创意任务，建议开启）
+            if self._enable_thinking:
+                payload["chat_template_kwargs"] = {"enable_thinking": True}
+
+            print(f"[INFO] 正在调用 Agnes ({model}) 生成文本..."
+                  + (" [Thinking]" if self._enable_thinking else ""))
+            _submit_retry = 0
             try:
-                res = requests.post(url, json=payload, headers=headers, timeout=120)
+                while True:
+                    try:
+                        res = requests.post(url, json=payload, headers=headers, timeout=300)
+                        break
+                    except Exception as e:
+                        _submit_retry += 1
+                        if _submit_retry <= config.AGNES_TEXT_SUBMIT_RETRIES:
+                            print(f"  [!] 提交异常: {e}，"
+                                  f"{config.AGNES_TEXT_SUBMIT_RETRY_DELAY}s 后重试 "
+                                  f"({_submit_retry}/{config.AGNES_TEXT_SUBMIT_RETRIES})")
+                            time.sleep(config.AGNES_TEXT_SUBMIT_RETRY_DELAY)
+                        else:
+                            last_error = f"Agnes 异常（重试{_submit_retry}次）: {e}"
+                            break
+                if last_error:
+                    idx = len(self._model_queue)
+                    break
+
+                # ---- 5xx: 服务端暂时不可用，等待后重试 ----
+                if 500 <= res.status_code < 600:
+                    _submit_retry += 1
+                    if _submit_retry <= config.AGNES_TEXT_SUBMIT_RETRIES:
+                        print(f"  [!] 服务端 {res.status_code}，"
+                              f"{config.AGNES_TEXT_SUBMIT_RETRY_DELAY}s 后重试 "
+                              f"({_submit_retry}/{config.AGNES_TEXT_SUBMIT_RETRIES})")
+                        time.sleep(config.AGNES_TEXT_SUBMIT_RETRY_DELAY)
+                        continue
+                    last_error = f"Agnes 失败 [{res.status_code}] (重试{_submit_retry}次): {res.text[:300]}"
+                    idx = len(self._model_queue)
+                    break
 
                 # ---- 200: 提取文本 ----
                 if res.status_code == 200:
@@ -77,7 +122,7 @@ class AgnesTextService(TextGenerationService):
                 if res.status_code == 403:
                     nxt = self._advance_index(idx)
                     if nxt is not None:
-                        print(f"  ⚠ 文本模型 {model} 返回 403（额度耗尽/无权限），"
+                        print(f"  [!] 文本模型 {model} 返回 403（额度耗尽/无权限），"
                               f"自动切换到 {self._model_queue[nxt]}")
                         idx = nxt
                         continue

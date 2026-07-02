@@ -56,20 +56,31 @@ class VideoGenCfg:
     # 视频: POST {base}{endpoint}（提交任务） / GET {base}{endpoint}/{task_id}（轮询）
     AGNES_API_KEY: str = os.getenv("AGNES_API_KEY", "")
     AGNES_BASE_URL: str = os.getenv("AGNES_BASE_URL", "")
-    AGNES_VIDEO_MODEL: str = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-1")
+    AGNES_VIDEO_MODEL: str = os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
     # 403 回退模型列表（逗号分隔）
     AGNES_VIDEO_FALLBACK_MODELS: list[str] = [
         m.strip()
         for m in os.getenv("AGNES_VIDEO_FALLBACK_MODELS", "").split(",")
         if m.strip()
     ]
-    AGNES_VIDEO_ENDPOINT: str = os.getenv("AGNES_VIDEO_ENDPOINT", "/v1/video/generations")
+    AGNES_VIDEO_ENDPOINT: str = os.getenv("AGNES_VIDEO_ENDPOINT", "/v1/videos")
+    # 轮询端点（Agnes 视频使用 /agnesapi?video_id=xxx，非标准的 /v1/videos/{id}）
+    AGNES_VIDEO_POLL_ENDPOINT: str = os.getenv("AGNES_VIDEO_POLL_ENDPOINT", "/agnesapi")
     # image-to-video: 首帧图在请求体中的字段名
     AGNES_VIDEO_IMAGE_FIELD: str = os.getenv("AGNES_VIDEO_IMAGE_FIELD", "image")
+    # 视频尺寸（宽x高）
+    AGNES_VIDEO_WIDTH: int = int(os.getenv("AGNES_VIDEO_WIDTH", "832"))
+    AGNES_VIDEO_HEIGHT: int = int(os.getenv("AGNES_VIDEO_HEIGHT", "1088"))
+    # 帧率与总帧数（12 fps * 5s = 60 帧，24 fps * 5s = 120 帧）
+    AGNES_VIDEO_FRAME_RATE: int = int(os.getenv("AGNES_VIDEO_FRAME_RATE", "24"))
+    AGNES_VIDEO_NUM_FRAMES: int = int(os.getenv("AGNES_VIDEO_NUM_FRAMES", "0"))  # 0=自适应
     # 视频模式: async（提交任务+轮询，默认）/ sync（同步返回 video_url）
     AGNES_VIDEO_MODE: str = os.getenv("AGNES_VIDEO_MODE", "async")
     AGNES_VIDEO_POLL_INTERVAL: int = int(os.getenv("AGNES_VIDEO_POLL_INTERVAL", "8"))
     AGNES_VIDEO_MAX_POLL_ATTEMPTS: int = int(os.getenv("AGNES_VIDEO_MAX_POLL_ATTEMPTS", "120"))
+    # 提交重试: 5xx/连接错误时的最大重试次数与间隔（秒）
+    AGNES_VIDEO_SUBMIT_RETRIES: int = int(os.getenv("AGNES_VIDEO_SUBMIT_RETRIES", "3"))
+    AGNES_VIDEO_SUBMIT_RETRY_DELAY: int = int(os.getenv("AGNES_VIDEO_SUBMIT_RETRY_DELAY", "30"))
 
     @classmethod
     def validate(cls) -> None:

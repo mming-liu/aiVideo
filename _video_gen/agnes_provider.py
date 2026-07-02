@@ -1,10 +1,11 @@
-"""agnes ai 视频生成 — OpenAI 兼容协议 (image-to-video + 异步轮询).
+"""agnes ai 视频生成 — 异步轮询模式.
 
-提交: POST {AGNES_BASE_URL}{AGNES_VIDEO_ENDPOINT}
-轮询: GET  {AGNES_BASE_URL}{AGNES_VIDEO_ENDPOINT}/{task_id}
+提交: POST /v1/videos
+轮询: GET  /agnesapi?video_id=<VIDEO_ID>
 
-支持 image-to-video: 若 req.image_path 指向有效文件，读取后 base64 编码为 data URL
-放入 AGNES_VIDEO_IMAGE_FIELD (默认 image) 字段; 否则降级为纯 text-to-video.
+模型: agnes-video-v2.0
+  - text-to-video: prompt + width + height + num_frames + frame_rate
+  - image-to-video: 附加 image 字段 (data URL base64)
 
 403 自动回退: 主模型返回 403 时切换到 AGNES_VIDEO_FALLBACK_MODELS 中的下一个,
 回退在实例生命周期内保持 (与 DashScope 一致).
@@ -27,7 +28,7 @@ _SYNC_PREFIX = "__sync__"
 
 
 class AgnesVideoService(VideoGenerationService):
-    """agnes ai (OpenAI 兼容) 视频生成实现."""
+    """agnes ai 视频生成实现 (agnes-video-v2.0)."""
 
     def __init__(self) -> None:
         config.validate()
@@ -54,7 +55,8 @@ class AgnesVideoService(VideoGenerationService):
     # ------------------------------------------------------------------
     # 首帧图编码
     # ------------------------------------------------------------------
-    def _encode_image(self, path: Optional[str]) -> Optional[str]:
+    @staticmethod
+    def _encode_image(path: Optional[str]) -> Optional[str]:
         """读取本地图片，返回 data URL (base64). 失败返回 None."""
         if not path:
             return None
@@ -71,59 +73,81 @@ class AgnesVideoService(VideoGenerationService):
             return None
 
     # ------------------------------------------------------------------
-    # URL 构造
+    # num_frames 约束
     # ------------------------------------------------------------------
-    def _submit_url(self) -> str:
-        return f"{config.AGNES_BASE_URL.rstrip('/')}{config.AGNES_VIDEO_ENDPOINT}"
+    @staticmethod
+    def _clamp_num_frames(raw: int) -> int:
+        """Agnes 约束: num_frames = 8n + 1，取最接近的合法值（至少 1）."""
+        if raw < 1:
+            return 1
+        n = round((raw - 1) / 8)
+        n = max(n, 0)
+        result = 8 * n + 1
+        return result
 
-    def _query_url(self, task_id: str) -> str:
-        return f"{self._submit_url()}/{task_id}"
-
     # ------------------------------------------------------------------
-    # 响应字段解析（兼容多种 OpenAI 风格包装）
+    # 响应字段解析
     # ------------------------------------------------------------------
-    def _extract_task_id(self, data: dict) -> Optional[str]:
-        for key in ("task_id", "id"):
+    @staticmethod
+    def _extract_video_id(data: dict) -> Optional[str]:
+        """从创建任务响应中提取 video_id."""
+        for key in ("video_id", "id", "task_id"):
             v = data.get(key)
             if v:
                 return str(v)
+        # 嵌套在 data 字段中
         d = data.get("data") or {}
         if isinstance(d, dict):
-            for key in ("task_id", "id"):
+            for key in ("video_id", "id", "task_id"):
                 v = d.get(key)
                 if v:
                     return str(v)
         return None
 
-    def _extract_video_url(self, output: dict) -> Optional[str]:
-        for key in ("video_url", "url"):
+    @staticmethod
+    def _extract_video_url(output: dict) -> Optional[str]:
+        """从轮询响应中提取视频下载 URL."""
+        for key in ("video_url", "url", "remixed_from_video_id"):
             v = output.get(key)
-            if v:
+            if v and isinstance(v, str) and v.startswith("http"):
                 return str(v)
         urls = output.get("video_urls")
         if urls and isinstance(urls, list) and urls[0]:
             return str(urls[0])
         d = output.get("data") or {}
         if isinstance(d, dict):
-            for key in ("video_url", "url"):
+            for key in ("video_url", "url", "remixed_from_video_id"):
                 v = d.get(key)
-                if v:
+                if v and isinstance(v, str) and v.startswith("http"):
                     return str(v)
         return None
 
-    def _extract_status(self, output: dict) -> str:
+    @staticmethod
+    def _extract_status(output: dict) -> str:
+        """从轮询响应中提取任务状态，统一转大写."""
         s = output.get("status") or output.get("task_status") or ""
         return str(s).upper()
 
     # ------------------------------------------------------------------
-    # 创建任务（带 403 回退）
+    # 创建任务（带 403 回退 + 5xx 自动重试）
     # ------------------------------------------------------------------
     def create_task(self, req: VideoGenerationRequest) -> str:
-        size = req.size or config.VIDEO_SIZE
         image_data_url = self._encode_image(req.image_path)
         if req.image_path and not image_data_url:
-            print(f"  [镜头{req.clip_index}] ⚠ 首帧图 {req.image_path} 读取失败，"
+            print(f"  [镜头{req.clip_index}] 首帧图 {req.image_path} 读取失败，"
                   f"降级为 text-to-video")
+
+        # 计算尺寸与帧数
+        width = config.AGNES_VIDEO_WIDTH
+        height = config.AGNES_VIDEO_HEIGHT
+        frame_rate = config.AGNES_VIDEO_FRAME_RATE
+        num_frames = config.AGNES_VIDEO_NUM_FRAMES
+        if num_frames <= 0 and req.duration > 0:
+            raw = req.duration * frame_rate
+            # Agnes 约束: num_frames = 8n + 1，取最接近的合法值
+            num_frames = self._clamp_num_frames(raw)
+
+        _submit_retry = 0
 
         while True:
             model = self._current_model
@@ -134,12 +158,12 @@ class AgnesVideoService(VideoGenerationService):
             payload: dict = {
                 "model": model,
                 "prompt": req.prompt,
-                "size": size,
+                "width": width,
+                "height": height,
+                "frame_rate": frame_rate,
             }
-            if req.duration:
-                payload["duration"] = req.duration
-            if req.negative_prompt:
-                payload["negative_prompt"] = req.negative_prompt
+            if num_frames > 0:
+                payload["num_frames"] = num_frames
             if image_data_url:
                 payload[config.AGNES_VIDEO_IMAGE_FIELD] = image_data_url
 
@@ -148,7 +172,15 @@ class AgnesVideoService(VideoGenerationService):
                     self._submit_url(), json=payload, headers=headers, timeout=120
                 )
             except Exception as e:
-                raise RuntimeError(f"Agnes 视频提交异常: {e}")
+                # 连接错误也做重试
+                _submit_retry += 1
+                if _submit_retry <= config.AGNES_VIDEO_SUBMIT_RETRIES:
+                    print(f"  [镜头{req.clip_index}] 提交异常: {e}，"
+                          f"{config.AGNES_VIDEO_SUBMIT_RETRY_DELAY}s 后重试 "
+                          f"({_submit_retry}/{config.AGNES_VIDEO_SUBMIT_RETRIES})")
+                    time.sleep(config.AGNES_VIDEO_SUBMIT_RETRY_DELAY)
+                    continue
+                raise RuntimeError(f"Agnes 视频提交异常（重试{_submit_retry}次后仍失败）: {e}")
 
             # ---- 200 ----
             if res.status_code == 200:
@@ -166,21 +198,35 @@ class AgnesVideoService(VideoGenerationService):
                     )
 
                 # async 模式
-                task_id = self._extract_task_id(data)
-                if not task_id:
+                video_id = self._extract_video_id(data)
+                if not video_id:
                     raise RuntimeError(
-                        f"Agnes 未返回 task_id: {str(data)[:300]}"
+                        f"Agnes 未返回 video_id: {str(data)[:300]}"
                     )
                 mode_tag = "image-to-video" if image_data_url else "text-to-video"
                 print(f"  [镜头{req.clip_index}] 任务已创建 [{model}] ({mode_tag}) "
-                      f"-> task_id: {task_id}")
-                return task_id
+                      f"-> video_id: {video_id}")
+                return video_id
+
+            # ---- 5xx: 服务端暂时不可用，等待后重试 ----
+            if 500 <= res.status_code < 600:
+                _submit_retry += 1
+                if _submit_retry <= config.AGNES_VIDEO_SUBMIT_RETRIES:
+                    print(f"  [镜头{req.clip_index}] 服务端 {res.status_code}，"
+                          f"{config.AGNES_VIDEO_SUBMIT_RETRY_DELAY}s 后重试 "
+                          f"({_submit_retry}/{config.AGNES_VIDEO_SUBMIT_RETRIES})")
+                    time.sleep(config.AGNES_VIDEO_SUBMIT_RETRY_DELAY)
+                    continue
+                raise RuntimeError(
+                    f"Agnes 视频提交失败 [{res.status_code}] (重试{_submit_retry}次): "
+                    f"{res.text[:500]}"
+                )
 
             # ---- 403: 额度耗尽或无权限，尝试回退 ----
             if res.status_code == 403:
                 next_model = self._advance_model()
                 if next_model:
-                    print(f"  [镜头{req.clip_index}] ⚠ 模型 {model} 返回 403"
+                    print(f"  [镜头{req.clip_index}] [!] 模型 {model} 返回 403"
                           f"（额度耗尽/无权限），自动切换到 {next_model}")
                     continue  # 用新模型重试
                 else:
@@ -193,6 +239,17 @@ class AgnesVideoService(VideoGenerationService):
             raise RuntimeError(
                 f"Agnes 视频提交失败 [{res.status_code}]: {res.text[:500]}"
             )
+
+    # ------------------------------------------------------------------
+    # URL 构造
+    # ------------------------------------------------------------------
+    def _submit_url(self) -> str:
+        return f"{config.AGNES_BASE_URL.rstrip('/')}/v1/videos"
+
+    def _query_url(self, video_id: str) -> str:
+        """轮询端点: GET /agnesapi?video_id=<VIDEO_ID>."""
+        return (f"{config.AGNES_BASE_URL.rstrip('/')}"
+                f"{config.AGNES_VIDEO_POLL_ENDPOINT}?video_id={video_id}")
 
     # ------------------------------------------------------------------
     # 查询任务
@@ -236,7 +293,12 @@ class AgnesVideoService(VideoGenerationService):
             output = self.query_task(task_id)
             status = self._extract_status(output)
 
-            if status in ("SUCCEEDED", "SUCCESS", "COMPLETED", "DONE"):
+            if status in ("SUCCEEDED", "SUCCESS", "COMPLETED", "DONE", "COMPLETE"):
+                video_url = self._extract_video_url(output)
+                if not video_url:
+                    # 残量诊断日志，方便排查新增响应结构
+                    print(f"  [镜头{req.clip_index}] [DEBUG] 未找到 video_url, "
+                          f"响应: {str(output)[:500]}")
                 video_url = self._extract_video_url(output)
                 if not video_url:
                     return VideoGenerationResult(
