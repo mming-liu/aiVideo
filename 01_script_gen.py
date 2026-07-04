@@ -104,13 +104,12 @@ PROMPT_TEMPLATE = """
   - 镜头5-6 ← 段落5-6（结尾，高潮/冲突/转折；若原文结尾有战斗、刺杀、冲突、逃离、反转等强事件，镜头5-6必须呈现，不得用风景/氛围替代）
 
 第2步 — 为每个段落生成字段：
-  - narration_segment：从该段摘取最核心的1句原文原句（16-25字，不改写）。6段总旁白必须达到120-150字，否则不合格。
+  - narration_segment：从该段摘取核心原文原句（35-45字，不改写）。6段总旁白必须达到240-280字
   - subtitle：与 narration_segment 逐字相同
   - prompt：按上面结构模板生成
-  - duration：朗读秒数估算（中文约4字/秒 + 1s停顿，取5-7秒）
-  - 校验：6个duration之和必须在28-36秒之间（≈视频总长30s），否则调整narration_segment字数
+  - duration：每条 4-6 秒，6 个 duration 之和 24-30 秒
 
-第3步 — 拼接6个 narration_segment 为 narration 字段，总字数120-150字，对应朗读时长28-36秒。
+第3步 — 拼接6个 narration_segment 为 narration 字段，总字数 240-280 字
 
 # 自检清单（输出前逐条自检，不合格重做）
 - [ ] shot[i].subtitle == shot[i].narration_segment（逐字相同）

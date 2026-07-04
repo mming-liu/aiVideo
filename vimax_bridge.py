@@ -27,7 +27,6 @@ from vimax.interfaces import (
 )
 
 from character_bank import CharacterBank, StyleBank
-from style_prefix import STYLE_PREFIX
 
 
 async def build_working_dir(
@@ -206,11 +205,21 @@ async def _generate_missing_portraits(
 
     已有肖像的角色直接复用，新角色生成后注册到 bank.
     返回 ViMax 兼容的 character_portraits_registry dict.
+
+    肖像生成需要横屏白底纯角色图（不加风格前缀），与首帧视频的竖屏+前缀不同。
+    因此创建专用 portrait_adapter：横屏尺寸 + 跳过风格前缀/合规清洗。
     """
     from vimax.agents.character_portraits_generator import CharacterPortraitsGenerator
+    from vimax_adapters import ImageGeneratorAiVideoAdapter
 
-    portrait_gen = CharacterPortraitsGenerator(image_generator=image_adapter)
-    registry = {}
+    # 肖像专用适配器：16:9 横屏、不加风格前缀、不替换敏感词（英文 prompt）
+    portrait_adapter = ImageGeneratorAiVideoAdapter(
+        size="1600x900",
+        skip_prefix=True,
+        skip_sanitize=True,
+    )
+    portrait_gen = CharacterPortraitsGenerator(image_generator=portrait_adapter)
+    registry = {}  # 注掉的代码保持不变
 
     for char in characters:
         identifier = char.get("identifier", "")
@@ -240,13 +249,14 @@ async def _generate_missing_portraits(
         portrait_dir = bank.get_portrait_dir(identifier)
         portrait_dir.mkdir(parents=True, exist_ok=True)
 
-        # 正面肖像（16:9 横屏白底，不拼风格前缀）
+        # 正面肖像（英文 prompt，不拼风格前缀，横屏白底）
         front_path = portrait_dir / "front.png"
         if not front_path.exists():
             print(f"  [bank] 生成 {identifier} 正面肖像 ...")
             try:
                 img_out = await portrait_gen.generate_front_portrait(
-                    char_in_scene, style=STYLE_PREFIX,
+                    # 只传角色特征作为 style，不加 STYLE_PREFIX（portrait_adapter 已 skip_prefix）
+                    char_in_scene, style="2D anime character portrait, full-body, white background, 16:9 wide canvas",
                 )
                 # 保存：ImageOutput 是 PIL Image
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):

@@ -29,6 +29,8 @@ SCRIPT_FILE = _project_root / "script_result.json"
 # 首帧图目录（与 _image_gen/config.py 的 IMAGE_OUTPUT_DIR 保持一致）
 _IMAGE_DIR = _project_root / "output" / "images"
 
+MAX_RETRIES = int(os.getenv("VIDEO_MAX_RETRIES", "3"))  # 单个镜头失败后最大重试次数
+
 
 def load_script(path: Path) -> dict:
     """读取分镜脚本 JSON."""
@@ -186,6 +188,22 @@ def generate_all(script: dict) -> BatchGenerationResult:
                 success=False,
                 error=str(e),
             )
+
+        # 失败重试：最多 MAX_RETRIES 次
+        retry_count = 0
+        while not result.success and retry_count < MAX_RETRIES:
+            retry_count += 1
+            print(f"  [重试] 镜头{shot['index']} 第{retry_count}/{MAX_RETRIES} 次重试...")
+            try:
+                task_id = service.create_task(req)
+                result = service.wait_for_completion(req, task_id)
+            except Exception as e:
+                print(f"  [FAIL] 镜头{shot['index']} 重试{retry_count} 失败: {e}")
+                result = VideoGenerationResult(
+                    clip_index=shot["index"],
+                    success=False,
+                    error=str(e),
+                )
 
         batch.results.append(result)
         if result.success:

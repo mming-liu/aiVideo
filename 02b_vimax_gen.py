@@ -25,6 +25,7 @@ from vimax_bridge import build_working_dir
 SCRIPT_FILE = _project_root / "script_result.json"
 WORKING_DIR = Path(os.getenv("VIMAX_WORKING_DIR", "./output/vimax_working"))
 SUBMIT_INTERVAL = float(os.getenv("VIDEO_CLIP_INTERVAL", "65"))
+MAX_RETRIES = 3  # 单个镜头失败后最大重试次数
 
 
 def load_script(path: Path) -> dict:
@@ -53,7 +54,7 @@ def _build_prompt(shot: dict, script: dict) -> str:
 
 
 async def generate_all(script: dict, working_dir: Path, force_first_frame: bool = False) -> int:
-    """两阶段批量生成."""
+    """两阶段批量生成 + 失败重试（每镜最多 MAX_RETRIES 次）."""
     image_adapter = ImageGeneratorAiVideoAdapter()
     video_adapter = VideoGeneratorAiVideoAdapter()
 
@@ -64,12 +65,12 @@ async def generate_all(script: dict, working_dir: Path, force_first_frame: bool 
     shots_dir = working_dir / "shots"
     script_mtime = SCRIPT_FILE.stat().st_mtime if SCRIPT_FILE.exists() else None
 
-    print(f"\n[INFO] 开始两阶段批量生成（{len(shots)} 镜头）...\n")
+    print(f"\n[INFO] 开始两阶段批量生成（{len(shots)} 镜头，每镜最多 {MAX_RETRIES} 次重试）...\n")
 
-    # ----------------------------------------------------------------
+    # ------------------------------------------------------------------
     # 阶段一：批量提交（间隔只控制提交之间，不等视频生成完成）
-    # ----------------------------------------------------------------
-    pending: list[dict] = []  # [{idx, shot_dir, task_id, ...}]
+    # ------------------------------------------------------------------
+    pending: list[dict] = []  # [{idx, shot_dir, video_path, req, task_id, attempts}]
     succeeded = 0
     failed = 0
 
@@ -94,7 +95,6 @@ async def generate_all(script: dict, working_dir: Path, force_first_frame: bool 
         first_frame = str(shot_dir / "first_frame.png")
 
         try:
-            # 提交任务（不等完成）
             req = await _make_request_async(
                 video_adapter, prompt, [first_frame] if Path(first_frame).exists() else [], idx,
             )
@@ -105,44 +105,71 @@ async def generate_all(script: dict, working_dir: Path, force_first_frame: bool 
                 "video_path": video_path,
                 "req": req,
                 "task_id": task_id,
+                "attempts": 1,
             })
             print(f"  [已提交] task_id={task_id[:40]}...")
         except Exception as e:
             print(f"  [FAIL] 提交失败: {e}")
             failed += 1
 
-        # 提交间隔：控制调用频率
         if i < len(shots):
             print(f"  [间隔] {SUBMIT_INTERVAL:.0f}s 后提交下一个镜头...")
             await asyncio.sleep(SUBMIT_INTERVAL)
 
     print(f"\n[INFO] 阶段一完成：{len(pending)} 个任务已提交，开始轮询...\n")
 
-    # ----------------------------------------------------------------
-    # 阶段二：并发轮询全部结果
-    # ----------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # 阶段二：并发轮询 + 失败重试循环
+    # ------------------------------------------------------------------
+    while pending:
+        # 并发轮询当前这批
+        async def _fetch_one(item: dict) -> tuple[dict, int]:
+            """返回 (item, result_code): 0=成功, 1=失败需重试, 2=最终失败."""
+            idx = item["idx"]
+            video_path = item["video_path"]
+            print(f"[轮询] 镜头{idx} (第{item['attempts']}次) 等待完成...")
+            try:
+                result = await video_adapter.fetch_result(item["req"], item["task_id"])
+                if result.success and result.save_path:
+                    import shutil
+                    shutil.move(result.save_path, str(video_path))
+                    print(f"  [OK] 镜头{idx} 生成完毕（{video_path.stat().st_size//1024}KB）")
+                    return item, 0
+                else:
+                    print(f"  [FAIL] 镜头{idx} 生成失败: {result.error}")
+                    return item, 1
+            except Exception as e:
+                print(f"  [FAIL] 镜头{idx} 轮询异常: {e}")
+                return item, 1
 
-    async def _fetch_one(item: dict) -> int:
-        idx = item["idx"]
-        video_path = item["video_path"]
-        print(f"[轮询] 镜头{idx} 等待完成...")
-        try:
-            result = await video_adapter.fetch_result(item["req"], item["task_id"])
-            if result.success and result.save_path:
-                import shutil
-                shutil.move(result.save_path, str(video_path))
-                print(f"  [OK] 镜头{idx} 生成完毕（{video_path.stat().st_size//1024}KB）")
-                return 0
+        results = await asyncio.gather(*[_fetch_one(item) for item in pending])
+        pending = []
+
+        for item, code in results:
+            if code == 0:
+                succeeded += 1
+            elif item["attempts"] < MAX_RETRIES:
+                # 重试：重新提交
+                item["attempts"] += 1
+                idx = item["idx"]
+                print(f"  [重试] 镜头{idx} 第{item['attempts']}/{MAX_RETRIES} 次重试...")
+                try:
+                    new_task_id = await video_adapter.submit_task(item["req"])
+                    item["task_id"] = new_task_id
+                    print(f"  [已重提] 镜头{idx} task_id={new_task_id[:40]}...")
+                    # 重提交后等待间隔再轮询
+                    await asyncio.sleep(SUBMIT_INTERVAL)
+                    pending.append(item)
+                except Exception as e:
+                    print(f"  [FAIL] 镜头{idx} 重提交也失败: {e}")
+                    failed += 1
             else:
-                print(f"  [FAIL] 镜头{idx} 生成失败: {result.error}")
-                return 1
-        except Exception as e:
-            print(f"  [FAIL] 镜头{idx} 轮询失败: {e}")
-            return 1
+                idx = item["idx"]
+                print(f"  [放弃] 镜头{idx} 已达最大重试次数 {MAX_RETRIES}，跳过")
+                failed += 1
 
-    results = await asyncio.gather(*[_fetch_one(item) for item in pending])
-    succeeded += sum(1 for r in results if r == 0)
-    failed += sum(r for r in results)
+        if pending:
+            print(f"\n[INFO] {len(pending)} 个镜头等待重试轮询...\n")
 
     print(f"\n{'='*50}")
     print(f"视频片段生成完毕：总计 {len(shots)} | 成功 {succeeded} | 失败 {failed}")

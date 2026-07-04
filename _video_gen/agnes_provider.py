@@ -65,7 +65,7 @@ class AgnesVideoService(VideoGenerationService):
             if not os.path.isfile(p):
                 return None
             with open(p, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("ascii").rstrip("=")
+                b64 = base64.b64encode(f.read()).decode("ascii")
             mime, _ = mimetypes.guess_type(p)
             return f"data:{mime or 'image/png'};base64,{b64}"
         except Exception:

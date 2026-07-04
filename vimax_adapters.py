@@ -32,10 +32,14 @@ class ImageGeneratorAiVideoAdapter:
         self,
         size: str = "1024x1792",  # 9:16 竖屏
         negative_prompt: str = NEGATIVE_PROMPT,
+        skip_prefix: bool = False,    # 跳过风格前缀（白底肖像用）
+        skip_sanitize: bool = False,  # 跳过合规词替换（英文 prompt 用）
         **_,
     ):
         self.size = size
         self.negative_prompt = negative_prompt
+        self._skip_prefix = skip_prefix
+        self._skip_sanitize = skip_sanitize
         self._svc = _image_gen.create_service(_image_gen.config.PROVIDER)
         self._lock = asyncio.Lock()
 
@@ -45,11 +49,10 @@ class ImageGeneratorAiVideoAdapter:
         reference_image_paths: List[str] | None = None,
         **kwargs,
     ) -> ImageOutput:
-        # 优先从 kwargs 取尺寸（角色肖像用），否则用实例默认竖屏尺寸
+        # 优先从 kwargs 取尺寸，其次实例默认
         size = kwargs.get("size", self.size)
-        # portrait 模式：kwargs 传 skip_prefix=True 跳过风格前缀（白底肖像）
-        skip_prefix = kwargs.get("skip_prefix", False)
-        skip_sanitize = kwargs.get("skip_sanitize", False)
+        skip_prefix = kwargs.get("skip_prefix", self._skip_prefix)
+        skip_sanitize = kwargs.get("skip_sanitize", self._skip_sanitize)
         ref = reference_image_paths[0] if reference_image_paths else None
 
         full_prompt = prompt
