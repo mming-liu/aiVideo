@@ -7,6 +7,7 @@
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 # 项目根目录在 02_video_gen 上级
@@ -22,6 +23,7 @@ from _video_gen import (
     VideoGenerationResult,
     BatchGenerationResult,
 )
+from style_prefix import STYLE_PREFIX, sanitize_prompt as _sanitize_prompt
 
 SCRIPT_FILE = _project_root / "script_result.json"
 # 首帧图目录（与 _image_gen/config.py 的 IMAGE_OUTPUT_DIR 保持一致）
@@ -88,40 +90,21 @@ def _find_first_frame(shot_index) -> str | None:
 
 # ---------------------------------------------------------------------------
 # 合规化处理：中国大陆平台（DashScope/即梦）内容审核规避
-# 参考: storyboard-artist/references/veo-jimeng-guide.md
+# 实现见 style_prefix.py（运行时单一来源，vimax_adapters 复用）
 # ---------------------------------------------------------------------------
-_SENSITIVE_SUBSTITUTIONS = {
-    # 低龄词汇 → 安全替代
-    "娃娃": "少年",
-    "孩童": "年轻人",
-    "小孩": "人物",
-    "儿童": "少年",
-    # 裸露相关
-    "光腚": "赤膊",
-    "裸": "赤",
-    # 暴力相关
-    "血": "红",
-    "杀": "击",
-    "死": "倒",
-    # 已用电影语境包裹，不再生硬替换
-}
 
 
-def _sanitize_prompt(prompt: str) -> str:
-    """对 prompt 做合规化处理，替换可能触发中国大陆 AI 平台内容审核的敏感词."""
-    sanitized = prompt
-    for old, new in _SENSITIVE_SUBSTITUTIONS.items():
-        if old in sanitized:
-            sanitized = sanitized.replace(old, new)
-            print(f"  [合规] prompt 已替换敏感词: '{old}' -> '{new}'")
-    return sanitized
+def _clip_exists_valid(
+    clip_index: int,
+    script_mtime: float | None = None,
+    source_mtime: float | None = None,
+) -> bool:
+    """检查片段是否可跳过：存在、大小正常（>20KB）、且不比脚本/源码旧.
 
-
-def _clip_exists_valid(clip_index: int, script_mtime: float | None = None) -> bool:
-    """检查片段是否可跳过：存在、大小正常（>20KB）、且不比脚本旧.
-
-    若 clip 的修改时间早于 script_result.json，说明 prompt 已更新但片段未重新生成，
-    必须重新生成，否则会用旧 prompt 的画面（与当前文章内容脱节）.
+    陈旧基准取 max(script_result.json mtime, 02_video_gen.py mtime)：
+      - script_result.json 变了 → prompt 内容变了
+      - 02_video_gen.py 变了 → 硬编码 prefix 或 build_prompt 逻辑变了
+    任一基准晚于 clip 生成时间，都必须重新生成，否则画面与最新 prompt 脱节.
     """
     clip_path = Path(config.OUTPUT_DIR) / f"clip_{clip_index}.mp4"
     if not clip_path.exists():
@@ -131,11 +114,17 @@ def _clip_exists_valid(clip_index: int, script_mtime: float | None = None) -> bo
         print(f"  [!] 已有片段 {clip_path} 仅 {size_kb:.0f}KB（疑似失败），将重新生成")
         return False
 
-    # 过期检测：片段比脚本旧 → prompt 变了，必须重新生成
-    if script_mtime is not None:
+    # 过期检测：clip 早于任一基准 → 视为陈旧
+    baseline = max(filter(lambda t: t is not None, [script_mtime, source_mtime]), default=None)
+    if baseline is not None:
         clip_mtime = clip_path.stat().st_mtime
-        if clip_mtime < script_mtime:
-            print(f"  [!] 片段 {clip_path.name} 早于 script_result.json（prompt 已更新），将重新生成")
+        if clip_mtime < baseline:
+            reasons = []
+            if script_mtime is not None and clip_mtime < script_mtime:
+                reasons.append("script_result.json")
+            if source_mtime is not None and clip_mtime < source_mtime:
+                reasons.append("02_video_gen.py（含 prefix）")
+            print(f"  [!] 片段 {clip_path.name} 早于 {'/'.join(reasons)}（prompt 已更新），将重新生成")
             return False
 
     print(f"  [OK] 跳过已生成的镜头{clip_index}（{size_kb:.0f}KB）")
@@ -148,21 +137,23 @@ def generate_all(script: dict) -> BatchGenerationResult:
     shots = script.get("shots", [])
     negative = script.get("negative_prompt", "")
 
-    prefix = (
-        "古风权谋卧底影视剧，9:16竖屏，电影柔光，暗调低饱和，"
-        "烛火局部光影，浅景深缓慢向前推镜，真人写实古装，无动漫，高清1080P"
-    )
+    # 画面统一前缀：来自 style_prefix.STYLE_PREFIX（单一来源，与 01/skill_spy/适配器一致）
+    prefix = STYLE_PREFIX
 
     # 确保输出目录存在
     Path(config.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
     # 读取脚本修改时间，用于判断已存在片段是否过期（prompt 变更后需重新生成）
     script_mtime = SCRIPT_FILE.stat().st_mtime if SCRIPT_FILE.exists() else None
+    # 02 自身源码 mtime：捕获 prefix / build_prompt 逻辑改动（这些不在 json 里）
+    source_mtime = Path(__file__).resolve().stat().st_mtime
+    import datetime as _dt
     if script_mtime is not None:
-        import datetime as _dt
         print(f"[INFO] script_result.json 修改时间: "
               f"{_dt.datetime.fromtimestamp(script_mtime).strftime('%Y-%m-%d %H:%M:%S')}")
-        print("[INFO] 早于此时间的片段将被视为过期并重新生成")
+    print(f"[INFO] 02_video_gen.py 修改时间: "
+          f"{_dt.datetime.fromtimestamp(source_mtime).strftime('%Y-%m-%d %H:%M:%S')}")
+    print("[INFO] 早于以上任一时间的片段将被视为过期并重新生成")
 
     batch = BatchGenerationResult(total=len(shots))
 
@@ -172,7 +163,7 @@ def generate_all(script: dict) -> BatchGenerationResult:
         print(f"  字幕: {shot.get('subtitle', 'N/A')}")
 
         # 跳过已存在的有效片段（含过期检测）
-        if _clip_exists_valid(shot["index"], script_mtime):
+        if _clip_exists_valid(shot["index"], script_mtime, source_mtime):
             result = VideoGenerationResult(
                 clip_index=shot["index"],
                 success=True,
@@ -201,6 +192,12 @@ def generate_all(script: dict) -> BatchGenerationResult:
             batch.succeeded += 1
         else:
             batch.failed += 1
+
+        # 镜头间间隔：控制调用频率，避免触发 API 速率限制
+        if i < len(shots):
+            interval = float(os.getenv("VIDEO_CLIP_INTERVAL", "65"))
+            print(f"  [等待] {interval:.0f}s 后处理下一个镜头...")
+            time.sleep(interval)
 
     return batch
 

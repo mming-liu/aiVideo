@@ -32,16 +32,28 @@ def load_script(path: Path) -> dict:
         return json.load(f)
 
 
-def _image_exists_valid(shot_index: int) -> bool:
-    """检查首帧图是否已存在且大小正常（> 5KB，排除生成失败的文件）."""
+def _image_exists_valid(shot_index: int, script_mtime: float | None = None) -> bool:
+    """检查首帧图是否可跳过：存在、大小正常（>5KB）、且不比脚本旧.
+
+    首帧图对画面锚定强于文字 prompt，一旦与 script_result.json 不同步必须重生成，
+    否则即使 prompt 改了，image-to-video 仍由旧首帧决定画面.
+    """
     img_path = Path(config.OUTPUT_DIR) / f"shot_{shot_index}.png"
     if not img_path.exists():
         return False
     size_kb = img_path.stat().st_size / 1024
     if size_kb < 5:
-        print(f"  ⚠ 已有首帧 {img_path} 仅 {size_kb:.0f}KB（疑似失败），将重新生成")
+        print(f"  [!] 已有首帧 {img_path} 仅 {size_kb:.0f}KB（疑似失败），将重新生成")
         return False
-    print(f"  ✓ 跳过已生成的首帧{shot_index}（{size_kb:.0f}KB）")
+
+    # 过期检测：首帧图早于 script_result.json → prompt 已更新，必须重新生成
+    if script_mtime is not None:
+        img_mtime = img_path.stat().st_mtime
+        if img_mtime < script_mtime:
+            print(f"  [!] 首帧 {img_path.name} 早于 script_result.json（prompt 已更新），将重新生成")
+            return False
+
+    print(f"  [OK] 跳过已生成的首帧{shot_index}（{size_kb:.0f}KB）")
     return True
 
 
@@ -54,6 +66,14 @@ def generate_all(script: dict) -> list:
     # 确保输出目录存在
     Path(config.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
+    # 读取脚本修改时间，用于判断已存在首帧是否过期
+    script_mtime = SCRIPT_FILE.stat().st_mtime if SCRIPT_FILE.exists() else None
+    if script_mtime is not None:
+        import datetime as _dt
+        print(f"[INFO] script_result.json 修改时间: "
+              f"{_dt.datetime.fromtimestamp(script_mtime).strftime('%Y-%m-%d %H:%M:%S')}")
+        print("[INFO] 早于此时间的首帧将被视为过期并重新生成")
+
     results: list = []
     succeeded = 0
     failed = 0
@@ -64,7 +84,7 @@ def generate_all(script: dict) -> list:
         print(f"[{i}/{len(shots)}] 正在生成镜头{idx} 首帧...")
 
         # 跳过已存在的有效首帧
-        if _image_exists_valid(idx):
+        if _image_exists_valid(idx, script_mtime):
             results.append(ImageGenerationResult(
                 success=True,
                 save_path=str(Path(config.OUTPUT_DIR) / f"shot_{idx}.png"),

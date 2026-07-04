@@ -64,11 +64,10 @@ class AgnesVideoService(VideoGenerationService):
             p = os.path.abspath(path)
             if not os.path.isfile(p):
                 return None
-            mime, _ = mimetypes.guess_type(p)
-            mime = mime or "image/png"
             with open(p, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("ascii")
-            return f"data:{mime};base64,{b64}"
+                b64 = base64.b64encode(f.read()).decode("ascii").rstrip("=")
+            mime, _ = mimetypes.guess_type(p)
+            return f"data:{mime or 'image/png'};base64,{b64}"
         except Exception:
             return None
 
@@ -167,6 +166,9 @@ class AgnesVideoService(VideoGenerationService):
             if image_data_url:
                 payload[config.AGNES_VIDEO_IMAGE_FIELD] = image_data_url
 
+            print(f"  [镜头{req.clip_index}] [prompt -> {model}] "
+                  f"{req.prompt[:200]}{'...' if len(req.prompt) > 200 else ''}")
+
             try:
                 res = requests.post(
                     self._submit_url(), json=payload, headers=headers, timeout=120
@@ -219,6 +221,21 @@ class AgnesVideoService(VideoGenerationService):
                     continue
                 raise RuntimeError(
                     f"Agnes 视频提交失败 [{res.status_code}] (重试{_submit_retry}次): "
+                    f"{res.text[:500]}"
+                )
+
+            # ---- 429: 速率限制，等待后重试 ----
+            if res.status_code == 429:
+                _submit_retry += 1
+                if _submit_retry <= config.AGNES_VIDEO_SUBMIT_RETRIES:
+                    delay = config.AGNES_VIDEO_SUBMIT_RETRY_DELAY + 30  # 至少比常规重试多等30s
+                    print(f"  [镜头{req.clip_index}] 速率限制 429，"
+                          f"{delay}s 后重试 "
+                          f"({_submit_retry}/{config.AGNES_VIDEO_SUBMIT_RETRIES})")
+                    time.sleep(delay)
+                    continue
+                raise RuntimeError(
+                    f"Agnes 视频速率限制 [429] (重试{_submit_retry}次): "
                     f"{res.text[:500]}"
                 )
 

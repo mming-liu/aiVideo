@@ -61,7 +61,7 @@ class AgnesImageService(ImageGenerationService):
             mime, _ = mimetypes.guess_type(p)
             mime = mime or "image/png"
             with open(p, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("ascii")
+                b64 = base64.b64encode(f.read()).decode("ascii").rstrip("=")
             return f"data:{mime};base64,{b64}"
         except Exception:
             return None

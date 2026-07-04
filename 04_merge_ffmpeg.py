@@ -26,12 +26,19 @@ from dotenv import load_dotenv
 _PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(_PROJECT_ROOT / ".env")
 
+# 视频片段来源: legacy（output/clips/clip_N.mp4） 或 vimax（output/vimax_working/shots/<idx>/video.mp4）
+CLIP_SOURCE = os.getenv("CLIP_SOURCE", "legacy")
+_VIMAX_WD = os.getenv("VIMAX_WORKING_DIR", "./output/vimax_working")
 CLIP_DIR = Path(os.getenv("VIDEO_OUTPUT_DIR", "./output/clips"))
+if CLIP_SOURCE == "vimax":
+    CLIP_DIR = Path(_VIMAX_WD) / "shots"
 AUDIO_PATH = Path(os.getenv("TTS_OUTPUT_PATH", "./output/audio/narration.mp3"))
 FINAL_OUT = Path(os.getenv("MERGE_OUTPUT_PATH", "./output/final.mp4"))
 SCRIPT_FILE = _PROJECT_ROOT / "script_result.json"
 SRT_OUT = _PROJECT_ROOT / "output" / "subtitles.srt"
 TEMP_DIR = _PROJECT_ROOT / "output" / "stretched"
+# 调试开关：DEBUG_SKIP_CACHE=1 时跳拉伸片段和最终成片的缓存，每次强制重拉/重拼
+DEBUG_SKIP_CACHE = os.getenv("DEBUG_SKIP_CACHE", "0").strip() == "1"
 
 # FFmpeg 路径解析: 优先使用 .env 配置，其次自动查找
 _FFMPEG_BIN_DIR = os.getenv("FFMPEG_BIN_DIR", "").strip()
@@ -108,21 +115,21 @@ def compute_target_durations(
 ) -> List[float]:
     """计算每个镜头的目标时长。
 
-    策略（按优先级）:
-    1. 音频时长 ≤ 视频时长 × MAX_STRETCH: 按比例拉伸视频匹配音频
-    2. 音频时长 > 视频时长 × MAX_STRETCH: 截断音频，视频最大拉伸 MAX_STRETCH 倍
-    3. 视频按脚本比例分配时长（受拉伸上限约束）
+    以视频为时间轴基准：
+      - 音频 ≤ 视频：视频保持原速，音频自然播放（不压缩视频）
+      - 音频 > 视频：拉伸视频匹配音频（上限 MAX_STRETCH_FACTOR）
     """
-    max_video = video_total * MAX_STRETCH_FACTOR
-
-    if audio_duration <= max_video:
-        # 情况1: 音频不算太长，拉伸视频匹配音频
-        effective_duration = audio_duration
-        mode = "视频拉伸 -> 匹配音频"
+    if audio_duration > video_total:
+        stretch_needed = audio_duration / video_total
+        if stretch_needed <= MAX_STRETCH_FACTOR:
+            effective_duration = audio_duration
+            mode = f"视频拉伸 {stretch_needed:.2f}x -> 匹配音频"
+        else:
+            effective_duration = video_total * MAX_STRETCH_FACTOR
+            mode = f"视频达到拉伸上限 {MAX_STRETCH_FACTOR}x，音频将自然结束"
     else:
-        # 情况2: 音频太长，截断音频，视频拉到上限
-        effective_duration = max_video
-        mode = f"音频截断（{audio_duration:.0f}s -> {max_video:.0f}s）"
+        effective_duration = video_total
+        mode = "视频保持原速（视频为时间轴基准）"
 
     total_script = sum(script_durations)
     if total_script <= 0:
@@ -146,11 +153,17 @@ def stretch_clip(input_path: Path, output_path: Path, factor: float) -> Path:
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 已存在则跳过
-    if output_path.exists() and output_path.stat().st_size > 20000:
-        dur = get_media_duration(output_path)
-        print(f"  [OK] 跳过已拉伸片段 {output_path.name}（{dur:.1f}s）")
-        return output_path
+    # 陈旧检测（调试时可用 DEBUG_SKIP_CACHE=1 跳过全部拉伸缓存）
+    if not DEBUG_SKIP_CACHE and output_path.exists() and output_path.stat().st_size > 20000:
+        src_mtime = input_path.stat().st_mtime
+        out_mtime = output_path.stat().st_mtime
+        if src_mtime > out_mtime:
+            print(f"  [!] {output_path.name} 早于源 {input_path.name}"
+                  f"（源画面已更新），将重新拉伸")
+        else:
+            dur = get_media_duration(output_path)
+            print(f"  [OK] 跳过已拉伸片段 {output_path.name}（{dur:.1f}s）")
+            return output_path
 
     # setpts 拉伸 + fps 固定帧率
     vf = f"setpts={factor:.4f}*PTS,fps=30"
@@ -175,31 +188,42 @@ def stretch_clip(input_path: Path, output_path: Path, factor: float) -> Path:
 def generate_srt(
     shots: List[dict],
     target_durations: List[float],
+    audio_duration: float,
     output: Path,
 ) -> None:
-    """根据目标时长（已对齐音频）生成 SRT 字幕文件."""
+    """生成 SRT 字幕文件，时间轴按字幕字数比例对齐实际音频时长.
+
+    每条字幕的显示时长 = (该字幕字数 / 总旁白字数) × audio_duration，
+    确保最后一条字幕的结束时间 ≈ 音频结束时间。
+    """
     output.parent.mkdir(parents=True, exist_ok=True)
+    # 计算总旁白字数
+    total_chars = sum(len(shot.get("subtitle", "").strip()) for shot in shots)
+    if total_chars <= 0:
+        total_chars = 1
+
     current_time = 0.0
     srt_lines = []
 
-    for i, (shot, duration) in enumerate(zip(shots, target_durations), 1):
-        start = current_time
-        end = current_time + duration
+    for i, shot in enumerate(shots, 1):
         subtitle = shot.get("subtitle", "").strip()
-
-        if subtitle:
-            srt_lines.append(str(i))
-            srt_lines.append(
-                f"{seconds_to_srt_time(start)} --> {seconds_to_srt_time(end)}"
-            )
-            srt_lines.append(subtitle)
-            srt_lines.append("")
-
+        if not subtitle:
+            continue
+        # 按该段字幕字数比例分配音频时长（比 4字/秒 估算更精确）
+        snippet_dur = audio_duration * len(subtitle) / total_chars
+        start = current_time
+        end = current_time + snippet_dur
+        srt_lines.append(str(i))
+        srt_lines.append(
+            f"{seconds_to_srt_time(start)} --> {seconds_to_srt_time(end)}"
+        )
+        srt_lines.append(subtitle)
+        srt_lines.append("")
         current_time = end
 
     output.write_text("\n".join(srt_lines), encoding="utf-8")
     print(f"[OK] 字幕文件生成: {output} ({len(shots)} 条字幕, "
-          f"时长范围 0.0 ~ {current_time:.1f}s)")
+          f"总字数{total_chars}字, 时长范围 0.0 ~ {current_time:.1f}s)")
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +265,7 @@ def build_ffmpeg_command(
         f",vignette=angle={VIGNETTE_ANGLE}"
     )
 
-    # 3. 命令 — 添加 -shortest，当音频比视频长时截断音频
+    # 3. 命令 — 音频自然播放，不循环
     cmd = [
         FFMPEG,
         "-y",
@@ -258,7 +282,6 @@ def build_ffmpeg_command(
         "-crf", "20",
         "-c:a", "aac",
         "-b:a", "192k",
-        "-shortest",                        # 以较短的流为准（截断过长的音频）
         str(output_path),
     ]
     return cmd
@@ -342,15 +365,20 @@ def main() -> None:
     script_durations = []
     for shot in shots:
         idx = shot.get("index", 0)
-        clip_path = CLIP_DIR / f"clip_{idx}.mp4"
+        if CLIP_SOURCE == "vimax":
+            clip_path = CLIP_DIR / str(idx) / "video.mp4"
+            error_script = "02b_vimax_gen.py"
+        else:
+            clip_path = CLIP_DIR / f"clip_{idx}.mp4"
+            error_script = "02_video_gen.py"
         if not clip_path.exists():
             raise FileNotFoundError(
-                f"视频片段不存在: {clip_path}\n请先运行 02_video_gen.py"
+                f"视频片段不存在: {clip_path}\n请先运行 {error_script}"
             )
         clips.append(clip_path)
         script_durations.append(shot.get("duration", 6))
 
-    print(f"[INFO] 视频片段就绪: {len(clips)} 个")
+    print(f"[INFO] 视频片段就绪 ({CLIP_SOURCE}): {len(clips)} 个")
 
     # 4. 计算目标时长（以视频为基准，限制拉伸倍数）
     video_durations = [get_media_duration(c) for c in clips]
@@ -380,10 +408,10 @@ def main() -> None:
         stretch_clip(clip, stretched_path, factor)
         stretched_clips.append(stretched_path)
 
-    # 6. 生成 SRT 字幕（时间轴对齐目标时长）
-    generate_srt(shots, target_durations, SRT_OUT)
+    # 6. 生成 SRT 字幕（时间轴按字数比例对齐实际音频时长）
+    generate_srt(shots, target_durations, audio_duration, SRT_OUT)
 
-    # 7. 执行合并（添加 -shortest 确保音频截断到视频长度）
+    # 7. 执行合并（视频原速、音频自然播放、字幕按字数对齐音频）
     merge_final_video(stretched_clips, AUDIO_PATH, FINAL_OUT, SRT_OUT)
 
     final_duration = get_media_duration(FINAL_OUT)
