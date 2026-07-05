@@ -32,6 +32,8 @@ class AgnesImageService(ImageGenerationService):
     回退在单次调用级别（与 TTS/文本一致）.
     """
 
+    _SUBMIT_TIMEOUT = int(os.getenv("AGNES_IMAGE_SUBMIT_TIMEOUT", "120"))  # 默认 120s
+
     def __init__(self) -> None:
         config.validate()
         # 构建完整模型队列: [主模型, 回退1, 回退2, ...]
@@ -111,7 +113,8 @@ class AgnesImageService(ImageGenerationService):
             try:
                 while True:
                     try:
-                        res = requests.post(url, json=payload, headers=headers, timeout=360)
+                        res = requests.post(url, json=payload, headers=headers,
+                                          timeout=self._SUBMIT_TIMEOUT)
                         break
                     except Exception as e:
                         _submit_retry += 1

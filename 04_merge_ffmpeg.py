@@ -25,8 +25,8 @@ from dotenv import load_dotenv
 _PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(_PROJECT_ROOT / ".env")
 
-# 视频片段来源: legacy（output/clips/clip_N.mp4） 或 vimax（output/vimax_working/shots/<idx>/video.mp4）
-CLIP_SOURCE = os.getenv("CLIP_SOURCE", "legacy")
+# 视频片段来源: vimax（output/vimax_working/shots/<idx>/video.mp4）
+CLIP_SOURCE = os.getenv("CLIP_SOURCE", "vimax")
 _VIMAX_WD = os.getenv("VIMAX_WORKING_DIR", "./output/vimax_working")
 CLIP_DIR = Path(os.getenv("VIDEO_OUTPUT_DIR", "./output/clips"))
 if CLIP_SOURCE == "vimax":
@@ -118,8 +118,7 @@ def compute_target_durations(
     音频与视频不对齐时：
       - 音频 < 视频：音频播完即止，后续无声（字幕覆盖全程）
       - 音频 > 视频：音频被截断
-    真正解决不对齐的方式是 01_script_gen 控制 narration 字数让 TTS ≈ 30s，
-    或 02_video_gen 让模型生成与音频匹配的视频长度.
+    真正的解决方式是 01_script_gen 控制 narration 字数让 TTS ≈ 30s.
     """
     effective_duration = video_total
     mode = "视频绝对不改（铁律）"
@@ -359,15 +358,10 @@ def main() -> None:
     script_durations = []
     for shot in shots:
         idx = shot.get("index", 0)
-        if CLIP_SOURCE == "vimax":
-            clip_path = CLIP_DIR / str(idx) / "video.mp4"
-            error_script = "02b_vimax_gen.py"
-        else:
-            clip_path = CLIP_DIR / f"clip_{idx}.mp4"
-            error_script = "02_video_gen.py"
+        clip_path = CLIP_DIR / str(idx) / "video.mp4"
         if not clip_path.exists():
             raise FileNotFoundError(
-                f"视频片段不存在: {clip_path}\n请先运行 {error_script}"
+                f"视频片段不存在: {clip_path}\n请先运行 02b_vimax_gen.py"
             )
         clips.append(clip_path)
         script_durations.append(shot.get("duration", 6))

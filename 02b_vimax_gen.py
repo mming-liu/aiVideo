@@ -21,11 +21,18 @@ _project_root = Path(__file__).resolve().parent
 
 from vimax_adapters import ImageGeneratorAiVideoAdapter, VideoGeneratorAiVideoAdapter
 from vimax_bridge import build_working_dir
+from vimax.utils.rate_limiter import RateLimiter
 
 SCRIPT_FILE = _project_root / "script_result.json"
 WORKING_DIR = Path(os.getenv("VIMAX_WORKING_DIR", "./output/vimax_working"))
 SUBMIT_INTERVAL = float(os.getenv("VIDEO_CLIP_INTERVAL", "65"))
 MAX_RETRIES = 3  # 单个镜头失败后最大重试次数
+
+# 速率限制（从 .env 读取，None = 不限制）
+_VIDEO_RPM = os.getenv("VIDEO_MAX_REQUESTS_PER_MINUTE")
+VIDEO_RATE_LIMITER = RateLimiter(
+    max_requests_per_minute=int(_VIDEO_RPM) if _VIDEO_RPM else None,
+)
 
 
 def load_script(path: Path) -> dict:
@@ -36,20 +43,33 @@ def load_script(path: Path) -> dict:
 
 
 def _build_prompt(shot: dict, script: dict) -> str:
-    """构建单镜头 prompt，含上下文与人物设定."""
-    motion_desc = shot.get("prompt", "")
+    """构建单镜头 prompt，使用 motion_desc + character_profile + context_bridge.
+
+    关键改变：主 prompt 用 motion_desc（帧间运动）替代原始 prompt（完整视觉描述），
+    因为静态构图信息已通过 first_frame/last_frame 参考图传递给视频模型.
+    """
+    # 主 prompt = motion_desc（运动描述） + audio_desc（字幕文本）
+    motion_desc = shot.get("motion_desc", "").strip()
+    if not motion_desc:
+        motion_desc = shot.get("prompt", "")  # 向后兼容：旧格式无 motion_desc
     audio_desc = shot.get("subtitle", "").strip()
     prompt = f"{motion_desc}\n{audio_desc}" if audio_desc else motion_desc
 
+    # 追加连续性上下文
     extras = []
+
+    # character_profile（全局人物外貌总纲）
     cp = script.get("character_profile", "").strip()
     if cp:
         extras.append(f"全局人物统一外貌设定：{cp}")
+
+    # context_bridge（视觉衔接）
     cb = shot.get("context_bridge", "").strip()
     if cb:
-        extras.append(f"叙事衔接（保持与上一镜视觉连贯）：{cb}")
+        extras.append(f"与上一镜视觉衔接：{cb}")
+
     if extras:
-        prompt = f"{prompt}\n\n{'；'.join(extras)}。请确保本镜头与上述设定/衔接描述一致。"
+        prompt = f"{prompt}\n\n{'；'.join(extras)}。"
     return prompt
 
 
@@ -65,10 +85,10 @@ async def generate_all(script: dict, working_dir: Path, force_first_frame: bool 
     shots_dir = working_dir / "shots"
     script_mtime = SCRIPT_FILE.stat().st_mtime if SCRIPT_FILE.exists() else None
 
-    print(f"\n[INFO] 开始两阶段批量生成（{len(shots)} 镜头，每镜最多 {MAX_RETRIES} 次重试）...\n")
+    print(f"\n[PLAN] 开始两阶段批量生成（{len(shots)} 镜头，每镜最多 {MAX_RETRIES} 次重试）...\n")
 
     # ------------------------------------------------------------------
-    # 阶段一：批量提交（间隔只控制提交之间，不等视频生成完成）
+    # 阶段一：批量提交（速率限制 + 间隔控制）
     # ------------------------------------------------------------------
     pending: list[dict] = []  # [{idx, shot_dir, video_path, req, task_id, attempts}]
     succeeded = 0
@@ -79,7 +99,7 @@ async def generate_all(script: dict, working_dir: Path, force_first_frame: bool 
         shot_dir = shots_dir / str(idx)
         video_path = shot_dir / "video.mp4"
         print(f"{'─'*50}")
-        print(f"[提交 {i}/{len(shots)}] 镜头{idx} 字幕: {shot.get('subtitle', 'N/A')}")
+        print(f"[SUBMIT {i}/{len(shots)}] 镜头{idx} 字幕: {shot.get('subtitle', 'N/A')}")
 
         # 缓存跳过 + 陈旧检测
         if video_path.exists() and video_path.stat().st_size > 20 * 1024:
@@ -89,15 +109,24 @@ async def generate_all(script: dict, working_dir: Path, force_first_frame: bool 
                 succeeded += 1
                 continue
             else:
-                print(f"  [!] prompt 已更新，重新生成")
+                print(f"  [WARN] prompt 已更新，重新生成")
 
         prompt = _build_prompt(shot, script)
         first_frame = str(shot_dir / "first_frame.png")
+        last_frame = str(shot_dir / "last_frame.png")
 
         try:
+            # 多参考图：首帧 + 可选尾帧（medium/large 变幅）
+            frame_paths = []
+            if Path(first_frame).exists():
+                frame_paths.append(first_frame)
+            if Path(last_frame).exists():
+                frame_paths.append(last_frame)
+
             req = await _make_request_async(
-                video_adapter, prompt, [first_frame] if Path(first_frame).exists() else [], idx,
+                video_adapter, prompt, frame_paths, shot,
             )
+            await VIDEO_RATE_LIMITER.acquire()  # 速率限制
             task_id = await video_adapter.submit_task(req)
             pending.append({
                 "idx": idx,
@@ -107,16 +136,16 @@ async def generate_all(script: dict, working_dir: Path, force_first_frame: bool 
                 "task_id": task_id,
                 "attempts": 1,
             })
-            print(f"  [已提交] task_id={task_id[:40]}...")
+            print(f"  [SUBMIT] task_id={task_id[:40]}...")
         except Exception as e:
             print(f"  [FAIL] 提交失败: {e}")
             failed += 1
 
         if i < len(shots):
-            print(f"  [间隔] {SUBMIT_INTERVAL:.0f}s 后提交下一个镜头...")
+            print(f"  [提交间隔] {SUBMIT_INTERVAL:.0f}s...")
             await asyncio.sleep(SUBMIT_INTERVAL)
 
-    print(f"\n[INFO] 阶段一完成：{len(pending)} 个任务已提交，开始轮询...\n")
+    print(f"\n[PLAN] 阶段一完成：{len(pending)} 个任务已提交，开始轮询...\n")
 
     # ------------------------------------------------------------------
     # 阶段二：并发轮询 + 失败重试循环
@@ -127,7 +156,7 @@ async def generate_all(script: dict, working_dir: Path, force_first_frame: bool 
             """返回 (item, result_code): 0=成功, 1=失败需重试, 2=最终失败."""
             idx = item["idx"]
             video_path = item["video_path"]
-            print(f"[轮询] 镜头{idx} (第{item['attempts']}次) 等待完成...")
+            print(f"[POLL] 镜头{idx} (第{item['attempts']}次) 等待完成...")
             try:
                 result = await video_adapter.fetch_result(item["req"], item["task_id"])
                 if result.success and result.save_path:
@@ -152,12 +181,12 @@ async def generate_all(script: dict, working_dir: Path, force_first_frame: bool 
                 # 重试：重新提交
                 item["attempts"] += 1
                 idx = item["idx"]
-                print(f"  [重试] 镜头{idx} 第{item['attempts']}/{MAX_RETRIES} 次重试...")
+                print(f"  [RETRY] 镜头{idx} 第{item['attempts']}/{MAX_RETRIES} 次重试...")
                 try:
+                    await VIDEO_RATE_LIMITER.acquire()  # 重提交也受速率限制
                     new_task_id = await video_adapter.submit_task(item["req"])
                     item["task_id"] = new_task_id
-                    print(f"  [已重提] 镜头{idx} task_id={new_task_id[:40]}...")
-                    # 重提交后等待间隔再轮询
+                    print(f"  [SUBMIT] 镜头{idx} task_id={new_task_id[:40]}...")
                     await asyncio.sleep(SUBMIT_INTERVAL)
                     pending.append(item)
                 except Exception as e:
@@ -165,26 +194,26 @@ async def generate_all(script: dict, working_dir: Path, force_first_frame: bool 
                     failed += 1
             else:
                 idx = item["idx"]
-                print(f"  [放弃] 镜头{idx} 已达最大重试次数 {MAX_RETRIES}，跳过")
+                print(f"  [FAIL] 镜头{idx} 已达最大重试次数 {MAX_RETRIES}，跳过")
                 failed += 1
 
         if pending:
-            print(f"\n[INFO] {len(pending)} 个镜头等待重试轮询...\n")
+            print(f"\n[PLAN] {len(pending)} 个镜头等待重试轮询...\n")
 
     print(f"\n{'='*50}")
-    print(f"视频片段生成完毕：总计 {len(shots)} | 成功 {succeeded} | 失败 {failed}")
+    print(f"[DONE] 视频片段生成完毕：总计 {len(shots)} | 成功 {succeeded} | 失败 {failed}")
     print(f"{'='*50}")
     return failed
 
 
-async def _make_request_async(video_adapter, prompt: str, frame_paths: list, clip_index: int):
-    """构建 VideoGenerationRequest（纯 CPU，直接同步构建）."""
+async def _make_request_async(video_adapter, prompt: str, frame_paths: list, shot: dict):
+    """构建 VideoGenerationRequest，支持多参考图（首帧+尾帧）+ 动态 duration."""
     import _video_gen
     from _video_gen import VideoGenerationRequest
     from style_prefix import STYLE_PREFIX, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt
 
     full_prompt = sanitize_prompt(ensure_prefix(prompt, STYLE_PREFIX))
-    # 优先 first_frame，其次任意可用参考图
+    # 优先使用传入的 frame_paths（已由 generate_all 预处理，含首帧+尾帧）
     image_path = None
     for fp in (frame_paths or []):
         if fp and Path(fp).exists():
@@ -193,12 +222,17 @@ async def _make_request_async(video_adapter, prompt: str, frame_paths: list, cli
 
     # 回退：从 character_portraits_registry 找角色正面肖像
     if not image_path:
-        image_path = _find_fallback_reference(Path(os.getenv("VIMAX_WORKING_DIR", "./output/vimax_working")))
+        image_path = _find_fallback_reference(
+            Path(os.getenv("VIMAX_WORKING_DIR", "./output/vimax_working"))
+        )
+
+    # duration 从 script 实际读取（向后兼容默认 5）
+    duration = shot.get("duration", 5)
 
     return VideoGenerationRequest(
         prompt=full_prompt,
-        clip_index=clip_index,
-        duration=5,
+        clip_index=shot["index"],
+        duration=duration,
         negative_prompt=NEGATIVE_PROMPT,
         size="960x1792",
         image_path=image_path,

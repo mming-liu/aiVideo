@@ -2,9 +2,8 @@
 
 固定前缀在四处出现，必须逐字一致：
   - 01_script_gen.py 的 PROMPT_TEMPLATE（LLM 生成 shot.prompt 时被要求以此开头）
-  - 本模块 STYLE_PREFIX（02_video_gen.py / vimax_adapters.py 运行时复用）
+  - 本模块 STYLE_PREFIX（02b_vimax_gen.py / vimax_adapters.py 运行时复用）
   - skill_spy.txt Skill1（参考文档）
-  - 02_video_gen.py 的 prefix（应 import 本模块，不再硬编码）
 改动任一处须同步其余三处。
 """
 
@@ -26,9 +25,17 @@ _SENSITIVE_SUBSTITUTIONS = {
     "光腚": "赤膊",
     "裸": "赤",
     # 暴力相关 — 动漫语境下用更叙事的替代
+    "刺进": "袭向",
+    "刺入": "掠过",
+    "刺": "击",
+    "心口": "胸口",
     "血": "红",
     "杀": "击",
     "死": "倒",
+    "毙命": "倒地",
+    "刺杀": "突袭",
+    "匕首": "短刃",
+    "剑刺": "剑掠",
 }
 
 
