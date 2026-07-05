@@ -52,7 +52,11 @@ class AgnesImageService(ImageGenerationService):
     # ------------------------------------------------------------------
     @staticmethod
     def _encode_image(path: Optional[str]) -> Optional[str]:
-        """读取本地图片，返回 data URL (base64). 失败返回 None."""
+        """读取本地图片，返回 data URL (base64)，padding 已标准化.
+
+        Agnes image API 对 base64 padding 较敏感，编码后主动补齐 padding 并
+        确保长度是 4 的倍数（消除 "incorrect padding" / "1 more than a multiple of 4" 错误）.
+        """
         if not path:
             return None
         try:
@@ -63,7 +67,13 @@ class AgnesImageService(ImageGenerationService):
             mime, _ = mimetypes.guess_type(p)
             mime = mime or "image/png"
             with open(p, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("ascii")
+                raw = f.read()
+            b64 = base64.b64encode(raw).decode("ascii")
+            # 标准化 padding：去掉多余 = 后按 4 字节补齐
+            b64 = b64.rstrip("=")
+            rem = len(b64) % 4
+            if rem:
+                b64 += "=" * (4 - rem)
             return f"data:{mime};base64,{b64}"
         except Exception:
             return None
