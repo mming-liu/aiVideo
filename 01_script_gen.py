@@ -17,9 +17,9 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))  # 默认第 1 章
 CHARACTER_EXTRACTION_ENABLED = os.getenv("CHARACTER_EXTRACTION_ENABLED", "1").strip() == "1"
-PROMPT_MAX_CHARS = int(os.getenv("PROMPT_MAX_CHARS", "8000"))  # 给 LLM 的原文上限，默认 8000 确保单章完整
+PROMPT_MAX_CHARS = int(os.getenv("PROMPT_MAX_CHARS", "12000"))  # 给 LLM 的原文上限，默认 12000 确保单章完整
 SHOT_COUNT_MIN = int(os.getenv("SHOT_COUNT_MIN", "4"))  # LLM 自适应镜头数下限
-SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "10"))  # LLM 自适应镜头数上限
+SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "20"))  # LLM 自适应镜头数上限，不设硬限制
 
 # ---------------------------------------------------------------------------
 # 1. 从小说提取指定章节
@@ -47,11 +47,12 @@ PROMPT_TEMPLATE = """
 
 # 第一步：决定镜头数与总时长（必做，写在最前面）
 根据以下规则自行决定本批分镜的镜头数 N 和总时长（范围 {min_shots}-{max_shots} 镜，无强制时长限制）：
-- 情节密度高（场景多、事件线复杂）→ N 取偏大值，每镜 duration 可取短一些
-- 情节舒缓、氛围渲染为主 → N 取偏小值，每镜 duration 可取长一些
-- 原文约 {max_chars} 字符，每镜覆盖约 400-800 字为宜
-- 每条 duration 自行决定（2-8秒），重要镜头给长一些，过渡镜头可以短一些
+- 情节密度高（场景多、事件线复杂）-> N 取偏大值，每镜 duration 可取短一些
+- 情节舒缓、氛围渲染为主 -> N 取偏小值，每镜 duration 可取长一些
+- 原文约 {max_chars} 字符，每镜覆盖约 300-600 字为宜
+- **每条 duration 自行决定（3-12秒）**，高潮镜头给 8-12 秒，过渡镜头 3-5 秒
 - **narration_segment 自行决定字数摘取，不限 35-45 字**，以原文最佳片段为准
+- **关键新增**：若分镜数 * 每镜时长不足以覆盖完整章节内容，则增加分镜数 N 或增加每镜 duration，直到能完整覆盖
 - 请在输出 JSON 的 `shot_count` 字段中写明 N
 
 # 核心铁律（违反任一即不合格）
@@ -135,7 +136,7 @@ PROMPT_TEMPLATE = """
   - narration_segment：从该段摘取最核心的原文原句（自行决定字数，以最佳摘句为准）
   - subtitle：与 narration_segment 逐字相同
   - prompt：按上面结构模板生成
-  - duration：每条自行决定（2-8秒），重要镜头给长，过渡镜头给短。**不同镜头应给不同 duration**，高潮镜头（large variation）给 6-8 秒，过渡镜头给 2-4 秒。
+  - duration：每条自行决定（3-12秒），高潮镜头（large variation）给 8-12 秒，过渡镜头给 3-5 秒。**不同镜头应给不同 duration**。
   - cam_idx：分配摄像机编号（1-3，同一摄像机镜头连续不交错）
   - variation_type：判断变幅（small/medium/large），至少 ceil(N/3) 个非 small
   - ff_desc：首帧静态快照（80-120字，纯静态，无运动动词）
@@ -170,7 +171,7 @@ PROMPT_TEMPLATE = """
   "shots": [
     {{
       "index": 1,
-      "duration": 5,
+      "duration": 6,
       "narration_segment": "太阳像火炉般烘烤着青州府大地，田间土皮都在冒烟",
       "subtitle": "太阳像火炉般烘烤着青州府大地，田间土皮都在冒烟",
       "cam_idx": 1,

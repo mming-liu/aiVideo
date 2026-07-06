@@ -57,10 +57,11 @@ class AgnesVideoService(VideoGenerationService):
     # ------------------------------------------------------------------
     @staticmethod
     def _encode_image(path: Optional[str]) -> Optional[str]:
-        """读取本地图片，返回 data URL (base64)，padding 已标准化.
+        """读取本地图片，返回 data URL (base64), 去掉 = padding.
 
-        Agnes video API 对 base64 padding 较敏感，编码后主动补齐 padding 并
-        确保长度是 4 的倍数（消除 "incorrect padding" / "1 more than a multiple of 4" 错误）.
+        Agnes video API 不接受带 = 填充的标准 base64，必须去掉尾部 = 号，
+        否则服务端返回 "Invalid image: Incorrect padding"。
+        Python 的 base64.b64decode 可自动补全缺失的 padding。
         """
         if not path:
             return None
@@ -70,12 +71,7 @@ class AgnesVideoService(VideoGenerationService):
                 return None
             with open(p, "rb") as f:
                 raw = f.read()
-            b64 = base64.b64encode(raw).decode("ascii")
-            # 标准化 padding：去掉多余 = 后按 4 字节补齐，消除 Agnes 端 padding 校验错误
-            b64 = b64.rstrip("=")
-            rem = len(b64) % 4
-            if rem:
-                b64 += "=" * (4 - rem)
+            b64 = base64.b64encode(raw).decode("ascii").rstrip("=")
             mime, _ = mimetypes.guess_type(p)
             return f"data:{mime or 'image/png'};base64,{b64}"
         except Exception:
@@ -175,6 +171,10 @@ class AgnesVideoService(VideoGenerationService):
                 payload["num_frames"] = num_frames
             if image_data_url:
                 payload[config.AGNES_VIDEO_IMAGE_FIELD] = image_data_url
+                # 日志含 b64 长度，便于排查 padding 相关错误
+                b64_body = image_data_url.split(",", 1)[-1]
+                print(f"  [镜头{req.clip_index}] 参考图编码完成 "
+                      f"(len={len(b64_body)}, mod4={len(b64_body)%4})")
 
             print(f"  [镜头{req.clip_index}] [prompt -> {model}] "
                   f"{req.prompt[:200]}{'...' if len(req.prompt) > 200 else ''}")

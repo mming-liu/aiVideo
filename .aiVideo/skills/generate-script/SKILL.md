@@ -1,14 +1,28 @@
 ---
 name: generate-script
-description: "将小说章节转化为视听同步的动漫电影级分镜脚本的核心合同"
+description: "将小说章节转化为视听同步的动漫电影级分镜脚本的核心合同，含分镜师知识库"
 ---
 
 # 分镜生成
 
 ## 输入
 
-- 小说章节文本（≤8000 字符）
+- 小说章节文本（≤12000 字符）
 - 已知角色库（跨章节一致性）
+
+## 知识库（分镜决策参考）
+
+以下 reference 文件提供分镜拆解的专业知识支持，生成前按需加载：
+- [references/shot-language.md](references/shot-language.md) — 景别/运镜/构图词汇库
+- [references/cinematography.md](references/cinematography.md) — 摄影技法库
+- [references/director-styles.md](references/director-styles.md) — 导演风格库
+- [references/art-styles.md](references/art-styles.md) — 美术风格库
+- [references/montage-theory.md](references/montage-theory.md) — 蒙太奇理论
+- [references/color-psychology.md](references/color-psychology.md) — 色彩心理学
+- [references/film-genres.md](references/film-genres.md) — 影片类型库
+- [references/veo-jimeng-guide.md](references/veo-jimeng-guide.md) — Veo/即梦双平台提示词最佳实践
+
+分镜模板见 [template.md](template.md)。
 
 ## 输出 Schema
 

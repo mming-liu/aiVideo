@@ -221,81 +221,90 @@ async def build_working_dir(
         _dump_json(shots_dir / str(idx) / "shot_description.json", sd)
         (shots_dir / str(idx)).mkdir(parents=True, exist_ok=True)
 
-    # ---- 6. 首帧 + 尾帧生成（摄像机首帧锚定 / 摄像机组间并行）----
+    # ---- 6. 首帧 + 尾帧生成（摄像机组间并行）----
     script_mtime = script_path.stat().st_mtime if script_path.exists() else None
 
     # 摄像机首帧锚定：同一摄像机内，镜头 N 的 first_frame 引用该摄像机第一个镜头的 first_frame
     camera_first_frames: dict[int, str] = {}  # {cam_idx: first_frame_path}
 
-    # 按摄像机分组
+    # 按摄像机分组处理（确保锚点先生成）
     cam_groups: dict[int, list[dict]] = OrderedDict()
     for shot in shots:
         cam = shot.get("cam_idx", 1)
         cam_groups.setdefault(cam, []).append(shot)
 
-    # 风格锚点：只在 Ch1 首次锁定
-    style_anchor_locked = False
+    # 风格锚点（asyncio.Lock 保护，只在 Ch1 首次锁定）
+    style_lock = asyncio.Lock()
 
-    async def _process_camera(cam_idx: int, cam_shots: list[dict]):
-        """单个摄像机内串行处理所有镜头的首帧 + 尾帧.
-
-        每个摄像机独立创建 adapter 实例，确保多摄像机间真正并行（无共享锁）.
-        """
-        cam_adapter = type(image_adapter)(
-            size=image_adapter.size,
-            negative_prompt=image_adapter.negative_prompt,
-            skip_prefix=image_adapter._skip_prefix,
-            skip_sanitize=image_adapter._skip_sanitize,
+    # 摄像机组间并行：每组独立生成帧，组内串行（首帧锚定依赖）
+    tasks = [
+        _gen_frames_for_camera_group(
+            cam_idx, cam_shots, shots_dir, image_adapter, force_first_frame,
+            script_mtime, bank, style_bank, characters_data, camera_first_frames,
+            style_lock, chapter_idx, cam_groups,
         )
-        nonlocal style_anchor_locked
-        for i, shot in enumerate(cam_shots):
-            is_first_in_cam = (i == 0)
-            idx = shot["index"]
-            shot_dir = shots_dir / str(idx)
-
-            # -- 首帧生成 --
-            ff_path = shot_dir / "first_frame.png"
-            refs = _build_reference_list(
-                shot, bank, style_bank, characters_data, camera_first_frames,
-                cam_idx=cam_idx, is_first_in_cam=is_first_in_cam,
-            )
-            ff_result = await _gen_first_frame_async(
-                cam_adapter, shots_dir, shot, force_first_frame, script_mtime,
-                reference_paths=refs,
-            )
-            if is_first_in_cam and ff_result:
-                camera_first_frames[cam_idx] = ff_result
-                # 风格锚点锁定（全局首帧 = 首个摄像机的首个镜头首帧）
-                if not style_anchor_locked and chapter_idx == 1 \
-                        and not style_bank.is_locked() and cam_idx == min(cam_groups.keys()):
-                    style_bank.lock(ff_result, chapter_idx)
-                    style_bank.save()
-                    style_anchor_locked = True
-
-            # -- 尾帧生成（medium/large 变幅）--
-            vt = shot.get("variation_type", "small").strip() or "small"
-            if vt in ("medium", "large"):
-                lf_desc = shot.get("lf_desc", "").strip()
-                if lf_desc:
-                    lf_refs = [str(ff_path)] if ff_path and ff_path.exists() else []
-                    # 追加角色参考（lf_desc 中提到的角色）
-                    char_ref = _select_best_reference(shot, bank, style_bank, characters_data)
-                    if char_ref and char_ref not in lf_refs:
-                        lf_refs.append(char_ref)
-                    await _gen_last_frame_async(
-                        cam_adapter, shots_dir, shot, force_first_frame, script_mtime,
-                        reference_paths=lf_refs,
-                    )
-                else:
-                    print(f"  [bridge] 镜头{idx}: variation_type={vt} 但 lf_desc 为空，跳尾帧")
-
-    # 摄像机组间并行执行（组内保持串行，保证锚定顺序）
-    await asyncio.gather(*[
-        _process_camera(cam_idx, cam_shots)
         for cam_idx, cam_shots in cam_groups.items()
-    ])
+    ]
+    await asyncio.gather(*tasks)
 
     print(f"[bridge] working_dir 就绪: {working_dir} ({n} shots, {len(cam_groups)} 摄像机)")
+
+
+async def _gen_frames_for_camera_group(
+    cam_idx: int,
+    cam_shots: list[dict],
+    shots_dir: Path,
+    image_adapter,
+    force_first_frame: bool,
+    script_mtime: float | None,
+    bank: CharacterBank,
+    style_bank: StyleBank,
+    characters_data: list[dict],
+    camera_first_frames: dict[int, str],
+    style_lock: asyncio.Lock,
+    chapter_idx: int,
+    cam_groups: dict[int, list[dict]],
+):
+    """单个摄像机组内所有镜头的首帧/尾帧生成（组内串行，组间并行）."""
+    for i, shot in enumerate(cam_shots):
+        is_first_in_cam = (i == 0)
+        idx = shot["index"]
+        shot_dir = shots_dir / str(idx)
+
+        # -- 首帧生成 --
+        ff_path = shot_dir / "first_frame.png"
+        refs = _build_reference_list(
+            shot, bank, style_bank, characters_data, camera_first_frames,
+            cam_idx=cam_idx, is_first_in_cam=is_first_in_cam,
+        )
+        ff_result = await _gen_first_frame_async(
+            image_adapter, shots_dir, shot, force_first_frame, script_mtime,
+            reference_paths=refs,
+        )
+        if is_first_in_cam and ff_result:
+            camera_first_frames[cam_idx] = ff_result
+            # 风格锚点锁定（全局首帧 = 首个摄像机的首个镜头首帧）
+            async with style_lock:
+                if chapter_idx == 1 and not style_bank.is_locked() \
+                        and cam_idx == min(cam_groups.keys()):
+                    style_bank.lock(ff_result, chapter_idx)
+                    style_bank.save()
+
+        # -- 尾帧生成（medium/large 变幅）--
+        vt = shot.get("variation_type", "small").strip() or "small"
+        if vt in ("medium", "large"):
+            lf_desc = shot.get("lf_desc", "").strip()
+            if lf_desc:
+                lf_refs = [str(ff_path)] if ff_path and ff_path.exists() else []
+                char_ref = _select_best_reference(shot, bank, style_bank, characters_data)
+                if char_ref and char_ref not in lf_refs:
+                    lf_refs.append(char_ref)
+                await _gen_last_frame_async(
+                    image_adapter, shots_dir, shot, force_first_frame, script_mtime,
+                    reference_paths=lf_refs,
+                )
+            else:
+                print(f"  [bridge] 镜头{idx}: variation_type={vt} 但 lf_desc 为空，跳尾帧")
 
 
 # ---------------------------------------------------------------------------

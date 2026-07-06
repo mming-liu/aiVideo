@@ -52,10 +52,11 @@ class AgnesImageService(ImageGenerationService):
     # ------------------------------------------------------------------
     @staticmethod
     def _encode_image(path: Optional[str]) -> Optional[str]:
-        """读取本地图片，返回 data URL (base64)，padding 已标准化.
+        """读取本地图片，返回 data URL (base64).
 
-        Agnes image API 对 base64 padding 较敏感，编码后主动补齐 padding 并
-        确保长度是 4 的倍数（消除 "incorrect padding" / "1 more than a multiple of 4" 错误）.
+        Python base64.b64encode 输出始终是 4 的倍数（自动补齐 =），
+        直接使用标准输出，不再做额外 strip/re-pad 处理——这在某些场景下
+        反而会引入 padding 不匹配的问题.
         """
         if not path:
             return None
@@ -69,11 +70,6 @@ class AgnesImageService(ImageGenerationService):
             with open(p, "rb") as f:
                 raw = f.read()
             b64 = base64.b64encode(raw).decode("ascii")
-            # 标准化 padding：去掉多余 = 后按 4 字节补齐
-            b64 = b64.rstrip("=")
-            rem = len(b64) % 4
-            if rem:
-                b64 += "=" * (4 - rem)
             return f"data:{mime};base64,{b64}"
         except Exception:
             return None
@@ -115,6 +111,9 @@ class AgnesImageService(ImageGenerationService):
             # 图生图: 在 extra_body.image 传入输入图像
             if ref_data_url:
                 extra["image"] = [ref_data_url]
+                b64_body = ref_data_url.split(",", 1)[-1]
+                print(f"  [镜头{req.shot_index}] 参考图编码完成 "
+                      f"(len={len(b64_body)}, mod4={len(b64_body)%4})")
 
             payload["extra_body"] = extra
 

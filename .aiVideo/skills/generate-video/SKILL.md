@@ -1,6 +1,6 @@
 ---
 name: generate-video
-description: "将分镜 JSON 转化为视频片段的核心合同，含首帧锚定/尾帧生成/速率限制"
+description: "将分镜 JSON 转化为视频片段的核心合同，含 Seedance 2.0 提示词指南"
 ---
 
 # 视频生成
@@ -9,6 +9,21 @@ description: "将分镜 JSON 转化为视频片段的核心合同，含首帧锚
 
 - `script_result.json`（含 shots[] 及摄像机连贯性字段）
 - `output/vimax_working/` 缓存（首帧/尾帧/角色肖像/风格锚点）
+
+## 输出
+
+- `output/vimax_working/shots/<idx>/video.mp4` — 每个镜头的静音视频片段
+
+## 提示词参考
+
+视频生成的质量高度依赖 prompt 质量。以下参考指南提供详细的 prompt 编写策略：
+
+- [references/seedance-prompt-guide.md](references/seedance-prompt-guide.md) — 即梦 Seedance 2.0 提示词完整指南：
+  - @参考图/视频/音频引用系统
+  - 摄像机运动术语表（推拉摇移跟/希区柯克变焦/鱼眼）
+  - 时间分段 prompt（0-3s/3-6s/6-10s）
+  - 人物一致性、运动复制、特效复制、视频扩展等场景模板
+  - 短视频/微短剧/广告/教育等行业的完整 prompt 示例
 
 ## 输出
 

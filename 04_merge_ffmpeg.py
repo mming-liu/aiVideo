@@ -258,7 +258,7 @@ def build_ffmpeg_command(
         f",vignette=angle={VIGNETTE_ANGLE}"
     )
 
-    # 3. 命令
+    # 3. 命令（-shortest 以较短流为准，防止缺失镜头导致音频超长）
     cmd = [
         FFMPEG,
         "-y",
@@ -275,6 +275,7 @@ def build_ffmpeg_command(
         "-crf", "20",
         "-c:a", "aac",
         "-b:a", "192k",
+        "-shortest",
         str(output_path),
     ]
     return cmd
@@ -353,18 +354,29 @@ def main() -> None:
     audio_duration = get_media_duration(AUDIO_PATH)
     print(f"[INFO] 旁白音频时长: {audio_duration:.1f}s")
 
-    # 3. 检查视频片段
+    # 3. 检查视频片段（跳过不存在的镜头以容忍部分失败）
     clips = []
     script_durations = []
+    valid_shots = []    # 只保留有视频的镜头（用于字幕生成）
+    missing_idxs = []
     for shot in shots:
         idx = shot.get("index", 0)
         clip_path = CLIP_DIR / str(idx) / "video.mp4"
         if not clip_path.exists():
-            raise FileNotFoundError(
-                f"视频片段不存在: {clip_path}\n请先运行 02b_vimax_gen.py"
-            )
+            print(f"[WARN] 视频片段不存在: {clip_path}，将跳过此镜头")
+            missing_idxs.append(idx)
+            continue
         clips.append(clip_path)
         script_durations.append(shot.get("duration", 6))
+        valid_shots.append(shot)
+
+    if missing_idxs:
+        print(f"[WARN] 共跳过 {len(missing_idxs)} 个缺失镜头: {missing_idxs}")
+    if not clips:
+        raise FileNotFoundError(
+            f"没有任何有效视频片段，请先运行 02b_vimax_gen.py\n"
+            f"检查目录: {CLIP_DIR}"
+        )
 
     print(f"[INFO] 视频片段就绪 ({CLIP_SOURCE}): {len(clips)} 个")
 
@@ -377,7 +389,7 @@ def main() -> None:
     )
     print(f"[INFO] 目标时长分配:")
     for i, (sd, td, s) in enumerate(
-        zip(script_durations, target_durations, shots), 1
+        zip(script_durations, target_durations, valid_shots), 1
     ):
         print(f"  镜头{i}: 脚本{sd}s -> 目标{td:.1f}s "
               f"\"{s.get('subtitle', '')[:20]}...\"")
@@ -395,8 +407,8 @@ def main() -> None:
         stretch_clip(clip, stretched_path, factor)
         stretched_clips.append(stretched_path)
 
-    # 6. 生成 SRT 字幕（以视频时间为基准）
-    generate_srt(shots, target_durations, audio_duration, SRT_OUT)
+    # 6. 生成 SRT 字幕（只用有视频的镜头，避免字幕出现在不存在片段上）
+    generate_srt(valid_shots, target_durations, audio_duration, SRT_OUT)
 
     # 7. 合并
     merge_final_video(stretched_clips, AUDIO_PATH, FINAL_OUT, SRT_OUT)
