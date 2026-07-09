@@ -57,11 +57,12 @@ class AgnesVideoService(VideoGenerationService):
     # ------------------------------------------------------------------
     @staticmethod
     def _encode_image(path: Optional[str]) -> Optional[str]:
-        """读取本地图片，返回 data URL (base64), 去掉 = padding.
+        """读取本地图片，返回 data URL (base64).
 
-        Agnes video API 不接受带 = 填充的标准 base64，必须去掉尾部 = 号，
-        否则服务端返回 "Invalid image: Incorrect padding"。
-        Python 的 base64.b64decode 可自动补全缺失的 padding。
+        Agnes video API 使用标准 base64（保留 = padding）。
+        确保图片编码后 len % 4 == 0，否则解码会失败报 "Incorrect padding"。
+        之前错误地使用了 .rstrip("=")，仅当文件大小是 3 的倍数时无害，
+        其余情况会破坏 4 字节对齐。现已修复为标准 base64。
         """
         if not path:
             return None
@@ -71,7 +72,7 @@ class AgnesVideoService(VideoGenerationService):
                 return None
             with open(p, "rb") as f:
                 raw = f.read()
-            b64 = base64.b64encode(raw).decode("ascii").rstrip("=")
+            b64 = base64.b64encode(raw).decode("ascii")
             mime, _ = mimetypes.guess_type(p)
             return f"data:{mime or 'image/png'};base64,{b64}"
         except Exception:
