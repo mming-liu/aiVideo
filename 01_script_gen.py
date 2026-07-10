@@ -68,7 +68,7 @@ PROMPT_TEMPLATE = """
 5. **平台合规（语义级禁令，违反则被AI审核拦截）**：
   - **禁止性描写**：不得出现任何性暗示、裸露画面、亲密接触、身体部位特写。拥抱亲吻一律退化为眼神交流或转身离去。
   - **禁止血腥暴力细节**：不得出现刺入/砍伤/折断等暴力动作的生理细节描述（如"刺进心口""鲜血飞溅""伤口可见"）。打斗场面用远景侧写——剑光一闪/身影交错/水面碎纹/袖风猎猎——绝不写流血细节。
-  - **词汇替换**：用"矮小/小身影"代"娃娃/孩童"，"赤足/赤膊"代"光腚/裸"，"红"代"血"，"交锋/出手"代"杀/刺"。
+  - **词汇替换**："赤足/赤膊"代"光腚/裸"，"红"代"血"，"交锋/出手"代"杀/刺"。
 
 # 镜头语言库（必须从中选用并写入 prompt）
 
@@ -211,7 +211,7 @@ SYSTEM_PROMPT = (
     "5. 语义级合规（违规则被审核拦截）：\n"
     "   - 禁止性暗示/性描写/亲密接触，有情人退化为眼神交流或转身离去；\n"
     "   - 禁止血腥暴力生理细节（刺入/砍伤/流血/伤口），打斗用远景侧写（剑光一闪/身影交错/水面碎纹），绝不描述流血；\n"
-    "   - 低龄/裸露/血腥词一律替换（小身影代娃娃、红代血、交锋代刺杀）。\n"
+    "   - 低龄/裸露/血腥词一律替换（红代血、交锋代刺杀）。\n"
     "6. 摄像机分组与镜头连贯性：\n"
     "   - 所有镜头分到2-3台摄像机（cam_idx=1,2,3），同摄像机镜头连续；\n"
     "   - 每镜拆解为 ff_desc/lf_desc/motion_desc；\n"
@@ -548,6 +548,51 @@ def parse_response(raw_text: str) -> dict:
     return script
 
 
+def _compute_timecodes(script: dict) -> None:
+    """计算每个镜头的时间轴（timecode），并生成 timeline 数组.
+
+    每个镜头分配 start 和 end 时间戳，单位：秒。
+    用于后续 TTS 和合并阶段精确对齐。
+    """
+    shots = script.get("shots", [])
+    if not shots:
+        return
+
+    # 预留 0.3s 空镜缓冲（每个镜头前后各 0.15s）
+    # 实际画面时间 = duration - 0.3s
+    buffer_per_shot = 0.3
+
+    current_time = 0.0
+    timeline = []
+
+    for shot in shots:
+        duration = shot.get("duration", 5)
+        # 实际画面时间，预留缓冲
+        effective_duration = max(duration - buffer_per_shot, 0.5)
+        end_time = current_time + effective_duration
+
+        # 写入 timecode 字段
+        shot["timecode"] = {
+            "start": round(current_time, 2),
+            "end": round(end_time, 2),
+        }
+        shot["effective_duration"] = round(effective_duration, 2)
+
+        timeline.append({
+            "index": shot.get("index", 0),
+            "start": round(current_time, 2),
+            "end": round(end_time, 2),
+            "duration": duration,
+            "effective_duration": round(effective_duration, 2),
+        })
+
+        current_time = end_time + buffer_per_shot  # 下一镜头从空镜结束后开始
+
+    # 顶层 timeline 数组
+    script["timeline"] = timeline
+    script["total_effective_duration"] = round(current_time - buffer_per_shot, 2)  # 减去最后一个缓冲
+
+
 # ---------------------------------------------------------------------------
 # 5. 主流程
 # ---------------------------------------------------------------------------
@@ -663,3 +708,10 @@ if __name__ == "__main__":
         print(f"    字幕: {shot.get('subtitle', 'N/A')}")
         print(f"    画面: {shot.get('prompt', 'N/A')[:120]}...")
         print()
+
+    # Step 4.5 — 计算时间轴（timecode），每个镜头占一段时间
+    _compute_timecodes(script)
+    # 保存带 timecode 的脚本
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        json.dump(script, f, ensure_ascii=False, indent=2)
+    print(f"[INFO] 时间轴已计算并保存")

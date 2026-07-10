@@ -54,6 +54,8 @@ def register(provider: str, cls: type[TTSServiceInterface]) -> None:
     _REGISTRY[provider] = cls
 
 
+
+
 def _auto_register() -> None:
     """延迟导入所有供应商实现."""
     if _REGISTRY:
@@ -77,6 +79,20 @@ def _auto_register() -> None:
         from . import openai_provider as _oa
         register("openai", _oa.OpenAIProvider)
         register("openai_compat", _oa.OpenAIProvider)
+    except ImportError:
+        pass
+
+    # Qwen3 TTS (from waoowaoo)
+    try:
+        from . import dashscope_qwen3 as _q3
+        register("dashscope_qwen3", _q3.DashScopeQwen3TTSProvider)
+    except ImportError:
+        pass
+
+    # Voice design
+    try:
+        from . import voice_design as _vd
+        register("voice_design", _vd.VoiceDesignService)
     except ImportError:
         pass
 

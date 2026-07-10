@@ -60,6 +60,13 @@ def _auto_register() -> None:
     except ImportError:
         pass  # dashscope 相关依赖未安装
 
+    # DashScope HTTP (KF2V 首尾帧支持, from waoowaoo)
+    try:
+        from . import http_dashscope_provider as _hdp
+        register("dashscope_http", _hdp.DashScopeHttpVideoService)
+    except ImportError:
+        pass
+
     # agnes ai (OpenAI 兼容协议, image-to-video + 异步轮询)
     try:
         from . import agnes_provider as _ag

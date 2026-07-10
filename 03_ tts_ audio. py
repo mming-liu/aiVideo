@@ -1,0 +1,135 @@
+"""语音合成 — 从分镜脚本读取旁白，TTS 生成配音。
+
+支持多供应商，通过 .env 的 TTS_PROVIDER 切换:
+  dashscope_sdk   → DashScope Python SDK (WebSocket)
+  dashscope_http  → DashScope HTTP REST 端点
+  openai          → OpenAI 官方 /v1/audio/speech
+  openai_compat   → 任何兼容 OpenAI 格式的第三方 API
+
+支持按镜头逐个生成 TTS（shot_N.amp3）和整段 narration 生成。
+"""
+import json
+import sys
+from pathlib import Path
+from typing import List, Optional
+
+from tts import create_provider, TTSRequest
+from tts.config import config
+
+# 配置
+_PROJECT_ROOT = Path(__file__).resolve().parent
+SCRIPT_FILE = _PROJECT_ROOT / "script_result.json"
+AUDIO_OUTPUT_DIR = _PROJECT_ROOT / "output" / "audio"
+
+
+def load_script(path: Path = SCRIPT_FILE) -> dict:
+    if not path.exists():
+        raise FileNotFoundError(f"分镜脚本不存在: {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_narration(path: Path = SCRIPT_FILE) -> str:
+    script = load_script(path)
+    narration = script.get("narration", "")
+    if not narration:
+        raise ValueError(f"分镜脚本中 narration 字段为空: {path}")
+    return narration
+
+
+def gen_single_tts(text: str, output_path: Path, provider=None) -> str:
+    if provider is None:
+        provider = create_provider()
+    req = TTSRequest(
+        text=text,
+        model=config.MODEL,
+        rate=config.RATE,
+        volume=config.VOLUME,
+        format=config.FORMAT,
+        sample_rate=config.SAMPLE_RATE,
+    )
+    result = provider.synthesize(req, output=str(output_path))
+    if not result.success:
+        raise RuntimeError(result.error)
+    size_kb = output_path.stat().st_size / 1024
+    print(f"  [OK] {output_path.name} ({size_kb:.1f} KB)")
+    return str(output_path)
+
+
+def gen_shot_tts(shot: dict, output_dir: Path, provider=None) -> Optional[str]:
+    idx = shot.get("index", 0)
+    text = shot.get("narration_segment", "").strip()
+    if not text:
+        print(f"  [SKIP] 镜头 {idx}: 无 narration_segment")
+        return None
+    output_path = output_dir / f"shot_{idx}.mp3"
+    if output_path.exists() and output_path.stat().st_size > 1024:
+        print(f"  [CACHE] 镜头 {idx}: 已缓存")
+        return str(output_path)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        gen_single_tts(text, output_path, provider)
+        return str(output_path)
+    except Exception as e:
+        print(f"  [FAIL] 镜头 {idx}: {e}")
+        return None
+
+
+def gen_all_shot_tts(script: dict, output_dir: Path) -> List[str]:
+    shots = script.get("shots", [])
+    if not shots:
+        print("[WARN] 没有镜头数据")
+        return []
+    output_dir.mkdir(parents=True, exist_ok=True)
+    provider = create_provider()
+    results = []
+    print(f"[INFO] 开始为 {len(shots)} 个镜头生成 TTS...\n")
+    for shot in shots:
+        path = gen_shot_tts(shot, output_dir, provider)
+        if path:
+            results.append(path)
+    print(f"\n[INFO] 镜头 TTS 完成: {len(results)}/{len(shots)} 成功")
+    return results
+
+
+def gen_narration_tts(text: str, output: str = None) -> str:
+    if output is None:
+        output = config.OUTPUT_PATH
+    provider = create_provider()
+    req = TTSRequest(
+        text=text,
+        model=config.MODEL,
+        rate=config.RATE,
+        volume=config.VOLUME,
+        format=config.FORMAT,
+        sample_rate=config.SAMPLE_RATE,
+    )
+    print(f"[INFO] TTS 文本长度: {len(text)} 字")
+    print(f"[INFO] 供应商: {config.PROVIDER}")
+    print(f"[INFO] 模型: {req.model} | 语速: {req.rate} | 音量: {req.volume}")
+    print("[INFO] 正在调用 TTS ...")
+    result = provider.synthesize(req, output=output)
+    if not result.success:
+        raise RuntimeError(result.error)
+    size_kb = len(result.audio_bytes) / 1024
+    print(f"[OK] 配音生成完成: {result.save_path} ({size_kb:.1f} KB)")
+    return result.save_path
+
+
+if __name__ == "__main__":
+    script = load_script()
+    shots = script.get("shots", [])
+    narration = script.get("narration", "")
+    print(f"分镜: {len(shots)} 个镜头")
+    print(f"旁白({len(narration)}字): {narration[:80]}...\n")
+    answer = input("确认生成配音？(y/N): ").strip().lower()
+    if answer not in ("y", "yes"):
+        print("已取消。")
+        sys.exit(0)
+    try:
+        config.validate()
+        print("\n=== 按镜头生成 TTS ===")
+        gen_all_shot_tts(script, AUDIO_OUTPUT_DIR)
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        sys.exit(1)
