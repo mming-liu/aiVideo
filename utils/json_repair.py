@@ -76,6 +76,20 @@ def safe_parse_json(text: str) -> Any:
     except json.JSONDecodeError:
         pass
 
+    # 修复尾部逗号
+    no_trailing = re.sub(r",\s*}", "}", extracted)
+    no_trailing = re.sub(r",\s*]", "]", no_trailing)
+    if no_trailing != extracted:
+        try:
+            return json.loads(no_trailing)
+        except json.JSONDecodeError:
+            pass
+        fixed2 = _fix_common_json_errors(no_trailing)
+        try:
+            return json.loads(fixed2)
+        except json.JSONDecodeError:
+            pass
+
     try:
         from jsonrepair import repair_json
         return json.loads(repair_json(extracted))

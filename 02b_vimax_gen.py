@@ -1,9 +1,11 @@
-"""视频生成（ViMax 后端） — 流水线优化版.
+"""视频生成（ViMax 后端） — 流水线优化版 v2.
 
-核心优化：分镜内串行（首帧→尾帧→提交），分镜间流水线（提交后后台轮询，继续处理下一镜）
+核心优化：
+  - **音频先行确定时长**（v2 新增）：提交视频前先为该镜头生成 TTS 音频，
+    用实际音频时长计算视频帧数（num_frames），保证音画精准对齐
+  - 分镜内串行（首帧→尾帧→提交），分镜间流水线（提交后后台轮询，继续处理下一镜）
   - 首帧/尾帧：使用 vimax_bridge.build_working_dir 预生成
   - 视频提交：每60s间隔，后台轮询
-  - 打印简化：只用 [idx] 已提交 / [idx] OK / [idx] FAIL
   - 时长回填：视频生成后用 ffprobe 测量实际时长，写回 JSON
 """
 
@@ -23,8 +25,11 @@ _project_root = Path(__file__).resolve().parent
 from vimax_adapters import ImageGeneratorAiVideoAdapter, VideoGeneratorAiVideoAdapter
 from vimax_bridge import build_working_dir
 from vimax.utils.rate_limiter import RateLimiter
+from tts import create_provider, TTSRequest
+from tts.config import config as tts_config
 
 SCRIPT_FILE = _project_root / "script_result.json"
+AUDIO_TTS_DIR = _project_root / "output" / "audio"
 WORKING_DIR = Path(os.getenv("VIMAX_WORKING_DIR", "./output/vimax_working"))
 MAX_RETRIES = int(os.getenv("VIDEO_MAX_RETRIES", "3"))
 SUBMIT_INTERVAL = float(os.getenv("VIDEO_CLIP_INTERVAL", "60"))
@@ -58,6 +63,69 @@ def _find_ffprobe() -> str:
 
 
 FFPROBE = _find_ffprobe()
+
+
+def _measure_media_duration(path: Path) -> float:
+    """用 ffprobe 测量媒体时长（秒）。"""
+    if not path.exists():
+        return 0.0
+    try:
+        result = subprocess.run(
+            [FFPROBE, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except Exception as e:
+        print(f"[WARN] 测量时长失败 {path.name}: {e}")
+    return 0.0
+
+
+def _gen_shot_audio_duration(shot: dict, audio_dir: Path, provider=None) -> float:
+    """为指定镜头生成 TTS 音频，返回实际时长（秒）.
+
+    核心优化：先生成音频拿到实际时长，再按音频时长计算视频帧数，保证音画精准对齐.
+    """
+    idx = shot.get("index", 0)
+    text = shot.get("narration_segment", "").strip()
+    if not text:
+        print(f"  [{idx}] 无 narration_segment，回退使用 LLM 预估时长")
+        return shot.get("duration", 5)
+
+    audio_path = audio_dir / f"shot_{idx}.mp3"
+    if audio_path.exists() and audio_path.stat().st_size > 1024:
+        duration = _measure_media_duration(audio_path)
+        if duration > 0:
+            return duration
+        audio_path.unlink()
+
+    try:
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        if provider is None:
+            provider = create_provider()
+        req = TTSRequest(
+            text=text,
+            model=tts_config.MODEL,
+            rate=tts_config.RATE,
+            volume=tts_config.VOLUME,
+            format=tts_config.FORMAT,
+            sample_rate=tts_config.SAMPLE_RATE,
+        )
+        result = provider.synthesize(req, output=str(audio_path))
+        if not result.success:
+            raise RuntimeError(result.error)
+
+        duration = _measure_media_duration(audio_path)
+        if duration > 0:
+            size_kb = audio_path.stat().st_size / 1024
+            print(f"  [{idx}] TTS ({size_kb:.0f}KB/{duration:.1f}s)")
+            return duration
+    except Exception as e:
+        print(f"  [{idx}] TTS 失败: {e}")
+
+    print(f"  [{idx}] 回退使用 LLM 预估时长")
+    return shot.get("duration", 5)
 
 
 def _measure_actual_duration(video_path: Path) -> float:
@@ -96,8 +164,9 @@ def _update_script_with_actual_durations(working_dir: Path) -> None:
             actual_duration = _measure_actual_duration(video_path)
             if actual_duration > 0:
                 shot["actual_duration"] = round(actual_duration, 2)
-                # 同时计算与期望时长的偏差
-                expected = shot.get("duration", 5)
+                # 相对于音频时长的偏差（新标准：视频应匹配音频）
+                audio_ref = shot.get("actual_audio_duration", 0)
+                expected = audio_ref if audio_ref > 0 else shot.get("duration", 5)
                 deviation = abs(actual_duration - expected) / expected * 100 if expected > 0 else 0
                 shot["duration_deviation_pct"] = round(deviation, 1)
                 updated_count += 1
@@ -159,13 +228,14 @@ async def _submit_single_shot(
     video_adapter, semaphore: asyncio.Semaphore,
     shot: dict, prompt: str, frame_paths: list,
     shot_dir: Path, video_path: Path, max_retries: int,
+    audio_duration: float = 0,
 ) -> asyncio.Task | None:
     """提交单个镜头，返回轮询 Task."""
     idx = shot["index"]
     for attempt in range(1, max_retries + 1):
         try:
             await VIDEO_RATE_LIMITER.acquire()
-            req = await _make_request_async(video_adapter, prompt, frame_paths, shot)
+            req = await _make_request_async(video_adapter, prompt, frame_paths, shot, audio_duration)
             task_id = await video_adapter.submit_task(req)
             tag = f"(重{attempt})" if attempt > 1 else ""
             print(f"[{idx}] 已提交 {tag}")
@@ -182,8 +252,8 @@ async def _submit_single_shot(
     return None
 
 
-async def _make_request_async(video_adapter, prompt: str, frame_paths: list, shot: dict):
-    """构建 VideoGenerationRequest."""
+async def _make_request_async(video_adapter, prompt: str, frame_paths: list, shot: dict, audio_duration: float = 0):
+    """构建 VideoGenerationRequest，使用音频实际时长计算视频帧数."""
     from _video_gen import VideoGenerationRequest
     from style_prefix import STYLE_PREFIX, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt
 
@@ -197,7 +267,8 @@ async def _make_request_async(video_adapter, prompt: str, frame_paths: list, sho
         image_path = _find_fallback_reference(
             Path(os.getenv("VIMAX_WORKING_DIR", "./output/vimax_working"))
         )
-    duration = shot.get("duration", 5)
+    # 使用音频实际时长替代 LLM 预估的 duration，保证音画对齐
+    duration = max(round(audio_duration), 3) if audio_duration > 0 else shot.get("duration", 5)
     return VideoGenerationRequest(
         prompt=full_prompt,
         clip_index=shot["index"],
@@ -227,7 +298,7 @@ def _find_fallback_reference(working_dir: Path) -> str | None:
 
 
 async def generate_all(script: dict, working_dir: Path, force_first_frame: bool = False) -> int:
-    """流水线生成：首帧/尾帧预生成 → 顺序提交视频 → 后台并发轮询."""
+    """流水线生成：首帧/尾帧预生成 → TTS 预生成(得实际时长) → 按时长提交视频 → 后台并发轮询."""
     image_adapter = ImageGeneratorAiVideoAdapter()
     video_adapter = VideoGeneratorAiVideoAdapter()
 
@@ -238,11 +309,27 @@ async def generate_all(script: dict, working_dir: Path, force_first_frame: bool 
     shots_dir = working_dir / "shots"
     script_mtime = SCRIPT_FILE.stat().st_mtime if SCRIPT_FILE.exists() else None
 
-    total_duration = sum(s.get("duration", 0) for s in shots)
-    actual_concurrency = min(len(shots), VIDEO_CONCURRENCY)
-    print(f"\n[流水线] {len(shots)} 镜, ~{total_duration}s, 间隔{SUBMIT_INTERVAL}s, 轮询{actual_concurrency}路\n")
+    # 2. 预生成 TTS 音频，获取每个镜头的实际时长（核心优化）
+    print(f"\n[音频] 预生成 {len(shots)} 个镜头的 TTS 音频，获取实际时长...")
+    tts_provider = create_provider()
+    shot_audio_durations = {}
+    for shot in shots:
+        idx = shot["index"]
+        ad = _gen_shot_audio_duration(shot, AUDIO_TTS_DIR, provider=tts_provider)
+        shot_audio_durations[idx] = ad
+        shot["actual_audio_duration"] = round(ad, 2)
 
-    # 2. 收集需要生成的镜头（跳过缓存）
+    total_llm = sum(s.get("duration", 0) for s in shots)
+    total_audio = sum(shot_audio_durations.values())
+    print(f"\n[音频] LLM 预估总长: {total_llm:.0f}s | 音频实际总长: {total_audio:.1f}s")
+    print(f"       差异: {abs(total_audio - total_llm):.1f}s ({abs(total_audio - total_llm)/max(total_llm,1)*100:.0f}%)")
+    if abs(total_audio - total_llm) > 5:
+        print(f"       [!] 音频与 LLM 预估偏差较大，视频将按音频实际时长生成")
+
+    actual_concurrency = min(len(shots), VIDEO_CONCURRENCY)
+    print(f"\n[流水线] {len(shots)} 镜, ~{total_audio:.0f}s, 间隔{SUBMIT_INTERVAL}s, 轮询{actual_concurrency}路\n")
+
+    # 3. 收集需要生成的镜头（跳过缓存）
     shot_tasks = []
     for shot in shots:
         idx = shot["index"]
@@ -266,13 +353,14 @@ async def generate_all(script: dict, working_dir: Path, force_first_frame: bool 
             "frame_paths": frame_paths,
             "shot_dir": shot_dir,
             "video_path": video_path,
+            "audio_duration": shot_audio_durations.get(idx, 0),
         })
 
     if not shot_tasks:
         print("[全部已缓存]")
         return 0
 
-    # 3. 流水线提交 + 后台轮询
+    # 4. 流水线提交 + 后台轮询
     poll_semaphore = asyncio.Semaphore(actual_concurrency)
     poll_all_tasks: list[asyncio.Task] = []
     last_submit_time = 0.0
@@ -291,11 +379,12 @@ async def generate_all(script: dict, working_dir: Path, force_first_frame: bool 
             video_adapter, poll_semaphore,
             info["shot"], info["prompt"], info["frame_paths"],
             info["shot_dir"], info["video_path"], MAX_RETRIES,
+            audio_duration=info["audio_duration"],
         )
         if task:
             poll_all_tasks.append(task)
 
-    # 4. 等待所有轮询完成
+    # 5. 等待所有轮询完成
     print(f"\n等待 {len(poll_all_tasks)} 个任务完成...\n")
     results = await asyncio.gather(*poll_all_tasks, return_exceptions=True)
 
@@ -304,7 +393,11 @@ async def generate_all(script: dict, working_dir: Path, force_first_frame: bool 
 
     print(f"\n完成: {succeeded} 成功 / {failed} 失败")
 
-    # 4.5 回填实际视频时长到 JSON
+    # 6. 保存音频实际时长到 JSON，供 04 合并阶段使用
+    with open(SCRIPT_FILE, "w", encoding="utf-8") as f:
+        json.dump(script, f, ensure_ascii=False, indent=2)
+    print(f"[INFO] 已保存音频实际时长到 JSON")
+    # 7. 回填视频实际时长到 JSON
     _update_script_with_actual_durations(working_dir)
 
     return failed

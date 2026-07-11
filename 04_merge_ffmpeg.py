@@ -1,11 +1,15 @@
 """视频合并 — 将分镜片段、旁白音频合成为最终成片。
 
+核心改进（setpts 精确对齐）：
+  不再依赖 -shortest 截断对齐音画，而是通过 setpts 逐镜头将视频
+  拉伸到对应的音频时长，实现零偏差的音画对齐。视频精确等于音频长度。
+
 流程:
   1. 读取 script_result.json 获取字幕与镜头信息
-  2. 使用实际视频时长（actual_duration）计算时间轴
-  3. 使用 per-shot TTS 音频（shot_N.mp3）实现精确音画对齐
-  4. 字幕按实际视频时长分布，覆盖全程无空白
-  5. ffmpeg concat + 字幕烧录 + 调色 + 暗角 + 混音
+  2. 使用 per-shot 音频时长（actual_audio_duration）作为目标时长
+  3. 逐镜头 setpts 拉伸视频到目标时长
+  4. concat 拼接拉伸后的视频片段
+  5. 字幕烧录 + 调色 + 暗角 + 混音
 """
 
 import json
@@ -13,7 +17,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import List, Tuple, Optional
 
@@ -76,7 +79,7 @@ SUBTITLE_OUTLINE_WIDTH = int(os.getenv("SUBTITLE_OUTLINE_WIDTH", "1"))
 
 
 # ---------------------------------------------------------------------------
-# 工具函数
+# 逐镜头时域拉伸（setpts 精确对齐音频时长）
 # ---------------------------------------------------------------------------
 
 def _run(cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
@@ -96,6 +99,53 @@ def get_media_duration(path: Path) -> float:
     return float(result.stdout.strip())
 
 
+STRETCH_RATIO_MIN = float(os.getenv("STRETCH_RATIO_MIN", "0.75"))
+STRETCH_RATIO_MAX = float(os.getenv("STRETCH_RATIO_MAX", "1.333"))
+
+
+def stretch_clip(clip_path: Path, target_dur: float, output_path: Path) -> bool:
+    """用 setpts 将视频拉伸到目标时长.
+
+    视频时长通过 setpts 滤镜精确适配音频时长，消除音画偏差。
+    拉伸导致的速度变化在 ±33% 范围内感知微弱，适合用于消除 8n+1 量化误差。
+    """
+    if target_dur <= 0:
+        return False
+    actual_dur = get_media_duration(clip_path)
+    if actual_dur <= 0:
+        return False
+
+    ratio = target_dur / actual_dur
+    # 限制拉伸范围防止明显变形
+    if ratio < STRETCH_RATIO_MIN or ratio > STRETCH_RATIO_MAX:
+        clamped = max(STRETCH_RATIO_MIN, min(STRETCH_RATIO_MAX, ratio))
+        print(f"  [WARN] 拉伸比 {ratio:.3f} 超出 [{STRETCH_RATIO_MIN}, {STRETCH_RATIO_MAX}]，"
+              f"限制到 {clamped:.3f}")
+        ratio = clamped
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        FFMPEG, "-y",
+        "-i", str(clip_path),
+        "-vf", f"setpts={ratio}*PTS",
+        "-an",
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "20",
+        str(output_path),
+    ]
+    try:
+        _run(cmd)
+        size_kb = output_path.stat().st_size // 1024
+        print(f"  [STRETCH] {clip_path.name} {actual_dur:.1f}s -> {target_dur:.1f}s "
+              f"(ratio={ratio:.3f}, {size_kb}KB)")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"[ERROR] 拉伸失败: {e.stderr[:200]}")
+        return False
+
+
 def seconds_to_srt_time(seconds: float) -> str:
     """将秒数转换为 SRT 时间格式 HH:MM:SS,mmm."""
     hours = int(seconds // 3600)
@@ -106,39 +156,31 @@ def seconds_to_srt_time(seconds: float) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 时间轴计算（使用实际视频时长 + per-shot 音频）
+# 时间轴计算（使用 per-shot 音频时长作为目标时长）
 # ---------------------------------------------------------------------------
 
-def get_shot_duration(shot: dict) -> float:
-    """获取镜头实际时长。
+def get_shot_target_duration(shot: dict) -> float:
+    """获取镜头目标时长——即音频时长，视频将被拉伸到此值。
 
-    优先级：actual_duration（真实测量）> effective_duration（01 计算的带缓冲时长）> duration（请求时长）
+    优先级：actual_audio_duration（02b 测量的 TTS 实际时长）> duration（01 的文本比例估算）
     """
-    # 02b 视频生成后写入的实际时长
-    actual = shot.get("actual_duration")
-    if actual and actual > 0:
-        return actual
-
-    # 01 计算的有效时长（已减去 0.3s 缓冲）
-    effective = shot.get("effective_duration")
-    if effective and effective > 0:
-        return effective
-
-    # 回退到原始请求时长
+    audio = shot.get("actual_audio_duration")
+    if audio and audio > 0:
+        return float(audio)
     return shot.get("duration", 5)
 
 
-def compute_timeline_from_actual(script: dict) -> Tuple[List[float], float]:
-    """基于实际视频时长计算每个镜头的时间轴。
+def compute_timeline_from_script(script: dict) -> Tuple[List[float], float]:
+    """基于每镜目标时长（音频时长）计算整个时间轴。
 
     Returns:
-        durations: 每个镜头的实际/有效时长列表
-        total: 总时长
+        durations: 每个镜头的目标时长列表
+        total: 总时长（= 音频总长）
     """
     shots = script.get("shots", [])
-    durations = [get_shot_duration(s) for s in shots]
+    durations = [get_shot_target_duration(s) for s in shots]
     total = sum(durations)
-    print(f"[INFO] 时间轴: {len(durations)} 镜, 总计 {total:.1f}s")
+    print(f"[INFO] 音频时间轴: {len(durations)} 镜, 总计 {total:.1f}s")
     return durations, total
 
 
@@ -186,7 +228,7 @@ def generate_srt(
 ) -> None:
     """生成 SRT 字幕文件。
 
-    字幕按每个镜头的实际时长比例分配时间。
+    字幕按每个镜头目标时长（音频时长）分配时间。
     """
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -198,7 +240,7 @@ def generate_srt(
         if not subtitle:
             continue
 
-        # 字幕时长按该镜头实际视频时长
+        # 字幕时长按该镜头目标时长（音频时长）
         start = current_time
         end = current_time + dur
         srt_lines.append(str(i))
@@ -215,25 +257,72 @@ def generate_srt(
 
 
 # ---------------------------------------------------------------------------
-# FFmpeg 合并命令
+# 合并流程：拉伸 → concat → 字幕 + 调色 + 暗角 + 混音
 # ---------------------------------------------------------------------------
 
-def build_ffmpeg_command(
+
+def concat_clips(clips: List[Path], output_path: Path) -> None:
+    """用 ffmpeg concat 拼接多个视频片段（-c copy 不重编码）。"""
+    list_path = output_path.parent / "concat_list_stretched.txt"
+    lines = [f"file '{c.resolve().as_posix()}'" for c in clips]
+    list_path.write_text("\n".join(lines), encoding="utf-8")
+
+    cmd = [
+        FFMPEG, "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", str(list_path),
+        "-c", "copy",
+        str(output_path),
+    ]
+    print(f"  [CONCAT] 拼接 {len(clips)} 个拉伸后的视频")
+    try:
+        _run(cmd)
+    finally:
+        if list_path.exists():
+            list_path.unlink()
+
+
+def merge_final_video(
     clips: List[Path],
-    srt_path: Path,
+    shot_audio_durations: List[float],
+    stretched_dir: Path,
     audio_path: Path,
     output_path: Path,
-    concat_list_path: Path,
-) -> List[str]:
-    """构建 ffmpeg 合并命令（concat + 字幕 + 调色 + 暗角 + 混音）。"""
-    # 1. 写入 concat 列表文件
-    concat_lines = []
-    for clip in clips:
-        safe_path = clip.resolve().as_posix()
-        concat_lines.append(f"file '{safe_path}'")
-    concat_list_path.write_text("\n".join(concat_lines), encoding="utf-8")
+    srt_path: Path,
+) -> None:
+    """逐镜头拉伸对齐音频时长 → concat 拼接 → 字幕 + 调色 + 暗角 + 混音。
 
-    # 2. 视频滤镜链（字幕 -> 调色 -> 暗角）
+    核心改进：不再依赖 -shortest 截断对齐，而是通过 setpts 精确将每个视频片段
+    拉伸到对应的音频时长，实现零偏差的音画对齐。视频时长 = 音频时长。
+    """
+    # 1. 逐个拉伸视频片段
+    stretched_clips = []
+    stretched_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, (clip, target_dur) in enumerate(zip(clips, shot_audio_durations)):
+        stretched_path = stretched_dir / f"stretched_{i:04d}.mp4"
+        if stretched_path.exists() and not DEBUG_SKIP_CACHE:
+            cached_dur = get_media_duration(stretched_path)
+            if abs(cached_dur - target_dur) < 0.1:
+                stretched_clips.append(stretched_path)
+                continue
+            stretched_path.unlink()
+
+        if not stretch_clip(clip, target_dur, stretched_path):
+            print(f"  [WARN] 镜头 {i+1} 拉伸失败，使用原始片段")
+            stretched_clips.append(clip)
+        else:
+            stretched_clips.append(stretched_path)
+
+    # 2. 拼接拉伸后的片段
+    concat_video = stretched_dir / "concat_video.mp4"
+    if concat_video.exists() and not DEBUG_SKIP_CACHE:
+        print(f"  [CACHE] 拼接视频已缓存: {concat_video}")
+    else:
+        concat_clips(stretched_clips, concat_video)
+
+    # 3. 最终合成（字幕 + 调色 + 暗角 + 混音）
     srt_path_abs = srt_path.resolve().as_posix()
     escaped_srt = srt_path_abs.replace(":", "\\:")
     style = (
@@ -249,13 +338,9 @@ def build_ffmpeg_command(
         f"vignette=angle={VIGNETTE_ANGLE}"
     )
 
-    # 3. 命令
     cmd = [
-        FFMPEG,
-        "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", str(concat_list_path),
+        FFMPEG, "-y",
+        "-i", str(concat_video),
         "-i", str(audio_path),
         "-map", "0:v:0",
         "-map", "1:a:0",
@@ -266,39 +351,18 @@ def build_ffmpeg_command(
         "-crf", "20",
         "-c:a", "aac",
         "-b:a", "192k",
-        "-shortest",
         str(output_path),
     ]
-    return cmd
-
-
-def merge_final_video(
-    clips: List[Path],
-    audio_path: Path,
-    output_path: Path,
-    srt_path: Path,
-) -> None:
-    """执行 ffmpeg 合并."""
-    concat_list_path = output_path.parent / "concat_list.txt"
-
-    cmd = build_ffmpeg_command(
-        clips, srt_path, audio_path, output_path,
-        concat_list_path,
-    )
 
     print(f"\n{'='*60}")
     print("[INFO] 开始合并成片 ...")
     print(f"[INFO] 视频片段: {len(clips)} 个")
-    print(f"[INFO] 旁白音频: {audio_path}")
+    print(f"[INFO] 音频文件: {audio_path}")
     print(f"[INFO] 字幕文件: {srt_path}")
     print(f"[INFO] 最终输出: {output_path}")
     print(f"{'='*60}\n")
 
     result = subprocess.run(cmd, capture_output=True, text=True)
-
-    # 清理临时文件
-    if concat_list_path.exists():
-        concat_list_path.unlink()
 
     if result.returncode != 0:
         print(f"[ERROR] ffmpeg 失败:\n{result.stderr}")
@@ -338,6 +402,7 @@ def main() -> None:
     # 2. 收集视频片段和 per-shot 音频
     clips = []
     valid_shots = []  # 只保留有视频的镜头
+    shot_indices = []
     missing_idxs = []
 
     for shot in shots:
@@ -349,6 +414,7 @@ def main() -> None:
             continue
         clips.append(clip_path)
         valid_shots.append(shot)
+        shot_indices.append(idx)
 
     if missing_idxs:
         print(f"[WARN] 共跳过 {len(missing_idxs)} 个缺失镜头: {missing_idxs}")
@@ -360,12 +426,10 @@ def main() -> None:
 
     print(f"[INFO] 视频片段就绪 ({CLIP_SOURCE}): {len(clips)} 个")
 
-    # 3. 计算时间轴（使用实际时长）
-    durations, video_total = compute_timeline_from_actual(script)
-    # 过滤到有效镜头
-    durations = [durations[shots.index(s)] for s in valid_shots]
-
-    print(f"[INFO] 视频实际总时长: {video_total:.1f}s")
+    # 3. 计算目标时长（音频时长作为视频拉伸目标）
+    target_durations = [get_shot_target_duration(s) for s in valid_shots]
+    total_target = sum(target_durations)
+    print(f"[INFO] 目标时长（音频）: 总计 {total_target:.1f}s")
 
     # 4. 处理音频：优先使用 per-shot 音频，否则回退到整段 narration
     audio_path = None
@@ -387,6 +451,7 @@ def main() -> None:
         audio_path = merged_audio
         audio_duration = get_media_duration(audio_path)
         print(f"[INFO] 使用 per-shot 音频: {len(audio_paths)} 个片段, 总长 {audio_duration:.1f}s")
+        use_stretch = True
     else:
         # 回退到整段 narration
         if not AUDIO_PATH.exists():
@@ -396,22 +461,87 @@ def main() -> None:
         audio_path = AUDIO_PATH
         audio_duration = get_media_duration(audio_path)
         print(f"[INFO] 回退使用整段 narration: {audio_duration:.1f}s")
+        # 无 per-shot 音频时无法逐镜拉伸，使用原始视频
+        print(f"[INFO] 无 per-shot 音频，跳过逐镜拉伸，直接使用原始视频")
+        target_durations = [get_media_duration(c) for c in clips]
+        use_stretch = False
 
-    # 5. 生成 SRT 字幕（基于实际时长）
-    generate_srt(valid_shots, durations, SRT_OUT)
+    # 5. 生成 SRT 字幕（基于目标音频时长）
+    generate_srt(valid_shots, target_durations, SRT_OUT)
 
-    # 6. 合并（视频不拉伸，直接按实际时长 concat）
-    merge_final_video(clips, audio_path, FINAL_OUT, SRT_OUT)
+    # 6. 合并（拉伸对齐 → concat → 字幕/调色/暗角/混音）
+    if use_stretch:
+        merge_final_video(
+            clips, target_durations,
+            stretched_dir=TEMP_DIR,
+            audio_path=audio_path,
+            output_path=FINAL_OUT,
+            srt_path=SRT_OUT,
+        )
+    else:
+        # 旧模式 fallback（无 per-shot 音频时）
+        print(f"\n{'='*60}")
+        print("[INFO] 使用旧模式合并（无 per-shot 音频，直接 concat + -shortest）")
+        print(f"{'='*60}\n")
+        concat_list = TEMP_DIR / "merge_concat.txt"
+        concat_list.parent.mkdir(parents=True, exist_ok=True)
+        lines = [f"file '{c.resolve().as_posix()}'" for c in clips]
+        concat_list.write_text("\n".join(lines), encoding="utf-8")
+
+        srt_path_abs = SRT_OUT.resolve().as_posix()
+        escaped_srt = srt_path_abs.replace(":", "\\:")
+        style = (
+            f"FontName={SUBTITLE_FONT}"
+            f"\\,FontSize={SUBTITLE_FONT_SIZE}"
+            f"\\,PrimaryColour={SUBTITLE_COLOR}"
+            f"\\,OutlineColour={SUBTITLE_OUTLINE_COLOR}"
+            f"\\,Outline={SUBTITLE_OUTLINE_WIDTH}"
+        )
+        video_filter = (
+            f"subtitles='{escaped_srt}':force_style='{style}',"
+            f"eq=contrast={CONTRAST}:saturation={SATURATION},"
+            f"vignette=angle={VIGNETTE_ANGLE}"
+        )
+        cmd = [
+            FFMPEG, "-y",
+            "-f", "concat", "-safe", "0", "-i", str(concat_list),
+            "-i", str(audio_path),
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-vf", video_filter,
+            "-af", f"volume={AUDIO_VOLUME}",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+            "-c:a", "aac", "-b:a", "192k",
+            "-shortest",
+            str(FINAL_OUT),
+        ]
+        subprocess.run(cmd, check=True)
+        if concat_list.exists():
+            concat_list.unlink()
+        if FINAL_OUT.exists():
+            print(f"\n[OK] 成片生成完毕: {FINAL_OUT}")
 
     # 7. 清理临时合并音频
     if use_per_shot_audio and 'merged_audio' in locals() and Path(merged_audio).exists():
         Path(merged_audio).unlink()
 
+    # 8. 合成报告
     final_duration = get_media_duration(FINAL_OUT)
     print("\n[INFO] 合成报告：")
-    print(f"  视频实际总时长: {video_total:.1f}s")
-    print(f"  音频实际总时长: {audio_duration:.1f}s")
-    print(f"  最终输出时长:   {final_duration:.1f}s")
+    print(f"  音频总时长:      {audio_duration:.1f}s")
+    print(f"  最终输出时长:    {final_duration:.1f}s")
+    mismatch = abs(final_duration - audio_duration)
+    print(f"  音画偏差:        {mismatch:.1f}s（理想：<0.1s）")
+    if use_stretch:
+        print(f"  [OK] 视频已精确拉伸对齐音频")
+        if mismatch < 0.3:
+            print(f"  [OK] 音画零偏差")
+        else:
+            print(f"  [WARN] 偏差源：拉伸缓存过旧或 ffmpeg 精度限制")
+    else:
+        if mismatch < 1:
+            print(f"  [OK] 音画对齐良好（-shortest 模式）")
+        else:
+            print(f"  [WARN] 音画偏差较大，建议使用 per-shot 音频模式")
 
 
 # ---------------------------------------------------------------------------

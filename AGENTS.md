@@ -1,51 +1,90 @@
-# AGENTS.md
+﻿# Repository Guidelines
 
-本文件记录项目架构与约定，供后续会话复用。
+## Project Overview
 
-## 流水线
+aiVideo is an automated video production pipeline that transforms novel chapters into cinematic videos. It generates storyboards, video clips, TTS narration, and merges everything into a final MP4.
+
+## Pipeline
 
 ```
 01_script_gen.py → 02b_vimax_gen.py → 03_tts_audio.py → 04_merge_ffmpeg.py
-     (分镜)          (视频+首帧+尾帧)       (旁白语音)         (合成)
+   (storyboard)      (video + frames)      (narration)        (merge)
 ```
 
-- **01_script_gen.py**：小说章节 → LLM 生成分镜 JSON（含摄像机分组、镜头分解、视觉衔接、人物外貌总纲）
-- **02b_vimax_gen.py**：分镜 JSON → ViMax 桥接层翻译 → 首帧/尾帧生成（摄像机锚定）→ 视频片段提交+轮询
-- **03_tts_audio.py**：旁白文本 → TTS 语音
-- **04_merge_ffmpeg.py**：片段 + 音频 + 字幕 → 最终 MP4
+- **01_script_gen.py**: Novel chapter → LLM generates storyboard JSON
+- **02b_vimax_gen.py**: Storyboard JSON → ViMax translation → first/last frame generation → video clip submission + polling
+- **03_tts_audio.py**: Narration text → TTS audio generation
+- **04_merge_ffmpeg.py**: Video clips + audio + subtitles → final MP4
 
-## 新能力（v3 + v4）
+## Project Structure
 
-### 已同步的 ViMax 连续性机制
-- 摄像机分组（cam_idx 2-3 台）
-- 镜头分解（ff_desc / lf_desc / motion_desc）
-- 变幅类型（small / medium / large）
-- 首帧锚定（同摄像机首帧共享）
-- 尾帧生成（medium/large 变幅）
-- 视觉衔接（context_bridge）
-- 人物外貌总纲（character_profile）
-- 视角检测（front/side/back 肖像匹配）
-- 速率限制器（每分钟 API 上限）
-- 首帧/尾帧生成校验 + 自动重试
+| Path | Description |
+|------|-------------|
+| `01_*.py` - `04_*.py` | Main pipeline entry points |
+| `tts/` | TTS providers (DashScope SDK/HTTP, OpenAI) |
+| `_text_gen/` | Text generation (Qwen, DeepSeek, Agnes) |
+| `_video_gen/` | Video generation (DashScope, Agnes) |
+| `_image_gen/` | Image generation (Agnes) |
+| `vimax/` | ViMax framework (agents, interfaces, pipelines, tools) |
+| `vimax_bridge.py` | Bridge layer between script and ViMax |
+| `.env` | Configuration (API keys, model settings) |
 
-### 已删除的旧入口
-- **02_video_gen.py**：被 02b_vimax_gen.py 完全取代
-- **01b_image_gen.py**：首帧生成改由 vimax_bridge 内部处理
+## Build & Run
 
-## 关键决策
+```bash
+# Install dependencies
+pip install -r requirements.txt
 
-1. **视频模式 = async 轮询**：提交任务 → 轮询 task_id → 下载 video_url
-2. **图片 = 视频首帧**：vimax_bridge 内部为每个镜头生成 first_frame.png，视频生成做 image-to-video
-3. **统一 403 回退**：各 provider 均沿用 `_model_queue` + 403 自动切换模式
-4. **所有 provider 走 .env**，不硬编码
+# Run pipeline steps
+python 01_script_gen.py    # Generate storyboard
+python 02b_vimax_gen.py    # Generate video clips
+python 03_tts_audio.py     # Generate narration audio
+python 04_merge_ffmpeg.py  # Merge into final video
 
-## Provider 架构
+# Verify syntax
+python -m py_compile 01_script_gen.py 02b_vimax_gen.py 03_tts_audio.py 04_merge_ffmpeg.py
+```
 
-| 模块 | 协议 | 当前实现 |
-|---|---|---|
-| `_text_gen/` | OpenAI chat completions | DashScope Qwen / DeepSeek / Agnes |
+## Coding Style
+
+- **Language**: Python 3.10+
+- **Indentation**: 4 spaces
+- **Naming**: `snake_case` for functions/variables, `PascalCase` for classes
+- **Encoding**: UTF-8 (avoid hardcoded Chinese characters in logic)
+- All providers use `.env` — never hardcode API keys
+
+## Provider Architecture
+
+All providers follow ABC interface + factory registry + Config singleton pattern:
+
+| Module | Protocol | Implementations |
+|--------|----------|-----------------|
+| `_text_gen/` | OpenAI chat completions | DashScope Qwen, DeepSeek, Agnes |
 | `_image_gen/` | OpenAI images API | Agnes |
-| `_video_gen/` | 自定义轮询 | DashScope 通义万相 / Agnes |
-| `tts/` | TTS | DashScope SDK / DashScope HTTP / OpenAI |
+| `_video_gen/` | Custom polling | DashScope, Agnes |
+| `tts/` | TTS | DashScope SDK, DashScope HTTP, OpenAI |
 
-均采用：ABC 接口 + 工厂注册表 + Config 单例 + Dataclass 模型。
+## Configuration
+
+Edit `.env` to switch providers:
+
+```ini
+# Text generation
+TEXT_PROVIDER=deepseek
+
+# Video generation
+VIDEO_PROVIDER=agnes
+
+# TTS
+TTS_PROVIDER=dashscope_sdk
+
+# Chapter selection
+NOVEL_CHAPTER=1
+```
+
+## Key Conventions
+
+1. **Video mode = async polling**: Submit task → poll task_id → download video_url
+2. **Images = video first frames**: vimax_bridge generates first_frame.png per shot
+3. **403 fallback**: Providers use `_model_queue` with automatic fallback on 403 errors
+4. **Rate limiting**: VIDEO_MAX_REQUESTS_PER_MINUTE, IMAGE_GEN_INTERVAL

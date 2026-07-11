@@ -1,0 +1,18 @@
+﻿// aiVideo project rules
+// Command prefix rules that are automatically allowed in this project
+
+// Python compilation
+prefix_rule(pattern=["python", "-m", "py_compile"], decision="allow")
+
+// File reading
+prefix_rule(pattern=["powershell", "-Command", "Get-Content"], decision="allow")
+prefix_rule(pattern=["powershell", "-Command", "Get-ChildItem"], decision="allow")
+
+// File writing
+prefix_rule(pattern=["powershell", "-Command", "Set-Content"], decision="allow")
+prefix_rule(pattern=["powershell", "-Command", "Out-File"], decision="allow")
+
+// File operations
+prefix_rule(pattern=["Remove-Item"], decision="allow")
+prefix_rule(pattern=["Copy-Item"], decision="allow")
+prefix_rule(pattern=["New-Item"], decision="allow")

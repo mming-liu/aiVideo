@@ -1,4 +1,4 @@
-﻿"""TTS 鏁版嵁妯″瀷 鈥?渚涘簲鍟嗘棤鍏?"""
+"""TTS 数据模型 — 供应商无关。"""
 
 from dataclasses import dataclass, field
 from typing import Optional
@@ -6,17 +6,19 @@ from typing import Optional
 
 @dataclass
 class TTSRequest:
-    """璇煶鍚堟垚璇锋眰锛堜笌渚涘簲鍟嗘棤鍏筹級."""
+    """语音合成请求（与供应商无关）。"""
 
-    text: str             # 寰呰浆鎹㈢殑鏂囨湰
-    model: str = ""       # 渚涘簲鍟嗕晶鐨勬ā鍨嬪悕绉?    rate: float = 0.92    # 璇€熺郴鏁帮紝鑼冨洿鍥犳彁渚涘晢鑰屽紓
-    volume: int = 50      # 闊抽噺锛岃寖鍥村洜鎻愪緵鍟嗚€屽紓
-    format: str = "mp3"   # 杈撳嚭鏍煎紡锛歮p3 / wav / pcm
-    sample_rate: int = 16000  # 閲囨牱鐜?
+    text: str = ""              # 待转换的文本
+    model: str = ""             # 供应商晶牌的模型名
+    rate: float = 0.92          # 语速系数，范围因供应商而异
+    volume: int = 50            # 音量，范围因供应商而异
+    format: str = "mp3"         # 输出格式：mp3 / wav / pcm
+    sample_rate: int = 16000    # 采样率
+
 
 @dataclass
 class TTSSuccessResult:
-    """鍚堟垚鎴愬姛."""
+    """合成成功。"""
 
     success: bool = True
     audio_bytes: bytes = b""
@@ -25,7 +27,7 @@ class TTSSuccessResult:
 
 @dataclass
 class TTSFailureResult:
-    """鍚堟垚澶辫触."""
+    """合成失败。"""
 
     success: bool = False
     error: str = ""
@@ -33,4 +35,3 @@ class TTSFailureResult:
 
 # Union type
 TTSServiceResult = TTSSuccessResult | TTSFailureResult
-

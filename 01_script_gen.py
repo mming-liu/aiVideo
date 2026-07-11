@@ -4,8 +4,10 @@ import json
 import os
 import re
 from pathlib import Path
-from chapter_reader import extract_section
+from datetime import datetime
+from chapter_reader import extract_section, extract_chapter
 import storyboard_refs
+from utils.json_repair import safe_parse_json_object
 
 from _text_gen import config, create_service, TextGenerationRequest
 from character_bank import CharacterBank
@@ -17,7 +19,7 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))  # 默认第 1 章
 CHARACTER_EXTRACTION_ENABLED = os.getenv("CHARACTER_EXTRACTION_ENABLED", "1").strip() == "1"
-PROMPT_MAX_CHARS = int(os.getenv("PROMPT_MAX_CHARS", "12000"))  # 给 LLM 的原文上限，默认 12000 确保单章完整
+SECTIONS_PER_CHAPTER = int(os.getenv("SECTIONS_PER_CHAPTER", "1"))  # 每章对应文件中的一个小节
 SHOT_COUNT_MIN = int(os.getenv("SHOT_COUNT_MIN", "4"))  # LLM 自适应镜头数下限
 SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "20"))  # LLM 自适应镜头数上限，不设硬限制
 
@@ -25,16 +27,11 @@ SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "20"))  # LLM 自适应镜头�
 # 1. 从小说提取指定章节
 # ---------------------------------------------------------------------------
 
-def read_chapter(path: str = "锦衣夜行_77119小说.txt", chapter: int = 1,
-                 max_chars: int = 8000) -> str:
-    """提取小说指定章节，截取前 max_chars 字符（控制 token 用量）."""
+def read_chapter(path: str = "锦衣夜行_77119小说.txt", chapter: int = 1) -> str:
+    """提取小说指定章节（合并多个小节），返回完整内容."""
     full_text = extract_section(path, chapter)
-    # 截取前 max_chars 字符
-    truncated = full_text[:max_chars]
-    if len(full_text) > max_chars:
-        print(f"[INFO] 章节原文共 {len(full_text)} 字符，"
-              f"截取前 {max_chars} 字符用于生成分镜")
-    return truncated
+    print(f"[INFO] 选取第 {chapter} 章全文 {len(full_text)} 字符作为素材")
+    return full_text
 
 
 # ---------------------------------------------------------------------------
@@ -45,15 +42,15 @@ PROMPT_TEMPLATE = """
 # 角色定位
 你是资深国风动漫分镜导演兼动画摄影指导，擅长把小说原文转化为动漫电影级视觉描述。请严格基于下方小说原文，生成一部 9:16 竖屏抖音短视频的动漫电影级分镜脚本。画面风格为精美2D国风动画，非真人写实。
 
-# 第一步：决定镜头数与总时长（必做，写在最前面）
-根据以下规则自行决定本批分镜的镜头数 N 和总时长（范围 {min_shots}-{max_shots} 镜，无强制时长限制）：
-- 情节密度高（场景多、事件线复杂）-> N 取偏大值，每镜 duration 可取短一些
-- 情节舒缓、氛围渲染为主 -> N 取偏小值，每镜 duration 可取长一些
-- 原文约 {max_chars} 字符，每镜覆盖约 300-600 字为宜
-- **每条 duration 自行决定（3-12秒）**，高潮镜头给 8-12 秒，过渡镜头 3-5 秒
+# 第一步：决定镜头数（必做，写在最前面）
+根据以下规则自行决定本批分镜的镜头数 N（范围 {min_shots}-{max_shots} 镜）：
+- 情节密度高（场景多、事件线复杂）-> N 取偏大值
+- 情节舒缓、氛围渲染为主 -> N 取偏小值
+- 原文约 {novel_char_count} 字符，每镜覆盖约 300-600 字为宜
 - **narration_segment 自行决定字数摘取，不限 35-45 字**，以原文最佳片段为准
-- **关键新增**：若分镜数 * 每镜时长不足以覆盖完整章节内容，则增加分镜数 N 或增加每镜 duration，直到能完整覆盖
+- **关键新增**：若 N 个镜头不足以覆盖完整章节内容，则增加镜头数 N 直到能完整覆盖
 - 请在输出 JSON 的 `shot_count` 字段中写明 N
+- **注意：每镜时长（duration）由系统根据 TTS 实际生成长度自动决定，不需要在 JSON 中输出 duration 字段**
 
 # 核心铁律（违反任一即不合格）
 1. 音字同步：shot[i].subtitle 必须与 shot[i].narration_segment 逐字相同；narration 字段必须等于所有 subtitle 按序拼接。
@@ -137,13 +134,13 @@ PROMPT_TEMPLATE = """
   - narration_segment：从该段摘取最核心的原文原句（自行决定字数，以最佳摘句为准）
   - subtitle：与 narration_segment 逐字相同
   - prompt：按上面结构模板生成
-  - duration：每条自行决定（3-12秒），高潮镜头（large variation）给 8-12 秒，过渡镜头给 3-5 秒。**不同镜头应给不同 duration**。
   - cam_idx：分配摄像机编号（1-3，同一摄像机镜头连续不交错）
   - variation_type：判断变幅（small/medium/large），至少 ceil(N/3) 个非 small
   - ff_desc：首帧静态快照（80-120字，纯静态，无运动动词）
   - lf_desc：尾帧静态快照（80-120字，small时留空""）
   - motion_desc：帧间运动描述（50-100字，纯过程，含运镜+主体动作）
   - context_bridge：视觉衔接描述（30-60字，镜头1留空""）
+  - **注意：不需要 duration 字段——系统根据 TTS 实际生成长度自动计算每镜时长**
 
 第4步 — 拼接所有 narration_segment 为 narration 字段
 
@@ -164,12 +161,10 @@ PROMPT_TEMPLATE = """
 {{
   "shot_count": N,
   "narration": "所有narration_segment按序拼接",
-  "total_duration": "所有duration之和（秒），供下游视频生成参考",
   "negative_prompt": "真人写实、写实风格、畸形五官、明亮强光、现代服装、3D渲染、塑料质感、明亮阳光",
   "shots": [
     {{
       "index": 1,
-      "duration": 6,
       "narration_segment": "太阳像火炉般烘烤着青州府大地，田间土皮都在冒烟",
       "subtitle": "太阳像火炉般烘烤着青州府大地，田间土皮都在冒烟",
       "cam_idx": 1,
@@ -219,6 +214,7 @@ SYSTEM_PROMPT = (
     "   - variation_type 至少 ceil(N/3) 个 medium 或 large；\n"
     "   - 镜头2及之后写 context_bridge（30-60字）；\n"
     "   - 输出 shot_count 字段，值等于实际镜头数。\n"
+    "   - **不需要 duration 字段**——系统根据 TTS 实际生成长度自动决定每镜时长。\n"
     "只输出纯JSON，不要markdown代码块、不要任何额外文字。"
 )
 
@@ -345,7 +341,7 @@ def build_prompt(novel_text: str) -> str:
         novel_text=novel_text,
         min_shots=SHOT_COUNT_MIN,
         max_shots=SHOT_COUNT_MAX,
-        max_chars=PROMPT_MAX_CHARS,
+        novel_char_count=len(novel_text),
         shot_sizes=_format_list(storyboard_refs.SHOT_SIZES),
         camera_angles=_format_list(storyboard_refs.CAMERA_ANGLES),
         camera_movements=_format_list(storyboard_refs.CAMERA_MOVEMENTS),
@@ -526,24 +522,36 @@ def _strip_punct(text: str) -> str:
 def parse_response(raw_text: str) -> dict:
     """从 LLM 返回的文本中提取分镜 JSON."""
     print(f"[INFO] 模型返回文本长度: {len(raw_text)} 字符")
-
-    # 清理 markdown 代码块标记
-    cleaned = re.sub(r"^```json\s*", "", raw_text.strip(), flags=re.MULTILINE)
-    cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE)
-    cleaned = cleaned.strip()
-
-    # 解析 JSON
     try:
-        script = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        print(f"[WARN] JSON 解析失败，尝试修复... 前 200 字符: {cleaned[:200]}")
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start != -1 and end != -1:
-            script = json.loads(cleaned[start : end + 1])
-        else:
-            raise ValueError(f"无法解析模型返回的 JSON: {e}") from e
-
+        script = safe_parse_json_object(raw_text)
+    except (ValueError, json.JSONDecodeError) as e:
+        print(f"[WARN] safe_parse_json_object 失败: {e}")
+        # 兜底：去掉围栏，取 {…} 区间，直接 json.loads
+        text = re.sub(r"^```json\s*", "", raw_text.strip(), flags=re.MULTILINE)
+        text = re.sub(r"```\s*$", "", text, flags=re.MULTILINE)
+        text = text.strip()
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1:
+            raise ValueError(f"模型未返回有效 JSON。响应:\n{text[:1000]}")
+        candidate = text[start:end+1]
+        candidate = re.sub(r",\s*}", "}", candidate)   # 尾部逗号
+        candidate = re.sub(r",\s*]", "]", candidate)
+        try:
+            script = json.loads(candidate)
+            print(f"[INFO] 兜底解析成功（直接 JSON 区间+尾部逗号修复）")
+        except json.JSONDecodeError as e2:
+            dump_path = f"llm_response_dump_{datetime.now():%Y%m%d_%H%M%S}.txt"
+            with open(dump_path, "w", encoding="utf-8") as df:
+                df.write(text)
+            pos = getattr(e2, "pos", 0)
+            snippet = text[max(0,pos-60):pos+60]
+            raise ValueError(
+                f"模型返回的 JSON 无法解析。\n"
+                f"错误: {e2}\n"
+                f"出错位置上下文 (...{snippet}...)\n"
+                f"完整响应已保存至 {dump_path}"
+            ) from e2
     _validate_script(script)
     return script
 
@@ -551,27 +559,40 @@ def parse_response(raw_text: str) -> dict:
 def _compute_timecodes(script: dict) -> None:
     """计算每个镜头的时间轴（timecode），并生成 timeline 数组.
 
-    每个镜头分配 start 和 end 时间戳，单位：秒。
-    用于后续 TTS 和合并阶段精确对齐。
+    时长基于 narration_segment 文本长度按比例计算，不再依赖 LLM 的 duration 猜测。
+    Chinese 语速 ≈ 3.5 字/秒，每镜加 1.5s 视觉填充（空镜/氛围留白）。
+    总时长 = sum(chars_i) / 3.5 + N * 1.5，每镜最低 3 秒.
+    用于后续 TTS 和合并阶段的参考时间轴；实际时长由 02b 的 TTS 测量决定.
     """
     shots = script.get("shots", [])
     if not shots:
         return
 
-    # 预留 0.3s 空镜缓冲（每个镜头前后各 0.15s）
-    # 实际画面时间 = duration - 0.3s
+    SPEECH_RATE = 3.5       # 字/秒
+    PAUSE_PER_SHOT = 1.5    # 每镜视觉留白秒数
+    MIN_SHOT_DURATION = 3.0 # 每镜最低秒数
     buffer_per_shot = 0.3
+
+    total_chars = sum(len(s.get("narration_segment", "")) for s in shots)
+    if total_chars == 0:
+        total_chars = len(shots) * 15  # fallback
 
     current_time = 0.0
     timeline = []
 
     for shot in shots:
-        duration = shot.get("duration", 5)
-        # 实际画面时间，预留缓冲
-        effective_duration = max(duration - buffer_per_shot, 0.5)
+        chars = len(shot.get("narration_segment", ""))
+        # 文本比例时长
+        shot_duration = max(chars / SPEECH_RATE + PAUSE_PER_SHOT, MIN_SHOT_DURATION)
+        # 取整到 0.333s 步长（24fps 下 8 帧 = 0.333s），利于后续 num_frames 对齐
+        shot_duration = max(round(shot_duration * 3) / 3, MIN_SHOT_DURATION)
+        shot_duration = round(shot_duration, 1)
+
+        shot["duration"] = shot_duration
+
+        effective_duration = max(shot_duration - buffer_per_shot, 0.5)
         end_time = current_time + effective_duration
 
-        # 写入 timecode 字段
         shot["timecode"] = {
             "start": round(current_time, 2),
             "end": round(end_time, 2),
@@ -582,15 +603,13 @@ def _compute_timecodes(script: dict) -> None:
             "index": shot.get("index", 0),
             "start": round(current_time, 2),
             "end": round(end_time, 2),
-            "duration": duration,
+            "duration": shot_duration,
             "effective_duration": round(effective_duration, 2),
         })
+        current_time = end_time + buffer_per_shot
 
-        current_time = end_time + buffer_per_shot  # 下一镜头从空镜结束后开始
-
-    # 顶层 timeline 数组
     script["timeline"] = timeline
-    script["total_effective_duration"] = round(current_time - buffer_per_shot, 2)  # 减去最后一个缓冲
+    script["total_effective_duration"] = round(current_time - buffer_per_shot, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -634,8 +653,8 @@ if __name__ == "__main__":
     print(f"[INFO] 当前 Text Provider: {config.PROVIDER}")
 
     # Step 1 — 读取指定章节
-    novel_content = read_chapter(chapter=CHAPTER_INDEX, max_chars=PROMPT_MAX_CHARS)
-    print(f"[INFO] 选取第 {CHAPTER_INDEX} 章前 {len(novel_content)} 字符作为素材")
+    novel_content = read_chapter(chapter=CHAPTER_INDEX)
+    print(f"[INFO] 选取第 {CHAPTER_INDEX} 章全文 {len(novel_content)} 字符作为素材")
     print(f"[INFO] 原文预览: {novel_content[:100]}...\n")
 
     # Step 2 — 检查是否需要重新生成
