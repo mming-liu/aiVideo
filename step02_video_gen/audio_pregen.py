@@ -13,6 +13,7 @@ import os
 import json
 import subprocess
 import shutil
+import hashlib
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -76,11 +77,21 @@ def _gen_shot_audio_duration(shot: dict, audio_dir: Path, provider=None) -> floa
         return shot.get("duration", 5)
 
     audio_path = audio_dir / f"shot_{idx}.mp3"
+    # 缓存检查：验证文件存在 + 内容指纹匹配（防止 script 变更后使用旧音频）
     if audio_path.exists() and audio_path.stat().st_size > 10240:
         duration = _measure_media_duration(audio_path)
         if duration > 0:
-            return duration
-        audio_path.unlink()
+            # 读取现有内容哈希，与当前文本对比
+            hash_path = audio_dir / f"shot_{idx}.mp3.hash"
+            text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            if hash_path.exists():
+                cached_hash = hash_path.read_text(encoding="utf-8").strip()
+                if cached_hash == text_hash:
+                    return duration
+                print(f"  [{idx}] 文本已变更，重新生成 TTS")
+            # 哈希不匹配或不存在 → 删除旧文件，重新生成
+            audio_path.unlink()
+            hash_path.unlink(missing_ok=True)
 
     try:
         audio_dir.mkdir(parents=True, exist_ok=True)
@@ -102,6 +113,9 @@ def _gen_shot_audio_duration(shot: dict, audio_dir: Path, provider=None) -> floa
         if duration > 0:
             size_kb = audio_path.stat().st_size / 1024
             print(f"  [{idx}] TTS ({size_kb:.0f}KB/{duration:.1f}s)")
+            # 保存内容哈希，供后续缓存检查
+            text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            Path(str(audio_path) + ".hash").write_text(text_hash, encoding="utf-8")
             return duration
     except Exception as e:
         print(f"  [{idx}] TTS 失败: {e}")

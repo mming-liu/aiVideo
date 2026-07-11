@@ -61,12 +61,12 @@ async def _submit_single_shot(
     audio_duration: float = 0,
 ) -> asyncio.Task | None:
     """提交单个镜头， 返回轮询 Task."""
-    from step02_video_gen.prompt_builder import _make_request_async
+    from step02_video_gen.prompt_builder import _make_request
     idx = shot["index"]
     for attempt in range(1, max_retries + 1):
         try:
             await VIDEO_RATE_LIMITER.acquire()
-            req = await _make_request_async(video_adapter, prompt, frame_paths, shot, audio_duration)
+            req = _make_request(video_adapter, prompt, frame_paths, shot, audio_duration)
             task_id = await video_adapter.submit_task(req)
             tag = f"(重{attempt})" if attempt > 1 else ""
             print(f"[{idx}] 已提交 {tag}")

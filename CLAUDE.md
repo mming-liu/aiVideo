@@ -16,7 +16,8 @@ pip install -r requirements.txt
 
 ### 运行流水线（按顺序）
 ```bash
-python 01_script_gen.py      # 阶段1: 小说文本 → 分镜 JSON（调用 LLM）
+python step01_script_gen/main.py  # 阶段1（新版入口）：小说文本 → 分镜 JSON
+# python 01_script_gen.py         # 旧版入口（已弃用，仅作向后兼容包装）
 python 02b_vimax_gen.py      # 阶段2: 分镜 → 视频片段（首帧锚定、尾帧生成）
 python 03_tts_audio.py       # 阶段3: 旁白文本 → 语音音频
 python 04_merge_ffmpeg.py    # 阶段4: 片段 + 音频 + 字幕 → 最终 MP4
@@ -43,7 +44,7 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 ### 四阶段流水线
 ```
 小说文本 (.txt)
-    → 01_script_gen.py  → script_result.json（分镜 + 旁白 + 角色 + 摄像机分组）
+    → step01_script_gen/main.py → script_result.json（分镜 + 旁白 + 角色 + 摄像机分组）
     → 02b_vimax_gen.py  → output/vimax_working/shots/<idx>/video.mp4
     → 03_tts_audio.py   → output/audio/narration.mp3
     → 04_merge_ffmpeg.py → output/final.mp4

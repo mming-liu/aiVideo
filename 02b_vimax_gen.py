@@ -28,7 +28,11 @@ from vimax.utils.rate_limiter import RateLimiter
 from tts import create_provider, TTSRequest
 from tts.config import config as tts_config
 
-SCRIPT_FILE = _project_root / "script_result.json"
+# 分镜脚本路径需与 step01_script_gen/main.py 输出一致
+_BOOK_INDEX = int(os.getenv("BOOK_INDEX", "1"))
+_CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))
+_OUTPUT_BASE = Path(os.getenv("OUTPUT_BASE", "./output/video"))
+SCRIPT_FILE = _OUTPUT_BASE / f"book_{_BOOK_INDEX:02d}" / f"chapter_{_CHAPTER_INDEX:02d}" / "script_result.json"
 AUDIO_TTS_DIR = _project_root / "output" / "audio"
 WORKING_DIR = Path(os.getenv("VIMAX_WORKING_DIR", "./output/vimax_working"))
 MAX_RETRIES = int(os.getenv("VIDEO_MAX_RETRIES", "3"))
@@ -43,7 +47,7 @@ VIDEO_RATE_LIMITER = RateLimiter(
 
 def load_script(path: Path) -> dict:
     if not path.exists():
-        raise FileNotFoundError(f"分镜脚本不存在: {path}\n请先运行 01_script_gen.py")
+        raise FileNotFoundError(f"分镜脚本不存在: {path}\n请先运行 step01_script_gen（python step01_script_gen/main.py）")
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -235,7 +239,7 @@ async def _submit_single_shot(
     for attempt in range(1, max_retries + 1):
         try:
             await VIDEO_RATE_LIMITER.acquire()
-            req = await _make_request_async(video_adapter, prompt, frame_paths, shot, audio_duration)
+            req = _make_request(video_adapter, prompt, frame_paths, shot, audio_duration)
             task_id = await video_adapter.submit_task(req)
             tag = f"(重{attempt})" if attempt > 1 else ""
             print(f"[{idx}] 已提交 {tag}")
@@ -252,7 +256,7 @@ async def _submit_single_shot(
     return None
 
 
-async def _make_request_async(video_adapter, prompt: str, frame_paths: list, shot: dict, audio_duration: float = 0):
+def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, audio_duration: float = 0) -> "VideoGenerationRequest":
     """构建 VideoGenerationRequest，使用音频实际时长计算视频帧数."""
     from _video_gen import VideoGenerationRequest
     from style_prefix import STYLE_PREFIX, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt

@@ -18,7 +18,11 @@ from tts.config import config
 
 # 配置
 _PROJECT_ROOT = Path(__file__).resolve().parent
-SCRIPT_FILE = _PROJECT_ROOT / "script_result.json"
+# 分镜脚本路径需与 step01_script_gen/main.py 输出一致
+_BOOK_INDEX = int(os.getenv("BOOK_INDEX", "1"))
+_CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))
+_OUTPUT_BASE = Path(os.getenv("OUTPUT_BASE", "./output/video"))
+SCRIPT_FILE = _OUTPUT_BASE / f"book_{_BOOK_INDEX:02d}" / f"chapter_{_CHAPTER_INDEX:02d}" / "script_result.json"
 AUDIO_OUTPUT_DIR = _PROJECT_ROOT / "output" / "audio"
 
 

@@ -34,7 +34,7 @@ def _build_prompt(shot: dict, script: dict) -> str:
     return prompt
 
 
-def _make_request_async(video_adapter, prompt: str, frame_paths: list, shot: dict, audio_duration: float = 0):
+def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, audio_duration: float = 0):
     """构建 VideoGenerationRequest，使用音频实际时长计算视频帧数."""
     from _video_gen import VideoGenerationRequest
 
@@ -55,7 +55,7 @@ def _make_request_async(video_adapter, prompt: str, frame_paths: list, shot: dic
         clip_index=shot["index"],
         duration=duration,
         negative_prompt=NEGATIVE_PROMPT,
-        size="960x17",
+        size="960x1792",
         image_path=image_path,
     )
 
