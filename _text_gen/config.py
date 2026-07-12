@@ -35,6 +35,13 @@ class TextGenCfg:
 
     # ---- agnes (OpenAI 兼容) ----
     AGNES_API_KEY: str = os.getenv("AGNES_API_KEY", "")
+    AGNES_API_KEY_2: str = os.getenv("AGNES_API_KEY_2", "")  # 备用 Key
+    AGNES_API_KEY_3: str = os.getenv("AGNES_API_KEY_3", "")  # 第三个 Key
+    AGNES_API_KEY_4: str = os.getenv("AGNES_API_KEY_4", "")  # 第四个 Key
+    AGNES_API_KEY_5: str = os.getenv("AGNES_API_KEY_5", "")  # 第五个 Key
+    AGNES_API_KEY_6: str = os.getenv("AGNES_API_KEY_6", "")  # 第六个 Key
+    AGNES_API_KEY_7: str = os.getenv("AGNES_API_KEY_7", "")  # 第七个 Key
+    AGNES_API_KEY_8: str = os.getenv("AGNES_API_KEY_8", "")  # 第八个 Key
     AGNES_BASE_URL: str = os.getenv("AGNES_BASE_URL", "")
     AGNES_TEXT_MODEL: str = os.getenv("AGNES_TEXT_MODEL", "agnes-2.0-flash")
     # 403 回退模型列表（逗号分隔）

@@ -8,8 +8,6 @@ import os
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-import asyncio
-import json
 import shutil
 import subprocess
 from dotenv import load_dotenv
@@ -21,7 +19,8 @@ load_dotenv(_PROJECT_ROOT / ".env")
 # ============================================================================
 CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))
 BOOK_INDEX = int(os.getenv("BOOK_INDEX", "1"))
-OUTPUT_BASE = Path(os.getenv("OUTPUT_BASE", "./output/video"))
+OUTPUT_RAW = os.getenv("OUTPUT_BASE", "./output/video")
+OUTPUT_BASE = _PROJECT_ROOT / OUTPUT_RAW if not Path(OUTPUT_RAW).is_absolute() else Path(OUTPUT_RAW)
 
 CHAPTER_DIR = OUTPUT_BASE / f"book_{BOOK_INDEX:02d}" / f"chapter_{CHAPTER_INDEX:02d}"
 SCRIPT_FILE = CHAPTER_DIR / "script_result.json"
@@ -43,12 +42,7 @@ VIDEO_RATE_LIMITER = RateLimiter(
 # ============================================================================
 # 子模块导入
 # ============================================================================
-from step02_video_gen.audio_pregen import (
-    load_script,
-    _gen_shot_audio_duration,
-    _update_script_with_actual_durations,
-)
-from step02_video_gen.prompt_builder import _build_prompt
+from step02_video_gen.audio_pregen import load_script
 from step02_video_gen.submit_poll import generate_all
 
 
@@ -82,6 +76,15 @@ def main() -> None:
     print("  ViMax 视频生成 (流水线优化版)")
     print("=" * 50)
 
+    # 检查前置步骤产物
+    if not SCRIPT_FILE.exists():
+        raise FileNotFoundError(
+            f"分镜脚本不存在: {SCRIPT_FILE}\n"
+            f"请先运行 step01: python step01_script_gen/main.py"
+        )
+    if not CHAPTER_DIR.exists() or not any(CHAPTER_DIR.iterdir()):
+        print(f"[WARN] 输出目录为空: {CHAPTER_DIR}")
+
     # 创建输出目录
     CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
     WORKING_DIR.mkdir(parents=True, exist_ok=True)
@@ -104,7 +107,7 @@ def main() -> None:
         sys.exit(0)
 
     force_ff = os.getenv("SCRIPT_FIRST_FRAME_FORCE", "0").strip() == "1"
-    failed = asyncio.run(generate_all(script, WORKING_DIR, force_first_frame=force_ff))
+    failed = generate_all(script, WORKING_DIR, force_first_frame=force_ff)
     if failed:
         sys.exit(1)
 

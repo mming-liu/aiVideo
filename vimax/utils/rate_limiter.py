@@ -90,5 +90,13 @@ class RateLimiter:
                     return
 
             if message:
-                print(message)
+                # Only print the first rate-limit message, subsequent ones just sleep
+                if not hasattr(self, '_rate_limit_printed'):
+                    print(message)
+                    self._rate_limit_printed = True
+                elif wait_time > 10:
+                    # Brief heartbeat after the first message
+                    if not hasattr(self, '_rate_limit_idle'):
+                        print(f"  (rate limited, waiting)")
+                        self._rate_limit_idle = True
             await asyncio.sleep(wait_time)

@@ -45,6 +45,31 @@ def main():
     print("  Step 4: Video Merge (Stretch + Concat + Subtitle + Color)")
     print("=" * 60)
 
+    # 检查前置步骤产物
+    if not SCRIPT_FILE.exists():
+        raise FileNotFoundError(
+            f"分镜脚本不存在: {SCRIPT_FILE}\n"
+            f"请先运行 step01: python step01_script_gen/main.py"
+        )
+
+    if CLIP_SOURCE == "vimax":
+        if not VIMAX_WD.exists():
+            raise FileNotFoundError(
+                f"ViMax 工作目录不存在: {VIMAX_WD}\n"
+                f"请先运行 step02: python step02_video_gen/main.py"
+            )
+        if not CLIP_DIR.exists():
+            raise FileNotFoundError(
+                f"视频片段目录不存在: {CLIP_DIR}\n"
+                f"请先运行 step02 生成视频片段"
+            )
+    else:
+        if not CLIP_DIR.exists():
+            raise FileNotFoundError(
+                f"视频片段目录不存在: {CLIP_DIR}\n"
+                f"请先运行 step02 生成视频片段"
+            )
+
     # Ensure output directories exist
     CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -123,6 +148,13 @@ def main():
     # 5. Generate SRT subtitles
     generate_srt(valid_shots, target_durations, SRT_OUT)
 
+    # 提取转场信息
+    clip_transitions = [s.get("clip_transition", "硬切 cut") for s in valid_shots]
+    print(f"[INFO] Transitions: {clip_transitions}")
+
+    # 获取章节标题（从环境变量或使用默认值）
+    chapter_title = os.getenv("CHAPTER_TITLE", "第一章")
+
     # 6. Merge video
     if use_stretch:
         merge_final_video(
@@ -131,6 +163,8 @@ def main():
             audio_path=audio_path,
             output_path=FINAL_OUT,
             srt_path=SRT_OUT,
+            clip_transitions=clip_transitions,
+            chapter_title=chapter_title,
         )
     else:
         # Old mode fallback
@@ -191,7 +225,20 @@ def main():
     mismatch = abs(final_duration - audio_duration)
     print(f"  A/V mismatch:    {mismatch:.1f}s (ideal: <0.1s)")
     if use_stretch:
-        print(f"  [OK] Video stretched to match audio")
+        # 检查是否因 clamp 导致 mismatch（STRETCH_RATIO_MAX = 1.333）
+        max_ratio = float(os.getenv("STRETCH_RAIO_MAX", "1.333"))
+        any_clamped = False
+        for orig, target in zip([get_media_duration(c) for c in clips], target_durations):
+            if orig > 0:
+                ratio = target / orig
+                if ratio > max_ratio:
+                    any_clamped = True
+                    break
+        if any_clamped or mismatch > 1.0:
+            print(f"  [WARN] 视频被强制拉伸（>1.333x），画面可能变形")
+            print(f"         建议：回到 step02 重新生成匹配音频时长的视频")
+        else:
+            print(f"  [OK] Video stretched to match audio")
     else:
         if mismatch < 1:
             print(f"  [OK] A/V aligned (-shortest mode)")

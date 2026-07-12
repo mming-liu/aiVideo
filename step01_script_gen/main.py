@@ -1,9 +1,10 @@
-"""step01_script_gen - 分镜脚本生成入口（v5.0 增强版）
+"""step01_script_gen - 分镜脚本生成入口（v6 增强版）
 
 功能：
   - 从小说提取章节内容
   - 调用 LLM 生成分镜脚本
-  - 验证音画同步 + 合规校验（scene_compliance）
+  - 生成钩子分镜（v6新增）用于吸引观众
+  - 验证音画同步 + 合规校验 + 敏感词校验（v6增强）
   - 注入全局渲染参数（style_prefix.inject_global_config_into_script）
   - 计算时间轴（含运镜量化参数）
   - 角色提取与持久化
@@ -31,7 +32,8 @@ load_dotenv(_PROJECT_ROOT / ".env")
 # ============================================================================
 CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))
 BOOK_INDEX = int(os.getenv("BOOK_INDEX", "1"))
-OUTPUT_BASE = Path(os.getenv("OUTPUT_BASE", "./output/video"))
+OUTPUT_RAW = os.getenv("OUTPUT_BASE", "./output/video")
+OUTPUT_BASE = _PROJECT_ROOT / OUTPUT_RAW if not Path(OUTPUT_RAW).is_absolute() else Path(OUTPUT_RAW)
 CHARACTER_EXTRACTION_ENABLED = os.getenv("CHARACTER_EXTRACTION_ENABLED", "1").strip() == "1"
 SHOT_COUNT_MIN = int(os.getenv("SHOT_COUNT_MIN", "4"))
 SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "20"))
@@ -39,6 +41,9 @@ SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "20"))
 # v5.0: 合规模式
 COMPLIANCE_STRICT = os.getenv("COMPLIANCE_STRICT", "0").strip() == "1"
 COMPLIANCE_AUTO_FIX = os.getenv("COMPLIANCE_AUTO_FIX", "1").strip() == "1"
+
+# v6: 钩子分镜开关
+HOOK_ENABLED = os.getenv("HOOK_ENABLED", "1").strip() == "1"
 
 # 输出目录基于 book/chapter 计算
 CHAPTER_DIR = OUTPUT_BASE / f"book_{BOOK_INDEX:02d}" / f"chapter_{CHAPTER_INDEX:02d}"
@@ -51,11 +56,12 @@ SCRIPT_FILE = OUTPUT_FILE
 from shared.chapter_reader import extract_section
 from _text_gen import create_service, TextGenerationRequest
 from shared.character_bank import CharacterBank
-from step01_script_gen.prompts import build_prompt, SYSTEM_PROMPT
+from step01_script_gen.prompts import build_prompt, SYSTEM_PROMPT, build_hook_prompt, parse_hook_response
 from step01_script_gen.character_extractor import extract_characters
 from step01_script_gen.validation import parse_response
 from step01_script_gen.timecode import _compute_timecodes
 from step01_script_gen.hash_cache import _prompt_changed, _hash_source
+from step01_script_gen.gap_analysis import validate_script_gap, generate_gap_report, print_gap_report
 
 import style_prefix
 import scene_compliance
@@ -99,11 +105,11 @@ def gen_spy_script(novel_text: str) -> str:
 
 
 # ============================================================================
-# 3. 后处理：注入全局配置 + 合规过滤
+# 3. 后处理：注入全局配置 + 合规过滤 + 敏感词校验（v6增强）
 # ============================================================================
 
 def _post_process(script: dict) -> dict:
-    """增强：注入全局渲染配置 + 合规过滤."""
+    """增强：注入全局渲染配置 + 合规过滤 + 敏感词校验."""
     # 注入全局渲染参数（若 LLM 未输出则补上）
     script = style_prefix.inject_global_config_into_script(script)
 
@@ -112,17 +118,74 @@ def _post_process(script: dict) -> dict:
         script = style_prefix.sanitize_script_shots(script, verbose=True)
         script = scene_compliance.auto_sanitize_shot_prompts(script, verbose=True)
 
+    # v6 新增：敏感词校验（强制级）
+    validation_result = style_prefix.validate_sensitive_words(script, verbose=True)
+    if validation_result["has_issues"]:
+        print("[WARN] 检测到残留敏感词，再次进行合规过滤...")
+        # 再次过滤确保干净
+        script = style_prefix.sanitize_script_shots(script, verbose=True)
+        # 再次校验
+        validation_result = style_prefix.validate_sensitive_words(script, verbose=True)
+        if validation_result["has_issues"]:
+            print("[ERROR] 仍有残留敏感词，请检查脚本!")
+
     return script
 
 
 # ============================================================================
-# 4. 主流程
+# 4. 钩子分镜生成（v6新增）
+# ============================================================================
+
+def gen_hook_script(novel_text: str) -> dict | None:
+    """调用 LLM 生成钩子分镜，返回 hook dict 或 None."""
+    if not HOOK_ENABLED:
+        return None
+
+    prompt = build_hook_prompt(novel_text)
+    service = create_service()
+    req = TextGenerationRequest(
+        system_prompt="你是短视频脚本大师，擅长在视频开头制造悬念和吸引力。禁止血腥暴力细节。",
+        user_prompt=prompt,
+        max_tokens=8000,
+        temperature=0.9,
+    )
+    print("[INFO] 正在调用 LLM 生成钩子分镜...")
+    result = service.generate(req)
+    if not result.success:
+        print(f"[WARN] 钩子分镜生成失败: {result.error}，跳过钩子")
+        return None
+
+    import re
+    raw = result.text.strip()
+    raw = re.sub(r"^```json\s*", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
+
+    try:
+        hook_data = parse_hook_response(raw)
+        hook = hook_data.get("hook")
+        if hook:
+            # 钩子也需合规过滤
+            hook["prompt"] = style_prefix.sanitize_prompt(hook.get("prompt", ""), verbose=False)
+            # 钩子镜头也需要做敏感词校验
+            for field in ("ff_desc", "lf_desc", "motion_desc"):
+                if hook.get(field):
+                    hook[field] = style_prefix.sanitize_prompt(hook[field], verbose=False)
+        return hook
+    except Exception as e:
+        print(f"[WARN] 钩子分镜解析失败: {e}，跳过钩子")
+        return None
+
+
+# ============================================================================
+# 5. 主流程
 # ============================================================================
 
 def main() -> None:
-    """主流程：读取章节 → 生成脚本 → 验证 → 后处理 → 保存."""
+    """主流程：读取章节 → 生成脚本 → 生成钩子 → 验证 → 后处理 → 保存."""
     print("=" * 50)
-    print("  步骤1: 分镜脚本生成 (v5.0)")
+    print("  步骤1: 分镜脚本生成 (v6.0)")
+    print("  新增: 钩子分镜 + 敏感词校验")
     print("=" * 50)
 
     # 创建输出目录
@@ -133,9 +196,11 @@ def main() -> None:
     novel_preview = novel_text[:1000]
 
     # 检查缓存
-    if not _prompt_changed(
+    prompt_changed = _prompt_changed(
         Path(__file__).parent / "prompts.py", SCRIPT_FILE, novel_preview, CHAPTER_INDEX
-    ):
+    )
+
+    if not prompt_changed:
         print(f"[CACHE] 脚本已缓存: {SCRIPT_FILE}")
         with open(SCRIPT_FILE, "r", encoding="utf-8") as f:
             script = json.load(f)
@@ -146,12 +211,99 @@ def main() -> None:
         print(f"时间轴已重新计算")
         return
 
+    # 脚本已更新，删除旧的音频和视频文件
+    print(f"[INFO] 分镜脚本已更新，清理旧的音视频文件...")
+    for subdir in ("audio", "vimax_working", "stretched"):
+        subdir_path = CHAPTER_DIR / subdir
+        if subdir_path.exists():
+            import shutil
+            shutil.rmtree(subdir_path)
+            print(f"  [已删除] {subdir}/")
+    # 删除最终视频和字幕
+    for f in ("final.mp4", "subtitles.srt"):
+        fpath = CHAPTER_DIR / f
+        if fpath.exists():
+            fpath.unlink()
+            print(f"  [已删除] {f}")
+
     # 生成脚本
     raw = gen_spy_script(novel_text)
     script = parse_response(raw)
 
-    # 后处理：注入全局配置 + 合规过滤
+    # ========== 差距分析（v5.0 新增）==========
+    # 若差距过大，重新生成（最多2次）
+    GAP_ANALYSIS_ENABLED = os.getenv("GAP_ANALYSIS_ENABLED", "1").strip() == "1"
+    MAX_REGEN_ATTEMPTS = int(os.getenv("GAP_MAX_REGEN_ATTEMPTS", "2"))
+
+    if GAP_ANALYSIS_ENABLED:
+        for attempt in range(MAX_REGEN_ATTEMPTS):
+            # 快速校验
+            validation = validate_script_gap(script, novel_text)
+
+            if validation["overall_pass"]:
+                print(f"[GAP] 差距分析通过 (尝试 {attempt + 1}/{MAX_REGEN_ATTEMPTS})")
+                # 保存脚本并生成完整报告
+                partial_path = CHAPTER_DIR / "script_result.partial.json"
+                with open(partial_path, "w", encoding="utf-8") as _f:
+                    json.dump(script, _f, ensure_ascii=False, indent=2)
+                report = generate_gap_report(
+                    str(partial_path),
+                    "锦衣夜行_77119小说.txt",
+                    CHAPTER_INDEX
+                )
+                # 打印报告摘要
+                print_gap_report(report)
+                # 清理临时文件
+                if partial_path.exists():
+                    partial_path.unlink()
+                break
+
+            # 发现问题，反馈给 LLM 重新生成
+            print(f"[GAP] 发现差距问题，重新生成 (尝试 {attempt + 1}/{MAX_REGEN_ATTEMPTS})...")
+
+            # 在 prompts.py 中获取差距分析上下文并追加到 prompt
+            from step01_script_gen.prompts import _load_gap_analysis_context
+            gap_context = _load_gap_analysis_context(validation)
+
+            # 追加差距反馈到 prompt，重新生成
+            prompt = build_prompt(novel_text, SHOT_COUNT_MIN, SHOT_COUNT_MAX)
+            prompt = prompt + gap_context
+
+            service = create_service()
+            req = TextGenerationRequest(
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=prompt,
+                max_tokens=40000,
+                temperature=0.8,
+            )
+            result = service.generate(req)
+            if not result.success:
+                raise RuntimeError(f"LLM 重新生成失败: {result.error}")
+
+            import re
+            raw = result.text.strip()
+            raw = re.sub(r"^```json\s*", "", raw, flags=re.MULTILINE)
+            raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
+            raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
+
+            script = parse_response(raw)
+            script = _post_process(script)
+        else:
+            # 达到最大尝试次数仍有问题，记录但不中断
+            print("[GAP] 达到最大重试次数，仍有差距问题，将继续处理")
+
+    # 后处理：注入全局配置 + 合规过滤 + 敏感词校验
     script = _post_process(script)
+
+    # ========== v6新增：钩子分镜生成 ==========
+    if HOOK_ENABLED:
+        print("\n[INFO] 开始生成钩子分镜...")
+        hook = gen_hook_script(novel_text)
+        if hook:
+            script["hook"] = hook
+            print(f"[OK] 钩子分镜已生成: {hook.get('narration_segment', '')[:30]}...")
+        else:
+            print("[INFO] 跳过钩子分镜")
 
     # 提取角色（跨章节一致性）
     if CHARACTER_EXTRACTION_ENABLED:
@@ -170,7 +322,7 @@ def main() -> None:
                 )
         bank.save()
 
-    # 计算时间轴（含 v5.0 运镜量化参数）
+    # 计算时间轴（v5.0 运镜量化参数）
     _compute_timecodes(script)
 
     # 写入 hash
@@ -190,6 +342,8 @@ def main() -> None:
     print(f"{'='*60}")
     shots = script.get("shots", [])
     print(f"共 {len(shots)} 个镜头")
+    if script.get("hook"):
+        print(f"含 1 个钩子分镜（开场悬念）")
     for k in ("resolution", "ratio", "fps", "render_style", "global_weather", "global_atmosphere"):
         if k in script:
             print(f"  {k}: {script[k]}")

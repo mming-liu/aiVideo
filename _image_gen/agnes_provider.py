@@ -23,6 +23,7 @@ import requests
 from .config import config
 from .models import ImageGenerationRequest, ImageGenerationResult
 from .service import ImageGenerationService
+from shared.content_policy_fix import auto_fix_prompt
 
 
 class AgnesImageService(ImageGenerationService):
@@ -40,6 +41,34 @@ class AgnesImageService(ImageGenerationService):
         self._model_queue: list[str] = [
             config.AGNES_IMAGE_MODEL
         ] + config.AGNES_IMAGE_FALLBACK_MODELS
+        # 多 Key 切换（最多8个）
+        self._api_keys = [config.AGNES_API_KEY]
+        if config.AGNES_API_KEY_2:
+            self._api_keys.append(config.AGNES_API_KEY_2)
+        if config.AGNES_API_KEY_3:
+            self._api_keys.append(config.AGNES_API_KEY_3)
+        if config.AGNES_API_KEY_4:
+            self._api_keys.append(config.AGNES_API_KEY_4)
+        if config.AGNES_API_KEY_5:
+            self._api_keys.append(config.AGNES_API_KEY_5)
+        if config.AGNES_API_KEY_6:
+            self._api_keys.append(config.AGNES_API_KEY_6)
+        if config.AGNES_API_KEY_7:
+            self._api_keys.append(config.AGNES_API_KEY_7)
+        if config.AGNES_API_KEY_8:
+            self._api_keys.append(config.AGNES_API_KEY_8)
+        self._current_key_index: int = 0
+
+    @property
+    def _api_key(self) -> str:
+        return self._api_keys[self._current_key_index]
+
+    def _switch_to_backup_key(self) -> bool:
+        """切换到备用 API Key. 返回是否切换成功."""
+        if self._current_key_index + 1 < len(self._api_keys):
+            self._current_key_index += 1
+            return True
+        return False
 
     def _advance_index(self, idx: int) -> Optional[int]:
         """返回下一个回退模型的下标，无可用模型时返回 None."""
@@ -84,24 +113,32 @@ class AgnesImageService(ImageGenerationService):
         if req.reference_image_path:
             ref_data_url = self._encode_image(req.reference_image_path)
             if ref_data_url:
-                print(f"  [镜头{req.shot_index}] 使用参考图做 image-to-image: "
-                      f"{req.reference_image_path}")
+                pass  # 静默
             else:
                 print(f"  [镜头{req.shot_index}] 参考图读取失败，降级为 text-to-image")
 
         while idx < len(self._model_queue):
             model = self._model_queue[idx]
             headers = {
-                "Authorization": f"Bearer {config.AGNES_API_KEY}",
+                "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
             }
 
-            # 基础 payload
+            # 基础 payload（使用档位式 size + ratio，文档推荐方式）
             payload: dict = {
                 "model": model,
                 "prompt": req.prompt,
-                "size": req.size,
+                "size": req.size,  # 如 "2K"
+                "ratio": req.ratio,  # 如 "9:16"
             }
+
+            # 添加 negative_prompt（文档支持）
+            if req.negative_prompt:
+                payload["negative_prompt"] = req.negative_prompt
+
+            # 添加 seed（文档支持，用于可复现结果）
+            if req.seed is not None:
+                payload["seed"] = req.seed
 
             # extra_body: response_format 必须放这里（禁止放顶层）
             extra: dict = {
@@ -136,6 +173,39 @@ class AgnesImageService(ImageGenerationService):
                             last_error = f"Agnes 图片异常（重试{_submit_retry}次）: {e}"
                             break
                 if last_error:
+                    idx = len(self._model_queue)
+                    break
+
+                # ---- 422: 内容违规，自動修復並重試 ----
+                if res.status_code == 422:
+                    error_text = res.text
+                    fixed_prompt = auto_fix_prompt(req.prompt, error_text)
+                    if fixed_prompt and _submit_retry < config.AGNES_IMAGE_SUBMIT_RETRIES:
+                        _submit_retry += 1
+                        print(f"  [鏡頭{req.shot_index}] 內容違規 [422]，嘗試修復 prompt "
+                              f"({_submit_retry}/{config.AGNES_IMAGE_SUBMIT_RETRIES})")
+                        req.prompt = fixed_prompt
+                        payload["prompt"] = fixed_prompt
+                        time.sleep(2)  # 短暫等待後重試
+                        continue
+                    last_error = f"Agnes 內容違規 [422]（已重試{_submit_retry}次仍失敗）: {error_text[:300]}"
+                    break
+
+                # ---- 401/402: 认证失败/余额不足，停止重试 ----
+                if res.status_code in (401, 402):
+                    last_error = f"Agnes 错误 [{res.status_code}]（停止重试）: {res.text[:300]}"
+                    break
+
+                # ---- 408/499/502/503/504/520/522/524: 临时错误，等待后重试 ----
+                if res.status_code in (408, 499, 502, 503, 504, 520, 522, 524):
+                    _submit_retry += 1
+                    if _submit_retry <= config.AGNES_IMAGE_SUBMIT_RETRIES:
+                        print(f"  [镜头{req.shot_index}] 临时错误 {res.status_code}，"
+                              f"{config.AGNES_IMAGE_SUBMIT_RETRY_DELAY}s 后重试 "
+                              f"({_submit_retry}/{config.AGNES_IMAGE_SUBMIT_RETRIES})")
+                        time.sleep(config.AGNES_IMAGE_SUBMIT_RETRY_DELAY)
+                        continue
+                    last_error = f"Agnes 图片失败 [{res.status_code}] (重试{_submit_retry}次): {res.text[:300]}"
                     idx = len(self._model_queue)
                     break
 
@@ -188,8 +258,19 @@ class AgnesImageService(ImageGenerationService):
                         last_error = f"图片下载/保存失败: {e}"
                         break
 
+                # ---- 429: 速率限制，优先切换 API Key（不同 key 限速独立）----
+                if res.status_code == 429:
+                    if self._switch_to_backup_key():
+                        continue
+                    last_error = f"所有 API Key 均返回 429 限速"
+                    break
+
                 # ---- 403: 额度耗尽或无权限，尝试回退 ----
                 if res.status_code == 403:
+                    # 先尝试切换备用 API Key
+                    if self._switch_to_backup_key():
+                        continue
+                    # Key 切换失败再尝试模型回退
                     nxt = self._advance_index(idx)
                     if nxt is not None:
                         print(f"  [镜头{req.shot_index}] [!] 图片模型 {model} 返回 403"

@@ -1,9 +1,14 @@
-"""step04_merge.merge_core - Core merge module with stretch, concat, and filter chain"""
+﻿"""step04_merge.merge_core - Core merge module with stretch, concat, and filter chain
+v5.1 新增：
+- 开场缓冲：黑屏淡入 + 标题卡 + 过渡到首个镜头
+- 转场效果：实现 clip_transition 字段定义的转场
+"""
 import sys
 from pathlib import Path
 import os
 import subprocess
 import json
+import math
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -48,10 +53,24 @@ SUBTITLE_OUTLINE_WIDTH = int(os.getenv("SUBTITLE_OUTLINE_WIDTH", "1"))
 
 DEBUG_SKIP_CACHE = os.getenv("DEBUG_SKIP_CACHE", "0").strip() == "1"
 
+# Opening buffer settings
+OPENING_BLACK_DURATION = float(os.getenv("OPENING_BLACK_DURATION", "1.5"))  # 黑屏持续时间
+OPENING_FADE_IN_DURATION = float(os.getenv("OPENING_FADE_IN_DURATION", "1.5"))  # 淡入持续时间
+OPENING_TITLE_DURATION = float(os.getenv("OPENING_TITLE_DURATION", "2.0"))  # 标题卡持续时间
+OPENING_ENABLED = os.getenv("OPENING_ENABLED", "1").strip() == "1"  # 是否启用开场缓冲
+
+# 转场持续时间（秒）
+TRANSITION_DURATION = float(os.getenv("TRANSITION_DURATION", "0.8"))
+
+
+# 是否显示 ffmpeg 命令行（调试用）
+DEBUG_SHOW_CMD = os.getenv("DEBUG_SHOW_CMD", "0").strip() == "1"
+
 
 def _run_cmd(cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
-    """Execute shell command and print."""
-    print(f"[CMD] {' '.join(cmd)}")
+    """Execute shell command and optionally print."""
+    if DEBUG_SHOW_CMD:
+        print(f"[CMD] {' '.join(cmd)}")
     return subprocess.run(cmd, check=True, capture_output=True, text=True, **kwargs)
 
 
@@ -100,6 +119,288 @@ def concat_audio_files(audio_paths: List[Path], output_path: Path) -> Path:
     return output_path
 
 
+def apply_transition(
+    clip_a_path: Path,
+    clip_b_path: Optional[Path],
+    transition_type: str,
+    output_path: Path,
+    transition_duration: float = TRANSITION_DURATION,
+) -> Path:
+    """Apply transition effect between two clips.
+
+    transition_type supported:
+    - "硬切 cut": direct concat
+    - "淡入 fade in": fade in from black (clip_b fades in from black)
+    - "淡出 fade out": fade out to black (clip_a fades out to black)
+    - "模糊叠化 blur dissolve": crossfade with blur
+    - "叠化 dissolve": simple crossfade
+    - "黑场闪白": white flash
+
+    clip_b_path can be None for fade-out on the last clip (no next clip).
+    """
+    transition_type = transition_type.lower()
+
+    # 硬切 - 直接拼接
+    if "硬切" in transition_type or "cut" in transition_type:
+        if clip_b_path:
+            concat_clips([clip_a_path, clip_b_path], output_path)
+        else:
+            # 最后一个镜头，复制即可
+            import shutil
+            shutil.copy2(clip_a_path, output_path)
+        return output_path
+
+    # 淡入淡出使用 fade 滤镜
+    if "淡入" in transition_type or "fade in" in transition_type:
+        # 淡入：clip_b 从黑场淡入（需要 clip_b_path）
+        if not clip_b_path:
+            # 无下一个镜头，复制当前
+            import shutil
+            shutil.copy2(clip_a_path, output_path)
+            return output_path
+
+        # 淡入：clip_b 从黑场淡入
+        cmd = [
+            FFMPEG, "-y",
+            "-f", "lavfi", "-i", f"color=c=black:s=1080x1920:d={transition_duration}",
+            "-i", str(clip_b_path),
+            "-filter_complex",
+            f"[0:v]fade=t=out:st=0:d={transition_duration}[black];[1:v]fade=t=in:st=0:d={transition_duration}[fadein];[black][fadein]concat=n=2:v=1:a=0",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            str(output_path),
+        ]
+        _run_cmd(cmd)
+        return output_path
+
+    if "淡出" in transition_type or "fade out" in transition_type:
+        # 获取 clip_a 的时长用于计算 fade 起始点
+        clip_a_duration = get_media_duration(clip_a_path)
+
+        # 如果 clip_b 不存在（最后一个镜头），只做淡出效果
+        if clip_b_path is None:
+            # fade 从视频末尾开始，持续时间不超过视频的一半
+            fade_dur = min(transition_duration, clip_a_duration * 0.5)
+            fade_start = clip_a_duration - fade_dur
+
+            cmd = [
+                FFMPEG, "-y",
+                "-i", str(clip_a_path),
+                "-filter_complex",
+                f"[0:v]fade=t=out:st={fade_start}:d={fade_dur}",
+                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                str(output_path),
+            ]
+            _run_cmd(cmd)
+            return output_path
+
+        # clip_a 淡出连接到 clip_b
+        clip_a_dur = get_media_duration(clip_a_path)
+        clip_b_dur = get_media_duration(clip_b_path)
+
+        # 淡出从 clip_a 末尾开始
+        fade_dur = min(transition_duration, clip_a_dur * 0.5)
+        fade_start = clip_a_dur - fade_dur
+
+        cmd = [
+            FFMPEG, "-y",
+            "-i", str(clip_a_path),
+            "-i", str(clip_b_path),
+            "-filter_complex",
+            f"[0:v]fade=t=out:st={fade_start}:d={fade_dur}[aout];[aout][1:v]concat=n=2:v=1:a=0",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            str(output_path),
+        ]
+        _run_cmd(cmd)
+        return output_path
+    # 模糊叠化 - 使用 crossfade 滤镜
+    if "模糊" in transition_type or "blur" in transition_type:
+        if not clip_b_path:
+            # 无下一个镜头，复制当前
+            import shutil
+            shutil.copy2(clip_a_path, output_path)
+            return output_path
+
+        cmd = [
+            FFMPEG, "-y",
+            "-i", str(clip_a_path),
+            "-i", str(clip_b_path),
+            "-filter_complex",
+            f"[0:v]setpts=PTS-STARTPTS[a];[1:v]setpts=PTS-STARTPTS[b];[a][b]xfade=transition=fadealpha:duration={transition_duration}:offset=0",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            str(output_path),
+        ]
+        _run_cmd(cmd)
+        return output_path
+
+    # 叠化 dissolve - 简单交叉淡入淡出
+    if "叠化" in transition_type or "dissolve" in transition_type:
+        if not clip_b_path:
+            # 无下一个镜头，复制当前
+            import shutil
+            shutil.copy2(clip_a_path, output_path)
+            return output_path
+
+        cmd = [
+            FFMPEG, "-y",
+            "-i", str(clip_a_path),
+            "-i", str(clip_b_path),
+            "-filter_complex",
+            f"[0:v]setpts=PTS-STARTPTS[xa];[1:v]setpts=PTS-STARTPTS[xb];[xa][xb]xfade=transition=fade:duration={transition_duration}:offset=0",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            str(output_path),
+        ]
+        _run_cmd(cmd)
+        return output_path
+
+    # 黑场闪白
+    if "闪白" in transition_type:
+        if not clip_b_path:
+            # 无下一个镜头，复制当前
+            import shutil
+            shutil.copy2(clip_a_path, output_path)
+            return output_path
+
+        # 短黑场后闪白
+        flash_duration = transition_duration / 3
+        cmd = [
+            FFMPEG, "-y",
+            "-i", str(clip_a_path),
+            "-f", "lavfi", "-i", f"color=c=white:s=1080x1920:d={flash_duration}",
+            "-f", "lavfi", "-i", f"color=c=black:s=1080x1920:d={flash_duration}",
+            "-i", str(clip_b_path),
+            "-filter_complex",
+            f"[0:v]fade=t=out:st=0:d={flash_duration}[aout];[1:v][2:v][3:v]concat=n=3:v=1:a=0[flash];[aout][flash]xfade=transition=fade:duration={flash_duration}:offset=0",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            str(output_path),
+        ]
+        _run_cmd(cmd)
+        return output_path
+
+    # 默认：硬切
+    concat_clips([clip_a_path, clip_b_path], output_path)
+    return output_path
+
+
+def create_opening_buffer(
+    first_clip_path: Path,
+    output_path: Path,
+    title_text: str = "",
+) -> Path:
+    """Create opening buffer: black screen -> fade in -> optional title -> first clip.
+
+    Returns the path to the combined opening video.
+    """
+    if not OPENING_ENABLED:
+        # Skip opening buffer, just copy first clip
+        import shutil
+        shutil.copy(first_clip_path, output_path)
+        return output_path
+
+    temp_dir = output_path.parent
+    black_path = temp_dir / "opening_black.mp4"
+    fadein_path = temp_dir / "opening_fadein.mp4"
+    title_path = temp_dir / "opening_title.mp4"
+
+    # 1. 创建黑屏 (OPENING_BLACK_DURATION 秒)
+    cmd = [
+        FFMPEG, "-y",
+        "-f", "lavfi", "-i", f"color=c=black:s=1080x1920:d={OPENING_BLACK_DURATION}",
+        "-c:v", "libx264", "-t", str(OPENING_BLACK_DURATION),
+        "-pix_fmt", "yuv420p",
+        str(black_path),
+    ]
+    _run_cmd(cmd)
+
+    # 2. 淡入到第一个镜头 (OPENING_FADE_IN_DURATION 秒)
+    # 使用 crossfade 实现黑屏->首个镜头的淡入
+    if title_text:
+        # 2a. Create title card using ASS subtitle (reliable for Chinese text)
+        ass_content = (
+            "[Script Info]\n"
+            "ScriptType: v4.00+\n"
+            "PlayResX: 1080\n"
+            "PlayResY: 1920\n"
+            "\n"
+            "[V4+ Styles]\n"
+            "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Italic, Alignment, BorderStyle, Outline, Shadow, MarginL, MarginR, MarginV\n"
+            "Style: Title,Microsoft YaHei,72,&H00FFFFFF,&H00000000,&H00000000,0,0,5,1,3,2,10,10,10\n"
+            "\n"
+            "[Events]\n"
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+            f"Dialogue: 0,0:00:00.00,0:00:{OPENING_TITLE_DURATION:.2f}.00,Title,,0,0,0,,{{\\fnMicrosoft YaHei}}{{\\fs72}}{{\\c&HFFFFFF}}{{\\bord3}}{{\\shad2}}{title_text}\n"
+        )
+        ass_path = temp_dir / "opening_title.ass"
+        ass_path.parent.mkdir(parents=True, exist_ok=True)
+        ass_path.write_text(ass_content, encoding="utf-8")
+        # Escape path for ffmpeg filter syntax (drive colon)
+        ass_filter_path = ass_path.resolve().as_posix().replace(":", "\\:")
+
+        cmd = [
+            FFMPEG, "-y",
+            "-f", "lavfi", "-i", f"color=c=black:s=1080x1920:d={OPENING_TITLE_DURATION}",
+            "-vf", f"subtitles=filename={ass_filter_path}:original_size=1080x1920",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            str(title_path),
+        ]
+        _run_cmd(cmd)
+
+        # 2b. 标题卡 -> 首个镜头 淡入
+        cmd = [
+            FFMPEG, "-y",
+            "-i", str(title_path),
+            "-i", str(first_clip_path),
+            "-filter_complex",
+            f"[0:v]setpts=PTS-STARTPTS[title];[1:v]setpts=PTS-STARTPTS[clip];[title][clip]xfade=transition=fadealpha:duration={OPENING_FADE_IN_DURATION}:offset=0[out];[out]fade=t=in:st=0:d=0.5",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            str(fadein_path),
+        ]
+        _run_cmd(cmd)
+    else:
+        # 无标题：黑屏 -> 首个镜头 淡入
+        cmd = [
+            FFMPEG, "-y",
+            "-i", str(black_path),
+            "-i", str(first_clip_path),
+            "-filter_complex",
+            f"[0:v]setpts=PTS-STARTPTS[black];[1:v]setpts=PTS-STARTPTS[clip];[black][clip]xfade=transition=fadealpha:duration={OPENING_FADE_IN_DURATION}:offset=0[out]",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            str(fadein_path),
+        ]
+        _run_cmd(cmd)
+
+    # 3. 拼接黑屏 + 淡入部分
+    cmd = [
+        FFMPEG, "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", f"file '{black_path.resolve().as_posix()}'\nfile '{fadein_path.resolve().as_posix()}'",
+        "-c", "copy",
+        str(output_path),
+    ]
+    # 使用 filter_complex 替代 concat 简化流程
+    cmd = [
+        FFMPEG, "-y",
+        "-i", str(black_path),
+        "-i", str(fadein_path),
+        "-filter_complex",
+        "[0:v][1:v]concat=n=2:v=1:a=0",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        str(output_path),
+    ]
+    _run_cmd(cmd)
+
+    # 清理临时文件
+    for p in [black_path, fadein_path, title_path]:
+        if p.exists():
+            p.unlink()
+
+    return output_path
+
+
 def merge_final_video(
     clips: List[Path],
     shot_audio_durations: List[float],
@@ -107,12 +408,22 @@ def merge_final_video(
     audio_path: Path,
     output_path: Path,
     srt_path: Path,
+    clip_transitions: Optional[List[str]] = None,
+    chapter_title: str = "",
 ) -> None:
-    """Per-shot stretch to audio duration -> concat -> subtitle + color + vignette + mix.
+    """Per-shot stretch to audio duration -> concat -> transition -> subtitle + color + vignette + mix.
 
-    Core improvement: No more -shortest truncation. Each video clip is stretched
-    via setpts to match its audio duration for zero-deviation audio-video alignment.
+    v5.1 新增：
+    - clip_transitions: 每个镜头的转场方式列表，与 clip_transition 字段对应
+    - chapter_title: 章节标题，用于开场标题卡
+    - 开场缓冲：黑屏 -> 淡入 -> (标题卡) -> 首个镜头
+    - 转场效果：根据 clip_transition 字段实现镜头间的转场
     """
+    # 0. 解析转场列表（如果未提供，从环境变量读取）
+    if clip_transitions is None:
+        # 默认全部硬切
+        clip_transitions = ["硬切 cut"] * len(clips)
+
     # 1. Stretch each video clip
     stretched_clips = []
     stretched_dir.mkdir(parents=True, exist_ok=True)
@@ -132,14 +443,63 @@ def merge_final_video(
         else:
             stretched_clips.append(stretched_path)
 
-    # 2. Concat stretched clips
-    concat_video = stretched_dir / "concat_video.mp4"
-    if concat_video.exists() and not DEBUG_SKIP_CACHE:
-        print(f"  [CACHE] Concat video cached: {concat_video}")
-    else:
-        concat_clips(stretched_clips, concat_video)
+    # 2. 应用转场效果并拼接
+    if len(stretched_clips) > 1:
+        print(f"  [TRANSITION] Applying transitions between {len(stretched_clips)} clips")
+        # 从第二个镜头开始应用转场
+        concat_with_transition = stretched_dir / "concat_with_transition.mp4"
+        if concat_with_transition.exists() and not DEBUG_SKIP_CACHE:
+            print(f"  [CACHE] Concatenated with transitions cached")
+        else:
+            # 逐对处理转场：第一镜 + 第二镜(带转场) -> 第三镜(带转场) -> ...
+            current = stretched_clips[0]
+            for i in range(1, len(stretched_clips)):
+                # transition_ 是描述如何从上一镜进入当前镜 (i)
+                # clip_transitions[i] 对应 shot i+1 (因为 0-indexed)
+                transition_type = clip_transitions[i] if i < len(clip_transitions) else "硬切 cut"
 
-    # 3. Final merge (subtitle + color + vignette + mix)
+                # 检查是否是最后一个镜头的转场
+                is_last = (i == len(stretched_clips) - 1)
+
+                # 如果是最后一个镜头且是淡出/淡入，需要特殊处理
+                # 淡出：从当前镜淡出到黑（不需要下一镜）
+                # 淡入：从黑淡入到当前镜（需要当前镜）
+                if is_last and ("淡出" in transition_type or "fade out" in transition_type):
+                    # 最后一个镜头的淡出：current (clip_a) 淡出结束，不需要 next (clip_b)
+                    next_clip = None
+                    print(f"    Shot {i+1}: {transition_type} (last clip, exit effect)")
+                elif is_last and ("淡入" in transition_type or "fade in" in transition_type):
+                    # 最后一个镜头的淡入：current 从黑淡入
+                    next_clip = stretched_clips[i]  # 最后一个镜头本身
+                    print(f"    Shot {i+1}: {transition_type} (last clip, entry from black)")
+                else:
+                    # 正常情况：两个镜头之间的转场
+                    next_clip = stretched_clips[i]
+                    print(f"    Shot {i} -> {i+1}: {transition_type}")
+
+                # 应用转场
+                temp_merged = stretched_dir / f"merged_{i:04d}.mp4"
+                apply_transition(current, next_clip, transition_type, temp_merged)
+                current = temp_merged
+
+            # 重命名为最终转场拼接文件
+            import shutil
+            shutil.move(str(current), str(concat_with_transition))
+        concat_video = concat_with_transition
+    else:
+        concat_video = stretched_clips[0] if stretched_clips else None
+
+    if not concat_video or not concat_video.exists():
+        raise RuntimeError(f"Concatenated video not generated: {concat_video}")
+
+    # 3. 添加开场缓冲
+    if OPENING_ENABLED:
+        final_with_opening = stretched_dir / "final_with_opening.mp4"
+        print(f"  [OPENING] Creating opening buffer with title: {chapter_title}")
+        create_opening_buffer(concat_video, final_with_opening, chapter_title)
+        concat_video = final_with_opening
+
+    # 4. Final merge (subtitle + color + vignette + mix)
     srt_path_abs = srt_path.resolve().as_posix()
     escaped_srt = srt_path_abs.replace(":", "\\:")
     style = (
@@ -186,7 +546,7 @@ def merge_final_video(
         raise RuntimeError(f"ffmpeg returned code {result.returncode}")
 
     if output_path.exists():
-        size_mb = output_path.stat().st_size / (10 * 10240 * 10240)
+        size_mb = output_path.stat().st_size / (1024 * 1024)
         print(f"\n[OK] Final video generated: {output_path} ({size_mb:.1f} MB)")
     else:
         raise RuntimeError(f"Output file not generated: {output_path}")

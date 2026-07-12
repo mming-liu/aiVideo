@@ -1,4 +1,4 @@
-"""step02_video_gen.prompt_builder - Prompt 构建模块
+﻿"""step02_video_gen.prompt_builder - Prompt 构建模块
 
 功能：
 - _build_rompt(): 构建单镜头 prompt
@@ -35,21 +35,34 @@ def _build_prompt(shot: dict, script: dict) -> str:
 
 
 def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, audio_duration: float = 0):
-    """构建 VideoGenerationRequest，使用音频实际时长计算视频帧数."""
+    """构建 VideoGenerationRequest，使用音频实际时长计算视频帧数.
+
+    frame_paths: [首帧路径, 尾帧路径(可选)]
+    当提供尾帧时，ag-nes 使用关键帧动画模式（keyframes mode）。
+    """
     from _video_gen import VideoGenerationRequest
 
-    full_prompt = sanitize_prompt(ensure_prefix(prompt, STYLE_PREFIX))
+    full_prompt = sanitize_prompt(ensure_prefix(prompt, STYLE_PREFIX), verbose=False)
     image_path = None
-    for fp in (frame_paths or []):
+    last_frame_image_path = None
+
+    # 第一个是首帧，第二个是尾帧
+    for i, fp in enumerate((frame_paths or [])):
         if fp and Path(fp).exists():
-            image_path = fp
-            break
+            if i == 0:
+                image_path = fp
+            elif i == 1:
+                last_frame_image_path = fp
+
+    # 如果没有首帧，尝试备用参考图
     if not image_path:
         image_path = _find_fallback_reference(
             Path(os.getenv("VIMAX_WORKING_DIR", "./output/vimax_working"))
         )
+
     # 使用音频实际时长替代 LLM 预估的 duration，保证音画对齐
     duration = max(round(audio_duration), 3) if audio_duration > 0 else shot.get("duration", 5)
+
     return VideoGenerationRequest(
         prompt=full_prompt,
         clip_index=shot["index"],
@@ -57,6 +70,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, aud
         negative_prompt=NEGATIVE_PROMPT,
         size="960x1792",
         image_path=image_path,
+        last_frame_image_path=last_frame_image_path,
     )
 
 
@@ -71,7 +85,7 @@ def _find_fallback_reference(working_dir: Path) -> str | None:
         for ident, views in registry.items():
             front = views.get("front", {}).get("path", "")
             if front and Path(front).exists():
-                print(f"  [fallback] 使用角色 {ident} 正面肖像")
+#                 print(f"  [fallback] 使用角色 {ident} 正面肖像")
                 return front
     except Exception:
         pass

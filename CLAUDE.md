@@ -16,11 +16,10 @@ pip install -r requirements.txt
 
 ### 运行流水线（按顺序）
 ```bash
-python step01_script_gen/main.py  # 阶段1（新版入口）：小说文本 → 分镜 JSON
-# python 01_script_gen.py         # 旧版入口（已弃用，仅作向后兼容包装）
-python 02b_vimax_gen.py      # 阶段2: 分镜 → 视频片段（首帧锚定、尾帧生成）
-python 03_tts_audio.py       # 阶段3: 旁白文本 → 语音音频
-python 04_merge_ffmpeg.py    # 阶段4: 片段 + 音频 + 字幕 → 最终 MP4
+python step01_script_gen/main.py  # 阶段1: 小说文本 → 分镜 JSON
+python step02_video_gen/main.py   # 阶段2: 分镜 → 视频片段
+python step03_tts_audio/main.py   # 阶段3: 旁白文本 → 语音音频
+python step04_merge/main.py       # 阶段4: 片段 + 音频 + 字幕 → 最终 MP4
 ```
 
 每个阶段脚本都有交互式确认提示。
@@ -38,6 +37,8 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 - `IMAGE_PROVIDER`: 图片生成供应商（默认agnes）
 - `TEXT_PROVIDER`: 文本生成供应商（默认deepseek）
 - `TTS_PROVIDER`: TTS供应商（默认dashscope_sdk）
+- `HOOK_ENABLED`: 是否生成钩子分镜（默认1，开启）
+- `COMPLIANCE_AUTO_FIX`: 是否自动修复敏感词（默认1，开启）
 
 ## 架构设计
 
@@ -45,9 +46,9 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 ```
 小说文本 (.txt)
     → step01_script_gen/main.py → script_result.json（分镜 + 旁白 + 角色 + 摄像机分组）
-    → 02b_vimax_gen.py  → output/vimax_working/shots/<idx>/video.mp4
-    → 03_tts_audio.py   → output/audio/narration.mp3
-    → 04_merge_ffmpeg.py → output/final.mp4
+    → step02_video_gen/main.py  → vimax_working/shots/<idx>/video.mp4
+    → step03_tts_audio/main.py  → audio/narration.mp3
+    → step04_merge/main.py      → final.mp4
 ```
 
 ### Provider 抽象模式
@@ -63,4 +64,4 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 
 ## 关键参考文件
 - `skill_spy.txt` — Prompt 工程参考
-- `01_script_gen.py` — 包含详细的分镜生成 prompt
+- `step01_script_gen/prompts.py` — 包含详细的分镜生成 prompt

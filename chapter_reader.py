@@ -2,10 +2,82 @@
 
 小说结构:
   - GBK 编码
-  - 章标记: 第001章, 第002章, ... 每节约 5000 字符
+  - 章标记: 第001章, 第002章, ... 每节约 5,000 字符
+
+过滤规则:
+  - 回忆/闪回: "上回说到"、"前文提要" 等
+  - 跨章引用: "详见第X章"、"上章" 等
+  - 说书套语: "却说"、"且听下回分解" 等
 """
 
 import re
+
+
+# 需要过滤的无关内容模式
+_IRRELEVANT_PATTERNS = [
+    # 回忆/闪回开头（整行匹配）
+    (r"^上回说到[，,。：]", "回忆/闪回"),
+    (r"^前文提要[：:]", "前文提要"),
+    (r"^上章[所述|提到|说到][：:]", "上章引用"),
+    # 跨章引用（整行匹配）
+    (r"^详见[第|上]\d+章", "跨章引用"),
+    (r"^且听下回分解", "章尾套语"),
+    (r"^欲知后事如何[，,]", "章尾套语"),
+    (r"^上回书说", "说书套语"),
+    (r"^却说", "说书套语"),
+]
+
+# 预编译正则
+_COMPILED_PATTERNS = [
+    (re.compile(p, re.MULTILINE), label) for p, label in _IRRELEVANT_PATTERNS
+]
+
+
+def _filter_irrelevant_content(text: str) -> str:
+    """过滤章节中的无关内容（回忆/闪回/跨章引用）.
+
+    Args:
+        text: 原始章节文本
+
+    Returns:
+        过滤后的文本
+    """
+    original_len = len(text)
+    lines = text.split("\n")
+    filtered_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            filtered_lines.append(line)
+            continue
+
+        # 检查整行是否匹配无关模式
+        matched = False
+        for pattern, label in _COMPILED_PATTERNS:
+            if pattern.match(stripped):
+                print(f"  [过滤] {label}: {stripped[:30]}...")
+                matched = True
+                break
+
+        # 检查段内跨章引用（整句删除）
+        if not matched:
+            # 移除 "...,详见第X章,..." 整句
+            stripped = re.sub(r"[，,，]详见第\d+章[，,\s].*", "", stripped)
+            stripped = re.sub(r"[，,]上回说到[，,].*", "", stripped)
+
+        if stripped:
+            filtered_lines.append(stripped)
+        else:
+            # 如果整行被过滤，保留空行
+            filtered_lines.append("")
+
+    result = "\n".join(filtered_lines).strip()
+    removed = original_len - len(result)
+    if removed > 0:
+        print(f"  [过滤] 共移除 {removed} 字符无关内容")
+
+    return result
 
 
 def find_sections(novel_path: str) -> list[dict]:
@@ -117,6 +189,10 @@ def extract_section(novel_path: str, section_index: int = 1) -> str:
             prev_empty = False
 
     cleaned = "\n".join(lines).strip()
+
+    # 过滤无关内容（回忆/闪回/跨章引用）
+    cleaned = _filter_irrelevant_content(cleaned)
+
     print(f"[OK] 提取第 {section_index:03d} 章「{target['title']}」: "
           f"{len(cleaned)} 字符")
     return cleaned

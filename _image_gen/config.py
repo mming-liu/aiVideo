@@ -1,4 +1,4 @@
-"""图片生成配置 — 从 .env 读取参数.
+﻿"""图片生成配置 — 从 .env 读取参数.
 
 供应商可切换，所有参数均可通过 .env 覆盖.
 """
@@ -19,11 +19,26 @@ class ImageGenCfg:
     PROVIDER: str = os.getenv("IMAGE_PROVIDER", "agnes")
 
     # ---- 通用参数 ----
-    OUTPUT_DIR: str = os.getenv("IMAGE_OUTPUT_DIR", "./output/images")
+    _OUTPUT_BASE = os.getenv("OUTPUT_BASE", "./output/video")
+    _BOOK_IDX = int(os.getenv("BOOK_INDEX", "1"))
+    _CHAPTER_IDX = int(os.getenv("NOVEL_CHAPTER", "1"))
+    OUTPUT_DIR: str = os.getenv("IMAGE_OUTPUT_DIR", os.path.join(
+        _OUTPUT_BASE,
+        f"book_{_BOOK_IDX:02d}",
+        f"chapter_{_CHAPTER_IDX:02d}",
+        "images"
+    ))
     IMAGE_SIZE: str = os.getenv("IMAGE_SIZE", "1024x1792")  # 9:16 竖屏
 
     # ---- agnes (OpenAI 兼容) ----
     AGNES_API_KEY: str = os.getenv("AGNES_API_KEY", "")
+    AGNES_API_KEY_2: str = os.getenv("AGNES_API_KEY_2", "")  # 备用 Key
+    AGNES_API_KEY_3: str = os.getenv("AGNES_API_KEY_3", "")  # 第三个 Key
+    AGNES_API_KEY_4: str = os.getenv("AGNES_API_KEY_4", "")  # 第四个 Key
+    AGNES_API_KEY_5: str = os.getenv("AGNES_API_KEY_5", "")  # 第五个 Key
+    AGNES_API_KEY_6: str = os.getenv("AGNES_API_KEY_6", "")  # 第六个 Key
+    AGNES_API_KEY_7: str = os.getenv("AGNES_API_KEY_7", "")  # 第七个 Key
+    AGNES_API_KEY_8: str = os.getenv("AGNES_API_KEY_8", "")  # 第八个 Key
     AGNES_BASE_URL: str = os.getenv("AGNES_BASE_URL", "")
     AGNES_IMAGE_MODEL: str = os.getenv("AGNES_IMAGE_MODEL", "agnes-image-2.1-flash")
     # 403 回退模型列表（逗号分隔）
@@ -42,6 +57,17 @@ class ImageGenCfg:
         """验证当前供应商所需配置是否完整."""
         if cls.PROVIDER == "agnes" and not cls.AGNES_API_KEY:
             raise RuntimeError("IMAGE_PROVIDER=agnes 需要 AGNES_API_KEY")
+
+    @classmethod
+    def get_rate_limit_info(cls) -> dict:
+        """返回免费用户推荐速率限制（基于 docs/faq.md）."""
+        return {
+            "image_2k_rpm": 10,      # 免费用户 2K: 10 RPM
+            "image_1k_rpm": 20,      # 免费用户 1K: 20 RPM
+            "image_3k_rpm": 1,       # 免费用户 3K/4K: 1 RPM
+            "image_interval_2k": 6,  # 2K: 6秒间隔
+            "image_interval_1k": 3,  # 1K: 3秒间隔
+        }
 
 
 # 单例

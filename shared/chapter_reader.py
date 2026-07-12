@@ -3,9 +3,79 @@
 小说结构:
   - GBK 编码
   - 章标记: 第001章, 第002章, ... 每节约 5000 字符
+
+功能:
+  - 基础过滤: 回忆/闪回、跨章引用、说书套语
+  - 场景过滤: 识别主线场景，过滤与主线无关的场景（需 LLM）
 """
 
 import re
+import os
+import json
+from pathlib import Path
+
+
+# 缓存目录
+_CACHE_DIR = Path("output/chapter_cache")
+_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# 需要过滤的无关内容模式
+_IRRELEVANT_PATTERNS = [
+    # 回忆/闪回开头（整行匹配）
+    (r"^上回说到[，,。：]", "回忆/闪回"),
+    (r"^前文提要[：:]", "前文提要"),
+    (r"^上章[所述|提到|说到][：:]", "上章引用"),
+    # 跨章引用（整行匹配）
+    (r"^详见[第|上]\d+章", "跨章引用"),
+    (r"^且听下回分解", "章尾套语"),
+    (r"^欲知后事如何[，,]", "章尾套语"),
+    (r"^上回书说", "说书套语"),
+    (r"^却说", "说书套语"),
+]
+
+# 预编译正则
+_COMPILED_PATTERNS = [
+    (re.compile(p, re.MULTILINE), label) for p, label in _IRRELEVANT_PATTERNS
+]
+
+
+def _filter_irrelevant_content(text: str) -> str:
+    """过滤章节中的无关内容（回忆/闪回/跨章引用）."""
+    original_len = len(text)
+    lines = text.split("\n")
+    filtered_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            filtered_lines.append(line)
+            continue
+
+        # 检查整行是否匹配无关模式
+        matched = False
+        for pattern, label in _COMPILED_PATTERNS:
+            if pattern.match(stripped):
+                print(f"  [过滤] {label}: {stripped[:30]}...")
+                matched = True
+                break
+
+        # 检查段内跨章引用（整句删除）
+        if not matched:
+            stripped = re.sub(r"[，,，]详见第\d+章[，,\s].*", "", stripped)
+            stripped = re.sub(r"[，,]上回说到[，,].*", "", stripped)
+
+        if stripped:
+            filtered_lines.append(stripped)
+        else:
+            filtered_lines.append("")
+
+    result = "\n".join(filtered_lines).strip()
+    removed = original_len - len(result)
+    if removed > 0:
+        print(f"  [过滤] 共移除 {removed} 字符无关内容")
+
+    return result
 
 
 def find_sections(novel_path: str) -> list[dict]:
@@ -117,6 +187,13 @@ def extract_section(novel_path: str, section_index: int = 1) -> str:
             prev_empty = False
 
     cleaned = "\n".join(lines).strip()
+
+    # 过滤无关内容（回忆/闪回/跨章引用/说书套语）
+    cleaned = _filter_irrelevant_content(cleaned)
+
+    # 场景过滤：检查是否属于需要过滤的支线场景
+    cleaned = filter_section_by_chapter(novel_path, section_index, cleaned)
+
     print(f"[OK] 提取第 {section_index:03d} 章「{target['title']}」: "
           f"{len(cleaned)} 字符")
     return cleaned
@@ -155,7 +232,148 @@ def extract_chapter(novel_path: str, chapter: int = 1,
     return result
 
 
-# ---------------------------------------------------------------------------
+# ============================================================================
+# 场景过滤：章级分析 + 节级过滤
+# ============================================================================
+
+def _get_chapter_cache_path(chapter: int) -> Path:
+    """获取章节场景缓存文件路径."""
+    return _CACHE_DIR / f"chapter_{chapter:03d}_scenes.json"
+
+
+def _analyze_chapter_scenes(novel_path: str, chapter: int, full_text: str) -> dict:
+    """调用 LLM 分析本章主线场景，返回场景分析结果.
+
+    Returns:
+        {
+            "chapter": int,
+            "main_scenes": ["场景1", "场景2", ...],
+            "main_characters": ["角色1", "角色2", ...],
+            "filtered_sections": [1, 3, 5],  # 需要过滤的节索引
+            "reason": "..."
+        }
+    """
+    try:
+        from _text_gen import create_service, TextGenerationRequest
+    except ImportError:
+        print(f"  [WARNING] 无法导入 text_gen，跳过场景分析")
+        return {"chapter": chapter, "main_scenes": [], "main_characters": [], "filtered_sections": []}
+
+    prompt = f"""分析以下小说章节，识别主线场景和支线场景。
+
+## 任务
+1. 识别本章（5节）中的所有场景地点
+2. 判断哪些是主线场景（推动剧情发展），哪些是支线/无关场景（插叙、过渡、与主线无关）
+3. 列出需要过滤掉的支线场景对应的节号
+
+## 输出格式（JSON）
+{{
+    "main_scenes": ["场景描述1", "场景描述2", ...],  // 主线场景
+    "main_characters": ["角色1", "角色2", ...],       // 主要人物
+    "filtered_sections": [节号1, 节号2, ...],         // 需要过滤的节索引（如与主线无关的回忆、插叙）
+    "reason": "分析理由"                              // 简要说明
+}}
+
+## 小说章节
+{full_text[:25000]}
+"""
+
+    try:
+        service = create_service()
+        req = TextGenerationRequest(
+            system_prompt="你是一个小说编辑，擅长分析剧情结构和场景",
+            user_prompt=prompt,
+            max_tokens=4000,
+            temperature=0.3,
+        )
+        print(f"  [场景分析] 正在分析第 {chapter} 章主线场景...")
+        result = service.generate(req)
+        if not result.success:
+            print(f"  [WARNING] LLM 分析失败: {result.error}")
+            return {"chapter": chapter, "main_scenes": [], "main_characters": [], "filtered_sections": []}
+
+        import json
+        import re
+        raw = result.text.strip()
+        # 提取 JSON
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            data = json.loads(match.group())
+            print(f"  [场景分析] 完成: 主线场景 {len(data.get('main_scenes', []))} 个, "
+                  f"需过滤 {len(data.get('filtered_sections', []))} 节")
+            return data
+        else:
+            print(f"  [WARNING] LLM 返回格式异常")
+            return {"chapter": chapter, "main_scenes": [], "main_characters": [], "filtered_sections": []}
+    except Exception as e:
+        print(f"  [ERROR] 场景分析异常: {e}")
+        return {"chapter": chapter, "main_scenes": [], "main_characters": [], "filtered_sections": []}
+
+
+def _load_chapter_cache(chapter: int) -> dict | None:
+    """加载章节场景缓存，若不存在返回 None."""
+    cache_path = _get_chapter_cache_path(chapter)
+    if cache_path.exists():
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+
+def _save_chapter_cache(chapter: int, data: dict) -> None:
+    """保存章节场景缓存."""
+    cache_path = _get_chapter_cache_path(chapter)
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _get_chapter_scenes(novel_path: str, chapter: int) -> dict:
+    """获取章节场景分析（带缓存）."""
+    # 尝试加载缓存
+    cache = _load_chapter_cache(chapter)
+    if cache:
+        print(f"  [场景缓存] 第 {chapter} 章缓存已加载")
+        return cache
+
+    # 需要分析，先提取全章文本
+    full_text = extract_chapter(novel_path, chapter, sections_per_chapter=5)
+
+    # 调用 LLM 分析
+    analysis = _analyze_chapter_scenes(novel_path, chapter, full_text)
+
+    # 保存缓存
+    _save_chapter_cache(chapter, analysis)
+
+    return analysis
+
+
+def filter_section_by_chapter(novel_path: str, section_index: int, text: str) -> str:
+    """根据章节场景分析检查本节内容（不过滤整节）。
+
+    逻辑调整（用户要求）：
+    - 整章回忆：不过滤
+    - 整节回忆：不过滤
+    - 节内回忆场景：通过 _filter_irrelevant_content 已逐行过滤
+
+    本函数现在仅用于记录分析结果，暂不执行过滤。
+    """
+    # 确定所属章节
+    chapter = (section_index - 1) // 5 + 1  # 每5节一章
+
+    # 获取章节场景分析（用于日志/调试）
+    scenes = _get_chapter_scenes(novel_path, chapter)
+
+    filtered_sections = scenes.get("filtered_sections", [])
+    if section_index in filtered_sections:
+        # 用户要求：整节回忆不过滤，只记录
+        print(f"  [场景分析] 第 {section_index} 节被识别为支线场景，但整节保留（回忆内容>20%）")
+
+    return text
+
+
+# ============================================================================
 if __name__ == "__main__":
     # 快速测试
     import sys

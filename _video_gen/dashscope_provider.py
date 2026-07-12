@@ -73,8 +73,7 @@ class DashScopeVideoService(VideoGenerationService):
 
             rsp = VideoSynthesis.async_call(**kwargs)
 
-            print(f"  [镜头{req.clip_index}] [prompt -> {model}] "
-                  f"{req.prompt[:200]}{'...' if len(req.prompt) > 200 else ''}")
+            print(f"  [镜头{req.clip_index}] [{model}] {req.prompt[:60]}...")
 
             if rsp.status_code == 200:
                 task_id = rsp.output["task_id"]

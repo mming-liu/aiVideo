@@ -24,7 +24,7 @@ class AgnesTextService(TextGenerationService):
     """agnes ai (OpenAI 兼容) 文本生成实现.
 
     403 回退: 主模型返回 403 时，自动切换到 AGNES_TEXT_FALLBACK_MODELS 中的下一个.
-    回退在单次调用级别（与 TTS/图片一致）.
+    429 回退: 速率限制时自动切换到下一个 API Key.
 
     Thinking 模式: 在 .env 中设置 AGNES_TEXT_ENABLE_THINKING=1 启用.
     """
@@ -36,6 +36,34 @@ class AgnesTextService(TextGenerationService):
             config.AGNES_TEXT_MODEL
         ] + config.AGNES_TEXT_FALLBACK_MODELS
         self._enable_thinking: bool = config.AGNES_TEXT_ENABLE_THINKING
+        # 多 Key 切换（最多8个）
+        self._api_keys = [config.AGNES_API_KEY]
+        if config.AGNES_API_KEY_2:
+            self._api_keys.append(config.AGNES_API_KEY_2)
+        if config.AGNES_API_KEY_3:
+            self._api_keys.append(config.AGNES_API_KEY_3)
+        if config.AGNES_API_KEY_4:
+            self._api_keys.append(config.AGNES_API_KEY_4)
+        if config.AGNES_API_KEY_5:
+            self._api_keys.append(config.AGNES_API_KEY_5)
+        if config.AGNES_API_KEY_6:
+            self._api_keys.append(config.AGNES_API_KEY_6)
+        if config.AGNES_API_KEY_7:
+            self._api_keys.append(config.AGNES_API_KEY_7)
+        if config.AGNES_API_KEY_8:
+            self._api_keys.append(config.AGNES_API_KEY_8)
+        self._current_key_index: int = 0
+
+    @property
+    def _api_key(self) -> str:
+        return self._api_keys[self._current_key_index]
+
+    def _switch_to_backup_key(self) -> bool:
+        """切换到备用 API Key. 返回是否切换成功."""
+        if self._current_key_index + 1 < len(self._api_keys):
+            self._current_key_index += 1
+            return True
+        return False
 
     def _advance_index(self, idx: int) -> Optional[int]:
         """返回下一个回退模型的下标，无可用模型时返回 None."""
@@ -51,7 +79,7 @@ class AgnesTextService(TextGenerationService):
         while idx < len(self._model_queue):
             model = self._model_queue[idx]
             headers = {
-                "Authorization": f"Bearer {config.AGNES_API_KEY}",
+                "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
             }
             payload: dict = {
@@ -90,6 +118,29 @@ class AgnesTextService(TextGenerationService):
                     idx = len(self._model_queue)
                     break
 
+                # ---- 422: 内容违规，返回错误 ----
+                if res.status_code == 422:
+                    last_error = f"Agnes 内容违规 [422]: {res.text[:300]}"
+                    break
+
+                # ---- 401/402: 认证失败/余额不足，停止重试 ----
+                if res.status_code in (401, 402):
+                    last_error = f"Agnes 错误 [{res.status_code}]（停止重试）: {res.text[:300]}"
+                    break
+
+                # ---- 408/499/502/503/504/520/522/524: 临时错误，等待后重试 ----
+                if res.status_code in (408, 499, 502, 503, 504, 520, 522, 524):
+                    _submit_retry += 1
+                    if _submit_retry <= config.AGNES_TEXT_SUBMIT_RETRIES:
+                        print(f"  [!] 临时错误 {res.status_code}，"
+                              f"{config.AGNES_TEXT_SUBMIT_RETRY_DELAY}s 后重试 "
+                              f"({_submit_retry}/{config.AGNES_TEXT_SUBMIT_RETRIES})")
+                        time.sleep(config.AGNES_TEXT_SUBMIT_RETRY_DELAY)
+                        continue
+                    last_error = f"Agnes 失败 [{res.status_code}] (重试{_submit_retry}次): {res.text[:300]}"
+                    idx = len(self._model_queue)
+                    break
+
                 # ---- 5xx: 服务端暂时不可用，等待后重试 ----
                 if 500 <= res.status_code < 600:
                     _submit_retry += 1
@@ -116,9 +167,28 @@ class AgnesTextService(TextGenerationService):
                         break
                     if idx > 0:
                         print(f"  [INFO] 文本已回退到模型: {model}")
+                    if self._current_key_index > 0:
+                        print(f"  [INFO] 文本已回退到 API Key: {self._current_key_index + 1}/{len(self._api_keys)}")
                     return TextGenerationResult(success=True, text=text)
 
-                # ---- 403: 额度耗尽或无权限，尝试回退 ----
+                # ---- 429: 速率限制，优先切换 API Key（不同 key 限速独立），再用新 key 重试 ----
+                if res.status_code == 429:
+                    if self._switch_to_backup_key():
+                        print(f"  [!] 文本 API Key {self._current_key_index} 速率限制 429，"
+                              f"切换到 Key {self._current_key_index + 1}/{len(self._api_keys)} 并重试")
+                        continue
+                    # 所有 Key 都 429，再等待后重试
+                    _submit_retry += 1
+                    if _submit_retry <= config.AGNES_TEXT_SUBMIT_RETRIES:
+                        print(f"  [!] 所有 API Key 均限速 429，"
+                              f"{config.AGNES_TEXT_SUBMIT_RETRY_DELAY}s 后重试 "
+                              f"({_submit_retry}/{config.AGNES_TEXT_SUBMIT_RETRIES})")
+                        time.sleep(config.AGNES_TEXT_SUBMIT_RETRY_DELAY)
+                        continue
+                    last_error = (f"Agnes 文本速率限制 [429] (重试{_submit_retry}次): "
+                                  f"{res.text[:300]}")
+
+                # ---- 403: 额度耗尽或无权限，尝试模型回退 ----
                 if res.status_code == 403:
                     nxt = self._advance_index(idx)
                     if nxt is not None:

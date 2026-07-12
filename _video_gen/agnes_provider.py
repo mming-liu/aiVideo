@@ -38,6 +38,42 @@ class AgnesVideoService(VideoGenerationService):
         ] + config.AGNES_VIDEO_FALLBACK_MODELS
         self._current_model_index: int = 0
 
+        # 多 API Key 支持（与 text/image provider 一致）
+        self._api_keys = [config.AGNES_API_KEY]
+        if config.AGNES_API_KEY_2:
+            self._api_keys.append(config.AGNES_API_KEY_2)
+        if config.AGNES_API_KEY_3:
+            self._api_keys.append(config.AGNES_API_KEY_3)
+        if config.AGNES_API_KEY_4:
+            self._api_keys.append(config.AGNES_API_KEY_4)
+        if config.AGNES_API_KEY_5:
+            self._api_keys.append(config.AGNES_API_KEY_5)
+        if config.AGNES_API_KEY_6:
+            self._api_keys.append(config.AGNES_API_KEY_6)
+        if config.AGNES_API_KEY_7:
+            self._api_keys.append(config.AGNES_API_KEY_7)
+        if config.AGNES_API_KEY_8:
+            self._api_keys.append(config.AGNES_API_KEY_8)
+        self._current_key_index: int = 0
+
+    # ------------------------------------------------------------------
+    # API Key 轮换
+    # ------------------------------------------------------------------
+    @property
+    def _current_api_key(self) -> str:
+        return self._api_keys[self._current_key_index]
+
+    def _advance_key(self) -> bool:
+        """切换到下一个 API Key. 返回是否切换成功."""
+        if self._current_key_index + 1 < len(self._api_keys):
+            self._current_key_index += 1
+            return True
+        return False
+
+    def get_key_index(self) -> int:
+        """返回当前使用的 key 索引."""
+        return self._current_key_index
+
     # ------------------------------------------------------------------
     # 模型回退
     # ------------------------------------------------------------------
@@ -158,7 +194,7 @@ class AgnesVideoService(VideoGenerationService):
         while True:
             model = self._current_model
             headers = {
-                "Authorization": f"Bearer {config.AGNES_API_KEY}",
+                "Authorization": f"Bearer {self._current_api_key}",
                 "Content-Type": "application/json",
             }
             payload: dict = {
@@ -235,15 +271,20 @@ class AgnesVideoService(VideoGenerationService):
                     f"{res.text[:500]}"
                 )
 
-            # ---- 429: 速率限制，等待后重试 ----
+            # ---- 429: 速率限制，切换 API Key 后重试 ----
             if res.status_code == 429:
                 _submit_retry += 1
                 if _submit_retry <= config.AGNES_VIDEO_SUBMIT_RETRIES:
-                    delay = config.AGNES_VIDEO_SUBMIT_RETRY_DELAY + 30  # 至少比常规重试多等30s
-                    print(f"  [镜头{req.clip_index}] 速率限制 429，"
-                          f"{delay}s 后重试 "
-                          f"({_submit_retry}/{config.AGNES_VIDEO_SUBMIT_RETRIES})")
-                    time.sleep(delay)
+                    # 尝试切换到下一个 API Key
+                    if self._advance_key():
+                        print(f"  [镜头{req.clip_index}] 速率限制 429，"
+                              f"切换到 API Key {self._current_key_index + 1}/{len(self._api_keys)} 并重试")
+                    else:
+                        # 所有 key 都用过了，等待后重试
+                        delay = config.AGNES_VIDEO_SUBMIT_RETRY_DELAY + 30
+                        print(f"  [镜头{req.clip_index}] 速率限制 429，所有 Key 已用完，"
+                              f"等待 {delay}s 后重试 ({_submit_retry}/{config.AGNES_VIDEO_SUBMIT_RETRIES})")
+                        time.sleep(delay)
                     continue
                 raise RuntimeError(
                     f"Agnes 视频速率限制 [429] (重试{_submit_retry}次): "
@@ -286,7 +327,7 @@ class AgnesVideoService(VideoGenerationService):
         try:
             res = requests.get(
                 self._query_url(task_id),
-                headers={"Authorization": f"Bearer {config.AGNES_API_KEY}"},
+                headers={"Authorization": f"Bearer {self._current_api_key}"},
                 timeout=120,
             )
         except Exception as e:

@@ -177,7 +177,7 @@ def _poll_task(task_id: str, api_key: str, clip_index: int) -> VideoGenerationRe
             if not task_status:
                 task_status = (data.get("task_status") or "").upper()
 
-            print(f"  [镜头{clip_index}] 生成中... ({task_status}, 第{attempt}/{config.DASHSCOPE_MAX_POLL_ATTEMPTS}次轮询)")
+            print(f"  [镜头{clip_index}] 生成中... ({task_status})")
 
             if task_status in ("FAILED", "CANCELED", "CANCELLED"):
                 # 读取错误码

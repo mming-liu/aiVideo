@@ -1,0 +1,191 @@
+﻿# aiVideo Pipeline — 完整文档
+
+> 生成日期: 2026-07-12
+> 项目路径: C:\myFloders\git\aiVideo
+
+---
+
+## 一、项目概览
+
+aiVideo 是一个自动化视频生产流水线，将小说章节转换为电影级短视频（9:16 竖屏，动漫风格）。流水线涵盖：分镜脚本生成 → 视频片段生成 → TTS 语音合成 → 最终合成。
+
+核心设计哲学：
+- 每个流水线步骤独立（step01~step04），产物为文件级中间状态
+- 多供应商抽象层（_text_gen / _image_gen / _video_gen / tts），通过 .env 一键切换
+- ViMax 框架作为底层智能体编排层
+- 缓存机制避免重复的 LLM/API 调用
+
+---
+
+## 二、文件与目录结构
+
+核心模块：
+- step01_script_gen/：分镜脚本生成
+- step02_video_gen/：视频生成
+- step03_tts_audio/：TTS 语音生成
+- step04_merge/：视频合成
+- shared/：共享工具（vimax_bridge, vimax_adapters, content_policy_fix, chapter_reader, character_bank）
+- _text_gen/, _image_gen/, _video_gen/, tts/：供应商抽象层
+- vimax/：ViMax 框架
+
+---
+
+## 三、流水线详解
+
+### 步骤一：分镜脚本生成（step01_script_gen/）
+
+输入：小说 TXT 文件 + 章节号
+输出：{OUTPUT_BASE}/book_N/chapter_N/script_result.json
+
+流程：
+read_chapter() → gen_spy_script() → parse_response() → 差距分析 → _post_process() → 生成钩子分镜 → 提取角色 → 计算时间轴 → 保存
+
+核心逻辑：
+- read_chapter()：通过 shared/chapter_reader.py 从小说 TXT 中提取指定章节
+- gen_spy_script()：调用 LLM 生成结构化分镜脚本，prompt 包含镜头语言库、风格前缀、合规规则、物理特效/光影分层/材质约束、画面-字幕逐词绑定规则
+- parse_response()：解析 JSON 带损坏恢复链（safe_parse_json_object 优先，兜底修复包括去代码块标记、提取 {} 区域、修复尾部逗号）。校验镜头数、字段完整性、景别多样性、字幕-画面一致性、合规性
+- 差距分析：检查后 1/3 镜头是否覆盖高潮情节，可自动带反馈重新生成（最多 2 次）
+- _post_process()：注入全局渲染参数 + 自动合规过滤 + 敏感词校验
+- 钩子分镜（v6 新增）：生成 1 个独立开场悬念镜头
+- 角色提取：跨章节一致性，通过 CharacterBank 持久化
+
+### 步骤二：视频生成（step02_video_gen/）
+
+输入：script_result.json
+输出：{VIMAX_WORKING_DIR}/shots/{idx}/video.mp4 + 首帧/尾帧
+
+流程：
+build_working_dir() → TTS 预生成 → 逐镜并发：生成帧 → 提交任务 → 后台轮询
+
+核心逻辑：
+- build_working_dir()（shared/vimax_bridge.py）：将 script_result.json 转换为 ViMax 工作目录（角色、故事板、摄像机树、镜头描述、角色肖像）
+- 逐镜处理：生成首帧 first_frame.png（及尾帧 last_frame.png 若为 medium/large 变幅），提交异步视频任务，后台轮询结果（最多重试 3 次）
+- 速率控制：提交间隔 + RPM 限流 + 并发数控制
+- 422 违规自动修复：通过 content_policy_fix.py 替换敏感词后重试
+
+### 步骤三：TTS 语音（step03_tts_audio/）
+
+简单的逐镜 TTS 生成，检测到已有音频文件则跳过。
+
+### 步骤四：视频合成（step04_merge/）
+
+输入：script_result.json + 视频片段 + 音频
+输出：final.mp4 + subtitles.srt
+
+核心逻辑：
+- SRT 字幕生成：基于逐镜字幕文本 + 音频时长计算时间戳
+- 视频拉伸（stretch.py）：使用 ffmpeg setpts 滤镜拉伸每段视频匹配对应 TTS 时长（STRETCH_RATIO_MAX=1.333，超出报警）
+- 转场效果：硬切 / 淡入 / 淡出 / 模糊叠化 / 简单叠化 / 黑场闪白
+- 开场缓冲：黑屏 → 标题卡（可选）→ 淡入到首个镜头
+- 最终合成：调色（对比度/饱和度/暗角）+ 字幕叠加 + 音量增益
+
+---
+
+## 四、供应商架构
+
+所有供应商遵循 ABC 接口 + 工厂注册 + Config 单例模式。
+
+文本生成（_text_gen/）：
+- dashscope_provider.py：DashScope HTTP API（qwen-plus）
+- deepseek_provider.py：OpenAI 兼容接口（deepseek-chat）
+- agnes_provider.py：OpenAI 兼容接口（agnes-2.0-flash）
+
+图片生成（_image_gen/）：
+- agnes_provider.py：Agnes AI（agnes-image-2.1-flash）
+
+视频生成（_video_gen/）：
+- dashscope_provider.py / http_dashscope_provider.py：DashScope（happyhorse-1.1-t2v）
+- agnes_provider.py：Agnes AI（agnes-video-v2.0），异步轮询模式
+
+语音合成（tts/）：
+- dashscope_provider.py：DashScope SDK WebSocket（sambert-zhide-v1）
+- dashscope_qwen3.py：DashScope HTTP（qwen3-tts）
+- openai_provider.py：OpenAI 兼容（tts-1）
+
+403 回退机制：每个供应商有 _model_queue，遇到 403（配额超限）自动切换到下一个回退模型。多个 API Key 轮换（Agnes 支持 5 个 Key）。
+
+---
+
+## 五、ViMax 集成
+
+vimax_bridge.py 将 step01 产出的 script_result.json 翻译为 ViMax 工作目录格式。
+
+核心功能：
+- 摄像机树（_build_camera_tree）：基于 cam_idx 算法构建多摄像机父子链
+- 首帧/尾帧生成：同摄像机内非首个镜头引用该摄像机首帧作为锚定，组间并行（不同摄像机同时生成）、组内串行
+- 参考图选择（_select_best_reference）：从 ff_desc/prompt/context_bridge 检测视角偏好（正面/侧面/背面），回退到角色肖像 → 风格锚点
+- 角色肖像生成：新角色生成 front/side/back 三视图（横屏白底，跳过风格前缀）
+- Prompt 哈希缓存：每镜记录 prompt hash，只有 prompt 变化时才重新生成帧
+
+适配器：
+- ImageGeneratorAiVideoAdapter：强制竖屏 9:16，复用风格前缀 + 合规化清洗
+- VideoGeneratorAiVideoAdapter：拼前缀 + 合规化 + 首帧/尾帧参考图
+
+---
+
+## 六、内容合规与敏感词
+
+style_prefix.py：
+- 定义固定 STYLE_PREFIX
+- sanitize_prompt()：替换敏感词（暴力/色情/恐怖）
+- validate_sensitive_words()：残留敏感词校验
+- inject_global_config_into_script()：注入全局渲染参数
+
+content_policy_fix.py：
+- 解析 422 错误信息提取疑似敏感词
+- auto_fix_prompt()：自动替换并重试
+- 本地敏感词库持久化（.cache/sensitive_words.json）
+- 内置词库：暴力约 30 词、色情约 16 词、恐怖约 20 词
+
+scene_compliance.py：
+- 场景矛盾检测
+- 逐镜合规过滤
+
+---
+
+## 七、缓存机制
+
+| 级别 | 条件 |
+|------|------|
+| Prompt 哈希 | prompts.py + novel_preview + 章节号组合哈希不变则跳过 LLM |
+| 首帧/尾帧 | 每镜 prompt_hash.txt，只有 prompt 变化才重新生成 |
+| 视频片段 | 文件 > 20KB 且 mtime >= script mtime |
+| TTS 音频 | 文件 > 10KB 则复用 |
+| 拉伸视频 | 时长匹配且未设 DEBUG_SKIP_CACHE |
+
+---
+
+## 八、关键配置
+
+TEXT_PROVIDER：LLM 供应商（deepseek/dashscope/agnes）
+VIDEO_PROVIDER：视频供应商（agnes/dashscope）
+TTS_PROVIDER：TTS 供应商（dashscope_sdk/dashscope_http/openai）
+IMAGE_PROVIDER：图片供应商（agnes）
+NOVEL_CHAPTER：处理的小说章节
+BOOK_INDEX：书号索引
+SHOT_COUNT_MIN/MAX：分镜数量范围
+VIDEO_CLIP_INTERVAL：视频提交间隔（秒）
+VIDEO_CONCURRENCY：视频并发数
+IMAGE_GEN_INTERVAL：图片生成间隔（秒）
+STRETCH_RATIO_MAX：最大拉伸比率
+COMPLIANCE_AUTO_FIX：自动合规修复
+HOOK_ENABLED：钩子分镜开关
+
+---
+
+## 九、已修复缺陷（共 6 个）
+
+1. shared/vimax_adapters.py:106 — 点号后多余空格（_time_module. monotonic()），执行到此分支时会 SyntaxError
+2. shared/vimax_adapters.py:115 — 函数名拼写错误（auto_fix_rompt → auto_fix_prompt），遇到 422 错误时 NameError
+3. step04_merge/merge_core.py:529 — MB 计算错误（10*10240*10240 应改为 1024*1024），显示的 MB 值约为实际值的千分之一
+4. step04_merge/merge_core.py — 淡出转场缺少 _run_cmd(cmd) 和 return，实际效果降级为硬切
+5. step01_script_gen/main.py:229 — generate_gap_report 调用时传入不存在的文件路径（script_result.partial.json 尚未保存）
+6. step01_script_gen/prompts.py:548 — 函数名 parse_hooK_response 中字母 K 大写不一致
+
+---
+
+## 十、其他注意事项
+
+- content_policy_fix.py 的 _infer_substitute() 中存在死代码（不可达的 else 分支），不影响运行
+- gap_analysis.py 的高潮关键词是英文但旁白文本是中文，关键词匹配不会生效（已知限制）
+- merge_core.py 的 apply_transition() 使用独立的 if 语句而非 elif 链，但因各分支有 early return，当前安全

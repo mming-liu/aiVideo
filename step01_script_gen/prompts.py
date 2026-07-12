@@ -156,6 +156,15 @@ PROMPT_TEMPLATE = """
 
 # 第四步：生成步骤（严格按序执行）
 
+第 0 步（新增必做）— **通读全章，列出地点及其特征**
+先完整阅读整章小说，记录以下信息：
+- 所有出现的地点（地点名+特征描述）
+- 地点之间的关系（空间位置、距离感）
+- 例："船上"→"游船，画舫式，有女眷，不是独木舟，应该是中型画舫，装饰精美"
+- 例："岸边"→"荷塘岸边，有灯笼，有石阶"
+- 这些地点特征将用于后续每个镜头的场景设计，确保环境合理
+- **特别注意**：涉及水上场景时，船只要符合文中描述（有人女眷→画舫/游船，非独木舟）
+
 第 1 步 — 先通读每段 subtitle，列出其中的核心实词（地名/人物名/关键物件/自然元素），然后在写画面描述时逐个确保有对应的视觉元素。这篇先列词再写画面的步骤不能跳过。
 
 第 2 步 — 将原文按情节均匀切为 N 个连续段落（N >= 6，至少6镜），不跳段不遗漏，覆盖从头到尾的全部转折。
@@ -163,7 +172,6 @@ PROMPT_TEMPLATE = """
   - 中段镜头 ← 中段段落（事态发展、人物互动、情节推进）
   - 后段镜头 ← 结尾段落（高潮/冲突/转折；若原文结尾有战斗、刺杀、冲突、逃离、反转等强事件，必须呈现，不得用风景/氛围替代）
   - 三段镜头数量大致均匀即可，无需严格等分。
-
 第 3 步 — 为每个段落生成基本字段：
   - narration_segment：从该段摘取最核心的原文原句（自行决定字数，以最佳摘句为准）
   - subtitle：与 narration_segment 逐字相同
@@ -359,8 +367,63 @@ SYSTEM_PROMPT = (
 
 
 # ========================================================================
-# 格式化辅助函数
+# 钩子分镜生成（v6 新增）
 # ========================================================================
+
+HOOK_PROMPT_TEMPLATE = """
+# 钩子分镜生成
+
+你是短视频脚本大师，擅长在视频开头制造悬念和吸引力。
+请从下方小说原文中提取最精彩的1个瞬间，用于视频开场的钩子。
+
+## 任务
+1. 从原文中找到一个有冲突、有悬念、有张力的片段：
+   - 紧张对峙/拔剑相向的瞬间
+   - 意外发现/秘密暴露的瞬间
+   - 人物冲突/矛盾激化的瞬间
+   - 悬念性对话/暗示性话语
+   - 突发事件/意外转折
+
+2. 生成分镜脚本：
+   - 只生成1个镜头（index: 0，作为开场钩子）
+   - narration_segment：摘取原文最精彩的1-2句话（20-40字）
+   - subtitle：与 narration_segment 完全相同
+   - prompt：使用与主分镜相同的视觉语言（国风2D动画、景别机位运镜等）
+   - 其他字段：main_subject/core_keywords/fx_effect/audio_cue/mask_area/color_tone/clip_transition/cam_idx/variation_type/ff_desc/motion_desc/context_bridge
+
+3. 关键要求：
+   - 这个镜头独立于主分镜，用于吸引观众继续看下去
+   - 叙事上可以是倒叙（先展示高潮瞬间，再回到开头正序）
+   - prompt 要有视觉冲击力和情绪张力
+   - 禁止血腥暴力细节（用远景侧写、人物神态替代）
+
+## 输出格式
+只输出纯JSON，结构如下：
+{
+  "hook": {
+    "index": 0,
+    "narration_segment": "...",
+    "subtitle": "...",
+    "main_subject": "...",
+    "core_keywords": ["..."],
+    "fx_effect": "...",
+    "audio_cue": "...",
+    "mask_area": "...",
+    "color_tone": "...",
+    "clip_transition": "...",
+    "cam_idx": 1,
+    "variation_type": "large",
+    "ff_desc": "...",
+    "lf_desc": "",
+    "motion_desc": "...",
+    "context_bridge": "",
+    "prompt": "..."
+  }
+}
+
+# 小说原文
+{novel_text}
+"""
 
 def _format_list(items: list) -> str:
     """将列表格式化为换行符分隔的字符串."""
@@ -434,3 +497,61 @@ def _load_local_skill_context() -> str:
     except Exception:
         pass
     return ""
+
+
+def _load_gap_analysis_context(validation: dict) -> str:
+    """加载差距分析报告作为 prompt 附加上下文（v5.0 新增）.
+
+    分析 core_keywords 覆盖率和镜头分布，自动发现问题并反馈给 LLM。
+    替代外部比对网站/工具，实现全流程本地自动化。
+    """
+    # 构建问题反馈
+    issues = []
+
+    # 问题1: 低覆盖率镜头
+    low_cov = validation.get("low_coverage_shots", [])
+    if low_cov:
+        issues.append("【关键词覆盖率问题】以下镜头的 core_keywords 视觉覆盖率低于 50%:")
+        for shot in low_cov[:3]:  # 最多反馈3个
+            issues.append(
+                f"  - 镜头 {shot['index']}: {shot['coverage_rate']:.0%}, "
+                f"缺失关键词: {', '.join(shot['missing'][:3])}"
+            )
+        issues.append("  → 请在生成 prompt 时确保每个 core_keywords 都有对应的视觉元素")
+
+    # 问题2: 镜头分布
+    dist = validation.get("distribution", {})
+    if not dist.get("valid", True):
+        arc = dist.get("arc_coverage", {})
+        if not arc.get("has_climax_coverage", False):
+            issues.append(
+                "【镜头分布问题】后半段镜头未覆盖高潮剧情（战斗/刺杀/反转等强事件）"
+            )
+            issues.append("  → 请在最后几个镜头中覆盖原文结尾的冲突/反转/离去等情节")
+
+    # 生成反馈文本
+    if issues:
+        gap_feedback = "\n".join(issues)
+        return f"\n\n# 差距分析反馈（来自本地校验）\n{gap_feedback}\n"
+    return ""
+
+
+def build_hook_prompt(novel_text: str) -> str:
+    """构建钩子分镜生成的 prompt."""
+    import style_prefix
+    # 使用 replace 替换，避免 JSON 大括号与 format 冲突
+    prompt = HOOK_PROMPT_TEMPLATE.replace("{novel_text}", novel_text)
+    return prompt
+
+
+def parse_hook_response(raw: str) -> dict:
+    """解析钩子分镜生成的原始响应."""
+    import json, re
+    raw = raw.strip()
+    raw = re.sub(r"^```json\s*", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
+    return json.loads(raw)
+
+
+# 兼容别名

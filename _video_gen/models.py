@@ -6,7 +6,11 @@ from typing import Optional
 
 @dataclass
 class VideoGenerationRequest:
-    """单次视频生成请求."""
+    """单次视频生成请求.
+
+    尺寸：推荐 9:16 竖屏用于短视频。
+    num_frames 必须 <= 441 且遵循 8n+1 规则。
+    """
 
     prompt: str
     clip_index: int
@@ -17,6 +21,8 @@ class VideoGenerationRequest:
     image_path: Optional[str] = None
     # 尾帧图本地路径（KF2V 首尾帧模式专用）；None 时为普通 i2v
     last_frame_image_path: Optional[str] = None
+    # 可选：用于可复现结果（文档支持）
+    seed: Optional[int] = None
 
 
 @dataclass

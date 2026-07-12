@@ -66,30 +66,22 @@ def _measure_media_duration(path: Path) -> float:
 
 
 def _gen_shot_audio_duration(shot: dict, audio_dir: Path, provider=None) -> float:
-    """为指定镜头生成 TTS 音频，返回实际时长（秒）.
-
-    核心优化：先生成音频拿到实际时长，再按音频时长计算视频帧数，保证音画精准对齐.
-    """
+    """为指定镜头生成 TTS 音频，返回实际时长（秒）."""
     idx = shot.get("index", 0)
     text = shot.get("narration_segment", "").strip()
     if not text:
-        print(f"  [{idx}] 无 narration_segment，回退使用 LLM 预估时长")
         return shot.get("duration", 5)
 
     audio_path = audio_dir / f"shot_{idx}.mp3"
-    # 缓存检查：验证文件存在 + 内容指纹匹配（防止 script 变更后使用旧音频）
     if audio_path.exists() and audio_path.stat().st_size > 10240:
         duration = _measure_media_duration(audio_path)
         if duration > 0:
-            # 读取现有内容哈希，与当前文本对比
             hash_path = audio_dir / f"shot_{idx}.mp3.hash"
             text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
             if hash_path.exists():
                 cached_hash = hash_path.read_text(encoding="utf-8").strip()
                 if cached_hash == text_hash:
                     return duration
-                print(f"  [{idx}] 文本已变更，重新生成 TTS")
-            # 哈希不匹配或不存在 → 删除旧文件，重新生成
             audio_path.unlink()
             hash_path.unlink(missing_ok=True)
 
@@ -111,16 +103,12 @@ def _gen_shot_audio_duration(shot: dict, audio_dir: Path, provider=None) -> floa
 
         duration = _measure_media_duration(audio_path)
         if duration > 0:
-            size_kb = audio_path.stat().st_size / 1024
-            print(f"  [{idx}] TTS ({size_kb:.0f}KB/{duration:.1f}s)")
-            # 保存内容哈希，供后续缓存检查
             text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
             Path(str(audio_path) + ".hash").write_text(text_hash, encoding="utf-8")
             return duration
     except Exception as e:
         print(f"  [{idx}] TTS 失败: {e}")
 
-    print(f"  [{idx}] 回退使用 LLM 预估时长")
     return shot.get("duration", 5)
 
 
@@ -168,9 +156,6 @@ def _update_script_with_actual_durations(working_dir: Path, script_path: Path) -
                 updated_count += 1
 
     if updated_count > 0:
-        # 保存回脚本文件
         with open(script_path, "w", encoding="utf-8") as f:
             json.dump(script, f, ensure_ascii=False, indent=2)
-        print(f"[INFO] 已回填 {updated_count} 个镜头的实际时长到 JSON")
-    else:
-        print("[INFO] 没有视频文件需要回填时长")
+        print(f"[INFO] 已回填 {updated_count} 个镜头实际时长")

@@ -1,4 +1,4 @@
-"""script_result.json → ViMax working_dir 翻译器.
+﻿"""script_result.json → ViMax working_dir 翻译器.
 
 把 aiVideo 01_script_gen 产出的分镜（narration + shots + characters）翻译成 ViMax 的
 working_dir 缓存产物，让 Script2VideoPipeline 命中缓存、跳过全部 LLM 规划步骤
@@ -29,6 +29,45 @@ from vimax.interfaces import (
 )
 
 from character_bank import CharacterBank, StyleBank
+
+import hashlib
+
+
+# ---------------------------------------------------------------------------
+# Prompt Hash Cache Detection
+# ---------------------------------------------------------------------------
+
+def _compute_prompt_hash(shot: dict) -> str:
+    key_parts = [
+        shot.get("ff_desc", ""),
+        shot.get("lf_desc", ""),
+        shot.get("prompt", ""),
+        shot.get("motion_desc", ""),
+    ]
+    content = "|".join(key_parts)
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+
+
+def _save_shot_hash(shot_dir: Path, shot: dict) -> None:
+    hash_path = shot_dir / "prompt_hash.txt"
+    h = _compute_prompt_hash(shot)
+    hash_path.write_text(h, encoding="utf-8")
+
+
+def _load_shot_hash(shot_dir: Path) -> str | None:
+    hash_path = shot_dir / "prompt_hash.txt"
+    if hash_path.exists():
+        return hash_path.read_text(encoding="utf-8").strip()
+    return None
+
+
+def _is_shot_stale(shot_dir: Path, shot: dict) -> bool:
+    old_hash = _load_shot_hash(shot_dir)
+    if old_hash is None:
+        return True
+    new_hash = _compute_prompt_hash(shot)
+    return old_hash != new_hash
+
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +129,7 @@ async def build_working_dir(
     working_dir: Path,
     image_adapter,
     force_first_frame: bool = False,
+    skip_frames: bool = False,
 ):
     """读 script_result.json，写 ViMax working_dir 缓存产物 + 预生成 first_frame.
 
@@ -222,6 +262,10 @@ async def build_working_dir(
         (shots_dir / str(idx)).mkdir(parents=True, exist_ok=True)
 
     # ---- 6. 首帧 + 尾帧生成（摄像机组间并行）----
+    if skip_frames:
+        print(f"  [bridge] skip_frames=True，跳过帧生成")
+        return
+
     script_mtime = script_path.stat().st_mtime if script_path.exists() else None
 
     # 摄像机首帧锚定：同一摄像机内，镜头 N 的 first_frame 引用该摄像机第一个镜头的 first_frame
@@ -710,3 +754,53 @@ def _dump_json(path: Path, model) -> None:
         data = model.model_dump()
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# 单独镜头帧生成（供 submit_ poll. py 调用）
+# ---------------------------------------------------------------------------
+
+async def gen_shot_frames(
+    shot: dict,
+    shots_dir: Path,
+    image_adapter,
+    script_mtime: float | None,
+    force: bool = False,
+) -> dict:
+    """为单个镜头生成/检查首帧和尾帧。
+
+    用于 submit_poll.py 中 skip_frames=False 时的逐镜帧生成。
+
+    Returns:
+        dict: {"ff_path": str | None, "lf_path": str | None}
+    """
+    idx = shot["index"]
+    shot_dir = shots_dir / str(idx)
+    shot_dir.mkdir(parents=True, exist_ok=True)
+
+    ff_ = {}
+    ff_path = shot_dir / "first_frame.png"
+
+    # 首帧 generation (使用 _gen_first_frame_async 的缓存逻辑)
+    ff_path_str = await _gen_first_frame_async(
+        image_adapter, shots_dir, shot,
+        force=force, script_mtime=script_mtime,
+        reference_paths=None, max_retries=1,
+    )
+    ff_["ff_path"] = ff_path_str
+
+    # 尾帧 generation (仅对 medium/large variation_type)
+    vt = shot.get("variation_type", "small").strip() or "small"
+    lf_path_str = None
+    if vt in ("medium", "large"):
+        lf_desc = shot.get("lf_desc", "").strip()
+        if lf_desc:
+            lf_path_str = await _gen_last_frame_async(
+                image_adapter, shots_dir, shot,
+                force=force, script_mtime=script_mtime,
+                reference_paths=[ff_path_str] if ff_path_str else None,
+                max_retries=1,
+            )
+    ff_["lf_path"] = lf_path_str
+
+    return ff_
