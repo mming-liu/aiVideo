@@ -123,9 +123,18 @@ class AgnesTextService(TextGenerationService):
                     last_error = f"Agnes 内容违规 [422]: {res.text[:300]}"
                     break
 
-                # ---- 401/402: 认证失败/余额不足，停止重试 ----
+                # ---- 401/402: 认证失败/余额不足，优先切换 API Key ----
                 if res.status_code in (401, 402):
-                    last_error = f"Agnes 错误 [{res.status_code}]（停止重试）: {res.text[:300]}"
+                    _submit_retry += 1
+                    if _submit_retry <= config.AGNES_TEXT_SUBMIT_RETRIES:
+                        if self._switch_to_backup_key():
+                            print(f"  [!] HTTP {res.status_code}，"
+                                  f"切换到 API Key {self._current_key_index + 1}/{len(self._api_keys)} 并重试")
+                        else:
+                            last_error = f"Agnes API Key 无效/过期 [HTTP {res.status_code}]，所有 Key 均已尝试: {res.text[:300]}"
+                            break
+                        continue
+                    last_error = f"Agnes 认证失败 [HTTP {res.status_code}] (重试{_submit_retry}次): {res.text[:300]}"
                     break
 
                 # ---- 408/499/502/503/504/520/522/524: 临时错误，等待后重试 ----

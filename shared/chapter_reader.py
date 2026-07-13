@@ -349,7 +349,7 @@ def _get_chapter_scenes(novel_path: str, chapter: int) -> dict:
     return analysis
 
 
-def filter_section_by_chapter(novel_path: str, section_index: int, text: str) -> str:
+def filter_section_by_chapter(novel_path: str, section_index: int, text: str, _recursion_depth: int = 0) -> str:
     """根据章节场景分析检查本节内容（不过滤整节）。
 
     逻辑调整（用户要求）：
@@ -358,12 +358,21 @@ def filter_section_by_chapter(novel_path: str, section_index: int, text: str) ->
     - 节内回忆场景：通过 _filter_irrelevant_content 已逐行过滤
 
     本函数现在仅用于记录分析结果，暂不执行过滤。
+    为避免递归调用导致的无限循环，添加递归深度检查。
     """
+    # 防递归：超过2层直接返回原文
+    if _recursion_depth > 2:
+        return text
+
     # 确定所属章节
     chapter = (section_index - 1) // 5 + 1  # 每5节一章
 
-    # 获取章节场景分析（用于日志/调试）
-    scenes = _get_chapter_scenes(novel_path, chapter)
+    # 获取章节场景分析（用于日志/调试），带递归深度标志
+    try:
+        scenes = _get_chapter_scenes(novel_path, chapter)
+    except RecursionError:
+        # 递归错误时静默返回原文
+        return text
 
     filtered_sections = scenes.get("filtered_sections", [])
     if section_index in filtered_sections:

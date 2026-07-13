@@ -1,4 +1,4 @@
-"""视频生成配置 — 从 .env 读取参数.
+﻿"""视频生成配置 — 从 .env 读取参数.
 
 供应商可切换，所有参数均可通过 .env 覆盖.
 """
@@ -29,7 +29,7 @@ class VideoGenCfg:
         f"chapter_{_CHAPTER_IDX:02d}",
         "clips"
     ))
-    VIDEO_SIZE: str = os.getenv("VIDEO_SIZE", "960x1792")       # 9:16 竖屏
+    VIDEO_SIZE: str = os.getenv("VIDEO_SIZE", "720x1280")       # 9:16 竖屏
     VIDEO_DURATION: int = int(os.getenv("VIDEO_DURATION", "6"))  # 默认单镜头时长(秒)
 
     # ---- DashScope (通义万相) ----
@@ -84,8 +84,8 @@ class VideoGenCfg:
     # image-to-video: 首帧图在请求体中的字段名
     AGNES_VIDEO_IMAGE_FIELD: str = os.getenv("AGNES_VIDEO_IMAGE_FIELD", "image")
     # 视频尺寸（宽x高）
-    AGNES_VIDEO_WIDTH: int = int(os.getenv("AGNES_VIDEO_WIDTH", "832"))
-    AGNES_VIDEO_HEIGHT: int = int(os.getenv("AGNES_VIDEO_HEIGHT", "1088"))
+    AGNES_VIDEO_WIDTH: int = int(os.getenv("AGNES_VIDEO_WIDTH", "720"))
+    AGNES_VIDEO_HEIGHT: int = int(os.getenv("AGNES_VIDEO_HEIGHT", "1280"))
     # 帧率与总帧数（12 fps * 5s = 60 帧，24 fps * 5s = 120 帧）
     AGNES_VIDEO_FRAME_RATE: int = int(os.getenv("AGNES_VIDEO_FRAME_RATE", "24"))
     AGNES_VIDEO_NUM_FRAMES: int = int(os.getenv("AGNES_VIDEO_NUM_FRAMES", "0"))  # 0=自适应

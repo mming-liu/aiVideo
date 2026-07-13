@@ -130,8 +130,16 @@ class VideoGeneratorAiVideoAdapter:
         self.prefix = prefix
         self._svc = _video_gen.create_service(_video_gen.config.PROVIDER)
 
+    def get_key_index(self) -> int:
+        """返回当前使用的 key 索引."""
+        return self._svc.get_key_index()
+
     _VIDEO_SUBMIT_TIMEOUT = int(os.getenv("AGNES_VIDEO_SUBMIT_TIMEOUT", "180"))
     _VIDEO_FETCH_TIMEOUT = int(os.getenv("AGNES_VIDEO_FETCH_TIMEOUT", "1200"))
+
+    def get_key_index(self) -> int:
+        """返回当前使用的 key 索引."""
+        return self._svc.get_key_index()
 
     async def submit_task(self, req) -> str:
         """提交视频生成任务，返回 task_id（不等待完成）."""

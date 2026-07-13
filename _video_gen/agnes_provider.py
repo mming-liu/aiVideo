@@ -179,9 +179,19 @@ class AgnesVideoService(VideoGenerationService):
             print(f"  [镜头{req.clip_index}] 首帧图 {req.image_path} 读取失败，"
                   f"降级为 text-to-video")
 
-        # 计算尺寸与帧数
-        width = config.AGNES_VIDEO_WIDTH
-        height = config.AGNES_VIDEO_HEIGHT
+        # 计算尺寸与帧数：优先使用 req.size，否则回退到 config
+        if req.size:
+            # req.size 格式: "720x1280"
+            size_parts = req.size.lower().split("x")
+            if len(size_parts) == 2:
+                width = int(size_parts[0])
+                height = int(size_parts[1])
+            else:
+                width = config.AGNES_VIDEO_WIDTH
+                height = config.AGNES_VIDEO_HEIGHT
+        else:
+            width = config.AGNES_VIDEO_WIDTH
+            height = config.AGNES_VIDEO_HEIGHT
         frame_rate = config.AGNES_VIDEO_FRAME_RATE
         num_frames = config.AGNES_VIDEO_NUM_FRAMES
         if num_frames <= 0 and req.duration > 0:
@@ -268,6 +278,26 @@ class AgnesVideoService(VideoGenerationService):
                     continue
                 raise RuntimeError(
                     f"Agnes 视频提交失败 [{res.status_code}] (重试{_submit_retry}次): "
+                    f"{res.text[:500]}"
+                )
+
+            # ---- 401/402: 认证失败或支付问题，切换 API Key 后重试 ----
+            if res.status_code in (401, 402):
+                _submit_retry += 1
+                if _submit_retry <= config.AGNES_VIDEO_SUBMIT_RETRIES:
+                    # 尝试切换到下一个 API Key
+                    if self._advance_key():
+                        print(f"  [镜头{req.clip_index}] HTTP {res.status_code}，"
+                              f"切换到 API Key {self._current_key_index + 1}/{len(self._api_keys)} 并重试")
+                    else:
+                        # 所有 key 都用过了，抛出异常
+                        raise RuntimeError(
+                            f"Agnes API Key 无效/过期 [HTTP {res.status_code}]，"
+                            f"所有 Key 均已尝试: {res.text[:300]}"
+                        )
+                    continue
+                raise RuntimeError(
+                    f"Agnes 认证失败 [HTTP {res.status_code}] (重试{_submit_retry}次): "
                     f"{res.text[:500]}"
                 )
 

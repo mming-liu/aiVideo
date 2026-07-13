@@ -258,13 +258,38 @@ class AgnesImageService(ImageGenerationService):
                         last_error = f"图片下载/保存失败: {e}"
                         break
 
-                # ---- 429: 速率限制，优先切换 API Key（不同 key 限速独立）----
-                if res.status_code == 429:
-                    if self._switch_to_backup_key():
+                # ---- 401/402: 认证失败或支付问题，优先切换 API Key ----
+                if res.status_code in (401, 402):
+                    _submit_retry += 1
+                    if _submit_retry <= config.AGNES_IMAGE_SUBMIT_RETRIES:
+                        if self._switch_to_backup_key():
+                            print(f"  [镜头{req.shot_index}] HTTP {res.status_code}，"
+                                  f"切换到 API Key {self._current_key_index + 1}/{len(self._api_keys)} 并重试")
+                        else:
+                            last_error = (f"Agnes API Key 无效/过期 [HTTP {res.status_code}]，"
+                                          f"所有 Key 均已尝试: {res.text[:300]}")
+                            break
                         continue
-                    last_error = f"所有 API Key 均返回 429 限速"
+                    last_error = (f"Agnes 认证失败 [HTTP {res.status_code}] "
+                                  f"(重试{_submit_retry}次): {res.text[:300]}")
                     break
 
+                # ---- 429: 速率限制，优先切换 API Key（不同 key 限速独立）----
+                if res.status_code == 429:
+                    _submit_retry += 1
+                    if _submit_retry <= config.AGNES_IMAGE_SUBMIT_RETRIES:
+                        if self._switch_to_backup_key():
+                            print(f"  [镜头{req.shot_index}] 速率限制 429，"
+                                  f"切换到 API Key {self._current_key_index + 1}/{len(self._api_keys)} 并重试")
+                        else:
+                            delay = config.AGNES_IMAGE_SUBMIT_RETRY_DELAY + 30
+                            print(f"  [镜头{req.shot_index}] 速率限制 429，所有 Key 已用完，"
+                                  f"等待 {delay}s 后重试 ({_submit_retry}/{config.AGNES_IMAGE_SUBMIT_RETRIES})")
+                            time.sleep(delay)
+                        continue
+                    last_error = (f"Agnes 图片速率限制 [429] "
+                                  f"(重试{_submit_retry}次): {res.text[:300]}")
+                    break
                 # ---- 403: 额度耗尽或无权限，尝试回退 ----
                 if res.status_code == 403:
                     # 先尝试切换备用 API Key

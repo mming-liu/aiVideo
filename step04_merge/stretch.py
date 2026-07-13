@@ -30,7 +30,7 @@ FFMPEG = _find_exe("ffmpeg")
 FFPROBE = _find_exe("ffprobe")
 
 STRETCH_RAIO_MIN = float(os.getenv("STRETCH_RAIO_MIN", "0.75"))
-STRETCH_RAIO_MAX = float(os.getenv("STRETCH_RAIO_MAX", "1.333"))
+STRETCH_RAIO_MAX = float(os.getenv("STRETCH_RAIO_MAX", "2.5"))
 
 
 def _run_cmd(cmd, **kwargs):

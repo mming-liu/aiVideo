@@ -412,7 +412,7 @@ async def _generate_missing_portraits(
     因此创建专用 portrait_adapter：横屏尺寸 + 跳过风格前缀/合规清洗。
     """
     from vimax.agents.character_portraits_generator import CharacterPortraitsGenerator
-    from vimax_adapters import ImageGeneratorAiVideoAdapter
+    from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
 
     # 肖像专用适配器：16:9 横屏、不加风格前缀、不替换敏感词（英文 prompt）
     portrait_adapter = ImageGeneratorAiVideoAdapter(

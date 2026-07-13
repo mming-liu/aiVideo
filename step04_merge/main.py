@@ -225,8 +225,8 @@ def main():
     mismatch = abs(final_duration - audio_duration)
     print(f"  A/V mismatch:    {mismatch:.1f}s (ideal: <0.1s)")
     if use_stretch:
-        # 检查是否因 clamp 导致 mismatch（STRETCH_RATIO_MAX = 1.333）
-        max_ratio = float(os.getenv("STRETCH_RAIO_MAX", "1.333"))
+        # 检查是否因 clamp 导致 mismatch（STRETCH_RATIO_MAX = 2.5）
+        max_ratio = float(os.getenv("STRETCH_RAIO_MAX", "2.5"))
         any_clamped = False
         for orig, target in zip([get_media_duration(c) for c in clips], target_durations):
             if orig > 0:
@@ -235,7 +235,7 @@ def main():
                     any_clamped = True
                     break
         if any_clamped or mismatch > 1.0:
-            print(f"  [WARN] 视频被强制拉伸（>1.333x），画面可能变形")
+            print(f"  [WARN] 视频被强制拉伸（>2.5x），画面可能变形")
             print(f"         建议：回到 step02 重新生成匹配音频时长的视频")
         else:
             print(f"  [OK] Video stretched to match audio")

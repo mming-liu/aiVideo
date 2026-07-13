@@ -1,4 +1,4 @@
-﻿"""step02_video_gen.prompt_builder - Prompt 构建模块
+"""step02_video_gen.prompt_builder - Prompt 构建模块
 
 功能：
 - _build_rompt(): 构建单镜头 prompt
@@ -68,7 +68,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, aud
         clip_index=shot["index"],
         duration=duration,
         negative_prompt=NEGATIVE_PROMPT,
-        size="960x1792",
+        size="720x1280",
         image_path=image_path,
         last_frame_image_path=last_frame_image_path,
     )

@@ -1,4 +1,4 @@
-﻿"""step04_merge.merge_core - Core merge module with stretch, concat, and filter chain
+"""step04_merge.merge_core - Core merge module with stretch, concat, and filter chain
 v5.1 新增：
 - 开场缓冲：黑屏淡入 + 标题卡 + 过渡到首个镜头
 - 转场效果：实现 clip_transition 字段定义的转场
@@ -162,7 +162,7 @@ def apply_transition(
         # 淡入：clip_b 从黑场淡入
         cmd = [
             FFMPEG, "-y",
-            "-f", "lavfi", "-i", f"color=c=black:s=1080x1920:d={transition_duration}",
+            "-f", "lavfi", "-i", f"color=c=black:s=720x1280:d={transition_duration}",
             "-i", str(clip_b_path),
             "-filter_complex",
             f"[0:v]fade=t=out:st=0:d={transition_duration}[black];[1:v]fade=t=in:st=0:d={transition_duration}[fadein];[black][fadein]concat=n=2:v=1:a=0",
@@ -220,12 +220,16 @@ def apply_transition(
             shutil.copy2(clip_a_path, output_path)
             return output_path
 
+        # 获取 clip_a 时长，计算转场偏移
+        clip_a_dur = get_media_duration(clip_a_path)
+        offset = clip_a_dur - transition_duration
+
         cmd = [
             FFMPEG, "-y",
             "-i", str(clip_a_path),
             "-i", str(clip_b_path),
             "-filter_complex",
-            f"[0:v]setpts=PTS-STARTPTS[a];[1:v]setpts=PTS-STARTPTS[b];[a][b]xfade=transition=fadealpha:duration={transition_duration}:offset=0",
+            f"[0:v]setpts=PTS-STARTPTS[a];[1:v]setpts=PTS-STARTPTS[b];[a][b]xfade=transition=fadealpha:duration={transition_duration}:offset={offset}",
             "-c:v", "libx264", "-preset", "medium", "-crf", "23",
             str(output_path),
         ]
@@ -240,12 +244,16 @@ def apply_transition(
             shutil.copy2(clip_a_path, output_path)
             return output_path
 
+        # 获取 clip_a 时长，计算转场偏移
+        clip_a_dur = get_media_duration(clip_a_path)
+        offset = clip_a_dur - transition_duration
+
         cmd = [
             FFMPEG, "-y",
             "-i", str(clip_a_path),
             "-i", str(clip_b_path),
             "-filter_complex",
-            f"[0:v]setpts=PTS-STARTPTS[xa];[1:v]setpts=PTS-STARTPTS[xb];[xa][xb]xfade=transition=fade:duration={transition_duration}:offset=0",
+            f"[0:v]setpts=PTS-STARTPTS[xa];[1:v]setpts=PTS-STARTPTS[xb];[xa][xb]xfade=transition=fade:duration={transition_duration}:offset={offset}",
             "-c:v", "libx264", "-preset", "medium", "-crf", "23",
             str(output_path),
         ]
@@ -262,14 +270,19 @@ def apply_transition(
 
         # 短黑场后闪白
         flash_duration = transition_duration / 3
+
+        # 获取 clip_a 时长，估算 offset
+        clip_a_dur = get_media_duration(clip_a_path)
+        offset = clip_a_dur - flash_duration * 2  # 留出黑场+白场时间
+
         cmd = [
             FFMPEG, "-y",
             "-i", str(clip_a_path),
-            "-f", "lavfi", "-i", f"color=c=white:s=1080x1920:d={flash_duration}",
-            "-f", "lavfi", "-i", f"color=c=black:s=1080x1920:d={flash_duration}",
+            "-f", "lavfi", "-i", f"color=c=white:s=720x1280:d={flash_duration}",
+            "-f", "lavfi", "-i", f"color=c=black:s=720x1280:d={flash_duration}",
             "-i", str(clip_b_path),
             "-filter_complex",
-            f"[0:v]fade=t=out:st=0:d={flash_duration}[aout];[1:v][2:v][3:v]concat=n=3:v=1:a=0[flash];[aout][flash]xfade=transition=fade:duration={flash_duration}:offset=0",
+            f"[0:v]fade=t=out:st=0:d={flash_duration}[aout];[1:v][2:v][3:v]concat=n=3:v=1:a=0[flash];[aout][flash]xfade=transition=fade:duration={flash_duration}:offset={offset}",
             "-c:v", "libx264", "-preset", "medium", "-crf", "23",
             str(output_path),
         ]
@@ -304,7 +317,7 @@ def create_opening_buffer(
     # 1. 创建黑屏 (OPENING_BLACK_DURATION 秒)
     cmd = [
         FFMPEG, "-y",
-        "-f", "lavfi", "-i", f"color=c=black:s=1080x1920:d={OPENING_BLACK_DURATION}",
+        "-f", "lavfi", "-i", f"color=c=black:s=720x1280:d={OPENING_BLACK_DURATION}",
         "-c:v", "libx264", "-t", str(OPENING_BLACK_DURATION),
         "-pix_fmt", "yuv420p",
         str(black_path),
@@ -318,8 +331,8 @@ def create_opening_buffer(
         ass_content = (
             "[Script Info]\n"
             "ScriptType: v4.00+\n"
-            "PlayResX: 1080\n"
-            "PlayResY: 1920\n"
+            "PlayResX: 720\n"
+            "PlayResY: 1280\n"
             "\n"
             "[V4+ Styles]\n"
             "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Italic, Alignment, BorderStyle, Outline, Shadow, MarginL, MarginR, MarginV\n"
@@ -337,8 +350,8 @@ def create_opening_buffer(
 
         cmd = [
             FFMPEG, "-y",
-            "-f", "lavfi", "-i", f"color=c=black:s=1080x1920:d={OPENING_TITLE_DURATION}",
-            "-vf", f"subtitles=filename={ass_filter_path}:original_size=1080x1920",
+            "-f", "lavfi", "-i", f"color=c=black:s=720x1280:d={OPENING_TITLE_DURATION}",
+            "-vf", f"subtitles=filename={ass_filter_path}:original_size=720x1280",
             "-c:v", "libx264", "-preset", "medium", "-crf", "23",
             "-pix_fmt", "yuv420p",
             str(title_path),
@@ -521,6 +534,7 @@ def merge_final_video(
         "-i", str(audio_path),
         "-map", "0:v:0",
         "-map", "1:a:0",
+        "-shortest",
         "-vf", video_filter,
         "-af", f"volume={AUDIO_VOLUME}",
         "-c:v", "libx264",
