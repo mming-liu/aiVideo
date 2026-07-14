@@ -31,6 +31,8 @@ FFPROBE = _find_exe("ffprobe")
 
 STRETCH_RAIO_MIN = float(os.getenv("STRETCH_RAIO_MIN", "0.75"))
 STRETCH_RAIO_MAX = float(os.getenv("STRETCH_RAIO_MAX", "2.5"))
+# 超过此比率使用 tpad 补黑帧（避免大幅慢放导致画面变形）
+STRETCH_TPAD_RATIO = float(os.getenv("STRETCH_TPAD_RATIO", "1.2"))
 
 
 def _run_cmd(cmd, **kwargs):
@@ -55,8 +57,15 @@ def get_media_duration(path: Path) -> float:
         return 0.0
 
 
-def stretch_clip(clip_path: Path, target_dur: float, output_path: Path) -> bool:
-    """Stretch video to target duration using setpts filter."""
+def stretch_clip(clip_path: Path, target_dur: float, output_path: Path, keep_audio: bool = False) -> bool:
+    """Stretch video to target duration using setpts filter.
+
+    Args:
+        clip_path: Source video path
+        target_dur: Target duration in seconds
+        output_path: Output video path
+        keep_audio: If True, preserve video audio; if False, remove audio (default)
+    """
     if target_dur <= 0:
         return False
     actual_dur = get_media_duration(clip_path)
@@ -72,16 +81,50 @@ def stretch_clip(clip_path: Path, target_dur: float, output_path: Path) -> bool:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = [
-        FFMPEG, "-y",
-        "-i", str(clip_path),
-        "-vf", f"setpts={ratio}*PTS",
-        "-an",
+    # 优化策略：轻微延长用 setpts 慢放，大幅延长用 tpad 补黑帧
+    if ratio < STRETCH_TPAD_RATIO:
+        # 轻微慢放（<1.2倍），肉眼不易察觉
+        if abs(ratio - 1.0) < 0.01:
+            # 几乎不需要拉伸，直接复制
+            cmd = [
+                FFMPEG, "-y",
+                "-i", str(clip_path),
+            ]
+        else:
+            cmd = [
+                FFMPEG, "-y",
+                "-i", str(clip_path),
+                "-vf", f"setpts={ratio}*PTS",
+            ]
+    else:
+        # 大幅延长：保持原速播放，末尾补黑帧
+        pad_duration = target_dur - actual_dur
+        print(f"  [INFO] Using tpad for large stretch: +{pad_duration:.1f}s black frames")
+        cmd = [
+            FFMPEG, "-y",
+            "-i", str(clip_path),
+            "-vf", f"tpad=stop_mode=add:stop_duration={pad_duration}",
+        ]
+    # Remove audio if keep_audio is False
+    if not keep_audio:
+        cmd.append("-an")
+    else:
+        # 如果保留音频，强制转换为 AAC 44100Hz 立体声，防止后续合并报错
+        cmd.extend([
+            "-c:a", "aac",
+            "-ar", "44100",
+            "-ac", "2",
+        ])
+
+    cmd.extend([
+        "-pix_fmt", "yuv420p",
         "-c:v", "libx264",
+        "-profile:v", "main",   # 使用 Main Profile，兼容性更好
+        "-level", "4.0",
         "-preset", "fast",
         "-crf", "20",
         str(output_path),
-    ]
+    ])
     try:
         _run_cmd(cmd)
         size_kb = output_path.stat().st_size // 10240

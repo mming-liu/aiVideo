@@ -28,6 +28,15 @@ PROMPT_TEMPLATE = """
 # 角色定位
 你是资深国风动漫分镜导演兼动画摄影指导，擅长把小说原文转化为动漫电影级视觉描述。请严格基于下方小说原文，生成一部 9:16 竖屏抖音短视频的动漫电影级分镜脚本。画面风格为精美2D国风动画，非真人写实。
 
+# 角色一致性强制锚点（必须严格遵守）
+{character_anchors}
+上述角色特征必须体现在每个涉及该人物的镜头 prompt 中，確保画风统一。
+
+# Agnes AI 声音生成指令（必须严格遵守）
+如果 narration_segment/subtitle 中包含人物对话，必须在 prompt 末尾显式添加声音指令。
+格式为：（用中文说）"对话内容"。例如：subtitle 为"杨旭说：小心！"，则 prompt 结尾必须包含（用中文说）"小心！"。
+如果没有人物对话，请描述环境音效，如：（音效：蝉鸣声，风声）。
+
 # 第一步：决定镜头数（必做，写在最前面）
 根据以下规则自行决定本批分镜的镜头数 N（范围 {min_shots}-{max_shots} 镜）：
 - 情节密度高（场景多、事件线复杂）-> N 取偏大值
@@ -425,6 +434,34 @@ HOOK_PROMPT_TEMPLATE = """
 {novel_text}
 """
 
+# ========================================================================
+# 角色锚点构建（新增 v6.1）
+# ========================================================================
+
+def _build_character_anchors(bank) -> str:
+    """构建角色锚点字符串，用于注入 Prompt"""
+    if not bank:
+        return "无已知角色"
+    try:
+        chars = bank.get_all_identifiers()
+        if not chars:
+            return "无已知角色"
+
+        anchors = []
+        for ident in chars:
+            char = bank.get_character(ident)
+            if char:
+                static = char.get("static_features", "")
+                dynamic = char.get("dynamic_features", "")
+                if static or dynamic:
+                    # 格式化为：[角色名: 静态特征 + 动态特征]
+                    features = f"{static} {dynamic}".strip()
+                    anchors.append(f"[{ident}: {features}]")
+        return "\n".join(anchors) if anchors else "无已知角色"
+    except Exception:
+        return "无已知角色"
+
+
 def _format_list(items: list) -> str:
     """将列表格式化为换行符分隔的字符串."""
     return "\n".join(f"  - {item}" for item in items)
@@ -444,14 +481,17 @@ def _format_movement_params(params: dict) -> str:
 # 构建完整 prompt
 # ========================================================================
 
-def build_prompt(novel_text: str, min_shots: int, max_shots: int) -> str:
-    """构建最终发送给 LLM 的 prompt，注入完整镜头语言库 + 扩展词库."""
+def build_prompt(novel_text: str, min_shots: int, max_shots: int, bank=None) -> str:
+    """构建最终发送给 LLM 的 prompt，注入完整镜头语言库 + 扩展词库 + 角色锚点."""
+    # 构建角色锚点
+    char_anchors = _build_character_anchors(bank) if bank else "无已知角色"
     prompt = PROMPT_TEMPLATE.format(
         novel_text=novel_text,
         min_shots=min_shots,
         max_shots=max_shots,
         novel_char_count=len(novel_text),
-        style_prefix=style_prefix.STYLE_PREFIX,
+        style_prefix=style_prefix.STYLE_PREFIX_SHORT,
+        character_anchors=char_anchors,
         # 原始镜头库
         shot_sizes=_format_list(storyboard_refs.SHOT_SIZES),
         camera_angles=_format_list(storyboard_refs.CAMERA_ANGLES),

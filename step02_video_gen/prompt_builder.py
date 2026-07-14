@@ -18,19 +18,63 @@ from style_prefix import STYLE_PREFIX, NEGATIVE_PROMPT, ensure_prefix, sanitize_
 
 
 def _build_prompt(shot: dict, script: dict) -> str:
-    """构建单镜头 prompt，motion__desc + subtitle + context_bridge."""
+    """构建单镜头 prompt，针对 Agnes AI 优化声音指令.
+
+    策略：
+    1. 区分旁白与对话：如果 subtitle 包含冒号或引号，视为对话。
+    2. 角色锚点注入：从 script['characters'] 中提取当前 main_subject 的特征，加入 Prompt。
+    3. 强制中文指令：使用 （用中文说）"subtitle" + NO English speech.
+    """
     motion_desc = shot.get("motion_desc", "").strip()
     if not motion_desc:
         motion_desc = shot.get("prompt", "")
-    audio_desc = shot.get("subtitle", "").strip()
-    prompt = f"{motion_desc}\n{audio_desc}" if audio_desc else motion_desc
 
+    subtitle = shot.get("subtitle", "").strip()
+    main_subject = shot.get("main_subject", "")
+
+    # 1. 获取角色特征（如果存在）
+    char_features = ""
+    characters = script.get("characters", [])
+    for char in characters:
+        if char.get("identifier") == main_subject:
+            static = char.get("static_features", "")
+            dynamic = char.get("dynamic_features", "")
+            if static or dynamic:
+                char_features = f"[{main_subject}: {static}, {dynamic}]"
+            break
+
+    # 2. 构建基础 Prompt
+    parts = []
+    if char_features:
+        parts.append(char_features)  # 角色特征放最前面作为锚点
+    parts.append(motion_desc)
+
+    # 3. 处理声音指令
+    if subtitle:
+        # 判断是否为对话 (简单规则：包含冒号或引号)
+        is_dialogue = ":" in subtitle or "：" in subtitle or '"' in subtitle or '"' in subtitle or '"' in subtitle
+
+        if is_dialogue:
+            # 对话模式：保留原文格式，Agnes 通常能识别 "Name: Content"
+            # 但为了保险，显式添加中文指令
+            audio_instruction = f'（用中文说）"{subtitle}"'
+        else:
+            # 旁白/环境音模式
+            audio_instruction = f"（音效/旁白：{subtitle}）"
+
+        parts.append(audio_instruction)
+        parts.append("NO English speech.")  # 负面提示
+
+    prompt = "\n".join(parts)
+
+    # 4. 添加视觉衔接
     extras = []
     cb = shot.get("context_bridge", "").strip()
     if cb:
-        extras.append(f"与上一镜视觉衔接：{cb}")
+        extras.append(f"视觉衔接：{cb}")
     if extras:
         prompt = f"{prompt}\n\n{'；'.join(extras)}。"
+
     return prompt
 
 

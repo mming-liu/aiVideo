@@ -21,7 +21,7 @@ import _image_gen
 import _video_gen
 from _image_gen import ImageGenerationRequest
 from _video_gen import VideoGenerationRequest
-from style_prefix import STYLE_PREFIX, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt
+from style_prefix import STYLE_PREFIX, STYLE_PREFIX_SHORT, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt
 
 from vimax.interfaces import ImageOutput, VideoOutput
 from vimax.utils.rate_limiter import RateLimiter
@@ -121,7 +121,7 @@ class VideoGeneratorAiVideoAdapter:
         size: str = "960x1792",  # 9:16 竖屏（与 _video_gen 默认一致）
         duration: int = 5,
         negative_prompt: str = NEGATIVE_PROMPT,
-        prefix: str = STYLE_PREFIX,
+        prefix: str = STYLE_PREFIX_SHORT,
         **_,
     ):
         self.size = size

@@ -1,5 +1,6 @@
 """step04_merge - Video merge entry point"""
 import sys
+import subprocess
 from pathlib import Path
 import os
 
@@ -19,7 +20,8 @@ CHAPTER_DIR = OUTPUT_BASE / f"book_{BOOK_INDEX:02d}" / f"chapter_{CHAPTER_INDEX:
 SCRIPT_FILE = CHAPTER_DIR / "script_result.json"
 AUDIO_PATH = CHAPTER_DIR / "audio" / "narration.mp3"
 AUDIO_SHOT_DIR = CHAPTER_DIR / "audio"
-FINAL_OUT = CHAPTER_DIR / "final.mp4"
+FINAL_OUT_A = CHAPTER_DIR / "final-A.mp4"  # TTS only
+FINAL_OUT_B = CHAPTER_DIR / "final-B.mp4"  # Video audio + TTS mixed
 SRT_OUT = CHAPTER_DIR / "subtitles.srt"
 TEMP_DIR = CHAPTER_DIR / "stretched"
 
@@ -43,31 +45,32 @@ import json
 def main():
     print("=" * 60)
     print("  Step 4: Video Merge (Stretch + Concat + Subtitle + Color)")
+    print("  Output: final-A.mp4 (TTS only) + final-B.mp4 (mixed)")
     print("=" * 60)
 
-    # 检查前置步骤产物
+    # Check prerequisites
     if not SCRIPT_FILE.exists():
         raise FileNotFoundError(
-            f"分镜脚本不存在: {SCRIPT_FILE}\n"
-            f"请先运行 step01: python step01_script_gen/main.py"
+            f"Script not found: {SCRIPT_FILE}\n"
+            f"Please run step01 first"
         )
 
     if CLIP_SOURCE == "vimax":
         if not VIMAX_WD.exists():
             raise FileNotFoundError(
-                f"ViMax 工作目录不存在: {VIMAX_WD}\n"
-                f"请先运行 step02: python step02_video_gen/main.py"
+                f"ViMax working dir not found: {VIMAX_WD}\n"
+                f"Please run step02 first"
             )
         if not CLIP_DIR.exists():
             raise FileNotFoundError(
-                f"视频片段目录不存在: {CLIP_DIR}\n"
-                f"请先运行 step02 生成视频片段"
+                f"Video clips dir not found: {CLIP_DIR}\n"
+                f"Please run step02 to generate clips"
             )
     else:
         if not CLIP_DIR.exists():
             raise FileNotFoundError(
-                f"视频片段目录不存在: {CLIP_DIR}\n"
-                f"请先运行 step02 生成视频片段"
+                f"Video clips dir not found: {CLIP_DIR}\n"
+                f"Please run step02 first"
             )
 
     # Ensure output directories exist
@@ -75,9 +78,6 @@ def main():
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
     # 1. Load script
-    if not SCRIPT_FILE.exists():
-        raise FileNotFoundError(f"Script not found: {SCRIPT_FILE}\nPlease run step01 first")
-
     with open(SCRIPT_FILE, "r", encoding="utf-8") as f:
         script = json.load(f)
 
@@ -148,31 +148,50 @@ def main():
     # 5. Generate SRT subtitles
     generate_srt(valid_shots, target_durations, SRT_OUT)
 
-    # 提取转场信息
-    clip_transitions = [s.get("clip_transition", "硬切 cut") for s in valid_shots]
+    # Extract transition info
+    clip_transitions = [s.get("clip_transition", "cut") for s in valid_shots]
     print(f"[INFO] Transitions: {clip_transitions}")
 
-    # 获取章节标题（从环境变量或使用默认值）
-    chapter_title = os.getenv("CHAPTER_TITLE", "第一章")
+    # Get chapter title
+    chapter_title = os.getenv("CHAPTER_TITLE", "Chapter 1")
 
-    # 6. Merge video
+    # 6. Merge video - Version A: TTS only, Version B: Video audio + TTS mixed
     if use_stretch:
+        # Version A: TTS only (discard video audio)
+        print(f"\n{'='*60}")
+        print("[INFO] Generating version A: TTS audio only")
+        print(f"{'='*60}\n")
         merge_final_video(
             clips, target_durations,
             stretched_dir=TEMP_DIR,
             audio_path=audio_path,
-            output_path=FINAL_OUT,
+            output_path=FINAL_OUT_A,
             srt_path=SRT_OUT,
             clip_transitions=clip_transitions,
             chapter_title=chapter_title,
+            keep_video_audio=False,
+        )
+
+        # Version B: Video audio + TTS mixed
+        print(f"\n{'='*60}")
+        print("[INFO] Generating version B: Video audio + TTS mixed")
+        print(f"{'='*60}\n")
+        merge_final_video(
+            clips, target_durations,
+            stretched_dir=TEMP_DIR / "version_b",
+            audio_path=audio_path,
+            output_path=FINAL_OUT_B,
+            srt_path=SRT_OUT,
+            clip_transitions=clip_transitions,
+            chapter_title=chapter_title,
+            keep_video_audio=True,
         )
     else:
-        # Old mode fallback
+        # Old mode fallback (no per-shot audio, direct concat)
         print(f"\n{'='*60}")
         print("[INFO] Using old mode merge (no per-shot audio, direct concat)")
         print(f"{'='*60}\n")
-        # For simplicity, just call merge with stretch=False logic
-        from step04_merge.merge_core import concat_clips, _run__cmd, _find_exe
+        from step04_merge.merge_core import concat_clips, _run_cmd, _find_exe
         FFMPEG = _find_exe("ffmpeg")
 
         # Concat clips directly
@@ -195,55 +214,64 @@ def main():
             f"eq=contrast=1.15:saturation=0.85,"
             f"vignette=angle=0.5"
         )
+
+        # Version A: TTS only
         cmd = [
             FFMPEG, "-y",
             "-f", "concat", "-safe", "0", "-i", str(concat_list),
             "-i", str(audio_path),
             "-map", "0:v:0", "-map", "1:a:0",
             "-vf", video_filter,
-            "-af", "volume=5dB",
+            "-af", "volume=5dB,aformat=sample_fmts=fltp:channel_layouts=stereo,sample_rates=44k",
             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
-            "-c:a", "aac", "-b:a", "192k",
+            "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "44k", "-ac", "2",
             "-shortest",
-            str(FINAL_OUT),
+            str(FINAL_OUT_A),
         ]
         subprocess.run(cmd, check=True)
+        print(f"\n[OK] Version A generated: {FINAL_OUT_A}")
+
+        # Version B: Video audio + TTS mixed
+        cmd = [
+            FFMPEG, "-y",
+            "-f", "concat", "-safe", "0", "-i", str(concat_list),
+            "-i", str(audio_path),
+            "-map", "0:v:0", "-map", "0:a:0", "-map", "1:a:0",
+            "-vf", video_filter,
+            "-filter_complex",
+            # 处理视频音频：降低音量 + 格式化
+            "[0:a]volume=0.3,aformat=sample_fmts=fltp:channel_layouts=stereo:sample_rates=44k[bg];"
+            # 处理 TTS 音频：格式化
+            "[1:a]aformat=sample_fmts=fltp:channel_layouts=stereo:sample_rates=44k[tts];"
+            # 混合
+            "[bg][tts]amix=inputs=2:duration=first[audio]",
+            "-map", "0:v:0", "-map", "[audio]",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+            "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "44k", "-ac", "2",
+            "-shortest",
+            str(FINAL_OUT_B),
+        ]
+        subprocess.run(cmd, check=True)
+        print(f"[OK] Version B generated: {FINAL_OUT_B}")
+
         if concat_list.exists():
             concat_list.unlink()
-        if FINAL_OUT.exists():
-            print(f"\n[OK] Final video generated: {FINAL_OUT}")
 
     # 7. Cleanup
     if use_per_shot_audio and 'merged_audio' in locals() and Path(merged_audio).exists():
         Path(merged_audio).unlink()
 
     # 8. Report
-    final_duration = get_media_duration(FINAL_OUT)
+    duration_a = get_media_duration(FINAL_OUT_A)
+    duration_b = get_media_duration(FINAL_OUT_B)
     print("\n[INFO] Merge Report:")
-    print(f"  Audio total:     {audio_duration:.1f}s")
-    print(f"  Final duration:  {final_duration:.1f}s")
-    mismatch = abs(final_duration - audio_duration)
-    print(f"  A/V mismatch:    {mismatch:.1f}s (ideal: <0.1s)")
-    if use_stretch:
-        # 检查是否因 clamp 导致 mismatch（STRETCH_RATIO_MAX = 2.5）
-        max_ratio = float(os.getenv("STRETCH_RAIO_MAX", "2.5"))
-        any_clamped = False
-        for orig, target in zip([get_media_duration(c) for c in clips], target_durations):
-            if orig > 0:
-                ratio = target / orig
-                if ratio > max_ratio:
-                    any_clamped = True
-                    break
-        if any_clamped or mismatch > 1.0:
-            print(f"  [WARN] 视频被强制拉伸（>2.5x），画面可能变形")
-            print(f"         建议：回到 step02 重新生成匹配音频时长的视频")
-        else:
-            print(f"  [OK] Video stretched to match audio")
-    else:
-        if mismatch < 1:
-            print(f"  [OK] A/V aligned (-shortest mode)")
-        else:
-            print(f"  [WARN] Large A/V mismatch, recommend per-shot audio mode")
+    print(f"  Audio total:        {audio_duration:.1f}s")
+    print(f"  Version A duration: {duration_a:.1f}s (TTS only)")
+    print(f"  Version B duration: {duration_b:.1f}s (mixed)")
+    print(f"  A/V mismatch A:     {abs(duration_a - audio_duration):.1f}s")
+    print(f"  A/V mismatch B:     {abs(duration_b - audio_duration):.1f}s")
 
 
 if __name__ == "__main__":

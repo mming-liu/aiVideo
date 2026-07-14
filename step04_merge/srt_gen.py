@@ -39,24 +39,35 @@ def find_shot_audio(shot_idx: int, audio_dir: Path):
 
 def generate_srt(shots: List[dict], durations: List[float], output: Path) -> None:
     """Generate SRT subtitle file based on per-shot target durations."""
+    # 字幕最大显示时长（秒），防止长句字幕停留太久
+    max_display_time = 8.0
+
     output.parent.mkdir(parents=True, exist_ok=True)
 
     current_time = 0.0
     srt_lines = []
+    subtitle_count = 0
 
     for i, (shot, dur) in enumerate(zip(shots, durations), 1):
         subtitle = shot.get("subtitle", "").strip()
         if not subtitle:
+            current_time += dur
             continue
 
-        # Subtitle duration = shot target duration (audio duration)
         start = current_time
         end = current_time + dur
+
+        # 优化：如果单句字幕过长，强制截断显示时间
+        if dur > max_display_time:
+            end = start + max_display_time
+            print(f"  [WARN] Subtitle too long ({dur:.1f}s), capped to {max_display_time}s")
+
         srt_lines.append(str(i))
         srt_lines.append(f"{seconds_to_srt_time(start)} --> {seconds_to_srt_time(end)}")
         srt_lines.append(subtitle)
         srt_lines.append("")
+        subtitle_count += 1
         current_time = end
 
     output.write_text("\n".join(srt_lines), encoding="utf-8")
-    print(f"[OK] SRT generated: {output} ({len(shots)} subtitles, total {current_time:.1f}s)")
+    print(f"[OK] SRT generated: {output} ({subtitle_count} subtitles, total {current_time:.1f}s)")

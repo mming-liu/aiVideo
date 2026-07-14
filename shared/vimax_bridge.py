@@ -383,12 +383,7 @@ def _build_reference_list(
     if char_ref and char_ref not in refs:
         refs.append(char_ref)
 
-    # 风格锚点（最后回退）
-    if not refs:
-        anchor = style_bank.get_anchor_path()
-        if anchor and Path(anchor).exists():
-            refs.append(anchor)
-            print(f"  [bridge] 镜头{shot['index']}: 参考图=风格锚点")
+    # 只在 prompt 明确提到角色时才传参考图（不回退到风格锚点）
 
     return refs[:1]  # 当前 provider 只支持单参考图，取最优第一个
 

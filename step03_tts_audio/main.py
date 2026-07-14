@@ -22,13 +22,14 @@ AUDIO_OUTPUT_DIR = CHAPTER_DIR / "audio"
 
 # Submodule imports
 from step03_tts_audio.shot_tts import load_script as load_script_module, gen_all_shot_tts
-from step03_tts_audio.narration_tts import load_narration, gen_narration_tts
 from tts.config import config as tts_config
+from tts.voice_registry import get_registry
 
 
 def main():
     print("=" * 50)
     print("  Step 3: TTS Audio Generation")
+    print("  (Multi-voice support enabled)")
     print("=" * 50)
 
     # 检查前置步骤产物
@@ -45,10 +46,9 @@ def main():
     # Load script
     script = load_script_module(SCRIPT_FILE)
     shots = script.get("shots", [])
-    narration = script.get("narration", "")
 
     print(f"Shots: {len(shots)}")
-    print(f"Narration ({len(narration)} chars): {narration[:80]}...\n")
+    print(f"Chapter: {CHAPTER_INDEX}, Book: {BOOK_INDEX}\n")
 
     # 检查 step02 是否已完成音频生成（复用产物，避免重复调用 TTS API）
     existing_count = 0
@@ -73,8 +73,10 @@ def main():
 
     try:
         tts_config.validate()
-        print("\n=== Generate per-shot TTS ===")
-        gen_all_shot_tts(script, AUDIO_OUTPUT_DIR)
+        print("\n=== Generate per-shot TTS (dynamic voice) ===")
+        # 初始化音色注册表（跨章节保持角色声音一致）
+        voice_registry = get_registry()
+        gen_all_shot_tts(script, AUDIO_OUTPUT_DIR, voice_registry)
     except Exception as e:
         print(f"[ERROR] {e}")
         sys.exit(1)

@@ -82,9 +82,9 @@ def read_chapter(path: str = "锦衣夜行_77119小说.txt", chapter: int = 1) -
 # 2. 文本生成
 # ============================================================================
 
-def gen_spy_script(novel_text: str) -> str:
+def gen_spy_script(novel_text: str, bank=None) -> str:
     """调用 LLM 生成脚本，返回原始文本."""
-    prompt = build_prompt(novel_text, SHOT_COUNT_MIN, SHOT_COUNT_MAX)
+    prompt = build_prompt(novel_text, SHOT_COUNT_MIN, SHOT_COUNT_MAX, bank)
     service = create_service()
     req = TextGenerationRequest(
         system_prompt=SYSTEM_PROMPT,
@@ -195,6 +195,30 @@ def main() -> None:
     novel_text = read_chapter("锦衣夜行_77119小说.txt", chapter=CHAPTER_INDEX)
     novel_preview = novel_text[:1000]
 
+    # 加载角色库（v6.1 新增）
+    character_bank = CharacterBank()
+    character_bank.load()
+
+    # 预提取本章角色信息，辅助分镜生成（v6.1 新增）
+    # 这样 LLM 生成脚本时能看到本章新角色的特征描述
+    if CHARACTER_EXTRACTION_ENABLED:
+        print("[INFO] 预提取本章角色信息以辅助分镜生成...")
+        try:
+            chars = extract_characters(novel_text, character_bank)
+            # 注册新角色到 bank（暂存本章角色，供生成时使用）
+            for c in chars:
+                if c.get("is_new", True):
+                    character_bank.register_character(
+                        c["identifier"],
+                        c.get("static_features", ""),
+                        c.get("dynamic_features", ""),
+                        CHAPTER_INDEX,
+                    )
+            # 不在这里 save，等脚本生成完成后再保存（避免提前写入空数据）
+            print(f"[INFO] 预提取到 {len(chars)} 个角色特征")
+        except Exception as e:
+            print(f"[WARN] 预提取角色失败: {e}，继续生成脚本...")
+
     # 检查缓存
     prompt_changed = _prompt_changed(
         Path(__file__).parent / "prompts.py", SCRIPT_FILE, novel_preview, CHAPTER_INDEX
@@ -227,7 +251,7 @@ def main() -> None:
             print(f"  [已删除] {f}")
 
     # 生成脚本
-    raw = gen_spy_script(novel_text)
+    raw = gen_spy_script(novel_text, character_bank)
     script = parse_response(raw)
 
     # ========== 差距分析（v5.0 新增）==========
@@ -266,7 +290,7 @@ def main() -> None:
             gap_context = _load_gap_analysis_context(validation)
 
             # 追加差距反馈到 prompt，重新生成
-            prompt = build_prompt(novel_text, SHOT_COUNT_MIN, SHOT_COUNT_MAX)
+            prompt = build_prompt(novel_text, SHOT_COUNT_MIN, SHOT_COUNT_MAX, character_bank)
             prompt = prompt + gap_context
 
             service = create_service()
@@ -308,19 +332,12 @@ def main() -> None:
     # 提取角色（跨章节一致性）
     if CHARACTER_EXTRACTION_ENABLED:
         print("[INFO] 提取角色信息...")
-        bank = CharacterBank()
-        bank.load()
-        chars = extract_characters(novel_text, bank)
+        # 复用预提取的 character_bank，避免重复提取
+        chars = extract_characters(novel_text, character_bank)
         script["characters"] = chars
-        for c in chars:
-            if c.get("is_new", True):
-                bank.register_character(
-                    c["identifier"],
-                    c.get("static_features", ""),
-                    c.get("dynamic_features", ""),
-                    CHAPTER_INDEX,
-                )
-        bank.save()
+        # 保存角色库到持久化文件
+        character_bank.save()
+        print(f"[INFO] 已保存 {len(chars)} 个角色到角色库")
 
     # 计算时间轴（v5.0 运镜量化参数）
     _compute_timecodes(script)

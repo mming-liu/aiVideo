@@ -100,6 +100,9 @@ def _validate_script(script: dict) -> None:
     # --- 景别多样性校验 ---
     _check_shot_size_diversity(shots)
 
+    # v6.1: Agnes AI 音频指令校验
+    _check_audio_instruction(shots)
+
     # --- 单镜头校验 ---
     for i, shot in enumerate(shots, 1):
         seg = shot.get("narration_segment", "").strip()
@@ -187,6 +190,19 @@ def _check_subtitle_char_coverage(shot_idx: int, subtitle: str, search_text: str
         print(f"[WARN] 镜头{shot_idx}: 画面描述与字幕内容严重脱节"
               f"（汉字命中{char_hit_rate:.0%}、二字组合全部未命中）")
         print(f"       未命中的二字组合: {missing_bg}")
+
+
+def _check_audio_instruction(shots: list[dict]) -> None:
+    """检查是否包含 Agnes AI 的声音指令（v6.1 新增）."""
+    for shot in shots:
+        shot_idx = shot.get("index", "?")
+        subtitle = shot.get("subtitle", "")
+        prompt = shot.get("prompt", "")
+
+        # 简单判断：如果 subtitle 包含冒号或引号，视为有对话
+        if ":" in subtitle or "：" in subtitle or '"' in subtitle or '"' in subtitle or '"' in subtitle:
+            if "（用中文说）" not in prompt and "(用中文说)" not in prompt:
+                print(f"[WARN] 镜头{shot_idx}: 检测到对话但 Prompt 中缺少 Agnes AI 中文发音指令 '（用中文说）'")
 
 
 _STOP_WORDS = {

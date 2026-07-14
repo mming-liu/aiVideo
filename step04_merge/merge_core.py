@@ -74,21 +74,37 @@ def _run_cmd(cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=True, capture_output=True, text=True, **kwargs)
 
 
-def concat_clips(clips: List[Path], output_path: Path) -> None:
-    """Concat multiple video clips using ffmpeg (-c copy, no re-encode)."""
+def concat_clips(clips: List[Path], output_path: Path, keep_audio: bool = False) -> None:
+    """Concat multiple video clips using ffmpeg (-c copy, no re-encode).
+
+    keep_audio: 是否保留原始音轨（默认 False 只保留视频）
+    """
     list_path = output_path.parent / "concat_list_stretched.txt"
     lines = [f"file '{c.resolve().as_posix()}'" for c in clips]
     list_path.write_text("\n".join(lines), encoding="utf-8")
 
-    cmd = [
-        FFMPEG, "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", str(list_path),
-        "-c", "copy",
-        str(output_path),
-    ]
-    print(f"  [CONCAT] Concatenating {len(clips)} stretched videos")
+    if keep_audio:
+        # 保留音轨（使用 -map 0 同时保留视频和音频）
+        cmd = [
+            FFMPEG, "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(list_path),
+            "-map", "0",
+            "-c", "copy",
+            str(output_path),
+        ]
+    else:
+        # 只保留视频（丢弃音频）
+        cmd = [
+            FFMPEG, "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(list_path),
+            "-c", "copy",
+            str(output_path),
+        ]
+    print(f"  [CONCAT] Concatenating {len(clips)} stretched videos (keep_audio={keep_audio})")
     try:
         _run_cmd(cmd)
     finally:
@@ -125,6 +141,7 @@ def apply_transition(
     transition_type: str,
     output_path: Path,
     transition_duration: float = TRANSITION_DURATION,
+    keep_audio: bool = False,
 ) -> Path:
     """Apply transition effect between two clips.
 
@@ -137,13 +154,15 @@ def apply_transition(
     - "黑场闪白": white flash
 
     clip_b_path can be None for fade-out on the last clip (no next clip).
+
+    keep_audio: 是否保留原始音轨（用于版本B混合模式）
     """
     transition_type = transition_type.lower()
 
     # 硬切 - 直接拼接
     if "硬切" in transition_type or "cut" in transition_type:
         if clip_b_path:
-            concat_clips([clip_a_path, clip_b_path], output_path)
+            concat_clips([clip_a_path, clip_b_path], output_path, keep_audio=keep_audio)
         else:
             # 最后一个镜头，复制即可
             import shutil
@@ -156,20 +175,51 @@ def apply_transition(
         if not clip_b_path:
             # 无下一个镜头，复制当前
             import shutil
-            shutil.copy2(clip_a_path, output_path)
+            if keep_audio:
+                shutil.copy2(clip_a_path, output_path)
+            else:
+                shutil.copy2(clip_a_path, output_path)
             return output_path
 
         # 淡入：clip_b 从黑场淡入
-        cmd = [
-            FFMPEG, "-y",
-            "-f", "lavfi", "-i", f"color=c=black:s=720x1280:d={transition_duration}",
-            "-i", str(clip_b_path),
-            "-filter_complex",
-            f"[0:v]fade=t=out:st=0:d={transition_duration}[black];[1:v]fade=t=in:st=0:d={transition_duration}[fadein];[black][fadein]concat=n=2:v=1:a=0",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-            str(output_path),
-        ]
-        _run_cmd(cmd)
+        # 注意：fade 滤镜会丢弃音频，需要单独处理
+        if keep_audio:
+            # 保留音频：先处理视频，合并音频
+            temp_video = output_path.with_suffix('.video.mp4')
+            cmd = [
+                FFMPEG, "-y",
+                "-f", "lavfi", "-i", f"color=c=black:s=720x1280:d={transition_duration}",
+                "-i", str(clip_b_path),
+                "-filter_complex",
+                f"[0:v]fade=t=out:st=0:d={transition_duration}[black];[1:v]fade=t=in:st=0:d={transition_duration}[fadein];[black][fadein]concat=n=2:v=1:a=0",
+                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
+                str(temp_video),
+            ]
+            _run_cmd(cmd)
+            # 合并音频
+            cmd2 = [
+                FFMPEG, "-y",
+                "-i", str(temp_video),
+                "-i", str(clip_b_path),
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-c:v", "copy", "-c:a", "copy",
+                str(output_path),
+            ]
+            _run_cmd(cmd2)
+            temp_video.unlink(missing_ok=True)
+        else:
+            cmd = [
+                FFMPEG, "-y",
+                "-f", "lavfi", "-i", f"color=c=black:s=720x1280:d={transition_duration}",
+                "-i", str(clip_b_path),
+                "-filter_complex",
+                f"[0:v]fade=t=out:st=0:d={transition_duration}[black];[1:v]fade=t=in:st=0:d={transition_duration}[fadein];[black][fadein]concat=n=2:v=1:a=0",
+                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
+                str(output_path),
+            ]
+            _run_cmd(cmd)
         return output_path
 
     if "淡出" in transition_type or "fade out" in transition_type:
@@ -188,6 +238,7 @@ def apply_transition(
                 "-filter_complex",
                 f"[0:v]fade=t=out:st={fade_start}:d={fade_dur}",
                 "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
                 str(output_path),
             ]
             _run_cmd(cmd)
@@ -201,16 +252,45 @@ def apply_transition(
         fade_dur = min(transition_duration, clip_a_dur * 0.5)
         fade_start = clip_a_dur - fade_dur
 
-        cmd = [
-            FFMPEG, "-y",
-            "-i", str(clip_a_path),
-            "-i", str(clip_b_path),
-            "-filter_complex",
-            f"[0:v]fade=t=out:st={fade_start}:d={fade_dur}[aout];[aout][1:v]concat=n=2:v=1:a=0",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-            str(output_path),
-        ]
-        _run_cmd(cmd)
+        if keep_audio:
+            # 分两步处理：先视频转场，再合并音频
+            temp_video = output_path.with_suffix('.video.mp4')
+            cmd = [
+                FFMPEG, "-y",
+                "-i", str(clip_a_path),
+                "-i", str(clip_b_path),
+                "-filter_complex",
+                f"[0:v]fade=t=out:st={fade_start}:d={fade_dur}[aout];[aout][1:v]concat=n=2:v=1:a=0",
+                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
+                str(temp_video),
+            ]
+            _run_cmd(cmd)
+            # 合并两个视频的音频
+            cmd2 = [
+                FFMPEG, "-y",
+                "-i", str(temp_video),
+                "-i", str(clip_a_path),
+                "-i", str(clip_b_path),
+                "-filter_complex", "[1:a][2:a]concat=n=2:v=0:a=1[audio]",
+                "-map", "0:v:0", "-map", "[audio]",
+                "-c:v", "copy", "-c:a", "aac",
+                str(output_path),
+            ]
+            _run_cmd(cmd2)
+            temp_video.unlink(missing_ok=True)
+        else:
+            cmd = [
+                FFMPEG, "-y",
+                "-i", str(clip_a_path),
+                "-i", str(clip_b_path),
+                "-filter_complex",
+                f"[0:v]fade=t=out:st={fade_start}:d={fade_dur}[aout];[aout][1:v]concat=n=2:v=1:a=0",
+                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
+                str(output_path),
+            ]
+            _run_cmd(cmd)
         return output_path
     # 模糊叠化 - 使用 crossfade 滤镜
     if "模糊" in transition_type or "blur" in transition_type:
@@ -224,16 +304,44 @@ def apply_transition(
         clip_a_dur = get_media_duration(clip_a_path)
         offset = clip_a_dur - transition_duration
 
-        cmd = [
-            FFMPEG, "-y",
-            "-i", str(clip_a_path),
-            "-i", str(clip_b_path),
-            "-filter_complex",
-            f"[0:v]setpts=PTS-STARTPTS[a];[1:v]setpts=PTS-STARTPTS[b];[a][b]xfade=transition=fadealpha:duration={transition_duration}:offset={offset}",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-            str(output_path),
-        ]
-        _run_cmd(cmd)
+        if keep_audio:
+            temp_video = output_path.with_suffix('.video.mp4')
+            cmd = [
+                FFMPEG, "-y",
+                "-i", str(clip_a_path),
+                "-i", str(clip_b_path),
+                "-filter_complex",
+                f"[0:v]setpts=PTS-STARTPTS[a];[1:v]setpts=PTS-STARTPTS[b];[a][b]xfade=transition=fadealpha:duration={transition_duration}:offset={offset}",
+                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
+                str(temp_video),
+            ]
+            _run_cmd(cmd)
+            # 合并音频
+            cmd2 = [
+                FFMPEG, "-y",
+                "-i", str(temp_video),
+                "-i", str(clip_a_path),
+                "-i", str(clip_b_path),
+                "-filter_complex", "[1:a][2:a]concat=n=2:v=0:a=1[audio]",
+                "-map", "0:v:0", "-map", "[audio]",
+                "-c:v", "copy", "-c:a", "aac",
+                str(output_path),
+            ]
+            _run_cmd(cmd2)
+            temp_video.unlink(missing_ok=True)
+        else:
+            cmd = [
+                FFMPEG, "-y",
+                "-i", str(clip_a_path),
+                "-i", str(clip_b_path),
+                "-filter_complex",
+                f"[0:v]setpts=PTS-STARTPTS[a];[1:v]setpts=PTS-STARTPTS[b];[a][b]xfade=transition=fadealpha:duration={transition_duration}:offset={offset}",
+                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
+                str(output_path),
+            ]
+            _run_cmd(cmd)
         return output_path
 
     # 叠化 dissolve - 简单交叉淡入淡出
@@ -255,6 +363,7 @@ def apply_transition(
             "-filter_complex",
             f"[0:v]setpts=PTS-STARTPTS[xa];[1:v]setpts=PTS-STARTPTS[xb];[xa][xb]xfade=transition=fade:duration={transition_duration}:offset={offset}",
             "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
             str(output_path),
         ]
         _run_cmd(cmd)
@@ -284,6 +393,7 @@ def apply_transition(
             "-filter_complex",
             f"[0:v]fade=t=out:st=0:d={flash_duration}[aout];[1:v][2:v][3:v]concat=n=3:v=1:a=0[flash];[aout][flash]xfade=transition=fade:duration={flash_duration}:offset={offset}",
             "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
             str(output_path),
         ]
         _run_cmd(cmd)
@@ -318,8 +428,12 @@ def create_opening_buffer(
     cmd = [
         FFMPEG, "-y",
         "-f", "lavfi", "-i", f"color=c=black:s=720x1280:d={OPENING_BLACK_DURATION}",
-        "-c:v", "libx264", "-t", str(OPENING_BLACK_DURATION),
+        "-c:v", "libx264",
+        "-profile:v", "main",
+        "-level", "4.0",
+        "-t", str(OPENING_BLACK_DURATION),
         "-pix_fmt", "yuv420p",
+        "-an",  # 黑屏不需要音频
         str(black_path),
     ]
     _run_cmd(cmd)
@@ -352,7 +466,10 @@ def create_opening_buffer(
             FFMPEG, "-y",
             "-f", "lavfi", "-i", f"color=c=black:s=720x1280:d={OPENING_TITLE_DURATION}",
             "-vf", f"subtitles=filename={ass_filter_path}:original_size=720x1280",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-c:v", "libx264",
+            "-profile:v", "main",
+            "-level", "4.0",
+            "-preset", "medium", "-crf", "23",
             "-pix_fmt", "yuv420p",
             str(title_path),
         ]
@@ -365,7 +482,10 @@ def create_opening_buffer(
             "-i", str(first_clip_path),
             "-filter_complex",
             f"[0:v]setpts=PTS-STARTPTS[title];[1:v]setpts=PTS-STARTPTS[clip];[title][clip]xfade=transition=fadealpha:duration={OPENING_FADE_IN_DURATION}:offset=0[out];[out]fade=t=in:st=0:d=0.5",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-c:v", "libx264",
+            "-profile:v", "main",
+            "-level", "4.0",
+            "-preset", "medium", "-crf", "23",
             "-pix_fmt", "yuv420p",
             str(fadein_path),
         ]
@@ -378,21 +498,16 @@ def create_opening_buffer(
             "-i", str(first_clip_path),
             "-filter_complex",
             f"[0:v]setpts=PTS-STARTPTS[black];[1:v]setpts=PTS-STARTPTS[clip];[black][clip]xfade=transition=fadealpha:duration={OPENING_FADE_IN_DURATION}:offset=0[out]",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-c:v", "libx264",
+            "-profile:v", "main",
+            "-level", "4.0",
+            "-preset", "medium", "-crf", "23",
             "-pix_fmt", "yuv420p",
             str(fadein_path),
         ]
         _run_cmd(cmd)
 
     # 3. 拼接黑屏 + 淡入部分
-    cmd = [
-        FFMPEG, "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", f"file '{black_path.resolve().as_posix()}'\nfile '{fadein_path.resolve().as_posix()}'",
-        "-c", "copy",
-        str(output_path),
-    ]
     # 使用 filter_complex 替代 concat 简化流程
     cmd = [
         FFMPEG, "-y",
@@ -401,7 +516,7 @@ def create_opening_buffer(
         "-filter_complex",
         "[0:v][1:v]concat=n=2:v=1:a=0",
         "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-        "-pix_fmt", "yuv420p",
+        "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
         str(output_path),
     ]
     _run_cmd(cmd)
@@ -423,8 +538,14 @@ def merge_final_video(
     srt_path: Path,
     clip_transitions: Optional[List[str]] = None,
     chapter_title: str = "",
+    keep_video_audio: bool = False,
 ) -> None:
     """Per-shot stretch to audio duration -> concat -> transition -> subtitle + color + vignette + mix.
+
+    v5.2 新增：
+    - keep_video_audio: 是否保留视频自带音频
+      - False (default): 版本A，只使用 TTS 配音
+      - True: 版本B，视频音频 + TTS 混合（背景音效 70% + TTS 30%）
 
     v5.1 新增：
     - clip_transitions: 每个镜头的转场方式列表，与 clip_transition 字段对应
@@ -443,14 +564,16 @@ def merge_final_video(
 
     for i, (clip, target_dur) in enumerate(zip(clips, shot_audio_durations)):
         stretched_path = stretched_dir / f"stretched_{i:04d}.mp4"
-        if stretched_path.exists() and not DEBUG_SKIP_CACHE:
+        # 当需要保留视频音频时，跳过缓存重新生成（因为旧缓存没有音频）
+        use_cache = stretched_path.exists() and not DEBUG_SKIP_CACHE and not keep_video_audio
+        if use_cache:
             cached_dur = get_media_duration(stretched_path)
             if abs(cached_dur - target_dur) < 0.1:
                 stretched_clips.append(stretched_path)
                 continue
             stretched_path.unlink()
 
-        if not stretch_clip(clip, target_dur, stretched_path):
+        if not stretch_clip(clip, target_dur, stretched_path, keep_audio=keep_video_audio):
             print(f"  [WARN] Shot {i+1} stretch failed, use original clip")
             stretched_clips.append(clip)
         else:
@@ -492,7 +615,13 @@ def merge_final_video(
 
                 # 应用转场
                 temp_merged = stretched_dir / f"merged_{i:04d}.mp4"
-                apply_transition(current, next_clip, transition_type, temp_merged)
+                print(f"    [DEBUG] i={i}, current={current.name if current else 'None'}, next={next_clip.name if next_clip else 'None'}, transition={transition_type}, is_last={is_last}")
+                try:
+                    result = apply_transition(current, next_clip, transition_type, temp_merged, keep_audio=keep_video_audio)
+                    print(f"    [DEBUG] apply_transition returned: {result}")
+                except Exception as e:
+                    print(f"    [ERROR] apply_transition failed: {e}")
+                    raise
                 current = temp_merged
 
             # 重命名为最终转场拼接文件
@@ -512,15 +641,15 @@ def merge_final_video(
         create_opening_buffer(concat_video, final_with_opening, chapter_title)
         concat_video = final_with_opening
 
-    # 4. Final merge (subtitle + color + vignette + mix)
+    # 4. 构建视频滤镜（字幕 + 色彩 + 暗角）
     srt_path_abs = srt_path.resolve().as_posix()
     escaped_srt = srt_path_abs.replace(":", "\\:")
     style = (
-        f"FontName={SUBTITLE_FONT}"
-        f"\\,FontSize={SUBTITLE_FONT_SIZE}"
-        f"\\,PrimaryColour={SUBTITLE_COLOR}"
-        f"\\,OutlineColour={SUBTITLE_OUTLINE_COLOR}"
-        f"\\,Outline={SUBTITLE_OUTLINE_WIDTH}"
+        f"FontName=Sans"
+        f"\\,FontSize=20"
+        f"\\,PrimaryColour=&H00FFFFFF"
+        f"\\,OutlineColour=&H00FFFFFF"
+        f"\\,Outline=1"
     )
     video_filter = (
         f"subtitles='{escaped_srt}':force_style='{style}',"
@@ -528,22 +657,66 @@ def merge_final_video(
         f"vignette=angle={VIGNETTE_ANGLE}"
     )
 
-    cmd = [
-        FFMPEG, "-y",
-        "-i", str(concat_video),
-        "-i", str(audio_path),
-        "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-shortest",
-        "-vf", video_filter,
-        "-af", f"volume={AUDIO_VOLUME}",
-        "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "20",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        str(output_path),
-    ]
+    # 5. 根据版本添加音频
+    # Version A: 只使用 TTS
+    # Version B: 视频音频 + TTS 混合（真正的混合：背景音效 + TTS 人声）
+    video_audio_path = None
+    if keep_video_audio:
+        # Version B: 混合模式 - 视频原声(背景音/环境音) + TTS(人声)
+        # 策略：视频原声降低音量作为背景，TTS 保持清晰
+        print("[INFO] Mode B: Mixing Video Audio (Background) + TTS (Voice)")
+
+        cmd = [
+            FFMPEG, "-y",
+            "-i", str(concat_video),      # 输入0: 视频 (含原声)
+            "-i", str(audio_path),         # 输入1: TTS 音频
+            "-filter_complex",
+            # 1. 处理视频音频: 降低音量至 20%，确保格式一致
+            "[0:a]volume=0.2,aformat=sample_fmts=fltp:channel_layouts=stereo,sample_rates=44100[a_bg];"
+            # 2. 处理 TTS 音频: 确保格式一致
+            "[1:a]aformat=sample_fmts=fltp:channel_layouts=stereo,sample_rates=44100[a_tts];"
+            # 3. 混合: 背景音 + TTS
+            "[a_bg][a_tts]amix=inputs=2:duration=first:dropout_transition=3[a_out]",
+            "-map", "0:v:0",               # 映射视频流
+            "-map", "[a_out]",             # 映射混合后的音频流
+            "-shortest",                   # 以最短流为准
+            "-vf", video_filter,           # 字幕+调色
+            "-pix_fmt", "yuv420p",         # 强制 YUV420P，Windows 必选
+            "-c:v", "libx264",
+            "-profile:v", "main",          # 使用 Main Profile，兼容性更好
+            "-level", "4.0",
+            "-preset", "medium",
+            "-crf", "20",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "44100",                # 强制音频采样率 44100Hz
+            "-ac", "2",                    # 强制双声道
+            str(output_path),
+        ]
+    else:
+        # Version A: 纯 TTS 模式 (丢弃视频原声)
+        print("[INFO] Mode A: TTS Audio Only")
+        cmd = [
+            FFMPEG, "-y",
+            "-i", str(concat_video),
+            "-i", str(audio_path),
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-shortest",
+            "-vf", video_filter,
+            "-af", f"volume={AUDIO_VOLUME},aformat=sample_fmts=fltp:channel_layouts=stereo,sample_rates=44100",  # 格式化音频
+            "-pix_fmt", "yuv420p",         # 强制 YUV420P，Windows 必选
+            "-c:v", "libx264",
+            "-profile:v", "main",          # 使用 Main Profile，兼容性更好
+            "-level", "4.0",
+            "-preset", "medium",
+            "-crf", "20",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "44100",                # 强制音频采样率 44100Hz
+            "-ac", "2",                    # 强制双声道
+            str(output_path),
+        ]
 
     print(f"\n{'='*60}")
     print("[INFO] Starting final merge...")
