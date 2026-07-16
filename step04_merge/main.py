@@ -222,7 +222,7 @@ def main():
             "-i", str(audio_path),
             "-map", "0:v:0", "-map", "1:a:0",
             "-vf", video_filter,
-            "-af", "volume=5dB,aformat=sample_fmts=fltp:channel_layouts=stereo,sample_rates=44k",
+            "-af", "volume=5dB,aformat=sample_fmts=fltp:channel_layouts=stereo",
             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
             "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", "-ar", "44k", "-ac", "2",
@@ -241,9 +241,9 @@ def main():
             "-vf", video_filter,
             "-filter_complex",
             # 处理视频音频：降低音量 + 格式化
-            "[0:a]volume=0.3,aformat=sample_fmts=fltp:channel_layouts=stereo:sample_rates=44k[bg];"
+            "[0:a]volume=0.3,aformat=sample_fmts=fltp:channel_layouts=stereo[bg];"
             # 处理 TTS 音频：格式化
-            "[1:a]aformat=sample_fmts=fltp:channel_layouts=stereo:sample_rates=44k[tts];"
+            "[1:a]aformat=sample_fmts=fltp:channel_layouts=stereo[tts];"
             # 混合
             "[bg][tts]amix=inputs=2:duration=first[audio]",
             "-map", "0:v:0", "-map", "[audio]",

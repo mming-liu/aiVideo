@@ -1,10 +1,11 @@
-﻿"""step02_video_gen.submit_poll - submit and poll module"""
+"""step02_video_gen.submit_poll - submit and poll module"""
 import sys
 from pathlib import Path
 import os
 import asyncio
 import shutil
 import json
+import random
 from collections import defaultdict
 import hashlib
 
@@ -18,6 +19,13 @@ from shared.vimax_bridge import build_working_dir, gen_shot_frames
 from shared.vimax_adapters import ImageGeneratorAiVideoAdapter, VideoGeneratorAiVideoAdapter
 from vimax.utils.rate_limiter import RateLimiter
 
+# Smart polling config: exponential backoff + jitter
+POLL_BASE_INTERVAL = int(os.getenv("POLL_BASE_INTERVAL", "10"))    # Initial poll interval (seconds)
+POLL_MAX_INTERVAL = int(os.getenv("POLL_MAX_INTERVAL", "60"))      # Max poll interval (seconds)
+POLL_EXPONENTIAL_FACTOR = float(os.getenv("POLL_EXPONENTIAL_FACTOR", "1.5"))  # Backoff multiplier
+POLL_JITTER = int(os.getenv("POLL_JITTER", "3"))                   # Jitter range +/- seconds
+INITIAL_POLL_DELAY = int(os.getenv("INITIAL_POLL_DELAY", "60"))    # Wait after submit before first poll
+
 _VIDEO_RPM = os.getenv("VIDEO_MAX_REQUESTS_PER_MINUTE")
 VIDEO_RATE_LIMITER = RateLimiter(
     max_requests_per_minute=int(_VIDEO_RPM) if _VIDEO_RPM else None,
@@ -26,22 +34,33 @@ VIDEO_RATE_LIMITER = RateLimiter(
 SUBMIT_INTERVAL = float(os.getenv("VIDEO_CLIP_INTERVAL", "60"))
 VIDEO_CONCURRENCY = int(os.getenv("VIDEO_CONCURRENCY", "6"))
 
-# global failure storage
+# Global failure storage
 _failed_videos = defaultdict(list)
 
+
 def _get_shot_hash(shot: dict) -> str:
+    """
+    计算分镜的哈希值，用于判断是否需要重新生成视频。
+    优化：只使用决定视频内容的核心字段，移除不稳定的 ff_desc 和 lf_desc。
+    """
     key = "|".join([
-        shot.get("ff_desc", ""),
-        shot.get("lf_desc", ""),
-        shot.get("prompt", ""),
-        shot.get("motion_desc", ""),
+        # ff_desc 和 lf_desc 是用于生成图片的，具有随机性，不应作为视频是否变化的依据
+        # shot.get("ff_desc", ""),
+        # shot.get("lf_desc", ""),
+
+        # 使用更稳定的字段：
+        shot.get("prompt", ""),      # 发送给视频生成AI的最终提示词
+        shot.get("motion_desc", ""), # 动作描述，是prompt的核心部分
+        str(shot.get("duration", 0)), # 视频时长，时长变了视频肯定也变了
+        shot.get("narration_segment", ""), # 旁白内容，如果旁白变了，视频节奏可能也要变
     ])
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
 
 def _is_recoverable(err: str) -> bool:
     err_lower = err.lower()
     terminal_markers = [
-        "content_policy", "内容违规",
+        "content_policy", "5185bb98fdd",
         "401", "unauthorized", "invalid api key",
         "403", "forbidden",
         "invalid_param", "invalid parameter",
@@ -58,14 +77,24 @@ async def _poll_video(
     req, task_id: str, shot_idx: int,
     shot_dir: Path, video_path: Path, max_retries: int,
 ) -> bool:
-    """background poll - infinite retry for recoverable errors."""
+    """Background poll with exponential backoff + jitter - reduces API queries."""
     async with semaphore:
-        # 提交后先等待 60s 再开始查询（遵守 1 RPM 限制）
-        print(f"  [镜头{shot_idx}] 任务已提交，等待 60s 后开始查询...")
-        await asyncio.sleep(60)
+        # Wait INITIAL_POLL_DELAY seconds after submit before first query (respect 1 RPM limit)
+        print(f"  [Shot {shot_idx}] Task submitted, waiting {INITIAL_POLL_DELAY}s before polling...")
+        await asyncio.sleep(INITIAL_POLL_DELAY)
+
+        # Exponential backoff state
+        poll_interval = POLL_BASE_INTERVAL
+        consecutive_failures = 0
 
         while True:
             try:
+                # Calculate next poll time with exponential backoff + jitter
+                jitter = random.uniform(-POLL_JITTER, POLL_JITTER)
+                actual_interval = max(1, poll_interval + jitter)
+
+                await asyncio.sleep(actual_interval)
+
                 result = await video_adapter.fetch_result(req, task_id)
                 if result.success and result.save_path:
                     shot_dir.mkdir(parents=True, exist_ok=True)
@@ -73,19 +102,27 @@ async def _poll_video(
                     return True
                 else:
                     err = result.error or "unknown"
-                    # 429: 无限重试，等待更长时间
+                    # 429 triggers longer backoff
                     if _is_recoverable(err):
-                        wait = 60 if "429" in err else 15
-                        await asyncio.sleep(wait)
+                        if "429" in err or "rate" in err.lower():
+                            poll_interval = min(poll_interval * 2, POLL_MAX_INTERVAL)
+                        else:
+                            poll_interval = min(poll_interval * POLL_EXPONENTIAL_FACTOR, POLL_MAX_INTERVAL)
+                        consecutive_failures += 1
+                        print(f"  [Shot {shot_idx}] Processing (interval {poll_interval:.0f}s, failures {consecutive_failures})")
                         continue
                     _failed_videos[shot_idx].append({"attempt": -1, "error": err, "task_id": task_id})
                     return False
             except Exception as e:
                 err_str = str(e)
-                # 429: 无限重试，等待更长时间
+                # 429 triggers longer backoff
                 if _is_recoverable(err_str):
-                    wait = 60 if "429" in err_str else 15
-                    await asyncio.sleep(wait)
+                    if "429" in err_str or "rate" in err_str.lower():
+                        poll_interval = min(poll_interval * 2, POLL_MAX_INTERVAL)
+                    else:
+                        poll_interval = min(poll_interval * POLL_EXPONENTIAL_FACTOR, POLL_MAX_INTERVAL)
+                    consecutive_failures += 1
+                    print(f"  [Shot {shot_idx}] Poll error (interval {poll_interval:.0f}s): {err_str[:50]}")
                     continue
                 _failed_videos[shot_idx].append({"attempt": -1, "error": err_str, "task_id": task_id})
                 return False
@@ -96,14 +133,14 @@ async def _process_one_shot(
     script_mtime: float | None, force_first_frame: bool,
     script: dict, audio_duration: float,
     poll_semaphore: asyncio.Semaphore,
-    submit_interval: _SubmitInterval,
+    submit_interval: "_SubmitInterval",
 ) -> asyncio.Task | None:
-    """process single shot: frame gen -> submit video -> return poll task."""
+    """Process single shot: frame gen -> submit video -> return poll task."""
     idx = shot["index"]
     shot_dir = shots_dir / str(idx)
     video_path = shot_dir / "video.mp4"
 
-    # cache check: use prompt_hash.txt
+    # Cache check: use prompt_hash.txt
     if video_path.exists() and video_path.stat().st_size > 20 * 1024:
         hash_path = shot_dir / "prompt_hash.txt"
         if hash_path.exists():
@@ -112,7 +149,7 @@ async def _process_one_shot(
             if old_hash == new_hash:
                 return None
 
-    # frame gen
+    # Frame gen
     frames = await gen_shot_frames(shot, shots_dir, image_adapter, script_mtime, force=force_first_frame)
     frame_paths = [p for p in [frames.get("ff_path"), frames.get("lf_path")] if p]
 
@@ -134,7 +171,7 @@ async def _process_one_shot(
             return task
         except Exception as e:
             err_str = str(e)
-            if "400" in err_str or "422" in err_str or "content_policy" in err_str.lower() or "\u5185\u5bb9\u8fdd\u89c4" in err_str:
+            if "400" in err_str or "422" in err_str or "content_policy" in err_str.lower() or "5185bb98fdd" in err_str:
                 from shared.content_policy_fix import auto_fix_prompt
                 fixed_prompt = auto_fix_prompt(prompt, str(e), verbose=False)
                 if fixed_prompt and fixed_prompt != prompt:
@@ -159,14 +196,14 @@ async def _process_one_shot(
 
 
 class _SubmitInterval:
-    """global submit interval controller with key-aware timing.
+    """Global submit interval controller with key-aware timing.
 
     - Different key: 30s interval
     - Same key: 61s interval
     """
-    # 不同 key 间隔 30s，相同 key 间隔 61s（免费用户 1 RPM = 60s）
-    INTERVAL_DIFF_KEY = 30  # 不同 key
-    INTERVAL_SAME_KEY = 61  # 相同 key
+    # Different key interval 30s, same key interval 61s (free user 1 RPM = 60s)
+    INTERVAL_DIFF_KEY = 30  # Different key
+    INTERVAL_SAME_KEY = 61  # Same key
 
     def __init__(self):
         self._last_time: float = 0.0
@@ -174,36 +211,36 @@ class _SubmitInterval:
         self._lock = asyncio.Lock()
 
     async def wait(self, video_adapter):
-        """等待合适的时间后再提交."""
+        """Wait appropriate time before submitting."""
         async with self._lock:
             now = asyncio.get_event_loop().time()
             current_key_idx = video_adapter.get_key_index()
 
-            # 计算间隔
+            # Calculate interval
             if self._last_key_idx < 0:
-                # 首次提交，不等待
+                # First submit, no wait
                 interval = 0
             elif current_key_idx != self._last_key_idx:
-                # 不同 key，30s 间隔
+                # Different key, 30s interval
                 interval = self.INTERVAL_DIFF_KEY
             else:
-                # 相同 key，61s 间隔
+                # Same key, 61s interval
                 interval = self.INTERVAL_SAME_KEY
 
             if self._last_time > 0 and interval > 0:
                 elapsed = now - self._last_time
                 if elapsed < interval:
-                    wait = interval - elapsed
-                    print(f"  [提交间隔] Key {current_key_idx + 1}，等待 {wait:.1f}s（{interval}s 间隔）")
-                    await asyncio.sleep(wait)
+                    wait_time = interval - elapsed
+                    print(f"  [Submit interval] Key {current_key_idx + 1}, waiting {wait_time:.1f}s ({interval}s interval)")
+                    await asyncio.sleep(wait_time)
 
-            # 更新记录
+            # Update record
             self._last_time = asyncio.get_event_loop().time()
             self._last_key_idx = current_key_idx
 
 
 async def generate_alls(script: dict, working_dir: Path, script_file: Path, force_first_frame: bool = False) -> int:
-    """pipeline: config -> TTS -> concurrent shots (frames -> submit -> poll)."""
+    """Pipeline: config -> TTS -> concurrent shots (frames -> submit -> poll)."""
     from step02_video_gen.audio_pregen import _gen_shot_audio_duration, _update_script_with_actual_durations
     from tts import create_provider
 
@@ -212,7 +249,7 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     image_adapter = ImageGeneratorAiVideoAdapter()
     video_adapter = VideoGeneratorAiVideoAdapter()
 
-    # 1. working dir setup (skip frames)
+    # 1. Working dir setup (skip frames)
     await build_working_dir(script_file, working_dir, image_adapter,
                             force_first_frame=force_first_frame, skip_frames=True)
 
@@ -240,7 +277,7 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     poll_semaphore = asyncio.Semaphore(actual_concurrency)
     submit_interval = _SubmitInterval()
 
-    # 3. concurrent shot processing
+    # 3. Concurrent shot processing
     shot_tasks = [
         _process_one_shot(
             shot, shots_dir, image_adapter, video_adapter,
@@ -257,10 +294,10 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     if not poll_tasks:
         return 0
 
-    # 4. wait all polls
+    # 4. Wait all polls
     results = await asyncio.gather(*poll_tasks, return_exceptions=True)
 
-    # build result table
+    # Build result table
     all_shot_ids = [s["index"] for s in shots]
     total = len(all_shot_ids)
     success_count = total - len(_failed_videos)
@@ -285,7 +322,7 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     print(f"  total: {total} shots | OK: {success_count} | FAIL: {len(_failed_videos)}")
     print()
 
-    # 5. save
+    # 5. Save
     with open(script_file, "w", encoding="utf-8") as f:
         json.dump(script, f, ensure_ascii=False, indent=2)
 
@@ -295,7 +332,7 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     return len(_failed_videos)
 
 
-# sync entry
+# Sync entry
 def generate_all(script: dict, working_dir: Path, force_first_frame: bool = False) -> int:
     book_idx = int(os.getenv("BOOK_INDEX", "1"))
     chapter_idx = int(os.getenv("NOVEL_CHAPTER", "1"))

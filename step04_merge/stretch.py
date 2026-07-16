@@ -121,7 +121,7 @@ def stretch_clip(clip_path: Path, target_dur: float, output_path: Path, keep_aud
         "-c:v", "libx264",
         "-profile:v", "main",   # 使用 Main Profile，兼容性更好
         "-level", "4.0",
-        "-preset", "fast",
+        "-preset", "ultrafast",  # 中间文件不需要高压缩率，极速生成
         "-crf", "20",
         str(output_path),
     ])

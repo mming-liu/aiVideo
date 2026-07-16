@@ -1,6 +1,6 @@
-﻿# aiVideo Pipeline — 完整文档
+# aiVideo Pipeline — 完整文档
 
-> 生成日期: 2026-07-12
+> 生成日期: 2026-07-15
 > 项目路径: C:\myFloders\git\aiVideo
 
 ---
@@ -46,7 +46,7 @@ read_chapter() → gen_spy_script() → parse_response() → 差距分析 → _p
 - parse_response()：解析 JSON 带损坏恢复链（safe_parse_json_object 优先，兜底修复包括去代码块标记、提取 {} 区域、修复尾部逗号）。校验镜头数、字段完整性、景别多样性、字幕-画面一致性、合规性
 - 差距分析：检查后 1/3 镜头是否覆盖高潮情节，可自动带反馈重新生成（最多 2 次）
 - _post_process()：注入全局渲染参数 + 自动合规过滤 + 敏感词校验
-- 钩子分镜（v6 新增）：生成 1 个独立开场悬念镜头
+- 钩子分镜：生成 1 个独立开场悬念镜头
 - 角色提取：跨章节一致性，通过 CharacterBank 持久化
 
 ### 步骤二：视频生成（step02_video_gen/）
@@ -62,22 +62,31 @@ build_working_dir() → TTS 预生成 → 逐镜并发：生成帧 → 提交任
 - 逐镜处理：生成首帧 first_frame.png（及尾帧 last_frame.png 若为 medium/large 变幅），提交异步视频任务，后台轮询结果（最多重试 3 次）
 - 速率控制：提交间隔 + RPM 限流 + 并发数控制
 - 422 违规自动修复：通过 content_policy_fix.py 替换敏感词后重试
+- **智能轮询**：指数退避 + 抖动策略，显著减少 API 查询频率
+  - 初始等待 60s 后开始轮询
+  - 间隔序列：10s → 15s → 22s → 33s → 50s → 60s（上限）
+  - 429 限流触发更激进退避：10s → 20s → 40s → 60s
+  - 每次查询 ±3s 随机抖动防请求风暴
 
 ### 步骤三：TTS 语音（step03_tts_audio/）
 
-简单的逐镜 TTS 生成，检测到已有音频文件则跳过。
+逐镜 TTS 生成，检测到已有音频文件则跳过。包含：
+- 多音色支持：自动说话人检测 + 动态音色分配
+- 异步并发优化：Semaphore(2) 限流 + 指数退避重试
 
 ### 步骤四：视频合成（step04_merge/）
 
 输入：script_result.json + 视频片段 + 音频
 输出：final.mp4 + subtitles.srt
 
-核心逻辑：
-- SRT 字幕生成：基于逐镜字幕文本 + 音频时长计算时间戳
+核心逻辑（v5.2 优化）：
+- SRT 字幕生成：基于逐镜字幕文本 + 音频时长计算时间戳，单段最长 8s
 - 视频拉伸（stretch.py）：使用 ffmpeg setpts 滤镜拉伸每段视频匹配对应 TTS 时长（STRETCH_RATIO_MAX=1.333，超出报警）
 - 转场效果：硬切 / 淡入 / 淡出 / 模糊叠化 / 简单叠化 / 黑场闪白
 - 开场缓冲：黑屏 → 标题卡（可选）→ 淡入到首个镜头
 - 最终合成：调色（对比度/饱和度/暗角）+ 字幕叠加 + 音量增益
+- **版本 A/B 双输出**：生成 final-A（纯净 TTS）和 final-B（混音：背景 20% + TTS 80%）
+- **视频完整性校验**：检测异常小文件（<20KB）并自动重生成
 
 ---
 
@@ -98,11 +107,11 @@ build_working_dir() → TTS 预生成 → 逐镜并发：生成帧 → 提交任
 - agnes_provider.py：Agnes AI（agnes-video-v2.0），异步轮询模式
 
 语音合成（tts/）：
-- dashscope_provider.py：DashScope SDK WebSocket（sambert-zhide-v1）
+- dashscope_provider.py：DashScope SDK WebSocket（sambert-zhida-v1）
 - dashscope_qwen3.py：DashScope HTTP（qwen3-tts）
 - openai_provider.py：OpenAI 兼容（tts-1）
 
-403 回退机制：每个供应商有 _model_queue，遇到 403（配额超限）自动切换到下一个回退模型。多个 API Key 轮换（Agnes 支持 5 个 Key）。
+403 回退机制：每个供应商有 _model_queue，遇到 403（配额超限）自动切换到下一个回退模型。多个 API Key 轮换（Agnes 支持 8 个 Key）。
 
 ---
 
@@ -157,19 +166,41 @@ scene_compliance.py：
 
 ## 八、关键配置
 
-TEXT_PROVIDER：LLM 供应商（deepseek/dashscope/agnes）
-VIDEO_PROVIDER：视频供应商（agnes/dashscope）
-TTS_PROVIDER：TTS 供应商（dashscope_sdk/dashscope_http/openai）
-IMAGE_PROVIDER：图片供应商（agnes）
-NOVEL_CHAPTER：处理的小说章节
-BOOK_INDEX：书号索引
-SHOT_COUNT_MIN/MAX：分镜数量范围
-VIDEO_CLIP_INTERVAL：视频提交间隔（秒）
-VIDEO_CONCURRENCY：视频并发数
-IMAGE_GEN_INTERVAL：图片生成间隔（秒）
-STRETCH_RATIO_MAX：最大拉伸比率
-COMPLIANCE_AUTO_FIX：自动合规修复
-HOOK_ENABLED：钩子分镜开关
+文本/图像/视频/TTS 供应商：
+- TEXT_PROVIDER：LLM 供应商（deepseek/dashscope/agnes）
+- VIDEO_PROVIDER：视频供应商（agnes/dashscope）
+- IMAGE_PROVIDER：图片供应商（agnes）
+- TTS_PROVIDER：TTS 供应商（dashscope_sdk/dashscope_http/openai）
+
+章节与分镜：
+- NOVEL_CHAPTER：处理的小说章节
+- BOOK_INDEX：书号索引
+- SHOT_COUNT_MIN/MAX：分镜数量范围
+- HOOK_ENABLED：钩子分镜开关（默认 1）
+
+视频生成（step02）：
+- VIDEO_CLIP_INTERVAL：视频提交间隔（同 key 61s/不同 key 30s）
+- VIDEO_CONCURRENCY：视频并发数（默认 6，自动匹配镜头数）
+- VIDEO_MAX_REQUESTS_PER_MINUTE：RPM 限流
+- VIDEO_MAX_RETRIES：单镜最大重试次数（默认 3）
+- **轮询参数**（POLL_xxx）：
+  - POLL_BASE_INTERVAL：初始轮询间隔（默认 10s）
+  - POLL_MAX_INTERVAL：最大轮询间隔（默认 60s）
+  - POLL_EXPONENTIAL_FACTOR：退避系数（默认 1.5x）
+  - POLL_JITTER：随机抖动范围（默认 3s）
+  - INITIAL_POLL_DELAY：提交后首次等待（默认 60s）
+
+图片生成：
+- IMAGE_GEN_INTERVAL：图片生成间隔（默认 21s）
+- AGNES_IMAGE_GENERATE_TIMEOUT：图片生成超时（默认 180s）
+
+视频生成：
+- AGNES_VIDEO_SUBMIT_TIMEOUT：提交超时（默认 180s）
+- AGNES_VIDEO_FETCH_TIMEOUT：轮询超时（默认 1200s）
+
+Step04 合成：
+- STRETCH_RATIO_MAX：最大拉伸比率（默认 1.333）
+- COMPLIANCE_AUTO_FIX：自动合规修复（默认 1）
 
 ---
 
@@ -189,3 +220,6 @@ HOOK_ENABLED：钩子分镜开关
 - content_policy_fix.py 的 _infer_substitute() 中存在死代码（不可达的 else 分支），不影响运行
 - gap_analysis.py 的高潮关键词是英文但旁白文本是中文，关键词匹配不会生效（已知限制）
 - merge_core.py 的 apply_transition() 使用独立的 if 语句而非 elif 链，但因各分支有 early return，当前安全
+- Windows GBK 控制台下 print() 必须使用 ASCII 安全字符（无中文/表情符号）
+- Agnes 视频 API 要求 num_frames = 8n + 1（自动 clamp）
+- Agnes 视频端点 base64 编码需要去掉 = 填充符（图片端点不需要）

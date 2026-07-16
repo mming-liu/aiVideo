@@ -32,15 +32,19 @@ from character_bank import CharacterBank, StyleBank
 
 import hashlib
 
+# 首帧/尾帧生成需要风格前缀（与视频生成保持一致）
+from style_prefix import STYLE_PREFIX, sanitize_prompt, ensure_prefix
+
 
 # ---------------------------------------------------------------------------
 # Prompt Hash Cache Detection
 # ---------------------------------------------------------------------------
 
 def _compute_prompt_hash(shot: dict) -> str:
+    """计算视频生成的稳定哈希值（忽略 ff_desc/lf_desc 的随机性）."""
     key_parts = [
-        shot.get("ff_desc", ""),
-        shot.get("lf_desc", ""),
+        # shot.get("ff_desc", ""),  # 移除：随机性太强
+        # shot.get("lf_desc", ""),  # 移除：随机性太强
         shot.get("prompt", ""),
         shot.get("motion_desc", ""),
     ]
@@ -630,6 +634,20 @@ def _validate_frame(path: str, min_kb: float = 5) -> bool:
     return True
 
 
+def _get_frame_content_hash(shot: dict) -> str:
+    """计算首帧/尾帧的稳定哈希值。
+
+    只依赖核心意图字段，忽略 ff_desc/If_desc（具有随机性）。
+    这样只要分镜的核心内容不变，首帧/尾帧就不会重新生成。
+    """
+    key = "|".join([
+        shot.get("prompt", ""),          # 视频生成总 prompt，画面的基调
+        shot.get("motion_desc", ""),     # 动作描述，决定画面动态
+        shot.get("main_subject", ""),    # 主体，确保主角不变
+    ])
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
 async def _gen_first_frame_async(
     image_adapter, shots_dir: Path, shot: dict, force: bool,
     script_mtime: float | None = None,
@@ -644,25 +662,34 @@ async def _gen_first_frame_async(
     shot_dir = shots_dir / str(idx)
     shot_dir.mkdir(parents=True, exist_ok=True)
     ff_path = shot_dir / "first_frame.png"
+    ff_hash_path = shot_dir / "frame_hash.txt"
     ff_desc = shot.get("ff_desc", "").strip() or shot.get("prompt", "")
+
+    # 计算当前哈希值（基于核心意图）
+    current_hash = _get_frame_content_hash(shot)
 
     for attempt in range(max_retries + 1):
         if ff_path.exists() and not force and attempt == 0:
-            if script_mtime is not None and ff_path.stat().st_mtime >= script_mtime:
-                if _validate_frame(str(ff_path)):
+            # 检查哈希文件是否存在且匹配
+            if ff_hash_path.exists():
+                saved_hash = ff_hash_path.read_text(encoding="utf-8").strip()
+                if saved_hash == current_hash and _validate_frame(str(ff_path)):
                     return str(ff_path)
                 else:
-                    print(f"  [FRAME] 首帧 shot_{idx} 缓存无效，重新生成")
+                    print(f"  [FRAME] 首帧 shot_{idx} 哈希不匹配或缓存无效，重新生成")
+            elif script_mtime is not None and ff_path.stat().st_mtime >= script_mtime:
+                if _validate_frame(str(ff_path)):
+                    return str(ff_path)
             elif script_mtime is None and _validate_frame(str(ff_path)):
                 return str(ff_path)
-            elif script_mtime is not None:
-                print(f"  [FRAME] 首帧 shot_{idx} 早于 script_result.json，重新生成")
 
         print(f"  [FRAME] 生成首帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
+        # 添加风格前缀（与视频生成保持一致，确保风格统一）
+        ff_desc_full = sanitize_prompt(ensure_prefix(ff_desc, STYLE_PREFIX), verbose=False)
         refs = reference_paths if reference_paths else []
         try:
             img_out = await image_adapter.generate_single_image(
-                prompt=ff_desc,
+                prompt=ff_desc_full,
                 reference_image_paths=refs,
                 shot_index=idx,
             )
@@ -677,6 +704,8 @@ async def _gen_first_frame_async(
             return None
 
         if _validate_frame(str(ff_path)):
+            # 保存哈希值，供下次缓存检测使用
+            ff_hash_path.write_text(current_hash, encoding="utf-8")
             return str(ff_path)
         if attempt < max_retries:
             print(f"  [FRAME] 首帧 shot_{idx} 第{attempt+1}次不达标，重试...")
@@ -698,28 +727,37 @@ async def _gen_last_frame_async(
     shot_dir = shots_dir / str(idx)
     shot_dir.mkdir(parents=True, exist_ok=True)
     lf_path = shot_dir / "last_frame.png"
+    lf_hash_path = shot_dir / "frame_hash.txt"  # 复用同一个哈希文件
     lf_desc = shot.get("lf_desc", "").strip()
     if not lf_desc:
         print(f"  [FRAME] 尾帧 shot_{idx}: lf_desc 为空，跳过")
         return None
 
+    # 计算当前哈希值（基于核心意图）
+    current_hash = _get_frame_content_hash(shot)
+
     for attempt in range(max_retries + 1):
         if lf_path.exists() and not force and attempt == 0:
-            if script_mtime is not None and lf_path.stat().st_mtime >= script_mtime:
-                if _validate_frame(str(lf_path)):
+            # 检查哈希文件是否存在且匹配
+            if lf_hash_path.exists():
+                saved_hash = lf_hash_path.read_text(encoding="utf-8").strip()
+                if saved_hash == current_hash and _validate_frame(str(lf_path)):
                     return str(lf_path)
                 else:
-                    print(f"  [FRAME] 尾帧 shot_{idx} 缓存无效，重新生成")
+                    print(f"  [FRAME] 尾帧 shot_{idx} 哈希不匹配或缓存无效，重新生成")
+            elif script_mtime is not None and lf_path.stat().st_mtime >= script_mtime:
+                if _validate_frame(str(lf_path)):
+                    return str(lf_path)
             elif script_mtime is None and _validate_frame(str(lf_path)):
                 return str(lf_path)
-            elif script_mtime is not None:
-                print(f"  [FRAME] 尾帧 shot_{idx} 早于 script_result.json，重新生成")
 
         print(f"  [FRAME] 生成尾帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
+        # 添加风格前缀（与视频生成保持一致，确保持风格统一）
+        lf_desc_full = sanitize_prompt(ensure_prefix(lf_desc, STYLE_PREFIX), verbose=False)
         refs = reference_paths if reference_paths else []
         try:
             img_out = await image_adapter.generate_single_image(
-                prompt=lf_desc,
+                prompt=lf_desc_full,
                 reference_image_paths=refs,
             )
             if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
@@ -733,6 +771,8 @@ async def _gen_last_frame_async(
             return None
 
         if _validate_frame(str(lf_path)):
+            # 保存哈希值，供下次缓存检测使用
+            lf_hash_path.write_text(current_hash, encoding="utf-8")
             return str(lf_path)
         if attempt < max_retries:
             print(f"  [FRAME] 尾帧 shot_{idx} 第{attempt+1}次不达标，重试...")

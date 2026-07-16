@@ -214,8 +214,9 @@ def main() -> None:
                         c.get("dynamic_features", ""),
                         CHAPTER_INDEX,
                     )
-            # 不在这里 save，等脚本生成完成后再保存（避免提前写入空数据）
-            print(f"[INFO] 预提取到 {len(chars)} 个角色特征")
+            # v6.1 优化：立即保存，确保即使脚本生成失败，角色库也已更新
+            character_bank.save()
+            print(f"[INFO] 预提取到 {len(chars)} 个角色特征（已保存到角色库）")
         except Exception as e:
             print(f"[WARN] 预提取角色失败: {e}，继续生成脚本...")
 

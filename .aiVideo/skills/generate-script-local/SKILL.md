@@ -70,7 +70,7 @@ metadata:
 
 ---
 
-## 镜头词汇（来自 seedance-vocab-zh）
+## 镜头词汇（[skill:seedance-camera]）
 
 ### 摄像机运动
 
@@ -94,7 +94,7 @@ metadata:
 
 ---
 
-## 光线词汇（来自 seedance-lighting）
+## 光线词汇（[skill:seedance-lighting]）
 
 ### 主光类型
 
@@ -118,7 +118,7 @@ metadata:
 
 ---
 
-## 运动词汇（来自 seedance-motion）
+## 运动词汇（[skill:seedance-motion]）
 
 ### 强描述 vs 弱描述
 
@@ -140,7 +140,7 @@ metadata:
 
 ---
 
-## 反空洞规则（来自 seedance-antislop）
+## 反空洞规则（[skill:seedance-antislop]）
 
 ### 空洞词 → 物理元素
 

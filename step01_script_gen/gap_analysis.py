@@ -135,14 +135,30 @@ def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
         front_narration = "".join(s.get("narration_segment", "") for s in front_shots)
         back_narration = "".join(s.get("narration_segment", "") for s in back_shots)
 
-        # Check for climax keywords
-        climax_keywords = [
+        # Check for climax keywords (v6.1: 支持中英文 + core_keywords 匹配)
+        climax_keywords_en = [
             "battle", "assassinate", "duel", "conflict", "reversal", "explosion",
             "death", "leave", "escape", "chase", "plot", "expose",
             "secret letter", "edict", "truth", "plot exposed", "identity exposed"
         ]
+        climax_keywords_cn = [
+            "战斗", "刺杀", "决斗", "冲突", "反转", "爆炸", "死亡", "离开", "逃离",
+            "追逐", "阴谋", "暴露", "密信", "圣旨", "真相", "身份暴露", "杀", "死",
+            "跑", "砍", "剑", "血", "下手", "动手", "突围", "拼杀"
+        ]
+        climax_keywords = climax_keywords_en + climax_keywords_cn
 
-        has_climax_coverage = any(kw in back_narration for kw in climax_keywords)
+        # 检查后段镜头是否覆盖高潮（检查 narration_segment + core_keywords）
+        has_climax_coverage = False
+        for shot in back_shots:
+            segment_text = shot.get("narration_segment", "")
+            core_kws = shot.get("core_keywords", [])
+            search_text = segment_text + " " + " ".join(core_kws)
+            if any(kw in search_text for kw in climax_keywords):
+                has_climax_coverage = True
+                break
+
+        has_climax_coverage = has_climax_coverage
 
         arc_coverage = {
             "front_shots": len(front_shots),

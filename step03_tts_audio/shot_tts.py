@@ -2,6 +2,9 @@
 import sys
 from pathlib import Path
 import os
+import asyncio
+import time
+import random
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -14,6 +17,12 @@ from tts import create_provider, TTSRequest
 from tts.config import config as tts_config
 from tts.voice_registry import get_registry, NARRATOR_VOICE, AVAILABLE_VOICES
 from typing import Optional, List
+
+
+# 并发限流：百炼免费版 QPS=2
+TTS_SEMAPHORE = asyncio.Semaphore(2)
+MAX_RETRIES = 3
+MAX_TEXT_LENGTH = 300  # 单个 TTS 文本最大字符数
 
 
 def load_script(path: Path) -> dict:
@@ -42,10 +51,12 @@ def _detect_speaker_from_narration(narration: str, characters: List[dict]) -> Op
     # 按名字长度降序排列，优先匹配更长的名字
     char_names = sorted(char_names, key=len, reverse=True)
 
-    # 对话格式匹配
+    # 对话格式匹配 - 增强版正则，支持动作+说话混合
     import re
     dialogue_patterns = [
-        r"^([^\s，。,]{1,4})(?:道|说|问|答|喊|叫|叹|怒|笑|哭|喝|骂|低声道|低声说|低声问道|低声笑道|笑道|冷笑道|急道|忙道)[:：]",
+        # 匹配 "XXX道：" / "XXX说：" / "XXX问道" 等，0-4个中文字符的动作描写
+        r"^([一-龥]{1,4})(?:[^一-龥]{0,4})?(?:道|说|问|答|喊|叫|叹|怒|笑|哭|喝|骂|低声道|低声说|低声问道|低声笑道|笑道|冷笑道|急道|忙道|冷声道|朗声道|轻声道)[:：]",
+        # 备用简化模式
         r"^([^\s，。,]{1,4})(?:道|说|问|答|喊|叫|叹|怒|笑|哭|喝|骂)[:：]",
     ]
 
@@ -79,6 +90,11 @@ def gen_single_tts(text: str, output_path: Path, provider=None,
         provider: TTS 提供商实例
         voice_config: 音色配置 {id, rate, volume, ...}，None 时使用默认配置
     """
+    # 文本长度检查
+    if len(text) > MAX_TEXT_LENGTH:
+        print(f"  [WARN] Text too long ({len(text)} chars), truncating to {MAX_TEXT_LENGTH}")
+        text = text[:MAX_TEXT_LENGTH]
+
     if provider is None:
         provider = create_provider()
 
@@ -106,6 +122,36 @@ def gen_single_tts(text: str, output_path: Path, provider=None,
     size_kb = output_path.stat().st_size / 10.24
     print(f"  [OK] {output_path.name} ({size_kb:.1f} KB)")
     return str(output_path)
+
+
+async def _gen_single_tts_async(text: str, output_path: Path, provider,
+                                voice_config: Optional[dict] = None) -> str:
+    """异步包装的 TTS 生成函数，带限流和重试机制."""
+    async with TTS_SEMAPHORE:
+        retries = 0
+        last_error = None
+
+        while retries < MAX_RETRIES:
+            try:
+                # 同步转异步执行
+                loop = asyncio.get_event_loop()
+                return await loop.run_in_executor(
+                    None, gen_single_tts, text, output_path, provider, voice_config
+                )
+            except Exception as e:
+                error_str = str(e)
+                # 限流错误：429 或 RateLimit
+                if "429" in error_str or "RateLimit" in error_str or "too many requests" in error_str.lower():
+                    wait_time = (2 ** retries) + random.uniform(0, 1)
+                    print(f"  [RATE LIMIT] Retrying in {wait_time:.1f}s... (attempt {retries+1}/{MAX_RETRIES})")
+                    await asyncio.sleep(wait_time)
+                    retries += 1
+                    last_error = e
+                else:
+                    # 其他错误直接抛出
+                    raise e
+
+        raise RuntimeError(f"TTS failed after {MAX_RETRIES} retries: {last_error}")
 
 
 def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
@@ -170,14 +216,54 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
         return None
 
 
+async def _gen_shot_tts_async(shot: dict, output_dir: Path, provider,
+                              voice_registry, characters: List[dict]) -> Optional[str]:
+    """异步版本的单分镜 TTS 生成."""
+    idx = shot.get("index", 0)
+    text = shot.get("narration_segment", "").strip()
+    if not text:
+        return None
+
+    # 1. 识别说话人
+    detected_speaker = None
+    if characters:
+        detected_speaker = _detect_speaker_from_narration(text, characters)
+
+    main_subject = shot.get("main_subject", "").strip()
+    speaker_name = detected_speaker or (main_subject if main_subject and len(main_subject) <= 4 else None)
+
+    # 2. 获取音色
+    if speaker_name:
+        voice_config = voice_registry.get_voice(speaker_name)
+    else:
+        voice_config = NARRATOR_VOICE.copy()
+
+    output_path = output_dir / f"shot_{idx}.mp3"
+
+    # 缓存检查
+    if output_path.exists() and output_path.stat().st_size > 10240:
+        print(f"  [CACHE] Shot {idx}: cached ({speaker_name or 'Narrator'})")
+        return str(output_path)
+
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        display_name = speaker_name or "Narrator"
+        print(f"  [TTS] Shot {idx} [{display_name}] <- {voice_config['id']}")
+        return await _gen_single_tts_async(text, output_path, provider, voice_config)
+    except Exception as e:
+        print(f"  [FAIL] Shot {idx}: {e}")
+        return None
+
+
 def gen_all_shot_tts(script: dict, output_dir: Path,
-                     voice_registry=None) -> List[str]:
+                     voice_registry=None, use_async: bool = False) -> List[str]:
     """为所有分镜生成 TTS 音频.
 
     Args:
         script: 完整脚本数据
         output_dir: 输出目录
         voice_registry: 音色注册表实例
+        use_async: 是否使用异步并发模式（默认 False 保持向后兼容）
 
     Returns:
         成功生成的音频文件路径列表
@@ -198,14 +284,27 @@ def gen_all_shot_tts(script: dict, output_dir: Path,
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    provider = create_provider() if not voice_registry else None
+    provider = create_provider()
     results = []
     print(f"[INFO] Generating TTS for {len(shots)} shots with dynamic voices...\n")
 
-    for shot in shots:
-        path = gen_shot_tts(shot, output_dir, provider, voice_registry, characters)
-        if path:
-            results.append(path)
+    if use_async:
+        # 异步并发模式：利用限流信号量控制并发
+        async def run_async():
+            tasks = [
+                _gen_shot_tts_async(shot, output_dir, provider, voice_registry, characters)
+                for shot in shots
+            ]
+            return await asyncio.gather(*tasks)
+
+        results = asyncio.run(run_async())
+        results = [r for r in results if r]  # 过滤 None
+    else:
+        # 原有串行模式（保持向后兼容）
+        for shot in shots:
+            path = gen_shot_tts(shot, output_dir, provider, voice_registry, characters)
+            if path:
+                results.append(path)
 
     print(f"\n[INFO] Shot TTS done: {len(results)}/{len(shots)} success")
     return results

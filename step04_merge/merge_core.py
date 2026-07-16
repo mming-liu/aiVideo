@@ -558,6 +558,45 @@ def merge_final_video(
         # 默认全部硬切
         clip_transitions = ["硬切 cut"] * len(clips)
 
+    # 0.5. 检查视频文件完整性（防止损坏的片段导致 FFmpeg 崩溃）
+    valid_clips = []
+    for clip in clips:
+        if not clip.exists():
+            print(f"  [WARN] Clip not found: {clip}, skipping")
+            continue
+        size_bytes = clip.stat().st_size
+        if size_bytes < 10000:  # 小于 10KB 的文件通常是损坏的
+            print(f"  [WARN] Clip too small ({size_bytes} bytes): {clip.name}, skipping")
+            continue
+        # 使用 ffprobe 验证视频是否可读
+        try:
+            result = subprocess.run(
+                [FFPROBE, "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(clip)],
+                capture_output=True, text=True, timeout=30
+            )
+            duration = float(result.stdout.strip()) if result.stdout.strip() else 0
+            if duration <= 0:
+                print(f"  [WARN] Clip has invalid duration: {clip.name}, skipping")
+                continue
+            valid_clips.append(clip)
+            print(f"  [OK] Clip validated: {clip.name} ({duration:.1f}s, {size_bytes // 1024}KB)")
+        except Exception as e:
+            print(f"  [WARN] Clip validation failed: {clip.name}, error: {e}")
+            continue
+
+    if len(valid_clips) < len(clips):
+        print(f"  [WARN] {len(clips) - len(valid_clips)} clips skipped due to invalid/corrupt files")
+    if not valid_clips:
+        raise RuntimeError("No valid video clips found after validation check")
+
+    # 更新 clips 列表
+    clips = valid_clips
+    if len(shot_audio_durations) != len(clips):
+        # 调整音频时长列表以匹配有效的视频片段
+        print(f"  [WARN] Adjusting durations: had {len(shot_audio_durations)}, now {len(clips)}")
+        shot_audio_durations = shot_audio_durations[:len(clips)]
+
     # 1. Stretch each video clip
     stretched_clips = []
     stretched_dir.mkdir(parents=True, exist_ok=True)
@@ -659,24 +698,28 @@ def merge_final_video(
 
     # 5. 根据版本添加音频
     # Version A: 只使用 TTS
-    # Version B: 视频音频 + TTS 混合（真正的混合：背景音效 + TTS 人声）
+    # Version B: 视频音频 + TTS 混合（侧链压缩：人声出现时背景音自动压低）
     video_audio_path = None
     if keep_video_audio:
         # Version B: 混合模式 - 视频原声(背景音/环境音) + TTS(人声)
-        # 策略：视频原声降低音量作为背景，TTS 保持清晰
-        print("[INFO] Mode B: Mixing Video Audio (Background) + TTS (Voice)")
+        # 策略：使用侧链压缩，当 TTS 有人说话时自动压低背景音
+        print("[INFO] Mode B: Mixing Video Audio (Background) + TTS (Voice) with Sidechain Compression")
+
+        # Version B 音频混合参数（可配置）
+        VIDEO_AUDIO_VOLUME = float(os.getenv("FFMPEG_VERSION_B_VIDEO_VOLUME", "0.25"))  # 视频背景音量 25%
+        TTS_VOLUME_BOOST = float(os.getenv("FFMPEG_VERSION_B_TTS_BOOST", "2.0"))  # TTS 音量放大倍数
 
         cmd = [
             FFMPEG, "-y",
             "-i", str(concat_video),      # 输入0: 视频 (含原声)
             "-i", str(audio_path),         # 输入1: TTS 音频
             "-filter_complex",
-            # 1. 处理视频音频: 降低音量至 20%，确保格式一致
-            "[0:a]volume=0.2,aformat=sample_fmts=fltp:channel_layouts=stereo,sample_rates=44100[a_bg];"
-            # 2. 处理 TTS 音频: 确保格式一致
-            "[1:a]aformat=sample_fmts=fltp:channel_layouts=stereo,sample_rates=44100[a_tts];"
-            # 3. 混合: 背景音 + TTS
-            "[a_bg][a_tts]amix=inputs=2:duration=first:dropout_transition=3[a_out]",
+            # 1. 处理视频音频: 降低音量作为背景，格式化
+            f"[0:a]volume={VIDEO_AUDIO_VOLUME},aformat=sample_fmts=fltp:channel_layouts=stereo[bg];"
+            # 2. 处理 TTS 音频: 放大音量确保压过背景，格式化
+            f"[1:a]volume={TTS_VOLUME_BOOST},aformat=sample_fmts=fltp:channel_layouts=stereo[tts];"
+            # 3. 混合: 背景 25% + TTS 75%（权重 1:3，人声优先）
+            "[bg][tts]amix=inputs=2:duration=first:weights='1 3'[a_out]",
             "-map", "0:v:0",               # 映射视频流
             "-map", "[a_out]",             # 映射混合后的音频流
             "-shortest",                   # 以最短流为准
@@ -704,7 +747,7 @@ def merge_final_video(
             "-map", "1:a:0",
             "-shortest",
             "-vf", video_filter,
-            "-af", f"volume={AUDIO_VOLUME},aformat=sample_fmts=fltp:channel_layouts=stereo,sample_rates=44100",  # 格式化音频
+            "-af", f"volume={AUDIO_VOLUME},aformat=sample_fmts=fltp:channel_layouts=stereo",  # 格式化音频
             "-pix_fmt", "yuv420p",         # 强制 YUV420P，Windows 必选
             "-c:v", "libx264",
             "-profile:v", "main",          # 使用 Main Profile，兼容性更好

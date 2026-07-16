@@ -37,10 +37,63 @@ def find_shot_audio(shot_idx: int, audio_dir: Path):
     return None
 
 
+def split_subtitle_by_punctuation(text: str, max_chars: int = 30) -> List[str]:
+    """Split long subtitle into shorter parts by punctuation marks.
+
+    Splits on Chinese periods (。), commas (，), question marks (？),
+    exclamation marks (！), and English equivalents.
+
+    Args:
+        text: Original subtitle text
+        max_chars: Maximum characters per subtitle segment
+
+    Returns:
+        List of subtitle segments
+    """
+    if not text or len(text) <= max_chars:
+        return [text] if text else []
+
+    # Define punctuation marks for splitting (prioritized)
+    # Chinese and English punctuation that naturally divides sentences
+    punctuation = ['。', '；', '！', '？', '，', '.', ';', '!', '?','、', ',']
+
+    parts = []
+    current = ""
+
+    for char in text:
+        current += char
+        if char in punctuation and len(current) > 5:  # At least 5 chars before split
+            parts.append(current.strip())
+            current = ""
+
+    # Add remaining text
+    if current.strip():
+        parts.append(current.strip())
+
+    # If splitting by punctuation still results in too long segments,
+    # force split by character count
+    result = []
+    for part in parts:
+        if len(part) > max_chars:
+            # Split this part into smaller chunks
+            for i in range(0, len(part), max_chars):
+                chunk = part[i:i + max_chars]
+                if chunk:
+                    result.append(chunk)
+        else:
+            result.append(part)
+
+    return result if result else [text[:max_chars]]
+
+
 def generate_srt(shots: List[dict], durations: List[float], output: Path) -> None:
-    """Generate SRT subtitle file based on per-shot target durations."""
-    # 字幕最大显示时长（秒），防止长句字幕停留太久
+    """Generate SRT subtitle file based on per-shot target durations.
+
+    v5.2 优化: 长字幕按标点符号智能拆分，而非简单截断
+    """
+    # 字幕最大显示时长（秒）- 作为拆分依据，不是截断
     max_display_time = 8.0
+    max_chars_per_line = 30  # 每行最大字符数（视觉舒适度）
 
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -57,16 +110,47 @@ def generate_srt(shots: List[dict], durations: List[float], output: Path) -> Non
         start = current_time
         end = current_time + dur
 
-        # 优化：如果单句字幕过长，强制截断显示时间
-        if dur > max_display_time:
-            end = start + max_display_time
-            print(f"  [WARN] Subtitle too long ({dur:.1f}s), capped to {max_display_time}s")
+        # 优化: 智能拆分长字幕，而非简单截断
+        # 规则：
+        # 1. 按标点拆分（如有多个句子）
+        # 2. 每段字幕不超过 max_chars_per_line 字符
+        # 3. 总时长按文字比例分配
+        subtitle_parts = split_subtitle_by_punctuation(subtitle, max_chars_per_line)
 
-        srt_lines.append(str(i))
-        srt_lines.append(f"{seconds_to_srt_time(start)} --> {seconds_to_srt_time(end)}")
-        srt_lines.append(subtitle)
-        srt_lines.append("")
-        subtitle_count += 1
+        if len(subtitle_parts) == 1:
+            # 单段字幕，直接使用
+            if dur > max_display_time:
+                # 如果单个镜头音频太长，警告但保持完整（因为已按标点拆分）
+                print(f"  [WARN] Shot {i} subtitle duration {dur:.1f}s > {max_display_time}s (consider splitting in script)")
+
+            srt_lines.append(str(i))
+            srt_lines.append(f"{seconds_to_srt_time(start)} --> {seconds_to_srt_time(end)}")
+            srt_lines.append(subtitle)
+            srt_lines.append("")
+            subtitle_count += 1
+        else:
+            # 多段字幕：按文字比例分配时间
+            total_chars = sum(len(p) for p in subtitle_parts)
+            temp_start = start
+            for j, part_text in enumerate(subtitle_parts, 1):
+                # 按字符比例分配时间
+                part_ratio = len(part_text) / total_chars if total_chars > 0 else 1.0 / len(subtitle_parts)
+                part_duration = dur * part_ratio
+
+                part_start = temp_start
+                part_end = temp_start + part_duration
+
+                srt_lines.append(f"{i}_{j}")  # Use sub-index like 1_1, 1_2 for multi-part subtitles
+                srt_lines.append(f"{seconds_to_srt_time(part_start)} --> {seconds_to_srt_time(part_end)}")
+                srt_lines.append(part_text)
+                srt_lines.append("")
+                subtitle_count += 1
+
+                temp_start = part_end
+
+            # 更新 end time to last part
+            end = part_end
+
         current_time = end
 
     output.write_text("\n".join(srt_lines), encoding="utf-8")

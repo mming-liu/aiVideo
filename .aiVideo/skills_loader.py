@@ -63,6 +63,40 @@ def read_local_skill(core_name: str) -> Optional[str]:
     return skill["body"] if skill else None
 
 
+def read_skill(name: str) -> Optional[str]:
+    """读取任意 skill 的正文（不含 -local 后缀）."""
+    skill = load_skill(name)
+    return skill["body"] if skill else None
+
+
+# Skill 引用模式：[skill:xxx]
+_SKILL_REF_PATTERN = re.compile(r"\[skill:([a-z0-9_-]+)\]")
+
+
+def resolve_skill_refs(text: str) -> str:
+    """解析文本中的 [skill:xxx] 引用，替换为对应 skill 内容.
+
+    支持链式引用（skill 内容中再次引用其他 skill），最多递归 3 层。
+    """
+    max_depth = 3
+    resolved = text
+
+    for _ in range(max_depth):
+        # 查找所有 skill 引用
+        refs = set(_SKILL_REF_PATTERN.findall(resolved))
+        if not refs:
+            break
+
+        # 替换每个引用
+        for ref_name in refs:
+            skill_body = read_skill(ref_name)
+            if skill_body:
+                # 替换引用（保留一个换行防止粘连）
+                resolved = resolved.replace(f"[skill:{ref_name}]", f"\n{skill_body}\n")
+
+    return resolved
+
+
 # ---------------------------------------------------------------------------
 # 写表面安全
 # ---------------------------------------------------------------------------
