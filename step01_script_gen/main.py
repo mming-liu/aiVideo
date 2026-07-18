@@ -26,14 +26,11 @@ from dotenv import load_dotenv
 import json
 
 load_dotenv(_PROJECT_ROOT / ".env")
-
 # ============================================================================
 # 配置（从环境变量读取）
 # ============================================================================
 CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))
 BOOK_INDEX = int(os.getenv("BOOK_INDEX", "1"))
-OUTPUT_RAW = os.getenv("OUTPUT_BASE", "./output/video")
-OUTPUT_BASE = _PROJECT_ROOT / OUTPUT_RAW if not Path(OUTPUT_RAW).is_absolute() else Path(OUTPUT_RAW)
 CHARACTER_EXTRACTION_ENABLED = os.getenv("CHARACTER_EXTRACTION_ENABLED", "1").strip() == "1"
 SHOT_COUNT_MIN = int(os.getenv("SHOT_COUNT_MIN", "4"))
 SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "20"))
@@ -45,15 +42,16 @@ COMPLIANCE_AUTO_FIX = os.getenv("COMPLIANCE_AUTO_FIX", "1").strip() == "1"
 # v6: 钩子分镜开关
 HOOK_ENABLED = os.getenv("HOOK_ENABLED", "1").strip() == "1"
 
-# 输出目录基于 book/chapter 计算
-CHAPTER_DIR = OUTPUT_BASE / f"book_{BOOK_INDEX:02d}" / f"chapter_{CHAPTER_INDEX:02d}"
-OUTPUT_FILE = CHAPTER_DIR / "script_result.json"
+# 输出目录基于 book/chapter 计算（统一路径来源: shared/paths.py）
+from shared.paths import chapter_dir, script_file
+CHAPTER_DIR = chapter_dir()
+OUTPUT_FILE = script_file()
 SCRIPT_FILE = OUTPUT_FILE
 
 # ============================================================================
 # 导入子模块
 # ============================================================================
-from shared.chapter_reader import extract_section
+from shared.chapter_reader import extract_section, get_chapter_meta
 from _text_gen import create_service, TextGenerationRequest
 from shared.character_bank import CharacterBank
 from step01_script_gen.prompts import build_prompt, SYSTEM_PROMPT, build_hook_prompt, parse_hook_response
@@ -229,6 +227,9 @@ def main() -> None:
         print(f"[CACHE] 脚本已缓存: {SCRIPT_FILE}")
         with open(SCRIPT_FILE, "r", encoding="utf-8") as f:
             script = json.load(f)
+        # 补写章节元信息（部名/章名，老缓存可能缺失）
+        if not script.get("chapter_title"):
+            script.update(get_chapter_meta("锦衣夜行_77119小说.txt", CHAPTER_INDEX))
         # 重新计算时间轴（使用增强算法）
         _compute_timecodes(script)
         with open(SCRIPT_FILE, "w", encoding="utf-8") as f:
@@ -343,6 +344,9 @@ def main() -> None:
     # 计算时间轴（v5.0 运镜量化参数）
     _compute_timecodes(script)
 
+    # 章节元信息（部名/章名，来自小说标题行「第一部 杀青州 第NNN章 章名」）
+    script.update(get_chapter_meta("锦衣夜行_77119小说.txt", CHAPTER_INDEX))
+
     # 写入 hash
     script["_source_hash"] = _hash_source(
         str(Path(__file__).parent / "prompts.py"), novel_preview, CHAPTER_INDEX
@@ -369,6 +373,7 @@ def main() -> None:
         idx = shot.get("index", "?")
         ct = shot.get("color_tone", shot.get("clip_transition", ""))
         print(f"  镜头{idx}: {shot.get('subtitle', '')[:40]}... [{ct}]")
+
 
 
 if __name__ == "__main__":

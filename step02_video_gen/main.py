@@ -19,16 +19,15 @@ load_dotenv(_PROJECT_ROOT / ".env")
 # ============================================================================
 CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))
 BOOK_INDEX = int(os.getenv("BOOK_INDEX", "1"))
-OUTPUT_RAW = os.getenv("OUTPUT_BASE", "./output/video")
-OUTPUT_BASE = _PROJECT_ROOT / OUTPUT_RAW if not Path(OUTPUT_RAW).is_absolute() else Path(OUTPUT_RAW)
 
-CHAPTER_DIR = OUTPUT_BASE / f"book_{BOOK_INDEX:02d}" / f"chapter_{CHAPTER_INDEX:02d}"
-SCRIPT_FILE = CHAPTER_DIR / "script_result.json"
-AUDIO_TTS_DIR = CHAPTER_DIR / "audio"
-WORKING_DIR = Path(os.getenv("VIMAX_WORKING_DIR", str(CHAPTER_DIR / "vimax_working")))
+# 输出目录（统一路径来源: shared/paths.py）
+from shared.paths import chapter_dir, script_file, audio_dir, vimax_working_dir
+CHAPTER_DIR = chapter_dir()
+SCRIPT_FILE = script_file()
+AUDIO_TTS_DIR = audio_dir()
+WORKING_DIR = vimax_working_dir()
 
 MAX_RETRIES = int(os.getenv("VIDEO_MAX_RETRIES", "3"))
-SUBMIT_INTERVAL = float(os.getenv("VIDEO_CLIP_INTERVAL", "60"))
 VIDEO_CONCURRENCY = int(os.getenv("VIDEO_CONCURRENCY", "6"))
 
 _VIDEO_RPM = os.getenv("VIDEO_MAX_REQUESTS_PER_MINUTE")

@@ -10,7 +10,7 @@ class TextGenerationRequest:
 
     system_prompt: str
     user_prompt: str
-    max_tokens: int = 4000
+    max_tokens: int = 8000
     temperature: float = 0.7
 
 

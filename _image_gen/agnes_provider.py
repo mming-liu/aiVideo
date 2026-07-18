@@ -24,6 +24,8 @@ from .config import config
 from .models import ImageGenerationRequest, ImageGenerationResult
 from .service import ImageGenerationService
 from shared.content_policy_fix import auto_fix_prompt
+from shared.error_fmt import parse_retry_after
+from shared.key_scheduler import KeyScheduler
 
 
 class AgnesImageService(ImageGenerationService):
@@ -58,6 +60,14 @@ class AgnesImageService(ImageGenerationService):
         if config.AGNES_API_KEY_8:
             self._api_keys.append(config.AGNES_API_KEY_8)
         self._current_key_index: int = 0
+
+        # 多 key 冷却调度：图片免费档约 1 次/20s/key，留 1s 余量
+        # N 个 key 轮询提交，吞吐提升 N 倍（原全局 21s 串行闸已移除）
+        self._key_scheduler = KeyScheduler(
+            len(self._api_keys),
+            cooldown=float(os.getenv("IMAGE_GEN_INTERVAL", "21")),
+            name="image-keys",
+        )
 
     @property
     def _api_key(self) -> str:
@@ -107,6 +117,7 @@ class AgnesImageService(ImageGenerationService):
         url = f"{config.AGNES_BASE_URL.rstrip('/')}/v1/images/generations"
         idx = 0
         last_error = ""
+        _403_count = 0  # 连续 403 计数：轮完一圈可用 key 仍 403 则回退模型
 
         # 图生图：编码参考图
         ref_data_url = None
@@ -119,8 +130,11 @@ class AgnesImageService(ImageGenerationService):
 
         while idx < len(self._model_queue):
             model = self._model_queue[idx]
+            # 冷却调度：取最早可用的 key（阻塞直到有 key 出冷却）
+            key_idx = self._key_scheduler.acquire()
+            self._current_key_index = key_idx
             headers = {
-                "Authorization": f"Bearer {self._api_key}",
+                "Authorization": f"Bearer {self._api_keys[key_idx]}",
                 "Content-Type": "application/json",
             }
 
@@ -139,6 +153,10 @@ class AgnesImageService(ImageGenerationService):
             # 添加 seed（文档支持，用于可复现结果）
             if req.seed is not None:
                 payload["seed"] = req.seed
+
+            # 添加 num_inference_steps（文档支持，提升生成质量）
+            if req.num_inference_steps is not None:
+                payload["num_inference_steps"] = req.num_inference_steps
 
             # extra_body: response_format 必须放这里（禁止放顶层）
             extra: dict = {
@@ -191,9 +209,15 @@ class AgnesImageService(ImageGenerationService):
                     last_error = f"Agnes 內容違規 [422]（已重試{_submit_retry}次仍失敗）: {error_text[:300]}"
                     break
 
-                # ---- 401/402: 认证失败/余额不足，停止重试 ----
+                # ---- 401/402: 认证失败/欠费，拉黑该 Key 并调度下一个 ----
                 if res.status_code in (401, 402):
-                    last_error = f"Agnes 错误 [{res.status_code}]（停止重试）: {res.text[:300]}"
+                    self._key_scheduler.disable(key_idx)
+                    if self._key_scheduler.n_active() > 0:
+                        print(f"  [镜头{req.shot_index}] HTTP {res.status_code}，"
+                              f"Key {key_idx + 1} 已拉黑，调度下一个可用 Key")
+                        continue
+                    last_error = (f"Agnes API Key 全部无效/欠费 "
+                                  f"[{res.status_code}]: {res.text[:300]}")
                     break
 
                 # ---- 408/499/502/503/504/520/522/524: 临时错误，等待后重试 ----
@@ -258,44 +282,30 @@ class AgnesImageService(ImageGenerationService):
                         last_error = f"图片下载/保存失败: {e}"
                         break
 
-                # ---- 401/402: 认证失败或支付问题，优先切换 API Key ----
-                if res.status_code in (401, 402):
-                    _submit_retry += 1
-                    if _submit_retry <= config.AGNES_IMAGE_SUBMIT_RETRIES:
-                        if self._switch_to_backup_key():
-                            print(f"  [镜头{req.shot_index}] HTTP {res.status_code}，"
-                                  f"切换到 API Key {self._current_key_index + 1}/{len(self._api_keys)} 并重试")
-                        else:
-                            last_error = (f"Agnes API Key 无效/过期 [HTTP {res.status_code}]，"
-                                          f"所有 Key 均已尝试: {res.text[:300]}")
-                            break
-                        continue
-                    last_error = (f"Agnes 认证失败 [HTTP {res.status_code}] "
-                                  f"(重试{_submit_retry}次): {res.text[:300]}")
-                    break
-
-                # ---- 429: 速率限制，优先切换 API Key（不同 key 限速独立）----
+                # ---- 429: 速率限制，按服务端剩余时间冷却该 Key，调度下一个 ----
                 if res.status_code == 429:
                     _submit_retry += 1
                     if _submit_retry <= config.AGNES_IMAGE_SUBMIT_RETRIES:
-                        if self._switch_to_backup_key():
-                            print(f"  [镜头{req.shot_index}] 速率限制 429，"
-                                  f"切换到 API Key {self._current_key_index + 1}/{len(self._api_keys)} 并重试")
-                        else:
-                            delay = config.AGNES_IMAGE_SUBMIT_RETRY_DELAY + 30
-                            print(f"  [镜头{req.shot_index}] 速率限制 429，所有 Key 已用完，"
-                                  f"等待 {delay}s 后重试 ({_submit_retry}/{config.AGNES_IMAGE_SUBMIT_RETRIES})")
-                            time.sleep(delay)
+                        wait = parse_retry_after(res.text)
+                        cool = (wait + 0.5) if wait is not None \
+                            else self._key_scheduler._cooldown
+                        self._key_scheduler.penalize(key_idx, cool)
+                        print(f"  [镜头{req.shot_index}] 速率限制 429，Key {key_idx + 1} "
+                              f"冷却 {cool:.1f}s，调度下一个可用 Key "
+                              f"({_submit_retry}/{config.AGNES_IMAGE_SUBMIT_RETRIES})")
                         continue
                     last_error = (f"Agnes 图片速率限制 [429] "
                                   f"(重试{_submit_retry}次): {res.text[:300]}")
                     break
                 # ---- 403: 额度耗尽或无权限，尝试回退 ----
                 if res.status_code == 403:
-                    # 先尝试切换备用 API Key
-                    if self._switch_to_backup_key():
+                    _403_count += 1
+                    # 先冷却该 Key 换下一个试（可能是单 Key 额度问题）；
+                    # 轮完一圈可用 key 仍 403 → 模型问题，走模型回退
+                    if _403_count < self._key_scheduler.n_active():
+                        self._key_scheduler.penalize(key_idx, self._key_scheduler._cooldown)
                         continue
-                    # Key 切换失败再尝试模型回退
+                    _403_count = 0
                     nxt = self._advance_index(idx)
                     if nxt is not None:
                         print(f"  [镜头{req.shot_index}] [!] 图片模型 {model} 返回 403"

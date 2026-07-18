@@ -180,7 +180,7 @@ class DashScopeQwen3TTSProvider(TTSServiceInterface):
                     if res.status_code == 403:
                         raise _TTSModelFallback(model)
                     if res.status_code != 200:
-                        last_error = "Qwen3 TTS failed (" + str(res.status_code) + "): " + res.text[:200]
+                        last_error = "Qwen3 TTS failed (" + str(res.status_code) + "): " + res.text[:500]
                         break
 
                     data = res.json()

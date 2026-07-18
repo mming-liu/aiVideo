@@ -14,7 +14,16 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 import style_prefix
-from style_prefix import STYLE_PREFIX, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt
+from style_prefix import (
+    STYLE_PREFIX, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt,
+    is_empty_scene,
+)
+
+# 是否允许视频模型自带语音（默认关闭）：
+# 模型自带配音不可控——会随机生成英文语音（镜头11等多镜实测），且与 TTS
+# 双声重叠。默认让模型只生成环境音效，全部语音（旁白+对话）由 step03 TTS 提供。
+# 设 VIDEO_MODEL_VOICE=1 可恢复旧行为（模型自带中文配音）。
+_MODEL_VOICE = os.getenv("VIDEO_MODEL_VOICE", "0").strip() == "1"
 
 
 def _build_prompt(shot: dict, script: dict) -> str:
@@ -43,6 +52,10 @@ def _build_prompt(shot: dict, script: dict) -> str:
                 char_features = f"[{main_subject}: {static}, {dynamic}]"
             break
 
+    # 1.5 空镜检测：main_subject 不是角色、画面描述未提到角色名、也无泛人物字眼
+    # （否则"旁白"语音指令会诱导模型在纯景物镜头里生成一个说话的人）
+    is_character_shot = not is_empty_scene(shot, characters)
+
     # 2. 构建基础 Prompt
     parts = []
     if char_features:
@@ -54,20 +67,36 @@ def _build_prompt(shot: dict, script: dict) -> str:
         # 判断是否为对话 (简单规则：包含冒号或引号)
         is_dialogue = ":" in subtitle or "：" in subtitle or '"' in subtitle or '"' in subtitle or '"' in subtitle
 
-        if is_dialogue:
-            # 对话模式：保留原文格式，Agnes 通常能识别 "Name: Content"
-            # 但为了保险，显式添加中文指令
-            audio_instruction = f'（用中文说）"{subtitle}"'
+        if _MODEL_VOICE:
+            # 旧行为：模型自带中文配音（不可控，可能随机出英文）
+            if is_dialogue:
+                parts.append(f'（用中文普通话说）"{subtitle}"')
+            else:
+                parts.append(f"（中文普通话画外音旁白，仅声音：{subtitle}）")
+            parts.append("所有语音必须为中文普通话，禁止任何英文语音。")
         else:
-            # 旁白/环境音模式
-            audio_instruction = f"（音效/旁白：{subtitle}）"
+            # 默认：视频只生成环境音效，语音全部由 TTS 叠加——从源头杜绝英文配音
+            if is_dialogue and is_character_shot:
+                parts.append("角色可有开口说话的口型与神态，但不发出人声。")
+            parts.append(
+                "音频只保留贴合画面的环境音效（风声、水声、虫鸣、衣料与器物声等），"
+                "禁止任何人声、旁白、对话、歌声。"
+            )
 
-        parts.append(audio_instruction)
-        parts.append("NO English speech.")  # 负面提示
+    # 4. 空镜约束：无角色镜头明确禁止人物出现（加强版）
+    if not is_character_shot:
+        parts.append("空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。")
+
+    # 4.5 风格收束（放在末尾对抗长 prompt 注意力衰减——
+    # 风格漂移多发于镜头后半段：开头动漫、中途突变真人写实）
+    parts.append(
+        "整段视频每一帧都保持同一2D国风动画画风，首尾画风完全一致，"
+        "禁止中途转为真人实拍、写实或3D渲染画面。"
+    )
 
     prompt = "\n".join(parts)
 
-    # 4. 添加视觉衔接
+    # 5. 添加视觉衔接
     extras = []
     cb = shot.get("context_bridge", "").strip()
     if cb:
@@ -78,7 +107,8 @@ def _build_prompt(shot: dict, script: dict) -> str:
     return prompt
 
 
-def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, audio_duration: float = 0):
+def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, audio_duration: float = 0,
+                  characters: list | None = None):
     """构建 VideoGenerationRequest，使用音频实际时长计算视频帧数.
 
     frame_paths: [首帧路径, 尾帧路径(可选)]
@@ -87,6 +117,9 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, aud
     from _video_gen import VideoGenerationRequest
 
     full_prompt = sanitize_prompt(ensure_prefix(prompt, STYLE_PREFIX), verbose=False)
+    # 静音人声模式下，负面提示词同步追加人声类条目（双保险）
+    negative = NEGATIVE_PROMPT if _MODEL_VOICE \
+        else NEGATIVE_PROMPT + "、人声、旁白配音、对话语音、歌声"
     image_path = None
     last_frame_image_path = None
 
@@ -98,11 +131,10 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, aud
             elif i == 1:
                 last_frame_image_path = fp
 
-    # 如果没有首帧，尝试备用参考图
+    # 如果没有首帧，尝试备用参考图（仅限镜头里实际出现的角色，空镜绝不注入肖像）
     if not image_path:
-        image_path = _find_fallback_reference(
-            Path(os.getenv("VIMAX_WORKING_DIR", "./output/vimax_working"))
-        )
+        from shared.paths import vimax_working_dir
+        image_path = _find_fallback_reference(vimax_working_dir(), shot, characters)
 
     # 使用音频实际时长替代 LLM 预估的 duration，保证音画对齐
     duration = max(round(audio_duration), 3) if audio_duration > 0 else shot.get("duration", 5)
@@ -111,15 +143,34 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, aud
         prompt=full_prompt,
         clip_index=shot["index"],
         duration=duration,
-        negative_prompt=NEGATIVE_PROMPT,
+        negative_prompt=negative,
         size="720x1280",
         image_path=image_path,
         last_frame_image_path=last_frame_image_path,
     )
 
 
-def _find_fallback_reference(working_dir: Path) -> str | None:
-    """从 character_portraits_registry.json 找可用参考图."""
+def _find_fallback_reference(working_dir: Path, shot: dict | None = None,
+                             characters: list | None = None) -> str | None:
+    """从 character_portraits_registry.json 找可用参考图.
+
+    只返回镜头画面里实际出现的角色的肖像：备用参考图会成为视频的首个
+    关键帧（image-to-video），若不加限制会把注册表第一个角色（通常是
+    主角）的肖像塞进所有首帧缺失的镜头，导致与主角无关的片段开头出现
+    主角画面。空镜（is_empty_scene）一律不注入肖像，降级 text-to-video。
+    """
+    if shot is None:
+        return None
+    if is_empty_scene(shot, characters or []):
+        return None
+
+    # 镜头文本：只看本镜头自身的画面描述（不含 context_bridge，见 is_empty_scene 注释）
+    search_text = " ".join([
+        shot.get("main_subject", ""),
+        shot.get("motion_desc", "").strip() or shot.get("prompt", ""),
+        shot.get("ff_desc", ""),
+    ])
+
     registry_path = working_dir / "character_portraits_registry.json"
     if not registry_path.exists():
         return None
@@ -127,9 +178,11 @@ def _find_fallback_reference(working_dir: Path) -> str | None:
         with open(registry_path, "r", encoding="utf-8") as f:
             registry = json.load(f)
         for ident, views in registry.items():
+            if not ident or ident not in search_text:
+                continue
             front = views.get("front", {}).get("path", "")
             if front and Path(front).exists():
-#                 print(f"  [fallback] 使用角色 {ident} 正面肖像")
+                print(f"  [fallback] 镜头{shot.get('index', '?')} 首帧缺失，使用角色 {ident} 正面肖像")
                 return front
     except Exception:
         pass

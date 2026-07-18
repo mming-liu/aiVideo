@@ -16,9 +16,9 @@ class TextGenCfg:
 
     # ---- 供应商选择 ----
     # dashscope → 阿里云百炼 DashScope (Qwen)
-    # deepseek  → DeepSeek (OpenAI 兼容接口)
+    # deepseek  → DeepSeek (OpenAI 兼容接口) [默认]
     # agnes     → agnes ai (OpenAI 兼容协议)
-    PROVIDER: str = os.getenv("TEXT_PROVIDER", "dashscope")
+    PROVIDER: str = os.getenv("TEXT_PROVIDER", "deepseek")
 
     # ---- DashScope (百炼) ----
     DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
@@ -31,7 +31,9 @@ class TextGenCfg:
     # ---- DeepSeek ----
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-    DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+    # 推理模式 (reasoning_effort): low/medium/high，适用于 deepseek-reasoner 系列
+    DEEPSEEK_REASONING_EFFORT: str = os.getenv("DEEPSEEK_REASONING_EFFORT", "high")
 
     # ---- agnes (OpenAI 兼容) ----
     AGNES_API_KEY: str = os.getenv("AGNES_API_KEY", "")

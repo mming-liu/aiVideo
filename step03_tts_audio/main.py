@@ -13,12 +13,12 @@ load_dotenv(_PROJECT_ROOT / ".env")
 # Configuration
 CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))
 BOOK_INDEX = int(os.getenv("BOOK_INDEX", "1"))
-OUTPUT_RAW = os.getenv("OUTPUT_BASE", "./output/video")
-OUTPUT_BASE = _PROJECT_ROOT / OUTPUT_RAW if not Path(OUTPUT_RAW).is_absolute() else Path(OUTPUT_RAW)
 
-CHAPTER_DIR = OUTPUT_BASE / f"book_{BOOK_INDEX:02d}" / f"chapter_{CHAPTER_INDEX:02d}"
-SCRIPT_FILE = CHAPTER_DIR / "script_result.json"
-AUDIO_OUTPUT_DIR = CHAPTER_DIR / "audio"
+# 输出目录（统一路径来源: shared/paths.py）
+from shared.paths import chapter_dir, script_file, audio_dir
+CHAPTER_DIR = chapter_dir()
+SCRIPT_FILE = script_file()
+AUDIO_OUTPUT_DIR = audio_dir()
 
 # Submodule imports
 from step03_tts_audio.shot_tts import load_script as load_script_module, gen_all_shot_tts

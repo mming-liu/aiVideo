@@ -21,6 +21,8 @@ class ImageGenerationRequest:
     reference_image_path: Optional[str] = None
     # 可选：用于可复现结果
     seed: Optional[int] = None
+    # 推理步数（Agnes API 支持，默认 20）
+    num_inference_steps: Optional[int] = None
 
 
 @dataclass

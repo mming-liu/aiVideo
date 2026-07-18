@@ -21,7 +21,10 @@ tasks = [
     (8, "task_2g9cZvNrVClOCn0JEBMcQHIPaSMi6UYW"),
 ]
 
-os.makedirs("output/clips", exist_ok=True)
+# 章节 clips 目录（统一路径来源: shared/paths.py）
+from shared.paths import clips_dir
+CLIPS_DIR = str(clips_dir())
+os.makedirs(CLIPS_DIR, exist_ok=True)
 
 for shot_idx, vid in tasks:
     print(f"=> 镜头{shot_idx}: {vid}")
@@ -37,7 +40,7 @@ for shot_idx, vid in tasks:
     if video_url:
         print(f"  下载: {video_url[:60]}...")
         video_bin = requests.get(video_url, timeout=120).content
-        save_path = "output/clips/clip_" + str(shot_idx) + ".mp4"
+        save_path = os.path.join(CLIPS_DIR, "clip_" + str(shot_idx) + ".mp4")
         with open(save_path, "wb") as f:
             f.write(video_bin)
         print(f"  OK -> {save_path} ({len(video_bin)/10.24/10.24:.1f} MB)")

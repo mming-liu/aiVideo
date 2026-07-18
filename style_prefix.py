@@ -21,13 +21,13 @@ from typing import Optional
 
 STYLE_PREFIX = (
     "国风动漫影视剧，9:16竖屏，电影柔光，暗调低饱和，"
-    "烛火局部光影，浅景深缓慢向前推镜，精美2D动画风格，无真人写实，高清1080P"
+    "光影随场景自然变化，浅景深缓慢向前推镜，精美2D动画风格，无真人写实，高清1080P"
 )
 
 # 精简版前缀（用于减少 token 占用）
 STYLE_PREFIX_SHORT = "国风2D动画"
 
-NEGATIVE_PROMPT = "真人写实、写实风格、畸形五官、异形船只、四叶草、明亮强光、现代服装、3D渲染、塑料质感、明亮阳光、English text, watermark, logo, English speech"
+NEGATIVE_PROMPT = "真人写实、写实风格、真人演员、实拍画面、照片质感、写实人脸、画风突变、畸形五官、异形船只、四叶草、现代服装、3D渲染、塑料质感、English text, watermark, logo, English speech"
 
 # ===========================================================================
 # 二、全局渲染配置（输出 JSON 顶层字段来源）
@@ -38,7 +38,7 @@ _GLOBAL_RENDER_DEFAULTS = {
     "ratio": "9:16",
     "fps": 24,
     "render_style": "2D国风动画",
-    "global_lighting": "电影柔光，暗调低饱和，烛火局部光影",
+    "global_lighting": "电影柔光，暗调低饱和，光源随场景（白天日光/夜晚烛火灯笼）",
     "global_camera_base": "浅景深，支持缓慢向前推镜，推镜速度约 0.3 倍常规",
     "global_weather": "酷暑燥热",
     "global_atmosphere": "燥热慵懒感，空气蒸腾扭曲，金色扬尘弥漫",
@@ -52,8 +52,8 @@ _GLOBAL_RENDER_DEFAULTS = {
 # 分层负面词（从紧到松，可根据平台审核阈值切换）
 NEGATIVE_LAYERS = {
     "strict": (
-        "真人写实、写实风格、畸形五官、明亮强光、现代服装、3D渲染、"
-        "塑料质感、明亮阳光、过曝、赛博荧光、西式建筑、机械齿轮、"
+        "真人写实、写实风格、畸形五官、现代服装、3D渲染、"
+        "塑料质感、过曝、赛博荧光、西式建筑、机械齿轮、"
         "现代字体、logo水印、AI伪影、重复纹理、不合理手指、扭曲边缘"
     ),
     "normal": NEGATIVE_PROMPT,
@@ -182,6 +182,43 @@ def ensure_prefix(prompt: str, prefix: str = STYLE_PREFIX) -> str:
     if prefix and prefix.split("，")[0] not in prompt.split("，")[0]:
         return f"{prefix}，{prompt}"
     return prompt
+
+
+# ============================================================================
+# 空镜检测（供 prompt_builder 与 vimax_bridge 共用，避免两处逻辑分歧）
+# ============================================================================
+
+# 泛人物特征字（角色库之外的路人/群像，如"赤膊娃娃""车夫"）
+# 用于空镜检测兜底：宁可漏判（不加空镜约束）也不能错杀画面里该有的人
+PERSON_HINTS = (
+    "人", "娃", "孩", "童", "汉", "翁", "叟", "妇", "女", "男",
+    "客", "卒", "兵", "仆", "婢", "侍", "夫", "郎", "姑", "婆",
+    "身影", "众", "民",
+)
+
+
+def mentions_person(text: str) -> bool:
+    """文本是否提到泛人物（角色库之外的路人/群像）."""
+    return any(k in text for k in PERSON_HINTS)
+
+
+def is_empty_scene(shot: dict, characters: list[dict]) -> bool:
+    """判断镜头是否为空镜（画面中不应出现任何人物）.
+
+    依据：main_subject 不是角色、画面描述（motion_desc/ff_desc）未提到
+    角色名、也无泛人物字眼。注意不检查 context_bridge —— 它描述的是
+    上一镜头的画面，常含上一镜头的角色名，会造成误判。
+    """
+    main_subject = shot.get("main_subject", "")
+    motion_desc = shot.get("motion_desc", "").strip() or shot.get("prompt", "")
+    ff_desc = shot.get("ff_desc", "")
+    search_text = f"{main_subject} {motion_desc} {ff_desc}"
+
+    has_character = any(
+        c.get("identifier") and c["identifier"] in search_text
+        for c in (characters or [])
+    )
+    return not has_character and not mentions_person(search_text)
 
 
 # ============================================================================

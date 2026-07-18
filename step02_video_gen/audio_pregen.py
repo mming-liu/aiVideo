@@ -56,7 +56,7 @@ def _measure_media_duration(path: Path) -> float:
         result = subprocess.run(
             [FFPROBE, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
-            capture_output=True, text=True, timeout=10
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
         )
         if result.returncode == 0 and result.stdout.strip():
             return float(result.stdout.strip())
@@ -120,7 +120,7 @@ def _measure_actual_duration(video_path: Path) -> float:
         result = subprocess.run(
             [FFPROBE, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
-            capture_output=True, text=True, timeout=10
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
         )
         if result.returncode == 0 and result.stdout.strip():
             return float(result.stdout.strip())

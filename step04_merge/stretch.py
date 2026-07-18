@@ -12,6 +12,8 @@ load_dotenv(_PROJECT_ROOT / ".env")
 
 import shutil
 
+from shared.error_fmt import fmt_err_tail
+
 
 def _find_exe(name: str) -> str:
     """Find executable file."""
@@ -38,7 +40,10 @@ STRETCH_TPAD_RATIO = float(os.getenv("STRETCH_TPAD_RATIO", "1.2"))
 def _run_cmd(cmd, **kwargs):
     """Execute shell command and print."""
     print(f"[CMD] {' '.join(cmd)}")
-    return subprocess.run(cmd, check=True, capture_output=True, text=True, **kwargs)
+    # ffmpeg/ffprobe 输出 UTF-8；不显式指定时 Windows 会用 GBK 解码导致
+    # UnicodeDecodeError（路径含中文目录名时必现）
+    return subprocess.run(cmd, check=True, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", **kwargs)
 
 
 def get_media_duration(path: Path) -> float:
@@ -131,5 +136,6 @@ def stretch_clip(clip_path: Path, target_dur: float, output_path: Path, keep_aud
         print(f"  [STRETCH] {clip_path.name} {actual_dur:.1f}s -> {target_dur:.1f}s (ratio={ratio:.3f}, {size_kb}KB)")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"[ERROR] Stretch failed: {e.stderr[:200]}")
+        # ffmpeg 的有效错误信息在 stderr 末尾，取尾部而非头部
+        print(f"[ERROR] Stretch failed: {fmt_err_tail(e.stderr)}")
         return False

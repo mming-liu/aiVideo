@@ -5,14 +5,16 @@
   - StyleBank: 全局视觉风格锚点（Ch1 锁定，后续章引用）
 
 数据布局:
-  output/characters_bank/
+  {OUTPUT_BASE}/book_{BOOK:02d}/global/characters_bank/
     characters_bank.json        ← 角色注册表
     <identifier>/front.png      ← 正面肖像
     <identifier>/side.png       ← 侧面肖像
     <identifier>/back.png       ← 背面肖像
-  output/style_bank/
+  {OUTPUT_BASE}/book_{BOOK:02d}/global/style_bank/
     style_bank.json             ← 风格元数据
     style_anchor.png            ← Ch1 Shot1 首帧副本
+
+全局（跨章节）数据按书归档在 book 目录的 global/ 下，与各 chapter_NN/ 平级。
 """
 
 import json
@@ -20,6 +22,12 @@ import os
 import shutil
 from pathlib import Path
 from datetime import datetime
+
+
+def _book_global_dir() -> Path:
+    """本书跨章节共享目录（统一路径来源: shared/paths.py）."""
+    from shared.paths import global_dir
+    return global_dir()
 
 
 # ---------------------------------------------------------------------------
@@ -32,8 +40,8 @@ _EMPTY_BANK: dict = {"characters": {}, "meta": {"last_updated_chapter": 0, "tota
 class CharacterBank:
     """跨章节角色外观 + 肖像持久化."""
 
-    def __init__(self, bank_dir: str = "./output/characters_bank"):
-        self._bank_dir = Path(bank_dir)
+    def __init__(self, bank_dir: str | None = None):
+        self._bank_dir = Path(bank_dir) if bank_dir else _book_global_dir() / "characters_bank"
         self._bank_path = self._bank_dir / "characters_bank.json"
         self._data: dict = dict(_EMPTY_BANK)
 
@@ -182,8 +190,8 @@ class StyleBank:
     Ch1 首次运行时锁定风格锚点（Shot1 首帧），后续所有章节引用.
     """
 
-    def __init__(self, bank_dir: str = "./output/style_bank"):
-        self._dir = Path(bank_dir)
+    def __init__(self, bank_dir: str | None = None):
+        self._dir = Path(bank_dir) if bank_dir else _book_global_dir() / "style_bank"
         self._json_path = self._dir / "style_bank.json"
         self._data: dict = dict(_EMPTY_STYLE)
 

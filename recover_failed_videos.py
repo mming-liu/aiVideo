@@ -17,6 +17,8 @@ from dotenv import load_dotenv
 from pathlib import Path
 _ = load_dotenv(Path(__file__).parent / ".env")
 
+from shared.error_fmt import fmt_err
+
 AGNES_API_KEY = os.getenv("AGNES_API_KEY", "")
 AGNES_API_KEY_2 = os.getenv("AGNES_API_KEY_2", "")
 AGNES_API_KEY_3 = os.getenv("AGNES_API_KEY_3", "")
@@ -26,6 +28,10 @@ AGNES_API_KEY_5 = os.getenv("AGNES_API_KEY_5", "")
 API_KEYS = [k for k in [AGNES_API_KEY, AGNES_API_KEY_2, AGNES_API_KEY_3, AGNES_API_KEY_4, AGNES_API_KEY_5] if k]
 
 BASE_URL = os.getenv("AGNES_BASE_URL", "https://api.engagelist.com")
+
+# 章节 clips 目录（统一路径来源: shared/paths.py）
+from shared.paths import clips_dir
+CLIPS_DIR = str(clips_dir())
 
 def query_video(video_id, api_key):
     url = f"{BASE_URL}/ Agnesapi?video_id={video_id}"
@@ -54,7 +60,7 @@ def poll_and_download(shot_name, video_id, max_attempts=30):
             continue
 
         if res.status_code != 200:
-            print(f"[{shot_name}] 查询失败 [{res.status_code}]: {res.text[:100]}")
+            print(f"[{shot_name}] 查询失败 [{res.status_code}]: {fmt_err(res.text)}")
             time.sleep(5)
             continue
 
@@ -80,8 +86,8 @@ def poll_and_download(shot_name, video_id, max_attempts=30):
             print(f"[{shot_name}] 视频就绪，下载中...")
             try:
                 video_bin = requests.get(video_url, timeout=120).content
-                save_path = f"output/clips/clip_{shot_name.replace('镜头', '')}.mp4"
-                os.makedirs("output/clips", exist_ok=True)
+                save_path = os.path.join(CLIPS_DIR, f"clip_{shot_name.replace('镜头', '')}.mp4")
+                os.makedirs(CLIPS_DIR, exist_ok=True)
                 with open(save_path, "wb") as f:
                     f.write(video_bin)
                 size_mb = len(video_bin) / (1024 * 1024)

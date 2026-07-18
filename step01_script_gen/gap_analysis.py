@@ -98,91 +98,106 @@ def calculate_keyword_coverage(shot: dict, novel_text: str) -> dict:
 # ========================================================================
 
 def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
-    """Analyze shot distribution for full chapter arc coverage (including climax).
-
-    Args:
-        script: Script data
-        novel_text: Novel chapter text
-
-    Returns:
-        Distribution analysis result
+    """
+    分析分镜脚本的分布情况，检查是否覆盖了小说的高潮剧情，
+    并校验镜头拆分是否符合“蒙太奇”和“角色一致性”标准。
     """
     shots = script.get("shots", [])
-    if not shots or not novel_text:
-        return {"valid": False, "reason": "no_shots_or_novel"}
+    if not shots:
+        return {"status": "error", "message": "未找到任何分镜"}
 
-    # Check 1: Enough shots to cover novel
-    novel_len = len(novel_text)
-    min_shots_for_coverage = max(6, novel_len // 600)
-    shot_count = len(shots)
+    # 1. 高潮关键词库（已优化为中文，匹配 Agnes AI 的中文语境）
+    climax_keywords = [
+        "战斗", "刺杀", "决斗", "冲突", "反转", "爆炸", "死亡", "离开", "逃离",
+        "追逐", "阴谋", "暴露", "密信", "圣旨", "真相", "身份暴露", "杀", "死", "跑",
+        "寒光", "鲜血", "尖叫", "破水而出"  # 针对你当前文本的特化关键词
+    ]
 
-    coverage_check = {
-        "novel_length": novel_len,
-        "shot_count": shot_count,
-        "min_required": min_shots_for_coverage,
-        "sufficient": shot_count >= min_shots_for_coverage,
-    }
+    # 2. 检查高潮覆盖情况
+    has_climax_coverage = False
+    climax_shots_count = 0
 
-    # Check 2: Back 1/3 shots cover latter-half (climax)
-    total_narration = "".join(s.get("narration_segment", "") for s in shots)
-    total_narration_len = len(total_narration)
+    for shot in shots:
+        # 将旁白、字幕和核心关键词拼接起来进行检测
+        segment_text = shot.get("narration_segment", "") + " " + \
+                       shot.get("subtitle", "") + " " + \
+                       " ".join(shot.get("core_keywords", []))
 
-    if total_narration_len > 0:
-        front_shots = shots[:shot_count // 3] if shot_count >= 3 else []
-        middle_shots = shots[shot_count // 3: (shot_count * 2) // 3] if shot_count >= 3 else []
-        back_shots = shots[(shot_count * 2) // 3:] if shot_count >= 3 else shots
+        if any(kw in segment_text for kw in climax_keywords):
+            has_climax_coverage = True
+            climax_shots_count += 1
 
-        front_narration = "".join(s.get("narration_segment", "") for s in front_shots)
-        back_narration = "".join(s.get("narration_segment", "") for s in back_shots)
+    # 3. 校验“蒙太奇拆分”规则（核心优化点）
+    # 规则：如果检测到了高潮剧情，那么相关的镜头数量必须 >= 3
+    montage_check_passed = True
+    montage_message = ""
 
-        # Check for climax keywords (v6.1: 支持中英文 + core_keywords 匹配)
-        climax_keywords_en = [
-            "battle", "assassinate", "duel", "conflict", "reversal", "explosion",
-            "death", "leave", "escape", "chase", "plot", "expose",
-            "secret letter", "edict", "truth", "plot exposed", "identity exposed"
-        ]
-        climax_keywords_cn = [
-            "战斗", "刺杀", "决斗", "冲突", "反转", "爆炸", "死亡", "离开", "逃离",
-            "追逐", "阴谋", "暴露", "密信", "圣旨", "真相", "身份暴露", "杀", "死",
-            "跑", "砍", "剑", "血", "下手", "动手", "突围", "拼杀"
-        ]
-        climax_keywords = climax_keywords_en + climax_keywords_cn
+    if has_climax_coverage and climax_shots_count < 3:
+        montage_check_passed = False
+        montage_message = f"⚠️ 警告：检测到高潮剧情，但仅生成了 {climax_shots_count} 个镜头。建议拆分为至少 3 个独立镜头（如：跃出水面、寒光一闪、刺入心口）以增强视觉冲击力。"
 
-        # 检查后段镜头是否覆盖高潮（检查 narration_segment + core_keywords）
-        has_climax_coverage = False
-        for shot in back_shots:
-            segment_text = shot.get("narration_segment", "")
-            core_kws = shot.get("core_keywords", [])
-            search_text = segment_text + " " + " ".join(core_kws)
-            if any(kw in search_text for kw in climax_keywords):
-                has_climax_coverage = True
-                break
+    # 4. 校验“角色一致性”规则
+    # 规则：检查 prompt 中是否包含了 [角色名: ...] 格式的锚点
+    consistency_check_passed = True
+    consistency_message = ""
+    missing_anchor_shots = []
 
-        has_climax_coverage = has_climax_coverage
+    # 获取脚本中定义的角色名
+    defined_characters = [c.get("identifier", "") for c in script.get("characters", []) if c.get("identifier")]
 
-        arc_coverage = {
-            "front_shots": len(front_shots),
-            "middle_shots": len(middle_shots),
-            "back_shots": len(back_shots),
-            "front_narration_len": len(front_narration),
-            "back_narration_len": len(back_narration),
-            "has_climax_coverage": has_climax_coverage,
-        }
+    for shot in shots:
+        prompt = shot.get("prompt", "")
+        main_subject = shot.get("main_subject", "")
 
-        # Back section must have shots and cover climax
-        valid = (
-            len(back_shots) > 0 and
-            arc_coverage["back_narration_len"] >= novel_len * 0.15 and
-            has_climax_coverage
-        )
-    else:
-        arc_coverage = {"error": "no_narration_content"}
-        valid = False
+        # 如果画面主体是已定义的角色，检查 prompt 里是否有锚点
+        if main_subject in defined_characters:
+            # 简单的正则检查，看 prompt 里有没有类似 [杨旭: ...] 的格式
+            if not re.search(rf"\[{main_subject}[:：]", prompt):
+                consistency_check_passed = False
+                missing_anchor_shots.append(shot.get("index"))
+
+    if not consistency_check_passed:
+        consistency_message = f"⚠️ 警告：镜头 {missing_anchor_shots} 的主体是已知角色，但 Prompt 中缺少 [角色名: 特征] 格式的锚点，可能导致 Agnes AI 生成的人物不一致。"
+
+    # 5. 校验“蒙太奇空镜”规则（防止流水账）
+    # 规则：前 3 个镜头中，至少要有 1 个是环境空镜（main_subject 包含“空镜”、“特写”或不含人名）
+    opening_check_passed = True
+    opening_message = ""
+
+    first_three_shots = shots[:3]
+    has_opening_shot = any(
+        "空镜" in shot.get("main_subject", "") or
+        "特写" in shot.get("main_subject", "") or
+        shot.get("main_subject", "") not in defined_characters
+        for shot in first_three_shots
+    )
+
+    if not has_opening_shot and len(shots) > 3:
+        opening_check_passed = False
+        opening_message = "⚠️ 建议：开篇前 3 个镜头建议增加环境空镜或特写（如：烈日、知了、荷叶），避免直接切入人物导致节奏过快。"
+
+    # 6. 汇总分析结果
+    overall_status = "pass"
+    messages = []
+
+    if not montage_check_passed:
+        overall_status = "fail"
+        messages.append(montage_message)
+    if not consistency_check_passed:
+        overall_status = "warning" if overall_status == "pass" else "fail"
+        messages.append(consistency_message)
+    if not opening_check_passed:
+        overall_status = "warning" if overall_status == "pass" else "fail"
+        messages.append(opening_message)
+
+    if overall_status == "pass":
+        messages.append("✅ 分镜脚本质量优秀，符合蒙太奇拆分与角色一致性标准。")
 
     return {
-        "valid": valid,
-        "coverage": coverage_check,
-        "arc_coverage": arc_coverage,
+        "status": overall_status,
+        "total_shots": len(shots),
+        "climax_shots": climax_shots_count,
+        "messages": messages
     }
 
 

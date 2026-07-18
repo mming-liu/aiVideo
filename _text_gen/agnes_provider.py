@@ -18,6 +18,7 @@ import requests
 from .config import config
 from .models import TextGenerationRequest, TextGenerationResult
 from .service import TextGenerationService
+from shared.error_fmt import parse_retry_after
 
 
 class AgnesTextService(TextGenerationService):
@@ -186,13 +187,16 @@ class AgnesTextService(TextGenerationService):
                         print(f"  [!] 文本 API Key {self._current_key_index} 速率限制 429，"
                               f"切换到 Key {self._current_key_index + 1}/{len(self._api_keys)} 并重试")
                         continue
-                    # 所有 Key 都 429，再等待后重试
+                    # 所有 Key 都 429，按服务端返回的剩余时间精确等待后重试
                     _submit_retry += 1
                     if _submit_retry <= config.AGNES_TEXT_SUBMIT_RETRIES:
+                        wait = parse_retry_after(res.text)
+                        delay = (wait + 0.5) if wait is not None \
+                            else config.AGNES_TEXT_SUBMIT_RETRY_DELAY
                         print(f"  [!] 所有 API Key 均限速 429，"
-                              f"{config.AGNES_TEXT_SUBMIT_RETRY_DELAY}s 后重试 "
+                              f"{delay:.1f}s 后重试 "
                               f"({_submit_retry}/{config.AGNES_TEXT_SUBMIT_RETRIES})")
-                        time.sleep(config.AGNES_TEXT_SUBMIT_RETRY_DELAY)
+                        time.sleep(delay)
                         continue
                     last_error = (f"Agnes 文本速率限制 [429] (重试{_submit_retry}次): "
                                   f"{res.text[:300]}")

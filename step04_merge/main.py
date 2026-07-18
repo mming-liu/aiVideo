@@ -14,12 +14,13 @@ load_dotenv(_PROJECT_ROOT / ".env")
 # Configuration
 CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))
 BOOK_INDEX = int(os.getenv("BOOK_INDEX", "1"))
-OUTPUT_BASE = Path(os.getenv("OUTPUT_BASE", "./output/video"))
 
-CHAPTER_DIR = OUTPUT_BASE / f"book_{BOOK_INDEX:02d}" / f"chapter_{CHAPTER_INDEX:02d}"
-SCRIPT_FILE = CHAPTER_DIR / "script_result.json"
-AUDIO_PATH = CHAPTER_DIR / "audio" / "narration.mp3"
-AUDIO_SHOT_DIR = CHAPTER_DIR / "audio"
+# 输出目录（统一路径来源: shared/paths.py）
+from shared.paths import chapter_dir, script_file, audio_dir, clips_dir, vimax_working_dir
+CHAPTER_DIR = chapter_dir()
+SCRIPT_FILE = script_file()
+AUDIO_PATH = audio_dir() / "narration.mp3"
+AUDIO_SHOT_DIR = audio_dir()
 FINAL_OUT_A = CHAPTER_DIR / "final-A.mp4"  # TTS only
 FINAL_OUT_B = CHAPTER_DIR / "final-B.mp4"  # Video audio + TTS mixed
 SRT_OUT = CHAPTER_DIR / "subtitles.srt"
@@ -27,11 +28,11 @@ TEMP_DIR = CHAPTER_DIR / "stretched"
 
 # Video source
 CLIP_SOURCE = os.getenv("CLIP_SOURCE", "vimax")
-VIMAX_WD = Path(os.getenv("VIMAX_WORKING_DIR", str(CHAPTER_DIR / "vimax_working")))
+VIMAX_WD = vimax_working_dir()
 if CLIP_SOURCE == "vimax":
     CLIP_DIR = VIMAX_WD / "shots"
 else:
-    CLIP_DIR = Path(os.getenv("VIDEO_OUTPUT_DIR", "./output/clips"))
+    CLIP_DIR = Path(os.getenv("VIDEO_OUTPUT_DIR", str(clips_dir())))
 
 DEBUG_SKIP_CACHE = os.getenv("DEBUG_SKIP_CACHE", "0").strip() == "1"
 

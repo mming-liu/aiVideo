@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_PROJECT_ROOT / ".env")
 
+from shared.paths import images_dir as _images_dir
+
 
 class ImageGenCfg:
     """图片生成配置（所有参数均可通过 .env 覆盖）."""
@@ -19,15 +21,8 @@ class ImageGenCfg:
     PROVIDER: str = os.getenv("IMAGE_PROVIDER", "agnes")
 
     # ---- 通用参数 ----
-    _OUTPUT_BASE = os.getenv("OUTPUT_BASE", "./output/video")
-    _BOOK_IDX = int(os.getenv("BOOK_INDEX", "1"))
-    _CHAPTER_IDX = int(os.getenv("NOVEL_CHAPTER", "1"))
-    OUTPUT_DIR: str = os.getenv("IMAGE_OUTPUT_DIR", os.path.join(
-        _OUTPUT_BASE,
-        f"book_{_BOOK_IDX:02d}",
-        f"chapter_{_CHAPTER_IDX:02d}",
-        "images"
-    ))
+    # 默认输出到当前 book/chapter 的 images/ 目录（统一路径来源: shared/paths.py）
+    OUTPUT_DIR: str = os.getenv("IMAGE_OUTPUT_DIR", str(_images_dir()))
     IMAGE_SIZE: str = os.getenv("IMAGE_SIZE", "1024x1792")  # 9:16 竖屏
 
     # ---- agnes (OpenAI 兼容) ----

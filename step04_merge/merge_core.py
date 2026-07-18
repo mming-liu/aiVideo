@@ -71,7 +71,36 @@ def _run_cmd(cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
     """Execute shell command and optionally print."""
     if DEBUG_SHOW_CMD:
         print(f"[CMD] {' '.join(cmd)}")
-    return subprocess.run(cmd, check=True, capture_output=True, text=True, **kwargs)
+    # ffmpeg/ffprobe 输出 UTF-8；不显式指定时 Windows 会用 GBK 解码导致
+    # UnicodeDecodeError（路径含中文目录名时必现）
+    return subprocess.run(cmd, check=True, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", **kwargs)
+
+
+_video_params_cache: dict = {}
+
+
+def get_video_params(path: Path) -> Tuple[int, int, str]:
+    """探测视频实际宽高与帧率，返回 (width, height, fps_str)（如 704, 1280, "24/1"）.
+
+    lavfi color 源（黑场/白场/标题卡）的尺寸和帧率必须与真实片段完全一致，
+    否则 concat/xfade 滤镜以 EINVAL(-22) 失败。不能硬编码 720x1280：
+    Agnes 会把请求尺寸圆整到 32 的倍数，实际输出 704x1280@24。
+    """
+    key = str(path)
+    if key in _video_params_cache:
+        return _video_params_cache[key]
+    cmd = [
+        FFPROBE, "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,r_frame_rate",
+        "-of", "json", str(path),
+    ]
+    result = _run_cmd(cmd)
+    stream = json.loads(result.stdout)["streams"][0]
+    params = (int(stream["width"]), int(stream["height"]),
+              stream.get("r_frame_rate", "24/1"))
+    _video_params_cache[key] = params
+    return params
 
 
 def concat_clips(clips: List[Path], output_path: Path, keep_audio: bool = False) -> None:
@@ -127,7 +156,8 @@ def concat_audio_files(audio_paths: List[Path], output_path: Path) -> Path:
         str(output_path)
     ]
     print(f"  [CONCAT] Merging {len(audio_paths)} audio files")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
     list_file.unlink()
 
     if result.returncode != 0:
@@ -171,55 +201,14 @@ def apply_transition(
 
     # 淡入淡出使用 fade 滤镜
     if "淡入" in transition_type or "fade in" in transition_type:
-        # 淡入：clip_b 从黑场淡入（需要 clip_b_path）
+        # 淡入：简化为直接拼接（硬切），避免复杂的 fade 滤镜问题
         if not clip_b_path:
-            # 无下一个镜头，复制当前
             import shutil
-            if keep_audio:
-                shutil.copy2(clip_a_path, output_path)
-            else:
-                shutil.copy2(clip_a_path, output_path)
+            shutil.copy2(clip_a_path, output_path)
             return output_path
 
-        # 淡入：clip_b 从黑场淡入
-        # 注意：fade 滤镜会丢弃音频，需要单独处理
-        if keep_audio:
-            # 保留音频：先处理视频，合并音频
-            temp_video = output_path.with_suffix('.video.mp4')
-            cmd = [
-                FFMPEG, "-y",
-                "-f", "lavfi", "-i", f"color=c=black:s=720x1280:d={transition_duration}",
-                "-i", str(clip_b_path),
-                "-filter_complex",
-                f"[0:v]fade=t=out:st=0:d={transition_duration}[black];[1:v]fade=t=in:st=0:d={transition_duration}[fadein];[black][fadein]concat=n=2:v=1:a=0",
-                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-                "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
-                str(temp_video),
-            ]
-            _run_cmd(cmd)
-            # 合并音频
-            cmd2 = [
-                FFMPEG, "-y",
-                "-i", str(temp_video),
-                "-i", str(clip_b_path),
-                "-map", "0:v:0", "-map", "1:a:0",
-                "-c:v", "copy", "-c:a", "copy",
-                str(output_path),
-            ]
-            _run_cmd(cmd2)
-            temp_video.unlink(missing_ok=True)
-        else:
-            cmd = [
-                FFMPEG, "-y",
-                "-f", "lavfi", "-i", f"color=c=black:s=720x1280:d={transition_duration}",
-                "-i", str(clip_b_path),
-                "-filter_complex",
-                f"[0:v]fade=t=out:st=0:d={transition_duration}[black];[1:v]fade=t=in:st=0:d={transition_duration}[fadein];[black][fadein]concat=n=2:v=1:a=0",
-                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-                "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
-                str(output_path),
-            ]
-            _run_cmd(cmd)
+        # 直接拼接视频（使用已有的 concat_clips）
+        concat_clips([clip_a_path, clip_b_path], output_path, keep_audio=False)
         return output_path
 
     if "淡出" in transition_type or "fade out" in transition_type:
@@ -311,7 +300,7 @@ def apply_transition(
                 "-i", str(clip_a_path),
                 "-i", str(clip_b_path),
                 "-filter_complex",
-                f"[0:v]setpts=PTS-STARTPTS[a];[1:v]setpts=PTS-STARTPTS[b];[a][b]xfade=transition=fadealpha:duration={transition_duration}:offset={offset}",
+                f"[0:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[a];[1:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[b];[a][b]xfade=transition=hblur:duration={transition_duration}:offset={offset}",
                 "-c:v", "libx264", "-preset", "medium", "-crf", "23",
                 "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
                 str(temp_video),
@@ -336,7 +325,7 @@ def apply_transition(
                 "-i", str(clip_a_path),
                 "-i", str(clip_b_path),
                 "-filter_complex",
-                f"[0:v]setpts=PTS-STARTPTS[a];[1:v]setpts=PTS-STARTPTS[b];[a][b]xfade=transition=fadealpha:duration={transition_duration}:offset={offset}",
+                f"[0:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[a];[1:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[b];[a][b]xfade=transition=hblur:duration={transition_duration}:offset={offset}",
                 "-c:v", "libx264", "-preset", "medium", "-crf", "23",
                 "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
                 str(output_path),
@@ -361,7 +350,7 @@ def apply_transition(
             "-i", str(clip_a_path),
             "-i", str(clip_b_path),
             "-filter_complex",
-            f"[0:v]setpts=PTS-STARTPTS[xa];[1:v]setpts=PTS-STARTPTS[xb];[xa][xb]xfade=transition=fade:duration={transition_duration}:offset={offset}",
+            f"[0:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[xa];[1:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[xb];[xa][xb]xfade=transition=fade:duration={transition_duration}:offset={offset}",
             "-c:v", "libx264", "-preset", "medium", "-crf", "23",
             "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
             str(output_path),
@@ -384,14 +373,19 @@ def apply_transition(
         clip_a_dur = get_media_duration(clip_a_path)
         offset = clip_a_dur - flash_duration * 2  # 留出黑场+白场时间
 
+        # 白场/黑场源必须匹配片段实际宽高/帧率，setsar=1 统一采样宽高比
+        fw, fh, ffps = get_video_params(clip_b_path)
         cmd = [
             FFMPEG, "-y",
             "-i", str(clip_a_path),
-            "-f", "lavfi", "-i", f"color=c=white:s=720x1280:d={flash_duration}",
-            "-f", "lavfi", "-i", f"color=c=black:s=720x1280:d={flash_duration}",
+            "-f", "lavfi", "-i", f"color=c=white:s={fw}x{fh}:r={ffps}:d={flash_duration}",
+            "-f", "lavfi", "-i", f"color=c=black:s={fw}x{fh}:r={ffps}:d={flash_duration}",
             "-i", str(clip_b_path),
             "-filter_complex",
-            f"[0:v]fade=t=out:st=0:d={flash_duration}[aout];[1:v][2:v][3:v]concat=n=3:v=1:a=0[flash];[aout][flash]xfade=transition=fade:duration={flash_duration}:offset={offset}",
+            f"[0:v]fade=t=out:st=0:d={flash_duration},setsar=1,settb=AVTB[aout];"
+            f"[1:v]setsar=1[white];[2:v]setsar=1[blk];[3:v]setsar=1[clipb];"
+            f"[white][blk][clipb]concat=n=3:v=1:a=0,settb=AVTB[flash];"
+            f"[aout][flash]xfade=transition=fade:duration={flash_duration}:offset={offset}",
             "-c:v", "libx264", "-preset", "medium", "-crf", "23",
             "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
             str(output_path),
@@ -424,10 +418,13 @@ def create_opening_buffer(
     fadein_path = temp_dir / "opening_fadein.mp4"
     title_path = temp_dir / "opening_title.mp4"
 
+    # 黑屏/标题卡必须匹配首个片段的实际宽高/帧率（Agnes 实际输出 704x1280@24）
+    vw, vh, vfps = get_video_params(first_clip_path)
+
     # 1. 创建黑屏 (OPENING_BLACK_DURATION 秒)
     cmd = [
         FFMPEG, "-y",
-        "-f", "lavfi", "-i", f"color=c=black:s=720x1280:d={OPENING_BLACK_DURATION}",
+        "-f", "lavfi", "-i", f"color=c=black:s={vw}x{vh}:r={vfps}:d={OPENING_BLACK_DURATION}",
         "-c:v", "libx264",
         "-profile:v", "main",
         "-level", "4.0",
@@ -445,8 +442,8 @@ def create_opening_buffer(
         ass_content = (
             "[Script Info]\n"
             "ScriptType: v4.00+\n"
-            "PlayResX: 720\n"
-            "PlayResY: 1280\n"
+            f"PlayResX: {vw}\n"
+            f"PlayResY: {vh}\n"
             "\n"
             "[V4+ Styles]\n"
             "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Italic, Alignment, BorderStyle, Outline, Shadow, MarginL, MarginR, MarginV\n"
@@ -464,8 +461,8 @@ def create_opening_buffer(
 
         cmd = [
             FFMPEG, "-y",
-            "-f", "lavfi", "-i", f"color=c=black:s=720x1280:d={OPENING_TITLE_DURATION}",
-            "-vf", f"subtitles=filename={ass_filter_path}:original_size=720x1280",
+            "-f", "lavfi", "-i", f"color=c=black:s={vw}x{vh}:r={vfps}:d={OPENING_TITLE_DURATION}",
+            "-vf", f"subtitles=filename={ass_filter_path}:original_size={vw}x{vh}",
             "-c:v", "libx264",
             "-profile:v", "main",
             "-level", "4.0",
@@ -481,7 +478,7 @@ def create_opening_buffer(
             "-i", str(title_path),
             "-i", str(first_clip_path),
             "-filter_complex",
-            f"[0:v]setpts=PTS-STARTPTS[title];[1:v]setpts=PTS-STARTPTS[clip];[title][clip]xfade=transition=fadealpha:duration={OPENING_FADE_IN_DURATION}:offset=0[out];[out]fade=t=in:st=0:d=0.5",
+            f"[0:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[title];[1:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[clip];[title][clip]xfade=transition=fade:duration={OPENING_FADE_IN_DURATION}:offset=0[out];[out]fade=t=in:st=0:d=0.5",
             "-c:v", "libx264",
             "-profile:v", "main",
             "-level", "4.0",
@@ -497,7 +494,7 @@ def create_opening_buffer(
             "-i", str(black_path),
             "-i", str(first_clip_path),
             "-filter_complex",
-            f"[0:v]setpts=PTS-STARTPTS[black];[1:v]setpts=PTS-STARTPTS[clip];[black][clip]xfade=transition=fadealpha:duration={OPENING_FADE_IN_DURATION}:offset=0[out]",
+            f"[0:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[black];[1:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[clip];[black][clip]xfade=transition=fade:duration={OPENING_FADE_IN_DURATION}:offset=0[out]",
             "-c:v", "libx264",
             "-profile:v", "main",
             "-level", "4.0",
@@ -573,7 +570,8 @@ def merge_final_video(
             result = subprocess.run(
                 [FFPROBE, "-v", "error", "-show_entries", "format=duration",
                  "-of", "default=noprint_wrappers=1:nokey=1", str(clip)],
-                capture_output=True, text=True, timeout=30
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=30
             )
             duration = float(result.stdout.strip()) if result.stdout.strip() else 0
             if duration <= 0:
@@ -658,6 +656,16 @@ def merge_final_video(
                 try:
                     result = apply_transition(current, next_clip, transition_type, temp_merged, keep_audio=keep_video_audio)
                     print(f"    [DEBUG] apply_transition returned: {result}")
+                    # 验证输出文件
+                    if temp_merged.exists():
+                        size = temp_merged.stat().st_size
+                        dur = get_media_duration(temp_merged)
+                        print(f"    [DEBUG] merged file: {size} bytes, {dur:.2f}s")
+                        if size < 10000:
+                            print(f"    [ERROR] merged file too small ({size} bytes), possible FFmpeg failure!")
+                            raise RuntimeError(f"Merge failed: output file too small ({size} bytes)")
+                    else:
+                        raise RuntimeError(f"Merge failed: output file not created")
                 except Exception as e:
                     print(f"    [ERROR] apply_transition failed: {e}")
                     raise
@@ -672,6 +680,11 @@ def merge_final_video(
 
     if not concat_video or not concat_video.exists():
         raise RuntimeError(f"Concatenated video not generated: {concat_video}")
+
+    # 验证文件大小（防止 FFmpeg 失败但文件被创建的情况）
+    concat_size = concat_video.stat().st_size
+    if concat_size < 100000:  # 小于 100KB 说明转场合并失败
+        raise RuntimeError(f"Concatenated video too small ({concat_size} bytes), merge likely failed: {concat_video}")
 
     # 3. 添加开场缓冲
     if OPENING_ENABLED:
@@ -769,7 +782,8 @@ def merge_final_video(
     print(f"[INFO] Final output: {output_path}")
     print(f"{'='*60}\n")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
 
     if result.returncode != 0:
         print(f"[ERROR] ffmpeg failed:\n{result.stderr}")

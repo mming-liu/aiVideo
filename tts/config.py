@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_PROJECT_ROOT / ".env")
 
+from shared.paths import audio_dir as _audio_dir
+
 
 class TTSCfg:
     """TTS 配置（所有参数均可通过 .env 覆盖）."""
@@ -32,7 +34,8 @@ class TTSCfg:
     VOLUME: int = int(os.getenv("DASHSCOPE_TTS_VOLUME", "50"))
     FORMAT: str = os.getenv("DASHSCOPE_TTS_FORMAT", "mp3")
     SAMPLE_RATE: int = int(os.getenv("DASHSCOPE_TTS_SAMPLE_RATE", "16000"))
-    OUTPUT_PATH: str = os.getenv("TTS_OUTPUT_PATH", "./output/audio/narration.mp3")
+    # 默认输出到当前 book/chapter 的 audio/ 目录（统一路径来源: shared/paths.py）
+    OUTPUT_PATH: str = os.getenv("TTS_OUTPUT_PATH", str(_audio_dir() / "narration.mp3"))
 
     # ---- OpenAI / 第三方 REST API ----
     # OpenAI 官方: https://api.openai.com/v1/audio/speech

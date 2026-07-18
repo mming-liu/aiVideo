@@ -15,8 +15,9 @@ import json
 from pathlib import Path
 
 
-# 缓存目录
-_CACHE_DIR = Path("output/chapter_cache")
+# 缓存目录：本书跨章节共享（统一路径来源: shared/paths.py）
+from shared.paths import chapter_cache_dir
+_CACHE_DIR = chapter_cache_dir()
 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -85,15 +86,15 @@ def find_sections(novel_path: str) -> list[dict]:
         list of {index: int, title: str, start: int, end: int}
         start/end 为字符位置
     """
-    for enc in ("gbk", "gb18030", "utf-8", "utf-8-sig"):
+    for enc in ("utf-8", "utf-8-sig", "gbk", "gb18030"):
         try:
             with open(novel_path, "r", encoding=enc) as f:
                 text = f.read()
-            # 验证编码
-            if any("一" <= c <= "鿿" for c in text[:200]):
-                break
         except (UnicodeDecodeError, FileNotFoundError):
             continue
+        # 验证解码正确性：能命中章标记才算成功（乱码文本不会命中「第NNN章」）
+        if re.search(r"第\d{3,4}章", text[:20000]):
+            break
     else:
         raise ValueError(f"无法读取小说 {novel_path}")
 
@@ -106,6 +107,12 @@ def find_sections(novel_path: str) -> list[dict]:
         idx = int(m.group(1))
         title = m.group(2).strip()
         start = m.start()
+        # 解析同一行「第NNN章」之前的 部/卷 信息（如「第一部 杀青州 第001章 章名」）
+        line_start_pos = text.rfind("\n", 0, start) + 1
+        line_prefix = text[line_start_pos:start].strip()
+        vol_m = re.match(r"第[一二三四五六七八九十百零\d]+部\s*(\S*)", line_prefix)
+        volume_label = line_prefix if vol_m else ""
+        book_name = (vol_m.group(1) if vol_m else "").strip()
         # 后退到最近的行首，避免漏掉前面的「第一卷 xxx」
         line_start = text.rfind("\n", 0, start)
         if line_start > 0:
@@ -123,11 +130,30 @@ def find_sections(novel_path: str) -> list[dict]:
         sections.append({
             "index": idx,
             "title": title,
+            "volume_label": volume_label,   # 如「第一部 杀青州」
+            "book_name": book_name,         # 如「杀青州」
             "start": start,
             "end": end,
         })
 
     return sections
+
+
+def get_chapter_meta(novel_path: str, chapter: int) -> dict:
+    """返回指定章的元信息（部名 + 章名），供写入 script_result.json.
+
+    标题行格式: 第一部 杀青州 第002章 卖了亲爹的娃
+    Returns: {"chapter_index", "chapter_title", "book_name", "volume_label"}
+    """
+    for s in find_sections(novel_path):
+        if s["index"] == chapter:
+            return {
+                "chapter_index": chapter,
+                "chapter_title": s.get("title", ""),
+                "book_name": s.get("book_name", ""),
+                "volume_label": s.get("volume_label", ""),
+            }
+    return {"chapter_index": chapter, "chapter_title": "", "book_name": "", "volume_label": ""}
 
 
 def extract_section(novel_path: str, section_index: int = 1) -> str:

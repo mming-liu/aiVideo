@@ -11,7 +11,6 @@ aiVideo 的 provider 是同步的（create_task → wait_for_completion → 下�
 
 import asyncio
 import os
-import time as _time_module
 from pathlib import Path
 from typing import List, Optional
 
@@ -35,12 +34,9 @@ _IMAGE_RATE_LIMITER = RateLimiter(
     max_requests_per_minute=int(_IMAGE_RPM) if _IMAGE_RPM else None,
 )
 
-# 图片生成最小间隔（秒）—— 共享模块级 asyncio.Lock 保证所有 adapter 实例
-# 的首帧/尾帧/肖像生成不会在两个连续请求间隔小于此值。
-# Agnes 图片 API 不接受过快连续提交。
-_IMAGE_GEN_INTERVAL = float(os.getenv("IMAGE_GEN_INTERVAL", "21"))
-_image_last_time: float = 0.0
-_image_interval_lock = asyncio.Lock()
+# 图片限速已下沉到 _image_gen provider 的 KeyScheduler（每 key 独立冷却，
+# 8 key 轮询并行）。此处不再做全局串行闸——原先的模块级 21s 间隔会把
+# 所有 key 的产能压成单 key 水平。保留可选的全局 RPM 上限（默认不限）。
 
 
 class ImageGeneratorAiVideoAdapter:
@@ -90,18 +86,8 @@ class ImageGeneratorAiVideoAdapter:
             size=size,
             reference_image_path=ref,
         )
-        # 速率限制：控制图片 API 请求频率（多摄像机并行时不互相阻塞）
+        # 速率限制：可选全局上限（默认不限；每 key 限速由 provider 的 KeyScheduler 负责）
         await _IMAGE_RATE_LIMITER.acquire()
-        # 共享间隔：所有 adapter 实例串行化，确保连续两次提交间隔 >= IMAGE_GEN_INTERVAL
-        # （Agnes 图片 API 不接受过快连续提交，与视频的 60s 间隔同理）
-        global _image_last_time
-        async with _image_interval_lock:
-            elapsed = _time_module.monotonic() - _image_last_time
-            if elapsed < _IMAGE_GEN_INTERVAL:
-                delay = _IMAGE_GEN_INTERVAL - elapsed
-                print(f"  [图片间隔] 等待 {delay:.0f}s（距上次 {elapsed:.0f}s < {_IMAGE_GEN_INTERVAL}s）")
-                await asyncio.sleep(delay)
-            _image_last_time = _time_module.monotonic()
         result = await asyncio.wait_for(
             asyncio.to_thread(self._svc.generate, req),
             timeout=_IMAGE_GEN_TIMEOUT,

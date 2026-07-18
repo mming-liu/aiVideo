@@ -185,7 +185,7 @@ class DashScopeHttpProvider(TTSServiceInterface):
                     last_error = (f"DashScope HTTP 失败 ({res.status_code}): "
                                   f"{data.get('message', str(data))}")
                 else:
-                    last_error = f"DashScope HTTP 失败 ({res.status_code}): {res.text[:200]}"
+                    last_error = f"DashScope HTTP 失败 ({res.status_code}): {res.text[:500]}"
                 break  # 非 403 错误不重试
 
             except Exception as e:

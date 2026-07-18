@@ -23,6 +23,8 @@ class VideoGenerationRequest:
     last_frame_image_path: Optional[str] = None
     # 可选：用于可复现结果（文档支持）
     seed: Optional[int] = None
+    # 推理步数（Agnes API 支持）
+    num_inference_steps: Optional[int] = None
 
 
 @dataclass

@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_PROJECT_ROOT / ".env")
 
+from shared.paths import clips_dir as _clips_dir
+
 
 class VideoGenCfg:
     """视频生成配置（所有参数均可通过 .env 覆盖）."""
@@ -20,15 +22,8 @@ class VideoGenCfg:
     PROVIDER: str = os.getenv("VIDEO_PROVIDER", "dashscope")
 
     # ---- 通用参数 ----
-    _OUTPUT_BASE = os.getenv("OUTPUT_BASE", "./output/video")
-    _BOOK_IDX = int(os.getenv("BOOK_INDEX", "1"))
-    _CHAPTER_IDX = int(os.getenv("NOVEL_CHAPTER", "1"))
-    OUTPUT_DIR: str = os.getenv("VIDEO_OUTPUT_DIR", os.path.join(
-        _OUTPUT_BASE,
-        f"book_{_BOOK_IDX:02d}",
-        f"chapter_{_CHAPTER_IDX:02d}",
-        "clips"
-    ))
+    # 默认输出到当前 book/chapter 的 clips/ 目录（统一路径来源: shared/paths.py）
+    OUTPUT_DIR: str = os.getenv("VIDEO_OUTPUT_DIR", str(_clips_dir()))
     VIDEO_SIZE: str = os.getenv("VIDEO_SIZE", "720x1280")       # 9:16 竖屏
     VIDEO_DURATION: int = int(os.getenv("VIDEO_DURATION", "6"))  # 默认单镜头时长(秒)
 
@@ -93,9 +88,9 @@ class VideoGenCfg:
     AGNES_VIDEO_MODE: str = os.getenv("AGNES_VIDEO_MODE", "async")
     AGNES_VIDEO_POLL_INTERVAL: int = int(os.getenv("AGNES_VIDEO_POLL_INTERVAL", "8"))
     AGNES_VIDEO_MAX_POLL_ATTEMPTS: int = int(os.getenv("AGNES_VIDEO_MAX_POLL_ATTEMPTS", "120"))
-    # 提交重试: 5xx/429连接错误时无限重试（只要不是必须停止的错误码），直到成功
-    # 429限速错误会等待后重试，不会放弃
-    AGNES_VIDEO_SUBMIT_RETRIES: int = int(os.getenv("AGNES_VIDEO_SUBMIT_RETRIES", "99999"))
+    # 提交重试: 5xx/连接错误时的最大重试次数与间隔（秒）
+    # 默认 10 次 × 30s = 5 分钟合理上限；超过后视为临时故障，由外层重试整个流水线
+    AGNES_VIDEO_SUBMIT_RETRIES: int = int(os.getenv("AGNES_VIDEO_SUBMIT_RETRIES", "10"))
     AGNES_VIDEO_SUBMIT_RETRY_DELAY: int = int(os.getenv("AGNES_VIDEO_SUBMIT_RETRY_DELAY", "30"))
 
     @classmethod

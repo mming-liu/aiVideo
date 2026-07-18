@@ -33,45 +33,12 @@ from character_bank import CharacterBank, StyleBank
 import hashlib
 
 # 首帧/尾帧生成需要风格前缀（与视频生成保持一致）
-from style_prefix import STYLE_PREFIX, sanitize_prompt, ensure_prefix
+from style_prefix import STYLE_PREFIX, sanitize_prompt, ensure_prefix, is_empty_scene
 
 
-# ---------------------------------------------------------------------------
-# Prompt Hash Cache Detection
-# ---------------------------------------------------------------------------
-
-def _compute_prompt_hash(shot: dict) -> str:
-    """计算视频生成的稳定哈希值（忽略 ff_desc/lf_desc 的随机性）."""
-    key_parts = [
-        # shot.get("ff_desc", ""),  # 移除：随机性太强
-        # shot.get("lf_desc", ""),  # 移除：随机性太强
-        shot.get("prompt", ""),
-        shot.get("motion_desc", ""),
-    ]
-    content = "|".join(key_parts)
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
-
-
-def _save_shot_hash(shot_dir: Path, shot: dict) -> None:
-    hash_path = shot_dir / "prompt_hash.txt"
-    h = _compute_prompt_hash(shot)
-    hash_path.write_text(h, encoding="utf-8")
-
-
-def _load_shot_hash(shot_dir: Path) -> str | None:
-    hash_path = shot_dir / "prompt_hash.txt"
-    if hash_path.exists():
-        return hash_path.read_text(encoding="utf-8").strip()
-    return None
-
-
-def _is_shot_stale(shot_dir: Path, shot: dict) -> bool:
-    old_hash = _load_shot_hash(shot_dir)
-    if old_hash is None:
-        return True
-    new_hash = _compute_prompt_hash(shot)
-    return old_hash != new_hash
-
+# 注意: 视频级缓存哈希 (prompt_hash.txt) 的唯一读写实现在
+# step02_video_gen/submit_poll.py 的 _get_shot_hash / _poll_video 中，
+# 此处不再保留第二套实现，避免读写算法分歧导致缓存永不命中。
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +159,9 @@ async def build_working_dir(
                 json.dump([], f, ensure_ascii=False, indent=2)
 
     # ---- 2. character_portraits_registry.json ----
+    # 每次都重写：registry 由 bank 实时导出，旧文件可能残留迁移前的失效路径
     registry_path = working_dir / "character_portraits_registry.json"
-    if registry and (not registry_path.exists() or force_first_frame):
+    if registry:
         with open(registry_path, "w", encoding="utf-8") as f:
             json.dump(registry, f, ensure_ascii=False, indent=2)
         print(f"  [bridge] character_portraits_registry.json: {len(registry)} 个角色")
@@ -328,6 +296,7 @@ async def _gen_frames_for_camera_group(
         ff_result = await _gen_first_frame_async(
             image_adapter, shots_dir, shot, force_first_frame, script_mtime,
             reference_paths=refs,
+            empty_scene=is_empty_scene(shot, characters_data),
         )
         if is_first_in_cam and ff_result:
             camera_first_frames[cam_idx] = ff_result
@@ -338,21 +307,18 @@ async def _gen_frames_for_camera_group(
                     style_bank.lock(ff_result, chapter_idx)
                     style_bank.save()
 
-        # -- 尾帧生成（medium/large 变幅）--
-        vt = shot.get("variation_type", "small").strip() or "small"
-        if vt in ("medium", "large"):
-            lf_desc = shot.get("lf_desc", "").strip()
-            if lf_desc:
-                lf_refs = [str(ff_path)] if ff_path and ff_path.exists() else []
-                char_ref = _select_best_reference(shot, bank, style_bank, characters_data)
-                if char_ref and char_ref not in lf_refs:
-                    lf_refs.append(char_ref)
-                await _gen_last_frame_async(
-                    image_adapter, shots_dir, shot, force_first_frame, script_mtime,
-                    reference_paths=lf_refs,
-                )
-            else:
-                print(f"  [bridge] 镜头{idx}: variation_type={vt} 但 lf_desc 为空，跳尾帧")
+        # -- 尾帧生成（全镜头覆盖：首尾双关键帧钳制风格漂移）--
+        # 注：不再按 variation_type 过滤——LLM 常输出空值导致 20/20 镜头无尾帧，
+        # 仅首帧单锚时长镜头后半段会从动漫漂移成真人写实
+        lf_refs = [str(ff_path)] if ff_path and ff_path.exists() else []
+        char_ref = _select_best_reference(shot, bank, style_bank, characters_data)
+        if char_ref and char_ref not in lf_refs:
+            lf_refs.append(char_ref)
+        await _gen_last_frame_async(
+            image_adapter, shots_dir, shot, force_first_frame, script_mtime,
+            reference_paths=lf_refs,
+            empty_scene=is_empty_scene(shot, characters_data),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -372,8 +338,15 @@ def _build_reference_list(
     1. 同摄像机首帧锚定（非首镜头时）
     2. 角色正面肖像（prompt 中提到的角色）
     3. 风格锚点（跨摄像机回退）
+
+    空镜不注入任何参考图：锚定帧/肖像里的人物会被图生图带进空镜画面。
     """
     refs: list[str] = []
+
+    # 空镜：text-to-image，避免参考图中的人物（往往是主角）渗入画面
+    if is_empty_scene(shot, characters_data):
+        print(f"  [bridge] 镜头{shot['index']}: 空镜，不注入参考图")
+        return refs
 
     # 非首镜头：引用本摄像机首帧作为锚定
     if not is_first_in_cam and cam_idx in camera_first_frames:
@@ -573,19 +546,26 @@ def _select_best_reference(
     """为镜头选择最优单张参考图（增强版）.
 
     增强点:
-    1. 同时搜索 ff_desc、prompt、context_bridge 三个字段（不是只搜 prompt）
+    1. 搜索 ff_desc、prompt 两个字段（不含 context_bridge —— 它描述的是
+       上一镜头画面，常含上一镜头角色名，会把无关角色肖像注入本镜头）
     2. 根据描述中的视角词（侧身/背面/正面）选择最合适的角色肖像视图
     3. 视角不存在时按 front → side → back 降级
+    4. 空镜（画面不应出现人物）不注入任何参考图，避免参考图里的人物
+       被图生图带进空镜画面
 
     优先级:
-    1. ff_desc/prompt/context_bridge 中提到某角色 + 有匹配视角的肖像 → 用该视角
-    2. 风格锚点（Ch2+ 或 Ch1 已锁定）
+    1. ff_desc/prompt 中提到某角色 + 有匹配视角的肖像 → 用该视角
+    2. 风格锚点（Ch2+ 或 Ch1 已锁定；仅非空镜）
     3. None（text-to-image）
     """
+    # 空镜：任何含人物的参考图都会诱导模型把人画进空镜
+    if is_empty_scene(shot, characters_data):
+        print(f"  [bridge] 镜头{shot['index']}: 空镜，不注入参考图")
+        return None
+
     ff_desc = shot.get("ff_desc", "").strip() or ""
-    context = shot.get("context_bridge", "").strip() or ""
     prompt = shot.get("prompt", "")
-    search_text = f"{ff_desc} {context} {prompt}"
+    search_text = f"{ff_desc} {prompt}"
 
     # 视角检测
     view_pref = _detect_view_preference(search_text)
@@ -634,17 +614,29 @@ def _validate_frame(path: str, min_kb: float = 5) -> bool:
     return True
 
 
-def _get_frame_content_hash(shot: dict) -> str:
+def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
+                            reference_paths: list | None = None) -> str:
     """计算首帧/尾帧的稳定哈希值。
 
-    只依赖核心意图字段，忽略 ff_desc/If_desc（具有随机性）。
+    只依赖核心意图字段，忽略 ff_desc/lf_desc（具有随机性）。
     这样只要分镜的核心内容不变，首帧/尾帧就不会重新生成。
+
+    empty_scene / reference_paths 参与哈希：空镜约束改变生成 prompt、
+    参考图决定图生图底图，二者变化时帧必须重做。均为条件追加——
+    默认情形（非空镜、无参考图）哈希值与旧算法一致，避免哈希算法
+    升级导致已有干净缓存整体失效。
     """
-    key = "|".join([
+    key_parts = [
+        STYLE_PREFIX,                    # 风格前缀变化时首帧也应重新生成
         shot.get("prompt", ""),          # 视频生成总 prompt，画面的基调
         shot.get("motion_desc", ""),     # 动作描述，决定画面动态
         shot.get("main_subject", ""),    # 主体，确保主角不变
-    ])
+    ]
+    if empty_scene:
+        key_parts.append("empty_scene")  # 空镜判定翻转时帧应重做
+    if reference_paths:
+        key_parts.extend(str(p) for p in reference_paths)  # 参考图变化时帧应重做
+    key = "|".join(key_parts)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
@@ -653,10 +645,13 @@ async def _gen_first_frame_async(
     script_mtime: float | None = None,
     reference_paths: list | None = None,
     max_retries: int = 1,
+    empty_scene: bool = False,
 ):
     """为镜头生成 first_frame.png，prompt 用 ff_desc.
 
     生成后自动校验文件大小；不达标时自动重试（最多 max_retries 次）.
+    empty_scene=True 时在 prompt 中显式禁止人物（与视频 prompt 的空镜约束
+    保持一致，防止首帧凭空长出人物后被 image-to-video 固化成片头画面）.
     """
     idx = shot["index"]
     shot_dir = shots_dir / str(idx)
@@ -664,9 +659,11 @@ async def _gen_first_frame_async(
     ff_path = shot_dir / "first_frame.png"
     ff_hash_path = shot_dir / "frame_hash.txt"
     ff_desc = shot.get("ff_desc", "").strip() or shot.get("prompt", "")
+    if empty_scene:
+        ff_desc = f"{ff_desc}\n空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
 
-    # 计算当前哈希值（基于核心意图）
-    current_hash = _get_frame_content_hash(shot)
+    # 计算当前哈希值（核心意图 + 空镜约束 + 参考图，任一变化都重新生成）
+    current_hash = _get_frame_content_hash(shot, empty_scene, reference_paths)
 
     for attempt in range(max_retries + 1):
         if ff_path.exists() and not force and attempt == 0:
@@ -718,23 +715,31 @@ async def _gen_last_frame_async(
     script_mtime: float | None = None,
     reference_paths: list | None = None,
     max_retries: int = 1,
+    empty_scene: bool = False,
 ):
     """为 medium/large 变幅镜头生成 last_frame.png，prompt 用 lf_desc.
 
     生成后自动校验文件大小；不达标时自动重试.
+    empty_scene=True 时与首帧一致，显式禁止人物出现.
     """
     idx = shot["index"]
     shot_dir = shots_dir / str(idx)
     shot_dir.mkdir(parents=True, exist_ok=True)
     lf_path = shot_dir / "last_frame.png"
-    lf_hash_path = shot_dir / "frame_hash.txt"  # 复用同一个哈希文件
+    # 尾帧独立哈希文件：首帧/尾帧的参考图不同 → 哈希值不同，
+    # 共用一个文件会互相覆盖，导致每次运行都误判失效、双双重做
+    lf_hash_path = shot_dir / "last_frame_hash.txt"
     lf_desc = shot.get("lf_desc", "").strip()
     if not lf_desc:
-        print(f"  [FRAME] 尾帧 shot_{idx}: lf_desc 为空，跳过")
-        return None
+        # lf_desc 缺失时回退首帧描述：同场景收尾画面，作为末端风格锚
+        # （尾帧的核心职责是钳制画风，构图可与首帧相近）
+        base_desc = shot.get("ff_desc", "").strip() or shot.get("prompt", "")
+        lf_desc = f"{base_desc}（镜头收尾画面，与开场同一场景同一画风，构图自然延续）"
+    if empty_scene:
+        lf_desc = f"{lf_desc}\n空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
 
-    # 计算当前哈希值（基于核心意图）
-    current_hash = _get_frame_content_hash(shot)
+    # 计算当前哈希值（核心意图 + 空镜约束 + 参考图，任一变化都重新生成）
+    current_hash = _get_frame_content_hash(shot, empty_scene, reference_paths)
 
     for attempt in range(max_retries + 1):
         if lf_path.exists() and not force and attempt == 0:
@@ -801,10 +806,12 @@ async def gen_shot_frames(
     image_adapter,
     script_mtime: float | None,
     force: bool = False,
+    characters: list | None = None,
 ) -> dict:
     """为单个镜头生成/检查首帧和尾帧。
 
     用于 submit_poll.py 中 skip_frames=False 时的逐镜帧生成。
+    characters: script['characters']，用于空镜检测（空镜首帧禁止人物）。
 
     Returns:
         dict: {"ff_path": str | None, "lf_path": str | None}
@@ -815,27 +822,26 @@ async def gen_shot_frames(
 
     ff_ = {}
     ff_path = shot_dir / "first_frame.png"
+    empty_scene = is_empty_scene(shot, characters or [])
 
     # 首帧 generation (使用 _gen_first_frame_async 的缓存逻辑)
     ff_path_str = await _gen_first_frame_async(
         image_adapter, shots_dir, shot,
         force=force, script_mtime=script_mtime,
         reference_paths=None, max_retries=1,
+        empty_scene=empty_scene,
     )
     ff_["ff_path"] = ff_path_str
 
-    # 尾帧 generation (仅对 medium/large variation_type)
-    vt = shot.get("variation_type", "small").strip() or "small"
-    lf_path_str = None
-    if vt in ("medium", "large"):
-        lf_desc = shot.get("lf_desc", "").strip()
-        if lf_desc:
-            lf_path_str = await _gen_last_frame_async(
-                image_adapter, shots_dir, shot,
-                force=force, script_mtime=script_mtime,
-                reference_paths=[ff_path_str] if ff_path_str else None,
-                max_retries=1,
-            )
+    # 尾帧 generation（全镜头覆盖：首尾双关键帧钳制风格漂移，
+    # 不再按 variation_type 过滤——LLM 常输出空值导致全部镜头无尾帧）
+    lf_path_str = await _gen_last_frame_async(
+        image_adapter, shots_dir, shot,
+        force=force, script_mtime=script_mtime,
+        reference_paths=[ff_path_str] if ff_path_str else None,
+        max_retries=1,
+        empty_scene=empty_scene,
+    )
     ff_["lf_path"] = lf_path_str
 
     return ff_

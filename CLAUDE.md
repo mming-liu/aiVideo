@@ -31,6 +31,9 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 
 ### 环境变量配置（.env）
 - `NOVEL_CHAPTER`: 章节序号（默认1）
+- `NOVEL_NAME`: 小说名（小说级目录，全书共享库所在层）
+- `BOOK_INDEX`: 部序号（小说内第几部，默认1）
+- `BOOK_NAME`: 部名（拼入目录名，如 part_01_杀青州）
 - `PROMPT_MAX_CHARS`: 传给 LLM 的原文上限（默认50000，传递完整章节）
 - `SHOT_COUNT_MIN/MAX`: 分镜数范围（默认8-20）
 - `VIDEO_PROVIDER`: 视频生成供应商（默认agnes）
@@ -51,6 +54,21 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
     → step04_merge/main.py      → final.mp4
 ```
 
+### 输出目录结构（统一由 shared/paths.py 计算，禁止自行拼接）
+层级对应小说自身结构「小说 → 部 → 章」：
+```
+{OUTPUT_BASE}/                              # 默认 ./output/video
+└── 锦衣夜行/                                # {NOVEL_NAME} 小说级
+    ├── global/                             # 全书共享（角色形象/风格跨部统一）
+    │   ├── characters_bank/                # 角色注册表 + 肖像
+    │   ├── style_bank/                     # 风格锚点（Ch1 锁定）
+    │   └── chapter_cache/                  # 章节文本解析缓存
+    └── part_01_杀青州/                      # part_{BOOK_INDEX:02d}_{BOOK_NAME} 部级
+        └── chapter_002/                    # chapter_{NOVEL_CHAPTER:03d} 章级
+            ├── script_result.json / final-A.mp4 / final-B.mp4 / subtitles.srt
+            └── audio/ clips/ images/ vimax_working/ stretched/
+```
+
 ### Provider 抽象模式
 `_video_gen/` 和 `tts/` 两个包采用相同架构：
 - **ABC 接口 + 工厂注册表**：通过 `.env` 中的 PROVIDER 切换
@@ -58,8 +76,8 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 - **Dataclass 模型**：请求和结果用 dataclass 定义
 
 ### 章节提取
-- 小说文件：`锦衣夜行_77119小说.txt`（GBK编码）
-- 章节格式：`第001章 章节标题`
+- 小说文件：`锦衣夜行_77119小说.txt`（UTF-8编码；`.bak` 为 GBK 原件）
+- 标题行格式：`第一部 杀青州 第001章 章节标题`（部名/章名由 `get_chapter_meta()` 解析并写入 script_result.json）
 - 使用 `chapter_reader.py` 提取完整章节
 
 ## 关键参考文件

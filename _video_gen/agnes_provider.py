@@ -22,6 +22,8 @@ import requests
 from .models import VideoGenerationRequest, VideoGenerationResult
 from .service import VideoGenerationService
 from .config import config
+from shared.error_fmt import parse_retry_after
+from shared.key_scheduler import KeyScheduler
 
 
 _SYNC_PREFIX = "__sync__"
@@ -55,6 +57,16 @@ class AgnesVideoService(VideoGenerationService):
         if config.AGNES_API_KEY_8:
             self._api_keys.append(config.AGNES_API_KEY_8)
         self._current_key_index: int = 0
+
+        # 多 key 冷却调度：视频免费档约 1 次/60s/key，留 1s 余量
+        # N 个 key 轮询提交，吞吐提升 N 倍
+        self._key_scheduler = KeyScheduler(
+            len(self._api_keys),
+            cooldown=float(os.getenv("AGNES_VIDEO_KEY_COOLDOWN", "61")),
+            name="video-keys",
+        )
+        # task_id -> 提交时所用 key 下标（查询必须用同一 key，跨 key 查不到任务）
+        self._task_keys: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # API Key 轮换
@@ -178,6 +190,11 @@ class AgnesVideoService(VideoGenerationService):
         if req.image_path and not image_data_url:
             print(f"  [镜头{req.clip_index}] 首帧图 {req.image_path} 读取失败，"
                   f"降级为 text-to-video")
+        # 尾帧：与首帧同时提供时启用关键帧动画模式（首尾双锚定钳制风格漂移）
+        last_frame_data_url = self._encode_image(req.last_frame_image_path)
+        if req.last_frame_image_path and not last_frame_data_url:
+            print(f"  [镜头{req.clip_index}] 尾帧图 {req.last_frame_image_path} 读取失败，"
+                  f"降级为 image-to-video")
 
         # 计算尺寸与帧数：优先使用 req.size，否则回退到 config
         if req.size:
@@ -203,8 +220,11 @@ class AgnesVideoService(VideoGenerationService):
 
         while True:
             model = self._current_model
+            # 冷却调度：取最早可用的 key（阻塞直到有 key 出冷却）
+            key_idx = self._key_scheduler.acquire()
+            self._current_key_index = key_idx
             headers = {
-                "Authorization": f"Bearer {self._current_api_key}",
+                "Authorization": f"Bearer {self._api_keys[key_idx]}",
                 "Content-Type": "application/json",
             }
             payload: dict = {
@@ -216,7 +236,21 @@ class AgnesVideoService(VideoGenerationService):
             }
             if num_frames > 0:
                 payload["num_frames"] = num_frames
-            if image_data_url:
+            if req.negative_prompt:
+                payload["negative_prompt"] = req.negative_prompt
+            if req.seed is not None:
+                payload["seed"] = req.seed
+            if req.num_inference_steps is not None:
+                payload["num_inference_steps"] = req.num_inference_steps
+            if image_data_url and last_frame_data_url:
+                # 关键帧动画模式（API: extra_body.image 数组 + mode=keyframes）
+                # 首尾双关键帧钳制画风：修复视频中途从动漫漂移成真人写实的问题
+                payload["extra_body"] = {
+                    "image": [image_data_url, last_frame_data_url],
+                    "mode": "keyframes",
+                }
+                print(f"  [镜头{req.clip_index}] 关键帧模式: 首帧+尾帧双锚定")
+            elif image_data_url:
                 payload[config.AGNES_VIDEO_IMAGE_FIELD] = image_data_url
                 # 日志含 b64 长度，便于排查 padding 相关错误
                 b64_body = image_data_url.split(",", 1)[-1]
@@ -262,9 +296,16 @@ class AgnesVideoService(VideoGenerationService):
                     raise RuntimeError(
                         f"Agnes 未返回 video_id: {str(data)[:300]}"
                     )
-                mode_tag = "image-to-video" if image_data_url else "text-to-video"
+                # 绑定任务与提交 key：后续查询必须用同一 key
+                self._task_keys[video_id] = key_idx
+                if image_data_url and last_frame_data_url:
+                    mode_tag = "keyframes"
+                elif image_data_url:
+                    mode_tag = "image-to-video"
+                else:
+                    mode_tag = "text-to-video"
                 print(f"  [镜头{req.clip_index}] 任务已创建 [{model}] ({mode_tag}) "
-                      f"-> video_id: {video_id}")
+                      f"[Key {key_idx + 1}] -> video_id: {video_id}")
                 return video_id
 
             # ---- 5xx: 服务端暂时不可用，等待后重试 ----
@@ -281,40 +322,29 @@ class AgnesVideoService(VideoGenerationService):
                     f"{res.text[:500]}"
                 )
 
-            # ---- 401/402: 认证失败或支付问题，切换 API Key 后重试 ----
+            # ---- 401/402: 认证失败或欠费，拉黑该 Key 并调度下一个 ----
             if res.status_code in (401, 402):
-                _submit_retry += 1
-                if _submit_retry <= config.AGNES_VIDEO_SUBMIT_RETRIES:
-                    # 尝试切换到下一个 API Key
-                    if self._advance_key():
-                        print(f"  [镜头{req.clip_index}] HTTP {res.status_code}，"
-                              f"切换到 API Key {self._current_key_index + 1}/{len(self._api_keys)} 并重试")
-                    else:
-                        # 所有 key 都用过了，抛出异常
-                        raise RuntimeError(
-                            f"Agnes API Key 无效/过期 [HTTP {res.status_code}]，"
-                            f"所有 Key 均已尝试: {res.text[:300]}"
-                        )
+                self._key_scheduler.disable(key_idx)
+                if self._key_scheduler.n_active() > 0:
+                    print(f"  [镜头{req.clip_index}] HTTP {res.status_code}，"
+                          f"Key {key_idx + 1} 已拉黑，调度下一个可用 Key")
                     continue
                 raise RuntimeError(
-                    f"Agnes 认证失败 [HTTP {res.status_code}] (重试{_submit_retry}次): "
-                    f"{res.text[:500]}"
+                    f"Agnes API Key 全部无效/欠费 [HTTP {res.status_code}]: "
+                    f"{res.text[:300]}"
                 )
 
-            # ---- 429: 速率限制，切换 API Key 后重试 ----
+            # ---- 429: 速率限制，按服务端剩余时间冷却该 Key，调度下一个 ----
             if res.status_code == 429:
                 _submit_retry += 1
                 if _submit_retry <= config.AGNES_VIDEO_SUBMIT_RETRIES:
-                    # 尝试切换到下一个 API Key
-                    if self._advance_key():
-                        print(f"  [镜头{req.clip_index}] 速率限制 429，"
-                              f"切换到 API Key {self._current_key_index + 1}/{len(self._api_keys)} 并重试")
-                    else:
-                        # 所有 key 都用过了，等待后重试
-                        delay = config.AGNES_VIDEO_SUBMIT_RETRY_DELAY + 30
-                        print(f"  [镜头{req.clip_index}] 速率限制 429，所有 Key 已用完，"
-                              f"等待 {delay}s 后重试 ({_submit_retry}/{config.AGNES_VIDEO_SUBMIT_RETRIES})")
-                        time.sleep(delay)
+                    wait = parse_retry_after(res.text)
+                    cool = (wait + 0.5) if wait is not None \
+                        else self._key_scheduler._cooldown
+                    self._key_scheduler.penalize(key_idx, cool)
+                    print(f"  [镜头{req.clip_index}] 速率限制 429，Key {key_idx + 1} "
+                          f"冷却 {cool:.1f}s，调度下一个可用 Key "
+                          f"({_submit_retry}/{config.AGNES_VIDEO_SUBMIT_RETRIES})")
                     continue
                 raise RuntimeError(
                     f"Agnes 视频速率限制 [429] (重试{_submit_retry}次): "
@@ -354,10 +384,12 @@ class AgnesVideoService(VideoGenerationService):
     # 查询任务
     # ------------------------------------------------------------------
     def query_task(self, task_id: str) -> dict:
+        # 必须用提交该任务时的 key 查询（任务归属提交账号，跨 key 查不到）
+        bound_key = self._api_keys[self._task_keys.get(task_id, self._current_key_index)]
         try:
             res = requests.get(
                 self._query_url(task_id),
-                headers={"Authorization": f"Bearer {self._current_api_key}"},
+                headers={"Authorization": f"Bearer {bound_key}"},
                 timeout=120,
             )
         except Exception as e:
@@ -379,6 +411,8 @@ class AgnesVideoService(VideoGenerationService):
             return self._download(req, task_id[len(_SYNC_PREFIX):])
 
         attempt = 0
+        # 下次查询前的等待时间；429 时改为服务端返回的剩余时间 + 0.5s
+        next_wait = config.AGNES_VIDEO_POLL_INTERVAL
         while True:
             attempt += 1
             if attempt > config.AGNES_VIDEO_MAX_POLL_ATTEMPTS:
@@ -388,8 +422,21 @@ class AgnesVideoService(VideoGenerationService):
                     error=f"轮询超时 ({config.AGNES_VIDEO_MAX_POLL_ATTEMPTS} 次)",
                 )
 
-            time.sleep(config.AGNES_VIDEO_POLL_INTERVAL)
-            output = self.query_task(task_id)
+            time.sleep(next_wait)
+            next_wait = config.AGNES_VIDEO_POLL_INTERVAL
+            try:
+                output = self.query_task(task_id)
+            except RuntimeError as e:
+                err = str(e)
+                # 429 限流: 不中断轮询循环，按服务端提示的剩余时间精确等待后继续
+                if "[429]" in err:
+                    wait = parse_retry_after(err)
+                    next_wait = (wait + 0.5) if wait is not None \
+                        else config.AGNES_VIDEO_POLL_INTERVAL * 2
+                    print(f"  [镜头{req.clip_index}] 查询限流 429，"
+                          f"等待 {next_wait:.1f}s 后继续轮询")
+                    continue
+                raise
             status = self._extract_status(output)
 
             if status in ("SUCCEEDED", "SUCCESS", "COMPLETED", "DONE", "COMPLETE"):
