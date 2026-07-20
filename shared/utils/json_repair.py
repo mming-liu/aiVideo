@@ -126,7 +126,18 @@ def safe_parse_json_array(text: str, fallback_key: Optional[str] = None) -> list
 
 
 def _fix_common_json_errors(text: str) -> str:
-    """修复常见 JSON 格式问题（单引号转双引号）。"""
+    """修复常见 JSON 格式问题（单引号转双引号、中文引号/逗号处理）。"""
+    import re
+    # 处理中文引号「」『』——完全移除（这些在JSON字符串中不应出现）
+    text = text.replace("「", '"').replace("」", '"').replace("『", '"').replace("』", '"')
+    # 处理中文弯引号 "" —— 替换为双引号 "
+    text = text.replace(""", '"').replace(""", '"')
+    # 处理中文逗号，替换为英文逗号（全局替换）
+    text = text.replace('，', ',')
+    # 处理中文冒号，替换为英文冒号
+    text = text.replace('：', ':')
+    # 处理中文方括号，替换为英文方括号
+    text = text.replace('【', '[').replace('】', ']')
     result = []
     i = 0
     in_single = False

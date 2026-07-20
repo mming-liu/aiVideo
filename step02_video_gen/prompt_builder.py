@@ -87,11 +87,9 @@ def _build_prompt(shot: dict, script: dict) -> str:
     if not is_character_shot:
         parts.append("空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。")
 
-    # 4.5 风格收束（放在末尾对抗长 prompt 注意力衰减——
-    # 风格漂移多发于镜头后半段：开头动漫、中途突变真人写实）
+    # 4.5 风格收束（放在末尾对抗长 prompt 注意力衰减——风格漂移多发于镜头后半段）必须明确：写实古风真人，禁止任何动画风格
     parts.append(
-        "整段视频每一帧都保持同一2D国风动画画风，首尾画风完全一致，"
-        "禁止中途转为真人实拍、写实或3D渲染画面。"
+        "整段视频每一帧都保持写实古风真人风格，首尾画风完全一致，禁止中途转为动漫、动画、2D渲染、卡通脸或任何非写实风格。"
     )
 
     prompt = "\n".join(parts)
@@ -120,6 +118,8 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, aud
     # 静音人声模式下，负面提示词同步追加人声类条目（双保险）
     negative = NEGATIVE_PROMPT if _MODEL_VOICE \
         else NEGATIVE_PROMPT + "、人声、旁白配音、对话语音、歌声"
+    # 物理逻辑约束：防止违反常识的场景（车马上船、水上行走等）
+    negative += "、车马在水中行驶、马车在水上跑、人在水上走、物体违反重力"
     image_path = None
     last_frame_image_path = None
 

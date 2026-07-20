@@ -343,10 +343,24 @@ def _build_reference_list(
     """
     refs: list[str] = []
 
-    # 空镜：text-to-image，避免参考图中的人物（往往是主角）渗入画面
+    # 空镜：不注入角色肖像（人物会渗入画面），但传入背景参考（风格锚点/
+    # 摄像机首帧），确保场景一致性而非纯 text-to-image 无约束生成。
     if is_empty_scene(shot, characters_data):
-        print(f"  [bridge] 镜头{shot['index']}: 空镜，不注入参考图")
-        return refs
+        # 优先使用摄像机首帧锚定（同摄像机的已生成帧，场景一致）
+        if not is_first_in_cam and cam_idx in camera_first_frames:
+            anchor = camera_first_frames[cam_idx]
+            if anchor and Path(anchor).exists():
+                refs.append(anchor)
+                print(f"  [bridge] 镜头{shot['index']}: 空镜，参考图=摄像机{cam_idx}首帧锚定（背景）")
+        # 回退到风格锚点（Ch1 锁定的全局风格）
+        if not refs and style_bank.is_locked():
+            style_anchor = style_bank.get_anchor_path()
+            if style_anchor and Path(style_anchor).exists():
+                refs.append(style_anchor)
+                print(f"  [bridge] 镜头{shot['index']}: 空镜，参考图=风格锚点（背景）")
+        if not refs:
+            print(f"  [bridge] 镜头{shot['index']}: 空镜，无可用背景参考图，降级为 text-to-image")
+        return refs[:1]
 
     # 非首镜头：引用本摄像机首帧作为锚定
     if not is_first_in_cam and cam_idx in camera_first_frames:
@@ -616,26 +630,37 @@ def _validate_frame(path: str, min_kb: float = 5) -> bool:
 
 def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
                             reference_paths: list | None = None) -> str:
-    """计算首帧/尾帧的稳定哈希值。
+    """计算首帧/尾帧的稳定哈希值 v3.
 
-    只依赖核心意图字段，忽略 ff_desc/lf_desc（具有随机性）。
-    这样只要分镜的核心内容不变，首帧/尾帧就不会重新生成。
+    使用稳定字段（main_subject/scene/core_keywords）代替完整 prompt，
+    避免 LLM 生成的 prompt 文本有微小差异（换行/空格/词汇顺序）导致
+    哈希永远不匹配，缓存永远失效的问题。
 
-    empty_scene / reference_paths 参与哈希：空镜约束改变生成 prompt、
-    参考图决定图生图底图，二者变化时帧必须重做。均为条件追加——
-    默认情形（非空镜、无参考图）哈希值与旧算法一致，避免哈希算法
-    升级导致已有干净缓存整体失效。
+    v3: 移除 reference_paths——build_working_dir 和 gen_shot_frames 两次
+    调用传入的参考图路径可能不同，导致哈希永不一致、帧被反复重生成、
+    永远进不到视频提交阶段。参考图路径本身由 shot 内容派生，内容不变
+    则路径语义不变。
     """
-    key_parts = [
-        STYLE_PREFIX,                    # 风格前缀变化时首帧也应重新生成
-        shot.get("prompt", ""),          # 视频生成总 prompt，画面的基调
-        shot.get("motion_desc", ""),     # 动作描述，决定画面动态
-        shot.get("main_subject", ""),    # 主体，确保主角不变
+    # 使用稳定字段而非完整 prompt
+    stable_fields = [
+        shot.get("main_subject", ""),      # 主体最稳定
+        shot.get("scene", ""),              # 场景地点
     ]
+    # core_keywords 是列表，转为字符串
+    keywords = shot.get("core_keywords", [])
+    if isinstance(keywords, list):
+        keywords_str = ",".join(sorted(keywords))
+    else:
+        keywords_str = str(keywords) if keywords else ""
+    stable_fields.append(keywords_str)
+
+    key_parts = [
+        STYLE_PREFIX,                      # 风格前缀变化时首帧也应重新生成
+    ]
+    key_parts.extend(stable_fields)
+
     if empty_scene:
-        key_parts.append("empty_scene")  # 空镜判定翻转时帧应重做
-    if reference_paths:
-        key_parts.extend(str(p) for p in reference_paths)  # 参考图变化时帧应重做
+        key_parts.append("empty_scene")    # 空镜判定翻转时帧应重做
     key = "|".join(key_parts)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 

@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 aiVideo 是一个 AI 驱动的短视频生成流水线，将中文小说文本转换为约 60 秒的抖音竖屏视频（古风权谋卧底风格）。整个流水线分为 4 个阶段，按顺序执行。
 
+**⚠️ 编码规范：所有项目文件统一使用 UTF-8 编码，禁止使用 GBK 或其他编码。编辑文件时确保保存为 UTF-8。**
+
 ## 常用命令
 
 ### 安装依赖

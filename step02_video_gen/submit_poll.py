@@ -73,6 +73,8 @@ def _is_recoverable(err: str) -> bool:
     err_lower = err.lower()
     terminal_markers = [
         "content_policy", "5185bb98fdd",
+        "datainspectionfailed",  # 图片内容违规
+        "green net check failed",  # 绿网检查失败
         "401", "unauthorized", "invalid api key",
         "403", "forbidden",
         "invalid_param", "invalid parameter",
@@ -116,10 +118,40 @@ async def _poll_video(
                 result = await video_adapter.fetch_result(req, task_id)
                 if result.success and result.save_path:
                     shot_dir.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(result.save_path, str(video_path))
+
+                    # 视频已下载成功；copy 失败只重试 copy，绝不重新轮询（否则会重复下载）
+                    copy_ok = False
+                    for copy_attempt in range(10):
+                        try:
+                            shutil.copy2(result.save_path, str(video_path))
+                            copy_ok = True
+                            break
+                        except OSError as copy_err:
+                            if "WinError 32" in str(copy_err) and copy_attempt < 9:
+                                wait = 1.0 + copy_attempt  # 递增等待 1s~10s
+                                print(f"  [Shot {shot_idx}] File locked, retrying copy in {wait:.0f}s ({copy_attempt + 1}/10)...")
+                                await asyncio.sleep(wait)
+                            else:
+                                print(f"  [Shot {shot_idx}] Copy failed after {copy_attempt} retries: {copy_err}")
+                                break
+
+                    if not copy_ok:
+                        _failed_videos[shot_idx].append({"attempt": -1, "error": "文件被占用，copy 失败", "task_id": task_id})
+                        return False
+
                     # 写入哈希，供下次运行的缓存检测使用（与 _get_shot_hash 同一算法）
                     if shot_hash:
                         (shot_dir / "prompt_hash.txt").write_text(shot_hash, encoding="utf-8")
+
+                    # 同步复制到 clips/ 目录（step04 合并用；缓存检测用）
+                    from shared.paths import clips_dir as _clips_dir
+                    clips_d = _clips_dir()
+                    clips_d.mkdir(parents=True, exist_ok=True)
+                    try:
+                        shutil.copy2(str(video_path), str(clips_d / f"clip_{shot_idx}.mp4"))
+                    except OSError:
+                        pass  # clips 目录失败不影响主流程
+
                     return True
                 else:
                     err = result.error or "unknown"
@@ -161,39 +193,16 @@ async def _poll_video(
                 return False
 
 
-async def _process_one_shot(
-    shot: dict, shots_dir: Path, image_adapter, video_adapter,
-    script_mtime: float | None, force_first_frame: bool,
-    script: dict, audio_duration: float,
-    poll_semaphore: asyncio.Semaphore,
+async def _submit_video(
+    shot: dict, shot_dir: Path, video_path: Path, frame_paths: list,
+    shot_hash: str, video_adapter, poll_semaphore,
+    audio_duration: float, script: dict, idx: int,
 ) -> asyncio.Task | None:
-    """Process single shot: frame gen -> submit video -> return poll task."""
-    idx = shot["index"]
-    shot_dir = shots_dir / str(idx)
-    video_path = shot_dir / "video.mp4"
-
-    # Cache check: prompt_hash.txt (由 _poll_video 在视频成功保存后写入)
-    # force_first_frame（SCRIPT_FIRST_FRAME_FORCE=1）时跳过缓存，强制重新生成
-    shot_hash = _get_shot_hash(shot, script)
-    if not force_first_frame and video_path.exists() and video_path.stat().st_size > 20 * 1024:
-        hash_path = shot_dir / "prompt_hash.txt"
-        if hash_path.exists():
-            old_hash = hash_path.read_text(encoding="utf-8").strip()
-            if old_hash == shot_hash:
-                print(f"  [Shot {idx}] Cache hit, skip (prompt unchanged)")
-                return None
-
-    # Frame gen
-    characters = script.get("characters", [])
-    frames = await gen_shot_frames(shot, shots_dir, image_adapter, script_mtime,
-                                   force=force_first_frame, characters=characters)
-    frame_paths = [p for p in [frames.get("ff_path"), frames.get("lf_path")] if p]
-
+    """提交视频任务并返回轮询 task."""
     from step02_video_gen.prompt_builder import _build_prompt, _make_request
 
-    # 提交限速由 provider 内的 KeyScheduler（每 key 独立冷却）负责，
-    # 此处不再做全局提交间隔
     prompt = _build_prompt(shot, script)
+    characters = script.get("characters", [])
 
     for attempt in range(1, 4):
         try:
@@ -233,7 +242,58 @@ async def _process_one_shot(
     return None
 
 
-# 已移除 _SubmitInterval 全局提交间隔：
+async def _process_one_shot(
+    shot: dict, shots_dir: Path, image_adapter, video_adapter,
+    script_mtime: float | None, force_first_frame: bool,
+    script: dict, audio_duration: float,
+    poll_semaphore: asyncio.Semaphore,
+) -> asyncio.Task | None:
+    """Process single shot: frame gen -> submit video -> return poll task."""
+    idx = shot["index"]
+    shot_dir = shots_dir / str(idx)
+    video_path = shot_dir / "video.mp4"
+
+    # Cache check: prompt_hash.txt + clips 目录双重验证
+    # prompt 没变 *且* clips/clip_{idx}.mp4 也存在 → 跳过；否则重新生成
+    # 这样只需清空 clips 目录就能触发部分/全部视频重新生成
+    # force_first_frame（SCRIPT_FIRST_FRAME_FORCE=1）时跳过缓存，强制重新生成
+    shot_hash = _get_shot_hash(shot, script)
+    if not force_first_frame and video_path.exists() and video_path.stat().st_size > 20 * 1024:
+        hash_path = shot_dir / "prompt_hash.txt"
+        if hash_path.exists():
+            old_hash = hash_path.read_text(encoding="utf-8").strip()
+            if old_hash == shot_hash:
+                # 双重验证：clips/ 目录不存在或缺少对应文件 → 重新生成
+                # 删掉整个 clips 目录 = 触发全部视频重新生成
+                from shared.paths import clips_dir as _clips_dir
+                clips_d = _clips_dir()
+                clip_file = clips_d / f"clip_{idx}.mp4"
+                if clip_file.exists() and clip_file.stat().st_size > 20 * 1024:
+                    print(f"  [Shot {idx}] Cache hit, skip (prompt unchanged + clip exists)")
+                    return None
+                else:
+                    # 帧文件已存在，跳过帧生成直接提视频
+                    print(f"  [Shot {idx}] Clip missing, re-generate video only (skip frames)")
+                    ff = shot_dir / "first_frame.png"
+                    lf = shot_dir / "last_frame.png"
+                    frame_paths = [str(p) for p in [ff, lf] if p.exists()]
+                    return await _submit_video(
+                        shot, shot_dir, video_path, frame_paths, shot_hash,
+                        video_adapter, poll_semaphore, audio_duration, script, idx,
+                    )
+
+    # Frame gen + submit
+    characters = script.get("characters", [])
+    frames = await gen_shot_frames(shot, shots_dir, image_adapter, script_mtime,
+                                   force=force_first_frame, characters=characters)
+    frame_paths = [p for p in [frames.get("ff_path"), frames.get("lf_path")] if p]
+
+    from step02_video_gen.prompt_builder import _build_prompt, _make_request
+
+    return await _submit_video(
+        shot, shot_dir, video_path, frame_paths, shot_hash,
+        video_adapter, poll_semaphore, audio_duration, script, idx,
+    )
 # 提交限速由 _video_gen provider 内的 KeyScheduler 负责（每 key 独立 61s 冷却，
 # 8 key 轮询并行——全局间隔会把多 key 产能压成单 key 水平）。
 
@@ -248,9 +308,9 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     image_adapter = ImageGeneratorAiVideoAdapter()
     video_adapter = VideoGeneratorAiVideoAdapter()
 
-    # 1. Working dir setup (skip frames)
+    # 1. Working dir setup (frames controlled by force_first_frame)
     await build_working_dir(script_file, working_dir, image_adapter,
-                            force_first_frame=force_first_frame, skip_frames=True)
+                            force_first_frame=force_first_frame, skip_frames=False)
 
     shots = script.get("shots", [])
     shots_dir = working_dir / "shots"
@@ -273,15 +333,27 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     actual_concurrency = min(len(shots), VIDEO_CONCURRENCY)
     poll_semaphore = asyncio.Semaphore(actual_concurrency)
 
-    # 3. Concurrent shot processing
+    # 3. Build task list: hook + shots all in one gather (parallel)
+    hook = script.get("hook")
+    if hook and isinstance(hook, dict) and hook.get("prompt"):
+        print(f"\n[INFO] ===== 钩子视频 (index=0, 与正片并行) =====")
+        hook["index"] = 0
+        hook_audio_dur = _gen_shot_audio_duration(hook, audio_dir, provider=tts_provider)
+        hook["actual_audio_duration"] = round(hook_audio_dur, 2)
+        shot_audio_durations[0] = hook_audio_dur
+    else:
+        hook = None
+
+    # 钩子 + 正片一并并行
+    all_specs = ([hook] if hook else []) + shots
     shot_tasks = [
         _process_one_shot(
-            shot, shots_dir, image_adapter, video_adapter,
+            spec, shots_dir, image_adapter, video_adapter,
             script_mtime, force_first_frame, script,
-            audio_duration=shot_audio_durations.get(shot["index"], 0),
+            audio_duration=shot_audio_durations.get(spec.get("index", 0), 0),
             poll_semaphore=poll_semaphore,
         )
-        for shot in shots
+        for spec in all_specs
     ]
     poll_tasks = await asyncio.gather(*shot_tasks)
     poll_tasks = [t for t in poll_tasks if t is not None]
@@ -289,18 +361,32 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     if not poll_tasks:
         return 0
 
-    # 4. Wait all polls
+    # 4. Wait all polls (hook + shots)
     results = await asyncio.gather(*poll_tasks, return_exceptions=True)
 
-    # Build result table
-    all_shot_ids = [s["index"] for s in shots]
-    total = len(all_shot_ids)
-    success_count = total - len(_failed_videos)
+    # Save hook audio duration back
+    if hook:
+        script["hook"] = hook
 
+    # Build result table
     print()
     print("=" * 70)
     print("  shot    status  reason / task_id")
     print("=" * 70)
+    # Hook first
+    if hook:
+        if 0 in _failed_videos:
+            errs = _failed_videos[0]
+            err = _fmt_err(errs[0].get("error", "unknown"))
+            tid = errs[0].get("task_id", "")
+            reason = f"{err} | {tid}" if tid else err
+            print(f"  {'hook':>5}  FAIL    {reason}")
+        else:
+            hook_video = shots_dir / "0" / "video.mp4"
+            if hook_video.exists() and hook_video.stat().st_size > 20 * 1024:
+                print(f"  {'hook':>5}  OK      -")
+            else:
+                print(f"  {'hook':>5}  SKIP    (not generated)")
     for s in shots:
         sid = s["index"]
         if sid in _failed_videos:
@@ -314,7 +400,10 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
         else:
             print(f"  {sid:>5}  OK      -")
     print("=" * 70)
-    print(f"  total: {total} shots | OK: {success_count} | FAIL: {len(_failed_videos)}")
+    total_shots = len(shots) + (1 if hook else 0)
+    failed_count = len(_failed_videos)
+    ok_count = total_shots - failed_count
+    print(f"  total: {total_shots} shots (incl. hook) | OK: {ok_count} | FAIL: {failed_count}")
     print()
 
     # 5. Save

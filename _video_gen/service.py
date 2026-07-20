@@ -74,6 +74,13 @@ def _auto_register() -> None:
     except ImportError:
         pass
 
+    # Bailian 百炼 (wan2.7 图生视频 + 文生视频)
+    try:
+        from . import bailian_provider as _bl
+        register("bailian", _bl.BailianVideoService)
+    except ImportError:
+        pass
+
     # OpenAI Sora / 第三方兼容 (待后续扩展)
     # try:
     #     from . import openai_provider as _oa

@@ -220,27 +220,33 @@ class AgnesImageService(ImageGenerationService):
                                   f"[{res.status_code}]: {res.text[:300]}")
                     break
 
-                # ---- 408/499/502/503/504/520/522/524: 临时错误，等待后重试 ----
+                # ---- 408/499/502/503/504/520/522/524: 临时错误，立即切换key ----
                 if res.status_code in (408, 499, 502, 503, 504, 520, 522, 524):
-                    _submit_retry += 1
-                    if _submit_retry <= config.AGNES_IMAGE_SUBMIT_RETRIES:
-                        print(f"  [镜头{req.shot_index}] 临时错误 {res.status_code}，"
-                              f"{config.AGNES_IMAGE_SUBMIT_RETRY_DELAY}s 后重试 "
-                              f"({_submit_retry}/{config.AGNES_IMAGE_SUBMIT_RETRIES})")
-                        time.sleep(config.AGNES_IMAGE_SUBMIT_RETRY_DELAY)
-                        continue
-                    last_error = f"Agnes 图片失败 [{res.status_code}] (重试{_submit_retry}次): {res.text[:300]}"
-                    idx = len(self._model_queue)
-                    break
+                    print(f"  [镜头{req.shot_index}] 临时错误 {res.status_code}，立即切换key重试")
+                    self._key_scheduler.penalize(key_idx, 5)  # 短冷却5秒
+                    if self._key_scheduler.n_active() > 0:
+                        key_idx = self._key_scheduler.acquire()
+                        self._current_key_index = key_idx
+                        continue  # 立即用新key重试
+                    # 没有其他key，等3秒后本key重试
+                    time.sleep(3)
+                    continue
 
-                # ---- 5xx: 服务端暂时不可用，等待后重试 ----
+                # ---- 5xx: 服务端错误，立即切换key ----
                 if 500 <= res.status_code < 600:
-                    _submit_retry += 1
-                    if _submit_retry <= config.AGNES_IMAGE_SUBMIT_RETRIES:
-                        print(f"  [镜头{req.shot_index}] 服务端 {res.status_code}，"
-                              f"{config.AGNES_IMAGE_SUBMIT_RETRY_DELAY}s 后重试 "
-                              f"({_submit_retry}/{config.AGNES_IMAGE_SUBMIT_RETRIES})")
-                        time.sleep(config.AGNES_IMAGE_SUBMIT_RETRY_DELAY)
+                    print(f"  [镜头{req.shot_index}] 服务端 {res.status_code}，立即切换key重试")
+                    self._key_scheduler.penalize(key_idx, 5)
+                    if self._key_scheduler.n_active() > 0:
+                        key_idx = self._key_scheduler.acquire()
+                        self._current_key_index = key_idx
+                        continue
+                    time.sleep(3)
+                    continue
+                    self._key_scheduler.penalize(key_idx, config.AGNES_IMAGE_SUBMIT_RETRY_DELAY)
+                    if self._key_scheduler.n_active() > 0:
+                        key_idx = self._key_scheduler.acquire()
+                        self._current_key_index = key_idx
+                        _submit_retry = 0
                         continue
                     last_error = f"Agnes 图片失败 [{res.status_code}] (重试{_submit_retry}次): {res.text[:300]}"
                     idx = len(self._model_queue)

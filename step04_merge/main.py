@@ -88,10 +88,29 @@ def main():
 
     print(f"[INFO] Loaded {len(shots)} shots")
 
+    # 1.5. Check for hook video
+    hook_clip = None
+    hook = script.get("hook")
+    if hook and isinstance(hook, dict):
+        hook_clip_path = CLIP_DIR / "0" / "video.mp4"
+        if hook_clip_path.exists() and hook_clip_path.stat().st_size > 20 * 1024:
+            hook_clip = hook_clip_path
+            print(f"[INFO] Hook video found: {hook_clip_path}")
+        else:
+            print(f"[INFO] Hook video not found (skipping)")
+
     # 2. Collect video clips
     clips = []
     valid_shots = []
     missing_idxs = []
+
+    # Hook goes first
+    if hook_clip:
+        clips.append(hook_clip)
+        # Create a pseudo-shot for the hook so that SRT/subtitle handling works
+        hook_shot = dict(hook)
+        hook_shot["index"] = 0
+        valid_shots.append(hook_shot)
 
     for shot in shots:
         idx = shot.get("index", 0)

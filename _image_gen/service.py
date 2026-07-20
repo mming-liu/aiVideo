@@ -50,6 +50,13 @@ def _auto_register() -> None:
     except ImportError:
         pass
 
+    # Bailian 百炼 (qwen-image 文生图)
+    try:
+        from . import bailian_provider as _bl
+        register("bailian", _bl.BailianImageService)
+    except ImportError:
+        pass
+
 
 def create_service(provider: Optional[str] = None) -> ImageGenerationService:
     """根据 provider 名称创建服务实例.

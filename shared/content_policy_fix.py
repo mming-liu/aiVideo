@@ -243,8 +243,9 @@ def auto_fix_prompt(prompt: str, error_text: str, verbose: bool = True) -> Optio
 
     if not suspected_words:
         if verbose:
-            print(f"  [422修复] 无法从错误信息提取敏感词")
-        return None
+            print(f"  [审核修复] 无法从错误信息提取敏感词，执行全量盲替换")
+        # 盲替换：把所有已知敏感词都替换掉（适用于 400/不指明敏感词的错误）
+        return _blind_replace_all(prompt, verbose=verbose)
 
     if verbose:
         print(f"  [422修复] 疑似敏感词: {suspected_words}")
@@ -274,6 +275,45 @@ def auto_fix_prompt(prompt: str, error_text: str, verbose: bool = True) -> Optio
 
     # 3. 返回修复后的 prompt（如果有变化）
     if fixed_prompt != prompt:
+        return fixed_prompt
+
+    return None
+
+
+def _blind_replace_all(prompt: str, verbose: bool = True) -> Optional[str]:
+    """盲替换：将所有已知敏感词按优先级全部替换（适用于 400/不指明敏感词的错误）.
+
+    按词长降序（长词优先），避免短词误伤长词的一部分。
+    """
+    fixed_prompt = prompt
+    replaced_count = 0
+
+    # 合并所有词库，按词长降序排列（"刺入" 在 "刺" 之前）
+    all_words = {}
+    all_words.update(_VIOLENT_WORDS)
+    all_words.update(_SEXUAL_WORDS)
+    all_words.update(_GORE_WORDS)
+    # 本地词库
+    local = _load_word_library()
+    for word, info in local.items():
+        if isinstance(info, dict) and info.get("substitute"):
+            all_words[word] = info["substitute"]
+        elif isinstance(info, str):
+            all_words[word] = info
+
+    sorted_words = sorted(all_words.keys(), key=lambda w: -len(w))
+
+    for word in sorted_words:
+        if word in fixed_prompt:
+            substitute = all_words[word]
+            fixed_prompt = fixed_prompt.replace(word, substitute)
+            replaced_count += 1
+            if verbose and replaced_count <= 5:
+                print(f"  [盲替换] '{word}' -> '{substitute}'")
+
+    if replaced_count > 0:
+        if verbose:
+            print(f"  [盲替换] 共替换 {replaced_count} 个敏感词")
         return fixed_prompt
 
     return None

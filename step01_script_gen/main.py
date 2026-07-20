@@ -16,31 +16,21 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-import os
+import json
 
 # 确保从项目根目录解析导入
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from dotenv import load_dotenv
-import json
-
-load_dotenv(_PROJECT_ROOT / ".env")
-# ============================================================================
-# 配置（从环境变量读取）
-# ============================================================================
-CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))
-BOOK_INDEX = int(os.getenv("BOOK_INDEX", "1"))
-CHARACTER_EXTRACTION_ENABLED = os.getenv("CHARACTER_EXTRACTION_ENABLED", "1").strip() == "1"
-SHOT_COUNT_MIN = int(os.getenv("SHOT_COUNT_MIN", "4"))
-SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "20"))
-
-# v5.0: 合规模式
-COMPLIANCE_STRICT = os.getenv("COMPLIANCE_STRICT", "0").strip() == "1"
-COMPLIANCE_AUTO_FIX = os.getenv("COMPLIANCE_AUTO_FIX", "1").strip() == "1"
-
-# v6: 钩子分镜开关
-HOOK_ENABLED = os.getenv("HOOK_ENABLED", "1").strip() == "1"
+# 统一配置（从 shared.config 读取 .env）
+from shared.config import (
+    NOVEL_CHAPTER, BOOK_INDEX,
+    SHOT_COUNT_MIN, SHOT_COUNT_MAX,
+    CHARACTER_EXTRACTION_ENABLED,
+    COMPLIANCE_STRICT, COMPLIANCE_AUTO_FIX,
+    HOOK_ENABLED,
+    GAP_ANALYSIS_ENABLED, GAP_MAX_REGEN_ATTEMPTS,
+)
 
 # 输出目录基于 book/chapter 计算（统一路径来源: shared/paths.py）
 from shared.paths import chapter_dir, script_file
@@ -190,7 +180,7 @@ def main() -> None:
     CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
 
     # 读取章节
-    novel_text = read_chapter("锦衣夜行_77119小说.txt", chapter=CHAPTER_INDEX)
+    novel_text = read_chapter("锦衣夜行_77119小说.txt", chapter=NOVEL_CHAPTER)
     novel_preview = novel_text[:1000]
 
     # 加载角色库（v6.1 新增）
@@ -210,7 +200,7 @@ def main() -> None:
                         c["identifier"],
                         c.get("static_features", ""),
                         c.get("dynamic_features", ""),
-                        CHAPTER_INDEX,
+                        NOVEL_CHAPTER,
                     )
             # v6.1 优化：立即保存，确保即使脚本生成失败，角色库也已更新
             character_bank.save()
@@ -220,7 +210,7 @@ def main() -> None:
 
     # 检查缓存
     prompt_changed = _prompt_changed(
-        Path(__file__).parent / "prompts.py", SCRIPT_FILE, novel_preview, CHAPTER_INDEX
+        Path(__file__).parent / "prompts.py", SCRIPT_FILE, novel_preview, NOVEL_CHAPTER
     )
 
     if not prompt_changed:
@@ -229,7 +219,7 @@ def main() -> None:
             script = json.load(f)
         # 补写章节元信息（部名/章名，老缓存可能缺失）
         if not script.get("chapter_title"):
-            script.update(get_chapter_meta("锦衣夜行_77119小说.txt", CHAPTER_INDEX))
+            script.update(get_chapter_meta("锦衣夜行_77119小说.txt", NOVEL_CHAPTER))
         # 重新计算时间轴（使用增强算法）
         _compute_timecodes(script)
         with open(SCRIPT_FILE, "w", encoding="utf-8") as f:
@@ -258,16 +248,14 @@ def main() -> None:
 
     # ========== 差距分析（v5.0 新增）==========
     # 若差距过大，重新生成（最多2次）
-    GAP_ANALYSIS_ENABLED = os.getenv("GAP_ANALYSIS_ENABLED", "1").strip() == "1"
-    MAX_REGEN_ATTEMPTS = int(os.getenv("GAP_MAX_REGEN_ATTEMPTS", "2"))
 
     if GAP_ANALYSIS_ENABLED:
-        for attempt in range(MAX_REGEN_ATTEMPTS):
+        for attempt in range(GAP_MAX_REGEN_ATTEMPTS):
             # 快速校验
             validation = validate_script_gap(script, novel_text)
 
             if validation["overall_pass"]:
-                print(f"[GAP] 差距分析通过 (尝试 {attempt + 1}/{MAX_REGEN_ATTEMPTS})")
+                print(f"[GAP] 差距分析通过 (尝试 {attempt + 1}/{GAP_MAX_REGEN_ATTEMPTS})")
                 # 保存脚本并生成完整报告
                 partial_path = CHAPTER_DIR / "script_result.partial.json"
                 with open(partial_path, "w", encoding="utf-8") as _f:
@@ -275,7 +263,7 @@ def main() -> None:
                 report = generate_gap_report(
                     str(partial_path),
                     "锦衣夜行_77119小说.txt",
-                    CHAPTER_INDEX
+                    NOVEL_CHAPTER
                 )
                 # 打印报告摘要
                 print_gap_report(report)
@@ -285,7 +273,7 @@ def main() -> None:
                 break
 
             # 发现问题，反馈给 LLM 重新生成
-            print(f"[GAP] 发现差距问题，重新生成 (尝试 {attempt + 1}/{MAX_REGEN_ATTEMPTS})...")
+            print(f"[GAP] 发现差距问题， 重新生成 (尝试 {attempt + 1}/{GAP_MAX_REGEN_ATTEMPTS})...")
 
             # 在 prompts.py 中获取差距分析上下文并追加到 prompt
             from step01_script_gen.prompts import _load_gap_analysis_context
@@ -345,11 +333,11 @@ def main() -> None:
     _compute_timecodes(script)
 
     # 章节元信息（部名/章名，来自小说标题行「第一部 杀青州 第NNN章 章名」）
-    script.update(get_chapter_meta("锦衣夜行_77119小说.txt", CHAPTER_INDEX))
+    script.update(get_chapter_meta("锦衣夜行_77119小说.txt", NOVEL_CHAPTER))
 
     # 写入 hash
     script["_source_hash"] = _hash_source(
-        str(Path(__file__).parent / "prompts.py"), novel_preview, CHAPTER_INDEX
+        str(Path(__file__).parent / "prompts.py"), novel_preview, NOVEL_CHAPTER
     )
 
     # 保存
