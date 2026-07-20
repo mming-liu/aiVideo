@@ -1,0 +1,1 @@
+- [Prompt hallucination fix](prompt-hallucination-fix.md) — 在 SYSTEM_PROMPT 中添加动作方向和多角色同框约束，防止 AI 视频生成幻觉
