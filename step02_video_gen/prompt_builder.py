@@ -122,14 +122,17 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, aud
     negative += "、车马在水中行驶、马车在水上跑、人在水上走、物体违反重力"
     image_path = None
     last_frame_image_path = None
+    extra_keyframe_paths = []
 
-    # 第一个是首帧，第二个是尾帧
+    # 第一个是首帧，第二个是尾帧，第三个及以后是多关键帧
     for i, fp in enumerate((frame_paths or [])):
         if fp and Path(fp).exists():
             if i == 0:
                 image_path = fp
             elif i == 1:
                 last_frame_image_path = fp
+            elif i >= 2:
+                extra_keyframe_paths.append(fp)
 
     # 如果没有首帧，尝试备用参考图（仅限镜头里实际出现的角色，空镜绝不注入肖像）
     if not image_path:
@@ -139,6 +142,14 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, aud
     # 使用音频实际时长替代 LLM 预估的 duration，保证音画对齐
     duration = max(round(audio_duration), 3) if audio_duration > 0 else shot.get("duration", 5)
 
+    # 多关键帧优先：3+ 帧时使用多关键帧模式，2帧时使用首尾双锚定
+    if extra_keyframe_paths:
+        extra_keyframe_paths = extra_keyframe_paths  # 使用多关键帧
+    elif image_path and last_frame_image_path:
+        extra_keyframe_paths = []  # 使用首尾双锚定
+    else:
+        extra_keyframe_paths = []
+
     return VideoGenerationRequest(
         prompt=full_prompt,
         clip_index=shot["index"],
@@ -147,6 +158,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, aud
         size="720x1280",
         image_path=image_path,
         last_frame_image_path=last_frame_image_path,
+        extra_keyframe_paths=extra_keyframe_paths,
     )
 
 

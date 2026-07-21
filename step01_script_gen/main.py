@@ -44,7 +44,10 @@ SCRIPT_FILE = OUTPUT_FILE
 from shared.chapter_reader import extract_section, get_chapter_meta
 from _text_gen import create_service, TextGenerationRequest
 from shared.character_bank import CharacterBank
-from step01_script_gen.prompts import build_prompt, SYSTEM_PROMPT, build_hook_prompt, parse_hook_response
+from step01_script_gen.prompts import (
+    build_prompt, SYSTEM_PROMPT, build_hook_prompt, parse_hook_response,
+    _load_gap_analysis_context,
+)
 from step01_script_gen.character_extractor import extract_characters
 from step01_script_gen.validation import parse_response
 from step01_script_gen.timecode import _compute_timecodes
@@ -275,8 +278,7 @@ def main() -> None:
             # 发现问题，反馈给 LLM 重新生成
             print(f"[GAP] 发现差距问题， 重新生成 (尝试 {attempt + 1}/{GAP_MAX_REGEN_ATTEMPTS})...")
 
-            # 在 prompts.py 中获取差距分析上下文并追加到 prompt
-            from step01_script_gen.prompts import _load_gap_analysis_context
+            # 获取差距分析上下文并追加到 prompt（函数已在模块级导入）
             gap_context = _load_gap_analysis_context(validation)
 
             # 追加差距反馈到 prompt，重新生成
@@ -322,12 +324,11 @@ def main() -> None:
     # 提取角色（跨章节一致性）
     if CHARACTER_EXTRACTION_ENABLED:
         print("[INFO] 提取角色信息...")
-        # 复用预提取的 character_bank，避免重复提取
+        # 复用预提取的 character_bank，角色库已在预提取阶段保存（第206行）
         chars = extract_characters(novel_text, character_bank)
         script["characters"] = chars
-        # 保存角色库到持久化文件
-        character_bank.save()
-        print(f"[INFO] 已保存 {len(chars)} 个角色到角色库")
+        # 注意：角色库已在预提取阶段保存，无需重复保存
+        print(f"[INFO] 已提取 {len(chars)} 个角色")
 
     # 计算时间轴（v5.0 运镜量化参数）
     _compute_timecodes(script)

@@ -126,6 +126,11 @@ class AgnesVideoService(VideoGenerationService):
         except Exception:
             return None
 
+    @staticmethod
+    def _encode_images(paths: list[str]) -> list[str]:
+        """编码多个图片路径为 data URL 列表."""
+        return [img for path in paths if (img := AgnesVideoService._encode_image(path))]
+
     # ------------------------------------------------------------------
     # num_frames 约束
     # ------------------------------------------------------------------
@@ -196,6 +201,14 @@ class AgnesVideoService(VideoGenerationService):
             print(f"  [镜头{req.clip_index}] 尾帧图 {req.last_frame_image_path} 读取失败，"
                   f"降级为 image-to-video")
 
+        # 多关键帧模式（extra_body.image 数组，3-4 帧完整动作序列）
+        extra_keyframes = []
+        if req.extra_keyframe_paths:
+            extra_keyframes = self._encode_images(req.extra_keyframe_paths)
+            if len(extra_keyframes) >= 2:
+                print(f"  [镜头{req.clip_index}] 多关键帧模式: {len(extra_keyframes)} 帧锚定 "
+                      f"(完整动作序列 A->B->C...)")
+
         # 计算尺寸与帧数：优先使用 req.size，否则回退到 config
         if req.size:
             # req.size 格式: "720x1280"
@@ -242,9 +255,14 @@ class AgnesVideoService(VideoGenerationService):
                 payload["seed"] = req.seed
             if req.num_inference_steps is not None:
                 payload["num_inference_steps"] = req.num_inference_steps
-            if image_data_url and last_frame_data_url:
-                # 关键帧动画模式（API: extra_body.image 数组 + mode=keyframes）
-                # 首尾双关键帧钳制画风：修复视频中途从动漫漂移成真人写实的问题
+            # 多关键帧模式（3-4 帧）优先于双关键帧模式
+            if extra_keyframes and len(extra_keyframes) >= 2:
+                payload["extra_body"] = {
+                    "image": extra_keyframes,
+                    "mode": "keyframes",
+                }
+            elif image_data_url and last_frame_data_url:
+                # 双关键帧模式（首尾双锚定）作为回退
                 payload["extra_body"] = {
                     "image": [image_data_url, last_frame_data_url],
                     "mode": "keyframes",

@@ -193,8 +193,11 @@ def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
     if overall_status == "pass":
         messages.append("✅ 分镜脚本质量优秀，符合蒙太奇拆分与角色一致性标准。")
 
+    # 返回完整结构（供 _load_gap_analysis_Context 使用）
     return {
         "status": overall_status,
+        "valid": overall_status == "pass",  # 兼容旧代码
+        "has_climax_coverage": has_climax_coverage,  # 新增：供差距反馈使用
         "total_shots": len(shots),
         "climax_shots": climax_shots_count,
         "messages": messages
@@ -298,14 +301,42 @@ def validate_script_gap(script: dict, novel_text: str) -> dict:
     Keyword coverage is handled by validation.py.
 
     Returns:
-        Validation result dict
+        Validation result dict with structure matching _load_gap_analysis_context expectations:
+        {
+            "low_coverage_shots": [],
+            "distribution": {
+                "status": str,  # "pass", "warning", "fail"
+                "has_climax_coverage": bool,
+                "valid": bool,
+                "messages": [str],
+            },
+            "overall_pass": bool,
+        }
     """
     dist = analyze_shot_distribution(script, novel_text)
 
+    # 将 analyze_shot_distribution 的输出转换为 _load_gap_analysis_context 期望的格式
+    status = dist.get("status", "pass")
+
+    # 检查高潮覆盖
+    has_climax_coverage = dist.get("climax_shots", 0) > 0
+
+    # 检查是否有失败或警告消息
+    has_messages = bool(dist.get("messages")) and any(
+        "⚠️" in m or "警告" in m for m in dist.get("messages", [])
+    )
+
     return {
         "low_coverage_shots": [],  # Handled by validation.py
-        "distribution": dist,
-        "overall_pass": dist["valid"],
+        "distribution": {
+            "status": status,
+            "has_climax_coverage": has_climax_coverage,
+            "valid": status == "pass",  # pass 状态表示通过
+            "messages": dist.get("messages", []),
+            "climax_shots": dist.get("climax_shots", 0),
+            "total_shots": dist.get("total_shots", 0),
+        },
+        "overall_pass": status == "pass" and not has_messages,
     }
 
 

@@ -281,7 +281,7 @@ async def _gen_frames_for_camera_group(
     chapter_idx: int,
     cam_groups: dict[int, list[dict]],
 ):
-    """单个摄像机组内所有镜头的首帧/尾帧生成（组内串行，组间并行）."""
+    """单个摄像机组内所有镜头的首帧/尾帧/中间关键帧生成（组内串行，组间并行）."""
     for i, shot in enumerate(cam_shots):
         is_first_in_cam = (i == 0)
         idx = shot["index"]
@@ -317,6 +317,15 @@ async def _gen_frames_for_camera_group(
         await _gen_last_frame_async(
             image_adapter, shots_dir, shot, force_first_frame, script_mtime,
             reference_paths=lf_refs,
+            empty_scene=is_empty_scene(shot, characters_data),
+        )
+
+        # -- 中间关键帧生成（多关键帧叙事模式）--
+        kf_refs = [str(ff_path)] if ff_path and ff_path.exists() else None
+        await _gen_keyframes_async(
+            image_adapter, shots_dir, shot, force_first_frame, script_mtime,
+            reference_paths=kf_refs,
+            max_retries=1,
             empty_scene=is_empty_scene(shot, characters_data),
         )
 
@@ -821,6 +830,113 @@ def _dump_json(path: Path, model) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+
+
+# ---------------------------------------------------------------------------
+# 中间关键帧生成（多关键帧叙事模式）
+# ---------------------------------------------------------------------------
+
+async def _gen_keyframes_async(
+    image_adapter, shots_dir: Path, shot: dict, force: bool,
+    script_mtime: float | None = None,
+    reference_paths: list | None = None,
+    max_retries: int = 1,
+    empty_scene: bool = False,
+) -> list[str]:
+    """为镜头生成中间关键帧图片（多关键帧叙事模式）。
+    
+    从 shot['keyframes'] 数组读取关键帧描述，生成对应的图片。
+    返回关键帧图片路径列表（不包括首帧和尾帧）。
+    
+    Args:
+        keyframes: 如 [{"desc": "...", "time_ratio": 0.3}, ...]
+    
+    Returns:
+        关键帧图片路径列表
+    """
+    import asyncio
+    from pathlib import Path as P
+    
+    idx = shot["index"]
+    shot_dir = shots_dir / str(idx)
+    shot_dir.mkdir(parents=True, exist_ok=True)
+    
+    keyframes_data = shot.get("keyframes", [])
+    if not keyframes_data:
+        return []
+    
+    # 过滤掉 time_ratio=0（首帧）和 time_ratio=1（尾帧），只生成中间帧
+    intermediate_kfs = [
+        kf for kf in keyframes_data 
+        if isinstance(kf, dict) and 0 < float(kf.get("time_ratio", 0)) < 1
+    ]
+    
+    if not intermediate_kfs:
+        return []
+    
+    kf_paths = []
+    for i, kf in enumerate(intermediate_kfs):
+        kf_desc = kf.get("desc", "").strip()
+        if not kf_desc:
+            continue
+        
+        time_ratio = float(kf.get("time_ratio", 0.5))
+        kf_path = shot_dir / f"keyframe_{i}.png"
+        kf_hash_path = shot_dir / f"keyframe_{i}_hash.txt"
+        
+        if empty_scene:
+            kf_desc = kf_desc + "\n空镜头， 画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
+        
+        # 复用首帧哈希逻辑：基于 shot 内容派生，内容不变则路径语义不变
+        current_hash = _get_frame_content_hash(shot, empty_scene, reference_paths) + f"_kf_{i}"
+        
+        for attempt in range(max_retries + 1):
+            if kf_path.exists() and not force and attempt == 0:
+                if kf_hash_path.exists():
+                    saved_hash = kf_hash_path.read_text(encoding="utf-8").strip()
+                    if saved_hash == current_hash and _validate_frame(str(kf_path)):
+                        kf_paths.append(str(kf_path))
+                        break
+                elif script_mtime is not None and kf_path.stat().st_mtime >= script_mtime:
+                    if _validate_frame(str(kf_path)):
+                        kf_paths.append(str(kf_path))
+                        break
+                elif script_mtime is None and _validate_frame(str(kf_path)):
+                    kf_paths.append(str(kf_path))
+                    break
+            
+            print(f"  [KEYFRAME] 生成 shot_{idx} keyframe_{i} (t={time_ratio:.1f})...")
+            kf_desc_full = sanitize_prompt(ensure_prefix(kf_desc, STYLE_PREFIX), verbose=False)
+            refs = reference_paths if reference_paths else []
+            
+            try:
+                img_out = await image_adapter.generate_single_image(
+                    prompt=kf_desc_full,
+                    reference_image_paths=refs,
+                    shot_index=idx,
+                )
+                if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
+                    img_out.data.save(str(kf_path))
+                elif hasattr(img_out, "save"):
+                    img_out.save(str(kf_path))
+            except Exception as e:
+                print(f"  [KEYFRAME] shot_{idx} keyframe_{i} 生成异常: {e}")
+                if attempt < max_retries:
+                    continue
+                break
+            
+            if _validate_frame(str(kf_path)):
+                kf_hash_path.write_text(current_hash, encoding="utf-8")
+                kf_paths.append(str(kf_path))
+                break
+            if attempt < max_retries:
+                print(f"  [KEYFRAME] shot_{idx} keyframe_{i} 第{attempt+1}次不达标，重试...")
+    
+    if kf_paths:
+        print(f"  [bridge] 镜头{idx}: 生成 {len(kf_paths)} 个中间关键帧")
+    
+    return kf_paths
+
 # ---------------------------------------------------------------------------
 # 单独镜头帧生成（供 submit_ poll. py 调用）
 # ---------------------------------------------------------------------------
@@ -833,13 +949,13 @@ async def gen_shot_frames(
     force: bool = False,
     characters: list | None = None,
 ) -> dict:
-    """为单个镜头生成/检查首帧和尾帧。
+    """为单个镜头生成/检查首帧、尾帧和中间关键帧。
 
     用于 submit_poll.py 中 skip_frames=False 时的逐镜帧生成。
     characters: script['characters']，用于空镜检测（空镜首帧禁止人物）。
 
     Returns:
-        dict: {"ff_path": str | None, "lf_path": str | None}
+        dict: {"ff_path": str | None, "lf_path": str | None, "keyframes_paths": list[str]}
     """
     idx = shot["index"]
     shot_dir = shots_dir / str(idx)
@@ -868,5 +984,16 @@ async def gen_shot_frames(
         empty_scene=empty_scene,
     )
     ff_["lf_path"] = lf_path_str
+
+    # 中间关键帧 generation（多关键帧叙事模式）
+    kf_refs = [ff_path_str] if ff_path_str else None
+    kf_paths = await _gen_keyframes_async(
+        image_adapter, shots_dir, shot,
+        force=force, script_mtime=script_mtime,
+        reference_paths=kf_refs,
+        max_retries=1,
+        empty_scene=empty_scene,
+    )
+    ff_["keyframes_paths"] = kf_paths
 
     return ff_

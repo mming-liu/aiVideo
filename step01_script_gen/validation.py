@@ -34,6 +34,14 @@ _REQUIRED_NEW_FIELDS = [
     "mask_area",
     "color_tone",
     "clip_transition",
+    # v6.4 新增：视频钩子版新字段
+    "content",
+    "camera_movement",
+    "framing",
+    "lighting_color",
+    "duration",
+    "negative_prompt",
+    "hook",
 ]
 
 
@@ -148,6 +156,11 @@ def _validate_script(script: dict) -> None:
 
     # v6.2: 人物一致性校验（纳入常规流程，强制运行）
     _check_character_consistency(script)
+
+    # v6.3: 分镜提示词检查表（8项核心检查）
+    checklist_result = _run_prompt_checklist(script)
+    if not checklist_result["pass"]:
+        print(f"[WARN] 分镜提示词检查表: {len([r for r in checklist_result['results'].values() if not r.get('pass', True)])} 项未通过")
 
 
 def _check_shot_size_diversity(shots: list[dict]) -> None:
@@ -370,6 +383,397 @@ def _check_character_consistency(script: dict) -> dict:
     return {"pass": not bool(issues), "issues": issues, "warnings": warnings}
 
 
+# ===========================================================================
+# v6.3 新增：分镜提示词检查表（适配用户提供的8项核心检查）
+# ===========================================================================
+
+# --- 5. 提示词污染检测：无效关键词列表 ---
+_INVALID_PROMPT_KEYWORDS = {
+    "8K清晰度", "8k清晰度", "8K画质", "8k画质", "超高清", "HD画质",
+    "无AI感", "无AI痕迹", "无AI味道", "不像AI", "AI感",
+    "电影感", "电影画质", " cinematic", "电影级",
+    "真实感", "逼真", "写实感",
+    "专业摄影", "专业摄像", "摄影师级别",
+    "顶级画质", "最高画质", "最佳画质",
+    "单反", " DSLR", "微单", "摄像机",
+    "好莱坞", "大片感",
+    "Adobe", "Photoshop", "渲染",
+    "CG", "3D渲染", "三维渲染",
+    "光线追踪", "Ray Tracing",
+}
+
+# --- 7. 语义风险关键词（需拦截） ---
+_SEMANTIC_RISK_KEYWORDS = {
+    "迷药", "蒙汗药", "春药", "媚药",
+    "如何制作", "制作方法", "配方",
+    "杀人", "自杀", "轻生",
+    "抢劫", "盗窃", "偷盗",
+    "毒品", "吸毒", "贩毒",
+    "赌博", "作弊",
+}
+
+# --- 6. 逆向提示词模板 ---
+_COMMON_NEGATIVE_PROMPTS = {
+    "人物变形", "面部扭曲", "多余的手指", "畸形",
+    "画面抖动", "模糊", "虚焦", "噪点",
+    "色差", "色彩失真", "过曝", "欠曝",
+    "穿帮", "穿帮镜头", "不自然",
+    "闪烁", "跳帧", "卡顿",
+    "水印", "logo", "文字",
+    "字幕", "文本",
+}
+
+# v6.4 新增：视频教程转场关键词库
+_TRANSITION_COMBAT = {"冲击转场", "快速跟拍", "动作连贯", "转场时长0.2s", "画面冲击转场", "快速切换"}
+_TRANSITION_SCENE_SWITCH = {"淡入淡出转场", "镜头拉远", "自然过渡", "转场时长0.5s", "平滑过渡", "渐变转场"}
+_TRANSITION_CLOSEUP = {"模糊转场", "镜头推近", "节奏缓慢", "转场时长0.3s", "渐进转场", "推进转场"}
+_TRANSITION_GENERIC = {"转场时长", "镜头运动", "光影变化", "画面衔接", "转场指令", "转场效果"}
+
+# 场景类型判断关键词
+_COMBAT_KEYWORDS = {"打斗", "战斗", "格斗", "刺杀", "攻击", "砍杀", "挥刀", "拔剑", "跃出", "冲刺"}
+_CLOSEUP_KEYWORDS = {"特写", "近景", "面部", "眼神", "表情", "眼睛", "嘴唇", "手指"}
+
+
+def _check_prompt_pollution(shots: list[dict]) -> dict:
+    """检查提示词污染：堆砌无效关键词（检查项5）."""
+    issues = []
+    for shot in shots:
+        idx = shot.get("index", "?")
+        prompt = shot.get("prompt", "")
+
+        found_invalid = [kw for kw in _INVALID_PROMPT_KEYWORDS if kw in prompt]
+        if found_invalid:
+            issues.append(f"镜头{idx}: 包含无效关键词 {found_invalid}，需精简提示词")
+
+    if issues:
+        for issue in issues:
+            print(f"[CHECK] 提示词污染: {issue}")
+
+    return {"pass": len(issues) == 0, "issues": issues}
+
+
+def _check_negative_prompt(shots: list[dict]) -> dict:
+    """检查逆向提示词是否添加（检查项6）."""
+    warnings = []
+    for shot in shots:
+        idx = shot.get("index", "?")
+        negative_prompt = shot.get("negative_prompt", "").strip()
+
+        if not negative_prompt:
+            warnings.append(f"镜头{idx}: 未添加逆向提示词，需补充")
+
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 逆向提示词: [WARN] {warn}")
+
+    return {"pass": len(warnings) == 0, "warnings": warnings}
+
+
+def _check_prop_consistency(shots: list[dict]) -> dict:
+    """检查道具连贯性（检查项2）：上一镜道具的状态、位置与下一镜是否一致."""
+    issues = []
+    warnings = []
+
+    # 从 shots 提取每个镜头的道具信息
+    # 简化实现：检查同一角色在不同镜头的道具是否矛盾
+    for i, shot in enumerate(shots):
+        idx = shot.get("index", "?")
+        prompt = shot.get("prompt", "")
+        narration = shot.get("narration_segment", "")
+
+        # 常见道具关键词
+        props = ["剑", "刀", "枪", "鞭", "扇", "笛", "琴", "棋", "书", "画",
+                 "酒", "茶", "杯", "碗", "灯", "烛", "火把", "包袱", "书信",
+                 "令牌", "印信", "玉佩", "项链", "戒指", "手镯"]
+
+        # 查找本镜头提到的道具
+        mentioned_props = [p for p in props if p in prompt or p in narration]
+
+        # 与下一镜头对比
+        if i < len(shots) - 1:
+            next_shot = shots[i + 1]
+            next_idx = next_shot.get("index", "?")
+            next_prompt = next_shot.get("prompt", "")
+            next_narration = next_shot.get("narration_segment", "")
+            next_mentioned = [p for p in props if p in next_prompt or p in next_narration]
+
+            # 如果本镜有道具，下一镜完全没提，可能不连贯
+            for prop in mentioned_props:
+                if prop not in next_mentioned and "消失" not in next_prompt:
+                    # 排除明显场景切换的情况（如从室内到室外）
+                    # 这里简化处理，仅作警告
+                    if any(kw in next_prompt for kw in ["继续", "仍然", "依然", "仍是"]):
+                        issues.append(
+                            f"镜头{idx}→{next_idx}: 道具\"{prop}\"在镜头{idx}出现，"
+                            f"但镜头{next_idx}未提及，可能道具连贯性问题"
+                        )
+
+    if issues:
+        for issue in issues:
+            print(f"[CHECK] 道具连贯性: {issue}")
+
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
+def _check_shot_transition(shots: list[dict]) -> dict:
+    """检查镜头衔接（检查项4）：本镜结束画面与下一镜开始画面的衔接."""
+    issues = []
+    warnings = []
+
+    for i in range(len(shots) - 1):
+        curr_shot = shots[i]
+        next_shot = shots[i + 1]
+
+        curr_idx = curr_shot.get("index", "?")
+        next_idx = next_shot.get("index", "?")
+
+        curr_prompt = curr_shot.get("prompt", "")
+        next_prompt = next_shot.get("prompt", "")
+
+        # 检查 context_bridge 是否存在且有效
+        curr_bridge = curr_shot.get("context_bridge", "").strip()
+        if not curr_bridge:
+            warnings.append(f"镜头{curr_idx}: 缺少 context_bridge 衔接描述")
+
+        # 检查关键动作/位置衔接
+        # 简化：检查"继续""然后""紧接着"等衔接词
+        transition_words = ["继续", "然后", "紧接着", "随后", "随即", "紧接",
+                           "瞬间", "刹那", "突然", "猛然", "骤然"]
+        has_transition = any(tw in curr_prompt for tw in transition_words)
+        has_bridge = curr_bridge and any(tw in curr_bridge for tw in transition_words)
+
+        if not has_transition and not has_bridge:
+            # 检查两个镜头之间的场景是否相同
+            curr_scene = curr_shot.get("scene", "")
+            next_scene = next_shot.get("scene", "")
+
+            if curr_scene and next_scene and curr_scene != next_scene:
+                # 场景切换时可以没有强衔接词
+                pass
+            elif curr_scene == next_scene and not has_bridge:
+                warnings.append(
+                    f"镜头{curr_idx}→{next_idx}: 同一场景({curr_scene})但缺少衔接词，"
+                    f"可能画面跳跃"
+                )
+
+    if issues:
+        for issue in issues:
+            print(f"[CHECK] 镜头衔接: {issue}")
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 镜头衔接: [WARN] {warn}")
+
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
+def _check_semantic_risk(shots: list[dict]) -> dict:
+    """检查语义风险（检查项7）：是否存在隐晦的违规意图."""
+    issues = []
+
+    for shot in shots:
+        idx = shot.get("index", "?")
+        prompt = shot.get("prompt", "")
+        subtitle = shot.get("subtitle", "")
+        narration = shot.get("narration_segment", "")
+
+        search_text = prompt + subtitle + narration
+
+        found_risks = [kw for kw in _SEMANTIC_RISK_KEYWORDS if kw in search_text]
+        if found_risks:
+            issues.append(f"镜头{idx}: 存在语义风险关键词 {found_risks}，需修改提示词")
+
+    if issues:
+        for issue in issues:
+            print(f"[CHECK] 语义风险: {issue}")
+
+    return {"pass": len(issues) == 0, "issues": issues}
+
+
+def _check_platform_compliance(shots: list[dict]) -> dict:
+    """检查平台规则（检查项8）：是否标注AI生成等内容."""
+    warnings = []
+
+    # 检查 prompt 是否包含 AI 生成相关标注
+    # 注意：这是可选的合规要求，仅作警告
+    ai_keywords = ["AI生成", "AI创作", "人工智能", "AIGC"]
+
+    for shot in shots:
+        idx = shot.get("index", "?")
+        prompt = shot.get("prompt", "")
+
+        # 仅在第一个镜头检查（整体标注即可）
+        if idx == 1:
+            has_ai_mark = any(kw in prompt for kw in ai_keywords)
+            if not has_ai_mark:
+                warnings.append(
+                    "建议在首镜头 prompt 中添加\"AI生成\"等标注，"
+                    "以符合平台合规要求"
+                )
+
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 平台规则: [WARN] {warn}")
+
+    return {"pass": True, "warnings": warnings}
+
+# v6.5: 视线方向检查
+def _check_gaze_direction(shots):
+    issues, warnings = [], []
+    wrong_pattern = re.compile(r'[看盯望向朝][^，。,\.]{0,10}')
+    correct_dirs = {'画左', '画右', '画上方', '画下方', '画前', '画后'}
+    
+    for shot in shots:
+        idx = shot.get('index', '?')
+        prompt = shot.get('prompt', '')
+        
+        wrong = wrong_pattern.findall(prompt)
+        filtered = [w for w in wrong if not any(d in w for d in correct_dirs)]
+        if filtered:
+            warnings.append(f'镜头{idx}: 视线描述 {filtered} 建议用画左/画右等')
+        
+        has_correct = any(d in prompt for d in correct_dirs)
+        if not has_correct and ('看向' in prompt or '盯着' in prompt):
+            warnings.append(f'镜头{idx}: 建议用空间方向词(画左/画右/画上方)')
+    
+    for w in warnings:
+        print(f'[CHECK] 视线方向: [WARN] {w}')
+    return {'pass': True, 'issues': issues, 'warnings': warnings}
+
+def _check_transition_keywords(shots: list[dict]) -> dict:
+    """检查转场关键词（v6.4 新增）★视频教程核心技巧★.
+
+    检查项：
+    1. clip_transition 字段是否有效（不为空、不是仅"硬切"）
+    2. prompt 中是否包含场景对应的转场关键词
+    3. 转场时长是否符合场景类型
+    """
+    issues = []
+    warnings = []
+
+    for i, shot in enumerate(shots):
+        idx = shot.get("index", "?")
+        prompt = shot.get("prompt", "")
+        clip_transition = shot.get("clip_transition", "").strip()
+        narration = shot.get("narration_segment", "")
+
+        # 1. clip_transition 字段检查
+        if not clip_transition:
+            warnings.append(f"镜头{idx}: clip_transition 为空，需添加转场方式")
+        elif clip_transition in ("硬切", "硬切 cut", "cut"):
+            # 硬切是允许的，但如果是战斗/特写场景，应有更丰富的转场描述
+            # 仅作为 soft warning
+            pass
+
+        # 2. 判断场景类型
+        is_combat = any(kw in narration for kw in _COMBAT_KEYWORDS)
+        is_closeup = any(kw in narration for kw in _CLOSEUP_KEYWORDS)
+        is_scene_switch = i < len(shots) - 1 and shots[i + 1].get("scene", "") != shot.get("scene", "")
+
+        # 3. 转场关键词检查
+        all_transition_kws = _TRANSITION_COMBAT | _TRANSITION_SCENE_SWITCH | _TRANSITION_CLOSEUP | _TRANSITION_GENERIC
+        found_kws = [kw for kw in all_transition_kws if kw in prompt]
+
+        if is_combat:
+            # 打斗场景应该有冲击转场、0.2s 等关键词
+            expected_kws = _TRANSITION_COMBAT
+            missing_kws = expected_kws - set(found_kws)
+            if not found_kws:
+                warnings.append(
+                    f"镜头{idx}: 检测为打斗场景但 prompt 缺少转场关键词，"
+                    f"建议添加冲击转场、快速跟拍、动作连贯、转场时长0.2s"
+                )
+            elif missing_kws and "转场时长" not in found_kws:
+                warnings.append(f"镜头{idx}: 打斗场景建议添加具体转场时长（如0.2s）")
+
+        elif is_closeup:
+            # 特写场景应该有模糊转场、0.3s 等关键词
+            expected_kws = _TRANSITION_CLOSEUP
+            missing_kws = expected_kws - set(found_kws)
+            if not found_kws:
+                warnings.append(
+                    f"镜头{idx}: 检测为特写场景但 prompt 缺少转场关键词，"
+                    f"建议添加模糊转场、镜头推近、节奏缓慢、转场时长0.3s"
+                )
+
+        elif is_scene_switch:
+            # 场景切换应该有淡入淡出、0.5s 等关键词
+            expected_kws = _TRANSITION_SCENE_SWITCH
+            missing_kws = expected_kws - set(found_kws)
+            if not found_kws:
+                warnings.append(
+                    f"镜头{idx}: 检测为场景切换但 prompt 缺少转场关键词，"
+                    f"建议添加淡入淡出、镜头拉远、自然过渡、转场时长0.5s"
+                )
+
+    if issues:
+        for issue in issues:
+            print(f"[CHECK] 转场关键词: {issue}")
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 转场关键词: [WARN] {warn}")
+
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
+def _run_prompt_checklist(script: dict) -> dict:
+    """运行分镜提示词检查表（v6.3 新增）.
+
+    整合8项核心检查：
+    1. 人物连贯性 → _check_character_consistency（已存在）
+    2. 道具连贯性 → _check_prop_consistency（新增）
+    3. 镜头节奏 → 暂略（需 duration 信息，LLM 决定）
+    4. 起点/终点衔接 → _check_shot_transition（新增）
+    5. 提示词污染 → _check_prompt_pollution（新增）
+    6. 逆向提示词 → _check_negative_prompt（新增）
+    7. 语义风险 → _check_semantic_risk（新增）
+    8. 平台规则 → _check_platform_compliance（新增）
+
+    Returns:
+        dict: {"pass": bool, "results": {每个检查项的结果}}
+    """
+    shots = script.get("shots", [])
+    if not shots:
+        return {"pass": True, "results": {}}
+
+    results = {}
+
+    # 1. 人物连贯性（已有）
+    results["character_consistency"] = _check_character_consistency(script)
+
+    # 2. 道具连贯性（新增）
+    results["prop_consistency"] = _check_prop_consistency(shots)
+
+    # 4. 镜头衔接（新增）
+    results["shot_transition"] = _check_shot_transition(shots)
+
+    # 5. 提示词污染（新增）
+    results["prompt_pollution"] = _check_prompt_pollution(shots)
+
+    # 6. 逆向提示词（新增）
+    results["negative_prompt"] = _check_negative_prompt(shots)
+
+    # 7. 语义风险（新增）
+    results["semantic_risk"] = _check_semantic_risk(shots)
+
+    # 8. 平台规则（新增）
+    results["platform_compliance"] = _check_platform_compliance(shots)
+
+    # v6.4 新增：转场关键词检查（视频教程核心技巧）
+    results["transition_keywords"] = _check_transition_keywords(shots)
+
+    # v6.5 新增：人物视线方向检查（镜内词域原则）
+    results["gaze_direction"] = _check_gaze_direction(shots)
+
+    # 综合判定：任一硬性检查失败则整体不通过
+    hard_fail_checks = ["prop_consistency", "shot_transition", "semantic_risk"]
+    pass_fail = all(
+        results.get(check, {}).get("pass", True)
+        for check in hard_fail_checks
+    )
+
+    return {"pass": pass_fail, "results": results}
+
+
 _STOP_WORDS = {
     "一个", "没有", "不是", "什么", "怎么", "可以", "这个", "那个",
     "他们", "你们", "我们", "自己", "起来", "出来", "过来", "进去",
@@ -380,8 +784,37 @@ _STOP_WORDS = {
 
 
 def _strip_punct(text: str) -> str:
-    """移除中文标点和空白，仅保留汉字."""
+    """移除中文标点和空白,仅保留汉字."""
     return re.sub(r'[^一-鿿]', '', text)
+
+
+def _fill_missing_new_fields(script: dict) -> None:
+    """补全视频钩子版本的新字段（如果 LLM 未返回则用默认值填充）."""
+    # 补全 shots
+    for shot in script.get("shots", []):
+        shot.setdefault("content", "")
+        shot.setdefault("camera_movement", "")
+        shot.setdefault("framing", "")
+        shot.setdefault("lighting_color", "")
+        shot.setdefault("duration", 1)
+        shot.setdefault("negative_prompt", "")
+        shot.setdefault("hook", "")
+        shot.setdefault("time_stamp", "")
+
+    # 补全 hook（如果存在）
+    hook = script.get("hook")
+    if hook and isinstance(hook, dict):
+        hook.setdefault("content", "")
+        hook.setdefault("camera_movement", "")
+        hook.setdefault("framing", "")
+        hook.setdefault("lighting_color", "")
+        hook.setdefault("duration", 1)
+        hook.setdefault("negative_prompt", "")
+        hook.setdefault("time_stamp", "")
+
+    # 补全顶层字段
+    script.setdefault("total_duration", 0)
+    script.setdefault("style", "")
 
 
 def parse_response(raw_text: str) -> dict:
@@ -419,5 +852,9 @@ def parse_response(raw_text: str) -> dict:
                 f"出错位置上下文 (...{snippet}...)\n"
                 f"完整响应已保存至 {dump_path}"
             ) from e2
+
+    # v6.4 新增：补全新添加的字段（如果 LLM 没有返回）
+    _fill_missing_new_fields(script)
+
     _validate_script(script)
     return script

@@ -286,7 +286,10 @@ async def _process_one_shot(
     characters = script.get("characters", [])
     frames = await gen_shot_frames(shot, shots_dir, image_adapter, script_mtime,
                                    force=force_first_frame, characters=characters)
+    # 合并首帧、尾帧和中间关键帧
+    kf_paths = frames.get("keyframes_paths", [])
     frame_paths = [p for p in [frames.get("ff_path"), frames.get("lf_path")] if p]
+    frame_paths.extend(kf_paths)  # 添加中间关键帧
 
     from step02_video_gen.prompt_builder import _build_prompt, _make_request
 

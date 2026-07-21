@@ -177,6 +177,21 @@ SYSTEM_PROMPT = (
     "   - 违反示例：prompt 有两人，ff_desc 只写一人 → 首帧图片生成错误 → 视频中角色丢失或错误\n"
     "14. JSON转义铁律：所有字符串内的双引号必须转义， 中文引号禁止使用。\n"
     "15. 替换词表强制：光腚→赤膊，血→红，杀→击，刺→掠，死→倒，毙命→倒地。\n"
+    "16. **运镜视角库**（按场景类型选用，直接嵌入 prompt）：\n"
+    "   # POV 视角（第一人称代入）\n"
+    "   - 第一人称视角，掌心凝聚红色能量，镜头跟随手部动作快速移动，冷色调光影\n"
+    "   - 第一人称视角，手持发光长剑向前挥砍，剑气斩裂巨石，动态模糊效果\n"
+    "   - 第一人称视角，快速侧身躲避攻击，镜头随闪避动作剧烈晃动，手持感\n"
+    "   # 鸟瞰视角（高空俯拍宏大场景）\n"
+    "   - 高空鸟瞰视角，镜头从海面缓缓上摇，岸边古风楼阁，暖金与深蓝交织\n"
+    "   - 高空鸟瞰视角，镜头从云层缓缓下移，悬浮建筑群+瀑布，冷色调光影\n"
+    "   # FPV 视角（穿梭机快速穿越）\n"
+    "   - FPV穿梭视角，镜头从古风城镇上空快速俯冲，穿过密集建筑群，暖色调\n"
+    "   - FPV穿梭视角，镜头从仙门秘境入口快速飞入，悬浮建筑+云雾缭绕，冷色调\n"
+    "   # ACT 视角（第三人称战斗动作）\n"
+    "   - ACT战斗视角，镜头跟随角色动作快速移动，动态模糊效果，冷色调光影\n"
+    "   - ACT战斗视角，镜头围绕战斗两人快速旋转，鞭影与盾面碰撞火花飞溅\n"
+    "   - 通用运镜关键词：镜头跟随、缓慢推进、快速拉出、环绕旋转、手持晃动\n"
     "只输出纯JSON，不要markdown代码块、不要任何额外文字。"
 )
 
@@ -323,6 +338,12 @@ def build_prompt(novel_text: str, min_shots: int, max_shots: int, bank=None) -> 
     local_ctx = _load_local_skill_context()
     if local_ctx:
         prompt = prompt + local_ctx
+
+    # 追加独立知识库 skill：转场技巧 + 材质写实化
+    knowledge_ctx = _load_knowledge_skills()
+    if knowledge_ctx:
+        prompt = prompt + knowledge_ctx
+
     return prompt
 
 
@@ -339,6 +360,40 @@ def _load_local_skill_context() -> str:
         body = mod.read_local_skill("generate-script")
         if body:
             return f"\n\n# 项目专属偏好（来自 .aiVideo/skills/generate-script-local/SKILL.md）\n{body}"
+    except Exception:
+        pass
+    return ""
+
+
+def _load_knowledge_skills() -> str:
+    """加载独立知识库 skill 作为 prompt 附加上下文（v6.4：转场技巧 + 材质写实化）."""
+    try:
+        loader_path = _PROJECT_ROOT / ".aiVideo" / "skills_loader.py"
+        if not loader_path.exists():
+            return ""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("skills_loader", str(loader_path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        parts = []
+
+        # 视频转场技巧
+        transition_body = mod.read_skill("video-transition")
+        if transition_body:
+            parts.append(f"\n\n# AI视频转场技巧（来自 video-transition）\n{transition_body}")
+
+        # 材质写实化
+        material_body = mod.read_skill("material-realism")
+        if material_body:
+            parts.append(f"\n\n# AI材质写实化提示词（来自 material-realism）\n{material_body}")
+
+        # Seedance 2.5 运镜视角
+        angles_body = mod.read_skill("seedance-shot-angles")
+        if angles_body:
+            parts.append(f"\n\n# Seedance 2.5 运镜提示词（来自 seedance-shot-angles）\n{angles_body}")
+
+        return "".join(parts)
     except Exception:
         pass
     return ""
