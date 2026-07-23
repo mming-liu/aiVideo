@@ -20,6 +20,10 @@ CHAPTER_DIR = chapter_dir()
 SCRIPT_FILE = script_file()
 AUDIO_OUTPUT_DIR = audio_dir()
 
+# 模块级日志
+from shared.tee_logger import get_logger
+_logger = get_logger(CHAPTER_DIR / "step03.log", console_level="INFO")
+
 # Submodule imports
 from step03_tts_audio.shot_tts import load_script as load_script_module, gen_all_shot_tts
 from tts.config import config as tts_config
@@ -27,10 +31,10 @@ from tts.voice_registry import get_registry
 
 
 def main():
-    print("=" * 50)
-    print("  Step 3: TTS Audio Generation")
-    print("  (Multi-voice support enabled)")
-    print("=" * 50)
+    _logger.separator()
+    _logger.info("  Step 3: TTS Audio Generation")
+    _logger.info("  (Multi-voice support enabled)")
+    _logger.separator()
 
     # 检查前置步骤产物
     if not SCRIPT_FILE.exists():
@@ -47,8 +51,8 @@ def main():
     script = load_script_module(SCRIPT_FILE)
     shots = script.get("shots", [])
 
-    print(f"Shots: {len(shots)}")
-    print(f"Chapter: {CHAPTER_INDEX}, Book: {BOOK_INDEX}\n")
+    _logger.info(f"Shots: {len(shots)}")
+    _logger.info(f"Chapter: {CHAPTER_INDEX}, Book: {BOOK_INDEX}")
 
     # 检查 step02 是否已完成音频生成（复用产物，避免重复调用 TTS API）
     existing_count = 0
@@ -59,26 +63,26 @@ def main():
             existing_count += 1
 
     if existing_count == len(shots) and existing_count > 0:
-        print(f"[INFO] 发现 {existing_count} 个已生成的音频文件（来自 step02）")
-        print(f"       跳过 TTS 生成，直接使用现有音频")
+        _logger.info(f"[INFO] 发现 {existing_count} 个已生成的音频文件（来自 step02）")
+        _logger.info("       跳过 TTS 生成，直接使用现有音频")
         return
 
     if existing_count > 0:
-        print(f"[INFO] 部分音频已存在 ({existing_count}/{len(shots)})，将补充生成缺失的")
+        _logger.info(f"[INFO] 部分音频已存在 ({existing_count}/{len(shots)})，将补充生成缺失的")
 
     answer = input("确认 TTS 生成? (y/N): ").strip().lower()
     if answer not in ("y", "yes"):
-        print("已取消.")
+        _logger.info("已取消.")
         sys.exit(0)
 
     try:
         tts_config.validate()
-        print("\n=== Generate per-shot TTS (dynamic voice) ===")
+        _logger.info("\n=== Generate per-shot TTS (dynamic voice) ===")
         # 初始化音色注册表（跨章节保持角色声音一致）
         voice_registry = get_registry()
         gen_all_shot_tts(script, AUDIO_OUTPUT_DIR, voice_registry)
     except Exception as e:
-        print(f"[ERROR] {e}")
+        _logger.error(f"[ERROR] {e}")
         sys.exit(1)
 
 

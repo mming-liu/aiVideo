@@ -120,6 +120,8 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, aud
         else NEGATIVE_PROMPT + "、人声、旁白配音、对话语音、歌声"
     # 物理逻辑约束：防止违反常识的场景（车马上船、水上行走等）
     negative += "、车马在水中行驶、马车在水上跑、人在水上走、物体违反重力"
+    # v6.5 Agens AI 幻觉防护：追加负向词屏蔽常见幻觉元素
+    negative += "、換臉、五官變形、臉型改變、凭空道具、多余杂物、六指畸形、扭曲肢体、人物消失、服装突变、凭空人物"
     image_path = None
     last_frame_image_path = None
     extra_keyframe_paths = []

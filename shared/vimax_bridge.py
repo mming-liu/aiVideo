@@ -32,6 +32,16 @@ from character_bank import CharacterBank, StyleBank
 
 import hashlib
 
+# 静默日志: 桥接日志写入 step02.log，不污染控制台
+def _bridge_log(msg: str):
+    try:
+        from shared.tee_logger import get_logger
+        from shared.paths import chapter_dir
+        log = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+        log.verbose(msg)
+    except Exception:
+        _bridge_log(msg)
+
 # 首帧/尾帧生成需要风格前缀（与视频生成保持一致）
 from style_prefix import STYLE_PREFIX, sanitize_prompt, ensure_prefix, is_empty_scene
 
@@ -86,11 +96,11 @@ def _build_camera_tree(shots: list[dict]) -> list[Camera]:
             missing_info="机位切换，空间关系与景别发生变化" if parent_cam_idx else None,
         ))
 
-    print(f"  [bridge] camera_tree: {len(cameras)} 台摄像机 "
+    _bridge_log(f"  [bridge] camera_tree: {len(cameras)} 台摄像机 "
           f"{[c.idx for c in cameras]}")
     for c in cameras:
         if c.parent_cam_idx:
-            print(f"    cam_{c.idx} -> parent=cam_{c.parent_cam_idx}"
+            _bridge_log(f"    cam_{c.idx} -> parent=cam_{c.parent_cam_idx}"
                   f" 镜头{c.parent_shot_idx}")
     return cameras
 
@@ -152,7 +162,7 @@ async def build_working_dir(
         with open(chars_path, "w", encoding="utf-8") as f:
             json.dump(char_objects, f, ensure_ascii=False, indent=2)
         if char_objects:
-            print(f"  [bridge] characters.json: {len(char_objects)} 个角色")
+            _bridge_log(f"  [bridge] characters.json: {len(char_objects)} 个角色")
     elif not characters_data:
         if not chars_path.exists():
             with open(chars_path, "w", encoding="utf-8") as f:
@@ -164,7 +174,7 @@ async def build_working_dir(
     if registry:
         with open(registry_path, "w", encoding="utf-8") as f:
             json.dump(registry, f, ensure_ascii=False, indent=2)
-        print(f"  [bridge] character_portraits_registry.json: {len(registry)} 个角色")
+        _bridge_log(f"  [bridge] character_portraits_registry.json: {len(registry)} 个角色")
 
     # ---- 3. storyboard.json（cam_idx 从 script 读取）----
     storyboard_path = working_dir / "storyboard.json"
@@ -235,7 +245,7 @@ async def build_working_dir(
 
     # ---- 6. 首帧 + 尾帧生成（摄像机组间并行）----
     if skip_frames:
-        print(f"  [bridge] skip_frames=True，跳过帧生成")
+        _bridge_log(f"  [bridge] skip_frames=True，跳过帧生成")
         return
 
     script_mtime = script_path.stat().st_mtime if script_path.exists() else None
@@ -263,7 +273,7 @@ async def build_working_dir(
     ]
     await asyncio.gather(*tasks)
 
-    print(f"[bridge] working_dir 就绪: {working_dir} ({n} shots, {len(cam_groups)} 摄像机)")
+    _bridge_log(f"[bridge] working_dir 就绪: {working_dir} ({n} shots, {len(cam_groups)} 摄像机)")
 
 
 async def _gen_frames_for_camera_group(
@@ -281,13 +291,21 @@ async def _gen_frames_for_camera_group(
     chapter_idx: int,
     cam_groups: dict[int, list[dict]],
 ):
-    """单个摄像机组内所有镜头的首帧/尾帧/中间关键帧生成（组内串行，组间并行）."""
+    """单摄像机帧生成：首帧串行(锚定依赖)，尾帧+关键帧后台并行.
+
+    规则：
+    1. 每个镜头首帧生成完 → 立即启动该镜头的尾帧+关键帧(后台)
+    2. 下一镜的首帧不等尾帧/关键帧完成，立即用新的 Key 开始提交
+    3. 所有帧完成后汇总，确保该摄像机所有帧生成完毕后才返回
+    """
+    bg_tasks: list[asyncio.Task] = []
+
     for i, shot in enumerate(cam_shots):
         is_first_in_cam = (i == 0)
         idx = shot["index"]
         shot_dir = shots_dir / str(idx)
 
-        # -- 首帧生成 --
+        # -- 首帧生成（串行：需要前镜锚定） --
         ff_path = shot_dir / "first_frame.png"
         refs = _build_reference_list(
             shot, bank, style_bank, characters_data, camera_first_frames,
@@ -307,27 +325,31 @@ async def _gen_frames_for_camera_group(
                     style_bank.lock(ff_result, chapter_idx)
                     style_bank.save()
 
-        # -- 尾帧生成（全镜头覆盖：首尾双关键帧钳制风格漂移）--
-        # 注：不再按 variation_type 过滤——LLM 常输出空值导致 20/20 镜头无尾帧，
-        # 仅首帧单锚时长镜头后半段会从动漫漂移成真人写实
-        lf_refs = [str(ff_path)] if ff_path and ff_path.exists() else []
-        char_ref = _select_best_reference(shot, bank, style_bank, characters_data)
-        if char_ref and char_ref not in lf_refs:
-            lf_refs.append(char_ref)
-        await _gen_last_frame_async(
-            image_adapter, shots_dir, shot, force_first_frame, script_mtime,
-            reference_paths=lf_refs,
-            empty_scene=is_empty_scene(shot, characters_data),
-        )
+        # -- 尾帧+关键帧 后台并行（不等它们完成，下一镜首帧立即开始） --
+        # 用当前镜头的 ff 完成状态启动后台任务
+        async def _gen_rest_frames(shot, ff_path, i_idx):
+            lf_refs = [str(ff_path)] if ff_path and ff_path.exists() else []
+            char_ref = _select_best_reference(shot, bank, style_bank, characters_data)
+            if char_ref and char_ref not in lf_refs:
+                lf_refs.append(char_ref)
+            await _gen_last_frame_async(
+                image_adapter, shots_dir, shot, force_first_frame, script_mtime,
+                reference_paths=lf_refs,
+                empty_scene=is_empty_scene(shot, characters_data),
+            )
+            kf_refs = [str(ff_path)] if ff_path and ff_path.exists() else None
+            await _gen_keyframes_async(
+                image_adapter, shots_dir, shot, force_first_frame, script_mtime,
+                reference_paths=kf_refs,
+                max_retries=1,
+                empty_scene=is_empty_scene(shot, characters_data),
+            )
 
-        # -- 中间关键帧生成（多关键帧叙事模式）--
-        kf_refs = [str(ff_path)] if ff_path and ff_path.exists() else None
-        await _gen_keyframes_async(
-            image_adapter, shots_dir, shot, force_first_frame, script_mtime,
-            reference_paths=kf_refs,
-            max_retries=1,
-            empty_scene=is_empty_scene(shot, characters_data),
-        )
+        bg_tasks.append(asyncio.create_task(_gen_rest_frames(shot, ff_path, idx)))
+
+    # 等待所有后台尾帧/关键帧任务完成
+    if bg_tasks:
+        await asyncio.gather(*bg_tasks)
 
 
 # ---------------------------------------------------------------------------
@@ -360,15 +382,15 @@ def _build_reference_list(
             anchor = camera_first_frames[cam_idx]
             if anchor and Path(anchor).exists():
                 refs.append(anchor)
-                print(f"  [bridge] 镜头{shot['index']}: 空镜，参考图=摄像机{cam_idx}首帧锚定（背景）")
+                _bridge_log(f"  [bridge] 镜头{shot['index']}: 空镜，参考图=摄像机{cam_idx}首帧锚定（背景）")
         # 回退到风格锚点（Ch1 锁定的全局风格）
         if not refs and style_bank.is_locked():
             style_anchor = style_bank.get_anchor_path()
             if style_anchor and Path(style_anchor).exists():
                 refs.append(style_anchor)
-                print(f"  [bridge] 镜头{shot['index']}: 空镜，参考图=风格锚点（背景）")
+                _bridge_log(f"  [bridge] 镜头{shot['index']}: 空镜，参考图=风格锚点（背景）")
         if not refs:
-            print(f"  [bridge] 镜头{shot['index']}: 空镜，无可用背景参考图，降级为 text-to-image")
+            _bridge_log(f"  [bridge] 镜头{shot['index']}: 空镜，无可用背景参考图，降级为 text-to-image")
         return refs[:1]
 
     # 非首镜头：引用本摄像机首帧作为锚定
@@ -376,7 +398,7 @@ def _build_reference_list(
         anchor = camera_first_frames[cam_idx]
         if anchor and Path(anchor).exists():
             refs.append(anchor)
-            print(f"  [bridge] 镜头{shot['index']}: 参考图=摄像机{cam_idx}首帧锚定")
+            _bridge_log(f"  [bridge] 镜头{shot['index']}: 参考图=摄像机{cam_idx}首帧锚定")
 
     # 角色正面肖像
     char_ref = _select_best_reference(shot, bank, style_bank, characters_data)
@@ -423,16 +445,21 @@ async def _generate_missing_portraits(
         if not identifier:
             continue
 
-        # 已有肖像 → 直接复用
+        # 已有肖像且图片文件存在 → 直接复用
         if bank.has_character(identifier):
             entry = bank.get_character(identifier)
             if entry and entry.get("portraits"):
                 portraits = entry["portraits"]
-                registry[identifier] = portraits
-                print(f"  [bank] 复用角色 {identifier} 的已有肖像")
-                bank.update_character_chapter(identifier, chapter_idx)
-                bank.update_dynamic_features(identifier, char.get("dynamic_features", ""))
-                continue
+                # 检查实际文件是否存在（bank 有记录但旧图片已删除时需重生成）
+                front_p = portraits.get("front", {}).get("path", "")
+                if front_p and Path(front_p).exists():
+                    registry[identifier] = portraits
+                    _bridge_log(f"  [bank] 复用角色 {identifier} 的已有肖像")
+                    bank.update_character_chapter(identifier, chapter_idx)
+                    bank.update_dynamic_features(identifier, char.get("dynamic_features", ""))
+                    continue
+                else:
+                    _bridge_log(f"  [bank] 角色 {identifier} 肖像文件不存在，重新生成...")
 
         # 新角色 → 生成肖像
         char_in_scene = CharacterInScene(
@@ -449,11 +476,11 @@ async def _generate_missing_portraits(
         # 正面肖像（英文 prompt，不拼风格前缀，横屏白底）
         front_path = portrait_dir / "front.png"
         if not front_path.exists():
-            print(f"  [bank] 生成 {identifier} 正面肖像 ...")
+            _bridge_log(f"  [bank] 生成 {identifier} 正面肖像 ...")
             try:
                 img_out = await portrait_gen.generate_front_portrait(
                     # 只传角色特征作为 style，不加 STYLE_PREFIX（portrait_adapter 已 skip_prefix）
-                    char_in_scene, style="2D anime character portrait, full-body, white background, 16:9 wide canvas",
+                    char_in_scene, style="photorealistic Chinese ancient costume character portrait, full-body, white background, 16:9 wide canvas, realistic skin texture, natural lighting, film photography",
                 )
                 # 保存：ImageOutput 是 PIL Image
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
@@ -462,17 +489,17 @@ async def _generate_missing_portraits(
                     img_out.save(str(front_path))
                 else:
                     # 如果返回的是路径
-                    print(f"  [bank] {identifier} 正面肖像: 未知返回类型 {type(img_out)}")
+                    _bridge_log(f"  [bank] {identifier} 正面肖像: 未知返回类型 {type(img_out)}")
                     continue
-                print(f"  [bank] {identifier} 正面肖像 -> {front_path}")
+                _bridge_log(f"  [bank] {identifier} 正面肖像 -> {front_path}")
             except Exception as e:
-                print(f"  [bank] {identifier} 正面肖像生成失败: {e}")
+                _bridge_log(f"  [bank] {identifier} 正面肖像生成失败: {e}")
                 continue
 
         # 侧面肖像
         side_path = portrait_dir / "side.png"
         if not side_path.exists() and front_path.exists():
-            print(f"  [bank] 生成 {identifier} 侧面肖像 ...")
+            _bridge_log(f"  [bank] 生成 {identifier} 侧面肖像 ...")
             try:
                 img_out = await portrait_gen.generate_side_portrait(
                     char_in_scene, front_image_path=str(front_path),
@@ -481,14 +508,14 @@ async def _generate_missing_portraits(
                     img_out.data.save(str(side_path))
                 elif hasattr(img_out, "save"):
                     img_out.save(str(side_path))
-                print(f"  [bank] {identifier} 侧面肖像 -> {side_path}")
+                _bridge_log(f"  [bank] {identifier} 侧面肖像 -> {side_path}")
             except Exception as e:
-                print(f"  [bank] {identifier} 侧面肖像生成失败: {e}")
+                _bridge_log(f"  [bank] {identifier} 侧面肖像生成失败: {e}")
 
         # 背面肖像
         back_path = portrait_dir / "back.png"
         if not back_path.exists() and front_path.exists():
-            print(f"  [bank] 生成 {identifier} 背面肖像 ...")
+            _bridge_log(f"  [bank] 生成 {identifier} 背面肖像 ...")
             try:
                 img_out = await portrait_gen.generate_back_portrait(
                     char_in_scene, front_image_path=str(front_path),
@@ -497,9 +524,9 @@ async def _generate_missing_portraits(
                     img_out.data.save(str(back_path))
                 elif hasattr(img_out, "save"):
                     img_out.save(str(back_path))
-                print(f"  [bank] {identifier} 背面肖像 -> {back_path}")
+                _bridge_log(f"  [bank] {identifier} 背面肖像 -> {back_path}")
             except Exception as e:
-                print(f"  [bank] {identifier} 背面肖像生成失败: {e}")
+                _bridge_log(f"  [bank] {identifier} 背面肖像生成失败: {e}")
 
         # 构建 portraits dict
         portraits = {}
@@ -583,7 +610,7 @@ def _select_best_reference(
     """
     # 空镜：任何含人物的参考图都会诱导模型把人画进空镜
     if is_empty_scene(shot, characters_data):
-        print(f"  [bridge] 镜头{shot['index']}: 空镜，不注入参考图")
+        _bridge_log(f"  [bridge] 镜头{shot['index']}: 空镜，不注入参考图")
         return None
 
     ff_desc = shot.get("ff_desc", "").strip() or ""
@@ -605,7 +632,7 @@ def _select_best_reference(
                     p = portraits.get(view, {}).get("path")
                     if p and Path(p).exists():
                         view_tag = f"（视角={view}" + (" 自动匹配)" if view == view_pref else " 降级)")
-                        print(f"  [bridge] 镜头{shot['index']}: 参考图=角色 {identifier} {view}肖像{view_tag}")
+                        _bridge_log(f"  [bridge] 镜头{shot['index']}: 参考图=角色 {identifier} {view}肖像{view_tag}")
                         return p
                 # 极端情况：portraits dict 里没有任何视图
                 break
@@ -613,7 +640,7 @@ def _select_best_reference(
     # 回退：风格锚点
     anchor = style_bank.get_anchor_path()
     if anchor and Path(anchor).exists():
-        print(f"  [bridge] 镜头{shot['index']}: 参考图=风格锚点")
+        _bridge_log(f"  [bridge] 镜头{shot['index']}: 参考图=风格锚点")
         return anchor
 
     return None
@@ -632,7 +659,7 @@ def _validate_frame(path: str, min_kb: float = 5) -> bool:
         return False
     size_kb = p.stat().st_size / 1024
     if size_kb < min_kb:
-        print(f"  [bridge] 帧图片过小: {p} ({size_kb:.1f}KB < {min_kb}KB)，判定无效")
+        _bridge_log(f"  [bridge] 帧图片过小: {p} ({size_kb:.1f}KB < {min_kb}KB)，判定无效")
         return False
     return True
 
@@ -692,6 +719,12 @@ async def _gen_first_frame_async(
     shot_dir.mkdir(parents=True, exist_ok=True)
     ff_path = shot_dir / "first_frame.png"
     ff_hash_path = shot_dir / "frame_hash.txt"
+
+    # 日志输出到 step02.log，不污染控制台
+    from shared.tee_logger import get_logger
+    from shared.paths import chapter_dir
+    _log_dir = chapter_dir()
+    logger = get_logger(_log_dir / "step02.log", console_level="INFO")
     ff_desc = shot.get("ff_desc", "").strip() or shot.get("prompt", "")
     if empty_scene:
         ff_desc = f"{ff_desc}\n空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
@@ -707,14 +740,14 @@ async def _gen_first_frame_async(
                 if saved_hash == current_hash and _validate_frame(str(ff_path)):
                     return str(ff_path)
                 else:
-                    print(f"  [FRAME] 首帧 shot_{idx} 哈希不匹配或缓存无效，重新生成")
+                    logger.verbose(f"  [FRAME] 首帧 shot_{idx} 哈希不匹配或缓存无效，重新生成")
             elif script_mtime is not None and ff_path.stat().st_mtime >= script_mtime:
                 if _validate_frame(str(ff_path)):
                     return str(ff_path)
             elif script_mtime is None and _validate_frame(str(ff_path)):
                 return str(ff_path)
 
-        print(f"  [FRAME] 生成首帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
+        logger.verbose(f"  [FRAME] 生成首帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
         # 添加风格前缀（与视频生成保持一致，确保风格统一）
         ff_desc_full = sanitize_prompt(ensure_prefix(ff_desc, STYLE_PREFIX), verbose=False)
         refs = reference_paths if reference_paths else []
@@ -723,13 +756,14 @@ async def _gen_first_frame_async(
                 prompt=ff_desc_full,
                 reference_image_paths=refs,
                 shot_index=idx,
+                frame_desc="首帧",
             )
             if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                 img_out.data.save(str(ff_path))
             elif hasattr(img_out, "save"):
                 img_out.save(str(ff_path))
         except Exception as e:
-            print(f"  [FRAME] 首帧 shot_{idx} 生成异常: {e}")
+            _bridge_log(f"  [FRAME] 首帧 shot_{idx} 生成异常: {e}")
             if attempt < max_retries:
                 continue
             return None
@@ -739,7 +773,7 @@ async def _gen_first_frame_async(
             ff_hash_path.write_text(current_hash, encoding="utf-8")
             return str(ff_path)
         if attempt < max_retries:
-            print(f"  [FRAME] 首帧 shot_{idx} 第{attempt+1}次不达标，重试...")
+            logger.verbose(f"  [FRAME] 首帧 shot_{idx} 第{attempt+1}次不达标，重试...")
 
     return str(ff_path) if ff_path.exists() else None
 
@@ -763,6 +797,13 @@ async def _gen_last_frame_async(
     # 尾帧独立哈希文件：首帧/尾帧的参考图不同 → 哈希值不同，
     # 共用一个文件会互相覆盖，导致每次运行都误判失效、双双重做
     lf_hash_path = shot_dir / "last_frame_hash.txt"
+
+    # 日志输出到 step02.log，不污染控制台
+    from shared.tee_logger import get_logger
+    from shared.paths import chapter_dir
+    _log_dir = chapter_dir()
+    logger = get_logger(_log_dir / "step02.log", console_level="INFO")
+
     lf_desc = shot.get("lf_desc", "").strip()
     if not lf_desc:
         # lf_desc 缺失时回退首帧描述：同场景收尾画面，作为末端风格锚
@@ -783,14 +824,14 @@ async def _gen_last_frame_async(
                 if saved_hash == current_hash and _validate_frame(str(lf_path)):
                     return str(lf_path)
                 else:
-                    print(f"  [FRAME] 尾帧 shot_{idx} 哈希不匹配或缓存无效，重新生成")
+                    logger.verbose(f"  [FRAME] 尾帧 shot_{idx} 哈希不匹配或缓存无效，重新生成")
             elif script_mtime is not None and lf_path.stat().st_mtime >= script_mtime:
                 if _validate_frame(str(lf_path)):
                     return str(lf_path)
             elif script_mtime is None and _validate_frame(str(lf_path)):
                 return str(lf_path)
 
-        print(f"  [FRAME] 生成尾帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
+        logger.verbose(f"  [FRAME] 生成尾帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
         # 添加风格前缀（与视频生成保持一致，确保持风格统一）
         lf_desc_full = sanitize_prompt(ensure_prefix(lf_desc, STYLE_PREFIX), verbose=False)
         refs = reference_paths if reference_paths else []
@@ -798,13 +839,15 @@ async def _gen_last_frame_async(
             img_out = await image_adapter.generate_single_image(
                 prompt=lf_desc_full,
                 reference_image_paths=refs,
+                shot_index=idx,
+                frame_desc="尾帧",
             )
             if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                 img_out.data.save(str(lf_path))
             elif hasattr(img_out, "save"):
                 img_out.save(str(lf_path))
         except Exception as e:
-            print(f"  [FRAME] 尾帧 shot_{idx} 生成异常: {e}")
+            _bridge_log(f"  [FRAME] 尾帧 shot_{idx} 生成异常: {e}")
             if attempt < max_retries:
                 continue
             return None
@@ -814,7 +857,7 @@ async def _gen_last_frame_async(
             lf_hash_path.write_text(current_hash, encoding="utf-8")
             return str(lf_path)
         if attempt < max_retries:
-            print(f"  [FRAME] 尾帧 shot_{idx} 第{attempt+1}次不达标，重试...")
+            logger.verbose(f"  [FRAME] 尾帧 shot_{idx} 第{attempt+1}次不达标，重试...")
 
     return str(lf_path) if lf_path.exists() else None
 
@@ -856,10 +899,15 @@ async def _gen_keyframes_async(
     """
     import asyncio
     from pathlib import Path as P
-    
+
     idx = shot["index"]
     shot_dir = shots_dir / str(idx)
     shot_dir.mkdir(parents=True, exist_ok=True)
+
+    # 日志
+    from shared.tee_logger import get_logger
+    from shared.paths import chapter_dir
+    _kf_logger = get_logger(chapter_dir() / "step02.log", console_level="INFO")
     
     keyframes_data = shot.get("keyframes", [])
     if not keyframes_data:
@@ -905,7 +953,7 @@ async def _gen_keyframes_async(
                     kf_paths.append(str(kf_path))
                     break
             
-            print(f"  [KEYFRAME] 生成 shot_{idx} keyframe_{i} (t={time_ratio:.1f})...")
+            _kf_logger.verbose(f"  [KEYFRAME] 生成 shot_{idx} keyframe_{i} (t={time_ratio:.1f})...")
             kf_desc_full = sanitize_prompt(ensure_prefix(kf_desc, STYLE_PREFIX), verbose=False)
             refs = reference_paths if reference_paths else []
             
@@ -914,13 +962,14 @@ async def _gen_keyframes_async(
                     prompt=kf_desc_full,
                     reference_image_paths=refs,
                     shot_index=idx,
+                    frame_desc=f"中间关键帧(t={time_ratio:.1f})",
                 )
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                     img_out.data.save(str(kf_path))
                 elif hasattr(img_out, "save"):
                     img_out.save(str(kf_path))
             except Exception as e:
-                print(f"  [KEYFRAME] shot_{idx} keyframe_{i} 生成异常: {e}")
+                _kf_logger.verbose(f"  [KEYFRAME] shot_{idx} keyframe_{i} 生成异常: {e}")
                 if attempt < max_retries:
                     continue
                 break
@@ -930,10 +979,10 @@ async def _gen_keyframes_async(
                 kf_paths.append(str(kf_path))
                 break
             if attempt < max_retries:
-                print(f"  [KEYFRAME] shot_{idx} keyframe_{i} 第{attempt+1}次不达标，重试...")
+                _kf_logger.verbose(f"  [KEYFRAME] shot_{idx} keyframe_{i} 第{attempt+1}次不达标，重试...")
     
     if kf_paths:
-        print(f"  [bridge] 镜头{idx}: 生成 {len(kf_paths)} 个中间关键帧")
+        _bridge_log(f"  [bridge] 镜头{idx}: 生成 {len(kf_paths)} 个中间关键帧")
     
     return kf_paths
 

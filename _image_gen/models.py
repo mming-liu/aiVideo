@@ -23,6 +23,12 @@ class ImageGenerationRequest:
     seed: Optional[int] = None
     # 推理步数（Agnes API 支持，默认 20）
     num_inference_steps: Optional[int] = None
+    # 帧描述（用于区分首帧/尾帧/中间帧日志），可选
+    frame_desc: str = ""
+    # 启用图片幻觉检测（默认开启）
+    enable_hallucination_detection: bool = True
+    # 期望出现的物体列表（用于检测多余物体）
+    expected_objects: Optional[list[str]] = None
 
 
 @dataclass
@@ -32,3 +38,8 @@ class ImageGenerationResult:
     success: bool
     save_path: Optional[str] = None
     error: Optional[str] = None
+    # 原始图片 URL（用于图像检测）
+    image_url: Optional[str] = None
+    # 幻觉检测结果
+    hallucination_detected: bool = False
+    hallucination_issues: Optional[str] = None  # JSON string of issues

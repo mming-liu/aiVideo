@@ -27,6 +27,10 @@ SCRIPT_FILE = script_file()
 AUDIO_TTS_DIR = audio_dir()
 WORKING_DIR = vimax_working_dir()
 
+# 模块级日志
+from shared.tee_logger import get_logger
+_logger = get_logger(CHAPTER_DIR / "step02.log", console_level="INFO")
+
 MAX_RETRIES = int(os.getenv("VIDEO_MAX_RETRIES", "3"))
 VIDEO_CONCURRENCY = int(os.getenv("VIDEO_CONCURRENCY", "6"))
 
@@ -71,9 +75,10 @@ FFPROBE = _find_ffprobe()
 # ============================================================================
 
 def main() -> None:
-    print("=" * 50)
-    print("  ViMax 视频生成 (流水线优化版)")
-    print("=" * 50)
+
+    _logger.separator()
+    _logger.info("  ViMax 视频生成 (流水线优化版)")
+    _logger.separator()
 
     # 检查前置步骤产物
     if not SCRIPT_FILE.exists():
@@ -82,7 +87,7 @@ def main() -> None:
             f"请先运行 step01: python step01_script_gen/main.py"
         )
     if not CHAPTER_DIR.exists() or not any(CHAPTER_DIR.iterdir()):
-        print(f"[WARN] 输出目录为空: {CHAPTER_DIR}")
+        _logger.warn(f"[WARN] 输出目录为空: {CHAPTER_DIR}")
 
     # 创建输出目录
     CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
@@ -92,17 +97,17 @@ def main() -> None:
     shots = script.get("shots", [])
     narration = script.get("narration", "")
     total_duration = sum(s.get("duration", 0) for s in shots)
-    print(f"\n分镜: {len(shots)} 个, ~{total_duration}s")
-    print(f"旁白: {narration[:50]}...")
+    _logger.info(f"分镜: {len(shots)} 个, ~{total_duration}s")
+    _logger.info(f"旁白: {narration[:50]}...")
 
     auto_confirm = os.getenv("VIDEO_AUTO_CONFIRM", "").strip() == "1"
     if auto_confirm:
         answer = "y"
-        print("确认: y (AUTO)")
+        _logger.info("确认: y (AUTO)")
     else:
         answer = input("\n确认生成? (y/N): ").strip().lower()
     if answer not in ("y", "yes"):
-        print("已取消")
+        _logger.info("已取消")
         sys.exit(0)
 
     force_ff = os.getenv("SCRIPT_FIRST_FRAME_FORCE", "0").strip() == "1"

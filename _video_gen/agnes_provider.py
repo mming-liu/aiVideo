@@ -191,22 +191,26 @@ class AgnesVideoService(VideoGenerationService):
     # 创建任务（带 403 回退 + 5xx 自动重试）
     # ------------------------------------------------------------------
     def create_task(self, req: VideoGenerationRequest) -> str:
+        # 日志：从 tee_logger 输出到 step02.log，与 _image_gen 保持一致
+        from shared.tee_logger import get_logger
+        from shared.paths import chapter_dir
+        _vlog = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+
         image_data_url = self._encode_image(req.image_path)
         if req.image_path and not image_data_url:
-            print(f"  [镜头{req.clip_index}] 首帧图 {req.image_path} 读取失败，"
+            _vlog.verbose(f"  [镜头{req.clip_index}] 首帧图 {req.image_path} 读取失败，"
                   f"降级为 text-to-video")
         # 尾帧：与首帧同时提供时启用关键帧动画模式（首尾双锚定钳制风格漂移）
         last_frame_data_url = self._encode_image(req.last_frame_image_path)
         if req.last_frame_image_path and not last_frame_data_url:
-            print(f"  [镜头{req.clip_index}] 尾帧图 {req.last_frame_image_path} 读取失败，"
+            _vlog.verbose(f"  [镜头{req.clip_index}] 尾帧图 {req.last_frame_image_path} 读取失败，"
                   f"降级为 image-to-video")
-
         # 多关键帧模式（extra_body.image 数组，3-4 帧完整动作序列）
         extra_keyframes = []
         if req.extra_keyframe_paths:
             extra_keyframes = self._encode_images(req.extra_keyframe_paths)
             if len(extra_keyframes) >= 2:
-                print(f"  [镜头{req.clip_index}] 多关键帧模式: {len(extra_keyframes)} 帧锚定 "
+                _vlog.verbose(f"  [镜头{req.clip_index}] 多关键帧模式: {len(extra_keyframes)} 帧锚定 "
                       f"(完整动作序列 A->B->C...)")
 
         # 计算尺寸与帧数：优先使用 req.size，否则回退到 config
@@ -267,15 +271,15 @@ class AgnesVideoService(VideoGenerationService):
                     "image": [image_data_url, last_frame_data_url],
                     "mode": "keyframes",
                 }
-                print(f"  [镜头{req.clip_index}] 关键帧模式: 首帧+尾帧双锚定")
+                _vlog.verbose(f"  [镜头{req.clip_index}] 关键帧模式: 首帧+尾帧双锚定")
             elif image_data_url:
                 payload[config.AGNES_VIDEO_IMAGE_FIELD] = image_data_url
                 # 日志含 b64 长度，便于排查 padding 相关错误
                 b64_body = image_data_url.split(",", 1)[-1]
-                print(f"  [镜头{req.clip_index}] 参考图编码完成 "
+                _vlog.verbose(f"  [镜头{req.clip_index}] 参考图编码完成 "
                       f"(len={len(b64_body)}, mod4={len(b64_body)%4})")
 
-            print(f"  [镜头{req.clip_index}] [prompt -> {model}] "
+            _vlog.verbose(f"  [镜头{req.clip_index}] [prompt -> {model}] "
                   f"{req.prompt[:200]}{'...' if len(req.prompt) > 200 else ''}")
 
             try:
@@ -286,7 +290,7 @@ class AgnesVideoService(VideoGenerationService):
                 # 连接错误也做重试
                 _submit_retry += 1
                 if _submit_retry <= config.AGNES_VIDEO_SUBMIT_RETRIES:
-                    print(f"  [镜头{req.clip_index}] 提交异常: {e}，"
+                    _vlog.verbose(f"  [镜头{req.clip_index}] 提交异常: {e}，"
                           f"{config.AGNES_VIDEO_SUBMIT_RETRY_DELAY}s 后重试 "
                           f"({_submit_retry}/{config.AGNES_VIDEO_SUBMIT_RETRIES})")
                     time.sleep(config.AGNES_VIDEO_SUBMIT_RETRY_DELAY)
@@ -301,7 +305,7 @@ class AgnesVideoService(VideoGenerationService):
                 if config.AGNES_VIDEO_MODE == "sync":
                     vurl = self._extract_video_url(data)
                     if vurl:
-                        print(f"  [镜头{req.clip_index}] 任务已创建(同步) [{model}] "
+                        _vlog.verbose(f"  [镜头{req.clip_index}] 任务已创建(同步) [{model}] "
                               f"-> 直接返回 video_url")
                         return f"{_SYNC_PREFIX}{vurl}"
                     raise RuntimeError(
@@ -322,7 +326,7 @@ class AgnesVideoService(VideoGenerationService):
                     mode_tag = "image-to-video"
                 else:
                     mode_tag = "text-to-video"
-                print(f"  [镜头{req.clip_index}] 任务已创建 [{model}] ({mode_tag}) "
+                _vlog.verbose(f"  [镜头{req.clip_index}] 任务已创建 [{model}] ({mode_tag}) "
                       f"[Key {key_idx + 1}] -> video_id: {video_id}")
                 return video_id
 
@@ -330,7 +334,7 @@ class AgnesVideoService(VideoGenerationService):
             if 500 <= res.status_code < 600:
                 _submit_retry += 1
                 if _submit_retry <= config.AGNES_VIDEO_SUBMIT_RETRIES:
-                    print(f"  [镜头{req.clip_index}] 服务端 {res.status_code}，"
+                    _vlog.verbose(f"  [镜头{req.clip_index}] 服务端 {res.status_code}，"
                           f"{config.AGNES_VIDEO_SUBMIT_RETRY_DELAY}s 后重试 "
                           f"({_submit_retry}/{config.AGNES_VIDEO_SUBMIT_RETRIES})")
                     time.sleep(config.AGNES_VIDEO_SUBMIT_RETRY_DELAY)
@@ -344,7 +348,7 @@ class AgnesVideoService(VideoGenerationService):
             if res.status_code in (401, 402):
                 self._key_scheduler.disable(key_idx)
                 if self._key_scheduler.n_active() > 0:
-                    print(f"  [镜头{req.clip_index}] HTTP {res.status_code}，"
+                    _vlog.verbose(f"  [镜头{req.clip_index}] HTTP {res.status_code}，"
                           f"Key {key_idx + 1} 已拉黑，调度下一个可用 Key")
                     continue
                 raise RuntimeError(
@@ -360,7 +364,7 @@ class AgnesVideoService(VideoGenerationService):
                     cool = (wait + 0.5) if wait is not None \
                         else self._key_scheduler._cooldown
                     self._key_scheduler.penalize(key_idx, cool)
-                    print(f"  [镜头{req.clip_index}] 速率限制 429，Key {key_idx + 1} "
+                    _vlog.verbose(f"  [镜头{req.clip_index}] 速率限制 429，Key {key_idx + 1} "
                           f"冷却 {cool:.1f}s，调度下一个可用 Key "
                           f"({_submit_retry}/{config.AGNES_VIDEO_SUBMIT_RETRIES})")
                     continue
@@ -373,7 +377,7 @@ class AgnesVideoService(VideoGenerationService):
             if res.status_code == 403:
                 next_model = self._advance_model()
                 if next_model:
-                    print(f"  [镜头{req.clip_index}] [!] 模型 {model} 返回 403"
+                    _vlog.verbose(f"  [镜头{req.clip_index}] [!] 模型 {model} 返回 403"
                           f"（额度耗尽/无权限），自动切换到 {next_model}")
                     continue  # 用新模型重试
                 else:
@@ -424,6 +428,11 @@ class AgnesVideoService(VideoGenerationService):
     def wait_for_completion(
         self, req: VideoGenerationRequest, task_id: str
     ) -> VideoGenerationResult:
+        # 日志：从 tee_logger 输出到 step02.log，与 create_task 保持一致
+        from shared.tee_logger import get_logger
+        from shared.paths import chapter_dir
+        _vlog = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+
         # sync 模式: task_id 实际是 video_url
         if task_id.startswith(_SYNC_PREFIX):
             return self._download(req, task_id[len(_SYNC_PREFIX):])
@@ -451,7 +460,7 @@ class AgnesVideoService(VideoGenerationService):
                     wait = parse_retry_after(err)
                     next_wait = (wait + 0.5) if wait is not None \
                         else config.AGNES_VIDEO_POLL_INTERVAL * 2
-                    print(f"  [镜头{req.clip_index}] 查询限流 429，"
+                    _vlog.verbose(f"  [镜头{req.clip_index}] 查询限流 429，"
                           f"等待 {next_wait:.1f}s 后继续轮询")
                     continue
                 raise
@@ -461,7 +470,7 @@ class AgnesVideoService(VideoGenerationService):
                 video_url = self._extract_video_url(output)
                 if not video_url:
                     # 残量诊断日志，方便排查新增响应结构
-                    print(f"  [镜头{req.clip_index}] [DEBUG] 未找到 video_url, "
+                    _vlog.verbose(f"  [镜头{req.clip_index}] [DEBUG] 未找到 video_url, "
                           f"响应: {str(output)[:500]}")
                 video_url = self._extract_video_url(output)
                 if not video_url:
@@ -481,7 +490,7 @@ class AgnesVideoService(VideoGenerationService):
                     error=f"API 失败: {reason}",
                 )
 
-            print(f"  [镜头{req.clip_index}] 生成中... ({status}, "
+            _vlog.verbose(f"  [镜头{req.clip_index}] 生成中... ({status}, "
                   f"第 {attempt}/{config.AGNES_VIDEO_MAX_POLL_ATTEMPTS} 次轮询)")
 
     # ------------------------------------------------------------------
@@ -497,7 +506,7 @@ class AgnesVideoService(VideoGenerationService):
                 f.write(video_bin)
 
             size_mb = len(video_bin) / (1024 * 1024)
-            print(f"  [镜头{req.clip_index}] [OK] 已保存 -> {save_path} ({size_mb:.1f} MB)")
+            _vlog.verbose(f"  [镜头{req.clip_index}] [OK] 已保存 -> {save_path} ({size_mb:.1f} MB)")
             return VideoGenerationResult(
                 clip_index=req.clip_index,
                 success=True,

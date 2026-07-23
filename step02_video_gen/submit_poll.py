@@ -18,7 +18,6 @@ load_dotenv(_PROJECT_ROOT / ".env")
 from shared.vimax_bridge import build_working_dir, gen_shot_frames
 from shared.vimax_adapters import ImageGeneratorAiVideoAdapter, VideoGeneratorAiVideoAdapter
 from shared.error_fmt import fmt_err as _fmt_err, parse_retry_after
-from vimax.utils.rate_limiter import RateLimiter
 
 # Smart polling config: exponential backoff + jitter
 POLL_BASE_INTERVAL = int(os.getenv("POLL_BASE_INTERVAL", "10"))    # Initial poll interval (seconds)
@@ -27,12 +26,10 @@ POLL_EXPONENTIAL_FACTOR = float(os.getenv("POLL_EXPONENTIAL_FACTOR", "1.5"))  # 
 POLL_JITTER = int(os.getenv("POLL_JITTER", "3"))                   # Jitter range +/- seconds
 INITIAL_POLL_DELAY = int(os.getenv("INITIAL_POLL_DELAY", "60"))    # Wait after submit before first poll
 
-_VIDEO_RPM = os.getenv("VIDEO_MAX_REQUESTS_PER_MINUTE")
-VIDEO_RATE_LIMITER = RateLimiter(
-    max_requests_per_minute=int(_VIDEO_RPM) if _VIDEO_RPM else None,
-)
-
-VIDEO_CONCURRENCY = int(os.getenv("VIDEO_CONCURRENCY", "6"))
+# 视频提交并发：在 _submit_video 入口处用 Semaphore 控制，与 _video_gen provider
+# 的 KeyScheduler（每 Key 独立冷却）配合实现 Nx 吞吐。空闲 Key 越多，并发越多。
+# 不再使用全局 RateLimiter 单令牌串行闸。
+VIDEO_CONCURRENCY = int(os.getenv("VIDEO_CONCURRENCY", "8"))
 
 # Global failure storage
 _failed_videos = defaultdict(list)
@@ -95,7 +92,7 @@ async def _poll_video(
     """Background poll with exponential backoff + jitter - reduces API queries."""
     async with semaphore:
         # Wait INITIAL_POLL_DELAY seconds after submit before first query (respect 1 RPM limit)
-        print(f"  [Shot {shot_idx}] Task submitted, waiting {INITIAL_POLL_DELAY}s before polling...")
+        logger.verbose(f"  [Shot {shot_idx}] Task submitted, waiting {INITIAL_POLL_DELAY}s before polling...")
         await asyncio.sleep(INITIAL_POLL_DELAY)
 
         # Exponential backoff state
@@ -129,10 +126,10 @@ async def _poll_video(
                         except OSError as copy_err:
                             if "WinError 32" in str(copy_err) and copy_attempt < 9:
                                 wait = 1.0 + copy_attempt  # 递增等待 1s~10s
-                                print(f"  [Shot {shot_idx}] File locked, retrying copy in {wait:.0f}s ({copy_attempt + 1}/10)...")
+                                logger.verbose(f"  [Shot {shot_idx}] File locked, retrying copy in {wait:.0f}s ({copy_attempt + 1}/10)...")
                                 await asyncio.sleep(wait)
                             else:
-                                print(f"  [Shot {shot_idx}] Copy failed after {copy_attempt} retries: {copy_err}")
+                                logger.verbose(f"  [Shot {shot_idx}] Copy failed after {copy_attempt} retries: {copy_err}")
                                 break
 
                     if not copy_ok:
@@ -162,13 +159,13 @@ async def _poll_video(
                             wait = parse_retry_after(err)
                             if wait is not None:
                                 override_interval = wait + 0.5
-                                print(f"  [Shot {shot_idx}] Rate limited, waiting {override_interval:.1f}s (server retry-after): {_fmt_err(err)}")
+                                logger.verbose(f"  [Shot {shot_idx}] Rate limited, waiting {override_interval:.1f}s (server retry-after): {_fmt_err(err)}")
                             else:
                                 poll_interval = min(poll_interval * 2, POLL_MAX_INTERVAL)
-                                print(f"  [Shot {shot_idx}] Rate limited (interval {poll_interval:.0f}s): {_fmt_err(err)}")
+                                logger.verbose(f"  [Shot {shot_idx}] Rate limited (interval {poll_interval:.0f}s): {_fmt_err(err)}")
                         else:
                             poll_interval = min(poll_interval * POLL_EXPONENTIAL_FACTOR, POLL_MAX_INTERVAL)
-                            print(f"  [Shot {shot_idx}] Processing (interval {poll_interval:.0f}s, failures {consecutive_failures})")
+                            logger.verbose(f"  [Shot {shot_idx}] Processing (interval {poll_interval:.0f}s, failures {consecutive_failures})")
                         continue
                     _failed_videos[shot_idx].append({"attempt": -1, "error": err, "task_id": task_id})
                     return False
@@ -181,13 +178,13 @@ async def _poll_video(
                         wait = parse_retry_after(err_str)
                         if wait is not None:
                             override_interval = wait + 0.5
-                            print(f"  [Shot {shot_idx}] Rate limited, waiting {override_interval:.1f}s (server retry-after): {_fmt_err(err_str)}")
+                            logger.verbose(f"  [Shot {shot_idx}] Rate limited, waiting {override_interval:.1f}s (server retry-after): {_fmt_err(err_str)}")
                         else:
                             poll_interval = min(poll_interval * 2, POLL_MAX_INTERVAL)
-                            print(f"  [Shot {shot_idx}] Poll error (interval {poll_interval:.0f}s): {_fmt_err(err_str)}")
+                            logger.verbose(f"  [Shot {shot_idx}] Poll error (interval {poll_interval:.0f}s): {_fmt_err(err_str)}")
                     else:
                         poll_interval = min(poll_interval * POLL_EXPONENTIAL_FACTOR, POLL_MAX_INTERVAL)
-                        print(f"  [Shot {shot_idx}] Poll error (interval {poll_interval:.0f}s): {_fmt_err(err_str)}")
+                        logger.verbose(f"  [Shot {shot_idx}] Poll error (interval {poll_interval:.0f}s): {_fmt_err(err_str)}")
                     continue
                 _failed_videos[shot_idx].append({"attempt": -1, "error": err_str, "task_id": task_id})
                 return False
@@ -206,7 +203,6 @@ async def _submit_video(
 
     for attempt in range(1, 4):
         try:
-            await VIDEO_RATE_LIMITER.acquire()
             req = _make_request(video_adapter, prompt, frame_paths, shot,
                                 audio_duration=audio_duration, characters=characters)
             task_id = await video_adapter.submit_task(req)
@@ -269,11 +265,11 @@ async def _process_one_shot(
                 clips_d = _clips_dir()
                 clip_file = clips_d / f"clip_{idx}.mp4"
                 if clip_file.exists() and clip_file.stat().st_size > 20 * 1024:
-                    print(f"  [Shot {idx}] Cache hit, skip (prompt unchanged + clip exists)")
+                    logger.verbose(f"  [Shot {idx}] Cache hit, skip (prompt unchanged + clip exists)")
                     return None
                 else:
                     # 帧文件已存在，跳过帧生成直接提视频
-                    print(f"  [Shot {idx}] Clip missing, re-generate video only (skip frames)")
+                    logger.verbose(f"  [Shot {idx}] Clip missing, re-generate video only (skip frames)")
                     ff = shot_dir / "first_frame.png"
                     lf = shot_dir / "last_frame.png"
                     frame_paths = [str(p) for p in [ff, lf] if p.exists()]
@@ -305,6 +301,11 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     """Pipeline: config -> TTS -> concurrent shots (frames -> submit -> poll)."""
     from step02_video_gen.audio_pregen import _gen_shot_audio_duration, _update_script_with_actual_durations
     from tts import create_provider
+    from shared.paths import chapter_dir
+    from shared.tee_logger import get_logger
+
+    log_dir = chapter_dir()
+    logger = get_logger(log_dir / "step02.log", console_level="INFO")
 
     script_actual_mtime = script_file.stat().st_mtime if script_file.exists() else None
 
@@ -339,7 +340,7 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     # 3. Build task list: hook + shots all in one gather (parallel)
     hook = script.get("hook")
     if hook and isinstance(hook, dict) and hook.get("prompt"):
-        print(f"\n[INFO] ===== 钩子视频 (index=0, 与正片并行) =====")
+        logger.info(f"\n[INFO] ===== 钩子视频 (index=0, ======")
         hook["index"] = 0
         hook_audio_dur = _gen_shot_audio_duration(hook, audio_dir, provider=tts_provider)
         hook["actual_audio_duration"] = round(hook_audio_dur, 2)
@@ -372,10 +373,9 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
         script["hook"] = hook
 
     # Build result table
-    print()
-    print("=" * 70)
-    print("  shot    status  reason / task_id")
-    print("=" * 70)
+    logger.separator("=", 70)
+    logger.info("  shot    status  reason / task_id")
+    logger.separator("=", 70)
     # Hook first
     if hook:
         if 0 in _failed_videos:
@@ -383,13 +383,13 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
             err = _fmt_err(errs[0].get("error", "unknown"))
             tid = errs[0].get("task_id", "")
             reason = f"{err} | {tid}" if tid else err
-            print(f"  {'hook':>5}  FAIL    {reason}")
+            logger.info(f"  {'hook':>5}  FAIL    {reason}")
         else:
             hook_video = shots_dir / "0" / "video.mp4"
             if hook_video.exists() and hook_video.stat().st_size > 20 * 1024:
-                print(f"  {'hook':>5}  OK      -")
+                logger.info(f"  {'hook':>5}  OK      -")
             else:
-                print(f"  {'hook':>5}  SKIP    (not generated)")
+                logger.info(f"  {'hook':>5}  SKIP    (not generated)")
     for s in shots:
         sid = s["index"]
         if sid in _failed_videos:
@@ -399,15 +399,14 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
             reason = err
             if tid:
                 reason += " | " + tid
-            print(f"  {sid:>5}  FAIL    {reason}")
+            logger.info(f"  {sid:>5}  FAIL    {reason}")
         else:
-            print(f"  {sid:>5}  OK      -")
-    print("=" * 70)
+            logger.info(f"  {sid:>5}  OK      -")
+    logger.separator("=", 70)
     total_shots = len(shots) + (1 if hook else 0)
     failed_count = len(_failed_videos)
     ok_count = total_shots - failed_count
-    print(f"  total: {total_shots} shots (incl. hook) | OK: {ok_count} | FAIL: {failed_count}")
-    print()
+    logger.info(f"  total: {total_shots} shots (incl. hook) | OK: {ok_count} | FAIL: {failed_count}")
 
     # 5. Save
     with open(script_file, "w", encoding="utf-8") as f:

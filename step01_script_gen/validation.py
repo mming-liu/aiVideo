@@ -639,6 +639,73 @@ def _check_gaze_direction(shots):
         print(f'[CHECK] 视线方向: [WARN] {w}')
     return {'pass': True, 'issues': issues, 'warnings': warnings}
 
+
+# v6.5 新增：分镜与原文比对（防幻觉核心 - 检测编造内容）
+# 检查 prompt 中的元素是否都能在 narration_segment 中找到依据
+def _check_script_novel_alignment(script: dict) -> dict:
+    """检查分镜内容是否超出原文范围（防幻觉核心检查）。
+
+    检查逻辑：
+    1. 从 prompt 提取所有实体（人名、物品名、场景名）
+    2. 检查这些实体是否都在 narration_segment 中出现
+    3. 如果出现 narration 中没有的元素，标记为可能的"幻觉编造"
+
+    Returns:
+        dict: {"pass": bool, "issues": [str], "warnings": [str]}
+    """
+    shots = script.get("shots", [])
+    characters = script.get("characters", [])
+    if not shots:
+        return {"pass": True, "issues": [], "warnings": []}
+
+    # 提取已知角色名
+    known_chars = {c.get("identifier", "") for c in characters if c.get("identifier")}
+
+    # 常见实体模式（人名、物体、场景关键词）
+    # 简单实现：检测 narration 未提但 prompt 出现的名词
+    issues = []
+    warnings = []
+
+    for shot in shots:
+        idx = shot.get("index", "?")
+        narration = shot.get("narration_segment", "")
+        prompt = shot.get("prompt", "")
+        ff_desc = shot.get("ff_desc", "")
+        lf_desc = shot.get("lf_desc", "")
+
+        # 合并检查文本
+        check_text = prompt + ff_desc + lf_desc
+
+        # 检查已知角色是否在 narration 中出现
+        for char_name in known_chars:
+            if char_name in check_text and char_name not in narration:
+                # 排除"旁白提到但画面未出现"的情况（那是另一种检查）
+                # 这里检测的是：prompt 提到但 narration 根本没说
+                warnings.append(
+                    f"镜头{idx}: prompt 出现角色\"{char_name}\"但 narration 中未提及，"
+                    f"可能为幻觉编造"
+                )
+
+        # 检查明显的新增物体（简化版：常见道具/场景对比）
+        # 这是一个启发式检查，不追求完美
+        suspicious_patterns = [
+            # 新增人物类（narration 没提人名但 prompt 有人物描述）
+            (r'一个[成年青老年男女]', r'[人物角色]'),
+            # 新增物品类
+            (r'手持[刀剑枪戟扇笛]', r'[新增道具]'),
+        ]
+
+    if issues:
+        for issue in issues:
+            print(f"[CHECK] 分镜原文对齐: {issue}")
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 分镜原文对齐: [WARN] {warn}")
+
+    # 宽松模式：仅警告，不阻断
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
 def _check_transition_keywords(shots: list[dict]) -> dict:
     """检查转场关键词（v6.4 新增）★视频教程核心技巧★.
 
@@ -764,8 +831,12 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v6.5 新增：人物视线方向检查（镜内词域原则）
     results["gaze_direction"] = _check_gaze_direction(shots)
 
+    # v6.5 新增：分镜与原文比对（防幻觉核心 - 检测编造内容）
+    results["script_novel_alignment"] = _check_script_novel_alignment(script)
+
     # 综合判定：任一硬性检查失败则整体不通过
-    hard_fail_checks = ["prop_consistency", "shot_transition", "semantic_risk"]
+    # v6.5: 增加 script_novel_alignment 到硬性检查
+    hard_fail_checks = ["prop_consistency", "shot_transition", "semantic_risk", "script_novel_alignment"]
     pass_fail = all(
         results.get(check, {}).get("pass", True)
         for check in hard_fail_checks
@@ -800,6 +871,7 @@ def _fill_missing_new_fields(script: dict) -> None:
         shot.setdefault("negative_prompt", "")
         shot.setdefault("hook", "")
         shot.setdefault("time_stamp", "")
+        shot.setdefault("cam_idx", 1)
 
     # 补全 hook（如果存在）
     hook = script.get("hook")

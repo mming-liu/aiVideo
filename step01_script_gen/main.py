@@ -38,6 +38,10 @@ CHAPTER_DIR = chapter_dir()
 OUTPUT_FILE = script_file()
 SCRIPT_FILE = OUTPUT_FILE
 
+# 模块级日志
+from shared.tee_logger import get_logger
+_logger = get_logger(CHAPTER_DIR / "step01.log", console_level="INFO")
+
 # ============================================================================
 # 导入子模块
 # ============================================================================
@@ -65,7 +69,7 @@ import scene_compliance
 def read_chapter(path: str = "锦衣夜行_77119小说.txt", chapter: int = 1) -> str:
     """提取小说指定章节（合并多个小节），返回完整内容."""
     full_text = extract_section(path, chapter)
-    print(f"[INFO] 选取第 {chapter} 章全文 {len(full_text)} 字符作为素材")
+    _logger.info(f"[INFO] 选取第 {chapter} 章全文 {len(full_text)} 字符作为素材")
     return full_text
 
 
@@ -81,9 +85,9 @@ def gen_spy_script(novel_text: str, bank=None) -> str:
         system_prompt=SYSTEM_PROMPT,
         user_prompt=prompt,
         max_tokens=40000,
-        temperature=0.8,
+        temperature=0.2,  # v6.5: 降低温度防止幻觉
     )
-    print("[INFO] 正在调用 LLM 生成分镜脚本...")
+    _logger.info("[INFO] 正在调用 LLM 生成分镜脚本...")
     result = service.generate(req)
     if not result.success:
         raise RuntimeError(f"LLM 生成失败: {result.error}")
@@ -112,13 +116,13 @@ def _post_process(script: dict) -> dict:
     # v6 新增：敏感词校验（强制级）
     validation_result = style_prefix.validate_sensitive_words(script, verbose=True)
     if validation_result["has_issues"]:
-        print("[WARN] 检测到残留敏感词，再次进行合规过滤...")
+        _logger.warn("[WARN] 检测到残留敏感词，再次进行合规过滤...")
         # 再次过滤确保干净
         script = style_prefix.sanitize_script_shots(script, verbose=True)
         # 再次校验
         validation_result = style_prefix.validate_sensitive_words(script, verbose=True)
         if validation_result["has_issues"]:
-            print("[ERROR] 仍有残留敏感词，请检查脚本!")
+            _logger.error("[ERROR] 仍有残留敏感词，请检查脚本!")
 
     return script
 
@@ -138,12 +142,12 @@ def gen_hook_script(novel_text: str) -> dict | None:
         system_prompt="你是短视频脚本大师，擅长在视频开头制造悬念和吸引力。禁止血腥暴力细节。",
         user_prompt=prompt,
         max_tokens=8000,
-        temperature=0.9,
+        temperature=0.2,  # v6.5: 降低温度防止幻觉
     )
-    print("[INFO] 正在调用 LLM 生成钩子分镜...")
+    _logger.info("[INFO] 正在调用 LLM 生成钩子分镜...")
     result = service.generate(req)
     if not result.success:
-        print(f"[WARN] 钩子分镜生成失败: {result.error}，跳过钩子")
+        _logger.warn(f"[WARN] 钩子分镜生成失败: {result.error}，跳过钩子")
         return None
 
     import re
@@ -164,7 +168,7 @@ def gen_hook_script(novel_text: str) -> dict | None:
                     hook[field] = style_prefix.sanitize_prompt(hook[field], verbose=False)
         return hook
     except Exception as e:
-        print(f"[WARN] 钩子分镜解析失败: {e}，跳过钩子")
+        _logger.warn(f"[WARN] 钩子分镜解析失败: {e}，跳过钩子")
         return None
 
 
@@ -174,10 +178,11 @@ def gen_hook_script(novel_text: str) -> dict | None:
 
 def main() -> None:
     """主流程：读取章节 → 生成脚本 → 生成钩子 → 验证 → 后处理 → 保存."""
-    print("=" * 50)
-    print("  步骤1: 分镜脚本生成 (v6.0)")
-    print("  新增: 钩子分镜 + 敏感词校验")
-    print("=" * 50)
+
+    _logger.separator()
+    _logger.info("  步骤1: 分镜脚本生成 (v6.0)")
+    _logger.info("  新增: 钩子分镜 + 敏感词校验")
+    _logger.separator()
 
     # 创建输出目录
     CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
@@ -193,7 +198,7 @@ def main() -> None:
     # 预提取本章角色信息，辅助分镜生成（v6.1 新增）
     # 这样 LLM 生成脚本时能看到本章新角色的特征描述
     if CHARACTER_EXTRACTION_ENABLED:
-        print("[INFO] 预提取本章角色信息以辅助分镜生成...")
+        _logger.info("[INFO] 预提取本章角色信息以辅助分镜生成...")
         try:
             chars = extract_characters(novel_text, character_bank)
             # 注册新角色到 bank（暂存本章角色，供生成时使用）
@@ -207,9 +212,9 @@ def main() -> None:
                     )
             # v6.1 优化：立即保存，确保即使脚本生成失败，角色库也已更新
             character_bank.save()
-            print(f"[INFO] 预提取到 {len(chars)} 个角色特征（已保存到角色库）")
+            _logger.info(f"[INFO] 预提取到 {len(chars)} 个角色特征（已保存到角色库）")
         except Exception as e:
-            print(f"[WARN] 预提取角色失败: {e}，继续生成脚本...")
+            _logger.warn(f"[WARN] 预提取角色失败: {e}，继续生成脚本...")
 
     # 检查缓存
     prompt_changed = _prompt_changed(
@@ -217,7 +222,7 @@ def main() -> None:
     )
 
     if not prompt_changed:
-        print(f"[CACHE] 脚本已缓存: {SCRIPT_FILE}")
+        _logger.info(f"[CACHE] 脚本已缓存: {SCRIPT_FILE}")
         with open(SCRIPT_FILE, "r", encoding="utf-8") as f:
             script = json.load(f)
         # 补写章节元信息（部名/章名，老缓存可能缺失）
@@ -227,23 +232,23 @@ def main() -> None:
         _compute_timecodes(script)
         with open(SCRIPT_FILE, "w", encoding="utf-8") as f:
             json.dump(script, f, ensure_ascii=False, indent=2)
-        print(f"时间轴已重新计算")
+        _logger.info("时间轴已重新计算")
         return
 
     # 脚本已更新，删除旧的音频和视频文件
-    print(f"[INFO] 分镜脚本已更新，清理旧的音视频文件...")
+    _logger.info(f"[INFO] 分镜脚本已更新，清理旧的音视频文件...")
     for subdir in ("audio", "vimax_working", "stretched"):
         subdir_path = CHAPTER_DIR / subdir
         if subdir_path.exists():
             import shutil
             shutil.rmtree(subdir_path)
-            print(f"  [已删除] {subdir}/")
+    _logger.verbose(f"  [已删除] {subdir}/")
     # 删除最终视频和字幕
     for f in ("final.mp4", "subtitles.srt"):
         fpath = CHAPTER_DIR / f
         if fpath.exists():
             fpath.unlink()
-            print(f"  [已删除] {f}")
+            _logger.verbose(f"  [已删除] {f}")
 
     # 生成脚本
     raw = gen_spy_script(novel_text, character_bank)
@@ -258,7 +263,7 @@ def main() -> None:
             validation = validate_script_gap(script, novel_text)
 
             if validation["overall_pass"]:
-                print(f"[GAP] 差距分析通过 (尝试 {attempt + 1}/{GAP_MAX_REGEN_ATTEMPTS})")
+                _logger.info(f"[GAP] 差距分析通过 (尝试 {attempt + 1}/{GAP_MAX_REGEN_ATTEMPTS})")
                 # 保存脚本并生成完整报告
                 partial_path = CHAPTER_DIR / "script_result.partial.json"
                 with open(partial_path, "w", encoding="utf-8") as _f:
@@ -276,7 +281,7 @@ def main() -> None:
                 break
 
             # 发现问题，反馈给 LLM 重新生成
-            print(f"[GAP] 发现差距问题， 重新生成 (尝试 {attempt + 1}/{GAP_MAX_REGEN_ATTEMPTS})...")
+            _logger.warn(f"[GAP] 发现差距问题， 重新生成 (尝试 {attempt + 1}/{GAP_MAX_REGEN_ATTEMPTS})...")
 
             # 获取差距分析上下文并追加到 prompt（函数已在模块级导入）
             gap_context = _load_gap_analysis_context(validation)
@@ -290,7 +295,7 @@ def main() -> None:
                 system_prompt=SYSTEM_PROMPT,
                 user_prompt=prompt,
                 max_tokens=40000,
-                temperature=0.8,
+                temperature=0.2,  # v6.5: 降低温度防止幻觉
             )
             result = service.generate(req)
             if not result.success:
@@ -306,29 +311,29 @@ def main() -> None:
             script = _post_process(script)
         else:
             # 达到最大尝试次数仍有问题，记录但不中断
-            print("[GAP] 达到最大重试次数，仍有差距问题，将继续处理")
+            _logger.warn("[GAP] 达到最大重试次数，仍有差距问题，将继续处理")
 
     # 后处理：注入全局配置 + 合规过滤 + 敏感词校验
     script = _post_process(script)
 
     # ========== v6新增：钩子分镜生成 ==========
     if HOOK_ENABLED:
-        print("\n[INFO] 开始生成钩子分镜...")
+        _logger.info("\n[INFO] 开始生成钩子分镜...")
         hook = gen_hook_script(novel_text)
         if hook:
             script["hook"] = hook
-            print(f"[OK] 钩子分镜已生成: {hook.get('narration_segment', '')[:30]}...")
+            _logger.info(f"[OK] 钩子分镜已生成: {hook.get('narration_segment', '')[:30]}...")
         else:
-            print("[INFO] 跳过钩子分镜")
+            _logger.info("[INFO] 跳过钩子分镜")
 
     # 提取角色（跨章节一致性）
     if CHARACTER_EXTRACTION_ENABLED:
-        print("[INFO] 提取角色信息...")
+        _logger.info("[INFO] 提取角色信息...")
         # 复用预提取的 character_bank，角色库已在预提取阶段保存（第206行）
         chars = extract_characters(novel_text, character_bank)
         script["characters"] = chars
         # 注意：角色库已在预提取阶段保存，无需重复保存
-        print(f"[INFO] 已提取 {len(chars)} 个角色")
+        _logger.info(f"[INFO] 已提取 {len(chars)} 个角色")
 
     # 计算时间轴（v5.0 运镜量化参数）
     _compute_timecodes(script)
@@ -345,23 +350,23 @@ def main() -> None:
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(script, f, ensure_ascii=False, indent=2)
 
-    print(f"[OK] 分镜脚本已保存至 {OUTPUT_FILE}")
+    _logger.info(f"[OK] 分镜脚本已保存至 {OUTPUT_FILE}")
 
     # 摘要
-    print(f"\n{'='*60}")
-    print(f"分镜脚本摘要")
-    print(f"{'='*60}")
+    _logger.separator("=", 60)
+    _logger.info("分镜脚本摘要")
+    _logger.separator("=", 60)
     shots = script.get("shots", [])
-    print(f"共 {len(shots)} 个镜头")
+    _logger.info(f"共 {len(shots)} 个镜头")
     if script.get("hook"):
-        print(f"含 1 个钩子分镜（开场悬念）")
+        _logger.info("含 1 个钩子分镜（开场悬念）")
     for k in ("resolution", "ratio", "fps", "render_style", "global_weather", "global_atmosphere"):
         if k in script:
-            print(f"  {k}: {script[k]}")
+            _logger.verbose(f"  {k}: {script[k]}")
     for shot in shots[:3]:
         idx = shot.get("index", "?")
         ct = shot.get("color_tone", shot.get("clip_transition", ""))
-        print(f"  镜头{idx}: {shot.get('subtitle', '')[:40]}... [{ct}]")
+        _logger.verbose(f"  镜头{idx}: {shot.get('subtitle', '')[:40]}... [{ct}]")
 
 
 

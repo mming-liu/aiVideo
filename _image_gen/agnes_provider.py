@@ -117,6 +117,17 @@ class AgnesImageService(ImageGenerationService):
         url = f"{config.AGNES_BASE_URL.rstrip('/')}/v1/images/generations"
         idx = 0
         last_error = ""
+        # 日志辅助: 写文件，静默控制台
+        try:
+            from shared.tee_logger import get_logger
+            from shared.paths import chapter_dir
+            __vl = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+            def _verbose_write(msg):
+                __vl.verbose(msg)
+        except Exception:
+            def _verbose_write(msg):
+                print(msg)
+
         _403_count = 0  # 连续 403 计数：轮完一圈可用 key 仍 403 则回退模型
 
         # 图生图：编码参考图
@@ -126,7 +137,7 @@ class AgnesImageService(ImageGenerationService):
             if ref_data_url:
                 pass  # 静默
             else:
-                print(f"  [镜头{req.shot_index}] 参考图读取失败，降级为 text-to-image")
+                _verbose_write(f"  [镜头{req.shot_index}] 参考图读取失败，降级为 text-to-image")
 
         while idx < len(self._model_queue):
             model = self._model_queue[idx]
@@ -166,13 +177,11 @@ class AgnesImageService(ImageGenerationService):
             # 图生图: 在 extra_body.image 传入输入图像
             if ref_data_url:
                 extra["image"] = [ref_data_url]
-                b64_body = ref_data_url.split(",", 1)[-1]
-                print(f"  [镜头{req.shot_index}] 参考图编码完成 "
-                      f"(len={len(b64_body)}, mod4={len(b64_body)%4})")
 
             payload["extra_body"] = extra
 
-            print(f"  [镜头{req.shot_index}] 正在生成首帧 [{model}]...")
+            frame_label = req.frame_desc if req.frame_desc else "首帧"
+            _verbose_write(f"  [镜头{req.shot_index}] 正在生成{frame_label} [{model}]...")
             _submit_retry = 0
             try:
                 while True:
@@ -183,7 +192,7 @@ class AgnesImageService(ImageGenerationService):
                     except Exception as e:
                         _submit_retry += 1
                         if _submit_retry <= config.AGNES_IMAGE_SUBMIT_RETRIES:
-                            print(f"  [镜头{req.shot_index}] 提交异常: {e}，"
+                            _verbose_write(f"  [镜头{req.shot_index}] 提交异常: {e}，"
                                   f"{config.AGNES_IMAGE_SUBMIT_RETRY_DELAY}s 后重试 "
                                   f"({_submit_retry}/{config.AGNES_IMAGE_SUBMIT_RETRIES})")
                             time.sleep(config.AGNES_IMAGE_SUBMIT_RETRY_DELAY)
@@ -200,7 +209,7 @@ class AgnesImageService(ImageGenerationService):
                     fixed_prompt = auto_fix_prompt(req.prompt, error_text)
                     if fixed_prompt and _submit_retry < config.AGNES_IMAGE_SUBMIT_RETRIES:
                         _submit_retry += 1
-                        print(f"  [鏡頭{req.shot_index}] 內容違規 [422]，嘗試修復 prompt "
+                        _verbose_write(f"  [鏡頭{req.shot_index}] 內容違規 [422]，嘗試修復 prompt "
                               f"({_submit_retry}/{config.AGNES_IMAGE_SUBMIT_RETRIES})")
                         req.prompt = fixed_prompt
                         payload["prompt"] = fixed_prompt
@@ -213,7 +222,7 @@ class AgnesImageService(ImageGenerationService):
                 if res.status_code in (401, 402):
                     self._key_scheduler.disable(key_idx)
                     if self._key_scheduler.n_active() > 0:
-                        print(f"  [镜头{req.shot_index}] HTTP {res.status_code}，"
+                        _verbose_write(f"  [镜头{req.shot_index}] HTTP {res.status_code}，"
                               f"Key {key_idx + 1} 已拉黑，调度下一个可用 Key")
                         continue
                     last_error = (f"Agnes API Key 全部无效/欠费 "
@@ -222,35 +231,28 @@ class AgnesImageService(ImageGenerationService):
 
                 # ---- 408/499/502/503/504/520/522/524: 临时错误，立即切换key ----
                 if res.status_code in (408, 499, 502, 503, 504, 520, 522, 524):
-                    print(f"  [镜头{req.shot_index}] 临时错误 {res.status_code}，立即切换key重试")
+                    _verbose_write(f"  [镜头{req.shot_index}] 临时错误 {res.status_code}，切key重试")
                     self._key_scheduler.penalize(key_idx, 5)  # 短冷却5秒
                     if self._key_scheduler.n_active() > 0:
+                        time.sleep(2)  # 等待 2s 再切 key，避免秒级打穿所有 key
                         key_idx = self._key_scheduler.acquire()
                         self._current_key_index = key_idx
-                        continue  # 立即用新key重试
+                        continue
                     # 没有其他key，等3秒后本key重试
                     time.sleep(3)
                     continue
 
                 # ---- 5xx: 服务端错误，立即切换key ----
                 if 500 <= res.status_code < 600:
-                    print(f"  [镜头{req.shot_index}] 服务端 {res.status_code}，立即切换key重试")
+                    _verbose_write(f"  [镜头{req.shot_index}] 服务端 {res.status_code}，切key重试")
                     self._key_scheduler.penalize(key_idx, 5)
                     if self._key_scheduler.n_active() > 0:
+                        time.sleep(2)  # 等待 2s 再切 key，避免秒级打穿所有 key
                         key_idx = self._key_scheduler.acquire()
                         self._current_key_index = key_idx
                         continue
                     time.sleep(3)
                     continue
-                    self._key_scheduler.penalize(key_idx, config.AGNES_IMAGE_SUBMIT_RETRY_DELAY)
-                    if self._key_scheduler.n_active() > 0:
-                        key_idx = self._key_scheduler.acquire()
-                        self._current_key_index = key_idx
-                        _submit_retry = 0
-                        continue
-                    last_error = f"Agnes 图片失败 [{res.status_code}] (重试{_submit_retry}次): {res.text[:300]}"
-                    idx = len(self._model_queue)
-                    break
 
                 # ---- 200: 解析图片 ----
                 if res.status_code == 200:
@@ -272,18 +274,59 @@ class AgnesImageService(ImageGenerationService):
                             break
 
                         os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+                        # 首帧/尾帧用前缀区分（避免尾帧覆盖首帧的 shot_N.png）
+                        frame_label = req.frame_desc if req.frame_desc else "首帧"
+                        fname_prefix = {
+                            "首帧": "ff",
+                            "尾帧": "lf",
+                        }.get(frame_label, "kf")
                         save_path = os.path.join(
-                            config.OUTPUT_DIR, f"shot_{req.shot_index}.png"
+                            config.OUTPUT_DIR, f"shot_{req.shot_index}_{fname_prefix}.png"
                         )
                         with open(save_path, "wb") as f:
                             f.write(img_bytes)
 
                         size_kb = len(img_bytes) / 1024
                         if idx > 0:
-                            print(f"  [INFO] 图片已回退到模型: {model}")
-                        print(f"  [镜头{req.shot_index}] [OK] 首帧已保存 -> "
+                            _verbose_write(f"  [INFO] 图片已回退到模型: {model}")
+                        _verbose_write(f"  [镜头{req.shot_index}] [OK] {frame_label}已保存 -> "
                               f"{save_path} ({size_kb:.1f} KB)")
-                        return ImageGenerationResult(success=True, save_path=save_path)
+
+                        # 返回结果（含图片 URL，供幻觉检测使用）
+                        result = ImageGenerationResult(
+                            success=True,
+                            save_path=save_path,
+                            image_url=img_url,  # 原始 URL
+                        )
+
+                        # 图片幻觉检测（可选，默认开启）
+                        if req.enable_hallucination_detection and img_url:
+                            try:
+                                from shared.image_hallucination_detector import (
+                                    detect_image_hallucination,
+                                )
+                                # 需要公开可访问的 URL，Agnes 返回的 URL 通常是可下载的
+                                _verbose_write(f"  [镜头{req.shot_index}] 正在进行幻觉检测...")
+                                detection = detect_image_hallucination(
+                                    image_url=img_url,
+                                    expected_objects=req.expected_objects,
+                                    reference_image_url=None,  # 可后续添加
+                                )
+                                result.hallucination_detected = detection.has_hallucination
+                                if detection.issues:
+                                    import json
+                                    result.hallucination_issues = json.dumps([
+                                        {"category": i.category, "description": i.description, "severity": i.severity}
+                                        for i in detection.issues
+                                    ], ensure_ascii=False)
+                                if detection.has_hallucination:
+                                    _verbose_write(f"  [镜头{req.shot_index}] [WARN] 检测到幻觉: {detection.issues}")
+                                else:
+                                    _verbose_write(f"  [镜头{req.shot_index}] 幻觉检测通过")
+                            except Exception as e:
+                                _verbose_write(f"  [镜头{req.shot_index}] 幻觉检测跳过: {e}")
+
+                        return result
                     except Exception as e:
                         last_error = f"图片下载/保存失败: {e}"
                         break
@@ -296,7 +339,7 @@ class AgnesImageService(ImageGenerationService):
                         cool = (wait + 0.5) if wait is not None \
                             else self._key_scheduler._cooldown
                         self._key_scheduler.penalize(key_idx, cool)
-                        print(f"  [镜头{req.shot_index}] 速率限制 429，Key {key_idx + 1} "
+                        _verbose_write(f"  [镜头{req.shot_index}] 速率限制 429，Key {key_idx + 1} "
                               f"冷却 {cool:.1f}s，调度下一个可用 Key "
                               f"({_submit_retry}/{config.AGNES_IMAGE_SUBMIT_RETRIES})")
                         continue
@@ -314,7 +357,7 @@ class AgnesImageService(ImageGenerationService):
                     _403_count = 0
                     nxt = self._advance_index(idx)
                     if nxt is not None:
-                        print(f"  [镜头{req.shot_index}] [!] 图片模型 {model} 返回 403"
+                        _verbose_write(f"  [镜头{req.shot_index}] [!] 图片模型 {model} 返回 403"
                               f"（额度耗尽/无权限），自动切换到 {self._model_queue[nxt]}")
                         idx = nxt
                         continue
