@@ -172,7 +172,22 @@ def main():
     # 5. Generate SRT subtitles
     generate_srt(valid_shots, target_durations, SRT_OUT)
 
-    # Extract transition info
+    # Extract Mode B indices from continuity metadata (step02 writes this)
+    mode_b_indices = set()
+    try:
+        from step02_video_gen.continuity import ContinuityTracker
+        meta = ContinuityTracker.load_meta(VIMAX_WD)
+        if meta:
+            shots_meta = meta.get("shots", {})
+            mode_b_indices = {
+                int(idx) for idx, mode in shots_meta.items() if mode == "B"
+            }
+        if mode_b_indices:
+            _logger.info(f"[INFO] Mode B clips (will trim first frames): {sorted(mode_b_indices)}")
+    except Exception:
+        pass  # continuity_meta.json may not exist (old runs), gracefully ignore
+
+    # Clip transition info
     clip_transitions = [s.get("clip_transition", "cut") for s in valid_shots]
     _logger.info(f"[INFO] Transitions: {clip_transitions}")
 
@@ -194,6 +209,7 @@ def main():
             clip_transitions=clip_transitions,
             chapter_title=chapter_title,
             keep_video_audio=False,
+            mode_b_indices=mode_b_indices,
         )
 
         # Version B: Video audio + TTS mixed
@@ -209,6 +225,7 @@ def main():
             clip_transitions=clip_transitions,
             chapter_title=chapter_title,
             keep_video_audio=True,
+            mode_b_indices=mode_b_indices,
         )
     else:
         # Old mode fallback (no per-shot audio, direct concat)

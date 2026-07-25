@@ -18,6 +18,7 @@ load_dotenv(_PROJECT_ROOT / ".env")
 from shared.vimax_bridge import build_working_dir, gen_shot_frames
 from shared.vimax_adapters import ImageGeneratorAiVideoAdapter, VideoGeneratorAiVideoAdapter
 from shared.error_fmt import fmt_err as _fmt_err, parse_retry_after
+from step02_video_gen.continuity import ContinuityTracker, MODE_B_START_INDEX
 
 # Smart polling config: exponential backoff + jitter
 POLL_BASE_INTERVAL = int(os.getenv("POLL_BASE_INTERVAL", "10"))    # Initial poll interval (seconds)
@@ -35,6 +36,47 @@ VIDEO_CONCURRENCY = int(os.getenv("VIDEO_CONCURRENCY", "8"))
 _failed_videos = defaultdict(list)
 
 
+def _check_keyframe_hallucination(frame_path: str) -> dict:
+    """
+    检查关键帧是否有 critical 级别的幻觉。
+
+    Returns:
+        dict: {"has_critical": bool, "issues": list}
+    """
+    if not frame_path:
+        return {"has_critical": False, "issues": []}
+
+    frame_path_obj = Path(frame_path)
+    hallucination_file = frame_path_obj.with_suffix(".png").with_name(
+        frame_path_obj.stem + "_hallucination.json"
+    )
+
+    # 检查 shot_0_lf.png 对应的 shot_0_lf_hallucination.json
+    if not hallucination_file.exists():
+        # 尝试其他可能的命名
+        for pattern in ["*_hallucination.json"]:
+            matches = list(frame_path_obj.parent.glob(pattern))
+            if matches:
+                hallucination_file = matches[0]
+                break
+
+    if hallucination_file.exists():
+        try:
+            with open(hallucination_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            has_critical = False
+            critical_issues = []
+            for issue in data.get("issues", []):
+                if issue.get("severity") == "critical":
+                    has_critical = True
+                    critical_issues.append(issue)
+            return {"has_critical": has_critical, "issues": critical_issues}
+        except Exception:
+            pass
+
+    return {"has_critical": False, "issues": []}
+
+
 def _get_shot_hash(shot: dict, script: dict) -> str:
     """
     计算分镜的哈希值，用于判断是否需要重新生成视频。
@@ -44,24 +86,35 @@ def _get_shot_hash(shot: dict, script: dict) -> str:
     - _build_prompt 输出（已含 motion_desc/subtitle/角色特征锚点/context_bridge）
     - 风格前缀 + 负面提示词（全局配置变了所有视频都该重生成）
     - narration_segment（决定 TTS 音频时长，进而决定视频帧数）
-    - 空镜镜头额外并入首帧内容哈希：首帧是 image-to-video 的首个关键帧，
-      首帧生成输入（空镜约束等）变化时视频必须重提交，否则重做的首帧
-      永远进不了视频。条件追加——非空镜镜头哈希与旧算法一致，其核心
-      字段已含于 _build_prompt 输出，避免哈希算法升级触发全量重做。
+    - ff_desc + lf_desc + keyframes：图片 prompt 变了帧就变了，
+      I2V 参考图变了视频也该重生成（不只是空镜）。
     不含 duration：实际帧数由 TTS 音频时长决定，LLM 估算值变化不应触发重新生成。
     """
+    def _normalize(text: str) -> str:
+        import re
+        t = (text or "").strip()
+        t = re.sub(r'\s+', ' ', t)
+        return t
+
     from step02_video_gen.prompt_builder import _build_prompt
-    from style_prefix import STYLE_PREFIX, NEGATIVE_PROMPT, is_empty_scene
+    from style_prefix import STYLE_PREFIX, NEGATIVE_PROMPT
 
     key_parts = [
         STYLE_PREFIX,
         NEGATIVE_PROMPT,
         _build_prompt(shot, script),
         shot.get("narration_segment", ""),
+        # v4: 图片 prompt 变了帧就变了，I2V 参考图变了视频也应重做
+        _normalize(shot.get("ff_desc", "")),
+        _normalize(shot.get("lf_desc", "")),
     ]
-    if is_empty_scene(shot, script.get("characters", [])):
-        from shared.vimax_bridge import _get_frame_content_hash
-        key_parts.append(_get_frame_content_hash(shot, empty_scene=True))
+    # keyframes 数据也纳入哈希（添加/移除/修改关键帧都会触发重做）
+    kfs = shot.get("keyframes") or shot.get("intermediate_keyframes") or []
+    if kfs:
+        for kf in kfs:
+            if isinstance(kf, dict):
+                key_parts.append(_normalize(kf.get("desc", "")))
+                key_parts.append(str(kf.get("time_ratio", "")))
     key = "|".join(key_parts)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
@@ -90,9 +143,19 @@ async def _poll_video(
     shot_hash: str = "",
 ) -> bool:
     """Background poll with exponential backoff + jitter - reduces API queries."""
+    from shared.tee_logger import get_logger
+    from shared.paths import chapter_dir
+    logger = get_logger(chapter_dir() / "step02.log", console_level="INFO")
     async with semaphore:
+        # 获取提交时绑定的 key 索引
+        try:
+            key_idx = video_adapter._task_keys.get(task_id, video_adapter._current_key_index)
+        except Exception:
+            key_idx = 0
+        key_display = f"key-{key_idx + 1}"
+
         # Wait INITIAL_POLL_DELAY seconds after submit before first query (respect 1 RPM limit)
-        logger.verbose(f"  [Shot {shot_idx}] Task submitted, waiting {INITIAL_POLL_DELAY}s before polling...")
+        logger.verbose(f"  [Shot {shot_idx}] [{key_display}] Task submitted, waiting {INITIAL_POLL_DELAY}s before polling...")
         await asyncio.sleep(INITIAL_POLL_DELAY)
 
         # Exponential backoff state
@@ -159,13 +222,13 @@ async def _poll_video(
                             wait = parse_retry_after(err)
                             if wait is not None:
                                 override_interval = wait + 0.5
-                                logger.verbose(f"  [Shot {shot_idx}] Rate limited, waiting {override_interval:.1f}s (server retry-after): {_fmt_err(err)}")
+                                logger.verbose(f"  [Shot {shot_idx}] [{key_display}] Rate limited, waiting {override_interval:.1f}s (server retry-after): {_fmt_err(err)}")
                             else:
                                 poll_interval = min(poll_interval * 2, POLL_MAX_INTERVAL)
-                                logger.verbose(f"  [Shot {shot_idx}] Rate limited (interval {poll_interval:.0f}s): {_fmt_err(err)}")
+                                logger.verbose(f"  [Shot {shot_idx}] [{key_display}] Rate limited (interval {poll_interval:.0f}s): {_fmt_err(err)}")
                         else:
                             poll_interval = min(poll_interval * POLL_EXPONENTIAL_FACTOR, POLL_MAX_INTERVAL)
-                            logger.verbose(f"  [Shot {shot_idx}] Processing (interval {poll_interval:.0f}s, failures {consecutive_failures})")
+                            logger.verbose(f"  [Shot {shot_idx}] [{key_display}] Processing (interval {poll_interval:.0f}s, failures {consecutive_failures})")
                         continue
                     _failed_videos[shot_idx].append({"attempt": -1, "error": err, "task_id": task_id})
                     return False
@@ -178,13 +241,13 @@ async def _poll_video(
                         wait = parse_retry_after(err_str)
                         if wait is not None:
                             override_interval = wait + 0.5
-                            logger.verbose(f"  [Shot {shot_idx}] Rate limited, waiting {override_interval:.1f}s (server retry-after): {_fmt_err(err_str)}")
+                            logger.verbose(f"  [Shot {shot_idx}] [{key_display}] Rate limited, waiting {override_interval:.1f}s (server retry-after): {_fmt_err(err_str)}")
                         else:
                             poll_interval = min(poll_interval * 2, POLL_MAX_INTERVAL)
-                            logger.verbose(f"  [Shot {shot_idx}] Poll error (interval {poll_interval:.0f}s): {_fmt_err(err_str)}")
+                            logger.verbose(f"  [Shot {shot_idx}] [{key_display}] Poll error (interval {poll_interval:.0f}s): {_fmt_err(err_str)}")
                     else:
                         poll_interval = min(poll_interval * POLL_EXPONENTIAL_FACTOR, POLL_MAX_INTERVAL)
-                        logger.verbose(f"  [Shot {shot_idx}] Poll error (interval {poll_interval:.0f}s): {_fmt_err(err_str)}")
+                        logger.verbose(f"  [Shot {shot_idx}] [{key_display}] Poll error (interval {poll_interval:.0f}s): {_fmt_err(err_str)}")
                     continue
                 _failed_videos[shot_idx].append({"attempt": -1, "error": err_str, "task_id": task_id})
                 return False
@@ -194,17 +257,20 @@ async def _submit_video(
     shot: dict, shot_dir: Path, video_path: Path, frame_paths: list,
     shot_hash: str, video_adapter, poll_semaphore,
     audio_duration: float, script: dict, idx: int,
+    continuity_ref_image: str | None = None,
+    mode: str = "A",
 ) -> asyncio.Task | None:
     """提交视频任务并返回轮询 task."""
     from step02_video_gen.prompt_builder import _build_prompt, _make_request
 
-    prompt = _build_prompt(shot, script)
+    prompt = _build_prompt(shot, script, mode=mode)
     characters = script.get("characters", [])
 
     for attempt in range(1, 4):
         try:
             req = _make_request(video_adapter, prompt, frame_paths, shot,
-                                audio_duration=audio_duration, characters=characters)
+                                audio_duration=audio_duration, characters=characters,
+                                continuity_ref_image=continuity_ref_image, mode=mode)
             task_id = await video_adapter.submit_task(req)
             task = asyncio.create_task(
                 _poll_video(video_adapter, poll_semaphore, req, task_id, idx,
@@ -219,7 +285,8 @@ async def _submit_video(
                 if fixed_prompt and fixed_prompt != prompt:
                     try:
                         req = _make_request(video_adapter, fixed_prompt, frame_paths, shot,
-                                            audio_duration=audio_duration, characters=characters)
+                                            audio_duration=audio_duration, characters=characters,
+                                            continuity_ref_image=continuity_ref_image, mode=mode)
                         task_id = await video_adapter.submit_task(req)
                         task = asyncio.create_task(
                             _poll_video(video_adapter, poll_semaphore, req, task_id, idx,
@@ -243,24 +310,29 @@ async def _process_one_shot(
     script_mtime: float | None, force_first_frame: bool,
     script: dict, audio_duration: float,
     poll_semaphore: asyncio.Semaphore,
+    continuity_ref_image: str | None = None,
+    mode: str = "A",
 ) -> asyncio.Task | None:
-    """Process single shot: frame gen -> submit video -> return poll task."""
+    """Process single shot: frame gen -> submit video -> return poll task.
+
+    continuity_ref_image: 模式B时传入上一镜视频尾帧路径，跳过首帧生成。
+    mode: "A" 关键帧模式 / "B" I2V接续模式。
+    """
+    from shared.tee_logger import get_logger
+    from shared.paths import chapter_dir
+    logger = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+
     idx = shot["index"]
     shot_dir = shots_dir / str(idx)
     video_path = shot_dir / "video.mp4"
 
     # Cache check: prompt_hash.txt + clips 目录双重验证
-    # prompt 没变 *且* clips/clip_{idx}.mp4 也存在 → 跳过；否则重新生成
-    # 这样只需清空 clips 目录就能触发部分/全部视频重新生成
-    # force_first_frame（SCRIPT_FIRST_FRAME_FORCE=1）时跳过缓存，强制重新生成
     shot_hash = _get_shot_hash(shot, script)
     if not force_first_frame and video_path.exists() and video_path.stat().st_size > 20 * 1024:
         hash_path = shot_dir / "prompt_hash.txt"
         if hash_path.exists():
             old_hash = hash_path.read_text(encoding="utf-8").strip()
             if old_hash == shot_hash:
-                # 双重验证：clips/ 目录不存在或缺少对应文件 → 重新生成
-                # 删掉整个 clips 目录 = 触发全部视频重新生成
                 from shared.paths import clips_dir as _clips_dir
                 clips_d = _clips_dir()
                 clip_file = clips_d / f"clip_{idx}.mp4"
@@ -268,37 +340,95 @@ async def _process_one_shot(
                     logger.verbose(f"  [Shot {idx}] Cache hit, skip (prompt unchanged + clip exists)")
                     return None
                 else:
-                    # 帧文件已存在，跳过帧生成直接提视频
                     logger.verbose(f"  [Shot {idx}] Clip missing, re-generate video only (skip frames)")
                     ff = shot_dir / "first_frame.png"
                     lf = shot_dir / "last_frame.png"
                     frame_paths = [str(p) for p in [ff, lf] if p.exists()]
+                    # 模式B：用上一镜尾帧替代首帧
+                    if mode == "B" and continuity_ref_image:
+                        frame_paths = [continuity_ref_image] + frame_paths[1:]
                     return await _submit_video(
                         shot, shot_dir, video_path, frame_paths, shot_hash,
                         video_adapter, poll_semaphore, audio_duration, script, idx,
+                        continuity_ref_image=continuity_ref_image, mode=mode,
                     )
 
     # Frame gen + submit
-    characters = script.get("characters", [])
-    frames = await gen_shot_frames(shot, shots_dir, image_adapter, script_mtime,
-                                   force=force_first_frame, characters=characters)
-    # 合并首帧、尾帧和中间关键帧
-    kf_paths = frames.get("keyframes_paths", [])
-    frame_paths = [p for p in [frames.get("ff_path"), frames.get("lf_path")] if p]
-    frame_paths.extend(kf_paths)  # 添加中间关键帧
+    if mode == "B" and continuity_ref_image:
+        # 模式B：跳过首帧生成，用上一镜视频尾帧作为 I2V 参考图
+        # 仅生成尾帧用于本镜风格锚定
+        characters = script.get("characters", [])
+        frames = await gen_shot_frames(shot, shots_dir, image_adapter, script_mtime,
+                                       force=force_first_frame, characters=characters,
+                                       skip_first_frame=True)
+        kf_paths = frames.get("keyframes_paths", [])
+        frame_paths = [continuity_ref_image]  # 上一镜尾帧替代 ff_path
+        lf = frames.get("lf_path")
+        if lf:
+            # 检查尾帧幻觉
+            lf_check = _check_keyframe_hallucination(lf)
+            if lf_check.get("has_critical"):
+                logger.verbose(f"  [镜头{idx}] 尾帧检测到 critical 幻觉: {lf_check['issues']}，强制重新生成尾帧")
+                # 删除有问题的尾帧，触发重新生成
+                Path(lf).unlink(missing_ok=True)
+                # 重新生成
+                frames = await gen_shot_frames(shot, shots_dir, image_adapter, script_mtime,
+                                               force=True, characters=characters,
+                                               skip_first_frame=True)
+                lf = frames.get("lf_path")
+            frame_paths.append(lf)
+        frame_paths.extend(kf_paths)
+    else:
+        # 模式A：完整帧生成（首帧+尾帧+关键帧）
+        characters = script.get("characters", [])
+        frames = await gen_shot_frames(shot, shots_dir, image_adapter, script_mtime,
+                                       force=force_first_frame, characters=characters)
+        kf_paths = frames.get("keyframes_paths", [])
+
+        # 检查首帧幻觉
+        ff_path = frames.get("ff_path")
+        if ff_path:
+            ff_check = _check_keyframe_hallucination(ff_path)
+            if ff_check.get("has_critical"):
+                logger.verbose(f"  [镜头{idx}] 首帧检测到 critical 幻觉: {ff_check['issues']}，强制重新生成首帧")
+                Path(ff_path).unlink(missing_ok=True)
+                frames = await gen_shot_frames(shot, shots_dir, image_adapter, script_mtime,
+                                               force=True, characters=characters)
+                ff_path = frames.get("ff_path")
+
+        # 检查尾帧幻觉
+        lf_path = frames.get("lf_path")
+        if lf_path:
+            lf_check = _check_keyframe_hallucination(lf_path)
+            if lf_check.get("has_critical"):
+                logger.verbose(f"  [镜头{idx}] 尾帧检测到 critical 幻觉: {lf_check['issues']}，强制重新生成尾帧")
+                Path(lf_path).unlink(missing_ok=True)
+                frames = await gen_shot_frames(shot, shots_dir, image_adapter, script_mtime,
+                                               force=True, characters=characters)
+                lf_path = frames.get("lf_path")
+
+        # 重新获取帧路径（可能已被重新生成）
+        kf_paths = frames.get("keyframes_paths", [])
+        frame_paths = [p for p in [frames.get("ff_path"), frames.get("lf_path")] if p]
+        frame_paths.extend(kf_paths)
 
     from step02_video_gen.prompt_builder import _build_prompt, _make_request
 
     return await _submit_video(
         shot, shot_dir, video_path, frame_paths, shot_hash,
         video_adapter, poll_semaphore, audio_duration, script, idx,
+        continuity_ref_image=continuity_ref_image, mode=mode,
     )
 # 提交限速由 _video_gen provider 内的 KeyScheduler 负责（每 key 独立 61s 冷却，
 # 8 key 轮询并行——全局间隔会把多 key 产能压成单 key 水平）。
 
 
 async def generate_alls(script: dict, working_dir: Path, script_file: Path, force_first_frame: bool = False) -> int:
-    """Pipeline: config -> TTS -> concurrent shots (frames -> submit -> poll)."""
+    """Pipeline: config -> TTS -> shots (shot 0+1 parallel Mode A, shot 2+ serial Mode B).
+
+    shot 0 (hook) + shot 1: Mode A, parallel submit (no dependency).
+    shot >= 2: Mode B, serial — each waits for previous video tail frame.
+    """
     from step02_video_gen.audio_pregen import _gen_shot_audio_duration, _update_script_with_actual_durations
     from tts import create_provider
     from shared.paths import chapter_dir
@@ -337,10 +467,10 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     actual_concurrency = min(len(shots), VIDEO_CONCURRENCY)
     poll_semaphore = asyncio.Semaphore(actual_concurrency)
 
-    # 3. Build task list: hook + shots all in one gather (parallel)
+    # 3. Dual-mode scheduling: shot 0+1 parallel Mode A, shot 2+ serial Mode B
     hook = script.get("hook")
     if hook and isinstance(hook, dict) and hook.get("prompt"):
-        logger.info(f"\n[INFO] ===== 钩子视频 (index=0, ======")
+        logger.info(f"\n[INFO] ===== Hook video (index=0) =====")
         hook["index"] = 0
         hook_audio_dur = _gen_shot_audio_duration(hook, audio_dir, provider=tts_provider)
         hook["actual_audio_duration"] = round(hook_audio_dur, 2)
@@ -348,25 +478,80 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     else:
         hook = None
 
-    # 钩子 + 正片一并并行
-    all_specs = ([hook] if hook else []) + shots
-    shot_tasks = [
-        _process_one_shot(
-            spec, shots_dir, image_adapter, video_adapter,
+    tracker = ContinuityTracker(working_dir)
+
+    # ---- Step A: Submit hook (shot 0) and shot 1 in parallel (both Mode A) ----
+    mode_a_tasks = []  # (shot, mode, tail_ref) tuples to gather
+
+    # Hook: always Mode A
+    if hook:
+        tracker.record_mode(0, "A")
+        mode_a_tasks.append((hook, "A", None))
+
+    # Shot 1: always Mode A (if present)
+    if len(shots) > 0:
+        s1 = shots[0]
+        tracker.record_mode(s1["index"], "A")
+        mode_a_tasks.append((s1, "A", None))
+
+    # Submit all Mode A shots in parallel
+    mode_a_polls = []
+    for shot, mode, tail_ref in mode_a_tasks:
+        idx = shot["index"]
+        ad = shot_audio_durations.get(idx, 0)
+        logger.verbose(f"  [Shot {idx}] Mode A (keyframes, parallel)")
+        poll_task = await _process_one_shot(
+            shot, shots_dir, image_adapter, video_adapter,
             script_mtime, force_first_frame, script,
-            audio_duration=shot_audio_durations.get(spec.get("index", 0), 0),
+            audio_duration=ad,
             poll_semaphore=poll_semaphore,
+            continuity_ref_image=None,
+            mode="A",
         )
-        for spec in all_specs
-    ]
-    poll_tasks = await asyncio.gather(*shot_tasks)
-    poll_tasks = [t for t in poll_tasks if t is not None]
+        if poll_task is not None:
+            mode_a_polls.append(poll_task)
 
-    if not poll_tasks:
-        return 0
+    # ---- Step B: Shot 2+ serial chain (Mode B, each waits for previous) ----
+    # All Mode A polls are running in background; wait them all, then chain Mode B
+    if mode_a_polls:
+        await asyncio.gather(*mode_a_polls)
 
-    # 4. Wait all polls (hook + shots)
-    results = await asyncio.gather(*poll_tasks, return_exceptions=True)
+    # Extract tail frames from Mode A results for the chain
+    for shot_dict, _, _ in mode_a_tasks:
+        idx = shot_dict["index"]
+        video_path = shots_dir / str(idx) / "video.mp4"
+        if video_path.exists() and video_path.stat().st_size > 20 * 1024:
+            tracker.advance(shot_dict, video_path)
+
+    # Serial chain: remaining shots (index >= 2) are Mode B
+    remaining = [s for s in shots if s["index"] >= MODE_B_START_INDEX]
+    for shot in remaining:
+        idx = shot["index"]
+        ad = shot_audio_durations.get(idx, 0)
+        tracker.record_mode(idx, "B")
+
+        tail_ref = tracker.get_tail_frame()
+        if tail_ref:
+            logger.verbose(f"  [Shot {idx}] Mode B (I2V, tail={Path(tail_ref).name})")
+        else:
+            logger.verbose(f"  [Shot {idx}] Mode B (I2V, tail MISSING - fallback)")
+
+        poll_task = await _process_one_shot(
+            shot, shots_dir, image_adapter, video_adapter,
+            script_mtime, force_first_frame, script,
+            audio_duration=ad,
+            poll_semaphore=poll_semaphore,
+            continuity_ref_image=tail_ref,
+            mode="B",
+        )
+
+        if poll_task is not None:
+            await poll_task  # Wait for completion before next shot
+
+        # Extract tail frame for next shot in chain
+        video_path = shots_dir / str(idx) / "video.mp4"
+        if video_path.exists() and video_path.stat().st_size > 20 * 1024:
+            tracker.advance(shot, video_path)
 
     # Save hook audio duration back
     if hook:
@@ -374,7 +559,7 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
 
     # Build result table
     logger.separator("=", 70)
-    logger.info("  shot    status  reason / task_id")
+    logger.info("  shot    mode  status  reason / task_id")
     logger.separator("=", 70)
     # Hook first
     if hook:
@@ -383,15 +568,16 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
             err = _fmt_err(errs[0].get("error", "unknown"))
             tid = errs[0].get("task_id", "")
             reason = f"{err} | {tid}" if tid else err
-            logger.info(f"  {'hook':>5}  FAIL    {reason}")
+            logger.info(f"  {'hook':>5}  A     FAIL    {reason}")
         else:
             hook_video = shots_dir / "0" / "video.mp4"
             if hook_video.exists() and hook_video.stat().st_size > 20 * 1024:
-                logger.info(f"  {'hook':>5}  OK      -")
+                logger.info(f"  {'hook':>5}  A     OK      -")
             else:
-                logger.info(f"  {'hook':>5}  SKIP    (not generated)")
+                logger.info(f"  {'hook':>5}  A     SKIP    (not generated)")
     for s in shots:
         sid = s["index"]
+        smode = tracker.get_mode(sid) or "?"
         if sid in _failed_videos:
             errs = _failed_videos[sid]
             err = _fmt_err(errs[0].get("error", "unknown"))
@@ -399,9 +585,9 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
             reason = err
             if tid:
                 reason += " | " + tid
-            logger.info(f"  {sid:>5}  FAIL    {reason}")
+            logger.info(f"  {sid:>5}  {smode}     FAIL    {reason}")
         else:
-            logger.info(f"  {sid:>5}  OK      -")
+            logger.info(f"  {sid:>5}  {smode}     OK      -")
     logger.separator("=", 70)
     total_shots = len(shots) + (1 if hook else 0)
     failed_count = len(_failed_videos)
@@ -411,6 +597,9 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     # 5. Save
     with open(script_file, "w", encoding="utf-8") as f:
         json.dump(script, f, ensure_ascii=False, indent=2)
+
+    # 保存连续性元数据（供 step04 merge 查询）
+    tracker.save_meta()
 
     from step02_video_gen.audio_pregen import _update_script_with_actual_durations
     _update_script_with_actual_durations(working_dir, script_file)

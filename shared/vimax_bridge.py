@@ -666,18 +666,25 @@ def _validate_frame(path: str, min_kb: float = 5) -> bool:
 
 def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
                             reference_paths: list | None = None) -> str:
-    """计算首帧/尾帧的稳定哈希值 v3.
+    """计算首帧/尾帧的稳定哈希值 v4.
 
-    使用稳定字段（main_subject/scene/core_keywords）代替完整 prompt，
+    v4: 新增 _prompt_sig() 对实际图片 prompt (ff_desc/lf_desc) 做规范化哈希，
+    解决分镜词（ff_desc/lf_desc/motion_desc）变更后图片缓存不失效的问题。
+    规范化（strip + 统一空白字符）避免 LLM 微小格式差异导致永不命中。
+
+    v3: 使用稳定字段（main_subject/scene/core_keywords）代替完整 prompt，
     避免 LLM 生成的 prompt 文本有微小差异（换行/空格/词汇顺序）导致
     哈希永远不匹配，缓存永远失效的问题。
-
-    v3: 移除 reference_paths——build_working_dir 和 gen_shot_frames 两次
-    调用传入的参考图路径可能不同，导致哈希永不一致、帧被反复重生成、
-    永远进不到视频提交阶段。参考图路径本身由 shot 内容派生，内容不变
-    则路径语义不变。
+    reference_paths 由 shot 内容派生，内容不变则路径语义不变，不纳入哈希。
     """
-    # 使用稳定字段而非完整 prompt
+    def _normalize(text: str) -> str:
+        """规范化文本：strip + 统一空白字符，消除 LLM 格式噪音。"""
+        import re
+        t = (text or "").strip()
+        t = re.sub(r'\s+', ' ', t)
+        return t
+
+    # 稳定字段作为基线
     stable_fields = [
         shot.get("main_subject", ""),      # 主体最稳定
         shot.get("scene", ""),              # 场景地点
@@ -694,6 +701,12 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
         STYLE_PREFIX,                      # 风格前缀变化时首帧也应重新生成
     ]
     key_parts.extend(stable_fields)
+
+    # v4: 规范化后的实际图片 prompt 文本 — 分镜词变了图片就该重新生成
+    for field_name in ("ff_desc", "lf_desc", "motion_desc"):
+        val = shot.get(field_name, "")
+        if val:
+            key_parts.append(f"{field_name}={_normalize(val)}")
 
     if empty_scene:
         key_parts.append("empty_scene")    # 空镜判定翻转时帧应重做
@@ -725,7 +738,26 @@ async def _gen_first_frame_async(
     from shared.paths import chapter_dir
     _log_dir = chapter_dir()
     logger = get_logger(_log_dir / "step02.log", console_level="INFO")
-    ff_desc = shot.get("ff_desc", "").strip() or shot.get("prompt", "")
+
+    ff_desc = shot.get("ff_desc", "").strip()
+    if not ff_desc:
+        # ff_Desc 缺失时， 从 scene/ narration 构建静态首帧
+        scene = shot.get("scene", "")
+        narration = shot.get("narration_segment", "")
+        main_subj = shot.get("main_subject", "")
+        ff_desc = f"{scene}，{main_subj}，静态画面。"
+        if narration:
+            ff_desc += f" {narration[:50]}。" if len(narration) > 50 else f" {narration}。"
+    else:
+        # ff_Desc 存在时，检查是否是纯相机运动描述（无静态画面）
+        motion_keywords = ["上移", "下移", "左移", "右移", "推进", "拉远", "跃起", "冲出",
+                          "穿越", "飞", "跑", "快速", "缓慢", "跟随", "追"]
+        is_pure_motion = all(kw in ff_desc for kw in motion_keywords) if motion_keywords else False
+        if is_pure_motion or len(ff_desc) < 20:
+            # ff_Desc 几乎是纯相机运动，补充静态画面
+            scene = shot.get("scene", "")
+            main_subj = shot.get("main_subject", "")
+            ff_desc = f"{scene}，{main_subj}，静态画面。{ff_desc}"
     if empty_scene:
         ff_desc = f"{ff_desc}\n空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
 
@@ -806,10 +838,28 @@ async def _gen_last_frame_async(
 
     lf_desc = shot.get("lf_desc", "").strip()
     if not lf_desc:
-        # lf_desc 缺失时回退首帧描述：同场景收尾画面，作为末端风格锚
-        # （尾帧的核心职责是钳制画风，构图可与首帧相近）
-        base_desc = shot.get("ff_desc", "").strip() or shot.get("prompt", "")
-        lf_desc = f"{base_desc}（镜头收尾画面，与开场同一场景同一画风，构图自然延续）"
+        # lf_desc 缺失时回退逻辑：
+        # 1. 先尝试 ff_desc（如果是静态画面描述）
+        # 2. 如果 ff_desc 也是动作描述（如"快速上移"、"跃起"），则用 scene 或 narration 生成静态结尾
+        ff_desc = shot.get("ff_desc", "").strip()
+        motion_keywords = ["上移", "下移", "左移", "右移", "推进", "拉远", "跃起", "冲出",
+                          "穿越", "飞", "跑", "跳", "蹦", "滑", "冲", "快速", "缓慢"]
+        is_motion_desc = any(kw in ff_desc for kw in motion_keywords)
+
+        if ff_desc and not is_motion_desc:
+            # ff_Desc 是静态画面，可以用作尾帧
+            lf_desc = f"{ff_desc}（镜头收尾画面，场景延续，构图自然）"
+        else:
+            # ff_Desc 是动作描述，生成安全的静态结尾画面
+            # 从 scene + narration 提取关键元素构建静态尾帧
+            scene = shot.get("scene", "")
+            narration = shot.get("narration_segment", "")
+            # 提取主体静态画面
+            main_subj = shot.get("main_subject", "")
+            lf_desc = f"{scene}，{main_subj}，静态画面，夜晚冷蓝月光，水面平静。"
+            if narration:
+                # 截取narration描述的最后一个动作结果作为尾帧
+                lf_desc += f" {narration}。"
     if empty_scene:
         lf_desc = f"{lf_desc}\n空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
 
@@ -997,11 +1047,13 @@ async def gen_shot_frames(
     script_mtime: float | None,
     force: bool = False,
     characters: list | None = None,
+    skip_first_frame: bool = False,
 ) -> dict:
     """为单个镜头生成/检查首帧、尾帧和中间关键帧。
 
     用于 submit_poll.py 中 skip_frames=False 时的逐镜帧生成。
     characters: script['characters']，用于空镜检测（空镜首帧禁止人物）。
+    skip_first_frame: 模式B时跳过首帧生成（用上一镜尾帧代替），仅生成尾帧用于本镜风格锚定。
 
     Returns:
         dict: {"ff_path": str | None, "lf_path": str | None, "keyframes_paths": list[str]}
@@ -1014,35 +1066,45 @@ async def gen_shot_frames(
     ff_path = shot_dir / "first_frame.png"
     empty_scene = is_empty_scene(shot, characters or [])
 
-    # 首帧 generation (使用 _gen_first_frame_async 的缓存逻辑)
-    ff_path_str = await _gen_first_frame_async(
-        image_adapter, shots_dir, shot,
-        force=force, script_mtime=script_mtime,
-        reference_paths=None, max_retries=1,
-        empty_scene=empty_scene,
-    )
+    if skip_first_frame:
+        # 模式B：跳过首帧生成，尾帧仍生成（用于本镜风格锚定）
+        ff_path_str = None
+    else:
+        # 模式A：首帧 generation (使用 _gen_first_frame_async 的缓存逻辑)
+        ff_path_str = await _gen_first_frame_async(
+            image_adapter, shots_dir, shot,
+            force=force, script_mtime=script_mtime,
+            reference_paths=None, max_retries=1,
+            empty_scene=empty_scene,
+        )
     ff_["ff_path"] = ff_path_str
 
     # 尾帧 generation（全镜头覆盖：首尾双关键帧钳制风格漂移，
     # 不再按 variation_type 过滤——LLM 常输出空值导致全部镜头无尾帧）
+    # 模式B时尾帧参考图回退到空（首帧已跳过）
+    lf_refs = [ff_path_str] if ff_path_str else None
     lf_path_str = await _gen_last_frame_async(
         image_adapter, shots_dir, shot,
         force=force, script_mtime=script_mtime,
-        reference_paths=[ff_path_str] if ff_path_str else None,
+        reference_paths=lf_refs,
         max_retries=1,
         empty_scene=empty_scene,
     )
     ff_["lf_path"] = lf_path_str
 
     # 中间关键帧 generation（多关键帧叙事模式）
-    kf_refs = [ff_path_str] if ff_path_str else None
-    kf_paths = await _gen_keyframes_async(
-        image_adapter, shots_dir, shot,
-        force=force, script_mtime=script_mtime,
-        reference_paths=kf_refs,
-        max_retries=1,
-        empty_scene=empty_scene,
-    )
+    # 模式B时跳过中间关键帧生成（已用尾帧接续替代关键帧锚定）
+    if skip_first_frame:
+        kf_paths = []
+    else:
+        kf_refs = [ff_path_str] if ff_path_str else None
+        kf_paths = await _gen_keyframes_async(
+            image_adapter, shots_dir, shot,
+            force=force, script_mtime=script_mtime,
+            reference_paths=kf_refs,
+            max_retries=1,
+            empty_scene=empty_scene,
+        )
     ff_["keyframes_paths"] = kf_paths
 
     return ff_

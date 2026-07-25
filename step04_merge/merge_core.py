@@ -1,4 +1,6 @@
 """step04_merge.merge_core - Core merge module with stretch, concat, and filter chain
+v5.3 新增：
+- 模式B视频裁前2帧（消除I2V接续起始顿挫），通过 MODE_B_TRIM_FRAMES 控制
 v5.1 新增：
 - 开场缓冲：黑屏淡入 + 标题卡 + 过渡到首个镜头
 - 转场效果：实现 clip_transition 字段定义的转场
@@ -16,8 +18,8 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 from dotenv import load_dotenv
 load_dotenv(_PROJECT_ROOT / ".env")
 
-from typing import List, Tuple, Optional
-from step04_merge.stretch import stretch_clip, get_media_duration
+from typing import List, Tuple, Optional, Set
+from step04_merge.stretch import stretch_clip, get_media_duration, MODE_B_TRIM_FRAMES
 
 import shutil
 
@@ -536,24 +538,25 @@ def merge_final_video(
     clip_transitions: Optional[List[str]] = None,
     chapter_title: str = "",
     keep_video_audio: bool = False,
+    mode_b_indices: Optional[Set[int]] = None,
 ) -> None:
     """Per-shot stretch to audio duration -> concat -> transition -> subtitle + color + vignette + mix.
 
-    v5.2 新增：
-    - keep_video_audio: 是否保留视频自带音频
-      - False (default): 版本A，只使用 TTS 配音
-      - True: 版本B，视频音频 + TTS 混合（背景音效 70% + TTS 30%）
+    v5.3 mode_b_indices: Mode B I2V continuity clip indices — these get their
+    first N frames trimmed during stretch to eliminate startup jitter.
 
-    v5.1 新增：
-    - clip_transitions: 每个镜头的转场方式列表，与 clip_transition 字段对应
-    - chapter_title: 章节标题，用于开场标题卡
-    - 开场缓冲：黑屏 -> 淡入 -> (标题卡) -> 首个镜头
-    - 转场效果：根据 clip_transition 字段实现镜头间的转场
+    keep_video_audio:
+      - False (default): Version A, TTS audio only
+      - True: Version B, video audio + TTS mixed
     """
     # 0. 解析转场列表（如果未提供，从环境变量读取）
     if clip_transitions is None:
         # 默认全部硬切
         clip_transitions = ["硬切 cut"] * len(clips)
+
+    # 0.3. Mode B trim indices (empty set if not provided)
+    if mode_b_indices is None:
+        mode_b_indices = set()
 
     # 0.5. 检查视频文件完整性（防止损坏的片段导致 FFmpeg 崩溃）
     valid_clips = []
@@ -601,8 +604,15 @@ def merge_final_video(
 
     for i, (clip, target_dur) in enumerate(zip(clips, shot_audio_durations)):
         stretched_path = stretched_dir / f"stretched_{i:04d}.mp4"
+        # 判断当前镜头是否是模式B产物（需要裁前2帧）
+        # clip 文件名如 clip_1.mp4，镜头序号从文件名解析
+        # 或者从 CLIP_DIR 结构中获取
+        trim_frames = MODE_B_TRIM_FRAMES if (i + 1) in mode_b_indices else 0
+
         # 当需要保留视频音频时，跳过缓存重新生成（因为旧缓存没有音频）
-        use_cache = stretched_path.exists() and not DEBUG_SKIP_CACHE and not keep_video_audio
+        # 模式B trim 也跳过缓存（旧缓存没有 trim）
+        use_cache = (stretched_path.exists() and not DEBUG_SKIP_CACHE
+                     and not keep_video_audio and trim_frames == 0)
         if use_cache:
             cached_dur = get_media_duration(stretched_path)
             if abs(cached_dur - target_dur) < 0.1:
@@ -610,7 +620,9 @@ def merge_final_video(
                 continue
             stretched_path.unlink()
 
-        if not stretch_clip(clip, target_dur, stretched_path, keep_audio=keep_video_audio):
+        if not stretch_clip(clip, target_dur, stretched_path,
+                           keep_audio=keep_video_audio,
+                           trim_start_frames=trim_frames):
             print(f"  [WARN] Shot {i+1} stretch failed, use original clip")
             stretched_clips.append(clip)
         else:

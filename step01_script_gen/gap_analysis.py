@@ -118,7 +118,7 @@ def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
     climax_shots_count = 0
 
     for shot in shots:
-        # 将旁白、字幕和核心关键词拼接起来进行检测
+        # 将对话、字幕和核心关键词拼接起来进行检测
         segment_text = shot.get("narration_segment", "") + " " + \
                        shot.get("subtitle", "") + " " + \
                        " ".join(shot.get("core_keywords", []))

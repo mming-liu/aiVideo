@@ -76,10 +76,13 @@ _IMAGE_ANALYSIS_SYSTEM_PROMPT = """你是一个专业的图片质量检测专家
    - 是否有四肢扭曲、关节错位
    - 是否有身体比例严重失调
 
-3. **多余物体 (unexpected_object)**：
+3. **多余物体/物理逻辑错误 (unexpected_object)**：
    - 画面中是否出现了剧本/提示词中没有提到的物体
    - 是否有凭空出现的家具、摆件、花草
    - 是否有漂浮的物体
+   - 是否有半透明消散/漂浮效果（如人在水中半透明）
+   - 是否有不自然的光束/光环/发光效果
+   - 是否有人物肢体与物体融合、穿透等违反物理逻辑的情况
 
 4. **文字水印 (text_watermark)**：
    - 是否有乱码文字
@@ -92,8 +95,17 @@ _IMAGE_ANALYSIS_SYSTEM_PROMPT = """你是一个专业的图片质量检测专家
 判断标准：
 - 发现任何 critical 级别的问题 → has_hallucination = true
 - 发现 2 个以上 warning 级别的问题 → has_hallucination = true
+- unexpected_object 中出现物理逻辑错误（漂浮/半透明/光束/融合/穿透）→ 自动提升为 critical
 - 一切正常 → has_hallucination = false
 """
+
+
+# 物理逻辑错误关键词（检测到这些时自动提升为 critical）
+_PHYSICS_VIOLATION_KEYWORDS = [
+    "漂浮", "半透明", "消散", "透明", "发光光束", "光束", "光环", "融合",
+    "穿透", "肢体融合", "身体融合", "人船融合", "人与物融合",
+    "半透明漂浮", "不自然的发光", "违反物理", "不符合物理逻辑"
+]
 
 
 class ImageHallucinationDetector:
@@ -235,22 +247,33 @@ class ImageHallucinationDetector:
             has_hallucination = data.get("has_hallucination", False)
 
             for issue_data in data.get("issues", []):
+                category = issue_data.get("category", "unknown")
+                description = issue_data.get("description", "")
+                severity = issue_data.get("severity", "warning")
+
+                # 物理逻辑错误：自动提升为 critical
+                if category == "unexpected_object":
+                    if any(kw in description for kw in _PHYSICS_VIOLATION_KEYWORDS):
+                        severity = "critical"
+                        has_hallucination = True
+
                 issues.append(HallucinationIssue(
-                    category=issue_data.get("category", "unknown"),
-                    description=issue_data.get("description", ""),
-                    severity=issue_data.get("severity", "warning"),
+                    category=category,
+                    description=description,
+                    severity=severity,
                 ))
         except Exception as e:
             # 解析失败，记录原始响应
             print(f"  [WARN] 图像检测响应解析失败: {e}")
             # 尝试简单模式匹配
             text_lower = text.lower()
-            if any(k in text_lower for k in ["多指", "畸形", "换脸", "多出", "漂浮", "水印"]):
+            if any(k in text_lower for k in ["多指", "畸形", "换脸", "多出", "漂浮", "水印", "半透明", "光束"]):
                 has_hallucination = True
+                severity = "critical" if any(k in text_lower for k in ["漂浮", "半透明", "光束", "融合", "穿透"]) else "warning"
                 issues.append(HallucinationIssue(
                     category="detected_issues",
                     description="检测到潜在幻觉（解析失败，但关键词匹配）",
-                    severity="warning",
+                    severity=severity,
                 ))
 
         return HallucinationDetectionResult(

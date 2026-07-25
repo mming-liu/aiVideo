@@ -183,8 +183,9 @@ class AgnesVideoService(VideoGenerationService):
 
     @staticmethod
     def _extract_status(output: dict) -> str:
-        """从轮询响应中提取任务状态，统一转大写."""
-        s = output.get("status") or output.get("task_status") or ""
+        """从轮询响应中提取任务状态，优先用 internal_status."""
+        # Agnes 返回 internal_status (completed/in_progress)，比 status 更可靠
+        s = output.get("internal_status") or output.get("status") or output.get("task_status") or ""
         return str(s).upper()
 
     # ------------------------------------------------------------------
@@ -234,6 +235,8 @@ class AgnesVideoService(VideoGenerationService):
             num_frames = self._clamp_num_frames(raw)
 
         _submit_retry = 0
+        _first_attempt = True       # 首次尝试才打印完整 prompt
+        _consecutive_5xx = 0        # 连续 5xx 计数（全局故障检测）
 
         while True:
             model = self._current_model
@@ -279,8 +282,10 @@ class AgnesVideoService(VideoGenerationService):
                 _vlog.verbose(f"  [镜头{req.clip_index}] 参考图编码完成 "
                       f"(len={len(b64_body)}, mod4={len(b64_body)%4})")
 
-            _vlog.verbose(f"  [镜头{req.clip_index}] [prompt -> {model}] "
-                  f"{req.prompt[:200]}{'...' if len(req.prompt) > 200 else ''}")
+            if _first_attempt:
+                _vlog.verbose(f"  [镜头{req.clip_index}] [prompt -> {model}] "
+                      f"{req.prompt[:200]}{'...' if len(req.prompt) > 200 else ''}")
+                _first_attempt = False
 
             try:
                 res = requests.post(
@@ -294,6 +299,13 @@ class AgnesVideoService(VideoGenerationService):
                           f"{config.AGNES_VIDEO_SUBMIT_RETRY_DELAY}s 后重试 "
                           f"({_submit_retry}/{config.AGNES_VIDEO_SUBMIT_RETRIES})")
                     time.sleep(config.AGNES_VIDEO_SUBMIT_RETRY_DELAY)
+                    continue
+                # 当前 key 超时耗尽，惩罚后切 key 重试
+                self._key_scheduler.penalize(key_idx, 60)
+                if self._key_scheduler.n_active() > 1:
+                    _vlog.verbose(f"  [镜头{req.clip_index}] Key {key_idx + 1} 超时耗尽，"
+                          f"冷却 60s，调度下一个可用 Key")
+                    _submit_retry = 0
                     continue
                 raise RuntimeError(f"Agnes 视频提交异常（重试{_submit_retry}次后仍失败）: {e}")
 
@@ -330,17 +342,29 @@ class AgnesVideoService(VideoGenerationService):
                       f"[Key {key_idx + 1}] -> video_id: {video_id}")
                 return video_id
 
-            # ---- 5xx: 服务端暂时不可用，等待后重试 ----
+            # ---- 5xx: 服务端暂时不可用 ----
+            # 5xx 是服务端全局故障，不是 key 限流。短罚时（10s）快速探测，
+            # 避免当前逐个 key 等 9s （acquire 内部最多等 5s）都把 key 罚 60s。
+            # 连续 5 个 key 都 5xx 说明服务端全员故障，统一等 30s 后再试。
             if 500 <= res.status_code < 600:
+                _consecutive_5xx += 1
+                self._key_scheduler.penalize(key_idx, 10)  # 短罚时，快速跳过
+                if self._key_scheduler.n_active() > 1 and _consecutive_5xx < self._key_scheduler.n_active():
+                    _vlog.verbose(f"  [镜头{req.clip_index}] 服务端 {res.status_code}，"
+                          f"Key {key_idx + 1} (5xx #{_consecutive_5xx})，切下一个 Key")
+                    continue
+                # 所有 key 都返回 5xx，或只有一个 key：统一等待后重试
                 _submit_retry += 1
                 if _submit_retry <= config.AGNES_VIDEO_SUBMIT_RETRIES:
-                    _vlog.verbose(f"  [镜头{req.clip_index}] 服务端 {res.status_code}，"
-                          f"{config.AGNES_VIDEO_SUBMIT_RETRY_DELAY}s 后重试 "
+                    wait = 30  # 全局故障统一等 30s
+                    _vlog.verbose(f"  [镜头{req.clip_index}] 所有 Key 均 {res.status_code}，"
+                          f"全局故障，{wait}s 后重试 "
                           f"({_submit_retry}/{config.AGNES_VIDEO_SUBMIT_RETRIES})")
-                    time.sleep(config.AGNES_VIDEO_SUBMIT_RETRY_DELAY)
+                    time.sleep(wait)
+                    _consecutive_5xx = 0
                     continue
                 raise RuntimeError(
-                    f"Agnes 视频提交失败 [{res.status_code}] (重试{_submit_retry}次): "
+                    f"Agnes 视频提交失败 [5xx 全局故障] (重试{_submit_retry}次): "
                     f"{res.text[:500]}"
                 )
 
@@ -407,13 +431,22 @@ class AgnesVideoService(VideoGenerationService):
     # ------------------------------------------------------------------
     def query_task(self, task_id: str) -> dict:
         # 必须用提交该任务时的 key 查询（任务归属提交账号，跨 key 查不到）
-        bound_key = self._api_keys[self._task_keys.get(task_id, self._current_key_index)]
+        bound_key_idx = self._task_keys.get(task_id, self._current_key_index)
+        bound_key = self._api_keys[bound_key_idx]
+        url = self._query_url(task_id)
+        from shared.tee_logger import get_logger
+        from shared.paths import chapter_dir
+        _vlog = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+        _vlog.verbose(f"[DEBUG] query_task: GET {url}")
+        _vlog.verbose(f"[DEBUG] query_task: key_idx={bound_key_idx}, key={bound_key[:30]}...")
+        _vlog.verbose(f"[DEBUG] query_task: header=Authorization: Bearer {bound_key[:40]}...")
         try:
             res = requests.get(
-                self._query_url(task_id),
+                url,
                 headers={"Authorization": f"Bearer {bound_key}"},
                 timeout=120,
             )
+            _vlog.verbose(f"[DEBUG] query_task: status={res.status_code}, body={res.text[:300]}")
         except Exception as e:
             raise RuntimeError(f"Agnes 查询异常: {e}")
         if res.status_code != 200:
@@ -451,6 +484,9 @@ class AgnesVideoService(VideoGenerationService):
 
             time.sleep(next_wait)
             next_wait = config.AGNES_VIDEO_POLL_INTERVAL
+            # 调试日志：显示查询用的 key
+            bound_key_idx = self._task_keys.get(task_id, self._current_key_index)
+            _vlog.verbose(f"  [镜头{req.clip_index}] [DEBUG] query_task key_idx={bound_key_idx}")
             try:
                 output = self.query_task(task_id)
             except RuntimeError as e:
@@ -465,20 +501,22 @@ class AgnesVideoService(VideoGenerationService):
                     continue
                 raise
             status = self._extract_status(output)
+            url_val = output.get('url', '')
+            _vlog.verbose(f"  [镜头{req.clip_index}] [DEBUG] raw_status={output.get('internal_status')}, parsed={status}, has_url={bool(url_val)}")
 
             if status in ("SUCCEEDED", "SUCCESS", "COMPLETED", "DONE", "COMPLETE"):
                 video_url = self._extract_video_url(output)
+                _vlog.verbose(f"  [镜头{req.clip_index}] [DEBUG] extracted video_url={video_url[:80] if video_url else 'None'}...")
                 if not video_url:
                     # 残量诊断日志，方便排查新增响应结构
                     _vlog.verbose(f"  [镜头{req.clip_index}] [DEBUG] 未找到 video_url, "
                           f"响应: {str(output)[:500]}")
-                video_url = self._extract_video_url(output)
-                if not video_url:
                     return VideoGenerationResult(
                         clip_index=req.clip_index,
                         success=False,
                         error="任务成功但未找到 video_url",
                     )
+                _vlog.verbose(f"  [镜头{req.clip_index}] [DEBUG] calling _download with {video_url[:80]}...")
                 return self._download(req, video_url)
 
             if status in ("FAILED", "FAIL", "ERROR"):
@@ -497,10 +535,14 @@ class AgnesVideoService(VideoGenerationService):
     # 下载视频到本地
     # ------------------------------------------------------------------
     def _download(self, req: VideoGenerationRequest, video_url: str) -> VideoGenerationResult:
+        from shared.tee_logger import get_logger
+        from shared.paths import chapter_dir
+        _vlog = get_logger(chapter_dir() / "step02.log", console_level="INFO")
         try:
             os.makedirs(config.OUTPUT_DIR, exist_ok=True)
             save_path = os.path.join(config.OUTPUT_DIR, f"clip_{req.clip_index}.mp4")
 
+            _vlog.verbose(f"  [镜头{req.clip_index}] [DEBUG] downloading from {video_url[:80]}...")
             video_bin = requests.get(video_url, timeout=120).content
             with open(save_path, "wb") as f:
                 f.write(video_bin)
@@ -513,6 +555,7 @@ class AgnesVideoService(VideoGenerationService):
                 save_path=save_path,
             )
         except Exception as e:
+            _vlog.verbose(f"  [镜头{req.clip_index}] [FAIL] 下载失败: {e}")
             return VideoGenerationResult(
                 clip_index=req.clip_index,
                 success=False,

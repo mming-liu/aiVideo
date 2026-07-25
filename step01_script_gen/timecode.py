@@ -111,7 +111,23 @@ def _compute_timecodes(script: dict) -> None:
         current_time += duration
 
     script["timeline"] = timeline
+
+    # 计算总分镜时长
     total = sum(s.get("duration", 0) for s in shots)
+
+    # 加上钩子分镜时长（如果有）
+    hook = script.get("hook")
+    if hook and isinstance(hook, dict):
+        hook_duration = hook.get("duration")
+        if hook_duration is not None:
+            hook_duration = float(hook_duration)
+        else:
+            # 如果钩子没有时长，用 LLM 返回的 narration_segment 估算
+            hook_text = hook.get("narration_segment", "")
+            hook_duration = _estimate_duration(hook_text)
+            hook["duration"] = round(hook_duration, 2)
+        total += hook_duration
+
     script["total_duration"] = round(total, 2)
     script["total_effective_duration"] = round(total, 2)
-    print(f"[INFO] 时间轴计算完成: {len(shots)} 镜, 总计 {total:.1f}s")
+    print(f"[INFO] 时间轴计算完成: {len(shots)} 镜 + {1 if hook else 0} 钩子, 总计 {total:.1f}s")

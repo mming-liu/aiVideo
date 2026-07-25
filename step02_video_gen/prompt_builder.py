@@ -1,8 +1,8 @@
 """step02_video_gen.prompt_builder - Prompt 构建模块
 
 功能：
-- _build_rompt(): 构建单镜头 prompt
-- _make_request_async(): 构建 VideoGenerationRequest
+- _build_prompt(): 构建单镜头 prompt（支持模式A/B）
+- _make_request(): 构建 VideoGenerationRequest（支持连续接续/多关键帧模式）
 - _find_fallback_reference(): 查找备用参考图
 """
 import sys
@@ -10,7 +10,7 @@ from pathlib import Path
 import os
 import json
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 import style_prefix
@@ -26,13 +26,14 @@ from style_prefix import (
 _MODEL_VOICE = os.getenv("VIDEO_MODEL_VOICE", "0").strip() == "1"
 
 
-def _build_prompt(shot: dict, script: dict) -> str:
+def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     """构建单镜头 prompt，针对 Agnes AI 优化声音指令.
 
     策略：
     1. 区分旁白与对话：如果 subtitle 包含冒号或引号，视为对话。
     2. 角色锚点注入：从 script['characters'] 中提取当前 main_subject 的特征，加入 Prompt。
     3. 强制中文指令：使用 （用中文说）"subtitle" + NO English speech.
+    4. 模式B时追加连续接续指令（延续参考图像人物外貌、禁止漂移）。
     """
     motion_desc = shot.get("motion_desc", "").strip()
     if not motion_desc:
@@ -87,10 +88,19 @@ def _build_prompt(shot: dict, script: dict) -> str:
     if not is_character_shot:
         parts.append("空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。")
 
-    # 4.5 风格收束（放在末尾对抗长 prompt 注意力衰减——风格漂移多发于镜头后半段）必须明确：写实古风真人，禁止任何动画风格
+    # 4.5 风格收束（放在末尾对抗长 prompt 注意力衰减——风格漂移多发于镜头后半段）
     parts.append(
-        "整段视频每一帧都保持写实古风真人风格，首尾画风完全一致，禁止中途转为动漫、动画、2D渲染、卡通脸或任何非写实风格。"
+        "整段视频每一帧都保持写实古风真人风格，首尾画风完全一致，"
+        "禁止中途转为动漫、动画、2D渲染、卡通脸或任何非写实风格。"
     )
+
+    # 4.6 模式B连续接续指令：延续上一条视频尾帧的人物外貌和场景
+    if mode == "B":
+        parts.append(
+            "【连续接续模式】延续参考图像中的人物五官、发型、服饰、材质、光影、场景透视，"
+            "禁止人物外貌漂移、服装变化、色彩突变、场景跳跃。镜头运动平稳自然，"
+            "与上一镜头无缝衔接。"
+        )
 
     prompt = "\n".join(parts)
 
@@ -105,12 +115,17 @@ def _build_prompt(shot: dict, script: dict) -> str:
     return prompt
 
 
-def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, audio_duration: float = 0,
-                  characters: list | None = None):
-    """构建 VideoGenerationRequest，使用音频实际时长计算视频帧数.
+def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
+                  audio_duration: float = 0, characters: list | None = None,
+                  continuity_ref_image: str | None = None, mode: str = "A"):
+    """构建 VideoGenerationRequest.
 
-    frame_paths: [首帧路径, 尾帧路径(可选)]
-    当提供尾帧时，ag-nes 使用关键帧动画模式（keyframes mode）。
+    frame_paths: [首帧路径, 尾帧路径(可选), 中间关键帧...]
+      模式A（关键帧模式）用：首帧+尾帧→双锚定，多帧→多关键帧叙事。
+    continuity_ref_image: 模式B时传入上一镜视频尾帧路径作为 I2V 参考图，
+      替代本镜首帧（不再生成 start_frame 图片）。
+    mode: "A"（关键帧模式）或 "B"（I2V 连续接续模式）。
+      模式B时跳过 frame_paths 首帧解析，直接用 continuity_ref_image 作 image_path。
     """
     from _video_gen import VideoGenerationRequest
 
@@ -126,15 +141,24 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, aud
     last_frame_image_path = None
     extra_keyframe_paths = []
 
-    # 第一个是首帧，第二个是尾帧，第三个及以后是多关键帧
-    for i, fp in enumerate((frame_paths or [])):
-        if fp and Path(fp).exists():
-            if i == 0:
-                image_path = fp
-            elif i == 1:
+    if mode == "B" and continuity_ref_image:
+        # 模式B：用上一镜尾帧作 I2V 参考图（不另生成首帧）
+        image_path = continuity_ref_image
+        # 仍尝试收尾帧锚定（如果 frame_paths 里有尾帧）
+        for i, fp in enumerate((frame_paths or [])):
+            if fp and Path(fp).exists() and i >= 1:
                 last_frame_image_path = fp
-            elif i >= 2:
-                extra_keyframe_paths.append(fp)
+                break
+    else:
+        # 模式A：第一个是首帧，第二个是尾帧，第三个及以后是多关键帧
+        for i, fp in enumerate((frame_paths or [])):
+            if fp and Path(fp).exists():
+                if i == 0:
+                    image_path = fp
+                elif i == 1:
+                    last_frame_image_path = fp
+                elif i >= 2:
+                    extra_keyframe_paths.append(fp)
 
     # 如果没有首帧，尝试备用参考图（仅限镜头里实际出现的角色，空镜绝不注入肖像）
     if not image_path:
@@ -146,7 +170,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict, aud
 
     # 多关键帧优先：3+ 帧时使用多关键帧模式，2帧时使用首尾双锚定
     if extra_keyframe_paths:
-        extra_keyframe_paths = extra_keyframe_paths  # 使用多关键帧
+        pass  # 使用多关键帧
     elif image_path and last_frame_image_path:
         extra_keyframe_paths = []  # 使用首尾双锚定
     else:

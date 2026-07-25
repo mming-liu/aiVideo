@@ -240,7 +240,7 @@ def _check_character_consistency(script: dict) -> dict:
     检查项：
     1. 角色锚点检查：main_subject 是已知角色时，prompt 必须有 [角色名: ...] 锚点
     2. 跨镜头特征一致性：同一角色在不同镜头中，静态特征（衣着/外貌）不应矛盾
-    3. 旁白提到角色但画面缺失：narration 中明确提到角色名，但 prompt/fd_desc 无此人
+    3. 对话提到角色但画面缺失：narration 中明确提到角色名，但 prompt/fd_desc 无此人
     4. 空镜中出现角色：main_subject 为非人物（如"荷塘""日落"）但 prompt 含人物描述
 
     Returns:
@@ -318,7 +318,7 @@ def _check_character_consistency(script: dict) -> dict:
                         )
                         break
 
-    # --- 3. 旁白/字幕提到角色但画面可能缺失 ---
+    # --- 3. 对话/字幕提到角色但画面可能缺失 ---
     for shot in shots:
         idx = shot.get("index", "?")
         narration = shot.get("narration_segment", "")
@@ -329,7 +329,7 @@ def _check_character_consistency(script: dict) -> dict:
 
         for char_id in defined_ids:
             if char_id in narration:
-                # 旁白提到了这个角色，检查画面中是否出现了该角色
+                # 对话提到了这个角色，检查画面中是否出现了该角色
                 if char_id not in search_pool:
                     main_sub = shot.get("main_subject", "")
                     # 排除画外音/未见其人的情况
@@ -621,23 +621,330 @@ def _check_gaze_direction(shots):
     issues, warnings = [], []
     wrong_pattern = re.compile(r'[看盯望向朝][^，。,\.]{0,10}')
     correct_dirs = {'画左', '画右', '画上方', '画下方', '画前', '画后'}
-    
+
     for shot in shots:
         idx = shot.get('index', '?')
         prompt = shot.get('prompt', '')
-        
+
         wrong = wrong_pattern.findall(prompt)
         filtered = [w for w in wrong if not any(d in w for d in correct_dirs)]
         if filtered:
             warnings.append(f'镜头{idx}: 视线描述 {filtered} 建议用画左/画右等')
-        
+
         has_correct = any(d in prompt for d in correct_dirs)
         if not has_correct and ('看向' in prompt or '盯着' in prompt):
             warnings.append(f'镜头{idx}: 建议用空间方向词(画左/画右/画上方)')
-    
+
     for w in warnings:
         print(f'[CHECK] 视线方向: [WARN] {w}')
     return {'pass': True, 'issues': issues, 'warnings': warnings}
+
+
+# v6.6 新增：人物船只位置检查（防"人在水面蹦跳"幻觉）
+# 检查船只/水面场景中人物是否有明确的位置约束词
+def _check_person_boat_position(shots: list[dict]) -> dict:
+    """检查船只/水面场景中人物位置约束是否明确（防幻觉核心检查）。
+
+    问题场景：prompt 说"小舟穿过荷叶，杨旭坐船头吹箫"，但 AI 可能理解为
+    "人站在水面上跳"——因为缺少"端坐于"、"稳坐于"等强制位置约束词。
+
+    检查逻辑：
+    1. 检测涉及船只/水面的场景关键词
+    2. 检查人物描述是否有明确的位置约束词（端坐、盘膝、稳坐、跪坐等）
+    3. 检查是否包含可能导致误解的动作词（跳、蹦、穿过、跃等）
+    4. 如发现问题，建议添加负面提示词
+
+    Returns:
+        dict: {"pass": bool, "issues": [str], "warnings": [str]}
+    """
+    issues = []
+    warnings = []
+
+    # 船只/水面场景关键词
+    boat_keywords = ["船", "舟", "筏", "艇", "帆", "桨", "水面", "湖面", "河面", "荷塘", "池塘"]
+
+    # 明确的位置约束词（正面清单）
+    position_constraint_words = [
+        "端坐", "稳坐", "盘膝", "跪坐", "正坐", "斜坐", "侧坐",
+        "倚坐", "卧", "仰卧", "俯卧", "躺", "斜躺",
+        "立于", "站在", "蹲于", "坐于", "位于",
+        "固定于", "静止于", "不动",
+    ]
+
+    # 可能导致误解的动作词（需要配合位置约束）
+    ambiguous_action_words = [
+        "跳", "蹦", "跃", "冲出", "穿过", "跨越", "腾空", "飞起",
+        "移动", "滑行", "漂移", "荡", "摇", "晃",
+    ]
+
+    # 需要添加的负面提示词模板
+    negative_suggestions = [
+        "不要在水面上跳", "不要蹦跳", "不要站立在水面",
+        "不要在船上走动", "不要跳入水中", "不要从水面跃出",
+    ]
+
+    for shot in shots:
+        idx = shot.get("index", "?")
+        prompt = shot.get("prompt", "")
+        narration = shot.get("narration_segment", "")
+        ff_desc = shot.get("ff_desc", "")
+
+        # 合并检查文本
+        check_text = prompt + ff_desc
+
+        # 1. 检测是否是船只/水面场景
+        is_boat_scene = any(kw in check_text for kw in boat_keywords) or any(kw in narration for kw in boat_keywords)
+
+        if not is_boat_scene:
+            continue
+
+        # 2. 检测是否有人物描述（有 [角色名: 特征] 锚点）
+        has_char_anchor = bool(re.search(r"\[[^\]]+[:：][^\]]+\]", prompt))
+
+        if not has_char_anchor:
+            # 没有角色锚点，可能是空镜，跳过
+            continue
+
+        # 3. 检查是否有明确的位置约束词
+        has_position_constraint = any(
+            constraint in check_text
+            for constraint in position_constraint_words
+        )
+
+        # 4. 检查是否有歧义动作词
+        has_ambiguous_action = any(
+            action in check_text
+            for action in ambiguous_action_words
+        )
+
+        # 5. 检查是否有负面提示词
+        has_negative_prompt = shot.get("negative_prompt", "").strip()
+        has_negative_about_boat = any(
+            neg in (has_negative_prompt or "").lower()
+            for neg in ["跳", "蹦", "水面", "船"]
+        )
+
+        # 判断是否需要警告
+        if is_boat_scene and has_char_anchor:
+            if has_ambiguous_action and not has_position_constraint:
+                warnings.append(
+                    f"镜头{idx}: 船只/水面场景检测到歧义动作词但缺少位置约束词，"
+                    f"建议添加\"端坐\"、\"稳坐\"、\"盘膝\"等明确位置描述"
+                )
+
+            if has_ambiguous_action and not has_negative_about_boat:
+                warnings.append(
+                    f"镜头{idx}: 船只/水面场景建议添加负面提示词防止幻觉，"
+                    f"如：\"不要在水面蹦跳、不要站立在水面\""
+                )
+
+    if issues:
+        for issue in issues:
+            print(f"[CHECK] 船只位置约束: {issue}")
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 船只位置约束: [WARN] {warn}")
+
+    # 宽松模式：仅警告， 不阻断
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
+# v6.8 新增：情绪可视化检查（将抽象情绪词转化为具体肢体动作）
+def _check_emotion_visualization(shots: list[dict], hook: dict = None) -> dict:
+    """检查 prompt 中的抽象情绪词是否已转化为可视化动作。
+
+    检查逻辑：
+    1. 检测 prompt 中是否出现抽象情绪词（悲伤、愤怒、迷茫、冷酷等）
+    2. 如出现抽象情绪词，必须同时包含对应的可视化动作描述
+    3. 提供常见情绪词的可视化动作对照表
+
+    Args:
+        shots: 分镜列表
+        hook: 钩子镜头（可选）
+
+    Returns:
+        dict: {"pass": bool, "issues": [str], "warnings": [str]}
+    """
+    issues = []
+    warnings = []
+
+    # 抽象情绪词列表（禁止直接使用）
+    abstract_emotion_words = [
+        "悲伤", "伤心", "难过", "痛苦", "哀伤", "悲痛", "哀愁", "忧郁", "忧伤",
+        "愤怒", "生气", "恼怒", "怒火", "愤恨", "怒气", "狂怒", "暴怒",
+        "迷茫", "困惑", "茫然", "无助", "彷徨", "犹豫", "纠结",
+        "冷酷", "冷漠", "无情", "冰冷", "冷淡", "淡漠", "麻木",
+        "开心", "高兴", "快乐", "喜悦", "愉快", "欣喜", "欢乐", "欢笑",
+        "害怕", "恐惧", "惊恐", "畏惧", "胆怯", "惊慌", "恐慌",
+        "惊讶", "震惊", "惊奇", "意外", "错愕", "愕然",
+        "温柔", "温柔地", "柔情", "温情", "温馨", "温暖",
+        "严肃", "严厉", "严厉地", "庄重", "郑重", "正经",
+        "紧张", "紧张地", "焦虑", "焦急", "急迫", "紧迫",
+        "害羞", "羞涩", "腼腆", "不好意思", "脸红",
+        "镇定", "冷静", "沉稳", "冷静地", "淡定",
+    ]
+
+    # 情绪词 → 可视化动作对照表
+    emotion_to_action = {
+        "悲伤": "低头垂眸、眼眶泛红、双手紧握、肩膀颤抖、泪水滑落、嘴角下垂",
+        "愤怒": "咬牙切齿、眉头上挑、额头青筋跳动、猛拍桌面、胸口起伏、呼吸急促",
+        "迷茫": "眼神空洞、眉头紧锁、手指无意识摩挲、望向远处、嘴唇微张、叹息",
+        "冷酷": "面部肌肉僵硬、嘴角下沉、目光如刀、手指缓慢擦拭兵刃、不带感情",
+        "开心": "眉眼弯弯、嘴角上扬、露出牙齿、身体前倾、拍手、跳跃",
+        "害怕": "瞳孔放大、脚步后退、双手护胸、身体颤抖、面色苍白、冷汗直流",
+        "惊讶": "眼睛瞪大、嘴巴张开、眉毛上扬、身体后仰、双手举起",
+        "温柔": "眼神柔和、嘴角含笑、动作轻缓、声音软糯、轻轻抚摸",
+        "严肃": "眉头紧锁、表情凝固、目光犀利、声音低沉、双手交叉胸前",
+        "紧张": "吞咽口水、频繁眨眼、搓手、踱步、咬唇、肌肉紧绷",
+        "害羞": "低头、脸颊泛红、绞手指、眼神躲闪、声音变小、扭捏",
+        "镇定": "呼吸平稳、目光坚定、表情平静、站立不动、声音平稳",
+    }
+
+    def check_shot_emotions(shot, idx):
+        """检查单个镜头的情绪可视化"""
+        prompt = shot.get("prompt", "")
+        motion_desc = shot.get("motion_desc", "")
+
+        # 合并检查文本
+        full_text = prompt + " " + motion_desc
+
+        for emotion in abstract_emotion_words:
+            if emotion in full_text:
+                # 检查是否同时包含对应的可视化动作
+                has_visual_action = False
+
+                if emotion in emotion_to_action:
+                    # 检查是否包含该情绪对应的任何可视化动作词
+                    action_words = emotion_to_action[emotion].split("、")
+                    for action in action_words:
+                        if action in full_text:
+                            has_visual_action = True
+                            break
+
+                if not has_visual_action:
+                    # 提供具体的修改建议
+                    suggested_actions = emotion_to_action.get(emotion, "具体肢体动作描述")
+                    issues.append(
+                        f"镜头{idx}: prompt 中出现抽象情绪词 \"{emotion}\"，"
+                        f"必须转化为可视化动作！建议添加：{suggested_actions}"
+                    )
+
+    # 检查所有镜头
+    for shot in shots:
+        idx = shot.get("index", "?")
+        if idx == 0:  # 跳过 hook
+            continue
+        check_shot_emotions(shot, idx)
+
+    # 检查 hook
+    if hook:
+        check_shot_emotions(hook, 0)
+
+    # 输出检查结果
+    for issue in issues:
+        print(f"[CHECK] 情绪可视化: [ISSUE] {issue}")
+
+    for warn in warnings:
+        print(f"[CHECK] 情绪可视化: [WARN] {warn}")
+
+    # 宽松模式：仅警告， 不阻断（因为 LLM 可能用其他方式表达情绪）
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
+# v6.7 新增：首尾帧描述完整性检查
+def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict:
+    """检查 ff_desc 和 lf_desc 的完整性和差异性（防静态视频关键）。
+
+    检查逻辑：
+    1. lf_desc 禁止为空
+    2. ff_desc 和 lf_desc 必须有明显差异（否则生成的视频只是静态淡入淡出）
+    3. hook 镜头（index=0）也必须遵守同样规则
+
+    Args:
+        shots: 分镜列表
+        hook: 钩子镜头（可选）
+
+    Returns:
+        dict: {"pass": bool, "issues": [str], "warnings": [str]}
+    """
+    issues = []
+    warnings = []
+
+    # 检查普通镜头
+    for shot in shots:
+        idx = shot.get("index", "?")
+        ff_desc = shot.get("ff_desc", "").strip()
+        lf_desc = shot.get("lf_desc", "").strip()
+
+        # 检查 lf_desc 是否为空
+        if not lf_desc:
+            issues.append(
+                f"镜头{idx}: lf_desc（尾帧描述）为空，生成的视频将只是静态图片过渡！"
+                f"必须填写尾帧画面描述（动作结束后的静止状态）"
+            )
+            continue
+
+        # 检查 ff_desc 是否为空
+        if not ff_desc:
+            issues.append(
+                f"镜头{idx}: ff_desc（首帧描述）为空，生成的视频将无法生成首帧图片！"
+            )
+            continue
+
+        # 检查首尾帧是否相同或过于相似（去除空格和标点后比较）
+        import re
+        ff_normalized = re.sub(r'[\s　，。！？、：；""''（）【】《》]', '', ff_desc)
+        lf_normalized = re.sub(r'[\s　，。！？、：；""''（）【】《》]', '', lf_desc)
+
+        # 计算相似度
+        if ff_normalized == lf_normalized:
+            issues.append(
+                f"镜头{idx}: ff_desc 和 lf_desc 完全相同，生成的视频将只是静态图片的淡入淡出！"
+                f"ff_desc=\"{ff_desc}\", lf_desc=\"{lf_desc}\""
+            )
+        elif ff_normalized in lf_normalized or lf_normalized in ff_normalized:
+            # 检查是否有明显的动作变化词
+            action_keywords = ["跃", "跳", "冲", "飞", "跑", "倒下", "倒地", "刺", "劈", "砍",
+                             "挥", "甩", "落", "起", "出", "入", "进", "出"]
+            has_action_change = any(kw in lf_desc for kw in action_keywords)
+            if not has_action_change:
+                warnings.append(
+                    f"镜头{idx}: ff_desc 和 lf_desc 相似度过高，生成的视频可能缺乏动态效果。"
+                    f"建议在 lf_desc 中添加动作结束后的状态描述"
+                )
+
+    # 检查 hook 镜头（如果有）
+    if hook and isinstance(hook, dict):
+        idx = 0
+        ff_desc = hook.get("ff_desc", "").strip()
+        lf_desc = hook.get("lf_desc", "").strip()
+
+        if not lf_desc:
+            issues.append(
+                f"钩子镜头(index=0): lf_desc（尾帧描述）为空，生成的视频将只是静态图片过渡！"
+            )
+        elif not ff_desc:
+            issues.append(
+                f"钩子镜头(index=0): ff_desc（首帧描述）为空，生成的视频将无法生成首帧图片！"
+            )
+        else:
+            import re
+            ff_normalized = re.sub(r'[\s　，。！？、：；""''（）【】《》]', '', ff_desc)
+            lf_normalized = re.sub(r'[\s　，。！？、：；""''（）【】《》]', '', lf_desc)
+            if ff_normalized == lf_normalized:
+                issues.append(
+                    f"钩子镜头(index=0): ff_desc 和 lf_desc 完全相同，生成的视频将只是静态图片的淡入淡出！"
+                )
+
+    if issues:
+        for issue in issues:
+            print(f"[CHECK] 首尾帧完整性: {issue}")
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 首尾帧完整性: [WARN] {warn}")
+
+    # 硬性检查：lf_desc 不能为空，首尾帧不能完全相同
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
 
 # v6.5 新增：分镜与原文比对（防幻觉核心 - 检测编造内容）
@@ -679,7 +986,7 @@ def _check_script_novel_alignment(script: dict) -> dict:
         # 检查已知角色是否在 narration 中出现
         for char_name in known_chars:
             if char_name in check_text and char_name not in narration:
-                # 排除"旁白提到但画面未出现"的情况（那是另一种检查）
+                # 排除"对话提到但画面未出现"的情况（那是另一种检查）
                 # 这里检测的是：prompt 提到但 narration 根本没说
                 warnings.append(
                     f"镜头{idx}: prompt 出现角色\"{char_name}\"但 narration 中未提及，"
@@ -834,9 +1141,20 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v6.5 新增：分镜与原文比对（防幻觉核心 - 检测编造内容）
     results["script_novel_alignment"] = _check_script_novel_alignment(script)
 
+    # v6.6 新增：船只位置约束检查（防"人在水面蹦跳"幻觉）
+    results["person_boat_position"] = _check_person_boat_position(shots)
+
+    # v6.7 新增：首尾帧描述完整性检查（防静态视频）
+    hook = script.get("hook")
+    results["ff_lf_completeness"] = _check_ff_lf_desc_completeness(shots, hook)
+
+    # v6.8 新增：情绪可视化检查（将抽象情绪词转化为具体肢体动作）
+    results["emotion_visualization"] = _check_emotion_visualization(shots, hook)
+
     # 综合判定：任一硬性检查失败则整体不通过
     # v6.5: 增加 script_novel_alignment 到硬性检查
-    hard_fail_checks = ["prop_consistency", "shot_transition", "semantic_risk", "script_novel_alignment"]
+    # v6.7: 增加 ff_lf_completeness 到硬性检查（lf_desc 为空会导致静态视频）
+    hard_fail_checks = ["prop_consistency", "shot_transition", "semantic_risk", "script_novel_alignment", "ff_lf_completeness"]
     pass_fail = all(
         results.get(check, {}).get("pass", True)
         for check in hard_fail_checks

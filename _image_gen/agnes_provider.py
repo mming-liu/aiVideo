@@ -197,6 +197,16 @@ class AgnesImageService(ImageGenerationService):
                                   f"({_submit_retry}/{config.AGNES_IMAGE_SUBMIT_RETRIES})")
                             time.sleep(config.AGNES_IMAGE_SUBMIT_RETRY_DELAY)
                         else:
+                            # 当前 key 超时耗尽，惩罚此 key 后切下一个
+                            self._key_scheduler.penalize(key_idx, 60)
+                            _verbose_write(f"  [镜头{req.shot_index}] Key {key_idx + 1} 超时耗尽，"
+                                  f"冷却 60s，调度下一个可用 Key")
+                            # 切 key 重试（重置重试计数）
+                            if self._key_scheduler.n_active() > 1:
+                                _submit_retry = 0
+                                key_idx = self._key_scheduler.acquire()
+                                self._current_key_index = key_idx
+                                continue
                             last_error = f"Agnes 图片异常（重试{_submit_retry}次）: {e}"
                             break
                 if last_error:
@@ -315,10 +325,20 @@ class AgnesImageService(ImageGenerationService):
                                 result.hallucination_detected = detection.has_hallucination
                                 if detection.issues:
                                     import json
-                                    result.hallucination_issues = json.dumps([
+                                    issues_data = [
                                         {"category": i.category, "description": i.description, "severity": i.severity}
                                         for i in detection.issues
-                                    ], ensure_ascii=False)
+                                    ]
+                                    result.hallucination_issues = json.dumps(issues_data, ensure_ascii=False)
+
+                                    # 保存幻觉检测结果到 JSON 文件（供视频生成时过滤）
+                                    hallucination_file = save_path.replace(".png", "_hallucination.json")
+                                    with open(hallucination_file, "w", encoding="utf-8") as f:
+                                        json.dump({
+                                            "has_hallucination": detection.has_hallucination,
+                                            "issues": issues_data,
+                                        }, f, ensure_ascii=False, indent=2)
+
                                 if detection.has_hallucination:
                                     _verbose_write(f"  [镜头{req.shot_index}] [WARN] 检测到幻觉: {detection.issues}")
                                 else:
