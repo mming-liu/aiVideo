@@ -345,13 +345,14 @@ def _check_character_consistency(script: dict) -> dict:
         "空镜", "荷塘", "池塘", "日落", "日出", "山", "水", "湖", "河", "田野",
         "田埂", "村庄", "房屋", "门", "窗", "树", "花", "草", "云", "月", "日",
         "雨", "雪", "风", "雾", "路", "桥", "船", "灯", "烛", "书案", "桌",
-        "天空", "大地", "庭院", "回廊", "楼阁", "屋檐",
+        "天空", "大地", "庭院", "回廊", "楼阁", "屋檐", "照月湾", "荷塘黄昏全景",
     }
     for shot in shots:
         idx = shot.get("index", "?")
         main_subject = shot.get("main_subject", "").strip()
         prompt = shot.get("prompt", "")
         ff_desc = shot.get("ff_desc", "")
+        lf_desc = shot.get("lf_desc", "")
 
         # 如果 main_subject 是空镜/场景/物体，检查是否不当出现人物
         is_non_char = any(nc in main_subject for nc in non_character_subjects)
@@ -360,16 +361,19 @@ def _check_character_consistency(script: dict) -> dict:
             # 如果有 [角色名: 特征] 锚点，说明 LLM 明确加了人物，不算误报
             has_char_anchor = bool(re.search(r"\[[^\]]+[:：][^\]]+\]", prompt))
             if not has_char_anchor:
-                # 模糊检测：prompt 中出现常见人物词但 main_subject 不匹配
+                # 模糊检测：prompt/ff_Desc/lf_Desc 中出现常见人物词但 main_subject 不匹配
                 person_words = ["人物", "角色", "人影", "身影", "男子", "女子", "老人", "少年",
-                              "公子", "姑娘", "刺客", "杀手", "官员", "士兵", "侍女"]
-                found_persons = [pw for pw in person_words if pw in prompt]
+                              "少女", "孩子", "娃娃", "公子", "姑娘", "刺客", "杀手", "官员",
+                              "士兵", "侍女", "人", "两人", "三人", "两个人", "三个人"]
+                # 合并所有文本进行检查
+                all_text = prompt + ff_desc + lf_desc
+                found_persons = [pw for pw in person_words if pw in all_text]
                 if found_persons:
                     # 检查是否 main_subject 本身就包含这些词（如"刺客出水"）
                     if not any(pw in main_subject for pw in found_persons):
                         warnings.append(
                             f"镜头{idx}: main_subject=\"{main_subject}\" 疑似空镜/场景，"
-                            f"但 prompt 含有 {found_persons}，可能是空镜中不当出现人物"
+                            f"但 prompt/ff_Desc/lf_Desc 含有 {found_persons}，可能是空镜中不当出现人物"
                         )
 
     # --- 汇总 ---
@@ -455,12 +459,22 @@ def _check_prompt_pollution(shots: list[dict]) -> dict:
 def _check_negative_prompt(shots: list[dict]) -> dict:
     """检查逆向提示词是否添加（检查项6）."""
     warnings = []
+    # 空镜关键词集合
+    non_character_subjects = {"空镜", "荷塘", "池塘", "日落", "日出", "山", "水", "湖", "河", "田野",
+                              "田埂", "村庄", "照月湾", "荷塘黄昏全景", "山峦", "空镜"}
+
     for shot in shots:
         idx = shot.get("index", "?")
         negative_prompt = shot.get("negative_prompt", "").strip()
+        main_subject = shot.get("main_subject", "").strip()
 
         if not negative_prompt:
             warnings.append(f"镜头{idx}: 未添加逆向提示词，需补充")
+        elif any(nc in main_subject for nc in non_character_subjects):
+            # 空镜必须包含禁止人物的负向提示词
+            required_terms = ["no people", "empty scene", "禁止人物", "空镜无人"]
+            if not any(term in negative_prompt.lower() for term in [t.lower() for t in required_terms]):
+                warnings.append(f"镜头{idx}: main_subject=\"{main_subject}\" 为空镜/场景，但负向提示词缺少禁止人物相关词（如 no people/empty scene/禁止人物）")
 
     if warnings:
         for warn in warnings:
@@ -935,6 +949,17 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
                 issues.append(
                     f"钩子镜头(index=0): ff_desc 和 lf_desc 完全相同，生成的视频将只是静态图片的淡入淡出！"
                 )
+
+        # 检查 hook 的 scene 字段是否包含具体地点
+        hook_scene = hook.get("scene", "").strip()
+        if not hook_scene:
+            issues.append(
+                f"钩子镜头(index=0): scene（场景地点）为空，必须填写具体场景！"
+            )
+        elif len(hook_scene) < 4:  # 太短可能是模糊词如"湖面"
+            warnings.append(
+                f"钩子镜头(index=0): scene=\"{hook_scene}\" 可能过于模糊，建议填写更具体的地点如\"照月湾湖面小舟\""
+            )
 
     if issues:
         for issue in issues:
