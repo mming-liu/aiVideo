@@ -252,7 +252,7 @@ def main() -> None:
 
     # 生成脚本
     raw = gen_spy_script(novel_text, character_bank)
-    script = parse_response(raw)
+    script = parse_response(raw, novel_text=novel_text)
 
     # ========== 差距分析（v5.0 新增）==========
     # 若差距过大，重新生成（最多2次）
@@ -307,7 +307,7 @@ def main() -> None:
             raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
             raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
 
-            script = parse_response(raw)
+            script = parse_response(raw, novel_text=novel_text)
             script = _post_process(script)
         else:
             # 达到最大尝试次数仍有问题，记录但不中断

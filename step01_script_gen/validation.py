@@ -25,6 +25,16 @@ import scene_compliance
 import storyboard_refs
 
 
+# 模块级变量：存储当前待验证的小说原文
+_novel_text_for_validation = ""
+
+
+def _set_novel_text(text: str) -> None:
+    """设置待验证的小说原文。"""
+    global _novel_text_for_validation
+    _novel_text_for_validation = text
+
+
 # v5.0 新增必填字段列表
 _REQUIRED_NEW_FIELDS = [
     "main_subject",
@@ -42,6 +52,8 @@ _REQUIRED_NEW_FIELDS = [
     "duration",
     "negative_prompt",
     "hook",
+    # v6.6 新增：物理地点
+    "location",
 ]
 
 
@@ -157,6 +169,10 @@ def _validate_script(script: dict) -> None:
     # v6.2: 人物一致性校验（纳入常规流程，强制运行）
     _check_character_consistency(script)
 
+    # v6.6: 逐镜头原文锚点校验（新增 P1 优化）
+    # 检查 narration_segment 是否能在原文中找到对应内容，防止 LLM 编造
+    _check_grounding_wrapper(script)
+
     # v6.3: 分镜提示词检查表（8项核心检查）
     checklist_result = _run_prompt_checklist(script)
     if not checklist_result["pass"]:
@@ -232,6 +248,93 @@ def _check_audio_instruction(shots: list[dict]) -> None:
         if ":" in subtitle or "：" in subtitle or '"' in subtitle or '"' in subtitle or '"' in subtitle:
             if "（用中文说）" not in prompt and "(用中文说)" not in prompt:
                 print(f"[WARN] 镜头{shot_idx}: 检测到对话但 Prompt 中缺少 Agnes AI 中文发音指令 '（用中文说）'")
+
+
+# 模块级变量：存储当前待验证的小说原文
+_novel_text_for_validation = ""
+
+
+def _check_grounding(shot: dict, novel_text: str) -> bool:
+    """简单的原文锚点检查：检查 narration 是否在原文中有对应内容。"""
+    narration = shot.get("narration_segment", "").strip()
+    if not narration:
+        return True
+
+    narration_clean = narration.replace(" ", "").replace("，", "").replace("。", "")
+    for i in range(len(narration_clean) - 4):
+        chunk = narration_clean[i:i+5]
+        if chunk in novel_text:
+            return True
+    return False
+
+
+def _check_grounding_and_warn(script: dict) -> None:
+    """对脚本中所有镜头进行原文锚点校验并打印警告。"""
+    global _novel_text_for_validation
+    if not _novel_text_for_validation:
+        return
+
+    shots = script.get("shots", [])
+    ungrounded = []
+    for shot in shots:
+        idx = shot.get("index", "?")
+        if not _check_grounding(shot, _novel_text_for_validation):
+            narration = shot.get("narration_segment", "").strip()
+            ungrounded.append((idx, narration[:30] if narration else ""))
+
+    if ungrounded:
+        print(f"[WARN] 原文锚点校验: 以下镜头的 narration 在原文中未找到对应内容:")
+        for idx, text in ungrounded:
+            print(f"  镜头{idx}: \"{text}...\"")
+        print(f"  → 请确保所有 narration 直接引用自小说原文")
+
+
+def _check_grounding_wrapper(script: dict) -> None:
+    """包装函数，供 _validate_script 调用。"""
+    _check_grounding_and_warn(script)
+
+
+def _check_narration_grounding(script: dict, novel_text: str = "") -> None:
+    """逐镜头原文锚点校验（v6.6 新增 P1 优化）。
+
+    检查 narration_segment 是否能在原文中找到对应内容，
+    防止 LLM 编造原文不存在的对话/旁白。
+    """
+    if not novel_text:
+        # 如果没有传入 novel_text，跳过此校验
+        return
+
+    shots = script.get("shots", [])
+    ungrounded = []
+
+    # 简单的文本包含检查：narration 必须是原文的子串
+    for shot in shots:
+        idx = shot.get("index", "?")
+        narration = shot.get("narration_segment", "").strip()
+
+        if not narration:
+            continue
+
+        # 简单匹配：检查 narration 是否在原文中有完全匹配或高相似度匹配
+        # 由于 narration 可能有轻微变动（如标点），使用模糊匹配
+        is_grounded = False
+        narration_clean = narration.replace(" ", "").replace("，", "").replace("。", "")
+
+        # 检查是否有连续 5 个字符以上在原文中
+        for i in range(len(narration_clean) - 4):
+            chunk = narration_clean[i:i+5]
+            if chunk in novel_text:
+                is_grounded = True
+                break
+
+        if not is_grounded:
+            ungrounded.append((idx, narration[:30]))
+
+    if ungrounded:
+        print(f"[WARN] 原文锚点校验: 以下镜头的 narration 在原文中未找到对应内容:")
+        for idx, text in ungrounded:
+            print(f"  镜头{idx}: \"{text}...\"")
+        print(f"  → 请确保所有 narration 直接引用自小说原文")
 
 
 def _check_character_consistency(script: dict) -> dict:
@@ -557,16 +660,16 @@ def _check_shot_transition(shots: list[dict]) -> dict:
         has_bridge = curr_bridge and any(tw in curr_bridge for tw in transition_words)
 
         if not has_transition and not has_bridge:
-            # 检查两个镜头之间的场景是否相同
-            curr_scene = curr_shot.get("scene", "")
-            next_scene = next_shot.get("scene", "")
+            # 检查两个镜头之间的 location 是否相同（同一地点需要有衔接）
+            curr_loc = curr_shot.get("location", "") or curr_shot.get("scene", "")
+            next_loc = next_shot.get("location", "") or next_shot.get("scene", "")
 
-            if curr_scene and next_scene and curr_scene != next_scene:
-                # 场景切换时可以没有强衔接词
+            if curr_loc and next_loc and curr_loc != next_loc:
+                # 地点切换时可以没有强衔接词
                 pass
-            elif curr_scene == next_scene and not has_bridge:
+            elif curr_loc == next_loc and not has_bridge:
                 warnings.append(
-                    f"镜头{curr_idx}→{next_idx}: 同一场景({curr_scene})但缺少衔接词，"
+                    f"镜头{curr_idx}→{next_idx}: 同一地点({curr_loc})但缺少衔接词，"
                     f"可能画面跳跃"
                 )
 
@@ -954,11 +1057,22 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
         hook_scene = hook.get("scene", "").strip()
         if not hook_scene:
             issues.append(
-                f"钩子镜头(index=0): scene（场景地点）为空，必须填写具体场景！"
+                f"钩子镜头(index=0): scene（场景名称）为空，必须填写！"
             )
-        elif len(hook_scene) < 4:  # 太短可能是模糊词如"湖面"
+        elif len(hook_scene) < 4:  # 太短可能是模糊词
             warnings.append(
-                f"钩子镜头(index=0): scene=\"{hook_scene}\" 可能过于模糊，建议填写更具体的地点如\"照月湾湖面小舟\""
+                f"钩子镜头(index=0): scene=\"{hook_scene}\" 可能过于模糊，建议填写更具体的场景名称"
+            )
+
+        # 检查 hook 的 location 字段（新增）
+        hook_location = hook.get("location", "").strip()
+        if not hook_location:
+            issues.append(
+                f"钩子镜头(index=0): location（物理地点）为空，必须填写具体地点！"
+            )
+        elif len(hook_location) < 3:  # 太短
+            warnings.append(
+                f"钩子镜头(index=0): location=\"{hook_location}\" 可能过于模糊，建议填写更具体的地点如\"照月湾湖面小舟\""
             )
 
     if issues:
@@ -1063,10 +1177,14 @@ def _check_transition_keywords(shots: list[dict]) -> dict:
             # 仅作为 soft warning
             pass
 
-        # 2. 判断场景类型
+        # 2. 判断场景类型（location 变化 = 真正的场景切换）
         is_combat = any(kw in narration for kw in _COMBAT_KEYWORDS)
         is_closeup = any(kw in narration for kw in _CLOSEUP_KEYWORDS)
-        is_scene_switch = i < len(shots) - 1 and shots[i + 1].get("scene", "") != shot.get("scene", "")
+        curr_loc = shot.get("location", "") or shot.get("scene", "")
+        is_scene_switch = False
+        if i < len(shots) - 1:
+            next_loc = shots[i + 1].get("location", "") or shots[i + 1].get("scene", "")
+            is_scene_switch = curr_loc != next_loc
 
         # 3. 转场关键词检查
         all_transition_kws = _TRANSITION_COMBAT | _TRANSITION_SCENE_SWITCH | _TRANSITION_CLOSEUP | _TRANSITION_GENERIC
@@ -1232,8 +1350,16 @@ def _fill_missing_new_fields(script: dict) -> None:
     script.setdefault("style", "")
 
 
-def parse_response(raw_text: str) -> dict:
-    """解析 LLM 返回的原始文本为 JSON，含兜底修复."""
+def parse_response(raw_text: str, novel_text: str = "") -> dict:
+    """解析 LLM 返回的原始文本为 JSON， 含兜底修复。
+
+    Args:
+        raw_text: LLM 返回的原始文本
+        novel_text: 小说原文（用于原文锚点验证）
+    """
+    global _novel_text_for_validation
+    _novel_text_for_validation = novel_text
+
     print(f"[INFO] 模型返回文本长度: {len(raw_text)} 字符")
     try:
         script = safe_parse_json_object(raw_text)

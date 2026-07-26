@@ -687,8 +687,11 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
     # 稳定字段作为基线
     stable_fields = [
         shot.get("main_subject", ""),      # 主体最稳定
-        shot.get("scene", ""),              # 场景地点
+        shot.get("location", ""),          # 物理地点（新增）
     ]
+    # 如果 location 为空则回退到 scene
+    if not stable_fields[1]:
+        stable_fields[1] = shot.get("scene", "")
     # core_keywords 是列表，转为字符串
     keywords = shot.get("core_keywords", [])
     if isinstance(keywords, list):
@@ -741,15 +744,24 @@ async def _gen_first_frame_async(
 
     ff_desc = shot.get("ff_desc", "").strip()
     if not ff_desc:
-        # ff_Desc 缺失时， 从 scene/ narration 构建静态首帧
-        scene = shot.get("scene", "")
+        # ff_Desc 缺失时，从 location/scene + narration 构建静态首帧
+        location = shot.get("location", "") or shot.get("scene", "")
+        scene = shot.get("scene", "") or location
         narration = shot.get("narration_segment", "")
         main_subj = shot.get("main_subject", "")
-        ff_desc = f"{scene}，{main_subj}，静态画面。"
+        ff_desc = f"{location}，{main_subj}，静态画面。"
         if narration:
             ff_desc += f" {narration[:50]}。" if len(narration) > 50 else f" {narration}。"
     else:
         # ff_Desc 存在时，检查是否是纯相机运动描述（无静态画面）
+        motion_keywords = ["上移", "下移", "左移", "右移", "推进", "拉远", "跃起", "冲出",
+                          "穿越", "飞", "跑", "快速", "缓慢", "跟随", "追"]
+        is_pure_motion = all(kw in ff_desc for kw in motion_keywords) if motion_keywords else False
+        if is_pure_motion or len(ff_desc) < 20:
+            # ff_Desc 几乎是纯相机运动，补充静态画面
+            location = shot.get("location", "") or shot.get("scene", "")
+            main_subj = shot.get("main_subject", "")
+            ff_desc = f"{location}，{main_subj}，静态画面。{ff_desc}"
         motion_keywords = ["上移", "下移", "左移", "右移", "推进", "拉远", "跃起", "冲出",
                           "穿越", "飞", "跑", "快速", "缓慢", "跟随", "追"]
         is_pure_motion = all(kw in ff_desc for kw in motion_keywords) if motion_keywords else False
