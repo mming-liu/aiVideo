@@ -691,14 +691,14 @@ class Script2VideoPipeline:
         os.makedirs(character_dir, exist_ok=True)
         _emit_render_progress(progress, "character_portrait_start", f"Generating portraits for {character.identifier_in_scene}", {"character_idx": character.idx, "identifier": character.identifier_in_scene})
 
-        front_portrait_path = os.path.join(character_dir, "front.png")
-        if os.path.exists(front_portrait_path):
+        base_portrait_path = os.path.join(character_dir, "base.png")
+        if os.path.exists(base_portrait_path):
             pass
         else:
-            _emit_render_progress(progress, "character_portrait_front_start", f"Generating front portrait for {character.identifier_in_scene}", {"character_idx": character.idx, "identifier": character.identifier_in_scene})
-            front_portrait_output = await self.character_portraits_generator.generate_front_portrait(character, style)
-            front_portrait_output.save(front_portrait_path)
-            _emit_render_progress(progress, "character_portrait_front_done", f"Generated front portrait for {character.identifier_in_scene}", {"character_idx": character.idx, "identifier": character.identifier_in_scene, "path": front_portrait_path})
+            _emit_render_progress(progress, "character_portrait_base_start", f"Generating base portrait for {character.identifier_in_scene}", {"character_idx": character.idx, "identifier": character.identifier_in_scene})
+            base_output = await self.character_portraits_generator.generate_base_portrait(character, style)
+            base_output.save(base_portrait_path)
+            _emit_render_progress(progress, "character_portrait_base_done", f"Generated base portrait for {character.identifier_in_scene}", {"character_idx": character.idx, "identifier": character.identifier_in_scene, "path": base_portrait_path})
 
 
         side_portrait_path = os.path.join(character_dir, "side.png")
@@ -706,8 +706,8 @@ class Script2VideoPipeline:
             pass
         else:
             _emit_render_progress(progress, "character_portrait_side_start", f"Generating side portrait for {character.identifier_in_scene}", {"character_idx": character.idx, "identifier": character.identifier_in_scene})
-            side_portrait_output = await self.character_portraits_generator.generate_side_portrait(character, front_portrait_path)
-            side_portrait_output.save(side_portrait_path)
+            side_output = await self.character_portraits_generator.generate_side_portrait(character, base_image_path=base_portrait_path)
+            side_output.save(side_portrait_path)
             _emit_render_progress(progress, "character_portrait_side_done", f"Generated side portrait for {character.identifier_in_scene}", {"character_idx": character.idx, "identifier": character.identifier_in_scene, "path": side_portrait_path})
 
         back_portrait_path = os.path.join(character_dir, "back.png")
@@ -715,8 +715,8 @@ class Script2VideoPipeline:
             pass
         else:
             _emit_render_progress(progress, "character_portrait_back_start", f"Generating back portrait for {character.identifier_in_scene}", {"character_idx": character.idx, "identifier": character.identifier_in_scene})
-            back_portrait_output = await self.character_portraits_generator.generate_back_portrait(character, front_portrait_path)
-            back_portrait_output.save(back_portrait_path)
+            back_output = await self.character_portraits_generator.generate_back_portrait(character, base_image_path=base_portrait_path)
+            back_output.save(back_portrait_path)
             _emit_render_progress(progress, "character_portrait_back_done", f"Generated back portrait for {character.identifier_in_scene}", {"character_idx": character.idx, "identifier": character.identifier_in_scene, "path": back_portrait_path})
 
         self.character_portrait_events[character.idx].set()
@@ -727,7 +727,7 @@ class Script2VideoPipeline:
         return {
             character.identifier_in_scene: {
                 "front": {
-                    "path": front_portrait_path,
+                    "path": base_portrait_path,
                     "description": f"A front view portrait of {character.identifier_in_scene}.",
                 },
                 "side": {
@@ -737,6 +737,10 @@ class Script2VideoPipeline:
                 "back": {
                     "path": back_portrait_path,
                     "description": f"A back view portrait of {character.identifier_in_scene}.",
+                },
+                "base": {
+                    "path": base_portrait_path,
+                    "description": f"Base portrait reference for {character.identifier_in_scene}.",
                 },
             }
         }

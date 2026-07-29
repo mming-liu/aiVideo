@@ -130,12 +130,19 @@ class AgnesImageService(ImageGenerationService):
 
         _403_count = 0  # 连续 403 计数：轮完一圈可用 key 仍 403 则回退模型
 
-        # 图生图：编码参考图
-        ref_data_url = None
-        if req.reference_image_path:
-            ref_data_url = self._encode_image(req.reference_image_path)
-            if ref_data_url:
-                pass  # 静默
+        # 图生图：编码参考图（支持多张，同框多角色各自传入肖像）
+        ref_data_urls = []
+        for ref_path in req.reference_image_paths:
+            url = self._encode_image(ref_path)
+            if url:
+                ref_data_urls.append(url)
+            else:
+                _verbose_write(f"  [镜头{req.shot_index}] 参考图读取失败 {ref_path}")
+        if not ref_data_urls and req.reference_image_path:
+            # 向后兼容：仅设置了单张 reference_image_path
+            url = self._encode_image(req.reference_image_path)
+            if url:
+                ref_data_urls.append(url)
             else:
                 _verbose_write(f"  [镜头{req.shot_index}] 参考图读取失败，降级为 text-to-image")
 
@@ -174,9 +181,9 @@ class AgnesImageService(ImageGenerationService):
                 "response_format": "url",
             }
 
-            # 图生图: 在 extra_body.image 传入输入图像
-            if ref_data_url:
-                extra["image"] = [ref_data_url]
+            # 图生图: 在 extra_body.image 传入输入图像（支持多张）
+            if ref_data_urls:
+                extra["image"] = ref_data_urls
 
             payload["extra_body"] = extra
 
@@ -291,7 +298,11 @@ class AgnesImageService(ImageGenerationService):
 
                     try:
                         if img_url:
-                            img_bytes = requests.get(img_url, timeout=180).content
+                            _img_resp = requests.get(img_url, timeout=180)
+                            _img_resp.raise_for_status()
+                            img_bytes = _img_resp.content
+                            if len(img_bytes) < 5 * 1024:
+                                raise RuntimeError(f"下载内容过小 ({len(img_bytes)} bytes)，可能是错误页面")
                         elif b64:
                             img_bytes = base64.b64decode(b64)
                         else:

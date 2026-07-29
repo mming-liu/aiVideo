@@ -220,6 +220,9 @@ async def _poll_video(
                     # 429 triggers longer backoff
                     if _is_recoverable(err):
                         consecutive_failures += 1
+                        if consecutive_failures > max_retries:
+                            _failed_videos[shot_idx].append({"attempt": -1, "error": f"连续失败 {consecutive_failures} 次，超过上限 {max_retries}", "task_id": task_id})
+                            return False
                         if "429" in err or "rate" in err.lower():
                             wait = parse_retry_after(err)
                             if wait is not None:
@@ -239,6 +242,9 @@ async def _poll_video(
                 # 429 triggers longer backoff
                 if _is_recoverable(err_str):
                     consecutive_failures += 1
+                    if consecutive_failures > max_retries:
+                        _failed_videos[shot_idx].append({"attempt": -1, "error": f"连续失败 {consecutive_failures} 次，超过上限 {max_retries}", "task_id": task_id})
+                        return False
                     if "429" in err_str or "rate" in err_str.lower():
                         wait = parse_retry_after(err_str)
                         if wait is not None:

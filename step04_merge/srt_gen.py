@@ -123,11 +123,11 @@ def generate_srt(shots: List[dict], durations: List[float], output: Path) -> Non
                 # 如果单个镜头音频太长，警告但保持完整（因为已按标点拆分）
                 print(f"  [WARN] Shot {i} subtitle duration {dur:.1f}s > {max_display_time}s (consider splitting in script)")
 
-            srt_lines.append(str(i))
+            subtitle_count += 1
+            srt_lines.append(str(subtitle_count))
             srt_lines.append(f"{seconds_to_srt_time(start)} --> {seconds_to_srt_time(end)}")
             srt_lines.append(subtitle)
             srt_lines.append("")
-            subtitle_count += 1
         else:
             # 多段字幕：按文字比例分配时间
             total_chars = sum(len(p) for p in subtitle_parts)
@@ -140,11 +140,11 @@ def generate_srt(shots: List[dict], durations: List[float], output: Path) -> Non
                 part_start = temp_start
                 part_end = temp_start + part_duration
 
-                srt_lines.append(f"{i}_{j}")  # Use sub-index like 1_1, 1_2 for multi-part subtitles
+                subtitle_count += 1
+                srt_lines.append(str(subtitle_count))
                 srt_lines.append(f"{seconds_to_srt_time(part_start)} --> {seconds_to_srt_time(part_end)}")
                 srt_lines.append(part_text)
                 srt_lines.append("")
-                subtitle_count += 1
 
                 temp_start = part_end
 

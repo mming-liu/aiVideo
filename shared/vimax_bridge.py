@@ -394,21 +394,36 @@ def _build_reference_list(
             _bridge_log(f"  [bridge] 镜头{shot['index']}: 空镜，无可用背景参考图，降级为 text-to-image")
         return refs[:1]
 
-    # 非首镜头：引用本摄像机首帧作为锚定
+    # 非首镜头：引用本摄像机首帧作为锚定（保证场景连贯，优先级最高）
     if not is_first_in_cam and cam_idx in camera_first_frames:
         anchor = camera_first_frames[cam_idx]
         if anchor and Path(anchor).exists():
             refs.append(anchor)
             _bridge_log(f"  [bridge] 镜头{shot['index']}: 参考图=摄像机{cam_idx}首帧锚定")
 
-    # 角色正面肖像
+    # 角色肖像：根据 IMAGE_MULTI_REF 决定单张还是多张
+    # 1（默认）= 单张最优肖像（向后兼容）；2+ = 锚定帧优先 + 多角色肖像填充剩余名额
+    from shared.config import IMAGE_MULTI_REF
+    if IMAGE_MULTI_REF >= 2:
+        # 多参考图：剩余名额分给出镜角色（同框多角色各自传入肖像）
+        remaining = IMAGE_MULTI_REF - len(refs)
+        char_refs = _select_all_character_refs(shot, bank, characters_data, limit=remaining)
+        for cr in char_refs:
+            if cr not in refs:
+                refs.append(cr)
+        # 一个角色都没匹配到时，回退到单张最优参考图（含风格锚点）
+        if not char_refs:
+            char_ref = _select_best_reference(shot, bank, style_bank, characters_data)
+            if char_ref and char_ref not in refs:
+                refs.append(char_ref)
+        return refs[:IMAGE_MULTI_REF]
+
+    # 单参考图（默认，向后兼容）：锚定帧优先，否则单张最优角色肖像
     char_ref = _select_best_reference(shot, bank, style_bank, characters_data)
     if char_ref and char_ref not in refs:
         refs.append(char_ref)
 
-    # 只在 prompt 明确提到角色时才传参考图（不回退到风格锚点）
-
-    return refs[:1]  # 当前 provider 只支持单参考图，取最优第一个
+    return refs[:1]  # 单参考图模式，取最优第一个
 
 
 # ---------------------------------------------------------------------------
@@ -474,36 +489,35 @@ async def _generate_missing_portraits(
         portrait_dir = bank.get_portrait_dir(identifier)
         portrait_dir.mkdir(parents=True, exist_ok=True)
 
-        # 正面肖像（英文 prompt，不拼风格前缀，横屏白底）
-        front_path = portrait_dir / "front.png"
-        if not front_path.exists():
-            _bridge_log(f"  [bank] 生成 {identifier} 正面肖像 ...")
+        # === 基础图优先策略 ===
+        # Step 1: 生成基础全景图（front = base），锁定核心特征
+        base_path = portrait_dir / "base.png"
+        if not base_path.exists():
+            _bridge_log(f"  [bank] 生成 {identifier} 基础全景图 ...")
             try:
-                img_out = await portrait_gen.generate_front_portrait(
-                    # 只传角色特征作为 style，不加 STYLE_PREFIX（portrait_adapter 已 skip_prefix）
-                    char_in_scene, style="photorealistic Chinese ancient costume character portrait, full-body, white background, 16:9 wide canvas, realistic skin texture, natural lighting, film photography",
+                img_out = await portrait_gen.generate_base_portrait(
+                    char_in_scene,
+                    style="photorealistic Chinese ancient costume character portrait, full-body, white background, 16:9 landscape canvas, realistic skin texture, natural lighting, film photography",
                 )
-                # 保存：ImageOutput 是 PIL Image
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
-                    img_out.data.save(str(front_path))
+                    img_out.data.save(str(base_path))
                 elif hasattr(img_out, "save"):
-                    img_out.save(str(front_path))
+                    img_out.save(str(base_path))
                 else:
-                    # 如果返回的是路径
-                    _bridge_log(f"  [bank] {identifier} 正面肖像: 未知返回类型 {type(img_out)}")
+                    _bridge_log(f"  [bank] {identifier} 基础全景图: 未知返回类型 {type(img_out)}")
                     continue
-                _bridge_log(f"  [bank] {identifier} 正面肖像 -> {front_path}")
+                _bridge_log(f"  [bank] {identifier} 基础全景图 -> {base_path}")
             except Exception as e:
-                _bridge_log(f"  [bank] {identifier} 正面肖像生成失败: {e}")
+                _bridge_log(f"  [bank] {identifier} 基础全景图生成失败: {e}")
                 continue
 
-        # 侧面肖像
+        # Step 2: 基于基础图生成侧面照
         side_path = portrait_dir / "side.png"
-        if not side_path.exists() and front_path.exists():
-            _bridge_log(f"  [bank] 生成 {identifier} 侧面肖像 ...")
+        if not side_path.exists() and base_path.exists():
+            _bridge_log(f"  [bank] 基于基础图生成 {identifier} 侧面肖像 ...")
             try:
                 img_out = await portrait_gen.generate_side_portrait(
-                    char_in_scene, front_image_path=str(front_path),
+                    char_in_scene, base_image_path=str(base_path),
                 )
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                     img_out.data.save(str(side_path))
@@ -513,13 +527,13 @@ async def _generate_missing_portraits(
             except Exception as e:
                 _bridge_log(f"  [bank] {identifier} 侧面肖像生成失败: {e}")
 
-        # 背面肖像
+        # Step 3: 基于基础图生成背面照
         back_path = portrait_dir / "back.png"
-        if not back_path.exists() and front_path.exists():
-            _bridge_log(f"  [bank] 生成 {identifier} 背面肖像 ...")
+        if not back_path.exists() and base_path.exists():
+            _bridge_log(f"  [bank] 基于基础图生成 {identifier} 背面肖像 ...")
             try:
                 img_out = await portrait_gen.generate_back_portrait(
-                    char_in_scene, front_image_path=str(front_path),
+                    char_in_scene, base_image_path=str(base_path),
                 )
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                     img_out.data.save(str(back_path))
@@ -529,12 +543,16 @@ async def _generate_missing_portraits(
             except Exception as e:
                 _bridge_log(f"  [bank] {identifier} 背面肖像生成失败: {e}")
 
-        # 构建 portraits dict
+        # 构建 portraits dict（兼容旧 front 字段名）
         portraits = {}
-        if front_path.exists():
+        if base_path.exists():
             portraits["front"] = {
-                "path": str(front_path.resolve()),
-                "description": f"{identifier} 正面全身肖像",
+                "path": str(base_path.resolve()),
+                "description": f"{identifier} 基础全景肖像（参考源）",
+            }
+            portraits["base"] = {
+                "path": str(base_path.resolve()),
+                "description": f"{identifier} 基础全景肖像",
             }
         if side_path.exists():
             portraits["side"] = {
@@ -647,6 +665,54 @@ def _select_best_reference(
     return None
 
 
+def _select_all_character_refs(
+    shot: dict,
+    bank: CharacterBank,
+    characters_data: list[dict],
+    limit: int = 2,
+) -> list[str]:
+    """为镜头选择所有出镜角色的肖像参考图（多角色一致性）.
+
+    与 _select_best_reference 的区别：后者只返回单张最优参考图（含风格锚点回退），
+    本函数遍历 ff_desc/prompt 中提到的**所有**角色，返回各自最优视角肖像，
+    用于同框多角色镜头——每个角色都传入自己的肖像，避免次要角色长相漂移。
+
+    Args:
+        limit: 最多返回的角色肖像数量（默认 2，配合锚定帧共 3 张）
+
+    Returns:
+        角色肖像路径列表（按 ff_desc/prompt 中出现顺序），不含锚定帧/风格锚点
+    """
+    if limit <= 0:
+        return []
+
+    ff_desc = shot.get("ff_desc", "").strip() or ""
+    prompt = shot.get("prompt", "")
+    search_text = f"{ff_desc} {prompt}"
+    view_pref = _detect_view_preference(search_text)
+
+    refs: list[str] = []
+    for char in characters_data:
+        identifier = char.get("identifier", "")
+        if not identifier or identifier not in search_text:
+            continue
+        entry = bank.get_character(identifier)
+        if not entry or not entry.get("portraits"):
+            continue
+        portraits = entry["portraits"]
+        # 按优先级尝试：检测到的视角 → front → side → back
+        for view in [view_pref, "front", "side", "back"]:
+            p = portraits.get(view, {}).get("path")
+            if p and Path(p).exists():
+                refs.append(p)
+                _bridge_log(f"  [bridge] 镜头{shot['index']}: 多角色参考=角色 {identifier} {view}肖像")
+                break
+        if len(refs) >= limit:
+            break
+
+    return refs
+
+
 # ---------------------------------------------------------------------------
 # 首帧/尾帧生成（带校验重试）
 # ---------------------------------------------------------------------------
@@ -757,20 +823,12 @@ async def _gen_first_frame_async(
         # ff_Desc 存在时，检查是否是纯相机运动描述（无静态画面）
         motion_keywords = ["上移", "下移", "左移", "右移", "推进", "拉远", "跃起", "冲出",
                           "穿越", "飞", "跑", "快速", "缓慢", "跟随", "追"]
-        is_pure_motion = all(kw in ff_desc for kw in motion_keywords) if motion_keywords else False
+        is_pure_motion = any(kw in ff_desc for kw in motion_keywords)
         if is_pure_motion or len(ff_desc) < 20:
             # ff_Desc 几乎是纯相机运动，补充静态画面
             location = shot.get("location", "") or shot.get("scene", "")
             main_subj = shot.get("main_subject", "")
             ff_desc = f"{location}，{main_subj}，静态画面。{ff_desc}"
-        motion_keywords = ["上移", "下移", "左移", "右移", "推进", "拉远", "跃起", "冲出",
-                          "穿越", "飞", "跑", "快速", "缓慢", "跟随", "追"]
-        is_pure_motion = all(kw in ff_desc for kw in motion_keywords) if motion_keywords else False
-        if is_pure_motion or len(ff_desc) < 20:
-            # ff_Desc 几乎是纯相机运动，补充静态画面
-            scene = shot.get("scene", "")
-            main_subj = shot.get("main_subject", "")
-            ff_desc = f"{scene}，{main_subj}，静态画面。{ff_desc}"
     if empty_scene:
         ff_desc = f"{ff_desc}\n空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
 

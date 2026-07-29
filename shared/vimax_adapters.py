@@ -70,7 +70,31 @@ class ImageGeneratorAiVideoAdapter:
         skip_sanitize = kwargs.get("skip_sanitize", self._skip_sanitize)
         shot_index = kwargs.get("shot_index", 0)
         frame_desc = kwargs.get("frame_desc", "")
-        ref = reference_image_paths[0] if reference_image_paths else None
+        # 参考图：根据 IMAGE_MULTI_REF 决定传单张还是多张
+        # 1（默认）= 只取第一张（向后兼容）；2+ = 传入全部（上限 IMAGE_MULTI_REF）
+        from shared.config import IMAGE_MULTI_REF
+        refs = reference_image_paths or []
+        if IMAGE_MULTI_REF >= 2 and len(refs) > 1:
+            ref_paths = refs[:IMAGE_MULTI_REF]
+            ref = None  # 多张走 reference_image_paths
+        else:
+            ref_paths = []
+            ref = refs[0] if refs else None
+
+        # 单图模型兜底：provider 不支持多参考图时，把多张肖像拼成单张参考表
+        if ref_paths and not getattr(self._svc, "supports_multi_ref", True):
+            try:
+                from shared.portrait_stitch import stitch_portraits
+                from shared.paths import vimax_working_dir
+                sheet_path = vimax_working_dir() / "shots" / str(shot_index) / "ref_sheet.png"
+                stitched = stitch_portraits(ref_paths, str(sheet_path))
+                if stitched:
+                    ref = stitched
+                    ref_paths = []  # 降级为单张
+            except Exception:
+                # 拼图失败则退回第一张，保证不中断生成
+                ref = ref_paths[0]
+                ref_paths = []
 
         full_prompt = prompt
         if not skip_prefix:
@@ -90,6 +114,7 @@ class ImageGeneratorAiVideoAdapter:
             negative_prompt=self.negative_prompt,
             size=size,
             reference_image_path=ref,
+            reference_image_paths=ref_paths,
             frame_desc=frame_desc,
             # 传递幻觉检测开关（可选禁用）
             enable_hallucination_detection=self._enable_hallucination_lock,
@@ -150,10 +175,6 @@ class VideoGeneratorAiVideoAdapter:
 
     _VIDEO_SUBMIT_TIMEOUT = int(os.getenv("AGNES_VIDEO_SUBMIT_TIMEOUT", "180"))
     _VIDEO_FETCH_TIMEOUT = int(os.getenv("AGNES_VIDEO_FETCH_TIMEOUT", "1200"))
-
-    def get_key_index(self) -> int:
-        """返回当前使用的 key 索引."""
-        return self._svc.get_key_index()
 
     async def submit_task(self, req) -> str:
         """提交视频生成任务，返回 task_id（不等待完成）."""

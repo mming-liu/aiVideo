@@ -19,6 +19,18 @@ from .models import VideoGenerationRequest, VideoGenerationResult
 from .service import VideoGenerationService
 from .config import config
 
+
+def _verbose_write(msg: str) -> None:
+    """写入日志文件，静默控制台（fallback 到 print 时输出到控制台）。"""
+    try:
+        from shared.tee_logger import get_logger
+        from shared.paths import chapter_dir
+        __vl = get_logger(chapter_dir() / "step02b.log", console_level="INFO")
+        __vl.verbose(msg)
+    except Exception:
+        print(msg)
+
+
 # ===================================================================
 # 端点与常量（从 waoowaoo 源码提取）
 # ===================================================================
@@ -162,7 +174,7 @@ def _poll_task(task_id: str, api_key: str, clip_index: int) -> VideoGenerationRe
         try:
             res = requests.get(url, headers=headers, timeout=30)
             if not res.ok:
-                print(f"  [镜头{clip_index}] 查询失败 ({res.status_code})，重试...")
+                _verbose_write(f"  [镜头{clip_index}] 查询失败 ({res.status_code})，重试...")
                 continue
 
             data = res.json()
@@ -177,7 +189,7 @@ def _poll_task(task_id: str, api_key: str, clip_index: int) -> VideoGenerationRe
             if not task_status:
                 task_status = (data.get("task_status") or "").upper()
 
-            print(f"  [镜头{clip_index}] 生成中... ({task_status})")
+            _verbose_write(f"  [镜头{clip_index}] 生成中... ({task_status})")
 
             if task_status in ("FAILED", "CANCELED", "CANCELLED"):
                 # 读取错误码
@@ -203,7 +215,7 @@ def _poll_task(task_id: str, api_key: str, clip_index: int) -> VideoGenerationRe
                 return _download_video(media_url, clip_index)
 
         except requests.RequestException as e:
-            print(f"  [镜头{clip_index}] 查询异常: {e}")
+            _verbose_write(f"  [镜头{clip_index}] 查询异常: {e}")
             continue
 
     return VideoGenerationResult(
@@ -219,12 +231,16 @@ def _download_video(video_url: str, clip_index: int) -> VideoGenerationResult:
         os.makedirs(config.OUTPUT_DIR, exist_ok=True)
         save_path = os.path.join(config.OUTPUT_DIR, f"clip_{clip_index}.mp4")
 
-        video_bin = requests.get(video_url, timeout=120).content
+        resp = requests.get(video_url, timeout=120)
+        resp.raise_for_status()
+        video_bin = resp.content
+        if len(video_bin) < 20 * 1024:
+            raise RuntimeError(f"下载内容过小 ({len(video_bin)} bytes)，可能是错误页面")
         with open(save_path, "wb") as f:
             f.write(video_bin)
 
         size_mb = len(video_bin) / (1024 * 1024)
-        print(f"  [镜头{clip_index}] [OK] 已保存 -> {save_path} ({size_mb:.1f} MB)")
+        _verbose_write(f"  [镜头{clip_index}] [OK] 已保存 -> {save_path} ({size_mb:.1f} MB)")
         return VideoGenerationResult(
             clip_index=clip_index,
             success=True,
@@ -284,7 +300,7 @@ class DashScopeHttpVideoService(VideoGenerationService):
             body = _build_submit_body(req, model)
 
             mode_desc = "KF2V首尾帧" if use_kf2v else "i2v"
-            print(f"  [镜头{req.clip_index}] [{mode_desc} -> {model}] "
+            _verbose_write(f"  [镜头{req.clip_index}] [{mode_desc} -> {model}] "
                   f"{req.prompt[:200]}{'...' if len(req.prompt) > 200 else ''}")
 
             try:
@@ -302,14 +318,14 @@ class DashScopeHttpVideoService(VideoGenerationService):
                 if res.status_code == 403:
                     next_model = self._advance_model()
                     if next_model:
-                        print(f"  [镜头{req.clip_index}] [!] {model} 403，切换到 {next_model}")
+                        _verbose_write(f"  [镜头{req.clip_index}] [!] {model} 403，切换到 {next_model}")
                         continue
                     raise RuntimeError(
                         f"所有模型均返回 403: {', '.join(self._model_queue)}"
                     )
 
                 task_id = _parse_submit_response(res)
-                print(f"  [镜头{req.clip_index}] 任务已创建 -> task_id: {task_id}")
+                _verbose_write(f"  [镜头{req.clip_index}] 任务已创建 -> task_id: {task_id}")
                 return task_id
 
             except requests.RequestException as e:

@@ -71,17 +71,6 @@ class AgnesVideoService(VideoGenerationService):
     # ------------------------------------------------------------------
     # API Key 轮换
     # ------------------------------------------------------------------
-    @property
-    def _current_api_key(self) -> str:
-        return self._api_keys[self._current_key_index]
-
-    def _advance_key(self) -> bool:
-        """切换到下一个 API Key. 返回是否切换成功."""
-        if self._current_key_index + 1 < len(self._api_keys):
-            self._current_key_index += 1
-            return True
-        return False
-
     def get_key_index(self) -> int:
         """返回当前使用的 key 索引."""
         return self._current_key_index
@@ -567,7 +556,11 @@ class AgnesVideoService(VideoGenerationService):
             save_path = os.path.join(config.OUTPUT_DIR, f"clip_{req.clip_index}.mp4")
 
             _vlog.verbose(f"  [镜头{req.clip_index}] [DEBUG] downloading from {video_url[:80]}...")
-            video_bin = requests.get(video_url, timeout=120).content
+            resp = requests.get(video_url, timeout=120)
+            resp.raise_for_status()
+            video_bin = resp.content
+            if len(video_bin) < 20 * 1024:
+                raise RuntimeError(f"下载内容过小 ({len(video_bin)} bytes)，可能是错误页面")
             with open(save_path, "wb") as f:
                 f.write(video_bin)
 

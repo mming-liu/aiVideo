@@ -200,10 +200,14 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
 
     output_path = output_dir / f"shot_{idx}.mp3"
 
-    # 缓存检查：文件存在且大小正常则跳过
+    # 缓存检查：文件存在且大小正常且音色匹配则跳过
     if output_path.exists() and output_path.stat().st_size > 10240:
-        print(f"  [CACHE] Shot {idx}: cached ({speaker_name or 'Narrator'})")
-        return str(output_path)
+        voice_meta = output_path.with_suffix(".voice")
+        cached_voice = voice_meta.read_text(encoding="utf-8").strip() if voice_meta.exists() else ""
+        if cached_voice == voice_config.get("id", ""):
+            print(f"  [CACHE] Shot {idx}: cached ({speaker_name or 'Narrator'})")
+            return str(output_path)
+        print(f"  [CACHE] Shot {idx}: voice changed ({cached_voice or 'none'} -> {voice_config.get('id', '')}), regenerating")
 
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -212,6 +216,8 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
         display_name = speaker_name or "Narrator"
         print(f"  [TTS] Shot {idx} [{display_name}] <- {voice_config['id']}")
         gen_single_tts(text, output_path, provider, voice_config)
+        # 写入音色元数据，供缓存检查比对（防止 step02b 默认音色音频阻塞多角色生成）
+        output_path.with_suffix(".voice").write_text(voice_config.get("id", ""), encoding="utf-8")
         return str(output_path)
     except Exception as e:
         print(f"  [FAIL] Shot {idx}: {e}")
@@ -242,16 +248,22 @@ async def _gen_shot_tts_async(shot: dict, output_dir: Path, provider,
 
     output_path = output_dir / f"shot_{idx}.mp3"
 
-    # 缓存检查
+    # 缓存检查（含音色比对）
     if output_path.exists() and output_path.stat().st_size > 10240:
-        print(f"  [CACHE] Shot {idx}: cached ({speaker_name or 'Narrator'})")
-        return str(output_path)
+        voice_meta = output_path.with_suffix(".voice")
+        cached_voice = voice_meta.read_text(encoding="utf-8").strip() if voice_meta.exists() else ""
+        if cached_voice == voice_config.get("id", ""):
+            print(f"  [CACHE] Shot {idx}: cached ({speaker_name or 'Narrator'})")
+            return str(output_path)
+        print(f"  [CACHE] Shot {idx}: voice changed ({cached_voice or 'none'} -> {voice_config.get('id', '')}), regenerating")
 
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
         display_name = speaker_name or "Narrator"
         print(f"  [TTS] Shot {idx} [{display_name}] <- {voice_config['id']}")
-        return await _gen_single_tts_async(text, output_path, provider, voice_config)
+        result = await _gen_single_tts_async(text, output_path, provider, voice_config)
+        output_path.with_suffix(".voice").write_text(voice_config.get("id", ""), encoding="utf-8")
+        return result
     except Exception as e:
         print(f"  [FAIL] Shot {idx}: {e}")
         return None

@@ -28,3 +28,13 @@ Thumbs.db
 picture.md
 text.md
 video.md
+
+# 调试残留（历史误提交，已清理）
+*.jpg
+llm_response_dump_*.txt
+debug_*.txt
+candidate_json.txt
+_test.txt
+temp.md
+test_check.py
+test_output.mp3

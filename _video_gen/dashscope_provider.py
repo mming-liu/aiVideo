@@ -17,6 +17,17 @@ from .service import VideoGenerationService
 from .config import config
 
 
+def _verbose_write(msg: str) -> None:
+    """写入日志文件，静默控制台（fallback 到 print 时输出到控制台）。"""
+    try:
+        from shared.tee_logger import get_logger
+        from shared.paths import chapter_dir
+        __vl = get_logger(chapter_dir() / "step02b.log", console_level="INFO")
+        __vl.verbose(msg)
+    except Exception:
+        print(msg)
+
+
 class DashScopeVideoService(VideoGenerationService):
     """百炼 DashScope 文生视频实现 (通义万相).
 
@@ -73,18 +84,18 @@ class DashScopeVideoService(VideoGenerationService):
 
             rsp = VideoSynthesis.async_call(**kwargs)
 
-            print(f"  [镜头{req.clip_index}] [{model}] {req.prompt[:60]}...")
+            _verbose_write(f"  [镜头{req.clip_index}] [{model}] {req.prompt[:60]}...")
 
             if rsp.status_code == 200:
                 task_id = rsp.output["task_id"]
-                print(f"  [镜头{req.clip_index}] 任务已创建 [{model}] -> task_id: {task_id}")
+                _verbose_write(f"  [镜头{req.clip_index}] 任务已创建 [{model}] -> task_id: {task_id}")
                 return task_id
 
             # ---- 403: 额度耗尽或无权限，尝试回退 ----
             if rsp.status_code == 403:
                 next_model = self._advance_model()
                 if next_model:
-                    print(f"  [镜头{req.clip_index}] [!] 模型 {model} 返回 403（额度耗尽/无权限），"
+                    _verbose_write(f"  [镜头{req.clip_index}] [!] 模型 {model} 返回 403（额度耗尽/无权限），"
                           f"自动切换到 {next_model}")
                     continue  # 用新模型重试
                 else:
@@ -149,7 +160,7 @@ class DashScopeVideoService(VideoGenerationService):
                     error=f"API 失败: {reason}",
                 )
 
-            print(f"  [镜头{req.clip_index}] 生成中... ({status}, "
+            _verbose_write(f"  [镜头{req.clip_index}] 生成中... ({status}, "
                   f"第 {attempt}/{config.DASHSCOPE_MAX_POLL_ATTEMPTS} 次轮询)")
 
     # ------------------------------------------------------------------
@@ -160,12 +171,16 @@ class DashScopeVideoService(VideoGenerationService):
             os.makedirs(config.OUTPUT_DIR, exist_ok=True)
             save_path = os.path.join(config.OUTPUT_DIR, f"clip_{req.clip_index}.mp4")
 
-            video_bin = requests.get(video_url, timeout=120).content
+            resp = requests.get(video_url, timeout=120)
+            resp.raise_for_status()
+            video_bin = resp.content
+            if len(video_bin) < 20 * 1024:
+                raise RuntimeError(f"下载内容过小 ({len(video_bin)} bytes)，可能是错误页面")
             with open(save_path, "wb") as f:
                 f.write(video_bin)
 
             size_mb = len(video_bin) / (1024 * 1024)
-            print(f"  [镜头{req.clip_index}] [OK] 已保存 -> {save_path} ({size_mb:.1f} MB)")
+            _verbose_write(f"  [镜头{req.clip_index}] [OK] 已保存 -> {save_path} ({size_mb:.1f} MB)")
             return VideoGenerationResult(
                 clip_index=req.clip_index,
                 success=True,

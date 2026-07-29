@@ -160,26 +160,26 @@ class Idea2VideoPipeline:
             self.working_dir, "character_portraits", f"{character.idx}_{safe_path_component(character.identifier_in_scene)}")
         os.makedirs(character_dir, exist_ok=True)
 
-        front_portrait_path = os.path.join(character_dir, "front.png")
-        if os.path.exists(front_portrait_path):
+        base_portrait_path = os.path.join(character_dir, "base.png")
+        if os.path.exists(base_portrait_path):
             pass
         else:
-            front_portrait_output = await self.character_portraits_generator.generate_front_portrait(character, style)
-            front_portrait_output.save(front_portrait_path)
+            base_output = await self.character_portraits_generator.generate_base_portrait(character, style)
+            base_output.save(base_portrait_path)
 
         side_portrait_path = os.path.join(character_dir, "side.png")
         if os.path.exists(side_portrait_path):
             pass
         else:
-            side_portrait_output = await self.character_portraits_generator.generate_side_portrait(character, front_portrait_path)
-            side_portrait_output.save(side_portrait_path)
+            side_output = await self.character_portraits_generator.generate_side_portrait(character, base_image_path=base_portrait_path)
+            side_output.save(side_portrait_path)
 
         back_portrait_path = os.path.join(character_dir, "back.png")
         if os.path.exists(back_portrait_path):
             pass
         else:
-            back_portrait_output = await self.character_portraits_generator.generate_back_portrait(character, front_portrait_path)
-            back_portrait_output.save(back_portrait_path)
+            back_output = await self.character_portraits_generator.generate_back_portrait(character, base_image_path=base_portrait_path)
+            back_output.save(back_portrait_path)
 
         print(
             f"☑️ Completed character portrait generation for {character.identifier_in_scene}.")
@@ -187,7 +187,7 @@ class Idea2VideoPipeline:
         return {
             character.identifier_in_scene: {
                 "front": {
-                    "path": front_portrait_path,
+                    "path": base_portrait_path,
                     "description": f"A front view portrait of {character.identifier_in_scene}.",
                 },
                 "side": {
@@ -197,6 +197,10 @@ class Idea2VideoPipeline:
                 "back": {
                     "path": back_portrait_path,
                     "description": f"A back view portrait of {character.identifier_in_scene}.",
+                },
+                "base": {
+                    "path": base_portrait_path,
+                    "description": f"Base portrait reference for {character.identifier_in_scene}.",
                 },
             }
         }

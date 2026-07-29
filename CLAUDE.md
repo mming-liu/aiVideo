@@ -27,6 +27,7 @@ python step04_merge/main.py       # 阶段4: 片段 + 音频 + 字幕 → 最终
 
 - 阶段2拆分为2a和2b，方便调试：可以先运行2a检查图片质量，确认OK后再运行2b生成视频
 - 每个阶段脚本都有交互式确认提示。
+- 当 `VIDEO_REFERENCE_MODE=text` 时跳过分帧环节，直接文生视频
 
 每个阶段脚本都有交互式确认提示。
 
@@ -34,6 +35,8 @@ python step04_merge/main.py       # 阶段4: 片段 + 音频 + 字幕 → 最终
 ```bash
 python chapter_reader.py 锦衣夜行_77119小说.txt
 ```
+- 此脚本为 thin re-export 层，实际实现在 `shared/chapter_reader.py`
+- `PROMPT_MAX_CHARS` 控制传递给 LLM 的原文上限（默认 50000，改 .env 生效）
 
 ### 环境变量配置（.env）
 - `NOVEL_CHAPTER`: 章节序号（默认1）
@@ -56,10 +59,15 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 ```
 小说文本 (.txt)
     → step01_script_gen/main.py → script_result.json（分镜 + 旁白 + 角色 + 摄像机分组）
-    → step02_video_gen/main.py  → vimax_working/shots/<idx>/video.mp4
+    → step02a_frame_gen/main.py  → 首帧/尾帧/关键帧图片（图生视频前导）
+    → step02b_video_gen/main.py  → vimax_working/shots/<idx>/video.mp4
     → step03_tts_audio/main.py  → audio/narration.mp3
     → step04_merge/main.py      → final.mp4
 ```
+
+- 阶段2拆分为2a（帧图片）和2b（视频生成），方便调试：可以先运行2a检查图片质量，确认OK后再运行2b
+- 每个阶段脚本都有交互式确认提示
+- `VIDEO_REFERENCE_MODE=text` 时跳过分帧环节，直接文生视频
 
 ### 输出目录结构（统一由 shared/paths.py 计算，禁止自行拼接）
 层级对应小说自身结构「小说 → 部 → 章」：

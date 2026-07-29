@@ -30,6 +30,14 @@ TEMP_DIR = CHAPTER_DIR / "stretched"
 
 # 模块级日志
 from shared.tee_logger import get_logger
+
+# 编码预设（匹配 merge_core.py，默认 ultrafast）
+try:
+    from shared.config import MERGE_PRESET as _CFG_PRESET
+    VIDEO_PRESET = _CFG_PRESET
+except ImportError:
+    VIDEO_PRESET = "ultrafast"
+
 _logger = get_logger(CHAPTER_DIR / "step04.log", console_level="INFO")
 
 # Video source
@@ -266,7 +274,7 @@ def main():
             "-map", "0:v:0", "-map", "1:a:0",
             "-vf", video_filter,
             "-af", "volume=5dB,aformat=sample_fmts=fltp:channel_layouts=stereo",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+            "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "20",
             "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", "-ar", "44k", "-ac", "2",
             "-shortest",
@@ -290,7 +298,7 @@ def main():
             # 混合
             "[bg][tts]amix=inputs=2:duration=first[audio]",
             "-map", "0:v:0", "-map", "[audio]",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+            "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "20",
             "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", "-ar", "44k", "-ac", "2",
             "-shortest",

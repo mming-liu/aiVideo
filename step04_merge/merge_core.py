@@ -57,6 +57,13 @@ SUBTITLE_OUTLINE_WIDTH = int(os.getenv("SUBTITLE_OUTLINE_WIDTH", "1"))
 
 DEBUG_SKIP_CACHE = os.getenv("DEBUG_SKIP_CACHE", "0").strip() == "1"
 
+# 编码预设（读取 shared.config，默认 ultrafast 匹配记忆）
+try:
+    from shared.config import MERGE_PRESET as _CFG_PRESET
+    VIDEO_PRESET = _CFG_PRESET
+except ImportError:
+    VIDEO_PRESET = "ultrafast"
+
 # Opening buffer settings
 OPENING_BLACK_DURATION = float(os.getenv("OPENING_BLACK_DURATION", "1.5"))  # 黑屏持续时间
 OPENING_FADE_IN_DURATION = float(os.getenv("OPENING_FADE_IN_DURATION", "1.5"))  # 淡入持续时间
@@ -230,7 +237,7 @@ def apply_transition(
                 "-i", str(clip_a_path),
                 "-filter_complex",
                 f"[0:v]fade=t=out:st={fade_start}:d={fade_dur}",
-                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "23",
                 "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
                 str(output_path),
             ]
@@ -254,7 +261,7 @@ def apply_transition(
                 "-i", str(clip_b_path),
                 "-filter_complex",
                 f"[0:v]fade=t=out:st={fade_start}:d={fade_dur}[aout];[aout][1:v]concat=n=2:v=1:a=0",
-                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "23",
                 "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
                 str(temp_video),
             ]
@@ -279,7 +286,7 @@ def apply_transition(
                 "-i", str(clip_b_path),
                 "-filter_complex",
                 f"[0:v]fade=t=out:st={fade_start}:d={fade_dur}[aout];[aout][1:v]concat=n=2:v=1:a=0",
-                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "23",
                 "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
                 str(output_path),
             ]
@@ -305,7 +312,7 @@ def apply_transition(
                 "-i", str(clip_b_path),
                 "-filter_complex",
                 f"[0:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[a];[1:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[b];[a][b]xfade=transition=hblur:duration={transition_duration}:offset={offset}",
-                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "23",
                 "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
                 str(temp_video),
             ]
@@ -330,7 +337,7 @@ def apply_transition(
                 "-i", str(clip_b_path),
                 "-filter_complex",
                 f"[0:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[a];[1:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[b];[a][b]xfade=transition=hblur:duration={transition_duration}:offset={offset}",
-                "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "23",
                 "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
                 str(output_path),
             ]
@@ -355,7 +362,7 @@ def apply_transition(
             "-i", str(clip_b_path),
             "-filter_complex",
             f"[0:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[xa];[1:v]setpts=PTS-STARTPTS,setsar=1,settb=AVTB[xb];[xa][xb]xfade=transition=fade:duration={transition_duration}:offset={offset}",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "23",
             "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
             str(output_path),
         ]
@@ -390,7 +397,7 @@ def apply_transition(
             f"[1:v]setsar=1[white];[2:v]setsar=1[blk];[3:v]setsar=1[clipb];"
             f"[white][blk][clipb]concat=n=3:v=1:a=0,settb=AVTB[flash];"
             f"[aout][flash]xfade=transition=fade:duration={flash_duration}:offset={offset}",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "23",
             "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
             str(output_path),
         ]
@@ -470,7 +477,7 @@ def create_opening_buffer(
             "-c:v", "libx264",
             "-profile:v", "main",
             "-level", "4.0",
-            "-preset", "medium", "-crf", "23",
+            "-preset", VIDEO_PRESET, "-crf", "23",
             "-pix_fmt", "yuv420p",
             str(title_path),
         ]
@@ -486,7 +493,7 @@ def create_opening_buffer(
             "-c:v", "libx264",
             "-profile:v", "main",
             "-level", "4.0",
-            "-preset", "medium", "-crf", "23",
+            "-preset", VIDEO_PRESET, "-crf", "23",
             "-pix_fmt", "yuv420p",
             str(fadein_path),
         ]
@@ -502,7 +509,7 @@ def create_opening_buffer(
             "-c:v", "libx264",
             "-profile:v", "main",
             "-level", "4.0",
-            "-preset", "medium", "-crf", "23",
+            "-preset", VIDEO_PRESET, "-crf", "23",
             "-pix_fmt", "yuv420p",
             str(fadein_path),
         ]
@@ -516,7 +523,7 @@ def create_opening_buffer(
         "-i", str(fadein_path),
         "-filter_complex",
         "[0:v][1:v]concat=n=2:v=1:a=0",
-        "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+        "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "23",
         "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
         str(output_path),
     ]
@@ -607,9 +614,10 @@ def merge_final_video(
     for i, (clip, target_dur) in enumerate(zip(clips, shot_audio_durations)):
         stretched_path = stretched_dir / f"stretched_{i:04d}.mp4"
         # 判断当前镜头是否是模式B产物（需要裁前2帧）
-        # clip 文件名如 clip_1.mp4，镜头序号从文件名解析
-        # 或者从 CLIP_DIR 结构中获取
-        trim_frames = MODE_B_TRIM_FRAMES if (i + 1) in mode_b_indices else 0
+        # 从 clip 路径解析真实 shot index（clips/{idx}/video.mp4），
+        # 而非用列表位置 i+1（有 hook 时位置与 index 错位）
+        clip_shot_idx = int(clip.parent.name) if clip.parent.name.isdigit() else (i + 1)
+        trim_frames = MODE_B_TRIM_FRAMES if clip_shot_idx in mode_b_indices else 0
 
         # 当需要保留视频音频时，跳过缓存重新生成（因为旧缓存没有音频）
         # 模式B trim 也跳过缓存（旧缓存没有 trim）
@@ -725,12 +733,12 @@ def merge_final_video(
 
     # 5. 根据版本添加音频
     # Version A: 只使用 TTS
-    # Version B: 视频音频 + TTS 混合（侧链压缩：人声出现时背景音自动压低）
+    # Version B: 视频原声(背景) + TTS(人声) 静态加权混合（权重 1:3）
     video_audio_path = None
     if keep_video_audio:
         # Version B: 混合模式 - 视频原声(背景音/环境音) + TTS(人声)
-        # 策略：使用侧链压缩，当 TTS 有人说话时自动压低背景音
-        print("[INFO] Mode B: Mixing Video Audio (Background) + TTS (Voice) with Sidechain Compression")
+        # 策略：静态加权混合，背景 25% + TTS 75%（人声始终优先）
+        print("[INFO] Mode B: Mixing Video Audio (Background) + TTS (Voice) with static weights")
 
         # Version B 音频混合参数（可配置）
         VIDEO_AUDIO_VOLUME = float(os.getenv("FFMPEG_VERSION_B_VIDEO_VOLUME", "0.25"))  # 视频背景音量 25%
@@ -755,7 +763,7 @@ def merge_final_video(
             "-c:v", "libx264",
             "-profile:v", "main",          # 使用 Main Profile，兼容性更好
             "-level", "4.0",
-            "-preset", "medium",
+            "-preset", VIDEO_PRESET,
             "-crf", "20",
             "-c:a", "aac",
             "-b:a", "192k",
@@ -779,7 +787,7 @@ def merge_final_video(
             "-c:v", "libx264",
             "-profile:v", "main",          # 使用 Main Profile，兼容性更好
             "-level", "4.0",
-            "-preset", "medium",
+            "-preset", VIDEO_PRESET,
             "-crf", "20",
             "-c:a", "aac",
             "-b:a", "192k",

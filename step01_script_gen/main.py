@@ -131,12 +131,17 @@ def _post_process(script: dict) -> dict:
 # 4. 钩子分镜生成（v6新增）
 # ============================================================================
 
-def gen_hook_script(novel_text: str) -> dict | None:
-    """调用 LLM 生成钩子分镜，返回 hook dict 或 None."""
+def gen_hook_script(novel_text: str, bank=None) -> dict | None:
+    """调用 LLM 生成钩子分镜，返回 hook dict 或 None.
+
+    Args:
+        novel_text: 小说原文
+        bank: CharacterBank 实例，用于注入角色锚点（prompt 中用角色名而非模糊称呼）
+    """
     if not HOOK_ENABLED:
         return None
 
-    prompt = build_hook_prompt(novel_text)
+    prompt = build_hook_prompt(novel_text, bank=bank)
     service = create_service()
     req = TextGenerationRequest(
         system_prompt="你是短视频脚本大师，擅长在视频开头制造悬念和吸引力。禁止血腥暴力细节。",
@@ -319,7 +324,7 @@ def main() -> None:
     # ========== v6新增：钩子分镜生成 ==========
     if HOOK_ENABLED:
         _logger.info("\n[INFO] 开始生成钩子分镜...")
-        hook = gen_hook_script(novel_text)
+        hook = gen_hook_script(novel_text, bank=character_bank)
         if hook:
             script["hook"] = hook
             _logger.info(f"[OK] 钩子分镜已生成: {hook.get('narration_segment', '')[:30]}...")

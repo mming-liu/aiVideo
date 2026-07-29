@@ -30,7 +30,17 @@ from shared.config import (
 # 初始化 Bailian workspace URL
 if BAILIAN_WORKSPACE_ID and BAILIAN_REGION:
     dashscope.base_url = f"https://{BAILIAN_WORKSPACE_ID}.{BAILIAN_REGION}.maas.aliyuncs.com"
-    print(f"[INFO] Bailian Video API URL: {dashscope.base_url}")
+
+
+def _verbose_write(msg: str) -> None:
+    """写入日志文件，静默控制台（fallback 到 print 时输出到控制台）。"""
+    try:
+        from shared.tee_logger import get_logger
+        from shared.paths import chapter_dir
+        __vl = get_logger(chapter_dir() / "step02b.log", console_level="INFO")
+        __vl.verbose(msg)
+    except Exception:
+        print(msg)
 
 # 模型列表从 shared/config.py 读取（可通过 .env 覆盖）
 # 示例 .env 配置:
@@ -99,7 +109,7 @@ class BailianVideoService(VideoGenerationService):
             with open(image_path, "rb") as f:
                 return base64.b64encode(f.read()).decode("utf-8")
         except Exception as e:
-            print(f"  [WARN] 编码图片失败 {image_path}: {e}")
+            _verbose_write(f"  [WARN] 编码图片失败 {image_path}: {e}")
             return None
 
     # =======================================================================
@@ -151,14 +161,14 @@ class BailianVideoService(VideoGenerationService):
         if req.seed is not None:
             kwargs["seed"] = req.seed
 
-        print(f"  [镜头{req.clip_index}] [Wan T2V] 正在提交任务 [{model}]...")
-        print(f"    prompt: {req.prompt[:60]}...")
+        _verbose_write(f"  [镜头{req.clip_index}] [Wan T2V] 正在提交任务 [{model}]...")
+        _verbose_write(f"    prompt: {req.prompt[:60]}...")
 
         rsp = VideoSynthesis.async_call(**kwargs)
 
         if rsp.status_code == 200:
             task_id = rsp.output["task_id"]
-            print(f"  [镜头{req.clip_index}] 任务已创建 [Wan T2V] -> task_id: {task_id}")
+            _verbose_write(f"  [镜头{req.clip_index}] 任务已创建 [Wan T2V] -> task_id: {task_id}")
             return task_id
 
         # 403: 额度耗尽
@@ -187,14 +197,14 @@ class BailianVideoService(VideoGenerationService):
         if req.seed is not None:
             kwargs["seed"] = req.seed
 
-        print(f"  [镜头{req.clip_index}] [HappyHorse T2V] 正在提交任务 [{model}]...")
-        print(f"    prompt: {req.prompt[:60]}...")
+        _verbose_write(f"  [镜头{req.clip_index}] [HappyHorse T2V] 正在提交任务 [{model}]...")
+        _verbose_write(f"    prompt: {req.prompt[:60]}...")
 
         rsp = VideoSynthesis.async_call(**kwargs)
 
         if rsp.status_code == 200:
             task_id = rsp.output["task_id"]
-            print(f"  [镜头{req.clip_index}] 任务已创建 [HappyHorse T2V] -> task_id: {task_id}")
+            _verbose_write(f"  [镜头{req.clip_index}] 任务已创建 [HappyHorse T2V] -> task_id: {task_id}")
             return task_id
 
         if rsp.status_code == 403:
@@ -236,7 +246,7 @@ class BailianVideoService(VideoGenerationService):
         - 不支持: ratio, last_frame
         """
         if not first_frame_b64:
-            print(f"  [镜头{req.clip_index}] [!] HappyHorse 需要首帧图片")
+            _verbose_write(f"  [镜头{req.clip_index}] [!] HappyHorse 需要首帧图片")
             return None
 
         # HappyHorse 只支持 first_frame
@@ -254,18 +264,18 @@ class BailianVideoService(VideoGenerationService):
         if req.seed is not None:
             kwargs["seed"] = req.seed
 
-        print(f"  [镜头{req.clip_index}] [HappyHorse I2V] 正在提交任务 [{model}]...")
-        print(f"    prompt: {req.prompt[:60]}...")
-        print(f"    首帧: {req.image_path}")
+        _verbose_write(f"  [镜头{req.clip_index}] [HappyHorse I2V] 正在提交任务 [{model}]...")
+        _verbose_write(f"    prompt: {req.prompt[:60]}...")
+        _verbose_write(f"    首帧: {req.image_path}")
 
         rsp = VideoSynthesis.async_call(**kwargs)
 
         if rsp.status_code == 200:
             task_id = rsp.output["task_id"]
-            print(f"  [镜头{req.clip_index}] 任务已创建 [HappyHorse I2V] -> task_id: {task_id}")
+            _verbose_write(f"  [镜头{req.clip_index}] 任务已创建 [HappyHorse I2V] -> task_id: {task_id}")
             return task_id
 
-        print(f"  [镜头{req.clip_index}] [!] HappyHorse 模型错误 [{rsp.status_code}]: {rsp.code} - {rsp.message}")
+        _verbose_write(f"  [镜头{req.clip_index}] [!] HappyHorse 模型错误 [{rsp.status_code}]: {rsp.code} - {rsp.message}")
         return None
 
     def _create_wan_i2v_task(
@@ -283,7 +293,7 @@ class BailianVideoService(VideoGenerationService):
         - resolution, ratio, duration, watermark, seed
         """
         if not first_frame_b64 and not last_frame_b64:
-            print(f"  [镜头{req.clip_index}] [!] Wan 需要首帧或尾帧图片")
+            _verbose_write(f"  [镜头{req.clip_index}] [!] Wan 需要首帧或尾帧图片")
             return None
 
         # Wan2.7 支持双关键帧
@@ -307,21 +317,21 @@ class BailianVideoService(VideoGenerationService):
         if req.seed is not None:
             kwargs["seed"] = req.seed
 
-        print(f"  [镜头{req.clip_index}] [Wan I2V] 正在提交任务 [{model}]...")
-        print(f"    prompt: {req.prompt[:60]}...")
+        _verbose_write(f"  [镜头{req.clip_index}] [Wan I2V] 正在提交任务 [{model}]...")
+        _verbose_write(f"    prompt: {req.prompt[:60]}...")
         if first_frame_b64:
-            print(f"    首帧: {req.image_path}")
+            _verbose_write(f"    首帧: {req.image_path}")
         if last_frame_b64:
-            print(f"    尾帧: {req.last_frame_image_path}")
+            _verbose_write(f"    尾帧: {req.last_frame_image_path}")
 
         rsp = VideoSynthesis.async_call(**kwargs)
 
         if rsp.status_code == 200:
             task_id = rsp.output["task_id"]
-            print(f"  [镜头{req.clip_index}] 任务已创建 [Wan I2V] -> task_id: {task_id}")
+            _verbose_write(f"  [镜头{req.clip_index}] 任务已创建 [Wan I2V] -> task_id: {task_id}")
             return task_id
 
-        print(f"  [镜头{req.clip_index}] [!] Wan 模型错误 [{rsp.status_code}]: {rsp.code} - {rsp.message}")
+        _verbose_write(f"  [镜头{req.clip_index}] [!] Wan 模型错误 [{rsp.status_code}]: {rsp.code} - {rsp.message}")
         return None
 
     # =======================================================================
@@ -355,22 +365,22 @@ class BailianVideoService(VideoGenerationService):
                 continue
 
             status = rsp.output.task_status
-            print(f"  [镜头{req.clip_index}] 任务状态: {status} (已等待 {int(time.time() - start_time)}s)")
+            _verbose_write(f"  [镜头{req.clip_index}] 任务状态: {status} (已等待 {int(time.time() - start_time)}s)")
 
             # status: PENDING, RUNNING, SUCCEEDED, FAILED
             if status == "SUCCEEDED":
                 video_url = rsp.output.video_url
                 # 打印计费信息
                 if hasattr(rsp.output, 'usage') and rsp.output.usage:
-                    print(f"  [镜头{req.clip_index}] 计费信息: {rsp.output.usage}")
+                    _verbose_write(f"  [镜头{req.clip_index}] 计费信息: {rsp.output.usage}")
                 # 下载视频
                 return self._download(req, video_url)
 
             if status == "FAILED":
                 err_code = rsp.output.code if hasattr(rsp.output, 'code') else "unknown"
                 err_msg = rsp.output.message if hasattr(rsp.output, 'message') else "unknown"
-                print(f"  [镜头{req.clip_index}] 任务失败! 错误码: {err_code}, 错误信息: {err_msg}")
-                print(f"  [镜头{req.clip_index}] 完整响应: {rsp.output}")
+                _verbose_write(f"  [镜头{req.clip_index}] 任务失败! 错误码: {err_code}, 错误信息: {err_msg}")
+                _verbose_write(f"  [镜头{req.clip_index}] 完整响应: {rsp.output}")
                 return VideoGenerationResult(
                     clip_index=req.clip_index,
                     success=False,
@@ -401,7 +411,7 @@ class BailianVideoService(VideoGenerationService):
         save_dir.mkdir(parents=True, exist_ok=True)
         save_path = save_dir / "video.mp4"
 
-        print(f"  [镜头{req.clip_index}] 下载视频: {video_url}")
+        _verbose_write(f"  [镜头{req.clip_index}] 下载视频: {video_url}")
 
         try:
             # 先下载到临时文件，再 copy 到目标路径（避免直接写入目标导致文件锁）
@@ -413,7 +423,7 @@ class BailianVideoService(VideoGenerationService):
                 Path(tmp_path).unlink()
             except OSError:
                 pass
-            print(f"  [镜头{req.clip_index}] 视频已保存 -> {save_path}")
+            _verbose_write(f"  [镜头{req.clip_index}] 视频已保存 -> {save_path}")
             return VideoGenerationResult(
                 clip_index=req.clip_index,
                 success=True,

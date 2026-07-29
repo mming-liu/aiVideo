@@ -38,6 +38,7 @@ COMPLIANCE_STRICT = os.getenv("COMPLIANCE_STRICT", "0").strip() == "1"
 COMPLIANCE_AUTO_FIX = os.getenv("COMPLIANCE_AUTO_FIX", "1").strip() == "1"
 GAP_ANALYSIS_ENABLED = os.getenv("GAP_ANALYSIS_ENABLED", "1").strip() == "1"
 GAP_MAX_REGEN_ATTEMPTS = int(os.getenv("GAP_MAX_REGEN_ATTEMPTS", "2"))
+# CLAUDE.md 记载默认 50000，由 chapter_reader 读取（shared/chapter_reader.py）
 PROMPT_MAX_CHARS = int(os.getenv("PROMPT_MAX_CHARS", "50000"))
 
 
@@ -48,6 +49,10 @@ VIDEO_PROVIDER = os.getenv("VIDEO_PROVIDER", "agnes")
 IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "agnes")
 TEXT_PROVIDER = os.getenv("TEXT_PROVIDER", "deepseek")
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "dashscope_sdk")
+
+# 图片生成参考图数量：1=单张（默认，向后兼容），2+=多张参考图上限
+# 多张时同框多角色可各自传入肖像，提升人物一致性
+IMAGE_MULTI_REF = int(os.getenv("IMAGE_MULTI_REF", "1"))
 
 
 # ============================================================================
@@ -75,9 +80,8 @@ AGNES_VIDEO_MAX_POLL_ATTEMPTS = int(os.getenv("AGNES_VIDEO_MAX_POLL_ATTEMPTS", "
 # Agnes 图片配置
 # ============================================================================
 AGNES_IMAGE_MODEL = os.getenv("AGNES_IMAGE_MODEL", "agnes-image-v2.0")
-AGNES_IMAGE_WIDTH = int(os.getenv("AGNES_IMAGE_WIDTH", "1024"))
-AGNES_IMAGE_HEIGHT = int(os.getenv("AGNES_IMAGE_HEIGHT", "1024"))
-AGNES_IMAGE_INTERVAL = int(os.getenv("AGNES_IMAGE_INTERVAL", "6"))
+# 实际图片尺寸由各 provider 的档位式 size 参数控制（如 "2K"、"1024x1792"）
+# 见 _image_gen/agnes_provider.py 和 vimax_adapters.py
 
 
 # ============================================================================
@@ -105,10 +109,8 @@ BAILIAN_VIDEO_RATIO = os.getenv("BAILIAN_VIDEO_RATIO", "9:16")  # 16:9, 9:16, 1:
 BAILIAN_VIDEO_DURATION = int(os.getenv("BAILIAN_VIDEO_DURATION", "5"))  # 2-15秒
 BAILIAN_VIDEO_POLL_INTERVAL = int(os.getenv("BAILIAN_VIDEO_POLL_INTERVAL", "15"))
 BAILIAN_VIDEO_MAX_POLL_ATTEMPTS = int(os.getenv("BAILIAN_VIDEO_MAX_POLL_ATTEMPTS", "120"))
-# 图片参数
-BAILIAN_IMAGE_SIZE = os.getenv("BAILIAN_IMAGE_SIZE", "1024*1024")  # 如 1024*1024, 720*1280
-BAILIAN_IMAGE_N = int(os.getenv("BAILIAN_IMAGE_N", "1"))  # 生成数量
-AGNES_IMAGE_RPM = int(os.getenv("AGNES_IMAGE_RPM", "10"))
+# 图片参数（默认由各 provider 内部档位控制，此处保留 env 覆盖接口）
+# BAILIAN_IMAGE_SIZE 和 BAILIAN_IMAGE_N 已废弃，由 agnes_provider 的 size 档位取代
 
 
 # ============================================================================
@@ -134,11 +136,8 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
 
 # ============================================================================
-# TTS 配置
+# TTS 配置（实际生效值见 tts/config.py 的 DASHSCOPE_TTS_RATE/VOLUME）
 # ============================================================================
-TTS_RATE = os.getenv("TTS_RATE", "+0%")
-TTS_VOLUME = int(os.getenv("TTS_VOLUME", "100"))
-TTS_PITCH = os.getenv("TTS_PITCH", "+0Hz")
 
 
 # ============================================================================
@@ -151,6 +150,4 @@ VIDEO_MAX_RETRIES = int(os.getenv("VIDEO_MAX_RETRIES", "3"))
 # ============================================================================
 # 合并配置（step04）
 # ============================================================================
-MERGE_VIDEO_BITRATE = os.getenv("MERGE_VIDEO_BITRATE", "2M")
-MERGE_AUDIO_BITRATE = os.getenv("MERGE_AUDIO_BITRATE", "128k")
 MERGE_PRESET = os.getenv("MERGE_PRESET", "ultrafast")

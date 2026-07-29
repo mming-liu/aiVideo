@@ -20,6 +20,11 @@ class ImageGenerationService(ABC):
     各供应商实现此接口，业务代码只调用 generate().
     """
 
+    # 是否原生支持多张参考图（同框多角色各自传入肖像）。
+    # Agnes（extra_body.image 数组）/ Bailian（MultiModalConversation content 混合）均为 True。
+    # 未来若接入只支持单图的 provider，置为 False，适配器层会自动降级为肖像拼图。
+    supports_multi_ref: bool = True
+
     @abstractmethod
     def generate(self, req: ImageGenerationRequest) -> ImageGenerationResult:
         """生成图片，保存到本地，返回结果."""

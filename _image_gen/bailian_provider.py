@@ -29,6 +29,37 @@ from shared.key_scheduler import KeyScheduler
 _BAILIAN_IMAGE_RPM = int(os.getenv("BAILIAN_IMAGE_RPM", "3"))
 
 
+def _verbose_write(msg: str) -> None:
+    """写入日志文件，静默控制台（fallback 到 print 时输出到控制台）。"""
+    try:
+        from shared.tee_logger import get_logger
+        from shared.paths import chapter_dir
+        __vl = get_logger(chapter_dir() / "step02a.log", console_level="INFO")
+        __vl.verbose(msg)
+    except Exception:
+        print(msg)
+
+
+def _encode_image(path: Optional[str]) -> Optional[str]:
+    """读取本地图片，返回 data URL (base64)，供 MultiModalConversation 图生图使用。"""
+    if not path:
+        return None
+    try:
+        import base64
+        import mimetypes
+        p = os.path.abspath(path)
+        if not os.path.isfile(p):
+            return None
+        mime, _ = mimetypes.guess_type(p)
+        mime = mime or "image/png"
+        with open(p, "rb") as f:
+            raw = f.read()
+        b64 = base64.b64encode(raw).decode("ascii")
+        return f"data:{mime};base64,{b64}"
+    except Exception:
+        return None
+
+
 class BailianImageService(ImageGenerationService):
     """百炼文生图实现.
 
@@ -54,7 +85,7 @@ class BailianImageService(ImageGenerationService):
         # Bailian 使用 Workspace 专用端点
         if BAILIAN_WORKSPACE_ID and BAILIAN_REGION:
             dashscope.base_url = f"https://{BAILIAN_WORKSPACE_ID}.{BAILIAN_REGION}.maas.aliyuncs.com"
-            print(f"[INFO] Bailian API URL: {dashscope.base_url}")
+            # 静默—URL 仅在需要时查日志
 
         # Bailian 单 key 限速（类似 Agnes）
         self._key_scheduler = KeyScheduler(
@@ -62,8 +93,6 @@ class BailianImageService(ImageGenerationService):
             cooldown=60 / _BAILIAN_IMAGE_RPM if _BAILIAN_IMAGE_RPM > 0 else 0,
             name="bailian_image",
         )
-
-        print(f"[INFO] Bailian 图片服务初始化，模型队列: {self._model_queue}")
 
     @property
     def _current_model(self) -> str:
@@ -113,12 +142,25 @@ class BailianImageService(ImageGenerationService):
 
             while retry_429 <= _MAX_429_RETRIES:
                 # 构建 messages 格式（MultiModalConversation 需要 messages 列表）
+                # content 数组支持 text + image 混合（图生图：同框多角色各自传入肖像）
+                content_items = [{"text": req.prompt}]
+                ref_urls = []
+                for ref_path in req.reference_image_paths:
+                    url = _encode_image(ref_path)
+                    if url:
+                        ref_urls.append(url)
+                    else:
+                        _verbose_write(f"  [镜头{req.shot_index}] 参考图读取失败 {ref_path}")
+                if not ref_urls and req.reference_image_path:
+                    url = _encode_image(req.reference_image_path)
+                    if url:
+                        ref_urls.append(url)
+                for url in ref_urls:
+                    content_items.append({"image": url})
                 messages = [
                     {
                         "role": "user",
-                        "content": [
-                            {"text": req.prompt},
-                        ],
+                        "content": content_items,
                     }
                 ]
 
@@ -141,13 +183,15 @@ class BailianImageService(ImageGenerationService):
                     params["parameters"]["seed"] = req.seed
 
                 frame_label = req.frame_desc if req.frame_desc else "首帧"
-                print(f"  [镜头{req.shot_index}] 正在生成{frame_label} [{model}]...")
-                print(f"    prompt: {req.prompt[:120]}...")
-                print(f"    size: {size_str}, ratio: {ratio_str}, seed: {req.seed}")
+                _verbose_write(f"  [镜头{req.shot_index}] 正在生成{frame_label} [{model}]...")
+                _verbose_write(f"    prompt: {req.prompt[:120]}...")
+                _verbose_write(f"    size: {size_str}, ratio: {ratio_str}, seed: {req.seed}")
                 if req.negative_prompt:
-                    print(f"    negative: {req.negative_prompt[:80]}...")
+                    _verbose_write(f"    negative: {req.negative_prompt[:80]}...")
                 if req.reference_image_path:
-                    print(f"    ref_image: {req.reference_image_path}")
+                    _verbose_write(f"    ref_image: {req.reference_image_path}")
+                if ref_urls:
+                    _verbose_write(f"    ref_images: {len(ref_urls)} 张已注入（图生图）")
 
                 # 记录时间，用于超时判断
                 _req_start = time.time()
@@ -174,7 +218,7 @@ class BailianImageService(ImageGenerationService):
                     if rsp.status_code == 429:
                         retry_429 += 1
                         wait = _429_RETRY_DELAY * retry_429  # 5s, 10s, 15s
-                        print(f"  [镜头{req.shot_index}] [!] 429 限速 (retry {retry_429}/{_MAX_429_RETRIES})，等待 {wait}s...")
+                        _verbose_write(f"  [镜头{req.shot_index}] [!] 429 限速 (retry {retry_429}/{_MAX_429_RETRIES})，等待 {wait}s...")
                         time.sleep(wait)
                         continue
 
@@ -182,7 +226,7 @@ class BailianImageService(ImageGenerationService):
                     if rsp.status_code == 403:
                         if model_idx + 1 < len(self._model_queue):
                             model_idx += 1
-                            print(f"  [镜头{req.shot_index}] [!] 模型 {model} 返回 403，"
+                            _verbose_write(f"  [镜头{req.shot_index}] [!] 模型 {model} 返回 403，"
                                   f"切换到 {self._model_queue[model_idx]}")
                             break  # 跳出 retry 循环，进入下一个模型
                         last_error = f"所有模型均返回 403: {rsp.message}"
@@ -222,12 +266,16 @@ class BailianImageService(ImageGenerationService):
                 config.OUTPUT_DIR, f"shot_{req.shot_index}_{fname_prefix}.png"
             )
 
-            img_bytes = requests.get(img_url, timeout=180).content
+            resp = requests.get(img_url, timeout=180)
+            resp.raise_for_status()
+            img_bytes = resp.content
+            if len(img_bytes) < 5 * 1024:
+                raise RuntimeError(f"下载内容过小 ({len(img_bytes)} bytes)，可能是错误页面")
             with open(save_path, "wb") as f:
                 f.write(img_bytes)
 
             size_kb = len(img_bytes) / 1024
-            print(f"  [镜头{req.shot_index}] [OK] {frame_label}已保存 -> {save_path} ({size_kb:.1f} KB)")
+            _verbose_write(f"  [镜头{req.shot_index}] [OK] {frame_label}已保存 -> {save_path} ({size_kb:.1f} KB)")
             return ImageGenerationResult(success=True, save_path=save_path)
 
         except Exception as e:

@@ -294,49 +294,6 @@ def _check_grounding_wrapper(script: dict) -> None:
     _check_grounding_and_warn(script)
 
 
-def _check_narration_grounding(script: dict, novel_text: str = "") -> None:
-    """逐镜头原文锚点校验（v6.6 新增 P1 优化）。
-
-    检查 narration_segment 是否能在原文中找到对应内容，
-    防止 LLM 编造原文不存在的对话/旁白。
-    """
-    if not novel_text:
-        # 如果没有传入 novel_text，跳过此校验
-        return
-
-    shots = script.get("shots", [])
-    ungrounded = []
-
-    # 简单的文本包含检查：narration 必须是原文的子串
-    for shot in shots:
-        idx = shot.get("index", "?")
-        narration = shot.get("narration_segment", "").strip()
-
-        if not narration:
-            continue
-
-        # 简单匹配：检查 narration 是否在原文中有完全匹配或高相似度匹配
-        # 由于 narration 可能有轻微变动（如标点），使用模糊匹配
-        is_grounded = False
-        narration_clean = narration.replace(" ", "").replace("，", "").replace("。", "")
-
-        # 检查是否有连续 5 个字符以上在原文中
-        for i in range(len(narration_clean) - 4):
-            chunk = narration_clean[i:i+5]
-            if chunk in novel_text:
-                is_grounded = True
-                break
-
-        if not is_grounded:
-            ungrounded.append((idx, narration[:30]))
-
-    if ungrounded:
-        print(f"[WARN] 原文锚点校验: 以下镜头的 narration 在原文中未找到对应内容:")
-        for idx, text in ungrounded:
-            print(f"  镜头{idx}: \"{text}...\"")
-        print(f"  → 请确保所有 narration 直接引用自小说原文")
-
-
 def _check_character_consistency(script: dict) -> dict:
     """校验人物一致性（v6.2 新增，纳入常规校验流程）.
 
