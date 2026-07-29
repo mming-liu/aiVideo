@@ -183,6 +183,20 @@ class AgnesImageService(ImageGenerationService):
             frame_label = req.frame_desc if req.frame_desc else "首帧"
             _verbose_write(f"  [镜头{req.shot_index}] 正在生成{frame_label} [{model}]...")
             _submit_retry = 0
+            # 完整请求日志（不含 base64 内容）
+            import json
+            _log_payload = {k: v for k, v in payload.items()}
+            if "extra_body" in _log_payload and isinstance(_log_payload.get("extra_body"), dict):
+                _eb = _log_payload["extra_body"]
+                if "image" in _eb and _eb["image"]:
+                    if isinstance(_eb["image"], list):
+                        _eb["image"] = [f"[base64 data, len={len(x)}]" if isinstance(x, str) and x.startswith("data:") else x for x in _eb["image"]]
+                    else:
+                        _eb["image"] = f"[base64 data, len={len(_eb['image'])}]" if isinstance(_eb["image"], str) and _eb["image"].startswith("data:") else _eb["image"]
+            _verbose_write(f"[DEBUG] image_submit: POST {url}")
+            _verbose_write(f"[DEBUG] image_submit: headers={json.dumps({k: v if k != 'Authorization' else f'Bearer ***{v[-8:]}' for k, v in headers.items()}, ensure_ascii=False)}")
+            _verbose_write(f"[DEBUG] image_submit: payload={json.dumps(_log_payload, ensure_ascii=False, indent=2)}")
+
             try:
                 while True:
                     try:
@@ -197,11 +211,9 @@ class AgnesImageService(ImageGenerationService):
                                   f"({_submit_retry}/{config.AGNES_IMAGE_SUBMIT_RETRIES})")
                             time.sleep(config.AGNES_IMAGE_SUBMIT_RETRY_DELAY)
                         else:
-                            # 当前 key 超时耗尽，惩罚此 key 后切下一个
                             self._key_scheduler.penalize(key_idx, 60)
                             _verbose_write(f"  [镜头{req.shot_index}] Key {key_idx + 1} 超时耗尽，"
                                   f"冷却 60s，调度下一个可用 Key")
-                            # 切 key 重试（重置重试计数）
                             if self._key_scheduler.n_active() > 1:
                                 _submit_retry = 0
                                 key_idx = self._key_scheduler.acquire()
@@ -212,6 +224,9 @@ class AgnesImageService(ImageGenerationService):
                 if last_error:
                     idx = len(self._model_queue)
                     break
+
+                # 记录响应日志
+                _verbose_write(f"[DEBUG] image_submit response: status={res.status_code}, body={res.text[:500]}")
 
                 # ---- 422: 内容违规，自動修復並重試 ----
                 if res.status_code == 422:

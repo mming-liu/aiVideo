@@ -103,92 +103,131 @@ class BailianImageService(ImageGenerationService):
 
         model_idx = 0
         last_error = ""
+        # 429 重试参数
+        _MAX_429_RETRIES = 3
+        _429_RETRY_DELAY = 5  # 秒
 
         while model_idx < len(self._model_queue):
             model = self._model_queue[model_idx]
+            retry_429 = 0
 
-            # 构建 messages 格式（MultiModalConversation 需要 messages 列表）
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"text": req.prompt},
-                    ],
+            while retry_429 <= _MAX_429_RETRIES:
+                # 构建 messages 格式（MultiModalConversation 需要 messages 列表）
+                messages = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"text": req.prompt},
+                        ],
+                    }
+                ]
+
+                # 构建参数
+                params = {
+                    "model": model,
+                    "messages": messages,
+                    "parameters": {
+                        "size": size_str,
+                        "n": 1,  # 生成1张
+                    }
                 }
-            ]
 
-            # 构建参数
-            params = {
-                "model": model,
-                "messages": messages,
-                "parameters": {
-                    "size": size_str,
-                    "n": 1,  # 生成1张
-                }
-            }
+                # 添加 negative_prompt
+                if req.negative_prompt:
+                    params["parameters"]["negative_prompt"] = req.negative_prompt
 
-            # 添加 negative_prompt
-            if req.negative_prompt:
-                params["parameters"]["negative_prompt"] = req.negative_prompt
+                # 添加 seed（用于可复现）
+                if req.seed is not None:
+                    params["parameters"]["seed"] = req.seed
 
-            # 添加 seed（用于可复现）
-            if req.seed is not None:
-                params["parameters"]["seed"] = req.seed
+                frame_label = req.frame_desc if req.frame_desc else "首帧"
+                print(f"  [镜头{req.shot_index}] 正在生成{frame_label} [{model}]...")
+                print(f"    prompt: {req.prompt[:120]}...")
+                print(f"    size: {size_str}, ratio: {ratio_str}, seed: {req.seed}")
+                if req.negative_prompt:
+                    print(f"    negative: {req.negative_prompt[:80]}...")
+                if req.reference_image_path:
+                    print(f"    ref_image: {req.reference_image_path}")
 
-            print(f"  [镜头{req.shot_index}] 正在生成图片 [{model}]...")
-            print(f"    prompt: {req.prompt[:80]}...")
-            print(f"    size: {size_str}, ratio: {ratio_str}")
+                # 记录时间，用于超时判断
+                _req_start = time.time()
+                _REQUEST_TIMEOUT = 120  # 单次请求最大等待秒数
 
-            try:
-                rsp = MultiModalConversation.call(**params)
+                try:
+                    rsp = MultiModalConversation.call(**params)
 
-                if rsp.status_code == 200:
-                    # 解析响应获取图片 URL
-                    content = rsp.output.choices[0].message.content
-                    if content and len(content) > 0:
-                        img_data = content[0]
-                        if "image" in img_data:
-                            img_url = img_data["image"]
-                            return self._download(req, img_url)
+                    if rsp.status_code == 200:
+                        # 解析响应获取图片 URL
+                        content = rsp.output.choices[0].message.content
+                        if content and len(content) > 0:
+                            img_data = content[0]
+                            if "image" in img_data:
+                                img_url = img_data["image"]
+                                return self._download(req, img_url)
 
-                    return ImageGenerationResult(
-                        success=False,
-                        error="响应中未找到图片 URL",
-                    )
+                        return ImageGenerationResult(
+                            success=False,
+                            error="响应中未找到图片 URL",
+                        )
 
-                # ---- 403: 额度耗尽或无权限，尝试回退 ----
-                if rsp.status_code == 403:
-                    if model_idx + 1 < len(self._model_queue):
-                        model_idx += 1
-                        print(f"  [镜头{req.shot_index}] [!] 模型 {model} 返回 403，"
-                              f"切换到 {self._model_queue[model_idx]}")
+                    # ---- 429: 请求限速，等待后重试 ----
+                    if rsp.status_code == 429:
+                        retry_429 += 1
+                        wait = _429_RETRY_DELAY * retry_429  # 5s, 10s, 15s
+                        print(f"  [镜头{req.shot_index}] [!] 429 限速 (retry {retry_429}/{_MAX_429_RETRIES})，等待 {wait}s...")
+                        time.sleep(wait)
                         continue
-                    last_error = f"所有模型均返回 403: {rsp.message}"
+
+                    # ---- 403: 额度耗尽或无权限，尝试回退 ----
+                    if rsp.status_code == 403:
+                        if model_idx + 1 < len(self._model_queue):
+                            model_idx += 1
+                            print(f"  [镜头{req.shot_index}] [!] 模型 {model} 返回 403，"
+                                  f"切换到 {self._model_queue[model_idx]}")
+                            break  # 跳出 retry 循环，进入下一个模型
+                        last_error = f"所有模型均返回 403: {rsp.message}"
+                        break
+
+                    # ---- 其他错误 ----
+                    last_error = f"API 错误 [{rsp.status_code}]: {rsp.code} - {rsp.message}"
                     break
 
-                # ---- 其他错误 ----
-                last_error = f"API 错误 [{rsp.status_code}]: {rsp.code} - {rsp.message}"
+                except Exception as e:
+                    last_error = f"生成异常: {e}"
+                    break
+
+            # 内部 retry 循环正常结束（没 break）说明超出 429 重试上限
+            if retry_429 > _MAX_429_RETRIES:
+                last_error = f"429 限速重试 {_MAX_429_RETRIES} 次后仍然失败"
                 break
 
-            except Exception as e:
-                last_error = f"生成异常: {e}"
+            # last_error 非空表示内层 break 了（非模型切换），不再尝试下一个模型
+            if last_error and rsp.status_code != 403:
                 break
 
         return ImageGenerationResult(success=False, error=last_error)
 
     def _download(self, req: ImageGenerationRequest, img_url: str) -> ImageGenerationResult:
-        """下载图片到本地."""
+        """下载图片到本地，区分首帧/尾帧/关键帧文件名."""
         import requests
         try:
             os.makedirs(config.OUTPUT_DIR, exist_ok=True)
-            save_path = os.path.join(config.OUTPUT_DIR, f"shot_{req.shot_index}.png")
+            # 首帧/尾帧用前缀区分（避免尾帧覆盖首帧的 shot_N.png）
+            frame_label = req.frame_desc if req.frame_desc else "首帧"
+            fname_prefix = {
+                "首帧": "ff",
+                "尾帧": "lf",
+            }.get(frame_label, "kf")
+            save_path = os.path.join(
+                config.OUTPUT_DIR, f"shot_{req.shot_index}_{fname_prefix}.png"
+            )
 
             img_bytes = requests.get(img_url, timeout=180).content
             with open(save_path, "wb") as f:
                 f.write(img_bytes)
 
             size_kb = len(img_bytes) / 1024
-            print(f"  [镜头{req.shot_index}] [OK] 图片已保存 -> {save_path} ({size_kb:.1f} KB)")
+            print(f"  [镜头{req.shot_index}] [OK] {frame_label}已保存 -> {save_path} ({size_kb:.1f} KB)")
             return ImageGenerationResult(success=True, save_path=save_path)
 
         except Exception as e:

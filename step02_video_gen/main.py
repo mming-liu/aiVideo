@@ -12,7 +12,9 @@ import shutil
 import subprocess
 from dotenv import load_dotenv
 
-load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_PROJECT_ROOT / ".env.content")
+load_dotenv(_PROJECT_ROOT / ".env.keys")
+
 
 # ============================================================================
 # 配置

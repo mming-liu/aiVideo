@@ -757,6 +757,201 @@ def _check_gaze_direction(shots):
     return {'pass': True, 'issues': issues, 'warnings': warnings}
 
 
+# v2.0 新增：正文净化规则检查
+_BODY_PURIFICATION_FORBIDDEN = {
+    # 2.1 禁止进入正文的词汇
+    "画面", "分镜", "参考图", "镜头", "画面变",
+    # 2.2 内部说明词
+    "参考上一版", "接上文", "保持镜头不变", "本规则用于过滤",
+    "为了方便剪辑", "继续完成对话", "尚未结束",
+    # 2.3 泛称（除非是真正描述"人物"概念）
+    "人物", "角色",
+}
+
+
+def _check_body_purification(shots: list[dict], hook: dict = None) -> dict:
+    """检查正文是否包含净化规则禁止的词汇（v2.0 新增）。
+
+    检查项：
+    1. prompt 中是否出现"画面"、"分镜"、"参考图"、"镜头"等词
+    2. 是否出现内部说明词
+    3. 是否使用泛称而非具体角色名
+    """
+    issues = []
+    warnings = []
+
+    def check_shot_prompt(shot, idx):
+        prompt = shot.get("prompt", "")
+        if not prompt:
+            return
+
+        # 检查禁止词汇
+        found_forbidden = []
+        for word in _BODY_PURIFICATION_FORBIDDEN:
+            if word in prompt:
+                # 排除合理使用（如"画面中"出现在某些固定表达中）
+                if word == "人物" and "人物关系" in prompt:
+                    continue  # 允许"人物关系"这种专业术语
+                found_forbidden.append(word)
+
+        if found_forbidden:
+            # 判断严重程度：如果在开头或连续出现，视为严重
+            is_severe = any(prompt.startswith(w) for w in found_forbidden)
+            if is_severe:
+                issues.append(
+                    f"镜头{idx}: prompt 开头包含净化规则禁止词 {found_forbidden}，"
+                    f"这些词不应进入【正文】"
+                )
+            else:
+                warnings.append(
+                    f"镜头{idx}: prompt 包含净化规则禁止词 {found_forbidden}，"
+                    f"建议移至【参考素材】或【制作说明】"
+                )
+
+    # 检查所有镜头
+    for shot in shots:
+        idx = shot.get("index", "?")
+        if idx == 0:  # 跳过 hook
+            continue
+        check_shot_prompt(shot, idx)
+
+    # 检查 hook
+    if hook:
+        check_shot_prompt(hook, 0)
+
+    if issues:
+        for issue in issues:
+            print(f"[CHECK] 正文净化: [ISSUE] {issue}")
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 正文净化: [WARN] {warn}")
+
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
+# v2.0 新增：输出结构检查
+_OUTPUT_STRUCTURE_KEYWORDS = {
+    "【参考素材】", "【正文】", "【制作说明】", "参考素材", "制作说明",
+}
+
+
+def _check_output_structure(script: dict) -> dict:
+    """检查输出是否包含固定结构要素（v2.0 新增）。
+
+    注：由于 JSON 结构本身已包含 shots/hook 等字段，此检查主要针对
+    prompt 内部是否有结构化注释（可选）。
+    """
+    warnings = []
+    shots = script.get("shots", [])
+
+    # 检查 prompt 中是否包含结构化标记（作为参考）
+    has_structure_marker = False
+    for shot in shots:
+        prompt = shot.get("prompt", "")
+        if any(marker in prompt for marker in _OUTPUT_STRUCTURE_KEYWORDS):
+            has_structure_marker = True
+            break
+
+    # 如果 LLM 主动添加了结构化注释，给出确认
+    if has_structure_marker:
+        print("[CHECK] 输出结构: 检测到结构化标记（【参考素材】【正文】【制作说明】）")
+
+    # 注意：不强制要求 JSON 输出包含这些标记，因为 JSON 本身已是结构化格式
+    # 此检查仅为日志确认
+    return {"pass": True, "issues": [], "warnings": warnings}
+
+
+# v2.0 新增：剧情事件轴分布检查（强化版）
+def _check_narrative_arc_distribution(shots: list[dict], script: dict) -> dict:
+    """检查剧情事件轴分布是否均匀（v2.0 新增，强化版）。
+
+    检查项：
+    1. 镜头是否均匀覆盖前/中/后三段剧情
+    2. 高潮镜头是否在后半段
+    3. 是否存在连续空镜/环境描写
+    """
+    issues = []
+    warnings = []
+
+    if not shots:
+        return {"pass": True, "issues": [], "warnings": []}
+
+    total = len(shots)
+    # 按位置分为前/中/后三段
+    first_third = total // 3
+    last_third = total - total // 3
+
+    # 检测高潮关键词
+    climax_keywords = {"刺杀", "战斗", "对决", "反转", "死亡", "诀别", "暴露", "发现", "冲突", "搏杀", "跃出", "挥刀", "拔剑"}
+
+    # 统计各段的事件密度
+    events_in_thirds = [0, 0, 0]  # 前/中/后
+    climax_in_thirds = [0, 0, 0]
+
+    for i, shot in enumerate(shots):
+        idx = shot.get("index", "?")
+        if idx == 0:  # 跳过 hook
+            continue
+
+        narration = shot.get("narration_segment", "")
+        main_subject = shot.get("main_subject", "")
+
+        # 判断属于哪一段
+        if i < first_third:
+            tier = 0
+        elif i < last_third:
+            tier = 1
+        else:
+            tier = 2
+
+        # 有 narration 视为有事件
+        if narration and len(narration) > 5:
+            events_in_thirds[tier] += 1
+
+        # 检查是否是高潮镜头
+        text_to_check = narration + main_subject
+        if any(kw in text_to_check for kw in climax_keywords):
+            climax_in_thirds[tier] += 1
+
+    # 检查1：前段不能全是事件，后段不能没有事件
+    if events_in_thirds[0] > 0 and events_in_thirds[2] == 0:
+        warnings.append(
+            f"事件分布不均：前段有 {events_in_thirds[0]} 个事件，后段无事件。"
+            f"建议后半段增加关键剧情镜头。"
+        )
+
+    # 检查2：高潮应集中在后半段
+    if climax_in_thirds[0] > 0 and climax_in_thirds[2] == 0:
+        warnings.append(
+            f"高潮分布不均：检测到 {sum(climax_in_thirds)} 个高潮镜头，全部集中在前中段。"
+            f"建议将至少一个高潮点移至后半段（战斗/刺杀/反转等）。"
+        )
+
+    # 检查3：连续空镜检测
+    empty_subjects = {"空镜", "荷塘", "日落", "日出", "山", "水", "湖", "田野", "村庄"}
+    consecutive_empty = 0
+    for shot in shots:
+        ms = shot.get("main_subject", "")
+        if any(e in ms for e in empty_subjects):
+            consecutive_empty += 1
+            if consecutive_empty >= 2:
+                issues.append(
+                    f"连续空镜：检测到 {consecutive_empty} 个连续空镜镜头，"
+                    f"根据v2.0规则，背景内容应合并为1个空镜"
+                )
+        else:
+            consecutive_empty = 0
+
+    if issues:
+        for issue in issues:
+            print(f"[CHECK] 事件轴分布: [ISSUE] {issue}")
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 事件轴分布: [WARN] {warn}")
+
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
 # v6.6 新增：人物船只位置检查（防"人在水面蹦跳"幻觉）
 # 检查船只/水面场景中人物是否有明确的位置约束词
 def _check_person_boat_position(shots: list[dict]) -> dict:
@@ -1294,10 +1489,20 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v6.8 新增：情绪可视化检查（将抽象情绪词转化为具体肢体动作）
     results["emotion_visualization"] = _check_emotion_visualization(shots, hook)
 
+    # v2.0 新增：正文净化规则检查（禁止词汇检查）
+    results["body_purification"] = _check_body_purification(shots, hook)
+
+    # v2.0 新增：输出结构检查
+    results["output_structure"] = _check_output_structure(script)
+
+    # v2.0 新增：剧情事件轴分布检查（强化版）
+    results["narrative_arc"] = _check_narrative_arc_distribution(shots, script)
+
     # 综合判定：任一硬性检查失败则整体不通过
     # v6.5: 增加 script_novel_alignment 到硬性检查
     # v6.7: 增加 ff_lf_completeness 到硬性检查（lf_desc 为空会导致静态视频）
-    hard_fail_checks = ["prop_consistency", "shot_transition", "semantic_risk", "script_novel_alignment", "ff_lf_completeness"]
+    # v2.0: 增加 body_purification 到硬性检查（正文净化规则禁止词）
+    hard_fail_checks = ["prop_consistency", "shot_transition", "semantic_risk", "script_novel_alignment", "ff_lf_completeness", "body_purification"]
     pass_fail = all(
         results.get(check, {}).get("pass", True)
         for check in hard_fail_checks

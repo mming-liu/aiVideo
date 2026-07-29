@@ -15,7 +15,9 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 import os
 from dotenv import load_dotenv
-load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_PROJECT_ROOT / ".env.content")
+load_dotenv(_PROJECT_ROOT / ".env.keys")
+
 
 # 直接用已存在的 adapter
 from shared.vimax_adapters import VideoGeneratorAiVideoAdapter as VideoAdapter

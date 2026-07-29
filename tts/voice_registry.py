@@ -9,9 +9,13 @@ from typing import Optional
 from dotenv import load_dotenv
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_PROJECT_ROOT / ".env.content")
+load_dotenv(_PROJECT_ROOT / ".env.keys")
+
+
 
 import os
+from typing import Optional
 
 # 可用的音色池 (DashScope sambert 系列模型 + 自定义参数)
 # 每个音色有: id, gender(性别), style(风格描述), rate(语速), volume(音量)

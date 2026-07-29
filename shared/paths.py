@@ -25,7 +25,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # 自行加载 .env（幂等）：路径计算不能依赖调用方的导入顺序，
 # 否则先于 load_dotenv 导入本模块的代码会拿到缺少 NOVEL_NAME/BOOK_NAME 的错误路径
 from dotenv import load_dotenv
-load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_PROJECT_ROOT / ".env.content")
+load_dotenv(_PROJECT_ROOT / ".env.keys")
 
 
 def _output_base() -> Path:

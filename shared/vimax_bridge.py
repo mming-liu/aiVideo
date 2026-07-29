@@ -34,16 +34,17 @@ import hashlib
 
 # 静默日志: 桥接日志写入 step02.log，不污染控制台
 def _bridge_log(msg: str):
+    """写入文件日志."""
     try:
         from shared.tee_logger import get_logger
         from shared.paths import chapter_dir
         log = get_logger(chapter_dir() / "step02.log", console_level="INFO")
         log.verbose(msg)
     except Exception:
-        _bridge_log(msg)
+        pass
 
 # 首帧/尾帧生成需要风格前缀（与视频生成保持一致）
-from style_prefix import STYLE_PREFIX, sanitize_prompt, ensure_prefix, is_empty_scene
+from style_prefix import STYLE_PREFIX, sanitize_prompt, ensure_prefix, is_empty_scene, add_image_strict_constraints, preprocess_prompt_for_image
 
 
 # 注意: 视频级缓存哈希 (prompt_hash.txt) 的唯一读写实现在
@@ -792,8 +793,11 @@ async def _gen_first_frame_async(
                 return str(ff_path)
 
         logger.verbose(f"  [FRAME] 生成首帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
-        # 添加风格前缀（与视频生成保持一致，确保风格统一）
+        # 添加风格前缀 + 严格约束（与视频生成保持一致，确保风格统一）
+        # 先预处理：替换 AI 可能误解的词汇
+        ff_desc = preprocess_prompt_for_image(ff_desc)
         ff_desc_full = sanitize_prompt(ensure_prefix(ff_desc, STYLE_PREFIX), verbose=False)
+        ff_desc_full = add_image_strict_constraints(ff_desc_full, "首帧", shot=shot)
         refs = reference_paths if reference_paths else []
         try:
             img_out = await image_adapter.generate_single_image(
@@ -894,8 +898,11 @@ async def _gen_last_frame_async(
                 return str(lf_path)
 
         logger.verbose(f"  [FRAME] 生成尾帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
-        # 添加风格前缀（与视频生成保持一致，确保持风格统一）
+        # 添加风格前缀 + 严格约束（与视频生成保持一致，确保风格统一）
+        # 先预处理：替换 AI 可能误解的词汇
+        lf_desc = preprocess_prompt_for_image(lf_desc)
         lf_desc_full = sanitize_prompt(ensure_prefix(lf_desc, STYLE_PREFIX), verbose=False)
+        lf_desc_full = add_image_strict_constraints(lf_desc_full, "尾帧", shot=shot)
         refs = reference_paths if reference_paths else []
         try:
             img_out = await image_adapter.generate_single_image(
@@ -1017,6 +1024,7 @@ async def _gen_keyframes_async(
             
             _kf_logger.verbose(f"  [KEYFRAME] 生成 shot_{idx} keyframe_{i} (t={time_ratio:.1f})...")
             kf_desc_full = sanitize_prompt(ensure_prefix(kf_desc, STYLE_PREFIX), verbose=False)
+            kf_desc_full = add_image_strict_constraints(kf_desc_full, "关键帧", shot=shot)
             refs = reference_paths if reference_paths else []
             
             try:

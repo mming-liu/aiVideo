@@ -14,7 +14,8 @@ from dotenv import load_dotenv
 
 # 确保只加载一次
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_PROJECT_ROOT / ".env.content")
+load_dotenv(_PROJECT_ROOT / ".env.keys")
 
 
 # ============================================================================

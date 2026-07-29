@@ -134,14 +134,19 @@ class AgnesVideoService(VideoGenerationService):
     # ------------------------------------------------------------------
     # num_frames 约束
     # ------------------------------------------------------------------
+    MAX_NUM_FRAMES = 441  # Agnes 硬限制
+
     @staticmethod
     def _clamp_num_frames(raw: int) -> int:
-        """Agnes 约束: num_frames = 8n + 1，取最接近的合法值（至少 1）."""
+        """Agnes 约束: num_frames = 8n + 1，且 <= 441."""
         if raw < 1:
             return 1
         n = round((raw - 1) / 8)
         n = max(n, 0)
         result = 8 * n + 1
+        # 硬限制：不超过 441
+        if result > AgnesVideoService.MAX_NUM_FRAMES:
+            result = AgnesVideoService.MAX_NUM_FRAMES
         return result
 
     # ------------------------------------------------------------------
@@ -287,10 +292,29 @@ class AgnesVideoService(VideoGenerationService):
                       f"{req.prompt[:200]}{'...' if len(req.prompt) > 200 else ''}")
                 _first_attempt = False
 
+            # 记录完整请求日志
+            import json
+            _log_payload = {k: v for k, v in payload.items()}
+            # 图片数据只记录长度，避免日志过大
+            if "image" in _log_payload and _log_payload["image"]:
+                _log_payload["image"] = f"[base64 data, len={len(_log_payload['image'])}]"
+            if "extra_body" in _log_payload and isinstance(_log_payload.get("extra_body"), dict):
+                _eb = _log_payload["extra_body"]
+                if "image" in _eb and _eb["image"]:
+                    if isinstance(_eb["image"], list):
+                        _eb["image"] = [f"[base64 data, len={len(x)}]" if isinstance(x, str) and x.startswith("data:") else x for x in _eb["image"]]
+                    else:
+                        _eb["image"] = f"[base64 data, len={len(_eb['image'])}]"
+            _vlog.verbose(f"[DEBUG] video_submit: POST {self._submit_url()}")
+            _vlog.verbose(f"[DEBUG] video_submit: headers={json.dumps({k: v if k != 'Authorization' else f'Bearer ***{v[-8:]}' for k, v in headers.items()}, ensure_ascii=False)}")
+            _vlog.verbose(f"[DEBUG] video_submit: payload={json.dumps(_log_payload, ensure_ascii=False, indent=2)}")
+
             try:
                 res = requests.post(
                     self._submit_url(), json=payload, headers=headers, timeout=120
                 )
+                # 记录响应日志
+                _vlog.verbose(f"[DEBUG] video_submit response: status={res.status_code}, body={res.text[:500]}")
             except Exception as e:
                 # 连接错误也做重试
                 _submit_retry += 1

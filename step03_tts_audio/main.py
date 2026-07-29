@@ -8,7 +8,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from dotenv import load_dotenv
-load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_PROJECT_ROOT / ".env.content")
+load_dotenv(_PROJECT_ROOT / ".env.keys")
+
 
 # Configuration
 CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))

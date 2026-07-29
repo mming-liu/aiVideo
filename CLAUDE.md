@@ -19,10 +19,14 @@ pip install -r requirements.txt
 ### 运行流水线（按顺序）
 ```bash
 python step01_script_gen/main.py  # 阶段1: 小说文本 → 分镜 JSON
-python step02_video_gen/main.py   # 阶段2: 分镜 → 视频片段
+python step02a_frame_gen/main.py  # 阶段2a: 分镜 → 首帧/尾帧/关键帧图片
+python step02b_video_gen/main.py  # 阶段2b: 图片 → 视频片段
 python step03_tts_audio/main.py   # 阶段3: 旁白文本 → 语音音频
 python step04_merge/main.py       # 阶段4: 片段 + 音频 + 字幕 → 最终 MP4
 ```
+
+- 阶段2拆分为2a和2b，方便调试：可以先运行2a检查图片质量，确认OK后再运行2b生成视频
+- 每个阶段脚本都有交互式确认提示。
 
 每个阶段脚本都有交互式确认提示。
 
@@ -44,6 +48,7 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 - `TTS_PROVIDER`: TTS供应商（默认dashscope_sdk）
 - `HOOK_ENABLED`: 是否生成钩子分镜（默认1，开启）
 - `COMPLIANCE_AUTO_FIX`: 是否自动修复敏感词（默认1，开启）
+- `VIDEO_REFERENCE_MODE`: 视频参考图模式（默认text，可选image）— text=文生视频（跳过帧图片），image=图生视频（需先运行step02a生成帧图片）
 
 ## 架构设计
 

@@ -13,7 +13,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from dotenv import load_dotenv
-load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_PROJECT_ROOT / ".env.content")
+load_dotenv(_PROJECT_ROOT / ".env.keys")
+
 
 from shared.vimax_bridge import build_working_dir, gen_shot_frames
 from shared.vimax_adapters import ImageGeneratorAiVideoAdapter, VideoGeneratorAiVideoAdapter
@@ -21,7 +23,7 @@ from shared.error_fmt import fmt_err as _fmt_err, parse_retry_after
 from step02_video_gen.continuity import ContinuityTracker, MODE_B_START_INDEX
 
 # Smart polling config: exponential backoff + jitter
-POLL_BASE_INTERVAL = int(os.getenv("POLL_BASE_INTERVAL", "10"))    # Initial poll interval (seconds)
+POLL_BASE_INTERVAL = int(os.getenv("POLL_BASE_INTERVAL", "60"))    # Initial poll interval (seconds)
 POLL_MAX_INTERVAL = int(os.getenv("POLL_MAX_INTERVAL", "60"))      # Max poll interval (seconds)
 POLL_EXPONENTIAL_FACTOR = float(os.getenv("POLL_EXPONENTIAL_FACTOR", "1.5"))  # Backoff multiplier
 POLL_JITTER = int(os.getenv("POLL_JITTER", "3"))                   # Jitter range +/- seconds

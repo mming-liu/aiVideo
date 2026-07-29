@@ -1,5 +1,6 @@
 # API 密钥（包含敏感信息，绝对不能提交）
 .env
+.env.keys
 
 # Python 缓存
 __pycache__/
