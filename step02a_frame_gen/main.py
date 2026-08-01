@@ -4,7 +4,9 @@
 用途：方便调试 - 可以先单独运行图片生成，确认图片质量后再生成视频
 
 使用方法：
-    python step02a_frame_gen/main.py
+    python step02a_frame_gen/main.py                 # 生成全部镜头帧
+    python step02a_frame_gen/main.py --shots 3,5-7   # 只生成指定镜头帧
+    python step02a_frame_gen/main.py --shots 3 --force  # 强制重生成（忽略缓存）
 """
 from __future__ import annotations
 import sys
@@ -22,10 +24,16 @@ from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
 from shared.paths import script_file, chapter_dir, vimax_working_dir
 from shared.tee_logger import get_logger
 from shared.vimax_bridge import build_working_dir
+from shared.shot_selector import parse_shot_selector
 
 
-async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False) -> dict:
+async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
+                         only_indices: set[int] | None = None) -> dict:
     """生成所有镜头的首帧/尾帧/关键帧图片
+
+    Args:
+        force: 忽略缓存强制重生成
+        only_indices: 只生成指定 index 的镜头帧（None=全部）
 
     Returns:
         dict: {shot_index: {"ff": path, "lf": path, "kf": [paths]}}
@@ -52,20 +60,23 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False)
 
     # 生成 hook 帧
     if hook and hook.get("prompt"):
-        logger.info(f"\n[INFO] ===== Hook frame generation (index=0) =====")
-        hook["index"] = 0
-        hook_result = await gen_shot_frames(
-            hook, shots_dir, image_adapter,
-            script_mtime, force=force,
-            characters=characters,
-            skip_first_frame=False,
-        )
-        results[0] = hook_result
-        _log_shot_frames(0, hook_result, logger)
+        if only_indices is None or 0 in only_indices:
+            logger.info(f"\n[INFO] ===== Hook frame generation (index=0) =====")
+            hook["index"] = 0
+            hook_result = await gen_shot_frames(
+                hook, shots_dir, image_adapter,
+                script_mtime, force=force,
+                characters=characters,
+                skip_first_frame=False,
+            )
+            results[0] = hook_result
+            _log_shot_frames(0, hook_result, logger)
 
     # 生成各镜头帧
     for shot in shots:
         idx = shot["index"]
+        if only_indices is not None and idx not in only_indices:
+            continue
         logger.info(f"\n[INFO] ===== Shot {idx} frame generation =====")
 
         # Mode A: shot 0, 1 使用完整帧生成
@@ -97,8 +108,18 @@ def _log_shot_frames(idx: int, result: dict, logger):
 
 
 def main():
+    import argparse
     import json
     from shared.paths import script_file, vimax_working_dir as wd
+
+    parser = argparse.ArgumentParser(description="step02a 帧图片生成")
+    parser.add_argument("--shots", "-s", default=None,
+                        help="只生成指定镜头（逗号分隔，支持区间），如 3,5-7,9；默认全部")
+    parser.add_argument("--force", "-f", action="store_true",
+                        help="忽略缓存强制重生成")
+    args = parser.parse_args()
+
+    only_indices = parse_shot_selector(args.shots)
 
     script_path = script_file()
     work_dir = wd()
@@ -112,6 +133,10 @@ def main():
     logger.info(f"[INFO] step02a_frame_gen start")
     logger.info(f"  script: {script_path}")
     logger.info(f"  output: {work_dir / 'shots'}")
+    if only_indices is not None:
+        logger.info(f"  shots:  {sorted(only_indices)} (指定镜头)")
+    if args.force:
+        logger.info(f"  force:  True (忽略缓存)")
 
     # 确保 working dir 结构
     asyncio.run(build_working_dir(
@@ -121,8 +146,10 @@ def main():
         skip_frames=True,  # 只设置目录结构，不生成帧
     ))
 
-    # 生成所有帧
-    results = asyncio.run(gen_all_frames(script_path, work_dir, force=False))
+    # 生成帧（全部或指定镜头）
+    results = asyncio.run(gen_all_frames(
+        script_path, work_dir, force=args.force, only_indices=only_indices,
+    ))
 
     logger.info(f"\n[INFO] step02a_frame_gen done!")
     for idx, result in results.items():

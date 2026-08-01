@@ -40,22 +40,14 @@ class AgnesVideoService(VideoGenerationService):
         ] + config.AGNES_VIDEO_FALLBACK_MODELS
         self._current_model_index: int = 0
 
-        # 多 API Key 支持（与 text/image provider 一致）
-        self._api_keys = [config.AGNES_API_KEY]
-        if config.AGNES_API_KEY_2:
-            self._api_keys.append(config.AGNES_API_KEY_2)
-        if config.AGNES_API_KEY_3:
-            self._api_keys.append(config.AGNES_API_KEY_3)
-        if config.AGNES_API_KEY_4:
-            self._api_keys.append(config.AGNES_API_KEY_4)
-        if config.AGNES_API_KEY_5:
-            self._api_keys.append(config.AGNES_API_KEY_5)
-        if config.AGNES_API_KEY_6:
-            self._api_keys.append(config.AGNES_API_KEY_6)
-        if config.AGNES_API_KEY_7:
-            self._api_keys.append(config.AGNES_API_KEY_7)
-        if config.AGNES_API_KEY_8:
-            self._api_keys.append(config.AGNES_API_KEY_8)
+        # 多 API Key 支持（直接读取环境变量，灵活支持任意数量）
+        self._api_keys = []
+        for i in range(1, 21):  # 支持最多 20 个 key
+            key = os.environ.get(f"AGNES_API_KEY_{i}" if i > 1 else "AGNES_API_KEY", "")
+            if key:
+                self._api_keys.append(key)
+        if not self._api_keys:
+            raise ValueError("没有配置任何 AGNES_API_KEY")
         self._current_key_index: int = 0
 
         # 多 key 冷却调度：视频免费档约 1 次/60s/key，留 1s 余量
@@ -93,25 +85,43 @@ class AgnesVideoService(VideoGenerationService):
     # 首帧图编码
     # ------------------------------------------------------------------
     @staticmethod
-    def _encode_image(path: Optional[str]) -> Optional[str]:
-        """读取本地图片，返回 data URL (base64).
+    def _encode_image(path: Optional[str], max_size_kb: int = 2048) -> Optional[str]:
+        """读取本地图片，压缩后返回 data URL (base64).
 
-        Agnes video API 使用标准 base64（保留 = padding）。
-        确保图片编码后 len % 4 == 0，否则解码会失败报 "Incorrect padding"。
-        之前错误地使用了 .rstrip("=")，仅当文件大小是 3 的倍数时无害，
-        其余情况会破坏 4 字节对齐。现已修复为标准 base64。
+        视频 API 对 base64 大小有限制，需要压缩图片。
+        默认最大 2MB，压缩后如果仍超限则降低质量重试。
         """
         if not path:
             return None
         try:
+            from PIL import Image
+            import io
             p = os.path.abspath(path)
             if not os.path.isfile(p):
                 return None
-            with open(p, "rb") as f:
-                raw = f.read()
-            b64 = base64.b64encode(raw).decode("ascii")
-            mime, _ = mimetypes.guess_type(p)
-            return f"data:{mime or 'image/png'};base64,{b64}"
+
+            # 打开图片
+            img = Image.open(p)
+            if img.mode == 'RGBA':
+                # 白色背景合成，解决透明通道导致的文件膨胀
+                bg = Image.new('RGB', img.size, (255, 255, 255))
+                bg.paste(img, mask=img.split()[3])
+                img = bg
+
+            mime = "image/jpeg"  # JPEG 比 PNG 小很多
+
+            # 压缩到目标大小
+            quality = 85
+            for _ in range(3):  # 最多重试 3 次
+                buf = io.BytesIO()
+                img.save(buf, format='JPEG', quality=quality, optimize=True)
+                if len(buf.getvalue()) <= max_size_kb * 1024:
+                    break
+                quality -= 20
+
+            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            # Agnes video API 需要纯 base64 字符串，不要 data URL 格式
+            return b64
         except Exception:
             return None
 

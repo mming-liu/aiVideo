@@ -50,10 +50,17 @@ class ImageGenCfg:
     AGNES_IMAGE_SUBMIT_RETRY_DELAY: int = int(os.getenv("AGNES_IMAGE_SUBMIT_RETRY_DELAY", "30"))
 
     @classmethod
-    def validate(cls) -> None:
+    def validate(cls) -> None:  # type: ignore[override]
         """验证当前供应商所需配置是否完整."""
-        if cls.PROVIDER == "agnes" and not cls.AGNES_API_KEY:
-            raise RuntimeError("IMAGE_PROVIDER=agnes 需要 AGNES_API_KEY")
+        if cls.PROVIDER == "agnes":
+            # 动态检测是否配置了任何 AGNES_API_KEY
+            has_key = bool(os.environ.get("AGNES_API_KEY"))
+            for i in range(2, 21):
+                if os.environ.get(f"AGNES_API_KEY_{i}"):
+                    has_key = True
+                    break
+            if not has_key:
+                raise RuntimeError("IMAGE_PROVIDER=agnes 需要至少配置一个 AGNES_API_KEY")
 
     @classmethod
     def get_rate_limit_info(cls) -> dict:

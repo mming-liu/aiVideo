@@ -24,7 +24,7 @@ from _text_gen import create_service, TextGenerationRequest
 CHARACTER_EXTRACTION_PROMPT = """
 从以下小说原文中，提取所有出场人物。
 
-已知角色库（若角色已在库中，只需确认其出场， 不需重复描述外貌）：
+已知角色库（若角色已在库中，请确认其出场，并描述本章中的衣着/服装变化）：
 {known_characters}
 
 # 输出格式
@@ -44,7 +44,7 @@ CHARACTER_EXTRACTION_PROMPT = """
 - identifier 必须使用小说中的原名，跨章保持一致
 - 同一个人物只出现一次
 - static_features 描述脸型、五官、发式、体型等不随场景变化的特征
-- dynamic_features 描述服装、配饰、手持物品等随场景变化的特征
+- dynamic_features 描述服装、配饰、手持物品等随场景变化的特征。即使角色已在库中，仍需描述本章中该角色的衣着/打扮（与之前章节可能不同）。
 - 描述要具体可视化：不要用"英俊"，要写"剑眉星目、"
 - is_new: 该人物是否不在已知角色库中
 - 只提取主要角色（有名字、有对话、有动作的），忽略纯背景路人

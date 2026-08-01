@@ -18,6 +18,12 @@ import json
 from tts import create_provider, TTSRequest
 from tts.config import config as tts_config
 from tts.voice_registry import get_registry, NARRATOR_VOICE, AVAILABLE_VOICES
+
+
+def _has_dialogue(text: str) -> bool:
+    """检测文本是否包含对话（带冒号、引号）。"""
+    dialogue_markers = [":", "：", '"', "“", "‘", "——"]
+    return any(marker in text for marker in dialogue_markers)
 from typing import Optional, List
 
 
@@ -174,6 +180,11 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
     text = shot.get("narration_segment", "").strip()
     if not text:
         print(f"  [SKIP] Shot {idx}: no narration_segment")
+        return None
+
+    # v6.6: 只有对话才生成 TTS，旁白（纯描述）不生成
+    if not _has_dialogue(text):
+        print(f"  [SKIP] Shot {idx}: narration only (no dialogue), no TTS")
         return None
 
     # 1. 识别说话人角色（优先从对话中检测）

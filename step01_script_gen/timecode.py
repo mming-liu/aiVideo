@@ -58,16 +58,63 @@ _SPEED_MAP = {"small": 1.0, "medium": 0.5, "large": 0.3}
 _KEYFRAME_MAP = {"small": 1, "medium": 2, "large": 3}
 
 
+def _has_dialogue(text: str) -> bool:
+    """检测文本是否包含对话（带冒号、引号）。"""
+    dialogue_markers = [":", "：", '"', "“", "‘", "——"]
+    return any(marker in text for marker in dialogue_markers)
+
+
+def _extract_motion_duration(motion_desc: str) -> float | None:
+    """从 motion_desc 中提取时间分段，计算实际时长。
+
+    解析格式如：
+    - "前3秒：推镜过程；后3秒：镜头稳定" -> 6秒
+    - "前2秒：开场；中间3秒：动作；后2秒：收尾" -> 7秒
+    - "0-2秒：A动作；2-4秒：B动作" -> 4秒
+
+    Returns:
+        计算出的总时长（秒），解析失败返回 None
+    """
+    if not motion_desc:
+        return None
+
+    # 匹配 "前X秒" 或 "后X秒" 或 "X-Y秒" 格式
+    total = 0.0
+    found = False
+
+    # 格式1: "前N秒：...；后M秒：..."
+    match = re.findall(r'前(\d+(?:\.\d+)?)秒', motion_desc)
+    for m in match:
+        total += float(m)
+        found = True
+    match = re.findall(r'后(\d+(?:\.\d+)?)秒', motion_desc)
+    for m in match:
+        total += float(m)
+        found = True
+
+    # 格式2: "X-Y秒：..." (范围格式)
+    match = re.findall(r'(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*秒', motion_desc)
+    for start, end in match:
+        diff = float(end) - float(start)
+        if diff > 0:
+            total += diff
+            found = True
+
+    # 格式3: 末尾总时长说明 "共N秒" 或 "时长N秒"
+    match = re.search(r'(?:共|时长|总)\s*(\d+(?:\.\d+)?)\s*秒', motion_desc)
+    if match:
+        return float(match.group(1))
+
+    return total if found else None
+
+
 def _compute_timecodes(script: dict) -> None:
-    """根据文本长度计算每个镜头的 timecode（基于优化的时长估算）.
+    """根据 motion_desc 时间分段或对话字数计算每个镜头的 timecode。
 
-    v5.0 新增字段到每个 shot 和 timeline：
-      - keyframe_sample_count: 关键帧采样数量
-      - movement_speed_multiplier: 运镜速度倍率
-      - blank_hold_duration: 留白空镜时长
-
-    v6.1 优化：使用 _estimate_duration 替代简单字符除法，
-    考虑标点停顿、句子长短、动态语速等因素。
+    v6.6 修复：
+    - 优先从 motion_desc 中解析时间分段（前N秒，后M秒）
+    - 只有对话（带冒号/引号）才按字数估算时长
+    - 纯旁白用固定短时长（4秒）
     """
     shots = script.get("shots", [])
     if not shots:
@@ -76,12 +123,27 @@ def _compute_timecodes(script: dict) -> None:
     current_time = 0.0
     timeline = []
 
+    # 纯旁白固定时长（不读旁白，只展示画面）
+    NARRATION_FIXED_DURATION = 4.0
+
     for shot in shots:
         text = shot.get("narration_segment", "")
+        motion_desc = shot.get("motion_desc", "")
         var_type = shot.get("variation_type", "small")
 
-        # 基础时长计算（使用优化的估算函数）
-        base_duration = _estimate_duration(text)
+        # v6.6: 优先从 motion_desc 解析时间分段
+        motion_duration = _extract_motion_duration(motion_desc) if motion_desc else None
+
+        if motion_duration and motion_duration > 0:
+            # 优先使用 motion_desc 中的时间分段
+            base_duration = motion_duration
+        elif _has_dialogue(text):
+            # 有对话：按对话字数估算时长
+            base_duration = _estimate_duration(text)
+        else:
+            # 纯旁白：固定短时长
+            base_duration = NARRATION_FIXED_DURATION
+
         duration = round(base_duration * 30) / 30  # 对齐音频帧 (0.033s)
         duration = max(duration, MIN_SHOT_DURATION)
 

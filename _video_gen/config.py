@@ -102,8 +102,15 @@ class VideoGenCfg:
             raise RuntimeError("VIDEO_PROVIDER=dashscope 需要 DASHSCOPE_API_KEY")
         if cls.PROVIDER in ("openai", "openai_compat") and not cls.OPENAI_API_KEY:
             raise RuntimeError(f"VIDEO_PROVIDER={cls.PROVIDER} 需要 VIDEO_OPENAI_API_KEY")
-        if cls.PROVIDER == "agnes" and not cls.AGNES_API_KEY:
-            raise RuntimeError("VIDEO_PROVIDER=agnes 需要 AGNES_API_KEY")
+        if cls.PROVIDER == "agnes":
+            # 动态检测是否配置了任何 AGNES_API_KEY
+            has_key = bool(os.environ.get("AGNES_API_KEY"))
+            for i in range(2, 21):
+                if os.environ.get(f"AGNES_API_KEY_{i}"):
+                    has_key = True
+                    break
+            if not has_key:
+                raise RuntimeError("VIDEO_PROVIDER=agnes 需要至少配置一个 AGNES_API_KEY")
 
     @classmethod
     def get_rate_limit_info(cls) -> dict:

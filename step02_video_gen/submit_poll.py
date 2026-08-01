@@ -23,11 +23,11 @@ from shared.error_fmt import fmt_err as _fmt_err, parse_retry_after
 from step02_video_gen.continuity import ContinuityTracker, MODE_B_START_INDEX
 
 # Smart polling config: exponential backoff + jitter
-POLL_BASE_INTERVAL = int(os.getenv("POLL_BASE_INTERVAL", "60"))    # Initial poll interval (seconds)
-POLL_MAX_INTERVAL = int(os.getenv("POLL_MAX_INTERVAL", "60"))      # Max poll interval (seconds)
+POLL_BASE_INTERVAL = int(os.getenv("POLL_BASE_INTERVAL", "180"))   # Initial poll interval (seconds) - 3 minutes
+POLL_MAX_INTERVAL = int(os.getenv("POLL_MAX_INTERVAL", "180"))      # Max poll interval (seconds)
 POLL_EXPONENTIAL_FACTOR = float(os.getenv("POLL_EXPONENTIAL_FACTOR", "1.5"))  # Backoff multiplier
-POLL_JITTER = int(os.getenv("POLL_JITTER", "3"))                   # Jitter range +/- seconds
-INITIAL_POLL_DELAY = int(os.getenv("INITIAL_POLL_DELAY", "60"))    # Wait after submit before first poll
+POLL_JITTER = int(os.getenv("POLL_JITTER", "10"))                    # Jitter range +/- seconds
+INITIAL_POLL_DELAY = int(os.getenv("INITIAL_POLL_DELAY", "180"))     # Wait after submit before first poll (3 minutes)
 
 # 视频提交并发：在 _submit_video 入口处用 Semaphore 控制，与 _video_gen provider
 # 的 KeyScheduler（每 Key 独立冷却）配合实现 Nx 吞吐。空闲 Key 越多，并发越多。
@@ -156,46 +156,69 @@ async def _poll_video(
             key_idx = 0
         key_display = f"key-{key_idx + 1}"
 
-        # Wait INITIAL_POLL_DELAY seconds after submit before first query (respect 1 RPM limit)
+        # Wait INITIAL_POLL__DELAY seconds after submit before first query (respect 1 RPM limit)
         logger.verbose(f"  [Shot {shot_idx}] [{key_display}] Task submitted, waiting {INITIAL_POLL_DELAY}s before polling...")
         await asyncio.sleep(INITIAL_POLL_DELAY)
+
+        # 首次轮询前检查：视频文件已存在（上次运行可能已下载成功），直接返回 True
+        if video_path.exists() and video_path.stat().st_size > 1000000:
+            logger.verbose(f"  [Shot {shot_idx}] [{key_display}] 视频已存在，跳过轮询")
+            return True
 
         # Exponential backoff state
         poll_interval = POLL_BASE_INTERVAL
         consecutive_failures = 0
         override_interval = None  # 429 时用服务端返回的剩余时间 + 0.5s（一次性生效）
+        first_poll = True  # INITIAL_POLL_DELAY 已等待，首次轮询不再重复 sleep（修复双重等待）
 
         while True:
             try:
                 # Calculate next poll time: 429 override > exponential backoff + jitter
-                if override_interval is not None:
+                # 首次轮询直接查询（INITIAL_POLL_DELAY 已等过），避免 180s+180s 双重等待
+                if first_poll:
+                    first_poll = False
+                elif override_interval is not None:
                     actual_interval = override_interval
                     override_interval = None
+                    await asyncio.sleep(actual_interval)
                 else:
                     jitter = random.uniform(-POLL_JITTER, POLL_JITTER)
                     actual_interval = max(1, poll_interval + jitter)
+                    await asyncio.sleep(actual_interval)
 
-                await asyncio.sleep(actual_interval)
+                # 每次轮询前检查：视频文件是否已存在（上次运行或其他进程可能已下载）
+                if video_path.exists() and video_path.stat().st_size > 1000000:
+                    logger.verbose(f"  [Shot {shot_idx}] [{key_display}] 视频已存在，跳过轮询")
+                    return True
 
                 result = await video_adapter.fetch_result(req, task_id)
                 if result.success and result.save_path:
                     shot_dir.mkdir(parents=True, exist_ok=True)
 
                     # 视频已下载成功；copy 失败只重试 copy，绝不重新轮询（否则会重复下载）
+                    # 注意：bailian _download 直接存到 shots/{idx}/video.mp4，与 video_path 同路径，
+                    # 此时 copy2 会抛 SameFileError，须跳过复制（文件已在目标位置）。
                     copy_ok = False
-                    for copy_attempt in range(10):
-                        try:
-                            shutil.copy2(result.save_path, str(video_path))
-                            copy_ok = True
-                            break
-                        except OSError as copy_err:
-                            if "WinError 32" in str(copy_err) and copy_attempt < 9:
-                                wait = 1.0 + copy_attempt  # 递增等待 1s~10s
-                                logger.verbose(f"  [Shot {shot_idx}] File locked, retrying copy in {wait:.0f}s ({copy_attempt + 1}/10)...")
-                                await asyncio.sleep(wait)
-                            else:
-                                logger.verbose(f"  [Shot {shot_idx}] Copy failed after {copy_attempt} retries: {copy_err}")
+                    try:
+                        same_file = Path(result.save_path).resolve() == video_path.resolve()
+                    except OSError:
+                        same_file = False
+                    if same_file:
+                        copy_ok = True
+                    else:
+                        for copy_attempt in range(10):
+                            try:
+                                shutil.copy2(result.save_path, str(video_path))
+                                copy_ok = True
                                 break
+                            except OSError as copy_err:
+                                if "WinError 32" in str(copy_err) and copy_attempt < 9:
+                                    wait = 1.0 + copy_attempt  # 递增等待 1s~10s
+                                    logger.verbose(f"  [Shot {shot_idx}] File locked, retrying copy in {wait:.0f}s ({copy_attempt + 1}/10)...")
+                                    await asyncio.sleep(wait)
+                                else:
+                                    logger.verbose(f"  [Shot {shot_idx}] Copy failed after {copy_attempt} retries: {copy_err}")
+                                    break
 
                     if not copy_ok:
                         _failed_videos[shot_idx].append({"attempt": -1, "error": "文件被占用，copy 失败", "task_id": task_id})

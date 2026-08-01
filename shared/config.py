@@ -50,13 +50,17 @@ IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "agnes")
 TEXT_PROVIDER = os.getenv("TEXT_PROVIDER", "deepseek")
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "dashscope_sdk")
 
+# 导演风格配置（可选）：用于视频 prompt 添加电影感前缀
+# 有效值：空字符串=无风格，wong_kar_wai=王家卫， Villeneuve=维伦纽瓦 等
+CINEMATIC_STYLE = os.getenv("CINEMATIC_STYLE", "")
+
 # 图片生成参考图数量：1=单张（默认，向后兼容），2+=多张参考图上限
 # 多张时同框多角色可各自传入肖像，提升人物一致性
 IMAGE_MULTI_REF = int(os.getenv("IMAGE_MULTI_REF", "1"))
 
 
 # ============================================================================
-# Agnes 视频配置
+# Agnes 视频配置（直接读取环境变量，灵活支持任意数量）
 # ============================================================================
 AGNES_API_KEY = os.getenv("AGNES_API_KEY", "")
 AGNES_API_KEY_2 = os.getenv("AGNES_API_KEY_2", "")
@@ -103,6 +107,8 @@ BAILIAN_I2V_FALLBACK_MODELS = [
     m.strip() for m in os.getenv("BAILIAN_I2V_FALLBACK_MODELS", "wan2.7-i2v-2026-04-25,happyhorse-1.0-i2v,happyhorse-1.1-i2v").split(",")
     if m.strip()
 ]
+# 参考图生视频模型 (wan2.7-r2v / happyhorse-1.1-r2v)
+BAILIAN_R2V_MODEL = os.getenv("BAILIAN_R2V_MODEL", "wan2.7-r2v-2026-06-12")
 # 视频参数
 BAILIAN_VIDEO_RESOLUTION = os.getenv("BAILIAN_VIDEO_RESOLUTION", "720P")  # 720P 或 1080P
 BAILIAN_VIDEO_RATIO = os.getenv("BAILIAN_VIDEO_RATIO", "9:16")  # 16:9, 9:16, 1:1

@@ -6,6 +6,7 @@ v5: 支持 wan2.7 和 happyhorse 模型，区分 T2V(文生视频) 和 I2V(图�
 import os
 import base64
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
@@ -23,6 +24,7 @@ from shared.config import (
     BAILIAN_T2V_MODEL,
     BAILIAN_I2V_MODEL,
     BAILIAN_I2V_FALLBACK_MODELS,
+    BAILIAN_R2V_MODEL,
     BAILIAN_VIDEO_POLL_INTERVAL,
     BAILIAN_VIDEO_MAX_POLL_ATTEMPTS,
 )
@@ -53,6 +55,10 @@ DEFAULT_I2V_MODELS = (
     if BAILIAN_I2V_MODEL else
     ["wan2.7-i2v-2026-04-25", "happyhorse-1.0-i2v", "happyhorse-1.1-i2v"]
 )
+DEFAULT_R2V_MODELS = (
+    [m.strip() for m in BAILIAN_R2V_MODEL.split(",") if m.strip()]
+    if BAILIAN_R2V_MODEL else ["wan2.7-r2v-2026-06-12"]
+)
 
 
 class BailianVideoService(VideoGenerationService):
@@ -61,12 +67,14 @@ class BailianVideoService(VideoGenerationService):
     支持:
     - T2V (text-to-video): wan2.7-t2v
     - I2V (image-to-video): wan2.7-i2v, happyhorse 系列
+    - R2V (reference-to-video): wan2.7-r2v (最多5个参考图/视频，支持音频音色参考)
 
     模型差异:
     - Wan2.7 T2V: 支持 negative_prompt, prompt_extend, audio_url
     - HappyHorse T2V: 不支持上述参数
     - Wan2.7 I2V: 支持 first_frame + last_frame，支持 ratio 参数
     - HappyHorse I2V: 只支持 first_frame，不支持 ratio 参数
+    - Wan2.7 R2V: 支持最多5个参考图/视频混合，音频音色参考，更强的角色一致性
     """
 
     def __init__(
@@ -74,6 +82,7 @@ class BailianVideoService(VideoGenerationService):
         api_keys: list[str] | None = None,
         t2v_models: list[str] | None = None,
         i2v_models: list[str] | None = None,
+        r2v_models: list[str] | None = None,
         resolution: str | None = None,
         ratio: str | None = None,
         duration: int | None = None,
@@ -84,7 +93,9 @@ class BailianVideoService(VideoGenerationService):
         # 模型列表
         self._t2v_model_queue = t2v_models or DEFAULT_T2V_MODELS
         self._i2v_model_queue = i2v_models or DEFAULT_I2V_MODELS
+        self._r2v_model_queue = r2v_models or DEFAULT_R2V_MODELS
         self._current_i2v_model_index = 0
+        self._current_r2v_model_index = 0
 
         # 输出参数（从配置读取，resolution 必须大写：720P 或 1080P）
         self._resolution = resolution or BAILIAN_VIDEO_RESOLUTION  # 默认: 720P
@@ -335,6 +346,76 @@ class BailianVideoService(VideoGenerationService):
         return None
 
     # =======================================================================
+    # R2V (参考图/视频生视频) - Wan2.7 R2V
+    # =======================================================================
+    def _create_r2v_task(self, req: VideoGenerationRequest) -> str:
+        """创建参考图生视频任务.
+
+        Wan2.7 R2V 支持:
+        - prompt
+        - references: 最多5个参考图/视频混合，用于角色/道具/场景一致性
+        - reference_audio: 参考音频，用于音色参考
+        - resolution, ratio, duration, watermark, seed
+        """
+        # 编码参考图
+        ref_medias = []
+        for ref_path in (req.reference_paths or [])[:5]:  # 最多5个
+            b64 = self._encode_image(ref_path)
+            if b64:
+                ref_medias.append({'type': 'reference', 'url': f'data:image/png;base64,{b64}'})
+
+        # 如果有首帧/尾帧，也作为参考
+        first_frame_b64 = self._encode_image(req.image_path) if req.image_path else None
+        last_frame_b64 = self._encode_image(req.last_frame_image_path) if req.last_frame_image_path else None
+        if first_frame_b64:
+            ref_medias.append({'type': 'first_frame', 'url': f'data:image/png;base64,{first_frame_b64}'})
+        if last_frame_b64:
+            ref_medias.append({'type': 'last_frame', 'url': f'data:image/png;base64,{last_frame_b64}'})
+
+        if not ref_medias:
+            _verbose_write(f'  [镜头{req.clip_index}] [!] R2V 需要至少一个参考图')
+            return self._create_i2v_task(req)  # 回退到 I2V
+
+        # 构建音频参考（可选）
+        audio_url = None
+        if req.reference_audio:
+            # TODO: 需要上传音频获取 URL 或使用 base64
+            pass
+
+        model = self._r2v_model_queue[0]  # R2V 暂不支持回退
+
+        kwargs: dict = {
+            'model': model,
+            'prompt': req.prompt,
+            'references': ref_medias,
+            'negative_prompt': req.negative_prompt or '',
+            'resolution': self._resolution,
+            'ratio': self._ratio,
+            'duration': self._duration,
+            'watermark': False,
+        }
+
+        if audio_url:
+            kwargs['reference_audio'] = audio_url
+        if req.seed is not None:
+            kwargs['seed'] = req.seed
+
+        _verbose_write(f'  [镜头{req.clip_index}] [Wan R2V] 正在提交任务 [{model}]...')
+        _verbose_write(f'    prompt: {req.prompt[:60]}...')
+        _verbose_write(f'    参考图数量: {len(ref_medias)}')
+
+        rsp = VideoSynthesis.async_call(**kwargs)
+
+        if rsp.status_code == 200:
+            task_id = rsp.output['task_id']
+            _verbose_write(f'  [镜头{req.clip_index}] 任务已创建 [Wan R2V] -> task_id: {task_id}')
+            return task_id
+
+        _verbose_write(f'  [镜头{req.clip_index}] [!] R2V 模型错误 [{rsp.status_code}]: {rsp.code} - {rsp.message}')
+        # 回退到 I2V
+        return self._create_i2v_task(req)
+
+    # =======================================================================
     # 查询任务
     # =======================================================================
     def query_task(self, task_id: str) -> dict:
@@ -430,6 +511,7 @@ class BailianVideoService(VideoGenerationService):
                 save_path=str(save_path),
             )
         except Exception as e:
+            _verbose_write(f"  [镜头{req.clip_index}] 下载失败: {e}")
             return VideoGenerationResult(
                 clip_index=req.clip_index,
                 success=False,

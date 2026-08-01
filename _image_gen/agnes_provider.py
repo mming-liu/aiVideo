@@ -43,22 +43,14 @@ class AgnesImageService(ImageGenerationService):
         self._model_queue: list[str] = [
             config.AGNES_IMAGE_MODEL
         ] + config.AGNES_IMAGE_FALLBACK_MODELS
-        # 多 Key 切换（最多8个）
-        self._api_keys = [config.AGNES_API_KEY]
-        if config.AGNES_API_KEY_2:
-            self._api_keys.append(config.AGNES_API_KEY_2)
-        if config.AGNES_API_KEY_3:
-            self._api_keys.append(config.AGNES_API_KEY_3)
-        if config.AGNES_API_KEY_4:
-            self._api_keys.append(config.AGNES_API_KEY_4)
-        if config.AGNES_API_KEY_5:
-            self._api_keys.append(config.AGNES_API_KEY_5)
-        if config.AGNES_API_KEY_6:
-            self._api_keys.append(config.AGNES_API_KEY_6)
-        if config.AGNES_API_KEY_7:
-            self._api_keys.append(config.AGNES_API_KEY_7)
-        if config.AGNES_API_KEY_8:
-            self._api_keys.append(config.AGNES_API_KEY_8)
+        # 多 Key 切换（直接读取环境变量，灵活支持任意数量）
+        self._api_keys = []
+        for i in range(1, 21):  # 支持最多 20 个 key
+            key = os.environ.get(f"AGNES_API_KEY_{i}" if i > 1 else "AGNES_API_KEY", "")
+            if key:
+                self._api_keys.append(key)
+        if not self._api_keys:
+            raise ValueError("没有配置任何 AGNES_API_KEY")
         self._current_key_index: int = 0
 
         # 多 key 冷却调度：图片免费档约 1 次/20s/key，留 1s 余量
@@ -117,16 +109,24 @@ class AgnesImageService(ImageGenerationService):
         url = f"{config.AGNES_BASE_URL.rstrip('/')}/v1/images/generations"
         idx = 0
         last_error = ""
-        # 日志辅助: 写文件，静默控制台
-        try:
-            from shared.tee_logger import get_logger
-            from shared.paths import chapter_dir
-            __vl = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+
+        # 图生图模式：完全静默（不写日志），纯文生图模式正常
+        _is_img2img = bool(req.reference_image_path or req.reference_image_paths)
+
+        # 日志辅助
+        if _is_img2img:
             def _verbose_write(msg):
-                __vl.verbose(msg)
-        except Exception:
-            def _verbose_write(msg):
-                print(msg)
+                pass  # 图生图完全静默
+        else:
+            try:
+                from shared.tee_logger import get_logger
+                from shared.paths import chapter_dir
+                __vl = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+                def _verbose_write(msg):
+                    __vl.verbose(msg)
+            except Exception:
+                def _verbose_write(msg):
+                    print(msg)
 
         _403_count = 0  # 连续 403 计数：轮完一圈可用 key 仍 403 则回退模型
 

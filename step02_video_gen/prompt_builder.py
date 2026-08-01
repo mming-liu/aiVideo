@@ -241,10 +241,8 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     extra_keyframe_paths = []
 
     if _USE_TEXT_TO_VIDEO:
-        # 文生视频模式：不使用任何参考图
-        # 模式B仍用上一镜尾帧保持人物连续性
-        if mode == "B" and continuity_ref_image:
-            image_path = continuity_ref_image
+        # 文生视频模式：完全不使用任何参考图（强制 T2V）
+        pass
     else:
         # 图生视频模式：使用帧图片作为参考
         if mode == "B" and continuity_ref_image:

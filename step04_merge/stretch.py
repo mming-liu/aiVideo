@@ -90,22 +90,32 @@ def stretch_clip(clip_path: Path, target_dur: float, output_path: Path,
         return False
 
     ratio = target_dur / actual_dur
-    # Clamp ratio to prevent obvious distortion
+    # Only warn for setpts branch - tpad branch naturally reaches target duration
     if ratio < STRETCH_RAIO_MIN or ratio > STRETCH_RAIO_MAX:
-        clamped = max(STRETCH_RAIO_MIN, min(STRETCH_RAIO_MAX, ratio))
-        print(f"  [WARN] Stretch ratio {ratio:.3f} exceeds limits, clamped to {clamped:.3f}")
-        ratio = clamped
+        if ratio < STRETCH_TPAD_RATIO:
+            # setpts branch: actual clamping happens
+            clamped = max(STRETCH_RAIO_MIN, min(STRETCH_RAIO_MAX, ratio))
+            print(f"  [WARN] Stretch ratio {ratio:.3f} exceeds limits, clamped to {clamped:.3f}")
+            ratio = clamped
+        # tpad branch: ratio > 1.2 will use tpad to reach target, no clamping needed
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Build video filter chain
     vf_parts = []
 
-    # Step 0: Mode B frame trim (before stretch, so trimmed frames don't get stretched)
+    # Build the ffmpeg command
+    cmd = [FFMPEG, "-y"]
+
+    # Step 0: Mode B frame trim - use -ss to skip frames BEFORE input for A/V sync
+    # -ss before -i applies to both video and audio streams
+    trim_start_sec = 0.0
     if trim_start_frames > 0:
-        # trim=start_frame:n tells ffmpeg to start decoding from frame N
-        vf_parts.append(f"trim=start_frame={trim_start_frames},setpts=PTS-STARTPTS")
-        print(f"  [TRIM] Mode B clip: trimming {trim_start_frames} frames from start")
+        trim_start_sec = trim_start_frames / 24.0  # Assume 24fps from Agnes
+        cmd.extend(["-ss", str(trim_start_sec)])
+        print(f"  [TRIM] Mode B clip: trimming {trim_start_frames} frames (~{trim_start_sec:.3f}s) from start (A/V sync)")
+
+    cmd.extend(["-i", str(clip_path)])
 
     # Step 1: Stretch
     if ratio < STRETCH_TPAD_RATIO:
@@ -117,9 +127,6 @@ def stretch_clip(clip_path: Path, target_dur: float, output_path: Path,
         pad_duration = target_dur - actual_dur
         print(f"  [INFO] Using tpad for large stretch: +{pad_duration:.1f}s black frames")
         vf_parts.append(f"tpad=stop_mode=add:stop_duration={pad_duration}")
-
-    # Build the ffmpeg command
-    cmd = [FFMPEG, "-y", "-i", str(clip_path)]
 
     if vf_parts:
         cmd.extend(["-vf", ",".join(vf_parts)])

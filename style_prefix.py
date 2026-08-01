@@ -28,7 +28,7 @@ STYLE_PREFIX = (
 # 精简版前缀（用于减少 token 占用）
 STYLE_PREFIX_SHORT = "古风真人"
 
-NEGATIVE_PROMPT = "动漫风格、动画、2D渲染、卡通脸、卡通人物、三头身、Q版、动漫脸、画风突变、畸形五官、异形船只、四叶草、现代服装、3D渲染、塑料质感、English text, watermark, logo, English speech"
+NEGATIVE_PROMPT = "动漫风格、动画、2D渲染、卡通脸、卡通人物、三头身、Q版、动漫脸、画风突变、畸形五官、异形船只、四叶草、现代服装、现代建筑、现代楼房、水泥建筑、玻璃幕墙、电线杆、汽车、摩托车、现代设施、3D渲染、塑料质感、English text, watermark, logo, English speech"
 
 # ===============================================================================
 # 图片幻觉专项防护（2025-07-23 v1 渐进增强）
@@ -39,6 +39,16 @@ IMAGE_HALLUCINATION_LOCK_PROMPT = (
     "identity locked, same face, consistent facial structure, fixed costume, "
     "no extra objects, consistent scene layout, "
     "面部锁定，統一五官，固定服裝，無多餘雜物，場景布局不變"
+)
+
+# 图片防幻觉锁图 - 尾帧/关键帧版（解除"场景布局不变"锁）
+# 尾帧/关键帧需表现动作演变与构图变化，若沿用带"布局不变"的完整锁图，
+# 再叠加首帧整图参考，构图会被锁死在首帧上，三帧雷同、动作无法推进。
+# 保留五官/服装/杂物锁定，去掉 "consistent scene layout / 場景布局不變"。
+IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT = (
+    "identity locked, same face, consistent facial structure, fixed costume, "
+    "no extra objects, "
+    "面部锁定，統一五官，固定服裝，無多餘雜物"
 )
 
 # 图片防幻觉追加负向词（追加到现有负向词）

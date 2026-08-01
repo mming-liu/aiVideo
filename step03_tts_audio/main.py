@@ -82,7 +82,7 @@ def main():
         _logger.info("\n=== Generate per-shot TTS (dynamic voice) ===")
         # 初始化音色注册表（跨章节保持角色声音一致）
         voice_registry = get_registry()
-        gen_all_shot_tts(script, AUDIO_OUTPUT_DIR, voice_registry)
+        gen_all_shot_tts(script, AUDIO_OUTPUT_DIR, voice_registry, use_async=True)
     except Exception as e:
         _logger.error(f"[ERROR] {e}")
         sys.exit(1)

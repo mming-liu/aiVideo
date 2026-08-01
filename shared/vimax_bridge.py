@@ -45,6 +45,7 @@ def _bridge_log(msg: str):
 
 # 首帧/尾帧生成需要风格前缀（与视频生成保持一致）
 from style_prefix import STYLE_PREFIX, sanitize_prompt, ensure_prefix, is_empty_scene, add_image_strict_constraints, preprocess_prompt_for_image
+from style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT
 
 
 # 注意: 视频级缓存哈希 (prompt_hash.txt) 的唯一读写实现在
@@ -938,7 +939,8 @@ async def _gen_last_frame_async(
         lf_desc = f"{lf_desc}\n空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
 
     # 计算当前哈希值（核心意图 + 空镜约束 + 参考图，任一变化都重新生成）
-    current_hash = _get_frame_content_hash(shot, empty_scene, reference_paths)
+    # 追加 _nl 后缀：解除布局锁后 prompt 语义变化，强制旧缓存失效重新生成
+    current_hash = _get_frame_content_hash(shot, empty_scene, reference_paths) + "_lf_nl"
 
     for attempt in range(max_retries + 1):
         if lf_path.exists() and not force and attempt == 0:
@@ -959,7 +961,18 @@ async def _gen_last_frame_async(
         # 添加风格前缀 + 严格约束（与视频生成保持一致，确保风格统一）
         # 先预处理：替换 AI 可能误解的词汇
         lf_desc = preprocess_prompt_for_image(lf_desc)
-        lf_desc_full = sanitize_prompt(ensure_prefix(lf_desc, STYLE_PREFIX), verbose=False)
+        # 尾帧注入场景上下文 + 显式"重构图"指令：
+        # 参考图（首帧）只作人物/风格锚定，构图必须按 lf_desc 重新布局，
+        # 否则参考图会把动作结果帧也锁死在首帧构图上，三帧雷同、动作无法推进。
+        scene = shot.get("scene", "") or ""
+        location = shot.get("location", "") or ""
+        ctx = f"（场景：{location or scene}）" if (location or scene) else ""
+        lf_desc_full = (
+            f"{lf_desc}{ctx}"
+            f"，构图需按尾帧描述重新布局，"
+            f"可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。"
+        )
+        lf_desc_full = sanitize_prompt(ensure_prefix(lf_desc_full, STYLE_PREFIX), verbose=False)
         lf_desc_full = add_image_strict_constraints(lf_desc_full, "尾帧", shot=shot)
         refs = reference_paths if reference_paths else []
         try:
@@ -968,6 +981,8 @@ async def _gen_last_frame_async(
                 reference_image_paths=refs,
                 shot_index=idx,
                 frame_desc="尾帧",
+                # 尾帧：解除"场景布局不变"锁，允许构图随动作演变
+                lock_prompt=IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT,
             )
             if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                 img_out.data.save(str(lf_path))
@@ -1063,7 +1078,8 @@ async def _gen_keyframes_async(
             kf_desc = kf_desc + "\n空镜头， 画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
         
         # 复用首帧哈希逻辑：基于 shot 内容派生，内容不变则路径语义不变
-        current_hash = _get_frame_content_hash(shot, empty_scene, reference_paths) + f"_kf_{i}"
+        # 追加 _nl 后缀：解除布局锁后 prompt 语义变化，强制旧缓存失效重新生成
+        current_hash = _get_frame_content_hash(shot, empty_scene, reference_paths) + f"_kf_{i}_nl"
         
         for attempt in range(max_retries + 1):
             if kf_path.exists() and not force and attempt == 0:
@@ -1081,16 +1097,29 @@ async def _gen_keyframes_async(
                     break
             
             _kf_logger.verbose(f"  [KEYFRAME] 生成 shot_{idx} keyframe_{i} (t={time_ratio:.1f})...")
-            kf_desc_full = sanitize_prompt(ensure_prefix(kf_desc, STYLE_PREFIX), verbose=False)
+            # 关键帧注入场景上下文 + 显式"重构图"指令：
+            # 关键帧是动作进行中的瞬间状态，构图需与首帧不同（如"推至中景"），
+            # 若沿用首帧整图参考 + 布局不变锁，会锁死在首帧构图上。
+            scene = shot.get("scene", "") or ""
+            location = shot.get("location", "") or ""
+            ctx = f"（场景：{location or scene}）" if (location or scene) else ""
+            kf_desc_full = (
+                f"{kf_desc}{ctx}"
+                f"，构图需按关键帧描述重新布局，"
+                f"可与首帧/参考图的景别、机位、人物位置不同，表现动作过程中的瞬间状态。"
+            )
+            kf_desc_full = sanitize_prompt(ensure_prefix(kf_desc_full, STYLE_PREFIX), verbose=False)
             kf_desc_full = add_image_strict_constraints(kf_desc_full, "关键帧", shot=shot)
             refs = reference_paths if reference_paths else []
-            
+
             try:
                 img_out = await image_adapter.generate_single_image(
                     prompt=kf_desc_full,
                     reference_image_paths=refs,
                     shot_index=idx,
                     frame_desc=f"中间关键帧(t={time_ratio:.1f})",
+                    # 关键帧：解除"场景布局不变"锁，允许构图随动作演变
+                    lock_prompt=IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT,
                 )
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                     img_out.data.save(str(kf_path))

@@ -21,7 +21,7 @@ import _video_gen
 from _image_gen import ImageGenerationRequest
 from _video_gen import VideoGenerationRequest
 from style_prefix import STYLE_PREFIX, STYLE_PREFIX_SHORT, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt
-from style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT, IMAGE_HALLUCINATION_EXTRA_NEGATIVE
+from style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT, IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT, IMAGE_HALLUCINATION_EXTRA_NEGATIVE
 
 from vimax.interfaces import ImageOutput, VideoOutput
 
@@ -105,8 +105,11 @@ class ImageGeneratorAiVideoAdapter:
             full_prompt = prompt
 
         # 图片防幻觉锁图关键词注入（仅在启用时）
+        # 默认用完整锁图（含"场景布局不变"）；尾帧/关键帧通过 lock_prompt 传入
+        # 无布局锁版本，允许构图随动作演变（详见 style_prefix.py 注释）。
         if self._enable_hallucination_lock:
-            full_prompt = f"{IMAGE_HALLUCINATION_LOCK_PROMPT}，{full_prompt}"
+            lock_prompt = kwargs.get("lock_prompt", IMAGE_HALLUCINATION_LOCK_PROMPT)
+            full_prompt = f"{lock_prompt}，{full_prompt}"
 
         req = ImageGenerationRequest(
             prompt=full_prompt,

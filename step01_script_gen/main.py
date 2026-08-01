@@ -208,13 +208,25 @@ def main() -> None:
             chars = extract_characters(novel_text, character_bank)
             # 注册新角色到 bank（暂存本章角色，供生成时使用）
             for c in chars:
+                ident = c.get("identifier", "")
+                if not ident:
+                    continue
                 if c.get("is_new", True):
+                    # 新角色：首次注册
                     character_bank.register_character(
-                        c["identifier"],
+                        ident,
                         c.get("static_features", ""),
                         c.get("dynamic_features", ""),
                         NOVEL_CHAPTER,
                     )
+                elif c.get("dynamic_features"):
+                    # 已知角色：如果 LLM 返回了 dynamic_features，则更新衣着
+                    # 这解决了"衣着与本章内容不一致"的问题
+                    character_bank.update_dynamic_features(
+                        ident,
+                        c.get("dynamic_features", ""),
+                    )
+                    character_bank.update_character_chapter(ident, NOVEL_CHAPTER)
             # v6.1 优化：立即保存，确保即使脚本生成失败，角色库也已更新
             character_bank.save()
             _logger.info(f"[INFO] 预提取到 {len(chars)} 个角色特征（已保存到角色库）")
