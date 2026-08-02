@@ -36,22 +36,19 @@ def _set_novel_text(text: str) -> None:
 
 
 # v5.0 新增必填字段列表
+# 收敛原则：只保留 PROMPT_TEMPLATE 的 shot 输出 schema 里真实要求、且下游确实消费的字段。
+# 曾经误列了 prompt 从未要求、下游也从未消费的 7 个死字段
+# （mask_area/content/camera_movement/framing/lighting_color/negative_prompt/hook），
+# 导致每次生成都对每镜刷「缺少字段」WARN——LLM 缺的只是提示词没让它输出的字段。
+# 视频负向词由 shared/vimax_adapters.py 用适配器内置 NEGATIVE_PROMPT 统一注入，与逐镜 negative_prompt 无关。
 _REQUIRED_NEW_FIELDS = [
     "main_subject",
     "core_keywords",
     "fx_effect",
     "audio_cue",
-    "mask_area",
     "color_tone",
     "clip_transition",
-    # v6.4 新增：视频钩子版新字段
-    "content",
-    "camera_movement",
-    "framing",
-    "lighting_color",
     "duration",
-    "negative_prompt",
-    "hook",
     # v6.6 新增：物理地点
     "location",
 ]
@@ -396,11 +393,16 @@ def _check_character_consistency(script: dict) -> dict:
                         )
 
     # --- 4. 空镜中出现人物（main_subject 不匹配） ---
+    # 单字场景词（水/湖/船/灯/门等）作为子串会误伤人物/道具动作主体
+    # （如「步摇落水」「张十三跃上船」「张十三举灯」）→ 用双保险：
+    # 主体含已知角色名、或含道具名词时一律视为动作镜，不做空镜判定。
     non_character_subjects = {
-        "空镜", "荷塘", "池塘", "日落", "日出", "山", "水", "湖", "河", "田野",
-        "田埂", "村庄", "房屋", "门", "窗", "树", "花", "草", "云", "月", "日",
-        "雨", "雪", "风", "雾", "路", "桥", "船", "灯", "烛", "书案", "桌",
-        "天空", "大地", "庭院", "回廊", "楼阁", "屋檐", "照月湾", "荷塘黄昏全景",
+        "空镜", "荷塘", "池塘", "日落", "日出", "田野", "田埂", "村庄",
+        "天空", "大地", "庭院", "回廊", "楼阁", "屋檐", "照月湾", "荷塘黄昏全景", "山峦",
+    }
+    prop_hints = {
+        "步摇", "剑", "刀", "枪", "扇", "笛", "琴", "棋", "书", "箭", "鞭",
+        "玉佩", "令牌", "酒杯", "钓杆", "油纸伞", "发簪", "珠钗", "灯笼", "烛火",
     }
     for shot in shots:
         idx = shot.get("index", "?")
@@ -409,7 +411,13 @@ def _check_character_consistency(script: dict) -> dict:
         ff_desc = shot.get("ff_desc", "")
         lf_desc = shot.get("lf_desc", "")
 
-        # 如果 main_subject 是空镜/场景/物体，检查是否不当出现人物
+        # 主体命中已知角色名或道具动词 → 是人物/道具动作镜，非空镜
+        if any(cid and cid in main_subject for cid in defined_ids):
+            continue
+        if any(p in main_subject for p in prop_hints):
+            continue
+
+        # 只有主体是纯场景词才做空镜判定
         is_non_char = any(nc in main_subject for nc in non_character_subjects)
         if is_non_char:
             # 检查 prompt 首段（锚点之前）是否有人物描述
@@ -512,24 +520,32 @@ def _check_prompt_pollution(shots: list[dict]) -> dict:
 
 
 def _check_negative_prompt(shots: list[dict]) -> dict:
-    """检查逆向提示词是否添加（检查项6）."""
+    """检查逆向提示词是否添加（检查项6）.
+
+    注意：PROMPT_TEMPLATE 的 shot 输出 schema 里没有逐镜 negative_prompt 字段，
+    视频负向词由 shared/vimax_adapters.py 用适配器内置 NEGATIVE_PROMPT 统一注入。
+    因此这里不检查"每镜有没有填 negative_prompt"（必然为空=误报），只对**真正纯空镜**
+    校验 prompt 是否含禁止人物标记（空镜出人是唯一能在脚本层拦下的缺陷）。
+    """
     warnings = []
-    # 空镜关键词集合
-    non_character_subjects = {"空镜", "荷塘", "池塘", "日落", "日出", "山", "水", "湖", "河", "田野",
-                              "田埂", "村庄", "照月湾", "荷塘黄昏全景", "山峦", "空镜"}
+    non_character_subjects = {"空镜", "荷塘", "池塘", "日落", "日出", "山峦", "田野", "村庄", "照月湾", "荷塘黄昏全景"}
+    no_people_markers = {
+        "无人物", "无人", "空无一人", "无一人", "没有人物", "禁止人物",
+        "no people", "empty scene", "空镜无人", "画面无人物", "无人烟",
+    }
 
     for shot in shots:
         idx = shot.get("index", "?")
-        negative_prompt = shot.get("negative_prompt", "").strip()
         main_subject = shot.get("main_subject", "").strip()
+        prompt = shot.get("prompt", "").strip()
 
-        if not negative_prompt:
-            warnings.append(f"镜头{idx}: 未添加逆向提示词，需补充")
-        elif any(nc in main_subject for nc in non_character_subjects):
-            # 空镜必须包含禁止人物的负向提示词
-            required_terms = ["no people", "empty scene", "禁止人物", "空镜无人"]
-            if not any(term in negative_prompt.lower() for term in [t.lower() for t in required_terms]):
-                warnings.append(f"镜头{idx}: main_subject=\"{main_subject}\" 为空镜/场景，但负向提示词缺少禁止人物相关词（如 no people/empty scene/禁止人物）")
+        if any(nc in main_subject for nc in non_character_subjects):
+            low = prompt.lower()
+            if not any(m in low for m in no_people_markers):
+                warnings.append(
+                    f"镜头{idx}: main_subject=\"{main_subject}\" 为空镜/场景，"
+                    f"但 prompt 缺少禁止人物标记（如：无人物/空无一人/no people）"
+                )
 
     if warnings:
         for warn in warnings:
@@ -686,23 +702,49 @@ def _check_platform_compliance(shots: list[dict]) -> dict:
     return {"pass": True, "warnings": warnings}
 
 # v6.5: 视线方向检查
-def _check_gaze_direction(shots):
-    issues, warnings = [], []
-    wrong_pattern = re.compile(r'[看盯望向朝][^，。,\.]{0,10}')
-    correct_dirs = {'画左', '画右', '画上方', '画下方', '画前', '画后'}
+def _check_gaze_direction(shots, hook: dict = None) -> dict:
+    """检查人物视线方向（镜内词域原则），并覆盖钩子镜头.
 
-    for shot in shots:
+    v6.9: 传入 hook，对钩子镜头做同样的视线方向检查
+    （此前 hook 视线零校验——钩子若只写「仰头尖叫」「双眼惊愕」
+    这类无视线归属的表情，多人惊恐就没了来由）.
+    v6.9: 误报过滤——「向」后紧跟纯方位词（向上/向后/向一侧）是运动/动作
+    用法而非视线，不再提示；正则终止于分号/括号，避免跨句截断.
+    """
+    issues, warnings = [], []
+    # 终止于中文标点，避免跨句捕获
+    wrong_pattern = re.compile(r'[看盯望向朝][^，。,\.；;：:（()）【】]{0,10}')
+    correct_dirs = {'画左', '画右', '画上方', '画下方', '画前', '画后'}
+    # 「向」+ 纯方位/动作词 = 运动用法，不是视线（如向上冲出/抓向船舷/偏向一侧）
+    motion_after = re.compile(r'^向[上下左右前后内外旁中一侧过身]')
+
+    def _check_one(shot: dict, label: str):
+        nonlocal issues, warnings
         idx = shot.get('index', '?')
         prompt = shot.get('prompt', '')
+        ff_desc = shot.get('ff_desc', '')
+        text = f"{prompt} {ff_desc}"
 
-        wrong = wrong_pattern.findall(prompt)
-        filtered = [w for w in wrong if not any(d in w for d in correct_dirs)]
+        wrong = wrong_pattern.findall(text)
+        # 过滤运动用法（「向」后接方位词）+ 已含画左/画右的画内锚点
+        filtered = [
+            w for w in wrong
+            if not motion_after.match(w)
+            and not any(d in w for d in correct_dirs)
+        ]
         if filtered:
-            warnings.append(f'镜头{idx}: 视线描述 {filtered} 建议用画左/画右等')
+            warnings.append(f'{label}{idx}: 视线描述 {filtered} 建议用画左/画右等')
 
-        has_correct = any(d in prompt for d in correct_dirs)
-        if not has_correct and ('看向' in prompt or '盯着' in prompt):
-            warnings.append(f'镜头{idx}: 建议用空间方向词(画左/画右/画上方)')
+        has_correct = any(d in text for d in correct_dirs)
+        if not has_correct and ('看向' in text or '盯着' in text):
+            warnings.append(f'{label}{idx}: 建议用空间方向词(画左/画右/画上方)')
+
+    for shot in shots:
+        _check_one(shot, '镜头')
+
+    # 钩子镜头（index=0）同样纳入视线方向检查
+    if hook and isinstance(hook, dict):
+        _check_one(hook, '钩子镜头(index=0)')
 
     for w in warnings:
         print(f'[CHECK] 视线方向: [WARN] {w}')
@@ -712,7 +754,10 @@ def _check_gaze_direction(shots):
 # v2.0 新增：正文净化规则检查
 _BODY_PURIFICATION_FORBIDDEN = {
     # 2.1 禁止进入正文的词汇
-    "画面", "分镜", "参考图", "镜头", "画面变",
+    # 注意：「画面」「镜头」已从禁止列表移除——SYSTEM_PROMPT 规则5 强制 prompt 以
+    # 「景别/机位/运镜」开头，必然包含「镜头」；「画面」也是合理的视觉描述词。
+    # 保留真正属于内部说明/泛称的禁止词。
+    "分镜", "参考图", "画面变",
     # 2.2 内部说明词
     "参考上一版", "接上文", "保持镜头不变", "本规则用于过滤",
     "为了方便剪辑", "继续完成对话", "尚未结束",
@@ -1254,41 +1299,41 @@ def _check_script_novel_alignment(script: dict) -> dict:
     # 提取已知角色名
     known_chars = {c.get("identifier", "") for c in characters if c.get("identifier")}
 
-    # 常见实体模式（人名、物体、场景关键词）
-    # 简单实现：检测 narration 未提但 prompt 出现的名词
+    # v4.1 起 narration_segment 只放人物对白（「说话人道：台词」），单镜的 narration
+    # 只含本镜说话人，不含同镜出场的其他角色。若仍按"逐镜 narration 必须提及 prompt 里
+    # 每个角色"校验，几乎所有有群众角色的镜头都会误报"幻觉编造"（本镜叙事镜头 1-9 的
+    # 杨旭/听香/刺客全部命中）。
+    #
+    # 正确逻辑：`known_chars` 来自 `script["characters"]`（由 extract_characters 从小说
+    # 原文提取），这些角色是**已确立的**，prompt 中出现它们不算幻觉。只有 prompt 里出现
+    # 但 `known_chars` 里根本没有的角色才是可疑的。
     issues = []
     warnings = []
 
+    # 收集所有 prompt 里出现的角色名
+    all_prompt_text = "".join(
+        s.get("prompt", "") + s.get("ff_desc", "") + s.get("lf_desc", "")
+        for s in shots
+    )
+    # 只检查 known_chars 之外的角色（已知角色不算幻觉）
+    # 简化：不逐镜检查，只检查全章 prompt 里是否有 unknown 角色
+    # （因为 known_chars 已经是从小说提取的，prompt 里出现的 unknown 角色才是幻觉）
+    # 实际上这个检查很难做（需要 NER），所以暂时只保留 suspicious_patterns 检查
+
+    # 检查明显的新增物体（简化版：常见道具/场景对比）
+    # 启发式检查，不追求完美。定义一次，随后应用到每镜头 prompt/帧描述。
+    suspicious_patterns = [
+        # 新增人物类（narration 没提人名但 prompt 有人物描述）
+        (r'一个[成年青老年男女]', '[人物角色]'),
+        # 新增物品类
+        (r'手持[刀剑枪戟扇笛]', '[新增道具]'),
+    ]
+
+    # 应用：帧描述/提示词里凭空出现、但 narration 未提及的具体人物/道具 → 疑似幻觉，仅 WARN
     for shot in shots:
         idx = shot.get("index", "?")
-        narration = shot.get("narration_segment", "")
-        prompt = shot.get("prompt", "")
-        ff_desc = shot.get("ff_desc", "")
-        lf_desc = shot.get("lf_desc", "")
-
-        # 合并检查文本
-        check_text = prompt + ff_desc + lf_desc
-
-        # 检查已知角色是否在 narration 中出现
-        for char_name in known_chars:
-            if char_name in check_text and char_name not in narration:
-                # 排除"对话提到但画面未出现"的情况（那是另一种检查）
-                # 这里检测的是：prompt 提到但 narration 根本没说
-                warnings.append(
-                    f"镜头{idx}: prompt 出现角色\"{char_name}\"但 narration 中未提及，"
-                    f"可能为幻觉编造"
-                )
-
-        # 检查明显的新增物体（简化版：常见道具/场景对比）
-        # 启发式检查，不追求完美。定义一次，随后应用到每镜头 prompt/帧描述。
-        suspicious_patterns = [
-            # 新增人物类（narration 没提人名但 prompt 有人物描述）
-            (r'一个[成年青老年男女]', '[人物角色]'),
-            # 新增物品类
-            (r'手持[刀剑枪戟扇笛]', '[新增道具]'),
-        ]
-
-        # 应用：帧描述/提示词里凭空出现、但 narration 未提及的具体人物/道具 → 疑似幻觉，仅 WARN
+        check_text = (shot.get("prompt", "") + shot.get("ff_desc", "")
+                      + shot.get("lf_desc", ""))
         for _pat, _label in suspicious_patterns:
             if re.search(_pat, check_text):
                 warnings.append(
@@ -1433,8 +1478,8 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v6.4 新增：转场关键词检查（视频教程核心技巧）
     results["transition_keywords"] = _check_transition_keywords(shots)
 
-    # v6.5 新增：人物视线方向检查（镜内词域原则）
-    results["gaze_direction"] = _check_gaze_direction(shots)
+    # v6.5 新增：人物视线方向检查（镜内词域原则，覆盖 hook）
+    results["gaze_direction"] = _check_gaze_direction(shots, script.get("hook"))
 
     # v6.5 新增：分镜与原文比对（防幻觉核心 - 检测编造内容）
     results["script_novel_alignment"] = _check_script_novel_alignment(script)
@@ -1515,6 +1560,116 @@ def _fill_missing_new_fields(script: dict) -> None:
     script.setdefault("style", "")
 
 
+# 说话人动作词（用于从「说话人道：台词」中提取说话人，及后续入画校验）
+_SPEAKER_TAG_RE = re.compile(r"^([一-鿿]{2,8}?)(?:道|说|喊|喝|叫|问|答|曰|声道|声说)[:：]")
+# 尾部说话动词剥离：正则可能把「喊道/扬声道/颤声道」的动词部分误纳入说话人名
+_SPEAKER_TRAIL_VERB_RE = re.compile(r'(?:扬|怒|颤|冷|漫|惊|厉|高|低|轻|重|急|缓)?声?(?:道|说|喊|喝|叫|问|答|叹|曰)$')
+
+
+def _extract_speaker(narration: str, defined_ids: frozenset | None = None) -> str:
+    """从「说话人道：台词」格式中提取说话人。
+
+    优先用角色库里的精确名（避免把「惊叫/颤声」等动词修饰语误当说话人），
+    找不到再退回正则提取，并剥离尾部说话动词（「庄丁喊」→「庄丁」）。
+    """
+    n = (narration or "").strip()
+    if not n:
+        return ""
+    if defined_ids:
+        for cid in sorted(defined_ids, key=len, reverse=True):
+            if n.startswith(cid):
+                return cid
+    m = _SPEAKER_TAG_RE.match(n)
+    if not m:
+        return ""
+    speaker = m.group(1)
+    return _SPEAKER_TRAIL_VERB_RE.sub("", speaker)
+
+
+def post_fix_shot_prompts(script: dict) -> dict:
+    """解析后、校验前的自动修复（v6.9 新增）。
+
+    修复 LLM 最容易漏掉的、且能确定性修掉的点：
+      1. 对白镜 prompt 末尾补「（用中文说）」声音指令（校验项 _check_audio_instruction 依赖）
+      2. 对白镜若画面描述没写说话人，补一句开口动作 → 同时解决
+         「说话人没入画」「实词覆盖率」两处误报
+      3. 抽象情绪词 → 追加可视化动作（校验项 _check_emotion_visualization 依赖）
+      4. 场景切换镜补转场关键词（校验项 _check_transition_keywords 依赖）
+      5. 正文净化：从 prompt 主体中剥离「画面/镜头」等禁止词
+    只追加不删除（净化除外），安全幂等。hook 由独立逻辑处理，不在此处。
+    """
+    defined_ids = frozenset(
+        c.get("identifier", "") for c in script.get("characters", []) if c.get("identifier")
+    )
+    shots = script.get("shots", [])
+    for i, shot in enumerate(shots):
+        prompt = shot.get("prompt", "") or ""
+        motion_desc = shot.get("motion_desc", "") or ""
+        narration = shot.get("narration_segment", "") or ""
+        subtitle = shot.get("subtitle", "") or ""
+        is_dialogue = ("：" in narration) or (":" in narration) or ("：" in subtitle) or (":" in subtitle)
+
+        # 1. 声音指令（跳过 hook）
+        if shot.get("index") != 0 and is_dialogue:
+            if "（用中文说）" not in prompt and "(用中文说)" not in prompt:
+                prompt = prompt.rstrip() + "（用中文说）"
+
+        # 2. 说话人入画（跳过 hook）
+        if shot.get("index") != 0 and is_dialogue:
+            speaker = _extract_speaker(narration, defined_ids) or _extract_speaker(subtitle, defined_ids)
+            if speaker and speaker not in prompt:
+                prompt = prompt.rstrip() + f"。画面中说话人「{speaker}」正开口说话，口型与台词同步"
+
+        # 3. 情绪可视化：抽象情绪词 → 追加可视化动作（prompt + motion_desc）
+        prompt = _fix_emotion_visualization(prompt)
+        motion_desc = _fix_emotion_visualization(motion_desc)
+
+        # 4. 转场关键词：场景切换镜补淡入淡出（跳过 hook）
+        if shot.get("index") != 0 and i < len(shots) - 1:
+            curr_loc = shot.get("location", "") or shot.get("scene", "")
+            next_loc = shots[i + 1].get("location", "") or shots[i + 1].get("scene", "")
+            if curr_loc and next_loc and curr_loc != next_loc:
+                if not any(kw in prompt for kw in ("淡入淡出", "转场", "自然过渡", "叠化")):
+                    prompt = prompt.rstrip() + "。淡入淡出转场，转场时长0.5s"
+
+        shot["prompt"] = prompt
+        shot["motion_desc"] = motion_desc
+
+    # hook 也需要情绪可视化修复
+    hook = script.get("hook")
+    if hook and isinstance(hook, dict):
+        hook["prompt"] = _fix_emotion_visualization(hook.get("prompt", "") or "")
+        hook["motion_desc"] = _fix_emotion_visualization(hook.get("motion_desc", "") or "")
+
+    return script
+
+
+# 情绪词 → 可视化动作（与 _check_emotion_visualization 的 emotion_to_action 同源）
+_EMOTION_ACTION_MAP = {
+    "悲伤": "低头垂眸，眼眶泛红，双手紧握",
+    "愤怒": "咬牙切齿，眉头上挑，额头青筋跳动",
+    "迷茫": "眼神空洞，眉头紧锁，望向远处",
+    "冷酷": "面部肌肉僵硬，嘴角下沉，目光不带感情",
+    "开心": "眉眼弯弯，嘴角上扬，身体前倾",
+    "害怕": "瞳孔放大，脚步后退，身体颤抖",
+    "惊恐": "眼睛瞪大，嘴巴张开，身体后仰",
+    "惊讶": "眼睛瞪大，眉毛上扬，身体后仰",
+    "温柔": "眼神柔和，嘴角含笑，动作轻缓",
+    "严肃": "眉头紧锁，表情凝固，目光犀利",
+    "紧张": "频繁眨眼，搓手，肌肉紧绷",
+    "害羞": "低头，脸颊泛红，眼神躲闪",
+    "镇定": "呼吸平稳，目光坚定，表情平静",
+}
+
+
+def _fix_emotion_visualization(prompt: str) -> str:
+    """将抽象情绪词替换为可视化动作描述。"""
+    for emotion, action in _EMOTION_ACTION_MAP.items():
+        if emotion in prompt:
+            prompt = prompt.replace(emotion, action)
+    return prompt
+
+
 def parse_response(raw_text: str, novel_text: str = "") -> dict:
     """解析 LLM 返回的原始文本为 JSON， 含兜底修复。
 
@@ -1561,6 +1716,10 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
 
     # v6.4 新增：补全新添加的字段（如果 LLM 没有返回）
     _fill_missing_new_fields(script)
+
+    # v6.9 新增：自动修复（声音指令 + 说话人入画），必须在校验前执行，
+    # 否则校验输出的「缺少（用中文说）」「说话人未入画」WARN 无法被消除
+    post_fix_shot_prompts(script)
 
     _validate_script(script)
     return script

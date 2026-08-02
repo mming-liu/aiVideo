@@ -50,47 +50,87 @@ def extract_json_substring(text: str) -> str:
     return text
 
 
-def _is_cjk(c: str) -> bool:
-    o = ord(c)
-    return 0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF
-
-
-def _has_cjk(text: str) -> bool:
-    for c in text:
-        if _is_cjk(c):
-            return True
-    return False
-
-
 def _manual_fix(text: str) -> str:
-    """手动修复中文标点和引号。"""
-    # 中文引号转标准引号
-    text = text.replace(chr(0x201C), '"').replace(chr(0x201D), '"')
-    text = text.replace(chr(0x300E), '"').replace(chr(0x300F), '"')
-    text = text.replace(chr(0x300C), '"').replace(chr(0x300D), '"')
-    # 中文标点
-    text = text.replace('，', ',').replace('：', ':')
-    text = text.replace('（', '(').replace('）', ')')
-    text = text.replace('【', '[').replace('】', ']')
-    # 转义两 CJK 字符之间的 ASCII 双引号（如 清脆的"咚"声 → 清脆的\"咚\"声）
-    text = _escape_cjk_adjacent_quotes(text)
-    return text
+    """手动修复中文标点和引号 — 仅转换 JSON 结构位置的字符，绝不改动字符串值内容。
 
+    LLM 常见两种输出：
+      A. 结构用中文引号/标点（如 {"title"： "xx"， "shots"：[...]}）—— 需转 ASCII
+      B. 字符串值内含中文引号（对话「张十三道：“凶手...”」）—— 这是合法 Unicode 内容，
+         必须原样保留
 
-def _escape_cjk_adjacent_quotes(text: str) -> str:
-    """将两 CJK 字符之间的 ASCII 双引号转义。
-
-    LLM 输出中，中文拟声词常用 ASCII 双引号包裹（如 发出清脆的"咚"声），
-    这些引号会被 JSON 解析器误认为字符串结束符，需要转义。
+    旧实现把「“ ” → "」全局替换，导致 B 类内容里的对话引号被转成未转义的 ASCII 引号，
+    字符串被截断 → JSON 解析崩溃（本流水线 DeepSeek 的输出即为此类）。此处用状态机
+    区分「结构位置」与「字符串内部」：只有结构位置的中文标点才转换。
     """
-    result = []
-    for i, ch in enumerate(text):
-        if ch == '"' and i > 0 and i < len(text) - 1:
-            if _is_cjk(text[i - 1]) and _is_cjk(text[i + 1]):
-                result.append('\\"')
-                continue
-        result.append(ch)
-    return ''.join(result)
+    out: list[str] = []
+    in_string = False
+    opened_by_real_quote = False  # True=当前字符串由 ASCII " 开启（内部中文引号全是内容）
+    escaped = False
+    cjk_quotes = '“”「」『』'  # “ ” 「 」 『 』
+
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+
+        if escaped:
+            out.append(ch)
+            escaped = False
+            i += 1
+            continue
+        if ch == '\\':
+            out.append(ch)
+            escaped = True
+            i += 1
+            continue
+
+        if not in_string:
+            # ---- 结构位置 ----
+            if ch == '"':
+                in_string = True
+                opened_by_real_quote = True
+                out.append(ch)
+            elif ch in cjk_quotes:
+                # 中文引号在结构位置 = 当作 ASCII 双引号（开/闭字符串）
+                in_string = True
+                opened_by_real_quote = False
+                out.append('"')
+            elif ch == '，':      # ，
+                out.append(',')
+            elif ch == '：':      # ：
+                out.append(':')
+            elif ch == '（':      # （
+                out.append('(')
+            elif ch == '）':      # ）
+                out.append(')')
+            elif ch == '【':      # 【
+                out.append('[')
+            elif ch == '】':      # 】
+                out.append(']')
+            else:
+                out.append(ch)
+            i += 1
+            continue
+
+        # ---- 字符串内部 ----
+        if opened_by_real_quote:
+            if ch == '"':
+                # 未转义的 ASCII 引号关闭字符串（这是 LLM 真实的结构错误，交给 _fix_at_error）
+                in_string = False
+                out.append(ch)
+            else:
+                # 中文引号/标点在此全是内容，原样保留
+                out.append(ch)
+        else:
+            # 由中文引号开启的字符串：中文闭合引号关闭，其余内容保留
+            if ch in cjk_quotes:
+                in_string = False
+                out.append('"')
+            else:
+                out.append(ch)
+        i += 1
+
+    return ''.join(out)
 
 
 def _fix_at_error(text: str, error: json.JSONDecodeError) -> str:
@@ -104,6 +144,13 @@ def _fix_at_error(text: str, error: json.JSONDecodeError) -> str:
     """
     pos = error.pos
     n = len(text)
+
+    # 防御：错误位置可能在 EOF（pos == len(text)），此时退到最后一个字符再回溯，
+    # 避免 text[pos] 越界抛 IndexError。若修复无果会返回 None，由上层降级处理。
+    if pos >= n:
+        pos = n - 1
+    if pos < 0:
+        return None
 
     # 向前找冒号，跳过字符串内的冒号
     colon_pos = -1

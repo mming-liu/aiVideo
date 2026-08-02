@@ -159,8 +159,43 @@ _SUBSTITUTION_MAP = {
 }
 
 
-def check_subtitle_coverage(subtitle: str, prompt_text: str) -> dict:
+def check_subtitle_coverage(subtitle: str, prompt_text: str, speakers: frozenset | None = None) -> dict:
     """程序级校验字幕核心实词在画面描述中的覆盖率."""
+    # 对白镜特殊处理：本流水线 v4.1 起 narration/subtitle 被强制为「说话人道：台词」，
+    # 即字幕内容 = 人物对白。对白文字本身不需要（也不应该）以文字形式出现在画面里，
+    # 程序无法逐字匹配它。此时校验语义改为：**说话人是否出现在画面中**（有声必须有人）。
+    # 这样既消除「对白镜覆盖率 0%」的批量误报，又保留"喊了话但画面里没人"的真缺陷检测。
+    # 说话人从 script 的角色清单里精确匹配（避免把「惊叫/颤声」等动词修饰语误当说话人）。
+    speakers = speakers or frozenset()
+    if ("：" in subtitle or ":" in subtitle) and speakers:
+        for sp in sorted(speakers, key=len, reverse=True):
+            if subtitle.startswith(sp):
+                in_prompt = sp in prompt_text or any(
+                    s in prompt_text for s in _SUBSTITUTION_MAP.get(sp, set())
+                )
+                return {
+                    "pass": bool(in_prompt),
+                    "rate": 1.0 if in_prompt else 0.0,
+                    "missing": [] if in_prompt else [sp],
+                    "covered": [sp] if in_prompt else [],
+                    "all_nouns": [sp],
+                }
+        # 有冒号但说话人不匹配任何已知角色 → 无法判定，降级为普通实词校验，不误报
+    # 兜底：从「说话人道：」前缀正则提取（用于无角色清单/纯文本场景）
+    m_dialog = re.match(r"^([一-鿿]{2,8}?)(?:道|说|喊|喝|叫|问|答|曰)[:：]", subtitle)
+    if m_dialog:
+        speaker = m_dialog.group(1)
+        in_prompt = speaker in prompt_text or any(
+            s in prompt_text for s in _SUBSTITUTION_MAP.get(speaker, set())
+        )
+        return {
+            "pass": bool(in_prompt),
+            "rate": 1.0 if in_prompt else 0.0,
+            "missing": [] if in_prompt else [speaker],
+            "covered": [speaker] if in_prompt else [],
+            "all_nouns": [speaker],
+        }
+
     candidates = _extract_candidates(subtitle)
     useful = [c for c in candidates if c not in _STOP_NOUNS][:15]
 
@@ -189,7 +224,7 @@ def check_subtitle_coverage(subtitle: str, prompt_text: str) -> dict:
     }
 
 
-def check_shot_full(shot: dict) -> dict:
+def check_shot_full(shot: dict, speakers: frozenset | None = None) -> dict:
     """单镜头全量校验，返回合规报告。"""
     report: dict = {"pass": True, "index": shot.get("index", "?"), "checks": {}, "warnings": []}
 
@@ -213,7 +248,7 @@ def check_shot_full(shot: dict) -> dict:
         report["pass"] = False
 
     # 3. 字幕实词覆盖率
-    coverage = check_subtitle_coverage(subtitle, search_text)
+    coverage = check_subtitle_coverage(subtitle, search_text, speakers)
     report["checks"]["coverage"] = coverage
     if not coverage["pass"] and coverage["rate"] < 0.6:
         report["pass"] = False
@@ -230,7 +265,11 @@ def check_shot_full(shot: dict) -> dict:
 
 def validate_script(script: dict, strict_mode: bool = False) -> dict:
     """全脚本合规校验."""
-    shot_reports = [check_shot_full(s) for s in script.get("shots", [])]
+    # 收集脚本内已定义的角色名，供对白镜的"说话人是否入画"校验使用
+    speakers = frozenset(
+        c.get("identifier", "") for c in script.get("characters", []) if c.get("identifier")
+    )
+    shot_reports = [check_shot_full(s, speakers) for s in script.get("shots", [])]
     fail_count = sum(1 for r in shot_reports if not r["pass"])
     warn_count = sum(len(r["warnings"]) for r in shot_reports)
 

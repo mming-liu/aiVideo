@@ -324,9 +324,22 @@ def main() -> None:
             fpath.unlink()
             _logger.verbose(f"  [已删除] {f}")
 
-    # 生成脚本
-    raw = gen_spy_script(novel_text, character_bank)
-    script = parse_response(raw, novel_text=novel_text)
+    # 生成脚本（含 JSON 解析重试）
+    # LLM 偶发输出损坏的 JSON（DeepSeek 尤甚：内部中文引号未转义/缺逗号等）。
+    # 解析失败时重新调用 LLM 重试，而不是让整个流水线崩溃（每次约 3-6 分钟）。
+    script = None
+    last_err = None
+    for attempt in range(1, 1 + 3):
+        raw = gen_spy_script(novel_text, character_bank)
+        try:
+            script = parse_response(raw, novel_text=novel_text)
+            break
+        except (ValueError, json.JSONDecodeError) as e:
+            last_err = e
+            _logger.warn(f"[WARN] 分镜 JSON 解析失败（尝试 {attempt}/3）: {e}")
+            _console(f"  [重试] JSON 解析失败，重新调用 LLM（{attempt}/3）...")
+    if script is None:
+        raise RuntimeError(f"分镜 JSON 连续 3 次解析失败: {last_err}")
 
     # ========== 差距分析（v5.0 新增）==========
     # 若差距过大，重新生成（最多2次）
@@ -381,7 +394,12 @@ def main() -> None:
             raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
             raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
 
-            script = parse_response(raw, novel_text=novel_text)
+            try:
+                script = parse_response(raw, novel_text=novel_text)
+            except (ValueError, json.JSONDecodeError) as e:
+                # 重生成结果 JSON 损坏 → 保留上一版，不中断流水线
+                _logger.warn(f"[WARN] 重生成 JSON 解析失败，保留上一版: {e}")
+                break
             # 不在循环内 post_process：循环退出后统一在 line 334 做一次
             # （code-audit 07-31 #7：原 :328 与 :334 重复调用 _post_process）
         else:

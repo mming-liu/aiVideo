@@ -380,6 +380,17 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
             "【关键帧】这是动作进行中的画面，展示动作过程中的一个瞬间状态。"
         )
 
+    # 地点一致性锚定：把镜头的 location 注入画面，防止图片模型自由发挥地点，
+    # 导致同一场景在不同镜头/不同帧之间环境不一致（与视频 prompt 的
+    # 「场景一致性约束」同源，保证图生视频前导帧与视频场景统一）。
+    if shot is not None:
+        location = shot.get("location", "") or shot.get("scene", "")
+        if location:
+            strict_constraints += (
+                f"【场景地点】本画面发生地点必须是{location}。"
+                f"严格遵守该地点特征，禁止画成其他场景（如河流/江面/室内/街道）。"
+            )
+
     # 根据镜头实际内容动态生成角色约束（不再硬编码刺客）
     if shot is not None:
         # 收集本镜头所有文本字段，判断哪些角色实际出现
