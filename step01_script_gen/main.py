@@ -17,6 +17,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 import json
+from contextlib import redirect_stdout
 
 # 确保从项目根目录解析导入
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -41,6 +42,41 @@ SCRIPT_FILE = OUTPUT_FILE
 # 模块级日志
 from shared.tee_logger import get_logger
 _logger = get_logger(CHAPTER_DIR / "step01.log", console_level="INFO")
+
+
+# ============================================================================
+# 控制台静默：把运行期间的 print() 全部重定向到 step01.log
+# 控制台只保留关键进度提示（_logger.console）和最终摘要
+# ============================================================================
+class _ConsoleToLog:
+    """把 print() 输出重定向到 log 文件的对象（配合 contextlib.redirect_stdout）."""
+
+    def write(self, s: str):
+        if s and s.strip():
+            _logger.verbose(s.rstrip("\n"))
+
+    def flush(self):
+        pass
+
+
+def _redirect_to_log() -> _ConsoleToLog:
+    """返回一个 file-like 对象，print 写进去会落到 step01.log 而非控制台."""
+    return _ConsoleToLog()
+
+
+def _console(msg: str) -> None:
+    """直接写原始 stdout（绕过重定向），用于控制台进度提示与最终摘要.
+
+    重定向期间 _logger.info() 也会被吞进 log，故关键控制台输出走这里.
+    """
+    try:
+        print(msg, file=_REAL_STDOUT)
+    except UnicodeEncodeError:
+        print(msg.encode("ascii", errors="replace").decode("ascii"), file=_REAL_STDOUT)
+
+
+# 保存真实 stdout 引用（redirect 前赋值）
+_REAL_STDOUT = sys.stdout
 
 # ============================================================================
 # 导入子模块
@@ -88,6 +124,7 @@ def gen_spy_script(novel_text: str, bank=None) -> str:
         temperature=0.2,  # v6.5: 降低温度防止幻觉
     )
     _logger.info("[INFO] 正在调用 LLM 生成分镜脚本...")
+    _console("  [生成] 正在调用 LLM 生成分镜脚本（18 镜，约需 3-6 分钟）...")
     result = service.generate(req)
     if not result.success:
         raise RuntimeError(f"LLM 生成失败: {result.error}")
@@ -150,6 +187,7 @@ def gen_hook_script(novel_text: str, bank=None) -> dict | None:
         temperature=0.2,  # v6.5: 降低温度防止幻觉
     )
     _logger.info("[INFO] 正在调用 LLM 生成钩子分镜...")
+    _console("  [生成] 正在生成钩子分镜（约 30 秒）...")
     result = service.generate(req)
     if not result.success:
         _logger.warn(f"[WARN] 钩子分镜生成失败: {result.error}，跳过钩子")
@@ -182,7 +220,11 @@ def gen_hook_script(novel_text: str, bank=None) -> dict | None:
 # ============================================================================
 
 def main() -> None:
-    """主流程：读取章节 → 生成脚本 → 生成钩子 → 验证 → 后处理 → 保存."""
+    """主流程：读取章节 → 生成脚本 → 生成钩子 → 验证 → 后处理 → 保存.
+
+    控制台静默策略：运行期间所有 print()（校验 WARN、LLM 推理过程等）
+    重定向到 step01.log，控制台只显示关键进度和最终摘要。
+    """
 
     _logger.separator()
     _logger.info("  步骤1: 分镜脚本生成 (v6.0)")
@@ -191,6 +233,10 @@ def main() -> None:
 
     # 创建输出目录
     CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 运行期间 print() 全部重定向到 step01.log，控制台静默
+    # 最终摘要用 _console() 写 _REAL_STDOUT（模块级保存的真实 stdout）
+    sys.stdout = _redirect_to_log()
 
     # 读取章节
     novel_text = read_chapter("锦衣夜行_77119小说.txt", chapter=NOVEL_CHAPTER)
@@ -250,6 +296,17 @@ def main() -> None:
         with open(SCRIPT_FILE, "w", encoding="utf-8") as f:
             json.dump(script, f, ensure_ascii=False, indent=2)
         _logger.info("时间轴已重新计算")
+        # 缓存命中：恢复 stdout 并显示最终摘要
+        sys.stdout = _REAL_STDOUT
+        shots = script.get("shots", [])
+        _console("")
+        _console("=" * 56)
+        _console("  [步骤1] 分镜脚本摘要（缓存命中，未重新生成）")
+        _console("=" * 56)
+        _console(f"  输出: {SCRIPT_FILE}")
+        _console(f"  镜头数: {len(shots)}" + ("  + 钩子" if script.get("hook") else ""))
+        _console(f"  总时长: {script.get('total_duration', 0):.1f}s")
+        _console("=" * 56)
         return
 
     # 脚本已更新，删除旧的音频和视频文件
@@ -370,21 +427,29 @@ def main() -> None:
 
     _logger.info(f"[OK] 分镜脚本已保存至 {OUTPUT_FILE}")
 
-    # 摘要
-    _logger.separator("=", 60)
-    _logger.info("分镜脚本摘要")
-    _logger.separator("=", 60)
+    # ---- 最终摘要：写真实 stdout（控制台），绕过重定向 ----
     shots = script.get("shots", [])
-    _logger.info(f"共 {len(shots)} 个镜头")
-    if script.get("hook"):
-        _logger.info("含 1 个钩子分镜（开场悬念）")
-    for k in ("resolution", "ratio", "fps", "render_style", "global_weather", "global_atmosphere"):
+    _console("")
+    _console("=" * 56)
+    _console("  [步骤1] 完成 —— 分镜脚本摘要")
+    _console("=" * 56)
+    _console(f"  输出: {OUTPUT_FILE}")
+    _console(f"  镜头数: {len(shots)}" + ("  + 钩子" if script.get("hook") else ""))
+    _console(f"  总时长: {script.get('total_duration', 0):.1f}s")
+    for k in ("resolution", "ratio", "fps", "render_style"):
         if k in script:
-            _logger.verbose(f"  {k}: {script[k]}")
+            _console(f"  {k}: {script[k]}")
+    _console("  前 3 镜:")
     for shot in shots[:3]:
         idx = shot.get("index", "?")
-        ct = shot.get("color_tone", shot.get("clip_transition", ""))
-        _logger.verbose(f"  镜头{idx}: {shot.get('subtitle', '')[:40]}... [{ct}]")
+        sub = (shot.get('subtitle', '') or '').strip()
+        _console(f"    - 镜{idx}: {sub[:42] if sub else '(空镜/纯画面)'}")
+    _console("=" * 56)
+    _console("  ⚠️ 详细校验 WARN 已写入 step01.log，控制台不再重复输出")
+    _console("=" * 56)
+
+    # 恢复 stdout
+    sys.stdout = _REAL_STDOUT
 
 
 

@@ -79,24 +79,26 @@ def _extract_motion_duration(motion_desc: str) -> float | None:
         return None
 
     # 匹配 "前X秒"/"后X秒" 或 "X-Y秒" 格式。
-    # 多种格式互斥：同时含"前N秒"与"X-Y秒"时只按第一种计算，避免重复累加（code-audit 08-01 #8）。
+    # 支持混合格式（"前2秒：A；2-4秒：B；后1秒：C"），用并集法取最大值，
+    # 避免单格式正则漏掉后段区间（code-audit 08-01 #8 的防重复累加由取 max 替代）。
     # 格式1: "前N秒：...；后M秒：..."
     m1 = re.findall(r'前(\d+(?:\.\d+)?)秒', motion_desc)
     m2 = re.findall(r'后(\d+(?:\.\d+)?)秒', motion_desc)
-    if m1 or m2:
-        return sum(float(x) for x in m1) + sum(float(x) for x in m2)
+    pre_post = sum(float(x) for x in m1) + sum(float(x) for x in m2)
 
-    # 格式2: "X-Y秒：..." (范围格式)
+    # 格式2: "X-Y秒：..." (范围格式，取所有区间终点)
     m3 = re.findall(r'(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*秒', motion_desc)
-    if m3:
-        return sum(float(end) - float(start) for start, end in m3 if float(end) > float(start))
+    ranges = [float(end) for start, end in m3 if float(end) > float(start)]
+    range_max = max(ranges) if ranges else 0.0
 
     # 格式3: 末尾总时长说明 "共N秒" 或 "时长N秒"
     match = re.search(r'(?:共|时长|总)\s*(\d+(?:\.\d+)?)\s*秒', motion_desc)
-    if match:
-        return float(match.group(1))
+    explicit = float(match.group(1)) if match else 0.0
 
-    return None
+    # 取所有能确定时长的来源的最大值（并集），防止漏段
+    candidates = [pre_post, range_max, explicit]
+    positives = [c for c in candidates if c > 0]
+    return max(positives) if positives else None
 
 
 def _compute_timecodes(script: dict) -> None:
@@ -125,12 +127,15 @@ def _compute_timecodes(script: dict) -> None:
         # v6.6: 优先从 motion_desc 解析时间分段
         motion_duration = _extract_motion_duration(motion_desc) if motion_desc else None
 
+        # 对话镜头时长必须以「能念完台词」为下限：取 motion 分段与字数估时的较大值，
+        # 避免视频太短、TTS 长台词被截断（音画同步关键）。
+        speech_duration = _estimate_duration(text) if _has_dialogue(text) else 0.0
+
         if motion_duration and motion_duration > 0:
-            # 优先使用 motion_desc 中的时间分段
-            base_duration = motion_duration
+            base_duration = max(motion_duration, speech_duration) if speech_duration > 0 else motion_duration
         elif _has_dialogue(text):
-            # 有对话：按对话字数估算时长
-            base_duration = _estimate_duration(text)
+            # 有对话但无 motion 分段：按对话字数估算时长
+            base_duration = speech_duration
         else:
             # 纯旁白：固定短时长
             base_duration = NARRATION_FIXED_DURATION

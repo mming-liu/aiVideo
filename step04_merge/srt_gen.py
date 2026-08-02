@@ -113,8 +113,15 @@ def generate_srt(shots: List[dict], durations: List[float], output: Path) -> Non
 
         # 检查是否是对话（有引号或说话动词）
         has_dialogue = any(c in subtitle for c in ['「', '」', '『', '』', '"', '"', '"', '“', '”'])
-        has_speaker = any(w in subtitle for w in ['说', '道', '问', '答', '喊', '叫', '喝', '答'])
-        is_dialogue = has_dialogue or has_speaker
+        # 说话动词必须后跟标点才视为对话（避免"一道道炊烟"的"道"误判）
+        has_quote = any(c in subtitle for c in ['"', '"', '«', '»'])
+        has_speaker = False
+        for w in ['说', '道', '问', '答', '喊', '叫', '喝']:
+            pos = subtitle.find(w)
+            if pos >= 0 and pos + 1 < len(subtitle) and subtitle[pos + 1] in '：:,,，,.。':
+                has_speaker = True
+                break
+        is_dialogue = has_quote or has_speaker
 
         if not is_dialogue:
             # 没有对话，跳过字幕
