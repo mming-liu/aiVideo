@@ -222,14 +222,23 @@ async def _process_one_shot_skip_frames(
                     return None
 
     # 收集已有帧路径（跳过 gen_shot_frames）
-    # VIDEO_Reference_Reference_Reference_Reference_Reference_Reference_ MODE=text 时强制纯 T2V，跳过所有帧图片
+    # VIDEO_REFERENCE_MODE=text 时强制纯 T2V，跳过所有帧图片
     REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
     if REFERENCE_MODE == "text":
         # 纯文生视频，不使用任何帧图片
         frame_paths = []
         logger.info(f"  [Shot {idx}] Mode: T2V (text-only, no frames)")
+    elif REFERENCE_MODE == "r2v":
+        # R2V 模式：使用参考图（最多5个）保持角色/道具一致性，不传首帧/尾帧
+        kf = shot_dir / "keyframes"
+        kf_paths = []
+        if kf.exists():
+            kf_paths = [str(p) for p in sorted(kf.glob("*.png"))[:5]]  # 最多5个
+        frame_paths = kf_paths
+        logger.info(f"  [Shot {idx}] Mode: R2V (reference images only, max 5)")
     else:
-        ff = shot_dir / "first_frame.png"
+        # image 模式：使用首帧/尾帧/关键帧
+        ff = shot_ / "first_frame.png"
         lf = shot_dir / "last_frame.png"
         kf = shot_dir / "keyframes"
         kf_paths = []
@@ -325,6 +334,11 @@ def main():
         script, work_dir, script_path,
         only_indices=only_indices, force=args.force,
     ))
+
+    
+    # 将 actual_audio_duration 写回 script（供 step04 使用）
+    with open(script_path, "w", encoding="utf-8") as f:
+        json.dump(script, f, ensure_ascii=False, indent=2)
 
     logger.info(f"\n[INFO] step02b_video_gen done! Failed: {failed}")
 

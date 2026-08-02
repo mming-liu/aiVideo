@@ -59,9 +59,9 @@ _KEYFRAME_MAP = {"small": 1, "medium": 2, "large": 3}
 
 
 def _has_dialogue(text: str) -> bool:
-    """检测文本是否包含对话（带冒号、引号）。"""
-    dialogue_markers = [":", "：", '"', "“", "‘", "——"]
-    return any(marker in text for marker in dialogue_markers)
+    """检测文本是否包含对话（引号或全角冒号）。判定逻辑统一在 shared/dialogue.py。"""
+    from shared.dialogue import has_dialogue
+    return has_dialogue(text)
 
 
 def _extract_motion_duration(motion_desc: str) -> float | None:
@@ -78,34 +78,25 @@ def _extract_motion_duration(motion_desc: str) -> float | None:
     if not motion_desc:
         return None
 
-    # 匹配 "前X秒" 或 "后X秒" 或 "X-Y秒" 格式
-    total = 0.0
-    found = False
-
+    # 匹配 "前X秒"/"后X秒" 或 "X-Y秒" 格式。
+    # 多种格式互斥：同时含"前N秒"与"X-Y秒"时只按第一种计算，避免重复累加（code-audit 08-01 #8）。
     # 格式1: "前N秒：...；后M秒：..."
-    match = re.findall(r'前(\d+(?:\.\d+)?)秒', motion_desc)
-    for m in match:
-        total += float(m)
-        found = True
-    match = re.findall(r'后(\d+(?:\.\d+)?)秒', motion_desc)
-    for m in match:
-        total += float(m)
-        found = True
+    m1 = re.findall(r'前(\d+(?:\.\d+)?)秒', motion_desc)
+    m2 = re.findall(r'后(\d+(?:\.\d+)?)秒', motion_desc)
+    if m1 or m2:
+        return sum(float(x) for x in m1) + sum(float(x) for x in m2)
 
     # 格式2: "X-Y秒：..." (范围格式)
-    match = re.findall(r'(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*秒', motion_desc)
-    for start, end in match:
-        diff = float(end) - float(start)
-        if diff > 0:
-            total += diff
-            found = True
+    m3 = re.findall(r'(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*秒', motion_desc)
+    if m3:
+        return sum(float(end) - float(start) for start, end in m3 if float(end) > float(start))
 
     # 格式3: 末尾总时长说明 "共N秒" 或 "时长N秒"
     match = re.search(r'(?:共|时长|总)\s*(\d+(?:\.\d+)?)\s*秒', motion_desc)
     if match:
         return float(match.group(1))
 
-    return total if found else None
+    return None
 
 
 def _compute_timecodes(script: dict) -> None:

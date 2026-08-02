@@ -28,16 +28,9 @@ from shared.key_scheduler import KeyScheduler
 # Bailian 图片 API 限速（每分钟请求数，默认 3，类似 Agnes 21s 冷却）
 _BAILIAN_IMAGE_RPM = int(os.getenv("BAILIAN_IMAGE_RPM", "3"))
 
-
-def _verbose_write(msg: str) -> None:
-    """写入日志文件，静默控制台（fallback 到 print 时输出到控制台）。"""
-    try:
-        from shared.tee_logger import get_logger
-        from shared.paths import chapter_dir
-        __vl = get_logger(chapter_dir() / "step02a.log", console_level="INFO")
-        __vl.verbose(msg)
-    except Exception:
-        print(msg)
+from functools import partial  # noqa: E402
+from shared.log_utils import verbose_write  # noqa: E402
+_verbose_write = partial(verbose_write, log_file="step02a.log")
 
 
 def _encode_image(path: Optional[str]) -> Optional[str]:

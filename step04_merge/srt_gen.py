@@ -102,8 +102,22 @@ def generate_srt(shots: List[dict], durations: List[float], output: Path) -> Non
     subtitle_count = 0
 
     for i, (shot, dur) in enumerate(zip(shots, durations), 1):
+        # 只对有对话的镜头生成字幕
+        # 对话判断标准：文本包含引号（"「」""）或说话动词（说/道/问/答/喊/叫/喝）
         subtitle = shot.get("subtitle", "").strip()
+        narration_segment = shot.get("narration_segment", "").strip()
+
         if not subtitle:
+            current_time += dur
+            continue
+
+        # 检查是否是对话（有引号或说话动词）
+        has_dialogue = any(c in subtitle for c in ['「', '」', '『', '』', '"', '"', '"', '“', '”'])
+        has_speaker = any(w in subtitle for w in ['说', '道', '问', '答', '喊', '叫', '喝', '答'])
+        is_dialogue = has_dialogue or has_speaker
+
+        if not is_dialogue:
+            # 没有对话，跳过字幕
             current_time += dur
             continue
 

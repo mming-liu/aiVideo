@@ -156,15 +156,13 @@ async def _poll_video(
             key_idx = 0
         key_display = f"key-{key_idx + 1}"
 
-        # Wait INITIAL_POLL__DELAY seconds after submit before first query (respect 1 RPM limit)
+        # Wait INITIAL_POLL_DELAY seconds after submit before first query (respect 1 RPM limit)
         logger.verbose(f"  [Shot {shot_idx}] [{key_display}] Task submitted, waiting {INITIAL_POLL_DELAY}s before polling...")
         await asyncio.sleep(INITIAL_POLL_DELAY)
 
-        # 首次轮询前检查：视频文件已存在（上次运行可能已下载成功），直接返回 True
-        if video_path.exists() and video_path.stat().st_size > 1000000:
-            logger.verbose(f"  [Shot {shot_idx}] [{key_display}] 视频已存在，跳过轮询")
-            return True
-
+        # 首次轮询前不再按旧文件短路：本任务刚提交，必须轮询新任务结果。
+        # 若此处因历史遗留的旧 video.mp4 就 return True，--force/改 prompt 重生成会拿回旧视频、
+        # 新任务白跑且 prompt_hash 不更新（code-audit 08-01 #1）。旧文件由下载成功后被新结果覆盖。
         # Exponential backoff state
         poll_interval = POLL_BASE_INTERVAL
         consecutive_failures = 0
@@ -186,11 +184,7 @@ async def _poll_video(
                     actual_interval = max(1, poll_interval + jitter)
                     await asyncio.sleep(actual_interval)
 
-                # 每次轮询前检查：视频文件是否已存在（上次运行或其他进程可能已下载）
-                if video_path.exists() and video_path.stat().st_size > 1000000:
-                    logger.verbose(f"  [Shot {shot_idx}] [{key_display}] 视频已存在，跳过轮询")
-                    return True
-
+                # 不再按旧文件短路：本任务结果必须经 fetch_result 拿到，成功后覆盖旧 video.mp4
                 result = await video_adapter.fetch_result(req, task_id)
                 if result.success and result.save_path:
                     shot_dir.mkdir(parents=True, exist_ok=True)

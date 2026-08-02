@@ -33,20 +33,22 @@ from shared.tee_logger import get_logger
 
 # 编码预设（匹配 merge_core.py，默认 ultrafast）
 try:
-    from shared.config import MERGE_PRESET as _CFG_PRESET
-    VIDEO_PRESET = _CFG_PRESET
+  from shared.config import MERGE_PRESET as _CFG_PRESET
+  VIDEO_PRESET = _CFG_PRESET
 except ImportError:
-    VIDEO_PRESET = "ultrafast"
+  VIDEO_PRESET = "ultrafast"
 
 _logger = get_logger(CHAPTER_DIR / "step04.log", console_level="INFO")
 
 # Video source
 CLIP_SOURCE = os.getenv("CLIP_SOURCE", "vimax")
+# Merge mode: stretch(音画同步) | concat(直接拼接) | native(纯视频拼接，语音由视频模型生成)
+MERGE_MODE = os.getenv("MERGE_MODE", "stretch").strip().lower()
 VIMAX_WD = vimax_working_dir()
 if CLIP_SOURCE == "vimax":
-    CLIP_DIR = VIMAX_WD / "shots"
+  CLIP_DIR = VIMAX_WD / "shots"
 else:
-    CLIP_DIR = Path(os.getenv("VIDEO_OUTPUT_DIR", str(clips_dir())))
+  CLIP_DIR = Path(os.getenv("VIDEO_OUTPUT_DIR", str(clips_dir())))
 
 DEBUG_SKIP_CACHE = os.getenv("DEBUG_SKIP_CACHE", "0").strip() == "1"
 
@@ -58,276 +60,317 @@ import json
 
 
 def main():
-    _logger.separator("=", 60)
-    _logger.info("  Step 4: Video Merge (Stretch + Concat + Subtitle + Color)")
-    _logger.info("  Output: final-A.mp4 (TTS only) + final-B.mp4 (mixed)")
-    _logger.separator("=", 60)
+  _logger.separator("=", 60)
+  _logger.info(" Step 4: Video Merge (Stretch + Concat + Subtitle + Color)")
+  _logger.info(" Output: final-A.mp4 (TTS only) + final-B.mp4 (mixed)")
+  _logger.separator("=", 60)
 
-    # Check prerequisites
-    if not SCRIPT_FILE.exists():
-        raise FileNotFoundError(
-            f"Script not found: {SCRIPT_FILE}\n"
-            f"Please run step01 first"
-        )
+  # Check prerequisites
+  if not SCRIPT_FILE.exists():
+    raise FileNotFoundError(
+      f"Script not found: {SCRIPT_FILE}\n"
+      f"Please run step01 first"
+    )
 
+  if CLIP_SOURCE == "vimax":
+    if not VIMAX_WD.exists():
+      raise FileNotFoundError(
+        f"ViMax working dir not found: {VIMAX_WD}\n"
+        f"Please run step02 first"
+      )
+    if not CLIP_DIR.exists():
+      raise FileNotFoundError(
+        f"Video clips dir not found: {CLIP_DIR}\n"
+        f"Please run step02 to generate clips"
+      )
+  else:
+    if not CLIP_DIR.exists():
+      raise FileNotFoundError(
+        f"Video clips dir not found: {CLIP_DIR}\n"
+        f"Please run step02 first"
+      )
+
+  # Ensure output directories exist
+  CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
+  TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+  # 1. Load script
+  with open(SCRIPT_FILE, "r", encoding="utf-8") as f:
+    script = json.load(f)
+
+  shots = script.get("shots", [])
+  if not shots:
+    raise ValueError("No shots in script")
+
+  _logger.info(f"[INFO] Loaded {len(shots)} shots")
+
+  # 1.5. Check for hook video
+  # Hook视频位置: vimax模式在 shots/0/video.mp4, clipr模式在 clips/clip_0.mp4
+  hook_clip = None
+  hook = script.get("hook")
+  if hook and isinstance(hook, dict):
     if CLIP_SOURCE == "vimax":
-        if not VIMAX_WD.exists():
-            raise FileNotFoundError(
-                f"ViMax working dir not found: {VIMAX_WD}\n"
-                f"Please run step02 first"
-            )
-        if not CLIP_DIR.exists():
-            raise FileNotFoundError(
-                f"Video clips dir not found: {CLIP_DIR}\n"
-                f"Please run step02 to generate clips"
-            )
+      hook_clip_path = CLIP_DIR / "0" / "video.mp4"
     else:
-        if not CLIP_DIR.exists():
-            raise FileNotFoundError(
-                f"Video clips dir not found: {CLIP_DIR}\n"
-                f"Please run step02 first"
-            )
+      # clipr 模式: 从 clips 目录找 clip_0.mp4
+      from shared.paths import clips_dir
+      hook_clip_path = clips_dir() / "clip_0.mp4"
 
-    # Ensure output directories exist
-    CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
-    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    if hook_clip_path.exists() and hook_clip_path.stat().st_size > 20 * 10**24:
+      hook_clip = hook_clip_path
+      _logger.info(f"[INFO] Hook video found: {hook_clip_path}")
+    else:
+      _logger.info("[INFO] Hook video not found (skipping)")
 
-    # 1. Load script
-    with open(SCRIPT_FILE, "r", encoding="utf-8") as f:
-        script = json.load(f)
+  # 2. Collect video clips
+  clips = []
+  valid_shots = []
+  missing_idxs = []
 
-    shots = script.get("shots", [])
-    if not shots:
-        raise ValueError("No shots in script")
+  # Hook goes first
+  if hook_clip:
+    clips.append(hook_clip)
+    # Create a pseudo-shot for the hook so that SRT/subtitle handling works
+    hook_shot = dict(hook)
+    hook_shot["index"] = 0
+    valid_shots.append(hook_shot)
 
-    _logger.info(f"[INFO] Loaded {len(shots)} shots")
+  for shot in shots:
+    idx = shot.get("index", 0)
+    clip_path = CLIP_DIR / str(idx) / "video.mp4"
+    if not clip_path.exists():
+      _logger.warn(f"[WARN] Video clip not found: {clip_path}, skip this shot")
+      missing_idxs.append(idx)
+      continue
+    clips.append(clip_path)
+    valid_shots.append(shot)
 
-    # 1.5. Check for hook video
-    hook_clip = None
-    hook = script.get("hook")
-    if hook and isinstance(hook, dict):
-        hook_clip_path = CLIP_DIR / "0" / "video.mp4"
-        if hook_clip_path.exists() and hook_clip_path.stat().st_size > 20 * 1024:
-            hook_clip = hook_clip_path
-            _logger.info(f"[INFO] Hook video found: {hook_clip_path}")
-        else:
-            _logger.info("[INFO] Hook video not found (skipping)")
+  if missing_idxs:
+    _logger.warn(f"[WARN] Skipped {len(missing_idxs)} missing shots: {missing_idxs}")
+  if not clips:
+    raise FileNotFoundError(f"No valid video clips. Please run step02 first")
 
-    # 2. Collect video clips
-    clips = []
-    valid_shots = []
-    missing_idxs = []
+  _logger.info(f"[INFO] Video clips ready: {len(clips)}")
 
-    # Hook goes first
-    if hook_clip:
-        clips.append(hook_clip)
-        # Create a pseudo-shot for the hook so that SRT/subtitle handling works
-        hook_shot = dict(hook)
-        hook_shot["index"] = 0
-        valid_shots.append(hook_shot)
+  # 3. Get target durations (audio durations)
+  target_durations = [get_shot_target_duration(s) for s in valid_shots]
+  total_target = sum(target_durations)
+  _logger.info(f"[INFO] Target duration (audio): {total_target:.1f}s")
 
-    for shot in shots:
-        idx = shot.get("index", 0)
-        clip_path = CLIP_DIR / str(idx) / "video.mp4"
-        if not clip_path.exists():
-            _logger.warn(f"[WARN] Video clip not found: {clip_path}, skip this shot")
-            missing_idxs.append(idx)
-            continue
-        clips.append(clip_path)
-        valid_shots.append(shot)
-
-    if missing_idxs:
-        _logger.warn(f"[WARN] Skipped {len(missing_idxs)} missing shots: {missing_idxs}")
-    if not clips:
-        raise FileNotFoundError(f"No valid video clips. Please run step02 first")
-
-    _logger.info(f"[INFO] Video clips ready: {len(clips)}")
-
-    # 3. Get target durations (audio durations)
-    target_durations = [get_shot_target_duration(s) for s in valid_shots]
-    total_target = sum(target_durations)
-    _logger.info(f"[INFO] Target duration (audio): {total_target:.1f}s")
-
-    # 4. Handle audio: prefer per-shot audio, fallback to narration
+  # 4. Handle audio: prefer per-shot audio, fallback to narration
+  # Native mode: skip all TTS, just concat videos directly
+  if MERGE_MODE == "native":
+    _logger.info("[INFO] MERGE_MODE=native, skipping TTS, direct video concat")
+    # Use video durations directly as target
+    target_durations = [get_media_duration(c) for c in clips]
+    audio_duration = sum(target_durations)
+    audio_path = None # No audio
+    use_stretch = False
+    use_per_shot_audio = False
+  else:
     audio_path = None
     use_per_shot_audio = True
 
     for shot in valid_shots:
-        idx = shot.get("index")
-        audio = find_shot_audio(idx, AUDIO_SHOT_DIR)
-        if audio is None:
-            use_per_shot_audio = False
-            break
+      idx = shot.get("index")
+      audio = find_shot_audio(idx, AUDIO_SHOT_DIR)
+      if audio is None:
+        use_per_shot_audio = False
+        break
 
     if use_per_shot_audio:
-        # Merge per-shot audio
-        audio_paths = [find_shot_audio(s.get("index"), AUDIO_SHOT_DIR) for s in valid_shots]
-        merged_audio = TEMP_DIR / "merged_audio.mp3"
-        concat_audio_files(audio_paths, merged_audio)
-        audio_path = merged_audio
-        audio_duration = get_media_duration(audio_path)
-        _logger.info(f"[INFO] Using per-shot audio: {len(audio_paths)} clips, total {audio_duration:.1f}s")
-        use_stretch = True
+      # Merge per-shot audio
+      audio_paths = [find_shot_audio(s.get("index"), AUDIO_SHOT_DIR) for s in valid_shots]
+      merged_audio = TEMP_DIR / "merged_audio.mp3"
+      concat_audio_files(audio_paths, merged_audio)
+      audio_path = merged_audio
+      audio_duration = get_media_duration(audio_path)
+      _logger.info(f"[INFO] Using per-shot audio: {len(audio_paths)} clips, total {audio_duration:.1f}s")
+      use_stretch = True
     else:
-        # Fallback to narration
-        if not AUDIO_PATH.exists():
-            raise FileNotFoundError(f"Narration audio not found: {AUDIO_PATH}")
-        audio_path = AUDIO_PATH
-        audio_duration = get_media_duration(audio_path)
-        _logger.info(f"[INFO] Using narration audio: {audio_duration:.1f}s")
-        _logger.info(f"[INFO] No per-shot audio, skipping per-shot stretch")
-        target_durations = [get_media_duration(c) for c in clips]
-        use_stretch = False
+      # Fallback to narration
+      if not AUDIO_PATH.exists():
+        raise FileNotFoundError(f"Narration audio not found: {AUDIO_PATH}")
+      audio_path = AUDIO_PATH
+      audio_duration = get_media_duration(audio_path)
+      _logger.info(f"[INFO] Using narration audio: {audio_duration:.1f}s")
+      _logger.info(f"[INFO] No per-shot audio, skipping per-shot stretch")
+      target_durations = [get_media_duration(c) for c in clips]
+      use_stretch = False
 
-    # 5. Generate SRT subtitles
-    generate_srt(valid_shots, target_durations, SRT_OUT)
+  # 5. Generate SRT subtitles
+  generate_srt(valid_shots, target_durations, SRT_OUT)
 
-    # Extract Mode B indices from continuity metadata (step02 writes this)
-    mode_b_indices = set()
-    try:
-        from step02_video_gen.continuity import ContinuityTracker
-        meta = ContinuityTracker.load_meta(VIMAX_WD)
-        if meta:
-            shots_meta = meta.get("shots", {})
-            mode_b_indices = {
-                int(idx) for idx, mode in shots_meta.items() if mode == "B"
-            }
-        if mode_b_indices:
-            _logger.info(f"[INFO] Mode B clips (will trim first frames): {sorted(mode_b_indices)}")
-    except Exception:
-        pass  # continuity_meta.json may not exist (old runs), gracefully ignore
+  # Extract Mode B indices from continuity metadata (step02 writes this)
+  mode_b_indices = set()
+  try:
+    from step02_video_gen.continuity import ContinuityTracker
+    meta = ContinuityTracker.load_meta(VIMAX_WD)
+    if meta:
+      shots_meta = meta.get("shots", {})
+      mode_b_indices = {
+        int(idx) for idx, mode in shots_meta.items() if mode == "B"
+      }
+    if mode_b_indices:
+      _logger.info(f"[INFO] Mode B clips (will trim first frames): {sorted(mode_b_indices)}")
+  except Exception:
+    pass # continuity_meta.json may not exist (old runs), gracefully ignore
 
-    # Clip transition info
-    clip_transitions = [s.get("clip_transition", "cut") for s in valid_shots]
-    _logger.info(f"[INFO] Transitions: {clip_transitions}")
+  # Clip transition info
+  clip_transitions = [s.get("clip_transition", "cut") for s in valid_shots]
+  _logger.info(f"[INFO] Transitions: {clip_transitions}")
 
-    # Get chapter title
-    chapter_title = os.getenv("CHAPTER_TITLE", "Chapter 1")
+  # Get chapter title
+  chapter_title = os.getenv("CHAPTER_TITLE", "Chapter 1")
 
-    # 6. Merge video - Version A: TTS only, Version B: Video audio + TTS mixed
-    if use_stretch:
-        # Version A: TTS only (discard video audio)
-        _logger.separator("=", 60)
-        _logger.info("[INFO] Generating version A: TTS audio only")
-        _logger.separator("=", 60)
-        merge_final_video(
-            clips, target_durations,
-            stretched_dir=TEMP_DIR,
-            audio_path=audio_path,
-            output_path=FINAL_OUT_A,
-            srt_path=SRT_OUT,
-            clip_transitions=clip_transitions,
-            chapter_title=chapter_title,
-            keep_video_audio=False,
-            mode_b_indices=mode_b_indices,
-        )
+  # 6. Merge video - Version A: TTS only, Version B: Video audio + TTS mixed
+  if use_stretch:
+    # Version A: TTS only (discard video audio)
+    _logger.separator("=", 60)
+    _logger.info("[INFO] Generating version A: TTS audio only")
+    _logger.separator("=", 60)
+    merge_final_video(
+      clips, target_durations,
+      stretched_dir=TEMP_DIR,
+      audio_path=audio_path,
+      output_path=FINAL_OUT_A,
+      srt_path=SRT_OUT,
+      clip_transitions=clip_transitions,
+      chapter_title=chapter_title,
+      keep_video_audio=False,
+      mode_b_indices=mode_b_indices,
+    )
 
-        # Version B: Video audio + TTS mixed
-        _logger.separator("=", 60)
-        _logger.info("[INFO] Generating version B: Video audio + TTS mixed")
-        _logger.separator("=", 60)
-        merge_final_video(
-            clips, target_durations,
-            stretched_dir=TEMP_DIR / "version_b",
-            audio_path=audio_path,
-            output_path=FINAL_OUT_B,
-            srt_path=SRT_OUT,
-            clip_transitions=clip_transitions,
-            chapter_title=chapter_title,
-            keep_video_audio=True,
-            mode_b_indices=mode_b_indices,
-        )
+    # Version B: Video audio + TTS mixed
+    _logger.separator("=", 60)
+    _logger.info("[INFO] Generating version B: Video audio + TTS mixed")
+    _logger.separator("=", 60)
+    merge_final_video(
+      clips, target_durations,
+      stretched_dir=TEMP_DIR / "version_b",
+      audio_path=audio_path,
+      output_path=FINAL_OUT_B,
+      srt_path=SRT_OUT,
+      clip_transitions=clip_transitions,
+      chapter_title=chapter_title,
+      keep_video_audio=True,
+      mode_b_indices=mode_b_indices,
+    )
+  else:
+    # Old mode fallback (no per-shot audio, direct concat)
+    _logger.separator("=", 60)
+    _logger.info("[INFO] Using old mode merge (no per-shot audio, direct concat)")
+    _logger.separator("=", 60)
+    from step04_merge.merge_core import concat_clips, _run_cmd, _find_exe
+    FFMPEG = _find_exe("ffmpeg")
+
+    # Concat clips directly
+    concat_list = TEMP_DIR / "merge_concat.txt"
+    concat_list.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f"file '{c.resolve().as_posix()}'" for c in clips]
+    concat_list.write_text("\n".join(lines), encoding="utf-8")
+
+    srt_path_abs = SRT_OUT.resolve().as_posix()
+    escaped_srt = srt_path_abs.replace(":", "\\:")
+    style = (
+      f"FontName=Sans"
+      f"\\,FontSize=20"
+      f"\\,PrimaryColour=&H00FFFFFF"
+      f"\\,OutlineColour=&H00FFFFFF"
+      f"\\,Outline=1"
+    )
+    video_filter = (
+      f"subtitles='{escaped_srt}':force_style='{style}',"
+      f"eq=contrast=1.15:saturation=0.85,"
+      f"vignette=angle=0.5"
+    )
+
+    if audio_path is None:
+      # Native mode - keep original video audio, just concat with subtitles
+      _logger.info("[INFO] Native mode: keeping original video audio")
+      cmd = [
+        FFMPEG, "-y",
+        "-f", "concat", "-safe", "0", "-i", str(concat_list),
+        "-vf", video_filter,
+        "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "20",
+        "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
+        "-c:a", "copy", # Copy original audio without re-encoding
+        "-shortest",
+        str(FINAL_OUT_A),
+      ]
+      subprocess.run(cmd, check=True)
+      _logger.info(f"[OK] Version A generated: {FINAL_OUT_A}")
+
+      # Version B is same as A in native mode (no external audio to mix)
+      FINAL_OUT_B = FINAL_OUT_A
     else:
-        # Old mode fallback (no per-shot audio, direct concat)
-        _logger.separator("=", 60)
-        _logger.info("[INFO] Using old mode merge (no per-shot audio, direct concat)")
-        _logger.separator("=", 60)
-        from step04_merge.merge_core import concat_clips, _run_cmd, _find_exe
-        FFMPEG = _find_exe("ffmpeg")
+      # Version A: TTS only
+      cmd = [
+        FFMPEG, "-y",
+        "-f", "concat", "-safe", "0", "-i", str(concat_list),
+        "-i", str(audio_path),
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-vf", video_filter,
+        "-af", "volume=5dB,aformat=sample_fmts=fltp:channel_layouts=stereo",
+        "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "20",
+        "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44k", "-ac", "2",
+        "-shortest",
+        str(FINAL_OUT_A),
+      ]
+      subprocess.run(cmd, check=True)
+      _logger.info(f"[OK] Version A generated: {FINAL_OUT_A}")
 
-        # Concat clips directly
-        concat_list = TEMP_DIR / "merge_concat.txt"
-        concat_list.parent.mkdir(parents=True, exist_ok=True)
-        lines = [f"file '{c.resolve().as_posix()}'" for c in clips]
-        concat_list.write_text("\n".join(lines), encoding="utf-8")
+      # Version B: Video audio + TTS mixed
+      cmd = [
+        FFMPEG, "-y",
+        "-f", "concat", "-safe", "0", "-i", str(concat_list),
+        "-i", str(audio_path),
+        "-map", "0:v:0", "-map", "0:a:0", "-map", "1:a:0",
+        "-vf", video_filter,
+        "-filter_complex",
+        # 处理视频音频：降低音量 + 格式化
+        "[0:a]volume=0.3,aformat=sample_fmts=fltp:channel_layouts=stereo[bg];"
+        # 处理 TTS 音频：格式化
+        "[1:a]aformat=sample_fmts=fltp:channel_layouts=stereo[tts];"
+        # 混合
+        "[bg][tts]amix=inputs=2:duration=first[audio]",
+        "-map", "0:v:0", "-map", "[audio]",
+        "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "20",
+        "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44k", "-ac", "2",
+        "-shortest",
+        str(FINAL_OUT_B),
+      ]
+      subprocess.run(cmd, check=True)
+      _logger.info(f"[OK] Version B generated: {FINAL_OUT_B}")
 
-        srt_path_abs = SRT_OUT.resolve().as_posix()
-        escaped_srt = srt_path_abs.replace(":", "\\:")
-        style = (
-            f"FontName=Sans"
-            f"\\,FontSize=20"
-            f"\\,PrimaryColour=&H00FFFFFF"
-            f"\\,OutlineColour=&H00FFFFFF"
-            f"\\,Outline=1"
-        )
-        video_filter = (
-            f"subtitles='{escaped_srt}':force_style='{style}',"
-            f"eq=contrast=1.15:saturation=0.85,"
-            f"vignette=angle=0.5"
-        )
+    if concat_list.exists():
+      concat_list.unlink()
 
-        # Version A: TTS only
-        cmd = [
-            FFMPEG, "-y",
-            "-f", "concat", "-safe", "0", "-i", str(concat_list),
-            "-i", str(audio_path),
-            "-map", "0:v:0", "-map", "1:a:0",
-            "-vf", video_filter,
-            "-af", "volume=5dB,aformat=sample_fmts=fltp:channel_layouts=stereo",
-            "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "20",
-            "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k", "-ar", "44k", "-ac", "2",
-            "-shortest",
-            str(FINAL_OUT_A),
-        ]
-        subprocess.run(cmd, check=True)
-        _logger.info(f"[OK] Version A generated: {FINAL_OUT_A}")
+  # 7. Cleanup
+  if use_per_shot_audio and 'merged_audio' in locals() and Path(merged_audio).exists():
+    Path(merged_audio).unlink()
 
-        # Version B: Video audio + TTS mixed
-        cmd = [
-            FFMPEG, "-y",
-            "-f", "concat", "-safe", "0", "-i", str(concat_list),
-            "-i", str(audio_path),
-            "-map", "0:v:0", "-map", "0:a:0", "-map", "1:a:0",
-            "-vf", video_filter,
-            "-filter_complex",
-            # 处理视频音频：降低音量 + 格式化
-            "[0:a]volume=0.3,aformat=sample_fmts=fltp:channel_layouts=stereo[bg];"
-            # 处理 TTS 音频：格式化
-            "[1:a]aformat=sample_fmts=fltp:channel_layouts=stereo[tts];"
-            # 混合
-            "[bg][tts]amix=inputs=2:duration=first[audio]",
-            "-map", "0:v:0", "-map", "[audio]",
-            "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "20",
-            "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k", "-ar", "44k", "-ac", "2",
-            "-shortest",
-            str(FINAL_OUT_B),
-        ]
-        subprocess.run(cmd, check=True)
-        _logger.info(f"[OK] Version B generated: {FINAL_OUT_B}")
-
-        if concat_list.exists():
-            concat_list.unlink()
-
-    # 7. Cleanup
-    if use_per_shot_audio and 'merged_audio' in locals() and Path(merged_audio).exists():
-        Path(merged_audio).unlink()
-
-    # 8. Report
-    duration_a = get_media_duration(FINAL_OUT_A)
-    duration_b = get_media_duration(FINAL_OUT_B)
-    _logger.info("[INFO] Merge Report:")
-    _logger.info(f"  Audio total:        {audio_duration:.1f}s")
-    _logger.info(f"  Version A duration: {duration_a:.1f}s (TTS only)")
-    _logger.info(f"  Version B duration: {duration_b:.1f}s (mixed)")
-    _logger.info(f"  A/V mismatch A:     {abs(duration_a - audio_duration):.1f}s")
-    _logger.info(f"  A/V mismatch B:     {abs(duration_b - audio_duration):.1f}s")
+  # 8. Report
+  duration_a = get_media_duration(FINAL_OUT_A)
+  duration_b = get_media_duration(FINAL_OUT_B)
+  _logger.info("[INFO] Merge Report:")
+  if audio_path is None:
+    _logger.info(f" Audio:       Original video audio (native mode)")
+    _logger.info(f" Version A duration: {duration_a:.1f}s")
+    _logger.info(f" Version B duration: {duration_b:.1f}s")
+  else:
+    _logger.info(f" Audio total:    {audio_duration:.1f}s")
+    _logger.info(f" Version A duration: {duration_a:.1f}s (TTS only)")
+    _logger.info(f" Version B duration: {duration_b:.1f}s (mixed)")
+    _logger.info(f" A/V mismatch A:   {abs(duration_a - audio_duration):.1f}s")
+    _logger.info(f" A/V mismatch B:   {abs(duration_b - audio_duration):.1f}s")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        _logger.error(f"[ERROR] {e}")
-        sys.exit(1)
+  try:
+    main()
+  except Exception as e:
+    _logger.error(f"[ERROR] {e}")
+    sys.exit(1)

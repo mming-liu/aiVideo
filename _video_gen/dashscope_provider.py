@@ -16,16 +16,7 @@ from .models import VideoGenerationRequest, VideoGenerationResult
 from .service import VideoGenerationService
 from .config import config
 
-
-def _verbose_write(msg: str) -> None:
-    """写入日志文件，静默控制台（fallback 到 print 时输出到控制台）。"""
-    try:
-        from shared.tee_logger import get_logger
-        from shared.paths import chapter_dir
-        __vl = get_logger(chapter_dir() / "step02b.log", console_level="INFO")
-        __vl.verbose(msg)
-    except Exception:
-        print(msg)
+from shared.log_utils import verbose_write as _verbose_write
 
 
 class DashScopeVideoService(VideoGenerationService):

@@ -28,7 +28,7 @@ from vimax.interfaces import (
     ShotDescription,
 )
 
-from character_bank import CharacterBank, StyleBank
+from shared.character_bank import CharacterBank, StyleBank
 
 import hashlib
 

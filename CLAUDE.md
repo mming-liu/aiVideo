@@ -27,7 +27,7 @@ python step04_merge/main.py       # 阶段4: 片段 + 音频 + 字幕 → 最终
 
 - 阶段2拆分为2a和2b，方便调试：可以先运行2a检查图片质量，确认OK后再运行2b生成视频
 - 每个阶段脚本都有交互式确认提示。
-- 当 `VIDEO_REFERENCE_MODE=text` 时跳过分帧环节，直接文生视频
+- 当 `VIDEO_REFERENCE_MODE=text` 时跳过分帧环节，直接文生视频；r2v 模式使用参考图（最多5个）保持角色/道具一致性
 
 每个阶段脚本都有交互式确认提示。
 
@@ -51,7 +51,7 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 - `TTS_PROVIDER`: TTS供应商（默认dashscope_sdk）
 - `HOOK_ENABLED`: 是否生成钩子分镜（默认1，开启）
 - `COMPLIANCE_AUTO_FIX`: 是否自动修复敏感词（默认1，开启）
-- `VIDEO_REFERENCE_MODE`: 视频参考图模式（默认text，可选image）— text=文生视频（跳过帧图片），image=图生视频（需先运行step02a生成帧图片）
+- `VIDEO_REFERENCE_MODE`: 视频参考图模式（默认text，可选image/r2v）— text=文生视频（跳过帧图片），image=图生视频（需先运行step02a生成帧图片），r2v=参考图生视频（最多5个参考图，角色/道具一致性）
 
 ## 架构设计
 
@@ -67,7 +67,7 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 
 - 阶段2拆分为2a（帧图片）和2b（视频生成），方便调试：可以先运行2a检查图片质量，确认OK后再运行2b
 - 每个阶段脚本都有交互式确认提示
-- `VIDEO_REFERENCE_MODE=text` 时跳过分帧环节，直接文生视频
+- `VIDEO_REFERENCE_MODE=text` 时跳过分帧环节，直接文生视频；r2v 模式使用参考图（最多5个）保持角色/道具一致性
 
 ### 输出目录结构（统一由 shared/paths.py 计算，禁止自行拼接）
 层级对应小说自身结构「小说 → 部 → 章」：

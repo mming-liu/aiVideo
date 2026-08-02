@@ -107,9 +107,9 @@ PROMPT_TEMPLATE = """
     "context_bridge": "",
     "audio_cue": "钩子音效",
     "fx_effect": "钩子特效",
-    "color_ tone": "钩子色调",
+    "color_tone": "钩子色调",
     "cam_idx": 1,
-    "clip_ transition": "淡出",
+    "clip_transition": "淡出",
     "duration": 6.0,
     "variation_type": "large",
     "keyframes": [
@@ -495,6 +495,43 @@ def _format_movement_params(params: dict) -> str:
     return "\n".join(f"  - {k}: {v}" for k, v in params.items())
 
 
+def _build_cinematic_vocab() -> str:
+    """汇总 storyboard_refs 的镜头语言词库，作为独立 section 拼入 prompt（code-audit 07-31 #1）.
+
+    旧实现把各词库作为 build_prompt 里 .format() 的 kwargs 传入，但 PROMPT_TEMPLATE
+    从未声明这些占位符 → 被 .format() 静默忽略，词库实际是死代码、LLM 从未见过。
+    改为这里显式拼接成一段，由 build_prompt 在 format 完成后再 append。
+    """
+    sections = [
+        ("景别", _format_list(storyboard_refs.SHOT_SIZES)),
+        ("机位角度", _format_list(storyboard_refs.CAMERA_ANGLES)),
+        ("运镜方式", _format_list(storyboard_refs.CAMERA_MOVEMENTS)),
+        ("景深/对焦", _format_list(storyboard_refs.DEPTH_OF_FIELD)),
+        ("光影氛围", _format_dict(storyboard_refs.LIGHTING_MOODS)),
+        ("色调", _format_dict(storyboard_refs.COLOR_PALETTES)),
+        ("古代服饰", _format_list(storyboard_refs.ANCIENT_COSTUMES)),
+        ("古代场景", _format_list(storyboard_refs.ANCIENT_LOCATIONS)),
+        ("摄像机分组", _format_list(storyboard_refs.CAMERA_GROUPING)),
+        ("天气", _format_dict(storyboard_refs.WEATHER_TAGS)),
+        ("粒子特效", _format_list(storyboard_refs.PARTICLE_EFFECTS)),
+        ("地面物理", _format_list(storyboard_refs.GROUND_PHYSICS)),
+        ("材质描述", _format_list(storyboard_refs.TEXTURE_DESCRIPTORS)),
+        ("光照层次", _format_list(storyboard_refs.LIGHTING_LAYERS)),
+        ("转场方式", _format_list(storyboard_refs.TRANSITIONS)),
+        ("音效提示", _format_list(storyboard_refs.AUDIO_CUES)),
+        ("运镜参数", _format_movement_params(storyboard_refs.MOVEMENT_PARAMS)),
+        ("氛围关键词", _format_dict(storyboard_refs.ATMOSPHERE_KEYWORDS)),
+        ("禁止元素", _format_list(storyboard_refs.BANNED_VISUALS)),
+    ]
+    lines = ["### 镜头语言词库（从下列词汇中选择合适项，帮助画面描述更专业）"]
+    for name, body in sections:
+        if not body:
+            continue
+        lines.append(f"[{name}]")
+        lines.append(body)
+    return "\n".join(lines)
+
+
 # ========================================================================
 # 构建完整 prompt
 # ========================================================================
@@ -506,31 +543,14 @@ def build_prompt(novel_text: str, min_shots: int, max_shots: int, bank=None) -> 
         novel_text=novel_text,
         min_shots=min_shots,
         max_shots=max_shots,
-        novel_char_count=len(novel_text),
-        style_prefix=style_prefix.STYLE_PREFIX_SHORT,
         character_anchors=char_anchors,
-        # 原始镜头库
-        shot_sizes=_format_list(storyboard_refs.SHOT_SIZES),
-        camera_angles=_format_list(storyboard_refs.CAMERA_ANGLES),
-        camera_movements=_format_list(storyboard_refs.CAMERA_MOVEMENTS),
-        depth_of_field=_format_list(storyboard_refs.DEPTH_OF_FIELD),
-        lighting_moods=_format_dict(storyboard_refs.LIGHTING_MOODS),
-        color_palettes=_format_dict(storyboard_refs.COLOR_PALETTES),
-        costumes=_format_list(storyboard_refs.ANCIENT_COSTUMES),
-        locations=_format_list(storyboard_refs.ANCIENT_LOCATIONS),
-        camera_grouping=_format_list(storyboard_refs.CAMERA_GROUPING),
-        # v5.0 新增词库
-        weather_tags=_format_dict(storyboard_refs.WEATHER_TAGS),
-        particle_effects=_format_list(storyboard_refs.PARTICLE_EFFECTS),
-        ground_physics=_format_list(storyboard_refs.GROUND_PHYSICS),
-        texture_descriptors=_format_list(storyboard_refs.TEXTURE_DESCRIPTORS),
-        lighting_layers=_format_list(storyboard_refs.LIGHTING_LAYERS),
-        transitions=_format_list(storyboard_refs.TRANSITIONS),
-        audio_cues=_format_list(storyboard_refs.AUDIO_CUES),
-        movement_params=_format_movement_params(storyboard_refs.MOVEMENT_PARAMS),
-        atmosphere_keywords=_format_dict(storyboard_refs.ATMOSPHERE_KEYWORDS),
-        banned_visuals=_format_list(storyboard_refs.BANNED_VISUALS),
     )
+    # 追加镜头语言词库。旧实现把这些词库作为 .format() 的 kwargs 传入，但 PROMPT_TEMPLATE
+    # 从未声明对应占位符，.format() 静默忽略 → 词库从未到达 LLM（code-audit 07-31 #1）。
+    # 现改为 format 完成后再拼接：既避开大模板里 `{ }` 的转义风险，也确保 LLM 真实看到词库。
+    vocab = _build_cinematic_vocab()
+    if vocab:
+        prompt = prompt + "\n" + vocab
     # 追加伴生技能上下文
     local_ctx = _load_local_skill_context()
     if local_ctx:

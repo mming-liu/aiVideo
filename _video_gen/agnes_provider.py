@@ -301,7 +301,7 @@ class AgnesVideoService(VideoGenerationService):
                 _eb = _log_payload["extra_body"]
                 if "image" in _eb and _eb["image"]:
                     if isinstance(_eb["image"], list):
-                        _eb["image"] = [f"[base64 data, len={len(x)}]" if isinstance(x, str) and x.startswith("data:") else x for x in _eb["image"]]
+                        _eb["image"] = [f"[base64 data, len={len(x)}]" if isinstance(x, str) else x for x in _eb["image"]]
                     else:
                         _eb["image"] = f"[base64 data, len={len(_eb['image'])}]"
             _vlog.verbose(f"[DEBUG] video_submit: POST {self._submit_url()}")

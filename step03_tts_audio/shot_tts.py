@@ -21,9 +21,11 @@ from tts.voice_registry import get_registry, NARRATOR_VOICE, AVAILABLE_VOICES
 
 
 def _has_dialogue(text: str) -> bool:
-    """检测文本是否包含对话（带冒号、引号）。"""
-    dialogue_markers = [":", "：", '"', "“", "‘", "——"]
-    return any(marker in text for marker in dialogue_markers)
+    """检测文本是否包含对话（引号或全角冒号）。判定逻辑统一在 shared/dialogue.py。"""
+    from shared.dialogue import has_dialogue
+    return has_dialogue(text)
+
+
 from typing import Optional, List
 
 
@@ -38,6 +40,29 @@ def load_script(path: Path) -> dict:
         raise FileNotFoundError(f"Script not found: {path}")
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _detect_speaker_attributes(character_name: str, characters: List[dict]) -> tuple:
+    """根据角色名查找性别和年龄段。
+
+    Args:
+        character_name: 角色名
+        characters: 角色列表
+
+    Returns:
+        (gender, age_range) 元组， 可能为 (None, None)
+    """
+    if not character_name or not characters:
+        return None, None
+
+    for char in characters:
+        if char.get("identifier") == character_name:
+            gender = char.get("gender", "").lower()
+            age = char.get("age_range", "").lower()
+            # 验证有效性
+            if gender in ("male", "female"):
+                return gender, age if age in ("young", "middle", "old") else None
+    return None, None
 
 
 def _detect_speaker_from_narration(narration: str, characters: List[dict]) -> Optional[str]:
@@ -200,17 +225,21 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
     speaker_name = detected_speaker or (main_subject if main_subject and len(main_subject) <= 4 else None)
 
     # 2. 获取动态音色配置
+    # 如果检测不到说话人，尝试使用 main_subject
+    main_subject = shot.get("main_subject", "").strip()
+    speaker_name = detected_speaker or (main_subject if main_subject and len(main_subject) <= 4 else None)
+
+    # 2. 获取角色属性（性别、年龄段）
+    gender, age_range = None, None
+    if speaker_name and characters:
+        gender, age_range = _detect_speaker_attributes(speaker_name, characters)
+
+    # 3. 获取动态音色配置
     if voice_registry is None:
         voice_registry = get_registry()
 
     if speaker_name:
-        voice_config = voice_registry.get_voice(speaker_name)
-    else:
-        # 无说话人信息，使用旁白音色
-        voice_config = NARRATOR_VOICE.copy()
-
-    output_path = output_dir / f"shot_{idx}.mp3"
-
+        voice_config = voice_registry.get_voice(speaker_name, gender, age_range)
     # 缓存检查：文件存在且大小正常且音色匹配则跳过
     if output_path.exists() and output_path.stat().st_size > 10240:
         voice_meta = output_path.with_suffix(".voice")
@@ -251,9 +280,14 @@ async def _gen_shot_tts_async(shot: dict, output_dir: Path, provider,
     main_subject = shot.get("main_subject", "").strip()
     speaker_name = detected_speaker or (main_subject if main_subject and len(main_subject) <= 4 else None)
 
-    # 2. 获取音色
+    # 2. 获取角色属性（性别、年龄段）
+    gender, age_range = None, None
+    if speaker_name and characters:
+        gender, age_range = _detect_speaker_attributes(speaker_name, characters)
+
+    # 3. 获取音色
     if speaker_name:
-        voice_config = voice_registry.get_voice(speaker_name)
+        voice_Config = voice_registry.get_voice(speaker_name, gender, age_range)
     else:
         voice_config = NARRATOR_VOICE.copy()
 

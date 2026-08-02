@@ -24,14 +24,17 @@ from _text_gen import create_service, TextGenerationRequest
 CHARACTER_EXTRACTION_PROMPT = """
 从以下小说原文中，提取所有出场人物。
 
-已知角色库（若角色已在库中，请确认其出场，并描述本章中的衣着/服装变化）：
+已知角色库（若角色已在库中，请确认其出场，描述本章中的衣着变化，以及性别/年龄是否变化）：
 {known_characters}
 
 # 输出格式
-只输出纯JSON，必要markdown代码块标记，不要任何前后缀文字。格式如下：{{
+只输出纯JSON，必要markdown代码块标记，不要任何前后缀文字。格式如下：
+{{
   "characters": [
     {{
       "identifier": "人物名称（跨章节保持一致，如杨旭、张十三）",
+      "gender": "male 或 female，表示性别",
+      "age_range": "young(青年) / middle(中年) / old(老年)，表示大致年龄段",
       "static_features": "外貌、体型等不变特征（如：剑眉星目，黑发束冠，身姿挺拔）",
       "dynamic_features": "本场景服装、配饰等可变特征（如：素白轻袍，平定四方巾）",
       "is_visible": true,
@@ -43,8 +46,10 @@ CHARACTER_EXTRACTION_PROMPT = """
 # 规则
 - identifier 必须使用小说中的原名，跨章保持一致
 - 同一个人物只出现一次
+- gender: 根据外貌/声音/名字判断性别，male=男性，female=女性
+- age_range: 根据外貌描述/身份判断年龄段，young=青年(20-35岁)，middle=中年(36-55岁)，old=老年(56岁以上)
 - static_features 描述脸型、五官、发式、体型等不随场景变化的特征
-- dynamic_features 描述服装、配饰、手持物品等随场景变化的特征。即使角色已在库中，仍需描述本章中该角色的衣着/打扮（与之前章节可能不同）。
+- dynamic_features 描述服装、配饰、手持物品等随场景变化的特征
 - 描述要具体可视化：不要用"英俊"，要写"剑眉星目、"
 - is_new: 该人物是否不在已知角色库中
 - 只提取主要角色（有名字、有对话、有动作的），忽略纯背景路人

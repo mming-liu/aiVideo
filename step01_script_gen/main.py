@@ -325,7 +325,8 @@ def main() -> None:
             raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
 
             script = parse_response(raw, novel_text=novel_text)
-            script = _post_process(script)
+            # 不在循环内 post_process：循环退出后统一在 line 334 做一次
+            # （code-audit 07-31 #7：原 :328 与 :334 重复调用 _post_process）
         else:
             # 达到最大尝试次数仍有问题，记录但不中断
             _logger.warn("[GAP] 达到最大重试次数，仍有差距问题，将继续处理")

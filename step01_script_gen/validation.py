@@ -171,7 +171,7 @@ def _validate_script(script: dict) -> None:
 
     # v6.6: 逐镜头原文锚点校验（新增 P1 优化）
     # 检查 narration_segment 是否能在原文中找到对应内容，防止 LLM 编造
-    _check_grounding_wrapper(script)
+    _check_grounding_and_warn(script)
 
     # v6.3: 分镜提示词检查表（8项核心检查）
     checklist_result = _run_prompt_checklist(script)
@@ -250,8 +250,8 @@ def _check_audio_instruction(shots: list[dict]) -> None:
                 print(f"[WARN] 镜头{shot_idx}: 检测到对话但 Prompt 中缺少 Agnes AI 中文发音指令 '（用中文说）'")
 
 
-# 模块级变量：存储当前待验证的小说原文
-_novel_text_for_validation = ""
+# 模块级变量 _novel_text_for_validation 已在文件顶部（line 29）定义，此处不再重复
+# （code-audit 07-31 #5：原 :254 与 :29 重复定义同一模块级变量）
 
 
 def _check_grounding(shot: dict, novel_text: str) -> bool:
@@ -287,11 +287,6 @@ def _check_grounding_and_warn(script: dict) -> None:
         for idx, text in ungrounded:
             print(f"  镜头{idx}: \"{text}...\"")
         print(f"  → 请确保所有 narration 直接引用自小说原文")
-
-
-def _check_grounding_wrapper(script: dict) -> None:
-    """包装函数，供 _validate_script 调用。"""
-    _check_grounding_and_warn(script)
 
 
 def _check_character_consistency(script: dict) -> dict:
@@ -1285,13 +1280,21 @@ def _check_script_novel_alignment(script: dict) -> dict:
                 )
 
         # 检查明显的新增物体（简化版：常见道具/场景对比）
-        # 这是一个启发式检查，不追求完美
+        # 启发式检查，不追求完美。定义一次，随后应用到每镜头 prompt/帧描述。
         suspicious_patterns = [
             # 新增人物类（narration 没提人名但 prompt 有人物描述）
-            (r'一个[成年青老年男女]', r'[人物角色]'),
+            (r'一个[成年青老年男女]', '[人物角色]'),
             # 新增物品类
-            (r'手持[刀剑枪戟扇笛]', r'[新增道具]'),
+            (r'手持[刀剑枪戟扇笛]', '[新增道具]'),
         ]
+
+        # 应用：帧描述/提示词里凭空出现、但 narration 未提及的具体人物/道具 → 疑似幻觉，仅 WARN
+        for _pat, _label in suspicious_patterns:
+            if re.search(_pat, check_text):
+                warnings.append(
+                    f"镜头{idx}: 画面描述出现未锚定的{_label}（{_pat}），"
+                    f"narration 中无对应，可能为幻觉编造"
+                )
 
     if issues:
         for issue in issues:

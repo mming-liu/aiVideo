@@ -34,15 +34,7 @@ if BAILIAN_WORKSPACE_ID and BAILIAN_REGION:
     dashscope.base_url = f"https://{BAILIAN_WORKSPACE_ID}.{BAILIAN_REGION}.maas.aliyuncs.com"
 
 
-def _verbose_write(msg: str) -> None:
-    """写入日志文件，静默控制台（fallback 到 print 时输出到控制台）。"""
-    try:
-        from shared.tee_logger import get_logger
-        from shared.paths import chapter_dir
-        __vl = get_logger(chapter_dir() / "step02b.log", console_level="INFO")
-        __vl.verbose(msg)
-    except Exception:
-        print(msg)
+from shared.log_utils import verbose_write as _verbose_write  # noqa: E402
 
 # 模型列表从 shared/config.py 读取（可通过 .env 覆盖）
 # 示例 .env 配置:
@@ -124,15 +116,20 @@ class BailianVideoService(VideoGenerationService):
             return None
 
     # =======================================================================
-    # 创建任务 - 根据是否有图片决定 T2V 还是 I2V
+    # 创建任务 - 根据是否有图片决定 T2V / I2V / R2V
     # =======================================================================
     def create_task(self, req: VideoGenerationRequest) -> str:
         # Bailian 限速：每个请求等待冷却
         time.sleep(self._cooldown)
 
-        # 判断是 T2V 还是 I2V（根据是否有首帧图）
+        # 判断模式：T2V / I2V / R2V
         has_first_frame = bool(req.image_path)
         has_last_frame = bool(req.last_frame_image_path)
+        has_refs = bool(req.reference_paths)
+
+        # R2V: 有 reference_paths 时优先使用 R2V（角色/道具一致性保持）
+        if has_refs:
+            return self._create_r2v_task(req)
 
         if has_first_frame or has_last_frame:
             return self._create_i2v_task(req)
@@ -164,7 +161,7 @@ class BailianVideoService(VideoGenerationService):
             "negative_prompt": req.negative_prompt or "",
             "resolution": self._resolution,
             "ratio": self._ratio,
-            "duration": self._duration,
+            "duration": req.duration or self._duration,
             "prompt_extend": True,   # 默认开启智能改写
             "watermark": False,      # 默认不添加水印
         }
@@ -201,7 +198,7 @@ class BailianVideoService(VideoGenerationService):
             "model": model,
             "prompt": req.prompt,
             "resolution": self._resolution,
-            "duration": self._duration,
+            "duration": req.duration or self._duration,
             "watermark": True,  # HappyHorse 默认添加水印
         }
 
@@ -268,7 +265,7 @@ class BailianVideoService(VideoGenerationService):
             "prompt": req.prompt,
             "media": media,
             "resolution": self._resolution,  # 必须是 720P 或 1080P
-            "duration": self._duration,
+            "duration": req.duration or self._duration,
             "watermark": True,
         }
 
@@ -321,7 +318,7 @@ class BailianVideoService(VideoGenerationService):
             "negative_prompt": req.negative_prompt or "",
             "resolution": self._resolution,
             "ratio": self._ratio,
-            "duration": self._duration,
+            "duration": req.duration or self._duration,
             "watermark": False,
         }
 
@@ -391,7 +388,7 @@ class BailianVideoService(VideoGenerationService):
             'negative_prompt': req.negative_prompt or '',
             'resolution': self._resolution,
             'ratio': self._ratio,
-            'duration': self._duration,
+            'duration': req.duration or self._duration,
             'watermark': False,
         }
 

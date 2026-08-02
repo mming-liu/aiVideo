@@ -3,6 +3,7 @@ requests
 python-dotenv
 pysrt
 ffmpeg-python
+Pillow                 # _video_gen/agnes_provider.py 图片压缩编码（裸 base64 前处理）
 
 # TTS 语音合成
 dashscope                # dashscope_sdk / dashscope_http 供应商必需
