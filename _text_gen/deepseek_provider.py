@@ -70,7 +70,14 @@ class DeepSeekTextService(TextGenerationService):
 
             text = message.content
             if not text:
-                return TextGenerationResult(success=False, error="DeepSeek 返回文本为空")
+                # deepseek-v4-flash 等模型偶发把真正的正文（分镜 JSON）塞进 reasoning_content，
+                # 而 content 为空。此时用 reasoning_content 兜底——仅当它以 JSON 起始（排除纯思维链）。
+                reasoning_stripped = (reasoning or "").lstrip()
+                if reasoning_stripped.startswith(("{", "[")):
+                    print(f"[WARN] message.content 为空，回退使用 reasoning_content（长度 {len(reasoning)}）")
+                    text = reasoning
+                else:
+                    return TextGenerationResult(success=False, error="DeepSeek 返回文本为空")
             return TextGenerationResult(success=True, text=text)
         except Exception as e:
             return TextGenerationResult(success=False, error=str(e))

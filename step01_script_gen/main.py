@@ -26,7 +26,6 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 # 统一配置（从 shared.config 读取 .env）
 from shared.config import (
     NOVEL_CHAPTER, BOOK_INDEX,
-    SHOT_COUNT_MIN, SHOT_COUNT_MAX,
     CHARACTER_EXTRACTION_ENABLED,
     COMPLIANCE_STRICT, COMPLIANCE_AUTO_FIX,
     HOOK_ENABLED,
@@ -115,7 +114,7 @@ def read_chapter(path: str = "锦衣夜行_77119小说.txt", chapter: int = 1) -
 
 def gen_spy_script(novel_text: str, bank=None) -> str:
     """调用 LLM 生成脚本，返回原始文本."""
-    prompt = build_prompt(novel_text, SHOT_COUNT_MIN, SHOT_COUNT_MAX, bank)
+    prompt = build_prompt(novel_text, bank)
     service = create_service()
     req = TextGenerationRequest(
         system_prompt=SYSTEM_PROMPT,
@@ -374,7 +373,7 @@ def main() -> None:
             gap_context = _load_gap_analysis_context(validation)
 
             # 追加差距反馈到 prompt，重新生成
-            prompt = build_prompt(novel_text, SHOT_COUNT_MIN, SHOT_COUNT_MAX, character_bank)
+            prompt = build_prompt(novel_text, character_bank)
             prompt = prompt + gap_context
 
             service = create_service()
@@ -472,4 +471,16 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        import traceback
+        tb = traceback.format_exc()
+        # 完整 traceback 写入 step01.log（verbose 仅文件，不依赖 stderr）
+        for line in tb.splitlines():
+            _logger.verbose(line)
+        # 恢复真实 stdout，控制台显示一行错误摘要
+        sys.stdout = _REAL_STDOUT
+        last = tb.strip().splitlines()[-1]
+        _logger.error(f"[FATAL] {last}")
+        sys.exit(1)

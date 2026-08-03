@@ -30,8 +30,11 @@ BOOK_NAME = os.getenv("BOOK_NAME", "杀青州")
 # ============================================================================
 # 分镜生成配置（step01）
 # ============================================================================
-SHOT_COUNT_MIN = int(os.getenv("SHOT_COUNT_MIN", "6"))
-SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "10"))
+# v4.1 起镜头数量交由 LLM 决定（prompt 不再写死范围）。这两个变量已**不再进入 prompt**，
+# 仅作为 validation 的 sanity 软护栏：实际镜头数落在这个很宽的区间之外才 WARN（不阻断），
+# 用于兜住 LLM 抽风输出 2 镜或 50 镜这类废结果。
+SHOT_COUNT_MIN = int(os.getenv("SHOT_COUNT_MIN", "4"))
+SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "40"))
 CHARACTER_EXTRACTION_ENABLED = os.getenv("CHARACTER_EXTRACTION_ENABLED", "1").strip() == "1"
 HOOK_ENABLED = os.getenv("HOOK_ENABLED", "1").strip() == "1"
 COMPLIANCE_STRICT = os.getenv("COMPLIANCE_STRICT", "0").strip() == "1"

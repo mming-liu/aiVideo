@@ -65,13 +65,16 @@ def _validate_script(script: dict) -> None:
         raise ValueError("缺少 shots 字段")
     shots = script.get("shots", [])
 
-    # --- 镜头数校验 ---
+    # --- 镜头数校验（软护栏：v4.1 起数量交由 LLM 决定，此处只拦极端废输出） ---
     reported_count = script.get("shot_count")
     actual_count = len(shots)
+    from shared.config import SHOT_COUNT_MIN, SHOT_COUNT_MAX
+    if actual_count < SHOT_COUNT_MIN or actual_count > SHOT_COUNT_MAX:
+        print(f"[WARN] 镜头数 {actual_count} 超出 sanity 范围 [{SHOT_COUNT_MIN}, {SHOT_COUNT_MAX}]（仅提示，不阻断）")
     if reported_count is None:
         print(f"[WARN] JSON 中缺少 shot_count 字段，建议 LLM 在输出中包含此字段")
-    elif not isinstance(reported_count, int) or reported_count < 4 or reported_count > 20:
-        print(f"[WARN] shot_count={reported_count} 超出配置范围 [4, 20]")
+    elif not isinstance(reported_count, int):
+        print(f"[WARN] shot_count={reported_count} 非整数，已忽略")
     elif reported_count != actual_count:
         print(f"[WARN] 声明 shot_count={reported_count} 但实际镜头数为 {actual_count}，已自动修正")
         script["shot_count"] = actual_count

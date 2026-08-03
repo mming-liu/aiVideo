@@ -209,7 +209,7 @@ def _fix_at_error(text: str, error: json.JSONDecodeError) -> str:
 
 
 def _fix_common_errors(text: str) -> str:
-    # 先手动修复中文标点
+    # 先手动修复中文标点（状态机：仅转换结构位置，保留字符串值内中文引号）
     text = _manual_fix(text)
 
     # 尝试直接解析
@@ -251,6 +251,114 @@ def _fix_common_errors(text: str) -> str:
     return ''.join(result)
 
 
+def _truncate_fix(text: str) -> str:
+    """截断恢复：LLM 输出可能被 API 中途截断（如 lf_desc 字符串写到一半戛然而止）。
+
+    这种输入的特征：结尾停在未闭合字符串内，结构括号未收束。
+
+    恢复策略：
+      0. 先正向扫描确认"以未闭合字符串结尾"（否则是完整 JSON，直接原样返回）
+      1. 反向定位未闭合字符串的**起始引号** start_quote
+      2. 丢弃 start_quote 起的半个字段值；再往前回退到该字段 key 开头，连同字段一起丢弃
+      3. 去掉尾部逗号，收束所有未闭合 } ]
+
+    有损恢复：丢弃未完成镜头末尾的字段（如 lf_desc），保留前面完整字段。
+    对完整 JSON 必须是无操作。
+    """
+    # 0. 正向扫描：是否以未闭合字符串结尾？且是否存在一个未闭合的结构？
+    in_str = False
+    esc = False
+    for ch in text:
+        if esc:
+            esc = False
+            continue
+        if ch == '\\':
+            esc = True
+            continue
+        if not in_str:
+            if ch == '"':
+                in_str = True
+        else:
+            if ch == '"':
+                in_str = False
+    if not in_str:
+        return text  # 完整 JSON，无操作
+
+    # 1. 反向定位未闭合字符串的起始引号
+    #    从末尾往前扫描；未闭合字符串的起始引号 = 反向遇到的第一个引号，
+    #    但要注意它可能是已闭合字符串的结束引号。可靠做法：反向走时用栈匹配。
+    #    简化但可靠：从末尾找到未闭合串起点 —— 从末尾反向，跳过已闭合成对引号。
+    n = len(text)
+    start_quote = -1
+    i = n - 1
+    esc = False
+    while i >= 0:
+        ch = text[i]
+        if esc:
+            esc = False
+            i -= 1
+            continue
+        if ch == '\\':
+            esc = True
+            i -= 1
+            continue
+        if ch == '"':
+            # 反向遇到的引号：由于正向已确认末尾在字符串内，
+            # 从末尾反向遇到的第一个引号就是未闭合串的起始引号
+            # （其左边要么是冒号+key，要么是数组/对象起始）
+            start_quote = i
+            break
+        i -= 1
+    if start_quote < 0:
+        return text
+
+    # 2. 从 start_quote 往前找该字段 key 的冒号，把整个字段丢弃
+    colon = text.rfind('":', 0, start_quote)
+    if colon < 0:
+        head = text[:start_quote].rstrip()
+    else:
+        key_open = text.rfind('"', 0, colon)
+        if key_open < 0:
+            head = text[:start_quote].rstrip()
+        else:
+            head = text[:key_open].rstrip()
+
+    # 3. 去掉尾部逗号
+    while head.endswith(','):
+        head = head[:-1].rstrip()
+
+    # 4. 收束未闭合括号
+    open_stack = []
+    in_str2 = False
+    esc2 = False
+    for ch in head:
+        if esc2:
+            esc2 = False
+            continue
+        if ch == '\\':
+            esc2 = True
+            continue
+        if not in_str2:
+            if ch == '"':
+                in_str2 = True
+            elif ch == '{':
+                open_stack.append('}')
+            elif ch == '[':
+                open_stack.append(']')
+            elif ch == '}':
+                if open_stack and open_stack[-1] == '}':
+                    open_stack.pop()
+            elif ch == ']':
+                if open_stack and open_stack[-1] == ']':
+                    open_stack.pop()
+        else:
+            if ch == '"':
+                in_str2 = False
+
+    closed = ''.join(reversed(open_stack))
+    return head + closed
+
+
 def safe_parse_json(text: str) -> Any:
     cleaned = strip_markdown_fence(text.strip())
 
@@ -282,6 +390,15 @@ def safe_parse_json(text: str) -> Any:
         fixed2 = _fix_common_errors(no_trailing)
         try:
             return json.loads(fixed2)
+        except json.JSONDecodeError:
+            pass
+
+    # 截断恢复（最后兜底）：LLM 输出被 API 中途截断时，丢弃未完成镜头，
+    # 保留前面已完整序列化的部分。有损但比整体重试省时。
+    truncated = _truncate_fix(extracted)
+    if truncated != extracted:
+        try:
+            return json.loads(truncated)
         except json.JSONDecodeError:
             pass
 
