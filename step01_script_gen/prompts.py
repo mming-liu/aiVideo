@@ -28,7 +28,7 @@ PROMPT_TEMPLATE = """
 你是一位顶级的古风真人分镜导演和编剧。你的任务是将给定的小说文本转化为适合视频生成的专业分镜脚本。
 
 ### 核心任务
-**【强制要求】镜头数量范围：{min_shots} - {max_shots} 个镜头。必须生成该范围内的镜头数量！注意：hook不计入shot数组，shot数组只放实际叙事镜头！**
+**【强制要求】镜头数量完全交由你（LLM）决定**：按剧情密度自然分配镜头，覆盖全部关键剧情节点即可，**禁止为了凑镜头数堆砌无关背景、也禁止为省镜头删剧情**。打斗/追杀拆分多镜不设上限。注意：hook不计入shot数组，shot数组只放实际叙事镜头！
 **【强制要求】总时长不做上限：镜头数优先，剧情节点必须全部覆盖，时长随镜头自然增长（通常 70-110 秒）。禁止为了凑 60 秒而删剧情！**
 **【强制要求】单镜头时长限制：特写/空镜 2-4秒，中景 3-6秒，远景/动作 5-8秒，严禁超过 10秒！（镜头数越多每镜越短，14镜以上时单镜上限8秒）**
 **【强制要求】打斗流畅度（最高优先级）：打斗/追杀镜头必须用「短镜头+快切」——每镜 2-3 秒、一镜一个动作、连续打斗用 clip_transition=硬切0.2s 拼接。禁止把多个招式塞进一个长镜头，禁止打斗镜超过 4 秒。**
@@ -274,6 +274,10 @@ SYSTEM_PROMPT = (
     "   - 角色位置一致性：上一镜人物在画面左侧，下一镜也要从左侧开始或给出合理的位移理由\n"
     "   - 视线/动作连贯：人物看向哪里、伸手向哪里，下一镜必须从这个位置继续\n"
     "   - 颜色渐变：相邻镜头 color_tone 变化幅度不超过 20%，避免色彩突变\n"
+    "   - **致命伤/死亡状态持续（最高优先级）**：一旦发生致命伤（如刺入心口），后续每个镜头必须持续锚定伤口位置与生命体征衰减，严禁跳变为\"直接躺平\"。\n"
+    "     - 状态链：闷哼僵直 → 眸中惊恐/难以置信 → 瞳孔渐渐涣散 → 手无力垂下 → 不再动弹，按原文顺序推进，每镜承接上一镜末尾状态\n"
+    "     - **伤口位置持续**：被刺后的镜头（即使主体是刺客逃跑/听香反应）也必须提及伤处（如\"心口处白袍暗红洇痕\"），不能完全消失\n"
+    "     - 少量血迹可写（如\"听香脸上溅到的血\"\"指尖暗红\"\"心口洇痕\"），用暗红/红痕等合规词；禁止血迹特写与大面积血腥\n"
     "9. 情绪递进：走\"铺垫→积累→爆发→余波\"完整曲线，高潮镜头有蓄力瞬间（静止→爆发）；\n"
     "10. 细节锚点：主角面部特征每3镜再现，配角出场镜给出标志性特征；每镜含中景+远景/背景两层环境暗示；赤足足部细节每2-3镜出现一次；\n"
     "11. 输出全局渲染参数顶层字段（resolution/ratio/fps/render_style/global_lighting/global_camera_base/global_weather/global_atmosphere）。\n"
@@ -457,6 +461,7 @@ HOOK_PROMPT_TEMPLATE = """
    - **ff_desc 必须是单一静态瞬间**！只准画一个时间点的画面（所有元素同框共存），禁止时间推进（如「刺客从水中窜出…随即倒纵入水」是多个动作先后发生，画不出一张图）。正确写法如「水面炸开大洞，刺客半身已冲出水面，右手高举弯刀，水花在月光中凝住」——选动作时间线上最早且最震撼的定格
    - **多人画面视线必须交汇（最重要）**：ff_desc 和 prompt 中每个角色都用「画左/画右/画上方」锚定视线落点，所有视线必须汇聚到同一个威胁焦点（如刺客身上），形成「刺客盯A、A盯刺客、B盯刺客」的视线三角。**禁止**只写「仰头尖叫」「双眼惊愕」这类无视线归属的表情——那是角色被吓到了却不知道在怕什么，观众读不出恐惧的来由
    - **ff 与 lf 姿态必须显著不同（防首尾帧雷同）**：lf_desc 描述的动作结束态必须在姿态/空间位置上与 ff_desc 明显拉开，禁止「半身没入/探出水面」这类与首帧「冲出水面」构图撞车的写法。正确示例：ff「刺客半身冲出水面、右手高举弯刀过顶」→ lf「刺客整个身体已反身没入水中、仅余一截刀尖刺破水面、浪花高卷」——首帧向上冲起、尾帧向下没入，一眼可分
+   - **致命伤/受伤状态（最高优先级）**：若钩子涉及致命伤（如刺入心口），lf_desc 必须体现受伤结果——伤者姿态从 ff 的"对峙/惊愕"变为"中刀后倒下"，并持续锚定伤处（如"心口处白袍暗红洇痕"）；禁止只写"仰面倒下"却不交代受伤因果。少量血迹可写（暗红/红痕/溅到脸上的血），禁止血迹特写与大面积血腥\n"
 
 3. 关键要求：
    - 这个镜头独立于主分镜，用于吸引观众继续看下去
@@ -577,13 +582,11 @@ def _build_cinematic_vocab() -> str:
 # 构建完整 prompt
 # ========================================================================
 
-def build_prompt(novel_text: str, min_shots: int, max_shots: int, bank=None) -> str:
+def build_prompt(novel_text: str, bank=None) -> str:
     """构建最终发送给 LLM 的 prompt，注入完整镜头语言库 + 扩展词库 + 角色锚点."""
     char_anchors = _build_character_anchors(bank) if bank else "无已知角色"
     prompt = PROMPT_TEMPLATE.format(
         novel_text=novel_text,
-        min_shots=min_shots,
-        max_shots=max_shots,
         character_anchors=char_anchors,
     )
     # 追加镜头语言词库。旧实现把这些词库作为 .format() 的 kwargs 传入，但 PROMPT_TEMPLATE
@@ -652,9 +655,14 @@ def _load_knowledge_skills() -> str:
             parts.append(f"\n\n# Seedance 2.5 运镜提示词（来自 seedance-shot-angles）\n{angles_body}")
 
         # 武侠打斗运镜
-        wuxia_body = mod.read_skill("wuxia-combat")
+        wuxia_body = mod.read_skill("wuxia_combat")
         if wuxia_body:
-            parts.append(f"\n\n# Seedance 2.0 武侠打斗运镜提示词（来自 wuxia-combat）\n{wuxia_body}")
+            parts.append(f"\n\n# Seedance 2.0 武侠打斗运镜提示词（来自 wuxia_combat）\n{wuxia_body}")
+
+        # 故事圣经（世界观/人物/主线设定）
+        bible_body = mod.read_skill("story-bible")
+        if bible_body:
+            parts.append(f"\n\n# 故事圣经（来自 story-bible）\n{bible_body}")
 
         return "".join(parts)
     except Exception:
@@ -719,13 +727,15 @@ def build_hook_prompt(novel_text: str, bank=None) -> str:
 
 
 def parse_hook_response(raw: str) -> dict:
-    """解析钩子分镜生成的原始响应."""
-    import json, re
-    raw = raw.strip()
-    raw = re.sub(r"^```json\s*", "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
-    return json.loads(raw)
+    """解析钩子分镜生成的原始响应（复用 json_repair 的容错解析）.
+
+    裸 json.loads 在 LLM 返回不规范 JSON 时（如字符串未闭合/尾逗号/截断）
+    会直接抛异常导致钩子丢失。改用 safe_parse_json_object 与主分镜同一套
+    六层修复（去围栏/提取子串/常见错误/尾逗号/截断恢复），保证钩子不因
+    轻微格式问题而静默丢失。
+    """
+    from shared.utils.json_repair import safe_parse_json_object
+    return safe_parse_json_object(raw.strip())
 
 
 # 兼容别名
