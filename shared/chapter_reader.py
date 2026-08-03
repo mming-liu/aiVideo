@@ -311,11 +311,13 @@ def _analyze_chapter_scenes(novel_path: str, chapter: int, full_text: str) -> di
 
     try:
         service = create_service()
+        from _text_gen.deepseek_schema import SCENE_ANALYSIS_SCHEMA
         req = TextGenerationRequest(
             system_prompt="你是一个小说编辑，擅长分析剧情结构和场景",
             user_prompt=prompt,
             max_tokens=4000,
             temperature=0.3,
+            json_schema=SCENE_ANALYSIS_SCHEMA,
         )
         print(f"  [场景分析] 正在分析第 {chapter} 章主线场景...")
         result = service.generate(req)

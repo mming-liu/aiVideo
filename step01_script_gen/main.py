@@ -114,6 +114,7 @@ def read_chapter(path: str = "锦衣夜行_77119小说.txt", chapter: int = 1) -
 
 def gen_spy_script(novel_text: str, bank=None) -> str:
     """调用 LLM 生成脚本，返回原始文本."""
+    from _text_gen.deepseek_schema import SCRIPT_SCHEMA
     prompt = build_prompt(novel_text, bank)
     service = create_service()
     req = TextGenerationRequest(
@@ -121,6 +122,7 @@ def gen_spy_script(novel_text: str, bank=None) -> str:
         user_prompt=prompt,
         max_tokens=40000,
         temperature=0.2,  # v6.5: 降低温度防止幻觉
+        json_schema=SCRIPT_SCHEMA,
     )
     _logger.info("[INFO] 正在调用 LLM 生成分镜脚本...")
     _console("  [生成] 正在调用 LLM 生成分镜脚本（18 镜，约需 3-6 分钟）...")
@@ -179,11 +181,13 @@ def gen_hook_script(novel_text: str, bank=None) -> dict | None:
 
     prompt = build_hook_prompt(novel_text, bank=bank)
     service = create_service()
+    from _text_gen.deepseek_schema import HOOK_SCHEMA
     req = TextGenerationRequest(
         system_prompt="你是短视频脚本大师，擅长在视频开头制造悬念和吸引力。禁止血腥暴力细节。",
         user_prompt=prompt,
         max_tokens=8000,
         temperature=0.2,  # v6.5: 降低温度防止幻觉
+        json_schema=HOOK_SCHEMA,
     )
     _logger.info("[INFO] 正在调用 LLM 生成钩子分镜...")
     _console("  [生成] 正在生成钩子分镜（约 30 秒）...")
@@ -329,7 +333,16 @@ def main() -> None:
     script = None
     last_err = None
     for attempt in range(1, 1 + 3):
-        raw = gen_spy_script(novel_text, character_bank)
+        try:
+            raw = gen_spy_script(novel_text, character_bank)
+        except RuntimeError as e:
+            # 生成失败（如 DeepSeek 返回空文本）：短暂等待后重试，而不是中断流水线
+            last_err = e
+            _logger.warn(f"[WARN] LLM 生成失败（尝试 {attempt}/3）: {e}")
+            _console(f"  [重试] LLM 生成失败，重新调用（{attempt}/3）...")
+            import time as _t
+            _t.sleep(5)
+            continue
         try:
             script = parse_response(raw, novel_text=novel_text)
             break
@@ -377,11 +390,13 @@ def main() -> None:
             prompt = prompt + gap_context
 
             service = create_service()
+            from _text_gen.deepseek_schema import SCRIPT_SCHEMA
             req = TextGenerationRequest(
                 system_prompt=SYSTEM_PROMPT,
                 user_prompt=prompt,
                 max_tokens=40000,
                 temperature=0.2,  # v6.5: 降低温度防止幻觉
+                json_schema=SCRIPT_SCHEMA,
             )
             result = service.generate(req)
             if not result.success:

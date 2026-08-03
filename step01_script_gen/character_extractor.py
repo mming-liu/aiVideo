@@ -82,11 +82,13 @@ def extract_characters(novel_text: str, bank: CharacterBank) -> list[dict]:
         novel_text=novel_text,
     )
     service = create_service()
+    from _text_gen.deepseek_schema import CHARACTERS_SCHEMA
     req = TextGenerationRequest(
         system_prompt="你是小说人物分析专家，精确提取出场人物信息。只输出纯JSON，不要任何额外文字。",
         user_prompt=prompt,
         max_tokens=20000,
         temperature=0.3,
+        json_schema=CHARACTERS_SCHEMA,
     )
     result = service.generate(req)
     if not result.success:
