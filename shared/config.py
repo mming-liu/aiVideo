@@ -43,6 +43,11 @@ COMPLIANCE_STRICT = os.getenv("COMPLIANCE_STRICT", "0").strip() == "1"
 COMPLIANCE_AUTO_FIX = os.getenv("COMPLIANCE_AUTO_FIX", "1").strip() == "1"
 GAP_ANALYSIS_ENABLED = os.getenv("GAP_ANALYSIS_ENABLED", "1").strip() == "1"
 GAP_MAX_REGEN_ATTEMPTS = int(os.getenv("GAP_MAX_REGEN_ATTEMPTS", "2"))
+# v6.7: 镜头数严重超限时的有界收敛重生成。
+# 触发条件：实际镜头数 > SHOT_COUNT_MAX（如默认 25）。超限时把「合并冗余镜头」反馈
+# 追加到 prompt 重新生成一次，防止 LLM 输出 32+ 镜拖垮下游（视频生成成本/时长翻倍）。
+# 仍是软收敛：重生成失败或仍超限则保留原版，不中断流水线。
+SHOT_COUNT_REGEN_ENABLED = os.getenv("SHOT_COUNT_REGEN_ENABLED", "1").strip() == "1"
 # CLAUDE.md 记载默认 50000，由 chapter_reader 读取（shared/chapter_reader.py）
 PROMPT_MAX_CHARS = int(os.getenv("PROMPT_MAX_CHARS", "50000"))
 

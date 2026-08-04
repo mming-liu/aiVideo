@@ -178,9 +178,71 @@ def _validate_script(script: dict) -> None:
     if not checklist_result["pass"]:
         print(f"[WARN] 分镜提示词检查表: {len([r for r in checklist_result['results'].values() if not r.get('pass', True)])} 项未通过")
 
+    # v6.7: 内容问题汇总——把「幻觉/语义风险/连续空镜」等真实内容缺陷从几十条
+    # WARN 中单独高亮，便于在批量生成后一眼定位需人工审核的镜头。
+    # （此前这些 [CHECK] 项与大量噪声混在一起，真实问题容易被淹没）
+    _print_content_issue_summary(script, shots)
+
+
+def _print_content_issue_summary(script: dict, shots: list[dict]) -> None:
+    """高亮汇总真实内容缺陷（幻觉、语义风险、连续空镜），与噪声 WARN 区分.
+
+    仅汇总不修复——这些需要 LLM 重新生成或人工判断，静默吞掉会让问题流入下游.
+    """
+    flagged = []
+
+    # 1. 未锚定角色（幻觉）：_check_script_novel_alignment 已检测，这里重扫 prompt 里
+    #    出现「一个[人物]」但 narration 无对应说话人的镜头
+    defined_ids = frozenset(
+        c.get("identifier", "") for c in script.get("characters", []) if c.get("identifier")
+    )
+    unanchored_pat = re.compile(r"一个[\[【]?[^\]】]{1,6}男女[\]】]?")
+    for shot in shots:
+        idx = shot.get("index", "?")
+        prompt = shot.get("prompt", "") or ""
+        m = unanchored_pat.search(prompt)
+        if m:
+            flagged.append(f"镜头{idx}: 画面出现未锚定角色「{m.group(0)}」，可能为幻觉编造")
+
+    # 2. 语义风险关键词（硬性检查项，需人工确认是否合理）
+    for shot in shots:
+        idx = shot.get("index", "?")
+        search_text = " ".join([
+            shot.get("prompt", ""), shot.get("subtitle", ""),
+            shot.get("narration_segment", ""),
+        ])
+        found = [kw for kw in _SEMANTIC_RISK_KEYWORDS if kw in search_text]
+        if found:
+            flagged.append(f"镜头{idx}: 语义风险关键词 {found}（需人工确认是否保留）")
+
+    # 3. 连续空镜（事件轴分布硬性检查项）
+    empty_subjects = {"空镜", "荷塘", "日落", "日出", "山", "水", "湖", "田野", "村庄"}
+    run = 0
+    for shot in shots:
+        if any(s in (shot.get("main_subject", "") or "") for s in empty_subjects):
+            run += 1
+        else:
+            run = 0
+        if run == 2:
+            flagged.append(f"镜头{shot.get('index', '?')} 起连续空镜，建议合并为 1 个空镜")
+            run = 0  # 只报一次
+
+    if flagged:
+        print("\n[重点] 内容问题汇总 - 以下为需人工审核的真实缺陷:")
+        for item in flagged:
+            print(f"  [CHECK] {item}")
+        print("[重点] 上述内容问题已标记，建议确认后继续下游\n")
+    else:
+        print("\n[OK] 内容问题汇总: 未发现幻觉/语义风险/连续空镜缺陷")
+
 
 def _check_shot_size_diversity(shots: list[dict]) -> None:
-    """校验镜头景别多样性：至少 ceil(N/2) 种不同景别，无相邻同景别."""
+    """校验镜头景别多样性：至少覆盖词表半数景别，无相邻同景别.
+
+    注意：词表 storyboard_refs.SHOT_SIZES 实际只有 9 种可用景别，
+    旧逻辑要求 ceil(N/2) 种（32 镜要 16 种）超出词表上限，结构性永远
+    无法达标，造成大量误报刷屏。改为「覆盖词表半数」（5 种）即可。
+    """
     shot_sizes_used = []
     for shot in shots:
         prompt = shot.get("prompt", "")
@@ -193,12 +255,25 @@ def _check_shot_size_diversity(shots: list[dict]) -> None:
         shot_sizes_used.append(found)
 
     unique_sizes = len(set(s for s in shot_sizes_used if s))
-    min_required = max(3, -(len(shots) // -2))  # ceil(N/2)
+    # 词表上限 9 种，取半数（ceil(9/2)=5）作为多样性要求，不随镜头数线性增长
+    min_required = min(5, max(3, -(len(storyboard_refs.SHOT_SIZES) // -2)))
     if unique_sizes < min_required:
         print(f"[WARN] 景别多样性不足：{unique_sizes} 种（{shot_sizes_used}），要求至少 {min_required} 种")
+    # 相邻同景别：聚合连续 run，避免一屏刷 N 行相同警告（对话/打斗连续镜同景别是正常剪辑）
+    run_start = None
+    run_sz = None
     for i in range(len(shot_sizes_used) - 1):
         if shot_sizes_used[i] and shot_sizes_used[i] == shot_sizes_used[i + 1]:
-            print(f"[WARN] 镜头{i+1}与镜头{i+2}景别重复（{shot_sizes_used[i]}）")
+            if run_sz is None:
+                run_start, run_sz = i + 1, shot_sizes_used[i]
+            # 检查是否同一连续 run 结束
+            if i + 2 >= len(shot_sizes_used) or shot_sizes_used[i + 1] != shot_sizes_used[i + 2]:
+                run_end = i + 2
+                if run_end - run_start + 1 >= 3:  # 3 镜以上连续同景别才提示
+                    print(f"[WARN] 镜头{run_start}~{run_end}连续{run_end - run_start + 1}镜景别相同（{run_sz}），建议插入景别变化")
+                run_start, run_sz = None, None
+        else:
+            run_start, run_sz = None, None
 
 
 def _check_prompt_subtitle_alignment(shot_idx: int, subtitle: str, search_text: str) -> None:
@@ -607,6 +682,9 @@ def _check_shot_transition(shots: list[dict]) -> dict:
     """检查镜头衔接（检查项4）：本镜结束画面与下一镜开始画面的衔接."""
     issues = []
     warnings = []
+    # 连续同地点缺衔接词的 run 聚合（同一场景连续对话/打斗缺衔接词是正常剪辑，
+    # 逐镜刷屏无增量信息；聚合为一条，注明连续镜范围）
+    same_loc_runs = []  # (start_idx, end_idx, loc)
 
     for i in range(len(shots) - 1):
         curr_shot = shots[i]
@@ -638,11 +716,20 @@ def _check_shot_transition(shots: list[dict]) -> dict:
             if curr_loc and next_loc and curr_loc != next_loc:
                 # 地点切换时可以没有强衔接词
                 pass
-            elif curr_loc == next_loc and not has_bridge:
-                warnings.append(
-                    f"镜头{curr_idx}→{next_idx}: 同一地点({curr_loc})但缺少衔接词，"
-                    f"可能画面跳跃"
-                )
+            elif curr_loc and curr_loc == next_loc and not has_bridge:
+                # 聚合连续同地点 run：同一 run 只在边界汇总，避免刷屏
+                if same_loc_runs and same_loc_runs[-1][1] == curr_idx and same_loc_runs[-1][2] == curr_loc:
+                    same_loc_runs[-1][1] = next_idx
+                else:
+                    same_loc_runs.append([curr_idx, next_idx, curr_loc])
+
+    # 连续同地点缺衔接词的 run 只报一条（≥3 镜才提示；1-2 镜是正常剪辑节奏）
+    for start_idx, end_idx, loc in same_loc_runs:
+        if isinstance(start_idx, int) and isinstance(end_idx, int) and end_idx - start_idx >= 2:
+            warnings.append(
+                f"镜头{start_idx}→{end_idx}: 连续{end_idx - start_idx + 1}镜同一地点({loc})"
+                f"但缺少衔接词，可能画面跳跃"
+            )
 
     if issues:
         for issue in issues:
@@ -713,10 +800,13 @@ def _check_gaze_direction(shots, hook: dict = None) -> dict:
     这类无视线归属的表情，多人惊恐就没了来由）.
     v6.9: 误报过滤——「向」后紧跟纯方位词（向上/向后/向一侧）是运动/动作
     用法而非视线，不再提示；正则终止于分号/括号，避免跨句截断.
+    v6.7: 触发词聚焦真正的视线动词。「向/朝」多为运动/站位/说话对象介词
+    （朝杨旭站立、向船梢、向听香张嘴质问），被当成视线造成大量误报，
+    移出触发集，只保留 看/盯/望/视/瞧/瞄 等视线动词.
     """
     issues, warnings = [], []
-    # 终止于中文标点，避免跨句捕获
-    wrong_pattern = re.compile(r'[看盯望向朝][^，。,\.；;：:（()）【】]{0,10}')
+    # 终止于中文标点，避免跨句捕获；触发词只含真正的视线动词
+    wrong_pattern = re.compile(r'[看盯望瞧瞄注视][^，。,\.；;：:（()）【】]{0,10}')
     correct_dirs = {'画左', '画右', '画上方', '画下方', '画前', '画后'}
     # 「向」+ 纯方位/动作词 = 运动用法，不是视线（如向上冲出/抓向船舷/偏向一侧）
     motion_after = re.compile(r'^向[上下左右前后内外旁中一侧过身]')

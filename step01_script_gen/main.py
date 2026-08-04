@@ -31,6 +31,7 @@ from shared.config import (
     COMPLIANCE_STRICT, COMPLIANCE_AUTO_FIX,
     HOOK_ENABLED,
     GAP_ANALYSIS_ENABLED, GAP_MAX_REGEN_ATTEMPTS,
+    SHOT_COUNT_REGEN_ENABLED,
 )
 
 # 输出目录基于 book/chapter 计算（统一路径来源: shared/paths.py）
@@ -223,7 +224,107 @@ def gen_hook_script(novel_text: str, bank=None, objects_bank=None) -> dict | Non
 
 
 # ============================================================================
-# 5. 主流程
+# 5. 镜头数超限收敛重生成（v6.7 新增）
+# ============================================================================
+
+def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=None,
+                      max_attempts: int = 2) -> dict:
+    """镜头数严重超限时，反馈给 LLM 合并冗余镜头，重新生成一次（软收敛）.
+
+    与 gap_analysis 相互独立：这里只看「镜头数/总时长」超限，不校验内容分布。
+    仍超限或 JSON 解析失败时保留原版，不中断流水线（下游有 TTS rate / merge
+    truncation / stretch cap 兜底，v4.1 哲学是镜头数交 LLM，此处只收敛废输出）。
+
+    Returns:
+        重新生成且通过校验的 script；否则返回原 script。
+    """
+    from shared.config import SHOT_COUNT_MAX
+
+    shots = script.get("shots", [])
+    total_duration = float(script.get("total_duration", 0) or 0)
+    over_max = len(shots) > SHOT_COUNT_MAX
+
+    for attempt in range(1, 1 + max_attempts):
+        if not over_max:
+            break
+
+        current = len(script.get("shots", []))
+        _logger.warn(
+            f"[COUNT] 镜头数 {current} 超上限 {SHOT_COUNT_MAX}，"
+            f"反馈 LLM 合并冗余镜头（尝试 {attempt}/{max_attempts}）..."
+        )
+        _console(f"  [收敛] 镜头数 {current} 超上限 {SHOT_COUNT_MAX}，重新生成精简版（{attempt}/{max_attempts}）...")
+
+        # 反馈上下文：镜头数与总时长双重提示，要求合并同场景/冗余过渡镜头
+        from shared.config import SHOT_COUNT_MAX as _max
+        feedback = (
+            f"\n\n# 镜头数收敛反馈（来自本地校验）\n"
+            f"当前生成的镜头数为 {current} 个、总时长 {total_duration:.0f} 秒，"
+            f"超过上限 {_max} 个镜头。短视频平台成片以 60 秒为佳。\n"
+            f"请重新生成，严格做到：\n"
+            f"1. 合并同场景连续镜头（同一地点、连续动作、多镜一拍）\n"
+            f"2. 删减冗余过渡镜头与重复表达的空镜\n"
+            f"3. 确保镜头数 ≤ {_max}，总时长控制在 110 秒以内\n"
+            f"4. 保留全部关键剧情节点与高潮部分，不要删剧情，只合并冗余\n"
+        )
+        prompt = build_prompt(novel_text, bank, objects_bank)
+        prompt = prompt + feedback
+
+        service = create_service()
+        from _text_gen.deepseek_schema import SCRIPT_SCHEMA
+        req = TextGenerationRequest(
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=prompt,
+            max_tokens=40000,
+            temperature=0.2,
+            json_schema=SCRIPT_SCHEMA,
+        )
+        try:
+            result = service.generate(req)
+        except Exception as e:
+            _logger.warn(f"[WARN] 收敛重生成失败: {e}，保留原版")
+            break
+        if not result.success:
+            _logger.warn(f"[WARN] 收敛重生成失败: {result.error}，保留原版")
+            break
+
+        import re
+        raw = result.text.strip()
+        raw = re.sub(r"^```json\s*", "", raw, flags=re.MULTILINE)
+        raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
+        raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
+
+        try:
+            new_script = parse_response(raw, novel_text=novel_text)
+        except (ValueError, json.JSONDecodeError) as e:
+            _logger.warn(f"[WARN] 收敛重生成 JSON 解析失败，保留原版: {e}")
+            break
+
+        new_shots = new_script.get("shots", [])
+        if not new_shots:
+            _logger.warn("[WARN] 收敛重生成返回空 shots，保留原版")
+            break
+
+        # 收敛有效：替换并重算时间轴
+        script = new_script
+        _compute_timecodes(script)
+        total_duration = float(script.get("total_duration", 0) or 0)
+        if len(new_shots) <= SHOT_COUNT_MAX:
+            _logger.info(
+                f"[COUNT] 收敛成功: {current} → {len(new_shots)} 镜, "
+                f"总时长 {total_duration:.0f}s"
+            )
+        over_max = len(new_shots) > SHOT_COUNT_MAX
+
+    if over_max:
+        _logger.warn(
+            f"[COUNT] 重试 {max_attempts} 次后镜头数仍超上限，保留当前版本继续流水线"
+        )
+    return script
+
+
+# ============================================================================
+# 6. 主流程
 # ============================================================================
 
 def main() -> None:
@@ -243,7 +344,9 @@ def main() -> None:
 
     # 运行期间 print() 全部重定向到 step01.log，控制台静默
     # 最终摘要用 _console() 写 _REAL_STDOUT（模块级保存的真实 stdout）
+    # 同时让 logger 控制台输出静默，避免 logger.print 经重定向回流日志造成双写
     sys.stdout = _redirect_to_log()
+    _logger.console_silent = True
 
     # 读取章节
     novel_text = read_chapter("锦衣夜行_77119小说.txt", chapter=NOVEL_CHAPTER)
@@ -255,10 +358,13 @@ def main() -> None:
 
     # 预提取本章角色信息，辅助分镜生成（v6.1 新增）
     # 这样 LLM 生成脚本时能看到本章新角色的特征描述
+    # 预提取结果存到 pre_extracted_chars，主流程后段（角色提取）直接复用，避免二次 LLM 调用
+    pre_extracted_chars = None
     if CHARACTER_EXTRACTION_ENABLED:
         _logger.info("[INFO] 预提取本章角色信息以辅助分镜生成...")
         try:
             chars = extract_characters(novel_text, character_bank)
+            pre_extracted_chars = chars
             # 注册新角色到 bank（暂存本章角色，供生成时使用）
             for c in chars:
                 ident = c.get("identifier", "")
@@ -325,6 +431,7 @@ def main() -> None:
         _logger.info("时间轴已重新计算")
         # 缓存命中：恢复 stdout 并显示最终摘要
         sys.stdout = _REAL_STDOUT
+        _logger.console_silent = False
         shots = script.get("shots", [])
         _console("")
         _console("=" * 56)
@@ -444,6 +551,13 @@ def main() -> None:
             # 达到最大尝试次数仍有问题，记录但不中断
             _logger.warn("[GAP] 达到最大重试次数，仍有差距问题，将继续处理")
 
+    # v6.7: 镜头数严重超限时收敛重生成（独立于 gap_analysis，默认开启）
+    if SHOT_COUNT_REGEN_ENABLED:
+        script = _regen_over_limit(
+            script, novel_text,
+            bank=character_bank, objects_bank=scene_objects_bank,
+        )
+
     # 后处理：注入全局配置 + 合规过滤 + 敏感词校验
     script = _post_process(script)
 
@@ -459,9 +573,14 @@ def main() -> None:
 
     # 提取角色（跨章节一致性）
     if CHARACTER_EXTRACTION_ENABLED:
-        _logger.info("[INFO] 提取角色信息...")
-        # 复用预提取的 character_bank，角色库已在预提取阶段保存（第206行）
-        chars = extract_characters(novel_text, character_bank)
+        if pre_extracted_chars is not None:
+            # 复用预提取结果，避免二次 LLM 调用（角色库已在预提取阶段保存）
+            chars = pre_extracted_chars
+            _logger.info(f"[INFO] 复用预提取的 {len(chars)} 个角色")
+        else:
+            # 预提取阶段失败时才重新提取
+            _logger.info("[INFO] 提取角色信息...")
+            chars = extract_characters(novel_text, character_bank)
         script["characters"] = chars
         # 注意：角色库已在预提取阶段保存，无需重复保存
         _logger.info(f"[INFO] 已提取 {len(chars)} 个角色")
@@ -523,6 +642,7 @@ def main() -> None:
 
     # 恢复 stdout
     sys.stdout = _REAL_STDOUT
+    _logger.console_silent = False
 
 
 
@@ -537,6 +657,7 @@ if __name__ == "__main__":
             _logger.verbose(line)
         # 恢复真实 stdout，控制台显示一行错误摘要
         sys.stdout = _REAL_STDOUT
+        _logger.console_silent = False
         last = tb.strip().splitlines()[-1]
         _logger.error(f"[FATAL] {last}")
         sys.exit(1)

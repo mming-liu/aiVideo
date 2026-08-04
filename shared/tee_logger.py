@@ -52,6 +52,9 @@ class TeeLogger:
         self.console_level = self._LEVELS.get(console_level.upper(), 30)
         self.auto_timestamp = auto_timestamp
         self._fp: Optional[object] = None
+        # 静默控制台：stdout 被重定向到日志时置 True，避免 logger 的 print
+        # 回流日志文件造成每条消息双写（see step01 main.py _redirect_to_log）
+        self.console_silent = False
 
         # 确保目录存在
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,7 +83,7 @@ class TeeLogger:
     def log(self, msg: str, level: str = "INFO"):
         """写日志（文件 + 控制台，按 level 决定是否写控制台）."""
         self._write_file(msg)
-        if self._should_console(level):
+        if self._should_console(level) and not self.console_silent:
             try:
                 print(msg)
             except UnicodeEncodeError:

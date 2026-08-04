@@ -79,19 +79,31 @@ _SCENE_REF_WORDS = (
 
 
 def _load_character_registry() -> dict:
-    """从 character_portraits_registry.json 加载角色注册表（存在时）.
+    """加载角色注册表（存在时）.
 
-    注册表格式：{角色名: {front/side/back: {path, description}}}，
-    由 character_bank 在 step02a/step02b 启动时写入工作目录。
+    优先级：工作目录的 character_portraits_registry.json（step02a/step02b 启动时
+    由 character_bank 写入，含最新动态特征）→ CharacterBank 全角色导出
+    （新章节直接跑 step02b 时工作目录还没有 registry，回退到全书级持久化 bank）.
+
+    注册表格式：{角色名: {front/side/back: {path, description}}}.
     """
     try:
         from shared.paths import vimax_working_dir
         registry_path = vimax_working_dir() / "character_portraits_registry.json"
-        if not registry_path.exists():
-            return {}
-        with open(registry_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        if registry_path.exists():
+            with open(registry_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if data:
+                return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    # 回退：全书级 CharacterBank（跨章持久化，路径为绝对路径）
+    try:
+        from shared.character_bank import CharacterBank
+        bank = CharacterBank()
+        bank.load()
+        reg = bank.get_all_portraits_as_registry()
+        return reg if isinstance(reg, dict) else {}
     except Exception:
         return {}
 
@@ -502,11 +514,16 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         # 不传首帧/尾帧/关键帧。此前 r2v 参考图被按位置塞进 image_path/last_frame/
         # extra_keyframes（首帧/尾帧时间语义），而 bailian R2V 只看 reference_paths——
         # 参考图语义从未真正到达 provider。此处显式归位。
+        # 参考图由本函数权威收集（出镜角色肖像，视角匹配，最多5个）：
+        # 调用方传 frame_paths 时收集的是不存在的 keyframes/ 子目录（step02b 旧逻辑），
+        # 或与 bailian「reference_paths ≤5」约定冲突的首帧/尾帧/关键帧——一律忽略，
+        # 只以 registry 肖像为准，避免 r2v 参考图静默断链（code-audit 08-04）。
         extra_keyframe_paths = []
-        reference_paths = [
-            p for p in (frame_paths or [])
-            if p and Path(p).exists()
-        ]
+        image_path = None
+        last_frame_image_path = None
+        reference_paths = _collect_r2v_references(
+            shot, characters=characters or [], registry=_load_character_registry(),
+        )
     else:
         # 图生视频模式：使用帧图片作为参考
         reference_paths = []
@@ -576,6 +593,64 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         extra_keyframe_paths=extra_keyframe_paths,
         reference_paths=reference_paths,
     )
+
+
+def _collect_r2v_references(shot: dict, characters: list | None = None,
+                            registry: dict | None = None,
+                            limit: int = 5) -> list[str]:
+    """收集 r2v 模式的参考图（角色肖像，最多 limit 个）.
+
+    r2v 模式的参考图来自 character_portraits_registry.json 中「本镜头实际
+    出镜角色」的肖像（front/side/back），按出现顺序 + 视角词（背面/侧面/
+    正面）匹配最合适视图；注册表缺失时回退到出镜角色存在的前/侧/背任意一张。
+    空镜（画面禁止人物）返回空列表——肖像会诱导模型把人物画进空镜。
+
+    与 _select_best_reference 的区别：后者为图生图（首帧/尾帧）选单张最优，
+    且可能回退到风格锚点；r2v 需要多张并只认角色肖像（风格锚点对角色一致性
+    无意义）。返回空列表时由 _make_request 降级为纯文生视频。
+    """
+    if is_empty_scene(shot, characters or []):
+        return []
+
+    registry = registry if registry is not None else _load_character_registry()
+    if not registry:
+        return []
+
+    search_text = " ".join([
+        shot.get("ff_desc", "").strip() or "",
+        shot.get("motion_desc", "").strip() or shot.get("prompt", ""),
+        shot.get("lf_desc", "").strip() or "",
+    ])
+    view_pref = "front"
+    for kw in ("背面", "背影", "背向", "背对", "背身", "后背", "背朝"):
+        if kw in search_text:
+            view_pref = "back"
+            break
+    for kw in ("侧身", "侧面", "侧脸", "侧目", "半侧", "侧对", "侧立"):
+        if kw in search_text:
+            view_pref = "side"
+            break
+
+    refs: list[str] = []
+    for ch in (characters or []):
+        ident = ch.get("identifier", "")
+        if not ident or ident not in search_text:
+            continue
+        views = registry.get(ident)
+        if not views:
+            continue
+        picked = None
+        for view in [view_pref, "front", "side", "back"]:
+            p = views.get(view, {})
+            path = p.get("path", "") if isinstance(p, dict) else ""
+            if path and Path(path).exists():
+                picked = path
+                break
+        if picked and picked not in refs:
+            refs.append(picked)
+            if len(refs) >= limit:
+                break
+    return refs
 
 
 def _find_fallback_reference(working_dir: Path, shot: dict | None = None,
