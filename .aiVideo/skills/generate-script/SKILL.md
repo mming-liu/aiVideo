@@ -21,6 +21,7 @@ description: "将小说章节转化为视听同步的动漫电影级分镜脚本
 - [references/color-psychology.md](references/color-psychology.md) — 色彩心理学
 - [references/film-genres.md](references/film-genres.md) — 影片类型库
 - [references/veo-jimeng-guide.md](references/veo-jimeng-guide.md) — Veo/即梦双平台提示词最佳实践
+- [references/face-expressions.md](references/face-expressions.md) — 动漫角色面部表情提示词库（50种，情绪词→具象面部模板，与情绪可视化规则配套）
 
 分镜模板见 [template.md](template.md)。
 

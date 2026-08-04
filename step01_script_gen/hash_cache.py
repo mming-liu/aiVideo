@@ -13,8 +13,13 @@ import hashlib
 import json
 
 
-def _hash_source(build_py_path: str, novel_preview: str, chapter: int) -> str:
-    """计算源内容指纹（用于缓存比对）."""
+def _hash_source(build_py_path: str, novel_preview: str, chapter: int,
+                 objects_bank_data: str = "") -> str:
+    """计算源内容指纹（用于缓存比对）.
+
+    objects_bank_data: 场景物体库序列化内容——场景物体锚点已注入 prompt，
+    物体尺寸/容量/结构变化时应视为源变更、重新生成脚本（v6.6）.
+    """
     h = hashlib.sha256()
     build_py = Path(build_py_path)
     if build_py.exists():
@@ -22,10 +27,12 @@ def _hash_source(build_py_path: str, novel_preview: str, chapter: int) -> str:
             h.update(f.read())
     h.update(novel_preview.encode())
     h.update(str(chapter).encode())
+    h.update(objects_bank_data.encode())
     return h.hexdigest()[:16]
 
 
-def _prompt_changed(build_py: Path, script_json: Path, novel_preview: str, chapter: int) -> bool:
+def _prompt_changed(build_py: Path, script_json: Path, novel_preview: str, chapter: int,
+                    objects_bank_data: str = "") -> bool:
     """检测 prompt 是否变更（通过源文件 hash 比对）."""
     if not script_json.exists():
         return True
@@ -34,7 +41,7 @@ def _prompt_changed(build_py: Path, script_json: Path, novel_preview: str, chapt
         with open(script_json, "r", encoding="utf-8") as f:
             old_script = json.load(f)
         old_hash = old_script.get("_source_hash", "")
-        new_hash = _hash_source(str(build_py), novel_preview, chapter)
+        new_hash = _hash_source(str(build_py), novel_preview, chapter, objects_bank_data)
         return new_hash != old_hash
     except Exception:
         return True

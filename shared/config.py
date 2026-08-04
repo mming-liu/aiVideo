@@ -36,6 +36,8 @@ BOOK_NAME = os.getenv("BOOK_NAME", "杀青州")
 SHOT_COUNT_MIN = int(os.getenv("SHOT_COUNT_MIN", "4"))
 SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "40"))
 CHARACTER_EXTRACTION_ENABLED = os.getenv("CHARACTER_EXTRACTION_ENABLED", "1").strip() == "1"
+# v6.6: 场景物体尺寸提取（从原文上下文推导船/车/厅堂等的合理尺寸，替代硬编码，防止画面比例漂移）
+SCENE_OBJECT_EXTRACTION_ENABLED = os.getenv("SCENE_OBJECT_EXTRACTION_ENABLED", "1").strip() == "1"
 HOOK_ENABLED = os.getenv("HOOK_ENABLED", "1").strip() == "1"
 COMPLIANCE_STRICT = os.getenv("COMPLIANCE_STRICT", "0").strip() == "1"
 COMPLIANCE_AUTO_FIX = os.getenv("COMPLIANCE_AUTO_FIX", "1").strip() == "1"

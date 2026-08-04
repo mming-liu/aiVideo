@@ -44,7 +44,7 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 - `BOOK_INDEX`: 部序号（小说内第几部，默认1）
 - `BOOK_NAME`: 部名（拼入目录名，如 part_01_杀青州）
 - `PROMPT_MAX_CHARS`: 传给 LLM 的原文上限（默认50000，传递完整章节）
-- `SHOT_COUNT_MIN/MAX`: 分镜数范围（默认8-20）
+- `SHOT_COUNT_MIN/MAX`: 分镜数范围（默认8-20，v4.1 起仅作 validation 软护栏，不进入 prompt）
 - `VIDEO_PROVIDER`: 视频生成供应商（默认agnes）
 - `IMAGE_PROVIDER`: 图片生成供应商（默认agnes）
 - `TEXT_PROVIDER`: 文本生成供应商（默认deepseek）
@@ -89,6 +89,13 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 - **ABC 接口 + 工厂注册表**：通过 `.env` 中的 PROVIDER 切换
 - **Config 单例**：各包的 `config.py` 从 `.env` 加载
 - **Dataclass 模型**：请求和结果用 dataclass 定义
+
+### DeepSeek 文本生成（`_text_gen/`）
+- **Responses API**（`deepseek-v4-flash`）：`POST /responses`，`reasoning.effort=none` 关闭思考 + strict `json_schema` 结构化输出
+- **JSON Schema** 定义在 `_text_gen/deepseek_schema.py`（SCRIPT/HOOK/CHARACTERS/SCENE_ANALYSIS 四个）
+- 请求结构：`text.format = {type: "json_schema", name, schema}`（漏 `type` 报 400）
+- 正文从响应 `output[]` 的 `message.output_text` 提取；`status=incomplete` → `incomplete_details.reason` 诊断截断
+- 非 v4-flash 模型回退 `chat.completions`
 
 ### 章节提取
 - 小说文件：`锦衣夜行_77119小说.txt`（UTF-8编码；`.bak` 为 GBK 原件）

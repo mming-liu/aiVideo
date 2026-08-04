@@ -45,6 +45,249 @@ def _extract_characters_from_desc(desc: str, characters: list) -> list:
     return found
 
 
+# ========================================================================
+# 豆包 Fast 模板吸收（2026-08-04）：参考图清单 / 人物站位清单 / 场景时间
+# ========================================================================
+
+_TIME_WORDS = (
+    "黎明", "破晓", "清晨", "早晨", "早上", "朝阳", "旭日",
+    "正午", "中午", "午后", "下午", "傍晚", "黄昏", "日落", "夕阳",
+    "入夜", "夜晚", "深夜", "午夜", "月夜", "星光",
+)
+
+
+def _detect_time_of_day(text: str) -> str:
+    """从画面描述中探测时间段（晨/午/暮/夜），未命中返回空串."""
+    if not text:
+        return ""
+    for w in _TIME_WORDS:
+        if w in text:
+            return w
+    return ""
+
+
+# 场景/环境词表：用于区分 r2v 参考图是「场景参考」还是「人物参考」。
+# 命中这些词的参考图 → 用途标注「场景/环境参考」；否则按角色注册表标注人物用途。
+_SCENE_REF_WORDS = (
+    "场景", "环境", "背景", "地点", "场景", "风景", "景色", "山水", "湖面", "水面",
+    "荷塘", "池塘", "庭院", "回廊", "楼阁", "屋檐", "屋宇", "屋顶", "城墙", "城门",
+    "街道", "市集", "田野", "田埂", "村庄", "山寨", "山峦", "山崖", "山谷", "树林",
+    "竹林", "森林", "江河", "河流", "瀑布", "石桥", "拱桥", "木桥", "小舟", "船",
+    "马车", "花轿", "轿子", "月亮", "月光", "夜空", "星空", "天边", "夕阳", "黄昏",
+    "烛火", "灯笼", "灯光", "屋内", "室内", "大堂", "殿内", "书房", "卧室", "城墙头",
+)
+
+
+def _load_character_registry() -> dict:
+    """从 character_portraits_registry.json 加载角色注册表（存在时）.
+
+    注册表格式：{角色名: {front/side/back: {path, description}}}，
+    由 character_bank 在 step02a/step02b 启动时写入工作目录。
+    """
+    try:
+        from shared.paths import vimax_working_dir
+        registry_path = vimax_working_dir() / "character_portraits_registry.json"
+        if not registry_path.exists():
+            return {}
+        with open(registry_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _classify_reference_purpose(path: str, shot: dict, registry: dict,
+                                characters: list) -> str:
+    """为一张 r2v 参考图判定用途标签（seedance2-skill @引用语义吸收）.
+
+    判定优先级：
+    1. 路径文件名含角色名 → 该角色的人物形象参考
+    2. 路径属于注册表里某角色的肖像（front/side/back）→ 该角色的人物形象参考
+    3. 参考图父目录名 = 角色名（characters_bank/{角色}/）→ 该角色人物参考
+    4. 镜头的 ff_desc/prompt 中出现的角色里，谁命中路径 → 该角色参考
+    5. 都不命中 → 按镜头场景/环境词判定为场景参考，否则兜底「一致性参考」
+
+    最终用途说明显式写清角色/场景用途，避免模型把人物肖像当场景、把场景
+    参考当人物（seedance2-skill 避坑第1条「引用模糊」）。
+    """
+    from pathlib import Path as _P
+    name = _P(path).name
+    stem = _P(path).stem
+
+    # 1. 文件名直接含角色名（如 杨旭_front.png）
+    for ch in characters:
+        ident = ch.get("identifier", "")
+        if ident and ident in (name, stem):
+            return f"角色「{ident}」人物形象参考，图中人物五官、发型、服装以参考图为准"
+    for ident in registry:
+        if ident and ident in (name, stem):
+            return f"角色「{ident}」人物形象参考，图中人物五官、发型、服装以参考图为准"
+
+    # 2. 路径属于注册表某角色的肖像
+    for ident, views in registry.items():
+        if not ident:
+            continue
+        for view_data in views.values():
+            if not isinstance(view_data, dict):
+                continue
+            p = view_data.get("path", "")
+            if p and str(p).replace("\\", "/") == str(path).replace("\\", "/"):
+                return f"角色「{ident}」人物形象参考，图中人物五官、发型、服装以参考图为准"
+
+    # 3. 父目录名 = 角色名（characters_bank/{角色}/...）
+    parent_dir = _P(path).parent.name
+    for ch in characters:
+        ident = ch.get("identifier", "")
+        if ident and parent_dir == ident:
+            return f"角色「{ident}」人物形象参考，图中人物五官、发型、服装以参考图为准"
+
+    # 4. keyframes 目录中的帧图：仅当 main_subject 是已知角色时按该角色标注。
+    #    不猜——路径不含角色名的帧图，无法确定其内容，宁可落到场景/一致性兜底，
+    #    也不能硬扣一个角色（避免人物参考被误标，或场景帧被错标成人物）。
+    ms = shot.get("main_subject", "").strip()
+    if ms and ("keyframes" in str(path) or "kf" in str(path).lower()):
+        for ch in characters:
+            if ch.get("identifier") and ch["identifier"] == ms:
+                return f"角色「{ms}」人物形象参考，图中人物五官、发型、服装以参考图为准"
+
+    # 5. 兜底：场景/环境 或 一致性
+    scene_probe = " ".join([shot.get("location", ""), shot.get("scene", ""),
+                            shot.get("ff_desc", ""), shot.get("prompt", "")])
+    if any(w in scene_probe for w in _SCENE_REF_WORDS):
+        return "场景/环境参考，图中环境、光线、空间布局以参考图为准"
+    return "一致性参考，图中人物与场景风格以参考图为准"
+
+
+def _build_r2v_purpose_list(shot: dict, registry: dict = None,
+                            characters: list | None = None,
+                            ref_paths: list | None = None) -> str:
+    """构建 r2v 参考图逐图用途清单（seedance2-skill @引用语义吸收）.
+
+    与运行时 _build_reference_list（豆包模板吸收）不同：后者只声明首帧/尾帧/
+    关键帧的时间语义；本函数针对 r2v 模式给**每一张参考图**标注具体用途
+    （人物形象/场景/道具/一致性），实现 seedance2-skill 的「@图片N 作为XX」。
+    无注册表信息时回退为通用「一致性参考」声明，不丢原有语义。
+
+    shot: 当前镜头 dict
+    registry: character_portraits_registry.json 内容（可选）
+    characters: script["characters"]（可选，用于角色名匹配）
+    ref_paths: 实际传入 provider 的 reference_paths 列表（r2v 模式的参考图）
+    """
+    registry = registry if registry is not None else _load_character_registry()
+    characters = characters or []
+    refs = []
+    for p in (ref_paths or []):
+        if not p or not Path(p).exists():
+            continue
+        purpose = _classify_reference_purpose(str(p), shot, registry, characters)
+        refs.append(f"- {Path(p).name}：{purpose}")
+    if not refs:
+        return ""
+    head = ("【参考图用途】以下每张参考图用途不同，严格按标注用途取用：\n"
+            "  人物参考只取人物特征，场景参考只取环境光线，"
+            "禁止把人物参考当场景、把场景参考当人物。")
+    return head + "\n" + "\n".join(refs)
+
+
+def _build_scene_environment(shot: dict) -> str:
+    """构建场景时间环境标注（豆包模板吸收 #3）.
+
+    视频 prompt 开头锚定「地点 + 时间段」，给模型一个早期空间基准。
+    时间段从 ff_desc/prompt 的已有描写中探测，不新增内容、不写死。
+    """
+    location = shot.get("location", "") or shot.get("scene", "")
+    if not location:
+        return ""
+    probe = f"{shot.get('ff_desc', '')} {shot.get('prompt', '')}"
+    t = _detect_time_of_day(probe)
+    if t:
+        return f"【场景环境】{location}，{t}"
+    return f"【场景环境】{location}"
+
+
+def _build_character_layout_block(shot: dict, characters: list) -> str:
+    """构建「人物站位清单」区块（豆包模板吸收 #2）.
+
+    逐角色列出镜头开场画面实际出现的角色及其身份特征，显式枚举 + 身份锚定，
+    防止视频模型多人镜头漏人/错位/脑补陌生人（与 ff_desc 的完整静态布局同源，
+    此处把它抽成逐角色清单强化遵循度）。
+
+    只基于 ff_desc + main_subject 判定开场在场角色（晚进场的角色由 motion_desc
+    描述其登场，不锁进开场清单，避免过度约束）。情绪只允许具象动作，禁止
+    抽象情绪词（遵守 SYSTEM_PROMPT 规则 17.2，不倒退到豆包式的「悲伤/愤怒」）。
+    空镜无角色，返回空串。
+    """
+    probe = " ".join([shot.get("ff_desc", ""), shot.get("main_subject", "")])
+    if not probe:
+        return ""
+    appearing = [c for c in characters
+                 if c.get("identifier") and c["identifier"] in probe]
+    if not appearing:
+        return ""
+
+    lines = []
+    for c in appearing:
+        ident = c["identifier"]
+        feats = [f for f in (c.get("static_features", ""), c.get("dynamic_features", "")) if f]
+        if feats:
+            lines.append(f"- {ident}：{'，'.join(feats)}，位置/朝向/动作以视频起点描述为准")
+        else:
+            lines.append(f"- {ident}：位置/朝向/动作以视频起点描述为准")
+
+    return (
+        "【人物站位清单】本镜头开场画面包含以下角色，必须在开场画面中正确出现，"
+        "不得缺失、错位或替换为他人，位置/朝向/动作与视频起点描述一致，"
+        "角色间视线方向相互吻合；各角色情绪用具体面部与肢体动作表现"
+        "（瞪眼/垂眸/攥拳/肩背起伏等），禁止抽象情绪词。\n"
+        + "\n".join(lines)
+    )
+
+
+def _build_reference_list(image_path, last_frame_image_path, extra_keyframe_paths,
+                          mode: str = "A", ref_kind: str = "image") -> str:
+    """构建「参考图清单」声明（豆包模板吸收 #1）.
+
+    让视频模型明确每张传入参考图的语义：首帧起点 / 尾帧终点 / 关键帧 /
+    r2v 角色一致性参考。不声明时模型可能把首帧当角色参考图、把关键帧当
+    尾帧，造成构图混乱。text 模式无参考图，返回空串。
+
+    ref_kind: "image"（图生视频，帧图有明确时间语义）或 "r2v"（参考生视频，
+      参考图只作角色/道具/场景一致性锚定，无时间语义）。
+    """
+    n = 1
+    refs = []
+    if ref_kind == "r2v":
+        # r2v：所有参考图都是「角色/道具/场景一致性」参考
+        label = ("角色/道具/场景一致性参考，图中人物的五官、发型、服装、"
+                 "道具与场景风格以参考图为准")
+        for p in ([image_path] if image_path else []) \
+                + ([last_frame_image_path] if last_frame_image_path else []) \
+                + list(extra_keyframe_paths or []):
+            if p and Path(p).exists():
+                refs.append(f"参考图{n}：{label}")
+                n += 1
+    else:
+        if mode == "B" and image_path:
+            refs.append("参考图1：上一镜头结尾画面，本镜头画面从这里无缝延续，"
+                        "人物姿态与构图以它为基准")
+            n = 2
+        elif image_path:
+            refs.append("参考图1：视频起点画面（首帧），本镜头画面从这里开始，"
+                        "人物位置与构图以它为基准")
+            n = 2
+        if last_frame_image_path:
+            refs.append(f"参考图{n}：视频终点画面（尾帧），动作结束后画面落在该构图")
+            n += 1
+        for p in (extra_keyframe_paths or []):
+            if p and Path(p).exists():
+                refs.append(f"参考图{n}：动作过程关键帧，展示动作推进到该时刻的瞬间画面")
+                n += 1
+    if not refs:
+        return ""
+    head = "【参考图清单】本次生成使用以下参考图，严格按其所示内容生成，禁止与参考图冲突："
+    return head + "；".join(refs)
+
+
 def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     """构建单镜头 prompt，派生自首尾帧描述，确保图片与视频一致性。
 
@@ -82,9 +325,19 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     # ========== 4. 构建派生视频 prompt（首帧->动作->尾帧） ==========
     parts = []
 
+    # 4.0 场景时间环境标注（豆包模板吸收 #3）
+    env = _build_scene_environment(shot)
+    if env:
+        parts.append(env)
+
     # 4.1 角色特征锚点（放最前面）
     if char_features:
         parts.append(char_features)
+
+    # 4.1b 人物站位清单（豆包模板吸收 #2）
+    layout_block = _build_character_layout_block(shot, characters)
+    if layout_block:
+        parts.append(layout_block)
 
     # 4.2 首帧画面描述（视频起点）
     if ff_desc:
@@ -242,9 +495,21 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
 
     if _USE_TEXT_TO_VIDEO:
         # 文生视频模式：完全不使用任何参考图（强制 T2V）
+        reference_paths = []
         pass
+    elif _REFERENCE_MODE == "r2v":
+        # R2V 模式：所有参考图都进 reference_paths（参考生视频，角色/道具/场景一致性锚定），
+        # 不传首帧/尾帧/关键帧。此前 r2v 参考图被按位置塞进 image_path/last_frame/
+        # extra_keyframes（首帧/尾帧时间语义），而 bailian R2V 只看 reference_paths——
+        # 参考图语义从未真正到达 provider。此处显式归位。
+        extra_keyframe_paths = []
+        reference_paths = [
+            p for p in (frame_paths or [])
+            if p and Path(p).exists()
+        ]
     else:
         # 图生视频模式：使用帧图片作为参考
+        reference_paths = []
         if mode == "B" and continuity_ref_image:
             image_path = continuity_ref_image
             for i, fp in enumerate((frame_paths or [])):
@@ -280,6 +545,26 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     else:
         extra_keyframe_paths = []
 
+    # 参考图清单声明（豆包模板吸收 #1）：在路径解析完成后再注入，
+    # 让视频模型明确每张参考图的语义（首帧起点/尾帧终点/关键帧/r2v 一致性参考）。
+    # text 模式无参考图返回空串，不改变现有 text 模式 prompt 形态。
+    if _REFERENCE_MODE == "r2v":
+        # r2v：给每张参考图标注具体用途（人物形象/场景/一致性），
+        # 实现 seedance2-skill 的「@图片N 作为XX」逐图语义声明。
+        r2v_purposes = _build_r2v_purpose_list(
+            shot, registry=_load_character_registry(), characters=characters or [],
+            ref_paths=reference_paths,
+        )
+        if r2v_purposes:
+            full_prompt = full_prompt + "\n\n" + r2v_purposes
+    else:
+        ref_list = _build_reference_list(
+            image_path, last_frame_image_path, extra_keyframe_paths,
+            mode=mode, ref_kind=_REFERENCE_MODE,
+        )
+        if ref_list:
+            full_prompt = full_prompt + "\n\n" + ref_list
+
     return VideoGenerationRequest(
         prompt=full_prompt,
         clip_index=shot["index"],
@@ -289,6 +574,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         image_path=image_path,
         last_frame_image_path=last_frame_image_path,
         extra_keyframe_paths=extra_keyframe_paths,
+        reference_paths=reference_paths,
     )
 
 

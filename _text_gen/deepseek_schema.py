@@ -210,3 +210,80 @@ SCENE_ANALYSIS_SCHEMA = {
         "additionalProperties": False,
     },
 }
+
+# ========================================================================
+# 场景物体尺寸提取（step01_script_gen/object_extractor.py）
+# ========================================================================
+
+_SCENE_OBJECT = {
+    "type": "object",
+    "properties": {
+        "identifier": {
+            "type": "string",
+            "description": "物体名称（跨章节保持一致，如：照月湾小舟、青石马车）",
+        },
+        "category": {
+            "type": "string",
+            "description": "物体类别（如：船、车、轿、厅堂、院落）",
+        },
+        "subtype": {
+            "type": "string",
+            "description": "形制（如：窄身无篷舴艋舟、四轮马车）",
+        },
+        "length_m": {
+            "type": "number",
+            "description": "总长（米），由原文空间线索推导",
+        },
+        "width_m": {
+            "type": "number",
+            "description": "最大宽度（米）",
+        },
+        "height_m": {
+            "type": "number",
+            "description": "舱面高度/船舷高度（米）；无高度意义物体可填 0",
+        },
+        "capacity": {
+            "type": "string",
+            "description": "可容人数与装载（如：可容3-4人+炭炉酒菜）",
+        },
+        "structure": {
+            "type": "string",
+            "description": "内部结构分区（如：船头/中舱/船梢三段；船头可坐、中舱敞舱可站立烹煮、船梢收窄）",
+        },
+        "consistent_terms": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "跨镜头统一称呼（如：[\"这条舴艋舟\", \"窄身小舟\"]，全脚本必须用同一规格词）",
+        },
+        "size_reasoning": {
+            "type": "string",
+            "description": "尺寸推导依据（原文哪些线索→如何排除过小/过大）",
+        },
+        "is_new": {
+            "type": "boolean",
+            "description": "是否不在已知物体库中",
+        },
+    },
+    "required": [
+        "identifier", "category", "subtype", "length_m", "width_m",
+        "height_m", "capacity", "structure", "consistent_terms",
+        "size_reasoning", "is_new",
+    ],
+    "additionalProperties": False,
+}
+
+SCENE_OBJECTS_SCHEMA = {
+    "name": "scene_objects",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "scene_objects": {
+                "type": "array",
+                "items": _SCENE_OBJECT,
+            },
+        },
+        "required": ["scene_objects"],
+        "additionalProperties": False,
+    },
+}

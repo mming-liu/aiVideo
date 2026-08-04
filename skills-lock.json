@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "skills": {
+    "dependency-doctor": {
+      "source": "Shubhamsaboo/awesome-llm-apps",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "agent_skills/dependency-doctor/SKILL.md",
+      "computedHash": "eb777cb149da63180407a30b3e892b25a2144cbb0c84acd4e12f68747acda2c7"
+    }
+  }
+}

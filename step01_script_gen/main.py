@@ -27,6 +27,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 from shared.config import (
     NOVEL_CHAPTER, BOOK_INDEX,
     CHARACTER_EXTRACTION_ENABLED,
+    SCENE_OBJECT_EXTRACTION_ENABLED,
     COMPLIANCE_STRICT, COMPLIANCE_AUTO_FIX,
     HOOK_ENABLED,
     GAP_ANALYSIS_ENABLED, GAP_MAX_REGEN_ATTEMPTS,
@@ -83,11 +84,13 @@ _REAL_STDOUT = sys.stdout
 from shared.chapter_reader import extract_section, get_chapter_meta
 from _text_gen import create_service, TextGenerationRequest
 from shared.character_bank import CharacterBank
+from shared.scene_objects_bank import SceneObjectsBank
 from step01_script_gen.prompts import (
     build_prompt, SYSTEM_PROMPT, build_hook_prompt, parse_hook_response,
     _load_gap_analysis_context,
 )
 from step01_script_gen.character_extractor import extract_characters
+from step01_script_gen.object_extractor import extract_scene_objects
 from step01_script_gen.validation import parse_response
 from step01_script_gen.timecode import _compute_timecodes
 from step01_script_gen.hash_cache import _prompt_changed, _hash_source
@@ -112,10 +115,10 @@ def read_chapter(path: str = "锦衣夜行_77119小说.txt", chapter: int = 1) -
 # 2. 文本生成
 # ============================================================================
 
-def gen_spy_script(novel_text: str, bank=None) -> str:
+def gen_spy_script(novel_text: str, bank=None, objects_bank=None) -> str:
     """调用 LLM 生成脚本，返回原始文本."""
     from _text_gen.deepseek_schema import SCRIPT_SCHEMA
-    prompt = build_prompt(novel_text, bank)
+    prompt = build_prompt(novel_text, bank, objects_bank)
     service = create_service()
     req = TextGenerationRequest(
         system_prompt=SYSTEM_PROMPT,
@@ -169,17 +172,18 @@ def _post_process(script: dict) -> dict:
 # 4. 钩子分镜生成（v6新增）
 # ============================================================================
 
-def gen_hook_script(novel_text: str, bank=None) -> dict | None:
+def gen_hook_script(novel_text: str, bank=None, objects_bank=None) -> dict | None:
     """调用 LLM 生成钩子分镜，返回 hook dict 或 None.
 
     Args:
         novel_text: 小说原文
         bank: CharacterBank 实例，用于注入角色锚点（prompt 中用角色名而非模糊称呼）
+        objects_bank: SceneObjectsBank 实例，用于注入场景物体尺寸锚点（prompt 中写出锚定尺寸）
     """
     if not HOOK_ENABLED:
         return None
 
-    prompt = build_hook_prompt(novel_text, bank=bank)
+    prompt = build_hook_prompt(novel_text, bank=bank, objects_bank=objects_bank)
     service = create_service()
     from _text_gen.deepseek_schema import HOOK_SCHEMA
     req = TextGenerationRequest(
@@ -282,9 +286,29 @@ def main() -> None:
         except Exception as e:
             _logger.warn(f"[WARN] 预提取角色失败: {e}，继续生成脚本...")
 
-    # 检查缓存
+    # 预提取本章场景物体尺寸，辅助分镜生成（v6.6 新增）
+    # 从原文上下文推导船/车/厅堂等空间物体的合理尺寸/容量/结构，
+    # 替代硬编码规则，防止画面比例漂移（图片模型把船画成只能装2人的小舢板）
+    scene_objects_bank = SceneObjectsBank()
+    scene_objects_bank.load()
+    if SCENE_OBJECT_EXTRACTION_ENABLED:
+        _logger.info("[INFO] 预提取本章场景物体尺寸以辅助分镜生成...")
+        try:
+            objs = extract_scene_objects(novel_text, scene_objects_bank)
+            for o in objs:
+                scene_objects_bank.register_object(o, NOVEL_CHAPTER)
+            scene_objects_bank.save()
+            _logger.info(f"[INFO] 预提取到 {len(objs)} 个场景物体（已保存到场景物体库）")
+        except Exception as e:
+            _logger.warn(f"[WARN] 预提取场景物体失败: {e}，继续生成脚本...")
+
+    # 检查缓存（场景物体库内容变化也视为源变更，v6.6）
+    objects_bank_data = json.dumps(
+        scene_objects_bank._data, ensure_ascii=False, sort_keys=True
+    )
     prompt_changed = _prompt_changed(
-        Path(__file__).parent / "prompts.py", SCRIPT_FILE, novel_preview, NOVEL_CHAPTER
+        Path(__file__).parent / "prompts.py", SCRIPT_FILE, novel_preview, NOVEL_CHAPTER,
+        objects_bank_data,
     )
 
     if not prompt_changed:
@@ -334,7 +358,7 @@ def main() -> None:
     last_err = None
     for attempt in range(1, 1 + 3):
         try:
-            raw = gen_spy_script(novel_text, character_bank)
+            raw = gen_spy_script(novel_text, character_bank, scene_objects_bank)
         except RuntimeError as e:
             # 生成失败（如 DeepSeek 返回空文本）：短暂等待后重试，而不是中断流水线
             last_err = e
@@ -386,7 +410,7 @@ def main() -> None:
             gap_context = _load_gap_analysis_context(validation)
 
             # 追加差距反馈到 prompt，重新生成
-            prompt = build_prompt(novel_text, character_bank)
+            prompt = build_prompt(novel_text, character_bank, scene_objects_bank)
             prompt = prompt + gap_context
 
             service = create_service()
@@ -426,7 +450,7 @@ def main() -> None:
     # ========== v6新增：钩子分镜生成 ==========
     if HOOK_ENABLED:
         _logger.info("\n[INFO] 开始生成钩子分镜...")
-        hook = gen_hook_script(novel_text, bank=character_bank)
+        hook = gen_hook_script(novel_text, bank=character_bank, objects_bank=scene_objects_bank)
         if hook:
             script["hook"] = hook
             _logger.info(f"[OK] 钩子分镜已生成: {hook.get('narration_segment', '')[:30]}...")
@@ -442,6 +466,19 @@ def main() -> None:
         # 注意：角色库已在预提取阶段保存，无需重复保存
         _logger.info(f"[INFO] 已提取 {len(chars)} 个角色")
 
+    # 写入场景物体锚定（v6.6）：供下游 step02/validation 引用统一尺寸
+    _scene_objects_out = {}
+    for _oid in scene_objects_bank.get_all_identifiers():
+        _obj = scene_objects_bank.get_object(_oid)
+        if _obj:
+            _scene_objects_out[_oid] = {
+                k: _obj[k] for k in ("category", "subtype", "length_m", "width_m",
+                                     "height_m", "capacity", "structure",
+                                     "consistent_terms")
+                if k in _obj
+            }
+    script["scene_objects"] = _scene_objects_out
+
     # 计算时间轴（v5.0 运镜量化参数）
     _compute_timecodes(script)
 
@@ -450,7 +487,8 @@ def main() -> None:
 
     # 写入 hash
     script["_source_hash"] = _hash_source(
-        str(Path(__file__).parent / "prompts.py"), novel_preview, NOVEL_CHAPTER
+        str(Path(__file__).parent / "prompts.py"), novel_preview, NOVEL_CHAPTER,
+        objects_bank_data,
     )
 
     # 保存
@@ -468,6 +506,9 @@ def main() -> None:
     _console(f"  输出: {OUTPUT_FILE}")
     _console(f"  镜头数: {len(shots)}" + ("  + 钩子" if script.get("hook") else ""))
     _console(f"  总时长: {script.get('total_duration', 0):.1f}s")
+    _scene_objs = script.get("scene_objects", {})
+    if _scene_objs:
+        _console(f"  场景物体: {', '.join(_scene_objs.keys())}")
     for k in ("resolution", "ratio", "fps", "render_style"):
         if k in script:
             _console(f"  {k}: {script[k]}")

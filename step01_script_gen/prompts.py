@@ -37,6 +37,9 @@ PROMPT_TEMPLATE = """
 ### 角色库 (Character Bank)
 {character_anchors}
 
+### 场景物体尺寸锚定库 (Scene Object Bank)
+{scene_object_anchors}
+
 ### 角色出现规则（重要！）
 每个镜头应该根据以下规则确定画面中应出现的角色：
 1. **main_subject 优先**：如果 main_subject 是人物名（如"杨旭吹箫"、"听香尖叫"），该角色必须出现
@@ -128,7 +131,7 @@ PROMPT_TEMPLATE = """
 2. 注意：只提取引号内的对话内容作为 TTS 文本，不要包含“谁说”这类描述词。
 
 ### 输入小说文本
-{novel_text}
+{novel_text}{scene_object_anchors}
 """
 
 
@@ -165,7 +168,7 @@ SYSTEM_PROMPT = (
     "     - 例：narration 说\"箫音清如梵唱\" → 画面只能是**小舟、荷花、湖面、竹箫横放**等场景元素，**禁止生成\"吹箫\"动作**\n"
     "     - 例：narration 说\"听到脚步声\" → 画面应是远景对向脚步声方向，**禁止生成具体人物走路**\n"
     "     - 例：narration 说\"入夜，水声更响\" → 画面是溪流/瀑布，**禁止生成人物在水中**\n"
-    "   - **空间限制强制**：narration 描述小舟场景时，船上最多2人，**禁止人在船外行走**，人物应保持静态或小幅动作\n"
+    "   - **空间限制强制**：narration 描述小舟场景时，船上最多3-4人（本作舴艋舟可容三四人），**禁止人在船外行走**，人物应保持静态或小幅动作\n"
     "   - **道具约束强制**：只有对话中明确提到道具（\"撑伞\"、\"拿扇\"、\"佩剑\"、\"执杆\"）时，prompt 才能出现该道具\n"
     "     - 例：角色库说听香\"撑着油纸伞\"，但 narration 没提 → **禁止**出现\"撑伞\"\n"
     "     - 例：角色库说杨旭\"手执钓杆\"，narration 说\"左手钓杆垂湖\" → **允许**出现钓杆\n"
@@ -282,6 +285,12 @@ SYSTEM_PROMPT = (
     "10. 细节锚点：主角面部特征每3镜再现，配角出场镜给出标志性特征；每镜含中景+远景/背景两层环境暗示；赤足足部细节每2-3镜出现一次；\n"
     "11. 输出全局渲染参数顶层字段（resolution/ratio/fps/render_style/global_lighting/global_camera_base/global_weather/global_atmosphere）。\n"
     "12. 每镜含 scene/main_subject/core_keywords/fx_effect/audio_cue/mask_area/color_tone/clip_transition 字段。\n"
+    "12.5 **【对话镜头分轨模板（最高优先级）】有对话的镜头（narration_segment 非空），prompt 按「画面 + 台词 + 音效」三轨组织（吸收 AI短剧分轨写法）：\n"
+    "   - **画面轨**：描述说话人开口动作 + 听话人反应 + 环境，遵循规则 0 的说话可视化（说话人必须入画并开口）\n"
+    "   - **台词轨**：把 narration_segment 的原文台词原样放在 prompt 的台词位置，用「说话人道：台词」标注说话人（如「听香（青衫女子）尖叫道：救命啊——」），台词必须与 narration_segment 逐字一致，禁止改词\n"
+    "   - **音效轨**：audio_cue 对应的人声语气 + 环境音效单独写清（如「急促脚步声、水花声、女子尖叫」），放在画面与台词之后\n"
+    "   - **时长分配**：对话镜头内台词与画面的时间占比要匹配，台词长则画面给足口型时间；禁止台词量远超画面承载（4-5秒镜头塞一整段长对话）\n"
+    "   - 反例：只写画面动作不写台词、或台词与画面人物表情脱节（画面没人在说话却有台词）\n"
     "13. **首尾帧描述完整规则（最高优先级）**：ff_desc 和 lf_desc 必须包含本镜头 prompt 中出现的**所有角色**，缺一不可！\n"
     "   - 镜头有 N 个角色，ff_desc 和 lf_desc 也必须出现 N 个角色（除非角色在首帧时还没进入画面）\n"
     "   - 示例：镜头 prompt 说\"杨旭吹箫，听香撑伞\"，ff_desc 必须包含听香，不能只写\"杨旭\"\n"
@@ -422,9 +431,9 @@ SYSTEM_PROMPT = (
     "   - **视觉衔接锚点（最核心）**：相邻镜头必须共享至少1个视觉元素（地点/人物/色调/光线），镜头N的 lf_desc 与镜头N+1的 ff_desc 在构图、主体位置、色温上要能自然承接。禁止相邻镜头的地点、人物、色调全部无关——那样即使加淡入淡出也生硬\n"
     "   - **色彩连续**：相邻镜头 color_tone 变化幅度 ≤20%（开篇环境建立、明确时间跳跃可用淡入淡出过渡）；禁止从\"暖金正午\"直接跳到\"冷蓝深夜\"而无中间过渡\n"
     "25. **【场景物体尺寸锚定（最高优先级）】**：同一场景反复出现的空间物体（船只/马车/厅堂/院落等）必须在涉及它的每个镜头给出**一致的绝对尺寸参照**，防止 AI 在不同景别下画出比例漂移：\n"
-    "   - **【强制】每个出现完整船身的镜头，prompt 里都必须写出锚定尺寸**：首次出现写全「一叶长约四米、宽约一米半、可容两三人并肩的无篷木质小舟」，后续镜头写「这条长约四米、宽约一米半的木舟」（用同规格词），禁止任何镜头把船写成无尺寸的\"小舟/木舟/船\"！\n"
-    "   - **先定规格**：首次出现的镜头用一句明确尺寸锚定，如「一叶长约四米、宽约一米半、可容两三人并肩的无篷木质小舟」；后续镜头引用同一规格时用同款词（「这条木舟」）保持一致\n"
-    "   - **尺寸必须现实**：按真实容量设计——小船容2-3人、马车容2-4人、厢房等按实际，禁止\"一叶小舟载四人+腾空打斗\"这类不可能的体积\n"
+    "   - **【强制】尺寸以「场景物体尺寸锚定库」为准**：上方「场景物体尺寸锚定库」列出了每个场景物体的锚定尺寸/容量/结构/统一称呼，这是唯一权威来源。首次出现该物体的镜头，prompt/ff_desc 里必须写出完整锚定规格（尺寸+形制+容量）；后续镜头用该物体的**统一称呼**（锚定库 consistent_terms 首项）引用同一规格。禁止任何镜头把物体写成无尺寸的\"小舟/木舟/船\"，也禁止改用锚定库之外的称呼或尺寸！\n"
+    "   - **锚定库之外的物体**：若本章出现锚定库未覆盖的新的空间物体（如另一艘船、一辆马车），照常写出其尺寸（参照上方「场景物体尺寸锚定库」的格式：尺寸+容量+结构），保持与原文一致即可\n"
+    "   - **尺寸必须现实**：容量与人数匹配（船容3-4人、马车容2-4人、厢房按实际），物体尺寸必须与原文动作自洽——禁止把能容数人的游船画成独木舟般的小舢板，也禁止画成9米以上的宽体画舫（窄航道无法穿行、人登船不可能\"猛地一沉、剧烈摇晃\"）\n"
     "   - **同一物体不同镜头用同一称呼+规格**：远景的\"小舟\"和近景的\"小舟\"必须同尺寸；禁止远景写成\"一叶\"、近景却画成\"画舫\"\n"
     "   - **空间动作要够得着**：同一镜头/相邻镜头的人物动作（如\"蹲船舷刺船头\"）必须在锚定尺寸内合理，距离不至于太远够不着或太挤叠在一起\n"
     "   - **人物容量约束**：镜头内同时出现的人物数量必须能装进该物体；满载时人物动作保持小幅（坐/蹲/站立不动），禁止拥挤跑跳\n"
@@ -496,7 +505,7 @@ HOOK_PROMPT_TEMPLATE = """
 }
 
 # 小说原文
-{novel_text}{character_anchors}
+{novel_text}{character_anchors}{scene_object_anchors}
 """
 
 # ========================================================================
@@ -524,6 +533,52 @@ def _build_character_anchors(bank) -> str:
         return "\n".join(anchors) if anchors else "无已知角色"
     except Exception:
         return "无已知角色"
+
+
+def _build_scene_object_anchors(objects_bank) -> str:
+    """构建场景物体尺寸锚点字符串，用于注入 Prompt.
+
+    每个物体输出一行「首次出现写全规格」的推荐写法（consistent_terms 首项），
+    供 LLM 在涉及该物体的每个镜头 prompt/ff_desc/lf_desc 中写出锚定尺寸。
+    无已知物体时返回哨兵字符串（与角色锚点一致的约定，调用方据非哨兵判断是否注入）。
+    """
+    if not objects_bank:
+        return "无场景物体"
+    try:
+        idents = objects_bank.get_all_identifiers()
+        if not idents:
+            return "无场景物体"
+
+        anchors = []
+        for ident in idents:
+            obj = objects_bank.get_object(ident)
+            if not obj:
+                continue
+            parts = [f"- {ident}"]
+            if obj.get("category"):
+                parts.append(f"类别:{obj['category']}")
+            if obj.get("subtype"):
+                parts.append(f"形制:{obj['subtype']}")
+            dims = []
+            if obj.get("length_m") is not None:
+                dims.append(f"长{obj['length_m']}米")
+            if obj.get("width_m") is not None:
+                dims.append(f"宽{obj['width_m']}米")
+            if obj.get("height_m") is not None:
+                dims.append(f"高{obj['height_m']}米")
+            if dims:
+                parts.append("尺寸:" + "、".join(dims))
+            if obj.get("capacity"):
+                parts.append(f"容量:{obj['capacity']}")
+            if obj.get("structure"):
+                parts.append(f"结构:{obj['structure']}")
+            terms = obj.get("consistent_terms") or []
+            if terms:
+                parts.append(f"统一称呼:{terms[0]}")
+            anchors.append("，".join(parts))
+        return "\n".join(anchors) if anchors else "无场景物体"
+    except Exception:
+        return "无场景物体"
 
 
 def _format_list(items: list) -> str:
@@ -582,12 +637,14 @@ def _build_cinematic_vocab() -> str:
 # 构建完整 prompt
 # ========================================================================
 
-def build_prompt(novel_text: str, bank=None) -> str:
-    """构建最终发送给 LLM 的 prompt，注入完整镜头语言库 + 扩展词库 + 角色锚点."""
+def build_prompt(novel_text: str, bank=None, objects_bank=None) -> str:
+    """构建最终发送给 LLM 的 prompt，注入完整镜头语言库 + 扩展词库 + 角色锚点 + 场景物体锚点."""
     char_anchors = _build_character_anchors(bank) if bank else "无已知角色"
+    scene_object_anchors = _build_scene_object_anchors(objects_bank) if objects_bank else "无场景物体"
     prompt = PROMPT_TEMPLATE.format(
         novel_text=novel_text,
         character_anchors=char_anchors,
+        scene_object_anchors=scene_object_anchors,
     )
     # 追加镜头语言词库。旧实现把这些词库作为 .format() 的 kwargs 传入，但 PROMPT_TEMPLATE
     # 从未声明对应占位符，.format() 静默忽略 → 词库从未到达 LLM（code-audit 07-31 #1）。
@@ -707,8 +764,8 @@ def _load_gap_analysis_context(validation: dict) -> str:
     return ""
 
 
-def build_hook_prompt(novel_text: str, bank=None) -> str:
-    """构建钩子分镜生成的 prompt，可选注入角色锚点."""
+def build_hook_prompt(novel_text: str, bank=None, objects_bank=None) -> str:
+    """构建钩子分镜生成的 prompt，可选注入角色锚点 + 场景物体锚点."""
     import style_prefix
     # 注入角色锚点（使 LLM 知道原文人物称呼对应哪个角色名）
     char_anchor_str = ""
@@ -720,9 +777,20 @@ def build_hook_prompt(novel_text: str, bank=None) -> str:
                 "以下是已有角色及其特征，prompt 中必须使用角色名（而非'公子''小姐'等模糊称呼）：\n"
                 f"{char_anchors}"
             )
+    # 注入场景物体尺寸锚点（使 LLM 知道场景物体的锚定尺寸/容量/统一称呼）
+    obj_anchor_str = ""
+    if objects_bank:
+        obj_anchors = _build_scene_object_anchors(objects_bank)
+        if obj_anchors and obj_anchors != "无场景物体":
+            obj_anchor_str = (
+                "\n\n### 场景物体尺寸参考\n"
+                "以下是已锚定的场景物体尺寸，钩子画面涉及这些物体时必须写出锚定尺寸、使用统一称呼：\n"
+                f"{obj_anchors}"
+            )
     # 使用 replace 替换，避免 JSON 大括号与 format 冲突
     prompt = HOOK_PROMPT_TEMPLATE.replace("{novel_text}", novel_text)
     prompt = prompt.replace("{character_anchors}", char_anchor_str)
+    prompt = prompt.replace("{scene_object_anchors}", obj_anchor_str)
     return prompt
 
 

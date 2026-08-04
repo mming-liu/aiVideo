@@ -101,15 +101,23 @@ python step04_merge/main.py
 | `IMAGE_PROVIDER` | 图片生成 | `agnes`, `bailian` |
 | `TTS_PROVIDER` | 语音合成 | `dashscope_sdk`, `dashscope_http`, `openai` |
 
+**DeepSeek（TEXT_PROVIDER=deepseek）走 Responses API：**
+- 模型 `deepseek-v4-flash` → `POST https://api.deepseek.com/responses`（结构化输出）
+- 使用 `reasoning.effort=none` 关闭思考模式（防止 CoT 吃光 token 导致空输出）
+- 使用 strict `json_schema` 结构化输出（schema 定义在 `_text_gen/deepseek_schema.py`），分镜/钩子/角色/场景分析的 JSON 天然合法
+- 其他模型（`deepseek-v4-pro`/`deepseek-reasoner`）自动回退 Chat Completions
+
 ### 分镜生成（step01）
 
 | 变量 | 说明 | 默认值 |
 |-----|------|-------|
-| `SHOT_COUNT_MIN` | 分镜数最小值 | `6` |
-| `SHOT_COUNT_MAX` | 分镜数最大值 | `15` |
+| `SHOT_COUNT_MIN` | 分镜数最小值（软护栏，仅校验提示，不进入 prompt） | `6` |
+| `SHOT_COUNT_MAX` | 分镜数最大值（软护栏） | `25` |
 | `CHARACTER_EXTRACTION_ENABLED` | 角色提取 | `1` 开启 |
 | `HOOK_ENABLED` | 钩子分镜 | `1` 开启 |
 | `GAP_ANALYSIS_ENABLED` | 间隔分析 | `0` 关闭 |
+
+> 注：v4.1 起镜头数由 LLM 决定，`SHOT_COUNT_MIN/MAX` 仅作 validation 的 sanity 软护栏（代码默认 4–40，.env 覆盖为 6–25）。
 
 ### 视频生成（step02）
 
@@ -275,6 +283,14 @@ CINEMATIC_STYLE=王家卫  # 或 kubrick, villeneuve, fincher 等
 python chapter_reader.py 锦衣夜行_77119小说.txt
 ```
 
+### Q: step01 报「DeepSeek 返回文本为空」/ LLM 生成失败？
+
+- 该问题源于 DeepSeek Chat Completions 偶发空 `content`（官方已知）。已迁移到 **Responses API** 规避：
+  - `reasoning.effort=none` 关闭思考模式，CoT 不再吃光 `max_tokens`
+  - strict `json_schema` 结构化输出，正文必合法 JSON
+- 若仍失败，`[WARN] LLM 生成失败（尝试 x/3）` 会自动重试 3 次，错误信息含 `finish_reason`/`status`/`incomplete_details.reason` 便于诊断
+- 确认 `DEEPSEEK_MODEL=deepseek-v4-flash`（Responses API 仅支持该模型，v4-pro 回退 Chat Completions）
+
 ---
 
 ## API Keys 获取
@@ -287,4 +303,4 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 
 ---
 
-*最后更新：2026-08-02*
+*最后更新：2026-08-03*
