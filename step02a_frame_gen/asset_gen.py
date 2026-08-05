@@ -93,7 +93,7 @@ async def gen_scene_assets(image_adapter, force: bool = False) -> int:
         # 生成大场景建立镜头图
         logger.info(f"[ASSET] 生成场景 {ident} 大场景建立镜头图 ...")
         try:
-            img_out = await gen.generate_wide(scene)
+            img_out = await gen.generate_wide(scene, save_path=str(wide_path))
             if not _save_image(img_out, wide_path):
                 logger.warn(f"[ASSET] 场景 {ident} 大场景图生成失败，跳过该场景")
                 continue
@@ -111,7 +111,7 @@ async def gen_scene_assets(image_adapter, force: bool = False) -> int:
         near_path = scene_dir / "near.png"
         if SCENE_NEAR_SHOT_ENABLED and (not near_path.exists() or force):
             try:
-                img_out = await gen.generate_near(scene, str(wide_path))
+                img_out = await gen.generate_near(scene, str(wide_path), save_path=str(near_path))
                 if img_out is not None and _save_image(img_out, near_path):
                     assets["near"] = {"path": str(near_path.resolve()),
                                       "description": f"{ident} 近景功能场景参考图"}
@@ -171,7 +171,7 @@ async def gen_prop_assets(image_adapter, force: bool = False) -> int:
 
         logger.info(f"[ASSET] 生成道具 {ident} 白底资产图 ...")
         try:
-            img_out = await gen.generate_prop(prop)
+            img_out = await gen.generate_prop(prop, save_path=str(prop_path))
             if not _save_image(img_out, prop_path):
                 logger.warn(f"[ASSET] 道具 {ident} 资产图生成失败，跳过")
                 continue
@@ -198,11 +198,13 @@ async def gen_all_assets(force: bool = False) -> dict:
 
     from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
 
-    # 资产图专用适配器：16:9 横屏、不加风格前缀、不替换敏感词（英文/纯描述 prompt）
+    # 资产图专用适配器：16:9 横屏、不加风格前缀、不替换敏感词、不注入幻觉锁图
+    # （资产图禁止人物，无需面部/服装锁定；锁图词"統一五官"对无人物场景无意义）
     asset_adapter = ImageGeneratorAiVideoAdapter(
         size="1600x900",
         skip_prefix=True,
         skip_sanitize=True,
+        enable_hallucination_lock=False,
     )
 
     n_scenes = await gen_scene_assets(asset_adapter, force=force)

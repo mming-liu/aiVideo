@@ -249,15 +249,20 @@ class BailianImageService(ImageGenerationService):
         import requests
         try:
             os.makedirs(config.OUTPUT_DIR, exist_ok=True)
-            # 首帧/尾帧用前缀区分（避免尾帧覆盖首帧的 shot_N.png）
+            # 显式保存路径优先（资产图/肖像等非帧图，直接落盘到目标目录）
             frame_label = req.frame_desc if req.frame_desc else "首帧"
-            fname_prefix = {
-                "首帧": "ff",
-                "尾帧": "lf",
-            }.get(frame_label, "kf")
-            save_path = os.path.join(
-                config.OUTPUT_DIR, f"shot_{req.shot_index}_{fname_prefix}.png"
-            )
+            if req.save_path:
+                save_path = req.save_path
+                os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+            else:
+                # 首帧/尾帧用前缀区分（避免尾帧覆盖首帧的 shot_N.png）
+                fname_prefix = {
+                    "首帧": "ff",
+                    "尾帧": "lf",
+                }.get(frame_label, "kf")
+                save_path = os.path.join(
+                    config.OUTPUT_DIR, f"shot_{req.shot_index}_{fname_prefix}.png"
+                )
 
             resp = requests.get(img_url, timeout=180)
             resp.raise_for_status()

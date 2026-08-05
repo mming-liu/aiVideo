@@ -73,10 +73,12 @@ class CharacterPortraitsGenerator:
         self,
         character: CharacterInScene,
         style: str = "",
+        save_path: str | None = None,
     ) -> ImageOutput:
         """生成基础全景图 — 锁定核心特征（外观+质感+光影）
 
         这是角色资产的第一步，生成的图将作为后续侧面/背面照的参考源。
+        save_path: 肖像直接落盘路径（否则走 provider 默认帧路径，会污染 hook 首帧）
         """
         identity = character.identifier_in_scene
         static = (character.static_features or "").strip()
@@ -92,6 +94,7 @@ class CharacterPortraitsGenerator:
 
         image_output = await self.image_generator.generate_single_image(
             prompt=prompt,
+            save_path=save_path,
         )
         return image_output
 
@@ -99,6 +102,7 @@ class CharacterPortraitsGenerator:
         self,
         character: CharacterInScene,
         base_image_path: str,
+        save_path: str | None = None,
     ) -> ImageOutput:
         """基于基础图生成侧面全身照 — 强制一致性约束"""
         prompt = PROMPT_SIDE.format(
@@ -108,6 +112,7 @@ class CharacterPortraitsGenerator:
         image_output = await self.image_generator.generate_single_image(
             prompt=prompt,
             reference_image_paths=[base_image_path],
+            save_path=save_path,
         )
         return image_output
 
@@ -115,6 +120,7 @@ class CharacterPortraitsGenerator:
         self,
         character: CharacterInScene,
         base_image_path: str,
+        save_path: str | None = None,
     ) -> ImageOutput:
         """基于基础图生成背面全身照 — 强制一致性约束"""
         prompt = PROMPT_BACK.format(
@@ -124,5 +130,6 @@ class CharacterPortraitsGenerator:
         image_output = await self.image_generator.generate_single_image(
             prompt=prompt,
             reference_image_paths=[base_image_path],
+            save_path=save_path,
         )
         return image_output

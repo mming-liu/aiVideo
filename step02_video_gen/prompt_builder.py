@@ -218,6 +218,7 @@ def _classify_reference_purpose(path: str, shot: dict, registry: dict,
     """为一张 r2v 参考图判定用途标签（seedance2-skill @引用语义吸收）.
 
     判定优先级：
+    0. 路径为本镜头已生成的首帧（first_frame.png）→ 视频起点构图锚点
     1. 路径文件名含角色名 → 该角色的人物形象参考
     2. 路径属于注册表里某角色的肖像（front/side/back）→ 该角色的人物形象参考
     3. 参考图父目录名 = 角色名（characters_bank/{角色}/）→ 该角色人物参考
@@ -232,6 +233,11 @@ def _classify_reference_purpose(path: str, shot: dict, registry: dict,
     from pathlib import Path as _P
     name = _P(path).name
     stem = _P(path).stem
+
+    # 0. 本镜首帧：视频起点构图锚点（时间/场景/人物站位/动作起点以它为准）
+    if name == "first_frame.png":
+        return ("视频起点构图锚点，画面从该静态瞬间开始，时间、场景、人物站位、"
+                "动作起点与图中完全一致，后续动作在此基础上推进")
 
     # 1. 文件名直接含角色名（如 杨旭_front.png）
     for ch in characters:
@@ -683,7 +689,8 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     # 时长改由 shot["duration_sec"] 控制（step01 timecode 权威计算）。
     # 不再由 TTS 音频时长驱动——视频模型自带对话/背景音后，音频不再是时长来源。
     # 回退到 duration（旧分镜脚本无 duration_sec 字段）。
-    duration = shot.get("duration_sec") or shot.get("duration", 5)
+    # 强制 int：API 要求 parameters.duration 为整数（脚本里可能是 3.0 float，会被拒）。
+    duration = int(shot.get("duration_sec") or shot.get("duration", 5))
 
     # 多关键帧优先：3+ 帧时使用多关键帧模式，2帧时使用首尾双锚定
     if extra_keyframe_paths:
@@ -754,7 +761,22 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
     ])
     loc = shot.get("location", "") or shot.get("scene", "")
 
-    # ---- 1. 场景资产图（环境锚定，优先级最高）----
+    # ---- 0. 首帧构图锚点（最高优先级）----
+    # step02a 已为本镜生成正确的首帧（正确时间/场景/人物站位/动作起点）。
+    # r2v 若不传首帧，视频模型只能拿场景资产图+站姿肖像自由发挥构图，
+    # 造成时间错（黄昏）、船大小错、人物缺失、动作假跳（code-audit 08-05）。
+    # 首帧存在时以它为构图锚点，并在组装时替代场景资产图的环境锚定（避免时间冲突）。
+    composition_refs: list[str] = []
+    try:
+        from shared.paths import vimax_working_dir
+        ff_candidate = vimax_working_dir() / "shots" / str(shot.get("index", 0)) / "first_frame.png"
+        if ff_candidate.exists() and ff_candidate.stat().st_size > 10 * 1024:
+            composition_refs = [str(ff_candidate)]
+            _log_r2v_collect(f"  首帧构图锚点: {ff_candidate.name}（动作起点/时间/人物站位以它为准）")
+    except Exception as e:
+        _log_r2v_collect(f"  首帧构图锚点收集异常: {e}")
+
+    # ---- 1. 场景资产图（环境锚定，首帧缺失时才需要）----
     scene_refs: list[str] = []
     if loc:
         try:
@@ -764,17 +786,31 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
             for sid in sbank.get_all_identifiers():
                 if not sid:
                     continue
-                # 双向子串匹配：镜头地点含场景名，或场景名含镜头地点
-                if sid in loc or loc in sid:
-                    # 场景其余镜头的地点含场景名（如"照月湾荷花丛中，小舟上"→"照月湾小舟"）
-                    wide = sbank.get_wide_image(sid)
-                    near = sbank.get_near_image(sid)
-                    if wide:
-                        scene_refs.append(wide)
-                    elif near:
-                        scene_refs.append(near)
-                    break
-        except Exception:
+                scene = sbank.get_scene(sid) or {}
+                # 匹配源：场景名 + 场景 consistent_terms（别名）+ 场景 location。
+                # 模糊匹配：公共连续子串 ≥2 字即算同一地点
+                # （"照月湾小舟" vs "云河镇照月湾" → 共"照月湾"3字命中）。
+                # 单纯双向子串会漏（如"照月湾荷花丛中，一叶小舟上"不含完整场景名）。
+                match_sources = [sid] + list(scene.get("consistent_terms", []) or [])
+                if scene.get("location"):
+                    match_sources.append(scene["location"])
+                from shared.assets_bank import scene_matches_location
+                matched = any(scene_matches_location(src, loc) for src in match_sources if src)
+                if not matched:
+                    continue
+                wide = sbank.get_wide_image(sid)
+                near = sbank.get_near_image(sid)
+                if wide:
+                    scene_refs.append(wide)
+                elif near:
+                    scene_refs.append(near)
+                _log_r2v_collect(
+                    f"  场景「{sid}」匹配(location='{loc[:30]}') → "
+                    f"{Path(wide or near).name}（匹配源: {[s for s in match_sources if s][:4]}）"
+                )
+                break
+        except Exception as e:
+            _log_r2v_collect(f"  场景资产收集异常: {e}")
             scene_refs = []
 
     # ---- 空镜：只收场景资产图（禁止人物肖像，道具图不注入——空镜无道具特写）----
@@ -820,21 +856,52 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
         for pid in pbank.get_all_identifiers():
             if not pid:
                 continue
-            if pid in search_text or pid in loc:
+            entry = pbank.get_prop(pid) or {}
+            # 匹配源：道具名 + 道具 consistent_terms（别名）。
+            # 只做道具名匹配会漏（如"弯刀"在 ff_desc 而道具名是"刺客弯刀"，
+            # 但 consistent_terms 含"弯刀"可命中）。
+            match_sources = [pid] + list(entry.get("consistent_terms", []) or [])
+            if any(src and (src in search_text or src in loc) for src in match_sources):
                 img = pbank.get_asset_image(pid)
                 if img:
                     prop_refs.append(img)
-    except Exception:
+                    _log_r2v_collect(
+                        f"  道具「{pid}」匹配 → {Path(img).name}（匹配源: {[s for s in match_sources if s][:4]}）"
+                    )
+    except Exception as e:
+        _log_r2v_collect(f"  道具资产收集异常: {e}")
         prop_refs = []
 
-    # ---- 组装：场景 → 角色 → 道具，最多 limit 张 ----
+    # ---- 组装 ----
+    # 首帧构图锚点存在：它已锚定正确时间/场景/人物站位/动作起点，替代场景资产图
+    # （wide.png 是黄昏远景，与首帧的深青夜色冲突，会让视频时间漂移）。场景资产图
+    # 只在无首帧时注入，作环境兜底。
     refs: list[str] = []
-    for p in scene_refs + char_refs + prop_refs:
+    base = composition_refs + ([scene_refs[0]] if scene_refs and not composition_refs else [])
+    for p in base + char_refs + prop_refs:
         if p not in refs:
             refs.append(p)
         if len(refs) >= limit:
             break
+    _log_r2v_collect(
+        f"r2v 参考图收集完成（镜头{shot.get('index', '?')}）: "
+        f"首帧{len(composition_refs)} / 场景{len(scene_refs)} / "
+        f"角色{len(char_refs)} / 道具{len(prop_refs)} / 共{len(refs)}张"
+    )
+    for i, p in enumerate(refs):
+        _log_r2v_collect(f"    [{i}] {Path(p).parent.name}/{Path(p).name}")
     return refs
+
+
+def _log_r2v_collect(msg: str) -> None:
+    """输出 r2v 参考图收集日志（写 step02*.log，便于分析参考图组成）."""
+    try:
+        from shared.paths import chapter_dir
+        from shared.tee_logger import get_logger
+        logger = get_logger(chapter_dir() / "step02b.log", console_level="INFO")
+        logger.info(f"[R2V-COLLECT] {msg}")
+    except Exception:
+        print(f"[R2V-COLLECT] {msg}")
 
 
 def _find_fallback_reference(working_dir: Path, shot: dict | None = None,

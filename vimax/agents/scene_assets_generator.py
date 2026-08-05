@@ -42,10 +42,12 @@ class SceneAssetsGenerator:
     def __init__(self, image_generator):
         self.image_generator = image_generator
 
-    async def generate_wide(self, scene: dict, style: str = "古风电影写实") -> object:
+    async def generate_wide(self, scene: dict, style: str = "古风电影写实",
+                            save_path: str | None = None) -> object:
         """生成大场景建立镜头图（无人物）.
 
         scene: scene_assets bank 条目（含 wide_desc/time_of_day/weather/color_tone）
+        save_path: 资产图直接落盘路径（否则走 provider 默认帧路径，会污染 hook 首帧）
         Returns: ImageOutput
         """
         wide_desc = (scene.get("wide_desc") or "").strip()
@@ -57,10 +59,14 @@ class SceneAssetsGenerator:
             wide_desc=wide_desc,
             env_material=env_material,
         )
-        return await self.image_generator.generate_single_image(prompt=prompt)
+        return await self.image_generator.generate_single_image(
+            prompt=prompt,
+            save_path=save_path,
+        )
 
     async def generate_near(self, scene: dict, wide_image_path: str,
-                            style: str = "古风电影写实") -> object:
+                            style: str = "古风电影写实",
+                            save_path: str | None = None) -> object:
         """基于大场景图生成近景功能场景图（无人物）.
 
         near_desc 缺失时跳过（返回 None），下游只保留大场景图。
@@ -75,6 +81,7 @@ class SceneAssetsGenerator:
         return await self.image_generator.generate_single_image(
             prompt=prompt,
             reference_image_paths=[wide_image_path],
+            save_path=save_path,
         )
 
 

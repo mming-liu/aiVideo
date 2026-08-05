@@ -72,10 +72,13 @@ class ImageGeneratorAiVideoAdapter:
         frame_desc = kwargs.get("frame_desc", "")
         # 参考图：根据 IMAGE_MULTI_REF 决定传单张还是多张
         # 1（默认）= 只取第一张（向后兼容）；2+ = 传入全部（上限 IMAGE_MULTI_REF）
+        # force_multi_ref（首帧/尾帧生成路径）: 场景+角色+道具混合参考必须全部传入，
+        # 不受 IMAGE_MULTI_REF 限制——单张参考无法同时锚定场景/人物/道具三要素。
+        force_multi_ref = bool(kwargs.get("force_multi_ref", False))
         from shared.config import IMAGE_MULTI_REF
         refs = reference_image_paths or []
-        if IMAGE_MULTI_REF >= 2 and len(refs) > 1:
-            ref_paths = refs[:IMAGE_MULTI_REF]
+        if (force_multi_ref or IMAGE_MULTI_REF >= 2) and len(refs) > 1:
+            ref_paths = refs[:max(IMAGE_MULTI_REF, len(refs))] if force_multi_ref else refs[:IMAGE_MULTI_REF]
             ref = None  # 多张走 reference_image_paths
         else:
             ref_paths = []
@@ -116,6 +119,10 @@ class ImageGeneratorAiVideoAdapter:
             shot_index=shot_index,
             negative_prompt=self.negative_prompt,
             size=size,
+            # 显式保存路径：资产图/肖像等非帧图直接落盘，避免写默认 shot_N_ff.png
+            save_path=kwargs.get("save_path"),
+            # 纵横比透传（资产图传 16:9；帧图用默认 9:16）
+            ratio=kwargs.get("ratio", "9:16"),
             reference_image_path=ref,
             reference_image_paths=ref_paths,
             frame_desc=frame_desc,

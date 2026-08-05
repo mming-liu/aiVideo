@@ -177,15 +177,32 @@ def _compute_timecodes(script: dict) -> None:
     total = sum(s.get("duration", 0) for s in shots)
 
     # 加上钩子分镜时长（如果有）
+    # v6.14: hook 时长下限 = max(motion_desc 时间分段, LLM duration, 对话字数估时)。
+    # 此前 LLM 常给 hook duration=3.0，而 motion_desc 描述的是 6 秒动作（前2/2-4/4-6），
+    # 视频生成后段动作被硬截断（hook 视频只有 3 秒，动作没播完）。
     hook = script.get("hook")
     if hook and isinstance(hook, dict):
-        hook_duration = hook.get("duration")
-        if hook_duration is not None:
-            hook_duration = float(hook_duration)
+        # 1) motion_desc 时间分段（如"前2秒…2-4秒…4-6秒"→6s）优先，动作必须播完
+        motion_duration = _extract_motion_duration(hook.get("motion_desc", "")) if hook.get("motion_desc") else None
+        # 2) LLM 给出的 duration（仅作参考）
+        llm_duration = None
+        raw_duration = hook.get("duration")
+        if raw_duration is not None:
+            try:
+                llm_duration = float(raw_duration)
+            except (TypeError, ValueError):
+                llm_duration = None
+        # 3) 对话字数估算（钩子通常是尖叫/对话，留足口型时间）
+        hook_text = hook.get("narration_segment", "")
+        speech_duration = _estimate_duration(hook_text) if hook_text else 0.0
+
+        candidates = [d for d in (motion_duration, llm_duration, speech_duration) if d and d > 0]
+        if candidates:
+            hook_duration = max(candidates)
         else:
-            # 如果钩子没有时长，用 LLM 返回的 narration_segment 估算
-            hook_text = hook.get("narration_segment", "")
-            hook_duration = _estimate_duration(hook_text)
+            hook_duration = MIN_SHOT_DURATION
+        # 下限保护：钩子是开场悬念，至少给足动作时间，禁止 < MIN_SHOT_DURATION
+        hook_duration = max(hook_duration, MIN_SHOT_DURATION)
         hook["duration"] = round(hook_duration, 2)
         hook["duration_sec"] = round(hook_duration, 2)
         total += hook_duration

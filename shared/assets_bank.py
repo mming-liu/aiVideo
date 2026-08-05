@@ -31,6 +31,48 @@ def _book_global_dir() -> Path:
 
 
 # ---------------------------------------------------------------------------
+# 场景名↔地点 模糊匹配辅助
+# ---------------------------------------------------------------------------
+
+def _longest_common_substr_len(a: str, b: str) -> int:
+    """计算两个字符串的最长公共连续子串长度（中文字符按单个字符计）.
+
+    用于场景名（如"照月湾小舟"）↔ 镜头 location（如"云河镇照月湾"）的
+    模糊匹配。单纯双向子串（src in loc or loc in src）会漏掉两个都只含
+    共同片段的情况："照月湾小舟" 与 "云河镇照月湾" 互为超集/子集不成立，
+    但共同连续子串"照月湾"（3字）足以确认是同一地点。
+    """
+    if not a or not b:
+        return 0
+    # 较短的串作为滑动基准，减少 DP 开销
+    if len(a) > len(b):
+        a, b = b, a
+    best = 0
+    for start in range(len(a)):
+        for end in range(start + best, len(a) + 1):
+            seg = a[start:end]
+            if seg in b:
+                best = len(seg)
+            else:
+                break
+    return best
+
+
+def scene_matches_location(scene_src: str, loc: str, min_len: int = 2) -> bool:
+    """判断场景匹配源（场景名/别名/location）与镜头 location 是否同一地点.
+
+    min_len: 公共连续子串的最小长度。默认 2 字——地名公共片段 ≥2 字即可
+    确认同一地点（如"照月湾"3字命中），1 字太弱（"湾"到处都有）容易误配。
+    命中任一场景匹配源即返回 True。
+    """
+    if not scene_src or not loc:
+        return False
+    if scene_src in loc or loc in scene_src:
+        return True  # 完整子串（旧逻辑保留，最快路径）
+    return _longest_common_substr_len(scene_src, loc) >= min_len
+
+
+# ---------------------------------------------------------------------------
 # SceneAssetsBank
 # ---------------------------------------------------------------------------
 
@@ -182,13 +224,16 @@ class SceneAssetsBank:
         """设置场景资产图数据.
 
         assets 格式: {wide: {path, description}, near: {path, description}}
+
+        注意：写独立字段 wide_image_desc/near_image_desc，绝不覆盖
+        wide_desc/near_desc（LLM 提取的场景描述，供 asset_gen/r2v 参考图使用）。
         """
         scene = self._data["scenes"].get(identifier)
         if scene:
             for key in ("wide", "near"):
                 if key in assets:
                     scene[f"{key}_image"] = assets[key].get("path", "")
-                    scene[f"{key}_desc"] = assets[key].get("description", "")
+                    scene[f"{key}_image_desc"] = assets[key].get("description", "")
 
 
 # ---------------------------------------------------------------------------

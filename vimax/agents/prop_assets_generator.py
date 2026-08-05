@@ -35,10 +35,11 @@ class PropAssetsGenerator:
     def __init__(self, image_generator):
         self.image_generator = image_generator
 
-    async def generate_prop(self, prop: dict) -> object:
+    async def generate_prop(self, prop: dict, save_path: str | None = None) -> object:
         """生成白底道具资产图.
 
         prop: prop_assets bank 条目（含 identifier/category/appearance）
+        save_path: 资产图直接落盘路径（否则走 provider 默认帧路径，会污染 hook 首帧）
         Returns: ImageOutput
         """
         identifier = (prop.get("identifier") or "").strip()
@@ -53,7 +54,10 @@ class PropAssetsGenerator:
             identifier=identifier,
             appearance=appearance,
         )
-        return await self.image_generator.generate_single_image(prompt=prompt)
+        return await self.image_generator.generate_single_image(
+            prompt=prompt,
+            save_path=save_path,
+        )
 
 
 # 从 bank 条目中提取道具数据（供 asset_gen 调用，与 PropAssetsBank 结构解耦）

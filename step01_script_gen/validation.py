@@ -1482,6 +1482,108 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
 
+# ============================================================================
+# v6.14 新增：ff_desc / motion_desc 时间线一致性检查（防动作时序矛盾）
+# ============================================================================
+
+# 完成态/进行态动词：表示动作「已发生/正在进行」——首帧必须是「动作开始前」的
+# 定格，若首帧出现这些完成态动词，说明 LLM 把定格选在了动作结果时刻，与
+# motion_desc 描述的动作推进（如"刺入"）矛盾：t=0 已刺中，motion 却又在刺。
+_FF_COMPLETED_VERBS = (
+    "已刺中", "已刺入", "刺中", "刺入", "扎进", "已刺", "刺进", "已中",
+    "倒地", "倒下", "已倒", "已摔", "翻落", "坠地", "已落水", "栽倒",
+    "已跃上", "已冲出", "已破水", "已没入", "已潜入", "已入水", "已反身",
+    "已拔出", "已抽出", "已抽出刀", "已砍", "已劈", "已挥出", "已斩",
+    "已断裂", "已折断", "已碎裂", "已炸开", "已开", "已抓", "已抓住",
+    "已夺", "已夺过", "已夺下", "已扑倒", "已扑上", "已擒住", "已制服",
+)
+
+
+def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
+    """检查 ff_desc 与 motion_desc 的时间线一致性（防视频模型脑补假动作）.
+
+    背景（code-audit 08-05 钩子视频）：hook ff_desc 写成「刀尖已刺中杨旭心口，
+    杨旭仰面后倒」（动作结果时刻），而 motion_desc 写「前2秒：刺客破水而出、
+    寒光刺中」（动作进行时）。t=0 已经刺中，0-2秒又要"破水而出、刺中"——
+    动作刺了两遍，视频模型无法调和起点与动作，只能脑补一套假动作
+    （站在水里→假跳→下刺→落回水里）。
+
+    检查规则：ff_desc 出现「完成态动词」（已刺中/倒地/已跃上等）时，视为首帧
+    定格选在动作结果时刻。若同时满足以下任一，判定为时序矛盾：
+      a) motion_desc 包含同一动作的「进行态」动词（刺/跃/冲/扑/砍/劈/挥/落水等）
+      b) motion_desc 含时间分段（"前N秒/2-4秒"），即动作确实在视频中推进
+
+    纯静态镜头（无动作词）不受影响。此检查为 warning 级（不阻断），提示 LLM
+    把 ff_desc 定格前移到「动作开始前/进行中」时刻。
+    """
+    import re
+    issues = []
+    warnings = []
+
+    # 进行态动词：动作推进中（与完成态对应）
+    _MOTION_PROGRESSIVE = (
+        "刺", "跃", "冲", "扑", "砍", "劈", "挥", "斩", "落", "没入", "潜入",
+        "反身", "出水", "入水", "破水", "倒纵", "拔", "抽", "抓", "夺",
+        "撞", "击", "挥出", "跃起", "跃上",
+    )
+    _TIME_SEGMENT_RE = re.compile(r"前\d+秒|后\d+秒|\d+\s*[-–]\s*\d+\s*秒|共\d+秒|时长\d+秒")
+
+    def _check_one(shot: dict, label: str):
+        ff = shot.get("ff_desc", "").strip() or ""
+        motion = shot.get("motion_desc", "").strip() or shot.get("prompt", "") or ""
+        if not ff:
+            return
+        # 完成态动词检测
+        completed = [v for v in _FF_COMPLETED_VERBS if v in ff]
+        if not completed:
+            return
+        # motion 是否有进行态动作
+        has_progressive = any(v in motion for v in _MOTION_PROGRESSIVE)
+        has_time_seg = bool(_TIME_SEGMENT_RE.search(motion))
+        if not (has_progressive or has_time_seg):
+            return
+        # 更严格：完成态动作与 motion 里同一动作词族冲突才告警（减少误报）。
+        # 例：ff"已刺中" + motion"刺中/刺入" → 冲突；ff"已没入" + motion"落水" → 冲突。
+        verb_families = {
+            "刺": ("刺", "扎", "捅"),
+            "跃": ("跃", "纵", "跳"),
+            "冲": ("冲", "窜", "破水"),
+            "没入": ("没入", "潜入", "入水", "落水"),
+            "倒": ("倒", "仰", "后倒"),
+            "挥": ("挥", "劈", "砍", "斩"),
+        }
+        conflict = False
+        for comp in completed:
+            fam = None
+            for verb, members in verb_families.items():
+                if comp.endswith(verb) or verb in comp:
+                    fam = members
+                    break
+            if fam and any(m in motion for m in fam):
+                conflict = True
+                break
+        if not conflict:
+            return
+
+        warnings.append(
+            f"{label}: ff_desc 含完成态动词「{'、'.join(completed)}」（首帧定格在动作结果时刻），"
+            f"而 motion_desc 又描述同一动作推进（{motion[:40]}...）。"
+            f"t=0 已发生，motion 却又在发生 → 视频模型无法调和，会脑补假动作。"
+            f"建议 ff_desc 定格在动作开始前/进行中时刻（如'刺客半身破水、刀高举未落下'）。"
+        )
+
+    for shot in shots:
+        _check_one(shot, f"镜头{shot.get('index', '?')}")
+    if hook and isinstance(hook, dict):
+        _check_one(hook, "钩子镜头(index=0)")
+
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 首帧时序: [WARN] {warn}")
+
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
 # v6.5 新增：分镜与原文比对（防幻觉核心 - 检测编造内容）
 # 检查 prompt 中的元素是否都能在 narration_segment 中找到依据
 def _check_script_novel_alignment(script: dict) -> dict:
@@ -2066,6 +2168,9 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v6.7 新增：首尾帧描述完整性检查（防静态视频）
     hook = script.get("hook")
     results["ff_lf_completeness"] = _check_ff_lf_desc_completeness(shots, hook)
+
+    # v6.14 新增：ff_desc / motion_desc 时间线一致性检查（防钩子动作时序矛盾）
+    results["ff_motion_timeline"] = _check_ff_motion_timeline(shots, hook)
 
     # v6.8 新增：情绪可视化检查（将抽象情绪词转化为具体肢体动作）
     results["emotion_visualization"] = _check_emotion_visualization(shots, hook)

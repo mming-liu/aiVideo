@@ -499,6 +499,7 @@ async def _generate_missing_portraits(
                 img_out = await portrait_gen.generate_base_portrait(
                     char_in_scene,
                     style="photorealistic Chinese ancient costume character portrait, full-body, white background, 16:9 landscape canvas, realistic skin texture, natural lighting, film photography",
+                    save_path=str(base_path),
                 )
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                     img_out.data.save(str(base_path))
@@ -519,6 +520,7 @@ async def _generate_missing_portraits(
             try:
                 img_out = await portrait_gen.generate_side_portrait(
                     char_in_scene, base_image_path=str(base_path),
+                    save_path=str(side_path),
                 )
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                     img_out.data.save(str(side_path))
@@ -535,6 +537,7 @@ async def _generate_missing_portraits(
             try:
                 img_out = await portrait_gen.generate_back_portrait(
                     char_in_scene, base_image_path=str(base_path),
+                    save_path=str(back_path),
                 )
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                     img_out.data.save(str(back_path))
@@ -785,6 +788,217 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
+def _collect_scene_asset_refs(shot: dict) -> list[str]:
+    """为本镜头匹配场景资产图（scenes_bank wide/near）作环境参考.
+
+    用于 step02a 首帧图生图：注入与 r2v 同源的场景资产图，保证首帧的
+    场景/环境/光线/船型与全局资产库一致，避免图生图自由发挥导致场景漂移。
+
+    时间段匹配（重要）：资产库的 wide（大场景建立镜头）和 near（近景功能场景）
+    常带不同时段/光线——如「照月湾小舟」wide=黄昏暖金、near=夜晚冷月。
+    首帧的时间由 ff_desc 决定，若注入时段冲突的场景图（黄昏 wide 配夜晚
+    首帧），会把时间带偏。故：画面描述含夜晚/月光/夜色 → 优先 near；
+    含黄昏/夕阳/落日 → 优先 wide；无法判断时近景 near 兜底（含正确船型）。
+    匹配逻辑与 prompt_builder._collect_r2v_references 保持一致（location 双向子串匹配）。
+    """
+    try:
+        from shared.assets_bank import SceneAssetsBank
+        sbank = SceneAssetsBank()
+        sbank.load()
+        loc = shot.get("location", "") or shot.get("scene", "")
+        if not loc:
+            return []
+        for sid in sbank.get_all_identifiers():
+            if not sid:
+                continue
+            scene = sbank.get_scene(sid) or {}
+            match_sources = [sid] + list(scene.get("consistent_terms", []) or [])
+            if scene.get("location"):
+                match_sources.append(scene["location"])
+            # 模糊匹配：公共连续子串 ≥2 字即算同一地点
+            # （"照月湾小舟" vs "云河镇照月湾" → 共"照月湾"3字命中）
+            from shared.assets_bank import scene_matches_location
+            matched = any(scene_matches_location(src, loc) for src in match_sources if src)
+            if not matched:
+                continue
+            wide = sbank.get_wide_image(sid)
+            near = sbank.get_near_image(sid)
+            # 时间段判定：夜间 → near；黄昏/白天 → wide；默认 near（含正确物体尺寸）
+            probe = " ".join([shot.get("ff_desc", ""), shot.get("motion_desc", ""),
+                              shot.get("lf_desc", ""), shot.get("prompt", "")])
+            night_kw = ("夜", "月", "星光", "星", "灯笼", "烛火", "黑暗", "入夜", "暮色")
+            dusk_kw = ("黄昏", "夕阳", "落日", "傍晚", "余晖", "晚霞", "西下")
+            is_night = any(k in probe for k in night_kw)
+            is_dusk = any(k in probe for k in dusk_kw)
+            picked = None
+            if is_night and near:
+                picked = near
+            elif is_dusk and wide:
+                picked = wide
+            else:
+                picked = near or wide
+            if picked and Path(picked).exists():
+                _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 首帧参考图=场景 {sid} {Path(picked).name}"
+                            f"（{'夜→near' if is_night else '昏→wide' if is_dusk else '近景兜底'}）")
+                return [picked]
+        return []
+    except Exception as e:
+        _bridge_log(f"  [bridge] 场景资产参考图收集异常: {e}")
+        return []
+
+
+def _collect_prop_asset_refs(shot: dict, limit: int = 2) -> list[str]:
+    """为本镜头匹配道具资产图（props_bank prop.png）作道具参考.
+
+    与 r2v 同源匹配：道具名/consistent_terms 出现在本镜 ff_desc/motion_desc/
+    lf_desc 或 location 中。注入道具资产图保证首帧出现的道具外观/材质/尺寸
+    与全局道具库一致（如钓杆、弯刀），避免图生图自由发挥画错道具。
+    """
+    try:
+        from shared.assets_bank import PropAssetsBank
+        pbank = PropAssetsBank()
+        pbank.load()
+        search_text = " ".join([
+            shot.get("ff_desc", "").strip() or "",
+            shot.get("motion_desc", "").strip() or shot.get("prompt", ""),
+            shot.get("lf_desc", "").strip() or "",
+        ])
+        loc = shot.get("location", "") or shot.get("scene", "")
+        refs: list[str] = []
+        for pid in pbank.get_all_identifiers():
+            if not pid:
+                continue
+            entry = pbank.get_prop(pid) or {}
+            match_sources = [pid] + list(entry.get("consistent_terms", []) or [])
+            if any(src and (src in search_text or src in loc) for src in match_sources):
+                img = pbank.get_asset_image(pid)
+                if img and Path(img).exists() and img not in refs:
+                    refs.append(img)
+                    _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 首帧参考图=道具 {pid} {Path(img).name}")
+                if len(refs) >= limit:
+                    break
+        return refs
+    except Exception as e:
+        _bridge_log(f"  [bridge] 道具资产参考图收集异常: {e}")
+        return []
+
+
+def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
+                                 limit: int = 5) -> list[str]:
+    """为 step02a 首帧/尾帧图生图收集参考图（场景 → 角色 → 道具）.
+
+    与 r2v 参考图同源、同一套匹配逻辑，保证图生视频前导帧（首帧/尾帧）的
+    场景/人物/道具与全局资产库 + r2v 视频一致，避免「首帧画对、视频画偏」
+    或「首帧场景/道具与资产库不一致」的漂移（code-audit 08-05）。
+
+    顺序：场景资产图（环境锚定）→ 出镜角色肖像（人物形象）→ 出镜道具资产图。
+    空镜只注入场景资产图（禁止角色/道具参考，防人物渗入）。
+    """
+    scene_refs = _collect_scene_asset_refs(shot)
+    empty_scene = is_empty_scene(shot, characters or [])
+    if empty_scene:
+        return scene_refs[:limit]
+
+    portrait_refs = _collect_portrait_refs_for_shot(shot, characters, limit=max(1, limit - len(scene_refs)))
+    prop_refs = _collect_prop_asset_refs(shot, limit=max(1, limit - len(scene_refs) - len(portrait_refs)))
+
+    refs: list[str] = []
+    for p in scene_refs + portrait_refs + prop_refs:
+        if p not in refs:
+            refs.append(p)
+        if len(refs) >= limit:
+            break
+    return refs
+
+
+def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
+                                    limit: int = 3) -> list[str]:
+    """从 character_portraits_registry.json 为本镜头出镜角色收集肖像参考图.
+
+    用于 step02a 首帧/尾帧图生图：给图片模型注入本镜出镜角色的肖像作参考，
+    复杂多人构图（如钩子"刺客半身踞船舷+杨旭仰倒+听香画右尖叫"）才能画出
+    正确的人物形象与站位，避免纯文生图把三人构图简化成单人。
+
+    判定"出镜角色"与 _collect_r2v_references 同源：角色名出现在本镜
+    ff_desc/motion_desc/lf_desc 中。视角匹配：画面描述含背面/侧面词则优先
+    对应视角，否则默认 front。空镜/无角色匹配返回空列表（调用方降级纯文生图）。
+
+    characters: script['characters']（含 identifier）；缺省时只依赖注册表 key。
+    """
+    try:
+        from shared.paths import vimax_working_dir
+        registry_path = vimax_working_dir() / "character_portraits_registry.json"
+        if not registry_path.exists():
+            # 回退：全书级 CharacterBank 导出（step02b 直接跑时工作目录可能还没有 registry）
+            from shared.character_bank import CharacterBank
+            bank = CharacterBank()
+            bank.load()
+            reg = bank.get_all_portraits_as_registry()
+        else:
+            import json as _json
+            with open(registry_path, "r", encoding="utf-8") as f:
+                reg = _json.load(f)
+        if not isinstance(reg, dict) or not reg:
+            return []
+
+        # 本镜出镜角色：ff_desc/motion_desc/lf_desc 中出现角色名
+        search_text = " ".join([
+            shot.get("ff_desc", "").strip() or "",
+            shot.get("motion_desc", "").strip() or shot.get("prompt", ""),
+            shot.get("lf_desc", "").strip() or "",
+        ])
+        if not search_text:
+            return []
+
+        # 视角匹配
+        view_pref = "front"
+        for kw in ("背面", "背影", "背向", "背对", "背身", "后背", "背朝"):
+            if kw in search_text:
+                view_pref = "back"
+                break
+        for kw in ("侧身", "侧面", "侧脸", "侧目", "半侧", "侧对", "侧立"):
+            if kw in search_text:
+                view_pref = "side"
+                break
+
+        # 出镜角色名集合：优先用 script characters（identifier），否则注册表 key
+        char_names: list[str] = []
+        seen = set()
+        for c in (characters or []):
+            ident = c.get("identifier", "")
+            if ident and ident not in seen:
+                seen.add(ident)
+                char_names.append(ident)
+        for ident in reg:
+            if ident not in seen:
+                seen.add(ident)
+                char_names.append(ident)
+
+        refs: list[str] = []
+        for ident in char_names:
+            if ident not in search_text:
+                continue
+            views = reg.get(ident)
+            if not isinstance(views, dict):
+                continue
+            picked = None
+            for view in [view_pref, "front", "side", "back"]:
+                p = views.get(view, {})
+                path = p.get("path", "") if isinstance(p, dict) else ""
+                if path and Path(path).exists():
+                    picked = path
+                    break
+            if picked and picked not in refs:
+                refs.append(picked)
+                _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 首帧/尾帧参考图=角色 {ident} {view_pref}肖像")
+            if len(refs) >= limit:
+                break
+        return refs
+    except Exception as e:
+        _bridge_log(f"  [bridge] 肖像参考图收集异常: {e}")
+        return []
+
+
 async def _gen_first_frame_async(
     image_adapter, shots_dir: Path, shot: dict, force: bool,
     script_mtime: float | None = None,
@@ -864,6 +1078,7 @@ async def _gen_first_frame_async(
                 reference_image_paths=refs,
                 shot_index=idx,
                 frame_desc="首帧",
+                force_multi_ref=True,
             )
             if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                 img_out.data.save(str(ff_path))
@@ -983,6 +1198,7 @@ async def _gen_last_frame_async(
                 frame_desc="尾帧",
                 # 尾帧：解除"场景布局不变"锁，允许构图随动作演变
                 lock_prompt=IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT,
+                force_multi_ref=True,
             )
             if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                 img_out.data.save(str(lf_path))
@@ -1120,6 +1336,7 @@ async def _gen_keyframes_async(
                     frame_desc=f"中间关键帧(t={time_ratio:.1f})",
                     # 关键帧：解除"场景布局不变"锁，允许构图随动作演变
                     lock_prompt=IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT,
+                    force_multi_ref=True,
                 )
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                     img_out.data.save(str(kf_path))
@@ -1173,6 +1390,12 @@ async def gen_shot_frames(
     ff_path = shot_dir / "first_frame.png"
     empty_scene = is_empty_scene(shot, characters or [])
 
+    # 首帧参考图：场景资产图 + 出镜角色肖像 + 出镜道具资产图（图生图锚定）。
+    # 此前 reference_paths=None 纯文生图，复杂多人构图（钩子"刺客+杨旭+听香"三人物）
+    # 被图片模型简化成单人，首帧人物/构图全错，且场景/道具与资产库不一致。
+    # 空镜只注入场景资产图（禁止角色/道具肖像，防人物渗入）。
+    frame_refs = _collect_frame_refs_for_shot(shot, characters, limit=5)
+
     if skip_first_frame:
         # 模式B：跳过首帧生成，尾帧仍生成（用于本镜风格锚定）
         ff_path_str = None
@@ -1181,15 +1404,19 @@ async def gen_shot_frames(
         ff_path_str = await _gen_first_frame_async(
             image_adapter, shots_dir, shot,
             force=force, script_mtime=script_mtime,
-            reference_paths=None, max_retries=1,
+            reference_paths=frame_refs or None, max_retries=1,
             empty_scene=empty_scene,
         )
     ff_["ff_path"] = ff_path_str
 
     # 尾帧 generation（全镜头覆盖：首尾双关键帧钳制风格漂移，
     # 不再按 variation_type 过滤——LLM 常输出空值导致全部镜头无尾帧）
-    # 模式B时尾帧参考图回退到空（首帧已跳过）
+    # 尾帧参考图：首帧（锚定动作起点）+ 场景/角色/道具资产（锚定一致）。
     lf_refs = [ff_path_str] if ff_path_str else None
+    if lf_refs:
+        lf_refs = list(lf_refs) + frame_refs
+    else:
+        lf_refs = frame_refs or None
     lf_path_str = await _gen_last_frame_async(
         image_adapter, shots_dir, shot,
         force=force, script_mtime=script_mtime,
@@ -1205,6 +1432,10 @@ async def gen_shot_frames(
         kf_paths = []
     else:
         kf_refs = [ff_path_str] if ff_path_str else None
+        if kf_refs:
+            kf_refs = list(kf_refs) + frame_refs
+        else:
+            kf_refs = frame_refs or None
         kf_paths = await _gen_keyframes_async(
             image_adapter, shots_dir, shot,
             force=force, script_mtime=script_mtime,

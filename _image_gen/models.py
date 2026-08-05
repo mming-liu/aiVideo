@@ -32,6 +32,8 @@ class ImageGenerationRequest:
     num_inference_steps: Optional[int] = None
     # 帧描述（用于区分首帧/尾帧/中间帧日志），可选
     frame_desc: str = ""
+    # 显式保存路径（资产图/肖像等非帧图时传入，避免写默认 shot_N_ff.png 覆盖 hook 首帧）
+    save_path: Optional[str] = None
     # 启用图片幻觉检测（默认开启）
     enable_hallucination_detection: bool = True
     # 期望出现的物体列表（用于检测多余物体）

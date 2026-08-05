@@ -53,6 +53,34 @@ DEFAULT_R2V_MODELS = (
 )
 
 
+def _int_duration(value) -> int:
+    """强制把时长转成整数（API 要求 parameters.duration 为 int）.
+
+    脚本里 duration 可能是 3.0 float（step01 时间码计算），直接传 API 会被拒：
+    "Input should be a valid integer: parameters.duration"。
+    """
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 5
+
+
+def _append_image_refs(prompt: str, n: int) -> str:
+    """给 happyhorse R2V 的 prompt 追加 [Image N] 指代说明.
+
+    happyhorse-1.1-r2v 文档要求用 [Image 1]、[Image 2] 标识指代 media 数组中
+    对应位置的参考图像（顺序与 media 一致），否则模型不明确各参考图的用途。
+    wan2.7-r2v 不需要（prompt_builder 已注入用途声明）。
+    """
+    if n <= 0:
+        return prompt
+    ref_lines = [
+        "[Image {}] 为传入的第{}张参考图（顺序与参考图列表一致）。".format(i + 1, i + 1)
+        for i in range(n)
+    ]
+    return prompt + "\n\n【参考图指代】" + " ".join(ref_lines)
+
+
 class BailianVideoService(VideoGenerationService):
     """Bailian 视频生成服务 (阿里云 dashscope).
 
@@ -161,7 +189,7 @@ class BailianVideoService(VideoGenerationService):
             "negative_prompt": req.negative_prompt or "",
             "resolution": self._resolution,
             "ratio": self._ratio,
-            "duration": req.duration or self._duration,
+            "duration": _int_duration(req.duration or self._duration),
             "prompt_extend": True,   # 默认开启智能改写
             "watermark": False,      # 默认不添加水印
         }
@@ -198,7 +226,7 @@ class BailianVideoService(VideoGenerationService):
             "model": model,
             "prompt": req.prompt,
             "resolution": self._resolution,
-            "duration": req.duration or self._duration,
+            "duration": _int_duration(req.duration or self._duration),
             "watermark": True,  # HappyHorse 默认添加水印
         }
 
@@ -265,7 +293,7 @@ class BailianVideoService(VideoGenerationService):
             "prompt": req.prompt,
             "media": media,
             "resolution": self._resolution,  # 必须是 720P 或 1080P
-            "duration": req.duration or self._duration,
+            "duration": _int_duration(req.duration or self._duration),
             "watermark": True,
         }
 
@@ -318,7 +346,7 @@ class BailianVideoService(VideoGenerationService):
             "negative_prompt": req.negative_prompt or "",
             "resolution": self._resolution,
             "ratio": self._ratio,
-            "duration": req.duration or self._duration,
+            "duration": _int_duration(req.duration or self._duration),
             "watermark": False,
         }
 
@@ -346,28 +374,36 @@ class BailianVideoService(VideoGenerationService):
     # R2V (参考图/视频生视频) - Wan2.7 R2V
     # =======================================================================
     def _create_r2v_task(self, req: VideoGenerationRequest) -> str:
-        """创建参考图生视频任务.
+        """创建参考图生视频任务（固定用 R2V 模型队列首个模型）.
 
-        Wan2.7 R2V 支持:
-        - prompt
-        - references: 最多5个参考图/视频混合，用于角色/道具/场景一致性
-        - reference_audio: 参考音频，用于音色参考
-        - resolution, ratio, duration, watermark, seed
+        模型差异（官方文档）：
+        - wan2.7-r2v: 支持 negative_prompt；media 最多5个
+        - happyhorse-1.1-r2v: 不支持 negative_prompt；media 1~9 个；
+          prompt 用 [Image N] 指代参考图（文档要求）
+
+        公共部分：media 项 type=reference_image，SDK 会把 base64 data URL
+        自动上传并回填 input.media[].url。
         """
-        # 编码参考图
+        model = self._r2v_model_queue[0]
+        is_happyhorse = "happyhorse" in model.lower()
+        # happyhorse 上限9，wan 上限5
+        max_refs = 9 if is_happyhorse else 5
+
         ref_medias = []
-        for ref_path in (req.reference_paths or [])[:5]:  # 最多5个
+        for ref_path in (req.reference_paths or [])[:max_refs]:
             b64 = self._encode_image(ref_path)
             if b64:
-                ref_medias.append({'type': 'reference', 'url': f'data:image/png;base64,{b64}'})
+                # media 项 type 必须是 reference_image（官方文档），
+                # 此前误用 'reference' 导致 API 报 Field required: input.media。
+                ref_medias.append({'type': 'reference_image', 'url': f'data:image/png;base64,{b64}'})
 
         # 如果有首帧/尾帧，也作为参考
         first_frame_b64 = self._encode_image(req.image_path) if req.image_path else None
         last_frame_b64 = self._encode_image(req.last_frame_image_path) if req.last_frame_image_path else None
         if first_frame_b64:
-            ref_medias.append({'type': 'first_frame', 'url': f'data:image/png;base64,{first_frame_b64}'})
+            ref_medias.append({'type': 'reference_image', 'url': f'data:image/png;base64,{first_frame_b64}'})
         if last_frame_b64:
-            ref_medias.append({'type': 'last_frame', 'url': f'data:image/png;base64,{last_frame_b64}'})
+            ref_medias.append({'type': 'reference_image', 'url': f'data:image/png;base64,{last_frame_b64}'})
 
         if not ref_medias:
             _verbose_write(f'  [镜头{req.clip_index}] [!] R2V 需要至少一个参考图')
@@ -379,37 +415,45 @@ class BailianVideoService(VideoGenerationService):
             # TODO: 需要上传音频获取 URL 或使用 base64
             pass
 
-        model = self._r2v_model_queue[0]  # R2V 暂不支持回退
+        # happyhorse 用 [Image N] 指代参考图（文档要求）；
+        # wan 保持现状（用途声明已由 prompt_builder 注入）。
+        prompt = req.prompt
+        if is_happyhorse:
+            prompt = _append_image_refs(prompt, len(ref_medias))
 
         kwargs: dict = {
             'model': model,
-            'prompt': req.prompt,
-            'references': ref_medias,
-            'negative_prompt': req.negative_prompt or '',
+            'prompt': prompt,
+            # 参考图用 media 参数（SDK 签名含 media，不含 references）
+            'media': ref_medias,
             'resolution': self._resolution,
             'ratio': self._ratio,
-            'duration': req.duration or self._duration,
+            'duration': _int_duration(req.duration or self._duration),
             'watermark': False,
         }
+        # happyhorse 不支持 negative_prompt；wan 支持
+        if not is_happyhorse and req.negative_prompt:
+            kwargs['negative_prompt'] = req.negative_prompt
 
         if audio_url:
             kwargs['reference_audio'] = audio_url
         if req.seed is not None:
             kwargs['seed'] = req.seed
 
-        _verbose_write(f'  [镜头{req.clip_index}] [Wan R2V] 正在提交任务 [{model}]...')
-        _verbose_write(f'    prompt: {req.prompt[:60]}...')
+        tag = 'HappyHorse R2V' if is_happyhorse else 'Wan R2V'
+        _verbose_write(f'  [镜头{req.clip_index}] [{tag}] 正在提交任务 [{model}]...')
+        _verbose_write(f'    prompt: {prompt[:60]}...')
         _verbose_write(f'    参考图数量: {len(ref_medias)}')
 
         rsp = VideoSynthesis.async_call(**kwargs)
 
         if rsp.status_code == 200:
             task_id = rsp.output['task_id']
-            _verbose_write(f'  [镜头{req.clip_index}] 任务已创建 [Wan R2V] -> task_id: {task_id}')
+            _verbose_write(f'  [镜头{req.clip_index}] 任务已创建 [{tag}] -> task_id: {task_id}')
             return task_id
 
-        _verbose_write(f'  [镜头{req.clip_index}] [!] R2V 模型错误 [{rsp.status_code}]: {rsp.code} - {rsp.message}')
-        # 回退到 I2V
+        _verbose_write(f'  [镜头{req.clip_index}] [!] {tag} 模型错误 [{rsp.status_code}]: {rsp.code} - {rsp.message}')
+        # R2V 失败回退到 I2V
         return self._create_i2v_task(req)
 
     # =======================================================================
