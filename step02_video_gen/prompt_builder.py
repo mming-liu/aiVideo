@@ -108,6 +108,38 @@ def _load_character_registry() -> dict:
         return {}
 
 
+def _load_scene_assets_registry() -> dict:
+    """加载场景资产注册表（存在资产图的场景）.
+
+    格式: {identifier: {wide: {path, description}, near: {path, description}}}
+    资产图由 step02a asset_gen 从 global/scenes_bank 生成，跨章复用。
+    """
+    try:
+        from shared.assets_bank import SceneAssetsBank
+        bank = SceneAssetsBank()
+        bank.load()
+        reg = bank.get_all_assets_as_registry()
+        return reg if isinstance(reg, dict) else {}
+    except Exception:
+        return {}
+
+
+def _load_prop_assets_registry() -> dict:
+    """加载道具资产注册表（存在资产图的道具）.
+
+    格式: {identifier: {path, description}}
+    资产图由 step02a asset_gen 从 global/props_bank 生成，跨章复用。
+    """
+    try:
+        from shared.assets_bank import PropAssetsBank
+        bank = PropAssetsBank()
+        bank.load()
+        reg = bank.get_all_assets_as_registry()
+        return reg if isinstance(reg, dict) else {}
+    except Exception:
+        return {}
+
+
 def _classify_reference_purpose(path: str, shot: dict, registry: dict,
                                 characters: list) -> str:
     """为一张 r2v 参考图判定用途标签（seedance2-skill @引用语义吸收）.
@@ -116,11 +148,13 @@ def _classify_reference_purpose(path: str, shot: dict, registry: dict,
     1. 路径文件名含角色名 → 该角色的人物形象参考
     2. 路径属于注册表里某角色的肖像（front/side/back）→ 该角色的人物形象参考
     3. 参考图父目录名 = 角色名（characters_bank/{角色}/）→ 该角色人物参考
-    4. 镜头的 ff_desc/prompt 中出现的角色里，谁命中路径 → 该角色参考
-    5. 都不命中 → 按镜头场景/环境词判定为场景参考，否则兜底「一致性参考」
+    4. 路径属于场景资产库（scenes_bank/{场景}/wide|near.png）→ 场景/环境参考
+    5. 路径属于道具资产库（props_bank/{道具}/prop.png）→ 道具外观参考
+    6. 镜头的 ff_desc/prompt 中出现的角色里，谁命中路径 → 该角色参考
+    7. 都不命中 → 按镜头场景/环境词判定为场景参考，否则兜底「一致性参考」
 
-    最终用途说明显式写清角色/场景用途，避免模型把人物肖像当场景、把场景
-    参考当人物（seedance2-skill 避坑第1条「引用模糊」）。
+    最终用途说明显式写清角色/场景/道具用途，避免模型把人物肖像当场景、把
+    场景参考当人物（seedance2-skill 避坑第1条「引用模糊」）。
     """
     from pathlib import Path as _P
     name = _P(path).name
@@ -153,7 +187,18 @@ def _classify_reference_purpose(path: str, shot: dict, registry: dict,
         if ident and parent_dir == ident:
             return f"角色「{ident}」人物形象参考，图中人物五官、发型、服装以参考图为准"
 
-    # 4. keyframes 目录中的帧图：仅当 main_subject 是已知角色时按该角色标注。
+    # 4. 场景资产库（scenes_bank/{场景}/wide|near.png）
+    if "scenes_bank" in str(path):
+        scene_name = parent_dir
+        is_wide = "wide" in name.lower()
+        view_label = "大场景建立镜头" if is_wide else "近景功能场景"
+        return f"场景「{scene_name}」{view_label}参考，图中环境、光线、空间布局、季节色调以参考图为准，画面应保持与该地点一致"
+
+    # 5. 道具资产库（props_bank/{道具}/prop.png）
+    if "props_bank" in str(path):
+        return f"道具「{parent_dir}」外观参考，图中道具的材质、颜色、结构、尺寸与使用痕迹以参考图为准，画面出现该道具时必须一致"
+
+    # 6. keyframes 目录中的帧图：仅当 main_subject 是已知角色时按该角色标注。
     #    不猜——路径不含角色名的帧图，无法确定其内容，宁可落到场景/一致性兜底，
     #    也不能硬扣一个角色（避免人物参考被误标，或场景帧被错标成人物）。
     ms = shot.get("main_subject", "").strip()
@@ -162,7 +207,7 @@ def _classify_reference_purpose(path: str, shot: dict, registry: dict,
             if ch.get("identifier") and ch["identifier"] == ms:
                 return f"角色「{ms}」人物形象参考，图中人物五官、发型、服装以参考图为准"
 
-    # 5. 兜底：场景/环境 或 一致性
+    # 7. 兜底：场景/环境 或 一致性
     scene_probe = " ".join([shot.get("location", ""), shot.get("scene", ""),
                             shot.get("ff_desc", ""), shot.get("prompt", "")])
     if any(w in scene_probe for w in _SCENE_REF_WORDS):
@@ -598,58 +643,111 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
 def _collect_r2v_references(shot: dict, characters: list | None = None,
                             registry: dict | None = None,
                             limit: int = 5) -> list[str]:
-    """收集 r2v 模式的参考图（角色肖像，最多 limit 个）.
+    """收集 r2v 模式的参考图（角色肖像 + 场景资产 + 道具资产，最多 limit 个）.
 
-    r2v 模式的参考图来自 character_portraits_registry.json 中「本镜头实际
-    出镜角色」的肖像（front/side/back），按出现顺序 + 视角词（背面/侧面/
-    正面）匹配最合适视图；注册表缺失时回退到出镜角色存在的前/侧/背任意一张。
-    空镜（画面禁止人物）返回空列表——肖像会诱导模型把人物画进空镜。
+    参考图来源（优先级：场景环境 → 出镜角色肖像 → 出镜道具）：
+    1. 镜头所属场景的资产图（大场景 wide 优先，近景 near 次之）——
+       scenes_bank/{场景}/wide.png|near.png，锚定环境/光线/色调
+    2. 本镜头实际出镜角色的肖像（front/side/back，视角匹配）——
+       character_portraits_registry.json
+    3. 本镜头出现的道具资产图 —— props_bank/{道具}/prop.png
+
+    空镜（画面禁止人物）：只收场景资产图，不注入任何角色肖像——
+    肖像会诱导模型把人物画进空镜。
 
     与 _select_best_reference 的区别：后者为图生图（首帧/尾帧）选单张最优，
-    且可能回退到风格锚点；r2v 需要多张并只认角色肖像（风格锚点对角色一致性
-    无意义）。返回空列表时由 _make_request 降级为纯文生视频。
+    且可能回退到风格锚点；r2v 需要多张并只认角色肖像/场景/道具资产
+    （风格锚点对角色一致性无意义）。返回空列表时由 _make_request 降级为纯文生视频。
     """
-    if is_empty_scene(shot, characters or []):
-        return []
-
     registry = registry if registry is not None else _load_character_registry()
-    if not registry:
-        return []
 
     search_text = " ".join([
         shot.get("ff_desc", "").strip() or "",
         shot.get("motion_desc", "").strip() or shot.get("prompt", ""),
         shot.get("lf_desc", "").strip() or "",
     ])
-    view_pref = "front"
-    for kw in ("背面", "背影", "背向", "背对", "背身", "后背", "背朝"):
-        if kw in search_text:
-            view_pref = "back"
-            break
-    for kw in ("侧身", "侧面", "侧脸", "侧目", "半侧", "侧对", "侧立"):
-        if kw in search_text:
-            view_pref = "side"
-            break
+    loc = shot.get("location", "") or shot.get("scene", "")
 
+    # ---- 1. 场景资产图（环境锚定，优先级最高）----
+    scene_refs: list[str] = []
+    if loc:
+        try:
+            from shared.assets_bank import SceneAssetsBank
+            sbank = SceneAssetsBank()
+            sbank.load()
+            for sid in sbank.get_all_identifiers():
+                if not sid:
+                    continue
+                # 双向子串匹配：镜头地点含场景名，或场景名含镜头地点
+                if sid in loc or loc in sid:
+                    # 场景其余镜头的地点含场景名（如"照月湾荷花丛中，小舟上"→"照月湾小舟"）
+                    wide = sbank.get_wide_image(sid)
+                    near = sbank.get_near_image(sid)
+                    if wide:
+                        scene_refs.append(wide)
+                    elif near:
+                        scene_refs.append(near)
+                    break
+        except Exception:
+            scene_refs = []
+
+    # ---- 空镜：只收场景资产图（禁止人物肖像，道具图不注入——空镜无道具特写）----
+    if is_empty_scene(shot, characters or []):
+        return scene_refs[:limit]
+
+    # ---- 2. 出镜角色肖像（视角匹配）----
+    char_refs: list[str] = []
+    if registry:
+        view_pref = "front"
+        for kw in ("背面", "背影", "背向", "背对", "背身", "后背", "背朝"):
+            if kw in search_text:
+                view_pref = "back"
+                break
+        for kw in ("侧身", "侧面", "侧脸", "侧目", "半侧", "侧对", "侧立"):
+            if kw in search_text:
+                view_pref = "side"
+                break
+
+        for ch in (characters or []):
+            ident = ch.get("identifier", "")
+            if not ident or ident not in search_text:
+                continue
+            views = registry.get(ident)
+            if not views:
+                continue
+            picked = None
+            for view in [view_pref, "front", "side", "back"]:
+                p = views.get(view, {})
+                path = p.get("path", "") if isinstance(p, dict) else ""
+                if path and Path(path).exists():
+                    picked = path
+                    break
+            if picked and picked not in char_refs:
+                char_refs.append(picked)
+
+    # ---- 3. 出镜道具资产图 ----
+    prop_refs: list[str] = []
+    try:
+        from shared.assets_bank import PropAssetsBank
+        pbank = PropAssetsBank()
+        pbank.load()
+        for pid in pbank.get_all_identifiers():
+            if not pid:
+                continue
+            if pid in search_text or pid in loc:
+                img = pbank.get_asset_image(pid)
+                if img:
+                    prop_refs.append(img)
+    except Exception:
+        prop_refs = []
+
+    # ---- 组装：场景 → 角色 → 道具，最多 limit 张 ----
     refs: list[str] = []
-    for ch in (characters or []):
-        ident = ch.get("identifier", "")
-        if not ident or ident not in search_text:
-            continue
-        views = registry.get(ident)
-        if not views:
-            continue
-        picked = None
-        for view in [view_pref, "front", "side", "back"]:
-            p = views.get(view, {})
-            path = p.get("path", "") if isinstance(p, dict) else ""
-            if path and Path(path).exists():
-                picked = path
-                break
-        if picked and picked not in refs:
-            refs.append(picked)
-            if len(refs) >= limit:
-                break
+    for p in scene_refs + char_refs + prop_refs:
+        if p not in refs:
+            refs.append(p)
+        if len(refs) >= limit:
+            break
     return refs
 
 

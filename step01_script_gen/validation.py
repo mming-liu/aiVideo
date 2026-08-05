@@ -573,6 +573,11 @@ _TRANSITION_COMBAT = {"冲击转场", "快速跟拍", "动作连贯", "转场时
 _TRANSITION_SCENE_SWITCH = {"淡入淡出转场", "镜头拉远", "自然过渡", "转场时长0.5s", "平滑过渡", "渐变转场"}
 _TRANSITION_CLOSEUP = {"模糊转场", "镜头推近", "节奏缓慢", "转场时长0.3s", "渐进转场", "推进转场"}
 _TRANSITION_GENERIC = {"转场时长", "镜头运动", "光影变化", "画面衔接", "转场指令", "转场效果"}
+# v6.10 新增：莞夏10种电影级转场关键词
+_TRANSITION_CINEMATIC = {
+    "空镜匹配", "过肩遮挡", "甩镜", "推近匹配", "拉远揭示",
+    "光线闪白", "物体擦拭", "动作匹配", "焦点虚化", "声画延续",
+}
 
 # 场景类型判断关键词
 _COMBAT_KEYWORDS = {"打斗", "战斗", "格斗", "刺杀", "攻击", "砍杀", "挥刀", "拔剑", "跃出", "冲刺"}
@@ -739,6 +744,66 @@ def _check_shot_transition(shots: list[dict]) -> dict:
             print(f"[CHECK] 镜头衔接: [WARN] {warn}")
 
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
+def _check_action_overlap(shots: list[dict]) -> dict:
+    """检查动作重叠法（v6.10 新增，莞夏/阿凯衔接方案核心）.
+
+    同一地点连续动作的相邻镜头，镜头N+1 的开头动作必须承接镜头N 的结尾动作，
+    否则视频拼接处动作断层（"上一镜收剑 → 下一镜直接拔剑"）产生割裂感。
+
+    判定：连续同地点镜头，检查相邻镜头是否有重叠动作线索
+      - 镜头N lf_desc 尾部的动作动词/主体，是否出现在镜头N+1 prompt/ff_desc 开头
+      - 出现明确衔接词（继续/仍/还/接着/顺势/随/继而）或转场词 → 视为已衔接
+    只 WARN 不阻断（动作承接由 LLM 决定，此处仅提示）。
+    """
+    warnings = []
+    # 动作/持械/姿态类线索词——用于检测「上一镜结尾动作」是否延续到下一镜
+    _ACTION_LINKS = {
+        "剑", "刀", "笛", "箫", "琴", "扇", "袖", "手", "目光", "视线",
+        "跪", "坐", "站", "立", "握", "持", "提", "举", "抬", "伸",
+        "低", "垂", "转", "回", "退", "进", "入", "出", "落", "起",
+    }
+    _BRIDGE_WORDS = {"继续", "仍", "还", "接着", "顺势", "继而", "紧接",
+                     "随即", "转场", "动作承接", "延续"}
+
+    for i in range(len(shots) - 1):
+        curr_shot, next_shot = shots[i], shots[i + 1]
+        curr_idx = curr_shot.get("index", "?")
+        next_idx = next_shot.get("index", "?")
+        if curr_idx == 0 or next_idx == 0:
+            continue
+
+        curr_loc = curr_shot.get("location", "") or curr_shot.get("scene", "")
+        next_loc = next_shot.get("location", "") or next_shot.get("scene", "")
+        if not curr_loc or curr_loc != next_loc:
+            continue  # 仅同地点连续动作需要动作承接（场景切换靠转场）
+
+        curr_lf = curr_shot.get("lf_desc", "") or ""
+        next_text = (next_shot.get("prompt", "") or "") + (next_shot.get("ff_desc", "") or "")
+        if not curr_lf or not next_text:
+            continue
+
+        # 已有明确衔接词 → 跳过
+        if any(w in next_text for w in _BRIDGE_WORDS):
+            continue
+        if "转场" in (next_shot.get("clip_transition", "") or ""):
+            continue
+
+        # 检查上一镜结尾动作线索是否延续到下一镜开头
+        tail = curr_lf[-18:]  # 上一镜结尾末尾
+        found = [w for w in _ACTION_LINKS if w in tail and w in next_text]
+        if not found:
+            warnings.append(
+                f"镜头{curr_idx}→{next_idx}: 同地点连续动作，下一镜开头未承接"
+                f"上一镜结尾动作（上一镜结尾「{tail}」），建议用动作重叠法"
+                f"让下一镜从上一镜结束的动作继续"
+            )
+
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 动作重叠: [WARN] {warn}")
+    return {"pass": True, "issues": [], "warnings": warnings}
 
 
 def _check_semantic_risk(shots: list[dict]) -> dict:
@@ -1615,7 +1680,9 @@ def _check_transition_keywords(shots: list[dict]) -> dict:
             is_scene_switch = curr_loc != next_loc
 
         # 3. 转场关键词检查
-        all_transition_kws = _TRANSITION_COMBAT | _TRANSITION_SCENE_SWITCH | _TRANSITION_CLOSEUP | _TRANSITION_GENERIC
+        all_transition_kws = (_TRANSITION_COMBAT | _TRANSITION_SCENE_SWITCH
+                              | _TRANSITION_CLOSEUP | _TRANSITION_GENERIC
+                              | _TRANSITION_CINEMATIC)
         found_kws = [kw for kw in all_transition_kws if kw in prompt]
 
         if is_combat:
@@ -1658,6 +1725,271 @@ def _check_transition_keywords(shots: list[dict]) -> dict:
             print(f"[CHECK] 转场关键词: [WARN] {warn}")
 
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
+# v6.10 新增：情景剧运镜检查（抖音@莞夏 18种运镜吸收）
+# 18种运镜按作用域分三类：
+#   - 机位/角度（prompt 头部固定描述，可与运镜共存）：仰拍/俯拍/过肩/正反打/手持
+#   - 运镜动作（一镜一运镜，堆叠会分散注意力）：推/拉/跟/摇/移/甩/环绕/变焦
+#   - 速度/格式修饰（可叠加在单个运镜上）：慢动作/快动作/长镜头
+_MOVEMENT_TYPE_TERMS = {
+    "推镜": ("推近", "前推", "推镜", "推进", "推至"),
+    "拉镜": ("拉远", "后拉", "拉镜", "拉出", "拉至"),
+    "跟镜": ("跟拍", "跟随", "跟镜", "跟踪"),
+    "摇镜": ("摇镜", "横摇", "纵摇", "摇摄", "上摇", "下摇"),
+    "移镜": ("横移", "移镜", "侧移", "平移"),
+    "甩镜": ("甩镜", "甩动", "甩向", "甩拍"),
+    "环绕镜": ("环绕", "环拍", "绕行", "围绕", "360°", "360度", "180°"),
+    "变焦镜": ("变焦", "推拉变焦", "急推", "急拉", "急速推近", "突然放大", "突然缩小"),
+}
+_ANGLE_TECHNIQUES = ("仰拍", "俯拍", "仰视", "俯视", "平视", "过肩", "正反打", "手持", "侧拍", "正对镜头")
+_SPEED_TECHNIQUES = ("慢动作", "快动作", "长镜头")
+_STATIC_MARKERS = ("固定", "静止", "不动", "静态", "锁机位", "定格")
+
+
+def _check_camera_movement(shots: list[dict]) -> dict:
+    """检查运镜使用（情景剧18种运镜吸收，v6.10 新增）.
+
+    对应抖音@莞夏「18种情景剧运镜技巧」的三条落地规则：
+    1. 运镜服务剧情：每个镜头必须有运镜/机位描述（或明确固定机位）
+    2. 避免过度运镜：单镜只承载 1 种主导运镜，禁止堆叠多种运镜
+    3. 运镜类型多样性：全片运镜类型不宜单一（关键场景用运镜强化，普通场景固定）
+
+    机位/角度（仰拍/俯拍/过肩/手持等）属于 prompt 头部固定描述，可与运镜共存，
+    不参与"堆叠"计数；速度修饰（慢动作/快动作/长镜头）可叠加在单个运镜上。
+    """
+    warnings = []
+    used_techniques = set()  # 全片运镜类型集合（含机位/角度，用于多样性统计）
+
+    for shot in shots:
+        idx = shot.get("index", "?")
+        text = " ".join([
+            shot.get("prompt", ""),
+            shot.get("ff_desc", ""),
+            shot.get("motion_desc", ""),
+        ])
+
+        # 1. 命中运镜动作
+        matched = {name for name, terms in _MOVEMENT_TYPE_TERMS.items() if any(t in text for t in terms)}
+        used_techniques |= matched
+
+        # 2. 命中机位/角度 + 速度修饰
+        angle_hits = [a for a in _ANGLE_TECHNIQUES if a in text]
+        speed_hits = [s for s in _SPEED_TECHNIQUES if s in text]
+        used_techniques |= set(angle_hits) | set(speed_hits)
+
+        # 3. 完全没有运镜/机位/固定描述 → 缺镜头语言
+        if not matched and not angle_hits and not any(m in text for m in _STATIC_MARKERS) and "空镜" not in text:
+            warnings.append(
+                f"镜头{idx}: 缺少运镜/机位描述（如 推/拉/跟/环绕/仰拍/过肩，或注明「固定机位」）"
+            )
+
+        # 4. 单镜堆叠多种运镜 → 避免过度运镜（机位/速度修饰不计数；跟拍可与其他运镜
+        #    复合——「跟随+环绕/推进/变焦」是跟拍镜的合法变体，不算堆叠）
+        if len(matched) >= 2 and "跟镜" not in matched:
+            warnings.append(
+                f"镜头{idx}: 单镜堆叠多种运镜 {sorted(matched)}，"
+                f"建议一镜一运镜（变化交给相邻镜头的 clip_transition）"
+            )
+
+    # 5. 全片运镜类型多样性（软检查：≥6镜才提示）
+    if len(shots) >= 6 and len(used_techniques) < 3:
+        warnings.append(
+            f"全片运镜类型单一（仅 {sorted(used_techniques) or ['无']}），"
+            f"建议关键场景用运镜强化（推/拉/环绕/甩等），普通场景固定机位"
+        )
+
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 运镜检查: [WARN] {warn}")
+
+    return {"pass": True, "issues": [], "warnings": warnings}
+
+
+# v6.12 新增：高级运镜升级关键词库（抖音@AI开机 运镜提示词升级教程）
+# 基础运镜词 → 对应的高级运镜提示词（高张力镜头命中时给出升级建议）。
+# 与 v6.10 _check_camera_movement（一镜一运镜/多样性）互补：一个管"堆叠/缺失"，
+# 一个管"基础词→特效词升级"。
+_CAMERA_UPGRADE_MAP = {
+    # 推
+    "推镜头": "侵入式推进+轻微变焦扭曲",
+    "缓慢前推": "侵入式推进+轻微变焦扭曲",
+    "快速推近": "侵入式推进+轻微变焦扭曲",
+    "镜头推进": "侵入式推进+轻微变焦扭曲",
+    # 拉
+    "拉镜头": "反向变焦后拉+视差空间剥离",
+    "缓慢后拉": "反向变焦后拉+视差空间剥离",
+    "快速拉出": "反向变焦后拉+视差空间剥离",
+    "镜头拉远": "反向变焦后拉+视差空间剥离",
+    # 摇 / 甩
+    "横摇": "极速鞭甩+动态残影捕捉",
+    "摇镜头": "极速鞭甩+动态残影捕捉",
+    "甩镜头": "暴力轴向撕裂+画面畸变拉伸",
+    "甩镜": "暴力轴向撕裂+画面畸变拉伸",
+    "快速甩动": "暴力轴向撕裂+画面畸变拉伸",
+    # 移
+    "镜头横移": "斯坦尼康横移+前景遮挡",
+    "横移": "斯坦尼康横移+前景遮挡",
+    # 跟
+    "镜头跟随": "POV视角+动态构图重构",
+    "跟拍": "POV视角+动态构图重构",
+    "跟踪拍摄": "POV视角+动态构图重构",
+}
+_CAMERA_UPGRADE_ADVANCED = {
+    "侵入式推进", "变焦扭曲", "反向变焦", "视差", "空间剥离",
+    "极速鞭甩", "动态残影", "斯坦尼康横移", "前景遮挡",
+    "POV", "第一人称视角", "动态构图", "轴向撕裂", "画面畸变", "畸变拉伸",
+}
+# 高张力场景触发词：仅此类镜头提示升级（避免对对话/特写/空镜等低张力镜头产生噪声）
+_CAMERA_UPGRADE_TENSION = _COMBAT_KEYWORDS | {
+    "对峙", "逼近", "压迫", "杀意", "追击", "追杀", "奔跑",
+    "疾驰", "逃跑", "潜入", "窃听", "埋伏", "陷阱", "危机",
+    "离别", "孤独", "回忆", "凝望", "转身离去",
+}
+
+
+def _check_camera_upgrade(shots: list[dict]) -> dict:
+    """检查基础运镜是否升级为高级运镜词（v6.12 新增）★抖音@AI开机 运镜提示词升级教程★.
+
+    基础运镜描述（推/拉/摇/移/跟/甩）升级为带特效细节的高级提示词
+    （侵入式推进/反向变焦后拉/极速鞭甩/斯坦尼康横移/POV视角/暴力轴向撕裂），
+    画面张力与电影感直接提升。仅对高张力镜头（打斗/对峙/追逐/离别等）提示，
+    低张力镜头不打扰；命中高级词则跳过。
+    """
+    issues = []
+    warnings = []
+
+    for shot in shots:
+        idx = shot.get("index", "?")
+        prompt = shot.get("prompt", "") or ""
+        narration = shot.get("narration_segment", "") or ""
+
+        # 仅高张力镜头才检查（避免规则5强制「[运镜]推/拉/摇/移/跟」前缀导致的噪声）
+        is_tension = any(kw in narration for kw in _CAMERA_UPGRADE_TENSION)
+        if not is_tension:
+            continue
+
+        if any(kw in prompt for kw in _CAMERA_UPGRADE_ADVANCED):
+            continue
+
+        found_basic = [basic for basic in _CAMERA_UPGRADE_MAP if basic in prompt]
+        if found_basic:
+            basic = found_basic[0]
+            advanced = _CAMERA_UPGRADE_MAP[basic]
+            warnings.append(
+                f"镜头{idx}: 高张力镜头运镜仍为基础词「{basic}」，"
+                f"建议升级为「{advanced}」（可补充 4K高清、电影感、动态模糊）"
+            )
+
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 运镜升级: [WARN] {warn}")
+
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
+# 8种AI人像专业光位（抖音「方块格子」教程吸收）
+# 人像镜头的光影描述必须落到具体灯位（光源相对人物/镜头的位置+软硬光+阴影形状），
+# 禁止"自然光""柔和光线"这种无位置、无来源的模糊光。
+_LIGHT_POSITION_KEYWORDS = {
+    "正面顺光", "顺光", "前侧光", "侧顺光", "蝴蝶光", "伦勃朗光", "伦勃朗",
+    "侧光", "侧面光", "逆光", "背光", "轮廓光", "顶光", "顶光直射", "底光", "鬼光",
+    "侧逆光", "轮廓光勾勒", "三分区", "明暗交界线", "三角亮区", "蝴蝶形阴影",
+    "高光", "眼神光", "剪影光", "分区照明", "边缘光", "主光源",
+}
+# 具体光源动机词——即便不是人像光位，也是可落地的光源（不算模糊光，不提示）
+_LIGHT_SOURCE_WORDS = {
+    "烛火", "烛光", "灯笼", "篝火", "火把", "油灯", "火盆",
+    "月光", "日光", "天光", "窗光", "夕阳", "旭日", "晨光",
+}
+# 无位置、无来源的模糊光描述——出现即提示补充具体灯位
+_VAGUE_LIGHT_WORDS = {"自然光", "柔和光", "柔和光线", "柔光", "自然光线", "柔和光照"}
+# 情绪光位映射：命中情绪词时建议的光位（供提示文案引用）
+_EMOTION_TO_LIGHT_HINT = {
+    "浪漫": "逆光", "神秘": "伦勃朗光", "深邃": "伦勃朗光", "恐怖": "底光",
+    "诡异": "底光", "危险": "底光", "压抑": "顶光", "权威": "顶光",
+    "威慑": "顶光", "硬朗": "侧光", "冲突": "侧光", "力量": "侧光",
+    "温馨": "正面顺光", "亲和": "正面顺光", "清新": "前侧光", "精致": "蝴蝶光",
+    "优雅": "蝴蝶光", "高级": "蝴蝶光", "氛围": "逆光", "剪影": "逆光",
+}
+# 人像判定标记（命中其一视为镜头里有人的脸/人物）
+_PERSON_PATTERN = re.compile(
+    r"\[[^\[\]]+[:：][^\[\]]+\]"               # 角色锚点 [名: 特征]
+    r"|[男女][子士]"                            # 男子/女子/男士/女士
+    r"|公子|姑娘|少年|少女|刺客|杀手|侠客|官吏|士兵|侍女|老翁|老妪|书生"
+    r"|面孔|面部|脸颊|脸庞|面容|五官|眉"
+)
+# 纯场景主体（空镜/风景）——无人物时跳过光位检查（风景光位逻辑不同）
+_EMPTY_SCENE_SUBJECTS = {
+    "空镜", "荷塘", "池塘", "日落", "日出", "田野", "田埂", "村庄",
+    "天空", "大地", "庭院", "回廊", "楼阁", "屋檐", "照月湾", "山峦",
+    "水面", "湖面", "荷塘黄昏全景", "夕阳", "薄雾",
+}
+# 场景主体里的动作/道具词——main_subject 含这些但非人物名时，也视为有人（动作镜）
+_ACTIVE_SCENE_HINTS = ("跃", "冲", "刺", "追", "杀", "对峙", "交锋", "挥手", "举", "抱")
+
+
+def _check_lighting_position(shots: list[dict]) -> dict:
+    """检查人像光位是否落到具体灯位（8种AI人像专业光位教程吸收）.
+
+    问题场景：人像/特写镜头 prompt 写"自然光""柔和光线"，AI 无法确定光源
+    从哪个方向来、在脸上形成什么阴影 → 光影平庸无故事感。
+
+    判定（只 WARN 不阻断）：
+    1. 有人的镜头出现模糊光词（自然光/柔和光线），且既无具体光位词、也无具体
+       光源动机词（烛火/月光/窗光等）→ 提示补充灯位
+    2. 出现情绪词（浪漫/诡异/权威…）但画面未用任何光位/光源 → 提示用光位强化情绪
+
+    Args:
+        shots: 分镜列表
+
+    Returns:
+        dict: {"pass": True, "issues": [], "warnings": [str]}
+    """
+    warnings = []
+    for shot in shots:
+        idx = shot.get("index", "?")
+        if idx == 0:  # hook 由独立逻辑校验，此处跳过
+            continue
+        prompt = shot.get("prompt", "") or ""
+        main_subject = shot.get("main_subject", "") or ""
+        search_text = prompt + (shot.get("ff_desc", "") or "")
+
+        has_person = bool(_PERSON_PATTERN.search(search_text))
+        is_empty_subject = any(kw in main_subject for kw in _EMPTY_SCENE_SUBJECTS)
+        if is_empty_subject and not has_person:
+            continue  # 纯空镜/风景，无人 → 光位检查不适用
+
+        # 具体灯位 vs 具体光源动机：灯位决定"光从哪来+阴影形状"（本检查核心），
+        # 光源动机（烛火/月光等）只说明光源是什么，不说明位置——情绪配对仍需要灯位
+        has_position = any(kw in prompt for kw in _LIGHT_POSITION_KEYWORDS)
+        has_source = any(kw in prompt for kw in _LIGHT_SOURCE_WORDS)
+
+        # 1. 模糊光词检测（仅人像镜头：非空镜、或空镜中有人）
+        #    无灯位、无光源动机的"自然光/柔和光线" → 提示补充具体灯位
+        vague_hits = [w for w in _VAGUE_LIGHT_WORDS if w in prompt]
+        if vague_hits and not has_position and not has_source and has_person:
+            warnings.append(
+                f"镜头{idx}: 人像镜头使用模糊光描述 {vague_hits} 且无具体光位，"
+                f"建议改为具体灯位（如：正面顺光/前侧光/蝴蝶光/伦勃朗光/侧光/"
+                f"逆光/顶光/底光），灯位+画面特征+情绪效果三要素齐备"
+            )
+
+        # 2. 情绪词 → 推荐光位（人物/动作镜头，出现情绪但画面未用具体灯位时提示）
+        if not has_position:
+            emotion_hits = [e for e, _ in _EMOTION_TO_LIGHT_HINT.items() if e in search_text]
+            for emotion in emotion_hits:
+                suggested = _EMOTION_TO_LIGHT_HINT[emotion]
+                warnings.append(
+                    f"镜头{idx}: 画面含情绪词「{emotion}」，建议配 {suggested} 强化氛围"
+                    f"（光位决定光影基调，情绪词决定色彩氛围）"
+                )
+
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 光位: [WARN] {warn}")
+
+    return {"pass": True, "issues": [], "warnings": warnings}
 
 
 def _run_prompt_checklist(script: dict) -> dict:
@@ -1705,6 +2037,18 @@ def _run_prompt_checklist(script: dict) -> dict:
 
     # v6.4 新增：转场关键词检查（视频教程核心技巧）
     results["transition_keywords"] = _check_transition_keywords(shots)
+
+    # v6.10 新增：动作重叠法检查（同地点连续动作的镜头衔接）
+    results["action_overlap"] = _check_action_overlap(shots)
+
+    # v6.10 新增：情景剧运镜检查（18种运镜，一镜一运镜 + 类型多样性）
+    results["camera_movement"] = _check_camera_movement(shots)
+
+    # v6.12 新增：高级运镜升级检查（基础运镜→特效词，高张力镜头才提示）
+    results["camera_upgrade"] = _check_camera_upgrade(shots)
+
+    # v6.11 新增：人像光位检查（8种AI人像专业光位，防模糊光）
+    results["lighting_position"] = _check_lighting_position(shots)
 
     # v6.5 新增：人物视线方向检查（镜内词域原则，覆盖 hook）
     results["gaze_direction"] = _check_gaze_direction(shots, script.get("hook"))
@@ -1825,6 +2169,8 @@ def post_fix_shot_prompts(script: dict) -> dict:
       2. 对白镜若画面描述没写说话人，补一句开口动作 → 同时解决
          「说话人没入画」「实词覆盖率」两处误报
       3. 抽象情绪词 → 追加可视化动作（校验项 _check_emotion_visualization 依赖）
+      3.5 模糊光词 → 具体光位（校验项 _check_lighting_position 依赖；
+          8种AI人像专业光位教程吸收）
       4. 场景切换镜补转场关键词（校验项 _check_transition_keywords 依赖）
       5. 正文净化：从 prompt 主体中剥离「画面/镜头」等禁止词
     只追加不删除（净化除外），安全幂等。hook 由独立逻辑处理，不在此处。
@@ -1851,7 +2197,13 @@ def post_fix_shot_prompts(script: dict) -> dict:
             if speaker and speaker not in prompt:
                 prompt = prompt.rstrip() + f"。画面中说话人「{speaker}」正开口说话，口型与台词同步"
 
-        # 3. 情绪可视化：抽象情绪词 → 追加可视化动作（prompt + motion_desc）
+        # 3. 光位量化：模糊光词（自然光/柔和光线）→ 具体灯位。先于情绪可视化，
+        #    让「浪漫/诡异」等情绪词在 _fix_emotion_visualization 替换前仍可被
+        #    _fix_lighting_quantization 用来挑选对应光位（校验项 _check_lighting_position 依赖；
+        #    8种AI人像专业光位教程吸收）
+        prompt = _fix_lighting_quantization(prompt)
+
+        # 3.5 情绪可视化：抽象情绪词 → 追加可视化动作（prompt + motion_desc）
         prompt = _fix_emotion_visualization(prompt)
         motion_desc = _fix_emotion_visualization(motion_desc)
 
@@ -1866,9 +2218,10 @@ def post_fix_shot_prompts(script: dict) -> dict:
         shot["prompt"] = prompt
         shot["motion_desc"] = motion_desc
 
-    # hook 也需要情绪可视化修复
+    # hook 也需要光位量化 + 情绪可视化修复（光位先，让情绪词先驱动光位选择）
     hook = script.get("hook")
     if hook and isinstance(hook, dict):
+        hook["prompt"] = _fix_lighting_quantization(hook.get("prompt", "") or "")
         hook["prompt"] = _fix_emotion_visualization(hook.get("prompt", "") or "")
         hook["motion_desc"] = _fix_emotion_visualization(hook.get("motion_desc", "") or "")
 
@@ -1935,6 +2288,50 @@ def _fix_emotion_visualization(prompt: str) -> str:
     for emotion, action in _EMOTION_ACTION_MAP.items():
         if emotion in prompt:
             prompt = prompt.replace(emotion, action)
+    return prompt
+
+
+# 8种光位可直接复制描述（与 portrait-lighting SKILL.md 一致，供自动修复拼接）。
+# 注意：描述文字避免出现 _VAGUE_LIGHT_WORDS（自然光/柔和光/柔光等），防止 replace 二次命中。
+_LIGHT_POSITION_DESC = {
+    "正面顺光": "主光位于镜头正后方，光轴与镜头方向基本重合，接近人物眼睛高度，均匀照亮人物正面，面部阴影极少，左右亮度接近一致",
+    "前侧光": "主光位于人物左前方约30°，略高于人物眼睛20-30°，中等面积软光，靠近光源侧额头颧骨明亮，鼻梁在另一侧形成短而柔和的阴影，暗侧眼睛保留细节",
+    "蝴蝶光": "主光位于人物正前上方，水平角度0°，高于人物眼睛约35°-45°，额头鼻梁双侧颧骨对称受光，鼻尖正下方形成短小居中的蝴蝶形阴影，面颊下颌收紧",
+    "伦勃朗光": "主光位于人物左前上方，水平方向约45°，高于人物眼睛30°，硬光，暗侧脸颊形成三角形亮区，明暗对比强，暗部保留细节",
+    "侧光": "主光位于人物正侧方，与人物成90°角，硬光，面部一半明亮一半处于阴影，明暗交界线清晰，轮廓硬朗",
+    "逆光": "主光位于人物正后方略高于头顶，硬光，人物正面处于阴影中，头发肩膀身体边缘形成明亮轮廓光，背景明亮人物与背景分离",
+    "顶光": "主光位于人物正上方垂直向下照射，硬光，眼窝鼻梁下方下颌形成明显阴影，面部轮廓深邃",
+    "底光": "主光位于人物正下方垂直向上照射，硬光，面部下方明亮上方处于阴影，阴影反常向上生长",
+}
+
+
+def _fix_lighting_quantization(prompt: str) -> str:
+    """将模糊光描述替换为具体光位（8种AI人像专业光位教程吸收）.
+
+    与 _check_lighting_position 的判定同源（_VAGUE_LIGHT_WORDS /
+    _LIGHT_POSITION_KEYWORDS / _LIGHT_SOURCE_WORDS / _EMOTION_TO_LIGHT_HINT）：
+    - 出现模糊光词（自然光/柔和光线）且无具体灯位、无光源动机 → 替换为具体光位
+    - 命中情绪词时按其映射光位（浪漫→逆光、诡异→底光…），无情绪词默认前侧光
+    只替换不删改其他内容，幂等（替换后 prompt 已含具体灯位词，二次调用跳过）。
+    """
+    vague_hits = [w for w in _VAGUE_LIGHT_WORDS if w in prompt]
+    if not vague_hits:
+        return prompt
+    if any(kw in prompt for kw in _LIGHT_POSITION_KEYWORDS):
+        return prompt
+    if any(kw in prompt for kw in _LIGHT_SOURCE_WORDS):
+        return prompt
+
+    position = "前侧光"
+    for emotion, suggested in _EMOTION_TO_LIGHT_HINT.items():
+        if emotion in prompt:
+            position = suggested
+            break
+    desc = _LIGHT_POSITION_DESC.get(position, _LIGHT_POSITION_DESC["前侧光"])
+    replacement = f"{position}：{desc}"
+    for vague in vague_hits:
+        # count=1：仅替换首个命中，避免 desc 内文字被后续 vague 词二次命中
+        prompt = prompt.replace(vague, replacement, 1)
     return prompt
 
 

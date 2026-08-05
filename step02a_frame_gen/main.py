@@ -146,6 +146,15 @@ def main():
         skip_frames=True,  # 只设置目录结构，不生成帧
     ))
 
+    # v7: 场景/道具资产图生成（大场景/近景/道具白底图，供 r2v 一致性参考）
+    # 资产图是横屏参考，独立于竖屏帧；在帧生成前跑，保证 r2v 参考图就绪
+    try:
+        from step02a_frame_gen.asset_gen import gen_all_assets
+        asset_result = asyncio.run(gen_all_assets(force=args.force))
+        logger.info(f"[ASSET] 资产图: 场景{asset_result.get('scenes', 0)} / 道具{asset_result.get('props', 0)}")
+    except Exception as e:
+        logger.warn(f"[ASSET] 资产图生成失败（不阻断帧生成）: {e}")
+
     # 生成帧（全部或指定镜头）
     results = asyncio.run(gen_all_frames(
         script_path, work_dir, force=args.force, only_indices=only_indices,

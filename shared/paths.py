@@ -112,5 +112,15 @@ def style_bank_dir() -> Path:
     return global_dir() / "style_bank"
 
 
+def scenes_bank_dir() -> Path:
+    """场景资产库（大场景图 + 近景功能场景图），全书跨章共享."""
+    return global_dir() / "scenes_bank"
+
+
+def props_bank_dir() -> Path:
+    """道具资产库（白底道具资产图），全书跨章共享."""
+    return global_dir() / "props_bank"
+
+
 def chapter_cache_dir() -> Path:
     return global_dir() / "chapter_cache"

@@ -38,6 +38,14 @@ SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "40"))
 CHARACTER_EXTRACTION_ENABLED = os.getenv("CHARACTER_EXTRACTION_ENABLED", "1").strip() == "1"
 # v6.6: 场景物体尺寸提取（从原文上下文推导船/车/厅堂等的合理尺寸，替代硬编码，防止画面比例漂移）
 SCENE_OBJECT_EXTRACTION_ENABLED = os.getenv("SCENE_OBJECT_EXTRACTION_ENABLED", "1").strip() == "1"
+# v7: 场景资产提取（大场景/近景功能场景描述 + 地点/时间段锚定，供资产图生成与 r2v 参考）
+SCENE_ASSET_EXTRACTION_ENABLED = os.getenv("SCENE_ASSET_EXTRACTION_ENABLED", "1").strip() == "1"
+# v7: 道具资产提取（剧本核心道具 + 外观描述，供道具资产图生成与 r2v 参考）
+PROP_ASSET_EXTRACTION_ENABLED = os.getenv("PROP_ASSET_EXTRACTION_ENABLED", "1").strip() == "1"
+# v7: 场景/道具资产图生成开关（step02a 帧生成前）
+ASSET_GEN_ENABLED = os.getenv("ASSET_GEN_ENABLED", "1").strip() == "1"
+# v7: 近景功能场景图（从大场景派生）开关，关闭时只生成大场景图
+SCENE_NEAR_SHOT_ENABLED = os.getenv("SCENE_NEAR_SHOT_ENABLED", "1").strip() == "1"
 HOOK_ENABLED = os.getenv("HOOK_ENABLED", "1").strip() == "1"
 COMPLIANCE_STRICT = os.getenv("COMPLIANCE_STRICT", "0").strip() == "1"
 COMPLIANCE_AUTO_FIX = os.getenv("COMPLIANCE_AUTO_FIX", "1").strip() == "1"

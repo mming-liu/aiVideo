@@ -28,6 +28,8 @@ from shared.config import (
     NOVEL_CHAPTER, BOOK_INDEX,
     CHARACTER_EXTRACTION_ENABLED,
     SCENE_OBJECT_EXTRACTION_ENABLED,
+    SCENE_ASSET_EXTRACTION_ENABLED,
+    PROP_ASSET_EXTRACTION_ENABLED,
     COMPLIANCE_STRICT, COMPLIANCE_AUTO_FIX,
     HOOK_ENABLED,
     GAP_ANALYSIS_ENABLED, GAP_MAX_REGEN_ATTEMPTS,
@@ -86,12 +88,14 @@ from shared.chapter_reader import extract_section, get_chapter_meta
 from _text_gen import create_service, TextGenerationRequest
 from shared.character_bank import CharacterBank
 from shared.scene_objects_bank import SceneObjectsBank
+from shared.assets_bank import SceneAssetsBank, PropAssetsBank
 from step01_script_gen.prompts import (
     build_prompt, SYSTEM_PROMPT, build_hook_prompt, parse_hook_response,
     _load_gap_analysis_context,
 )
 from step01_script_gen.character_extractor import extract_characters
 from step01_script_gen.object_extractor import extract_scene_objects
+from step01_script_gen.asset_extractor import extract_scene_assets, extract_props
 from step01_script_gen.validation import parse_response
 from step01_script_gen.timecode import _compute_timecodes
 from step01_script_gen.hash_cache import _prompt_changed, _hash_source
@@ -324,6 +328,75 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
 
 
 # ============================================================================
+# 6. 场景/道具资产提取（v7 新增）
+# ============================================================================
+
+def _extract_assets_and_update_script(script: dict) -> None:
+    """从分镜脚本提取场景资产 + 道具资产，注册入库并写回 script.
+
+    依赖 script 的 shots[].scene/location/prompt（脚本生成/收敛之后才能调用）。
+    两个失败点（LLM 提取失败 / 注册失败）都只 WARN 不阻断流水线：
+    下游 step02a 资产生成与 step02b r2v 参考在 bank 为空时自动跳过。
+
+    Args:
+        script: script_result.json dict（原地修改，写入 scene_assets/prop_assets）
+    """
+    # -- 场景资产提取（大场景/近景功能场景描述，供资产图生成与 r2v 场景参考） --
+    scene_assets_bank = SceneAssetsBank()
+    scene_assets_bank.load()
+    if SCENE_ASSET_EXTRACTION_ENABLED:
+        _logger.info("[INFO] 提取本章场景资产（大场景/近景描述）...")
+        try:
+            _scene_assets = extract_scene_assets(script, scene_assets_bank)
+            for _sa in _scene_assets:
+                scene_assets_bank.register_scene(_sa, NOVEL_CHAPTER)
+            scene_assets_bank.save()
+            _logger.info(f"[INFO] 已提取 {len(_scene_assets)} 个场景资产（已保存到场景资产库）")
+        except Exception as e:
+            _logger.warn(f"[WARN] 提取场景资产失败: {e}，继续流水线...")
+
+    # -- 道具资产提取（核心道具 + 外观描述，供道具资产图生成与 r2v 道具参考） --
+    prop_assets_bank = PropAssetsBank()
+    prop_assets_bank.load()
+    if PROP_ASSET_EXTRACTION_ENABLED:
+        _logger.info("[INFO] 提取本章核心道具（外观描述）...")
+        try:
+            _prop_assets = extract_props(script, prop_assets_bank)
+            for _pa in _prop_assets:
+                prop_assets_bank.register_prop(_pa, NOVEL_CHAPTER)
+            prop_assets_bank.save()
+            _logger.info(f"[INFO] 已提取 {len(_prop_assets)} 个道具资产（已保存到道具资产库）")
+        except Exception as e:
+            _logger.warn(f"[WARN] 提取道具资产失败: {e}，继续流水线...")
+
+    # 场景/道具资产描述写回 script，供 step02a 资产生成与 step02b r2v 参考引用
+    _scene_assets_out = {}
+    for _sid in scene_assets_bank.get_all_identifiers():
+        _sa = scene_assets_bank.get_scene(_sid)
+        if _sa:
+            _scene_assets_out[_sid] = {
+                k: _sa[k] for k in ("location", "time_of_day", "weather", "color_tone",
+                                    "wide_desc", "near_desc", "consistent_terms")
+                if k in _sa
+            }
+    script["scene_assets"] = _scene_assets_out
+
+    _prop_assets_out = {}
+    for _pid in prop_assets_bank.get_all_identifiers():
+        _pa = prop_assets_bank.get_prop(_pid)
+        if _pa:
+            _prop_assets_out[_pid] = {
+                k: _pa[k] for k in ("category", "appearance", "consistent_terms")
+                if k in _pa
+            }
+    script["prop_assets"] = _prop_assets_out
+    if _scene_assets_out or _prop_assets_out:
+        _logger.info(
+            f"[INFO] 场景资产 {len(_scene_assets_out)} 个 / 道具资产 {len(_prop_assets_out)} 个 已写入 script_result.json"
+        )
+
+
+# ============================================================================
 # 6. 主流程
 # ============================================================================
 
@@ -426,6 +499,9 @@ def main() -> None:
             script.update(get_chapter_meta("锦衣夜行_77119小说.txt", NOVEL_CHAPTER))
         # 重新计算时间轴（使用增强算法）
         _compute_timecodes(script)
+        # v7: 缓存命中时也要跑场景/道具资产提取（老缓存无 scene_assets/prop_assets），
+        # 结果写回 script 再落盘，保证 step02a 资产生成能拿到数据
+        _extract_assets_and_update_script(script)
         with open(SCRIPT_FILE, "w", encoding="utf-8") as f:
             json.dump(script, f, ensure_ascii=False, indent=2)
         _logger.info("时间轴已重新计算")
@@ -440,6 +516,10 @@ def main() -> None:
         _console(f"  输出: {SCRIPT_FILE}")
         _console(f"  镜头数: {len(shots)}" + ("  + 钩子" if script.get("hook") else ""))
         _console(f"  总时长: {script.get('total_duration', 0):.1f}s")
+        _sa = script.get("scene_assets", {})
+        _pa = script.get("prop_assets", {})
+        if _sa or _pa:
+            _console(f"  资产: 场景{len(_sa)} / 道具{len(_pa)}")
         _console("=" * 56)
         return
 
@@ -598,6 +678,10 @@ def main() -> None:
             }
     script["scene_objects"] = _scene_objects_out
 
+    # v7: 场景/道具资产提取（依赖 script 的 shots[].scene/location/prompt，
+    # 必须在脚本生成/收敛之后执行；缓存命中路径也调用同一函数）
+    _extract_assets_and_update_script(script)
+
     # 计算时间轴（v5.0 运镜量化参数）
     _compute_timecodes(script)
 
@@ -628,6 +712,10 @@ def main() -> None:
     _scene_objs = script.get("scene_objects", {})
     if _scene_objs:
         _console(f"  场景物体: {', '.join(_scene_objs.keys())}")
+    _sa = script.get("scene_assets", {})
+    _pa = script.get("prop_assets", {})
+    if _sa or _pa:
+        _console(f"  资产: 场景{len(_sa)}个 {', '.join(_sa.keys())} / 道具{len(_pa)}个 {', '.join(_pa.keys())}")
     for k in ("resolution", "ratio", "fps", "render_style"):
         if k in script:
             _console(f"  {k}: {script[k]}")

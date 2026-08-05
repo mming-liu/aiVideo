@@ -287,3 +287,126 @@ SCENE_OBJECTS_SCHEMA = {
         "additionalProperties": False,
     },
 }
+
+# ========================================================================
+# 场景资产提取（step01_script_gen/asset_extractor.py）
+# 方法论：大场景建立镜头锁定地理/时间/天气色调，近景功能场景从其派生。
+# 与 SCENE_OBJECTS_SCHEMA 的分工：后者锚定空间物体的尺寸/容量（文字），
+# 本 schema 锚定场景的建立镜头/近景镜头描述（供资产生成图 + r2v 场景参考）。
+# ========================================================================
+
+_SCENE_ASSET = {
+    "type": "object",
+    "properties": {
+        "identifier": {
+            "type": "string",
+            "description": "场景名称（跨章节保持一致，如：照月湾小舟、杨府别庄大门）",
+        },
+        "location": {
+            "type": "string",
+            "description": "物理地点（如：照月湾荷花丛中、云河镇杨府别庄大门外）",
+        },
+        "time_of_day": {
+            "type": "string",
+            "description": "主要时间段（如：初秋上午、黄昏、夜晚）",
+        },
+        "weather": {
+            "type": "string",
+            "description": "天气状态（如：轻薄云层、月光晴朗）",
+        },
+        "color_tone": {
+            "type": "string",
+            "description": "整体色调（如：自然温暖朴素、冷蓝夜色）",
+        },
+        "wide_desc": {
+            "type": "string",
+            "description": "大场景建立镜头描述：地理环境/空间关系/季节光线/年代风格，画面中不得出现人物",
+        },
+        "near_desc": {
+            "type": "string",
+            "description": "近景功能场景描述：同一地点的内部/近景，与大场景保持季节/光线/年代/风格一致，画面中不得出现人物",
+        },
+        "consistent_terms": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "跨镜头统一称呼（如：[\"照月湾荷花丛中\", \"荷花荡\"]）",
+        },
+        "is_new": {
+            "type": "boolean",
+            "description": "是否不在已知场景库中",
+        },
+    },
+    "required": [
+        "identifier", "location", "time_of_day", "weather", "color_tone",
+        "wide_desc", "near_desc", "consistent_terms", "is_new",
+    ],
+    "additionalProperties": False,
+}
+
+SCENE_ASSETS_SCHEMA = {
+    "name": "scene_assets",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "scene_assets": {
+                "type": "array",
+                "items": _SCENE_ASSET,
+            },
+        },
+        "required": ["scene_assets"],
+        "additionalProperties": False,
+    },
+}
+
+# ========================================================================
+# 道具资产提取（step01_script_gen/asset_extractor.py）
+# 方法论：剧本核心道具 → 独立棚拍白底资产图，为后续贴图与视频生成提供稳定基础。
+# ========================================================================
+
+_PROP = {
+    "type": "object",
+    "properties": {
+        "identifier": {
+            "type": "string",
+            "description": "道具名称（跨章节保持一致，如：竹编背篓、青石马车）",
+        },
+        "category": {
+            "type": "string",
+            "description": "道具类别（如：背具、武器、器物、交通工具）",
+        },
+        "appearance": {
+            "type": "string",
+            "description": "外观描述：材质/颜色/结构/尺寸/使用痕迹/装饰，供资产生成图与跨章一致性引用",
+        },
+        "consistent_terms": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "跨镜头统一称呼",
+        },
+        "is_new": {
+            "type": "boolean",
+            "description": "是否不在已知道具库中",
+        },
+    },
+    "required": [
+        "identifier", "category", "appearance", "consistent_terms", "is_new",
+    ],
+    "additionalProperties": False,
+}
+
+PROPS_SCHEMA = {
+    "name": "props",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "props": {
+                "type": "array",
+                "items": _PROP,
+            },
+        },
+        "required": ["props"],
+        "additionalProperties": False,
+    },
+}
