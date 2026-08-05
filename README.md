@@ -164,12 +164,12 @@ python step04_merge/main.py
 | `FFMPEG_AUDIO_VOLUME` | 旁白音量增益 | `5dB` |
 | `OPENING_` | 开场标题 | `0` 关闭 |
 | `CLIP_SOURCE` | 视频来源 | `vimax` |
-| `MERGE_MODE` | 合并模式 | `native` |
+| `MERGE_MODE` | 合并模式（2026-08 起仅 native） | `native` |
+| `VIDEO_MODEL_VOICE` | 视频模型自带语音（对话/背景音） | `1` |
 
-**MERGE_MODE 选项：**
-- `stretch` - 音画同步（视频拉伸匹配音频）
-- `concat` - 直接拼接
-- `native` - 纯视频拼接（语音由视频模型生成）
+**MERGE_MODE（2026-08 起唯一 native）：**
+- `native` - 纯视频拼接，保留视频原声（语音/背景音由视频模型生成），只输出 `final.mp4`
+- ~~`stretch`/`concat`~~ 已删除：不再按音频时长拉伸，版本A/B双输出已移除
 
 ### Bailian (百炼) 模型配置
 
@@ -218,12 +218,10 @@ python step04_merge/main.py
     └── part_01_杀青州/             # part_{BOOK_INDEX:02d}_{BOOK_NAME} 部级
         └── chapter_001/           # chapter_{NOVEL_CHAPTER:03d} 章级
             ├── script_result.json # 分镜脚本
-            ├── final-A.mp4        # 最终视频 A
-            ├── final-B.mp4        # 最终视频 B
+            ├── final.mp4         # 最终视频（native，语音/背景音由视频模型生成）
             ├── subtitles.srt      # 字幕
             ├── audio/
-            │   ├── narration.mp3  # 完整旁白
-            │   └── shot_*.mp3     # 分镜旁白
+            │   └── shot_*.mp3     # step03 TTS 逐镜音频（step02 不生成，可选独立运行）
             ├── clips/             # 视频片段
             │   └── clip_*.mp4
             ├── vimax_working/
@@ -233,7 +231,7 @@ python step04_merge/main.py
             │           ├── last_frame.png
             │           ├── video.mp4
             │           └── keyframes/
-            └── stretched/         # 拉伸后视频片段
+            └── stretched/         # 合并临时目录
 ```
 
 ---
@@ -257,12 +255,13 @@ python step02b_video_gen/main.py --shots 3 --force
 VIDEO_REFERENCE_MODE=text
 ```
 
-### Q: 视频时长如何自动匹配音频？
+### Q: 视频时长如何控制？（2026-08 起不再由音频驱动）
 
-系统会自动：
-1. 在 step02b 生成视频前，先用 TTS 生成音频
-2. 根据音频实际时长设置视频 duration
-3. 修复已应用到：`_video_gen/bailian_provider.py`（使用 `req.duration or self._duration`）
+系统自动：
+1. step01 由 timecode 按文本/动作估算每个分镜时长，写入 `shot["duration_sec"]`
+2. step02b 生成视频时以 `duration_sec` 为时长（不再调用 TTS 测音频时长）
+3. 想加长某镜头，改它的 `duration_sec` 即可（或让 LLM 输出的动作分段更长）
+4. 合并为 native 模式：直接拼接保留视频原声，不按音频拉伸
 
 ### Q: 如何切换导演风格？
 

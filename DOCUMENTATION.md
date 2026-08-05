@@ -54,12 +54,14 @@ read_chapter() → gen_spy_script() → parse_response() → 差距分析 → _p
 输入：script_result.json
 输出：{VIMAX_WORKING_DIR}/shots/{idx}/video.mp4 + 首帧/尾帧
 
-流程：
-build_working_dir() → TTS 预生成 → 逐镜并发：生成帧 → 提交任务 → 后台轮询
+流程（2026-08 起不再预生成 TTS）：
+build_working_dir() → 逐镜并发：生成帧 → 提交任务 → 后台轮询
 
 核心逻辑：
 - build_working_dir()（shared/vimax_bridge.py）：将 script_result.json 转换为 ViMax 工作目录（角色、故事板、摄像机树、镜头描述、角色肖像）
 - 逐镜处理：生成首帧 first_frame.png（及尾帧 last_frame.png 若为 medium/large 变幅），提交异步视频任务，后台轮询结果（最多重试 3 次）
+- **时长**：视频时长由 `shot["duration_sec"]`（step01 timecode 权威计算）驱动，不再由 TTS 音频决定
+- **语音**：对话/背景音交给视频模型（wan2.7 系列有声视频，`VIDEO_MODEL_VOICE=1`），step02 不调用 TTS；台词+说话人+音色描述（voice_registry style）注入 prompt
 - 速率控制：提交间隔 + RPM 限流 + 并发数控制
 - 422 违规自动修复：通过 content_policy_fix.py 替换敏感词后重试
 - **智能轮询**：指数退避 + 抖动策略，显著减少 API 查询频率
@@ -70,22 +72,22 @@ build_working_dir() → TTS 预生成 → 逐镜并发：生成帧 → 提交任
 
 ### 步骤三：TTS 语音（step03_tts_audio/）
 
-逐镜 TTS 生成，检测到已有音频文件则跳过。包含：
+可选独立步骤（step02 已不调用 TTS）。逐镜 TTS 生成，检测到已有音频文件则跳过。包含：
 - 多音色支持：自动说话人检测 + 动态音色分配
 - 异步并发优化：Semaphore(2) 限流 + 指数退避重试
 
 ### 步骤四：视频合成（step04_merge/）
 
-输入：script_result.json + 视频片段 + 音频
+输入：script_result.json + 视频片段
 输出：final.mp4 + subtitles.srt
 
-核心逻辑（v5.2 优化）：
-- SRT 字幕生成：基于逐镜字幕文本 + 音频时长计算时间戳，单段最长 8s
-- 视频拉伸（stretch.py）：使用 ffmpeg setpts 滤镜拉伸每段视频匹配对应 TTS 时长（STRETCH_RATIO_MAX=1.333，超出报警）
+核心逻辑（2026-08 native 精简版）：
+- SRT 字幕生成：基于逐镜字幕文本 + 视频实际时长计算时间戳，单段最长 8s
+- **native 拼接（唯一模式）**：xfade/acrossfade 转场链直接拼接，保留每段视频原声
+  （语音/背景音由视频模型生成）；不再按音频时长拉伸视频
 - 转场效果：硬切 / 淡入 / 淡出 / 模糊叠化 / 简单叠化 / 黑场闪白
-- 开场缓冲：黑屏 → 标题卡（可选）→ 淡入到首个镜头
-- 最终合成：调色（对比度/饱和度/暗角）+ 字幕叠加 + 音量增益
-- **版本 A/B 双输出**：生成 final-A（纯净 TTS）和 final-B（混音：背景 20% + TTS 80%）
+- 最终合成：调色（对比度/饱和度/暗角）+ 字幕叠加
+- **单输出 final.mp4**：删除 final-A（纯 TTS）/ final-B（混音）双版本
 - **视频完整性校验**：检测异常小文件（<20KB）并自动重生成
 
 ---

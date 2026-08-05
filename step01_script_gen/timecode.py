@@ -144,6 +144,9 @@ def _compute_timecodes(script: dict) -> None:
         duration = max(duration, MIN_SHOT_DURATION)
 
         shot["duration"] = duration
+        # duration_sec：视频时长的权威来源（剥离 TTS 后由它驱动），
+        # 与 duration 同值；LLM 的 duration 仅作参考，此处覆盖。
+        shot["duration_sec"] = duration
         shot["timecode"] = {
             "start": round(current_time, 2),
             "end": round(current_time + duration, 2),
@@ -183,7 +186,8 @@ def _compute_timecodes(script: dict) -> None:
             # 如果钩子没有时长，用 LLM 返回的 narration_segment 估算
             hook_text = hook.get("narration_segment", "")
             hook_duration = _estimate_duration(hook_text)
-            hook["duration"] = round(hook_duration, 2)
+        hook["duration"] = round(hook_duration, 2)
+        hook["duration_sec"] = round(hook_duration, 2)
         total += hook_duration
 
     script["total_duration"] = round(total, 2)

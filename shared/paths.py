@@ -9,7 +9,7 @@
       │   └── chapter_cache/                  章节文本解析缓存
       └── part_{BOOK_INDEX:02d}[_{BOOK_NAME}]/   部级，如 part_01_杀青州
           └── chapter_{NOVEL_CHAPTER:03d}/    章级，如 chapter_002（对齐小说 第NNN章）
-              ├── script_result.json / final-A.mp4 / final-B.mp4 / subtitles.srt
+              ├── script_result.json / final.mp4 / subtitles.srt
               └── audio/ clips/ images/ vimax_working/ stretched/
 
 约定：

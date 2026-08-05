@@ -6,6 +6,10 @@
 - _gen_shot_audio_duration(): 为镜头生成 TTS 音频并获取实际时长
 - _measure_actual_duration(): 测量视频实际时长
 - _update_script_with_actual_durations(): 回填实际时长到 JSON
+
+⚠️ 2026-08 架构变更：step02 已不再调用本模块的 TTS 预生成（对话交给视频模型，
+视频时长由 shot["duration_sec"] 驱动）。本文件保留供 step03_tts_audio 及日后
+需要测量媒体时长/TTS 音频时长的地方复用，勿删除。
 """
 import sys
 from pathlib import Path

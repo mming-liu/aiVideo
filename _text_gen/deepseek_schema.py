@@ -46,7 +46,14 @@ _SHOT = {
         "color_tone": {"type": "string"},
         "cam_idx": {"type": "integer"},
         "clip_transition": {"type": "string"},
-        "duration": {"type": "number"},
+        "duration": {
+            "type": "number",
+            "description": "LLM 预估时长（秒），仅作参考",
+        },
+        "duration_sec": {
+            "type": "number",
+            "description": "本镜头视频目标时长（秒）——由 step01 timecode 权威计算，视频生成以它为准；剥离 TTS 后由它驱动时长",
+        },
         "variation_type": {"type": "string", "enum": ["small", "large"]},
         "keyframes": {"type": "array", "items": _KEYFRAME},
     },

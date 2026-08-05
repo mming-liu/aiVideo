@@ -871,6 +871,8 @@ def _check_gaze_direction(shots, hook: dict = None) -> dict:
     """
     issues, warnings = [], []
     # 终止于中文标点，避免跨句捕获；触发词只含真正的视线动词
+    # v6.10: 「视」会被前缀「影视剧」/机位术语「平视 微仰视 俯视 仰视」误触发
+    # （28 镜逐镜报 2 条、刷屏 56 行）——匹配前先剔除这些非视线词，真实视线(看/盯/望)不受影响。
     wrong_pattern = re.compile(r'[看盯望瞧瞄注视][^，。,\.；;：:（()）【】]{0,10}')
     correct_dirs = {'画左', '画右', '画上方', '画下方', '画前', '画后'}
     # 「向」+ 纯方位/动作词 = 运动用法，不是视线（如向上冲出/抓向船舷/偏向一侧）
@@ -883,15 +885,17 @@ def _check_gaze_direction(shots, hook: dict = None) -> dict:
         ff_desc = shot.get('ff_desc', '')
         text = f"{prompt} {ff_desc}"
 
-        wrong = wrong_pattern.findall(text)
-        # 过滤运动用法（「向」后接方位词）+ 已含画左/画右的画内锚点
-        filtered = [
-            w for w in wrong
-            if not motion_after.match(w)
-            and not any(d in w for d in correct_dirs)
-        ]
-        if filtered:
-            warnings.append(f'{label}{idx}: 视线描述 {filtered} 建议用画左/画右等')
+        wrong = []
+        # 先剔除机位/前缀术语，避免其内部「视」被误当视线（影视剧/平视/微仰视/俯视/仰视）
+        clean_text = re.sub(r'影视剧|平视|微仰视|俯视|仰视', '', text)
+        for m in wrong_pattern.finditer(clean_text):
+            w = m.group()
+            # 过滤运动用法（「向」后接方位词）+ 已含画左/画右的画内锚点
+            if motion_after.match(w) or any(d in w for d in correct_dirs):
+                continue
+            wrong.append(w)
+        if wrong:
+            warnings.append(f'{label}{idx}: 视线描述 {wrong} 建议用画左/画右等')
 
         has_correct = any(d in text for d in correct_dirs)
         if not has_correct and ('看向' in text or '盯着' in text):
@@ -1597,7 +1601,7 @@ def _check_content_density(shots: list[dict]) -> dict:
         idx = shot.get("index", "?")
         if idx == 0:  # 跳过 hook（hook 独立校验）
             continue
-        duration = shot.get("duration")
+        duration = shot.get("duration_sec") or shot.get("duration")
         try:
             duration = float(duration) if duration is not None else 5.0
         except (TypeError, ValueError):
@@ -2114,6 +2118,8 @@ def _fill_missing_new_fields(script: dict) -> None:
         shot.setdefault("framing", "")
         shot.setdefault("lighting_color", "")
         shot.setdefault("duration", 1)
+        # duration_sec：视频时长权威来源，缺省时与 duration 同值（timecode 后续会覆盖）
+        shot.setdefault("duration_sec", shot.get("duration", 1))
         shot.setdefault("negative_prompt", "")
         shot.setdefault("hook", "")
         shot.setdefault("time_stamp", "")
@@ -2127,6 +2133,7 @@ def _fill_missing_new_fields(script: dict) -> None:
         hook.setdefault("framing", "")
         hook.setdefault("lighting_color", "")
         hook.setdefault("duration", 1)
+        hook.setdefault("duration_sec", hook.get("duration", 1))
         hook.setdefault("negative_prompt", "")
         hook.setdefault("time_stamp", "")
 

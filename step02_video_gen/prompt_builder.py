@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 import os
 import json
+import re
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -22,11 +23,11 @@ from style_prefix import (
 from shared.style_cinematic import get_cinematic_prefix, get_director_negative
 from shared.config import CINEMATIC_STYLE
 
-# 是否允许视频模型自带语音（默认关闭）：
-# 模型自带配音不可控——会随机生成英文语音（镜头11等多镜实测），且与 TTS
-# 双声重叠。默认让模型只生成环境音效，全部语音（旁白+对话）由 step03 TTS 提供。
-# 设 VIDEO_MODEL_VOICE=1 可恢复旧行为（模型自带中文配音）。
-_MODEL_VOICE = os.getenv("VIDEO_MODEL_VOICE", "0").strip() == "1"
+# 是否允许视频模型自带语音（默认开启）：
+# 2026-08 架构变更：对话已交给视频模型（模型生成说话+口型+台词），step02 不再
+# 调用 TTS。设 VIDEO_MODEL_VOICE=0 可回到旧行为（模型只生成环境音效，全部语音由
+# step03 TTS 提供）。
+_MODEL_VOICE = os.getenv("VIDEO_MODEL_VOICE", "1").strip() == "1"
 
 # 参考图模式: "image" = 图生视频（需帧图片），"text" = 纯文生视频（默认）
 _REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
@@ -43,6 +44,78 @@ def _extract_characters_from_desc(desc: str, characters: list) -> list:
         if ident and ident in desc:
             found.append(ident)
     return found
+
+
+# ========================================================================
+# 声音一致性（2026-08）：台词 + 说话人 + 音色描述注入
+# ========================================================================
+
+_SPEAKER_PREFIX_RE = re.compile(
+    r"^([一-鿿]{1,8}?)(?:道|说|问|答|喊|叫|叹|怒|笑|哭|喝|骂|"
+    r"低声道|低声说|低声问道|低声笑道|笑道|冷笑道|急道|忙道|"
+    r"冷声道|朗声道|轻声道|声道|声说)[:：]"
+)
+
+
+def _extract_speaker_line(text: str) -> str:
+    """从「说话人道：台词」中提取台词部分（去掉说话人前缀）。
+
+    例：「听香尖叫道：救命啊——」→「救命啊——」
+    匹配不到前缀时原样返回（无说话人前缀，仅台词）。
+    """
+    if not text:
+        return text
+    m = _SPEAKER_PREFIX_RE.match(text)
+    if m:
+        return text[m.end():].strip()
+    return text.strip()
+
+
+def _detect_speaker_from_line(text: str, characters: list) -> str | None:
+    """从台词行检测说话人角色名（复用 step03 shot_tts 的检测逻辑）。
+
+    step03_tts_audio/shot_tts.py._detect_speaker_from_narration 是权威实现，
+    此处直接用 import 复用，避免两处逻辑漂移。
+    """
+    try:
+        from step03_tts_audio.shot_tts import _detect_speaker_from_narration
+        return _detect_speaker_from_narration(text, characters or [])
+    except Exception:
+        return None
+
+
+def _get_voice_description(text: str, characters: list) -> str:
+    """获取说话人的音色描述（如「青年男声，阳光」），用于 prompt 声音一致性。
+
+    复用 tts/voice_registry 的每角色音色映射（跨章持久化）：get_voice 会为
+    新角色分配并保存音色，返回含 style 描述的配置。把 style 拼进台词指令，
+    让视频模型按描述发声——同名角色跨镜头音色一致。
+    无角色/匹配失败时返回空串。
+    """
+    speaker = _detect_speaker_from_line(text, characters)
+    if not speaker:
+        return ""
+    try:
+        from tts.voice_registry import get_registry
+        from tts.voice_registry import AVAILABLE_VOICES
+        reg = get_registry()
+        # 用角色属性匹配音色（与 step03 相同逻辑）
+        gender, age_range = None, None
+        for c in (characters or []):
+            if c.get("identifier") == speaker:
+                gender = c.get("gender", "").lower()
+                age = c.get("age_range", "").lower()
+                if gender in ("male", "female"):
+                    gender = gender
+                else:
+                    gender = None
+                age_range = age if age in ("young", "middle", "old") else None
+                break
+        voice = reg.get_voice(speaker, gender, age_range)
+        style = voice.get("style", "").strip()
+        return style
+    except Exception:
+        return ""
 
 
 # ========================================================================
@@ -439,31 +512,46 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     )
 
     # ========== 6. 处理声音指令 ==========
-    if subtitle:
-        is_dialogue = (
-            ":" in subtitle
-            or "：" in subtitle
-            or '"' in subtitle
-            or "“" in subtitle
-            or "‘" in subtitle
-        )
+    # 2026-08 架构变更：对话/背景音交给视频模型（wan2.7 系列有声视频）。
+    # 每个镜头都注入场景背景音（audio_cue），对话镜头额外注入台词+说话人+音色描述。
+    # 台词文本本身写进 prompt，让模型念出来并与口型同步。
+    dialogue_text = shot.get("narration_segment", "").strip()
+    is_dialogue = (
+        ":" in dialogue_text or "：" in dialogue_text
+        or '"' in dialogue_text or "“" in dialogue_text or "‘" in dialogue_text
+    )
 
-        if _MODEL_VOICE:
-            if is_dialogue:
-                parts.append(f'（用中文普通话说）"{subtitle}"')
-            else:
+    # 6.0 场景背景音（所有镜头）：audio_cue 由 step01 生成，如「蝉鸣声渐起、水波轻拍」。
+    # 贴合当前场景即可——对话镜头同样保留背景音（人声在前、环境音垫底）。
+    audio_cue = shot.get("audio_cue", "").strip()
+    if _MODEL_VOICE:
+        if audio_cue:
+            parts.append(f"（背景音效：{audio_cue}）")
+        elif not is_character_shot:
+            parts.append("（背景音效：贴合场景的环境音，如风声、水声、虫鸣）")
+        if is_dialogue and dialogue_text:
+            # 台词 + 说话人 + 音色描述：只注入台词与说话人，让模型念出台词并同步口型。
+            # 声音一致性用 voice_registry 的 style 描述（如「青年男声，阳光」）。
+            voice_desc = _get_voice_description(dialogue_text, characters)
+            speaker_line = _extract_speaker_line(dialogue_text)
+            if voice_desc:
                 parts.append(
-                    f"（中文普通话画外音旁白，仅声音：{subtitle}）"
+                    f'（用中文普通话说，{voice_desc}）"{speaker_line}"'
                 )
+            else:
+                parts.append(f'（用中文普通话说）"{speaker_line}"')
             parts.append("所有语音必须为中文普通话，禁止任何英文语音。")
-        else:
-            if is_dialogue and is_character_shot:
-                parts.append("角色可有开口说话的口型与神态，但不发出人声。")
-            parts.append(
-                "音频只保留贴合画面的环境音效"
-                "（风声、水声、虫鸣、衣料与器物声等），"
-                "禁止任何人声、旁白、对话、歌声。"
-            )
+    else:
+        # 旧行为：模型不发声，语音由 step03 TTS 提供
+        if is_dialogue and is_character_shot:
+            parts.append("角色可有开口说话的口型与神态，但不发出人声。")
+        if audio_cue:
+            parts.append(f"（背景音效：{audio_cue}）")
+        parts.append(
+            "音频只保留贴合画面的环境音效"
+            "（风声、水声、虫鸣、衣料与器物声等），"
+            "禁止任何人声、旁白、对话、歌声。"
+        )
 
     # ========== 7. 空镜约束 ==========
     if not is_character_shot:
@@ -502,7 +590,7 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
 
 
 def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
-                  audio_duration: float = 0, characters: list | None = None,
+                  characters: list | None = None,
                   continuity_ref_image: str | None = None, mode: str = "A"):
     """构建 VideoGenerationRequest.
 
@@ -525,7 +613,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     if cinematic_prefix:
         full_prompt = cinematic_prefix + full_prompt
 
-    # 静音人声模式下，负面提示词同步追加人声类条目（双保险）
+    # _MODEL_VOICE=0 时（旧行为），负面提示词追加人声类条目（双保险）
     negative = (
         NEGATIVE_PROMPT
         if _MODEL_VOICE
@@ -592,12 +680,10 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     # 避免角色肖像参考图误导视频模型生成错误内容
     # 模式B下如果没有前一镜尾帧，也降级为 text-to-video
 
-    # 使用音频实际时长替代 LLM 预估的 duration，保证音画对齐
-    duration = (
-        max(round(audio_duration), 3)
-        if audio_duration > 0
-        else shot.get("duration", 5)
-    )
+    # 时长改由 shot["duration_sec"] 控制（step01 timecode 权威计算）。
+    # 不再由 TTS 音频时长驱动——视频模型自带对话/背景音后，音频不再是时长来源。
+    # 回退到 duration（旧分镜脚本无 duration_sec 字段）。
+    duration = shot.get("duration_sec") or shot.get("duration", 5)
 
     # 多关键帧优先：3+ 帧时使用多关键帧模式，2帧时使用首尾双锚定
     if extra_keyframe_paths:

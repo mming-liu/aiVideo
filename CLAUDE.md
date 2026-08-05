@@ -45,10 +45,11 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 - `BOOK_NAME`: 部名（拼入目录名，如 part_01_杀青州）
 - `PROMPT_MAX_CHARS`: 传给 LLM 的原文上限（默认50000，传递完整章节）
 - `SHOT_COUNT_MIN/MAX`: 分镜数范围（默认8-20，v4.1 起仅作 validation 软护栏，不进入 prompt）
-- `VIDEO_PROVIDER`: 视频生成供应商（默认agnes）
+- `VIDEO_PROVIDER`: 视频生成供应商（默认bailian）
 - `IMAGE_PROVIDER`: 图片生成供应商（默认agnes）
 - `TEXT_PROVIDER`: 文本生成供应商（默认deepseek）
-- `TTS_PROVIDER`: TTS供应商（默认dashscope_sdk）
+- `TTS_PROVIDER`: TTS供应商（默认dashscope_sdk；step02 已不调用 TTS，对话由视频模型生成）
+- `VIDEO_MODEL_VOICE`: 视频模型自带语音（默认1，对话/背景音交给视频模型；0=旧行为由 step03 TTS 提供）
 - `HOOK_ENABLED`: 是否生成钩子分镜（默认1，开启）
 - `COMPLIANCE_AUTO_FIX`: 是否自动修复敏感词（默认1，开启）
 - `VIDEO_REFERENCE_MODE`: 视频参考图模式（默认text，可选image/r2v）— text=文生视频（跳过帧图片），image=图生视频（需先运行step02a生成帧图片），r2v=参考图生视频（最多5个参考图，角色肖像+场景/道具资产图）
@@ -86,9 +87,10 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
     │   └── chapter_cache/                  # 章节文本解析缓存
     └── part_01_杀青州/                      # part_{BOOK_INDEX:02d}_{BOOK_NAME} 部级
         └── chapter_002/                    # chapter_{NOVEL_CHAPTER:03d} 章级
-            ├── script_result.json / final-A.mp4 / final-B.mp4 / subtitles.srt
+            ├── script_result.json / final.mp4 / subtitles.srt
             └── audio/ clips/ images/ vimax_working/ stretched/
 ```
+- 2026-08 架构变更：合并改为唯一 native 模式（直接拼接保留视频原声），只输出 `final.mp4`，删除 final-A/final-B 双版本；对话/背景音由视频模型生成（wan2.7 系列有声视频），视频时长由分镜 `duration_sec` 字段驱动（step01 timecode 权威计算），step02 不再调用 TTS。
 
 ### 场景/道具资产（v7 新增）
 四步资产生成方法论（`references/ai-scene-prop-asset-guide.md`）：

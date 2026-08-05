@@ -18,25 +18,6 @@ def seconds_to_srt_time(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
-def get_shot_target_duration(shot: dict) -> float:
-    """Get shot target duration - audio duration. Video will be stretched to this.
-
-    Priority: actual_audio_duration (TTS measured) > duration (text proportion estimate)
-    """
-    audio = shot.get("actual_audio_duration")
-    if audio and audio > 0:
-        return float(audio)
-    return shot.get("duration", 5)
-
-
-def find_shot_audio(shot_idx: int, audio_dir: Path):
-    """Find audio file for a shot."""
-    audio_path = audio_dir / f"shot_{shot_idx}.mp3"
-    if audio_path.exists():
-        return audio_path
-    return None
-
-
 def split_subtitle_by_punctuation(text: str, max_chars: int = 30) -> List[str]:
     """Split long subtitle into shorter parts by punctuation marks.
 

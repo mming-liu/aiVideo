@@ -26,9 +26,7 @@ import asyncio
 import json
 import os
 
-from step02_video_gen.audio_pregen import _gen_shot_audio_duration
-from tts import create_provider
-from shared.paths import script_file, vimax_working_dir, chapter_dir, audio_dir as _audio_dir
+from shared.paths import script_file, vimax_working_dir, chapter_dir
 from shared.tee_logger import get_logger
 from step02_video_gen.submit_poll import _submit_video, _get_shot_hash
 from shared.vimax_adapters import VideoGeneratorAiVideoAdapter
@@ -65,28 +63,7 @@ async def gen_all_videos(script: dict, working_dir: Path, script_file_path: Path
 
     # Adapter
     video_adapter = VideoGeneratorAiVideoAdapter()
-    tts_provider = create_provider()
-    audio_dir = _audio_dir()
 
-    # TTS 生成音频（获取时长）—— 只为待生成镜头生成，避免无谓 TTS 调用
-    shot_audio_durations = {}
-    for shot in shots:
-        idx = shot["index"]
-        if only_indices is not None and idx not in only_indices:
-            continue
-        ad = _gen_shot_audio_duration(shot, audio_dir, provider=tts_provider)
-        shot_audio_durations[idx] = ad
-        shot["actual_audio_duration"] = round(ad, 2)
-
-    if hook and hook.get("prompt"):
-        hook["index"] = 0
-        if only_indices is None or 0 in only_indices:
-            hook_audio_dur = _gen_shot_audio_duration(hook, audio_dir, provider=tts_provider)
-            hook["actual_audio_duration"] = round(hook_audio_dur, 2)
-            shot_audio_durations[0] = hook_audio_dur
-
-    total_audio = sum(shot_audio_durations.values())
-    logger.info(f"[INFO] Total audio duration: {total_audio:.1f}s")
     logger.info(f"[INFO] Reference mode: {REFERENCE_MODE}（全程统一，不分 Mode A/B）")
 
     actual_concurrency = max(1, min(len(shots) + (1 if hook else 0), VIDEO_CONCURRENCY))
@@ -106,13 +83,9 @@ async def gen_all_videos(script: dict, working_dir: Path, script_file_path: Path
     polls = []
     failed_count = 0
     for shot in tasks:
-        idx = shot["index"]
-        ad = shot_audio_durations.get(idx, 0)
-
         poll_task = await _process_one_shot_skip_frames(
             shot, shots_dir, video_adapter,
             script_mtime, script,
-            audio_duration=ad,
             poll_semaphore=poll_semaphore,
             force=force,
         )
@@ -132,7 +105,7 @@ async def gen_all_videos(script: dict, working_dir: Path, script_file_path: Path
 
 async def _process_one_shot_skip_frames(
     shot: dict, shots_dir: Path, video_adapter,
-    script_mtime: float | None, script: dict, audio_duration: float,
+    script_mtime: float | None, script: dict,
     poll_semaphore: asyncio.Semaphore,
     force: bool = False,
 ):
@@ -186,7 +159,7 @@ async def _process_one_shot_skip_frames(
 
     return await _submit_video(
         shot, shot_dir, video_path, frame_paths, shot_hash,
-        video_adapter, poll_semaphore, audio_duration, script, idx,
+        video_adapter, poll_semaphore, script, idx,
         continuity_ref_image=None, mode="A",
     )
 
@@ -261,7 +234,7 @@ def main():
         only_indices=only_indices, force=args.force,
     ))
 
-    # 将 actual_audio_duration 写回 script（供 step04 使用）
+    # 将可能回填的字段写回 script（如 actual_duration / duration_deviation_pct）
     with open(script_path, "w", encoding="utf-8") as f:
         json.dump(script, f, ensure_ascii=False, indent=2)
 

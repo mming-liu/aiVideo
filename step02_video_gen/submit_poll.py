@@ -87,11 +87,11 @@ def _get_shot_hash(shot: dict, script: dict) -> str:
     直接哈希实际提交给视频 API 的内容，而非分镜源字段：
     - _build_prompt 输出（已含 motion_desc/subtitle/角色特征锚点/context_bridge）
     - 风格前缀 + 负面提示词（全局配置变了所有视频都该重生成）
-    - narration_segment（决定 TTS 音频时长，进而决定视频帧数）
+    - narration_segment（决定 prompt 中的台词，台词变了视频该重做）
     - ff_desc + lf_desc + keyframes：图片 prompt 变了帧就变了，
       I2V 参考图变了视频也该重生成（不只是空镜）。
-    不含 duration：实际帧数由 TTS 音频时长决定，LLM 估算值变化不应触发重新生成。
-    """
+    不含 duration/duration_sec：实际帧数由 duration_sec 决定（step01 timecode），
+    时长变化不应触发重新生成视频。"""
     def _normalize(text: str) -> str:
         import re
         t = (text or "").strip()
@@ -281,7 +281,7 @@ async def _poll_video(
 async def _submit_video(
     shot: dict, shot_dir: Path, video_path: Path, frame_paths: list,
     shot_hash: str, video_adapter, poll_semaphore,
-    audio_duration: float, script: dict, idx: int,
+    script: dict, idx: int,
     continuity_ref_image: str | None = None,
     mode: str = "A",
 ) -> asyncio.Task | None:
@@ -294,7 +294,7 @@ async def _submit_video(
     for attempt in range(1, 4):
         try:
             req = _make_request(video_adapter, prompt, frame_paths, shot,
-                                audio_duration=audio_duration, characters=characters,
+                                characters=characters,
                                 continuity_ref_image=continuity_ref_image, mode=mode)
             task_id = await video_adapter.submit_task(req)
             task = asyncio.create_task(
@@ -310,7 +310,7 @@ async def _submit_video(
                 if fixed_prompt and fixed_prompt != prompt:
                     try:
                         req = _make_request(video_adapter, fixed_prompt, frame_paths, shot,
-                                            audio_duration=audio_duration, characters=characters,
+                                            characters=characters,
                                             continuity_ref_image=continuity_ref_image, mode=mode)
                         task_id = await video_adapter.submit_task(req)
                         task = asyncio.create_task(
@@ -333,7 +333,7 @@ async def _submit_video(
 async def _process_one_shot(
     shot: dict, shots_dir: Path, image_adapter, video_adapter,
     script_mtime: float | None, force_first_frame: bool,
-    script: dict, audio_duration: float,
+    script: dict,
     poll_semaphore: asyncio.Semaphore,
     continuity_ref_image: str | None = None,
     mode: str = "A",
@@ -374,7 +374,7 @@ async def _process_one_shot(
                         frame_paths = [continuity_ref_image] + frame_paths[1:]
                     return await _submit_video(
                         shot, shot_dir, video_path, frame_paths, shot_hash,
-                        video_adapter, poll_semaphore, audio_duration, script, idx,
+                        video_adapter, poll_semaphore, script, idx,
                         continuity_ref_image=continuity_ref_image, mode=mode,
                     )
 
@@ -441,7 +441,7 @@ async def _process_one_shot(
 
     return await _submit_video(
         shot, shot_dir, video_path, frame_paths, shot_hash,
-        video_adapter, poll_semaphore, audio_duration, script, idx,
+        video_adapter, poll_semaphore, script, idx,
         continuity_ref_image=continuity_ref_image, mode=mode,
     )
 # 提交限速由 _video_gen provider 内的 KeyScheduler 负责（每 key 独立 61s 冷却，
@@ -449,13 +449,12 @@ async def _process_one_shot(
 
 
 async def generate_alls(script: dict, working_dir: Path, script_file: Path, force_first_frame: bool = False) -> int:
-    """Pipeline: config -> TTS -> shots (shot 0+1 parallel Mode A, shot 2+ serial Mode B).
+    """Pipeline: config -> shots (shot 0+1 parallel Mode A, shot 2+ serial Mode B).
 
     shot 0 (hook) + shot 1: Mode A, parallel submit (no dependency).
     shot >= 2: Mode B, serial — each waits for previous video tail frame.
     """
-    from step02_video_gen.audio_pregen import _gen_shot_audio_duration, _update_script_with_actual_durations
-    from tts import create_provider
+    from step02_video_gen.audio_pregen import _update_script_with_actual_durations
     from shared.paths import chapter_dir
     from shared.tee_logger import get_logger
 
@@ -475,31 +474,14 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     shots_dir = working_dir / "shots"
     script_mtime = script_actual_mtime
 
-    # 2. TTS pre-gen
-    tts_provider = create_provider()
-    from shared.paths import audio_dir as _audio_dir
-    audio_dir = _audio_dir()
-
-    shot_audio_durations = {}
-    for shot in shots:
-        idx = shot["index"]
-        ad = _gen_shot_audio_duration(shot, audio_dir, provider=tts_provider)
-        shot_audio_durations[idx] = ad
-        shot["actual_audio_duration"] = round(ad, 2)
-
-    total_audio = sum(shot_audio_durations.values())
-
     actual_concurrency = min(len(shots), VIDEO_CONCURRENCY)
     poll_semaphore = asyncio.Semaphore(actual_concurrency)
 
-    # 3. Dual-mode scheduling: shot 0+1 parallel Mode A, shot 2+ serial Mode B
+    # 2. Dual-mode scheduling: shot 0+1 parallel Mode A, shot 2+ serial Mode B
     hook = script.get("hook")
     if hook and isinstance(hook, dict) and hook.get("prompt"):
         logger.info(f"\n[INFO] ===== Hook video (index=0) =====")
         hook["index"] = 0
-        hook_audio_dur = _gen_shot_audio_duration(hook, audio_dir, provider=tts_provider)
-        hook["actual_audio_duration"] = round(hook_audio_dur, 2)
-        shot_audio_durations[0] = hook_audio_dur
     else:
         hook = None
 
@@ -523,12 +505,10 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     mode_a_polls = []
     for shot, mode, tail_ref in mode_a_tasks:
         idx = shot["index"]
-        ad = shot_audio_durations.get(idx, 0)
         logger.verbose(f"  [Shot {idx}] Mode A (keyframes, parallel)")
         poll_task = await _process_one_shot(
             shot, shots_dir, image_adapter, video_adapter,
             script_mtime, force_first_frame, script,
-            audio_duration=ad,
             poll_semaphore=poll_semaphore,
             continuity_ref_image=None,
             mode="A",
@@ -552,7 +532,6 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     remaining = [s for s in shots if s["index"] >= MODE_B_START_INDEX]
     for shot in remaining:
         idx = shot["index"]
-        ad = shot_audio_durations.get(idx, 0)
         tracker.record_mode(idx, "B")
 
         tail_ref = tracker.get_tail_frame()
@@ -564,7 +543,6 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
         poll_task = await _process_one_shot(
             shot, shots_dir, image_adapter, video_adapter,
             script_mtime, force_first_frame, script,
-            audio_duration=ad,
             poll_semaphore=poll_semaphore,
             continuity_ref_image=tail_ref,
             mode="B",
