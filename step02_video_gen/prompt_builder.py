@@ -741,8 +741,8 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
     参考图来源（优先级：场景环境 → 出镜角色肖像 → 出镜道具）：
     1. 镜头所属场景的资产图（大场景 wide 优先，近景 near 次之）——
        scenes_bank/{场景}/wide.png|near.png，锚定环境/光线/色调
-    2. 本镜头实际出镜角色的肖像（front/side/back，视角匹配）——
-       character_portraits_registry.json
+    2. 本镜头实际出镜角色的肖像（front/side/back，视角匹配；特写镜头优先
+       face 面部特写锁五官，组合参考图法）——character_portraits_registry.json
     3. 本镜头出现的道具资产图 —— props_bank/{道具}/prop.png
 
     空镜（画面禁止人物）：只收场景资产图，不注入任何角色肖像——
@@ -829,6 +829,12 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
             if kw in search_text:
                 view_pref = "side"
                 break
+        # 面部特写视角（face 肖像）：特写/大特写/面部/表情镜头优先用独立面部特写
+        # 锁脸防变脸（组合参考图法：三视图 + 面部特写同时输入，模型优先锁面部特征）。
+        is_face_closeup = any(
+            kw in search_text for kw in ("大特写", "特写", "面部", "表情", "脸部", "脸的特写",
+                                         "面部特写", "微表情", "眉", "眼尾", "泪", "嘴角")
+        )
 
         for ch in (characters or []):
             ident = ch.get("identifier", "")
@@ -838,12 +844,19 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
             if not views:
                 continue
             picked = None
-            for view in [view_pref, "front", "side", "back"]:
-                p = views.get(view, {})
-                path = p.get("path", "") if isinstance(p, dict) else ""
-                if path and Path(path).exists():
-                    picked = path
-                    break
+            # 特写镜头：face 优先（锁定五官），其次按视角/默认视图
+            if is_face_closeup:
+                face_p = views.get("face", {})
+                fpath = face_p.get("path", "") if isinstance(face_p, dict) else ""
+                if fpath and Path(fpath).exists():
+                    picked = fpath
+            if not picked:
+                for view in [view_pref, "front", "side", "back"]:
+                    p = views.get(view, {})
+                    path = p.get("path", "") if isinstance(p, dict) else ""
+                    if path and Path(path).exists():
+                        picked = path
+                        break
             if picked and picked not in char_refs:
                 char_refs.append(picked)
 
@@ -931,9 +944,16 @@ def _find_fallback_reference(working_dir: Path, shot: dict | None = None,
     try:
         with open(registry_path, "r", encoding="utf-8") as f:
             registry = json.load(f)
+        is_closeup = any(kw in search_text for kw in ("大特写", "特写", "面部", "表情", "脸部"))
         for ident, views in registry.items():
             if not ident or ident not in search_text:
                 continue
+            # 特写镜头优先面部特写（锁五官），否则用正面全身
+            if is_closeup:
+                face = views.get("face", {}).get("path", "")
+                if face and Path(face).exists():
+                    print(f"  [fallback] 镜头{shot.get('index', '?')} 首帧缺失，使用角色 {ident} 面部特写肖像")
+                    return face
             front = views.get("front", {}).get("path", "")
             if front and Path(front).exists():
                 print(f"  [fallback] 镜头{shot.get('index', '?')} 首帧缺失，使用角色 {ident} 正面肖像")

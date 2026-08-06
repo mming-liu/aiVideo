@@ -54,6 +54,25 @@ PROMPT_BACK = (
     "Not anime, not cartoon, not illustration, not 3D render."
 )
 
+# -- 面部特写 Prompt（基于基础图，独立高清锁脸，组合参考图法核心） --
+# 来源：抖音@赛博子 组合参考图法——三视图 + 单独高清面部特写同时输入，
+# 模型优先锁定面部特征，再匹配全身造型，大幅降低变脸。面部特写是"变脸"
+# 重灾区，独立一张高清正面脸部图作为 r2v 面部锁定锚点。
+PROMPT_FACE_CLOSEUP = (
+    "Photorealistic close-up face portrait of {identifier}, "
+    "referencing the provided base image. "
+    "MUST match base image: face shape, eyes, nose, mouth, eyebrow arch, "
+    "skin tone, hairstyle and hairline, ALL light source direction, "
+    "color temperature 5500K completely consistent. "
+    "Head-and-shoulders composition, face filling the frame, "
+    "looking straight at camera, neutral expression. "
+    "Texture: realistic skin texture, subtle pores, natural eye detail, "
+    "fine hair strands. "
+    "Quality: photorealistic, film-grade texture, sharp facial detail, "
+    "8K HD resolution. White background, 16:9 landscape. "
+    "Not anime, not cartoon, not illustration, not 3D render."
+)
+
 DEGREE = "°"  # °
 
 
@@ -64,6 +83,8 @@ class CharacterPortraitsGenerator:
     1. generate_base_portrait() — 生成基础全景图，锁定核心特征（首次创建角色时）
     2. generate_side_portrait() — 基于基础图生成侧面全身照
     3. generate_back_portrait() — 基于基础图生成背面全身照
+    4. generate_face_closeup() — 基于基础图生成独立高清面部特写（组合参考图法，
+       与三视图同时输入，模型优先锁定面部特征，降低变脸）
     """
 
     def __init__(self, image_generator):
@@ -124,6 +145,29 @@ class CharacterPortraitsGenerator:
     ) -> ImageOutput:
         """基于基础图生成背面全身照 — 强制一致性约束"""
         prompt = PROMPT_BACK.format(
+            identifier=character.identifier_in_scene,
+            deg=DEGREE,
+        )
+        image_output = await self.image_generator.generate_single_image(
+            prompt=prompt,
+            reference_image_paths=[base_image_path],
+            save_path=save_path,
+        )
+        return image_output
+
+    async def generate_face_closeup(
+        self,
+        character: CharacterInScene,
+        base_image_path: str,
+        save_path: str | None = None,
+    ) -> ImageOutput:
+        """基于基础图生成独立高清面部特写 — 组合参考图法核心.
+
+        与正面/侧面/背面全身照同时输入 AI（r2v 参考图），模型优先锁定面部
+        特征（脸型/五官/发际线），再匹配全身造型，显著降低变脸（AI漫剧角色
+        面部一致性教程，抖音@赛博子）。
+        """
+        prompt = PROMPT_FACE_CLOSEUP.format(
             identifier=character.identifier_in_scene,
             deg=DEGREE,
         )

@@ -1994,6 +1994,241 @@ def _check_camera_upgrade(shots: list[dict]) -> dict:
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
 
+# v6.15 新增：打斗动作具体性检查（AI漫剧打斗动作提示词吸收，combat-action）
+# 打斗镜头禁止抽象"交手/打斗"，必须落具体招式 + 打击反馈 + 节奏变化：
+#   1. 招式具体：prompt 命中拳/掌/腿法招式词（或武器+挥/劈/刺等动词）
+#   2. 打击反馈：每镜至少 1 个可感知反馈元素（冲击波/火星/碎屑/衣袂/气浪/动态模糊等）
+#   3. 节奏变化：时间凝滞/慢动作类修饰必须写三段时长分配，禁止笼统"全程慢动作"
+# 与 v6.4 转场检查、v6.12 运镜升级互补：那个管镜头过渡，这个管动作本体。
+_COMBAT_STRIKE_TERMS = (
+    # 拳法类
+    "直拳", "摆拳", "勾拳", "连环拳", "反手拳", "虚晃拳",
+    # 掌法类
+    "推掌", "劈掌", "拍掌", "横掌", "双掌推出", "反掌",
+    # 腿法类
+    "高扫腿", "低扫腿", "后踢", "回旋踢", "腾空踢", "蹬踢", "飞踢", "旋风腿",
+    # 武器挥击动词（配合武器词判定具体招架）
+    "劈砍", "横劈", "上挑", "斜劈", "格挡", "挥刀", "出剑", "刺出", "横扫",
+    "斩", "劈", "刺", "砍",
+)
+_COMBAT_FEEDBACK_TERMS = (
+    "冲击波", "气浪", "火星四溅", "火花四溅", "碎屑飞溅", "飞沙走石",
+    "衣袂翻飞", "肌肉紧绷", "动态模糊", "速度线", "气流扰动", "扬尘",
+    "虎口青筋", "撞击", "格挡",
+)
+# 节奏修饰必须带时长分配（三段式），命中下面"裸节奏词"却无时长分段 → 提示
+_COMBAT_RHYTHM_NUDES = ("时间凝滞", "定格", "慢动作", "慢镜头")
+_COMBAT_TIMING_PATTERN = re.compile(r"前?\d+\.?\d*\s*秒|(\d|秒)[-–—](\d|秒)")
+
+
+def _check_combat_action(shots: list[dict]) -> dict:
+    """检查打斗动作具体性（v6.15 新增）★AI漫剧打斗动作提示词★.
+
+    仅检查检测为打斗的镜头（复用 _COMBAT_KEYWORDS + 高张力触发词）：
+    1. 招式必须具体（拳/掌/腿法招式词或武器挥击动词），禁止"激烈交手/两人缠斗"式抽象
+    2. 每镜至少 1 个打击反馈元素，防止"挥空拳"式的无反馈打斗
+    3. 时间凝滞/慢动作必须写三段时长分配，禁止笼统"全程慢动作"
+    """
+    warnings = []
+    issues = []
+
+    for shot in shots:
+        idx = shot.get("index", "?")
+        prompt = shot.get("prompt", "") or ""
+        narration = shot.get("narration_segment", "") or ""
+        text = " ".join([prompt, shot.get("ff_desc", "") or "", shot.get("motion_desc", "") or ""])
+
+        # 仅打斗/高张力镜头检查
+        is_combat = any(kw in narration for kw in _COMBAT_KEYWORDS) or any(kw in text for kw in _COMBAT_KEYWORDS)
+        if not is_combat:
+            continue
+
+        # 1. 招式具体性
+        has_strike = any(t in text for t in _COMBAT_STRIKE_TERMS)
+        has_weapon = any(w in text for w in ("刀", "剑", "枪", "鞭", "戟", "斧", "锤", "匕首", "暗器", "箭"))
+        has_abstract_fight = any(w in text for w in ("交手", "缠斗", "激战", "搏斗", "对战"))
+        if not has_strike:
+            if has_abstract_fight:
+                warnings.append(
+                    f"镜头{idx}: 打斗动作仍抽象（「{next(w for w in ('交手', '缠斗', '激战', '搏斗', '对战') if w in text)}」），"
+                    f"建议写具体招式（拳/掌/腿法名或 武器+挥/劈/刺+部位+方向）"
+                )
+            elif has_weapon:
+                warnings.append(
+                    f"镜头{idx}: 有武器但缺具体挥击动词，建议写「劈砍/横劈/上挑/刺出+方向+部位」"
+                )
+
+        # 2. 打击反馈
+        if not any(f in text for f in _COMBAT_FEEDBACK_TERMS):
+            warnings.append(
+                f"镜头{idx}: 打斗镜头缺打击反馈，建议加 冲击波/火星四溅/碎屑飞溅/衣袂翻飞/动态模糊 等效果"
+            )
+
+        # 3. 节奏修饰必须带时长分配
+        nude_rhythm = [r for r in _COMBAT_RHYTHM_NUDES if r in text]
+        if nude_rhythm and not _COMBAT_TIMING_PATTERN.search(text):
+            warnings.append(
+                f"镜头{idx}: 用了「{'/'.join(nude_rhythm)}」但未写时段分配，"
+                f"建议「前X秒：常速；X-X+2秒：定格；剩余：恢复」"
+            )
+
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 打斗动作: [WARN] {warn}")
+
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
+# v6.16 新增：克制感情绪戏检查（AI微表情生成教学吸收，restrained-emotion）
+# 告别/隐忍/失落/哽咽/噙泪等克制情绪：
+#   1. 禁止外放大动作（大哭/痛哭/猛烈摇头/瘫坐捶地）——情绪压在微表情细节
+#   2. 克制情绪镜头必须形成「微表情时间链」：至少 2-3 拍面部细节，按时间先后递进
+#   3. 情绪可视化照旧（抽象情绪词 → 面部/肢体动作），但克制情绪落点在面部细节
+# 与 _check_emotion_visualization 互补：那个管「抽象情绪词必须有可视化动作」，
+# 这个管「克制情绪的强度控制 + 递进链完整」。
+_RESTRAINED_EMOTION_WORDS = (
+    "隐忍", "释然", "失落", "哽咽", "噙泪", "含泪", "忍住不落", "无声哭", "无声地哭",
+    "压抑", "强忍", "强忍住", "苦笑", "别过脸", "眼眶泛红", "眼尾泛红", "微红",
+    "噙着泪", "泪光", "忍住泪", "将落未落", "克制",
+)
+# 外放大动作（克制情绪禁止组合）
+_RESTRAINED_OVERT_ACTIONS = ("大哭", "痛哭", "嚎啕", "失声痛哭", "哭喊", "捶地", "猛摇头",
+                              "剧烈颤抖", "抽搐", "泣不成声", "悲痛欲绝", "撕心裂肺", "嚎哭")
+# 微表情面部细节词（克制情绪链的构成拍）
+_RESTRAINED_MICRO_TELLS = (
+    "眼眶泛红", "眼尾泛红", "眼角泛红", "泛红", "泪光", "噙泪", "含泪", "将落未落",
+    "睫毛轻颤", "睫毛颤动", "睫毛微颤", "垂眼", "垂眸", "低垂", "低头", "目光低垂",
+    "失神", "无聚焦", "眼神空洞", "凝住", "瞳孔微缩", "抿紧", "嘴角紧闭", "嘴唇抿",
+    "嘴角", "眉眼", "别过脸", "扭头", "转过头", "微笑", "苦笑", "浮起", "微扬",
+    "松开", "吸了吸鼻子", "鼻尖", "喉头滚动", "呼吸", "胸口起伏",
+)
+
+
+def _check_restrained_emotion(shots: list[dict], hook: dict = None) -> dict:
+    """检查克制感情绪戏（v6.16 新增）★AI微表情生成教学★.
+
+    仅检查出现克制情绪词的镜头：
+    1. 克制基调：出现克制情绪词时禁止外放大动作（大哭/痛哭/猛摇头），
+       也不得用「悲痛欲绝」类形容词堆砌
+    2. 微表情时间链：克制情绪镜头必须 ≥2 个微表情面部细节拍（不能只写一个表情定住）
+    3. 若出现「眼泪/泪水」但没有「忍住/噙/无声」等克制修饰 → 提示补克制基调
+    """
+    warnings = []
+    issues = []
+
+    def _check_one(shot: dict, label: str):
+        nonlocal warnings, issues
+        idx = shot.get("index", "?")
+        prompt = shot.get("prompt", "") or ""
+        text = " ".join([prompt, shot.get("ff_desc", "") or "", shot.get("motion_desc", "") or ""])
+        if not any(w in text for w in _RESTRAINED_EMOTION_WORDS):
+            return
+
+        # 1. 克制基调：克制情绪词 + 外放大动作 → 冲突
+        overt_hits = [w for w in _RESTRAINED_OVERT_ACTIONS if w in text]
+        if overt_hits:
+            warnings.append(
+                f"{label}{idx}: 克制情绪与「{'/'.join(overt_hits[:3])}」冲突，"
+                f"克制情绪应压在微表情（无声哭/忍泪/苦笑），禁外放大动作"
+            )
+
+        # 2. 微表情时间链：克制情绪镜头 ≥2 个面部细节拍
+        micro_hits = [m for m in _RESTRAINED_MICRO_TELLS if m in text]
+        if len(micro_hits) < 2:
+            warnings.append(
+                f"{label}{idx}: 克制情绪镜头微表情不足（仅 {len(micro_hits)} 拍），"
+                f"应形成时间链：低头隐忍（抿唇/垂眼）→ 泪光（噙泪）→ 苦笑/释怀，"
+                f"每拍一个面部细节，按时间先后写全"
+            )
+
+        # 3. 有眼泪无克制修饰 → 补克制基调（防写成大哭）
+        if ("泪水" in text or "眼泪" in text or "泪" in text) and not any(
+            k in text for k in ("忍住", "噙", "将落未落", "含泪", "强忍", "无声", "忍泪", "涌上")
+        ):
+            warnings.append(
+                f"{label}{idx}: 出现泪/泪水但无克制修饰（忍住/噙/将落未落/含泪），"
+                f"克制哭戏请写「眼含热泪但忍住不落」，禁止直接「泪水滑落」"
+            )
+
+    for shot in shots:
+        _check_one(shot, "镜头")
+    if hook and isinstance(hook, dict):
+        _check_one(hook, "钩子镜头(index=0)")
+
+    for w in warnings:
+        print(f"[CHECK] 克制情绪: [WARN] {w}")
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
+# v6.16 新增：切换拍摄对象检查（AI视频镜头控制教学吸收，focal-switch）
+# 镜头在人物与物品之间切换时必须写清「方向+景别+运动+结束落点」四要素：
+#   1. 切换提示词必须有方向（左侧/右侧/上方/前方/环绕/前推/上移/左摇）
+#   2. 切换提示词必须有运动方式（前推/环绕/摇移/跟随/上移）
+#   3. 切换到物品的镜头必须写明「结束落点」（环绕一周/定格/拉回），禁止切到物品后无归宿
+#   4. 物品特写只用于关键道具/伏笔（被台词或动作点名），禁止为炫技硬切
+# 与 _check_camera_movement（18种运镜，一镜一运镜）互补：那个管镜头类型与多样性，
+# 这个管「切换对象」这类组合运镜的完整性。
+_FOCAL_SWITCH_MOTIONS = (
+    "前推", "推近", "推镜", "环绕", "摇移", "左摇", "右摇", "上移", "下移",
+    "跟随", "跟拍", "拉回", "拉远", "推上", "上摇", "下摇",
+)
+_FOCAL_SWITCH_DIRECTIONS = ("左", "右", "上", "下", "前", "后", "侧", "环绕", "正中", "画左", "画右")
+_FOCAL_SWITCH_ENDINGS = ("环绕", "定格", "拉回", "停", "停留", "落在", "对准", "聚焦", "结束")
+
+
+def _check_focal_switch(shots: list[dict], hook: dict = None) -> dict:
+    """检查切换拍摄对象运镜的完整性（v6.16 新增）★AI视频镜头控制教学★.
+
+    仅检查出现切换语义（前推/环绕/从...切到/焦点切换到/转向）的镜头：
+    1. 必须写清方向（从哪边/朝哪边）
+    2. 必须写清运动方式（前推/环绕/摇移/上移）
+    3. 切到物品的镜头必须写明结束落点，防止镜头切到物品后乱跑
+    """
+    warnings = []
+    issues = []
+
+    def _check_one(shot: dict, label: str):
+        nonlocal warnings, issues
+        idx = shot.get("index", "?")
+        prompt = shot.get("prompt", "") or ""
+        motion = shot.get("motion_desc", "") or ""
+        text = " ".join([prompt, motion])
+
+        # 触发：出现切换语义（从人物切到物品/焦点切换/转向某物）
+        is_switch = any(
+            s in text for s in ("切换到", "焦点切换", "从...切到", "转向", "从人物手部", "切换", "焦点")
+        )
+        has_motion = any(m in text for m in _FOCAL_SWITCH_MOTIONS)
+        if not (is_switch and has_motion):
+            return
+
+        # 1. 方向
+        has_dir = any(d in text for d in _FOCAL_SWITCH_DIRECTIONS)
+        # 2. 运动方式已由 has_motion 保证
+        # 3. 结束落点（切到物品类镜头）
+        is_item_target = any(w in text for w in ("戒指", "令牌", "玉簪", "臂环", "玉佩", "书信",
+                                                  "符", "剑鞘", "镜", "香囊", "步摇", "发簪", "令牌"))
+        if is_item_target and not any(e in text for e in _FOCAL_SWITCH_ENDINGS):
+            warnings.append(
+                f"{label}{idx}: 切换到物品特写但无结束落点，"
+                f"应写「环绕一周/定格在物品/拉回中景」，防止镜头切到物品后乱跑"
+            )
+        if not has_dir:
+            warnings.append(
+                f"{label}{idx}: 切换拍摄对象缺方向，"
+                f"应写清「从{人物}手部/左侧/右侧」+「前推/环绕」"
+            )
+
+    for shot in shots:
+        _check_one(shot, "镜头")
+    if hook and isinstance(hook, dict):
+        _check_one(hook, "钩子镜头(index=0)")
+
+    for w in warnings:
+        print(f"[CHECK] 切换拍摄对象: [WARN] {w}")
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
 # 8种AI人像专业光位（抖音「方块格子」教程吸收）
 # 人像镜头的光影描述必须落到具体灯位（光源相对人物/镜头的位置+软硬光+阴影形状），
 # 禁止"自然光""柔和光线"这种无位置、无来源的模糊光。
@@ -2153,6 +2388,9 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v6.12 新增：高级运镜升级检查（基础运镜→特效词，高张力镜头才提示）
     results["camera_upgrade"] = _check_camera_upgrade(shots)
 
+    # v6.15 新增：打斗动作具体性检查（combat-action 吸收，招式/反馈/节奏）
+    results["combat_action"] = _check_combat_action(shots)
+
     # v6.11 新增：人像光位检查（8种AI人像专业光位，防模糊光）
     results["lighting_position"] = _check_lighting_position(shots)
 
@@ -2174,6 +2412,12 @@ def _run_prompt_checklist(script: dict) -> dict:
 
     # v6.8 新增：情绪可视化检查（将抽象情绪词转化为具体肢体动作）
     results["emotion_visualization"] = _check_emotion_visualization(shots, hook)
+
+    # v6.16 新增：克制感情绪戏检查（微表情时间链，克制情绪禁外放大动作）
+    results["restrained_emotion"] = _check_restrained_emotion(shots, hook)
+
+    # v6.16 新增：切换拍摄对象运镜检查（人物→物品：方向+景别+运动+结束落点）
+    results["focal_switch"] = _check_focal_switch(shots, hook)
 
     # seedance2-skill 吸收：时长-内容密度检查（短镜头塞太多动作/场景）
     results["content_density"] = _check_content_density(shots)

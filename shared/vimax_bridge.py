@@ -547,6 +547,24 @@ async def _generate_missing_portraits(
             except Exception as e:
                 _bridge_log(f"  [bank] {identifier} 背面肖像生成失败: {e}")
 
+        # Step 4: 基于基础图生成独立高清面部特写（组合参考图法，锁脸防变脸）
+        # 面部是"变脸"重灾区——三视图 + 单独面部特写同时输入，模型优先锁面部特征。
+        face_path = portrait_dir / "face.png"
+        if not face_path.exists() and base_path.exists():
+            _bridge_log(f"  [bank] 基于基础图生成 {identifier} 面部特写肖像 ...")
+            try:
+                img_out = await portrait_gen.generate_face_closeup(
+                    char_in_scene, base_image_path=str(base_path),
+                    save_path=str(face_path),
+                )
+                if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
+                    img_out.data.save(str(face_path))
+                elif hasattr(img_out, "save"):
+                    img_out.save(str(face_path))
+                _bridge_log(f"  [bank] {identifier} 面部特写肖像 -> {face_path}")
+            except Exception as e:
+                _bridge_log(f"  [bank] {identifier} 面部特写肖像生成失败: {e}")
+
         # 构建 portraits dict（兼容旧 front 字段名）
         portraits = {}
         if base_path.exists():
@@ -567,6 +585,11 @@ async def _generate_missing_portraits(
             portraits["back"] = {
                 "path": str(back_path.resolve()),
                 "description": f"{identifier} 背面全身肖像",
+            }
+        if face_path.exists():
+            portraits["face"] = {
+                "path": str(face_path.resolve()),
+                "description": f"{identifier} 面部特写肖像（锁脸防变脸）",
             }
 
         # 注册到 bank
@@ -650,7 +673,14 @@ def _select_best_reference(
             entry = bank.get_character(identifier)
             if entry and entry.get("portraits"):
                 portraits = entry["portraits"]
-                # 按优先级尝试：检测到的视角 → front → side → back
+                # 特写镜头：face 面部特写优先（锁五官防变脸，组合参考图法）；
+                # 否则按优先级尝试：检测到的视角 → front → side → back
+                is_closeup = any(kw in search_text for kw in ("大特写", "特写", "面部", "表情", "脸部"))
+                if is_closeup:
+                    face_p = portraits.get("face", {}).get("path")
+                    if face_p and Path(face_p).exists():
+                        _bridge_log(f"  [bridge] 镜头{shot['index']}: 参考图=角色 {identifier} 面部特写")
+                        return face_p
                 for view in [view_pref, "front", "side", "back"]:
                     p = portraits.get(view, {}).get("path")
                     if p and Path(p).exists():
@@ -696,6 +726,7 @@ def _select_all_character_refs(
     view_pref = _detect_view_preference(search_text)
 
     refs: list[str] = []
+    is_closeup = any(kw in search_text for kw in ("大特写", "特写", "面部", "表情", "脸部"))
     for char in characters_data:
         identifier = char.get("identifier", "")
         if not identifier or identifier not in search_text:
@@ -704,6 +735,15 @@ def _select_all_character_refs(
         if not entry or not entry.get("portraits"):
             continue
         portraits = entry["portraits"]
+        # 特写镜头：face 面部特写优先（锁五官防变脸）
+        if is_closeup:
+            face_p = portraits.get("face", {}).get("path")
+            if face_p and Path(face_p).exists():
+                refs.append(face_p)
+                _bridge_log(f"  [bridge] 镜头{shot['index']}: 多角色参考=角色 {identifier} 面部特写")
+                if len(refs) >= limit:
+                    break
+                continue
         # 按优先级尝试：检测到的视角 → front → side → back
         for view in [view_pref, "front", "side", "back"]:
             p = portraits.get(view, {}).get("path")
