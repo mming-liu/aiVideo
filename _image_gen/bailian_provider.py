@@ -73,6 +73,14 @@ class BailianImageService(ImageGenerationService):
         self._model_queue: list[str] = [BAILIAN_T2I_MODEL] + fallback_models
         self._current_model_index: int = 0
 
+        # 模型参考图上限（I2I 模式）：
+        # qwen-image-2.0-2in1 / qwen-image 系列支持 0~3 个 image content items
+        # （0 = T2I，1~3 = I2I）。上层 force_multi_ref 会绕过 IMAGE_MULTI_REF 全传
+        # 参考图（钩子 5 张 = 场景 + 3 角色 + 道具），provider 必须在此裁剪到模型上限，
+        # 否则 400: "Model supports 0~3 image content items. Got N image items."
+        # 可通过环境变量 IMAGE_MAX_REFS 覆盖（部分模型支持更多参考图）。
+        self._max_image_refs = int(os.getenv("IMAGE_MAX_REFS", "3"))
+
         # 设置 dashscope API key 和 Bailian Workspace URL
         dashscope.api_key = BAILIAN_API_KEY
         # Bailian 使用 Workspace 专用端点
@@ -148,6 +156,16 @@ class BailianImageService(ImageGenerationService):
                     url = _encode_image(req.reference_image_path)
                     if url:
                         ref_urls.append(url)
+                # 裁剪到模型 I2I 上限（0~3 张），超出丢弃尾部参考图。
+                # 首帧/尾帧参考图组装时已按 场景→角色→道具 排序，优先级在前，
+                # 超出的尾部（多为道具/次要角色）丢弃不致命。
+                if len(ref_urls) > self._max_image_refs:
+                    dropped = len(ref_urls) - self._max_image_refs
+                    _verbose_write(
+                        f"  [镜头{req.shot_index}] 参考图 {len(ref_urls)} 张超过模型上限 "
+                        f"{self._max_image_refs}，裁剪掉后 {dropped} 张（保留 场景→角色→道具 优先级）"
+                    )
+                    ref_urls = ref_urls[: self._max_image_refs]
                 for url in ref_urls:
                     content_items.append({"image": url})
                 messages = [

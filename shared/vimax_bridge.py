@@ -951,6 +951,60 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
     return refs
 
 
+def _detect_action_subject(shot: dict, characters: list | None = None) -> str:
+    """从镜头描述中检测动作主体（动词主语）.
+
+    组合参考图法：多人镜头参考图名额优先给动作主体——它是镜头画面里做核心
+    动作的角色（钩子"刺客自水面窜出、匕首劈落"→刺客）。用 motion_desc /
+    ff_desc 里「主体+动作动词」的最早出现判定：遍历已知角色名，找到
+    「角色名+（了/地/一/向/自…）+动作动词」在描述中出现位置最靠前的那个。
+
+    返回角色名；无法判定时返回空字符串（调用方保持原顺序）。
+    """
+    text = " ".join([
+        shot.get("motion_desc", "").strip() or shot.get("prompt", ""),
+        shot.get("ff_desc", "").strip() or "",
+        shot.get("prompt", "").strip() or "",
+    ])
+    if not text:
+        return ""
+    # 角色名候选：参数 characters（script 顺序优先）→ 注册表 key 兜底
+    known = [c.get("identifier", "") for c in (characters or []) if c.get("identifier", "")]
+    if not known:
+        try:
+            from shared.paths import vimax_working_dir
+            reg_path = vimax_working_dir() / "character_portraits_registry.json"
+            if reg_path.exists():
+                import json as _json
+                known = list(_json.load(open(reg_path, encoding="utf-8")).keys())
+        except Exception:
+            known = []
+    if not known:
+        return ""
+    # 动作动词（做核心动作的标记）
+    action_verbs = (
+        "窜出", "冲出", "跃出", "刺", "劈", "砍", "扑", "杀", "倒", "喊", "叫",
+        "尖叫", "仰面", "后倒", "摔", "跑", "追", "跪", "拜", "夺", "抢",
+        "拔", "抽", "挥", "斩", "轰", "踹", "踢", "挥手", "怒喝", "厉喝",
+        "哭", "笑", "转身", "回头", "出手", "攻击",
+    )
+    best: str = ""
+    best_pos = len(text)
+    for verb in action_verbs:
+        pos = text.find(verb)
+        if pos < 0:
+            continue
+        # 动词往前找最近的角色名（主语在动词前，通常在 0~8 字内）
+        window = text[max(0, pos - 8):pos]
+        for ident in known:
+            if ident and ident in window:
+                if pos < best_pos:
+                    best = ident
+                    best_pos = pos
+                break
+    return best
+
+
 def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
                                     limit: int = 3) -> list[str]:
     """从 character_portraits_registry.json 为本镜头出镜角色收集肖像参考图.
@@ -1014,6 +1068,16 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
                 seen.add(ident)
                 char_names.append(ident)
 
+        # 角色重要性排序（组合参考图法：多人镜头参考图上限内的名额优先给动作主体）：
+        # 1. 动作主体（motion_desc/ff_desc 的动词主语，如钩子"刺客自水面窜出"→刺客）
+        # 2. 其余出镜角色按出现顺序
+        # 这样 IMAGE_MAX_REFS 裁剪/拼图保留下限内的名额时，动作主体肖像优先保住，
+        # 而不是被"场景→角色→道具"顺序里的次要角色挤掉。
+        action_subject = _detect_action_subject(shot, characters)
+        if action_subject and action_subject in char_names:
+            char_names.remove(action_subject)
+            char_names.insert(0, action_subject)
+
         refs: list[str] = []
         for ident in char_names:
             if ident not in search_text:
@@ -1037,6 +1101,54 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
     except Exception as e:
         _bridge_log(f"  [bridge] 肖像参考图收集异常: {e}")
         return []
+
+
+def _inject_object_size_anchor(shot: dict, text: str) -> str:
+    """把场景物体尺寸锚定注入帧 prompt（防船/车等物体比例漂移）.
+
+    图片模型默认按「一个人躺满整艘船」的直觉画船——尺寸信息在
+    script_result.json 的 scene_objects（如 照月湾小舟 6米×1.4米），
+    但帧 prompt 只用了 ff_desc/lf_desc（LLM 生成时不一定带尺寸）。
+    按 shot.location 匹配 scene_objects，命中则把尺寸+称呼追加到 prompt，
+    让首帧/尾帧的物体比例与原文一致（code-audit 2026-08-06 钩子"船太小"）。
+
+    shot: 镜头 dict（含 location/scene）
+    text: 已组装的帧 prompt
+    """
+    loc = shot.get("location", "") or shot.get("scene", "") or ""
+    if not loc:
+        return text
+    try:
+        from shared.paths import chapter_dir
+        import json as _json
+        script_path = chapter_dir() / "script_result.json"
+        if not script_path.exists():
+            return text
+        script = _json.load(open(script_path, encoding="utf-8"))
+        objs = script.get("scene_objects", {})
+        if not isinstance(objs, dict) or not objs:
+            return text
+        for name, obj in objs.items():
+            if not isinstance(obj, dict):
+                continue
+            # 匹配：物体名/一致称呼出现在镜头地点或画面描述中
+            match_sources = [name] + list(obj.get("consistent_terms", []) or [])
+            if obj.get("category"):
+                match_sources.append(obj["category"])
+            if not any(src and src in (loc + text) for src in match_sources if src):
+                continue
+            length = obj.get("length_m")
+            width = obj.get("width_m")
+            subtype = obj.get("subtype", "")
+            if not length and not width:
+                return text
+            # 只注入尺寸/称呼，不注入容量结构（避免与画面描述冲突）
+            size_desc = f"该{name}为{subtype}{'，长' + str(length) + '米' if length else ''}{'、宽' + str(width) + '米' if width else ''}"
+            if size_desc not in text:
+                return f"{text}。{size_desc}"
+        return text
+    except Exception:
+        return text
 
 
 async def _gen_first_frame_async(
@@ -1109,6 +1221,8 @@ async def _gen_first_frame_async(
         # 添加风格前缀 + 严格约束（与视频生成保持一致，确保风格统一）
         # 先预处理：替换 AI 可能误解的词汇
         ff_desc = preprocess_prompt_for_image(ff_desc)
+        # 场景物体尺寸锚定注入（船/车等物体比例防漂移，code-audit 08-06 钩子船太小）
+        ff_desc = _inject_object_size_anchor(shot, ff_desc)
         ff_desc_full = sanitize_prompt(ensure_prefix(ff_desc, STYLE_PREFIX), verbose=False)
         ff_desc_full = add_image_strict_constraints(ff_desc_full, "首帧", shot=shot)
         refs = reference_paths if reference_paths else []
@@ -1216,6 +1330,8 @@ async def _gen_last_frame_async(
         # 添加风格前缀 + 严格约束（与视频生成保持一致，确保风格统一）
         # 先预处理：替换 AI 可能误解的词汇
         lf_desc = preprocess_prompt_for_image(lf_desc)
+        # 场景物体尺寸锚定注入（船/车等物体比例防漂移）
+        lf_desc = _inject_object_size_anchor(shot, lf_desc)
         # 尾帧注入场景上下文 + 显式"重构图"指令：
         # 参考图（首帧）只作人物/风格锚定，构图必须按 lf_desc 重新布局，
         # 否则参考图会把动作结果帧也锁死在首帧构图上，三帧雷同、动作无法推进。
@@ -1451,12 +1567,12 @@ async def gen_shot_frames(
 
     # 尾帧 generation（全镜头覆盖：首尾双关键帧钳制风格漂移，
     # 不再按 variation_type 过滤——LLM 常输出空值导致全部镜头无尾帧）
-    # 尾帧参考图：首帧（锚定动作起点）+ 场景/角色/道具资产（锚定一致）。
-    lf_refs = [ff_path_str] if ff_path_str else None
-    if lf_refs:
-        lf_refs = list(lf_refs) + frame_refs
-    else:
-        lf_refs = frame_refs or None
+    # 尾帧参考图：场景/角色/道具资产（锚定人物形象与环境一致）。
+    # 不再把首帧整图作为尾帧参考图——首帧是动作起点，直接抄首帧构图会让
+    # 尾帧几乎复刻首帧（刺客同位置、听香位置错乱、两帧雷同），
+    # 动作演变只能靠 lf_desc 文字描述驱动。首帧只通过 frame_refs 的
+    # 场景资产图隐式锚定环境/光线，不用整图锁死尾帧构图。
+    lf_refs = frame_refs or None
     lf_path_str = await _gen_last_frame_async(
         image_adapter, shots_dir, shot,
         force=force, script_mtime=script_mtime,
@@ -1471,11 +1587,9 @@ async def gen_shot_frames(
     if skip_first_frame:
         kf_paths = []
     else:
-        kf_refs = [ff_path_str] if ff_path_str else None
-        if kf_refs:
-            kf_refs = list(kf_refs) + frame_refs
-        else:
-            kf_refs = frame_refs or None
+        # 关键帧参考图：场景/角色/道具资产（锚定一致），不用首帧整图锁死构图
+        # （与尾帧同理——首帧整图会把关键帧的中间动作态锁死在起点构图上）。
+        kf_refs = frame_refs or None
         kf_paths = await _gen_keyframes_async(
             image_adapter, shots_dir, shot,
             force=force, script_mtime=script_mtime,

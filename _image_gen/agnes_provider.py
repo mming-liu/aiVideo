@@ -146,6 +146,16 @@ class AgnesImageService(ImageGenerationService):
             else:
                 _verbose_write(f"  [镜头{req.shot_index}] 参考图读取失败，降级为 text-to-image")
 
+        # 裁剪到模型 I2I 参考图上限（默认 3，可用 IMAGE_MAX_REFS 覆盖）。
+        # 与 bailian_provider 同一兜底：上层 force_multi_ref 会绕过 IMAGE_MULTI_REF
+        # 全传参考图（钩子 5 张 = 场景 + 3 角色 + 道具），超上限会触发 provider 400。
+        # 参考图按 场景→角色→道具 排序，保留优先级在前的，丢弃尾部。
+        max_refs = int(os.getenv("IMAGE_MAX_REFS", "3"))
+        if len(ref_data_urls) > max_refs:
+            dropped = len(ref_data_urls) - max_refs
+            _verbose_write(f"  [镜头{req.shot_index}] 参考图 {len(ref_data_urls)} 张超过上限 {max_refs}，裁剪掉 {dropped} 张")
+            ref_data_urls = ref_data_urls[:max_refs]
+
         while idx < len(self._model_queue):
             model = self._model_queue[idx]
             # 冷却调度：取最早可用的 key（阻塞直到有 key 出冷却）

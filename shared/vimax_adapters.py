@@ -84,7 +84,15 @@ class ImageGeneratorAiVideoAdapter:
             ref_paths = []
             ref = refs[0] if refs else None
 
+        # 参考图数量上限兜底：provider 单次请求能传的图有限（qwen-image 系列
+        # I2I 上限 3 张 = IMAGE_MAX_REFS）。force_multi_ref 会绕过 IMAGE_MULTI_REF
+        # 全传参考图（钩子 5 张 = 场景+3角色+道具），超过 provider 上限会 400
+        # "supports 0~3 image items"。这里把超出的尾部参考图拼成单张「参考表」，
+        # 保留上限内的名额 + 1 张拼图，总共不超过 provider 上限，不丢信息
+        # （拼图让模型一次看到多个角色长相）。优先级保留在前（场景/角色在前，
+        # 尾部多为道具/次要角色）。
         # 单图模型兜底：provider 不支持多参考图时，把多张肖像拼成单张参考表
+        max_refs = int(os.getenv("IMAGE_MAX_REFS", "3"))
         if ref_paths and not getattr(self._svc, "supports_multi_ref", True):
             try:
                 from shared.portrait_stitch import stitch_portraits
@@ -98,6 +106,30 @@ class ImageGeneratorAiVideoAdapter:
                 # 拼图失败则退回第一张，保证不中断生成
                 ref = ref_paths[0]
                 ref_paths = []
+        elif len(ref_paths) > max_refs:
+            # provider 支持多图但超模型上限：保留前 max_refs-1 张 + 尾部拼图 = max_refs 张
+            try:
+                from shared.portrait_stitch import stitch_portraits
+                from shared.paths import vimax_working_dir
+                from shared.log_utils import verbose_write
+                keep = max_refs - 1
+                sheet_path = vimax_working_dir() / "shots" / str(shot_index) / "ref_sheet_extra.png"
+                stitched = stitch_portraits(ref_paths[keep:], str(sheet_path))
+                if stitched:
+                    ref_paths = list(ref_paths[:keep]) + [stitched]
+                    verbose_write(
+                        f"  [镜头{shot_index}] 参考图 {len(refs)} 张超过模型上限 {max_refs}，"
+                        f"尾部 {len(refs) - keep} 张拼接为参考表，共 {len(ref_paths)} 张传入",
+                        log_file="step02a.log",
+                    )
+            except Exception:
+                # 拼图失败则裁剪到上限，保证不中断
+                dropped = len(ref_paths) - max_refs
+                verbose_write(
+                    f"  [镜头{shot_index}] 参考图超上限拼图失败，裁剪掉 {dropped} 张",
+                    log_file="step02a.log",
+                )
+                ref_paths = ref_paths[:max_refs]
 
         full_prompt = prompt
         if not skip_prefix:

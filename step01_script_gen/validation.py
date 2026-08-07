@@ -1533,9 +1533,45 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
         motion = shot.get("motion_desc", "").strip() or shot.get("prompt", "") or ""
         if not ff:
             return
+        # 结果状态污染检查（v6.16）：ff_desc 是动作开始前的定格，若把动作
+        # 进行/结束后的结果状态（血溅到脸上、尖叫、瘫坐、倒地）写进 t=0，
+        # 就是"图片提示词是一串动作"的根因——图片模型画不出"炸开→冲出→
+        # 溅血→尖叫"的递进，只能靠参考图兜底导致两帧雷同。
+        # 触发条件：motion 有时间分段（动作确实在推进）且 ff 与 motion 都含
+        # 同一结果状态词 → 该状态属于动作结果，不属于首帧定格。
+        # 例：ff「听香仰头张嘴尖叫，脸上溅着暗红红珠」+ motion「2-4秒听香脸上
+        # 溅红；4-6秒听香发出凄厉尖叫」→ 尖叫与溅血都是动作结果，被提前到 t=0。
+        _RESULT_STATE_WORDS = (
+            "尖叫", "溅血", "溅红", "血珠", "血迹", "溅着", "暗红",
+            "瘫坐", "倒地", "倒下", "晕厥", "昏迷", "捂住脸", "捂脸",
+            "泪水滑落", "痛哭", "大哭", "抽搐",
+        )
+        _TIME_SEG_RE = re.compile(r"前\d+秒|后\d+秒|\d+\s*[-–]\s*\d+\s*秒")
+        if _TIME_SEG_RE.search(motion):
+            polluted = [w for w in _RESULT_STATE_WORDS if w in ff and w in motion]
+            if polluted:
+                warnings.append(
+                    f"{label}: ff_desc 把动作结果状态「{'、'.join(polluted)}」写进首帧定格，"
+                    f"但 motion_desc 该状态发生在动作推进中（{motion[:50]}...）。"
+                    f"首帧只能画动作开始前的状态（如刺客刚破水、听香惊恐未尖叫、脸上无血），"
+                    f"禁止把血溅到脸上/尖叫/倒地等动作结果提前到 t=0——否则图片模型画不出一串动作，"
+                    f"只能照首帧参考图兜底导致首尾帧雷同。"
+                )
         # 完成态动词检测
         completed = [v for v in _FF_COMPLETED_VERBS if v in ff]
         if not completed:
+            return
+        # 进行中定格豁免：「半身已冲出水面 + 武器高举未落下」是动作进行中的
+        # 定格（还有后续劈落/追击），不是动作结果时刻。这是规则建议的正确写法
+        # （如'刺客半身破水、刀高举未落下'），不应误报为完成态。
+        # 误报示例（code-audit 08-06 钩子）：ff「半身已冲出水面、右手高举匕首过顶」
+        # 是进行中，motion 前2秒才劈落——时序一致，却因「已冲出」被判完成态。
+        in_progress_exempt = (
+            ("半身" in ff and "已冲出" in ff and any(k in ff for k in ("高举", "未落", "过顶", "扬起")))
+            or ("破水" in ff and "高举" in ff)
+            or ("即将" in ff or "欲" in ff or "尚未" in ff)
+        )
+        if in_progress_exempt:
             return
         # motion 是否有进行态动作
         has_progressive = any(v in motion for v in _MOTION_PROGRESSIVE)
@@ -2229,6 +2265,248 @@ def _check_focal_switch(shots: list[dict], hook: dict = None) -> dict:
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
 
+# v6.17 新增：打斗四段式节奏检查（抖音拉片《凡人修仙传打戏》吸收，combat-arc）
+# 整段打斗（连续 4 镜以上命中打斗/高张力触发词）必须覆盖「对峙→攻防→反转→收尾」四段：
+#   1. 段式覆盖：打斗段应包含 快镜攻防（短镜/推拉跟）+ 长镜蓄力（反转/大招）+ 空镜/远景收尾
+#   2. 反差提示：打斗段若全片 1-2s 短镜、无任何长镜慢放蓄力 → 提示补反转长镜（大招没冲击）
+#   3. 闪白提示：大招/雷击/蓄力类镜头未用「黑场闪白/闪白」转场 → 提示制造悬念
+#   4. 收尾提示：打斗段结束无空镜/远景收尾升华 → 提示战后拉长时间
+# 只 WARN 不阻断（节奏由 LLM 决定，此处仅提示结构完整性）。
+_COMBAT_ARC_TRIGGERS = _COMBAT_KEYWORDS | _CAMERA_UPGRADE_TENSION
+# 反转/大招/蓄力类关键词（命中即视为存在反转段）
+_COMBAT_ARC_CLIMAX_WORDS = (
+    "大招", "蓄力", "施法", "法术", "灵光", "法阵", "凝结", "爆气", "暴气",
+    "积蓄", "聚力", "运功", "念咒", "腾空", "跃起蓄力",
+)
+# 长镜/慢放标记（反转段载体）
+_COMBAT_ARC_SLOW_LONGSHOT = ("慢动作", "慢镜头", "长镜头", "环绕", "慢放", "凝滞", "定格")
+# 收尾升华标记（空镜/大远景/情绪镜头）
+_COMBAT_ARC_CODA_WORDS = ("空镜", "大远景", "远景", "极光", "月夜", "黄昏", "晨光", "背影", "升华", "落幕")
+# 闪白转场标记（大招/雷击前）
+_COMBAT_ARC_FLASH_WHITE = ("闪白", "黑场闪白", "白闪", "强光充满")
+
+
+def _check_combat_arc(shots: list[dict]) -> dict:
+    """检查打斗四段式节奏结构（v6.17 新增）★凡人修仙传打戏拉片★.
+
+    仅对连续打斗段（≥4 镜命中打斗/高张力触发词）做结构检查，防误报：
+    1. 反转长镜反差：打斗段全片短镜（无长镜/慢放/环绕）→ 大招无冲击，建议穿插反转蓄力长镜
+    2. 闪白悬念：大招/蓄力镜头未用闪白转场 → 建议释放前黑场闪白（约1.5s）
+    3. 收尾升华：打斗段结束紧接人物镜头、无空镜/远景 → 建议战后空镜叠化拉长时间
+    """
+    warnings = []
+    combat_runs = []
+    run = []
+    for shot in shots:
+        idx = shot.get("index", "?")
+        if idx == 0:
+            continue
+        text = " ".join([
+            shot.get("prompt", "") or "",
+            shot.get("narration_segment", "") or "",
+            shot.get("motion_desc", "") or "",
+        ])
+        # 段内成员：打斗/高张力触发词，或大招蓄力镜头（施法/灵光/慢动作——这类镜头
+        # 本身不含'打斗/刺杀'触发词，若不算进段会掐断打斗弧，闪白/反差检查失效）
+        is_combat_shot = any(kw in text for kw in _COMBAT_ARC_TRIGGERS)
+        is_climax_shot = any(k in text for k in _COMBAT_ARC_CLIMAX_WORDS) and (
+            any(k in text for k in _COMBAT_ARC_SLOW_LONGSHOT)
+        )
+        if is_combat_shot or is_climax_shot:
+            run.append((idx, text))
+        else:
+            if len(run) >= 4:
+                combat_runs.append(run)
+            run = []
+    if len(run) >= 4:
+        combat_runs.append(run)
+
+    for run_shots in combat_runs:
+        run_text = " ".join(t for _, t in run_shots)
+        # 1. 反转长镜反差：打斗段无任何长镜/慢放/环绕 → 大招没冲击
+        if not any(k in run_text for k in _COMBAT_ARC_SLOW_LONGSHOT):
+            warnings.append(
+                f"镜头{run_shots[0][0]}~{run_shots[-1][0]}: 打斗段 {len(run_shots)} 镜全为短镜快切，"
+                f"无长镜/慢放/环绕蓄力——大招没冲击。建议在法术蓄力/施法/大招镜头穿插 1 个"
+                f"3-5s 长镜+慢放+环绕（紧-松-紧节奏反差，规则7 的唯一例外）"
+            )
+        # 2. 闪白悬念：打斗段含大招/蓄力词但无闪白转场
+        if any(k in run_text for k in _COMBAT_ARC_CLIMAX_WORDS) and not any(
+            k in run_text for k in _COMBAT_ARC_FLASH_WHITE
+        ):
+            warnings.append(
+                f"镜头{run_shots[0][0]}~{run_shots[-1][0]}: 大招/蓄力镜头未用闪白转场，"
+                f"建议释放前「黑场闪白」（约1.5s）制造悬念提升爽感"
+            )
+        # 3. 收尾升华：打斗段之后无空镜/远景收尾
+        coda = _check_combat_arc_coda(shots, run_shots[-1][0])
+        if coda:
+            warnings.append(coda)
+
+    if warnings:
+        for w in warnings:
+            print(f"[CHECK] 打斗节奏: [WARN] {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
+
+
+def _check_combat_arc_coda(shots: list[dict], last_combat_idx) -> str | None:
+    """打斗段后 3 镜内是否有空镜/大远景收尾升华（返回提示或 None）."""
+    try:
+        last_combat_pos = next(i for i, s in enumerate(shots) if s.get("index") == last_combat_idx)
+    except StopIteration:
+        return None
+    for i in range(last_combat_pos + 1, min(last_combat_pos + 4, len(shots))):
+        text = " ".join([
+            shots[i].get("prompt", "") or "",
+            shots[i].get("main_subject", "") or "",
+        ])
+        if any(k in text for k in _COMBAT_ARC_CODA_WORDS):
+            return None
+    return (
+        f"镜头{last_combat_idx}: 打斗结束后连续镜头无空镜/大远景收尾，"
+        f"建议战后插 1 个 5-10s 空镜叠化/大远景（极光/月夜/山水），突出平静与成长"
+    )
+
+
+# v6.17 新增：台词标点情绪检查（AI配音标点控制语气教程吸收，voice-punctuation）
+# 有对话的镜头（narration_segment 含「道：台词」）标点必须与情绪语义匹配：
+#   1. 撒娇/温柔类台词用「。」或「！」收尾 → 提示改「～」
+#   2. 警告/愤怒/质问类台词用「。」或「～」收尾 → 提示改「！」
+#   3. 思考/迟疑类台词无停顿逗号/省略号 → 提示加停顿
+#   4. 台词缺句末标点（无标点裸收尾）→ 提示补标点（语气无法传达）
+# 只 WARN 不阻断（标点是 LLM 的情绪表达，此处仅提示语气落地）。
+_TAUNT_PUNCT = ("～", "~", "！", "!", "？", "?")
+_COAX_PUNCT = ("～", "~", "！", "!", "？", "?", "……", "…")
+_WARN_PUNCT = ("～", "~", "…", "……")
+_COAX_WORDS = ("撒娇", "娇", "甜", "软", "嘟", "嗔", "呢", "呀", "嘛", "啦")
+_WARN_WORDS = ("警告", "警告地", "怒", "喝", "呵斥", "质问", "威胁", "厉", "冷声", "叱")
+_THINK_WORDS = ("思考", "迟疑", "犹豫", "顿", "欲言又止", "想了想", "迟疑地")
+
+
+def _check_voice_punctuation(shots: list[dict], hook: dict = None) -> dict:
+    """检查台词标点与情绪语义匹配（v6.17 新增）★AI配音标点控制语气★.
+
+    仅检查有对话的镜头（narration_segment 含「道：/说：」+ 台词）：
+    1. 撒娇/温柔台词（撒娇/娇/呀/嘛）句尾是「。」或「～」外的平调 → 建议「～」
+    2. 警告/愤怒台词（警告/怒/喝/呵斥）句尾非「！」 → 建议「！」
+    3. 思考/迟疑台词（思考/迟疑/犹豫）无停顿标点 → 建议加「，」或「…」
+    4. 台词裸收尾（无任何句末标点） → 建议补标点
+    """
+    warnings = []
+
+    def _check_one(shot: dict, label: str):
+        idx = shot.get("index", "?")
+        narration = (shot.get("narration_segment") or "").strip()
+        if "道：" not in narration and "说：" not in narration and "：" not in narration:
+            return
+        # 台词部分 = 「角色名道：」后的内容（不含说话人前缀）
+        line = re.split(r"道[:：]|说[:：]|喊[:：]|喝[:：]|叫[:：]|问[:：]", narration)
+        if len(line) < 2:
+            return
+        speech = line[-1].strip()
+        if not speech:
+            return
+        # 台词文本（去尾标点）
+        body = speech.rstrip("～~！!？?。.…。，,；;")
+        if not body:
+            return
+        tail = speech[len(body):]
+        # 1. 裸收尾：台词无任何句末标点 → 语气无法传达
+        if not tail:
+            warnings.append(
+                f"{label}{idx}: 台词「{body[:24]}{'…' if len(body) > 24 else ''}」裸收尾无标点，"
+                f"建议按情绪补标点（撒娇「～」/警告「！」/思考「，」「…」）"
+            )
+            return
+        # 2. 撒娇/温柔类：句尾用了「。」→ 平淡，建议「～」
+        if any(w in narration for w in _COAX_WORDS) and tail.endswith("。") and not tail.endswith("！") and not tail.endswith("～"):
+            warnings.append(
+                f"{label}{idx}: 撒娇/娇柔台词句尾「。」过于平淡，建议改「～」（如「{body}～」）"
+            )
+        # 3. 警告/愤怒类：句尾非「！」→ 压迫感不足
+        if any(w in narration for w in _WARN_WORDS) and tail.endswith("。"):
+            warnings.append(
+                f"{label}{idx}: 警告/愤怒台词句尾「。」缺压迫感，建议改「！」（如「{body}！」）"
+            )
+        # 4. 思考/迟疑类：无停顿逗号/省略号 → 读不出卡顿
+        if any(w in narration for w in _THINK_WORDS) and "，" not in speech and "…" not in speech:
+            warnings.append(
+                f"{label}{idx}: 思考/迟疑台词缺停顿标点，建议在停顿处加「，」（如「等一下，我想，先确认一件事」）"
+            )
+
+    for shot in shots:
+        _check_one(shot, "镜头")
+    if hook and isinstance(hook, dict):
+        _check_one(hook, "钩子镜头(index=0)")
+
+    for w in warnings:
+        print(f"[CHECK] 台词标点: [WARN] {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
+
+
+# v6.17 新增：前后遮挡逻辑检查（古风酒楼一镜到底教程吸收，occlusion-layering）
+# 人物处于复合空间/走位场景时，遮挡关系必须显式写明（防穿模）：
+#   1. 有明确遮挡物（围栏/栏杆/门窗/楼梯扶手/屏风/柱子）+ 人物同框 → 必须有「遮挡」动词+部位
+#   2. 写了「…后/在…后面」但无「遮挡/掠过/穿行」+ 部位 → 提示写清遮挡到什么部位
+#   3. 前景人物/物件走过场景 → 应有「短暂遮挡/掠过」描述（前后位置）
+# 只 WARN 不阻断（遮挡是空间关系，由 LLM 决定写法，此处仅提示穿模风险）。
+_OCCLUSION_OBJECTS = ("围栏", "栏杆", "门框", "窗框", "屏风", "柱子", "楼梯扶手", "拱门",
+                      "窗棂", "隔扇", "廊柱", "门槛", "回廊", "雕花栏杆", "栅栏")
+_OCCLUSION_VERBS = ("遮挡", "遮住", "遮蔽", "掠过", "穿行", "隔开", "隐于", "掩住", "挡住", "遮掩")
+_OCCLUSION_LEVELS = ("膝", "腿", "腰部", "腰", "半身", "半张脸", "脸", "上身", "下身",
+                     "手臂", "肩膀", "脚", "头部", "下摆", "裙摆", "衣摆")
+_OCCLUSION_FAR_SYNC = ("之后", "后面", "后", "背后", "深处", "内侧", "旁边", "一侧")
+
+
+def _check_occlusion_layering(shots: list[dict]) -> dict:
+    """检查前后遮挡逻辑是否显式化（v6.17 新增）★古风酒楼一镜到底★.
+
+    仅检查出现遮挡物词（围栏/栏杆/门窗/屏风/楼梯扶手）且有明确人物的镜头：
+    1. 遮挡物+人物同框但无「遮挡/掠过/穿行」动词 → 提示写清遮挡关系
+    2. 有遮挡词但无部位（膝/腰/半张脸）→ 提示写清遮挡程度（防穿模/防笼统）
+    3. 前景走过类（从…前走过/从…前经过）→ 提示补「短暂遮挡/掠过」前后位置
+    """
+    warnings = []
+    for shot in shots:
+        idx = shot.get("index", "?")
+        if idx == 0:
+            continue
+        prompt = (shot.get("prompt") or "") + (shot.get("ff_desc") or "") + (shot.get("lf_desc") or "")
+        if not any(o in prompt for o in _OCCLUSION_OBJECTS):
+            continue
+        # 有人物才算（遮挡物+人同框才有遮挡语义；纯空镜建筑不检查）
+        has_person = bool(_PERSON_PATTERN.search(prompt))
+        if not has_person:
+            continue
+        # 1. 遮挡物+人物但无遮挡动词
+        if not any(v in prompt for v in _OCCLUSION_VERBS):
+            warnings.append(
+                f"镜头{idx}: 画面含遮挡物（围栏/门窗/屏风等）与人物同框，但未写明遮挡关系，"
+                "建议写「遮挡物遮挡住人物部位」（如'围栏遮挡住女主膝盖以下'），防穿模"
+            )
+            continue
+        # 2. 有遮挡动词但无部位（写清遮挡到什么程度）
+        if not any(l in prompt for l in _OCCLUSION_LEVELS):
+            # 排除「遮挡视线/镜头掠过」这类非人体部位用法
+            if not any(w in prompt for w in ("视线", "镜头", "视野", "画面")):
+                warnings.append(
+                    f"镜头{idx}: 写了遮挡但未写遮挡程度（膝/腰/半张脸），"
+                    f"建议写清部位——禁止笼统「在围栏后」，否则 AI 会把人物画成与围栏穿插"
+                )
+        # 3. 前景走过类（从…前走过/经过）→ 补前后位置遮挡
+        if re.search(r"[从侧画]?[左右]?.*前走过|从.*前经过", prompt) and not any(
+            v in prompt for v in ("短暂遮挡", "掠过", "遮挡住", "遮住")
+        ):
+            warnings.append(
+                f"镜头{idx}: 前景人物走过但未写遮挡关系，建议补「前景路人行进中短暂遮挡住主角」"
+            )
+
+    if warnings:
+        for w in warnings:
+            print(f"[CHECK] 遮挡逻辑: [WARN] {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
+
+
 # 8种AI人像专业光位（抖音「方块格子」教程吸收）
 # 人像镜头的光影描述必须落到具体灯位（光源相对人物/镜头的位置+软硬光+阴影形状），
 # 禁止"自然光""柔和光线"这种无位置、无来源的模糊光。
@@ -2418,6 +2696,15 @@ def _run_prompt_checklist(script: dict) -> dict:
 
     # v6.16 新增：切换拍摄对象运镜检查（人物→物品：方向+景别+运动+结束落点）
     results["focal_switch"] = _check_focal_switch(shots, hook)
+
+    # v6.17 新增：打斗四段式节奏检查（对峙→攻防→反转→收尾 + 闪白/空镜升华）
+    results["combat_arc"] = _check_combat_arc(shots)
+
+    # v6.17 新增：台词标点情绪检查（标点驱动配音语气：波浪号撒娇/感叹号警告/逗号思考）
+    results["voice_punctuation"] = _check_voice_punctuation(shots, hook)
+
+    # v6.17 新增：前后遮挡逻辑检查（写清什么遮挡什么，防人物与围栏/门框穿模）
+    results["occlusion_layering"] = _check_occlusion_layering(shots)
 
     # seedance2-skill 吸收：时长-内容密度检查（短镜头塞太多动作/场景）
     results["content_density"] = _check_content_density(shots)
