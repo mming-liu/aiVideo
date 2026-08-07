@@ -7,6 +7,13 @@
       "sourceType": "github",
       "skillPath": "agent_skills/dependency-doctor/SKILL.md",
       "computedHash": "eb777cb149da63180407a30b3e892b25a2144cbb0c84acd4e12f68747acda2c7"
+    },
+    "ds-vision-skill": {
+      "source": "Sorwcyra/ds-vision-skill",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "d3e82f5a16de4cb41fd456df3a56a6476a2af427"
     }
   }
 }

@@ -76,6 +76,13 @@ CINEMATIC_STYLE = os.getenv("CINEMATIC_STYLE", "")
 # 多张时同框多角色可各自传入肖像，提升人物一致性
 IMAGE_MULTI_REF = int(os.getenv("IMAGE_MULTI_REF", "1"))
 
+# 图片生成后视觉质检（ds-vision-skill 接入，step02a 帧生成后自动检查首帧+尾帧）
+IMAGE_QC_ENABLED = os.getenv("IMAGE_QC_ENABLED", "1").strip() == "1"  # 总开关（默认开启）
+IMAGE_QC_TIMEOUT_SEC = int(os.getenv("IMAGE_QC_TIMEOUT_SEC", "300"))  # 单次质检超时（Agnes 端点慢，默认 300s）
+# 是否把 critical 级问题写入 sidecar（默认 0=封顶为 warning）。
+# 说明：submit_poll 读 sidecar 遇 critical 会自动删帧重生成，封顶为 warning 可避免触发重生成，仅告警。
+IMAGE_QC_WRITE_CRITICAL = os.getenv("IMAGE_QC_WRITE_CRITICAL", "0").strip() == "1"
+
 
 # ============================================================================
 # Agnes 视频配置（直接读取环境变量，灵活支持任意数量）

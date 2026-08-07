@@ -648,6 +648,15 @@ def main() -> None:
         if hook:
             script["hook"] = hook
             _logger.info(f"[OK] 钩子分镜已生成: {hook.get('narration_segment', '')[:30]}...")
+            # v6.18：钩子在 parse_response 之后才挂载（_validate_script 已跑完），
+            # 必须补自动修复 + 校验，否则钩子 ff_desc 零校验零修复（多动作堆叠
+            # 直接落盘，导致首帧图画不出三个同时态动作）。
+            try:
+                from step01_script_gen.validation import post_fix_shot_prompts, validate_hook
+                post_fix_shot_prompts(script)  # 幂等：shots 已修复过，主要触发 hook 分支
+                validate_hook(script["hook"], script.get("characters", []))
+            except Exception as _hook_fix_err:
+                _logger.warn(f"[WARN] 钩子修复/校验异常（不阻断）: {_hook_fix_err}")
         else:
             _logger.info("[INFO] 跳过钩子分镜")
 

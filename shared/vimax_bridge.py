@@ -17,6 +17,7 @@ v3: 摄像机分组 + 镜头分解 + 首帧锚定 + 尾帧生成 + 视觉衔接
 import asyncio
 import json
 import os
+import re
 from collections import OrderedDict
 from pathlib import Path
 from typing import List
@@ -317,6 +318,7 @@ async def _gen_frames_for_camera_group(
             image_adapter, shots_dir, shot, force_first_frame, script_mtime,
             reference_paths=refs,
             empty_scene=is_empty_scene(shot, characters_data),
+            characters=characters_data,
         )
         if is_first_in_cam and ff_result:
             camera_first_frames[cam_idx] = ff_result
@@ -338,6 +340,7 @@ async def _gen_frames_for_camera_group(
                 image_adapter, shots_dir, shot, force_first_frame, script_mtime,
                 reference_paths=lf_refs,
                 empty_scene=is_empty_scene(shot, characters_data),
+                characters=characters_data,
             )
             kf_refs = [str(ff_path)] if ff_path and ff_path.exists() else None
             await _gen_keyframes_async(
@@ -775,6 +778,39 @@ def _validate_frame(path: str, min_kb: float = 5) -> bool:
     return True
 
 
+async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
+                          characters: list | None = None, empty_scene: bool = False):
+    """帧生成后执行视觉质检（软失败，不阻断流水线）.
+
+    通过 shared/image_qc.py 调用 ds-vision-skill 的 vision-router.ps1 对帧图做内容质检；
+    QC 成功（ok=True）即写 sidecar（检出与否都写，has_hallucination=false 表示"已检过无问题"，
+    供 should_run_qc 靠 sidecar 新鲜度跳过重复质检）。默认封顶 warning，不触发 step02b 自动重生成。
+    asyncio.to_thread 避免阻塞事件循环（单次质检 2-4 分钟）。
+    """
+    if not frame_path:
+        return
+    try:
+        from shared.image_qc import maybe_qc_sync, sidecar_path, write_sidecar
+        result = await asyncio.to_thread(
+            maybe_qc_sync, frame_path, shot, frame_kind, characters, empty_scene,
+        )
+        if not result.ok:
+            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 质检失败跳过（未写 sidecar）: {result.error}")
+            return
+        # QC 成功 → 写 sidecar（检出与否都写），供下次跳过与 step02b 消费
+        try:
+            write_sidecar(Path(frame_path), result)
+        except Exception as e:
+            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} sidecar 写入失败: {e}")
+        if result.has_hallucination:
+            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 检出问题: "
+                        + "; ".join(f"[{i.severity}]{i.category} {i.description}" for i in result.issues))
+        else:
+            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 质检通过")
+    except Exception as e:
+        _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 质检异常（不阻断）: {e}")
+
+
 def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
                             reference_paths: list | None = None) -> str:
     """计算首帧/尾帧的稳定哈希值 v4.
@@ -924,7 +960,7 @@ def _collect_prop_asset_refs(shot: dict, limit: int = 2) -> list[str]:
 
 
 def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
-                                 limit: int = 5) -> list[str]:
+                                 limit: int = 5, for_frame: str = "首帧") -> list[str]:
     """为 step02a 首帧/尾帧图生图收集参考图（场景 → 角色 → 道具）.
 
     与 r2v 参考图同源、同一套匹配逻辑，保证图生视频前导帧（首帧/尾帧）的
@@ -933,9 +969,15 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
 
     顺序：场景资产图（环境锚定）→ 出镜角色肖像（人物形象）→ 出镜道具资产图。
     空镜只注入场景资产图（禁止角色/道具参考，防人物渗入）。
+
+    for_frame: "首帧"/"尾帧"。动作镜头首帧跳过场景资产图（场景图被硬约束
+    "禁止人物"，与多角色参考图矛盾时场景图占上风、人物被压制——钩子首帧
+    几乎无人）。尾帧/关键帧保留场景参考图（环境锚定，NO_LAYOUT 锁下无碍）。
     """
-    scene_refs = _collect_scene_asset_refs(shot)
     empty_scene = is_empty_scene(shot, characters or [])
+    # 动作镜头首帧：不注入场景资产图
+    is_action_ff = (for_frame == "首帧") and _is_action_shot(shot, characters) and not empty_scene
+    scene_refs = [] if is_action_ff else _collect_scene_asset_refs(shot)
     if empty_scene:
         return scene_refs[:limit]
 
@@ -1103,6 +1145,196 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
         return []
 
 
+# ---------------------------------------------------------------------------
+# 动作镜头判定 + 动作姿态参考图（action_ref）
+#
+# 背景：首帧图生图若只注入角色静态站姿肖像 + 带"场景布局不变"的完整锁图，
+# 图生图模型会把姿态/构图锁死成"站着/看镜头/闭嘴"，动作描述（破水而出、
+# 高举匕首、张嘴尖叫）被参考图反锚定压制（code-audit 2026-08-07 钩子首帧无人）。
+# 这里提供：
+#   1. _is_action_shot —— 统一动作镜头判定（修改1选锁 / 修改2跳场景 / 修改3生成姿态图共用）
+#   2. _ensure_action_ref —— 为动作镜头生成「动作姿态参考图」action_ref.png，
+#      以角色 front 肖像为参考、prompt 注入动作短语，替代静态站姿肖像。
+# ---------------------------------------------------------------------------
+
+PROMPT_ACTION_REF = (
+    "Photorealistic {style} dynamic action pose of {identifier}, "
+    "referencing the provided base portrait. "
+    "MUST keep the base image identical: face shape, eyes, nose, mouth, hairstyle, "
+    "hairline, clothing, body proportions, ALL light source direction, "
+    "color temperature, 5500K lighting completely consistent. "
+    "CHANGE ONLY the body pose to the described action: {action_desc}. "
+    "Dynamic mid-motion posture, expressive face, correct anatomy. "
+    "Full body visible, white background, 16:9 landscape canvas. "
+    "Not anime, not cartoon, not illustration, not 3D render."
+)
+
+# 强动作动词（无具名主体时的兜底判定 + 动作短语提取）。
+# 刻意收窄：不含"转身/回头/起/坐/站"等对话镜头高频静态词，避免普通镜头
+# 被误判为动作镜头而解除布局锁、导致构图漂移。
+_ACTION_STRONG_VERBS = (
+    "窜出", "跃出", "冲出", "破水", "腾空", "翻身", "下坠", "跌",
+    "劈", "刺", "挥", "扑", "砍", "斩", "撞", "抓", "夺", "举", "捅", "踹",
+    "尖叫", "惊呼", "怒喝", "厉喝",
+)
+
+
+def _is_action_shot(shot: dict, characters: list | None = None) -> bool:
+    """统一动作镜头判定（修改1/2/3 共用）.
+
+    1. _detect_action_subject 返回非空（motion_desc/ff_desc 找到「角色名+动作动词」）
+    2. 兜底：motion_desc/ff_desc 含强动作动词（无具名主体也视为动作）
+    钩子镜头（index==0，如破水/惊觉/尖叫）经上面两条天然命中。
+    空镜/纯静态描述不判定为动作镜头。
+    """
+    if is_empty_scene(shot, characters or []):
+        return False
+    if _detect_action_subject(shot, characters):
+        return True
+    text = " ".join([
+        shot.get("motion_desc", "").strip() or shot.get("prompt", ""),
+        shot.get("ff_desc", "").strip() or "",
+    ])
+    return any(v in text for v in _ACTION_STRONG_VERBS)
+
+
+def _extract_action_phrase(shot: dict, characters: list | None = None) -> str:
+    """从 motion_desc/ff_desc 提取动作主体的动作分句（供 action_ref prompt 使用）.
+
+    优先找「含动作主体 + 强动词」的分句（如钩子 → "刺客自水中窜出"）；
+    退而求其次找含动作主体的分句；最后回退 ff_desc 首句。
+    """
+    subject = _detect_action_subject(shot, characters)
+    for field in ("motion_desc", "ff_desc"):
+        for seg in re.split(r"[，。；！？\n:：]", shot.get(field, "") or ""):
+            seg = seg.strip()
+            if seg and subject and subject in seg and any(v in seg for v in _ACTION_STRONG_VERBS):
+                return seg
+    if subject:
+        for field in ("ff_desc", "motion_desc"):
+            for seg in re.split(r"[，。；！？\n:：]", shot.get(field, "") or ""):
+                if subject in seg:
+                    return seg.strip()
+    ff = shot.get("ff_desc", "") or ""
+    segs = [s.strip() for s in re.split(r"[，。；！？\n:：]", ff) if s.strip()]
+    return segs[0] if segs else ff.strip()
+
+
+def _subject_portrait_path(subject: str) -> str | None:
+    """从 character_portraits_registry.json 取动作主体的 front/base 肖像路径."""
+    if not subject:
+        return None
+    try:
+        from shared.paths import vimax_working_dir
+        reg_path = vimax_working_dir() / "character_portraits_registry.json"
+        if reg_path.exists():
+            reg = json.load(open(reg_path, encoding="utf-8"))
+            for view in ("front", "side", "back"):
+                p = (reg.get(subject, {}).get(view) or {}).get("path", "")
+                if p and Path(p).exists():
+                    return p
+    except Exception:
+        pass
+    return None
+
+
+def _action_ref_hash(shot: dict, subject: str, portrait_path: str) -> str:
+    """动作姿态参考图缓存哈希：ff_desc/motion_desc/主体/肖像/地点任一变化都重生成."""
+    key = "|".join([
+        shot.get("ff_desc", ""),
+        shot.get("motion_desc", ""),
+        subject or "",
+        portrait_path,                              # 肖像重生成 → 姿态图重生成
+        shot.get("location", "") or shot.get("scene", ""),
+    ])
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+def _swap_in_action_ref(refs: list, action_ref: str, subject: str) -> list:
+    """把动作主体的静态肖像替换为 action_ref（1 换 1，不增参考图数量）.
+
+    规避 IMAGE_MAX_REFS=3 超限：替换而非追加。主体肖像不在 refs 时前插 1 张。
+    """
+    if not action_ref:
+        return refs
+    subj_path = _subject_portrait_path(subject)
+    if subj_path and subj_path in refs:
+        return [action_ref if p == subj_path else p for p in refs]
+    return [action_ref] + [p for p in refs if p != action_ref]
+
+
+async def _ensure_action_ref(shot: dict, characters: list | None,
+                             shots_dir) -> str | None:
+    """为动作镜头生成动作姿态参考图 vimax_working/shots/<idx>/action_ref.png.
+
+    以角色 front(base) 肖像为参考、prompt 注入动作描述，替代静态站姿肖像作为
+    人物参考，解除「站姿肖像 = 动作反锚点」。生成失败时返回 None，调用方优雅
+    降级回静态肖像（不阻断帧生成）。
+
+    内部自建横屏白底肖像适配器（与帧生成适配器配置不同），不依赖调用方传入。
+    """
+    if not _is_action_shot(shot, characters):
+        return None
+    subject = _detect_action_subject(shot, characters)
+    if not subject:
+        return None
+    portrait = _subject_portrait_path(subject)
+    if not portrait:
+        return None
+
+    idx = shot["index"]
+    shot_dir = shots_dir / str(idx)
+    shot_dir.mkdir(parents=True, exist_ok=True)
+    out_path = shot_dir / "action_ref.png"
+    hash_path = shot_dir / "action_ref_hash.txt"
+    cur_hash = _action_ref_hash(shot, subject, portrait)
+
+    # 缓存命中
+    if out_path.exists() and hash_path.exists():
+        try:
+            if hash_path.read_text(encoding="utf-8").strip() == cur_hash \
+                    and _validate_frame(str(out_path)):
+                return str(out_path)
+        except Exception:
+            pass
+
+    # 肖像专用适配器：横屏白底、跳过风格前缀/合规（与 _generate_missing_portraits 一致）
+    from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
+    portrait_adapter = ImageGeneratorAiVideoAdapter(
+        size="1600x900",
+        skip_prefix=True,
+        skip_sanitize=True,
+    )
+    action_desc = _extract_action_phrase(shot, characters) or shot.get("ff_desc", "")
+    prompt = PROMPT_ACTION_REF.format(
+        style="Chinese ancient costume", identifier=subject, action_desc=action_desc,
+    )
+    try:
+        img_out = await portrait_adapter.generate_single_image(
+            prompt=prompt,
+            reference_image_paths=[portrait],
+            save_path=str(out_path),
+            shot_index=idx,
+            frame_desc="动作姿态参考图",
+            # 允许姿态改变：不用带"场景布局不变"的完整锁
+            lock_prompt=IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT,
+        )
+        if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
+            img_out.data.save(str(out_path))
+        elif hasattr(img_out, "save"):
+            img_out.save(str(out_path))
+        else:
+            return None
+        if _validate_frame(str(out_path)):
+            hash_path.write_text(cur_hash, encoding="utf-8")
+            _bridge_log(f"  [bridge] 镜头{idx}: 动作姿态参考图已生成 -> {out_path.name}")
+            return str(out_path)
+        return None
+    except Exception as e:
+        _bridge_log(f"  [bridge] 动作姿态参考图生成失败 shot_{idx}: {e}")
+        return None
+
+
 def _inject_object_size_anchor(shot: dict, text: str) -> str:
     """把场景物体尺寸锚定注入帧 prompt（防船/车等物体比例漂移）.
 
@@ -1157,12 +1389,15 @@ async def _gen_first_frame_async(
     reference_paths: list | None = None,
     max_retries: int = 1,
     empty_scene: bool = False,
+    characters: list | None = None,
 ):
     """为镜头生成 first_frame.png，prompt 用 ff_desc.
 
     生成后自动校验文件大小；不达标时自动重试（最多 max_retries 次）.
     empty_scene=True 时在 prompt 中显式禁止人物（与视频 prompt 的空镜约束
     保持一致，防止首帧凭空长出人物后被 image-to-video 固化成片头画面）.
+    characters: 用于动作镜头判定——动作镜头改用 NO_LAYOUT 锁图（解除"场景
+    布局不变"），否则动作描述被锁图压制、人物画不全（code-audit 2026-08-07）.
     """
     idx = shot["index"]
     shot_dir = shots_dir / str(idx)
@@ -1199,8 +1434,23 @@ async def _gen_first_frame_async(
     if empty_scene:
         ff_desc = f"{ff_desc}\n空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
 
+    # v6.18：ff_desc 归一化 + 回写（多动作/进行态堆叠 → 单一静态瞬间）。
+    # 必须在哈希计算之前——_get_frame_content_hash 哈希的是 shot["ff_desc"]，
+    # 不回写则归一化后缓存永不失效。回写保证帧 prompt、step02a 落盘、
+    # step02b 的【视频起点】三处一致。
+    if ff_desc and not empty_scene:
+        from style_prefix import normalize_ff_desc
+        norm = normalize_ff_desc(ff_desc, shot, characters)
+        if norm != ff_desc:
+            shot["ff_desc"] = ff_desc = norm
+            _bridge_log(f"  [bridge] 镜头{idx}: ff_desc 归一化（多动作→静态瞬间）")
+
     # 计算当前哈希值（核心意图 + 空镜约束 + 参考图，任一变化都重新生成）
     current_hash = _get_frame_content_hash(shot, empty_scene, reference_paths)
+    # 动作镜头首帧改用 NO_LAYOUT 锁图（解除"场景布局不变"），prompt 语义变化，
+    # 追加 _ff_nl 后缀强制旧缓存（无人的首帧）失效重新生成。
+    if _is_action_shot(shot, characters):
+        current_hash += "_ff_nl"
 
     for attempt in range(max_retries + 1):
         if ff_path.exists() and not force and attempt == 0:
@@ -1208,13 +1458,16 @@ async def _gen_first_frame_async(
             if ff_hash_path.exists():
                 saved_hash = ff_hash_path.read_text(encoding="utf-8").strip()
                 if saved_hash == current_hash and _validate_frame(str(ff_path)):
+                    await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene)
                     return str(ff_path)
                 else:
                     logger.verbose(f"  [FRAME] 首帧 shot_{idx} 哈希不匹配或缓存无效，重新生成")
             elif script_mtime is not None and ff_path.stat().st_mtime >= script_mtime:
                 if _validate_frame(str(ff_path)):
+                    await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene)
                     return str(ff_path)
             elif script_mtime is None and _validate_frame(str(ff_path)):
+                await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene)
                 return str(ff_path)
 
         logger.verbose(f"  [FRAME] 生成首帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
@@ -1226,14 +1479,21 @@ async def _gen_first_frame_async(
         ff_desc_full = sanitize_prompt(ensure_prefix(ff_desc, STYLE_PREFIX), verbose=False)
         ff_desc_full = add_image_strict_constraints(ff_desc_full, "首帧", shot=shot)
         refs = reference_paths if reference_paths else []
+        # 动作镜头首帧：解除"场景布局不变"锁，允许人物动作/构图随描述演变
+        # （普通镜头不传 lock_prompt，保持适配器默认完整锁）。
+        # 注意不能传 None——适配器 kwargs.get("lock_prompt", DEFAULT) 会把 "None，" 拼进 prompt。
+        is_action = _is_action_shot(shot, characters)
+        gen_kwargs = dict(
+            prompt=ff_desc_full,
+            reference_image_paths=refs,
+            shot_index=idx,
+            frame_desc="首帧",
+            force_multi_ref=True,
+        )
+        if is_action:
+            gen_kwargs["lock_prompt"] = IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT
         try:
-            img_out = await image_adapter.generate_single_image(
-                prompt=ff_desc_full,
-                reference_image_paths=refs,
-                shot_index=idx,
-                frame_desc="首帧",
-                force_multi_ref=True,
-            )
+            img_out = await image_adapter.generate_single_image(**gen_kwargs)
             if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                 img_out.data.save(str(ff_path))
             elif hasattr(img_out, "save"):
@@ -1247,6 +1507,7 @@ async def _gen_first_frame_async(
         if _validate_frame(str(ff_path)):
             # 保存哈希值，供下次缓存检测使用
             ff_hash_path.write_text(current_hash, encoding="utf-8")
+            await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene)
             return str(ff_path)
         if attempt < max_retries:
             logger.verbose(f"  [FRAME] 首帧 shot_{idx} 第{attempt+1}次不达标，重试...")
@@ -1260,6 +1521,7 @@ async def _gen_last_frame_async(
     reference_paths: list | None = None,
     max_retries: int = 1,
     empty_scene: bool = False,
+    characters: list | None = None,
 ):
     """为 medium/large 变幅镜头生成 last_frame.png，prompt 用 lf_desc.
 
@@ -1317,13 +1579,16 @@ async def _gen_last_frame_async(
             if lf_hash_path.exists():
                 saved_hash = lf_hash_path.read_text(encoding="utf-8").strip()
                 if saved_hash == current_hash and _validate_frame(str(lf_path)):
+                    await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene)
                     return str(lf_path)
                 else:
                     logger.verbose(f"  [FRAME] 尾帧 shot_{idx} 哈希不匹配或缓存无效，重新生成")
             elif script_mtime is not None and lf_path.stat().st_mtime >= script_mtime:
                 if _validate_frame(str(lf_path)):
+                    await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene)
                     return str(lf_path)
             elif script_mtime is None and _validate_frame(str(lf_path)):
+                await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene)
                 return str(lf_path)
 
         logger.verbose(f"  [FRAME] 生成尾帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
@@ -1369,6 +1634,7 @@ async def _gen_last_frame_async(
         if _validate_frame(str(lf_path)):
             # 保存哈希值，供下次缓存检测使用
             lf_hash_path.write_text(current_hash, encoding="utf-8")
+            await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene)
             return str(lf_path)
         if attempt < max_retries:
             logger.verbose(f"  [FRAME] 尾帧 shot_{idx} 第{attempt+1}次不达标，重试...")
@@ -1550,7 +1816,21 @@ async def gen_shot_frames(
     # 此前 reference_paths=None 纯文生图，复杂多人构图（钩子"刺客+杨旭+听香"三人物）
     # 被图片模型简化成单人，首帧人物/构图全错，且场景/道具与资产库不一致。
     # 空镜只注入场景资产图（禁止角色/道具肖像，防人物渗入）。
-    frame_refs = _collect_frame_refs_for_shot(shot, characters, limit=5)
+    #
+    # 修改2（2026-08-07）：动作镜头首帧不注入场景资产图——场景图被硬约束"禁止
+    # 人物"，与多角色参考图矛盾时场景图占上风、人物被压制（钩子首帧几乎无人）。
+    # 尾帧/关键帧仍保留场景参考图（环境锚定，NO_LAYOUT 锁下无碍）。
+    frame_refs_ff = _collect_frame_refs_for_shot(shot, characters, limit=5, for_frame="首帧")
+    frame_refs_full = _collect_frame_refs_for_shot(shot, characters, limit=5, for_frame="尾帧")
+
+    # 修改3（2026-08-07）：动作姿态参考图替代动作主体的静态站姿肖像。
+    # 静态站姿肖像 = 动作反锚点（站直/看镜头/嘴闭压制"破水而出/举匕/尖叫"）。
+    # action_ref 以角色 front 肖像 + 动作描述生成，ff/lf/kf 全部换入。
+    subject = _detect_action_subject(shot, characters)
+    action_ref = await _ensure_action_ref(shot, characters, shots_dir)
+    if action_ref:
+        frame_refs_ff = _swap_in_action_ref(frame_refs_ff, action_ref, subject)
+        frame_refs_full = _swap_in_action_ref(frame_refs_full, action_ref, subject)
 
     if skip_first_frame:
         # 模式B：跳过首帧生成，尾帧仍生成（用于本镜风格锚定）
@@ -1560,8 +1840,8 @@ async def gen_shot_frames(
         ff_path_str = await _gen_first_frame_async(
             image_adapter, shots_dir, shot,
             force=force, script_mtime=script_mtime,
-            reference_paths=frame_refs or None, max_retries=1,
-            empty_scene=empty_scene,
+            reference_paths=frame_refs_ff or None, max_retries=1,
+            empty_scene=empty_scene, characters=characters,
         )
     ff_["ff_path"] = ff_path_str
 
@@ -1570,15 +1850,16 @@ async def gen_shot_frames(
     # 尾帧参考图：场景/角色/道具资产（锚定人物形象与环境一致）。
     # 不再把首帧整图作为尾帧参考图——首帧是动作起点，直接抄首帧构图会让
     # 尾帧几乎复刻首帧（刺客同位置、听香位置错乱、两帧雷同），
-    # 动作演变只能靠 lf_desc 文字描述驱动。首帧只通过 frame_refs 的
+    # 动作演变只能靠 lf_desc 文字描述驱动。首帧只通过 frame_refs_full 的
     # 场景资产图隐式锚定环境/光线，不用整图锁死尾帧构图。
-    lf_refs = frame_refs or None
+    lf_refs = frame_refs_full or None
     lf_path_str = await _gen_last_frame_async(
         image_adapter, shots_dir, shot,
         force=force, script_mtime=script_mtime,
         reference_paths=lf_refs,
         max_retries=1,
         empty_scene=empty_scene,
+        characters=characters,
     )
     ff_["lf_path"] = lf_path_str
 
@@ -1589,7 +1870,7 @@ async def gen_shot_frames(
     else:
         # 关键帧参考图：场景/角色/道具资产（锚定一致），不用首帧整图锁死构图
         # （与尾帧同理——首帧整图会把关键帧的中间动作态锁死在起点构图上）。
-        kf_refs = frame_refs or None
+        kf_refs = frame_refs_full or None
         kf_paths = await _gen_keyframes_async(
             image_adapter, shots_dir, shot,
             force=force, script_mtime=script_mtime,

@@ -434,7 +434,17 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     4. 添加人物与场景一致性约束
     """
     # ========== 1. 提取首尾帧描述 ==========
+    characters = script.get("characters", [])
     ff_desc = shot.get("ff_desc", "").strip()
+    # v6.18：ff_desc 归一化 + 回写（多动作/进行态堆叠 → 单一静态瞬间）。
+    # 回写保证【视频起点】、layout_block 的角色探测、_get_shot_hash 三处一致；
+    # 也保证视频缓存自动失效（帧变了视频该重做）。r2v/text 模式不依赖
+    # step02a 时，这里兜底让视频起点也用静态文本。
+    if ff_desc:
+        from style_prefix import normalize_ff_desc
+        norm = normalize_ff_desc(ff_desc, shot, characters)
+        if norm != ff_desc:
+            shot["ff_desc"] = ff_desc = norm
     lf_desc = shot.get("lf_desc", "").strip()
     motion_desc = shot.get("motion_desc", "").strip()
     if not motion_desc:
@@ -446,7 +456,6 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
 
     # ========== 2. 获取角色特征 ==========
     char_features = ""
-    characters = script.get("characters", [])
     for char in characters:
         if char.get("identifier") == main_subject:
             static = char.get("static_features", "")

@@ -1620,6 +1620,86 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
+def _check_ff_multi_action(shots: list[dict], hook: dict = None,
+                           characters: list | None = None) -> dict:
+    """检查 ff_desc 是否把多个动作/时间推进/过渡态堆叠进一个静态首帧（v6.18）.
+
+    背景（code-audit 08-07 钩子首帧）：LLM 常把「破水而出 + 惊觉欲起 + 尖叫」
+    三个进行态动作塞进 ff_desc——图片模型画不出"三个同时态动作"，只能糊成
+    一团或只画部分。此检查为 warning 级（不阻断），提示把 ff_desc 收敛为
+    单一静态瞬间：保留最早且最震撼的 1 个动作，其余角色定格为静态反应
+    （自动修复见 style_prefix.normalize_ff_desc，生成源头与消费兜底共用）。
+
+    复用 style_prefix.detect_ff_multi_action 作为判定闸门（词库单一来源）。
+    """
+    from style_prefix import detect_ff_multi_action
+    warnings = []
+    issues = []
+
+    def _check_one(shot: dict, label: str):
+        ff = shot.get("ff_desc", "").strip() or ""
+        if not ff:
+            return
+        problems = detect_ff_multi_action(ff, characters)
+        if not problems:
+            return
+        parts = []
+        for p in problems:
+            if p["type"] == "time_advance":
+                parts.append(f"时间推进连接词「{'、'.join(p['words'])}」")
+            elif p["type"] == "multi_action":
+                parts.append(f"{p['count']} 个动作时刻同框（{'；'.join(p['clauses'][:2])}{'…' if p['count']>2 else ''}）")
+            elif p["type"] == "transition":
+                parts.append(f"过渡态「{p['clause']}」")
+            elif p["type"] == "sustained":
+                parts.append(f"持续动作「{p['clause']}」")
+        warnings.append(
+            f"{label}: ff_desc 含 {('、'.join(parts))}——静态首帧堆叠多动作，"
+            f"图片模型画不出（破水而出+惊觉欲起+尖叫=三个同时态动作）。"
+            f"只保留最早且最震撼的 1 个动作瞬间，其余角色定格为该瞬间的静态反应"
+            f"（如「刺客半身破水而出、右手高举弯刀；杨旭惊觉、身体前倾；听香仰头张嘴」）。"
+        )
+
+    for shot in shots:
+        _check_one(shot, f"镜头{shot.get('index', '?')}")
+    if hook and isinstance(hook, dict):
+        _check_one(hook, "钩子镜头(index=0)")
+
+    if warnings:
+        for warn in warnings:
+            print(f"[CHECK] 首帧多动作: [WARN] {warn}")
+
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+def validate_hook(hook: dict, characters: list | None = None) -> None:
+    """钩子分镜单独校验（v6.18）.
+
+    钩子在 main.py 中于 _validate_script 之后才挂载，正常流程从不经过校验。
+    此函数补跑所有 hook-aware 检查，打印 warning（不阻断，防钩子因校验被丢弃）。
+
+    characters: script['characters']，用于多动作/空镜判定；缺省时传空列表。
+    """
+    from style_prefix import normalize_ff_desc
+    if not hook or not isinstance(hook, dict):
+        return
+    chars = characters or []
+    try:
+        # 先做 ff_desc 归一化（生成源头修复，与 post_fix 幂等）
+        if hook.get("ff_desc"):
+            hook["ff_desc"] = normalize_ff_desc(hook["ff_desc"], hook, chars)
+        _check_ff_multi_action([], hook, chars)
+        _check_ff_lf_desc_completeness([], hook)
+        _check_ff_motion_timeline([], hook)
+        _check_gaze_direction([], hook)
+        _check_emotion_visualization([], hook)
+        _check_restrained_emotion([], hook)
+        _check_focal_switch([], hook)
+        _check_body_purification([], hook)
+    except Exception as e:
+        print(f"[CHECK] 钩子校验异常（不阻断）: {e}")
+
+
 # v6.5 新增：分镜与原文比对（防幻觉核心 - 检测编造内容）
 # 检查 prompt 中的元素是否都能在 narration_segment 中找到依据
 def _check_script_novel_alignment(script: dict) -> dict:
@@ -2688,6 +2768,9 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v6.14 新增：ff_desc / motion_desc 时间线一致性检查（防钩子动作时序矛盾）
     results["ff_motion_timeline"] = _check_ff_motion_timeline(shots, hook)
 
+    # v6.18 新增：ff_desc 多动作/时间推进堆叠检查（单一静态瞬间，warning 级）
+    results["ff_multi_action"] = _check_ff_multi_action(shots, hook, script.get("characters", []))
+
     # v6.8 新增：情绪可视化检查（将抽象情绪词转化为具体肢体动作）
     results["emotion_visualization"] = _check_emotion_visualization(shots, hook)
 
@@ -2818,6 +2901,7 @@ def post_fix_shot_prompts(script: dict) -> dict:
       5. 正文净化：从 prompt 主体中剥离「画面/镜头」等禁止词
     只追加不删除（净化除外），安全幂等。hook 由独立逻辑处理，不在此处。
     """
+    from style_prefix import normalize_ff_desc
     defined_ids = frozenset(
         c.get("identifier", "") for c in script.get("characters", []) if c.get("identifier")
     )
@@ -2861,12 +2945,21 @@ def post_fix_shot_prompts(script: dict) -> dict:
         shot["prompt"] = prompt
         shot["motion_desc"] = motion_desc
 
+        # v6.18：ff_desc 静态化归一化（多动作/进行态堆叠 → 单一静态瞬间）
+        if shot.get("ff_desc"):
+            shot["ff_desc"] = normalize_ff_desc(
+                shot["ff_desc"], shot, script.get("characters", []))
+
     # hook 也需要光位量化 + 情绪可视化修复（光位先，让情绪词先驱动光位选择）
     hook = script.get("hook")
     if hook and isinstance(hook, dict):
         hook["prompt"] = _fix_lighting_quantization(hook.get("prompt", "") or "")
         hook["prompt"] = _fix_emotion_visualization(hook.get("prompt", "") or "")
         hook["motion_desc"] = _fix_emotion_visualization(hook.get("motion_desc", "") or "")
+        # v6.18：hook ff_desc 同样归一化
+        if hook.get("ff_desc"):
+            hook["ff_desc"] = normalize_ff_desc(
+                hook["ff_desc"], hook, script.get("characters", []))
 
     return script
 

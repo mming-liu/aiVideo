@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
@@ -367,6 +368,267 @@ def preprocess_prompt_for_image(prompt: str) -> str:
     for old, new in replacements.items():
         result = result.replace(old, new)
     return result
+
+
+# ============================================================================
+# ff_desc 归一化：多动作/进行态堆叠 → 单一静态瞬间
+#
+# 背景：LLM 生成的 ff_desc 常把多个动作（破水而出 + 惊觉欲起 + 尖叫）堆进
+# 一个静态首帧描述，而图片模型画不出"三个同时态动作"，只能糊成一团或只画
+# 部分。step01 生成时修复 + step02 消费时兜底，共用本模块这一套函数
+# （code-audit 2026-08-07 钩子首帧）。
+#
+# 设计原则：
+#   1. 保守——`detect_ff_multi_action` 是闸门，无信号不动原文；
+#   2. 幂等——`normalize(normalize(x)) == normalize(x)`（归一化产物不再含
+#      时间推进词/过渡态/持续动词，二次检测无信号直接返回）；
+#   3. 只碰时间连接词/过渡态/持续动词，角色名/静态姿势/场景/视线全保留；
+#   4. 只作用于 ff_desc，绝不作用于 lf_desc（动作结果态）/keyframes（进行中瞬间）。
+#
+# 注意：不并入 preprocess_prompt_for_image——该函数同时服务 ff 和 lf，
+# 而 lf 是动作结果态（尖叫/倒地在那是对的），归一化不能作用到 lf。
+# ============================================================================
+
+# 时间推进连接词：表示先后/并行 → 单帧图片不需要，删
+FF_TIME_ADVANCE_WORDS = (
+    "随即", "然后", "接着", "紧接着", "紧随其后", "紧跟着",
+    "与此同时", "同时", "就在这时", "霎时间", "霎那间", "下一瞬", "下一刹", "下一刻",
+    "骤然", "猛地", "突然", "忽地", "忽然", "继而", "随之", "随后", "旋即", "立刻", "马上",
+)
+
+# 过渡态标记（「即将」刻意不在表内 → 保留，符合"即将刺中→保持"的正确定格）
+FF_TRANSITION_MARKERS = (
+    "欲起", "欲动", "欲站", "欲纵", "欲扑", "欲跃",
+    "正要", "刚要", "准备", "正准备",
+)
+
+# 持续声音动词 → 可画静态姿势（(短替换, 完整替换)，完整替换含"张嘴"，
+# 分句已有 张嘴/张口/仰头 时用短替换，避免"张嘴张嘴"）。
+# 值不得命中本表其他键（防链式替换破坏幂等）：
+#   尖叫 → 惊呼/张嘴惊呼（惊呼不在本表键中）
+#   惊叫 → 低呼/张嘴低呼（低呼不在本表键中）
+FF_SUSTAINED_TO_POSE = {
+    "尖声尖叫": ("惊呼", "张嘴惊呼"),
+    "发出尖叫": ("惊呼", "张嘴惊呼"),
+    "尖叫": ("惊呼", "张嘴惊呼"),
+    "惊叫": ("低呼", "张嘴低呼"),
+    "怒喝": ("怒喝", "张嘴怒喝"),
+    "厉喝": ("厉喝", "张嘴厉喝"),
+    "大喊": ("大喊", "张嘴大喊"),
+    "大声喊叫": ("喊叫", "张嘴喊叫"),
+    "呼救": ("呼救", "张嘴呼救"),
+    "放声大哭": ("欲哭", "张口欲哭"),
+}
+
+# 进行态动作动词（构成独立"动作时刻"）。
+# 注意：单字"抓"不在表内——"抓住船舷/抓住手腕"是静态姿势（FF_STATIC_POSTURE_VERBS），
+# 只有"抓向/抓夺/抢夺"这类明显位移动作才算动作时刻。
+FF_MOTION_VERBS = (
+    "破水", "冲出", "窜出", "跃出", "跃起", "腾空", "翻身", "下坠", "跌落",
+    "跌倒", "倒纵", "没入", "潜入", "入水", "落水", "栽倒",
+    "刺", "劈", "砍", "斩", "挥", "扑", "撞", "夺", "踢", "踹",
+    "拔出", "抽出", "挥出", "砸下", "劈落", "刺下", "劈下",
+    "追杀", "疾冲", "狂奔", "疾驰", "纵身", "抓向", "抓夺", "抢夺",
+)
+
+# 静态姿势动词（定格的一部分，不构成独立动作时刻）
+FF_STATIC_POSTURE_VERBS = (
+    "高举", "紧握", "握", "举", "持", "握紧", "指", "盯着", "凝视",
+    "注视", "看", "望", "跪", "坐", "立", "站", "躺", "卧",
+    "仰头", "低头", "抬头", "张嘴", "张口", "闭眼", "睁眼", "睁大", "微张",
+    "前倾", "后仰", "侧身", "半起身", "抓住", "扶着", "倚着", "靠着",
+)
+
+# 特定过渡短语 → 具体静态姿势（保守映射，优先于正则兜底）
+FF_TRANSITION_REPLACE = (
+    ("惊觉欲起", "惊觉、身体前倾"),
+    ("惊觉欲站起", "惊觉、半起身"),
+    ("欲纵身", "身体前倾"),
+    ("欲扑", "身体前倾"),
+    ("欲起", "半起身"),
+    ("欲动", "身体前倾"),
+    ("欲站", "半起身"),
+    ("正要起身", "半起身"),
+    ("刚要起身", "半起身"),
+    ("准备起身", "半起身"),
+)
+
+
+def _subject_names(characters) -> set:
+    """角色名集合（含 刺客/杀手/黑衣人 等兜底称谓）. 用于动作主体识别."""
+    names = set()
+    for c in (characters or []):
+        ident = (c.get("identifier") or "").strip()
+        if ident:
+            names.add(ident)
+    # 兜底常见称谓（非注册角色名也可能出现在 ff_desc）
+    for fallback in ("刺客", "杀手", "黑衣人", "杨旭", "听香", "张十三", "老汉", "肖管事"):
+        names.add(fallback)
+    return names
+
+
+def _mask_subjects(text: str, names: set) -> str:
+    """遮蔽角色名，防止单字动词（刺/杀）误匹配人名（刺客/杀手）.
+
+    如"视线全部汇聚于刺客"遮蔽后 刺 不再命中 FF_MOTION_VERBS。
+    """
+    masked = text
+    for n in sorted(names, key=len, reverse=True):
+        if n:
+            masked = masked.replace(n, "\x00" * len(n))
+    return masked
+
+
+def _collect_ff_action_moments(text: str, characters=None) -> list[dict]:
+    """分句，收集含 进行态/过渡态/持续动作 的分句（= 独立"动作时刻"）.
+
+    「即将X」分句（逼近瞬间的定格，如"即将刺中杨旭"）刻意豁免——
+    是可画的静止画面（动作尚未发生），保留不处理（与 _check_ff_motion_timeline
+    的 in_progress_exempt 一致）。角色名先遮蔽，防 刺/杀 误匹配 刺客/杀手。
+
+    Returns:
+        list[dict]: [{subject, clause, kind}]，kind ∈ motion/transition/sustained
+    """
+    names = _subject_names(characters)
+    moments = []
+    for clause in re.split(r"[，,；;。！？]", text):
+        clause = clause.strip()
+        if not clause:
+            continue
+        if "即将" in clause:
+            continue  # 逼近瞬间的定格：可画，保留
+        masked = _mask_subjects(clause, names)
+        if any(v in masked for v in FF_MOTION_VERBS):
+            kind = "motion"
+        elif any(w in masked for w in FF_TRANSITION_MARKERS):
+            kind = "transition"
+        elif any(w in masked for w in FF_SUSTAINED_TO_POSE):
+            kind = "sustained"
+        else:
+            continue
+        subject = next((s for s in names if s in clause), None)
+        moments.append({"subject": subject, "clause": clause, "kind": kind})
+    return moments
+
+
+def detect_ff_multi_action(ff_desc: str, characters=None) -> list[dict]:
+    """检测 ff_desc 是否含多动作/时间推进/过渡态堆叠.
+
+    这是归一化是否动手的闸门：返回空列表 = 无问题，normalize 原样返回。
+    Returns:
+        list[dict]: 问题描述列表，每项 {type, ...}；空 = 无问题
+    """
+    if not ff_desc:
+        return []
+    problems: list[dict] = []
+    ta = [w for w in FF_TIME_ADVANCE_WORDS if w in ff_desc]
+    if ta:
+        problems.append({"type": "time_advance", "words": ta})
+    moments = _collect_ff_action_moments(ff_desc, characters)
+    if len(moments) >= 2:
+        problems.append({
+            "type": "multi_action",
+            "count": len(moments),
+            "clauses": [m["clause"] for m in moments],
+        })
+    for m in moments:
+        if m["kind"] == "transition":
+            problems.append({"type": "transition", "clause": m["clause"]})
+        elif m["kind"] == "sustained" and len(moments) >= 2:
+            problems.append({"type": "sustained", "clause": m["clause"]})
+    return problems
+
+
+def _strip_ff_time_advance(text: str) -> str:
+    """删除时间推进连接词，并清理双标点."""
+    for w in FF_TIME_ADVANCE_WORDS:
+        text = text.replace(w, "")
+    text = re.sub(r"[，、]{2,}", "，", text)
+    text = re.sub(r"[；;]{1,}", "，", text)  # 统一分号为逗号（同帧元素并列）
+    return text
+
+
+def _split_ff_clauses(text: str) -> list[str]:
+    """按标点分句."""
+    return [c.strip() for c in re.split(r"[，,；;。！？]", text) if c.strip()]
+
+
+def _drop_followup_motion(clauses: list[str], characters=None) -> list[str]:
+    """动作链只留最早定格：保留第一个含进行态动词的分句，后续进行态分句
+    去动词后若剩静态姿势残词则保留，否则丢弃（处理"破水而出→随即倒纵入水"）.
+    角色名先遮蔽防 刺/杀 误匹配；「即将」分句豁免（逼近瞬间定格，可画）。
+    """
+    names = _subject_names(characters)
+    kept_first_motion = False
+    out: list[str] = []
+    for c in clauses:
+        if "即将" in c:
+            out.append(c)
+            continue
+        masked = _mask_subjects(c, names)
+        is_motion = any(v in masked for v in FF_MOTION_VERBS)
+        if is_motion and not kept_first_motion:
+            kept_first_motion = True
+            out.append(c)
+            continue
+        if is_motion:
+            stripped = c
+            for v in FF_MOTION_VERBS:
+                stripped = stripped.replace(v, "")
+            has_posture = any(v in stripped for v in FF_STATIC_POSTURE_VERBS)
+            # 保留含静态姿势的分句（如"杨旭仰头"），丢弃纯动作链分句
+            if has_posture:
+                out.append(c)
+            continue
+        out.append(c)
+    return out
+
+
+def _staticize_ff_transition(clause: str) -> str:
+    """过渡态 → 静态姿势（欲起→半起身等）。「即将」不在表内，自动保留."""
+    for old, new in FF_TRANSITION_REPLACE:
+        if old in clause:
+            return clause.replace(old, new)
+    # 正则兜底：欲X → 半起身（不匹配"即将"）
+    clause = re.sub(r"欲(起|站|动|扑|纵|跃)", "半起身", clause)
+    return clause
+
+
+def _staticize_ff_sustained(clause: str, multi: bool) -> str:
+    """持续声音动词 → 静态姿势（尖叫→惊呼）。仅多动作时替换（单动作定格可保留原声）."""
+    if not multi:
+        return clause
+    for word, (short, full) in FF_SUSTAINED_TO_POSE.items():
+        if word in clause:
+            # 分句已有 张嘴/张口/仰头 时只换短形式，避免"张嘴张嘴"
+            if any(k in clause for k in ("张嘴", "张口", "仰头")):
+                return clause.replace(word, short)
+            return clause.replace(word, full)
+    return clause
+
+
+def normalize_ff_desc(ff_desc: str, shot: dict | None = None,
+                      characters=None) -> str:
+    """ff_desc 归一化：多动作/进行态堆叠 → 单一静态瞬间（幂等、保守）.
+
+    无问题信号（detect_ff_multi_action 为空）时原样返回；只作用于 ff_desc，
+    绝不作用于 lf_desc（动作结果态）/keyframes（进行中瞬间）。
+    """
+    if not ff_desc or not isinstance(ff_desc, str):
+        return ff_desc
+    if not detect_ff_multi_action(ff_desc, characters):
+        return ff_desc
+    text = _strip_ff_time_advance(ff_desc)
+    clauses = _split_ff_clauses(text)
+    moments = _collect_ff_action_moments("，".join(clauses), characters)
+    multi = len(moments) >= 2
+    clauses = _drop_followup_motion(clauses, characters)
+    out = []
+    for c in clauses:
+        c = _staticize_ff_transition(c)
+        c = _staticize_ff_sustained(c, multi)
+        out.append(c)
+    return "，".join(out).strip("，、。 ")
 
 
 def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",

@@ -92,6 +92,25 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
         results[idx] = result
         _log_shot_frames(idx, result, logger)
 
+    # v6.18：gen_shot_frames 内归一化会回写 shot["ff_desc"]（多动作→静态瞬间），
+    # 落盘让 script_result.json 反映真实用于生图的文本，也保证 step02b 读到
+    # 归一化后的 ff_desc（【视频起点】一致）。只在有归一化发生时落盘。
+    with open(script_path, "r", encoding="utf-8") as f:
+        on_disk = json.load(f)
+    changed = False
+    disk_shots = {s.get("index"): s.get("ff_desc") for s in on_disk.get("shots", [])}
+    for s in script.get("shots", []):
+        if s.get("ff_desc") != disk_shots.get(s.get("index")):
+            changed = True
+            break
+    disk_hook = (on_disk.get("hook") or {}).get("ff_desc")
+    if (script.get("hook") or {}).get("ff_desc") != disk_hook:
+        changed = True
+    if changed:
+        with open(script_path, "w", encoding="utf-8") as f:
+            json.dump(script, f, ensure_ascii=False, indent=2)
+        logger.info("[INFO] ff_desc 归一化已回写 script_result.json")
+
     return results
 
 
