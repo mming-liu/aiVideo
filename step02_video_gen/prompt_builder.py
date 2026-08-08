@@ -150,6 +150,31 @@ _SCENE_REF_WORDS = (
     "烛火", "灯笼", "灯光", "屋内", "室内", "大堂", "殿内", "书房", "卧室", "城墙头",
 )
 
+# v6.25：空间物体（船/马车/轿/辇等可容纳人或作环境舞台的物体）在 r2v 参考中
+# 属于「环境/尺寸锚点」，与手持道具（箫/伞/酒壶/弯刀）不同——它们决定画面的
+# 空间比例，防模型画小或比例漂移。道具 bank 里 category=交通工具 即这类物体。
+_SPACE_OBJECT_CATEGORIES = ("交通工具",)
+
+
+def _is_space_object_prop(entry: dict) -> bool:
+    """判断道具 bank 条目是否为空间物体（船/马车/轿等，作环境/尺寸锚点）."""
+    category = (entry.get("category") or "").strip()
+    return category in _SPACE_OBJECT_CATEGORIES or any(
+        w in category for w in ("船", "车", "轿", "辇", "舟")
+    )
+
+
+# 无 bank 上下文时（_classify_reference_purpose 只有路径），按形制字识别空间物体
+_SPACE_OBJECT_IDENTIFIER_WORDS = (
+    "舴艋舟", "扁舟", "楼船", "画舫", "乌篷", "帆船", "采莲舟", "渡船",
+    "马车", "牛车", "板车", "轿子", "花轿", "轿辇", "步辇", "舟",
+)
+
+
+def _is_space_object_identifier(ident: str) -> bool:
+    """按标识符/形制字判断是否为空间物体（船/车/轿/舟）."""
+    return any(w in ident for w in _SPACE_OBJECT_IDENTIFIER_WORDS)
+
 
 def _load_character_registry() -> dict:
     """加载角色注册表（存在时）.
@@ -275,6 +300,13 @@ def _classify_reference_purpose(path: str, shot: dict, registry: dict,
 
     # 5. 道具资产库（props_bank/{道具}/prop.png）
     if "props_bank" in str(path):
+        # v6.25：空间物体（船/车/轿）作环境/尺寸锚点，非手持道具外观——
+        # 白底道具图对船无用（它不告诉你船占画面多大），必须让模型以它
+        # 作为画面空间比例与舞台规模的基准。
+        if _is_space_object_identifier(parent_dir) or _is_space_object_identifier(stem):
+            return (f"场景「{parent_dir}」空间物体参考：图中物体的尺寸、形态、"
+                    f"船体/车体结构、与画面的相对比例以参考图为准，画面中的船/车"
+                    f"必须保持该大小，禁止画小或比例漂移，人物与它的空间关系以此为准")
         return f"道具「{parent_dir}」外观参考，图中道具的材质、颜色、结构、尺寸与使用痕迹以参考图为准，画面出现该道具时必须一致"
 
     # 6. keyframes 目录中的帧图：仅当 main_subject 是已知角色时按该角色标注。
@@ -347,6 +379,59 @@ def _build_scene_environment(shot: dict) -> str:
     if t:
         return f"【场景环境】{location}，{t}"
     return f"【场景环境】{location}"
+
+
+def _build_space_object_anchor(shot: dict, script: dict) -> str:
+    """构建空间物体尺寸/舞台锚点（v6.25 船小根因修复）.
+
+    从 script.scene_objects 找本镜出现的空间物体（船/马车/轿等，含 size 数据），
+    注入绝对尺寸与「它是画面主体舞台」的语义。防止视频模型在 r2v 图没船、
+    只有文字「小舟」时自由发挥把船画小。
+
+    script.scene_objects 由 step01 object_extractor 提取：{identifier: {category,
+    subtype, length_m, width_m, height_m, capacity, structure, consistent_terms}}。
+    命中：location/ff/prompt/lf 含对象的 consistent_terms 或 identifier。
+    """
+    scene_objects = (script or {}).get("scene_objects") or {}
+    if not scene_objects:
+        return ""
+    location = shot.get("location", "") or shot.get("scene", "")
+    probe = " ".join([
+        location, shot.get("scene", ""), shot.get("ff_desc", ""),
+        shot.get("motion_desc", "") or shot.get("prompt", ""),
+        shot.get("lf_desc", ""),
+    ])
+    for ident, obj in scene_objects.items():
+        if not isinstance(obj, dict):
+            continue
+        terms = [ident] + list(obj.get("consistent_terms", []) or [])
+        if not any(term and (term in probe or term in location) for term in terms):
+            continue
+        subtype = (obj.get("subtype") or ident or "").strip()
+        category = (obj.get("category") or "").strip()
+        length_m = obj.get("length_m")
+        width_m = obj.get("width_m")
+        dims = []
+        if length_m:
+            dims.append(f"{length_m:g}米长")
+        if width_m:
+            dims.append(f"{width_m:g}米宽")
+        if obj.get("height_m"):
+            dims.append(f"{obj['height_m']:g}米高")
+        capacity = (obj.get("capacity") or "").strip()
+        structure = (obj.get("structure") or "").strip()
+        body_word = "车体" if "车" in category else ("轿体" if "轿" in category else "船体")
+        parts_anchor = [f"【空间物体】本镜舞台是{subtype}（{'、'.join(dims) or '具体尺寸见参考图'}）"]
+        if capacity:
+            parts_anchor.append(f"，{capacity}")
+        if structure:
+            parts_anchor.append(f"，{structure[:40]}")
+        parts_anchor.append(
+            f"。它是所有人物活动的舞台，{body_word}必须在画面中清晰可见、"
+            f"占据合理主体比例，禁止画成小舢板/独木舟大小或比例漂移。"
+        )
+        return "".join(parts_anchor)
+    return ""
 
 
 # v6.24：远景镜头词库（capsule 远景省略规则，与 validation._WIDE_SHOT_WORDS 同步）
@@ -535,6 +620,12 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     layout_block = _build_character_layout_block(shot, characters)
     if layout_block:
         parts.append(layout_block)
+
+    # 4.1c 空间物体尺寸/舞台锚点（v6.25 船小根因修复）：船/马车等作为舞台主体，
+    # 注入绝对尺寸 + 统一称呼，防 r2v 图没船时模型自由发挥画小。
+    space_anchor = _build_space_object_anchor(shot, script)
+    if space_anchor:
+        parts.append(space_anchor)
 
     # 4.2 首帧画面描述（视频起点）
     if ff_desc:
@@ -934,8 +1025,9 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
             if picked and picked not in char_refs:
                 char_refs.append(picked)
 
-    # ---- 3. 出镜道具资产图 ----
+    # ---- 3. 道具资产图（空间物体拆出，作环境/尺寸锚点；手持道具作外观参考）----
     prop_refs: list[str] = []
+    space_refs: list[str] = []
     try:
         from shared.assets_bank import PropAssetsBank
         pbank = PropAssetsBank()
@@ -950,11 +1042,21 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
             match_sources = [pid] + list(entry.get("consistent_terms", []) or [])
             if any(src and (src in search_text or src in loc) for src in match_sources):
                 img = pbank.get_asset_image(pid)
-                if img:
-                    prop_refs.append(img)
-                    _log_r2v_collect(
-                        f"  道具「{pid}」匹配 → {Path(img).name}（匹配源: {[s for s in match_sources if s][:4]}）"
-                    )
+                if not img:
+                    continue
+                # v6.25：船/马车等空间物体拆到 space_refs（环境/尺寸锚点，提前到
+                # 角色肖像前）——手持道具不决定画面空间比例，船才决定。
+                if _is_space_object_prop(entry):
+                    if img not in space_refs:
+                        space_refs.append(img)
+                        _log_r2v_collect(
+                            f"  空间物体「{pid}」匹配 → {Path(img).name}（环境/尺寸锚点，提前注入）"
+                        )
+                    continue
+                prop_refs.append(img)
+                _log_r2v_collect(
+                    f"  道具「{pid}」匹配 → {Path(img).name}（匹配源: {[s for s in match_sources if s][:4]}）"
+                )
     except Exception as e:
         _log_r2v_collect(f"  道具资产收集异常: {e}")
         prop_refs = []
@@ -962,10 +1064,11 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
     # ---- 组装 ----
     # 首帧构图锚点存在：它已锚定正确时间/场景/人物站位/动作起点，替代场景资产图
     # （wide.png 是黄昏远景，与首帧的深青夜色冲突，会让视频时间漂移）。场景资产图
-    # 只在无首帧时注入，作环境兜底。
+    # 只在无首帧时注入，作环境兜底。空间物体图（船/马车）紧随场景后、角色肖像前，
+    # 作为尺寸/舞台锚点（船大小由它 + 文字锚点共同锁定）。
     refs: list[str] = []
     base = composition_refs + ([scene_refs[0]] if scene_refs and not composition_refs else [])
-    for p in base + char_refs + prop_refs:
+    for p in base + space_refs + char_refs + prop_refs:
         if p not in refs:
             refs.append(p)
         if len(refs) >= limit:
@@ -973,7 +1076,8 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
     _log_r2v_collect(
         f"r2v 参考图收集完成（镜头{shot.get('index', '?')}）: "
         f"首帧{len(composition_refs)} / 场景{len(scene_refs)} / "
-        f"角色{len(char_refs)} / 道具{len(prop_refs)} / 共{len(refs)}张"
+        f"空间物体{len(space_refs)} / 角色{len(char_refs)} / "
+        f"道具{len(prop_refs)} / 共{len(refs)}张"
     )
     for i, p in enumerate(refs):
         _log_r2v_collect(f"    [{i}] {Path(p).parent.name}/{Path(p).name}")

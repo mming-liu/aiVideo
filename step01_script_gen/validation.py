@@ -2871,6 +2871,9 @@ def _run_prompt_checklist(script: dict) -> dict:
     results["hand_lock"] = _check_hand_lock(shots)
     results["subtitle_leak"] = _check_subtitle_leak(shots, script.get("hook"))
 
+    # v6.25 新增：威胁源-视线耦合（规则41，hook 调试暴露的站位-视线矛盾）
+    results["threat_gaze_coupling"] = _check_threat_gaze_coupling(shots, script.get("hook"))
+
     # 综合判定：任一硬性检查失败则整体不通过
     # v6.5: 增加 script_novel_alignment 到硬性检查
     # v6.7: 增加 ff_lf_completeness 到硬性检查（lf_desc 为空会导致静态视频）
@@ -3417,4 +3420,76 @@ def _check_subtitle_leak(shots: list[dict], hook: dict = None) -> dict:
             )
     for w in warnings:
         print(f"[CHECK] 字幕泄漏: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+# v6.25: 威胁源-视线耦合检查（规则41）
+_THREAT_WORDS = ("刺客", "杀手", "偷袭者", "持刀", "黑衣人", "黑影", "潜伏", "埋伏", "伏击")
+# 「发现者视线指向某威胁」的表达（视线锁定/紧盯/看向 + 威胁词）
+_THREAT_GAZE_RE = re.compile(
+    r'[视线目光双眼眼神]?[^。；！？]{0,8}[盯看望锁][^。；！？]{0,10}(刺客|杀手|黑衣人|黑影|水中|水下)'
+)
+
+
+def _check_threat_gaze_coupling(shots: list[dict], hook: dict = None) -> dict:
+    """v6.25 新增：威胁源-视线耦合检查（规则41）.
+
+    从 hook 调试学到的教训：威胁源（刺客）的站位必须与「发现者」的视线方向
+    逻辑自洽。v6 构图里把刺客移到画左（船尾侧），结果中舱的听香朝画右看
+    根本看不到——反而是画右船头的杨旭先发现，逻辑崩坏。
+
+    本检查聚焦两类问题（warning-only）：
+    1. **威胁源朝向不明/背对目标**：威胁源（刺客）描述里没写它朝向目标方向
+       （画左/画右），或写了朝向但没对齐「盯目标」。
+    2. **视线所指与威胁方位矛盾**：角色「视线锁定画X的威胁」，但威胁源
+       描述里方位（画X）与视线方向不一致——发现者看的不是威胁所在处。
+    """
+    issues, warnings = [], []
+    targets = list(shots) + ([hook] if hook else [])
+    for s in targets:
+        text = " ".join([s.get("prompt", ""), s.get("ff_desc", ""),
+                         s.get("lf_desc", ""), s.get("motion_desc", "")])
+        label = "hook" if (hook and s is hook) else s.get("index", "?")
+
+        # 1. 有威胁源但无朝向目标：威胁源该「紧盯/朝向某方向的目标」，若只写
+        #    「潜伏水下」而无朝向目标，容易画成背对或正对镜头（hook 实测）
+        has_threat = any(w in text for w in _THREAT_WORDS)
+        if has_threat:
+            # 威胁源是否有「面向目标」的朝向表达：朝画X/紧盯画X/侧身/望向X
+            threat_has_target = any(
+                k in text for k in ("朝画", "紧盯画", "盯向画", "望画", "侧身", "朝向", "面向", "逼近", "逼近画")
+            )
+            if not threat_has_target:
+                warnings.append(
+                    f"镜头{label}: 威胁源（刺客/黑衣人等）未写朝向目标——应写明它"
+                    f"「侧身朝画X/紧盯画X/朝向目标」，否则模型易画成背对目标或正对镜头"
+                    f"（威胁源-视线耦合规则41）。"
+                )
+
+        # 2. 发现者视线方向 vs 威胁方位矛盾：
+        #    「视线锁定画右的刺客」→ 威胁源（刺客）应摆在画右；若威胁源的
+        #    方位描述（画左/画右）与视线方向相反，发现者看的不是威胁
+        #    （hook 实测：听香「视线锁定画右水下刺客」，但刺客被排到画左，
+        #     逻辑崩坏——中舱听香朝画右看，画右是船头杨旭，画左才是刺客）。
+        gaze_match = _THREAT_GAZE_RE.search(text)
+        if gaze_match:
+            seg = gaze_match.group()
+            gaze_dir = next((d for d in ("画左", "画右") if d in seg), None)
+            if gaze_dir:
+                # 威胁源（刺客）自身的方位：找「刺客/黑衣人/潜伏 附近」的方位词
+                threat_spot = next(
+                    (d for d in ("画左", "画右")
+                     if any(t in text for t in _THREAT_WORDS)
+                     and d in text and d != gaze_dir),
+                    None,
+                )
+                if threat_spot:
+                    warnings.append(
+                        f"镜头{label}: 视线-威胁方位矛盾——发现者「{seg[:26]}」，"
+                        f"视线指{gaze_dir}，但威胁源（刺客）方位写的是{threat_spot}"
+                        f"（画{gaze_dir}反侧）。威胁源必须与发现者视线同向摆放，"
+                        f"否则发现者看到的不是威胁（威胁源-视线耦合规则41）。"
+                    )
+    for w in warnings:
+        print(f"[CHECK] 威胁源-视线耦合: [WARN] {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}

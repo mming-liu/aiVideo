@@ -934,12 +934,26 @@ def _collect_scene_asset_refs(shot: dict) -> list[str]:
         return []
 
 
-def _collect_prop_asset_refs(shot: dict, limit: int = 2) -> list[str]:
-    """为本镜头匹配道具资产图（props_bank prop.png）作道具参考.
+def _is_space_object_prop(entry: dict) -> bool:
+    """判断道具 bank 条目是否为空间物体（船/马车/轿等，作环境/尺寸锚点）.
 
-    与 r2v 同源匹配：道具名/consistent_terms 出现在本镜 ff_desc/motion_desc/
-    lf_desc 或 location 中。注入道具资产图保证首帧出现的道具外观/材质/尺寸
-    与全局道具库一致（如钓杆、弯刀），避免图生图自由发挥画错道具。
+    与 prompt_builder._is_space_object_prop 保持一致（两处各自持一份判定，
+    避免跨模块耦合——vimax_bridge 不 import prompt_builder）。
+    空间物体决定画面空间比例（防模型画小），手持道具不决定，故拆出优先。
+    """
+    category = (entry.get("category") or "").strip()
+    return category in ("交通工具",) or any(
+        w in category for w in ("船", "车", "轿", "辇", "舟")
+    )
+
+
+def _collect_space_object_refs(shot: dict) -> list[str]:
+    """收集本镜头出现的空间物体参考图（船/马车/轿，category=交通工具）.
+
+    v6.25：空间物体是环境/尺寸锚点，决定画面空间比例（防船画小），与手持道具
+    分开收集——组装时排在场景图后、角色肖像前。图片模型默认按「一个人躺满
+    整艘船」画船，船图在 5 名额里若不提前必然被手持道具挤掉（code-audit 08-08
+    钩子首帧「3角色+2道具」占满名额，舴艋舟无位）。
     """
     try:
         from shared.assets_bank import PropAssetsBank
@@ -956,6 +970,48 @@ def _collect_prop_asset_refs(shot: dict, limit: int = 2) -> list[str]:
             if not pid:
                 continue
             entry = pbank.get_prop(pid) or {}
+            if not _is_space_object_prop(entry):
+                continue
+            match_sources = [pid] + list(entry.get("consistent_terms", []) or [])
+            if not any(src and (src in search_text or src in loc) for src in match_sources):
+                continue
+            img = pbank.get_asset_image(pid)
+            if img and Path(img).exists() and img not in refs:
+                refs.append(img)
+                _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 首帧参考图=空间物体 {pid} {Path(img).name}")
+        return refs
+    except Exception as e:
+        _bridge_log(f"  [bridge] 空间物体参考图收集异常: {e}")
+        return []
+
+
+def _collect_prop_asset_refs(shot: dict, limit: int = 2) -> list[str]:
+    """为本镜头匹配手持道具资产图（props_bank prop.png）作道具参考.
+
+    与 r2v 同源匹配：道具名/consistent_terms 出现在本镜 ff_desc/motion_desc/
+    lf_desc 或 location 中。注入道具资产图保证首帧出现的道具外观/材质/尺寸
+    与全局道具库一致（如钓杆、弯刀），避免图生图自由发挥画错道具。
+
+    v6.25：只收集手持道具（空间物体走 _collect_space_object_refs，单独提前），
+    limit 为手持道具上限。由调用方按「场景 → 空间物体 → 角色 → 手持道具」组装。
+    """
+    try:
+        from shared.assets_bank import PropAssetsBank
+        pbank = PropAssetsBank()
+        pbank.load()
+        search_text = " ".join([
+            shot.get("ff_desc", "").strip() or "",
+            shot.get("motion_desc", "").strip() or shot.get("prompt", ""),
+            shot.get("lf_desc", "").strip() or "",
+        ])
+        loc = shot.get("location", "") or shot.get("scene", "")
+        refs: list[str] = []
+        for pid in pbank.get_all_identifiers():
+            if not pid:
+                continue
+            entry = pbank.get_prop(pid) or {}
+            if _is_space_object_prop(entry):
+                continue
             match_sources = [pid] + list(entry.get("consistent_terms", []) or [])
             if any(src and (src in search_text or src in loc) for src in match_sources):
                 img = pbank.get_asset_image(pid)
@@ -992,11 +1048,16 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
     if empty_scene:
         return scene_refs[:limit]
 
-    portrait_refs = _collect_portrait_refs_for_shot(shot, characters, limit=max(1, limit - len(scene_refs)))
-    prop_refs = _collect_prop_asset_refs(shot, limit=max(1, limit - len(scene_refs) - len(portrait_refs)))
+    # v6.25：组装序 = 场景 → 空间物体（船/马车）→ 角色肖像 → 手持道具。
+    # 空间物体是环境/尺寸锚点（决定画面空间比例，防船画小），比手持道具重要，
+    # 先于角色肖像占据名额——hook 首帧「3角色+2道具」占满 5 名额时船必须在场。
+    space_refs = _collect_space_object_refs(shot)
+    prop_budget = max(1, limit - len(scene_refs) - len(space_refs))
+    portrait_refs = _collect_portrait_refs_for_shot(shot, characters, limit=max(1, limit - len(scene_refs) - len(space_refs)))
+    prop_refs = _collect_prop_asset_refs(shot, limit=prop_budget)
 
     refs: list[str] = []
-    for p in scene_refs + portrait_refs + prop_refs:
+    for p in scene_refs + space_refs + portrait_refs + prop_refs:
         if p not in refs:
             refs.append(p)
         if len(refs) >= limit:
