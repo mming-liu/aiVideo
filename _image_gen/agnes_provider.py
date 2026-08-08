@@ -200,7 +200,7 @@ class AgnesImageService(ImageGenerationService):
             frame_label = req.frame_desc if req.frame_desc else "首帧"
             _verbose_write(f"  [镜头{req.shot_index}] 正在生成{frame_label} [{model}]...")
             _submit_retry = 0
-            # 完整请求日志（不含 base64 内容）
+            # 完整请求日志（不含 base64 内容，只记长度 + 源路径）
             import json
             _log_payload = {k: v for k, v in payload.items()}
             if "extra_body" in _log_payload and isinstance(_log_payload.get("extra_body"), dict):
@@ -212,6 +212,12 @@ class AgnesImageService(ImageGenerationService):
                         _eb["image"] = f"[base64 data, len={len(_eb['image'])}]" if isinstance(_eb["image"], str) and _eb["image"].startswith("data:") else _eb["image"]
             _verbose_write(f"[DEBUG] image_submit: POST {url}")
             _verbose_write(f"[DEBUG] image_submit: headers={json.dumps({k: v if k != 'Authorization' else f'Bearer ***{v[-8:]}' for k, v in headers.items()}, ensure_ascii=False)}")
+            # 参考图源路径（用户需要知道发了哪些照片）
+            _srcs = list(req.reference_image_paths) if req.reference_image_paths else []
+            if not _srcs and req.reference_image_path:
+                _srcs = [req.reference_image_path]
+            for i, src in enumerate(_srcs):
+                _verbose_write(f"[DEBUG] image_submit: ref[{i}] 源路径={src}")
             _verbose_write(f"[DEBUG] image_submit: payload={json.dumps(_log_payload, ensure_ascii=False, indent=2)}")
 
             try:

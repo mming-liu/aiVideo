@@ -1553,19 +1553,35 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
                 warnings.append(
                     f"{label}: ff_desc 把动作结果状态「{'、'.join(polluted)}」写进首帧定格，"
                     f"但 motion_desc 该状态发生在动作推进中（{motion[:50]}...）。"
-                    f"首帧只能画动作开始前的状态（如刺客刚破水、听香惊恐未尖叫、脸上无血），"
+                    f"首帧只能画动作开始前（前一刻）的状态（如刺客潜伏水下、听香张嘴欲呼、脸上无血），"
                     f"禁止把血溅到脸上/尖叫/倒地等动作结果提前到 t=0——否则图片模型画不出一串动作，"
                     f"只能照首帧参考图兜底导致首尾帧雷同。"
                 )
         # 完成态动词检测
         completed = [v for v in _FF_COMPLETED_VERBS if v in ff]
+        # v6.19：进行中动作定格检查（用户决策：ff_desc 应收敛到动作「前一刻」）。
+        # 若 ff 含进行态动作动词（破水/冲出/刺向/倒纵/跃起等，非完成态）——
+        # 首帧定格在动作进行中，与 motion_desc 首段动作重叠，视频模型会把
+        # 动作做两遍。提示改前一刻（自动修复见 style_prefix.normalize_ff_desc）。
         if not completed:
+            from style_prefix import detect_ff_multi_action
+            prog = detect_ff_multi_action(ff, None)
+            pre = [p for p in prog if p.get("type") == "pre_action"]
+            if pre:
+                warnings.append(
+                    f"{label}: ff_desc 定格在动作进行中（{pre[0].get('clause', '')[:30]}），"
+                    f"而 motion_desc 首段动作相同（{motion[:40]}...）——视频起点与中段动作重叠，"
+                    f"模型会把动作做两遍。建议改定格在动作「前一刻」"
+                    f"（如'刺客潜伏水下、水面微澜'/'刀尖抵近杨旭心口、即将触及'/'听香张嘴欲呼'）。"
+                )
             return
         # 进行中定格豁免：「半身已冲出水面 + 武器高举未落下」是动作进行中的
         # 定格（还有后续劈落/追击），不是动作结果时刻。这是规则建议的正确写法
         # （如'刺客半身破水、刀高举未落下'），不应误报为完成态。
         # 误报示例（code-audit 08-06 钩子）：ff「半身已冲出水面、右手高举匕首过顶」
         # 是进行中，motion 前2秒才劈落——时序一致，却因「已冲出」被判完成态。
+        # v6.19 注：normalize_ff_desc 会把「半身破水而出」改写成「潜伏水下」，
+        # 此豁免仅防旧缓存/未归一化文本误报为完成态（安全网）。
         in_progress_exempt = (
             ("半身" in ff and "已冲出" in ff and any(k in ff for k in ("高举", "未落", "过顶", "扬起")))
             or ("破水" in ff and "高举" in ff)
@@ -1605,7 +1621,7 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
             f"{label}: ff_desc 含完成态动词「{'、'.join(completed)}」（首帧定格在动作结果时刻），"
             f"而 motion_desc 又描述同一动作推进（{motion[:40]}...）。"
             f"t=0 已发生，motion 却又在发生 → 视频模型无法调和，会脑补假动作。"
-            f"建议 ff_desc 定格在动作开始前/进行中时刻（如'刺客半身破水、刀高举未落下'）。"
+            f"建议 ff_desc 定格在动作「前一刻」（如'刺客潜伏水下、水面微澜'/'刀尖抵近杨旭心口、即将触及'）。"
         )
 
     for shot in shots:
@@ -1626,11 +1642,14 @@ def _check_ff_multi_action(shots: list[dict], hook: dict = None,
 
     背景（code-audit 08-07 钩子首帧）：LLM 常把「破水而出 + 惊觉欲起 + 尖叫」
     三个进行态动作塞进 ff_desc——图片模型画不出"三个同时态动作"，只能糊成
-    一团或只画部分。此检查为 warning 级（不阻断），提示把 ff_desc 收敛为
-    单一静态瞬间：保留最早且最震撼的 1 个动作，其余角色定格为静态反应
+    一团或只画部分。v6.19：收敛目标升级为动作「前一刻」（破水→潜伏水下、
+    水面微澜；刺向→刀尖抵近、即将触及；尖叫→欲呼）。此检查为 warning 级
+    （不阻断），提示把 ff_desc 定格在 motion 第一个动作的前一刻
     （自动修复见 style_prefix.normalize_ff_desc，生成源头与消费兜底共用）。
 
     复用 style_prefix.detect_ff_multi_action 作为判定闸门（词库单一来源）。
+    注意过滤 pre_action 类型——它是"应被 normalize 自动改写"的信号（post_fix
+    已先归一化，正常不会出现），不是"多动作堆叠"问题。
     """
     from style_prefix import detect_ff_multi_action
     warnings = []
@@ -1645,6 +1664,8 @@ def _check_ff_multi_action(shots: list[dict], hook: dict = None,
             return
         parts = []
         for p in problems:
+            if p["type"] == "pre_action":
+                continue  # normalize 自动改写信号，非质量问题
             if p["type"] == "time_advance":
                 parts.append(f"时间推进连接词「{'、'.join(p['words'])}」")
             elif p["type"] == "multi_action":
@@ -1653,11 +1674,13 @@ def _check_ff_multi_action(shots: list[dict], hook: dict = None,
                 parts.append(f"过渡态「{p['clause']}」")
             elif p["type"] == "sustained":
                 parts.append(f"持续动作「{p['clause']}」")
+        if not parts:
+            return  # 只剩 pre_action，无实际问题
         warnings.append(
-            f"{label}: ff_desc 含 {('、'.join(parts))}——静态首帧堆叠多动作，"
-            f"图片模型画不出（破水而出+惊觉欲起+尖叫=三个同时态动作）。"
-            f"只保留最早且最震撼的 1 个动作瞬间，其余角色定格为该瞬间的静态反应"
-            f"（如「刺客半身破水而出、右手高举弯刀；杨旭惊觉、身体前倾；听香仰头张嘴」）。"
+            f"{label}: ff_desc 含 {('、'.join(parts))}——静态首帧不应定格在动作进行中。"
+            f"应改写为 motion 第一个动作的「前一刻」："
+            f"破水而出→潜伏水下、水面微澜；刺向→刀尖抵近、即将触及；尖叫→张嘴欲呼"
+            f"（如「刺客潜伏水下、水面微澜；杨旭静坐未察；听香仰头张嘴欲呼」）。"
         )
 
     for shot in shots:

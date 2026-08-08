@@ -779,20 +779,30 @@ def _validate_frame(path: str, min_kb: float = 5) -> bool:
 
 
 async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
-                          characters: list | None = None, empty_scene: bool = False):
+                          characters: list | None = None, empty_scene: bool = False,
+                          prompt: str | None = None):
     """帧生成后执行视觉质检（软失败，不阻断流水线）.
 
     通过 shared/image_qc.py 调用 ds-vision-skill 的 vision-router.ps1 对帧图做内容质检；
     QC 成功（ok=True）即写 sidecar（检出与否都写，has_hallucination=false 表示"已检过无问题"，
     供 should_run_qc 靠 sidecar 新鲜度跳过重复质检）。默认封顶 warning，不触发 step02b 自动重生成。
     asyncio.to_thread 避免阻塞事件循环（单次质检 2-4 分钟）。
+
+    prompt: v1.1 语义核对用——实际生成图片的最终 prompt。不传时从
+    shot["ff_desc_final"]/["lf_desc_final"] 取（_gen_first_frame_async 挂载）。
     """
     if not frame_path:
         return
+    # 未显式传 prompt 时，从 shot 挂载的最终 prompt 取（QC 语义核对用）
+    if prompt is None and isinstance(shot, dict):
+        if frame_kind == "last_frame":
+            prompt = shot.get("lf_desc_final") or shot.get("ff_desc_final")
+        else:
+            prompt = shot.get("ff_desc_final") or shot.get("lf_desc_final")
     try:
         from shared.image_qc import maybe_qc_sync, sidecar_path, write_sidecar
         result = await asyncio.to_thread(
-            maybe_qc_sync, frame_path, shot, frame_kind, characters, empty_scene,
+            maybe_qc_sync, frame_path, shot, frame_kind, characters, empty_scene, prompt,
         )
         if not result.ok:
             _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 质检失败跳过（未写 sidecar）: {result.error}")
@@ -860,6 +870,7 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
 
     if empty_scene:
         key_parts.append("empty_scene")    # 空镜判定翻转时帧应重做
+
     key = "|".join(key_parts)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
@@ -1024,8 +1035,13 @@ def _detect_action_subject(shot: dict, characters: list | None = None) -> str:
     if not known:
         return ""
     # 动作动词（做核心动作的标记）
+    # v1.1：加出水/入水动作（破水/出水/没入/入水/落水）——钩子「刺客破水而出，
+    # 刺中杨旭心口；杨旭仰面后倒」里，「破水」最早出现且主语是刺客；缺它时
+    # 会误识别「仰面后倒」的主语杨旭，导致 action_ref 生成"杨旭自捅"
+    # （code-audit 2026-08-08）。
     action_verbs = (
-        "窜出", "冲出", "跃出", "刺", "劈", "砍", "扑", "杀", "倒", "喊", "叫",
+        "破水", "出水", "窜出", "冲出", "跃出", "没入", "入水", "落水",
+        "刺", "劈", "砍", "扑", "杀", "倒", "喊", "叫",
         "尖叫", "仰面", "后倒", "摔", "跑", "追", "跪", "拜", "夺", "抢",
         "拔", "抽", "挥", "斩", "轰", "踹", "踢", "挥手", "怒喝", "厉喝",
         "哭", "笑", "转身", "回头", "出手", "攻击",
@@ -1086,7 +1102,7 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
         if not search_text:
             return []
 
-        # 视角匹配
+        # 全局视角匹配（背面/侧身词对整镜生效）
         view_pref = "front"
         for kw in ("背面", "背影", "背向", "背对", "背身", "后背", "背朝"):
             if kw in search_text:
@@ -1096,6 +1112,21 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
             if kw in search_text:
                 view_pref = "side"
                 break
+
+        # v1.1：动作主体「面向画左/画右/朝画X」→ 侧面朝向（如钩子"刺客盯向画右的
+        # 杨旭" → 刺客用 side 侧面肖像，避免 front 看镜头把刺客画成面向镜头；
+        # code-audit 2026-08-08 钩子首帧刺客面向镜头）。仅对动作主体生效——
+        # "画左/画右"也可能出现在其他角色描述里，全局触发会误伤。
+        action_subject = _detect_action_subject(shot, characters)
+        subject_view = None
+        if action_subject:
+            _s_idx = search_text.find(action_subject)
+            if _s_idx >= 0:
+                _tail = search_text[_s_idx:_s_idx + 30]
+                if any(kw in _tail for kw in ("面向画", "朝向画", "盯向画", "望向画",
+                                              "面向右", "面向左", "朝画右", "朝画左",
+                                              "看画右", "看画左", "转向画")):
+                    subject_view = "side"
 
         # 出镜角色名集合：优先用 script characters（identifier），否则注册表 key
         char_names: list[str] = []
@@ -1115,7 +1146,6 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
         # 2. 其余出镜角色按出现顺序
         # 这样 IMAGE_MAX_REFS 裁剪/拼图保留下限内的名额时，动作主体肖像优先保住，
         # 而不是被"场景→角色→道具"顺序里的次要角色挤掉。
-        action_subject = _detect_action_subject(shot, characters)
         if action_subject and action_subject in char_names:
             char_names.remove(action_subject)
             char_names.insert(0, action_subject)
@@ -1128,7 +1158,9 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
             if not isinstance(views, dict):
                 continue
             picked = None
-            for view in [view_pref, "front", "side", "back"]:
+            # 动作主体单独判定视角（优先 subject_view，否则用全局 view_pref）
+            _ident_view = subject_view if ident == action_subject else view_pref
+            for view in [_ident_view or "front", "front", "side", "back"]:
                 p = views.get(view, {})
                 path = p.get("path", "") if isinstance(p, dict) else ""
                 if path and Path(path).exists():
@@ -1146,30 +1178,16 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
 
 
 # ---------------------------------------------------------------------------
-# 动作镜头判定 + 动作姿态参考图（action_ref）
+# 动作镜头判定
 #
-# 背景：首帧图生图若只注入角色静态站姿肖像 + 带"场景布局不变"的完整锁图，
-# 图生图模型会把姿态/构图锁死成"站着/看镜头/闭嘴"，动作描述（破水而出、
-# 高举匕首、张嘴尖叫）被参考图反锚定压制（code-audit 2026-08-07 钩子首帧无人）。
-# 这里提供：
-#   1. _is_action_shot —— 统一动作镜头判定（修改1选锁 / 修改2跳场景 / 修改3生成姿态图共用）
-#   2. _ensure_action_ref —— 为动作镜头生成「动作姿态参考图」action_ref.png，
-#      以角色 front 肖像为参考、prompt 注入动作短语，替代静态站姿肖像。
+# v6.19 注：action_ref 动作姿态参考图已废弃（code-audit 2026-08-08）——
+# 前一刻改造后首帧是静态画面（潜伏水下/水面微澜），静态肖像作参考图锚定
+# 身份即可；「破水而出」等动作描述无法翻译成可画的静态姿势，生成的
+# action_ref 姿态怪异（半只脚出水/双手伸开），且与首帧/尾帧状态冲突。
+# 参考图直接用角色肖像 + 场景/道具资产（gen_shot_frames）。
 # ---------------------------------------------------------------------------
 
-PROMPT_ACTION_REF = (
-    "Photorealistic {style} dynamic action pose of {identifier}, "
-    "referencing the provided base portrait. "
-    "MUST keep the base image identical: face shape, eyes, nose, mouth, hairstyle, "
-    "hairline, clothing, body proportions, ALL light source direction, "
-    "color temperature, 5500K lighting completely consistent. "
-    "CHANGE ONLY the body pose to the described action: {action_desc}. "
-    "Dynamic mid-motion posture, expressive face, correct anatomy. "
-    "Full body visible, white background, 16:9 landscape canvas. "
-    "Not anime, not cartoon, not illustration, not 3D render."
-)
-
-# 强动作动词（无具名主体时的兜底判定 + 动作短语提取）。
+# 强动作动词（无具名主体时的兜底判定）。
 # 刻意收窄：不含"转身/回头/起/坐/站"等对话镜头高频静态词，避免普通镜头
 # 被误判为动作镜头而解除布局锁、导致构图漂移。
 _ACTION_STRONG_VERBS = (
@@ -1196,143 +1214,6 @@ def _is_action_shot(shot: dict, characters: list | None = None) -> bool:
         shot.get("ff_desc", "").strip() or "",
     ])
     return any(v in text for v in _ACTION_STRONG_VERBS)
-
-
-def _extract_action_phrase(shot: dict, characters: list | None = None) -> str:
-    """从 motion_desc/ff_desc 提取动作主体的动作分句（供 action_ref prompt 使用）.
-
-    优先找「含动作主体 + 强动词」的分句（如钩子 → "刺客自水中窜出"）；
-    退而求其次找含动作主体的分句；最后回退 ff_desc 首句。
-    """
-    subject = _detect_action_subject(shot, characters)
-    for field in ("motion_desc", "ff_desc"):
-        for seg in re.split(r"[，。；！？\n:：]", shot.get(field, "") or ""):
-            seg = seg.strip()
-            if seg and subject and subject in seg and any(v in seg for v in _ACTION_STRONG_VERBS):
-                return seg
-    if subject:
-        for field in ("ff_desc", "motion_desc"):
-            for seg in re.split(r"[，。；！？\n:：]", shot.get(field, "") or ""):
-                if subject in seg:
-                    return seg.strip()
-    ff = shot.get("ff_desc", "") or ""
-    segs = [s.strip() for s in re.split(r"[，。；！？\n:：]", ff) if s.strip()]
-    return segs[0] if segs else ff.strip()
-
-
-def _subject_portrait_path(subject: str) -> str | None:
-    """从 character_portraits_registry.json 取动作主体的 front/base 肖像路径."""
-    if not subject:
-        return None
-    try:
-        from shared.paths import vimax_working_dir
-        reg_path = vimax_working_dir() / "character_portraits_registry.json"
-        if reg_path.exists():
-            reg = json.load(open(reg_path, encoding="utf-8"))
-            for view in ("front", "side", "back"):
-                p = (reg.get(subject, {}).get(view) or {}).get("path", "")
-                if p and Path(p).exists():
-                    return p
-    except Exception:
-        pass
-    return None
-
-
-def _action_ref_hash(shot: dict, subject: str, portrait_path: str) -> str:
-    """动作姿态参考图缓存哈希：ff_desc/motion_desc/主体/肖像/地点任一变化都重生成."""
-    key = "|".join([
-        shot.get("ff_desc", ""),
-        shot.get("motion_desc", ""),
-        subject or "",
-        portrait_path,                              # 肖像重生成 → 姿态图重生成
-        shot.get("location", "") or shot.get("scene", ""),
-    ])
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
-
-
-def _swap_in_action_ref(refs: list, action_ref: str, subject: str) -> list:
-    """把动作主体的静态肖像替换为 action_ref（1 换 1，不增参考图数量）.
-
-    规避 IMAGE_MAX_REFS=3 超限：替换而非追加。主体肖像不在 refs 时前插 1 张。
-    """
-    if not action_ref:
-        return refs
-    subj_path = _subject_portrait_path(subject)
-    if subj_path and subj_path in refs:
-        return [action_ref if p == subj_path else p for p in refs]
-    return [action_ref] + [p for p in refs if p != action_ref]
-
-
-async def _ensure_action_ref(shot: dict, characters: list | None,
-                             shots_dir) -> str | None:
-    """为动作镜头生成动作姿态参考图 vimax_working/shots/<idx>/action_ref.png.
-
-    以角色 front(base) 肖像为参考、prompt 注入动作描述，替代静态站姿肖像作为
-    人物参考，解除「站姿肖像 = 动作反锚点」。生成失败时返回 None，调用方优雅
-    降级回静态肖像（不阻断帧生成）。
-
-    内部自建横屏白底肖像适配器（与帧生成适配器配置不同），不依赖调用方传入。
-    """
-    if not _is_action_shot(shot, characters):
-        return None
-    subject = _detect_action_subject(shot, characters)
-    if not subject:
-        return None
-    portrait = _subject_portrait_path(subject)
-    if not portrait:
-        return None
-
-    idx = shot["index"]
-    shot_dir = shots_dir / str(idx)
-    shot_dir.mkdir(parents=True, exist_ok=True)
-    out_path = shot_dir / "action_ref.png"
-    hash_path = shot_dir / "action_ref_hash.txt"
-    cur_hash = _action_ref_hash(shot, subject, portrait)
-
-    # 缓存命中
-    if out_path.exists() and hash_path.exists():
-        try:
-            if hash_path.read_text(encoding="utf-8").strip() == cur_hash \
-                    and _validate_frame(str(out_path)):
-                return str(out_path)
-        except Exception:
-            pass
-
-    # 肖像专用适配器：横屏白底、跳过风格前缀/合规（与 _generate_missing_portraits 一致）
-    from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
-    portrait_adapter = ImageGeneratorAiVideoAdapter(
-        size="1600x900",
-        skip_prefix=True,
-        skip_sanitize=True,
-    )
-    action_desc = _extract_action_phrase(shot, characters) or shot.get("ff_desc", "")
-    prompt = PROMPT_ACTION_REF.format(
-        style="Chinese ancient costume", identifier=subject, action_desc=action_desc,
-    )
-    try:
-        img_out = await portrait_adapter.generate_single_image(
-            prompt=prompt,
-            reference_image_paths=[portrait],
-            save_path=str(out_path),
-            shot_index=idx,
-            frame_desc="动作姿态参考图",
-            # 允许姿态改变：不用带"场景布局不变"的完整锁
-            lock_prompt=IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT,
-        )
-        if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
-            img_out.data.save(str(out_path))
-        elif hasattr(img_out, "save"):
-            img_out.save(str(out_path))
-        else:
-            return None
-        if _validate_frame(str(out_path)):
-            hash_path.write_text(cur_hash, encoding="utf-8")
-            _bridge_log(f"  [bridge] 镜头{idx}: 动作姿态参考图已生成 -> {out_path.name}")
-            return str(out_path)
-        return None
-    except Exception as e:
-        _bridge_log(f"  [bridge] 动作姿态参考图生成失败 shot_{idx}: {e}")
-        return None
 
 
 def _inject_object_size_anchor(shot: dict, text: str) -> str:
@@ -1381,6 +1262,30 @@ def _inject_object_size_anchor(shot: dict, text: str) -> str:
         return text
     except Exception:
         return text
+
+
+def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str) -> str:
+    """构建实际生成图片的最终 prompt（供 QC 语义核对用）.
+
+    与 _gen_first_frame_async / _gen_last_frame_async 的组装链一致：
+    normalize(已在 shot["ff_desc"] 回写) → preprocess_prompt_for_image(青丝→黑发等)
+    → _inject_object_size_anchor → ensure_prefix + sanitize_prompt → add_image_strict_constraints。
+
+    缓存命中路径（QC 在 ff_desc_full 计算前调用）用此函数补算最终 prompt，
+    保证 QC 拿到的"画面描述"与图片模型实际收到的一致（code-audit 2026-08-08）。
+    """
+    try:
+        from style_prefix import (
+            preprocess_prompt_for_image, sanitize_prompt, ensure_prefix,
+            add_image_strict_constraints,
+        )
+        text = preprocess_prompt_for_image(desc)
+        text = _inject_object_size_anchor(shot, text)
+        text = sanitize_prompt(ensure_prefix(text, STYLE_PREFIX), verbose=False)
+        text = add_image_strict_constraints(text, "首帧" if frame_kind == "first_frame" else "尾帧", shot=shot)
+        return text
+    except Exception:
+        return desc
 
 
 async def _gen_first_frame_async(
@@ -1451,6 +1356,14 @@ async def _gen_first_frame_async(
     # 追加 _ff_nl 后缀强制旧缓存（无人的首帧）失效重新生成。
     if _is_action_shot(shot, characters):
         current_hash += "_ff_nl"
+
+    # v1.1：挂实际生成最终 prompt 到 shot（QC 语义核对用）。缓存命中/生成两条
+    # 路径都在此补算——缓存命中时 ff_desc_full 未计算，但 shot["ff_desc"] 已被
+    # normalize 回写，用 _build_final_frame_prompt 补算得到与图片模型一致的文本。
+    try:
+        shot["ff_desc_final"] = _build_final_frame_prompt(shot, ff_desc, "first_frame")
+    except Exception:
+        pass
 
     for attempt in range(max_retries + 1):
         if ff_path.exists() and not force and attempt == 0:
@@ -1572,6 +1485,12 @@ async def _gen_last_frame_async(
     # 计算当前哈希值（核心意图 + 空镜约束 + 参考图，任一变化都重新生成）
     # 追加 _nl 后缀：解除布局锁后 prompt 语义变化，强制旧缓存失效重新生成
     current_hash = _get_frame_content_hash(shot, empty_scene, reference_paths) + "_lf_nl"
+
+    # v1.1：挂实际生成最终 prompt（QC 语义核对用），与首帧同理
+    try:
+        shot["lf_desc_final"] = _build_final_frame_prompt(shot, lf_desc, "last_frame")
+    except Exception:
+        pass
 
     for attempt in range(max_retries + 1):
         if lf_path.exists() and not force and attempt == 0:
@@ -1822,15 +1741,6 @@ async def gen_shot_frames(
     # 尾帧/关键帧仍保留场景参考图（环境锚定，NO_LAYOUT 锁下无碍）。
     frame_refs_ff = _collect_frame_refs_for_shot(shot, characters, limit=5, for_frame="首帧")
     frame_refs_full = _collect_frame_refs_for_shot(shot, characters, limit=5, for_frame="尾帧")
-
-    # 修改3（2026-08-07）：动作姿态参考图替代动作主体的静态站姿肖像。
-    # 静态站姿肖像 = 动作反锚点（站直/看镜头/嘴闭压制"破水而出/举匕/尖叫"）。
-    # action_ref 以角色 front 肖像 + 动作描述生成，ff/lf/kf 全部换入。
-    subject = _detect_action_subject(shot, characters)
-    action_ref = await _ensure_action_ref(shot, characters, shots_dir)
-    if action_ref:
-        frame_refs_ff = _swap_in_action_ref(frame_refs_ff, action_ref, subject)
-        frame_refs_full = _swap_in_action_ref(frame_refs_full, action_ref, subject)
 
     if skip_first_frame:
         # 模式B：跳过首帧生成，尾帧仍生成（用于本镜风格锚定）

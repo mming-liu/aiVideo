@@ -307,6 +307,13 @@ class AgnesVideoService(VideoGenerationService):
             _vlog.verbose(f"[DEBUG] video_submit: POST {self._submit_url()}")
             _vlog.verbose(f"[DEBUG] video_submit: headers={json.dumps({k: v if k != 'Authorization' else f'Bearer ***{v[-8:]}' for k, v in headers.items()}, ensure_ascii=False)}")
             _vlog.verbose(f"[DEBUG] video_submit: payload={json.dumps(_log_payload, ensure_ascii=False, indent=2)}")
+            # 参考图源路径（用户需要知道发了哪些照片；base64 内容不打印）
+            if req.image_path:
+                _vlog.verbose(f"[DEBUG] video_submit: ref[首帧] 源路径={req.image_path}")
+            if req.last_frame_image_path:
+                _vlog.verbose(f"[DEBUG] video_submit: ref[尾帧] 源路径={req.last_frame_image_path}")
+            for i, kf in enumerate(req.extra_keyframe_paths or []):
+                _vlog.verbose(f"[DEBUG] video_submit: ref[keyframe{i}] 源路径={kf}")
 
             try:
                 res = requests.post(

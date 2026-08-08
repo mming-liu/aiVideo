@@ -195,14 +195,23 @@ class BailianImageService(ImageGenerationService):
 
                 frame_label = req.frame_desc if req.frame_desc else "首帧"
                 _verbose_write(f"  [镜头{req.shot_index}] 正在生成{frame_label} [{model}]...")
-                _verbose_write(f"    prompt: {req.prompt[:120]}...")
-                _verbose_write(f"    size: {size_str}, ratio: {ratio_str}, seed: {req.seed}")
+                # 完整请求参数日志（v1.1）：prompt 全文 + 参考图源路径（不打印 base64 内容）
+                _verbose_write(f"[DEBUG] image_submit: model={model}")
+                _verbose_write(f"[DEBUG] image_submit: size={size_str}, ratio={ratio_str}, seed={req.seed}, n=1")
+                _verbose_write(f"[DEBUG] image_submit: prompt全文={req.prompt}")
                 if req.negative_prompt:
-                    _verbose_write(f"    negative: {req.negative_prompt[:80]}...")
-                if req.reference_image_path:
-                    _verbose_write(f"    ref_image: {req.reference_image_path}")
+                    _verbose_write(f"[DEBUG] image_submit: negative={req.negative_prompt}")
+                # 参考图：打印源文件路径（用户需要知道发了哪些照片）+ base64 长度
+                _ref_sources = list(req.reference_image_paths) if req.reference_image_paths else []
+                if not _ref_sources and req.reference_image_path:
+                    _ref_sources = [req.reference_image_path]
+                for i, src in enumerate(_ref_sources):
+                    _verbose_write(f"[DEBUG] image_submit: ref[{i}] 源路径={src}")
+                for i, url in enumerate(ref_urls):
+                    b64_len = len(url.split(",", 1)[-1]) if "," in url else len(url)
+                    _verbose_write(f"[DEBUG] image_submit: ref[{i}] base64_len={b64_len}")
                 if ref_urls:
-                    _verbose_write(f"    ref_images: {len(ref_urls)} 张已注入（图生图）")
+                    _verbose_write(f"[DEBUG] image_submit: ref_images={len(ref_urls)} 张已注入（图生图）")
 
                 # 记录时间，用于超时判断
                 _req_start = time.time()

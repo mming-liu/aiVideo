@@ -356,13 +356,21 @@ def ensure_prefix(prompt: str, prefix: str = STYLE_PREFIX) -> str:
 # ============================================================================
 
 def preprocess_prompt_for_image(prompt: str) -> str:
-    """图片生成前预处理：替换 AI 可能误解的词汇。"""
+    """图片生成前预处理：替换 AI 可能误解的词汇.
+
+    图片模型对文言词/颜色词按字面直译（code-audit 2026-08-08 钩子首帧）：
+    - "青丝" 是黑发的文言说法，图片模型会把"青"直译成青色/绿色 → 替换为"黑发"
+    - 其余为模糊称谓归一化
+    """
     replacements = {
         "掠客": "刺客",
         "一道人影": "刺客",
         "一道身影": "杀手",
         "蒙面刺客": "刺客",
         "蒙面黑衣人": "黑衣人",
+        "青丝": "黑发",        # 文言"青丝"=黑发，图片模型误译成绿/青色
+        "乌丝": "黑发",
+        "黛眉": "柳眉",        # 黛=青黑色，避免误译
     }
     result = prompt
     for old, new in replacements.items():
@@ -371,19 +379,22 @@ def preprocess_prompt_for_image(prompt: str) -> str:
 
 
 # ============================================================================
-# ff_desc 归一化：多动作/进行态堆叠 → 单一静态瞬间
+# ff_desc 归一化：多动作/进行态堆叠 → 动作「前一刻」静态定格
 #
 # 背景：LLM 生成的 ff_desc 常把多个动作（破水而出 + 惊觉欲起 + 尖叫）堆进
-# 一个静态首帧描述，而图片模型画不出"三个同时态动作"，只能糊成一团或只画
-# 部分。step01 生成时修复 + step02 消费时兜底，共用本模块这一套函数
-# （code-audit 2026-08-07 钩子首帧）。
+# 一个静态首帧描述，且 ff_desc 与 prompt 高度雷同（都是"破水而出"），导致
+# 视频【视频起点】和【视频中段】动作重叠、模型把动作做两遍脑补假动作。
+# step01 生成时修复 + step02 消费时兜底，共用本模块这一套函数
+# （code-audit 2026-08-07 钩子首帧；v6.19 升级：收敛到动作「前一刻」——
+# 破水前=潜伏水下/水面微澜，而非破水而出）。
 #
 # 设计原则：
 #   1. 保守——`detect_ff_multi_action` 是闸门，无信号不动原文；
 #   2. 幂等——`normalize(normalize(x)) == normalize(x)`（归一化产物不再含
-#      时间推进词/过渡态/持续动词，二次检测无信号直接返回）；
-#   3. 只碰时间连接词/过渡态/持续动词，角色名/静态姿势/场景/视线全保留；
-#   4. 只作用于 ff_desc，绝不作用于 lf_desc（动作结果态）/keyframes（进行中瞬间）。
+#      动作动词/时间推进词/过渡态/持续动词，二次检测无信号直接返回）；
+#   3. 只碰动作动词/时间连接词/过渡态/持续动词，角色名/静态姿势/场景/视线全保留；
+#   4. 只作用于 ff_desc，绝不作用于 lf_desc（动作结果态）/keyframes（进行中瞬间）；
+#   5. 产物必须与 motion_desc 首段动作彻底错开（平静→破水→没入），禁止同词重叠。
 #
 # 注意：不并入 preprocess_prompt_for_image——该函数同时服务 ff 和 lf，
 # 而 lf 是动作结果态（尖叫/倒地在那是对的），归一化不能作用到 lf。
@@ -453,6 +464,100 @@ FF_TRANSITION_REPLACE = (
     ("准备起身", "半起身"),
 )
 
+# 进行态动作动词 → 动作「前一刻」的静态描述（短语精确替换，长词优先）。
+# 幂等性：产物不得再命中 FF_MOTION_VERBS / FF_TRANSITION_MARKERS / FF_SUSTAINED_TO_POSE；
+# 含「即将」的产物因 _collect_ff_action_moments 的「即将」豁免而天然幂等。
+# 刺/劈/砍/斩/挥/砸下 不走此表（需保留目标 NP，走 _preactionize_strike 正则）。
+FF_MOTION_TO_PREACTION = (
+    # ── water_break 破水/出水类 → 潜伏水下（水面微澜） ──
+    ("半身破水而出", "潜伏水下，水面微澜"),
+    ("半身已冲出水面", "潜伏水下"),          # 有独立水面分句时用「潜伏水下」，避免水面微澜重复
+    ("破水而出", "潜伏水下，水面微澜"),
+    ("冲出水面", "潜伏水下"),
+    ("窜出水面", "潜伏水下"),
+    ("跃出水面", "潜伏水下"),
+    ("半身已冲出", "潜伏水下"),
+    ("破水", "潜伏水下，水面微澜"),
+    # ── water_enter 倒纵/没入/入水/落水类 → 即将入水 ──
+    ("双腿一弹正倒纵入水", "重心后移"),       # 精确处理 shot10（紧随的「身体后仰即将没入水中」分句保留）
+    ("倒纵入水", "重心后移，即将入水"),
+    ("倒纵", "重心后移"),
+    ("没入水中", "身体前倾，即将没入"),
+    ("没入", "身体前倾，即将没入"),
+    ("入水", "身体后仰，即将入水"),
+    ("落水", "身体前倾，即将落水"),
+    ("潜入", "身体低伏，即将潜入"),
+    ("栽倒", "身体前倾，将倒未倒"),
+    # ── jump 跃起/纵身/腾空类 → 曲膝蓄势 ──
+    ("纵身跃起", "曲膝蓄势"),
+    ("纵身一跃", "曲膝蓄势"),
+    ("跃起", "双腿微屈，曲膝蓄势"),
+    ("纵身", "双腿微屈，曲膝蓄势"),
+    ("腾空", "双腿蹬地，即将腾空"),
+    ("翻身", "侧身欲翻，重心偏移"),
+    # ── draw 拔/抽类 → 未出鞘 ──
+    ("拔出匕首", "手按匕首柄，刀刃未出鞘"),
+    ("抽出长刀", "手按刀柄，刀刃未出鞘"),
+    ("拔出", "手按柄，刀刃未出鞘"),
+    ("抽出", "手按柄，刀刃未出鞘"),
+    # ── rush 陆上位移/扑击类 → 蓄势待发 ──
+    ("疾冲", "身体前倾，蓄势待发"),
+    ("狂奔", "弓身起步，蓄势待发"),
+    ("疾驰", "身体前倾，蓄势待发"),
+    ("追杀", "身体前倾，蓄势待发"),
+    ("扑", "身体前倾，扑势未发"),
+    ("撞", "身体前倾，撞势未发"),
+    ("抓向", "手臂前伸，指尖将触"),
+    ("抓夺", "手臂前伸，指尖将触"),
+    ("抢夺", "手臂前伸，指尖将触"),
+    ("夺", "手臂前伸，指尖将触"),
+    # ── fall 下坠/跌落/跌倒类 → 将倒未倒 ──
+    ("下坠", "身体失衡，将坠未坠"),
+    ("跌落", "身体失衡，将倒未倒"),
+    ("跌倒", "身体失衡，将倒未倒"),
+)
+
+# 动作「前一刻」路径下需改写/删除的关联分句。
+#   值 None → 删除该分句（动作进行/完成后的效果，前一刻不存在）；
+#   值 str  → 改写为前一刻。
+FF_PREACTION_CLAUSE_FIXES = {
+    "水面破开大洞": "水面微澜",     # 动作瞬间 → 前一刻
+    "水面炸开": "水面微澜",
+    "破开大洞": "水面微澜",
+    "水花四溅": None,          # 破水后才出现 → 删
+    "水花溅起": None,
+    "水花凝住": None,
+    "浪花高卷": None,
+    "水珠沿刀刃滑落": None,
+    "水珠滑落": None,
+}
+
+# 动作残留虚词（前一刻改写时剥离，如「双腿一弹正倒纵入水」里的「一弹/正」）
+FF_PREACTION_STRIP_WORDS = (
+    "正在", "正要", "猛地", "突然", "骤然", "随即", "一弹", "一扬", "一送", "一下",
+)
+
+# 角色反应 → 前一刻（破水前角色还没察觉：惊觉→静坐，惊呼/尖叫→未出声）。
+# 长词/完整短语在前（先匹配「惊觉、身体前倾」再匹配「惊觉」），防残词拼接。
+# 幂等：产物（静坐/未出声/欲呼）不含 motion/transition/sustained 触发词。
+FF_REACTION_TO_PREACTION = (
+    ("惊觉、身体前倾", "静坐未察"),
+    ("惊觉欲起", "静坐未察"),
+    ("惊觉、半起身", "静坐"),
+    ("仰头张嘴惊呼", "仰头未出声"),
+    ("仰头张嘴尖叫", "仰头未出声"),
+    ("张嘴惊呼", "张嘴未出声"),
+    ("张嘴尖叫", "张嘴未出声"),
+    ("惊呼", "未出声"),
+    ("尖叫", "欲呼"),
+    ("惊觉", "静坐"),
+    ("身体前倾", "端坐"),
+    ("双眼瞪大", "神色平静"),
+    ("瞪大", "神色平静"),
+    ("双眼睁大", "神色平静"),
+    ("睁大", "神色平静"),
+)
+
 
 def _subject_names(characters) -> set:
     """角色名集合（含 刺客/杀手/黑衣人 等兜底称谓）. 用于动作主体识别."""
@@ -512,9 +617,11 @@ def _collect_ff_action_moments(text: str, characters=None) -> list[dict]:
 
 
 def detect_ff_multi_action(ff_desc: str, characters=None) -> list[dict]:
-    """检测 ff_desc 是否含多动作/时间推进/过渡态堆叠.
+    """检测 ff_desc 是否含多动作/时间推进/过渡态/进行中动作堆叠.
 
     这是归一化是否动手的闸门：返回空列表 = 无问题，normalize 原样返回。
+    v6.19：新增「pre_action」信号——单一 motion/sustained 时刻也触发归一化
+    （要把动作改写成前一刻，不再要求多动作堆叠）。
     Returns:
         list[dict]: 问题描述列表，每项 {type, ...}；空 = 无问题
     """
@@ -532,10 +639,10 @@ def detect_ff_multi_action(ff_desc: str, characters=None) -> list[dict]:
             "clauses": [m["clause"] for m in moments],
         })
     for m in moments:
-        if m["kind"] == "transition":
+        if m["kind"] in ("motion", "sustained"):
+            problems.append({"type": "pre_action", "clause": m["clause"]})
+        elif m["kind"] == "transition":
             problems.append({"type": "transition", "clause": m["clause"]})
-        elif m["kind"] == "sustained" and len(moments) >= 2:
-            problems.append({"type": "sustained", "clause": m["clause"]})
     return problems
 
 
@@ -607,12 +714,171 @@ def _staticize_ff_sustained(clause: str, multi: bool) -> str:
     return clause
 
 
+# ---------------------------------------------------------------------------
+# 「前一刻」改写辅助（v6.19）
+#
+# 语义：ff_desc 必须定格在 motion 第一个动作的「前一刻」——破水前=潜伏水下、
+# 水面微澜；刺向=刀尖抵近、即将触及；尖叫=张嘴欲呼。产物与 motion_desc 首段
+# 动作彻底错开（平静→破水→没入），避免【视频起点】与【视频中段】动作重叠、
+# 模型把动作做两遍。
+# ---------------------------------------------------------------------------
+
+def _motion_archetype(clause: str, masked: str, watery: bool) -> str:
+    """动作分句的原型分类（决定关联分句怎么处理）."""
+    if any(v in masked for v in ("破水", "出水", "冲出水面", "窜出水面", "跃出水面")) \
+            or (watery and any(v in masked for v in ("冲出", "窜出", "跃出"))):
+        return "water_break"
+    if any(v in masked for v in ("倒纵", "没入", "入水", "落水", "潜入", "栽倒")):
+        return "water_enter"
+    if any(v in masked for v in ("纵身", "跃起", "腾空", "翻身")):
+        return "jump"
+    if any(v in masked for v in ("刺", "劈", "砍", "斩", "挥", "砸下")):
+        return "strike"
+    if any(v in masked for v in ("抓向", "抓夺", "抢夺", "夺")):
+        return "grab"
+    if any(v in masked for v in ("拔出", "抽出")):
+        return "draw"
+    return "rush"   # 疾冲/狂奔/疾驰/追杀/扑/撞/冲出(陆上)
+
+
+def _detect_preaction_anchor(clauses: list[str], characters=None,
+                             shot: dict | None = None) -> str | None:
+    """首个待改写动作分句的原型（water_break/water_enter/jump/strike/...）.
+
+    用 shot.location/scene 的水词提示区分陆上/水上动作，避免「冲出/窜出/跃出」
+    在陆上语境被 water_break 误判。
+    """
+    names = _subject_names(characters)
+    watery = bool(shot) and any(
+        w in f"{shot.get('location', '')}{shot.get('scene', '')}"
+        for w in ("湖", "河", "水", "塘", "湾", "荷", "潭", "江", "海")
+    )
+    for c in clauses:
+        if "即将" in c:
+            continue
+        masked = _mask_subjects(c, names)
+        if any(v in masked for v in FF_MOTION_VERBS):
+            return _motion_archetype(c, masked, watery)
+        if any(w in masked for w in FF_TRANSITION_MARKERS):
+            return "transition"
+        if any(w in masked for w in FF_SUSTAINED_TO_POSE):
+            return "sustained"
+    return None
+
+
+def _cleanup_preaction_particles(c: str) -> str:
+    """剥离动作残留虚词（正在/正要/猛地/一弹 等），清理重复标点."""
+    for w in FF_PREACTION_STRIP_WORDS:
+        c = c.replace(w, "")
+    # 独立的"正"（"正在"已被上面替换，此处处理"正刀尖抵近"这类残留）
+    c = c.replace("正刀尖", "刀尖").replace("正伸手", "伸手").replace("正握", "握")
+    c = re.sub(r"[，、]{2,}", "，", c)
+    return c.strip("，、。 ")
+
+
+def _preactionize_strike(clause: str, names: set) -> str:
+    """单字攻击动词 → 刀将刺未刺（保留目标 NP，如「刀尖抵近杨旭心口，即将触及」）."""
+    masked = _mask_subjects(clause, names)
+    for verb in ("刺向", "刺入", "刺中", "刺下", "劈向", "砍向", "斩向", "挥向"):
+        idx = masked.find(verb)
+        if idx != -1:
+            tail = clause[idx + len(verb):].lstrip("，、")
+            target = re.split(r"[，。！？；]", tail)[0] or ""
+            if verb.startswith("刺"):
+                return _cleanup_preaction_particles(f"{clause[:idx]}刀尖抵近{target}，即将触及")
+            if verb.startswith(("劈", "砍", "斩")):
+                return _cleanup_preaction_particles(f"{clause[:idx]}刀高高扬起，即将劈向{target}")
+            if verb.startswith("挥"):
+                return _cleanup_preaction_particles(f"{clause[:idx]}手臂后引，即将挥向{target}")
+    # 无目标兜底
+    if any(v in masked for v in ("劈", "砍", "斩", "砸下")):
+        return "刀高高扬起，即将落下"
+    if "挥" in masked:
+        return "手臂后引，即将挥出"
+    return "刀尖抵近，即将触及"
+
+
+def _preactionize_ff_motion(clause: str, names: set) -> str:
+    """进行态动作分句 → 前一刻（长词短语替换优先，刺/劈/砍/挥走目标保留正则）."""
+    if any(v in _mask_subjects(clause, names) for v in ("刺", "劈", "砍", "斩", "挥", "砸下")):
+        return _preactionize_strike(clause, names)
+    for old, new in FF_MOTION_TO_PREACTION:
+        if old in clause:
+            return _cleanup_preaction_particles(clause.replace(old, new))
+    return clause
+
+
+def _preactionize_ff_sustained(clause: str) -> str:
+    """持续声音动词 → 前一刻（尖叫→欲呼，怒喝→欲喝；已含张嘴/仰头时只换尾词）."""
+    for w in ("尖声尖叫", "发出尖叫", "尖叫", "惊叫"):
+        if w in clause:
+            return clause.replace(w, "欲呼")
+    for w in ("怒喝", "厉喝"):
+        if w in clause:
+            return clause.replace(w, "欲喝")
+    for w, repl in (("大喊", "欲喊"), ("大声喊叫", "欲喊"), ("呼救", "欲呼救"), ("放声大哭", "欲哭")):
+        if w in clause:
+            return clause.replace(w, repl)
+    return clause
+
+
+def _preactionize_ff_transition(clause: str) -> str:
+    """过渡态 → 前一刻（正要仰头尖叫→仰头张嘴欲呼；正要纵身跃起→曲膝蓄势）."""
+    c = clause
+    for w in ("正准备", "正要", "刚要", "准备"):
+        c = c.replace(w, "")
+    # 反应词 → 前一刻（惊觉欲起→静坐未察；用户决策：破水前角色还没察觉）。
+    # 先于 _staticize_ff_transition，否则"惊觉欲起"先被转成"惊觉、身体前倾"匹配不到。
+    for old, new in FF_REACTION_TO_PREACTION:
+        if old in c:
+            c = c.replace(old, new)
+    if any(w in c for w in ("尖叫", "惊叫", "怒喝", "厉喝", "大喊", "呼救")):
+        return _preactionize_ff_sustained(c)
+    if any(v in c for v in ("纵身", "跃起", "腾空")):
+        return "曲膝蓄势"
+    return _staticize_ff_transition(c)   # 其余沿用旧静态化（欲起→半起身等）
+
+
+def _preactionize_associated_clause(clause: str, anchor: str | None) -> str | None:
+    """动作前一刻路径下处理静态分句：删动作后效果、改写武器出水/视线落点/角色反应.
+
+    anchor 为 None（无动作原型）时原样返回。
+    """
+    if not anchor:
+        return clause
+    # 1. 角色反应 → 前一刻（破水前角色还没察觉）。先于其他改写（如"惊觉、身体前倾"）
+    for old, new in FF_REACTION_TO_PREACTION:
+        if old in clause:
+            clause = clause.replace(old, new)
+    # 2. 水面破开/水花/水珠 精确改写或删除
+    for old, new in FF_PREACTION_CLAUSE_FIXES.items():
+        if old in clause:
+            return clause.replace(old, new) if new else None
+    # 3. water_break：视线汇聚匕首 → 汇聚水面；武器出水分句 → 未出水
+    if anchor == "water_break":
+        if "视线" in clause and any(k in clause for k in ("匕首", "高举", "寒光")):
+            return clause.replace("刺客高举的匕首", "水面涟漪") \
+                         .replace("高举的匕首", "水面涟漪") \
+                         .replace("高举的弯刀", "水面涟漪")
+        m = re.search(r"(匕首|弯刀|短刃|长刀|剑|刃)", clause)
+        if m and re.search(r"(高举|紧握|握).{0,4}(匕首|弯刀|短刃|长刀|剑|刃)", clause):
+            return f"{m.group(1)}未出水"
+    # 4. strike：高举武器 → 握（贴近目标，避免「高举+抵近」构图矛盾）
+    if anchor == "strike" and "高举" in clause \
+            and any(w in clause for w in ("匕首", "刀", "剑", "刃")):
+        return clause.replace("高举", "握")
+    return clause
+
+
 def normalize_ff_desc(ff_desc: str, shot: dict | None = None,
                       characters=None) -> str:
-    """ff_desc 归一化：多动作/进行态堆叠 → 单一静态瞬间（幂等、保守）.
+    """ff_desc 归一化：多动作/进行态堆叠 → 动作「前一刻」静态定格（幂等、保守）.
 
     无问题信号（detect_ff_multi_action 为空）时原样返回；只作用于 ff_desc，
     绝不作用于 lf_desc（动作结果态）/keyframes（进行中瞬间）。
+
+    v6.19 语义：首个动作时刻改写为「前一刻」（破水→潜伏水下、水面微澜；
+    刺向→刀尖抵近、即将触及；尖叫→欲呼），与 motion_desc 首段动作彻底错开。
     """
     if not ff_desc or not isinstance(ff_desc, str):
         return ff_desc
@@ -620,14 +886,43 @@ def normalize_ff_desc(ff_desc: str, shot: dict | None = None,
         return ff_desc
     text = _strip_ff_time_advance(ff_desc)
     clauses = _split_ff_clauses(text)
+    names = _subject_names(characters)
     moments = _collect_ff_action_moments("，".join(clauses), characters)
     multi = len(moments) >= 2
-    clauses = _drop_followup_motion(clauses, characters)
-    out = []
+    anchor = _detect_preaction_anchor(clauses, characters, shot)
+
+    out: list[str] = []
+    preaction_done = False
     for c in clauses:
-        c = _staticize_ff_transition(c)
-        c = _staticize_ff_sustained(c, multi)
-        out.append(c)
+        if "即将" in c:                    # 已是前一刻定格，原样保留
+            out.append(c)
+            continue
+        masked = _mask_subjects(c, names)
+        is_motion = any(v in masked for v in FF_MOTION_VERBS)
+        is_transition = any(w in masked for w in FF_TRANSITION_MARKERS)
+        is_sustained = any(w in masked for w in FF_SUSTAINED_TO_POSE)
+
+        if is_motion:
+            if not preaction_done:
+                out.append(_preactionize_ff_motion(c, names))
+                preaction_done = True
+            elif multi:
+                out.extend(_drop_followup_motion([c], characters))
+            continue
+        if is_transition:
+            if not preaction_done:
+                out.append(_preactionize_ff_transition(c))
+                preaction_done = True
+            else:
+                out.append(_preactionize_ff_transition(c))
+            continue
+        if is_sustained:
+            out.append(_preactionize_ff_sustained(c))
+            preaction_done = True
+            continue
+        fixed = _preactionize_associated_clause(c, anchor)
+        if fixed is not None:
+            out.append(fixed)
     return "，".join(out).strip("，、。 ")
 
 

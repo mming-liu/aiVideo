@@ -58,16 +58,23 @@ PROMPT_BACK = (
 # 来源：抖音@赛博子 组合参考图法——三视图 + 单独高清面部特写同时输入，
 # 模型优先锁定面部特征，再匹配全身造型，大幅降低变脸。面部特写是"变脸"
 # 重灾区，独立一张高清正面脸部图作为 r2v 面部锁定锚点。
+# v1.1（2026-08-08）：注入 {physical_features}（脸型词随 static_features 进面部
+# 特写图锁脸）+ 完整去塑料 Texture 段（毛孔/红润/明暗/颗粒，专治塑料脸——
+# 面部特写是塑料感重灾区，去塑料段仅此处注入，普通肖像保留基础毛孔）。
 PROMPT_FACE_CLOSEUP = (
-    "Photorealistic close-up face portrait of {identifier}, "
+    "Photorealistic close-up face portrait of {identifier}, {physical_features}. "
     "referencing the provided base image. "
     "MUST match base image: face shape, eyes, nose, mouth, eyebrow arch, "
     "skin tone, hairstyle and hairline, ALL light source direction, "
     "color temperature 5500K completely consistent. "
     "Head-and-shoulders composition, face filling the frame, "
     "looking straight at camera, neutral expression. "
-    "Texture: realistic skin texture, subtle pores, natural eye detail, "
-    "fine hair strands. "
+    "Texture: visible pores and fine lines, natural flush, "
+    "facial chiaroscuro variation, not uniformly lit, light grain and dust noise, "
+    "realistic skin texture, subtle oily sheen, fine vellus hair, small moles, "
+    "natural lip lines, side lighting, soft gradient transitions, "
+    "natural cheekbone undulation, cheek shadow layering, "
+    "natural nose-to-cheek transition, not over-smoothed, not perfectly symmetrical. "
     "Quality: photorealistic, film-grade texture, sharp facial detail, "
     "8K HD resolution. White background, 16:9 landscape. "
     "Not anime, not cartoon, not illustration, not 3D render."
@@ -166,9 +173,13 @@ class CharacterPortraitsGenerator:
         与正面/侧面/背面全身照同时输入 AI（r2v 参考图），模型优先锁定面部
         特征（脸型/五官/发际线），再匹配全身造型，显著降低变脸（AI漫剧角色
         面部一致性教程，抖音@赛博子）。
+
+        v1.1：static_features（含脸型词）拼入 prompt，锁脸防变脸——
+        脸型词跨章一致，面部特写图与全身肖像共享同一脸型。
         """
         prompt = PROMPT_FACE_CLOSEUP.format(
             identifier=character.identifier_in_scene,
+            physical_features=(character.static_features or "").strip(),
             deg=DEGREE,
         )
         image_output = await self.image_generator.generate_single_image(

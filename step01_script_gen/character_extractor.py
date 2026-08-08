@@ -51,6 +51,11 @@ CHARACTER_EXTRACTION_PROMPT = """
 - static_features 描述脸型、五官、发式、体型等不随场景变化的特征
 - dynamic_features 描述服装、配饰、手持物品等随场景变化的特征
 - 描述要具体可视化：不要用"英俊"，要写"剑眉星目、"
+- **static_features 必须包含「脸型」描述，按角色气质选型（跨章锁脸防变脸）**：
+  猫系脸(细长眼/眼尾上挑/清冷警觉)→刺客/杀手/心思深沉；鹿系脸(大而清澈的眼/湿润眼神/温柔无辜)→白月光女主/弱质被保护者；
+  狐系脸(眼尾上挑/尖下巴/狡黠魅惑)→妖妃/宠姬/反派美人；天鹅脸(修长/高鼻梁/清晰下颌线/贵气)→名门闺秀/权贵之女；
+  雀斑脸(自然雀斑/真实素颜/野生感)→山野/质朴配角
+  示例：'鹿系脸，大而清澈的眼睛，湿润眼神，鹅蛋脸，黑发挽髻，身姿袅娜'
 - is_new: 该人物是否不在已知角色库中
 - 只提取主要角色（有名字、有对话、有动作的），忽略纯背景路人
 
@@ -111,5 +116,79 @@ def extract_characters(novel_text: str, bank: CharacterBank) -> list[dict]:
             return []
 
     chars = data.get("characters", [])
+    _ensure_face_shape(chars, bank)
     print(f"[INFO] 提取到 {len(chars)} 个角色: {[c.get('identifier', '?') for c in chars]}")
     return chars
+
+
+# ========================================================================
+# 脸型词补齐（v1.1）
+#
+# 脸型库（.aiVideo/skills/face-shapes）要求每个角色 static_features 含脸型词，
+# 跨章锁脸防变脸。但角色提取 prompt 的脸型规则只对新角色生效——已知角色
+# 首次注册时 static_features 已锁定（CharacterBank update_dynamic_features
+# 注释明确 static 不覆盖）。这里按角色名/特征关键词确定性映射，给已知角色
+# 的 static_features 补脸型词（若已含脸型词则跳过，幂等）。
+# ========================================================================
+
+# 角色名/特征关键词 → 脸型词（气质→脸型映射，与 face-shapes skill 一致）
+_FACE_SHAPE_MAPPING = (
+    # 角色名精确匹配（高优先级，按名判断角色气质）
+    ("听香", "鹿系脸，圆润柔和的脸型，大而清澈的眼睛，湿润眼神"),
+    ("刺客", "猫系脸，细长杏眼，眼尾微微上扬，清冷警觉的眼神"),
+    ("肖管事", "方脸，浓眉，目光精明"),
+
+    # 特征关键词兜底（低优先级，新角色也能命中）
+    ("少女", "鹿系脸，圆润柔和的脸型，大而清澈的眼睛"),
+    ("女子", "鹅蛋脸，柳叶眉，眉眼含情"),
+    ("老妇", "皱纹遍布，面色蜡黄"),
+    ("杀手", "猫系脸，细长杏眼，眼尾上挑，冷冽"),
+    ("丫鬟", "圆脸，眉眼清秀，稚气未脱"),
+    ("妖妃", "狐系脸，眼尾明显上挑，尖下巴，妩媚"),
+    ("宠姬", "狐系脸，眼尾上挑，尖下巴，娇媚"),
+    ("闺秀", "天鹅脸，修长脸型，高鼻梁，清晰下颌线"),
+    ("村姑", "雀斑脸，自然雀斑，真实素颜，清冷文艺"),
+)
+
+# 脸型词命中检测（static_features 已含脸型词则跳过）
+_FACE_SHAPE_HINTS = (
+    "系脸", "猫系", "鹿系", "狐系", "天鹅脸", "雀斑脸", "鹅蛋脸",
+    "瓜子脸", "圆脸", "方脸", "长脸", "小脸", "菱形脸", "心形脸",
+)
+
+
+def _ensure_face_shape(chars: list[dict], bank: CharacterBank) -> None:
+    """给角色 static_features 补脸型词（已知角色复用 static_features 时）.
+
+    - 已含脸型词（_FACE_SHAPE_HINTS）→ 跳过（幂等）
+    - 名字匹配 _FACE_SHAPE_MAPPING → 用映射脸型词
+    - 名字不匹配但特征关键词命中 → 追加映射脸型词
+    只改内存 chars（script_result.json 的 characters），不改 CharacterBank
+    static_features（首次锁定语义保留）；新角色由提取 prompt 规则直接生成。
+    """
+    for c in chars:
+        sf = (c.get("static_features") or "").strip()
+        ident = (c.get("identifier") or "").strip()
+        if any(h in sf for h in _FACE_SHAPE_HINTS):
+            continue  # 已有脸型词
+        # 名字精确匹配
+        for name, face in _FACE_SHAPE_MAPPING:
+            if ident == name:
+                c["static_features"] = _merge_face_shape(sf, face)
+                break
+        else:
+            # 特征关键词兜底（名字未匹配时）
+            for name, face in _FACE_SHAPE_MAPPING:
+                if name != ident and name in f"{ident}{sf}":
+                    c["static_features"] = _merge_face_shape(sf, face)
+                    break
+
+
+def _merge_face_shape(sf: str, face: str) -> str:
+    """把脸型词合并进 static_features（幂等、去重）."""
+    if not sf:
+        return face
+    if face in sf:
+        return sf
+    # 脸型词放最前（人脸优先）
+    return f"{face}，{sf}"

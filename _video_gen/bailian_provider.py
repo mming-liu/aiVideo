@@ -198,7 +198,15 @@ class BailianVideoService(VideoGenerationService):
             kwargs["seed"] = req.seed
 
         _verbose_write(f"  [镜头{req.clip_index}] [Wan T2V] 正在提交任务 [{model}]...")
-        _verbose_write(f"    prompt: {req.prompt[:60]}...")
+        # 完整请求参数日志（v1.1）：prompt 全文 + 全部 kwargs
+        import json as _json
+        _log_kwargs = dict(kwargs)
+        # prompt_extend 内容不展开（bool），audio_url 若是 base64 只记长度
+        if _log_kwargs.get("audio_url") and str(_log_kwargs["audio_url"]).startswith("data:"):
+            _log_kwargs["audio_url"] = f"[base64 audio, len={len(_log_kwargs['audio_url'])}]"
+        _verbose_write(f"[DEBUG] video_submit: model={model}")
+        _verbose_write(f"[DEBUG] video_submit: prompt全文={req.prompt}")
+        _verbose_write(f"[DEBUG] video_submit: params={_json.dumps({k: v for k, v in _log_kwargs.items() if k not in ('model', 'prompt')}, ensure_ascii=False)}")
 
         rsp = VideoSynthesis.async_call(**kwargs)
 

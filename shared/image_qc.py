@@ -43,9 +43,11 @@ _PHYSICS_VIOLATION_KEYWORDS = [
 _FALLBACK_KEYWORDS = ["多指", "畸形", "换脸", "多出", "水印", "半透明", "光束", "漂浮", "融合", "穿透"]
 
 # 有效 category 白名单（对齐现有 detector + subject_consistency 图文一致性）
+# v1.1：新增 prompt_semantics（画面是否符合实际生成 prompt 的语义，如发色/朝向/手持物）
 _VALID_CATEGORIES = {
     "face_consistency", "body_deformity", "unexpected_object",
     "text_watermark", "scene_consistency", "subject_consistency",
+    "prompt_semantics",
 }
 
 
@@ -155,14 +157,19 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
     """构建质检 prompt（中文，要求视觉模型只返回严格 JSON）.
 
     prompt 不含字面双引号或 $（PowerShell -File 参数引号安全），中文安全。
+
+    v1.1：新增 prompt_semantics 类别——用「实际生成图片的最终 prompt」与图片
+    内容比对，检测语义偏差（发色/朝向/手持物/姿势），而不只是生成畸形。
+    最终 prompt 来自 shot["ff_desc_final"]/["lf_desc_final"]（生成处挂载），
+    未挂载时回退到 shot["ff_desc"]/["lf_desc"]。
     """
     # 场景 / 主体
     scene = shot.get("scene") or shot.get("location") or ""
     subject = shot.get("main_subject") or ""
-    # 画面描述（首帧用 ff_desc，尾帧用 lf_desc）
-    desc = shot.get("ff_desc") or shot.get("lf_desc") or shot.get("motion_desc") or ""
+    # 实际生成图片的最终 prompt（生成处挂载），优先于原始 desc
+    desc = shot.get("ff_desc_final") or shot.get("ff_desc") or shot.get("lf_desc") or shot.get("motion_desc") or ""
     if frame_kind == "last_frame":
-        desc = shot.get("lf_desc") or shot.get("ff_desc") or shot.get("motion_desc") or desc
+        desc = shot.get("lf_desc_final") or shot.get("lf_desc") or shot.get("ff_desc") or shot.get("motion_desc") or desc
     # 期望道具/关键词
     core_keywords = shot.get("core_keywords") or []
     if isinstance(core_keywords, list):
@@ -176,7 +183,7 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
         f"主体：{_truncate(subject or '未指定', 80)}",
         f"应出现人物：{chars}",
         f"应出现道具或关键词：{_truncate(core_keywords or '无', 100)}",
-        f"画面描述：{_truncate(desc, 220)}",
+        f"画面描述：{_truncate(desc, 500)}",
         "",
         "检查以下问题类别，只看图里实际存在、明显的问题，不要吹毛求疵：",
         "1. face_consistency 人物五官/脸型异常、扭曲、模糊不清",
@@ -185,12 +192,20 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
         "4. text_watermark 乱码文字、水印、logo",
         "5. subject_consistency 画面主体人物/场景/道具与预期明显不符",
     ]
+    if not empty_scene:
+        # v1.1：语义核对——画面是否符合实际生成的最终 prompt
+        lines.append(
+            "6. prompt_semantics 画面是否符合以上「画面描述」（重点核对："
+            "人物发色/服装颜色、面部朝向（画左/画右/面向谁）、手持物品/姿势、"
+            "场景要素、人物数量——与描述明显不符才算问题；古风水墨风格笔触不算）"
+        )
     if empty_scene:
-        lines.append("6. 本镜是空镜，画面中禁止出现任何人；若出现人物则属于严重问题。")
+        lines.append("7. 本镜是空镜，画面中禁止出现任何人；若出现人物则属于严重问题。")
     lines.extend([
         "",
         "判定规则：",
         "- 物理逻辑错误（漂浮/穿透/半透明/融合）或关键人物缺失或空镜出现人物 → critical",
+        "- prompt_semantics 语义偏差（发色/朝向/手持物不符）→ warning，不升级 critical",
         "- 轻微瑕疵（背景小物、风格笔触、留白、水墨晕染）→ 不算问题，不得误判",
         "- 该作品是古风水墨风格，水墨、留白、笔触、墨晕均属正常艺术风格",
         "",
@@ -246,6 +261,14 @@ def _extract_result_text(stdout: str) -> str:
 def _map_category(raw: str) -> str:
     """把模型返回的 category 归一化到白名单."""
     raw = (raw or "").strip().lower()
+    # v1.1：语义偏差词优先归 prompt_semantics（发色/朝向/服装/手持物/姿势/数量与描述不符）
+    semantic_hints = (
+        "发色", "朝向", "服装", "手持", "姿势", "发丝", "颜色不符",
+        "画面与描述", "不符描述", "与描述不符", "未按描述", "语义",
+        "发色不符", "朝向不符", "头发", "青绿", "绿色头发",
+    )
+    if any(h in raw for h in semantic_hints):
+        return "prompt_semantics"
     for cat in _VALID_CATEGORIES:
         if cat in raw:
             return cat
@@ -467,9 +490,14 @@ def qc_image(frame_path: str | Path, prompt: str | None = None,
 
 # 便捷入口：给 vimax_bridge 用
 def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
-                  characters: list | None = None, empty_scene: bool = False) -> QcResult:
-    """同步质检入口（带 should_run_qc 守卫）；由 vimax_bridge 的 async 包装调用."""
+                  characters: list | None = None, empty_scene: bool = False,
+                  prompt: str | None = None) -> QcResult:
+    """同步质检入口（带 should_run_qc 守卫）；由 vimax_bridge 的 async 包装调用.
+
+    prompt: 自定义质检 prompt（v1.1 传实际生成图片的最终 prompt；None 则由
+    build_qc_prompt 自动构建，内部优先取 shot["ff_desc_final"]/["lf_desc_final"]）。
+    """
     if not should_run_qc(frame_path):
         return QcResult(has_hallucination=False, issues=[], ok=True, raw_result="", error="skipped")
-    return qc_image(frame_path, shot=shot, frame_kind=frame_kind,
+    return qc_image(frame_path, prompt=prompt, shot=shot, frame_kind=frame_kind,
                     characters=characters, empty_scene=empty_scene)

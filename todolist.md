@@ -1,11 +1,29 @@
 # TODO 待办清单
 
 > 记录尚未完成的修复、待验证项和待决策事项。
-> 最近更新：2026-08-06 钩子首尾帧质量修复（已清理已完成项）。
+> 最近更新：2026-08-08 ff_desc「前一刻」改造（已实施完成）。
 
 ---
 
-## 1. 钩子首尾帧质量修复 + 重生成验证
+## 1. ~~ff_desc「前一刻」改造（v6.19）~~ ✅ 已实施 + 已重跑验证
+
+**状态**: 已完成（2026-08-08），step01 重跑验证通过
+
+**改动**:
+- `style_prefix.py`: `FF_MOTION_TO_PREACTION` / `FF_PREACTION_CLAUSE_FIXES` / `FF_REACTION_TO_PREACTION` / `FF_PREACTION_STRIP_WORDS` 词库 + 8 个 `_preactionize_*` / `_detect_preaction_anchor` 辅助函数 + `detect_ff_multi_action` 放宽（pre_action 信号）+ `normalize_ff_desc` 重写
+- `validation.py`: `_check_ff_multi_action` 过滤 pre_action + 文案；`_check_ff_motion_timeline` 新增「进行中动作定格」检查
+- `prompts.py`: rule 13.5 / PROMPT_TEMPLATE / HOOK_PROMPT_TEMPLATE 统一「前一刻」语义
+- `deepseek_schema.py`: `_SHOT`/`_HOOK` ff_desc description
+
+**已验证**（单元级 + 真实重跑）:
+- 单元级: 8 个动作镜头全部前一刻化 + 幂等 + 闸门清空；静态镜头原样
+- **真实重跑（2026-08-08 10:07）**: 钩子 ff_desc 已是「水面微澜，一个黑衣刺客潜伏水下」——LLM 从源头生成前一刻（非归一化兜底）；21 镜 + 钩子全部前一刻化；`_check_ff_motion_timeline` **0 警告**（之前 6 处全消）
+- step02b mock: 【视频起点】/【视频中段】/【视频终点】三段彻底错开
+- 剩余: step02a/02b 真实生成验证（钩子视频动作只发生一次）→ 归入第 2 条
+
+---
+
+## 2. 钩子首尾帧质量修复 + 重生成验证
 
 **状态**: 代码修复已完成，待重跑验证（2026-08-06 22:53 首帧生成但质量不达标）
 
@@ -34,49 +52,47 @@
 
 ---
 
-## 2. 决策: ff_motion_timeline 是否升级为硬性检查
+## 3. ~~决策: ff_motion_timeline 是否升级为硬性检查~~ ✅ 已取消
 
-**状态**: 待决策
+**状态**: 已取消（2026-08-08）——前一刻改造后重跑 0 警告，无需升级
 
-**背景**: `_check_ff_motion_timeline` 目前是 **warning 级**（质量问题不阻断）。如果希望它成为硬性拦截（ff_desc 含完成态动词 + motion 同动作推进 → 重新生成直到通过），需加进 `validation.py` 的 `hard_fail_checks` 列表。
-
-**当前硬性检查**: `["prop_consistency", "shot_transition", "semantic_risk", "script_novel_alignment", "ff_lf_completeness", "body_purification"]`
+**背景**: `_check_ff_motion_timeline` 目前是 **warning 级**。原考虑升级为硬性拦截。但 v6.19 前一刻改造后，step01 重跑（10:07）该检查 **0 警告**（之前 6 处全消），LLM 从源头生成前一刻 ff_desc。升级需求已消失。
 
 ---
 
-## 3. 检查其余镜头（非钩子）的 ff/motion 时序
+## 4. ~~检查其余镜头（非钩子）的 ff/motion 时序~~ ✅ 已验证解决
 
-**状态**: 待确认
+**状态**: 已验证解决（2026-08-08）——前一刻改造后重跑 0 警告
 
-**背景**: 钩子排查时发现镜头10 也有「已冲出」vs「窜出跃上船头」的时序矛盾。`_check_ff_motion_timeline` 会对所有镜头扫描，重跑 step01 后可确认其他 28 个镜头是否也有类似问题。
-
----
-
-## 4. 决策: 脸型库落地（ai-face-shapes-library）
-
-**状态**: 待决策
-
-**背景**: 已建 `references/ai-face-shapes-library.md`（5 种 AI 脸型：雀斑/天鹅/猫系/鹿系/狐系，含完整 Prompt + 核心特征 + 古风适配）。目前仅是素材库，未接入代码。
-
-**可选落地方式**:
-- A. `storyboard_refs.py` 加 `FACE_SHAPES` 词库 section，注入 step01 分镜 prompt（角色外貌描述可选脸型）
-- B. 写入角色 `static_features`（CharacterBank），肖像/首帧跨章用同一脸型词
-- C. 保持纯素材库，仅手动参考
+**背景**: 钩子排查时发现镜头10 也有「已冲出」vs「窜出跃上船头」的时序矛盾。v6.19 前一刻改造 + step01 重跑（10:07）后，`_check_ff_motion_timeline` 对全部 21 镜 + 钩子扫描 **0 警告**，时序问题全部解决。
 
 ---
 
-## 5. 决策: 人脸去塑料库落地（ai-face-deplastic-library）
+## 5. ~~决策: 脸型库落地（ai-face-shapes-library）~~ ✅ 已实施
 
-**状态**: 待决策
+**状态**: 已完成（2026-08-08）
 
-**背景**: 已建 `references/ai-face-deplastic-library.md`（5XL-AI 去塑料脸：基础核心 + 强化三组 + 完整模板 + 古风适配）。目前仅是素材库，未接入代码。
+**落地**:
+- 新建 `.aiVideo/skills/face-shapes/SKILL.md`（5 种脸型速查表 + 气质映射 + 古风 prompt）
+- `prompts.py` `_load_knowledge_skills` 加 `read_skill("face-shapes")` 分支
+- `character_extractor.py` 提取 prompt 加脸型选择规则（LLM 按气质选型，写入 static_features）
+- `character_portraits_generator.py` `PROMPT_FACE_CLOSEUP` 加 `{physical_features}` 占位（脸型词进面部特写图）
 
-**可选落地方式**:
-- A. `prompts.py` 5.3 古风人物公式的「皮肤必须强调真实纹理」处，升级为完整去塑料段落
-- B. 肖像生成器（character_portraits_generator）面部段注入
-- C. 保持纯素材库
+**⚠️ 已有角色补脸型词（已完成）**: `character_extractor._ensure_face_shape` 按角色名/特征确定性映射给已知角色补脸型词（听香→鹿系、刺客→猫系、肖管事→方脸等），script 层 characters 带脸型词供肖像/视频使用；杨旭/张十三/老汉未匹配保持原样
 
-**注意**: 脸型库和去塑料库互补——先选脸型定轮廓气质，再加去塑料段定皮肤真实感。两项可合并落地（同一次 code 改动）。
+---
+
+## 6. ~~决策: 人脸去塑料库落地（ai-face-deplastic-library）~~ ✅ 已实施
+
+**状态**: 已完成（2026-08-08）
+
+**落地**:
+- 新建 `.aiVideo/skills/face-deplastic/SKILL.md`（毛孔/红润/明暗/颗粒四要素 + 古风适配）
+- `prompts.py` `_load_knowledge_skills` 加 `read_skill("face-deplastic")` 分支
+- `character_portraits_generator.py` `PROMPT_FACE_CLOSEUP` Texture 行替换为完整去塑料段（仅面部特写）
+
+**已验证**: skill 加载正常、`_load_knowledge_skills` 输出含两个新 skill、PROMPT_FACE_CLOSEUP format 完整
+
 
 ---
 
