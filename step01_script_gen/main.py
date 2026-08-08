@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 import json
 from contextlib import redirect_stdout
@@ -35,6 +36,9 @@ from shared.config import (
     GAP_ANALYSIS_ENABLED, GAP_MAX_REGEN_ATTEMPTS,
     SHOT_COUNT_REGEN_ENABLED,
 )
+
+# v6.23：大纲两阶段开关（ShortVideoDirector director-outline 吸收，默认开启）
+OUTLINE_ENABLED = os.getenv("OUTLINE_ENABLED", "1").strip() == "1"
 
 # 输出目录基于 book/chapter 计算（统一路径来源: shared/paths.py）
 from shared.paths import chapter_dir, script_file
@@ -123,7 +127,19 @@ def read_chapter(path: str = "锦衣夜行_77119小说.txt", chapter: int = 1) -
 def gen_spy_script(novel_text: str, bank=None, objects_bank=None) -> str:
     """调用 LLM 生成脚本，返回原始文本."""
     from _text_gen.deepseek_schema import SCRIPT_SCHEMA
-    prompt = build_prompt(novel_text, bank, objects_bank)
+    # v6.23：大纲两阶段（ShortVideoDirector director-outline 吸收）——先生成章节
+    # 大纲作分镜锚点，保证冲突/高潮分布。失败不阻断（空锚点）。
+    outline_anchor = ""
+    try:
+        from step01_script_gen.outline import generate_outline, outline_to_anchor
+        if OUTLINE_ENABLED:
+            outline = generate_outline(novel_text)
+            if outline:
+                outline_anchor = outline_to_anchor(outline)
+                _logger.info("[INFO] 章节大纲已生成，注入分镜 prompt")
+    except Exception as e:
+        _logger.warn(f"[WARN] 大纲生成失败（不阻断）: {e}")
+    prompt = build_prompt(novel_text, bank, objects_bank, outline_anchor)
     service = create_service()
     req = TextGenerationRequest(
         system_prompt=SYSTEM_PROMPT,
@@ -266,7 +282,7 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
             f"当前生成的镜头数为 {current} 个、总时长 {total_duration:.0f} 秒，"
             f"超过上限 {_max} 个镜头。短视频平台成片以 60 秒为佳。\n"
             f"请重新生成，严格做到：\n"
-            f"1. 合并同场景连续镜头（同一地点、连续动作、多镜一拍）\n"
+            f"1. 合并同场景连续镜头（镜头数 = 真跳切数 + 1：同一主体、同一地点、连续同一动作必须合为一镜，相机角度微调/同对话正反打并入一镜内部动作；只有主体变/地点变/时空跳跃/旁白主题切换才拆分）\n"
             f"2. 删减冗余过渡镜头与重复表达的空镜\n"
             f"3. 确保镜头数 ≤ {_max}，总时长控制在 110 秒以内\n"
             f"4. 保留全部关键剧情节点与高潮部分，不要删剧情，只合并冗余\n"

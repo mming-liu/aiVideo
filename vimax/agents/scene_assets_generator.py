@@ -30,6 +30,15 @@ PROMPT_NEAR = (
     "不能变成另一处场景。"
 )
 
+# v6.23：侧面全景（side_desc → 侧面全景图，引用大场景图，同一地点的侧面视角）
+PROMPT_SIDE = (
+    "严格参考上传的{style}大场景参考图，提取并生成同一地点的侧面全景视角。"
+    "必须保持与参考图相同的季节、时间、天气、自然色调、光线方向、"
+    "年代风格和画面风格。画面中不得出现任何人物、身影、人影、轮廓或人形。"
+    "16:9横屏，侧面全景构图，展示地点的纵深与空间关系，镜头从侧面拍摄。"
+    "电影级写实摄影，真实材质细节，高清自然，画面必须与大场景属于同一个地点。"
+)
+
 
 class SceneAssetsGenerator:
     """AI漫剧场景资产生成器 - 大场景优先 + 近景派生.
@@ -37,6 +46,7 @@ class SceneAssetsGenerator:
     生成流程：
     1. generate_wide() — 生成大场景建立镜头图，锁定地理/时间/天气色调（首次）
     2. generate_near() — 基于大场景图生成近景功能场景图（保持同一地点一致性）
+    3. generate_side() — 基于大场景图生成侧面全景图（v6.23 多视图）
     """
 
     def __init__(self, image_generator):
@@ -78,6 +88,24 @@ class SceneAssetsGenerator:
             style=style,
             near_desc=near_desc,
         )
+        return await self.image_generator.generate_single_image(
+            prompt=prompt,
+            reference_image_paths=[wide_image_path],
+            save_path=save_path,
+        )
+
+    async def generate_side(self, scene: dict, wide_image_path: str,
+                            style: str = "古风电影写实",
+                            save_path: str | None = None) -> object:
+        """基于大场景图生成侧面全景图（v6.23 多视图）.
+
+        side_desc 缺失时用 wide_desc 兜底；无 wide_desc 则返回 None。
+        """
+        wide_desc = (scene.get("wide_desc") or "").strip()
+        if not wide_desc:
+            return None
+        side_desc = (scene.get("side_desc") or wide_desc).strip()
+        prompt = PROMPT_SIDE.format(style=style)
         return await self.image_generator.generate_single_image(
             prompt=prompt,
             reference_image_paths=[wide_image_path],

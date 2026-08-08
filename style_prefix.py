@@ -29,7 +29,7 @@ STYLE_PREFIX = (
 # 精简版前缀（用于减少 token 占用）
 STYLE_PREFIX_SHORT = "古风真人"
 
-NEGATIVE_PROMPT = "动漫风格、动画、2D渲染、卡通脸、卡通人物、三头身、Q版、动漫脸、画风突变、畸形五官、异形船只、四叶草、现代服装、现代建筑、现代楼房、水泥建筑、玻璃幕墙、电线杆、汽车、摩托车、现代设施、3D渲染、塑料质感、English text, watermark, logo, English speech"
+NEGATIVE_PROMPT = "动漫风格、动画、2D渲染、卡通脸、卡通人物、三头身、Q版、动漫脸、画风突变、畸形五官、异形船只、四叶草、现代服装、现代建筑、现代楼房、水泥建筑、玻璃幕墙、电线杆、汽车、摩托车、现代设施、3D渲染、塑料质感、English text, watermark, logo, English speech、画面字幕、中文文字、水印"
 
 # ===============================================================================
 # 图片幻觉专项防护（2025-07-23 v1 渐进增强）
@@ -86,6 +86,13 @@ STYLE_PRESETS = {
         "prefix": "古风真人影视剧，9:16竖屏，电影质感，暗调低饱和， 光影随场景自然变化，浅景深缓慢推镜，写实古风风格，高清1080P， 轻微电影胶片颗粒，真实镜头微反差，轻微自然暗角",
         "negative": "动漫风格、动画、2D渲染、卡通脸、卡通人物、三头身、Q版、 动漫脸、画风突变、畸形五官、异形船只、四叶草、现代服装、3D渲染、 塑料质感、English text, watermark, logo, English speech",
         "ratio": "9:16",
+        # v6.23：技术参数（seedance-storyboard/Micro-Drama 吸收，古风化适配）
+        "camera": "中长焦镜头（约50mm人像焦段），浅景深",
+        "film_stock": "复古胶片质感，轻微颗粒",
+        "filter": "自然柔光滤镜，暗角轻微",
+        "focal_length": "50mm",
+        "aperture": "f/2.0",
+        "lighting": "烛火/月光为主光源，暖金与冷蓝交织，侧逆光勾勒轮廓",
     },
     # 2. 吉卜力动画
     "ghibli": {
@@ -926,6 +933,65 @@ def normalize_ff_desc(ff_desc: str, shot: dict | None = None,
     return "，".join(out).strip("，、。 ")
 
 
+# 朝向强化触发词（与 vimax_bridge._collect_portrait_refs_for_shot 的 subject_view
+# 判定同源——参考图三视图是伪三视图，朝向语义改由 prompt 文字驱动）
+ORIENTATION_KW = (
+    "面向画", "朝向画", "盯向画", "望向画", "朝画右", "朝画左",
+    "面向右", "面向左", "看画右", "看画左", "转向画",
+)
+
+
+def extract_orientation(desc: str, characters=None) -> list[tuple[str, str]]:
+    """从描述提取「动作主体 + 朝向目标角色」朝向对.
+
+    只对明确写了「角色 + 盯向/面向/望向/朝向 + 画X + 目标角色」的主体生效。
+    如「刺客潜伏水下，正盯向画右的杨旭」→ (刺客, 杨旭)——刺客面向杨旭。
+    目标须是已知角色名（杨旭/听香等）；望向水面/望向消失处 → 目标非角色，跳过。
+
+    保守闸门：未指定朝向主体、目标非角色、空镜 → 返回 []（不强加）。
+    """
+    if not desc:
+        return []
+    names = _subject_names(characters)  # None 时返回兜底称谓
+    result: list[tuple[str, str]] = []
+    seen = set()
+    # 朝向触发词：角色 + 动词 + 画X + 目标
+    for ident in sorted(names, key=len, reverse=True):
+        if not ident:
+            continue
+        idx = 0
+        while True:
+            idx = desc.find(ident, idx)
+            if idx < 0:
+                break
+            # 角色名后 40 字窗口（覆盖「潜伏水下...正盯向画右的杨旭」）
+            window = desc[idx:idx + 40]
+            for kw in ORIENTATION_KW:
+                kpos = window.find(kw)
+                if kpos < 0:
+                    continue
+                # 主体须紧邻朝向动词：角色名与触发词之间不能隔着另一角色名
+                # （如"杨旭，听香望向画右"→杨旭是宾语，听香才是主体）
+                between = window[len(ident):kpos]
+                if any(n in between for n in names if n != ident):
+                    continue
+                # 从触发词后找目标角色：仅认「画X + 的 + 角色名」紧密模式
+                # （如"盯向画右的杨旭"→目标杨旭），不认"逗号+角色名"（避免
+                # 宾语位的角色名被误当目标，如"画右的刺客"里刺客是宾语）。
+                import re as _re
+                tail = window[kpos:]
+                m = _re.search(r"画[左右]的([一-鿿]{1,4})", tail)
+                target = m.group(1) if m else None
+                if target and target in names and target != ident:
+                    key = (ident, target)
+                    if key not in seen:
+                        seen.add(key)
+                        result.append((ident, target))
+                    break
+            idx += len(ident)
+    return result
+
+
 def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                                  shot: dict | None = None) -> str:
     """为图片生成添加严格约束，防止 AI 幻觉生成错误画面。
@@ -1005,6 +1071,21 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                 f"【人物数量限制】画面中只允许出现以下角色：{'、'.join(char_names)}。"
                 f"总共{len(char_names)}人，禁止出现任何其他人物、黑影、人影。"
             )
+
+        # v6.20：帧朝向强化——参考图三视图是伪三视图（side/back 0.95+ 相似度，
+        # 图生图没执行 Facing left），朝向语义改由 prompt 文字驱动。只对明确写了
+        # 「角色 + 盯向/面向 + 画X + 目标角色」的主体追加朝向，未指定不强加。
+        _orient_text = " ".join([
+            shot.get("ff_desc", ""),
+            shot.get("lf_desc", ""),
+            shot.get("prompt", "") or shot.get("motion_desc", ""),
+        ])
+        _orient_pairs = extract_orientation(_orient_text)
+        if _orient_pairs:
+            _parts = "，".join(
+                f"{c}面朝{d}方向，侧身不看向镜头" for c, d in _orient_pairs
+            )
+            strict_constraints += f"【朝向】{_parts}。"
     else:
         # 无 shot 上下文时，只添加通用约束（不注入具体角色描述）
         strict_constraints += (

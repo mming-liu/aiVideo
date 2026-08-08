@@ -568,6 +568,21 @@ _COMMON_NEGATIVE_PROMPTS = {
     "字幕", "文本",
 }
 
+# v6.24 新增：seedance 铁律7/8/12 + capsule 分镜原则吸收的检查词库
+_DEFORMATION_VERBS = {
+    "掰断", "掰碎", "掰一半", "掰",
+    "撕开", "撕碎", "撕裂", "撕破", "撕",
+    "劈开", "劈碎", "劈",
+    "折断", "剥开", "剥", "捏碎", "砸碎", "摔碎",
+}
+_WIDE_SHOT_WORDS = {"远景", "大远景", "全景", "大全景", "俯拍", "航拍", "俯瞰", "鸟瞰", "广角"}
+_FINE_FACE_WORDS = {
+    "剑眉", "星目", "丹凤眼", "柳叶眉", "朱唇", "樱桃小口", "五官",
+    "睫毛", "发簪", "眉心", "唇瓣", "珍珠耳坠",
+}
+_HAND_EXCHANGE_WORDS = {"递出", "递交", "递到", "递", "接过", "接", "交接", "交换", "换", "奉上", "呈上", "交出"}
+_HAND_LOCK_WORDS = {"手部", "左手", "右手", "手中", "指间", "双手", "手背", "拇指"}
+
 # v6.4 新增：视频教程转场关键词库
 _TRANSITION_COMBAT = {"冲击转场", "快速跟拍", "动作连贯", "转场时长0.2s", "画面冲击转场", "快速切换"}
 _TRANSITION_SCENE_SWITCH = {"淡入淡出转场", "镜头拉远", "自然过渡", "转场时长0.5s", "平滑过渡", "渐变转场"}
@@ -883,7 +898,28 @@ def _check_gaze_direction(shots, hook: dict = None) -> dict:
         idx = shot.get('index', '?')
         prompt = shot.get('prompt', '')
         ff_desc = shot.get('ff_desc', '')
-        text = f"{prompt} {ff_desc}"
+        lf_desc = shot.get('lf_desc', '')
+        # v1.1：拼入 lf_desc——尾帧角色视线此前零校验（"听香目光盯着画右水面刺客
+        # 消失之处"被画右锚点放行且错别字无检测）
+        text = f"{prompt} {ff_desc} {lf_desc}"
+
+        # v1.1：尾帧角色看向"消失对象"检测——场景含受伤结果对象（杨旭倒下）时，
+        # 角色应看向被刺倒的同伴，而非已消失的刺客/水面
+        _victim_hints = ("倒下", "仰面倒", "仰面躺", "中刀", "被刺", "心口", "洇开", "倒地")
+        _lost_objects = ("消失之处", "消失处", "水面刺客", "刺客消失", "没入之处", "水中刺客")
+        if lf_desc and any(h in lf_desc for h in _victim_hints):
+            _gaze_lost = re.search(
+                r'[目光双眼眼神视线][^，。；！？]{0,3}[盯看望][^，。；！？]{0,12}',
+                lf_desc,
+            )
+            if _gaze_lost:
+                _seg = _gaze_lost.group()
+                if any(l in _seg for l in _lost_objects):
+                    warnings.append(
+                        f"{label}{idx}: 尾帧角色目光看向「{_seg[:20]}」——已消失的刺客/水面，"
+                        f"不是动作结果对象。场景含受伤结果（杨旭倒下），角色应看向被刺倒的"
+                        f"同伴杨旭（自动修复见 vimax_bridge.fix_lf_desc_gaze）。"
+                    )
 
         wrong = []
         # 先剔除机位/前缀术语，避免其内部「视」被误当视线（影视剧/平视/微仰视/俯视/仰视）
@@ -2824,6 +2860,17 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v2.0 新增：剧情事件轴分布检查（强化版）
     results["narrative_arc"] = _check_narrative_arc_distribution(shots, script)
 
+    # v6.21 新增：镜头组接检查（轴线越轴 / 景别跳跃 / 战场分层）
+    results["axis_crossing"] = _check_axis_crossing(shots, script.get("hook"))
+    results["shot_size_jump"] = _check_shot_size_jump(shots)
+    results["battle_layer"] = _check_battle_layer(shots, script)
+
+    # v6.24 新增：seedance 铁律7/8 + capsule 分镜原则吸收（全部 warning 级）
+    results["object_separability"] = _check_object_separability(shots)
+    results["wide_shot_facial"] = _check_wide_shot_facial(shots, script.get("hook"))
+    results["hand_lock"] = _check_hand_lock(shots)
+    results["subtitle_leak"] = _check_subtitle_leak(shots, script.get("hook"))
+
     # 综合判定：任一硬性检查失败则整体不通过
     # v6.5: 增加 script_novel_alignment 到硬性检查
     # v6.7: 增加 ff_lf_completeness 到硬性检查（lf_desc 为空会导致静态视频）
@@ -2866,6 +2913,7 @@ def _fill_missing_new_fields(script: dict) -> None:
         shot.setdefault("hook", "")
         shot.setdefault("time_stamp", "")
         shot.setdefault("cam_idx", 1)
+        shot.setdefault("subject_direction", "")  # v6.21：人物朝向（可选）
 
     # 补全 hook（如果存在）
     hook = script.get("hook")
@@ -2973,6 +3021,12 @@ def post_fix_shot_prompts(script: dict) -> dict:
             shot["ff_desc"] = normalize_ff_desc(
                 shot["ff_desc"], shot, script.get("characters", []))
 
+        # v1.1：尾帧 lf_desc 目光修复（错别字 + 看向动作结果对象——听香看被刺倒的杨旭）
+        if shot.get("lf_desc"):
+            from shared.vimax_bridge import fix_lf_desc_gaze
+            shot["lf_desc"] = fix_lf_desc_gaze(
+                shot["lf_desc"], shot, script.get("characters", []))
+
     # hook 也需要光位量化 + 情绪可视化修复（光位先，让情绪词先驱动光位选择）
     hook = script.get("hook")
     if hook and isinstance(hook, dict):
@@ -2983,6 +3037,11 @@ def post_fix_shot_prompts(script: dict) -> dict:
         if hook.get("ff_desc"):
             hook["ff_desc"] = normalize_ff_desc(
                 hook["ff_desc"], hook, script.get("characters", []))
+        # v1.1：hook 尾帧 lf_desc 目光修复（与 shot 一致）
+        if hook.get("lf_desc"):
+            from shared.vimax_bridge import fix_lf_desc_gaze
+            hook["lf_desc"] = fix_lf_desc_gaze(
+                hook["lf_desc"], hook, script.get("characters", []))
 
     return script
 
@@ -3147,3 +3206,215 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
 
     _validate_script(script)
     return script
+
+
+# ============================================================================
+# v6.21：镜头组接检查（shot-assembling skill 吸收）
+# ============================================================================
+
+# 朝向方向词（从 prompt/ff_desc 提取「画左/画右」作越轴锚点）
+_AXIS_DIR_WORDS = ("画左", "画右")
+# 景别等级表（storyboard_refs.SHOT_SIZES 的 9 级，用于计算相邻镜头景别跳跃幅度）
+_SHOT_SIZE_ORDER = [
+    "大特写", "特写", "中近景", "中景", "中远景", "全景", "远景", "大远景", "鸟瞰远景",
+]
+
+
+def _extract_shot_directions(text: str) -> list[str]:
+    """从文本提取「画左/画右」方向词列表."""
+    return [d for d in _AXIS_DIR_WORDS if d in text]
+
+
+def _shot_size_level(shot: dict) -> str | None:
+    """提取镜头景别（prompt 开头格式「[景别]」），返回等级名."""
+    prompt = shot.get("prompt", "") or ""
+    for sz in _SHOT_SIZE_ORDER:
+        if sz in prompt:
+            return sz
+    return None
+
+
+def _check_axis_crossing(shots: list[dict], hook: dict = None) -> dict:
+    """检查相邻镜头同场景中「画左/画右」方向翻转（180°轴线越轴）.
+
+    镜头组接规则（v6.21）：同一场景相邻镜头，同一角色「画左/画右」朝向不应
+    随意翻转（越轴会让人物左右颠倒）。仅当镜头间有越轴豁免（插空镜/转身/特写）
+    才允许。warning 级，不阻断。
+    """
+    issues, warnings = [], []
+    for i in range(len(shots) - 1):
+        s1, s2 = shots[i], shots[i + 1]
+        loc1 = s1.get("location", "") or s1.get("scene", "")
+        loc2 = s2.get("location", "") or s2.get("scene", "")
+        if not loc1 or loc1 != loc2:
+            continue  # 不同场景不查（场景切换允许重新建立朝向）
+        # 相邻镜头方向词（画左/画右）
+        t1 = " ".join([s1.get("prompt", ""), s1.get("ff_desc", "")])
+        t2 = " ".join([s2.get("prompt", ""), s2.get("ff_desc", "")])
+        d1 = _extract_shot_directions(t1)
+        d2 = _extract_shot_directions(t2)
+        if not d1 or not d2:
+            continue  # 任一镜头未锚定方向，无法判定
+        # 方向冲突：镜头1只有画左/画右且镜头2方向相反
+        if set(d1) == {"画左"} and set(d2) == {"画右"}:
+            warnings.append(
+                f"镜头{s1['index']}→{s2['index']}: 同场景「画左」→「画右」朝向翻转，"
+                f"疑似180°轴线越轴——人物左右颠倒观众分不清。需插入空镜/转身/特写"
+                f"豁免，或统一朝向（镜头组接规则33）。"
+            )
+        elif set(d1) == {"画右"} and set(d2) == {"画左"}:
+            warnings.append(
+                f"镜头{s1['index']}→{s2['index']}: 同场景「画右」→「画左」朝向翻转，"
+                f"疑似180°轴线越轴——人物左右颠倒观众分不清。需插入空镜/转身/特写"
+                f"豁免，或统一朝向（镜头组接规则33）。"
+            )
+    for w in warnings:
+        print(f"[CHECK] 轴线越轴: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+def _check_shot_size_jump(shots: list[dict]) -> dict:
+    """检查相邻镜头景别跳跃幅度（禁止特写直接跳大远景）.
+
+    景别等级 9 级（大特写→鸟瞰），相邻镜头跳跃幅度 >2 级视为割裂（如
+    特写→大远景）。warning 级。
+    """
+    issues, warnings = [], []
+    for i in range(len(shots) - 1):
+        lv1 = _shot_size_level(shots[i])
+        lv2 = _shot_size_level(shots[i + 1])
+        if not lv1 or not lv2:
+            continue
+        d1 = _SHOT_SIZE_ORDER.index(lv1)
+        d2 = _SHOT_SIZE_ORDER.index(lv2)
+        if abs(d1 - d2) > 2:
+            warnings.append(
+                f"镜头{shots[i]['index']}→{shots[i+1]['index']}: 景别「{lv1}」→「{lv2}」"
+                f"跳跃幅度 {abs(d1 - d2)} 级（>2 级）——特写直接跳大远景观感割裂，"
+                f"建议中间补过渡景别（镜头组接规则33）。"
+            )
+    for w in warnings:
+        print(f"[CHECK] 景别跳跃: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+def _check_battle_layer(shots: list[dict], script: dict) -> dict:
+    """检查大战场镜头是否含分层描述（battle-layered skill 吸收）.
+
+    大战场镜头（prompt 含 大军/万人/阵列/士兵 等）应标 scene_layer 并分层描述，
+    禁止一次性塞满上万士兵。warning 级（当前章节无战场镜头不触发）。
+    """
+    issues, warnings = [], []
+    battle_kw = ("大军", "万人", "军队", "士兵", "阵列", "冲杀", "兵马", "千军", "万马")
+    layer_kw = ("英雄层", "近景动作", "中景队列", "远景密度", "hero_layer",
+                "near_action", "mid_queue", "far_density")
+    for s in shots:
+        text = " ".join([s.get("prompt", ""), s.get("motion_desc", ""), s.get("ff_desc", "")])
+        if not any(k in text for k in battle_kw):
+            continue
+        has_layer = any(k in text for k in layer_kw) or s.get("scene_layer")
+        if not has_layer:
+            warnings.append(
+                f"镜头{s['index']}: 大战场镜头（{s.get('scene','')}）未分层描述——"
+                f"禁止一次性塞满上万士兵。应按四层分层（英雄层/近景动作/中景队列/"
+                f"远景密度）+ 场景DNA + 战场资产复用（战场分层规则34）。"
+            )
+    for w in warnings:
+        print(f"[CHECK] 战场分层: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+def _check_object_separability(shots: list[dict]) -> dict:
+    """v6.24 新增：物体可分性检查（seedance 铁律7 / 规则35）.
+
+    易碎/可撕裂/可弯折物体的分解类动作（掰断/撕开/劈开/折断）渲染差，
+    应改为摔/取/递单帧动作或结果状态特写。warning-only。
+    """
+    issues, warnings = [], []
+    result_state = ("裂", "碎", "破", "折断", "特写", "静止")
+    for s in shots:
+        text = " ".join([s.get("prompt", ""), s.get("motion_desc", ""),
+                         s.get("ff_desc", ""), s.get("lf_desc", "")])
+        hit = next((w for w in _DEFORMATION_VERBS if w in text), None)
+        if not hit:
+            continue
+        if any(k in text for k in result_state):
+            continue  # 已是结果态镜头（结果帧特写），不告警
+        warnings.append(
+            f"镜头{s['index']}: 形变动词「{hit}」——物体断裂渲染差，"
+            f"改为摔/取/递单帧动作或结果状态特写（物体可分性规则35）。"
+        )
+    for w in warnings:
+        print(f"[CHECK] 物体可分性: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+def _check_wide_shot_facial(shots: list[dict], hook: dict = None) -> dict:
+    """v6.24 新增：远景镜头禁精细五官（capsule 远景省略 / 规则39）.
+
+    远景/大远景/全景/俯拍/航拍中人物很小，写精细五官会导致 AI 把脸放大、
+    比例崩坏。warning-only。
+    """
+    issues, warnings = [], []
+    targets = list(shots) + ([hook] if hook else [])
+    for s in targets:
+        probe = " ".join([s.get("ff_desc", ""), s.get("prompt", ""),
+                          s.get("location", ""), s.get("scene", "")])
+        if not any(w in probe for w in _WIDE_SHOT_WORDS):
+            continue
+        hit = next((w for w in _FINE_FACE_WORDS if w in probe), None)
+        if hit:
+            label = "hook" if (hook and s is hook) else s.get("index", "?")
+            warnings.append(
+                f"镜头{label}: 远景镜头含精细五官词「{hit}」——远景人物只留身份+服装主色+剪影，"
+                f"禁止精细五官与全身服装细节（远景人物省略规则39）。"
+            )
+    for w in warnings:
+        print(f"[CHECK] 远景禁五官: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+def _check_hand_lock(shots: list[dict]) -> dict:
+    """v6.24 新增：双人递物/交易手部锁定检查（seedance 铁律8 / 规则38）.
+
+    递/接/交/换场景手部易混淆（尤其有饰品时），必须写明手部归属与方向。
+    warning-only。
+    """
+    issues, warnings = [], []
+    for s in shots:
+        text = " ".join([s.get("prompt", ""), s.get("motion_desc", ""), s.get("ff_desc", "")])
+        if not any(k in text for k in _HAND_EXCHANGE_WORDS):
+            continue
+        if any(k in text for k in _HAND_LOCK_WORDS):
+            continue
+        warnings.append(
+            f"镜头{s['index']}: 递物/交易镜头未锁定手部——需写明谁用哪只手递/接、"
+            f"双方手部饰品严格区分（双人递物手部锁定规则38）。"
+        )
+    for w in warnings:
+        print(f"[CHECK] 手部锁定: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+def _check_subtitle_leak(shots: list[dict], hook: dict = None) -> dict:
+    """v6.24 新增：画面字段字幕泄漏检查（seedance 铁律3 / 规则40）.
+
+    prompt/ff_desc/lf_desc/motion_desc 出现「字幕/文字/水印」字样或【字幕：】标记，
+    会导致视频模型渲染烧录文字；字幕由 step04 后期统一烧录。warning-only。
+    """
+    issues, warnings = [], []
+    leak_kw = ("字幕", "文字", "水印", "【字幕", "字体")
+    targets = list(shots) + ([hook] if hook else [])
+    for s in targets:
+        text = " ".join([s.get("prompt", ""), s.get("ff_desc", ""),
+                         s.get("lf_desc", ""), s.get("motion_desc", "")])
+        hit = next((w for w in leak_kw if w in text), None)
+        if hit:
+            label = "hook" if (hook and s is hook) else s.get("index", "?")
+            warnings.append(
+                f"镜头{label}: 画面描述含「{hit}」——视频模型会渲染烧录文字，"
+                f"字幕由后期统一烧录，画面描述必须无任何文字（画面无字幕规则40）。"
+            )
+    for w in warnings:
+        print(f"[CHECK] 字幕泄漏: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}

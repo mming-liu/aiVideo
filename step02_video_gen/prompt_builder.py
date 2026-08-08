@@ -312,16 +312,24 @@ def _build_r2v_purpose_list(shot: dict, registry: dict = None,
     registry = registry if registry is not None else _load_character_registry()
     characters = characters or []
     refs = []
+    # v6.24：图N = 参考图列表第N张（与 provider media 顺序一致，同 happyhorse [Image N]）。
+    # 修正 v6.22 缺陷：旧实现只数角色肖像，遇到前置首帧/场景参考图时编号错位。
+    idx = 0
     for p in (ref_paths or []):
         if not p or not Path(p).exists():
             continue
+        idx += 1
         purpose = _classify_reference_purpose(str(p), shot, registry, characters)
-        refs.append(f"- {Path(p).name}：{purpose}")
+        refs.append(f"- 图{idx}（{Path(p).name}）：{purpose}")
     if not refs:
         return ""
-    head = ("【参考图用途】以下每张参考图用途不同，严格按标注用途取用：\n"
-            "  人物参考只取人物特征，场景参考只取环境光线，"
+    head = ("【参考图用途】以下每张参考图用途不同，图N 严格对应参考图列表第N张"
+            "（首帧/场景/道具也占位编号），严格按标注用途取用："
+            "人物参考只取人物特征，场景参考只取环境光线，"
             "禁止把人物参考当场景、把场景参考当人物。")
+    head += ("\n  多人镜头请用角色所在位置的「图N」指代该角色并分配其行为"
+             "（如'图3的杨旭握紧酒壶，图4的听香望向画右'——编号以本清单标注为准），"
+             "一个角色一个编号，禁止混用。")
     return head + "\n" + "\n".join(refs)
 
 
@@ -339,6 +347,28 @@ def _build_scene_environment(shot: dict) -> str:
     if t:
         return f"【场景环境】{location}，{t}"
     return f"【场景环境】{location}"
+
+
+# v6.24：远景镜头词库（capsule 远景省略规则，与 validation._WIDE_SHOT_WORDS 同步）
+_WIDE_SHOT_WORDS = {"远景", "大远景", "全景", "大全景", "俯拍", "航拍", "俯瞰", "鸟瞰", "广角"}
+
+
+def _shorten_feature(feat: str, max_len: int = 25) -> str:
+    """多角色/远景镜头：特征压缩到 ~max_len 字，保留开头（通常为服装主色/剪影）.
+
+    防止多人镜头锚点膨胀、远景写精细五官导致 AI 把脸放大（capsule 吸收）。
+    """
+    feat = (feat or "").strip()
+    if len(feat) <= max_len:
+        return feat
+    return feat[:max_len].rstrip("，、；：。") + "…"
+
+
+def _is_wide_shot(shot: dict) -> bool:
+    """远景/大远景/全景/俯拍/航拍镜头探测（胶囊远景省略规则）."""
+    probe = " ".join([shot.get("ff_desc", ""), shot.get("prompt", ""),
+                      shot.get("location", ""), shot.get("scene", "")])
+    return any(w in probe for w in _WIDE_SHOT_WORDS)
 
 
 def _build_character_layout_block(shot: dict, characters: list) -> str:
@@ -362,13 +392,26 @@ def _build_character_layout_block(shot: dict, characters: list) -> str:
         return ""
 
     lines = []
+    main_ident = (shot.get("main_subject") or "").strip()
+    wide = _is_wide_shot(shot)
+    many = len(appearing) >= 3
     for c in appearing:
         ident = c["identifier"]
-        feats = [f for f in (c.get("static_features", ""), c.get("dynamic_features", "")) if f]
-        if feats:
-            lines.append(f"- {ident}：{'，'.join(feats)}，位置/朝向/动作以视频起点描述为准")
+        if wide:
+            # 远景：只留身份+服装主色剪影，禁精细五官（规则39）
+            short = _shorten_feature(c.get("static_features", ""), 15)
+            lines.append(f"- {ident}（远景剪影）：{short}，禁止五官与服装细节")
+            continue
+        if many and ident != main_ident:
+            # 多角色镜头：非主角压缩到 ~25 字，防锚点膨胀（capsule 短锚点）
+            short = _shorten_feature(c.get("static_features", ""), 25)
+            lines.append(f"- {ident}：{short}，位置/朝向/动作以视频起点描述为准")
         else:
-            lines.append(f"- {ident}：位置/朝向/动作以视频起点描述为准")
+            feats = [f for f in (c.get("static_features", ""), c.get("dynamic_features", "")) if f]
+            if feats:
+                lines.append(f"- {ident}：{'，'.join(feats)}，位置/朝向/动作以视频起点描述为准")
+            else:
+                lines.append(f"- {ident}：位置/朝向/动作以视频起点描述为准")
 
     return (
         "【人物站位清单】本镜头开场画面包含以下角色，必须在开场画面中正确出现，"
@@ -461,6 +504,9 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
             static = char.get("static_features", "")
             dynamic = char.get("dynamic_features", "")
             if static or dynamic:
+                # 远景镜头：主角特征也截断到剪影级，禁精细五官（规则39）
+                if _is_wide_shot(shot):
+                    static = _shorten_feature(static, 15)
                 char_features = f"[{main_subject}: {static}, {dynamic}]"
             break
 
@@ -469,6 +515,12 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
 
     # ========== 4. 构建派生视频 prompt（首帧->动作->尾帧） ==========
     parts = []
+
+    # 4.0a seedance 铁律3：视频模型画面禁止渲染任何字幕/文字/水印。
+    # 字幕由 step04 ffmpeg 后期统一烧录，这里只禁「模型画字」。
+    parts.append(
+        "画面无任何字幕、文字、水印、logo、图标；禁止在画面中叠加文字。"
+    )
 
     # 4.0 场景时间环境标注（豆包模板吸收 #3）
     env = _build_scene_environment(shot)
@@ -580,6 +632,19 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
         "整段视频每一帧都保持写实古风真人风格，首尾画风完全一致，"
         "禁止中途转为动漫、动画、2D渲染、卡通脸或任何非写实风格。"
     )
+
+    # ========== 8b. 色彩氛围锚点（spark-video mood_anchor 吸收）==========
+    tone = (shot.get("color_tone") or "").strip()
+    if not tone:
+        # 兜底：脚本级全局色调
+        tone = (script.get("color_tone")
+                or script.get("global_config", {}).get("color_tone")
+                or "").strip()
+    if tone:
+        parts.append(
+            f"【色彩氛围】全片色调锚定：{tone}；每一帧的明暗、饱和度与色温"
+            f"都服从这一基调，禁止中途跳色。"
+        )
 
     # ========== 9. 模式B连续接续指令 ==========
     if mode == "B":

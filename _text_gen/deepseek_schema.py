@@ -38,7 +38,7 @@ _SHOT = {
         "core_keywords": {"type": "array", "items": {"type": "string"}},
         "prompt": {"type": "string"},
         "motion_desc": {"type": "string"},
-        "ff_desc": {"type": "string", "description": "首帧静态画面描述。必须定格在 motion 第一个动作的「前一刻」（动作尚未发生、可画出的静止画面），禁止动作进行态（破水而出/正在刺向/张嘴尖叫）；破水而出→潜伏水下/水面微澜、刺向→刀尖抵近/即将触及、尖叫→张嘴欲呼；禁止时间推进/多动作堆叠、禁止完成态动词（已刺中/倒地，动作结果只能在lf_desc）；多人视线用画左/画右/画上方锚定并汇聚到同一焦点。"},
+        "ff_desc": {"type": "string", "description": "首帧静态画面描述。必须定格在 motion 第一个动作的「前一刻」（动作尚未发生、可画出的静止画面），禁止动作进行态（破水而出/正在刺向/张嘴尖叫）；破水而出→潜伏水下/水面微澜、刺向→刀尖抵近/即将触及、尖叫→张嘴欲呼；禁止时间推进/多动作堆叠、禁止完成态动词（已刺中/倒地，动作结果只能在lf_desc）；多人视线用画左/画右/画上方锚定并汇聚到同一焦点。用短句动词前置、一角色一短句，普通镜头 ≤80 字符；只删冗余不删角色/前一刻/明确朝向。"},
         "lf_desc": {"type": "string", "description": "尾帧静态画面描述"},
         "context_bridge": {"type": "string"},
         "audio_cue": {"type": "string"},
@@ -56,6 +56,8 @@ _SHOT = {
         },
         "variation_type": {"type": "string", "enum": ["small", "large"]},
         "keyframes": {"type": "array", "items": _KEYFRAME},
+        # v6.21：人物朝向（镜头组接规则33，可选——同场景连续镜头朝向一致性校验用）
+        "subject_direction": {"type": "string", "description": "人物朝向（左/右/面向镜头/背对），可选；同场景相邻镜头朝向不应翻转"},
     },
     "required": [
         "index", "narration_segment", "subtitle", "scene", "location",
@@ -88,7 +90,7 @@ _HOOK = {
         "clip_transition": {"type": "string"},
         "cam_idx": {"type": "integer"},
         "variation_type": {"type": "string"},
-        "ff_desc": {"type": "string", "description": "钩子首帧静态画面描述。必须定格在 motion 第一个动作的「前一刻」（动作尚未发生），禁止动作进行态（破水而出/正在刺向/张嘴尖叫）；破水而出→潜伏水下/水面微澜、刺向→刀尖抵近/即将触及、尖叫→张嘴欲呼；禁止时间推进/多动作堆叠、禁止完成态动词（已刺中/倒地）；多人视线用画左/画右锚定并汇聚到同一焦点。"},
+        "ff_desc": {"type": "string", "description": "钩子首帧静态画面描述。必须定格在 motion 第一个动作的「前一刻」（动作尚未发生），禁止动作进行态（破水而出/正在刺向/张嘴尖叫）；破水而出→潜伏水下/水面微澜、刺向→刀尖抵近/即将触及、尖叫→张嘴欲呼；禁止时间推进/多动作堆叠、禁止完成态动词（已刺中/倒地）；多人视线用画左/画右锚定并汇聚到同一焦点。用短句动词前置，钩子 ≤120 字符；只删冗余不删角色/前一刻/明确朝向。"},
         "lf_desc": {"type": "string"},
         "motion_desc": {"type": "string"},
         "context_bridge": {"type": "string"},
@@ -148,6 +150,20 @@ SCRIPT_SCHEMA = {
                 "items": _SHOT,
             },
             "hook": {"anyOf": [{"type": "object", "properties": _HOOK["properties"], "required": _HOOK["required"], "additionalProperties": False}, {"type": "null"}]},
+            # v6.21：战场分层字段（仅大战场镜头输出，普通镜头省略）
+            "scene_layer": {"type": "string", "description": "战场镜头分层（hero_layer英雄层/near_action近景动作层/mid_queue中景队列层/far_density远景密度层），非战场镜头省略"},
+            "world_dna": {
+                "type": "object",
+                "description": "战场世界观恒定参数（同一战役全部镜头共用，禁止乱跳）",
+                "properties": {
+                    "terrain": {"type": "string", "description": "地形建筑（城墙/滩涂/营寨结构固定）"},
+                    "lighting": {"type": "string", "description": "光照（太阳方位/阴影投射方向固定）"},
+                    "atmosphere": {"type": "string", "description": "环境氛围（烟尘颜色/雾气浓度）"},
+                    "scale_anchor": {"type": "string", "description": "尺度锚点（城门/战车/战马，约束士兵大小防透视崩坏）"},
+                },
+                "additionalProperties": False,
+            },
+            "battle_asset_group": {"type": "string", "description": "战场资产组ID（复用预制盾牌/头盔/旗帜资产，禁止自由随机设计军备）"},
         },
         "required": ["title", "characters", "shots"],
         "additionalProperties": False,
@@ -414,6 +430,50 @@ PROPS_SCHEMA = {
             },
         },
         "required": ["props"],
+        "additionalProperties": False,
+    },
+}
+
+
+# ========================================================================
+# 章节大纲（step01_script_gen/outline.py，ShortVideoDirector director-outline 吸收）
+# ========================================================================
+
+OUTLINE_SCHEMA = {
+    "name": "chapter_outline",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "main_events": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "本章主要事件（按时间顺序，3-6个，覆盖全章）",
+            },
+            "characters": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "出场角色列表",
+            },
+            "emotional_arc": {
+                "type": "string",
+                "description": "本章情绪弧线（如：平静→惊疑→爆发→余波）",
+            },
+            "climax": {
+                "type": "string",
+                "description": "本章高潮事件（冲突/转折点）",
+            },
+            "end_hook": {
+                "type": "string",
+                "description": "结尾钩子（吸引观众看下一集）",
+            },
+            "key_scenes": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "需要重点刻画的关键场景",
+            },
+        },
+        "required": ["main_events", "characters", "emotional_arc", "climax", "end_hook", "key_scenes"],
         "additionalProperties": False,
     },
 }

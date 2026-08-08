@@ -14,6 +14,8 @@ AI漫剧角色资产创建 - 基础图优先策略
 
 # -- 基础全景图 Prompt（首次创建角色时，锁定核心特征） --
 # 遵循万能公式：风格 + 身份 + 外貌细节 + 服装配饰 + 光影氛围 + 质量标签
+# v6.23：人物资产硬约束（seedance-storyboard 吸收）——含鞋子防半身、表情中性、
+# 不手持物件、真实成人比例，保证肖像图稳定可作 r2v 参考。
 PROMPT_BASE = (
     "Photorealistic {style} portrait of {identity}. "
     "{physical_features}. {clothing}. "
@@ -23,8 +25,11 @@ PROMPT_BASE = (
     "natural fiber wrinkles, slight cuff wear, natural shoe dust. "
     "Quality: subtle film grain, micro-contrast, natural vignette, "
     "8K HD resolution, film-grade texture, photorealistic. "
-    "Full body, centered composition, white background, 16:9 landscape canvas. "
-    "Natural standing pose, arms relaxed at sides, realistic expression. "
+    "Full body from head to toe, MUST include shoes, centered composition, "
+    "white background, 16:9 landscape canvas. "
+    "Neutral expression, face relaxed, eyes open looking at camera. "
+    "Hands relaxed at sides, holding nothing, no props. "
+    "Realistic adult proportions, no child-like features. "
     "Not anime, not cartoon, not illustration, not 3D render."
 )
 

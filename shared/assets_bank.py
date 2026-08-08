@@ -30,6 +30,28 @@ def _book_global_dir() -> Path:
     return global_dir()
 
 
+def _next_asset_id(entries: dict, prefix: str) -> str:
+    """为资产分配编号（S01/C01/P01），按注册顺序递增.
+
+    扫描已有条目的 asset_id，取最大序号 +1。缺 asset_id 的旧条目按出现顺序补号。
+    """
+    max_n = 0
+    n = 1
+    for ident, entry in entries.items():
+        aid = (entry or {}).get("asset_id", "")
+        if aid and aid.startswith(prefix):
+            try:
+                max_n = max(max_n, int(aid[len(prefix):]))
+            except ValueError:
+                pass
+        else:
+            # 旧条目无编号 → 按顺序占用编号（避免与已有编号冲突）
+            while f"{prefix}{n:02d}" in {e.get('asset_id') for e in entries.values() if e}:
+                n += 1
+            entries[ident]["asset_id"] = f"{prefix}{n:02d}"
+    return f"{prefix}{max_n + 1:02d}"
+
+
 # ---------------------------------------------------------------------------
 # 场景名↔地点 模糊匹配辅助
 # ---------------------------------------------------------------------------
@@ -166,6 +188,19 @@ class SceneAssetsBank:
             return str(default.resolve())
         return None
 
+    def get_side_image(self, identifier: str) -> str | None:
+        """返回侧面全景图路径（v6.23 多视图），不存在返回 None."""
+        scene = self.get_scene(identifier)
+        if not scene:
+            return None
+        p = scene.get("side_image", "")
+        if p and Path(p).exists():
+            return p
+        default = self.get_asset_dir(identifier) / "side.png"
+        if default.exists():
+            return str(default.resolve())
+        return None
+
     def get_all_assets_as_registry(self) -> dict:
         """导出 ViMax 兼容的 scene_assets_registry dict.
 
@@ -214,6 +249,8 @@ class SceneAssetsBank:
             entry.setdefault("first_chapter", chapter_num)
             entry["last_chapter"] = chapter_num
             entry["consistent_terms"] = list(entry.get("consistent_terms", []) or [])
+            # v6.23：资产编号（S01/S02... 按注册顺序自动分配，与中文名双轨）
+            entry.setdefault("asset_id", _next_asset_id(self._data["scenes"], "S"))
             self._data["scenes"][ident] = entry
 
         self._data["meta"]["last_updated_chapter"] = max(
@@ -354,6 +391,8 @@ class PropAssetsBank:
             entry.setdefault("first_chapter", chapter_num)
             entry["last_chapter"] = chapter_num
             entry["consistent_terms"] = list(entry.get("consistent_terms", []) or [])
+            # v6.23：道具编号（P01/P02... 按注册顺序自动分配）
+            entry.setdefault("asset_id", _next_asset_id(self._data["props"], "P"))
             self._data["props"][ident] = entry
 
         self._data["meta"]["last_updated_chapter"] = max(

@@ -53,12 +53,71 @@ from step04_merge.stretch import get_media_duration
 from step04_merge.srt_gen import generate_srt
 import json
 import re
+import os
+
+
+# v6.22：音频音量归一（FFMPEG_AUDIO_VOLUME 环境变量，如 5dB/0.8；默认空=不处理）
+_AUDIO_VOLUME = os.getenv("FFMPEG_AUDIO_VOLUME", "").strip()
+
+
+# v6.22：多转场映射表（clip_transition 文本关键词 → xfade transition 类型）
+_TRANSITION_MAP = (
+    # 黑场闪白 / 冲击转场
+    ("黑场闪白", "fadeblack"),
+    ("画面冲击", "fadeblack"),
+    ("冲击转场", "fadeblack"),
+    ("光线闪白", "fadewhite"),
+    ("闪白", "fadewhite"),
+    # 推移 / 推镜 / 拉远
+    ("推移转场", "slideleft"),
+    ("推近匹配", "smoothleft"),
+    ("拉远揭示", "smoothright"),
+    ("推移", "slideleft"),
+    # 擦拭 / 扫光
+    ("擦拭", "wipeleft"),
+    ("扫光", "wipeleft"),
+    ("物体擦拭", "wipeup"),
+    # 平滑 / 柔化 / 虚化
+    ("焦点虚化", "smoothup"),
+    ("模糊叠化", "smoothdown"),
+    ("平滑", "smoothleft"),
+    ("柔化", "smoothdown"),
+    # 旋转 / 径向
+    ("旋转", "radial"),
+    ("光圈", "radial"),
+    ("径向", "radial"),
+    # 叠化 / 溶解
+    ("叠化", "fade"),
+    ("dissolve", "fade"),
+    ("淡入淡出", "fade"),
+    ("交叉溶解", "fade"),
+    # 匹配 / 空镜
+    ("空镜匹配", "fade"),
+    ("匹配剪辑", "fade"),
+    ("动作匹配", "fade"),
+    # 淡入 / 淡出
+    ("淡入", "fade_in"),
+    ("淡出", "fade_out"),
+    # 硬切 / 跳跃
+    ("硬切", "cut"),
+    ("jump", "cut"),
+    ("跳跃剪辑", "cut"),
+)
+
+# 可用的 xfade transition 白名单（校验 kind 合法，非法回退 fade）
+_VALID_XFADE = {
+    "fade", "wipeleft", "wiperight", "wipeup", "wipedown",
+    "slideleft", "slideright", "slideup", "slidedown",
+    "circlecrop", "rectcrop", "distance", "fadeblack", "fadewhite",
+    "radial", "smoothleft", "smoothright", "smoothup", "smoothdown",
+}
 
 
 def _parse_transition(text: str, default_dur: float = 0.5):
     """解析 clip_transition 字符串 → (kind, duration_seconds).
 
-    kind: 'cut'(硬切) | 'fade'(交叉溶解) | 'fade_in'(淡入) | 'fade_out'(淡出)
+    kind: 'cut'(硬切) | 'fade_in'(淡入) | 'fade_out'(淡出) | xfade 转场名
+    （fade/wipeleft/slideleft/fadeblack/radial... 多转场增强 v6.22）
     duration 从「转场时长0.5s/0.5秒」提取，clamp 到 0.1~1.5s（短转场防突兀）。
     """
     text = (text or "").strip()
@@ -68,18 +127,23 @@ def _parse_transition(text: str, default_dur: float = 0.5):
     dur = float(m.group(1)) if m else default_dur
     # 是否显式提到转场（带「转场」字样或时长），用于区分「硬切」和「硬切+快速转场」
     has_transition_word = "转场" in text or m is not None
-    if "淡入淡出" in text or "叠化" in text or "dissolve" in text.lower():
+
+    # v6.22：多转场映射（长词优先）——黑场闪白/冲击→fadeblack、推移→slide、擦拭→wipe、
+    # 旋转→radial、平滑→smooth、光线闪白→fadewhite，其余叠化/淡入淡出→fade
+    kind = None
+    for kw, xf in _TRANSITION_MAP:
+        if kw in text:
+            kind = xf
+            break
+    if kind is None:
         kind = "fade"
-    elif "淡入" in text:
-        kind = "fade_in"
-    elif "淡出" in text:
-        kind = "fade_out"
-    elif "硬切" in text or "cut" in text.lower():
-        # 「硬切，战斗转场时长0.2s」→ 快速交叉溶解（时长即转场时间）
-        # 纯「硬切」→ 无转场
-        kind = "fade" if has_transition_word else "cut"
-    else:
+    # 纯「硬切」（无转场时长）→ cut
+    if "硬切" in text and not has_transition_word:
+        kind = "cut"
+    # 「硬切，战斗转场时长0.2s」→ 快速交叉溶解（保留 fade）
+    elif kind == "cut" and has_transition_word:
         kind = "fade"
+
     if kind == "cut":
         dur = 0.0
     else:
@@ -113,10 +177,14 @@ def _build_native_transition_filter(clips, transitions, video_filter):
         if i == 0 and transitions[0][0] == "fade_in":
             v_chain += f",fade=t=in:st=0:d={min(transitions[0][1], d):.2f}"
         parts.append(f"{v_chain}[nv{i}]")
-        parts.append(
+        # v6.22：音频音量归一（读取 FFMPEG_AUDIO_VOLUME，如 5dB/0.8；默认不处理）
+        _a_chain = (
             f"[{i}:a]atrim=duration={d:.2f},asetpts=PTS-STARTPTS,"
-            f"aformat=sample_fmts=fltp:channel_layouts=stereo,aresample=44100[na{i}]"
+            f"aformat=sample_fmts=fltp:channel_layouts=stereo,aresample=44100"
         )
+        if _AUDIO_VOLUME:
+            _a_chain += f",volume={_AUDIO_VOLUME}"
+        parts.append(f"{_a_chain}[na{i}]")
 
     total = durs[0]
     cur_v, cur_a = "[nv0]", "[na0]"
@@ -133,8 +201,11 @@ def _build_native_transition_filter(clips, transitions, video_filter):
         else:
             offset = max(0.0, total - tdur - 0.001)
             x += 1
+            # v6.22：xfade transition 类型动态（fade/wipeleft/slideleft/fadeblack...），
+            # kind 直接作 xfade transition 参数；非法回退 fade
+            xfade_type = kind if kind in _VALID_XFADE else "fade"
             parts.append(
-                f"{cur_v}[nv{i}]xfade=transition=fade:duration={tdur:.3f}:offset={offset:.3f}[vx{x}]"
+                f"{cur_v}[nv{i}]xfade=transition={xfade_type}:duration={tdur:.3f}:offset={offset:.3f}[vx{x}]"
             )
             parts.append(f"{cur_a}[na{i}]acrossfade=d={tdur:.3f}[ax{x}]")
             cur_v, cur_a = f"[vx{x}]", f"[ax{x}]"
@@ -233,7 +304,13 @@ def main():
 
   for shot in shots:
     idx = shot.get("index", 0)
-    clip_path = CLIP_DIR / str(idx) / "video.mp4"
+    # v6.22：按 CLIP_SOURCE 分支处理 clip 路径——vimax 用 shots/{idx}/video.mp4，
+    # 非 vimax（agens-clips 等）用扁平 clip_{idx}.mp4（此前硬编码 vimax 结构导致
+    # 非 vimax 时合并路径不可用，code-review-2026-08-06 #10）
+    if CLIP_SOURCE == "vimax":
+      clip_path = CLIP_DIR / str(idx) / "video.mp4"
+    else:
+      clip_path = CLIP_DIR / f"clip_{idx}.mp4"
     if not clip_path.exists():
       _logger.warn(f"[WARN] Video clip not found: {clip_path}, skip this shot")
       missing_idxs.append(idx)
@@ -285,10 +362,14 @@ def main():
     f"\\,OutlineColour=&H00FFFFFF"
     f"\\,Outline=1"
   )
+  # v6.22：调色配置化（读取 merge_core 的环境变量，替代硬编码）
+  from step04_merge.merge_core import CONTRAST, SATURATION, VIGNETTE_ANGLE
+  color_filter = f"eq=contrast={CONTRAST}:saturation={SATURATION}"
+  if VIGNETTE_ANGLE:
+    color_filter += f",vignette=angle={VIGNETTE_ANGLE}"
   video_filter = (
     f"subtitles='{escaped_srt}':force_style='{style}',"
-    f"eq=contrast=1.15:saturation=0.85,"
-    f"vignette=angle=0.5"
+    f"{color_filter}"
   )
 
   _logger.info("[INFO] Native mode: applying transitions + concat filter")

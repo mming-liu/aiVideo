@@ -127,8 +127,18 @@ class CharacterBank:
         chapter_num: int,
     ) -> None:
         """注册新角色（尚无肖像）."""
+        # v6.23：角色编号（C01/C02... 按注册顺序自动分配）
+        max_n = 0
+        for c in self._data["characters"].values():
+            aid = (c or {}).get("asset_id", "")
+            if aid and aid.startswith("C"):
+                try:
+                    max_n = max(max_n, int(aid[1:]))
+                except ValueError:
+                    pass
         self._data["characters"][identifier] = {
             "identifier": identifier,
+            "asset_id": f"C{max_n + 1:02d}",
             "static_features": static_features,
             "dynamic_features": dynamic_features,
             "first_chapter": chapter_num,

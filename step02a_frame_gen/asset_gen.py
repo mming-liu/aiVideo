@@ -122,6 +122,21 @@ async def gen_scene_assets(image_adapter, force: bool = False) -> int:
             assets["near"] = {"path": str(near_path.resolve()),
                               "description": f"{ident} 近景功能场景参考图"}
 
+        # v6.23：侧面全景图（可选，从大场景派生，多视图）
+        side_path = scene_dir / "side.png"
+        if SCENE_NEAR_SHOT_ENABLED and (not side_path.exists() or force):
+            try:
+                img_out = await gen.generate_side(scene, str(wide_path), save_path=str(side_path))
+                if img_out is not None and _save_image(img_out, side_path):
+                    assets["side"] = {"path": str(side_path.resolve()),
+                                      "description": f"{ident} 侧面全景参考图"}
+                    logger.info(f"[ASSET] 场景 {ident} 侧面全景图 -> {side_path}")
+            except Exception as e:
+                logger.warn(f"[ASSET] 场景 {ident} 侧面全景图生成异常: {e}（保留大场景图）")
+        elif side_path.exists():
+            assets["side"] = {"path": str(side_path.resolve()),
+                              "description": f"{ident} 侧面全景参考图"}
+
         bank.set_assets(ident, assets)
         bank.save()
         total += 1

@@ -1123,9 +1123,8 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
             _s_idx = search_text.find(action_subject)
             if _s_idx >= 0:
                 _tail = search_text[_s_idx:_s_idx + 30]
-                if any(kw in _tail for kw in ("面向画", "朝向画", "盯向画", "望向画",
-                                              "面向右", "面向左", "朝画右", "朝画左",
-                                              "看画右", "看画左", "转向画")):
+                from style_prefix import ORIENTATION_KW
+                if any(kw in _tail for kw in ORIENTATION_KW):
                     subject_view = "side"
 
         # 出镜角色名集合：优先用 script characters（identifier），否则注册表 key
@@ -1264,7 +1263,127 @@ def _inject_object_size_anchor(shot: dict, text: str) -> str:
         return text
 
 
-def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str) -> str:
+# 服装颜色/服装词提示（幂等判定：desc 已含服装描述则不重复注入）
+_COSTUME_COLOR_HINTS = ("白", "素", "青", "蓝", "红", "黑", "绿", "紫", "褐", "金", "灰", "粉", "墨")
+_COSTUME_WORDS = ("袍", "衫", "衣", "裳", "裙", "袄", "裰", "服", "袈", "氅")
+
+
+def _inject_character_costume(desc: str, characters: list | None,
+                              shot: dict | None = None) -> str:
+    """给首帧/尾帧 prompt 注入出镜角色的服装特征（dynamic_features）.
+
+    出镜角色 = desc 中出现的角色名。按角色名周围窗口检测该角色是否已有服装
+    描述（颜色词+服装词，或服装词）——已有则跳过（幂等），否则追加
+    「{角色}身着{dynamic}」，保证图片模型知道角色服装颜色——否则「夜色深沉」
+    背景下模型自由发挥成深色（code-audit 2026-08-08 首帧杨旭深色衣 vs 角色
+    特征「素白色轻袍」）。"黑衣刺客"里的"衣"只算刺客的服装，不影响杨旭。
+
+    空镜（empty_scene）不注入（禁人物）。dynamic_features 缺失时跳过该角色。
+    """
+    if not desc or not characters or not shot:
+        return desc
+    try:
+        if is_empty_scene(shot, characters):
+            return desc
+        additions = []
+        for c in characters:
+            ident = c.get("identifier", "") or ""
+            if not ident or ident not in desc:
+                continue
+            dynamic = (c.get("dynamic_features") or "").strip()
+            if not dynamic:
+                continue
+            # 按角色名周围窗口检测该角色是否已有服装（幂等，避免只补一个角色）
+            idx = desc.find(ident)
+            window = desc[max(0, idx - 3):idx + 30]
+            if any(w in window for w in _COSTUME_WORDS):
+                continue  # 该角色已有服装词（如"黑衣刺客"）
+            additions.append(f"{ident}身着{dynamic}")
+        if additions:
+            return f"{desc}。{('，'.join(additions))}"
+        return desc
+    except Exception:
+        return desc
+
+
+# 尾帧目光确定性修复：错别字 + 看向动作结果对象
+_LF_GAZE_TYPO = (
+    ("倒倒", "紧紧"), ("倒到", "紧紧"),
+    ("望望", "望着"), ("看看", "看着"),
+)
+# 目光看向"不在场/消失对象"的模式（触发改为看动作结果对象）
+_LF_GAZE_LOST_OBJECT = (
+    "消失之处", "消失处", "水面刺客", "刺客消失", "画右水面", "画左水面",
+    "水中刺客", "刺客没入之处", "没入之处",
+)
+# 动作结果对象出现（场景含被刺倒的同伴）→ 才触发目光改写
+_LF_VICTIM_HINTS = ("倒下", "仰面倒", "仰面躺", "中刀", "被刺", "心口", "洇开", "倒地", "受伤")
+
+
+def fix_lf_desc_gaze(lf_desc: str, shot: dict | None = None,
+                     characters: list | None = None) -> str:
+    """修复尾帧 lf_desc 的角色目光（错别字 + 看向动作结果对象）.
+
+    用户反馈：尾帧听香「目光倒倒盯着画右水面刺客消失之处」——盯刺客消失的
+    水面，且"倒倒"是错别字。期望听香看向被刺倒的杨旭（被刺的同伴）。
+
+    修复逻辑（确定性，保守）：
+    1. 错别字：倒倒/倒到→紧紧 等叠字错写
+    2. 目光语义：若 lf_desc 含「目光/盯着/看向 + 消失/水面/刺客」且场景含
+       受伤结果对象（杨旭倒下/心口洇开），把该目光改写为「目光看向倒下的
+       杨旭」——看被刺的同伴，而非已消失的刺客。
+
+    保守触发：只修"明显在看不在场/消失对象"的目光；不含受伤结果对象时不动。
+    """
+    if not lf_desc:
+        return lf_desc
+    # 1. 错别字修复（叠字错写）
+    text = lf_desc
+    for old, new in _LF_GAZE_TYPO:
+        text = text.replace(old, new)
+
+    # 2. 目光语义修复：看消失对象 → 看向动作结果对象
+    try:
+        victim = None
+        for c in (characters or []):
+            ident = c.get("identifier", "") or ""
+            if ident and ident in text and any(h in text for h in _LF_VICTIM_HINTS):
+                victim = ident
+                break
+        if not victim:
+            return text
+        # 检测"目光 + 看/盯 + 消失对象"
+        gaze_patterns = (
+            ("目光倒倒盯着", "目光紧紧看向"),
+            ("目光紧紧盯着", "目光紧紧看向"),
+            ("目光盯着", "目光看向"),
+            ("目光望向", "目光看向"),
+            ("双眼盯着", "双眼看向"),
+            ("盯着", "看向"),
+        )
+        for gaze_old, gaze_new in gaze_patterns:
+            if gaze_old in text:
+                idx = text.find(gaze_old)
+                # 从 gaze 位置后到句尾/标点前 = 目光宾语段（"画右水面刺客消失之处"）
+                seg = text[idx + len(gaze_old):]
+                # 宾语段终止于中文标点
+                for _i, _ch in enumerate(seg):
+                    if _ch in "，。；！？":
+                        seg = seg[:_i]
+                        break
+                # 确认宾语段含消失对象（水面/消失/刺客）
+                if any(l in seg for l in _LF_GAZE_LOST_OBJECT):
+                    text = text.replace(gaze_old, gaze_new)
+                    # 整个宾语段替换为"倒下的{victim}"
+                    text = text[:idx + len(gaze_new)] + f"倒下的{victim}" + text[idx + len(gaze_old) + len(seg):]
+                    break
+    except Exception:
+        pass
+    return text
+
+
+def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
+                              characters: list | None = None) -> str:
     """构建实际生成图片的最终 prompt（供 QC 语义核对用）.
 
     与 _gen_first_frame_async / _gen_last_frame_async 的组装链一致：
@@ -1280,6 +1399,11 @@ def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str) -> str:
             add_image_strict_constraints,
         )
         text = preprocess_prompt_for_image(desc)
+        # v1.1：注入出镜角色服装特征（与 _gen_first_frame_async 生成链一致）
+        text = _inject_character_costume(text, characters, shot)
+        # v1.1：尾帧目光修复（与 _gen_last_frame_async 一致，QC 看到修复后 prompt）
+        if frame_kind == "last_frame":
+            text = fix_lf_desc_gaze(text, shot, characters)
         text = _inject_object_size_anchor(shot, text)
         text = sanitize_prompt(ensure_prefix(text, STYLE_PREFIX), verbose=False)
         text = add_image_strict_constraints(text, "首帧" if frame_kind == "first_frame" else "尾帧", shot=shot)
@@ -1361,7 +1485,7 @@ async def _gen_first_frame_async(
     # 路径都在此补算——缓存命中时 ff_desc_full 未计算，但 shot["ff_desc"] 已被
     # normalize 回写，用 _build_final_frame_prompt 补算得到与图片模型一致的文本。
     try:
-        shot["ff_desc_final"] = _build_final_frame_prompt(shot, ff_desc, "first_frame")
+        shot["ff_desc_final"] = _build_final_frame_prompt(shot, ff_desc, "first_frame", characters)
     except Exception:
         pass
 
@@ -1387,6 +1511,8 @@ async def _gen_first_frame_async(
         # 添加风格前缀 + 严格约束（与视频生成保持一致，确保风格统一）
         # 先预处理：替换 AI 可能误解的词汇
         ff_desc = preprocess_prompt_for_image(ff_desc)
+        # v1.1：注入出镜角色服装特征（防"夜色深沉"背景下模型自由发挥深色衣）
+        ff_desc = _inject_character_costume(ff_desc, characters, shot)
         # 场景物体尺寸锚定注入（船/车等物体比例防漂移，code-audit 08-06 钩子船太小）
         ff_desc = _inject_object_size_anchor(shot, ff_desc)
         ff_desc_full = sanitize_prompt(ensure_prefix(ff_desc, STYLE_PREFIX), verbose=False)
@@ -1488,7 +1614,7 @@ async def _gen_last_frame_async(
 
     # v1.1：挂实际生成最终 prompt（QC 语义核对用），与首帧同理
     try:
-        shot["lf_desc_final"] = _build_final_frame_prompt(shot, lf_desc, "last_frame")
+        shot["lf_desc_final"] = _build_final_frame_prompt(shot, lf_desc, "last_frame", characters)
     except Exception:
         pass
 
@@ -1514,6 +1640,10 @@ async def _gen_last_frame_async(
         # 添加风格前缀 + 严格约束（与视频生成保持一致，确保风格统一）
         # 先预处理：替换 AI 可能误解的词汇
         lf_desc = preprocess_prompt_for_image(lf_desc)
+        # v1.1：注入出镜角色服装特征（与首帧一致）
+        lf_desc = _inject_character_costume(lf_desc, characters, shot)
+        # v1.1：尾帧目光修复（错别字 + 看向动作结果对象——听香看被刺倒的杨旭）
+        lf_desc = fix_lf_desc_gaze(lf_desc, shot, characters)
         # 场景物体尺寸锚定注入（船/车等物体比例防漂移）
         lf_desc = _inject_object_size_anchor(shot, lf_desc)
         # 尾帧注入场景上下文 + 显式"重构图"指令：
