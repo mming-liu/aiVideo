@@ -1354,8 +1354,17 @@ def _check_emotion_visualization(shots: list[dict], hook: dict = None) -> dict:
         prompt = shot.get("prompt", "")
         motion_desc = shot.get("motion_desc", "")
 
-        # 合并检查文本
-        full_text = prompt + " " + motion_desc
+        # 剥离模板注入的固定段落（色彩情绪/物理特效等），这些由 LLM 统一输出，
+        # 其中的情绪词不反映角色表演指令，不应触发抽象情绪警告。
+        # 匹配「label：value」格式后截断到对应段落的末尾。
+        _EMOTION_SECTION_RE = re.compile(
+            r'(?:色彩情绪|物理特效|材质|光影|色调|主光源|辅光源)[^：:]*[：:]([^\n]*)(?:\n|$)',
+        )
+        clean_prompt = _EMOTION_SECTION_RE.sub('', prompt)
+        clean_motion = _EMOTION_SECTION_RE.sub('', motion_desc)
+
+        # 合并检查文本（剥离模板段落后）
+        full_text = clean_prompt + " " + clean_motion
 
         for emotion in abstract_emotion_words:
             if emotion in full_text:
@@ -1804,7 +1813,8 @@ def _check_script_novel_alignment(script: dict) -> dict:
     # 检查明显的新增物体（简化版：常见道具/场景对比）
     # 启发式检查，不追求完美。定义一次，随后应用到每镜头 prompt/帧描述。
     suspicious_patterns = [
-        # 新增人物类（narration 没提人名但 prompt 有人物描述）
+        # 新增人物类：匹配「一个+性别/年龄」等模糊人称（如「一个成年男性」）。
+        # 如果同一条文中还出现了已注册角色名，则该模糊描述大概率是指已知角色，跳过。
         (r'一个[成年青老年男女]', '[人物角色]'),
         # 新增物品类
         (r'手持[刀剑枪戟扇笛]', '[新增道具]'),
@@ -1817,6 +1827,11 @@ def _check_script_novel_alignment(script: dict) -> dict:
                       + shot.get("lf_desc", ""))
         for _pat, _label in suspicious_patterns:
             if re.search(_pat, check_text):
+                # 若同一条文中出现了已注册角色名，则该模糊描述大概率指向已知角色（如
+                # 「一个成年男性刺客」中「刺客」是已知角色），跳过以避免误报
+                has_known_char = any(c in check_text for c in known_chars)
+                if has_known_char and _label == '[人物角色]':
+                    continue
                 warnings.append(
                     f"镜头{idx}: 画面描述出现未锚定的{_label}（{_pat}），"
                     f"narration 中无对应，可能为幻觉编造"
@@ -3209,6 +3224,12 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
 
     # v6.4 新增：补全新添加的字段（如果 LLM 没有返回）
     _fill_missing_new_fields(script)
+
+    # narration 兜底：若 LLM 未输出顶层 narration，从 subtitle 拼接填充。
+    # 防止 _validate_script 报告「narration 与 subtitle 拼接不一致」（line 108-111），
+    # 同时也保证 step03 TTS 不会拿到空字符串而 raise ValueError。
+    if not script.get("narration"):
+        script["narration"] = "".join(s.get("subtitle", "") for s in script.get("shots", []))
 
     # v6.9 新增：自动修复（声音指令 + 说话人入画），必须在校验前执行，
     # 否则校验输出的「缺少（用中文说）」「说话人未入画」WARN 无法被消除
