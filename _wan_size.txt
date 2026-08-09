@@ -1,0 +1,15 @@
+===== size参数 =====
+
+ | **输出图像规格** |\n| wan2.7-image-pro | 万相2.7 image专业版，文生图（非组图生成）支持4K高清输出 | 图片格式：PNG。<br>图像分辨率和尺寸请参见 [size参数](https://help.aliyun.com/zh/model-studio/wan-image-generation-api-reference#wan27-param-size-section \"\")。 |\n| wan2.7-image | 万相2.7 image，生成速度更快 |\n\n**说明**\n\n调用前，请查阅各地域支持的 [模型列表与价格](https://help.aliyun.com/zh/model-studio/model-pricing#e2540d71a2utl \"\")。\n\n## 前提条件\n\n您需要已 [获取API Key](https://help.aliyun.com/zh/model-studio/get-api-key \"\") 并 [配置API Key到环境变量](https://help.aliyun.com/zh/model-studio/configure-api-key-through-environment-variables \"\")。\n\n**重要**\n\n华北2（北京）和新加坡地域拥有独立的 **API Key** 与 **请求地址**，不可混用，跨地域调用将导致鉴权失败或服务报错。\n\n**重要**\n\n阿里云百炼为华北2（北京）、新加坡地域推出了业务空间专属域名， **能够为
+
+===== 1K =====
+
+（可选）<br>关于输出图片分辨率参数，支持以下两种方式，不可混用：<br>**模型：wan2.7-image-pro**<br>- **方式一：指定输出图片的分辨率（推荐）**<br>  - 支持 1K、2K（默认）、4K 三种规格<br>    <br>  - **适用范围**：<br>    - 文生图（无图片输入，非组图生成）：支持1K、2K、4K。<br>      <br>    - 其他场景：支持1K、2K。<br>  - **各规格总像素**：1K：1024\\*1024、2K：2048\\*2048、4K：4096\\*4096<br>    <br>  - **图像比例**：<br>    - 当有图片输入时：输出宽高比与输入图像（多图输入时为最后一张）一致，并缩放到选定分辨率。<br>      <br>    - 当没有图片输入时：输出为正方形。<br>- **方式二：指定生成图像的宽高像素值**<br>  - 文生图：总像素在 \\[768\\*768, 4096\\*4096\\] 之间，宽高比范围为 \\[1:8, 8:1\\]。<br>    <br>  - 其他场景：总像素在 \\[768\\*768, 2048\\*2048\\] 之间，宽高比范围为 \\[1:8, 8:1\\]。<br>**模型：wan2.7-image**<br>- **方式一：指定输出图片的分辨率（推荐）**<br>  - 支持1K、2K（默认）两种规格，不支持4K。<br>- **方式二：指定生成图像的宽高像素值**<br>  - 所有场景下，总像素在 \\[768\
+
+===== 2K =====
+
+| --- |\n| #### 请求参数 | 文生图<br>图像编辑<br>交互式编辑<br>组图生成<br>> wan2.7-image-pro仅文生图场景支持4K分辨率，图像编辑和组图生成支持最高2K分辨率<br>```curl<br>curl --location 'https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation' \\<br>--header 'Content-Type: application/json' \\<br>--header \"Authorization: Bearer $DASHSCOPE_API_KEY\" \\<br>--data '{<br>    \"model\": \"wan2.7-image-pro\",<br>    \"input\": {<br>        \"messages\": [<br>            {<br>                \"role\": \"user\",<br>                \"content\": [<br>                    {\"text\": \"一间有着精致窗户的花店，漂亮的木质门，摆放着花朵\"}<br>                ]<br>            }<br>        ]<br>    },<br>    \"parameters\": {<br>   
+
+===== 分辨率 =====
+
+ | **模型简介** | **输出图像规格** |\n| wan2.7-image-pro | 万相2.7 image专业版，文生图（非组图生成）支持4K高清输出 | 图片格式：PNG。<br>图像分辨率和尺寸请参见 [size参数](https://help.aliyun.com/zh/model-studio/wan-image-generation-api-reference#wan27-param-size-section \"\")。 |\n| wan2.7-image | 万相2.7 image，生成速度更快 |\n\n**说明**\n\n调用前，请查阅各地域支持的 [模型列表与价格](https://help.aliyun.com/zh/model-studio/model-pricing#e2540d71a2utl \"\")。\n\n## 前提条件\n\n您需要已 [获取API Key](https://help.aliyun.com/zh/model-studio/get-api-key \"\") 并 [配置API Key到环境变量](https://help.aliyun.com/zh/model-studio/configure-api-key-through-environment-variables \"\")。\n\n**重要**\n\n华北2（北京）和新加坡地域拥有独立的 **API Key** 与 **请求地址**，不可混用，跨地域调用将导致鉴权失败或服务报错。\n\n**重要**\n\n阿里云百炼为华北2（北京）、新加坡地域推出了业务空间

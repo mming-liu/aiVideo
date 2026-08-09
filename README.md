@@ -117,7 +117,7 @@ python step04_merge/main.py
 | `HOOK_ENABLED` | 钩子分镜 | `1` 开启 |
 | `GAP_ANALYSIS_ENABLED` | 间隔分析 | `0` 关闭 |
 
-> 注：v4.1 起镜头数由 LLM 决定，`SHOT_COUNT_MIN/MAX` 仅作 validation 的 sanity 软护栏（代码默认 4–40，.env 覆盖为 6–25）。
+> 注：v4.1 起镜头数由 LLM 决定，`SHOT_COUNT_MIN/MAX` 仅作 validation 的 sanity 软护栏（代码默认 4–40，.env.content 覆盖为 6–25）。
 
 ### 视频生成（step02）
 

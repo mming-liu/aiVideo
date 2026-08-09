@@ -209,9 +209,9 @@ NEGATIVE_LAYERS = {
 
 
 def get_global_render_config() -> dict:
-    """获取当前全局渲染配置（可从 .env 覆盖）."""
+    """获取当前全局渲染配置（可从 .env.content 覆盖）."""
     config = dict(_GLOBAL_RENDER_DEFAULTS)
-    # 允许 .env 选择性覆盖
+    # 允许 .env.content 选择性覆盖
     env_overrides = {
         "resolution": os.getenv("RENDER_RESOLUTION"),
         "ratio": os.getenv("RENDER_RATIO"),
@@ -537,6 +537,11 @@ FF_PREACTION_CLAUSE_FIXES = {
     "浪花高卷": None,
     "水珠沿刀刃滑落": None,
     "水珠滑落": None,
+    # 手持物+身体粘连病句（08-09 首帧杨旭姿势）：「左手钓杆垂身体后仰」把钓杆
+    # 和身体动作混在一个分句，模型理解不了钓杆归属 → 拆成钓杆垂挂 + 身体坐姿。
+    "左手钓杆垂身体后仰": "左手握钓杆，钓杆垂向水面",
+    "钓杆垂身体后仰": "握钓杆，钓杆垂向水面",
+    "钓杆垂身": "握钓杆，钓杆垂挂",
 }
 
 # 动作残留虚词（前一刻改写时剥离，如「双腿一弹正倒纵入水」里的「一弹/正」）
@@ -877,6 +882,71 @@ def _preactionize_associated_clause(clause: str, anchor: str | None) -> str | No
     return clause
 
 
+# 手持物+身体粘连病句：钓杆/鱼竿/伞/扇等手持物直接连在身体动作后，模型无法
+# 判断归属（「左手钓杆垂身体后仰」→ 钓杆到底在左手还是身体？）。长词优先。
+# ⚠️ 替换词禁用「入水/落水/没入」等 FF_MOTION_VERBS——会二次命中前一刻改写产生病句。
+_FF_GRAMMAR_HANDHELD = (
+    ("左手钓杆垂身体后仰", "左手握钓杆，钓杆垂向水面"),
+    ("右手钓杆垂身体后仰", "右手握钓杆，钓杆垂向水面"),
+    ("钓杆垂身体后仰", "握钓杆，钓杆垂向水面"),
+    ("钓杆垂身", "握钓杆，钓杆垂挂"),
+    ("鱼竿垂身体后仰", "握鱼竿，鱼竿垂向水面"),
+)
+
+
+def _fix_ff_grammar(ff_desc: str) -> str:
+    """ff_desc 病句语法修复（不依赖动作检测闸门，幂等）.
+
+    修复 LLM 输出的手持物+身体粘连病句（钓杆/鱼竿/伞/扇 + 垂身/后仰混写），
+    让图片模型能正确理解「谁拿什么、身体什么姿势」。长词优先替换。
+    """
+    if not ff_desc:
+        return ff_desc
+    out = ff_desc
+    for old, new in _FF_GRAMMAR_HANDHELD:
+        if old in out:
+            out = out.replace(old, new)
+    return out
+
+
+# 潜伏威胁站位硬锚（08-09 首帧刺客朝左「背后长眼睛」）：潜伏水下+目光望向画X
+# 的目标，但没写明威胁源自己站在画左还是画右，模型自由发挥成背对目标或朝左。
+# 修复：检测「潜伏水下 + 目光望向画X的[角色]」，在分句前补「潜伏于画X水下」
+# 站位锚——威胁源站画左、望画右的目标，视线与站位同向（规则41）。
+_FF_LURK_POSITION_FIXES = (
+    # 潜伏水下 + 望向画右 → 威胁源站画左（左侧望右侧目标）
+    ("潜伏水下，目光", "潜伏于画左水下，目光"),
+    ("潜伏水下，目光", "潜伏于画左水下，目光"),
+    ("潜伏水下", "潜伏于画左水下"),
+)
+
+
+def _fix_ff_lurk_position(ff_desc: str) -> str:
+    """给潜伏威胁（刺客/黑衣人潜伏水下）补画左站位硬锚，防「背对目标/朝左」.
+
+    图片模型对「潜伏水下+目光望向画X」这种只锚视线不锚站位的描述，容易把
+    威胁源画成朝镜头或朝左（背后长眼睛）。补上「潜伏于画左水下」让模型明确
+    威胁源在画左、望向画右目标（规则41 威胁源-视线耦合在图片层的落地）。
+    """
+    if not ff_desc or not isinstance(ff_desc, str):
+        return ff_desc
+    # 仅当「潜伏」类威胁源描述里既没有站位锚、又有望向目标方向时补锚
+    has_lurk = any(w in ff_desc for w in ("潜伏", "潜于", "藏身水中", "只露一双"))
+    if not has_lurk:
+        return ff_desc
+    # 已有明确站位锚（潜伏于画X / 画X水下 / 画X侧）→ 跳过
+    if any(a in ff_desc for a in ("潜伏于画", "画左水下", "画右水下", "画左侧", "画右侧", "画左方", "画右方")):
+        return ff_desc
+    # 望向画右目标 → 补「画左」站位；望向画左目标 → 补「画右」站位
+    if "望向画右" in ff_desc or "望向画右上" in ff_desc or "盯向画右" in ff_desc:
+        return ff_desc.replace("潜伏水下", "潜伏于画左水下", 1) \
+                      .replace("潜于水下", "潜于画左水下", 1)
+    if "望向画左" in ff_desc or "盯向画左" in ff_desc:
+        return ff_desc.replace("潜伏水下", "潜伏于画右水下", 1) \
+                      .replace("潜于水下", "潜于画右水下", 1)
+    return ff_desc
+
+
 def normalize_ff_desc(ff_desc: str, shot: dict | None = None,
                       characters=None) -> str:
     """ff_desc 归一化：多动作/进行态堆叠 → 动作「前一刻」静态定格（幂等、保守）.
@@ -889,6 +959,11 @@ def normalize_ff_desc(ff_desc: str, shot: dict | None = None,
     """
     if not ff_desc or not isinstance(ff_desc, str):
         return ff_desc
+    # 病句语法修复先行（不依赖动作检测闸门）：「左手钓杆垂身体后仰」等手持物+身体
+    # 粘连，模型理解不了钓杆归属。与「前一刻」改写无关，任何 ff_desc 都应先修语法。
+    ff_desc = _fix_ff_grammar(ff_desc)
+    # 潜伏威胁站位硬锚：刺客「潜伏水下+望向画X」缺站位 → 补「潜伏于画X水下」
+    ff_desc = _fix_ff_lurk_position(ff_desc)
     if not detect_ff_multi_action(ff_desc, characters):
         return ff_desc
     text = _strip_ff_time_advance(ff_desc)
@@ -1053,6 +1128,18 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                 "禁止两个人拿武器。只有刺客一个人拿武器。"
             )
 
+        # 性别硬约束（08-09 首帧听香被画成男）：仅靠「一袭春衫」等服装词不足以
+        # 约束性别，图片模型会参考图生图随机发挥。显式标注性别防止听香/杨旭性别错乱。
+        if has_tingxiang:
+            strict_constraints += (
+                "【性别】听香是年轻女子，面容秀美，鹅蛋脸，身段娇柔；"
+                "必须画成女性，禁止男性化/中性化。"
+            )
+        if has_yangxu:
+            strict_constraints += (
+                "【性别】杨旭是青年男子，身形挺拔；必须画成男性。"
+            )
+
         # 统计本镜头应出现的人物数量，显式限制
         char_names = []
         if has_yangxu:
@@ -1086,6 +1173,15 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                 f"{c}面朝{d}方向，侧身不看向镜头" for c, d in _orient_pairs
             )
             strict_constraints += f"【朝向】{_parts}。"
+
+        # 首帧禁血/禁动作结果（08-09 首帧杨旭胸口血迹、刺客血眼）：首帧是动作
+        # 「前一刻」（破水前/未刺中），画面必须干净无血。血污/伤口只允许出现在尾帧。
+        if frame_type == "首帧" and has_assassin:
+            strict_constraints += (
+                "【首帧禁血】这是动作开始前的画面，刺客尚未出水、未刺中任何人。"
+                "所有人物身上禁止血迹、血污、血点、洇痕；眼睛禁止充血/泛红/血丝。"
+                "杨旭胸口、身上必须干净无伤。"
+            )
     else:
         # 无 shot 上下文时，只添加通用约束（不注入具体角色描述）
         strict_constraints += (

@@ -23,10 +23,13 @@ from shared.config import (
     BAILIAN_T2I_MODEL,
 )
 from shared.key_scheduler import KeyScheduler
+from shared.error_fmt import parse_retry_after
 
 
-# Bailian 图片 API 限速（每分钟请求数，默认 3，类似 Agnes 21s 冷却）
-_BAILIAN_IMAGE_RPM = int(os.getenv("BAILIAN_IMAGE_RPM", "3"))
+# Bailian 图片 API 限速（每分钟请求数，默认 300，类似 Agnes 21s 冷却）
+# 官方限流页：wan2.7-image / wan2.7-image-pro RPS=5（≈300/min），并发 5。
+# 旧 qwen-image 系列是 RPM=1/min，若回退到该系列模型请覆盖此值。
+_BAILIAN_IMAGE_RPM = int(os.getenv("BAILIAN_IMAGE_RPM", "300"))
 
 from functools import partial  # noqa: E402
 from shared.log_utils import verbose_write  # noqa: E402
@@ -117,7 +120,7 @@ class BailianImageService(ImageGenerationService):
             "10x18": "10*18",
             "10x16": "10*16",
             "10x12": "10*12",
-            "720x1280": "720*12",
+            "720x1280": "720*1280",
             "1024x1024": "10*10",
             "10*24": "10*24",
             "10*18": "10*18",
@@ -134,8 +137,15 @@ class BailianImageService(ImageGenerationService):
         model_idx = 0
         last_error = ""
         # 429 重试参数
-        _MAX_429_RETRIES = 3
-        _429_RETRY_DELAY = 5  # 秒
+        # bailian 图生图模型（qwen-image 系列）限流为 RPM=1/min，429 表示 1 分钟冷却窗口。
+        # 不能按 5/10/15s 递增快速重发——窗口没到重发必再 429，白烧免费额度。
+        # 策略：优先读服务端 Retry-After/错误体剩余秒数；读不到则按完整冷却窗口兜底。
+        # 冷却窗口按 BAILIAN_IMAGE_RPM 推导（wan2.7-image 默认 RPS=5 ≈ 窗口 0.2s，
+        # qwen-image RPM=1 ≈ 窗口 60s），兜底至少 5s 避免高并发下瞬时限流。
+        _MAX_429_RETRIES = 2
+        _429_RATE_LIMIT_WINDOW = 60.0 / _BAILIAN_IMAGE_RPM if _BAILIAN_IMAGE_RPM > 0 else 60.0  # 秒
+        _429_RATE_LIMIT_WINDOW = max(_429_RATE_LIMIT_WINDOW, 5.0)  # 下限 5s
+        _429_RETRY_BACKOFF = 2  # 秒：窗口末尾的额外缓冲（网络抖动/时钟偏差）
 
         while model_idx < len(self._model_queue):
             model = self._model_queue[model_idx]
@@ -182,6 +192,11 @@ class BailianImageService(ImageGenerationService):
                     "parameters": {
                         "size": size_str,
                         "n": 1,  # 生成1张
+                        # 官方 wan-image 文档：图像编辑模式（I2I/多图参考）下
+                        # prompt_extend 默认 true，会智能改写正向提示词。
+                        # 我们的首帧/尾帧 prompt 已精调（构图锚定/服装一致/站姿锁定），
+                        # 改写会破坏锚定 → 显式关闭，用原始提示词。
+                        "prompt_extend": False,
                     }
                 }
 
@@ -237,8 +252,23 @@ class BailianImageService(ImageGenerationService):
                     # ---- 429: 请求限速，等待后重试 ----
                     if rsp.status_code == 429:
                         retry_429 += 1
-                        wait = _429_RETRY_DELAY * retry_429  # 5s, 10s, 15s
-                        _verbose_write(f"  [镜头{req.shot_index}] [!] 429 限速 (retry {retry_429}/{_MAX_429_RETRIES})，等待 {wait}s...")
+                        # 优先用服务端返回的剩余等待秒数（Retry-After 头 / 错误体 retry 字段）；
+                        # 读不到则按 RPM=1/min 的完整冷却窗口兜底（60s + 缓冲）。
+                        wait = None
+                        retry_after_hdr = getattr(rsp, "headers", {}).get("Retry-After") \
+                            or getattr(rsp, "headers", {}).get("retry-after")
+                        if retry_after_hdr:
+                            try:
+                                wait = float(retry_after_hdr)
+                            except (TypeError, ValueError):
+                                wait = None
+                        if wait is None:
+                            wait = parse_retry_after(getattr(rsp, "message", "") or getattr(rsp, "text", ""))
+                        if wait is None:
+                            wait = _429_RATE_LIMIT_WINDOW
+                        wait = max(wait, 1.0) + _429_RETRY_BACKOFF  # 至少 1s + 缓冲
+                        _verbose_write(f"  [镜头{req.shot_index}] [!] 429 限速 (retry {retry_429}/{_MAX_429_RETRIES})，"
+                              f"等待 {wait:.0f}s（RPM=1/min 冷却窗口）...")
                         time.sleep(wait)
                         continue
 
@@ -257,7 +287,11 @@ class BailianImageService(ImageGenerationService):
                     break
 
                 except Exception as e:
-                    last_error = f"生成异常: {e}"
+                    # 异常路径：必须是显式标记退出条件。此前这里只 break 当前迭代，
+                    # retry_429 不递增 → while retry_429 <= _MAX_429_RETRIES 永远成立 →
+                    # 403 免费额度耗尽时无限重发（08-09 实测 645 次提交、0 张产出）。
+                    # 显式赋退出标记，让下方统一 break 逻辑生效。
+                    last_error = f"生成异常: {e}" if str(e) else "生成异常（无错误详情，疑似限流/额度/参数问题）"
                     break
 
             # 内部 retry 循环正常结束（没 break）说明超出 429 重试上限
@@ -266,7 +300,8 @@ class BailianImageService(ImageGenerationService):
                 break
 
             # last_error 非空表示内层 break 了（非模型切换），不再尝试下一个模型
-            if last_error and rsp.status_code != 403:
+            # 注意：异常路径 rsp 可能未定义，必须用局部变量判断，避免 NameError
+            if last_error:
                 break
 
         return ImageGenerationResult(success=False, error=last_error)

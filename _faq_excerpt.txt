@@ -1,0 +1,17 @@
+m/zh/product/32348.html)\n\n[Data Exchange](https://help.aliyun.com/zh/product/2655805.html)\n\n图像API接口的通用问题汇总，包含接口调试、模型计费与限流、接口高频报错等。\n\n本文涉及的图像模型有：文生图V1和V2、涂鸦作画、图像局部重绘、Cosplay动漫人物生成、人像风格重绘、虚拟模特、鞋靴模特、图像画面扩展、人物实例分割、图像擦除补全、创意海报生成、图像背景生成、图配文。\n\n## **本地调试接口**\n\n图像API均支持HTTP调用。下面以文生图API为例展示本地调试HTTP接口的流程
+
+=====
+
+时免费”时，表示该模型处于公测阶段，免费额度用尽后不可使用。\n\n\n**计费说明**\n\n- 当计费有明确单价时，如0.02元/张，表示该模型已商业化，免费额度用尽或过期后需付费使用。\n\n- 计费项：只对模型成功生成的输出图片进行收费，其余情况暂不计费。\n\n- 付费方式：由阿里云主账号统一付费。RAM子账号不能独立计量计费，必须由所属的主账号付费。如果您需要查询账单信息，请前往阿里云控制台 [账单概览](https://billing-cost.console.aliyun.com/finance/month-bill/account)。\n\n- 充值途径：您可以在阿里云控制台 [
+
+=====
+
+n| 图像模型1 | 500张 | 限时免费 | 2 | 1 |\n| 图像模型2 | 500张 | 0.02元/张 | 2 | 1 |\n\n**免费额度**\n\n- 额度说明：免费额度是指模型成功生成的输出图片数量。输入图片及模型处理失败的情况不占用免费额度。\n\n- 领取方式：开通阿里云百炼大模型服务后自动发放，有效期90天。\n\n- 使用账号：阿里云主账号与其RAM子账号共享免费额度。\n\n- 更多详情请参见 [新人免费额度](https://help.aliyun.com/zh/model-studio/new-free-quota \"\")。\n\n\n**限时免费**\n\
+
+=====
+
+Ops](https://help.aliyun.com/zh/product/3027368.html)\n\n数据库\n\n瑶池数据库\n\n- [瑶池控制台](https://help.aliyun.com/zh/product/2842933.html)\n\n关系型数据库\n\n- [云原生数据库 PolarDB](https://help.aliyun.com/zh/polardb/)\n- [云数据库 RDS](https://help.aliyun.com/zh/rds/)\n- [云数据库 OceanBase 版（文档停止维护）](https://help.aliyun.com/z
+
+=====
+
+h/product/32348.html)\n\n[Data Exchange](https://help.aliyun.com/zh/product/2655805.html)\n\n图像API接口的通用问题汇总，包含接口调试、模型计费与限流、接口高频报错等。\n\n本文涉及的图像模型有：文生图V1和V2、涂鸦作画、图像局部重绘、Cosplay动漫人物生成、人像风格重绘、虚拟模特、鞋靴模特、图像画面扩展、人物实例分割、图像擦除补全、创意海报生成、图像背景生成、图配文。\n\n## **本地调试接口**\n\n图像API均支持HTTP调用。下面以文生图API为例展示本地调试HTTP接口的流程。\n

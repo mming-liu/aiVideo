@@ -216,10 +216,15 @@ def _print_content_issue_summary(script: dict, shots: list[dict]) -> None:
             flagged.append(f"镜头{idx}: 语义风险关键词 {found}（需人工确认是否保留）")
 
     # 3. 连续空镜（事件轴分布硬性检查项）
-    empty_subjects = {"空镜", "荷塘", "日落", "日出", "山", "水", "湖", "田野", "村庄"}
+    # 空镜词用「纯场景词」匹配，禁止用单字「水」——「刺客出水」含「水」被误判为空镜
+    # （08-09 日志镜头7-9 刺客出水/刺向/遁水被误报连续空镜）。只有 main_subject
+    # 是纯场景/环境（不含动作、不含角色名）才算空镜。
+    empty_subjects = {"空镜", "荷塘", "日落", "日出", "田野", "村庄", "山峦", "水面", "湖面"}
     run = 0
     for shot in shots:
-        if any(s in (shot.get("main_subject", "") or "") for s in empty_subjects):
+        ms = shot.get("main_subject", "") or ""
+        is_empty = any(s in ms for s in empty_subjects)
+        if is_empty:
             run += 1
         else:
             run = 0
@@ -330,12 +335,23 @@ def _check_audio_instruction(shots: list[dict]) -> None:
 
 
 def _check_grounding(shot: dict, novel_text: str) -> bool:
-    """简单的原文锚点检查：检查 narration 是否在原文中有对应内容。"""
+    """简单的原文锚点检查：检查 narration 是否在原文中有对应内容。
+
+    先剥掉「说话人道：」前缀再校验台词体——LLM 按规则0给原文台词补说话人前缀
+    （「住嘴！张十三怒极」→「张十三怒道：住嘴！」），前缀（说话人+道/怒道）是
+    生成层补充、不一定逐字来自原文，但台词体本身逐字引用原文。若整段切 5 字
+    子串校验，前缀变了就误报"原文未找到"（08-09 镜头17「张十三怒道：住嘴！」）。
+    """
     narration = shot.get("narration_segment", "").strip()
     if not narration:
         return True
 
-    narration_clean = narration.replace(" ", "").replace("，", "").replace("。", "")
+    # 剥掉「说话人道：」前缀（说话人 + 道/说/怒道/厉声道 + 全角/半角冒号）
+    narration_clean = re.split(r"[:：]", narration, maxsplit=1)[-1]
+    narration_clean = narration_clean.replace(" ", "").replace("，", "").replace("。", "")
+    if len(narration_clean) < 5:
+        # 台词体太短（如「住嘴！」）无法切 5 字子串，退化为直接查原文
+        return narration_clean in novel_text
     for i in range(len(narration_clean) - 4):
         chunk = narration_clean[i:i+5]
         if chunk in novel_text:
@@ -923,7 +939,23 @@ def _check_gaze_direction(shots, hook: dict = None) -> dict:
 
         wrong = []
         # 先剔除机位/前缀术语，避免其内部「视」被误当视线（影视剧/平视/微仰视/俯视/仰视）
-        clean_text = re.sub(r'影视剧|平视|微仰视|俯视|仰视', '', text)
+        clean_text = re.sub(r'影视剧|平视|微仰视|俯视|仰视|视角|镜头视角', '', text)
+
+        # v6.27：潜伏威胁（只露眼睛/头肩/半身藏水中）视线朝向校验——只露眼睛的潜伏
+        # 姿态最易被画成正对镜头，必须显式写「自水面下斜望画X」+「禁止正对镜头」，
+        # 否则模型会把潜伏威胁画成看向观众（threat-gaze-coupling 规则41.3 的补充校验）。
+        _lurking_hints = ("只露一双", "只露出一双", "仅露一双", "只露头肩", "半身藏于", "潜伏水下", "潜于水下", "藏身水中")
+        if any(h in text for h in _lurking_hints):
+            _lurking = re.search(r'[目光双眼眼神][^，。；！？]{0,3}[盯看望斜望][^，。；！？]{0,16}', text)
+            if _lurking:
+                _seg = _lurking.group()
+                if not any(d in _seg for d in correct_dirs):
+                    warnings.append(
+                        f'{label}{idx}: 潜伏威胁（只露眼睛/头肩）视线 {_seg} 缺方位锚定，'
+                        f'应写「目光自水面下斜望画X的[目标]，侧向朝向目标，禁止正对镜头」'
+                        f'——否则水面露眼最易画成正对镜头（规则41）。'
+                    )
+
         for m in wrong_pattern.finditer(clean_text):
             w = m.group()
             # 过滤运动用法（「向」后接方位词）+ 已含画左/画右的画内锚点
@@ -1522,6 +1554,30 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
     if warnings:
         for warn in warnings:
             print(f"[CHECK] 首尾帧完整性: [WARN] {warn}")
+
+    # 尾帧武器残留检查（08-09 钩子坑：匕首尖停水面）：刺客/杀手没入水中后，
+    # 武器必须一并没入，禁止「仅余一截刀尖刺破水面/露出水面」这类卡在水面的
+    # 中间态——视频模型会把刀尖当【视频终点】定格，观众看到匕首一直戳水面。
+    # 注：函数内 1486 行 `import re` 是局部遮蔽，这里统一用模块级 `_re`。
+    import re as _re
+    _weapon_residue_warns = []
+    for _shot in list(shots) + ([hook] if hook else []):
+        _idx = _shot.get("index", "?")
+        _lf = _shot.get("lf_desc", "") or ""
+        # 武器半截露水面：刀/匕首/剑 + 刺破水面/露出水面/水面之上
+        _weapon_residue = _re.search(
+            r"(?:刀尖|匕首|剑尖|刀|匕)[^。！？；]{0,6}(?:刺破水面|露出水面|露在水面|探出水面|挑破水面|浮于水面)",
+            _lf,
+        )
+        if _weapon_residue:
+            _weapon_residue_warns.append(
+                f"镜头{_idx}: 尾帧武器残留「{_weapon_residue.group(0)}」——武器半截卡在水面，"
+                f"视频模型会把它当【视频终点】定格，观众看到匕首尖一直戳在水面。"
+                f"应让武器随人彻底没入水下（不提武器），或已被拔出握在岸上人物手中，"
+                f"禁止「刀尖刺破水面」这类中间态（规则609）。"
+            )
+    for w in _weapon_residue_warns:
+        print(f"[CHECK] 尾帧武器残留: [WARN] {w}")
 
     # 硬性检查：lf_desc 不能为空，首尾帧不能完全相同
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
@@ -2896,6 +2952,9 @@ def _run_prompt_checklist(script: dict) -> dict:
     results["dialogue_length"] = _check_dialogue_length(shots, script.get("hook"))
     results["dwell_time"] = _check_dwell_time(shots, script.get("hook"))
 
+    # v6.27 新增：角色状态锁定校验（角色状态锁定表吸收，跨镜坐站跳变检测）
+    results["pose_continuity"] = _check_pose_continuity(shots)
+
     # 综合判定：任一硬性检查失败则整体不通过
     # v6.5: 增加 script_novel_alignment 到硬性检查
     # v6.7: 增加 ff_lf_completeness 到硬性检查（lf_desc 为空会导致静态视频）
@@ -3052,6 +3111,13 @@ def post_fix_shot_prompts(script: dict) -> dict:
             shot["lf_desc"] = fix_lf_desc_gaze(
                 shot["lf_desc"], shot, script.get("characters", []))
 
+        # v6.28：尾帧武器残留确定性修复（从根上解决「匕首尖停水面」）。
+        # LLM 常把「刺客没入水中」写成「仅余一截刀尖刺破水面」——刀尖半截卡在水面，
+        # 视频模型把 lf_desc 当【视频终点】定格，观众看到匕首一直戳水面。
+        # 这里落盘前自动改写为「彻底没入 + 水面涟漪」，不依赖 LLM 自觉（08-09 钩子坑）。
+        if shot.get("lf_desc"):
+            shot["lf_desc"] = _fix_lf_weapon_residue(shot["lf_desc"])
+
     # hook 也需要光位量化 + 情绪可视化修复（光位先，让情绪词先驱动光位选择）
     hook = script.get("hook")
     if hook and isinstance(hook, dict):
@@ -3068,7 +3134,54 @@ def post_fix_shot_prompts(script: dict) -> dict:
             hook["lf_desc"] = fix_lf_desc_gaze(
                 hook["lf_desc"], hook, script.get("characters", []))
 
+        # v6.28：hook 尾帧武器残留确定性修复（同 shot）
+        if hook.get("lf_desc"):
+            hook["lf_desc"] = _fix_lf_weapon_residue(hook["lf_desc"])
+
     return script
+
+
+# 尾帧武器残留：武器半截露水面 → 彻底没入（从根上修「匕首尖停水面」）
+# LLM 常写「仅余一截刀尖刺破水面/露出水面」——刀尖半截卡水面，视频模型当
+# 【视频终点】定格。落盘前确定性改写为「彻底没入 + 水面涟漪」，保留动作结果
+# （受伤/浪花）不删，只把「武器半截露水面」的中间态改掉。
+# 通用性：武器词覆盖刀/剑/匕首/枪/矛/戟/斧/锏/鞭/钩/镖等冷兵器；动词覆盖
+# 刺破/露出/探出/浮于/挑破/悬于/划过 等水面残留表达。
+# 匹配策略：**不消费武器名本身**（保留「长枪/方天画戟」），只消费武器名后
+# 的残留动词段（刺破水面/露出水面/浮于水面），替换为「{武器名}已没入水下」。
+# 同时吞掉「仅余一截/只剩/仅剩」这类残留前缀（「仅余一截刀尖已没入水下」语义
+# 矛盾——「仅余」暗示残留，「已没入」说没入）。避免替换吞掉武器名造成「一支长」
+# 破句，也避免「水面」重复。
+_LF_WEAPON_RESIDUE_RE = re.compile(
+    r"(?:仅余|只剩|仅剩|留下)?[一截枝杆柄支]?(?P<weapon>刀尖|匕首|剑尖|枪尖|刀|剑|枪|矛|戟|斧|锏|鞭|钩|镖)"
+    r"[^。！？；]{0,8}?(?:刺破水面|露出水面|露在水面|探出水面|挑破水面|浮于水面|悬于水面|划过水面|戳破水面)",
+)
+
+
+def _fix_lf_weapon_residue(lf_desc: str) -> str:
+    """确定性改写尾帧武器残留：武器半截露水面 → 已彻底没入水下.
+
+    通用正则匹配「武器名 + 水面残留动词」，替换为「{武器名}已没入水下」——
+    保留武器名（长枪/方天画戟），把残留动词段改掉，避免吞词/破句。
+    保留受伤结果/浪花等有效动作结果；非水面残留不误伤。
+    """
+    if not lf_desc or not isinstance(lf_desc, str):
+        return lf_desc
+
+    def _repl(m):
+        weapon = m.group("weapon")
+        return f"{weapon}已没入水下"
+
+    out = _LF_WEAPON_RESIDUE_RE.sub(_repl, lf_desc)
+    if out == lf_desc:
+        return lf_desc  # 无残留，原样返回
+    # 清理改写后的孤立标点/重复（「没入水中，水面涟漪，浪花高卷」正常；
+    # 「枪已没入水下，随波摇晃」自然）
+    out = re.sub(r"([，、])\s*([，、。])", r"\2", out)       # ，， → 。
+    out = re.sub(r"[，、]\s*。", "。", out)                  # ，。 → 。
+    out = re.sub(r"\s{2,}", " ", out)
+    out = out.strip(" ，、。") + ("。" if out.strip(" ，、。") and not out.strip().endswith("。") else "")
+    return out
 
 
 # 情绪词 → 可视化动作（与 _check_emotion_visualization 的 emotion_to_action 同源）
@@ -3735,3 +3848,113 @@ def _check_dwell_time(shots: list[dict], hook: dict = None) -> dict:
     for w in warnings:
         print(f"[CHECK] 静态停留: [WARN] {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+# ============================================================================
+# v6.27 新增：角色状态锁定校验（角色状态锁定表吸收——根治「坐站跳变」）
+# ============================================================================
+# 短剧 skill 三件套的「角色状态锁定表」核心主张：同一角色在连续镜头中的
+# 身体姿势状态（坐/站/蹲/跪/躺/立）不能无动机跳变——上一镜坐着、下一镜
+# 忽然站起而镜头/旁白没交代「起身」，视频模型会脑补一个不存在的过渡，
+# 导致动作生硬或穿模。aiVideo 没有逐镜状态锁字段，改由跨镜校验兜底：
+# 同一角色相邻镜头姿势状态冲突且无「状态转换动作」衔接 → WARN。
+_POSE_STATES = ("坐", "站", "蹲", "跪", "躺", "卧", "趴", "立")
+# 状态转换动作：任一出现在当前镜 prompt/motion/lf 或下镜 prompt/ff，
+# 说明姿势变化有动机交代（起身/坐下/站起/落座/蹲下/跪倒/爬起…），不算跳变
+_POSE_TRANSITION_ACTIONS = (
+    "起身", "站起", "站了起", "站起身来", "坐起", "坐下", "落座", "入座", "就座",
+    "蹲下", "蹲了", "跪倒", "跪下", "跪坐", "卧倒", "躺下", "倒下", "倒地",
+    "爬起", "翻身", "起来", "上船", "下船", "上岸", "下岸", "出舱", "进舱",
+    "迈步", "踏步", "行走", "走进", "走出", "站到", "走向", "走到", "站定",
+    "扶着", "撑地", "撑身", "欠身", "起身离",
+)
+
+
+def _check_pose_continuity(shots: list[dict]) -> dict:
+    """跨镜姿势状态连续性检查（角色状态锁定表吸收，根治「坐站跳变」）.
+
+    检测：同一角色出现在相邻镜头时，两镜的姿势状态词（坐/站/蹲/跪/躺）冲突，
+    但当前镜结尾 / 下镜开头没有任何「状态转换动作」（起身/坐下/站起等）衔接，
+    则提示姿势跳变——视频模型会在两镜之间脑补一个不存在的起身/落座过渡。
+
+    只 WARN 不阻断（姿势状态由 LLM 按原文决定，此处仅提示补动机镜头或衔接动作）。
+    """
+    warnings = []
+    for i in range(len(shots) - 1):
+        curr, nxt = shots[i], shots[i + 1]
+        ci, ni = curr.get("index", "?"), nxt.get("index", "?")
+        if ci == 0 or ni == 0:
+            continue  # hook 独立，不参与相邻姿态链
+        # 同一角色：取两镜共有的 main_subject 或 prompt 中共同出现的角色名
+        # 简化：用「角色锚点 [名: 特征]」提取，兼容 main_subject 直接是角色名
+        common_chars = _common_present_characters(curr, nxt)
+        if not common_chars:
+            continue
+
+        curr_text = ((curr.get("prompt") or "") + " " +
+                     (curr.get("motion_desc") or "") + " " +
+                     (curr.get("lf_desc") or ""))
+        nxt_text = ((nxt.get("prompt") or "") + " " +
+                    (nxt.get("ff_desc") or "") + " " +
+                    (nxt.get("motion_desc") or ""))
+        for char_id in common_chars:
+            pose_curr = _extract_pose_for_char(curr_text, char_id)
+            pose_nxt = _extract_pose_for_char(nxt_text, char_id)
+            if not pose_curr or not pose_nxt or pose_curr == pose_nxt:
+                continue  # 未检出姿势或姿势一致 → 无跳变
+            # 姿势变了：检查是否有转换动作衔接（当前镜结尾或下镜开头）
+            transition_mentioned = any(a in curr_text or a in nxt_text
+                                       for a in _POSE_TRANSITION_ACTIONS)
+            if transition_mentioned:
+                continue  # 有动机交代（起身/坐下…），不算跳变
+            warnings.append(
+                f"镜头{ci}→{ni}: 角色「{char_id}」姿势状态跳变（{pose_curr}→{pose_nxt}）"
+                f"但无「起身/坐下/站起」等转换动作衔接——视频模型会脑补一个不存在的过渡，"
+                f"建议补状态转换动作或过渡镜头（角色状态锁定表）。"
+            )
+    for w in warnings:
+        print(f"[CHECK] 角色状态锁定: [WARN] {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
+
+
+def _common_present_characters(curr: dict, nxt: dict) -> list[str]:
+    """提取相邻两镜共同出现的角色（角色锚点 [名:特征] 或 main_subject）."""
+    def extract(shot: dict) -> set:
+        found = set()
+        text = (shot.get("prompt") or "") + (shot.get("ff_desc") or "") + (shot.get("lf_desc") or "")
+        for m in re.finditer(r"\[([^\]：:]{1,8})[:：]", text):
+            found.add(m.group(1).strip())
+        ms = (shot.get("main_subject") or "").strip()
+        if ms and len(ms) <= 6:  # main_subject 是角色名（短、非句子）
+            found.add(ms)
+        return found
+
+    return sorted(extract(curr) & extract(nxt))
+
+
+def _extract_pose_for_char(text: str, char_id: str) -> str | None:
+    """从文本中提取指定角色的姿势状态词.
+
+    命中顺序：姿势词出现在该角色名附近（前后 6 字内）优先；
+    若全句只含一个姿势词且该角色是唯一主体，也接受（简化启发式）。
+    """
+    char_re = re.escape(char_id)
+    # 姿势词在角色名附近（同句片段）
+    for pose in _POSE_STATES:
+        # 「坐」会误配「坐在」「坐着」——这些其实也是坐姿，接受；
+        # 但「立」在「立刻/独立」里不算姿势，需词边界（用后续字排除常见非姿势词）
+        if pose == "立":
+            if re.search(rf"{char_re}[^。！？；\n]{{0,6}}立(?!刻|即|场|功|足)", text):
+                return "立"
+        else:
+            # 角色名后 6 字内出现姿势词，或姿势词紧邻角色名
+            if re.search(rf"{char_re}[^。！？；\n]{{0,6}}{pose}", text):
+                return pose
+    # 兜底：句子以「角色 姿势」形式出现（如「杨旭站」「听香坐」）
+    for pose in _POSE_STATES:
+        if pose == "立":
+            if re.search(rf"{char_re}\s*立(?!刻|即|场|功|足)", text):
+                return "立"
+        elif re.search(rf"{char_re}\s*{pose}", text):
+            return pose
+    return None

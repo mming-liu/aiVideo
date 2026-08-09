@@ -36,9 +36,9 @@ python step04_merge/main.py       # 阶段4: 片段 + 音频 + 字幕 → 最终
 python chapter_reader.py 锦衣夜行_77119小说.txt
 ```
 - 此脚本为 thin re-export 层，实际实现在 `shared/chapter_reader.py`
-- `PROMPT_MAX_CHARS` 控制传递给 LLM 的原文上限（默认 50000，改 .env 生效）
+- `PROMPT_MAX_CHARS` 控制传递给 LLM 的原文上限（默认 50000，改 .env.content 生效）
 
-### 环境变量配置（.env）
+### 环境变量配置（.env.content / .env.keys）
 - `NOVEL_CHAPTER`: 章节序号（默认1）
 - `NOVEL_NAME`: 小说名（小说级目录，全书共享库所在层）
 - `BOOK_INDEX`: 部序号（小说内第几部，默认1）
@@ -113,8 +113,8 @@ step01 asset_extractor.py（LLM 提取，schema: SCENE_ASSETS_SCHEMA / PROPS_SCH
 
 ### Provider 抽象模式
 `_video_gen/` 和 `tts/` 两个包采用相同架构：
-- **ABC 接口 + 工厂注册表**：通过 `.env` 中的 PROVIDER 切换
-- **Config 单例**：各包的 `config.py` 从 `.env` 加载
+- **ABC 接口 + 工厂注册表**：通过 `.env.content` 中的 PROVIDER 切换
+- **Config 单例**：各包的 `config.py` 从 `.env.content`（内容参数）+ `.env.keys`（API Key）加载
 - **Dataclass 模型**：请求和结果用 dataclass 定义
 
 ### DeepSeek 文本生成（`_text_gen/`）

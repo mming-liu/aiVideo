@@ -11,7 +11,7 @@ aiVideo 是一个自动化视频生产流水线，将小说章节转换为电影
 
 核心设计哲学：
 - 每个流水线步骤独立（step01~step04），产物为文件级中间状态
-- 多供应商抽象层（_text_gen / _image_gen / _video_gen / tts），通过 .env 一键切换
+- 多供应商抽象层（_text_gen / _image_gen / _video_gen / tts），通过 .env.content（内容参数）+ .env.keys（API Key）一键切换
 - ViMax 框架作为底层智能体编排层
 - 缓存机制避免重复的 LLM/API 调用
 

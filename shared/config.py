@@ -1,4 +1,4 @@
-"""统一配置管理 — 所有模块从这里读取 .env 配置。
+"""统一配置管理 — 所有模块从这里读取 .env.content / .env.keys 配置。
 
 使用方式：
     from shared.config import CHAPTER_INDEX, SHOT_COUNT_MIN, AGNES_API_KEY, ...
@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# 确保只加载一次
+# 确保只加载一次：.env.content 存放内容参数，.env.keys 存放 API Key
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_PROJECT_ROOT / ".env.content")
 load_dotenv(_PROJECT_ROOT / ".env.keys")

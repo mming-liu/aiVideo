@@ -1317,6 +1317,11 @@ def _inject_object_size_anchor(shot: dict, text: str) -> str:
                 return text
             # 只注入尺寸/称呼，不注入容量结构（避免与画面描述冲突）
             size_desc = f"该{name}为{subtype}{'，长' + str(length) + '米' if length else ''}{'、宽' + str(width) + '米' if width else ''}"
+            # 近景/中景构图提示（08-09 首帧船太小）：图片模型对纯数字尺寸不敏感
+            # （「长6.0米」不认），且全船入画会压缩人物比例。用镜头语言替代：
+            # 近景/中景只画船头/船舷局部、人物占画面放大，从构图比例暗示船大。
+            if "近景" in text or "中景" in text or "中近景" in text:
+                size_desc += "，镜头取近景构图，只画船头/船舷局部，人物占画面比例放大，船体向画外延伸暗示全船长宽"
             if size_desc not in text:
                 return f"{text}。{size_desc}"
         return text
@@ -1330,16 +1335,23 @@ _COSTUME_WORDS = ("袍", "衫", "衣", "裳", "裙", "袄", "裰", "服", "袈",
 
 
 def _inject_character_costume(desc: str, characters: list | None,
-                              shot: dict | None = None) -> str:
+                              shot: dict | None = None,
+                              frame_kind: str | None = None) -> str:
     """给首帧/尾帧 prompt 注入出镜角色的服装特征（dynamic_features）.
 
-    出镜角色 = desc 中出现的角色名。按角色名周围窗口检测该角色是否已有服装
-    描述（颜色词+服装词，或服装词）——已有则跳过（幂等），否则追加
-    「{角色}身着{dynamic}」，保证图片模型知道角色服装颜色——否则「夜色深沉」
-    背景下模型自由发挥成深色（code-audit 2026-08-08 首帧杨旭深色衣 vs 角色
-    特征「素白色轻袍」）。"黑衣刺客"里的"衣"只算刺客的服装，不影响杨旭。
+    出镜角色 = desc 中出现的角色名。**两帧（ff/lf）一律注入完整 dynamic_features**，
+    不做"已有服装词就跳过"的幂等——旧逻辑按角色名周围窗口检测是否已有单个服装词
+    （如"一袭春衫"）就跳过，导致 ff 只带"春衫"、lf 才带完整"春衫+步摇"，两帧服装
+    锚定不同源 → 图片模型画出的听香衣服不一致（code-audit 08-09 首尾帧衣服差异）。
+    现在：dynamic 已整段出现在 desc 中才跳过，否则追加完整锚。
 
-    空镜（empty_scene）不注入（禁人物）。dynamic_features 缺失时跳过该角色。
+    frame_kind="first_frame" 时过滤动作结果/武器词——首帧是动作「前一刻」（破水前），
+    不该有溅血/持刀等动作结果。dynamic_features 是**全章状态**（含"脸上溅血""手持
+    寒光匕首"），全量注入首帧会让图片模型画出血污/武器（08-09 首帧杨旭胸口血迹、
+    刺客血眼）。尾帧/关键帧不过滤（动作已发生，结果应保留）。
+
+    "黑衣刺客"里的"衣"只算刺客的服装，不影响杨旭。空镜（empty_scene）不注入
+    （禁人物）。dynamic_features 缺失时跳过该角色。
     """
     if not desc or not characters or not shot:
         return desc
@@ -1354,17 +1366,44 @@ def _inject_character_costume(desc: str, characters: list | None,
             dynamic = (c.get("dynamic_features") or "").strip()
             if not dynamic:
                 continue
-            # 按角色名周围窗口检测该角色是否已有服装（幂等，避免只补一个角色）
-            idx = desc.find(ident)
-            window = desc[max(0, idx - 3):idx + 30]
-            if any(w in window for w in _COSTUME_WORDS):
-                continue  # 该角色已有服装词（如"黑衣刺客"）
+            # 完整 dynamic 已出现在 desc 中才跳过（保证两帧锚定一致，不重复堆叠）
+            if dynamic in desc:
+                continue
+            # 首帧过滤动作结果/武器词（溅血/持刀/血迹/洇痕等），保留静态服装/发型
+            if frame_kind == "first_frame":
+                dynamic = _strip_frame_action_result(dynamic)
+                if not dynamic:
+                    continue
             additions.append(f"{ident}身着{dynamic}")
         if additions:
             return f"{desc}。{('，'.join(additions))}"
         return desc
     except Exception:
         return desc
+
+
+# 首帧禁注入的动作结果/武器词（dynamic_features 是全章状态，含破水/刺中后的
+# 血污、武器、致命伤等结果。首帧是动作前一刻，这些不该出现——否则图片模型画出血
+# 污/持刀）。仅按词拆分保留，不误伤服装/发型/姿势词（春衫/步摇/披发/跪坐等）。
+_FRAME_ACTION_RESULT_WORDS = (
+    "溅血", "溅红", "血", "血迹", "血污", "洇痕", "洇开", "暗红", "红痕",
+    "手持", "握刀", "握剑", "持刀", "持剑", "提刀", "举刀", "握匕首",
+    "寒光匕首", "匕首", "弯刀", "刺中", "刺入", "劈落", "仰面倒", "倒地",
+    "胸口", "心口", "伤口", "重伤", "毙命",
+)
+
+
+def _strip_frame_action_result(dynamic: str) -> str:
+    """从 dynamic_features 中剥离首帧不应出现的动作结果/武器词.
+
+    按顿号/逗号拆词，逐词判断——命中动作结果/武器词则剔除，其余（服装/发型/
+    姿势/饰品）保留。避免把「脸上溅血」这种动作结果带进首帧。
+    """
+    if not dynamic:
+        return ""
+    parts = [p.strip() for p in re.split(r"[，、,\s]+", dynamic) if p.strip()]
+    kept = [p for p in parts if not any(w in p for w in _FRAME_ACTION_RESULT_WORDS)]
+    return "，".join(kept)
 
 
 # 尾帧目光确定性修复：错别字 + 看向动作结果对象
@@ -1461,7 +1500,8 @@ def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
         )
         text = preprocess_prompt_for_image(desc)
         # v1.1：注入出镜角色服装特征（与 _gen_first_frame_async 生成链一致）
-        text = _inject_character_costume(text, characters, shot)
+        # 首帧过滤动作结果/武器词，保证 QC 与图片模型看到的 prompt 一致
+        text = _inject_character_costume(text, characters, shot, frame_kind=frame_kind)
         # v1.1：尾帧目光修复（与 _gen_last_frame_async 一致，QC 看到修复后 prompt）
         if frame_kind == "last_frame":
             text = fix_lf_desc_gaze(text, shot, characters)
@@ -1573,7 +1613,9 @@ async def _gen_first_frame_async(
         # 先预处理：替换 AI 可能误解的词汇
         ff_desc = preprocess_prompt_for_image(ff_desc)
         # v1.1：注入出镜角色服装特征（防"夜色深沉"背景下模型自由发挥深色衣）
-        ff_desc = _inject_character_costume(ff_desc, characters, shot)
+        # 首帧过滤动作结果/武器词（溅血/持刀）——dynamic_features 含全章状态，
+        # 首帧是动作前一刻，血污/武器不该出现（08-09 首帧杨旭胸口血迹/刺客血眼）。
+        ff_desc = _inject_character_costume(ff_desc, characters, shot, frame_kind="first_frame")
         # 场景物体尺寸锚定注入（船/车等物体比例防漂移，code-audit 08-06 钩子船太小）
         ff_desc = _inject_object_size_anchor(shot, ff_desc)
         ff_desc_full = sanitize_prompt(ensure_prefix(ff_desc, STYLE_PREFIX), verbose=False)

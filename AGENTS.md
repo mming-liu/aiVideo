@@ -27,7 +27,8 @@ aiVideo is an automated video production pipeline that transforms novel chapters
 | `_image_gen/` | Image generation (Agnes) |
 | `vimax/` | ViMax framework (agents, interfaces, pipelines, tools) |
 | `vimax_bridge.py` | Bridge layer between script and ViMax |
-| `.env` | Configuration (API keys, model settings) |
+| `.env.content` | Configuration (model settings, behavior params) |
+| `.env.keys` | API keys (sensitive, git-ignored) |
 
 ## Build & Run
 
@@ -51,7 +52,7 @@ python -m py_compile 01_script_gen.py 02b_vimax_gen.py 03_tts_audio.py 04_merge_
 - **Indentation**: 4 spaces
 - **Naming**: `snake_case` for functions/variables, `PascalCase` for classes
 - **Encoding**: UTF-8 (avoid hardcoded Chinese characters in logic)
-- All providers use `.env` — never hardcode API keys
+- All providers use `.env.content` / `.env.keys` — never hardcode API keys
 
 ## Provider Architecture
 
@@ -66,7 +67,7 @@ All providers follow ABC interface + factory registry + Config singleton pattern
 
 ## Configuration
 
-Edit `.env` to switch providers:
+Edit `.env.content` to switch providers:
 
 ```ini
 # Text generation

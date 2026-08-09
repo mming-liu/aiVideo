@@ -1,0 +1,11 @@
+===== 多图 =====
+
+ttps://help.aliyun.com/zh)\n\n[有奖调研](https://survey.aliyun.com/apps/zhiliao/u72JLBHwp?ID=XX&WAY=1)\n\n输入文档关键字查找\n\n万相2.7图像生成与编辑模型支持文生图、文生组图、图生组图、图像编辑和多图参考生成。\n\n## 模型概览\n\n| **模型名称** | **模型简介** | **输出图像规格** |\n| --- | --- | --- |\n\n|     |     |     |\n| --- | --- | --- |\n| **模型名称** | **模型简介** | **输出图像规格** |\n| wan2.7-image-pro | 万相2.7 image专业版，文生图（非组图生成）支持4K高清输出 | 图片格式：PNG。<br>图像分辨率和尺寸请参见 [size参数](https://help.aliyun.com/zh/model-studio/wan-image-generation-api-reference#wan27-param-size-section \"\")。 |\n| wan2.7-image | 万相2.7 image，生成速度更快 |\n\n**说明**\n\n调用前，请查阅各地域支持的 [模型列表与价格](https://help.aliyun.com/zh/model-studio/model-pricing#e2540d7
+
+===== 图生 =====
+
+ "[官方文档](https://help.aliyun.com/zh)\n\n[有奖调研](https://survey.aliyun.com/apps/zhiliao/u72JLBHwp?ID=XX&WAY=1)\n\n输入文档关键字查找\n\n万相2.7图像生成与编辑模型支持文生图、文生组图、图生组图、图像编辑和多图参考生成。\n\n## 模型概览\n\n| **模型名称** | **模型简介** | **输出图像规格** |\n| --- | --- | --- |\n\n|     |     |     |\n| --- | --- | --- |\n| **模型名称** | **模型简介** | **输出图像规格** |\n| wan2.7-image-pro | 万相2.7 image专业版，文生图（非组图生成）支持4K高清输出 | 图片格式：PNG。<br>图像分辨率和尺寸请参见 [size参数](https://help.aliyun.com/zh/model-studio/wan-image-generation-api-reference#wan27-param-size-section \"\")。 |\n| wan2.7-image | 万相2.7 image，生成速度更快 |\n\n**说明**\n\n调用前，请查阅各地域支持的 [模型列表与价格](https://help.aliyun.com/zh/model-studio/model-prici
+
+===== 参考图 =====
+
+猫穿梭在盛开的樱花树下；第二张：夏天，橘猫在老街的树荫下乘凉避暑；第三张：秋天，橘猫踩在满地的金色落叶上；第四张：冬天，橘猫在雪地上走留下足迹。\"\\\n        }\\\n        # 图生组图场景：取消以下注释并注释掉上方纯文本\\\n        # {\"text\": \"参考图片风格生成四季组图\"},\\\n        # {\"image\": image_1}\\\n    ],\n)\n\nprint(\"----sync call, please wait a moment----\")\nrsp = ImageGeneration.call(\n    model=\"wan2.7-image-pro\",\n    api_key=api_key,\n    messages=[message],\n    enable_sequential=True,\n    n=4,\n    size=\"2K\",  # wan2.7-image-pro仅文生图场景支持4K分辨率，图像编辑和组图生成支持最高2K分辨率\n)\n\n# 提取结果图片URL并保存到本地\nif rsp.status_code == 200:\n    for i, choice in enumerate(rsp.output.choices):\n        for j, content in enumerate(choice[\"message\"][\"

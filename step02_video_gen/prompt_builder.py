@@ -449,6 +449,32 @@ def _shorten_feature(feat: str, max_len: int = 25) -> str:
     return feat[:max_len].rstrip("，、；：。") + "…"
 
 
+# 开场画面（视频起点）禁注入的动作结果/武器词：dynamic_features 是全章状态，
+# 含破水/刺中后的血污、武器、致命伤等。视频起点 = ff_desc 前一刻状态（破水前、
+# 未刺中），这些不该出现在开场——否则视频模型把血污/武器画进开头（08-09 首帧
+# 杨旭胸口血迹、刺客血眼、听香溅血）。与 step02a `_inject_character_costume`
+# frame_kind="first_frame" 的过滤保持一致。
+_DYNAMIC_ACTION_RESULT_WORDS = (
+    "溅血", "溅红", "血", "血迹", "血污", "洇痕", "洇开", "暗红", "红痕",
+    "手持", "握刀", "握剑", "持刀", "持剑", "提刀", "举刀", "握匕首",
+    "寒光匕首", "匕首", "弯刀", "刺中", "刺入", "劈落", "仰面倒", "倒地",
+    "胸口", "心口", "伤口", "重伤", "毙命",
+)
+
+
+def _clean_dynamic_for_start(dynamic: str) -> str:
+    """从 dynamic_features 剥离开场画面不应出现的动作结果/武器词.
+
+    按顿号/逗号拆词，逐词判断——命中动作结果/武器词则剔除，其余（服装/发型/
+    姿势/饰品）保留。与 step02a 首帧过滤同源，保证视频起点与首帧一致。
+    """
+    if not dynamic:
+        return ""
+    parts = [p.strip() for p in re.split(r"[，、,\s]+", dynamic) if p.strip()]
+    kept = [p for p in parts if not any(w in p for w in _DYNAMIC_ACTION_RESULT_WORDS)]
+    return "，".join(kept)
+
+
 def _is_wide_shot(shot: dict) -> bool:
     """远景/大远景/全景/俯拍/航拍镜头探测（胶囊远景省略规则）."""
     probe = " ".join([shot.get("ff_desc", ""), shot.get("prompt", ""),
@@ -492,7 +518,10 @@ def _build_character_layout_block(shot: dict, characters: list) -> str:
             short = _shorten_feature(c.get("static_features", ""), 25)
             lines.append(f"- {ident}：{short}，位置/朝向/动作以视频起点描述为准")
         else:
-            feats = [f for f in (c.get("static_features", ""), c.get("dynamic_features", "")) if f]
+            # 开场画面 = 视频起点（ff_desc 前一刻状态），dynamic_features 是全章状态
+            # （含溅血/持刀等动作结果），必须过滤——否则视频模型把血污/武器画进开场
+            # （08-09 首帧杨旭胸口血迹、刺客血眼、听香溅血）。
+            feats = [f for f in (c.get("static_features", ""), _clean_dynamic_for_start(c.get("dynamic_features", ""))) if f]
             if feats:
                 lines.append(f"- {ident}：{'，'.join(feats)}，位置/朝向/动作以视频起点描述为准")
             else:
@@ -587,7 +616,9 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     for char in characters:
         if char.get("identifier") == main_subject:
             static = char.get("static_features", "")
-            dynamic = char.get("dynamic_features", "")
+            # 开场画面 = 视频起点（前一刻），dynamic_features 全章状态含溅血/持刀等
+            # 动作结果，必须过滤（08-09 首帧杨旭胸口血迹/刺客血眼/听香溅血）
+            dynamic = _clean_dynamic_for_start(char.get("dynamic_features", ""))
             if static or dynamic:
                 # 远景镜头：主角特征也截断到剪影级，禁精细五官（规则39）
                 if _is_wide_shot(shot):
