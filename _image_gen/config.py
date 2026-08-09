@@ -1,6 +1,6 @@
-﻿"""图片生成配置 — 从 .env 读取参数.
+﻿"""图片生成配置 — 从 .env.content（内容参数）+ .env.keys（API Key）读取参数.
 
-供应商可切换，所有参数均可通过 .env 覆盖.
+供应商可切换，所有参数均可通过 .env.content 覆盖.
 """
 
 import os
@@ -16,7 +16,7 @@ from shared.paths import images_dir as _images_dir
 
 
 class ImageGenCfg:
-    """图片生成配置（所有参数均可通过 .env 覆盖）."""
+    """图片生成配置（所有参数均可通过 .env.content 覆盖）."""
 
     # ---- 供应商选择 ----
     # agnes → agnes ai (OpenAI 兼容协议 /v1/images/generations)

@@ -1,6 +1,6 @@
-﻿"""视频生成配置 — 从 .env 读取参数.
+﻿"""视频生成配置 — 从 .env.content（内容参数）+ .env.keys（API Key）读取参数.
 
-供应商可切换，所有参数均可通过 .env 覆盖.
+供应商可切换，所有参数均可通过 .env.content 覆盖.
 """
 
 import os
@@ -16,7 +16,7 @@ from shared.paths import clips_dir as _clips_dir
 
 
 class VideoGenCfg:
-    """视频生成配置（所有参数均可通过 .env 覆盖）."""
+    """视频生成配置（所有参数均可通过 .env.content 覆盖）."""
 
     # ---- 供应商选择 ----
     # dashscope  → 阿里云百炼 DashScope (通义万相 wan2.7-t2v)

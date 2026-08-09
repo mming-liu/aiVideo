@@ -27,7 +27,7 @@ class AgnesTextService(TextGenerationService):
     403 回退: 主模型返回 403 时，自动切换到 AGNES_TEXT_FALLBACK_MODELS 中的下一个.
     429 回退: 速率限制时自动切换到下一个 API Key.
 
-    Thinking 模式: 在 .env 中设置 AGNES_TEXT_ENABLE_THINKING=1 启用.
+    Thinking 模式: 在 .env.content 中设置 AGNES_TEXT_ENABLE_THINKING=1 启用.
     """
 
     def __init__(self) -> None:

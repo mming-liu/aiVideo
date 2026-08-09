@@ -36,8 +36,8 @@ if BAILIAN_WORKSPACE_ID and BAILIAN_REGION:
 
 from shared.log_utils import verbose_write as _verbose_write  # noqa: E402
 
-# 模型列表从 shared/config.py 读取（可通过 .env 覆盖）
-# 示例 .env 配置:
+# 模型列表从 shared/config.py 读取（可通过 .env.content 覆盖）
+# 示例 .env.content 配置:
 #   BAILIAN_T2V_MODEL=wan2.7-t2v-2026-06-12,happyhorse-1.1-t2v
 #   BAILIAN_I2V_MODEL=wan2.7-i2v-2026-04-25
 #   BAILIAN_I2V_FALLBACK_MODELS=happyhorse-1.0-i2v,happyhorse-1.1-i2v

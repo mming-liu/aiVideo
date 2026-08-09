@@ -78,6 +78,6 @@ def create_service(provider: Optional[str] = None) -> ImageGenerationService:
         available = ", ".join(_REGISTRY.keys())
         raise ValueError(
             f"未知图片供应商 '{provider}'，可用: {available}\n"
-            f"在 .env 中设置 IMAGE_PROVIDER 切换供应商."
+            f"在 .env.content 中设置 IMAGE_PROVIDER 切换供应商."
         )
     return _REGISTRY[provider]()

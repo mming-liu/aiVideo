@@ -1,6 +1,6 @@
-"""文本生成配置 — 从 .env 读取参数.
+"""文本生成配置 — 从 .env.content（内容参数）+ .env.keys（API Key）读取参数.
 
-供应商可切换，所有参数均可通过 .env 覆盖.
+供应商可切换，所有参数均可通过 .env.content 覆盖.
 """
 
 import os
@@ -14,7 +14,7 @@ load_dotenv(_PROJECT_ROOT / ".env.keys")
 
 
 class TextGenCfg:
-    """文本生成配置（所有参数均可通过 .env 覆盖）."""
+    """文本生成配置（所有参数均可通过 .env.content 覆盖）."""
 
     # ---- 供应商选择 ----
     # dashscope → 阿里云百炼 DashScope (Qwen)
