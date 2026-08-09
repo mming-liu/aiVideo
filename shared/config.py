@@ -3,7 +3,7 @@
 使用方式：
     from shared.config import CHAPTER_INDEX, SHOT_COUNT_MIN, AGNES_API_KEY, ...
 
-这样可以确保 .env 只在一处加载，避免重复配置。
+这样可以确保配置只在一处加载，避免重复加载。
 """
 
 from __future__ import annotations
