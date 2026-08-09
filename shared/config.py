@@ -122,6 +122,16 @@ BAILIAN_REGION = os.getenv("BAILIAN_REGION", "cn-beijing")
 BAILIAN_WORKSPACE_ID = os.getenv("BAILIAN_WORKSPACE_ID", "")
 BAILIAN_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")  # 复用 DASHSCOPE_API_KEY
 
+# ============================================================================
+# Token Plan（阿里云编程额度）配置 - 手工调试脚本用
+# ============================================================================
+# key 存于 .env.keys（已被 gitignore，不会提交）；端点独立于百炼 Workspace。
+# 用途：调试脚本（图片/视频生成）从 TOKEN_PLAN_API_KEY 读取，不再硬编码。
+TOKEN_PLAN_API_KEY = os.getenv("TOKEN_PLAN_API_KEY", "")
+TOKEN_PLAN_BASE_URL = os.getenv(
+    "TOKEN_PLAN_BASE_URL", "https://token-plan.cn-beijing.maas.aliyuncs.com"
+)
+
 # 文生图模型 (qwen-image)
 BAILIAN_T2I_MODEL = os.getenv("BAILIAN_T2I_MODEL", "qwen-image-2.0-pro-2026-04-22")
 # 文生视频模型 (wan2.7-t2v)
