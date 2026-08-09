@@ -72,14 +72,14 @@ def _extract_speaker_line(text: str) -> str:
 
 
 def _detect_speaker_from_line(text: str, characters: list) -> str | None:
-    """从台词行检测说话人角色名（复用 step03 shot_tts 的检测逻辑）。
+    """从台词行检测说话人角色名（复用 shared.dialogue 的权威实现）。
 
-    step03_tts_audio/shot_tts.py._detect_speaker_from_narration 是权威实现，
-    此处直接用 import 复用，避免两处逻辑漂移。
+    说话人检测统一收敛在 shared/dialogue.detect_speaker（原 step03_tts_audio/
+    shot_tts.py 实现已下沉，2026-08-09 审计 P0-1）。
     """
     try:
-        from step03_tts_audio.shot_tts import _detect_speaker_from_narration
-        return _detect_speaker_from_narration(text, characters or [])
+        from shared.dialogue import detect_speaker
+        return detect_speaker(text, characters or [])
     except Exception:
         return None
 

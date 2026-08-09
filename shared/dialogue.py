@@ -7,6 +7,9 @@ shot_tts 仍旧生成配音，与"去旁白只留对话"的目标相悖。
 现收紧为真实对话引号 + 全角冒号 `：`；半角冒号与破折号不再判定为对话。
 """
 
+import re
+from typing import Optional, List
+
 
 # 真正的对话标记：全角冒号 + 各类成对/全角引号
 _DIALOGUE_MARKERS = (
@@ -27,3 +30,60 @@ def has_dialogue(text: str) -> bool:
     if not text:
         return False
     return any(marker in text for marker in _DIALOGUE_MARKERS)
+
+
+# 说话人检测（从「说话人道：台词」格式中识别角色名）。
+# 原实现位于 step03_tts_audio/shot_tts.py（step03 已孤儿），2026-08-09 下沉到
+# shared/dialogue.py 统一供给，避免 prompt_builder 反向依赖 step03（审计 P0-1）。
+_SPEAKER_PATTERNS = (
+    # 匹配 "XXX道：" / "XXX说：" / "XXX问道" 等，0-4个中文字符的动作描写
+    r"^([一-龥]{1,4})(?:[^一-龥]{0,4})?(?:道|说|问|答|喊|叫|叹|怒|笑|哭|喝|骂|低声道|低声说|低声问道|低声笑道|笑道|冷笑道|急道|忙道|冷声道|朗声道|轻声道)[:：]",
+    # 备用简化模式
+    r"^([^\s，。,]{1,4})(?:道|说|问|答|喊|叫|叹|怒|笑|哭|喝|骂)[:：]",
+)
+
+
+def detect_speaker(narration: str, characters: Optional[List[dict]] = None) -> Optional[str]:
+    """从叙述文本中检测说话人角色名.
+
+    检测逻辑：
+    1. 在文本开头匹配 "XXX道："、"XXX说："等对话格式
+    2. 匹配 "XXX笑道："、"XXX怒道："等带情感词的情况
+    3. 匹配 "XXX低声"等动作描述
+
+    Args:
+        narration: 台词文本
+        characters: 角色列表（含 identifier 字段），用于验证说话人是已知角色
+
+    Returns:
+        说话人角色名，未检测到返回 None
+    """
+    if not narration:
+        return None
+
+    # 角色名列表（按长度降序，优先匹配更长名字）
+    char_names = [c.get("identifier", "") for c in characters or [] if c.get("identifier")]
+    char_names = sorted(char_names, key=len, reverse=True)
+
+    # 对话格式匹配（增强版正则，支持动作+说话混合）
+    for pattern in _SPEAKER_PATTERNS:
+        match = re.match(pattern, narration)
+        if match:
+            speaker = match.group(1)
+            # 验证匹配到的确实是角色名
+            if char_names:
+                for char_name in char_names:
+                    if char_name in speaker or speaker in char_name:
+                        return char_name
+                if speaker in char_names:
+                    return speaker
+            else:
+                return speaker  # 无角色库时直接返回匹配结果
+
+    # 尝试在文本开头找角色名（动作+说话）
+    for char_name in char_names:
+        if narration.startswith(char_name) or narration[:6].find(char_name) >= 0:
+            if any(v in narration[len(char_name):len(char_name)+3] for v in ["道", "说", "问", "笑", "怒", "哭"]):
+                return char_name
+
+    return None
