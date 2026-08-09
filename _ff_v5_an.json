@@ -1,0 +1,16 @@
+{
+    "task_type":  "image_reasoning",
+    "tool_used":  "agnes-2.5-flash:agnes-2.5-flash",
+    "confidence":  "high",
+    "result":  "1) 画面清晰度高，整体锐利，人物与景物轮廓分明。\n\n2) 船头朝画面右侧。手持鱼竿的白衣男子斜躺于船头位置，女子站立于船舱中部偏后、靠近船尾处。\n\n3) 水中刺客面向镜头（正对观者），非面向船头或白衣男子。仅露出头部与肩部，其余身体隐于水下。\n\n4) 船横向占据画面宽度约85%-90%，从左边缘延伸至右边缘附近，几乎横跨整个画面。\n\n5) 女子（听香）表情为惊恐——双眼圆睁、嘴唇微张，呈现惊讶/恐惧状态，非警觉或平静。",
+    "metadata":  {
+                     "channel":  "agnes-2.5-flash",
+                     "model":  "agnes-2.5-flash",
+                     "image_sha":  "81002A48CF0F",
+                     "image_mb":  5.28,
+                     "prepared_payload":  true,
+                     "race_runtime":  "runspace",
+                     "latency_ms":  25635,
+                     "cached":  false
+                 }
+}
