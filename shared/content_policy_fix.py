@@ -5,6 +5,10 @@
   - 从已知敏感词库查找安全替代词
   - 自动替换后重试提交
   - 记录新发现的敏感词到本地词库
+
+2026-08-09 审计 P0-2：敏感词替换词表统一收敛在 shared/content_safety.py
+（style_prefix 先验替换 + 本模块 422 后验修复共用同一权威词表），
+删除本模块重复的 _VIOLENT_WORDS/_SEXUAL_WORDS/_GORE_WORDS 三份词表。
 """
 
 from __future__ import annotations
@@ -17,85 +21,10 @@ from typing import Optional
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# ============================================================================
-# 一、已知敏感词库（可扩展）
-# ============================================================================
+# 权威替换词表（与 style_prefix.sanitize_prompt 共用，单一来源）
+from shared.content_safety import SENSITIVE_SUBSTITUTIONS, sanitize as safety_sanitize
 
-# 暴力动作
-_VIOLENT_WORDS = {
-    "刺客": "神秘人",
-    "刺杀": "突袭",
-    "刺进": "剑光掠过",
-    "刺穿": "剑光掠过",
-    "刺入": "剑光掠过",
-    "刺": "剑光",
-    "心口": "身前",
-    "胸口": "身前",
-    "砍断": "剑影交错",
-    "斩断": "剑影交错",
-    "剁": "斩",
-    "劈开": "斩裂",
-    "割喉": "剑影闪过",
-    "杀死": "击败",
-    "击杀": "击败",
-    "掐死": "制住",
-    "勒死": "制住",
-    "毒死": "倒下",
-    "血": "红",
-    "血腥": "红影",
-    "鲜血": "赤色",
-    "血迹": "痕迹",
-    "血痕": "痕迹",
-    "流血": "滴落",
-    "飞溅": "洒落",
-    "腥甜": "奇怪",
-}
-
-# 性暗示
-_SEXUAL_WORDS = {
-    "裸": "衣",
-    "赤裸": "赤身",
-    "光腚": "赤脚",
-    "酥胸": "衣襟",
-    "玉体": "身影",
-    "胴体": "身形",
-    "亲吻": "凝望",
-    "拥抱": "相视",
-    "抚摸": "凝视",
-    "缠绵": "对立",
-    "交缠": "对立",
-    "喘息": "呼吸",
-    "呻吟": "低吟",
-    "挑逗": "示意",
-    "诱惑": "示意",
-    "勾引": "示意",
-}
-
-# 恐怖/恶心
-_GORE_WORDS = {
-    "尸体": "身影",
-    "尸骸": "遗影",
-    "尸横遍野": "伤亡遍野",
-    "尸体堆积": "伤亡",
-    "脑浆": "浊液",
-    "内脏": "内部",
-    "肠子": "内部",
-    "碎肉": "残片",
-    "断肢": "伤痛",
-    "断臂": "伤痛",
-    "断头": "倒下",
-    "残肢": "伤痛",
-    "白骨": "骨架",
-    "骷髅": "骨架",
-    "腐肉": "残骸",
-    "血肉模糊": "赤影朦胧",
-    "鲜血淋漓": "赤色浸染",
-    "开膛破肚": "伤裂",
-    "脑浆迸裂": "重伤",
-}
-
-# 合并所有敏感词
-ALL_SENSITIVE_WORDS = {**_VIOLENT_WORDS, **_SEXUAL_WORDS, **_GORE_WORDS}
+ALL_SENSITIVE_WORDS = dict(SENSITIVE_SUBSTITUTIONS)
 
 
 # ============================================================================
@@ -288,11 +217,8 @@ def _blind_replace_all(prompt: str, verbose: bool = True) -> Optional[str]:
     fixed_prompt = prompt
     replaced_count = 0
 
-    # 合并所有词库，按词长降序排列（"刺入" 在 "刺" 之前）
-    all_words = {}
-    all_words.update(_VIOLENT_WORDS)
-    all_words.update(_SEXUAL_WORDS)
-    all_words.update(_GORE_WORDS)
+    # 用权威词表（shared/content_safety），按词长降序（"刺入" 在 "刺" 之前）
+    all_words = dict(ALL_SENSITIVE_WORDS)
     # 本地词库
     local = _load_word_library()
     for word, info in local.items():

@@ -1,15 +1,14 @@
-"""step02_video_gen.audio_pregen - 音频预生成与时长回填模块
+"""step02_video_gen.audio_pregen - 媒体时长测量与回填模块
 
 功能：
-- load_script(): 加载脚本
+- _find_ffprobe(): 查找 ffprobe
 - _measure_media_duration(): 测量媒体时长
-- _gen_shot_audio_duration(): 为镜头生成 TTS 音频并获取实际时长
 - _measure_actual_duration(): 测量视频实际时长
 - _update_script_with_actual_durations(): 回填实际时长到 JSON
 
 ⚠️ 2026-08 架构变更：step02 已不再调用本模块的 TTS 预生成（对话交给视频模型，
-视频时长由 shot["duration_sec"] 驱动）。本文件保留供 step03_tts_audio 及日后
-需要测量媒体时长/TTS 音频时长的地方复用，勿删除。
+视频时长由 shot["duration_sec"] 驱动）。原 _gen_shot_audio_duration（TTS 音频时长）
+已删除（死代码，审计 P0-1），保留 ffprobe 时长测量供 submit_poll 复用。
 """
 import sys
 from pathlib import Path
@@ -17,7 +16,6 @@ import os
 import json
 import subprocess
 import shutil
-import hashlib
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -25,10 +23,6 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 from dotenv import load_dotenv
 load_dotenv(_PROJECT_ROOT / ".env.content")
 load_dotenv(_PROJECT_ROOT / ".env.keys")
-
-
-from tts import create_provider, TTSRequest
-from tts.config import config as tts_config
 
 
 def load_script(path: Path) -> dict:
@@ -69,53 +63,6 @@ def _measure_media_duration(path: Path) -> float:
     except Exception as e:
         print(f"[WARN] 测量时长失败 {path.name}: {e}")
     return 0.0
-
-
-def _gen_shot_audio_duration(shot: dict, audio_dir: Path, provider=None) -> float:
-    """为指定镜头生成 TTS 音频，返回实际时长（秒）."""
-    idx = shot.get("index", 0)
-    text = shot.get("narration_segment", "").strip()
-    if not text:
-        return shot.get("duration", 5)
-
-    audio_path = audio_dir / f"shot_{idx}.mp3"
-    if audio_path.exists() and audio_path.stat().st_size > 10240:
-        duration = _measure_media_duration(audio_path)
-        if duration > 0:
-            hash_path = audio_dir / f"shot_{idx}.mp3.hash"
-            text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
-            if hash_path.exists():
-                cached_hash = hash_path.read_text(encoding="utf-8").strip()
-                if cached_hash == text_hash:
-                    return duration
-            audio_path.unlink()
-            hash_path.unlink(missing_ok=True)
-
-    try:
-        audio_dir.mkdir(parents=True, exist_ok=True)
-        if provider is None:
-            provider = create_provider()
-        req = TTSRequest(
-            text=text,
-            model=tts_config.MODEL,
-            rate=tts_config.RATE,
-            volume=tts_config.VOLUME,
-            format=tts_config.FORMAT,
-            sample_rate=tts_config.SAMPLE_RATE,
-        )
-        result = provider.synthesize(req, output=str(audio_path))
-        if not result.success:
-            raise RuntimeError(result.error)
-
-        duration = _measure_media_duration(audio_path)
-        if duration > 0:
-            text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
-            Path(str(audio_path) + ".hash").write_text(text_hash, encoding="utf-8")
-            return duration
-    except Exception as e:
-        print(f"  [{idx}] TTS 失败: {e}")
-
-    return shot.get("duration", 5)
 
 
 def _measure_actual_duration(video_path: Path) -> float:

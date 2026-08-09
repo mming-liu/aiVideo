@@ -412,8 +412,8 @@ def should_run_qc(frame_path: Path) -> bool:
 def write_sidecar(frame_path: Path, result: QcResult) -> Path:
     """写质检 sidecar（submit_poll 兼容格式）.
 
-    IMAGE_QC_WRITE_CRITICAL=0（默认）时所有 issues severity 封顶为 warning，
-    避免触发 step02b 的自动删帧重生成；日志仍显示真实 severity。
+    IMAGE_QC_WRITE_CRITICAL=0 时所有 issues severity 封顶为 warning（仅告警）；
+    =1（默认）时写真实 severity，submit_poll 遇 critical 自动删帧重生成（审计 P0-3）。
     """
     sc = sidecar_path(frame_path)
     issues_data = []

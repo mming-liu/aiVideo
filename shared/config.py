@@ -79,9 +79,10 @@ IMAGE_MULTI_REF = int(os.getenv("IMAGE_MULTI_REF", "1"))
 # 图片生成后视觉质检（ds-vision-skill 接入，step02a 帧生成后自动检查首帧+尾帧）
 IMAGE_QC_ENABLED = os.getenv("IMAGE_QC_ENABLED", "1").strip() == "1"  # 总开关（默认开启）
 IMAGE_QC_TIMEOUT_SEC = int(os.getenv("IMAGE_QC_TIMEOUT_SEC", "300"))  # 单次质检超时（Agnes 端点慢，默认 300s）
-# 是否把 critical 级问题写入 sidecar（默认 0=封顶为 warning）。
-# 说明：submit_poll 读 sidecar 遇 critical 会自动删帧重生成，封顶为 warning 可避免触发重生成，仅告警。
-IMAGE_QC_WRITE_CRITICAL = os.getenv("IMAGE_QC_WRITE_CRITICAL", "0").strip() == "1"
+# 是否把 critical 级问题写入 sidecar（默认 1=写 critical，让 submit_poll 遇 critical 自动删帧重生成）。
+# 2026-08-09 审计 P0-3：此前默认 0 把 critical 封顶成 warning，导致 submit_poll 的
+# 删帧重生成逻辑永远读不到 critical、成为死代码——QC 白检不修复。现统一为「critical 即重生成」。
+IMAGE_QC_WRITE_CRITICAL = os.getenv("IMAGE_QC_WRITE_CRITICAL", "1").strip() == "1"
 
 
 # ============================================================================

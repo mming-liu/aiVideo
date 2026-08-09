@@ -49,18 +49,11 @@ def _check_keyframe_hallucination(frame_path: str) -> dict:
         return {"has_critical": False, "issues": []}
 
     frame_path_obj = Path(frame_path)
-    hallucination_file = frame_path_obj.with_suffix(".png").with_name(
-        frame_path_obj.stem + "_hallucination.json"
-    )
-
-    # 检查 shot_0_lf.png 对应的 shot_0_lf_hallucination.json
-    if not hallucination_file.exists():
-        # 尝试其他可能的命名
-        for pattern in ["*_hallucination.json"]:
-            matches = list(frame_path_obj.parent.glob(pattern))
-            if matches:
-                hallucination_file = matches[0]
-                break
+    # sidecar 命名契约与 shared/image_qc.sidecar_path 完全一致：<stem>_hallucination.json。
+    # 此前用 with_suffix(".png").with_name(...) 拼名 + glob("*_hallucination.json") 盲取
+    # 第一个（多帧时可能张冠李戴）——统一走 image_qc.sidecar_path，消除双份命名约定（审计 P0-3）。
+    from shared.image_qc import sidecar_path
+    hallucination_file = sidecar_path(frame_path_obj)
 
     if hallucination_file.exists():
         try:

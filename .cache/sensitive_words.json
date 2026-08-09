@@ -18,5 +18,15 @@
     "substitute": "***",
     "context": "摄像机从右侧平拍，水面炸开，黑影从左侧出水上船，镜头快速跟随掠客动作，掠客蹲踞后右手直掠，刀光一闪击中杨旭胸口，杨旭身体猛震\n音频只保留贴合画面的环境音效（风声、水声、虫鸣、衣料与器物声等），禁止任何人声、旁白、对话、歌声。\n整段视频每一帧都保持写实古风真人风格，首尾画风完全一致，禁止中途转为动漫、动画、2D渲染、卡通脸或任何非写实风格。\n\n视觉衔接：上一镜杨旭仰望星空，本镜突然袭击，时间连贯，同",
     "discovered_at": "C:\\myFloders\\git\\aiVideo"
+  },
+  "鲜血": {
+    "substitute": "红",
+    "context": "刺客刺入心口，鲜血飞溅",
+    "discovered_at": "C:\\myFloders\\git\\aiVideo"
+  },
+  "刺入": {
+    "substitute": "身影",
+    "context": "刺客刺入心口，鲜血飞溅",
+    "discovered_at": "C:\\myFloders\\git\\aiVideo"
   }
 }
