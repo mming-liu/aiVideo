@@ -2874,6 +2874,13 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v6.25 新增：威胁源-视线耦合（规则41，hook 调试暴露的站位-视线矛盾）
     results["threat_gaze_coupling"] = _check_threat_gaze_coupling(shots, script.get("hook"))
 
+    # v6.26 新增：抠姐短剧剧本检查（开篇冲突/爆点密度/对白长度）+ video-shotcraft（静态停留）
+    # 全部 warning-only，不进 hard_fail_checks（与 v6.24/v6.25 一致）
+    results["opening_hook"] = _check_opening_hook(shots, script.get("hook"))
+    results["punch_density"] = _check_punch_density(shots, script.get("hook"))
+    results["dialogue_length"] = _check_dialogue_length(shots, script.get("hook"))
+    results["dwell_time"] = _check_dwell_time(shots, script.get("hook"))
+
     # 综合判定：任一硬性检查失败则整体不通过
     # v6.5: 增加 script_novel_alignment 到硬性检查
     # v6.7: 增加 ff_lf_completeness 到硬性检查（lf_desc 为空会导致静态视频）
@@ -3492,4 +3499,218 @@ def _check_threat_gaze_coupling(shots: list[dict], hook: dict = None) -> dict:
                     )
     for w in warnings:
         print(f"[CHECK] 威胁源-视线耦合: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+# ========================================================================
+# v6.26 吸收：抠姐短剧剧本检查（开篇冲突/爆点密度/对白长度）+ video-shotcraft（静态停留）
+# 全部 warning-only，不进 hard_fail_checks（与 v6.24/v6.25 一致，重生成循环昂贵）
+# ========================================================================
+
+# 爆点/冲突关键词（与 _check_narrative_arc_distribution 的 climax_keywords 互补，
+# 此处偏「反转/打脸/冲突」等短视频情绪爆点，供密度检查与开篇检查共用）
+_PUNCH_WORDS = (
+    "刺杀", "偷袭", "伏击", "拔剑", "挥刀", "匕首", "对峙", "冲突", "搏杀", "跃出",
+    "反转", "揭露", "暴露", "揭穿", "打脸", "翻脸", "变故", "密谋", "秘密", "谎言",
+    "欺骗", "背叛", "惊慌", "尖叫", "质问", "怒喝", "威胁", "求饶", "落败", "反杀",
+    "吐血", "跌倒", "遇袭", "惊觉", "发现", "意外", "撞击", "破窗", "闯入",
+)
+
+# 对白单句长度上限（规则43：每句 ≤15 字，说话人前缀不计入）
+_DIALOGUE_SENTENCE_MAX = 15
+# 对白分句标点（逗号/感叹号/问号/省略号/破折号/句号后接），用于把长台词拆成单句
+_DIALOGUE_SEP_RE = re.compile(r"[，。！？；…—、,\n]")
+
+# 静态/停留场景判定词（对白、特写、静景、氛围空镜；与空镜/特写检查词互补）
+_DWELL_STATIC_HINTS = ("静坐", "凝视", "对视", "定住", "僵住", "沉默", "伫立", "停驻",
+                       "特写", "静景", "空镜", "氛围", "独坐", "背影", "面朝")
+# 静态停留下限（规则44：静态/对白镜头 ≥2 秒）
+_DWELL_MIN_SEC = 2.0
+# 对白镜头推荐下限（规则44 建议 3-5 秒，此处对明确有对白的镜头放宽到 ≥2 秒即可，
+# 严格下限按 _DWELL_MIN_SEC；低于 3s 只提示为建议，避免与动作短镜误伤）
+_DWELL_DIALOG_RECOMMEND = 3.0
+
+
+def _check_opening_hook(shots: list[dict], hook: dict = None) -> dict:
+    """v6.26 新增：开篇3秒冲突/悬念检查（抠姐剧本检查·开篇3秒+前10秒建立核心冲突）.
+
+    1. 钩子存在且锁定冲突/悬念瞬间 → hook 已由钩子分镜 prompt 保证，此处只核对
+       hook 的 prompt/ff_desc 是否含冲突/悬念画面词
+    2. 主分镜前1-2镜（紧随 hook 之后）必须有冲突/悬念画面，禁止纯风景/环境空镜开场拖节奏
+    3. 前 1/3 段（前10秒对应位置）必须建立核心冲突（谁/在哪/要发生什么）
+    """
+    issues, warnings = [], []
+
+    # 1. 钩子须含冲突/悬念画面词
+    if hook and isinstance(hook, dict):
+        htext = " ".join([hook.get("prompt", ""), hook.get("ff_desc", ""),
+                          hook.get("motion_desc", ""), hook.get("lf_desc", "")])
+        if not any(p in htext for p in _PUNCH_WORDS):
+            warnings.append(
+                "钩子镜头(index=0): 画面未检测到冲突/悬念词（对峙/拔剑/惊觉/意外等）——"
+                "钩子必须锁定冲突/悬念瞬间（开篇3秒抓注意力，抠姐检查·开篇3秒）。"
+            )
+
+    # 2. 前2个主分镜禁止纯环境/风景开场拖节奏
+    front = [s for s in shots if s.get("index") != 0][:2]
+    for s in front:
+        text = " ".join([s.get("prompt", ""), s.get("narration_segment", ""),
+                         s.get("main_subject", ""), s.get("motion_desc", "")])
+        if not any(p in text for p in _PUNCH_WORDS):
+            warnings.append(
+                f"镜头{s.get('index')}: 开篇镜头未含冲突/悬念画面——视频前3秒必须出现"
+                f"事件/冲突/悬念（对峙/意外/反转伏笔/危机逼近），禁止纯风景空镜开场拖节奏"
+                f"（开篇3秒规则42，抠姐检查·开篇3秒/前10秒）。"
+            )
+
+    # 3. 前 1/3 段必须建立核心冲突（对应前10秒内容）
+    if shots:
+        active = [s for s in shots if s.get("index") != 0]
+        if active:
+            head = active[: max(1, len(active) // 3)]
+            head_text = " ".join(
+                s.get("prompt", "") + s.get("narration_segment", "") + s.get("main_subject", "")
+                for s in head
+            )
+            if not any(p in head_text for p in _PUNCH_WORDS):
+                warnings.append(
+                    "前1/3段镜头未建立核心冲突（谁/在哪/要发生什么）——"
+                    "前10秒观众必须能一眼看懂冲突，禁止只铺垫不推进"
+                    "（规则42，抠姐检查·前10秒建立核心冲突）。"
+                )
+
+    for w in warnings:
+        print(f"[CHECK] 开篇冲突: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+def _check_punch_density(shots: list[dict], hook: dict = None) -> dict:
+    """v6.26 新增：爆点密度检查（抠姐剧本检查·爆点密度≥1个/30秒）.
+
+    以 60 秒全片估算爆点数（钩子+主分镜中含冲突/反转/打脸/高潮词的镜头数），
+    目标 ≥1个/30秒；并检查前1/3段是否已出现第一个爆点（防前段拖沓铺垫）。
+    """
+    issues, warnings = [], []
+    targets = [s for s in shots if s.get("index") != 0] + ([hook] if hook else [])
+    if not targets:
+        return {"pass": True, "issues": [], "warnings": []}
+
+    punch_count = 0
+    for s in targets:
+        text = " ".join([s.get("prompt", ""), s.get("narration_segment", ""),
+                         s.get("main_subject", ""), s.get("motion_desc", "")])
+        if any(p in text for p in _PUNCH_WORDS):
+            punch_count += 1
+
+    # 全片时长：duration_sec 权威来源，缺省按 60s 估算
+    total = 0.0
+    for s in targets:
+        d = s.get("duration_sec") or s.get("duration")
+        try:
+            total += float(d) if d else 0.0
+        except (TypeError, ValueError):
+            pass
+    if total <= 0:
+        total = 60.0
+
+    needed = max(1, int(total // 30) + (1 if total % 30 else 0))
+    if punch_count < needed:
+        warnings.append(
+            f"全片约 {total:.0f}s 含爆点镜头 {punch_count} 个（目标 ≥{needed}个/每30秒）——"
+            f"爆点（冲突/反转/打脸/高潮）密度不足，视频中段易流失观众；"
+            f"建议压缩铺垫、在关键转折处强化冲突（规则42.5，抠姐检查·爆点密度）。"
+        )
+
+    # 前1/3段须出现第一个爆点
+    active = [s for s in shots if s.get("index") != 0]
+    if active:
+        head = active[: max(1, len(active) // 3)]
+        head_text = " ".join(
+            s.get("prompt", "") + s.get("narration_segment", "") + s.get("main_subject", "")
+            for s in head
+        )
+        if not any(p in head_text for p in _PUNCH_WORDS):
+            warnings.append(
+                "前1/3段未检测到第一个爆点——铺垫镜头（纯环境/日常/过渡）连续不宜超2镜，"
+                "首个爆点应出现在前1/3段（规则42.5，抠姐检查·爆点密度/铺垫拖沓）。"
+            )
+
+    for w in warnings:
+        print(f"[CHECK] 爆点密度: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+def _check_dialogue_length(shots: list[dict], hook: dict = None) -> dict:
+    """v6.26 新增：对白单句≤15字检查（抠姐剧本检查·制作细节·台词口语化/单句≤15字）.
+
+    遍历所有有对白的镜头（narration_segment 非空），按分句标点拆成单句，
+    逐句检查长度（说话人「道：」前缀不计入，句末标点计入）。
+    """
+    issues, warnings = [], []
+    targets = list(shots) + ([hook] if hook else [])
+    for s in targets:
+        narration = (s.get("narration_segment") or "").strip()
+        if not narration:
+            continue
+        label = "hook" if (hook and s is hook) else s.get("index", "?")
+        # 去掉「说话人道：」前缀（说话人识别前缀不计入长度；兼容半角/全角冒号）
+        body = re.split(r"[:：]", narration, maxsplit=1)[-1]
+        # 按分句标点拆单句
+        sentences = [seg.strip() for seg in _DIALOGUE_SEP_RE.split(body) if seg.strip()]
+        for seg in sentences:
+            # 字符计数：保留汉字/字母数字，忽略空格（中文对白无空格，双引号/书名号等不计数）
+            count = len(re.sub(r"[^一-鿿A-Za-z0-9]", "", seg))
+            if count > _DIALOGUE_SENTENCE_MAX:
+                warnings.append(
+                    f"{label}: 对白单句 {count} 字（>{_DIALOGUE_SENTENCE_MAX}字）「{seg[:24]}…」"
+                    f"——对白需口语化、单句≤{_DIALOGUE_SENTENCE_MAX}字，长句按标点断成短句"
+                    f"（规则43，抠姐检查·台词口语化/单句长度）。"
+                )
+    for w in warnings:
+        print(f"[CHECK] 对白长度: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+def _check_dwell_time(shots: list[dict], hook: dict = None) -> dict:
+    """v6.26 新增：静态镜头停留时长检查（video-shotcraft·关键画面停留时长）.
+
+    对白/特写/静景/氛围空镜等静态镜头（prompt/ff_desc 含静态判定词，或 narration 非空
+    且画面无明显动作），duration_sec 低于 _DWELL_MIN_SEC → 提示停留不足；
+    对白镜头低于 3s → 提示建议放宽（动作短镜快切不受限，规则7既定节奏）。
+    """
+    issues, warnings = [], []
+    targets = list(shots) + ([hook] if hook else [])
+    for s in targets:
+        idx = s.get("index", "?")
+        if idx == 0 and hook and s is hook:
+            continue  # 钩子镜为「前一刻」定格，时长规则按钩子 prompt 独立约束，不套静态下限
+        d = s.get("duration_sec") or s.get("duration")
+        try:
+            duration = float(d) if d else 0.0
+        except (TypeError, ValueError):
+            duration = 0.0
+        if duration <= 0:
+            continue
+
+        prompt = (s.get("prompt") or "") + (s.get("ff_desc") or "")
+        narration = (s.get("narration_segment") or "").strip()
+        has_dialog = bool(narration)
+        # 静态判定：对白镜 或 画面含静态/特写/空镜词 且无动作动词
+        is_static = has_dialog or any(h in prompt for h in _DWELL_STATIC_HINTS)
+        if not is_static:
+            continue
+
+        if duration < _DWELL_MIN_SEC:
+            warnings.append(
+                f"镜头{idx}: 静态/对白镜头停留 {duration:.1f}s < {_DWELL_MIN_SEC:.0f}s——"
+                f"画面主体刚出现就切走，观众看不清；静态/对白镜头应 ≥{_DWELL_MIN_SEC:.0f}s"
+                f"（video-shotcraft·关键画面停留时长）。"
+            )
+        elif has_dialog and duration < _DWELL_DIALOG_RECOMMEND:
+            warnings.append(
+                f"镜头{idx}: 对白镜头 {duration:.1f}s（建议 3-5s）——台词口型与画面时间不足，"
+                f"可适当放宽到 {_DWELL_DIALOG_RECOMMEND:.0f}s 以上（规则7节奏分配）。"
+            )
+    for w in warnings:
+        print(f"[CHECK] 静态停留: [WARN] {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
