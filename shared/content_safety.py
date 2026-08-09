@@ -95,6 +95,35 @@ def sanitize(text: str) -> str:
     return out
 
 
+# 首帧/视频起点禁注入的「动作结果/武器词」（2026-08-09 审计 S2 收敛）：
+# dynamic_features 是全章状态（含破水/刺中后的血污、武器、致命伤等），但首帧是
+# 动作「前一刻」、视频起点是 ff_desc 前一刻状态，这些不该出现在开场——否则图片/
+# 视频模型画出血污/持刀（08-09 首帧杨旭胸口血迹、刺客血眼、听香溅血）。
+# 此前在 shared/vimax_bridge._FRAME_ACTION_RESULT_WORDS 与 step02_video_gen/
+# prompt_builder._DYNAMIC_ACTION_RESULT_WORDS 各持一份逐字相同的词表，改一漏一。
+# 现在收敛为单一来源，step02a 首帧过滤与 step02b 视频起点过滤共用。
+ACTION_RESULT_WORDS = (
+    "溅血", "溅红", "血", "血迹", "血污", "洇痕", "洇开", "暗红", "红痕",
+    "手持", "握刀", "握剑", "持刀", "持剑", "提刀", "举刀", "握匕首",
+    "寒光匕首", "匕首", "弯刀", "刺中", "刺入", "劈落", "仰面倒", "倒地",
+    "胸口", "心口", "伤口", "重伤", "毙命",
+)
+
+
+def strip_action_result(dynamic: str) -> str:
+    """从 dynamic_features 剥离不应出现的动作结果/武器词（首帧/视频起点）.
+
+    按顿号/逗号拆词，逐词判断——命中动作结果/武器词则剔除，其余（服装/发型/
+    姿势/饰品）保留。避免把「脸上溅血」这种动作结果带进首帧。
+    """
+    import re
+    if not dynamic:
+        return ""
+    parts = [p.strip() for p in re.split(r"[，、,\s]+", dynamic) if p.strip()]
+    kept = [p for p in parts if not any(w in p for w in ACTION_RESULT_WORDS)]
+    return "，".join(kept)
+
+
 def check_chain_safety() -> list[tuple[str, str, str]]:
     """静态检查替换值是否命中其它 key（链式二次替换风险）.
 

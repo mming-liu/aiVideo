@@ -944,6 +944,181 @@ def normalize_ff_desc(ff_desc: str, shot: dict | None = None,
     return "，".join(out).strip("，、。 ")
 
 
+# ============================================================================
+# lf_desc 终态归一化（与 ff 侧 normalize_ff_desc 对称，审计 S1 收敛）
+# ============================================================================
+# 尾帧（lf_desc）应是动作**彻底结束的终态**（刺客已没入、杨旭已倒下、水面已平静），
+# 但 LLM 常输出中间态（正在刺/即将刺/半截刀尖露水面/缓缓没入中）。视频模型把 lf_desc
+# 当【视频终点】定格，任何中间态都会被定格成诡异画面（08-09 钩子「匕首尖停水面」）。
+# normalize_lf_desc 把中间态确定性改写为终态。
+# 词表命名 LF_*（与 FF_* 区分），值**禁用** 正在/仍/缓缓/即将/正要/欲 及 没入/倒下/
+# 沉入 等动词（幂等铁律：产物不命中任何触发词）。
+LF_WEAPON_WORDS = ("刀尖", "匕首", "剑尖", "枪尖", "刀", "剑", "枪", "矛", "戟", "斧", "锏", "鞭", "钩", "镖")
+LF_WATER_RESIDUE_VERBS = (
+    "刺破水面", "露出水面", "露在水面", "探出水面", "挑破水面",
+    "浮于水面", "悬于水面", "划过水面", "戳破水面", "掠在水面",
+    "在水面划动", "于水面划动",
+)
+LF_RESIDUE_PREFIX = ("仅余", "只剩", "仅剩", "只余", "唯余", "留下", "余下", "半截", "一截")
+LF_PROGRESSIVE_MARKERS = ("正在", "仍在", "还在", "正", "还")
+LF_PROGRESSIVE_VERBS = (
+    "挣扎", "扑腾", "沉入", "没入", "下沉", "刺", "劈", "砍", "斩", "捅",
+    "跃", "冲", "窜", "跑", "坠", "倒下", "倒地", "滑落", "蠕动", "抽搐",
+)
+LF_IMMINENT_MARKERS = ("即将", "正要", "将要", "快要", "就要", "欲")
+LF_IMMINENT_VERBS = (
+    "刺入", "刺中", "刺向", "刺到", "捅入", "劈向", "砍向", "斩向",
+    "扑向", "扑倒", "坠入", "砸向", "击中", "撞向", "贯入", "没入", "沉入",
+)
+LF_TRANSITION_MARKERS = ("缓缓", "慢慢", "逐渐", "渐渐", "徐徐", "一点一点")
+LF_HALF_BODY_TRIGGERS = ("半身", "半个身子", "半截", "半个")
+LF_HALF_BODY_VERBS = ("探出", "露出", "没入", "沉入", "浮出", "仰出")
+LF_STRIP_PREFIXES = ("随即", "随后", "然后", "接着", "紧接着", "与此同时")
+
+# 中间态 → 终态改写映射（长词优先替换；值不得命中任何触发词）
+LF_TRANSITION_TO_DONE = (
+    ("缓缓没入", "已没入"), ("慢慢没入", "已没入"), ("逐渐没入", "已没入"),
+    ("徐徐没入", "已没入"), ("缓缓沉入", "已沉入"), ("慢慢沉入", "已沉入"),
+    ("逐渐沉入", "已沉入"), ("缓缓倒下", "仰面倒下"), ("慢慢倒下", "仰面倒下"),
+    ("逐渐倒下", "仰面倒下"), ("缓缓下沉", "已沉入水下"), ("慢慢下沉", "已沉入水下"),
+)
+LF_PROGRESSIVE_TO_DONE = (
+    ("正在没入", "已没入"), ("仍在没入", "已没入"), ("正在沉入", "已沉入"),
+    ("还在沉入", "已沉入"), ("正在下沉", "已沉入"), ("正没入", "已没入"),
+    ("正在倒下", "仰面倒下"), ("仍在倒下", "仰面倒下"),
+    ("正在挣扎", "已不再挣扎"), ("仍在挣扎", "已不再挣扎"), ("还在挣扎", "已不再挣扎"),
+    ("还在抽搐", "已不再抽搐"), ("正在抽搐", "已不再抽搐"),
+)
+LF_IMMINENT_TO_DONE = (
+    ("即将刺入", "已刺入"), ("正要刺入", "已刺入"), ("即将刺中", "已刺中"),
+    ("即将刺向", "已刺向"), ("正要刺向", "已刺向"), ("正要扑向", "已扑向"),
+    ("即将扑向", "已扑向"), ("即将坠入", "已坠入"), ("正要坠入", "已坠入"),
+)
+
+
+def detect_lf_midstate(lf_desc: str, characters=None) -> list[dict]:
+    """检测 lf_desc 是否含「动作未彻底结束」的中间态表达.
+
+    这是 normalize_lf_desc 是否动手的闸门：返回空列表 = 无问题，原样返回。
+    中间态类别（每一类是一条问题记录）：
+      residue     残留态：仅余一截刀尖刺破水面
+      half_body   半身态：半身探出水面
+      transition  过渡态：缓缓没入中
+      imminent    即将态：即将刺入
+      progressive 进行态：正在没入
+    保守设计：无标记裸动词（挣扎）不触发（防误伤静态终态）；「只剩」前缀单独
+    出现不触发（残留态要求「武器词 + 水面残留动词」同时命中）。
+    """
+    if not lf_desc or not isinstance(lf_desc, str):
+        return []
+    problems: list[dict] = []
+    names = _subject_names(characters)
+    for clause in _split_ff_clauses(lf_desc):
+        masked = _mask_subjects(clause, names)
+        # 1. 残留态：剥前缀后 武器+水面残留动词
+        stripped = clause
+        for p in LF_RESIDUE_PREFIX:
+            stripped = stripped.replace(p, "")
+        if any(w in stripped for w in LF_WEAPON_WORDS) \
+                and any(v in stripped for v in LF_WATER_RESIDUE_VERBS):
+            problems.append({"type": "residue", "clause": clause})
+        # 2. 半身态
+        if any(t in masked for t in LF_HALF_BODY_TRIGGERS) \
+                and any(v in masked for v in LF_HALF_BODY_VERBS):
+            problems.append({"type": "half_body", "clause": clause})
+        # 3. 过渡态
+        if any(t in masked for t in LF_TRANSITION_MARKERS) \
+                and any(v in masked for v in LF_PROGRESSIVE_VERBS):
+            problems.append({"type": "transition", "clause": clause})
+        # 4. 即将态
+        if any(m in masked for m in LF_IMMINENT_MARKERS) \
+                and any(v in masked for v in LF_IMMINENT_VERBS):
+            problems.append({"type": "imminent", "clause": clause})
+        # 5. 进行态（标记+动词成对）
+        if any(m in masked for m in LF_PROGRESSIVE_MARKERS) \
+                and any(v in masked for v in LF_PROGRESSIVE_VERBS):
+            problems.append({"type": "progressive", "clause": clause})
+    return problems
+
+
+def _finalize_lf_clause(clause: str, names: set) -> str:
+    """逐分句终态化（优先级：残留 → 过渡 → 进行 → 即将 → 半身，命中一条即返回）."""
+    masked = _mask_subjects(clause, names)
+
+    # 1. 残留态：吞前缀，武器残留动词 → 武器已没入水下（保留武器名，不吞词）
+    stripped = clause
+    for p in LF_RESIDUE_PREFIX:
+        stripped = stripped.replace(p, "")
+    if any(w in stripped for w in LF_WEAPON_WORDS) \
+            and any(v in stripped for v in LF_WATER_RESIDUE_VERBS):
+        weapon = next(w for w in LF_WEAPON_WORDS if w in stripped)
+        return f"{weapon}已没入水下"
+
+    # 2. 过渡态短语替换（长词优先）
+    for old, new in LF_TRANSITION_TO_DONE:
+        if old in clause:
+            return clause.replace(old, new)
+
+    # 3. 进行态短语替换
+    for old, new in LF_PROGRESSIVE_TO_DONE:
+        if old in clause:
+            return clause.replace(old, new)
+
+    # 4. 即将态短语替换
+    for old, new in LF_IMMINENT_TO_DONE:
+        if old in clause:
+            return clause.replace(old, new)
+
+    # 5. 半身态：半身探出/没入 → 已没入水下（保留主语，不删整句——
+    #    否则「刺客半身探出水面」→ 空字符串，主语丢失）
+    if any(t in masked for t in LF_HALF_BODY_TRIGGERS) \
+            and any(v in masked for v in LF_HALF_BODY_VERBS):
+        # 剥离半身/探出/露出 等中间态词，保留主语 + 改写为已没入
+        subj = ""
+        for name in sorted(names, key=len, reverse=True):
+            if name in clause:
+                subj = name
+                break
+        for t in LF_HALF_BODY_TRIGGERS:
+            clause = clause.replace(t, "")
+        return f"{subj}已没入水下".strip() if subj else "已没入水下"
+
+    return clause
+
+
+def normalize_lf_desc(lf_desc: str, shot: dict | None = None,
+                      characters=None) -> str:
+    """lf_desc 归一化：中间态表达 → 动作彻底结束的终态（幂等、保守）.
+
+    视频模型把 lf_desc 当【视频终点】定格，任何「正在刺/即将刺/半截刀尖露
+    水面/缓缓没入中」都会被定格成诡异画面。本函数把中间态确定性改写为终态。
+
+    v6.29 语义：终态 = 动作已彻底结束（已没入/已刺入/已倒下/水面只剩涟漪），
+    与 ff_desc 的「前一刻」对称（ff 前一刻 静止、lf 已结束 静止）。
+    """
+    if not lf_desc or not isinstance(lf_desc, str):
+        return lf_desc
+    # 闸门：无中间态则原样返回（幂等保守）
+    if not detect_lf_midstate(lf_desc, characters):
+        return lf_desc
+
+    text = lf_desc
+    for w in LF_STRIP_PREFIXES:
+        text = text.replace(w, "")
+    clauses = _split_ff_clauses(text)
+    names = _subject_names(characters)
+
+    out: list[str] = []
+    for c in clauses:
+        c = _finalize_lf_clause(c, names)
+        if c:
+            out.append(c)
+    joined = "，".join(out).strip("，、。 ")
+    joined = re.sub(r"[，、]{2,}", "，", joined)
+    joined = re.sub(r"\s{2,}", " ", joined)
+    return joined
+
+
 # 朝向强化触发词（与 vimax_bridge._collect_portrait_refs_for_shot 的 subject_view
 # 判定同源——参考图三视图是伪三视图，朝向语义改由 prompt 文字驱动）
 ORIENTATION_KW = (

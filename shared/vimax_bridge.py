@@ -822,7 +822,8 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
 
 
 def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
-                            reference_paths: list | None = None) -> str:
+                            reference_paths: list | None = None,
+                            lock_kind: str = "layout") -> str:
     """计算首帧/尾帧的稳定哈希值 v4.
 
     v4: 新增 _prompt_sig() 对实际图片 prompt (ff_desc/lf_desc) 做规范化哈希，
@@ -832,7 +833,15 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
     v3: 使用稳定字段（main_subject/scene/core_keywords）代替完整 prompt，
     避免 LLM 生成的 prompt 文本有微小差异（换行/空格/词汇顺序）导致
     哈希永远不匹配，缓存永远失效的问题。
-    reference_paths 由 shot 内容派生，内容不变则路径语义不变，不纳入哈希。
+
+    lock_kind: 图片锁类型——"layout"（完整锁图，含场景布局不变）或
+    "no_layout"（动作镜头解除布局锁）。锁类型是 prompt 语义的一部分，
+    作为哈希键而非魔法后缀（替代 v6.19 的 _ff_nl/_lf_nl/_kf_nl 后缀补丁，
+    审计 S4）。
+
+    reference_paths: 参考图路径。语义变化（增删/换图）应触发重新生成——
+    但路径本身是文件引用，哈希路径的规范性已由调用方保证（内容不变则路径语义
+    不变）。实际参考图的 mtime/size 变化由上层文件系统缓存处理。
     """
     def _normalize(text: str) -> str:
         """规范化文本：strip + 统一空白字符，消除 LLM 格式噪音。"""
@@ -859,6 +868,7 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
 
     key_parts = [
         STYLE_PREFIX,                      # 风格前缀变化时首帧也应重新生成
+        f"lock={lock_kind}",               # 锁类型是 prompt 语义的一部分
     ]
     key_parts.extend(stable_fields)
 
@@ -870,6 +880,10 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
 
     if empty_scene:
         key_parts.append("empty_scene")    # 空镜判定翻转时帧应重做
+
+    # 参考图路径语义纳入哈希（审计 S4：此前不入哈希，参考图变了但哈希不变）
+    for ref in (reference_paths or []):
+        key_parts.append(f"ref={_normalize(str(ref))}")
 
     key = "|".join(key_parts)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
@@ -1382,28 +1396,14 @@ def _inject_character_costume(desc: str, characters: list | None,
         return desc
 
 
-# 首帧禁注入的动作结果/武器词（dynamic_features 是全章状态，含破水/刺中后的
-# 血污、武器、致命伤等结果。首帧是动作前一刻，这些不该出现——否则图片模型画出血
-# 污/持刀）。仅按词拆分保留，不误伤服装/发型/姿势词（春衫/步摇/披发/跪坐等）。
-_FRAME_ACTION_RESULT_WORDS = (
-    "溅血", "溅红", "血", "血迹", "血污", "洇痕", "洇开", "暗红", "红痕",
-    "手持", "握刀", "握剑", "持刀", "持剑", "提刀", "举刀", "握匕首",
-    "寒光匕首", "匕首", "弯刀", "刺中", "刺入", "劈落", "仰面倒", "倒地",
-    "胸口", "心口", "伤口", "重伤", "毙命",
-)
+# 首帧禁注入的动作结果/武器词：收敛到 shared/content_safety（审计 S2），
+# 与 step02_video_gen/prompt_builder 视频起点过滤共用单一词表，不再各持一份。
+from shared.content_safety import ACTION_RESULT_WORDS, strip_action_result as _safety_strip_action_result
 
 
 def _strip_frame_action_result(dynamic: str) -> str:
-    """从 dynamic_features 中剥离首帧不应出现的动作结果/武器词.
-
-    按顿号/逗号拆词，逐词判断——命中动作结果/武器词则剔除，其余（服装/发型/
-    姿势/饰品）保留。避免把「脸上溅血」这种动作结果带进首帧。
-    """
-    if not dynamic:
-        return ""
-    parts = [p.strip() for p in re.split(r"[，、,\s]+", dynamic) if p.strip()]
-    kept = [p for p in parts if not any(w in p for w in _FRAME_ACTION_RESULT_WORDS)]
-    return "，".join(kept)
+    """从 dynamic_features 中剥离首帧不应出现的动作结果/武器词（复用 shared 单一实现）."""
+    return _safety_strip_action_result(dynamic)
 
 
 # 尾帧目光确定性修复：错别字 + 看向动作结果对象
@@ -1575,12 +1575,12 @@ async def _gen_first_frame_async(
             shot["ff_desc"] = ff_desc = norm
             _bridge_log(f"  [bridge] 镜头{idx}: ff_desc 归一化（多动作→静态瞬间）")
 
-    # 计算当前哈希值（核心意图 + 空镜约束 + 参考图，任一变化都重新生成）
-    current_hash = _get_frame_content_hash(shot, empty_scene, reference_paths)
-    # 动作镜头首帧改用 NO_LAYOUT 锁图（解除"场景布局不变"），prompt 语义变化，
-    # 追加 _ff_nl 后缀强制旧缓存（无人的首帧）失效重新生成。
-    if _is_action_shot(shot, characters):
-        current_hash += "_ff_nl"
+    # 计算当前哈希值（核心意图 + 空镜约束 + 参考图 + 锁类型，任一变化都重新生成）
+    # 动作镜头用 NO_LAYOUT 锁图（prompt 语义变化），锁类型纳入哈希键而非魔法后缀。
+    current_hash = _get_frame_content_hash(
+        shot, empty_scene, reference_paths,
+        lock_kind="no_layout" if _is_action_shot(shot, characters) else "layout",
+    )
 
     # v1.1：挂实际生成最终 prompt 到 shot（QC 语义核对用）。缓存命中/生成两条
     # 路径都在此补算——缓存命中时 ff_desc_full 未计算，但 shot["ff_desc"] 已被
@@ -1711,9 +1711,18 @@ async def _gen_last_frame_async(
     if empty_scene:
         lf_desc = f"{lf_desc}\n空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
 
-    # 计算当前哈希值（核心意图 + 空镜约束 + 参考图，任一变化都重新生成）
-    # 追加 _nl 后缀：解除布局锁后 prompt 语义变化，强制旧缓存失效重新生成
-    current_hash = _get_frame_content_hash(shot, empty_scene, reference_paths) + "_lf_nl"
+    # v6.29：尾帧终态归一化兜底（与 step01 post_fix 对称）——lf_desc 中间态在
+    # 帧生成前也清洗一次，保证 step02a 直接跑时尾帧不画中间态；回写保证哈希正确失效。
+    if lf_desc:
+        from style_prefix import normalize_lf_desc
+        _norm_lf = normalize_lf_desc(lf_desc, shot, characters)
+        if _norm_lf != lf_desc:
+            shot["lf_desc"] = lf_desc = _norm_lf
+
+    # 计算当前哈希值（核心意图 + 空镜约束 + 参考图 + 锁类型）
+    # 尾帧用 NO_LAYOUT 锁图（构图随动作演变），锁类型纳入哈希键（审计 S4）。
+    current_hash = _get_frame_content_hash(
+        shot, empty_scene, reference_paths, lock_kind="no_layout")
 
     # v1.1：挂实际生成最终 prompt（QC 语义核对用），与首帧同理
     try:
@@ -1867,9 +1876,9 @@ async def _gen_keyframes_async(
         if empty_scene:
             kf_desc = kf_desc + "\n空镜头， 画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
         
-        # 复用首帧哈希逻辑：基于 shot 内容派生，内容不变则路径语义不变
-        # 追加 _nl 后缀：解除布局锁后 prompt 语义变化，强制旧缓存失效重新生成
-        current_hash = _get_frame_content_hash(shot, empty_scene, reference_paths) + f"_kf_{i}_nl"
+        # 复用首帧哈希逻辑：基于 shot 内容派生 + 锁类型（关键帧用 NO_LAYOUT 锁）
+        current_hash = _get_frame_content_hash(
+            shot, empty_scene, reference_paths, lock_kind="no_layout")
         
         for attempt in range(max_retries + 1):
             if kf_path.exists() and not force and attempt == 0:

@@ -29,6 +29,19 @@ import storyboard_refs
 _novel_text_for_validation = ""
 
 
+# 空镜主体词表（唯一权威常量，审计 P1-8 收敛）。
+# 历史：此前在 222/493/645/1158/2752 五处各持一份互不一致的词表，222 已修
+# 「禁止单字水」、1158 还是旧版（含单字 山/水/湖 误报「刺客出水」为空镜）。
+# 现在收敛为单一常量，所有空镜判定引用它。
+# 注意：只含**纯场景词**（不含动作/角色名），且**不含单字「水/湖/山」**——
+# 「刺客出水」含「水」被误判为空镜的根因。
+EMPTY_SCENE_SUBJECTS = frozenset({
+    "空镜", "荷塘", "池塘", "日落", "日出", "田野", "田埂", "村庄",
+    "天空", "大地", "庭院", "回廊", "楼阁", "屋檐", "照月湾", "山峦",
+    "水面", "湖面", "荷塘黄昏全景", "夕阳", "薄雾",
+})
+
+
 def _set_novel_text(text: str) -> None:
     """设置待验证的小说原文。"""
     global _novel_text_for_validation
@@ -216,14 +229,12 @@ def _print_content_issue_summary(script: dict, shots: list[dict]) -> None:
             flagged.append(f"镜头{idx}: 语义风险关键词 {found}（需人工确认是否保留）")
 
     # 3. 连续空镜（事件轴分布硬性检查项）
-    # 空镜词用「纯场景词」匹配，禁止用单字「水」——「刺客出水」含「水」被误判为空镜
-    # （08-09 日志镜头7-9 刺客出水/刺向/遁水被误报连续空镜）。只有 main_subject
-    # 是纯场景/环境（不含动作、不含角色名）才算空镜。
-    empty_subjects = {"空镜", "荷塘", "日落", "日出", "田野", "村庄", "山峦", "水面", "湖面"}
+    # 空镜词用唯一常量 EMPTY_SCENE_SUBJECTS（纯场景词，禁止单字「水」——
+    # 「刺客出水」含「水」被误判为空镜，08-09 已修）。
     run = 0
     for shot in shots:
         ms = shot.get("main_subject", "") or ""
-        is_empty = any(s in ms for s in empty_subjects)
+        is_empty = any(s in ms for s in EMPTY_SCENE_SUBJECTS)
         if is_empty:
             run += 1
         else:
@@ -490,10 +501,7 @@ def _check_character_consistency(script: dict) -> dict:
     # 单字场景词（水/湖/船/灯/门等）作为子串会误伤人物/道具动作主体
     # （如「步摇落水」「张十三跃上船」「张十三举灯」）→ 用双保险：
     # 主体含已知角色名、或含道具名词时一律视为动作镜，不做空镜判定。
-    non_character_subjects = {
-        "空镜", "荷塘", "池塘", "日落", "日出", "田野", "田埂", "村庄",
-        "天空", "大地", "庭院", "回廊", "楼阁", "屋檐", "照月湾", "荷塘黄昏全景", "山峦",
-    }
+    non_character_subjects = EMPTY_SCENE_SUBJECTS
     prop_hints = {
         "步摇", "剑", "刀", "枪", "扇", "笛", "琴", "棋", "书", "箭", "鞭",
         "玉佩", "令牌", "酒杯", "钓杆", "油纸伞", "发簪", "珠钗", "灯笼", "烛火",
@@ -642,7 +650,7 @@ def _check_negative_prompt(shots: list[dict]) -> dict:
     校验 prompt 是否含禁止人物标记（空镜出人是唯一能在脚本层拦下的缺陷）。
     """
     warnings = []
-    non_character_subjects = {"空镜", "荷塘", "池塘", "日落", "日出", "山峦", "田野", "村庄", "照月湾", "荷塘黄昏全景"}
+    non_character_subjects = EMPTY_SCENE_SUBJECTS
     no_people_markers = {
         "无人物", "无人", "空无一人", "无一人", "没有人物", "禁止人物",
         "no people", "empty scene", "空镜无人", "画面无人物", "无人烟",
@@ -1154,12 +1162,11 @@ def _check_narrative_arc_distribution(shots: list[dict], script: dict) -> dict:
             f"建议将至少一个高潮点移至后半段（战斗/刺杀/反转等）。"
         )
 
-    # 检查3：连续空镜检测
-    empty_subjects = {"空镜", "荷塘", "日落", "日出", "山", "水", "湖", "田野", "村庄"}
+    # 检查3：连续空镜检测（复用唯一常量 EMPTY_SCENE_SUBJECTS，禁用单字水/湖/山）
     consecutive_empty = 0
     for shot in shots:
         ms = shot.get("main_subject", "")
-        if any(e in ms for e in empty_subjects):
+        if any(e in ms for e in EMPTY_SCENE_SUBJECTS):
             consecutive_empty += 1
             if consecutive_empty >= 2:
                 issues.append(
@@ -1330,56 +1337,9 @@ def _check_emotion_visualization(shots: list[dict], hook: dict = None) -> dict:
         "释然", "得意", "苦笑", "假笑", "冷笑",
     ]
 
-    # 情绪词 → 可视化动作对照表
-    # 2026-08-04 扩充：与 _EMOTION_ACTION_MAP（自动修复）同源，保证校验建议与自动修复一致
-    emotion_to_action = {
-        "悲伤": "低头垂眸、眼眶泛红、双手紧握、肩膀颤抖、泪水滑落、嘴角下垂",
-        "愤怒": "咬牙切齿、眉头上挑、额头青筋跳动、猛拍桌面、胸口起伏、呼吸急促",
-        "迷茫": "眼神空洞、眉头紧锁、手指无意识摩挲、望向远处、嘴唇微张、叹息",
-        "冷酷": "面部肌肉僵硬、嘴角下沉、目光如刀、手指缓慢擦拭兵刃、不带感情",
-        "开心": "眉眼弯弯、嘴角上扬、露出牙齿、身体前倾、拍手、跳跃",
-        "害怕": "瞳孔放大、脚步后退、双手护胸、身体颤抖、面色苍白、冷汗直流",
-        "惊讶": "眼睛瞪大、嘴巴张开、眉毛上扬、身体后仰、双手举起",
-        "温柔": "眼神柔和、嘴角含笑、动作轻缓、声音软糯、轻轻抚摸",
-        "严肃": "眉头紧锁、表情凝固、目光犀利、声音低沉、双手交叉胸前",
-        "紧张": "吞咽口水、频繁眨眼、搓手、踱步、咬唇、肌肉紧绷",
-        "害羞": "低头、脸颊泛红、绞手指、眼神躲闪、声音变小、扭捏",
-        "镇定": "呼吸平稳、目光坚定、表情平静、站立不动、声音平稳",
-        # face-expressions 扩充（2026-08-04）
-        "震惊": "眉峰上扬、眼睛微睁、嘴角微张、眼神意外",
-        "错愕": "嘴巴微张、眼神停滞、眉头微蹙、头微偏",
-        "难以置信": "眉头微皱、眼睛半睁半疑、嘴巴微撇、头微偏",
-        "石化": "表情完全僵住、眼睛瞪大、嘴巴半张、面部如雕塑静止",
-        "惊喜": "眼睛睁大、眼角带笑、眉毛上扬、脸颊泛红",
-        "委屈": "嘴角下撇、眼眶泛红、眼神湿润、头微低",
-        "哭泣": "眼泪滑落、眼眶泛红、嘴角微撇、眉头紧锁",
-        "失落": "眼神低垂、嘴角平直、面部无表情",
-        "绝望": "眼神空洞、嘴角下撇、面部肌肉僵硬",
-        "难过": "嘴角下撇、眼神湿润、眉毛微蹙、头微低",
-        "沮丧": "眼神低垂、嘴角下撇、面部无精打采",
-        "心碎": "眼神黯淡、嘴角下撇、面部肌肉松弛",
-        "隐忍": "眼眶泛红、嘴角紧闭、眼神坚定、头微仰",
-        "生气": "眉头微蹙、眼神锐利、嘴角下撇、头微抬",
-        "暴怒": "眼睛瞪大、瞳孔收缩、嘴巴大张、面部肌肉扭曲",
-        "不满": "眉头微蹙、眼神不满、嘴角下撇、头微偏",
-        "厌恶": "眉头微皱、眼神厌恶、嘴角下撇、头微偏",
-        "气呼呼": "脸颊鼓起、眉头微蹙、眼神不满、嘴巴微嘟",
-        "高冷": "嘴角平直、眉头舒展、眼神淡漠、下颌线清晰",
-        "慵懒": "眼皮半耷拉、眼神慵懒、嘴角平直、头微歪",
-        "冰冷": "眼神冰冷、嘴角平直、眉头微蹙、下颌微抬",
-        "疏离": "脸侧角度、眼神疏离、嘴角平直、冷硬光影",
-        "困倦": "眼皮耷拉、眼神惺忪、眼角泛红、头微仰",
-        "疲惫": "眼皮下垂、眼神疲惫、眼袋明显、嘴角下撇",
-        "撒娇": "嘴巴嘟起、脸颊鼓起、眼神委屈带期待、头微歪",
-        "傲娇": "头微扭、嘴角下撇、眼神傲娇、眉峰微挑",
-        "好奇": "头微歪、眼睛睁大、眼神好奇、嘴角微扬",
-        "冷漠": "眼神平静无波、眉形平直、嘴角没有弧度、直视镜头",
-        "释然": "眼神柔和稳定、眉头完全舒展、嘴角浮现极浅笑意",
-        "得意": "嘴角上扬、眼神明亮、眉梢微挑、头微仰",
-        "苦笑": "嘴角扯出僵硬弧度、眉头微蹙、眼神无奈、眼底带疲惫",
-        "假笑": "嘴角上扬无笑意、眼神空洞、苹果肌僵硬、眉峰平直",
-        "冷笑": "嘴角单侧上扬、眉峰微挑、眼神轻蔑、下颌微抬",
-    }
+    # 情绪词 → 可视化动作对照表（收敛：复用模块级 _EMOTION_ACTION_MAP 单一来源，
+    # 审计 P1-8 此前在此处另有一份顿号分隔的独立副本，与修复版逗号分隔互相抵消）
+    emotion_to_action = _EMOTION_ACTION_MAP
 
     def check_shot_emotions(shot, idx):
         """检查单个镜头的情绪可视化"""
@@ -1405,7 +1365,8 @@ def _check_emotion_visualization(shots: list[dict], hook: dict = None) -> dict:
 
                 if emotion in emotion_to_action:
                     # 检查是否包含该情绪对应的任何可视化动作词
-                    action_words = emotion_to_action[emotion].split("、")
+                    # （_EMOTION_ACTION_MAP 用逗号分隔，与修复版一致，避免互相抵消）
+                    action_words = emotion_to_action[emotion].split("，")
                     for action in action_words:
                         if action in full_text:
                             has_visual_action = True
@@ -1555,29 +1516,26 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
         for warn in warnings:
             print(f"[CHECK] 首尾帧完整性: [WARN] {warn}")
 
-    # 尾帧武器残留检查（08-09 钩子坑：匕首尖停水面）：刺客/杀手没入水中后，
-    # 武器必须一并没入，禁止「仅余一截刀尖刺破水面/露出水面」这类卡在水面的
-    # 中间态——视频模型会把刀尖当【视频终点】定格，观众看到匕首一直戳水面。
-    # 注：函数内 1486 行 `import re` 是局部遮蔽，这里统一用模块级 `_re`。
-    import re as _re
-    _weapon_residue_warns = []
+    # 尾帧中间态检查（v6.29：从「武器残留单洞」扩展为五类中间态，复用
+    # style_prefix.detect_lf_midstate 闸门，词库单一来源——取代窄正则武器残留）。
+    # 视频模型把 lf_desc 当【视频终点】定格，任何中间态（正在刺/即将刺/半截刀尖
+    # 露水面/缓缓没入中）都会被定格成诡异画面（08-09 钩子坑「匕首尖停水面」）。
+    from style_prefix import detect_lf_midstate
+    _midstate_warns = []
     for _shot in list(shots) + ([hook] if hook else []):
         _idx = _shot.get("index", "?")
         _lf = _shot.get("lf_desc", "") or ""
-        # 武器半截露水面：刀/匕首/剑 + 刺破水面/露出水面/水面之上
-        _weapon_residue = _re.search(
-            r"(?:刀尖|匕首|剑尖|刀|匕)[^。！？；]{0,6}(?:刺破水面|露出水面|露在水面|探出水面|挑破水面|浮于水面)",
-            _lf,
-        )
-        if _weapon_residue:
-            _weapon_residue_warns.append(
-                f"镜头{_idx}: 尾帧武器残留「{_weapon_residue.group(0)}」——武器半截卡在水面，"
-                f"视频模型会把它当【视频终点】定格，观众看到匕首尖一直戳在水面。"
-                f"应让武器随人彻底没入水下（不提武器），或已被拔出握在岸上人物手中，"
-                f"禁止「刀尖刺破水面」这类中间态（规则609）。"
+        _problems = detect_lf_midstate(_lf)
+        if _problems:
+            _kinds = {p["type"] for p in _problems}
+            _midstate_warns.append(
+                f"镜头{_idx}: lf_desc 含中间态（{'/'.join(sorted(_kinds))}）——"
+                f"尾帧必须是动作彻底结束的终态，中间态会被视频模型当【视频终点】定格成"
+                f"诡异画面（如匕首尖一直戳水面）。应让武器/人物彻底没入或已结束"
+                f"（规则609，normalize_lf_desc 会自动修复）。"
             )
-    for w in _weapon_residue_warns:
-        print(f"[CHECK] 尾帧武器残留: [WARN] {w}")
+    for w in _midstate_warns:
+        print(f"[CHECK] 尾帧中间态: [WARN] {w}")
 
     # 硬性检查：lf_desc 不能为空，首尾帧不能完全相同
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
@@ -2749,11 +2707,8 @@ _PERSON_PATTERN = re.compile(
     r"|面孔|面部|脸颊|脸庞|面容|五官|眉"
 )
 # 纯场景主体（空镜/风景）——无人物时跳过光位检查（风景光位逻辑不同）
-_EMPTY_SCENE_SUBJECTS = {
-    "空镜", "荷塘", "池塘", "日落", "日出", "田野", "田埂", "村庄",
-    "天空", "大地", "庭院", "回廊", "楼阁", "屋檐", "照月湾", "山峦",
-    "水面", "湖面", "荷塘黄昏全景", "夕阳", "薄雾",
-}
+# 空镜主体词表（收敛：引用文件顶部唯一常量 EMPTY_SCENE_SUBJECTS，审计 P1-8）
+_EMPTY_SCENE_SUBJECTS = EMPTY_SCENE_SUBJECTS
 # 场景主体里的动作/道具词——main_subject 含这些但非人物名时，也视为有人（动作镜）
 _ACTIVE_SCENE_HINTS = ("跃", "冲", "刺", "追", "杀", "对峙", "交锋", "挥手", "举", "抱")
 
@@ -3025,21 +2980,13 @@ _SPEAKER_TRAIL_VERB_RE = re.compile(r'(?:扬|怒|颤|冷|漫|惊|厉|高|低|轻
 def _extract_speaker(narration: str, defined_ids: frozenset | None = None) -> str:
     """从「说话人道：台词」格式中提取说话人。
 
-    优先用角色库里的精确名（避免把「惊叫/颤声」等动词修饰语误当说话人），
-    找不到再退回正则提取，并剥离尾部说话动词（「庄丁喊」→「庄丁」）。
+    复用 shared/dialogue.detect_speaker 权威实现（含角色库精确名优先 + 剥离
+    尾部说话动词，审计 P1-8 说话人检测 5 套正则收敛）。返回空串表示未检测到。
     """
-    n = (narration or "").strip()
-    if not n:
-        return ""
-    if defined_ids:
-        for cid in sorted(defined_ids, key=len, reverse=True):
-            if n.startswith(cid):
-                return cid
-    m = _SPEAKER_TAG_RE.match(n)
-    if not m:
-        return ""
-    speaker = m.group(1)
-    return _SPEAKER_TRAIL_VERB_RE.sub("", speaker)
+    from shared.dialogue import detect_speaker
+    chars = [{"identifier": cid} for cid in (defined_ids or [])]
+    speaker = detect_speaker(narration, chars) if narration else None
+    return speaker or ""
 
 
 def post_fix_shot_prompts(script: dict) -> dict:
@@ -3113,10 +3060,13 @@ def post_fix_shot_prompts(script: dict) -> dict:
 
         # v6.28：尾帧武器残留确定性修复（从根上解决「匕首尖停水面」）。
         # LLM 常把「刺客没入水中」写成「仅余一截刀尖刺破水面」——刀尖半截卡在水面，
-        # 视频模型把 lf_desc 当【视频终点】定格，观众看到匕首一直戳水面。
-        # 这里落盘前自动改写为「彻底没入 + 水面涟漪」，不依赖 LLM 自觉（08-09 钩子坑）。
+        # v6.29：lf_desc 终态归一化（中间态 → 彻底结束；与 ff 侧 normalize_ff_desc 对称）。
+        # 取代 v6.28 的 _fix_lf_weapon_residue 窄正则（审计 S1：_fix_* 小函数收敛为管道）。
+        # 覆盖残留/半身/过渡/即将/进行 五类中间态（武器残留是其一）。
         if shot.get("lf_desc"):
-            shot["lf_desc"] = _fix_lf_weapon_residue(shot["lf_desc"])
+            from style_prefix import normalize_lf_desc
+            shot["lf_desc"] = normalize_lf_desc(
+                shot["lf_desc"], shot, script.get("characters", []))
 
     # hook 也需要光位量化 + 情绪可视化修复（光位先，让情绪词先驱动光位选择）
     hook = script.get("hook")
@@ -3134,54 +3084,13 @@ def post_fix_shot_prompts(script: dict) -> dict:
             hook["lf_desc"] = fix_lf_desc_gaze(
                 hook["lf_desc"], hook, script.get("characters", []))
 
-        # v6.28：hook 尾帧武器残留确定性修复（同 shot）
+        # v6.29：hook 尾帧终态归一化（同 shot，取代 v6.28 武器残留窄正则）
         if hook.get("lf_desc"):
-            hook["lf_desc"] = _fix_lf_weapon_residue(hook["lf_desc"])
+            from style_prefix import normalize_lf_desc
+            hook["lf_desc"] = normalize_lf_desc(
+                hook["lf_desc"], hook, script.get("characters", []))
 
     return script
-
-
-# 尾帧武器残留：武器半截露水面 → 彻底没入（从根上修「匕首尖停水面」）
-# LLM 常写「仅余一截刀尖刺破水面/露出水面」——刀尖半截卡水面，视频模型当
-# 【视频终点】定格。落盘前确定性改写为「彻底没入 + 水面涟漪」，保留动作结果
-# （受伤/浪花）不删，只把「武器半截露水面」的中间态改掉。
-# 通用性：武器词覆盖刀/剑/匕首/枪/矛/戟/斧/锏/鞭/钩/镖等冷兵器；动词覆盖
-# 刺破/露出/探出/浮于/挑破/悬于/划过 等水面残留表达。
-# 匹配策略：**不消费武器名本身**（保留「长枪/方天画戟」），只消费武器名后
-# 的残留动词段（刺破水面/露出水面/浮于水面），替换为「{武器名}已没入水下」。
-# 同时吞掉「仅余一截/只剩/仅剩」这类残留前缀（「仅余一截刀尖已没入水下」语义
-# 矛盾——「仅余」暗示残留，「已没入」说没入）。避免替换吞掉武器名造成「一支长」
-# 破句，也避免「水面」重复。
-_LF_WEAPON_RESIDUE_RE = re.compile(
-    r"(?:仅余|只剩|仅剩|留下)?[一截枝杆柄支]?(?P<weapon>刀尖|匕首|剑尖|枪尖|刀|剑|枪|矛|戟|斧|锏|鞭|钩|镖)"
-    r"[^。！？；]{0,8}?(?:刺破水面|露出水面|露在水面|探出水面|挑破水面|浮于水面|悬于水面|划过水面|戳破水面)",
-)
-
-
-def _fix_lf_weapon_residue(lf_desc: str) -> str:
-    """确定性改写尾帧武器残留：武器半截露水面 → 已彻底没入水下.
-
-    通用正则匹配「武器名 + 水面残留动词」，替换为「{武器名}已没入水下」——
-    保留武器名（长枪/方天画戟），把残留动词段改掉，避免吞词/破句。
-    保留受伤结果/浪花等有效动作结果；非水面残留不误伤。
-    """
-    if not lf_desc or not isinstance(lf_desc, str):
-        return lf_desc
-
-    def _repl(m):
-        weapon = m.group("weapon")
-        return f"{weapon}已没入水下"
-
-    out = _LF_WEAPON_RESIDUE_RE.sub(_repl, lf_desc)
-    if out == lf_desc:
-        return lf_desc  # 无残留，原样返回
-    # 清理改写后的孤立标点/重复（「没入水中，水面涟漪，浪花高卷」正常；
-    # 「枪已没入水下，随波摇晃」自然）
-    out = re.sub(r"([，、])\s*([，、。])", r"\2", out)       # ，， → 。
-    out = re.sub(r"[，、]\s*。", "。", out)                  # ，。 → 。
-    out = re.sub(r"\s{2,}", " ", out)
-    out = out.strip(" ，、。") + ("。" if out.strip(" ，、。") and not out.strip().endswith("。") else "")
-    return out
 
 
 # 情绪词 → 可视化动作（与 _check_emotion_visualization 的 emotion_to_action 同源）
@@ -3236,6 +3145,70 @@ _EMOTION_ACTION_MAP = {
     "苦笑": "嘴角扯出僵硬弧度，眉头微蹙，眼神无奈，眼底带疲惫",
     "假笑": "嘴角上扬无笑意，眼神空洞，苹果肌僵硬，眉峰平直",
     "冷笑": "嘴角单侧上扬，眉峰微挑，眼神轻蔑，下颌微抬",
+    # ── 2026-08-09 补全（审计 P1-8：abstract_emotion_words 108 词仅 46 有映射，
+    # 缺映射的校验给泛泛兜底、修复不替换，两者不一致）──
+    "伤心": "低头垂眸，眼泪滑落，嘴角下撇",
+    "痛苦": "眉头紧锁，双眼紧闭，牙关咬紧，身体蜷缩",
+    "哀伤": "目光低垂，眼眶泛红，嘴角轻颤",
+    "悲痛": "泪流满面，肩膀剧烈颤抖，双手攥紧",
+    "哀愁": "眼神低垂无神，轻轻叹气，眉头微蹙",
+    "忧郁": "目光低垂，沉默不语，神情落寞",
+    "忧伤": "眼神黯淡，低头不语，眼角微红",
+    "恼怒": "眉头紧皱，眼含怒意，嘴唇紧抿",
+    "怒火": "双目圆睁，额角青筋凸起，握拳",
+    "愤恨": "眼神凌厉，咬牙切齿，胸口起伏",
+    "怒气": "眉头倒竖，双拳握紧，呼吸粗重",
+    "狂怒": "双目赤红，面部扭曲，挥臂砸物",
+    "困惑": "眉头微皱，眼神迷茫，歪头思索",
+    "茫然": "目光空洞，呆立不动，嘴唇微张",
+    "无助": "眼神哀求，双手垂下，肩背佝偻",
+    "彷徨": "来回踱步，眉头紧锁，目光游移",
+    "犹豫": "手悬半空，目光迟疑，欲言又止",
+    "纠结": "眉头深锁，来回摩挲手指，眼神挣扎",
+    "无情": "眼神冰冷，面无表情，直视前方",
+    "冷淡": "目光疏离，面无表情，语气平淡",
+    "淡漠": "眼神平静无波，面无表情，视若无睹",
+    "麻木": "眼神空洞，身体僵直，无反应",
+    "高兴": "眉眼弯弯，嘴角上扬，眼睛发亮",
+    "快乐": "笑容满面，眼睛弯成月牙，脚步轻快",
+    "喜悦": "嘴角上扬，眼含笑意，眉梢舒展",
+    "愉快": "眉眼舒展，嘴角带笑，神情轻松",
+    "欣喜": "眼睛发亮，嘴角上扬，眉梢带喜",
+    "欢乐": "咧嘴大笑，眼睛眯起，手舞足蹈",
+    "欢笑": "咧嘴大笑，眉眼弯弯，肩膀轻抖",
+    "恐惧": "瞳孔骤缩，身体后缩，双手护胸，面色惨白",
+    "畏惧": "身体瑟缩，目光躲闪，不敢直视",
+    "胆怯": "目光闪躲，身体微缩，声音发颤",
+    "惊慌": "双眼睁大，手足无措，身体僵硬",
+    "恐慌": "瞳孔放大，面色惨白，双手颤抖，脚步踉跄",
+    "惊奇": "眼睛瞪大，嘴巴微张，身体前倾",
+    "意外": "眉毛上扬，眼睛睁大，身体微顿",
+    "愕然": "眼睛圆睁，嘴巴微张，身体僵住",
+    "温柔": "眼神柔和，嘴角含笑，动作轻缓",
+    "柔情": "眼神温柔，嘴角浅笑，目光含情",
+    "温情": "眼神柔和，嘴角带暖意，目光关切",
+    "温馨": "眼神柔和，嘴角含笑，动作轻柔",
+    "温暖": "嘴角带暖意，眼神温和，神情舒展",
+    "严厉": "眉头紧锁，目光锐利，面色沉凝",
+    "庄重": "表情严肃，目光端正，身姿挺直",
+    "郑重": "表情严肃，目光认真，身姿端凝",
+    "正经": "表情端正，目光平视，姿态规整",
+    "紧张": "手指绞紧，呼吸急促，目光游移，吞咽口水",
+    "焦虑": "来回踱步，手指不停摩挲，目光焦灼",
+    "焦急": "眉头紧锁，目光急切，不停张望",
+    "急迫": "身体前倾，步伐急促，目光紧迫",
+    "紧迫": "神情紧绷，呼吸急促，眉头紧锁",
+    "羞涩": "脸颊泛红，低头垂眸，手指绞动",
+    "腼腆": "脸颊微红，低头抿唇，目光躲闪",
+    "不好意思": "脸颊泛红，低头挠头，目光闪躲",
+    "脸红": "双颊泛红，低头回避，目光躲闪",
+    "冷静": "呼吸平稳，目光坚定，神情平静",
+    "沉稳": "呼吸平稳，目光沉静，身体不动",
+    "淡定": "神情自若，目光平稳，姿态从容",
+    "冷静地": "呼吸平稳，目光坚定，神情平静",
+    "温柔地": "眼神柔和，嘴角含笑，动作轻缓",
+    "严厉地": "眉头紧锁，目光锐利，面色沉凝",
+    "紧张地": "手指绞紧，呼吸急促，目光游移，吞咽口水",
 }
 
 

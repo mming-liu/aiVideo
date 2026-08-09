@@ -297,6 +297,13 @@ async def _submit_video(
             return task
         except Exception as e:
             err_str = str(e)
+            # 429 限流：读服务端 retry-after，等待后重试（收敛 shared/rate_limit）
+            if "429" in err_str or "rate limit" in err_str.lower() or "too many requests" in err_str.lower():
+                from shared.rate_limit import compute_429_wait
+                wait = compute_429_wait(err_str, fallback_seconds=61.0)
+                logger.verbose(f"  [镜头{idx}] 视频提交限流 429，等待 {wait:.0f}s 后重试 ({attempt}/3): {_fmt_err(err_str)}")
+                await asyncio.sleep(wait)
+                continue
             if "400" in err_str or "422" in err_str or "content_policy" in err_str.lower() or "5185bb98fdd" in err_str:
                 from shared.content_policy_fix import auto_fix_prompt
                 fixed_prompt = auto_fix_prompt(prompt, str(e), verbose=False)

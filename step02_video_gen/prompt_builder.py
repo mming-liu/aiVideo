@@ -449,30 +449,15 @@ def _shorten_feature(feat: str, max_len: int = 25) -> str:
     return feat[:max_len].rstrip("，、；：。") + "…"
 
 
-# 开场画面（视频起点）禁注入的动作结果/武器词：dynamic_features 是全章状态，
-# 含破水/刺中后的血污、武器、致命伤等。视频起点 = ff_desc 前一刻状态（破水前、
-# 未刺中），这些不该出现在开场——否则视频模型把血污/武器画进开头（08-09 首帧
-# 杨旭胸口血迹、刺客血眼、听香溅血）。与 step02a `_inject_character_costume`
-# frame_kind="first_frame" 的过滤保持一致。
-_DYNAMIC_ACTION_RESULT_WORDS = (
-    "溅血", "溅红", "血", "血迹", "血污", "洇痕", "洇开", "暗红", "红痕",
-    "手持", "握刀", "握剑", "持刀", "持剑", "提刀", "举刀", "握匕首",
-    "寒光匕首", "匕首", "弯刀", "刺中", "刺入", "劈落", "仰面倒", "倒地",
-    "胸口", "心口", "伤口", "重伤", "毙命",
-)
+# 开场画面（视频起点）禁注入的动作结果/武器词：收敛到 shared/content_safety
+# （审计 S2），与 step02a `_inject_character_costume` frame_kind="first_frame"
+# 过滤共用单一词表，不再各持一份。
+from shared.content_safety import strip_action_result as _safety_strip_action_result
 
 
 def _clean_dynamic_for_start(dynamic: str) -> str:
-    """从 dynamic_features 剥离开场画面不应出现的动作结果/武器词.
-
-    按顿号/逗号拆词，逐词判断——命中动作结果/武器词则剔除，其余（服装/发型/
-    姿势/饰品）保留。与 step02a 首帧过滤同源，保证视频起点与首帧一致。
-    """
-    if not dynamic:
-        return ""
-    parts = [p.strip() for p in re.split(r"[，、,\s]+", dynamic) if p.strip()]
-    kept = [p for p in parts if not any(w in p for w in _DYNAMIC_ACTION_RESULT_WORDS)]
-    return "，".join(kept)
+    """从 dynamic_features 剥离开场画面不应出现的动作结果/武器词（复用 shared 单一实现）."""
+    return _safety_strip_action_result(dynamic)
 
 
 def _is_wide_shot(shot: dict) -> bool:
@@ -603,6 +588,13 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
         if norm != ff_desc:
             shot["ff_desc"] = ff_desc = norm
     lf_desc = shot.get("lf_desc", "").strip()
+    # v6.29：视频终点兜底归一化（与 step01 post_fix 对称，保证 step02 直接跑时
+    # 中间态 lf 也被清洗；回写保证视频哈希正确失效）
+    if lf_desc:
+        from style_prefix import normalize_lf_desc
+        _norm_lf = normalize_lf_desc(lf_desc, shot, characters)
+        if _norm_lf != lf_desc:
+            shot["lf_desc"] = lf_desc = _norm_lf
     motion_desc = shot.get("motion_desc", "").strip()
     if not motion_desc:
         motion_desc = shot.get("prompt", "")

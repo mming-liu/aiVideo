@@ -253,7 +253,7 @@ class BailianImageService(ImageGenerationService):
                     if rsp.status_code == 429:
                         retry_429 += 1
                         # 优先用服务端返回的剩余等待秒数（Retry-After 头 / 错误体 retry 字段）；
-                        # 读不到则按 RPM=1/min 的完整冷却窗口兜底（60s + 缓冲）。
+                        # 读不到则按 RPM 推导的完整冷却窗口兜底（收敛 shared/rate_limit）。
                         wait = None
                         retry_after_hdr = getattr(rsp, "headers", {}).get("Retry-After") \
                             or getattr(rsp, "headers", {}).get("retry-after")
@@ -263,12 +263,16 @@ class BailianImageService(ImageGenerationService):
                             except (TypeError, ValueError):
                                 wait = None
                         if wait is None:
-                            wait = parse_retry_after(getattr(rsp, "message", "") or getattr(rsp, "text", ""))
-                        if wait is None:
-                            wait = _429_RATE_LIMIT_WINDOW
-                        wait = max(wait, 1.0) + _429_RETRY_BACKOFF  # 至少 1s + 缓冲
+                            from shared.rate_limit import compute_429_wait
+                            wait = compute_429_wait(
+                                getattr(rsp, "message", "") or getattr(rsp, "text", ""),
+                                fallback_seconds=_429_RATE_LIMIT_WINDOW,
+                                backoff_seconds=_429_RETRY_BACKOFF,
+                            )
+                        else:
+                            wait = max(wait, 1.0) + _429_RETRY_BACKOFF
                         _verbose_write(f"  [镜头{req.shot_index}] [!] 429 限速 (retry {retry_429}/{_MAX_429_RETRIES})，"
-                              f"等待 {wait:.0f}s（RPM=1/min 冷却窗口）...")
+                              f"等待 {wait:.0f}s（RPM={_BAILIAN_IMAGE_RPM}/min 冷却窗口）...")
                         time.sleep(wait)
                         continue
 
