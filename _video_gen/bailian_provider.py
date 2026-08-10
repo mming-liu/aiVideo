@@ -477,13 +477,28 @@ class BailianVideoService(VideoGenerationService):
     # 轮询结果
     # =======================================================================
     def wait_for_completion(
-        self, req: VideoGenerationRequest, task_id: str, timeout: int = 300
+        self, req: VideoGenerationRequest, task_id: str, timeout: int | None = None
     ) -> VideoGenerationResult:
-        """轮询直到视频生成完成或超时."""
+        """轮询直到视频生成完成或超时.
+
+        轮询节奏由 BAILIAN_VIDEO_POLL_INTERVAL 控制（.env.content 可调，
+        默认 15s；set 180 即 3min 一次）。此前用硬编码 1s+3s 紧轮询，
+        与 step02 的 POLL_BASE_INTERVAL=180 背退架构脱节，任务实际 ~4s 一次
+        查询白烧 API 配额。现统一走配置值。
+
+        循环受「轮询次数 ≤ BAILIAN_VIDEO_MAX_POLL_ATTEMPTS」与「墙钟 ≤ timeout」
+        双重约束。timeout 默认由 次数×间隔 推导（避免间隔拉长后 300s 旧默认
+        在第 2 次轮询前就把循环掐掉）；真正的墙钟上限由外层调用方
+        （adapter._VIDEO_FETCH_TIMEOUT，默认 1200s）的 asyncio.wait_for 兜底。
+        """
         start_time = time.time()
         last_error = ""
+        if timeout is None:
+            timeout = BAILIAN_VIDEO_MAX_POLL_ATTEMPTS * BAILIAN_VIDEO_POLL_INTERVAL
 
-        while time.time() - start_time < timeout:
+        attempts = 0
+        while attempts < BAILIAN_VIDEO_MAX_POLL_ATTEMPTS and time.time() - start_time < timeout:
+            attempts += 1
             time.sleep(self._cooldown)
 
             # 查询状态
@@ -517,8 +532,15 @@ class BailianVideoService(VideoGenerationService):
                     error=f"生成失败: {err_code} - {err_msg}",
                 )
 
-            # PENDING 或 RUNNING：等待后继续轮询
-            time.sleep(3)
+            # PENDING 或 RUNNING：按配置间隔等待后继续轮询
+            time.sleep(BAILIAN_VIDEO_POLL_INTERVAL)
+
+        # 超时
+        return VideoGenerationResult(
+            clip_index=req.clip_index,
+            success=False,
+            error=f"轮询超时 ({timeout}s): {last_error}",
+        )
 
         # 超时
         return VideoGenerationResult(

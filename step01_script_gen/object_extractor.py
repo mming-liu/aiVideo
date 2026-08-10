@@ -156,5 +156,64 @@ def extract_scene_objects(novel_text: str, bank: SceneObjectsBank) -> list[dict]
             return []
 
     objs = data.get("scene_objects", [])
+    # B3 修复（08-10）：物体尺寸合理性钳制——LLM 可能推「房间长500米」这类离谱值，
+    # 原样入库入帧会导致画面比例崩坏（船画成巨轮/房间画成广场）。按 category 分档
+    # 钳制到合理范围，越界值 WARN 并修正。
+    for o in objs:
+        _sanitize_object_dimensions(o)
     print(f"[INFO] 提取到 {len(objs)} 个场景物体: {[o.get('identifier', '?') for o in objs]}")
     return objs
+
+
+# ========================================================================
+# 物体尺寸合理性钳制（B3 修复 08-10）
+#
+# LLM 从原文推导尺寸时可能给出离谱值（房间长500m、小舟长0.5m），无任何代码校验
+# 就入库入帧，画面比例直接崩坏。这里按 category 分档定义合理范围，越界钳制并 WARN。
+# 范围参考：古风湖湾游船 2-15m、马车 2-8m、轿子 1-3m、厅堂 3-60m、院落 5-200m。
+# ========================================================================
+
+# category → (长度合理范围m, 宽度合理范围m, 高度合理范围m)
+_OBJECT_DIM_RANGES = {
+    "船": ((2, 15), (0.8, 5), (0.3, 3)),
+    "车": ((2, 8), (1, 3), (1.5, 3.5)),
+    "轿": ((1, 3), (0.8, 2), (1.5, 2.5)),
+    "厅堂": ((3, 60), (3, 40), (3, 15)),
+    "院落": ((5, 200), (5, 150), (2, 20)),
+    "其它": ((0.5, 50), (0.5, 30), (0.5, 20)),
+}
+# category 兜底（未命中分档时用通用范围）
+_OBJECT_DIM_FALLBACK = ((0.5, 50), (0.5, 30), (0.5, 20))
+
+
+def _clamp_dim(value, lo, hi, field, ident, category):
+    """钳制单个尺寸值到 [lo, hi]，越界时 WARN 并返回钳制值."""
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        print(f"[WARN] 场景物体 {ident}（{category}）{field} 非数值: {value}，跳过")
+        return None
+    if v < lo or v > hi:
+        print(f"[WARN] 场景物体 {ident}（{category}）{field}={v}m 超出合理范围"
+              f"[{lo}, {hi}]，钳制为 {max(lo, min(hi, v))}m")
+        return max(lo, min(hi, v))
+    return v
+
+
+def _sanitize_object_dimensions(obj: dict) -> None:
+    """按 category 钳制物体 length_m/width_m/height_m 到合理范围.
+
+    category 未命中分档时用通用范围兜底。不合理的数值（负值/非数值）置 None
+    （下游 _inject_object_size_anchor 对 None 跳过，不注入）。
+    """
+    category = (obj.get("category") or "").strip()
+    ranges = _OBJECT_DIM_RANGES.get(category, _OBJECT_DIM_FALLBACK)
+    ident = obj.get("identifier", "?")
+    for field, (lo, hi) in zip(("length_m", "width_m", "height_m"), ranges):
+        v = obj.get(field)
+        if v is None:
+            continue
+        clamped = _clamp_dim(v, lo, hi, field, ident, category)
+        obj[field] = clamped

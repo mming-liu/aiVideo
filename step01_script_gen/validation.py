@@ -1616,6 +1616,31 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
                     f"禁止把血溅到脸上/尖叫/倒地等动作结果提前到 t=0——否则图片模型画不出一串动作，"
                     f"只能照首帧参考图兜底导致首尾帧雷同。"
                 )
+        # 武器 t=0 不可见检查（08-09 钩子坑2）：motion 含刺入/挥砍动作，
+        # 但 ff_desc 没有武器可见状态（藏刀：匕首未出水/未出鞘/未露寒光）——
+        # 视频模型没有刀的起始位置，只能「凭空变」出武器，导致刀从胸口冒出/
+        # 刺入方向错乱。应让武器 t=0 就握在攻击者手中并可见（如高举过顶/抵住）。
+        # 词表统一来源：shared/content_safety.py（与 prompts 规则48 共用，改一漏一）
+        from shared.content_safety import (
+            WEAPON_WORDS as _W_WORDS,
+            WEAPON_HIDDEN_WORDS as _W_HIDDEN,
+            WEAPON_VISIBLE_WORDS as _W_VISIBLE,
+            WEAPON_STAB_VERBS as _W_STAB,
+        )
+        if motion and any(w in ff for w in _W_WORDS):
+            # 仅当 motion 确实有攻击动作才检查（纯静态镜头无关）
+            if any(v in motion for v in _W_STAB):
+                # 排除藏刀状态（潜伏水下是合法动作前一刻，但必须紧接着出刀）
+                if any(w in ff for w in _W_HIDDEN):
+                    if not any(w in ff for w in _W_VISIBLE):
+                        warnings.append(
+                            f"{label}: ff_desc 武器处于隐藏态（{'、'.join([w for w in _W_HIDDEN if w in ff])}），"
+                            f"而 motion_desc 有刺入/挥砍动作（{motion[:40]}...）。"
+                            f"t=0 画面没有武器起点，视频模型只能「凭空变」出武器，"
+                            f"导致刀从胸口冒出/刺入方向错乱。"
+                            f"建议 ff 让武器可见（如'刺客半身出水、右手握匕首高举过顶、刀尖朝下'），"
+                            f"或 motion 首段先写'举刀出水面'建立武器可见起点再下刺。"
+                        )
         # 完成态动词检测
         completed = [v for v in _FF_COMPLETED_VERBS if v in ff]
         # v6.19：进行中动作定格检查（用户决策：ff_desc 应收敛到动作「前一刻」）。
@@ -2910,6 +2935,19 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v6.27 新增：角色状态锁定校验（角色状态锁定表吸收，跨镜坐站跳变检测）
     results["pose_continuity"] = _check_pose_continuity(shots)
 
+    # v6.28 新增：双人对话过肩锁定检查（视频「对话视角一致性」吸收，规则22.8）
+    results["over_shoulder_lock"] = _check_over_shoulder_lock(shots, script.get("hook"))
+
+    # v6.29 新增：keyframes 简略检查（08-10 hook 关键帧质量——keyframe desc 只写
+    # 动作动词、缺角色姿态/位置/朝向锚定，导致图片模型画错（杨旭站立/刺客消失/
+    # 听香撑伞/船断）。warning-only，提示 LLM 重写规范 keyframes；step02a 代码层
+    # _extract_char_layout 作为最终兜底。）
+    results["keyframes_quality"] = _check_keyframes_quality(shots, script.get("hook"))
+
+    # v6.30 新增：道具空间方位锚定检查（A3 修复——同框多道具各写落点，rule50/22.9）
+    results["prop_spatial_anchor"] = _check_prop_spatial_anchor(
+        shots, script.get("hook"), script.get("characters"))
+
     # 综合判定：任一硬性检查失败则整体不通过
     # v6.5: 增加 script_novel_alignment 到硬性检查
     # v6.7: 增加 ff_lf_completeness 到硬性检查（lf_desc 为空会导致静态视频）
@@ -3610,6 +3648,157 @@ def _check_threat_gaze_coupling(shots: list[dict], hook: dict = None) -> dict:
 
 
 # ========================================================================
+# v6.29 新增：keyframes 简略检查（08-10 hook 关键帧质量）
+#
+# 背景：hook 关键帧「刺客破水而出」被图片模型画成无刺客/听香站水面（船断）/
+# 杨旭站立后倒——根因是 keyframes desc 只写动作动词，缺角色姿态/位置/朝向锚定。
+# 本检查对每个含中间关键帧（0<time_ratio<1）的镜头，检查 keyframes[].desc 是否
+# 含角色姿态词/位置词/威胁源朝向；简略则 WARN 提示 LLM 重写规范描述。
+# warning-only 不阻断（step02a 代码层 _extract_char_layout 是最终兜底）。
+# ========================================================================
+
+# 关键帧简略检查：姿态词（角色画成什么样）/ 位置词（角色在哪）
+_KF_VALIDATION_POSE_WORDS = (
+    "仰卧", "仰面", "躺", "卧", "跪坐", "跪", "坐", "蹲", "趴", "俯卧",
+    "直立", "站立", "站", "立", "半身探出", "半身出水", "潜伏",
+)
+_KF_VALIDATION_POS_WORDS = (
+    "船头", "船尾", "船中", "中舱", "船梢", "船舷", "船板",
+    "画左", "画右", "画中", "水中", "水下", "水面", "岸上",
+)
+# 威胁源词（含合规替换后"神秘人"——LLM 可能直接产出）
+_KF_VALIDATION_THREAT_WORDS = (
+    "刺客", "杀手", "黑衣人", "黑影", "神秘人", "蒙面人", "潜伏", "埋伏", "伏击",
+)
+# 威胁源朝向表达
+_KF_VALIDATION_ORIENT_WORDS = (
+    "面向", "朝向", "侧身", "紧盯", "盯向", "望向", "朝画", "逼近",
+)
+
+
+def _check_keyframes_quality(shots: list[dict], hook: dict = None) -> dict:
+    """检查 keyframes 中间帧 desc 是否缺角色姿态/位置/朝向锚定（warning-only）."""
+    issues, warnings = [], []
+    targets = list(shots) + ([hook] if hook else [])
+    for s in targets:
+        label = "hook" if (hook and s is hook) else s.get("index", "?")
+        kfs = s.get("keyframes") or []
+        for kf in kfs:
+            if not isinstance(kf, dict):
+                continue
+            try:
+                tr = float(kf.get("time_ratio", 0))
+            except (TypeError, ValueError):
+                tr = 0
+            if not (0 < tr < 1):
+                continue  # 只查中间帧
+            desc = (kf.get("desc") or "").strip()
+            if not desc:
+                warnings.append(
+                    f"镜头{label}: keyframe 中间帧 desc 为空，应写清该瞬间每个角色的姿态/位置/朝向"
+                )
+                continue
+            # 1. 姿态/位置锚定：desc 是否含角色姿态词 + 位置词
+            has_pose = any(w in desc for w in _KF_VALIDATION_POSE_WORDS)
+            has_pos = any(w in desc for w in _KF_VALIDATION_POS_WORDS)
+            # 2. 威胁源朝向：desc 含威胁词而缺朝向表达 → 提示
+            has_threat = any(w in desc for w in _KF_VALIDATION_THREAT_WORDS)
+            has_orient = any(w in desc for w in _KF_VALIDATION_ORIENT_WORDS)
+            if not has_pose or not has_pos:
+                warnings.append(
+                    f"镜头{label}: keyframe(t={tr:.1f}) desc 缺少角色姿态/位置锚定——"
+                    f"应写清该瞬间每个角色的姿态（仰卧/跪坐/站）与位置（船头/船尾/画左/画右），"
+                    f"如「杨旭仰卧船头，听香跪坐船尾，刺客半身探出画右水面」（08-10 关键帧质量）。"
+                )
+            if has_threat and not has_orient:
+                warnings.append(
+                    f"镜头{label}: keyframe(t={tr:.1f}) 威胁源未写朝向目标——"
+                    f"应写明「面向/朝向目标」，否则图片模型把刺客画成背对目标或正对镜头。"
+                )
+    for w in warnings:
+        print(f"[CHECK] keyframes质量: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+# ========================================================================
+# v6.30 新增：道具空间方位锚定检查（A3 修复 08-10，规则50/22.9）
+#
+# 背景：同框多件手持道具必须各写落点，否则图片/视频模型自由摆放重叠（酒壶钓杆
+# 叠一起）。rule50/22.9 是纯 LLM 约束，零代码校验。本检查对含多个手持道具的
+# 镜头，检测道具是否各带方位词（画左/右手/身侧/水中 等），缺则 WARN。
+# warning-only 不阻断（step02a `_extract_prop_layout` 代码层注入是最终兜底）。
+# ========================================================================
+
+# 道具方位词（画面方位 + 手部 + 位置落点）
+_KF_VALIDATION_PROP_POS = (
+    "画左", "画右", "画中", "画上方", "画下方",
+    "左手", "右手", "双手", "手中", "手边", "身侧", "身前", "身下",
+    "前方", "身后", "头顶", "肩头", "腰间", "背后",
+    "水中", "水下", "水面", "船头", "船尾", "船板", "船舷", "船侧", "甲板",
+    "地上", "岸上", "桌上", "几上", "案上",
+)
+
+
+def _check_prop_spatial_anchor(shots: list[dict], hook: dict = None,
+                               characters: list | None = None) -> dict:
+    """检查同框多道具是否各带空间方位（规则50/22.9，warning-only）."""
+    issues, warnings = [], []
+    targets = list(shots) + ([hook] if hook else [])
+    for s in targets:
+        label = "hook" if (hook and s is hook) else s.get("index", "?")
+        text = " ".join([
+            s.get("ff_desc", ""), s.get("motion_desc", "") or s.get("prompt", ""),
+            s.get("lf_desc", ""),
+        ])
+        # 从 prop_assets 匹配本镜出现的道具（含 consistent_terms 别名）
+        try:
+            import json as _json
+            from shared.paths import chapter_dir
+            script_path = chapter_dir() / "script_result.json"
+            if not script_path.exists():
+                continue
+            script = _json.load(open(script_path, encoding="utf-8"))
+            prop_assets = script.get("prop_assets", {}) or {}
+        except Exception:
+            continue
+        matched = []
+        for pid, entry in (prop_assets.items() if isinstance(prop_assets, dict) else []):
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("category") in ("交通工具",) or any(
+                    w in str(entry.get("category", "")) for w in ("船", "车", "轿", "辇", "舟")):
+                continue  # 空间物体走 _build_space_object_anchor，不在此查
+            terms = [pid] + list(entry.get("consistent_terms", []) or [])
+            for t in terms:
+                if t and t in text:
+                    matched.append(pid)
+                    break
+        if len(matched) < 2:
+            continue  # 只有一个或零个道具不构成"同框多道具"
+        # 每个道具是否带方位：道具名前 6 字 + 后 8 字窗口含方位词
+        # （"右手酒壶倾洒" → "右手"在酒壶前；"钓杆垂入画右水面" → "画右"在后 8 字。
+        # 窗口收窄到 8 字避免把"站在船头"这种角色站位误当道具方位——并列清单
+        # "手持酒壶、钓杆" 后 8 字是"、钓杆"无方位，正确拦截。）
+        lacks = []
+        for pid in matched:
+            p = text.find(pid)
+            if p < 0:
+                continue
+            window = text[max(0, p - 6):p + 8]
+            if not any(w in window for w in _KF_VALIDATION_PROP_POS):
+                lacks.append(pid)
+        if lacks:
+            warnings.append(
+                f"镜头{label}: 同框道具 {matched} 中 {lacks} 未写空间方位——"
+                f"应给每件道具一个落点（如「钓杆垂入画右水面、酒壶倾洒画左甲板」），"
+                f"否则模型自由摆放重叠（规则50/22.9）。"
+            )
+    for w in warnings:
+        print(f"[CHECK] 道具空间方位: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+# ========================================================================
 # v6.26 吸收：抠姐短剧剧本检查（开篇冲突/爆点密度/对白长度）+ video-shotcraft（静态停留）
 # 全部 warning-only，不进 hard_fail_checks（与 v6.24/v6.25 一致，重生成循环昂贵）
 # ========================================================================
@@ -3888,6 +4077,48 @@ def _check_pose_continuity(shots: list[dict]) -> dict:
     for w in warnings:
         print(f"[CHECK] 角色状态锁定: [WARN] {w}")
     return {"pass": True, "issues": [], "warnings": warnings}
+
+
+def _check_over_shoulder_lock(shots: list[dict], hook: dict = None) -> dict:
+    """v6.28 新增：双人对话过肩锁定检查（视频1「对话视角一致性」吸收，规则22.8）.
+
+    同一对话场景组的相邻镜头，一旦某镜用「过肩」机位（通过某角色肩膀拍另一人），
+    要求后续镜头延续过肩/正反打逻辑、被拍者视线落向对话对方——禁止一人过肩、
+    下镜突然变「看向镜头/看向观众」的单人正打机位，导致对话关系断裂。
+
+    warning-only。越轴翻转（画左/画右）已由 _check_axis_crossing 覆盖，此处不重复。
+    """
+    issues, warnings = [], []
+    targets = list(shots) + ([hook] if hook else [])
+    for i in range(len(targets) - 1):
+        s1, s2 = targets[i], targets[i + 1]
+        # 对话镜头组：相邻两镜都有对白
+        if not (s1.get("narration_segment") or "").strip():
+            continue
+        if not (s2.get("narration_segment") or "").strip():
+            continue
+        # 同场景（对话组要求座位/朝向连续）
+        loc1 = s1.get("location", "") or s1.get("scene", "")
+        loc2 = s2.get("location", "") or s2.get("scene", "")
+        if not loc1 or loc1 != loc2:
+            continue
+        # 取 prompt 头部（景别/机位）+ 视线词
+        t1 = " ".join([s1.get("prompt", ""), s1.get("ff_desc", "")])
+        t2 = " ".join([s2.get("prompt", ""), s2.get("ff_desc", "")])
+        # 过肩词：过肩/正反打；被拍者视线看对方 vs 看镜头
+        os1 = any(w in t1 for w in ("过肩", "正反打"))
+        os2 = any(w in t2 for w in ("过肩", "正反打"))
+        look_cam = any(w in t2 for w in ("看向镜头", "看向观众", "看镜头", "直视镜头", "注视观众"))
+        if os1 and not os2 and look_cam:
+            i2 = s2.get("index", "?")
+            warnings.append(
+                f"镜头{s1.get('index','?')}→{i2}: 对话组内上镜用「过肩」机位，"
+                f"下镜{look_cam and '却写成「看向镜头/观众」' or '却未延续过肩/正反打逻辑'}"
+                f"——双人对话被拍者视线应落向对方而非镜头（规则22.8）。"
+            )
+    for w in warnings:
+        print(f"[CHECK] 对话过肩: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
 
 
 def _common_present_characters(curr: dict, nxt: dict) -> list[str]:

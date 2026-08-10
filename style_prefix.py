@@ -303,6 +303,9 @@ def preprocess_prompt_for_image(prompt: str) -> str:
 
     图片模型对文言词/颜色词按字面直译（code-audit 2026-08-08 钩子首帧）：
     - "青丝" 是黑发的文言说法，图片模型会把"青"直译成青色/绿色 → 替换为"黑发"
+    - "平定四方巾" 未指定颜色时，图片模型在冷青色调下会脑补成绿色/青绿色头巾
+      （明制绿头巾是伶人贱籍标识，公子绝不能戴；2026-08-10 杨旭首帧绿头巾修复）
+      → 无颜色前缀时强制锁"乌黑色"
     - 其余为模糊称谓归一化
     """
     replacements = {
@@ -314,10 +317,25 @@ def preprocess_prompt_for_image(prompt: str) -> str:
         "青丝": "黑发",        # 文言"青丝"=黑发，图片模型误译成绿/青色
         "乌丝": "黑发",
         "黛眉": "柳眉",        # 黛=青黑色，避免误译
+        "平定四方巾": "乌黑色平定四方巾",  # 未锁色会被脑补成绿/青（08-10 杨旭绿头巾）
     }
     result = prompt
     for old, new in replacements.items():
-        result = result.replace(old, new)
+        if old == "平定四方巾":
+            # 只在头巾前无颜色词时锁色（防已锁色的"乌黑平定四方巾"被二次替换）。
+            # 检查"平定四方巾"前 2 字窗口是否含颜色字，含则保持原样。
+            import re as _re
+            _PINGDING_RE = _re.compile(r"平定四方巾")
+
+            def _lock_black(m):
+                pre = result[max(0, m.start() - 2):m.start()]
+                if any(c in pre for c in "黑乌青绿白灰素墨黛玄深"):
+                    return m.group(0)
+                return "乌黑色" + m.group(0)
+
+            result = _PINGDING_RE.sub(_lock_black, result)
+        else:
+            result = result.replace(old, new)
     return result
 
 

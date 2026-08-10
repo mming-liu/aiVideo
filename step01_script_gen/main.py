@@ -539,51 +539,6 @@ def main() -> None:
         _console("=" * 56)
         return
 
-    # 脚本已更新，删除旧的音频和视频文件。
-    # 2026-08-09 用户需求：若新旧脚本只是分镜数量差异且总时长≤3min，逐镜对比后
-    # 保留未变镜头的帧/视频产物，只清理新增/改动/删除的镜头（避免重跑 step02 全量
-    # 重新生成白烧额度）。
-    _preserve_shots: list[int] = []
-    try:
-        from shared.shot_diff import compute_shot_diff, should_preserve_artifacts
-        _old_script = json.load(open(SCRIPT_FILE, encoding="utf-8")) if SCRIPT_FILE.exists() else None
-        if _old_script and should_preserve_artifacts(_old_script, script):
-            _diff = compute_shot_diff(_old_script, script)
-            _preserve_shots = _diff.get("unchanged", [])
-            _logger.info(
-                f"[PRESERVE] 逐镜对比放行：未变 {len(_preserve_shots)} 镜"
-                f"（保留旧产物），新增/改动 {len(_diff.get('added', [])) + len(_diff.get('changed', []))} 镜重新生成"
-            )
-            # 只清理 changed/removed 镜头的帧/视频（未变镜头保留）
-            for _sub in ("vimax_working", "stretched"):
-                _sub_path = CHAPTER_DIR / _sub
-                if _sub_path.exists():
-                    _shots_root = _sub_path / "shots"
-                    if _shots_root.exists():
-                        for _sid in _diff.get("changed", []) + _diff.get("removed", []):
-                            _shot_dir = _shots_root / str(_sid)
-                            if _shot_dir.exists():
-                                import shutil as _sh
-                                _sh.rmtree(_shot_dir)
-                                _logger.verbose(f"  [已清理] {_sub}/shots/{_sid}/（内容变更）")
-    except Exception as _preserve_err:
-        _logger.warn(f"[PRESERVE] 逐镜对比失败，全量清理: {_preserve_err}")
-
-    if not _preserve_shots:
-        _logger.info(f"[INFO] 分镜脚本已更新，清理旧的音视频文件...")
-        for subdir in ("audio", "vimax_working", "stretched"):
-            subdir_path = CHAPTER_DIR / subdir
-            if subdir_path.exists():
-                import shutil
-                shutil.rmtree(subdir_path)
-        _logger.verbose(f"  [已删除] {subdir}/")
-    # 删除最终视频和字幕（脚本结构变了，最终产物必须重做）
-    for f in ("final.mp4", "subtitles.srt"):
-        fpath = CHAPTER_DIR / f
-        if fpath.exists():
-            fpath.unlink()
-            _logger.verbose(f"  [已删除] {f}")
-
     # 生成脚本（含 JSON 解析重试）
     # LLM 偶发输出损坏的 JSON（DeepSeek 尤甚：内部中文引号未转义/缺逗号等）。
     # 解析失败时重新调用 LLM 重试，而不是让整个流水线崩溃（每次约 3-6 分钟）。
@@ -686,6 +641,55 @@ def main() -> None:
 
     # 后处理：注入全局配置 + 合规过滤 + 敏感词校验
     script = _post_process(script)
+
+    # 脚本已更新，删除旧的音频和视频文件。
+    # 2026-08-09 用户需求：若新旧脚本只是分镜数量差异且总时长≤3min，逐镜对比后
+    # 保留未变镜头的帧/视频产物，只清理新增/改动/删除的镜头（避免重跑 step02 全量
+    # 重新生成白烧额度）。
+    # 2026-08-09 修复：原实现把此段放在 script 生成之前，引用未赋值变量 script
+    # 触发 UnboundLocalError，逐镜保留从未生效（每次都全量清理）。现在移到
+    # _post_process 之后——新分镜已定稿（含收敛/合规过滤），旧 script_result.json
+    # 仍在磁盘可读，对比才有意义；且 LLM 生成失败时旧产物也不会被提前删掉。
+    _preserve_shots: list[int] = []
+    try:
+        from shared.shot_diff import compute_shot_diff, should_preserve_artifacts
+        _old_script = json.load(open(SCRIPT_FILE, encoding="utf-8")) if SCRIPT_FILE.exists() else None
+        if _old_script and should_preserve_artifacts(_old_script, script):
+            _diff = compute_shot_diff(_old_script, script)
+            _preserve_shots = _diff.get("unchanged", [])
+            _logger.info(
+                f"[PRESERVE] 逐镜对比放行：未变 {len(_preserve_shots)} 镜"
+                f"（保留旧产物），新增/改动 {len(_diff.get('added', [])) + len(_diff.get('changed', []))} 镜重新生成"
+            )
+            # 只清理 changed/removed 镜头的帧/视频（未变镜头保留）
+            for _sub in ("vimax_working", "stretched"):
+                _sub_path = CHAPTER_DIR / _sub
+                if _sub_path.exists():
+                    _shots_root = _sub_path / "shots"
+                    if _shots_root.exists():
+                        for _sid in _diff.get("changed", []) + _diff.get("removed", []):
+                            _shot_dir = _shots_root / str(_sid)
+                            if _shot_dir.exists():
+                                import shutil as _sh
+                                _sh.rmtree(_shot_dir)
+                                _logger.verbose(f"  [已清理] {_sub}/shots/{_sid}/（内容变更）")
+    except Exception as _preserve_err:
+        _logger.warn(f"[PRESERVE] 逐镜对比失败，全量清理: {_preserve_err}")
+
+    if not _preserve_shots:
+        _logger.info(f"[INFO] 分镜脚本已更新，清理旧的音视频文件...")
+        for subdir in ("audio", "vimax_working", "stretched"):
+            subdir_path = CHAPTER_DIR / subdir
+            if subdir_path.exists():
+                import shutil
+                shutil.rmtree(subdir_path)
+                _logger.verbose(f"  [已删除] {subdir}/")
+    # 删除最终视频和字幕（脚本结构变了，最终产物必须重做）
+    for f in ("final.mp4", "subtitles.srt"):
+        fpath = CHAPTER_DIR / f
+        if fpath.exists():
+            fpath.unlink()
+            _logger.verbose(f"  [已删除] {f}")
 
     # ========== v6新增：钩子分镜生成 ==========
     if HOOK_ENABLED:

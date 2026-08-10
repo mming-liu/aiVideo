@@ -170,6 +170,11 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
     desc = shot.get("ff_desc_final") or shot.get("ff_desc") or shot.get("lf_desc") or shot.get("motion_desc") or ""
     if frame_kind == "last_frame":
         desc = shot.get("lf_desc_final") or shot.get("lf_desc") or shot.get("ff_desc") or shot.get("motion_desc") or desc
+    elif frame_kind == "keyframe":
+        # 关键帧：用关键帧实际最终 prompt 核对（kf_{i}_desc_final 由 _gen_keyframes_async 挂载）
+        desc = (shot.get("kf_0_desc_final") or shot.get("kf_desc_final")
+                or shot.get("ff_desc_final") or shot.get("ff_desc")
+                or shot.get("lf_desc") or shot.get("motion_desc") or desc)
     # 期望道具/关键词
     core_keywords = shot.get("core_keywords") or []
     if isinstance(core_keywords, list):

@@ -432,6 +432,18 @@ async def _process_one_shot(
                                                force=True, characters=characters)
                 lf_path = frames.get("lf_path")
 
+        # B7 修复：关键帧幻觉检查（补上——vimax_bridge 关键帧 QC 已写 sidecar，
+        # 此处双保险：关键帧 critical 坏图不进视频）
+        kf_paths = frames.get("keyframes_paths", [])
+        bad_kf = [p for p in kf_paths if _check_keyframe_hallucination(p).get("has_critical")]
+        if bad_kf:
+            logger.verbose(f"  [镜头{idx}] 关键帧检测到 critical 幻觉: {len(bad_kf)} 帧，强制重新生成")
+            for p in bad_kf:
+                Path(p).unlink(missing_ok=True)
+            frames = await gen_shot_frames(shot, shots_dir, image_adapter, script_mtime,
+                                           force=True, characters=characters)
+            kf_paths = frames.get("keyframes_paths", [])
+
         # 重新获取帧路径（可能已被重新生成）
         kf_paths = frames.get("keyframes_paths", [])
         frame_paths = [p for p in [frames.get("ff_path"), frames.get("lf_path")] if p]

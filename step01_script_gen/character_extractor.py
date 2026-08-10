@@ -154,7 +154,18 @@ _FACE_SHAPE_MAPPING = (
 _FACE_SHAPE_HINTS = (
     "系脸", "猫系", "鹿系", "狐系", "天鹅脸", "雀斑脸", "鹅蛋脸",
     "瓜子脸", "圆脸", "方脸", "长脸", "小脸", "菱形脸", "心形脸",
+    "国字脸",  # B1 默认 male 脸型词，须进 HINTS 防二次叠加
 )
+
+# 默认脸型兜底（B1 修复 08-10）：新角色名字/特征关键词都不在 _FACE_SHAPE_MAPPING、
+# LLM 又漏写脸型词时，按性别给一个确定性默认脸型——否则该角色 static_features
+# 无脸型词就永久固化（register_character 锁定 static），跨章无法补救，肖像变脸。
+# 值=脸型核心词（合并时只取核心词，避免与已有 static 描述重复堆叠）。
+_DEFAULT_FACE_SHAPES = {
+    "male": "国字脸",
+    "female": "鹅蛋脸",
+    "": "方脸",
+}
 
 
 def _ensure_face_shape(chars: list[dict], bank: CharacterBank) -> None:
@@ -163,8 +174,10 @@ def _ensure_face_shape(chars: list[dict], bank: CharacterBank) -> None:
     - 已含脸型词（_FACE_SHAPE_HINTS）→ 跳过（幂等）
     - 名字匹配 _FACE_SHAPE_MAPPING → 用映射脸型词
     - 名字不匹配但特征关键词命中 → 追加映射脸型词
+    - **都未命中（B1 兜底）→ 按性别补默认脸型**（male→国字脸、female→鹅蛋脸）
     只改内存 chars（script_result.json 的 characters），不改 CharacterBank
-    static_features（首次锁定语义保留）；新角色由提取 prompt 规则直接生成。
+    static_features（首次锁定语义保留）；新角色由提取 prompt 规则直接生成，
+    兜底在 extract_characters→_ensure_face_shape 于 register_character 之前生效。
     """
     for c in chars:
         sf = (c.get("static_features") or "").strip()
@@ -172,16 +185,24 @@ def _ensure_face_shape(chars: list[dict], bank: CharacterBank) -> None:
         if any(h in sf for h in _FACE_SHAPE_HINTS):
             continue  # 已有脸型词
         # 名字精确匹配
+        matched = False
         for name, face in _FACE_SHAPE_MAPPING:
             if ident == name:
                 c["static_features"] = _merge_face_shape(sf, face)
+                matched = True
+                break
+        if matched:
+            continue
+        # 特征关键词兜底（名字未匹配时）
+        for name, face in _FACE_SHAPE_MAPPING:
+            if name != ident and name in f"{ident}{sf}":
+                c["static_features"] = _merge_face_shape(sf, face)
                 break
         else:
-            # 特征关键词兜底（名字未匹配时）
-            for name, face in _FACE_SHAPE_MAPPING:
-                if name != ident and name in f"{ident}{sf}":
-                    c["static_features"] = _merge_face_shape(sf, face)
-                    break
+            # B1 最终兜底：名字/特征都不匹配 → 按性别补默认脸型
+            gender = (c.get("gender") or "").strip().lower()
+            default_face = _DEFAULT_FACE_SHAPES.get(gender, _DEFAULT_FACE_SHAPES[""])
+            c["static_features"] = _merge_face_shape(sf, default_face)
 
 
 def _merge_face_shape(sf: str, face: str) -> str:

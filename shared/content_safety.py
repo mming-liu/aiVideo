@@ -124,6 +124,34 @@ def strip_action_result(dynamic: str) -> str:
     return "，".join(kept)
 
 
+# ========================================================================
+# ff_desc 武器可见性判定词表（08-09 钩子坑2 收敛）
+# validation._check_ff_motion_timeline 的「武器 t=0 不可见」检查与 prompts 规则48
+# 共用这里——判定 ff_desc 里攻击者武器是「可见握持」还是「隐藏态」。
+# 单一来源：prompts 规则告诉 LLM 怎么写，validation 检查是否遵守，post_fix 兜底。
+# ========================================================================
+
+# 武器名词（ff/prompt 中出现这些 → 涉及武器镜头）
+WEAPON_WORDS = ("匕首", "刀", "剑", "枪", "鞭", "戟", "斧", "锤", "暗器")
+# 武器隐藏态（t=0 画面看不到武器 → 模型只能凭空变）
+WEAPON_HIDDEN_WORDS = ("未出水", "未出鞘", "藏", "潜伏", "隐于", "隐在")
+# 武器可见态（握在攻击者手中/有明确出鞘/寒光）
+WEAPON_VISIBLE_WORDS = ("高举", "握", "持", "拎", "执", "抵", "横", "指", "出鞘", "寒光", "挥")
+# 攻击动作动词（motion 有这些才需要武器可见性检查）
+WEAPON_STAB_VERBS = ("刺", "捅", "扎", "劈", "砍", "挥", "斩")
+
+
+def weapon_visible_in_ff(ff_desc: str) -> bool:
+    """判定 ff_desc 是否满足「武器 t=0 可见」规则.
+
+    Returns:
+        True = 武器可见（合法）；False = 武器隐藏或缺失。
+    """
+    if not ff_desc:
+        return False
+    return any(w in ff_desc for w in WEAPON_VISIBLE_WORDS)
+
+
 def check_chain_safety() -> list[tuple[str, str, str]]:
     """静态检查替换值是否命中其它 key（链式二次替换风险）.
 

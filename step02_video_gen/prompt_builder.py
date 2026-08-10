@@ -650,6 +650,17 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     if space_anchor:
         parts.append(space_anchor)
 
+    # 4.1d 道具空间方位锚定（A3 修复 08-10）：同框手持道具各写落点，防视频模型
+    # 自由摆放重叠（酒壶钓杆叠一起）。复用 step02a 的 _extract_prop_layout 从
+    # shot 文本提取道具方位（钓杆在左手/酒壶在右手），视频起点/中段/终点共用。
+    try:
+        from shared.vimax_bridge import _extract_prop_layout
+        prop_anchor = _extract_prop_layout(shot, characters)
+        if prop_anchor:
+            parts.append(prop_anchor)
+    except Exception:
+        pass
+
     # 4.2 首帧画面描述（视频起点）
     if ff_desc:
         parts.append(f"【视频起点】{ff_desc}")
@@ -1026,7 +1037,18 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
 
         for ch in (characters or []):
             ident = ch.get("identifier", "")
-            if not ident or ident not in search_text:
+            # 出镜判定支持威胁源别名（刺客→神秘人/黑衣人——合规替换后文本用
+            # "神秘人"，但注册表 key 是"刺客"；仅 ident in search_text 会漏掉威胁源
+            # 肖像，视频模型只能自由发挥刺客形象。与图片侧 _collect_portrait_refs
+            # 的别名修复同源（08-10 A2）。局部导入避免模块级耦合。
+            if not ident:
+                continue
+            try:
+                from shared.vimax_bridge import _char_aliases
+                ident_hit = any(a in search_text for a in _char_aliases(ident, characters))
+            except Exception:
+                ident_hit = ident in search_text
+            if not ident_hit:
                 continue
             views = registry.get(ident)
             if not views:

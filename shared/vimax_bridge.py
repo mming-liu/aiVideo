@@ -348,6 +348,7 @@ async def _gen_frames_for_camera_group(
                 reference_paths=kf_refs,
                 max_retries=1,
                 empty_scene=is_empty_scene(shot, characters_data),
+                characters=characters_data,
             )
 
         bg_tasks.append(asyncio.create_task(_gen_rest_frames(shot, ff_path, idx)))
@@ -780,7 +781,7 @@ def _validate_frame(path: str, min_kb: float = 5) -> bool:
 
 async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
                           characters: list | None = None, empty_scene: bool = False,
-                          prompt: str | None = None):
+                          prompt: str | None = None) -> bool:
     """帧生成后执行视觉质检（软失败，不阻断流水线）.
 
     通过 shared/image_qc.py 调用 ds-vision-skill 的 vision-router.ps1 对帧图做内容质检；
@@ -790,13 +791,20 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
 
     prompt: v1.1 语义核对用——实际生成图片的最终 prompt。不传时从
     shot["ff_desc_final"]/["lf_desc_final"] 取（_gen_first_frame_async 挂载）。
+
+    Returns:
+        bool（B7 修复 08-10）：True = 检出 critical（调用方应 unlink 坏帧 + 删哈希
+        触发重生成——修复 QC 只记日志、坏帧继续进视频的断链）；False = 无 critical。
     """
     if not frame_path:
-        return
+        return False
     # 未显式传 prompt 时，从 shot 挂载的最终 prompt 取（QC 语义核对用）
     if prompt is None and isinstance(shot, dict):
         if frame_kind == "last_frame":
             prompt = shot.get("lf_desc_final") or shot.get("ff_desc_final")
+        elif frame_kind == "keyframe":
+            prompt = (shot.get("kf_0_desc_final") or shot.get("kf_desc_final")
+                      or shot.get("ff_desc_final") or shot.get("lf_desc_final"))
         else:
             prompt = shot.get("ff_desc_final") or shot.get("lf_desc_final")
     try:
@@ -806,24 +814,47 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
         )
         if not result.ok:
             _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 质检失败跳过（未写 sidecar）: {result.error}")
-            return
+            return False
         # QC 成功 → 写 sidecar（检出与否都写），供下次跳过与 step02b 消费
         try:
             write_sidecar(Path(frame_path), result)
         except Exception as e:
             _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} sidecar 写入失败: {e}")
+        has_critical = result.has_hallucination and any(
+            getattr(i, "severity", "") == "critical" for i in result.issues)
+        if has_critical:
+            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 检出 critical，"
+                        f"将删帧重生成: " + "; ".join(
+                            f"[{i.severity}]{i.category} {i.description}" for i in result.issues))
+            return True
         if result.has_hallucination:
             _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 检出问题: "
                         + "; ".join(f"[{i.severity}]{i.category} {i.description}" for i in result.issues))
         else:
             _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 质检通过")
+        return False
     except Exception as e:
         _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 质检异常（不阻断）: {e}")
+        return False
+
+
+def _del_frame_and_hash(frame_path, hash_path, label, idx, logger):
+    """QC critical 后删除坏帧 + 哈希文件（B7 修复，触发下次重生成）."""
+    try:
+        Path(frame_path).unlink(missing_ok=True)
+    except Exception:
+        pass
+    try:
+        Path(hash_path).unlink(missing_ok=True)
+    except Exception:
+        pass
+    logger.verbose(f"  [FRAME] {label} shot_{idx} QC critical，已删坏帧+哈希，重新生成")
 
 
 def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
                             reference_paths: list | None = None,
-                            lock_kind: str = "layout") -> str:
+                            lock_kind: str = "layout",
+                            extra_fields: dict | None = None) -> str:
     """计算首帧/尾帧的稳定哈希值 v4.
 
     v4: 新增 _prompt_sig() 对实际图片 prompt (ff_desc/lf_desc) 做规范化哈希，
@@ -877,6 +908,12 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
         val = shot.get(field_name, "")
         if val:
             key_parts.append(f"{field_name}={_normalize(val)}")
+
+    # extra_fields: 关键帧专用——哈希含 kf_desc + time_ratio，使每个中间帧独立
+    # 哈希且改 kf desc 能触发该帧重出（原复用 shot 哈希，改 kf desc 缓存不失效）。
+    for k, v in (extra_fields or {}).items():
+        if v is not None:
+            key_parts.append(f"{k}={_normalize(str(v))}")
 
     if empty_scene:
         key_parts.append("empty_scene")    # 空镜判定翻转时帧应重做
@@ -1226,7 +1263,10 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
 
         refs: list[str] = []
         for ident in char_names:
-            if ident not in search_text:
+            # 出镜判定支持威胁源别名（刺客→神秘人/黑衣人——合规替换后文本用
+            # "神秘人"，但角色注册表 key 是"刺客"，仅靠 ident in search_text 会漏掉
+            # 刺客肖像，导致关键帧/首帧参考图缺威胁源形象、图片模型画不出刺客）。
+            if not any(a in search_text for a in _char_aliases(ident, characters)):
                 continue
             views = reg.get(ident)
             if not isinstance(views, dict):
@@ -1343,29 +1383,410 @@ def _inject_object_size_anchor(shot: dict, text: str) -> str:
         return text
 
 
-# 服装颜色/服装词提示（幂等判定：desc 已含服装描述则不重复注入）
-_COSTUME_COLOR_HINTS = ("白", "素", "青", "蓝", "红", "黑", "绿", "紫", "褐", "金", "灰", "粉", "墨")
+# ============================================================================
+# 角色姿态/位置/朝向锚定块（代码级兜底，关键帧/首帧共用）
+#
+# 背景（code-audit 08-10）：hook 关键帧「刺客破水而出」被图片模型画成没有刺客、
+# 听香站水面（船断）、杨旭站立后倒（本应仰卧）——根因是 keyframes desc 只写一
+# 行动作动词，无角色姿态/位置/朝向的代码级强制，完全依赖 LLM 遵守 prompt 规则。
+# 本函数从 shot 的 ff_desc/lf_desc/motion_desc 提取出镜角色的姿态/位置/朝向，
+# 生成一段「【角色锚定】」追加到帧 prompt，代码级兜底（不依赖 LLM）。
+# 覆盖 hook + 普通分镜（走同一 _gen_keyframes_async / _gen_first_frame_async）。
+# ============================================================================
+
+_KF_POSE_STATES = (
+    "仰卧", "仰面躺", "仰面倒", "躺", "卧", "跪坐", "跪", "坐", "蹲", "趴",
+    "俯卧", "直立", "站立", "站", "立", "半身探出", "半身出水", "潜伏",
+)
+# 位置词：角色名后窗口找第一个出现的位置词（含画面方位 + 船体部位）
+_KF_POSITION_WORDS = (
+    "船头", "船尾", "船中", "中舱", "船梢", "船舷", "船板", "船侧",
+    "画左", "画右", "画中", "画上方", "水中", "水下", "水面", "岸上",
+)
+# 威胁源词表（含合规替换后的词——content_safety 会把"刺客"→"神秘人"，
+# 检测发生在 sanitize 之前面对原文"刺客"，但 LLM 直接产出"神秘人"也要能命中）
+_THREAT_WORDS_ENLARGED = (
+    "刺客", "杀手", "黑衣人", "黑影", "神秘人", "蒙面人",
+    "潜伏", "埋伏", "伏击", "偷袭者",
+)
+# 威胁源攻击动词（用于找动作目标角色）
+_THREAT_STAB_VERBS = ("刺", "劈", "扑", "砍", "斩", "捅", "扎", "挥")
+
+
+def _char_aliases(char_id: str, characters: list | None = None) -> list[str]:
+    """角色名可能出现的称谓别名（供姿态/位置提取用）.
+
+    关键：合规替换会把"刺客"→"神秘人"（content_safety.SENSITIVE_SUBSTITUTIONS），
+    script_result 里可能存"神秘人"而非"刺客"。威胁源角色（刺客/杀手/黑衣人）额外
+    匹配"神秘人/黑衣人/蒙面人"等替换称谓；普通角色只匹配自身名。
+    """
+    aliases = [char_id]
+    threat_ids = ("刺客", "杀手", "黑衣人")
+    if char_id in threat_ids:
+        aliases += ["神秘人", "黑衣人", "蒙面人", "黑影", "杀手", "刺客"]
+    # 去重保序
+    seen = set()
+    out = []
+    for a in aliases:
+        if a and a not in seen:
+            seen.add(a)
+            out.append(a)
+    return out
+
+
+def _extract_kf_pose(text: str, char_id: str) -> str:
+    """从文本中角色名附近提取姿态词（长词优先，'立'排除立刻/独立等）.
+
+    按角色名在文本中的出现顺序逐个窗口匹配——取**最早出现且有姿态**的位置
+    （ff 在前、lf 在后，ff 的"仰卧"优先于 lf 的"仰面倒"，保证关键帧取基础姿态）。
+    """
+    if not text:
+        return ""
+    poses = sorted(_KF_POSE_STATES, key=len, reverse=True)
+    # 收集该角色所有出现位置（按别名合并，按位置排序）
+    occ = set()
+    for alias in _char_aliases(char_id):
+        idx = text.find(alias)
+        while idx >= 0:
+            occ.add(idx)
+            idx = text.find(alias, idx + len(alias))
+    for pos0 in sorted(occ):
+        window = text[pos0:pos0 + 12]
+        for pose in poses:
+            if pose in window:
+                if pose == "立" and any(w in window for w in ("立刻", "独立", "立时", "立地")):
+                    return ""
+                return pose
+    return ""
+
+
+def _extract_kf_position(text: str, char_id: str) -> str:
+    """从文本中角色名后 12 字窗口提取位置词（船头/画左/水中 等）."""
+    if not text:
+        return ""
+    occ = set()
+    for alias in _char_aliases(char_id):
+        idx = text.find(alias)
+        while idx >= 0:
+            occ.add(idx)
+            idx = text.find(alias, idx + len(alias))
+    for pos0 in sorted(occ):
+        window = text[pos0:pos0 + 12]
+        for pos in _KF_POSITION_WORDS:
+            if pos in window:
+                return pos
+    return ""
+
+
+def _extract_char_layout(
+    shot: dict,
+    characters: list | None = None,
+    role_scan_text: str | None = None,
+    water_state: bool = True,
+) -> str:
+    """提取本镜出镜角色的姿态/位置/朝向锚定块（关键帧/首帧共用）.
+
+    策略：ff 是动作「前一刻」的静态完整布局（谁在船头/船尾/画左/画右/什么姿态），
+    关键帧是动作「中间态」——以 ff 提取的基础姿态为准，只叠加关键帧自身的动作
+    变化，避免姿态锚定与 kf_desc 的动作描述冲突（如 kf 写"杨旭后仰"时仍锚定
+    "杨旭仰卧船头"——两者其实一致，后仰是仰卧的延续）。
+
+    water_state=True（关键帧）：补"完整小舟"+"水面浪花"（场景状态锚定）。
+    water_state=False（首帧）：只取姿态/位置/朝向，不补船/水面状态。
+
+    返回形如：
+      【角色锚定】杨旭仰卧船头（面向画右），听香跪坐船尾（面向画左），
+      刺客半身探出画右水面（面向画左杨旭）。完整小舟在画中，水面浪花翻涌。
+    无可用信息时返回 ""（调用方不追加，绝不堆叠）。
+    """
+    if not shot or not characters:
+        return ""
+    try:
+        if is_empty_scene(shot, characters):
+            return ""
+        # 角色判定文本：role_scan_text 优先（关键帧合并全文），否则合并 shot 字段
+        scan = role_scan_text or " ".join(filter(None, [
+            shot.get("ff_desc", ""), shot.get("lf_desc", ""),
+            shot.get("motion_desc", "") or shot.get("prompt", ""),
+        ]))
+        if not scan:
+            return ""
+        onstage = [c for c in characters
+                   if c.get("identifier") and any(
+                       a in scan for a in _char_aliases(c.get("identifier", ""), characters))]
+        if not onstage:
+            return ""
+
+        # 提取姿态/位置：角色优先在 ff_desc（基础布局）找，kf 覆盖在 scan 前部
+        parts = []
+        for c in onstage:
+            ident = c.get("identifier", "")
+            pose = _extract_kf_pose(scan, ident)
+            pos = _extract_kf_position(scan, ident)
+            seg = ident
+            if pose:
+                seg += pose
+            if pos:
+                seg += pos
+            # 朝向：extract_orientation 有(主体,目标) → 面向{目标}
+            try:
+                from style_prefix import extract_orientation
+                orient = extract_orientation(scan, characters)
+                for subject, target in orient:
+                    if subject == ident:
+                        seg += f"（面向{target}）"
+                        break
+            except Exception:
+                pass
+            parts.append(seg)
+
+        if not parts:
+            return ""
+        block = "【角色锚定】" + "，".join(parts)
+
+        # 威胁源朝向兜底：有威胁源而 scan 无朝向表达 → 追加"面向目标/侧身朝向画X"
+        has_threat = any(w in scan for w in _THREAT_WORDS_ENLARGED)
+        has_orient = any(k in scan for k in (
+            "面向", "朝向", "侧身", "紧盯画", "盯向画", "望向画", "朝画", "逼近",
+        ))
+        if has_threat and not has_orient:
+            block += "，威胁源必须面向其攻击目标，禁止背对目标或正对镜头"
+
+        # 关键帧补船完整 + 水面浪花（场景状态锚定）
+        if water_state:
+            try:
+                import json as _json
+                from shared.paths import chapter_dir
+                script_path = chapter_dir() / "script_result.json"
+                if script_path.exists():
+                    script = _json.load(open(script_path, encoding="utf-8"))
+                    objs = script.get("scene_objects", {}) or {}
+                    boat = next((o for o in objs.values()
+                                 if isinstance(o, dict) and o.get("category") == "船"), None)
+                    if boat and "完整小舟" not in block and "整船" not in block:
+                        block += "，完整小舟在画中、船头船尾齐全不缺失"
+            except Exception:
+                pass
+            if ("破水" in scan or "刺" in scan or "浪花" in scan or "出水" in scan) \
+                    and "浪花" not in block and "水花" not in block:
+                block += "，水面浪花翻涌"
+
+        return block
+    except Exception:
+        return ""
+
+
+# ============================================================================
+# 道具空间方位锚定块（A3 修复 08-10）
+#
+# 背景（rule50/22.9）：同框多件手持道具必须写清各自落点，但 ff_desc 里的道具方位
+# （如"左手钓杆垂于水面、右手酒壶倾洒"）**从未被提取进帧 prompt 锚定**——step02a
+# 三帧只有【角色锚定】，图片模型自由摆放道具导致酒壶钓杆重叠（08-09 钩子坑）。
+# 本函数从 shot 文本提取出镜道具及其方位词，生成「【道具锚定】」块注入三帧，
+# 代码级兜底（不依赖 LLM 遵守 rule50/22.9）。
+# ============================================================================
+
+# 道具方位词（画面方位 + 手部 + 位置落点；覆盖 rule22.9 的空间词）
+_PROP_POSITION_WORDS = (
+    "画左", "画右", "画中", "画上方", "画下方",
+    "左手", "右手", "双手", "手中", "手边", "身侧", "身前", "身下",
+    "前方", "身后", "头顶", "肩头", "腰间", "背后",
+    "水中", "水下", "水面", "船头", "船尾", "船板", "船舷", "船侧", "甲板",
+    "地上", "岸上", "桌上", "几上", "案上",
+)
+# 道具方位词命中窗口（道具名后找方位）
+_PROP_POSITION_WINDOW = 16
+
+
+def _extract_prop_layout(
+    shot: dict,
+    characters: list | None = None,
+    role_scan_text: str | None = None,
+) -> str:
+    """提取本镜出镜道具及其方位锚定块（首帧/尾帧/关键帧共用）.
+
+    从 shot 文本（ff_desc/prompt 等）匹配 prop_assets 库中的道具名/consistent_terms，
+    对每个匹配道具提取其周围 16 字的方位词（画左/右手/身侧/水中…），生成
+    「【道具锚定】」块。命中多个道具且各带方位 → 输出（防模型自由摆放重叠）。
+
+    策略：文本已有方位 → 保留；无方位 → 从同句角色方位推断（如"杨旭左手持钓杆"
+    在前、"钓杆"在后 → 用角色方位兜底）；仍无 → 跳过该道具（不强加）。
+
+    返回形如：
+      【道具锚定】钓杆在杨旭左手垂入画右船头外侧水面，酒壶在杨旭右手倾洒画左甲板。
+    无可用道具方位时返回 ""（调用方不追加，绝不堆叠）。
+    """
+    if not shot:
+        return ""
+    try:
+        if is_empty_scene(shot, characters or []):
+            return ""
+        scan = role_scan_text or " ".join(filter(None, [
+            shot.get("ff_desc", ""), shot.get("lf_desc", ""),
+            shot.get("motion_desc", "") or shot.get("prompt", ""),
+        ]))
+        if not scan:
+            return ""
+
+        # 从 script_result.json 读 prop_assets（道具名 + consistent_terms）
+        try:
+            import json as _json
+            from shared.paths import chapter_dir
+            script_path = chapter_dir() / "script_result.json"
+            if not script_path.exists():
+                return ""
+            script = _json.load(open(script_path, encoding="utf-8"))
+        except Exception:
+            return ""
+        prop_assets = script.get("prop_assets", {}) or {}
+        if not isinstance(prop_assets, dict) or not prop_assets:
+            return ""
+
+        # 幂等：desc 已含"【道具锚定】" → 返回 ""（防多轮组装堆叠）
+        if "【道具锚定】" in scan:
+            return ""
+
+        # 第一阶段：收集所有匹配道具的出现位置（用于检测并列清单模式）
+        prop_hits = []  # (pid, hit_pos, hit_term)
+        for pid, entry in prop_assets.items():
+            if not isinstance(entry, dict):
+                continue
+            if _is_space_object_prop(entry):
+                continue
+            match_sources = [pid] + list(entry.get("consistent_terms", []) or [])
+            hit_pos = -1
+            hit_term = None
+            for term in sorted(match_sources, key=len, reverse=True):
+                if not term:
+                    continue
+                p = scan.find(term)
+                if p >= 0:
+                    hit_pos = p
+                    hit_term = term
+                    break
+            if hit_pos < 0:
+                continue
+            # 隐藏武器排除：道具命中词周围含"未出水/未出鞘/潜伏/藏"等 → 不在画面同框
+            from shared.content_safety import WEAPON_HIDDEN_WORDS
+            hid_win = scan[max(0, hit_pos - 6):hit_pos + len(hit_term) + 8]
+            if any(w in hid_win for w in WEAPON_HIDDEN_WORDS):
+                continue
+            prop_hits.append((pid, hit_pos, hit_term))
+
+        if not prop_hits:
+            return ""
+
+        # 第二阶段：先给每件道具算「独立方位」（前后 12 字窗口，**不含**后向远端
+        # 捞方位——"船头"这种角色站位不是道具落点）。有方位的道具正常输出；
+        # 无方位的道具若与相邻道具构成「、」分隔清单 → 标记"单独摆放"。
+        def _near_pos(pid, hit_pos, hit_term):
+            """道具前后 12 字窗口找独立方位词；返回 (pos_word, 是否清单分隔).
+
+            后向窗口在**遇到下一个道具名**时截断——避免跨道具捞到下一件道具后的
+            方位（"手持酒壶、钓杆、匕首，站在船头"里钓杆后 8 字会跨过匕首捞到
+            "船头"，那是角色站位不是钓杆落点）。
+            """
+            pos_word = ""
+            best_dist = 999
+            end_pos = hit_pos + len(hit_term)
+            # 后向边界：下一个道具名位置（若无则 +8）
+            next_prop_pos = end_pos + 8
+            for other_pid, other_pos, other_term in sorted_hits:
+                if other_pos > end_pos and other_pos < next_prop_pos:
+                    next_prop_pos = other_pos
+            for w in _PROP_POSITION_WORDS:
+                pre_idx = scan.rfind(w, max(0, hit_pos - 12), hit_pos)
+                if pre_idx >= 0:
+                    d = hit_pos - pre_idx
+                    if d < best_dist:
+                        best_dist, pos_word = d, w
+                # 后向只找到下一个道具名或 +8 内（不跨道具捞方位）
+                post_idx = scan.find(w, end_pos, min(next_prop_pos, end_pos + 8))
+                if post_idx >= 0:
+                    # 排除"站/立/坐/跪/躺"等姿态动词后的位置词——那是角色位置
+                    # （"站在船头"= 角色站位，不是道具落点；"匕首，站在船头"里
+                    # 的船头不该算匕首方位）
+                    verb_gap = scan[end_pos:post_idx]
+                    if any(v in verb_gap for v in ("站", "立", "坐", "跪", "躺", "卧", "伏")):
+                        continue
+                    d = post_idx - end_pos
+                    if d < best_dist:
+                        best_dist, pos_word = d, w
+            return pos_word
+
+        parts = []
+        sorted_hits = sorted(prop_hits, key=lambda x: x[1])
+        for i, (pid, hit_pos, hit_term) in enumerate(sorted_hits):
+            pos_word = _near_pos(pid, hit_pos, hit_term)
+            if pos_word:
+                parts.append(f"{pid}在{pos_word}")
+                continue
+            # 无独立方位：判断是否在「、」分隔清单中（相邻道具 + 逗号/顿号分隔）
+            in_list = False
+            gap_prev = scan[sorted_hits[i-1][1] + len(sorted_hits[i-1][2]):hit_pos] if i > 0 else ""
+            gap_next = scan[hit_pos + len(hit_term):sorted_hits[i+1][1]] if i < len(sorted_hits) - 1 else ""
+            sep = lambda g: any(s in g for s in ("、", "，", "和", "与", ","))
+            if (i > 0 and sep(gap_prev)) or (i < len(sorted_hits) - 1 and sep(gap_next)):
+                in_list = True
+            if in_list:
+                # 清单中的无方位道具：明确"单独摆放"而非伪精确方位
+                parts.append(f"{pid}单独摆放")
+            else:
+                # 孤立无方位道具 → 找角色名兜底（"杨旭…钓杆"）
+                pre_win = scan[max(0, hit_pos - 12):hit_pos]
+                role = next((c.get("identifier", "") for c in (characters or [])
+                             if c.get("identifier") and c.get("identifier") in pre_win), "")
+                if role:
+                    role_pos = _extract_kf_position(scan, role)
+                    parts.append(f"{pid}在{role_pos or role + '手中'}")
+                else:
+                    continue  # 无方位无角色 → 跳过（不强加）
+
+        if not parts:
+            return ""
+        block = "【道具锚定】" + "，".join(parts)
+        # 清单模式下补"分开摆放"指令（有单独摆放的道具时）
+        if any("单独摆放" in p for p in parts):
+            block += "（多道具分开摆放，禁止重叠）"
+        return block
+    except Exception:
+        return ""
+
+
+# 服装词提示（dynamic 是服装词开头用"身着"连接；_COSTUME_WORDS 供 _inject_character_costume 判定）
 _COSTUME_WORDS = ("袍", "衫", "衣", "裳", "裙", "袄", "裰", "服", "袈", "氅")
 
 
 def _inject_character_costume(desc: str, characters: list | None,
                               shot: dict | None = None,
-                              frame_kind: str | None = None) -> str:
-    """给首帧/尾帧 prompt 注入出镜角色的服装特征（dynamic_features）.
+                              frame_kind: str | None = None,
+                              role_scan_text: str | None = None) -> str:
+    """给首帧/尾帧 prompt 注入出镜角色的脸型（static）+ 服装特征（dynamic）.
 
-    出镜角色 = desc 中出现的角色名。**两帧（ff/lf）一律注入完整 dynamic_features**，
+    出镜角色 = desc 中出现的角色名。**两帧（ff/lf）一律注入完整 static+dynamic**，
     不做"已有服装词就跳过"的幂等——旧逻辑按角色名周围窗口检测是否已有单个服装词
     （如"一袭春衫"）就跳过，导致 ff 只带"春衫"、lf 才带完整"春衫+步摇"，两帧服装
     锚定不同源 → 图片模型画出的听香衣服不一致（code-audit 08-09 首尾帧衣服差异）。
     现在：dynamic 已整段出现在 desc 中才跳过，否则追加完整锚。
 
+    **static_features（脸型/五官）注入（A1 修复 08-10）**：图片模型在 NO_LAYOUT
+    锁（尾帧/关键帧）下对肖像参考图的遵循度被放宽，脸型全靠模型自觉 → 变脸/性别
+    漂移。此处把 static_features 一并注入（`{ident}：{static}，身着{dynamic}`），
+    用文字锚定脸型，与参考图双重保险。static 缺失时只注入 dynamic（保持兼容）。
+
     frame_kind="first_frame" 时过滤动作结果/武器词——首帧是动作「前一刻」（破水前），
     不该有溅血/持刀等动作结果。dynamic_features 是**全章状态**（含"脸上溅血""手持
     寒光匕首"），全量注入首帧会让图片模型画出血污/武器（08-09 首帧杨旭胸口血迹、
-    刺客血眼）。尾帧/关键帧不过滤（动作已发生，结果应保留）。
+    刺客血眼）。尾帧/关键帧不过滤（动作已发生，结果应保留）。static_features 无
+    动作结果词，首帧不过滤。
 
     "黑衣刺客"里的"衣"只算刺客的服装，不影响杨旭。空镜（empty_scene）不注入
     （禁人物）。dynamic_features 缺失时跳过该角色。
+
+    role_scan_text: 关键帧专用——kf_desc 常只含动作主体（如"刺客破水而出"），
+    杨旭/听香等配角名不在其中，需合并 shot 全文（ff/lf/motion）判定出镜角色，
+    否则关键帧画出的角色服装/姿态与首尾帧不一致（code-audit 08-10 hook
+    keyframe 杨旭站立/听香撑伞/刺客消失）。传 None 时回退到 desc 判定。
     """
     if not desc or not characters or not shot:
         return desc
@@ -1373,22 +1794,34 @@ def _inject_character_costume(desc: str, characters: list | None,
         if is_empty_scene(shot, characters):
             return desc
         additions = []
+        # 角色判定文本：默认 desc；关键帧用合并全文（含配角名）
+        scan_text = role_scan_text if role_scan_text else desc
         for c in characters:
             ident = c.get("identifier", "") or ""
-            if not ident or ident not in desc:
+            # 出镜判定支持威胁源别名（刺客→神秘人/黑衣人——合规替换后文本用
+            # "神秘人"，但角色名是"刺客"；仅 ident in scan_text 会漏注入刺客的
+            # 脸型/服装，导致刺客形象全靠模型自由发挥。与 _collect_portrait_refs
+            # 的别名修复同源（08-10 A1/A2）。
+            if not ident or not any(a in scan_text for a in _char_aliases(ident, characters)):
                 continue
+            static = (c.get("static_features") or "").strip()
             dynamic = (c.get("dynamic_features") or "").strip()
-            if not dynamic:
-                continue
-            # 完整 dynamic 已出现在 desc 中才跳过（保证两帧锚定一致，不重复堆叠）
-            if dynamic in desc:
+            if not static and not dynamic:
                 continue
             # 首帧过滤动作结果/武器词（溅血/持刀/血迹/洇痕等），保留静态服装/发型
             if frame_kind == "first_frame":
                 dynamic = _strip_frame_action_result(dynamic)
-                if not dynamic:
+                if not dynamic and not static:
                     continue
-            additions.append(f"{ident}身着{dynamic}")
+            # 组装：static（脸型）+ dynamic（服装/状态）。dynamic 是服装词开头用
+            # "身着"，否则用"，"连接（如刺客 dynamic="浑身湿透"非衣服，说"身着浑身
+            # 湿透"不通顺 → "刺客：猫系脸…，浑身湿透"）。static 缺失时只拼 dynamic。
+            conn = "，身着" if any(w in dynamic for w in _COSTUME_WORDS) else "，"
+            combined = (f"{ident}：{static}{conn}{dynamic}" if static
+                        else f"{ident}{conn}{dynamic}")
+            if combined in desc:
+                continue
+            additions.append(combined)
         if additions:
             return f"{desc}。{('，'.join(additions))}"
         return desc
@@ -1596,17 +2029,25 @@ async def _gen_first_frame_async(
             if ff_hash_path.exists():
                 saved_hash = ff_hash_path.read_text(encoding="utf-8").strip()
                 if saved_hash == current_hash and _validate_frame(str(ff_path)):
-                    await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene)
-                    return str(ff_path)
+                    # B7：缓存命中但 QC critical → 删帧+删哈希，下次重生成
+                    if await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene):
+                        _del_frame_and_hash(ff_path, ff_hash_path, "首帧", idx, logger)
+                        # 继续走下方生成分支（attempt=0 未 ++，force 不变 → 重新生成）
+                    else:
+                        return str(ff_path)
                 else:
                     logger.verbose(f"  [FRAME] 首帧 shot_{idx} 哈希不匹配或缓存无效，重新生成")
             elif script_mtime is not None and ff_path.stat().st_mtime >= script_mtime:
                 if _validate_frame(str(ff_path)):
-                    await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene)
-                    return str(ff_path)
+                    if await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene):
+                        _del_frame_and_hash(ff_path, ff_hash_path, "首帧", idx, logger)
+                    else:
+                        return str(ff_path)
             elif script_mtime is None and _validate_frame(str(ff_path)):
-                await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene)
-                return str(ff_path)
+                if await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene):
+                    _del_frame_and_hash(ff_path, ff_hash_path, "首帧", idx, logger)
+                else:
+                    return str(ff_path)
 
         logger.verbose(f"  [FRAME] 生成首帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
         # 添加风格前缀 + 严格约束（与视频生成保持一致，确保风格统一）
@@ -1618,6 +2059,18 @@ async def _gen_first_frame_async(
         ff_desc = _inject_character_costume(ff_desc, characters, shot, frame_kind="first_frame")
         # 场景物体尺寸锚定注入（船/车等物体比例防漂移，code-audit 08-06 钩子船太小）
         ff_desc = _inject_object_size_anchor(shot, ff_desc)
+        # 角色姿态/位置/朝向锚定块（代码级兜底——首帧若 LLM 漏写刺客朝向/角色姿态，
+        # 从 shot 全文提取补上；water_state=False 首帧是动作前一刻，不补船/水面状态）
+        ff_anchor = _extract_char_layout(shot, characters,
+                                         role_scan_text=shot.get("ff_desc", ""),
+                                         water_state=False)
+        if ff_anchor:
+            ff_desc = f"{ff_desc}。{ff_anchor}"
+        # A3 修复：道具空间方位锚定块（提取同框手持道具的落点，防自由摆放重叠）
+        ff_prop = _extract_prop_layout(shot, characters,
+                                       role_scan_text=shot.get("ff_desc", ""))
+        if ff_prop:
+            ff_desc = f"{ff_desc}。{ff_prop}"
         ff_desc_full = sanitize_prompt(ensure_prefix(ff_desc, STYLE_PREFIX), verbose=False)
         ff_desc_full = add_image_strict_constraints(ff_desc_full, "首帧", shot=shot)
         refs = reference_paths if reference_paths else []
@@ -1649,7 +2102,20 @@ async def _gen_first_frame_async(
         if _validate_frame(str(ff_path)):
             # 保存哈希值，供下次缓存检测使用
             ff_hash_path.write_text(current_hash, encoding="utf-8")
-            await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene)
+            # B7 修复：首帧 QC critical → unlink 坏帧 + 删哈希，重试循环重生成
+            qc_critical = await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene)
+            if qc_critical:
+                logger.verbose(f"  [FRAME] 首帧 shot_{idx} QC critical，删帧重生成")
+                try:
+                    Path(ff_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                try:
+                    Path(ff_hash_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                if attempt < max_retries:
+                    continue
             return str(ff_path)
         if attempt < max_retries:
             logger.verbose(f"  [FRAME] 首帧 shot_{idx} 第{attempt+1}次不达标，重试...")
@@ -1736,17 +2202,24 @@ async def _gen_last_frame_async(
             if lf_hash_path.exists():
                 saved_hash = lf_hash_path.read_text(encoding="utf-8").strip()
                 if saved_hash == current_hash and _validate_frame(str(lf_path)):
-                    await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene)
-                    return str(lf_path)
+                    # B7：缓存命中但 QC critical → 删帧+删哈希，下次重生成
+                    if await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene):
+                        _del_frame_and_hash(lf_path, lf_hash_path, "尾帧", idx, logger)
+                    else:
+                        return str(lf_path)
                 else:
                     logger.verbose(f"  [FRAME] 尾帧 shot_{idx} 哈希不匹配或缓存无效，重新生成")
             elif script_mtime is not None and lf_path.stat().st_mtime >= script_mtime:
                 if _validate_frame(str(lf_path)):
-                    await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene)
-                    return str(lf_path)
+                    if await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene):
+                        _del_frame_and_hash(lf_path, lf_hash_path, "尾帧", idx, logger)
+                    else:
+                        return str(lf_path)
             elif script_mtime is None and _validate_frame(str(lf_path)):
-                await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene)
-                return str(lf_path)
+                if await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene):
+                    _del_frame_and_hash(lf_path, lf_hash_path, "尾帧", idx, logger)
+                else:
+                    return str(lf_path)
 
         logger.verbose(f"  [FRAME] 生成尾帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
         # 添加风格前缀 + 严格约束（与视频生成保持一致，确保风格统一）
@@ -1758,6 +2231,18 @@ async def _gen_last_frame_async(
         lf_desc = fix_lf_desc_gaze(lf_desc, shot, characters)
         # 场景物体尺寸锚定注入（船/车等物体比例防漂移）
         lf_desc = _inject_object_size_anchor(shot, lf_desc)
+        # 角色姿态/位置/朝向锚定块（代码级兜底——lf_desc 是动作结果态，从 shot
+        # 全文提取出镜角色的终态姿态/位置，防"浪花消失/角色站位漂移"；
+        # water_state=True 尾帧也补船完整+水面状态）
+        lf_anchor = _extract_char_layout(shot, characters,
+                                         role_scan_text=shot.get("lf_desc", ""))
+        if lf_anchor:
+            lf_desc = f"{lf_desc}。{lf_anchor}"
+        # A3 修复：道具空间方位锚定块（尾帧同框道具落点，防自由摆放重叠）
+        lf_prop = _extract_prop_layout(shot, characters,
+                                       role_scan_text=shot.get("lf_desc", ""))
+        if lf_prop:
+            lf_desc = f"{lf_desc}。{lf_prop}"
         # 尾帧注入场景上下文 + 显式"重构图"指令：
         # 参考图（首帧）只作人物/风格锚定，构图必须按 lf_desc 重新布局，
         # 否则参考图会把动作结果帧也锁死在首帧构图上，三帧雷同、动作无法推进。
@@ -1795,7 +2280,20 @@ async def _gen_last_frame_async(
         if _validate_frame(str(lf_path)):
             # 保存哈希值，供下次缓存检测使用
             lf_hash_path.write_text(current_hash, encoding="utf-8")
-            await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene)
+            # B7 修复：尾帧 QC critical → unlink 坏帧 + 删哈希，重试循环重生成
+            qc_critical = await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene)
+            if qc_critical:
+                logger.verbose(f"  [FRAME] 尾帧 shot_{idx} QC critical，删帧重生成")
+                try:
+                    Path(lf_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                try:
+                    Path(lf_hash_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                if attempt < max_retries:
+                    continue
             return str(lf_path)
         if attempt < max_retries:
             logger.verbose(f"  [FRAME] 尾帧 shot_{idx} 第{attempt+1}次不达标，重试...")
@@ -1826,6 +2324,7 @@ async def _gen_keyframes_async(
     reference_paths: list | None = None,
     max_retries: int = 1,
     empty_scene: bool = False,
+    characters: list | None = None,
 ) -> list[str]:
     """为镜头生成中间关键帧图片（多关键帧叙事模式）。
     
@@ -1876,24 +2375,45 @@ async def _gen_keyframes_async(
         if empty_scene:
             kf_desc = kf_desc + "\n空镜头， 画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
         
-        # 复用首帧哈希逻辑：基于 shot 内容派生 + 锁类型（关键帧用 NO_LAYOUT 锁）
+        # 复用首帧哈希逻辑：基于 shot 内容派生 + 锁类型（关键帧用 NO_LAYOUT 锁）。
+        # v2（08-10）：哈希含 kf_desc + time_ratio → 每个中间帧独立哈希，改 kf desc
+        # 能触发该帧重出（原复用 shot 哈希，所有中间帧同值且改 desc 缓存不失效）。
         current_hash = _get_frame_content_hash(
-            shot, empty_scene, reference_paths, lock_kind="no_layout")
+            shot, empty_scene, reference_paths, lock_kind="no_layout",
+            extra_fields={"kf_desc": kf_desc, "kf_t": time_ratio})
         
         for attempt in range(max_retries + 1):
             if kf_path.exists() and not force and attempt == 0:
                 if kf_hash_path.exists():
                     saved_hash = kf_hash_path.read_text(encoding="utf-8").strip()
                     if saved_hash == current_hash and _validate_frame(str(kf_path)):
-                        kf_paths.append(str(kf_path))
-                        break
+                        # B7：缓存命中但 QC critical → 删帧+删哈希，走下方重生成
+                        if await _maybe_qc_frame(shot, str(kf_path), "keyframe",
+                                                 characters, empty_scene,
+                                                 prompt=shot.get(f"kf_{i}_desc_final")):
+                            _del_frame_and_hash(kf_path, kf_hash_path, f"关键帧{i}", idx, _kf_logger)
+                        else:
+                            kf_paths.append(str(kf_path))
+                            break
+                    else:
+                        _kf_logger.verbose(f"  [KEYFRAME] shot_{idx} keyframe_{i} 哈希不匹配或缓存无效，重新生成")
                 elif script_mtime is not None and kf_path.stat().st_mtime >= script_mtime:
                     if _validate_frame(str(kf_path)):
+                        if await _maybe_qc_frame(shot, str(kf_path), "keyframe",
+                                                 characters, empty_scene,
+                                                 prompt=shot.get(f"kf_{i}_desc_final")):
+                            _del_frame_and_hash(kf_path, kf_hash_path, f"关键帧{i}", idx, _kf_logger)
+                        else:
+                            kf_paths.append(str(kf_path))
+                            break
+                elif script_mtime is None and _validate_frame(str(kf_path)):
+                    if await _maybe_qc_frame(shot, str(kf_path), "keyframe",
+                                             characters, empty_scene,
+                                             prompt=shot.get(f"kf_{i}_desc_final")):
+                        _del_frame_and_hash(kf_path, kf_hash_path, f"关键帧{i}", idx, _kf_logger)
+                    else:
                         kf_paths.append(str(kf_path))
                         break
-                elif script_mtime is None and _validate_frame(str(kf_path)):
-                    kf_paths.append(str(kf_path))
-                    break
             
             _kf_logger.verbose(f"  [KEYFRAME] 生成 shot_{idx} keyframe_{i} (t={time_ratio:.1f})...")
             # 关键帧注入场景上下文 + 显式"重构图"指令：
@@ -1902,6 +2422,32 @@ async def _gen_keyframes_async(
             scene = shot.get("scene", "") or ""
             location = shot.get("location", "") or ""
             ctx = f"（场景：{location or scene}）" if (location or scene) else ""
+            # 关键帧预处理：替换 AI 可能误解的词汇（与首帧/尾帧一致）
+            kf_desc = preprocess_prompt_for_image(kf_desc)
+            # 注入出镜角色服装特征（与首帧/尾帧一致）。kf_desc 常只含动作主体
+            # （如"刺客破水而出"），杨旭/听香等配角名不在其中，需合并 shot 全文
+            # 判定出镜角色——否则关键帧画出的角色服装/姿态与首尾帧不一致
+            # （code-audit 08-10 hook keyframe 杨旭站立/听香撑伞/刺客消失）。
+            role_scan = " ".join(filter(None, [
+                shot.get("ff_desc", ""), shot.get("lf_desc", ""),
+                shot.get("motion_desc", "") or shot.get("prompt", ""),
+                kf_desc,
+            ]))
+            kf_desc = _inject_character_costume(kf_desc, characters, shot,
+                                                role_scan_text=role_scan)
+            # 船/车等空间物体尺寸锚定（防关键帧船画小/画断——08-10 hook keyframe_0
+            # 船少一截导致听香站水面）
+            kf_desc = _inject_object_size_anchor(shot, kf_desc)
+            # 角色姿态/位置/朝向锚定块（代码级兜底——kf_desc 常只一行动作描述，
+            # 从 shot 全文提取出镜角色的姿态/位置/朝向，防"杨旭站立后倒/听香撑伞/
+            # 刺客消失/船断"（code-audit 08-10 hook 关键帧质量）。首帧也注入。
+            kf_anchor = _extract_char_layout(shot, characters, role_scan_text=role_scan)
+            if kf_anchor:
+                kf_desc = f"{kf_desc}。{kf_anchor}"
+            # A3 修复：道具空间方位锚定块（关键帧同框道具落点，防自由摆放重叠）
+            kf_prop = _extract_prop_layout(shot, characters, role_scan_text=role_scan)
+            if kf_prop:
+                kf_desc = f"{kf_desc}。{kf_prop}"
             kf_desc_full = (
                 f"{kf_desc}{ctx}"
                 f"，构图需按关键帧描述重新布局，"
@@ -1932,7 +2478,25 @@ async def _gen_keyframes_async(
                 break
             
             if _validate_frame(str(kf_path)):
-                kf_hash_path.write_text(current_hash, encoding="utf-8")
+                # 挂实际最终 prompt（QC 语义核对用）+ 关键帧视觉质检（软失败不阻断）
+                shot[f"kf_{i}_desc_final"] = kf_desc_full
+                qc_critical = await _maybe_qc_frame(
+                    shot, str(kf_path), "keyframe", characters,
+                    empty_scene, prompt=kf_desc_full)
+                # B7 修复：关键帧 QC critical → unlink 坏帧 + 删哈希，下次重试循环重生成
+                # （原只记日志，坏帧继续进视频）
+                if qc_critical:
+                    _kf_logger.verbose(f"  [KEYFRAME] shot_{idx} keyframe_{i} QC critical，删帧重生成")
+                    try:
+                        Path(kf_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    try:
+                        Path(kf_hash_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    if attempt < max_retries:
+                        continue
                 kf_paths.append(str(kf_path))
                 break
             if attempt < max_retries:
@@ -2029,6 +2593,7 @@ async def gen_shot_frames(
             reference_paths=kf_refs,
             max_retries=1,
             empty_scene=empty_scene,
+            characters=characters,
         )
     ff_["keyframes_paths"] = kf_paths
 
