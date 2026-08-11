@@ -34,8 +34,75 @@ INITIAL_POLL_DELAY = int(os.getenv("INITIAL_POLL_DELAY", "180"))     # Wait afte
 # 不再使用全局 RateLimiter 单令牌串行闸。
 VIDEO_CONCURRENCY = int(os.getenv("VIDEO_CONCURRENCY", "8"))
 
+# A6 视频产物质检（08-11 修复）：_poll_video 此前成功判定=文件>20KB，时长/内容
+# 零校验，坏视频直接进 step04。现增加两级 QC：
+#   1. 时长校验（always-on，ffprobe 探时长）：实际时长 vs 期望 duration_sec 偏差
+#      > 阈值 → 判定坏视频（短截/黑场/动作没播完）。
+#   2. 视觉质检（VIDEO_QC_ENABLED=1 时，抽取中段帧跑 ds-vision-skill）：检测人物
+#      消失/字幕/幻觉。默认 0（视觉质检昂贵，逐镜跑会拖慢全片），时长校验兜底。
+VIDEO_QC_ENABLED = os.getenv("VIDEO_QC_ENABLED", "0").strip() == "1"
+# 时长偏差阈值：实际时长 vs 期望时长的相对偏差（比例）或绝对偏差（秒）任一超限即坏
+VIDEO_DURATION_DEV_RATIO = float(os.getenv("VIDEO_DURATION_DEV_RATIO", "0.5"))
+VIDEO_DURATION_DEV_SEC = float(os.getenv("VIDEO_DURATION_DEV_SEC", "1.5"))
+
 # Global failure storage
 _failed_videos = defaultdict(list)
+
+
+def _probe_video_duration(video_path: Path) -> float:
+    """用 ffprobe 探测视频实际时长（秒），失败返回 0."""
+    try:
+        from step04_merge.stretch import get_media_duration
+        return get_media_duration(video_path)
+    except Exception:
+        return 0.0
+
+
+def _qc_video_product(video_path: Path, shot_idx: int, expected_duration: float) -> bool:
+    """视频产物内容质检（A6 修复 08-11）.
+
+    Returns:
+        bool: True = 视频有效（通过 QC）；False = 检出问题（调用方应标记失败重生成）。
+    """
+    from shared.tee_logger import get_logger
+    from shared.paths import chapter_dir
+    logger = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+    try:
+        if not video_path.exists() or video_path.stat().st_size <= 20 * 1024:
+            logger.verbose(f"  [Shot {shot_idx}] 视频 QC：文件缺失或过小")
+            return False
+        # --- 1. 时长校验（always-on） ---
+        actual = _probe_video_duration(video_path)
+        if actual <= 0:
+            # ffprobe 不可用/解析失败：不做时长判定（软失败，不误杀）
+            logger.verbose(f"  [Shot {shot_idx}] 视频 QC：时长探测失败，跳过时长校验")
+        else:
+            exp = expected_duration or 0
+            if exp > 0:
+                dev_abs = abs(actual - exp)
+                dev_ratio = dev_abs / exp if exp else 1.0
+                if dev_abs > VIDEO_DURATION_DEV_SEC and dev_ratio > VIDEO_DURATION_DEV_RATIO:
+                    logger.warn(
+                        f"  [Shot {shot_idx}] 视频 QC FAIL：实际时长 {actual:.1f}s vs "
+                        f"期望 {exp:.1f}s（偏差 {dev_abs:.1f}s / {dev_ratio:.0%}）——"
+                        f"视频短截/动作没播完，判定坏视频，重生成"
+                    )
+                    return False
+            logger.verbose(f"  [Shot {shot_idx}] 视频 QC：时长 {actual:.1f}s 校验通过")
+        # --- 2. 视觉质检（可选，VIDEO_QC_ENABLED=1 时） ---
+        if VIDEO_QC_ENABLED:
+            try:
+                from step02_video_gen.video_qc import qc_video_file
+                bad = qc_video_file(video_path, shot_idx)
+                if bad:
+                    logger.warn(f"  [Shot {shot_idx}] 视频 QC 视觉检测发现问题，重生成")
+                    return False
+            except Exception as e:
+                logger.verbose(f"  [Shot {shot_idx}] 视频视觉 QC 异常（不阻断）: {e}")
+        return True
+    except Exception as e:
+        logger.verbose(f"  [Shot {shot_idx}] 视频 QC 异常（不阻断）: {e}")
+        return True
 
 
 def _check_keyframe_hallucination(frame_path: str) -> dict:
@@ -209,6 +276,29 @@ async def _poll_video(
 
                     if not copy_ok:
                         _failed_videos[shot_idx].append({"attempt": -1, "error": "文件被占用，copy 失败", "task_id": task_id})
+                        return False
+
+                    # A6 修复（08-11）：视频产物接 QC——此前成功判定=文件>20KB，
+                    # 时长/内容零校验，坏视频直接进 step04。现做两级 QC：
+                    #   1. 时长校验（ffprobe，always-on）：实际 vs 期望 duration 偏差
+                    #      超限 → 短截/黑场/动作没播完，删视频标记失败重生成。
+                    #   2. 视觉质检（VIDEO_QC_ENABLED=1 时抽中段帧跑 ds-vision-skill）。
+                    # QC 失败不写哈希（下次缓存检测不会命中），返回 False 走失败重试。
+                    _expected_dur = float(getattr(req, "duration", 0) or 0)
+                    if not _qc_video_product(video_path, shot_idx, _expected_dur):
+                        _failed_videos[shot_idx].append({
+                            "attempt": -1, "error": "视频 QC 未通过（时长偏差/内容问题）",
+                            "task_id": task_id,
+                        })
+                        # 删坏视频 + 旧哈希，触发下次重生成
+                        try:
+                            video_path.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        try:
+                            (shot_dir / "prompt_hash.txt").unlink(missing_ok=True)
+                        except Exception:
+                            pass
                         return False
 
                     # 写入哈希，供下次运行的缓存检测使用（与 _get_shot_hash 同一算法）

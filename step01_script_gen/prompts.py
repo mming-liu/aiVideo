@@ -998,8 +998,11 @@ def _load_gap_analysis_context(validation: dict) -> str:
     # 问题2: 镜头分布
     dist = validation.get("distribution", {})
     if not dist.get("valid", True):
-        arc = dist.get("arc_coverage", {})
-        if not arc.get("has_climax_coverage", False):
+        # C1 修复（08-11）：旧实现读 `arc.arc_coverage.has_climax_coverage`，但
+        # gap_analysis 返回的 distribution dict 用的是顶层 `has_climax_coverage`
+        # ——键路径不匹配，分支永远不进、分布问题反馈从不到达 LLM。改读真实键。
+        has_climax = bool(dist.get("has_climax_coverage", False))
+        if not has_climax:
             issues.append(
                 "【镜头分布问题】后半段镜头未覆盖高潮剧情（战斗/刺杀/反转等强事件）"
             )

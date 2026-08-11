@@ -72,17 +72,33 @@ def _get_synonyms(keyword: str) -> list:
 
 
 def calculate_keyword_coverage(shot: dict, novel_text: str) -> dict:
-    """Calculate keyword coverage for a single shot (simplified, for debug report).
+    """Calculate keyword coverage for a single shot (for debug report + gap feedback).
 
-    Note: Keyword coverage detection is handled by validation.py.
+    C1 修复（08-11）：旧实现只查 core_keywords 是否在 prompt 中命中（且不返回
+    missing 列表），`validate_script_gap` 因此恒返回空 `low_coverage_shots`，
+    声称的覆盖检查从未真正执行（todolist C 档死代码）。现在：
+    - 命中源扩大：prompt + ff_desc + lf_desc + motion_desc（关键词可能只出现在
+      帧描述里，单查 prompt 会漏报）
+    - 返回 missing 列表：供 `_load_gap_analysis_context` 反馈给 LLM 具体缺了哪些词
     """
     core_keywords = shot.get("core_keywords", [])
     prompt = shot.get("prompt", "")
+    if not isinstance(core_keywords, list):
+        core_keywords = []
+    # 命中源：画面描述全字段（关键词可能只出现在帧描述里，单查 prompt 会漏报）
+    search_pool = " ".join(filter(None, [
+        prompt,
+        shot.get("ff_desc", "") or "",
+        shot.get("lf_desc", "") or "",
+        shot.get("motion_desc", "") or "",
+        shot.get("subtitle", "") or "",
+    ]))
 
     if not core_keywords:
-        return {"total": 0, "covered": 0, "coverage_rate": 0.0}
+        return {"total": 0, "covered": 0, "coverage_rate": 0.0, "missing": []}
 
-    covered = sum(1 for kw in core_keywords if _keyword_covered(kw, prompt))
+    missing = [kw for kw in core_keywords if not _keyword_covered(kw, search_pool)]
+    covered = len(core_keywords) - len(missing)
     total = len(core_keywords)
     coverage_rate = covered / total if total > 0 else 0.0
 
@@ -90,6 +106,7 @@ def calculate_keyword_coverage(shot: dict, novel_text: str) -> dict:
         "total": total,
         "covered": covered,
         "coverage_rate": round(coverage_rate, 3),
+        "missing": missing,
     }
 
 
@@ -321,13 +338,27 @@ def validate_script_gap(script: dict, novel_text: str) -> dict:
     # 检查高潮覆盖
     has_climax_coverage = dist.get("climax_shots", 0) > 0
 
+    # C1 修复（08-11）：真正计算低覆盖率镜头——旧实现硬编码返回空列表，
+    # `_load_gap_analysis_context` 的「关键词覆盖率问题」反馈永不触发，覆盖
+    # 检查形同虚设。现逐镜算覆盖率，低于阈值（<0.5）且缺词的镜头进反馈。
+    low_coverage_shots = []
+    _COVERAGE_THRESHOLD = 0.5
+    for shot in script.get("shots", []):
+        cov = calculate_keyword_coverage(shot, novel_text)
+        if cov["total"] > 0 and cov["coverage_rate"] < _COVERAGE_THRESHOLD:
+            low_coverage_shots.append({
+                "index": shot.get("index", "?"),
+                "coverage_rate": cov["coverage_rate"],
+                "missing": cov.get("missing", [])[:5],
+            })
+
     # 检查是否有失败或警告消息
     has_messages = bool(dist.get("messages")) and any(
         "⚠️" in m or "警告" in m for m in dist.get("messages", [])
     )
 
     return {
-        "low_coverage_shots": [],  # Handled by validation.py
+        "low_coverage_shots": low_coverage_shots,  # C1：真正计算（此前恒为空死代码）
         "distribution": {
             "status": status,
             "has_climax_coverage": has_climax_coverage,

@@ -529,7 +529,11 @@ def _check_character_consistency(script: dict) -> dict:
                 # 模糊检测：prompt/ff_Desc/lf_Desc 中出现常见人物词但 main_subject 不匹配
                 person_words = ["人物", "角色", "人影", "身影", "男子", "女子", "老人", "少年",
                               "少女", "孩子", "娃娃", "公子", "姑娘", "刺客", "杀手", "官员",
-                              "士兵", "侍女", "人", "两人", "三人", "两个人", "三个人"]
+                              "士兵", "侍女", "人", "两人", "三人", "两个人", "三个人",
+                              # B4 修复（08-11）：威胁源合规替换别名（刺客→神秘人）——
+                              # 替换后文本用「神秘人」但角色名是「刺客」，仅查「刺客」会
+                              # 误判空镜中无人物、人物渗入不告警
+                              "神秘人", "黑衣人", "蒙面人", "黑影", "偷袭者"]
                 # 合并所有文本进行检查
                 all_text = prompt + ff_desc + lf_desc
                 found_persons = [pw for pw in person_words if pw in all_text]
@@ -987,6 +991,82 @@ def _check_gaze_direction(shots, hook: dict = None) -> dict:
     for w in warnings:
         print(f'[CHECK] 视线方向: [WARN] {w}')
     return {'pass': True, 'issues': issues, 'warnings': warnings}
+
+
+# v6.31 新增：多人视线收敛判定（B6 修复 08-11，规则22.7/13.5/41）
+#
+# 背景（todolist 审计 08-10 B6）：规则22.7/13.5 要求「ff_desc 中每个角色都用
+# 画左/画右锚定视线落点，所有视线汇聚到同一威胁焦点，形成视线三角」。现有
+# _check_gaze_direction 只查「每个角色是否用了画左/画右」——但三个人各看各的
+# 方向（A看画左、B看画右、C看画上方）时每人都锚定了，却是散焦，规则仍被违反。
+# 本检查做「多人视线收敛」判定：同一镜头 ≥2 个角色都有视线锚定（画左/画右），
+# 若各角色视线落点方向明显分歧（画左 与 画右 同时出现），且无中间过渡/多人分
+# 散看不同方向的台词依据 → WARN 提示让视线汇聚到同一焦点。
+#
+# 保守设计：只对「多人同框 + 明确写了视线锚定」的镜头提示；单人镜头/空镜/
+# 无视线锚定的镜头不查。warning-only。
+# ============================================================================
+
+# 视线锚定正则：角色名 + 视线词 + 视线动词 + 画左/画右/画上方/画下方。
+# 注意：不跨逗号（逗号分隔的多个角色各自成锚点，跨逗号会误把"杨旭"当
+# 「听香目光盯向…」的宾语）；名字非贪婪且不含视线词（防止"听香目光"被
+# 当名字捕获）。
+_GAZE_ANCHOR_RE = re.compile(
+    r'([一-鿿]{2,4}?)(?:目光|双眼|眼睛|眼神|视线)[^，。；！？\n]{0,6}?'
+    r'(?:盯|看|望|视|瞄)[^，。；！？\n]{0,4}?(画左|画右|画上方|画下方)'
+)
+
+
+def _check_gaze_convergence(shots: list[dict], hook: dict = None) -> dict:
+    """检查多人同框镜头视线是否汇聚到同一焦点（规则22.7/13.5/41，warning-only）.
+
+    同一镜头 ≥2 个角色各自有视线锚定（画左/画右）时，若落点方向明显分歧
+    （画左 与 画右 并存），且无台词/动作依据说明是多人分散环视 → 提示让
+    视线汇聚到同一威胁焦点（视线三角）。
+    """
+    warnings = []
+
+    def _check_one(shot: dict, label: str):
+        idx = shot.get("index", "?")
+        text = " ".join([
+            shot.get("prompt", "") or "", shot.get("ff_desc", "") or "",
+            shot.get("lf_desc", "") or "", shot.get("motion_desc", "") or "",
+        ])
+        # 收集所有「角色 + 视线动词 + 画X」锚点
+        anchors = _GAZE_ANCHOR_RE.findall(text)
+        if len(anchors) < 2:
+            return  # 少于 2 个角色视线锚定，无需收敛判定
+        # 统计各落点方向（findall 返回 (角色, 画X) 二元组）
+        dirs = set(a[1] for a in anchors)
+        # 画左 与 画右 并存 = 明显分歧（画上方/画下方并存可算对立，但画左/右
+        # 是最常见的视线对撞）
+        has_left = "画左" in dirs
+        has_right = "画右" in dirs
+        if not (has_left and has_right):
+            return  # 视线同向或单向，无分歧
+        # 排除「多人分散环视」的合法依据：台词/动作写明各方看不同目标
+        # （如「三人围坐，各怀心事」）——简化为：有明确「各自/分别/环视/扫视」
+        # 词则不提示
+        if any(k in text for k in ("各自", "分别", "环视", "扫视", "四顾", "左顾右盼")):
+            return
+        # 多人视线分歧：画左 与 画右 并存
+        left_subs = sorted({a[0] for a in anchors if a[1] == "画左"})
+        right_subs = sorted({a[0] for a in anchors if a[1] == "画右"})
+        warnings.append(
+            f"{label}{idx}: 多人同框视线散焦——{left_subs} 看画左、{right_subs} 看画右，"
+            f"各看各的方向。规则22.7/13.5 要求所有视线汇聚到同一威胁焦点形成视线三角"
+            f"（威胁→目标、发现者→威胁），多人各看一方会让观众读不出冲突焦点。"
+            f"应让非威胁侧角色的视线落向威胁源（如'听香看向画右水中的刺客'）。"
+        )
+
+    for shot in shots:
+        _check_one(shot, "镜头")
+    if hook and isinstance(hook, dict):
+        _check_one(hook, "钩子镜头(index=0)")
+
+    for w in warnings:
+        print(f"[CHECK] 视线收敛: [WARN] {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
 
 
 # v2.0 新增：正文净化规则检查
@@ -1539,6 +1619,170 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
 
     # 硬性检查：lf_desc 不能为空，首尾帧不能完全相同
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
+# ============================================================================
+# v6.31 新增：软性规则校验（C3 修复 08-11）
+#
+# todolist C 档：以下规则只有 LLM prompt 约束、零代码校验，LLM 违约时无任何
+# 提示（软性规则 = 违反不崩、但违反多了画面质量/节奏/合规性明显下降）。
+#   - 规则13.6：ff_desc ≤80 字（钩子 ≤120）——超长则嵌套长句、图片模型理解退化
+#   - 规则37：抽象词必须量化（梦幻/压抑/优雅 等情绪风格词须带光/色/焦参数）
+#   - 规则46：人物出场四大方式——核心角色首次登场用有设计感的出场方式
+#   - 规则24：相邻镜头 color_tone 变化幅度 ≤20%（色彩突变观感割裂）
+# 全部 warning-only，不阻断（软性规则由 LLM 决定，此处仅提示）。
+# ============================================================================
+
+# 规则37 抽象风格词 → 必须量化（梦幻=低饱和+柔光；压抑=暗调+顶光；优雅=暖金侧光…
+# 命中抽象词而画面描述无任何光/色/焦参数 → 提示补量化）
+_ABSTRACT_QUANT_WORDS = (
+    "梦幻", "压抑", "优雅", "诡异", "神秘", "浪漫", "冷酷", "清冷",
+    "阴森", "温馨", "壮阔", "孤寂", "哀婉",
+)
+# 光/色/焦参数（抽象词的量化落点）
+_QUANT_PARAM_WORDS = (
+    "光", "阴影", "明暗", "冷色", "暖色", "青蓝", "金黄", "橙红", "暗调",
+    "低饱和", "高饱和", "浅景深", "景深", "柔光", "硬光", "侧光", "逆光",
+    "顶光", "色温", "焦",
+)
+
+# 规则46 出场设计方式（出现任一即视为有出场设计）
+_ENTRANCE_DESIGN_WORDS = (
+    "远景", "背影", "背部", "上摇", "特写", "大特写", "脚部", "手部",
+    "俯视", "剪影", "轮廓", "渺小", "天地", "缓步", "登场", "出场",
+)
+
+
+def _check_ff_desc_length(shots: list[dict], hook: dict = None) -> dict:
+    """规则13.6：ff_desc ≤80 字（钩子 ≤120）校验（C3 修复，warning-only）."""
+    warnings = []
+    for s in shots:
+        idx = s.get("index", "?")
+        ff = (s.get("ff_desc") or "").strip()
+        if not ff:
+            continue
+        if len(ff) > 80:
+            warnings.append(
+                f"镜头{idx}: ff_desc {len(ff)} 字 > 80 字（规则13.6）——首帧描述过长，"
+                f"易嵌套长句、图片模型理解退化。应短句、一角色一短句、动词前置，"
+                f"只留「前一刻」定格 + 角色完整静态布局，删冗余环境/月光段句。"
+            )
+    if hook and isinstance(hook, dict):
+        hff = (hook.get("ff_desc") or "").strip()
+        if hff and len(hff) > 120:
+            warnings.append(
+                f"钩子镜头(index=0): ff_desc {len(hff)} 字 > 120 字（规则13.6 钩子上限）"
+            )
+    for w in warnings:
+        print(f"[CHECK] ff描述长度: [WARN] {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
+
+
+def _check_abstract_quantization(shots: list[dict], hook: dict = None) -> dict:
+    """规则37：抽象风格词必须量化（C3 修复，warning-only）.
+
+    命中抽象词（梦幻/压抑/优雅…）而画面描述无任何光/色/焦参数 → 提示把
+    抽象词翻译成光/色/焦（梦幻=低饱和+柔光+浅景深+青蓝主色…）。
+    """
+    warnings = []
+
+    def _check_one(shot: dict, label: str):
+        idx = shot.get("index", "?")
+        text = " ".join([
+            shot.get("prompt", "") or "", shot.get("ff_desc", "") or "",
+            shot.get("motion_desc", "") or "",
+        ])
+        hits = [w for w in _ABSTRACT_QUANT_WORDS if w in text]
+        if not hits:
+            return
+        has_quant = any(p in text for p in _QUANT_PARAM_WORDS)
+        if not has_quant:
+            warnings.append(
+                f"{label}{idx}: 抽象风格词 {hits} 未量化（规则37）——抽象词必须翻译成"
+                f"光/色/焦参数（梦幻=低饱和+柔光+浅景深+青蓝主色；压抑=暗调+顶光+冷色；"
+                f"优雅=暖金侧光+绸缎高光+慢推），无法量化则删词。"
+            )
+
+    for shot in shots:
+        _check_one(shot, "镜头")
+    if hook and isinstance(hook, dict):
+        _check_one(hook, "钩子镜头(index=0)")
+    for w in warnings:
+        print(f"[CHECK] 抽象词量化: [WARN] {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
+
+
+def _check_character_entrance(shots: list[dict], characters: list | None = None) -> dict:
+    """规则46：核心角色出场设计（C3 修复，warning-only）.
+
+    主角/关键角色首次登场（本镜头 main_subject 是 script.characters 里的
+    注册角色 + 该角色首次出现在 shots 中）时，应避免「平视中景站立」千人一面，
+    用四大出场方式之一（远景渺小/背影藏脸/细节上摇/特写五官）。
+
+    只查注册角色（characters 里的 identifier）——路人/背景角色不受规则46约束，
+    避免对每个新出现的路人误报（C3 保守化 08-11）。
+    """
+    warnings = []
+    seen_chars: set[str] = set()
+    defined_ids = frozenset(
+        c.get("identifier", "") for c in (characters or []) if c.get("identifier")
+    )
+    for s in shots:
+        idx = s.get("index", "?")
+        ms = (s.get("main_subject") or "").strip()
+        # 只查注册角色（核心角色 = 已进入角色库的），且是首次出现
+        if ms not in defined_ids or ms in seen_chars:
+            continue
+        seen_chars.add(ms)
+        text = " ".join([
+            s.get("prompt", "") or "", s.get("ff_desc", "") or "",
+            s.get("motion_desc", "") or "",
+        ])
+        if any(e in text for e in _ENTRANCE_DESIGN_WORDS):
+            continue
+        # 空镜/场景主体（无人物）不查
+        if any(nc in ms for nc in EMPTY_SCENE_SUBJECTS):
+            continue
+        warnings.append(
+            f"镜头{idx}: 核心角色「{ms}」首次登场无出场设计（规则46）——避免'平视中景"
+            f"站立'千人一面，用四大出场方式之一：远景渺小于天地 / 中景背影藏脸 / "
+            f"近景脚手细节+上摇揭示 / 特写五官眼神。"
+        )
+    for w in warnings:
+        print(f"[CHECK] 出场设计: [WARN] {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
+
+
+def _check_color_tone_transition(shots: list[dict]) -> dict:
+    """规则24：相邻镜头 color_tone 变化幅度 ≤20%（C3 修复，warning-only）.
+
+    相邻镜头 color_tone 关键词差异过大（冷蓝 vs 暖金、白天 vs 夜晚）→ 色彩突变
+    观感割裂。启发式：相邻镜头各提取色调方向词（暖/冷/金/蓝/青/夜/昼…），
+    明显对立的组合提示。
+    """
+    warnings = []
+    _WARM = ("暖", "金", "橙", "红", "黄昏", "夕阳", "烛", "火")
+    _COLD = ("冷", "蓝", "青", "月", "夜", "幽", "银")
+    prev_warm = prev_cold = False
+    prev_idx = None
+    for s in shots:
+        idx = s.get("index", "?")
+        if idx == 0:
+            continue
+        tone = (s.get("color_tone") or "").strip()
+        has_warm = any(w in tone for w in _WARM)
+        has_cold = any(c in tone for c in _COLD)
+        if prev_idx is not None and (has_warm != prev_warm or has_cold != prev_cold):
+            # 相邻色调方向翻转（暖→冷 或 冷→暖）→ 突变
+            warnings.append(
+                f"镜头{prev_idx}→{idx}: color_tone 色调方向突变（规则24）——"
+                f"相邻镜头色调变化幅度应 ≤20%，暖→冷/冷→暖 直接跳是明显突变，"
+                f"建议中间加过渡镜头（开篇环境建立/明确时间跳跃可用淡入淡出过渡）。"
+            )
+        prev_warm, prev_cold, prev_idx = has_warm, has_cold, idx
+    for w in warnings:
+        print(f"[CHECK] 色调过渡: [WARN] {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
 
 
 # ============================================================================
@@ -2948,6 +3192,22 @@ def _run_prompt_checklist(script: dict) -> dict:
     results["prop_spatial_anchor"] = _check_prop_spatial_anchor(
         shots, script.get("hook"), script.get("characters"))
 
+    # v6.31 新增：致命伤跨镜持续校验（A4 修复——规则8 伤处锚定词跨镜持续）
+    results["fatal_wound_continuity"] = _check_fatal_wound_continuity(shots)
+
+    # v6.31 新增：禁抽象形容词/比喻校验（A5 修复——规则5.1，抽象词视频画不出）
+    results["forbidden_abstract"] = _check_forbidden_abstract(shots, script.get("hook"))
+
+    # v6.31 新增：多人视线收敛判定（B6 修复——规则22.7/13.5，三人各看一方=散焦）
+    results["gaze_convergence"] = _check_gaze_convergence(shots, script.get("hook"))
+
+    # v6.31 新增：软性规则校验（C3 修复——规则13.6 ff长度 / 规则37 抽象词量化 /
+    # 规则46 出场设计 / 规则24 色调过渡，全部 warning-only）
+    results["ff_desc_length"] = _check_ff_desc_length(shots, script.get("hook"))
+    results["abstract_quantization"] = _check_abstract_quantization(shots, script.get("hook"))
+    results["character_entrance"] = _check_character_entrance(shots, script.get("characters", []))
+    results["color_tone_transition"] = _check_color_tone_transition(shots)
+
     # 综合判定：任一硬性检查失败则整体不通过
     # v6.5: 增加 script_novel_alignment 到硬性检查
     # v6.7: 增加 ff_lf_completeness 到硬性检查（lf_desc 为空会导致静态视频）
@@ -3070,9 +3330,28 @@ def post_fix_shot_prompts(script: dict) -> dict:
         #    8种AI人像专业光位教程吸收）
         prompt = _fix_lighting_quantization(prompt)
 
+        # 3.2 禁抽象形容词/比喻词（A5 修复 08-11，规则5.1）：「快速出剑」「身形矫健」
+        #    这类抽象词视频模型画不出具体动作。确定性删除抽象修饰词，保留主体与动作
+        #    （校验项 _check_forbidden_abstract 依赖）。motion_desc 同样处理。
+        prompt = _fix_forbidden_abstract(prompt)
+        motion_desc = _fix_forbidden_abstract(motion_desc)
+
         # 3.5 情绪可视化：抽象情绪词 → 追加可视化动作（prompt + motion_desc）
         prompt = _fix_emotion_visualization(prompt)
         motion_desc = _fix_emotion_visualization(motion_desc)
+
+        # 3.6 对白超长句确定性断句（B9 修复 08-11，规则43）：无标点连续 >15 字
+        #    的单句在语义停顿点插入「，」，只改标点不改文字（规则31 兼容）。
+        #    narration_segment 与 subtitle 同步修复（subtitle == narration_segment，
+        #    字幕与语音严格对齐；修复后仍逐字一致）。
+        _fixed_narr = _fix_dialogue_length(narration)
+        if _fixed_narr != narration:
+            shot["narration_segment"] = _fixed_narr
+            narration = _fixed_narr
+        _fixed_sub = _fix_dialogue_length(subtitle)
+        if _fixed_sub != subtitle:
+            shot["subtitle"] = _fixed_sub
+            subtitle = _fixed_sub
 
         # 4. 转场关键词：场景切换镜补淡入淡出（跳过 hook）
         if shot.get("index") != 0 and i < len(shots) - 1:
@@ -3110,6 +3389,8 @@ def post_fix_shot_prompts(script: dict) -> dict:
     hook = script.get("hook")
     if hook and isinstance(hook, dict):
         hook["prompt"] = _fix_lighting_quantization(hook.get("prompt", "") or "")
+        hook["prompt"] = _fix_forbidden_abstract(hook.get("prompt", "") or "")
+        hook["motion_desc"] = _fix_forbidden_abstract(hook.get("motion_desc", "") or "")
         hook["prompt"] = _fix_emotion_visualization(hook.get("prompt", "") or "")
         hook["motion_desc"] = _fix_emotion_visualization(hook.get("motion_desc", "") or "")
         # v6.18：hook ff_desc 同样归一化
@@ -3967,6 +4248,79 @@ def _check_dialogue_length(shots: list[dict], hook: dict = None) -> dict:
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
+def _fix_dialogue_length(narration: str) -> str:
+    """确定性修复超长对白单句（B9 修复 08-11，规则43）.
+
+    _check_dialogue_length 只告警不修正（超长句仍进 TTS/视频模型，规则43
+    形同虚设）。本函数按规则31「只改标点不改文字」做确定性的句内断句：
+    无标点连续 >15 字的单句，在语义停顿点（的/了/在/要/把/让/便/就/已等
+    虚词后）插入「，」断成短句；不删改任何汉字（台词原文锚点校验不破坏）。
+
+    幂等：修复后每句 ≤15 字，二次调用无操作。
+    """
+    if not narration:
+        return narration
+    # 剥「说话人道：」前缀，只修台词体（规则43 前缀不计入长度）
+    if "：" in narration or ":" in narration:
+        prefix, _, body = re.split(r"([：:])", narration, maxsplit=1)
+        new_body = _split_long_dialogue(body)
+        return prefix + "：" + new_body if new_body != body else narration
+    return _split_long_dialogue(narration)
+
+
+# 语义停顿虚词（插入逗号的候选位置；优先长虚词，避免无意义断句）
+_DIALOGUE_BREAK_AFTER = (
+    "的", "了", "在", "要", "把", "让", "便", "就", "已", "也",
+    "却", "然后", "接着", "所以", "因为", "如果", "虽然", "但是",
+)
+
+
+def _split_long_dialogue(body: str) -> str:
+    """把超长台词体按语义停顿点插入逗号（不删字，幂等）.
+
+    只处理「无标点连续单句 >15 字」的 clause；已有标点的 clause 原样保留
+    （逐 clause 拆分，不破坏原文标点）。虚词断点只在当前分句 ≥10 字后生效，
+    避免过早切碎。
+    """
+    # 保留分句标点（_DIALOGUE_SEP_RE 含 ，。！？；…—、 等），逐 clause 处理
+    parts = list(_DIALOGUE_SEP_RE.split(body))
+    seps = list(_DIALOGUE_SEP_RE.findall(body))
+    out: list[str] = []
+    for i, clause in enumerate(parts):
+        clause = clause.strip()
+        if not clause:
+            continue
+        if len(re.sub(r"[^一-鿿A-Za-z0-9]", "", clause)) <= _DIALOGUE_SENTENCE_MAX:
+            out.append(clause)
+        else:
+            out.append("，".join(_break_one_long_clause(clause)))
+        if i < len(seps):
+            out.append(seps[i])
+    # 已拆的 clause 都 ≤15 字（_break_one_long_clause 兜底保留原样），
+    # 拼接后二次调用只会逐 clause 处理（各 ≤15 → 原样返回），天然幂等。
+    return "".join(out)
+
+
+def _break_one_long_clause(clause: str) -> list[str]:
+    """把单个超长无标点 clause 在语义停顿虚词后断成 ≤15 字短句（不删字）."""
+    pieces: list[str] = []
+    cur = ""
+    for ch in clause:
+        cur += ch
+        if len(cur) >= 10 and ch in _DIALOGUE_BREAK_AFTER:
+            pieces.append(cur)
+            cur = ""
+    if cur:
+        pieces.append(cur)
+    # 极端情况：断出的子句仍 >15 字（clause 中虚词密度低），放弃断句保留原样
+    if any(
+        len(re.sub(r"[^一-鿿A-Za-z0-9]", "", p)) > _DIALOGUE_SENTENCE_MAX
+        for p in pieces
+    ):
+        return [clause]
+    return pieces
+
+
 def _check_dwell_time(shots: list[dict], hook: dict = None) -> dict:
     """v6.26 新增：静态镜头停留时长检查（video-shotcraft·关键画面停留时长）.
 
@@ -4162,3 +4516,200 @@ def _extract_pose_for_char(text: str, char_id: str) -> str | None:
         elif re.search(rf"{char_re}\s*{pose}", text):
             return pose
     return None
+
+
+# ============================================================================
+# v6.31 新增：禁形容词/比喻校验 + 替换修正（A5 修复 08-11，规则5.1）
+#
+# 背景（todolist 审计 08-10 A5）：SYSTEM_PROMPT 规则5.1 禁止在 prompt 中使用
+# 形容词（矫健/敏捷/迅猛/凌厉/飘逸/灵动/优雅/诡异/阴森）和比喻句（如鹰隼般/
+# 似闪电/仿佛/犹如/如同/恰如），要求用具体动作替代——「快速出剑」→「右手从
+# 腰侧拔出长剑，剑身与地面成45度」。但这是纯 LLM 规则、零代码校验零修正，
+# LLM 不遵守时抽象动作直接进视频模型，画面画不出「矫健地跃出」这类抽象概念。
+# 本检查扫描 prompt/motion_desc/ff_desc，命中禁词则 WARN；post_fix 里用
+# _fix_forbidden_abstract 确定性替换（抽象形容词删除/比喻词删除，保留主体与动作）。
+# ============================================================================
+
+# 规则5.1 禁止的形容词（抽象动作/神态描述，替换为具体动作）
+_FORBIDDEN_ABSTRACT_ADJECTIVES = (
+    "矫健", "敏捷", "迅猛", "凌厉", "飘逸", "灵动", "优雅", "诡异",
+    "阴森", "迅捷", "迅猛", "利落", "轻盈", "疾速", "彪悍", "凶悍",
+    "狰狞", "凄厉", "萧瑟", "肃杀", "凌厉地", "迅速", "疾速地",
+)
+# 规则5.1 禁止的比喻句连接词（如鹰隼般/似闪电/仿佛/犹如/如同/恰如）
+# 注意：单字「般/似的」不单独列入——「一般/似的」在正常中文里太常见（"一般情况"），
+# 比喻句式由 _fix_forbidden_abstract 的「如X般/似X/像X一样」正则整体删除覆盖。
+_FORBIDDEN_METAPHOR_WORDS = (
+    "如鹰隼般", "似闪电", "仿佛", "犹如", "如同", "恰如", "宛似", "恍若",
+)
+# 规则5.1 禁止的程度副词（快速/缓慢/轻轻/重重/猛地/骤然）
+_FORBIDDEN_ABSTRACT_ADVERBS = (
+    "快速地", "缓慢地", "轻轻地", "重重地", "猛地", "骤然", "忽然间",
+    "迅速地", "疾速地", "轻轻地", "快速", "缓缓",
+)
+
+
+def _find_forbidden_abstract(text: str) -> list[str]:
+    """扫描文本中的禁形容词/比喻词/程度副词，返回命中列表（去重保序）."""
+    hits = []
+    seen = set()
+    for word in _FORBIDDEN_ABSTRACT_ADJECTIVES + _FORBIDDEN_METAPHOR_WORDS + _FORBIDDEN_ABSTRACT_ADVERBS:
+        if word in text and word not in seen:
+            seen.add(word)
+            hits.append(word)
+    return hits
+
+
+def _check_forbidden_abstract(shots: list[dict], hook: dict = None) -> dict:
+    """检查 prompt 是否含禁形容词/比喻（规则5.1，warning-only）.
+
+    扫描 prompt/motion_desc/ff_desc/lf_desc，命中规则5.1 禁止的抽象形容词、
+    比喻句、程度副词则 WARN 提示改为具体动作描述。自动修正见
+    post_fix_shot_prompts 的 _fix_forbidden_abstract（幂等）。
+    """
+    warnings = []
+
+    def _check_one(shot: dict, label: str):
+        idx = shot.get("index", "?")
+        text = " ".join([
+            shot.get("prompt", "") or "", shot.get("motion_desc", "") or "",
+            shot.get("ff_desc", "") or "", shot.get("lf_desc", "") or "",
+        ])
+        hits = _find_forbidden_abstract(text)
+        if hits:
+            warnings.append(
+                f"{label}{idx}: 画面描述含禁抽象形容词/比喻 {hits}（规则5.1）——"
+                f"「快速出剑」「身形矫健」这类抽象词视频模型画不出具体动作，"
+                f"应改为具体动作描述（如'右手从腰侧拔出长剑，剑身与地面成45度'"
+                f"'身体直立，双手自然下垂，目光平视'）。"
+            )
+
+    for shot in shots:
+        _check_one(shot, "镜头")
+    if hook and isinstance(hook, dict):
+        _check_one(hook, "钩子镜头(index=0)")
+
+    for w in warnings:
+        print(f"[CHECK] 禁抽象词: [WARN] {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
+
+
+def _fix_forbidden_abstract(text: str) -> str:
+    """确定性删除/替换禁抽象形容词与比喻词（规则5.1，幂等）.
+
+    只删抽象修饰词，保留主体与动作（「身形矫健地跃出」→「身形跃出」——
+    删除'矫健地'；「剑光如银龙般飞舞」→「剑光飞舞」——删除'如银龙般'）。
+    程度副词「快速/缓慢/猛地」也删除（「快速出剑」→「出剑」，交由后续
+    motion 的具体动作描述表达时序）。幂等：删除后不再含禁词。
+    """
+    if not text:
+        return text
+    out = text
+    # 1. 比喻句模式「如X般/如X一样/似X/像X」→ 整段删除（如银龙般→''）
+    #    X = 1-6 字（避免误删"如故/如初"这类短词）
+    import re as _re
+    for pat in (
+        r"如[一-鿿A-Za-z0-9]{1,6}般",
+        r"如[一-鿿A-Za-z0-9]{1,4}(一样|一般)",
+        r"似[一-鿿A-Za-z0-9]{1,6}(般|一样|一般)?",
+        r"像[一-鿿A-Za-z0-9]{1,4}一样",
+    ):
+        out = _re.sub(pat, "", out)
+    # 2. 抽象形容词 + 可选「地」（矫健地/凌厉地/敏捷地/轻盈地）整词删除
+    for word in _FORBIDDEN_ABSTRACT_ADJECTIVES:
+        # 长词优先（凌厉地 在 凌厉 之前）
+        pass
+    for word in sorted(_FORBIDDEN_ABSTRACT_ADJECTIVES, key=len, reverse=True):
+        out = out.replace(word + "地", "").replace(word, "")
+    # 3. 程度副词（快速/缓慢/轻轻/重重/猛地/骤然）+ 可选「地」整词删除
+    for word in sorted(_FORBIDDEN_ABSTRACT_ADVERBS, key=len, reverse=True):
+        out = out.replace(word + "地", "").replace(word, "")
+    # 4. 比喻连接词残余（仿佛/犹如/如同/恰如/宛似/恍若）删除
+    for word in _FORBIDDEN_METAPHOR_WORDS:
+        out = out.replace(word, "")
+    # 5. 清理删除后产生的残留：孤立的「地」「的」、连续标点、句首/句尾标点
+    out = _re.sub(r"[，、]{1,}地(?!道|说)", "，", out)   # "，地" → "，"
+    out = _re.sub(r"[，、]{2,}", "，", out)
+    out = _re.sub(r"^[，、；；。！？、\s]+", "", out)
+    out = _re.sub(r"[，、；；。！？、\s]+$", "", out)
+    return out
+
+
+# ============================================================================
+# v6.31 新增：致命伤跨镜持续校验（A4 修复 08-11，规则8）
+#
+# 背景（todolist 审计 08-10 A4）：规则8 要求「一旦发生致命伤（如刺入心口），后续
+# 每个镜头必须持续锚定伤口位置与生命体征衰减，严禁跳变为'直接躺平'」——第2镜伤口
+# 洇痕消失无任何告警，剧情连续性断裂。这是纯 LLM 规则约束、零代码校验。
+# 本检查做跨镜「伤处锚定词持续」校验：某镜建立致命伤后，同一场景的后续连续镜头
+# 必须至少提及一处伤处锚定词（心口/伤处/洇痕/暗红/中刀…），直到场景切换。
+# warning-only 不阻断（伤情推进由 LLM 按原文决定，此处仅提示补锚定词）。
+# ============================================================================
+
+# 建立致命伤的触发词（某镜出现这些 = 本镜刚发生致命伤，开启持续校验）
+_WOUND_START_VERBS = (
+    "刺中", "刺入", "刺进", "捅入", "扎入", "被刺", "中刀", "中箭",
+    "仰面倒", "仰面躺", "倒地", "倒下", "洇开", "洇出", "血染",
+)
+# 伤处锚定词（伤口位置/生命体征衰减的持续表达）
+_WOUND_ANCHOR_WORDS = (
+    "心口", "伤处", "伤口", "洇痕", "洇开", "洇出", "暗红", "红痕", "血",
+    "中刀", "被刺", "中箭", "受伤", "重伤", "倒地", "倒下", "仰面",
+)
+
+
+def _check_fatal_wound_continuity(shots: list[dict]) -> dict:
+    """跨镜致命伤状态持续校验（规则8，warning-only）.
+
+    状态机：某镜出现致命伤触发词（刺中/被刺/倒下/洇开）→ 开启"伤情持续"；
+    同一地点（location 连续）的后续镜头必须至少含一处伤处锚定词，否则 WARN
+    （第2镜伤口洇痕消失 → 剧情连续性断裂）。场景切换 / 空镜 / 纯过渡镜头重置。
+
+    只 WARN 不阻断（伤情推进与锚定写法由 LLM 决定，此处仅提示补持续锚定）。
+    """
+    warnings = []
+    wound_active = False      # 是否处于"伤情持续"状态
+    wound_loc = None          # 伤情发生的场景（location）
+    wound_start_idx = None    # 建立伤情的镜头
+    for shot in shots:
+        idx = shot.get("index", "?")
+        if idx == 0:
+            continue  # hook 独立，不参与跨镜状态链
+        text = " ".join([
+            shot.get("prompt", "") or "", shot.get("ff_desc", "") or "",
+            shot.get("lf_desc", "") or "", shot.get("motion_desc", "") or "",
+        ])
+        loc = shot.get("location", "") or shot.get("scene", "") or ""
+        # 空镜判定（复用 EMPTY_SCENE_SUBJECTS）：空镜无人物，不要求伤处锚定，
+        # 且会重置伤情状态（空镜通常是转场/时间流逝，伤情锚定由下一人物镜头承接）
+        main_subject = shot.get("main_subject", "") or ""
+        is_empty = any(s in main_subject for s in EMPTY_SCENE_SUBJECTS)
+
+        if not wound_active:
+            # 本镜建立致命伤 → 开启持续校验
+            if any(v in text for v in _WOUND_START_VERBS):
+                wound_active = True
+                wound_loc = loc
+                wound_start_idx = idx
+            continue
+
+        # ---- 伤情持续状态 ----
+        # 1. 场景切换 / 空镜 → 重置状态（伤情锚定由新场景或后续人物镜头承接）
+        if is_empty or (wound_loc and loc and loc != wound_loc):
+            wound_active = False
+            wound_loc = None
+            wound_start_idx = None
+            continue
+        # 2. 本镜是否持续锚定伤处
+        has_anchor = any(w in text for w in _WOUND_ANCHOR_WORDS)
+        if not has_anchor:
+            warnings.append(
+                f"镜头{wound_start_idx}→{idx}: 镜头{wound_start_idx}建立致命伤，"
+                f"但镜头{idx}（同场景继续）未提及任何伤处锚定词（心口/伤处/洇痕/"
+                f"暗红/中刀/倒地）——伤口洇痕消失、剧情连续性断裂。"
+                f"被刺后的镜头即使主体是刺客逃跑/听香反应，也必须持续锚定伤处"
+                f"（如'心口处白袍暗红洇痕'），不能完全消失（规则8）。"
+            )
+    for w in warnings:
+        print(f"[CHECK] 致命伤持续: [WARN] {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}

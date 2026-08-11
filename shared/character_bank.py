@@ -20,6 +20,7 @@
 import json
 import os
 import shutil
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -28,6 +29,33 @@ def _book_global_dir() -> Path:
     """本书跨章节共享目录（统一路径来源: shared/paths.py）."""
     from shared.paths import global_dir
     return global_dir()
+
+
+# ---------------------------------------------------------------------------
+# 角色名规范化（B2 修复 08-11，与 character_extractor 的 _normalize_identifier 同源）
+#
+# 历史遗留：旧版本角色提取未规范化 identifier，「杨旭。」「杨旭，」被注册成
+# 双角色（character_bank 双 key、肖像分裂、prompt 锚点只命中一个）。本 Bank
+# 在读写边界统一规范化：register 时存规范化名，查找时先精确再归一化匹配，
+# 保证新注册不再产生双 key，旧数据也能被正确命中。
+# ---------------------------------------------------------------------------
+
+_TRAILING_NOISE = "。，、；；：:！!？?、 　"
+
+_FULLWIDTH_MAP = {
+    ch: chr(ord(ch) - 0xFEE0) for ch in "ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ"
+}
+
+
+def normalize_identifier(name: str) -> str:
+    """角色名规范化：strip + 剥尾部标点 + 全角字母归一（幂等）."""
+    if not name:
+        return name
+    out = str(name).strip(_TRAILING_NOISE)
+    for full, half in _FULLWIDTH_MAP.items():
+        if full in out:
+            out = out.replace(full, half)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -80,12 +108,29 @@ class CharacterBank:
     # -- 查询 ----------------------------------------------------------------
 
     def has_character(self, identifier: str) -> bool:
-        """角色是否已在 bank 中."""
-        return identifier in self._data.get("characters", {})
+        """角色是否已在 bank 中（先精确，再归一化匹配——旧数据可能带尾部标点）."""
+        if identifier in self._data.get("characters", {}):
+            return True
+        norm = normalize_identifier(identifier)
+        return any(
+            k == norm or normalize_identifier(k) == norm
+            for k in self._data.get("characters", {})
+        )
 
     def get_character(self, identifier: str) -> dict | None:
-        """获取角色条目（含肖像），不存在返回 None."""
-        return self._data.get("characters", {}).get(identifier)
+        """获取角色条目（含肖像），不存在返回 None.
+
+        B2 修复：先精确匹配；未命中时按规范化名匹配（旧数据「杨旭。」vs
+        新名「杨旭」→ 命中间接规范化 key），消除双角色分裂。
+        """
+        chars = self._data.get("characters", {})
+        if identifier in chars:
+            return chars[identifier]
+        norm = normalize_identifier(identifier)
+        for k, v in chars.items():
+            if normalize_identifier(k) == norm:
+                return v
+        return None
 
     def get_all_identifiers(self) -> list[str]:
         """返回所有已注册角色名."""
@@ -126,7 +171,26 @@ class CharacterBank:
         dynamic_features: str,
         chapter_num: int,
     ) -> None:
-        """注册新角色（尚无肖像）."""
+        """注册新角色（尚无肖像）.
+
+        B2 修复：identifier 先规范化（剥尾部标点/全角归一），若已存在同化名
+        角色（旧数据「杨旭。」），合并到该条目而非新建双 key——保证同一角色
+        跨章只占一个 key，肖像/特征不分裂。
+        """
+        identifier = normalize_identifier(identifier)
+        # 合并旧化名条目：若规范化后与已有 key 一致，把新特征并入已有条目
+        for k in list(self._data["characters"].keys()):
+            if normalize_identifier(k) == identifier and k != identifier:
+                existing = self._data["characters"].pop(k)
+                # 合并特征（已有保留，新补充）
+                for field in ("static_features", "dynamic_features"):
+                    cur = existing.get(field, "")
+                    newv = static_features if field == "static_features" else dynamic_features
+                    if newv and newv not in str(cur):
+                        existing[field] = (str(cur) + "，" + newv).strip("，")
+                self._data["characters"][identifier] = existing
+                self._data["characters"][identifier]["identifier"] = identifier
+                return
         # v6.23：角色编号（C01/C02... 按注册顺序自动分配）
         max_n = 0
         for c in self._data["characters"].values():
@@ -148,13 +212,13 @@ class CharacterBank:
 
     def update_character_chapter(self, identifier: str, chapter_num: int) -> None:
         """更新角色最后出场章节."""
-        char = self._data["characters"].get(identifier)
+        char = self.get_character(identifier)
         if char:
             char["last_chapter"] = max(char.get("last_chapter", 0), chapter_num)
 
     def update_dynamic_features(self, identifier: str, dynamic_features: str) -> None:
         """更新角色可变特征（服装等），不变量 static_features 首次锁定不变."""
-        char = self._data["characters"].get(identifier)
+        char = self.get_character(identifier)
         if char and dynamic_features:
             char["dynamic_features"] = dynamic_features
 
@@ -163,7 +227,7 @@ class CharacterBank:
 
         portraits 格式: {front: {path, description}, side: {...}, back: {...}}
         """
-        char = self._data["characters"].get(identifier)
+        char = self.get_character(identifier)
         if char:
             char["portraits"] = portraits
 

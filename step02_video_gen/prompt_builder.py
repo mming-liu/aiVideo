@@ -405,7 +405,21 @@ def _build_space_object_anchor(shot: dict, script: dict) -> str:
         if not isinstance(obj, dict):
             continue
         terms = [ident] + list(obj.get("consistent_terms", []) or [])
-        if not any(term and (term in probe or term in location) for term in terms):
+        subtype = (obj.get("subtype") or "").strip()
+        if subtype:
+            terms.append(subtype)
+        # B5 修复（08-11）：location 走模糊匹配（公共连续子串 ≥2 字，
+        # 「照月湾湖上」↔「照月湾小舟」→ 命中）；镜头全文子串匹配兜底
+        # （ff/lf/motion/prompt 含对象名/称呼/形制字）。旧实现 `term in probe`
+        # 纯子串，location 写「湖上」不写「小舟」就漏配、尺寸锚点永不注入。
+        from shared.assets_bank import scene_matches_location
+        loc_matched = any(
+            scene_matches_location(term, location) for term in terms if term
+        )
+        text_matched = any(
+            term and term in probe for term in terms if term
+        )
+        if not (loc_matched or text_matched):
             continue
         subtype = (obj.get("subtype") or ident or "").strip()
         category = (obj.get("category") or "").strip()
@@ -972,6 +986,18 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
         if ff_candidate.exists() and ff_candidate.stat().st_size > 10 * 1024:
             composition_refs = [str(ff_candidate)]
             _log_r2v_collect(f"  首帧构图锚点: {ff_candidate.name}（动作起点/时间/人物站位以它为准）")
+        else:
+            # A7 修复（08-11）：首帧缺失时 r2v 无构图锚点——旧逻辑场景资产图兜底
+            # 只锚环境，不锚人物站位/动作起点，导致 r2v 视频构图自由发挥（时间错、
+            # 人物缺失、动作假跳）。_find_fallback_reference 已写好但从未接线，这里
+            # 在首帧缺失时调用它：从角色注册表找本镜出镜角色的肖像作构图锚点
+            # （空镜返回 None，降级纯文生视频）。
+            _fallback = _find_fallback_reference(
+                vimax_working_dir(), shot=shot, characters=characters or [],
+            )
+            if _fallback:
+                composition_refs = [_fallback]
+                _log_r2v_collect(f"  首帧缺失，fallback 参考图: {Path(_fallback).name}")
     except Exception as e:
         _log_r2v_collect(f"  首帧构图锚点收集异常: {e}")
 

@@ -38,6 +38,16 @@ _test.txt
 temp.md
 test_check.py
 test_output.mp3
+# 根目录调试产物（08-11 清理：首帧调试图/API 调试日志/临时验证脚本等 _ 前缀文件）
+/_*.png
+/_*.json
+/_*.txt
+/_*.py
+/_tmp_*
+/_ff_*
+/_usage*.txt
+/_wan_*.txt
+/_faq_*
 
 # 参考仓库（clone 供吸收参考，不入版本库）
 reference_skills/

@@ -120,6 +120,19 @@ def read_chapter(path: str = "锦衣夜行_77119小说.txt", chapter: int = 1) -
     return full_text
 
 
+def _check_fps_consistency(script: dict) -> None:
+    """C5 修复（08-11）：接线 validate_fps_consistency（此前定义后无调用点）.
+
+    在 _compute_timecodes 之后调用——timeline 此时才存在。分镜时长 × fps 若
+    不对齐整数帧，视频生成会多/少一帧导致卡顿。只 WARN 不阻断。
+    """
+    try:
+        from style_prefix import validate_fps_consistency
+        validate_fps_consistency(script)
+    except Exception:
+        pass
+
+
 # ============================================================================
 # 2. 文本生成
 # ============================================================================
@@ -246,6 +259,18 @@ def gen_hook_script(novel_text: str, bank=None, objects_bank=None) -> dict | Non
 # ============================================================================
 # 5. 镜头数超限收敛重生成（v6.7 新增）
 # ============================================================================
+
+def _speech_body(narration: str) -> str:
+    """从「说话人道：台词」中提取台词体（剥说话人前缀，去标点）.
+
+    C4 修复（08-11）用：钩子台词与主分镜台词比对去重。台词比对前先剥
+    「说话人道：」前缀（不同说话人说同一句也判重）并去空白标点。
+    """
+    if not narration:
+        return ""
+    import re as _re
+    body = _re.split(r"[:：]", narration, maxsplit=1)[-1]
+    return _re.sub(r"[\s　，。！？、；：""''（）【】《》…—-]", "", body)
 
 def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=None,
                       max_attempts: int = 2) -> dict:
@@ -515,6 +540,8 @@ def main() -> None:
             script.update(get_chapter_meta("锦衣夜行_77119小说.txt", NOVEL_CHAPTER))
         # 重新计算时间轴（使用增强算法）
         _compute_timecodes(script)
+        # C5 修复（08-11）：fps 一致性校验（timeline 此时已存在）
+        _check_fps_consistency(script)
         # v7: 缓存命中时也要跑场景/道具资产提取（老缓存无 scene_assets/prop_assets），
         # 结果写回 script 再落盘，保证 step02a 资产生成能拿到数据
         _extract_assets_and_update_script(script)
@@ -698,6 +725,26 @@ def main() -> None:
         if hook:
             script["hook"] = hook
             _logger.info(f"[OK] 钩子分镜已生成: {hook.get('narration_segment', '')[:30]}...")
+            # C4 修复（08-11）：hook 台词去重盲区——gen_hook_script 生成时拿不到
+            # 主分镜文本，只能靠 prompt 规则「台词不得与主分镜任何镜头重复」约束，
+            # LLM 违约时无任何校验（结构性盲区零校验）。这里挂载后立即比对：
+            # 钩子台词与主分镜任一镜头台词重复 → WARN（提示重生成钩子或换台词）。
+            # 注意钩子是「最精彩瞬间」的倒叙，与主分镜台词重复会直接穿帮
+            # （观众刚在钩子听到、又在下个镜头原样听到）。
+            _hook_line = _speech_body(hook.get("narration_segment", ""))
+            _dup_hits = []
+            if _hook_line:
+                for _s in script.get("shots", []):
+                    _s_body = _speech_body(_s.get("narration_segment", ""))
+                    if _s_body and (_hook_line == _s_body or _hook_line in _s_body or _s_body in _hook_line):
+                        _dup_hits.append(_s.get("index", "?"))
+            if _dup_hits:
+                _logger.warn(
+                    f"[WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复（C4 修复）——"
+                    f"「{_hook_line[:24]}」在钩子与主分镜都出现会穿帮（倒叙穿帮），"
+                    f"建议重新生成钩子换一句台词。"
+                )
+                _console(f"  [WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复，建议换钩子台词")
             # v6.18：钩子在 parse_response 之后才挂载（_validate_script 已跑完），
             # 必须补自动修复 + 校验，否则钩子 ff_desc 零校验零修复（多动作堆叠
             # 直接落盘，导致首帧图画不出三个同时态动作）。
@@ -743,6 +790,8 @@ def main() -> None:
 
     # 计算时间轴（v5.0 运镜量化参数）
     _compute_timecodes(script)
+    # C5 修复（08-11）：fps 一致性校验（timeline 此时已存在）
+    _check_fps_consistency(script)
 
     # 章节元信息（部名/章名，来自小说标题行「第一部 杀青州 第NNN章 章名」）
     script.update(get_chapter_meta("锦衣夜行_77119小说.txt", NOVEL_CHAPTER))

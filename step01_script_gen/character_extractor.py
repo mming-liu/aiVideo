@@ -64,6 +64,64 @@ CHARACTER_EXTRACTION_PROMPT = """
 """
 
 
+# 角色名结尾可剥除的标点/称谓残余（LLM 常把「杨旭。」「杨旭，」的句读带进 identifier）
+_TRAILING_NOISE = "。，、；；：:！!？?、 　"
+
+# 全角→半角映射（B2 修复：LLM 可能输出全角字母/数字，导致「李A」「李A」两个名字）
+_FULLWIDTH_MAP = {
+    ch: chr(ord(ch) - 0xFEE0) for ch in "ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ"
+}
+
+
+def _normalize_identifier(name: str) -> str:
+    """角色名规范化（B2 修复 08-11）：strip + 剥尾部标点 + 全角字母归一.
+
+    LLM 从原文摘取角色名时常把句读标点带进 identifier（「杨旭。」「杨旭，」），
+    且可能用全角字母（「李Ａ」），导致同一角色被注册成两个独立角色
+    （character_bank 按 identifier 精确 key 存）。这里归一化后再判重。
+    """
+    if not name:
+        return name
+    out = str(name).strip(_TRAILING_NOISE)
+    for full, half in _FULLWIDTH_MAP.items():
+        if full in out:
+            out = out.replace(full, half)
+    return out
+
+
+# 相似名去重（B2 修复）：完全一致（归一化后）视为同一角色合并；
+# 近似名（如「杨旭」vs「杨旭.」）在剥尾部标点后已一致，自然合并。
+def _dedup_characters(chars: list[dict]) -> list[dict]:
+    """按归一化后的 identifier 去重（B2 修复 08-11）.
+
+    合并策略：保留首个出现条目，把重复条目的 static/dynamic_features 合并
+    （两者互补时），避免「杨旭」「杨旭。」被注册成双角色后：
+    - character_bank 出现两个 key（肖像/特征分裂）
+    - prompt 锚点 [杨旭: ...] 只命中一个，另一个永远无肖像
+    """
+    seen: dict[str, dict] = {}
+    order: list[str] = []
+    for c in chars:
+        ident = (c.get("identifier") or "").strip()
+        norm = _normalize_identifier(ident)
+        if not norm:
+            continue
+        c["identifier"] = norm
+        if norm in seen:
+            existing = seen[norm]
+            # 合并 static/dynamic（已有则保留，新条目补充空字段）
+            for field in ("static_features", "dynamic_features"):
+                cur = existing.get(field, "")
+                new = c.get(field, "")
+                if new and new not in str(cur):
+                    existing[field] = (str(cur) + "，" + new).strip("，")
+            continue
+        seen[norm] = c
+        order.append(norm)
+    # 保持原顺序返回
+    return [seen[n] for n in order]
+
+
 # ========================================================================
 # 角色提取函数
 # ========================================================================
@@ -116,6 +174,9 @@ def extract_characters(novel_text: str, bank: CharacterBank) -> list[dict]:
             return []
 
     chars = data.get("characters", [])
+    # B2 修复（08-11）：角色名规范化 + 去重（strip/剥尾部标点/全角归一/相似合并）。
+    # 此前「杨旭」「杨旭。」被注册成双角色，character_bank 双 key、肖像分裂。
+    chars = _dedup_characters(chars)
     _ensure_face_shape(chars, bank)
     print(f"[INFO] 提取到 {len(chars)} 个角色: {[c.get('identifier', '?') for c in chars]}")
     return chars

@@ -73,11 +73,50 @@ def generate_outline(novel_text: str) -> dict | None:
             data = json.loads(raw[start:end + 1])
         else:
             return None
-    return data
+    # C2 修复（08-11）：大纲零校验——此前 main_events/climax 非空零校验，
+    # 空大纲静默注入分镜 prompt（大纲锚点是一堆空标签，LLM 拿不到任何约束）。
+    # 补两条校验：① 关键字段非空（main_events 至少1条、climax 非空）；
+    # ② main_events 元素非空字符串。不合格时返回 None（调用方按"大纲生成失败"
+    # 处理，不注入空锚点）。
+    return _validate_outline(data)
+
+
+def _validate_outline(outline: dict | None) -> dict | None:
+    """大纲合法性校验（C2 修复 08-11）.
+
+    校验项：
+    1. main_events 至少 1 条非空事件（空列表/全空串 → 不合格）
+    2. climax 非空（高潮事件是分镜分布的锚点，空则锚点失效）
+    3. 净化：main_events 元素 strip、过滤空串
+    不合格返回 None（调用方不注入空锚点，避免「【本章主要事件】」空标签进 prompt）。
+    """
+    if not isinstance(outline, dict) or not outline:
+        return None
+    events = outline.get("main_events") or []
+    if isinstance(events, list):
+        cleaned_events = [str(e).strip() for e in events if str(e).strip()]
+        outline["main_events"] = cleaned_events
+    else:
+        cleaned_events = []
+        outline["main_events"] = []
+    if not cleaned_events:
+        print("[WARN] 大纲校验失败：main_events 为空（不注入空大纲锚点）")
+        return None
+    climax = str(outline.get("climax") or "").strip()
+    if not climax:
+        print("[WARN] 大纲校验失败：climax（高潮事件）为空（不注入空大纲锚点）")
+        return None
+    outline["climax"] = climax
+    return outline
 
 
 def outline_to_anchor(outline: dict | None) -> str:
-    """把大纲 dict 转成可注入分镜 prompt 的锚点文本."""
+    """把大纲 dict 转成可注入分镜 prompt 的锚点文本.
+
+    C2 修复：内部先过 _validate_outline——无效大纲（空 main_events/空 climax）
+    返回空串，不注入空标签。
+    """
+    outline = _validate_outline(outline)
     if not outline:
         return ""
     parts = []

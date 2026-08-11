@@ -1339,6 +1339,17 @@ def _inject_object_size_anchor(shot: dict, text: str) -> str:
     按 shot.location 匹配 scene_objects，命中则把尺寸+称呼追加到 prompt，
     让首帧/尾帧的物体比例与原文一致（code-audit 2026-08-06 钩子"船太小"）。
 
+    B5 修复（08-11）：
+    1. **匹配增强**——旧实现 `src in (loc + text)` 是纯子串匹配，location 写
+       「湖上」不写「小舟」（或镜头文本里用别称/漏词）就漏配、尺寸永不注入。
+       改为：location 走 `scene_matches_location` 模糊匹配（公共连续子串 ≥2 字，
+       如"照月湾小舟"↔"湖上"… 仍不强，但对象名/consistent_terms/形制字
+       （舴艋舟/乌篷/扁舟）在镜头全文（ff/lf/motion/prompt/main_subject）任一
+       命中即算同一物体），大幅减少漏配。
+    2. **比例后验**——注入前校验长宽比合理性（船 2-15m 长宽比应 ∈ [2, 12]，
+       超出说明 LLM 推导的尺寸比例可疑，只注入宽/长单值不注入离谱比值），
+       防止「长15m 宽0.5m」这类比例崩坏进帧 prompt。
+
     shot: 镜头 dict（含 location/scene）
     text: 已组装的帧 prompt
     """
@@ -1355,18 +1366,47 @@ def _inject_object_size_anchor(shot: dict, text: str) -> str:
         objs = script.get("scene_objects", {})
         if not isinstance(objs, dict) or not objs:
             return text
+        # 镜头全文（匹配对象名/consistent_terms/形制字用；比 loc+text 覆盖面广）
+        probe = " ".join(filter(None, [
+            loc,
+            shot.get("scene", ""), shot.get("ff_desc", ""), shot.get("lf_desc", ""),
+            shot.get("motion_desc", "") or shot.get("prompt", ""),
+            shot.get("main_subject", ""),
+        ]))
         for name, obj in objs.items():
             if not isinstance(obj, dict):
                 continue
-            # 匹配：物体名/一致称呼出现在镜头地点或画面描述中
+            # 匹配源：物体名 + consistent_terms（统一称呼）+ 形制字
             match_sources = [name] + list(obj.get("consistent_terms", []) or [])
-            if obj.get("category"):
-                match_sources.append(obj["category"])
-            if not any(src and src in (loc + text) for src in match_sources if src):
+            subtype = obj.get("subtype", "")
+            if subtype:
+                match_sources.append(subtype)
+            # 1) location 模糊匹配（B5：公共连续子串 ≥2 字）
+            from shared.assets_bank import scene_matches_location
+            loc_matched = any(
+                scene_matches_location(src, loc) for src in match_sources if src
+            )
+            # 2) 镜头全文子串匹配（对象名/称呼/形制字出现在 ff/lf/motion/prompt）
+            text_matched = any(
+                src and src in probe for src in match_sources if src
+            )
+            if not (loc_matched or text_matched):
                 continue
             length = obj.get("length_m")
             width = obj.get("width_m")
-            subtype = obj.get("subtype", "")
+            # B5 比例后验：长宽比离谱（长/宽 <1.5 或 >12）说明 LLM 推导的比例可疑，
+            # 只注入长度单值（宽度不可信），防「长15m 宽0.5m 的木条」进帧 prompt
+            if length and width:
+                try:
+                    ratio = float(length) / float(width)
+                    if ratio < 1.5 or ratio > 12:
+                        _bridge_log(
+                            f"  [bridge] 场景物体 {name} 长宽比 {ratio:.1f} 离谱，"
+                            f"仅注入长度，跳过宽度（B5 比例后验）"
+                        )
+                        width = None
+                except (TypeError, ValueError):
+                    width = None
             if not length and not width:
                 return text
             # 只注入尺寸/称呼，不注入容量结构（避免与画面描述冲突）

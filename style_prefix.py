@@ -1335,22 +1335,43 @@ def mentions_person(text: str) -> bool:
     return any(k in text for k in PERSON_HINTS)
 
 
+# 合规替换威胁源别名（B4 修复 08-11）：content_safety 会把「刺客→神秘人」
+# 等威胁源替换词写进文本，但注册角色名仍是「刺客」。空镜判定（is_empty_scene）
+# 此前只靠 `mentions_person` 的单字「人」意外命中「神秘人」——依赖子串巧合，
+# 一旦别名不含「人」就误判空镜、人物渗入。这里把威胁源别名显式列出，
+# 让 has_character 按别名匹配（与 shared/vimax_bridge._char_aliases 同源逻辑）。
+THREAT_ALIASES = ("神秘人", "黑衣人", "蒙面人", "黑影", "杀手", "刺客", "偷袭者")
+
+
 def is_empty_scene(shot: dict, characters: list[dict]) -> bool:
     """判断镜头是否为空镜（画面中不应出现任何人物）.
 
     依据：main_subject 不是角色、画面描述（motion_desc/ff_desc）未提到
     角色名、也无泛人物字眼。注意不检查 context_bridge —— 它描述的是
     上一镜头的画面，常含上一镜头的角色名，会造成误判。
+
+    B4 修复：角色匹配含威胁源别名——合规替换把「刺客→神秘人」后文本用
+    「神秘人」，但注册角色名是「刺客」；仅 ident in search_text 会漏配
+    （此前靠单字「人」意外命中），导致带威胁源的空镜镜头被误判为空镜、
+    人物渗入（威胁源肖像漏注入）。现按别名显式匹配。
     """
     main_subject = shot.get("main_subject", "")
     motion_desc = shot.get("motion_desc", "").strip() or shot.get("prompt", "")
     ff_desc = shot.get("ff_desc", "")
     search_text = f"{main_subject} {motion_desc} {ff_desc}"
 
-    has_character = any(
-        c.get("identifier") and c["identifier"] in search_text
-        for c in (characters or [])
-    )
+    has_character = False
+    for c in (characters or []):
+        ident = c.get("identifier") or ""
+        if not ident:
+            continue
+        # 精确名 + 威胁源别名（合规替换后的称谓）都算"画面出现角色"
+        if ident in search_text:
+            has_character = True
+            break
+        if ident in THREAT_ALIASES and any(a in search_text for a in THREAT_ALIASES):
+            has_character = True
+            break
     return not has_character and not mentions_person(search_text)
 
 
