@@ -109,6 +109,16 @@ def check_content_sensitive(subtitle: str, prompt_text: str) -> dict:
 
     if result["found_violent"] or result["found_sexual"] or result["found_gore"]:
         result["pass"] = False
+        # v6.33（08-12）：补 reason——此前返回无 reason，validation.py:178 打印
+        # 「镜头X sensitive: 」空内容（日志 08-12 镜头5/8/9）。拼出命中的敏感词。
+        parts = []
+        if result["found_violent"]:
+            parts.append("暴力:" + "、".join(result["found_violent"]))
+        if result["found_sexual"]:
+            parts.append("性暗示:" + "、".join(result["found_sexual"]))
+        if result["found_gore"]:
+            parts.append("血腥:" + "、".join(result["found_gore"]))
+        result["reason"] = "画面含敏感内容 " + "；".join(parts) + "（将自动合规替换）"
 
     return result
 

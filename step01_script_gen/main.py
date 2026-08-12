@@ -100,13 +100,14 @@ from step01_script_gen.prompts import (
 from step01_script_gen.character_extractor import extract_characters
 from step01_script_gen.object_extractor import extract_scene_objects
 from step01_script_gen.asset_extractor import extract_scene_assets, extract_props
-from step01_script_gen.validation import parse_response
+from step01_script_gen.validation import parse_response, build_regen_feedback
 from step01_script_gen.timecode import _compute_timecodes
 from step01_script_gen.hash_cache import _prompt_changed, _hash_source
 from step01_script_gen.gap_analysis import validate_script_gap, generate_gap_report, print_gap_report
 
 import style_prefix
 import scene_compliance
+import shared.content_safety as content_safety
 
 
 # ============================================================================
@@ -187,6 +188,14 @@ def _post_process(script: dict) -> dict:
     if COMPLIANCE_AUTO_FIX:
         script = style_prefix.sanitize_script_shots(script, verbose=True)
         script = scene_compliance.auto_sanitize_shot_prompts(script, verbose=True)
+        # v6.32（08-12）：台词（narration/subtitle）做「台词级」敏感词替换——只替换
+        # 语义风险词表里的词（如「杀人」→「出人命」），不套用画面 prompt 的全表
+        # （「死了→倒了」「杀了→击了」会把对话语义改碎，step01.log 镜头16/18 实测）。
+        # 让「杀人」类风险词不再触发 semantic_risk 硬检查，同时保留对话原意。
+        for _shot in script.get("shots", []):
+            for _f in ("narration_segment", "subtitle"):
+                if _shot.get(_f):
+                    _shot[_f] = content_safety.sanitize_narration(_shot[_f])
 
     # v6 新增：敏感词校验（强制级）
     validation_result = style_prefix.validate_sensitive_words(script, verbose=True)
@@ -206,18 +215,27 @@ def _post_process(script: dict) -> dict:
 # 4. 钩子分镜生成（v6新增）
 # ============================================================================
 
-def gen_hook_script(novel_text: str, bank=None, objects_bank=None) -> dict | None:
+def gen_hook_script(novel_text: str, bank=None, objects_bank=None,
+                    forbidden_lines: list[str] | None = None,
+                    dup_note: str | None = None) -> dict | None:
     """调用 LLM 生成钩子分镜，返回 hook dict 或 None.
 
     Args:
         novel_text: 小说原文
         bank: CharacterBank 实例，用于注入角色锚点（prompt 中用角色名而非模糊称呼）
         objects_bank: SceneObjectsBank 实例，用于注入场景物体尺寸锚点（prompt 中写出锚定尺寸）
+        forbidden_lines: v6.32（08-12）主分镜各镜头台词体列表（_speech_body），
+            注入钩子 prompt 防「钩子台词与主分镜重复」倒叙穿帮。
+        dup_note: v6.32（08-12）重生成时的去重反馈——上一版钩子台词与主分镜镜头
+            重复，把具体重复台词 + 换台词/改纯画面开场的选择喂给 LLM，引导它换一句。
     """
     if not HOOK_ENABLED:
         return None
 
-    prompt = build_hook_prompt(novel_text, bank=bank, objects_bank=objects_bank)
+    prompt = build_hook_prompt(novel_text, bank=bank, objects_bank=objects_bank,
+                               forbidden_lines=forbidden_lines)
+    if dup_note:
+        prompt = prompt + f"\n\n# 钩子台词去重反馈（必须遵守）\n{dup_note}"
     service = create_service()
     from _text_gen.deepseek_schema import HOOK_SCHEMA
     req = TextGenerationRequest(
@@ -250,6 +268,12 @@ def gen_hook_script(novel_text: str, bank=None, objects_bank=None) -> dict | Non
             for field in ("ff_desc", "lf_desc", "motion_desc"):
                 if hook.get(field):
                     hook[field] = style_prefix.sanitize_prompt(hook[field], verbose=False)
+            # v6.32：钩子台词（narration/subtitle）做「台词级」敏感词替换——只替换
+            # 语义风险词表里的词（如「杀人」→「出人命」），不套用画面 prompt 的全表
+            # （「死了→倒了」会把对话改得语义破碎）。见 shared.content_safety.sanitize_narration。
+            for field in ("narration_segment", "subtitle"):
+                if hook.get(field):
+                    hook[field] = content_safety.sanitize_narration(hook[field])
         return hook
     except Exception as e:
         _logger.warn(f"[WARN] 钩子分镜解析失败: {e}，跳过钩子")
@@ -301,6 +325,7 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         _console(f"  [收敛] 镜头数 {current} 超上限 {SHOT_COUNT_MAX}，重新生成精简版（{attempt}/{max_attempts}）...")
 
         # 反馈上下文：镜头数与总时长双重提示，要求合并同场景/冗余过渡镜头
+        # （08-12 用户决策：60s/110s 总时长目标「先不改」，只收敛镜头数超限的废输出）
         from shared.config import SHOT_COUNT_MAX as _max
         feedback = (
             f"\n\n# 镜头数收敛反馈（来自本地校验）\n"
@@ -312,6 +337,11 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
             f"3. 确保镜头数 ≤ {_max}，总时长控制在 110 秒以内\n"
             f"4. 保留全部关键剧情节点与高潮部分，不要删剧情，只合并冗余\n"
         )
+        # v6.33（08-12）：附加 checklist 聚合反馈——镜头数收敛之外，把内容密度/景别
+        # 跳跃/致命伤等真实缺陷也喂给 LLM（此前只喂镜头数/覆盖率，LLM 重生成还是老问题）
+        _checklist_fb = build_regen_feedback(script, novel_text)
+        if _checklist_fb:
+            feedback = feedback + _checklist_fb
         prompt = build_prompt(novel_text, bank, objects_bank)
         prompt = prompt + feedback
 
@@ -623,6 +653,11 @@ def main() -> None:
 
             # 获取差距分析上下文并追加到 prompt（函数已在模块级导入）
             gap_context = _load_gap_analysis_context(validation)
+            # v6.33（08-12）：附加 checklist 聚合反馈——差距分析之外，把内容密度/景别
+            # 跳跃/致命伤等真实缺陷也喂给重生成 LLM（此前只喂覆盖率/分布，重生成还是老问题）
+            _checklist_fb = build_regen_feedback(script, novel_text)
+            if _checklist_fb:
+                gap_context = gap_context + _checklist_fb
 
             # 追加差距反馈到 prompt，重新生成
             prompt = build_prompt(novel_text, character_bank, scene_objects_bank)
@@ -721,30 +756,74 @@ def main() -> None:
     # ========== v6新增：钩子分镜生成 ==========
     if HOOK_ENABLED:
         _logger.info("\n[INFO] 开始生成钩子分镜...")
-        hook = gen_hook_script(novel_text, bank=character_bank, objects_bank=scene_objects_bank)
+        # v6.32（08-12）：主分镜台词体列表，注入钩子 prompt 防「台词重复」穿帮。
+        # C4 修复的盲区——gen_hook_script 生成时拿不到主分镜文本——从源头堵住：
+        # 把每镜 narration 的台词体（剥说话人前缀）喂给钩子 LLM 作禁止清单。
+        _forbidden_lines = []
+        for _s in script.get("shots", []):
+            _body = _speech_body(_s.get("narration_segment", ""))
+            if _body:
+                _forbidden_lines.append(_body)
+        hook = gen_hook_script(novel_text, bank=character_bank,
+                               objects_bank=scene_objects_bank,
+                               forbidden_lines=_forbidden_lines)
+
+        def _hook_dup_hits() -> list:
+            """钩子台词与主分镜任一镜头台词重复的镜头 index 列表（空=无重复）."""
+            _hl = _speech_body(hook.get("narration_segment", ""))
+            _hits = []
+            if not _hl:
+                return _hits
+            for _s in script.get("shots", []):
+                _sb = _speech_body(_s.get("narration_segment", ""))
+                if _sb and (_hl == _sb or _hl in _sb or _sb in _hl):
+                    _hits.append(_s.get("index", "?"))
+            return _hits
+
         if hook:
             script["hook"] = hook
             _logger.info(f"[OK] 钩子分镜已生成: {hook.get('narration_segment', '')[:30]}...")
-            # C4 修复（08-11）：hook 台词去重盲区——gen_hook_script 生成时拿不到
-            # 主分镜文本，只能靠 prompt 规则「台词不得与主分镜任何镜头重复」约束，
-            # LLM 违约时无任何校验（结构性盲区零校验）。这里挂载后立即比对：
-            # 钩子台词与主分镜任一镜头台词重复 → WARN（提示重生成钩子或换台词）。
-            # 注意钩子是「最精彩瞬间」的倒叙，与主分镜台词重复会直接穿帮
-            # （观众刚在钩子听到、又在下个镜头原样听到）。
-            _hook_line = _speech_body(hook.get("narration_segment", ""))
-            _dup_hits = []
-            if _hook_line:
-                for _s in script.get("shots", []):
-                    _s_body = _speech_body(_s.get("narration_segment", ""))
-                    if _s_body and (_hook_line == _s_body or _hook_line in _s_body or _s_body in _hook_line):
-                        _dup_hits.append(_s.get("index", "?"))
-            if _dup_hits:
+            # C4 修复（08-11）+ v6.32 强化（08-12）：挂载后立即比对台词去重，
+            # 重复则自动重新生成钩子（换一句台词），最多再试 2 次；仍重复才 WARN
+            # 提示人工处理。钩子是「最精彩瞬间」的倒叙，与主分镜台词重复会直接
+            # 穿帮（观众刚在钩子听到、又在下个镜头原样听到）。
+            _dup_hits = _hook_dup_hits()
+            _regen_attempt = 0
+            while _dup_hits and _regen_attempt < 2:
+                _regen_attempt += 1
+                _hook_line_prev = _speech_body(hook.get("narration_segment", ""))
                 _logger.warn(
-                    f"[WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复（C4 修复）——"
-                    f"「{_hook_line[:24]}」在钩子与主分镜都出现会穿帮（倒叙穿帮），"
-                    f"建议重新生成钩子换一句台词。"
+                    f"[WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复（C4 修复），"
+                    f"自动重新生成钩子换台词（尝试 {_regen_attempt}/2）..."
                 )
-                _console(f"  [WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复，建议换钩子台词")
+                _console(f"  [WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复，重新生成钩子（{_regen_attempt}/2）...")
+                _dup_note = (
+                    f"上一版钩子台词「{_hook_line_prev[:30]}」与主分镜镜头 {_dup_hits} 的台词重复"
+                    f"（观众刚在钩子听到、又在正片听到，倒叙穿帮）。请严格换一句完全不同的台词：\n"
+                    f"1. 优先选主分镜其它镜头未用过的对话（如张十三的质问/密谋、杨旭的台词、肖管事的试探）；\n"
+                    f"2. 若所有人物对话都与主分镜重复，则把 narration_segment 和 subtitle 设为空字符串\"\"，"
+                    f"钩子改纯画面动作开场（刺客破水而出、匕首出鞘的瞬间），靠视觉冲击不靠台词。"
+                )
+                _hook_retry = gen_hook_script(
+                    novel_text, bank=character_bank, objects_bank=scene_objects_bank,
+                    forbidden_lines=_forbidden_lines, dup_note=_dup_note,
+                )
+                if not _hook_retry:
+                    break  # 重生成失败，保留原钩子
+                hook = _hook_retry
+                script["hook"] = hook
+                _logger.info(f"[OK] 钩子分镜已重新生成: {hook.get('narration_segment', '')[:30]}...")
+                _dup_hits = _hook_dup_hits()
+            if _dup_hits:
+                # 确定性兜底（08-12）：重试仍重复则清空钩子台词，改纯画面开场——
+                # 钩子画面（刺客破水+匕首下刺）本身是强开场，宁可无台词也不倒叙穿帮。
+                hook["narration_segment"] = ""
+                hook["subtitle"] = ""
+                _logger.warn(
+                    f"[WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复且重生成仍未解决，"
+                    f"已强制改为纯画面开场（narration_segment 清空）——无台词优于倒叙穿帮。"
+                )
+                _console(f"  [WARN] 钩子台词仍重复，已改为纯画面开场")
             # v6.18：钩子在 parse_response 之后才挂载（_validate_script 已跑完），
             # 必须补自动修复 + 校验，否则钩子 ff_desc 零校验零修复（多动作堆叠
             # 直接落盘，导致首帧图画不出三个同时态动作）。

@@ -259,7 +259,11 @@ def validate_fps_consistency(script: dict) -> None:
 
 # 权威替换词表统一收敛在 shared/content_safety.py（审计 P0-2：敏感词三套合一）。
 # style_prefix / content_policy_fix / scene_compliance 不再各自维护词表。
-from shared.content_safety import SENSITIVE_SUBSTITUTIONS, sanitize as _safety_sanitize
+from shared.content_safety import (
+    SENSITIVE_SUBSTITUTIONS,
+    sanitize as _safety_sanitize,
+    WEAPON_WORDS, WEAPON_HIDDEN_WORDS, WEAPON_VISIBLE_WORDS, WEAPON_STAB_VERBS,
+)
 
 
 def sanitize_prompt(prompt: str, verbose: bool = False) -> str:
@@ -901,6 +905,38 @@ def _fix_ff_lurk_position(ff_desc: str) -> str:
     return ff_desc
 
 
+def _fix_ff_weapon_visible(ff_desc: str, motion_desc: str) -> str:
+    """武器 t=0 不可见确定性修复（v6.32，08-12；08-09 钩子坑2 的 post_fix 兜底）.
+
+    校验项（validation._check_ff_motion_timeline）只 WARN 不修。这里在生成源头兜底：
+    ff 含武器词 + 隐藏态词（未出水/未出鞘），motion 又有刺入/挥砍动作，且 motion
+    首段也未建立「举刀出水面」可见起点 → 把 ff 的「未出水/未出鞘」改为「刀尖/刀锋
+    微露水面，寒光一点」（规则48 方案1：水下黑影 + 一截刀尖微露水面），保证 t=0
+    武器有可见起点，视频模型不至于「凭空变」出武器。
+
+    幂等：产物「微露水面」在 WEAPON_VISIBLE_WORDS 里，二次调用早退。
+    只改隐藏态描述，不删句不挪词；条件不满足时原样返回。
+    """
+    if not ff_desc or not motion_desc:
+        return ff_desc
+    if not any(w in ff_desc for w in WEAPON_WORDS):
+        return ff_desc
+    if not any(v in motion_desc for v in WEAPON_STAB_VERBS):
+        return ff_desc
+    if not any(w in ff_desc for w in WEAPON_HIDDEN_WORDS):
+        return ff_desc
+    if any(w in ff_desc for w in WEAPON_VISIBLE_WORDS):
+        return ff_desc  # 已可见（含规则48 方案1 的「微露水面」）
+    # motion 首段若已建立武器可见起点（破水而出 + 举刀/出水），视频模型有武器轨迹，无需改 ff
+    first_seg = motion_desc.split("；")[0]
+    if any(k in first_seg for k in ("出水", "破水", "举刀", "挥出")) or \
+            any(v in first_seg for v in WEAPON_VISIBLE_WORDS):
+        return ff_desc
+    out = (ff_desc.replace("未出水", "刀尖微露水面，寒光一点")
+                 .replace("未出鞘", "刀锋微露，寒光一点"))
+    return out if out != ff_desc else ff_desc
+
+
 def normalize_ff_desc(ff_desc: str, shot: dict | None = None,
                       characters=None) -> str:
     """ff_desc 归一化：多动作/进行态堆叠 → 动作「前一刻」静态定格（幂等、保守）.
@@ -918,6 +954,9 @@ def normalize_ff_desc(ff_desc: str, shot: dict | None = None,
     ff_desc = _fix_ff_grammar(ff_desc)
     # 潜伏威胁站位硬锚：刺客「潜伏水下+望向画X」缺站位 → 补「潜伏于画X水下」
     ff_desc = _fix_ff_lurk_position(ff_desc)
+    # v6.32：武器 t=0 不可见确定性修复（规则48 方案1 兜底；与多动作归一化正交，
+    # 放在 early-return 前，保证隐藏武器镜头也会被处理）
+    ff_desc = _fix_ff_weapon_visible(ff_desc, (shot or {}).get("motion_desc", ""))
     if not detect_ff_multi_action(ff_desc, characters):
         return ff_desc
     text = _strip_ff_time_advance(ff_desc)

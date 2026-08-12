@@ -564,7 +564,10 @@ def _check_character_consistency(script: dict) -> dict:
 _INVALID_PROMPT_KEYWORDS = {
     "8K清晰度", "8k清晰度", "8K画质", "8k画质", "超高清", "HD画质",
     "无AI感", "无AI痕迹", "无AI味道", "不像AI", "AI感",
-    "电影感", "电影画质", " cinematic", "电影级",
+    # P0-1 修复（08-12）：去掉「电影感/电影画质/电影级」——style_prefix.STYLE_PREFIX
+    # 运行时强制拼接「…电影质感…」，LLM 按规则 5 抄前缀 → 每镜必报「污染」刷屏。
+    # 电影质感是品牌风格词而非堆砌词，不该被拦；" cinematic"（英文）LLM 不会抄，保留。
+    " cinematic",
     "真实感", "逼真", "写实感",
     "专业摄影", "专业摄像", "摄影师级别",
     "顶级画质", "最高画质", "最佳画质",
@@ -645,19 +648,31 @@ def _check_prompt_pollution(shots: list[dict]) -> dict:
     return {"pass": len(issues) == 0, "issues": issues}
 
 
-def _check_negative_prompt(shots: list[dict]) -> dict:
+def _check_negative_prompt(shots: list[dict], characters: list | None = None) -> dict:
     """检查逆向提示词是否添加（检查项6）.
 
     注意：PROMPT_TEMPLATE 的 shot 输出 schema 里没有逐镜 negative_prompt 字段，
     视频负向词由 shared/vimax_adapters.py 用适配器内置 NEGATIVE_PROMPT 统一注入。
     因此这里不检查"每镜有没有填 negative_prompt"（必然为空=误报），只对**真正纯空镜**
     校验 prompt 是否含禁止人物标记（空镜出人是唯一能在脚本层拦下的缺陷）。
+
+    P0-3 修复（08-12）：空镜判定加「动作镜排除」——main_subject 含已知角色名
+    （刺客跃出水面/听香指水面）、动作动词、道具名词时是动作镜而非空镜。B4 修了
+    is_empty_scene 但漏了本检查（只查 EMPTY_SCENE_SUBJECTS 子串，未排角色名）。
     """
     warnings = []
     non_character_subjects = EMPTY_SCENE_SUBJECTS
     no_people_markers = {
         "无人物", "无人", "空无一人", "无一人", "没有人物", "禁止人物",
         "no people", "empty scene", "空镜无人", "画面无人物", "无人烟",
+    }
+    # 已知角色名（同 _check_character_consistency 第4节的双保险：主体含角色名/道具 → 动作镜）
+    defined_ids = frozenset(
+        c.get("identifier", "") for c in (characters or []) if c.get("identifier")
+    )
+    prop_hints = {
+        "步摇", "剑", "刀", "枪", "扇", "笛", "琴", "棋", "书", "箭", "鞭",
+        "玉佩", "令牌", "酒杯", "钓杆", "油纸伞", "发簪", "珠钗", "灯笼", "烛火",
     }
 
     for shot in shots:
@@ -666,6 +681,11 @@ def _check_negative_prompt(shots: list[dict]) -> dict:
         prompt = shot.get("prompt", "").strip()
 
         if any(nc in main_subject for nc in non_character_subjects):
+            # 动作镜排除：主体含已知角色名/道具名词/动作动词 → 非空镜（跳过）
+            if (any(cid and cid in main_subject for cid in defined_ids)
+                    or any(p in main_subject for p in prop_hints)
+                    or any(v in main_subject for v in _ACTION_VERB_HINTS)):
+                continue
             low = prompt.lower()
             if not any(m in low for m in no_people_markers):
                 warnings.append(
@@ -850,7 +870,13 @@ def _check_action_overlap(shots: list[dict]) -> dict:
 
 
 def _check_semantic_risk(shots: list[dict]) -> dict:
-    """检查语义风险（检查项7）：是否存在隐晦的违规意图."""
+    """检查语义风险（检查项7）：是否存在隐晦的违规意图.
+
+    v6.33（08-12）：对「会被合规替换的词」不再告警——search_text 用 sanitize 后的版本
+    再查。此前「杀人」在 parse 时告警，但 _post_process 会把它替换成「出人命」，日志
+    却仍显示需人工确认（08-12 镜头12）。只有 sanitize 后仍残留的风险词（无法确定性
+    替换的）才真正需要人工判断。
+    """
     issues = []
 
     for shot in shots:
@@ -859,7 +885,14 @@ def _check_semantic_risk(shots: list[dict]) -> dict:
         subtitle = shot.get("subtitle", "")
         narration = shot.get("narration_segment", "")
 
-        search_text = prompt + subtitle + narration
+        # 与 _post_process 同一替换函数：prompt 走全表 sanitize、台词走 sanitize_narration
+        try:
+            from shared.content_safety import sanitize, sanitize_narration
+            search_text = (
+                sanitize(prompt) + sanitize_narration(subtitle) + sanitize_narration(narration)
+            )
+        except Exception:
+            search_text = prompt + subtitle + narration
 
         found_risks = [kw for kw in _SEMANTIC_RISK_KEYWORDS if kw in search_text]
         if found_risks:
@@ -900,7 +933,7 @@ def _check_platform_compliance(shots: list[dict]) -> dict:
     return {"pass": True, "warnings": warnings}
 
 # v6.5: 视线方向检查
-def _check_gaze_direction(shots, hook: dict = None) -> dict:
+def _check_gaze_direction(shots, hook: dict = None, characters: list | None = None) -> dict:
     """检查人物视线方向（镜内词域原则），并覆盖钩子镜头.
 
     v6.9: 传入 hook，对钩子镜头做同样的视线方向检查
@@ -911,6 +944,10 @@ def _check_gaze_direction(shots, hook: dict = None) -> dict:
     v6.7: 触发词聚焦真正的视线动词。「向/朝」多为运动/站位/说话对象介词
     （朝杨旭站立、向船梢、向听香张嘴质问），被当成视线造成大量误报，
     移出触发集，只保留 看/盯/望/视/瞧/瞄 等视线动词.
+    P1-7 修复（08-12）：泛化「视线建议用画左/画右」只对**视线锚定有构图价值的
+    镜头**报——同镜 ≥2 角色、或含威胁源（视线汇聚焦点）。单人叙事视角
+    （望一眼满天星斗/看他/视而笑）是原文动作，降为静默，不再逐镜刷屏。
+    具体检查（尾帧看消失对象、潜伏威胁视线）不受影响，始终保留。
     """
     issues, warnings = [], []
     # 终止于中文标点，避免跨句捕获；触发词只含真正的视线动词
@@ -920,6 +957,16 @@ def _check_gaze_direction(shots, hook: dict = None) -> dict:
     correct_dirs = {'画左', '画右', '画上方', '画下方', '画前', '画后'}
     # 「向」+ 纯方位/动作词 = 运动用法，不是视线（如向上冲出/抓向船舷/偏向一侧）
     motion_after = re.compile(r'^向[上下左右前后内外旁中一侧过身]')
+    # P1-7：已知角色名 + 威胁源词，判定「视线锚定有构图价值」的镜头
+    defined_ids = frozenset(
+        c.get("identifier", "") for c in (characters or []) if c.get("identifier")
+    )
+    _threat_words = ("刺客", "杀手", "黑衣人", "黑影", "神秘人", "蒙面人", "潜伏", "伏击")
+
+    def _gaze_critical(text: str) -> bool:
+        """该镜视线是否值得锚定：同框 ≥2 角色，或含威胁源（视线汇聚焦点）."""
+        present = [c for c in defined_ids if c and c in text]
+        return len(present) >= 2 or any(t in text for t in _threat_words)
 
     def _check_one(shot: dict, label: str):
         nonlocal issues, warnings
@@ -949,13 +996,15 @@ def _check_gaze_direction(shots, hook: dict = None) -> dict:
                         f"同伴杨旭（自动修复见 vimax_bridge.fix_lf_desc_gaze）。"
                     )
 
-        wrong = []
-        # 先剔除机位/前缀术语，避免其内部「视」被误当视线（影视剧/平视/微仰视/俯视/仰视）
-        clean_text = re.sub(r'影视剧|平视|微仰视|俯视|仰视|视角|镜头视角', '', text)
+        # 先剔除机位/前缀术语/视类词，避免其内部「视」被误当视线
+        # （影视剧/平视/微仰视/俯视/仰视；v6.33 补 视频/影视/视图——「视频」会被
+        # wrong_pattern 捕获成「视频」，镜头3/4 的独立「视」也是此类词根碎片）
+        clean_text = re.sub(r'影视剧|平视|微仰视|俯视|仰视|视角|镜头视角|视频|影视|视图', '', text)
 
         # v6.27：潜伏威胁（只露眼睛/头肩/半身藏水中）视线朝向校验——只露眼睛的潜伏
         # 姿态最易被画成正对镜头，必须显式写「自水面下斜望画X」+「禁止正对镜头」，
         # 否则模型会把潜伏威胁画成看向观众（threat-gaze-coupling 规则41.3 的补充校验）。
+        # 具体检查不随 P1-7 泛化门控，始终保留（含威胁源，本就满足构图价值）。
         _lurking_hints = ("只露一双", "只露出一双", "仅露一双", "只露头肩", "半身藏于", "潜伏水下", "潜于水下", "藏身水中")
         if any(h in text for h in _lurking_hints):
             _lurking = re.search(r'[目光双眼眼神][^，。；！？]{0,3}[盯看望斜望][^，。；！？]{0,16}', text)
@@ -968,18 +1017,26 @@ def _check_gaze_direction(shots, hook: dict = None) -> dict:
                         f'——否则水面露眼最易画成正对镜头（规则41）。'
                     )
 
-        for m in wrong_pattern.finditer(clean_text):
-            w = m.group()
-            # 过滤运动用法（「向」后接方位词）+ 已含画左/画右的画内锚点
-            if motion_after.match(w) or any(d in w for d in correct_dirs):
-                continue
-            wrong.append(w)
-        if wrong:
-            warnings.append(f'{label}{idx}: 视线描述 {wrong} 建议用画左/画右等')
+        # P1-7（08-12）：泛化视线建议只对「构图价值镜头」报（同框≥2角色/含威胁源）；
+        # 单人叙事视角（望一眼满天星斗/看他/视而笑）是原文动作，静默不刷屏。
+        if _gaze_critical(text):
+            wrong = []
+            for m in wrong_pattern.finditer(clean_text):
+                w = m.group()
+                # 过滤运动用法（「向」后接方位词）+ 已含画左/画右的画内锚点
+                if motion_after.match(w) or any(d in w for d in correct_dirs):
+                    continue
+                # v6.33：跳过单字「视」——凝视/巡视/审视 等词根碎片，非独立视线动作
+                # （镜头3/4 误报「视线描述 ['视']」，08-12 日志）
+                if len(w) == 1 and w == '视':
+                    continue
+                wrong.append(w)
+            if wrong:
+                warnings.append(f'{label}{idx}: 视线描述 {wrong} 建议用画左/画右等')
 
-        has_correct = any(d in text for d in correct_dirs)
-        if not has_correct and ('看向' in text or '盯着' in text):
-            warnings.append(f'{label}{idx}: 建议用空间方向词(画左/画右/画上方)')
+            has_correct = any(d in text for d in correct_dirs)
+            if not has_correct and ('看向' in text or '盯着' in text):
+                warnings.append(f'{label}{idx}: 建议用空间方向词(画左/画右/画上方)')
 
     for shot in shots:
         _check_one(shot, '镜头')
@@ -1877,14 +1934,25 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
                 # 排除藏刀状态（潜伏水下是合法动作前一刻，但必须紧接着出刀）
                 if any(w in ff for w in _W_HIDDEN):
                     if not any(w in ff for w in _W_VISIBLE):
-                        warnings.append(
-                            f"{label}: ff_desc 武器处于隐藏态（{'、'.join([w for w in _W_HIDDEN if w in ff])}），"
-                            f"而 motion_desc 有刺入/挥砍动作（{motion[:40]}...）。"
-                            f"t=0 画面没有武器起点，视频模型只能「凭空变」出武器，"
-                            f"导致刀从胸口冒出/刺入方向错乱。"
-                            f"建议 ff 让武器可见（如'刺客半身出水、右手握匕首高举过顶、刀尖朝下'），"
-                            f"或 motion 首段先写'举刀出水面'建立武器可见起点再下刺。"
+                        # v6.32（08-12）：motion 首段若已建立武器可见起点（破水而出+
+                        # 高举匕首/举刀出水面），视频模型有武器运动轨迹，不构成「凭空变」，
+                        # 豁免（规则48 核心：要么 ff 可见，要么 motion 首段建立可见起点）。
+                        # 此前漏掉此分支，钩子「破水而出，右手高举匕首…垂直直刺」这类
+                        # 合规写法被误报（hook 实测，08-12）。
+                        _first_seg = motion.split("；")[0]
+                        _motion_establishes = (
+                            any(k in _first_seg for k in ("出水", "破水", "举刀", "挥出"))
+                            or any(v in _first_seg for v in _W_VISIBLE)
                         )
+                        if not _motion_establishes:
+                            warnings.append(
+                                f"{label}: ff_desc 武器处于隐藏态（{'、'.join([w for w in _W_HIDDEN if w in ff])}），"
+                                f"而 motion_desc 有刺入/挥砍动作（{motion[:40]}...）。"
+                                f"t=0 画面没有武器起点，视频模型只能「凭空变」出武器，"
+                                f"导致刀从胸口冒出/刺入方向错乱。"
+                                f"建议 ff 让武器可见（如'刺客半身出水、右手握匕首高举过顶、刀尖朝下'），"
+                                f"或 motion 首段先写'举刀出水面'建立武器可见起点再下刺。"
+                            )
         # 完成态动词检测
         completed = [v for v in _FF_COMPLETED_VERBS if v in ff]
         # v6.19：进行中动作定格检查（用户决策：ff_desc 应收敛到动作「前一刻」）。
@@ -2144,8 +2212,11 @@ _ACTION_VERB_HINTS = (
     "按", "抽", "甩", "挥", "刺", "砍", "劈", "踢", "蹬", "窜", "跃", "扑",
 )
 _SCENE_CHANGE_HINTS = (
-    "转场", "淡入", "淡出", "黑场", "切至", "画面切", "切换到", "地点变化",
-    "来到了", "走向", "赶往", "走出", "走进", "离开", "驶向", "驶出",
+    # P0-4 修复（08-12）：去掉纯转场词（转场/淡入/淡出/黑场/切至/画面切/切换到）——
+    # post_fix_shot_prompts 对场景切换镜注入「淡入淡出转场，转场时长0.5s」，含
+    # 「转场/淡入/淡出」被本检查自冲突误报「堆叠多地点」（10+ 镜刷屏）。
+    # 只保留**真实地点变化**词（人物移动/离开到另一地），转场描述不再计为多地点。
+    "地点变化", "来到了", "走向", "赶往", "走出", "走进", "离开", "驶向", "驶出",
 )
 
 _DENSITY_MAX_ACTIONS = {
@@ -3079,8 +3150,8 @@ def _run_prompt_checklist(script: dict) -> dict:
     # 5. 提示词污染（新增）
     results["prompt_pollution"] = _check_prompt_pollution(shots)
 
-    # 6. 逆向提示词（新增）
-    results["negative_prompt"] = _check_negative_prompt(shots)
+    # 6. 逆向提示词（新增；P0-3：传角色名供动作镜排除）
+    results["negative_prompt"] = _check_negative_prompt(shots, script.get("characters", []))
 
     # 7. 语义风险（新增）
     results["semantic_risk"] = _check_semantic_risk(shots)
@@ -3106,8 +3177,8 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v6.11 新增：人像光位检查（8种AI人像专业光位，防模糊光）
     results["lighting_position"] = _check_lighting_position(shots)
 
-    # v6.5 新增：人物视线方向检查（镜内词域原则，覆盖 hook）
-    results["gaze_direction"] = _check_gaze_direction(shots, script.get("hook"))
+    # v6.5 新增：人物视线方向检查（镜内词域原则，覆盖 hook；P1-7：传角色名供构图价值门控）
+    results["gaze_direction"] = _check_gaze_direction(shots, script.get("hook"), script.get("characters", []))
 
     # v6.5 新增：分镜与原文比对（防幻觉核心 - 检测编造内容）
     results["script_novel_alignment"] = _check_script_novel_alignment(script)
@@ -3219,6 +3290,117 @@ def _run_prompt_checklist(script: dict) -> dict:
     )
 
     return {"pass": pass_fail, "results": results}
+
+
+# ========================================================================
+# v6.33 新增（08-12）：第二轮校验反馈——把分镜检查表告警喂给重生成 LLM
+#
+# 背景：_run_prompt_checklist 的 ~50 条 [CHECK] WARN 只 print 不返回，重生成循环
+# （_regen_over_limit / gap regen）看不到内容密度/景别跳跃/致命伤等真实缺陷，
+# 重生成还是老问题（08-12 日志实测：内容密度7条/景别跳跃18条，LLM 重生成无感）。
+# 本函数把告警按类型聚合（每类 1 行 + 命中镜头数 + 首例截断），生成一段简短
+# 「本地校验反馈」，供 main.py 重生成循环附加到 prompt。
+# 只取告警数最多的前 max_categories 类；排除需人工判断/结构性的类别。
+# ========================================================================
+
+# 不反馈给 LLM 的低价值类别（人工判断 / 结构性 / 非重生成可修）
+_REGEN_FEEDBACK_EXCLUDE = frozenset({
+    "semantic_risk",          # 需人工确认是否保留
+    "script_novel_alignment", # 原文锚点需人工核对（编造/变形）
+    "platform_compliance",    # 平台合规标注（AI生成 字样）
+    "output_structure",       # 输出结构
+    "narrative_arc",          # 事件轴分布（结构性）
+    "body_purification",      # 正文净化
+})
+
+# 类别英文键 → 中文名（供反馈行首标签；未收录的用原键）
+_REGEN_FEEDBACK_LABELS = {
+    "content_density": "内容密度(动作过载)",
+    "shot_size_jump": "景别跳跃",
+    "gaze_direction": "视线方向",
+    "gaze_convergence": "多人视线收敛",
+    "fatal_wound_continuity": "致命伤持续",
+    "threat_gaze_coupling": "威胁源-视线耦合",
+    "prop_spatial_anchor": "道具空间方位",
+    "keyframes_quality": "关键帧质量",
+    "opening_hook": "开篇冲突",
+    "punch_density": "爆点密度",
+    "dialogue_length": "对白长度",
+    "dwell_time": "静态停留",
+    "combat_action": "打斗打击反馈",
+    "camera_movement": "一镜一运镜",
+    "camera_upgrade": "高张力运镜升级",
+    "lighting_position": "人像光位",
+    "forbidden_abstract": "禁抽象词",
+    "pose_continuity": "角色状态锁定",
+    "character_entrance": "人物出场设计",
+    "color_tone_transition": "色调过渡",
+    "character_consistency": "角色一致性",
+    "negative_prompt": "空镜禁止人物",
+    "ff_lf_completeness": "首尾帧完整性",
+    "ff_motion_timeline": "首帧motion时序",
+    "ff_multi_action": "ff多动作堆叠",
+    "over_shoulder_lock": "过肩锁定",
+    "restrained_emotion": "克制情绪",
+    "hand_lock": "手部锁定",
+    "occlusion_layering": "前后遮挡",
+    "ff_desc_length": "ff长度",
+    "emotion_visualization": "情绪可视化",
+    "voice_punctuation": "台词标点",
+    "combat_arc": "打斗四段式",
+    "shot_transition": "镜头衔接",
+    "action_overlap": "动作重叠",
+}
+
+
+def build_regen_feedback(script: dict, novel_text: str = "",
+                         max_categories: int = 5, per_line_chars: int = 72) -> str:
+    """把分镜检查表告警按类型聚合，生成给重生成 LLM 的简短「本地校验反馈」.
+
+    v6.33（08-12）：checklist 的 [CHECK] WARN 此前只 print 不返回，重生成 LLM
+    看不到内容密度/景别跳跃/致命伤等真实缺陷 → 重生成还是老问题。本函数重跑
+    _run_prompt_checklist（抑制 stdout 避免日志刷屏），把告警按类型聚合：
+    每类 1 行「- 类别 N处：首例（截断）」，取告警数最多的前 max_categories 类，
+    排除需人工判断/结构性的类别（_REGEN_FEEDBACK_EXCLUDE）。返回 "" 表示无反馈。
+
+    Args:
+        script: 当前待重生成的分镜脚本（重生成前已 parse_response，含完整字段）
+        novel_text: 小说原文（供原文锚点类检查；默认空则跳过）
+        max_categories: 最多反馈几类（默认 5，控制 prompt 膨胀）
+        per_line_chars: 每行首例截断长度
+    """
+    try:
+        if novel_text:
+            _set_novel_text(novel_text)
+        import io as _io
+        import contextlib as _ctx
+        _buf = _io.StringIO()
+        with _ctx.redirect_stdout(_buf):  # 抑制 [CHECK] 刷屏
+            results = _run_prompt_checklist(script).get("results", {})
+    except Exception:
+        return ""
+    grouped = {}
+    for key, res in results.items():
+        if key in _REGEN_FEEDBACK_EXCLUDE or not isinstance(res, dict):
+            continue
+        warns = list(res.get("warnings") or []) + list(res.get("issues") or [])
+        if warns:
+            grouped[key] = warns
+    if not grouped:
+        return ""
+    top = sorted(grouped.items(), key=lambda kv: -len(kv[1]))[:max_categories]
+    lines = []
+    for key, warns in top:
+        first = warns[0].strip()
+        if len(first) > per_line_chars:
+            first = first[:per_line_chars] + "…"
+        label = _REGEN_FEEDBACK_LABELS.get(key, key)
+        lines.append(f"- {label} {len(warns)}处：{first}")
+    body = "\n".join(lines)
+    return (
+        "\n\n# 本地校验反馈（来自分镜检查表，请针对性修正；「N处」=命中镜头数）\n"
+        + body + "\n"
+    )
 
 
 _STOP_WORDS = {
@@ -3640,6 +3822,16 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
     # 否则校验输出的「缺少（用中文说）」「说话人未入画」WARN 无法被消除
     post_fix_shot_prompts(script)
 
+    # P0-5 修复（08-12）：全局渲染参数（resolution/ratio/fps/render_style）此前在
+    # main._post_process 才注入，_validate_script 校验时永远缺失 → 4×2 次误报。
+    # 提前到校验前注入：inject_global_config_into_script 幂等（不覆盖已有字段），
+    # 后续 _post_process 再跑一次无副作用，且让校验能检查真实注入值。
+    try:
+        import style_prefix as _sp
+        _sp.inject_global_config_into_script(script)
+    except Exception:
+        pass  # 注入失败则维持原状，_validate_script 会提示缺失（可接受的降级）
+
     _validate_script(script)
     return script
 
@@ -3958,9 +4150,18 @@ _KF_VALIDATION_ORIENT_WORDS = (
 
 
 def _check_keyframes_quality(shots: list[dict], hook: dict = None) -> dict:
-    """检查 keyframes 中间帧 desc 是否缺角色姿态/位置/朝向锚定（warning-only）."""
+    """检查 keyframes 中间帧 desc 是否缺角色姿态/位置/朝向锚定（warning-only）.
+
+    P1-6 修复（08-12）：26 镜 + hook 逐镜报同样一句话刷屏、淹没真实缺陷。
+    改为**聚合提示**——每个问题类型最多一条，注明命中镜头数 + 首例示例
+    （代码层 _extract_char_layout 是最终兜底，warning 只作一次指引）。
+    """
     issues, warnings = [], []
     targets = list(shots) + ([hook] if hook else [])
+    # 聚合统计（问题类型 → 命中列表）
+    empty_kf = []          # desc 为空的中间帧
+    missing_anchor = []    # 缺姿态/位置锚定（(label, tr, desc[:36])）
+    missing_orient = []    # 威胁源未写朝向（(label, tr)）
     for s in targets:
         label = "hook" if (hook and s is hook) else s.get("index", "?")
         kfs = s.get("keyframes") or []
@@ -3975,9 +4176,7 @@ def _check_keyframes_quality(shots: list[dict], hook: dict = None) -> dict:
                 continue  # 只查中间帧
             desc = (kf.get("desc") or "").strip()
             if not desc:
-                warnings.append(
-                    f"镜头{label}: keyframe 中间帧 desc 为空，应写清该瞬间每个角色的姿态/位置/朝向"
-                )
+                empty_kf.append(label)
                 continue
             # 1. 姿态/位置锚定：desc 是否含角色姿态词 + 位置词
             has_pose = any(w in desc for w in _KF_VALIDATION_POSE_WORDS)
@@ -3986,16 +4185,28 @@ def _check_keyframes_quality(shots: list[dict], hook: dict = None) -> dict:
             has_threat = any(w in desc for w in _KF_VALIDATION_THREAT_WORDS)
             has_orient = any(w in desc for w in _KF_VALIDATION_ORIENT_WORDS)
             if not has_pose or not has_pos:
-                warnings.append(
-                    f"镜头{label}: keyframe(t={tr:.1f}) desc 缺少角色姿态/位置锚定——"
-                    f"应写清该瞬间每个角色的姿态（仰卧/跪坐/站）与位置（船头/船尾/画左/画右），"
-                    f"如「杨旭仰卧船头，听香跪坐船尾，刺客半身探出画右水面」（08-10 关键帧质量）。"
-                )
+                missing_anchor.append((label, tr, desc[:36]))
             if has_threat and not has_orient:
-                warnings.append(
-                    f"镜头{label}: keyframe(t={tr:.1f}) 威胁源未写朝向目标——"
-                    f"应写明「面向/朝向目标」，否则图片模型把刺客画成背对目标或正对镜头。"
-                )
+                missing_orient.append((label, tr))
+    if empty_kf:
+        warnings.append(
+            f"{len(empty_kf)} 个中间关键帧 desc 为空（镜头 {sorted(set(empty_kf))}），"
+            f"应写清该瞬间每个角色的姿态/位置/朝向"
+        )
+    if missing_anchor:
+        _first = missing_anchor[0]
+        warnings.append(
+            f"{len(missing_anchor)} 个中间关键帧 desc 缺角色姿态/位置锚定"
+            f"（首例：镜头{_first[0]} t={_first[1]:.1f}「{_first[2]}…」）——"
+            f"应写清该瞬间每个角色的姿态（仰卧/跪坐/站）与位置（船头/船尾/画左/画右），"
+            f"如「杨旭仰卧船头，听香跪坐船尾，刺客半身探出画右水面」（08-10 关键帧质量）。"
+        )
+    if missing_orient:
+        _labs = sorted({l for l, _ in missing_orient})
+        warnings.append(
+            f"{len(missing_orient)} 个中间关键帧的威胁源未写朝向目标（镜头 {_labs}）——"
+            f"应写明「面向/朝向目标」，否则图片模型把刺客画成背对目标或正对镜头。"
+        )
     for w in warnings:
         print(f"[CHECK] keyframes质量: [WARN] {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
@@ -4312,12 +4523,43 @@ def _break_one_long_clause(clause: str) -> list[str]:
             cur = ""
     if cur:
         pieces.append(cur)
-    # 极端情况：断出的子句仍 >15 字（clause 中虚词密度低），放弃断句保留原样
+    # 极端情况：断出的子句仍 >15 字（clause 中虚词密度低）→ 位置兜底硬切
+    # （08-12 P0-12：如「老爷们急着给府学和合城士绅们一个交待」无虚词断点，
+    # 虚词法放弃 → 位置切 10+8）。仅在能切出合法段时采用；连位置切都失败
+    # （超长无标点）才放弃保留原样。
     if any(
         len(re.sub(r"[^一-鿿A-Za-z0-9]", "", p)) > _DIALOGUE_SENTENCE_MAX
         for p in pieces
     ):
+        return _positional_break_clause(clause)
+    return pieces
+
+
+def _positional_break_clause(clause: str) -> list[str]:
+    """无虚词断点时的位置兜底：切成 ≤15 字段（不删字，幂等）.
+
+    优先两段式（首段 ≥10 字、余段 ≤15 字，最小干预）；两段放不下（超长无标点）
+    则贪心按 15 字切。首段若仍 >15 字则放弃原样返回（避免把超长句切碎成渣）。
+    幂等：产物每段 ≤15 字，二次调用早退。
+    """
+    max_len = _DIALOGUE_SENTENCE_MAX
+    _count = lambda s: len(re.sub(r"[^一-鿿A-Za-z0-9]", "", s))
+    if _count(clause) <= max_len:
         return [clause]
+    # 两段式：首段长度 = 使余段 ≤15 的最小可行值，夹在 [10, 15]
+    head_len = max(10, _count(clause) - max_len)
+    if head_len < _count(clause) and head_len <= max_len:
+        head, tail = clause[:head_len], clause[head_len:]
+        if _count(tail) <= max_len:
+            return [head, tail]
+    # 两段放不下：贪心按 max_len 切，末段收敛
+    pieces: list[str] = []
+    rest = clause
+    while _count(rest) > max_len:
+        pieces.append(rest[:max_len])
+        rest = rest[max_len:]
+    if rest:
+        pieces.append(rest)
     return pieces
 
 

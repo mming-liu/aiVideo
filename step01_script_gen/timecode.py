@@ -119,6 +119,13 @@ def _compute_timecodes(script: dict) -> None:
     # 纯旁白固定时长（不读旁白，只展示画面）
     NARRATION_FIXED_DURATION = 4.0
 
+    # 视频帧率对齐（v6.32，08-12）：时长 × fps 必须是整数帧，否则视频生成
+    # 多/少一帧导致卡顿（step01.log 反复报「duration 与 fps=24 不对齐」）。
+    # 旧实现按音频帧 1/30s 对齐，与视频 fps=24 冲突；改按 fps 对齐整数帧。
+    fps = float(script.get("fps", 24) or 24)
+    if fps <= 0:
+        fps = 24.0
+
     for shot in shots:
         text = shot.get("narration_segment", "")
         motion_desc = shot.get("motion_desc", "")
@@ -140,7 +147,7 @@ def _compute_timecodes(script: dict) -> None:
             # 纯旁白：固定短时长
             base_duration = NARRATION_FIXED_DURATION
 
-        duration = round(base_duration * 30) / 30  # 对齐音频帧 (0.033s)
+        duration = round(base_duration * fps) / fps  # 对齐视频整数帧（v6.32：原按 1/30s 音频帧，改按 fps）
         duration = max(duration, MIN_SHOT_DURATION)
 
         shot["duration"] = duration
@@ -203,6 +210,8 @@ def _compute_timecodes(script: dict) -> None:
             hook_duration = MIN_SHOT_DURATION
         # 下限保护：钩子是开场悬念，至少给足动作时间，禁止 < MIN_SHOT_DURATION
         hook_duration = max(hook_duration, MIN_SHOT_DURATION)
+        # v6.32：钩子时长同样按 fps 对齐整数帧（与 shots 一致）
+        hook_duration = round(hook_duration * fps) / fps
         hook["duration"] = round(hook_duration, 2)
         hook["duration_sec"] = round(hook_duration, 2)
         total += hook_duration
