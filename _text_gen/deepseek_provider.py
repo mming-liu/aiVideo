@@ -1,13 +1,15 @@
 """DeepSeek 文本生成 — Responses API 调用.
 
 优先走官方 Responses API（POST /responses）：
-  - 仅 deepseek-v4-flash 支持
-  - reasoning.effort=none 语义化关闭思考模式（chat completions 的 thinking 参数
-    会被 openai SDK 拒绝，responses API 原生支持）
+  - deepseek-v4-flash / deepseek-v4-pro 均支持（2026-08-12 V4-Pro-0813 起）
+  - reasoning.effort 控制思考模式开关与强度（none 关闭；low/medium/high/max 递增；
+    不传默认开启=high），effort 由请求 reasoning_effort 或 config.DEEPSEEK_REASONING_EFFORT 决定
   - text.format.json_schema 结构化输出（strict），分镜 JSON 天然合法
-  - 输出独立 message item，思维链是独立的 reasoning item，不再混在正文里
+  - 输出独立 message item，思维链是独立的 reasoning item，不在正文里
+  - 注意：思考模式下 temperature/top_p 不生效（API 静默忽略，不报错）；
+    max_output_tokens 包含思维链 token，思考强度越高越容易截断（incomplete/max_output_tokens）
 
-非 v4-flash 模型（如 deepseek-v4-pro）回退到 Chat Completions。
+非 v4 系列模型（如 deepseek-reasoner）回退到 Chat Completions。
 """
 
 from .config import config
@@ -21,16 +23,18 @@ class DeepSeekTextService(TextGenerationService):
     """DeepSeek (Responses API) 文本生成实现.
 
     支持:
-    - deepseek-v4-flash: Responses API（json_schema 结构化输出）
-    - deepseek-v4-pro / deepseek-reasoner: 回退 Chat Completions
+    - deepseek-v4-flash / deepseek-v4-pro: Responses API（json_schema 结构化输出 + 思考模式）
+    - deepseek-reasoner 等老模型: 回退 Chat Completions
     """
 
     def __init__(self) -> None:
         config.validate()
         self._model = config.DEEPSEEK_MODEL
 
-    def _is_v4_flash(self) -> bool:
-        return "flash" in self._model.lower()
+    def _uses_responses(self) -> bool:
+        """v4 系列（flash/pro）走 Responses API；老 reasoner 模型回退 chat."""
+        m = self._model.lower()
+        return "flash" in m or "pro" in m
 
     def generate(self, req: TextGenerationRequest) -> TextGenerationResult:
         try:
@@ -47,26 +51,29 @@ class DeepSeekTextService(TextGenerationService):
                 base_url=config.DEEPSEEK_BASE_URL,
             )
 
-            if self._is_v4_flash():
+            if self._uses_responses():
                 return self._generate_responses(client, req)
             return self._generate_chat(client, req)
         except Exception as e:
             return TextGenerationResult(success=False, error=str(e))
 
     # ------------------------------------------------------------------
-    # Responses API（deepseek-v4-flash）
+    # Responses API（deepseek-v4-flash / deepseek-v4-pro）
     # ------------------------------------------------------------------
     def _generate_responses(self, client, req: TextGenerationRequest) -> TextGenerationResult:
-        """走 Responses API：关闭思考 + json_schema 结构化输出."""
-        print(f"[INFO] 正在调用 DeepSeek Responses ({self._model}) 生成分镜脚本...")
+        """走 Responses API：思考模式 + json_schema 结构化输出."""
+        model = req.model or self._model
+        effort = req.reasoning_effort or config.DEEPSEEK_REASONING_EFFORT
+        print(f"[INFO] 正在调用 DeepSeek Responses ({model}, effort={effort}) 生成分镜脚本...")
 
         params = {
-            "model": self._model,
+            "model": model,
             "instructions": req.system_prompt,
             "input": req.user_prompt,
             "max_output_tokens": req.max_tokens,
             "temperature": req.temperature,
-            "reasoning": {"effort": "none"},  # 关闭思考模式，防止 CoT 吃光 token 导致正文为空
+            # 思考模式开关/强度（none 关闭；思考模式下 temperature 被 API 忽略）
+            "reasoning": {"effort": effort},
         }
         if req.json_schema:
             # strict json_schema 结构化输出：模型输出必合法 JSON。
@@ -104,6 +111,8 @@ class DeepSeekTextService(TextGenerationService):
                     text_parts.append(getattr(block, "text", "") or "")
         text = "".join(text_parts).strip()
 
+        usage = _usage_dict(response)
+
         if not text:
             # json_schema 偶发空输出（官方已知），带诊断信息返回以便重试
             return TextGenerationResult(
@@ -113,16 +122,18 @@ class DeepSeekTextService(TextGenerationService):
                     f"（status={getattr(response, 'status', None)}，"
                     f"output items={len(getattr(response, 'output', []) or [])}）"
                 ),
+                usage=usage,
             )
-        return TextGenerationResult(success=True, text=text)
+        return TextGenerationResult(success=True, text=text, usage=usage)
 
     # ------------------------------------------------------------------
-    # Chat Completions（v4-pro / reasoner 回退）
+    # Chat Completions（reasoner 老模型回退）
     # ------------------------------------------------------------------
     def _generate_chat(self, client, req: TextGenerationRequest) -> TextGenerationResult:
-        """走 Chat Completions（v4-pro / reasoner 老模型回退）."""
+        """走 Chat Completions（reasoner 老模型回退）."""
+        model = req.model or self._model
         api_params = {
-            "model": self._model,
+            "model": model,
             "messages": [
                 {"role": "system", "content": req.system_prompt},
                 {"role": "user", "content": req.user_prompt},
@@ -132,14 +143,15 @@ class DeepSeekTextService(TextGenerationService):
         }
 
         # JSON Output：仅普通 chat 模型启用；reasoner 老模型不支持
-        if "reasoner" not in self._model.lower():
+        if "reasoner" not in model.lower():
             api_params["response_format"] = {"type": "json_object"}
 
         # 推理模型支持 reasoning_effort
-        if "reasoner" in self._model.lower():
-            api_params["reasoning_effort"] = config.DEEPSEEK_REASONING_EFFORT
+        effort = req.reasoning_effort or config.DEEPSEEK_REASONING_EFFORT
+        if "reasoner" in model.lower():
+            api_params["reasoning_effort"] = effort
 
-        print(f"[INFO] 正在调用 DeepSeek ({self._model}) 生成分镜脚本...")
+        print(f"[INFO] 正在调用 DeepSeek ({model}) 生成分镜脚本...")
 
         response = client.chat.completions.create(**api_params)
         message = response.choices[0].message
@@ -155,6 +167,8 @@ class DeepSeekTextService(TextGenerationService):
                 part.get("text", "") if isinstance(part, dict) else str(part)
                 for part in text
             ).strip()
+
+        usage = _usage_dict(response)
 
         if not text:
             # 偶发把正文塞进 reasoning_content，且是 JSON 时回退
@@ -172,5 +186,21 @@ class DeepSeekTextService(TextGenerationService):
                         f"（finish_reason={finish}，reasoning 长度 {len(reasoning or '')}，"
                         f"前缀 {reasoning[:80] if reasoning else '无'}）"
                     ),
+                    usage=usage,
                 )
-        return TextGenerationResult(success=True, text=text)
+        return TextGenerationResult(success=True, text=text, usage=usage)
+
+
+def _usage_dict(response) -> dict | None:
+    """从 Responses / Chat 响应提取 token 用量统计（供 bench 分析思维链开销）."""
+    usage = getattr(response, "usage", None)
+    if not usage:
+        return None
+    return {
+        "input_tokens": getattr(usage, "input_tokens", None),
+        "output_tokens": getattr(usage, "output_tokens", None),
+        "reasoning_tokens": getattr(usage, "output_tokens_details", None) and getattr(
+            usage.output_tokens_details, "reasoning_tokens", None
+        ),
+        "total_tokens": getattr(usage, "total_tokens", None),
+    }

@@ -58,6 +58,24 @@ _SHOT = {
         "keyframes": {"type": "array", "items": _KEYFRAME},
         # v6.21：人物朝向（镜头组接规则33，可选——同场景连续镜头朝向一致性校验用）
         "subject_direction": {"type": "string", "description": "人物朝向（左/右/面向镜头/背对），可选；同场景相邻镜头朝向不应翻转"},
+        # v6.35 站位台吸收（规则51）：多人站位蓝图——本镜所有出镜角色的结构化站位。
+        # LLM 显式给 position/facing/role，供站位清单/帧锚定/校验直读，治站位混乱与比例失衡。
+        # 空镜/无角色填 []；每个出镜角色必须写入。
+        "char_layout": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "角色名，须与顶层 characters.identifier 一致"},
+                    "position": {"type": "string", "description": "画面位置：画左/画右/画中/前景/中景/后景，可组合（如 画左前景）"},
+                    "facing": {"type": "string", "description": "朝向：面向画左/面向画右/面向镜头/背对镜头/面向[另一角色名]"},
+                    "role": {"type": "string", "enum": ["主", "次", "背景"], "description": "画面主次：主要人物/次要人物/背景群演"},
+                },
+                "required": ["name", "position", "facing"],
+                "additionalProperties": False,
+            },
+            "description": "本镜所有出镜角色的站位布局（规则51多人站位蓝图）；空镜为 []",
+        },
     },
     "required": [
         "index", "narration_segment", "subtitle", "scene", "location",

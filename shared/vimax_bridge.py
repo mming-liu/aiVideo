@@ -1557,27 +1557,46 @@ def _extract_char_layout(
         if not onstage:
             return ""
 
-        # 提取姿态/位置：角色优先在 ff_desc（基础布局）找，kf 覆盖在 scan 前部
+        # 结构化站位（规则51/站位台吸收 v6.35）优先：shot.char_layout 直接给
+        # 位置/朝向，文本扫描提供姿态（pose）作基础，缺项回退到文本提取。
+        layout = shot.get("char_layout") or []
+        layout_by_name = {}
+        if isinstance(layout, list):
+            for item in layout:
+                if isinstance(item, dict):
+                    nm = str(item.get("name", "")).strip()
+                    if nm:
+                        layout_by_name[nm] = item
+
         parts = []
         for c in onstage:
             ident = c.get("identifier", "")
             pose = _extract_kf_pose(scan, ident)
-            pos = _extract_kf_position(scan, ident)
+            layout_item = layout_by_name.get(ident)
             seg = ident
             if pose:
                 seg += pose
-            if pos:
-                seg += pos
-            # 朝向：extract_orientation 有(主体,目标) → 面向{目标}
-            try:
-                from style_prefix import extract_orientation
-                orient = extract_orientation(scan, characters)
-                for subject, target in orient:
-                    if subject == ident:
-                        seg += f"（面向{target}）"
-                        break
-            except Exception:
-                pass
+            if layout_item:
+                pos = str(layout_item.get("position", "")).strip()
+                facing = str(layout_item.get("facing", "")).strip()
+                if pos:
+                    seg += pos
+                if facing:
+                    seg += f"（{facing}）"
+            else:
+                pos = _extract_kf_position(scan, ident)
+                if pos:
+                    seg += pos
+                # 朝向：extract_orientation 有(主体,目标) → 面向{目标}
+                try:
+                    from style_prefix import extract_orientation
+                    orient = extract_orientation(scan, characters)
+                    for subject, target in orient:
+                        if subject == ident:
+                            seg += f"（面向{target}）"
+                            break
+                except Exception:
+                    pass
             parts.append(seg)
 
         if not parts:

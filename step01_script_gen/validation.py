@@ -252,6 +252,36 @@ def _print_content_issue_summary(script: dict, shots: list[dict]) -> None:
         print("\n[OK] 内容问题汇总: 未发现幻觉/语义风险/连续空镜缺陷")
 
 
+def _is_over_shoulder_run(run_shots: list[dict]) -> bool:
+    """过肩对白组判定（P2-2）：连续同景别豁免.
+
+    双人对话正反打（规则22.8）锁定中近景连续是要求，非单调。判定：
+    run 内所有镜头都有对白（narration_segment 非空），且每镜都是双人
+    左右对峙（char_layout 或 ff_desc/prompt 同时含 画左 与 画右）。
+    """
+    if not run_shots:
+        return False
+    for s in run_shots:
+        if not (s.get("narration_segment") or "").strip():
+            return False
+        layout = s.get("char_layout") or []
+        sides = set()
+        if isinstance(layout, list):
+            for item in layout:
+                if isinstance(item, dict):
+                    p = str(item.get("position", "")).strip()
+                    if "画左" in p:
+                        sides.add("画左")
+                    if "画右" in p:
+                        sides.add("画右")
+        if len(sides) >= 2:
+            continue
+        ff = s.get("ff_desc", "") + s.get("prompt", "")
+        if not ("画左" in ff and "画右" in ff):
+            return False
+    return True
+
+
 def _check_shot_size_diversity(shots: list[dict]) -> None:
     """校验镜头景别多样性：至少覆盖词表半数景别，无相邻同景别.
 
@@ -286,7 +316,11 @@ def _check_shot_size_diversity(shots: list[dict]) -> None:
             if i + 2 >= len(shot_sizes_used) or shot_sizes_used[i + 1] != shot_sizes_used[i + 2]:
                 run_end = i + 2
                 if run_end - run_start + 1 >= 3:  # 3 镜以上连续同景别才提示
-                    print(f"[WARN] 镜头{run_start}~{run_end}连续{run_end - run_start + 1}镜景别相同（{run_sz}），建议插入景别变化")
+                    # v6.35（P2-2）：过肩对白组豁免——双人对话正反打（规则22.8）
+                    # 连续中近景是锁定要求，非单调。
+                    run_shots = shots[run_start - 1:run_end]
+                    if not _is_over_shoulder_run(run_shots):
+                        print(f"[WARN] 镜头{run_start}~{run_end}连续{run_end - run_start + 1}镜景别相同（{run_sz}），建议插入景别变化")
                 run_start, run_sz = None, None
         else:
             run_start, run_sz = None, None
@@ -3116,6 +3150,98 @@ def _check_lighting_position(shots: list[dict]) -> dict:
     return {"pass": True, "issues": [], "warnings": warnings}
 
 
+# ========================================================================
+# v6.35 站位台吸收（规则51）：多人站位蓝图检查
+# ========================================================================
+
+# 站位 position 合法空间词（画X + 景深；可组合，如 画左前景）
+_STAGING_POS_WORDS = ("画左", "画右", "画中", "画上方", "画下方", "前景", "中景", "后景")
+# 站位 facing 合法朝向词（面向[画X/角色]/背对/侧身/正对）
+_STAGING_FACING_WORDS = ("面向", "背对", "侧身", "正对", "面朝", "朝向")
+
+
+def _check_multi_person_staging(shots: list[dict], hook: dict = None,
+                                characters: list | None = None) -> dict:
+    """多人站位蓝图检查（站位台吸收 v6.35，规则51，warning-only）.
+
+    1. 多人同框（文本探测出镜 ≥2 角色）但缺 char_layout → 提示补结构化站位；
+    2. char_layout 内角色名不在顶层 characters 注册表 → 编造路人；
+    3. position/facing 用了非空间词/非朝向词 → 提示用画左/画右/前中后/面向；
+    4. 多角色同框全挤同一侧、无纵深展开 → 建议套对峙/群像蓝图。
+    空镜/单角色不触发（防误报刷屏，同 P1-7 视线门控思路）。
+    """
+    issues, warnings = [], []
+    known = {c.get("identifier") for c in (characters or []) if c.get("identifier")}
+    for shot in shots:
+        idx = shot.get("index", "?")
+        layout = shot.get("char_layout")
+        if layout is None:
+            layout = []
+        if not isinstance(layout, list):
+            warnings.append(
+                f"镜头{idx}: char_layout 不是数组（{type(layout).__name__}），"
+                f"规则51要求出镜角色逐一出镜")
+            continue
+        # 出镜角色探测（文本匹配注册表角色名）：ff/lf/prompt/main_subject
+        probe = " ".join(filter(None, [
+            shot.get("ff_desc", ""), shot.get("lf_desc", ""),
+            shot.get("prompt", ""), shot.get("main_subject", ""),
+        ]))
+        onstage = [c for c in known if c and c in probe] if probe else []
+        if not layout and len(onstage) < 2:
+            continue  # 空镜/单角色：无需站位布局
+        if not layout and len(onstage) >= 2:
+            warnings.append(
+                f"镜头{idx}: 多人同框（{len(onstage)}角色）缺 char_layout 站位布局——"
+                f"规则51要求出镜角色逐一出镜并给画左/画右/前中后站位")
+            continue
+        names = []
+        laterals = []  # 每个角色的横向侧位（画左/画右）
+        has_center = False
+        has_depth = False
+        for item in layout:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+            names.append(name)
+            pos = str(item.get("position", "")).strip()
+            facing = str(item.get("facing", "")).strip()
+            # 编造判定：既不在注册表、也不在本镜文本中可见 → 才提示。
+            # 防误伤文本可见的临时角色（如「小娃娃」在 ff_desc 出现但不在顶层 characters）
+            if name not in known and not any(a in probe for a in (name,)):
+                warnings.append(
+                    f"镜头{idx}: char_layout 角色「{name}」不在角色注册表内且未在本镜文本出现"
+                    f"（规则51要求与顶层 characters 一致）")
+            if pos and not any(k in pos for k in _STAGING_POS_WORDS):
+                warnings.append(
+                    f"镜头{idx}: {name} 站位「{pos}」缺空间词"
+                    f"（画左/画右/画中/前景/中景/后景），规则51")
+            if facing and not any(k in facing for k in _STAGING_FACING_WORDS):
+                warnings.append(
+                    f"镜头{idx}: {name} 朝向「{facing}」缺朝向词"
+                    f"（面向/背对/侧身/正对），规则51")
+            if "画左" in pos:
+                laterals.append("画左")
+            elif "画右" in pos:
+                laterals.append("画右")
+            if "画中" in pos:
+                has_center = True
+            if any(k in pos for k in ("前景", "中景", "后景")):
+                has_depth = True
+        # 多角色全挤同一侧（≥2 明确横向侧位、全部同侧、无画中/无纵深）→ 站位单一。
+        # 画中（居中构图）或含前中后景纵深时不提示——避免「画中+画右」被误判为全右。
+        if len(laterals) >= 2 and len(set(laterals)) == 1 and not has_center and not has_depth:
+            side = laterals[0]
+            warnings.append(
+                f"镜头{idx}: {len(laterals)}角色站位全在「{side}」同侧且无纵深（前中后景）——"
+                f"建议按对峙/群像蓝图对置或拉开纵深，规则51")
+    for w in warnings:
+        print(f"[CHECK] 多人站位: [WARN] {w}")
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
 def _run_prompt_checklist(script: dict) -> dict:
     """运行分镜提示词检查表（v6.3 新增）.
 
@@ -3279,6 +3405,10 @@ def _run_prompt_checklist(script: dict) -> dict:
     results["character_entrance"] = _check_character_entrance(shots, script.get("characters", []))
     results["color_tone_transition"] = _check_color_tone_transition(shots)
 
+    # v6.35 站位台吸收（规则51）：多人站位蓝图检查（warning-only，不进 hard_fail）
+    results["multi_person_staging"] = _check_multi_person_staging(
+        shots, script.get("hook"), script.get("characters"))
+
     # 综合判定：任一硬性检查失败则整体不通过
     # v6.5: 增加 script_novel_alignment 到硬性检查
     # v6.7: 增加 ff_lf_completeness 到硬性检查（lf_desc 为空会导致静态视频）
@@ -3350,6 +3480,7 @@ _REGEN_FEEDBACK_LABELS = {
     "combat_arc": "打斗四段式",
     "shot_transition": "镜头衔接",
     "action_overlap": "动作重叠",
+    "multi_person_staging": "多人站位",
 }
 
 
@@ -3433,6 +3564,7 @@ def _fill_missing_new_fields(script: dict) -> None:
         shot.setdefault("time_stamp", "")
         shot.setdefault("cam_idx", 1)
         shot.setdefault("subject_direction", "")  # v6.21：人物朝向（可选）
+        shot.setdefault("char_layout", [])  # v6.35 站位台吸收：多人站位蓝图（可选）
 
     # 补全 hook（如果存在）
     hook = script.get("hook")
@@ -3765,6 +3897,85 @@ def _fix_lighting_quantization(prompt: str) -> str:
     return prompt
 
 
+# ========================================================================
+# 类型归位（2026-08-13 修复）：LLM 偶发输出错误类型，防御 type-pollution 崩溃
+# ========================================================================
+
+def _coerce_schema_types(script: dict) -> None:
+    """按 SCRIPT_SCHEMA 声明类型，把字段尽力归位（类型污染防御）.
+
+    背景（2026-08-13）：DeepSeek strict json_schema 偶发输出错误类型（index/
+    cam_idx 混为字符串、duration 为字符串、prompt/narration 偶发非字符串等），
+    validation 里的 sorted()/< /字符串拼接等运算抛 `<` str/int、拼接等崩溃
+    （bench 实测两档各 1/2 触发）。此处按 schema 声明类型尽力转回
+    （数字字段→数字、字符串字段→str），失败保留原值让校验 WARN 兜底。
+
+    幂等：已是正确类型时原样返回。None 保留（校验用 `or ""` 处理）。
+    """
+    # 字符串字段（schema 声明为 string；非 str 值转 str，防拼接/strip 崩溃）
+    _STR_FIELDS = (
+        "prompt", "ff_desc", "lf_desc", "motion_desc", "main_subject",
+        "scene", "location", "narration_segment", "subtitle",
+        "context_bridge", "audio_cue", "fx_effect", "color_tone",
+        "clip_transition", "variation_type", "subject_direction",
+    )
+
+    def _cast(v, cast):
+        if v is None or isinstance(v, bool):
+            return v  # None/bool 语义特殊，不自动转（校验 `or ""` 兜底）
+        if isinstance(v, (int, float)):
+            return v
+        if isinstance(v, str):
+            try:
+                return cast(v)
+            except (TypeError, ValueError):
+                return v
+        return v  # list/dict 等：保留，校验兜底
+
+    def _to_str(v):
+        # 字符串字段兜底：None → ""（防 join/strip/拼接崩，校验对空字段 WARN 兜底）；
+        # 其余非 str 值转 str（防拼接/`.strip()` 崩溃）。
+        if v is None:
+            return ""
+        return v if isinstance(v, str) else str(v)
+
+    if not isinstance(script, dict):
+        return
+    for f, cast in (("shot_count", lambda s: int(float(s))),
+                    ("total_duration", float)):
+        if f in script:
+            script[f] = _cast(script[f], cast)
+    for shot in script.get("shots", []) or []:
+        if not isinstance(shot, dict):
+            continue
+        for f, cast in (("index", lambda s: int(float(s))),
+                        ("cam_idx", lambda s: int(float(s))),
+                        ("duration", float),
+                        ("duration_sec", float)):
+            if f in shot:
+                shot[f] = _cast(shot[f], cast)
+        for f in _STR_FIELDS:
+            if f in shot:
+                shot[f] = _to_str(shot[f])
+        for kf in shot.get("keyframes") or []:
+            if isinstance(kf, dict):
+                if "time_ratio" in kf:
+                    kf["time_ratio"] = _cast(kf["time_ratio"], float)
+                if "desc" in kf:
+                    kf["desc"] = _to_str(kf["desc"])
+    hook = script.get("hook")
+    if isinstance(hook, dict):
+        for f, cast in (("index", lambda s: int(float(s))),
+                        ("cam_idx", lambda s: int(float(s))),
+                        ("duration", float),
+                        ("duration_sec", float)):
+            if f in hook:
+                hook[f] = _cast(hook[f], cast)
+        for f in _STR_FIELDS:
+            if f in hook:
+                hook[f] = _to_str(hook[f])
+
+
 def parse_response(raw_text: str, novel_text: str = "") -> dict:
     """解析 LLM 返回的原始文本为 JSON， 含兜底修复。
 
@@ -3808,6 +4019,11 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
                 f"出错位置上下文 (...{snippet}...)\n"
                 f"完整响应已保存至 {dump_path}"
             ) from e2
+
+    # 2026-08-13 修复：LLM 偶发输出错误类型（index/cam_idx/duration 等混为字符串），
+    # validation 的 sorted()/< 等数字运算会抛 `<` str/int 崩溃（bench 实测）。
+    # 按 schema 类型归位后再填充/校验，同类 type-pollution 一并防御。
+    _coerce_schema_types(script)
 
     # v6.4 新增：补全新添加的字段（如果 LLM 没有返回）
     _fill_missing_new_fields(script)
@@ -3901,17 +4117,38 @@ def _check_axis_crossing(shots: list[dict], hook: dict = None) -> dict:
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
+# 打斗镜判定词（P2-1：景别跳跃豁免用——打斗短镜快切是规则7设计，非割裂）
+_COMBAT_WORDS = (
+    "刺杀", "偷袭", "伏击", "拔剑", "挥刀", "挥剑", "劈", "砍", "刺向", "刺入",
+    "跃出", "格挡", "刀锋", "剑锋", "匕首", "搏杀", "搏斗", "打斗", "交手",
+    "闪避", "反杀", "袭击", "挥",
+)
+
+
+def _is_combat_shot(shot: dict) -> bool:
+    """打斗镜判定：prompt/motion/ff/lf 含打斗动作词."""
+    text = " ".join([shot.get("prompt", ""), shot.get("motion_desc", ""),
+                     shot.get("ff_desc", ""), shot.get("lf_desc", "")])
+    return any(w in text for w in _COMBAT_WORDS)
+
+
 def _check_shot_size_jump(shots: list[dict]) -> dict:
     """检查相邻镜头景别跳跃幅度（禁止特写直接跳大远景）.
 
     景别等级 9 级（大特写→鸟瞰），相邻镜头跳跃幅度 >2 级视为割裂（如
     特写→大远景）。warning 级。
+
+    v6.35（P2-1）：打斗镜豁免——打斗短镜快切（规则7）本就走特写↔全景
+    交替制造节奏，跳跃是设计使然，不误报。
     """
     issues, warnings = [], []
     for i in range(len(shots) - 1):
         lv1 = _shot_size_level(shots[i])
         lv2 = _shot_size_level(shots[i + 1])
         if not lv1 or not lv2:
+            continue
+        # v6.35（P2-1）：打斗镜快切豁免（规则7：打斗/追杀一律 2-3 秒短镜 + 0.2s 硬切）
+        if _is_combat_shot(shots[i]) or _is_combat_shot(shots[i + 1]):
             continue
         d1 = _SHOT_SIZE_ORDER.index(lv1)
         d2 = _SHOT_SIZE_ORDER.index(lv2)
@@ -4079,12 +4316,38 @@ def _check_threat_gaze_coupling(shots: list[dict], hook: dict = None) -> dict:
         # 1. 有威胁源但无朝向目标：威胁源该「紧盯/朝向某方向的目标」，若只写
         #    「潜伏水下」而无朝向目标，容易画成背对或正对镜头（hook 实测）
         has_threat = any(w in text for w in _THREAT_WORDS)
-        if has_threat:
+        # v6.35（P1-1）结构化威胁源朝向（站位台吸收）：char_layout.facing 直读，
+        # 比文本正则更准——「背对镜头/正对镜头」是规则41 死穴，文本写法多变易漏。
+        layout = s.get("char_layout") or []
+        layout_threat = ""  # 威胁源在 char_layout 中的名字
+        layout_facing = ""  # 对应 facing
+        if isinstance(layout, list):
+            for item in layout:
+                if isinstance(item, dict):
+                    nm = str(item.get("name", "")).strip()
+                    if any(w in nm for w in _THREAT_WORDS):
+                        layout_threat = nm
+                        layout_facing = str(item.get("facing", "")).strip()
+                        break
+        layout_bad_facing = bool(layout_facing) and (
+            "背对" in layout_facing or "正对镜头" in layout_facing)
+
+        if has_threat or layout_threat:
             # 威胁源是否有「面向目标」的朝向表达：朝画X/紧盯画X/侧身/望向X
+            # （char_layout 的 facing 指向目标也算——如「面向画左的杨旭」）
             threat_has_target = any(
                 k in text for k in ("朝画", "紧盯画", "盯向画", "望画", "侧身", "朝向", "面向", "逼近", "逼近画")
             )
-            if not threat_has_target:
+            if layout_facing and any(k in layout_facing for k in ("面向", "朝向", "盯向", "望向")):
+                threat_has_target = True
+            if layout_bad_facing:
+                # 结构化命中背对/正对镜头——精确告警，替代笼统的「未写朝向目标」
+                warnings.append(
+                    f"镜头{label}: char_layout 威胁源「{layout_threat}」朝向「{layout_facing}」"
+                    f"——规则41要求威胁源侧身朝向目标，禁止背对目标或正对镜头，"
+                    f"否则发现者看不到它、模型也画不对攻击方向"
+                )
+            elif not threat_has_target:
                 warnings.append(
                     f"镜头{label}: 威胁源（刺客/黑衣人等）未写朝向目标——应写明它"
                     f"「侧身朝画X/紧盯画X/朝向目标」，否则模型易画成背对目标或正对镜头"
@@ -4190,7 +4453,8 @@ def _check_keyframes_quality(shots: list[dict], hook: dict = None) -> dict:
                 missing_orient.append((label, tr))
     if empty_kf:
         warnings.append(
-            f"{len(empty_kf)} 个中间关键帧 desc 为空（镜头 {sorted(set(empty_kf))}），"
+            # P1-2 修复（08-13）：label 混合 int 镜头号 + str "hook"，sorted 须 key=str 防 TypeError
+            f"{len(empty_kf)} 个中间关键帧 desc 为空（镜头 {sorted(set(empty_kf), key=str)}），"
             f"应写清该瞬间每个角色的姿态/位置/朝向"
         )
     if missing_anchor:
@@ -4202,7 +4466,8 @@ def _check_keyframes_quality(shots: list[dict], hook: dict = None) -> dict:
             f"如「杨旭仰卧船头，听香跪坐船尾，刺客半身探出画右水面」（08-10 关键帧质量）。"
         )
     if missing_orient:
-        _labs = sorted({l for l, _ in missing_orient})
+        # P1-2 修复（08-13）：label 混合 int/int 与 str "hook"，sorted 须 key=str 防 TypeError
+        _labs = sorted({l for l, _ in missing_orient}, key=str)
         warnings.append(
             f"{len(missing_orient)} 个中间关键帧的威胁源未写朝向目标（镜头 {_labs}）——"
             f"应写明「面向/朝向目标」，否则图片模型把刺客画成背对目标或正对镜头。"
@@ -4329,19 +4594,29 @@ def _check_opening_hook(shots: list[dict], hook: dict = None) -> dict:
     """
     issues, warnings = [], []
 
+    # 钩子文本 + 是否含冲突/悬念（供 section 1 校验 + section 2 豁免共用，P2-3）
+    hook_text = ""
+    hook_has_conflict = False
+    if hook and isinstance(hook, dict):
+        hook_text = " ".join([hook.get("prompt", ""), hook.get("ff_desc", ""),
+                              hook.get("motion_desc", ""), hook.get("lf_desc", "")])
+        hook_has_conflict = any(p in hook_text for p in _PUNCH_WORDS)
+
     # 1. 钩子须含冲突/悬念画面词
     if hook and isinstance(hook, dict):
-        htext = " ".join([hook.get("prompt", ""), hook.get("ff_desc", ""),
-                          hook.get("motion_desc", ""), hook.get("lf_desc", "")])
-        if not any(p in htext for p in _PUNCH_WORDS):
+        if not hook_has_conflict:
             warnings.append(
                 "钩子镜头(index=0): 画面未检测到冲突/悬念词（对峙/拔剑/惊觉/意外等）——"
                 "钩子必须锁定冲突/悬念瞬间（开篇3秒抓注意力，抠姐检查·开篇3秒）。"
             )
 
     # 2. 前2个主分镜禁止纯环境/风景开场拖节奏
+    #    v6.35（P2-3）：钩子已含冲突/悬念时，紧随其后的建立镜豁免——冲突由钩子承担
+    #    （规则42「钩子+前1-2镜」），前1-2镜做空间/人物建立不拖节奏。
     front = [s for s in shots if s.get("index") != 0][:2]
     for s in front:
+        if hook_has_conflict:
+            continue
         text = " ".join([s.get("prompt", ""), s.get("narration_segment", ""),
                          s.get("main_subject", ""), s.get("motion_desc", "")])
         if not any(p in text for p in _PUNCH_WORDS):

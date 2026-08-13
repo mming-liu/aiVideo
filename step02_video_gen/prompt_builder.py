@@ -482,7 +482,7 @@ def _is_wide_shot(shot: dict) -> bool:
 
 
 def _build_character_layout_block(shot: dict, characters: list) -> str:
-    """构建「人物站位清单」区块（豆包模板吸收 #2）.
+    """构建「人物站位清单」区块（豆包模板吸收 #2 + 站位台吸收 v6.35）.
 
     逐角色列出镜头开场画面实际出现的角色及其身份特征，显式枚举 + 身份锚定，
     防止视频模型多人镜头漏人/错位/脑补陌生人（与 ff_desc 的完整静态布局同源，
@@ -494,38 +494,63 @@ def _build_character_layout_block(shot: dict, characters: list) -> str:
     空镜无角色，返回空串。
     """
     probe = " ".join([shot.get("ff_desc", ""), shot.get("main_subject", "")])
-    if not probe:
+    # 结构化站位（规则51/站位台吸收 v6.35）优先：shot.char_layout 已由 LLM 显式给出
+    # 每出镜角色的 position/facing/role，直接读入清单；文本探测（ff_desc+main_subject）
+    # 作兜底补漏，保证漏填/晚进场角色仍被列出。
+    layout = shot.get("char_layout") or []
+    known = {c.get("identifier") for c in characters if c.get("identifier")}
+    layout_lines = []
+    layout_names = set()
+    for item in (layout if isinstance(layout, list) else []):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        if not name or name not in known:
+            continue  # 只认角色注册表内的名字，防 LLM 编造路人
+        layout_names.add(name)
+        bits = [b for b in (str(item.get("position", "")).strip(),
+                            str(item.get("facing", "")).strip()) if b]
+        if not bits:
+            bits = ["位置/朝向以视频起点描述为准"]
+        line = f"- {name}：{'，'.join(bits)}"
+        role = str(item.get("role", "")).strip()
+        if role in ("主", "次", "背景"):
+            line += f"（{role}）"
+        layout_lines.append(line)
+    if not probe and not layout_lines:
         return ""
     appearing = [c for c in characters
-                 if c.get("identifier") and c["identifier"] in probe]
-    if not appearing:
-        return ""
+                 if c.get("identifier") and c["identifier"] in probe
+                 and c["identifier"] not in layout_names]
 
-    lines = []
+    fallback_lines = []
     main_ident = (shot.get("main_subject") or "").strip()
     wide = _is_wide_shot(shot)
-    many = len(appearing) >= 3
+    many = (len(layout_lines) + len(appearing)) >= 3
     for c in appearing:
         ident = c["identifier"]
         if wide:
             # 远景：只留身份+服装主色剪影，禁精细五官（规则39）
             short = _shorten_feature(c.get("static_features", ""), 15)
-            lines.append(f"- {ident}（远景剪影）：{short}，禁止五官与服装细节")
+            fallback_lines.append(f"- {ident}（远景剪影）：{short}，禁止五官与服装细节")
             continue
         if many and ident != main_ident:
             # 多角色镜头：非主角压缩到 ~25 字，防锚点膨胀（capsule 短锚点）
             short = _shorten_feature(c.get("static_features", ""), 25)
-            lines.append(f"- {ident}：{short}，位置/朝向/动作以视频起点描述为准")
+            fallback_lines.append(f"- {ident}：{short}，位置/朝向/动作以视频起点描述为准")
         else:
             # 开场画面 = 视频起点（ff_desc 前一刻状态），dynamic_features 是全章状态
             # （含溅血/持刀等动作结果），必须过滤——否则视频模型把血污/武器画进开场
             # （08-09 首帧杨旭胸口血迹、刺客血眼、听香溅血）。
             feats = [f for f in (c.get("static_features", ""), _clean_dynamic_for_start(c.get("dynamic_features", ""))) if f]
             if feats:
-                lines.append(f"- {ident}：{'，'.join(feats)}，位置/朝向/动作以视频起点描述为准")
+                fallback_lines.append(f"- {ident}：{'，'.join(feats)}，位置/朝向/动作以视频起点描述为准")
             else:
-                lines.append(f"- {ident}：位置/朝向/动作以视频起点描述为准")
+                fallback_lines.append(f"- {ident}：位置/朝向/动作以视频起点描述为准")
 
+    lines = layout_lines + fallback_lines
+    if not lines:
+        return ""
     return (
         "【人物站位清单】本镜头开场画面包含以下角色，必须在开场画面中正确出现，"
         "不得缺失、错位或替换为他人，位置/朝向/动作与视频起点描述一致，"

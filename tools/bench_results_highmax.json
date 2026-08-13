@@ -1,0 +1,71 @@
+{
+  "chapter": 1,
+  "models": [
+    "deepseek-v4-flash"
+  ],
+  "efforts": [
+    "high",
+    "max"
+  ],
+  "trials": 2,
+  "max_tokens": 80000,
+  "weights": {
+    "parse": 3.0,
+    "schema": 2.0,
+    "gap": 2.0,
+    "subtitle_binding": 2.0,
+    "duration": 1.5,
+    "shot_count": 1.0,
+    "dialogue": 1.0,
+    "camera": 1.0,
+    "shot_size": 1.0,
+    "ff_lf": 1.0,
+    "keyframes": 0.5,
+    "warns": 1.0,
+    "cost": 0.5
+  },
+  "rows": [
+    {
+      "config": "deepseek-v4-flash/high",
+      "n": 2,
+      "composite": 0.8049960952380952,
+      "parse": 1.0,
+      "schema": 1.0,
+      "gap": 1.0,
+      "subtitle_binding": 1.0,
+      "duration": 0.0,
+      "shot_count": 0.5,
+      "dialogue": 0.76,
+      "camera": 1.0,
+      "shot_size": 1.0,
+      "ff_lf": 1.0,
+      "keyframes": 1.0,
+      "warns": 0.025000000000000022,
+      "cost": 0.6048633333333333,
+      "out_tok": 59270.5,
+      "reason_ratio": 0.6341749110005576,
+      "fails": 0
+    },
+    {
+      "config": "deepseek-v4-flash/max",
+      "n": 2,
+      "composite": 0.4209171428571429,
+      "parse": 0.5,
+      "schema": 0.5,
+      "gap": 0.5,
+      "subtitle_binding": 0.5,
+      "duration": 0.0,
+      "shot_count": 0.25,
+      "dialogue": 0.46,
+      "camera": 0.5,
+      "shot_size": 0.5,
+      "ff_lf": 0.5,
+      "keyframes": 0.5,
+      "warns": 0.0,
+      "cost": 0.8121,
+      "out_tok": 28185.0,
+      "reason_ratio": 0.3033705871917687,
+      "fails": 1
+    }
+  ]
+}
