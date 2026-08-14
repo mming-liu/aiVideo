@@ -1717,7 +1717,7 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
 #
 # todolist C 档：以下规则只有 LLM prompt 约束、零代码校验，LLM 违约时无任何
 # 提示（软性规则 = 违反不崩、但违反多了画面质量/节奏/合规性明显下降）。
-#   - 规则13.6：ff_desc ≤80 字（钩子 ≤120）——超长则嵌套长句、图片模型理解退化
+#   - 规则13.6：ff_desc ≤120 字（钩子 ≤160）——超长则嵌套长句、图片模型理解退化
 #   - 规则37：抽象词必须量化（梦幻/压抑/优雅 等情绪风格词须带光/色/焦参数）
 #   - 规则46：人物出场四大方式——核心角色首次登场用有设计感的出场方式
 #   - 规则24：相邻镜头 color_tone 变化幅度 ≤20%（色彩突变观感割裂）
@@ -1745,24 +1745,24 @@ _ENTRANCE_DESIGN_WORDS = (
 
 
 def _check_ff_desc_length(shots: list[dict], hook: dict = None) -> dict:
-    """规则13.6：ff_desc ≤80 字（钩子 ≤120）校验（C3 修复，warning-only）."""
+    """规则13.6：ff_desc ≤120 字（钩子 ≤160）校验（A+B 2026-08-14 放宽，warning-only）."""
     warnings = []
     for s in shots:
         idx = s.get("index", "?")
         ff = (s.get("ff_desc") or "").strip()
         if not ff:
             continue
-        if len(ff) > 80:
+        if len(ff) > 120:
             warnings.append(
-                f"镜头{idx}: ff_desc {len(ff)} 字 > 80 字（规则13.6）——首帧描述过长，"
+                f"镜头{idx}: ff_desc {len(ff)} 字 > 120 字（规则13.6）——首帧描述过长，"
                 f"易嵌套长句、图片模型理解退化。应短句、一角色一短句、动词前置，"
-                f"只留「前一刻」定格 + 角色完整静态布局，删冗余环境/月光段句。"
+                f"只留「前一刻」定格 + 角色完整静态布局 + 服装色，删冗余环境/月光段句。"
             )
     if hook and isinstance(hook, dict):
         hff = (hook.get("ff_desc") or "").strip()
-        if hff and len(hff) > 120:
+        if hff and len(hff) > 160:
             warnings.append(
-                f"钩子镜头(index=0): ff_desc {len(hff)} 字 > 120 字（规则13.6 钩子上限）"
+                f"钩子镜头(index=0): ff_desc {len(hff)} 字 > 160 字（规则13.6 钩子上限）"
             )
     for w in warnings:
         print(f"[CHECK] ff描述长度: [WARN] {w}")
@@ -2149,6 +2149,12 @@ def validate_hook(hook: dict, characters: list | None = None) -> None:
         _check_restrained_emotion([], hook)
         _check_focal_switch([], hook)
         _check_body_purification([], hook)
+        # Plan A（2026-08-14）：hook 补跑规则41/51/25/13.7 全锚点检查——
+        # _run_prompt_checklist 在 hook 挂载前执行，钩子必须在此处补查。
+        _check_threat_gaze_coupling([], hook)
+        _check_keyframes_quality([], hook)
+        _check_multi_person_staging([], hook, chars)
+        _check_ff_desc_anchors([], hook, chars)
     except Exception as e:
         print(f"[CHECK] 钩子校验异常（不阻断）: {e}")
 
@@ -3172,14 +3178,17 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
     """
     issues, warnings = [], []
     known = {c.get("identifier") for c in (characters or []) if c.get("identifier")}
-    for shot in shots:
+    # Plan A（2026-08-14）：hook 同为 index=0 的镜头，必须一并检查站位蓝图
+    targets = list(shots) + ([hook] if hook and isinstance(hook, dict) else [])
+    for shot in targets:
         idx = shot.get("index", "?")
+        label = "钩子镜头(index=0)" if (hook and shot is hook) else f"镜头{idx}"
         layout = shot.get("char_layout")
         if layout is None:
             layout = []
         if not isinstance(layout, list):
             warnings.append(
-                f"镜头{idx}: char_layout 不是数组（{type(layout).__name__}），"
+                f"{label}: char_layout 不是数组（{type(layout).__name__}），"
                 f"规则51要求出镜角色逐一出镜")
             continue
         # 出镜角色探测（文本匹配注册表角色名）：ff/lf/prompt/main_subject
@@ -3192,7 +3201,7 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
             continue  # 空镜/单角色：无需站位布局
         if not layout and len(onstage) >= 2:
             warnings.append(
-                f"镜头{idx}: 多人同框（{len(onstage)}角色）缺 char_layout 站位布局——"
+                f"{label}: 多人同框（{len(onstage)}角色）缺 char_layout 站位布局——"
                 f"规则51要求出镜角色逐一出镜并给画左/画右/前中后站位")
             continue
         names = []
@@ -3212,15 +3221,15 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
             # 防误伤文本可见的临时角色（如「小娃娃」在 ff_desc 出现但不在顶层 characters）
             if name not in known and not any(a in probe for a in (name,)):
                 warnings.append(
-                    f"镜头{idx}: char_layout 角色「{name}」不在角色注册表内且未在本镜文本出现"
+                    f"{label}: char_layout 角色「{name}」不在角色注册表内且未在本镜文本出现"
                     f"（规则51要求与顶层 characters 一致）")
             if pos and not any(k in pos for k in _STAGING_POS_WORDS):
                 warnings.append(
-                    f"镜头{idx}: {name} 站位「{pos}」缺空间词"
+                    f"{label}: {name} 站位「{pos}」缺空间词"
                     f"（画左/画右/画中/前景/中景/后景），规则51")
             if facing and not any(k in facing for k in _STAGING_FACING_WORDS):
                 warnings.append(
-                    f"镜头{idx}: {name} 朝向「{facing}」缺朝向词"
+                    f"{label}: {name} 朝向「{facing}」缺朝向词"
                     f"（面向/背对/侧身/正对），规则51")
             if "画左" in pos:
                 laterals.append("画左")
@@ -3235,7 +3244,7 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
         if len(laterals) >= 2 and len(set(laterals)) == 1 and not has_center and not has_depth:
             side = laterals[0]
             warnings.append(
-                f"镜头{idx}: {len(laterals)}角色站位全在「{side}」同侧且无纵深（前中后景）——"
+                f"{label}: {len(laterals)}角色站位全在「{side}」同侧且无纵深（前中后景）——"
                 f"建议按对峙/群像蓝图对置或拉开纵深，规则51")
     for w in warnings:
         print(f"[CHECK] 多人站位: [WARN] {w}")
@@ -3409,6 +3418,11 @@ def _run_prompt_checklist(script: dict) -> dict:
     results["multi_person_staging"] = _check_multi_person_staging(
         shots, script.get("hook"), script.get("characters"))
 
+    # Plan A（2026-08-14）：ff_desc 全锚点检查（规则41/25/13.7，warning-only）——
+    # 查「真正的图片输入」而非 prompt；hook 手改教训：ff_desc 缺锚 → 重渲必漂。
+    results["ff_desc_anchors"] = _check_ff_desc_anchors(
+        shots, script.get("hook"), script.get("characters"))
+
     # 综合判定：任一硬性检查失败则整体不通过
     # v6.5: 增加 script_novel_alignment 到硬性检查
     # v6.7: 增加 ff_lf_completeness 到硬性检查（lf_desc 为空会导致静态视频）
@@ -3577,6 +3591,8 @@ def _fill_missing_new_fields(script: dict) -> None:
         hook.setdefault("duration_sec", hook.get("duration", 1))
         hook.setdefault("negative_prompt", "")
         hook.setdefault("time_stamp", "")
+        hook.setdefault("char_layout", [])   # Plan A（2026-08-14）：与 _SHOT 对称
+        hook.setdefault("keyframes", [])     # Plan A（2026-08-14）：schema 已入 required
 
     # 补全顶层字段
     script.setdefault("total_duration", 0)
@@ -4384,6 +4400,188 @@ def _check_threat_gaze_coupling(shots: list[dict], hook: dict = None) -> dict:
 
 
 # ========================================================================
+# Plan A（2026-08-14）：ff_desc 全锚点检查——查「真正的图片输入」而非 prompt。
+#
+# 背景：chapter_001 hook 首帧手改 ff_desc + 反复重渲「越改越乱」——手改删掉了
+# 威胁源朝向锚/尺寸锚/服装色，图像模型每次重渲随机漂（衣服色/视线方向必变）。
+# 系统性修法：ff_desc 必须自带全锚点，让 LLM 一次生成、校验兜底，杜绝手改。
+# 四类锚点（全部 warning-only，不阻断）：
+#   A. 威胁源朝向锚（规则41）：ff_desc 出现威胁源但无朝向/目标表达 → 提示。
+#      （查 ff_desc 而非 prompt——prompt 有锚但 ff_desc 缺 = 首帧仍漂）
+#   B. 视线-威胁方位矛盾（规则41）：ff_desc 内视线方向与威胁方位相反 → 提示。
+#   C. 尺寸锚（规则25）：场景物体首现镜 ff_desc 必须含「N米」尺寸锚。
+#   D. 服装色重述（规则13.7）：出镜角色 ff_desc 必须重述其关键服装色/衣。
+# ========================================================================
+
+_FF_DESC_COLOR_WORDS = (
+    "素白", "月白", "雪白", "霜白", "玄色", "墨色", "鸦青", "青灰", "炭黑",
+    "鹅黄", "藕荷", "绯红", "绛红", "黛青", "藏青", "宝蓝", "靛蓝",
+    "杏黄", "杏红", "桃红", "柳绿", "竹青", "素青", "玄", "绯", "绛", "黛", "翠", "朱",
+)
+_FF_DESC_GARMENT_WORDS = (
+    "劲装", "道袍", "长衫", "纱衣", "缁衣", "斗篷", "小帽", "轻袍", "白袍",
+    "青袍", "玄袍", "黑袍", "红袍", "袍", "衫", "裳", "袄", "氅", "裙", "甲",
+)
+_FF_DESC_SIZE_RE = re.compile(r"\d+(?:\.\d+)?\s*米")
+
+
+def _extract_dress_tokens(dynamic_features: str) -> tuple[list[str], list[str]]:
+    """从角色衣着描述提取「服装色词 / 衣词」，供 ff_desc 重述检查（规则13.7）.
+
+    例：杨旭「素白色轻袍…」→ (["素白"], ["轻袍", "袍"])；
+        听香「一袭春衫…」→ ([], ["衫"])；刺客「浑身湿透…」→ ([], []) 跳过。
+    """
+    dyn = dynamic_features or ""
+    colors = [c for c in _FF_DESC_COLOR_WORDS if c in dyn]
+    garments = [g for g in _FF_DESC_GARMENT_WORDS if g in dyn]
+    return colors, garments
+
+
+# 场景物体类别词（识别 ff_desc 中的空间物体，用于「bank 未覆盖才要求尺寸锚」）。
+# 只用复合词：单字「船/舟/车」会命中「船头/船尾/船舷」等已知船的方位词（误报），
+# 复合词（小舟/马车/厅堂…）才是「独立物体」的信号。
+_SCENE_OBJ_HINT_WORDS = (
+    "舴艋舟", "小舟", "扁舟", "画舫", "乌篷船", "马车", "牛车", "轿子",
+    "厅堂", "院落", "宝塔", "拱桥", "楼阁", "山寨", "府邸",
+)
+
+
+def _check_size_anchor_warnings(shots: list[dict], hook: dict | None) -> list[str]:
+    """规则25：ff_desc 尺寸锚检查（Plan B 2026-08-14）——bank 未覆盖才要求.
+
+    职责分工：场景物体尺寸的**渲染权威来源是 objects_bank 注入**
+    （vimax_bridge._inject_object_size_anchor 在帧/视频 prompt 拼入「长X米宽Y米」）。
+    因此 ff_desc 只在「物体不在 bank」时才有自足义务——此时注入帮不上，
+    ff_desc 若缺尺寸锚，首帧比例就可能漂。
+
+    判定：ff_desc 含场景物体复合词（小舟/马车/厅堂…）但：
+    - 无「N米」尺寸锚 且
+    - 整镜文本（location/scene/ff/lf/motion/prompt/main_subject）不含任何 bank 物体
+      术语（identifier/consistent_terms/subtype——命中即 bank 覆盖、注入会兜底）
+    → WARN（bank 外新物体缺尺寸锚）。
+    """
+    out = []
+    try:
+        from shared.scene_objects_bank import SceneObjectsBank
+        bank = SceneObjectsBank()
+        bank.load()
+    except Exception:
+        return out
+    bank_terms = set()
+    for ident in bank.get_all_identifiers():
+        obj = bank.get_object(ident) or {}
+        bank_terms.add(ident)
+        bank_terms.update(obj.get("consistent_terms") or [])
+        if obj.get("subtype"):
+            bank_terms.add(obj["subtype"])
+    bank_terms = {t for t in bank_terms if t}
+
+    targets = (([hook] if hook and isinstance(hook, dict) else [])
+               + list(shots))
+    for s in targets:
+        label = "钩子镜头(index=0)" if (hook and s is hook) else f"镜头{s.get('index', '?')}"
+        ff = (s.get("ff_desc") or "").strip()
+        if not ff:
+            continue
+        if _FF_DESC_SIZE_RE.search(ff):
+            continue  # 已有尺寸锚
+        # bank 覆盖判定：与 _inject_object_size_anchor 同口径，整镜文本匹配
+        probe = " ".join(filter(None, [
+            s.get("location", ""), s.get("scene", ""), ff,
+            s.get("lf_desc", ""), s.get("motion_desc", ""),
+            s.get("prompt", ""), s.get("main_subject", ""),
+        ]))
+        if any(t in probe for t in bank_terms):
+            continue  # bank 覆盖，注入兜底，ff_desc 免写
+        hits = [w for w in _SCENE_OBJ_HINT_WORDS if w in ff]
+        if hits:
+            out.append(
+                f"{label}: ff_desc 出现场景物体「{hits[0]}」但缺尺寸锚且不在物体库"
+                f"（规则25）——该物体无法靠 bank 注入补尺寸，ff_desc 必须写出锚定尺寸"
+                f"（如「舴艋舟长约7米」），否则首帧比例漂移。"
+            )
+    return out
+
+
+def _check_ff_desc_anchors(shots: list[dict], hook: dict = None,
+                           characters: list | None = None) -> dict:
+    """Plan A（2026-08-14）：ff_desc 全锚点检查（warning-only）.
+
+    只查 ff_desc——真正的图片输入——而非 prompt/motion（prompt 有锚但 ff_desc
+    缺 = 首帧仍漂，正是 hook 手改教训）。四类锚点见函数头注释。
+    """
+    issues, warnings = [], []
+    labels = [(s, f"镜头{s.get('index', '?')}") for s in shots]
+    if hook and isinstance(hook, dict):
+        labels.append((hook, "钩子镜头(index=0)"))
+
+    known_chars = {c.get("identifier") for c in (characters or []) if c.get("identifier")}
+    char_dress = {c.get("identifier"): c.get("dynamic_features", "")
+                  for c in (characters or []) if c.get("identifier")}
+
+    for shot, label in labels:
+        ff = (shot.get("ff_desc") or "").strip()
+        if not ff:
+            continue
+
+        # --- A. 威胁源朝向锚（规则41，查 ff_desc 而非 prompt） ---
+        if any(w in ff for w in _THREAT_WORDS):
+            has_facing = any(k in ff for k in (
+                "朝画", "面向", "面朝", "朝向", "侧身", "紧盯画", "盯向画",
+                "望画", "望向", "逼近", "逼近画", "刀尖对准", "正对目标",
+                "对准画", "指向画",
+            ))
+            if not has_facing:
+                warnings.append(
+                    f"{label}: ff_desc 出现威胁源（刺客/黑影等）但无朝向/目标锚定"
+                    f"（规则41）——ff_desc 是图片输入，威胁源必须写明「侧身朝画X/刀尖"
+                    f"对准[目标]/目光望向画X的[角色]」，否则模型画成背对目标或正对镜头。"
+                )
+
+        # --- B. 视线-威胁方位矛盾（规则41，ff_desc 内） ---
+        gm = _THREAT_GAZE_RE.search(ff)
+        if gm:
+            seg = gm.group()
+            gaze_dir = next((d for d in ("画左", "画右") if d in seg), None)
+            if gaze_dir:
+                threat_dir = next(
+                    (d for d in ("画左", "画右")
+                     if d in ff and d != gaze_dir and any(t in ff for t in _THREAT_WORDS)),
+                    None,
+                )
+                if threat_dir:
+                    warnings.append(
+                        f"{label}: ff_desc 视线-威胁方位矛盾——「{seg[:26]}」视线指"
+                        f"{gaze_dir}，但威胁源方位写{threat_dir}（规则41）。威胁源必须与"
+                        f"发现者视线同向摆放，否则发现者看到的不是威胁。"
+                    )
+
+        # --- D. 出镜角色服装色重述（规则13.7，逐镜聚合防刷屏） ---
+        onstage = [c for c in known_chars if c and c in ff]
+        missing_dress = []
+        for c in onstage:
+            dyn = char_dress.get(c, "") or ""
+            colors, garments = _extract_dress_tokens(dyn)
+            if not colors and not garments:
+                continue  # 角色无衣着描述（如刺客「浑身湿透」），无法锚定，跳过
+            if not (any(x in ff for x in colors) or any(x in ff for x in garments)):
+                hint = (colors or garments)[0]
+                missing_dress.append(f"{c}({hint})")
+        if missing_dress:
+            warnings.append(
+                f"{label}: ff_desc 未重述出镜角色关键服装色 {missing_dress}"
+                f"（规则13.7 防漂色）——ff_desc 不重述时衣服色只靠肖像软锚，重渲必漂。"
+            )
+
+    # --- C. 场景物体首现镜尺寸锚（规则25，需 objects_bank） ---
+    warnings.extend(_check_size_anchor_warnings(shots, hook))
+
+    for w in warnings:
+        print(f"[CHECK] ff描述锚点: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+# ========================================================================
 # v6.29 新增：keyframes 简略检查（08-10 hook 关键帧质量）
 #
 # 背景：hook 关键帧「刺客破水而出」被图片模型画成无刺客/听香站水面（船断）/
@@ -4406,9 +4604,11 @@ _KF_VALIDATION_POS_WORDS = (
 _KF_VALIDATION_THREAT_WORDS = (
     "刺客", "杀手", "黑衣人", "黑影", "神秘人", "蒙面人", "潜伏", "埋伏", "伏击",
 )
-# 威胁源朝向表达
+# 威胁源朝向表达（Plan A 2026-08-14：补「正对/对准/刀尖朝/刺向」——武器指向目标
+# 也是朝向锚，如「刀尖朝下正对杨旭心口」，此前漏检误报）
 _KF_VALIDATION_ORIENT_WORDS = (
     "面向", "朝向", "侧身", "紧盯", "盯向", "望向", "朝画", "逼近",
+    "正对", "对准", "刀尖朝", "刺向", "直刺", "劈落",
 )
 
 
@@ -4447,9 +4647,13 @@ def _check_keyframes_quality(shots: list[dict], hook: dict = None) -> dict:
             # 2. 威胁源朝向：desc 含威胁词而缺朝向表达 → 提示
             has_threat = any(w in desc for w in _KF_VALIDATION_THREAT_WORDS)
             has_orient = any(w in desc for w in _KF_VALIDATION_ORIENT_WORDS)
+            # Plan A（2026-08-14）：威胁已没入/消失/不见踪影时免朝向——没入水下的
+            # 刺客无需朝向目标（如后果帧「刺客已没入画左水下、水面浪花翻涌」），
+            # 免误报（规则41 只要求可画的潜伏威胁朝向目标）。
+            threat_gone = any(g in desc for g in ("已没入", "没入水中", "没入水下", "消失", "不见踪影"))
             if not has_pose or not has_pos:
                 missing_anchor.append((label, tr, desc[:36]))
-            if has_threat and not has_orient:
+            if has_threat and not has_orient and not threat_gone:
                 missing_orient.append((label, tr))
     if empty_kf:
         warnings.append(
