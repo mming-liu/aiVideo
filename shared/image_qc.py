@@ -211,6 +211,14 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
         "判定规则：",
         "- 物理逻辑错误（漂浮/穿透/半透明/融合）或关键人物缺失或空镜出现人物 → critical",
         "- prompt_semantics 语义偏差（发色/朝向/手持物不符）→ warning，不升级 critical",
+    ])
+    # P4 修复：关键锚点（服装色/人物数量/威胁源状态）不符按配置升级严重度。
+    # QC_SEMANTICS_CRITICAL=1 → critical（删帧重生成，当场拦住）；默认 warning（只记录）。
+    if os.getenv("QC_SEMANTICS_CRITICAL", "0") == "1":
+        lines.append("- **关键锚点**（服装颜色、人物数量、威胁源状态如刺客是否出水）与「画面描述」明显不符 → critical（会删帧重生成）")
+    else:
+        lines.append("- **关键锚点**（服装颜色、人物数量、威胁源状态如刺客是否出水）与「画面描述」明显不符 → warning（设 QC_SEMANTICS_CRITICAL=1 可升级 critical 删帧重生成）")
+    lines.extend([
         "- 轻微瑕疵（背景小物、风格笔触、留白、水墨晕染）→ 不算问题，不得误判",
         "- 该作品是古风水墨风格，水墨、留白、笔触、墨晕均属正常艺术风格",
         "",
@@ -461,7 +469,9 @@ def qc_image(frame_path: str | Path, prompt: str | None = None,
         return QcResult(has_hallucination=False, issues=[], ok=False,
                         raw_result="", error=f"图片不存在: {frame}")
 
-    if prompt is None:
+    # P4 修复：空串/纯空白也算「未提供」——否则视觉模型拿到空的「画面描述」，
+    # prompt_semantics 必然全过（sidecar clean 实为「没查」而非「没问题」）。
+    if not (prompt and prompt.strip()):
         prompt = build_qc_prompt(shot or {}, frame_kind, characters, empty_scene)
 
     try:

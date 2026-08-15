@@ -133,7 +133,7 @@ TOKEN_PLAN_BASE_URL = os.getenv(
 )
 
 # 文生图模型 (qwen-image)
-BAILIAN_T2I_MODEL = os.getenv("BAILIAN_T2I_MODEL", "qwen-image-2.0-pro-2026-04-22")
+BAILIAN_T2I_MODEL = os.getenv("BAILIAN_T2I_MODEL", "qwen-image-3.0-pro")
 # 文生视频模型 (wan2.7-t2v)
 BAILIAN_T2V_MODEL = os.getenv("BAILIAN_T2V_MODEL", "wan2.7-t2v-2026-06-12")
 # 图生视频模型 (wan2.7-i2v / happyhorse-i2v)

@@ -15,6 +15,7 @@ POST {AGNES_BASE_URL}/v1/images/generations，OpenAI images generations 格式.
 
 import base64
 import os
+import re
 import time
 from typing import Optional
 
@@ -333,11 +334,17 @@ class AgnesImageService(ImageGenerationService):
                             save_path = req.save_path
                             os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
                         else:
-                            # 首帧/尾帧用前缀区分（避免尾帧覆盖首帧的 shot_N.png）
-                            fname_prefix = {
-                                "首帧": "ff",
-                                "尾帧": "lf",
-                            }.get(frame_label, "kf")
+                            # 首帧/尾帧用前缀区分（避免尾帧覆盖首帧的 shot_N.png）；
+                            # 关键帧带序号（frame_desc 由 bridge 传「关键帧{i}」），
+                            # 防多个中间帧同名互相覆盖（P5 关键帧 2→1）
+                            kf_m = re.match(r"^关键帧(\d+)", frame_label or "")
+                            if kf_m:
+                                fname_prefix = f"kf_{kf_m.group(1)}"
+                            else:
+                                fname_prefix = {
+                                    "首帧": "ff",
+                                    "尾帧": "lf",
+                                }.get(frame_label, "kf")
                             save_path = os.path.join(
                                 config.OUTPUT_DIR, f"shot_{req.shot_index}_{fname_prefix}.png"
                             )

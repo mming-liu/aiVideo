@@ -1423,6 +1423,20 @@ def _inject_object_size_anchor(shot: dict, text: str) -> str:
         return text
 
 
+def _inject_tone_anchor(shot: dict, text: str) -> str:
+    """把镜头色调锚点（color_tone：夜景冷蓝/暖金烛光等）注入帧 prompt.
+
+    图片模型对「夜色中」这类弱词不敏感，容易自造色调导致前后镜头漂色
+    （08-15 hook 验证：加「冷蓝色调夜景」后风格稳定）。shot.color_tone
+    由 LLM 按场景生成（如「冷月清辉，深蓝夜色」），但此前从未进入图片
+    prompt，这里追加到帧 prompt，让每镜色调一致。
+    """
+    tone = (shot.get("color_tone") or "").strip()
+    if not tone or tone in text:
+        return text
+    return f"{text}。场景色调：{tone}"
+
+
 # ============================================================================
 # 角色姿态/位置/朝向锚定块（代码级兜底，关键帧/首帧共用）
 #
@@ -1998,6 +2012,7 @@ def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
         if frame_kind == "last_frame":
             text = fix_lf_desc_gaze(text, shot, characters)
         text = _inject_object_size_anchor(shot, text)
+        text = _inject_tone_anchor(shot, text)
         text = sanitize_prompt(ensure_prefix(text, STYLE_PREFIX), verbose=False)
         text = add_image_strict_constraints(text, "首帧" if frame_kind == "first_frame" else "尾帧", shot=shot, characters=characters)
         return text
@@ -2118,6 +2133,8 @@ async def _gen_first_frame_async(
         ff_desc = _inject_character_costume(ff_desc, characters, shot, frame_kind="first_frame")
         # 场景物体尺寸锚定注入（船/车等物体比例防漂移，code-audit 08-06 钩子船太小）
         ff_desc = _inject_object_size_anchor(shot, ff_desc)
+        # 场景色调锚定注入（color_tone：夜景冷蓝/暖金烛光等，防模型自造色调漂色）
+        ff_desc = _inject_tone_anchor(shot, ff_desc)
         # 角色姿态/位置/朝向锚定块（代码级兜底——首帧若 LLM 漏写刺客朝向/角色姿态，
         # 从 shot 全文提取补上；water_state=False 首帧是动作前一刻，不补船/水面状态）
         ff_anchor = _extract_char_layout(shot, characters,
@@ -2292,6 +2309,8 @@ async def _gen_last_frame_async(
         lf_desc = fix_lf_desc_gaze(lf_desc, shot, characters)
         # 场景物体尺寸锚定注入（船/车等物体比例防漂移）
         lf_desc = _inject_object_size_anchor(shot, lf_desc)
+        # 场景色调锚定注入（color_tone：夜景冷蓝/暖金烛光等，防模型自造色调漂色）
+        lf_desc = _inject_tone_anchor(shot, lf_desc)
         # 角色姿态/位置/朝向锚定块（代码级兜底——lf_desc 是动作结果态，从 shot
         # 全文提取出镜角色的终态姿态/位置，防"浪花消失/角色站位漂移"；
         # water_state=True 尾帧也补船完整+水面状态）
@@ -2501,6 +2520,8 @@ async def _gen_keyframes_async(
             # 船/车等空间物体尺寸锚定（防关键帧船画小/画断——08-10 hook keyframe_0
             # 船少一截导致听香站水面）
             kf_desc = _inject_object_size_anchor(shot, kf_desc)
+            # 场景色调锚定注入（color_tone：夜景冷蓝/暖金烛光等，防模型自造色调漂色）
+            kf_desc = _inject_tone_anchor(shot, kf_desc)
             # 角色姿态/位置/朝向锚定块（代码级兜底——kf_desc 常只一行动作描述，
             # 从 shot 全文提取出镜角色的姿态/位置/朝向，防"杨旭站立后倒/听香撑伞/
             # 刺客消失/船断"（code-audit 08-10 hook 关键帧质量）。首帧也注入。
@@ -2525,7 +2546,7 @@ async def _gen_keyframes_async(
                     prompt=kf_desc_full,
                     reference_image_paths=refs,
                     shot_index=idx,
-                    frame_desc=f"中间关键帧(t={time_ratio:.1f})",
+                    frame_desc=f"关键帧{i}(t={time_ratio:.1f})",
                     # 关键帧：解除"场景布局不变"锁，允许构图随动作演变
                     lock_prompt=IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT,
                     force_multi_ref=True,

@@ -15,22 +15,23 @@
 - **待办方向**（用户定夺）：①简化 hook 首帧构图降载（纯水下黑影不要刀尖/删一件道具）；②hook 帧换 wan2.7-image-pro（官方标注复杂指令遵循更强）；③修 QC 让它当场拦住（见 P4）。
 - **教训**：ff_desc 锚点写得再全，也要在「模型画得出」的复杂度内——锚点系统是上限放大器，不是模型能力替代品。
 
-### P4. 图片 QC 的 prompt_semantics 失效（08-14）
+### P4. 图片 QC 的 prompt_semantics 失效（08-14 → 08-15 修复）
 - **现象**：hook 4 帧 sidecar 全部 `has_hallucination:false, issues:[]`，但图明显不符 prompt（刺客出水/站水面/蓝光/姿势错）。QC 宣称做了「画面 vs 最终 prompt 语义核对」却全放过。
-- **根因**：待查。两个候选：①QC prompt 可能拿到空串（`ff_desc_final` 未持久化时 `prompt=""` 非 None → 不触发 `build_qc_prompt` 兜底 → 视觉模型无描述可比 → 必然 clean）；②ds-vision 视觉模型对「复杂单帧 vs 稠密 prompt」的语义偏差判定过宽松（「与描述明显不符才算问题」）。
-- **待办**：查 `_post_qc`/`maybe_qc_sync` 的 prompt 传递链，确认是否空串；补「关键锚点（服装色/威胁源状态/人物数量）不符 → 至少 warning、可配升级 critical」。
+- **根因**：①传递链终点 `qc_image` 只认 `prompt is None`——空串/纯空白不触发 `build_qc_prompt` 兜底，视觉模型拿到空的「画面描述」无物可比 → 必然 clean（sidecar clean 实为「没查」）；②判定规则只给 warning、无关键锚点升级通道。
+- **解决（08-15）**：`shared/image_qc.py` `qc_image` 改 `not (prompt and prompt.strip())` 才走兜底；`build_qc_prompt` 增关键锚点（服装色/人物数量/威胁源状态）严重度规则，`QC_SEMANTICS_CRITICAL=1` 升级 critical（删帧重生成，当场拦住），默认 warning。
 - **教训**：QC 说 clean ≠ 图对。sidecar 的 `issues:[]` 在 QC prompt 无效时是「没查」而非「没问题」。
 
-### P5. 关键帧数量 2→1（08-14）
+### P5. 关键帧数量 2→1（08-14 → 08-15 修复）
 - **现象**：hook 的 script 有 keyframes×2（ratio 0.4/0.8），但 `images/` 只产出 1 张 `shot_0_kf.png`（`vimax_working/shots/0/` 有 keyframe_0/1）。
-- **根因**：待查（step02a 拷贝到 images/ 的逻辑？还是只看中间帧？）。
-- **待办**：查 keyframe 落盘/拷贝路径。
+- **根因**：provider `_download` 的 fname_prefix 对**所有**关键帧统一取 `"kf"`（只有首帧/尾帧区分 ff/lf）→ 多个中间帧写同名 `shot_N_kf.png` 互相覆盖，只留最后一张。
+- **解决（08-15）**：bridge 传 `frame_desc="关键帧{i}(t=...)"`，两个 provider（bailian/agnes）解析序号 → `shot_N_kf_0.png` / `shot_N_kf_1.png`。
+- **教训**：provider 落盘命名与 bridge 帧类型脱钩时，同名覆盖是最隐蔽的数据丢失——命名必须携带唯一标识（帧类型+序号）。
 
-### P6. 主角后镜省略服装色（08-14）
+### P6. 主角后镜省略服装色（08-14 → 08-15 修复）
 - **现象**：规则 13.7 提升最高优先级后，主分镜服装色告警 24→10；剩 10 条（镜头 14-23）全为**主角杨旭**后镜省略——「杨旭仰卧船头，心口暗红洇痕」没写「素白轻袍」，而张十三/听香都重述了。
 - **根因**：LLM 把主角当「已出场/已建立」，后镜不再重述；13.7 对 shots 的约束力仍弱于 hook（hook 是独立模板突出条目）。
 - **影响**：渲染期 `_inject_character_costume` 已注入服装色兜底（实际渲出有）；ff_desc 自足性待收敛。
-- **待办**：下一轮 regen feedback 收敛，或规则补「主角/已出场角色后镜也必须重述」。
+- **解决（08-15）**：规则 13.7 补「主角/已出场角色后镜也必须重述——禁止以『前镜已述/主角已建立』为由省略，主角与配角一视同仁」；待下一轮 step01 regen 验证收敛。
 
 ---
 

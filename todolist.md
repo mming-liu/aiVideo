@@ -12,28 +12,36 @@
 - 渲一次 hook 首帧（step02a `--shots 0`）→ 人工验收（不再反复手改）。
 - **注意**：当前 hook 首帧/尾帧已渲染（08-14 22:50-22:53），但**图片模型不忠实渲染锚点**（见 #2）——
   图是「刺客出水举蓝光匕首」，prompt 是「潜伏水下刀尖微露」。验收前需先解决 #2。
+- **08-15 进展**：qwen-image-3.0-pro 直测已验收（钩子「水下黑影+刀尖微露」忠实渲染、船体比例修复）；
+  模型全局切换 + 色调锚（color_tone 注入）+ 空间充裕锚规则已落地，可重渲 step02a `--shots 0` 验收。
 
 ### 2. 图片模型不忠实渲染 ff_desc 锚点 🔴
 - **问题**（详见 problems.md P3）：最终 prompt 带全部锚点（含「刺客尚未出水/刀尖微露」），
   wan2.7-image 却画成刺客出水举刀 + 蓝光匕首幻觉；尾帧「已没入水中」画成「站水面」。
+- **08-15 已修复**：
+  - [x] 图片模型切换 `qwen-image-3.0-pro`（全局，`.env.content` BAILIAN_T2I_MODEL + BAILIAN_IMAGE_RPM=1 预限速，403 回退 wan2.7-image → wan2.7-image-pro）——08-15 钩子直测验收通过
+  - [x] 色调锚：`shared/vimax_bridge.py` 新增 `_inject_tone_anchor`，首帧/尾帧/关键帧/QC 核对 prompt 统一注入 `color_tone`
+  - [x] 空间充裕锚：`step01_script_gen/prompts.py` HOOK_PROMPT_TEMPLATE 增「物体上有人物须写容纳性（船身宽大/空间充裕）」+「ff_desc 色调重述」规则
 - **待办方向**（用户定夺）：
-  - [ ] 简化 hook 首帧构图降载（纯水下黑影不要「刀尖微露」/删一件道具）
-  - [ ] hook 帧换 `wan2.7-image-pro`（复杂指令遵循更强）
+  - [ ] 简化 hook 首帧构图降载（纯水下黑影不要「刀尖微露」/删一件道具）——已验证 qwen-3.0-pro 可忠实渲染，暂不需要
   - [ ] 修 QC（见 #3）让「画不对」当场拦住
 
 ### 3. 图片 QC 的 prompt_semantics 失效 🔴
 - **问题**（详见 problems.md P4）：图明显不符但 sidecar 全 clean。
-- **待办**：
-  - [ ] 查 `_post_qc`/`maybe_qc_sync` prompt 传递链是否空串（`ff_desc_final` 未持久化时 `prompt=""` 非 None → 不触发 `build_qc_prompt` 兜底）
-  - [ ] 关键锚点（服装色/威胁源状态/人物数量）不符 → 至少 warning、可配升级 critical
+- **08-15 已修复**：
+  - [x] `shared/image_qc.py` `qc_image` 空串/纯空白也触发 `build_qc_prompt` 兜底（`not (prompt and prompt.strip())`）
+  - [x] 关键锚点（服装色/人物数量/威胁源状态）不符 → warning；`QC_SEMANTICS_CRITICAL=1` 可升级 critical 删帧重生成
 
 ### 4. 关键帧数量 2→1 🟡
 - script 有 keyframes×2（0.4/0.8），`images/` 只产出 1 张 `shot_0_kf.png`。
-- **待办**：查 step02a 关键帧落盘/拷贝到 images/ 的逻辑。
+- **08-15 已修复**：根因=provider `_download` 所有关键帧共用 `kf` 前缀同名覆盖；
+  bridge 传 `frame_desc="关键帧{i}"` + 两 provider 解析序号 → `shot_N_kf_0.png`/`shot_N_kf_1.png`。
 
 ### 5. 主角后镜省略服装色（⏳ 收敛中）
 - 规则 13.7 提升后 24→10；剩 10 条（镜头 14-23）全为**杨旭**后镜省略服装色。
-- 渲染期 `_inject_character_costume` 已兜底；待 regen feedback 收敛或规则补「主角后镜也必须重述」。
+- 渲染期 `_inject_character_costume` 已兜底。
+- **08-15**：13.7 规则已补「主角/已出场角色后镜也必须重述（禁止『前镜已述』省略）」；
+  待下一轮 step01 regen 验证收敛。
 
 ## 🟡 待决策
 
