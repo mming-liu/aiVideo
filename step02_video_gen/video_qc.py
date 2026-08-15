@@ -16,8 +16,17 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-# 视频抽帧时机（视频时长比例）：中段帧最能反映内容质量（开头/结尾易黑场/淡出）
+# 视频抽帧时机（视频时长比例）：中段帧最能反映内容质量（开头/结尾易黑场/淡出）。
+# v6.35（08-15）：首/中/尾三帧——单帧只查中段漏检开头黑场/结尾黑场淡出/人物
+# 中段消失。三帧任一检出 critical 即判坏（重生成）。
 _MID_FRAME_RATIO = 0.5
+_START_FRAME_RATIO = 0.12
+_END_FRAME_RATIO = 0.88
+_FRAME_RATIOS = (
+    ("start", _START_FRAME_RATIO),
+    ("mid", _MID_FRAME_RATIO),
+    ("end", _END_FRAME_RATIO),
+)
 
 
 def _find_ffmpeg() -> str | None:
@@ -35,8 +44,8 @@ def _find_ffmpeg() -> str | None:
     return None
 
 
-def _extract_mid_frame(video_path: Path, out_dir: Path) -> Path | None:
-    """用 ffmpeg 抽取视频中段单帧到 out_dir，返回帧路径（失败 None）."""
+def _extract_frame(video_path: Path, out_dir: Path, ratio: float, tag: str) -> Path | None:
+    """用 ffmpeg 抽取视频 ratio 时刻单帧到 out_dir，返回帧路径（失败 None）."""
     try:
         from step04_merge.stretch import get_media_duration
         ffmpeg = _find_ffmpeg()
@@ -45,8 +54,8 @@ def _extract_mid_frame(video_path: Path, out_dir: Path) -> Path | None:
         dur = get_media_duration(video_path)
         if dur <= 0:
             return None
-        t = dur * _MID_FRAME_RATIO
-        frame = out_dir / f"qc_frame_{video_path.stem}.png"
+        t = max(0.0, min(dur - 0.05, dur * ratio))
+        frame = out_dir / f"qc_{tag}_{video_path.stem}.png"
         cmd = [
             ffmpeg, "-y", "-v", "error",
             "-ss", f"{t:.2f}", "-i", str(video_path),
@@ -61,7 +70,7 @@ def _extract_mid_frame(video_path: Path, out_dir: Path) -> Path | None:
 
 
 def qc_video_file(video_path: Path, shot_idx: int) -> bool:
-    """对视频文件做视觉质检.
+    """对视频文件做视觉质检（v6.35：首/中/尾三帧）.
 
     Returns:
         bool: True = 检出 critical 问题（应重生成）；False = 无问题/软失败。
@@ -70,22 +79,29 @@ def qc_video_file(video_path: Path, shot_idx: int) -> bool:
         from shared.image_qc import qc_image
         from shared.paths import chapter_dir
         with tempfile.TemporaryDirectory(dir=str(chapter_dir() / "vimax_working")) as td:
-            frame = _extract_mid_frame(video_path, Path(td))
-            if frame is None:
-                return False  # 抽帧失败，软失败不误杀
-            result = qc_image(
-                frame,
-                shot={"index": shot_idx, "scene": "视频中段", "main_subject": ""},
-                frame_kind="first_frame",
-                characters=[],
-                empty_scene=False,
-            )
-            if not result.ok:
-                return False  # 质检本身失败，软失败
-            if result.has_hallucination and any(
-                getattr(i, "severity", "") == "critical" for i in result.issues
-            ):
-                return True  # critical 问题 → 重生成
+            frames = [
+                (tag, _extract_frame(video_path, Path(td), ratio, tag))
+                for tag, ratio in _FRAME_RATIOS
+            ]
+            frames = [(t, f) for t, f in frames if f is not None]
+            if not frames:
+                return False  # 抽帧全部失败，软失败不误杀
+
+            # 三帧任一检出 critical 问题 → 重生成（首尾帧防黑场/淡出吞画面）
+            for tag, frame in frames:
+                result = qc_image(
+                    frame,
+                    shot={"index": shot_idx, "scene": f"视频{tag}段", "main_subject": ""},
+                    frame_kind="first_frame",
+                    characters=[],
+                    empty_scene=False,
+                )
+                if not result.ok:
+                    continue  # 质检本身失败，软失败（该帧跳过，不误杀）
+                if result.has_hallucination and any(
+                    getattr(i, "severity", "") == "critical" for i in result.issues
+                ):
+                    return True  # critical 问题 → 重生成
             return False
     except Exception:
         return False

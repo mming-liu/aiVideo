@@ -56,6 +56,10 @@ GAP_MAX_REGEN_ATTEMPTS = int(os.getenv("GAP_MAX_REGEN_ATTEMPTS", "2"))
 # 追加到 prompt 重新生成一次，防止 LLM 输出 32+ 镜拖垮下游（视频生成成本/时长翻倍）。
 # 仍是软收敛：重生成失败或仍超限则保留原版，不中断流水线。
 SHOT_COUNT_REGEN_ENABLED = os.getenv("SHOT_COUNT_REGEN_ENABLED", "1").strip() == "1"
+# v6.35（08-15，P18 闭环）：GAP 通过后高价值告警（开篇冲突/爆点密度/威胁源朝向/
+# 关键帧质量/内容密度）触发「定向修复轮」——只重写告警镜头，不重生成全脚本。
+# 有界：最多 REPAIR_MAX_ROUNDS 轮，每轮最多修 6 镜；失败/无告警即停。
+REPAIR_ROUNDS_ENABLED = os.getenv("REPAIR_ROUNDS_ENABLED", "1").strip() == "1"
 # CLAUDE.md 记载默认 50000，由 chapter_reader 读取（shared/chapter_reader.py）
 PROMPT_MAX_CHARS = int(os.getenv("PROMPT_MAX_CHARS", "50000"))
 

@@ -35,6 +35,7 @@ from shared.config import (
     HOOK_ENABLED,
     GAP_ANALYSIS_ENABLED, GAP_MAX_REGEN_ATTEMPTS,
     SHOT_COUNT_REGEN_ENABLED,
+    REPAIR_ROUNDS_ENABLED,
 )
 
 # v6.23：大纲两阶段开关（ShortVideoDirector director-outline 吸收，默认开启）
@@ -100,7 +101,7 @@ from step01_script_gen.prompts import (
 from step01_script_gen.character_extractor import extract_characters
 from step01_script_gen.object_extractor import extract_scene_objects
 from step01_script_gen.asset_extractor import extract_scene_assets, extract_props
-from step01_script_gen.validation import parse_response, build_regen_feedback
+from step01_script_gen.validation import parse_response, build_regen_feedback, _set_novel_text, _run_prompt_checklist
 from step01_script_gen.timecode import _compute_timecodes
 from step01_script_gen.hash_cache import _prompt_changed, _hash_source
 from step01_script_gen.gap_analysis import validate_script_gap, generate_gap_report, print_gap_report
@@ -395,6 +396,171 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         _logger.warn(
             f"[COUNT] 重试 {max_attempts} 次后镜头数仍超上限，保留当前版本继续流水线"
         )
+    return script
+
+
+# 定向修复轮：GAP 通过后仍存在的高价值告警（开篇冲突/爆点密度/威胁源朝向/
+# 关键帧质量/内容密度），只把「告警镜头 + 告警文本」发给 LLM 做单镜修复，
+# 比全脚本重生成便宜、且不破坏已通过的镜头。P18（08-15）核心闭环。
+_REPAIR_PRIORITY_CATEGORIES = (
+    "opening_hook", "punch_density", "ff_desc_anchors", "keyframes_quality",
+    "content_density", "threat_gaze_coupling", "ff_motion_timeline",
+    "prop_spatial_anchor", "shot_transition", "action_overlap",
+)
+_REPAIR_MAX_ROUNDS = 2
+
+
+def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
+    """重跑 checklist，收集高价值告警，按镜头聚合.
+
+    Returns: {shot_index_or_"hook": [(category_label, warning_text), ...]}
+    """
+    try:
+        if novel_text:
+            _set_novel_text(novel_text)
+        import io as _io
+        import contextlib as _ctx
+        _buf = _io.StringIO()
+        with _ctx.redirect_stdout(_buf):
+            results = _run_prompt_checklist(script).get("results", {})
+    except Exception as _e:
+        import traceback
+        _logger.warn(f"[WARN] 定向修复收集告警异常: {_e}")
+        traceback.print_exc()
+        return {}
+    from step01_script_gen.validation import _REGEN_FEEDBACK_LABELS
+    per_shot: dict = {}
+    for key, res in results.items():
+        if key not in _REPAIR_PRIORITY_CATEGORIES or not isinstance(res, dict):
+            continue
+        warns = list(res.get("warnings") or []) + list(res.get("issues") or [])
+        if not warns:
+            continue
+        label = _REGEN_FEEDBACK_LABELS.get(key, key)
+        import re as _re
+        for w in warns:
+            m = _re.match(r"镜头([\d]+)", w)
+            tid = f"shot_{m.group(1)}" if m else ("hook" if "钩子" in w else "global")
+            per_shot.setdefault(tid, []).append(f"[{label}] {w.strip()}")
+    return per_shot
+
+
+def _repair_shot_warnings(script: dict, novel_text: str,
+                          bank=None, objects_bank=None) -> dict:
+    """定向修复轮（v6.35，P18 闭环核心）。
+
+    GAP 通过后仍有高价值告警 → 只重写告警镜头的相关字段，重新校验，收敛即停。
+    全脚本重生成会把没问题的镜头也重画一遍（白烧额度 + 引入新随机）；
+    单镜修复只动有问题的地方，且每次轮次只挑「最值得修」的镜头（防 prompt 爆炸）。
+
+    Returns:
+        修复后的 script（任一轮失败/无告警则原样返回）。
+    """
+    for _round in range(1, _REPAIR_MAX_ROUNDS + 1):
+        per_shot = _collect_repair_warnings(script, novel_text)
+        # 过滤结构性全局告警（无法单镜修复的），只留镜头级
+        shot_items = {k: v for k, v in per_shot.items() if k.startswith("shot_") or k == "hook"}
+        if not shot_items:
+            return script
+        # 每轮最多修 6 个镜头（防 prompt 膨胀）；按告警数降序
+        import itertools
+        picked = dict(itertools.islice(
+            sorted(shot_items.items(), key=lambda kv: -len(kv[1])), 6))
+        if not picked:
+            return script
+
+        # 构建单镜修复 prompt：只带被选镜头原文 + 告警
+        shots_by_id = {f"shot_{s.get('index')}": s for s in script.get("shots", [])}
+        if "hook" in picked and script.get("hook"):
+            shots_by_id["hook"] = script["hook"]
+
+        _console(f"  [修复轮{_round}] {len(picked)} 镜待修（{', '.join(picked)}）...")
+        parts = []
+        # 结构性全局告警（开篇冲突/爆点密度）没有对应镜头，作为修复前言注入
+        global_warns = per_shot.get("global") or []
+        if global_warns:
+            parts.append("### 全片结构问题（涉及前1/3段节奏）\n"
+                         + "\n".join(f"  - {w}" for w in global_warns)
+                         + "\n请通过调整前1/3段镜头顺序/精简铺垫/强化首镜冲突来修复（不要删关键剧情节点）。")
+        for tid, warns in picked.items():
+            if tid == "global":
+                continue
+            s = shots_by_id.get(tid)
+            if not s:
+                continue
+            parts.append(f"### 待修镜头 {tid}\n"
+                         f"当前 ff_desc: {s.get('ff_desc', '')}\n"
+                         f"当前 lf_desc: {s.get('lf_desc', '')}\n"
+                         f"当前 prompt: {s.get('prompt', '')}\n"
+                         f"当前 color_tone: {s.get('color_tone', '')}\n"
+                         f"问题:\n" + "\n".join(f"  - {w}" for w in warns))
+        if not parts:
+            return script
+
+        repair_prompt = (
+            "\n\n# 定向修复（来自本地校验）\n"
+            "以下是部分分镜的问题清单。请**只修复这些问题涉及的镜头**，"
+            "输出完整修正后的分镜 JSON（保留全部镜头结构与未提及字段，"
+            "不要改动没有问题的镜头，不要增删镜头）。修复要点：\n"
+            "1. 开篇冲突/爆点密度：前1/3段补冲突或提前爆点（可微调镜头顺序/精简铺垫/强化首镜冲突）\n"
+            "2. ff/lf_desc 锚点：威胁源写朝向/目标、出镜角色重述服装色\n"
+            "3. keyframes desc：补角色姿态/位置锚定\n"
+            "4. 内容密度过载：精简动作或拆镜\n"
+            "5. 保持原文锚定（narration_segment 逐字来自原文）、服装色、致命伤连续性不变\n"
+            + "\n".join(parts)
+        )
+
+        prompt = build_prompt(novel_text, bank, objects_bank)
+        prompt = prompt + repair_prompt
+
+        service = create_service()
+        from _text_gen.deepseek_schema import SCRIPT_SCHEMA
+        req = TextGenerationRequest(
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=prompt,
+            max_tokens=40000,
+            temperature=0.2,
+            json_schema=SCRIPT_SCHEMA,
+        )
+        try:
+            result = service.generate(req)
+        except Exception as e:
+            _logger.warn(f"[WARN] 定向修复失败（保留原版）: {e}")
+            break
+        if not result.success:
+            _logger.warn(f"[WARN] 定向修复失败（保留原版）: {result.error}")
+            break
+
+        import re as _re
+        raw = result.text.strip()
+        raw = _re.sub(r"^```json\s*", "", raw, flags=_re.MULTILINE)
+        raw = _re.sub(r"^```\s*", "", raw, flags=_re.MULTILINE)
+        raw = _re.sub(r"```\s*$", "", raw, flags=_re.MULTILINE)
+        try:
+            new_script = parse_response(raw, novel_text=novel_text)
+        except (ValueError, json.JSONDecodeError) as e:
+            _logger.warn(f"[WARN] 定向修复 JSON 解析失败（保留原版）: {e}")
+            break
+
+        if not new_script.get("shots"):
+            _logger.warn("[WARN] 定向修复返回空 shots，保留原版")
+            break
+
+        # 只采纳修复过的镜头，其余镜头保持原样（合并回 script）
+        merged = dict(script)
+        merged["shots"] = []
+        for old_s in script.get("shots", []):
+            new_s = next((n for n in new_script.get("shots", [])
+                          if n.get("index") == old_s.get("index")), None)
+            merged["shots"].append(new_s if new_s else old_s)
+        if "hook" in picked and new_script.get("hook"):
+            merged["hook"] = new_script["hook"]
+        # 修复后需重新算时间轴/注入全局渲染参数
+        from shared.vimax_bridge import inject_global_config_into_script as _inj
+        _inj(merged)
+        _compute_timecodes(merged)
+        script = merged
+        _logger.info(f"[REPAIR] 第 {_round} 轮定向修复完成，重新校验...")
     return script
 
 
@@ -697,6 +863,15 @@ def main() -> None:
     # v6.7: 镜头数严重超限时收敛重生成（独立于 gap_analysis，默认开启）
     if SHOT_COUNT_REGEN_ENABLED:
         script = _regen_over_limit(
+            script, novel_text,
+            bank=character_bank, objects_bank=scene_objects_bank,
+        )
+
+    # v6.35（08-15，P18 闭环）：GAP 通过后仍存在的高价值告警（开篇冲突/
+    # 爆点密度/威胁源朝向/关键帧质量/内容密度等）→ 定向修复轮，只重写
+    # 告警镜头（此前这些 WARN 纯打印落盘，无人修，带伤进 step02）。
+    if REPAIR_ROUNDS_ENABLED:
+        script = _repair_shot_warnings(
             script, novel_text,
             bank=character_bank, objects_bank=scene_objects_bank,
         )

@@ -973,6 +973,17 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         if ref_list:
             full_prompt = full_prompt + "\n\n" + ref_list
 
+    # v6.35（08-15，P18 遗留）：固定 seed——由镜头序号 + prompt 哈希派生。
+    # 此前 seed 恒 None → 每次提交纯抽卡：QC 判坏后重提交拿到全新随机结果，
+    # 好坏反复横跳，同一镜头 A/B 测试 prompt 改进也无法对照。固定 seed 后
+    # 同 prompt 同参考重提交结果可复现（wan2.7 文档支持 seed）。
+    try:
+        import hashlib as _hl
+        _seed_src = f"{shot.get('index', 0)}|{shot.get('ff_desc', '')}|{shot.get('lf_desc', '')}|{prompt}"
+        _seed = int(_hl.md5(_seed_src.encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
+    except Exception:
+        _seed = None
+
     return VideoGenerationRequest(
         prompt=full_prompt,
         clip_index=shot["index"],
@@ -983,6 +994,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         last_frame_image_path=last_frame_image_path,
         extra_keyframe_paths=extra_keyframe_paths,
         reference_paths=reference_paths,
+        seed=_seed,
     )
 
 

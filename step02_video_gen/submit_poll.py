@@ -48,6 +48,10 @@ VIDEO_DURATION_DEV_SEC = float(os.getenv("VIDEO_DURATION_DEV_SEC", "1.5"))
 # Global failure storage
 _failed_videos = defaultdict(list)
 
+# v6.35（08-15，P18 遗留）：QC 失败自动重提交次数。固定 seed 后同 prompt 同参考
+# 重提交结果可复现（不再抽卡）。QC 失败 → 删坏视频 → 相同 req 重提交（可配 0=关闭）。
+VIDEO_QC_RESUBMIT = int(os.getenv("VIDEO_QC_RESUBMIT", "2"))
+
 
 def _probe_video_duration(video_path: Path) -> float:
     """用 ffprobe 探测视频实际时长（秒），失败返回 0."""
@@ -203,11 +207,13 @@ async def _poll_video(
     req, task_id: str, shot_idx: int,
     shot_dir: Path, video_path: Path, max_retries: int,
     shot_hash: str = "",
+    qc_resubmit_limit: int = 0,
 ) -> bool:
     """Background poll with exponential backoff + jitter - reduces API queries."""
     from shared.tee_logger import get_logger
     from shared.paths import chapter_dir
     logger = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+    qc_resubmit_left = max(0, qc_resubmit_limit)
     async with semaphore:
         # 获取提交时绑定的 key 索引
         try:
@@ -286,6 +292,33 @@ async def _poll_video(
                     # QC 失败不写哈希（下次缓存检测不会命中），返回 False 走失败重试。
                     _expected_dur = float(getattr(req, "duration", 0) or 0)
                     if not _qc_video_product(video_path, shot_idx, _expected_dur):
+                        # v6.35：QC 失败自动重提交（相同 req = 相同 seed，结果可复现）。
+                        # 固定 seed 前重提交=抽卡，好坏反复横跳；固定 seed 后同 prompt
+                        # 同参考重提交仍有概率出不同结果（模型概率性），给 2 次机会，
+                        # 全失败才标记失败并删产物。QC 失败不写哈希（下次缓存不命中）。
+                        if qc_resubmit_left > 0:
+                            qc_resubmit_left -= 1
+                            logger.warn(
+                                f"  [Shot {shot_idx}] 视频 QC 未通过，"
+                                f"相同 seed 重提交（剩余 {qc_resubmit_left} 次）..."
+                            )
+                            try:
+                                video_path.unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                            try:
+                                new_task_id = await video_adapter.submit_task(req)
+                            except Exception as _re:
+                                _failed_videos[shot_idx].append({
+                                    "attempt": -1, "error": f"QC 重提交失败: {_re}", "task_id": task_id,
+                                })
+                                return False
+                            task_id = new_task_id
+                            key_idx = video_adapter._task_keys.get(task_id, key_idx)
+                            consecutive_failures = 0
+                            first_poll = True
+                            await asyncio.sleep(INITIAL_POLL_DELAY)
+                            continue
                         _failed_videos[shot_idx].append({
                             "attempt": -1, "error": "视频 QC 未通过（时长偏差/内容问题）",
                             "task_id": task_id,
@@ -386,7 +419,8 @@ async def _submit_video(
             task_id = await video_adapter.submit_task(req)
             task = asyncio.create_task(
                 _poll_video(video_adapter, poll_semaphore, req, task_id, idx,
-                           shot_dir, video_path, 99, shot_hash)
+                           shot_dir, video_path, 99, shot_hash,
+                           qc_resubmit_limit=VIDEO_QC_RESUBMIT)
             )
             return task
         except Exception as e:
@@ -409,7 +443,8 @@ async def _submit_video(
                         task_id = await video_adapter.submit_task(req)
                         task = asyncio.create_task(
                             _poll_video(video_adapter, poll_semaphore, req, task_id, idx,
-                                       shot_dir, video_path, 3, shot_hash)
+                                       shot_dir, video_path, 3, shot_hash,
+                                       qc_resubmit_limit=VIDEO_QC_RESUBMIT)
                         )
                         return task
                     except Exception:

@@ -28,7 +28,7 @@ import os
 
 from shared.paths import script_file, vimax_working_dir, chapter_dir
 from shared.tee_logger import get_logger
-from step02_video_gen.submit_poll import _submit_video, _get_shot_hash
+from step02_video_gen.submit_poll import _submit_video, _get_shot_hash, _failed_videos
 from shared.vimax_adapters import VideoGeneratorAiVideoAdapter
 from shared.shot_selector import parse_shot_selector
 
@@ -81,7 +81,6 @@ async def gen_all_videos(script: dict, working_dir: Path, script_file_path: Path
             tasks.append(shot)
 
     polls = []
-    failed_count = 0
     for shot in tasks:
         poll_task = await _process_one_shot_skip_frames(
             shot, shots_dir, video_adapter,
@@ -97,10 +96,20 @@ async def gen_all_videos(script: dict, working_dir: Path, script_file_path: Path
         results = await asyncio.gather(*(pt for _, pt in polls), return_exceptions=True)
         for (idx, _), res in zip(polls, results):
             if isinstance(res, Exception):
-                failed_count += 1
                 logger.warn(f"  [Shot {idx}] 轮询异常: {res}")
 
-    return failed_count
+    # v6.35（08-15，P18 遗留）：失败计数修真——此前只统计 gather 抛出的
+    # Exception，_poll_video 正常 return False（终态错误/QC 失败/超时）与
+    # _submit_video 失败（return None）都没被计入，坏镜头带 Failed: 0 假象
+    # 流进 step04。统一以 submit_poll._failed_videos 为准（提交失败 + 轮询
+    # 失败 + QC 失败全部记录在内）。
+    failed = len(_failed_videos)
+    if failed:
+        logger.warn(f"[FAIL] 失败镜头统计: {failed} 个（含提交失败/QC 失败/轮询失败）")
+        for _idx, recs in _failed_videos.items():
+            logger.warn(f"  [Shot {_idx}] {recs[-1].get('error', 'unknown')}")
+
+    return failed
 
 
 async def _process_one_shot_skip_frames(

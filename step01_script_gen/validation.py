@@ -29,6 +29,13 @@ import storyboard_refs
 _novel_text_for_validation = ""
 
 
+def _shot_tag(label: str, idx) -> str:
+    """检查告警镜头标签：hook 的 label 已含 index=0，避免「钩子镜头(index=0)0」双编号（v6.34）."""
+    if "index=" in (label or ""):
+        return label
+    return f"{label}{idx}"
+
+
 # 空镜主体词表（唯一权威常量，审计 P1-8 收敛）。
 # 历史：此前在 222/493/645/1158/2752 五处各持一份互不一致的词表，222 已修
 # 「禁止单字水」、1158 还是旧版（含单字 山/水/湖 误报「刺客出水」为空镜）。
@@ -85,7 +92,8 @@ def _validate_script(script: dict) -> None:
     if actual_count < SHOT_COUNT_MIN or actual_count > SHOT_COUNT_MAX:
         print(f"[WARN] 镜头数 {actual_count} 超出 sanity 范围 [{SHOT_COUNT_MIN}, {SHOT_COUNT_MAX}]（仅提示，不阻断）")
     if reported_count is None:
-        print(f"[WARN] JSON 中缺少 shot_count 字段，建议 LLM 在输出中包含此字段")
+        # v6.34（08-15）：缺失静默补齐——旧 WARN 无行动价值，4 轮日志纯噪音
+        script["shot_count"] = actual_count
     elif not isinstance(reported_count, int):
         print(f"[WARN] shot_count={reported_count} 非整数，已忽略")
     elif reported_count != actual_count:
@@ -119,8 +127,10 @@ def _validate_script(script: dict) -> None:
 
     # 验证 narration == 所有 subtitle 拼接
     combined = "".join(s.get("subtitle", "") for s in shots)
-    expected_narration = script.get("narration", "")
-    if combined != expected_narration:
+    expected_narration = script.get("narration")
+    # v6.34（08-15）：顶层 narration 已不在输出 schema，恒报假警——
+    # 仅当 LLM 仍输出该字段时才比对
+    if expected_narration is not None and combined != expected_narration:
         print(f"[WARN] narration 与 subtitle 拼接不一致")
 
     # 验证每个 shot 的 subtitle == narration_segment
@@ -393,7 +403,11 @@ def _check_grounding(shot: dict, novel_text: str) -> bool:
 
     # 剥掉「说话人道：」前缀（说话人 + 道/说/怒道/厉声道 + 全角/半角冒号）
     narration_clean = re.split(r"[:：]", narration, maxsplit=1)[-1]
-    narration_clean = narration_clean.replace(" ", "").replace("，", "").replace("。", "")
+    narration_clean = narration_clean.replace(" ", "")
+    # v6.34（08-15）：归一化补全全部中英文句读——「哎呀！」带感叹号导致
+    # 直接子串匹配 miss（镜头8 误报真因），标点变体不应影响锚定判定
+    for _p in '，。！？；：、…—,!?:;“”"\'（）()':
+        narration_clean = narration_clean.replace(_p, "")
     if len(narration_clean) < 5:
         # 台词体太短（如「住嘴！」）无法切 5 字子串，退化为直接查原文
         return narration_clean in novel_text
@@ -1005,6 +1019,7 @@ def _check_gaze_direction(shots, hook: dict = None, characters: list | None = No
     def _check_one(shot: dict, label: str):
         nonlocal issues, warnings
         idx = shot.get('index', '?')
+        tag = _shot_tag(label, idx)
         prompt = shot.get('prompt', '')
         ff_desc = shot.get('ff_desc', '')
         lf_desc = shot.get('lf_desc', '')
@@ -1025,7 +1040,7 @@ def _check_gaze_direction(shots, hook: dict = None, characters: list | None = No
                 _seg = _gaze_lost.group()
                 if any(l in _seg for l in _lost_objects):
                     warnings.append(
-                        f"{label}{idx}: 尾帧角色目光看向「{_seg[:20]}」——已消失的刺客/水面，"
+                        f"{_shot_tag(label, idx)}: 尾帧角色目光看向「{_seg[:20]}」——已消失的刺客/水面，"
                         f"不是动作结果对象。场景含受伤结果（杨旭倒下），角色应看向被刺倒的"
                         f"同伴杨旭（自动修复见 vimax_bridge.fix_lf_desc_gaze）。"
                     )
@@ -1046,7 +1061,7 @@ def _check_gaze_direction(shots, hook: dict = None, characters: list | None = No
                 _seg = _lurking.group()
                 if not any(d in _seg for d in correct_dirs):
                     warnings.append(
-                        f'{label}{idx}: 潜伏威胁（只露眼睛/头肩）视线 {_seg} 缺方位锚定，'
+                        f'{tag}: 潜伏威胁（只露眼睛/头肩）视线 {_seg} 缺方位锚定，'
                         f'应写「目光自水面下斜望画X的[目标]，侧向朝向目标，禁止正对镜头」'
                         f'——否则水面露眼最易画成正对镜头（规则41）。'
                     )
@@ -1066,11 +1081,11 @@ def _check_gaze_direction(shots, hook: dict = None, characters: list | None = No
                     continue
                 wrong.append(w)
             if wrong:
-                warnings.append(f'{label}{idx}: 视线描述 {wrong} 建议用画左/画右等')
+                warnings.append(f'{tag}: 视线描述 {wrong} 建议用画左/画右等')
 
             has_correct = any(d in text for d in correct_dirs)
             if not has_correct and ('看向' in text or '盯着' in text):
-                warnings.append(f'{label}{idx}: 建议用空间方向词(画左/画右/画上方)')
+                warnings.append(f'{tag}: 建议用空间方向词(画左/画右/画上方)')
 
     for shot in shots:
         _check_one(shot, '镜头')
@@ -1144,7 +1159,7 @@ def _check_gaze_convergence(shots: list[dict], hook: dict = None) -> dict:
         left_subs = sorted({a[0] for a in anchors if a[1] == "画左"})
         right_subs = sorted({a[0] for a in anchors if a[1] == "画右"})
         warnings.append(
-            f"{label}{idx}: 多人同框视线散焦——{left_subs} 看画左、{right_subs} 看画右，"
+            f"{_shot_tag(label, idx)}: 多人同框视线散焦——{left_subs} 看画左、{right_subs} 看画右，"
             f"各看各的方向。规则22.7/13.5 要求所有视线汇聚到同一威胁焦点形成视线三角"
             f"（威胁→目标、发现者→威胁），多人各看一方会让观众读不出冲突焦点。"
             f"应让非威胁侧角色的视线落向威胁源（如'听香看向画右水中的刺客'）。"
@@ -1789,7 +1804,7 @@ def _check_abstract_quantization(shots: list[dict], hook: dict = None) -> dict:
         has_quant = any(p in text for p in _QUANT_PARAM_WORDS)
         if not has_quant:
             warnings.append(
-                f"{label}{idx}: 抽象风格词 {hits} 未量化（规则37）——抽象词必须翻译成"
+                f"{_shot_tag(label, idx)}: 抽象风格词 {hits} 未量化（规则37）——抽象词必须翻译成"
                 f"光/色/焦参数（梦幻=低饱和+柔光+浅景深+青蓝主色；压抑=暗调+顶光+冷色；"
                 f"优雅=暖金侧光+绸缎高光+慢推），无法量化则删词。"
             )
@@ -1847,14 +1862,14 @@ def _check_character_entrance(shots: list[dict], characters: list | None = None)
 def _check_color_tone_transition(shots: list[dict]) -> dict:
     """规则24：相邻镜头 color_tone 变化幅度 ≤20%（C3 修复，warning-only）.
 
-    相邻镜头 color_tone 关键词差异过大（冷蓝 vs 暖金、白天 vs 夜晚）→ 色彩突变
-    观感割裂。启发式：相邻镜头各提取色调方向词（暖/冷/金/蓝/青/夜/昼…），
-    明显对立的组合提示。
+    v6.34（08-15 误报审计）：混合色调（「冷蓝星光与暖橙灯光对比」）同时含
+    双向词，与任何方向兼容（灯光元素变化≠基调突变，曾致 10↔11、22↔23
+    船岸 A/B 交替镜误报）；只有纯暖↔纯冷直接翻转才提示。
     """
     warnings = []
     _WARM = ("暖", "金", "橙", "红", "黄昏", "夕阳", "烛", "火")
     _COLD = ("冷", "蓝", "青", "月", "夜", "幽", "银")
-    prev_warm = prev_cold = False
+    prev_state = None   # 'warm'|'cold'|'mixed'|None
     prev_idx = None
     for s in shots:
         idx = s.get("index", "?")
@@ -1863,14 +1878,15 @@ def _check_color_tone_transition(shots: list[dict]) -> dict:
         tone = (s.get("color_tone") or "").strip()
         has_warm = any(w in tone for w in _WARM)
         has_cold = any(c in tone for c in _COLD)
-        if prev_idx is not None and (has_warm != prev_warm or has_cold != prev_cold):
-            # 相邻色调方向翻转（暖→冷 或 冷→暖）→ 突变
-            warnings.append(
-                f"镜头{prev_idx}→{idx}: color_tone 色调方向突变（规则24）——"
-                f"相邻镜头色调变化幅度应 ≤20%，暖→冷/冷→暖 直接跳是明显突变，"
-                f"建议中间加过渡镜头（开篇环境建立/明确时间跳跃可用淡入淡出过渡）。"
-            )
-        prev_warm, prev_cold, prev_idx = has_warm, has_cold, idx
+        state = "mixed" if (has_warm and has_cold) else ("warm" if has_warm else ("cold" if has_cold else None))
+        if prev_state is not None and "mixed" not in (state, prev_state):
+            if (prev_state, state) in (("warm", "cold"), ("cold", "warm")):
+                warnings.append(
+                    f"镜头{prev_idx}→{idx}: color_tone 色调方向突变（规则24）——"
+                    f"相邻镜头色调变化幅度应 ≤20%，暖→冷/冷→暖 直接跳是明显突变，"
+                    f"建议中间加过渡镜头（开篇环境建立/明确时间跳跃可用淡入淡出过渡）。"
+                )
+        prev_state, prev_idx = state, idx
     for w in warnings:
         print(f"[CHECK] 色调过渡: [WARN] {w}")
     return {"pass": True, "issues": [], "warnings": warnings}
@@ -1927,6 +1943,10 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
         motion = shot.get("motion_desc", "").strip() or shot.get("prompt", "") or ""
         if not ff:
             return
+        # v6.34（08-15 误报审计）：hook 豁免结果状态污染检查——hook 是
+        # 「案发后回放/高潮定格」结构，ff 含「暗红洇痕」等先在状态合法
+        # （动作发生在 hook 之前）。完成态动词检查（已刺中/倒地）仍对 hook 生效。
+        _is_hook = "index=0" in label or "hook" in label.lower()
         # 结果状态污染检查（v6.16）：ff_desc 是动作开始前的定格，若把动作
         # 进行/结束后的结果状态（血溅到脸上、尖叫、瘫坐、倒地）写进 t=0，
         # 就是"图片提示词是一串动作"的根因——图片模型画不出"炸开→冲出→
@@ -1941,8 +1961,16 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
             "泪水滑落", "痛哭", "大哭", "抽搐",
         )
         _TIME_SEG_RE = re.compile(r"前\d+秒|后\d+秒|\d+\s*[-–]\s*\d+\s*秒")
-        if _TIME_SEG_RE.search(motion):
-            polluted = [w for w in _RESULT_STATE_WORDS if w in ff and w in motion]
+        if _TIME_SEG_RE.search(motion) and not _is_hook:
+            # v6.34：状态词在 motion 首个时间段已存在 → 是 t=0 已成立的
+            # 先在状态而非动作结果，放行；只有后续时间段才出现的才属「结果被提前」
+            _m1 = _TIME_SEG_RE.search(motion)
+            _m2 = _TIME_SEG_RE.search(motion, _m1.end())
+            _first_text = motion[_m1.start():(_m2.start() if _m2 else len(motion))]
+            polluted = [
+                w for w in _RESULT_STATE_WORDS
+                if w in ff and w in motion and w not in _first_text
+            ]
             if polluted:
                 warnings.append(
                     f"{label}: ff_desc 把动作结果状态「{'、'.join(polluted)}」写进首帧定格，"
@@ -2261,10 +2289,12 @@ _SCENE_CHANGE_HINTS = (
 
 _DENSITY_MAX_ACTIONS = {
     # (max_duration, max_action_clauses) — 时长阈值 → 动作短语上限
+    # v6.34（08-15 审计）：≤3s 上限 1→2、≤5s 2→3——连贯动作链
+    # 「推臂→弹腿→倒纵入水」是一串连续身体动作而非多个独立动作，旧阈值误报
     2: 1,   # ≤2s：1 个动作
-    3: 1,   # ≤3s：1 个动作
+    3: 2,   # ≤3s：2 个动作（连续动作链）
     4: 2,   # ≤4s：2 个动作
-    5: 2,   # ≤5s：2 个动作
+    5: 3,   # ≤5s：3 个动作
 }
 _DENSITY_MIN_LEN = 8   # prompt 至少多少字才参与密度判定（过滤过短描述）
 _DENSITY_WARN_THRESHOLD = 1.5   # 动作密度 = 命中数 / 期望上限，超过该倍则提示
@@ -2672,8 +2702,10 @@ def _check_combat_action(shots: list[dict]) -> dict:
 # 这个管「克制情绪的强度控制 + 递进链完整」。
 _RESTRAINED_EMOTION_WORDS = (
     "隐忍", "释然", "失落", "哽咽", "噙泪", "含泪", "忍住不落", "无声哭", "无声地哭",
-    "压抑", "强忍", "强忍住", "苦笑", "别过脸", "眼眶泛红", "眼尾泛红", "微红",
+    "强忍", "强忍住", "苦笑", "别过脸", "眼眶泛红", "眼尾泛红",
     "噙着泪", "泪光", "忍住泪", "将落未落", "克制",
+    # v6.34（08-15 误报审计）：移除「压抑」（氛围词，空镜/岸景也命中）与
+    # 「微红」（掌掴红印等物理红，非克制表情）——曾致镜头11/21/22/23 误报
 )
 # 外放大动作（克制情绪禁止组合）
 _RESTRAINED_OVERT_ACTIONS = ("大哭", "痛哭", "嚎啕", "失声痛哭", "哭喊", "捶地", "猛摇头",
@@ -2712,7 +2744,7 @@ def _check_restrained_emotion(shots: list[dict], hook: dict = None) -> dict:
         overt_hits = [w for w in _RESTRAINED_OVERT_ACTIONS if w in text]
         if overt_hits:
             warnings.append(
-                f"{label}{idx}: 克制情绪与「{'/'.join(overt_hits[:3])}」冲突，"
+                f"{_shot_tag(label, idx)}: 克制情绪与「{'/'.join(overt_hits[:3])}」冲突，"
                 f"克制情绪应压在微表情（无声哭/忍泪/苦笑），禁外放大动作"
             )
 
@@ -2720,7 +2752,7 @@ def _check_restrained_emotion(shots: list[dict], hook: dict = None) -> dict:
         micro_hits = [m for m in _RESTRAINED_MICRO_TELLS if m in text]
         if len(micro_hits) < 2:
             warnings.append(
-                f"{label}{idx}: 克制情绪镜头微表情不足（仅 {len(micro_hits)} 拍），"
+                f"{_shot_tag(label, idx)}: 克制情绪镜头微表情不足（仅 {len(micro_hits)} 拍），"
                 f"应形成时间链：低头隐忍（抿唇/垂眼）→ 泪光（噙泪）→ 苦笑/释怀，"
                 f"每拍一个面部细节，按时间先后写全"
             )
@@ -2730,7 +2762,7 @@ def _check_restrained_emotion(shots: list[dict], hook: dict = None) -> dict:
             k in text for k in ("忍住", "噙", "将落未落", "含泪", "强忍", "无声", "忍泪", "涌上")
         ):
             warnings.append(
-                f"{label}{idx}: 出现泪/泪水但无克制修饰（忍住/噙/将落未落/含泪），"
+                f"{_shot_tag(label, idx)}: 出现泪/泪水但无克制修饰（忍住/噙/将落未落/含泪），"
                 f"克制哭戏请写「眼含热泪但忍住不落」，禁止直接「泪水滑落」"
             )
 
@@ -2794,12 +2826,12 @@ def _check_focal_switch(shots: list[dict], hook: dict = None) -> dict:
                                                   "符", "剑鞘", "镜", "香囊", "步摇", "发簪", "令牌"))
         if is_item_target and not any(e in text for e in _FOCAL_SWITCH_ENDINGS):
             warnings.append(
-                f"{label}{idx}: 切换到物品特写但无结束落点，"
+                f"{_shot_tag(label, idx)}: 切换到物品特写但无结束落点，"
                 f"应写「环绕一周/定格在物品/拉回中景」，防止镜头切到物品后乱跑"
             )
         if not has_dir:
             warnings.append(
-                f"{label}{idx}: 切换拍摄对象缺方向，"
+                f"{_shot_tag(label, idx)}: 切换拍摄对象缺方向，"
                 f"应写清「从{人物}手部/左侧/右侧」+「前推/环绕」"
             )
 
@@ -2962,24 +2994,24 @@ def _check_voice_punctuation(shots: list[dict], hook: dict = None) -> dict:
         # 1. 裸收尾：台词无任何句末标点 → 语气无法传达
         if not tail:
             warnings.append(
-                f"{label}{idx}: 台词「{body[:24]}{'…' if len(body) > 24 else ''}」裸收尾无标点，"
+                f"{_shot_tag(label, idx)}: 台词「{body[:24]}{'…' if len(body) > 24 else ''}」裸收尾无标点，"
                 f"建议按情绪补标点（撒娇「～」/警告「！」/思考「，」「…」）"
             )
             return
         # 2. 撒娇/温柔类：句尾用了「。」→ 平淡，建议「～」
         if any(w in narration for w in _COAX_WORDS) and tail.endswith("。") and not tail.endswith("！") and not tail.endswith("～"):
             warnings.append(
-                f"{label}{idx}: 撒娇/娇柔台词句尾「。」过于平淡，建议改「～」（如「{body}～」）"
+                f"{_shot_tag(label, idx)}: 撒娇/娇柔台词句尾「。」过于平淡，建议改「～」（如「{body}～」）"
             )
         # 3. 警告/愤怒类：句尾非「！」→ 压迫感不足
         if any(w in narration for w in _WARN_WORDS) and tail.endswith("。"):
             warnings.append(
-                f"{label}{idx}: 警告/愤怒台词句尾「。」缺压迫感，建议改「！」（如「{body}！」）"
+                f"{_shot_tag(label, idx)}: 警告/愤怒台词句尾「。」缺压迫感，建议改「！」（如「{body}！」）"
             )
         # 4. 思考/迟疑类：无停顿逗号/省略号 → 读不出卡顿
         if any(w in narration for w in _THINK_WORDS) and "，" not in speech and "…" not in speech:
             warnings.append(
-                f"{label}{idx}: 思考/迟疑台词缺停顿标点，建议在停顿处加「，」（如「等一下，我想，先确认一件事」）"
+                f"{_shot_tag(label, idx)}: 思考/迟疑台词缺停顿标点，建议在停顿处加「，」（如「等一下，我想，先确认一件事」）"
             )
 
     for shot in shots:
@@ -4352,7 +4384,15 @@ def _check_threat_gaze_coupling(shots: list[dict], hook: dict = None) -> dict:
             # 威胁源是否有「面向目标」的朝向表达：朝画X/紧盯画X/侧身/望向X
             # （char_layout 的 facing 指向目标也算——如「面向画左的杨旭」）
             threat_has_target = any(
-                k in text for k in ("朝画", "紧盯画", "盯向画", "望画", "侧身", "朝向", "面向", "逼近", "逼近画")
+                k in text for k in (
+                    "朝画", "紧盯画", "盯向画", "望画", "侧身", "朝向", "面向",
+                    "逼近", "逼近画",
+                    # v6.34：与 _check_ff_desc_anchors 朝向句式表对齐（08-15 审计）
+                    "刺向", "劈向", "扑向", "扎向", "斩向", "砍向", "挥向",
+                    "冲向", "探向", "逼向", "刀尖朝", "剑尖朝", "匕首朝",
+                    "举过头顶", "高举", "抵住", "对准", "正对",
+                    "即将刺", "即将劈", "即将扑", "即将跃", "即将砸",
+                )
             )
             if layout_facing and any(k in layout_facing for k in ("面向", "朝向", "盯向", "望向")):
                 threat_has_target = True
@@ -4503,12 +4543,83 @@ def _check_size_anchor_warnings(shots: list[dict], hook: dict | None) -> list[st
     return out
 
 
+def _check_frame_desc_anchors(text: str, label: str,
+                              known_chars, char_dress) -> list[str]:
+    """对单段画面描述（ff_desc/lf_desc）做 A/B/D 三类锚点检查（v6.35）.
+
+    与 ff_desc 相同口径套到 lf_desc——尾帧同样喂图片模型，缺锚 → 尾帧漂色/
+    比例漂/威胁背对，首尾帧风格断裂（08-15 审计 P17 遗留：锚点只查 ff 一半）。
+    A. 威胁源朝向锚（规则41）  B. 视线-威胁方位矛盾  D. 出镜角色服装色重述
+    """
+    out: list[str] = []
+    if not text:
+        return out
+
+    # --- A. 威胁源朝向锚 ---
+    _RULE48_LURKING = ("潜伏水下", "水下黑影", "微露水面", "藏于水下", "水下轮廓", "藏身水下")
+    if any(w in text for w in _THREAT_WORDS) and not any(k in text for k in _RULE48_LURKING):
+        has_facing = any(k in text for k in (
+            "朝画", "面向", "面朝", "朝向", "侧身", "紧盯画", "盯向画",
+            "望画", "望向", "逼近", "逼近画", "刀尖对准", "正对目标",
+            "对准画", "指向画",
+            # v6.34（08-15 误报审计）：武器指向/攻击预备也是朝向锚——
+            # 「刀尖朝下即将刺向杨旭心口」此前漏检误报（镜头7/8/9）
+            "刺向", "劈向", "扑向", "扎向", "斩向", "砍向", "挥向",
+            "冲向", "探向", "逼向", "刀尖朝", "剑尖朝", "匕首朝",
+            "举过头顶", "高举", "抵住", "对准", "正对",
+            "即将刺", "即将劈", "即将扑", "即将跃", "即将砸",
+        ))
+        if not has_facing:
+            out.append(
+                f"{label}: 出现威胁源（刺客/黑影等）但无朝向/目标锚定"
+                f"（规则41）——画面描述是图片输入，威胁源必须写明「侧身朝画X/刀尖"
+                f"对准[目标]/目光望向画X的[角色]」，否则模型画成背对目标或正对镜头。"
+            )
+
+    # --- B. 视线-威胁方位矛盾 ---
+    gm = _THREAT_GAZE_RE.search(text)
+    if gm:
+        seg = gm.group()
+        gaze_dir = next((d for d in ("画左", "画右") if d in seg), None)
+        if gaze_dir:
+            threat_dir = next(
+                (d for d in ("画左", "画右")
+                 if d in text and d != gaze_dir and any(t in text for t in _THREAT_WORDS)),
+                None,
+            )
+            if threat_dir:
+                out.append(
+                    f"{label}: 视线-威胁方位矛盾——「{seg[:26]}」视线指"
+                    f"{gaze_dir}，但威胁源方位写{threat_dir}（规则41）。威胁源必须与"
+                    f"发现者视线同向摆放，否则发现者看到的不是威胁。"
+                )
+
+    # --- D. 出镜角色服装色重述（规则13.7） ---
+    onstage = [c for c in known_chars if c and c in text]
+    missing_dress = []
+    for c in onstage:
+        dyn = char_dress.get(c, "") or ""
+        colors, garments = _extract_dress_tokens(dyn)
+        if not colors and not garments:
+            continue  # 角色无衣着描述（如刺客「浑身湿透」），无法锚定，跳过
+        if not (any(x in text for x in colors) or any(x in text for x in garments)):
+            hint = (colors or garments)[0]
+            missing_dress.append(f"{c}({hint})")
+    if missing_dress:
+        out.append(
+            f"{label}: 未重述出镜角色关键服装色 {missing_dress}"
+            f"（规则13.7 防漂色）——不重述时衣服色只靠肖像软锚，重渲必漂。"
+        )
+    return out
+
+
 def _check_ff_desc_anchors(shots: list[dict], hook: dict = None,
                            characters: list | None = None) -> dict:
-    """Plan A（2026-08-14）：ff_desc 全锚点检查（warning-only）.
+    """Plan A（2026-08-14 → v6.35 补 lf 对称）：ff_desc/lf_desc 全锚点检查.
 
-    只查 ff_desc——真正的图片输入——而非 prompt/motion（prompt 有锚但 ff_desc
-    缺 = 首帧仍漂，正是 hook 手改教训）。四类锚点见函数头注释。
+    v6.35（08-15 审计 P17 遗留）：锚点此前只查 ff_desc，尾帧同样喂图片模型，
+    缺锚 → 尾帧漂色/比例漂/威胁背对，首尾帧风格断裂。A/B/D 三类锚点现对称
+    套到 lf_desc。
     """
     issues, warnings = [], []
     labels = [(s, f"镜头{s.get('index', '?')}") for s in shots]
@@ -4521,59 +4632,20 @@ def _check_ff_desc_anchors(shots: list[dict], hook: dict = None,
 
     for shot, label in labels:
         ff = (shot.get("ff_desc") or "").strip()
-        if not ff:
-            continue
+        lf = (shot.get("lf_desc") or "").strip()
+        # 尾帧画面描述：ff/lf 内容相同时不重复检查（lf 继承 ff 锚点）
+        if ff and lf and ff == lf:
+            lf = ""
+        for frame_text, frame_tag in ((ff, "ff_desc"), (lf, "lf_desc")):
+            if not frame_text:
+                continue
+            for w in _check_frame_desc_anchors(
+                frame_text, f"{label}: {frame_tag}", known_chars, char_dress,
+            ):
+                warnings.append(w)
 
-        # --- A. 威胁源朝向锚（规则41，查 ff_desc 而非 prompt） ---
-        if any(w in ff for w in _THREAT_WORDS):
-            has_facing = any(k in ff for k in (
-                "朝画", "面向", "面朝", "朝向", "侧身", "紧盯画", "盯向画",
-                "望画", "望向", "逼近", "逼近画", "刀尖对准", "正对目标",
-                "对准画", "指向画",
-            ))
-            if not has_facing:
-                warnings.append(
-                    f"{label}: ff_desc 出现威胁源（刺客/黑影等）但无朝向/目标锚定"
-                    f"（规则41）——ff_desc 是图片输入，威胁源必须写明「侧身朝画X/刀尖"
-                    f"对准[目标]/目光望向画X的[角色]」，否则模型画成背对目标或正对镜头。"
-                )
-
-        # --- B. 视线-威胁方位矛盾（规则41，ff_desc 内） ---
-        gm = _THREAT_GAZE_RE.search(ff)
-        if gm:
-            seg = gm.group()
-            gaze_dir = next((d for d in ("画左", "画右") if d in seg), None)
-            if gaze_dir:
-                threat_dir = next(
-                    (d for d in ("画左", "画右")
-                     if d in ff and d != gaze_dir and any(t in ff for t in _THREAT_WORDS)),
-                    None,
-                )
-                if threat_dir:
-                    warnings.append(
-                        f"{label}: ff_desc 视线-威胁方位矛盾——「{seg[:26]}」视线指"
-                        f"{gaze_dir}，但威胁源方位写{threat_dir}（规则41）。威胁源必须与"
-                        f"发现者视线同向摆放，否则发现者看到的不是威胁。"
-                    )
-
-        # --- D. 出镜角色服装色重述（规则13.7，逐镜聚合防刷屏） ---
-        onstage = [c for c in known_chars if c and c in ff]
-        missing_dress = []
-        for c in onstage:
-            dyn = char_dress.get(c, "") or ""
-            colors, garments = _extract_dress_tokens(dyn)
-            if not colors and not garments:
-                continue  # 角色无衣着描述（如刺客「浑身湿透」），无法锚定，跳过
-            if not (any(x in ff for x in colors) or any(x in ff for x in garments)):
-                hint = (colors or garments)[0]
-                missing_dress.append(f"{c}({hint})")
-        if missing_dress:
-            warnings.append(
-                f"{label}: ff_desc 未重述出镜角色关键服装色 {missing_dress}"
-                f"（规则13.7 防漂色）——ff_desc 不重述时衣服色只靠肖像软锚，重渲必漂。"
-            )
-
-    # --- C. 场景物体首现镜尺寸锚（规则25，需 objects_bank） ---
+    # --- C. 场景物体首现镜尺寸锚（规则25，需 objects_bank；ff 专属——
+    # bank 注入同时兜底 lf，lf 免写） ---
     warnings.extend(_check_size_anchor_warnings(shots, hook))
 
     for w in warnings:
@@ -5303,7 +5375,7 @@ def _check_forbidden_abstract(shots: list[dict], hook: dict = None) -> dict:
         hits = _find_forbidden_abstract(text)
         if hits:
             warnings.append(
-                f"{label}{idx}: 画面描述含禁抽象形容词/比喻 {hits}（规则5.1）——"
+                f"{_shot_tag(label, idx)}: 画面描述含禁抽象形容词/比喻 {hits}（规则5.1）——"
                 f"「快速出剑」「身形矫健」这类抽象词视频模型画不出具体动作，"
                 f"应改为具体动作描述（如'右手从腰侧拔出长剑，剑身与地面成45度'"
                 f"'身体直立，双手自然下垂，目光平视'）。"

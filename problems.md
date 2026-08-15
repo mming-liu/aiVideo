@@ -2,7 +2,7 @@
 
 > 记录流水线开发中遇到过的真实问题（含已解决与开放中），避免重复踩坑、重复调查。
 > 每个问题记录：现象 → 根因 → 处理/状态。与 `todolist.md`（仅当前待办）互补。
-> 最近更新：2026-08-14
+> 最近更新：2026-08-15
 
 ---
 
@@ -32,6 +32,14 @@
 - **根因**：LLM 把主角当「已出场/已建立」，后镜不再重述；13.7 对 shots 的约束力仍弱于 hook（hook 是独立模板突出条目）。
 - **影响**：渲染期 `_inject_character_costume` 已注入服装色兜底（实际渲出有）；ff_desc 自足性待收敛。
 - **解决（08-15）**：规则 13.7 补「主角/已出场角色后镜也必须重述——禁止以『前镜已述/主角已建立』为由省略，主角与配角一视同仁」；待下一轮 step01 regen 验证收敛。
+
+### P18. 校验无闭环 + 开篇冲突告警被淹没（08-15 确认 → 当天修复）
+- **现象**：step01.log 每轮 ~60 条 WARN 纯打印后落盘；「前1/3段未建立核心冲突」「未检测到第一个爆点」这类直接决定前 10 秒留存的告警也只是一行 WARN。
+- **根因**：`[GAP] 差距分析通过（尝试 1/2）`每轮都一次通过 → 重生成反馈（top-5 类）**从不附加** → 所有 WARN 无人修；`hard_fail_checks` 不通过也只 print。
+- **影响**：高价值告警（开篇冲突/威胁朝向/keyframes 质量/首帧时序）带伤进 step02 烧额度；WARN 噪音导致「狼来了」效应，没人看 WARN。
+- **解决（08-15）**：①定向修复轮 `_repair_shot_warnings`（main.py）——GAP 通过后高价值告警触发单镜 LLM 修复，只重写告警镜头，最多 2 轮/轮 6 镜，失败即停不中断；开篇冲突/爆点密度并入 `_REPAIR_PRIORITY_CATEGORIES`（作为修复前言注入）；`REPAIR_ROUNDS_ENABLED` 可关。②step02b 失败计数修真——`gen_all_videos` 统一以 `submit_poll._failed_videos` 为准（覆盖提交/QC/轮询失败 + Exception），坏镜头不再带 `Failed: 0` 假象进 step04。③QC 失败自动重提交（`VIDEO_QC_RESUBMIT=2`）+ 视频 seed 固定（`shot_index|ff|lf|prompt` 哈希派生）。④视频 QC 首/中/尾三帧（原单帧中段，漏检开头/结尾黑场淡出）。
+- **验证**：`py_compile` 全过；修复收集器对现有脚本识别 23 个待修镜头；seed 确定性冒烟通过。
+- **教训**：校验广度和「告警→修复」闭环是两回事；warning-only 系统会随时间积累成无人阅读的噪音——高价值告警必须有触发修复的通道，且要全脚本重生成之外的「单镜手术」级修复手段。
 
 ---
 
@@ -81,3 +89,64 @@
 > - 空镜出现人物幻觉（拿蜡烛的人）→ 前缀撤烛火+负面撤禁亮光+旁白改画外音
 > - 图片 429 限流白烧免费额度 → 读 retry-after + 60s 窗口兜底
 > - 首尾帧动漫→真人漂移 → 全镜头首尾双关键帧+prompt 尾部收束
+
+### P12. is_happyhorse NameError 回归（08-15 引入 → 当天修复）
+- **现象**：`_video_gen/bailian_provider.py` r2v 提交必崩 NameError（`is_happyhorse` 未定义），而 `.env.content` 默认 `VIDEO_REFERENCE_MODE=r2v` → **所有镜头视频生成失败**。
+- **根因**：08-15 改 ref_compose 时把 `_create_r2v_task` 里的 `is_happyhorse = "happyhorse" in model.lower()` 连同旧 `[:max_refs]` 裁剪逻辑一起删了，但 445/459/467 行仍引用。
+- **解决**：补回定义；`py_compile` + rg 验证。
+- **教训**：**重构删代码时，用 rg 全局确认所有引用点**（子代理审计才发现的回归）；改 provider 模型分支后至少 py_compile + 一次冒烟调用。
+
+### P13. 中间关键帧白生成（08-15 确认 → 修复）
+- **现象**：step02a 花额度生成 keyframe_0/1，但 bailian wan2.7-i2v 的 media 组合固定（首帧+尾帧+音频），`extra_keyframe_paths` 全程未读；image 模式下 prompt 还虚假声明「有关键帧参考图」→ 模型被告知存在实际没传的图。
+- **根因**：bailian provider 只编码 `image_path`/`last_frame_image_path`；keyframe 落盘逻辑（P5 修过）与视频请求脱钩。
+- **解决**：prompt_builder 按 provider 区分——bailian image 模式不收集 kf（不虚假声明），agnes image 模式保留（真传），r2v/text 不收集。
+- **教训**：帧图生成（step02a）与视频生成（step02b）是两条链路，**产物是否真被下游消费必须逐 provider 验证**——「生成了」≠「用上了」。
+
+### P14. 双层降采样 720P 瓶颈（08-15 确认 → 配置化）
+- **现象**：1080P 首帧图 → wan2.7 按 `BAILIAN_VIDEO_RESOLUTION=720P` 出片（一次降采样）→ step04 硬编码 `scale=720:1280` 再压（第二次）；动作镜头细节发糊。
+- **根因**：`prompt_builder.py` 的 `size="720x1280"` 是死参数（bailian 不读 size，读 resolution）；step04 merge 硬编码 scale 双重降采样。
+- **解决**：`MERGE_RESOLUTION`/`MERGE_PRESET`/`MERGE_CRF`/`MERGE_AUDIO_MODE`/`MERGE_AUDIO_LOUDNORM` 全部配置化（shared/config.py）；调试期保持 720P 省钱，上线切 1080P（视频 0.6→1 元/秒）。
+- **教训**：**「改了没反应」陷阱**——先确认参数是否真到达 provider（size vs resolution 双源）；分辨率要全链路（生成+合成）统一口径。
+
+### P15. step04 合成层缺陷批（08-15 修复）
+- **现象**：①字幕 PrimaryColour=OutlineColour=白色 → 亮场景不可读；②调色滤镜在字幕**之后**（vignette 压暗字幕区）；③无响度归一，只有固定 +5dB（放大底噪且不解决逐镜跳变）；④编码 ultrafast+CRF20 画质损失；⑤hook 704 宽 pad 出 8px 黑边烧进成片；⑥回退 happyhorse（无声）→ `[i:a]` 匹配不到 → **整章合并失败**。
+- **根因**：合并层从未做过可读性/音质/鲁棒性审计；preset/CRF/分辨率全硬编码。
+- **解决**：字幕黑边+微软雅黑+字号随分辨率缩放；filter 顺序改调色在前字幕最后；逐镜 loudnorm（EBU R128）替代固定增益；preset=medium/CRF=18 配置化；increase+crop 消黑边；无声片段 `anullsrc` 补轨。
+- **教训**：合成层是成片的「最后一公里」，编码/字幕/音质/鲁棒性四个维度都要配置化+兜底。
+
+### P16. step03 TTS 孤儿步骤（08-15 确认 → 保留为备选）
+- **现象**：voice_registry 8 音色精心生成的 mp3 **不进成片**——step04 native 模式只保留视频原声；音色一致性只靠 prompt 文字描述；`reference_audio` 是 TODO。
+- **根因**：架构改 native（视频模型自带语音）后删了 TTS 混音路径，但 step03 没跟着删。
+- **解决**：`MERGE_AUDIO_MODE=tts_mix` 恢复可选混音（TTS 权重 1.0、原声压 0.6），对视频原声不满意时切换；默认仍 native。TTS 300 字拦腰截断改为按句末标点安全截断。
+- **待办方向**：实现 `reference_audio` 通道（step03 产物变音色参考，一石二鸟）。
+- **教训**：删掉下游消费者时要同步评估上游是否变孤儿（跑 step03 = 白烧额度）。
+
+### P17. step01 检查器误报 ~50%（08-15 修复）
+- **现象**：最新轮 62 条 WARN，逐条对照 script_result.json 核实约一半是检查器自身缺陷（详见 P17 子项）。
+- **根因**：检查器正则/判定逻辑与 LLM 实际输出格式脱节 + 规则互相矛盾 + 阈值不符合连续动作物理性。
+- **解决**（validation.py + prompts.py，回归全过）：
+  - 威胁源朝向句式扩充（刺向/刀尖朝/举过头顶/即将…）+ 规则48 水下黑影豁免（V1/V2）
+  - 锚点标点归一化补全（！？…等）——「哎呀！」带感叹号匹配失败真因（V3）
+  - 克制情绪触发词移除「压抑/微红」（氛围词/物理红印误报，V4）
+  - 色调过渡混合色调兼容——「冷蓝+暖橙对比」≠突变，纯暖↔纯冷才报（V5）
+  - shot_count 缺失静默补齐；narration 拼接仅字段存在时比对（V6/V7）
+  - 内容密度档位放宽——连贯动作链「推臂→弹腿→倒纵」不是 3 个独立动作（V8）
+  - hook 豁免结果状态污染 + motion 首时间段内状态词放行（V9）
+  - 全检查器 hook 双编号统一 `_shot_tag`（V10）
+  - prompts.py SYSTEM_PROMPT 注入 41.1/24.1/28.1/22.5a 四条规则（让 LLM 一次写对）
+- **效果**：62 → 2 条（剩 2 条人工核实为真命中：hook 微表情不足、镜头7 动作密度偏满）。
+- **教训**：**校验器自己也会出错**；改完必须对真实 script_result.json 回归；误报率 >30% 的系统没人信（狼来了效应），高价值检查（威胁源朝向）测不准比没有更糟——先修可信度再谈自动化。
+
+### P19. lf_desc 锚点校验缺失（08-15 修复）
+- **现象**：锚点检查（威胁朝向/视线方位矛盾/服装色重述）只查 `ff_desc`，尾帧同样喂图片模型却零锚点校验——实测现有脚本 lf_desc 有 **22 条服装色缺口**（尾帧漂色根因之一）。
+- **根因**：08-14 的 Plan A 锚点系统只覆盖「首帧」维度（ff_desc 是动作起点），漏掉尾帧；规则 13.7 也只针对 ff。
+- **解决**：`_check_ff_desc_anchors` 重构出 `_check_frame_desc_anchors(text, label, ...)`，A/B/D 三类锚点对称套到 lf_desc（ff==lf 时不重复查；尺寸锚 C 仍 ff 专属，bank 注入兜底 lf）。
+- **验证**：对现有 script_result.json 重跑，新增 22 条 lf 告警（均为真实缺口，交由定向修复轮处理）。
+- **教训**：**锚点校验要覆盖所有喂给图片模型的描述字段**（首帧/尾帧/关键帧）——只修一半等于留一半漂色口子。
+
+### P20. 视频 QC 单帧 + seed 不传 + 失败假象（08-15 修复）
+- **现象**：①视频视觉 QC 只抽**中段 1 帧**（`_MID_FRAME_RATIO=0.5`），开头黑场/结尾淡出吞画面漏检；②`req.seed` 恒 None → 每次提交纯抽卡，QC 判坏重提交拿全新随机结果，好坏反复横跳；③step02b `Failed: N` 只统计 gather 抛出的 Exception——`_poll_video` 正常 `return False`（终态错误/QC 失败/超时）与 `_submit_video` 失败（return None）都没计入，坏镜头带 `Failed: 0` 假象流进 step04。
+- **根因**：QC 设计时只考虑了中段代表性；seed 从未接线（wan2.7 文档支持 seed，白白没用）；失败计数用 Exception 判定而非 `_failed_videos` 注册表。
+- **解决**：①`video_qc.py` 抽首/中/尾三帧（0.12/0.5/0.88），任一帧 critical 即判坏；②`prompt_builder._make_request` 用 `shot_index|ff|lf|prompt` MD5 派生固定 seed；③`gen_all_videos` 失败数以 `submit_poll._failed_videos` 为准，日志输出失败镜头明细；④QC 失败自动重提交（`VIDEO_QC_RESUBMIT=2`，相同 req=相同 seed 可复现）。
+- **验证**：seed 确定性冒烟通过（同输入同输出、改 prompt 变 seed）；三帧比例断言通过；`py_compile` 全过。
+- **教训**：①视觉 QC 的抽帧策略要覆盖「可能出问题」的时段，单帧中段是最乐观抽样；②生成模型该用 seed 的地方一定要用（可复现性是 A/B 测试和 QC-重试循环的前提）；③失败统计要认「失败注册表」而非「异常类型」——正常返回 False 也是失败。
