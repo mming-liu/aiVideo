@@ -59,3 +59,25 @@ def get_media_duration(path: Path) -> float:
     except Exception as e:
         print(f"[WARN] get_media_duration 探测失败 {path}: {e}", file=sys.stderr)
         return 0.0
+
+
+def has_audio_stream(path: Path) -> bool:
+    """检测媒体文件是否含音频流（无声片段合成补轨用，v6.27）.
+
+    回退模型（happyhorse 等）产出的片段无音频轨，filter 图里 [i:a] 匹配
+    不到流会直接崩——提前检测，调用方对无声片段用 anullsrc 补静音轨。
+    探测失败按「有音频」处理（保持旧行为，不静默改变合成结果）。
+    """
+    try:
+        result = subprocess.run(
+            [FFPROBE, "-v", "error",
+             "-select_streams", "a",
+             "-show_entries", "stream=codec_type",
+             "-of", "csv=p=0",
+             str(path)],
+            check=True, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+        )
+        return bool(result.stdout.strip())
+    except Exception:
+        return True

@@ -132,30 +132,30 @@ class AgnesImageService(ImageGenerationService):
         _403_count = 0  # 连续 403 计数：轮完一圈可用 key 仍 403 则回退模型
 
         # 图生图：编码参考图（支持多张，同框多角色各自传入肖像）
+        # 模型感知参考图上限 + 无损压缩（与 bailian_provider 同一兜底）：
+        # 超上限保留前 N-1 张原图 + 尾部拼 1 张参考表，参考图信息不丢失
+        # （替换旧版「丢弃尾部」——参考图必须全部传过去，2026-08-15 需求）。
+        from shared.ref_compose import get_ref_limit, fit_flat
+        max_refs = get_ref_limit(config.AGNES_IMAGE_MODEL)
+        ref_paths = list(req.reference_image_paths or [])
+        if not ref_paths and req.reference_image_path:
+            ref_paths = [req.reference_image_path]
+        if len(ref_paths) > max_refs:
+            sheet_dir = os.path.join(config.OUTPUT_DIR, "ref_sheets")
+            composed = fit_flat(ref_paths, max_refs, sheet_dir, f"shot{req.shot_index}")
+            _verbose_write(
+                f"  [镜头{req.shot_index}] {config.AGNES_IMAGE_MODEL} 参考图 {len(ref_paths)} 张"
+                f"超上限 {max_refs}，无损压缩为 {len(composed)} 张（原图 + 尾部参考表）"
+            )
+            ref_paths = composed
+
         ref_data_urls = []
-        for ref_path in req.reference_image_paths:
+        for ref_path in ref_paths:
             ref_data_url = self._encode_image(ref_path)
             if ref_data_url:
                 ref_data_urls.append(ref_data_url)
             else:
                 _verbose_write(f"  [镜头{req.shot_index}] 参考图读取失败 {ref_path}")
-        if not ref_data_urls and req.reference_image_path:
-            # 向后兼容：仅设置了单张 reference_image_path
-            ref_data_url = self._encode_image(req.reference_image_path)
-            if ref_data_url:
-                ref_data_urls.append(ref_data_url)
-            else:
-                _verbose_write(f"  [镜头{req.shot_index}] 参考图读取失败，降级为 text-to-image")
-
-        # 裁剪到模型 I2I 参考图上限（默认 3，可用 IMAGE_MAX_REFS 覆盖）。
-        # 与 bailian_provider 同一兜底：上层 force_multi_ref 会绕过 IMAGE_MULTI_REF
-        # 全传参考图（钩子 5 张 = 场景 + 3 角色 + 道具），超上限会触发 provider 400。
-        # 参考图按 场景→角色→道具 排序，保留优先级在前的，丢弃尾部。
-        max_refs = int(os.getenv("IMAGE_MAX_REFS", "3"))
-        if len(ref_data_urls) > max_refs:
-            dropped = len(ref_data_urls) - max_refs
-            _verbose_write(f"  [镜头{req.shot_index}] 参考图 {len(ref_data_urls)} 张超过上限 {max_refs}，裁剪掉 {dropped} 张")
-            ref_data_urls = ref_data_urls[:max_refs]
 
         while idx < len(self._model_queue):
             model = self._model_queue[idx]

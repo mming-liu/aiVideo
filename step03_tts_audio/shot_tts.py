@@ -123,10 +123,16 @@ def gen_single_tts(text: str, output_path: Path, provider=None,
         provider: TTS 提供商实例
         voice_config: 音色配置 {id, rate, volume, ...}，None 时使用默认配置
     """
-    # 文本长度检查
+    # 文本长度检查：超长按句末标点安全截断（拦腰截断会语义残缺、
+    # TTS 停在半句，v6.27 修复）。找不到标点才退回硬截断。
     if len(text) > MAX_TEXT_LENGTH:
-        print(f"  [WARN] Text too long ({len(text)} chars), truncating to {MAX_TEXT_LENGTH}")
-        text = text[:MAX_TEXT_LENGTH]
+        _window = text[:MAX_TEXT_LENGTH]
+        _cut = max(_window.rfind(p) for p in "。！？；…\n")
+        if _cut >= int(MAX_TEXT_LENGTH * 0.5):
+            text = _window[: _cut + 1]
+        else:
+            text = _window
+        print(f"  [WARN] Text too long, truncated to {len(text)} chars at punctuation")
 
     if provider is None:
         provider = create_provider()

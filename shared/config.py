@@ -192,4 +192,14 @@ VIDEO_MAX_RETRIES = int(os.getenv("VIDEO_MAX_RETRIES", "3"))
 # ============================================================================
 # 合并配置（step04）
 # ============================================================================
-MERGE_PRESET = os.getenv("MERGE_PRESET", "ultrafast")
+MERGE_PRESET = os.getenv("MERGE_PRESET", "medium")
+# 成片分辨率（宽x高）。调试期保持 720x1280 省生成额度；上线提到 1080x1920
+# 时同步把 BAILIAN_VIDEO_RESOLUTION 改 1080P（视频按秒计费，0.6→1 元/秒）
+MERGE_RESOLUTION = os.getenv("MERGE_RESOLUTION", "720x1280")
+# 成片编码质量（x264 CRF，越小越清晰、文件越大；18=高质量，20=均衡）
+MERGE_CRF = os.getenv("MERGE_CRF", "18")
+# 音频模式：native=只保留视频原声（默认）；tts_mix=TTS 对白轨叠加 +
+# 视频原声闪避（对视频原声不满意时切换，需先跑 step03 生成 audio/shot_N.mp3）
+MERGE_AUDIO_MODE = os.getenv("MERGE_AUDIO_MODE", "native")
+# 逐镜响度归一（EBU R128，消除镜头间音量跳变；关闭则退回固定增益）
+MERGE_AUDIO_LOUDNORM = os.getenv("MERGE_AUDIO_LOUDNORM", "1")

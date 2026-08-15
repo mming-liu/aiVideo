@@ -394,11 +394,28 @@ class BailianVideoService(VideoGenerationService):
         """
         model = self._r2v_model_queue[0]
         is_happyhorse = "happyhorse" in model.lower()
-        # happyhorse 上限9，wan 上限5
-        max_refs = 9 if is_happyhorse else 5
+        # 模型感知 media 上限（happyhorse=9 / wan2.7-r2v=5，注册表可扩展
+        # minimax-h3/seedance）。首/尾帧占 2 个 media 名额，参考图无损压缩
+        # 进剩余名额（前 N-1 原图 + 尾部拼参考表）——参考图必须全部传过去，
+        # 不再丢弃尾部（2026-08-15 需求）。
+        from shared.ref_compose import get_ref_limit, fit_flat
+        media_limit = get_ref_limit(model, default=5)
+        n_frames = (1 if req.image_path else 0) + (1 if req.last_frame_image_path else 0)
+        ref_budget = max(1, media_limit - n_frames)
+
+        ref_paths = list(req.reference_paths or [])
+        if len(ref_paths) > ref_budget:
+            from shared.paths import vimax_working_dir
+            sheet_dir = vimax_working_dir() / "shots" / str(req.clip_index)
+            composed = fit_flat(ref_paths, ref_budget, sheet_dir, f"r2v{req.clip_index}")
+            _verbose_write(
+                f"  [镜头{req.clip_index}] {model} media 上限 {media_limit}（含首尾帧×{n_frames}），"
+                f"参考图 {len(ref_paths)} 张无损压缩为 {len(composed)} 张"
+            )
+            ref_paths = composed
 
         ref_medias = []
-        for ref_path in (req.reference_paths or [])[:max_refs]:
+        for ref_path in ref_paths:
             b64 = self._encode_image(ref_path)
             if b64:
                 # media 项 type 必须是 reference_image（官方文档），

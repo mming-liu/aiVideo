@@ -244,6 +244,8 @@ def _classify_reference_purpose(path: str, shot: dict, registry: dict,
 
     判定优先级：
     0. 路径为本镜头已生成的首帧（first_frame.png）→ 视频起点构图锚点
+    0.5. ref_sheet_*_{类别}.png（r2v 收集层 fit_refs 拼表产物）→ 按类别给
+        「参考表」用途（多角色/多道具拼合，取各单项特征，非画面构图）
     1. 路径文件名含角色名 → 该角色的人物形象参考
     2. 路径属于注册表里某角色的肖像（front/side/back）→ 该角色的人物形象参考
     3. 参考图父目录名 = 角色名（characters_bank/{角色}/）→ 该角色人物参考
@@ -263,6 +265,11 @@ def _classify_reference_purpose(path: str, shot: dict, registry: dict,
     if name == "first_frame.png":
         return ("视频起点构图锚点，画面从该静态瞬间开始，时间、场景、人物站位、"
                 "动作起点与图中完全一致，后续动作在此基础上推进")
+
+    # 0.5. 参考表（fit_refs 拼图产物）：按文件名类别给「参考表」用途
+    if name.startswith("ref_sheet_"):
+        from shared.ref_compose import describe_ref
+        return describe_ref(str(path))
 
     # 1. 文件名直接含角色名（如 杨旭_front.png）
     for ch in characters:
@@ -904,6 +911,14 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     else:
         # 图生视频模式：使用帧图片作为参考
         reference_paths = []
+        # v6.27：中间关键帧（kf_0/1）只有 provider 真会传给模型才收集——
+        # agnes image 模式消费 extra_keyframe_paths；bailian wan2.7-i2v 的
+        # media 组合固定为首帧+尾帧(+音频)，kf 传不进去。收集了但不传，
+        # _build_reference_list 会在 prompt 里虚假声明「有关键帧参考图」，
+        # 语义污染模型。r2v/text 模式本就不收集（用户决策 08-15：
+        # keyframes 留给图生图用，其他两个模式不用）。
+        _provider = (os.getenv("VIDEO_PROVIDER") or "").strip().lower()
+        _kf_enabled = _provider != "bailian"
         if mode == "B" and continuity_ref_image:
             image_path = continuity_ref_image
             for i, fp in enumerate((frame_paths or [])):
@@ -917,7 +932,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
                         image_path = fp
                     elif i == 1:
                         last_frame_image_path = fp
-                    elif i >= 2:
+                    elif i >= 2 and _kf_enabled:
                         extra_keyframe_paths.append(fp)
 
     # 模式A下如果没有有效帧图片，不注入任何参考图（纯 text-to-video）
@@ -1162,18 +1177,33 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
     # （wide.png 是黄昏远景，与首帧的深青夜色冲突，会让视频时间漂移）。场景资产图
     # 只在无首帧时注入，作环境兜底。空间物体图（船/马车）紧随场景后、角色肖像前，
     # 作为尺寸/舞台锚点（船大小由它 + 文字锚点共同锁定）。
-    refs: list[str] = []
-    base = composition_refs + ([scene_refs[0]] if scene_refs and not composition_refs else [])
-    for p in base + space_refs + char_refs + prop_refs:
-        if p not in refs:
-            refs.append(p)
-        if len(refs) >= limit:
-            break
+    #
+    # v6.26（08-15）：旧版 limit=5 平面截断会丢尾部参考图（道具被挤掉）。
+    # 改为类别分组 + 按当前 r2v 模型 media 上限无损压缩（wan2.7-r2v=5 /
+    # happyhorse=9，注册表 shared.ref_compose）——超限类别拼参考表，
+    # 参考图必须全部传过去。压缩后再生成「图N」清单（_build_r2v_purpose_list
+    # 拿到的就是这份最终列表），编号与 provider media 顺序严格对齐。
+    from shared.ref_compose import fit_refs, get_ref_limit
+    r2v_model = (os.getenv("BAILIAN_R2V_MODEL") or "wan2.7-r2v-2026-06-12").split(",")[0].strip()
+    media_limit = get_ref_limit(r2v_model, default=5)
+    # 首帧构图锚点永远原图直传占第 1 名额（构图/时间/站位基准，拼表会严重损失）
+    head_refs = composition_refs[:1]
+    buckets = [
+        ("scene", ([scene_refs[0]] if scene_refs and not composition_refs else [])
+         + list(space_refs)),
+        ("chars", list(char_refs)),
+        ("props", list(prop_refs)),
+    ]
+    from shared.paths import vimax_working_dir as _vwd
+    sheet_dir = _vwd() / "shots" / str(shot.get("index", 0))
+    refs = head_refs + fit_refs(
+        buckets, max(1, media_limit - len(head_refs)), sheet_dir, f"r2v{shot.get('index', 0)}",
+    )
     _log_r2v_collect(
         f"r2v 参考图收集完成（镜头{shot.get('index', '?')}）: "
         f"首帧{len(composition_refs)} / 场景{len(scene_refs)} / "
         f"空间物体{len(space_refs)} / 角色{len(char_refs)} / "
-        f"道具{len(prop_refs)} / 共{len(refs)}张"
+        f"道具{len(prop_refs)} / 模型上限{media_limit} / 传出{len(refs)}张"
     )
     for i, p in enumerate(refs):
         _log_r2v_collect(f"    [{i}] {Path(p).parent.name}/{Path(p).name}")

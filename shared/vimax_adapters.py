@@ -108,47 +108,39 @@ class ImageGeneratorAiVideoAdapter:
             ref_paths = []
             ref = refs[0] if refs else None
 
-        # 参考图数量上限兜底：provider 单次请求能传的图有限（qwen-image 系列
-        # I2I 上限 3 张 = IMAGE_MAX_REFS）。force_multi_ref 会绕过 IMAGE_MULTI_REF
-        # 全传参考图（钩子 5 张 = 场景+3角色+道具），超过 provider 上限会 400
-        # "supports 0~3 image items"。这里把超出的尾部参考图拼成单张「参考表」，
-        # 保留上限内的名额 + 1 张拼图，总共不超过 provider 上限，不丢信息
-        # （拼图让模型一次看到多个角色长相）。优先级保留在前（场景/角色在前，
-        # 尾部多为道具/次要角色）。
-        # 单图模型兜底：provider 不支持多参考图时，把多张肖像拼成单张参考表
+        # 参考图数量上限兜底（通用方法，2026-08-15）：
+        # - provider 只支持单张参考图 → 全部拼成 1 张大参考表（不丢信息）
+        # - provider 支持多图但超上限 → 保留前 N-1 张原图 + 尾部拼 1 张参考表
+        # 适配器层无模型信息，用 IMAGE_MAX_REFS（默认 3）；bridge 层已按
+        # 模型注册表（shared.ref_compose）做过分类无损压缩，这里通常是二道防线。
+        from shared.ref_compose import fit_refs, fit_flat
+        from shared.paths import vimax_working_dir
         max_refs = int(os.getenv("IMAGE_MAX_REFS", "3"))
+        sheet_dir = vimax_working_dir() / "shots" / str(shot_index)
         if ref_paths and not getattr(self._svc, "supports_multi_ref", True):
             try:
-                from shared.portrait_stitch import stitch_portraits
-                from shared.paths import vimax_working_dir
-                sheet_path = vimax_working_dir() / "shots" / str(shot_index) / "ref_sheet.png"
-                stitched = stitch_portraits(ref_paths, str(sheet_path))
-                if stitched:
-                    ref = stitched
-                    ref_paths = []  # 降级为单张
+                merged = fit_refs([("all", ref_paths)], 1, sheet_dir, f"shot{shot_index}")
+                if merged:
+                    ref = merged[0]
+                    ref_paths = []
             except Exception:
                 # 拼图失败则退回第一张，保证不中断生成
                 ref = ref_paths[0]
                 ref_paths = []
         elif len(ref_paths) > max_refs:
-            # provider 支持多图但超模型上限：保留前 max_refs-1 张 + 尾部拼图 = max_refs 张
             try:
-                from shared.portrait_stitch import stitch_portraits
-                from shared.paths import vimax_working_dir
                 from shared.log_utils import verbose_write
-                keep = max_refs - 1
-                sheet_path = vimax_working_dir() / "shots" / str(shot_index) / "ref_sheet_extra.png"
-                stitched = stitch_portraits(ref_paths[keep:], str(sheet_path))
-                if stitched:
-                    ref_paths = list(ref_paths[:keep]) + [stitched]
-                    verbose_write(
-                        f"  [镜头{shot_index}] 参考图 {len(refs)} 张超过模型上限 {max_refs}，"
-                        f"尾部 {len(refs) - keep} 张拼接为参考表，共 {len(ref_paths)} 张传入",
-                        log_file="step02a.log",
-                    )
+                composed = fit_flat(ref_paths, max_refs, sheet_dir, f"shot{shot_index}")
+                verbose_write(
+                    f"  [镜头{shot_index}] 参考图 {len(ref_paths)} 张超过上限 {max_refs}，"
+                    f"无损压缩为 {len(composed)} 张（原图 + 尾部参考表）",
+                    log_file="step02a.log",
+                )
+                ref_paths = composed
             except Exception:
                 # 拼图失败则裁剪到上限，保证不中断
                 dropped = len(ref_paths) - max_refs
+                from shared.log_utils import verbose_write
                 verbose_write(
                     f"  [镜头{shot_index}] 参考图超上限拼图失败，裁剪掉 {dropped} 张",
                     log_file="step02a.log",
@@ -162,6 +154,20 @@ class ImageGeneratorAiVideoAdapter:
             full_prompt = sanitize_prompt(prompt)
         else:
             full_prompt = prompt
+
+        # 参考图清单注入（图生图编号说明，2026-08-15）：多张参考图时按
+        # 上传顺序生成「参考图N：用途」，拼图表（ref_sheet_*）明示
+        # 「多图拼合、只取各单项特征、禁止当作画面构图」——防止模型把
+        # 人物参考表当成画面内容抄进生成图。单张/零张参考不注入。
+        try:
+            final_refs = ref_paths if ref_paths else ([ref] if ref else [])
+            if len(final_refs) >= 2:
+                from shared.ref_compose import build_ref_manifest
+                manifest = build_ref_manifest(final_refs, numbered=False)
+                if manifest:
+                    full_prompt = f"{full_prompt}\n\n{manifest}"
+        except Exception:
+            pass
 
         # 图片防幻觉锁图关键词注入（仅在启用时）
         # 默认用完整锁图（含"场景布局不变"）；尾帧/关键帧通过 lock_prompt 传入

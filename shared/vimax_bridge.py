@@ -1077,6 +1077,49 @@ def _collect_prop_asset_refs(shot: dict, limit: int = 2) -> list[str]:
         return []
 
 
+def _compose_frame_refs_by_category(
+    shot: dict,
+    for_frame: str,
+    scene_refs: list[str],
+    space_refs: list[str],
+    portrait_refs: list[str],
+    prop_refs: list[str],
+    limit: int = 5,
+) -> list[str]:
+    """按类别（环境/人物/道具）把参考图压缩到 IMAGE_MAX_REFS 以内.
+
+    总数不超上限时原样返回（截断到 limit，兼容 wan2.7 等多参考图模型行为）；
+    超上限时每个多图类别横向拼成一张同质参考表，三类别合计 ≤3 张：
+      - 环境（scene）= 场景资产图 + 空间物体（船/马车，同为空间比例锚点）
+      - 人物（chars）= 出镜角色肖像
+      - 道具（props）= 手持道具资产图
+    相比适配器层「前N张原样 + 尾部混拼」，每张参考表语义同质——模型能明确
+    知道这张全是人物长相、那张全是环境，不再出现「2角色+1道具」混拼表。
+    上限按当前 IMAGE_PROVIDER 主模型从 shared.ref_compose 注册表解析
+    （qwen-image=3 / wan2.7-image=9 / ...），未注册模型回退 IMAGE_MAX_REFS。
+    拼图失败时 fit_refs 内部裁剪兜底（保优先级，不中断生成）。
+    """
+    from shared.ref_compose import fit_refs, active_image_ref_limit
+    from shared.paths import vimax_working_dir
+
+    max_refs = active_image_ref_limit()
+    buckets = [
+        ("scene", list(scene_refs) + list(space_refs)),
+        ("chars", list(portrait_refs)),
+        ("props", list(prop_refs)),
+    ]
+    n_total = len({p for _, items in buckets for p in (items or []) if p and Path(p).exists()})
+    frame_tag = "ff" if for_frame == "首帧" else "lf"
+    shot_dir = vimax_working_dir() / "shots" / str(shot.get("index", 0))
+    composed = fit_refs(buckets, max_refs, shot_dir, frame_tag)
+    if n_total > max_refs:
+        _bridge_log(
+            f"  [bridge] 镜头{shot.get('index', '?')} {for_frame}: 参考图 {n_total} 张超上限 "
+            f"{max_refs}，按类别无损压缩为 {len(composed)} 张"
+        )
+    return composed
+
+
 def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
                                  limit: int = 5, for_frame: str = "首帧") -> list[str]:
     """为 step02a 首帧/尾帧图生图收集参考图（场景 → 角色 → 道具）.
@@ -1099,21 +1142,16 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
     if empty_scene:
         return scene_refs[:limit]
 
-    # v6.25：组装序 = 场景 → 空间物体（船/马车）→ 角色肖像 → 手持道具。
-    # 空间物体是环境/尺寸锚点（决定画面空间比例，防船画小），比手持道具重要，
-    # 先于角色肖像占据名额——hook 首帧「3角色+2道具」占满 5 名额时船必须在场。
+    # v6.26：按类别分组拼图。类别内配额放宽（多图类别会被拼成 1 张），
+    # 道具不再被角色名额挤掉——旧版平面列表 limit=5 时 3 角色+空间物体
+    # 就占满名额，道具永远进不了参考图。
     space_refs = _collect_space_object_refs(shot)
-    prop_budget = max(1, limit - len(scene_refs) - len(space_refs))
-    portrait_refs = _collect_portrait_refs_for_shot(shot, characters, limit=max(1, limit - len(scene_refs) - len(space_refs)))
-    prop_refs = _collect_prop_asset_refs(shot, limit=prop_budget)
+    portrait_refs = _collect_portrait_refs_for_shot(shot, characters, limit=max(2, limit - 1))
+    prop_refs = _collect_prop_asset_refs(shot, limit=3)
 
-    refs: list[str] = []
-    for p in scene_refs + space_refs + portrait_refs + prop_refs:
-        if p not in refs:
-            refs.append(p)
-        if len(refs) >= limit:
-            break
-    return refs
+    return _compose_frame_refs_by_category(
+        shot, for_frame, scene_refs, space_refs, portrait_refs, prop_refs, limit=limit,
+    )
 
 
 def _detect_action_subject(shot: dict, characters: list | None = None) -> str:

@@ -59,6 +59,23 @@ import os
 # v6.22：音频音量归一（FFMPEG_AUDIO_VOLUME 环境变量，如 5dB/0.8；默认空=不处理）
 _AUDIO_VOLUME = os.getenv("FFMPEG_AUDIO_VOLUME", "").strip()
 
+# v6.27（08-15）：画质/音频模式配置化（shared.config）
+try:
+    from shared.config import (
+        MERGE_RESOLUTION as _RES,
+        MERGE_CRF as _CRF,
+        MERGE_AUDIO_MODE as _AUDIO_MODE,
+        MERGE_AUDIO_LOUDNORM as _LOUDNORM,
+    )
+except ImportError:
+    _RES, _CRF, _AUDIO_MODE, _LOUDNORM = "720x1280", "18", "native", "1"
+_m = re.match(r"(\d+)x(\d+)", _RES.strip())
+if not _m:
+    raise ValueError(f"MERGE_RESOLUTION 格式错误（应为 WxH，如 720x1280）: {_RES!r}")
+OUT_W, OUT_H = int(_m.group(1)), int(_m.group(2))
+# 字幕字号随分辨率缩放（720 宽→22，1080 宽→33）
+SUB_FONT_SIZE = max(20, int(OUT_W * 22 / 720))
+
 
 # v6.22：多转场映射表（clip_transition 文本关键词 → xfade transition 类型）
 _TRANSITION_MAP = (
@@ -151,40 +168,92 @@ def _parse_transition(text: str, default_dur: float = 0.5):
     return kind, dur
 
 
-def _build_native_transition_filter(clips, transitions, video_filter):
+def _build_native_transition_filter(clips, transitions, video_filter,
+                                    tts_paths=None):
     """为 native 模式构建带转场的 filter_complex。
 
     视频：xfade（交叉溶解，要求各输入已归一化为同尺寸/帧率）
     音频：acrossfade（同步交叉淡化，避免硬切爆音）
     纯「硬切」：concat 直接拼接（不重叠）。
+    v6.27（08-15）：
+      - 分辨率配置化（MERGE_RESOLUTION，OUT_W×OUT_H），缩放用
+        increase+crop 而非 pad——704 宽 hook 不再烧进 8px 黑边（轻微裁切
+        上下边缘换取满幅）。
+      - 无音频流片段用 anullsrc 补静音轨（回退 happyhorse 无声不再崩合并）。
+      - 逐镜 loudnorm 响度归一（MERGE_AUDIO_LOUDNORM=1，替代固定增益——
+        固定 +5dB 会放大安静镜头底噪且不解决镜头间响度差）。
+      - tts_paths（MERGE_AUDIO_MODE=tts_mix 时）：每镜叠加 TTS 对白轨，
+        视频原声经 sidechaincompress 闪避（对白出现时压低环境音）。
+        TTS 缺失的镜保持纯原声。
 
     Returns:
-        (filter_complex, video_label, audio_label, total_duration, srt_durations)
+        (filter_complex, video_label, audio_label, total_duration, srt_durations,
+         n_extra_inputs)
         srt_durations 已按转场重叠量扣减，供字幕时间轴对齐。
+        n_extra_inputs: 额外音频输入数（tts_mix 模式，追加在视频输入之后）。
     """
+    from step04_merge.stretch import has_audio_stream
     durs = [get_media_duration(c) for c in clips]
     n = len(clips)
     parts = []
 
-    # 归一化 + 截断每个输入（hook/shot1=704x1280@24，shot2+=720x1280@30，必须统一）
+    # TTS 输入映射：tts_paths[i] 非空 → 追加为输入 n+pending，记录输入序号
+    tts_inputs: list[int | None] = [None] * n
+    n_extra = 0
+    if _AUDIO_MODE == "tts_mix":
+        for i, tp in enumerate(tts_paths or []):
+            if tp and Path(tp).exists():
+                tts_inputs[i] = n + n_extra
+                n_extra += 1
+
+    # 归一化 + 截断每个输入（分辨率配置化；hook/shot 分辨率帧率不一致必须统一）
     for i, d in enumerate(durs):
         v_chain = (
-            f"[{i}:v]fps=24,scale=720:1280:force_original_aspect_ratio=decrease,"
-            f"pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,"
+            f"[{i}:v]fps=24,"
+            f"scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,"
+            f"crop={OUT_W}:{OUT_H},setsar=1,format=yuv420p,"
             f"trim=duration={d:.2f},setpts=PTS-STARTPTS,settb=AVTB"
         )
         # 首个镜头的「淡入」→ 从黑场淡入
         if i == 0 and transitions[0][0] == "fade_in":
             v_chain += f",fade=t=in:st=0:d={min(transitions[0][1], d):.2f}"
         parts.append(f"{v_chain}[nv{i}]")
-        # v6.22：音频音量归一（读取 FFMPEG_AUDIO_VOLUME，如 5dB/0.8；默认不处理）
-        _a_chain = (
-            f"[{i}:a]atrim=duration={d:.2f},asetpts=PTS-STARTPTS,"
-            f"aformat=sample_fmts=fltp:channel_layouts=stereo,aresample=44100"
-        )
-        if _AUDIO_VOLUME:
+
+        # 音频链：无声片段补静音轨（anullsrc），有声片段正常取 [i:a]
+        if has_audio_stream(clips[i]):
+            _a_chain = (
+                f"[{i}:a]atrim=duration={d:.2f},asetpts=PTS-STARTPTS,"
+                f"aformat=sample_fmts=fltp:channel_layouts=stereo,aresample=44100"
+            )
+        else:
+            _logger.warn(f"[WARN] 片段无音频流（补静音轨）: {clips[i].name}")
+            _a_chain = (
+                f"anullsrc=r=44100:channel_layouts=stereo,atrim=duration={d:.2f},"
+                f"asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:channel_layouts=stereo"
+            )
+        # 响度归一：优先 loudnorm（EBU R128 统一感知响度）；
+        # 显式配置了 FFMPEG_AUDIO_VOLUME 则用固定增益（旧行为兼容）
+        if _LOUDNORM == "1" and not _AUDIO_VOLUME:
+            _a_chain += ",loudnorm=I=-16:TP=-1.5:LRA=11"
+        elif _AUDIO_VOLUME:
             _a_chain += f",volume={_AUDIO_VOLUME}"
-        parts.append(f"{_a_chain}[na{i}]")
+
+        # tts_mix：叠加 TTS 对白轨 + 视频原声闪避，混音结果统一标记 [na{i}]
+        if tts_inputs[i] is not None:
+            _in = tts_inputs[i]
+            # TTS 轨：截到镜头时长、不足补静音（对白从镜头起点播，电平基准）
+            parts.append(
+                f"[{_in}:a]aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                f"aresample=44100,atrim=duration={d:.2f},asetpts=PTS-STARTPTS,"
+                f"apad=whole_dur={d:.2f}[tts{i}]"
+            )
+            # 原声压低 + TTS 对白为主（amix 权重：原声 0.6 / TTS 1.0）
+            _a_chain += (
+                f",[tts{i}]amix=inputs=2:duration=first:weights=0.6 1[na{i}]"
+            )
+        else:
+            _a_chain += f"[na{i}]"
+        parts.append(_a_chain)
 
     total = durs[0]
     cur_v, cur_a = "[nv0]", "[na0]"
@@ -226,7 +295,8 @@ def _build_native_transition_filter(clips, transitions, video_filter):
         kind, tdur = transitions[i]
         srt_durations.append(durs[i] if kind == "cut" else durs[i] - tdur)
 
-    return ";".join(parts), "[outv]", cur_a, total, srt_durations
+    parts = [p for p in parts if p]  # 清理占位空段
+    return ";".join(parts), "[outv]", cur_a, total, srt_durations, n_extra
 
 
 def main():
@@ -351,49 +421,76 @@ def main():
   # 5. Generate SRT subtitles
   generate_srt(valid_shots, target_durations, SRT_OUT)
 
-  # 6. Merge video - native（唯一模式）：直接拼接保留视频原声
+  # 6. Merge video - native（默认）：直接拼接保留视频原声；
+  #    tts_mix（可选）：叠加 step03 TTS 对白轨（视频原声不满意时切换）
   _logger.separator("=", 60)
-  _logger.info("[INFO] Native merge: 转场 + 拼接 + 字幕 + 调色（保留视频原声）")
+  _logger.info(f"[INFO] Merge: 转场 + 拼接 + 字幕 + 调色（音频模式: {_AUDIO_MODE}）")
   _logger.separator("=", 60)
   from step04_merge.merge_core import _run_cmd, _find_exe
   FFMPEG = _find_exe("ffmpeg")
 
   srt_path_abs = SRT_OUT.resolve().as_posix()
   escaped_srt = srt_path_abs.replace(":", "\\:")
+  # v6.27：字幕可读性修复——白字黑边（原白字白边亮场景不可读）+ 中文字体
+  # （Sans 在 Windows 会回退）+ 字号随分辨率缩放
   style = (
-    f"FontName=Sans"
-    f"\\,FontSize=20"
+    f"FontName=Microsoft YaHei"
+    f"\\,FontSize={SUB_FONT_SIZE}"
     f"\\,PrimaryColour=&H00FFFFFF"
-    f"\\,OutlineColour=&H00FFFFFF"
-    f"\\,Outline=1"
+    f"\\,OutlineColour=&H00000000"
+    f"\\,Outline=2"
+    f"\\,Shadow=1"
   )
   # v6.22：调色配置化（读取 merge_core 的环境变量，替代硬编码）
   from step04_merge.merge_core import CONTRAST, SATURATION, VIGNETTE_ANGLE
   color_filter = f"eq=contrast={CONTRAST}:saturation={SATURATION}"
   if VIGNETTE_ANGLE:
     color_filter += f",vignette=angle={VIGNETTE_ANGLE}"
+  # v6.27：filter 顺序修复——调色在前、字幕最后（原顺序 vignette 会压暗
+  # 字幕区域、eq 改变字幕白字的饱和度）
   video_filter = (
-    f"subtitles='{escaped_srt}':force_style='{style}',"
-    f"{color_filter}"
+    f"{color_filter},"
+    f"subtitles='{escaped_srt}':force_style='{style}'"
   )
 
+  # tts_mix：为每个镜头找 step03 的 TTS 音频（audio/shot_{idx}.mp3）
+  tts_paths = None
+  if _AUDIO_MODE == "tts_mix":
+    from shared.paths import audio_dir
+    _adir = audio_dir()
+    tts_paths = []
+    n_found = 0
+    for s in valid_shots:
+      _tp = _adir / f"shot_{s.get('index', 0)}.mp3"
+      if _tp.exists() and _tp.stat().st_size > 10240:
+        tts_paths.append(str(_tp))
+        n_found += 1
+      else:
+        tts_paths.append(None)
+    _logger.info(f"[INFO] tts_mix: {n_found}/{len(valid_shots)} 镜头有 TTS 音频"
+                 f"（缺失的镜头保持纯视频原声；请先运行 step03）")
+
   _logger.info("[INFO] Native mode: applying transitions + concat filter")
-  filter_complex, v_label, a_label, _, _ = _build_native_transition_filter(
-    clips, native_transitions, video_filter
+  filter_complex, v_label, a_label, _, _, n_extra = _build_native_transition_filter(
+    clips, native_transitions, video_filter, tts_paths=tts_paths
   )
 
   # Build command with multiple inputs
   cmd = [FFMPEG, "-y"]
   for c in clips:
     cmd.extend(["-i", str(c)])
+  for tp in [t for t in (tts_paths or []) if t]:
+    cmd.extend(["-i", tp])
   cmd.extend([
     "-filter_complex", filter_complex,
     "-map", v_label, "-map", a_label,
-    "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", "20",
+    "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", str(_CRF),
     "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
     str(FINAL_OUT),
   ])
+  _logger.info(f"[INFO] 编码: preset={VIDEO_PRESET} crf={_CRF} 分辨率={OUT_W}x{OUT_H}"
+               f"（MERGE_RESOLUTION 可调；上线 1080x1920 时同步改 BAILIAN_VIDEO_RESOLUTION=1080P）")
   subprocess.run(cmd, check=True)
   _logger.info(f"[OK] Final video generated: {FINAL_OUT}")
 

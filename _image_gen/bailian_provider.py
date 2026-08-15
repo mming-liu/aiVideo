@@ -25,6 +25,7 @@ from shared.config import (
 )
 from shared.key_scheduler import KeyScheduler
 from shared.error_fmt import parse_retry_after
+from shared.ref_compose import get_ref_limit, fit_flat
 
 
 # Bailian 图片 API 限速（每分钟请求数，默认 300，类似 Agnes 21s 冷却）
@@ -155,6 +156,22 @@ class BailianImageService(ImageGenerationService):
 
         while model_idx < len(self._model_queue):
             model = self._model_queue[model_idx]
+            # 模型感知参考图上限（qwen-image=3 / wan2.7-image=9，见 shared.ref_compose
+            # 注册表）+ 无损压缩：超上限保留前 N-1 张原图 + 尾部拼 1 张参考表，
+            # 参考图信息不丢失（替换旧版「丢弃尾部」）。403 回退到不同上限的
+            # 模型时各自按注册表重算。在编码前、重试循环外只做一次。
+            ref_limit = get_ref_limit(model, default=self._max_image_refs)
+            ref_paths = list(req.reference_image_paths or [])
+            if not ref_paths and req.reference_image_path:
+                ref_paths = [req.reference_image_path]
+            if len(ref_paths) > ref_limit:
+                sheet_dir = os.path.join(config.OUTPUT_DIR, "ref_sheets")
+                composed = fit_flat(ref_paths, ref_limit, sheet_dir, f"shot{req.shot_index}")
+                _verbose_write(
+                    f"  [镜头{req.shot_index}] {model} 参考图 {len(ref_paths)} 张超上限 "
+                    f"{ref_limit}，无损压缩为 {len(composed)} 张（原图 + 尾部参考表）"
+                )
+                ref_paths = composed
             retry_429 = 0
 
             while retry_429 <= _MAX_429_RETRIES:
@@ -162,7 +179,7 @@ class BailianImageService(ImageGenerationService):
                 # content 数组支持 text + image 混合（图生图：同框多角色各自传入肖像）
                 content_items = [{"text": req.prompt}]
                 ref_urls = []
-                for ref_path in req.reference_image_paths:
+                for ref_path in ref_paths:
                     url = _encode_image(ref_path)
                     if url:
                         ref_urls.append(url)
@@ -172,16 +189,6 @@ class BailianImageService(ImageGenerationService):
                     url = _encode_image(req.reference_image_path)
                     if url:
                         ref_urls.append(url)
-                # 裁剪到模型 I2I 上限（0~3 张），超出丢弃尾部参考图。
-                # 首帧/尾帧参考图组装时已按 场景→角色→道具 排序，优先级在前，
-                # 超出的尾部（多为道具/次要角色）丢弃不致命。
-                if len(ref_urls) > self._max_image_refs:
-                    dropped = len(ref_urls) - self._max_image_refs
-                    _verbose_write(
-                        f"  [镜头{req.shot_index}] 参考图 {len(ref_urls)} 张超过模型上限 "
-                        f"{self._max_image_refs}，裁剪掉后 {dropped} 张（保留 场景→角色→道具 优先级）"
-                    )
-                    ref_urls = ref_urls[: self._max_image_refs]
                 for url in ref_urls:
                     content_items.append({"image": url})
                 messages = [
