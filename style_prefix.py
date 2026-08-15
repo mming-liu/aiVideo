@@ -323,6 +323,7 @@ def preprocess_prompt_for_image(prompt: str) -> str:
         "乌丝": "黑发",
         "黛眉": "柳眉",        # 黛=青黑色，避免误译
         "平定四方巾": "乌黑色平定四方巾",  # 未锁色会被脑补成绿/青（08-10 杨旭绿头巾）
+        "戟指": "手指直指",    # 戟=WEAPON_WORDS 武器词，图片模型把"戟指"(怒指)直译成持戟/持杆（08-15 hook 首帧）
     }
     result = prompt
     for old, new in replacements.items():
@@ -1313,6 +1314,17 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                 + _no_weapon
                 + f"【人物】{_not_threat}刺客是蒙面的。刺客是成年男性。"
                 "禁止两个人拿武器。只有刺客一个人拿武器。"
+            )
+
+        # 非战斗镜头禁武器（08-15 hook 尾帧被图片模型塞匕首）：镜头从未提及任何
+        # 武器且无威胁源时，画面禁止出现任何武器。检测同时看原始 shot 文本与
+        # 预处理后的最终 prompt——「戟指」已被替换，避免「戟」误判；若描述本身
+        # 写了武器（如"杨旭持剑"）则跳过，该镜允许武器、由正向约束管理。
+        if not has_threat and not any(w in shot_text for w in WEAPON_WORDS) \
+                and not any(w in prompt for w in WEAPON_WORDS):
+            strict_constraints += (
+                "【禁止武器】本镜头无任何武器，画面中禁止出现武器、刀具、匕首、刀、剑、"
+                "短刃、暗器、凶器；所有角色徒手空拳，手中禁止握持任何物品。"
             )
 
         # 性别硬约束（防角色性别错乱）：从角色属性派生，非硬编码人名

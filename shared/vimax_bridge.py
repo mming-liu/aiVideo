@@ -1868,6 +1868,13 @@ def _extract_prop_layout(
 _COSTUME_WORDS = ("袍", "衫", "衣", "裳", "裙", "袄", "裰", "服", "袈", "氅")
 
 
+# 镜中临时状态覆盖（08-15 hook 尾帧听香盘发泄漏）：dynamic_features 含这些
+# 发型状态词时，static_features（肖像发型）中与之冲突的静态发型短语必须剔除。
+_HAIR_STATE_WORDS = ("披头散发", "披发", "散发", "乱发", "发髻散落", "蓬发")
+_HAIR_STATIC_PHRASES = ("青丝挽美人髻", "黑发挽美人髻", "青丝盘起", "秀发高挽",
+                        "发髻高耸", "云鬓高挽", "挽发", "束发", "盘发")
+
+
 def _inject_character_costume(desc: str, characters: list | None,
                               shot: dict | None = None,
                               frame_kind: str | None = None,
@@ -1928,6 +1935,19 @@ def _inject_character_costume(desc: str, characters: list | None,
             # "身着"，否则用"，"连接（如刺客 dynamic="浑身湿透"非衣服，说"身着浑身
             # 湿透"不通顺 → "刺客：猫系脸…，浑身湿透"）。static 缺失时只拼 dynamic。
             conn = "，身着" if any(w in dynamic for w in _COSTUME_WORDS) else "，"
+            # 发型状态覆盖：dynamic 含"披头散发/散发"等状态词时，static（肖像）
+            # 里的静态发型短语（美人髻/束发/盘发）必须剔除并显式声明当前状态，
+            # 否则肖像参考图锚定盘发，图片模型把「披发」镜头画成盘发（08-15
+            # hook 尾帧听香）。脸型锚定保留，只去冲突发型。
+            _hair_state = next((w for w in _HAIR_STATE_WORDS if w in dynamic), "")
+            if _hair_state:
+                for _phrase in _HAIR_STATIC_PHRASES:
+                    static = static.replace(_phrase, "")
+                # 剔除后合并残留空段（"如花似玉，青丝挽美人髻，秀颈" → "如花似玉，秀颈"）
+                _parts = [p for p in static.split("，") if p.strip()]
+                static = "，".join(_parts)
+                if static:
+                    static = f"{static}，此刻{_hair_state}"
             combined = (f"{ident}：{static}{conn}{dynamic}" if static
                         else f"{ident}{conn}{dynamic}")
             if combined in desc:
@@ -2564,7 +2584,9 @@ async def _gen_keyframes_async(
             # 从 shot 全文提取出镜角色的姿态/位置/朝向，防"杨旭站立后倒/听香撑伞/
             # 刺客消失/船断"（code-audit 08-10 hook 关键帧质量）。首帧也注入。
             kf_anchor = _extract_char_layout(shot, characters, role_scan_text=role_scan)
-            if kf_anchor:
+            # 08-15（PR-2）：脚本层 post_fix 已注入「【角色锚定】」骨架时跳过，防重复
+            # 追加（幂等）。生成时仍由 _extract_char_layout 兜底补漏。
+            if kf_anchor and "【角色锚定】" not in kf_desc:
                 kf_desc = f"{kf_desc}。{kf_anchor}"
             # A3 修复：道具空间方位锚定块（关键帧同框道具落点，防自由摆放重叠）
             kf_prop = _extract_prop_layout(shot, characters, role_scan_text=role_scan)

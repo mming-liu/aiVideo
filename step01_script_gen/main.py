@@ -351,7 +351,7 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         req = TextGenerationRequest(
             system_prompt=SYSTEM_PROMPT,
             user_prompt=prompt,
-            max_tokens=40000,
+            max_tokens=50000,  # 08-15：全量分析反馈进 prompt 后重写镜头更多，输出=完整脚本留余量（修复轮已用 50000 实测成功）
             temperature=0.2,
             json_schema=SCRIPT_SCHEMA,
         )
@@ -402,12 +402,20 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
 # 定向修复轮：GAP 通过后仍存在的高价值告警（开篇冲突/爆点密度/威胁源朝向/
 # 关键帧质量/内容密度），只把「告警镜头 + 告警文本」发给 LLM 做单镜修复，
 # 比全脚本重生成便宜、且不破坏已通过的镜头。P18（08-15）核心闭环。
+# 08-15（v6.36）收紧：只留「字段级局部修复」类别——重写被限制在具体字段
+# （ff/lf 锚、道具方位、强情绪链、ff/motion 时序），引入新噪音的风险低。
+# 剔除：opening_hook/punch_density（全局重构，改前1/3段必引入噪音）、content_density
+# （08-15 实测 1→9 重写越改越糟）、threat_gaze_coupling（B2 确定性注入已覆盖）。
+# 08-15（PR-2）：keyframes_quality 退出修复轮——聚合告警（「N 个中间关键帧」无镜头号）
+# 本就归 global 被过滤，且 post_fix 已确定性注入角色姿态/位置骨架，无需 LLM 修。
 _REPAIR_PRIORITY_CATEGORIES = (
-    "opening_hook", "punch_density", "ff_desc_anchors", "keyframes_quality",
-    "content_density", "threat_gaze_coupling", "ff_motion_timeline",
-    "prop_spatial_anchor", "shot_transition", "action_overlap",
+    "ff_desc_anchors", "prop_spatial_anchor",
+    "strong_emotion_chain", "ff_motion_timeline",
+    "shot_transition", "action_overlap", "shot_size_jump",
 )
-_REPAIR_MAX_ROUNDS = 2
+# 08-15（v6.36）：2 轮 → 1 轮——实测修复轮越改越糟（38→55），降为单轮 top-6
+# 聚焦最严重，杜绝「第2轮全量」把没问题的镜头也重写一遍。
+_REPAIR_MAX_ROUNDS = 1
 
 
 def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
@@ -439,9 +447,20 @@ def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
         label = _REGEN_FEEDBACK_LABELS.get(key, key)
         import re as _re
         for w in warns:
-            m = _re.match(r"镜头([\d]+)", w)
-            tid = f"shot_{m.group(1)}" if m else ("hook" if "钩子" in w else "global")
-            per_shot.setdefault(tid, []).append(f"[{label}] {w.strip()}")
+            m = _re.match(r"镜头([\d]+)(?:→(\d+))?", w)
+            if m:
+                _tid = f"shot_{m.group(1)}"
+                per_shot.setdefault(_tid, []).append(f"[{label}] {w.strip()}")
+                # 08-15（PR-3）：跨镜告警（镜头衔接「镜头N→M」/动作重叠「镜头N→M」）
+                # 涉及的**两镜**都归入修复——动作重叠/衔接的修复动作常落在 M 的
+                # ff/prompt（下一镜承接上一镜结尾动作），M 不在 picked 则 merge 门闩
+                # 丢弃其改写，永远修不干净。只加告警句点名的对镜，不把整串 run 全加。
+                if m.group(2):
+                    per_shot.setdefault(f"shot_{m.group(2)}",
+                                         []).append(f"[{label}] {w.strip()}")
+            else:
+                _tid = "hook" if "钩子" in w else "global"
+                per_shot.setdefault(_tid, []).append(f"[{label}] {w.strip()}")
     return per_shot
 
 
@@ -462,12 +481,31 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         shot_items = {k: v for k, v in per_shot.items() if k.startswith("shot_") or k == "hook"}
         if not shot_items:
             return script
-        # 每轮最多修 6 个镜头（防 prompt 膨胀）；按告警数降序
+        # 第1轮：只挑告警最多的前 6 镜，聚焦修最严重的（防 prompt 膨胀）；
+        # 第2轮：剩余告警镜头**全部**返给 LLM 一次修完（08-15 用户要求——低告警镜头
+        # 此前可能两轮都进不了 top-6 而永不修复）。每轮 _collect_repair_warnings 都
+        # 重新校验当前脚本：第1轮已修的告警消失、未修的保留，故第2轮"全部"天然覆盖
+        # 第1轮遗留 + 第2轮新增。
         import itertools
-        picked = dict(itertools.islice(
-            sorted(shot_items.items(), key=lambda kv: -len(kv[1])), 6))
+        if _round == 1:
+            picked = dict(itertools.islice(
+                sorted(shot_items.items(), key=lambda kv: -len(kv[1])), 6))
+        else:
+            picked = dict(shot_items)
         if not picked:
             return script
+        # 08-15（PR-3）：跨镜告警对镜补选——top-6 按告警数排序时，被选镜告警里的
+        # 「镜头N→M」对镜可能掉出前 6（两镜告警数相同会一起进，但若 N 另有别的
+        # 告警挤掉 M 就散了）。补选保证 N 入选时 M 必然一起，merge 门闩才能采纳
+        # M 的承接改写。只补告警句点名的对镜，不把整串 run 全加（12→22 不加中间）。
+        import re as _pr3re
+        for _tid in list(picked):
+            for _w in picked[_tid]:
+                _pm = _pr3re.search(r"镜头\d+→(\d+)", _w)
+                if _pm:
+                    _partner = f"shot_{_pm.group(1)}"
+                    if _partner in shot_items and _partner not in picked:
+                        picked[_partner] = shot_items[_partner]
 
         # 构建单镜修复 prompt：只带被选镜头原文 + 告警
         shots_by_id = {f"shot_{s.get('index')}": s for s in script.get("shots", [])}
@@ -476,23 +514,36 @@ def _repair_shot_warnings(script: dict, novel_text: str,
 
         _console(f"  [修复轮{_round}] {len(picked)} 镜待修（{', '.join(picked)}）...")
         parts = []
-        # 结构性全局告警（开篇冲突/爆点密度）没有对应镜头，作为修复前言注入
-        global_warns = per_shot.get("global") or []
-        if global_warns:
-            parts.append("### 全片结构问题（涉及前1/3段节奏）\n"
-                         + "\n".join(f"  - {w}" for w in global_warns)
-                         + "\n请通过调整前1/3段镜头顺序/精简铺垫/强化首镜冲突来修复（不要删关键剧情节点）。")
+        # 08-15（v6.36 P18 修复）：删除「全片结构问题」前言注入。v6.36 已把开篇冲突/
+        # 爆点密度/内容密度 剔除出修复类别（全局重构必引入噪音），此时 per_shot["global"]
+        # 只剩 keyframes 聚合告警（以「N 个中间关键帧」开头、无镜头号、被 shot_items
+        # 过滤）——把它当结构问题灌给 LLM 只会诱导重排前1/3段镜头，正是开篇冲突/爆点
+        # 密度回归的来源。keyframes 改走确定性 skeleton（PR-2），不进修复轮。
         for tid, warns in picked.items():
             if tid == "global":
                 continue
             s = shots_by_id.get(tid)
             if not s:
                 continue
+            # 08-15 邻镜上下文（用户要求）：镜头衔接/动作重叠是**跨镜**类告警，
+            # 第1轮 top-6 时邻镜不在 prompt 里，LLM 看不到邻镜结尾/开头就修不了
+            # 成对的衔接问题——把「前镜 lf_desc + 后镜 ff_desc」一并给 LLM。
+            # 第2轮全量时邻镜字段已在各自块里，此处冗余无害。
+            prev_s = shots_by_id.get(f"shot_{s.get('index', 0) - 1}")
+            next_s = shots_by_id.get(
+                f"shot_1" if tid == "hook" else f"shot_{s.get('index', 0) + 1}")
+            ctx_lines = []
+            if prev_s:
+                ctx_lines.append(f"前镜({prev_s.get('index')}) lf_desc: {prev_s.get('lf_desc', '')}")
+            if next_s:
+                ctx_lines.append(f"后镜({next_s.get('index')}) ff_desc: {next_s.get('ff_desc', '')}")
+            ctx = ("\n" + "\n".join(ctx_lines) + "\n") if ctx_lines else ""
             parts.append(f"### 待修镜头 {tid}\n"
                          f"当前 ff_desc: {s.get('ff_desc', '')}\n"
                          f"当前 lf_desc: {s.get('lf_desc', '')}\n"
                          f"当前 prompt: {s.get('prompt', '')}\n"
                          f"当前 color_tone: {s.get('color_tone', '')}\n"
+                         f"{ctx}"
                          f"问题:\n" + "\n".join(f"  - {w}" for w in warns))
         if not parts:
             return script
@@ -501,12 +552,22 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "\n\n# 定向修复（来自本地校验）\n"
             "以下是部分分镜的问题清单。请**只修复这些问题涉及的镜头**，"
             "输出完整修正后的分镜 JSON（保留全部镜头结构与未提及字段，"
-            "不要改动没有问题的镜头，不要增删镜头）。修复要点：\n"
-            "1. 开篇冲突/爆点密度：前1/3段补冲突或提前爆点（可微调镜头顺序/精简铺垫/强化首镜冲突）\n"
-            "2. ff/lf_desc 锚点：威胁源写朝向/目标、出镜角色重述服装色\n"
-            "3. keyframes desc：补角色姿态/位置锚定\n"
-            "4. 内容密度过载：精简动作或拆镜\n"
-            "5. 保持原文锚定（narration_segment 逐字来自原文）、服装色、致命伤连续性不变\n"
+            "不要改动没有问题的镜头，不要增删镜头）。"
+            "**手术刀原则（最高优先级）：只改问题字段，其余内容逐字保留——"
+            "禁止新增动作短语/情绪词/运镜词/光位词/转场词，禁止改景别/时长/台词/剧情。**"
+            "修复要点：\n"
+            "1. ff/lf_desc 锚点：威胁源写朝向/目标、出镜角色重述服装色\n"
+            "2. keyframes desc：补角色姿态/位置锚定\n"
+            "3. 保持原文锚定（narration_segment 逐字来自原文）、服装色、致命伤连续性不变\n"
+            "4. 镜头衔接/动作重叠（跨镜）：利用每镜附带的「前镜 lf_desc / 后镜 ff_desc」"
+            "上下文——相邻镜头同地点时在结尾补衔接词（自然过渡/淡入淡出等），后一镜开头"
+            "承接前一镜结尾的动作，禁止无承接硬切\n"
+            "5. 景别跳跃（无夹心的真跳跃）：把后一镜的景别改为中间级（如全景→中景），"
+            "同步改该镜 prompt 开头的景别词与 ff_desc 构图——禁止只改景别词不改构图"
+            "（图视不一致），也禁止增删镜头\n"
+            # 08-15（v6.36 P18 修复）：已删「开篇冲突/爆点密度」「内容密度」两条指令——
+            # 这两类已剔除出 _REPAIR_PRIORITY_CATEGORIES，指令却还在 = 给 LLM 发放
+            # 结构性改写许可证（可微调镜头顺序/删动作），与「手术刀」矛盾。
             + "\n".join(parts)
         )
 
@@ -518,7 +579,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         req = TextGenerationRequest(
             system_prompt=SYSTEM_PROMPT,
             user_prompt=prompt,
-            max_tokens=40000,
+            max_tokens=50000,  # 08-15：第2轮全量告警重写镜头更多，输出=完整脚本，留出截断余量
             temperature=0.2,
             json_schema=SCRIPT_SCHEMA,
         )
@@ -547,20 +608,39 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             break
 
         # 只采纳修复过的镜头，其余镜头保持原样（合并回 script）
+        # 08-15（v6.36 P18 修复）：merge 强制以 picked 为门闩——此前只按 index 匹配就
+        # 全量采纳修复 LLM 的整本重写（25/25 镜），非选中镜头（23/25）的改写也一并落地，
+        # 光位×4/开篇冲突/爆点密度/内容密度 等新告警全由「全量采纳」引入。注释写「只
+        # 采纳修复过的镜头」但代码从没查 picked——v6.36 回归根因。现在 picked 镜内仍受
+        # 「手术刀原则」约束；跨镜告警（衔接/越轴）的对镜纳入 picked 属 PR-3。
         merged = dict(script)
         merged["shots"] = []
         for old_s in script.get("shots", []):
+            idx = old_s.get("index")
             new_s = next((n for n in new_script.get("shots", [])
-                          if n.get("index") == old_s.get("index")), None)
-            merged["shots"].append(new_s if new_s else old_s)
+                          if n.get("index") == idx), None)
+            if new_s and f"shot_{idx}" in picked:
+                merged["shots"].append(new_s)
+            else:
+                merged["shots"].append(old_s)
         if "hook" in picked and new_script.get("hook"):
             merged["hook"] = new_script["hook"]
         # 修复后需重新算时间轴/注入全局渲染参数
-        from shared.vimax_bridge import inject_global_config_into_script as _inj
-        _inj(merged)
+        # 08-15 修复：正确函数在 style_prefix（_post_process:186 同款），原 import 自
+        # shared.vimax_bridge 不存在 → 修复轮合并后 ImportError 崩溃，修复结果从未落地
+        merged = style_prefix.inject_global_config_into_script(merged)
         _compute_timecodes(merged)
         script = merged
         _logger.info(f"[REPAIR] 第 {_round} 轮定向修复完成，重新校验...")
+    # 08-15：修复轮合并后强制再跑一遍 post_fix_shot_prompts（幂等）——merge 保留的
+    # 旧镜头可能带着改版前就有的机械残留（如「迅速@lf」，parse_response 只修过
+    # prompt/motion），确定性清掉；也防修复 LLM 引入新的机械噪音。下一轮
+    # _collect_repair_warnings 校验的就是已 post_fix 的文本，少报一条废告警。
+    from step01_script_gen.validation import post_fix_shot_prompts as _pfix
+    try:
+        script = _pfix(script)
+    except Exception as _pfx:
+        _logger.warn(f"[WARN] 修复后 post_fix 失败（保留原版）: {_pfx}")
     return script
 
 

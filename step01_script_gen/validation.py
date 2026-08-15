@@ -1205,6 +1205,9 @@ def _check_body_purification(shots: list[dict], hook: dict = None) -> dict:
         prompt = shot.get("prompt", "")
         if not prompt:
             return
+        # 08-15：对白台词（narration/subtitle，规则0 原文原句会嵌入 prompt 尾部）
+        # 里的词不是画面描述——「公子是何等人物」是台词，跳过，避免每次误报。
+        spoken = (shot.get("narration_segment") or "") + (shot.get("subtitle") or "")
 
         # 检查禁止词汇
         found_forbidden = []
@@ -1213,6 +1216,8 @@ def _check_body_purification(shots: list[dict], hook: dict = None) -> dict:
                 # 排除合理使用（如"画面中"出现在某些固定表达中）
                 if word == "人物" and "人物关系" in prompt:
                     continue  # 允许"人物关系"这种专业术语
+                if spoken and word in spoken:
+                    continue  # 词在对白台词里（规则0 逐字保留），不是画面描述
                 found_forbidden.append(word)
 
         if found_forbidden:
@@ -2776,6 +2781,127 @@ def _check_restrained_emotion(shots: list[dict], hook: dict = None) -> dict:
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
 
+# v6.36 新增：强情绪顺序链检查（五层情绪链吸收，strong-emotion-chain）
+# 崩溃/狂怒/惊恐/骇然等强情绪转折镜头（情绪从平静跳到极值或剧烈转折）：
+#   1. 禁止只写一个「全脸定格快照」（面部扭曲/双目圆睁/嘴巴大张 定死）——
+#      视频模型把静止表情定住 →「突然变脸」。情绪要写成有顺序的表演链。
+#   2. 顺序链 = 触发事件在前 + ≥2 递进拍 + ≥1 时序连接词（先/随后/接着/骤然/继而），
+#      微表情路径（眉挑→眼睑抽→瞳孔放大）→ 肢体传导（肩膀↑→手指攥紧）。
+#   3. 与 _check_restrained_emotion 互补：克制情绪管「压着演」（规则28/28.1），
+#      本检查管「强情绪/转折要演出一步步」（规则52）——静态快照两者都要防。
+# 注意：暴怒/惊恐/狂怒/恐慌 等词已被 _fix_emotion_visualization 替换成静态快照
+#       （不触发本检查）；本检查捕的是幸存强情绪词（崩溃/骇然/惊呆/失控等）。
+# 08-15 误报审计：移除「惊变」（场景名「小舟惊变」=事件词，非角色情绪）与
+# 「骤变」（局势骤变等语境词）——曾致镜头7/8/9 误报，且事件词无法按链修复
+# 会白烧修复轮 LLM 调用。保留「脸色骤变」（真实面部反应）。
+_STRONG_EMOTION_WORDS = (
+    "崩溃", "狂怒", "震怒", "惊恐", "恐慌", "惊骇", "惊呆", "骇然",
+    "失控", "抓狂", "狂喜", "暴跳如雷", "怒不可遏", "火冒三丈", "歇斯底里",
+    "目眦欲裂", "呆若木鸡", "大惊失色", "脸色骤变", "惊得",
+    "惊惧", "吓呆",
+)
+# 时序连接词（证明情绪按先后递进，而非一个定格）
+_STRONG_SEQ_WORDS = (
+    "先是一", "先是", "随后", "随即", "然后", "接着", "继而", "紧接着",
+    "骤然", "下一瞬", "下一秒", "猛地", "突然", "忽然", "霎时", "一瞬",
+    "再一", "渐渐", "缓缓",
+)
+# 递进拍词（微表情路径/肢体传导的可数细节，一拍一词）
+_STRONG_BEAT_WORDS = (
+    # 面部/五官微变化
+    "眉挑", "挑眉", "眉峰", "眉头", "眼睑", "眼角", "瞳孔", "眼眶",
+    "嘴角", "嘴唇", "抿唇", "抿紧", "垂眸", "眨眼", "泛红", "泪光",
+    "噙泪", "鼻翼", "青筋", "咬紧", "咬牙", "龇牙", "僵住", "凝住",
+    "失神", "呆住", "愣住", "瞪大", "瞪圆", "圆睁",
+    # 肢体传导
+    "肩膀", "攥紧", "握紧", "握拳", "攥衣", "揪紧", "颤抖", "发抖",
+    "后缩", "后退", "前倾", "屏息", "胸口起伏", "呼吸急促", "双颊",
+    "鼓起", "瑟缩",
+)
+# 强情绪爆发镜的可动器物（环境留痕 C 的可触发对象）
+_STRONG_PROP_WORDS = (
+    "茶盏", "茶碗", "酒杯", "酒盏", "酒壶", "烛台", "砚台", "笔架",
+    "书卷", "信纸", "纸张", "蒲扇", "棋盘", "碗筷", "杯盏",
+)
+# 环境留痕词（证明情绪爆发在环境里留过痕）
+_STRONG_ENV_TRACE_WORDS = (
+    "打翻", "震落", "滑落", "扫落", "掀翻", "翻倒", "泼", "洒在",
+    "摔在", "拍桌", "拍案", "碰倒", "抖落", "碎", "溅",
+)
+# 强情绪 → 参考链（供 WARN 提示 LLM 模仿；只提示不注入，不改 _EMOTION_ACTION_MAP）
+_STRONG_EMOTION_CHAIN_MAP = {
+    "崩溃": "先是一愣，随即眼睑抽搐、瞳孔骤放，双颊鼓起、肩膀耸起，手指攥紧身侧衣角",
+    "惊恐": "骤然一震，瞳孔骤缩、嘴角抽搐，肩膀猛地上提，身体后缩、双手护胸",
+    "惊呆": "先是一怔，眉头僵住、嘴角微张，眼睛一眨不眨，好一会才回过神来",
+    "骇然": "脸色骤变，瞳孔骤缩、喉头滚动，后退半步、手指在袖中攥紧",
+}
+
+
+def _check_strong_emotion_chain(shots: list[dict], hook: dict = None) -> dict:
+    """检查强情绪顺序链（v6.36 新增）★五层情绪链★.
+
+    仅检查出现强情绪词的镜头（prompt+motion_desc；ff_desc 是静态定格，不要求表演链）：
+    1. 顺序链：≥2 递进拍 + ≥1 时序连接词，缺任一 → 提示补成表演链
+       （触发在前 → 微表情路径 → 肢体传导）
+    2. 环境留痕（C，可选）：链已合格 + 场景有可动器物 + 却无留痕 → 软提示
+    只 WARN 不阻断；每镜最多一条 WARN（链优先，环境留痕次之）。
+    """
+    warnings = []
+    issues = []
+
+    def _check_one(shot: dict, label: str):
+        nonlocal warnings, issues
+        idx = shot.get("index", "?")
+        text = " ".join([
+            shot.get("prompt", "") or "",
+            shot.get("motion_desc", "") or "",
+        ])
+        strong_hits = [w for w in _STRONG_EMOTION_WORDS if w in text]
+        if not strong_hits:
+            return
+        # 08-15 误报修复（镜头17 实测）：触发词若出现在对白台词里（narration/subtitle，
+        # prompt 尾部「（用中文说）…（用中文说）」会嵌入同一句原文原句，规则0 禁止改写）
+        # → 是台词里的词，不是画面表演指令，排除。否则修复轮每次喂它、LLM 按规则0
+        # 保留台词 → 永远修不好、白白烧修复轮。
+        spoken = (shot.get("narration_segment") or "") + (shot.get("subtitle") or "")
+        strong_hits = [w for w in strong_hits if w not in spoken]
+        if not strong_hits:
+            return
+
+        beats = [b for b in _STRONG_BEAT_WORDS if b in text]
+        seqs = [s for s in _STRONG_SEQ_WORDS if s in text]
+
+        # 1. 顺序链：≥2 递进拍 + ≥1 时序词，缺任一 → 静态快照
+        if len(beats) < 2 or not seqs:
+            seq_desc = "、".join(seqs[:3]) or "无时序词"
+            ref = _STRONG_EMOTION_CHAIN_MAP.get(strong_hits[0], strong_hits[0])
+            warnings.append(
+                f"{_shot_tag(label, idx)}: 强情绪「{'/'.join(strong_hits[:3])}」写成静态定格"
+                f"（{len(beats)} 拍、{seq_desc}），会突然变脸——请按顺序链写表演路径："
+                f"先写触发事件→微表情递进（≥2拍）→肢体传导，用「先…随后…接着…」串接，"
+                f"参考：{ref}"
+            )
+            return
+
+        # 2. 环境留痕（C，可选）：链已合格 + 有可动器物 + 无留痕 → 软提示
+        props = [p for p in _STRONG_PROP_WORDS if p in text]
+        if props and not any(t in text for t in _STRONG_ENV_TRACE_WORDS):
+            warnings.append(
+                f"{_shot_tag(label, idx)}: 强情绪「{'/'.join(strong_hits[:3])}」链已合格，"
+                f"画面有可动器物（{'/'.join(props[:2])}）——可加环境留痕证明情绪发生过"
+                f"（打翻的盏/滑落的信纸/拍响的案几），空间锚点（规则50）保持原位"
+            )
+
+    for shot in shots:
+        _check_one(shot, "镜头")
+    if hook and isinstance(hook, dict):
+        _check_one(hook, "钩子镜头(index=0)")
+
+    for w in warnings:
+        print(f"[CHECK] 强情绪链: [WARN] {w}")
+    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
 # v6.16 新增：切换拍摄对象检查（AI视频镜头控制教学吸收，focal-switch）
 # 镜头在人物与物品之间切换时必须写清「方向+景别+运动+结束落点」四要素：
 #   1. 切换提示词必须有方向（左侧/右侧/上方/前方/环绕/前推/上移/左摇）
@@ -3363,11 +3489,17 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v6.18 新增：ff_desc 多动作/时间推进堆叠检查（单一静态瞬间，warning 级）
     results["ff_multi_action"] = _check_ff_multi_action(shots, hook, script.get("characters", []))
 
+    # 08-15 新增：非战斗镜头武器词检查（拦截描述层武器泄漏，hook 帧被塞匕首）
+    results["frame_weapon_legality"] = _check_frame_weapon_legality(shots, hook, script.get("characters", []))
+
     # v6.8 新增：情绪可视化检查（将抽象情绪词转化为具体肢体动作）
     results["emotion_visualization"] = _check_emotion_visualization(shots, hook)
 
     # v6.16 新增：克制感情绪戏检查（微表情时间链，克制情绪禁外放大动作）
     results["restrained_emotion"] = _check_restrained_emotion(shots, hook)
+
+    # v6.36 新增：强情绪顺序链检查（五层情绪链吸收，强情绪禁静态定格快照）
+    results["strong_emotion_chain"] = _check_strong_emotion_chain(shots, hook)
 
     # v6.16 新增：切换拍摄对象运镜检查（人物→物品：方向+景别+运动+结束落点）
     results["focal_switch"] = _check_focal_switch(shots, hook)
@@ -3424,7 +3556,8 @@ def _run_prompt_checklist(script: dict) -> dict:
     # 动作动词、缺角色姿态/位置/朝向锚定，导致图片模型画错（杨旭站立/刺客消失/
     # 听香撑伞/船断）。warning-only，提示 LLM 重写规范 keyframes；step02a 代码层
     # _extract_char_layout 作为最终兜底。）
-    results["keyframes_quality"] = _check_keyframes_quality(shots, script.get("hook"))
+    results["keyframes_quality"] = _check_keyframes_quality(
+        shots, script.get("hook"), script.get("characters", []))
 
     # v6.30 新增：道具空间方位锚定检查（A3 修复——同框多道具各写落点，rule50/22.9）
     results["prop_spatial_anchor"] = _check_prop_spatial_anchor(
@@ -3518,6 +3651,7 @@ _REGEN_FEEDBACK_LABELS = {
     "ff_multi_action": "ff多动作堆叠",
     "over_shoulder_lock": "过肩锁定",
     "restrained_emotion": "克制情绪",
+    "strong_emotion_chain": "强情绪顺序链",
     "hand_lock": "手部锁定",
     "occlusion_layering": "前后遮挡",
     "ff_desc_length": "ff长度",
@@ -3527,24 +3661,29 @@ _REGEN_FEEDBACK_LABELS = {
     "shot_transition": "镜头衔接",
     "action_overlap": "动作重叠",
     "multi_person_staging": "多人站位",
+    "frame_weapon_legality": "非战斗镜头武器词",
 }
 
 
 def build_regen_feedback(script: dict, novel_text: str = "",
-                         max_categories: int = 5, per_line_chars: int = 72) -> str:
-    """把分镜检查表告警按类型聚合，生成给重生成 LLM 的简短「本地校验反馈」.
+                         max_categories: int = 99, per_line_chars: int = 300) -> str:
+    """把分镜检查表告警按类型聚合，生成给重生成 LLM 的「本地校验反馈」.
 
     v6.33（08-12）：checklist 的 [CHECK] WARN 此前只 print 不返回，重生成 LLM
     看不到内容密度/景别跳跃/致命伤等真实缺陷 → 重生成还是老问题。本函数重跑
     _run_prompt_checklist（抑制 stdout 避免日志刷屏），把告警按类型聚合：
-    每类 1 行「- 类别 N处：首例（截断）」，取告警数最多的前 max_categories 类，
+    每类 1 行「- 类别 N处：首例」，取告警数最多的前 max_categories 类，
     排除需人工判断/结构性的类别（_REGEN_FEEDBACK_EXCLUDE）。返回 "" 表示无反馈。
+
+    v6.36（08-15）：默认放开——max_categories=99（全部非排除类别，不再只取 top-5）
+    + per_line_chars=300（首例几乎完整，不再 72 字截断），重生成 LLM 看全量分析、
+    能修更多。若需控制 prompt 体积可显式传小值。
 
     Args:
         script: 当前待重生成的分镜脚本（重生成前已 parse_response，含完整字段）
         novel_text: 小说原文（供原文锚点类检查；默认空则跳过）
-        max_categories: 最多反馈几类（默认 5，控制 prompt 膨胀）
-        per_line_chars: 每行首例截断长度
+        max_categories: 最多反馈几类（默认 99=全部非排除类别）
+        per_line_chars: 每行首例截断长度（默认 300，几乎不截）
     """
     try:
         if novel_text:
@@ -3697,6 +3836,25 @@ def post_fix_shot_prompts(script: dict) -> dict:
         #    （校验项 _check_forbidden_abstract 依赖）。motion_desc 同样处理。
         prompt = _fix_forbidden_abstract(prompt)
         motion_desc = _fix_forbidden_abstract(motion_desc)
+        # 3.2.1 08-15 bug 修复：_check_forbidden_abstract 扫 prompt/motion/ff/lf 四字段，
+        # 但此前这里只修 prompt/motion →「迅速」出现在 ff/lf（shot25 lf_desc 实测）
+        # 检到了没修到、每次运行都报。ff/lf 同样确定性删抽象词（幂等）。
+        for _f in ("ff_desc", "lf_desc"):
+            _v = shot.get(_f)
+            if _v:
+                shot[_f] = _fix_forbidden_abstract(_v)
+
+        # 3.2.2 规则39 远景禁五官：确定性剥离精细五官词（校验项 _check_wide_shot_facial
+        # 依赖）——远景人物只留身份+服装主色+剪影，精细五官（剑眉/星目/朱唇）会让模型
+        # 把脸放大比例崩坏。仅当镜头命中远景词（远景/全景/俯拍…）才删，非远景不误伤。
+        _is_wide = any(w in " ".join([
+            shot.get("ff_desc", ""), shot.get("prompt", ""),
+            shot.get("location", ""), shot.get("scene", "")]) for w in _WIDE_SHOT_WORDS)
+        if _is_wide:
+            prompt = _fix_wide_shot_facial(prompt)
+            _vf = shot.get("ff_desc")
+            if _vf:
+                shot["ff_desc"] = _fix_wide_shot_facial(_vf)
 
         # 3.5 情绪可视化：抽象情绪词 → 追加可视化动作（prompt + motion_desc）
         prompt = _fix_emotion_visualization(prompt)
@@ -3714,6 +3872,14 @@ def post_fix_shot_prompts(script: dict) -> dict:
         if _fixed_sub != subtitle:
             shot["subtitle"] = _fixed_sub
             subtitle = _fixed_sub
+        # 08-15（P18）：台词破折号裸收尾补「！」（「救命啊——」→「救命啊——！」），
+        # 校验项 _check_voice_punctuation 裸收尾分支依赖。narration 与 subtitle 严格
+        # 同步（subtitle == narration_segment），修复后仍逐字一致。
+        _fixed_dash = _fix_trailing_dash_punct(narration)
+        if _fixed_dash != narration:
+            shot["narration_segment"] = _fixed_dash
+            shot["subtitle"] = _fix_trailing_dash_punct(subtitle)
+            narration = _fixed_dash
 
         # 4. 转场关键词：场景切换镜补淡入淡出（跳过 hook）
         if shot.get("index") != 0 and i < len(shots) - 1:
@@ -3747,14 +3913,67 @@ def post_fix_shot_prompts(script: dict) -> dict:
             shot["lf_desc"] = normalize_lf_desc(
                 shot["lf_desc"], shot, script.get("characters", []))
 
+        # 08-15 B1/B2：ff/lf 确定性锚注入（规则13.7 服装色短锚防漂色 / 规则41 威胁
+        # 朝向防背对）。放在各 normalize 之后，锚不被归一化剥离；幂等——已有锚跳过。
+        for _f in ("ff_desc", "lf_desc"):
+            _v = shot.get(_f)
+            if _v:
+                _v = _inject_dress_anchor(_v, script.get("characters", []))
+                _v = _inject_threat_facing(_v, shot)
+                shot[_f] = _v
+
+        # 08-15（PR-2）：中间关键帧确定性骨架锚定——ff/lf 定稿后，把与 step02a 生成时
+        # 同款的 _extract_char_layout「角色姿态/位置/朝向」块追加到 0<tr<1 的 keyframe
+        # desc（脚本层先落地，step02a 幂等跳过）。治「24 个中间关键帧缺姿态/位置锚定」
+        # 聚合告警，威胁源朝向兜底（面向目标/禁止背对）随之注入；空镜（无角色）返回
+        # 空跳过。幂等：「【角色锚定】」标记已在则不动。
+        _kfs = shot.get("keyframes") or []
+        if _kfs and isinstance(_kfs, list):
+            from shared.vimax_bridge import _extract_char_layout as _kf_layout
+            for _kf in _kfs:
+                if not isinstance(_kf, dict):
+                    continue
+                try:
+                    _tr = float(_kf.get("time_ratio", 0))
+                except (TypeError, ValueError):
+                    continue
+                if not (0 < _tr < 1):
+                    continue
+                _kd = _kf.get("desc") or ""
+                if not _kd or "【角色锚定】" in _kd:
+                    continue
+                _role_scan = " ".join(filter(None, [
+                    shot.get("ff_desc", ""), shot.get("lf_desc", ""),
+                    shot.get("motion_desc", "") or shot.get("prompt", ""),
+                    _kd,
+                ]))
+                _anchor = _kf_layout(shot, script.get("characters", []),
+                                     role_scan_text=_role_scan)
+                if _anchor:
+                    _kf["desc"] = f"{_kd}。{_anchor}"
+
     # hook 也需要光位量化 + 情绪可视化修复（光位先，让情绪词先驱动光位选择）
     hook = script.get("hook")
     if hook and isinstance(hook, dict):
         hook["prompt"] = _fix_lighting_quantization(hook.get("prompt", "") or "")
         hook["prompt"] = _fix_forbidden_abstract(hook.get("prompt", "") or "")
         hook["motion_desc"] = _fix_forbidden_abstract(hook.get("motion_desc", "") or "")
+        # 08-15 bug 修复（与 shot 3.2.1 一致）：hook 的 ff/lf 也确定性删抽象词
+        for _f in ("ff_desc", "lf_desc"):
+            _hv = hook.get(_f)
+            if _hv:
+                hook[_f] = _fix_forbidden_abstract(_hv)
         hook["prompt"] = _fix_emotion_visualization(hook.get("prompt", "") or "")
         hook["motion_desc"] = _fix_emotion_visualization(hook.get("motion_desc", "") or "")
+        # 08-15（P18）：hook 同样剥离远景精细五官词（_check_wide_shot_facial 覆盖 hook）
+        _hook_wide = any(w in " ".join([
+            hook.get("ff_desc", ""), hook.get("prompt", ""),
+            hook.get("location", ""), hook.get("scene", "")]) for w in _WIDE_SHOT_WORDS)
+        if _hook_wide:
+            hook["prompt"] = _fix_wide_shot_facial(hook.get("prompt", "") or "")
+            _hvf = hook.get("ff_desc")
+            if _hvf:
+                hook["ff_desc"] = _fix_wide_shot_facial(_hvf)
         # v6.18：hook ff_desc 同样归一化
         if hook.get("ff_desc"):
             hook["ff_desc"] = normalize_ff_desc(
@@ -3770,6 +3989,18 @@ def post_fix_shot_prompts(script: dict) -> dict:
             from style_prefix import normalize_lf_desc
             hook["lf_desc"] = normalize_lf_desc(
                 hook["lf_desc"], hook, script.get("characters", []))
+        # 08-15 B1/B2：hook ff/lf 同样注入服装色锚 + 威胁朝向（与 shot 一致）
+        for _f in ("ff_desc", "lf_desc"):
+            _hv = hook.get(_f)
+            if _hv:
+                _hv = _inject_dress_anchor(_hv, script.get("characters", []))
+                _hv = _inject_threat_facing(_hv, hook)
+                hook[_f] = _hv
+        # 08-15（P18）：hook 台词破折号裸收尾补「！」（_check_voice_punctuation 覆盖 hook）
+        if hook.get("narration_segment"):
+            hook["narration_segment"] = _fix_trailing_dash_punct(hook["narration_segment"])
+        if hook.get("subtitle"):
+            hook["subtitle"] = _fix_trailing_dash_punct(hook["subtitle"])
 
     return script
 
@@ -4180,6 +4411,34 @@ def _is_combat_shot(shot: dict) -> bool:
     return any(w in text for w in _COMBAT_WORDS)
 
 
+# 非战斗镜头武器词检查（08-15 hook 帧被塞匕首）：拦截 step01 把武器写进非战斗
+# 镜头的描述层泄漏。威胁源在场或打斗镜时武器合法、跳过；「戟指」是手势词先剔除，
+# 防误命中（戟∈WEAPON_WORDS）。
+def _check_frame_weapon_legality(shots: list[dict], hook: dict | None = None,
+                                 characters: list | None = None) -> dict:
+    """非战斗/无威胁镜头 ff/lf/prompt 出现武器词 → WARN（不阻断）."""
+    from shared.content_safety import WEAPON_WORDS as _W_WORDS
+    issues, warnings = [], []
+    checks = [(s, f"镜头{s.get('index')}") for s in shots]
+    if hook:
+        checks.insert(0, (hook, "钩子"))
+    _THREAT_NAMES = ("刺客", "杀手", "黑衣人", "蒙面人", "神秘人")
+    for shot, label in checks:
+        text = " ".join([shot.get("ff_desc", ""), shot.get("lf_desc", ""),
+                         shot.get("prompt", "") or shot.get("motion_desc", "")])
+        if any(n in text for n in _THREAT_NAMES) or _is_combat_shot(shot):
+            continue
+        # 剔除非武器复合词：戟指=手势、剑眉/刀眉=脸型描述（剑/刀/戟∈WEAPON_WORDS）
+        for excl in ("戟指", "剑眉", "刀眉", "烟枪"):
+            text = text.replace(excl, "")
+        hit = [w for w in _W_WORDS if w in text]
+        if hit:
+            warnings.append(
+                f"{label}:非战斗/无威胁镜头 ff/lf/prompt 出现武器词({','.join(hit)}),"
+                "图片模型会渲染出该武器;若角色确实空手请删除,或改为明确归属")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
 def _check_shot_size_jump(shots: list[dict]) -> dict:
     """检查相邻镜头景别跳跃幅度（禁止特写直接跳大远景）.
 
@@ -4195,8 +4454,24 @@ def _check_shot_size_jump(shots: list[dict]) -> dict:
         lv2 = _shot_size_level(shots[i + 1])
         if not lv1 or not lv2:
             continue
+        # v6.36（08-15）：场景切换豁免——切到新场景用远景建立镜头（establishing
+        # shot）是标准手法，前镜对白中近景→新场景远景不是割裂（镜头2→3 实测：
+        # 照月湾小舟上中近景 → 远处田埂上远景）。与 _check_axis_crossing 同口径
+        # （location 不同 = 新场景，允许重新建立朝向/景别）。
+        _loc1 = shots[i].get("location", "") or shots[i].get("scene", "")
+        _loc2 = shots[i + 1].get("location", "") or shots[i + 1].get("scene", "")
+        if _loc1 and _loc2 and _loc1 != _loc2:
+            continue
         # v6.35（P2-1）：打斗镜快切豁免（规则7：打斗/追杀一律 2-3 秒短镜 + 0.2s 硬切）
         if _is_combat_shot(shots[i]) or _is_combat_shot(shots[i + 1]):
+            continue
+        # v6.36（08-15）：正常节奏豁免——A-B-A 夹心。相邻跳跃对里某一镜被同景别
+        # 两镜夹住（shots[i-1] 与 shots[i+1] 同景别，或 shots[i] 与 shots[i+2]
+        # 同景别）=「切出再切回」节奏设计（对白中近景→环境全景→对白中近景 /
+        # 特写→全景→特写），不是割裂。实测 8→9/12→13/13→14 全是此类，正常节奏
+        # 走 B（接受），不喂修复轮。真跳跃（无夹心）走 A（修复轮 LLM 判断）。
+        if (i >= 1 and _shot_size_level(shots[i - 1]) == lv2) or \
+           (i + 2 < len(shots) and lv1 == _shot_size_level(shots[i + 2])):
             continue
         d1 = _SHOT_SIZE_ORDER.index(lv1)
         d2 = _SHOT_SIZE_ORDER.index(lv2)
@@ -4335,6 +4610,8 @@ def _check_subtitle_leak(shots: list[dict], hook: dict = None) -> dict:
 
 # v6.25: 威胁源-视线耦合检查（规则41）
 _THREAT_WORDS = ("刺客", "杀手", "偷袭者", "持刀", "黑衣人", "黑影", "潜伏", "埋伏", "伏击")
+# 潜伏态威胁免朝向（规则48：潜伏水下/藏匿中无需朝向目标；与 B2 注入共用）
+_RULE48_LURKING = ("潜伏水下", "水下黑影", "微露水面", "藏于水下", "水下轮廓", "藏身水下")
 # 「发现者视线指向某威胁」的表达（视线锁定/紧盯/看向 + 威胁词）
 _THREAT_GAZE_RE = re.compile(
     r'[视线目光双眼眼神]?[^。；！？]{0,8}[盯看望锁][^。；！？]{0,10}(刺客|杀手|黑衣人|黑影|水中|水下)'
@@ -4477,6 +4754,91 @@ def _extract_dress_tokens(dynamic_features: str) -> tuple[list[str], list[str]]:
     return colors, garments
 
 
+# ============================================================================
+# 08-15 B1/B2：ff/lf 确定性锚注入（规则13.7 服装色防漂色 / 规则41 威胁朝向防背对）
+#
+# B1 服装色锚：出镜角色缺服装色词时，在角色名后插「（色+衣）」短锚——比让 LLM
+#   「记得重述」稳一个数量级（check 判定：_extract_dress_tokens 提取的 token 任一
+#   在帧中即过，注入的锚必含其一，必然清除告警）。
+# B2 威胁朝向：威胁源缺朝向时注入「侧身朝画X/面向目标」——check 判定：_THREAT_WORDS
+#   命中 + 非潜伏 + 无朝向词（_THREAT_FACING_WORDS）→ 报。注入与判定用同一词表。
+# ============================================================================
+# 威胁源朝向表达（_check_frame_desc_anchors A 判定同源——共享单一词表防漂移）
+_THREAT_FACING_WORDS = (
+    "朝画", "面向", "面朝", "朝向", "侧身", "紧盯画", "盯向画",
+    "望画", "望向", "逼近", "逼近画", "刀尖对准", "正对目标",
+    "对准画", "指向画", "刺向", "劈向", "扑向", "扎向", "斩向", "砍向", "挥向",
+    "冲向", "探向", "逼向", "刀尖朝", "剑尖朝", "匕首朝",
+    "举过头顶", "高举", "抵住", "对准", "正对",
+    "即将刺", "即将劈", "即将扑", "即将跃", "即将砸",
+)
+# 威胁已没入/消失 → 免朝向（与 keyframes 检查 threat_gone 同口径：没入水下的
+# 刺客无需朝向目标——「刺客已没入水中、水面只剩涟漪」不该被要求朝向）
+_THREAT_GONE_WORDS = ("已没入", "没入水中", "没入水下", "沉入水底", "消失", "不见踪影")
+
+
+def _inject_dress_anchor(frame: str, characters) -> str:
+    """08-15 B1：ff/lf 出镜角色缺服装色锚时，在角色名首现后插「（色+衣）」短锚.
+
+    判定与 _check_frame_desc_anchors D 对称：角色名在帧中 + dynamic_features 有
+    服装色/衣词 + 帧中无任何已提取 token → 注入。锚 = 色+衣（素白轻袍）或单衣词
+    （衫）——都是 _extract_dress_tokens 会提取的词，注入后必然清除告警。
+    step02a 帧生成还会注入完整 static+dynamic，此处只做脚本层短锚（防 ff/lf 漂色）。
+    """
+    if not frame or not characters:
+        return frame
+    for c in characters:
+        ident = c.get("identifier") or ""
+        if not ident or ident not in frame:
+            continue
+        dyn = c.get("dynamic_features") or ""
+        colors, garments = _extract_dress_tokens(dyn)
+        if not colors and not garments:
+            continue  # 无衣着描述（如刺客「浑身湿透」），无法锚定，跳过
+        if any(x in frame for x in colors) or any(x in frame for x in garments):
+            continue  # 帧中已有服装锚
+        if colors and garments:
+            anchor = colors[0] + garments[0]          # 素白轻袍
+        elif colors:
+            anchor = colors[0] + "衣"
+        else:
+            # 单衣词（衫/袍）→ 从 dynamic 里取含该衣词的完整词（春衫/长衫），
+            # 避免注入「听香（衫）」这种单字锚
+            import re as _re
+            _m = _re.search(r"[一-鿿]{0,2}" + garments[0], dyn)
+            anchor = _m.group() if _m else garments[0]
+        frame = frame.replace(ident, f"{ident}（{anchor}）", 1)
+    return frame
+
+
+def _inject_threat_facing(frame: str, shot: dict) -> str:
+    """08-15 B2：威胁源在 ff/lf 缺朝向锚时注入朝向（规则41 防背对目标）.
+
+    优先级：① char_layout 威胁的 facing（真实站位意图，如「面向画右的杨旭」）
+    ② 画面方向反推（威胁在画右 → 侧身朝画左）③ 默认侧身朝画左。
+    潜伏（_RULE48_LURKING）与已没入/消失（_THREAT_GONE_WORDS）不注入——前者
+    无需朝向、后者给「已没入」硬加朝向是语义错误。
+    """
+    if not frame or not any(w in frame for w in _THREAT_WORDS):
+        return frame
+    if any(k in frame for k in _RULE48_LURKING) or any(g in frame for g in _THREAT_GONE_WORDS):
+        return frame
+    if any(k in frame for k in _THREAT_FACING_WORDS):
+        return frame
+    # ① char_layout 威胁 facing（站位意图权威）
+    for x in (shot.get("char_layout") or []):
+        nm = x.get("name") or ""
+        if any(t in nm for t in _THREAT_WORDS) and x.get("facing"):
+            return f"{frame}，{x['facing']}"
+    # ② 画面方向反推：威胁所在侧 → 面向对侧
+    if "画右" in frame:
+        return f"{frame}，侧身朝画左"
+    if "画左" in frame:
+        return f"{frame}，侧身朝画右"
+    # ③ 默认
+    return f"{frame}，侧身朝画左"
+
+
 # 场景物体类别词（识别 ff_desc 中的空间物体，用于「bank 未覆盖才要求尺寸锚」）。
 # 只用复合词：单字「船/舟/车」会命中「船头/船尾/船舷」等已知船的方位词（误报），
 # 复合词（小舟/马车/厅堂…）才是「独立物体」的信号。
@@ -4556,19 +4918,13 @@ def _check_frame_desc_anchors(text: str, label: str,
         return out
 
     # --- A. 威胁源朝向锚 ---
-    _RULE48_LURKING = ("潜伏水下", "水下黑影", "微露水面", "藏于水下", "水下轮廓", "藏身水下")
-    if any(w in text for w in _THREAT_WORDS) and not any(k in text for k in _RULE48_LURKING):
-        has_facing = any(k in text for k in (
-            "朝画", "面向", "面朝", "朝向", "侧身", "紧盯画", "盯向画",
-            "望画", "望向", "逼近", "逼近画", "刀尖对准", "正对目标",
-            "对准画", "指向画",
-            # v6.34（08-15 误报审计）：武器指向/攻击预备也是朝向锚——
-            # 「刀尖朝下即将刺向杨旭心口」此前漏检误报（镜头7/8/9）
-            "刺向", "劈向", "扑向", "扎向", "斩向", "砍向", "挥向",
-            "冲向", "探向", "逼向", "刀尖朝", "剑尖朝", "匕首朝",
-            "举过头顶", "高举", "抵住", "对准", "正对",
-            "即将刺", "即将劈", "即将扑", "即将跃", "即将砸",
-        ))
+    if (any(w in text for w in _THREAT_WORDS)
+            and not any(k in text for k in _RULE48_LURKING)
+            # 08-15 B2：威胁已没入/消失 → 免朝向（「刺客已没入水中、水面只剩涟漪」
+            # 不该被要求朝向，与 keyframes threat_gone 同口径）
+            and not any(g in text for g in _THREAT_GONE_WORDS)):
+        # 08-15 共享 _THREAT_FACING_WORDS 单一词表（含 v6.34 补的武器指向/攻击预备）
+        has_facing = any(k in text for k in _THREAT_FACING_WORDS)
         if not has_facing:
             out.append(
                 f"{label}: 出现威胁源（刺客/黑影等）但无朝向/目标锚定"
@@ -4684,15 +5040,28 @@ _KF_VALIDATION_ORIENT_WORDS = (
 )
 
 
-def _check_keyframes_quality(shots: list[dict], hook: dict = None) -> dict:
+def _check_keyframes_quality(shots: list[dict], hook: dict = None,
+                             characters: list | None = None) -> dict:
     """检查 keyframes 中间帧 desc 是否缺角色姿态/位置/朝向锚定（warning-only）.
 
     P1-6 修复（08-12）：26 镜 + hook 逐镜报同样一句话刷屏、淹没真实缺陷。
     改为**聚合提示**——每个问题类型最多一条，注明命中镜头数 + 首例示例
     （代码层 _extract_char_layout 是最终兜底，warning 只作一次指引）。
+
+    PR-2（08-15）：空镜（无出镜角色，如纯马车疾驰转场）不要求角色姿态/位置
+    锚定——没有角色可锚，报「缺角色姿态」是误报；且 post_fix 已确定性注入
+    骨架，非空镜不会再缺。
     """
     issues, warnings = [], []
     targets = list(shots) + ([hook] if hook else [])
+    # PR-2：空镜跳过（_extract_char_layout 对空镜返回空、注入不了，检查也当放过）
+    if characters:
+        try:
+            from shared.vimax_bridge import is_empty_scene as _is_empty
+        except Exception:
+            _is_empty = None
+        if _is_empty:
+            targets = [s for s in targets if not _is_empty(s, characters)]
     # 聚合统计（问题类型 → 命中列表）
     empty_kf = []          # desc 为空的中间帧
     missing_anchor = []    # 缺姿态/位置锚定（(label, tr, desc[:36])）
@@ -4769,6 +5138,10 @@ _KF_VALIDATION_PROP_POS = (
     "前方", "身后", "头顶", "肩头", "腰间", "背后",
     "水中", "水下", "水面", "船头", "船尾", "船板", "船舷", "船侧", "甲板",
     "地上", "岸上", "桌上", "几上", "案上",
+    # 08-15（P18 修复）：部位式落点——修复 LLM 已给 shot1 竹箫「横唇」、shot3 炭炉
+    # 「中舱」写了落点但 checker 不认，报假阳性。补人体部位/器具位置词：
+    # 唇（横唇）、嘴边/口中、胸前/怀中、舱内/中舱、案边/栏边。
+    "唇", "嘴边", "口中", "胸前", "怀中", "舱内", "中舱", "案边", "栏边",
 )
 
 
@@ -4812,16 +5185,16 @@ def _check_prop_spatial_anchor(shots: list[dict], hook: dict = None,
                     break
         if len(matched) < 2:
             continue  # 只有一个或零个道具不构成"同框多道具"
-        # 每个道具是否带方位：道具名前 6 字 + 后 8 字窗口含方位词
-        # （"右手酒壶倾洒" → "右手"在酒壶前；"钓杆垂入画右水面" → "画右"在后 8 字。
-        # 窗口收窄到 8 字避免把"站在船头"这种角色站位误当道具方位——并列清单
-        # "手持酒壶、钓杆" 后 8 字是"、钓杆"无方位，正确拦截。）
+        # 每个道具是否带方位：道具名前 8 字 + 后 12 字窗口含方位词
+        # （"右手酒壶倾洒" → "右手"在酒壶前；"钓杆垂入画右水面" → "画右"在后 12 字。
+        # 08-15（P18）：窗口 [-6,+8] → [-8,+12]，覆盖「中舱生炭炉」「横唇」等落点在
+        # 前/在词内的部位式写法；误配由 _KF_VALIDATION_PROP_POS 词表收窄。）
         lacks = []
         for pid in matched:
             p = text.find(pid)
             if p < 0:
                 continue
-            window = text[max(0, p - 6):p + 8]
+            window = text[max(0, p - 8):p + 12]
             if not any(w in window for w in _KF_VALIDATION_PROP_POS):
                 lacks.append(pid)
         if lacks:
@@ -5430,6 +5803,42 @@ def _fix_forbidden_abstract(text: str) -> str:
     out = _re.sub(r"^[，、；；。！？、\s]+", "", out)
     out = _re.sub(r"[，、；；。！？、\s]+$", "", out)
     return out
+
+
+def _fix_wide_shot_facial(text: str) -> str:
+    """远景镜头确定性剥离精细五官词（规则39，幂等）.
+
+    远景/大远景/全景/俯拍中人物极小，精细五官（剑眉/星目/朱唇）会让视频模型
+    把脸放大、比例崩坏。只删五官词，保留身份/服装/动作（校验项
+    _check_wide_shot_facial 依赖）。仅当镜头命中远景词时调用，非远景不误伤。
+    幂等：删除后不再含禁词。
+    """
+    if not text:
+        return text
+    out = text
+    for word in sorted(_FINE_FACE_WORDS, key=len, reverse=True):
+        out = out.replace(word, "")
+    import re as _re
+    out = _re.sub(r"[，、]{2,}", "，", out)
+    out = _re.sub(r"^[，、；；。！？、\s]+", "", out)
+    out = _re.sub(r"[，、；；。！？、\s]+$", "", out)
+    return out
+
+
+def _fix_trailing_dash_punct(text: str) -> str:
+    """台词以破折号裸收尾 → 确定性补「！」（08-15，P18）.
+
+    LLM 常写「救命啊——」「啊……啊……救命啊——」这类断喝/尖叫拖音尾，句末无
+    标点，配音/字幕语气无法传达（校验项 _check_voice_punctuation 裸收尾分支依赖）。
+    句尾破折号几乎总是「情绪未落地」的尖叫/断喝，确定性补「！」最贴合情绪。
+    幂等：句末已有标点（！？。…～）不处理。
+    """
+    if not text:
+        return text
+    stripped = text.rstrip()
+    if re.search(r"[—―]{1,2}$", stripped):
+        return stripped + "！"
+    return text
 
 
 # ============================================================================
