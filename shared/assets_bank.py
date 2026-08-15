@@ -21,6 +21,7 @@ bank → registry）：
 """
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 
@@ -33,23 +34,35 @@ def _book_global_dir() -> Path:
 def _next_asset_id(entries: dict, prefix: str) -> str:
     """为资产分配编号（S01/C01/P01），按注册顺序递增.
 
-    扫描已有条目的 asset_id，取最大序号 +1。缺 asset_id 的旧条目按出现顺序补号。
+    扫描已有条目的 asset_id，取最大序号 +1。缺 asset_id 的旧条目按出现顺序补号，
+    补号与返回的新编号都计入已用集合，避免撞号（修复 2026-08-14：旧版补号后
+    max_n 不更新，新条目会与刚补号的旧条目返回同一编号）。
     """
+    used = set()
     max_n = 0
-    n = 1
     for ident, entry in entries.items():
         aid = (entry or {}).get("asset_id", "")
+        num = None
         if aid and aid.startswith(prefix):
             try:
-                max_n = max(max_n, int(aid[len(prefix):]))
+                num = int(aid[len(prefix):])
             except ValueError:
-                pass
+                num = None
+        if num is not None:
+            used.add(num)
+            max_n = max(max_n, num)
         else:
-            # 旧条目无编号 → 按顺序占用编号（避免与已有编号冲突）
-            while f"{prefix}{n:02d}" in {e.get('asset_id') for e in entries.values() if e}:
+            # 旧条目无编号 / 编号非数字 → 补号（不占用已用编号）
+            n = 1
+            while n in used:
                 n += 1
+            used.add(n)
+            max_n = max(max_n, n)
             entries[ident]["asset_id"] = f"{prefix}{n:02d}"
-    return f"{prefix}{max_n + 1:02d}"
+    n = 1
+    while n in used:
+        n += 1
+    return f"{prefix}{n:02d}"
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +123,7 @@ class SceneAssetsBank:
     def __init__(self, bank_dir: str | None = None):
         self._bank_dir = Path(bank_dir) if bank_dir else _book_global_dir() / "scenes_bank"
         self._bank_path = self._bank_dir / "scenes_bank.json"
-        self._data: dict = dict(_EMPTY_SCENES)
+        self._data: dict = deepcopy(_EMPTY_SCENES)
 
     # -- 读写 ----------------------------------------------------------------
 
@@ -125,9 +138,9 @@ class SceneAssetsBank:
                 self._data = loaded
             except (json.JSONDecodeError, OSError) as e:
                 print(f"[bank] 场景资产库读取失败，使用空库: {e}")
-                self._data = dict(_EMPTY_SCENES)
+                self._data = deepcopy(_EMPTY_SCENES)
         else:
-            self._data = dict(_EMPTY_SCENES)
+            self._data = deepcopy(_EMPTY_SCENES)
         self._bank_dir.mkdir(parents=True, exist_ok=True)
         return self._data
 
@@ -289,7 +302,7 @@ class PropAssetsBank:
     def __init__(self, bank_dir: str | None = None):
         self._bank_dir = Path(bank_dir) if bank_dir else _book_global_dir() / "props_bank"
         self._bank_path = self._bank_dir / "props_bank.json"
-        self._data: dict = dict(_EMPTY_PROPS)
+        self._data: dict = deepcopy(_EMPTY_PROPS)
 
     # -- 读写 ----------------------------------------------------------------
 
@@ -304,9 +317,9 @@ class PropAssetsBank:
                 self._data = loaded
             except (json.JSONDecodeError, OSError) as e:
                 print(f"[bank] 道具资产库读取失败，使用空库: {e}")
-                self._data = dict(_EMPTY_PROPS)
+                self._data = deepcopy(_EMPTY_PROPS)
         else:
-            self._data = dict(_EMPTY_PROPS)
+            self._data = deepcopy(_EMPTY_PROPS)
         self._bank_dir.mkdir(parents=True, exist_ok=True)
         return self._data
 

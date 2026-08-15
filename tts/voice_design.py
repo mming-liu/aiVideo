@@ -113,7 +113,16 @@ def create_voice_design(
             timeout=60,
         )
 
-        data = res.json()
+        # #18 修复 2026-08-14：网关可能返回 HTML 错误页，res.json() 抛
+        # JSONDecodeError（非 RequestException）→ 之前是未捕获的真实崩溃路径。
+        try:
+            data = res.json()
+        except ValueError:
+            return VoiceDesignResult(
+                success=False,
+                error=(f"语音设计 API 返回非 JSON（HTTP {res.status_code}）: "
+                       f"{res.text[:200]}"),
+            )
 
         if res.ok and data.get("output"):
             output = data["output"]

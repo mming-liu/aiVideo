@@ -1999,7 +1999,7 @@ def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
             text = fix_lf_desc_gaze(text, shot, characters)
         text = _inject_object_size_anchor(shot, text)
         text = sanitize_prompt(ensure_prefix(text, STYLE_PREFIX), verbose=False)
-        text = add_image_strict_constraints(text, "首帧" if frame_kind == "first_frame" else "尾帧", shot=shot)
+        text = add_image_strict_constraints(text, "首帧" if frame_kind == "first_frame" else "尾帧", shot=shot, characters=characters)
         return text
     except Exception:
         return desc
@@ -2131,7 +2131,7 @@ async def _gen_first_frame_async(
         if ff_prop:
             ff_desc = f"{ff_desc}。{ff_prop}"
         ff_desc_full = sanitize_prompt(ensure_prefix(ff_desc, STYLE_PREFIX), verbose=False)
-        ff_desc_full = add_image_strict_constraints(ff_desc_full, "首帧", shot=shot)
+        ff_desc_full = add_image_strict_constraints(ff_desc_full, "首帧", shot=shot, characters=characters)
         refs = reference_paths if reference_paths else []
         # 动作镜头首帧：解除"场景布局不变"锁，允许人物动作/构图随描述演变
         # （普通镜头不传 lock_prompt，保持适配器默认完整锁）。
@@ -2175,6 +2175,8 @@ async def _gen_first_frame_async(
                     pass
                 if attempt < max_retries:
                     continue
+                # 末次尝试 QC critical：帧已删除，返回 None（调用方按失败处理）
+                return None
             return str(ff_path)
         if attempt < max_retries:
             logger.verbose(f"  [FRAME] 首帧 shot_{idx} 第{attempt+1}次不达标，重试...")
@@ -2314,7 +2316,7 @@ async def _gen_last_frame_async(
             f"可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。"
         )
         lf_desc_full = sanitize_prompt(ensure_prefix(lf_desc_full, STYLE_PREFIX), verbose=False)
-        lf_desc_full = add_image_strict_constraints(lf_desc_full, "尾帧", shot=shot)
+        lf_desc_full = add_image_strict_constraints(lf_desc_full, "尾帧", shot=shot, characters=characters)
         refs = reference_paths if reference_paths else []
         try:
             img_out = await image_adapter.generate_single_image(
@@ -2353,6 +2355,8 @@ async def _gen_last_frame_async(
                     pass
                 if attempt < max_retries:
                     continue
+                # 末次尝试 QC critical：帧已删除，返回 None（调用方按失败处理）
+                return None
             return str(lf_path)
         if attempt < max_retries:
             logger.verbose(f"  [FRAME] 尾帧 shot_{idx} 第{attempt+1}次不达标，重试...")
@@ -2513,7 +2517,7 @@ async def _gen_keyframes_async(
                 f"可与首帧/参考图的景别、机位、人物位置不同，表现动作过程中的瞬间状态。"
             )
             kf_desc_full = sanitize_prompt(ensure_prefix(kf_desc_full, STYLE_PREFIX), verbose=False)
-            kf_desc_full = add_image_strict_constraints(kf_desc_full, "关键帧", shot=shot)
+            kf_desc_full = add_image_strict_constraints(kf_desc_full, "关键帧", shot=shot, characters=characters)
             refs = reference_paths if reference_paths else []
 
             try:
@@ -2556,6 +2560,8 @@ async def _gen_keyframes_async(
                         pass
                     if attempt < max_retries:
                         continue
+                    # 末次尝试 QC critical：帧已删除，不加入结果
+                    break
                 kf_paths.append(str(kf_path))
                 break
             if attempt < max_retries:

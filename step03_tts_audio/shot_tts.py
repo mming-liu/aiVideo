@@ -148,6 +148,9 @@ def gen_single_tts(text: str, output_path: Path, provider=None,
         volume=volume,
         format=tts_config.FORMAT,
         sample_rate=tts_config.SAMPLE_RATE,
+        # #20 修复 2026-08-14：把 voice_registry 分配的音色 id 传给 provider
+        # （此前 TTSRequest 无 voice_id 字段，qwen3 等 provider 恒用硬编码默认）
+        voice_id=voice_config.get("id", "") if voice_config else "",
     )
     result = provider.synthesize(req, output=str(output_path))
     if not result.success:
@@ -224,11 +227,6 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
     main_subject = shot.get("main_subject", "").strip()
     speaker_name = detected_speaker or (main_subject if main_subject and len(main_subject) <= 4 else None)
 
-    # 2. 获取动态音色配置
-    # 如果检测不到说话人，尝试使用 main_subject
-    main_subject = shot.get("main_subject", "").strip()
-    speaker_name = detected_speaker or (main_subject if main_subject and len(main_subject) <= 4 else None)
-
     # 2. 获取角色属性（性别、年龄段）
     gender, age_range = None, None
     if speaker_name and characters:
@@ -240,6 +238,11 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
 
     if speaker_name:
         voice_config = voice_registry.get_voice(speaker_name, gender, age_range)
+    else:
+        voice_config = NARRATOR_VOICE.copy()
+
+    output_path = output_dir / f"shot_{idx}.mp3"
+
     # 缓存检查：文件存在且大小正常且音色匹配则跳过
     if output_path.exists() and output_path.stat().st_size > 10240:
         voice_meta = output_path.with_suffix(".voice")
@@ -287,7 +290,7 @@ async def _gen_shot_tts_async(shot: dict, output_dir: Path, provider,
 
     # 3. 获取音色
     if speaker_name:
-        voice_Config = voice_registry.get_voice(speaker_name, gender, age_range)
+        voice_config = voice_registry.get_voice(speaker_name, gender, age_range)
     else:
         voice_config = NARRATOR_VOICE.copy()
 

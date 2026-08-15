@@ -13,6 +13,7 @@ import asyncio
 import os
 from pathlib import Path
 from typing import List, Optional
+from weakref import WeakKeyDictionary
 
 from PIL import Image
 
@@ -29,6 +30,27 @@ from vimax.interfaces import ImageOutput, VideoOutput
 _IMAGE_GEN_TIMEOUT = int(os.getenv("AGNES_IMAGE_GENERATE_TIMEOUT", "180"))
 
 
+class _LoopScopedSemaphore:
+    """按事件循环缓存 asyncio.Semaphore。
+
+    asyncio 的 Semaphore 在首次 acquire 时绑定当前事件循环；若 class 级信号量
+    在第一个 asyncio.run() 中创建、又在后续 asyncio.run() 中复用，会抛
+    "bound to a different event loop"。按 loop 弱引用缓存：同一循环内复用
+    （并发控制生效），跨循环各自独立，且循环回收后自动清理。
+    """
+
+    def __init__(self) -> None:
+        self._sems: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = WeakKeyDictionary()
+
+    def get(self, concurrency: int) -> "asyncio.Semaphore":
+        loop = asyncio.get_running_loop()
+        sem = self._sems.get(loop)
+        if sem is None:
+            sem = asyncio.Semaphore(concurrency)
+            self._sems[loop] = sem
+        return sem
+
+
 class ImageGeneratorAiVideoAdapter:
     """把 ViMax 图像生成调用接到 aiVideo 的 _image_gen provider。
 
@@ -37,8 +59,10 @@ class ImageGeneratorAiVideoAdapter:
     不同实例各自独立（无全局锁），这样多摄像机可真正并行生成首帧/尾帧。
     """
 
-    # 全局并发信号量：最多同时提交 8 个任务（对应 8 个 API Key，Bailian 单账号自动降为 1）
-    _global_semaphore: "asyncio.Semaphore | None" = None
+    # 全局并发信号量（按事件循环缓存，避免跨 asyncio.run() 复用导致
+    # "bound to a different event loop"）：最多同时提交 8 个任务
+    # （对应 8 个 API Key，Bailian 单账号自动降为 1）
+    _global_semaphores: "_LoopScopedSemaphore" = _LoopScopedSemaphore()
     _MAX_CONCURRENT = int(os.getenv("IMAGE_MAX_CONCURRENT", "0"))  # 0=自动
 
     def __init__(
@@ -163,18 +187,17 @@ class ImageGeneratorAiVideoAdapter:
             # 从 kwargs 传递期望物体列表
             expected_objects=kwargs.get("expected_objects"),
         )
-        # 全局并发信号量：自动根据当前供应商调整并发数
-        if ImageGeneratorAiVideoAdapter._global_semaphore is None:
+        # 全局并发信号量：自动根据当前供应商调整并发数（按事件循环缓存）
+        if ImageGeneratorAiVideoAdapter._MAX_CONCURRENT > 0:
+            concurrency = ImageGeneratorAiVideoAdapter._MAX_CONCURRENT
+        else:
             # Bailian 只有 1 个账号，只能串行；Agnes 有 8 个 Key 可并行
-            if ImageGeneratorAiVideoAdapter._MAX_CONCURRENT > 0:
-                concurrency = ImageGeneratorAiVideoAdapter._MAX_CONCURRENT
-            else:
-                from _image_gen.config import config as _img_config
-                concurrency = 1 if _img_config.PROVIDER == "bailian" else 8
-            ImageGeneratorAiVideoAdapter._global_semaphore = asyncio.Semaphore(concurrency)
+            from _image_gen.config import config as _img_config
+            concurrency = 1 if _img_config.PROVIDER == "bailian" else 8
+        _sem = ImageGeneratorAiVideoAdapter._global_semaphores.get(concurrency)
 
         # 并发控制：Semaphore 保证同时只有 N 个任务在飞，超出排队等待
-        async with ImageGeneratorAiVideoAdapter._global_semaphore:
+        async with _sem:
             result = await asyncio.wait_for(
                 asyncio.to_thread(self._svc.generate, req),
                 timeout=_IMAGE_GEN_TIMEOUT,
@@ -193,8 +216,10 @@ class VideoGeneratorAiVideoAdapter:
     提交后异步轮询各任务（不占用 Semaphore 名额）。
     """
 
-    # 全局并发信号量：最多同时提交 8 个任务（对应 8 个 API Key，Bailian 自动降为 1）
-    _global_semaphore: "asyncio.Semaphore | None" = None
+    # 全局并发信号量（按事件循环缓存，避免跨 asyncio.run() 复用导致
+    # "bound to a different event loop"）：最多同时提交 8 个任务
+    # （对应 8 个 API Key，Bailian 自动降为 1）
+    _global_semaphores: "_LoopScopedSemaphore" = _LoopScopedSemaphore()
     _MAX_CONCURRENT = int(os.getenv("VIDEO_MAX_CONCURRENT", "0"))  # 0=自动
 
     def __init__(
@@ -257,17 +282,16 @@ class VideoGeneratorAiVideoAdapter:
             image_path=image_path,
         )
 
-        # 全局并发信号量：自动根据当前供应商调整并发数
-        if VideoGeneratorAiVideoAdapter._global_semaphore is None:
-            if VideoGeneratorAiVideoAdapter._MAX_CONCURRENT > 0:
-                concurrency = VideoGeneratorAiVideoAdapter._MAX_CONCURRENT
-            else:
-                from _video_gen.config import VideoGenCfg
-                concurrency = 1 if VideoGenCfg.PROVIDER == "bailian" else 8
-            VideoGeneratorAiVideoAdapter._global_semaphore = asyncio.Semaphore(concurrency)
+        # 全局并发信号量：自动根据当前供应商调整并发数（按事件循环缓存）
+        if VideoGeneratorAiVideoAdapter._MAX_CONCURRENT > 0:
+            concurrency = VideoGeneratorAiVideoAdapter._MAX_CONCURRENT
+        else:
+            from _video_gen.config import VideoGenCfg
+            concurrency = 1 if VideoGenCfg.PROVIDER == "bailian" else 8
+        _sem = VideoGeneratorAiVideoAdapter._global_semaphores.get(concurrency)
 
         # 提交阶段：Semaphore 控制并发（等有空位再提交）
-        async with VideoGeneratorAiVideoAdapter._global_semaphore:
+        async with _sem:
             task_id = await self.submit_task(req)
         print(f"  [ViMax适配器] task_id={task_id}")
 

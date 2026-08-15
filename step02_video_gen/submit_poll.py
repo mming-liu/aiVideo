@@ -369,7 +369,11 @@ async def _submit_video(
     mode: str = "A",
 ) -> asyncio.Task | None:
     """提交视频任务并返回轮询 task."""
+    from shared.tee_logger import get_logger
+    from shared.paths import chapter_dir
     from step02_video_gen.prompt_builder import _build_prompt, _make_request
+
+    logger = get_logger(chapter_dir() / "step02.log", console_level="INFO")
 
     prompt = _build_prompt(shot, script, mode=mode)
     characters = script.get("characters", [])
@@ -562,6 +566,9 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
 
     log_dir = chapter_dir()
     logger = get_logger(log_dir / "step02.log", console_level="INFO")
+
+    # 清空上一轮失败记录（同进程多章/重试时防止累计污染汇总计数）
+    _failed_videos.clear()
 
     script_actual_mtime = script_file.stat().st_mtime if script_file.exists() else None
 

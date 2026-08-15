@@ -112,7 +112,13 @@ def _build_submit_body(req: VideoGenerationRequest, model: str) -> dict:
 
 def _parse_submit_response(res: requests.Response) -> str:
     """解析提交响应，返回 task_id。"""
-    data = res.json()
+    # #21 修复 2026-08-14：网关可能返回 HTML/空页，res.json() 需保护
+    try:
+        data = res.json()
+    except ValueError:
+        raise RuntimeError(
+            f"视频提交响应非 JSON（HTTP {res.status_code}）: {res.text[:300]}"
+        )
     if not res.ok:
         code = (data.get("code") or "") if isinstance(data, dict) else ""
         message = (data.get("message") or "") if isinstance(data, dict) else ""
@@ -168,7 +174,13 @@ def _poll_task(task_id: str, api_key: str, clip_index: int) -> VideoGenerationRe
                 _verbose_write(f"  [镜头{clip_index}] 查询失败 ({res.status_code})，重试...")
                 continue
 
-            data = res.json()
+            # #21 修复 2026-08-14：网关可能返回 HTML/空页，res.json() 抛
+            # JSONDecodeError（非 RequestException）→ 之前是未捕获崩溃路径。
+            try:
+                data = res.json()
+            except ValueError:
+                _verbose_write(f"  [镜头{clip_index}] 查询响应非 JSON，重试...")
+                continue
             if not isinstance(data, dict):
                 continue
 
@@ -325,10 +337,18 @@ class DashScopeHttpVideoService(VideoGenerationService):
     def query_task(self, task_id: str) -> dict:
         url = f"{TASK_QUERY_ENDPOINT}/{task_id}"
         headers = {"Authorization": f"Bearer {config.DASHSCOPE_API_KEY}"}
-        res = requests.get(url, headers=headers, timeout=30)
+        try:
+            res = requests.get(url, headers=headers, timeout=30)
+        except requests.RequestException as e:
+            raise RuntimeError(f"查询任务失败（连接异常）: {e}")
         if not res.ok:
-            raise RuntimeError(f"查询任务失败: {res.status_code}")
-        return res.json()
+            # #21 修复：错误信息带状态码，供区分瞬态(5xx)与终态
+            raise RuntimeError(f"查询任务失败 [{res.status_code}]: {res.text[:300]}")
+        try:
+            data = res.json()
+        except ValueError:
+            raise RuntimeError("查询任务失败（响应非 JSON）")
+        return data
 
     def wait_for_completion(
         self, req: VideoGenerationRequest, task_id: str

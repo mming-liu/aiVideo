@@ -262,6 +262,7 @@ def validate_fps_consistency(script: dict) -> None:
 from shared.content_safety import (
     SENSITIVE_SUBSTITUTIONS,
     sanitize as _safety_sanitize,
+    FORBIDDEN_WORDS,
     WEAPON_WORDS, WEAPON_HIDDEN_WORDS, WEAPON_VISIBLE_WORDS, WEAPON_STAB_VERBS,
 )
 
@@ -530,14 +531,19 @@ FF_REACTION_TO_PREACTION = (
 
 
 def _subject_names(characters) -> set:
-    """角色名集合（含 刺客/杀手/黑衣人 等兜底称谓）. 用于动作主体识别."""
+    """角色名集合（含 刺客/杀手/黑衣人 等兜底称谓）. 用于动作主体识别.
+
+    M6 修复 2026-08-14：兜底表原硬编码第一章角色名（杨旭/听香/张十三/老汉/
+    肖管事），换章/换书会注入错误的角色约束。现只保留通用称谓兜底，
+    具体角色名一律来自 characters 参数。
+    """
     names = set()
     for c in (characters or []):
         ident = (c.get("identifier") or "").strip()
         if ident:
             names.add(ident)
     # 兜底常见称谓（非注册角色名也可能出现在 ff_desc）
-    for fallback in ("刺客", "杀手", "黑衣人", "杨旭", "听香", "张十三", "老汉", "肖管事"):
+    for fallback in ("刺客", "杀手", "黑衣人", "蒙面人", "神秘人"):
         names.add(fallback)
     return names
 
@@ -1236,12 +1242,17 @@ def extract_orientation(desc: str, characters=None) -> list[tuple[str, str]]:
 
 
 def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
-                                 shot: dict | None = None) -> str:
+                                 shot: dict | None = None,
+                                 characters: list | None = None) -> str:
     """为图片生成添加严格约束，防止 AI 幻觉生成错误画面。
 
     frame_type: "首帧"、"尾帧" 或 "关键帧"
     shot: 镜头数据（可选）。传入时根据镜头实际出现的角色动态生成约束，
           避免向无刺客的镜头注入刺客描述导致图片模型脑补多余人物。
+    characters: 角色表（可选）。M6 修复 2026-08-14：约束原先按第一章硬编码
+          角色名（杨旭/听香/张十三/老汉）生成，换章/换书会注入错误约束。
+          现改为从 characters + 镜头文本动态推导：性别约束取角色属性，
+          出场名单取镜头文本中实际出现的角色名。
     """
     strict_constraints = (
         "【强制】你必须严格参照以下描述的具体细节来生成画面。"
@@ -1272,7 +1283,7 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                 f"严格遵守该地点特征，禁止画成其他场景（如河流/江面/室内/街道）。"
             )
 
-    # 根据镜头实际内容动态生成角色约束（不再硬编码刺客）
+    # 根据镜头实际内容动态生成角色约束（不再硬编码刺客/第一章角色名）
     if shot is not None:
         # 收集本镜头所有文本字段，判断哪些角色实际出现
         shot_text = " ".join([
@@ -1281,45 +1292,49 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
             shot.get("lf_desc", ""),
             shot.get("motion_desc", "") or shot.get("prompt", ""),
         ])
-        has_assassin = "刺客" in shot_text
-        has_yangxu = "杨旭" in shot_text
-        has_tingxiang = "听香" in shot_text
+        # 威胁源角色（刺客一类的通称），与 _subject_names 兜底一致
+        _THREAT_NAMES = ("刺客", "杀手", "黑衣人", "蒙面人", "神秘人")
+        has_threat = any(n in shot_text for n in _THREAT_NAMES)
 
-        if has_assassin:
+        # 本镜实际出场的注册角色（按 identifier 在镜头文本中匹配）
+        present_chars = []
+        for c in (characters or []):
+            ident = (c.get("identifier") or "").strip()
+            if ident and ident in shot_text:
+                present_chars.append(c)
+
+        if has_threat:
+            # 武器归属：武器只能由威胁源持有；其余出场角色不得持武器/蒙面
+            others = [c["identifier"] for c in present_chars]
+            _no_weapon = "".join(f"{n}手中没有武器，没有刀，没有剑，没有短刃。" for n in others)
+            _not_threat = "".join(f"{n}不能蒙面，{n}不是刺客。" for n in others)
             strict_constraints += (
                 "【武器归属】武器（短刃、刀、剑）只能由刺客持有。"
-                "杨旭手中没有武器，没有刀，没有剑，没有短刃。"
-                "杨旭是被刺伤的人，不是拿武器的人。"
-                "听香手中也没有武器。"
-                "【人物】杨旭不能蒙面，杨旭不是刺客。"
-                "刺客是蒙面的。刺客是成年男性。"
+                + _no_weapon
+                + f"【人物】{_not_threat}刺客是蒙面的。刺客是成年男性。"
                 "禁止两个人拿武器。只有刺客一个人拿武器。"
             )
 
-        # 性别硬约束（08-09 首帧听香被画成男）：仅靠「一袭春衫」等服装词不足以
-        # 约束性别，图片模型会参考图生图随机发挥。显式标注性别防止听香/杨旭性别错乱。
-        if has_tingxiang:
-            strict_constraints += (
-                "【性别】听香是年轻女子，面容秀美，鹅蛋脸，身段娇柔；"
-                "必须画成女性，禁止男性化/中性化。"
-            )
-        if has_yangxu:
-            strict_constraints += (
-                "【性别】杨旭是青年男子，身形挺拔；必须画成男性。"
-            )
+        # 性别硬约束（防角色性别错乱）：从角色属性派生，非硬编码人名
+        for c in present_chars:
+            ident = c["identifier"]
+            gender = (c.get("gender") or "").strip().lower()
+            if gender in ("female", "女", "女子"):
+                age_note = (c.get("age_range") or "").strip() or "年轻"
+                strict_constraints += (
+                    f"【性别】{ident}是{age_note}女子，面容符合设定；"
+                    "必须画成女性，禁止男性化/中性化。"
+                )
+            elif gender in ("male", "男", "男子"):
+                age_note = (c.get("age_range") or "").strip() or "青年"
+                strict_constraints += (
+                    f"【性别】{ident}是{age_note}男子；必须画成男性。"
+                )
 
-        # 统计本镜头应出现的人物数量，显式限制
-        char_names = []
-        if has_yangxu:
-            char_names.append("杨旭")
-        if has_tingxiang:
-            char_names.append("听香")
-        if has_assassin:
+        # 统计本镜头应出现的人物数量，显式限制（威胁源记为「刺客」）
+        char_names = [c["identifier"] for c in present_chars]
+        if has_threat:
             char_names.append("刺客")
-        # 其他角色：从 main_subject 等字段中检测
-        for name in ["张十三", "老汉"]:
-            if name in shot_text:
-                char_names.append(name)
 
         if char_names:
             strict_constraints += (
@@ -1344,11 +1359,12 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
 
         # 首帧禁血/禁动作结果（08-09 首帧杨旭胸口血迹、刺客血眼）：首帧是动作
         # 「前一刻」（破水前/未刺中），画面必须干净无血。血污/伤口只允许出现在尾帧。
-        if frame_type == "首帧" and has_assassin:
+        if frame_type == "首帧" and has_threat:
+            _victim_note = "。".join(f"{c['identifier']}胸口、身上必须干净无伤" for c in present_chars)
             strict_constraints += (
                 "【首帧禁血】这是动作开始前的画面，刺客尚未出水、未刺中任何人。"
                 "所有人物身上禁止血迹、血污、血点、洇痕；眼睛禁止充血/泛红/血丝。"
-                "杨旭胸口、身上必须干净无伤。"
+                f"{_victim_note}。"
             )
     else:
         # 无 shot 上下文时，只添加通用约束（不注入具体角色描述）
@@ -1418,16 +1434,9 @@ def is_empty_scene(shot: dict, characters: list[dict]) -> bool:
 # 五、敏感词校验（v6 新增）
 # ============================================================================
 
-# 高危敏感词列表（必须完全禁止出现）
-_SENSITIVE_FORBIDDEN = {
-    # 血腥类（任何形式都不允许）
-    "血", "血液", "鲜血", "血迹", "血腥", "腥甜", "血腥味",
-    "品尝血", "伤口渗血", "喷血", "血溅", "血流",
-    # 极端暴力
-    "割喉", "斩首", "开膛破肚", "肢解", "分尸",
-    # 裸露性描写（注意："赤膊"是正常词汇，指光膀子的小说描写，不列入敏感词）
-    "裸露", "赤身", "光腚",
-}
+# 高危敏感词列表（必须完全禁止出现），M6 收敛 2026-08-14：单一来源
+# 为 shared.content_safety.FORBIDDEN_WORDS（原 _SENSITIVE_FORBIDDEN 本地表删除）。
+_FORBIDDEN = FORBIDDEN_WORDS
 
 
 def validate_sensitive_words(script: dict, verbose: bool = True) -> dict:
@@ -1447,7 +1456,7 @@ def validate_sensitive_words(script: dict, verbose: bool = True) -> dict:
             if not text:
                 continue
 
-            for forbidden in _SENSITIVE_FORBIDDEN:
+            for forbidden in _FORBIDDEN:
                 if forbidden in text:
                     issues.append({
                         "shot": shot_idx,

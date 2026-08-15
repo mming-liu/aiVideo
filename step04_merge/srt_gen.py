@@ -11,10 +11,10 @@ from typing import List
 
 def seconds_to_srt_time(seconds: float) -> str:
     """Convert seconds to SRT time format HH:MM:SS,mmm."""
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int((seconds - int(seconds)) * 1000)
+    total_ms = int(round(seconds * 1000))
+    hours, rem = divmod(total_ms, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    secs, millis = divmod(rem, 1000)
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
@@ -93,16 +93,16 @@ def generate_srt(shots: List[dict], durations: List[float], output: Path) -> Non
             continue
 
         # 检查是否是对话（有引号或说话动词）
-        has_dialogue = any(c in subtitle for c in ['「', '」', '『', '』', '"', '"', '"', '“', '”'])
+        # 全角/直角/ASCII 引号统一视为对话标记（与 shared/dialogue.py 标准一致）
+        has_dialogue = any(c in subtitle for c in ['「', '」', '『', '』', '“', '”', '"', '«', '»'])
         # 说话动词必须后跟标点才视为对话（避免"一道道炊烟"的"道"误判）
-        has_quote = any(c in subtitle for c in ['"', '"', '«', '»'])
         has_speaker = False
         for w in ['说', '道', '问', '答', '喊', '叫', '喝']:
             pos = subtitle.find(w)
             if pos >= 0 and pos + 1 < len(subtitle) and subtitle[pos + 1] in '：:,,，,.。':
                 has_speaker = True
                 break
-        is_dialogue = has_quote or has_speaker
+        is_dialogue = has_dialogue or has_speaker
 
         if not is_dialogue:
             # 没有对话，跳过字幕
@@ -155,5 +155,6 @@ def generate_srt(shots: List[dict], durations: List[float], output: Path) -> Non
 
         current_time = end
 
-    output.write_text("\n".join(srt_lines), encoding="utf-8")
+    # utf-8-sig（带 BOM）：部分 Windows 播放器/ffmpeg 按 ANSI 误读无 BOM 的 UTF-8 中文
+    output.write_text("\n".join(srt_lines), encoding="utf-8-sig")
     print(f"[OK] SRT generated: {output} ({subtitle_count} subtitles, total {current_time:.1f}s)")

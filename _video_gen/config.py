@@ -46,6 +46,8 @@ class VideoGenCfg:
     DASHSCOPE_VIDEO_DURATION: int = int(os.getenv("DASHSCOPE_VIDEO_DURATION", "0"))  # 0=不传duration
     DASHSCOPE_POLL_INTERVAL: int = int(os.getenv("DASHSCOPE_POLL_INTERVAL", "8"))
     DASHSCOPE_MAX_POLL_ATTEMPTS: int = int(os.getenv("DASHSCOPE_MAX_POLL_ATTEMPTS", "120"))
+    # #21 修复 2026-08-14：轮询中查询接口瞬态错误（5xx/连接异常）连续容忍次数
+    DASHSCOPE_POLL_MAX_TRANSIENT: int = int(os.getenv("DASHSCOPE_POLL_MAX_TRANSIENT", "5"))
 
     # ---- OpenAI Sora / 第三方兼容 API ----
     # OpenAI 官方: https://api.openai.com/v1/video
@@ -90,10 +92,17 @@ class VideoGenCfg:
     AGNES_VIDEO_MODE: str = os.getenv("AGNES_VIDEO_MODE", "async")
     AGNES_VIDEO_POLL_INTERVAL: int = int(os.getenv("AGNES_VIDEO_POLL_INTERVAL", "8"))
     AGNES_VIDEO_MAX_POLL_ATTEMPTS: int = int(os.getenv("AGNES_VIDEO_MAX_POLL_ATTEMPTS", "120"))
+    # #21 修复 2026-08-14：轮询中查询接口的瞬态错误（5xx/连接异常）连续容忍次数。
+    # 单次瞬时抖动不再杀镜头，连续超过此阈值才放弃（真正故障不应无限重试）。
+    AGNES_VIDEO_POLL_MAX_TRANSIENT: int = int(os.getenv("AGNES_VIDEO_POLL_MAX_TRANSIENT", "5"))
     # 提交重试: 5xx/连接错误时的最大重试次数与间隔（秒）
     # 默认 10 次 × 30s = 5 分钟合理上限；超过后视为临时故障，由外层重试整个流水线
     AGNES_VIDEO_SUBMIT_RETRIES: int = int(os.getenv("AGNES_VIDEO_SUBMIT_RETRIES", "10"))
     AGNES_VIDEO_SUBMIT_RETRY_DELAY: int = int(os.getenv("AGNES_VIDEO_SUBMIT_RETRY_DELAY", "30"))
+    # #23 修复 2026-08-14：key_scheduler.acquire() 等待上限（秒），防止全部 key
+    # 被 429 长冷却时工作线程无限阻塞占满线程池
+    AGNES_VIDEO_KEY_ACQUIRE_TIMEOUT: float = float(
+        os.getenv("AGNES_VIDEO_KEY_ACQUIRE_TIMEOUT", "300"))
 
     @classmethod
     def validate(cls) -> None:

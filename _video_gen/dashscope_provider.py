@@ -78,7 +78,13 @@ class DashScopeVideoService(VideoGenerationService):
             _verbose_write(f"  [镜头{req.clip_index}] [{model}] {req.prompt[:60]}...")
 
             if rsp.status_code == 200:
-                task_id = rsp.output["task_id"]
+                # #21 修复 2026-08-14：HTTP 200 但 output 缺 task_id（部分错误响应
+                # 以 200 返回）→ KeyError 无保护。改为显式取用 + 报错信息含响应原文。
+                task_id = (rsp.output or {}).get("task_id") or ""
+                if not task_id:
+                    raise RuntimeError(
+                        f"创建任务成功但未获取 task_id: {str(rsp.output)[:300]}"
+                    )
                 _verbose_write(f"  [镜头{req.clip_index}] 任务已创建 [{model}] -> task_id: {task_id}")
                 return task_id
 
@@ -104,9 +110,14 @@ class DashScopeVideoService(VideoGenerationService):
     # 查询任务
     # ------------------------------------------------------------------
     def query_task(self, task_id: str) -> dict:
-        rsp = VideoSynthesis.fetch(task_id)
+        try:
+            rsp = VideoSynthesis.fetch(task_id)
+        except Exception as e:
+            # SDK 网络/超时异常 → 归类为瞬态（wait_for_completion 按此容忍重试）
+            raise RuntimeError(f"查询任务失败（连接异常）: {e}")
         if rsp.status_code != 200:
-            raise RuntimeError(f"查询任务失败: {rsp.code} - {rsp.message}")
+            # #21 修复：错误信息带状态码，供 wait_for_completion 区分瞬态(5xx)与终态
+            raise RuntimeError(f"查询任务失败 [{rsp.status_code}]: {rsp.code} - {rsp.message}")
         return rsp.output
 
     # ------------------------------------------------------------------
@@ -116,6 +127,8 @@ class DashScopeVideoService(VideoGenerationService):
         self, req: VideoGenerationRequest, task_id: str
     ) -> VideoGenerationResult:
         attempt = 0
+        # #21 修复 2026-08-14：查询接口瞬态错误不杀镜头，连续超阈值才放弃
+        transient_failures = 0
         while True:
             attempt += 1
             if attempt > config.DASHSCOPE_MAX_POLL_ATTEMPTS:
@@ -126,7 +139,32 @@ class DashScopeVideoService(VideoGenerationService):
                 )
 
             time.sleep(config.DASHSCOPE_POLL_INTERVAL)
-            output = self.query_task(task_id)
+            try:
+                output = self.query_task(task_id)
+            except RuntimeError as e:
+                # 429 / 5xx / 连接异常 → 瞬态，容忍重试；4xx 终态直接失败
+                err = str(e)
+                transient = ("连接异常" in err) or any(
+                    f"[{code}]" in err
+                    for code in (408, 429, 499, 500, 502, 503, 504, 520, 522, 524)
+                )
+                if transient:
+                    transient_failures += 1
+                    if transient_failures > config.DASHSCOPE_POLL_MAX_TRANSIENT:
+                        return VideoGenerationResult(
+                            clip_index=req.clip_index,
+                            success=False,
+                            error=f"轮询连续瞬态错误 {transient_failures} 次: {err}",
+                        )
+                    _verbose_write(f"  [镜头{req.clip_index}] 查询瞬态错误"
+                          f"（{transient_failures}/{config.DASHSCOPE_POLL_MAX_TRANSIENT}），"
+                          f"等待后继续轮询: {err}")
+                    continue
+                return VideoGenerationResult(
+                    clip_index=req.clip_index,
+                    success=False,
+                    error=f"查询失败: {err}",
+                )
             status = output.get("task_status", "UNKNOWN")
 
             if status == "SUCCEEDED":

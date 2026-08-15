@@ -128,22 +128,26 @@ class TeeLogger:
 
 
 # ------------------------------------------------------------------
-# 全局单例（线程安全简化版）
+# 全局单例（按 log_path 缓存，M8 修复 2026-08-14）
+# 原实现只缓存第一个 log_path 的 logger，后续 get_logger(其他路径) 会
+# 静默返回错误文件句柄，日志写错文件。现按 log_path 分别缓存。
 # ------------------------------------------------------------------
-_global_logger: Optional[TeeLogger] = None
+_loggers: dict[str, TeeLogger] = {}
 
 
-def get_logger(log_path: Optional[Path] = None, console_level: str = "INFO") -> TeeLogger:
-    """获取全局 logger 实例（线程不安全，但脚本化场景足够）."""
-    global _global_logger
-    if _global_logger is None and log_path is not None:
-        _global_logger = TeeLogger(log_path, console_level=console_level)
-    return _global_logger  # type: ignore[return-value]
+def get_logger(log_path: Optional[Path] = None, console_level: str = "INFO") -> Optional[TeeLogger]:
+    """获取按 log_path 缓存的 logger 实例（脚本化场景足够，无需加锁）."""
+    if log_path is None:
+        return next(iter(_loggers.values())) if _loggers else None
+    key = str(Path(log_path))
+    if key not in _loggers:
+        _loggers[key] = TeeLogger(log_path, console_level=console_level)
+    return _loggers[key]
 
 
 def reset_logger():
-    """重置全局 logger."""
-    global _global_logger
-    if _global_logger:
-        _global_logger.close()
-        _global_logger = None
+    """关闭并清空全部 logger 缓存."""
+    global _loggers
+    for logger in _loggers.values():
+        logger.close()
+    _loggers = {}

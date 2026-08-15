@@ -77,6 +77,10 @@ class AgnesTextService(TextGenerationService):
         idx = 0
         last_error = ""
 
+        # M7 修复 2026-08-14：每次调用从主 Key 开始，避免一次 401/429 造成
+        # 的 Key 切换状态跨调用永久残留（否则后续请求永远跳过主 Key）。
+        self._current_key_index = 0
+
         while idx < len(self._model_queue):
             model = self._model_queue[idx]
             headers = {
@@ -124,18 +128,15 @@ class AgnesTextService(TextGenerationService):
                     last_error = f"Agnes 内容违规 [422]: {res.text[:300]}"
                     break
 
-                # ---- 401/402: 认证失败/余额不足，优先切换 API Key ----
+                # ---- 401/402: 认证失败/余额不足，切换到下一个 API Key ----
+                # M7 修复 2026-08-14：换 Key 预算不再与重试预算（_submit_retry）混用——
+                # 401/402 不会因重试，直接逐个换 Key 直到全部尝试（预算 = 可用 Key 数）。
                 if res.status_code in (401, 402):
-                    _submit_retry += 1
-                    if _submit_retry <= config.AGNES_TEXT_SUBMIT_RETRIES:
-                        if self._switch_to_backup_key():
-                            print(f"  [!] HTTP {res.status_code}，"
-                                  f"切换到 API Key {self._current_key_index + 1}/{len(self._api_keys)} 并重试")
-                        else:
-                            last_error = f"Agnes API Key 无效/过期 [HTTP {res.status_code}]，所有 Key 均已尝试: {res.text[:300]}"
-                            break
+                    if self._switch_to_backup_key():
+                        print(f"  [!] HTTP {res.status_code}，"
+                              f"切换到 API Key {self._current_key_index + 1}/{len(self._api_keys)} 并重试")
                         continue
-                    last_error = f"Agnes 认证失败 [HTTP {res.status_code}] (重试{_submit_retry}次): {res.text[:300]}"
+                    last_error = f"Agnes API Key 无效/过期 [HTTP {res.status_code}]，所有 Key 均已尝试: {res.text[:300]}"
                     break
 
                 # ---- 408/499/502/503/504/520/522/524: 临时错误，等待后重试 ----
@@ -200,6 +201,7 @@ class AgnesTextService(TextGenerationService):
                         continue
                     last_error = (f"Agnes 文本速率限制 [429] (重试{_submit_retry}次): "
                                   f"{res.text[:300]}")
+                    break
 
                 # ---- 403: 额度耗尽或无权限，尝试模型回退 ----
                 if res.status_code == 403:

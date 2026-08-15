@@ -5,6 +5,9 @@
 
 import json
 import hashlib
+import os
+import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
@@ -50,27 +53,52 @@ class VoiceRegistry:
         self.registry_path = registry_path
         self.mapping: dict[str, dict] = {}  # { "角色名": {id, rate, volume, ...} }
         self.used_voice_ids: set[str] = set()
+        # #19 修复 2026-08-14：get_voice 的 mapping 写入 + 落盘与并发读竞态加锁
+        self._lock = threading.RLock()
         self.load()
 
     def load(self) -> None:
-        """从 JSON 文件加载注册表."""
-        if self.registry_path.exists():
+        """从 JSON 文件加载注册表.
+
+        #19 修复 2026-08-14：加载失败不再只 WARN 后留空注册表（会导致音色
+        全部重分配、跨章节声音漂移）——保留内存中已加载的 mapping，并把损坏
+        文件备份为 .corrupt-<时间戳>，避免反复读坏文件；下次生成用备份恢复。
+        """
+        if not self.registry_path.exists():
+            return
+        try:
+            with open(self.registry_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if not isinstance(data, dict):
+                    raise ValueError(f"注册表根节点类型错误: {type(data).__name__}")
+                self.mapping = data.get("mapping", {}) or {}
+                self.used_voice_ids = set(data.get("used_voice_ids", []) or [])
+        except Exception as e:
+            if self.mapping:
+                # 已有内存态（重载场景）：保留现役分配，不整体漂移
+                print(f"[ERROR] 加载音色注册表失败，保留当前内存分配: {e}")
+                return
+            backup = self.registry_path.with_name(
+                self.registry_path.name + f".corrupt-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            )
             try:
-                with open(self.registry_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.mapping = data.get("mapping", {})
-                    self.used_voice_ids = set(data.get("used_voice_ids", []))
-            except Exception as e:
-                print(f"[WARN] 加载音色注册表失败: {e}")
+                os.replace(self.registry_path, backup)
+                print(f"[ERROR] 音色注册表损坏（{e}），已备份到 {backup}，将重建新注册表")
+            except OSError:
+                print(f"[ERROR] 音色注册表损坏且备份失败（{e}），将重建新注册表")
+            self.mapping = {}
+            self.used_voice_ids = set()
 
     def save(self) -> None:
-        """保存注册表到 JSON 文件."""
+        """保存注册表到 JSON 文件（#19 修复：先写临时文件再原子替换）."""
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.registry_path, "w", encoding="utf-8") as f:
+        tmp_path = self.registry_path.with_name(self.registry_path.name + ".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump({
                 "mapping": self.mapping,
                 "used_voice_ids": list(self.used_voice_ids)
             }, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, self.registry_path)
 
     def get_voice(self, character_name: str, gender: str = None, age_range: str = None) -> dict:
         """获取角色音色，根据性别和年龄段智能匹配。
@@ -91,14 +119,18 @@ class VoiceRegistry:
         if character_name in self.mapping:
             return self.mapping[character_name].copy()
 
-        # 新角色：根据性别和年龄段匹配
-        new_voice = self._assign_new_voice(gender, age_range)
-        if new_voice:
-            self.mapping[character_name] = new_voice.copy()
-            self.used_voice_ids.add(new_voice["id"])
-            self.save()
-            print(f"[INFO] 新角色 '{character_name}' 分配音色: {new_voice['id']} ({new_voice['style']}, gender={gender}, age={age_range})")
-            return new_voice
+        # 新角色：根据性别和年龄段匹配（加锁防并发重复分配/落盘竞态）
+        with self._lock:
+            # 双检：等待锁期间可能已被其他线程注册
+            if character_name in self.mapping:
+                return self.mapping[character_name].copy()
+            new_voice = self._assign_new_voice(gender, age_range)
+            if new_voice:
+                self.mapping[character_name] = new_voice.copy()
+                self.used_voice_ids.add(new_voice["id"])
+                self.save()
+                print(f"[INFO] 新角色 '{character_name}' 分配音色: {new_voice['id']} ({new_voice['style']}, gender={gender}, age={age_range})")
+                return new_voice
 
         # 音色池耗尽：按角色名哈希确定性分配，优先匹配性别
         # 优先尝试性别匹配
@@ -150,13 +182,16 @@ class VoiceRegistry:
         print("[INFO] 音色注册表已重置")
 
 
-# 全局单例
+# 全局单例（#19 修复：加锁防并发创建两个实例导致分配分裂）
 _registry_instance: Optional[VoiceRegistry] = None
+_registry_lock = threading.Lock()
 
 
 def get_registry() -> VoiceRegistry:
     """获取全局音色注册表单例."""
     global _registry_instance
     if _registry_instance is None:
-        _registry_instance = VoiceRegistry()
+        with _registry_lock:
+            if _registry_instance is None:
+                _registry_instance = VoiceRegistry()
     return _registry_instance

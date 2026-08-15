@@ -1,6 +1,5 @@
 import base64
 import sys
-sys.stdout.reconfigure(encoding='utf-8')
 
 from typing import Optional
 
@@ -18,6 +17,17 @@ DASHSCOPE_QWEN3_TTS_MODEL = "qwen3-tts-vd-2026-01-26"
 DASHSCOPE_TTS_MAX_CHARS = 600
 
 KNOWN_VOICE_IDS = ["longxiaxiaoxuan", "longwan", "longchen", "longyue", "longyuan"]
+
+
+def _ensure_utf8_stdout() -> None:
+    """#20 修复 2026-08-14：原模块导入即 `sys.stdout.reconfigure`，是进程级副作用
+    （影响同进程其它模块/重定向管道）。改为惰性 + 幂等 + 失败静默：
+    仅当 stdout 可重配且当前编码非 utf-8 时才执行。"""
+    try:
+        if hasattr(sys.stdout, "reconfigure") and (sys.stdout.encoding or "").lower() != "utf-8":
+            sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 _SPLIT_HINT_CHARS = {
     "。", "！", "？", "；", "：", "，", "、",
@@ -49,7 +59,15 @@ def _split_text_by_limit(text, max_chars=600):
                 break
         s = "".join(chars[cursor:split_point]).strip()
         if not s:
-            raise ValueError("TTS split failed at cursor " + str(cursor))
+            # #20 修复 2026-08-14：切点落在空白/标点处会产生空段，原实现直接
+            # raise ValueError 且无重试 → 长文本 TTS 硬失败。改为跳过空段；
+            # 若切点未前进则强制硬切，保证循环必然推进、不会死循环。
+            if split_point <= cursor:
+                split_point = hard_end
+                s = "".join(chars[cursor:split_point]).strip()
+            if not s:
+                cursor = split_point
+                continue
         segments.append(s)
         cursor = split_point
         while cursor < len(chars) and chars[cursor].isspace():
@@ -148,17 +166,26 @@ class DashScopeQwen3TTSProvider(TTSServiceInterface):
 
     def __init__(self):
         config.validate()
+        _ensure_utf8_stdout()
 
     def synthesize(self, req, output=None):
         model_queue = _build_model_queue(req.model or DASHSCOPE_QWEN3_TTS_MODEL)
         last_error = ""
         text_segments = _split_text_by_limit(req.text, DASHSCOPE_TTS_MAX_CHARS)
 
+        # #20 修复 2026-08-14：TTSRequest 已有 voice_id 字段；只在合法（已知）
+        # 音色 id 时使用，非法/未知 id 回退默认并提示（避免把 garbage id 发给接口）。
+        requested_voice = (getattr(req, "voice_id", "") or "").strip()
+        if requested_voice and requested_voice not in KNOWN_VOICE_IDS:
+            print("  [WARN] Qwen3 TTS 音色 id 不在 KNOWN_VOICE_IDS 中: " +
+                  requested_voice + "，回退默认 longxiaxiaoxuan")
+            requested_voice = ""
+        voice_id = requested_voice or "longxiaxiaoxuan"
+
         for idx, model in enumerate(model_queue):
             try:
                 wav_buffers = []
                 for seg in text_segments:
-                    voice_id = getattr(req, "voice_id", None) or "longxiaxiaoxuan"
                     payload = {
                         "model": model,
                         "input": {

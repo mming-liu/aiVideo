@@ -72,8 +72,18 @@ class TextGenCfg:
             raise RuntimeError("TEXT_PROVIDER=dashscope 需要 DASHSCOPE_API_KEY")
         if cls.PROVIDER == "deepseek" and not cls.DEEPSEEK_API_KEY:
             raise RuntimeError("TEXT_PROVIDER=deepseek 需要 DEEPSEEK_API_KEY")
-        if cls.PROVIDER == "agnes" and not cls.AGNES_API_KEY:
-            raise RuntimeError("TEXT_PROVIDER=agnes 需要 AGNES_API_KEY")
+        if cls.PROVIDER == "agnes":
+            # M7 修复 2026-08-14：补 BASE_URL 校验（此前只查 Key，URL 为空时
+            # 请求打到相对路径/异常，错误信息难定位）。
+            # #25 修复 2026-08-14：backup keys 口径与 _image_gen/config.py 对齐——
+            # 配置了任一 AGNES_API_KEY_2..8 也算有效，不强制必须有主 Key。
+            has_key = bool(cls.AGNES_API_KEY) or any(
+                getattr(cls, f"AGNES_API_KEY_{i}", "") for i in range(2, 9)
+            )
+            if not has_key:
+                raise RuntimeError("TEXT_PROVIDER=agnes 需要至少配置一个 AGNES_API_KEY")
+            if not cls.AGNES_BASE_URL:
+                raise RuntimeError("TEXT_PROVIDER=agnes 需要 AGNES_BASE_URL")
 
 
 # 单例

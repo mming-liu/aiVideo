@@ -165,12 +165,26 @@ _ALIASES = {
 }
 
 
+# 规范化别名表（#13 修复 2026-08-14）：保留原样键 + "空格/连字符→下划线"变体，
+# 使 "david fincher"/"david-fincher"/"david_fincher" 都能命中同一导演。
+_ALIASES_NORMALIZED: dict[str, str] = {}
+for _alias_key, _alias_target in _ALIASES.items():
+    _ALIASES_NORMALIZED[_alias_key] = _alias_target
+    _ALIASES_NORMALIZED[_alias_key.lower().replace(" ", "_").replace("-", "_")] = _alias_target
+
+
 def _normalize_style(style: str) -> str:
-    """标准化导演风格名称"""
+    """标准化导演风格名称.
+
+    #13 修复 2026-08-14：原实现把空格/连字符替换为下划线后再查 _ALIASES，
+    但 _ALIASES 键含空格（"david fincher" 等），替换后永远查不到 → 这些
+    别名静默返回空前缀。现预生成规范化别名表（空格/连字符→下划线 + 原样），
+    输入 "David Fincher" / "david-fincher" / "david_fincher" 均可命中。
+    """
     if not style:
         return ""
     style = style.strip().lower().replace(" ", "_").replace("-", "_")
-    return _ALIASES.get(style, style)
+    return _ALIASES_NORMALIZED.get(style, style)
 
 
 def get_cinematic_prefix(style: str, lang: str = "en") -> str:

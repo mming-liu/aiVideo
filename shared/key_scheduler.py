@@ -12,6 +12,7 @@ N 个 key 做冷却轮询可把提交吞吐提升 N 倍：
 """
 import threading
 import time
+from typing import Optional
 
 
 class KeyScheduler:
@@ -27,8 +28,14 @@ class KeyScheduler:
         self._disabled: set[int] = set()
         self._lock = threading.Lock()
 
-    def acquire(self) -> int:
-        """阻塞直到有 key 可用，返回 key 下标（返回时已预占本轮冷却）."""
+    def acquire(self, timeout: Optional[float] = None) -> int:
+        """阻塞直到有 key 可用，返回 key 下标（返回时已预占本轮冷却）.
+
+        #23 修复 2026-08-14：加 timeout 上限——全部 key 被 429 长冷却（可达
+        600s）时，工作线程不再无限阻塞占满 asyncio.to_thread 线程池。
+        timeout=None 保持原语义（无限等待）；超时抛 TimeoutError 由调用方处理。
+        """
+        deadline = (time.monotonic() + timeout) if timeout else None
         while True:
             with self._lock:
                 now = time.monotonic()
@@ -45,6 +52,13 @@ class KeyScheduler:
                     self._next_free[i] = now + self._cooldown
                     return i
                 wait = t - now
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"[{self._name}] 等待可用 API Key 超时（>{timeout:.0f}s）"
+                    )
+                wait = min(wait, remaining)
             # 锁外睡眠；封顶 5s，醒后重查（其他线程可能已抢走或惩罚了 key）
             time.sleep(min(wait, 5.0))
 

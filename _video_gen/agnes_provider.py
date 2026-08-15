@@ -245,7 +245,8 @@ class AgnesVideoService(VideoGenerationService):
         while True:
             model = self._current_model
             # 冷却调度：取最早可用的 key（阻塞直到有 key 出冷却）
-            key_idx = self._key_scheduler.acquire()
+            # #23 修复：acquire 加 timeout 上限，全部 key 长冷却时不无限阻塞
+            key_idx = self._key_scheduler.acquire(timeout=config.AGNES_VIDEO_KEY_ACQUIRE_TIMEOUT)
             self._current_key_index = key_idx
             headers = {
                 "Authorization": f"Bearer {self._api_keys[key_idx]}",
@@ -459,6 +460,19 @@ class AgnesVideoService(VideoGenerationService):
     # ------------------------------------------------------------------
     # 查询任务
     # ------------------------------------------------------------------
+    @staticmethod
+    def _is_transient_query_error(err: str) -> bool:
+        """判断查询错误是否为瞬态（5xx / 连接类），用于轮询容忍重试.
+
+        #21 修复 2026-08-14。非瞬态（400/401/403/404 等）仍立即失败。
+        """
+        transient_codes = (408, 499, 500, 502, 503, 504, 520, 522, 524)
+        if any(f"[{code}]" in err for code in transient_codes):
+            return True
+        if "查询异常" in err:  # 连接异常/超时
+            return True
+        return False
+
     def query_task(self, task_id: str) -> dict:
         # 必须用提交该任务时的 key 查询（任务归属提交账号，跨 key 查不到）
         bound_key_idx = self._task_keys.get(task_id, self._current_key_index)
@@ -501,6 +515,8 @@ class AgnesVideoService(VideoGenerationService):
             return self._download(req, task_id[len(_SYNC_PREFIX):])
 
         attempt = 0
+        # 连续瞬态查询失败计数（#21 修复 2026-08-14：5xx/连接异常不立即杀镜头）
+        transient_failures = 0
         # 下次查询前的等待时间；429 时改为服务端返回的剩余时间 + 0.5s
         next_wait = config.AGNES_VIDEO_POLL_INTERVAL
         while True:
@@ -528,6 +544,20 @@ class AgnesVideoService(VideoGenerationService):
                         else config.AGNES_VIDEO_POLL_INTERVAL * 2
                     _vlog.verbose(f"  [镜头{req.clip_index}] 查询限流 429，"
                           f"等待 {next_wait:.1f}s 后继续轮询")
+                    continue
+                # #21 修复：瞬态错误（5xx / 连接异常）不直接杀镜头——连续超过
+                # 阈值才放弃，避免单次网络抖动销毁整条视频。
+                if self._is_transient_query_error(err):
+                    transient_failures += 1
+                    if transient_failures > config.AGNES_VIDEO_POLL_MAX_TRANSIENT:
+                        return VideoGenerationResult(
+                            clip_index=req.clip_index,
+                            success=False,
+                            error=(f"轮询连续瞬态错误 {transient_failures} 次: {err}"),
+                        )
+                    _vlog.verbose(f"  [镜头{req.clip_index}] 查询瞬态错误"
+                          f"（{transient_failures}/{config.AGNES_VIDEO_POLL_MAX_TRANSIENT}），"
+                          f"等待后继续轮询: {err}")
                     continue
                 raise
             status = self._extract_status(output)

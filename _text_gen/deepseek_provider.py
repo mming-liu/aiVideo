@@ -154,6 +154,13 @@ class DeepSeekTextService(TextGenerationService):
         print(f"[INFO] 正在调用 DeepSeek ({model}) 生成分镜脚本...")
 
         response = client.chat.completions.create(**api_params)
+        if not getattr(response, "choices", None):
+            # #17 修复 2026-08-14：choices 为空时越界保护（用 usage/错误信息定位）
+            return TextGenerationResult(
+                success=False,
+                error=f"DeepSeek 返回无 choices: {str(response)[:300]}",
+                usage=_usage_dict(response),
+            )
         message = response.choices[0].message
 
         reasoning = getattr(message, "reasoning_content", None)

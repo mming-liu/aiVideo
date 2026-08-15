@@ -148,6 +148,75 @@
 | Bailian 图片异常路径 UnboundLocalError（问题 2） | 本次未复现同一代码点，但同类"响应字段无校验"问题仍存在（中 #17） |
 | 全局 logger 合并日志（问题 7） | **仍存在**（中 #22） |
 
+## 修复状态（2026-08-14 第二批完成）
+
+本报告全部 7 个高优先级问题 + 中优先级 M1-M10 已修复并通过 `python -m py_compile`。
+
+### 高优先级（全部完成）
+
+| # | 文件 | 修复内容 |
+|---|------|----------|
+| 1 | `step03_tts_audio/shot_tts.py` | 同步版删除重复 `main_subject/speaker_name` 计算块；补 `else: voice_config = NARRATOR_VOICE.copy()`；补 `output_path = output_dir / f"shot_{idx}.mp3"`；异步版 `voice_Config`→`voice_config` |
+| 2 | `step02_video_gen/submit_poll.py` | `_submit_video` 顶部懒加载 `get_logger` + `chapter_dir` 并初始化 logger |
+| 3 | `shared/chapter_reader.py` | 新增模块级 `_analyzing_scenes` 守卫；分析中二次进入返回空分析；try/finally 复位 |
+| 4 | `_image_gen/agnes_provider.py` | 参考图编码循环变量 `url`→`ref_data_url`，端点 URL 不再被覆盖 |
+| 5 | `step02b_video_gen/main.py` | `polls` 存 `(index, poll_task)`；gather 后 zip 正确配对，失败计数/日志不再错位 |
+| 6 | `shared/vimax_adapters.py` | 新增 `_LoopScopedSemaphore`（WeakKeyDictionary 按事件循环缓存）；两适配器改用 `_global_semaphores` |
+| 7 | `shared/vimax_bridge.py` | 首/尾帧 QC critical 末次尝试 `return None`；关键帧末次 `break` 不 append 已删路径 |
+
+### 中优先级（M1-M10 完成，编号对应报告"中优先级"列表）
+
+| # | 文件 | 修复内容 |
+|---|------|----------|
+| 8 | `step04_merge/srt_gen.py` | 时间计算改 `total_ms=round(seconds*1000)`+divmod；引号判定统一列表 + `is_dialogue = has_dialogue or has_speaker`；写文件 `utf-8-sig` |
+| 9 | `shared/assets_bank.py` | `_next_asset_id` 重写为无冲突分配（补号与返回都计入 `used` 集合）；`dict(_EMPTY_SCENES/_PROPS)` 浅拷贝改 `copy.deepcopy` |
+| 10 | `shared/content_policy_fix.py` | `discovered_at` 从 `str(Path.cwd())` 改为 `datetime.now()` 时间戳 |
+| 11 | `step03_tts_audio/main.py` | 不再凭 mp3 存在整体跳过 TTS（`.voice` 音色缓存由 gen_all_shot_tts 逐镜校验）；阻断式 `input()` 改为 `TTS_AUTO_CONFIRM` 可配置 |
+| 12 | `step04_merge/stretch.py` + `main.py` | 时长探测失败输出 stderr 告警不再静默 0.0；main 汇总 0 时长片段并告警 |
+| 13 | `style_prefix.py` | `_subject_names` 兜底表移除第一章角色名（杨旭/听香/张十三/老汉/肖管事）；`add_image_strict_constraints` 增 `characters` 参数，性别/武器/人数约束动态派生 |
+| 14 | `step02_video_gen/submit_poll.py` | `generate_alls` 开头 `_failed_videos.clear()` |
+| 15 | `step02_video_gen/continuity.py` | `extract_tail_frame` 的 subprocess 加 `timeout=30` |
+| 16 | `_text_gen/agnes_provider.py` + `config.py` | key 换 key 预算与重试预算分离（401/402 逐个换 Key 直至穷尽）；`_current_key_index` 每次 `generate()` 重置；429 耗尽后补 `break`；`validate()` 补 `AGNES_BASE_URL` 非空校验 |
+| 17 | `_image_gen/bailian_provider.py`、`_text_gen/deepseek_provider.py` | `choices` 空值边界保护（`choices[0]` 越界） |
+| 18 | `shared/tee_logger.py` | logger 按 `log_path` 缓存（原只缓存首个路径，跨文件日志写错文件） |
+| 19 | `shared/content_safety.py` + `style_prefix.py` | 禁止词表收敛为单一来源 `FORBIDDEN_WORDS`，删除 style_prefix 本地 `_SENSITIVE_FORBIDDEN` |
+
+### 验证
+
+- 全部 21 个改动文件 `python -m py_compile` 通过。
+- 冒烟：assets_bank 撞号（旧条目 P01/P02 → 新条目 P03）、浅拷贝隔离、tee_logger 按路径隔离、style_prefix 动态约束（武器归属/性别/人数/禁血按实际出场角色生成）、`_subject_names` 无书一角色名、敏感词门禁仍生效。
+
+### 未处理（报告中其余中/低优先级，供第三批）
+
+- 中：style_cinematic 别名空格、voice_design `res.json()` 无保护、voice_registry 无锁/非原子保存、dashscope_qwen3 缺 `voice_id`、_video_gen 轮询单次错误杀镜头、key_scheduler 无超时、config 双数据源、_text_gen validate 只查 AGNES_API_KEY、main.py:848 兜底无 try/except、validation.py:4721 重读磁盘 JSON、timecode.py 帧对齐。
+- 低：按原报告逐项。
+
+## 修复状态（2026-08-14 第三批完成）
+
+第二批"未处理"清单中列出的 11 项中优先级问题已全部修复并通过 `python -m py_compile`。
+编号沿用报告"中优先级"列表原编号（style_prefix 原为 #28，第二批表中误标为 #13；第二批 #17 为
+choices 越界保护，本批 #17b 补 bailian 尺寸推导）。
+
+| # | 文件 | 修复内容 |
+|---|------|----------|
+| 13 | `shared/style_cinematic.py` | `_normalize_style` 预生成规范化别名表 `_ALIASES_NORMALIZED`（原样 + 空格/连字符→下划线），`"david fincher"`/`"david-fincher"`/`"David Fincher"` 均命中 fincher |
+| 17b | `_image_gen/bailian_provider.py` | 非 `\d+\*\d+` 像素值时按 `_RATIO_TO_SIZE` 从 `req.ratio` 推导官方推荐尺寸（如 9:16→1536\*2688）；删除死代码 `_current_model/_advance_model/_current_model_index`；补 `import re` |
+| 18 | `tts/voice_design.py` | `res.json()` 包 `try/except ValueError`，非 JSON 返回含状态码 + 前 200 字符的明确错误 |
+| 19 | `tts/voice_registry.py` | `load()` 失败保留内存态或备份损坏文件（`.corrupt-<时间戳>`）后重建；`save()` 原子写（tmp + `os.replace`）；`get_voice` 新角色分配加 `RLock` 双检；`get_registry()` 单例双检锁 |
+| 20 | `tts/models.py`、`step03_tts_audio/shot_tts.py`、`tts/dashscope_qwen3.py` | `TTSRequest` 增 `voice_id` 字段并透传；移除模块级 `sys.stdout.reconfigure`（进程级副作用）改惰性 `_ensure_utf8_stdout()`；`_split_text_by_limit` 空段不再 raise（跳过 + 硬切保证推进）；voice_id 非法时回退 `longxiaxiaoxuan` 并 WARN |
+| 21 | `_video_gen/agnes_provider.py`、`dashscope_provider.py`、`http_dashscope_provider.py` + 各 `config.py` | 轮询单次瞬态错误（5xx/连接异常/响应非 JSON/200 但缺 task_id）不再杀镜头：加连续容忍计数（新配置 `AGNES_VIDEO_POLL_MAX_TRANSIENT`/`DASHSCOPE_POLL_MAX_TRANSIENT`，默认 5），超阈值才失败；错误信息统一带状态码供区分瞬态与终态 |
+| 23 | `shared/key_scheduler.py` + 视频/图片调用点 | `acquire(timeout=None)` 加等待上限（新配置 `AGNES_VIDEO_KEY_ACQUIRE_TIMEOUT`=300s / `AGNES_IMAGE_KEY_ACQUIRE_TIMEOUT`=180s），全部 key 被 429 长冷却时不再无限阻塞占满线程池；超时抛 `TimeoutError`；`None` 保持无限等待原语义 |
+| 24 | `shared/config.py` | 双数据源默认值漂移收敛：`DEEPSEEK_MODEL` `deepseek-chat`→`deepseek-v4-flash`、`AGNES_IMAGE_MODEL` `agnes-image-v2.0`→`agnes-image-2.1-flash`，与各 provider config 权威值一致 |
+| 25 | `_text_gen/config.py` | `validate()` agnes 分支改为"任一 AGNES_API_KEY 或 AGNES_API_KEY_2..8 有效"，与 `_image_gen/config.py` 口径对齐；保留 `AGNES_BASE_URL` 非空校验 |
+| 26 | `step01_script_gen/main.py` | `extract_characters` 调用包 `try/except`：LLM 提取失败回退脚本内已有 `characters`，仅 WARN 不中断流水线 |
+| 27 | `step01_script_gen/validation.py` | `_check_prop_spatial_anchor` 把 `script_result.json` 读盘 + `json.load` 提到镜头循环外（此前每镜一次 I/O） |
+| 29 | `step01_script_gen/timecode.py` | 镜头时长先 `max(base, MIN_SHOT_DURATION)` 再 `round(raw*fps)/fps` 帧对齐——旧顺序「先对齐后 max」在分数 fps（如 23.976）下兜出非整帧时长 |
+
+### 验证（第三批）
+
+- 全部改动文件 `python -m py_compile` 通过（含第二批 21 个，累计 37 个文件）。
+- 冒烟：timecode 分数 fps（23.976）下 96/144 帧精确对齐且 ≥3.0s；key_scheduler timeout 0.3s 抛 `TimeoutError`、`None` 等冷却后返回、全禁用仍抛 `RuntimeError`；`_check_prop_spatial_anchor` 无 script_result.json 时优雅跳过；`_is_transient_query_error` 分类（503/500/504/520/连接异常→瞬态，401/400/403/404→终态）全对。
+
 ## 审查假设
 
 - 本次审查聚焦项目自身 Python 实现，未逐行审查 `skills/`、`reference_skills/`、`references/` 中的第三方或参考资源。

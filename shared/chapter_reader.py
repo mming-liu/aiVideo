@@ -262,6 +262,11 @@ def extract_chapter(novel_path: str, chapter: int = 1,
 # 场景过滤：章级分析 + 节级过滤
 # ============================================================================
 
+# 防递归守卫：场景分析进行中（_get_chapter_scenes → extract_chapter → extract_section → 再次进入）
+# 时置 True，避免 extract_chapter 内部逐节提取再次触发 LLM 分析造成无限递归。
+_analyzing_scenes = False
+
+
 def _get_chapter_cache_path(chapter: int) -> Path:
     """获取章节场景缓存文件路径."""
     return _CACHE_DIR / f"chapter_{chapter:03d}_scenes.json"
@@ -364,22 +369,32 @@ def _save_chapter_cache(chapter: int, data: dict) -> None:
 
 def _get_chapter_scenes(novel_path: str, chapter: int) -> dict:
     """获取章节场景分析（带缓存）."""
+    global _analyzing_scenes
+
     # 尝试加载缓存
     cache = _load_chapter_cache(chapter)
     if cache:
         print(f"  [场景缓存] 第 {chapter} 章缓存已加载")
         return cache
 
+    # 防递归：本章分析进行中再次进入（extract_chapter→extract_section→filter 环路）
+    # 直接返回空分析，由最外层分析完成后统一写缓存。
+    if _analyzing_scenes:
+        return {"chapter": chapter, "main_scenes": [], "main_characters": [], "filtered_sections": []}
+
     # 需要分析，先提取全章文本
-    full_text = extract_chapter(novel_path, chapter, sections_per_chapter=5)
+    _analyzing_scenes = True
+    try:
+        full_text = extract_chapter(novel_path, chapter, sections_per_chapter=5)
 
-    # 调用 LLM 分析
-    analysis = _analyze_chapter_scenes(novel_path, chapter, full_text)
+        # 调用 LLM 分析
+        analysis = _analyze_chapter_scenes(novel_path, chapter, full_text)
 
-    # 保存缓存
-    _save_chapter_cache(chapter, analysis)
-
-    return analysis
+        # 保存缓存
+        _save_chapter_cache(chapter, analysis)
+        return analysis
+    finally:
+        _analyzing_scenes = False
 
 
 def filter_section_by_chapter(novel_path: str, section_index: int, text: str, _recursion_depth: int = 0) -> str:

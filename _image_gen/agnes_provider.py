@@ -133,16 +133,16 @@ class AgnesImageService(ImageGenerationService):
         # 图生图：编码参考图（支持多张，同框多角色各自传入肖像）
         ref_data_urls = []
         for ref_path in req.reference_image_paths:
-            url = self._encode_image(ref_path)
-            if url:
-                ref_data_urls.append(url)
+            ref_data_url = self._encode_image(ref_path)
+            if ref_data_url:
+                ref_data_urls.append(ref_data_url)
             else:
                 _verbose_write(f"  [镜头{req.shot_index}] 参考图读取失败 {ref_path}")
         if not ref_data_urls and req.reference_image_path:
             # 向后兼容：仅设置了单张 reference_image_path
-            url = self._encode_image(req.reference_image_path)
-            if url:
-                ref_data_urls.append(url)
+            ref_data_url = self._encode_image(req.reference_image_path)
+            if ref_data_url:
+                ref_data_urls.append(ref_data_url)
             else:
                 _verbose_write(f"  [镜头{req.shot_index}] 参考图读取失败，降级为 text-to-image")
 
@@ -159,7 +159,8 @@ class AgnesImageService(ImageGenerationService):
         while idx < len(self._model_queue):
             model = self._model_queue[idx]
             # 冷却调度：取最早可用的 key（阻塞直到有 key 出冷却）
-            key_idx = self._key_scheduler.acquire()
+            # #23 修复：acquire 加 timeout 上限，全部 key 长冷却时不无限阻塞
+            key_idx = self._key_scheduler.acquire(timeout=config.AGNES_IMAGE_KEY_ACQUIRE_TIMEOUT)
             self._current_key_index = key_idx
             headers = {
                 "Authorization": f"Bearer {self._api_keys[key_idx]}",
@@ -239,7 +240,7 @@ class AgnesImageService(ImageGenerationService):
                                   f"冷却 60s，调度下一个可用 Key")
                             if self._key_scheduler.n_active() > 1:
                                 _submit_retry = 0
-                                key_idx = self._key_scheduler.acquire()
+                                key_idx = self._key_scheduler.acquire(timeout=config.AGNES_IMAGE_KEY_ACQUIRE_TIMEOUT)
                                 self._current_key_index = key_idx
                                 continue
                             last_error = f"Agnes 图片异常（重试{_submit_retry}次）: {e}"
@@ -283,7 +284,7 @@ class AgnesImageService(ImageGenerationService):
                     self._key_scheduler.penalize(key_idx, 5)  # 短冷却5秒
                     if self._key_scheduler.n_active() > 0:
                         time.sleep(2)  # 等待 2s 再切 key，避免秒级打穿所有 key
-                        key_idx = self._key_scheduler.acquire()
+                        key_idx = self._key_scheduler.acquire(timeout=config.AGNES_IMAGE_KEY_ACQUIRE_TIMEOUT)
                         self._current_key_index = key_idx
                         continue
                     # 没有其他key，等3秒后本key重试
@@ -296,7 +297,7 @@ class AgnesImageService(ImageGenerationService):
                     self._key_scheduler.penalize(key_idx, 5)
                     if self._key_scheduler.n_active() > 0:
                         time.sleep(2)  # 等待 2s 再切 key，避免秒级打穿所有 key
-                        key_idx = self._key_scheduler.acquire()
+                        key_idx = self._key_scheduler.acquire(timeout=config.AGNES_IMAGE_KEY_ACQUIRE_TIMEOUT)
                         self._current_key_index = key_idx
                         continue
                     time.sleep(3)

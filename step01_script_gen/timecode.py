@@ -147,8 +147,11 @@ def _compute_timecodes(script: dict) -> None:
             # 纯旁白：固定短时长
             base_duration = NARRATION_FIXED_DURATION
 
-        duration = round(base_duration * fps) / fps  # 对齐视频整数帧（v6.32：原按 1/30s 音频帧，改按 fps）
-        duration = max(duration, MIN_SHOT_DURATION)
+        # #29 修复 2026-08-14：先兜底 MIN_SHOT_DURATION、再按 fps 对齐整数帧。
+        # 旧顺序「先对齐后 max」在分数 fps（如 23.976）下会被 max 兜出
+        # 3.0s 非整帧时长，破坏对齐保证（step01.log 反复报 duration 与 fps 不对齐）。
+        raw = max(base_duration, MIN_SHOT_DURATION)
+        duration = round(raw * fps) / fps
 
         shot["duration"] = duration
         # duration_sec：视频时长的权威来源（剥离 TTS 后由它驱动），

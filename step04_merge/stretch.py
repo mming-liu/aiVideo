@@ -35,8 +35,13 @@ FFPROBE = _find_exe("ffprobe")
 
 
 def get_media_duration(path: Path) -> float:
-    """Get media duration using ffprobe."""
+    """Get media duration using ffprobe.
+
+    M9 修复 2026-08-14：探测失败不再静默返回 0.0——输出告警（stderr）便于
+    定位坏文件/坏 ffprobe，避免调用方把 0.0 当真实时长导致字幕时间轴错位。
+    """
     if not path.exists():
+        print(f"[WARN] get_media_duration: 文件不存在: {path}", file=sys.stderr)
         return 0.0
     try:
         result = subprocess.run(
@@ -47,6 +52,10 @@ def get_media_duration(path: Path) -> float:
             check=True, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         )
-        return float(result.stdout.strip())
-    except Exception:
+        duration = float(result.stdout.strip())
+        if duration <= 0:
+            raise ValueError(f"ffprobe 返回非正时长: {result.stdout.strip()!r}")
+        return duration
+    except Exception as e:
+        print(f"[WARN] get_media_duration 探测失败 {path}: {e}", file=sys.stderr)
         return 0.0

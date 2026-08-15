@@ -327,6 +327,11 @@ def main():
 
   # 3. Get target durations (视频模型生成，native 模式直接以视频实际时长为准)
   target_durations = [get_media_duration(c) for c in clips]
+  zero_durations = [(i, str(c)) for i, c in enumerate(clips) if target_durations[i] <= 0]
+  if zero_durations:
+    # M9 修复 2026-08-14：时长探测失败不再静默——明确告警，字幕时间轴将受影响
+    _logger.warn(f"[WARN] {len(zero_durations)} 个片段时长探测失败（为0），"
+                 f"字幕时间轴可能错位: {[c for _, c in zero_durations]}")
   audio_duration = sum(target_durations)
   _logger.info(f"[INFO] Total video duration: {audio_duration:.1f}s")
 

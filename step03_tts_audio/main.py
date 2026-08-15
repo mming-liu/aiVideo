@@ -56,7 +56,9 @@ def main():
     _logger.info(f"Shots: {len(shots)}")
     _logger.info(f"Chapter: {CHAPTER_INDEX}, Book: {BOOK_INDEX}")
 
-    # 检查 step02 是否已完成音频生成（复用产物，避免重复调用 TTS API）
+    # 检查已生成音频（仅作进度提示；M10 修复 2026-08-14：不能凭 mp3 存在就
+    # 整体跳过——音色可能已变更，.voice 缓存由 gen_all_shot_tts 逐镜校验并
+    # 对音色变化的镜头自动重生成，整体跳过会绕过 voice 再生）。
     existing_count = 0
     for shot in shots:
         idx = shot.get("index", 0)
@@ -65,17 +67,22 @@ def main():
             existing_count += 1
 
     if existing_count == len(shots) and existing_count > 0:
-        _logger.info(f"[INFO] 发现 {existing_count} 个已生成的音频文件（来自 step02）")
-        _logger.info("       跳过 TTS 生成，直接使用现有音频")
-        return
-
-    if existing_count > 0:
+        _logger.info(f"[INFO] 发现 {existing_count} 个已生成音频，将按 .voice 音色缓存逐镜复用/重生成")
+    elif existing_count > 0:
         _logger.info(f"[INFO] 部分音频已存在 ({existing_count}/{len(shots)})，将补充生成缺失的")
 
-    answer = input("确认 TTS 生成? (y/N): ").strip().lower()
-    if answer not in ("y", "yes"):
-        _logger.info("已取消.")
-        sys.exit(0)
+    # M10 修复 2026-08-14：阻断式 input() 改为可配置确认——TTS_AUTO_CONFIRM=1
+    # 或 stdin 非交互（CI/批处理重定向）时自动继续，不阻塞管线。
+    auto_confirm = os.getenv("TTS_AUTO_CONFIRM", "0").strip().lower() in ("1", "yes", "y", "true")
+    if not auto_confirm and sys.stdin.isatty():
+        try:
+            answer = input("确认 TTS 生成? (y/N): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            _logger.info("已取消.")
+            sys.exit(0)
+        if answer not in ("y", "yes"):
+            _logger.info("已取消.")
+            sys.exit(0)
 
     try:
         tts_config.validate()

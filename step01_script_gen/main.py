@@ -845,7 +845,15 @@ def main() -> None:
         else:
             # 预提取阶段失败时才重新提取
             _logger.info("[INFO] 提取角色信息...")
-            chars = extract_characters(novel_text, character_bank)
+            # #26 修复 2026-08-14：LLM 提取失败不应中断整条流水线——
+            # 回退到脚本解析阶段已收集的 characters（可能为空），仅 WARN。
+            try:
+                chars = extract_characters(novel_text, character_bank)
+            except Exception as _char_err:
+                _logger.warn(
+                    f"[WARN] 角色提取失败（不阻断）: {_char_err}，"
+                    f"回退使用脚本内已有 characters")
+                chars = script.get("characters", []) or []
         script["characters"] = chars
         # 注意：角色库已在预提取阶段保存，无需重复保存
         _logger.info(f"[INFO] 已提取 {len(chars)} 个角色")

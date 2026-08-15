@@ -90,12 +90,12 @@ async def gen_all_videos(script: dict, working_dir: Path, script_file_path: Path
             force=force,
         )
         if poll_task is not None:
-            polls.append(poll_task)
+            polls.append((shot["index"], poll_task))
 
     # 后台轮询全部任务
     if polls:
-        results = await asyncio.gather(*polls, return_exceptions=True)
-        for idx, res in zip((t["index"] for t in tasks), results):
+        results = await asyncio.gather(*(pt for _, pt in polls), return_exceptions=True)
+        for (idx, _), res in zip(polls, results):
             if isinstance(res, Exception):
                 failed_count += 1
                 logger.warn(f"  [Shot {idx}] 轮询异常: {res}")

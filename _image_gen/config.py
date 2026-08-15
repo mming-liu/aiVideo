@@ -48,6 +48,10 @@ class ImageGenCfg:
     # 提交重试: 5xx/连接错误时的最大重试次数与间隔（秒）
     AGNES_IMAGE_SUBMIT_RETRIES: int = int(os.getenv("AGNES_IMAGE_SUBMIT_RETRIES", "3"))
     AGNES_IMAGE_SUBMIT_RETRY_DELAY: int = int(os.getenv("AGNES_IMAGE_SUBMIT_RETRY_DELAY", "30"))
+    # #23 修复 2026-08-14：key_scheduler.acquire() 等待上限（秒），防止全部 key
+    # 被 429 长冷却时工作线程无限阻塞
+    AGNES_IMAGE_KEY_ACQUIRE_TIMEOUT: float = float(
+        os.getenv("AGNES_IMAGE_KEY_ACQUIRE_TIMEOUT", "180"))
 
     @classmethod
     def validate(cls) -> None:  # type: ignore[override]

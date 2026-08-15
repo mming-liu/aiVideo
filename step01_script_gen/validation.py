@@ -4704,6 +4704,20 @@ def _check_prop_spatial_anchor(shots: list[dict], hook: dict = None,
                                characters: list | None = None) -> dict:
     """检查同框多道具是否各带空间方位（规则50/22.9，warning-only）."""
     issues, warnings = [], []
+    # #27 修复 2026-08-14：把 script_result.json 的读取提到循环外——
+    # 此前每个镜头都重新 read + json.load 一次磁盘文件，几十镜 = 几十次 I/O。
+    prop_assets: dict = {}
+    try:
+        import json as _json
+        from shared.paths import chapter_dir
+        script_path = chapter_dir() / "script_result.json"
+        if script_path.exists():
+            _script = _json.load(open(script_path, encoding="utf-8"))
+            prop_assets = _script.get("prop_assets", {}) or {}
+    except Exception:
+        prop_assets = {}
+    if not isinstance(prop_assets, dict):
+        prop_assets = {}
     targets = list(shots) + ([hook] if hook else [])
     for s in targets:
         label = "hook" if (hook and s is hook) else s.get("index", "?")
@@ -4712,16 +4726,6 @@ def _check_prop_spatial_anchor(shots: list[dict], hook: dict = None,
             s.get("lf_desc", ""),
         ])
         # 从 prop_assets 匹配本镜出现的道具（含 consistent_terms 别名）
-        try:
-            import json as _json
-            from shared.paths import chapter_dir
-            script_path = chapter_dir() / "script_result.json"
-            if not script_path.exists():
-                continue
-            script = _json.load(open(script_path, encoding="utf-8"))
-            prop_assets = script.get("prop_assets", {}) or {}
-        except Exception:
-            continue
         matched = []
         for pid, entry in (prop_assets.items() if isinstance(prop_assets, dict) else []):
             if not isinstance(entry, dict):

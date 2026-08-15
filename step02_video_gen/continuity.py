@@ -96,6 +96,7 @@ def extract_tail_frame(
         proc = subprocess.run(
             cmd, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
+            timeout=30,
         )
         if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
             stderr_tail = proc.stderr[-300:] if proc.stderr else "(no stderr)"

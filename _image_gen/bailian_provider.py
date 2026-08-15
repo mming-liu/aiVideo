@@ -7,6 +7,7 @@ API 文档: docs/bailian/api-docs/Qwen-Image.md
 """
 
 import os
+import re
 import time
 from typing import Optional
 
@@ -74,7 +75,6 @@ class BailianImageService(ImageGenerationService):
             if m.strip()
         ]
         self._model_queue: list[str] = [BAILIAN_T2I_MODEL] + fallback_models
-        self._current_model_index: int = 0
 
         # 模型参考图上限（I2I 模式）：
         # qwen-image-2.0-2in1 / qwen-image 系列支持 0~3 个 image content items
@@ -98,21 +98,11 @@ class BailianImageService(ImageGenerationService):
             name="bailian_image",
         )
 
-    @property
-    def _current_model(self) -> str:
-        return self._model_queue[self._current_model_index]
-
-    def _advance_model(self) -> Optional[str]:
-        """切换到下一个回退模型. 返回新模型名，无可用模型时返回 None."""
-        if self._current_model_index + 1 >= len(self._model_queue):
-            return None
-        self._current_model_index += 1
-        return self._current_model
-
     def generate(self, req: ImageGenerationRequest) -> ImageGenerationResult:
         """生成图片."""
         # Bailian 限速：每个请求等待冷却
-        self._key_scheduler.acquire()
+        # #23 修复：acquire 加 timeout 上限（180s），429 长冷却时不无限阻塞
+        self._key_scheduler.acquire(timeout=180)
 
         # 解析 size (如 "10x24" -> ["10", "24"])
         size_map = {
@@ -133,6 +123,22 @@ class BailianImageService(ImageGenerationService):
 
         # 解析 ratio (如 "9:16" -> ["9", "16"])
         ratio_str = req.ratio.replace(":", "*")
+        # #17b 修复 2026-08-14：ratio 此前只进日志不进请求，长宽比配置静默失效。
+        # qwen-image 用 size（宽*高）表达宽高比；当 req.size 是档位（如 "2K"，
+        # 见 _image_gen/models.py 推荐用法 size="2K" + ratio="9:16"）而非像素时，
+        # 按 ratio 推导官方推荐像素尺寸。已是 "W*H" 像素值的 size 原样保留。
+        _RATIO_TO_SIZE = {
+            "9:16": "1536*2688",
+            "16:9": "2688*1536",
+            "1:1": "2048*2048",
+            "3:4": "1728*2368",
+            "4:3": "2368*1728",
+        }
+        if not re.fullmatch(r"\d+\*\d+", size_str) and req.ratio in _RATIO_TO_SIZE:
+            derived_size = _RATIO_TO_SIZE[req.ratio]
+            _verbose_write(f"  [镜头{req.shot_index}] size={size_str!r} 非像素值，"
+                           f"按 ratio={req.ratio} 推导 size={derived_size}")
+            size_str = derived_size
 
         model_idx = 0
         last_error = ""
@@ -236,9 +242,15 @@ class BailianImageService(ImageGenerationService):
                     rsp = MultiModalConversation.call(**params)
 
                     if rsp.status_code == 200:
-                        # 解析响应获取图片 URL
-                        content = rsp.output.choices[0].message.content
-                        if content and len(content) > 0:
+                        # 解析响应获取图片 URL（#17 修复 2026-08-14：choices 可能为空，需边界保护）
+                        output_choices = getattr(rsp.output, "choices", None) or []
+                        if not output_choices:
+                            return ImageGenerationResult(
+                                success=False,
+                                error=f"响应中无 choices: {str(rsp.output)[:300]}",
+                            )
+                        content = getattr(output_choices[0].message, "content", None) or []
+                        if len(content) > 0:
                             img_data = content[0]
                             if "image" in img_data:
                                 img_url = img_data["image"]

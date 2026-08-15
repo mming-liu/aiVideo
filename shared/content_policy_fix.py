@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -114,7 +115,7 @@ def record_new_sensitive_word(word: str, context: str = "") -> None:
         library[word] = {
             "substitute": substitute,
             "context": context[:200] if context else "",
-            "discovered_at": str(Path.cwd()),
+            "discovered_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         _save_word_library(library)
         print(f"  [敏感词库] 记录新词: {word} -> {substitute}")
