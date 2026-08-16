@@ -373,7 +373,14 @@ def _check_subtitle_char_coverage(shot_idx: int, subtitle: str, search_text: str
 
 
 def _check_audio_instruction(shots: list[dict]) -> None:
-    """检查是否包含 Agnes AI 的声音指令（v6.1 新增）."""
+    """检查是否包含声音指令（v6.1 新增）.
+
+    旧供应商（bailian/agnes/dashscope）要求「（用中文说）」；volcengine/minimax
+    视频模型原生发声，prompt 写自然对白即可，跳过检查避免误报（08-16 适配）。
+    """
+    from shared.model_caps import active_video_uses_native_voice
+    if active_video_uses_native_voice():
+        return
     for shot in shots:
         shot_idx = shot.get("index", "?")
         subtitle = shot.get("subtitle", "")
@@ -2486,6 +2493,10 @@ def _check_camera_movement(shots: list[dict]) -> dict:
     warnings = []
     used_techniques = set()  # 全片运镜类型集合（含机位/角度，用于多样性统计）
 
+    # Seedance 官方明确「一个镜头尽量只指定 1 种运镜」，volcengine 下取消「跟拍可复合」豁免
+    from shared.model_caps import active_video_is_seedance
+    seedance_strict = active_video_is_seedance()
+
     for shot in shots:
         idx = shot.get("index", "?")
         text = " ".join([
@@ -2510,8 +2521,12 @@ def _check_camera_movement(shots: list[dict]) -> dict:
             )
 
         # 4. 单镜堆叠多种运镜 → 避免过度运镜（机位/速度修饰不计数；跟拍可与其他运镜
-        #    复合——「跟随+环绕/推进/变焦」是跟拍镜的合法变体，不算堆叠）
-        if len(matched) >= 2 and "跟镜" not in matched:
+        #    复合——「跟随+环绕/推进/变焦」是跟拍镜的合法变体，不算堆叠。
+        #    Seedance 官方要求一镜一运镜，volcengine 下不豁免）
+        composite = len(matched) >= 2
+        if composite and not seedance_strict and "跟镜" in matched:
+            composite = False
+        if composite:
             warnings.append(
                 f"镜头{idx}: 单镜堆叠多种运镜 {sorted(matched)}，"
                 f"建议一镜一运镜（变化交给相邻镜头的 clip_transition）"
@@ -3409,6 +3424,44 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
 
+def _check_prompt_length_budget(shots: list[dict], hook: dict | None = None) -> dict:
+    """模型感知的 prompt 长度预算检查（2026-08 适配多模型）.
+
+    provider 会按模型 prompt 上限静默截断（wan2.7=5000 / H3=7000 / Hailuo=2000），
+    截断=内容丢失。step01 在生成阶段就应控制单镜字段总长，避免 step02 拼接后超限。
+    step02 会在 shot.prompt 上追加 ~1200 字固定约束（风格前缀/背景音/空镜/风格收束/
+    色彩/衔接/参考图清单），故预算按 cap 预留该余量。warning-only（进 regen 反馈，
+    LLM 会自动精简，无需阻断）。
+    """
+    from shared.model_caps import active_video_prompt_cap
+    cap = active_video_prompt_cap()
+    if not cap or cap <= 0:
+        return {"pass": True, "issues": [], "warnings": []}
+    budget = max(1, cap - 1200)  # 预留 step02 固定约束余量
+    warnings = []
+    items = list(shots) + ([hook] if hook else [])
+    for shot in items:
+        if not isinstance(shot, dict):
+            continue
+        idx = shot.get("index", "?")
+        fields = "".join([
+            shot.get("prompt", "") or "",
+            shot.get("ff_desc", "") or "",
+            shot.get("lf_desc", "") or "",
+            shot.get("narration_segment", "") or "",
+        ])
+        n = len(fields)
+        if n > budget:
+            warnings.append(
+                f"镜头{idx}: step01 字段合计 {n} 字，超过模型 prompt 预算 {budget} 字"
+                f"（cap={cap}，预留 step02 约束 1200 字）。step02 拼接后会被 provider 截断，"
+                f"建议精简 prompt/ff_desc/lf_desc。"
+            )
+    for w in warnings:
+        print(f"[CHECK] prompt长度: [WARN] {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
+
+
 def _run_prompt_checklist(script: dict) -> dict:
     """运行分镜提示词检查表（v6.3 新增）.
 
@@ -3588,6 +3641,9 @@ def _run_prompt_checklist(script: dict) -> dict:
     results["ff_desc_anchors"] = _check_ff_desc_anchors(
         shots, script.get("hook"), script.get("characters"))
 
+    # 2026-08 适配多模型：prompt 长度预算（防 provider 按模型上限静默截断内容）
+    results["prompt_length_budget"] = _check_prompt_length_budget(shots, script.get("hook"))
+
     # 综合判定：任一硬性检查失败则整体不通过
     # v6.5: 增加 script_novel_alignment 到硬性检查
     # v6.7: 增加 ff_lf_completeness 到硬性检查（lf_desc 为空会导致静态视频）
@@ -3625,6 +3681,7 @@ _REGEN_FEEDBACK_EXCLUDE = frozenset({
 # 类别英文键 → 中文名（供反馈行首标签；未收录的用原键）
 _REGEN_FEEDBACK_LABELS = {
     "content_density": "内容密度(动作过载)",
+    "prompt_length_budget": "prompt长度预算",
     "shot_size_jump": "景别跳跃",
     "gaze_direction": "视线方向",
     "gaze_convergence": "多人视线收敛",
@@ -3803,6 +3860,9 @@ def post_fix_shot_prompts(script: dict) -> dict:
     只追加不删除（净化除外），安全幂等。hook 由独立逻辑处理，不在此处。
     """
     from style_prefix import normalize_ff_desc
+    from shared.model_caps import active_video_uses_native_voice
+    # volcengine/minimax 视频模型原生发声，不补「（用中文说）」；旧供应商保留历史行为
+    native_voice = active_video_uses_native_voice()
     defined_ids = frozenset(
         c.get("identifier", "") for c in script.get("characters", []) if c.get("identifier")
     )
@@ -3814,8 +3874,8 @@ def post_fix_shot_prompts(script: dict) -> dict:
         subtitle = shot.get("subtitle", "") or ""
         is_dialogue = ("：" in narration) or (":" in narration) or ("：" in subtitle) or (":" in subtitle)
 
-        # 1. 声音指令（跳过 hook）
-        if shot.get("index") != 0 and is_dialogue:
+        # 1. 声音指令（跳过 hook；原生发声模型不补「用中文说」）
+        if shot.get("index") != 0 and is_dialogue and not native_voice:
             if "（用中文说）" not in prompt and "(用中文说)" not in prompt:
                 prompt = prompt.rstrip() + "（用中文说）"
 

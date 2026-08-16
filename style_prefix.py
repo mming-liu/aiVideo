@@ -61,6 +61,43 @@ IMAGE_HALLUCINATION_EXTRA_NEGATIVE = (
 )
 
 # ===========================================================================
+# 纯中文版（2026-08 决策：模型均为国内模型，prompt 只留中文；
+# 英文负面词/正向词仅 Agnes 使用，中文模型用纯中文版）
+# ===========================================================================
+# NEGATIVE_PROMPT 去掉英文 token（"English text, watermark, logo, English speech"）的纯中文版
+NEGATIVE_PROMPT_CN = NEGATIVE_PROMPT.replace(
+    "English text, watermark, logo, English speech、", ""
+)
+# 图片锁图正向词纯中文版（英文半句仅 Agnes 用，中文模型读中文即可）
+IMAGE_HALLUCINATION_LOCK_PROMPT_CN = "面部锁定，統一五官，固定服裝，無多餘雜物，場景布局不變"
+IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT_CN = "面部锁定，統一五官，固定服裝，無多餘雜物"
+
+
+def video_negative_prompt() -> str:
+    """视频负向词：英文 token 仅 Agnes 使用；中文模型用纯中文版."""
+    if os.getenv("VIDEO_PROVIDER", "bailian") == "agnes":
+        return NEGATIVE_PROMPT
+    return NEGATIVE_PROMPT_CN
+
+
+def image_negative_prompt() -> str:
+    """图片负向词：英文 token 仅 Agnes 使用；中文模型用纯中文版."""
+    if os.getenv("IMAGE_PROVIDER", "bailian") == "agnes":
+        return NEGATIVE_PROMPT
+    return NEGATIVE_PROMPT_CN
+
+
+def image_lock_prompt(layout_lock: bool = True) -> str:
+    """图片防幻觉锁图正向词：英文半句仅 Agnes 使用；中文模型用纯中文版.
+
+    layout_lock=True 用带「场景布局不变」的完整锁（首帧）；
+    False 用去除布局锁的版本（尾帧/关键帧需表现动作演变）。
+    """
+    if os.getenv("IMAGE_PROVIDER", "bailian") == "agnes":
+        return IMAGE_HALLUCINATION_LOCK_PROMPT if layout_lock else IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT
+    return IMAGE_HALLUCINATION_LOCK_PROMPT_CN if layout_lock else IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT_CN
+
+# ===========================================================================
 # 二、全局渲染配置（输出 JSON 顶层字段来源）
 # ===========================================================================
 

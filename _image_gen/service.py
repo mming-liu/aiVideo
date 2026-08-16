@@ -62,6 +62,20 @@ def _auto_register() -> None:
     except ImportError:
         pass
 
+    # Volcengine 火山方舟 (Seedream 文生图)
+    try:
+        from . import volcengine_provider as _ve
+        register("volcengine", _ve.VolcengineImageService)
+    except ImportError:
+        pass
+
+    # MiniMax (image-01 文生图/图生图)
+    try:
+        from . import minimax_provider as _mm
+        register("minimax", _mm.MiniMaxImageService)
+    except ImportError:
+        pass
+
 
 def create_service(provider: Optional[str] = None) -> ImageGenerationService:
     """根据 provider 名称创建服务实例.

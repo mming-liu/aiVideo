@@ -83,6 +83,24 @@ def _console(msg: str) -> None:
         print(msg.encode("ascii", errors="replace").decode("ascii"), file=_REAL_STDOUT)
 
 
+def _warn_silent_video_model() -> None:
+    """VIDEO_MODEL_VOICE=1（对话交给视频模型）但当前视频模型无声时告警.
+
+    适配 2026-08 新接入模型：Seedance 1.0 系列（generate_audio=False）、
+    MiniMax v1 Hailuo 均不生成语音；此时若仍按「对话交给视频模型」架构运行，
+    成片会无对白/背景音。提示换有声模型或设 VIDEO_MODEL_VOICE=0 走 step03 TTS。
+    """
+    from shared.model_caps import active_video_supports_audio
+    voice_enabled = os.getenv("VIDEO_MODEL_VOICE", "1").strip() == "1"
+    if voice_enabled and not active_video_supports_audio():
+        _console(
+            "[!] 当前视频模型不生成语音（VIDEO_MODEL_VOICE=1 默认把对话/背景音交给"
+            "视频模型，但该模型无声）。\n"
+            "    成片将无对白/背景音。建议：换有声模型（Seedance 2.0+/wan2.7-r2v），"
+            "或设 VIDEO_MODEL_VOICE=0 走 step03 TTS。"
+        )
+
+
 # 保存真实 stdout 引用（redirect 前赋值）
 _REAL_STDOUT = sys.stdout
 
@@ -728,6 +746,10 @@ def main() -> None:
     _logger.info("  步骤1: 分镜脚本生成 (v6.0)")
     _logger.info("  新增: 钩子分镜 + 敏感词校验")
     _logger.separator()
+
+    # 无声视频模型告警：VIDEO_MODEL_VOICE=1（对话交给视频模型）但当前模型不生成语音时，
+    # 成片会无对白/背景音。Seedance 1.0 系列 / MiniMax v1 Hailuo 均无声（08-16 适配）。
+    _warn_silent_video_model()
 
     # 创建输出目录
     CHAPTER_DIR.mkdir(parents=True, exist_ok=True)

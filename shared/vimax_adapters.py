@@ -23,6 +23,7 @@ from _image_gen import ImageGenerationRequest
 from _video_gen import VideoGenerationRequest
 from style_prefix import STYLE_PREFIX, STYLE_PREFIX_SHORT, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt
 from style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT, IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT, IMAGE_HALLUCINATION_EXTRA_NEGATIVE
+from style_prefix import image_negative_prompt, video_negative_prompt, image_lock_prompt
 
 from vimax.interfaces import ImageOutput, VideoOutput
 
@@ -68,15 +69,16 @@ class ImageGeneratorAiVideoAdapter:
     def __init__(
         self,
         size: str = "1024x1792",  # 9:16 竖屏
-        negative_prompt: str = NEGATIVE_PROMPT,
+        negative_prompt: str | None = None,  # None=按 IMAGE_PROVIDER 自动（英文 token 仅 Agnes）
         skip_prefix: bool = False,    # 跳过风格前缀（白底肖像用）
         skip_sanitize: bool = False,  # 跳过合规词替换（英文 prompt 用）
         enable_hallucination_lock: bool = True,  # 启用图片幻觉锁图（默认开启）
         **_,
     ):
         self.size = size
-        # 追加图片防幻觉负向词
-        self.negative_prompt = f"{negative_prompt}、{IMAGE_HALLUCINATION_EXTRA_NEGATIVE}"
+        # 追加图片防幻觉负向词；英文 token 仅 Agnes 使用，中文模型用纯中文版
+        base_np = negative_prompt if negative_prompt is not None else image_negative_prompt()
+        self.negative_prompt = f"{base_np}、{IMAGE_HALLUCINATION_EXTRA_NEGATIVE}"
         self._skip_prefix = skip_prefix
         self._skip_sanitize = skip_sanitize
         self._enable_hallucination_lock = enable_hallucination_lock
@@ -111,11 +113,12 @@ class ImageGeneratorAiVideoAdapter:
         # 参考图数量上限兜底（通用方法，2026-08-15）：
         # - provider 只支持单张参考图 → 全部拼成 1 张大参考表（不丢信息）
         # - provider 支持多图但超上限 → 保留前 N-1 张原图 + 尾部拼 1 张参考表
-        # 适配器层无模型信息，用 IMAGE_MAX_REFS（默认 3）；bridge 层已按
-        # 模型注册表（shared.ref_compose）做过分类无损压缩，这里通常是二道防线。
-        from shared.ref_compose import fit_refs, fit_flat
+        # 上限按当前 IMAGE_PROVIDER 主模型从 shared.ref_compose 注册表解析
+        # （qwen=3 / seedream 4.5=14 / image-01=1 ...），未注册模型回退 IMAGE_MAX_REFS；
+        # 不写死在这里，跟具体模型走。
+        from shared.ref_compose import fit_refs, fit_flat, active_image_ref_limit
         from shared.paths import vimax_working_dir
-        max_refs = int(os.getenv("IMAGE_MAX_REFS", "3"))
+        max_refs = active_image_ref_limit()
         sheet_dir = vimax_working_dir() / "shots" / str(shot_index)
         if ref_paths and not getattr(self._svc, "supports_multi_ref", True):
             try:
@@ -172,8 +175,9 @@ class ImageGeneratorAiVideoAdapter:
         # 图片防幻觉锁图关键词注入（仅在启用时）
         # 默认用完整锁图（含"场景布局不变"）；尾帧/关键帧通过 lock_prompt 传入
         # 无布局锁版本，允许构图随动作演变（详见 style_prefix.py 注释）。
+        # 英文半句仅 Agnes 使用，中文模型用纯中文版（image_lock_prompt 按 IMAGE_PROVIDER 判定）
         if self._enable_hallucination_lock:
-            lock_prompt = kwargs.get("lock_prompt", IMAGE_HALLUCINATION_LOCK_PROMPT)
+            lock_prompt = kwargs.get("lock_prompt", image_lock_prompt(layout_lock=True))
             full_prompt = f"{lock_prompt}，{full_prompt}"
 
         req = ImageGenerationRequest(
@@ -232,13 +236,14 @@ class VideoGeneratorAiVideoAdapter:
         self,
         size: str = "960x1792",  # 9:16 竖屏（与 _video_gen 默认一致）
         duration: int = 5,
-        negative_prompt: str = NEGATIVE_PROMPT,
+        negative_prompt: str | None = None,  # None=按 VIDEO_PROVIDER 自动（英文 token 仅 Agnes）
         prefix: str = STYLE_PREFIX_SHORT,
         **_,
     ):
         self.size = size
         self.duration = duration
-        self.negative_prompt = negative_prompt
+        # 英文负向词 token 仅 Agnes 使用，中文模型用纯中文版
+        self.negative_prompt = negative_prompt if negative_prompt is not None else video_negative_prompt()
         self.prefix = prefix
         self._svc = _video_gen.create_service(_video_gen.config.PROVIDER)
 

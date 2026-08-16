@@ -13,6 +13,8 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
+from shared.model_caps import active_video_duration_cap, active_video_model
+
 # 语速配置（字符/秒）
 SPEECH_RATE = 3.5
 PAUSE_PER_SHOT = 1.5
@@ -126,6 +128,12 @@ def _compute_timecodes(script: dict) -> None:
     if fps <= 0:
         fps = 24.0
 
+    # 视频模型单镜时长上限（0=不夹取）。防止长对白/长 motion 分段生成的镜头
+    # 超过模型上限（如 Seedance 1.5 pro=12s、Hailuo v1 720P=6s）被 provider
+    # 截断——provider 现在会按能力表夹取，但那是「截断内容」而非「规划时长」。
+    dur_cap = active_video_duration_cap()
+    clamped_count = 0
+
     for shot in shots:
         text = shot.get("narration_segment", "")
         motion_desc = shot.get("motion_desc", "")
@@ -152,6 +160,10 @@ def _compute_timecodes(script: dict) -> None:
         # 3.0s 非整帧时长，破坏对齐保证（step01.log 反复报 duration 与 fps 不对齐）。
         raw = max(base_duration, MIN_SHOT_DURATION)
         duration = round(raw * fps) / fps
+        # 按视频模型时长上限夹取（先夹后对齐，保证整帧；超过上限会被 provider 截断内容）
+        if dur_cap and duration > dur_cap:
+            duration = round(dur_cap * fps) / fps
+            clamped_count += 1
 
         shot["duration"] = duration
         # duration_sec：视频时长的权威来源（剥离 TTS 后由它驱动），
@@ -215,6 +227,9 @@ def _compute_timecodes(script: dict) -> None:
         hook_duration = max(hook_duration, MIN_SHOT_DURATION)
         # v6.32：钩子时长同样按 fps 对齐整数帧（与 shots 一致）
         hook_duration = round(hook_duration * fps) / fps
+        # 钩子时长同样受视频模型上限约束
+        if dur_cap and hook_duration > dur_cap:
+            hook_duration = round(dur_cap * fps) / fps
         hook["duration"] = round(hook_duration, 2)
         hook["duration_sec"] = round(hook_duration, 2)
         total += hook_duration
@@ -222,3 +237,6 @@ def _compute_timecodes(script: dict) -> None:
     script["total_duration"] = round(total, 2)
     script["total_effective_duration"] = round(total, 2)
     print(f"[INFO] 时间轴计算完成: {len(shots)} 镜 + {1 if hook else 0} 钩子, 总计 {total:.1f}s")
+    if clamped_count and dur_cap:
+        print(f"[INFO] {clamped_count} 个镜头时长超过视频模型上限 {dur_cap}s，已夹取到 {dur_cap}s"
+              f"（active model: {active_video_model()}）")

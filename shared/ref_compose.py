@@ -11,8 +11,11 @@
   - wan2.7-image / -pro: 9 张（百炼文档）
   - wan2.7-r2v / wan2.6-r2v: media 5 个（百炼文档）
   - happyhorse-1.1-r2v: media 9 个（百炼文档）
+  - Seedream 图片: 5.0 pro=10，5.0 lite / 4.5 / 4.0=14（官方图片生成 API，按模型档位细分）
+  - MiniMax image-01: subject_reference 仅单张=1（官方文档）
   - MiniMax-H3: 全能参考 图≤9 / 混合≤12 文件；首尾帧专用槽 0~2（官方文档 2026-08）
-  - Seedance 2.0: 参考素材约 12 个；Seedance 2.5: 图≤30、混合≤50（官方对比表 2026-08）
+  - Seedance 2.5: 图≤30（官方对比表 2026-08）；Seedance 2.0: 参考素材约 12
+    注：模型 ID 用破折号（doubao-seedance-2-5-*），模式必须用 -2-5 而非 -2.5 才匹配得上
 
 未注册模型回退到环境变量 IMAGE_MAX_REFS（默认 3）。
 """
@@ -26,12 +29,23 @@ MODEL_REF_LIMITS: list[tuple[str, int]] = [
     ("qwen-image", 3),
     ("wan2.7-image", 9),
     ("wan2.6-image", 9),
+    # Seedream 按官方档位细分（与 shared/model_caps.SEEDREAM_CAPS 一致）
+    ("seedream-5-0-pro", 10),
+    ("seedream-5-0-lite", 14),
+    ("seedream-4-5", 14),
+    ("seedream-4-0", 14),
+    ("seedream", 10),
+    # MiniMax image-01: subject_reference 官方仅支持单张参考图
+    ("image-01", 1),
     # --- 视频模型（r2v 参考 media）---
     ("happyhorse", 9),
     ("wan2.7-r2v", 5),
     ("wan2.6-r2v", 5),
     ("minimax-h3", 9),
+    # 破折号形式匹配真实模型 ID（doubao-seedance-2-5-*）；点号形式兜底旧写法
+    ("seedance-2-5", 30),
     ("seedance-2.5", 30),
+    ("seedance-2-0", 12),
     ("seedance-2.0", 12),
     ("seedance", 12),
 ]
@@ -114,6 +128,10 @@ def active_image_ref_limit() -> int:
             model = config.BAILIAN_T2I_MODEL
         elif config.IMAGE_PROVIDER == "agnes":
             model = config.AGNES_IMAGE_MODEL
+        elif config.IMAGE_PROVIDER == "volcengine":
+            model = config.VOLCENGINE_T2I_MODEL
+        elif config.IMAGE_PROVIDER == "minimax":
+            model = config.MINIMAX_T2I_MODEL
         return get_ref_limit(model)
     except Exception:
         return get_ref_limit(None)

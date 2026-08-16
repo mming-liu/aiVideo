@@ -81,6 +81,20 @@ def _auto_register() -> None:
     except ImportError:
         pass
 
+    # Volcengine 火山方舟 (Seedance 视频生成)
+    try:
+        from . import volcengine_provider as _ve
+        register("volcengine", _ve.VolcengineVideoService)
+    except ImportError:
+        pass
+
+    # MiniMax (Hailuo v1 旧模型 + MiniMax-H3 v2 新模型)
+    try:
+        from . import minimax_provider as _mm
+        register("minimax", _mm.MiniMaxVideoService)
+    except ImportError:
+        pass
+
     # OpenAI Sora / 第三方兼容 (待后续扩展)
     # try:
     #     from . import openai_provider as _oa

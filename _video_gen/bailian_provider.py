@@ -28,6 +28,7 @@ from shared.config import (
     BAILIAN_VIDEO_POLL_INTERVAL,
     BAILIAN_VIDEO_MAX_POLL_ATTEMPTS,
 )
+from shared.model_caps import _model_duration_cap, _model_prompt_cap
 
 # 初始化 Bailian workspace URL
 if BAILIAN_WORKSPACE_ID and BAILIAN_REGION:
@@ -53,16 +54,28 @@ DEFAULT_R2V_MODELS = (
 )
 
 
-def _int_duration(value) -> int:
+def _int_duration(value, cap: int | None = None) -> int:
     """强制把时长转成整数（API 要求 parameters.duration 为 int）.
 
     脚本里 duration 可能是 3.0 float（step01 时间码计算），直接传 API 会被拒：
     "Input should be a valid integer: parameters.duration"。
+    cap 非空时按模型时长上限夹取（防御纵深；step01 timecode 已按模型夹取一次）。
     """
     try:
-        return int(float(value))
+        d = int(float(value))
     except (TypeError, ValueError):
-        return 5
+        d = 5
+    if cap and cap > 0:
+        d = min(d, cap)
+    return d
+
+
+def _clip_prompt(req, model: str) -> str:
+    """按模型 prompt 长度上限截断（wan2.7/happyhorse=5000，官方 Input Requirements；未注册不截）."""
+    cap = _model_prompt_cap(model)
+    if cap and cap > 0:
+        return req.prompt[:cap]
+    return req.prompt
 
 
 def _append_image_refs(prompt: str, n: int) -> str:
@@ -185,11 +198,11 @@ class BailianVideoService(VideoGenerationService):
         """
         kwargs: dict = {
             "model": model,
-            "prompt": req.prompt,
+            "prompt": _clip_prompt(req, model),
             "negative_prompt": req.negative_prompt or "",
             "resolution": self._resolution,
             "ratio": self._ratio,
-            "duration": _int_duration(req.duration or self._duration),
+            "duration": _int_duration(req.duration or self._duration, _model_duration_cap(model)),
             "prompt_extend": True,   # 默认开启智能改写
             "watermark": False,      # 默认不添加水印
         }
@@ -232,9 +245,9 @@ class BailianVideoService(VideoGenerationService):
         """
         kwargs: dict = {
             "model": model,
-            "prompt": req.prompt,
+            "prompt": _clip_prompt(req, model),
             "resolution": self._resolution,
-            "duration": _int_duration(req.duration or self._duration),
+            "duration": _int_duration(req.duration or self._duration, _model_duration_cap(model)),
             "watermark": True,  # HappyHorse 默认添加水印
         }
 
@@ -298,10 +311,10 @@ class BailianVideoService(VideoGenerationService):
 
         kwargs: dict = {
             "model": model,
-            "prompt": req.prompt,
+            "prompt": _clip_prompt(req, model),
             "media": media,
             "resolution": self._resolution,  # 必须是 720P 或 1080P
-            "duration": _int_duration(req.duration or self._duration),
+            "duration": _int_duration(req.duration or self._duration, _model_duration_cap(model)),
             "watermark": True,
         }
 
@@ -349,12 +362,12 @@ class BailianVideoService(VideoGenerationService):
 
         kwargs: dict = {
             "model": model,
-            "prompt": req.prompt,
+            "prompt": _clip_prompt(req, model),
             "media": media,
             "negative_prompt": req.negative_prompt or "",
             "resolution": self._resolution,
             "ratio": self._ratio,
-            "duration": _int_duration(req.duration or self._duration),
+            "duration": _int_duration(req.duration or self._duration, _model_duration_cap(model)),
             "watermark": False,
         }
 
@@ -442,7 +455,7 @@ class BailianVideoService(VideoGenerationService):
 
         # happyhorse 用 [Image N] 指代参考图（文档要求）；
         # wan 保持现状（用途声明已由 prompt_builder 注入）。
-        prompt = req.prompt
+        prompt = _clip_prompt(req, model)
         if is_happyhorse:
             prompt = _append_image_refs(prompt, len(ref_medias))
 
@@ -453,7 +466,7 @@ class BailianVideoService(VideoGenerationService):
             'media': ref_medias,
             'resolution': self._resolution,
             'ratio': self._ratio,
-            'duration': _int_duration(req.duration or self._duration),
+            'duration': _int_duration(req.duration or self._duration, _model_duration_cap(model)),
             'watermark': False,
         }
         # happyhorse 不支持 negative_prompt；wan 支持

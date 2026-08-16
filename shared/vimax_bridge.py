@@ -46,7 +46,7 @@ def _bridge_log(msg: str):
 
 # 首帧/尾帧生成需要风格前缀（与视频生成保持一致）
 from style_prefix import STYLE_PREFIX, sanitize_prompt, ensure_prefix, is_empty_scene, add_image_strict_constraints, preprocess_prompt_for_image
-from style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT
+from style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT, image_lock_prompt
 
 
 # 注意: 视频级缓存哈希 (prompt_hash.txt) 的唯一读写实现在
@@ -406,12 +406,15 @@ def _build_reference_list(
             refs.append(anchor)
             _bridge_log(f"  [bridge] 镜头{shot['index']}: 参考图=摄像机{cam_idx}首帧锚定")
 
-    # 角色肖像：根据 IMAGE_MULTI_REF 决定单张还是多张
-    # 1（默认）= 单张最优肖像（向后兼容）；2+ = 锚定帧优先 + 多角色肖像填充剩余名额
+    # 角色肖像：参考图上限 = min(用户偏好 IMAGE_MULTI_REF, 模型能力 active_image_ref_limit)
+    # 模型上限来自 shared.ref_compose 注册表（qwen=3 / seedream 4.5=14 / image-01=1 ...），
+    # 不写死在此；IMAGE_MULTI_REF 只是省钱偏好（软上限），模型能力是硬上限（防 400）。
     from shared.config import IMAGE_MULTI_REF
-    if IMAGE_MULTI_REF >= 2:
+    from shared.ref_compose import active_image_ref_limit
+    ref_cap = min(IMAGE_MULTI_REF, active_image_ref_limit())
+    if ref_cap >= 2:
         # 多参考图：剩余名额分给出镜角色（同框多角色各自传入肖像）
-        remaining = IMAGE_MULTI_REF - len(refs)
+        remaining = ref_cap - len(refs)
         char_refs = _select_all_character_refs(shot, bank, characters_data, limit=remaining)
         for cr in char_refs:
             if cr not in refs:
@@ -421,7 +424,7 @@ def _build_reference_list(
             char_ref = _select_best_reference(shot, bank, style_bank, characters_data)
             if char_ref and char_ref not in refs:
                 refs.append(char_ref)
-        return refs[:IMAGE_MULTI_REF]
+        return refs[:ref_cap]
 
     # 单参考图（默认，向后兼容）：锚定帧优先，否则单张最优角色肖像
     char_ref = _select_best_reference(shot, bank, style_bank, characters_data)
@@ -2402,7 +2405,7 @@ async def _gen_last_frame_async(
                 shot_index=idx,
                 frame_desc="尾帧",
                 # 尾帧：解除"场景布局不变"锁，允许构图随动作演变
-                lock_prompt=IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT,
+                lock_prompt=image_lock_prompt(layout_lock=False),
                 force_multi_ref=True,
             )
             if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
@@ -2608,7 +2611,7 @@ async def _gen_keyframes_async(
                     shot_index=idx,
                     frame_desc=f"关键帧{i}(t={time_ratio:.1f})",
                     # 关键帧：解除"场景布局不变"锁，允许构图随动作演变
-                    lock_prompt=IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT,
+                    lock_prompt=image_lock_prompt(layout_lock=False),
                     force_multi_ref=True,
                 )
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):

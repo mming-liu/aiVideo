@@ -56,7 +56,17 @@ class ImageGenCfg:
     @classmethod
     def validate(cls) -> None:  # type: ignore[override]
         """验证当前供应商所需配置是否完整."""
-        if cls.PROVIDER == "agnes":
+        if cls.PROVIDER == "volcengine":
+            import os as _os
+            key = _os.getenv("VOLCENGINE_API_KEY") or _os.getenv("ARK_API_KEY", "")
+            if not key:
+                raise RuntimeError("IMAGE_PROVIDER=volcengine 需要 VOLCENGINE_API_KEY（或 ARK_API_KEY）")
+        elif cls.PROVIDER == "minimax":
+            import os as _os
+            key = _os.getenv("MINIMAX_API_KEY")
+            if not key:
+                raise RuntimeError("IMAGE_PROVIDER=minimax 需要 MINIMAX_API_KEY")
+        elif cls.PROVIDER == "agnes":
             # 动态检测是否配置了任何 AGNES_API_KEY
             has_key = bool(os.environ.get("AGNES_API_KEY"))
             for i in range(2, 21):

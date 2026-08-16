@@ -107,7 +107,17 @@ class VideoGenCfg:
     @classmethod
     def validate(cls) -> None:
         """验证当前供应商所需配置是否完整."""
-        if cls.PROVIDER == "dashscope" and not cls.DASHSCOPE_API_KEY:
+        if cls.PROVIDER == "volcengine":
+            import os as _os
+            key = _os.getenv("VOLCENGINE_API_KEY") or _os.getenv("ARK_API_KEY", "")
+            if not key:
+                raise RuntimeError("VIDEO_PROVIDER=volcengine 需要 VOLCENGINE_API_KEY（或 ARK_API_KEY）")
+        elif cls.PROVIDER == "minimax":
+            import os as _os
+            key = _os.getenv("MINIMAX_API_KEY")
+            if not key:
+                raise RuntimeError("VIDEO_PROVIDER=minimax 需要 MINIMAX_API_KEY")
+        elif cls.PROVIDER == "dashscope" and not cls.DASHSCOPE_API_KEY:
             raise RuntimeError("VIDEO_PROVIDER=dashscope 需要 DASHSCOPE_API_KEY")
         if cls.PROVIDER in ("openai", "openai_compat") and not cls.OPENAI_API_KEY:
             raise RuntimeError(f"VIDEO_PROVIDER={cls.PROVIDER} 需要 VIDEO_OPENAI_API_KEY")

@@ -18,7 +18,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 import style_prefix
 from style_prefix import (
     STYLE_PREFIX, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt,
-    is_empty_scene,
+    is_empty_scene, video_negative_prompt,
 )
 from shared.style_cinematic import get_cinematic_prefix, get_director_negative
 from shared.config import CINEMATIC_STYLE
@@ -864,11 +864,12 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     if cinematic_prefix:
         full_prompt = cinematic_prefix + full_prompt
 
-    # _MODEL_VOICE=0 时（旧行为），负面提示词追加人声类条目（双保险）
+    # _MODEL_VOICE=0 时（旧行为），负面提示词追加人声类条目（双保险）。
+    # 英文 token 仅 Agnes 使用，中文模型用纯中文版（video_negative_prompt 按 VIDEO_PROVIDER 判定）
     negative = (
-        NEGATIVE_PROMPT
+        video_negative_prompt()
         if _MODEL_VOICE
-        else NEGATIVE_PROMPT + "、人声、旁白配音、对话语音、歌声"
+        else video_negative_prompt() + "、人声、旁白配音、对话语音、歌声"
     )
     # 物理逻辑约束：防止违反常识的场景（车马上船、水上行走等）
     negative += (
@@ -1196,7 +1197,22 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
     # 参考图必须全部传过去。压缩后再生成「图N」清单（_build_r2v_purpose_list
     # 拿到的就是这份最终列表），编号与 provider media 顺序严格对齐。
     from shared.ref_compose import fit_refs, get_ref_limit
-    r2v_model = (os.getenv("BAILIAN_R2V_MODEL") or "wan2.7-r2v-2026-06-12").split(",")[0].strip()
+    from shared.config import (
+        VIDEO_PROVIDER, BAILIAN_R2V_MODEL, VOLCENGINE_I2V_MODEL,
+        MINIMAX_H3_MODEL, AGNES_VIDEO_MODEL,
+    )
+    # r2v 参考图上限按「当前 VIDEO_PROVIDER 实际提交 r2v 的模型」解析，不写死百炼：
+    #   bailian → BAILIAN_R2V_MODEL（wan2.7-r2v=5 / happyhorse=9）
+    #   volcengine → VOLCENGINE_I2V_MODEL（Seedance 2.5=30 / 2.0=12）
+    #   minimax → MINIMAX_H3_MODEL（=9）；其余（agnes 等）→ AGNES_VIDEO_MODEL
+    if VIDEO_PROVIDER == "volcengine":
+        r2v_model = VOLCENGINE_I2V_MODEL
+    elif VIDEO_PROVIDER == "minimax":
+        r2v_model = MINIMAX_H3_MODEL
+    elif VIDEO_PROVIDER == "bailian":
+        r2v_model = BAILIAN_R2V_MODEL
+    else:
+        r2v_model = AGNES_VIDEO_MODEL
     media_limit = get_ref_limit(r2v_model, default=5)
     # 首帧构图锚点永远原图直传占第 1 名额（构图/时间/站位基准，拼表会严重损失）
     head_refs = composition_refs[:1]

@@ -1,0 +1,286 @@
+"""模型能力注册表 — Seedream 图片 / Seedance 视频 / 当前供应商视频能力.
+
+不同模型档位的参数约束差异很大（时长/分辨率/参考图/有声/像素范围），
+provider 生成请求前先按模型查表，避免用全局固定常量导致低版本模型报错、
+高版本模型参数浪费。值全部来自火山方舟官方文档（2026-08 核对）：
+
+- 图片生成 API（https://www.volcengine.com/docs/82379/1541523）：
+  - Seedream 5.0 pro：档位 1K/1.5K/2K；像素 [1280x720(921600), 2048x2048x1.1025(4624220)]；参考图 ≤10
+  - Seedream 5.0 lite：档位 2K/3K/4K；像素 [2560x1440(3686400), 4096x4096(16777216)]；参考图 ≤14
+  - Seedream 4.5：档位 2K/4K；像素 [2560x1440(3686400), 4096x4096(16777216)]；参考图 ≤14
+  - Seedream 4.0：档位 1K/2K/4K；像素 [1280x720(921600), 4096x4096(16777216)]；参考图 ≤14
+  - 所有档位均不支持 negative_prompt / seed 参数
+- 创建视频生成任务（https://www.volcengine.com/docs/82379/1520757）：
+  - duration：2.5 [4,30]；2.0 系列 [4,15]；1.5 pro [4,12]；1.0 系列 [2,12]（可 -1 智能选择）
+  - resolution：2.5 仅 480p/720p；2.0 480p~4k；2.0 fast/mini 仅 480p/720p；1.5 pro / 1.0 480p~1080p
+  - role=reference_image（图生视频-参考图 / 全模态参考）：仅 2.5、2.0 系列
+  - generate_audio（有声视频）：仅 2.5、2.0 系列、1.5 pro
+  - Seedance 2.5 在首帧/首尾帧场景 ratio 仅支持 adaptive
+- MiniMax 视频（国际站 api.minimax.io，2026-08 核对）：
+  - v1 Hailuo（T2V-01/I2V-01/Hailuo-02 等）：01 系列或 1080P 仅 6s；768P 可 6 或 10s；无原生语音
+  - v2 MiniMax-H3：duration [4,15]；支持首尾帧/多关键帧/参考图/参考音频；有声
+
+底部「当前供应商视频能力」helper 供 step01 等阶段在生成前按
+VIDEO_PROVIDER + VIDEO_REFERENCE_MODE 解析实际渲染分镜的视频模型
+（单镜时长上限 / 是否原生有声 / 对白发声指令风格），使上游脚本也能跟模型走。
+
+匹配策略与 shared/ref_compose.MODEL_REF_LIMITS 一致：模型 ID 小写子串匹配，
+顺序敏感（具体档位在前、泛化在后），未命中返回宽松默认值（按能力最弱档位兜底，
+保证小尺寸/低版本请求不被误杀）。
+"""
+
+import os
+from dataclasses import dataclass
+
+
+# ---------------------------------------------------------------------------
+# 能力结构
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SeedreamCap:
+    """Seedream 文生图/图生图能力.
+
+    tiers:   方式 1 支持的尺寸档位（"1K"/"2K"/...）；不在档位则用像素值方式 2
+    px_min:  方式 2 最小总像素（宽x高乘积）
+    px_max:  方式 2 最大总像素
+    max_refs:参考图数量上限（图生图 image 数组）
+    """
+    tiers: tuple[str, ...]
+    px_min: int
+    px_max: int
+    max_refs: int
+    supports_negative_prompt: bool = False  # 官方图片生成 API 不支持
+    supports_seed: bool = False             # 官方图片生成 API 不支持
+
+
+@dataclass(frozen=True)
+class SeedanceCap:
+    """Seedance 视频生成能力.
+
+    duration_range: (min, max) 秒；服务端还接受 -1 智能选择
+    resolutions:    支持的分辨率（升序）
+    supports_reference_image:  role=reference_image（图生视频-参考图/全模态参考）
+    supports_generate_audio:   generate_audio 有声视频
+    i2v_frames_ratio_adaptive: 首帧/首尾帧场景 ratio 是否强制 adaptive（Seedance 2.5）
+    """
+    duration_range: tuple[int, int]
+    resolutions: tuple[str, ...]
+    supports_reference_image: bool
+    supports_generate_audio: bool
+    i2v_frames_ratio_adaptive: bool
+
+
+# ---------------------------------------------------------------------------
+# 注册表（顺序敏感：具体在前，泛化在后）
+# ---------------------------------------------------------------------------
+
+SEEDREAM_CAPS: list[tuple[str, SeedreamCap]] = [
+    ("seedream-5-0-pro", SeedreamCap(("1K", "1.5K", "2K"), 921_600, 4_624_220, 10)),
+    ("seedream-5-0-lite", SeedreamCap(("2K", "3K", "4K"), 3_686_400, 16_777_216, 14)),
+    ("seedream-4-5", SeedreamCap(("2K", "4K"), 3_686_400, 16_777_216, 14)),
+    ("seedream-4-0", SeedreamCap(("1K", "2K", "4K"), 921_600, 16_777_216, 14)),
+]
+
+SEEDANCE_CAPS: list[tuple[str, SeedanceCap]] = [
+    ("seedance-2-5", SeedanceCap((4, 30), ("480p", "720p"), True, True, True)),
+    ("seedance-2-0-fast", SeedanceCap((4, 15), ("480p", "720p"), True, True, False)),
+    ("seedance-2-0-mini", SeedanceCap((4, 15), ("480p", "720p"), True, True, False)),
+    ("seedance-2-0", SeedanceCap((4, 15), ("480p", "720p", "1080p", "4k"), True, True, False)),
+    ("seedance-1-5-pro", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, True, False)),
+    ("seedance-1-5", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, False, False)),
+    ("seedance-1-0", SeedanceCap((2, 12), ("480p", "720p", "1080p"), False, False, False)),
+]
+
+# 未命中注册表时的兜底：按能力最弱档位，小尺寸/低版本请求不被误杀
+DEFAULT_SEEDREAM_CAP = SeedreamCap(("1K", "2K", "4K"), 921_600, 16_777_216, 14)
+DEFAULT_SEEDANCE_CAP = SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, False, False)
+
+
+# ---------------------------------------------------------------------------
+# 查找
+# ---------------------------------------------------------------------------
+
+def get_seedream_cap(model: str | None, default: SeedreamCap | None = None) -> SeedreamCap:
+    """按模型 ID 子串查 Seedream 能力；未注册返回宽松默认."""
+    if not model:
+        return default or DEFAULT_SEEDREAM_CAP
+    m = model.lower()
+    for pat, cap in SEEDREAM_CAPS:
+        if pat in m:
+            return cap
+    return default or DEFAULT_SEEDREAM_CAP
+
+
+def get_seedance_cap(model: str | None, default: SeedanceCap | None = None) -> SeedanceCap:
+    """按模型 ID 子串查 Seedance 能力；未注册返回宽松默认."""
+    if not model:
+        return default or DEFAULT_SEEDANCE_CAP
+    m = model.lower()
+    for pat, cap in SEEDANCE_CAPS:
+        if pat in m:
+            return cap
+    return default or DEFAULT_SEEDANCE_CAP
+
+
+# ---------------------------------------------------------------------------
+# 当前供应商视频模型能力（step01 等上游按 VIDEO_PROVIDER+VIDEO_REFERENCE_MODE 解析）
+# ---------------------------------------------------------------------------
+
+def active_video_model() -> str | None:
+    """当前 VIDEO_PROVIDER + VIDEO_REFERENCE_MODE 下实际渲染分镜的视频模型 ID.
+
+    - volcengine：text→T2V 模型；image/r2v→I2V 模型
+    - minimax：r2v→H3；text→T2V（v1 Hailuo）；image→I2V（v1 Hailuo）
+    - bailian：text→T2V；image→I2V；r2v→R2V（wan2.7/happyhorse 官方时长上限均为 15s）
+    - dashscope / agnes：返回各自主模型
+    """
+    provider = os.getenv("VIDEO_PROVIDER", "bailian")
+    mode = (os.getenv("VIDEO_REFERENCE_MODE", "text") or "text").strip().lower()
+    if provider == "volcengine":
+        if mode == "text":
+            return os.getenv("VOLCENGINE_T2V_MODEL", "doubao-seedance-1-5-pro-251215")
+        return os.getenv("VOLCENGINE_I2V_MODEL", "doubao-seedance-1-5-pro-251215")
+    if provider == "minimax":
+        if mode == "r2v":
+            return os.getenv("MINIMAX_H3_MODEL", "MiniMax-H3")
+        if mode == "text":
+            return os.getenv("MINIMAX_T2V_MODEL", "MiniMax-Hailuo-02")
+        return os.getenv("MINIMAX_I2V_MODEL", "MiniMax-Hailuo-2.3-Fast")
+    if provider == "bailian":
+        if mode == "r2v":
+            return os.getenv("BAILIAN_R2V_MODEL", "wan2.7-r2v-2026-06-12")
+        if mode == "image":
+            return os.getenv("BAILIAN_I2V_MODEL", "wan2.7-i2v-2026-04-25")
+        return os.getenv("BAILIAN_T2V_MODEL", "wan2.7-t2v-2026-06-12")
+    if provider == "dashscope":
+        return os.getenv("DASHSCOPE_VIDEO_MODEL", "wan2.7-t2v")
+    if provider == "agnes":
+        return os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
+    return None
+
+
+# 跨供应商视频时长上限注册表（官方文档 2026-08 核对，子串匹配，具体在前）：
+#   - 百炼/dashscope wan2.7 全系列、happyhorse：官方时长 [2,15]s
+#   - Agnes：num_frames ≤441（8n+1），@24fps 最大 ≈18.4s → 取 18
+_VIDEO_DURATION_CAPS: list[tuple[str, int]] = [
+    ("wan2.7", 15),
+    ("happyhorse", 15),
+    ("agnes-video", 18),
+]
+
+
+def _model_duration_cap(model: str | None) -> int:
+    """按模型 ID 子串查视频时长上限；未注册返回 0（不夹取，保持现状）."""
+    if not model:
+        return 0
+    m = model.lower()
+    for pat, cap in _VIDEO_DURATION_CAPS:
+        if pat in m:
+            return cap
+    return 0
+
+
+# prompt 长度上限注册表（官方 Input Requirements，2026-08 核对，子串匹配具体在前）：
+#   - 百炼 wan2.7 全系列 / happyhorse：官方 prompt ≤5000 字符
+#   - MiniMax H3（v2）：官方 ≤7000 字符
+#   - MiniMax Hailuo（v1）：官方 ≤2000 字符
+#   - Seedance / Seedream / Agnes：官方未声明上限 → 0（不截断）
+_PROMPT_LENGTH_CAPS: list[tuple[str, int]] = [
+    ("wan2.7", 5000),
+    ("happyhorse", 5000),
+    ("minimax-h3", 7000),
+    ("minimax-hailuo", 2000),
+]
+
+
+def _model_prompt_cap(model: str | None) -> int:
+    """按模型 ID 子串查 prompt 长度上限；未注册返回 0（不截断）."""
+    if not model:
+        return 0
+    m = model.lower()
+    for pat, cap in _PROMPT_LENGTH_CAPS:
+        if pat in m:
+            return cap
+    return 0
+
+
+def active_video_duration_cap() -> int:
+    """当前视频模型单镜时长上限（秒）；0 = 无新增硬上限（沿用现有 ≤10s 引导）.
+
+    step01 timecode 用此值夹取单镜时长，防止长对白/长 motion 分段生成的镜头
+    超过模型上限被 provider 截断（如 Seedance 1.5 pro=12s、Hailuo v1 720P=6s）。
+      volcengine → Seedance 能力表上限（1.5 pro=12 / 2.0=15 / 2.5=30 / 1.0=12）
+      minimax    → r2v 走 H3（15）；text/image 走 v1 Hailuo，按 req.size 短边定档
+                   （与 provider _resolve_v1_resolution/_resolve_v1_duration 同源：
+                   ≥1080→1080P=6s；≥720→768P 可 6/10→取 10；01 系列→720P=6s）
+      bailian/dashscope/agnes → 按 _VIDEO_DURATION_CAPS 注册表（wan2.7=15 / happyhorse=15 /
+                   agnes=18）；未注册模型返回 0（保持现状）
+    """
+    provider = os.getenv("VIDEO_PROVIDER", "bailian")
+    if provider == "volcengine":
+        return get_seedance_cap(active_video_model()).duration_range[1]
+    if provider == "minimax":
+        model = active_video_model() or ""
+        if "H3" in model:
+            return 15
+        # v1 Hailuo：与 provider 同源推导。provider _resolve_v1_resolution 按 req.size 短边
+        # 定档（step02b _make_request 固定发 720x1280→短边 720→768P）；不读 MINIMAX_VIDEO_RESOLUTION
+        # env——provider 只在 size 解析失败才读它，step02b 总能解析，读它反而误导 step01。
+        if "01" in model:
+            return 6  # 01 系列固定 720P=6s
+        size = (os.getenv("VIDEO_SIZE", "720x1280") or "720x1280").strip().lower().replace("*", "x")
+        try:
+            w, h = size.split("x")
+            short = min(int(w), int(h))
+        except (ValueError, AttributeError):
+            short = 720
+        return 6 if short >= 1080 else 10  # 1080P 仅 6s；768P/512P 可 6 或 10 → 取上限 10
+    # bailian / dashscope / agnes：按当前模型查跨供应商时长注册表
+    return _model_duration_cap(active_video_model())
+
+
+def active_video_prompt_cap() -> int:
+    """当前视频模型的 prompt 长度上限（0 = 官方未声明/不截断）.
+
+    provider 按此值截断（bailian=5000 / H3=7000 / Hailuo=2000）；step01 校验
+    用同一值做单镜 prompt 长度预算，避免最终 prompt 超限被 provider 静默截断。
+    """
+    return _model_prompt_cap(active_video_model())
+
+
+def active_video_supports_audio() -> bool:
+    """当前视频模型是否自带语音（generate_audio / 原生发声）.
+
+    False 表示成片无声：Seedance 1.0 系列、MiniMax v1 Hailuo。
+    架构默认 VIDEO_MODEL_VOICE=1（对话交给视频模型），此处为 False 时必须提示
+    换有声模型或设 VIDEO_MODEL_VOICE=0 走 step03 TTS，否则成片静音。
+    """
+    provider = os.getenv("VIDEO_PROVIDER", "bailian")
+    mode = (os.getenv("VIDEO_REFERENCE_MODE", "text") or "text").strip().lower()
+    if provider == "volcengine":
+        return get_seedance_cap(active_video_model()).supports_generate_audio
+    if provider == "minimax":
+        return mode == "r2v"  # 仅 H3 有声；v1 Hailuo 无声
+    return True  # bailian(wan2.7 系列) / agnes / dashscope 默认有声
+
+
+def active_video_uses_native_voice() -> bool:
+    """对白发声是否由视频模型原生生成（无需 Agnes 风格「（用中文说）」指令）.
+
+    volcengine / minimax = True（prompt 写自然对白，模型直接发声）；
+    bailian / agnes / dashscope = False（沿用「（用中文说）」指令格式，历史行为）。
+    """
+    return os.getenv("VIDEO_PROVIDER", "bailian") in ("volcengine", "minimax")
+
+
+def active_video_is_seedance() -> bool:
+    """当前视频供应商是否为火山引擎 Seedance."""
+    return os.getenv("VIDEO_PROVIDER", "bailian") == "volcengine"
+
+
+def active_video_is_h3() -> bool:
+    """当前视频渲染是否走 MiniMax H3（r2v 全模态参考路径）."""
+    provider = os.getenv("VIDEO_PROVIDER", "bailian")
+    mode = (os.getenv("VIDEO_REFERENCE_MODE", "text") or "text").strip().lower()
+    return provider == "minimax" and mode == "r2v"

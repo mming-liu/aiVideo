@@ -58,6 +58,70 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 - `ASSET_GEN_ENABLED`: 是否生成场景/道具资产图（step02a 帧生成前，默认1）
 - `SCENE_NEAR_SHOT_ENABLED`: 是否生成近景功能场景图（从大场景派生，默认1）
 
+### 参考图上限（随模型走，不写死）
+参考图数量上限**按当前供应商主模型从 `shared/ref_compose.py` 注册表解析**（子串匹配），
+不硬编码在配置文件：
+- `IMAGE_MULTI_REF`：用户偏好（省钱软上限），实际硬上限 = `min(IMAGE_MULTI_REF, 模型能力)`
+- `IMAGE_MAX_REFS`：仅作「未注册模型」的回退值（默认 3）
+- 注册表示例：qwen-image=3｜wan2.7-image=9｜Seedream 5.0 pro=10 / 4.5/4.0=14｜MiniMax image-01=1｜MiniMax-H3=9｜Seedance 2.5=30 / 2.0=12｜wan2.7-r2v=5
+- 视频 r2v 参考图上限在 `step02_video_gen/prompt_builder.py` 按 `VIDEO_PROVIDER` 选实际提交 r2v 的模型解析（bailian→R2V 模型 / volcengine→I2V 模型 / minimax→H3）
+
+> 新增模型遵守规则：
+> - 只需在 `MODEL_REF_LIMITS` 加一行 `(模型名子串, 上限)`，子串匹配、大小写不敏感、具体在前泛化在后；模型 ID 是破折号，模式写 `seedance-2-5` 而非 `seedance-2.5`。
+> - 上层（bridge 组装 / adapter 兜底 / provider 提交 / r2v prompt）都会经 `get_ref_limit(model)` / `active_image_ref_limit()` 自动跟随，配置文件无需改动。
+> - 图片/视频模型的能力（Seedream：档位+像素区间+参考图数；Seedance：时长+分辨率+reference_image+有声）在 `shared/model_caps.py`，与 `MODEL_REF_LIMITS` 保持一致。
+
+### 模型限制约定（新增模型必读）
+**模型参数限制属于模型特点，必须按官方文档进注册表跟着模型走，禁止写死到配置文件**
+（`.env.content` / `shared/config.py` / provider）：
+- **时长上限** → `shared/model_caps.py`：Seedance 用 `SEEDANCE_CAPS`（能力表）；wan2.7/happyhorse=15s、agnes=18s 用 `_VIDEO_DURATION_CAPS`；step01 经 `active_video_duration_cap()` 自动夹取，provider 兜底
+- **参考图上限** → `shared/ref_compose.py` `MODEL_REF_LIMITS`
+- **prompt 长度上限** → `shared/model_caps.py` `_PROMPT_LENGTH_CAPS`：wan2.7/happyhorse=5000、MiniMax H3=7000、Hailuo=2000；provider 经 `_model_prompt_cap()` 截断（bailian/minimax 已接）
+- **运镜格式**（如 Hailuo 方括号指令）→ provider 内映射
+- **负面词/seed 支持、有声(generate_audio)、参考图(reference_image) 能力** → `shared/model_caps.py` 能力表
+- 配置文件只放：**模型 ID、用户偏好**（省钱/目标分辨率/并发）、**操作参数**（轮询间隔/重试）
+- 新增模型时若发现"限制写死在配置里"，应迁入注册表而非继续堆配置
+
+### 火山引擎方舟（Volcengine Ark）配置
+- `VOLCENGINE_API_KEY`: 火山方舟 API Key（.env.keys；兼容 `ARK_API_KEY` 写法）
+- `VOLCENGINE_BASE_URL`: 方舟端点（默认 `https://ark.cn-beijing.volces.com/api/v3`）
+- `VOLCENGINE_T2I_MODEL`: Seedream 文生图模型（默认 `doubao-seedream-4-5-251128`）
+- `VOLCENGINE_T2I_FALLBACK_MODELS`: 图片 403 回退列表（默认 `doubao-seedream-4-0-250828`）
+- `VOLCENGINE_T2V_MODEL` / `VOLCENGINE_I2V_MODEL`: Seedance 文生/图生视频模型（默认均 `doubao-seedance-1-5-pro-251215`）+ 各自 `_FALLBACK_MODELS` 回退列表
+- `VOLCENGINE_IMAGE_SIZE`: 图片 size 强制 override（档位 1K/2K/4K 或像素 WxH，默认空=按分镜推导）
+- `VOLCENGINE_VIDEO_RESOLUTION`: 视频分辨率 override（480p/720p/1080p/4k，默认空=按 req.size 推导）
+- `VOLCENGINE_VIDEO_RATIO`: 视频比例 override（16:9/9:16/1:1，默认空=按 req.size 推导；2.5 首尾帧强制 adaptive 不可覆盖）
+- `VOLCENGINE_VIDEO_DURATION`: 视频时长 override（秒，默认 0=按分镜 duration_sec）
+- `VOLCENGINE_VIDEO_POLL_INTERVAL` / `VOLCENGINE_VIDEO_MAX_POLL_ATTEMPTS`: 视频任务轮询参数
+
+**Seedream/Seedance 模型能力矩阵**（值来自官方文档 2026-08 核对，实现见 `shared/model_caps.py`，provider 按模型子串查表收敛参数）：
+
+| 模型 | 时长(秒) | 分辨率 | 参考图(reference_image) | 有声(generate_audio) | 备注 |
+|---|---|---|---|---|---|
+| Seedream 5.0 pro | — | 档位 1K/1.5K/2K；像素 [921600, 4624220] | ≤10 | — | 图片不支持 negative_prompt/seed |
+| Seedream 5.0 lite | — | 档位 2K/3K/4K；像素 [3686400, 16777216] | ≤14 | — | 同上 |
+| Seedream 4.5 | — | 档位 2K/4K；像素 [3686400, 16777216] | ≤14 | — | 同上 |
+| Seedream 4.0 | — | 档位 1K/2K/4K；像素 [921600, 16777216] | ≤14 | — | 同上 |
+| Seedance 2.5 | 4–30 | 480p/720p | ✓ | ✓ | 首帧/首尾帧 ratio 仅 adaptive |
+| Seedance 2.0（含 fast/mini） | 4–15 | 480p–4k（fast/mini 仅 480p/720p） | ✓ | ✓ | |
+| Seedance 1.5 pro | 4–12 | 480p/720p/1080p | ✗ | ✓ | |
+| Seedance 1.0 系列 | 2–12 | 480p/720p/1080p | ✗ | ✗ | |
+
+> 关键约束：`reference_image`（参考生视频/r2v）仅 2.5/2.0 支持；`generate_audio` 仅 2.5/2.0/1.5 pro。首帧/首尾帧、参考生视频、参考视频/音频三种场景互斥，provider 已按模型能力分配 role 并 fail-fast。
+> **调试省钱配置**：`VOLCENGINE_T2I_MODEL=doubao-seedream-4-0-250828`（4.0 像素下限低，1024x1792 直接透传）+ `VOLCENGINE_I2V_MODEL=doubao-seedance-2-0-260128`（r2v 且便宜）；纯文生视频省钱可 `doubao-seedance-1-0-lite-t2v-250408`（无声、无参考图）。生产再切回 4.5 / 1.5 pro。
+
+### MiniMax 配置（国际站 api.minimax.io）
+- `MINIMAX_API_KEY`: MiniMax API Key（.env.keys）
+- `MINIMAX_BASE_URL`: 默认 `https://api.minimax.io`
+- 图片：`MINIMAX_T2I_MODEL=image-01`（subject_reference 单张）+ `MINIMAX_T2I_FALLBACK_MODELS=image-01-live`
+- 视频 v1（Hailuo 旧模型，省钱）：`MINIMAX_T2V_MODEL=MiniMax-Hailuo-02` / `MINIMAX_I2V_MODEL=MiniMax-Hailuo-2.3-Fast` + 各自回退队列（仅 MiniMax 系列）
+- 视频 v2（H3 新模型，贵）：`MINIMAX_H3_MODEL=MiniMax-H3`（尾帧/多关键帧/参考图/参考音频用）
+- `MINIMAX_VIDEO_RESOLUTION`（默认 768P）/ `MINIMAX_VIDEO_DURATION`（默认 6）/ 轮询参数
+- **prompt 适配（2026-08，按官方指南）**：
+  - H3（r2v 路径）：provider 自动把 step02 扁平 prompt 重组为官方**时间线三段结构**（`integrated_multimodal_description: [Shot 1] ...` + `overall_soundscape` + `non_diegetic_music`）；「（背景音效：X）」→ 音景；「（用中文普通话说，音色）"台词"」→ `(S1) says: <d>[Chinese] 台词</d>`；有首帧图时前置官方 I2V 对齐指令。见 `_video_gen/minimax_provider.py _h3_render`
+  - Hailuo v1（text/image 路径）：中文运镜词自动映射为官方**方括号指令**前缀（`[Push in]`/`[Tracking shot]`/`[Static shot]` 等 15 种，按出现顺序 ≤3 组合）。见 `_hailuo_camera_prefix`
+  - 两处均为 provider 内自动转换，其他供应商（bailian/agnes/volcengine）不受影响
+
 ## 架构设计
 
 ### 四阶段流水线
@@ -112,10 +176,23 @@ step01 asset_extractor.py（LLM 提取，schema: SCENE_ASSETS_SCHEMA / PROPS_SCH
 - r2v 参考图收集顺序：场景资产图（环境锚定）→ 出镜角色肖像 → 出镜道具资产图；空镜只收场景资产图
 
 ### Provider 抽象模式
-`_video_gen/` 和 `tts/` 两个包采用相同架构：
+`_video_gen/` 和 `tts/` 两个包采用相同架构（`_image_gen/` 同构）：
 - **ABC 接口 + 工厂注册表**：通过 `.env.content` 中的 PROVIDER 切换
 - **Config 单例**：各包的 `config.py` 从 `.env.content`（内容参数）+ `.env.keys`（API Key）加载
 - **Dataclass 模型**：请求和结果用 dataclass 定义
+
+**Provider 清单**（`_auto_register()` 注册）：
+- `_image_gen/`：`agnes`（OpenAI 兼容）、`bailian`（百炼 qwen-image）、`volcengine`（Seedream）、`minimax`（image-01）
+- `_video_gen/`：`dashscope`（通义万相）、`dashscope_http`（KF2V 首尾帧）、`agnes`、`bailian`（wan2.7/happyhorse）、`volcengine`（Seedance）、`minimax`（Hailuo v1 + H3 v2）
+- `_text_gen/`：DashScope Qwen、DeepSeek、Agnes
+- `tts/`：DashScope SDK、DashScope HTTP、OpenAI
+
+**Key Conventions**：
+1. 视频模式 = 异步轮询：Submit task → poll task_id → download video_url
+2. 图片 = 视频首帧：vimax_bridge 生成 first_frame.png per shot
+3. 403 回退：provider 用 `_model_queue` 自动切下一个模型
+4. 限速：VIDEO_MAX_REQUESTS_PER_MINUTE、IMAGE_GEN_INTERVAL、KeyScheduler
+5. 视频生成 provider 统一存 `vimax_working/shots/<idx>/video.mp4`
 
 ### DeepSeek 文本生成（`_text_gen/`）
 - **Responses API**（`deepseek-v4-flash`）：`POST /responses`，`reasoning.effort=none` 关闭思考 + strict `json_schema` 结构化输出

@@ -150,13 +150,122 @@ BAILIAN_I2V_FALLBACK_MODELS = [
 # 参考图生视频模型 (wan2.7-r2v / happyhorse-1.1-r2v)
 BAILIAN_R2V_MODEL = os.getenv("BAILIAN_R2V_MODEL", "wan2.7-r2v-2026-06-12")
 # 视频参数
+# 分辨率 = 目标偏好（省钱用 720P，须在模型能力内——wan2.7/happyhorse 官方支持 720P/1080P），
+# 非模型约束；模型时长上限由 shared/model_caps 注册表按模型解析（wan2.7/happyhorse=15s），不在此写死
 BAILIAN_VIDEO_RESOLUTION = os.getenv("BAILIAN_VIDEO_RESOLUTION", "720P")  # 720P 或 1080P
 BAILIAN_VIDEO_RATIO = os.getenv("BAILIAN_VIDEO_RATIO", "9:16")  # 16:9, 9:16, 1:1
-BAILIAN_VIDEO_DURATION = int(os.getenv("BAILIAN_VIDEO_DURATION", "5"))  # 2-15秒
+BAILIAN_VIDEO_DURATION = int(os.getenv("BAILIAN_VIDEO_DURATION", "5"))  # 兜底默认时长（step01 duration_sec 优先）
 BAILIAN_VIDEO_POLL_INTERVAL = int(os.getenv("BAILIAN_VIDEO_POLL_INTERVAL", "15"))
 BAILIAN_VIDEO_MAX_POLL_ATTEMPTS = int(os.getenv("BAILIAN_VIDEO_MAX_POLL_ATTEMPTS", "120"))
 # 图片参数（默认由各 provider 内部档位控制，此处保留 env 覆盖接口）
 # BAILIAN_IMAGE_SIZE 和 BAILIAN_IMAGE_N 已废弃，由 agnes_provider 的 size 档位取代
+
+
+# ============================================================================
+# 火山引擎方舟 (Volcengine Ark) 配置 - Seedream 文生图 / Seedance 视频
+# ============================================================================
+# 官方文档:
+#   图片生成 (Seedream): POST {base}/images/generations
+#   视频生成 (Seedance): POST {base}/contents/generations/tasks + 轮询
+# API Key 优先读 VOLCENGINE_API_KEY，兼容 ARK_API_KEY 写法
+VOLCENGINE_API_KEY = os.getenv("VOLCENGINE_API_KEY", os.getenv("ARK_API_KEY", ""))
+VOLCENGINE_BASE_URL = os.getenv(
+    "VOLCENGINE_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"
+)
+# ---- 模型能力矩阵（值来自官方文档，2026-08 核对，实现见 shared/model_caps.py）----
+# Seedream 图片：像素区间 + 档位 + 参考图上限
+#   5.0 pro  档位 1K/1.5K/2K      像素 [921600, 4624220]  参考图 ≤10
+#   5.0 lite 档位 2K/3K/4K        像素 [3686400, 16777216] 参考图 ≤14
+#   4.5      档位 2K/4K           像素 [3686400, 16777216] 参考图 ≤14
+#   4.0      档位 1K/2K/4K        像素 [921600, 16777216]  参考图 ≤14
+#   所有档位均不支持 negative_prompt / seed
+# Seedance 视频：时长/分辨率/参考图(reference_image)/有声(generate_audio)
+#   2.5         时长 [4,30]  480p/720p        参考图✓ 有声✓ 首尾帧ratio仅adaptive
+#   2.0(含fast/mini) 时长[4,15] 480p~4k(fast/mini仅480p/720p) 参考图✓ 有声✓
+#   1.5 pro     时长 [4,12]  480p/720p/1080p  参考图✗ 有声✓
+#   1.0 系列    时长 [2,12]  480p/720p/1080p  参考图✗ 有声✗
+# 调试省钱：VOLCENGINE_T2I_MODEL=doubao-seedream-4-0-250828（1K 档/低像素）；
+#           VOLCENGINE_I2V_MODEL=doubao-seedance-2-0-260128（r2v 且便宜）或 1.0 系列（纯文生视频）
+# 文生图模型 (Seedream)，403 回退到 T2I_FALLBACK
+VOLCENGINE_T2I_MODEL = os.getenv("VOLCENGINE_T2I_MODEL", "doubao-seedream-4-5-251128")
+VOLCENGINE_T2I_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.getenv("VOLCENGINE_T2I_FALLBACK_MODELS", "doubao-seedream-4-0-250828").split(",")
+    if m.strip()
+]
+# 可选 override：非空则强制所有图片用该 size（档位 1K/2K/4K 或 像素 WxH），
+# 仍会按模型能力表收敛；空=按分镜 req.size/ratio 推导
+VOLCENGINE_IMAGE_SIZE = os.getenv("VOLCENGINE_IMAGE_SIZE", "")
+VOLCENGINE_IMAGE_RPM = int(os.getenv("VOLCENGINE_IMAGE_RPM", "10"))  # 限速参考
+# 文生视频模型 (Seedance)，T2V / I2V 分开配置 + 各自 403 回退
+VOLCENGINE_T2V_MODEL = os.getenv("VOLCENGINE_T2V_MODEL", "doubao-seedance-1-5-pro-251215")
+VOLCENGINE_T2V_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.getenv("VOLCENGINE_T2V_FALLBACK_MODELS", "doubao-seedance-1-0-lite-t2v-250408").split(",")
+    if m.strip()
+]
+VOLCENGINE_I2V_MODEL = os.getenv("VOLCENGINE_I2V_MODEL", "doubao-seedance-1-5-pro-251215")
+VOLCENGINE_I2V_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.getenv("VOLCENGINE_I2V_FALLBACK_MODELS", "doubao-seedance-1-0-pro-250528").split(",")
+    if m.strip()
+]
+# 视频参数 override：非空/非 0 则强制该值，仍按模型能力表夹取（2.5 首尾帧 ratio
+# 强制 adaptive 不可覆盖）；空/0=按分镜 req 推导（分辨率/比例按 req.size，时长按分镜 duration_sec）
+VOLCENGINE_VIDEO_RESOLUTION = os.getenv("VOLCENGINE_VIDEO_RESOLUTION", "")  # 480p/720p/1080p/4k
+VOLCENGINE_VIDEO_RATIO = os.getenv("VOLCENGINE_VIDEO_RATIO", "")  # 16:9 / 9:16 / 1:1
+VOLCENGINE_VIDEO_DURATION = int(os.getenv("VOLCENGINE_VIDEO_DURATION", "0"))  # 秒，0=按分镜时长
+VOLCENGINE_VIDEO_POLL_INTERVAL = int(os.getenv("VOLCENGINE_VIDEO_POLL_INTERVAL", "8"))
+VOLCENGINE_VIDEO_MAX_POLL_ATTEMPTS = int(os.getenv("VOLCENGINE_VIDEO_MAX_POLL_ATTEMPTS", "120"))
+
+
+# ============================================================================
+# MiniMax 配置 - image-01 文生图 / Hailuo v1 视频 / MiniMax-H3 v2 视频
+# ============================================================================
+# 官方文档（国际站 api.minimax.io）:
+#   图片生成: POST {base}/v1/image_generation
+#   视频生成 v1 (Hailuo 旧模型，便宜): POST {base}/v1/video_generation
+#   视频生成 v2 (MiniMax-H3 新模型):  POST {base}/v2/video_generation
+# 仅接入 MiniMax 系列模型（image-01 / Hailuo-02 / Hailuo-2.3 / 2.3-Fast /
+# T2V-01 / I2V-01 / MiniMax-H3），403 回退不混入其他厂商模型。
+MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
+MINIMAX_BASE_URL = os.getenv("MINIMAX_BASE_URL", "https://api.minimax.io")
+# 文生图/图生图模型（image-01 支持 T2I 与 I2I；image-01-live 仅 I2I 更快）
+MINIMAX_T2I_MODEL = os.getenv("MINIMAX_T2I_MODEL", "image-01")
+MINIMAX_T2I_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.getenv("MINIMAX_T2I_FALLBACK_MODELS", "image-01-live").split(",")
+    if m.strip()
+]
+MINIMAX_IMAGE_RPM = int(os.getenv("MINIMAX_IMAGE_RPM", "10"))  # 限速参考
+# 视频 v1 (Hailuo 旧模型): T2V / I2V 分开 + 各自 403 回退（仅 MiniMax 系列）
+MINIMAX_T2V_MODEL = os.getenv("MINIMAX_T2V_MODEL", "MiniMax-Hailuo-02")
+MINIMAX_T2V_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.getenv(
+        "MINIMAX_T2V_FALLBACK_MODELS", "MiniMax-Hailuo-2.3,T2V-01-Director,T2V-01"
+    ).split(",")
+    if m.strip()
+]
+MINIMAX_I2V_MODEL = os.getenv("MINIMAX_I2V_MODEL", "MiniMax-Hailuo-2.3-Fast")
+MINIMAX_I2V_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.getenv(
+        "MINIMAX_I2V_FALLBACK_MODELS",
+        "MiniMax-Hailuo-02,MiniMax-Hailuo-2.3,I2V-01-Director,I2V-01-live,I2V-01",
+    ).split(",")
+    if m.strip()
+]
+# 视频 v2 (MiniMax-H3 新模型，贵): 首尾帧/多关键帧/参考图/参考音频
+MINIMAX_H3_MODEL = os.getenv("MINIMAX_H3_MODEL", "MiniMax-H3")
+# 视频参数（v1 支持 512P/720P/768P/1080P；时长默认 6，768P 可 6 或 10，1080P 仅 6）
+# MINIMAX_VIDEO_RESOLUTION **已失效**：provider _resolve_v1_resolution 按 req.size 短边定档
+# （step02b 固定 720x1280→768P），仅在 size 解析失败时作回退；step01 时长上限也已按 req.size
+# 同源推导（shared/model_caps.active_video_duration_cap）。想改分辨率需改 step02b _make_request 的 size。
+MINIMAX_VIDEO_RESOLUTION = os.getenv("MINIMAX_VIDEO_RESOLUTION", "768P")
+MINIMAX_VIDEO_DURATION = int(os.getenv("MINIMAX_VIDEO_DURATION", "6"))
+MINIMAX_VIDEO_POLL_INTERVAL = int(os.getenv("MINIMAX_VIDEO_POLL_INTERVAL", "15"))
+MINIMAX_VIDEO_MAX_POLL_ATTEMPTS = int(os.getenv("MINIMAX_VIDEO_MAX_POLL_ATTEMPTS", "120"))
 
 
 # ============================================================================

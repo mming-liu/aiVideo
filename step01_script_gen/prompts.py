@@ -131,11 +131,8 @@ PROMPT_TEMPLATE = """
   }}
 }}
 
-### Agnes AI 声音生成指令（必须严格遵守）
-如果镜头有对话（narration_segment 非空），必须在 prompt 末尾显式添加声音指令。
-格式规则：
-1. 对话文本必须放在 prompt 结尾，格式如：（用中文说，愤怒急切地）“小心！快跑！”
-2. 注意：只提取引号内的对话内容作为 TTS 文本，不要包含“谁说”这类描述词。
+### 声音生成指令（按当前视频供应商注入，见 _build_audio_instruction）
+{audio_instruction}
 
 ### 输入小说文本
 {novel_text}{scene_object_anchors}
@@ -716,6 +713,7 @@ def build_prompt(novel_text: str, bank=None, objects_bank=None,
         novel_text=novel_text,
         character_anchors=char_anchors,
         scene_object_anchors=scene_object_anchors,
+        audio_instruction=_build_audio_instruction(),
     )
     # v6.23：大纲锚点（ShortVideoDirector director-outline 吸收）——分镜参考大纲，
     # 保证冲突/高潮分布。大纲为空时不注入。
@@ -737,7 +735,55 @@ def build_prompt(novel_text: str, bank=None, objects_bank=None,
     if knowledge_ctx:
         prompt = prompt + knowledge_ctx
 
+    # 视频模型时长上限引导（仅当当前模型上限 < 模板里的 ≤10s 引导时收紧）
+    cap_ctx = _duration_cap_guidance()
+    if cap_ctx:
+        prompt = prompt + cap_ctx
+
     return prompt
+
+
+def _build_audio_instruction() -> str:
+    """按当前视频供应商返回对白/声音生成指令段（模板 {audio_instruction} 占位）.
+
+    旧供应商（bailian/agnes/dashscope）：保留「（用中文说）」指令格式（历史行为，
+    TTS/模型靠它识别中文发音与情绪）。
+    新供应商（volcengine/minimax）：视频模型原生发声，prompt 写自然对白即可，
+    禁止添加「用中文说」指令前缀。
+    """
+    from shared.model_caps import active_video_uses_native_voice
+    if active_video_uses_native_voice():
+        return (
+            "### 声音生成指令（视频模型自带语音）\n"
+            "视频模型会直接为对白生成说话+口型：prompt 中按规则0写自然台词"
+            "（说话人道：台词）即可，由模型自行发声。**禁止**添加「（用中文说）」这类指令前缀。\n"
+        )
+    return (
+        "### Agnes AI 声音生成指令（必须严格遵守）\n"
+        "如果镜头有对话（narration_segment 非空），必须在 prompt 末尾显式添加声音指令。\n"
+        "格式规则：\n"
+        "1. 对话文本必须放在 prompt 结尾，格式如：（用中文说，愤怒急切地）\"小心！快跑！\"\n"
+        "2. 注意：只提取引号内的对话内容作为 TTS 文本，不要包含\"谁说\"这类描述词。\n"
+    )
+
+
+def _duration_cap_guidance() -> str:
+    """当前视频模型单镜时长上限引导（仅当上限 < 模板里的 ≤10s 引导时收紧）.
+
+    模板已要求「单镜头时长：特写/空镜 2-4秒，中景 3-6秒，远景/动作 5-8秒，
+    严禁超过 10 秒」。对上限更低的模型（如 Hailuo v1 720P=6s）必须覆盖该引导，
+    否则 LLM 会按 10s 规划、生成超上限镜头被 provider 截断。
+    """
+    from shared.model_caps import active_video_duration_cap
+    cap = active_video_duration_cap()
+    if not cap or cap >= 10:
+        return ""
+    return (
+        f"\n\n### 视频模型时长上限 {cap} 秒（必须遵守，覆盖上述 10 秒引导）\n"
+        f"当前视频模型单镜时长上限为 {cap} 秒。任何镜头（含钩子）时长不得超过 {cap} 秒，"
+        f"超出会被视频服务截断。动作/对白规划必须落在 {cap} 秒内；"
+        f"无法在 {cap} 秒内完成的动作拆成多个 2-3 秒短镜快切。\n"
+    )
 
 
 def _load_local_skill_context() -> str:
