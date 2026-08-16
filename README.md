@@ -75,6 +75,7 @@ python step04_merge/main.py
 
 **调试技巧：**
 - 阶段2拆分为2a和2b，可先运行2a检查图片质量，确认OK后再运行2b
+- 阶段2a 调试指定分镜：`--shots 3 --all-frames` 一次生成该镜全部图片（首帧+尾帧+全部关键帧，覆盖 idx>=2 的 Mode B 跳过，会浪费额度）；`--frames ff,lf,kf0` 逐图选择（`ff`=首帧 / `lf`=尾帧 / `kf`=全部关键帧 / `kf0,kf1...`=指定关键帧，不指定则默认 Mode A/B 行为）
 - 每个阶段脚本都有交互式确认提示
 - `VIDEO_REFERENCE_MODE=text` 时跳过分帧环节，直接文生视频
 
@@ -241,11 +242,21 @@ python step04_merge/main.py
 ### Q: 如何指定生成特定分镜？
 
 ```bash
-# 只生成第 3、5、7 分镜
+# 只生成第 3、5、7 分镜的帧图片（step02a）或视频（step02b）
+python step02a_frame_gen/main.py --shots 3,5,7
 python step02b_video_gen/main.py --shots 3,5,7
 
 # 强制重生成（忽略缓存）
+python step02a_frame_gen/main.py --shots 3 --force
 python step02b_video_gen/main.py --shots 3 --force
+
+# 一次生成第 3 分镜的全部图片（首帧+尾帧+全部关键帧，覆盖 idx>=2 的 Mode B 跳过；
+# 调试整镜视觉检查用，会浪费额度；缓存仍生效，已生成且无改动的图会自动跳过）
+python step02a_frame_gen/main.py --shots 3 --all-frames
+
+# 逐图选择：只生成第 3 分镜的尾帧；或首帧 + 第 0 个关键帧
+python step02a_frame_gen/main.py --shots 3 --frames lf
+python step02a_frame_gen/main.py --shots 3 --frames ff,kf0
 ```
 
 ### Q: 如何跳过帧图片直接文生视频？
@@ -302,4 +313,4 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 
 ---
 
-*最后更新：2026-08-03*
+*最后更新：2026-08-16*
