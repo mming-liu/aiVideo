@@ -54,6 +54,7 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 - `HOOK_ENABLED`: 是否生成钩子分镜（默认1，开启）
 - `COMPLIANCE_AUTO_FIX`: 是否自动修复敏感词（默认1，开启）
 - `VIDEO_REFERENCE_MODE`: 视频参考图模式（默认text，可选image/r2v）— text=文生视频（跳过帧图片），image=图生视频（需先运行step02a生成帧图片），r2v=参考图生视频（最多5个参考图，角色肖像+场景/道具资产图）
+  - ⚠️ **恢复提醒（2026-08-16）**：当前为 `image`（适配火山免费 Seedance 1.0——无 `reference_image` 能力，image 模式只发首尾帧）。**待火山免费 Seedance 1.0 额度消耗完后，必须恢复 `r2v`**（古风权谋角色一致性最关键）；切回 bailian/minimax 生产时同样改回 r2v，否则角色/道具一致性会弱化。
 - `SCENE_ASSET_EXTRACTION_ENABLED`: 是否提取场景资产（大场景/近景描述，默认1）
 - `PROP_ASSET_EXTRACTION_ENABLED`: 是否提取道具资产（核心道具+外观描述，默认1）
 - `ASSET_GEN_ENABLED`: 是否生成场景/道具资产图（step02a 帧生成前，默认1）

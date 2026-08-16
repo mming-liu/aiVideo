@@ -78,6 +78,12 @@ class SeedanceCap:
 SEEDREAM_CAPS: list[tuple[str, SeedreamCap]] = [
     ("seedream-5-0-pro", SeedreamCap(("1K", "1.5K", "2K"), 921_600, 4_624_220, 10)),
     ("seedream-5-0-lite", SeedreamCap(("2K", "3K", "4K"), 3_686_400, 16_777_216, 14)),
+    # 点号形式兜底官方免费预置模型 ID（doubao-seedream-5.0-lite，方舟开通管理展示写法）
+    ("seedream-5.0-pro", SeedreamCap(("1K", "1.5K", "2K"), 921_600, 4_624_220, 10)),
+    ("seedream-5.0-lite", SeedreamCap(("2K", "3K", "4K"), 3_686_400, 16_777_216, 14)),
+    # 双点号形式（doubao-seedream-5.0.lite，方舟开通管理免费预置展示写法）
+    ("seedream-5.0.pro", SeedreamCap(("1K", "1.5K", "2K"), 921_600, 4_624_220, 10)),
+    ("seedream-5.0.lite", SeedreamCap(("2K", "3K", "4K"), 3_686_400, 16_777_216, 14)),
     ("seedream-4-5", SeedreamCap(("2K", "4K"), 3_686_400, 16_777_216, 14)),
     ("seedream-4-0", SeedreamCap(("1K", "2K", "4K"), 921_600, 16_777_216, 14)),
 ]

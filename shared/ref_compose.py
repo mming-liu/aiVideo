@@ -32,6 +32,12 @@ MODEL_REF_LIMITS: list[tuple[str, int]] = [
     # Seedream 按官方档位细分（与 shared/model_caps.SEEDREAM_CAPS 一致）
     ("seedream-5-0-pro", 10),
     ("seedream-5-0-lite", 14),
+    # 点号形式兜底官方免费预置模型 ID（doubao-seedream-5.0-lite）
+    ("seedream-5.0-pro", 10),
+    ("seedream-5.0-lite", 14),
+    # 双点号形式（doubao-seedream-5.0.lite，方舟开通管理免费预置展示写法）
+    ("seedream-5.0.pro", 10),
+    ("seedream-5.0.lite", 14),
     ("seedream-4-5", 14),
     ("seedream-4-0", 14),
     ("seedream", 10),

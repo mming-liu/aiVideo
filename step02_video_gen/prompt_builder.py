@@ -1156,6 +1156,11 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
         from shared.assets_bank import PropAssetsBank
         pbank = PropAssetsBank()
         pbank.load()
+        # ---- 先收集所有命中 (pid, hit)，再过滤别名嵌套/重复 ----
+        # 同一件道具不得注入两件参考图：匕首同时命中「刺客弯刀」「刺客匕首」时
+        # （后者的「寒光匕首」是更具体别名），只保留命中词最长的那件。
+        # 08-16 刺客弯刀残留：register_prop 别名去重防源头，此处匹配层兜底。
+        hits: list[tuple[str, str]] = []
         for pid in pbank.get_all_identifiers():
             if not pid:
                 continue
@@ -1164,23 +1169,52 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
             # 只做道具名匹配会漏（如"弯刀"在 ff_desc 而道具名是"刺客弯刀"，
             # 但 consistent_terms 含"弯刀"可命中）。
             match_sources = [pid] + list(entry.get("consistent_terms", []) or [])
-            if any(src and (src in search_text or src in loc) for src in match_sources):
-                img = pbank.get_asset_image(pid)
-                if not img:
-                    continue
-                # v6.25：船/马车等空间物体拆到 space_refs（环境/尺寸锚点，提前到
-                # 角色肖像前）——手持道具不决定画面空间比例，船才决定。
-                if _is_space_object_prop(entry):
-                    if img not in space_refs:
-                        space_refs.append(img)
-                        _log_r2v_collect(
-                            f"  空间物体「{pid}」匹配 → {Path(img).name}（环境/尺寸锚点，提前注入）"
-                        )
-                    continue
-                prop_refs.append(img)
-                _log_r2v_collect(
-                    f"  道具「{pid}」匹配 → {Path(img).name}（匹配源: {[s for s in match_sources if s][:4]}）"
+            # 命中词：identifier 精确命中优先，否则按别名长度降序（长词更具体，
+            # 如「寒光匕首」优先于「匕首」）。
+            hit = None
+            if pid and (pid in search_text or pid in loc):
+                hit = pid
+            else:
+                hit = next(
+                    (t for t in sorted(match_sources, key=len, reverse=True)
+                     if t and t != pid and (t in search_text or t in loc)),
+                    None,
                 )
+            if hit:
+                hits.append((pid, hit))
+
+        # 过滤：hit 是另一命中的子串 → 同一件，丢弃（保留更具体别名的那件）；
+        # 命中词完全相同时保留先出现的。
+        kept = []
+        for i, (pid, hit) in enumerate(hits):
+            subsumed = False
+            for j, (op, oh) in enumerate(hits):
+                if op == pid:
+                    continue
+                if (hit == oh and j < i) or (hit in oh and len(hit) < len(oh)):
+                    subsumed = True
+                    break
+            if subsumed:
+                _log_r2v_collect(f"  道具「{pid}」命中词「{hit}」被更具体别名覆盖，视为同一件，跳过")
+                continue
+            kept.append((pid, hit))
+
+        for pid, _ in kept:
+            img = pbank.get_asset_image(pid)
+            if not img:
+                continue
+            entry = pbank.get_prop(pid) or {}
+            # v6.25：船/马车等空间物体拆到 space_refs（环境/尺寸锚点，提前到
+            # 角色肖像前）——手持道具不决定画面空间比例，船才决定。
+            if _is_space_object_prop(entry):
+                if img not in space_refs:
+                    space_refs.append(img)
+                    _log_r2v_collect(
+                        f"  空间物体「{pid}」匹配 → {Path(img).name}（环境/尺寸锚点，提前注入）"
+                    )
+                continue
+            prop_refs.append(img)
+            _log_r2v_collect(f"  道具「{pid}」匹配 → {Path(img).name}")
     except Exception as e:
         _log_r2v_collect(f"  道具资产收集异常: {e}")
         prop_refs = []

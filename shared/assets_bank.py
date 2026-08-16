@@ -295,6 +295,13 @@ _EMPTY_PROPS: dict = {
     "meta": {"last_updated_chapter": 0, "total_props": 0},
 }
 
+# 别名去重时忽略的泛化词：单字类名/纯描述词（刀/利刃/寒光/车/船…）太泛，
+# 不能作为「两件道具是同一件」的依据——否则 牛车 会误并入 马车。
+_ALIAS_GENERIC_TERMS = frozenset({
+    "刀", "刃", "利刃", "寒光", "冷光", "光", "银白", "金属", "锋利",
+    "车", "船", "舟", "伞", "灯", "酒", "杯", "壶", "布", "帘",
+})
+
 
 class PropAssetsBank:
     """跨章节道具资产（白底资产图）持久化."""
@@ -381,24 +388,72 @@ class PropAssetsBank:
 
     # -- 修改 ----------------------------------------------------------------
 
+    def _find_alias_conflict(self, ident: str, terms: list) -> str | None:
+        """别名去重：新道具与既有道具是否同一件（仅 identifier 不同）.
+
+        判据（任一命中即视为同一件）：
+          1. 新 identifier 是既有道具的 consistent_term（别名）→ 明确同一件
+          2. 既有 identifier 是新道具的 consistent_term（别名）→ 明确同一件
+          3. 去泛化后别名交集非空（如 弯刀 vs 匕首 共享「匕首」）→ 强别名重叠
+
+        返回应合并到的既有 identifier；无冲突返回 None。
+
+        背景（08-16）：同一把刺客武器被 LLM 注册成「刺客弯刀」+「刺客匕首」两条，
+        运行时按别名子串匹配会把两件道具参考图一起注入。identifier 精确去重拦不住
+        （字符串不同），需要别名级判定。泛化词（刀/利刃/寒光…）不计入交集，防
+        牛车/马车 这类共享「车」的不同道具被误并入。
+        """
+        new_terms = {t for t in (terms or []) if t}
+        if not new_terms:
+            return None
+        for other_id, other in self._data["props"].items():
+            if other_id == ident or not isinstance(other, dict):
+                continue
+            other_terms = {t for t in (other.get("consistent_terms", []) or []) if t}
+            if not other_terms:
+                continue
+            # 强信号 1/2：一方 identifier 是另一方的别名
+            if ident in other_terms or other_id in new_terms:
+                return other_id
+            # 强信号 3：去泛化后的别名交集非空
+            specific = (new_terms & other_terms) - _ALIAS_GENERIC_TERMS
+            if specific:
+                return other_id
+        return None
+
     def register_prop(self, prop: dict, chapter_num: int) -> None:
         """注册或更新道具条目.
 
         prop: asset_extractor 返回的单个道具 dict（含 identifier/appearance/
         consistent_terms 等字段）。
         同一道具重复出现时：外观以最新为准，consistent_terms 累加去重。
+        别名强重叠（不同 identifier 但 consistent_terms 交集去泛化后非空）视为
+        同一件，合并进既有条目而非新建（防 LLM 把同一武器注册成多条）。
         """
         ident = prop.get("identifier", "").strip()
         if not ident:
             return
         existing = self._data["props"].get(ident)
+        is_alias_merge = False
+        if not existing:
+            alias_id = self._find_alias_conflict(ident, prop.get("consistent_terms", []))
+            if alias_id:
+                print(f"[bank] 道具「{ident}」与既有「{alias_id}」别名重叠视为同一件，"
+                      f"忽略新建，并入既有条目")
+                existing = self._data["props"].get(alias_id)
+                is_alias_merge = True
         if existing:
-            if prop.get("appearance"):
-                existing["appearance"] = prop["appearance"]
-            terms = set(existing.get("consistent_terms", []) or [])
-            terms.update(prop.get("consistent_terms", []) or [])
-            existing["consistent_terms"] = sorted(terms)
-            existing["last_chapter"] = max(existing.get("last_chapter", 0), chapter_num)
+            if is_alias_merge:
+                # 别名吸收：canonical 条目为准——重复条目的外观/别名可能是幻觉
+                # （弯刀的外观/别名是错的），不覆盖不并集，仅推进 last_chapter。
+                existing["last_chapter"] = max(existing.get("last_chapter", 0), chapter_num)
+            else:
+                if prop.get("appearance"):
+                    existing["appearance"] = prop["appearance"]
+                terms = set(existing.get("consistent_terms", []) or [])
+                terms.update(prop.get("consistent_terms", []) or [])
+                existing["consistent_terms"] = sorted(terms)
+                existing["last_chapter"] = max(existing.get("last_chapter", 0), chapter_num)
         else:
             entry = dict(prop)
             entry.setdefault("first_chapter", chapter_num)
