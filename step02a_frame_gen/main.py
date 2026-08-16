@@ -7,6 +7,11 @@
     python step02a_frame_gen/main.py                 # 生成全部镜头帧
     python step02a_frame_gen/main.py --shots 3,5-7   # 只生成指定镜头帧
     python step02a_frame_gen/main.py --shots 3 --force  # 强制重生成（忽略缓存）
+    python step02a_frame_gen/main.py --shots 3 --all-frames  # 一次生成 shot 3 全部图片
+                            # （首帧+尾帧+全部关键帧，覆盖 idx>=2 的 Mode B 跳过；
+                            #  调试整镜视觉检查用，会浪费额度）
+    python step02a_frame_gen/main.py --shots 3 --frames lf   # 只生成 shot 3 尾帧
+    python step02a_frame_gen/main.py --shots 3 --frames ff,kf0  # 首帧+第0个关键帧
 """
 from __future__ import annotations
 import sys
@@ -24,16 +29,19 @@ from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
 from shared.paths import script_file, chapter_dir, vimax_working_dir
 from shared.tee_logger import get_logger
 from shared.vimax_bridge import build_working_dir
-from shared.shot_selector import parse_shot_selector
+from shared.shot_selector import parse_shot_selector, parse_frame_selector
 
 
 async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
-                         only_indices: set[int] | None = None) -> dict:
+                         only_indices: set[int] | None = None,
+                         frames: set[str] | None = None) -> dict:
     """生成所有镜头的首帧/尾帧/关键帧图片
 
     Args:
         force: 忽略缓存强制重生成
         only_indices: 只生成指定 index 的镜头帧（None=全部）
+        frames: 帧类型选择（ff/lf/kf/kf0/kf1...，见 parse_frame_selector）——
+            None=默认 Mode A/B 行为；提供时精确控制生成哪些图片（调试用）
 
     Returns:
         dict: {shot_index: {"ff": path, "lf": path, "kf": [paths]}}
@@ -68,6 +76,7 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
                 script_mtime, force=force,
                 characters=characters,
                 skip_first_frame=False,
+                frames=frames,
             )
             results[0] = hook_result
             _log_shot_frames(0, hook_result, logger)
@@ -88,6 +97,7 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
             script_mtime, force=force,
             characters=characters,
             skip_first_frame=skip_first,
+            frames=frames,
         )
         results[idx] = result
         _log_shot_frames(idx, result, logger)
@@ -136,9 +146,24 @@ def main():
                         help="只生成指定镜头（逗号分隔，支持区间），如 3,5-7,9；默认全部")
     parser.add_argument("--force", "-f", action="store_true",
                         help="忽略缓存强制重生成")
+    frame_grp = parser.add_mutually_exclusive_group()
+    frame_grp.add_argument("--all-frames", action="store_true",
+                           help="对指定分镜一次性生成全部图片（首帧+尾帧+全部关键帧），"
+                                "覆盖 idx>=2 的 Mode B 跳过；调试整镜视觉检查用，会浪费额度")
+    frame_grp.add_argument("--frames", default=None,
+                           help="只生成指定图片类型（逗号分隔）：ff=首帧, lf=尾帧, "
+                                "kf=全部关键帧, kf0/kf1...=指定关键帧；默认=Mode A/B 行为")
     args = parser.parse_args()
 
     only_indices = parse_shot_selector(args.shots)
+
+    # 帧选择解析：--all-frames=全部帧；--frames=精确选择；均未给=默认 Mode A/B
+    if args.all_frames:
+        frames = {"ff", "lf", "kf"}
+    elif args.frames:
+        frames = parse_frame_selector(args.frames)
+    else:
+        frames = None
 
     script_path = script_file()
     work_dir = wd()
@@ -156,6 +181,8 @@ def main():
         logger.info(f"  shots:  {sorted(only_indices)} (指定镜头)")
     if args.force:
         logger.info(f"  force:  True (忽略缓存)")
+    if frames is not None:
+        logger.info(f"  frames: {sorted(frames)} (指定图片类型)")
 
     # 确保 working dir 结构
     asyncio.run(build_working_dir(
@@ -176,7 +203,8 @@ def main():
 
     # 生成帧（全部或指定镜头）
     results = asyncio.run(gen_all_frames(
-        script_path, work_dir, force=args.force, only_indices=only_indices,
+        script_path, work_dir, force=args.force,
+        only_indices=only_indices, frames=frames,
     ))
 
     logger.info(f"\n[INFO] step02a_frame_gen done!")

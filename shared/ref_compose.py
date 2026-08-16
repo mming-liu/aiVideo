@@ -25,6 +25,14 @@ from pathlib import Path
 
 # (模型名子串, 参考图上限)。顺序敏感：具体在前，泛化在后。
 MODEL_REF_LIMITS: list[tuple[str, int]] = [
+    # --- 火山免费预置模型（带日期后缀，先匹配先命中）---
+    # 免费额度 A/B 实测（2026-08-16）：2 张约 78-102s、7 张约 151-169s、
+    # 8 张（含场景 near 图）>180s 必超时 → 收紧到 3：场景/人物/道具 各拼 1 张
+    # 同质参考表（约 12MB，预计 ~100s，仍在 180s 内），比 2 张混拼保类别一致。
+    # 付费正式档位模型仍走下方 seedream-4-5/4-0 官方能力条目（≤14）。
+    ("doubao-seedream-4-0-250828", 3),
+    ("doubao-seedream-4-5-251128", 3),
+    ("doubao-seedream-5-0-lite-260128", 3),
     # --- 图片模型（I2I 参考图）---
     ("qwen-image", 3),
     ("wan2.7-image", 9),
@@ -202,11 +210,18 @@ def fit_refs(
             return [merged]
         return flat[:1]
 
-    # 类别数超过名额：前面类别各占 1 名额，尾部类别合并成一组共享 1 名额
+    # 类别数超过名额：前面类别各占 1 名额，尾部类别共享 1 名额。
+    # 尾巴恰好是单个类别时保留其真实类别名（scene/chars/props），拼图表命名与
+    # 参考图编号说明才能对上（参考图3=道具外观参考表，而非"综合参考表"）；
+    # 多个类别合并才叫 mix（综合参考表）。
     groups: list[tuple[str, list[str]]] = clean[: limit - 1]
     if len(clean) > limit - 1:
-        tail = [p for _, items in clean[limit - 1:] for p in items]
-        groups.append(("mix", tail))
+        tail_buckets = clean[limit - 1:]
+        if len(tail_buckets) == 1:
+            groups.append(tail_buckets[0])
+        else:
+            tail = [p for _, items in tail_buckets for p in items]
+            groups.append(("mix", tail))
 
     # 基础名额：每组 1 个；剩余名额分给「图最多」的组（让更多原图保真直传）
     slots = [1] * len(groups)

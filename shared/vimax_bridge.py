@@ -2505,15 +2505,18 @@ async def _gen_keyframes_async(
     max_retries: int = 1,
     empty_scene: bool = False,
     characters: list | None = None,
+    only_indices: set[int] | None = None,
 ) -> list[str]:
     """为镜头生成中间关键帧图片（多关键帧叙事模式）。
-    
+
     从 shot['keyframes'] 数组读取关键帧描述，生成对应的图片。
     返回关键帧图片路径列表（不包括首帧和尾帧）。
-    
+
     Args:
         keyframes: 如 [{"desc": "...", "time_ratio": 0.3}, ...]
-    
+        only_indices: 调试逐图选择——只生成指定序号的中间关键帧
+            （元素为中间帧序号 i，即 keyframe_{i}.png 的 i；None=全部）
+
     Returns:
         关键帧图片路径列表
     """
@@ -2544,6 +2547,10 @@ async def _gen_keyframes_async(
     
     kf_paths = []
     for i, kf in enumerate(intermediate_kfs):
+        # 调试逐图选择：只生成指定序号的中间关键帧（i 保持原始序号，
+        # 与 keyframe_{i}.png 文件名一致；跳过不生成的不改文件名编号）
+        if only_indices is not None and i not in only_indices:
+            continue
         kf_desc = kf.get("desc", "").strip()
         if not kf_desc:
             continue
@@ -2705,12 +2712,18 @@ async def gen_shot_frames(
     force: bool = False,
     characters: list | None = None,
     skip_first_frame: bool = False,
+    frames: set | None = None,
 ) -> dict:
     """为单个镜头生成/检查首帧、尾帧和中间关键帧。
 
     用于 submit_poll.py 中 skip_frames=False 时的逐镜帧生成。
     characters: script['characters']，用于空镜检测（空镜首帧禁止人物）。
     skip_first_frame: 模式B时跳过首帧生成（用上一镜尾帧代替），仅生成尾帧用于本镜风格锚定。
+    frames: 调试逐图选择——帧类型 token 集合（ff/lf/kf/kf0/kf1...，见
+        shared.shot_selector.parse_frame_selector）。提供时**精确控制**生成哪些图片，
+        覆盖 Mode A/B 的默认跳过逻辑（如 idx>=2 的 Mode B 镜头也可单独生成首帧或
+        全部关键帧，方便整镜视觉检查；代价是浪费额度，缓存仍生效——已生成的类型
+        无改动会被跳过）。None=默认行为（Mode A 全量 / Mode B 只尾帧）。
 
     Returns:
         dict: {"ff_path": str | None, "lf_path": str | None, "keyframes_paths": list[str]}
@@ -2734,10 +2747,22 @@ async def gen_shot_frames(
     frame_refs_ff = _collect_frame_refs_for_shot(shot, characters, limit=5, for_frame="首帧")
     frame_refs_full = _collect_frame_refs_for_shot(shot, characters, limit=5, for_frame="尾帧")
 
-    if skip_first_frame:
-        # 模式B：跳过首帧生成，尾帧仍生成（用于本镜风格锚定）
-        ff_path_str = None
+    # ---- 帧选择解析：frames 提供时精确控制（调试），None 沿用 Mode A/B 默认 ----
+    if frames is None:
+        want_ff = not skip_first_frame
+        want_lf = True
+        want_kf = not skip_first_frame
+        kf_only = None
     else:
+        want_ff = "ff" in frames
+        want_lf = "lf" in frames
+        kf_specific = {int(t[2:]) for t in frames
+                       if t.startswith("kf") and t[2:].isdigit()}
+        want_kf = "kf" in frames or bool(kf_specific)
+        # "kf"=全部关键帧，忽略具体序号；只有 kfN 时只生成对应序号
+        kf_only = None if "kf" in frames else (kf_specific or None)
+
+    if want_ff:
         # 模式A：首帧 generation (使用 _gen_first_frame_async 的缓存逻辑)
         ff_path_str = await _gen_first_frame_async(
             image_adapter, shots_dir, shot,
@@ -2745,31 +2770,35 @@ async def gen_shot_frames(
             reference_paths=frame_refs_ff or None, max_retries=1,
             empty_scene=empty_scene, characters=characters,
         )
+    else:
+        # 模式B（或 --frames 未选 ff）：跳过首帧生成（尾帧仍生成用于本镜风格锚定）
+        ff_path_str = None
     ff_["ff_path"] = ff_path_str
 
-    # 尾帧 generation（全镜头覆盖：首尾双关键帧钳制风格漂移，
-    # 不再按 variation_type 过滤——LLM 常输出空值导致全部镜头无尾帧）
-    # 尾帧参考图：场景/角色/道具资产（锚定人物形象与环境一致）。
-    # 不再把首帧整图作为尾帧参考图——首帧是动作起点，直接抄首帧构图会让
-    # 尾帧几乎复刻首帧（刺客同位置、听香位置错乱、两帧雷同），
-    # 动作演变只能靠 lf_desc 文字描述驱动。首帧只通过 frame_refs_full 的
-    # 场景资产图隐式锚定环境/光线，不用整图锁死尾帧构图。
-    lf_refs = frame_refs_full or None
-    lf_path_str = await _gen_last_frame_async(
-        image_adapter, shots_dir, shot,
-        force=force, script_mtime=script_mtime,
-        reference_paths=lf_refs,
-        max_retries=1,
-        empty_scene=empty_scene,
-        characters=characters,
-    )
+    if want_lf:
+        # 尾帧 generation（全镜头覆盖：首尾双关键帧钳制风格漂移，
+        # 不再按 variation_type 过滤——LLM 常输出空值导致全部镜头无尾帧）
+        # 尾帧参考图：场景/角色/道具资产（锚定人物形象与环境一致）。
+        # 不再把首帧整图作为尾帧参考图——首帧是动作起点，直接抄首帧构图会让
+        # 尾帧几乎复刻首帧（刺客同位置、听香位置错乱、两帧雷同），
+        # 动作演变只能靠 lf_desc 文字描述驱动。首帧只通过 frame_refs_full 的
+        # 场景资产图隐式锚定环境/光线，不用整图锁死尾帧构图。
+        lf_refs = frame_refs_full or None
+        lf_path_str = await _gen_last_frame_async(
+            image_adapter, shots_dir, shot,
+            force=force, script_mtime=script_mtime,
+            reference_paths=lf_refs,
+            max_retries=1,
+            empty_scene=empty_scene,
+            characters=characters,
+        )
+    else:
+        lf_path_str = None
     ff_["lf_path"] = lf_path_str
 
     # 中间关键帧 generation（多关键帧叙事模式）
     # 模式B时跳过中间关键帧生成（已用尾帧接续替代关键帧锚定）
-    if skip_first_frame:
-        kf_paths = []
-    else:
+    if want_kf:
         # 关键帧参考图：场景/角色/道具资产（锚定一致），不用首帧整图锁死构图
         # （与尾帧同理——首帧整图会把关键帧的中间动作态锁死在起点构图上）。
         kf_refs = frame_refs_full or None
@@ -2780,7 +2809,10 @@ async def gen_shot_frames(
             max_retries=1,
             empty_scene=empty_scene,
             characters=characters,
+            only_indices=kf_only,
         )
+    else:
+        kf_paths = []
     ff_["keyframes_paths"] = kf_paths
 
     return ff_

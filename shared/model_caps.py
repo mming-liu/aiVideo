@@ -76,6 +76,12 @@ class SeedanceCap:
 # ---------------------------------------------------------------------------
 
 SEEDREAM_CAPS: list[tuple[str, SeedreamCap]] = [
+    # --- 火山免费预置模型（带日期后缀，先匹配先命中）---
+    # max_refs 与 ref_compose.MODEL_REF_LIMITS 保持一致（免费档多参考图会贴/超 180s
+    # 超时线，收紧到 3）；档位/像素沿用各自基座（4.0/4.5/5.0-lite）官方能力。
+    ("doubao-seedream-5-0-lite-260128", SeedreamCap(("2K", "3K", "4K"), 3_686_400, 16_777_216, 3)),
+    ("doubao-seedream-4-5-251128", SeedreamCap(("2K", "4K"), 3_686_400, 16_777_216, 3)),
+    ("doubao-seedream-4-0-250828", SeedreamCap(("1K", "2K", "4K"), 921_600, 16_777_216, 3)),
     ("seedream-5-0-pro", SeedreamCap(("1K", "1.5K", "2K"), 921_600, 4_624_220, 10)),
     ("seedream-5-0-lite", SeedreamCap(("2K", "3K", "4K"), 3_686_400, 16_777_216, 14)),
     # 点号形式兜底官方免费预置模型 ID（doubao-seedream-5.0-lite，方舟开通管理展示写法）

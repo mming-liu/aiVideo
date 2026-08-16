@@ -26,6 +26,7 @@ python step04_merge/main.py       # 阶段4: 片段 + 音频 + 字幕 → 最终
 ```
 
 - 阶段2拆分为2a和2b，方便调试：可以先运行2a检查图片质量，确认OK后再运行2b生成视频
+- 阶段2a 调试指定分镜：`--shots 3 --all-frames` 一次生成 shot 3 全部图片（首帧+尾帧+全部关键帧，覆盖 idx>=2 的 Mode B 跳过，会浪费额度）；`--frames ff,lf,kf0` 逐图选择（ff/lf/kf/kfN，默认 Mode A/B 行为）
 - 每个阶段脚本都有交互式确认提示。
 - 当 `VIDEO_REFERENCE_MODE=text` 时跳过分帧环节，直接文生视频；r2v 模式使用参考图（最多5个）保持角色/道具一致性
 

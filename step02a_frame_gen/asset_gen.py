@@ -120,22 +120,17 @@ async def gen_scene_assets(image_adapter, force: bool = False) -> int:
         wide_path = scene_dir / "wide.png"
 
         if not force and wide_path.exists() and wide_path.stat().st_size > 5 * 1024:
-            # B8 修复：已有图也过一遍内容质检（sidecar 新鲜度控制，检出 critical
-            # 则删图走下方重生成）——此前只校验 >5KB，wide 画进路人/道具图带手不发现。
-            _regen = await _qc_asset_image(
-                wide_path, ident, (entry.get("wide_desc") or "")[:120],
-                empty_scene=True,  # 大场景禁人物
-            )
-            if not _regen:
-                # 已有大场景图：复用（无需重生成）
-                bank.set_assets(ident, {
-                    "wide": {"path": str(wide_path.resolve()),
-                             "description": f"{ident} 大场景建立镜头参考图"},
-                })
-                total += 1
-                logger.info(f"[ASSET] 场景 {ident}: 大场景图已存在，复用")
-                continue
-            logger.warn(f"[ASSET] 场景 {ident} 大场景图 QC critical，重新生成")
+            # 已入库大场景图直接复用（生成时已过内容质检），不再每轮复检——
+            # 省掉每轮对全部场景资产跑视觉 QC 的 API 开销，也避免 QC 抖动导致
+            # 已接受的图被反复判 critical、每轮删图重生成烧额度。
+            # 需要重审时用 --force 或删掉 wide.png 再跑。
+            bank.set_assets(ident, {
+                "wide": {"path": str(wide_path.resolve()),
+                         "description": f"{ident} 大场景建立镜头参考图"},
+            })
+            total += 1
+            logger.info(f"[ASSET] 场景 {ident}: 大场景图已存在，复用")
+            continue
 
         # 生成大场景建立镜头图（B8 修复：QC critical 时重试最多 2 次）
         wide_ok = False
@@ -239,18 +234,15 @@ async def gen_prop_assets(image_adapter, force: bool = False) -> int:
         prop_path = prop_dir / "prop.png"
 
         if not force and prop_path.exists() and prop_path.stat().st_size > 5 * 1024:
-            # B8 修复：已有图也过一遍内容质检（白底道具图带手/多余物不发现）。
-            _regen = await _qc_asset_image(
-                prop_path, ident, (entry.get("appearance") or "")[:120],
-                empty_scene=False,  # 道具图非空镜（检查多余物/水印/畸形手）
-            )
-            if not _regen:
-                bank.set_asset(ident, {"path": str(prop_path.resolve()),
-                                       "description": f"{ident} 道具资产参考图"})
-                total += 1
-                logger.info(f"[ASSET] 道具 {ident}: 资产图已存在，复用")
-                continue
-            logger.warn(f"[ASSET] 道具 {ident} 资产图 QC critical，重新生成")
+            # 已入库道具图直接复用（生成时已过内容质检），不再每轮复检——
+            # 省掉每轮对全部道具跑视觉 QC 的 API 开销，也避免 QC 抖动导致
+            # 已接受的图（如活虾）被反复判 critical、每轮删图重生成烧额度。
+            # 需要重审时用 --force 或删掉 prop.png 再跑。
+            bank.set_asset(ident, {"path": str(prop_path.resolve()),
+                                   "description": f"{ident} 道具资产参考图"})
+            total += 1
+            logger.info(f"[ASSET] 道具 {ident}: 资产图已存在，复用")
+            continue
 
         # 生成白底资产图（B8 修复：QC critical 时重试最多 2 次）
         prop_ok = False

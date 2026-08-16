@@ -1,7 +1,8 @@
-"""shared.shot_selector - 分镜选择器解析
+"""shared.shot_selector - 分镜/帧类型选择器解析
 
 把命令行 "--shots 3,5-7,9" 形式的字符串解析成镜头 index 集合，
-供 step02a / step02b 的指定镜头生成能力复用。
+"--frames ff,lf,kf0" 形式的字符串解析成帧类型集合，
+供 step02a / step02b 的指定镜头/指定帧生成能力复用。
 
 约定：
   - index 从 0 开始；0 = hook（钩子镜头），1+ = 正文镜头
@@ -49,3 +50,42 @@ def parse_shot_selector(spec: str | None) -> set[int] | None:
             indices.add(val)
 
     return indices or None
+
+
+def parse_frame_selector(spec: str | None) -> set[str] | None:
+    """解析帧类型选择器字符串。
+
+    Args:
+        spec: 如 "ff,lf,kf0"；None 或空串表示不限制（返回 None = 默认 Mode A/B 行为）
+
+    合法 token（逗号分隔、大小写不敏感）：
+      - ff        首帧（first_frame.png）
+      - lf        尾帧（last_frame.png）
+      - kf        全部中间关键帧（keyframe_{i}.png 全量）
+      - kf0/kf1/...  指定序号的中间关键帧（keyframe_0.png / keyframe_1.png ...）
+
+    Returns:
+        set[str] 帧类型 token 集合；None 表示不限制
+
+    Raises:
+        ValueError: 含非法 token（非 ff/lf/kf/kfN 形式）
+    """
+    if spec is None:
+        return None
+    spec = spec.strip()
+    if not spec:
+        return None
+
+    tokens: set[str] = set()
+    for part in spec.split(","):
+        part = part.strip().lower()
+        if not part:
+            continue
+        if part in ("ff", "lf", "kf"):
+            tokens.add(part)
+        elif part.startswith("kf") and part[2:].isdigit():
+            tokens.add(part)
+        else:
+            raise ValueError(f"非法帧类型: {part}（支持 ff/lf/kf/kf0/kf1...）")
+
+    return tokens or None
