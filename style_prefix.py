@@ -1334,6 +1334,24 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
         _THREAT_NAMES = ("刺客", "杀手", "黑衣人", "蒙面人", "神秘人")
         has_threat = any(n in shot_text for n in _THREAT_NAMES)
 
+        # 08-16 hook ff 刺客回头盯镜头根因：威胁源在该帧**自己的**描述里若仅
+        # 以非实体方式出现（水下黑影/刀尖微露/没入水中），画面里没有完整刺客
+        # → 人物数量/武器归属/「禁止黑影」都按此调整。延迟导入避免和
+        # vimax_bridge（已被其模块级导入 style_prefix）形成循环依赖。
+        if frame_type == "首帧":
+            _threat_desc = shot.get("ff_desc", "") or ""
+        elif frame_type == "尾帧":
+            _threat_desc = shot.get("lf_desc", "") or ""
+        else:
+            _threat_desc = " ".join(filter(None, [
+                shot.get("ff_desc", ""), shot.get("lf_desc", ""),
+                shot.get("motion_desc", "") or shot.get("prompt", ""),
+            ]))
+        from shared.vimax_bridge import _threat_visible_in
+        _threat_vis = _threat_visible_in(_threat_desc, characters)
+        _threat_onscreen = _threat_vis is True
+        _threat_invisible_only = has_threat and _threat_vis is False
+
         # 本镜实际出场的注册角色（按 identifier 在镜头文本中匹配）
         present_chars = []
         for c in (characters or []):
@@ -1342,8 +1360,11 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                 present_chars.append(c)
 
         if has_threat:
-            # 武器归属：武器只能由威胁源持有；其余出场角色不得持武器/蒙面
-            others = [c["identifier"] for c in present_chars]
+            # 武器归属：武器只能由威胁源持有；其余出场角色不得持武器/蒙面。
+            # 08-16：威胁源自己持有武器，不应被列入"无武器"——否则同段既写
+            # "武器只能由刺客持有"又写"刺客手中没有武器"自相矛盾。
+            others = [c["identifier"] for c in present_chars
+                      if c["identifier"] not in _THREAT_NAMES]
             _no_weapon = "".join(f"{n}手中没有武器，没有刀，没有剑，没有短刃。" for n in others)
             _not_threat = "".join(f"{n}不能蒙面，{n}不是刺客。" for n in others)
             strict_constraints += (
@@ -1380,15 +1401,26 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                     f"【性别】{ident}是{age_note}男子；必须画成男性。"
                 )
 
-        # 统计本镜头应出现的人物数量，显式限制（威胁源记为「刺客」）
-        char_names = [c["identifier"] for c in present_chars]
-        if has_threat:
+        # 08-16：人数名单只列**该帧可见**角色。威胁源在本帧若仅以非实体方式
+        # 出现（水下黑影/刀尖/没入水中）→ 画面没有完整刺客，不列入（否则
+        # hook ff「总共4人」会逼图片模型画出完整刺客）。同时去重——has_threat
+        # 追加"刺客"曾与 present_chars 里已匹配的刺客重复，出现"杨旭、听香、
+        # 刺客、刺客，总共4人"的严重幻觉源。
+        _count_chars = [c for c in present_chars
+                        if c["identifier"] not in _THREAT_NAMES or _threat_onscreen]
+        char_names = list(dict.fromkeys(c["identifier"] for c in _count_chars))
+        if has_threat and _threat_onscreen and "刺客" not in char_names:
             char_names.append("刺客")
 
         if char_names:
+            # 威胁源以水下黑影/刀尖呈现时，黑影是剧情要素，不在禁用之列——
+            # 否则"禁止…黑影"与 ff_desc「水下黑影轮廓」直接打架，模型被搞乱。
+            _banned_tail = ("禁止出现任何其他人物、人影。"
+                            if _threat_invisible_only
+                            else "禁止出现任何其他人物、黑影、人影。")
             strict_constraints += (
                 f"【人物数量限制】画面中只允许出现以下角色：{'、'.join(char_names)}。"
-                f"总共{len(char_names)}人，禁止出现任何其他人物、黑影、人影。"
+                f"总共{len(char_names)}人，{_banned_tail}"
             )
 
         # v6.20：帧朝向强化——参考图三视图是伪三视图（side/back 0.95+ 相似度，

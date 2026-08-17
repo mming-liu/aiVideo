@@ -1039,7 +1039,9 @@ def _collect_space_object_refs(shot: dict) -> list[str]:
         return []
 
 
-def _collect_prop_asset_refs(shot: dict, limit: int = 2) -> list[str]:
+def _collect_prop_asset_refs(shot: dict, limit: int = 2,
+                             frame_desc: str | None = None,
+                             characters: list | None = None) -> list[str]:
     """为本镜头匹配手持道具资产图（props_bank prop.png）作道具参考.
 
     与 r2v 同源匹配：道具名/consistent_terms 出现在本镜 ff_desc/motion_desc/
@@ -1048,16 +1050,30 @@ def _collect_prop_asset_refs(shot: dict, limit: int = 2) -> list[str]:
 
     v6.25：只收集手持道具（空间物体走 _collect_space_object_refs，单独提前），
     limit 为手持道具上限。由调用方按「场景 → 空间物体 → 角色 → 手持道具」组装。
+
+    frame_desc: 该帧自己的描述（08-16 hook ff 钓竿幻觉根因）——原版 search_text
+    把 ff/lf/motion 合并，lf 里的「钓杆」错装进 ff ref sheet，模型照钓杆参考图
+    凭空画出脱离手的钓竿。传 frame_desc 后只匹配该帧的道具（首帧=ff_desc /
+    尾帧=lf_desc / 关键帧=合并）。None 时回退到合并文本（旧行为）。
+
+    characters: 威胁武器帧级门控（08-16 hook ff 整把匕首画出根因）——威胁源
+    在该帧不可见（仅以黑影/刀尖微露方式呈现）时，威胁武器参图也会诱导模型
+    照完整匕首放大渲染。传 frame_desc + characters 后做帧级可见性门控：
+    威胁不可见 → 丢弃威胁武器参图（ff 只见指甲盖尖端，完整匕首参考图反而
+    误导）。kf0「刺客半身探出举匕首」威胁可见 → 保留参图。
     """
     try:
         from shared.assets_bank import PropAssetsBank
         pbank = PropAssetsBank()
         pbank.load()
-        search_text = " ".join([
-            shot.get("ff_desc", "").strip() or "",
-            shot.get("motion_desc", "").strip() or shot.get("prompt", ""),
-            shot.get("lf_desc", "").strip() or "",
-        ])
+        if frame_desc is not None:
+            search_text = frame_desc
+        else:
+            search_text = " ".join([
+                shot.get("ff_desc", "").strip() or "",
+                shot.get("motion_desc", "").strip() or shot.get("prompt", ""),
+                shot.get("lf_desc", "").strip() or "",
+            ])
         loc = shot.get("location", "") or shot.get("scene", "")
         refs: list[str] = []
 
@@ -1103,6 +1119,18 @@ def _collect_prop_asset_refs(shot: dict, limit: int = 2) -> list[str]:
                             f"「{hit}」被更具体别名覆盖，视为同一件，跳过")
                 continue
             kept.append((pid, hit))
+
+        # 08-16 hook ff：威胁武器帧级门控——威胁源在该帧不可见（仅黑影/刀尖
+        # 微露）时，威胁武器参图（完整匕首）会诱导模型照放大渲染成大宝剑。ff
+        # 只露指甲盖尖端时丢弃，kf0 刺客半身探出举匕首威胁可见→保留。
+        if frame_desc is not None and characters:
+            from shared.vimax_bridge import _threat_visible_in  # 已在同文件，防循环
+            if _threat_visible_in(frame_desc, characters) is not True:
+                _dropped = [p for p, _ in kept if _is_threat_weapon_prop(p)]
+                kept = [(p, h) for p, h in kept if not _is_threat_weapon_prop(p)]
+                for _p in _dropped:
+                    _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 威胁武器「{_p}」"
+                                f"该帧威胁源不可见，丢弃参图防完整渲染")
 
         for pid, _ in kept:
             img = pbank.get_asset_image(pid)
@@ -1186,8 +1214,24 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
     # 道具不再被角色名额挤掉——旧版平面列表 limit=5 时 3 角色+空间物体
     # 就占满名额，道具永远进不了参考图。
     space_refs = _collect_space_object_refs(shot)
-    portrait_refs = _collect_portrait_refs_for_shot(shot, characters, limit=max(2, limit - 1))
-    prop_refs = _collect_prop_asset_refs(shot, limit=3)
+    # 08-16：该帧的描述（首帧=ff_desc / 尾帧=lf_desc / 关键帧=合并全文）。
+    # 威胁源（刺客）仅以非实体方式出现时（水下黑影/刀尖微露/没入水中），
+    # 在该帧里没有完整刺客 → 不注入肖像，避免图片模型照肖像画出完整
+    # 刺客还回头盯镜头。
+    if for_frame == "首帧":
+        frame_desc = shot.get("ff_desc", "") or ""
+    elif for_frame == "尾帧":
+        frame_desc = shot.get("lf_desc", "") or ""
+    else:
+        frame_desc = " ".join(filter(None, [
+            shot.get("ff_desc", ""),
+            shot.get("lf_desc", ""),
+            shot.get("motion_desc", "") or shot.get("prompt", ""),
+        ]))
+    portrait_refs = _collect_portrait_refs_for_shot(
+        shot, characters, limit=max(2, limit - 1), frame_desc=frame_desc,
+    )
+    prop_refs = _collect_prop_asset_refs(shot, limit=3, frame_desc=frame_desc, characters=characters)
 
     return _compose_frame_refs_by_category(
         shot, for_frame, scene_refs, space_refs, portrait_refs, prop_refs, limit=limit,
@@ -1254,7 +1298,8 @@ def _detect_action_subject(shot: dict, characters: list | None = None) -> str:
 
 
 def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
-                                    limit: int = 3) -> list[str]:
+                                    limit: int = 3,
+                                    frame_desc: str | None = None) -> list[str]:
     """从 character_portraits_registry.json 为本镜头出镜角色收集肖像参考图.
 
     用于 step02a 首帧/尾帧图生图：给图片模型注入本镜出镜角色的肖像作参考，
@@ -1264,6 +1309,11 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
     判定"出镜角色"与 _collect_r2v_references 同源：角色名出现在本镜
     ff_desc/motion_desc/lf_desc 中。视角匹配：画面描述含背面/侧面词则优先
     对应视角，否则默认 front。空镜/无角色匹配返回空列表（调用方降级纯文生图）。
+
+    frame_desc: **该帧自己的**描述（ff_desc/lf_desc/combined）。威胁源若在本
+    帧仅以非实体方式呈现（水下黑影/刀尖微露/没入水中）→ 不注入肖像——画面
+    没有完整刺客，参考图会诱导图片模型画出完整刺客还回头盯镜头（08-16
+    hook ff 根因）。返回 None/False 皆跳过。
 
     characters: script['characters']（含 identifier）；缺省时只依赖注册表 key。
     """
@@ -1345,6 +1395,12 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
             # "神秘人"，但角色注册表 key 是"刺客"，仅靠 ident in search_text 会漏掉
             # 刺客肖像，导致关键帧/首帧参考图缺威胁源形象、图片模型画不出刺客）。
             if not any(a in search_text for a in _char_aliases(ident, characters)):
+                continue
+            # 威胁源帧级可见性门控（08-16 hook ff）：该帧自己的描述里威胁源若仅
+            # 以非实体方式出现（水下黑影/刀尖微露/没入水中）→ 不注入肖像——
+            # 画面没有完整刺客，参考图会诱导图片模型照肖像画出完整刺客。
+            if frame_desc is not None and ident in _THREAT_IDS \
+                    and _threat_visible_in(frame_desc, characters) is not True:
                 continue
             views = reg.get(ident)
             if not isinstance(views, dict):
@@ -1566,6 +1622,90 @@ def _char_aliases(char_id: str, characters: list | None = None) -> list[str]:
     return out
 
 
+# 威胁源标识（_char_aliases 只对这三个展开通称别名；identifier 通常为"刺客"）
+_THREAT_IDS = ("刺客", "杀手", "黑衣人")
+
+
+def _is_threat_weapon_prop(pid: str) -> bool:
+    """道具名是否为威胁源武器（刺客/杀手/黑衣人的刀/匕首/剑/刃/暗器/锤/斧/钩）.
+
+    08-16 hook ff「刀悬浮」根因：刺客匕首这种威胁源武器在帧描述里只露刀尖
+    （"一截刀尖微露水面"），通用位置词"在水面"太模糊，配合"正对杨旭方向"
+    图片模型把整把刀抬到船与水之间。识别为威胁武器后单独改写位置措辞。
+    """
+    if not pid:
+        return False
+    return any(pid.startswith(t) for t in _THREAT_IDS) and any(
+        c in pid for c in ("刀", "匕", "剑", "刃", "暗器", "锤", "斧", "钩"))
+
+# 威胁源「可见实体」特征（08-16 hook ff 刺客回头盯镜头根因修复）：
+# 威胁源常以**非实体**方式出现在帧描述里——水下黑影轮廓 / 一截刀尖微露水面 /
+# 已没入水中。此时画面里没有完整可见的刺客，若仍按「出镜角色」把它的肖像/服装/
+# 站位/人数注入，图片模型会照肖像画出完整刺客、还回头盯镜头。
+# 判定：别名出现处 8 字前 / 18 字后窗口内，至少一处伴随下列可见特征（身体部位/
+# 姿态/持械/目光/贴靠实体表面）→ 可见；全部只落在「黑影/轮廓/刀尖/水下/没入」
+# 等非实体语境 → 不可见。刻意不含 坐/站/跪/船头/船尾 等通用词——威胁源水下时
+# 邻句角色的这些词会误伤（如「…潜伏水下，听香跪坐船头」会把刺客判成可见）。
+_THREAT_VISIBLE_HINTS = (
+    # 形态/身体部位
+    "头肩", "半身", "全身", "身影", "蒙面", "面孔", "湿透", "身形",
+    # 姿态（蹲踞/探出/露出；坐站跪是邻句高频通用词，不进提示词）
+    "蹲", "踞", "探出", "露头", "露出", "浮出", "冒出",
+    # 动作（破水而出/窜出/攻击/持械）
+    "破水", "窜出", "冲出", "跃出", "腾空", "刺向", "刺入", "下刺",
+    "劈", "砍", "挥", "扑", "抓", "拔", "抽", "攥", "举", "握", "持", "执",
+    # 目光/五官
+    "目光", "盯", "瞪", "斜", "望", "看",
+    # 贴靠实体表面（非水下）
+    "船舷", "船帮", "船头", "船尾", "岸边", "堤",
+)
+
+
+def _threat_visible_in(desc: str, characters: list | None = None) -> bool | None:
+    """威胁源（刺客/杀手/黑衣人）是否在 desc 中作为「可见实体」出现.
+
+    出镜判定对威胁源加可见性门控：仅当威胁源别名出现在 desc 中且至少一处伴随
+    可见实体特征才返回 True；只以「黑影/轮廓/刀尖/水下/没入水中」等非实体方式
+    出现 → False（画面没有完整刺客，不注入参考图/服装/站位/人数）；desc 未提及
+    威胁源 → None（不适用）。
+
+    例：
+      hook ff   "…水下黑影轮廓，一截刀尖微露水面…"         → False（不可见）
+      hook lf   "神秘人已彻底没入水中，水面只剩剧烈涟漪…"   → False（已没入）
+      hook kf0  "画右水面刺客半身探出、右手举匕首…"         → True（可见）
+      shot6 ff  "神秘人潜伏于画左水下，只露头肩，目光斜望…" → True（露头肩）
+      shot7 ff  "神秘人浑身湿透踞蹲船舷，右手紧握匕首…"     → True（踞蹲船舷）
+    """
+    if not desc:
+        return None
+    # 威胁源别名集合（含合规替换称谓：神秘人/黑衣人/蒙面人/黑影/杀手）
+    aliases: list[str] = []
+    seen = set()
+    for tid in _THREAT_IDS:
+        for a in _char_aliases(tid, characters):
+            if a not in seen:
+                seen.add(a)
+                aliases.append(a)
+    occ: list[int] = []
+    for a in aliases:
+        if a not in desc:
+            continue
+        start = 0
+        while True:
+            i = desc.find(a, start)
+            if i < 0:
+                break
+            occ.append(i)
+            start = i + len(a)
+    if not occ:
+        return None
+    for i in occ:
+        window = desc[max(0, i - 8):i + 18]
+        if any(h in window for h in _THREAT_VISIBLE_HINTS):
+            return True
+    return False
+
+
 def _extract_kf_pose(text: str, char_id: str) -> str:
     """从文本中角色名附近提取姿态词（长词优先，'立'排除立刻/独立等）.
 
@@ -1643,9 +1783,19 @@ def _extract_char_layout(
         ]))
         if not scan:
             return ""
-        onstage = [c for c in characters
-                   if c.get("identifier") and any(
-                       a in scan for a in _char_aliases(c.get("identifier", ""), characters))]
+        # 08-16：威胁源帧级可见性门控——该帧描述里威胁源仅以非实体方式出现
+        # （水下黑影/刀尖/没入水中）→ 不锚定为完整出场角色，否则【角色锚定】
+        # 写出"神秘人画右水下（面向画左的杨旭）"逼图片模型画出完整刺客。
+        def _char_in_stage(c):
+            ident = c.get("identifier", "")
+            if not ident:
+                return False
+            if not any(a in scan for a in _char_aliases(ident, characters)):
+                return False
+            if ident in _THREAT_IDS and _threat_visible_in(scan, characters) is not True:
+                return False
+            return True
+        onstage = [c for c in characters if _char_in_stage(c)]
         if not onstage:
             return ""
 
@@ -1870,7 +2020,30 @@ def _extract_prop_layout(
         for i, (pid, hit_pos, hit_term) in enumerate(sorted_hits):
             pos_word = _near_pos(pid, hit_pos, hit_term)
             if pos_word:
-                parts.append(f"{pid}在{pos_word}")
+                # 08-16 hook ff「刀悬浮」根因：通用「刺客匕首在水面」+ ff_desc
+                # 「正对杨旭方向」让图片模型把整把刀抬到船与水之间（刀身悬空）。
+                # 威胁源武器在水位、命中词或上下文暗示水下/微露时，改写为「刀身
+                # 没入水下，仅刀尖微露水面」——刀身锚定水下，正对杨旭只影响刀尖
+                # 指向，不会把整把刀抬起来。「右手紧握匕首」这类完全可见的威胁
+                # 武器（pos_word=右手/左手/船舷…）不触发。
+                if (_is_threat_weapon_prop(pid)
+                        and pos_word in ("水面", "水中", "水下")
+                        and ("刀尖" in hit_term or "刃尖" in hit_term or "枪尖" in hit_term
+                             or any(w in scan[max(0, hit_pos - 4):hit_pos + len(hit_term) + 8]
+                                     for w in ("没入", "微露", "水下", "一截")))):
+                    _tip = hit_term if "尖" in hit_term else "刀尖"
+                    # 08-16 hook ff 第四次补刀：模型非确定性，positive「刀身竖直/正
+                    # 对杨旭」经常被忽略（hilt 浮出水面 / 刀与水面平行 / 刀尖乱指）。
+                    # 改 strong negative anchor：禁止 + 禁止 + 禁止 + 强正向钉死。
+                    # 用户原话「这是匕首不是大宝剑」+「必须指向杨旭」→ 显式钉死。
+                    parts.append(
+                        f"{pid}（短小匕首，不是长剑/不是大宝剑）：整把藏于水下，"
+                        f"护手/刀把/刀身完全没入水下不可见，水面外只露约指甲盖大小的"
+                        f"极小一截{_tip}且刀身与水面垂直竖立；"
+                        f"禁止匕首与水面平行、禁止匕首悬浮空中、禁止匕首横躺、"
+                        f"禁止护手/刀把/刀身露出水面；{_tip}必须正对画左杨旭胸口方向")
+                else:
+                    parts.append(f"{pid}在{pos_word}")
                 continue
             # 无独立方位：判断是否在「、」分隔清单中（相邻道具 + 逗号/顿号分隔）
             in_list = False
@@ -1913,6 +2086,13 @@ _COSTUME_WORDS = ("袍", "衫", "衣", "裳", "裙", "袄", "裰", "服", "袈",
 _HAIR_STATE_WORDS = ("披头散发", "披发", "散发", "乱发", "发髻散落", "蓬发")
 _HAIR_STATIC_PHRASES = ("青丝挽美人髻", "黑发挽美人髻", "青丝盘起", "秀发高挽",
                         "发髻高耸", "云鬓高挽", "挽发", "束发", "盘发")
+
+# 动物脸关键词（08-16 听香鹿角幻觉根因）：角色脸型描述含"鹿系脸/猫系脸/犬系脸"
+# 等"X 系脸"框架时，图片模型会把 X 延伸成动物特征（鹿→鹿角、猫→兽耳、犬→犬耳）
+# 叠加在头上——尤其与头饰（步摇/簪钗/冠）组合时。出现这些关键词必须加护栏，禁止
+# 任何动物头面特征。刻意不含"鹅蛋脸/桃花面"等无动物隐喻的脸型。
+_ANIMAL_FACE_KEYWORDS = ("鹿", "猫", "犬", "狐", "蛇", "狼", "虎", "鹰", "豹", "兽", "犄", "角")
+_NO_ANIMAL_FEATURES_GUARD = "（头面部无任何动物特征：无兽耳/无角/无犄角/无鳞/无羽毛）"
 
 
 def _inject_character_costume(desc: str, characters: list | None,
@@ -1962,6 +2142,11 @@ def _inject_character_costume(desc: str, characters: list | None,
             # 的别名修复同源（08-10 A1/A2）。
             if not ident or not any(a in scan_text for a in _char_aliases(ident, characters)):
                 continue
+            # 08-16：威胁源帧级可见性门控——该帧自己的描述（desc）里威胁源仅
+            # 以非实体方式出现（水下黑影/刀尖/没入水中）→ 不注入服装描述，
+            # 否则图片模型会照脸型描述画出完整刺客（hook ff 猫系脸/浑身湿透）。
+            if ident in _THREAT_IDS and _threat_visible_in(desc, characters) is not True:
+                continue
             static = (c.get("static_features") or "").strip()
             dynamic = (c.get("dynamic_features") or "").strip()
             if not static and not dynamic:
@@ -1990,6 +2175,11 @@ def _inject_character_costume(desc: str, characters: list | None,
                     static = f"{static}，此刻{_hair_state}"
             combined = (f"{ident}：{static}{conn}{dynamic}" if static
                         else f"{ident}{conn}{dynamic}")
+            # 08-16 听香鹿角幻觉：角色脸型含动物关键词（鹿系脸/猫系脸/犬系脸…）
+            # + 头饰（步摇/簪钗/冠）→ 模型把动物延伸成兽耳/角/犄角。追加护栏
+            # 明确禁止动物头面特征。检查 static+dynamic 任一含关键词即触发。
+            if any(k in (static + dynamic) for k in _ANIMAL_FACE_KEYWORDS):
+                combined = f"{combined}{_NO_ANIMAL_FEATURES_GUARD}"
             if combined in desc:
                 continue
             additions.append(combined)
@@ -2116,6 +2306,106 @@ def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
         return text
     except Exception:
         return desc
+
+
+# ──────────────────── Doodle 区域编辑 (Seedream 负向词替代品) ────────────────────
+# 2026-08-16 hook ff「刀悬浮/横躺」根因：Seedream 全档不支持 negative_prompt / seed
+# （见 shared/model_caps.py SEEDREAM 全档 supports_negative_prompt=False / supports_seed=False），
+# 文本 prompt 无法可靠约束「指甲盖大小/竖直/正对某人」等**精确空间约束**——模型非确定性
+# 反复画出完整匕首。官方 Seedream 4.0-4.5 提供 image-to-image + 视觉标注（doodle/bbox）
+# 作为空间控制手段：模型会优先改写红框区域，红框外严格保持原图。
+#
+# 把这条做成自动 fallback：常规出图 → 检测 prompt 含空间精确词 → 调 doodle 二修 →
+# 用 refined 覆盖 ff；doodle 失败保留原图（graceful degradation）。Per-shot 优先：
+# shot["doodle_refine"] = {"bbox_ratio": (x1,y1,x2,y2), "refined_prompt": "..."}
+# 命中即跳过 auto-detect，用 shot 提供的 bbox + 专用 prompt 覆盖通用模板。
+_SPATIAL_FALLBACK_DEFAULTS = {
+    # hook 案例：右下水面对应 1024×1792 上 (500,850)-(1020,1550)
+    # ratio = (0.488, 0.474, 0.996, 0.865)
+    "微露水面": {
+        "bbox_ratio": (0.49, 0.47, 1.0, 0.86),
+        "refined_prompt": (
+            "在红框区域: 水面上只允许出现一截指甲盖大小的极小物体顶端（高度≤1厘米），"
+            "物体主体/护手/手柄/刀身等必须完全没入水下不可见，"
+            "禁止物体与水面平行、禁止物体悬浮空中、禁止物体横躺。"
+            "红框外: 完全保持与原图一致，人物/船/夜色/荷叶等一切不变。"
+        ),
+    },
+    "悬浮空中": {
+        "bbox_ratio": (0.30, 0.05, 0.95, 0.60),
+        "refined_prompt": (
+            "在红框区域: 物体必须被某只手握住或落在物体表面，禁止悬浮空中。"
+            "红框外: 完全保持与原图一致。"
+        ),
+    },
+}
+
+
+def _detect_spatial_fallback(ff_desc_full: str, shot: dict) -> dict | None:
+    """检测 prompt 是否需要 doodle 区域编辑 fallback.
+
+    Returns dict {phrase, bbox_ratio, refined_prompt} 或 None.
+    """
+    override = shot.get("doodle_refine")
+    if override:
+        return {
+            "phrase": "<override>",
+            "bbox_ratio": tuple(override["bbox_ratio"]),
+            "refined_prompt": override["refined_prompt"],
+        }
+    for phrase, cfg in _SPATIAL_FALLBACK_DEFAULTS.items():
+        if phrase in ff_desc_full:
+            return {"phrase": phrase, **cfg}
+    return None
+
+
+async def _doodle_refine_first_frame(
+    image_adapter,
+    base_image_path: str,
+    bbox_ratio: tuple[float, float, float, float],
+    refined_prompt: str,
+    output_path: str,
+    shot_index: int,
+) -> str | None:
+    """在 base_image 上画红框区域，调用 i2i 用 refined_prompt 改写该区域.
+
+    1) 读 base_image → 画 bbox 红色矩形 → 保存为 annotated
+    2) i2i 调用（单参考图 = annotated）
+    3) 写入 output_path
+
+    失败（异常/输出缺失/未生成）→ 返回 None，调用方走 graceful degradation 保留原图。
+    """
+    try:
+        from PIL import Image, ImageDraw
+        base = Path(base_image_path)
+        annotated = base.parent / f"{base.stem}_doodle.png"
+
+        img = Image.open(base_image_path).convert("RGB")
+        w, h = img.size
+        x1, y1, x2, y2 = (int(c * d) for c, d in zip(bbox_ratio, (w, h, w, h)))
+        # 画 bbox：宽线 8px 红色（Seedream 视觉标注会优先改写该区域）
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((x1, y1, x2, y2), outline="red", width=8)
+        img.save(annotated)
+
+        # i2i 调用（单参考图 = 我们的 annotated doodle；force_multi_ref=False 走单图分支）
+        img_out = await image_adapter.generate_single_image(
+            prompt=refined_prompt,
+            reference_image_paths=[str(annotated)],
+            shot_index=shot_index,
+            frame_desc="doodle_refine",
+            force_multi_ref=False,
+        )
+        if img_out is None:
+            return None
+        if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
+            img_out.data.save(output_path)
+        elif hasattr(img_out, "save"):
+            img_out.save(output_path)
+        return output_path if Path(output_path).exists() else None
+    except Exception as e:
+        _bridge_log(f"  [DOODLE] 区域编辑失败: {e}")
+        return None
 
 
 async def _gen_first_frame_async(
@@ -2292,6 +2582,23 @@ async def _gen_first_frame_async(
                     continue
                 # 末次尝试 QC critical：帧已删除，返回 None（调用方按失败处理）
                 return None
+            # v6.30：doodle 区域编辑 fallback — 精确空间约束 prompt 调不到位时
+            # 走 i2i + 红框二修；QC critical 之后才做（不在已知坏帧上浪费 i2i）。
+            # 失败保留原图（graceful degradation）。哈希键不变（基于 prompt，
+            # 不是 image），同 prompt 重跑会再调一次 doodle（2x 成本但可控）。
+            doodle_cfg = _detect_spatial_fallback(ff_desc_full, shot)
+            if doodle_cfg:
+                doodle_tmp = ff_path.parent / f"{ff_path.stem}_doodle_tmp.png"
+                refined = await _doodle_refine_first_frame(
+                    image_adapter, str(ff_path),
+                    doodle_cfg["bbox_ratio"], doodle_cfg["refined_prompt"],
+                    str(doodle_tmp), idx,
+                )
+                if refined and _validate_frame(refined):
+                    Path(refined).replace(ff_path)
+                    _bridge_log(f"  [DOODLE] shot{idx} 区域编辑成功覆盖首帧 (phrase={doodle_cfg['phrase']})")
+                else:
+                    _bridge_log(f"  [DOODLE] shot{idx} 区域编辑失败，保留原图")
             return str(ff_path)
         if attempt < max_retries:
             logger.verbose(f"  [FRAME] 首帧 shot_{idx} 第{attempt+1}次不达标，重试...")
@@ -2690,6 +2997,22 @@ async def _gen_keyframes_async(
                         continue
                     # 末次尝试 QC critical：帧已删除，不加入结果
                     break
+                # v6.30：doodle 区域编辑 fallback（关键帧同首帧——精确空间约束
+                # prompt 调不到位时走 i2i+红框二修）。失败保留原图（graceful degradation）。
+                # 哈希键不变（基于 prompt，不是 image），同 prompt 重跑会再调一次 doodle。
+                kf_doodle_cfg = _detect_spatial_fallback(kf_desc_full, shot)
+                if kf_doodle_cfg:
+                    doodle_tmp = kf_path.parent / f"{kf_path.stem}_doodle_tmp.png"
+                    refined = await _doodle_refine_first_frame(
+                        image_adapter, str(kf_path),
+                        kf_doodle_cfg["bbox_ratio"], kf_doodle_cfg["refined_prompt"],
+                        str(doodle_tmp), idx,
+                    )
+                    if refined and _validate_frame(refined):
+                        Path(refined).replace(kf_path)
+                        _kf_logger.verbose(f"  [DOODLE] shot{idx} keyframe_{i} 区域编辑成功覆盖 (phrase={kf_doodle_cfg['phrase']})")
+                    else:
+                        _kf_logger.verbose(f"  [DOODLE] shot{idx} keyframe_{i} 区域编辑失败，保留原图")
                 kf_paths.append(str(kf_path))
                 break
             if attempt < max_retries:
@@ -2744,8 +3067,12 @@ async def gen_shot_frames(
     # 修改2（2026-08-07）：动作镜头首帧不注入场景资产图——场景图被硬约束"禁止
     # 人物"，与多角色参考图矛盾时场景图占上风、人物被压制（钩子首帧几乎无人）。
     # 尾帧/关键帧仍保留场景参考图（环境锚定，NO_LAYOUT 锁下无碍）。
+    # 08-16：尾帧与关键帧拆开收集——尾帧传 lf_desc（威胁源没入水中时不注入刺客
+    # 肖像），关键帧传合并全文（动作中间态，威胁源以动作可见→保留肖像供
+    # kf0「刺客半身探出举匕首」使用）。
     frame_refs_ff = _collect_frame_refs_for_shot(shot, characters, limit=5, for_frame="首帧")
-    frame_refs_full = _collect_frame_refs_for_shot(shot, characters, limit=5, for_frame="尾帧")
+    frame_refs_lf = _collect_frame_refs_for_shot(shot, characters, limit=5, for_frame="尾帧")
+    frame_refs_kf = _collect_frame_refs_for_shot(shot, characters, limit=5, for_frame="关键帧")
 
     # ---- 帧选择解析：frames 提供时精确控制（调试），None 沿用 Mode A/B 默认 ----
     if frames is None:
@@ -2783,7 +3110,7 @@ async def gen_shot_frames(
         # 尾帧几乎复刻首帧（刺客同位置、听香位置错乱、两帧雷同），
         # 动作演变只能靠 lf_desc 文字描述驱动。首帧只通过 frame_refs_full 的
         # 场景资产图隐式锚定环境/光线，不用整图锁死尾帧构图。
-        lf_refs = frame_refs_full or None
+        lf_refs = frame_refs_lf or None
         lf_path_str = await _gen_last_frame_async(
             image_adapter, shots_dir, shot,
             force=force, script_mtime=script_mtime,
@@ -2801,7 +3128,7 @@ async def gen_shot_frames(
     if want_kf:
         # 关键帧参考图：场景/角色/道具资产（锚定一致），不用首帧整图锁死构图
         # （与尾帧同理——首帧整图会把关键帧的中间动作态锁死在起点构图上）。
-        kf_refs = frame_refs_full or None
+        kf_refs = frame_refs_kf or None
         kf_paths = await _gen_keyframes_async(
             image_adapter, shots_dir, shot,
             force=force, script_mtime=script_mtime,

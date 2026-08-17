@@ -27,7 +27,24 @@ from shared.config import CINEMATIC_STYLE
 # 2026-08 架构变更：对话已交给视频模型（模型生成说话+口型+台词），step02 不再
 # 调用 TTS。设 VIDEO_MODEL_VOICE=0 可回到旧行为（模型只生成环境音效，全部语音由
 # step03 TTS 提供）。
+# 当模型本身不支持 generate_audio（如 Seedance 1.0、MiniMax v1 Hailuo）时，强制
+# 关掉所有声音/对白指令注入（对话台词、背景音、说话人音色）——这些指令对无声模型
+# 是 prompt 噪声，模型可能尝试"画"语音相关动作（张嘴/手势）但发不出声，导致
+# 嘴型/画面异常。改为只注入纯画面描述 + 提示有「无声」状态。
 _MODEL_VOICE = os.getenv("VIDEO_MODEL_VOICE", "1").strip() == "1"
+# 运行时检测当前视频模型是否原生有声：无声模型时 _MODEL_VOICE 强制为 False，
+# 后续对话/背景音指令自动跳过。
+try:
+    from shared.model_caps import active_video_supports_audio
+    if not active_video_supports_audio():
+        _MODEL_VOICE = False
+        import logging as _logging
+        _logging.getLogger(__name__).info(
+            "[prompt_builder] 当前视频模型不支持 generate_audio，"
+            "自动关闭对话/背景音指令注入（仅注入纯画面描述）"
+        )
+except Exception:
+    pass  # 加载失败时保持 env 决定
 
 # 参考图模式: "image" = 图生视频（需帧图片），"text" = 纯文生视频（默认）
 _REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
@@ -984,6 +1001,11 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         _seed = int(_hl.md5(_seed_src.encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
     except Exception:
         _seed = None
+
+    # 把 r2v 模式实际提交的参考图列表缓存到 shot，让 submit_poll._get_shot_hash
+    # 把 r2v 参考图变化纳入哈希（换角色肖像/场景资产图应触发重生成）
+    if _REFERENCE_MODE == "r2v":
+        shot["_r2v_refs_cache"] = list(reference_paths or [])
 
     return VideoGenerationRequest(
         prompt=full_prompt,

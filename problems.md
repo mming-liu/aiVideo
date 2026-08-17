@@ -8,6 +8,50 @@
 
 ## 🔴 开放中（未解决/未收敛）
 
+### P23. 关键帧时序一致性 — 单 frame pre+post 状态混搭（08-16 新发现 → 当天 v6.31 三层修复）
+- **现象**：钩子 kf0.4 prompt 同时写「刺客半身探出（pre-state，刺客刚出水面）」+「杨旭仰卧+心口暗红洇痕（post-state，已躺下+已流血）」。图片模型渲染后：刺客方向错乱+刀位置错+红血时机错+与首帧不一致（FF 写盘坐吹箫+无血，kf 跳到躺下+有血）。
+- **根因**：LLM 在 step01 一次性堆叠所有动作结果到单 kf，**没有时间线分镜概念**。单 frame 同时表达 pre-state（刺客潜伏/刚出）+ post-state（杨旭躺下+血）= 时序荒谬。图片模型对矛盾状态无解。
+- **同类问题**：「刺客刚破水（无血）+ 听香跪坐捂嘴+杨旭瞪眼+刺客已刺入+血」这种「一帧打完 4 个时序状态」常见于 step01 重生成。
+- **解决（08-16，v6.31/v6.32）三层防御**：
+  1. **step01 prompt 新增 5 条规则**（`prompts.py`）：
+     - 规则 5.4 人物形象禁止动物特征修饰（鹿系/猫系/兽耳/犄角 → 具体面部特征）
+     - 规则 5.5 禁止精确空间约束（指甲盖/竖直/正对 → 模糊词或 doodle 兜底）
+     - 规则 13.8 威胁源非实体提及不注入完整角色（水下黑影/刀尖微露 → 不在 char_layout 标位置）
+     - 规则 13.9 武器归属逻辑不矛盾（禁止双重否定「X 不持 Y」+「武器只能 X 持」）
+     - 规则 16.1 关键帧时序一致性铁律（3 段式 kf 模板：pre-stab / stab / post-stab）
+     - 规则 16.2 关键帧是单帧静态瞬间不是动作链（同瞬间判定：所有动作必须物理上能同时发生）
+  2. **validation 检查 `_check_kf_temporal_consistency`**（`validation.py`）：warning-only，三项检查：单 frame pre/post 冲突（刺客 pre-state + 杨旭 post-state=真矛盾）/ kf[0..N] 状态单调性（血不能回退、刺客不能「没入→刚出」倒退）/ FF→kf1 连续性（盘坐→仰卧缺过渡）
+  3. **doodle 区域编辑已扩展到 KF**（v6.30，`vimax_bridge.py` `_gen_keyframes_async`）：QC 通过后检测空间精确词 → 调 `_doodle_refine_first_frame` 兜底，失败保留原图
+- **本次修复**（`script_result.json` shot 0 重写为刺客 story）：
+  - ff_desc: 杨旭盘坐吹箫+水下黑影伏笔（pre-state）
+  - kf0 (t=0.3): 刺客只露刀尖+头肩水下，杨旭仍盘坐未察觉
+  - kf1 (t=0.6): 刺客半身破水刀尖刺入心口，此刻杨旭胸口初现暗红洇痕（stab 瞬间）
+  - kf2 (t=0.85): 刺客踞蹲船舷匕首已刺入，杨旭仰倒洇痕扩大
+  - lf_desc: 刺客已没入水中，杨旭仰倒心口洇痕+听香惊恐（post-state）
+  - char_layout：杨旭在画右船头（用户建议，刺客画左下手方便）
+- **教训**：**单 frame 表达多时序状态 = 必错的视觉**。图片模型只能画单一瞬间，连续 3 帧递进才能表达完整动作。源头（prompt）必须按时序分镜；doodle 兜底修不了时序问题。
+- **记忆**：`memory/kf-temporal-consistency-2026-08.md`（v6.31 集成位置/3 段式模板/校验规则/修法）
+
+### P22. Seedream 精确空间约束无解（08-16 新发现 → 当天 doodle fallback 集成）
+- **现象**：hook 首帧。prompt 写「一截刀尖微露水面，刀身/护手/刀把必须完全没入水下」「刀身与水面垂直」「刀尖正对杨旭心口方向」等**精确空间约束**——模型反复画出完整匕首（漂浮/横躺/与水面平行/刀把露出水面）。本轮调 7+ 次仍非确定。
+- **根因**：Seedream 全档（`shared/model_caps.py` SEEDREAM_CAPS）不支持 `negative_prompt` / `seed` → 纯文本 prompt 无法可靠约束「指甲盖大小/竖直/正对某人」类像素级空间——模型非确定性是底层属性。P3「锚点系统是上限放大器，不是模型能力替代品」同一根因的具体表现。
+- **尝试方案**：
+  - ❌ 改 prompt 措辞（指甲盖/竖直/正对方向/禁止平行悬浮横躺）— 7+ 轮迭代，模型反复回到「完整匕首漂浮」状态
+  - ❌ 试 seed=42 — HTTP 200 但**非确定性**（同 seed 不同 MD5 哈希）
+  - ❌ 改 IMAGE_PROVIDER 切 bailian/qwen-image-3.0 — 留 Plan C，待 r2v 模式恢复后
+  - ✅ **官方 doodle/bbox 区域编辑**（Seedream 4.0-4.5 i2i + 视觉标注）—— 验证有效：base 上画红框 → i2i 改写该区域 → 红框外严格保持原图。模型**优先**处理红框区域。
+- **解决（08-16，v6.30）**：`shared/vimax_bridge.py` 集成 doodle 自动 fallback——
+  - 新增 `_SPATIAL_FALLBACK_DEFAULTS` (per-phrase: bbox_ratio + refined_prompt)
+  - `_detect_spatial_fallback(ff_desc_full, shot)` 检测是否需 doodle
+  - `_doodle_refine_first_frame()` 画红框 + i2i 调用
+  - `_gen_first_frame_async` 在 QC critical 之后、return 之前插入 doodle 调用
+  - 失败兜底：doodle 异常/i2i 失败 → 保留原图（graceful degradation）
+  - Per-shot 覆盖：`shot["doodle_refine"] = {bbox_ratio, refined_prompt}`
+- **当前接受方案**：doodle 红框 + prompt 写狠了「完全没入不可见」→ 模型把**整把刀抹掉**（红框区域无可见匕首），用户接受「比一开始刀到处乱飞更好」+ 整体水下黑影伏笔保留
+- **改进方向**（待办）：①prompt 调软「只留 1cm 顶端，hilt/guard/blade 没入」去掉「禁止…横躺/悬浮/平行」强否定（红框已约束空间，模型过度解读） ②新增短语到 `_SPATIAL_FALLBACK_DEFAULTS`（如「左手持物」「正对某人」） ③LF 集成（hook lf 是「刺客彻底没入水中」类）
+- **教训**：精确空间约束 = 模型能力上限的硬边界。锚点系统 + 多次调 prompt 都突破不了时，必须切换通道（doodle 区域编辑 = Seedream 的「负向词替代品」）。下一步给 LLM 加规则：检测到「指甲盖/竖直/正对」类约束自动建议切 doodle，避免手动调半天。
+- **记忆**：`memory/doodle-spatial-fallback.md`（v6.30 集成位置/触发条件/失败兜底/Per-shot 覆盖）
+
 ### P3. 图片模型不忠实渲染 ff_desc 锚点（08-14）
 - **现象**：hook 首帧/尾帧。最终 prompt 明确写了「画右水下，一团玄色黑影轮廓，一截刀尖微露水面，正对杨旭心口方向」「【首帧禁血】刺客尚未出水、未刺中任何人」，但渲染出的图是**刺客上半身出水举匕首**、匕首尾部**发蓝光**（prompt 无任何「蓝光/发光」描述，为模型幻觉）；尾帧 prompt 写「神秘人已彻底没入水中」，图却是**刺客站水面上**（违反物理）；听香未跪坐、杨旭侧躺、钓杆画成细长撑杆。
 - **根因**：`_build_final_frame_prompt` 重建证明**锚点已忠实到达图片模型**——是 wan2.7-image 对复杂单帧（3角色+威胁+道具+前一刻定格）渲染保真不足；「一截刀尖微露水面」诱导模型脑补持刀者（刀不浮空→补手→补手臂→刺客出水）；发光武器为模型常见幻觉。

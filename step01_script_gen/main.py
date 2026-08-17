@@ -430,6 +430,7 @@ _REPAIR_PRIORITY_CATEGORIES = (
     "ff_desc_anchors", "prop_spatial_anchor",
     "strong_emotion_chain", "ff_motion_timeline",
     "shot_transition", "action_overlap", "shot_size_jump",
+    "combat_action", "kf_temporal_consistency",
 )
 # 08-15（v6.36）：2 轮 → 1 轮——实测修复轮越改越糟（38→55），降为单轮 top-6
 # 聚焦最严重，杜绝「第2轮全量」把没问题的镜头也重写一遍。

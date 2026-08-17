@@ -159,26 +159,12 @@ class VolcengineImageService(ImageGenerationService):
     def generate(self, req: ImageGenerationRequest) -> ImageGenerationResult:
         self._key_scheduler.acquire(timeout=180)
 
-        # 模型感知参考图上限（能力表 cap.max_refs）+ 无损压缩
+        # 原始参考图路径（来自 request，循环内按当前模型能力重新计算压缩后的 ref_paths/ref_urls）
         from shared.ref_compose import fit_flat
         from shared.model_caps import get_seedream_cap
-        ref_limit = get_seedream_cap(VOLCENGINE_T2I_MODEL).max_refs
-        ref_paths = list(req.reference_image_paths or [])
-        if not ref_paths and req.reference_image_path:
-            ref_paths = [req.reference_image_path]
-        if len(ref_paths) > ref_limit:
-            sheet_dir = os.path.join(config.OUTPUT_DIR, "ref_sheets")
-            ref_paths = fit_flat(ref_paths, ref_limit, sheet_dir, f"shot{req.shot_index}")
-            _verbose_write(f"  [镜头{req.shot_index}] 参考图超上限 {ref_limit}，"
-                  f"无损压缩为 {len(ref_paths)} 张")
-
-        ref_urls = []
-        for ref_path in ref_paths:
-            url = _encode_image(ref_path)
-            if url:
-                ref_urls.append(url)
-            else:
-                _verbose_write(f"  [镜头{req.shot_index}] 参考图读取失败 {ref_path}")
+        original_refs = list(req.reference_image_paths or [])
+        if not original_refs and req.reference_image_path:
+            original_refs = [req.reference_image_path]
 
         model_idx = 0
         last_error = ""
@@ -186,6 +172,24 @@ class VolcengineImageService(ImageGenerationService):
         while model_idx < len(self._model_queue):
             model = self._model_queue[model_idx]
             cap = get_seedream_cap(model)
+            # 关键修复：按当前模型能力重算 ref_limit（每个模型上限可能不同：
+            # 4.0/4.5/5.0-lite 免费版=3，5.0-pro=10，4.5/4.0 付费版=14）。
+            # 旧实现在循环外用主模型上限，回退到不同能力模型后可能超限或浪费额度。
+            ref_limit = cap.max_refs
+            ref_paths = list(original_refs)
+            if len(ref_paths) > ref_limit:
+                sheet_dir = os.path.join(config.OUTPUT_DIR, "ref_sheets")
+                ref_paths = fit_flat(ref_paths, ref_limit, sheet_dir, f"shot{req.shot_index}")
+                _verbose_write(f"  [镜头{req.shot_index}] 模型 {model} 参考图上限 {ref_limit}，"
+                      f"原 {len(original_refs)} 张无损压缩为 {len(ref_paths)} 张")
+            # base64 编码也按当前模型的最终 ref_paths 重新生成
+            ref_urls = []
+            for ref_path in ref_paths:
+                url = _encode_image(ref_path)
+                if url:
+                    ref_urls.append(url)
+                else:
+                    _verbose_write(f"  [镜头{req.shot_index}] 参考图读取失败 {ref_path}")
             size_str = _resolve_size(req, model)
             payload: dict = {
                 "model": model,

@@ -201,9 +201,10 @@ class ImageGeneratorAiVideoAdapter:
         if ImageGeneratorAiVideoAdapter._MAX_CONCURRENT > 0:
             concurrency = ImageGeneratorAiVideoAdapter._MAX_CONCURRENT
         else:
-            # Bailian 只有 1 个账号，只能串行；Agnes 有 8 个 Key 可并行
+            # 单 key 供应商（bailian/volcengine/minimax）走串行；Agnes 有 8 Key 可并行
             from _image_gen.config import config as _img_config
-            concurrency = 1 if _img_config.PROVIDER == "bailian" else 8
+            _p = _img_config.PROVIDER
+            concurrency = 1 if _p in ("bailian", "volcengine", "minimax") else 8
         _sem = ImageGeneratorAiVideoAdapter._global_semaphores.get(concurrency)
 
         # 并发控制：Semaphore 保证同时只有 N 个任务在飞，超出排队等待
@@ -298,7 +299,9 @@ class VideoGeneratorAiVideoAdapter:
             concurrency = VideoGeneratorAiVideoAdapter._MAX_CONCURRENT
         else:
             from _video_gen.config import VideoGenCfg
-            concurrency = 1 if VideoGenCfg.PROVIDER == "bailian" else 8
+            _p = VideoGenCfg.PROVIDER
+            # 单 key 供应商（bailian/volcengine/minimax）走串行；Agnes 有 8 Key 可并行
+            concurrency = 1 if _p in ("bailian", "volcengine", "minimax") else 8
         _sem = VideoGeneratorAiVideoAdapter._global_semaphores.get(concurrency)
 
         # 提交阶段：Semaphore 控制并发（等有空位再提交）

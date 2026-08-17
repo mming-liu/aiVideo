@@ -154,6 +154,9 @@ def _get_shot_hash(shot: dict, script: dict) -> str:
     - narration_segment（决定 prompt 中的台词，台词变了视频该重做）
     - ff_desc + lf_desc + keyframes：图片 prompt 变了帧就变了，
       I2V 参考图变了视频也该重生成（不只是空镜）。
+    - VIDEO_PROVIDER / VIDEO_REFERENCE_MODE / VIDEO_MODEL_VOICE：供应商/参考图
+      模式/声音开关变化会导致 prompt 形态、参考图列表、声音指令都不同，必须失效缓存
+    - r2v 模式下的参考图列表路径：换角色肖像/换场景资产图都应触发重做
     不含 duration/duration_sec：实际帧数由 duration_sec 决定（step01 timecode），
     时长变化不应触发重新生成视频。"""
     def _normalize(text: str) -> str:
@@ -166,6 +169,12 @@ def _get_shot_hash(shot: dict, script: dict) -> str:
     from style_prefix import STYLE_PREFIX, NEGATIVE_PROMPT
 
     key_parts = [
+        # 供应商/模式/声音开关：这些维度变化都应触发缓存失效
+        f"provider={os.getenv('VIDEO_PROVIDER', '')}",
+        f"ref_mode={os.getenv('VIDEO_REFERENCE_MODE', '')}",
+        f"model_voice={os.getenv('VIDEO_MODEL_VOICE', '1')}",
+        # r2v 模式：参考图列表路径纳入哈希（换图/换注册表都触发重做）
+        f"r2v_refs={','.join(shot.get('_r2v_refs_cache', []) or [])}",
         STYLE_PREFIX,
         NEGATIVE_PROMPT,
         _build_prompt(shot, script),

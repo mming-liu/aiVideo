@@ -2195,6 +2195,8 @@ def validate_hook(hook: dict, characters: list | None = None) -> None:
         _check_keyframes_quality([], hook)
         _check_multi_person_staging([], hook, chars)
         _check_ff_desc_anchors([], hook, chars)
+        # v6.31 新增：钩子 kf 时序一致性（与主分镜同校验，但钩子单独跑）
+        _check_kf_temporal_consistency([], hook)
     except Exception as e:
         print(f"[CHECK] 钩子校验异常（不阻断）: {e}")
 
@@ -3644,6 +3646,9 @@ def _run_prompt_checklist(script: dict) -> dict:
     # 2026-08 适配多模型：prompt 长度预算（防 provider 按模型上限静默截断内容）
     results["prompt_length_budget"] = _check_prompt_length_budget(shots, script.get("hook"))
 
+    # v6.31 新增：关键帧时序一致性检查（钩子 kf 修复：pre-state+post-state 冲突）
+    results["kf_temporal_consistency"] = _check_kf_temporal_consistency(shots, script.get("hook"))
+
     # 综合判定：任一硬性检查失败则整体不通过
     # v6.5: 增加 script_novel_alignment 到硬性检查
     # v6.7: 增加 ff_lf_completeness 到硬性检查（lf_desc 为空会导致静态视频）
@@ -3689,6 +3694,7 @@ _REGEN_FEEDBACK_LABELS = {
     "threat_gaze_coupling": "威胁源-视线耦合",
     "prop_spatial_anchor": "道具空间方位",
     "keyframes_quality": "关键帧质量",
+    "kf_temporal_consistency": "kf时序一致性",
     "opening_hook": "开篇冲突",
     "punch_density": "爆点密度",
     "dialogue_length": "对白长度",
@@ -4011,6 +4017,53 @@ def post_fix_shot_prompts(script: dict) -> dict:
                                      role_scan_text=_role_scan)
                 if _anchor:
                     _kf["desc"] = f"{_kd}。{_anchor}"
+
+        # 08-17（P18 闭环）：kf 坐→仰卧跳变自动改写过渡态
+        # 原逻辑：FF 杨旭「盘坐/坐/端坐」+ kf[0] t<1「仰卧/躺/仰倒」= 跳变
+        # 只输出 WARN 等 LLM 修，跨轮残留。改为确定性改写：kf[0] 改成过渡态
+        # 「身体后倾、即将倒地」类描述 + 标记「（过渡态）」，step02a/vimax_bridge
+        # 锚定能直接用。幂等：「（过渡态）」已在则跳过。
+        _ff_pose_m = _extract_state_markers(shot.get("ff_desc", "") or "")
+        _ff_yangxu = _ff_pose_m.get("poses", {}).get("杨旭", "")
+        if _ff_yangxu in ("盘坐", "盘膝", "端坐", "坐"):
+            for _kf in _kfs:
+                if not isinstance(_kf, dict):
+                    continue
+                try:
+                    _tr = float(_kf.get("time_ratio", 0))
+                except (TypeError, ValueError):
+                    continue
+                if not (0 < _tr < 1):
+                    continue
+                _kd = _kf.get("desc") or ""
+                if "（过渡态）" in _kd or "过渡态）" in _kd:
+                    continue
+                _kf_m = _extract_state_markers(_kd)
+                _kf_yangxu = _kf_m.get("poses", {}).get("杨旭", "")
+                if _kf_yangxu in ("仰卧", "躺", "仰倒", "倒", "已躺下"):
+                    # 把 kf[0] 改写为过渡态：去掉「仰卧/躺」，改为「身体后倾、即将倒地」
+                    _new_kd = re.sub(
+                        r"杨旭[^，。！？；、]*?(仰卧|躺下|仰倒|倒下)",
+                        "杨旭身体后倾、即将倒地",
+                        _kd,
+                    )
+                    if _new_kd != _kd:
+                        _kf["desc"] = f"{_new_kd}（过渡态）"
+                        # 仅改第一个命中（kf[0]），后续 kf 仍按自然推进
+                        break
+
+        # 08-17（P18 闭环）：打斗镜 motion_desc 自动补打击反馈元素
+        # 原逻辑：combat_action WARN 等 LLM 修，跨轮残留。改为确定性补强：
+        # 检测到打斗镜头（按 _COMBAT_KEYWORDS），motion_desc 末尾追加打击反馈词，
+        # 让 AI 视频模型有「打到了」的具体画面（不靠 LLM 自觉）。幂等：
+        # 已含「火星四溅/衣袂翻飞/冲击波」任一则跳过。
+        _motion_now = shot.get("motion_desc", "") or ""
+        _is_combat = any(kw in _motion_now for kw in _COMBAT_KEYWORDS) or \
+            any(kw in (shot.get("ff_desc", "") or "") for kw in _COMBAT_KEYWORDS)
+        if _is_combat:
+            _hit_fx = ("火星四溅", "衣袂翻飞", "冲击波", "动态模糊", "碎屑飞溅", "水花飞溅")
+            if not any(w in _motion_now for w in _hit_fx):
+                shot["motion_desc"] = f"{_motion_now.rstrip('。')}，火星四溅、衣袂翻飞"
 
     # hook 也需要光位量化 + 情绪可视化修复（光位先，让情绪词先驱动光位选择）
     hook = script.get("hook")
@@ -5179,6 +5232,242 @@ def _check_keyframes_quality(shots: list[dict], hook: dict = None,
         )
     for w in warnings:
         print(f"[CHECK] keyframes质量: [WARN] {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+# ========================================================================
+# v6.31 新增：关键帧时序一致性检查（08-16 钩子 kf 修复）
+#
+# 背景：钩子 kf0.4 prompt 同时写「刺客半身探出（刚出水面）」+「杨旭仰卧+心口
+# 暗红洇痕（已躺下+已流血）」——pre-state 与 post-state 混在同一 frame，
+# 渲染后图片模型左右为难（刺客方向错/刀位置错/红血时机错/与 FF 不一致）。
+#
+# 检查项：
+# 1. **状态单调性**（kf[0]→kf[1]→kf[2]）：每个出镜角色的关键状态
+#    （血/出水/仰卧）只能单调递进，不能回退（如 kf0 有血、kf1 又没血）。
+# 2. **单 frame 时序一致性**：单 kf 内不能同时含 pre-state 与 post-state
+#    （「刚出水面」+「已躺下有血」是典型冲突——刺客刚出来、杨旭就已经躺下
+#    有血，意味着刺杀瞬间过去 + 刺客又出来一次，时序荒谬）。
+# 3. **FF→kf0→LF 状态连续性**：FF 杨旭盘坐 + kf0 杨旭躺下 + LF 杨旭躺下
+#    缺过渡——kf0 必须是「仍坐/未察觉」或「刚察觉」，不能跳到「已躺下」。
+#
+# 状态词表（关键词匹配）：
+#   - 血相关：暗红/洇痕/血/红污/血染/红点/血迹/红痕
+#   - 刺客状态：刚出水面/半身探出/破水/出水/没入水中/已没入/倒纵入水
+#   - 杨旭姿态：盘坐/坐/仰卧/躺/倒/仰倒
+#   - 听香状态：惊叫/尖叫/捂嘴/张嘴欲呼/披头散发
+# ========================================================================
+_BLOOD_WORDS = ("暗红", "洇痕", "血污", "血染", "血痕", "血迹", "红痕", "红点", "红污", "流血", "血")
+_THREAT_WATER_WORDS = ("刚出水面", "半身探出", "破水而出", "窜出", "浮出", "半身破水",
+                       "没入水中", "已没入", "已彻底没入", "倒纵入水", "潜回水中", "潜伏")
+_SUBJECT_POSE_WORDS = {
+    "杨旭": ("盘坐", "盘膝", "端坐", "坐", "跪坐", "半躺", "倚靠", "仰卧", "躺", "仰倒", "倒", "已躺下"),
+    "听香": ("撑伞", "立", "站", "跪坐", "跪", "捂嘴", "惊叫", "尖叫", "披头散发"),
+}
+
+
+def _extract_state_markers(text: str) -> dict:
+    """从 kf/ff/lf desc 文本里提取状态标记."""
+    markers = {"has_blood": False, "threat_water_state": None, "poses": {}}
+    if not text:
+        return markers
+    for w in _BLOOD_WORDS:
+        if w in text:
+            markers["has_blood"] = True
+            break
+    for w in _THREAT_WATER_WORDS:
+        if w in text:
+            markers["threat_water_state"] = w
+            break
+    for char, words in _SUBJECT_POSE_WORDS.items():
+        for w in words:
+            if w in text:
+                markers["poses"][char] = w
+                break
+    return markers
+
+
+def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict:
+    """v6.31 关键帧时序一致性检查（warning-only）.
+
+    1. 单 frame pre/post 冲突（"刺客刚出水面" + "杨旭仰卧血痕"）
+    2. kf[0..N] 状态单调性（血不能回退、出水不能回退）
+    3. FF→kf[0] 状态连续性（不能跳变太大）
+    """
+    issues, warnings = [], []
+    targets = list(shots) + ([hook] if hook else [])
+
+    for s in targets:
+        label = "hook" if (hook and s is hook) else s.get("index", "?")
+        ff_text = (s.get("ff_desc") or "").strip()
+        lf_text = (s.get("lf_desc") or "").strip()
+        kfs = s.get("keyframes") or []
+
+        # 取中间帧（time_ratio 严格在 0~1 之间）
+        mid_kfs = []
+        for kf in kfs:
+            if not isinstance(kf, dict):
+                continue
+            try:
+                tr = float(kf.get("time_ratio", 0))
+            except (TypeError, ValueError):
+                continue
+            if 0 < tr < 1:
+                mid_kfs.append((tr, (kf.get("desc") or "").strip()))
+
+        # 按 time_ratio 排序
+        mid_kfs.sort(key=lambda x: x[0])
+        if not mid_kfs:
+            continue
+
+        ff_m = _extract_state_markers(ff_text)
+        kf_markers = [_extract_state_markers(d) for _, d in mid_kfs]
+        lf_m = _extract_state_markers(lf_text)
+
+        # 1. 单 frame pre/post 冲突
+        # 真矛盾 = 刺客 pre-state（刚出/刚探出）+ 杨旭 post-state（仰卧+血/洇痕）
+        # 允许的 stab 瞬间 = 刺客 pre-state + 杨旭 仍坐 + 血初现
+        for tr, desc in mid_kfs:
+            m = _extract_state_markers(desc)
+            threat_just_out = m["threat_water_state"] in (
+                "刚出水面", "半身探出", "破水而出", "窜出", "浮出", "半身破水"
+            )
+            yangxu_posture = m["poses"].get("杨旭", "")
+            # 真矛盾条件：刺客刚出 + 杨旭已躺下/仰倒 + 有血
+            yangxu_laying_down = yangxu_posture in ("仰卧", "躺", "仰倒", "倒", "已躺下")
+            if threat_just_out and yangxu_laying_down and m["has_blood"]:
+                warnings.append(
+                    f"镜头{label} t={tr:.1f} 时序冲突：刺客「{m['threat_water_state']}」"
+                    f"（pre-state）+ 杨旭已「{yangxu_posture}」+ 心口有血（post-state）"
+                    f"——刺客刚出水面，杨旭不可能已躺下有血（刺杀瞬间还没完成）。"
+                    f"建议 pre-stab kf 写「刺客刚出/杨旭仍坐/无血」；"
+                    f"stab kf 写「刺客刺入/杨旭坐或刚仰/初现血」；"
+                    f"post-stab kf 写「刺客踞蹲/杨旭已躺/洇痕扩大」。"
+                )
+
+        # 2. kf[0..N] 状态单调性
+        for i in range(1, len(kf_markers)):
+            prev, cur = kf_markers[i - 1], kf_markers[i]
+            # 血单调：上一镜有血、下一镜无血 → 回退
+            if prev["has_blood"] and not cur["has_blood"]:
+                tr_p = mid_kfs[i - 1][0]
+                tr_c = mid_kfs[i][0]
+                warnings.append(
+                    f"镜头{label} 血状态回退：t={tr_p:.1f} 有血 → t={tr_c:.1f} 无血，"
+                    f"违反时间线单调性（出血只能扩大或不变，不能消失）。"
+                )
+            # 刺客出水单调：上一镜「没入」、下一镜「刚出」 → 时序倒退
+            prev_gone = prev["threat_water_state"] in ("没入水中", "已没入", "已彻底没入", "倒纵入水", "潜回水中")
+            cur_just_out = cur["threat_water_state"] in (
+                "刚出水面", "半身探出", "破水而出", "窜出", "浮出", "半身破水"
+            )
+            if prev_gone and cur_just_out:
+                tr_p = mid_kfs[i - 1][0]
+                tr_c = mid_kfs[i][0]
+                warnings.append(
+                    f"镜头{label} 刺客状态回退：t={tr_p:.1f} 已没入 → t={tr_c:.1f} 刚出水面，"
+                    f"违反时间线单调性（刺客已没入不应再出水）。"
+                )
+
+        # 3. FF→kf[0] 状态连续性：FF 杨旭盘坐 + kf[0] 杨旭直接仰卧 = 跳变
+        if ff_m["poses"].get("杨旭") in ("盘坐", "盘膝", "端坐", "坐"):
+            kf0_m = kf_markers[0]
+            kf0_pose = kf0_m["poses"].get("杨旭")
+            if kf0_pose in ("仰卧", "躺", "仰倒", "倒", "已躺下"):
+                tr0 = mid_kfs[0][0]
+                warnings.append(
+                    f"镜头{label} FF→kf[0] 杨旭状态跳变：FF「{ff_m['poses']['杨旭']}」"
+                    f"→ kf[0] t={tr0:.1f}「{kf0_pose}」缺过渡（盘坐→仰卧应至少 1 镜过渡："
+                    f"「仍坐/察觉」或「被刺瞬间往后倒」）。"
+                )
+            # FF 无血 + kf[0] 有血 = 跳变（除非 kf[0] 写「刚被刺」明示时序）
+            if not ff_m["has_blood"] and kf0_m["has_blood"]:
+                tr0 = mid_kfs[0][0]
+                kf0_text = mid_kfs[0][1]
+                # 允许 kf[0] 写「刚被刺/刺入瞬间」明示时序
+                if not any(w in kf0_text for w in ("刚被刺", "刺入瞬间", "此刻", "正对", "刺入")):
+                    warnings.append(
+                        f"镜头{label} FF 无血 → kf[0] t={tr0:.1f} 突然有血，缺过渡。"
+                        f"建议 kf[0] 写「刺客刚破水（无血）」，kf[1] 写「刺入瞬间（初现血）」。"
+                    )
+
+        # 4. v6.32 镜内时序链：kf[last] → LF 倒退
+        #    血从有回到无 / 刺客从有回到潜伏 / 杨旭从躺回坐 = 时序倒退
+        if mid_kfs:
+            last_tr, last_text = mid_kfs[-1]
+            last_m = kf_markers[-1]
+            # 血倒退：kf 末尾有血 + LF 无血
+            if last_m["has_blood"] and not lf_m["has_blood"]:
+                warnings.append(
+                    f"镜头{label} 血状态回退：kf 末尾 t={last_tr:.1f} 有血 → LF 无血，"
+                    f"违反致命伤持续规则（一旦出血 LF 必须保持）。"
+                    f"建议 LF 重写为「杨旭仰倒+心口洇痕+刺客已没入水中」。"
+                )
+            # 刺客从有回到潜伏：kf 末尾刺客已出水/刺入 + LF 刺客「潜伏」「水下」无具体动作
+            kf_threat_visible = last_m["threat_water_state"] in (
+                "刚出水面", "半身探出", "破水而出", "窜出", "浮出", "半身破水"
+            )
+            lf_threat_gone = lf_m["threat_water_state"] in (
+                "没入水中", "已没入", "已彻底没入", "倒纵入水", "潜回水中"
+            )
+            lf_threat_latent = lf_m["threat_water_state"] is None and any(
+                w in lf_text for w in ("潜伏", "黑影", "潜伏水下", "暗影")
+            )
+            # kf 刺客已出水 → LF 刺客完全消失/潜伏（既不出水也不入水=凭空消失）
+            if kf_threat_visible and lf_threat_latent:
+                warnings.append(
+                    f"镜头{label} 刺客状态跳变：kf 末尾 t={last_tr:.1f} 刺客已出水/破水 → LF 刺客「潜伏/黑影」凭空消失（中间缺「倒纵入水/没入」过渡）。"
+                    f"建议 LF 写「刺客已没入水中/倒纵入水」明示消失方式。"
+                )
+            # 杨旭从躺回坐：kf 末尾杨旭躺下 + LF 杨旭坐起
+            kf_yangxu_laying = last_m["poses"].get("杨旭") in ("仰卧", "躺", "仰倒", "倒", "已躺下")
+            lf_yangxu_sitting = lf_m["poses"].get("杨旭") in ("盘坐", "盘膝", "端坐", "坐", "跪坐", "撑伞")
+            if kf_yangxu_laying and lf_yangxu_sitting:
+                warnings.append(
+                    f"镜头{label} 杨旭姿态回退：kf 末尾 t={last_tr:.1f} 杨旭「{last_m['poses']['杨旭']}」"
+                    f"→ LF 杨旭「{lf_m['poses']['杨旭']}」，违反致命伤持续规则（一旦倒下 LF 必须保持）。"
+                    f"建议 LF 写「杨旭仰倒船头/躺于船板」明示终态。"
+                )
+
+        # 5. v6.32 角色出现/消失时序合理性
+        #    FF + KFs + LF 必须含连贯的角色链——刺客不能凭空出现/消失
+        if mid_kfs:
+            ff_has_threat = any(w in ff_text for w in ("刺客", "神秘人", "黑衣人", "杀手", "蒙面人"))
+            lf_has_threat = any(w in lf_text for w in ("刺客", "神秘人", "黑衣人", "杀手", "蒙面人"))
+            kfs_have_threat = any(
+                any(w in d for w in ("刺客", "神秘人", "黑衣人", "杀手", "蒙面人"))
+                for _, d in mid_kfs
+            )
+            # 合理链：
+            #   FF ✓ KFs ✓ LF ✓  → 刺客全程在场（合理）
+            #   FF ✓ KFs ✓ LF ✗  → 刺客动作链收尾（合理）
+            #   FF ✗ KFs ✓ LF ✓  → 刺客入场（合理）
+            #   FF ✗ KFs ✓ LF ✗  → 刺客入场-出场（合理）
+            # 不合理链：
+            #   FF ✓ KFs ✗ LF ✓  → 刺客在 KFs 消失又重现
+            #   FF ✓ KFs ✗ LF ✗  → 刺客在 KFs 完全消失（无收尾）
+            #   FF ✗ KFs ✗ LF ✓  → 刺客凭空出现
+            #   FF ✗ KFs ✗ LF ✗  → 刺客全程不在（KFs 中途出现又消失不合理）
+            if ff_has_threat and not kfs_have_threat and lf_has_threat:
+                warnings.append(
+                    f"镜头{label} 刺客在 KFs 段消失又重现：FF 刺客在场，"
+                    f"KFs 无刺客，LF 刺客再次在场。刺客应在 KFs 持续呈现动作链"
+                    f"（潜伏→出水→刺入→入水），不应消失再重现。"
+                )
+            elif ff_has_threat and not kfs_have_threat and not lf_has_threat:
+                warnings.append(
+                    f"镜头{label} 刺客在 KFs+LF 消失：FF「{ff_text[:30]}…」刺客在场，"
+                    f"但所有 KFs 和 LF 均无刺客。刺客动作链应在 KFs 完整呈现"
+                    f"（潜伏→出水→刺入→入水消失）。"
+                )
+            elif not ff_has_threat and not kfs_have_threat and lf_has_threat:
+                warnings.append(
+                    f"镜头{label} 刺客凭空出现：FF/KFs 均无刺客，LF 刺客突然在场（无入场动作）。"
+                    f"建议 FF 加刺客潜伏伏笔，或前置一个刺客入场镜头。"
+                )
+
+    for w in warnings:
+        print(f"[CHECK] kf时序一致性: [WARN] {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 

@@ -62,13 +62,17 @@ class SeedanceCap:
     resolutions:    支持的分辨率（升序）
     supports_reference_image:  role=reference_image（图生视频-参考图/全模态参考）
     supports_generate_audio:   generate_audio 有声视频
+    supports_reference_audio:  role=reference_audio 参考音频
+    supports_seed:             seed 参数（可复现）
     i2v_frames_ratio_adaptive: 首帧/首尾帧场景 ratio 是否强制 adaptive（Seedance 2.5）
     """
     duration_range: tuple[int, int]
     resolutions: tuple[str, ...]
     supports_reference_image: bool
     supports_generate_audio: bool
-    i2v_frames_ratio_adaptive: bool
+    supports_reference_audio: bool = False
+    supports_seed: bool = False
+    i2v_frames_ratio_adaptive: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -95,14 +99,20 @@ SEEDREAM_CAPS: list[tuple[str, SeedreamCap]] = [
 ]
 
 SEEDANCE_CAPS: list[tuple[str, SeedanceCap]] = [
-    ("seedance-2-5", SeedanceCap((4, 30), ("480p", "720p"), True, True, True)),
-    ("seedance-2-0-fast", SeedanceCap((4, 15), ("480p", "720p"), True, True, False)),
-    ("seedance-2-0-mini", SeedanceCap((4, 15), ("480p", "720p"), True, True, False)),
-    ("seedance-2-0", SeedanceCap((4, 15), ("480p", "720p", "1080p", "4k"), True, True, False)),
-    ("seedance-1-5-pro", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, True, False)),
-    ("seedance-1-5", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, False, False)),
-    ("seedance-1-0", SeedanceCap((2, 12), ("480p", "720p", "1080p"), False, False, False)),
+    # 参数顺序：(duration, resolutions, supports_reference_image, supports_generate_audio,
+    #            i2v_frames_ratio_adaptive, supports_reference_audio, supports_seed)
+    # 2.5/2.0 系列支持参考音频（按官方文档全模态参考生视频场景）
+    ("seedance-2-5", SeedanceCap((4, 30), ("480p", "720p"), True, True, True, True, True)),
+    ("seedance-2-0-fast", SeedanceCap((4, 15), ("480p", "720p"), True, True, False, True, False)),
+    ("seedance-2-0-mini", SeedanceCap((4, 15), ("480p", "720p"), True, True, False, True, False)),
+    ("seedance-2-0", SeedanceCap((4, 15), ("480p", "720p", "1080p", "4k"), True, True, False, True, False)),
+    ("seedance-1-5-pro", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, True, False, False, False)),
+    ("seedance-1-5", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, False, False, False, False)),
+    ("seedance-1-0", SeedanceCap((2, 12), ("480p", "720p", "1080p"), False, False, False, False, False)),
 ]
+
+# 未命中注册表时的兜底：按能力最弱档位，小尺寸/低版本请求不被误杀
+DEFAULT_SEEDANCE_CAP = SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, False, False, False, False)
 
 # 未命中注册表时的兜底：按能力最弱档位，小尺寸/低版本请求不被误杀
 DEFAULT_SEEDREAM_CAP = SeedreamCap(("1K", "2K", "4K"), 921_600, 16_777_216, 14)
@@ -193,12 +203,27 @@ def _model_duration_cap(model: str | None) -> int:
     return 0
 
 
-# prompt 长度上限注册表（官方 Input Requirements，2026-08 核对，子串匹配具体在前）：
+# prompt 长度上限注册表（火山方舟官方 Input Requirements，2026-08 核对）：
+#   - Seedance 2.0/2.5（火山方舟 Doubao Seedance 2.0 提示词指南）：
+#     输入长度限制 = 500 字符，tokens 限制 = 不超过 2000 tokens
+#   - Seedance 1.x 系列：官方 Input Requirements 文档未声明 prompt 字符上限
+#     （参 volcengine.com/docs/6492/2165104 输入要求表格），但建议保守到 500
 #   - 百炼 wan2.7 全系列 / happyhorse：官方 prompt ≤5000 字符
 #   - MiniMax H3（v2）：官方 ≤7000 字符
 #   - MiniMax Hailuo（v1）：官方 ≤2000 字符
-#   - Seedance / Seedream / Agnes：官方未声明上限 → 0（不截断）
+#   - Seedream / Agnes：官方未声明上限 → 0（不截断）
+# 上限按字符数（不是 bytes）；provider 端用 _clip_prompt 按字符切。
+# 注意：项目 prompt 经常超 500 字（角色站位清单+参考图+多段描述），到 Seedance
+# 服务端会报 400。在 volcengine_provider 提交时已做截断兜底（bailian/minimax 也有）。
 _PROMPT_LENGTH_CAPS: list[tuple[str, int]] = [
+    # Seedance 2.0/2.5 严格 500 字符（官方提示词指南）
+    ("seedance-2-0", 500),
+    ("seedance-2-5", 500),
+    # Seedance 1.x 未声明，按 2.x 同保守值
+    ("seedance-1-5", 500),
+    ("seedance-1-0", 500),
+    ("seedance", 500),
+    # 百炼 / MiniMax 已知
     ("wan2.7", 5000),
     ("happyhorse", 5000),
     ("minimax-h3", 7000),
