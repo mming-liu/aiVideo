@@ -116,7 +116,7 @@ DEFAULT_SEEDANCE_CAP = SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, Fa
 
 # 未命中注册表时的兜底：按能力最弱档位，小尺寸/低版本请求不被误杀
 DEFAULT_SEEDREAM_CAP = SeedreamCap(("1K", "2K", "4K"), 921_600, 16_777_216, 14)
-DEFAULT_SEEDANCE_CAP = SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, False, False)
+DEFAULT_SEEDANCE_CAP = SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, False, False, False, False)
 
 
 # ---------------------------------------------------------------------------
