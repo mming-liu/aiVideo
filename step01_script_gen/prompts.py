@@ -17,7 +17,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 import storyboard_refs
-import style_prefix
 
 
 # ========================================================================
@@ -135,7 +134,7 @@ PROMPT_TEMPLATE = """
 {audio_instruction}
 
 ### 输入小说文本
-{novel_text}{scene_object_anchors}
+{novel_text}
 """
 
 
@@ -223,7 +222,7 @@ SYSTEM_PROMPT = (
     "     - 错误：\"女子面露惊恐\" → 正确：\"青衫女子听香抬头，嘴唇微张\"\n"
     "     - 错误：\"一个黑衣人跃出\" → 正确：\"蒙面黑衣刺客从画面右侧跃出\"\n"
     "     - 规则：prompt 开头用自然语言描述角色外貌，如「剑眉星目身穿白袍的杨旭」格式，后续每次提及都要带角色名\n"
-    "     - 例：\"剑眉星目身穿白袍的杨旭白色长袍]杨旭坐在船头，刺客刺向杨旭胸口，杨旭双眼瞪大\"\n"
+    "     - 例：\"剑眉星目身穿白袍的杨旭坐在船头，刺客刺向杨旭胸口，杨旭双眼瞪大\"\n"
     "   - **Prompt 标准结构**（7步模板）：\n"
     "     1. 开头固定风格：古风真人影视剧画面，写实清晰\n"
     "     2. 环境前置：时间+场景载体（如：夜晚，荷塘水面，一艘木质小舟）\n"
@@ -340,6 +339,12 @@ SYSTEM_PROMPT = (
     "   - **【致命伤/血迹/姿态在 LF 与 kfs 一致】**：一旦 kfs 中某角色被致命伤（刺中心口/倒地/死亡），LF **必须保持**该状态——「心口洇痕」「仰倒/死亡」「听香捂嘴惊恐」不能消失（已部分在规则 13.5/13.7 覆盖，跨镜 vs 镜内补强）。\n"
     "   - **【角色出现/消失的时序合理性】**：单镜内角色的「出现」「消失」必须**符合动作链**——刺客「潜伏水下→出水→刺入→入水消失」是合理链；FF 没刺客+kfs 刺客出现+LF 刺客又凭空消失=刺客未完成任何动作。LLM 写时序前先画出**人物状态时间轴**对齐 FF/KFs/LF。\n"
     "   - **【构图单调性】**：FF/KFs/LF 的景别/机位/构图**可不同**（多机位剪辑是允许的），但**状态单调**——血/姿态/角色在场性必须单调递进。\n"
+    "16.4 **【关键帧物理时刻 = motion_desc 时间窗铁律（v6.33，08-18 钩子坑）】**：**当 motion_desc 显式分时段时（「前2秒: …」「2-4秒: …」「4-6秒: …」），kf 的物理时刻 `time_ratio × duration_sec` 必须严格落在对应时间窗内**——\n"
+    "   - 解析 motion_desc 全部时段（中文冒号分隔，每段提取起止秒数，默认时长= duration_sec）\n"
+    "   - 每个 kf 的 `time_ratio` 必须使 `t × duration_sec` 落在某时段内，**禁止把「前2秒」的 pre-state 内容写到「2-4秒」的 kf 上**\n"
+    "   - kf 个数**至少**等于时段数（每段必须有 1 帧定格）；多段动作可每段多帧\n"
+    "   - 反例（08-18 钩子实测）：motion_desc 写「前2秒：刺客破水+下刺 / 2-4秒：杨旭闷哼+推臂」，但 kf 只写 2 帧都堆在 post 段（杨旭已仰卧+血）→ 渲染出『刺客凭空消失+血凭空出现』且首尾无刺杀过程（08-16 kf 时序一致性铁律的姐妹规则，治『完全没生成 pre 帧』这一类结构性塌缩）\n"
+    "   - 写 kf 前先**列出 motion_desc 时段表**（时段序号+起止秒+关键词），按表逐段生成 1 帧定格，time_ratio = 时段中点 / duration_sec\n"
     "17. **运镜视角库**（按场景类型选用，直接嵌入 prompt；完整画面示例见下方镜头语言词库与运镜 skill）：POV=第一人称代入、鸟瞰=宏大空间、FPV=穿梭穿越、ACT=第三人称战斗、仰拍=强大压迫感、俯拍=弱小无助、平视=对话自然。\n"
     "18. **摄像机分组规则（cam_idx）**：每个镜头必须根据景别和场景分配 cam_idx，同一摄像机组的镜头景别/视角应相近：\n"
     "   - cam_idx=1（广角组）：远景/全景/中远景 → 环境氛围渲染、空间建立，宽画幅涵盖场景全貌与人物位置关系\n"
@@ -685,19 +690,17 @@ def _build_scene_object_anchors(objects_bank) -> str:
         return "无场景物体"
 
 
-def _format_list(items: list) -> str:
-    """将列表格式化为换行符分隔的字符串."""
+def _format_kv(items) -> str:
+    """将列表或字典格式化为「  - key: value」列表字符串.
+
+    - list/tuple/set → 每项一行「  - item」
+    - dict → 每行「  - key: value」
+    统一替代原先 _format_list / _format_dict / _format_movement_params 三个
+    功能高度重叠的函数。
+    """
+    if isinstance(items, dict):
+        return "\n".join(f"  - {k}: {v}" for k, v in items.items())
     return "\n".join(f"  - {item}" for item in items)
-
-
-def _format_dict(d: dict) -> str:
-    """将字典格式化为 key: value 的字符串."""
-    return "\n".join(f"  - {k}: {v}" for k, v in d.items())
-
-
-def _format_movement_params(params: dict) -> str:
-    """格式化运镜量化参数字典为换行列表."""
-    return "\n".join(f"  - {k}: {v}" for k, v in params.items())
 
 
 def _build_cinematic_vocab() -> str:
@@ -708,25 +711,25 @@ def _build_cinematic_vocab() -> str:
     改为这里显式拼接成一段，由 build_prompt 在 format 完成后再 append。
     """
     sections = [
-        ("景别", _format_list(storyboard_refs.SHOT_SIZES)),
-        ("机位角度", _format_list(storyboard_refs.CAMERA_ANGLES)),
-        ("运镜方式", _format_list(storyboard_refs.CAMERA_MOVEMENTS)),
-        ("景深/对焦", _format_list(storyboard_refs.DEPTH_OF_FIELD)),
-        ("光影氛围", _format_dict(storyboard_refs.LIGHTING_MOODS)),
-        ("色调", _format_dict(storyboard_refs.COLOR_PALETTES)),
-        ("古代服饰", _format_list(storyboard_refs.ANCIENT_COSTUMES)),
-        ("古代场景", _format_list(storyboard_refs.ANCIENT_LOCATIONS)),
-        ("摄像机分组", _format_list(storyboard_refs.CAMERA_GROUPING)),
-        ("天气", _format_dict(storyboard_refs.WEATHER_TAGS)),
-        ("粒子特效", _format_list(storyboard_refs.PARTICLE_EFFECTS)),
-        ("地面物理", _format_list(storyboard_refs.GROUND_PHYSICS)),
-        ("材质描述", _format_list(storyboard_refs.TEXTURE_DESCRIPTORS)),
-        ("光照层次", _format_list(storyboard_refs.LIGHTING_LAYERS)),
-        ("转场方式", _format_list(storyboard_refs.TRANSITIONS)),
-        ("音效提示", _format_list(storyboard_refs.AUDIO_CUES)),
-        ("运镜参数", _format_movement_params(storyboard_refs.MOVEMENT_PARAMS)),
-        ("氛围关键词", _format_dict(storyboard_refs.ATMOSPHERE_KEYWORDS)),
-        ("禁止元素", _format_list(storyboard_refs.BANNED_VISUALS)),
+        ("景别", _format_kv(storyboard_refs.SHOT_SIZES)),
+        ("机位角度", _format_kv(storyboard_refs.CAMERA_ANGLES)),
+        ("运镜方式", _format_kv(storyboard_refs.CAMERA_MOVEMENTS)),
+        ("景深/对焦", _format_kv(storyboard_refs.DEPTH_OF_FIELD)),
+        ("光影氛围", _format_kv(storyboard_refs.LIGHTING_MOODS)),
+        ("色调", _format_kv(storyboard_refs.COLOR_PALETTES)),
+        ("古代服饰", _format_kv(storyboard_refs.ANCIENT_COSTUMES)),
+        ("古代场景", _format_kv(storyboard_refs.ANCIENT_LOCATIONS)),
+        ("摄像机分组", _format_kv(storyboard_refs.CAMERA_GROUPING)),
+        ("天气", _format_kv(storyboard_refs.WEATHER_TAGS)),
+        ("粒子特效", _format_kv(storyboard_refs.PARTICLE_EFFECTS)),
+        ("地面物理", _format_kv(storyboard_refs.GROUND_PHYSICS)),
+        ("材质描述", _format_kv(storyboard_refs.TEXTURE_DESCRIPTORS)),
+        ("光照层次", _format_kv(storyboard_refs.LIGHTING_LAYERS)),
+        ("转场方式", _format_kv(storyboard_refs.TRANSITIONS)),
+        ("音效提示", _format_kv(storyboard_refs.AUDIO_CUES)),
+        ("运镜参数", _format_kv(storyboard_refs.MOVEMENT_PARAMS)),
+        ("氛围关键词", _format_kv(storyboard_refs.ATMOSPHERE_KEYWORDS)),
+        ("禁止元素", _format_kv(storyboard_refs.BANNED_VISUALS)),
     ]
     lines = ["### 镜头语言词库（从下列词汇中选择合适项，帮助画面描述更专业）"]
     for name, body in sections:
@@ -823,16 +826,31 @@ def _duration_cap_guidance() -> str:
     )
 
 
-def _load_local_skill_context() -> str:
-    """加载伴生技能作为 prompt 附加上下文（若存在）."""
+def _get_skills_loader():
+    """加载 .aiVideo/skills_loader.py 模块并返回；失败返回 None.
+
+    统一供 _load_local_skill_context 和 _load_knowledge_skills 使用，
+    避免两处重复 importlib 初始化代码。
+    """
+    loader_path = _PROJECT_ROOT / ".aiVideo" / "skills_loader.py"
+    if not loader_path.exists():
+        return None
     try:
-        loader_path = _PROJECT_ROOT / ".aiVideo" / "skills_loader.py"
-        if not loader_path.exists():
-            return ""
         import importlib.util
         spec = importlib.util.spec_from_file_location("skills_loader", str(loader_path))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+def _load_local_skill_context() -> str:
+    """加载伴生技能作为 prompt 附加上下文（若存在）."""
+    mod = _get_skills_loader()
+    if not mod:
+        return ""
+    try:
         body = mod.read_local_skill("generate-script")
         if body:
             return f"\n\n# 项目专属偏好（来自 .aiVideo/skills/generate-script-local/SKILL.md）\n{body}"
@@ -843,15 +861,10 @@ def _load_local_skill_context() -> str:
 
 def _load_knowledge_skills() -> str:
     """加载独立知识库 skill 作为 prompt 附加上下文（v6.4：转场技巧 + 材质写实化）."""
+    mod = _get_skills_loader()
+    if not mod:
+        return ""
     try:
-        loader_path = _PROJECT_ROOT / ".aiVideo" / "skills_loader.py"
-        if not loader_path.exists():
-            return ""
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("skills_loader", str(loader_path))
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-
         parts = []
 
         # Seedance 2.0 同步（v6.21）：多人场景角色一致性（三档动作层级）
@@ -1018,7 +1031,6 @@ def build_hook_prompt(novel_text: str, bank=None, objects_bank=None,
     生成时看不到主分镜文本（C4 修复的盲区），把「不得重复的台词」直接喂给它，
     从源头避免「钩子台词与主分镜镜头X重复」穿帮。
     """
-    import style_prefix
     # 注入角色锚点（使 LLM 知道原文人物称呼对应哪个角色名）
     char_anchor_str = ""
     if bank:
@@ -1060,6 +1072,10 @@ def build_hook_prompt(novel_text: str, bank=None, objects_bank=None,
     knowledge_ctx = _load_knowledge_skills()
     if knowledge_ctx:
         prompt = prompt + knowledge_ctx
+    # 视频模型时长上限引导（钩子同样受模型上限约束）
+    cap_ctx = _duration_cap_guidance()
+    if cap_ctx:
+        prompt = prompt + cap_ctx
     return prompt
 
 

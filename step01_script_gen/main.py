@@ -532,6 +532,20 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             shots_by_id["hook"] = script["hook"]
 
         _console(f"  [修复轮{_round}] {len(picked)} 镜待修（{', '.join(picked)}）...")
+        # 08-18 方案 C 准备：先统计全片各 label 的 WARN 总数（按分镜聚合之前算一次），
+        # 后面拼 parts 时每条 WARN 末尾追加"（同类全片共 N 处）"——让 LLM 改 shot_4
+        # 时知道"ff_desc_anchors 错误全片 25 处"而不是孤例 1 处，全局视图促动认真修。
+        # --mode A 时跳过（保持现状）；--mode C 时启用。
+        _label_total: dict = {}
+        if FEEDBACK_MODE == "C":
+            from collections import Counter as _label_counter
+            _label_total = _label_counter()
+            for _tid, _ws in per_shot.items():
+                for _w in _ws:
+                    if _w.startswith("["):
+                        _end = _w.find("]")
+                        if _end > 0:
+                            _label_total[_w[1:_end]] += 1
         parts = []
         # 08-15（v6.36 P18 修复）：删除「全片结构问题」前言注入。v6.36 已把开篇冲突/
         # 爆点密度/内容密度 剔除出修复类别（全局重构必引入噪音），此时 per_shot["global"]
@@ -557,21 +571,46 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             if next_s:
                 ctx_lines.append(f"后镜({next_s.get('index')}) ff_desc: {next_s.get('ff_desc', '')}")
             ctx = ("\n" + "\n".join(ctx_lines) + "\n") if ctx_lines else ""
+            # 08-18 A/C 实验：--mode C 时每条 WARN 末尾追加"（同类全片共 N 处）"
+            if FEEDBACK_MODE == "C":
+                _warn_lines = []
+                for w in warns:
+                    if w.startswith("[") and w.find("]") > 0:
+                        _lbl = w[1:w.find("]")]
+                        _total = _label_total.get(_lbl, 1)
+                        _warn_lines.append(f"  - {w}（同类全片共 {_total} 处）")
+                    else:
+                        _warn_lines.append(f"  - {w}")
+                _warns_str = "\n".join(_warn_lines)
+            else:
+                _warns_str = "\n".join(f"  - {w}" for w in warns)
             parts.append(f"### 待修镜头 {tid}\n"
                          f"当前 ff_desc: {s.get('ff_desc', '')}\n"
                          f"当前 lf_desc: {s.get('lf_desc', '')}\n"
                          f"当前 prompt: {s.get('prompt', '')}\n"
                          f"当前 color_tone: {s.get('color_tone', '')}\n"
                          f"{ctx}"
-                         f"问题:\n" + "\n".join(f"  - {w}" for w in warns))
+                         f"问题:\n{_warns_str}")
         if not parts:
             return script
+
+        # 08-18 A/C 实验：--mode C 时在 prompt 开头加"全片错误分布"段
+        if FEEDBACK_MODE == "C":
+            _global_block = (
+                "\n**全片错误分布（同类问题总数，按类别聚合）**：\n"
+                + "\n".join(f"  - [{l}] 全片共 {n} 处"
+                            for l, n in _label_total.most_common())
+                + "\n"
+            )
+        else:
+            _global_block = ""
 
         repair_prompt = (
             "\n\n# 定向修复（来自本地校验）\n"
             "以下是部分分镜的问题清单。请**只修复这些问题涉及的镜头**，"
             "输出完整修正后的分镜 JSON（保留全部镜头结构与未提及字段，"
             "不要改动没有问题的镜头，不要增删镜头）。"
+            f"{_global_block}"
             "**手术刀原则（最高优先级）：只改问题字段，其余内容逐字保留——"
             "禁止新增动作短语/情绪词/运镜词/光位词/转场词，禁止改景别/时长/台词/剧情。**"
             "修复要点：\n"
@@ -660,6 +699,44 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         script = _pfix(script)
     except Exception as _pfx:
         _logger.warn(f"[WARN] 修复后 post_fix 失败（保留原版）: {_pfx}")
+    # 08-19：C 模式默认后，修复轮 LLM 可能删掉致命伤锚定（A→C 实测 2 个镜头"
+    # 心口暗红洇痕"被删，违反规则 8 最高优先级）。修复完成后跑 hard_fix 致命伤
+    # 兜底 + kf 时段对齐，把 LLM 弄丢的确定性补回来（幂等，不伤已有正确内容）。
+    from step01_script_gen.validation import hard_fix_shot_prompts as _hfix
+    try:
+        script = _hfix(script)
+    except Exception as _hfx:
+        _logger.warn(f"[WARN] 修复后 hard_fix 兜底失败（保留原版）: {_hfx}")
+    # 08-19：hard_fix_injury_continuity 按 location 精确匹配 + victim 提取不准，
+    # 会漏补"杨旭在船上仰卧但镜头 location 写岸边"这类情况。再加一道轻量兜底：
+    # 扫所有镜头，**刺杀发生后**（build_idx 之后）的镜头里，ff_desc/lf_desc/prompt
+    # 有"杨旭仰卧/倒下/躺"但没 anchor 词 → prompt 末尾追加伤处锚。
+    # 只在修复轮后调用，范围小。用 build_idx 作分界避免把"夜宴仰卧喝酒"也补成带伤。
+    _injury_lay_words = ("仰卧", "倒下", "仰倒", "躺于", "躺倒", "倒地", "瘫倒")
+    from step01_script_gen.validation import _INJURY_ANCHOR_WORDS as _anchor_words
+    # 找 build_idx（第一个有 anchor 词的镜头 = 致命伤建立点）
+    _build_idx = None
+    for _i, _s in enumerate(script.get("shots", [])):
+        _txt = _s.get("prompt", "") + _s.get("ff_desc", "")
+        if any(w in _txt for w in _anchor_words):
+            _build_idx = _i
+            break
+    _inj_fixed = 0
+    if _build_idx is not None:
+        for _i, _s in enumerate(script.get("shots", [])):
+            if _i <= _build_idx:
+                continue  # 刺杀发生前的镜头不补（夜宴仰卧喝酒不算伤）
+            _text = _s.get("prompt", "") + _s.get("ff_desc", "") + _s.get("lf_desc", "")
+            if not any(w in _text for w in _injury_lay_words):
+                continue  # 杨旭没倒下，不用补
+            if any(w in _text for w in _anchor_words):
+                continue  # 已有伤处锚，幂等跳过
+            if "杨旭" not in _text:
+                continue  # 倒下的不是杨旭，不补
+            _s["prompt"] = (_s.get("prompt", "") or "").rstrip("。") + "。伤处白袍暗红洇痕持续可见"
+            _inj_fixed += 1
+    if _inj_fixed:
+        _logger.info(f"[REPAIR] 致命伤兜底补锚: {_inj_fixed} 镜（C 模式修复轮后丢失的伤处锚）")
     return script
 
 
@@ -735,6 +812,30 @@ def _extract_assets_and_update_script(script: dict) -> None:
 # ============================================================================
 # 6. 主流程
 # ============================================================================
+
+def _parse_mode_flag() -> str:
+    """解析 --mode A / --mode C 反馈聚合模式（08-18 A/B 实验）.
+
+    A = 现状：按分镜聚合，每镜头看到自己的 WARN（不知全片同类总数）
+    C = 增强：每条 WARN 末尾追加"（同类全片共 N 处）"+ prompt 开头加全片错误分布
+    不传默认 C（08-19 实测 C 模式 WARN -18.9% + 全局视图迁移效应 13 镜改善，优于 A）。
+    """
+    args = sys.argv[1:]
+    for i, a in enumerate(args):
+        if a in ("--mode", "-m") and i + 1 < len(args):
+            v = args[i + 1].strip().upper()
+            if v in ("A", "C"):
+                return v
+        if a.startswith("--mode="):
+            v = a.split("=", 1)[1].strip().upper()
+            if v in ("A", "C"):
+                return v
+    return "C"
+
+
+# 当前反馈聚合模式（A=现状 / C=全片错误分布+同类计数，08-18 A/B 实验）
+FEEDBACK_MODE = _parse_mode_flag()
+
 
 def main() -> None:
     """主流程：读取章节 → 生成脚本 → 生成钩子 → 验证 → 后处理 → 保存.

@@ -32,6 +32,27 @@ python step04_merge/main.py       # 阶段4: 片段 + 音频 + 字幕 → 最终
 
 每个阶段脚本都有交互式确认提示。
 
+### step01 脚本生成与硬修复层（v6.32 通用化，2026-08-17）
+- LLM 生成 → `_coerce_schema_types` → `_fill_missing_new_fields` → naration 兜底 → **`post_fix_shot_prompts`（追加式）** → **`hard_fix_shot_prompts`（确定性改写）** → 注入全局配置 → `_validate_script`
+- `post_fix_shot_prompts`：只追加不删除——声音指令/说话人入画/光位量化/抽象词剥离/远景禁五官/ff/lf normalize/kf 过渡态/combat 打击反馈
+- **`hard_fix_shot_prompts`（v6.32 新增，4 类确定性兜底，对所有小说通用）**：
+  - **致命伤持续**（`_hard_fix_injury_continuity`）：扫所有 shot 找第一个含 anchor 词的 build_idx → 同 location + 仍含被打者角色 → 缺锚则追加「伤处白袍暗红洇痕持续可见」；anchor 词扩到 16 个（心口/洇痕/暗红/中刀/中剑/腹部/血痕/刀伤…），location/角色不写死
+  - **视线方向**（`_hard_fix_gaze_direction`）：扫所有 shot+hook 的 4 字段（prompt/ff_desc/lf_desc/motion_desc），「看/盯/望+人名」无空间方位则改写为「目光紧盯人名」；幂等——已含「目光/凝望/仰望/俯视」跳过
+  - **道具空间方位**（`_hard_fix_prop_position`）：14 类常见道具（炭炉/酒壶/酒杯/钓杆/油纸伞/步摇/灯盏/灯笼/竹箫/马车/舴艋舟/刺客匕首…）出现但 8 字内无空间方位则追加「（画X/船头/甲板/发间/岸边）」
+  - **kf 时序矛盾**（`_hard_fix_kf_pre_post_conflict`）：扫所有 shot+hook 的 keyframes，pre-state（半身探出/破水/举刀/出剑/跃起）+ 角色已躺血 → 矛盾，删 pre 词保留 post，t=0.5；纯 pre t>0.33 压到 0.2；纯 post t<0.67 拉到 0.8；pre/post 关键词扩到 13+8 类（破门/跃起/出剑/扑出/倒地/坠落/被擒…），任何打斗/追逐/位移场景都适用
+- **锚点校验器 3 处 bug**（`_check_grounding`）：①省略号折叠顺序——先折 `§` 再删标点再还原 `…`（旧顺序先删 `…` → 折叠失效）；②原文同步折叠 `…{1,}`（LLM `…` vs 原文 `……`）；③合规自动替换容忍——narration 里 `出人命` 还原为 `杀人` 再匹配原文（不破坏 narration 字段本身）
+- **设计原则**：硬修复层**对任何古风/权谋/刺杀/追逐镜头都适用**，不写死"小舟/杨旭"，换小说（主角变林平之、场景变镖局）代码不用动；幂等是硬要求（避免反复跑累积插入「目光紧盯」+「目光紧盯」…）
+- **位置**：`step01_script_gen/validation.py` → `hard_fix_shot_prompts()` → 由 `parse_response` 在 `post_fix_shot_prompts` 之后调用
+
+### step01 kf 物理时刻 = motion_desc 时段铁律（v6.33，2026-08-18）
+- **触发问题**：08-18 钩子实测，motion_desc 明确分「前2秒：破水+下刺 / 2-4秒：闷哼+推臂」两段，但 LLM 只生成 2 个 kf **都堆在 post 段**（杨旭已仰卧+血）——**根本没生成"破水+下刺"pre 帧**。08-16 v6.31 校验只检"单 frame pre+post 矛盾"，**不检"完全没有 pre 帧"这一类结构性塌缩**——校验覆盖盲区
+- **解决（双层）**：
+  1. **校验层新增** `_check_kf_time_window_alignment`（`step01_script_gen/validation.py`，warning-only，3 类检测）：①时段覆盖率（motion_desc 分 N 段 → kfs 个数 < N 报缺段）②时段归属（每 kf 物理时刻 t×duration_sec 不在任一时段内报错窗）③时段单调性（kfs 的 time_ratio 对应时段序号不单调报倒装）。辅助 `_parse_motion_time_segments` 解析「前N秒」「M-N秒」+ 全角 `～` `－`，显式段未覆盖到 duration 末尾时**自动补 implicit 段**（last_end, duration_sec）
+  2. **源头规则 16.4**（`step01_script_gen/prompts.py`）：**「关键帧物理时刻 = motion_desc 时间窗铁律」**——kf 物理时刻 `time_ratio × duration_sec` 必须落 motion_desc 显式时段内；kf 个数 ≥ 时段数；写 kf 前先**列 motion_desc 时段表**，按表逐段生成 1 帧定格，`time_ratio = 时段中点 / duration_sec`
+- **不做的修复**：**不派生 kf desc 硬修复**——超出确定性兜底范围（需语义理解从 motion_desc 切出 kf desc），应触发 LLM regen 而非代码层硬填
+- **设计原则**：**「时序矛盾」（v6.31）和「时序塌缩」（v6.33）是两类缺陷**——前者单 frame 内部矛盾，后者整段缺失；必须分别有检查，不能合并
+- **位置**：`step01_script_gen/validation.py` → `_check_kf_time_window_alignment()` → 由 `_validate_script` 注册到 `results["kf_time_window_alignment"]`
+
 ### 章节提取调试
 ```bash
 python chapter_reader.py 锦衣夜行_77119小说.txt
