@@ -185,14 +185,14 @@ def extract_characters(novel_text: str, bank: CharacterBank) -> list[dict]:
 # ========================================================================
 # 脸型词补齐（v1.1）
 #
-# 脸型库（.aiVideo/skills/face-shapes）要求每个角色 static_features 含脸型词，
+# 脸型库（.aiVideo/skills/portrait-mastery §2）要求每个角色 static_features 含脸型词，
 # 跨章锁脸防变脸。但角色提取 prompt 的脸型规则只对新角色生效——已知角色
 # 首次注册时 static_features 已锁定（CharacterBank update_dynamic_features
 # 注释明确 static 不覆盖）。这里按角色名/特征关键词确定性映射，给已知角色
 # 的 static_features 补脸型词（若已含脸型词则跳过，幂等）。
 # ========================================================================
 
-# 角色名/特征关键词 → 脸型词（气质→脸型映射，与 face-shapes skill 一致）
+# 角色名/特征关键词 → 脸型词（气质→脸型映射，与 portrait-mastery §2 face-shapes 一致）
 _FACE_SHAPE_MAPPING = (
     # 角色名精确匹配（高优先级，按名判断角色气质）
     ("听香", "鹿系脸，圆润柔和的脸型，大而清澈的眼睛，湿润眼神"),

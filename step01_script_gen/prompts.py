@@ -28,6 +28,7 @@ PROMPT_TEMPLATE = """
 
 ### 核心任务
 **【强制要求】镜头数量完全交由你（LLM）决定**：按剧情密度自然分配镜头，覆盖全部关键剧情节点即可，**禁止为了凑镜头数堆砌无关背景、也禁止为省镜头删剧情**。打斗/追杀拆分多镜不设上限。注意：hook不计入shot数组，shot数组只放实际叙事镜头！
+**【强制要求】节奏密度参考（v6.34）**：60秒短视频最佳镜头密度 = **15-22镜**（平均每镜 3-4秒）。剧情密集段（打斗/追杀/对峙）可密集到 2-3秒/镜，叙事平缓段（对话/环境/心理）应拉长到 4-6秒/镜——**一镜内动作少就拉长时长，动作多就拆短**。镜头数超过 25 镜时须自检：是否有可合并的同场景连续动作（同地点+同主体+连续动作 → 合并为一镜拉长 duration）。镜头数少于 12 镜时须自检：是否有可拆分的多动作镜头。**合并原则：一镜只承载一个核心动作/情绪转折**，承载多个就用 clip_transition=硬切 拆分。
 **【强制要求】总时长不做上限：镜头数优先，剧情节点必须全部覆盖，时长随镜头自然增长（通常 70-110 秒）。禁止为了凑 60 秒而删剧情！**
 **【强制要求】单镜头时长限制：特写/空镜 2-4秒，中景 3-6秒，远景/动作 5-8秒，严禁超过 10秒！（镜头数越多每镜越短，14镜以上时单镜上限8秒）**
 **【强制要求】打斗流畅度（最高优先级）：打斗/追杀镜头必须用「短镜头+快切」——每镜 2-3 秒、一镜一个动作、连续打斗用 clip_transition=硬切0.2s 拼接。禁止把多个招式塞进一个长镜头，禁止打斗镜超过 4 秒。**
@@ -867,110 +868,45 @@ def _load_knowledge_skills() -> str:
     try:
         parts = []
 
-        # Seedance 2.0 同步（v6.21）：多人场景角色一致性（三档动作层级）
-        characters_body = mod.read_skill("seedance-characters")
-        if characters_body:
-            parts.append(f"\n\n# 多人场景角色一致性（来自 seedance-characters）\n{characters_body}")
+        # Seedance 镜头工艺全集（v2.0 合并：13 个 seedance-* 技能）
+        craft_body = mod.read_skill("seedance-craft")
+        if craft_body:
+            parts.append(f"\n\n# Seedance 镜头工艺全集（来自 seedance-craft）\n{craft_body}")
 
-        # Seedance 2.0 同步（v6.21）：首尾帧衔接（贯穿元素/动作不重放）
-        continuation_body = mod.read_skill("seedance-continuation")
-        if continuation_body:
-            parts.append(f"\n\n# 首尾帧衔接（来自 seedance-continuation）\n{continuation_body}")
+        # 镜头工艺全集（v1.0 合并：advanced-camera-movement + situation-camera + shot-assembling + focal-switch + occlusion-layering）
+        camera_body = mod.read_skill("camera-mastery")
+        if camera_body:
+            parts.append(f"\n\n# 镜头工艺全集（来自 camera-mastery）\n{camera_body}")
 
-        # Seedance 2.0 同步（v6.21）：导演意图一致性（一镜一意图/潜台词/一个手势）
-        directing_body = mod.read_skill("seedance-directing")
-        if directing_body:
-            parts.append(f"\n\n# 导演意图一致性（来自 seedance-directing）\n{directing_body}")
-
-        # 视频转场技巧
-        transition_body = mod.read_skill("video-transition")
+        # 过渡工艺全集（v1.0 合并：video-transition + flashback-lens + speed-rhythm）
+        transition_body = mod.read_skill("transition-mastery")
         if transition_body:
-            parts.append(f"\n\n# AI视频转场技巧（来自 video-transition）\n{transition_body}")
+            parts.append(f"\n\n# 过渡工艺全集（来自 transition-mastery）\n{transition_body}")
+
+        # 打斗工艺全集（v1.0 合并：combat-action + combat-arc + battle-layered + wuxia_combat）
+        combat_body = mod.read_skill("combat-mastery")
+        if combat_body:
+            parts.append(f"\n\n# 打斗工艺全集（来自 combat-mastery）\n{combat_body}")
+
+        # 人像工艺全集（v1.0 合并：portrait-lighting + face-shapes + face-deplastic）
+        portrait_body = mod.read_skill("portrait-mastery")
+        if portrait_body:
+            parts.append(f"\n\n# 人像工艺全集（来自 portrait-mastery）\n{portrait_body}")
+
+        # 角色表演工艺全集（v1.0 合并：restrained-emotion + voice-punctuation）
+        performance_body = mod.read_skill("character-performance")
+        if performance_body:
+            parts.append(f"\n\n# 角色表演工艺全集（来自 character-performance）\n{performance_body}")
 
         # 材质写实化
         material_body = mod.read_skill("material-realism")
         if material_body:
             parts.append(f"\n\n# AI材质写实化提示词（来自 material-realism）\n{material_body}")
 
-        # Seedance 2.5 运镜视角
-        angles_body = mod.read_skill("seedance-shot-angles")
-        if angles_body:
-            parts.append(f"\n\n# Seedance 2.5 运镜提示词（来自 seedance-shot-angles）\n{angles_body}")
-
-        # 武侠打斗运镜
-        wuxia_body = mod.read_skill("wuxia_combat")
-        if wuxia_body:
-            parts.append(f"\n\n# Seedance 2.0 武侠打斗运镜提示词（来自 wuxia_combat）\n{wuxia_body}")
-
-        # 高级运镜升级（v6.12：抖音@AI开机 运镜提示词升级教程）
-        camera_body = mod.read_skill("advanced-camera-movement")
-        if camera_body:
-            parts.append(f"\n\n# 高级运镜提示词（来自 advanced-camera-movement）\n{camera_body}")
-
-        # 8种AI人像专业光位
-        portrait_lighting_body = mod.read_skill("portrait-lighting")
-        if portrait_lighting_body:
-            parts.append(f"\n\n# 8种AI人像专业光位提示词（来自 portrait-lighting）\n{portrait_lighting_body}")
-
         # 故事圣经（世界观/人物/主线设定）
         bible_body = mod.read_skill("story-bible")
         if bible_body:
             parts.append(f"\n\n# 故事圣经（来自 story-bible）\n{bible_body}")
-
-        # 情景剧运镜速查表（18种运镜：用法/情绪效果/适用场景映射）
-        situation_body = mod.read_skill("situation-camera")
-        if situation_body:
-            parts.append(f"\n\n# 情景剧18种运镜速查表（来自 situation-camera）\n{situation_body}")
-
-        # 打斗动作提示词（四类节奏镜 + 拳掌腿法招式词库 + 打击反馈）
-        combat_body = mod.read_skill("combat-action")
-        if combat_body:
-            parts.append(f"\n\n# AI漫剧打斗动作提示词（来自 combat-action）\n{combat_body}")
-
-        # 克制感情绪戏（微表情时间链：无声哭/隐忍/失落，多拍递进）
-        restrained_body = mod.read_skill("restrained-emotion")
-        if restrained_body:
-            parts.append(f"\n\n# 克制感情绪戏（来自 restrained-emotion）\n{restrained_body}")
-
-        # 切换拍摄对象运镜（镜头从人物→物品：前推→切换→环绕）
-        focal_body = mod.read_skill("focal-switch")
-        if focal_body:
-            parts.append(f"\n\n# 切换拍摄对象运镜（来自 focal-switch）\n{focal_body}")
-
-        # 打斗四段式节奏（对峙→攻防→反转→收尾 + 闪白/空镜升华 + 蒙太奇多机位）
-        combat_arc_body = mod.read_skill("combat-arc")
-        if combat_arc_body:
-            parts.append(f"\n\n# 打斗四段式节奏框架（来自 combat-arc）\n{combat_arc_body}")
-
-        # 台词标点情绪语法（波浪号撒娇/感叹号警告/逗号停顿思考——标点驱动配音语气）
-        voice_punct_body = mod.read_skill("voice-punctuation")
-        if voice_punct_body:
-            parts.append(f"\n\n# 台词标点情绪语法（来自 voice-punctuation）\n{voice_punct_body}")
-
-        # 前后遮挡逻辑显式化（写清什么遮挡什么，防人物与围栏/门框穿模）
-        occlusion_body = mod.read_skill("occlusion-layering")
-        if occlusion_body:
-            parts.append(f"\n\n# 前后遮挡逻辑（来自 occlusion-layering）\n{occlusion_body}")
-
-        # AI人物脸型提示词（5种脸型按气质选型，写入 static_features 跨章锁脸）
-        face_shapes_body = mod.read_skill("face-shapes")
-        if face_shapes_body:
-            parts.append(f"\n\n# AI人物脸型提示词（来自 face-shapes）\n{face_shapes_body}")
-
-        # AI人物去塑料感提示词（毛孔/红润/明暗/颗粒，面部特写镜头使用）
-        deplastic_body = mod.read_skill("face-deplastic")
-        if deplastic_body:
-            parts.append(f"\n\n# AI人物去塑料感提示词（来自 face-deplastic）\n{deplastic_body}")
-
-        # 镜头组接逻辑（四大匹配剪辑 + 180°轴线越轴 + 转场逻辑 + 节奏公式）
-        assembling_body = mod.read_skill("shot-assembling")
-        if assembling_body:
-            parts.append(f"\n\n# 镜头组接逻辑（来自 shot-assembling）\n{assembling_body}")
-
-        # 万人战争分层渲染（四层画面分层 + 场景DNA + 战场资产复用）
-        battle_body = mod.read_skill("battle-layered")
-        if battle_body:
-            parts.append(f"\n\n# 万人战争分层渲染（来自 battle-layered）\n{battle_body}")
 
         # 人物出场四大方式（远景渺小/背影神秘/细节上摇/特写内心——高光登场选型）
         entrance_body = mod.read_skill("character-entrance")

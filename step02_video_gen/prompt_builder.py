@@ -857,6 +857,41 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     return prompt
 
 
+def _build_seedance_concise_prompt(shot: dict) -> str:
+    """Seedance 专用精简 prompt（2026-08-20，方案 2 上游精简）.
+
+    Seedance 硬约束中文 ≤500 字符（@图引用不计），完整 _build_prompt 注入
+    18 段共 ~1500-1600 字符。精简原则：
+    - 保留：ff/motion/lf 三段（核心画面信息）
+    - 保留：字幕禁渲染（模型默认需明确禁止，否则可能画字）
+    - r2v 模式：角色/场景/道具/色彩已通过参考图视觉化，无须文字重复
+    - Seedance 自身有风格倾向：删 "整段写实古风风格收束"（45 字）
+    - 删 "人物一致性约束"（80 字，r2v 角色肖像已锚定）
+    - 删 "场景一致性约束"（30 字，r2v 场景资产已锚定）
+    - 删 "动作连贯性"（70 字，起点/中段/终点三段已隐含）
+    - 对话/背景音：audio_cue 单行保留（10-30 字），台词/说话人/音色全部删
+      （_MODEL_VOICE 在 Seedance 1.0 上自动 False，prompt 指令无效）
+
+    volcengine provider 仍保留 _seedance_compress_prompt 作兜底——精简后
+    仍超 500 字符的极端 case 由它按权重删低权重段。
+    """
+    parts = ["画面无任何字幕、文字、水印、logo、图标；禁止在画面中叠加文字。"]
+    ff_desc = shot.get("ff_desc", "").strip()
+    lf_desc = shot.get("lf_desc", "").strip()
+    motion_desc = shot.get("motion_desc", "").strip() or shot.get("prompt", "")
+    if ff_desc:
+        parts.append(f"【视频起点】{ff_desc}")
+    if motion_desc:
+        parts.append(f"【视频中段】{motion_desc}")
+    if lf_desc:
+        parts.append(f"【视频终点】{lf_desc}")
+    # 背景音效（audio_cue 单行）——对话/音色留给视频模型自己理解
+    audio_cue = shot.get("audio_cue", "").strip()
+    if audio_cue:
+        parts.append(f"（背景音效：{audio_cue}）")
+    return "\n".join(parts)
+
+
 def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
                   characters: list | None = None,
                   continuity_ref_image: str | None = None, mode: str = "A"):
@@ -875,11 +910,23 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     cinematic_prefix = (
         get_cinematic_prefix(CINEMATIC_STYLE) if CINEMATIC_STYLE else ""
     )
-    full_prompt = sanitize_prompt(
-        ensure_prefix(prompt, STYLE_PREFIX), verbose=False
-    )
-    if cinematic_prefix:
-        full_prompt = cinematic_prefix + full_prompt
+    # Seedance 专用精简路径（2026-08-20 方案 2 上游精简）：从源头减少注入量，
+    # 让 prompt 自然 ≤500 字符，volcengine 的 _seedance_compress_prompt 沦为兜底。
+    # 其他 provider（bailian/agnes/minimax）继续用完整 _build_prompt，
+    # 不影响其 prompt 架构。检测信号用 env 实时读（line 938 同款模式），
+    # 不用 module-level VIDEO_PROVIDER——避免同进程切 provider 时状态污染。
+    _provider = (os.getenv("VIDEO_PROVIDER") or "").strip().lower()
+    if _provider == "volcengine":
+        # 跳过 cinematic_prefix + STYLE_PREFIX：Seedance 自身有风格倾向，
+        # 长风格前缀是噪声（与"drop 风格收束"对称）
+        full_prompt = _build_seedance_concise_prompt(shot)
+    else:
+        # 完整 prompt 路径（其他 provider 不动）
+        full_prompt = sanitize_prompt(
+            ensure_prefix(prompt, STYLE_PREFIX), verbose=False
+        )
+        if cinematic_prefix:
+            full_prompt = cinematic_prefix + full_prompt
 
     # _MODEL_VOICE=0 时（旧行为），负面提示词追加人声类条目（双保险）。
     # 英文 token 仅 Agnes 使用，中文模型用纯中文版（video_negative_prompt 按 VIDEO_PROVIDER 判定）
@@ -935,7 +982,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         # _build_reference_list 会在 prompt 里虚假声明「有关键帧参考图」，
         # 语义污染模型。r2v/text 模式本就不收集（用户决策 08-15：
         # keyframes 留给图生图用，其他两个模式不用）。
-        _provider = (os.getenv("VIDEO_PROVIDER") or "").strip().lower()
+        # _provider 已在函数开头赋值（精简路径路由用），此处复用
         _kf_enabled = _provider != "bailian"
         if mode == "B" and continuity_ref_image:
             image_path = continuity_ref_image

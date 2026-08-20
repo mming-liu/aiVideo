@@ -23,6 +23,16 @@ from datetime import datetime
 from shared.utils.json_repair import safe_parse_json_object, _fix_common_json_errors
 import scene_compliance
 import storyboard_refs
+from shared.paths import chapter_dir
+from shared.tee_logger import get_logger
+
+# 懒加载 logger（避免模块导入时配置未就绪）
+_logger = None
+def _get_logger():
+    global _logger
+    if _logger is None:
+        _logger = get_logger(chapter_dir() / "step01.log", console_level="INFO")
+    return _logger
 
 
 # 模块级变量：存储当前待验证的小说原文
@@ -90,20 +100,25 @@ def _validate_script(script: dict) -> None:
     actual_count = len(shots)
     from shared.config import SHOT_COUNT_MIN, SHOT_COUNT_MAX
     if actual_count < SHOT_COUNT_MIN or actual_count > SHOT_COUNT_MAX:
-        print(f"[WARN] 镜头数 {actual_count} 超出 sanity 范围 [{SHOT_COUNT_MIN}, {SHOT_COUNT_MAX}]（仅提示，不阻断）")
+        density_hint = ""
+        if actual_count > 25:
+            density_hint = f"——v6.34 节奏密度参考：60s 短视频最佳 15-22 镜，当前 {actual_count} 镜偏多，建议合并同场景连续动作镜头"
+        elif actual_count < 12:
+            density_hint = f"——v6.34 节奏密度参考：60s 短视频最佳 15-22 镜，当前 {actual_count} 镜偏少，建议拆分多动作镜头"
+        _get_logger().warn(f"镜头数 {actual_count} 超出 sanity 范围 [{SHOT_COUNT_MIN}, {SHOT_COUNT_MAX}]（仅提示，不阻断）{density_hint}")
     if reported_count is None:
         # v6.34（08-15）：缺失静默补齐——旧 WARN 无行动价值，4 轮日志纯噪音
         script["shot_count"] = actual_count
     elif not isinstance(reported_count, int):
-        print(f"[WARN] shot_count={reported_count} 非整数，已忽略")
+        _get_logger().warn(f"shot_count={reported_count} 非整数，已忽略")
     elif reported_count != actual_count:
-        print(f"[WARN] 声明 shot_count={reported_count} 但实际镜头数为 {actual_count}，已自动修正")
+        _get_logger().warn(f"声明 shot_count={reported_count} 但实际镜头数为 {actual_count}，已自动修正")
         script["shot_count"] = actual_count
 
     # --- 全局渲染参数校验 ---
     for field in ("resolution", "ratio", "fps", "render_style"):
         if field not in script:
-            print(f"[WARN] JSON 缺少全局渲染参数 {field}")
+            _get_logger().warn(f"JSON 缺少全局渲染参数 {field}")
 
     # 验证每个 shot 必有字段
     required = {"index", "narration_segment", "subtitle", "prompt"}
@@ -123,7 +138,7 @@ def _validate_script(script: dict) -> None:
     for i, shot in enumerate(shots, 1):
         for field in _REQUIRED_NEW_FIELDS:
             if field not in shot or not shot.get(field):
-                print(f"[WARN] 镜头{i}: 缺少字段 {field}")
+                _get_logger().warn(f"镜头{i}: 缺少字段 {field}")
 
     # 验证 narration == 所有 subtitle 拼接
     combined = "".join(s.get("subtitle", "") for s in shots)
@@ -131,7 +146,7 @@ def _validate_script(script: dict) -> None:
     # v6.34（08-15）：顶层 narration 已不在输出 schema，恒报假警——
     # 仅当 LLM 仍输出该字段时才比对
     if expected_narration is not None and combined != expected_narration:
-        print(f"[WARN] narration 与 subtitle 拼接不一致")
+        _get_logger().warn(f"narration 与 subtitle 拼接不一致")
 
     # 验证每个 shot 的 subtitle == narration_segment
     # v6.2: 改为 auto-fix 而非崩溃——LLM 不总严格遵守此规则
@@ -142,15 +157,15 @@ def _validate_script(script: dict) -> None:
             # 优先取 narration_segment（来自原文摘取，通常更准确）
             if narr and not sub:
                 shot["subtitle"] = narr
-                print(f"[WARN] 镜头{i}: subtitle 为空，已用 narration_segment 填充")
+                _get_logger().warn(f"镜头{i}: subtitle 为空，已用 narration_segment 填充")
             elif sub and not narr:
                 shot["narration_segment"] = sub
-                print(f"[WARN] 镜头{i}: narration_segment 为空，已用 subtitle 填充")
+                _get_logger().warn(f"镜头{i}: narration_segment 为空，已用 subtitle 填充")
             else:
                 # 两者都有但不一致：以 narration_segment 为准
-                print(f"[WARN] 镜头{i}: subtitle 与 narration_segment 不一致，以 narration_segment 为准")
-                print(f"       subtitle: {sub[:40]}...")
-                print(f"       narration: {narr[:40]}...")
+                _get_logger().warn(f"镜头{i}: subtitle 与 narration_segment 不一致，以 narration_segment 为准")
+                _get_logger().info(f"       subtitle: {sub[:40]}...")
+                _get_logger().info(f"       narration: {narr[:40]}...")
                 shot["subtitle"] = narr
 
     # --- 景别多样性校验 ---
@@ -170,9 +185,9 @@ def _validate_script(script: dict) -> None:
         ])
 
         if seg and sub and seg != sub:
-            print(f"[WARN] 镜头{i}: subtitle 与 narration_segment 不一致")
-            print(f"       subtitle={sub}")
-            print(f"       narration_segment={seg}")
+            _get_logger().warn(f"镜头{i}: subtitle 与 narration_segment 不一致")
+            _get_logger().info(f"       subtitle={sub}")
+            _get_logger().info(f"       narration_segment={seg}")
 
         if sub and search_text:
             _check_prompt_subtitle_alignment(i, sub, search_text)
@@ -180,14 +195,14 @@ def _validate_script(script: dict) -> None:
     # v5.0: scene_compliance 合规校验（宽松模式，仅 WARN）
     compliance_result = scene_compliance.validate_script(script, strict_mode=False)
     if not compliance_result["pass"]:
-        print(f"[WARN] 合规校验: {compliance_result['summary']['fail_count']} 个镜头未通过")
+        _get_logger().warn(f"合规校验: {compliance_result['summary']['fail_count']} 个镜头未通过")
         for report in compliance_result["shot_reports"]:
             if not report["pass"]:
                 for ck, cv in report["checks"].items():
                     if not cv.get("pass", True):
-                        print(f"  镜头{report['index']} {ck}: {cv.get('reason', '')}")
+                        _get_logger().info(f"  镜头{report['index']} {ck}: {cv.get('reason', '')}")
                 for w in report["warnings"]:
-                    print(f"  镜头{report['index']}: {w}")
+                    _get_logger().info(f"  镜头{report['index']}: {w}")
 
     # v6.2: 人物一致性校验（纳入常规流程，强制运行）
     _check_character_consistency(script)
@@ -199,11 +214,11 @@ def _validate_script(script: dict) -> None:
     # v6.3: 分镜提示词检查表（8项核心检查）
     checklist_result = _run_prompt_checklist(script)
     if not checklist_result["pass"]:
-        print(f"[WARN] 分镜提示词检查表: {len([r for r in checklist_result['results'].values() if not r.get('pass', True)])} 项未通过")
+        _get_logger().warn(f"分镜提示词检查表: {len([r for r in checklist_result['results'].values() if not r.get('pass', True)])} 项未通过")
 
     # v6.7: 内容问题汇总——把「幻觉/语义风险/连续空镜」等真实内容缺陷从几十条
     # WARN 中单独高亮，便于在批量生成后一眼定位需人工审核的镜头。
-    # （此前这些 [CHECK] 项与大量噪声混在一起，真实问题容易被淹没）
+    # （此前这些 项与大量噪声混在一起，真实问题容易被淹没）
     _print_content_issue_summary(script, shots)
 
 
@@ -254,12 +269,12 @@ def _print_content_issue_summary(script: dict, shots: list[dict]) -> None:
             run = 0  # 只报一次
 
     if flagged:
-        print("\n[重点] 内容问题汇总 - 以下为需人工审核的真实缺陷:")
+        _get_logger().info("\n[重点] 内容问题汇总 - 以下为需人工审核的真实缺陷:")
         for item in flagged:
-            print(f"  [CHECK] {item}")
-        print("[重点] 上述内容问题已标记，建议确认后继续下游\n")
+            _get_logger().info(f"  {item}")
+        _get_logger().info("[重点] 上述内容问题已标记，建议确认后继续下游\n")
     else:
-        print("\n[OK] 内容问题汇总: 未发现幻觉/语义风险/连续空镜缺陷")
+        _get_logger().info("\n[OK] 内容问题汇总: 未发现幻觉/语义风险/连续空镜缺陷")
 
 
 def _is_over_shoulder_run(run_shots: list[dict]) -> bool:
@@ -314,7 +329,7 @@ def _check_shot_size_diversity(shots: list[dict]) -> None:
     # 词表上限 9 种，取半数（ceil(9/2)=5）作为多样性要求，不随镜头数线性增长
     min_required = min(5, max(3, -(len(storyboard_refs.SHOT_SIZES) // -2)))
     if unique_sizes < min_required:
-        print(f"[WARN] 景别多样性不足：{unique_sizes} 种（{shot_sizes_used}），要求至少 {min_required} 种")
+        _get_logger().warn(f"景别多样性不足：{unique_sizes} 种（{shot_sizes_used}），要求至少 {min_required} 种")
     # 相邻同景别：聚合连续 run，避免一屏刷 N 行相同警告（对话/打斗连续镜同景别是正常剪辑）
     run_start = None
     run_sz = None
@@ -330,7 +345,7 @@ def _check_shot_size_diversity(shots: list[dict]) -> None:
                     # 连续中近景是锁定要求，非单调。
                     run_shots = shots[run_start - 1:run_end]
                     if not _is_over_shoulder_run(run_shots):
-                        print(f"[WARN] 镜头{run_start}~{run_end}连续{run_end - run_start + 1}镜景别相同（{run_sz}），建议插入景别变化")
+                        _get_logger().warn(f"镜头{run_start}~{run_end}连续{run_end - run_start + 1}镜景别相同（{run_sz}），建议插入景别变化")
                 run_start, run_sz = None, None
         else:
             run_start, run_sz = None, None
@@ -343,7 +358,7 @@ def _check_prompt_subtitle_alignment(shot_idx: int, subtitle: str, search_text: 
     # --- 场景/地点矛盾 ---
     scene_check = scene_compliance.check_scene_contradiction(subtitle, prompt_body)
     if not scene_check["pass"]:
-        print(f"[WARN] 镜头{shot_idx}: {scene_check['reason']}")
+        _get_logger().warn(f"镜头{shot_idx}: {scene_check['reason']}")
         return
 
     # --- 字幕汉字覆盖率 ---
@@ -367,9 +382,9 @@ def _check_subtitle_char_coverage(shot_idx: int, subtitle: str, search_text: str
 
     if char_hit_rate < 0.15 and bg_hit_rate == 0:
         missing_bg = list(bigrams_in_sub - bigrams_found)[:6]
-        print(f"[WARN] 镜头{shot_idx}: 画面描述与字幕内容严重脱节"
+        _get_logger().warn(f"镜头{shot_idx}: 画面描述与字幕内容严重脱节"
               f"（汉字命中{char_hit_rate:.0%}、二字组合全部未命中）")
-        print(f"       未命中的二字组合: {missing_bg}")
+        _get_logger().info(f"       未命中的二字组合: {missing_bg}")
 
 
 def _check_audio_instruction(shots: list[dict]) -> None:
@@ -389,7 +404,7 @@ def _check_audio_instruction(shots: list[dict]) -> None:
         # 简单判断：如果 subtitle 包含冒号或引号，视为有对话
         if ":" in subtitle or "：" in subtitle or '"' in subtitle or '"' in subtitle or '"' in subtitle:
             if "（用中文说）" not in prompt and "(用中文说)" not in prompt:
-                print(f"[WARN] 镜头{shot_idx}: 检测到对话但 Prompt 中缺少 Agnes AI 中文发音指令 '（用中文说）'")
+                _get_logger().warn(f"镜头{shot_idx}: 检测到对话但 Prompt 中缺少 Agnes AI 中文发音指令 '（用中文说）'")
 
 
 # 模块级变量 _novel_text_for_validation 已在文件顶部（line 29）定义，此处不再重复
@@ -466,10 +481,10 @@ def _check_grounding_and_warn(script: dict) -> None:
             ungrounded.append((idx, narration[:30] if narration else ""))
 
     if ungrounded:
-        print(f"[WARN] 原文锚点校验: 以下镜头的 narration 在原文中未找到对应内容:")
+        _get_logger().warn(f"原文锚点校验: 以下镜头的 narration 在原文中未找到对应内容:")
         for idx, text in ungrounded:
-            print(f"  镜头{idx}: \"{text}...\"")
-        print(f"  → 请确保所有 narration 直接引用自小说原文")
+            _get_logger().info(f"  镜头{idx}: \"{text}...\"")
+        _get_logger().info(f"  → 请确保所有 narration 直接引用自小说原文")
 
 
 def _check_character_consistency(script: dict) -> dict:
@@ -510,7 +525,7 @@ def _check_character_consistency(script: dict) -> dict:
                 )
 
     if missing_anchor:
-        print(f"[WARN] 角色锚点缺失: 镜头 {missing_anchor} 的主体是已知角色但 prompt 缺少锚点")
+        _get_logger().warn(f"角色锚点缺失: 镜头 {missing_anchor} 的主体是已知角色但 prompt 缺少锚点")
 
     # --- 2. 跨镜头特征一致性 ---
     # 从 prompt 中提取每个角色的锚点特征，检查同一角色在不同镜头描述是否矛盾
@@ -630,9 +645,9 @@ def _check_character_consistency(script: dict) -> dict:
     has_issues = len(issues) > 0 or len(warnings) > 0
     if has_issues:
         for issue in issues:
-            print(f"[CHECK] 人物一致性: {issue}")
+            _get_logger().warn(f"人物一致性: {issue}")
         for warn in warnings:
-            print(f"[CHECK] 人物一致性: [WARN] {warn}")
+            _get_logger().warn(f"人物一致性: {warn}")
 
     return {"pass": not bool(issues), "issues": issues, "warnings": warnings}
 
@@ -724,7 +739,7 @@ def _check_prompt_pollution(shots: list[dict]) -> dict:
 
     if issues:
         for issue in issues:
-            print(f"[CHECK] 提示词污染: {issue}")
+            _get_logger().warn(f"提示词污染: {issue}")
 
     return {"pass": len(issues) == 0, "issues": issues}
 
@@ -776,7 +791,7 @@ def _check_negative_prompt(shots: list[dict], characters: list | None = None) ->
 
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 逆向提示词: [WARN] {warn}")
+            _get_logger().warn(f"逆向提示词: {warn}")
 
     return {"pass": len(warnings) == 0, "warnings": warnings}
 
@@ -822,7 +837,7 @@ def _check_prop_consistency(shots: list[dict]) -> dict:
 
     if issues:
         for issue in issues:
-            print(f"[CHECK] 道具连贯性: {issue}")
+            _get_logger().warn(f"道具连贯性: {issue}")
 
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
@@ -882,10 +897,10 @@ def _check_shot_transition(shots: list[dict]) -> dict:
 
     if issues:
         for issue in issues:
-            print(f"[CHECK] 镜头衔接: {issue}")
+            _get_logger().warn(f"镜头衔接: {issue}")
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 镜头衔接: [WARN] {warn}")
+            _get_logger().warn(f"镜头衔接: {warn}")
 
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
@@ -946,7 +961,7 @@ def _check_action_overlap(shots: list[dict]) -> dict:
 
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 动作重叠: [WARN] {warn}")
+            _get_logger().warn(f"动作重叠: {warn}")
     return {"pass": True, "issues": [], "warnings": warnings}
 
 
@@ -981,7 +996,7 @@ def _check_semantic_risk(shots: list[dict]) -> dict:
 
     if issues:
         for issue in issues:
-            print(f"[CHECK] 语义风险: {issue}")
+            _get_logger().warn(f"语义风险: {issue}")
 
     return {"pass": len(issues) == 0, "issues": issues}
 
@@ -1009,7 +1024,7 @@ def _check_platform_compliance(shots: list[dict]) -> dict:
 
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 平台规则: [WARN] {warn}")
+            _get_logger().warn(f"平台规则: {warn}")
 
     return {"pass": True, "warnings": warnings}
 
@@ -1128,7 +1143,7 @@ def _check_gaze_direction(shots, hook: dict = None, characters: list | None = No
         _check_one(hook, '钩子镜头(index=0)')
 
     for w in warnings:
-        print(f'[CHECK] 视线方向: [WARN] {w}')
+        _get_logger().info(f'视线方向: {w}')
     return {'pass': True, 'issues': issues, 'warnings': warnings}
 
 
@@ -1204,7 +1219,7 @@ def _check_gaze_convergence(shots: list[dict], hook: dict = None) -> dict:
         _check_one(hook, "钩子镜头(index=0)")
 
     for w in warnings:
-        print(f"[CHECK] 视线收敛: [WARN] {w}")
+        _get_logger().warn(f"视线收敛: {w}")
     return {"pass": True, "issues": [], "warnings": warnings}
 
 
@@ -1280,10 +1295,10 @@ def _check_body_purification(shots: list[dict], hook: dict = None) -> dict:
 
     if issues:
         for issue in issues:
-            print(f"[CHECK] 正文净化: [ISSUE] {issue}")
+            _get_logger().warn(f"正文净化: [ISSUE] {issue}")
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 正文净化: [WARN] {warn}")
+            _get_logger().warn(f"正文净化: {warn}")
 
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
@@ -1313,7 +1328,7 @@ def _check_output_structure(script: dict) -> dict:
 
     # 如果 LLM 主动添加了结构化注释，给出确认
     if has_structure_marker:
-        print("[CHECK] 输出结构: 检测到结构化标记（【参考素材】【正文】【制作说明】）")
+        _get_logger().warn("输出结构: 检测到结构化标记（【参考素材】【正文】【制作说明】）")
 
     # 注意：不强制要求 JSON 输出包含这些标记，因为 JSON 本身已是结构化格式
     # 此检查仅为日志确认
@@ -1402,10 +1417,10 @@ def _check_narrative_arc_distribution(shots: list[dict], script: dict) -> dict:
 
     if issues:
         for issue in issues:
-            print(f"[CHECK] 事件轴分布: [ISSUE] {issue}")
+            _get_logger().warn(f"事件轴分布: [ISSUE] {issue}")
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 事件轴分布: [WARN] {warn}")
+            _get_logger().warn(f"事件轴分布: {warn}")
 
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
@@ -1510,10 +1525,10 @@ def _check_person_boat_position(shots: list[dict]) -> dict:
 
     if issues:
         for issue in issues:
-            print(f"[CHECK] 船只位置约束: {issue}")
+            _get_logger().warn(f"船只位置约束: {issue}")
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 船只位置约束: [WARN] {warn}")
+            _get_logger().warn(f"船只位置约束: {warn}")
 
     # 宽松模式：仅警告， 不阻断
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
@@ -1617,10 +1632,10 @@ def _check_emotion_visualization(shots: list[dict], hook: dict = None) -> dict:
 
     # 输出检查结果
     for issue in issues:
-        print(f"[CHECK] 情绪可视化: [ISSUE] {issue}")
+        _get_logger().warn(f"情绪可视化: [ISSUE] {issue}")
 
     for warn in warnings:
-        print(f"[CHECK] 情绪可视化: [WARN] {warn}")
+        _get_logger().warn(f"情绪可视化: {warn}")
 
     # 宽松模式：仅警告， 不阻断（因为 LLM 可能用其他方式表达情绪）
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
@@ -1735,10 +1750,10 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
 
     if issues:
         for issue in issues:
-            print(f"[CHECK] 首尾帧完整性: {issue}")
+            _get_logger().warn(f"首尾帧完整性: {issue}")
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 首尾帧完整性: [WARN] {warn}")
+            _get_logger().warn(f"首尾帧完整性: {warn}")
 
     # 尾帧中间态检查（v6.29：从「武器残留单洞」扩展为五类中间态，复用
     # style_prefix.detect_lf_midstate 闸门，词库单一来源——取代窄正则武器残留）。
@@ -1759,7 +1774,7 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
                 f"（规则609，normalize_lf_desc 会自动修复）。"
             )
     for w in _midstate_warns:
-        print(f"[CHECK] 尾帧中间态: [WARN] {w}")
+        _get_logger().warn(f"尾帧中间态: {w}")
 
     # 硬性检查：lf_desc 不能为空，首尾帧不能完全相同
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
@@ -1818,7 +1833,7 @@ def _check_ff_desc_length(shots: list[dict], hook: dict = None) -> dict:
                 f"钩子镜头(index=0): ff_desc {len(hff)} 字 > 160 字（规则13.6 钩子上限）"
             )
     for w in warnings:
-        print(f"[CHECK] ff描述长度: [WARN] {w}")
+        _get_logger().warn(f"ff描述长度: {w}")
     return {"pass": True, "issues": [], "warnings": warnings}
 
 
@@ -1852,7 +1867,7 @@ def _check_abstract_quantization(shots: list[dict], hook: dict = None) -> dict:
     if hook and isinstance(hook, dict):
         _check_one(hook, "钩子镜头(index=0)")
     for w in warnings:
-        print(f"[CHECK] 抽象词量化: [WARN] {w}")
+        _get_logger().warn(f"抽象词量化: {w}")
     return {"pass": True, "issues": [], "warnings": warnings}
 
 
@@ -1893,7 +1908,7 @@ def _check_character_entrance(shots: list[dict], characters: list | None = None)
             f"近景脚手细节+上摇揭示 / 特写五官眼神。"
         )
     for w in warnings:
-        print(f"[CHECK] 出场设计: [WARN] {w}")
+        _get_logger().warn(f"出场设计: {w}")
     return {"pass": True, "issues": [], "warnings": warnings}
 
 
@@ -1926,7 +1941,7 @@ def _check_color_tone_transition(shots: list[dict]) -> dict:
                 )
         prev_state, prev_idx = state, idx
     for w in warnings:
-        print(f"[CHECK] 色调过渡: [WARN] {w}")
+        _get_logger().warn(f"色调过渡: {w}")
     return {"pass": True, "issues": [], "warnings": warnings}
 
 
@@ -2127,7 +2142,7 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
 
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 首帧时序: [WARN] {warn}")
+            _get_logger().warn(f"首帧时序: {warn}")
 
     return {"pass": True, "issues": issues, "warnings": warnings}
 
@@ -2186,7 +2201,7 @@ def _check_ff_multi_action(shots: list[dict], hook: dict = None,
 
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 首帧多动作: [WARN] {warn}")
+            _get_logger().warn(f"首帧多动作: {warn}")
 
     return {"pass": True, "issues": issues, "warnings": warnings}
 
@@ -2224,7 +2239,7 @@ def validate_hook(hook: dict, characters: list | None = None) -> None:
         # v6.31 新增：钩子 kf 时序一致性（与主分镜同校验，但钩子单独跑）
         _check_kf_temporal_consistency([], hook)
     except Exception as e:
-        print(f"[CHECK] 钩子校验异常（不阻断）: {e}")
+        _get_logger().warn(f"钩子校验异常（不阻断）: {e}")
 
 
 # v6.5 新增：分镜与原文比对（防幻觉核心 - 检测编造内容）
@@ -2298,10 +2313,10 @@ def _check_script_novel_alignment(script: dict) -> dict:
 
     if issues:
         for issue in issues:
-            print(f"[CHECK] 分镜原文对齐: {issue}")
+            _get_logger().warn(f"分镜原文对齐: {issue}")
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 分镜原文对齐: [WARN] {warn}")
+            _get_logger().warn(f"分镜原文对齐: {warn}")
 
     # 宽松模式：仅警告，不阻断
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
@@ -2400,7 +2415,7 @@ def _check_content_density(shots: list[dict]) -> dict:
 
     if warnings:
         for w in warnings:
-            print(f"[CHECK] 内容密度: [WARN] {w}")
+            _get_logger().warn(f"内容密度: {w}")
 
     return {"pass": True, "issues": [], "warnings": warnings}
 
@@ -2479,10 +2494,10 @@ def _check_transition_keywords(shots: list[dict]) -> dict:
 
     if issues:
         for issue in issues:
-            print(f"[CHECK] 转场关键词: {issue}")
+            _get_logger().warn(f"转场关键词: {issue}")
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 转场关键词: [WARN] {warn}")
+            _get_logger().warn(f"转场关键词: {warn}")
 
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
@@ -2569,7 +2584,7 @@ def _check_camera_movement(shots: list[dict]) -> dict:
 
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 运镜检查: [WARN] {warn}")
+            _get_logger().warn(f"运镜检查: {warn}")
 
     return {"pass": True, "issues": [], "warnings": warnings}
 
@@ -2651,7 +2666,7 @@ def _check_camera_upgrade(shots: list[dict]) -> dict:
 
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 运镜升级: [WARN] {warn}")
+            _get_logger().warn(f"运镜升级: {warn}")
 
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
@@ -2736,7 +2751,7 @@ def _check_combat_action(shots: list[dict]) -> dict:
 
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 打斗动作: [WARN] {warn}")
+            _get_logger().warn(f"打斗动作: {warn}")
 
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
@@ -2820,7 +2835,7 @@ def _check_restrained_emotion(shots: list[dict], hook: dict = None) -> dict:
         _check_one(hook, "钩子镜头(index=0)")
 
     for w in warnings:
-        print(f"[CHECK] 克制情绪: [WARN] {w}")
+        _get_logger().warn(f"克制情绪: {w}")
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
 
@@ -2941,7 +2956,7 @@ def _check_strong_emotion_chain(shots: list[dict], hook: dict = None) -> dict:
         _check_one(hook, "钩子镜头(index=0)")
 
     for w in warnings:
-        print(f"[CHECK] 强情绪链: [WARN] {w}")
+        _get_logger().warn(f"强情绪链: {w}")
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
 
@@ -3010,7 +3025,7 @@ def _check_focal_switch(shots: list[dict], hook: dict = None) -> dict:
         _check_one(hook, "钩子镜头(index=0)")
 
     for w in warnings:
-        print(f"[CHECK] 切换拍摄对象: [WARN] {w}")
+        _get_logger().warn(f"切换拍摄对象: {w}")
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
 
@@ -3094,7 +3109,7 @@ def _check_combat_arc(shots: list[dict]) -> dict:
 
     if warnings:
         for w in warnings:
-            print(f"[CHECK] 打斗节奏: [WARN] {w}")
+            _get_logger().warn(f"打斗节奏: {w}")
     return {"pass": True, "issues": [], "warnings": warnings}
 
 
@@ -3189,7 +3204,7 @@ def _check_voice_punctuation(shots: list[dict], hook: dict = None) -> dict:
         _check_one(hook, "钩子镜头(index=0)")
 
     for w in warnings:
-        print(f"[CHECK] 台词标点: [WARN] {w}")
+        _get_logger().warn(f"台词标点: {w}")
     return {"pass": True, "issues": [], "warnings": warnings}
 
 
@@ -3252,7 +3267,7 @@ def _check_occlusion_layering(shots: list[dict]) -> dict:
 
     if warnings:
         for w in warnings:
-            print(f"[CHECK] 遮挡逻辑: [WARN] {w}")
+            _get_logger().warn(f"遮挡逻辑: {w}")
     return {"pass": True, "issues": [], "warnings": warnings}
 
 
@@ -3352,7 +3367,7 @@ def _check_lighting_position(shots: list[dict]) -> dict:
 
     if warnings:
         for warn in warnings:
-            print(f"[CHECK] 光位: [WARN] {warn}")
+            _get_logger().warn(f"光位: {warn}")
 
     return {"pass": True, "issues": [], "warnings": warnings}
 
@@ -3448,7 +3463,7 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
                 f"{label}: {len(laterals)}角色站位全在「{side}」同侧且无纵深（前中后景）——"
                 f"建议按对峙/群像蓝图对置或拉开纵深，规则51")
     for w in warnings:
-        print(f"[CHECK] 多人站位: [WARN] {w}")
+        _get_logger().warn(f"多人站位: {w}")
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
 
 
@@ -3486,7 +3501,7 @@ def _check_prompt_length_budget(shots: list[dict], hook: dict | None = None) -> 
                 f"建议精简 prompt/ff_desc/lf_desc。"
             )
     for w in warnings:
-        print(f"[CHECK] prompt长度: [WARN] {w}")
+        _get_logger().warn(f"prompt长度: {w}")
     return {"pass": True, "issues": [], "warnings": warnings}
 
 
@@ -3620,7 +3635,7 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v6.25 新增：威胁源-视线耦合（规则41，hook 调试暴露的站位-视线矛盾）
     results["threat_gaze_coupling"] = _check_threat_gaze_coupling(shots, script.get("hook"))
 
-    # v6.26 新增：抠姐短剧剧本检查（开篇冲突/爆点密度/对白长度）+ video-shotcraft（静态停留）
+    # v6.26 新增：抠姐短剧剧本检查（开篇冲突/爆点密度/对白长度）+ absorption-log·shotcraft（静态停留）
     # 全部 warning-only，不进 hard_fail_checks（与 v6.24/v6.25 一致）
     results["opening_hook"] = _check_opening_hook(shots, script.get("hook"))
     results["punch_density"] = _check_punch_density(shots, script.get("hook"))
@@ -3694,7 +3709,7 @@ def _run_prompt_checklist(script: dict) -> dict:
 # ========================================================================
 # v6.33 新增（08-12）：第二轮校验反馈——把分镜检查表告警喂给重生成 LLM
 #
-# 背景：_run_prompt_checklist 的 ~50 条 [CHECK] WARN 只 print 不返回，重生成循环
+# 背景：_run_prompt_checklist 的 ~50 条 WARN 只 print 不返回，重生成循环
 # （_regen_over_limit / gap regen）看不到内容密度/景别跳跃/致命伤等真实缺陷，
 # 重生成还是老问题（08-12 日志实测：内容密度7条/景别跳跃18条，LLM 重生成无感）。
 # 本函数把告警按类型聚合（每类 1 行 + 命中镜头数 + 首例截断），生成一段简短
@@ -3761,7 +3776,7 @@ def build_regen_feedback(script: dict, novel_text: str = "",
                          max_categories: int = 99, per_line_chars: int = 300) -> str:
     """把分镜检查表告警按类型聚合，生成给重生成 LLM 的「本地校验反馈」.
 
-    v6.33（08-12）：checklist 的 [CHECK] WARN 此前只 print 不返回，重生成 LLM
+    v6.33（08-12）：checklist 的 WARN 此前只 print 不返回，重生成 LLM
     看不到内容密度/景别跳跃/致命伤等真实缺陷 → 重生成还是老问题。本函数重跑
     _run_prompt_checklist（抑制 stdout 避免日志刷屏），把告警按类型聚合：
     每类 1 行「- 类别 N处：首例」，取告警数最多的前 max_categories 类，
@@ -3783,7 +3798,7 @@ def build_regen_feedback(script: dict, novel_text: str = "",
         import io as _io
         import contextlib as _ctx
         _buf = _io.StringIO()
-        with _ctx.redirect_stdout(_buf):  # 抑制 [CHECK] 刷屏
+        with _ctx.redirect_stdout(_buf):  # 抑制 刷屏
             results = _run_prompt_checklist(script).get("results", {})
     except Exception:
         return ""
@@ -4605,7 +4620,7 @@ def hard_fix_shot_prompts(script: dict) -> dict:
     d = _hard_fix_kf_pre_post_conflict(shots, hook)
     e = _hard_fix_kf_time_window_alignment(shots, hook)  # v6.33 派生 kf 补缺段
     if any((a, b, c, d, e)):
-        print(
+        _get_logger().info(
             f"[HARD-FIX] 致命伤 +{a} 镜 / 视线 +{b} 字段 / 道具 +{c} 镜 / "
             f"kf时序矛盾 +{d} 帧 / kf时段缺段 +{e} 帧（08-17 P18 闭环 + 08-18 P25）"
         )
@@ -4873,11 +4888,11 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
     global _novel_text_for_validation
     _novel_text_for_validation = novel_text
 
-    print(f"[INFO] 模型返回文本长度: {len(raw_text)} 字符")
+    _get_logger().info(f"模型返回文本长度: {len(raw_text)} 字符")
     try:
         script = safe_parse_json_object(raw_text)
     except (ValueError, json.JSONDecodeError) as e:
-        print(f"[WARN] safe_parse_json_object 失败: {e}")
+        _get_logger().warn(f"safe_parse_json_object 失败: {e}")
         # 兜底：去掉围栏，取 {…} 区间，然后修复中文标点
         text = re.sub(r"^```json\s*", "", raw_text.strip(), flags=re.MULTILINE)
         text = re.sub(r"```\s*$", "", text, flags=re.MULTILINE)
@@ -4893,7 +4908,7 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
         candidate = re.sub(r",\s*]", "]", candidate)
         try:
             script = json.loads(candidate)
-            print(f"[INFO] 兜底解析成功（直接 JSON 区间+尾部逗号修复）")
+            _get_logger().info(f"兜底解析成功（直接 JSON 区间+尾部逗号修复）")
         except json.JSONDecodeError as e2:
             dump_path = f"llm_response_dump_{datetime.now():%Y%m%d_%H%M%S}.txt"
             with open(dump_path, "w", encoding="utf-8") as df:
@@ -5004,7 +5019,7 @@ def _check_axis_crossing(shots: list[dict], hook: dict = None) -> dict:
                 f"豁免，或统一朝向（镜头组接规则33）。"
             )
     for w in warnings:
-        print(f"[CHECK] 轴线越轴: [WARN] {w}")
+        _get_logger().warn(f"轴线越轴: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -5094,7 +5109,7 @@ def _check_shot_size_jump(shots: list[dict]) -> dict:
                 f"建议中间补过渡景别（镜头组接规则33）。"
             )
     for w in warnings:
-        print(f"[CHECK] 景别跳跃: [WARN] {w}")
+        _get_logger().warn(f"景别跳跃: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -5120,7 +5135,7 @@ def _check_battle_layer(shots: list[dict], script: dict) -> dict:
                 f"远景密度）+ 场景DNA + 战场资产复用（战场分层规则34）。"
             )
     for w in warnings:
-        print(f"[CHECK] 战场分层: [WARN] {w}")
+        _get_logger().warn(f"战场分层: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -5145,7 +5160,7 @@ def _check_object_separability(shots: list[dict]) -> dict:
             f"改为摔/取/递单帧动作或结果状态特写（物体可分性规则35）。"
         )
     for w in warnings:
-        print(f"[CHECK] 物体可分性: [WARN] {w}")
+        _get_logger().warn(f"物体可分性: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -5170,7 +5185,7 @@ def _check_wide_shot_facial(shots: list[dict], hook: dict = None) -> dict:
                 f"禁止精细五官与全身服装细节（远景人物省略规则39）。"
             )
     for w in warnings:
-        print(f"[CHECK] 远景禁五官: [WARN] {w}")
+        _get_logger().warn(f"远景禁五官: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -5192,7 +5207,7 @@ def _check_hand_lock(shots: list[dict]) -> dict:
             f"双方手部饰品严格区分（双人递物手部锁定规则38）。"
         )
     for w in warnings:
-        print(f"[CHECK] 手部锁定: [WARN] {w}")
+        _get_logger().warn(f"手部锁定: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -5216,7 +5231,7 @@ def _check_subtitle_leak(shots: list[dict], hook: dict = None) -> dict:
                 f"字幕由后期统一烧录，画面描述必须无任何文字（画面无字幕规则40）。"
             )
     for w in warnings:
-        print(f"[CHECK] 字幕泄漏: [WARN] {w}")
+        _get_logger().warn(f"字幕泄漏: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -5324,7 +5339,7 @@ def _check_threat_gaze_coupling(shots: list[dict], hook: dict = None) -> dict:
                         f"否则发现者看到的不是威胁（威胁源-视线耦合规则41）。"
                     )
     for w in warnings:
-        print(f"[CHECK] 威胁源-视线耦合: [WARN] {w}")
+        _get_logger().warn(f"威胁源-视线耦合: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -5617,7 +5632,7 @@ def _check_ff_desc_anchors(shots: list[dict], hook: dict = None,
     warnings.extend(_check_size_anchor_warnings(shots, hook))
 
     for w in warnings:
-        print(f"[CHECK] ff描述锚点: [WARN] {w}")
+        _get_logger().warn(f"ff描述锚点: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -5730,7 +5745,7 @@ def _check_keyframes_quality(shots: list[dict], hook: dict = None,
             f"应写明「面向/朝向目标」，否则图片模型把刺客画成背对目标或正对镜头。"
         )
     for w in warnings:
-        print(f"[CHECK] keyframes质量: [WARN] {w}")
+        _get_logger().warn(f"keyframes质量: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -5966,7 +5981,7 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
                 )
 
     for w in warnings:
-        print(f"[CHECK] kf时序一致性: [WARN] {w}")
+        _get_logger().warn(f"kf时序一致性: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -6144,7 +6159,7 @@ def _check_kf_time_window_alignment(shots: list[dict], hook: dict = None) -> dic
                     break
 
     for w in warnings:
-        print(f"[CHECK] kf时间窗对齐: [WARN] {w}")
+        _get_logger().warn(f"kf时间窗对齐: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -6230,12 +6245,12 @@ def _check_prop_spatial_anchor(shots: list[dict], hook: dict = None,
                 f"否则模型自由摆放重叠（规则50/22.9）。"
             )
     for w in warnings:
-        print(f"[CHECK] 道具空间方位: [WARN] {w}")
+        _get_logger().warn(f"道具空间方位: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
 # ========================================================================
-# v6.26 吸收：抠姐短剧剧本检查（开篇冲突/爆点密度/对白长度）+ video-shotcraft（静态停留）
+# v6.26 吸收：抠姐短剧剧本检查（开篇冲突/爆点密度/对白长度）+ absorption-log·shotcraft（静态停留）
 # 全部 warning-only，不进 hard_fail_checks（与 v6.24/v6.25 一致，重生成循环昂贵）
 # ========================================================================
 
@@ -6322,7 +6337,7 @@ def _check_opening_hook(shots: list[dict], hook: dict = None) -> dict:
                 )
 
     for w in warnings:
-        print(f"[CHECK] 开篇冲突: [WARN] {w}")
+        _get_logger().warn(f"开篇冲突: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -6378,7 +6393,7 @@ def _check_punch_density(shots: list[dict], hook: dict = None) -> dict:
             )
 
     for w in warnings:
-        print(f"[CHECK] 爆点密度: [WARN] {w}")
+        _get_logger().warn(f"爆点密度: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -6409,7 +6424,7 @@ def _check_dialogue_length(shots: list[dict], hook: dict = None) -> dict:
                     f"（规则43，抠姐检查·台词口语化/单句长度）。"
                 )
     for w in warnings:
-        print(f"[CHECK] 对白长度: [WARN] {w}")
+        _get_logger().warn(f"对白长度: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -6518,7 +6533,7 @@ def _positional_break_clause(clause: str) -> list[str]:
 
 
 def _check_dwell_time(shots: list[dict], hook: dict = None) -> dict:
-    """v6.26 新增：静态镜头停留时长检查（video-shotcraft·关键画面停留时长）.
+    """v6.26 新增：静态镜头停留时长检查（absorption-log·shotcraft·关键画面停留时长）.
 
     对白/特写/静景/氛围空镜等静态镜头（prompt/ff_desc 含静态判定词，或 narration 非空
     且画面无明显动作），duration_sec 低于 _DWELL_MIN_SEC → 提示停留不足；
@@ -6550,7 +6565,7 @@ def _check_dwell_time(shots: list[dict], hook: dict = None) -> dict:
             warnings.append(
                 f"镜头{idx}: 静态/对白镜头停留 {duration:.1f}s < {_DWELL_MIN_SEC:.0f}s——"
                 f"画面主体刚出现就切走，观众看不清；静态/对白镜头应 ≥{_DWELL_MIN_SEC:.0f}s"
-                f"（video-shotcraft·关键画面停留时长）。"
+                f"（absorption-log·shotcraft·关键画面停留时长）。"
             )
         elif has_dialog and duration < _DWELL_DIALOG_RECOMMEND:
             warnings.append(
@@ -6558,7 +6573,7 @@ def _check_dwell_time(shots: list[dict], hook: dict = None) -> dict:
                 f"可适当放宽到 {_DWELL_DIALOG_RECOMMEND:.0f}s 以上（规则7节奏分配）。"
             )
     for w in warnings:
-        print(f"[CHECK] 静态停留: [WARN] {w}")
+        _get_logger().warn(f"静态停留: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -6625,7 +6640,7 @@ def _check_pose_continuity(shots: list[dict]) -> dict:
                 f"建议补状态转换动作或过渡镜头（角色状态锁定表）。"
             )
     for w in warnings:
-        print(f"[CHECK] 角色状态锁定: [WARN] {w}")
+        _get_logger().warn(f"角色状态锁定: {w}")
     return {"pass": True, "issues": [], "warnings": warnings}
 
 
@@ -6667,7 +6682,7 @@ def _check_over_shoulder_lock(shots: list[dict], hook: dict = None) -> dict:
                 f"——双人对话被拍者视线应落向对方而非镜头（规则22.8）。"
             )
     for w in warnings:
-        print(f"[CHECK] 对话过肩: [WARN] {w}")
+        _get_logger().warn(f"对话过肩: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -6786,7 +6801,7 @@ def _check_forbidden_abstract(shots: list[dict], hook: dict = None) -> dict:
         _check_one(hook, "钩子镜头(index=0)")
 
     for w in warnings:
-        print(f"[CHECK] 禁抽象词: [WARN] {w}")
+        _get_logger().warn(f"禁抽象词: {w}")
     return {"pass": True, "issues": [], "warnings": warnings}
 
 
@@ -6943,5 +6958,5 @@ def _check_fatal_wound_continuity(shots: list[dict]) -> dict:
                 f"（如'心口处白袍暗红洇痕'），不能完全消失（规则8）。"
             )
     for w in warnings:
-        print(f"[CHECK] 致命伤持续: [WARN] {w}")
+        _get_logger().warn(f"致命伤持续: {w}")
     return {"pass": True, "issues": [], "warnings": warnings}

@@ -168,6 +168,15 @@ def _get_shot_hash(shot: dict, script: dict) -> str:
     from step02_video_gen.prompt_builder import _build_prompt
     from style_prefix import STYLE_PREFIX, NEGATIVE_PROMPT
 
+    # 2026-08-20：volcengine 走精简路径，缓存哈希必须跟随
+    # （否则旧完整 prompt 生成的视频会被错误复用，refit 错乱）
+    _provider = (os.getenv("VIDEO_PROVIDER") or "").strip().lower()
+    if _provider == "volcengine":
+        from step02_video_gen.prompt_builder import _build_seedance_concise_prompt
+        _prompt_for_hash = _build_seedance_concise_prompt(shot)
+    else:
+        _prompt_for_hash = _build_prompt(shot, script)
+
     key_parts = [
         # 供应商/模式/声音开关：这些维度变化都应触发缓存失效
         f"provider={os.getenv('VIDEO_PROVIDER', '')}",
@@ -177,7 +186,7 @@ def _get_shot_hash(shot: dict, script: dict) -> str:
         f"r2v_refs={','.join(shot.get('_r2v_refs_cache', []) or [])}",
         STYLE_PREFIX,
         NEGATIVE_PROMPT,
-        _build_prompt(shot, script),
+        _prompt_for_hash,
         shot.get("narration_segment", ""),
         # v4: 图片 prompt 变了帧就变了，I2V 参考图变了视频也应重做
         _normalize(shot.get("ff_desc", "")),

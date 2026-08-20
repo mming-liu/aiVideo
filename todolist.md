@@ -54,6 +54,10 @@
 - [ ] **🔴 skill 全量加载 token 浪费**：`_load_knowledge_skills()` 一次性加载 20 个 skill
   （battle-layered/face-shapes 等与本章无关），推高 token 消耗且稀释核心指令注意力。
   方案：按本章场景类型（打斗/对话/情感）做相关性筛选，或改为目录式索引（只列 skill 名+摘要）。
+  **08-20 进展**：技能合并完成——已合并 7 组共 30 个技能 → 7 个（seedance-craft / absorption-log / camera-mastery / combat-mastery / portrait-mastery / transition-mastery / character-performance），加载数从 22→9。但仍是全量加载，未做相关性筛选。
+  - 合并明细：seedance 13→1 + absorption 3→1 + camera 5→1 + combat 4→1 + portrait 3→1 + transition 3→1 + character 2→1
+  - 当前 _load_knowledge_skills() 加载 9 个 skill，总 ~28k chars (~7,000 tokens)
+  - 总删除：30 个 skill 目录（46 → 16 → 7 个 skill 类别）
 - [x] **🟡 钩子缺少 `_duration_cap_guidance`**：主分镜 `build_prompt` 有模型时长上限引导，
   `build_hook_prompt` 没有。对低上限模型（如 Hailuo v1 6s）钩子可能生成超长镜头。
   对齐补上。

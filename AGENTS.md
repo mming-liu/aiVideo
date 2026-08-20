@@ -153,7 +153,7 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
             └── audio/ clips/ images/ vimax_working/ stretched/
 ```
 - 2026-08 架构变更：合并改为唯一 native 模式（直接拼接保留视频原声），只输出 `final.mp4`，删除 final-A/final-B 双版本；对话/背景音由视频模型生成（wan2.7 系列有声视频），视频时长由分镜 `duration_sec` 字段驱动（step01 timecode 权威计算），step02 不再调用 TTS。
-- 2026-08 v6.24：分镜生成规则新增 35-40（物体可分性/同场景合并/词序量化/手部锁定/远景省略/画面无字幕），见 `.aiVideo/skills/seedance-iron-rules/SKILL.md` 源→落地映射；`VIDEO_REFERENCE_MODE=r2v` 为默认（spark-video 70/25/5 逐镜混合未采纳，全局单模）。
+- 2026-08 v6.24：分镜生成规则新增 35-40（物体可分性/同场景合并/词序量化/手部锁定/远景省略/画面无字幕），见 `.aiVideo/skills/absorption-log/SKILL.md` §1 源→落地映射；`VIDEO_REFERENCE_MODE=r2v` 为默认（spark-video 70/25/5 逐镜混合未采纳，全局单模）。
 
 ### 场景/道具资产（v7 新增）
 四步资产生成方法论（`references/ai-scene-prop-asset-guide.md`）：
