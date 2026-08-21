@@ -1,6 +1,9 @@
 # API 密钥（包含敏感信息，绝对不能提交）
 .env
 .env.keys
+# MCP 配置文件（带 API key 的本地配置）
+.mcp.json
+.mcp.local.json
 
 # Python 缓存
 __pycache__/

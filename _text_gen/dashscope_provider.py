@@ -19,13 +19,19 @@ class DashScopeTextService(TextGenerationService):
 
     def generate(self, req: TextGenerationRequest) -> TextGenerationResult:
         headers = {"Authorization": f"Bearer {config.DASHSCOPE_API_KEY}"}
+        # v6.37：结构化多轮输入（user_inputs）优先于 user_prompt 字符串
+        if req.user_inputs:
+            _messages = [{"role": "system", "content": req.system_prompt}]
+            _messages.extend(req.user_inputs)
+        else:
+            _messages = [
+                {"role": "system", "content": req.system_prompt},
+                {"role": "user", "content": req.user_prompt},
+            ]
         payload = {
             "model": config.DASHSCOPE_TEXT_MODEL,
             "input": {
-                "messages": [
-                    {"role": "system", "content": req.system_prompt},
-                    {"role": "user", "content": req.user_prompt},
-                ]
+                "messages": _messages,
             },
             "parameters": {
                 "result_format": "json",

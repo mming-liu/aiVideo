@@ -8,7 +8,7 @@ metadata:
   version: "1.0"
   updated: "2026-08-19"
   sources:
-    - "shyman159/seedance-prompts-skill (12 铁律)"
+    - "shyman159/seedance-prompts-skill (12 铁律 + 2026.05 新版增量)"
     - "JuneYaooo/capsule-cinema references/storyboard-craft.md"
     - "JohnKeating1997/spark-video lib/lore.py mood_anchor"
     - "抠姐短剧剧本检查提示词（7 大维度）"
@@ -28,6 +28,40 @@ metadata:
 | 1 | seedance-prompts-skill + capsule-cinema + spark-video | v6.24 | 10 | 1 未采纳 | 2026-08-08 |
 | 2 | 抠姐短剧剧本检查提示词 | v6.26 | 5 | 2 已有覆盖 + 1 软约束 | 2026-08-09 |
 | 3 | Vincentwei1021/video-shotcraft | v6.26 | 1 | 4 | 2026-08-09 |
+| 4 | seedance-prompts-skill 2026.05 新版增量 | v6.38 | 4 | 0 | 2026-08-21 |
+
+## 4. seedance 2026.05 新版铁律增量（v6.38，4 落地）
+
+> 来源：shyman159/seedance-prompts-skill 2026-05-15+ 升级版
+> （新增「沉浸式短片八维黄金公式」「防崩神词」「排版规则」「情绪具象化表」等）
+>
+> 本次只吸收低成本高价值 4 点；其他（八维公式/触发关键词大全/构图7种/光位8种）
+> 已在 SKILL v6.24 + 项目 camera-mastery/portrait-mastery 中覆盖。
+
+### 4 点 → 落地映射
+
+| # | 吸收点 | 来源 | 落地 |
+|---|--------|------|------|
+| 1 | 主观视角必须放句首 | seedance 铁律 11 | 规则 55：ff_desc/lf_desc/prompt 用 POV 时必须「第一人称视角/POV/主观视角」放句首 + 角色呼吸/眨眼/伸手 |
+| 2 | 防崩神词 + 排版规则 | seedance 铁律 9 | 规则 56：①完整输出 ②末尾追加「画面稳定·不闪烁·不重影·不模糊·动作流畅自然·不卡顿·不断裂·光影细腻·高清画质·电影质感」选 3-5 个 ③禁「————」长破折号 |
+| 3 | 情绪具象化表 | seedance 铁律 12 增量 | 规则 57：5 类情绪（悲伤/喜悦/紧张/愤怒/释然）的具体身体外化动作（与 28/52 链式表演规则互补） |
+| 4 | 长破折号校验 | seedance 铁律 9 排版 | validation `_check_long_dash_usage` v6.38（warning-only，≥3 个 —— 触发） |
+
+### 合规收紧（2026.05 审核更新）
+
+- 规则 6 补充：「15-17岁少女」改「年轻女孩/年轻女子」；「裸妆」改「清新妆」；「撒娇/嘟嘴」改中性表情
+- 禁止负面词前缀（"严禁/禁止 XXX"）一律改正向描述
+
+### 未采纳（记录不重复吸收）
+
+| # | 资产 | 排除原因 |
+|---|------|----------|
+| 1 | 八维黄金公式 | 已被现有 PROMPT_TEMPLATE 7 步结构覆盖（规则 5.2） |
+| 2 | 16 种运镜 + 情绪映射 | 已在 camera-mastery 6 组合 + situation-camera 18 种覆盖 |
+| 3 | 8 种光型 + 情绪映射 | 已在 portrait-lighting 8 种 + 规则 27 覆盖 |
+| 4 | 7 种构图 + 触发关键词 | 已有部分（前景/中心/三分/对角/对称/引导线/框架），无需重复 |
+| 5 | 时长估算公式 `对白句数 × 1.3s + 画面节拍数 × 0.8-1.5s` | 已有 prompt_length_budget 校验；公式较新，暂不嵌入校验层 |
+| 6 | 官方修正「镜头N」替代「0-X秒」 | 我们的项目 16.4 规则仍用「前2秒/2-4秒」格式（沉浸式短片对口型同步场景，官方允许保留秒数标注——见 seedance-prompt-guide.md §0.4） |
 
 ---
 

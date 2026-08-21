@@ -114,7 +114,8 @@ from shared.scene_objects_bank import SceneObjectsBank
 from shared.assets_bank import SceneAssetsBank, PropAssetsBank
 from step01_script_gen.prompts import (
     build_prompt, SYSTEM_PROMPT, build_hook_prompt, parse_hook_response,
-    _load_gap_analysis_context,
+    _load_gap_analysis_context, _build_character_anchors,
+    _load_knowledge_skills, _load_local_skill_context,
 )
 from step01_script_gen.character_extractor import extract_characters
 from step01_script_gen.object_extractor import extract_scene_objects
@@ -426,11 +427,39 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
 # （08-15 实测 1→9 重写越改越糟）、threat_gaze_coupling（B2 确定性注入已覆盖）。
 # 08-15（PR-2）：keyframes_quality 退出修复轮——聚合告警（「N 个中间关键帧」无镜头号）
 # 本就归 global 被过滤，且 post_fix 已确定性注入角色姿态/位置骨架，无需 LLM 修。
+# 定向修复轮：GAP 通过后仍存在的高价值告警，只把「告警镜头 + 告警文本」发给 LLM 做单镜修复。
+# 08-20（v6.37）扩展：9 → 33 类，覆盖所有字段级可手术修复的检查；结构性/全局/确定性已覆盖类仍排除。
+# 排除（合并改写必破坏其它镜头 / 代码已兜底）：
+#   - opening_hook / punch_density / content_density / combat_arc（全局或整段）
+#   - keyframes_quality / threat_gaze_coupling / combat_arc_coda（确定性已注入）
+#   - narrative_arc_distribution / platform_compliance / semantic_risk（结构性/合规另路处理）
 _REPAIR_PRIORITY_CATEGORIES = (
-    "ff_desc_anchors", "prop_spatial_anchor",
-    "strong_emotion_chain", "ff_motion_timeline",
-    "shot_transition", "action_overlap", "shot_size_jump",
-    "combat_action", "kf_temporal_consistency",
+    # === 锚点/位置（4） ===
+    "ff_desc_anchors", "prop_spatial_anchor", "pose_continuity", "multi_person_staging",
+    # === 情绪/表情（3） ===
+    "strong_emotion_chain", "restrained_emotion", "emotion_visualization",
+    # === 时序/节奏（5） ===
+    "ff_motion_timeline", "kf_temporal_consistency", "kf_time_window_alignment",
+    "shot_transition", "action_overlap",
+    # === 景别/运镜（3） ===
+    "shot_size_jump", "camera_movement", "camera_upgrade", "focal_switch",
+    # === 服装/角色（2） ===
+    "character_consistency", "character_entrance",
+    # === 对白/口型（2） ===
+    "dialogue_length", "voice_punctuation",
+    # === 静态/时长（2） ===
+    "dwell_time", "prompt_length_budget",
+    # === 画面质量（8） ===
+    "forbidden_abstract", "lighting_position", "color_tone_transition", "hand_lock",
+    "over_shoulder_lock", "occlusion_layering", "gaze_direction", "gaze_convergence",
+    # === 画面描述（4） ===
+    "ff_lf_completeness", "ff_desc_length", "ff_multi_action", "frame_weapon_legality",
+    # === 打斗/致命（2） ===
+    "combat_action", "fatal_wound_continuity",
+    # === 空镜/字幕/合规（2） ===
+    "negative_prompt", "subtitle_leak",
+    # === 原文锚点 + 高潮优先（2） ===
+    "grounding", "climax_priority",
 )
 # 08-15（v6.36）：2 轮 → 1 轮——实测修复轮越改越糟（38→55），降为单轮 top-6
 # 聚焦最严重，杜绝「第2轮全量」把没问题的镜头也重写一遍。
@@ -483,6 +512,116 @@ def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
     return per_shot
 
 
+def _locate_narration_in_novel(narration: str, novel_text: str) -> tuple:
+    """在 novel_text 里找 narration 的最长公共子串（LCS 简化：滑动窗口）。
+
+    返回 (start, end) 字符偏移；找不到返回 (-1, -1)。
+    - 完整 narration 命中：直接返回
+    - 标点归一化（：→"，" → "等）：再尝试一次
+    - 按标点/空白切 narration 为多个 8-16 字短语（短句优先匹配）
+    - 每个短语在 novel_text 里找首次出现位置
+    - 取**最靠后**的短语位置作 end，往前推 64 字作 start（保证覆盖整句）
+    """
+    if not narration or not novel_text:
+        return (-1, -1)
+    import re as _re_loc
+    # 标点归一化：把中文引号/弯引号统一，全角冒号 → 半角冒号
+    def _normalize(s: str) -> str:
+        s = s.replace("：", ":")  # 全角冒号 → 半角
+        s = s.replace('"', '"').replace('"', '"')  # 中文弯引号 → ASCII
+        s = s.replace(''', "'").replace(''', "'")  # 中文单引号 → ASCII
+        s = s.replace("…", "...")  # 横向省略号 → 三点
+        s = s.replace("。", ".")  # 句号归一
+        s = s.replace("，", ",")  # 逗号归一
+        return s
+    narr_norm = _normalize(narration)
+    novel_norm = _normalize(novel_text)
+    # 1) 完整 narration 命中（归一化后）：直接返回
+    if narr_norm in novel_norm:
+        idx = novel_norm.find(narr_norm)
+        return (idx, idx + len(narr_norm))
+    # 2) 切短语（按标点 / 「道:」切）—— 阈值从 6 放宽到 3，避免「啊…啊…救命啊」整段被切碎
+    chunks = _re_loc.split(r'[,.!?;:\n]', narr_norm)
+    chunks = [c.strip() for c in chunks if c and len(c.strip()) >= 3]
+    if not chunks:
+        return (-1, -1)
+    # 3) 找「人名 + 动词/对象」短语作锚（剥离「道:」前缀）
+    # 优先尝试最长的 chunk，再依次退到短的
+    chunks.sort(key=len, reverse=True)
+    for chunk in chunks[:5]:  # 试 5 个最长的
+        pos = novel_norm.find(chunk)
+        if pos >= 0:
+            end = pos + len(chunk)
+            start = max(0, pos - 64)
+            return (start, end)
+    return (-1, -1)
+
+
+def _build_novel_slice_for_picked(picked: dict, shots_by_id: dict,
+                                   novel_text: str, ctx: int = 200) -> str:
+    """08-20 mode B：按 picked 镜的 narration_segment 切原文片段，前后各扩 ctx 字。
+
+    返回拼接好的字符串（带 shot_xx 标头），多个 picked 镜的切片按时间序合并（重叠自动合并）。
+    """
+    if not picked or not novel_text:
+        return ""
+
+    # 1) 收集 picked 镜的 (shot_id, narration) 列表
+    items = []
+    for tid in picked:
+        if tid == "global":
+            continue
+        s = shots_by_id.get(tid)
+        if not s:
+            continue
+        narr = (s.get("narration_segment") or s.get("narration") or "").strip()
+        if not narr:
+            continue
+        items.append((tid, narr, s.get("index")))
+
+    if not items:
+        return ""
+
+    # 2) 每个 narration 在 novel 里定位 → (start, end) → 扩 ctx
+    slices = []
+    for tid, narr, idx in items:
+        s, e = _locate_narration_in_novel(narr, novel_text)
+        if s < 0:
+            continue
+        s2 = max(0, s - ctx)
+        e2 = min(len(novel_text), e + ctx)
+        slices.append((s2, e2, tid, idx))
+
+    if not slices:
+        return ""
+
+    # 3) 按 start 排序 + 重叠合并（间隔 < 100 字视为连续）
+    slices.sort(key=lambda x: x[0])
+    merged = [slices[0]]
+    for cur in slices[1:]:
+        last = merged[-1]
+        if cur[0] <= last[1] + 100:  # 重叠或相邻
+            new_end = max(last[1], cur[1])
+            new_ids = f"{last[2]},{cur[3]}"
+            merged[-1] = (last[0], new_end, last[2] + "+" + cur[2], None)
+        else:
+            merged.append(cur)
+
+    # 4) 输出：每个合并段打 shot_ids 标头 + 原文片段
+    out_lines = []
+    for s, e, ids, _ in merged:
+        seg = novel_text[s:e].replace("\n", " ").strip()
+        if len(seg) > 1500:  # 单段过长截断
+            seg = seg[:1500] + "..."
+        out_lines.append(f"### 原文片段（{ids}）\n{seg}\n")
+
+    total_len = sum(len(l) for l in out_lines)
+    # 防止 prompt 爆炸：超 6k 字截断（理论上 picked 6 镜 × ~400 字 = 2.4k）
+    if total_len > 6000:
+        return out_lines[0] + "\n...（后续切片省略，控制总长 6k 字以内）..."
+    return "\n".join(out_lines)
+
+
 def _repair_shot_warnings(script: dict, novel_text: str,
                           bank=None, objects_bank=None) -> dict:
     """定向修复轮（v6.35，P18 闭环核心）。
@@ -532,20 +671,30 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             shots_by_id["hook"] = script["hook"]
 
         _console(f"  [修复轮{_round}] {len(picked)} 镜待修（{', '.join(picked)}）...")
-        # 08-18 方案 C 准备：先统计全片各 label 的 WARN 总数（按分镜聚合之前算一次），
+        # 08-18 方案 C：先统计全片各 label 的 WARN 总数（按分镜聚合之前算一次），
         # 后面拼 parts 时每条 WARN 末尾追加"（同类全片共 N 处）"——让 LLM 改 shot_4
         # 时知道"ff_desc_anchors 错误全片 25 处"而不是孤例 1 处，全局视图促动认真修。
-        # --mode A 时跳过（保持现状）；--mode C 时启用。
+        # 08-21 mode 合并：_label_total 总是计算（v1 mode A 不算 → v2 算轻量版 → v3 复评
+        # 决定全量注入全片错误分布 + top-3 hint + 全片分布三件套同时给 LLM）
         _label_total: dict = {}
-        if FEEDBACK_MODE == "C":
-            from collections import Counter as _label_counter
-            _label_total = _label_counter()
-            for _tid, _ws in per_shot.items():
-                for _w in _ws:
-                    if _w.startswith("["):
-                        _end = _w.find("]")
-                        if _end > 0:
-                            _label_total[_w[1:_end]] += 1
+        from collections import Counter as _label_counter
+        _label_total = _label_counter()
+        for _tid, _ws in per_shot.items():
+            for _w in _ws:
+                if _w.startswith("["):
+                    _end = _w.find("]")
+                    if _end > 0:
+                        _label_total[_w[1:_end]] += 1
+        # top-3 高频 hint（轻量版全片视图，无分布表，只取前 3 类）
+        # ——给 LLM 一个"本章主要矛盾"信号，不带成本又比纯 warn 列表多了全局感
+        _top3_hint = ""
+        if _label_total:
+            _top3 = _label_total.most_common(3)
+            if _top3:
+                _top3_hint = (
+                    "\n**全片高频问题（top-3，仅作参考）**：" +
+                    "、".join(f"[{l}] {n}处" for l, n in _top3) + "\n"
+                )
         parts = []
         # 08-15（v6.36 P18 修复）：删除「全片结构问题」前言注入。v6.36 已把开篇冲突/
         # 爆点密度/内容密度 剔除出修复类别（全局重构必引入噪音），此时 per_shot["global"]
@@ -571,19 +720,17 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             if next_s:
                 ctx_lines.append(f"后镜({next_s.get('index')}) ff_desc: {next_s.get('ff_desc', '')}")
             ctx = ("\n" + "\n".join(ctx_lines) + "\n") if ctx_lines else ""
-            # 08-18 A/C 实验：--mode C 时每条 WARN 末尾追加"（同类全片共 N 处）"
-            if FEEDBACK_MODE == "C":
-                _warn_lines = []
-                for w in warns:
-                    if w.startswith("[") and w.find("]") > 0:
-                        _lbl = w[1:w.find("]")]
-                        _total = _label_total.get(_lbl, 1)
-                        _warn_lines.append(f"  - {w}（同类全片共 {_total} 处）")
-                    else:
-                        _warn_lines.append(f"  - {w}")
-                _warns_str = "\n".join(_warn_lines)
-            else:
-                _warns_str = "\n".join(f"  - {w}" for w in warns)
+            # 08-18：每条 WARN 末尾追加"（同类全片共 N 处）"
+            # 08-21 mode 合并：总是追加（让 LLM 知道同类问题全片共 N 处）
+            _warn_lines = []
+            for w in warns:
+                if w.startswith("[") and w.find("]") > 0:
+                    _lbl = w[1:w.find("]")]
+                    _total = _label_total.get(_lbl, 1)
+                    _warn_lines.append(f"  - {w}（同类全片共 {_total} 处）")
+                else:
+                    _warn_lines.append(f"  - {w}")
+            _warns_str = "\n".join(_warn_lines)
             parts.append(f"### 待修镜头 {tid}\n"
                          f"当前 ff_desc: {s.get('ff_desc', '')}\n"
                          f"当前 lf_desc: {s.get('lf_desc', '')}\n"
@@ -594,49 +741,236 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         if not parts:
             return script
 
-        # 08-18 A/C 实验：--mode C 时在 prompt 开头加"全片错误分布"段
-        if FEEDBACK_MODE == "C":
-            _global_block = (
-                "\n**全片错误分布（同类问题总数，按类别聚合）**：\n"
-                + "\n".join(f"  - [{l}] 全片共 {n} 处"
-                            for l, n in _label_total.most_common())
-                + "\n"
-            )
-        else:
-            _global_block = ""
+        # 08-18：在 prompt 开头加"全片错误分布"段
+        # 08-21 mode 合并：全片错误分布总是注入（v1 mode A 删掉，v2 复评发现有用）
+        # ——给 LLM 全局视图，决策树 + 正反例才能精准定位
+        _global_block = (
+            "\n**全片错误分布（同类问题总数，按类别聚合）**：\n"
+            + "\n".join(f"  - [{l}] 全片共 {n} 处"
+                        for l, n in _label_total.most_common())
+            + "\n"
+        )
 
-        repair_prompt = (
-            "\n\n# 定向修复（来自本地校验）\n"
-            "以下是部分分镜的问题清单。请**只修复这些问题涉及的镜头**，"
-            "输出完整修正后的分镜 JSON（保留全部镜头结构与未提及字段，"
-            "不要改动没有问题的镜头，不要增删镜头）。"
-            f"{_global_block}"
-            "**手术刀原则（最高优先级）：只改问题字段，其余内容逐字保留——"
-            "禁止新增动作短语/情绪词/运镜词/光位词/转场词，禁止改景别/时长/台词/剧情。**"
+        # v6.37：把修复轮 prompt 拆成结构化多轮输入
+        # - system_prompt：完整规则（不变）
+        # - input[0]：INPUT（当前分镜 + 角色锚点 + skills）——**不含 novel，防 LLM 重生成**
+        # - input[1]：REPAIR FEEDBACK（结构化 JSON）+ TASK（修复指令）——纯修复内容
+        # 关键：移除 novel text，避免 LLM 看到原文后重新拆镜（违反"手术刀原则"）
+        import json as _json
+        _current_script_json = _json.dumps(
+            script, ensure_ascii=False, indent=1, default=str
+        )
+
+        # 角色锚点（仅含服装色等查询字段，不含规则）——修 服装色 必备
+        _char_anchors_str = ""
+        if bank:
+            try:
+                _ca = _build_character_anchors(bank)
+                if _ca and _ca != "无已知角色":
+                    _char_anchors_str = (
+                        "## INPUT 2：角色锚点（仅供字段查询，不重生成）\n"
+                        "以下角色名+服装色等锁定字段，修复时服装色必查本表：\n"
+                        f"{_ca}"
+                    )
+            except Exception:
+                _char_anchors_str = ""
+
+        # skills（运镜/光线/招式词库）——修运镜/光位/打斗反馈必备
+        try:
+            _skills_str = _load_knowledge_skills()
+        except Exception:
+            _skills_str = ""
+
+        # Turn 0：INPUT（当前分镜 + 角色锚点 + skills，不含 novel）
+        _input_turn = (
+            "## INPUT 1：当前分镜（待修复）\n"
+            "```json\n"
+            f"{_current_script_json}\n"
+            "```\n\n"
+            f"{_char_anchors_str}"
+        )
+        if _skills_str:
+            _input_turn += (
+                "\n\n## INPUT 3：写作风格参考（skills 词库）\n"
+                "运镜/光线/招式/打斗等词汇从这里取（不要重新发挥）：\n"
+                f"{_skills_str}"
+            )
+
+        # 08-21 mode 合并：总是注入原文切片（原 mode B 特性，对 grounding 类问题很有用，
+        # 合并后无副作用：_input_turn 的 narration_segment 锚定校验本来就该有原文对照）
+        # - 按 narration_segment 在 novel_text 里做最长公共子串定位，前后各扩 200 字
+        # - 多个 picked 镜共享同一段原文时自动合并去重
+        # - 仅供「ground 修复」用，禁止触发 LLM 重新拆镜（依然保留手术刀原则）
+        if novel_text:
+            try:
+                _novel_slice = _build_novel_slice_for_picked(picked, shots_by_id, novel_text, ctx=200)
+                if _novel_slice:
+                    _input_turn += (
+                        "\n\n## INPUT 4：原文切片（仅供 ground 待修问题，禁改动 narration_segment）\n"
+                        "以下是从原文中按 picked 镜的 narration_segment 定位切出的片段，"
+                        "用于 ground「动作时刻」「致命伤 anchor」「kf 时段」等问题：\n"
+                        "**只用来查时间/动作/伤情对应关系，禁止用于重新拆镜、合并镜头、"
+                        "改动 narration_segment 文本。**\n"
+                        f"{_novel_slice}"
+                    )
+            except Exception as _e:
+                _logger.warn(f"[WARN] 原文切片构建失败，回退到无原文切片: {_e}")
+
+        # Turn 2：REPAIR FEEDBACK + TASK
+        # 警告转为结构化 JSON（按 shot_xxx 分组），避免 freeform 文本混排字段
+        # 08-21 mode 合并：总是带全片错误分布
+        _feedback_json = {
+            "mode": "unified",
+            "global_error_distribution": [
+                {"label": l, "total": n} for l, n in _label_total.most_common()
+            ],
+            "shots": {},
+        }
+        for _tid, _ws in picked.items():
+            if _tid == "global":
+                continue
+            _s = shots_by_id.get(_tid) or {}
+            _feedback_json["shots"][_tid] = {
+                "current": {
+                    "ff_desc": _s.get("ff_desc", ""),
+                    "lf_desc": _s.get("lf_desc", ""),
+                    "prompt": _s.get("prompt", ""),
+                    "color_tone": _s.get("color_tone", ""),
+                },
+                "warnings": _ws,
+            }
+
+        # 08-21 mode 合并：单一 unified prompt 替代原 A/B/C 三套
+        # 含：全片错误分布（_input_turn）+ top-3 hint + 4 类约束 + 决策树 + 3 组正反例
+        # + 同角色跨镜一致性 + 5 条修复要点 + 同镜内 anchor 保留
+        _repair_turn = (
+            "## REPAIR FEEDBACK（结构化 JSON，按 shot 分组）\n"
+            "```json\n"
+            f"{_json.dumps(_feedback_json, ensure_ascii=False, indent=1)}\n"
+            "```\n\n"
+            + _top3_hint +
+            "## TASK（精简修复）\n"
+            "请**逐条**修复下方列出的问题，每条 warn 改一处字段即可。\n"
+            "输出完整修正后的分镜 JSON（保留全部镜头结构与未提及字段）。\n\n"
+            "**手术刀原则（最高优先级）**：\n"
+            "1. 一条 warn 改一处字段——不要批量重写整镜\n"
+            "2. 禁止新增任何短语（动作/情绪/运镜/光位/转场/视角/装饰性方位），"
+            "**视线方位（画左/画右/画上方/目光/凝望/仰望/俯视）** 是规则 22.5a 硬性要求——"
+            "禁止砍/省略，但**禁止写成「望着她」「看杨旭」这类无空间方位词**\n"
+            "3. 禁止改景别/时长/台词/剧情/narration_segment 文本\n"
+            "4. 禁止增删镜头、改 shot.index\n"
+            "5. 修完输出整本 JSON，未列问题的镜头**逐字保留**\n"
+            "6. **lf_desc 至少 40 字，含本镜所有出镜角色的完整静态布局**（姿态/位置/服装色/视线）"
+            "——过短（如「已没入水下，杨旭仰卧船头」单句）会丢角色状态、产生内部矛盾\n\n"
+            "**关键字段保留白名单（最高优先级，违反 = 致命伤/漂色/连续性破缺）**：\n"
+            "即使该字段不在 warn 列表中，下述字段也**禁止删/改/移位**——\n"
+            "C 模式实验教训：改服装色 warn 连带删掉致命伤 anchor（shot14/24/25）。\n"
+            "  - **致命伤 anchor**：心口/洇痕/暗红/中刀/中剑/伤口/血痕/腹部/胸口/心窝 等\n"
+            "  - **服装色**（每个出镜角色）：素白轻袍/一袭春衫/青衣小帽/玄色劲装 等（取自角色库）\n"
+            "  - **角色当前状态**（坐/站/仰卧/跪坐/持物 等已建立姿态）\n"
+            "  - **锚点连贯子句**（前镜 lf_desc 已锚定的姿态/位置/朝向，跨镜承接必须保留）\n"
+            "  - **color_tone**（场景色调基底词，如「冷蓝星光」/「暖金烛光」——跨镜共享）\n\n"
+            "**Mask 字段清单（本轮禁止修改）**：\n"
+            "  - narration_segment（台词，原文锚定，改则 grounding 校验必挂）\n"
+            "  - index / duration_sec（结构性字段，动了会改镜头排序或时长）\n"
+            "  - subtitle（与 narration_segment 逐字相同，规则 1 锁定）\n"
+            "  - variation_type（small/large 变体类型，动了会改 keyframe 数量）\n"
+            "  - scene / location（场景字段，规则 7.5 锁定）\n\n"
+            "**同镜内 warn 改字段时必须保留同字段 anchor（最高优先级）**：\n"
+            "若一条 warn 改 X 字段（ff_desc/lf_desc/prompt），该字段内已存在的\n"
+            "  致命伤 anchor / 服装色 / 角色状态 / 锚点连贯子句 必须**逐字保留**。\n"
+            "例：ff_desc 报「缺服装色」→ 仅追加缺色角色的服装色，**禁止**顺手删\n"
+            "  已有的「心口暗红洇痕」；lf_desc 报「缺服装色」→ 同样只补服装色，\n"
+            "  已有的「仰卧/血痕/听香捂嘴」等不删。\n\n"
+            "**修复决策树（最高优先级，不知道改哪里时按表走）**：\n"
+            "- ff_desc/lf_desc 报「缺服装色」→ 仅在对应字段末尾追加缺色角色服装色，\n"
+            "  已有 anchor 全保留（见上「同镜内 anchor」原则）\n"
+            "- ff_desc/lf_desc/prompt 报「视线无空间方位」→ 把「看/盯/望+人名」\n"
+            "  改写为「目光紧盯人名（画X）」；无空间方位词 = 必挂\n"
+            "- 报「致命伤/洇痕缺失」→ 在 prompt + lf_desc 补「心口处白袍暗红洇痕持续可见」\n"
+            "- 报「kf 时序矛盾」→ 改 kf.desc（不要改 prompt），按 pre-stab/stab/post-stab 递进写\n"
+            "- 报「景别跳跃」→ 后一镜景别词改为中间级，同步改 prompt 开头 + ff_desc 构图\n"
+            "- 报「光位模糊」→ 「柔和光线」改为「45°侧光/顶光/逆光」等具体光位\n"
+            "- 报「kf 时段缺段」→ 按 motion_desc 时段表补 1 帧定格（time_ratio = 段中点/duration_sec）\n\n"
+            "**3 组正反例（最高优先级）**——C 模式实验的具体教训：\n"
+            "1. **致命伤保护**：\n"
+            "   - ❌ 反例：报「缺服装色」→ 整段重写 ff_desc（顺手删心口暗红洇痕）\n"
+            "   - ✅ 正例：报「缺服装色」→ 仅追加「刺客玄色劲装」5 字到 ff_desc 末尾，\n"
+            "     已有的「心口暗红洇痕/仰卧/听香跪坐」一字不动\n"
+            "2. **视线方位**：\n"
+            "   - ❌ 反例：报「视线无方位」→ 删整句「杨旭望一眼星空」\n"
+            "   - ✅ 正例：报「视线无方位」→ 改写为「杨旭仰望画上方星空」\n"
+            "     （加方位词 + 保留原意，**这是规则 22.5a 硬性要求，禁砍**）\n"
+            "3. **lf_desc 完整性（v6.37 实测坑）**：\n"
+            "   - ❌ 反例：报「服装色遗漏」→ 整句改写「杨旭仰卧」为「杨旭仰卧船头」\n"
+            "     （丢原 anchor 短语 + lf_desc 砍到 21 字 / 产生内部矛盾\n"
+            "     「已没入水下」+「举刀正对」单句并存）\n"
+            "   - ✅ 正例：报「服装色遗漏」→ 仅追加「素白轻袍」到 lf_desc 末尾，\n"
+            "     原 lf_desc 完整保留 + ≥40 字下限（防 lf_desc 整体被砍短）\n\n"
+            "**同角色跨镜一致性（最高优先级）**：\n"
+            "同一角色在多镜出现时，**服装色 / 当前状态（坐/站/仰卧）/ kf 顺序** 必须跨镜一致：\n"
+            "- 服装色：shot_1 杨旭素白轻袍 → shot_5 杨旭也必须素白轻袍，禁中途换色\n"
+            "- 当前状态：shot_3 杨旭盘坐 → shot_4 杨旭仍盘坐，禁无动机跳变（站起/躺下需承接）\n"
+            "- 致命伤持续：被刺后所有镜头都需带「心口暗红洇痕」（不只是伤镜）\n\n"
             "修复要点：\n"
             "1. ff/lf_desc 锚点：威胁源写朝向/目标、出镜角色重述服装色\n"
             "2. keyframes desc：补角色姿态/位置锚定\n"
             "3. 保持原文锚定（narration_segment 逐字来自原文）、服装色、致命伤连续性不变\n"
-            "4. 镜头衔接/动作重叠（跨镜）：利用每镜附带的「前镜 lf_desc / 后镜 ff_desc」"
-            "上下文——相邻镜头同地点时在结尾补衔接词（自然过渡/淡入淡出等），后一镜开头"
-            "承接前一镜结尾的动作，禁止无承接硬切\n"
+            "4. 镜头衔接/动作重叠（跨镜）：看 REPAIR FEEDBACK 中「current」字段"
+            "——相邻镜头同地点时在结尾补衔接词（自然过渡/淡入淡出等），后一镜"
+            "开头承接前一镜结尾的动作，禁止无承接硬切\n"
             "5. 景别跳跃（无夹心的真跳跃）：把后一镜的景别改为中间级（如全景→中景），"
-            "同步改该镜 prompt 开头的景别词与 ff_desc 构图——禁止只改景别词不改构图"
-            "（图视不一致），也禁止增删镜头\n"
-            # 08-15（v6.36 P18 修复）：已删「开篇冲突/爆点密度」「内容密度」两条指令——
-            # 这两类已剔除出 _REPAIR_PRIORITY_CATEGORIES，指令却还在 = 给 LLM 发放
-            # 结构性改写许可证（可微调镜头顺序/删动作），与「手术刀」矛盾。
-            + "\n".join(parts)
+            "同步改该镜 prompt 开头的景别词与 ff_desc 构图——禁止只改景别词不改"
+            "构图（图视不一致），也禁止增删镜头"
         )
 
+        # user_inputs：两条 user 消息
+        _user_inputs = [
+            {"role": "user", "content": _input_turn},
+            {"role": "user", "content": _repair_turn},
+        ]
+
+        # 向后兼容：旧 user_prompt 也保留（其他 provider 走 chat 时仍拼一段）
+        # 旧实现：prompt = build_prompt(novel_text, bank, objects_bank) + repair_prompt
+        # 新实现：user_inputs 拆两条；user_prompt 用作"未支持多轮的 provider"的回退
         prompt = build_prompt(novel_text, bank, objects_bank)
-        prompt = prompt + repair_prompt
+
+        # 08-21 mode 合并：单一 unified fallback（与 _repair_turn 同源，压缩为单行 + 决策树/正反例/跨镜一致性）
+        prompt = prompt + (
+            "\n\n# 定向修复\n"
+            "以下是分镜问题清单。请**逐条**修复，每条 warn 改一处字段即可。"
+            "输出完整修正后的分镜 JSON（保留全部镜头结构与未提及字段）。"
+            f"{_global_block}"
+            + _top3_hint +
+            "**手术刀原则（最高优先级）**：一条 warn 改一处——不要批量重写整镜；"
+            "禁止新增任何短语（动作/情绪/运镜/光位/转场/视角/装饰性方位），"
+            "**视线方位（画左/画右/画上方/目光/凝望/仰望/俯视）** 是规则 22.5a 硬性要求——"
+            "禁止砍/省略，但禁止写成无空间方位词；"
+            "禁止改景别/时长/台词/剧情/narration_segment 文本；禁止增删镜头、改 shot.index；"
+            "**lf_desc 至少 40 字**，含本镜所有出镜角色完整静态布局——过短会产生内部矛盾。\n"
+            "**关键字段保留白名单（最高优先级）**：致命伤 anchor（心口/洇痕/暗红/中刀/中剑/伤口/血痕 等）"
+            "+ 服装色（每个出镜角色，取自角色库）+ 角色当前状态（坐/站/仰卧/跪坐/持物 等）"
+            "+ 锚点连贯子句（前镜 lf_desc 已锚定的姿态/位置/朝向，跨镜承接必须保留）"
+            "+ color_tone（场景色调基底词）——即使不在 warn 列表中也**禁止删/改/移位**"
+            "（C 模式实验教训：改服装色 warn 连带删掉致命伤 anchor）。\n"
+            "**Mask 字段清单（本轮禁止修改）**：narration_segment / index / duration_sec /"
+            " subtitle / variation_type / scene / location——结构性字段，改则破坏排序/时长/原文锚定。\n"
+            "**同镜内 warn 改字段时必须保留同字段 anchor（最高优先级）**：改 ff_desc/lf_desc/prompt"
+            " 的某条 warn 时，**禁止**顺手删该字段已有的 anchor 子句（致命伤/服装色/角色状态）。\n"
+            "**修复决策树**（精简版）：缺服装色→追加；视线无方位→加画X/目光；致命伤缺→补洇痕；"
+            "kf矛盾→改kf.desc；景别跳→改中间级；光位模糊→具体光位。\n"
+            "**3 组正反例（按例做）**：致命伤保护=追加5字不删anchor；视线方位=加方位词不砍原意；"
+            "lf_desc完整性=追加不砍到<40字（防「已没入水下」+「举刀正对」矛盾）。\n"
+            "**同角色跨镜一致性**：服装色/状态/kf顺序跨镜一致（杨旭素白轻袍不中途换色，致命伤持续到所有伤后镜）。"
+            + "\n".join(parts)
+        )
 
         service = create_service()
         from _text_gen.deepseek_schema import SCRIPT_SCHEMA
         req = TextGenerationRequest(
             system_prompt=SYSTEM_PROMPT,
             user_prompt=prompt,
+            user_inputs=_user_inputs,  # v6.37 结构化多轮
             max_tokens=50000,  # 08-15：第2轮全量告警重写镜头更多，输出=完整脚本，留出截断余量
             temperature=0.2,
             json_schema=SCRIPT_SCHEMA,
@@ -813,28 +1147,12 @@ def _extract_assets_and_update_script(script: dict) -> None:
 # 6. 主流程
 # ============================================================================
 
-def _parse_mode_flag() -> str:
-    """解析 --mode A / --mode C 反馈聚合模式（08-18 A/B 实验）.
-
-    A = 现状：按分镜聚合，每镜头看到自己的 WARN（不知全片同类总数）
-    C = 增强：每条 WARN 末尾追加"（同类全片共 N 处）"+ prompt 开头加全片错误分布
-    不传默认 C（08-19 实测 C 模式 WARN -18.9% + 全局视图迁移效应 13 镜改善，优于 A）。
-    """
-    args = sys.argv[1:]
-    for i, a in enumerate(args):
-        if a in ("--mode", "-m") and i + 1 < len(args):
-            v = args[i + 1].strip().upper()
-            if v in ("A", "C"):
-                return v
-        if a.startswith("--mode="):
-            v = a.split("=", 1)[1].strip().upper()
-            if v in ("A", "C"):
-                return v
-    return "C"
-
-
-# 当前反馈聚合模式（A=现状 / C=全片错误分布+同类计数，08-18 A/B 实验）
-FEEDBACK_MODE = _parse_mode_flag()
+# 08-21：mode 合并（v1-v4 渐进后正式落地）
+# 删除了 08-20 重构的 A/B/C 三套反馈聚合模式（mode A 精简、mode B +原文、mode C 全片分布）。
+# 原因：v3 同步 4 类约束后，三种 mode 90% 内容相同；v4 加决策树/正反例/跨镜一致性后，
+# 差异化消失；用户几乎不切换 mode（A 实验后 C 胜出成为默认）。保留 3 套代码只增维护成本。
+# 合并后 unified 模式：4 类约束 + 决策树 + 3 组正反例 + 跨镜一致性 + 全片错误分布 + 原文切片
+# （原 mode B 的原文切片对 grounding 类问题很有用，无副作用全量注入）。
 
 
 def main() -> None:

@@ -1681,6 +1681,22 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
             )
             continue
 
+        # v6.37 lf_desc 字符下限（08-21 实战教训：Mode A++ v1 砍 lf 至 30 字丢角色布局）
+        # warning-only：空镜/纯过渡等静态镜可短；其余含角色或动作结束的镜应 ≥40 字
+        # 纯空镜（main_subject 是"空镜"/"环境"/"山峦"等）才豁免
+        if len(lf_desc) < 40:
+            _ms = str(shot.get("main_subject", "") or "").strip()
+            _empty_subjects = ("空镜", "空景", "远景", "环境", "山峦", "山色", "夕阳", "月光",
+                                "荷塘", "夜幕", "雨", "雪", "风", "云", "日落", "日出", "月色")
+            _is_empty_shot = any(es in _ms for es in _empty_subjects)
+            if not _is_empty_shot:
+                warnings.append(
+                    f"镜头{idx}: lf_desc 仅 {len(lf_desc)} 字 < 40 字下限——"
+                    f"过短会丢角色布局（如姿态/位置/服装色/视线），甚至产生内部矛盾"
+                    f"（如「已没入水下」+「举刀正对」单句并存）。"
+                    f"建议补齐本镜所有出镜角色的完整静态布局"
+                )
+
         # 检查首尾帧是否相同或过于相似（去除空格和标点后比较）
         import re
         ff_normalized = re.sub(r'[\s　，。！？、：；""''（）【】《》]', '', ff_desc)
@@ -1718,6 +1734,12 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
                 f"钩子镜头(index=0): ff_desc（首帧描述）为空，生成的视频将无法生成首帧图片！"
             )
         else:
+            # v6.37 hook lf_desc 字符下限（钩子常含多角色状态，< 60 字为 warning）
+            if len(lf_desc) < 60:
+                warnings.append(
+                    f"钩子镜头(index=0): lf_desc 仅 {len(lf_desc)} 字 < 60 字下限——"
+                    f"钩子常含多角色（刺客+杨旭+听香）状态，过短会丢布局"
+                )
             import re
             ff_normalized = re.sub(r'[\s　，。！？、：；""''（）【】《》]', '', ff_desc)
             lf_normalized = re.sub(r'[\s　，。！？、：；""''（）【】《》]', '', lf_desc)
@@ -3505,6 +3527,108 @@ def _check_prompt_length_budget(shots: list[dict], hook: dict | None = None) -> 
     return {"pass": True, "issues": [], "warnings": warnings}
 
 
+# ========================================================================
+# v6.37（08-20）高潮优先原则检查
+# 对应 prompts.py 规则 3.7（v6.35 新增）：强冲突/关键情感戏必拍，
+# 快铺垫 ≤2 镜（≤3s），背景/过渡/日常 0 镜。
+# ========================================================================
+
+# 背景/过渡/日常关键词（命中即视为「非高潮」镜头候选）
+_CLIMAX_BG_HINTS = (
+    "身世", "履历", "家境", "殷实", "中等", "媒人", "踏破门槛",
+    "田埂", "老汉", "牵牛", "季节", "春夏秋冬", "回顾", "从前",
+    "早亡", "幼年", "少年时", "父母", "出身", "门第", "门当户对",
+    "晨光", "暮色", "炊烟", "牛羊", "风吹草低", "空山新雨",
+    "漫步", "闲坐", "品茶", "赏花", "闲话", "絮语", "家常",
+    "寒暄", "客套", "沏茶", "煎药", "缝衣", "洗衣", "扫地",
+)
+# 强冲突关键词（命中即视为高潮）— 用 2 字以上短句避免「打/破/杀」等单字误匹配
+# （如「踏破门槛」含「破」但不是冲突）
+_CLIMAX_CONFLICT_HINTS = (
+    "刺杀", "砍杀", "搏斗", "打斗", "击退", "击中", "击倒",
+    "追杀", "追击", "追捕", "围捕", "包围", "围困",
+    "砍向", "劈向", "砍倒", "劈倒",
+    "对质", "质问", "质问", "怒骂", "怒斥", "怒喝",
+    "跃出", "跃起", "扑出", "冲出", "跃过",
+    "出鞘", "拔剑", "拔刀", "抽刀",
+    "格挡", "闪避", "躲过", "闪过", "挡住",
+    "擒住", "被擒", "被押", "被绑",
+    "逃出", "逃脱", "逃跑", "逃入",
+    "中刀", "中剑", "中箭", "中拳",
+    "打飞", "踢飞", "撞飞", "甩飞",
+    "厮打", "扭打", "肉搏",
+)
+# 关键情感戏关键词 — 同样用 2 字以上短句
+_CLIMAX_EMOTION_HINTS = (
+    "诀别", "告别", "永别", "重逢", "相认",
+    "拥抱", "拥抱", "相拥",
+    "哭泣", "痛哭", "落泪", "流泪", "泪流",
+    "失声", "哽咽", "抽泣",
+    "跪地", "下跪", "叩首", "叩拜",
+    "释怀", "释然", "恍然", "醒悟",
+    "承认", "认错", "认罪",
+    "立誓", "发誓", "起誓", "许诺", "承诺",
+    "思念", "想念", "怀念", "追忆", "追思",
+    "悔恨", "悔悟", "愧疚", "亏欠",
+    "诀别", "永诀",
+)
+
+
+def _check_climax_priority(shots: list[dict]) -> dict:
+    """v6.37 新增（08-20）：检测非高潮镜头（背景/过渡/日常），v6.35 规则 3.7 落地.
+
+    判定：
+    1. prompt + ff_desc + lf_desc + narration_segment 命中背景关键词
+    2. 同时未命中强冲突/关键情感戏关键词
+    3. 豁免：开篇 1-2 镜（idx 0/1）若 duration ≤3 秒 → 视为合法快铺垫
+
+    警告：每命中 1 镜 → 警告「非高潮镜头，应改 0 镜 / 信息由旁白承担」。
+    全片非高潮 > 2 镜 → 加总览警告「全片非高潮 N 镜 > 2 上限」。
+    """
+    warnings = []
+    background_ids = []
+    for shot in shots:
+        idx = shot.get("index", "?")
+        if idx == 0:  # 跳过 hook
+            continue
+        fields = "".join([
+            shot.get("prompt", "") or "",
+            shot.get("ff_desc", "") or "",
+            shot.get("lf_desc", "") or "",
+            shot.get("narration_segment", "") or "",
+        ])
+        if len(fields) < 4:
+            continue
+        has_bg = any(h in fields for h in _CLIMAX_BG_HINTS)
+        if not has_bg:
+            continue
+        has_conflict = any(h in fields for h in _CLIMAX_CONFLICT_HINTS)
+        has_emotion = any(h in fields for h in _CLIMAX_EMOTION_HINTS)
+        if has_conflict or has_emotion:
+            continue
+        # 开篇 1-2 镜（idx 1-2）若 duration ≤3s，视为合法快铺垫
+        if idx in (1, 2):
+            try:
+                dur = float(shot.get("duration_sec") or shot.get("duration") or 0)
+            except (TypeError, ValueError):
+                dur = 0
+            if dur > 0 and dur <= 3.0:
+                continue
+        background_ids.append(idx)
+        warnings.append(
+            f"镜头{idx}: 非高潮镜头（背景/过渡/日常），v6.35 规则 3.7 应为 0 镜——"
+            f"信息由旁白（narration_segment）一句带过，禁止单独成镜占用剧情预算"
+        )
+    if len(background_ids) > 2:
+        warnings.insert(
+            0, f"全片非高潮镜头 {len(background_ids)} 镜 > 2 上限（v6.35 仅允许开篇 1-2 镜快铺垫）"
+        )
+    for w in warnings:
+        _get_logger().warn(f"高潮优先: {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
+    return {"pass": True, "issues": [], "warnings": warnings}
+
+
 def _run_prompt_checklist(script: dict) -> dict:
     """运行分镜提示词检查表（v6.3 新增）.
 
@@ -3693,6 +3817,15 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v6.33 新增：关键帧物理时刻 = motion_desc 时段对齐（08-18 钩子坑：kfs 全堆 post 段、缺 pre 帧）
     results["kf_time_window_alignment"] = _check_kf_time_window_alignment(shots, script.get("hook"))
 
+    # v6.37 新增：高潮优先原则检查（08-20 高潮优先 prompt 落地，对应规则 3.7）
+    # 检测"非高潮"镜头（命中背景/过渡/日常关键词 + 未命中强冲突/关键情感戏关键词）
+    # → 警告应改为 0 镜（v6.35 规则 3.7）；开篇 1-2 镜快铺垫 ≤3 秒可豁免
+    results["climax_priority"] = _check_climax_priority(shots)
+
+    # v6.38 新增：长破折号检查（08-21 吸收 shyman159/seedance 铁律 9，规则 56）
+    # prompt 含「————」长破折号 → 改用空行/换行/【方括号区块标题】
+    results["long_dash_usage"] = _check_long_dash_usage(shots, script.get("hook"))
+
     # 综合判定：任一硬性检查失败则整体不通过
     # v6.5: 增加 script_novel_alignment 到硬性检查
     # v6.7: 增加 ff_lf_completeness 到硬性检查（lf_desc 为空会导致静态视频）
@@ -3739,6 +3872,7 @@ _REGEN_FEEDBACK_LABELS = {
     "prop_spatial_anchor": "道具空间方位",
     "keyframes_quality": "关键帧质量",
     "kf_temporal_consistency": "kf时序一致性",
+    "kf_time_window_alignment": "kf物理时刻=时段铁律(v6.33)",
     "opening_hook": "开篇冲突",
     "punch_density": "爆点密度",
     "dialogue_length": "对白长度",
@@ -3746,6 +3880,7 @@ _REGEN_FEEDBACK_LABELS = {
     "combat_action": "打斗打击反馈",
     "camera_movement": "一镜一运镜",
     "camera_upgrade": "高张力运镜升级",
+    "focal_switch": "切换拍摄对象",
     "lighting_position": "人像光位",
     "forbidden_abstract": "禁抽象词",
     "pose_continuity": "角色状态锁定",
@@ -3756,6 +3891,7 @@ _REGEN_FEEDBACK_LABELS = {
     "ff_lf_completeness": "首尾帧完整性",
     "ff_motion_timeline": "首帧motion时序",
     "ff_multi_action": "ff多动作堆叠",
+    "ff_desc_anchors": "ff锚点(服装色/威胁源朝向)",
     "over_shoulder_lock": "过肩锁定",
     "restrained_emotion": "克制情绪",
     "strong_emotion_chain": "强情绪顺序链",
@@ -3769,6 +3905,10 @@ _REGEN_FEEDBACK_LABELS = {
     "action_overlap": "动作重叠",
     "multi_person_staging": "多人站位",
     "frame_weapon_legality": "非战斗镜头武器词",
+    "subtitle_leak": "画面无字幕(规则40)",
+    "grounding": "原文锚点校验",
+    "climax_priority": "高潮优先原则(v6.35)",
+    "long_dash_usage": "长破折号使用(规则56/v6.38)",
 }
 
 
@@ -3814,14 +3954,24 @@ def build_regen_feedback(script: dict, novel_text: str = "",
     top = sorted(grouped.items(), key=lambda kv: -len(kv[1]))[:max_categories]
     lines = []
     for key, warns in top:
+        label = _REGEN_FEEDBACK_LABELS.get(key, key)
+        # 08-20（v6.37）：改为每类全量例举（之前只首例，信息不足）。
+        # 提取每条 warning 的镜头号前缀，列出所有命中镜头号；再附首例完整文本（截断）。
+        import re as _re_b
+        shot_ids = set()
+        for w in warns:
+            for m in _re_b.finditer(r"镜头(\d+)(?:→(\d+))?|钩子", w):
+                for g in m.groups():
+                    if g:
+                        shot_ids.add(f"镜头{g}" if g.isdigit() else "钩子")
+        shot_str = ",".join(sorted(shot_ids, key=lambda s: int(s.replace("镜头", "")) if s.startswith("镜头") and s[2:].isdigit() else -1)) or "全局"
         first = warns[0].strip()
         if len(first) > per_line_chars:
             first = first[:per_line_chars] + "…"
-        label = _REGEN_FEEDBACK_LABELS.get(key, key)
-        lines.append(f"- {label} {len(warns)}处：{first}")
+        lines.append(f"- {label} {len(warns)}处（{shot_str}）：{first}")
     body = "\n".join(lines)
     return (
-        "\n\n# 本地校验反馈（来自分镜检查表，请针对性修正；「N处」=命中镜头数）\n"
+        "\n\n# 本地校验反馈（来自分镜检查表，请针对性修正；「N处」=命中镜头数，括号内=镜头号）\n"
         + body + "\n"
     )
 
@@ -5232,6 +5382,34 @@ def _check_subtitle_leak(shots: list[dict], hook: dict = None) -> dict:
             )
     for w in warnings:
         _get_logger().warn(f"字幕泄漏: {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+def _check_long_dash_usage(shots: list[dict], hook: dict = None) -> dict:
+    """v6.38 新增：长破折号「————」检查（08-21 吸收 shyman159/seedance 铁律 9 排版规则）.
+
+    规则56: prompt 正文中禁止使用「————」长破折号作分隔符。
+    长破折号会污染 prompt 排版结构、影响 LLM 对分段/换行的理解。
+    改用：空行/换行/【方括号区块标题】（如【角色声线锁定】【声音】）。
+    warning-only（防崩神词放最末，长破折号中间也能用但建议改）。
+    """
+    issues, warnings = [], []
+    import re
+    # 匹配连续 3+ 个 em dash（—— 实际是 2 字符 "—" "—"）
+    long_dash_re = re.compile(r'—{3,}')
+    targets = list(shots) + ([hook] if hook else [])
+    for s in targets:
+        text = " ".join([s.get("prompt", ""), s.get("ff_desc", ""),
+                         s.get("lf_desc", ""), s.get("motion_desc", "")])
+        m = long_dash_re.search(text)
+        if m:
+            label = "hook" if (hook and s is hook) else s.get("index", "?")
+            warnings.append(
+                f"镜头{label}: prompt 含「{m.group()}」长破折号（≥3 个 ——）——"
+                f"改用空行/换行/【方括号区块标题】（规则 56，08-21 吸收 seedance 铁律 9）"
+            )
+    for w in warnings:
+        _get_logger().warn(f"长破折号: {w}")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 

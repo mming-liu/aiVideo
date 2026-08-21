@@ -21,6 +21,11 @@ class TextGenerationRequest:
     reasoning_effort: Optional[str] = None
     # 模型覆盖（可选，默认取 config.DEEPSEEK_MODEL）。bench 对比 v4-flash/v4-pro 用。
     model: Optional[str] = None
+    # v6.37（08-20）：结构化多轮 user 输入。每项形如 {"role": "user"|"assistant", "content": "..."}
+    # 若设置，provider 优先使用（DeepSeek Responses 走 input；其他 chat 走 messages）。
+    # 修复轮用此分离"INPUT(原文+当前分镜)"与"REPAIR FEEDBACK"，避免拼成一段。
+    # 旧 user_prompt 仍保留作回退（None 时使用）。
+    user_inputs: Optional[list] = None
 
 
 @dataclass

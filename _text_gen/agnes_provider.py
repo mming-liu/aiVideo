@@ -87,12 +87,18 @@ class AgnesTextService(TextGenerationService):
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
             }
-            payload: dict = {
-                "model": model,
-                "messages": [
+            # v6.37：结构化多轮输入（user_inputs）优先于 user_prompt 字符串
+            if req.user_inputs:
+                _messages = [{"role": "system", "content": req.system_prompt}]
+                _messages.extend(req.user_inputs)
+            else:
+                _messages = [
                     {"role": "system", "content": req.system_prompt},
                     {"role": "user", "content": req.user_prompt},
-                ],
+                ]
+            payload: dict = {
+                "model": model,
+                "messages": _messages,
                 "max_tokens": req.max_tokens,
                 "temperature": req.temperature,
             }

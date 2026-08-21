@@ -66,10 +66,12 @@ class DeepSeekTextService(TextGenerationService):
         effort = req.reasoning_effort or config.DEEPSEEK_REASONING_EFFORT
         print(f"[INFO] 正在调用 DeepSeek Responses ({model}, effort={effort}) 生成分镜脚本...")
 
+        # v6.37：结构化多轮输入（user_inputs）优先于 user_prompt 字符串
+        _input_value = req.user_inputs if req.user_inputs else req.user_prompt
         params = {
             "model": model,
             "instructions": req.system_prompt,
-            "input": req.user_prompt,
+            "input": _input_value,
             "max_output_tokens": req.max_tokens,
             "temperature": req.temperature,
             # 思考模式开关/强度（none 关闭；思考模式下 temperature 被 API 忽略）
@@ -132,12 +134,18 @@ class DeepSeekTextService(TextGenerationService):
     def _generate_chat(self, client, req: TextGenerationRequest) -> TextGenerationResult:
         """走 Chat Completions（reasoner 老模型回退）."""
         model = req.model or self._model
-        api_params = {
-            "model": model,
-            "messages": [
+        # v6.37：结构化多轮输入（user_inputs）优先于 user_prompt 字符串
+        if req.user_inputs:
+            messages = [{"role": "system", "content": req.system_prompt}]
+            messages.extend(req.user_inputs)
+        else:
+            messages = [
                 {"role": "system", "content": req.system_prompt},
                 {"role": "user", "content": req.user_prompt},
-            ],
+            ]
+        api_params = {
+            "model": model,
+            "messages": messages,
             "max_tokens": req.max_tokens,
             "temperature": req.temperature,
         }
