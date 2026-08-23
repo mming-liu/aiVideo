@@ -6,12 +6,20 @@ from typing import Optional
 
 @dataclass
 class TextGenerationRequest:
-    """单次文本生成请求."""
+    """单次文本生成请求.
+
+    v6.41+ 稳定化（08-23, 治理多次跑批结构漂移）：
+    - temperature 0.7 → 0.05（参考大模型稳定性指南，结构化解析任务建议 0.05-0.1）
+    - 新增 top_p=0.2（核采样收窄，双重压制随机性）
+    - 新增 seed=42（API 支持则传；不支持静默忽略；同 seed 同输入应稳定）
+    """
 
     system_prompt: str
     user_prompt: str
     max_tokens: int = 8000
-    temperature: float = 0.7
+    temperature: float = 0.05
+    top_p: float = 0.2
+    seed: Optional[int] = 42
     # DeepSeek Responses API json_schema 结构化输出（可选）。
     # 传了就用 strict json_schema 约束模型输出，返回必然合法 JSON。
     json_schema: Optional[dict] = None

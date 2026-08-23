@@ -226,7 +226,71 @@ def build_prompt(novel_text: str, bank=None, objects_bank=None,
     if cap_ctx:
         prompt = prompt + cap_ctx
 
+    # 08-23 v6.41 P19 闭环：硬约束总时长（红果标准 60-90s）
+    # 8-22~8-23 跑批实测 LLM 默认每镜 3-5s → 总 30-40s，差红果 60s 下限 20+s。
+    # 根因：prompts 仅有"特写 2-4s/中景 3-6s/远景 5-8s"逐镜引导，无总时长约束。
+    # 修复：在 prompt 末尾追加"总时长 60-90s + 镜头数 → 平均每镜时长"硬约束，
+    # 让 LLM 规划时按平均时长分配单镜 duration_sec，避免 hard_fix 层后置拉伸。
+    total_dur_ctx = _build_total_duration_constraint(shot_count_min=SHOT_COUNT_MIN,
+                                                     shot_count_max=SHOT_COUNT_MAX)
+    if total_dur_ctx:
+        prompt = prompt + total_dur_ctx
+
     return prompt
+
+
+def _build_total_duration_constraint(shot_count_min: int, shot_count_max: int) -> str:
+    """v6.41 P19 闭环：红果 60-90s 总时长硬约束（08-23 增，08-23 改 8-10 镜）.
+
+    8-22 跑批实测 LLM 生成的 duration_sec 总和 30-40s，距红果 60-90s 下限差 20+s。
+    旧版仅在 hard_fix 层后置拉伸（W6 _hard_fix_runtime_extend），但受 motion_desc
+    物理动作时长约束，单镜最多加 2s × 8 镜 = +16s，仍达不到 60s。
+
+    根因：prompts 模板只规定单镜 duration 范围（特写 2-4s / 中景 3-6s / 远景 5-8s），
+    没规定 SUM(duration_sec) 的总时长。LLM 按每镜 3-5s 规划自然落入 30-40s。
+
+    修法：prompt 末尾追加"总时长 60-90s"硬约束 + 镜头数→平均时长推导，让 LLM
+    在第一次生成就把每镜 duration_sec 拉到合理区间（结合 ≤8s 单镜 cap）。
+
+    08-23 v6.41 P19.2：原 3-8 镜 + 平均 7.5s → LLM 默认按 6s/镜规划 → 8 镜 48s
+    不到 60s 红果下限。改为 **8-10 镜 + 平均 6-9s/镜** → 48-90s 覆盖红果区间。
+
+    08-23 用户规则：**正片分镜总时长（不含钩子）≥ 60s，单镜 ≤ 8s，钩子时长另算**。
+    单镜 cap 从 12s 收紧到 8s；60s 下限只统计正片分镜，钩子不进总时长。
+    """
+    from shared.model_caps import active_video_duration_cap
+    cap = active_video_duration_cap() or 12
+    # 8-10 镜 + 60-90s 目标 → 平均每镜 6-8s（单镜硬上限 8s）
+    min_per_shot = 6.0
+    target_per_shot = 7.5
+    max_per_shot = min(8.0, cap)  # 单镜 cap（08-23 用户规则：≤8s，与模型 cap 取严）
+    return (
+        f"\n\n### ⏰ 红果 60-90s 总时长硬约束（最高优先级，违反则全章返工）\n"
+        f"本章是抖音 60-90s 竖屏短剧，**正片分镜（不含钩子，钩子时长另算）duration_sec 之和必须在 60-90s 之间**。\n"
+        f"按 {shot_count_min}-{shot_count_max} 镜规划：每镜平均 {min_per_shot:.1f}-{target_per_shot:.1f}s"
+        f"（{shot_count_min} 镜 × {min_per_shot:.0f}s={shot_count_min*int(min_per_shot):.0f}s, "
+        f"{shot_count_max} 镜 × {target_per_shot:.0f}s={shot_count_max*int(target_per_shot):.0f}s）。\n"
+        f"\n"
+        f"**规划方式**：\n"
+        f"- 开场/建立镜：{min_per_shot:.0f}-{target_per_shot:.0f}s（含人物姿态、空间关系建立）\n"
+        f"- 对话/反应镜：{min_per_shot:.0f}-{target_per_shot:.0f}s（必须能念完台词+展示反应）\n"
+        f"- 打斗/动作镜：{target_per_shot:.0f}-{max_per_shot:.0f}s（动作必须完整）\n"
+        f"- 末镜/留白镜：{min_per_shot:.0f}-{target_per_shot:.0f}s（情绪渲染时间）\n"
+        f"\n"
+        f"**硬约束**：\n"
+        f"- 正片分镜 SUM(duration_sec) ≥ 60s（差 1s 都会被打回；钩子不计入，钩子时长另算）\n"
+        f"- 正片分镜 SUM(duration_sec) ≤ 90s（超时会被强制截断）\n"
+        f"- 末镜 duration_sec ≥ {min_per_shot:.0f}s（红果末镜情绪渲染下限）\n"
+        f"- 单镜 ≤ {max_per_shot:.0f}s（硬上限，超过必被打回夹取）\n"
+        f"\n"
+        f"**禁止**：\n"
+        f"- 单镜 2-3s 短镜堆叠（10 镜 × 3s = 30s，差 30s 必返工）\n"
+        f"- 默认 4-5s 中景对话（8 镜 × 4s = 32s，必返工）\n"
+        f"- 单镜 > {max_per_shot:.0f}s 长镜头（动作链必须拆多镜，每镜 ≤ {max_per_shot:.0f}s）\n"
+        f"\n"
+        f"**自检**：写完每个 shot 后，累计正片分镜 SUM(duration_sec)（不含钩子），"
+        f"未到 60s 就把每镜 +1-2s（仍 ≤ {max_per_shot:.0f}s）或增加镜头数。\n"
+    )
 
 
 def _build_audio_instruction() -> str:
@@ -248,18 +312,18 @@ def _build_audio_instruction() -> str:
 
 
 def _duration_cap_guidance() -> str:
-    """当前视频模型单镜时长上限引导（仅当上限 < 模板里的 ≤10s 引导时收紧）.
+    """当前视频模型单镜时长上限引导（仅当上限 < 模板里的 ≤8s 硬上限时收紧）.
 
     模板已要求「单镜头时长：特写/空镜 2-4秒，中景 3-6秒，远景/动作 5-8秒，
-    严禁超过 10 秒」。对上限更低的模型（如 Hailuo v1 720P=6s）必须覆盖该引导，
-    否则 LLM 会按 10s 规划、生成超上限镜头被 provider 截断。
+    严禁超过 8 秒（08-23 用户规则硬上限）」。对上限更低的模型（如 Hailuo v1
+    720P=6s）必须覆盖该引导，否则 LLM 会按 8s 规划、生成超上限镜头被 provider 截断。
     """
     from shared.model_caps import active_video_duration_cap
     cap = active_video_duration_cap()
-    if not cap or cap >= 10:
+    if not cap or cap >= 8:
         return ""
     return (
-        f"\n\n### 视频模型时长上限 {cap} 秒（必须遵守，覆盖上述 10 秒引导）\n"
+        f"\n\n### 视频模型时长上限 {cap} 秒（必须遵守，覆盖上述 8 秒引导）\n"
         f"当前视频模型单镜时长上限为 {cap} 秒。任何镜头（含钩子）时长不得超过 {cap} 秒，"
         f"超出会被视频服务截断。动作/对白规划必须落在 {cap} 秒内；"
         f"无法在 {cap} 秒内完成的动作拆成多个 2-3 秒短镜快切。\n"

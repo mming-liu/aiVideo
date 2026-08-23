@@ -19,6 +19,13 @@ from shared.model_caps import active_video_duration_cap, active_video_model
 SPEECH_RATE = 3.5
 PAUSE_PER_SHOT = 1.5
 MIN_SHOT_DURATION = 3.0
+# 单镜硬上限（08-23 用户规则）：正片单镜时长不长于 8s。
+# 钩子时长另算（不受 8s 限制，见 _compute_timecodes hook 段）。
+MAX_SHOT_DURATION = 8.0
+# 正片分镜总时长硬下限（08-23 用户规则）：不含钩子 ≥ 60s。
+# 实际拉伸动作在 constraints/runtime_extend.py（W6，目标 65s 留裕度），
+# 此处仅用于日志告警。钩子时长另算，不计入该下限。
+MIN_TOTAL_SHOTS_DURATION = 60.0
 
 
 def _estimate_duration(text: str) -> float:
@@ -103,6 +110,31 @@ def _extract_motion_duration(motion_desc: str) -> float | None:
     return max(positives) if positives else None
 
 
+def _align_frame_duration(raw: float, fps: float) -> float:
+    """时长对齐整数帧 + 输出 ≤3 位小数（08-23 用户要求 duration 保留 2-3 位小数）.
+
+    帧对齐铁律（v6.32）：duration × fps 必须是整数帧，否则视频生成多/少一帧卡顿。
+    但 fps=24 时 1/24 = 0.04166… 是循环小数，直接 round(raw*fps)/fps 得到
+    5.583333333333333 这类长小数；若粗暴 round(x, 2) 又破坏整数帧对齐
+    （5.58×24=133.92 非整帧 → style_prefix.validate_fps_consistency 每次误报）。
+
+    关键：fps=24 时 duration = 帧数/24 只有在帧数是 3 的倍数时才非循环
+    （3k/24 = k/8，最多 3 位小数：0.125/0.375/0.5…）。因此把帧数归一化到
+    最近 3 的倍数——同时满足「整数帧对齐」+「输出 ≤3 位小数」。
+
+    通用化：仅当帧数×1000/fps 非整数（时长在 3 位内不可精确表示，如 fps=24/30）
+    才归一化到 3 帧步长；fps=25 等 1/fps 可整除 1000 的帧率天然 2 位小数，跳过。
+    最大偏差 1.5 帧 = 0.0625s（fps=24），远小于 QC 时长容差 1.5s。
+    """
+    if fps <= 0:
+        return round(float(raw), 2)
+    frames = round(float(raw) * fps)
+    # 时长在 3 位小数内能否精确表示？帧数 × 1000 / fps 应为整数
+    if abs(frames * 1000 / fps - round(frames * 1000 / fps)) > 1e-6:
+        frames = round(frames / 3) * 3
+    return frames / fps
+
+
 def _compute_timecodes(script: dict) -> None:
     """根据 motion_desc 时间分段或对话字数计算每个镜头的 timecode。
 
@@ -132,6 +164,9 @@ def _compute_timecodes(script: dict) -> None:
     # 超过模型上限（如 Seedance 1.5 pro=12s、Hailuo v1 720P=6s）被 provider
     # 截断——provider 现在会按能力表夹取，但那是「截断内容」而非「规划时长」。
     dur_cap = active_video_duration_cap()
+    # 08-23 用户规则：正片单镜 ≤ 8s（MAX_SHOT_DURATION）；模型 cap 更严则随模型。
+    # 钩子不受 8s 限制（钩子时长另算，下方 hook 段仍只按模型 cap 夹取）。
+    shot_cap = MAX_SHOT_DURATION if not dur_cap else min(dur_cap, MAX_SHOT_DURATION)
     clamped_count = 0
 
     for shot in shots:
@@ -159,10 +194,13 @@ def _compute_timecodes(script: dict) -> None:
         # 旧顺序「先对齐后 max」在分数 fps（如 23.976）下会被 max 兜出
         # 3.0s 非整帧时长，破坏对齐保证（step01.log 反复报 duration 与 fps 不对齐）。
         raw = max(base_duration, MIN_SHOT_DURATION)
-        duration = round(raw * fps) / fps
-        # 按视频模型时长上限夹取（先夹后对齐，保证整帧；超过上限会被 provider 截断内容）
-        if dur_cap and duration > dur_cap:
-            duration = round(dur_cap * fps) / fps
+        # 08-23：_align_frame_duration 兼顾「整数帧对齐」+「输出 ≤3 位小数」
+        # （fps=24 时长不再出现 5.583333333333333 长小数）
+        duration = _align_frame_duration(raw, fps)
+        # 按单镜上限夹取（模型 cap / 8s 硬限取严；先夹后对齐，保证整帧）。
+        # 超过模型上限会被 provider 截断内容；8s 是 08-23 用户规则（钩子另算）。
+        if duration > shot_cap:
+            duration = _align_frame_duration(shot_cap, fps)
             clamped_count += 1
 
         shot["duration"] = duration
@@ -195,8 +233,9 @@ def _compute_timecodes(script: dict) -> None:
 
     script["timeline"] = timeline
 
-    # 计算总分镜时长
-    total = sum(s.get("duration", 0) for s in shots)
+    # 计算正片分镜总时长（08-23 用户规则：≥60s 下限只算正片分镜，钩子另算）
+    shots_total = sum(s.get("duration", 0) for s in shots)
+    total = shots_total
 
     # 加上钩子分镜时长（如果有）
     # v6.14: hook 时长下限 = max(motion_desc 时间分段, LLM duration, 对话字数估时)。
@@ -225,18 +264,32 @@ def _compute_timecodes(script: dict) -> None:
             hook_duration = MIN_SHOT_DURATION
         # 下限保护：钩子是开场悬念，至少给足动作时间，禁止 < MIN_SHOT_DURATION
         hook_duration = max(hook_duration, MIN_SHOT_DURATION)
-        # v6.32：钩子时长同样按 fps 对齐整数帧（与 shots 一致）
-        hook_duration = round(hook_duration * fps) / fps
+        # v6.32：钩子时长同样按 fps 对齐整数帧（与 shots 一致）；
+        # 08-23：改用 _align_frame_duration，兼顾整数帧对齐 + 输出 ≤3 位小数
+        hook_duration = _align_frame_duration(hook_duration, fps)
         # 钩子时长同样受视频模型上限约束
         if dur_cap and hook_duration > dur_cap:
-            hook_duration = round(dur_cap * fps) / fps
+            hook_duration = _align_frame_duration(dur_cap, fps)
         hook["duration"] = round(hook_duration, 2)
         hook["duration_sec"] = round(hook_duration, 2)
         total += hook_duration
 
     script["total_duration"] = round(total, 2)
     script["total_effective_duration"] = round(total, 2)
-    print(f"[INFO] 时间轴计算完成: {len(shots)} 镜 + {1 if hook else 0} 钩子, 总计 {total:.1f}s")
-    if clamped_count and dur_cap:
-        print(f"[INFO] {clamped_count} 个镜头时长超过视频模型上限 {dur_cap}s，已夹取到 {dur_cap}s"
+    # 08-23 用户规则日志：正片分镜时长（不含钩子）与钩子时长分开报
+    hook_dur = 0.0
+    if hook and isinstance(hook, dict):
+        try:
+            hook_dur = float(hook.get("duration_sec") or hook.get("duration") or 0)
+        except (TypeError, ValueError):
+            hook_dur = 0.0
+    print(f"[INFO] 时间轴计算完成: {len(shots)} 镜 {shots_total:.1f}s（不含钩子）"
+          + (f" + 1 钩子 {hook_dur:.1f}s（另算）" if hook else "")
+          + f", 总计 {total:.1f}s")
+    if shots_total < MIN_TOTAL_SHOTS_DURATION:
+        print(f"[WARN] 正片分镜总时长 {shots_total:.1f}s < {MIN_TOTAL_SHOTS_DURATION:.0f}s 硬下限"
+              f"（不含钩子），W6 时长拉伸将补足（constraints/runtime_extend）")
+    if clamped_count:
+        cap_src = f"，视频模型上限 {dur_cap}s" if dur_cap and dur_cap < MAX_SHOT_DURATION else ""
+        print(f"[INFO] {clamped_count} 个镜头时长超过单镜上限 {shot_cap}s{cap_src}，已夹取到 {shot_cap}s"
               f"（active model: {active_video_model()}）")

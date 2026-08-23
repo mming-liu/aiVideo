@@ -246,11 +246,19 @@ NEGATIVE_LAYERS = {
 
 
 def get_global_render_config() -> dict:
-    """获取当前全局渲染配置（可从 .env.content 覆盖）."""
+    """获取当前全局渲染配置（可从 .env.content 覆盖）.
+
+    解析顺序（v6.43 08-23 审计）：
+      1. RENDER_RESOLUTION（专用 override，未设则空）
+      2. VIDEO_SIZE（项目统一目标尺寸，格式 `WIDTH*HEIGHT`，如 `1440*2560`）
+      3. _GLOBAL_RENDER_DEFAULTS["resolution"] = "1080*1920"（仅作 fallback）
+    原顺序只查 RENDER_RESOLUTION，没设就回到硬编码 1080*1920——但项目里
+    VIDEO_SIZE 才是真值（与 step04 MERGE_RESOLUTION 一致）。
+    """
     config = dict(_GLOBAL_RENDER_DEFAULTS)
     # 允许 .env.content 选择性覆盖
     env_overrides = {
-        "resolution": os.getenv("RENDER_RESOLUTION"),
+        "resolution": os.getenv("RENDER_RESOLUTION") or os.getenv("VIDEO_SIZE"),
         "ratio": os.getenv("RENDER_RATIO"),
         "fps": os.getenv("RENDER_FPS"),
         "render_style": os.getenv("RENDER_STYLE"),
@@ -1437,6 +1445,17 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                 f"{c}面朝{d}方向，侧身不看向镜头" for c, d in _orient_pairs
             )
             strict_constraints += f"【朝向】{_parts}。"
+
+        # 08-23 景别量化（用户反馈"应中景却画成远景"）：描述写"中景/中近景"却又
+        # 写"全身入画"时，图片模型为塞下全身把镜头拉远成远景。中景 = 人物腰腹以上
+        # 入画、人物占画面高度约 2/3——追加量化约束覆盖「全身入画」的拉远倾向。
+        _frame_desc = (shot.get("ff_desc", "") or "") + " " + (shot.get("lf_desc", "") or "")
+        if any(sz in _frame_desc for sz in ("中景", "中近景")) and "全身入画" in _frame_desc:
+            strict_constraints += (
+                "【景别】本镜头为【中景】：人物腰部以上、半身入画，人物高度约占画面"
+                "高度的三分之二，主体足够大、清晰可辨。禁止把人物缩成远景小人，"
+                "禁止全身入画拉远景别。"
+            )
 
         # 首帧禁血/禁动作结果（08-09 首帧杨旭胸口血迹、刺客血眼）：首帧是动作
         # 「前一刻」（破水前/未刺中），画面必须干净无血。血污/伤口只允许出现在尾帧。

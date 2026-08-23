@@ -1,0 +1,34 @@
+name: boat_crop_strip_yaml
+description: 船体裁切短语剥离（DSL PoC，对应 boat_crop.py 简化版）
+severity: warn
+fields: [prompt, ff_desc, lf_desc]
+
+when:
+  op: or
+  exprs:
+    - op: matches
+      field: prompt
+      pattern: "[，,。]?\\s*船身(?:向画)?[^。，,]{0,3}[左右]方?延伸出画外"
+    - op: matches
+      field: prompt
+      pattern: "[，,。]?\\s*只露出船身(?:的)?一部分"
+    - op: matches
+      field: prompt
+      pattern: "[，,。]?\\s*船(?:头|尾)[^。，,]{0,6}(?:在画外|出画外|被截断|被切掉)"
+    - op: matches
+      field: ff_desc
+      pattern: "[，,。]?\\s*船身(?:向画)?[^。，,]{0,3}[左右]方?延伸出画外"
+    - op: matches
+      field: ff_desc
+      pattern: "[，,。]?\\s*只露出船身(?:的)?一部分"
+    - op: matches
+      field: lf_desc
+      pattern: "[，,。]?\\s*船(?:头|尾)[^。，,]{0,6}(?:在画外|出画外|被截断|被切掉)"
+
+then:
+  action: strip_patterns
+  target: prompt
+  patterns:
+    - "[，,。]?\\s*船身(?:向画)?[^。，,]{0,3}[左右]方?延伸出画外(?:（[^（）]{0,30}）)?"
+    - "[，,。]?\\s*只露出船身(?:的)?一部分(?:（[^（）]{0,30}）)?"
+    - "[，,。]?\\s*船(?:头|尾)[^。，,]{0,6}(?:在画外|出画外|被截断|被切掉)(?:（[^（）]{0,30}）)?"

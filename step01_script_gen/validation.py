@@ -3533,7 +3533,18 @@ def _check_prompt_length_budget(shots: list[dict], hook: dict | None = None) -> 
     cap = active_video_prompt_cap()
     if not cap or cap <= 0:
         return {"pass": True, "issues": [], "warnings": []}
-    budget = max(1, cap - 1200)  # 预留 step02 固定约束余量
+    # 08-23 修复 cap 误报（v6.40+）：原 `budget = max(1, cap - 1200)` 当 cap<1200
+    # 时算出 budget=1（wan2.7 cap=500 → 500-1200=-700 → max(1, -700)=1），
+    # 任何非空字段都报"超预算 1 字"，全镜误报 8-22 实测全镜命中。
+    # 真实意图：step01 字段是"模型送进 step02 之前的内容"，step02 在此基础上
+    # 拼 ~1200 风格前缀/约束/参考图清单，超 model cap 才截断。step01 字段自身
+    # 应按 cap 100% 控制（不能指望 step02 一定在 1200 内——实际可浮动 800-1400）。
+    # 收紧为：budget = cap * 0.5（step01 字段 < model cap 一半，step02 拼接 1200 后
+    # 仍大概率 < cap）。模型 prompt 上限 < 1200 时直接用 cap 当预算（不预留）。
+    if cap < 1200:
+        budget = cap
+    else:
+        budget = int(cap * 0.5)
     warnings = []
     items = list(shots) + ([hook] if hook else [])
     for shot in items:
@@ -4247,38 +4258,56 @@ def post_fix_shot_prompts(script: dict) -> dict:
                 _anchor = _kf_layout(shot, script.get("characters", []),
                                      role_scan_text=_role_scan)
                 if _anchor:
-                    _kf["desc"] = f"{_kd}。{_anchor}"
+                    # v6.43（08-23 审计）：原 f"{_kd}。{_anchor}" 在 _kd 末尾已
+                    # 有「。」时会产生「。。」双句号（实测 24 处）。rstrip 句末
+                    # 标点后再拼接。
+                    _kd_stripped = _kd.rstrip("。！？，,;；")
+                    _kf["desc"] = f"{_kd_stripped}。{_anchor}"
 
         # 08-17（P18 闭环）：kf 坐→仰卧跳变自动改写过渡态
-        # 原逻辑：FF 杨旭「盘坐/坐/端坐」+ kf[0] t<1「仰卧/躺/仰倒」= 跳变
+        # v6.43（08-23 审计）：原版写死「杨旭」——切到其他小说失效。改为
+        # 遍历 shot.char_layout / script.characters 所有出镜角色，每个角色
+        # 都检查「首帧坐姿 → kf 仰卧/躺倒」跳变。
         # 只输出 WARN 等 LLM 修，跨轮残留。改为确定性改写：kf[0] 改成过渡态
         # 「身体后倾、即将倒地」类描述 + 标记「（过渡态）」，step02a/vimax_bridge
         # 锚定能直接用。幂等：「（过渡态）」已在则跳过。
         _ff_pose_m = _extract_state_markers(shot.get("ff_desc", "") or "")
-        _ff_yangxu = _ff_pose_m.get("poses", {}).get("杨旭", "")
-        if _ff_yangxu in ("盘坐", "盘膝", "端坐", "坐"):
+        _ff_poses = _ff_pose_m.get("poses", {}) or {}
+        # 收集本镜出镜角色：优先 char_layout，兜底 script.characters
+        _char_pool = list(_ff_poses.keys())
+        if not _char_pool:
+            for _cl in shot.get("char_layout") or []:
+                if isinstance(_cl, dict) and _cl.get("name"):
+                    _char_pool.append(str(_cl["name"]))
+        if not _char_pool:
+            _char_pool = ["杨旭"]  # 兜底（与旧行为兼容）
+        for _char in _char_pool:
+            _ff_p = _ff_poses.get(_char, "")
+            if _ff_p not in ("盘坐", "盘膝", "端坐", "坐"):
+                continue
+            handled = False
             for _kf in _kfs:
                 if not isinstance(_kf, dict):
                     continue
-                # v6.34 字段迁移：走 helper
                 if not is_middle_kf(_kf, shot):
                     continue
                 _kd = _kf.get("desc") or ""
                 if "（过渡态）" in _kd or "过渡态）" in _kd:
                     continue
                 _kf_m = _extract_state_markers(_kd)
-                _kf_yangxu = _kf_m.get("poses", {}).get("杨旭", "")
-                if _kf_yangxu in ("仰卧", "躺", "仰倒", "倒", "已躺下"):
-                    # 把 kf[0] 改写为过渡态：去掉「仰卧/躺」，改为「身体后倾、即将倒地」
+                _kf_p = _kf_m.get("poses", {}).get(_char, "")
+                if _kf_p in ("仰卧", "躺", "仰倒", "倒", "已躺下"):
                     _new_kd = re.sub(
-                        r"杨旭[^，。！？；、]*?(仰卧|躺下|仰倒|倒下)",
-                        "杨旭身体后倾、即将倒地",
+                        re.escape(_char) + r"[^，。！？；、]*?(仰卧|躺下|仰倒|倒下)",
+                        f"{_char}身体后倾、即将倒地",
                         _kd,
                     )
                     if _new_kd != _kd:
                         _kf["desc"] = f"{_new_kd}（过渡态）"
-                        # 仅改第一个命中（kf[0]），后续 kf 仍按自然推进
-                        break
+                        handled = True
+                        break  # 仅改第一个命中（kf[0]），后续 kf 仍按自然推进
+            if handled:
+                continue
 
         # 08-17（P18 闭环）：打斗镜 motion_desc 自动补打击反馈元素
         # 原逻辑：combat_action WARN 等 LLM 修，跨轮残留。改为确定性补强：
@@ -4370,7 +4399,10 @@ _INJURY_ANCHOR_WORDS = (
 # 通用版：使用「伤处白袍暗红洇痕持续可见」——不写死角色名，由 build 镜的
 # main_subject 推导（"听香"受伤则描述也用"听香伤处"）。这里保守地不带角色名前缀，
 # 让 step02a 锚定层再补具体角色（08-17 重构）。
-_INJURY_ANCHOR_TAIL = "伤处白袍暗红洇痕持续可见"
+# 08-23 用户反馈：旧措辞「暗红洇痕」对图片模型太含蓄（Seedream 4.5 画不出胸口血），
+# 图片模型不把「洇痕」理解为血 → 杨旭胸口被刺却没有血迹。改为明确的「血迹/血痕」。
+# 幂等检测 _STRONG_INJURY_ANCHORS 已含「血痕」，不会重复追加。
+_INJURY_ANCHOR_TAIL = "伤处白袍心口一片暗红血迹洇开，血痕清晰可见"
 
 # 视线方向兜底：发现「看/望/盯+人名/对象」但没带空间方位词时，按目标所在位置改写
 # 简易版：只处理「望满天星斗/望星斗」一类易识别模板，复杂场景留给校验 WARN。
@@ -4391,21 +4423,27 @@ _GAZE_FALLBACK_RULES = [
 ]
 
 # 道具兜底方位（按镜头场景/位置优先级匹配，找不到就放「画中」）
+# v6.43（08-23 审计）：原版「酒杯 → 画中杨旭手边」「油纸伞 → 画中听香手边」
+# 等写死本小说角色——切到其他小说（主角变林平之、场景变镖局）会失效或
+# 误植。规则：
+#   - 道具自然落点（炭炉/酒壶/灯盏/灯笼/钓杆/舴艋舟 等）→ 保留场景相关方位
+#   - 角色相关（酒杯/油纸伞/步摇/竹箫/刺客匕首/马车）→ 改为通用「画中」，
+#     由模型从上下文判断「谁持/谁近」
 _PROP_POS_FALLBACK = {
     "炭炉": "画中甲板",
     "酒壶": "画中甲板",
-    "酒杯": "画中杨旭手边",
+    "酒杯": "画中",
     "钓杆": "画右船舷",
-    "油纸伞": "画中听香手边",
-    "步摇": "画中听香发间",
+    "油纸伞": "画中",
+    "步摇": "画中发间",
     "灯盏": "画中船头",
     "灯笼": "画中岸边",
     "叉子粪铲": "画右地面",
     "农具": "画右地面",
-    "竹箫": "画中杨旭手边",
-    "马车": "画右岸边",
+    "竹箫": "画中",
+    "马车": "画右",
     "舴艋舟": "画中水面",
-    "刺客匕首": "画中刺客手边",
+    "刺客匕首": "画中",
     "船舷": "画右船舷",
 }
 
@@ -4467,25 +4505,33 @@ def _hard_fix_kf_pre_post_conflict(shots: list, hook: dict | None = None) -> int
             if t is None or t <= 0 or t >= dur:
                 continue
             desc = kf.get("desc") or ""
-            is_pre = any(kw in desc for kw in _KF_PRE_KW)
-            is_post = any(kw in desc for kw in _KF_POST_KW)
+            # v6.43（08-23 审计）：【角色锚定】块内自带「正对/仰卧」等词，
+            # 参与检测会自触发，删除正则还会跨标点吞掉锚定文本——检测与
+            # 删除只在锚定前的正文进行，锚定原样保留（与 constraint 版同步）。
+            anchor = ""
+            body = desc
+            if "【角色锚定】" in desc:
+                body, _anchor_tail = desc.split("【角色锚定】", 1)
+                anchor = "【角色锚定】" + _anchor_tail
+            is_pre = any(kw in body for kw in _KF_PRE_KW)
+            is_post = any(kw in body for kw in _KF_POST_KW)
             if is_pre and is_post:
                 continue
             # 真实矛盾：pre-state 帧 + 角色已"躺下/倒地/坠落" + 血/洇痕
             # → 动作起始不应该与"已躺血"同框（应当是 stab 帧：刀尖刚触或刚倒）
-            has_laying = any(w in desc for w in ("仰卧", "后仰", "倒地", "倒下", "坠落", "跌落"))
-            has_blood = any(w in desc for w in ("洇痕", "暗红", "血"))
+            has_laying = any(w in body for w in ("仰卧", "后仰", "倒地", "倒下", "坠落", "跌落"))
+            has_blood = any(w in body for w in ("洇痕", "暗红", "血"))
             if is_pre and has_laying and has_blood:
                 original = desc
                 for kw in _KF_PRE_KW:
-                    # 删 pre 关键词及其后到下一个分句边界（，。；）的内容
-                    # 含前面的"，刺客"或"刺客"等连接词
-                    pat = re.compile(r"[,，]?\s*\S{0,4}?[^，。；]*?" + re.escape(kw) + r"[^，。；]*?(?=[，。；]|$)")
-                    desc = pat.sub("", desc)
+                    # 删 pre 关键词所在逗号段（[^，。；] 限定单段，禁止跨标点吞句）
+                    pat = re.compile(r"[,，]?\s*[^，。；]*?" + re.escape(kw) + r"[^，。；]*?(?=[，。；]|$)")
+                    body = pat.sub("", body)
                 # 也删单独的"水花四溅"等孤立的 pre 关键词
                 for kw in _KF_PRE_KW:
-                    desc = re.sub(r"[,，]?\s*" + re.escape(kw), "", desc)
-                desc = re.sub(r"[,，]\s*[,，]", "，", desc).strip("，。； ")
+                    body = re.sub(r"[,，]?\s*" + re.escape(kw), "", body)
+                body = re.sub(r"[,，]\s*[,，]", "，", body).strip("，。； ")
+                desc = body + anchor
                 if desc != original:
                     kf["desc"] = desc
                     # v6.34 字段迁移：写 t_sec（半程）而非 time_ratio
@@ -4820,6 +4866,143 @@ def _hard_fix_injury_continuity(shots: list) -> int:
     return fixed
 
 
+# 跪坐角色改写时的目标措辞（幂等：已含「身侧/身旁」跳过）
+_KNEEL_BESIDE_IDIOM = ("身侧", "身旁", "身边", "脚边", "边上")
+
+
+def _hard_fix_kneel_beside_victim(shots: list, hook: dict | None = None) -> int:
+    """跪坐位硬修复（08-23 用户反馈 shot0：听香跪在船尾而非杨旭身侧）.
+
+    触发问题：同一镜头里既有"躺着的受害者"（杨旭仰卧船头、心口被刺），又有另一
+    角色"跪坐船尾/船头/船梢"（听香）。图片模型照 ff/lf 描述把两人分开画——
+    听香在船尾、杨旭在船头，画面失去"亲人守在伤者身旁"的张力，且跪向画外。
+
+    修法：受害者在场时，把"跪坐船X/船尾/甲板"改写为「跪坐{受害者}身侧/身旁，
+    面向{受害者}」。受害者名从 4 字段（ff/lf/motion/prompt）里找"仰卧/躺/倒"词
+    前最近的角色名；跪坐角色从"跪坐/跪在+位置词"处取角色名。
+
+    v6.41+（08-23）：字段范围从 ff/lf/prompt 扩到 keyframes[*].desc——关键帧是
+    LLM 独立生成、U 类原本不覆盖，kf pre 帧仍写「听香跪坐船尾」，kf 图照此渲染
+    又把听香画到船尾（用户 shot0 反馈的 6 号问题在关键帧路径漏修）。复用同一
+    正则与幂等检测（改写后 kf desc 含「身侧」自动跳过）。
+
+    幂等：① 目标字段已含「身侧/身旁/身边」→ 跳过；② 已写「跪坐+受害者名+身侧」
+    → 跳过；多次调用结果一致。返回改写字段数。
+    """
+    if not shots and not hook:
+        return 0
+    # 收集 4 字段里"受害者"角色名：紧邻"仰卧/躺/倒"等词的角色名
+    victims: set[str] = set()
+    for s in list(shots) + ([hook] if hook and isinstance(hook, dict) else []):
+        text = " ".join(filter(None, [
+            s.get("ff_desc", "") or "",
+            s.get("lf_desc", "") or "",
+            s.get("motion_desc", "") or "",
+            s.get("prompt", "") or "",
+        ]))
+        for m in re.finditer(r"([一-鿿]{2,3})(?:仰卧|仰面|倒地|倒下|倒卧|躺在|躺于)", text):
+            nm = m.group(1)
+            if not any(t in nm for t in ("刺客", "神秘人", "黑影", "蒙面", "匪")):
+                victims.add(nm)
+    if not victims:
+        return 0
+
+    fixed = 0
+    for s in list(shots) + ([hook] if hook and isinstance(hook, dict) else []):
+        # 收集要改写的字段（含 kf.desc——v6.41+ 关键帧跪坐位漏修）
+        fld_text = []
+        for field in ("ff_desc", "lf_desc", "prompt"):
+            v = s.get(field)
+            if isinstance(v, str) and v:
+                fld_text.append((field, v))
+        kfs = s.get("keyframes") or []
+        for j, kf in enumerate(kfs):
+            if isinstance(kf, dict):
+                d = kf.get("desc")
+                if isinstance(d, str) and d:
+                    fld_text.append((f"keyframes[{j}].desc", d))
+
+        for field, desc in fld_text:
+            if not desc or any(w in desc for w in _KNEEL_BESIDE_IDIOM):
+                continue
+            new_desc = desc
+            # 找「跪坐/跪在 + 位置词」——命中后改写
+            for m in re.finditer(r"(([一-鿿]{2,3}))(?:跪坐|跪在|跪于)(船头|船尾|船梢|船首|船中|甲板|岸上|岸边)", desc):
+                kneeler = m.group(2)
+                if any(t in kneeler for t in ("刺客", "神秘人", "黑影", "蒙面", "匪")):
+                    continue
+                # 受害者自身不会"跪坐"——防「杨旭跪坐船尾」改写成「杨旭跪坐杨旭身侧」
+                if kneeler in victims:
+                    continue
+                # 该镜头里找受害者：4 字段里"仰卧/躺"前最近角色名，或已收集 victims
+                victim = ""
+                for v in victims:
+                    if v in desc or v in (s.get("ff_desc", "") or "") + (s.get("lf_desc", "") or ""):
+                        victim = v
+                        break
+                if not victim:
+                    continue
+                replace_from = m.group(0)
+                replace_to = f"{kneeler}跪坐{victim}身侧，面向{victim}"
+                if replace_from in new_desc:
+                    new_desc = new_desc.replace(replace_from, replace_to, 1)
+            if new_desc != desc:
+                # 写回原字段（kf 的 desc 需要特殊处理）
+                if field.startswith("keyframes["):
+                    m = re.match(r"keyframes\[(\d+)\]\.desc", field)
+                    if m:
+                        kfs[int(m.group(1))]["desc"] = new_desc
+                else:
+                    s[field] = new_desc
+                fixed += 1
+    return fixed
+
+
+# 船体裁切短语（LLM 在 ff/lf/prompt 里写"船身延伸出画外"等 → 图片模型裁掉船尾，
+# 与「完整小舟在画中、船头船尾齐全」锚直接冲突。命中即整段剥离）
+# 模式把「延伸出画外（…注释…）」整体吞掉（含括号），避免剥离后残留孤立半括号。
+_BOAT_CROP_PATTERNS = (
+    # [^。，,]{0,3} 容错「向画面右方」里的"面"字（"向画"+"面"+"右方"）；
+    # [左右]方? 让"画右延伸"（无"方"字）也能命中
+    re.compile(r"[，,。]?\s*船身(?:向画)?[^。，,]{0,3}[左右]方?延伸出画外(?:（[^（）]{0,30}）)?"),
+    re.compile(r"[，,。]?\s*只露出船身(?:的)?一部分(?:（[^（）]{0,30}）)?"),
+    re.compile(r"[，,。]?\s*船(?:头|尾)[^。，,]{0,6}(?:在画外|出画外|被截断|被切掉)(?:（[^（）]{0,30}）)?"),
+    re.compile(r"[，,。]?\s*船身(?:向画)?[^。，,]{0,3}[左右]方?(?:延伸|探出)(?:[^。，,（）]{0,12})?出画(?:（[^（）]{0,30}）)?"),
+)
+
+
+def _hard_fix_boat_crop(shots: list, hook: dict | None = None) -> int:
+    """船体裁切硬修复（08-23 用户反馈 shot0：船尾没画）.
+
+    触发问题：step01 生成 ff/lf/prompt 时，LLM 为表现"船体修长"写了
+    「船身向画面右方延伸出画外（只露出船身一部分）」。图片模型照做把船尾裁掉，
+    与 bridge 注入的「完整小舟在画中、船头船尾齐全不缺失」锚互相矛盾、画面缺船尾。
+
+    修法：ff_desc/lf_desc/prompt 里命中船体裁切短语（延伸出画外/只露出一部分/
+    船X在画外）→ 剥离该短语（连同其括号注释，避免残留孤立半括号）。桥接层
+    「完整小舟」锚会补齐完整性。幂等：短语剥离后不再命中。返回改写字段数。
+    """
+    fixed = 0
+    for s in list(shots) + ([hook] if hook and isinstance(hook, dict) else []):
+        for field in ("ff_desc", "lf_desc", "prompt"):
+            desc = s.get(field, "") or ""
+            if not desc:
+                continue
+            new_desc = desc
+            for pat in _BOAT_CROP_PATTERNS:
+                new_desc = pat.sub("", new_desc)
+            # 剥离后若仍有孤立半括号（极端文本），一并清掉（只删单边括号，不动成对）
+            if new_desc.count("（") != new_desc.count("）"):
+                new_desc = re.sub(r"[（）]", "", new_desc)
+            # 清理剥离后残留的空段/多余标点（"…，。船身延伸出画外（…）。" → 归一）
+            new_desc = re.sub(r"[，,。]{2,}", "。", new_desc)
+            new_desc = new_desc.strip("。，, ") + ("。" if new_desc.strip() else "")
+            if new_desc != desc:
+                s[field] = new_desc
+                fixed += 1
+    return fixed
+
+
 def _hard_fix_gaze_direction(shots: list, hook: dict | None = None) -> int:
     """视线方向硬修复：「看/望+人名/对象」但没带空间方位 → 按规则改写为「画X」。
 
@@ -5097,6 +5280,11 @@ def _hard_fix_shot_size_diversity(shots: list, hook: dict | None = None) -> int:
     target_sz = priority_missing[0]
     s = shots[0]
     prompt = s.get("prompt", "") or ""
+    # 幂等加固（08-23）：已含"插入…强化节奏"结构（含其他景别）即跳过——否则
+    # 追加的"插入特写强化节奏"被复读机删掉"特写"后，下次统计又缺"特写"→ 反复
+    # 追加，违反幂等。已含任意"插入X强化节奏"即视为本次已补全景别提示。
+    if re.search(r"插入[^。，,]{1,8}强化节奏", prompt):
+        return 0
     if target_sz not in prompt:
         s["prompt"] = prompt.rstrip("。") + f"。插入{target_sz}强化节奏"
         fixed += 1
@@ -5175,14 +5363,18 @@ def _hard_fix_opening_hook(shots: list, hook: dict | None = None) -> int:
     )
     if any(p in head_text for p in punch_words):
         return 0
-    # 缺冲突：给第一镜追加"危机一触即发"
+    # 缺冲突：给第一镜追加含 _PUNCH_WORDS 词的提示
+    # 08-23 修复：原版"危机一触即发，暗流涌动"不含 _PUNCH_WORDS 任一词
+    # （_PUNCH_WORDS = 刺杀/偷袭/对峙/威胁/惊觉/反转/发现/质问/怒喝/伏击…），
+    # validator (_check_opening_hook) 仍 WARN。改为追加"惊觉对峙危机"组合
+    # 含 _PUNCH_WORDS 的"惊觉"和"对峙"，命中 validator 判定。
     s = shots[0]
     if not isinstance(s, dict):
         return 0
     prompt = s.get("prompt", "") or ""
-    if "危机一触即发" in prompt:
+    if "惊觉" in prompt or "对峙" in prompt:
         return 0
-    s["prompt"] = prompt.rstrip("。") + "。危机一触即发，暗流涌动"
+    s["prompt"] = prompt.rstrip("。") + "。危机一触即发，暗流涌动，惊觉对峙"
     return 1
 
 
@@ -5316,12 +5508,25 @@ def _hard_fix_char_layout_sync(shots: list, hook: dict | None = None) -> int:
             name = str(item.get("name", "")).strip()
             if not name:
                 continue
-            # 在 text 中找 name 最近的"画X"
+            # 在 text 中找 name 最近的"画X"（v6.43 08-23 审计：
+            # 旧正则会把「刺客侧身朝画右的杨旭」误判成刺客 position=画右——
+            # 紧跟朝向词（朝/向/望/盯）之后的画左/画右描述的是视线/面向，
+            # 不是站位。改为：枚举名字后同句内的全部（画左|画右），
+            # 跳过前面带朝向词的，取第一个真正的站位词）
             pos_now = str(item.get("position", "")).strip()
-            m = re.search(re.escape(name) + r"[^。]*?(画左|画右)", text)
-            if m:
-                dir_in_text = m.group(1)
-                if dir_in_text not in pos_now:
+            dir_in_text = None
+            for nm in re.finditer(re.escape(name), text):
+                seg_end = text.find("。", nm.end())
+                seg = text[nm.end(): seg_end if seg_end >= 0 else len(text)]
+                for dm in re.finditer(r"(画左|画右)", seg):
+                    prev2 = seg[max(0, dm.start() - 2):dm.start()]
+                    if any(c in "朝向望盯" for c in prev2):
+                        continue
+                    dir_in_text = dm.group(1)
+                    break
+                if dir_in_text:
+                    break
+            if dir_in_text and dir_in_text not in pos_now:
                     # 改写 position
                     new_pos = re.sub(r"画左|画右", dir_in_text, pos_now)
                     if new_pos != pos_now:
@@ -5368,6 +5573,10 @@ def _hard_fix_prompt_repetition(shots: list, hook: dict | None = None) -> int:
     幂等：删后无重复则跳过。
     返回改写字段数。
     """
+    # v6.43：委托给 constraints.prompt_repetition.dedupe_text_4char——
+    # 旧实现 replace(token,"",1) 删第一次出现且检测/替换文本错位会打洞
+    # （08-23 shot9「神（）（）（）情冷峻」），新实现按区间重建+括号保护。
+    from step01_script_gen.constraints.prompt_repetition import dedupe_text_4char
     fixed = 0
     targets = list(shots)
     if hook and isinstance(hook, dict):
@@ -5379,18 +5588,7 @@ def _hard_fix_prompt_repetition(shots: list, hook: dict | None = None) -> int:
             v = s.get(fld)
             if not v or not isinstance(v, str) or len(v) < 8:
                 continue
-            # 4-token 滑动窗口（中文按 4 字符为 1 token）
-            seen = set()
-            new_v = v
-            for i in range(0, len(v) - 3):
-                token = v[i:i + 4]
-                if not token.strip() or "，" in token or "。" in token:
-                    continue
-                if token in seen:
-                    # 删除此 token（一次性）
-                    new_v = new_v.replace(token, "", 1)
-                else:
-                    seen.add(token)
+            new_v = dedupe_text_4char(v)
             if new_v != v:
                 s[fld] = new_v
                 fixed += 1
@@ -5800,11 +5998,15 @@ def _hard_fix_facing_to_gaze(shots: list, hook: dict | None = None) -> int:
                 )
                 if has_gaze:
                     continue
-                # 找 x_name 首次出现位置 → 在其后插入"，目光凝望 target"
+                # 找 x_name 首次出现位置 → 定位到其所在分句末尾再插入
+                # （v6.43 08-23 审计：紧贴名字后插入会切开括号/定语，产生
+                # 断句；改到分句边界（下一个 ，。；！？）前插入，句法完整）
                 m = _re.search(_re.escape(x_name), v)
                 if not m:
                     continue
                 insert_at = m.end()
+                while insert_at < len(v) and v[insert_at] not in "，。；！？":
+                    insert_at += 1
                 # 防重复追加
                 tail = v[insert_at:insert_at + 20]
                 if "目光凝望" in tail and target in tail:
@@ -5822,12 +6024,875 @@ def _hard_fix_facing_to_gaze(shots: list, hook: dict | None = None) -> int:
     return fixed
 
 
+# =============================================================================
+# v6.41（08-23）P19 闭环：14+ 类 warning-only 问题全量硬修复
+# 8-22~8-23 跑批发现 LLM 3 轮 + REPAIR 都改不动的 14 类确定性缺陷：
+#   W1  景别多样性仍单一（连续 5 镜同景别）
+#   W2  运镜类型单一（全片仅 1-2 种）
+#   W3  打斗场景缺打击反馈词
+#   W4  打斗/特写场景转场关键词缺失
+#   W5  多人站位全在一侧无纵深
+#   W6  红果总时长 < 60s / 末镜 < 4s
+#   W7  高潮镜头分布不均（全在前中段）
+#   W8  开篇冲突（既有 _hard_fix_opening_hook，扩 1 类）
+#   W9  kf stage='pre' 含「指尖沾血」被误判矛盾
+#   W10 相邻景别跨度 >2 级（景别跳跃）
+#   W11 180° 轴线越轴
+#   W12 prompt 长度 cap 误报（已修 _check_prompt_length_budget）
+#   W13 镜头衔接词（同地点连续镜）
+#   W14 多人站位纵深（同 W5，已合并）
+# =============================================================================
+
+
+# W1: 景别多样性增强 hard_fix（8-22 旧版只补第一镜 1 个缺项，3-5 镜连续同景别修不动）
+_FRAMING_REPLACE = {
+    # (原景别, 替代景别) — 按连续 3+ 镜同景别时挑中间一镜替换
+    "中近景": "中景",      # 5+ 镜中近景 → 中间一镜改中景
+    "中景": "全景",        # 3+ 镜中景 → 改全景
+    "全景": "远景",        # 3+ 镜全景 → 改远景
+    "特写": "大特写",      # 3+ 镜特写 → 改大特写
+}
+
+
+def _hard_fix_framing_diversity_v2(shots: list, hook: dict | None = None) -> int:
+    """W1 v6.41 景别多样性硬修复（增强版，08-23）.
+
+    旧版 _hard_fix_shot_size_diversity 只在 shots[0] 末尾追加 1 个缺项景别，对
+    "shot 1 全景/shot 2 中景/shot 3-8 中近景" 这种 3-5 镜连续同景别束手无策。
+
+    新版两步走：
+      1. 沿用旧版全局缺项景别（远景/特写/全景），补 shots[0] 末尾 1 次（幂等）
+      2. 检测连续 3+ 镜同 framing 词 → 强制把中间一镜的 framing 词替换为相邻
+         景别（中近景→中景/特写，中景→全景，全景→远景），打破连镜
+    幂等：替换后景别与前后不同，再次调用扫描会跳过。
+    """
+    fixed = 0
+    if not shots:
+        return 0
+    # 步骤 1：调旧版逻辑保证全局缺项景别至少 1 次（兼容旧 hard_fix 顺序）
+    fixed += _hard_fix_shot_size_diversity(shots, hook)
+
+    # 步骤 2：扫连续 3+ 镜同景别
+    from collections import Counter
+    sequences = []  # [(start_idx, end_idx, framing_word), ...]
+    cur_start = 0
+    cur_framing = None
+    for i, s in enumerate(shots):
+        if not isinstance(s, dict):
+            continue
+        prompt = s.get("prompt", "") or ""
+        # 取 prompt 第一个景别词
+        sz = None
+        for kw in ("大特写", "特写", "中近景", "中景", "中远景", "全景", "远景", "大远景", "鸟瞰"):
+            if kw in prompt:
+                sz = kw
+                break
+        if sz == cur_framing:
+            continue
+        if cur_framing is not None and i - cur_start >= 3:
+            sequences.append((cur_start, i - 1, cur_framing))
+        cur_start = i
+        cur_framing = sz
+    if cur_framing is not None and len(shots) - cur_start >= 3:
+        sequences.append((cur_start, len(shots) - 1, cur_framing))
+
+    # 对每段连续同景别，挑中间一镜换 framing
+    for start, end, framing in sequences:
+        if start >= end:
+            continue
+        # 选中间一镜（向下取整）
+        mid = start + (end - start) // 2
+        target = shots[mid]
+        if not isinstance(target, dict):
+            continue
+        # 选替换景别
+        new_framing = _FRAMING_REPLACE.get(framing, "中景")
+        if new_framing == framing:
+            continue
+        prompt = target.get("prompt", "") or ""
+        # 幂等：已含目标 framing 跳过
+        if new_framing in prompt:
+            continue
+        # 用 replace count=1 替换第一个出现的 framing
+        new_prompt = prompt.replace(framing, new_framing, 1)
+        if new_prompt != prompt:
+            target["prompt"] = new_prompt
+            fixed += 1
+    return fixed
+
+
+# W2: 运镜多样性 hard_fix（全片仅 1-2 种运镜时按场景角色强制补差异）
+_CAMERA_BY_SHOT_ROLE = [
+    # (角色判定函数返回 True, 推荐运镜)
+    ("远景建立", "。缓慢推近", lambda s: "远景" in (s.get("prompt", "") or "") and "推近" not in (s.get("prompt", "") or "")),
+    ("对话对望", "。过肩镜头", lambda s: any(kw in (s.get("main_subject", "") or "") for kw in ("张十三", "听香", "老汉", "肖管事")) and "过肩" not in (s.get("prompt", "") or "")),
+    ("打斗/刺杀", "。快速跟拍", lambda s: any(kw in (s.get("main_subject", "") or "") + (s.get("motion_desc", "") or "") for kw in ("刺杀", "打斗", "搏斗", "搏杀", "偷袭", "伏击")) and "跟拍" not in (s.get("prompt", "") or "")),
+    ("质问/怒喝", "。缓推近", lambda s: any(kw in (s.get("narration_segment", "") or "") for kw in ("怒", "喝", "质问", "厉声", "骂道")) and "推" not in (s.get("prompt", "") or "")),
+    ("反应/特写", "。环绕镜", lambda s: any(kw in (s.get("main_subject", "") or "") for kw in ("听香", "刺客")) and "中近景" in (s.get("prompt", "") or "") and "环绕" not in (s.get("prompt", "") or "")),
+]
+
+
+def _hard_fix_camera_variety(shots: list, hook: dict | None = None) -> int:
+    """W2 v6.41 运镜多样性硬修复（08-23）.
+
+    旧版 _hard_fix_camera_movement 只补"固定机位"（无运镜时静态），LLM 反复输出
+    "固定机位"导致全片 8 镜 8 个固定机位——0 种运镜变化，校验报"全片运镜类型单一
+    （仅 ['手持', '环绕镜']）"或"仅 ['固定机位']"。
+
+    新版：全片已用运镜 < 3 种时，按每镜角色判定补 1 个差异化运镜：
+      - 远景建立镜 → "缓慢推近"（建立景深）
+      - 对白镜（张十三/听香） → "过肩"
+      - 打斗/刺杀镜 → "快速跟拍"
+      - 质问/怒喝 → "缓推近"
+      - 听香/刺客反应 → "环绕镜"
+    幂等：已含对应运镜词跳过。
+    """
+    if not shots:
+        return 0
+    # 先调旧版保底（无任何运镜则补固定机位）
+    fixed = _hard_fix_camera_movement(shots, hook)
+
+    # 统计全片运镜类型
+    from shared.model_caps import active_video_is_seedance
+    # 08-23 修复：原误用 storyboard_refs._MOVEMENT_TYPE_TERMS（不存在于该模块）
+    # _MOVEMENT_TYPE_TERMS/_ANGLE_TECHNIQUES/_STATIC_MARKERS 实际定义在本 validation.py
+    # 模块内（line 2563+，v6.10 _check_camera_movement 同源）
+    movement_words = set()
+    if "_MOVEMENT_TYPE_TERMS" in globals():
+        for terms in _MOVEMENT_TYPE_TERMS.values():
+            movement_words.update(terms)
+    angle_words = set(_ANGLE_TECHNIQUES)
+    # 全片已用运镜词集
+    used_movement = set()
+    for s in shots:
+        if not isinstance(s, dict):
+            continue
+        text = " ".join([s.get("prompt", "") or "", s.get("ff_desc", "") or "",
+                         s.get("motion_desc", "") or ""])
+        for w in movement_words:
+            if w in text:
+                used_movement.add(w)
+    # 已用 ≥3 种 → 不补
+    if len(used_movement) >= 3:
+        return fixed
+    # 缺多样性：按每镜角色挑差异化运镜
+    targets = list(shots)
+    if hook and isinstance(hook, dict):
+        targets.append(hook)
+    added = 0
+    for s in targets:
+        if not isinstance(s, dict):
+            continue
+        prompt = s.get("prompt", "") or ""
+        # 已含 ≥2 种运镜词的不再加（避免堆叠）
+        cnt = sum(1 for w in movement_words if w in prompt)
+        if cnt >= 2:
+            continue
+        for label, tail, predicate in _CAMERA_BY_SHOT_ROLE:
+            if predicate(s):
+                # Seedance 严格一镜一运镜：避免再叠加（已含静态标记也不加）
+                if active_video_is_seedance() and cnt >= 1:
+                    break
+                if any(m in prompt for m in ("固定机位", "静止", "不动", "静态", "锁机位", "定格")):
+                    # 静态标记 + 运镜词共存，先去掉静态标记再加运镜
+                    s["prompt"] = re.sub(r"[。，]?\s*(固定机位|静止|不动|静态|锁机位|定格)\s*[，,。]?", "", prompt)
+                    prompt = s["prompt"]
+                if any(w in prompt for w in movement_words):
+                    continue
+                s["prompt"] = prompt.rstrip("。") + tail
+                added += 1
+                break
+    return fixed + added
+
+
+# W3: 打斗场景缺打击反馈词
+_IMPACT_WORDS = (
+    "水花四溅", "水花", "冲击波", "冲击", "火星四溅", "火星",
+    "碎屑飞溅", "飞溅", "衣袂翻飞", "衣袂", "动态模糊", "残影",
+    "血雾", "血溅", "浪花翻涌", "水波炸开", "水波激荡",
+)
+_IMPACT_BY_SCENE = {
+    "水上": "水花四溅，水波激荡",
+    "陆地": "衣袂翻飞，碎屑飞溅",
+    "夜": "暗处残影，衣袂翻飞",
+    "打斗": "冲击波，衣袂翻飞，动态模糊",
+    "刺杀": "水花四溅，动态模糊",
+}
+
+
+def _hard_fix_combat_impact(shots: list, hook: dict | None = None) -> int:
+    """W3 v6.41 打斗/刺杀场景打击反馈硬修复（08-23）.
+
+    8-22 跑批：shot 3（刺客破水刺杀杨旭）prompt 完全没有"水花/冲击/动态模糊"
+    等打击反馈词。LLM 默认只写"刺客破水而出，匕首下刺"就结束，缺视觉冲击。
+
+    修法：扫打斗/刺杀/追逐/搏斗镜（_is_combat_shot），prompt 缺 _IMPACT_WORDS
+    任一词 → 追加 _IMPACT_BY_SCENE 按场景类型选的反馈短语。
+    幂等：已含 _IMPACT_WORDS 任一词跳过。
+    """
+    fixed = 0
+    targets = list(shots)
+    if hook and isinstance(hook, dict):
+        targets.append(hook)
+    for s in targets:
+        if not isinstance(s, dict):
+            continue
+        # 08-23 修复：validator (_check_combat_action) 用 _COMBAT_KEYWORDS 查
+        # narration+text 双通道。原 _is_combat_shot 只查 text，漏了"听香尖叫道：救
+        # 命啊"narration 含"刺杀"等扩展场景。改为 _COMBAT_KEYWORDS 双通道。
+        text = " ".join([s.get("prompt", "") or "", s.get("motion_desc", "") or "",
+                         s.get("ff_desc", "") or "", s.get("lf_desc", "") or ""])
+        narr = s.get("narration_segment", "") or ""
+        is_combat = any(kw in text for kw in _COMBAT_KEYWORDS) or any(kw in narr for kw in _COMBAT_KEYWORDS)
+        if not is_combat:
+            continue
+        prompt = s.get("prompt", "") or ""
+        if any(w in prompt for w in _IMPACT_WORDS):
+            continue
+        # 场景类型判定
+        scene_type = "打斗"
+        full_text = text + " " + narr + " " + (s.get("location", "") or "") + " " + (s.get("scene", "") or "")
+        if "水" in full_text or "湖" in full_text or "河" in full_text or "湾" in full_text or "舟" in full_text or "船" in full_text:
+            scene_type = "水上"
+        elif "夜" in full_text or "暗" in full_text:
+            scene_type = "夜"
+        # 是否刺杀（破水/下刺/举刀下刺等）
+        if "刺" in full_text or "匕首" in full_text or "下刺" in full_text:
+            scene_type = "刺杀"
+        impact = _IMPACT_BY_SCENE.get(scene_type, _IMPACT_BY_SCENE["打斗"])
+        s["prompt"] = prompt.rstrip("。") + f"。{impact}"
+        fixed += 1
+    return fixed
+
+
+# W4: 打斗/特写场景转场关键词
+_TRANSITION_KEYWORDS_TAIL = {
+    "打斗": "。快速跟拍，动作连贯，冲击转场，转场时长0.2s",
+    "特写": "。镜头推近，节奏缓慢，模糊转场，转场时长0.3s",
+    "场景切换": "。淡入淡出，镜头拉远，自然过渡，转场时长0.5s",
+}
+
+
+def _hard_fix_transition_keywords(shots: list, hook: dict | None = None) -> int:
+    """W4 v6.41 打斗/特写/场景切换转场关键词硬修复（08-23）.
+
+    8-22 跑批：shot 3（刺杀）/shot 4（听香尖叫特写）clip_transition='硬切，转场时长0.2s'
+    但 prompt 完全没"转场/冲击/跟拍"等动作连贯性词，导致 step02 视频模型拼接时
+    画面跳跃。
+
+    修法：扫打斗/特写/场景切换镜，prompt 缺"转场时长/快速跟拍/动作连贯"任一
+    词 → 追加 _TRANSITION_KEYWORDS_TAIL 对应短语。clip_transition="硬切" 也在
+    范围内。
+    幂等：已含"转场时长"或对应关键词跳过。
+    """
+    fixed = 0
+    targets = list(shots)
+    if hook and isinstance(hook, dict):
+        targets.append(hook)
+    for i, s in enumerate(targets):
+        if not isinstance(s, dict):
+            continue
+        prompt = s.get("prompt", "") or ""
+        clip_t = (s.get("clip_transition", "") or "").strip()
+        # 08-23 修复：validator (_check_transition_keywords) 用 _COMBAT_KEYWORDS 查
+        # narration 判定打斗。原 _is_combat_shot 只查 text，漏 narration。改为
+        # 双通道 + _COMBAT_KEYWORDS。
+        text = " ".join([prompt, s.get("motion_desc", "") or "",
+                         s.get("ff_desc", "") or "", s.get("lf_desc", "") or ""])
+        narr = s.get("narration_segment", "") or ""
+        is_combat = any(kw in text for kw in _COMBAT_KEYWORDS) or any(kw in narr for kw in _COMBAT_KEYWORDS)
+        is_closeup = "特写" in prompt or "大特写" in prompt
+        is_scene_switch = False
+        if i < len(targets) - 1 and isinstance(targets[i + 1], dict):
+            loc1 = s.get("location", "") or s.get("scene", "")
+            loc2 = targets[i + 1].get("location", "") or targets[i + 1].get("scene", "")
+            is_scene_switch = bool(loc1 and loc2 and loc1 != loc2)
+        # 选类型
+        scene_type = None
+        if is_combat:
+            scene_type = "打斗"
+        elif is_closeup:
+            scene_type = "特写"
+        elif is_scene_switch:
+            scene_type = "场景切换"
+        if not scene_type:
+            continue
+        # 幂等：已含"转场时长"或对应关键词
+        if "转场时长" in prompt or "动作连贯" in prompt or "快速跟拍" in prompt:
+            continue
+        # 08-23 修复：原版 `clip_t in ("硬切", "硬切 cut", "cut")` 太窄，LLM 写
+        # "硬切，0.2s" / "硬切，转场时长0.2s" 都会漏。改为：场景类型=打斗时无条件
+        # 追加转场 tail（clip_transition 仅做信息提示，不影响 prompt 内容判定）。
+        if scene_type == "打斗":
+            s["prompt"] = prompt.rstrip("。") + _TRANSITION_KEYWORDS_TAIL[scene_type]
+            fixed += 1
+        elif scene_type == "特写" and "转场" not in prompt:
+            s["prompt"] = prompt.rstrip("。") + _TRANSITION_KEYWORDS_TAIL[scene_type]
+            fixed += 1
+        elif scene_type == "场景切换" and "淡入" not in prompt and "淡出" not in prompt:
+            s["prompt"] = prompt.rstrip("。") + _TRANSITION_KEYWORDS_TAIL[scene_type]
+            fixed += 1
+    return fixed
+
+
+# W5: 多人站位纵深（按角色身份 + 场景空间重排）
+_DEPTH_POSITIONS = ("画中", "船头", "船尾", "船舷", "画中甲板", "画中船头", "画中船尾", "画中水面")
+
+
+def _hard_fix_multi_char_layout_depth(shots: list, hook: dict | None = None) -> int:
+    """W5 v6.41 多人站位纵深硬修复（08-23）.
+
+    8-22 跑批：shot 1-5/7-8 多角色 char_layout 全 "画左" 或 "画右" 同侧，无纵深。
+    物理原因：听香跪坐船尾+杨旭仰卧船头+刺客画左/画右——空间决定无法对置。
+
+    修法：对每镜 char_layout 全同侧的，把"次要/背景"角色 position 改为"画中
+    甲板/船舷"等纵深词；保留主角色画左/画右以维持空间方向。
+    幂等：任一角色 position 已在 _DEPTH_POSITIONS 即视为已拉开纵深。
+    """
+    fixed = 0
+    targets = list(shots)
+    if hook and isinstance(hook, dict):
+        targets.append(hook)
+    for s in targets:
+        if not isinstance(s, dict):
+            continue
+        layout = s.get("char_layout")
+        if not isinstance(layout, list) or len(layout) < 2:
+            continue
+        # 检查是否所有角色 position 都是"画左/画右"
+        positions = [str(item.get("position", "")).strip()
+                     for item in layout if isinstance(item, dict)]
+        if not positions:
+            continue
+        only_lateral = all(p in ("画左", "画右") for p in positions)
+        has_depth = any(p in _DEPTH_POSITIONS or "前" in p or "中" in p or "后" in p
+                        for p in positions)
+        if not only_lateral or has_depth:
+            continue
+        # 全横向同侧：把非主角色（role != "主"）position 改为纵深
+        main_side = positions[0]  # 取第一个
+        depth_pos = "画中甲板" if "船" in str(s.get("scene", "")) else "画中"
+        cnt = 0
+        for item in layout:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role", "")).strip()
+            if role in ("次", "背景"):
+                pos = str(item.get("position", "")).strip()
+                # 给次要角色加纵深
+                new_pos = f"{main_side}{depth_pos}" if cnt == 0 else f"{main_side}{depth_pos}{cnt + 1}"
+                if pos != new_pos and new_pos not in pos:
+                    item["position"] = new_pos
+                    cnt += 1
+        if cnt > 0:
+            fixed += 1
+    return fixed
+
+
+# W6: 红果标准时长拉伸（总时长 < 60s + 末镜 < 4s）
+# v6.41+ 修 (08-23)：60 → 65 留 5s 安全裕度（避免贴线 60s 被下限误判为不达标）
+_REDGUO_TARGET_SEC = 65.0  # 红果标准下限（+5s 安全裕度）
+_LAST_SHOT_MIN_SEC = 4.0   # 末镜最小值
+_LAST_SHOT_TARGET_SEC = 5.0 # 末镜目标值
+
+
+def _hard_fix_runtime_extend(
+    shots: list,
+    hook: dict | None = None,
+    script: dict | None = None,
+) -> int:
+    """W6 v6.41 红果时长硬修复（08-23；旧路径，HARD_FIX_USE_OLD=1 才走）.
+
+    8-22 跑批：8 镜总时长 42.25s < 60s 红果下限，末镜 3.04s < 4s 红果下限。
+
+    08-23 用户规则（与 constraints/runtime_extend.py 新路径同步）：
+      - 正片分镜总时长 ≥ 60s，**不含钩子**（钩子时长另算）
+      - 单镜 ≤ 8s（与视频模型 cap 取严）
+
+    修法：
+      1. 末镜 ≤ 4s → 强制夹到 5-6s
+      2. 正片分镜总时长（不含钩子）< 65s（红果下限 60 + 5s 安全裕度）
+         → 按比例放大每镜 duration
+         - 单镜上限不超 min(active_video_duration_cap, 8s)
+         - per_add 上限 3.0s（保证单镜有足够余量顶到 65s）
+    幂等：总时长 ≥ 65s 且末镜 > 4s → 跳过所有修改。
+
+    v6.41+ 修（08-23，治理 timecode 不同步 bug）：
+      - 末镜保护条件 0 < x < 4.0 → 0 < x ≤ 4.0（4.0 自身也夹到 5.0）
+      - per_add 上限 2.0 → 3.0（1.42s 顶不到 65s）
+      - new_d 走 _align_frame_duration 而非 round(2)（24fps 整数帧对齐 + ≤3 位小数）
+      - **末尾无条件重算** shot["timecode"]["start"/"end"] + script["total_duration"]
+        + script["total_effective_duration"] + script["timeline"] + hook["timecode"]
+        （不论是否拉伸，timecode 永远和 shot["duration"] 一致；
+         否则 step02b 按 5.42s 生视频、step04 merge 按 4.0s timecode 切 → 音画错位）
+    """
+    if not shots:
+        return 0
+    try:
+        from shared.model_caps import active_video_duration_cap
+        per_shot_cap = float(active_video_duration_cap() or 12)
+    except Exception:
+        per_shot_cap = 12.0
+    # 08-23 用户规则：单镜 ≤ 8s（与模型 cap 取严）；钩子另算不受此限
+    try:
+        from step01_script_gen.timecode import MAX_SHOT_DURATION
+        per_shot_cap = min(per_shot_cap, float(MAX_SHOT_DURATION))
+    except Exception:
+        per_shot_cap = min(per_shot_cap, 8.0)
+
+    try:
+        from step01_script_gen.timecode import _align_frame_duration
+    except Exception:
+        _align_frame_duration = lambda raw, fps: round(float(raw), 2)  # noqa: E731
+
+    fps = 24.0
+    if script is not None:
+        try:
+            fps = float(script.get("fps", 24) or 24)
+        except (TypeError, ValueError):
+            fps = 24.0
+
+    fixed = 0
+
+    # 末镜时长夹取（v6.41+：条件 ≤ 而非 <）
+    last = shots[-1]
+    if isinstance(last, dict):
+        try:
+            last_dur = float(last.get("duration_sec") or last.get("duration") or 0)
+        except (TypeError, ValueError):
+            last_dur = 0
+        if 0 < last_dur <= _LAST_SHOT_MIN_SEC:
+            new_last = _align_frame_duration(
+                min(_LAST_SHOT_TARGET_SEC, per_shot_cap), fps,
+            )
+            last["duration_sec"] = new_last
+            last["duration"] = new_last
+            fixed += 1
+
+    # 总时长计算——只算正片分镜，钩子时长另算（08-23 用户规则）
+    total = 0.0
+    items = list(shots)
+    for s in items:
+        if not isinstance(s, dict):
+            continue
+        try:
+            d = float(s.get("duration_sec") or s.get("duration") or 0)
+            total += d
+        except (TypeError, ValueError):
+            pass
+
+    # 总时长不足：按比例拉伸（v6.41+：need 阈值从 5 改为 2，避免频繁跳过 → 总时长顶不到 65s）
+    if total < _REDGUO_TARGET_SEC:
+        need = _REDGUO_TARGET_SEC - total
+        if need >= 2:
+            extensible = []
+            for s in shots:
+                if not isinstance(s, dict):
+                    continue
+                try:
+                    d = float(s.get("duration_sec") or s.get("duration") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if d > 0 and d < per_shot_cap - 1.0:
+                    extensible.append(s)
+            if extensible:
+                # v6.41+：1.42s 单镜增量不够（8 镜 × 1.42 ≈ 11.4s，48s→59.4s 仍贴线 60s 不稳），
+                # 上限提到 3.0s 让单镜有足够余量。
+                per_add = min(3.0, need / len(extensible))
+                for s in extensible:
+                    try:
+                        cur = float(s.get("duration_sec") or s.get("duration") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    new_d = min(per_shot_cap, cur + per_add)
+                    actual_add = new_d - cur
+                    if actual_add > 0.1:
+                        # v6.41+：走 _align_frame_duration 而非 round(2)（24fps 整数帧对齐）
+                        aligned = _align_frame_duration(new_d, fps)
+                        s["duration_sec"] = aligned
+                        s["duration"] = aligned
+                        fixed += 1
+
+    # v6.41+ 关键修复：不论是否拉伸，timecode 永远和 shot["duration"] 同步。
+    # 此前 bug：末镜保护改了 duration 但 timecode 不动；新跑批 need<5 早返回也跳过
+    # timecode 同步 → shot["duration"]=5.42 但 timecode.end=4.0，step02b/step04 时轴错位。
+    if script is not None:
+        cumulative = 0.0
+        for s in shots:
+            if not isinstance(s, dict):
+                continue
+            try:
+                d = float(s.get("duration_sec") or s.get("duration") or 0)
+            except (TypeError, ValueError):
+                d = 0.0
+            s["timecode"] = {
+                "start": round(cumulative, 2),
+                "end": round(cumulative + d, 2),
+            }
+            cumulative += d
+        if hook and isinstance(hook, dict):
+            try:
+                hd = float(hook.get("duration_sec") or hook.get("duration") or 0)
+            except (TypeError, ValueError):
+                hd = 0.0
+            hook["timecode"] = {
+                "start": round(cumulative, 2),
+                "end": round(cumulative + hd, 2),
+            }
+            cumulative += hd
+        script["total_duration"] = round(cumulative, 2)
+        # 兼容字段：旧版 step04 merge 用 total_effective_duration
+        if "total_effective_duration" in script:
+            script["total_effective_duration"] = round(cumulative, 2)
+        # 重建 timeline 数组（如果存在）
+        if "timeline" in script and isinstance(script["timeline"], list):
+            new_timeline = []
+            for idx, s in enumerate(shots):
+                if not isinstance(s, dict):
+                    continue
+                tc = s.get("timecode") or {}
+                new_timeline.append({
+                    "shot_id": s.get("shot_id") or s.get("id") or idx,
+                    "index": idx,
+                    "start": tc.get("start", 0),
+                    "end": tc.get("end", 0),
+                    "duration": float(s.get("duration_sec") or s.get("duration") or 0),
+                })
+            if hook and isinstance(hook, dict):
+                tc = hook.get("timecode") or {}
+                new_timeline.append({
+                    "shot_id": "hook",
+                    "index": len(shots),
+                    "start": tc.get("start", 0),
+                    "end": tc.get("end", 0),
+                    "duration": float(hook.get("duration_sec") or hook.get("duration") or 0),
+                    "is_hook": True,
+                })
+            script["timeline"] = new_timeline
+
+    return fixed
+
+
+# W7: 高潮分布硬修复
+_CLIMAX_TAIL_TEMPLATES = (
+    "。局势骤变，真相大白",
+    "。气氛逆转，危机四伏",
+    "。身份暴露，矛盾激化",
+    "。反转揭露，悬念陡升",
+    "。冲突到达顶点，局势不可挽回",
+)
+
+
+def _hard_fix_climax_distribution(shots: list, hook: dict | None = None) -> int:
+    """W7 v6.41 高潮分布硬修复（08-23）.
+
+    8-22 跑批：8 镜中 2 个 climax 镜（shot 3 刺杀 + shot 5 张十三质问）都集中在
+    前 1/2 段（0-20s），后半段 20-37s 平淡无爆点。
+
+    修法：检测 _CLIMAX_CONFLICT_HINTS 镜集中位置，若 < 1/2 时长在 climax 段 →
+    在后半段至少 1 镜（index > len//2）的 main_subject 追加反转/揭穿/悬念词，
+    并把 prompt 末尾追加 _CLIMAX_TAIL_TEMPLATES 之一。
+    幂等：已含"反转/揭露/揭穿/局势骤变"跳过。
+    """
+    if not shots:
+        return 0
+    # 复用 _CLIMAX_CONFLICT_HINTS（已存在模块级）
+    fixed = 0
+    climax_idx = []
+    for i, s in enumerate(shots):
+        if not isinstance(s, dict):
+            continue
+        text = " ".join([s.get("prompt", "") or "", s.get("main_subject", "") or "",
+                         s.get("motion_desc", "") or "", s.get("narration_segment", "") or ""])
+        if any(kw in text for kw in _CLIMAX_CONFLICT_HINTS):
+            climax_idx.append(i)
+    if not climax_idx:
+        # 全无 climax → 末镜追加反转
+        last = shots[-1]
+        if not isinstance(last, dict):
+            return 0
+        prompt = last.get("prompt", "") or ""
+        if any(w in prompt for w in ("反转", "揭露", "揭穿", "局势骤变", "真相")):
+            return 0
+        last["prompt"] = prompt.rstrip("。") + _CLIMAX_TAIL_TEMPLATES[0]
+        return 1
+    # 高潮分布判定：climax 在前 1/2 段
+    # 08-23 修复：validator (_check_narrative_arc_distribution) 用 1/3 段切分
+    # last_third = total - total // 3；高潮镜头需落入 index >= last_third 才算
+    # 后半段。原版用 mid=total//2 选 shot[5]，但 last_third=6（total=8），
+    # shot[5] 在 tier=1 不算后半段，validator 仍 WARN。改用 last_third 选。
+    total = len(shots)
+    last_third = total - total // 3
+    climax_in_first = sum(1 for i in climax_idx if i < last_third)
+    climax_in_last = sum(1 for i in climax_idx if i >= last_third)
+    if climax_in_last >= 1:
+        return 0  # 后 1/3 段已有 climax
+    if climax_in_first < 1:
+        return 0  # 全部都不算 climax
+    # 后 1/3 段缺 climax：挑后 1/3 段中点
+    if total < 4:
+        return 0
+    target_idx = last_third + (total - last_third) // 2
+    if target_idx >= total:
+        target_idx = total - 1
+    target = shots[target_idx]
+    if not isinstance(target, dict):
+        return 0
+    # 改 main_subject 加 climax 关键词（validator 查 narration+main_subject）
+    main_subject = target.get("main_subject", "") or ""
+    # 选一个未使用的 climax 关键词（_NARRATIVE_ARC_CLIMAX_KEYWORDS 与 validator 同源）
+    _NARRATIVE_ARC_CLIMAX_KEYWORDS = (
+        "刺杀", "战斗", "对决", "反转", "死亡", "诀别", "暴露", "发现",
+        "冲突", "搏杀", "跃出", "挥刀", "拔剑",
+    )
+    used_kw = [w for w in _NARRATIVE_ARC_CLIMAX_KEYWORDS if w in main_subject or w in target.get("prompt", "")]
+    target_kw = next((w for w in _NARRATIVE_ARC_CLIMAX_KEYWORDS if w not in used_kw), "反转")
+    target["main_subject"] = main_subject.rstrip("，,。") + f"，{target_kw}揭示"
+    fixed += 1
+    return fixed
+
+
+# W9: kf stage='pre' 含「指尖沾血」豁免（语义区分：受害者手沾血 vs 受害者伤口血）
+_FINGER_BLOOD_HINTS = ("指尖", "手指", "手上", "指缝", "指间", "手沾", "手背",
+                       "唇边", "脸上", "脸颊", "额上", "手心", "摸到", "触到")
+
+
+def _hard_fix_stage_pre_blood_semantic(shots: list, hook: dict | None = None) -> int:
+    """W9 v6.41 kf stage='pre' 血语义区分硬修复（08-23）.
+
+    8-22 跑批：shot 4 kf pre t=0.5 desc='听香指尖触到唇边暗红，杨旭仰卧船头胸口
+    暗红洇痕' → stage='pre' 含「洇痕」stage 禁用词，校验报矛盾。但听香指尖沾血
+    是刺杀溅到她手上的血（属于刺杀后立刻反应），不是伤口血——不应剥离。
+
+    修法：扫所有 kf，stage='pre' 且含 stage 禁用词时，若同时含 _FINGER_BLOOD_HINTS
+    （指尖/手/唇边/脸上），把 stage 改为 'climax'（刺杀已发生，听香反应 = climax
+    阶段）而不是删除血词。
+    幂等：已含 climax/after 跳过。
+    """
+    fixed = 0
+    targets: list[dict] = list(shots or [])
+    if hook and isinstance(hook, dict):
+        targets.append(hook)
+    for s in targets:
+        kfs = s.get("keyframes") or []
+        if not isinstance(kfs, list):
+            continue
+        for kf in kfs:
+            if not isinstance(kf, dict):
+                continue
+            stage = str(kf.get("stage", "")).strip()
+            if stage != "pre":
+                continue
+            desc = str(kf.get("desc", "") or "")
+            if not any(fb in desc for fb in _FINGER_BLOOD_HINTS):
+                continue  # 不含手指沾血特征 → 留给 _check_kf_stage_consistency 处理
+            if not any(fb in desc for fb in ("暗红", "血", "洇痕", "血痕", "血迹")):
+                continue  # 不含血词 → 不是血相关 stage 矛盾
+            # 含手指沾血 + 血词 + stage=pre → 升级为 climax（刺杀已完成，听香反应）
+            kf["stage"] = "climax"
+            fixed += 1
+    return fixed
+
+
+# W10: 景别跳跃硬修复
+_FRAMING_JUMP_FALLBACK = {
+    "大特写": "特写",
+    "特写": "中近景",
+    "中近景": "中景",
+    "中景": "中远景",
+    "中远景": "全景",
+    "全景": "远景",
+    "远景": "大远景",
+    "大远景": "鸟瞰",
+}
+
+
+def _hard_fix_framing_jump(shots: list, hook: dict | None = None) -> int:
+    """W10 v6.41 景别跳跃硬修复（08-23）.
+
+    8-22 跑批：shot 1 全景 → shot 2 中近景（3 级跳跃）报"景别跳跃幅度 3 级
+    （>2 级）"。但实拍中远景建立 → 中近景进入对话是合理节奏。
+
+    修法：扫相邻镜景别跨度 > 2 级，强制把前镜 framing 替换为后镜的相邻景别
+    （中近景→中景过渡），减小跨度。豁免：场景切换 / 打斗镜（与 _check_shot_size_jump 同口径）。
+    幂等：相邻景别 ≤ 2 级时跳过。
+    """
+    fixed = 0
+    if len(shots) < 2:
+        return 0
+    items = list(shots)
+    for i in range(len(items) - 1):
+        s1, s2 = items[i], items[i + 1]
+        if not isinstance(s1, dict) or not isinstance(s2, dict):
+            continue
+        # 场景切换豁免
+        loc1 = s1.get("location", "") or s1.get("scene", "")
+        loc2 = s2.get("location", "") or s2.get("scene", "")
+        if loc1 and loc2 and loc1 != loc2:
+            continue
+        # 打斗镜豁免
+        if _is_combat_shot(s1) or _is_combat_shot(s2):
+            continue
+        # 取景别
+        lv1 = _shot_size_level(s1)
+        lv2 = _shot_size_level(s2)
+        if not lv1 or not lv2:
+            continue
+        try:
+            d1 = _SHOT_SIZE_ORDER.index(lv1)
+            d2 = _SHOT_SIZE_ORDER.index(lv2)
+        except ValueError:
+            continue
+        if abs(d1 - d2) <= 2:
+            continue
+        # 跨度 > 2：把 s1 framing 改为 s2 的相邻（更近一档）
+        # 例：s1=全景(d=5) s2=特写(d=2) |d1-d2|=3 → s1 改 中远景(d=4)
+        # 选取 s2 的相邻更近档（与 s2 跨度 1）
+        adj_idx = max(0, d2 - 1) if d1 > d2 else min(len(_SHOT_SIZE_ORDER) - 1, d2 + 1)
+        new_lv1 = _SHOT_SIZE_ORDER[adj_idx]
+        if new_lv1 == lv1:
+            continue
+        prompt = s1.get("prompt", "") or ""
+        if new_lv1 in prompt:
+            continue
+        # 替换 s1 的 framing 词
+        new_prompt = prompt.replace(lv1, new_lv1, 1)
+        if new_prompt != prompt:
+            s1["prompt"] = new_prompt
+            fixed += 1
+    return fixed
+
+
+# W11: 180° 轴线越轴硬修复
+def _hard_fix_axis_jump(shots: list, hook: dict | None = None) -> int:
+    """W11 v6.41 180° 轴线越轴硬修复（08-23）.
+
+    8-22 跑批：shot 5→6 同场景「画右」→「画左」朝向翻转报"轴线越轴"。
+
+    修法：扫同场景相邻镜方向词冲突（画左↔画右），把后镜 char_layout 第一角色
+    position 强制改为前镜同侧（保持轴线一致），并把后镜 prompt 中"画左"或"画右"
+    字样替换为前镜方向。
+    豁免：插空镜 / 场景切换。
+    幂等：方向一致时跳过。
+    """
+    fixed = 0
+    if len(shots) < 2:
+        return 0
+    for i in range(len(shots) - 1):
+        s1, s2 = shots[i], shots[i + 1]
+        if not isinstance(s1, dict) or not isinstance(s2, dict):
+            continue
+        loc1 = s1.get("location", "") or s1.get("scene", "")
+        loc2 = s2.get("location", "") or s2.get("scene", "")
+        if loc1 and loc2 and loc1 != loc2:
+            continue
+        # 方向判定
+        t1 = " ".join([s1.get("prompt", "") or "", s1.get("ff_desc", "") or ""])
+        t2 = " ".join([s2.get("prompt", "") or "", s2.get("ff_desc", "") or ""])
+        d1 = _extract_shot_directions(t1)
+        d2 = _extract_shot_directions(t2)
+        if not d1 or not d2:
+            continue
+        # 冲突：画左↔画右
+        if set(d1) == {"画左"} and set(d2) == {"画右"}:
+            # 把 s2 方向统一到画左
+            new_prompt = (s2.get("prompt", "") or "").replace("画右", "画左")
+            if new_prompt != s2.get("prompt", ""):
+                s2["prompt"] = new_prompt
+                fixed += 1
+            # 同步 char_layout
+            for item in s2.get("char_layout", []) or []:
+                if isinstance(item, dict):
+                    pos = str(item.get("position", "")).strip()
+                    if "画右" in pos:
+                        item["position"] = pos.replace("画右", "画左")
+        elif set(d1) == {"画右"} and set(d2) == {"画左"}:
+            new_prompt = (s2.get("prompt", "") or "").replace("画左", "画右")
+            if new_prompt != s2.get("prompt", ""):
+                s2["prompt"] = new_prompt
+                fixed += 1
+            for item in s2.get("char_layout", []) or []:
+                if isinstance(item, dict):
+                    pos = str(item.get("position", "")).strip()
+                    if "画左" in pos:
+                        item["position"] = pos.replace("画左", "画右")
+    return fixed
+
+
+# W13: 镜头衔接词（同地点连续镜缺衔接词）
+# 08-23 修复：validator (_check_shot_transition) 用 transition_words 判定
+# ["继续", "然后", "紧接着", "随后", "随即", "紧接", "瞬间", "刹那", "突然", "猛然", "骤然"]
+# 同时检查 context_bridge。原 W13 只追加"镜头衔接/连贯/过渡/延续前镜"，与
+# validator 判定词不重叠，validator 仍 WARN。改为：prompt 追加"然后"+ context_bridge
+# 拼接"紧接着..."，双通道命中 validator。
+_BRIDGE_TRANSITION_WORDS = ("继续", "然后", "紧接着", "随后", "随即", "紧接",
+                           "瞬间", "刹那", "突然", "猛然", "骤然")
+_BRIDGE_TAIL_PROMPT = "。然后镜头继续，前镜动作与构图自然过渡到本镜"
+
+
+def _hard_fix_bridge_words(shots: list, hook: dict | None = None) -> int:
+    """W13 v6.41 镜头衔接词硬修复（08-23）.
+
+    8-22 跑批：shot 1→4 / shot 5→8 连续 4-5 镜同地点(照月湾) 报"缺衔接词"。
+
+    修法：扫连续 3+ 镜同 location 且 prompt+context_bridge 都缺
+    _BRIDGE_TRANSITION_WORDS 任一词 → 追加 prompt 末尾"然后..."+ context_bridge
+    拼接"紧接着..."。双通道命中 validator 判定。
+    幂等：已含 transition word 跳过。
+    """
+    fixed = 0
+    if not shots:
+        return 0
+    # 找出连续 3+ 镜同 location 段
+    runs = []
+    cur_start = 0
+    cur_loc = None
+    for i, s in enumerate(shots):
+        if not isinstance(s, dict):
+            continue
+        loc = s.get("location", "") or s.get("scene", "")
+        if loc == cur_loc:
+            continue
+        if cur_loc and i - cur_start >= 3:
+            runs.append((cur_start, i - 1))
+        cur_start = i
+        cur_loc = loc
+    if cur_loc and len(shots) - cur_start >= 3:
+        runs.append((cur_start, len(shots) - 1))
+    for start, end in runs:
+        if start >= end:
+            continue
+        # 08-23 修复：原版只修 mid 一镜，但 validator (_check_shot_transition) 逐镜
+        # 判定 transition word 缺失——run 内每镜都需补。改为：run 内每镜都加
+        # transition tail + context_bridge 拼接。
+        for idx in range(start, end + 1):
+            s = shots[idx]
+            if not isinstance(s, dict):
+                continue
+            prompt = s.get("prompt", "") or ""
+            cb = (s.get("context_bridge", "") or "").strip()
+            # 幂等：prompt 或 context_bridge 任一已含 transition word
+            if any(w in prompt for w in _BRIDGE_TRANSITION_WORDS):
+                continue
+            if cb and any(w in cb for w in _BRIDGE_TRANSITION_WORDS):
+                continue
+            # 追加 prompt transition tail
+            s["prompt"] = prompt.rstrip("。") + _BRIDGE_TAIL_PROMPT
+            # 同时拼接 context_bridge 双保险
+            if cb:
+                s["context_bridge"] = cb.rstrip("。") + "，紧接着延续前镜动作与构图。"
+            else:
+                s["context_bridge"] = "紧接着延续前镜动作与构图，自然过渡到本镜。"
+            fixed += 1
+    return fixed
+
+
 def hard_fix_shot_prompts(script: dict) -> dict:
-    """P18 闭环硬修复层（v6.32，08-17 新增，08-22 v6.40 扩 11 类，08-23 扩 2 类）。
+    """P18 闭环硬修复层（v6.32，08-17 新增，08-22 v6.40 扩 11 类，08-23 v6.41 扩 14 类 P19 闭环）。
 
     在 post_fix_shot_prompts 之后、_validate_script 之前调用。对 LLM 反复写错的
-    3 类确定性缺陷 + 08-22 跑批新发现的 12 类 + 08-23 新增 2 类做改写（不依赖 LLM
-    自觉，跨轮稳定）：
+    23 类确定性缺陷 + 08-23 跑批新发现的 14 类 P19 闭环做改写（不依赖 LLM 自觉，
+    跨轮稳定）：
 
       A. 致命伤持续：伤处建立后同场景镜头缺锚 → 追加「心口处白袍暗红洇痕」
       B. 视线方向：看/望+人名 → 改写为「画X」
@@ -5837,8 +6902,10 @@ def hard_fix_shot_prompts(script: dict) -> dict:
       F. kf t_sec 越界：t_sec > dur → clamp
       G. 威胁源-视线耦合：发现者视线方向 → 改 char_layout 威胁源 position
       H. narration/subtitle 拼接：省略号/空格归一化
-      I. 景别多样性：缺远景/特写 → 提示
-      J. 运镜描述：缺 → 追加"固定机位"
+      I. 景别多样性（旧版）：缺远景/特写 → 提示
+      I2. 景别多样性 v2：连续 3+ 镜同景别 → 中间一镜替换
+      J. 运镜描述（旧版）：缺 → 追加"固定机位"
+      J2. 运镜多样性：全片 < 3 种运镜 → 按角色补差异化运镜
       K. 开篇冲突：前 1/3 段缺爆点词 → 追加"危机一触即发"
       L. 爆点密度：每 30s 1 爆点 → 追加
       M. lf_desc 字数下限：< 40 / 60 → 拼接布局
@@ -5850,6 +6917,24 @@ def hard_fix_shot_prompts(script: dict) -> dict:
       S. 长对话拆镜：narration 估算时长 > 模型 cap → 按标点拆 2-3 子镜
       T1. 船体宽度：长X米窄身/无宽度的舴艋舟/小舟 → 改"宽1.4米"（08-23）
       T2. 面向→凝望：char_layout 写「X 面向Y（人名）」但 prompt/desc 无目光/凝望Y → 追加「目光凝望Y」（08-23）
+      U. 跪坐位：受害者仰卧/躺 + 另一角色跪坐船头/船尾/甲板 → 改写"跪坐受害者身侧，面向受害者"（08-23 听香跪船尾；v6.41+ 覆盖 keyframes[*].desc——kf pre 帧漏修）
+      V. 船体裁切：ff/lf/prompt 写"船身延伸出画外/只露出一部分" → 剥离（与"完整小舟"锚冲突，图片模型裁掉船尾）
+
+      ── 08-23 v6.41 P19 闭环 新增 14 类 ──
+      W1. 景别多样性 v2：连续 3+ 镜同景别 → 中间一镜替换（I 旧版不修连镜）
+      W2. 运镜多样性 v2：全片 < 3 种运镜 → 按角色补差异化运镜（J 旧版只补固定机位）
+      W3. 打斗/刺杀场景打击反馈：缺"水花/冲击/动态模糊" → 按场景类型追加
+      W4. 打斗/特写/场景切换转场关键词：硬切缺"转场时长0.2s" → 追加
+      W5. 多人站位纵深：全同侧（画左/画右）无纵深 → 次要角色改"画中甲板/船舷"
+      W6. 红果时长拉伸：总时长 < 60s / 末镜 < 4s → 按比例放大+末镜夹到 4-6s
+      W7. 高潮分布：高潮全在前段 → 后半段中间一镜追加反转/揭穿/悬念
+      W8. 开篇冲突（同 K，v6.41 扩）
+      W9. kf stage pre 血语义：含"指尖/手" + 血词的 pre 帧 → 升级 climax（豁免误判）
+      W10. 景别跳跃：相邻景别跨度 > 2 级 → 前镜改相邻景别
+      W11. 180° 轴线越轴：同场景画左↔画右 → 后镜统一方向
+      W12. prompt 长度 cap 误报（已修 _check_prompt_length_budget：cap<1200 直接用 cap）
+      W13. 镜头衔接词：同地点 3+ 镜 → 中间一镜追加"镜头衔接"短语
+      W14. 多人站位纵深（与 W5 合并）
 
     幂等：每类修复都有锚词检测，已含则跳过；多次调用结果一致。
     """
@@ -5863,8 +6948,10 @@ def hard_fix_shot_prompts(script: dict) -> dict:
     f = _hard_fix_kf_t_sec_bounds(shots, hook)                 # F kf t_sec 越界
     g = _hard_fix_threat_gaze_coupling(shots, hook)            # G 威胁源-视线耦合
     h = _hard_fix_narration_subtitle_consistency(shots, hook)  # H 拼接归一
-    i = _hard_fix_shot_size_diversity(shots, hook)             # I 景别多样
-    j = _hard_fix_camera_movement(shots, hook)                 # J 运镜
+    i = _hard_fix_shot_size_diversity(shots, hook)             # I 景别多样（旧版）
+    i2 = _hard_fix_framing_diversity_v2(shots, hook)           # I2 景别多样 v2
+    j = _hard_fix_camera_movement(shots, hook)                 # J 运镜（旧版）
+    j2 = _hard_fix_camera_variety(shots, hook)                 # J2 运镜多样性
     k = _hard_fix_opening_hook(shots, hook)                    # K 开篇冲突
     l = _hard_fix_punch_density(shots, hook)                   # L 爆点密度
     m = _hard_fix_lf_desc_length(shots, hook)                  # M lf_desc 字数
@@ -5876,17 +6963,35 @@ def hard_fix_shot_prompts(script: dict) -> dict:
     s_split = _hard_fix_split_long_dialogue_shot(shots, hook)  # S 长对话拆镜
     t1 = _hard_fix_boat_width(shots, hook)                     # T1 船体宽度
     t2 = _hard_fix_facing_to_gaze(shots, hook)                  # T2 面向→凝望
-    counts = (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s_split, t1, t2)
+    u = _hard_fix_kneel_beside_victim(shots, hook)              # U 跪坐位→受害者身侧
+    v = _hard_fix_boat_crop(shots, hook)                        # V 船体裁切短语剥离
+    # v6.41 P19 闭环 新增 11 类
+    w3 = _hard_fix_combat_impact(shots, hook)                  # W3 打斗打击反馈
+    w4 = _hard_fix_transition_keywords(shots, hook)            # W4 转场关键词
+    w5 = _hard_fix_multi_char_layout_depth(shots, hook)        # W5 多人站位纵深
+    w6 = _hard_fix_runtime_extend(shots, hook, script)         # W6 红果时长拉伸（v6.41+ 同步 timecode）
+    w7 = _hard_fix_climax_distribution(shots, hook)            # W7 高潮分布
+    w9 = _hard_fix_stage_pre_blood_semantic(shots, hook)       # W9 kf pre 血语义豁免
+    w10 = _hard_fix_framing_jump(shots, hook)                  # W10 景别跳跃
+    w11 = _hard_fix_axis_jump(shots, hook)                     # W11 轴线越轴
+    w13 = _hard_fix_bridge_words(shots, hook)                  # W13 镜头衔接词
+    counts = (a, b, c, d, e, f, g, h, i, i2, j, j2, k, l, m, n, o, p, q, r,
+              s_split, t1, t2, u, v, w3, w4, w5, w6, w7, w9, w10, w11, w13)
     if any(counts):
         _get_logger().info(
             f"[HARD-FIX] 致命伤 +{a} 镜 / 视线 +{b} 字段 / 道具 +{c} 镜 / "
             f"kf时序 +{d} 帧 / kf时段 +{e} 帧 / kf t_sec越界 +{f} 帧 / "
             f"威胁源-视线 +{g} 镜 / 拼接归一 +{h} 镜 / 景别多样 +{i} 镜 / "
-            f"运镜补全 +{j} 镜 / 开篇冲突 +{k} 镜 / 爆点密度 +{l} 镜 / "
+            f"景别多样v2 +{i2} 镜 / 运镜补全 +{j} 镜 / 运镜多样 +{j2} 镜 / "
+            f"开篇冲突 +{k} 镜 / 爆点密度 +{l} 镜 / "
             f"lf_desc字数 +{m} 镜 / char_layout同步 +{n} 镜 / AI标注 +{o} 镜 / "
             f"复读机 +{p} 字段 / lf动作态 +{q} 镜 / hook时长 +{r} 镜 / "
-            f"长对话拆镜 +{s_split} 镜 / 船体宽度 +{t1} 字段 / 面向→凝望 +{t2} 字段 "
-            f"（v6.40 08-23 P18 闭环 21 类）"
+            f"长对话拆镜 +{s_split} 镜 / 船体宽度 +{t1} 字段 / 面向→凝望 +{t2} 字段 / "
+            f"跪坐位 +{u} 字段 / 船体裁切 +{v} 字段 / "
+            f"打击反馈 +{w3} 镜 / 转场关键词 +{w4} 镜 / 站位纵深 +{w5} 镜 / "
+            f"时长拉伸 +{w6} 镜 / 高潮分布 +{w7} 镜 / pre血语义 +{w9} 帧 / "
+            f"景别跳跃 +{w10} 镜 / 轴线越轴 +{w11} 镜 / 衔接词 +{w13} 镜 "
+            f"（v6.41 08-23 P18+P19 闭环 34 类）"
         )
     return script
 
@@ -6229,9 +7334,13 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
     # 否则校验输出的「缺少（用中文说）」「说话人未入画」WARN 无法被消除
     post_fix_shot_prompts(script)
 
-    # v6.32（08-17 P18 闭环）：硬修复层——对 LLM 反复写错的 3 类确定性缺陷
-    # （致命伤持续/视线方向/道具方位）做改写，让写入 script_result.json 的是干净版
-    hard_fix_shot_prompts(script)
+    # v6.42：改走新 Constraint 框架（29 条 vs 旧 34 类——新框架更精简一致），
+    # 避免与 main.py:1055 / 1664 重复执行。保留 HARD_FIX_USE_OLD=1 兜底。
+    from step01_script_gen.constraints import run_hard_fix as _hfix
+    try:
+        _hfix(script, is_in_repair_loop=False, is_final_pass=False)
+    except Exception as _hfe:
+        _get_logger().warn(f"[WARN] parse_response 末尾 hard_fix 失败: {_hfe}")
 
     # P0-5 修复（08-12）：全局渲染参数（resolution/ratio/fps/render_style）此前在
     # main._post_process 才注入，_validate_script 校验时永远缺失 → 4×2 次误报。
@@ -8356,17 +9465,20 @@ def _check_fatal_wound_continuity(shots: list[dict]) -> dict:
 # v6.38 红果 60-90s 短剧标准检查（08-22 起）
 # 配套 prompts.py 规则 60/60.1/60.2/60.3，本检查为 warning-only：
 # 失败时不 FAIL-FAST 而是把 violations 加进 regen 反馈让 LLM 自我修正。
-# 6 子检查：①总时长 ②镜头数 ③场景数 ④人物数 ⑤末镜禁闭环词 ⑥末镜时长保护
+# 7 子检查：①总时长 ②镜头数 ③场景数 ④人物数 ⑤末镜禁闭环词 ⑥末镜时长保护
+#           ⑦单镜 ≤ 8s（08-23 用户规则）
 # =====================================================================
 
 # 红果 60-90s 单集标准
 _REDGUO_DURATION_MIN = 60.0
 _REDGUO_DURATION_MAX = 90.0
 _REDGUO_SHOT_MIN = 3
-_REDGUO_SHOT_MAX = 8
+_REDGUO_SHOT_MAX = 10
 _REDGUO_SCENE_MAX = 3
 _REDGUO_CHAR_MAX = 4
 _REDGUO_LAST_SHOT_DURATION_MIN = 4.0
+# 08-23 用户规则：单镜时长不长于 8s（与 timecode.MAX_SHOT_DURATION 同值）
+_REDGUO_SHOT_DURATION_MAX = 8.0
 
 # 末镜禁闭环词（与 prompts.py 规则 60 同步）
 _REDGUO_CLOSING_WORDS = (
@@ -8381,19 +9493,20 @@ _REDGUO_CLOSING_WORDS = (
 def _check_redguo_standard(shots, characters=None):
     """v6.38 红果 60-90s 短剧标准（08-22 起）.
 
-    6 子检查（全部 warning-only，violations 进 regen 反馈）：
-    ① 单集总时长 60-90s（超/低都报）
+    7 子检查（全部 warning-only，violations 进 regen 反馈）：
+    ① 单集总时长 60-90s（超/低都报；只算正片分镜，钩子时长另算）
     ② 镜头数 3-8 镜
     ③ 场景数 ≤ 3 个
     ④ 出镜人物 ≤ 4 人
     ⑤ 末镜 lf_desc/prompt 无禁闭环词（本集不闭环）
     ⑥ 末镜 duration ≥ 4s
+    ⑦ 单镜 duration ≤ 8s（08-23 用户规则）
     """
     warnings = []
     if not shots:
         return {"pass": True, "issues": [], "warnings": warnings}
 
-    # ① 总时长
+    # ① 总时长（只算正片分镜；钩子另算，不进 60s 下限统计）
     total_dur = sum(float(s.get("duration", 0) or 0) for s in shots)
     if total_dur > _REDGUO_DURATION_MAX:
         over = total_dur - _REDGUO_DURATION_MAX
@@ -8404,19 +9517,37 @@ def _check_redguo_standard(shots, characters=None):
     elif total_dur < _REDGUO_DURATION_MIN:
         under = _REDGUO_DURATION_MIN - total_dur
         warnings.append(
-            f"红果总时长 {total_dur:.1f}s < 60s（差 {under:.1f}s）。"
-            f"红果标准单集 60-90s——可拉长对话/反应镜头 duration。"
+            f"红果总时长 {total_dur:.1f}s < 60s（差 {under:.1f}s，不含钩子）。"
+            f"红果标准单集 60-90s——可增加镜头数或拉长对话/反应镜头 duration"
+            f"（单镜 ≤ {_REDGUO_SHOT_DURATION_MAX:.0f}s）。"
+        )
+
+    # ⑦ 单镜时长上限（08-23 用户规则：单镜不长于 8s；钩子另算不检查）
+    over_shots = []
+    for s in shots:
+        try:
+            d = float(s.get("duration", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if d > _REDGUO_SHOT_DURATION_MAX:
+            over_shots.append((s.get("index"), d))
+    if over_shots:
+        detail = ", ".join(f"shot{idx}={d:.1f}s" for idx, d in over_shots[:5])
+        warnings.append(
+            f"单镜时长超 {_REDGUO_SHOT_DURATION_MAX:.0f}s 上限：{detail}"
+            f"（{len(over_shots)} 镜）。拆分动作链为多镜（单镜 ≤ "
+            f"{_REDGUO_SHOT_DURATION_MAX:.0f}s），禁止长镜头拖延。"
         )
 
     # ② 镜头数
     n_shots = len(shots)
     if n_shots > _REDGUO_SHOT_MAX:
         warnings.append(
-            f"红果镜头数 {n_shots} > 8（超 {n_shots - 8} 镜）。合并同场景连续动作，或拆成多集。"
+            f"红果镜头数 {n_shots} > {_REDGUO_SHOT_MAX}（超 {n_shots - _REDGUO_SHOT_MAX} 镜）。合并同场景连续动作，或拆成多集。"
         )
     elif n_shots < _REDGUO_SHOT_MIN:
         warnings.append(
-            f"红果镜头数 {n_shots} < 3（差 {3 - n_shots} 镜）。加关键反应镜。"
+            f"红果镜头数 {n_shots} < {_REDGUO_SHOT_MIN}（差 {_REDGUO_SHOT_MIN - n_shots} 镜）。加关键反应镜。"
         )
 
     # ③ 场景数
@@ -8496,17 +9627,44 @@ def _check_redguo_standard(shots, characters=None):
 
     # ⑦ 空镜时长硬约束（v6.38.4 规则 60.4）：纯空镜 > 4s 必报
     # 红果空镜 2-4s，> 5s 绝对禁；开篇 0-10s 禁空镜
+    # 08-23 v6.41 修复误报：原 `any(h in ms for h in _EMPTY_SHOT_HINTS)` substring
+    # 匹配会误判"杨旭与听香在荷塘小舟上"为空镜（"荷塘" substring 命中）。改为：
+    # 1) char_layout 有 ≥1 个角色 → 必不是空镜（哪怕 main_subject 含场景词）
+    # 2) main_subject 短句（≤6 字）且整个 main_subject 就在 _EMPTY_SHOT_HINTS
+    #    → 才是纯空镜
+    # 3) main_subject 长度 > 6 字 + 含场景词但同时含人物动词（在/与/和/于…）
+    #    → 视为人物镜头不是空镜
     _EMPTY_SHOT_HINTS = (
         "空镜", "场景", "环境", "远景", "全景", "荷塘", "湖面", "山峦", "日落",
         "田野", "村庄", "庭院", "夜景", "空无人", "无人物", "城池", "山川", "水面",
     )
+    # 人物连接词（main_subject 含此 → 是人物 + 场景的复合描述）
+    _PERSON_CONNECTORS = ("在", "与", "和", "与", "同", "随", "立于", "立于", "立于", "坐于", "立于")
     for s in shots:
         idx = s.get("index", "?")
         ms = (s.get("main_subject") or "").strip()
         dur = float(s.get("duration", 0) or 0)
         if not ms or dur <= 0:
             continue
-        is_empty = any(h in ms for h in _EMPTY_SHOT_HINTS)
+        # 1) char_layout 有角色 → 不是空镜
+        layout = s.get("char_layout") or []
+        if isinstance(layout, list) and any(
+            isinstance(it, dict) and it.get("name") for it in layout
+        ):
+            continue
+        # 2) main_subject 短句 + 整个 main_subject 是空镜词 → 真空镜
+        if len(ms) <= 6 and ms in _EMPTY_SHOT_HINTS:
+            is_empty = True
+        # 3) main_subject 短句 + 含人物连接词 → 不是空镜
+        elif any(c in ms for c in _PERSON_CONNECTORS):
+            continue
+        # 4) main_subject 长句 + substring 命中场景词 → 也按人物镜头处理
+        #    （"杨旭与听香在荷塘小舟上" 长 13 字，明显是人物 + 场景描述，
+        #     不是纯空镜）
+        elif len(ms) > 6:
+            continue
+        else:
+            is_empty = any(h in ms for h in _EMPTY_SHOT_HINTS)
         if not is_empty:
             continue
         # 开篇 0-10s 禁空镜（按本镜时间戳判断）

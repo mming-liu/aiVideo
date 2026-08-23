@@ -359,7 +359,7 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
             f"4. 删减冗余过渡镜头与重复表达的空镜\n"
             f"5. 保留全部关键剧情节点（开篇冲突 / 刺杀 / 高潮 / 收尾），不删剧情只合并冗余\n"
             f"6. **不要把多镜拆成单镜的细碎画面**——一镜只承载 1 个核心动作/情绪转折\n\n"
-            f"v6.38 红果硬约束：3-8 镜、总时长 60-90s、单镜 3-12s。当前 14 镜是历史包袱，本轮必须压到 ≤ {_max} 镜。\n"
+            f"v6.38 红果硬约束：3-8 镜、正片总时长 60-90s（钩子另算）、单镜 3-8s（单镜硬上限 8s）。当前 14 镜是历史包袱，本轮必须压到 ≤ {_max} 镜。\n"
         )
         # v6.33（08-12）：附加 checklist 聚合反馈——镜头数收敛之外，把内容密度/景别
         # 跳跃/致命伤等真实缺陷也喂给 LLM（此前只喂镜头数/覆盖率，LLM 重生成还是老问题）
@@ -1052,9 +1052,10 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     # 08-19：C 模式默认后，修复轮 LLM 可能删掉致命伤锚定（A→C 实测 2 个镜头"
     # 心口暗红洇痕"被删，违反规则 8 最高优先级）。修复完成后跑 hard_fix 致命伤
     # 兜底 + kf 时段对齐，把 LLM 弄丢的确定性补回来（幂等，不伤已有正确内容）。
-    from step01_script_gen.validation import hard_fix_shot_prompts as _hfix
+    # v6.42：改用新 Constraint 框架（29 条），保留 HARD_FIX_USE_OLD=1 回退开关
+    from step01_script_gen.constraints import run_hard_fix as _hfix
     try:
-        script = _hfix(script)
+        script = _hfix(script, is_in_repair_loop=True, is_final_pass=False)
     except Exception as _hfx:
         _logger.warn(f"[WARN] 修复后 hard_fix 兜底失败（保留原版）: {_hfx}")
     # 08-19：hard_fix_injury_continuity 按 location 精确匹配 + victim 提取不准，
@@ -1657,6 +1658,16 @@ def main() -> None:
 
     # 计算时间轴（v5.0 运镜量化参数）
     _compute_timecodes(script)
+    # 08-23 v6.41 P19 闭环：硬修复层必须在 _compute_timecodes 之后调用——
+    # 此前 hard_fix 在 REPAIR 内部调用，但 line 1659 _compute_timecodes 会按
+    # motion_desc 重算 duration_sec，覆盖 W6 时长拉伸的值。改为：每次落盘前
+    # 跑一次 hard_fix_shot_prompts（含 W6 时长拉伸），保证最终值持久化。
+    # v6.42：改用新 Constraint 框架（is_final_pass=True 让 RuntimeExtendConstraint 拉伸时长）
+    from step01_script_gen.constraints import run_hard_fix as _hfix_final
+    try:
+        script = _hfix_final(script, is_in_repair_loop=False, is_final_pass=True)
+    except Exception as _hfe:
+        _logger.warn(f"[WARN] 落盘前 hard_fix 失败（保留原版）: {_hfe}")
     # C5 修复（08-11）：fps 一致性校验（timeline 此时已存在）
     _check_fps_consistency(script)
 

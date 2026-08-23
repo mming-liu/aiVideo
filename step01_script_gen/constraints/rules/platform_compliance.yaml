@@ -1,0 +1,21 @@
+name: platform_compliance_yaml
+description: 首镜头 AI 生成标注（DSL PoC，对应 platform_compliance.py 简化版）
+severity: warn
+repair_marker: "AI生成"
+skip_hook: true
+fields: [prompt]
+
+when:
+  op: and
+  exprs:
+    - op: field_eq
+      field: index
+      value: 1
+    - op: not_contains_any
+      field: prompt
+      keywords: ["AI生成", "AI创作", "人工智能", "AIGC"]
+
+then:
+  action: append
+  target: prompt
+  text: "。（AI生成）"

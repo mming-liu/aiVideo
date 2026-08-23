@@ -1700,10 +1700,22 @@ def _threat_visible_in(desc: str, characters: list | None = None) -> bool | None
             start = i + len(a)
     if not occ:
         return None
+    # 08-23 防御加固：ff 描述"黑衣身影轮廓若隐若现/一截刀尖微露水面"时，命中
+    # 的 hint 是弱形体词「身影/黑影」，但"轮廓/若隐若现/水下/水面下"说明威胁源
+    # 仍是**非实体**（水下黑影、未完整现形）。若该窗口同时含弱形体词 + 非实体词
+    # → 判不可见（否则参考图注入会逼图片模型画出完整刺客——用户反复反馈的
+    # "刺客被完整画出且戴动物面具"根因之一）。
+    _NON_ENTITY_HINTS = ("轮廓", "若隐若现", "隐约", "水下", "水面下", "水底", "黑影")
+    _WEAK_FORM_HINTS = ("身影", "黑影", "轮廓")
     for i in occ:
         window = desc[max(0, i - 8):i + 18]
-        if any(h in window for h in _THREAT_VISIBLE_HINTS):
-            return True
+        hit = [h for h in _THREAT_VISIBLE_HINTS if h in window]
+        if not hit:
+            continue
+        # 命中全是弱形体词且窗口含非实体词 → 不可见
+        if all(h in _WEAK_FORM_HINTS for h in hit) and any(n in window for n in _NON_ENTITY_HINTS):
+            continue
+        return True
     return False
 
 
@@ -1765,7 +1777,9 @@ def _extract_char_layout(
     "杨旭仰卧船头"——两者其实一致，后仰是仰卧的延续）。
 
     water_state=True（关键帧）：补"完整小舟"+"水面浪花"（场景状态锚定）。
-    water_state=False（首帧）：只取姿态/位置/朝向，不补船/水面状态。
+    water_state=False（首帧）：只取姿态/位置/朝向，不补水面浪花——但船体完整性
+    （"完整小舟、船头船尾齐全"）是基础构图约束，无论首/尾/关键帧只要画面有船有
+    角色都应补（08-23 用户反馈：首帧"船身延伸出画外"把船尾裁掉）。
 
     返回形如：
       【角色锚定】杨旭仰卧船头（面向画右），听香跪坐船尾（面向画左），
@@ -1846,29 +1860,37 @@ def _extract_char_layout(
             return ""
         block = "【角色锚定】" + "，".join(parts)
 
-        # 威胁源朝向兜底：有威胁源而 scan 无朝向表达 → 追加"面向目标/侧身朝向画X"
+        # 威胁源朝向兜底：有威胁源而 scan 无朝向表达 → 追加描述句
         has_threat = any(w in scan for w in _THREAT_WORDS_ENLARGED)
         has_orient = any(k in scan for k in (
             "面向", "朝向", "侧身", "紧盯画", "盯向画", "望向画", "朝画", "逼近",
         ))
         if has_threat and not has_orient:
-            block += "，威胁源必须面向其攻击目标，禁止背对目标或正对镜头"
+            # v6.43（08-23 审计）：原指令式「威胁源必须面向其攻击目标，禁止
+            # 背对目标或正对镜头」被 image-facing 锚定块吸入，会被 kf 文本
+            # 当作结构化 pose 描述「正对镜头」/「背对目标」误读，触发自噬。
+            # 改写为描述性短句「身体朝攻击目标方向，目光与攻击对象同侧」。
+            block += "，身体朝攻击目标方向，目光与攻击对象同侧"
 
-        # 关键帧补船完整 + 水面浪花（场景状态锚定）
+        # 船体完整性锚（首/尾/关键帧共用）：场景含船且画面有角色 → 补"完整小舟、
+        # 船头船尾齐全"。08-23 从 water_state 条件拆出——首帧（water_state=False）
+        # 原先不补，图片模型照 ff_desc 的"延伸出画外"裁掉船尾；船体完整是基础
+        # 构图约束不是动作状态，不应随首帧省略。
+        try:
+            import json as _json
+            from shared.paths import chapter_dir
+            script_path = chapter_dir() / "script_result.json"
+            if script_path.exists():
+                script = _json.load(open(script_path, encoding="utf-8"))
+                objs = script.get("scene_objects", {}) or {}
+                boat = next((o for o in objs.values()
+                             if isinstance(o, dict) and o.get("category") == "船"), None)
+                if boat and "完整小舟" not in block and "整船" not in block:
+                    block += "，完整小舟在画中、船头船尾齐全不缺失"
+        except Exception:
+            pass
+        # 关键帧补水面浪花（动作状态锚定，仅关键帧）
         if water_state:
-            try:
-                import json as _json
-                from shared.paths import chapter_dir
-                script_path = chapter_dir() / "script_result.json"
-                if script_path.exists():
-                    script = _json.load(open(script_path, encoding="utf-8"))
-                    objs = script.get("scene_objects", {}) or {}
-                    boat = next((o for o in objs.values()
-                                 if isinstance(o, dict) and o.get("category") == "船"), None)
-                    if boat and "完整小舟" not in block and "整船" not in block:
-                        block += "，完整小舟在画中、船头船尾齐全不缺失"
-            except Exception:
-                pass
             if ("破水" in scan or "刺" in scan or "浪花" in scan or "出水" in scan) \
                     and "浪花" not in block and "水花" not in block:
                 block += "，水面浪花翻涌"
@@ -2431,11 +2453,6 @@ async def _gen_first_frame_async(
     ff_path = shot_dir / "first_frame.png"
     ff_hash_path = shot_dir / "frame_hash.txt"
 
-    # v6.40 08-22：已存在则跳过（不重生成浪费 4.5 额度）
-    if not force and ff_path.exists() and ff_path.stat().st_size > 5 * 1024:
-        logger.info(f"  [镜头{idx}] 首帧已存在 ({ff_path.stat().st_size//1024}KB)，跳过生成")
-        return str(ff_path)
-
     # 日志输出到 step02.log，不污染控制台
     from shared.tee_logger import get_logger
     from shared.paths import chapter_dir
@@ -2632,11 +2649,6 @@ async def _gen_last_frame_async(
     # 尾帧独立哈希文件：首帧/尾帧的参考图不同 → 哈希值不同，
     # 共用一个文件会互相覆盖，导致每次运行都误判失效、双双重做
     lf_hash_path = shot_dir / "last_frame_hash.txt"
-
-    # v6.40 08-22：已存在则跳过（不重生成浪费 4.5 额度）
-    if not force and lf_path.exists() and lf_path.stat().st_size > 5 * 1024:
-        logger.info(f"  [镜头{idx}] 尾帧已存在 ({lf_path.stat().st_size//1024}KB)，跳过生成")
-        return str(lf_path)
 
     # 日志输出到 step02.log，不污染控制台
     from shared.tee_logger import get_logger
@@ -2876,12 +2888,6 @@ async def _gen_keyframes_async(
         time_ratio = float(kf.get("time_ratio", 0.5))
         kf_path = shot_dir / f"keyframe_{i}.png"
         kf_hash_path = shot_dir / f"keyframe_{i}_hash.txt"
-
-        # v6.40 08-22：已存在则跳过（不重生成浪费 4.5 额度）
-        if not force and kf_path.exists() and kf_path.stat().st_size > 5 * 1024:
-            _kf_logger.info(f"  [镜头{idx}] 关键帧{i}已存在 ({kf_path.stat().st_size//1024}KB)，跳过")
-            kf_paths.append(str(kf_path))
-            continue
 
         if empty_scene:
             kf_desc = kf_desc + "\n空镜头， 画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"

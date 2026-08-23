@@ -74,6 +74,9 @@ class DeepSeekTextService(TextGenerationService):
             "input": _input_value,
             "max_output_tokens": req.max_tokens,
             "temperature": req.temperature,
+            "top_p": req.top_p,                # v6.41+ 稳定化：核采样收窄到 0.2
+            # 注意：DeepSeek Responses API 不支持 seed 参数（仅 Chat Completions 支持），
+            # 故 seed 只在 _generate_chat 传。
             # 思考模式开关/强度（none 关闭；思考模式下 temperature 被 API 忽略）
             "reasoning": {"effort": effort},
         }
@@ -148,6 +151,8 @@ class DeepSeekTextService(TextGenerationService):
             "messages": messages,
             "max_tokens": req.max_tokens,
             "temperature": req.temperature,
+            "top_p": req.top_p,                # v6.41+ 稳定化：核采样收窄到 0.2
+            "seed": req.seed,                  # v6.41+ 稳定化：固定 seed（Chat Completions 支持）
         }
 
         # JSON Output：仅普通 chat 模型启用；reasoner 老模型不支持
