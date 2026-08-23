@@ -84,10 +84,25 @@ def _sum_duration(items: list[dict]) -> float:
 
 
 def _sync_timecode(shots: list, hook: dict | None, script: dict | None, fps: float) -> None:
-    """timecode 永远和 shot["duration"] 同步（不论是否拉伸都跑）."""
+    """timecode 永远和 shot["duration"] 同步（不论是否拉伸都跑）.
+
+    v6.43（08-23）钩子在播放顺序头部：hook.timecode = 0..hook_duration，
+    shots 从 hook_duration 开始累加。timeline[] 数组**不再重建**——
+    _compute_timecodes 已按 hook-first 建好正确顺序，下游（step04/03/02b）不读
+    timeline，W6 拉伸只更新 shot.timecode.start/end 即可，避免重复工作+顺序错乱。
+    """
     if script is None:
         return
+    # 钩子在头部：先设它的 timecode（0..hook_duration），shots 起始时间累加 hook_duration
     cumulative = 0.0
+    hook_dur = 0.0
+    if hook and isinstance(hook, dict):
+        hook_dur = _shot_dur(hook)
+        hook["timecode"] = {
+            "start": 0.0,
+            "end": round(hook_dur, 2),
+        }
+        cumulative = hook_dur
     for s in shots:
         if not isinstance(s, dict):
             continue
@@ -97,41 +112,10 @@ def _sync_timecode(shots: list, hook: dict | None, script: dict | None, fps: flo
             "end": round(cumulative + d, 2),
         }
         cumulative += d
-    if hook and isinstance(hook, dict):
-        hd = _shot_dur(hook)
-        hook["timecode"] = {
-            "start": round(cumulative, 2),
-            "end": round(cumulative + hd, 2),
-        }
-        cumulative += hd
     script["total_duration"] = round(cumulative, 2)
     if "total_effective_duration" in script:
         script["total_effective_duration"] = round(cumulative, 2)
-    # 重建 timeline
-    if "timeline" in script and isinstance(script["timeline"], list):
-        new_timeline: list[dict] = []
-        for idx, s in enumerate(shots):
-            if not isinstance(s, dict):
-                continue
-            tc = s.get("timecode") or {}
-            new_timeline.append({
-                "shot_id": s.get("shot_id") or s.get("id") or idx,
-                "index": idx,
-                "start": tc.get("start", 0),
-                "end": tc.get("end", 0),
-                "duration": _shot_dur(s),
-            })
-        if hook and isinstance(hook, dict):
-            tc = hook.get("timecode") or {}
-            new_timeline.append({
-                "shot_id": "hook",
-                "index": len(shots),
-                "start": tc.get("start", 0),
-                "end": tc.get("end", 0),
-                "duration": _shot_dur(hook),
-                "is_hook": True,
-            })
-        script["timeline"] = new_timeline
+    # timeline[] 数组不再重建（_compute_timecodes 已建好 hook-first 顺序；下游不读）
 
 
 class RuntimeExtendConstraint(Constraint):

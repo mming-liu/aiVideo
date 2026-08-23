@@ -326,8 +326,15 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
 
     Returns:
         重新生成且通过校验的 script；否则返回原 script。
+
+    v6.43（08-23 用户规则）镜头数不限：SHOT_COUNT_MAX<=0 时整个收敛+截断逻辑
+    全部跳过（不再 regen、不再 force-truncate），镜头数完全由 LLM 决定。
     """
     from shared.config import SHOT_COUNT_MAX
+
+    # v6.43 镜头数不限：SHOT_COUNT_MAX<=0 时跳过整个函数（保留 LLM 原始生成）
+    if SHOT_COUNT_MAX <= 0:
+        return script
 
     shots = script.get("shots", [])
     total_duration = float(script.get("total_duration", 0) or 0)

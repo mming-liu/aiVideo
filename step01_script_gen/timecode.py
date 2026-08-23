@@ -152,16 +152,41 @@ def _compute_timecodes(script: dict) -> None:
     - 优先从 motion_desc 中解析时间分段（前N秒，后M秒）
     - 只有对话（带冒号/引号）才按字数估算时长
     - 纯旁白用固定短时长（4秒）
+
+    v6.43（08-23 修复）钩子时间轴：钩子按播放顺序在头部（开场钩子→淡出黑场
+    →正片），所以 timecode 0..hook_duration 归 hook，正片 shots 从
+    hook_duration..hook_duration+shots_total。但 shots_total（正片分镜总时长）
+    用于"60-90s"硬约束检查时**仍只算 shots（不含钩子）**——钩子另算。
     """
     shots = script.get("shots", [])
     if not shots:
         return
 
-    current_time = 0.0
-    timeline = []
+    # v6.43：先算钩子时长（开放在前），正片 shots 起始时间 = hook_duration
+    hook = script.get("hook")
+    hook_duration = 0.0
+    if hook and isinstance(hook, dict):
+        # 1) motion_desc 时间分段（如"前2秒…2-4秒…4-6秒"→6s）优先，动作必须播完
+        motion_duration = _extract_motion_duration(hook.get("motion_desc", "")) if hook.get("motion_desc") else None
+        # 2) LLM 给出的 duration（仅作参考）
+        llm_duration = None
+        raw_duration = hook.get("duration")
+        if raw_duration is not None:
+            try:
+                llm_duration = float(raw_duration)
+            except (TypeError, ValueError):
+                llm_duration = None
+        # 3) 对话字数估算（钩子通常是尖叫/对话，留足口型时间）
+        hook_text = hook.get("narration_segment", "")
+        speech_duration = _estimate_duration(hook_text) if hook_text else 0.0
 
-    # 纯旁白固定时长（不读旁白，只展示画面）
-    NARRATION_FIXED_DURATION = 4.0
+        candidates = [d for d in (motion_duration, llm_duration, speech_duration) if d and d > 0]
+        if candidates:
+            hook_duration = max(candidates)
+        else:
+            hook_duration = MIN_SHOT_DURATION
+        # 下限保护：钩子是开场悬念，至少给足动作时间，禁止 < MIN_SHOT_DURATION
+        hook_duration = max(hook_duration, MIN_SHOT_DURATION)
 
     # 视频帧率对齐（v6.32，08-12）：时长 × fps 必须是整数帧，否则视频生成
     # 多/少一帧导致卡顿（step01.log 反复报「duration 与 fps=24 不对齐」）。
@@ -178,6 +203,28 @@ def _compute_timecodes(script: dict) -> None:
     # 钩子不受 8s 限制（钩子时长另算，下方 hook 段仍只按模型 cap 夹取）。
     shot_cap = MAX_SHOT_DURATION if not dur_cap else min(dur_cap, MAX_SHOT_DURATION)
     clamped_count = 0
+
+    # 钩子按模型 cap + fps 整数帧对齐（与 shots 一致；钩子本身不受 8s cap）
+    if hook_duration > 0:
+        hook_duration = _align_frame_duration(hook_duration, fps)
+        if dur_cap and hook_duration > dur_cap:
+            hook_duration = _align_frame_duration(dur_cap, fps)
+        hook["duration"] = round(hook_duration, 2)
+        hook["duration_sec"] = round(hook_duration, 2)
+        # 钩子 timecode 放在播放顺序头部（0..hook_duration）
+        hook["timecode"] = {
+            "start": 0.0,
+            "end": round(hook_duration, 2),
+        }
+    else:
+        hook["duration"] = 0.0
+        hook["duration_sec"] = 0.0
+        hook["timecode"] = {"start": 0.0, "end": 0.0}
+
+    # v6.43：正片 shots 起始时间 = hook_duration（钩子在播放顺序头部）
+    current_time = hook_duration
+    timeline = []
+    NARRATION_FIXED_DURATION = 4.0  # 纯旁白固定时长
 
     for shot in shots:
         text = shot.get("narration_segment", "")
@@ -241,60 +288,33 @@ def _compute_timecodes(script: dict) -> None:
 
         current_time += duration
 
+    # v6.43：timeline 列表前置钩子条目（播放顺序：hook → shots）
+    if hook and isinstance(hook, dict) and hook_duration > 0:
+        timeline.insert(0, {
+            "index": 0,
+            "is_hook": True,
+            "start": 0.0,
+            "end": round(hook_duration, 2),
+            "duration": hook_duration,
+            "effective_duration": round(hook_duration, 2),
+            "variation_type": hook.get("variation_type", "large"),
+            "keyframe_sample_count": _KEYFRAME_MAP.get(hook.get("variation_type", "large"), 3),
+            "movement_speed_multiplier": _SPEED_MAP.get(hook.get("variation_type", "large"), 0.3),
+            "blank_hold_duration": round(PAUSE_PER_SHOT, 1),
+        })
+
     script["timeline"] = timeline
 
     # 计算正片分镜总时长（08-23 用户规则：≥60s 下限只算正片分镜，钩子另算）
     shots_total = sum(s.get("duration", 0) for s in shots)
-    total = shots_total
-
-    # 加上钩子分镜时长（如果有）
-    # v6.14: hook 时长下限 = max(motion_desc 时间分段, LLM duration, 对话字数估时)。
-    # 此前 LLM 常给 hook duration=3.0，而 motion_desc 描述的是 6 秒动作（前2/2-4/4-6），
-    # 视频生成后段动作被硬截断（hook 视频只有 3 秒，动作没播完）。
-    hook = script.get("hook")
-    if hook and isinstance(hook, dict):
-        # 1) motion_desc 时间分段（如"前2秒…2-4秒…4-6秒"→6s）优先，动作必须播完
-        motion_duration = _extract_motion_duration(hook.get("motion_desc", "")) if hook.get("motion_desc") else None
-        # 2) LLM 给出的 duration（仅作参考）
-        llm_duration = None
-        raw_duration = hook.get("duration")
-        if raw_duration is not None:
-            try:
-                llm_duration = float(raw_duration)
-            except (TypeError, ValueError):
-                llm_duration = None
-        # 3) 对话字数估算（钩子通常是尖叫/对话，留足口型时间）
-        hook_text = hook.get("narration_segment", "")
-        speech_duration = _estimate_duration(hook_text) if hook_text else 0.0
-
-        candidates = [d for d in (motion_duration, llm_duration, speech_duration) if d and d > 0]
-        if candidates:
-            hook_duration = max(candidates)
-        else:
-            hook_duration = MIN_SHOT_DURATION
-        # 下限保护：钩子是开场悬念，至少给足动作时间，禁止 < MIN_SHOT_DURATION
-        hook_duration = max(hook_duration, MIN_SHOT_DURATION)
-        # v6.32：钩子时长同样按 fps 对齐整数帧（与 shots 一致）；
-        # 08-23：改用 _align_frame_duration，兼顾整数帧对齐 + 输出 ≤3 位小数
-        hook_duration = _align_frame_duration(hook_duration, fps)
-        # 钩子时长同样受视频模型上限约束
-        if dur_cap and hook_duration > dur_cap:
-            hook_duration = _align_frame_duration(dur_cap, fps)
-        hook["duration"] = round(hook_duration, 2)
-        hook["duration_sec"] = round(hook_duration, 2)
-        total += hook_duration
+    # v6.43：total = hook_duration + shots_total（钩子在播放顺序头部）
+    total = hook_duration + shots_total
 
     script["total_duration"] = round(total, 2)
     script["total_effective_duration"] = round(total, 2)
     # 08-23 用户规则日志：正片分镜时长（不含钩子）与钩子时长分开报
-    hook_dur = 0.0
-    if hook and isinstance(hook, dict):
-        try:
-            hook_dur = float(hook.get("duration_sec") or hook.get("duration") or 0)
-        except (TypeError, ValueError):
-            hook_dur = 0.0
     _log().info(f"时间轴计算完成: {len(shots)} 镜 {shots_total:.1f}s（不含钩子）"
-          + (f" + 1 钩子 {hook_dur:.1f}s（另算）" if hook else "")
+          + (f" + 1 钩子 {hook_duration:.1f}s（另算，开场在头部）" if hook and hook_duration > 0 else "")
           + f", 总计 {total:.1f}s")
     if shots_total < MIN_TOTAL_SHOTS_DURATION:
         _log().warn(f"正片分镜总时长 {shots_total:.1f}s < {MIN_TOTAL_SHOTS_DURATION:.0f}s 硬下限"

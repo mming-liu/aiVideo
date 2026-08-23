@@ -104,13 +104,16 @@ def _validate_script(script: dict) -> None:
     reported_count = script.get("shot_count")
     actual_count = len(shots)
     from shared.config import SHOT_COUNT_MIN, SHOT_COUNT_MAX
-    if actual_count < SHOT_COUNT_MIN or actual_count > SHOT_COUNT_MAX:
-        density_hint = ""
-        if actual_count > 25:
-            density_hint = f"——v6.34 节奏密度参考：60s 短视频最佳 15-22 镜，当前 {actual_count} 镜偏多，建议合并同场景连续动作镜头"
-        elif actual_count < 12:
-            density_hint = f"——v6.34 节奏密度参考：60s 短视频最佳 15-22 镜，当前 {actual_count} 镜偏少，建议拆分多动作镜头"
-        _get_logger().warn(f"镜头数 {actual_count} 超出 sanity 范围 [{SHOT_COUNT_MIN}, {SHOT_COUNT_MAX}]（仅提示，不阻断）{density_hint}")
+    # v6.43（08-23 用户规则）镜头数不限：SHOT_COUNT_MIN/MAX 任一 ≤0 跳过
+    # sanity 检查（红果标准：只约束 60-90s 总时长 + ≤8s 单镜）
+    if SHOT_COUNT_MIN > 0 and SHOT_COUNT_MAX > 0:
+        if actual_count < SHOT_COUNT_MIN or actual_count > SHOT_COUNT_MAX:
+            density_hint = ""
+            if actual_count > 25:
+                density_hint = f"——v6.34 节奏密度参考：60s 短视频最佳 15-22 镜，当前 {actual_count} 镜偏多，建议合并同场景连续动作镜头"
+            elif actual_count < 12:
+                density_hint = f"——v6.34 节奏密度参考：60s 短视频最佳 15-22 镜，当前 {actual_count} 镜偏少，建议拆分多动作镜头"
+            _get_logger().warn(f"镜头数 {actual_count} 超出 sanity 范围 [{SHOT_COUNT_MIN}, {SHOT_COUNT_MAX}]（仅提示，不阻断）{density_hint}")
     if reported_count is None:
         # v6.34（08-15）：缺失静默补齐——旧 WARN 无行动价值，4 轮日志纯噪音
         script["shot_count"] = actual_count
@@ -6516,8 +6519,22 @@ def _hard_fix_runtime_extend(
     # v6.41+ 关键修复：不论是否拉伸，timecode 永远和 shot["duration"] 同步。
     # 此前 bug：末镜保护改了 duration 但 timecode 不动；新跑批 need<5 早返回也跳过
     # timecode 同步 → shot["duration"]=5.42 但 timecode.end=4.0，step02b/step04 时轴错位。
+    # v6.43（08-23）钩子在播放顺序头部：hook.timecode=0..hook_duration，
+    # shots 从 hook_duration 开始累加。timeline[] 数组**不再重建**——
+    # _compute_timecodes 已按 hook-first 建好正确顺序，下游不读 timeline。
     if script is not None:
         cumulative = 0.0
+        hook_dur_v = 0.0
+        if hook and isinstance(hook, dict):
+            try:
+                hook_dur_v = float(hook.get("duration_sec") or hook.get("duration") or 0)
+            except (TypeError, ValueError):
+                hook_dur_v = 0.0
+            hook["timecode"] = {
+                "start": 0.0,
+                "end": round(hook_dur_v, 2),
+            }
+            cumulative = hook_dur_v
         for s in shots:
             if not isinstance(s, dict):
                 continue
@@ -6530,45 +6547,11 @@ def _hard_fix_runtime_extend(
                 "end": round(cumulative + d, 2),
             }
             cumulative += d
-        if hook and isinstance(hook, dict):
-            try:
-                hd = float(hook.get("duration_sec") or hook.get("duration") or 0)
-            except (TypeError, ValueError):
-                hd = 0.0
-            hook["timecode"] = {
-                "start": round(cumulative, 2),
-                "end": round(cumulative + hd, 2),
-            }
-            cumulative += hd
         script["total_duration"] = round(cumulative, 2)
         # 兼容字段：旧版 step04 merge 用 total_effective_duration
         if "total_effective_duration" in script:
             script["total_effective_duration"] = round(cumulative, 2)
-        # 重建 timeline 数组（如果存在）
-        if "timeline" in script and isinstance(script["timeline"], list):
-            new_timeline = []
-            for idx, s in enumerate(shots):
-                if not isinstance(s, dict):
-                    continue
-                tc = s.get("timecode") or {}
-                new_timeline.append({
-                    "shot_id": s.get("shot_id") or s.get("id") or idx,
-                    "index": idx,
-                    "start": tc.get("start", 0),
-                    "end": tc.get("end", 0),
-                    "duration": float(s.get("duration_sec") or s.get("duration") or 0),
-                })
-            if hook and isinstance(hook, dict):
-                tc = hook.get("timecode") or {}
-                new_timeline.append({
-                    "shot_id": "hook",
-                    "index": len(shots),
-                    "start": tc.get("start", 0),
-                    "end": tc.get("end", 0),
-                    "duration": float(hook.get("duration_sec") or hook.get("duration") or 0),
-                    "is_hook": True,
-                })
-            script["timeline"] = new_timeline
+        # timeline[] 数组不再重建（_compute_timecodes 已建好 hook-first 顺序；下游不读）
 
     return fixed
 

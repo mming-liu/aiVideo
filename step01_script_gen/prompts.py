@@ -255,21 +255,36 @@ def _build_total_duration_constraint(shot_count_min: int, shot_count_max: int) -
     08-23 v6.41 P19.2：原 3-8 镜 + 平均 7.5s → LLM 默认按 6s/镜规划 → 8 镜 48s
     不到 60s 红果下限。改为 **8-10 镜 + 平均 6-9s/镜** → 48-90s 覆盖红果区间。
 
-    08-23 用户规则：**正片分镜总时长（不含钩子）≥ 60s，单镜 ≤ 8s，钩子时长另算**。
+    08-23 v6.43 用户规则：**正片分镜总时长（不含钩子）≥ 60s，单镜 ≤ 8s，
+    钩子时长另算；镜头数不限（SHOT_COUNT_MIN/MAX<=0 即视为不限）**。
     单镜 cap 从 12s 收紧到 8s；60s 下限只统计正片分镜，钩子不进总时长。
+    镜头数不限时，提示「按需拆镜」+ 用「每镜平均时长」作为软目标，不再硬塞 N 镜。
     """
     from shared.model_caps import active_video_duration_cap
     cap = active_video_duration_cap() or 12
-    # 8-10 镜 + 60-90s 目标 → 平均每镜 6-8s（单镜硬上限 8s）
+    # 60-90s 目标 → 平均每镜 6-8s（单镜硬上限 8s）
     min_per_shot = 6.0
     target_per_shot = 7.5
     max_per_shot = min(8.0, cap)  # 单镜 cap（08-23 用户规则：≤8s，与模型 cap 取严）
+
+    # v6.43 镜头数不限：min/max 任一 ≤0 时按"按需拆镜"措辞，不再硬塞 N 镜数字
+    unlimited = shot_count_min <= 0 or shot_count_max <= 0
+    if unlimited:
+        plan_line = (
+            f"**镜头数不限**，按动作密度自然拆分：每镜平均 {min_per_shot:.1f}-{target_per_shot:.1f}s"
+            f"（以单镜 ≤ {max_per_shot:.0f}s 硬上限为准，超 8s 必拆镜）。\n"
+        )
+    else:
+        plan_line = (
+            f"按 {shot_count_min}-{shot_count_max} 镜规划：每镜平均 {min_per_shot:.1f}-{target_per_shot:.1f}s"
+            f"（{shot_count_min} 镜 × {min_per_shot:.0f}s={shot_count_min*int(min_per_shot):.0f}s, "
+            f"{shot_count_max} 镜 × {target_per_shot:.0f}s={shot_count_max*int(target_per_shot):.0f}s）。\n"
+        )
+
     return (
         f"\n\n### ⏰ 红果 60-90s 总时长硬约束（最高优先级，违反则全章返工）\n"
         f"本章是抖音 60-90s 竖屏短剧，**正片分镜（不含钩子，钩子时长另算）duration_sec 之和必须在 60-90s 之间**。\n"
-        f"按 {shot_count_min}-{shot_count_max} 镜规划：每镜平均 {min_per_shot:.1f}-{target_per_shot:.1f}s"
-        f"（{shot_count_min} 镜 × {min_per_shot:.0f}s={shot_count_min*int(min_per_shot):.0f}s, "
-        f"{shot_count_max} 镜 × {target_per_shot:.0f}s={shot_count_max*int(target_per_shot):.0f}s）。\n"
+        f"{plan_line}"
         f"\n"
         f"**规划方式**：\n"
         f"- 开场/建立镜：{min_per_shot:.0f}-{target_per_shot:.0f}s（含人物姿态、空间关系建立）\n"
