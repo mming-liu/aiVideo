@@ -9,13 +9,36 @@ character_extractor.py 的 CHARACTER_EXTRACTION_PROMPT 输出结构保持一致�
 # 通用小结构
 # ========================================================================
 
+# v6.34：kf 时间字段迁移 time_ratio → stage + t_sec
+# 6 值精细粒度 stage enum（pre/approach/climax/react/exit/after）；
+# t_sec 直写秒数（0 < t_sec < duration_sec），禁止 0-1 比例/除法表达式。
+# 旧 time_ratio 字段已彻底删除——LLM 必须用新字段。
+_KF_STAGE_DESC = {
+    "pre":      "动作前一刻：威胁源潜伏/未察觉/盘坐（潜伏/微澜/未察觉/盘坐/静止/暗流）",
+    "approach": "逼近/动作启动：破水/举刀/起身（破水/跃出/逼近/举刀/起身）",
+    "climax":   "接触/爆发瞬间：动作最高点（刺入/劈落/相击/砸下/此刻/溅起）",
+    "react":    "受击方即时反应：闷哼/后仰/初现血（闷哼/后仰/捂嘴/初现洇痕/刚察觉）",
+    "exit":     "施动者退场/离开画面（倒纵入水/没入/退入/消失/离去）",
+    "after":    "最终结果态：余波/收束/定格（已倒/仰卧/洇痕扩大/只剩涟漪/余波）",
+}
 _KEYFRAME = {
     "type": "object",
     "properties": {
-        "desc": {"type": "string"},
-        "time_ratio": {"type": "number"},
+        "desc": {
+            "type": "string",
+            "description": "单帧静态画面描述（规则16.2 禁止动作链；每个元素必须能在物理上同瞬间发生）",
+        },
+        "stage": {
+            "type": "string",
+            "enum": list(_KF_STAGE_DESC.keys()),
+            "description": "kf 语义阶段：" + "；".join(f"{k}={v}" for k, v in _KF_STAGE_DESC.items()),
+        },
+        "t_sec": {
+            "type": "number",
+            "description": "kf 物理时刻（秒，直写 0 < t_sec < duration_sec，禁止 0-1 比例/禁止除法表达式）；写 kf 前先列 motion_desc 时段表，每个 kf 的 t_sec 直接抄该时段内的秒数",
+        },
     },
-    "required": ["desc", "time_ratio"],
+    "required": ["desc", "stage", "t_sec"],
     "additionalProperties": False,
 }
 

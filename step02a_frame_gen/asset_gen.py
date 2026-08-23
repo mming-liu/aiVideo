@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -85,17 +86,19 @@ async def _qc_asset_image(asset_path: Path, ident: str, desc: str,
         return False
 
 
-async def gen_scene_assets(image_adapter, force: bool = False) -> int:
+async def gen_scene_assets(image_adapter, force: bool = False, hallucinated_ids: set | None = None) -> int:
     """为场景资产库中缺图的场景生成大场景图 + 近景功能场景图.
 
     Args:
         script: script_result.json（含 scene_assets 描述，但 bank 才是权威源）
         image_adapter: 图片生成适配器（横屏专用，见调用方）
         force: 忽略缓存强制重生成
+        hallucinated_ids: audit 识别的幻觉 prop/scene 集合 → 这些直接跳过不调 4.5
 
     Returns:
         int: 成功生成/复用的场景资产数
     """
+    hallucinated_ids = hallucinated_ids or set()
     if not ASSET_GEN_ENABLED:
         return 0
 
@@ -111,6 +114,10 @@ async def gen_scene_assets(image_adapter, force: bool = False) -> int:
 
     total = 0
     for ident in bank.get_all_identifiers():
+        # v6.40 08-22：audit 识别的幻觉 scene 直接跳过（不调 4.5 重生成）
+        if ident in hallucinated_ids:
+            logger.info(f"[ASSET] 场景 {ident}: 幻觉条目，跳过不补生成")
+            continue
         entry = bank.get_scene(ident)
         if not entry:
             continue
@@ -132,30 +139,20 @@ async def gen_scene_assets(image_adapter, force: bool = False) -> int:
             logger.info(f"[ASSET] 场景 {ident}: 大场景图已存在，复用")
             continue
 
-        # 生成大场景建立镜头图（B8 修复：QC critical 时重试最多 2 次）
-        wide_ok = False
-        for _attempt in range(1, 3):
-            logger.info(f"[ASSET] 生成场景 {ident} 大场景建立镜头图"
-                        f"{f'（重试 {_attempt}/2）' if _attempt > 1 else ''} ...")
-            try:
-                img_out = await gen.generate_wide(scene, save_path=str(wide_path))
-                if not _save_image(img_out, wide_path):
-                    logger.warn(f"[ASSET] 场景 {ident} 大场景图生成失败，跳过该场景")
-                    break
-                logger.info(f"[ASSET] 场景 {ident} 大场景图 -> {wide_path}")
-                # B8：内容质检（大场景禁人物），critical → 删图重试
-                _critical = await _qc_asset_image(
-                    wide_path, ident, (entry.get("wide_desc") or "")[:120],
-                    empty_scene=True,
-                )
-                if _critical:
-                    continue
-                wide_ok = True
-                break
-            except Exception as e:
-                logger.warn(f"[ASSET] 场景 {ident} 大场景图生成异常: {e}，跳过")
-                break
-        if not wide_ok:
+        # 生成大场景建立镜头图
+        # v6.40 08-23：跳过视觉 QC——专用 wide prompt 已 4 次强约束"不得出现任何
+        # 人物/身影/人影/轮廓或人形"，且专用横屏适配器关闭了幻觉锁图。ds-vision-skill
+        # 视觉模型对 2560x1440 大场景空镜（远景屋脊/炊烟/水面倒影/树丛阴影）
+        # 误判率高，每个新场景首生成浪费 1 张 3.69M 像素档位的 wide.png。
+        # 风险：完全依赖 prompt 强约束，已与 line 128-139 复用分支保持一致。
+        try:
+            img_out = await gen.generate_wide(scene, save_path=str(wide_path))
+            if not _save_image(img_out, wide_path):
+                logger.warn(f"[ASSET] 场景 {ident} 大场景图生成失败，跳过该场景")
+                continue
+            logger.info(f"[ASSET] 场景 {ident} 大场景图 -> {wide_path}")
+        except Exception as e:
+            logger.warn(f"[ASSET] 场景 {ident} 大场景图生成异常: {e}，跳过")
             continue
 
         assets = {
@@ -200,16 +197,19 @@ async def gen_scene_assets(image_adapter, force: bool = False) -> int:
     return total
 
 
-async def gen_prop_assets(image_adapter, force: bool = False) -> int:
+async def gen_prop_assets(image_adapter, force: bool = False, hallucinated_ids: set | None = None) -> int:
     """为道具资产库中缺图的道具生成白底资产图.
 
     Args:
         script: script_result.json（含 prop_assets 描述，但 bank 才是权威源）
         image_adapter: 图片生成适配器（横屏专用，见调用方）
+        force: 忽略缓存强制重生成
+        hallucinated_ids: audit 识别的幻觉 prop/scene 集合 → 这些直接跳过不调 4.5
 
     Returns:
         int: 成功生成/复用的道具资产数
     """
+    hallucinated_ids = hallucinated_ids or set()
     if not ASSET_GEN_ENABLED:
         return 0
 
@@ -225,6 +225,10 @@ async def gen_prop_assets(image_adapter, force: bool = False) -> int:
 
     total = 0
     for ident in bank.get_all_identifiers():
+        # v6.40 08-22：audit 识别的幻觉 prop 直接跳过（不调 4.5 重生成）
+        if ident in hallucinated_ids:
+            logger.info(f"[ASSET] 道具 {ident}: 幻觉条目，跳过不补生成")
+            continue
         entry = bank.get_prop(ident)
         if not entry:
             continue
@@ -282,23 +286,60 @@ async def gen_all_assets(force: bool = False) -> dict:
 
     使用专用横屏适配器（资产图是横屏参考，不加风格前缀，不做合规清洗——
     与角色肖像 _generate_missing_portraits 一致）。
+
+    v6.40 08-22：先调 audit_orphan_props 拿 hallucinated_now 集合，
+    传给 gen_scene_assets/gen_prop_assets → 幻觉 scene/prop 直接跳过
+    （不调 4.5 重生成，节省额度）。已存在则跳过的逻辑保留。
     """
     if not ASSET_GEN_ENABLED:
         return {"scenes": 0, "props": 0}
+
+    # 跑 audit 拿 hallucinated_now（需先有 script）
+    _hallucinated = set()
+    try:
+        from shared.assets_bank import PropAssetsBank
+        from step01_script_gen.asset_extractor import audit_orphan_props
+        from shared.paths import script_file
+        import json as _json
+        _script_path = script_file()
+        if _script_path.exists():
+            with open(_script_path, "r", encoding="utf-8") as _f:
+                _script = _json.load(_f)
+            _bank = PropAssetsBank()
+            _bank.load()
+            _chapter = int(os.getenv("NOVEL_CHAPTER", "1"))
+            _audit = audit_orphan_props(_bank, current_chapter=_chapter,
+                                        current_script=_script, orphan_window=3)
+            _hallucinated = set(_audit.get("hallucinated_now", []))
+            from shared.paths import chapter_dir
+            from shared.tee_logger import get_logger
+            logger = get_logger(chapter_dir() / "step02a.log", console_level="INFO")
+            logger.info(f"[ASSET] audit 识别 hallucinated_now={len(_hallucinated)} 个: "
+                        f"{sorted(_hallucinated)[:8]}{'...' if len(_hallucinated) > 8 else ''}")
+    except Exception as _e:
+        # v6.40 08-23：失败原因必须可见（之前 pass 静默吞 NameError 导致幻觉 prop 漏拦活虾等 8 章）
+        from shared.paths import chapter_dir
+        from shared.tee_logger import get_logger
+        try:
+            logger = get_logger(chapter_dir() / "step02a.log", console_level="INFO")
+            logger.warn(f"[ASSET] audit_orphan_props 失败，幻觉 prop 拦截失效: {_e!r}")
+        except Exception:
+            print(f"[ASSET][WARN] audit_orphan_props 失败，幻觉 prop 拦截失效: {_e!r}")
 
     from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
 
     # 资产图专用适配器：16:9 横屏、不加风格前缀、不替换敏感词、不注入幻觉锁图
     # （资产图禁止人物，无需面部/服装锁定；锁图词"統一五官"对无人物场景无意义）
+    # 2026-08-22 升级 2560x1440（= 3,686,400 像素）满足 Seedream 4.5 像素下限 3686400
     asset_adapter = ImageGeneratorAiVideoAdapter(
-        size="1600x900",
+        size="2560x1440",
         skip_prefix=True,
         skip_sanitize=True,
         enable_hallucination_lock=False,
     )
 
-    n_scenes = await gen_scene_assets(asset_adapter, force=force)
-    n_props = await gen_prop_assets(asset_adapter, force=force)
+    n_scenes = await gen_scene_assets(asset_adapter, force=force, hallucinated_ids=_hallucinated)
+    n_props = await gen_prop_assets(asset_adapter, force=force, hallucinated_ids=_hallucinated)
 
     from shared.paths import chapter_dir
     from shared.tee_logger import get_logger

@@ -346,16 +346,20 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
 
         # 反馈上下文：镜头数与总时长双重提示，要求合并同场景/冗余过渡镜头
         # （08-12 用户决策：60s/110s 总时长目标「先不改」，只收敛镜头数超限的废输出）
+        # v6.40 08-22：升级为"硬约束"措辞 + 强调"本轮拒收"，LLM 软话不收敛。
         from shared.config import SHOT_COUNT_MAX as _max
         feedback = (
-            f"\n\n# 镜头数收敛反馈（来自本地校验）\n"
-            f"当前生成的镜头数为 {current} 个、总时长 {total_duration:.0f} 秒，"
-            f"超过上限 {_max} 个镜头。短视频平台成片以 60 秒为佳。\n"
-            f"请重新生成，严格做到：\n"
-            f"1. 合并同场景连续镜头（镜头数 = 真跳切数 + 1：同一主体、同一地点、连续同一动作必须合为一镜，相机角度微调/同对话正反打并入一镜内部动作；只有主体变/地点变/时空跳跃/旁白主题切换才拆分）\n"
-            f"2. 删减冗余过渡镜头与重复表达的空镜\n"
-            f"3. 确保镜头数 ≤ {_max}，总时长控制在 110 秒以内\n"
-            f"4. 保留全部关键剧情节点与高潮部分，不要删剧情，只合并冗余\n"
+            f"\n\n# ★ 镜头数硬约束（v6.40 08-22 升级，本轮拒收）\n"
+            f"你上一轮出了 {current} 镜，超上限 {_max} {current - _max} 镜。\n"
+            f"**本轮拒收 ≤ {_max} 镜的输出——必须严格 ≤ {_max} 镜**。\n\n"
+            f"严格合并规则：\n"
+            f"1. 同一主体 + 同一地点 + 连续同一动作 = 1 镜（用动作重叠法或 clip_transition=硬切合并）\n"
+            f"2. 相机角度微调 / 同对话正反打 = 1 镜（不要拆）\n"
+            f"3. 只有主体变 / 地点变 / 时空跳跃 / 旁白主题切换 = 拆镜\n"
+            f"4. 删减冗余过渡镜头与重复表达的空镜\n"
+            f"5. 保留全部关键剧情节点（开篇冲突 / 刺杀 / 高潮 / 收尾），不删剧情只合并冗余\n"
+            f"6. **不要把多镜拆成单镜的细碎画面**——一镜只承载 1 个核心动作/情绪转折\n\n"
+            f"v6.38 红果硬约束：3-8 镜、总时长 60-90s、单镜 3-12s。当前 14 镜是历史包袱，本轮必须压到 ≤ {_max} 镜。\n"
         )
         # v6.33（08-12）：附加 checklist 聚合反馈——镜头数收敛之外，把内容密度/景别
         # 跳跃/致命伤等真实缺陷也喂给 LLM（此前只喂镜头数/覆盖率，LLM 重生成还是老问题）
@@ -412,9 +416,21 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         over_max = len(new_shots) > SHOT_COUNT_MAX
 
     if over_max:
-        _logger.warn(
-            f"[COUNT] 重试 {max_attempts} 次后镜头数仍超上限，保留当前版本继续流水线"
+        # v6.40 08-22：regen 全部失败后不再"保留原版"——按 v6.38 红果硬约束**强制截断**
+        # 到 SHOT_COUNT_MAX 镜。LLM 软话不收敛时这是最后兜底，优先保留前 N 镜（开篇+冲突+高潮）
+        # 截断后再跑一次 _compute_timecodes 校正 timecode。
+        from shared.config import SHOT_COUNT_MAX
+        _console(
+            f"  [COUNT] 重试 {max_attempts} 次后仍 {len(script.get('shots', []))} 镜，"
+            f"按 v6.38 红果硬约束强制截断到 {SHOT_COUNT_MAX} 镜"
         )
+        _logger.warn(
+            f"[COUNT] 强制截断: {len(script.get('shots', []))} → {SHOT_COUNT_MAX} 镜（v6.38 兜底）"
+        )
+        shots = script.get("shots", [])
+        script["shots"] = shots[:SHOT_COUNT_MAX]
+        # 同步处理 hook：若 hook 之前被算入 shots 之外的，截断不影响 hook
+        _compute_timecodes(script)
     return script
 
 
@@ -1129,13 +1145,48 @@ def _extract_assets_and_update_script(script: dict) -> None:
     script["scene_assets"] = _scene_assets_out
 
     _prop_assets_out = {}
+    # v6.40 08-22：prop_assets 字段 = 本次 LLM 提的 ∪ bank 中 last_chapter >= NOVEL_CHAPTER - 1 的
+    # 且 ∉ audit_orphan_props.hallucinated_now 集合
+    # 之前 L1148 遍历 bank 全部 → 把 LLM 幻觉的历史累积条目（如活虾/嫩藕/肥鸡）
+    # 也写进 script_result.json → 下游 step02a/r2v 看到这些幻觉条目。
+    # 改为并集：本次 LLM 提的（保证新提的真用道具）+ bank 中"本章或上章用过且非幻觉"的
+    # （避免 LLM 不稳定漏提"舴艋舟"等已 stable 的道具，同时排除"活虾"等历史幻觉）。
+    # audit_orphan_props 用 alias + 分镜全文反查识别幻觉，弥补"last_chapter 区分不了
+    # 真用 vs 幻觉"的盲区。
+    from step01_script_gen.asset_extractor import audit_orphan_props
+    _audit = audit_orphan_props(
+        prop_assets_bank, current_chapter=NOVEL_CHAPTER, current_script=script,
+        orphan_window=3,
+    )
+    _hallucinated = set(_audit.get("hallucinated_now", []))
+    if _hallucinated:
+        _logger.info(
+            f"[INFO] audit 拦截 bank 幻觉 prop: {len(_hallucinated)} 个 → {sorted(_hallucinated)}"
+        )
+    # 1) 本次 LLM 提的（优先，含新提的真用道具）
+    for _pa in _prop_assets:
+        _pid = _pa.get("identifier", "").strip()
+        if not _pid:
+            continue
+        _prop_assets_out[_pid] = {
+            k: _pa[k] for k in ("category", "appearance", "consistent_terms")
+            if k in _pa
+        }
+    # 2) bank 中本章或上章用到且非幻觉的（LLM 漏提兜底）
+    _cutoff = NOVEL_CHAPTER - 1
     for _pid in prop_assets_bank.get_all_identifiers():
+        if _pid in _prop_assets_out or _pid in _hallucinated:
+            continue
         _pa = prop_assets_bank.get_prop(_pid)
-        if _pa:
-            _prop_assets_out[_pid] = {
-                k: _pa[k] for k in ("category", "appearance", "consistent_terms")
-                if k in _pa
-            }
+        if not _pa:
+            continue
+        _last = _pa.get("last_chapter")
+        if _last is None or _last < _cutoff:
+            continue
+        _prop_assets_out[_pid] = {
+            k: _pa[k] for k in ("category", "appearance", "consistent_terms")
+            if k in _pa
+        }
     script["prop_assets"] = _prop_assets_out
     if _scene_assets_out or _prop_assets_out:
         _logger.info(
@@ -1450,36 +1501,68 @@ def main() -> None:
             fpath.unlink()
             _logger.verbose(f"  [已删除] {f}")
 
-    # ========== v6新增：钩子分镜生成 ==========
+    # ========================================================================
+    # 钩子分镜生成（v6 沿用 + v6.39 调用顺序硬约束）
+    # ========================================================================
+    # 严格 3 步调用顺序（C4 修复 08-11 + v6.32 强化 08-12），禁止任何步骤乱序：
+    #
+    #   ┌─────────────────────────────────────────────────────────────┐
+    #   │  ① 提取 forbidden_lines  ← 必须在主分镜 shots 落盘后做         │
+    #   │     (剥说话人前缀的台词体列表，注入钩子 prompt 防重复穿帮)      │
+    #   │                          ↓                                  │
+    #   │  ② 调用 hook = gen_hook_script(forbidden_lines=...)          │
+    #   │     (钩子 LLM 在 prompt 看到禁止清单，从源头不写重复台词)       │
+    #   │                          ↓                                  │
+    #   │  ③ 合并 + 去重 retry + 兜底清空                               │
+    #   │     (挂载后比对台词，仍重复则重试 2 次；再重复则清空台词字段)     │
+    #   └─────────────────────────────────────────────────────────────┘
+    #
+    # 关键 invariant（破坏任意一条会引发「钩子台词=主分镜台词」倒叙穿帮）：
+    #   - 步骤① forbidden_lines 必须在 shots 落盘后才能采集（空列表=无效）
+    #   - 步骤② gen_hook_script 调用时 forbidden_lines 必须非 None
+    #   - 步骤③ _hook_dup_hits 比对时 shots 列表未变（避免 race）
+    # ========================================================================
     if HOOK_ENABLED:
-        _logger.info("\n[INFO] 开始生成钩子分镜...")
-        # v6.32（08-12）：主分镜台词体列表，注入钩子 prompt 防「台词重复」穿帮。
-        # C4 修复的盲区——gen_hook_script 生成时拿不到主分镜文本——从源头堵住：
-        # 把每镜 narration 的台词体（剥说话人前缀）喂给钩子 LLM 作禁止清单。
-        _forbidden_lines = []
-        for _s in script.get("shots", []):
+        # ===== ① 提取 forbidden_lines（assert 保护调用顺序）=====
+        _shots_for_hook = script.get("shots", [])
+        assert _shots_for_hook, (
+            "HOOK pipeline 顺序保护：步骤②前必须先生成主分镜 shots。"
+            "当前 script['shots'] 为空——主分镜 LLM 调用可能失败或被跳过。"
+        )
+        _forbidden_lines: list[str] = []
+        for _s in _shots_for_hook:
             _body = _speech_body(_s.get("narration_segment", ""))
             if _body:
                 _forbidden_lines.append(_body)
-        hook = gen_hook_script(novel_text, bank=character_bank,
-                               objects_bank=scene_objects_bank,
-                               forbidden_lines=_forbidden_lines)
+        _logger.info(f"[INFO] 钩子禁止台词清单已就绪（{len(_forbidden_lines)} 条）")
 
-        def _hook_dup_hits() -> list:
-            """钩子台词与主分镜任一镜头台词重复的镜头 index 列表（空=无重复）."""
-            _hl = _speech_body(hook.get("narration_segment", ""))
-            _hits = []
-            if not _hl:
-                return _hits
-            for _s in script.get("shots", []):
-                _sb = _speech_body(_s.get("narration_segment", ""))
-                if _sb and (_hl == _sb or _hl in _sb or _sb in _hl):
-                    _hits.append(_s.get("index", "?"))
-            return _hits
+        # ===== ② 调用 hook LLM（注入 forbidden_lines）=====
+        _logger.info("\n[INFO] 开始生成钩子分镜...")
+        hook = gen_hook_script(
+            novel_text,
+            bank=character_bank,
+            objects_bank=scene_objects_bank,
+            forbidden_lines=_forbidden_lines,  # 必传参数，v6.32 强约束
+        )
 
         if hook:
+            # ===== ③ 合并 + 去重 retry + 兜底清空 =====
             script["hook"] = hook
             _logger.info(f"[OK] 钩子分镜已生成: {hook.get('narration_segment', '')[:30]}...")
+
+            # 闭包：引用外层 _shots_for_hook（步骤③ shots 列表不变 invariant）
+            def _hook_dup_hits() -> list:
+                """钩子台词与主分镜任一镜头台词重复的镜头 index 列表（空=无重复）."""
+                _hl = _speech_body(hook.get("narration_segment", ""))
+                _hits = []
+                if not _hl:
+                    return _hits
+                for _s in _shots_for_hook:  # ← 闭包用 _shots_for_hook 而非 script.get，避免 race
+                    _sb = _speech_body(_s.get("narration_segment", ""))
+                    if _sb and (_hl == _sb or _hl in _sb or _sb in _hl):
+                        _hits.append(_s.get("index", "?"))
+                return _hits
+
             # C4 修复（08-11）+ v6.32 强化（08-12）：挂载后立即比对台词去重，
             # 重复则自动重新生成钩子（换一句台词），最多再试 2 次；仍重复才 WARN
             # 提示人工处理。钩子是「最精彩瞬间」的倒叙，与主分镜台词重复会直接

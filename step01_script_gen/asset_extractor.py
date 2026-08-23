@@ -89,8 +89,12 @@ PROP_EXTRACTION_PROMPT = """
 已知道具库（若道具已在库中，请确认其出场；若本章对外观有补充，给出修正后的描述）：
 {known_props}
 
-# 提取范围
-- **必须提取**：人物手持/背负/使用的关键道具、剧情转折道具、跨镜头反复出现的道具（如背篓）
+# 提取范围（v6.40 08-22 收紧，禁止 LLM 幻觉）
+- **必须提取**：分镜脚本中**实际出现**的道具（prompt/lf_desc/ff_desc/motion_desc/main_subject/scene/location 任一字段能找到对应名）
+- **严禁提取**（LLM 幻觉高发区）：
+  - "可能用到" / "潜在场景" / "宴席可能用" / "厨房常见" 等推测性道具
+  - 完整食物清单（活虾/嫩藕/肥鸡/嫩羊/糕点/酒菜/餐具等）——除非分镜某镜**明确**写到
+  - 与本章剧情/场景/人物完全无关的"装饰类"道具
 - **可忽略**：纯背景陈设、一次性出现且无剧情意义的物件（如一张普通木桌、一棵树）
 
 # 外观描述要求（最重要）——供白底道具资产图生成，必须具体到可画的细节
@@ -118,6 +122,7 @@ PROP_EXTRACTION_PROMPT = """
 - appearance 必须具体到材质/颜色/结构/新旧痕迹，禁止抽象形容（如"看起来老旧"）
 - 只提取主要道具（有明确剧情/空间占位/反复出现），忽略纯背景
 - is_new: 该道具是否不在已知道具库中
+- **强约束（兜底）**：每个 prop 的 identifier 或 consistent_terms **必须**能在分镜脚本的 6 字段（prompt/lf_desc/ff_desc/motion_desc/main_subject/scene/location）任一找到原文匹配。匹配不到的就是幻觉，必须丢弃。
 
 # 分镜脚本
 {script_json}
@@ -228,8 +233,57 @@ def extract_props(script: dict, bank) -> list[dict]:
             return []
 
     props = data.get("props", [])
+    # v6.40 08-22：出口过滤 LLM 幻觉道具——每个 prop 的 identifier 或 consistent_terms
+    # 必须在分镜脚本 7 字段（prompt/lf_desc/ff_desc/motion_desc/main_subject/scene/location）
+    # 任一出现，否则视为幻觉丢弃
+    props = _filter_props_against_script(props, script)
     print(f"[INFO] 提取到 {len(props)} 个道具资产: {[p.get('identifier', '?') for p in props]}")
     return props
+
+
+def _filter_props_against_script(props: list, script: dict) -> list:
+    """v6.40 08-22：出口过滤 LLM 幻觉道具（兜底，prompt 强约束失效时仍能拦住）.
+
+    规则：每个 prop 的 identifier 或 consistent_terms 任一必须能在分镜脚本 7 字段
+    （prompt/lf_desc/ff_desc/motion_desc/main_subject/scene/location）找到原文匹配。
+    匹配不到 = LLM 幻觉 = 丢弃。
+
+    例外：first_chapter 已在 props_bank 注册的"已知道具"（bank 传入时附 _is_known 标记）
+    不参与本过滤——跨章复用优先。
+    """
+    # 拼接分镜脚本全文（7 字段 × N 镜 + hook）
+    fields = ("prompt", "lf_desc", "ff_desc", "motion_desc", "main_subject", "scene", "location")
+    all_text_parts = []
+    for sh in script.get("shots", []):
+        for f in fields:
+            v = sh.get(f)
+            if isinstance(v, str) and v:
+                all_text_parts.append(v)
+    hook = script.get("hook") or {}
+    for f in fields:
+        v = hook.get(f)
+        if isinstance(v, str) and v:
+            all_text_parts.append(v)
+    all_text = "\n".join(all_text_parts)
+
+    kept, dropped = [], []
+    for p in props:
+        ident = (p.get("identifier") or "").strip()
+        terms = [ident] + [t for t in (p.get("consistent_terms") or []) if isinstance(t, str) and t.strip()]
+        # 已知道具（已在 bank 注册）跳过过滤
+        if p.get("_is_known"):
+            kept.append(p)
+            continue
+        # 至少一个 term 在分镜 7 字段任一出现
+        hit = any(term in all_text for term in terms if term)
+        if hit:
+            kept.append(p)
+        else:
+            dropped.append(p)
+    if dropped:
+        dropped_names = [d.get("identifier", "?") for d in dropped]
+        print(f"[WARN] 出口过滤 LLM 幻觉道具: {len(dropped)} 个 → {dropped_names}")
+    return kept
 
 
 # ========================================================================
@@ -297,3 +351,71 @@ def _format_known_props(bank) -> str:
                 parts.append(f"外观:{prop['appearance'][:80]}")
             lines.append("，".join(parts))
     return "\n".join(lines)
+
+
+# ============================================================================
+# props_bank orphan 审计（v6.40 08-22）
+# ============================================================================
+
+def audit_orphan_props(bank, current_chapter: int, current_script: dict = None,
+                       orphan_window: int = 3) -> dict:
+    """审计 props_bank 中的孤儿道具（v6.40 08-22 拦截 LLM 幻觉累积）.
+
+    判定孤儿：prop 的 last_chapter 与 current_chapter 差 > orphan_window 章，
+    且当前分镜脚本不出现（若提供 current_script）。
+
+    Returns:
+        dict: {
+            "total": int,            # 总道具数
+            "active": list[str],     # 最近 N 章内仍出场的道具
+            "orphan": list[dict],    # 孤儿道具列表（含 id + last_chapter + first_chapter + category）
+            "hallucinated_now": list[str],  # 本章分镜未出现但 bank 标记为本章注册的（实锤幻觉）
+        }
+    """
+    result = {"total": 0, "active": [], "orphan": [], "hallucinated_now": []}
+    if not bank:
+        return result
+
+    all_props = {}
+    if hasattr(bank, "_data") and isinstance(bank._data, dict):
+        all_props = bank._data.get("props", {}) or {}
+    elif hasattr(bank, "get_all_props"):
+        all_props = bank.get_all_props() or {}
+    result["total"] = len(all_props)
+
+    # 拼接当前分镜全文（7 字段）
+    cur_text = ""
+    if current_script:
+        fields = ("prompt", "lf_desc", "ff_desc", "motion_desc",
+                  "main_subject", "scene", "location")
+        for sh in current_script.get("shots", []):
+            for f in fields:
+                v = sh.get(f)
+                if isinstance(v, str):
+                    cur_text += v + "\n"
+        hook = current_script.get("hook") or {}
+        for f in fields:
+            v = hook.get(f)
+            if isinstance(v, str):
+                cur_text += v + "\n"
+
+    for ident, prop in all_props.items():
+        first = prop.get("first_chapter")
+        last = prop.get("last_chapter")
+        # 本章注册 + 本章分镜未出现 = 实锤本章 LLM 幻觉
+        if current_chapter and first == current_chapter and cur_text:
+            terms = [ident] + [t for t in (prop.get("consistent_terms") or []) if t]
+            if not any(t and t in cur_text for t in terms):
+                result["hallucinated_now"].append(ident)
+        # orphan 判定：last_chapter + orphan_window < current_chapter
+        if last is not None and current_chapter and (current_chapter - last) > orphan_window:
+            result["orphan"].append({
+                "identifier": ident,
+                "last_chapter": last,
+                "first_chapter": first,
+                "category": prop.get("category"),
+            })
+        else:
+            result["active"].append(ident)
+
+    return result

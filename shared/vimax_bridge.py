@@ -456,8 +456,9 @@ async def _generate_missing_portraits(
     from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
 
     # 肖像专用适配器：16:9 横屏、不加风格前缀、不替换敏感词（英文 prompt）
+    # 2026-08-22 升级 2560x1440（= 3,686,400 像素）满足 Seedream 4.5 像素下限 3686400
     portrait_adapter = ImageGeneratorAiVideoAdapter(
-        size="1600x900",
+        size="2560x1440",
         skip_prefix=True,
         skip_sanitize=True,
     )
@@ -2430,6 +2431,11 @@ async def _gen_first_frame_async(
     ff_path = shot_dir / "first_frame.png"
     ff_hash_path = shot_dir / "frame_hash.txt"
 
+    # v6.40 08-22：已存在则跳过（不重生成浪费 4.5 额度）
+    if not force and ff_path.exists() and ff_path.stat().st_size > 5 * 1024:
+        logger.info(f"  [镜头{idx}] 首帧已存在 ({ff_path.stat().st_size//1024}KB)，跳过生成")
+        return str(ff_path)
+
     # 日志输出到 step02.log，不污染控制台
     from shared.tee_logger import get_logger
     from shared.paths import chapter_dir
@@ -2626,6 +2632,11 @@ async def _gen_last_frame_async(
     # 尾帧独立哈希文件：首帧/尾帧的参考图不同 → 哈希值不同，
     # 共用一个文件会互相覆盖，导致每次运行都误判失效、双双重做
     lf_hash_path = shot_dir / "last_frame_hash.txt"
+
+    # v6.40 08-22：已存在则跳过（不重生成浪费 4.5 额度）
+    if not force and lf_path.exists() and lf_path.stat().st_size > 5 * 1024:
+        logger.info(f"  [镜头{idx}] 尾帧已存在 ({lf_path.stat().st_size//1024}KB)，跳过生成")
+        return str(lf_path)
 
     # 日志输出到 step02.log，不污染控制台
     from shared.tee_logger import get_logger
@@ -2865,7 +2876,13 @@ async def _gen_keyframes_async(
         time_ratio = float(kf.get("time_ratio", 0.5))
         kf_path = shot_dir / f"keyframe_{i}.png"
         kf_hash_path = shot_dir / f"keyframe_{i}_hash.txt"
-        
+
+        # v6.40 08-22：已存在则跳过（不重生成浪费 4.5 额度）
+        if not force and kf_path.exists() and kf_path.stat().st_size > 5 * 1024:
+            _kf_logger.info(f"  [镜头{idx}] 关键帧{i}已存在 ({kf_path.stat().st_size//1024}KB)，跳过")
+            kf_paths.append(str(kf_path))
+            continue
+
         if empty_scene:
             kf_desc = kf_desc + "\n空镜头， 画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
         
