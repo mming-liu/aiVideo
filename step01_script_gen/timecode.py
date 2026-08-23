@@ -14,6 +14,16 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from shared.model_caps import active_video_duration_cap, active_video_model
+from shared.paths import chapter_dir
+from shared.tee_logger import get_logger
+
+# v6.43（08-23 用户规则）：用项目 logger 统一记录，不再 print 散落
+_logger = None
+def _log():
+    global _logger
+    if _logger is None:
+        _logger = get_logger(chapter_dir() / "step01.log", console_level="INFO")
+    return _logger
 
 # 语速配置（字符/秒）
 SPEECH_RATE = 3.5
@@ -283,13 +293,16 @@ def _compute_timecodes(script: dict) -> None:
             hook_dur = float(hook.get("duration_sec") or hook.get("duration") or 0)
         except (TypeError, ValueError):
             hook_dur = 0.0
-    print(f"[INFO] 时间轴计算完成: {len(shots)} 镜 {shots_total:.1f}s（不含钩子）"
+    _log().info(f"时间轴计算完成: {len(shots)} 镜 {shots_total:.1f}s（不含钩子）"
           + (f" + 1 钩子 {hook_dur:.1f}s（另算）" if hook else "")
           + f", 总计 {total:.1f}s")
     if shots_total < MIN_TOTAL_SHOTS_DURATION:
-        print(f"[WARN] 正片分镜总时长 {shots_total:.1f}s < {MIN_TOTAL_SHOTS_DURATION:.0f}s 硬下限"
+        _log().warn(f"正片分镜总时长 {shots_total:.1f}s < {MIN_TOTAL_SHOTS_DURATION:.0f}s 硬下限"
               f"（不含钩子），W6 时长拉伸将补足（constraints/runtime_extend）")
     if clamped_count:
         cap_src = f"，视频模型上限 {dur_cap}s" if dur_cap and dur_cap < MAX_SHOT_DURATION else ""
-        print(f"[INFO] {clamped_count} 个镜头时长超过单镜上限 {shot_cap}s{cap_src}，已夹取到 {shot_cap}s"
-              f"（active model: {active_video_model()}）")
+        # v6.43（08-23 用户规则）：clamp 升级为 WARN——LLM 应拆镜而非靠静默
+        # clamp 压缩时长（会丢失动作链）。让跑批时一眼看到 prompt 哪里没拆。
+        _log().warn(f"{clamped_count} 个镜头时长超过单镜上限 {shot_cap}s{cap_src}，"
+              f"已夹取到 {shot_cap}s（active model: {active_video_model()}）。"
+              f"v6.43 用户规则：单镜 > 8s 应在 prompt 层拆成多镜，不靠此处静默 clamp。")

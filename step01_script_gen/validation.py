@@ -9469,13 +9469,13 @@ def _check_fatal_wound_continuity(shots: list[dict]) -> dict:
 #           ⑦单镜 ≤ 8s（08-23 用户规则）
 # =====================================================================
 
-# 红果 60-90s 单集标准
-_REDGUO_DURATION_MIN = 60.0
+# v6.43 红果标准（08-23 用户规则）：镜头数不限 + 单镜 ≤ 8s + 正片总时长 60-90s（不含钩子，下限 60s 保留）
+_REDGUO_DURATION_MIN = 60.0  # 保留 60s 下限（08-23 用户规则）
 _REDGUO_DURATION_MAX = 90.0
-_REDGUO_SHOT_MIN = 3
-_REDGUO_SHOT_MAX = 10
-_REDGUO_SCENE_MAX = 3
-_REDGUO_CHAR_MAX = 4
+_REDGUO_SHOT_MIN = 0         # 取消镜数下限
+_REDGUO_SHOT_MAX = 0         # 取消镜数上限
+_REDGUO_SCENE_MAX = 3        # 保留：≤ 3 场景（与时长/镜数解耦的业务硬约束）
+_REDGUO_CHAR_MAX = 4         # 保留：≤ 4 人物
 _REDGUO_LAST_SHOT_DURATION_MIN = 4.0
 # 08-23 用户规则：单镜时长不长于 8s（与 timecode.MAX_SHOT_DURATION 同值）
 _REDGUO_SHOT_DURATION_MAX = 8.0
@@ -9511,14 +9511,14 @@ def _check_redguo_standard(shots, characters=None):
     if total_dur > _REDGUO_DURATION_MAX:
         over = total_dur - _REDGUO_DURATION_MAX
         warnings.append(
-            f"红果总时长 {total_dur:.1f}s > 90s（超 {over:.1f}s）。"
-            f"红果标准单集 60-90s——必须砍次要冲突/次要人物/铺垫段。"
+            f"红果总时长 {total_dur:.1f}s > 90s（超 {over:.1f}s，不含钩子）。"
+            f"v6.43 红果标准正片 60-90s——必须砍次要冲突/次要人物/铺垫段。"
         )
     elif total_dur < _REDGUO_DURATION_MIN:
         under = _REDGUO_DURATION_MIN - total_dur
         warnings.append(
             f"红果总时长 {total_dur:.1f}s < 60s（差 {under:.1f}s，不含钩子）。"
-            f"红果标准单集 60-90s——可增加镜头数或拉长对话/反应镜头 duration"
+            f"v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration"
             f"（单镜 ≤ {_REDGUO_SHOT_DURATION_MAX:.0f}s）。"
         )
 
@@ -9539,16 +9539,8 @@ def _check_redguo_standard(shots, characters=None):
             f"{_REDGUO_SHOT_DURATION_MAX:.0f}s），禁止长镜头拖延。"
         )
 
-    # ② 镜头数
-    n_shots = len(shots)
-    if n_shots > _REDGUO_SHOT_MAX:
-        warnings.append(
-            f"红果镜头数 {n_shots} > {_REDGUO_SHOT_MAX}（超 {n_shots - _REDGUO_SHOT_MAX} 镜）。合并同场景连续动作，或拆成多集。"
-        )
-    elif n_shots < _REDGUO_SHOT_MIN:
-        warnings.append(
-            f"红果镜头数 {n_shots} < {_REDGUO_SHOT_MIN}（差 {_REDGUO_SHOT_MIN - n_shots} 镜）。加关键反应镜。"
-        )
+    # ② 镜头数（v6.43：取消镜数上下限检查，按动作密度自然拆分）
+    # n_shots 仅作 log 记录，不再触发 warn。
 
     # ③ 场景数
     scenes = set()
