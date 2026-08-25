@@ -32,7 +32,8 @@ _STRONG_INJURY_ANCHORS = (
     "洇痕", "中刀", "中剑", "中枪", "刀伤", "剑伤",
     "血痕", "血斑", "溅血", "中伤", "倒卧", "倒地",
 )
-_THREAT_KEYWORDS = ("刺客", "神秘人", "黑影", "蒙面", "匪")
+# 威胁源关键词（统一从 prompt_semantic.registry 引入，单一事实源）
+from step01_script_gen.prompt_semantic import THREAT_KEYWORDS as _THREAT_KEYWORDS
 
 
 def _identify_victim(shot: dict) -> str | None:
@@ -180,4 +181,48 @@ class InjuryContinuityConstraint(Constraint):
                         after=s["lf_desc"],
                     )
                 )
+
+        # 4. v6.43 修复（08-25）：build_idx 之后镜头已处理，**hook 也需同步**
+        # — 真实跑批发现 hook（独立于 shots 之外）含 victim + 缺 anchor 也会丢伤处描
+        # 述（旧 _hard_fix_injury_continuity 同样不处理 hook；此 bug 由 v6.42 迁移
+        # 完整保留）。hook 的 location 与 build_loc 不一定相同（hook 多在时间轴头部），
+        # 故不强制 location 匹配：只要 hook 含 victim 且缺 anchor → 补。
+        hook = ctx.hook
+        if isinstance(hook, dict) and victim:
+            h_text = (
+                (hook.get("prompt", "") or "")
+                + (hook.get("ff_desc", "") or "")
+                + (hook.get("lf_desc", "") or "")
+            )
+            if victim in h_text and not self._already_repaired(hook):
+                hp = hook.get("prompt", "") or ""
+                hl = hook.get("lf_desc", "") or ""
+                hp_has = any(w in hp for w in _STRONG_INJURY_ANCHORS)
+                hl_has = bool(hl) and any(w in hl for w in _STRONG_INJURY_ANCHORS)
+                if not hp_has and hp:
+                    before = hp
+                    hook["prompt"] = hp.rstrip("。") + f"。{_INJURY_ANCHOR_TAIL}"
+                    repairs.append(
+                        RepairRecord(
+                            constraint_name=self.name,
+                            shot_index="hook",
+                            action="append",
+                            target="prompt",
+                            before=before,
+                            after=hook["prompt"],
+                        )
+                    )
+                if hl and not hl_has:
+                    before = hl
+                    hook["lf_desc"] = hl.rstrip("。") + f"。{_INJURY_ANCHOR_TAIL}"
+                    repairs.append(
+                        RepairRecord(
+                            constraint_name=self.name,
+                            shot_index="hook",
+                            action="append",
+                            target="lf_desc",
+                            before=before,
+                            after=hook["lf_desc"],
+                        )
+                    )
         return repairs

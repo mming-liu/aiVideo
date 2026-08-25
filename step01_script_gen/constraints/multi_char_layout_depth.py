@@ -3,6 +3,11 @@
 扫每镜 char_layout 全横向同侧（画左/画右）无纵深 → 把"次要/背景"角色 position
 改为"画中甲板/船舷"等纵深词；保留主角色画左/画右以维持空间方向。
 
+depth_pos 不再写死「画中甲板/船舷」，改为从 scene_anchors
+按 location 动态选——
+  - 横向场景（船/桥/街道/马车）：取 anchor 第 2 个（如 船中/桥中/街中）
+  - 围合/抽象场景：画中/前景/后景
+
 幂等：任一角色 position 已在 _DEPTH_POSITIONS 或含前/中/后字即视为已拉开纵深.
 """
 from __future__ import annotations
@@ -14,13 +19,23 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from step01_script_gen.scene_anchors import (
+    is_horizontal_scene, scene_anchors_for,
+)
 from .base import Constraint
 from .types import RepairRecord, Severity
 
 
-_DEPTH_POSITIONS = (
-    "画中", "船头", "船尾", "船舷", "画中甲板",
-    "画中船头", "画中船尾", "画中水面",
+# 深度词：从 scene_anchors BASE_POS_WORDS 派生（只取"画中/前景/后景/中景"4 个
+# 纵深词；"画左/画右/画上/画下" 是横向方位词，不算纵深）+ SCENE_ANCHORS
+# v6.43 重构：纵深位置由 scene_anchors 统一管理，新场景自动跟随
+from step01_script_gen.scene_anchors import BASE_POS_WORDS, scene_anchors_for
+
+_DEPTH_POSITIONS: tuple[str, ...] = (
+    "画中", "前景", "后景", "中景",  # 4 个纵深词
+    "画中甲板", "画中船头", "画中船尾", "画中水面",
+    "画中前", "画中后",
+    *scene_anchors_for("船"),  # 船头/船中/船尾/船舱/...
 )
 
 
@@ -39,6 +54,19 @@ def _has_depth(positions: list[str]) -> bool:
 def _all_lateral(positions: list[str]) -> bool:
     """所有 position 都是画左/画右."""
     return all(p in ("画左", "画右") for p in positions) and bool(positions)
+
+
+def _choose_depth_pos(location: str) -> str:
+    """按 location 选深度词.
+
+    - 横向场景（船/桥/街道/马车）：取 anchor 第 2 个（如 船中/桥中/街中）—— 横向天然纵深
+    - 围合/抽象场景：画中（基础深度词）
+    """
+    if is_horizontal_scene(location):
+        anchors = scene_anchors_for(location)
+        if len(anchors) >= 2:
+            return anchors[1]  # 第 2 个 anchor（如 船中 / 桥中 / 街中 / 车辕）
+    return "画中"
 
 
 class MultiCharLayoutDepthConstraint(Constraint):
@@ -73,8 +101,9 @@ class MultiCharLayoutDepthConstraint(Constraint):
                 continue
             # 全横向同侧：把 role=次/背景 改纵深
             main_side = positions[0]  # 取第一个保持同侧
-            is_boat = "船" in str(shot.get("scene", "") or "")
-            depth_pos = "画中甲板" if is_boat else "画中"
+            # 按 location 选 depth_pos（不再写死"画中甲板"）
+            location = str(shot.get("location", "") or shot.get("scene", "") or "")
+            depth_pos = _choose_depth_pos(location)
             cnt = 0
             for item in layout:
                 if not isinstance(item, dict):

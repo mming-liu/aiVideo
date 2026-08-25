@@ -12,11 +12,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from step01_script_gen.validation import (
-    _parse_motion_time_segments,
-    _split_motion_to_seg_texts,
-    _extract_scene_prefix,
-)
+from step01_script_gen.validation import _extract_scene_prefix  # OK（无循环）
 from shared.kf_time import get_kf_t_sec
 from .base import Constraint
 from .types import RepairRecord, Severity
@@ -52,6 +48,12 @@ class KfTimeWindowAlignmentConstraint(Constraint):
     fields = ()  # 不扫文本字段，处理的是 keyframes
 
     def apply(self, ctx) -> list[RepairRecord]:
+        # Lazy import: validation.py 顶部 6510 行 import constraints 包，会回到
+        # 本模块；本模块顶层 import validation 函数会形成循环（partially initialized）。
+        from step01_script_gen.validation import (
+            _parse_motion_time_segments,
+            _split_motion_to_seg_texts,
+        )
         repairs: list[RepairRecord] = []
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
             motion = (shot.get("motion_desc") or "").strip()

@@ -25,6 +25,7 @@ def test_appends_position_when_no_spatial_word():
             prompt="[中景] 炭炉摆在杨旭脚边",
             ff_desc="",
             lf_desc="",
+            location="舴艋舟",
         ),
     ])
     ctx = make_ctx(script)
@@ -46,6 +47,7 @@ def test_skips_when_position_already_present():
             prompt="[中景] 炭炉在画中甲板上",
             ff_desc="",
             lf_desc="",
+            location="舴艋舟",
         ),
     ])
     ctx = make_ctx(script)
@@ -67,6 +69,7 @@ def test_is_idempotent_no_duplicate_append():
             prompt="[中景] 炭炉摆在杨旭脚边",
             ff_desc="",
             lf_desc="",
+            location="舴艋舟",
         ),
     ])
     ctx = make_ctx(script)
@@ -94,6 +97,7 @@ def test_no_change_when_no_known_prop():
             prompt="[中景] 杨旭举刀",
             ff_desc="",
             lf_desc="",
+            location="舴艋舟",
         ),
     ])
     ctx = make_ctx(script)
@@ -121,6 +125,7 @@ def test_handles_multiple_props_in_same_field():
             prompt="灯盏和舴艋舟。",
             ff_desc="",
             lf_desc="",
+            location="舴艋舟",
         ),
     ])
     ctx = make_ctx(script)
@@ -145,6 +150,7 @@ def test_handles_multiple_fields():
             ff_desc="酒壶",
             lf_desc="",
             motion_desc="灯笼摇晃",
+            location="舴艋舟",
         ),
     ])
     ctx = make_ctx(script)

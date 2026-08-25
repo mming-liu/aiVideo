@@ -3432,10 +3432,28 @@ def _check_lighting_position(shots: list[dict]) -> dict:
 # v6.35 站位台吸收（规则51）：多人站位蓝图检查
 # ========================================================================
 
-# 站位 position 合法空间词（画X + 景深；可组合，如 画左前景）
-_STAGING_POS_WORDS = ("画左", "画右", "画中", "画上方", "画下方", "前景", "中景", "后景")
-# 站位 facing 合法朝向词（面向[画X/角色]/背对/侧身/正对）
-_STAGING_FACING_WORDS = ("面向", "背对", "侧身", "正对", "面朝", "朝向")
+# 站位合法性判定改走 scene_anchors：
+# - position 合法 = 画X/前景/中景/后景 之一 OR 该 location 场景的具象空间词
+# - facing 合法 = 6 个朝向词（不分场景）
+# - 多人在画左同侧无纵深 = 根据 HORIZONTAL/CONTAINING_SCENES 走不同分支
+# 完整字典见 step01_script_gen/scene_anchors.py
+from step01_script_gen.scene_anchors import (
+    is_valid_position, is_valid_facing, has_lateral_depth, get_scene_type,
+    is_horizontal_scene, scene_anchors_for,
+)
+
+
+def _format_anchors_hint(location: str) -> str:
+    """校验器提示用：取该场景前 5 个具象空间词作为 hint."""
+    anchors = scene_anchors_for(location)
+    if not anchors:
+        return "画左/画右/画中/前景/中景/后景"
+    return "/".join(anchors[:5])
+
+
+def scene_anchors_list_for(location: str) -> tuple:
+    """取该场景具象空间词 tuple（无则空 tuple）."""
+    return scene_anchors_for(location)
 
 
 def _check_multi_person_staging(shots: list[dict], hook: dict = None,
@@ -3480,6 +3498,9 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
         laterals = []  # 每个角色的横向侧位（画左/画右）
         has_center = False
         has_depth = False
+        # 本镜 location 决定 position 合法词表 + 纵深判定
+        shot_location = str(shot.get("location", "") or shot.get("scene", "") or "")
+        shot_scene = get_scene_type(shot_location)
         for item in layout:
             if not isinstance(item, dict):
                 continue
@@ -3495,11 +3516,15 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
                 warnings.append(
                     f"{label}: char_layout 角色「{name}」不在角色注册表内且未在本镜文本出现"
                     f"（规则51要求与顶层 characters 一致）")
-            if pos and not any(k in pos for k in _STAGING_POS_WORDS):
+            if pos and not is_valid_position(pos, shot_location):
+                # 按 scene 类型给具体提示（具象词空间锚点 / 画X 空间锚点）
+                if shot_scene:
+                    hint = f"（{shot_scene}场景可用：{_format_anchors_hint(shot_location)}）"
+                else:
+                    hint = "（画左/画右/画中/前景/中景/后景），规则51"
                 warnings.append(
-                    f"{label}: {name} 站位「{pos}」缺空间词"
-                    f"（画左/画右/画中/前景/中景/后景），规则51")
-            if facing and not any(k in facing for k in _STAGING_FACING_WORDS):
+                    f"{label}: {name} 站位「{pos}」缺空间词{hint}")
+            if facing and not is_valid_facing(facing):
                 warnings.append(
                     f"{label}: {name} 朝向「{facing}」缺朝向词"
                     f"（面向/背对/侧身/正对），规则51")
@@ -3513,14 +3538,123 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
                 has_depth = True
         # 多角色全挤同一侧（≥2 明确横向侧位、全部同侧、无画中/无纵深）→ 站位单一。
         # 画中（居中构图）或含前中后景纵深时不提示——避免「画中+画右」被误判为全右。
-        if len(laterals) >= 2 and len(set(laterals)) == 1 and not has_center and not has_depth:
+        # 横向场景（船/桥/街道）走 has_lateral_depth（船头/船中/船尾天然有纵深）
+        positions_all = [
+            str(item.get("position", "")).strip()
+            for item in layout if isinstance(item, dict)
+        ]
+        depth_ok = has_depth or has_center or has_lateral_depth(positions_all, shot_location)
+        if len(laterals) >= 2 and len(set(laterals)) == 1 and not depth_ok:
             side = laterals[0]
-            warnings.append(
-                f"{label}: {len(laterals)}角色站位全在「{side}」同侧且无纵深（前中后景）——"
-                f"建议按对峙/群像蓝图对置或拉开纵深，规则51")
+            if is_horizontal_scene(shot_location):
+                # 横向场景：建议改用 船头/船中/船尾 等具象词拉开纵深
+                anchors = scene_anchors_list_for(shot_location)
+                hint = f"建议改用 {side[0]}{anchors[0]} + {side[0]}{anchors[1] if len(anchors) > 1 else anchors[0]}" if anchors else "建议拉开前后景"
+                warnings.append(
+                    f"{label}: {len(laterals)}角色站位全在「{side}」同侧且无纵深——"
+                    f"{hint}（规则51，{shot_scene}横向场景）")
+            else:
+                warnings.append(
+                    f"{label}: {len(laterals)}角色站位全在「{side}」同侧且无纵深（前中后景）——"
+                    f"建议按对峙/群像蓝图对置或拉开纵深，规则51")
     for w in warnings:
         _get_logger().warn(f"多人站位: {w}")
     return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+
+
+# ============================================================================
+# 锚点失真 2 类校验（system.md 50a 规则）
+# ============================================================================
+
+# 攻击动作关键词（时序塌缩检测）
+_VAGUE_ATTACK_KW = (
+    "破水", "跃出", "破门", "举刀", "挥刀", "直刺", "刺中", "心口洇",
+    "闷哼", "推臂一送", "倒纵", "没入水中", "已中刀", "已倒下",
+)
+# 躺卧姿态关键词
+_RECLINING_KW = ("仰卧", "俯卧", "侧卧", "昏迷", "熟睡", "闭目", "失神")
+# 模糊方位词
+_VAGUE_DIRECTION_KW = ("回首", "抬头", "仰头", "抬眼", "凝神", "眺望")
+# 模糊数量词 + 危险锚点
+_VAGUE_ANCHOR_RE = re.compile(
+    r"(一点|一截|一缕)("
+    + "|".join(("刀尖", "刀", "剑", "匕首", "寒光", "黑影"))
+    + r")"
+)
+
+
+def _check_prompt_temporal_collapse(shots: list[dict], hook: dict = None) -> dict:
+    """钩子/关键首帧：pre-state + attack 混写检测.
+
+    规则（system.md 50a）：钩子/伏笔类首帧严禁在 ff_desc/prompt 写攻击/受害/遁水动作。
+    hard_fix (Rule 6) 会自动删除攻击句；本 check 是兜底——若 hard_fix 后仍残留，
+    报 warning 给 LLM 下一轮修复轮看。
+    """
+    warnings = []
+    targets = list(shots) + ([hook] if hook and isinstance(hook, dict) else [])
+    for shot in targets:
+        if not isinstance(shot, dict):
+            continue
+        idx = shot.get("index", "?")
+        label = "钩子镜头(index=0)" if (hook and shot is hook) else f"镜头{idx}"
+        is_hook_shot = (hook and shot is hook) or shot.get("index") == 0
+        for field in ("ff_desc", "prompt"):
+            text = shot.get(field, "")
+            if not text or not isinstance(text, str):
+                continue
+            attack_hits = [kw for kw in _VAGUE_ATTACK_KW if kw in text]
+            if not attack_hits:
+                continue
+            if is_hook_shot or any(kw in text for kw in _RECLINING_KW):
+                warnings.append(
+                    f"{label} {field} 含攻击动作词「{attack_hits[0]}」+ 躺卧姿态="
+                    "时序塌缩（system 50a）——只写 pre-state，受害/遁水留给 motion/lf")
+    for w in warnings:
+        _get_logger().warn(f"时序塌缩: {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
+
+
+def _check_prompt_anchor_ambiguity(shots: list[dict], hook: dict = None) -> dict:
+    """锚点失真 2 类检测（system.md 50a）.
+
+    1) "X手+道具" + 躺卧 → 道具被误读为"握"（"钓杆抵喉咙"根因）
+    2) 模糊数量词 + 危险锚点（"一点刀尖"）→ 锚点漂移（"匕首长头上"根因）
+    3) 模糊方位词（"回首/抬头"）→ 模型误读为头部姿态（"朝天看"根因）
+
+    hard_fix Rule 7/8/9 会自动改写；本 check 是兜底 warning.
+    """
+    warnings = []
+    targets = list(shots) + ([hook] if hook and isinstance(hook, dict) else [])
+    for shot in targets:
+        if not isinstance(shot, dict):
+            continue
+        idx = shot.get("index", "?")
+        label = "钩子镜头(index=0)" if (hook and shot is hook) else f"镜头{idx}"
+        for field in ("ff_desc", "prompt"):
+            text = shot.get(field, "")
+            if not text or not isinstance(text, str):
+                continue
+            if any(kw in text for kw in _RECLINING_KW):
+                m_handle = re.search(r"([左右])手[^，。、\n]{0,4}(钓杆|酒壶|竹箫|油纸伞|步摇|灯盏|灯笼|炭炉|刀|剑|匕首)", text)
+                if m_handle:
+                    warnings.append(
+                        f"{label} {field} 角色躺卧 + 「{m_handle.group(0)}」="
+                        "道具主谓歧义——模型会把「X手+道具」理解为「握」"
+                        "（system 50a，需改写为「道具已脱手+位置」）")
+            m_anchor = _VAGUE_ANCHOR_RE.search(text)
+            if m_anchor and "独立物体" not in text:
+                warnings.append(
+                    f"{label} {field} 「{m_anchor.group(0)}」模糊数量词+危险锚点="
+                    "易漂移（system 50a，需追加「独立物体/位置限定」）")
+            for kw in _VAGUE_DIRECTION_KW:
+                if kw in text:
+                    warnings.append(
+                        f"{label} {field} 模糊方位词「{kw}」="
+                        "模型易误读为头部姿态（system 50a，建议替换为「侧头凝望画X的[角色]」）")
+                    break
+    for w in warnings:
+        _get_logger().warn(f"锚点失真: {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
 
 
 def _check_prompt_length_budget(shots: list[dict], hook: dict | None = None) -> dict:
@@ -4394,24 +4528,19 @@ def post_fix_shot_prompts(script: dict) -> dict:
 # ============================================================================
 
 # 致命伤锚关键词（任一出现即视为「该镜已锚定致命伤」，跳过追加）
-_INJURY_ANCHOR_WORDS = (
-    "心口", "洇痕", "暗红", "中刀", "白袍", "胸口", "心窝", "腹部",
-    "中剑", "中枪", "暗伤", "剑伤", "刀伤", "溅血", "血痕", "血斑",
+# v6.43 重构：统一从 prompt_semantic.registry 引入
+from step01_script_gen.prompt_semantic import (
+    INJURY_ANCHOR_WORDS as _INJURY_ANCHOR_WORDS,
+    INJURY_ANCHOR_TAIL as _INJURY_ANCHOR_TAIL,
 )
-# 致命伤后兜底追加的锚模板（不与已有冲突、短小可叠加）
-# 通用版：使用「伤处白袍暗红洇痕持续可见」——不写死角色名，由 build 镜的
-# main_subject 推导（"听香"受伤则描述也用"听香伤处"）。这里保守地不带角色名前缀，
-# 让 step02a 锚定层再补具体角色（08-17 重构）。
-# 08-23 用户反馈：旧措辞「暗红洇痕」对图片模型太含蓄（Seedream 4.5 画不出胸口血），
-# 图片模型不把「洇痕」理解为血 → 杨旭胸口被刺却没有血迹。改为明确的「血迹/血痕」。
-# 幂等检测 _STRONG_INJURY_ANCHORS 已含「血痕」，不会重复追加。
-_INJURY_ANCHOR_TAIL = "伤处白袍心口一片暗红血迹洇开，血痕清晰可见"
 
 # 视线方向兜底：发现「看/望/盯+人名/对象」但没带空间方位词时，按目标所在位置改写
 # 简易版：只处理「望满天星斗/望星斗」一类易识别模板，复杂场景留给校验 WARN。
 # 复杂「看杨旭/看他」等需要按杨旭在 ff/lf 的实际位置推：ff 若杨旭在画右，look
 # 应写「目光画左望向杨旭」（看的人在画左、杨旭在画右、对视轴合理）。v6.32 简化
 # 处理：直接替换为「目光望向杨旭（画X）」，让模型自己推断（不写死画左/画右）。
+# v6.43 重构：角色名 regex 改为从 char_layout 动态生成（不再写死 11 个名字）。
+# 通用兜底名（"她/他/女子/男子/公子/姑娘"等）保留硬编码。
 _GAZE_FALLBACK_RULES = [
     # (匹配正则, 改写为) — 顺序敏感，先具体后泛化
     (re.compile(r"望满天星斗|仰望星斗|望星斗"), "仰望画上方星空"),
@@ -4419,11 +4548,35 @@ _GAZE_FALLBACK_RULES = [
     (re.compile(r"看向?水|望水"), "俯视画下方水面"),
     (re.compile(r"看向?远|望远方"), "凝望画面深处"),
     (re.compile(r"看向?地|望地"), "俯视画下方地面"),
-    # 角色名兜底（杨旭/听香/刺客/张十三）：把"看杨旭"→"目光紧盯杨旭"（去掉
-    # 简短「看/盯/望」字，模型可按 ff/lf 推断方向；不写死画左/画右避免朝向污染）
-    (re.compile(r"(?:看|盯|望)向?(杨旭|听香|刺客|张十三|老汉|肖管事|那女子|女子|那男子|男子|公子)"), r"目光紧盯\1"),
-    (re.compile(r"(?<![一-鿿])望着?(她|他|杨旭|听香|刺客|张十三|老汉|肖管事)"), r"目光凝视\1"),
+    # 通用代词兜底（不写死角色名）
+    (re.compile(r"(?<![一-鿿])望着?(她|他|那女子|女子|那男子|男子|公子|姑娘)"), r"目光凝视\1"),
 ]
+
+
+def _build_char_gaze_pattern(char_names: tuple[str, ...]) -> re.Pattern:
+    """从 char_layout 抽角色名，生成「看/盯/望+人名」regex.
+
+    替代原硬编码 11 名字列表 —— 任意小说的 char_layout 角色名都生效。
+    char_names 为空时 fallback 到 prompt_semantic.COMMON_PERSON_NAMES.
+    """
+    if not char_names:
+        from step01_script_gen.prompt_semantic import COMMON_PERSON_NAMES
+        char_names = COMMON_PERSON_NAMES
+    # 按名字长度降序排列（避免"听香"被"香"先匹配）
+    sorted_names = sorted(char_names, key=len, reverse=True)
+    alt = "|".join(re.escape(n) for n in sorted_names)
+    return re.compile(r"(?:看|盯|望)向?(" + alt + r")")
+
+
+def _build_char_gaze_loose_pattern(char_names: tuple[str, ...]) -> re.Pattern:
+    """宽松版：处理"望着杨旭"（不要求"向"）."""
+    if not char_names:
+        from step01_script_gen.prompt_semantic import COMMON_PERSON_NAMES
+        char_names = COMMON_PERSON_NAMES
+    sorted_names = sorted(char_names, key=len, reverse=True)
+    alt = "|".join(re.escape(n) for n in sorted_names)
+    return re.compile(r"(?<![一-鿿])望着?(" + alt + r")")
+
 
 # 道具兜底方位（按镜头场景/位置优先级匹配，找不到就放「画中」）
 # v6.43（08-23 审计）：原版「酒杯 → 画中杨旭手边」「油纸伞 → 画中听香手边」
@@ -4432,23 +4585,36 @@ _GAZE_FALLBACK_RULES = [
 #   - 道具自然落点（炭炉/酒壶/灯盏/灯笼/钓杆/舴艋舟 等）→ 保留场景相关方位
 #   - 角色相关（酒杯/油纸伞/步摇/竹箫/刺客匕首/马车）→ 改为通用「画中」，
 #     由模型从上下文判断「谁持/谁近」
-_PROP_POS_FALLBACK = {
-    "炭炉": "画中甲板",
-    "酒壶": "画中甲板",
-    "酒杯": "画中",
-    "钓杆": "画右船舷",
-    "油纸伞": "画中",
-    "步摇": "画中发间",
-    "灯盏": "画中船头",
-    "灯笼": "画中岸边",
-    "叉子粪铲": "画右地面",
-    "农具": "画右地面",
-    "竹箫": "画中",
-    "马车": "画右",
-    "舴艋舟": "画中水面",
-    "刺客匕首": "画中",
-    "船舷": "画右船舷",
-}
+# v6.43 重构：道具清单与位置从 prompt_semantic + scene_anchors 派生（不再写死）
+from step01_script_gen.prompt_semantic import PROP_REGISTRY
+from step01_script_gen.scene_anchors import (
+    _PROP_DEFAULT_POSITIONS, _PROP_HORIZONTAL_POSITIONS,
+)
+
+def _build_prop_pos_fallback() -> dict[str, str]:
+    """从 prompt_semantic + scene_anchors 派生道具兜底方位.
+
+    合并：
+      - scene_anchors._PROP_DEFAULT_POSITIONS（通用）
+      - scene_anchors._PROP_HORIZONTAL_POSITIONS（横向场景专属）
+    """
+    out: dict[str, str] = {}
+    # 通用位置
+    for name, pos in _PROP_DEFAULT_POSITIONS.items():
+        if name in out:
+            continue
+        # 把"发间"类（角色相关）改为通用"画中"
+        if pos in ("发间", "画中"):
+            out[name] = "画中"
+        else:
+            out[name] = pos
+    # 横向场景专属
+    for name, pos in _PROP_HORIZONTAL_POSITIONS.items():
+        out[name] = pos
+    return out
+
+# 运行时构建（替代原 15 个写死条目）
+_PROP_POS_FALLBACK: dict = _build_prop_pos_fallback()
 
 
 # 通用 pre/post-state 关键词（任何打斗/刺杀/追逐/位移场景都适用）
@@ -6339,7 +6505,17 @@ def _hard_fix_transition_keywords(shots: list, hook: dict | None = None) -> int:
 
 
 # W5: 多人站位纵深（按角色身份 + 场景空间重排）
-_DEPTH_POSITIONS = ("画中", "船头", "船尾", "船舷", "画中甲板", "画中船头", "画中船尾", "画中水面")
+# v6.43 重构：纵深位置统一从 constraints/multi_char_layout_depth 派生（已在该文件
+# 顶部从 scene_anchors 派生 _DEPTH_POSITIONS）。此处保留别名供 legacy path 使用。
+# 改为函数内 lazy import：module 级 import 会触发 constraints 包初始化，包内
+# axis_jump/camera_variety 等文件又 import validation 顶层 helper，构成
+# "partially initialized module" 循环（C:\...validation.py 在 6510 行尚未完成加载，
+# 包内 from step01_script_gen.validation import _extract_shot_directions 即挂）。
+def _get_depth_positions() -> tuple:
+    from step01_script_gen.constraints.multi_char_layout_depth import (
+        _DEPTH_POSITIONS as _DP,
+    )
+    return _DP
 
 
 def _hard_fix_multi_char_layout_depth(shots: list, hook: dict | None = None) -> int:
@@ -6352,6 +6528,7 @@ def _hard_fix_multi_char_layout_depth(shots: list, hook: dict | None = None) -> 
     甲板/船舷"等纵深词；保留主角色画左/画右以维持空间方向。
     幂等：任一角色 position 已在 _DEPTH_POSITIONS 即视为已拉开纵深。
     """
+    _DEPTH_POSITIONS = _get_depth_positions()
     fixed = 0
     targets = list(shots)
     if hook and isinstance(hook, dict):
@@ -7645,7 +7822,10 @@ def _check_long_dash_usage(shots: list[dict], hook: dict = None) -> dict:
 
 
 # v6.25: 威胁源-视线耦合检查（规则41）
-_THREAT_WORDS = ("刺客", "杀手", "偷袭者", "持刀", "黑衣人", "黑影", "潜伏", "埋伏", "伏击")
+# v6.43 重构：统一从 prompt_semantic.registry 引入
+from step01_script_gen.prompt_semantic import (
+    THREAT_WORDS_ENLARGED as _THREAT_WORDS,
+)
 # 潜伏态威胁免朝向（规则48：潜伏水下/藏匿中无需朝向目标；与 B2 注入共用）
 _RULE48_LURKING = ("潜伏水下", "水下黑影", "微露水面", "藏于水下", "水下轮廓", "藏身水下")
 # 「发现者视线指向某威胁」的表达（视线锁定/紧盯/看向 + 威胁词）
@@ -7800,7 +7980,14 @@ def _extract_dress_tokens(dynamic_features: str) -> tuple[list[str], list[str]]:
 #   命中 + 非潜伏 + 无朝向词（_THREAT_FACING_WORDS）→ 报。注入与判定用同一词表。
 # ============================================================================
 # 威胁源朝向表达（_check_frame_desc_anchors A 判定同源——共享单一词表防漂移）
+# v6.43 重构：基础词从 prompt_semantic.registry 引入，validation 扩展
+from step01_script_gen.prompt_semantic import (
+    THREAT_FACING_WORDS as _PS_THREAT_FACING,
+    THREAT_GONE_WORDS as _PS_THREAT_GONE,
+)
 _THREAT_FACING_WORDS = (
+    *_PS_THREAT_FACING,
+    # validation 扩展（更具体的朝向/动作短语）
     "朝画", "面向", "面朝", "朝向", "侧身", "紧盯画", "盯向画",
     "望画", "望向", "逼近", "逼近画", "刀尖对准", "正对目标",
     "对准画", "指向画", "刺向", "劈向", "扑向", "扎向", "斩向", "砍向", "挥向",
@@ -7810,7 +7997,7 @@ _THREAT_FACING_WORDS = (
 )
 # 威胁已没入/消失 → 免朝向（与 keyframes 检查 threat_gone 同口径：没入水下的
 # 刺客无需朝向目标——「刺客已没入水中、水面只剩涟漪」不该被要求朝向）
-_THREAT_GONE_WORDS = ("已没入", "没入水中", "没入水下", "沉入水底", "消失", "不见踪影")
+_THREAT_GONE_WORDS = _PS_THREAT_GONE
 
 
 def _inject_dress_anchor(frame: str, characters) -> str:
@@ -8186,8 +8373,12 @@ def _check_keyframes_quality(shots: list[dict], hook: dict = None,
 #   - 听香状态：惊叫/尖叫/捂嘴/张嘴欲呼/披头散发
 # ========================================================================
 _BLOOD_WORDS = ("暗红", "洇痕", "血污", "血染", "血痕", "血迹", "红痕", "红点", "红污", "流血", "血")
-_THREAT_WATER_WORDS = ("刚出水面", "半身探出", "破水而出", "窜出", "浮出", "半身破水",
-                       "没入水中", "已没入", "已彻底没入", "倒纵入水", "潜回水中", "潜伏")
+# v6.43 重构：基础词从 prompt_semantic.registry 引入，validation 扩展"没入/已没入"等
+from step01_script_gen.prompt_semantic import THREAT_WATER_WORDS as _PS_THREAT_WATER
+_THREAT_WATER_WORDS = (
+    *_PS_THREAT_WATER,
+    "没入水中", "已没入", "已彻底没入", "倒纵入水", "潜回水中", "潜伏",
+)
 _SUBJECT_POSE_WORDS = {
     "杨旭": ("盘坐", "盘膝", "端坐", "坐", "跪坐", "半躺", "倚靠", "仰卧", "躺", "仰倒", "倒", "已躺下"),
     "听香": ("撑伞", "立", "站", "跪坐", "跪", "捂嘴", "惊叫", "尖叫", "披头散发"),
@@ -9380,9 +9571,12 @@ _WOUND_START_VERBS = (
     "仰面倒", "仰面躺", "倒地", "倒下", "洇开", "洇出", "血染",
 )
 # 伤处锚定词（伤口位置/生命体征衰减的持续表达）
+# v6.43 重构：基础词从 prompt_semantic.registry 引入，validation 扩展
+from step01_script_gen.prompt_semantic import WOUND_ANCHOR_WORDS as _PS_WOUND
 _WOUND_ANCHOR_WORDS = (
-    "心口", "伤处", "伤口", "洇痕", "洇开", "洇出", "暗红", "红痕", "血",
-    "中刀", "被刺", "中箭", "受伤", "重伤", "倒地", "倒下", "仰面",
+    *_PS_WOUND,
+    "伤处", "伤口", "洇开", "洇出", "红痕",
+    "被刺", "中箭", "受伤", "重伤", "倒地", "倒下", "仰面",
 )
 
 

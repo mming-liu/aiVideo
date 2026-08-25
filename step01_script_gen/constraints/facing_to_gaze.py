@@ -11,6 +11,9 @@ v6.40+（08-23）char_layout「面向[人名]」→ 改写为「目光凝望[人
 之后追加"目光凝望[人名]"。
 
 幂等：已含 _F2G_GAZE_MARKERS 任一者 + 该人名则跳过。
+
+DIRECTION_WORDS 不再写死 10 词，改为从 scene_anchors 字典动态
+生成（BASE_POS_WORDS + 所有 SCENE_ANCHORS + 镜头/观众）——新场景自动跟随。
 """
 from __future__ import annotations
 
@@ -22,21 +25,59 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from step01_script_gen.scene_anchors import BASE_POS_WORDS, SCENE_ANCHORS
 from .base import Constraint
 from .types import RepairRecord, Severity
 
 
 _F2G_GAZE_MARKERS = ("目光", "凝望", "仰望", "俯视", "凝视")
 
-# 名字池：兜底用主名清单（实际从 char_layout 提取）
-NAME_POOL = ("杨旭", "听香", "刺客", "张十三", "老汉", "肖管事", "神秘人",
-             "那女子", "女子", "那男子", "男子", "公子", "姑娘")
+# 名字池已删：facing_to_gaze 实际从 shot.char_layout 抽角色名（_is_person_target 内
+# 1-4 字符中文短串判定已足够识别"人名"，无需要兜底写死 13 个名字）。如未来有
+# 真正需要"known name"集合（如过滤别名），从 prompt_semantic 或 character_bank
+# 动态取，不用再写硬编码 NAME_POOL。
 
-# 方向词（不是人名，是"面向画左/画右"等）
-DIRECTION_WORDS = ("画左", "画右", "画中", "画上", "画下", "画上方", "画下方",
-                   "船头", "船尾", "镜头", "观众")
+
+def _build_direction_words() -> tuple[str, ...]:
+    """从 scene_anchors 字典动态构建方向词黑名单.
+
+    组成：
+      - BASE_POS_WORDS（画X/前景/中景/后景）—— 任何场景
+      - 所有 SCENE_ANCHORS 值（船头/船尾/桥头/桥尾/街口/巷尾/正厅/院门/窗前/殿前...）
+      - 镜头 / 观众（人像摄影常用方位词）
+
+    返回 tuple 用于快速 in 判定.
+    """
+    extra = ("镜头", "观众", "画上", "画下", "画上方", "画下方")
+    seen: set[str] = set(BASE_POS_WORDS) | set(extra)
+    for anchors in SCENE_ANCHORS.values():
+        seen.update(anchors)
+    return tuple(seen)
+
+
+# 模块级常量（启动时构建一次）
+DIRECTION_WORDS = _build_direction_words()
 
 _FACING_RE = re.compile(r"^面向(.+)$")
+# 复合方位词前缀剥离：LLM 写「面向画右的杨旭」时 target="画右的杨旭" 长 5 字 + 含"的"
+# → _is_person_target 拒绝（>4 字或含非汉字）。剥离画X/前方/上方/水面 等前缀后留"杨旭"。
+_FACING_PREFIX_RE = re.compile(
+    r"^(?:画[左右中上下](?:的|之)?|前方的?|后方?|上方的?|下方的?|"
+    r"左方的?|右方的?|岸上|水面|水下)([一-鿿]{2,4})$"
+)
+
+
+def _extract_person_target(raw: str) -> str:
+    """从 char_layout.facing 的 target 字符串抽人名.
+
+    处理「面向画右的杨旭」「面向画右岸上」「面向画左的水面」等复合写法：
+    复合方位前缀 → 剥离；否则返回原值。
+    """
+    raw = raw.strip()
+    m = _FACING_PREFIX_RE.match(raw)
+    if m:
+        return m.group(1)
+    return raw
 
 
 def _has_gaze_marker(text: str, target: str) -> bool:
@@ -53,14 +94,21 @@ def _has_gaze_marker(text: str, target: str) -> bool:
 
 
 def _is_person_target(target: str) -> bool:
-    """target 是否是人物名（而非方向词）."""
+    """target 是否是人物名（而非方向词）.
+
+    判定规则（按优先级）：
+      1) 在 DIRECTION_WORDS 里 → 不是人名
+      2) 中文短串（≤4 字符 + 全汉字）→ 视为人名
+      3) 其他 → 不是人名
+
+    不再依赖写死 NAME_POOL：实际数据来源是 shot.char_layout，
+    校验时取角色 position/facing 字段已带正确人名。
+    """
     target = target.strip()
     if not target:
         return False
     if target in DIRECTION_WORDS:
         return False
-    if target in NAME_POOL:
-        return True
     # 中文姓名短（≤4 字符）+ 不含数字英文 → 视为人名
     if len(target) <= 4 and all("一" <= c <= "鿿" for c in target):
         return True
@@ -96,6 +144,7 @@ class FacingToGazeConstraint(Constraint):
                 if not m:
                     continue
                 target = m.group(1).strip()
+                target = _extract_person_target(target)  # 剥离"画右的"等复合前缀
                 if _is_person_target(target):
                     facing_pairs.append((str(x_name), target))
             if not facing_pairs:

@@ -158,21 +158,25 @@ def _check_fps_consistency(script: dict) -> None:
 # 2. 文本生成
 # ============================================================================
 
-def gen_spy_script(novel_text: str, bank=None, objects_bank=None) -> str:
-    """调用 LLM 生成脚本，返回原始文本."""
+def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
+                   outline: dict | None = None) -> str:
+    """调用 LLM 生成脚本，返回原始文本.
+
+    Args:
+        outline: 预提取的章节大纲（v6.43 08-25 改为 main() 入口并发预提取，
+            避免本函数再独立调一次 LLM 浪费 ~6s）。
+    """
     from _text_gen.deepseek_schema import SCRIPT_SCHEMA
-    # v6.23：大纲两阶段（ShortVideoDirector director-outline 吸收）——先生成章节
-    # 大纲作分镜锚点，保证冲突/高潮分布。失败不阻断（空锚点）。
+    # v6.23：大纲两阶段（ShortVideoDirector director-outline 吸收）——大纲作分镜
+    # 锚点，保证冲突/高潮分布。失败不阻断（空锚点）。
     outline_anchor = ""
-    try:
-        from step01_script_gen.outline import generate_outline, outline_to_anchor
-        if OUTLINE_ENABLED:
-            outline = generate_outline(novel_text)
-            if outline:
-                outline_anchor = outline_to_anchor(outline)
-                _logger.info("[INFO] 章节大纲已生成，注入分镜 prompt")
-    except Exception as e:
-        _logger.warn(f"[WARN] 大纲生成失败（不阻断）: {e}")
+    if outline:
+        try:
+            from step01_script_gen.outline import outline_to_anchor
+            outline_anchor = outline_to_anchor(outline)
+            _logger.info("[INFO] 章节大纲已预提取（并发），注入分镜 prompt")
+        except Exception as e:
+            _logger.warn(f"[WARN] 大纲转 anchor 失败: {e}，继续无大纲生成")
     prompt = build_prompt(novel_text, bank, objects_bank, outline_anchor)
     service = create_service()
     req = TextGenerationRequest(
@@ -477,8 +481,15 @@ _REPAIR_PRIORITY_CATEGORIES = (
     "over_shoulder_lock", "occlusion_layering", "gaze_direction", "gaze_convergence",
     # === 画面描述（4） ===
     "ff_lf_completeness", "ff_desc_length", "ff_multi_action", "frame_weapon_legality",
-    # === 打斗/致命（2） ===
-    "combat_action", "fatal_wound_continuity",
+    # === 打斗/致命（1） ===
+    # v6.43 08-25：fatal_wound_continuity 移除——hard_fix 阶段
+    # InjuryContinuityConstraint 已确定性补 anchor（prompt/lf_desc 追加
+    # _INJURY_ANCHOR_TAIL = "伤处白袍心口一片暗红血迹洇开"），剩余 WARN 是
+    # hard_fix 修复痕迹的镜像。如果保留进 LLM 修复轮，LLM 会把 hard_fix
+    # 加的 anchor 当成"问题"误删（实测 08-25 跑批 LLM 修复 round1 又删了
+    # 已补的 fatal_wound_continuity 6 处）。改为由 hard_fix 唯一负责，LLM
+    # 修复轮不再过问。
+    "combat_action",
     # === 空镜/字幕/合规（2） ===
     "negative_prompt", "subtitle_leak",
     # === 原文锚点 + 高潮优先（2） ===
@@ -1112,33 +1123,39 @@ def _extract_assets_and_update_script(script: dict) -> None:
     Args:
         script: script_result.json dict（原地修改，写入 scene_assets/prop_assets）
     """
-    # -- 场景资产提取（大场景/近景功能场景描述，供资产图生成与 r2v 场景参考） --
+    # -- 场景/道具资产提取（v6.43 08-25 改为并发跑）--
     scene_assets_bank = SceneAssetsBank()
     scene_assets_bank.load()
-    if SCENE_ASSET_EXTRACTION_ENABLED:
-        _logger.info("[INFO] 提取本章场景资产（大场景/近景描述）...")
-        try:
-            _scene_assets = extract_scene_assets(script, scene_assets_bank)
+    prop_assets_bank = PropAssetsBank()
+    prop_assets_bank.load()
+
+    _scene_assets: list = []
+    _prop_assets: list = []
+    if SCENE_ASSET_EXTRACTION_ENABLED or PROP_ASSET_EXTRACTION_ENABLED:
+        _logger.info("[INFO] 并发提取 场景资产/道具资产（2 路并发）...")
+        from step01_script_gen.concurrent_extract import extract_assets_concurrent
+        _asset_results = extract_assets_concurrent(
+            script,
+            scene_assets_bank,
+            prop_assets_bank,
+            enable_scene_assets=SCENE_ASSET_EXTRACTION_ENABLED,
+            enable_props=PROP_ASSET_EXTRACTION_ENABLED,
+            log_func=_logger.info,
+        )
+
+        if _asset_results.get("scene_assets") is not None:
+            _scene_assets = _asset_results["scene_assets"]
             for _sa in _scene_assets:
                 scene_assets_bank.register_scene(_sa, NOVEL_CHAPTER)
             scene_assets_bank.save()
             _logger.info(f"[INFO] 已提取 {len(_scene_assets)} 个场景资产（已保存到场景资产库）")
-        except Exception as e:
-            _logger.warn(f"[WARN] 提取场景资产失败: {e}，继续流水线...")
 
-    # -- 道具资产提取（核心道具 + 外观描述，供道具资产图生成与 r2v 道具参考） --
-    prop_assets_bank = PropAssetsBank()
-    prop_assets_bank.load()
-    if PROP_ASSET_EXTRACTION_ENABLED:
-        _logger.info("[INFO] 提取本章核心道具（外观描述）...")
-        try:
-            _prop_assets = extract_props(script, prop_assets_bank)
+        if _asset_results.get("prop_assets") is not None:
+            _prop_assets = _asset_results["prop_assets"]
             for _pa in _prop_assets:
                 prop_assets_bank.register_prop(_pa, NOVEL_CHAPTER)
             prop_assets_bank.save()
             _logger.info(f"[INFO] 已提取 {len(_prop_assets)} 个道具资产（已保存到道具资产库）")
-        except Exception as e:
-            _logger.warn(f"[WARN] 提取道具资产失败: {e}，继续流水线...")
 
     # 场景/道具资产描述写回 script，供 step02a 资产生成与 step02b r2v 参考引用
     _scene_assets_out = {}
@@ -1247,22 +1264,35 @@ def main() -> None:
     character_bank = CharacterBank()
     character_bank.load()
 
-    # 预提取本章角色信息，辅助分镜生成（v6.1 新增）
-    # 这样 LLM 生成脚本时能看到本章新角色的特征描述
-    # 预提取结果存到 pre_extracted_chars，主流程后段（角色提取）直接复用，避免二次 LLM 调用
-    pre_extracted_chars = None
-    if CHARACTER_EXTRACTION_ENABLED:
-        _logger.info("[INFO] 预提取本章角色信息以辅助分镜生成...")
-        try:
-            chars = extract_characters(novel_text, character_bank)
+    # 加载场景物体库（v6.6 新增）
+    scene_objects_bank = SceneObjectsBank()
+    scene_objects_bank.load()
+
+    # v6.43（08-25）：3 个 LLM 预提取并发跑（角色/场景物体/大纲）——
+    # 原来按顺序执行 = 3 × LLM 延迟（~16s 总耗时），并发后 = max(3) ≈ 5s，
+    # 节省 ~10s。3 个 extractor 各自独立 schema/服务/写入目标，并发安全。
+    pre_extracted_outline = None
+    if CHARACTER_EXTRACTION_ENABLED or SCENE_OBJECT_EXTRACTION_ENABLED:
+        _logger.info("[INFO] 并发预提取 角色/场景物体/大纲（3 路并发）...")
+        from step01_script_gen.concurrent_extract import extract_all_concurrent
+        pre_results = extract_all_concurrent(
+            novel_text,
+            character_bank,
+            scene_objects_bank,
+            enable_characters=CHARACTER_EXTRACTION_ENABLED,
+            enable_scene_objects=SCENE_OBJECT_EXTRACTION_ENABLED,
+            enable_outline=OUTLINE_ENABLED,
+            log_func=_logger.info,
+        )
+        # === 角色：注册到 bank（主流程后段仍可复用） ===
+        chars = pre_results.get("characters")
+        if chars is not None:
             pre_extracted_chars = chars
-            # 注册新角色到 bank（暂存本章角色，供生成时使用）
             for c in chars:
                 ident = c.get("identifier", "")
                 if not ident:
                     continue
                 if c.get("is_new", True):
-                    # 新角色：首次注册
                     character_bank.register_character(
                         ident,
                         c.get("static_features", ""),
@@ -1270,34 +1300,21 @@ def main() -> None:
                         NOVEL_CHAPTER,
                     )
                 elif c.get("dynamic_features"):
-                    # 已知角色：如果 LLM 返回了 dynamic_features，则更新衣着
-                    # 这解决了"衣着与本章内容不一致"的问题
                     character_bank.update_dynamic_features(
-                        ident,
-                        c.get("dynamic_features", ""),
+                        ident, c.get("dynamic_features", ""),
                     )
                     character_bank.update_character_chapter(ident, NOVEL_CHAPTER)
-            # v6.1 优化：立即保存，确保即使脚本生成失败，角色库也已更新
             character_bank.save()
             _logger.info(f"[INFO] 预提取到 {len(chars)} 个角色特征（已保存到角色库）")
-        except Exception as e:
-            _logger.warn(f"[WARN] 预提取角色失败: {e}，继续生成脚本...")
-
-    # 预提取本章场景物体尺寸，辅助分镜生成（v6.6 新增）
-    # 从原文上下文推导船/车/厅堂等空间物体的合理尺寸/容量/结构，
-    # 替代硬编码规则，防止画面比例漂移（图片模型把船画成只能装2人的小舢板）
-    scene_objects_bank = SceneObjectsBank()
-    scene_objects_bank.load()
-    if SCENE_OBJECT_EXTRACTION_ENABLED:
-        _logger.info("[INFO] 预提取本章场景物体尺寸以辅助分镜生成...")
-        try:
-            objs = extract_scene_objects(novel_text, scene_objects_bank)
+        # === 场景物体：注册到 bank ===
+        objs = pre_results.get("scene_objects")
+        if objs is not None:
             for o in objs:
                 scene_objects_bank.register_object(o, NOVEL_CHAPTER)
             scene_objects_bank.save()
             _logger.info(f"[INFO] 预提取到 {len(objs)} 个场景物体（已保存到场景物体库）")
-        except Exception as e:
-            _logger.warn(f"[WARN] 预提取场景物体失败: {e}，继续生成脚本...")
+        # === 大纲：预提取，主分镜生成时注入 prompt ===
+        pre_extracted_outline = pre_results.get("outline")
 
     # 检查缓存（场景物体库内容变化也视为源变更，v6.6）
     objects_bank_data = json.dumps(
@@ -1350,7 +1367,8 @@ def main() -> None:
     last_err = None
     for attempt in range(1, 1 + 3):
         try:
-            raw = gen_spy_script(novel_text, character_bank, scene_objects_bank)
+            raw = gen_spy_script(novel_text, character_bank, scene_objects_bank,
+                                  outline=pre_extracted_outline)
         except RuntimeError as e:
             # 生成失败（如 DeepSeek 返回空文本）：短暂等待后重试，而不是中断流水线
             last_err = e
@@ -1716,7 +1734,12 @@ def main() -> None:
     for shot in shots[:3]:
         idx = shot.get("index", "?")
         sub = (shot.get('subtitle', '') or '').strip()
-        _console(f"    - 镜{idx}: {sub[:42] if sub else '(空镜/纯画面)'}")
+        if sub:
+            _console(f"    - 镜{idx}: {sub[:42]}")
+        else:
+            # subtitle 为空时回退到 main_subject（避免误报"空镜"）
+            ms = (shot.get('main_subject', '') or '').strip()
+            _console(f"    - 镜{idx}: [{ms[:42]}] （subtitle 空）" if ms else f"    - 镜{idx}: (无 main_subject)")
     _console("=" * 56)
     _console("  ⚠️ 详细校验 WARN 已写入 step01.log，控制台不再重复输出")
     _console("=" * 56)

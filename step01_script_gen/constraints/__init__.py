@@ -43,6 +43,7 @@ from .runtime_extend import RuntimeExtendConstraint  # W6（红果时长拉伸�
 from .threat_gaze_coupling import ThreatGazeCouplingConstraint  # T1
 from .transition_keywords import TransitionKeywordsConstraint  # T3
 from .self_review import SelfReviewConstraint  # SR（LLM 自检回路）
+from .v6_43_prompt_enforcement import V643PromptEnforcementConstraint  # v6.43 (08-23 强化)
 
 ALL_CONSTRAINTS.extend([
     # Phase 2
@@ -80,6 +81,7 @@ ALL_CONSTRAINTS.extend([
     RuntimeExtendConstraint(),  # HARD
     ThreatGazeCouplingConstraint(),
     PlatformComplianceConstraint(),
+    V643PromptEnforcementConstraint(),  # v6.43 prompt 强化（早执行，独立于 LLM）
     SelfReviewConstraint(),  # SR opt-in via SELF_REVIEW_ENABLED=1
 ])
 

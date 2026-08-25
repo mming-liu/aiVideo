@@ -83,6 +83,151 @@ def _has_dialogue(text: str) -> bool:
     return has_dialogue(text)
 
 
+# v6.43（08-25）：超 cap 镜头自动拆镜的切点查找
+# 优先级：句号 > 问号/感叹号 > 省略号 > 逗号（中点附近）> 切中字（中点）
+_SPLIT_DELIMS_PRIORITY = ("。", "？", "！", "…", "，")
+
+
+def _find_best_split_point(text: str) -> int:
+    """在 text 中找最接近中点的优先级切点.
+
+    Returns:
+        切点位置（char index, 切点之前的字符保留在第一段）.
+        找不到合适切点返回 -1.
+    """
+    if not text:
+        return -1
+    target = len(text) // 2
+    best = (-1, float("inf"))  # (index, distance_to_target)
+    for delim in _SPLIT_DELIMS_PRIORITY:
+        for i, ch in enumerate(text):
+            if ch == delim:
+                # 切点必须在 [text_len*0.25, text_len*0.75] 区间，避免切出半句话
+                if i < len(text) * 0.25 or i > len(text) * 0.75:
+                    continue
+                d = abs(i - target)
+                if d < best[1]:
+                    best = (i + 1, d)  # 切点 = delim 之后
+        if best[0] >= 0:
+            return best[0]
+    return -1
+
+
+def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
+    """v6.43（08-25）修复 8s 静默 clamp：估时 > shot_cap 的 shot 拆为 2 镜.
+
+    旧实现：timecode.py for 循环里 `if duration > shot_cap: duration = shot_cap`
+    静默压缩时长 → 长对话镜头后半段被截断 / TTS 音画不同步。
+
+    新实现：pre-pass 在 _compute_timecodes 主循环之前把 shots 里超 cap 的按
+    narration_segment 句号切为 2 镜，原地修改 shots 列表。
+
+    切镜策略（防递归爆炸）：
+    1. 估时 > shot_cap 才拆（防 false positive）
+    2. 二分找切点：必须满足"两段估时都 ≤ shot_cap"——保证拆 1 次就够
+    3. 找切点：优先级 (。 > ？ > ！ > … > ，) 距中点最近且满足 ②
+    4. 找不到合适切点 → 不拆（保留原版，下游约束再处理）
+    5. shot_b 继承 shot_a 的 prompt/ff/lf/char_layout/motion_desc（连贯性）
+    6. shot_b.narration_segment = 切后段；subtitle 同步
+    7. shot_b.index = shot_a.index + 0.5（半整数；timeline 顺序按 list 序）
+
+    Returns:
+        拆出镜数（int；0 = 全部不需拆）
+    """
+    import copy
+    split_count = 0
+    i = 0
+    while i < len(shots):
+        shot = shots[i]
+        text = shot.get("narration_segment", "")
+        if not text:
+            i += 1
+            continue
+        estimated = _estimate_duration(text)
+        if estimated <= shot_cap:
+            i += 1
+            continue
+        # 找切点：必须满足切后两段估时都 ≤ shot_cap（防递归）
+        split_at = _find_split_point_within_cap(text, shot_cap)
+        if split_at <= 0 or split_at >= len(text) - 1:
+            i += 1
+            continue
+        # 构造 shot_b
+        shot_b = copy.deepcopy(shot)
+        # narration_segment 切分
+        shot_b["narration_segment"] = text[split_at:].strip()
+        if shot_b.get("subtitle"):
+            shot_b["subtitle"] = shot_b["narration_segment"]
+        # ff_desc 继承 shot_a 的 lf_desc（接续）
+        lf_a = shot.get("lf_desc", "")
+        if lf_a:
+            shot_b["ff_desc"] = lf_a
+        # keyframes 清空（keyframe 由 motion_desc 派生，shot_b 不再有时间分段）
+        shot_b["keyframes"] = []
+        if not shot_b.get("motion_desc"):
+            # 没 motion_desc 时给个空的避免 validator 误报
+            shot_b["motion_desc"] = ""
+        # 标记拆镜关系（调试用，不进入 prompt）
+        shot_b["_split_from"] = shot.get("index", i)
+        shot_b["index"] = (shot.get("index", i) or i) + 0.5
+        # shot_a 留前半段
+        shots[i]["narration_segment"] = text[:split_at].strip()
+        if shots[i].get("subtitle"):
+            shots[i]["subtitle"] = shots[i]["narration_segment"]
+        shots[i]["_split_to"] = shot_b["index"]
+        # 插入到 i+1
+        shots.insert(i + 1, shot_b)
+        split_count += 1
+        # v6.43 08-25：限制单 shot 最多拆 1 次（i 跳过 shot_b 自身），防
+        # 23s 长对话拆成 6 镜导致镜数爆炸。shot_b 估时仍可能 > cap，由
+        # _compute_timecodes 主循环的 clamp 兜底（虽然会被截断，但至少
+        # shot_a 是完整的）。
+        i += 2
+    if split_count:
+        try:
+            _log().info(
+                f"[SPLIT] {split_count} 个镜头估时 > {shot_cap:.1f}s，已按 narration_segment 切为 2 镜"
+            )
+        except Exception:
+            pass
+    return split_count
+
+
+def _find_split_point_within_cap(text: str, cap: float) -> int:
+    """在 text 中找切点，满足切后两段估时都 ≤ cap（防递归拆镜）.
+
+    策略：枚举优先级切点（。 > ？ > ！ > … > ，），找最接近中点且两段都 ≤ cap。
+    退化：若两段都 ≤ cap 找不到，按"只强制左段 ≤ cap、右段任意"再找 1 次。
+    Returns: 切点 index（0 或 len(text)-1 = 不可拆）.
+    """
+    if not text:
+        return -1
+    target = len(text) // 2
+    best_strict = (-1, float("inf"))
+    best_loose = (-1, float("inf"))  # 退化：只要求左段 ≤ cap
+    for delim in _SPLIT_DELIMS_PRIORITY:
+        for i, ch in enumerate(text):
+            if ch != delim:
+                continue
+            # 切点必须在 [text_len*0.2, text_len*0.8] 区间（避免切出半句话）
+            if i < len(text) * 0.2 or i > len(text) * 0.8:
+                continue
+            left = text[:i + 1]
+            right = text[i + 1:]
+            d = abs(i - target)
+            # 严格：两段都 ≤ cap
+            if _estimate_duration(left) <= cap and _estimate_duration(right) <= cap:
+                if d < best_strict[1]:
+                    best_strict = (i + 1, d)
+            # 退化：只要求左段 ≤ cap（右段可能仍超 cap，由 shot_b 继续尝试拆）
+            elif _estimate_duration(left) <= cap:
+                if d < best_loose[1]:
+                    best_loose = (i + 1, d)
+        if best_strict[0] >= 0:
+            return best_strict[0]
+    return best_loose[0]  # 严格没找到就退化（仍优于不拆）
+
+
 def _extract_motion_duration(motion_desc: str) -> float | None:
     """从 motion_desc 中提取时间分段，计算实际时长。
 
@@ -203,6 +348,11 @@ def _compute_timecodes(script: dict) -> None:
     # 钩子不受 8s 限制（钩子时长另算，下方 hook 段仍只按模型 cap 夹取）。
     shot_cap = MAX_SHOT_DURATION if not dur_cap else min(dur_cap, MAX_SHOT_DURATION)
     clamped_count = 0
+
+    # v6.43（08-25）：拆镜 pre-pass——估时 > shot_cap 的 shot 按 narration_segment
+    # 句号切为 2 镜，避免 timecode 静默 clamp 截断长对话镜头（违反 v6.43 用户规则）。
+    # 放在 fps/dur_cap 推导之后，让 _estimate_duration / 拆分都走同一 shot_cap。
+    _do_pre_split_oversized_shots(shots, shot_cap)
 
     # 钩子按模型 cap + fps 整数帧对齐（与 shots 一致；钩子本身不受 8s cap）
     if hook_duration > 0:

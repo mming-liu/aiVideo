@@ -1592,14 +1592,11 @@ _KF_POSITION_WORDS = (
     "船头", "船尾", "船中", "中舱", "船梢", "船舷", "船板", "船侧",
     "画左", "画右", "画中", "画上方", "水中", "水下", "水面", "岸上",
 )
-# 威胁源词表（含合规替换后的词——content_safety 会把"刺客"→"神秘人"，
-# 检测发生在 sanitize 之前面对原文"刺客"，但 LLM 直接产出"神秘人"也要能命中）
-_THREAT_WORDS_ENLARGED = (
-    "刺客", "杀手", "黑衣人", "黑影", "神秘人", "蒙面人",
-    "潜伏", "埋伏", "伏击", "偷袭者",
+# 威胁源词表 + 攻击动词（统一从 prompt_semantic.registry 引入）
+from step01_script_gen.prompt_semantic import (
+    THREAT_WORDS_ENLARGED as _THREAT_WORDS_ENLARGED,
+    THREAT_STAB_VERBS as _THREAT_STAB_VERBS,
 )
-# 威胁源攻击动词（用于找动作目标角色）
-_THREAT_STAB_VERBS = ("刺", "劈", "扑", "砍", "斩", "捅", "扎", "挥")
 
 
 def _char_aliases(char_id: str, characters: list | None = None) -> list[str]:
@@ -1623,8 +1620,9 @@ def _char_aliases(char_id: str, characters: list | None = None) -> list[str]:
     return out
 
 
-# 威胁源标识（_char_aliases 只对这三个展开通称别名；identifier 通常为"刺客"）
-_THREAT_IDS = ("刺客", "杀手", "黑衣人")
+# 威胁源标识（从 prompt_semantic.registry 引入；identifier 通常为"刺客"）
+# _char_aliases 仍只对核心三词展开通称别名（"刺客"+"神秘人"+"黑衣人"等）
+_THREAT_IDS = ("刺客", "杀手", "黑衣人")  # 保留精确匹配；通用检测走 THREAT_KEYWORDS
 
 
 def _is_threat_weapon_prop(pid: str) -> bool:
@@ -2100,22 +2098,19 @@ def _extract_prop_layout(
         return ""
 
 
-# 服装词提示（dynamic 是服装词开头用"身着"连接；_COSTUME_WORDS 供 _inject_character_costume 判定）
-_COSTUME_WORDS = ("袍", "衫", "衣", "裳", "裙", "袄", "裰", "服", "袈", "氅")
+# 服装词提示（dynamic 是服装词开头用"身着"连接；统一从 prompt_semantic.registry 引入）
+from step01_script_gen.prompt_semantic import WARDROBE_WORDS as _COSTUME_WORDS
 
 
 # 镜中临时状态覆盖（08-15 hook 尾帧听香盘发泄漏）：dynamic_features 含这些
 # 发型状态词时，static_features（肖像发型）中与之冲突的静态发型短语必须剔除。
-_HAIR_STATE_WORDS = ("披头散发", "披发", "散发", "乱发", "发髻散落", "蓬发")
-_HAIR_STATIC_PHRASES = ("青丝挽美人髻", "黑发挽美人髻", "青丝盘起", "秀发高挽",
-                        "发髻高耸", "云鬓高挽", "挽发", "束发", "盘发")
-
-# 动物脸关键词（08-16 听香鹿角幻觉根因）：角色脸型描述含"鹿系脸/猫系脸/犬系脸"
-# 等"X 系脸"框架时，图片模型会把 X 延伸成动物特征（鹿→鹿角、猫→兽耳、犬→犬耳）
-# 叠加在头上——尤其与头饰（步摇/簪钗/冠）组合时。出现这些关键词必须加护栏，禁止
-# 任何动物头面特征。刻意不含"鹅蛋脸/桃花面"等无动物隐喻的脸型。
-_ANIMAL_FACE_KEYWORDS = ("鹿", "猫", "犬", "狐", "蛇", "狼", "虎", "鹰", "豹", "兽", "犄", "角")
-_NO_ANIMAL_FEATURES_GUARD = "（头面部无任何动物特征：无兽耳/无角/无犄角/无鳞/无羽毛）"
+# v6.43 重构：统一从 prompt_semantic.registry 引入（不再写死）
+from step01_script_gen.prompt_semantic import (
+    HAIR_STATE_WORDS as _HAIR_STATE_WORDS,
+    HAIR_STATIC_PHRASES as _HAIR_STATIC_PHRASES,
+    ANIMAL_FACE_KEYWORDS as _ANIMAL_FACE_KEYWORDS,
+    NO_ANIMAL_FEATURES_GUARD as _NO_ANIMAL_FEATURES_GUARD,
+)
 
 
 def _inject_character_costume(desc: str, characters: list | None,
@@ -2183,21 +2178,37 @@ def _inject_character_costume(desc: str, characters: list | None,
             # "身着"，否则用"，"连接（如刺客 dynamic="浑身湿透"非衣服，说"身着浑身
             # 湿透"不通顺 → "刺客：猫系脸…，浑身湿透"）。static 缺失时只拼 dynamic。
             conn = "，身着" if any(w in dynamic for w in _COSTUME_WORDS) else "，"
-            # 发型状态覆盖：dynamic 含"披头散发/散发"等状态词时，static（肖像）
-            # 里的静态发型短语（美人髻/束发/盘发）必须剔除并显式声明当前状态，
-            # 否则肖像参考图锚定盘发，图片模型把「披发」镜头画成盘发（08-15
-            # hook 尾帧听香）。脸型锚定保留，只去冲突发型。
+            # v6.43 重构：anchor 拼接 + dedup 委托给 prompt_semantic.Character.canonical_anchor()。
+            # 之前在这里硬编码"先发 state 词前置+dynamic 已含则不前置"逻辑，与
+            # prompt_semantic.registry.ANCHOR_DEDUP_PHRASES 行为完全等价，统一为：
+            # 1) 静态发型短语剔除
+            # 2) dynamic 已含 hair_state 时不前置（避免出现"披头散发 ... 披头散发"）
+            # 3) dynamic 不含 hair_state 时前置"此刻X"
             _hair_state = next((w for w in _HAIR_STATE_WORDS if w in dynamic), "")
-            if _hair_state:
-                for _phrase in _HAIR_STATIC_PHRASES:
-                    static = static.replace(_phrase, "")
-                # 剔除后合并残留空段（"如花似玉，青丝挽美人髻，秀颈" → "如花似玉，秀颈"）
-                _parts = [p for p in static.split("，") if p.strip()]
-                static = "，".join(_parts)
-                if static:
-                    static = f"{static}，此刻{_hair_state}"
-            combined = (f"{ident}：{static}{conn}{dynamic}" if static
-                        else f"{ident}{conn}{dynamic}")
+            try:
+                from step01_script_gen.prompt_semantic import Character as _PSC
+                _char = _PSC(
+                    name=ident, static_features=static, dynamic_features=dynamic,
+                    hair_state=_hair_state,
+                )
+                combined = _char.canonical_anchor()
+            except ImportError:
+                # 兜底：保持原硬编码行为（无 prompt_semantic 包时回退）
+                if _hair_state:
+                    for _phrase in _HAIR_STATIC_PHRASES:
+                        static = static.replace(_phrase, "")
+                    _parts = [p for p in static.split("，") if p.strip()]
+                    static = "，".join(_parts)
+                    if _hair_state in dynamic:
+                        if static:
+                            static = f"{static}，"
+                    else:
+                        if static:
+                            static = f"{static}，此刻{_hair_state}"
+                        else:
+                            static = f"此刻{_hair_state}"
+                combined = (f"{ident}：{static}{conn}{dynamic}" if static
+                            else f"{ident}{conn}{dynamic}")
             # 08-16 听香鹿角幻觉：角色脸型含动物关键词（鹿系脸/猫系脸/犬系脸…）
             # + 头饰（步摇/簪钗/冠）→ 模型把动物延伸成兽耳/角/犄角。追加护栏
             # 明确禁止动物头面特征。检查 static+dynamic 任一含关键词即触发。

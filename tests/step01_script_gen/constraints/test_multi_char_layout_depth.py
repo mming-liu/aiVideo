@@ -37,9 +37,9 @@ def test_adds_depth_to_secondary_chars():
 
     # 次要角色 position 应被改
     layout = script["shots"][0]["char_layout"]
-    # 至少一个次要角色 position 应含 画中甲板 或 船
+    # 横向场景（船）取 anchor 第 2 个（船中）—— 期望 "船中" 而非"画中甲板"
     positions = [item.get("position", "") for item in layout]
-    assert any("画中" in p or "甲板" in p for p in positions)
+    assert any("船中" in p or "甲板" in p for p in positions), f"应有船中或甲板: {positions}"
 
 
 def test_is_idempotent():
