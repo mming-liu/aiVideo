@@ -139,6 +139,11 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 - 图片：`MINIMAX_T2I_MODEL=image-01`（subject_reference 单张）+ `MINIMAX_T2I_FALLBACK_MODELS=image-01-live`
 - 视频 v1（Hailuo 旧模型，省钱）：`MINIMAX_T2V_MODEL=MiniMax-Hailuo-02` / `MINIMAX_I2V_MODEL=MiniMax-Hailuo-2.3-Fast` + 各自回退队列（仅 MiniMax 系列）
 - 视频 v2（H3 新模型，贵）：`MINIMAX_H3_MODEL=MiniMax-H3`（尾帧/多关键帧/参考图/参考音频用）
+- ⚠️ **首尾帧模式 + MiniMax = 自动升 H3（贵，2026-08-29 确认）**：`VIDEO_REFERENCE_MODE=image` 的请求带尾帧，而 v1 Hailuo I2V 只支持首帧——provider 检测到尾帧/参考图即自动路由到 H3，**不会回落便宜档**。供应商选型约定（2026-08-29 用户决策：只用火山 + MiniMax，不做 A/B）：
+  - **日常跑量**：留火山免费 Seedance 1.0 pro（首尾帧模式，无参考图/无声）
+  - **关键镜头/验收**：切 MiniMax H3 或火山付费档（Seedance 2.0 起）
+  - **恢复 r2v 角色一致性**：火山 Seedance 2.0+ / MiniMax H3 都支持，管线已适配（`_collect_r2v_references` 按 provider 自动收参考图）
+  - 以上全部是 `.env` 配置切换，零代码改动——模型能力差异集中在 `shared/model_caps.py`（时长/分辨率/参考图/有声/prompt 上限）+ `shared/ref_compose.py`（参考图数）+ provider 内格式映射，新增/切换模型不改编码
 - `MINIMAX_VIDEO_RESOLUTION`（默认 768P）/ `MINIMAX_VIDEO_DURATION`（默认 6）/ 轮询参数
 - **prompt 适配（2026-08，按官方指南）**：
   - H3（r2v 路径）：provider 自动把 step02 扁平 prompt 重组为官方**时间线三段结构**（`integrated_multimodal_description: [Shot 1] ...` + `overall_soundscape` + `non_diegetic_music`）；「（背景音效：X）」→ 音景；「（用中文普通话说，音色）"台词"」→ `(S1) says: <d>[Chinese] 台词</d>`；有首帧图时前置官方 I2V 对齐指令。见 `_video_gen/minimax_provider.py _h3_render`

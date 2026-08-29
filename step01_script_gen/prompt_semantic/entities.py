@@ -65,6 +65,19 @@ class Character:
         dynamic = self.dynamic_features
         hair_state = self.hair_state
 
+        # v6.50（08-28）：「X系脸」动物比喻 → 人类五官词（registry 同源映射）。
+        # 比喻词（狐系脸/鹿系脸）本身诱导兽化幻觉，在 anchor 组装源头替换，
+        # 替换后不含动物字根，下游 NO_ANIMAL_FEATURES_GUARD 也不再触发。
+        try:
+            from .registry import ANIMAL_METAPHOR_FACE_REPLACEMENTS
+            for _meta, _human in ANIMAL_METAPHOR_FACE_REPLACEMENTS:
+                if _meta in static:
+                    static = static.replace(_meta, _human)
+                if _meta in dynamic:
+                    dynamic = dynamic.replace(_meta, _human)
+        except ImportError:
+            pass
+
         # 服装词判定（袍/衫/衣/裳/裙/袄/裰/服/袈/氅）
         _COSTUME = ("袍", "衫", "衣", "裳", "裙", "袄", "裰", "服", "袈", "氅")
         if any(w in dynamic for w in _COSTUME):

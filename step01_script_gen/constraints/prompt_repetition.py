@@ -129,11 +129,19 @@ class PromptRepetitionConstraint(Constraint):
     def apply(self, ctx) -> list[RepairRecord]:
         repairs: list[RepairRecord] = []
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
+            # v6.50：从 char_layout 收集本镜角色名，用于悬空名碎片清理
+            char_names: list[str] = []
+            for it in (shot.get("char_layout") or []):
+                if isinstance(it, dict):
+                    n = str(it.get("name", "")).strip()
+                    if 2 <= len(n) <= 4 and n not in char_names:
+                        char_names.append(n)
             for fld in self.fields:
                 v = shot.get(fld)
                 if not v or not isinstance(v, str) or len(v) < 8:
                     continue
                 new_v = dedupe_text_4char(v)
+                new_v = self._strip_dangling_names(new_v, char_names)
                 if new_v != v:
                     shot[fld] = new_v
                     repairs.append(
@@ -147,3 +155,15 @@ class PromptRepetitionConstraint(Constraint):
                         )
                     )
         return repairs
+
+    @staticmethod
+    def _strip_dangling_names(text: str, char_names: list[str]) -> str:
+        """清理悬空角色名碎片：「云鬓半偏，杨旭；」——逗号 + 角色名 + 子句
+        边界标点，名字后无任何谓语（名字连跑折叠后残留的单发注入垃圾）.
+        仅对 char_layout 已知角色名生效，限子句尾位置（不误伤句中主语）.
+        """
+        if not text or not char_names:
+            return text
+        for n in char_names:
+            text = re.sub(rf"，{re.escape(n)}(?=[，。；！？]|$)", "", text)
+        return text

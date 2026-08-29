@@ -1334,6 +1334,37 @@ def _extract_assets_and_update_script(script: dict) -> None:
 # （原 mode B 的原文切片对 grounding 类问题很有用，无副作用全量注入）。
 
 
+def _snapshot_run_artifacts(script: dict | None = None) -> None:
+    """跑批快照（v6.50 P3，08-28）：script + step01.log 时间戳备份到 snapshots/.
+
+    output 不进 git（P2 教训：想回滚 LLM 原始输出时无 .bak 无 raw 缓存），
+    每次落盘后快照一份，只保留最近 20 份（按 script_result_*.json 计，配对
+    删除同名 step01_*.log）。快照失败只告警，不影响主流程。
+    """
+    try:
+        import shutil
+        import time as _time
+        snap_dir = OUTPUT_FILE.parent / "snapshots"
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        ts = _time.strftime("%Y%m%d_%H%M%S")
+        if script is not None:
+            with open(snap_dir / f"script_result_{ts}.json", "w", encoding="utf-8") as f:
+                json.dump(script, f, ensure_ascii=False, indent=2)
+        log_file = OUTPUT_FILE.parent / "step01.log"
+        if log_file.exists():
+            shutil.copy2(log_file, snap_dir / f"step01_{ts}.log")
+        snaps = sorted(snap_dir.glob("script_result_*.json"))
+        for old in snaps[:-20]:
+            old.unlink(missing_ok=True)
+            log_pair = old.name.replace("script_result_", "step01_").replace(".json", ".log")
+            (snap_dir / log_pair).unlink(missing_ok=True)
+    except Exception as _snap_e:
+        try:
+            _logger.warn(f"[SNAPSHOT] 快照失败（不影响主流程）: {_snap_e}")
+        except Exception:
+            pass
+
+
 def main() -> None:
     """主流程：读取章节 → 生成脚本 → 生成钩子 → 验证 → 后处理 → 保存.
 
@@ -1444,6 +1475,7 @@ def main() -> None:
         _extract_assets_and_update_script(script)
         with open(SCRIPT_FILE, "w", encoding="utf-8") as f:
             json.dump(script, f, ensure_ascii=False, indent=2)
+        _snapshot_run_artifacts(script)
         _logger.info("时间轴已重新计算")
         # 缓存命中：恢复 stdout 并显示最终摘要
         sys.stdout = _REAL_STDOUT
@@ -1827,6 +1859,7 @@ def main() -> None:
     # 保存
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(script, f, ensure_ascii=False, indent=2)
+    _snapshot_run_artifacts(script)
 
     _logger.info(f"[OK] 分镜脚本已保存至 {OUTPUT_FILE}")
 

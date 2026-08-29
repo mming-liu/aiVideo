@@ -1696,6 +1696,14 @@ def _threat_visible_in(desc: str, characters: list | None = None) -> bool | None
                 break
             occ.append(i)
             start = i + len(a)
+    # v6.50（08-28）：剔除「视线提及」型出现——「目光凝望刺客/看向神秘人」
+    # 里威胁源是「看」的宾语（可能在场也可能画外），不是可见实体证据。
+    # 08-28 实测：ff 唯一的「刺客」出现是视线宾语 → 被旧逻辑判在场 →
+    # 「禁止黑影」尾巴拼进模板 → 与剧情黑影对称矛盾（矛盾自检器拦下）。
+    _GAZE_REF_TAILS = ("望向", "看向", "盯向", "望着", "看着", "盯着",
+                       "凝望", "注视", "凝视", "瞪向", "望", "看", "盯")
+    occ = [i for i in occ
+           if not any(desc[max(0, i - 2):i].endswith(s) for s in _GAZE_REF_TAILS)]
     if not occ:
         return None
     # 08-23 防御加固：ff 描述"黑衣身影轮廓若隐若现/一截刀尖微露水面"时，命中
@@ -2144,6 +2152,7 @@ from step01_script_gen.prompt_semantic import (
     HAIR_STATIC_PHRASES as _HAIR_STATIC_PHRASES,
     ANIMAL_FACE_KEYWORDS as _ANIMAL_FACE_KEYWORDS,
     NO_ANIMAL_FEATURES_GUARD as _NO_ANIMAL_FEATURES_GUARD,
+    ANIMAL_METAPHOR_FACE_REPLACEMENTS as _ANIMAL_METAPHOR_FACE_REPLACEMENTS,
 )
 
 # v6.45：角色惰性/失能状态词——本镜呈躺/卧/倒/昏迷/闭目/中刀等状态时，
@@ -2276,7 +2285,15 @@ def _inject_character_costume(desc: str, characters: list | None,
                             static = f"此刻{_hair_state}"
                 combined = (f"{ident}：{static}{conn}{dynamic}" if static
                             else f"{ident}{conn}{dynamic}")
-            # 08-16 听香鹿角幻觉：角色脸型含动物关键词（鹿系脸/猫系脸/犬系脸…）
+            # v6.50（08-28）：先做「X系脸」比喻词 → 人类五官词替换——比喻词
+            # （鹿系脸/猫系脸）本身诱导兽化，靠下面的否定护栏对抗是下策；
+            # 替换后 static/dynamic 不再含动物字根，护栏自然不触发，prompt 更短。
+            for _meta, _human in _ANIMAL_METAPHOR_FACE_REPLACEMENTS:
+                if _meta in static:
+                    static = static.replace(_meta, _human)
+                if _meta in dynamic:
+                    dynamic = dynamic.replace(_meta, _human)
+            # 08-16 听香鹿角幻觉：角色脸型含动物关键词（虎目/狼腰等残余动物词）
             # + 头饰（步摇/簪钗/冠）→ 模型把动物延伸成兽耳/角/犄角。追加护栏
             # 明确禁止动物头面特征。检查 static+dynamic 任一含关键词即触发。
             if any(k in (static + dynamic) for k in _ANIMAL_FACE_KEYWORDS):
@@ -2585,6 +2602,12 @@ async def _gen_first_frame_async(
         shot["ff_desc_final"] = _build_final_frame_prompt(shot, ff_desc, "first_frame", characters)
     except Exception:
         pass
+    # v6.50（08-28）矛盾自检器：提交前拦「匕首在手+没有武器」式对称矛盾——
+    # 放在 try 外，fail-fast 异常向上传播让该帧当场失败（不再烧额度画必错的图）
+    _assert_ff = shot.get("ff_desc_final")
+    if _assert_ff:
+        from shared.prompt_contradiction import assert_no_contradictions
+        assert_no_contradictions(_assert_ff, f"shot{idx} 首帧")
 
     for attempt in range(max_retries + 1):
         if ff_path.exists() and not force and attempt == 0:
@@ -2779,6 +2802,11 @@ async def _gen_last_frame_async(
         shot["lf_desc_final"] = _build_final_frame_prompt(shot, lf_desc, "last_frame", characters)
     except Exception:
         pass
+    # v6.50（08-28）矛盾自检器：与首帧同理
+    _assert_lf = shot.get("lf_desc_final")
+    if _assert_lf:
+        from shared.prompt_contradiction import assert_no_contradictions
+        assert_no_contradictions(_assert_lf, f"shot{idx} 尾帧")
 
     for attempt in range(max_retries + 1):
         if lf_path.exists() and not force and attempt == 0:

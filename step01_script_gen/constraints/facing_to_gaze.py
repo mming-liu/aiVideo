@@ -65,6 +65,16 @@ _FACING_RE = re.compile(r"^面向(.+)$")
 # 式互斥视线（同一角色同时盯两人）——注入前做 3 项检查（见 apply 内）。
 _GAZE_VERBS = ("目光凝望", "凝望", "凝视", "紧盯", "注视")
 
+# v6.50（08-28）动作子句分策略：插入点所在分句含强动作动词时，「目光凝望」
+# 物理荒谬（实测「刺客双腿并拢倒纵入水，目光凝望杨旭」——后空翻中凝视目标；
+# 单遍 facing_to_gaze=81-99 处多为这类注入）。动作子句改插「身体朝向」表达
+# 身体取向（物理上成立），静态子句仍用「目光凝望」表达视线。
+_ACTION_CLAUSE_VERBS = (
+    "倒纵", "跃", "腾", "翻", "滚", "扑", "冲", "奔", "跳", "挥", "劈",
+    "砍", "闪", "避", "摔", "坠", "破水", "飞掠", "飞身", "疾驰", "掠上",
+)
+_F2G_INSERT_MARKERS = ("目光凝望", "身体朝向")
+
 
 def _is_gaze_object(text: str, pos: int) -> bool:
     """pos 处的人名是否已是视线宾语（紧前文是视线动词）.
@@ -85,6 +95,23 @@ def _has_own_gaze_after(text: str, pos: int) -> bool:
     """
     tail = text[pos:pos + 8]
     return any(tail.startswith(v) for v in _GAZE_VERBS)
+
+
+# v6.50（08-28）：及物动作动词 + 「向」——此时人名是动作**宾语**（受害者/目标），
+# 不是子句主语，锚定到这里插入会读成攻击者凝望自己
+# （08-28 重放实测：「刺向杨旭胸口，目光凝望刺客」）。
+_OBJECT_TARGETING_VERBS = (
+    "刺向", "冲向", "扑向", "砍向", "挥向", "逼向", "掠向",
+    "掷向", "袭向", "捅向", "劈向", "砸向", "指向前", "递向",
+)
+
+
+def _is_action_object(text: str, pos: int) -> bool:
+    """pos 处的人名是否是动作宾语（紧前文是「动词+向」）."""
+    for v in _OBJECT_TARGETING_VERBS:
+        if text[max(0, pos - len(v)):pos] == v:
+            return True
+    return False
 # 复合方位词前缀剥离：LLM 写「面向画右的杨旭」时 target="画右的杨旭" 长 5 字 + 含"的"
 # → _is_person_target 拒绝（>4 字或含非汉字）。剥离画X/前方/上方/水面 等前缀后留"杨旭"。
 _FACING_PREFIX_RE = re.compile(
@@ -222,17 +249,30 @@ class FacingToGazeConstraint(Constraint):
                     # ② x_name 后已紧跟视线动词（该角色已建立 gaze）→ 跳过
                     if _has_own_gaze_after(v, m.end()):
                         continue
-                    # ③ 插入点分句边界后已是 gaze 短语（前一个 pair 刚注入）→ 跳过，
+                    # ②' v6.50：x_name 是动作宾语（「刺向杨旭」的杨旭）→ 跳过，
+                    #    该出现位不是子句主语（避免「刺向杨旭胸口，目光凝望刺客」）
+                    if _is_action_object(v, m.start()):
+                        continue
+                    # ③ 插入点分句边界后已是 gaze/朝向 短语（前一个 pair 刚注入）→ 跳过，
                     #    避免相邻两处「目光凝望A，目光凝望B」读作同主语双向看
                     after_boundary = v[insert_at:insert_at + 12]
                     if any(after_boundary.startswith(pre + verb)
-                           for pre in ("", "，", ",") for verb in ("目光凝望", "凝望")):
+                           for pre in ("", "，", ",")
+                           for verb in _F2G_INSERT_MARKERS):
                         continue
                     # 防重复追加
                     tail = v[insert_at:insert_at + 20]
-                    if "目光凝望" in tail and target in tail:
+                    if any(mk in tail for mk in _F2G_INSERT_MARKERS) and target in tail:
                         continue
-                    suffix = f"，目光凝望{target}"
+                    # v6.50 动作子句分策略：插入点所在分句含强动作动词 → 插
+                    # 「身体朝向」（物理成立）；静态分句 → 「目光凝望」（视线）
+                    clause_start = m.start()
+                    while clause_start > 0 and v[clause_start - 1] not in "，。；！？":
+                        clause_start -= 1
+                    clause = v[clause_start:insert_at]
+                    marker_word = ("身体朝向" if any(w in clause for w in _ACTION_CLAUSE_VERBS)
+                                   else "目光凝望")
+                    suffix = f"，{marker_word}{target}"
                     new_v = v[:insert_at] + suffix + v[insert_at:]
                     if new_v != v:
                         if target_key.startswith("keyframes["):

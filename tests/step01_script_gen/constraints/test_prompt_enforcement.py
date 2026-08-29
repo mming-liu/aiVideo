@@ -322,3 +322,41 @@ def test_head_fix_mid_sentence_boundary():
     assert _needs_head_fix(text)
     out = _append_head_fix(text)
     assert "杨旭袒腹仰卧于船头，仰面朝上双目紧闭，头颈僵直不侧转。" in out
+
+
+# ============================================================================
+# v6.50（08-29）：shot13.5 变体——lying 词表收窄 + 否定/直立双守卫
+# ============================================================================
+
+def test_head_fix_no_trigger_on_broad_words_removed():
+    """「失神」已从 LYING 词表移除——俯首者不触发头固定."""
+    from step01_script_gen.constraints.v6_43_prompt_enforcement import _needs_head_fix
+
+    assert _needs_head_fix("听香捂着脸含泪俯首，目光凝望张十三，不敢仰视，失神。") is False
+
+
+def test_head_fix_skips_upright_conflict_sentence():
+    """匹配所在句含直立词（俯首）→ 不追加（宁可漏加不误拼）."""
+    from step01_script_gen.constraints.v6_43_prompt_enforcement import _append_head_fix, _needs_head_fix
+
+    text = "听香捂着脸含泪俯首，吓得几乎昏迷。"
+    assert _needs_head_fix(text)
+    assert _append_head_fix(text) == text
+
+
+def test_head_fix_skips_negation_prefix():
+    """「并未昏迷」→ 不追加."""
+    from step01_script_gen.constraints.v6_43_prompt_enforcement import _append_head_fix, _needs_head_fix
+
+    text = "杨旭靠在船舷，并未昏迷，呼吸平稳"
+    assert _needs_head_fix(text)
+    assert _append_head_fix(text) == text
+
+
+def test_head_fix_multi_sentence_targets_second_match():
+    """第一句被守卫拦下、第二句合法 → 插到第二句的仰卧主语后."""
+    from step01_script_gen.constraints.v6_43_prompt_enforcement import _append_head_fix
+
+    out = _append_head_fix("听香捂脸俯首，吓得几乎昏迷。杨旭仰卧船头，钓竿垂入水面")
+    assert "吓得几乎昏迷，仰面朝上" not in out
+    assert "杨旭仰卧船头，仰面朝上双目紧闭，头颈僵直不侧转，钓竿垂入水面" in out

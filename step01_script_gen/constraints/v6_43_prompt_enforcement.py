@@ -76,6 +76,17 @@ def _needs_head_fix(text: str) -> bool:
 _EYE_OPEN_WORDS = ("双眼圆睁", "双目圆睁", "双目暴睁", "瞪", "睁眼", "双眼瞪")
 
 
+# v6.50（08-29）shot13.5 变体双守卫：
+# 1) 否定前缀——「并未昏迷/不曾熟睡」说的是“没躺”，不能追加头固定
+_NEGATION_PREFIX = ("不", "未", "没", "莫", "勿", "非")
+# 2) 直立/起身冲突——匹配子句已含身体朝向词时，追加「仰面朝上」直接矛盾
+#    （shot13.5 实测：听香「捂着脸含泪俯首…失神」被拼进「仰面朝上双目紧闭」）
+_UPRIGHT_CONFLICT_WORDS = (
+    "俯首", "低头", "垂首", "埋头", "俯身", "躬身",
+    "抬头", "仰起", "起身", "坐起", "站起", "抬起", "直起身", "挺直",
+)
+
+
 def _append_head_fix(text: str) -> str:
     """在「仰卧」主语所在子句后追加头部固定（不追加到整段末尾）.
 
@@ -84,29 +95,43 @@ def _append_head_fix(text: str) -> str:
     双目紧闭」——头部固定被接到了呼喊者/小舟上）。改为：定位「仰卧」
     匹配处，找其后的第一个子句边界——逗号后插入（延续同一主语），
     句末标点前插入（保持同句），全文无边界才回落到末尾追加。
+
+    v6.50（08-29）shot13.5 变体守卫：遍历所有匹配，逐一过否定前缀 +
+    直立冲突两道守卫，全部被守卫拦下则不追加（留给修复轮/LLM 裁决）。
     """
     suffix = "仰面朝上双目紧闭，头颈僵直不侧转"
     # 不重复追加（幂等）
     if "仰面朝上双目紧闭" in text:
         return text
-    m = _LYING_NO_HEAD_FIX.search(text)
-    if not m:
-        return text.rstrip("。,，. ") + "，" + suffix
-    # 仰卧主语所在子句已含睁眼态 → 不追加（避免「双目紧闭」紧邻「双眼圆睁」）
-    clause_start = m.start()
-    while clause_start > 0 and text[clause_start - 1] not in "。；！？；":
-        clause_start -= 1
-    clause = text[clause_start : m.end() + 20]
-    if any(w in clause for w in _EYE_OPEN_WORDS):
-        return text
-    i = m.end()
-    while i < len(text) and text[i] not in "，。；！？、":
-        i += 1
-    if i >= len(text):
-        return text.rstrip("。,，. ") + "，" + suffix
-    if text[i] in "，、":
-        return text[: i + 1] + suffix + "，" + text[i + 1 :]
-    return text[:i] + "，" + suffix + text[i:]
+    for m in _LYING_NO_HEAD_FIX.finditer(text):
+        # 守卫 1：否定前缀（并未昏迷/不曾熟睡）
+        prefix = text[max(0, m.start() - 1): m.start()]
+        if prefix and prefix in _NEGATION_PREFIX:
+            continue
+        # 守卫 2：匹配**所在句**（回扫到句首——子句级会漏掉同句前位主语的
+        # 直立描述，shot13.5「听香捂着脸含泪俯首，吓得几乎昏迷」实测）含
+        # 直立/起身词 → 追加「仰面朝上」直接矛盾。回扫到句首宁可漏加
+        # （安全侧），不误拼。
+        clause_start = m.start()
+        while clause_start > 0 and text[clause_start - 1] not in "。；！？":
+            clause_start -= 1
+        clause = text[clause_start: m.end() + 12]
+        if any(w in clause for w in _UPRIGHT_CONFLICT_WORDS):
+            continue
+        # 守卫 3：仰卧主语子句已含睁眼态 → 不追加（「双目紧闭」紧邻「双眼圆睁」）
+        if any(w in clause for w in _EYE_OPEN_WORDS):
+            continue
+        # 两道守卫都通过 → 在该匹配的子句后追加
+        i = m.end()
+        while i < len(text) and text[i] not in "，。；！？、":
+            i += 1
+        if i >= len(text):
+            return text.rstrip("。,，. ") + "，" + suffix
+        if text[i] in "，、":
+            return text[: i + 1] + suffix + "，" + text[i + 1:]
+        return text[:i] + "，" + suffix + text[i:]
+    # 所有匹配都被守卫拦下 → 不追加
+    return text
 
 
 # === 规则 3：kf pre 与 ff_desc 文本重叠 >70% → 强制改写 ===

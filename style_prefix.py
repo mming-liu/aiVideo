@@ -39,25 +39,25 @@ NEGATIVE_PROMPT = "动漫风格、动画、2D渲染、卡通脸、卡通人物�
 IMAGE_HALLUCINATION_LOCK_PROMPT = (
     "identity locked, same face, consistent facial structure, fixed costume, "
     "no extra objects, consistent scene layout, "
-    "面部锁定，統一五官，固定服裝，無多餘雜物，場景布局不變"
+    "面部锁定，统一五官，固定服装，无多余杂物，场景布局不变"
 )
 
 # 图片防幻觉锁图 - 尾帧/关键帧版（解除"场景布局不变"锁）
 # 尾帧/关键帧需表现动作演变与构图变化，若沿用带"布局不变"的完整锁图，
 # 再叠加首帧整图参考，构图会被锁死在首帧上，三帧雷同、动作无法推进。
-# 保留五官/服装/杂物锁定，去掉 "consistent scene layout / 場景布局不變"。
+# 保留五官/服装/杂物锁定，去掉 "consistent scene layout / 场景布局不变"。
 IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT = (
     "identity locked, same face, consistent facial structure, fixed costume, "
     "no extra objects, "
-    "面部锁定，統一五官，固定服裝，無多餘雜物"
+    "面部锁定，统一五官，固定服装，无多余杂物"
 )
 
 # 图片防幻觉追加负向词（追加到现有负向词）
 IMAGE_HALLUCINATION_EXTRA_NEGATIVE = (
-    "換臉、五官變形、臉型改變、五官錯位、多指、畸形手腳、扭曲肢體、"
-    "漂浮物體、憑空多出家具、多餘擺件、亂加裝飾、服裝花紋突變、"
-    "發色改變、妝容變化、畫面文字、水印、塗鴉、場景結構錯亂、"
-    "人物大小忽大忽小、多餘人物、模糊五官"
+    "換臉、五官变形、臉型改变、五官錯位、多指、畸形手腳、扭曲肢體、"
+    "漂浮物体、凭空多出家具、多余摆件、乱加裝饰、服装花紋突变、"
+    "發色改变、妝容变化、畫面文字、水印、塗鴉、场景結構錯亂、"
+    "人物大小忽大忽小、多余人物、模糊五官"
 )
 
 # ===========================================================================
@@ -69,8 +69,8 @@ NEGATIVE_PROMPT_CN = NEGATIVE_PROMPT.replace(
     "English text, watermark, logo, English speech、", ""
 )
 # 图片锁图正向词纯中文版（英文半句仅 Agnes 用，中文模型读中文即可）
-IMAGE_HALLUCINATION_LOCK_PROMPT_CN = "面部锁定，統一五官，固定服裝，無多餘雜物，場景布局不變"
-IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT_CN = "面部锁定，統一五官，固定服裝，無多餘雜物"
+IMAGE_HALLUCINATION_LOCK_PROMPT_CN = "面部锁定，统一五官，固定服装，无多余杂物，场景布局不变"
+IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT_CN = "面部锁定，统一五官，固定服装，无多余杂物"
 
 
 def video_negative_prompt() -> str:
@@ -1423,7 +1423,10 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
         if char_names:
             # 威胁源以水下黑影/刀尖呈现时，黑影是剧情要素，不在禁用之列——
             # 否则"禁止…黑影"与 ff_desc「水下黑影轮廓」直接打架，模型被搞乱。
-            _banned_tail = ("禁止出现任何其他人物、人影。"
+            # v6.50：不可见威胁时补正向锚（黑影保持暗影轮廓不画成人形），
+            # 消除「禁人影 vs 画黑影」的模型侧歧义。
+            _banned_tail = ("禁止出现任何其他人物、人影。黑影为剧情威胁伏笔，"
+                            "只画水下暗影轮廓，禁止画成完整人形。"
                             if _threat_invisible_only
                             else "禁止出现任何其他人物、黑影、人影。")
             strict_constraints += (

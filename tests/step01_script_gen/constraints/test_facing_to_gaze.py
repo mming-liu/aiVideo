@@ -239,3 +239,70 @@ def test_constraint_attributes():
     assert c.name == "facing_to_gaze"
     assert c.severity == Severity.WARN
     assert "prompt" in c.fields
+
+
+# ============================================================================
+# v6.50（08-28）：动作子句分策略——强动作动词子句插「身体朝向」非「目光凝望」
+# ============================================================================
+
+def test_action_clause_inserts_body_orientation():
+    """「倒纵入水」动作子句 → 身体朝向（后空翻中「目光凝望」物理荒谬）."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=1,
+            motion_desc="刺客双腿并拢倒纵入水，身影半没入水面",
+            char_layout=[{"name": "刺客", "position": "画右前景", "facing": "面向杨旭", "role": "主"}],
+        ),
+    ])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.facing_to_gaze import FacingToGazeConstraint
+
+    FacingToGazeConstraint().apply(ctx)
+
+    out = script["shots"][0]["motion_desc"]
+    assert "身体朝向杨旭" in out
+    assert "目光凝望" not in out
+
+
+def test_static_clause_still_inserts_gaze():
+    """静态子句（跪坐）→ 仍插「目光凝望」表达视线."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=1,
+            motion_desc="听香跪坐船板，双手撑地，语无伦次",
+            char_layout=[{"name": "听香", "position": "画左", "facing": "面向张十三", "role": "次"}],
+        ),
+    ])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.facing_to_gaze import FacingToGazeConstraint
+
+    FacingToGazeConstraint().apply(ctx)
+
+    assert "目光凝望张十三" in script["shots"][0]["motion_desc"]
+
+
+def test_action_clause_insert_idempotent():
+    """身体朝向注入后二次运行不重复追加（幂等标记覆盖两个 marker）."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=1,
+            motion_desc="刺客双腿并拢倒纵入水",
+            char_layout=[{"name": "刺客", "position": "画右", "facing": "面向杨旭", "role": "主"}],
+        ),
+    ])
+    from step01_script_gen.constraints.facing_to_gaze import FacingToGazeConstraint
+
+    c = FacingToGazeConstraint()
+    c.apply(make_ctx(script))
+    once = script["shots"][0]["motion_desc"]
+    repairs2 = c.apply(make_ctx(script))
+
+    assert repairs2 == []
+    assert script["shots"][0]["motion_desc"] == once
+    assert once.count("身体朝向") == 1

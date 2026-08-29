@@ -54,6 +54,7 @@ from .post_combat_blank import PostCombatBlankConstraint  # F6 打斗战后空�
 from .restrained_emotion_chain import RestrainedEmotionChainConstraint  # F7 克制情绪时间链（v6.49, 08-28）
 from .climax_priority import ClimaxPriorityConstraint  # F8 高潮优先（v6.49, 08-28）
 from .short_shot_merge import ShortShotMergeConstraint  # F9 短镜合并（v6.49, 08-28）
+from .ff_lf_temporal import FfLfTemporalConstraint  # F10 ff/lf 时序协议（v6.50, 08-28）
 
 ALL_CONSTRAINTS.extend([
     # Phase 2
@@ -102,6 +103,7 @@ ALL_CONSTRAINTS.extend([
     RestrainedEmotionChainConstraint(),  # F7 克制情绪时间链（v6.49, 08-28）
     ClimaxPriorityConstraint(),  # F8 高潮优先（v6.49, 08-28）
     ShortShotMergeConstraint(),  # F9 短镜合并 HARD（v6.49, 08-28）
+    FfLfTemporalConstraint(),  # F10 ff 时序协议：本镜有攻击时 ff 禁结束态（v6.50, 08-28）
     SelfReviewConstraint(),  # SR opt-in via SELF_REVIEW_ENABLED=1
 ])
 
