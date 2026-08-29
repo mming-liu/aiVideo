@@ -163,3 +163,45 @@ def test_rewrites_gaze_with_stare_at_sky():
 
     assert len(repairs) >= 1
     assert "仰望画上方天空" in script["shots"][0]["prompt"]
+
+
+# === v6.49 扩展测试（08-28 跑批实测 11/11 视线方向 WARN） ===
+
+def test_rewrites_gaze_with_water_v6_49():
+    """v6.49 扩展：「望向前方水面」/「望向水湾」/「望水面垂钓」→ 「俯视画下方水面」.
+
+    旧规则「望水」太严，含中间修饰词（"向前方"/"水湾"/"垂钓"）时不匹配
+    → 11/11 镜刷屏 WARN。v6.49 改 regex 允许中间 ≤8 字修饰。
+    """
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    cases = [
+        ("望向前方水面", "俯视画下方水面"),
+        ("望向水湾 箫", "俯视画下方水面"),
+        ("望水面垂钓", "俯视画下方水面"),
+    ]
+    from step01_script_gen.constraints.gaze_direction import GazeDirectionConstraint
+    c = GazeDirectionConstraint()
+    for src, expected in cases:
+        script = make_script([
+            make_shot(index=1, prompt=src, ff_desc="", lf_desc=""),
+        ])
+        ctx = make_ctx(script)
+        c.apply(ctx)
+        result = script["shots"][0]["prompt"]
+        assert expected in result, f"src={src!r} expected={expected!r} got={result!r}"
+
+
+def test_rewrites_gaze_simple_water_still_works():
+    """v6.49 改动后旧 case「望水」仍生效（向后兼容）."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(index=1, prompt="[中景] 他望水", ff_desc="", lf_desc=""),
+    ])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.gaze_direction import GazeDirectionConstraint
+
+    GazeDirectionConstraint().apply(ctx)
+
+    assert "俯视画下方水面" in script["shots"][0]["prompt"]

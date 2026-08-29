@@ -2,7 +2,7 @@
 
 L1 prompt 规则失声时（长 prompt 后段不被 LLM 关注）的确定性兜底：
 1. 「小舟/木舟/船/一叶舟」 → 「一叶无篷舴艋舟（宽1.4米，可容3人）」
-2. 「仰卧」无头部固定 → 追加「仰面朝上双目紧闭，头颈僵直不侧转」
+2. 「仰卧」无头部固定 → 在仰卧主语所在子句后追加「仰面朝上双目紧闭，头颈僵直不侧转」
 3. kf pre 与 ff_desc 文本重叠 >70% → 强制改写为构图级细节
 4. char_layout 抽象位置（身旁/旁边/其侧）+ 该镜 location 场景具象词 → 改具象
 5. threat_source 角色 facing 含「背对镜头」→ 改「侧身朝目标」（规则 41）
@@ -71,13 +71,42 @@ def _needs_head_fix(text: str) -> bool:
     return True
 
 
+# 睁眼态词：仰卧子句内已有时不再追加「双目紧闭」（避免相邻自相矛盾，
+# 如「仰卧船头，双眼圆睁」+「双目紧闭」——留给 LLM/修复轮裁决）
+_EYE_OPEN_WORDS = ("双眼圆睁", "双目圆睁", "双目暴睁", "瞪", "睁眼", "双眼瞪")
+
+
 def _append_head_fix(text: str) -> str:
-    """在「仰卧」类描述后追加头部固定."""
-    suffix = "，仰面朝上双目紧闭，头颈僵直不侧转"
+    """在「仰卧」主语所在子句后追加头部固定（不追加到整段末尾）.
+
+    v6.50 修复：旧版把后缀接到整段末尾，多角色句中会修饰到错误主语
+    （实测「听香……张嘴欲呼，仰面朝上双目紧闭」「无篷舴艋舟……仰面朝上
+    双目紧闭」——头部固定被接到了呼喊者/小舟上）。改为：定位「仰卧」
+    匹配处，找其后的第一个子句边界——逗号后插入（延续同一主语），
+    句末标点前插入（保持同句），全文无边界才回落到末尾追加。
+    """
+    suffix = "仰面朝上双目紧闭，头颈僵直不侧转"
     # 不重复追加（幂等）
     if "仰面朝上双目紧闭" in text:
         return text
-    return text.rstrip("。,，. ") + suffix
+    m = _LYING_NO_HEAD_FIX.search(text)
+    if not m:
+        return text.rstrip("。,，. ") + "，" + suffix
+    # 仰卧主语所在子句已含睁眼态 → 不追加（避免「双目紧闭」紧邻「双眼圆睁」）
+    clause_start = m.start()
+    while clause_start > 0 and text[clause_start - 1] not in "。；！？；":
+        clause_start -= 1
+    clause = text[clause_start : m.end() + 20]
+    if any(w in clause for w in _EYE_OPEN_WORDS):
+        return text
+    i = m.end()
+    while i < len(text) and text[i] not in "，。；！？、":
+        i += 1
+    if i >= len(text):
+        return text.rstrip("。,，. ") + "，" + suffix
+    if text[i] in "，、":
+        return text[: i + 1] + suffix + "，" + text[i + 1 :]
+    return text[:i] + "，" + suffix + text[i:]
 
 
 # === 规则 3：kf pre 与 ff_desc 文本重叠 >70% → 强制改写 ===
@@ -412,8 +441,13 @@ class V643PromptEnforcementConstraint(Constraint):
             # 重构为通用语义层：新增 prop/角色/场景只改 prompt_semantic/registry.py
             # 数据表，不改代码。详见 step01_script_gen/prompt_semantic/ 包。
             fixed += self._run_semantic_normalizer(shot, is_hook)
-        # v6.42 框架要求 list[RepairRecord]；修复次数已通过 _log_repair_count
-        # 在 engine 层 log 报告，此处返回空 list（保持向后兼容旧的 int 计数）。
+        # v6.42 框架要求 list[RepairRecord]；按修复次数填占位记录（engine
+        # 层走 repairs_by_constraint 计数，不消费元素内容）。
+        if fixed > 0:
+            return [RepairRecord(
+                constraint_name=self.name, shot_index=None,
+                action="rewrite", target="multi", before="", after="",
+            )] * fixed
         return []
 
     def _log_repair_count(self, count: int) -> None:

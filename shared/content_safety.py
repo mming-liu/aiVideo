@@ -120,6 +120,9 @@ def sanitize(text: str) -> str:
     """替换可能触发内容审核的敏感词（长词优先，防短词误伤长词）.
 
     唯一入口：style_prefix.sanitize_prompt 与 content_policy_fix 都复用此实现。
+    替换后统一折叠「替换值前缀与前置文本重叠」产生的叠词
+    （v6.50：治「一片暗红血迹」→「血迹→暗红痕迹」→「一片暗红暗红痕迹」，
+    08-20 评估记 14 处；逐个补长组合 key 是打地鼠）。
     """
     out = text
     for old, new in sorted(
@@ -127,7 +130,37 @@ def sanitize(text: str) -> str:
     ):
         if old in out:
             out = out.replace(old, new)
-    return out
+    return collapse_doubled_tokens(out)
+
+
+# ========================================================================
+# 替换重叠折叠（v6.50，08-28）
+# 「暗红」+「血迹→暗红痕迹」=「暗红暗红痕迹」这类立即重复的双字词统一折叠。
+# 合法叠词（汉语正常重叠形式：慢慢/层层/粼粼…）白名单不折叠。
+# ========================================================================
+import re as _re
+
+_LEGIT_REDUP = frozenset((
+    "慢慢", "轻轻", "渐渐", "缓缓", "淡淡", "静静", "紧紧", "深深", "重重",
+    "密密", "高高", "远远", "久久", "刚刚", "常常", "往往", "统统", "仅仅",
+    "微微", "悄悄", "默默", "徐徐", "悠悠", "纷纷", "茫茫", "层层", "阵阵",
+    "点点", "灼灼", "脉脉", "盈盈", "粼粼", "滚滚", "袅袅", "皎皎", "沉沉",
+    "匆匆", "瑟瑟", "隐隐", "蓬蓬", "幽幽", "泠泠", "淙淙", "萧萧",
+    "猎猎", "熠熠", "凛凛", "晃晃", "飘飘",
+))
+_DOUBLED_TOKEN_RE = _re.compile(r"([\u4e00-\u9fff]{2})\1")
+
+
+def collapse_doubled_tokens(text: str) -> str:
+    """折叠立即重复的双字词（「暗红暗红」→「暗红」），合法叠词保留."""
+    if not text or len(text) < 4:
+        return text
+
+    def _collapse(m):
+        tok = m.group(1)
+        return m.group(0) if tok in _LEGIT_REDUP else tok
+
+    return _DOUBLED_TOKEN_RE.sub(_collapse, text)
 
 
 # ========================================================================

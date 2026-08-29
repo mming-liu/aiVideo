@@ -50,6 +50,36 @@ def test_is_idempotent():
     assert repairs2 == []
 
 
+def test_appends_all_roles_and_pads_when_very_short():
+    """超短 lf_desc + 多角色 → 追加全部角色站位（≥40 字）.
+
+    v6.47：原只追加第一个角色，base 太短时仍 <40 字（镜3/5/10 实测 33-39 字）。
+    """
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=1,
+            prompt="[中景] 对峙",
+            lf_desc="张十三放下灯盏，推门走向湾堤。",  # 15 字
+            char_layout=[
+                {"name": "张十三", "position": "画右", "facing": "杨旭"},
+                {"name": "杨旭", "position": "画左", "facing": "张十三"},
+            ],
+        ),
+    ])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.lf_desc_length import LfDescLengthConstraint
+
+    repairs = LfDescLengthConstraint().apply(ctx)
+
+    assert len(repairs) >= 1
+    lf = script["shots"][0]["lf_desc"]
+    assert len(lf) >= 40
+    assert "张十三位于画右" in lf
+    assert "杨旭位于画左" in lf
+
+
 def test_skips_when_lf_already_long():
     """lf_desc ≥ 40 字 → 0 修复."""
     from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot

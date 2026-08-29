@@ -105,14 +105,31 @@ class MultiCharLayoutDepthConstraint(Constraint):
             location = str(shot.get("location", "") or shot.get("scene", "") or "")
             depth_pos = _choose_depth_pos(location)
             cnt = 0
+            # v6.49（08-28）扩展：若所有角色都没标 role=次/背景（如 LLM 全写"主"或空），
+            # 取第 2/3/... 个角色强制改纵深，避免「2 角色全画左」漏修（镜3 实测）。
+            has_secondary = any(
+                isinstance(it, dict) and str(it.get("role", "")).strip() in ("次", "背景")
+                for it in layout
+            )
+            seen_sides: list[str] = []
             for item in layout:
                 if not isinstance(item, dict):
                     continue
                 role = str(item.get("role", "")).strip()
-                if role not in ("次", "背景"):
-                    continue
                 pos = str(item.get("position", "")).strip()
                 if pos in _DEPTH_POSITIONS:
+                    continue
+                # 判定「需要改」：role 是次/背景 OR（无次/背景角色 + 本角色非首个）
+                is_target = (
+                    role in ("次", "背景")
+                    or (
+                        not has_secondary
+                        and pos in ("画左", "画右")
+                        and pos in seen_sides
+                    )
+                )
+                if not is_target:
+                    seen_sides.append(pos)
                     continue
                 new_pos = (
                     f"{main_side}{depth_pos}"

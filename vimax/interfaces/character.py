@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Union, Dict
 from PIL import Image
+
+from vimax.interfaces._int_coerce import coerce_int
 
 
 
@@ -9,6 +11,7 @@ class CharacterInScene(BaseModel):
     idx: int = Field(
         description="The index of the character in the scene, starting from 0",
     )
+    _coerce_int_fields = field_validator("idx", mode="before")(coerce_int)
     identifier_in_scene: str = Field(
         description="The identifier for the character in this specific scene, which may differ from the base identifier",
         examples=["Alice", "Bob the Builder"],
@@ -50,6 +53,7 @@ class CharacterInEvent(BaseModel):
     index: int = Field(
         description="The index of the character in the event, starting from 0",
     )
+    _coerce_int_fields = field_validator("index", mode="before")(coerce_int)
     identifier_in_event: str = Field(
         description="The unique identifier for the character in the event",
         examples=["Alice", "Bob the Builder"],
@@ -77,6 +81,7 @@ class CharacterInNovel(BaseModel):
     index: int = Field(
         description="The index of the character in the novel, starting from 0",
     )
+    _coerce_int_fields = field_validator("index", mode="before")(coerce_int)
     identifier_in_novel: str = Field(
         description="The unique identifier for the character in the novel",
         examples=["Alice", "Bob the Builder"],

@@ -126,26 +126,17 @@ def _build_cinematic_vocab() -> str:
     从未声明这些占位符 → 被 .format() 静默忽略，词库实际是死代码、LLM 从未见过。
     改为这里显式拼接成一段，由 build_prompt 在 format 完成后再 append。
     """
+    # v6.43 精简：删 10 个与 knowledge_skills 重复的分类，保留 9 个独有
     sections = [
         ("景别", _format_kv(storyboard_refs.SHOT_SIZES)),
-        ("机位角度", _format_kv(storyboard_refs.CAMERA_ANGLES)),
-        ("运镜方式", _format_kv(storyboard_refs.CAMERA_MOVEMENTS)),
         ("景深/对焦", _format_kv(storyboard_refs.DEPTH_OF_FIELD)),
-        ("光影氛围", _format_kv(storyboard_refs.LIGHTING_MOODS)),
         ("色调", _format_kv(storyboard_refs.COLOR_PALETTES)),
         ("古代服饰", _format_kv(storyboard_refs.ANCIENT_COSTUMES)),
         ("古代场景", _format_kv(storyboard_refs.ANCIENT_LOCATIONS)),
-        ("摄像机分组", _format_kv(storyboard_refs.CAMERA_GROUPING)),
         ("天气", _format_kv(storyboard_refs.WEATHER_TAGS)),
         ("粒子特效", _format_kv(storyboard_refs.PARTICLE_EFFECTS)),
         ("地面物理", _format_kv(storyboard_refs.GROUND_PHYSICS)),
-        ("材质描述", _format_kv(storyboard_refs.TEXTURE_DESCRIPTORS)),
-        ("光照层次", _format_kv(storyboard_refs.LIGHTING_LAYERS)),
-        ("转场方式", _format_kv(storyboard_refs.TRANSITIONS)),
         ("音效提示", _format_kv(storyboard_refs.AUDIO_CUES)),
-        ("运镜参数", _format_kv(storyboard_refs.MOVEMENT_PARAMS)),
-        ("氛围关键词", _format_kv(storyboard_refs.ATMOSPHERE_KEYWORDS)),
-        ("禁止元素", _format_kv(storyboard_refs.BANNED_VISUALS)),
     ]
     lines = ["### 镜头语言词库（从下列词汇中选择合适项，帮助画面描述更专业）"]
     for name, body in sections:
@@ -191,7 +182,7 @@ def build_prompt(novel_text: str, bank=None, objects_bank=None,
         prompt = prompt + local_ctx
 
     # 追加独立知识库 skill：转场技巧 + 材质写实化
-    knowledge_ctx = _load_knowledge_skills()
+    knowledge_ctx = _load_knowledge_skills(novel_text=novel_text)
     if knowledge_ctx:
         prompt = prompt + knowledge_ctx
 
@@ -297,7 +288,7 @@ def _build_audio_instruction() -> str:
             "视频模型会直接为对白生成说话+口型：prompt 中按规则0写自然台词"
             "（说话人道：台词）即可，由模型自行发声。**禁止**添加「（用中文说）」这类指令前缀。\n"
         )
-        return "（VIDEO_MODEL_VOICE=1，声音由视频模型原生生成，无需 prompt 额外指令）"
+    return ""
 
 
 def _duration_cap_guidance() -> str:
@@ -352,63 +343,75 @@ def _load_local_skill_context() -> str:
     return ""
 
 
-def _load_knowledge_skills() -> str:
-    """加载独立知识库 skill 作为 prompt 附加上下文（v6.4：转场技巧 + 材质写实化）."""
+def _load_knowledge_skills(novel_text: str = "") -> str:
+    """加载独立知识库 skill 作为 prompt 附加上下文（v6.43 精简版）.
+
+    v6.43 08-25 优化：
+    - 删 4 个与 cinematic_vocab 重复的 skill（camera/transition/portrait/material）
+    - 3 个通用 skill 默认全注入（seedance-craft / character-performance / story-bible）
+    - 2 个按需 skill（combat-mastery / character-entrance）按 novel_text 关键词检测注入
+
+    Args:
+        novel_text: 章节原文，用于关键词检测（combat / character-entrance 按需加载判断）
+    """
     mod = _get_skills_loader()
     if not mod:
         return ""
     try:
         parts = []
 
+        # === 通用 skill（默认注入） ===
+
         # Seedance 镜头工艺全集（v2.0 合并：13 个 seedance-* 技能）
         craft_body = mod.read_skill("seedance-craft")
         if craft_body:
             parts.append(f"\n\n# Seedance 镜头工艺全集（来自 seedance-craft）\n{craft_body}")
-
-        # 镜头工艺全集（v1.0 合并：advanced-camera-movement + situation-camera + shot-assembling + focal-switch + occlusion-layering）
-        camera_body = mod.read_skill("camera-mastery")
-        if camera_body:
-            parts.append(f"\n\n# 镜头工艺全集（来自 camera-mastery）\n{camera_body}")
-
-        # 过渡工艺全集（v1.0 合并：video-transition + flashback-lens + speed-rhythm）
-        transition_body = mod.read_skill("transition-mastery")
-        if transition_body:
-            parts.append(f"\n\n# 过渡工艺全集（来自 transition-mastery）\n{transition_body}")
-
-        # 打斗工艺全集（v1.0 合并：combat-action + combat-arc + battle-layered + wuxia_combat）
-        combat_body = mod.read_skill("combat-mastery")
-        if combat_body:
-            parts.append(f"\n\n# 打斗工艺全集（来自 combat-mastery）\n{combat_body}")
-
-        # 人像工艺全集（v1.0 合并：portrait-lighting + face-shapes + face-deplastic）
-        portrait_body = mod.read_skill("portrait-mastery")
-        if portrait_body:
-            parts.append(f"\n\n# 人像工艺全集（来自 portrait-mastery）\n{portrait_body}")
 
         # 角色表演工艺全集（v1.0 合并：restrained-emotion + voice-punctuation）
         performance_body = mod.read_skill("character-performance")
         if performance_body:
             parts.append(f"\n\n# 角色表演工艺全集（来自 character-performance）\n{performance_body}")
 
-        # 材质写实化
-        material_body = mod.read_skill("material-realism")
-        if material_body:
-            parts.append(f"\n\n# AI材质写实化提示词（来自 material-realism）\n{material_body}")
-
         # 故事圣经（世界观/人物/主线设定）
         bible_body = mod.read_skill("story-bible")
         if bible_body:
             parts.append(f"\n\n# 故事圣经（来自 story-bible）\n{bible_body}")
 
-        # 人物出场四大方式（远景渺小/背影神秘/细节上摇/特写内心——高光登场选型）
-        entrance_body = mod.read_skill("character-entrance")
-        if entrance_body:
-            parts.append(f"\n\n# 人物出场四大方式（来自 character-entrance）\n{entrance_body}")
+        # === 按需 skill（关键词检测） ===
+
+        if _novel_has_combat(novel_text):
+            combat_body = mod.read_skill("combat-mastery")
+            if combat_body:
+                parts.append(f"\n\n# 打斗工艺全集（来自 combat-mastery）\n{combat_body}")
+
+        if _novel_has_entrance(novel_text):
+            entrance_body = mod.read_skill("character-entrance")
+            if entrance_body:
+                parts.append(f"\n\n# 人物出场四大方式（来自 character-entrance）\n{entrance_body}")
 
         return "".join(parts)
     except Exception:
         pass
     return ""
+
+
+# v6.43 08-25：knowledge_skills 按需加载关键词检测
+_COMBAT_KEYWORDS = ("打斗", "刺杀", "拔剑", "挥刀", "搏斗", "砍", "击", "拳", "剑", "刀", "枪", "厮杀", "搏击", "刺客", "血战")
+_ENTRANCE_KEYWORDS = ("出场", "登场", "亮相", "走入", "缓步", "迈步", "踏出", "下轿", "下马")
+
+
+def _novel_has_combat(novel_text: str) -> bool:
+    """novel_text 是否含打斗关键词（决定是否注入 combat-mastery）."""
+    if not novel_text:
+        return True  # 无 novel_text 时默认注入（保险）
+    return any(kw in novel_text for kw in _COMBAT_KEYWORDS)
+
+
+def _novel_has_entrance(novel_text: str) -> bool:
+    """novel_text 是否含出场关键词（决定是否注入 character-entrance）."""
+    if not novel_text:
+        return True
+    return any(kw in novel_text for kw in _ENTRANCE_KEYWORDS)
 
 
 def _load_gap_analysis_context(validation: dict) -> str:
@@ -449,6 +452,26 @@ def _load_gap_analysis_context(validation: dict) -> str:
         gap_feedback = "\n".join(issues)
         return f"\n\n# 差距分析反馈（来自本地校验）\n{gap_feedback}\n"
     return ""
+
+
+def _build_regen_iron_rules() -> str:
+    """重生成铁律（v6.47 反馈前置）——GAP/收敛重试时注入反馈区最前.
+
+    长 prompt 后段规则易失声（v6.43 实测 + 08-27 复现：总时长/kf/合规规则被
+    尾部反馈淹没，重试版把时长写塌到 11s、编造原文没有的台词）。重试 prompt
+    必须在反馈前重申非协商规则，作为「本轮拒收标准」。
+    """
+    return (
+        "\n\n# ★ 重生成铁律（最高优先级，违反本轮拒收）\n"
+        "1. **正片分镜 SUM(duration_sec) 必须在 [60s, 90s]**（不含钩子），每镜 4-8s；"
+        "禁止 1-2s 短镜堆叠凑镜头数——写时长时先算 SUM，不足就加长单镜/加反应镜。\n"
+        "2. **台词（narration_segment/subtitle）必须逐字来自原文**——禁止编造原文没有的"
+        "对白（如『凶手是谁？如何击杀了公子』这类原文不存在的台词）。\n"
+        "3. **合规**：禁止「击杀/杀人/尸体」等敏感词，用「出人命/倒地/倒下」替换。\n"
+        "4. **每镜 kf.t_sec 必须在 [0.1, 0.9]×duration_sec 内**——写 kf 前先定 "
+        "duration_sec，不要写绝对值（如 24.5s/44.1s 这种远超单镜时长的值）。\n"
+        "5. **为补覆盖率可以加镜头/扩写镜头，但禁止推翻上一版已通过的内容重写**。\n"
+    )
 
 
 def build_hook_prompt(novel_text: str, bank=None, objects_bank=None,
@@ -497,7 +520,7 @@ def build_hook_prompt(novel_text: str, bank=None, objects_bank=None,
     prompt = prompt.replace("{forbidden_lines}", forbidden_str)
     # 注入知识技能上下文（光位/运镜/转场/材质等），与主分镜保持同一视觉语言。
     # 钩子通常是人物/面部开场特写，正是光位检查的核心场景（8种AI人像专业光位）。
-    knowledge_ctx = _load_knowledge_skills()
+    knowledge_ctx = _load_knowledge_skills(novel_text=novel_text)
     if knowledge_ctx:
         prompt = prompt + knowledge_ctx
     # 视频模型时长上限引导（钩子同样受模型上限约束）

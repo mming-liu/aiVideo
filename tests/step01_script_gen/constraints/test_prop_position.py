@@ -174,3 +174,68 @@ def test_constraint_attributes():
     assert c.name == "prop_spatial_anchor"
     assert c.severity == Severity.WARN
     assert "prompt" in c.fields
+
+
+# ============================================================================
+# v6.50（08-28）：单字道具词边界 + 倒序插入 + 双标记幂等
+# ============================================================================
+
+def test_single_char_prop_not_inserted_into_compound_word():
+    """「剑眉」「箫孔」不得被打洞（08-28 实测「剑（画中）眉星目」）."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    original = "剑眉星目、素白轻袍的杨旭盘膝坐在船头，唇贴箫孔"
+    script = make_script([
+        make_shot(index=1, prompt=original, location="云河镇照月湾荷塘小舟"),
+    ])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.prop_position import PropPositionConstraint
+
+    PropPositionConstraint().apply(ctx)
+
+    assert "剑（画" not in script["shots"][0]["prompt"]
+    assert "箫（画" not in script["shots"][0]["prompt"]
+    assert "剑眉星目" in script["shots"][0]["prompt"]
+    assert "唇贴箫孔" in script["shots"][0]["prompt"]
+
+
+def test_no_double_marker_across_size_anchor():
+    """已有 Size 锚时隔空二次追加 → 双标记（幂等破坏）——20 字内已有「（画」即跳过."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=1,
+            prompt="无篷舴艋舟（画中）（宽1.4米，可容3人）静泊，竹箫（画中）横于唇边",
+            location="云河镇照月湾荷塘小舟",
+        ),
+    ])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.prop_position import PropPositionConstraint
+
+    PropPositionConstraint().apply(ctx)
+
+    p = script["shots"][0]["prompt"]
+    assert p.count("（画中）") == 2  # 不新增
+
+
+def test_prop_position_idempotent_two_passes():
+    """第二遍 0 修复（倒序插入后坐标稳定）."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=1,
+            prompt="杨旭手握竹箫，炭炉摆在甲板，灯笼挂在船舷",
+            location="云河镇照月湾荷塘小舟",
+        ),
+    ])
+    from step01_script_gen.constraints.prop_position import PropPositionConstraint
+
+    c = PropPositionConstraint()
+    c.apply(make_ctx(script))
+    once = script["shots"][0]["prompt"]
+    repairs2 = c.apply(make_ctx(script))
+
+    assert repairs2 == []
+    assert script["shots"][0]["prompt"] == once

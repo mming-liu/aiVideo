@@ -3986,6 +3986,13 @@ def _run_prompt_checklist(script: dict) -> dict:
     results["multi_person_staging"] = _check_multi_person_staging(
         shots, script.get("hook"), script.get("characters"))
 
+    # v6.45 char_layout.surface 必填检查（warning-only）——LLM 漏填 surface
+    # （角色承重面：船尾/甲板/岸边/亭内/...）→ bridge 注入锚定块缺承重信息 →
+    # LLM 自由发挥成船外水面（08-26 hook 0 听香站水里实测）。只告警不修，
+    # 修法交回 prompt schema 必填 + LLM regen。
+    results["char_layout_surface"] = _check_char_layout_surface(
+        shots, script.get("hook"))
+
     # Plan A（2026-08-14）：ff_desc 全锚点检查（规则41/25/13.7，warning-only）——
     # 查「真正的图片输入」而非 prompt；hook 手改教训：ff_desc 缺锚 → 重渲必漂。
     results["ff_desc_anchors"] = _check_ff_desc_anchors(
@@ -4186,9 +4193,14 @@ def _fill_missing_new_fields(script: dict) -> None:
         shot.setdefault("camera_movement", "")
         shot.setdefault("framing", "")
         shot.setdefault("lighting_color", "")
-        shot.setdefault("duration", 1)
+        # v6.47（08-27）：duration 缺省默认 4.0s（原 1s 是误导性退化值——LLM 常漏写
+        # duration，parse 阶段红果检查读到 1s×N 报「总时长 16s」，实际 _compute_timecodes
+        # 会按 motion_desc/对白/4s 旁白重算。4.0 = 纯旁白固定时长下限，更接近最终值）。
+        shot.setdefault("duration", 4.0)
+        # fx_effect（schema required，LLM 常漏写）缺省置空避免「缺少字段」误报
+        shot.setdefault("fx_effect", "")
         # duration_sec：视频时长权威来源，缺省时与 duration 同值（timecode 后续会覆盖）
-        shot.setdefault("duration_sec", shot.get("duration", 1))
+        shot.setdefault("duration_sec", shot.get("duration", 4.0))
         shot.setdefault("negative_prompt", "")
         shot.setdefault("hook", "")
         shot.setdefault("time_stamp", "")
@@ -4203,8 +4215,9 @@ def _fill_missing_new_fields(script: dict) -> None:
         hook.setdefault("camera_movement", "")
         hook.setdefault("framing", "")
         hook.setdefault("lighting_color", "")
-        hook.setdefault("duration", 1)
-        hook.setdefault("duration_sec", hook.get("duration", 1))
+        hook.setdefault("duration", 4.0)
+        hook.setdefault("fx_effect", "")
+        hook.setdefault("duration_sec", hook.get("duration", 4.0))
         hook.setdefault("negative_prompt", "")
         hook.setdefault("time_stamp", "")
         hook.setdefault("char_layout", [])   # Plan A（2026-08-14）：与 _SHOT 对称
@@ -4545,7 +4558,12 @@ _GAZE_FALLBACK_RULES = [
     # (匹配正则, 改写为) — 顺序敏感，先具体后泛化
     (re.compile(r"望满天星斗|仰望星斗|望星斗"), "仰望画上方星空"),
     (re.compile(r"看向?天|望天"), "仰望画上方天空"),
-    (re.compile(r"看向?水|望水"), "俯视画下方水面"),
+    # v6.49（08-28）扩展：原规则「望水」太严，"望向前方水面"/"望向水湾"/"望水面垂钓"
+    # 等含中间修饰词的"望+水面"无法匹配 → 11/11 视线方向 WARN 刷屏。
+    # 改为「望(?:向)?[^，。；]{0,8}水」允许中间最多 8 字修饰。
+    # v6.50（08-28）补 `面?`：原文「呆望画下方水面」匹配止于「水」、遗留「面」，
+    # 拼出「俯视画下方水面面」（hook lf_desc 实测）——把尾字一并吞掉。
+    (re.compile(r"望(?:向)?[^，。；]{0,8}水面?"), "俯视画下方水面"),
     (re.compile(r"看向?远|望远方"), "凝望画面深处"),
     (re.compile(r"看向?地|望地"), "俯视画下方地面"),
     # 通用代词兜底（不写死角色名）
@@ -4914,6 +4932,9 @@ def _hard_fix_injury_continuity(shots: list) -> int:
     返回改写镜头数。
     """
     # 找致命伤建立镜（第一个 prompt/ff_desc/lf_desc 含 anchor 词）
+    from step01_script_gen.prompt_semantic.registry import (
+        MAIN_SUBJECT_PREFIXES, INJURY_ANCHOR_WORDS, STRONG_INJURY_ANCHORS, is_threat_name,
+    )
     build_idx = None
     build_loc = None
     for i, s in enumerate(shots):
@@ -4949,8 +4970,7 @@ def _hard_fix_injury_continuity(shots: list) -> int:
         ]
         if main_raw and "的" not in main_raw:
             stripped = main_raw
-            for prefix in ("刺杀", "被刺", "倒地", "躺血", "奄奄一息", "濒死", "受伤", "倒下",
-                           "刺客", "神秘人", "黑影", "破水", "出水", "破门", "夜袭"):
+            for prefix in MAIN_SUBJECT_PREFIXES:
                 stripped = stripped.replace(prefix, "")
             stripped = stripped.strip()
             # 关键：剥离结果必须与 char_layout 里的某个 name 完全匹配，才视为有效 victim
@@ -4959,7 +4979,6 @@ def _hard_fix_injury_continuity(shots: list) -> int:
                 victim_names.append(stripped)
         # 来源②+③：build_idx 镜头的 char_layout role=次 角色（刺客/施动者通常 role=主，被打者=次）
         # 限制 victim_names 最多 1 个：被打者是 build_idx 镜头的"主要受害角色"，唯一
-        threat_keywords = ("刺客", "神秘人", "黑影", "蒙面", "匪")
         # 优先从 main_subject 剥离（来源① 已经填），如空再从 char_layout role=次 找
         if not victim_names:
             for item in (build_shot.get("char_layout") or []):
@@ -4969,28 +4988,29 @@ def _hard_fix_injury_continuity(shots: list) -> int:
                 role = str(item.get("role", "")).strip()
                 if not nm or role != "次":
                     continue
-                if any(t in nm for t in threat_keywords):
+                if is_threat_name(nm):
                     continue
                 victim_names.append(nm)
                 break  # 只取第一个 role=次 非 threat 角色
         # 来源④：build_idx 自己的 prompt/lf_desc 里紧邻 anchor 词的人物名
         # （"杨旭胸口已现暗红洇痕" → 命中"杨旭"）。仅在以上源都空时使用。
         if not victim_names:
+            anchor_alt = "|".join(re.escape(w) for w in INJURY_ANCHOR_WORDS)
             anchor_nearby = re.findall(
-                r"([一-鿿]{2,3})(?:胸口|心口|心窝|腹部|中刀|中剑|中枪|刀伤|剑伤|洇痕|暗伤|血痕)",
+                r"([一-鿿]{2,3})(?:" + anchor_alt + r")",
                 (build_shot.get("prompt", "") or "") + (build_shot.get("lf_desc", "") or ""),
             )
             for nm in anchor_nearby:
-                if nm not in threat_keywords and nm not in victim_names:
+                if not is_threat_name(nm) and nm not in victim_names:
                     victim_names.append(nm)
                     break
-        # 防御：若仍空，至少从 char_layout 找"杨旭"作兜底（v6.40 chapter_001 主受害角色）
+        # 防御：若仍空，至少从 char_layout 找主受害角色
         if not victim_names:
             for item in (build_shot.get("char_layout") or []):
                 if not isinstance(item, dict):
                     continue
                 nm = str(item.get("name", "")).strip()
-                if nm and nm not in threat_keywords:
+                if nm and not is_threat_name(nm):
                     victim_names.append(nm)
                     break
         # 兜底：从 char_layout 找 "role=主" 角色作为 victim
@@ -5017,12 +5037,8 @@ def _hard_fix_injury_continuity(shots: list) -> int:
         # 同步追加到 prompt + lf_desc（只要受害者在这两个字段出现）
         # 收紧 anchor 判定：必须出现"洇痕/中刀/中剑/刀伤/剑伤/中枪"才算真致命伤锚定；
         # 单独出现"暗红/白袍"可能是听香手指沾血或衣服被水打湿，误判会漏补。
-        _STRONG_INJURY_ANCHORS = (
-            "洇痕", "中刀", "中剑", "中枪", "刀伤", "剑伤",
-            "血痕", "血斑", "溅血", "中伤", "倒卧", "倒地",
-        )
-        prompt_has_anchor = any(w in prompt for w in _STRONG_INJURY_ANCHORS)
-        lf_has_anchor = lf and any(w in lf for w in _STRONG_INJURY_ANCHORS)
+        prompt_has_anchor = any(w in prompt for w in STRONG_INJURY_ANCHORS)
+        lf_has_anchor = lf and any(w in lf for w in STRONG_INJURY_ANCHORS)
         changed = False
         if not prompt_has_anchor:
             s["prompt"] = prompt.rstrip("。") + f"。{_INJURY_ANCHOR_TAIL}"
@@ -5060,7 +5076,12 @@ def _hard_fix_kneel_beside_victim(shots: list, hook: dict | None = None) -> int:
     """
     if not shots and not hook:
         return 0
-    # 收集 4 字段里"受害者"角色名：紧邻"仰卧/躺/倒"等词的角色名
+    from step01_script_gen.prompt_semantic.registry import (
+        POSE_REGISTRY, is_threat_name,
+    )
+    # 收集 4 字段里"受害者"角色名：紧邻躺卧词（POSE_REGISTRY["reclining"]）的角色名
+    reclining_alt = "|".join(re.escape(w) for w in POSE_REGISTRY["reclining"])
+    victim_re = re.compile(r"([一-鿿]{2,3})(?:" + reclining_alt + r")")
     victims: set[str] = set()
     for s in list(shots) + ([hook] if hook and isinstance(hook, dict) else []):
         text = " ".join(filter(None, [
@@ -5069,9 +5090,9 @@ def _hard_fix_kneel_beside_victim(shots: list, hook: dict | None = None) -> int:
             s.get("motion_desc", "") or "",
             s.get("prompt", "") or "",
         ]))
-        for m in re.finditer(r"([一-鿿]{2,3})(?:仰卧|仰面|倒地|倒下|倒卧|躺在|躺于)", text):
+        for m in victim_re.finditer(text):
             nm = m.group(1)
-            if not any(t in nm for t in ("刺客", "神秘人", "黑影", "蒙面", "匪")):
+            if not is_threat_name(nm):
                 victims.add(nm)
     if not victims:
         return 0
@@ -5098,7 +5119,7 @@ def _hard_fix_kneel_beside_victim(shots: list, hook: dict | None = None) -> int:
             # 找「跪坐/跪在 + 位置词」——命中后改写
             for m in re.finditer(r"(([一-鿿]{2,3}))(?:跪坐|跪在|跪于)(船头|船尾|船梢|船首|船中|甲板|岸上|岸边)", desc):
                 kneeler = m.group(2)
-                if any(t in kneeler for t in ("刺客", "神秘人", "黑影", "蒙面", "匪")):
+                if is_threat_name(kneeler):
                     continue
                 # 受害者自身不会"跪坐"——防「杨旭跪坐船尾」改写成「杨旭跪坐杨旭身侧」
                 if kneeler in victims:
@@ -5138,6 +5159,107 @@ _BOAT_CROP_PATTERNS = (
     re.compile(r"[，,。]?\s*船(?:头|尾)[^。，,]{0,6}(?:在画外|出画外|被截断|被切掉)(?:（[^（）]{0,30}）)?"),
     re.compile(r"[，,。]?\s*船身(?:向画)?[^。，,]{0,3}[左右]方?(?:延伸|探出)(?:[^。，,（）]{0,12})?出画(?:（[^（）]{0,30}）)?"),
 )
+
+
+def _hard_fix_hook_witness_not_killer(hook: dict | None = None,
+                                      script: dict | None = None) -> int:
+    """钩子目击者-凶手视觉歧义硬修复（v6.44，08-26 用户反馈）.
+
+    触发问题：钩子画面里杨旭仰卧船头、胸口插刀/暗红洇痕，**同时**描写听香/某
+    女性「手伸向/摸向/触碰/握向/正要去拔 刀/匕首/凶器」。图片模型照描述画出来
+    就是「凶手在受害人身边处理凶器」的构图——观众一眼会把她读成凶手/栽赃者。
+
+    原文真相（《锦衣夜行》第一回）：刺客从水中跃出刺杨旭、跳回水中不见，听香
+    是目击者/受害者侧——她哆嗦地摸的是**自己濡湿的嘴唇**（沾了杨旭溅出的血），
+    不是凶器。脚本 step01 LLM 反复把听香的手部动作写向刀柄，与原文相悖。
+
+    修法：钩子（hook）4 字段 prompt/ff_desc/lf_desc/motion_desc 里若「X 伸向
+    刀柄/摸向刀/触碰凶器」+ 受害者已死/被刺，X 必须改成「伸向自己濡湿的嘴唇
+    （沾有 Y 溅出的血）」。「血迹是溅到嘴唇上」与「目击者刚目睹凶案」双重信号，
+    让观众明确「她不是凶手、是刚被血溅一脸的受害者/目击者」。
+
+    幂等：① 字段已含「嘴唇」/「舌尖」/「嘴唇沾血」/「摸了摸嘴唇」→ 跳过
+           ② 受害者未死/无胸口刀/无洇痕 → 不触发（健康人物+手部动作不算）
+    返回改写字段数。
+    """
+    if not hook or not isinstance(hook, dict):
+        return 0
+
+    from step01_script_gen.prompt_semantic.registry import (
+        VICTIM_SIGNS, WEAPON_HANDLE_WORDS, POSE_REGISTRY,
+        is_threat_name,
+    )
+
+    # 收集 4 字段文本
+    fields = ("prompt", "ff_desc", "lf_desc", "motion_desc")
+    text = " ".join(str(hook.get(f, "") or "") for f in fields)
+    if not text:
+        return 0
+
+    # 1. 受害者在场判定：VICTIM_SIGNS 至少一条出现（registry 单一事实源）
+    if not any(s in text for s in VICTIM_SIGNS):
+        return 0
+
+    # 2. 受害者名提取（多源融合：script.characters 优先，POSE_REGISTRY 兜底）
+    candidates: list[str] = []
+    if script and isinstance(script, dict):
+        for ch in script.get("characters") or []:
+            ident = ch.get("identifier") if isinstance(ch, dict) else None
+            if ident and not is_threat_name(ident):
+                candidates.append(ident)
+
+    reclining_alt = "|".join(re.escape(w) for w in POSE_REGISTRY["reclining"])
+    victim_pattern = re.compile(
+        r"([一-鿿]{2,4})(?:(" + reclining_alt + r")|被刺|身亡|已死)"
+    )
+
+    victim_name = ""
+    for m in victim_pattern.finditer(text):
+        nm = m.group(1)
+        if candidates:
+            if nm in candidates:
+                victim_name = nm
+                break
+        else:
+            if not is_threat_name(nm) and "人" not in nm:
+                victim_name = nm
+                break
+    if not victim_name:
+        victim_name = "受害人"
+
+    # 3. 已修：检查「嘴唇+血/摸/伸向/沾」组合
+    already_fixed_re = re.compile(
+        r"(嘴唇|唇上|唇角|舌尖).{0,6}(血|沾血|血迹|溅)|"
+        r"(摸了摸?|伸向|摸向|触碰).{0,4}自己.{0,4}(嘴唇|唇上|唇角)|"
+        r"指尖?颤抖.{0,6}(嘴唇|唇上|唇角)"
+    )
+    if already_fixed_re.search(text):
+        return 0
+
+    # 4. 触发：手部伸向/摸向/握向/正要去 凶器（registry: WEAPON_HANDLE_WORDS）
+    # 中间允许 0-8 字（覆盖"X 胸口的"5 字这种"插在受害者身上的凶器"）
+    weapon_alt = "|".join(re.escape(w) for w in WEAPON_HANDLE_WORDS)
+    hand_to_weapon_re = re.compile(
+        r"([一-鿿]{2,3})([^。]*?)(伸向|摸向|握向|伸去|触碰|握住|伸过来|伸过去|正要去拔|正要去|要去拔|就要拔)([^。]{0,8})("
+        + weapon_alt + r")"
+    )
+
+    fixed = 0
+    for field in fields:
+        v = hook.get(field)
+        if not isinstance(v, str) or not v:
+            continue
+        m = hand_to_weapon_re.search(v)
+        if not m:
+            continue
+        span_start = m.start(3)
+        span_end = m.end()
+        replacement = f"伸向自己濡湿的嘴唇（沾有{victim_name}胸口的血）"
+        new_v = v[:span_start] + replacement + v[span_end:]
+        if new_v != v:
+            hook[field] = new_v
+            fixed += 1
+    return fixed
 
 
 def _hard_fix_boat_crop(shots: list, hook: dict | None = None) -> int:
@@ -6107,12 +6229,11 @@ def _hard_fix_facing_to_gaze(shots: list, hook: dict | None = None) -> int:
     import re as _re
     if not shots:
         return 0
-    # 名字集合：从 char_layout 提取；兜底用主名清单
-    NAME_POOL = ("杨旭", "听香", "刺客", "张十三", "老汉", "肖管事", "神秘人",
-                 "那女子", "女子", "那男子", "男子", "公子", "姑娘")
+    from step01_script_gen.prompt_semantic.registry import COMMON_PERSON_NAMES, DIRECTION_WORDS
+    # 名字集合：从 char_layout 提取；兜底用 registry 主名清单（去重 COMMON_PERSON_NAMES）
+    NAME_POOL = COMMON_PERSON_NAMES
     # 只匹配"面向<人名>"，排除"面向画X"（方向词而非目标）
-    direction_words = ("画左", "画右", "画中", "画上", "画下", "画上方", "画下方",
-                       "船头", "船尾", "镜头", "观众")
+    direction_words = DIRECTION_WORDS
     facing_re = _re.compile(r"^面向(.+)$")
 
     targets = list(shots)
@@ -7079,6 +7200,7 @@ def hard_fix_shot_prompts(script: dict) -> dict:
       T2. 面向→凝望：char_layout 写「X 面向Y（人名）」但 prompt/desc 无目光/凝望Y → 追加「目光凝望Y」（08-23）
       U. 跪坐位：受害者仰卧/躺 + 另一角色跪坐船头/船尾/甲板 → 改写"跪坐受害者身侧，面向受害者"（08-23 听香跪船尾；v6.41+ 覆盖 keyframes[*].desc——kf pre 帧漏修）
       V. 船体裁切：ff/lf/prompt 写"船身延伸出画外/只露出一部分" → 剥离（与"完整小舟"锚冲突，图片模型裁掉船尾）
+      W15. 钩子目击者-凶手视觉歧义：受害者已死/被刺 + 另一角色"伸向/摸向/握向刀柄" → 改"伸向自己濡湿的嘴唇（沾有 Y 的血）"（08-26 用户反馈，registry 驱动：VICTIM_SIGNS/WEAPON_HANDLE_WORDS/POSE_REGISTRY）
 
       ── 08-23 v6.41 P19 闭环 新增 14 类 ──
       W1. 景别多样性 v2：连续 3+ 镜同景别 → 中间一镜替换（I 旧版不修连镜）
@@ -7125,6 +7247,7 @@ def hard_fix_shot_prompts(script: dict) -> dict:
     t2 = _hard_fix_facing_to_gaze(shots, hook)                  # T2 面向→凝望
     u = _hard_fix_kneel_beside_victim(shots, hook)              # U 跪坐位→受害者身侧
     v = _hard_fix_boat_crop(shots, hook)                        # V 船体裁切短语剥离
+    w15 = _hard_fix_hook_witness_not_killer(hook, script)         # W15 钩子目击者-凶手视觉歧义（registry 驱动）
     # v6.41 P19 闭环 新增 11 类
     w3 = _hard_fix_combat_impact(shots, hook)                  # W3 打斗打击反馈
     w4 = _hard_fix_transition_keywords(shots, hook)            # W4 转场关键词
@@ -7136,7 +7259,7 @@ def hard_fix_shot_prompts(script: dict) -> dict:
     w11 = _hard_fix_axis_jump(shots, hook)                     # W11 轴线越轴
     w13 = _hard_fix_bridge_words(shots, hook)                  # W13 镜头衔接词
     counts = (a, b, c, d, e, f, g, h, i, i2, j, j2, k, l, m, n, o, p, q, r,
-              s_split, t1, t2, u, v, w3, w4, w5, w6, w7, w9, w10, w11, w13)
+              s_split, t1, t2, u, v, w3, w4, w5, w6, w7, w9, w10, w11, w13, w15)
     if any(counts):
         _get_logger().info(
             f"[HARD-FIX] 致命伤 +{a} 镜 / 视线 +{b} 字段 / 道具 +{c} 镜 / "
@@ -9013,6 +9136,53 @@ def _check_opening_hook(shots: list[dict], hook: dict = None) -> dict:
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
+def _check_char_layout_surface(shots: list[dict], hook: dict | None = None) -> dict:
+    """v6.45（08-26）char_layout[i].surface 必填检查（warning-only，不修）.
+
+    根因：char_layout schema 当前 4 字段（name/position/facing/role）—— LLM 输出
+    时不写"角色所在的承重面"（船尾/甲板/岸边/亭内/...）→ vimax_bridge 拼锚定块
+    只有"画右（面向杨旭）" → LLM 自由发挥成船外水面（08-26 hook 0 听香站水里）。
+
+    修法：
+      - prompt schema（main.md/hook.md/system.md）扩 surface 字段，LLM 必填
+      - vimax_bridge._extract_char_layout seg 拼接时如有 surface 则拼入
+      - 本检查 warning-only 报"缺 surface"，**不自动改写**——承重面是 LLM 应
+        输出的语义信息，不该由代码层硬填（违反 v6.43 hard_fix 失声原则）
+      - role=背景/边角角色不强制（背景人物可只给构图位置）
+
+    校验返回 {pass, issues, warnings}，warnings 含"镜X/角色Y: 缺 surface"列表。
+    """
+    issues, warnings = [], []
+    targets = list(shots) + ([hook] if hook else [])
+    for s in targets:
+        if not isinstance(s, dict):
+            continue
+        cl = s.get("char_layout")
+        if not isinstance(cl, list) or not cl:
+            continue
+        label = f"hook(idx=0)" if (hook and s is hook) else f"shot{s.get('index', '?')}"
+        for j, item in enumerate(cl):
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            role = str(item.get("role", "")).strip()
+            surface = str(item.get("surface", "")).strip()
+            # 背景/边角角色不强求（不在图片显著位置）
+            if role in ("背景", "背景人物"):
+                continue
+            if not name:
+                continue
+            if not surface:
+                warnings.append(
+                    f"{label} char_layout[{j}]({name}): 缺 surface"
+                    f"（必填：船尾/船头/甲板/船舷/岸边/亭内/楼上/楼下/车内/...）"
+                    f"——无承重面锚点 → 锚定块缺位 → LLM 自由发挥角色站位"
+                )
+    for w in warnings:
+        _get_logger().warn(f"char_layout.surface: {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
 def _check_punch_density(shots: list[dict], hook: dict = None) -> dict:
     """v6.26 新增：爆点密度检查（抠姐剧本检查·爆点密度≥1个/30秒）.
 
@@ -9685,19 +9855,24 @@ def _check_redguo_standard(shots, characters=None):
 
     # ① 总时长（只算正片分镜；钩子另算，不进 60s 下限统计）
     total_dur = sum(float(s.get("duration", 0) or 0) for s in shots)
-    if total_dur > _REDGUO_DURATION_MAX:
-        over = total_dur - _REDGUO_DURATION_MAX
-        warnings.append(
-            f"红果总时长 {total_dur:.1f}s > 90s（超 {over:.1f}s，不含钩子）。"
-            f"v6.43 红果标准正片 60-90s——必须砍次要冲突/次要人物/铺垫段。"
-        )
-    elif total_dur < _REDGUO_DURATION_MIN:
-        under = _REDGUO_DURATION_MIN - total_dur
-        warnings.append(
-            f"红果总时长 {total_dur:.1f}s < 60s（差 {under:.1f}s，不含钩子）。"
-            f"v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration"
-            f"（单镜 ≤ {_REDGUO_SHOT_DURATION_MAX:.0f}s）。"
-        )
+    # v6.47（08-27）：LLM 常漏写 duration（_fill_missing_new_fields 兜底 1s → 均镜 1s×N
+    # 报「总时长 16s」是误导性 WARN——_compute_timecodes 会按 motion_desc/对白/4s 旁白
+    # 重算，W6 兜底 60s 下限）。总时长明显退化（均镜 < 2.5s）时跳过全部时长类子检查。
+    degenerate_durations = len(shots) >= 6 and total_dur < len(shots) * 2.5
+    if not degenerate_durations:
+        if total_dur > _REDGUO_DURATION_MAX:
+            over = total_dur - _REDGUO_DURATION_MAX
+            warnings.append(
+                f"红果总时长 {total_dur:.1f}s > 90s（超 {over:.1f}s，不含钩子）。"
+                f"v6.43 红果标准正片 60-90s——必须砍次要冲突/次要人物/铺垫段。"
+            )
+        elif total_dur < _REDGUO_DURATION_MIN:
+            under = _REDGUO_DURATION_MIN - total_dur
+            warnings.append(
+                f"红果总时长 {total_dur:.1f}s < 60s（差 {under:.1f}s，不含钩子）。"
+                f"v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration"
+                f"（单镜 ≤ {_REDGUO_SHOT_DURATION_MAX:.0f}s）。"
+            )
 
     # ⑦ 单镜时长上限（08-23 用户规则：单镜不长于 8s；钩子另算不检查）
     over_shots = []
@@ -9786,13 +9961,14 @@ def _check_redguo_standard(shots, characters=None):
             )
             break
 
-    # ⑥ 末镜时长保护
-    last_dur = float(last_shot.get("duration", 0) or 0)
-    if 0 < last_dur < _REDGUO_LAST_SHOT_DURATION_MIN:
-        warnings.append(
-            f"红果末镜（镜头{last_idx}）duration {last_dur:.1f}s < 4s ——"
-            f"末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。"
-        )
+    # ⑥ 末镜时长保护（退化时长同样跳过——timecode/W6 会兜底到 ≥4s）
+    if not degenerate_durations:
+        last_dur = float(last_shot.get("duration", 0) or 0)
+        if 0 < last_dur < _REDGUO_LAST_SHOT_DURATION_MIN:
+            warnings.append(
+                f"红果末镜（镜头{last_idx}）duration {last_dur:.1f}s < 4s ——"
+                f"末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。"
+            )
 
     # ⑦ 空镜时长硬约束（v6.38.4 规则 60.4）：纯空镜 > 4s 必报
     # 红果空镜 2-4s，> 5s 绝对禁；开篇 0-10s 禁空镜

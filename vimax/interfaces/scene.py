@@ -1,7 +1,9 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Literal, Tuple
 from vimax.interfaces.environment import EnvironmentInScene
 from vimax.interfaces.character import CharacterInScene
+
+from vimax.interfaces._int_coerce import coerce_int
 
 
 class Scene(BaseModel):
@@ -9,6 +11,7 @@ class Scene(BaseModel):
         description="The scene index, starting from 0",
         examples=[0, 1, 2],
     )
+    _coerce_int_fields = field_validator("idx", mode="before")(coerce_int)
     is_last: bool = Field(
         description="Indicates if this is the last scene",
         examples=[False, True],

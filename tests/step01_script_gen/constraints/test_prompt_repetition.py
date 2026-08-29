@@ -92,3 +92,57 @@ def test_constraint_attributes():
     assert "ff_desc" in c.fields
     assert "lf_desc" in c.fields
     assert "motion_desc" in c.fields
+
+
+# ============================================================================
+# v6.50（08-28）：角色名/短语连跑折叠（滑窗对含逗号重复单元的盲区）
+# ============================================================================
+
+def test_collapses_name_run_with_commas():
+    """「杨旭，杨旭，杨旭，杨旭」→「杨旭」（08-28 chapter_001 实测损坏）."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=1,
+            prompt="听香站立身旁，杨旭，杨旭，杨旭，杨旭，手持油纸伞撑开",
+        ),
+    ])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.prompt_repetition import PromptRepetitionConstraint
+
+    PromptRepetitionConstraint().apply(ctx)
+
+    assert script["shots"][0]["prompt"] == "听香站立身旁，杨旭，手持油纸伞撑开"
+
+
+def test_collapses_three_char_name_run():
+    """「张十三，张十三，张十三」→「张十三」."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=8,
+            ff_desc="张十三站在画右岸边，手指向画左水边；张十三，张十三，张十三，转身欲走",
+        ),
+    ])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.prompt_repetition import PromptRepetitionConstraint
+
+    PromptRepetitionConstraint().apply(ctx)
+
+    assert "张十三，张十三" not in script["shots"][0]["ff_desc"]
+
+
+def test_normal_text_with_repeated_name_not_collapsed():
+    """正常叙述中角色名多次出现（非逗号连跑）→ 不动."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    original = "杨旭仰卧船头，听香望向杨旭，张十三看着杨旭"
+    script = make_script([make_shot(index=1, prompt=original)])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.prompt_repetition import PromptRepetitionConstraint
+
+    PromptRepetitionConstraint().apply(ctx)
+
+    assert script["shots"][0]["prompt"] == original

@@ -1,5 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Literal, Tuple
+
+from vimax.interfaces._int_coerce import coerce_int, coerce_int_list
 
 
 class ShotBriefDescription(BaseModel):
@@ -17,6 +19,8 @@ class ShotBriefDescription(BaseModel):
         description="The index of the camera in the scene.",
         examples=[0, 1, 2],
     )
+
+    _normalize_int_fields = field_validator("idx", "cam_idx", mode="before")(coerce_int)
     visual_desc: str = Field(
         description='''A vivid and detailed visual description of the shot that convey rich visual information through text. The character identifiers in the description must match those in the character list and be enclosed in angle brackets (e.g., <Alice>, <Bob>). All visible characters should be described.
         If there is a conversation, please write down the content of the conversation), when you meet some dialogue, you should write into the visual content description with :" " symbols and the character's features (eg. <SLING> (male, late 20s, Texan accent softened by military precision, confident and energetic.) says: "Gear retracted. Flaps transitioning. Flight path stable. You are clear to climb."). 
@@ -101,6 +105,8 @@ class ShotDescription(BaseModel):
         description="The index of the camera in the scene.",
         examples=[0, 1, 2],
     )
+
+    _normalize_int_fields = field_validator("idx", "cam_idx", mode="before")(coerce_int)
     visual_desc: str = Field(
         description='''A vivid and detailed visual description of the shot that convey rich visual information through text. The character identifiers in the description must match those in the character list and be enclosed in angle brackets (e.g., <Alice>, <Bob>).
         If there is a conversation, please write down the content of the conversation), when you meet some dialogue, you should write into the visual content description with :" " symbols and the character's features (eg. <SLING> (male, late 20s, Texan accent softened by military precision, confident and energetic.) says: "Gear retracted. Flaps transitioning. Flight path stable. You are clear to climb."). ''',
@@ -149,6 +155,9 @@ class ShotDescription(BaseModel):
         default=[],
         description="The indices of the characters in the last frame.",
     )
+    _normalize_int_list_fields = field_validator(
+        "ff_vis_char_idxs", "lf_vis_char_idxs", mode="before"
+    )(coerce_int_list)
     motion_desc: str = Field(
         description='''The motion description of the shot.
         If there is a conversation, please write down the content of the conversation), when you meet some dialogue, you should write into the visual content description with :" " symbols and the character's features (eg. SLING (male, late 20s, Texan accent softened by military precision, confident and energetic.) says: "Gear retracted. Flaps transitioning. Flight path stable. You are clear to climb."). If there is a narration, you should write into the visual content description with :" " symbols and the narration's features (eg. Narration: "Everything is looking good. "). ''',

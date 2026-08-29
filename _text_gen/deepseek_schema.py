@@ -35,7 +35,9 @@ _KEYFRAME = {
         },
         "t_sec": {
             "type": "number",
-            "description": "kf 物理时刻（秒，直写 0 < t_sec < duration_sec，禁止 0-1 比例/禁止除法表达式）；写 kf 前先列 motion_desc 时段表，每个 kf 的 t_sec 直接抄该时段内的秒数",
+            "minimum": 0.05,
+            "maximum": 8.0,
+            "description": "kf 物理时刻（秒，0 < t_sec ≤ 8.0）",
         },
     },
     "required": ["desc", "stage", "t_sec"],

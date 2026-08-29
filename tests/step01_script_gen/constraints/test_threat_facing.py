@@ -143,14 +143,14 @@ def test_apply_runs_rule5():
         ]
     }
     fixed = _run([shot])
-    assert fixed >= 1
+    assert len(fixed) >= 1
     assert shot["char_layout"][0]["facing"] == "侧身朝目标"
 
 
 def test_apply_no_layout_no_crash():
     shot = {"ff_desc": "无 char_layout 也不崩"}
     fixed = _run([shot])
-    assert fixed == 0  # 不崩
+    assert len(fixed) == 0  # 不崩
 
 
 def test_apply_mysteriyname_threat_fixed():

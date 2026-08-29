@@ -173,6 +173,61 @@ def test_skips_when_already_at_limits():
     assert ctx.drain_violations() == []
 
 
+def test_action_shots_not_stretched_reaction_absorbs():
+    """智能分配：高节奏动作镜不拉伸，反应/情绪镜集中拉满（观感自然）."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    # 3 动作镜（刺杀/疾奔）+ 7 反应/建立镜，全 5.0s = 50s → 拉 15s 到 65s
+    shots = [
+        make_shot(index=1, duration_sec=5.0, prompt="夕阳下，水湾碧荷连天，小舟静泊"),
+        make_shot(index=2, duration_sec=5.0, prompt="刺客破水而出，匕首猛刺杨旭胸口"),
+        make_shot(index=3, duration_sec=5.0, prompt="听香跪坐船头，泪流满面，浑身颤抖"),
+        make_shot(index=4, duration_sec=5.0, prompt="马车疾奔，扬鞭，马匹四蹄腾空"),
+        make_shot(index=5, duration_sec=5.0, prompt="张十三蹲下探鼻息，脸色铁青"),
+        make_shot(index=6, duration_sec=5.0, prompt="庄仆们哄笑，摇头转身走远"),
+        make_shot(index=7, duration_sec=5.0, prompt="杨旭仰卧船头，胸口白袍暗红洇痕"),
+        make_shot(index=8, duration_sec=5.0, prompt="听香掩嘴，惊恐望向水面"),
+        make_shot(index=9, duration_sec=5.0, prompt="庄仆身影消失在树影后"),
+        make_shot(index=10, duration_sec=5.0, prompt="灯笼光暖黄，夜色渐沉"),
+    ]
+    script = make_script(shots)
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.runtime_extend import RuntimeExtendConstraint
+
+    RuntimeExtendConstraint().apply(ctx)
+
+    # 动作镜（index 2/4）不被拉伸
+    assert script["shots"][1]["duration_sec"] == 5.0  # 镜2 刺杀
+    assert script["shots"][3]["duration_sec"] == 5.0  # 镜4 马车疾奔
+    # 反应/建立镜被拉长
+    assert script["shots"][0]["duration_sec"] > 5.0   # 镜1 建立
+    assert script["shots"][2]["duration_sec"] > 5.0   # 镜3 听香哭
+    # 总时长仍达标
+    total = sum(s["duration_sec"] for s in script["shots"])
+    assert total >= 60.0
+
+
+def test_all_action_chapter_falls_back_to_stretch_all():
+    """纯打斗章（无反应镜可拉）→ 回退拉伸全部，避免时长落空."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    # 9 镜全打斗 5.0s = 45s → 无反应镜 → 回退拉全部
+    shots = [
+        make_shot(index=i + 1, duration_sec=5.0,
+                  prompt="激烈打斗，挥刀砍杀，血光四溅")
+        for i in range(9)
+    ]
+    script = make_script(shots)
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.runtime_extend import RuntimeExtendConstraint
+
+    RuntimeExtendConstraint().apply(ctx)
+
+    total = sum(s["duration_sec"] for s in script["shots"])
+    assert total >= 60.0  # 回退后仍达标
+    assert all(s["duration_sec"] <= 8.0 for s in script["shots"])
+
+
 def test_constraint_attributes():
     """验证 Constraint 类属性正确 (severity=HARD, skip_hook=True)."""
     from step01_script_gen.constraints.runtime_extend import RuntimeExtendConstraint

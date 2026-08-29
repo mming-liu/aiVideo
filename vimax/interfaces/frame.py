@@ -1,5 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Union, Dict, Tuple, Literal
+
+from vimax.interfaces._int_coerce import coerce_int, coerce_int_list
 
 
 class Frame(BaseModel):
@@ -18,3 +20,6 @@ class Frame(BaseModel):
     vis_char_idxs: List[int] = Field(
         description="A list of indices of characters that are visible in this frame, corresponding to the character list provided in the input."
     )
+
+    _coerce_int_fields = field_validator("shot_idx", "cam_idx", mode="before")(coerce_int)
+    _coerce_int_list_fields = field_validator("vis_char_idxs", mode="before")(coerce_int_list)

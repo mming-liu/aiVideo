@@ -10,7 +10,14 @@
 v6.43 重构：_MANAGED_PROPS 改用 prompt_semantic.PROP_REGISTRY 自动派生
 （新增 prop 只改 registry，不动本文件）.
 
-幂等：紧邻已含方位词 / 已追加过（防重复）→ 跳过.
+幂等：紧邻已含方位词 / 20 字内已有「（画X）」标记 → 跳过.
+
+v6.50 修（08-28 审计）：
+1. 单字道具（剑/箫/舟）改「前后不邻汉字」边界匹配——治「剑（画中）眉星目」
+   「唇贴箫（画中）孔」词中打洞。
+2. 匹配倒序处理——治正序插入坐标右移导致的错误位置插入。
+3. 幂等检查扩为「20 字内已有（画X）」——治跨 Size 锚的二次追加
+   「（画中）（宽1.4米，可容3人）（画中）」双标记。
 """
 from __future__ import annotations
 
@@ -59,6 +66,22 @@ _POS_WORDS = (
     "垂入", "倒在", "微倾", "洒落", "岸上", "水里", "插在", "挂在", "立于",
 )
 
+# 单字道具（剑/箫/舟 等）必须独立成词才能标注，否则会在复合作义词中间打洞：
+# 实测 08-28「剑（画中）眉星目」「唇贴箫（画中）孔」。前后紧邻汉字即视为
+# 复合词的一部分（剑眉/箫孔/舴艋舟 的「舟」），跳过不标。
+_SINGLE_CHAR_PROP_RE_CACHE: dict[str, "re.Pattern"] = {}
+
+
+def _prop_match_pattern(prop: str) -> "re.Pattern":
+    """单字道具用「前后不邻汉字」边界匹配；多字道具用原样匹配."""
+    if len(prop) > 1:
+        return re.compile(re.escape(prop))
+    pat = _SINGLE_CHAR_PROP_RE_CACHE.get(prop)
+    if pat is None:
+        pat = re.compile(r"(?<![一-龥])" + re.escape(prop) + r"(?![一-龥])")
+        _SINGLE_CHAR_PROP_RE_CACHE[prop] = pat
+    return pat
+
 
 class PropPositionConstraint(Constraint):
     """C. 道具空间方位：14 类常见道具缺方位 → 追加「（画X）」.
@@ -86,18 +109,23 @@ class PropPositionConstraint(Constraint):
                 changed = False
                 for prop in _MANAGED_PROPS:
                     fallback = get_prop_position_hint(prop, location)
-                    for m in list(re.finditer(re.escape(prop), new_v)):
-                        ctx_after = new_v[m.end():m.end() + 12]
+                    # 倒序处理：在文内插入会使后续匹配坐标右移，正序插入会把
+                    # 「（画X）」插进错误位置（08-23 审计「打洞」根因之一）；
+                    # 倒序插入只影响已处理完的右侧文本，坐标稳定。
+                    for m in list(_prop_match_pattern(prop).finditer(new_v))[::-1]:
+                        ctx_after = new_v[m.end():m.end() + 20]
                         ctx_before = new_v[max(0, m.start() - 5):m.start()]
                         if any(w in ctx_after for w in _POS_WORDS):
+                            continue
+                        # 已有任何「（画X）」标记（可能隔 Size 锚）→ 幂等跳过。
+                        # 旧版只查紧邻相同后缀，跨过「（宽1.4米…）」后会二次追加
+                        # 出「（画中）（宽1.4米，可容3人）（画中）」双标记。
+                        if "（画" in ctx_after:
                             continue
                         if any(w in ctx_before for w in _POS_WORDS):
                             continue
                         insert_at = m.end()
                         suffix = f"（{fallback}）"
-                        # 防重复追加
-                        if new_v[insert_at:insert_at + len(suffix)] == suffix:
-                            continue
                         new_v = new_v[:insert_at] + suffix + new_v[insert_at:]
                         changed = True
                 if changed:

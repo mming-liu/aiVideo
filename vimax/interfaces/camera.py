@@ -1,5 +1,7 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional, Union, Dict, Tuple
+from pydantic import BaseModel, Field, field_validator
+from typing import List, Optional, Union, Dict, Tuple, Any
+
+from vimax.interfaces._int_coerce import coerce_int, coerce_int_list
 
 
 
@@ -41,3 +43,10 @@ class Camera(BaseModel):
         default=None,
         description="The missing information in the child shot that is not covered by the parent shot. If the parent shot fully covers the child shot, set this to None.",
     )
+
+    _coerce_int_fields = field_validator(
+        "idx", "parent_cam_idx", "parent_shot_idx", mode="before"
+    )(coerce_int)
+    _coerce_int_list_fields = field_validator(
+        "active_shot_idxs", mode="before"
+    )(coerce_int_list)

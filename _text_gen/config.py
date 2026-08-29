@@ -5,6 +5,7 @@
 
 import os
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -41,6 +42,15 @@ class TextGenCfg:
     # 默认 high = 思考开启（高）——生产在 .env.content 显式设为 none 保持旧行为，
     # 由 tools/bench_reasoning.py 实测后决定是否切换。
     DEEPSEEK_REASONING_EFFORT: str = os.getenv("DEEPSEEK_REASONING_EFFORT", "high")
+
+    # DeepSeek 单次响应输出 token 上限（可选）。
+    # 不给值 = 不传 max_output_tokens 给 API，由 DeepSeek 服务端默认决定。
+    # 有值 = 按值传给 API（max_output_tokens 包含思维链 token——思考强度越高越容易截断）。
+    # 推荐分镜生成场景：40000-50000（含思维链余量）；钩子：8000；修复轮：50000。
+    # 兼容 .env 中 `KEY=`（空字符串）和注释掉（None）两种"不给值"写法。
+    DEEPSEEK_MAX_TOKENS: Optional[int] = (
+        int(os.getenv("DEEPSEEK_MAX_TOKENS") or "0") or None
+    )
 
     # ---- agnes (OpenAI 兼容) ----
     AGNES_API_KEY: str = os.getenv("AGNES_API_KEY", "")

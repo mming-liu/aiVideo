@@ -26,6 +26,10 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from .types import RepairReport, Severity, Violation
 
+# v6.50（08-28）：每条 (constraint_name, shot_index) 违例的已 regen 次数。
+# 进程级累计——同一条违例 regen ≥2 次仍在场即视为 LLM 修不动，熔断跳过。
+_REGEN_ATTEMPTS: dict = {}
+
 
 def _format_violations_for_regen(violations: List[Violation]) -> str:
     """把违例列表格式化为 LLM 友好的 regen 反馈 prompt."""
@@ -91,7 +95,24 @@ def trigger_regen_if_needed(
     if not hard_unresolved:
         return None
 
-    prompt = build_regen_prompt(hard_unresolved)
+    # v6.50（08-28）熔断：同一违例已 regen 过 ≥2 次仍在场 → 视为 LLM 修不动，
+    # 跳过（防 GAP 多轮循环里对同一 axis_jump 反复烧 LLM 调用）。
+    global _REGEN_ATTEMPTS
+    fresh = [
+        v for v in hard_unresolved
+        if _REGEN_ATTEMPTS.get((v.constraint_name, v.shot_index), 0) < 2
+    ]
+    if not fresh:
+        try:
+            from shared.tee_logger import get_logger
+            get_logger().warn(
+                f"[REGEN] {len(hard_unresolved)} 条违例均已重试 ≥2 次仍在场，跳过 regen（防空转）"
+            )
+        except Exception:
+            pass
+        return None
+
+    prompt = build_regen_prompt(fresh)
     if not prompt:
         return None
 
@@ -100,14 +121,14 @@ def trigger_regen_if_needed(
         from shared.tee_logger import get_logger
         log = get_logger()
         log.warn(
-            f"[REGEN] 触发局部 regen: {len(hard_unresolved)} 条 HARD 违例"
+            f"[REGEN] 触发局部 regen: {len(fresh)} 条 HARD 违例"
         )
-        for v in hard_unresolved[:5]:
+        for v in fresh[:5]:
             log.warn(
                 f"  - {v.constraint_name}@shot{v.shot_index}: {v.message}"
             )
-        if len(hard_unresolved) > 5:
-            log.warn(f"  ... 还有 {len(hard_unresolved) - 5} 条")
+        if len(fresh) > 5:
+            log.warn(f"  ... 还有 {len(fresh) - 5} 条")
         log.info(f"[REGEN] 反馈 prompt（前 500 字）:\n{prompt[:500]}")
     except Exception:
         pass
@@ -116,6 +137,15 @@ def trigger_regen_if_needed(
         auto_call_llm = os.getenv("REGEN_AUTO_TRIGGER", "0").strip() == "1"
     if not auto_call_llm:
         return None
+
+    # 记录本次尝试（无论成败，下次同违例再出现计数 +1）
+    try:
+        for v in fresh:
+            _REGEN_ATTEMPTS[(v.constraint_name, v.shot_index)] = (
+                _REGEN_ATTEMPTS.get((v.constraint_name, v.shot_index), 0) + 1
+            )
+    except Exception:
+        pass
 
     # 调用 LLM
     try:
@@ -128,7 +158,10 @@ def trigger_regen_if_needed(
                 "输出必须是合法 JSON：{\"shots\": [...], \"hook\": {...}, \"characters\": [...]}"
             ),
             user_prompt=prompt,
-            max_tokens=8000,
+            # v6.50（08-28）：删掉 max_tokens=8000 硬编码——整脚本 JSON 实测
+            # 15-25k token，8000 必然中途截断，json_repair 捞回残句直接落盘
+            # （「镜头推近至」「惊觉对」即此根因）。留空走 .env DEEPSEEK_MAX_TOKENS
+            # 三级 fallback（req→config→不传 API）。
             temperature=0.1,
             top_p=0.3,
         )

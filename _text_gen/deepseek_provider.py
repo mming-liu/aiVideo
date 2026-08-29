@@ -68,11 +68,13 @@ class DeepSeekTextService(TextGenerationService):
 
         # v6.37：结构化多轮输入（user_inputs）优先于 user_prompt 字符串
         _input_value = req.user_inputs if req.user_inputs else req.user_prompt
+        # max_output_tokens 优先级：req.max_tokens → config.DEEPSEEK_MAX_TOKENS → 不传
+        # 思考模式下 max_output_tokens 包含思维链 token，留出余量是分镜脚本不退化的关键
+        _effective_max_tokens = req.max_tokens or config.DEEPSEEK_MAX_TOKENS
         params = {
             "model": model,
             "instructions": req.system_prompt,
             "input": _input_value,
-            "max_output_tokens": req.max_tokens,
             "temperature": req.temperature,
             "top_p": req.top_p,                # v6.41+ 稳定化：核采样收窄到 0.2
             # 注意：DeepSeek Responses API 不支持 seed 参数（仅 Chat Completions 支持），
@@ -80,6 +82,8 @@ class DeepSeekTextService(TextGenerationService):
             # 思考模式开关/强度（none 关闭；思考模式下 temperature 被 API 忽略）
             "reasoning": {"effort": effort},
         }
+        if _effective_max_tokens:
+            params["max_output_tokens"] = _effective_max_tokens
         if req.json_schema:
             # strict json_schema 结构化输出：模型输出必合法 JSON。
             # text.format 需显式 type=json_schema + name + schema 三层结构。

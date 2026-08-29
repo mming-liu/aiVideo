@@ -90,6 +90,33 @@ def apply_constraints(
 # main.py 集成入口（新旧切换）
 # ============================================================================
 
+# v6.50（08-28）：进程内只声明一次当前硬修复路径——
+# 08-28 排障实测：日志里只有旧路径才有提示、新框架静默，读者无法从
+# 日志判断本轮跑的是哪条路径（还被 pytest 混进来的同名告警误导）。
+_PATH_ANNOUNCED = False
+
+
+def _announce_path(use_old: bool) -> None:
+    global _PATH_ANNOUNCED
+    if _PATH_ANNOUNCED:
+        return
+    _PATH_ANNOUNCED = True
+    try:
+        from shared.tee_logger import get_logger
+        log = get_logger()
+        if log is None:
+            return
+        if use_old:
+            log.warn(
+                "[HARD_FIX] 本轮路径: 旧 _hard_fix_* 正则路径（HARD_FIX_USE_OLD=1）——"
+                "若非有意切换请 unset 该环境变量"
+            )
+        else:
+            log.info("[HARD_FIX] 本轮路径: 新 Constraint 框架")
+    except Exception:
+        pass
+
+
 def run_hard_fix(
     script: Any,
     *,
@@ -115,6 +142,7 @@ def run_hard_fix(
         - is_final_pass: 标记 _compute_timecodes 之后，确保 RuntimeExtendConstraint 时长拉伸生效
     """
     use_old = os.getenv("HARD_FIX_USE_OLD", "0").strip() == "1"
+    _announce_path(use_old)
     if use_old:
         try:
             from step01_script_gen.validation import hard_fix_shot_prompts as _old_hfix

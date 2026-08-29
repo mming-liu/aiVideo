@@ -1,5 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Union, Dict
+
+from vimax.interfaces._int_coerce import coerce_int
 
 
 
@@ -7,6 +9,7 @@ class Event(BaseModel):
     index: int = Field(
         description="The index of the event, starting from 0",
     )
+    _coerce_int_fields = field_validator("index", mode="before")(coerce_int)
 
     is_last: bool = Field(
         description="Indicates if this is the last event in the sequence"

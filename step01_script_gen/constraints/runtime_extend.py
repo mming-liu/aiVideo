@@ -11,7 +11,7 @@
 修法：
   0. 单镜 > per_shot_cap（min(模型 cap, 8s)）→ 夹到 cap
   1. 末镜 ≤ 4s → 强制夹到 5-6s
-  2. 正片分镜总时长（**不含钩子**）< 65s（红果下限 60 + 5s 安全裕度）
+  2. 正片分镜总时长（**不含钩子**）< 60s（红果下限，v6.49 收紧去掉 5s 安全裕度）
      → 循环按比例放大每镜 duration，直到达标或全部顶到 cap
      - 单镜上限不超 per_shot_cap
      - 单轮 per_add 上限 3.0s
@@ -19,7 +19,7 @@
      → 记 HARD Violation，走 regen 反馈要求**加镜头**（而非继续拉单镜时长）
   4. 不论是否拉伸，timecode 永远和 shot["duration"] 同步（关键修复）
 
-幂等：单镜 ≤ cap 且总时长 ≥ 65s（或 need < 2 的贴线态）且末镜 > 4s → 跳过所有修改。
+幂等：单镜 ≤ cap 且总时长 ≥ 60s（或 need < 2 的贴线态）且末镜 > 4s → 跳过所有修改。
 """
 from __future__ import annotations
 
@@ -43,11 +43,54 @@ except Exception:  # pragma: no cover - 导入失败回退
     _MAX_SHOT_SEC = 8.0
     _REDGUO_MIN_SEC = 60.0
 
-_REDGUO_TARGET_SEC = 65.0   # 拉伸目标 = 红果下限 60 + 5s 安全裕度
+_REDGUO_TARGET_SEC = 60.0   # v6.49（08-28）收紧：红果下限 60s 不加安全裕度——
+                                   # 1.41x 拉伸比（原 65s 目标）会把过渡镜拉到 7-8s
+                                   # 内容贫瘠；目标 60s 拉伸比 1.30x 更稳。
+                                   # 安全裕度改由「末镜强制 ≥ 4s」承担（见 _LAST_SHOT_MIN_SEC）。
 _LAST_SHOT_MIN_SEC = 4.0
 _LAST_SHOT_TARGET_SEC = 5.0
 _PER_ADD_CAP = 3.0
 _MAX_STRETCH_PASSES = 8     # 循环拉伸安全阀（正常 1-2 轮收敛）
+
+
+# 高节奏动作词集（首次调用时构建）
+_ACTION_TEMPO_WORDS: frozenset | None = None
+
+
+def _action_tempo_words() -> frozenset:
+    """高节奏动作词（拉伸会变慢动作 → 不参与拉伸分配）.
+
+    复用 validation._COMBAT_KEYWORDS（打斗/刺杀/冲刺等，与 combat_impact 同源）
+    + 补充高节奏位移/出击词。构建一次后缓存。
+    """
+    global _ACTION_TEMPO_WORDS
+    if _ACTION_TEMPO_WORDS is None:
+        try:
+            from step01_script_gen.validation import _COMBAT_KEYWORDS
+            base = set(_COMBAT_KEYWORDS)
+        except Exception:  # pragma: no cover - 兜底
+            base = {"打斗", "战斗", "格斗", "刺杀", "攻击", "砍杀", "挥刀", "拔剑", "跃出", "冲刺"}
+        base |= {
+            # 高节奏位移 / 出击（拉伸即慢动作）
+            "追逐", "奔驰", "奔逃", "疾奔", "疾驰", "狂奔", "飞驰", "冲出", "奔袭",
+            "追击", "搏斗", "交手", "破水", "跃上", "猛刺", "挥砍", "扬鞭", "快马", "扑出", "翻身跃",
+        }
+        _ACTION_TEMPO_WORDS = frozenset(base)
+    return _ACTION_TEMPO_WORDS
+
+
+def _is_high_tempo_shot(shot: dict) -> bool:
+    """判定镜是否高节奏动作（拉伸会变慢动作 → 不参与拉伸分配）.
+
+    08-27（P1-2）：W6 拉伸逐镜均匀 +0.9s，打斗/追逐镜被拉成慢动作。改为——
+    动作镜不拉，反应/情绪/建立镜集中拉满（延长 = 蓄势悬念），观感自然。
+    扫 prompt/motion/ff/lf + narration 双通道（与 combat_impact._is_combat 同款）。
+    """
+    text = " ".join(
+        str(shot.get(f) or "") for f in ("prompt", "motion_desc", "ff_desc", "lf_desc")
+    )
+    narr = str(shot.get("narration_segment") or "")
+    return any(kw in text or kw in narr for kw in _action_tempo_words())
 
 
 def _align_frame_duration(raw: float, fps: float = 24.0) -> float:
@@ -189,23 +232,35 @@ class RuntimeExtendConstraint(Constraint):
         # 2) 总时长计算——只算正片分镜，钩子时长另算（08-23 用户规则）
         total = _sum_duration(ctx.shots)
 
-        # 3) 总时长不足：循环按比例拉伸，直到达标（65s）或全部顶到 cap
+        # 3) 总时长不足：循环按比例拉伸，直到达标（60s）或全部顶到 cap
         for _pass in range(_MAX_STRETCH_PASSES):
             if total >= _REDGUO_TARGET_SEC:
                 break
             need = _REDGUO_TARGET_SEC - total
-            if need < 2:
-                break  # 贴线态（如 8 镜×8s=64s）：已 ≥60s 硬下限，不再微调
+            if need < 0.1:
+                break  # 贴线态（如 FPS 对齐后 59.9s ≈ 60s）：不再微调
+            # v6.49（08-28）：need < 2 的旧 break 太宽，会让 9 镜 5s → 9×6.625=59.625s
+            # 卡死在 60s 下限下。改为 < 0.1s，允许多轮微调跨过 60s 阈值。
             extensible: list[dict] = []
+            high_tempo: list[dict] = []
             for s in ctx.shots:
                 if not isinstance(s, dict):
                     continue
                 d = _shot_dur(s)
                 if d > 0 and d < per_shot_cap - 1.0:
-                    extensible.append(s)
+                    # 08-27（P1-2）智能分配：高节奏动作镜不拉（拉伸=慢动作），
+                    # 只拉反应/情绪/建立镜——集中拉满观感自然
+                    (high_tempo if _is_high_tempo_shot(s) else extensible).append(s)
+            if not extensible:
+                # 全是高节奏镜（纯打斗/追逐章）→ 回退拉全部，避免时长落空
+                extensible = high_tempo
             if not extensible:
                 break  # 全部顶到 cap，无余量
             per_add = min(_PER_ADD_CAP, need / len(extensible))
+            # v6.49（08-28）贴线态保护：per_add < 0.2 时 FPS 对齐会吃光增量（如
+            # 9×6.625=59.625 卡在 60s 下限下），强制最小 0.5 步长确保跨过阈值。
+            if per_add < 0.5 and total >= _REDGUO_TARGET_SEC - 1.0:
+                per_add = 0.5
             added_any = False
             for s in extensible:
                 cur = _shot_dur(s)

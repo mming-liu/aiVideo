@@ -152,7 +152,7 @@ def test_apply_integrates_all_4_rules():
         ],
     }
     fixed = _run([shot])
-    assert fixed >= 4
+    assert len(fixed) >= 4
     assert "仰卧船头" in shot["ff_desc"]
     assert "破水而出" not in shot["ff_desc"]
     assert "钓杆已脱手" in shot["ff_desc"]

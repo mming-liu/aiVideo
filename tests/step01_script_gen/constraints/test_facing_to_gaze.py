@@ -137,7 +137,11 @@ def test_appends_gaze_to_keyframes_desc():
 
 
 def test_handles_multiple_facing_pairs():
-    """多对 facing（听香面向杨旭 + 杨旭面向听香）→ 各自追加."""
+    """多对 facing（听香面向杨旭 + 杨旭面向听香）→ 只注入首个，不互注矛盾.
+
+    08-27 修复：逐对注入会互注出「目光凝望杨旭，目光凝望听香」式同主语双向看
+    （镜4 kf 实测根因）。首对注入后，第二对在分句边界后已是 gaze 短语 → 跳过。
+    """
     from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
 
     script = make_script([
@@ -155,11 +159,56 @@ def test_handles_multiple_facing_pairs():
 
     repairs = FacingToGazeConstraint().apply(ctx)
 
-    # 两次追加
-    assert len(repairs) >= 2
-    # 听香后追加"目光凝望杨旭"，杨旭后追加"目光凝望听香"
-    assert "目光凝望杨旭" in script["shots"][0]["prompt"]
-    assert "目光凝望听香" in script["shots"][0]["prompt"]
+    # 有注入发生，但绝无相邻互斥视线
+    assert len(repairs) >= 1
+    p = script["shots"][0]["prompt"]
+    assert "目光凝望杨旭" in p
+    assert "目光凝望听香，目光凝望杨旭" not in p
+    assert "目光凝望杨旭，目光凝望听香" not in p
+
+
+def test_skips_when_subject_is_gaze_object():
+    """x_name 已是视线宾语（「目光凝望杨旭」中的杨旭）→ 不注入新 gaze."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=1,
+            prompt="[中景] 刺客目光凝望杨旭，举刀逼近",
+            char_layout=[
+                {"name": "杨旭", "facing": "面向刺客"},
+            ],
+        ),
+    ])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.facing_to_gaze import FacingToGazeConstraint
+
+    repairs = FacingToGazeConstraint().apply(ctx)
+
+    assert repairs == []
+    assert "目光凝望杨旭，目光凝望刺客" not in script["shots"][0]["prompt"]
+
+
+def test_skips_when_subject_has_own_gaze():
+    """x_name 后已紧跟视线动词（该角色已有 gaze）→ 不重复注入."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=1,
+            prompt="[中景] 杨旭目光凝望听香",
+            char_layout=[
+                {"name": "杨旭", "facing": "面向张十三"},
+            ],
+        ),
+    ])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.facing_to_gaze import FacingToGazeConstraint
+
+    repairs = FacingToGazeConstraint().apply(ctx)
+
+    assert repairs == []
+    assert script["shots"][0]["prompt"].count("目光凝望") == 1
 
 
 def test_processes_hook():

@@ -145,3 +145,59 @@ def test_constraint_attributes():
     assert c.name == "multi_char_layout_depth"
     assert c.severity == Severity.WARN
     assert c.skip_hook is True
+
+
+# === v6.49 扩展测试（08-28 跑批实测 镜3 漏修） ===
+
+def test_adds_depth_when_no_secondary_role_v6_49():
+    """v6.49 扩展：所有角色都无 role=次/背景，全画左 → 强制第 2 个改纵深.
+
+    08-28 chapter_001 镜3 实测：[('杨旭', '画左'), ('听香', '画左')]，两个
+    角色都没标 role=次，原约束只改 role=次/背景 → 漏修。本版扩展：
+    无次/背景角色 + 同侧 2+ → 强制第 2 个起改纵深。
+    """
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=1,
+            scene="小舟",
+            char_layout=[
+                {"name": "杨旭", "role": "主", "position": "画左"},
+                {"name": "听香", "role": "主", "position": "画左"},
+            ],
+        ),
+    ])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.multi_char_layout_depth import MultiCharLayoutDepthConstraint
+
+    repairs = MultiCharLayoutDepthConstraint().apply(ctx)
+
+    assert len(repairs) >= 1
+    positions = [item.get("position", "") for item in script["shots"][0]["char_layout"]]
+    # 第 2 个角色（听香）应被改为船中/甲板/画中
+    assert any("船中" in p or "甲板" in p or "画中" in p for p in positions[1:]), \
+        f"expected depth in positions[1:], got {positions}"
+
+
+def test_keeps_first_char_unchanged_v6_49():
+    """v6.49 扩展：第 1 个角色保持画左不动."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=1,
+            scene="小舟",
+            char_layout=[
+                {"name": "杨旭", "role": "主", "position": "画左"},
+                {"name": "听香", "role": "主", "position": "画左"},
+            ],
+        ),
+    ])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.multi_char_layout_depth import MultiCharLayoutDepthConstraint
+
+    MultiCharLayoutDepthConstraint().apply(ctx)
+
+    # 第 1 个角色（杨旭）应保持画左
+    assert script["shots"][0]["char_layout"][0]["position"] == "画左"

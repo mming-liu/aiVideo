@@ -59,6 +59,32 @@ def _build_direction_words() -> tuple[str, ...]:
 DIRECTION_WORDS = _build_direction_words()
 
 _FACING_RE = re.compile(r"^面向(.+)$")
+
+# 视线动词：用于判定「x_name 是否已是视线宾语 / 已建立自己的视线」
+# 08-27 修复：一镜多 facing pair 时逐对注入会互注出「目光凝望杨旭，目光凝望刺客」
+# 式互斥视线（同一角色同时盯两人）——注入前做 3 项检查（见 apply 内）。
+_GAZE_VERBS = ("目光凝望", "凝望", "凝视", "紧盯", "注视")
+
+
+def _is_gaze_object(text: str, pos: int) -> bool:
+    """pos 处的人名是否已是视线宾语（紧前文是视线动词）.
+
+    例：「目光凝望杨旭」中的杨旭 → True。此时 x_name 已被别人注视，
+    在其后注入新 gaze 会错位（读作同一角色盯两人）。
+    """
+    for verb in _GAZE_VERBS:
+        if text[max(0, pos - len(verb)):pos] == verb:
+            return True
+    return False
+
+
+def _has_own_gaze_after(text: str, pos: int) -> bool:
+    """pos 处的人名后是否紧跟视线动词（该角色已建立自己的视线表达）.
+
+    例：「杨旭目光凝望听香」中的杨旭 → True。已有视线再加 = 冗余/矛盾。
+    """
+    tail = text[pos:pos + 8]
+    return any(tail.startswith(v) for v in _GAZE_VERBS)
 # 复合方位词前缀剥离：LLM 写「面向画右的杨旭」时 target="画右的杨旭" 长 5 字 + 含"的"
 # → _is_person_target 拒绝（>4 字或含非汉字）。剥离画X/前方/上方/水面 等前缀后留"杨旭"。
 _FACING_PREFIX_RE = re.compile(
@@ -189,6 +215,19 @@ class FacingToGazeConstraint(Constraint):
                     insert_at = m.end()
                     while insert_at < len(v) and v[insert_at] not in "，。；！？":
                         insert_at += 1
+                    # 08-27 修复：防「目光凝望X，目光凝望Y」互斥视线注入（镜4 kf 实测）
+                    # ① x_name 已是视线宾语（「目光凝望杨旭」中的杨旭）→ 跳过
+                    if _is_gaze_object(v, m.start()):
+                        continue
+                    # ② x_name 后已紧跟视线动词（该角色已建立 gaze）→ 跳过
+                    if _has_own_gaze_after(v, m.end()):
+                        continue
+                    # ③ 插入点分句边界后已是 gaze 短语（前一个 pair 刚注入）→ 跳过，
+                    #    避免相邻两处「目光凝望A，目光凝望B」读作同主语双向看
+                    after_boundary = v[insert_at:insert_at + 12]
+                    if any(after_boundary.startswith(pre + verb)
+                           for pre in ("", "，", ",") for verb in ("目光凝望", "凝望")):
+                        continue
                     # 防重复追加
                     tail = v[insert_at:insert_at + 20]
                     if "目光凝望" in tail and target in tail:

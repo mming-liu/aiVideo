@@ -16,7 +16,10 @@ class TextGenerationRequest:
 
     system_prompt: str
     user_prompt: str
-    max_tokens: int = 8000
+    # 供应商侧输出 token 上限（可选）。None = 不传，由供应商默认；
+    # DeepSeek 路径下 None 时进一步兜底到 config.DEEPSEEK_MAX_TOKENS；
+    # 都为 None 时 DeepSeek API 不收 max_output_tokens 约束。
+    max_tokens: Optional[int] = None
     temperature: float = 0.05
     top_p: float = 0.2
     seed: Optional[int] = 42

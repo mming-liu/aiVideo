@@ -12,9 +12,20 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+
+@pytest.fixture(autouse=True)
+def _reset_regen_attempts():
+    """隔离模块级熔断计数（v6.50）——上一个个例的尝试次数不得泄漏到下一个."""
+    from step01_script_gen.constraints import regen_trigger as _rt
+    _rt._REGEN_ATTEMPTS.clear()
+    yield
+    _rt._REGEN_ATTEMPTS.clear()
 
 
 def test_build_regen_prompt_empty():

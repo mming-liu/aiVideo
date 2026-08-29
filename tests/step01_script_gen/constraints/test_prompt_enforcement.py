@@ -261,7 +261,7 @@ def test_integration_real_hook_fixes_all_three():
             self.hook = hook
     n = V643PromptEnforcementConstraint().apply(_HookCtx(shot))
     # v6.43 重构后：每字段 1 次 find/replace 算 1 fix。ff_desc 触发 3 类问题 = 1 fix。
-    assert n >= 1
+    assert len(n) >= 1
     # Issue 2（酒壶+钓杆）+ Issue 3（刺客+刀尖+头顶+露出水面）已修复
     assert "挂在船舷" not in shot["ff_desc"]
     assert "斜伸出" not in shot["ff_desc"]
@@ -273,3 +273,52 @@ def test_integration_real_hook_fixes_all_three():
     # Issue 1: 听香 anchor 块不重复（虽然此例没有 anchor 块，但确认未引入新问题）
     # 听香仅 1 次出现
     assert shot["ff_desc"].count("听香") == 1
+
+
+# ============================================================================
+# v6.50（08-28）：仰卧头部固定追加到「仰卧」主语子句（不再追加到整段末尾）
+# ============================================================================
+
+def test_head_fix_attaches_to_lying_subject_clause():
+    """多主语句：头固定必须落在杨旭子句，不是句尾的听香."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=1,
+            ff_desc="听香跪坐画左，面向杨旭，杨旭仰卧船头，左手钓竿垂入水面",
+        ),
+    ])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.v6_43_prompt_enforcement import V643PromptEnforcementConstraint
+
+    V643PromptEnforcementConstraint().apply(ctx)
+
+    ff = script["shots"][0]["ff_desc"]
+    # 后缀紧跟杨旭子句（钓竿前），而不是落到句子末尾
+    assert "杨旭仰卧船头，仰面朝上双目紧闭，头颈僵直不侧转，左手钓竿" in ff
+    assert not ff.endswith("头颈僵直不侧转")
+
+
+def test_head_fix_skips_when_lying_clause_has_eye_open_words():
+    """仰卧子句含「双眼圆睁」→ 不追加（避免「双目紧闭」紧邻矛盾），留给修复轮."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    original = "神秘人破水而出；杨旭袒腹仰卧船头，双眼圆睁；听香在画左张嘴欲呼"
+    script = make_script([make_shot(index=1, ff_desc=original)])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.v6_43_prompt_enforcement import V643PromptEnforcementConstraint
+
+    V643PromptEnforcementConstraint().apply(ctx)
+
+    assert script["shots"][0]["ff_desc"] == original
+
+
+def test_head_fix_mid_sentence_boundary():
+    """仰卧在句中、句号结尾 → 标点前插入保持同句."""
+    from step01_script_gen.constraints.v6_43_prompt_enforcement import _append_head_fix, _needs_head_fix
+
+    text = "听香在画左张嘴欲呼。杨旭袒腹仰卧于船头。水面平静"
+    assert _needs_head_fix(text)
+    out = _append_head_fix(text)
+    assert "杨旭袒腹仰卧于船头，仰面朝上双目紧闭，头颈僵直不侧转。" in out

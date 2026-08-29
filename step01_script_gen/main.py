@@ -114,7 +114,8 @@ from shared.scene_objects_bank import SceneObjectsBank
 from shared.assets_bank import SceneAssetsBank, PropAssetsBank
 from step01_script_gen.prompts import (
     build_prompt, SYSTEM_PROMPT, build_hook_prompt, parse_hook_response,
-    _load_gap_analysis_context, _build_character_anchors,
+    _load_gap_analysis_context, _build_regen_iron_rules,
+    _build_character_anchors,
     _load_knowledge_skills, _load_local_skill_context,
 )
 from step01_script_gen.character_extractor import extract_characters
@@ -182,7 +183,6 @@ def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
     req = TextGenerationRequest(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=prompt,
-        max_tokens=40000,
         temperature=0.2,  # v6.5: 降低温度防止幻觉
         json_schema=SCRIPT_SCHEMA,
     )
@@ -265,7 +265,6 @@ def gen_hook_script(novel_text: str, bank=None, objects_bank=None,
     req = TextGenerationRequest(
         system_prompt="你是短视频脚本大师，擅长在视频开头制造悬念和吸引力。禁止血腥暴力细节。",
         user_prompt=prompt,
-        max_tokens=8000,
         temperature=0.2,  # v6.5: 降低温度防止幻觉
         json_schema=HOOK_SCHEMA,
     )
@@ -385,7 +384,6 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         req = TextGenerationRequest(
             system_prompt=SYSTEM_PROMPT,
             user_prompt=prompt,
-            max_tokens=50000,  # 08-15：全量分析反馈进 prompt 后重写镜头更多，输出=完整脚本留余量（修复轮已用 50000 实测成功）
             temperature=0.2,
             json_schema=SCRIPT_SCHEMA,
         )
@@ -503,7 +501,15 @@ _REPAIR_MAX_ROUNDS = 1
 def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
     """重跑 checklist，收集高价值告警，按镜头聚合.
 
-    Returns: {shot_index_or_"hook": [(category_label, warning_text), ...]}
+    v6.43 08-25 HARD-only 策略：
+    - 区分 `issues` (HARD 硬约束违反，代码层不可忽略)
+       vs `warnings` (WARN 软建议，可由 hard_fix 兜底)
+    - 只 picked 镜头含 issues（HARD）才进入修复轮
+    - 纯 warnings 不再触发 LLM 修复轮（节省 60s LLM 调用）
+    - 返回 {"_has_hard": bool, "shots": {shot_N: [warns]}, "hook": [warns]}
+
+    Returns:
+        {"_has_hard": bool, "shots": {...}, "hook": [...]}（无 issues 时 _has_hard=False）
     """
     try:
         if novel_text:
@@ -517,18 +523,21 @@ def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
         import traceback
         _logger.warn(f"[WARN] 定向修复收集告警异常: {_e}")
         traceback.print_exc()
-        return {}
+        return {"_has_hard": False, "shots": {}, "hook": []}
     from step01_script_gen.validation import _REGEN_FEEDBACK_LABELS
     per_shot: dict = {}
+    has_hard = False
     for key, res in results.items():
         if key not in _REPAIR_PRIORITY_CATEGORIES or not isinstance(res, dict):
             continue
-        warns = list(res.get("warnings") or []) + list(res.get("issues") or [])
-        if not warns:
+        # v6.43 08-25：只收集 issues（HARD），warnings（WARN）由 hard_fix 兜底不再走 LLM
+        issues = list(res.get("issues") or [])
+        if not issues:
             continue
+        has_hard = True
         label = _REGEN_FEEDBACK_LABELS.get(key, key)
         import re as _re
-        for w in warns:
+        for w in issues:
             m = _re.match(r"镜头([\d]+)(?:→(\d+))?", w)
             if m:
                 _tid = f"shot_{m.group(1)}"
@@ -543,7 +552,8 @@ def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
             else:
                 _tid = "hook" if "钩子" in w else "global"
                 per_shot.setdefault(_tid, []).append(f"[{label}] {w.strip()}")
-    return per_shot
+    # v6.43 08-25：返回 _has_hard 标记，_repair_shot_warnings 见到 False 直接 skip 修复轮
+    return {"_has_hard": has_hard, "shots": per_shot}
 
 
 def _locate_narration_in_novel(narration: str, novel_text: str) -> tuple:
@@ -589,6 +599,86 @@ def _locate_narration_in_novel(narration: str, novel_text: str) -> tuple:
             start = max(0, pos - 64)
             return (start, end)
     return (-1, -1)
+
+
+# ============================================================================
+# GAP 重试回退保护（v6.47，08-27）——重试版质量退化时保留上一版
+# ============================================================================
+
+def _retry_raw_duration(script: dict) -> float:
+    """重试版原始总时长（不含钩子）——parse_response 后、hard_fix 拉伸前的值.
+
+    W6 会把不足 60s 的脚本事后拉伸，所以只看**原始** duration_sec 之和才能
+    反映 LLM 是否真的响应了总时长规则（08-27 重试版原始 11s → 被拉到 68s 的
+    事故就是只看拉伸后总值看不出来）。
+    """
+    return sum(float(sh.get("duration_sec") or sh.get("duration") or 0)
+               for sh in script.get("shots", []) or [])
+
+
+def _count_ungrounded_narrations(script: dict, novel_text: str) -> int:
+    """统计台词未在原文找到的镜头数（原文锚定失败 = LLM 编造对白）."""
+    if not novel_text:
+        return 0
+    cnt = 0
+    for sh in script.get("shots", []) or []:
+        narr = str(sh.get("narration_segment") or sh.get("narration") or "").strip()
+        if not narr:
+            continue
+        s, e = _locate_narration_in_novel(narr, novel_text)
+        if s < 0:
+            cnt += 1
+    return cnt
+
+
+# v6.50（08-28）：文本截断检测——LLM 响应被截断后 json_repair 捞回的残句
+# （实测「镜头推近至」「惊觉对」ff_desc 尾部悬空「庄仆」直接落盘）。
+# 正常 prompt/ff/lf/motion 都应以终结标点收尾；台词 narration 允许逗号结尾
+# （跨镜拆分对白），故只查这 4 个字段。
+_TERMINAL_TAIL = tuple("。！？…」）】")
+
+
+def _count_mid_clause_tails(script: dict) -> int:
+    """统计 4 文本字段以非终结标点/汉字收尾的数量（截断 salvage 的强信号）."""
+    cnt = 0
+    for sh in script.get("shots", []) or []:
+        for fld in ("prompt", "ff_desc", "lf_desc", "motion_desc"):
+            v = str(sh.get(fld) or "").strip()
+            if len(v) >= 10 and not v.endswith(_TERMINAL_TAIL):
+                cnt += 1
+    return cnt
+
+
+def _is_retry_degraded(prev: dict, new: dict, novel_text: str) -> bool:
+    """判定重试版是否比上一版退化（回退保护的两个强信号）.
+
+    1) **时长塌缩**：上一版健康（≥40s）而新版原始总时长 < 40s——LLM 明显没
+       响应总时长规则（08-27 重试版 11s 事故），事后拉伸会把 1s 镜头拉到 8s。
+    2) **台词失锚变多**：新版未在原文找到的台词数 > 上一版（原文幻觉，如
+       「凶手是谁？如何击杀了公子」）。≥2 条才判退化，防短语匹配误报。
+    3) **文本中途截断**（v6.50，08-28）：新版 ≥2 个文本字段以非终结标点
+       收尾且比上一版多——LLM 响应被截断、json_repair 捞回残句
+       （实测「镜头推近至」「惊觉对」直接落盘）。
+
+    Returns:
+        True = 重试版退化，应回退保留 prev。
+    """
+    # 1) 时长塌缩
+    prev_dur = _retry_raw_duration(prev)
+    new_dur = _retry_raw_duration(new)
+    if prev_dur >= 40 and new_dur < 40:
+        return True
+    # 2) 台词失锚变多
+    if novel_text:
+        prev_ung = _count_ungrounded_narrations(prev, novel_text)
+        new_ung = _count_ungrounded_narrations(new, novel_text)
+        if new_ung > prev_ung and new_ung >= 2:
+            return True
+    # 3) 文本中途截断变多
+    new_trunc = _count_mid_clause_tails(new)
+    if new_trunc >= 2 and new_trunc > _count_mid_clause_tails(prev):
+        return True
+    return False
 
 
 def _build_novel_slice_for_picked(picked: dict, shots_by_id: dict,
@@ -664,11 +754,25 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     全脚本重生成会把没问题的镜头也重画一遍（白烧额度 + 引入新随机）；
     单镜修复只动有问题的地方，且每次轮次只挑「最值得修」的镜头（防 prompt 爆炸）。
 
+    v6.43 08-25 HARD-only 策略：
+    - 无 HARD 违例时（_has_hard=False）**整轮跳过**，节省 60s LLM 调用
+    - WARN/soft-suggestion 全部由 hard_fix 兜底（runtime_extend / 12 个 constraint）
+    - 实测：精简 prompt + hard_fix 增强后，HARD 违例基本为 0，**修复轮几乎不再触发**
+
     Returns:
         修复后的 script（任一轮失败/无告警则原样返回）。
     """
     for _round in range(1, _REPAIR_MAX_ROUNDS + 1):
-        per_shot = _collect_repair_warnings(script, novel_text)
+        per_shot_dict = _collect_repair_warnings(script, novel_text)
+        # v6.43 08-25：HARD-only 触发——没 hard violation 就不调 LLM
+        if not per_shot_dict.get("_has_hard", False):
+            if _round == 1:
+                _logger.info(
+                    "[REPAIR] 跳过：无 HARD 违例（HARD-only 策略），"
+                    "WARN 已由 hard_fix 兜底"
+                )
+            return script
+        per_shot = per_shot_dict.get("shots", {})
         # 过滤结构性全局告警（无法单镜修复的），只留镜头级
         shot_items = {k: v for k, v in per_shot.items() if k.startswith("shot_") or k == "hook"}
         if not shot_items:
@@ -1005,7 +1109,6 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             system_prompt=SYSTEM_PROMPT,
             user_prompt=prompt,
             user_inputs=_user_inputs,  # v6.37 结构化多轮
-            max_tokens=50000,  # 08-15：第2轮全量告警重写镜头更多，输出=完整脚本，留出截断余量
             temperature=0.2,
             json_schema=SCRIPT_SCHEMA,
         )
@@ -1418,6 +1521,10 @@ def main() -> None:
 
             # 获取差距分析上下文并追加到 prompt（函数已在模块级导入）
             gap_context = _load_gap_analysis_context(validation)
+            # v6.47（08-27）反馈前置：重生成铁律放在反馈区**最前**——长 prompt 后段
+            # 规则易失声（实测重试版把总时长写塌到 11s、编造原文没有的台词），
+            # 必须在反馈前重申非协商规则作为拒收标准
+            gap_context = _build_regen_iron_rules() + gap_context
             # v6.33（08-12）：附加 checklist 聚合反馈——差距分析之外，把内容密度/景别
             # 跳跃/致命伤等真实缺陷也喂给重生成 LLM（此前只喂覆盖率/分布，重生成还是老问题）
             _checklist_fb = build_regen_feedback(script, novel_text)
@@ -1433,7 +1540,6 @@ def main() -> None:
             req = TextGenerationRequest(
                 system_prompt=SYSTEM_PROMPT,
                 user_prompt=prompt,
-                max_tokens=40000,
                 temperature=0.2,  # v6.5: 降低温度防止幻觉
                 json_schema=SCRIPT_SCHEMA,
             )
@@ -1448,11 +1554,24 @@ def main() -> None:
             raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
 
             try:
-                script = parse_response(raw, novel_text=novel_text)
+                new_script = parse_response(raw, novel_text=novel_text)
             except (ValueError, json.JSONDecodeError) as e:
                 # 重生成结果 JSON 损坏 → 保留上一版，不中断流水线
                 _logger.warn(f"[WARN] 重生成 JSON 解析失败，保留上一版: {e}")
                 break
+            # v6.47（08-27）回退保护：重试版质量退化（时长塌缩/台词失锚变多）→
+            # 保留上一版。GAP 通过≠质量好——08-27 重试版 11 镜×1s 靠加镜头骗过
+            # 覆盖检查但时长崩了，事后 W6 把 1s 拉到 8s（8 倍慢动作）。
+            if _is_retry_degraded(script, new_script, novel_text):
+                _logger.warn(
+                    f"[GAP] 重试版质量退化（原始总时长 {_retry_raw_duration(new_script):.0f}s "
+                    f"vs 上一版 {_retry_raw_duration(script):.0f}s，台词失锚 "
+                    f"{_count_ungrounded_narrations(new_script, novel_text)} 条），"
+                    f"回退保留上一版"
+                )
+                _console("  [GAP] 重试版质量退化，回退保留上一版（时长塌缩/台词失锚）")
+                break
+            script = new_script
             # 不在循环内 post_process：循环退出后统一在 line 334 做一次
             # （code-audit 07-31 #7：原 :328 与 :334 重复调用 _post_process）
         else:

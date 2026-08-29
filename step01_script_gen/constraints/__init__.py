@@ -44,6 +44,16 @@ from .threat_gaze_coupling import ThreatGazeCouplingConstraint  # T1
 from .transition_keywords import TransitionKeywordsConstraint  # T3
 from .self_review import SelfReviewConstraint  # SR（LLM 自检回路）
 from .v6_43_prompt_enforcement import V643PromptEnforcementConstraint  # v6.43 (08-23 强化)
+from .kf_weak_template import KfWeakTemplateConstraint  # W16 kf弱模板占位（v6.45, 08-26）
+from .camera_movement_fill import CameraMovementFillConstraint  # J3 运镜缺失补填（v6.47, 08-27）
+from .kf_blood_monotonic import KfBloodMonotonicConstraint  # F2 kf 血状态单调（v6.49, 08-28）
+from .ff_motion_overlap import FfMotionOverlapConstraint  # F3 ff_desc 动作重叠（v6.49, 08-28）
+from .kf_pose_anchor import KfPoseAnchorConstraint  # F4 kf 姿态+位置+威胁朝向（v6.49, 08-28）
+from .redguo_scene_char_limit import RedguoSceneCharLimitConstraint  # F5 红果场景/人物硬上限（v6.49, 08-28）
+from .post_combat_blank import PostCombatBlankConstraint  # F6 打斗战后空镜收尾（v6.49, 08-28）
+from .restrained_emotion_chain import RestrainedEmotionChainConstraint  # F7 克制情绪时间链（v6.49, 08-28）
+from .climax_priority import ClimaxPriorityConstraint  # F8 高潮优先（v6.49, 08-28）
+from .short_shot_merge import ShortShotMergeConstraint  # F9 短镜合并（v6.49, 08-28）
 
 ALL_CONSTRAINTS.extend([
     # Phase 2
@@ -82,6 +92,16 @@ ALL_CONSTRAINTS.extend([
     ThreatGazeCouplingConstraint(),
     PlatformComplianceConstraint(),
     V643PromptEnforcementConstraint(),  # v6.43 prompt 强化（早执行，独立于 LLM）
+    KfWeakTemplateConstraint(),  # W16 kf弱模板占位（v6.45, 08-26）
+    CameraMovementFillConstraint(),  # J3 运镜缺失补填（v6.47, 08-27）
+    KfBloodMonotonicConstraint(),  # F2 kf 血状态单调（v6.49, 08-28）
+    FfMotionOverlapConstraint(),  # F3 ff_desc 动作重叠（v6.49, 08-28）
+    KfPoseAnchorConstraint(),  # F4 kf 姿态+位置+威胁朝向（v6.49, 08-28）
+    RedguoSceneCharLimitConstraint(),  # F5 红果场景/人物硬上限 HARD（v6.49, 08-28）
+    PostCombatBlankConstraint(),  # F6 打斗战后空镜收尾（v6.49, 08-28）
+    RestrainedEmotionChainConstraint(),  # F7 克制情绪时间链（v6.49, 08-28）
+    ClimaxPriorityConstraint(),  # F8 高潮优先（v6.49, 08-28）
+    ShortShotMergeConstraint(),  # F9 短镜合并 HARD（v6.49, 08-28）
     SelfReviewConstraint(),  # SR opt-in via SELF_REVIEW_ENABLED=1
 ])
 

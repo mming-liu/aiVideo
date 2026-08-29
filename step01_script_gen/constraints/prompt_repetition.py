@@ -16,6 +16,7 @@ v6.43 修（08-23 跑批审计）：
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -31,6 +32,17 @@ _OPEN_TO_CLOSE = {"（": "）", "【": "】"}
 _CLOSE_SET = set(_OPEN_TO_CLOSE.values())
 # 句读分隔：滑窗不跨逗号/句号（同旧版）
 _PUNCT_SKIP = ("，", "。")
+
+# 角色名/短语连跑：「杨旭，杨旭，杨旭，杨旭」「张十三，张十三」——
+# 4-char 滑窗对含逗号的重复单元天然失明（token 含 ， 即跳过），
+# 实测 08-28 chapter_001 单镜最多「杨旭，」×4 混入 prompt/ff/motion。
+# 同一 2-4 字 token 紧邻逗号连跑 ≥2 次即折叠为 1 次。
+_NAME_RUN_RE = re.compile(r"([\u4e00-\u9fff]{2,4})(?:[，,]\1)+")
+
+
+def _collapse_name_runs(v: str) -> str:
+    """折叠「名，名，名」连跑为单次（修复滑窗对逗号重复的盲区）."""
+    return _NAME_RUN_RE.sub(r"\1", v)
 
 
 def _protected_mask(text: str) -> list[bool]:
@@ -67,6 +79,14 @@ def dedupe_text_4char(v: str) -> str:
     """
     if not v or len(v) < 8:
         return v
+    v = _collapse_name_runs(v)
+    # v6.50：双字叠词折叠（「暗红暗红痕迹」）——其他约束层追加模板也可能撞出
+    # 重叠，不只 content_safety 替换一处
+    try:
+        from shared.content_safety import collapse_doubled_tokens
+        v = collapse_doubled_tokens(v)
+    except ImportError:
+        pass
     mask = _protected_mask(v)
     seen: set[str] = set()
     deletions: list[tuple[int, int]] = []

@@ -1834,6 +1834,16 @@ def _extract_char_layout(
             if layout_item:
                 pos = str(layout_item.get("position", "")).strip()
                 facing = str(layout_item.get("facing", "")).strip()
+                # v6.45 char_layout.surface 注入（站位错位兜底）：角色所在承重
+                # 面（如"船尾"/"船头"/"甲板"）必须在锚定块里出现，否则 LLM 自由
+                # 发挥成"船外的水面"——08-26 hook 0 听香站在水里实测。
+                # 强化策略：surface 用"在{surface}上"括号显式（"立船头" 弱 →"立船头（在舴艋舟上）"强），
+                # 防 image model 把"画右"读成远离船的方位把听香画到水里。
+                surface = str(layout_item.get("surface", "")).strip()
+                if surface and not pose.endswith(surface):
+                    seg += surface
+                if surface and f"在{surface}" not in seg:
+                    seg += f"（在{surface}上）"
                 if pos:
                     seg += pos
                 if facing:
@@ -1884,7 +1894,9 @@ def _extract_char_layout(
                 boat = next((o for o in objs.values()
                              if isinstance(o, dict) and o.get("category") == "船"), None)
                 if boat and "完整小舟" not in block and "整船" not in block:
-                    block += "，完整小舟在画中、船头船尾齐全不缺失"
+                    # v6.45（08-26）⚠️ 强调前缀——image model 对末尾约束遵守率低，
+                    # 加 ⚠️ 符号提升视觉权重（与"画面稳定·不闪烁"等约束同款模式）。
+                    block += "。⚠️ 完整小舟在画中、船头船尾齐全不缺失，**所有角色必须严格在船上**，禁止任何角色出现在船外水面/船头船尾缺失"
         except Exception:
             pass
         # 关键帧补水面浪花（动作状态锚定，仅关键帧）
@@ -1918,6 +1930,13 @@ _PROP_POSITION_WORDS = (
 )
 # 道具方位词命中窗口（道具名后找方位）
 _PROP_POSITION_WINDOW = 16
+
+# v6.45：威胁武器入体方位词——匕首/刀/剑「插/扎/刺在角色身体部位」时，
+# 标准方位词表没有胸口/心口等身体词，且角色名距武器常超 12 字窗口，
+# 导致【道具锚定】整体丢失（08-26 hook kf0 匕首消失根因）。仅威胁武器 +
+# 身体部位词命中时兜底，普通道具不触发。
+_BODY_POSITION_WORDS = ("胸口", "心口", "胸前", "腹部", "后背", "后心",
+                        "咽喉", "喉头", "肩头", "腰眼")
 
 
 def _extract_prop_layout(
@@ -2034,6 +2053,21 @@ def _extract_prop_layout(
                     d = post_idx - end_pos
                     if d < best_dist:
                         best_dist, pos_word = d, w
+            # v6.45：威胁武器入体方位兜底——标准方位词未命中时，找身体部位词
+            # （胸口/心口/腹部…），让「匕首插在杨旭胸口」产出【道具锚定】。
+            # 普通道具不触发（防「酒杯在胸口」类误锚）。
+            if not pos_word and _is_threat_weapon_prop(pid):
+                for w in _BODY_POSITION_WORDS:
+                    pre_idx = scan.rfind(w, max(0, hit_pos - 12), hit_pos)
+                    if pre_idx >= 0:
+                        d = hit_pos - pre_idx
+                        if d < best_dist:
+                            best_dist, pos_word = d, w
+                    post_idx = scan.find(w, end_pos, min(next_prop_pos, end_pos + 8))
+                    if post_idx >= 0:
+                        d = post_idx - end_pos
+                        if d < best_dist:
+                            best_dist, pos_word = d, w
             return pos_word
 
         parts = []
@@ -2112,6 +2146,31 @@ from step01_script_gen.prompt_semantic import (
     NO_ANIMAL_FEATURES_GUARD as _NO_ANIMAL_FEATURES_GUARD,
 )
 
+# v6.45：角色惰性/失能状态词——本镜呈躺/卧/倒/昏迷/闭目/中刀等状态时，
+# 不可能手持任何物件。chapter 级 dynamic_features 的"手持钓杆"等跨镜手部物件
+# 不得注入该角色（08-26 hook kf0 杨旭"手持钓杆"污染根因）。
+_INERT_STATE_WORDS = (
+    "仰卧", "倒地", "倒下", "躺", "卧", "瘫坐",
+    "昏迷", "晕倒", "闭目", "双目紧闭", "已死", "身亡", "毙命",
+    "中刀", "中剑", "胸口插", "心口插", "被刺",
+)
+
+
+def _char_inert_in_shot(ident: str, scan_text: str, characters: list | None) -> bool:
+    """角色在本镜文本中是否呈惰性/失能状态.
+
+    逐别名检查角色名出现位置的前 8 字/后 12 字窗口内是否有惰性状态词
+    （"杨旭仰卧船头"→仰卧在杨旭后 → 惰性）。威胁源别名（刺客/神秘人）也覆盖。
+    """
+    if not ident or not scan_text:
+        return False
+    for alias in _char_aliases(ident, characters):
+        for m in re.finditer(re.escape(alias), scan_text):
+            win = scan_text[max(0, m.start() - 8):m.end() + 12]
+            if any(w in win for w in _INERT_STATE_WORDS):
+                return True
+    return False
+
 
 def _inject_character_costume(desc: str, characters: list | None,
                               shot: dict | None = None,
@@ -2171,6 +2230,14 @@ def _inject_character_costume(desc: str, characters: list | None,
                 continue
             # 首帧过滤动作结果/武器词（溅血/持刀/血迹/洇痕等），保留静态服装/发型
             if frame_kind == "first_frame":
+                dynamic = _strip_frame_action_result(dynamic)
+                if not dynamic and not static:
+                    continue
+            # v6.45：尾帧/关键帧——角色在本镜呈惰性/失能状态（仰卧/倒地/昏迷/闭目/
+            # 中刀…）时不可能手持物件。chapter 级 dynamic_features 含跨镜"手持钓杆"
+            # 会被注入本镜（08-26 hook kf0 杨旭"手持钓杆"+起身看镜头根因）。与首帧
+            # 同剥动作结果词；威胁源（刺客半身探出/举刀）不处于惰性态，武器保留。
+            elif _char_inert_in_shot(ident, scan_text, characters):
                 dynamic = _strip_frame_action_result(dynamic)
                 if not dynamic and not static:
                     continue
@@ -2872,20 +2939,24 @@ async def _gen_keyframes_async(
     from shared.tee_logger import get_logger
     from shared.paths import chapter_dir
     _kf_logger = get_logger(chapter_dir() / "step02.log", console_level="INFO")
-    
+
     keyframes_data = shot.get("keyframes", [])
     if not keyframes_data:
         return []
-    
-    # 过滤掉 time_ratio=0（首帧）和 time_ratio=1（尾帧），只生成中间帧
+
+    # v6.34 kf 字段迁移：time_ratio → stage + t_sec。
+    # 必须走 shared.kf_time.is_middle_kf()（单一事实源），不能用 kf.get("time_ratio")。
+    # 旧实现 `0 < time_ratio < 1` 在 kf 只有 t_sec 字段时永远 default=0，
+    # 全部关键帧被过滤掉 → 关键帧从不生成。
+    from shared.kf_time import is_middle_kf, get_kf_t_sec
     intermediate_kfs = [
-        kf for kf in keyframes_data 
-        if isinstance(kf, dict) and 0 < float(kf.get("time_ratio", 0)) < 1
+        kf for kf in keyframes_data
+        if isinstance(kf, dict) and is_middle_kf(kf, shot)
     ]
-    
+
     if not intermediate_kfs:
         return []
-    
+
     kf_paths = []
     for i, kf in enumerate(intermediate_kfs):
         # 调试逐图选择：只生成指定序号的中间关键帧（i 保持原始序号，
@@ -2895,8 +2966,9 @@ async def _gen_keyframes_async(
         kf_desc = kf.get("desc", "").strip()
         if not kf_desc:
             continue
-        
-        time_ratio = float(kf.get("time_ratio", 0.5))
+
+        time_ratio = get_kf_t_sec(kf, shot) or 0.5
+        t_sec = time_ratio  # v6.34 迁移后变量值是绝对秒数（不是 ratio），rename 给下游用
         kf_path = shot_dir / f"keyframe_{i}.png"
         kf_hash_path = shot_dir / f"keyframe_{i}_hash.txt"
 
