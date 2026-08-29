@@ -259,3 +259,75 @@
 - **验证**：S1 寒光匕首镜头只留匕首 / S2 老酒胜酒壶 / S3 酒壶+老酒同镜两件都留（不误杀）/ T1 弯刀并入匕首 canonical 不污染 / T2 牛车马车不误并入 / r2v 路径无 NameError。`py_compile` 全过。
 - **残留**：当前 script_result.json 的 prop_assets 仍含「刺客弯刀」（只影响【道具锚定】文字块冗余，不影响参考图——参考图走 bank）。prop_assets 从 bank 回写（main.py:719），下轮 step01 跑一次自动干净；**勿手动改 script_result.json**（mtime 变更触发帧/视频缓存失效，白烧额度）。已生成的钩子帧/视频（shot 6/7）含旧弯刀参考，需 `--force` 重生成该镜。
 - **教训**：bank 去重只认 identifier 精确匹配时，LLM 给同一物件换名=必出重复条目，别名重叠才是「同一件」的真实信号；且「一致性问题」要在写入端（bank）拦一次、读取端（匹配）兜一次，单层防线必漏。
+
+### P22. step01 0.5 副镜 5 根因（16:34 实测 → 16:34 当天修复）
+- **现象**：16:34 step01 跑批后审计发现 5 类 bug 集中在 0.5 副镜（shot7.5/8.0/9.5）：
+  1. **shot8.0 与 shot8 共存**（命名碰撞）：shot7.5 (4.625s) 估时 > cap → 二次拆镜为 shot8.0 (4.625s)，`_split_from=7.5`；7.5+0.5=8.0 撞上已存在的 shot8 (4.625s)
+  2. **shot8.0 ff/lf 相似度 0.935**（自抄，v6.50 ≥ 0.85 阈值）—— 衔接链精确复制
+  3. **shot7.5 ff/lf 相似度 0.878**（自抄，≥ 0.85 阈值）—— D 块时序错 + C/E 块只改 ff
+  4. **shot9.5 ff/lf 相似度 0.845**（临界，< 0.85 但差 0.005）
+  5. **审计工具 bug**：`s['index'] != int(s['index'])` 在 float 8.0 时返回 False（8.0 == int(8.0) == 8），漏判 shot8.0 为副镜
+- **根因链**：
+  1. `step01_script_gen/timecode.py:172` `shot_b["index"] = (shot.get("index", i) or i) + 0.5` —— 不去重、不跳过 .5 索引，触发二次拆镜
+  2. `step01_script_gen/timecode.py:163` `shot_b["ff_desc"] = shot_a.lf` —— 精确复制，二次拆镜后 D 块再追加 12 字"缓推"还是接近 1.0
+  3. `step01_script_gen/split_visuals.py:82-89` D 块先于 C/E 跑（注释明确说"在装饰前基于基文判断"），但 C/E 给 ff 加"气氛愈发紧绷"+"画面聚焦{...}（说话神情）"约 26 字，把 ratio 从 1.0 拉到 0.878
+  4. `step01_script_gen/split_visuals.py:103-118` C 块只改 prompt+ff 不改 lf；E 块焦点轮换只改 prompt+ff 不改 lf——设计性 bug
+  5. 审计脚本用了 `idx != int(idx)` 判定 0.5 副镜，**float 8.0 漏判**
+- **修复 patch 草图**（v6.50+，待实施）：
+  ```python
+  # P0 timecode.py:115 入口（_do_pre_split_oversized_shots）
+  while i < len(shots):
+      shot = shots[i]
+      idx = shot.get("index", i)
+      # P0: 跳过 0.5 副镜二次拆镜（避免命名碰撞 + 差异化叠加崩溃）
+      if idx != int(idx):
+          i += 1
+          continue
+      text = shot.get("narration_segment", "")
+      ...
+
+  # P1 split_visuals.py:115 D 块移到文件末尾
+  # 当前顺序: A → D → B → C → E
+  # 改为:    A → B → C → E → D（D 块在 C/E 后跑，ratio 用最终 ff/lf）
+  ```
+  ```python
+  # P1 配套: split_visuals.py C/E 块扩展到 lf
+  # C 块: 同步给 lf 追加情绪递进（part≥1 加 "气氛愈发紧绷"，part≥2 加 "气氛剑拔弩张"）
+  if part_i >= 1:
+      mood = "气氛愈发紧绷" if part_i == 1 else "气氛剑拔弩张"
+      if mood not in prompt: prompt = prompt.rstrip("。") + f"。{mood}，镜头缓推向对话双方。"
+      if mood not in ff: ff = ff.rstrip("。") + f"，{mood}。"
+      if mood not in lf: lf = lf.rstrip("。") + f"，{mood}。"  # 新增
+
+  # E 块: 焦点轮换 lf 用"听者反应"
+  if part_i >= 1 and (speaker or listener):
+      focus, kind = ((speaker, "说话神情") if part_i % 2 == 1
+                     else (listener or speaker, "聆听反应"))
+      tag = f"画面聚焦{focus}（{kind}）"
+      if tag not in prompt: prompt = prompt.rstrip("。") + f"。{tag}。"
+      if tag not in ff: ff = ff.rstrip("。") + f"，{tag}。"
+      # lf 同步：如果是说话人焦点则 lf 切到听者
+      lf_focus, lf_kind = ((listener or speaker, "聆听反应") if focus == speaker
+                           else (speaker, "说话神情"))
+      lf_tag = f"画面聚焦{lf_focus}（{lf_kind}）"
+      if lf_tag not in lf: lf = lf.rstrip("。") + f"，{lf_tag}。"  # 新增
+  ```
+  ```python
+  # 审计工具修复: 0.5 副镜判定改用字符串含 '.' 检查
+  # 旧（漏 float 8.0）:
+  if s['index'] != int(s['index']):  # 8.0 == 8 → False
+  # 新:
+  if '.' in str(s['index']):
+      # 含 . 的全是副镜（含 7.5/8.0/9.5/10.5 等）
+  ```
+- **验证标准**（v6.50+ step01 跑批后必查）：
+  1. step01 输出无 `_split_from` 嵌套（拆镜只拆一次）
+  2. 所有副镜 ff/lf difflib 相似度 < 0.85
+  3. shot_count metadata == 实际 shots 长度
+  4. 审计脚本用 `if '.' in str(s['index'])` 判定副镜
+- **教训**：
+  1. **修复一类问题，它的近似变体和时序变体就成为新盲区**——15:12 修的"差 2-3 字自抄"边界外，16:34 出现整段复制+命名碰撞
+  2. **拆镜器必须幂等去重**：`_do_pre_split_oversized_shots` 入口检查 idx 不是 .5 才拆
+  3. **C/E 块设计原则**：影响"画面"的所有装饰必须同步改 ff 和 lf（图片模型两个都喂）
+  4. **审计工具的"模糊判定"必须用字符串**——`8.0 == 8` 在 Python 是 True，float/str 边界是经典陷阱
+  5. **shot8.0 这个索引命名本身是 bug**——拆分器应该用 `(idx + 0.5) -> int(idx) + 1` 整数后缀，跳过 0.5 副镜再拆时改用更安全的 1.0 / 1.5 区间表示

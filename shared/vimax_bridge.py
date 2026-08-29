@@ -819,6 +819,11 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
         if not result.ok:
             _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 质检失败跳过（未写 sidecar）: {result.error}")
             return False
+        if result.error == "skipped":
+            # v6.50：skip 静默是 15:42 坏图带 clean sidecar 流出的排障盲区——
+            # 免检必须留痕（帧此前已质检过才允许 skip）
+            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} sidecar 新鲜免检")
+            return False
         # QC 成功 → 写 sidecar（检出与否都写），供下次跳过与 step02b 消费
         try:
             write_sidecar(Path(frame_path), result)
@@ -2302,7 +2307,9 @@ def _inject_character_costume(desc: str, characters: list | None,
                 continue
             additions.append(combined)
         if additions:
-            return f"{desc}。{('，'.join(additions))}"
+            # v6.50：desc 尾部句号 + 本处固定 "。" → 双句号（矛盾门会拦），
+            # 先剥再拼
+            return f"{desc.rstrip('。')}。{('，'.join(additions))}"
         return desc
     except Exception:
         return desc
@@ -2421,6 +2428,9 @@ def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
         text = _inject_tone_anchor(shot, text)
         text = sanitize_prompt(ensure_prefix(text, STYLE_PREFIX), verbose=False)
         text = add_image_strict_constraints(text, "首帧" if frame_kind == "first_frame" else "尾帧", shot=shot, characters=characters)
+        # v6.50：多模板拼接点的双句号归一化（防御性兜底，矛盾门此前会拦）
+        while "。。" in text:
+            text = text.replace("。。", "。")
         return text
     except Exception:
         return desc

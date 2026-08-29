@@ -149,12 +149,16 @@ _LEGIT_REDUP = frozenset((
     "猎猎", "熠熠", "凛凛", "晃晃", "飘飘",
 ))
 _DOUBLED_TOKEN_RE = _re.compile(r"([\u4e00-\u9fff]{2})\1")
+# 连续同类标点折叠（16:34 run「瞪大，，，扭曲」实测）：regen 轮 LLM 自产的
+# 连续逗号/句号。…（省略号）与 ——（破折号）是合法重复形态，刻意不在表内。
+_CONSEC_PUNCT_RE = _re.compile(r"([，。；：、！？,;])\1+")
 
 
 def collapse_doubled_tokens(text: str) -> str:
     """折叠立即重复的双字词（「暗红暗红」→「暗红」），合法叠词保留."""
     if not text or len(text) < 4:
         return text
+    text = _CONSEC_PUNCT_RE.sub(r"\1", text)
 
     def _collapse(m):
         tok = m.group(1)

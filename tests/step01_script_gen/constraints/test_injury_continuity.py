@@ -252,3 +252,39 @@ def test_constraint_attributes():
     assert c.name == "fatal_wound_continuity"
     assert c.severity == Severity.WARN
     assert c.repair_marker is not None
+
+
+def test_collective_name_never_victim():
+    """泛指名（群演等）不作受害者候选——16:34 run shot4 main_subject='群演'
+    曾被采纳为 victim，shot6/7 伤锚延续漏补（实测）."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+    from step01_script_gen.constraints.injury_continuity import (
+        InjuryContinuityConstraint, _identify_victim,
+    )
+    from step01_script_gen.validation import _INJURY_ANCHOR_TAIL
+
+    # build 镜 main_subject=群演 且 char_layout 群演在列 → 应跳过群演，
+    # 回落到 role=次 的杨旭
+    build = make_shot(
+        index=1,
+        prompt="特写匕首刺入，杨旭倒地，心口洇痕",
+        main_subject="群演",
+        char_layout=[
+            {"name": "群演", "role": "次"},
+            {"name": "杨旭", "role": "次"},
+        ],
+        location="小舟船头",
+    )
+    assert _identify_victim(build) == "杨旭"
+
+    script = make_script([
+        build,
+        make_shot(index=2, prompt="杨旭（衣宽袍）倒在中景", lf_desc="杨旭仰卧不动",
+                  ff_desc="杨旭（衣宽袍）倒在中景", location="小舟上，张十三质问"),
+    ])
+    ctx = make_ctx(script)
+    repairs = InjuryContinuityConstraint().apply(ctx)
+    assert len(repairs) >= 1
+    assert _INJURY_ANCHOR_TAIL in script["shots"][1]["ff_desc"], (
+        "location 2字头匹配（小舟船头↔小舟上）+ ff 纳入后应补 ff_desc"
+    )

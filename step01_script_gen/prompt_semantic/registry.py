@@ -415,7 +415,27 @@ STRONG_INJURY_ANCHORS: Tuple[str, ...] = (
 )
 
 
+# 血状态可见词（v6.50，08-29）——kf_blood_monotonic 判"本帧有血"专用。
+# = STRONG_INJURY_ANCHORS + 可见血迹词（洇开/暗红…），**刻意排除宽表里的
+# "白袍/胸口/心口"**——服装/中性部位词会让开篇「杨旭白袍盘坐」误置位
+# 血状态，后续 kf 全被判"血回退"而误追加伤处锚（shot1 三 kf 实测）。
+BLOOD_STATE_WORDS: Tuple[str, ...] = STRONG_INJURY_ANCHORS + (
+    "洇开", "暗红", "血迹", "血污", "渗血",
+)
+
+
+# 泛指/群像名（redguo alias 机制产出 + LLM 常用群体写法）——不是可追踪的
+# 受害个体。受害者提取与伤锚延续逻辑必须跳过：16:34 run shot4（特写刺杀）
+# main_subject='群演' 被当成受害者，shot6/7 伤锚延续因此漏补（实测）。
+COLLECTIVE_NAMES: Tuple[str, ...] = (
+    "群演", "村人", "船夫", "众人", "路人", "仆从", "仆人",
+    "侍卫", "百姓", "家丁", "围观", "人群", "宾客", "侍女", "丫鬟",
+)
+
+
 __all__ = [
+    "BLOOD_STATE_WORDS",
+    "COLLECTIVE_NAMES",
     "PROP_REGISTRY", "PropSpec", "get_prop_spec", "is_known_prop",
     "POSE_REGISTRY", "classify_pose",
     "get_surfaces",

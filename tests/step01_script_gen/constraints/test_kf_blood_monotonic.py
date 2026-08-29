@@ -175,3 +175,48 @@ def test_skips_single_kf_shot():
     repairs = KfBloodMonotonicConstraint().apply(ctx)
 
     assert len(repairs) == 0
+
+
+# ============================================================================
+# v6.50（08-29）：血状态判定用 BLOOD_STATE_WORDS（宽表"白袍"误置位回归）
+# ============================================================================
+
+def test_costume_white_robe_does_not_activate_blood():
+    """开篇「杨旭白袍盘坐」是服装描述非血迹——不得置位 blood_active
+    （14:46 run shot1 三个 kf 被误追加伤处锚实测）."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    shots = [make_shot(
+        index=1,
+        keyframes=[
+            {"stage": "pre", "t_sec": 1.0, "desc": "杨旭白袍盘坐船头，手持玉箫，听香撑伞站立一旁"},
+            {"stage": "approach", "t_sec": 2.4, "desc": "杨旭嘴唇贴近箫孔，箫声扬起，听香侧头注视"},
+            {"stage": "climax", "t_sec": 3.6, "desc": "杨旭闭眼吹箫，神情陶醉，听香含笑凝视"},
+        ],
+    )]
+    ctx = make_ctx(make_script(shots))
+    from step01_script_gen.constraints.kf_blood_monotonic import KfBloodMonotonicConstraint
+
+    KfBloodMonotonicConstraint().apply(ctx)
+
+    for kf in shots[0]["keyframes"]:
+        assert "伤处白袍心口" not in kf["desc"], "开篇吹箫 kf 被误加伤处锚"
+
+
+def test_real_blood_still_triggers_monotonic():
+    """真血迹描述（洇开暗红）仍触发单调性兜底."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    shots = [make_shot(
+        index=1,
+        keyframes=[
+            {"stage": "climax", "t_sec": 2.5, "desc": "刀刺入杨旭心口，胸口洇开暗红"},
+            {"stage": "after", "t_sec": 3.5, "desc": "杨旭仰卧船头，双目失神"},
+        ],
+    )]
+    ctx = make_ctx(make_script(shots))
+    from step01_script_gen.constraints.kf_blood_monotonic import KfBloodMonotonicConstraint
+
+    KfBloodMonotonicConstraint().apply(ctx)
+
+    assert "伤处白袍心口" in shots[0]["keyframes"][1]["desc"]

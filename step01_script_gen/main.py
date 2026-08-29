@@ -1185,7 +1185,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     # 有"杨旭仰卧/倒下/躺"但没 anchor 词 → prompt 末尾追加伤处锚。
     # 只在修复轮后调用，范围小。用 build_idx 作分界避免把"夜宴仰卧喝酒"也补成带伤。
     _injury_lay_words = ("仰卧", "倒下", "仰倒", "躺于", "躺倒", "倒地", "瘫倒")
-    from step01_script_gen.validation import _INJURY_ANCHOR_WORDS as _anchor_words
+    # v6.50（08-29）：build 判定改用 STRONG 词表——"白袍"等服装词会让
+    # 刺杀前镜头（开篇白袍吹箫）被当致命伤建立点
+    from step01_script_gen.prompt_semantic.registry import STRONG_INJURY_ANCHORS as _anchor_words
     # 找 build_idx（第一个有 anchor 词的镜头 = 致命伤建立点）
     _build_idx = None
     for _i, _s in enumerate(script.get("shots", [])):
@@ -1855,6 +1857,10 @@ def main() -> None:
         str(Path(__file__).parent / "prompts.py"), novel_preview, NOVEL_CHAPTER,
         objects_bank_data,
     )
+
+    # v6.50（08-29）：保存前重算 shot_count——timecode pre-pass 拆镜发生在
+    # parse 期校正之后，元数据会落后实际镜头数（15:12 run 16 vs 20 实测）
+    script["shot_count"] = len(script.get("shots", []))
 
     # 保存
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:

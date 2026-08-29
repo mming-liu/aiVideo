@@ -222,6 +222,13 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
         "- 轻微瑕疵（背景小物、风格笔触、留白、水墨晕染）→ 不算问题，不得误判",
         "- 该作品是古风水墨风格，水墨、留白、笔触、墨晕均属正常艺术风格",
         "",
+        "",
+        "⚠️ 这是【已生成图片的质检任务】，不是生成任务：",
+        "- 禁止重新生成图像、禁止输出修改后的画面描述、禁止提供调整建议",
+        "- 只对上图做检查并输出判定 JSON，任何多余文字都会导致质检作废",
+        "- 若画面出现纯白/影棚背景、参考图版式混入、或上下拼接的两截画面，"
+        "属 unexpected_object critical（参考图样式污染）",
+        "",
         "只返回一个 JSON 对象，不要任何其他内容：",
         '{"has_hallucination":true或false,"issues":[{"category":"类别","description":"描述","severity":"critical或warning"}]}',
         "category 只能从以上列表选；has_hallucination 为 true 当且仅当存在至少一个 critical 或两个以上 warning。",
@@ -357,7 +364,18 @@ def parse_verdict(text: str) -> QcResult:
     except Exception:
         pass
 
-    # 4. 关键词回退
+    # 4. 对话式响应守卫（v6.50，08-29）：视觉模型把质检当成了生成任务、
+    #    返回"重新生成/如需调整"式聊天文本——此时没有质检结论可言。
+    #    旧行为是在散文上做关键词回退扫描：碰巧含触发词→critical、
+    #    碰巧没有→clean sidecar——同一张图两次结果相反（非确定性根源）。
+    #    改为：一律判质检失败（ok=False），调用方日志可见、不写 clean sidecar，
+    #    下次重新质检。
+    _CHAT_MARKERS = ("如需调整", "重新生成", "我将继续", "根据您描述", "请提供", "可以告知")
+    if any(k in text for k in _CHAT_MARKERS):
+        return QcResult(has_hallucination=False, issues=[], ok=False,
+                        raw_result=text, error="视觉模型返回对话式响应而非质检 JSON（已拒收）")
+
+    # 5. 关键词回退（仅对非对话式纯文本判定）
     text_lower = text.lower()
     has = any(k in text_lower for k in _FALLBACK_KEYWORDS)
     issues = []

@@ -4545,6 +4545,8 @@ def post_fix_shot_prompts(script: dict) -> dict:
 from step01_script_gen.prompt_semantic import (
     INJURY_ANCHOR_WORDS as _INJURY_ANCHOR_WORDS,
     INJURY_ANCHOR_TAIL as _INJURY_ANCHOR_TAIL,
+    STRONG_INJURY_ANCHORS as _STRONG_INJURY_ANCHORS,
+    BLOOD_STATE_WORDS as _BLOOD_STATE_WORDS,
 )
 
 # 视线方向兜底：发现「看/望/盯+人名/对象」但没带空间方位词时，按目标所在位置改写
@@ -4927,19 +4929,29 @@ def _hard_fix_injury_continuity(shots: list) -> int:
     lf_desc 描述角色时丢了伤处锚，画面渲染看不出受伤。
 
     修法：扫所有 shot，找到第一个含 anchor 词的镜头作为 build_idx；之后
-    所有同 location 镜头若 prompt/lf_desc 缺 anchor 词且仍含"被打者"角色 →
-    同步追加到 prompt + lf_desc（只要受害者在这两个字段出现）。
-    返回改写镜头数。
+    所有同 location 镜头若 prompt/lf_desc/ff_desc 缺 anchor 词且仍含"被打者"
+    角色 → 同步追加到对应字段（v6.51：ff_desc 纳入，location 放宽 2 字头，
+    泛指名不作受害者候选）。返回改写镜头数。
     """
     # 找致命伤建立镜（第一个 prompt/ff_desc/lf_desc 含 anchor 词）
     from step01_script_gen.prompt_semantic.registry import (
-        MAIN_SUBJECT_PREFIXES, INJURY_ANCHOR_WORDS, STRONG_INJURY_ANCHORS, is_threat_name,
+        MAIN_SUBJECT_PREFIXES, INJURY_ANCHOR_WORDS, STRONG_INJURY_ANCHORS,
+        COLLECTIVE_NAMES, is_threat_name,
     )
+
+    def _is_victim_candidate(nm: str) -> bool:
+        """个体受害者候选：非威胁、非泛指（群演/仆从等群像不是可追踪受害者）."""
+        return bool(nm) and not is_threat_name(nm) and not any(w in nm for w in COLLECTIVE_NAMES)
+
     build_idx = None
     build_loc = None
+    # v6.50（08-29）：build 判定改用 STRONG_INJURY_ANCHORS（洇痕/中刀/血痕…）——
+    # 宽表含"白袍/胸口/心口"等服装/中性部位词，开篇"素白色轻袍"即命中 →
+    # build_idx 误判到刺杀前 → 全片误补伤处锚（14:46 run shot1 三 kf + hook
+    # 带「伤处白袍心口一片暗红血迹」实测）
     for i, s in enumerate(shots):
         text = (s.get("prompt", "") or "") + (s.get("ff_desc", "") or "") + (s.get("lf_desc", "") or "")
-        if any(w in text for w in _INJURY_ANCHOR_WORDS):
+        if any(w in text for w in STRONG_INJURY_ANCHORS):
             build_idx = i
             build_loc = (s.get("location", "") or s.get("scene", ""))
             break
@@ -4950,8 +4962,11 @@ def _hard_fix_injury_continuity(shots: list) -> int:
     for i in range(build_idx + 1, len(shots)):
         s = shots[i]
         loc = (s.get("location", "") or s.get("scene", ""))
-        # 同 location 才延续
-        if not build_loc or loc != build_loc:
+        # 同 location 才延续。v6.51：放宽为「前 2 字一致」——LLM 写的 location
+        # 是「小舟上，张十三质问听香」这类自由文本，与 build 镜的「小舟船头」
+        # 精确串比较永不相等 → 延续层整体失明（16:34 run shot6/7 杨旭倒地
+        # 图字段无锚实测）。受害者的伤在身上，跨机位同场景理应延续。
+        if not build_loc or (loc != build_loc and loc[:2] != build_loc[:2]):
             continue
         prompt = s.get("prompt", "") or ""
         lf = s.get("lf_desc", "") or ""
@@ -4975,7 +4990,9 @@ def _hard_fix_injury_continuity(shots: list) -> int:
             stripped = stripped.strip()
             # 关键：剥离结果必须与 char_layout 里的某个 name 完全匹配，才视为有效 victim
             # 否则可能是动词残留（如"破水"/"出水"）或无效词，进入来源② 继续查找
-            if stripped and stripped in cl_names_all:
+            # v6.51：泛指名（群演/仆从…）不是受害者——shot4 特写刺杀
+            # main_subject='群演' 曾被采纳，shot6/7 延续因此漏补（实测）
+            if _is_victim_candidate(stripped) and stripped in cl_names_all:
                 victim_names.append(stripped)
         # 来源②+③：build_idx 镜头的 char_layout role=次 角色（刺客/施动者通常 role=主，被打者=次）
         # 限制 victim_names 最多 1 个：被打者是 build_idx 镜头的"主要受害角色"，唯一
@@ -4988,7 +5005,7 @@ def _hard_fix_injury_continuity(shots: list) -> int:
                 role = str(item.get("role", "")).strip()
                 if not nm or role != "次":
                     continue
-                if is_threat_name(nm):
+                if not _is_victim_candidate(nm):
                     continue
                 victim_names.append(nm)
                 break  # 只取第一个 role=次 非 threat 角色
@@ -5001,7 +5018,7 @@ def _hard_fix_injury_continuity(shots: list) -> int:
                 (build_shot.get("prompt", "") or "") + (build_shot.get("lf_desc", "") or ""),
             )
             for nm in anchor_nearby:
-                if not is_threat_name(nm) and nm not in victim_names:
+                if _is_victim_candidate(nm) and nm not in victim_names:
                     victim_names.append(nm)
                     break
         # 防御：若仍空，至少从 char_layout 找主受害角色
@@ -5010,7 +5027,7 @@ def _hard_fix_injury_continuity(shots: list) -> int:
                 if not isinstance(item, dict):
                     continue
                 nm = str(item.get("name", "")).strip()
-                if nm and not is_threat_name(nm):
+                if _is_victim_candidate(nm):
                     victim_names.append(nm)
                     break
         # 兜底：从 char_layout 找 "role=主" 角色作为 victim
@@ -5019,7 +5036,7 @@ def _hard_fix_injury_continuity(shots: list) -> int:
                 if isinstance(item, dict):
                     role = str(item.get("role", "")).strip()
                     nm = str(item.get("name", "")).strip()
-                    if role in ("主", "次") and nm:
+                    if role in ("主", "次") and _is_victim_candidate(nm):
                         victim_names.append(nm)
         # 必须"被打者"在画面里才追加（否则刺客遁水远景镜也被污染）
         # 判定方式：victim 出现在 ① 4 字段任一 或 ② char_layout（背景角色也算）
@@ -5034,17 +5051,27 @@ def _hard_fix_injury_continuity(shots: list) -> int:
         )
         if not victim_in_frame:
             continue
-        # 同步追加到 prompt + lf_desc（只要受害者在这两个字段出现）
+        # 同步追加到 prompt + lf_desc + ff_desc（受害者出现的字段才追加）
+        # v6.51：①ff_desc 纳入——image 模式首帧图恰恰由 ff_desc 生成，此前只补
+        # prompt+lf 会让 ff 画出无伤的杨旭（16:34 run shot6/7 实测）；
+        # ②已锚判定改 BLOOD_STATE_WORDS（含 暗红/洇开 等可见血状态词）——
+        # STRONG 漏判变体锚 → 重复追加完整锚尾 → 复读去重抠出截断碎片。
         # 收紧 anchor 判定：必须出现"洇痕/中刀/中剑/刀伤/剑伤/中枪"才算真致命伤锚定；
         # 单独出现"暗红/白袍"可能是听香手指沾血或衣服被水打湿，误判会漏补。
-        prompt_has_anchor = any(w in prompt for w in STRONG_INJURY_ANCHORS)
-        lf_has_anchor = lf and any(w in lf for w in STRONG_INJURY_ANCHORS)
+        ff = s.get("ff_desc", "") or ""
+        prompt_has_anchor = any(w in prompt for w in _BLOOD_STATE_WORDS)
+        lf_has_anchor = lf and any(w in lf for w in _BLOOD_STATE_WORDS)
+        ff_has_anchor = ff and any(w in ff for w in _BLOOD_STATE_WORDS)
         changed = False
         if not prompt_has_anchor:
             s["prompt"] = prompt.rstrip("。") + f"。{_INJURY_ANCHOR_TAIL}"
             changed = True
         if lf and not lf_has_anchor:
             s["lf_desc"] = lf.rstrip("。") + f"。{_INJURY_ANCHOR_TAIL}"
+            changed = True
+        if ff and not ff_has_anchor and any(n in ff for n in victim_names):
+            # ff 只在受害者确实出现在该字段时补（反应特写 ff 无受害者时不污染）
+            s["ff_desc"] = ff.rstrip("。") + f"。{_INJURY_ANCHOR_TAIL}"
             changed = True
         if changed:
             fixed += 1
@@ -5979,6 +6006,17 @@ def _estimate_speech_duration(text: str) -> float:
     return max(dur + pauses, 3.0)
 
 
+# v6.50（08-29）拆镜视觉差异化 helpers 已上移 split_visuals.py——
+# timecode._do_pre_split_oversized_shots（半整数索引 pre-pass）与 F3.6
+# 长对话拆镜两个拆镜器共用（14:22 run 实测第二拆分器同样照抄）。
+from step01_script_gen.split_visuals import (  # noqa: E402,F401
+    FRAMING_LADDER as _FRAMING_LADDER,
+    shift_framing as _shift_framing,
+    extract_speaker as _extract_speaker,
+    differentiate_split_visuals as _differentiate_split_visuals,
+)
+
+
 def _hard_fix_split_long_dialogue_shot(shots: list, hook: dict | None = None) -> int:
     """v6.40 F3.6（08-22）长对话拆镜 hard_fix.
 
@@ -6121,6 +6159,8 @@ def _hard_fix_split_long_dialogue_shot(shots: list, hook: dict | None = None) ->
                 kfs = s.get("keyframes")
                 if isinstance(kfs, list):
                     new_shot["keyframes"] = [dict(kf) for kf in kfs if isinstance(kf, dict)]
+            # v6.50：拆镜视觉差异化（治「拆镜照抄」——相邻子镜同 prompt、ff==lf）
+            _differentiate_split_visuals(s, new_shot, part_i)
             new_shots.append(new_shot)
             fixed += 1
         # 原始镜不保留（已被 N 子镜替换）

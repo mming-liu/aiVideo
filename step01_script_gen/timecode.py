@@ -139,6 +139,13 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
     i = 0
     while i < len(shots):
         shot = shots[i]
+        # v6.51：每镜最多拆 1 次。_compute_timecodes 每次落盘都会重跑本
+        # pre-pass（main.py 5 处调用），已拆出的子镜若估时仍 > cap 会被
+        # 再次拆分，index +0.5 链式递增（7.5→8.0）与真实 shot 8 数值碰撞
+        # （16:34 run 实测：两次 [SPLIT] 日志、shots 同时含 8.0 与 8）。
+        if "_split_from" in shot or "_split_to" in shot:
+            i += 1
+            continue
         text = shot.get("narration_segment", "")
         if not text:
             i += 1
@@ -169,7 +176,58 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
             shot_b["motion_desc"] = ""
         # 标记拆镜关系（调试用，不进入 prompt）
         shot_b["_split_from"] = shot.get("index", i)
-        shot_b["index"] = (shot.get("index", i) or i) + 0.5
+        # 索引防碰撞：+0.5 撞现有 index（int/float 数值相等即撞）时逐级细化，
+        # 防止出现 8.0 与真实 shot 8 并存的数值重复（排序/查重即不稳定）
+        _orig_idx = shot.get("index", i) or i
+        _existing = {s.get("index") for s in shots if isinstance(s, dict)}
+        new_idx = round(_orig_idx + 0.5, 4)
+        for _frac in (0.25, 0.125, 0.0625):
+            if new_idx not in _existing:
+                break
+            new_idx = round(_orig_idx + _frac, 4)
+        shot_b["index"] = new_idx
+        # v6.50（08-29）拆镜视觉差异化：此拆分器 shot_b.ff=shot_a.lf（接续）
+        # 但 shot_b.lf 是同一文本深拷贝 → ff==lf 必现；prompt 深拷贝 → 相邻
+        # 相似度 1.00（14:22 run shot11.5/12.5 实测）。按"后半镜"（part_i=1）
+        # 差异化：景别 +1、过肩、情绪递进、焦点、lf 缓推兜底。
+        try:
+            from step01_script_gen.split_visuals import differentiate_split_visuals
+            differentiate_split_visuals(shot, shot_b, part_i=1)
+        except Exception:
+            pass
+        # v6.50（08-29）后半镜致命伤锚延续：拆分发生在约束层 injury_continuity
+        # 之后，新 halves 没人再补锚（15:12 run shot12.5/14.5/15.5 ff/lf 无伤锚
+        # 实测——刺杀后画面会画出无伤的杨旭）。原镜带真伤锚 + 非威胁角色在
+        # 后半镜画面 → ff/lf 补锚。
+        try:
+            from step01_script_gen.prompt_semantic.registry import (
+                INJURY_ANCHOR_TAIL as _IAT,
+                STRONG_INJURY_ANCHORS as _SIA,
+                BLOOD_STATE_WORDS as _BSW,
+                COLLECTIVE_NAMES as _COLL,
+            )
+            _orig_txt = (shot.get("prompt") or "") + (shot.get("lf_desc") or "") + (shot.get("ff_desc") or "")
+            if any(w in _orig_txt for w in _SIA):
+                _victim = ""
+                for _it in (shot_b.get("char_layout") or []):
+                    _nm = str((_it or {}).get("name", "")).strip()
+                    if (_nm and not any(t in _nm for t in ("刺客", "神秘人", "黑衣人", "杀手"))
+                            and not any(w in _nm for w in _COLL)):
+                        _victim = _nm
+                        break
+                _b_txt = (shot_b.get("ff_desc") or "") + (shot_b.get("lf_desc") or "")
+                if _victim and _victim in _b_txt:
+                    for _fld in ("ff_desc", "lf_desc"):
+                        _t = shot_b.get(_fld) or ""
+                        # v6.51：已锚判定用 BLOOD_STATE_WORDS（含 暗红/洇开/血迹 等
+                        # 可见血状态词）。原用 STRONG（洇痕/血痕…）——变体锚
+                        # 「暗红痕迹洇开，清晰可见」漏判 → 重复追加完整 _IAT →
+                        # 下游复读去重把重复片段抠掉，残留「。暗红血迹洇开，血痕」
+                        # 截断碎片（16:34 run shot8.0 实测）。
+                        if _t and not any(w in _t for w in _BSW):
+                            shot_b[_fld] = _t.rstrip("。") + f"。{_IAT}"
+        except Exception:
+            pass
         # shot_a 留前半段
         shots[i]["narration_segment"] = text[:split_at].strip()
         if shots[i].get("subtitle"):

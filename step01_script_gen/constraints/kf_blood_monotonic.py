@@ -26,7 +26,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from shared.kf_time import get_kf_t_sec
 from step01_script_gen.prompt_semantic.registry import (
-    INJURY_ANCHOR_WORDS,
+    BLOOD_STATE_WORDS,
     INJURY_ANCHOR_TAIL,
 )
 from .base import Constraint
@@ -73,7 +73,10 @@ class KfBloodMonotonicConstraint(Constraint):
                 desc = kf.get("desc", "") or ""
                 if not isinstance(desc, str):
                     continue
-                has_blood = any(w in desc for w in INJURY_ANCHOR_WORDS)
+                # v6.50（08-29）：血状态判定改用 BLOOD_STATE_WORDS——
+                # 宽表含"白袍"，开篇 kf「杨旭白袍盘坐」即置位 blood_active →
+                # 后续 kf 全被判"血回退"而误追加伤处锚（shot1 三 kf 实测）
+                has_blood = any(w in desc for w in BLOOD_STATE_WORDS)
                 if has_blood:
                     # 本帧含血 → blood_active 保持 True
                     blood_active = True

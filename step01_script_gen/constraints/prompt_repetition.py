@@ -39,10 +39,25 @@ _PUNCT_SKIP = ("，", "。")
 # 同一 2-4 字 token 紧邻逗号连跑 ≥2 次即折叠为 1 次。
 _NAME_RUN_RE = re.compile(r"([\u4e00-\u9fff]{2,4})(?:[，,]\1)+")
 
+# regen 修复轮指令回显（16:34 run shot7 实测）：修复 prompt 要求
+# 「每拍一个面部细节，按时间先后写全」（validation._check_restrained_emotion
+# 的重写指令），LLM 改写时把它原样/变体抄进 motion_desc 尾部。指令是给
+# 模型的，落进画面字段会污染视频 prompt。尾部锚定 + 词形宽容，安全剥离。
+_REPAIR_ECHO_RE = re.compile(
+    r"[，,]{0,3}\s*每拍\s*[一个\d]{1,3}\s*个?\s*面部细节\s*，?\s*按时间先后写全\s*$"
+)
+
 
 def _collapse_name_runs(v: str) -> str:
     """折叠「名，名，名」连跑为单次（修复滑窗对逗号重复的盲区）."""
     return _NAME_RUN_RE.sub(r"\1", v)
+
+
+def _strip_repair_echo(v: str) -> str:
+    """剥掉字段尾部的修复指令回显（「，，，每拍1个面部细节按时间先后写全」）."""
+    if not v:
+        return v
+    return _REPAIR_ECHO_RE.sub("", v).rstrip("，,。") or v
 
 
 def _protected_mask(text: str) -> list[bool]:
@@ -141,6 +156,7 @@ class PromptRepetitionConstraint(Constraint):
                 if not v or not isinstance(v, str) or len(v) < 8:
                     continue
                 new_v = dedupe_text_4char(v)
+                new_v = _strip_repair_echo(new_v)
                 new_v = self._strip_dangling_names(new_v, char_names)
                 if new_v != v:
                     shot[fld] = new_v

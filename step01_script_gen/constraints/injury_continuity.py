@@ -20,27 +20,32 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from step01_script_gen.validation import (
-    _INJURY_ANCHOR_WORDS,
     _INJURY_ANCHOR_TAIL,
+)
+from step01_script_gen.prompt_semantic import (
+    STRONG_INJURY_ANCHORS as _STRONG_INJURY_ANCHORS,
+    BLOOD_STATE_WORDS as _BLOOD_STATE_WORDS,
+    COLLECTIVE_NAMES as _COLLECTIVE_NAMES,
+    THREAT_KEYWORDS as _THREAT_KEYWORDS,
 )
 from .base import Constraint
 from .types import RepairRecord, Severity
 
 
-# 强致命伤锚词（更严格，避免误判衣服水渍/手指沾血）
-_STRONG_INJURY_ANCHORS = (
-    "洇痕", "中刀", "中剑", "中枪", "刀伤", "剑伤",
-    "血痕", "血斑", "溅血", "中伤", "倒卧", "倒地",
-)
-# 威胁源关键词（统一从 prompt_semantic.registry 引入，单一事实源）
-from step01_script_gen.prompt_semantic import THREAT_KEYWORDS as _THREAT_KEYWORDS
+def _is_victim_candidate(nm: str) -> bool:
+    """个体受害者候选：非威胁、非泛指（群演/仆从等群像不是可追踪受害者）.
+
+    16:34 run 实测：shot4 特写刺杀 main_subject='群演' 被当成受害者，
+    shot6/7 伤锚延续漏补。与 validation._hard_fix_injury_continuity 同规则。
+    """
+    return bool(nm) and nm not in _THREAT_KEYWORDS and not any(w in nm for w in _COLLECTIVE_NAMES)
 
 
 def _identify_victim(shot: dict) -> str | None:
     """从 build_idx 镜头推导 victim 角色名（4 来源 fallback）.
 
     来源顺序：① main_subject 剥离动作词（仅当与 char_layout name 完全匹配）
-    ② char_layout role=次 非 threat 角色 ③ prompt/lf_desc 紧邻 anchor 词
+    ② char_layout role=次 非 threat/非泛指角色 ③ prompt/lf_desc 紧邻 anchor 词
     ④ char_layout 兜底.
     """
     cl_names_all = [
@@ -58,7 +63,7 @@ def _identify_victim(shot: dict) -> str | None:
         ):
             stripped = stripped.replace(prefix, "")
         stripped = stripped.strip()
-        if stripped and stripped in cl_names_all:
+        if _is_victim_candidate(stripped) and stripped in cl_names_all:
             return stripped
     # 来源②
     for item in (shot.get("char_layout") or []):
@@ -68,9 +73,8 @@ def _identify_victim(shot: dict) -> str | None:
         role = str(item.get("role", "")).strip()
         if not nm or role != "次":
             continue
-        if any(t in nm for t in _THREAT_KEYWORDS):
-            continue
-        return nm
+        if _is_victim_candidate(nm):
+            return nm
     # 来源③
     text = (shot.get("prompt", "") or "") + (shot.get("lf_desc", "") or "")
     for m in re.finditer(
@@ -78,13 +82,13 @@ def _identify_victim(shot: dict) -> str | None:
         text,
     ):
         nm = m.group(1)
-        if nm not in _THREAT_KEYWORDS:
+        if _is_victim_candidate(nm):
             return nm
     # 来源④
     for item in (shot.get("char_layout") or []):
         if isinstance(item, dict):
             nm = str(item.get("name", "")).strip()
-            if nm and nm not in _THREAT_KEYWORDS:
+            if _is_victim_candidate(nm):
                 return nm
     return None
 
@@ -117,7 +121,8 @@ class InjuryContinuityConstraint(Constraint):
     repair_marker = _INJURY_ANCHOR_TAIL
 
     def apply(self, ctx) -> list[RepairRecord]:
-        # 1. 找 build_idx（第一个含 anchor 词的 shot）
+        # 1. 找 build_idx（第一个含 STRONG anchor 词的 shot）——v6.51 与
+        #    validation 版对齐：宽表含"白袍/胸口"等服装词，开篇即命中会误建
         build_idx = None
         build_loc = None
         for i, s in enumerate(ctx.shots):
@@ -126,7 +131,7 @@ class InjuryContinuityConstraint(Constraint):
                 + (s.get("ff_desc", "") or "")
                 + (s.get("lf_desc", "") or "")
             )
-            if any(w in text for w in _INJURY_ANCHOR_WORDS):
+            if any(w in text for w in _STRONG_INJURY_ANCHORS):
                 build_idx = i
                 build_loc = s.get("location", "") or s.get("scene", "")
                 break
@@ -139,11 +144,14 @@ class InjuryContinuityConstraint(Constraint):
             return []
 
         # 3. 后续同 location shot 缺 anchor → 追加
+        #    v6.51：location 放宽「前 2 字一致」——LLM 自由文本 location
+        #    （「小舟上，张十三质问听香」）与 build（「小舟船头」）精确串
+        #    永不相等 → 延续层整体失明（16:34 run 实测）
         repairs: list[RepairRecord] = []
         for i in range(build_idx + 1, len(ctx.shots)):
             s = ctx.shots[i]
             loc = s.get("location", "") or s.get("scene", "")
-            if not build_loc or loc != build_loc:
+            if not build_loc or (loc != build_loc and loc[:2] != build_loc[:2]):
                 continue
             if not _is_victim_in_frame(s, victim):
                 continue
@@ -152,8 +160,11 @@ class InjuryContinuityConstraint(Constraint):
 
             prompt = s.get("prompt", "") or ""
             lf = s.get("lf_desc", "") or ""
-            prompt_has_anchor = any(w in prompt for w in _STRONG_INJURY_ANCHORS)
-            lf_has_anchor = bool(lf) and any(w in lf for w in _STRONG_INJURY_ANCHORS)
+            ff = s.get("ff_desc", "") or ""
+            # 已锚判定用 BLOOD_STATE_WORDS（含 暗红/洇开 等变体），防重复追加
+            prompt_has_anchor = any(w in prompt for w in _BLOOD_STATE_WORDS)
+            lf_has_anchor = bool(lf) and any(w in lf for w in _BLOOD_STATE_WORDS)
+            ff_has_anchor = bool(ff) and any(w in ff for w in _BLOOD_STATE_WORDS)
 
             if not prompt_has_anchor:
                 before = prompt
@@ -181,6 +192,21 @@ class InjuryContinuityConstraint(Constraint):
                         after=s["lf_desc"],
                     )
                 )
+            # v6.51：ff_desc 纳入——image 模式首帧图由 ff_desc 生成，缺锚会画出
+            # 无伤受害者（16:34 run shot6/7 实测）。受害者出现在 ff 才补。
+            if ff and not ff_has_anchor and victim in ff:
+                before = ff
+                s["ff_desc"] = ff.rstrip("。") + f"。{_INJURY_ANCHOR_TAIL}"
+                repairs.append(
+                    RepairRecord(
+                        constraint_name=self.name,
+                        shot_index=s.get("index", i),
+                        action="append",
+                        target="ff_desc",
+                        before=before,
+                        after=s["ff_desc"],
+                    )
+                )
 
         # 4. v6.43 修复（08-25）：build_idx 之后镜头已处理，**hook 也需同步**
         # — 真实跑批发现 hook（独立于 shots 之外）含 victim + 缺 anchor 也会丢伤处描
@@ -197,8 +223,8 @@ class InjuryContinuityConstraint(Constraint):
             if victim in h_text and not self._already_repaired(hook):
                 hp = hook.get("prompt", "") or ""
                 hl = hook.get("lf_desc", "") or ""
-                hp_has = any(w in hp for w in _STRONG_INJURY_ANCHORS)
-                hl_has = bool(hl) and any(w in hl for w in _STRONG_INJURY_ANCHORS)
+                hp_has = any(w in hp for w in _BLOOD_STATE_WORDS)
+                hl_has = bool(hl) and any(w in hl for w in _BLOOD_STATE_WORDS)
                 if not hp_has and hp:
                     before = hp
                     hook["prompt"] = hp.rstrip("。") + f"。{_INJURY_ANCHOR_TAIL}"
