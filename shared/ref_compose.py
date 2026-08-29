@@ -80,36 +80,83 @@ def get_ref_limit(model: str | None, default: int | None = None) -> int:
 
 
 _SHEET_LABELS = {
-    "chars": "人物形象参考表（多角色肖像横向拼合，只取各角色长相与服装，禁止当作画面构图）",
+    # v6.52：保留什么/禁止什么分开写——只禁不取会被模型理解成整体拒绝参考。
+    # 全身站姿照抄进画面是 hook ff「半身探出水面画出站立巨人+船尾第 4 蒙面人」
+    # 的实测根因，必须点名禁姿态/持物/人数。
+    "chars": "人物形象参考表（多角色头肩像横向拼合，仅取各角色面部/发型/上装特征；"
+             "禁止照搬参考图人物的站姿、持物与人数到本画面，画面中角色人数与站位以文字描述为准）",
     "scene": "场景环境参考表（多张环境图拼合，只取环境光线与布局，禁止当作画面构图）",
     "props": "道具外观参考表（多件道具拼合，只取各道具外观，禁止当作画面构图）",
     "all": "综合参考表（多张参考图拼合，只取各单项特征，禁止当作画面构图）",
 }
 
 
+def identity_names_of(paths: list[str]) -> list[str]:
+    """从头肩像路径提取角色名（拼表文件名后缀与逐人绑定用）.
+
+    portrait_crops/神秘人_front_no_weapon.png → 神秘人（stem 首段）
+    characters_bank/杨旭/front.png           → 杨旭（父目录名）
+    """
+    names: list[str] = []
+    for p in paths or []:
+        s = str(p).replace("\\", "/")
+        if "/portrait_crops/" in s:
+            stem = s.rsplit("/", 1)[-1][:-4] if s.endswith(".png") else s.rsplit("/", 1)[-1]
+            nm = stem.split("_")[0]
+            if nm:
+                names.append(nm)
+        elif "/characters_bank/" in s:
+            nm = s.rsplit("/", 2)[-2]
+            if nm:
+                names.append(nm)
+    return names
+
+
 def describe_ref(path: str) -> str:
     """按路径判定参考图用途标签（供 prompt 里的「图N」清单复用）.
 
-    识别约定：ref_sheet_*_{类别}.png（fit_refs 产物）、scenes_bank/、
-    characters_bank/、props_bank/ 目录、first_frame/last_frame 帧名。
+    识别约定：ref_sheet_*_{类别}.png（fit_refs 产物；v6.53 起 chars 表文件名
+    带从左至右角色顺序后缀 ref_sheet_*_chars_A+B+C.png）、scenes_bank/、
+    characters_bank/、portrait_crops/、props_bank/ 目录、first_frame/last_frame 帧名。
     """
     if not path:
         return ""
     p = str(path).replace("\\", "/")
     name = p.rsplit("/", 1)[-1]
-    # 拼图表：ref_sheet_{tag}_{group}.png
+    # 拼图表：ref_sheet_{tag}_{group}[_A+B+C].png
     if name.startswith("ref_sheet_"):
-        parts = name[:-4].split("_")  # 去 .png
-        group = parts[-1] if len(parts) >= 3 else "all"
-        return _SHEET_LABELS.get(group, _SHEET_LABELS["all"])
+        base = name[:-4] if name.endswith(".png") else name
+        group = "all"
+        names_part = ""
+        for pt in base.split("_")[2:]:
+            if pt in ("chars", "scene", "props", "mix", "extra"):
+                group = pt
+            elif "+" in pt:
+                names_part = pt
+        label = _SHEET_LABELS.get(group, _SHEET_LABELS["all"])
+        # v6.53 人↔参考图绑定：拼表内逐人点名（左→右），模型不再猜左一是谁
+        if group == "chars" and names_part:
+            ordered = "、".join(names_part.split("+"))
+            label += f"；从左至右依次为：{ordered} 的头肩像，各自的长相与上装以对应位置为准"
+        return label
     if name == "first_frame.png":
         return "视频起点画面（首帧，构图与人物站位基准）"
     if name == "last_frame.png":
         return "视频终点画面（尾帧）"
     if "/scenes_bank/" in p:
         return "场景环境参考（只取环境光线与布局，禁止把图中内容当人物）"
+    if "/portrait_crops/" in p:
+        # v6.52：收集层裁出的头肩胸像缓存（源为 characters_bank 立绘）
+        # v6.53：单图路径也点名角色（文件名首段即角色名）
+        who = name.split("_")[0] if name else ""
+        who_txt = f"{who}的" if who else ""
+        return (f"{who_txt}人物形象参考（头肩胸像，仅取该角色的面部/发型/上装特征；"
+                "禁止照搬图中姿态与持物）")
     if "/characters_bank/" in p:
-        return "人物形象参考（只取该角色的五官、发型与服装）"
+        who = p.rsplit("/", 2)[-2] if "/" in p else ""
+        who_txt = f"{who}的" if who else ""
+        return (f"{who_txt}人物形象参考（头肩胸像，只取该角色的五官、发型与上装特征；"
+                "禁止照搬图中站姿与持物）")
     if "/props_bank/" in p:
         return "道具/空间物体外观参考（只取该物体外观与比例）"
     return "一致性参考（人物/场景/道具特征以该图为准）"
@@ -199,7 +246,15 @@ def fit_refs(
         pass
 
     def _sheet(name: str, paths: list[str]) -> str:
-        out = str(sheet_dir / f"ref_sheet_{sheet_tag}_{name}.png")
+        # v6.53 人↔参考图绑定：chars 表文件名带从左至右角色顺序（stitch 保序，
+        # collect 顺序=动作主体优先的出镜顺序），describe_ref/build_ref_manifest
+        # 据此生成逐人绑定说明——模型不再猜左一是谁
+        suffix = ""
+        if name == "chars":
+            names = identity_names_of(paths)
+            if names:
+                suffix = "_" + "+".join(names)
+        out = str(sheet_dir / f"ref_sheet_{sheet_tag}_{name}{suffix}.png")
         stitched = _stitch(paths, out)
         return stitched if stitched else ""
 

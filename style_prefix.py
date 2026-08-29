@@ -328,12 +328,26 @@ def sanitize_prompt(prompt: str, verbose: bool = False) -> str:
 
 
 def sanitize_script_shots(script: dict, verbose: bool = True) -> dict:
-    """对 script 中所有镜头 prompt 做敏感词替换."""
-    for shot in script.get("shots", []):
+    """对 script 中所有镜头 prompt 做敏感词替换.
+
+    v6.53：main_subject / char_layout[].name 一并走 alias 折叠（此前完全
+    跳过合规替换——hook char_layout[0].name="刺客"、shot3 "船夫"、shot10
+    main_subject="庄仆" 实测，下游人数名单/肖像查找/锚匹配三方失配）。
+    hook 与 shots 同处理。
+    """
+    targets = list(script.get("shots", []) or [])
+    if isinstance(script.get("hook"), dict):
+        targets.append(script["hook"])
+    for shot in targets:
         for field in ("prompt", "ff_desc", "lf_desc", "motion_desc"):
             val = shot.get(field, "")
             if val:
                 shot[field] = sanitize_prompt(val, verbose=verbose)
+        try:
+            from shared.alias_map import alias_walk_shot
+            alias_walk_shot(shot)
+        except Exception:
+            pass
     return script
 
 
@@ -1430,13 +1444,37 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
             # 否则"禁止…黑影"与 ff_desc「水下黑影轮廓」直接打架，模型被搞乱。
             # v6.50：不可见威胁时补正向锚（黑影保持暗影轮廓不画成人形），
             # 消除「禁人影 vs 画黑影」的模型侧歧义。
-            _banned_tail = ("禁止出现任何其他人物、人影。黑影为剧情威胁伏笔，"
-                            "只画水下暗影轮廓，禁止画成完整人形。"
-                            if _threat_invisible_only
-                            else "禁止出现任何其他人物、黑影、人影。")
+            # v6.52：两分支各自点名真实漏网形态——不可见分支防"第二个黑影/
+            # 第二个角色"；可见分支防"复用已列角色"（hook ff 第 4 蒙面人 =
+            # 蒙面人即别名刺客被复制成第二个分身，实测）。
+            if _threat_invisible_only:
+                _banned_tail = (
+                    f"仅实体可见角色：威胁源以水下黑影呈现，不计入实体人数；"
+                    f"禁止出现任何其他人物、第二个黑影、第二个{'、'.join(char_names)}。"
+                    "黑影为剧情威胁伏笔，只画水下暗影轮廓，禁止画成完整人形。"
+                )
+            else:
+                _banned_tail = (
+                    "禁止出现任何其他人物、黑影、人影。"
+                    "禁止复制/复用画面已列角色作为新人物（如把同一角色画两次、"
+                    "给蒙面人画第二个分身），每个角色在画面中只出现一次。"
+                )
             strict_constraints += (
                 f"【人物数量限制】画面中只允许出现以下角色：{'、'.join(char_names)}。"
                 f"总共{len(char_names)}人，{_banned_tail}"
+            )
+
+        # v6.52 防线2：char_layout 结构化直推人数硬锚——present_chars 靠文本
+        # 匹配推导，威胁源别名（刺客→神秘人）漏配时名单缺人、人数锚失真
+        # （hook ff 实测画 4 人）。char_layout ≥3 条（含威胁源）时把名单写成
+        # 逐个清点的硬锚。
+        _cl_items = shot.get("char_layout") or []
+        _cl_names = [str(it.get("name", "")).strip() for it in _cl_items
+                     if isinstance(it, dict) and str(it.get("name", "")).strip()]
+        if len(_cl_items) >= 3 and char_names:
+            strict_constraints += (
+                f"【画面人数硬锚】本画面共 {len(char_names)} 个角色：{'、'.join(char_names)}。"
+                "请在心中逐个清点画面人物，多于上述名单即错误。"
             )
 
         # v6.20：帧朝向强化——参考图三视图是伪三视图（side/back 0.95+ 相似度，

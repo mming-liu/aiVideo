@@ -816,6 +816,11 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
         result = await asyncio.to_thread(
             maybe_qc_sync, frame_path, shot, frame_kind, characters, empty_scene, prompt,
         )
+        # v6.54.1：完整结果暂存——QC critical 分支据此构建局部修复计划
+        try:
+            shot["_qc_last"] = result
+        except Exception:
+            pass
         if not result.ok:
             _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 质检失败跳过（未写 sidecar）: {result.error}")
             return False
@@ -829,6 +834,28 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
             write_sidecar(Path(frame_path), result)
         except Exception as e:
             _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} sidecar 写入失败: {e}")
+        # v6.53 A.4：尝试日志落盘（人数/问答答案/判定），重抽对比「哪里变了」
+        try:
+            import time as _time
+            log_path = Path(frame_path).parent / f"{Path(frame_path).stem}_qc_log.json"
+            log = []
+            if log_path.exists():
+                try:
+                    log = json.loads(log_path.read_text(encoding="utf-8"))
+                except Exception:
+                    log = []
+            log.append({
+                "ts": _time.strftime("%Y-%m-%d %H:%M:%S"),
+                "provider": os.getenv("QC_PROVIDER", "auto"),
+                "has_hallucination": result.has_hallucination,
+                "person_count": getattr(result, "person_count", None),
+                "answers": getattr(result, "answers", None),
+                "issues": [{"category": i.category, "severity": i.severity,
+                            "description": i.description} for i in result.issues],
+            })
+            log_path.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 尝试日志写入失败: {e}")
         has_critical = result.has_hallucination and any(
             getattr(i, "severity", "") == "critical" for i in result.issues)
         if has_critical:
@@ -845,6 +872,42 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
     except Exception as e:
         _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 质检异常（不阻断）: {e}")
         return False
+
+
+async def _try_qc_repair(image_adapter, shot: dict, frame_path: str, frame_kind: str,
+                         characters: list | None, empty_scene: bool, idx) -> bool:
+    """QC critical 后先试局部修复（v6.54.1 先修后抽）.
+
+    build_repair_plan 分类：局部可修（睁眼/刀接触/红痕/篷/发光）→ doodle 红框
+    i2i 改写 1 次（复用 v6.30 机制，bbox 来自 L1 检测）→ 复检；复检通过 = True
+    （帧已替换，哈希不删——下次缓存命中的就是修好的图）。全局失败/编辑失败/
+    复检仍 critical → False（调用方走原删帧重抽路径）。
+    """
+    from shared.image_qc import build_repair_plan
+    qc_result = shot.get("_qc_last")
+    if not qc_result:
+        return False
+    plan = build_repair_plan(shot, frame_kind, qc_result)
+    if plan.get("action") != "edit":
+        _bridge_log(f"  [REPAIR] shot_{idx} {frame_kind} 走重抽: {plan.get('reason', '')[:60]}")
+        return False
+    _bridge_log(f"  [REPAIR] shot_{idx} 局部修复 ({','.join(plan.get('matched_patterns', []))}) "
+                f"region={plan['bbox_ratio']} area={plan.get('area_pct')}%")
+    tmp = Path(frame_path).parent / f"{Path(frame_path).stem}_repair.png"
+    edited = await _doodle_refine_first_frame(
+        image_adapter, frame_path, plan["bbox_ratio"], plan["edit_prompt"], str(tmp), idx)
+    if not edited or not _validate_frame(edited):
+        _bridge_log("  [REPAIR] 编辑失败/输出无效，回落重抽")
+        return False
+    Path(edited).replace(frame_path)
+    qc2 = await _maybe_qc_frame(shot, frame_path, frame_kind, characters, empty_scene)
+    qc2_critical = bool(qc2 and qc2.has_hallucination and any(
+        getattr(i, "severity", "") == "critical" for i in qc2.issues))
+    if qc2_critical:
+        _bridge_log("  [REPAIR] 修复后复检仍 critical，回落重抽")
+        return False
+    _bridge_log("  [REPAIR] 修复后复检通过")
+    return True
 
 
 def _del_frame_and_hash(frame_path, hash_path, label, idx, logger):
@@ -1303,6 +1366,36 @@ def _detect_action_subject(shot: dict, characters: list | None = None) -> str:
     return best
 
 
+def _head_portrait_path(src: str) -> str:
+    """把角色立绘转换为头肩胸像缓存（v6.52 参考图防姿态/持物泄漏）.
+
+    全身站姿会被图生图照抄成画面构图（hook ff 要「半身探出水面」画出站立
+    巨人、船尾多出第二个蒙面人实测）；刺客像里的发光匕首也随参考图泄入
+    画面。裁到头肩胸后姿态与持物不再入参考，身份特征（脸/发型/上装）保留。
+
+    裁切缓存于 vimax_working/portrait_crops/（源 mtime 变化才重裁）——
+    放在收集层而非拼图层，fit_refs 的「≤limit 原图直传」单图路径与拼图
+    路径拿到的是同一份已裁图。失败返回原路径（graceful degradation）。
+    """
+    try:
+        from shared.portrait_stitch import crop_head_portrait
+        sp = Path(src)
+        if not sp.exists():
+            return src
+        from shared.paths import vimax_working_dir
+        out_dir = vimax_working_dir() / "portrait_crops"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"{sp.parent.name}_{sp.stem}.png"
+        if out.exists() and out.stat().st_mtime >= sp.stat().st_mtime:
+            return str(out)
+        from PIL import Image as _PILImage
+        img = _PILImage.open(sp).convert("RGB")
+        crop_head_portrait(img).save(out, "PNG")
+        return str(out)
+    except Exception:
+        return src
+
+
 def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
                                     limit: int = 3,
                                     frame_desc: str | None = None) -> list[str]:
@@ -1420,6 +1513,16 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
                 if path and Path(path).exists():
                     picked = path
                     break
+            # v6.52 A2：威胁源优先用无武器版立绘（<stem>_no_weapon.png 同目录
+            # 存在即换）——原刺客像持发光蓝匕首，是发光武器幻觉的源头之一。
+            if picked and ident in _THREAT_IDS:
+                _nw = Path(picked).parent / f"{Path(picked).stem}_no_weapon.png"
+                if _nw.exists():
+                    picked = str(_nw)
+                    _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: {ident} 使用无武器版立绘 {_nw.name}")
+            # v6.52 A1：立绘 → 头肩胸像缓存（裁姿态/持物，保脸/发型/上装）
+            if picked:
+                picked = _head_portrait_path(picked)
             if picked and picked not in refs:
                 refs.append(picked)
                 _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 首帧/尾帧参考图=角色 {ident} {view_pref}肖像")
@@ -1496,6 +1599,11 @@ def _inject_object_size_anchor(shot: dict, text: str) -> str:
     loc = shot.get("location", "") or shot.get("scene", "") or ""
     if not loc:
         return text
+    # v6.52：剥离 desc 内嵌的 LLM 尺寸残留——「（宽1.4米，可容3人）」「（长6米
+    # 宽1.4米无篷舴艋舟）」与 scene_objects 注入的尺寸自相矛盾（16:34 脚本
+    # 实测 6 处 1.4米 vs 注入 1.6米），模型两侧都不信、船宽随机抽奖。
+    # 尺寸一律以本函数注入的 scene_objects 锚为准。幂等：剥完再跑无变化。
+    text = re.sub(r"[（(][^（）()]*\d+(?:\.\d+)?米[^（）()]*[）)]", "", text)
     try:
         from shared.paths import chapter_dir
         import json as _json
@@ -1551,6 +1659,14 @@ def _inject_object_size_anchor(shot: dict, text: str) -> str:
                 return text
             # 只注入尺寸/称呼，不注入容量结构（避免与画面描述冲突）
             size_desc = f"该{name}为{subtype}{'，长' + str(length) + '米' if length else ''}{'、宽' + str(width) + '米' if width else ''}"
+            # v6.52 船宽相对锚：绝对米数对图片模型无效（P22 精确空间约束无解，
+            # hook ff「宽1.6米」照画 0.6 米实测），改用相对人体的语义锚。
+            if (obj.get("category") or "") == "船":
+                size_desc += "，船宽约为人物肩宽的三倍，人物躺卧后船舷两侧仍有空档"
+                # 无篷形制反向锚：「舴艋舟」易被联想成乌篷船（hook ff 实测画出
+                # 大竹篷遮挡舱面）——subtype 带「无篷」时显式钉死敞舱。
+                if "无篷" in subtype or "无篷" in name:
+                    size_desc += "，无船篷无遮盖，舱面完全敞开可见"
             # 近景/中景构图提示（08-09 首帧船太小）：图片模型对纯数字尺寸不敏感
             # （「长6.0米」不认），且全船入画会压缩人物比例。用镜头语言替代：
             # 近景/中景只画船头/船舷局部、人物占画面放大，从构图比例暗示船大。
@@ -1596,6 +1712,12 @@ _KF_POSE_STATES = (
 _KF_POSITION_WORDS = (
     "船头", "船尾", "船中", "中舱", "船梢", "船舷", "船板", "船侧",
     "画左", "画右", "画中", "画上方", "水中", "水下", "水面", "岸上",
+)
+# v6.52 前景体型锚的动态入场词：命中 + 画左/画右前景 → 该角色按前景透视
+# 被画成巨人的重灾组合（hook ff 神秘人/shot6 张十三跃上船实测）
+_FG_DYNAMIC_WORDS = (
+    "探出", "跃上", "跃下", "跃入", "扑出", "扑向", "破水", "入画",
+    "落水", "窜出", "半身出水", "半身探出", "潜伏", "俯身", "逼近",
 )
 # 威胁源词表 + 攻击动词（统一从 prompt_semantic.registry 引入）
 from step01_script_gen.prompt_semantic import (
@@ -1840,7 +1962,13 @@ def _extract_char_layout(
         for c in onstage:
             ident = c.get("identifier", "")
             pose = _extract_kf_pose(scan, ident)
-            layout_item = layout_by_name.get(ident)
+            # v6.53 alias 感知查找：char_layout.name 经 alias 折叠（刺客→神秘人、
+            # 船夫→群演），与 identifier 字面不同——按别名链逐个试。
+            layout_item = None
+            for _nm in _char_aliases(ident, characters):
+                if _nm in layout_by_name:
+                    layout_item = layout_by_name[_nm]
+                    break
             seg = ident
             if pose:
                 seg += pose
@@ -1875,6 +2003,14 @@ def _extract_char_layout(
                             break
                 except Exception:
                     pass
+            # v6.52 前景体型锚：前景机位 + 动态入场姿态（探出/跃上/扑出/破水…）
+            # 或威胁源时，图片模型按前景透视把该角色画成巨人（hook ff 神秘人
+            # 手臂比船宽还长实测）。相对体型锚压回正常人体比例。只挂本角色
+            # seg 末尾，中景/背景条目不受影响。动态词查 scan 全文而非姿态表——
+            # 跃上/扑出/破水这类动词不在 _KF_POSE_STATES 里，但恰是巨人化重灾。
+            if ("前景" in (pos or "")) and (
+                    any(w in scan for w in _FG_DYNAMIC_WORDS) or ident in _THREAT_IDS):
+                seg += "（体型与画面其他人物相当，透视正常，非巨人）"
             parts.append(seg)
 
         if not parts:
@@ -1893,6 +2029,23 @@ def _extract_char_layout(
             # 改写为描述性短句「身体朝攻击目标方向，目光与攻击对象同侧」。
             block += "，身体朝攻击目标方向，目光与攻击对象同侧"
 
+        # v6.53.1：收集「水面角色」（surface/pose 表明身体在水里）——船体锚的
+        # 「所有角色必须严格在船上」与 desc「神秘人半身探出水面」直接矛盾，
+        # 模型随机调和（hook ff 画成推船随行实测）。分句后矛盾消除。
+        _WATER_MARKS = ("水面", "水中", "水下", "半身", "潜")
+        _water_names: list[str] = []
+        for c in onstage:
+            ident_c = c.get("identifier", "")
+            li = None
+            for _nm in _char_aliases(ident_c, characters):
+                if _nm in layout_by_name:
+                    li = layout_by_name[_nm]
+                    break
+            _surf = str((li or {}).get("surface", "")) if isinstance(li, dict) else ""
+            _pose_c = _extract_kf_pose(scan, ident_c) or ""
+            if any(w in (_surf + _pose_c) for w in _WATER_MARKS):
+                _water_names.append(ident_c)
+
         # 船体完整性锚（首/尾/关键帧共用）：场景含船且画面有角色 → 补"完整小舟、
         # 船头船尾齐全"。08-23 从 water_state 条件拆出——首帧（water_state=False）
         # 原先不补，图片模型照 ff_desc 的"延伸出画外"裁掉船尾；船体完整是基础
@@ -1909,7 +2062,15 @@ def _extract_char_layout(
                 if boat and "完整小舟" not in block and "整船" not in block:
                     # v6.45（08-26）⚠️ 强调前缀——image model 对末尾约束遵守率低，
                     # 加 ⚠️ 符号提升视觉权重（与"画面稳定·不闪烁"等约束同款模式）。
-                    block += "。⚠️ 完整小舟在画中、船头船尾齐全不缺失，**所有角色必须严格在船上**，禁止任何角色出现在船外水面/船头船尾缺失"
+                    if _water_names:
+                        # 有水面角色：船上/水中分句，并点名袭击姿态（防「推船随行」）
+                        _wnames = "、".join(_water_names)
+                        block += (f"。⚠️ 完整小舟在画中、船头船尾齐全不缺失。"
+                                  f"{_wnames}半身浸在船侧水中、身体静止面向船上目标，"
+                                  f"呈袭击/威胁姿态（禁止推船、撑船、扶船随行）；"
+                                  f"其余角色必须严格在船上，禁止出现在船外水面")
+                    else:
+                        block += "。⚠️ 完整小舟在画中、船头船尾齐全不缺失，**所有角色必须严格在船上**，禁止任何角色出现在船外水面/船头船尾缺失"
         except Exception:
             pass
         # 关键帧补水面浪花（动作状态锚定，仅关键帧）
@@ -2619,6 +2780,11 @@ async def _gen_first_frame_async(
         from shared.prompt_contradiction import assert_no_contradictions
         assert_no_contradictions(_assert_ff, f"shot{idx} 首帧")
 
+    # v6.53 A.4：QC_MAX_ATTEMPTS=重抽总尝试次数（含首次），默认沿用调用方
+    try:
+        max_retries = max(0, int(os.getenv("QC_MAX_ATTEMPTS", str(max_retries + 1))) - 1)
+    except (TypeError, ValueError):
+        pass
     for attempt in range(max_retries + 1):
         if ff_path.exists() and not force and attempt == 0:
             # 检查哈希文件是否存在且匹配
@@ -2701,21 +2867,30 @@ async def _gen_first_frame_async(
             # 保存哈希值，供下次缓存检测使用
             ff_hash_path.write_text(current_hash, encoding="utf-8")
             # B7 修复：首帧 QC critical → unlink 坏帧 + 删哈希，重试循环重生成
+            # v6.54.1：先修后抽——局部可修的 critical 走 bbox i2i 编辑（保已通过
+            # 的构图/人脸），编辑失败或全局失败才删帧重抽
             qc_critical = await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene)
             if qc_critical:
-                logger.verbose(f"  [FRAME] 首帧 shot_{idx} QC critical，删帧重生成")
-                try:
-                    Path(ff_path).unlink(missing_ok=True)
-                except Exception:
-                    pass
-                try:
-                    Path(ff_hash_path).unlink(missing_ok=True)
-                except Exception:
-                    pass
-                if attempt < max_retries:
-                    continue
-                # 末次尝试 QC critical：帧已删除，返回 None（调用方按失败处理）
-                return None
+                if await _try_qc_repair(image_adapter, shot, str(ff_path), "first_frame",
+                                        characters, empty_scene, idx):
+                    pass  # 修复成功：哈希未删（下次缓存命中即修好的图），继续 spatial fallback
+                else:
+                    logger.verbose(f"  [FRAME] 首帧 shot_{idx} QC critical，删帧重生成")
+                    try:
+                        Path(ff_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    try:
+                        Path(ff_hash_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    if attempt < max_retries:
+                        continue
+                    # v6.53 A.4：末次尝试仍 critical → 不删帧（保留最不差一版），
+                    # sidecar 已带 critical 记录，留痕供人工复核；无图比坏图更伤链路
+                    _bridge_log(f"  [QC] shot_{idx} {attempt+1} 次尝试均 critical，"
+                                "保留末版留痕（attempts_exhausted）")
+                    return str(ff_path)
             # v6.30：doodle 区域编辑 fallback — 精确空间约束 prompt 调不到位时
             # 走 i2i + 红框二修；QC critical 之后才做（不在已知坏帧上浪费 i2i）。
             # 失败保留原图（graceful degradation）。哈希键不变（基于 prompt，
@@ -2818,6 +2993,11 @@ async def _gen_last_frame_async(
         from shared.prompt_contradiction import assert_no_contradictions
         assert_no_contradictions(_assert_lf, f"shot{idx} 尾帧")
 
+    # v6.53 A.4：QC_MAX_ATTEMPTS=重抽总尝试次数（含首次）
+    try:
+        max_retries = max(0, int(os.getenv("QC_MAX_ATTEMPTS", str(max_retries + 1))) - 1)
+    except (TypeError, ValueError):
+        pass
     for attempt in range(max_retries + 1):
         if lf_path.exists() and not force and attempt == 0:
             # 检查哈希文件是否存在且匹配
@@ -2907,6 +3087,10 @@ async def _gen_last_frame_async(
             # B7 修复：尾帧 QC critical → unlink 坏帧 + 删哈希，重试循环重生成
             qc_critical = await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene)
             if qc_critical:
+                # v6.54.1：先修后抽（与首帧同策略）
+                if await _try_qc_repair(image_adapter, shot, str(lf_path), "last_frame",
+                                        characters, empty_scene, idx):
+                    return str(lf_path)
                 logger.verbose(f"  [FRAME] 尾帧 shot_{idx} QC critical，删帧重生成")
                 try:
                     Path(lf_path).unlink(missing_ok=True)
@@ -2918,8 +3102,11 @@ async def _gen_last_frame_async(
                     pass
                 if attempt < max_retries:
                     continue
-                # 末次尝试 QC critical：帧已删除，返回 None（调用方按失败处理）
-                return None
+                # v6.53 A.4：末次尝试仍 critical → 不删帧（保留最不差一版），
+                # sidecar 已带 critical 记录，留痕供人工复核；无图比坏图更伤链路
+                _bridge_log(f"  [QC] shot_{idx} {attempt+1} 次尝试均 critical，"
+                            "保留末版留痕（attempts_exhausted）")
+                return str(ff_path)
             return str(lf_path)
         if attempt < max_retries:
             logger.verbose(f"  [FRAME] 尾帧 shot_{idx} 第{attempt+1}次不达标，重试...")

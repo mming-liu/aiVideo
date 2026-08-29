@@ -17,12 +17,18 @@ sidecar 契约（与 step02_video_gen/submit_poll.py 的 _check_keyframe_halluci
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import requests
+from PIL import Image
 
 # 图片质检配置（与 shared/config.py 保持一致；此处直接读 env，避免循环依赖）
 QC_ENABLED = os.getenv("IMAGE_QC_ENABLED", "1").strip() == "1"
@@ -44,10 +50,11 @@ _FALLBACK_KEYWORDS = ["多指", "畸形", "换脸", "多出", "水印", "半透�
 
 # 有效 category 白名单（对齐现有 detector + subject_consistency 图文一致性）
 # v1.1：新增 prompt_semantics（画面是否符合实际生成 prompt 的语义，如发色/朝向/手持物）
+# v6.52：新增 extra_person（人数断言——画面实体人数超出 char_layout 名单+1）
 _VALID_CATEGORIES = {
     "face_consistency", "body_deformity", "unexpected_object",
     "text_watermark", "scene_consistency", "subject_consistency",
-    "prompt_semantics",
+    "prompt_semantics", "extra_person",
 }
 
 
@@ -69,6 +76,12 @@ class QcResult:
     ok: bool = False  # False=质检本身失败（超时/无路由/解析失败），非图片问题
     raw_result: str = ""
     error: str = ""
+    # v6.53 三层架构产出（第 1/2 层），sidecar 与尝试日志消费
+    person_count: int | None = None
+    answers: dict | None = None
+    # v6.54.1：L1 grounding 原始实体条目（{label, desc, bbox}，bbox 归一 0-1000），
+    # build_repair_plan 据此选 bbox 调 _doodle_refine_first_frame 做局部修复
+    entities: list[dict] | None = None
 
 
 # ============================================================================
@@ -204,6 +217,19 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
             "人物发色/服装颜色、面部朝向（画左/画右/面向谁）、手持物品/姿势、"
             "场景要素、人物数量——与描述明显不符才算问题；古风水墨风格笔触不算）"
         )
+    # v6.52 防线1：人数断言——给视觉模型一个具体数字去清点（模糊的「人物数量」
+    # 检查项会被跳过；hook ff 画了 4 人 QC 判 0 问题实测）。容忍 +1（威胁源
+    # 双实例/背景 1 路人），超出即 critical（IMAGE_QC_WRITE_CRITICAL=1 删帧重生成）。
+    _cl_entities = [str(it.get("name", "")).strip() for it in (shot.get("char_layout") or [])
+                    if isinstance(it, dict) and str(it.get("name", "")).strip()]
+    if _cl_entities and not empty_scene:
+        _tol0 = int(os.getenv("QC_PERSON_TOLERANCE", "0"))
+        lines.append(
+            f"8. extra_person 清点画面中的实体人物数（蒙面/背影/水中半身都算，"
+            f"水面倒影/水下暗影轮廓/画中画像不算）：本镜角色名单共 "
+            f"{len(_cl_entities)} 人（{'、'.join(_cl_entities)}），"
+            f"画面实体人数若多于 {len(_cl_entities) + _tol0} → critical"
+        )
     if empty_scene:
         lines.append("7. 本镜是空镜，画面中禁止出现任何人；若出现人物则属于严重问题。")
     lines.extend([
@@ -214,10 +240,19 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
     ])
     # P4 修复：关键锚点（服装色/人物数量/威胁源状态）不符按配置升级严重度。
     # QC_SEMANTICS_CRITICAL=1 → critical（删帧重生成，当场拦住）；默认 warning（只记录）。
+    # v6.53 A.0：人数容差从写死的 +1 改为 QC_PERSON_TOLERANCE（默认 0——
+    # try1 的 4 人图 vs 名单 3 人曾因 +1 容差漏放，0 容差下 critical）。
+    _tol = int(os.getenv("QC_PERSON_TOLERANCE", "0"))
     if os.getenv("QC_SEMANTICS_CRITICAL", "0") == "1":
         lines.append("- **关键锚点**（服装颜色、人物数量、威胁源状态如刺客是否出水）与「画面描述」明显不符 → critical（会删帧重生成）")
     else:
         lines.append("- **关键锚点**（服装颜色、人物数量、威胁源状态如刺客是否出水）与「画面描述」明显不符 → warning（设 QC_SEMANTICS_CRITICAL=1 可升级 critical 删帧重生成）")
+    if _cl_entities and not empty_scene:
+        allowed = len(_cl_entities) + _tol
+        lines.append(
+            f"- 人数断言：名单 {len(_cl_entities)} 人，容忍名单外 {_tol} 人——"
+            f"画面实体人数多于 {allowed} → critical"
+        )
     lines.extend([
         "- 轻微瑕疵（背景小物、风格笔触、留白、水墨晕染）→ 不算问题，不得误判",
         "- 该作品是古风水墨风格，水墨、留白、笔触、墨晕均属正常艺术风格",
@@ -521,16 +556,642 @@ def qc_image(frame_path: str | Path, prompt: str | None = None,
     return parse_verdict(result_text)
 
 
+# ============================================================================
+# v6.53 三层架构：第 1/2 层（ARK grounding + 锚点二值问答）
+#
+# 背景：免费池视觉模型"判对错"不可救——hook ff 4 人图两次判 0 问题，它不数
+# 人数、只扫整体像不像。本层把"数数"与"对错"从 LLM 拿回代码：
+#   LLM 只做检测（出实体框+属性行 / 答二值问题——它擅长的）
+#   代码做计数断言 + 属性指纹查重 + 锚点符合性判定（它擅长的）
+# ============================================================================
+
+_ARK_VISION_MODEL = os.getenv("QC_ARK_MODEL", "doubao-seed-1-6-250615")
+# Agnes 视觉响应慢（router 给它配 300s）——检测层默认 150s，单渠道失败自动
+# 落下一个渠道；末渠道重试 1 次。
+_ARK_TIMEOUT_SEC = int(os.getenv("QC_ARK_TIMEOUT_SEC", "150"))
+_COLOR_WORDS = ("白", "黑", "青", "蓝", "红", "绿", "灰", "紫", "金", "银", "粉", "褐")
+# 检测模型属性行是英文（grounding prompt 为英文）——英文色词归一到中文键，
+# 与 characters features（中文）的颜色统计对齐
+_EN_COLOR_MAP = (("white", "白"), ("black", "黑"), ("cyan", "青"), ("blue", "蓝"),
+                 ("red", "红"), ("green", "绿"), ("gray", "灰"), ("grey", "灰"),
+                 ("purple", "紫"), ("gold", "金"), ("silver", "银"), ("pink", "粉"),
+                 ("brown", "褐"))
+_GROUNDING_PROMPT = (
+    "Detect every distinct person and the main vehicle/furniture object in this image. "
+    'Return ONLY a JSON array, one entry per entity: '
+    '[{"label":"person","desc":"<clothing color + headwear + pose, <=20 words>","bbox":[x1,y1,x2,y2]}] '
+    "where bbox is normalized to 0-1000. Include partially visible persons (in water, behind objects). "
+    "Do NOT count reflections, shadows, or painted figures. No other text."
+)
+
+
+def _vision_chat(frame_path: str | Path, prompt: str) -> str:
+    """检测/问答共用的视觉对话传输层，按可用性链式回落，全失败抛异常.
+
+    实测（2026-08-29）：
+    - ARK doubao-seed 视觉模型全部 404（该账号仅开通图片/视频生成，未开通
+      视觉 chat）——保留 ark 分支以备开通后自动生效。
+    - agnes-2.5-flash（AGNES_BASE_URL/v1/chat/completions，router 同款）
+      grounding 完美：try2 好图正好 3 人、属性行准确，且免费。
+    - dashscope qwen-vl-max 同样可用（输出偶发 JSON 畸形，_parse_entity_array
+      已做容错修复）。
+    """
+    attempts = []
+    agnes_key = os.getenv("AGNES_API_KEY") or ""
+    if agnes_key:
+        base = (os.getenv("AGNES_BASE_URL") or "https://api.agnes-ai.cn").rstrip("/")
+        attempts.append(("agnes", f"{base}/v1/chat/completions",
+                         os.getenv("AGNES_VISION_MODEL", "agnes-2.5-flash"), agnes_key))
+    ds_key = os.getenv("DASHSCOPE_API_KEY") or ""
+    if ds_key:
+        attempts.append(("dashscope", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                         os.getenv("QC_DASHSCOPE_VISION_MODEL", "qwen-vl-max"), ds_key))
+    ark_key = os.getenv("VOLCENGINE_API_KEY") or os.getenv("ARK_API_KEY") or ""
+    if ark_key:
+        base = os.getenv("VOLCENGINE_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
+        attempts.append(("ark", f"{base.rstrip('/')}/chat/completions", _ARK_VISION_MODEL, ark_key))
+
+    if not attempts:
+        raise RuntimeError("无可用视觉理解渠道（AGNES/DASHSCOPE/VOLCENGINE key 均未配置）")
+    data_url = _ark_image_data_url(frame_path)
+    last_err = ""
+    for name, url, model, key in attempts:
+        # Agnes 响应慢且偶发读超时——超时重试 1 次（4xx 不重试）
+        tries = 2 if name == "agnes" else 1
+        for attempt_i in range(tries):
+            try:
+                resp = requests.post(
+                    url,
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json={"model": model, "messages": [{"role": "user", "content": [
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                        {"type": "text", "text": prompt},
+                    ]}], "temperature": 0, "max_tokens": 1500,
+                    },
+                    timeout=_ARK_TIMEOUT_SEC,
+                )
+                if resp.status_code != 200:
+                    last_err = f"{name} {resp.status_code}: {resp.text[:120]}"
+                    break
+                data = resp.json()
+                return ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+            except Exception as e:
+                last_err = f"{name}: {e}"
+                if attempt_i < tries - 1:
+                    continue
+                break
+    raise RuntimeError(f"视觉检测渠道全部失败：{last_err}")
+
+
+def _parse_entity_array(text: str) -> list[dict]:
+    """解析实体 JSON 数组；容忍模型输出的畸形括号（qwen 实测「420}}」）."""
+    if not text or not text.strip():
+        raise RuntimeError("检测模型返回空结果")
+    m = re.search(r"\[.*\]", text, re.S)
+    if not m:
+        raise RuntimeError(f"无 JSON 数组: {text[:120]}")
+    raw = m.group(0)
+    try:
+        entries = json.loads(raw)
+    except Exception:
+        entries = []
+        # 逐对象抽取重建（对象内不含嵌套花括号）
+        for obj in re.findall(r"\{[^{}]*\}", raw):
+            try:
+                entries.append(json.loads(obj))
+            except Exception:
+                continue
+    if not isinstance(entries, list):
+        raise RuntimeError("检测结果非数组")
+    return [e for e in entries if isinstance(e, dict)]
+
+
+def _detect_entities(frame_path: str | Path) -> list[dict]:
+    """grounding 检测：返回实体条目 [{label, desc, bbox}, ...]；失败抛异常."""
+    return _parse_entity_array(_vision_chat(frame_path, _GROUNDING_PROMPT))
+
+
+def _ark_image_data_url(frame_path: str | Path, max_side: int = 1024) -> str:
+    """图片转 base64 data URL（长边压到 max_side 控 payload/延迟）."""
+    img = Image.open(frame_path).convert("RGB")
+    w, h = img.size
+    if max(w, h) > max_side:
+        ratio = max_side / max(w, h)
+        img = img.resize((max(1, int(w * ratio)), max(1, int(h * ratio))), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=88)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/jpeg;base64,{b64}"
+
+
+def _expected_persons(shot: dict, frame_kind: str, characters: list | None) -> int | None:
+    """本帧应出现人数 = char_layout 实体数；威胁源仅非实体呈现时从名单剔除."""
+    names = [str(it.get("name", "")).strip() for it in (shot.get("char_layout") or [])
+             if isinstance(it, dict) and str(it.get("name", "")).strip()]
+    if not names:
+        return None
+    _THREAT = ("神秘人", "刺客", "杀手", "黑衣人", "蒙面人", "黑影")
+    has_threat_name = any(n in _THREAT for n in names)
+    if has_threat_name:
+        try:
+            from shared.vimax_bridge import _threat_visible_in
+            if frame_kind == "first_frame":
+                desc = shot.get("ff_desc_final") or shot.get("ff_desc") or ""
+            elif frame_kind == "last_frame":
+                desc = shot.get("lf_desc_final") or shot.get("lf_desc") or ""
+            else:
+                desc = " ".join(filter(None, [shot.get("ff_desc", ""), shot.get("lf_desc", "")]))
+            if _threat_visible_in(desc, characters) is not True:
+                names = [n for n in names if n not in _THREAT]
+        except Exception:
+            pass
+    return len(names)
+
+
+def _color_of(attrs: str) -> str:
+    """从属性行抽主服装色（中英文表都查，返回中文键；无则空）."""
+    t = attrs or ""
+    for en, zh in _EN_COLOR_MAP:
+        if en in t.lower():
+            return zh
+    for w in _COLOR_WORDS:
+        if w in t:
+            return w
+    return ""
+
+
+# ── v6.54.1 QC 驱动局部修复：critical 分类 → bbox 局部 i2i 改写 ──────────
+# 原理：局部失败（睁眼/刀接触/红痕/篷/发光）重抽 = 十颗骰子全重掷；
+# bbox 圈定问题区域走 _doodle_refine_first_frame（红框 i2i，框外保持原样）
+# 1 次命中的概率远高于整张重抽。全局失败（人数/复制/动作错/位置错）编辑
+# ≈ 重画，直接 regenerate。
+
+# (名称, 问题文案匹配正则, 修复指令, bbox 选择器)
+_LOCALIZED_FIX_PATTERNS: list[tuple[str, str, str, str]] = (
+    ("knife_contact", r"刀具|接触|切入|刺入",
+     "让刀具悬停在空中，与任何人的身体保持明显距离，不接触不切入人体",
+     "knife_zone"),
+    ("red_mark", r"红色痕迹|伤口|血迹|红污|洇痕",
+     "去除人物身上所有红色痕迹、伤口与血迹，皮肤与衣物干净",
+     "all_persons"),
+    ("glowing", r"发光|光刃|光束|光环",
+     "移除画面中的发光物体与光效，刀具为普通哑光金属质感",
+     "all_persons"),
+    ("eyes_closed", r"双目紧闭|闭眼|闭目|睁眼",
+     "让躺着的人闭上双眼，头部与身体姿态保持不变",
+     "lying_face_top45"),
+    ("canopy", r"篷|顶棚|遮盖物",
+     "移除船的顶棚与篷布，舱面完全敞开",
+     "boat_upper_half"),
+)
+
+
+def _bbox_valid(b) -> bool:
+    try:
+        x1, y1, x2, y2 = (float(v) for v in b)
+        return x2 > x1 and y2 > y1
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_lying(entity: dict) -> bool:
+    desc = str(entity.get("desc", "")).lower()
+    if any(w in desc for w in ("lying", "躺", "卧", "仰", "横")):
+        return True
+    b = entity.get("bbox")
+    if _bbox_valid(b):
+        x1, y1, x2, y2 = (float(v) for v in b)
+        w, h = x2 - x1, y2 - y1
+        if h > 0 and w / h > 1.5:  # 横宽人形 ≈ 卧姿
+            return True
+    return False
+
+
+def _is_knife_holder(entity: dict) -> bool:
+    desc = str(entity.get("desc", "")).lower()
+    return any(w in desc for w in ("holding", "持", "握", "刀", "匕首", "剑",
+                                   "knife", "blade", "sword"))
+
+
+def _select_bboxes_for_pattern(selector: str,
+                               person_entities: list[dict],
+                               all_entities: list[dict]) -> list[list[float]]:
+    """按选择器收集目标 bbox（0-1000 归一坐标）."""
+    boxes: list[list[float]] = []
+    if selector == "all_persons":
+        boxes = [e["bbox"] for e in person_entities if _bbox_valid(e.get("bbox"))]
+    elif selector == "knife_zone":
+        for e in person_entities:
+            if _is_knife_holder(e) or _is_lying(e):
+                if _bbox_valid(e.get("bbox")):
+                    boxes.append(e["bbox"])
+    elif selector == "lying_face_top45":
+        for e in person_entities:
+            if _is_lying(e) and _bbox_valid(e.get("bbox")):
+                x1, y1, x2, y2 = (float(v) for v in e["bbox"])
+                boxes.append([x1, y1, x2, y1 + (y2 - y1) * 0.45])  # 脸部=框顶 45%
+    elif selector == "boat_upper_half":
+        for e in all_entities:
+            if str(e.get("label", "")).lower() != "person" and _bbox_valid(e.get("bbox")):
+                x1, y1, x2, y2 = (float(v) for v in e["bbox"])
+                boxes.append([x1, y1, x2, y1 + (y2 - y1) * 0.5])
+    return boxes
+
+
+def _union_bboxes(boxes: list[list[float]]) -> tuple[float, float, float, float]:
+    x1 = min(b[0] for b in boxes)
+    y1 = min(b[1] for b in boxes)
+    x2 = max(b[2] for b in boxes)
+    y2 = max(b[3] for b in boxes)
+    return (x1, y1, x2, y2)
+
+
+def _bbox_area_pct(bbox: tuple[float, float, float, float]) -> float:
+    """归一 0-1000 坐标的面积占比（%），总画幅 = 1e6."""
+    x1, y1, x2, y2 = bbox
+    return (x2 - x1) * (y2 - y1) / 1e6 * 100
+
+
+def build_repair_plan(shot: dict, frame_kind: str, result) -> dict:
+    """QC critical 分类：局部可修 → edit（bbox + 指令）；全局 → regenerate.
+
+    任一 critical 不匹配局部模式（人数/复制/动作错/位置错等）或 bbox 不可得
+    或并集区域 >70% 画幅 → 判非局部，走原重抽路径。
+    """
+    issues = [i for i in (getattr(result, "issues", None) or [])
+              if getattr(i, "severity", "") == "critical"]
+    if not issues:
+        return {"action": "regenerate", "reason": "无 critical", "matched_patterns": []}
+    entities = getattr(result, "entities", None) or []
+    persons = [e for e in entities if str(e.get("label", "")).lower() == "person"]
+
+    matched: list[str] = []
+    instructions: list[str] = []
+    all_boxes: list[list[float]] = []
+    unmatched: list[str] = []
+    for issue in issues:
+        d = getattr(issue, "description", "") or ""
+        for name, pat, instruction, selector in _LOCALIZED_FIX_PATTERNS:
+            if re.search(pat, d):
+                matched.append(name)
+                instructions.append(instruction)
+                all_boxes.extend(_select_bboxes_for_pattern(selector, persons, entities))
+                break
+        else:
+            unmatched.append(d[:40])
+
+    if unmatched:
+        return {"action": "regenerate",
+                "reason": f"非局部失败: {'; '.join(unmatched)}",
+                "matched_patterns": matched}
+    if not all_boxes:
+        return {"action": "regenerate",
+                "reason": "无可选目标 bbox（检测层缺实体）",
+                "matched_patterns": matched}
+
+    region = _union_bboxes(all_boxes)
+    area = _bbox_area_pct(region)
+    if area > 70:
+        return {"action": "regenerate",
+                "reason": f"修复区域占画幅 {area:.0f}%，非局部",
+                "matched_patterns": matched}
+
+    bbox_ratio = tuple(round(c / 1000.0, 4) for c in region)  # 0-1000 → 0-1
+    return {
+        "action": "edit",
+        "bbox_ratio": bbox_ratio,
+        "edit_prompt": (f"修改图中红框区域：{'；'.join(instructions)}。"
+                        "红框外的画面内容严格保持原样，不得改动构图、人物与其他元素。"),
+        "matched_patterns": matched,
+        "area_pct": round(area, 1),
+    }
+
+
+def _assert_action_consistency(persons: list[dict], prompt_text: str) -> list[QcIssue]:
+    """通用对账（象限 B）：图中人物动作/持物 vs prompt 允许集.
+
+    hook ff「推船随行」实测：检测属性行出现 pushing 而描述无「推」——动作
+    对账自动拦，无需为每个新失败手写问题。强动作（改变场景/物体状态）→
+    critical；姿态类（模型用词宽泛，误报高）→ warning。持物按允许集比对
+    （prompt 提及任一可持物词即放行）。
+    """
+    issues: list[QcIssue] = []
+    t = prompt_text or ""
+    for p in persons:
+        desc = str(p.get("desc", "")).lower()
+        who = str(p.get("desc", ""))[:26]
+        for en, zhs, strong in _ACTION_EN_ZH:
+            if en not in desc:
+                continue
+            if en == "holding":
+                if not any(w in t for w in _HOLDING_ALLOWED):
+                    issues.append(QcIssue(
+                        category="action_mismatch",
+                        description=f"图中人物持有物品（{who}），描述未提及任何可持物",
+                        severity="critical" if strong else "warning",
+                    ))
+                continue
+            if not any(z in t for z in zhs):
+                issues.append(QcIssue(
+                    category="action_mismatch",
+                    description=f"图中人物动作「{zhs[0]}」({en}) 未出现在描述中（{who}）",
+                    severity="critical" if strong else "warning",
+                ))
+    return issues
+
+
+def _assert_duplicate_chars(persons: list[dict], expected: int | None,
+                            characters: list | None) -> list[QcIssue]:
+    """属性指纹查重：同色实体对数 > 名单同色对数 → critical（「杨旭重复」形态）.
+
+    颜色指纹取属性行的主服装色。名单侧颜色从 characters 的
+    static_features/dynamic_features 文本统计；名单缺颜色信息时（无法比对）
+    仅在人数本身已超名单时由计数断言拦截，此处不误报。
+    """
+    if len(persons) < 2 or expected is None:
+        return []
+    observed: dict[str, int] = {}
+    for p in persons:
+        c = _color_of(str(p.get("desc", "")))
+        if c:
+            observed[c] = observed.get(c, 0) + 1
+    roster_text = " ".join(
+        str((c or {}).get("static_features", "")) + str((c or {}).get("dynamic_features", ""))
+        for c in (characters or []))
+    if not roster_text.strip():
+        return []
+    issues: list[QcIssue] = []
+    for color, n in observed.items():
+        if n < 2:
+            continue
+        roster_n = roster_text.count(color)
+        if roster_n < 2:
+            issues.append(QcIssue(
+                category="extra_person",
+                description=f"{color}色人物出现 {n} 次，名单中该色角色不足 2 个（角色被复制）",
+                severity="critical",
+            ))
+    return issues
+
+
+# ── 第 2 层：锚点 → 二值问答 ────────────────────────────────────────
+# (触发词, 问题, 期望答案, 是否关键锚)。期望答案由锚的极性直接给出，
+# 避免"问题→锚"反向匹配的歧义。
+
+# ── v6.54 通用对账层 ────────────────────────────────────────────────
+# 设计原则：不枚举历史失败（打地鼠），对账「事实源」。失败只可能落在三个
+# 象限，各有一个通用机制：
+#   A. prompt 写了、图没画   → 逐句断言对账（本函数）+ 否定句式自动翻转
+#   B. 图里有了、prompt 没写 → 实体动作/持物对账（_assert_action_consistency）
+#   C. 恒真规则              → 人数/复制（L1）+ 首帧禁红/禁接触（规则类，保留）
+
+# 不可判定子句：含抽象/叙事/氛围词 → 跳过（视觉模型判不了，硬判必误报）
+_CLAIM_SKIP_WORDS = ("气氛", "危机", "仿佛", "即将", "定格", "一触即发", "惊觉",
+                     "蓄势", "张力", "情绪", "叙事", "视觉焦点", "前一刻",
+                     "静态布局", "稳定", "不闪烁")
+
+# 结构性词：子句含任一 → 关键断言（画错 = 构图/叙事损坏，critical）
+_CLAIM_KEY_WORDS = (
+    "画左", "画右", "画中", "前景", "中景", "远景", "船头", "船尾", "船中",
+    "中舱", "甲板", "船舷", "水中", "水下", "水面", "岸边", "门口", "车辕",
+    "仰卧", "仰面", "躺", "跪", "蹲", "探出", "俯身", "倒",
+    "刀", "匕首", "短刃", "武器", "持", "握", "蒙面",
+    "白袍", "血", "伤", "洇", "红", "伞", "灯笼", "马车", "箫",
+    "肩宽", "船宽",
+)
+
+# 否定句式可视觉判定的目标词（「无X/没有X/不见X」自动生成期望 no 的检查）
+_NEGATION_TARGETS = ("篷", "伞", "刀", "剑", "匕首", "武器", "血", "血迹", "红",
+                     "伤", "痕", "帽", "冠", "灯", "灯笼", "文字", "水印", "发光",
+                     "面容", "武器")
+
+# 图中英文动作词 → 中文允许集（任一中文出现在 prompt 即算允许）
+# 只收「改变场景/物体状态」的强动作——姿态类（躺/站/坐）误报率高单独降级
+_ACTION_EN_ZH = (
+    ("pushing", ("推",), True),
+    ("pulling", ("拉", "拽"), True),
+    ("carrying", ("背", "扛", "抬"), True),
+    ("rowing", ("撑", "划"), True),
+    ("throwing", ("掷", "扔", "抛"), True),
+    ("climbing", ("攀", "爬"), True),
+    ("riding", ("骑",), True),
+    ("holding", ("持", "拿", "握", "撑", "提"), True),
+    ("pointing", ("指", "戟指"), False),
+    ("covering", ("捂", "掩", "遮"), False),
+    ("crying", ("哭", "泣", "啜"), False),
+    ("smiling", ("笑",), False),
+    ("jumping", ("跃", "跳"), False),
+    ("running", ("跑", "奔"), False),
+    ("walking", ("走", "行"), False),
+    # 姿态类：误报高（模型用词宽泛），只产 warning
+    ("lying", ("卧", "躺"), False),
+    ("kneeling", ("跪",), False),
+    ("standing", ("站", "立"), False),
+    ("sitting", ("坐",), False),
+)
+# 持物允许集：prompt 出现任一词即认为「持物」被允许
+_HOLDING_ALLOWED = ("刀", "匕首", "剑", "短刃", "伞", "桨", "橹", "盘", "灯",
+                    "笼", "缰", "竿", "杆", "箫", "扇", "酒", "信")
+
+
+def _split_clauses(text: str) -> list[str]:
+    """画面描述 → 原子子句（。！？；与，两级切分，保留 4-40 字的可判定段）."""
+    clauses: list[str] = []
+    for sent in re.split(r"[。！？；\n]", text or ""):
+        for sub in re.split(r"[，]", sent):
+            sub = sub.strip("，。；、（）() \t")
+            if 4 <= len(sub) <= 40:
+                clauses.append(sub)
+    # 去重保序
+    seen: set[str] = set()
+    out = []
+    for c in clauses:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+def build_claim_checks(shot: dict, frame_kind: str) -> list[dict]:
+    """通用对账（象限 A）：画面描述逐句 → 「画面是否表现：X」二值检查.
+
+    通用性：不枚举历史失败。任何「prompt 写了但图没画」的子句自动成为检查项；
+    否定句式（无X/没有X/不见X 且 X 可视觉判定）自动翻转为期望 no。
+    抽象/氛围子句跳过（不可判定，硬判必误报）。关键子句（含结构性词）优先。
+    """
+    if frame_kind == "first_frame":
+        text = shot.get("ff_desc") or shot.get("ff_desc_final", "") or ""
+    elif frame_kind == "last_frame":
+        text = shot.get("lf_desc") or shot.get("lf_desc_final", "") or ""
+    else:
+        text = " ".join(filter(None, [shot.get("ff_desc", ""), shot.get("lf_desc", "")]))
+    # 只对账「叙述+锚块」：组装 prompt 里的【强制】等约束条款不是画面断言，
+    # 混入会污染拆句。ff_desc 含【角色锚定】/船体尾句——它们本身就是可判定
+    # 的视觉断言（听香在中舱边缘/神秘人半身浸水中）。剥掉【】标记保留内容。
+    text = re.sub(r"【[^】]*】", "", text)
+    text = re.sub(r"identity locked[^，。]*", "", text)
+    try:
+        # 尺寸锚（肩宽三倍/无篷）注入在组装期、不在 ff_desc 字段——此处单独
+        # 取回作为断言（船宽类失败的通用覆盖）
+        from shared.vimax_bridge import _inject_object_size_anchor
+        size_line = _inject_object_size_anchor(shot, "")
+        if size_line.strip("。"):
+            text = text + "。" + size_line
+    except Exception:
+        pass
+
+    qs: list[dict] = []
+    # 常真规则（规则类，非补丁）：首帧 = 动作开始前
+    if frame_kind == "first_frame":
+        qs.append({"q": "画面任何人身上是否出现红色痕迹、伤口或血迹？", "expect": "no", "key": True})
+        if any(w in text for w in ("刀", "匕首", "刺")):
+            qs.append({"q": "刀具是否已接触或切入任何人的身体？", "expect": "no", "key": True})
+        if "发光" not in text and any(w in text for w in ("刀", "匕首", "短刃")):
+            qs.append({"q": "图中是否有发光的物体或光刃？", "expect": "no", "key": True})
+
+    for clause in _split_clauses(text):
+        if any(w in clause for w in _CLAIM_SKIP_WORDS):
+            continue
+        if re.search(r"[长宽高]\s*\d", clause):
+            continue  # 绝对米数子句视觉不可判定（相对比例子句才生成检查）
+        # 否定句式自动翻转：「无篷」「没有武器」「不见面容」→ 期望 no 的存在性检查
+        neg = re.search(r"(?:无|没有|不见|不得|禁止)([^，。；、\s]{1,6})", clause)
+        if neg:
+            target = neg.group(1)
+            if any(t in target for t in _NEGATION_TARGETS):
+                hit_key = any(t in target for t in _CLAIM_KEY_WORDS)
+                qs.append({"q": f"画面中是否出现「{target}」？",
+                           "expect": "no", "key": hit_key})
+                continue
+        # 正向断言：含角色/部位指示（他/她/其/手/身/目/发/袍/衣…）的可判定子句
+        if not re.search(r"[\u4e00-\u9fff]{2,4}|他|她|其", clause):
+            continue
+        key = any(w in clause for w in _CLAIM_KEY_WORDS)
+        qs.append({"q": f"画面是否表现：{clause}？", "expect": "yes", "key": key})
+
+    qs.sort(key=lambda q: not q["key"])
+    return qs[:10]
+
+
+def build_targeted_questions(shot: dict, frame_kind: str) -> list[dict]:
+    """兼容包装：v6.54 起逐句对账取代手写锚问题表（原表已删——打地鼠范式）."""
+    return build_claim_checks(shot, frame_kind)
+
+
+def _ask_yes_no(frame_path: str | Path, questions: list[dict]) -> dict[str, str]:
+    """批量二值问答：一次调用答 N 题；返回 {问题: yes|no|unclear}.
+
+    解析失败 = unclear（关键锚按答错处理，次要锚忽略——保守判定）。
+    """
+    numbered = "\n".join(f"{i}. {q['q']}（只答 yes 或 no）" for i, q in enumerate(questions, 1))
+    prompt = ("Answer these questions about the image. Reply with ONLY lines like "
+              f"'1: yes'.\n{numbered}")
+    text = _vision_chat(frame_path, prompt)
+    answers: dict[str, str] = {q["q"]: "unclear" for q in questions}
+    for i, q in enumerate(questions, 1):
+        m = re.search(rf"{i}\s*[:：.、]\s*(yes|no|是|否)", text or "", re.I)
+        if m:
+            answers[q["q"]] = "yes" if m.group(1).lower() in ("yes", "是") else "no"
+    return answers
+
+
 # 便捷入口：给 vimax_bridge 用
 def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
                   characters: list | None = None, empty_scene: bool = False,
                   prompt: str | None = None) -> QcResult:
     """同步质检入口（带 should_run_qc 守卫）；由 vimax_bridge 的 async 包装调用.
 
+    v6.53 三层架构（QC_PROVIDER=auto 默认，检测链 agnes→dashscope→ark）：
+      第 1 层  ARK grounding 出实体框+属性行 → **代码**数人数 vs char_layout
+               名单（容差 QC_PERSON_TOLERANCE，默认 0）+ 属性指纹查角色复制
+      第 2 层  锚点 → 二值问答（build_targeted_questions），关键锚答错 critical
+      第 3 层  既有 router 整体质检——**只产 warning，无放行权**
+    ark 失败且 provider=ark → 回落 router 全权（legacy 行为，宁可误放不可漏闸全无）；
+    provider=router → 纯 legacy；provider=off → 跳过。
+
     prompt: 自定义质检 prompt（v1.1 传实际生成图片的最终 prompt；None 则由
     build_qc_prompt 自动构建，内部优先取 shot["ff_desc_final"]/["lf_desc_final"]）。
     """
     if not should_run_qc(frame_path):
         return QcResult(has_hallucination=False, issues=[], ok=True, raw_result="", error="skipped")
-    return qc_image(frame_path, prompt=prompt, shot=shot, frame_kind=frame_kind,
-                    characters=characters, empty_scene=empty_scene)
+    provider = os.getenv("QC_PROVIDER", "auto").strip().lower()
+    if provider == "off":
+        return QcResult(has_hallucination=False, issues=[], ok=True, raw_result="",
+                        error="QC_PROVIDER=off")
+
+    router_result = qc_image(frame_path, prompt=prompt, shot=shot, frame_kind=frame_kind,
+                             characters=characters, empty_scene=empty_scene)
+
+    if provider not in ("ark", "auto"):
+        return router_result
+
+    all_issues: list[QcIssue] = []
+    person_count: int | None = None
+    answers: dict | None = None
+    entities: list[dict] | None = None
+    ark_ok = True
+    ark_error = ""
+    try:
+        # ── 第 1 层：grounding 出框 + 代码计数/查重 ──
+        entries = _detect_entities(frame_path)
+        entities = entries
+        persons = [e for e in entries if str(e.get("label", "")).lower() == "person"]
+        person_count = len(persons)
+        expected = _expected_persons(shot, frame_kind, characters)
+        if expected is not None:
+            tol = int(os.getenv("QC_PERSON_TOLERANCE", "0"))
+            if abs(person_count - expected) > tol:
+                all_issues.append(QcIssue(
+                    category="extra_person",
+                    description=f"图中实体人数 {person_count} vs 名单 {expected}（容差 {tol}）",
+                    severity="critical",
+                ))
+        all_issues.extend(_assert_duplicate_chars(persons, expected, characters))
+        # v6.54 象限 B：图中动作/持物 vs prompt 允许集（推船类失败通用拦截）
+        _claim_text = (shot.get("ff_desc_final") or shot.get("ff_desc", "") or "") + " " +             (shot.get("motion_desc", "") or "")
+        all_issues.extend(_assert_action_consistency(persons, _claim_text))
+
+        # ── 第 2 层：锚点 → 二值问答 ──
+        questions = build_targeted_questions(shot, frame_kind)
+        if questions:
+            answers = _ask_yes_no(frame_path, questions)
+            for item in questions:
+                got = (answers or {}).get(item["q"], "unclear")
+                if got == item["expect"]:
+                    continue
+                if got == "unclear" and not item["key"]:
+                    continue  # 次要锚解析失败不罚；关键锚 unclear 按答错拦
+                sev = "critical" if item["key"] else "warning"
+                all_issues.append(QcIssue(
+                    category="anchor_mismatch",
+                    description=f"「{item['q']}」答 {got}，期望 {item['expect']}",
+                    severity=sev,
+                ))
+    except Exception as e:  # ARK 不可用 → 回落
+        ark_ok = False
+        ark_error = f"ARK 质检失败回落 router: {e}"
+
+    if not ark_ok and provider == "ark":
+        # ARK 全挂：router 结果全权（legacy），否则本帧完全无闸
+        out = router_result
+        out.person_count = person_count
+        out.answers = answers
+        out.entities = entities
+        if ark_error:
+            out.error = (out.error + "；" + ark_error).strip("；")
+        return out
+
+    # 第 3 层：router 整体质检强制降级为 warning（无放行权）
+    for issue in router_result.issues:
+        all_issues.append(QcIssue(category=issue.category,
+                                  description=f"[router] {issue.description}",
+                                  severity="warning"))
+
+    has_critical = any(i.severity == "critical" for i in all_issues)
+    warn_n = sum(1 for i in all_issues if i.severity == "warning")
+    has_hallucination = has_critical or warn_n >= 2
+    return QcResult(has_hallucination=has_hallucination, issues=all_issues, ok=True,
+                    raw_result=router_result.raw_result,
+                    error=ark_error,
+                    person_count=person_count, answers=answers,
+                    entities=entities)
