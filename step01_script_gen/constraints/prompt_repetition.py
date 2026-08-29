@@ -54,10 +54,17 @@ def _collapse_name_runs(v: str) -> str:
 
 
 def _strip_repair_echo(v: str) -> str:
-    """剥掉字段尾部的修复指令回显（「，，，每拍1个面部细节按时间先后写全」）."""
+    """剥掉字段尾部的修复指令回显（「，，，每拍1个面部细节按时间先后写全」）.
+
+    仅在确实命中回显时才清理衔接标点——无回显的字段原样返回，
+    避免误删正常字段的尾部句号。
+    """
     if not v:
         return v
-    return _REPAIR_ECHO_RE.sub("", v).rstrip("，,。") or v
+    out, n = _REPAIR_ECHO_RE.subn("", v)
+    if not n:
+        return v
+    return out.rstrip("，,。") or v
 
 
 def _protected_mask(text: str) -> list[bool]:

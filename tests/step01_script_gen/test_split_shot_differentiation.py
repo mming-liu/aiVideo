@@ -288,3 +288,11 @@ def test_consecutive_punct_collapsed():
     assert collapse_doubled_tokens("完。。。。结") == "完。结"
     assert collapse_doubled_tokens("慢慢走来") == "慢慢走来"
     assert collapse_doubled_tokens("等等……他说——") == "等等……他说——"
+
+
+def test_repair_echo_preserves_trailing_period_when_no_echo():
+    """无回显的字段原样返回——不误删尾部句号."""
+    from step01_script_gen.constraints.prompt_repetition import _strip_repair_echo
+
+    assert _strip_repair_echo("杨旭倒在地上。") == "杨旭倒在地上。"
+    assert _strip_repair_echo("听香掩面啜泣，") == "听香掩面啜泣，"
