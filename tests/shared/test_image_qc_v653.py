@@ -266,3 +266,34 @@ def test_extract_char_layout_alias_aware_lookup():
     }
     block = _extract_char_layout(shot, chars, role_scan_text=shot["ff_desc"])
     assert "画左前景" in block and "在船头水面交界处上" in block
+
+
+# ── v6.x.x（08-30 实抽驱动）：视线/朝向类断言升级 ──
+
+def test_claim_key_words_include_gaze_directions():
+    """v6.x.x：_CLAIM_KEY_WORDS 含视线/朝向词，含视线子句升级关键断言.
+
+    实抽根因：刺客"目光不看杨旭"反复改不掉，因为含「面朝画右的杨旭」
+    的子句不进入关键断言列表，QC 逐句断言里 0 条关于视线。
+    修法：_CLAIM_KEY_WORDS 加「目光/凝望/盯/望向/面朝/面向」6 词。
+    """
+    from shared.image_qc import _CLAIM_KEY_WORDS
+    expected = {"目光", "凝望", "盯", "望向", "面朝", "面向"}
+    actual = set(_CLAIM_KEY_WORDS)
+    missing = expected - actual
+    assert not missing, f"_CLAIM_KEY_WORDS 缺视线类词: {missing}"
+
+
+def test_grounding_prompt_requests_gaze_direction():
+    """v6.x.x：_GROUNDING_PROMPT 的 desc 要求含 gaze direction.
+
+    L1 实体检测 desc 加 gaze direction → vision 模型报视线 →
+    动作对账可比对「desc 说面朝杨旭 vs 图中 looking away」→ 象限 B 拦。
+    """
+    from shared.image_qc import _GROUNDING_PROMPT
+    assert "gaze direction" in _GROUNDING_PROMPT, \
+        f"_GROUNDING_PROMPT 缺 gaze direction 指令，实测片段: {_GROUNDING_PROMPT!r}"
+    # 回归：原有的 clothing color + headwear + pose 要求不丢
+    assert "clothing color" in _GROUNDING_PROMPT
+    assert "headwear" in _GROUNDING_PROMPT
+    assert "pose" in _GROUNDING_PROMPT

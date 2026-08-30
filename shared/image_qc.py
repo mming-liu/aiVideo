@@ -579,7 +579,7 @@ _EN_COLOR_MAP = (("white", "白"), ("black", "黑"), ("cyan", "青"), ("blue", "
 _GROUNDING_PROMPT = (
     "Detect every distinct person and the main vehicle/furniture object in this image. "
     'Return ONLY a JSON array, one entry per entity: '
-    '[{"label":"person","desc":"<clothing color + headwear + pose, <=20 words>","bbox":[x1,y1,x2,y2]}] '
+    '[{"label":"person","desc":"<clothing color + headwear + pose + gaze direction, <=20 words>","bbox":[x1,y1,x2,y2]}] '
     "where bbox is normalized to 0-1000. Include partially visible persons (in water, behind objects). "
     "Do NOT count reflections, shadows, or painted figures. No other text."
 )
@@ -1008,6 +1008,9 @@ def build_repair_plan(shot: dict, frame_kind: str, result) -> dict:
 
     仍走 regenerate 的情况：无 critical / 模式不匹配 / bbox 不可得 /
     并集超模式阈值 / smaller_person 主体识别不明确（删错人护栏）。
+
+    完整决策树 + 修/regen 案例分流表 + 10 模式选区阈值表，详见
+    `references/decision-tree-qc-repair.md`。
     """
     issues = [i for i in (getattr(result, "issues", None) or [])
               if getattr(i, "severity", "") == "critical"]
@@ -1174,6 +1177,11 @@ _CLAIM_SKIP_WORDS = ("气氛", "危机", "仿佛", "即将", "定格", "一触�
                      "静态布局", "稳定", "不闪烁")
 
 # 结构性词：子句含任一 → 关键断言（画错 = 构图/叙事损坏，critical）
+# v6.x.x（08-30 实抽驱动）：补 6 词视线/朝向类——刺客"目光不看杨旭"反复改不掉的
+# 根因是含视线的子句（如「面朝画右的杨旭」）既不进入 _CLAIM_KEY_WORDS 升级断言，
+# L1 实体检测 desc 也不报视线方向，QC 逐句断言里 0 条关于视线。改法：
+# 1) 视线/朝向词进 _CLAIM_KEY_WORDS → 含「目光 X/凝望 X/面朝 X」子句自动升级关键断言
+# 2) _GROUNDING_PROMPT desc 要求加 gaze direction → L1 报视线后动作对账可比对
 _CLAIM_KEY_WORDS = (
     "画左", "画右", "画中", "前景", "中景", "远景", "船头", "船尾", "船中",
     "中舱", "甲板", "船舷", "水中", "水下", "水面", "岸边", "门口", "车辕",
@@ -1181,6 +1189,8 @@ _CLAIM_KEY_WORDS = (
     "刀", "匕首", "短刃", "武器", "持", "握", "蒙面",
     "白袍", "血", "伤", "洇", "红", "伞", "灯笼", "马车", "箫",
     "肩宽", "船宽",
+    # 视线/朝向类（v6.x.x 08-30 新增）
+    "目光", "凝望", "盯", "望向", "面朝", "面向",
 )
 
 # 否定句式可视觉判定的目标词（「无X/没有X/不见X」自动生成期望 no 的检查）
