@@ -33,6 +33,8 @@ MODEL_REF_LIMITS: list[tuple[str, int]] = [
     ("doubao-seedream-4-0-250828", 3),
     ("doubao-seedream-4-5-251128", 3),
     ("doubao-seedream-5-0-lite-260128", 3),
+    # Agent Plan 通道默认模型（无日期后缀，2026-08-30 注册）：免费档对齐 3 张约束
+    ("doubao-seedream-5-0-lite", 3),
     # --- 图片模型（I2I 参考图）---
     ("qwen-image", 3),
     ("wan2.7-image", 9),
@@ -193,6 +195,8 @@ def active_image_ref_limit() -> int:
             model = config.VOLCENGINE_T2I_MODEL
         elif config.IMAGE_PROVIDER == "minimax":
             model = config.MINIMAX_T2I_MODEL
+        elif config.IMAGE_PROVIDER == "agent_plan":
+            model = config.AGENT_PLAN_T2I_MODEL
         return get_ref_limit(model)
     except Exception:
         return get_ref_limit(None)

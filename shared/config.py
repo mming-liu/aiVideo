@@ -220,6 +220,33 @@ VOLCENGINE_VIDEO_MAX_POLL_ATTEMPTS = int(os.getenv("VOLCENGINE_VIDEO_MAX_POLL_AT
 
 
 # ============================================================================
+# 火山方舟 Agent Plan (/api/plan/v3) 配置 — 2026-08-30 新增
+# ============================================================================
+# Agent Plan 是火山方舟为 Agent / 自动化场景提供的新通道，与标准方舟（/api/v3）
+# 端点不同，**专属 key 不通用**（普通 ARK key 报 401）。使用本通道可获得
+# 官方为 Agent 设计的 fuel 包/计量规则（"AFP 燃料"），但部分功能（如角色
+# 形象 reference、参考音频）按 Small 套餐当前无权限（仍可正常生图生视频）。
+# 切换方式：.env.content 设 IMAGE_PROVIDER=agent_plan / VIDEO_PROVIDER=agent_plan；
+#           现有 volcengine provider 不受影响，保持默认。
+AGENT_PLAN_API_KEY = os.getenv("AGENT_PLAN_API_KEY", "")
+AGENT_PLAN_BASE_URL = os.getenv(
+    "AGENT_PLAN_BASE_URL", "https://ark.cn-beijing.volces.com/api/plan/v3"
+)
+# 文生图（默认 Seedream 5.0 lite 免费档，对齐 _image_gen/volcengine 同款 3 张参考图上限）
+AGENT_PLAN_T2I_MODEL = os.getenv("AGENT_PLAN_T2I_MODEL", "doubao-seedream-5-0-lite")
+# 文生视频（Seedance 2.0 — 4-15s/支持 reference_image/generate_audio）
+AGENT_PLAN_T2V_MODEL = os.getenv("AGENT_PLAN_T2V_MODEL", "doubao-seedance-2-0")
+# 视频参数 override
+AGENT_PLAN_VIDEO_RESOLUTION = os.getenv("AGENT_PLAN_VIDEO_RESOLUTION", "")  # 空=按 req.size 推导
+AGENT_PLAN_VIDEO_RATIO = os.getenv("AGENT_PLAN_VIDEO_RATIO", "")  # 空=按 req.size 推导
+AGENT_PLAN_VIDEO_DURATION = int(os.getenv("AGENT_PLAN_VIDEO_DURATION", "0"))  # 0=按分镜 duration_sec
+AGENT_PLAN_VIDEO_POLL_INTERVAL = int(os.getenv("AGENT_PLAN_VIDEO_POLL_INTERVAL", "20"))
+AGENT_PLAN_VIDEO_MAX_POLL_ATTEMPTS = int(os.getenv("AGENT_PLAN_VIDEO_MAX_POLL_ATTEMPTS", "25"))
+# 套餐并发护栏（Agent Plan 按 Small 套餐并发数 2，避免按 VPS 申请 10 并发被拒）
+AGENT_PLAN_MAX_CONCURRENCY = int(os.getenv("AGENT_PLAN_MAX_CONCURRENCY", "2"))
+
+
+# ============================================================================
 # MiniMax 配置 - image-01 文生图 / Hailuo v1 视频 / MiniMax-H3 v2 视频
 # ============================================================================
 # 官方文档（国际站 api.minimax.io）:

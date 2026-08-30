@@ -76,6 +76,13 @@ def _auto_register() -> None:
     except ImportError:
         pass
 
+    # Agent Plan (/api/plan/v3) — 2026-08-30 新增（专属 key 通道）
+    try:
+        from . import agent_plan_provider as _ap
+        register("agent_plan", _ap.AgentPlanImageService)
+    except ImportError:
+        pass
+
 
 def create_service(provider: Optional[str] = None) -> ImageGenerationService:
     """根据 provider 名称创建服务实例.

@@ -155,10 +155,13 @@ def active_video_model() -> str | None:
     - volcengine：text→T2V 模型；image/r2v→I2V 模型
     - minimax：r2v→H3；text→T2V（v1 Hailuo）；image→I2V（v1 Hailuo）
     - bailian：text→T2V；image→I2V；r2v→R2V（wan2.7/happyhorse 官方时长上限均为 15s）
+    - agent_plan：text→T2V；image→I2V；r2v→I2V（Agent Plan 默认模型）
     - dashscope / agnes：返回各自主模型
     """
     provider = os.getenv("VIDEO_PROVIDER", "bailian")
     mode = (os.getenv("VIDEO_REFERENCE_MODE", "text") or "text").strip().lower()
+    if provider == "agent_plan":
+        return os.getenv("AGENT_PLAN_T2V_MODEL", "doubao-seedance-2-0")
     if provider == "volcengine":
         if mode == "text":
             return os.getenv("VOLCENGINE_T2V_MODEL", "doubao-seedance-1-5-pro-251215")
@@ -257,6 +260,9 @@ def active_video_duration_cap() -> int:
     provider = os.getenv("VIDEO_PROVIDER", "bailian")
     if provider == "volcengine":
         return get_seedance_cap(active_video_model()).duration_range[1]
+    if provider == "agent_plan":
+        # 共享 Seedance 能力表（doubao-seedance-2-0 命中 seedance-2-0 → 15s）
+        return get_seedance_cap(active_video_model()).duration_range[1]
     if provider == "minimax":
         model = active_video_model() or ""
         if "H3" in model:
@@ -295,7 +301,7 @@ def active_video_supports_audio() -> bool:
     """
     provider = os.getenv("VIDEO_PROVIDER", "bailian")
     mode = (os.getenv("VIDEO_REFERENCE_MODE", "text") or "text").strip().lower()
-    if provider == "volcengine":
+    if provider in ("volcengine", "agent_plan"):
         return get_seedance_cap(active_video_model()).supports_generate_audio
     if provider == "minimax":
         return mode == "r2v"  # 仅 H3 有声；v1 Hailuo 无声
@@ -305,15 +311,18 @@ def active_video_supports_audio() -> bool:
 def active_video_uses_native_voice() -> bool:
     """对白发声是否由视频模型原生生成（无需 Agnes 风格「（用中文说）」指令）.
 
-    volcengine / minimax = True（prompt 写自然对白，模型直接发声）；
+    volcengine / minimax / agent_plan = True（prompt 写自然对白，模型直接发声）；
     bailian / agnes / dashscope = False（沿用「（用中文说）」指令格式，历史行为）。
     """
-    return os.getenv("VIDEO_PROVIDER", "bailian") in ("volcengine", "minimax")
+    return os.getenv("VIDEO_PROVIDER", "bailian") in ("volcengine", "minimax", "agent_plan")
 
 
 def active_video_is_seedance() -> bool:
-    """当前视频供应商是否为火山引擎 Seedance."""
-    return os.getenv("VIDEO_PROVIDER", "bailian") == "volcengine"
+    """当前视频供应商是否为火山引擎 Seedance.
+
+    agent_plan 走同款 Seedance 模型，故同样归类为 Seedance 系。
+    """
+    return os.getenv("VIDEO_PROVIDER", "bailian") in ("volcengine", "agent_plan")
 
 
 def active_video_is_h3() -> bool:

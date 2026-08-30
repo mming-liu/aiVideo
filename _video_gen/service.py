@@ -95,6 +95,13 @@ def _auto_register() -> None:
     except ImportError:
         pass
 
+    # Agent Plan (/api/plan/v3) — 2026-08-30 新增（专属 key 通道）
+    try:
+        from . import agent_plan_provider as _ap
+        register("agent_plan", _ap.AgentPlanVideoService)
+    except ImportError:
+        pass
+
     # OpenAI Sora / 第三方兼容 (待后续扩展)
     # try:
     #     from . import openai_provider as _oa

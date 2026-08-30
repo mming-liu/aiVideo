@@ -117,11 +117,55 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
     if (script.get("hook") or {}).get("ff_desc") != disk_hook:
         changed = True
     if changed:
-        with open(script_path, "w", encoding="utf-8") as f:
-            json.dump(script, f, ensure_ascii=False, indent=2)
+        # v6.x.x fix：shot["_qc_last"] 等下划线开头字段是运行时数据（QcResult dataclass），
+        # 不可 JSON 序列化；sidecar 已单独落 *_hallucination.json + _qc_log.json，
+        # 此处只持久化业务字段。下划线开头键 = 约定俗成的"不入盘"信号。
+        # v6.x.x.x 二次修：atomic write 避免 dump 中途抛错污染原文件（08-30 实抽
+        # 暴露：上次崩在 _qc_last 写入中，文件被截断到 L1326 损坏）。
+        _atomic_dump_json(
+            script_path,
+            _strip_runtime_fields(script),
+            default=lambda o: o.__dict__ if hasattr(o, "__dict__") else str(o),
+        )
         logger.info("[INFO] ff_desc 归一化已回写 script_result.json")
 
     return results
+
+
+def _strip_runtime_fields(obj):
+    """递归剥掉 dict 下划线开头的 key（运行时数据，不入盘）.
+
+    list 内元素递归处理；非 dict/list 叶子直接返回。
+    """
+    if isinstance(obj, dict):
+        return {k: _strip_runtime_fields(v) for k, v in obj.items()
+                if not (isinstance(k, str) and k.startswith("_"))}
+    if isinstance(obj, list):
+        return [_strip_runtime_fields(v) for v in obj]
+    return obj
+
+
+def _atomic_dump_json(path, obj, **kwargs):
+    """原子写 JSON：先写 .tmp，os.replace 替换原文件.
+
+    即使 json.dump 中途抛错（不可序列化对象/磁盘满/中断），原文件仍完好
+    ——避免上次的"半截文件污染原 JSON"事故（v6.x 实抽）。
+    """
+    tmp_path = Path(str(path) + ".tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(obj, f, **kwargs)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        # 清理残留 .tmp，原文件保持完整
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        raise
 
 
 def _log_shot_frames(idx: int, result: dict, logger):
