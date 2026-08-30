@@ -37,7 +37,7 @@
 - **ff_desc 出镜角色服装色**：重述关键服装色，防漂色
 - **多人画面视线交汇**：写「画左/画右/画上方」空间方位，禁「仰头惊愕」无视线归属
 - **场景物体尺寸锚**：用锚定库统一称呼，写明容纳性（"船身宽大两人有充裕活动空间"）
-- **char_layout 站位蓝图**：写 name/position/facing/role，威胁源也要写入
+- **frame_layouts 站位（v6.57+ per-frame spec）**：写 `{ff:[...], lf:[...], kfs:[[...]]}`，每项 name/on_screen/position/pose/gaze_target/props 全必填，威胁源也要写入
 - **威胁源-视线耦合**：攻击者写「面朝/朝向 [目标角色]」
 - **武器刺入方向**：写死「刀尖朝下+垂直+直入」
 - **威胁源 ff 处理**：二选一：水下黑影+刀尖微露 / 半身探水+单手持刀
@@ -48,6 +48,26 @@
 - **非战斗禁武器**：全文无武器时 ff/lf 禁武器词，角色「空手/徒手」，「手指直指」非「戟指」
 - **镜中临时状态覆盖**：与肖像冲突时显式声明（如「此刻披头散发」）
 - **关键帧时间字段**：kf 用 `stage` + `t_sec`，不写 `time_ratio`
+
+## 输出格式
+
+### frame_layouts 字段（v6.57+ per-frame spec 事实源，每镜必填）
+
+**结构**：`{ff:[...], lf:[...], kfs:[[...]]}`，每项 `{name, on_screen, position, pose, gaze_target, props}` **6 字段全必填**。
+
+**`on_screen` 决定 QC 期望人数（治 lf 互斥根因）**：
+- ✅ 正确：lf「神秘人已没入水中不见踪影」→ lf 项 `{"name": "神秘人", "on_screen": false, ...}`
+- ❌ 错误：把已退场角色 lf 项 `on_screen: true` → QC 期望 3 人，模型多画人头
+
+**空镜 = 三桶全 `[]`**（**禁止**哨兵行如 `{"name":"空镜"}` → 污染 QC）。
+
+**`kfs` 与 `keyframes` 一一对应**（kfs[i] = keyframes[i] 的出镜表，数组长度相等）。
+
+**⚠️ 重要：`kfs` 数组长度必须严格等于 `keyframes` 数组长度**——有多少个关键帧就写多少个出镜表，**不能偷懒只写 1 个**！Constraint 会硬校验（v6.57+ HARD 违例），不一致直接触发 regen。
+
+**`gaze_target`**：角色名 / 画左 / 画右 / 画上 / 画下 / 无。
+
+**`pose`**：自由态词（≤15字：盘坐/潜伏/仰卧/半身探水/站立/倒纵入水/...）。
 
 ## 输出格式
 只输出纯 JSON，结构如下：
@@ -69,7 +89,11 @@
     "clip_transition": "...",
     "cam_idx": 1,
     "variation_type": "large",
-    "char_layout": [{"name": "角色名", "position": "画左/画右/画中/前景/中景/后景", "surface": "船尾/船头/甲板/船舷/岸边/亭内/楼上/楼下/车内/...", "facing": "面向画左/画右/镜头/背对/面向[角色]", "role": "主/次/背景"}],
+    "frame_layouts": {
+      "ff":  [{"name": "角色名", "on_screen": true, "position": "画左/画右/画中/前景/中景/后景", "pose": "半身探水", "gaze_target": "画右", "props": []}],
+      "lf":  [{"name": "角色名", "on_screen": true, "position": "画左/画右/画中/前景/中景/后景", "pose": "倒纵入水", "gaze_target": "无", "props": []}],
+      "kfs": [[{"name": "角色名", "on_screen": true, "position": "...", "pose": "...", "gaze_target": "...", "props": []}], ...]
+    },
     "ff_desc": "动作前一刻静态定格（≤120 字符，pre-state only）",
     "lf_desc": "动作结束后定格画面（必填、与 ff 同角色、姿态显著不同）",
     "motion_desc": "动作序列（与 ff 时间线一致）",

@@ -4207,6 +4207,9 @@ def _fill_missing_new_fields(script: dict) -> None:
         shot.setdefault("cam_idx", 1)
         shot.setdefault("subject_direction", "")  # v6.21：人物朝向（可选）
         shot.setdefault("char_layout", [])  # v6.35 站位台吸收：多人站位蓝图（可选）
+        # v6.57 P0-B：char_layout 派生回填（frame_layouts → 旧视图，老章原样保留）
+        from shared.frame_spec import derive_char_layout
+        shot["char_layout"] = derive_char_layout(shot)
 
     # 补全 hook（如果存在）
     hook = script.get("hook")
@@ -4221,6 +4224,8 @@ def _fill_missing_new_fields(script: dict) -> None:
         hook.setdefault("negative_prompt", "")
         hook.setdefault("time_stamp", "")
         hook.setdefault("char_layout", [])   # Plan A（2026-08-14）：与 _SHOT 对称
+        from shared.frame_spec import derive_char_layout
+        hook["char_layout"] = derive_char_layout(hook)
         hook.setdefault("keyframes", [])     # Plan A（2026-08-14）：schema 已入 required
 
     # 补全顶层字段
@@ -6150,6 +6155,13 @@ def _hard_fix_split_long_dialogue_shot(shots: list, hook: dict | None = None) ->
                 "clip_transition": s.get("clip_transition", "硬切，转场时长0.2s"),
                 "variation_type": s.get("variation_type", "small"),
                 "char_layout": [dict(item) for item in (s.get("char_layout") or []) if isinstance(item, dict)],
+                # v6.57+ 继承 frame_layouts：ff/lf 出镜表复制（连贯性），kfs
+                # 跟随 keyframes（只第一子镜保留）
+                "frame_layouts": {
+                    "ff":  [dict(item) for item in ((s.get("frame_layouts") or {}).get("ff") or []) if isinstance(item, dict)],
+                    "lf":  [dict(item) for item in ((s.get("frame_layouts") or {}).get("lf") or []) if isinstance(item, dict)],
+                    "kfs": [],
+                },
                 "__split_from_idx": original_index,
                 "__split_part": part_i + 1,
                 "__split_total": n_parts,
@@ -6159,6 +6171,10 @@ def _hard_fix_split_long_dialogue_shot(shots: list, hook: dict | None = None) ->
                 kfs = s.get("keyframes")
                 if isinstance(kfs, list):
                     new_shot["keyframes"] = [dict(kf) for kf in kfs if isinstance(kf, dict)]
+                    # v6.57+ kfs 同步继承
+                    _src_kfs = (s.get("frame_layouts") or {}).get("kfs")
+                    if isinstance(_src_kfs, list):
+                        new_shot["frame_layouts"]["kfs"] = [list(items) for items in _src_kfs if isinstance(items, list)]
             # v6.50：拆镜视觉差异化（治「拆镜照抄」——相邻子镜同 prompt、ff==lf）
             _differentiate_split_visuals(s, new_shot, part_i)
             new_shots.append(new_shot)

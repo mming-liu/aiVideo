@@ -63,6 +63,71 @@ _CHAR_LAYOUT = {
     "description": "本镜所有出镜角色的站位布局（规则51多人站位蓝图）；空镜为 []",
 }
 
+# v6.57+：per-frame 出镜表（事实源唯一化第一步）
+# 替代 v6.35 char_layout 单一站位表：spec 逐帧独立，因为 lf 角色可能与 ff 不同
+# （威胁源入水/受害方倒下），per-frame 才能正确表达，治 lf 互斥 + kf 全用 ff+lf
+# 拼接的结构性必败。
+# on_screen=false 是 lf 互斥根因的字段化方案：QC 期望人数 = on_screen 计数，
+# 散文「已没入水中」无需被启发式窗口匹配破译。
+_FRAME_SPEC_ITEM = {
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "角色名（与 characters.identifier 一致）；空镜/无角色填「空镜」",
+        },
+        "on_screen": {
+            "type": "boolean",
+            "description": "本帧是否在场。false=本帧已退场（例：lf「神秘人已没入水中」），治 lf 互斥",
+        },
+        "position": {
+            "type": "string",
+            "description": "画面位置：画左/画右/画中/前景/中景/后景，可组合（如 画左前景）",
+        },
+        "pose": {
+            "type": "string",
+            "description": "本帧姿态（≤15字）：盘坐/潜伏/仰卧/半身探水/站立/倒纵入水/...；空镜填空串",
+        },
+        "gaze_target": {
+            "type": "string",
+            "description": "视线目标（角色名 / 画左 / 画右 / 画上 / 画下 / 无）；无视线角色填「无」",
+        },
+        "props": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "本帧持有/身边的道具列表（匕首/酒壶/灯盏/竹箫...）；空填 []",
+        },
+    },
+    "required": ["name", "on_screen", "position", "pose", "gaze_target", "props"],
+    "additionalProperties": False,
+}
+
+_FRAME_LAYOUTS = {
+    "type": "object",
+    "properties": {
+        "ff": {
+            "type": "array",
+            "items": _FRAME_SPEC_ITEM,
+            "description": "首帧出镜表（per-frame spec 事实源，pre-state 时刻）",
+        },
+        "lf": {
+            "type": "array",
+            "items": _FRAME_SPEC_ITEM,
+            "description": "尾帧出镜表（per-frame spec 事实源，post-state 时刻，可与 ff 角色不同）",
+        },
+        "kfs": {
+            "type": "array",
+            "items": {
+                "type": "array",
+                "items": _FRAME_SPEC_ITEM,
+            },
+            "description": "关键帧出镜表（与 shot.keyframes 顺序一一对应，每个 kf 一项出镜表）",
+        },
+    },
+    "required": ["ff", "lf", "kfs"],
+    "additionalProperties": False,
+}
+
 # ========================================================================
 # 镜头 shot
 # ========================================================================
@@ -102,15 +167,16 @@ _SHOT = {
         "keyframes": {"type": "array", "items": _KEYFRAME},
         # v6.21：人物朝向（镜头组接规则33，可选——同场景连续镜头朝向一致性校验用）
         "subject_direction": {"type": "string", "description": "人物朝向（左/右/面向镜头/背对），可选；同场景相邻镜头朝向不应翻转"},
-        # v6.35 站位台吸收（规则51）：多人站位蓝图——本镜所有出镜角色的结构化站位。
-        "char_layout": _CHAR_LAYOUT,
+        # v6.57+：per-frame spec 事实源（必填；QC + prompt 组装均走它，逐帧独立出镜表）。
+        # 替代 v6.35 char_layout 单一站位表（已从 schema 移除，旧章数据由 accessor 降级）。
+        "frame_layouts": _FRAME_LAYOUTS,
     },
     "required": [
         "index", "narration_segment", "subtitle", "scene", "location",
         "main_subject", "core_keywords", "prompt", "motion_desc",
         "ff_desc", "lf_desc", "context_bridge", "audio_cue", "fx_effect",
         "color_tone", "cam_idx", "clip_transition", "duration",
-        "variation_type", "keyframes",
+        "variation_type", "keyframes", "frame_layouts",
     ],
     "additionalProperties": False,
 }
@@ -150,9 +216,9 @@ _HOOK = {
         "motion_desc": {"type": "string"},
         "context_bridge": {"type": "string"},
         "prompt": {"type": "string"},
-        # Plan A（2026-08-14）：钩子补全锚点——与 _SHOT 对称，供站位清单/帧锚定/校验直读。
-        # 钩子全景建场，出镜角色同样必须写入 char_layout（杨旭/听香/潜伏威胁等）。
-        "char_layout": _CHAR_LAYOUT,
+        # v6.57+：per-frame spec 事实源（必填；QC + prompt 组装均走它，逐帧独立出镜表）。
+        # 替代 Plan A char_layout（已从 schema 移除，旧章数据由 accessor 降级）。
+        "frame_layouts": _FRAME_LAYOUTS,
     },
     "required": [
         "index", "narration_segment", "subtitle", "scene", "location",
@@ -160,7 +226,7 @@ _HOOK = {
         "mask_area", "color_tone", "clip_transition", "cam_idx",
         "variation_type", "duration", "keyframes",
         "ff_desc", "lf_desc", "motion_desc",
-        "context_bridge", "prompt",
+        "context_bridge", "prompt", "frame_layouts",
     ],
     "additionalProperties": False,
 }

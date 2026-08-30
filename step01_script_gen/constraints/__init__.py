@@ -55,6 +55,8 @@ from .restrained_emotion_chain import RestrainedEmotionChainConstraint  # F7 克
 from .climax_priority import ClimaxPriorityConstraint  # F8 高潮优先（v6.49, 08-28）
 from .short_shot_merge import ShortShotMergeConstraint  # F9 短镜合并（v6.49, 08-28）
 from .ff_lf_temporal import FfLfTemporalConstraint  # F10 ff/lf 时序协议（v6.50, 08-28）
+from .frame_spec_consistency import FrameSpecConsistencyConstraint  # S v6.57+ per-frame spec 一致性
+from .self_review import SelfReviewConstraint  # SR（LLM 自检回路）
 
 ALL_CONSTRAINTS.extend([
     # Phase 2
@@ -104,6 +106,7 @@ ALL_CONSTRAINTS.extend([
     ClimaxPriorityConstraint(),  # F8 高潮优先（v6.49, 08-28）
     ShortShotMergeConstraint(),  # F9 短镜合并 HARD（v6.49, 08-28）
     FfLfTemporalConstraint(),  # F10 ff 时序协议：本镜有攻击时 ff 禁结束态（v6.50, 08-28）
+    FrameSpecConsistencyConstraint(),  # S per-frame spec 必填 + 完整性 + desc 一致性（v6.57+）
     SelfReviewConstraint(),  # SR opt-in via SELF_REVIEW_ENABLED=1
 ])
 

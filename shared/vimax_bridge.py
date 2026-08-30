@@ -807,8 +807,8 @@ def _validate_frame(path: str, min_kb: float = 5) -> bool:
 
 async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
                           characters: list | None = None, empty_scene: bool = False,
-                          prompt: str | None = None,
-                          variation: str = "") -> bool:
+                          prompt: str | None = None, variation: str = "",
+                          kf_index: int | None = None) -> bool:
     """帧生成后执行视觉质检（软失败，不阻断流水线）.
 
     通过 shared/image_qc.py 调用 ds-vision-skill 的 vision-router.ps1 对帧图做内容质检；
@@ -838,6 +838,7 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
         from shared.image_qc import maybe_qc_sync, sidecar_path, write_sidecar
         result = await asyncio.to_thread(
             maybe_qc_sync, frame_path, shot, frame_kind, characters, empty_scene, prompt,
+            kf_index,
         )
         # v6.54.1：完整结果暂存——QC critical 分支据此构建局部修复计划
         try:
@@ -905,7 +906,7 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
 
 
 async def _try_qc_repair(image_adapter, shot: dict, frame_path: str, frame_kind: str,
-                         characters: list | None, empty_scene: bool, idx) -> bool:
+                         characters: list | None, empty_scene: bool, idx, kf_index: int | None = None) -> bool:
     """QC critical 后先试局部修复（v6.54.1 先修后抽）.
 
     build_repair_plan 分类：局部可修（睁眼/刀接触/红痕/篷/发光）→ doodle 红框
@@ -934,7 +935,7 @@ async def _try_qc_repair(image_adapter, shot: dict, frame_path: str, frame_kind:
     # （旧代码用 `qc2.has_hallucination` 触发 AttributeError，触发条件：_try_qc_repair
     # 实际被调用时——之前所有单测都 mock 掉 _try_qc_repair 返 True/False，从未走到
     # 内部 i2i+复检路径，所以 bug 一直藏到真实跑批才暴露）。
-    qc2_critical = await _maybe_qc_frame(shot, frame_path, frame_kind, characters, empty_scene)
+    qc2_critical = await _maybe_qc_frame(shot, frame_path, frame_kind, characters, empty_scene, kf_index=kf_index)
     # v6.x.x：runtime type assertion 防回归——_maybe_qc_frame 必须返 bool，
     # 任何返回类型漂移都会立刻定位到本行（静态检查 / 单测都覆盖不到这种类型契约）。
     assert isinstance(qc2_critical, bool), \
@@ -2395,6 +2396,10 @@ def _inject_character_costume(desc: str, characters: list | None,
                               role_scan_text: str | None = None) -> str:
     """给首帧/尾帧 prompt 注入出镜角色的脸型（static）+ 服装特征（dynamic）.
 
+    v6.57+：保留为老章降级路径（spec 不可用时回退）。新章统一走 `_inject_frame_spec`——
+    spec 驱动 on_screen=true 角色注入，无「名字启发式」+ 无 `_threat_visible_in` 窗口匹配
+    （治 lf 互斥 + kf ff+lf 拼接的结构性必败）。
+
     出镜角色 = desc 中出现的角色名。**两帧（ff/lf）一律注入完整 static+dynamic**，
     不做"已有服装词就跳过"的幂等——旧逻辑按角色名周围窗口检测是否已有单个服装词
     （如"一袭春衫"）就跳过，导致 ff 只带"春衫"、lf 才带完整"春衫+步摇"，两帧服装
@@ -2465,60 +2470,138 @@ def _inject_character_costume(desc: str, characters: list | None,
                 dynamic = _strip_frame_action_result(dynamic)
                 if not dynamic and not static:
                     continue
-            # 组装：static（脸型）+ dynamic（服装/状态）。dynamic 是服装词开头用
-            # "身着"，否则用"，"连接（如刺客 dynamic="浑身湿透"非衣服，说"身着浑身
-            # 湿透"不通顺 → "刺客：猫系脸…，浑身湿透"）。static 缺失时只拼 dynamic。
-            conn = "，身着" if any(w in dynamic for w in _COSTUME_WORDS) else "，"
-            # v6.43 重构：anchor 拼接 + dedup 委托给 prompt_semantic.Character.canonical_anchor()。
-            # 之前在这里硬编码"先发 state 词前置+dynamic 已含则不前置"逻辑，与
-            # prompt_semantic.registry.ANCHOR_DEDUP_PHRASES 行为完全等价，统一为：
-            # 1) 静态发型短语剔除
-            # 2) dynamic 已含 hair_state 时不前置（避免出现"披头散发 ... 披头散发"）
-            # 3) dynamic 不含 hair_state 时前置"此刻X"
-            _hair_state = next((w for w in _HAIR_STATE_WORDS if w in dynamic), "")
-            try:
-                from step01_script_gen.prompt_semantic import Character as _PSC
-                _char = _PSC(
-                    name=ident, static_features=static, dynamic_features=dynamic,
-                    hair_state=_hair_state,
-                )
-                combined = _char.canonical_anchor()
-            except ImportError:
-                # 兜底：保持原硬编码行为（无 prompt_semantic 包时回退）
-                if _hair_state:
-                    for _phrase in _HAIR_STATIC_PHRASES:
-                        static = static.replace(_phrase, "")
-                    _parts = [p for p in static.split("，") if p.strip()]
-                    static = "，".join(_parts)
-                    if _hair_state in dynamic:
-                        if static:
-                            static = f"{static}，"
-                    else:
-                        if static:
-                            static = f"{static}，此刻{_hair_state}"
-                        else:
-                            static = f"此刻{_hair_state}"
-                combined = (f"{ident}：{static}{conn}{dynamic}" if static
-                            else f"{ident}{conn}{dynamic}")
-            # v6.50（08-28）：先做「X系脸」比喻词 → 人类五官词替换——比喻词
-            # （鹿系脸/猫系脸）本身诱导兽化，靠下面的否定护栏对抗是下策；
-            # 替换后 static/dynamic 不再含动物字根，护栏自然不触发，prompt 更短。
-            for _meta, _human in _ANIMAL_METAPHOR_FACE_REPLACEMENTS:
-                if _meta in static:
-                    static = static.replace(_meta, _human)
-                if _meta in dynamic:
-                    dynamic = dynamic.replace(_meta, _human)
-            # 08-16 听香鹿角幻觉：角色脸型含动物关键词（虎目/狼腰等残余动物词）
-            # + 头饰（步摇/簪钗/冠）→ 模型把动物延伸成兽耳/角/犄角。追加护栏
-            # 明确禁止动物头面特征。检查 static+dynamic 任一含关键词即触发。
-            if any(k in (static + dynamic) for k in _ANIMAL_FACE_KEYWORDS):
-                combined = f"{combined}{_NO_ANIMAL_FEATURES_GUARD}"
+            combined = _build_char_anchor(ident, static, dynamic)
             if combined in desc:
                 continue
             additions.append(combined)
         if additions:
             # v6.50：desc 尾部句号 + 本处固定 "。" → 双句号（矛盾门会拦），
             # 先剥再拼
+            return f"{desc.rstrip('。')}。{('，'.join(additions))}"
+        return desc
+    except Exception:
+        return desc
+
+
+def _build_char_anchor(ident: str, static: str, dynamic: str) -> str:
+    """组装单个角色的脸型+服装锚字符串（v6.57+ 提取自 _inject_character_costume 复用）.
+
+    行为与原 _inject_character_costume 末尾 2468-2518 行一致：
+      - conn: 服装词开头用「身着」，否则用「，」
+      - hair_state 前置（披头散发/散落等已配 dynamic 时不重复）
+      - X 系脸 → 人类五官词替换（治听香鹿角幻觉）
+      - 动物头面特征护栏
+    """
+    conn = "，身着" if any(w in dynamic for w in _COSTUME_WORDS) else "，"
+    _hair_state = next((w for w in _HAIR_STATE_WORDS if w in dynamic), "")
+    try:
+        from step01_script_gen.prompt_semantic import Character as _PSC
+        _char = _PSC(
+            name=ident, static_features=static, dynamic_features=dynamic,
+            hair_state=_hair_state,
+        )
+        combined = _char.canonical_anchor()
+    except ImportError:
+        # 兜底：保持原硬编码行为（无 prompt_semantic 包时回退）
+        if _hair_state:
+            for _phrase in _HAIR_STATIC_PHRASES:
+                static = static.replace(_phrase, "")
+            _parts = [p for p in static.split("，") if p.strip()]
+            static = "，".join(_parts)
+            if _hair_state in dynamic:
+                if static:
+                    static = f"{static}，"
+            else:
+                if static:
+                    static = f"{static}，此刻{_hair_state}"
+                else:
+                    static = f"此刻{_hair_state}"
+        combined = (f"{ident}：{static}{conn}{dynamic}" if static
+                    else f"{ident}{conn}{dynamic}")
+    # v6.50（08-28）：先做「X系脸」比喻词 → 人类五官词替换——比喻词
+    # （鹿系脸/猫系脸）本身诱导兽化，靠下面的否定护栏对抗是下策；
+    # 替换后 static/dynamic 不再含动物字根，护栏自然不触发，prompt 更短。
+    for _meta, _human in _ANIMAL_METAPHOR_FACE_REPLACEMENTS:
+        if _meta in static:
+            static = static.replace(_meta, _human)
+        if _meta in dynamic:
+            dynamic = dynamic.replace(_meta, _human)
+    # 08-16 听香鹿角幻觉：角色脸型含动物关键词（虎目/狼腰等残余动物词）
+    # + 头饰（步摇/簪钗/冠）→ 模型把动物延伸成兽耳/角/犄角。追加护栏
+    # 明确禁止动物头面特征。检查 static+dynamic 任一含关键词即触发。
+    if any(k in (static + dynamic) for k in _ANIMAL_FACE_KEYWORDS):
+        combined = f"{combined}{_NO_ANIMAL_FEATURES_GUARD}"
+    return combined
+
+
+def _inject_frame_spec(
+    desc: str,
+    shot: dict,
+    characters: list | None,
+    frame_kind: str,
+    kf_index: int | None = None,
+) -> str:
+    """v6.57+ per-frame spec 驱动的角色锚定注入（替代 _inject_character_costume）.
+
+    出镜角色 = frame_layouts.{ff/lf/kfs[kf_index]} on_screen=true 的角色。
+    不再用「desc 中名字出现」启发式 + `_threat_visible_in` 窗口匹配——
+    spec on_screen=false 的角色直接跳过（治 lf 互斥：威胁源已没入水中时不被注入；
+    治 kf 角色消失：刺客离场 kf 不会再画刺客）。
+
+    优势：
+      - on_screen=false 角色不注入任何锚 → lf prompt 不引导模型画已退场角色
+      - kf 各取自己的 spec（kfs[i]）→ kf 独立角色表，不再用 ff+lf 拼接
+      - 威胁源可见性 = spec on_screen 字段判定，治 8-30 实证 lf count=3 烧 200 张根因
+
+    老章降级：shot 无 frame_layouts / spec 为空 → 回退 _inject_character_costume
+    旧逻辑（保留兼容）。
+    """
+    if not desc or not characters or not shot:
+        return desc
+    try:
+        if is_empty_scene(shot, characters):
+            return desc
+        from shared.frame_spec import get_frame_spec
+        spec = get_frame_spec(shot, frame_kind, kf_index)
+        # 老章降级（spec 为空——无 frame_layouts / 全 off_screen）
+        if not spec:
+            return _inject_character_costume(
+                desc, characters, shot,
+                frame_kind=frame_kind,
+            )
+        # spec 驱动：on_screen=true 才注入
+        on_screen_items = [s for s in spec
+                           if isinstance(s, dict) and s.get("on_screen") is True]
+        if not on_screen_items:
+            return desc
+        char_by_ident = {c.get("identifier", ""): c for c in characters
+                         if isinstance(c, dict)}
+        additions = []
+        for item in on_screen_items:
+            ident = str(item.get("name", "")).strip()
+            if not ident:
+                continue
+            c = char_by_ident.get(ident)
+            if not c:
+                continue
+            static = (c.get("static_features") or "").strip()
+            dynamic = (c.get("dynamic_features") or "").strip()
+            if not static and not dynamic:
+                continue
+            # 首帧过滤动作结果/武器词；非首帧（lf / kf）做惰性态剥离
+            if frame_kind == "first_frame":
+                dynamic = _strip_frame_action_result(dynamic)
+                if not dynamic and not static:
+                    continue
+            elif _char_inert_in_shot(ident, desc, characters):
+                dynamic = _strip_frame_action_result(dynamic)
+                if not dynamic and not static:
+                    continue
+            combined = _build_char_anchor(ident, static, dynamic)
+            if combined in desc:
+                continue
+            additions.append(combined)
+        if additions:
             return f"{desc.rstrip('。')}。{('，'.join(additions))}"
         return desc
     except Exception:
@@ -2630,7 +2713,7 @@ def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
         text = preprocess_prompt_for_image(desc)
         # v1.1：注入出镜角色服装特征（与 _gen_first_frame_async 生成链一致）
         # 首帧过滤动作结果/武器词，保证 QC 与图片模型看到的 prompt 一致
-        text = _inject_character_costume(text, characters, shot, frame_kind=frame_kind)
+        text = _inject_frame_spec(text, shot, characters, frame_kind=frame_kind)
         # v1.1：尾帧目光修复（与 _gen_last_frame_async 一致，QC 看到修复后 prompt）
         if frame_kind == "last_frame":
             text = fix_lf_desc_gaze(text, shot, characters)
@@ -2848,7 +2931,7 @@ async def _gen_first_frame_async(
     action_lock = IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT if is_action else None
     # ---- prompt 组装（只算一次，重试复用） ----
     _ff_pre = preprocess_prompt_for_image(ff_desc)
-    _ff_pre = _inject_character_costume(_ff_pre, characters, shot, frame_kind="first_frame")
+    _ff_pre = _inject_frame_spec(_ff_pre, shot, characters, frame_kind="first_frame")
     # 场景物体尺寸锚定注入（船/车等物体比例防漂移，code-audit 08-06 钩子船太小）
     _ff_pre = _inject_object_size_anchor(shot, _ff_pre)
     # 场景色调锚定注入（color_tone：夜景冷蓝/暖金烛光等，防模型自造色调漂色）
@@ -3084,7 +3167,7 @@ async def _gen_last_frame_async(
     # ---- lf prompt 组装（只算一次，重试复用） ----
     _lf_pre = preprocess_prompt_for_image(lf_desc)
     # v1.1：注入出镜角色服装特征（与首帧一致）
-    _lf_pre = _inject_character_costume(_lf_pre, characters, shot)
+    _lf_pre = _inject_frame_spec(_lf_pre, shot, characters, frame_kind="last_frame")
     # v1.1：尾帧目光修复（错别字 + 看向动作结果对象——听香看被刺倒的杨旭）
     _lf_pre = fix_lf_desc_gaze(_lf_pre, shot, characters)
     # 场景物体尺寸锚定注入（船/车等物体比例防漂移）
@@ -3311,7 +3394,8 @@ async def _gen_keyframes_async(
                         # v6.x.x P1 修：continue 让 attempt 走到 1 触发 variation[1]
                         if await _maybe_qc_frame(shot, str(kf_path), "keyframe",
                                                  characters, empty_scene,
-                                                 prompt=shot.get(f"kf_{i}_desc_final")):
+                                                 prompt=shot.get(f"kf_{i}_desc_final"),
+                                                 kf_index=i):
                             _del_frame_and_hash(kf_path, kf_hash_path, f"关键帧{i}", idx, _kf_logger)
                             continue
                         else:
@@ -3323,7 +3407,8 @@ async def _gen_keyframes_async(
                     if _validate_frame(str(kf_path)):
                         if await _maybe_qc_frame(shot, str(kf_path), "keyframe",
                                                  characters, empty_scene,
-                                                 prompt=shot.get(f"kf_{i}_desc_final")):
+                                                 prompt=shot.get(f"kf_{i}_desc_final"),
+                                                 kf_index=i):
                             _del_frame_and_hash(kf_path, kf_hash_path, f"关键帧{i}", idx, _kf_logger)
                             continue
                         else:
@@ -3332,7 +3417,8 @@ async def _gen_keyframes_async(
                 elif script_mtime is None and _validate_frame(str(kf_path)):
                     if await _maybe_qc_frame(shot, str(kf_path), "keyframe",
                                              characters, empty_scene,
-                                             prompt=shot.get(f"kf_{i}_desc_final")):
+                                             prompt=shot.get(f"kf_{i}_desc_final"),
+                                             kf_index=i):
                         _del_frame_and_hash(kf_path, kf_hash_path, f"关键帧{i}", idx, _kf_logger)
                         continue
                     else:
@@ -3357,8 +3443,19 @@ async def _gen_keyframes_async(
                 shot.get("motion_desc", "") or shot.get("prompt", ""),
                 kf_desc,
             ]))
-            kf_desc = _inject_character_costume(kf_desc, characters, shot,
-                                                role_scan_text=role_scan)
+            # v6.57+ spec 驱动：kf 用 frame_layouts.kfs[i] 各查各的 spec 角色表
+            # 取代「role_scan_text 合并全文」启发式（治 kf 角色消失 / 角色错位）
+            _kf_idx_in_shot = None
+            try:
+                _all_kfs = shot.get("keyframes") or []
+                if kf in _all_kfs:
+                    _kf_idx_in_shot = _all_kfs.index(kf)
+            except Exception:
+                pass
+            kf_desc = _inject_frame_spec(
+                kf_desc, shot, characters,
+                frame_kind="keyframe", kf_index=_kf_idx_in_shot,
+            )
             # 船/车等空间物体尺寸锚定（防关键帧船画小/画断——08-10 hook keyframe_0
             # 船少一截导致听香站水面）
             kf_desc = _inject_object_size_anchor(shot, kf_desc)
@@ -3413,7 +3510,8 @@ async def _gen_keyframes_async(
                 qc_critical = await _maybe_qc_frame(
                     shot, str(kf_path), "keyframe", characters,
                     empty_scene, prompt=kf_desc_full,
-                    variation=attempt_variation)
+                    variation=attempt_variation,
+                    kf_index=i)
                 # B7 修复：关键帧 QC critical → 删帧 + 删哈希，下次重生成。
                 # v6.x 末次兜底：与 ff/lf 对齐——坏图比没图好，保留末版留痕。
                 # v6.x.x P5 修：关键帧也接 _try_qc_repair（v6.54.2 落地）——
@@ -3421,7 +3519,7 @@ async def _gen_keyframes_async(
                 # 复检通过直接保留，不消耗重抽额度。修复失败再走删帧/保留末版路径。
                 if qc_critical:
                     if await _try_qc_repair(image_adapter, shot, str(kf_path), "keyframe",
-                                            characters, empty_scene, idx):
+                                            characters, empty_scene, idx, kf_index=i):
                         # 修复成功：哈希未删（下次缓存命中即修好的图）
                         kf_paths.append(str(kf_path))
                         break

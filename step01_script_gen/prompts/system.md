@@ -8,7 +8,7 @@
 
 - **只输出纯 JSON**，无 markdown 代码块、无任何额外文字
 - 顶层字段：title / characters / scenes / shots（数组）/ hook（可选）/ props / scene_objects
-- shot 字段：index, scene, location, main_subject, prompt, ff_desc, lf_desc, motion_desc, keyframes, char_layout, narration_segment, subtitle, color_tone, audio_cue, duration_sec, variation_type
+- shot 字段：index, scene, location, main_subject, prompt, ff_desc, lf_desc, motion_desc, keyframes, **frame_layouts**, narration_segment, subtitle, color_tone, audio_cue, duration_sec, variation_type
 - keyframe 字段：stage (pre/approach/climax/react/exit/after) + t_sec (0 < t_sec < duration_sec)
 - 严格遵守 schema；缺字段 = 拒收
 
@@ -60,7 +60,7 @@
 - duration_sec 公式：对话镜 6-8s / 动作/打斗/空镜 3-5s / 过渡 4-6s / 末镜 ≥ 4s
 - 空镜绝对禁 > 5s
 - 开篇 0-10s 禁止纯空镜（必须有人物+冲突）
-- char_layout 字段：每个出镜角色必填（name/position/**surface**/facing/role=主|次|背景）；surface 是角色所在的承重面（船尾/船头/甲板/船舷/岸边/亭内/楼上/楼下/车内/车辕/田埂/...），**缺则校验层报 warning**（LLM 必填）
+- **frame_layouts 字段（v6.57+ per-frame spec 事实源）**：每镜必填 `{ff:[...], lf:[...], kfs:[[...]]}`，每项 `{name, on_screen, position, pose, gaze_target, props}` **6 字段全必填**。`on_screen` 决定 QC 期望人数：lf「神秘人已没入水中」→ 该角色 **on_screen=false**（否则 QC 互斥 bug）；空镜 = 三桶全 `[]`（**禁止**哨兵行如 `{"name":"空镜"}`）；`kfs` 与 `keyframes` 顺序一一对应（数组长度相等）
 - 防止画面崩：prompt 末尾追加 "画面稳定 · 不闪烁 · 不重影 · 不模糊 · 动作流畅自然 · 不卡顿"（选 3-5 个）
 
 只输出纯 JSON，不要任何额外文字。

@@ -171,6 +171,11 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
             shot_b["ff_desc"] = lf_a
         # keyframes 清空（keyframe 由 motion_desc 派生，shot_b 不再有时间分段）
         shot_b["keyframes"] = []
+        # v6.57+ frame_layouts.kfs 同步清空（与 keyframes 一一对应，kfs 留
+        # 在 child 但 keyframes 空 → frame_spec_consistency HARD 违例）
+        _fl_b = shot_b.get("frame_layouts")
+        if isinstance(_fl_b, dict):
+            _fl_b["kfs"] = []
         if not shot_b.get("motion_desc"):
             # 没 motion_desc 时给个空的避免 validator 误报
             shot_b["motion_desc"] = ""

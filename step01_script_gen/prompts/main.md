@@ -15,9 +15,9 @@
 
 ### ⚠️ v6.49 红果场景/人物硬约束（v6.53 起由代码层强制执行）
 - **scene 字段合并为 2-3 个**：所有「同一物理地点」必须用同一个 scene 字符串（例：荷塘-小舟-岸边=「照月湾」；别庄大门-别庄内-庄仆=「杨府别庄」）。禁止把同地点细分（禁「小舟」「岸边」拆开）。
-- **人物合并为 2-4 人**：所有非核心配角（老汉/庄仆/船夫/家丁）统一 alias 为「群演」（main_subject/char_layout 都用「群演」名）。主角 + 主要对手 + 1-2 配角，禁止超过 4 个独立角色。
-- **威胁源统一写「神秘人」**：main_subject/char_layout.name 写「神秘人」（代码层会把「刺客/杀手/黑衣人/蒙面人」折叠为「神秘人」，与 ff_desc 合规形态一致）。
-- **代码层会自动改写**：main_subject/char_layout.name 命中 alias 表（船夫→群演、刺客→神秘人）会被直接替换，ff_desc 不动。
+- **人物合并为 2-4 人**：所有非核心配角（老汉/庄仆/船夫/家丁）统一 alias 为「群演」（main_subject 与 frame_layouts.*.name 都用「群演」名）。主角 + 主要对手 + 1-2 配角，禁止超过 4 个独立角色。
+- **威胁源统一写「神秘人」**：main_subject 与 frame_layouts 的 name 字段写「神秘人」（代码层会把「刺客/杀手/黑衣人/蒙面人」折叠为「神秘人」，与 ff_desc 合规形态一致）。
+- **代码层会自动改写**：main_subject + frame_layouts.*.name 命中 alias 表（船夫→群演、刺客→神秘人）会被直接替换，ff_desc 不动。
 
 ## 角色与场景物体库
 ### 角色库 (Character Bank)
@@ -28,6 +28,26 @@
 
 ## 声音生成指令（按当前视频供应商注入）
 {audio_instruction}
+
+## frame_layouts 字段（v6.57+ per-frame spec 事实源，每镜必填）
+
+**结构**：`{{ff:[...], lf:[...], kfs:[[...]]}}`，每项 `{{name, on_screen, position, pose, gaze_target, props}}` **6 字段全必填**。
+
+**`on_screen` 决定 QC 期望人数（治 lf 互斥根因）**：
+- ✅ 正确：lf「神秘人已没入水中不见踪影」→ lf 项 `{{"name": "神秘人", "on_screen": false, ...}}`
+- ❌ 错误：把已退场角色 lf 项 `on_screen: true` → QC 期望 3 人，模型多画人头（互斥 bug）
+
+**空镜 = 三桶全 `[]`**：
+- ✅ 正确：`{{"ff": [], "lf": [], "kfs": []}}`
+- ❌ 错误：哨兵行 `{{"name": "空镜", "on_screen": false, ...}}` → 污染 QC 期望人数
+
+**`kfs` 与 `keyframes` 一一对应**：kfs[i] = keyframes[i] 的出镜表；数组长度必须相等。
+
+**⚠️ 重要：`kfs` 数组长度必须严格等于 `keyframes` 数组长度**——有多少个关键帧就写多少个出镜表，**不能偷懒只写 1 个**！例如 keyframes 4 个 → kfs 必须也是 4 个二维数组项，每项是该关键帧的出镜表。Constraint 会硬校验（v6.57+ HARD 违例），不一致直接触发 regen。
+
+**`gaze_target` 值域**：角色名 / 画左 / 画右 / 画上 / 画下 / 无。
+
+**`pose`**：自由态词（≤15字：盘坐/潜伏/仰卧/半身探水/站立/倒纵入水/...）。
 
 ## 输出 JSON 骨架
 请严格输出一个 JSON 对象，不要包含任何 Markdown 标记（如 ```json），结构如下：
@@ -62,9 +82,11 @@
       "clip_transition": "转场方式 + 时长",
       "duration_sec": 6.0,
       "variation_type": "small|medium|large",
-      "char_layout": [
-        {{"name": "角色名", "position": "画左/画右/画中/前景/中景/后景", "surface": "船尾/船头/甲板/船舷/岸边/亭内/楼上/楼下/车内/...", "facing": "面向画左/画右/镜头/背对/面向[角色]", "role": "主/次/背景"}}
-      ],
+      "frame_layouts": {{
+        "ff":  [{{"name": "杨旭", "on_screen": true, "position": "画中", "pose": "盘坐", "gaze_target": "无", "props": ["酒壶"]}}],
+        "lf":  [{{"name": "杨旭", "on_screen": true, "position": "画中", "pose": "仰卧", "gaze_target": "无", "props": []}}],
+        "kfs": [[{{"name": "杨旭", "on_screen": true, "position": "画中", "pose": "盘坐", "gaze_target": "无", "props": []}}]]
+      }},
       "keyframes": [
         {{"desc": "静态构图定格，**自描述本帧完整画面**（含本镜全部角色姿态 + 关键武器/道具位置 + 伤处状态；独立生图，模型看不到 ff/lf，禁写「不重复本镜 ff_desc」「前一刻画面定格」等占位措辞）", "stage": "pre|approach|climax|react|exit|after", "t_sec": 1.5}}
       ]
@@ -89,7 +111,11 @@
     "clip_transition": "淡入转场，时长0.3s",
     "duration_sec": 4.0,
     "variation_type": "large",
-    "char_layout": [...],
+    "frame_layouts": {{
+      "ff":  [...],
+      "lf":  [...],
+      "kfs": [[...], ...]
+    }},
     "keyframes": [...]
   }}
 }}

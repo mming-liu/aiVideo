@@ -709,8 +709,25 @@ def frame_narrative_desc(shot: dict, frame_kind: str) -> str:
     return " ".join(filter(None, [shot.get("ff_desc", ""), shot.get("lf_desc", "")]))
 
 
-def _expected_persons(shot: dict, frame_kind: str, characters: list | None) -> int | None:
-    """本帧应出现人数 = char_layout 实体数；威胁源仅非实体呈现时从名单剔除."""
+def _expected_persons(shot: dict, frame_kind: str, characters: list | None, kf_index: int | None = None) -> int | None:
+    """本帧应出现人数 = spec on_screen 计数（新章）/ char_layout 实体数（老章）.
+
+    v6.57+ per-frame spec 事实源：spec 有 on_screen 字段 → 期望人数直接 = 在场数。
+    治 lf 互斥根因：spec on_screen=false 角色不会被计入期望人数，无需 _threat_visible_in
+    窗口匹配启发式（8-30 hook lf count=3 实证：旧路径 + 启发式破译 = 期望错；新路径
+    = spec 直读 = 0 误判）。
+
+    老章降级：shot 无 frame_layouts → 走 char_layout 路径 + _threat_visible_in 兜底。
+    """
+    # 新章路径：仅当 frame_layouts 真实存在时走 spec（否则 spec_on_screen_names
+    # 会从 char_layout 派生 → 全部 on_screen=True → 威胁源未被剔除）
+    if isinstance(shot.get("frame_layouts"), dict):
+        try:
+            from shared.frame_spec import spec_on_screen_names
+            return len(spec_on_screen_names(shot, frame_kind, kf_index=kf_index))
+        except Exception:
+            pass
+    # 老章降级
     names = [str(it.get("name", "")).strip() for it in (shot.get("char_layout") or [])
              if isinstance(it, dict) and str(it.get("name", "")).strip()]
     if not names:
@@ -1357,6 +1374,9 @@ def build_claim_checks(shot: dict, frame_kind: str) -> list[dict]:
 
     v6.56：text 解析走 frame_narrative_desc 统一入口，与 _expected_persons /
     maybe_qc_sync._claim_text 同源——三处统一用 raw desc 优先，final 兜底。
+
+    v6.57+：保留为 desc 路径。新章默认走 build_claim_checks_spec（spec 驱动），
+    QC_DESC_CLAIMS=1 可开回 A/B 对比。dispatch 在 build_targeted_questions。
     """
     text = frame_narrative_desc(shot, frame_kind)
     # 只对账「叙述+锚块」：组装 prompt 里的【强制】等约束条款不是画面断言，
@@ -1417,8 +1437,99 @@ def build_claim_checks(shot: dict, frame_kind: str) -> list[dict]:
     return qs[:10]
 
 
-def build_targeted_questions(shot: dict, frame_kind: str) -> list[dict]:
-    """兼容包装：v6.54 起逐句对账取代手写锚问题表（原表已删——打地鼠范式）."""
+def build_claim_checks_spec(shot: dict, frame_kind: str, kf_index: int | None = None) -> list[dict]:
+    """v6.57+ per-frame spec 驱动的 QC 对账（替代 build_claim_checks 散文解析路径）.
+
+    每帧 ≤6 问，从 frame_layouts 直接生成——人物在/不在、位置、视线、道具
+    全部按 spec.on_screen 字段判定（互斥不可能，治 lf 互斥 + kf 角色消失）。
+
+    类别（带 v6.55 reliability 分级）：
+      1) 在场：每个 on_screen 角色 1 问「画面是否表现：[name]在本帧在场？」(key)
+      2) 位置：每个有 position 的角色 1 问「[name]位于[position]？」(key)
+      3) 视线：每个 gaze_target != 无 的角色 1 问「[name]视线看向[gaze]？」(low)
+      4) 道具：每个 props 项 1 问「[name]持有[prop]？」(low)
+
+    旧章节（无 frame_layouts）/ spec 为空：返回 []——调用方应回退到 build_claim_checks。
+    """
+    from shared.frame_spec import get_frame_spec
+    spec = get_frame_spec(shot, frame_kind, kf_index)
+    if not spec:
+        return []
+    on_screen_items = [s for s in spec
+                       if isinstance(s, dict) and s.get("on_screen") is True]
+    if not on_screen_items:
+        return []
+    qs: list[dict] = []
+    # 1+2) 在场+位置合一（位置 yes 蕴含在场；替代独立「在本帧在场」问句）
+    for s in on_screen_items:
+        name = str(s.get("name", "")).strip()
+        position = str(s.get("position", "")).strip()
+        if name and position and position not in ("画外", "无", ""):
+            qs.append({
+                "q": f"画面是否表现：{name}位于{position}？",
+                "expect": "yes", "key": True,
+            })
+    # P1-B: off_screen 缺席断言（spec on_screen=false → 画面中是否已无）
+    off_items = [s for s in spec if isinstance(s, dict) and s.get("on_screen") is False]
+    for s in off_items:
+        name = str(s.get("name", "")).strip()
+        if name:
+            qs.append({
+                "q": f"画面中是否已无{name}？",
+                "expect": "yes", "key": True,
+            })
+    # 3) 视线（key=True，视线答错走 regen）
+    for s in on_screen_items:
+        name = str(s.get("name", "")).strip()
+        gaze = str(s.get("gaze_target", "")).strip()
+        if name and gaze and gaze not in ("无", "无视线", ""):
+            qs.append({
+                "q": f"画面是否表现：{name}的视线看向{gaze}？",
+                "expect": "yes", "key": True,
+            })
+    # 4) 道具（low）—— props 列表逐项查
+    for s in on_screen_items:
+        name = str(s.get("name", "")).strip()
+        props = s.get("props") or []
+        if name and isinstance(props, list):
+            for prop in props:
+                if isinstance(prop, str) and prop:
+                    qs.append({
+                        "q": f"画面是否表现：{name}持有{prop}？",
+                        "expect": "yes", "key": False,
+                    })
+    # v6.55 D 方案：reliability 标（生成期一次完成）
+    for q in qs:
+        q["reliability"] = _claim_reliability(q["q"])
+    # 视线问句 reliability 强制 high（不含 low 触发词，答错走 regen）
+    for q in qs:
+        if "视线看向" in q.get("q", ""):
+            q["reliability"] = "high"
+    qs.sort(key=lambda q: not q["key"])
+    return qs[:8]  # per-frame ≤8 问（腾出视线/道具名额）
+
+
+def build_targeted_questions(shot: dict, frame_kind: str, kf_index: int | None = None) -> list[dict]:
+    """QC 入口：spec 驱动 vs 散文解析的 dispatch.
+
+    v6.57+ 章级开关 QC_DESC_CLAIMS：
+      - 1  = 强制 desc 散文解析（沿用旧 build_claim_checks 路径，可与 spec A/B 对比）
+      - 0  = 强制 spec 驱动（新章 + 老章都走 spec；老章 spec 为空时返回 []）
+      - unset = 自动：有 frame_layouts 的章走 spec，无则走 desc（默认章级行为）
+
+    返回的 questions 与原有 _ask_yes_no / _claim_severity / unstable_flips 兼容。
+    """
+    flag = os.getenv("QC_DESC_CLAIMS", "").strip()
+    has_spec = isinstance(shot.get("frame_layouts"), dict)
+    if flag == "1":
+        # 强制 desc 路径
+        return build_claim_checks(shot, frame_kind)
+    if flag == "0":
+        # 强制 spec 路径（无 spec 章 → []）
+        return build_claim_checks_spec(shot, frame_kind, kf_index=kf_index)
+    # 自动：新章 → spec；老章 → desc
+    if has_spec:
+        return build_claim_checks_spec(shot, frame_kind, kf_index=kf_index)
     return build_claim_checks(shot, frame_kind)
 
 
@@ -1442,7 +1553,7 @@ def _ask_yes_no(frame_path: str | Path, questions: list[dict]) -> dict[str, str]
 # 便捷入口：给 vimax_bridge 用
 def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
                   characters: list | None = None, empty_scene: bool = False,
-                  prompt: str | None = None) -> QcResult:
+                  prompt: str | None = None, kf_index: int | None = None) -> QcResult:
     """同步质检入口（带 should_run_qc 守卫）；由 vimax_bridge 的 async 包装调用.
 
     v6.53 三层架构（QC_PROVIDER=auto 默认，检测链 agnes→dashscope→ark）：
@@ -1491,7 +1602,7 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
         entities = entries
         persons = [e for e in entries if str(e.get("label", "")).lower() == "person"]
         person_count = len(persons)
-        expected = _expected_persons(shot, frame_kind, characters)
+        expected = _expected_persons(shot, frame_kind, characters, kf_index=kf_index)
         if expected is not None:
             tol = int(os.getenv("QC_PERSON_TOLERANCE", "0"))
             if abs(person_count - expected) > tol:
@@ -1510,7 +1621,7 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
         all_issues.extend(_assert_action_consistency(persons, _claim_text))
 
         # ── 第 2 层：锚点 → 二值问答 ──
-        questions = build_targeted_questions(shot, frame_kind)
+        questions = build_targeted_questions(shot, frame_kind, kf_index=kf_index)
         if questions:
             answers = _ask_yes_no(frame_path, questions)
             # v6.55 D 方案：low 类断言跨 attempt 累计，streak 存 shot["_qc_low_streak"]
