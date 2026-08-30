@@ -878,6 +878,11 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
                 # v6.x C 项留痕：per-attempt 变体
                 "variation": variation,
             })
+            # v6.55 D 方案窄化 B 留痕：high 类关键断言跨 attempt 翻转点
+            # （理论上矛盾率 <10%，出现意味着模型状态异常而非 VLM 噪声）
+            _flips = getattr(result, "unstable_flips", None)
+            if _flips:
+                log[-1]["unstable_flips"] = _flips
             log_path.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
             _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 尝试日志写入失败: {e}")

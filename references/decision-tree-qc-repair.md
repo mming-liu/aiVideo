@@ -4,6 +4,7 @@
 >
 > 维护人：本会话（08-30 末次汇总）
 > 关联：`shared/image_qc.py:999` `build_repair_plan` + `shared/vimax_bridge.py` 重试循环
+> **v6.55 增补**：D 方案 reliability 预分级——low 类断言（比例/语义/程度副词）首错只 warning，连错升级 critical 才进本决策树。详见 `references/qc-reliability-calibration.md`。
 
 ## 决策树
 
@@ -52,6 +53,14 @@ critical in shot?
 | 5 | **extra_person 主体护栏**触发 | smaller_person 找不到 `_is_knife_holder`/`_is_lying` 主体 | 防止误删主体（v6.x.x review 修） |
 | 6 | i2i 修复**复检仍 critical** | （隐式：attempt 内部重试） | 修复失败 → 下一 attempt regen |
 | 7 | 多次 regen 仍 critical | "attempts_exhausted" | max_retries 用完 → 末次保留（坏图比没图好，CLAUDE.md 铁律）|
+
+
+
+## v6.55 补充：low 类断言的「升级条件」
+
+D 方案实施后，**low 类断言（详见 qc-reliability-calibration.md）首错只 warning，**不**进本决策树**。仅当跨 attempt 累计 ≥ 2 次答错 **且** key → 升级 critical → 才进本决策树。修复模式如 glowing/eyes_closed/knife_contact 不受影响——只是从首错即修变确认系统性才修。
+
+**反例**：用户单次跑批里 船宽三倍 答 no 一次 → 不进修复 → 第二次还答 no → 升级 critical → 走决策树 regen。
 
 ## 常见 critical 案例分流表
 

@@ -82,6 +82,12 @@ class QcResult:
     # v6.54.1：L1 grounding 原始实体条目（{label, desc, bbox}，bbox 归一 0-1000），
     # build_repair_plan 据此选 bbox 调 _doodle_refine_first_frame 做局部修复
     entities: list[dict] | None = None
+    # v6.55 D 方案窄化 B 留痕：high 类关键断言跨 attempt 答案翻转点列表
+    # （[{q, prev, got}]）。**双向留痕**（答对→答错 和 答错→答对 都记）——
+    # 答错→答对让审计看出"上轮 critical 是不是噪声"，对回退式分析更全。
+    # 不进入 build_repair_plan 决策，仅留痕供 qc_log 审计。理论翻转率 <10%，
+    # 出现意味着模型状态异常而非 VLM 噪声
+    unstable_flips: list | None = None
 
 
 # ============================================================================
@@ -1193,6 +1199,82 @@ _CLAIM_KEY_WORDS = (
     "目光", "凝望", "盯", "望向", "面朝", "面向",
 )
 
+# v6.55 D 方案：QC 断言 reliability 预分级（first_frame_qc_log.json 14 次
+# 实抽校准，见 references/qc-reliability-calibration.md）。
+# q 文本含下列触发词 → reliability="low"（首错只 warning，连错升级 critical）；
+# 否则 reliability="high"（答错即 critical，现状）。
+# 实证依据（矛盾率）：
+#   - 比例/空间类（"约为"/"三倍"/"两侧"/"空档"/"宽"/"窄"）：15-30%
+#   - 抽象语义类（"紧闭"/"发光"/"光刃"/"表情"/"神色"）：35-50%
+# 注意：「目光/凝望/面朝」属视线类，**不**进 low（用户决策视线答错走 regen），
+# 校准无视线矛盾样本，下次实抽补
+#
+# 程度副词族（"明显"/"清晰"/"隐约"/"大致"/"差不多"）08-30 review 撤出：
+# 校准 14 attempt 中**无矛盾样本**（凭直觉加入违反自家维护规则"≥5 样本
+# + 矛盾率 ≥15%"）。风险方向是漏检真问题——"白袍上血痕清晰可见"类存在
+# 性断言被误降 low 时会放过 critical。暂留待校准注释，下次实抽拿数据再
+# 决定是否入表（见 references/qc-reliability-calibration.md "维护规则"）
+_LOW_TRIGGERS = (
+    # 空间/比例族
+    "约为", "约是", "比例", "三倍", "两倍", "一倍",
+    "两侧", "空档", "空隙", "间距", "宽", "窄",
+    # 抽象语义族（VLM 二值问答弱项）
+    "紧闭", "微闭", "半闭",
+    "发光", "光刃", "光晕", "光束",
+    "表情", "神色", "神态", "目光惊愕", "神情",
+)
+
+
+def _claim_reliability(q: str) -> str:
+    """QC 断言可靠性预分级（v6.55 D 方案）.
+
+    返回 "high"（答错即 critical）或 "low"（首错只 warning，连错升级）。
+    校准驱动：高/低矛盾率差异 ~5x（见 references/qc-reliability-calibration.md）。
+    """
+    return "low" if any(w in (q or "") for w in _LOW_TRIGGERS) else "high"
+
+
+def _claim_severity(item: dict, got: str, streak: dict[str, int]) -> tuple[str, int]:
+    """单条断言判定（v6.55 D 方案）.
+
+    抽出纯函数便于单测，不依赖 maybe_qc_sync 完整 mock。
+
+    行为矩阵：
+      high + key + 答错(含 unclear)        → ("critical", 0)   # 现状不变
+      high + 非 key + 答错                  → ("warning", 0)
+      high + key + 答对                      → ("ok", 0)
+      low  + 答对                            → ("ok", streak[q] 维持)
+      low  + unclear                         → ("warning", 0)   # 解析失败不计次
+      low  + 答错(明确 yes/no)              → streak[q]+1；
+        streak ≥ 2 + key                    → ("critical", streak)
+        否则                                 → ("warning", streak)
+
+    返回: (severity, new_streak_value)
+    """
+    expect = item.get("expect")
+    key = item.get("key", False)
+    q = item.get("q", "")
+    reliability = item.get("reliability") or _claim_reliability(q)
+
+    # 答对：ok，streak 维持
+    if got == expect:
+        return ("ok", streak.get(q, 0))
+
+    if reliability == "high":
+        # 现状：unclear + key 算答错（critical）；非 key 不计
+        if got == "unclear" and not key:
+            return ("warning", 0)
+        return ("critical" if key else "warning", 0)
+
+    # reliability == "low"
+    if got == "unclear":
+        # 解析失败不计入 streak（解析失败≠画面事实）
+        return ("warning", 0)
+    new_streak = streak.get(q, 0) + 1
+    if new_streak >= 2 and key:
+        return ("critical", new_streak)
+    return ("warning", new_streak)
+
 # 否定句式可视觉判定的目标词（「无X/没有X/不见X」自动生成期望 no 的检查）
 _NEGATION_TARGETS = ("篷", "伞", "刀", "剑", "匕首", "武器", "血", "血迹", "红",
                      "伤", "痕", "帽", "冠", "灯", "灯笼", "文字", "水印", "发光",
@@ -1308,6 +1390,10 @@ def build_claim_checks(shot: dict, frame_kind: str) -> list[dict]:
         key = any(w in clause for w in _CLAIM_KEY_WORDS)
         qs.append({"q": f"画面是否表现：{clause}？", "expect": "yes", "key": key})
 
+    # v6.55 D 方案：出口打 reliability 标（生成期一次完成，零额外调用）
+    # 恒真规则三问（红痕/接触/发光）同样自动分级——发光问句含"发光"自动落 low
+    for q in qs:
+        q["reliability"] = _claim_reliability(q["q"])
     qs.sort(key=lambda q: not q["key"])
     return qs[:10]
 
@@ -1350,6 +1436,16 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
 
     prompt: 自定义质检 prompt（v1.1 传实际生成图片的最终 prompt；None 则由
     build_qc_prompt 自动构建，内部优先取 shot["ff_desc_final"]/["lf_desc_final"]）。
+
+    v6.55 D 方案：第 2 层判定走 _claim_severity 纯函数。
+    - reliability 标由 build_claim_checks 出口打定（生成期一次完成）
+    - high + key 答错 → critical（现状不变）
+    - low  + key 答错 → 累计 streak（shot["_qc_low_streak"]，下划线运行时字段），
+      ≥ 2 次答错升级 critical
+    - 答对不清零 + unclear 不计次（设计原则）
+    - 窄化 B 留痕：high 类关键断言跨 attempt 翻转 → shot["_qc_prev_answers"]
+      比对，仅记 unstable_flips（不改 severity，仅审计）
+    详见 references/qc-reliability-calibration.md。
     """
     if not should_run_qc(frame_path):
         return QcResult(has_hallucination=False, issues=[], ok=True, raw_result="", error="skipped")
@@ -1394,18 +1490,39 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
         questions = build_targeted_questions(shot, frame_kind)
         if questions:
             answers = _ask_yes_no(frame_path, questions)
+            # v6.55 D 方案：low 类断言跨 attempt 累计，streak 存 shot["_qc_low_streak"]
+            # （下划线运行时字段，_strip_runtime_fields 已有约定不入盘）。
+            # 答对不清零——每次 attempt 是全新图片，"连续"跨图无意义；
+            # 累计 ≥ 2 = 该问题跨图反复出现 = 系统性，升级 critical
+            streak = shot.setdefault("_qc_low_streak", {})
+            # 窄化 B 留痕：high 类跨 attempt 答案翻转（理论上矛盾率 <10%，
+            # 出现意味着模型状态异常）→ 记 unstable_flips，仅审计不改 severity
+            prev_answers = shot.get("_qc_prev_answers") or {}
+            unstable_flips: list[dict] = []
             for item in questions:
                 got = (answers or {}).get(item["q"], "unclear")
-                if got == item["expect"]:
-                    continue
-                if got == "unclear" and not item["key"]:
-                    continue  # 次要锚解析失败不罚；关键锚 unclear 按答错拦
-                sev = "critical" if item["key"] else "warning"
-                all_issues.append(QcIssue(
-                    category="anchor_mismatch",
-                    description=f"「{item['q']}」答 {got}，期望 {item['expect']}",
-                    severity=sev,
-                ))
+                sev, new_streak = _claim_severity(item, got, streak)
+                if sev == "ok":
+                    pass  # 答对，streak 维持（low 类不清零）
+                elif sev in ("critical", "warning"):
+                    all_issues.append(QcIssue(
+                        category="anchor_mismatch",
+                        description=f"「{item['q']}」答 {got}，期望 {item['expect']}",
+                        severity=sev,
+                    ))
+                if new_streak:
+                    streak[item["q"]] = new_streak
+                # 窄化 B：仅 high + key + 明确 yes/no 翻转记入
+                reliability = item.get("reliability") or _claim_reliability(item["q"])
+                if reliability == "high" and item.get("key") and got in ("yes", "no"):
+                    prev = prev_answers.get(item["q"])
+                    if prev in ("yes", "no") and prev != got:
+                        unstable_flips.append({
+                            "q": item["q"], "prev": prev, "got": got,
+                        })
+            # 更新 _qc_prev_answers 供下次 attempt 比对
+            if answers:
+                shot["_qc_prev_answers"] = dict(answers)
     except Exception as e:  # ARK 不可用 → 回落
         ark_ok = False
         ark_error = f"ARK 质检失败回落 router: {e}"
@@ -1433,4 +1550,5 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
                     raw_result=router_result.raw_result,
                     error=ark_error,
                     person_count=person_count, answers=answers,
-                    entities=entities)
+                    entities=entities,
+                    unstable_flips=unstable_flips or None)
