@@ -690,6 +690,25 @@ def _ark_image_data_url(frame_path: str | Path, max_side: int = 1024) -> str:
     return f"data:image/jpeg;base64,{b64}"
 
 
+def frame_narrative_desc(shot: dict, frame_kind: str) -> str:
+    """本帧「事实源」叙事 desc 的唯一解析入口（v6.56 字段源统一修复）.
+
+    raw desc（ff_desc / lf_desc）优先，*_desc_final 兜底。原因：lf_desc_final
+    含「蒙面/湿衣/持刃」等**组装时注入的服装锚块**——喂给 _threat_visible_in
+    会命中「蒙面/湿透」可见词表，必然判威胁源可见，与原始「已没入水中」叙事
+    直接矛盾（19:01:09 count=3 实证）。所有 desc 消费方（_expected_persons /
+    build_claim_checks / maybe_qc_sync._claim_text）必须走本入口，禁止自行
+    维护"哪个字段优先"的偏好——三处分散偏好是这次 lf 互斥 bug 的根因。
+
+    frame_kind == "merged" 或其他未识别值：ff+lf 合并（用于跨镜断言/统计）。
+    """
+    if frame_kind == "first_frame":
+        return shot.get("ff_desc") or shot.get("ff_desc_final") or ""
+    if frame_kind == "last_frame":
+        return shot.get("lf_desc") or shot.get("lf_desc_final") or ""
+    return " ".join(filter(None, [shot.get("ff_desc", ""), shot.get("lf_desc", "")]))
+
+
 def _expected_persons(shot: dict, frame_kind: str, characters: list | None) -> int | None:
     """本帧应出现人数 = char_layout 实体数；威胁源仅非实体呈现时从名单剔除."""
     names = [str(it.get("name", "")).strip() for it in (shot.get("char_layout") or [])
@@ -701,13 +720,10 @@ def _expected_persons(shot: dict, frame_kind: str, characters: list | None) -> i
     if has_threat_name:
         try:
             from shared.vimax_bridge import _threat_visible_in
-            if frame_kind == "first_frame":
-                desc = shot.get("ff_desc_final") or shot.get("ff_desc") or ""
-            elif frame_kind == "last_frame":
-                desc = shot.get("lf_desc_final") or shot.get("lf_desc") or ""
-            else:
-                desc = " ".join(filter(None, [shot.get("ff_desc", ""), shot.get("lf_desc", "")]))
-            if _threat_visible_in(desc, characters) is not True:
+            # v6.56：desc 解析走 frame_narrative_desc 统一入口——和
+            # build_claim_checks / _claim_text 同源，消灭「lf 期望人数判
+            # 可见 vs 逐句断言判不可见」的对账互斥。
+            if _threat_visible_in(frame_narrative_desc(shot, frame_kind), characters) is not True:
                 names = [n for n in names if n not in _THREAT]
         except Exception:
             pass
@@ -1278,7 +1294,12 @@ def _claim_severity(item: dict, got: str, streak: dict[str, int]) -> tuple[str, 
 # 否定句式可视觉判定的目标词（「无X/没有X/不见X」自动生成期望 no 的检查）
 _NEGATION_TARGETS = ("篷", "伞", "刀", "剑", "匕首", "武器", "血", "血迹", "红",
                      "伤", "痕", "帽", "冠", "灯", "灯笼", "文字", "水印", "发光",
-                     "面容", "武器")
+                     "面容", "武器",
+                     # v6.56：补「消失/退场」类视觉词——hook lf「神秘人已没入水中
+                     # 不见踪影」描述威胁源**不在场**（视觉不可见），需翻转为
+                     # expect=no。_threat_visible_in 同句判不可见（消费方一致）。
+                     # 注：故意不用单字「影」——光影/倒影/身影是视觉元素而非退场
+                     "踪影", "踪迹", "轮廓", "形体")
 
 # 图中英文动作词 → 中文允许集（任一中文出现在 prompt 即算允许）
 # 只收「改变场景/物体状态」的强动作——姿态类（躺/站/坐）误报率高单独降级
@@ -1333,13 +1354,11 @@ def build_claim_checks(shot: dict, frame_kind: str) -> list[dict]:
     通用性：不枚举历史失败。任何「prompt 写了但图没画」的子句自动成为检查项；
     否定句式（无X/没有X/不见X 且 X 可视觉判定）自动翻转为期望 no。
     抽象/氛围子句跳过（不可判定，硬判必误报）。关键子句（含结构性词）优先。
+
+    v6.56：text 解析走 frame_narrative_desc 统一入口，与 _expected_persons /
+    maybe_qc_sync._claim_text 同源——三处统一用 raw desc 优先，final 兜底。
     """
-    if frame_kind == "first_frame":
-        text = shot.get("ff_desc") or shot.get("ff_desc_final", "") or ""
-    elif frame_kind == "last_frame":
-        text = shot.get("lf_desc") or shot.get("lf_desc_final", "") or ""
-    else:
-        text = " ".join(filter(None, [shot.get("ff_desc", ""), shot.get("lf_desc", "")]))
+    text = frame_narrative_desc(shot, frame_kind)
     # 只对账「叙述+锚块」：组装 prompt 里的【强制】等约束条款不是画面断言，
     # 混入会污染拆句。ff_desc 含【角色锚定】/船体尾句——它们本身就是可判定
     # 的视觉断言（听香在中舱边缘/神秘人半身浸水中）。剥掉【】标记保留内容。
@@ -1483,7 +1502,11 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
                 ))
         all_issues.extend(_assert_duplicate_chars(persons, expected, characters))
         # v6.54 象限 B：图中动作/持物 vs prompt 允许集（推船类失败通用拦截）
-        _claim_text = (shot.get("ff_desc_final") or shot.get("ff_desc", "") or "") + " " +             (shot.get("motion_desc", "") or "")
+        # v6.56：改走 frame_narrative_desc 统一入口——之前 * 优先 final 字段，
+        # _assert_action_consistency 会拿到「蒙面/湿衣/持刃」服装锚块，误判
+        # 「持刃」为期望动作（与「已没入水中」lf 叙事直接矛盾）。raw desc 同
+        # 源，逻辑与 _expected_persons / build_claim_checks 统一。
+        _claim_text = frame_narrative_desc(shot, frame_kind) + " " + (shot.get("motion_desc", "") or "")
         all_issues.extend(_assert_action_consistency(persons, _claim_text))
 
         # ── 第 2 层：锚点 → 二值问答 ──

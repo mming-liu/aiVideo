@@ -1787,6 +1787,12 @@ def _char_aliases(char_id: str, characters: list | None = None) -> list[str]:
 # _char_aliases 仍只对核心三词展开通称别名（"刺客"+"神秘人"+"黑衣人"等）
 _THREAT_IDS = ("刺客", "杀手", "黑衣人")  # 保留精确匹配；通用检测走 THREAT_KEYWORDS
 
+# v6.56：威胁源可见性门控用的扩展词表——6 词覆盖合规替换称谓（神秘人/蒙面人/
+# 黑影），与 shared.image_qc._THREAT 对齐。ident 命中即视为威胁源，别名表命中
+# 也算（解决「ident=刺客但 lf_desc 写神秘人」类偏移场景）。下游 _threat_visible_in
+# 仍以「是否伴随可见实体特征」判定是否注入。
+_THREAT_KEYWORDS = ("神秘人", "刺客", "杀手", "黑衣人", "蒙面人", "黑影")
+
 
 def _is_threat_weapon_prop(pid: str) -> bool:
     """道具名是否为威胁源武器（刺客/杀手/黑衣人的刀/匕首/剑/刃/暗器/锤/斧/钩）.
@@ -2430,10 +2436,17 @@ def _inject_character_costume(desc: str, characters: list | None,
             # 的别名修复同源（08-10 A1/A2）。
             if not ident or not any(a in scan_text for a in _char_aliases(ident, characters)):
                 continue
-            # 08-16：威胁源帧级可见性门控——该帧自己的描述（desc）里威胁源仅
-            # 以非实体方式出现（水下黑影/刀尖/没入水中）→ 不注入服装描述，
-            # 否则图片模型会照脸型描述画出完整刺客（hook ff 猫系脸/浑身湿透）。
-            if ident in _THREAT_IDS and _threat_visible_in(desc, characters) is not True:
+            # v6.56（P0 威胁源注入可见性门控收紧）：原门控只判 ident in _THREAT_IDS
+            # （"刺客/杀手/黑衣人" 3 词），lf_desc 出现「神秘人已没入水中不见踪影」
+            # 时别名表里有「神秘人」但 ident「刺客」是 _THREAT_IDS 真子集——本就走
+            # 这条路；但跨小说/合规替换后 ident 可能是「蒙面人/黑影」（不在 _THREAT_IDS
+            # 但属于威胁源），旧门控直接放行 → 静态/动态锚块注入 lf 最终 prompt
+            # → 图片模型被引导画出威胁源（19:01:09 count=3 实证）。
+            # 修：threat keyword 扩到 6 词并对**别名表**判可见（不只看 ident），
+            # 检测文本用 scan_text（kf 路径 role_scan_text 合并全文，照旧工作）。
+            _aliases = _char_aliases(ident, characters)
+            _is_threat = any(a in _THREAT_KEYWORDS for a in _aliases) or ident in _THREAT_KEYWORDS
+            if _is_threat and _threat_visible_in(scan_text, characters) is not True:
                 continue
             static = (c.get("static_features") or "").strip()
             dynamic = (c.get("dynamic_features") or "").strip()
