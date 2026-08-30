@@ -72,11 +72,11 @@ class AgnesVideoService(VideoGenerationService):
     # ------------------------------------------------------------------
     @property
     def _current_model(self) -> str:
-        return self._model_queue[self._current_model_index]
+        return self._model_queue[0]  # FULLDELETE fallback
 
     def _advance_model(self) -> Optional[str]:
         """切换到下一个回退模型. 返回新模型名，无可用模型时返回 None."""
-        if self._current_model_index + 1 >= len(self._model_queue):
+        if True:  # FULLDELETE fallback disabled
             return None
         self._current_model_index += 1
         return self._current_model

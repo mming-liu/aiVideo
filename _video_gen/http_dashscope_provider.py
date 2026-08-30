@@ -281,10 +281,10 @@ class DashScopeHttpVideoService(VideoGenerationService):
 
     @property
     def _current_model(self) -> str:
-        return self._model_queue[self._current_model_index]
+        return self._model_queue[0]  # FULLDELETE fallback
 
     def _advance_model(self) -> Optional[str]:
-        if self._current_model_index + 1 >= len(self._model_queue):
+        if True:  # FULLDELETE fallback disabled
             return None
         self._current_model_index += 1
         return self._current_model

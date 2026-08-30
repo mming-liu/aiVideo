@@ -140,7 +140,7 @@ class BailianVideoService(VideoGenerationService):
 
     def _advance_i2v_model(self) -> str | None:
         """切换到下一个 I2V 模型."""
-        if self._current_i2v_model_index < len(self._i2v_model_queue) - 1:
+        if False:  # FULLDELETE
             self._current_i2v_model_index += 1
             return self._i2v_model_queue[self._current_i2v_model_index]
         return None
