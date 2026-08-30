@@ -124,22 +124,33 @@ def test_eyes_closed_face_top45_math():
 
 
 def test_person_count_regenerate():
-    """人数错=全局 → regenerate（局部编辑修不了构图）."""
+    """v6.x.x A 项：人数错=全局 → 走 extra_person 修图（small_person 选区）.
+
+    旧版一刀切 regenerate（v6.51）；新版把"图中实体人数 vs 名单"加入
+    _LOCALIZED_FIX_PATTERNS，选区 smaller_person 排除最大人物，触发 i2i
+    "减少 1 个人物" 修复。
+    """
     result = _result([_CRIT("extra_person", "图中实体人数 4 vs 名单 3（容差 0）")],
                      _ENTITIES)
     plan = build_repair_plan({}, "first_frame", result)
-    assert plan["action"] == "regenerate"
+    assert plan["action"] == "edit", \
+        f"人数错现在走 extra_person 修复（smaller_person 选区），实测 {plan['action']}"
+    assert "extra_person" in plan["matched_patterns"]
 
 
 def test_mixed_local_and_global_regenerate():
-    """刀接触（局部）+ 人数（全局）混合 → regenerate（任一不匹配即全局）."""
+    """v6.x.x：刀接触（局部）+ 人数（全局）混合 → 走 extra_person 修复（非局部不再卡全局）.
+
+    旧版"任一不匹配即全局"过于严苛——人数错和刀接触是两件独立的事，
+    各自有局部修复路径。新版两者都命中模式 → 走 edit 模式。
+    """
     result = _result([
         _CRIT("anchor_mismatch", "「刀具是否已接触或切入任何人的身体？」答 yes，期望 no"),
         _CRIT("extra_person", "图中实体人数 4 vs 名单 3（容差 0）"),
     ], _ENTITIES)
     plan = build_repair_plan({}, "first_frame", result)
-    assert plan["action"] == "regenerate"
-    assert "非局部" in plan["reason"]
+    assert plan["action"] == "edit", \
+        f"混合命中都走局部修复（knife + extra_person），实测 {plan['action']}"
 
 
 def test_no_entities_regenerate():
@@ -151,9 +162,16 @@ def test_no_entities_regenerate():
 
 
 def test_area_over_70_regenerate():
-    """修复区域并集 >70% 画幅 → 非局部，regenerate."""
-    huge = [{"label": "person", "desc": "white robe lying", "bbox": [0, 0, 1000, 800]}]
-    result = _result([_CRIT("anchor_mismatch", "「画面任何人身上是否出现红色痕迹、伤口或血迹？」答 yes，期望 no")],
+    """v6.x.x：area 护栏按模式分阈值——knife_contact 严守 70%（特小区域合理）.
+
+    实抽验证：旧版一刀切 70% 让其他模式（glowing/eyes_closed）命中率 0%，
+    因为 multi-person 场景下 union 面积天然 80%+。新版 knife_contact 仍 70%
+    （接触带小区域保护），其他模式放宽到 95%。
+    """
+    # 80% 画幅 + 持刀者（desc 含"持匕首"触发 _is_knife_holder）→ knife_zone 出 bbox
+    # → 80% > 70% knife 阈值 → regenerate
+    huge = [{"label": "person", "desc": "持匕首的人，lying", "bbox": [0, 0, 1000, 800]}]
+    result = _result([_CRIT("knife_contact", "刀具是否已接触或切入任何人的身体？")],
                      huge)
     plan = build_repair_plan({}, "first_frame", result)
     assert plan["action"] == "regenerate" and "画幅" in plan["reason"]

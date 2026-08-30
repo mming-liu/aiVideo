@@ -765,6 +765,16 @@ _LOCALIZED_FIX_PATTERNS: list[tuple[str, str, str, str]] = (
     ("face_expression", r"表情.{0,6}(?:错|不符|不对|错误)|惊愕|惊恐|痛苦|惊惶",
      "让人物面部呈现描述所述表情，五官位置保持不变",
      "person_face_top45"),
+    # v6.x.x A 项：extra_person 修图模式
+    # 选区 "smaller_person"：除最大面积人物外的所有人物 bbox——假设主角占画幅
+    # 最大，余下小面积人物框是 LLM 误读/重复产生的多余实体。i2i 指令"减少 1 个人物
+    # 保留主要人物"，让模型从小框中移除最模糊的那个。
+    # 风险：识别错了"主角"会删错人。阈值保守——由 _assert_duplicate_chars 软化后
+    # 的 critical（n>=3 真重复）喂入，避免单次误判触发删人。
+    ("extra_person", r"图中实体人数.*?vs.*?名单|角色被复制",
+     "减少 1 个人物，保留画面中面积最大、最清晰的主要人物，"
+     "其他人物与构图保持不变",
+     "smaller_person"),
 )
 
 
@@ -947,6 +957,28 @@ def _select_bboxes_for_pattern(selector: str,
             if _bbox_valid(e.get("bbox")):
                 x1, y1, x2, y2 = (float(v) for v in e["bbox"])
                 boxes.append([x1, y1, x2, y1 + (y2 - y1) * 0.45])
+    elif selector == "smaller_person":
+        # v6.x.x A 项：extra_person 修复模式——除最大面积人物外的所有人物框
+        # （假设主角占画幅最大，余下小框是 LLM 误读/重复产生的多余实体）
+        valid = [e for e in person_entities if _bbox_valid(e.get("bbox"))]
+        if not valid:
+            return boxes
+        # 算每个 bbox 面积
+        def _area(e):
+            x1, y1, x2, y2 = (float(v) for v in e["bbox"])
+            return (x2 - x1) * (y2 - y1)
+        max_area = max(_area(e) for e in valid)
+        # v6.x.x.x 护栏：最大框必须是"主体"才能 edit，否则宁可 regen 兜底——
+        # 防止主体本身就是小框（如"神秘人落水"shot 主体是小蒙面人）时把
+        # 主体当多余者删掉。仅当最大框满足 _is_knife_holder（持刀者，多为威胁
+        # 或动作主体）或 _is_lying（躺卧者，多为被刺/静态主体）才放行。
+        max_entity = max(valid, key=_area)
+        if not (_is_knife_holder(max_entity) or _is_lying(max_entity)):
+            # 主体识别不明确 → 不走删人模式，返空 boxes 让 build_repair_plan 走 regen
+            return boxes
+        for e in valid:
+            if _area(e) < max_area * 0.8:  # 至少小 20% 才算"smaller"（避免和主角并列大小）
+                boxes.append(e["bbox"])
     return boxes
 
 
@@ -965,10 +997,17 @@ def _bbox_area_pct(bbox: tuple[float, float, float, float]) -> float:
 
 
 def build_repair_plan(shot: dict, frame_kind: str, result) -> dict:
-    """QC critical 分类：局部可修 → edit（bbox + 指令）；全局 → regenerate.
+    """QC critical 分类：局部可修 → edit（bbox + 指令）；否则 → regenerate.
 
-    任一 critical 不匹配局部模式（人数/复制/动作错/位置错等）或 bbox 不可得
-    或并集区域 >70% 画幅 → 判非局部，走原重抽路径。
+    v6.x.x 新行为（与旧 docstring 区别）：
+    - 人数错有专属 extra_person 修复（smaller_person 选区 + 主体护栏），
+      不再一票 regenerate
+    - 关键阈值：knife_contact 70%，其他模式 95%（v6.x.x 第 1 步 area 分阈值）
+    - 同一 critical 可命中多模式，指令合并 dedup
+    - 正则收紧为"问题形态词"（v6.x.x P0）
+
+    仍走 regenerate 的情况：无 critical / 模式不匹配 / bbox 不可得 /
+    并集超模式阈值 / smaller_person 主体识别不明确（删错人护栏）。
     """
     issues = [i for i in (getattr(result, "issues", None) or [])
               if getattr(i, "severity", "") == "critical"]
@@ -1013,9 +1052,22 @@ def build_repair_plan(shot: dict, frame_kind: str, result) -> dict:
 
     region = _union_bboxes(all_boxes)
     area = _bbox_area_pct(region)
-    if area > 70:
+    # v6.x.x：按模式分阈值——knife_contact 是真正"局部"修复（接触带小区域），
+    # 保留 70%；其他模式（glowing/eyes_closed/costume_color/holding_wrong/
+    # multi_finger/face_expression）大多用 all_persons/lying_face_top45 选择器，
+    # multi-person 场景下 union 面积天然 80%+，70% 一刀切会让修复机制实际命中
+    # 率 ≈ 0%（v6.x.x 实抽 entry 6/7 验证：glowing/eyes_closed 命中但 80% union
+    # 被护栏拒绝）。多个模式同时命中时取最宽松阈值（max）——knife 严选 70，
+    # 其他宽选 95；若同时命中，按宽的来不冲突。
+    _AREA_THRESHOLDS = {"knife_contact": 70}
+    _DEFAULT_AREA_THRESHOLD = 95
+    threshold = max(
+        (_AREA_THRESHOLDS.get(m, _DEFAULT_AREA_THRESHOLD) for m in matched),
+        default=_DEFAULT_AREA_THRESHOLD,
+    )
+    if area > threshold:
         return {"action": "regenerate",
-                "reason": f"修复区域占画幅 {area:.0f}%，非局部",
+                "reason": f"修复区域占画幅 {area:.0f}%，超过 {threshold}% 阈值",
                 "matched_patterns": matched}
 
     bbox_ratio = tuple(round(c / 1000.0, 4) for c in region)  # 0-1000 → 0-1
@@ -1088,10 +1140,19 @@ def _assert_duplicate_chars(persons: list[dict], expected: int | None,
             continue
         roster_n = roster_text.count(color)
         if roster_n < 2:
+            # v6.x.x：夜景镜「神秘人黑衣 + 阴影里其他角色」易被 L1 误判为
+            # 同一色重复（hook 镜实抽 entry 4/6/7 验证 person_count=3 但误报
+            # "黑色人物出现 2 次"）。软化措辞提示 L1 二次确认，n>=3 仍升 critical
+            # 视为真重复；n==2 降 warning 避免一票否决。
+            severity = "critical" if n >= 3 else "warning"
             issues.append(QcIssue(
                 category="extra_person",
-                description=f"{color}色人物出现 {n} 次，名单中该色角色不足 2 个（角色被复制）",
-                severity="critical",
+                description=(
+                    f"{color}色人物出现 {n} 次，名单中该色角色不足 2 个。"
+                    f"若为夜色阴影/同色服装误读可忽略；"
+                    f"否则疑似角色被复制"
+                ),
+                severity=severity,
             ))
     return issues
 
@@ -1209,7 +1270,13 @@ def build_claim_checks(shot: dict, frame_kind: str) -> list[dict]:
         if any(w in text for w in ("刀", "匕首", "刺")):
             qs.append({"q": "刀具是否已接触或切入任何人的身体？", "expect": "no", "key": True})
         if "发光" not in text and any(w in text for w in ("刀", "匕首", "短刃")):
-            qs.append({"q": "图中是否有发光的物体或光刃？", "expect": "no", "key": True})
+            # v6.x.x：夜景镜「月光/水面反光」易被 L1 误判为发光物体（hook 镜
+            # 实抽 entry 5/6/7 验证）——加限定词明示排除，减少误报。
+            qs.append({
+                "q": "图中是否有发光的物体或光刃？"
+                     "（月亮/月光/水面反光/灯光/火把等自然光不算）",
+                "expect": "no", "key": True,
+            })
 
     for clause in _split_clauses(text):
         if any(w in clause for w in _CLAIM_SKIP_WORDS):

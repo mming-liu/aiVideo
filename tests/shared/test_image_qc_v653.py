@@ -82,13 +82,34 @@ def test_expected_persons_threat_invisible_excluded():
 
 
 def test_duplicate_chars_two_white_one_roster_white():
-    """两个白衣实体 vs 名单仅 1 个白衣角色 → critical（杨旭重复形态）."""
+    """v6.x.x：两个白衣实体 vs 名单仅 1 个白衣角色 → warning（夜景误读风险）.
+
+    旧版 n==2 即 critical，hook 镜实抽 entry 4/6/7 验证：夜色"神秘人黑衣 +
+    阴影里听香"易被 L1 误判为同色重复。n==2 改 warning + 提示二次确认，
+    n==3+ 仍 critical（真重复一眼可见）。
+    """
     persons = [
         {"label": "person", "desc": "white robe lying"},
         {"label": "person", "desc": "white hanfu standing"},
     ]
     issues = iq._assert_duplicate_chars(persons, 2, _CHARS)
-    assert any(i.severity == "critical" for i in issues)
+    # n=2 应是 warning（不再一票否决）
+    assert any(i.severity == "warning" for i in issues), \
+        f"n=2 应降为 warning，实测 {[i.severity for i in issues]}"
+    assert not any(i.severity == "critical" for i in issues), \
+        f"n=2 不应 critical（误读风险），实测 {[i.severity for i in issues]}"
+
+
+def test_duplicate_chars_three_white_one_roster_white_still_critical():
+    """v6.x.x：三个白衣实体 vs 名单 1 个 → 仍 critical（真重复，n>=3）."""
+    persons = [
+        {"label": "person", "desc": "white robe lying"},
+        {"label": "person", "desc": "white hanfu standing"},
+        {"label": "person", "desc": "white robe background"},
+    ]
+    issues = iq._assert_duplicate_chars(persons, 3, _CHARS)
+    assert any(i.severity == "critical" for i in issues), \
+        f"n=3 应仍 critical（真重复），实测 {[i.severity for i in issues]}"
 
 
 def test_duplicate_chars_legit_two_black():

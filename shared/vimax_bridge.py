@@ -930,6 +930,10 @@ async def _try_qc_repair(image_adapter, shot: dict, frame_path: str, frame_kind:
     # 实际被调用时——之前所有单测都 mock 掉 _try_qc_repair 返 True/False，从未走到
     # 内部 i2i+复检路径，所以 bug 一直藏到真实跑批才暴露）。
     qc2_critical = await _maybe_qc_frame(shot, frame_path, frame_kind, characters, empty_scene)
+    # v6.x.x：runtime type assertion 防回归——_maybe_qc_frame 必须返 bool，
+    # 任何返回类型漂移都会立刻定位到本行（静态检查 / 单测都覆盖不到这种类型契约）。
+    assert isinstance(qc2_critical, bool), \
+        f"_maybe_qc_frame 应返 bool，实测 {type(qc2_critical)}（_qc_last={shot.get('_qc_last')!r}）"
     if qc2_critical:
         _bridge_log("  [REPAIR] 修复后复检仍 critical，回落重抽")
         return False

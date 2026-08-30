@@ -744,3 +744,154 @@ def test_try_qc_repair_post_edit_qc_no_attribute_error():
     fixed_pattern = "qc2_critical = await _maybe_qc_frame"
     assert fixed_pattern in src, \
         f"v6.x.x bug 修：应包含 `{fixed_pattern}`\n（直接用 bool 返值）"
+
+
+# ── v6.x.x area 护栏按模式分阈值 ──
+
+
+def test_area_threshold_per_pattern():
+    """v6.x.x 修：area 护栏从一刀切 70% 改为按模式分阈值。
+
+    实抽 entry 6/7 验证：glowing/eyes_closed 命中（person_count=3），
+    union area 80% 被旧 70% 护栏拒绝，修复机制实际命中率 0%。
+
+    验证：
+    - knife_contact 仍严守 70%（接触带小区域，70% 合理）
+    - 其他模式（glowing/eyes_closed 等）放宽到 95%
+    """
+    from types import SimpleNamespace
+    from shared.image_qc import build_repair_plan
+
+    # 3 个人的全图 bboxes（union 80%）
+    persons_3 = [
+        {"label": "person", "desc": "wearing white robe, lying", "bbox": [50, 100, 600, 700]},
+        {"label": "person", "desc": "wearing green dress, kneeling", "bbox": [400, 600, 850, 1100]},
+        {"label": "person", "desc": "wearing black, head above water", "bbox": [100, 800, 500, 1100]},
+    ]
+
+    # 1. glowing 命中 + 80% union → 旧 70% 拒，新 95% 应 edit
+    glow_result = SimpleNamespace(
+        issues=[SimpleNamespace(category="anchor_mismatch",
+                                description="图中是否有发光的物体或光刃？答 yes，期望 no",
+                                severity="critical")],
+        entities=persons_3,
+    )
+    plan = build_repair_plan({}, "first_frame", glow_result)
+    assert plan["action"] == "edit", \
+        f"glowing 命中 + 80% union 应放行（95% 阈值），实测 {plan['action']}，reason={plan.get('reason')}"
+    assert "glowing" in plan["matched_patterns"]
+
+    # 2. eyes_closed 命中 + 80% union → 应 edit
+    eyes_result = SimpleNamespace(
+        issues=[SimpleNamespace(category="anchor_mismatch",
+                                description="仰面朝上双目紧闭？答 no，期望 yes",
+                                severity="critical")],
+        entities=persons_3,
+    )
+    plan = build_repair_plan({}, "first_frame", eyes_result)
+    assert plan["action"] == "edit", \
+        f"eyes_closed 命中 + 80% union 应放行（95% 阈值），实测 {plan['action']}"
+    assert "eyes_closed" in plan["matched_patterns"]
+
+    # 3. knife_contact 命中 + 80% union → knife_contact 严守 70%，应 regenerate
+    #    （knife 接触带小区域理论 ≤30%，80% 一定非局部）
+    knife_result = SimpleNamespace(
+        issues=[SimpleNamespace(category="knife_contact",
+                                description="刀具是否已接触或切入任何人的身体？",
+                                severity="critical")],
+        entities=persons_3,
+    )
+    plan = build_repair_plan({}, "first_frame", knife_result)
+    assert plan["action"] == "regenerate", \
+        f"knife_contact 80% union 应被 70% 阈值拒绝，实测 {plan['action']}，reason={plan.get('reason')}"
+
+    # 4. 多模式命中（glowing + knife_contact）→ 取最宽松阈值（95%），应 edit
+    mixed_result = SimpleNamespace(
+        issues=[
+            SimpleNamespace(category="anchor_mismatch",
+                            description="图中是否有发光的物体或光刃？答 yes，期望 no",
+                            severity="critical"),
+            SimpleNamespace(category="knife_contact",
+                            description="刀具是否已接触或切入任何人的身体？",
+                            severity="critical"),
+        ],
+        entities=persons_3,
+    )
+    plan = build_repair_plan({}, "first_frame", mixed_result)
+    assert plan["action"] == "edit", \
+        f"混合命中（glowing + knife_contact）应取最宽松 95%，实测 {plan['action']}"
+
+
+# ── v6.x.x.x review fixes：extra_person 正则收窄 + smaller_person 主体护栏 ──
+
+
+def test_extra_person_regex_tightened():
+    """review 修：去掉「多余人物」三字——router warning「画面中多出多余人物」
+    误中删人模式风险。代码生成的确定性描述只剩「图中实体人数 vs 名单」
+    和「角色被复制」。
+    """
+    from types import SimpleNamespace
+    from shared.image_qc import build_repair_plan
+    import re
+    from shared.image_qc import _LOCALIZED_FIX_PATTERNS
+
+    # 找 extra_person 模式
+    extra_person_pat = next(p[1] for p in _LOCALIZED_FIX_PATTERNS if p[0] == "extra_person")
+
+    # 应匹配的：代码生成的确定性文案
+    assert re.search(extra_person_pat, "图中实体人数 4 vs 名单 3（容差 0）"), \
+        "extra_person 应匹配「图中实体人数 vs 名单」（代码生成）"
+    assert re.search(extra_person_pat, "黑色人物出现 2 次（角色被复制）"), \
+        "extra_person 应匹配「角色被复制」"
+
+    # 不应匹配的：router warning 文案（v6.x.x.x 收窄后）
+    assert not re.search(extra_person_pat, "画面中多出多余人物"), \
+        "v6.x.x.x 收窄后「多余人物」不应再匹配 extra_person（router warning 误中风险）"
+    assert not re.search(extra_person_pat, "画面有多余人物"), \
+        "v6.x.x.x 收窄后「多余人物」三字不应再匹配"
+
+
+def test_smaller_person_subject_guard():
+    """review 修：smaller_person 加主体护栏——最大框必须满足 _is_knife_holder
+    或 _is_lying 才放行 edit，否则 regen 兜底（防把主体当多余者删掉）。
+
+    hook 场景：神秘人是小框 + 持刀者（_is_knife_holder）→ 应 edit
+    shot5 场景：神秘人落水是小框 + 不持刀不躺卧 → 应 regen（主体识别不明确）
+    """
+    from types import SimpleNamespace
+    from shared.image_qc import build_repair_plan
+
+    # hook 场景：3 人，大框=杨旭（躺卧），神秘人持刀，2 个小框（听香跪坐 + 神秘人头）
+    # 最大框是杨旭（desc "lying" 触发 _is_lying）→ 放行
+    hook_persons = [
+        {"label": "person", "desc": "wearing white robe, lying", "bbox": [50, 100, 600, 800]},  # 大
+        {"label": "person", "desc": "wearing green dress, kneeling", "bbox": [400, 700, 700, 950]},  # 小
+        {"label": "person", "desc": "wearing black, holding knife", "bbox": [200, 800, 450, 950]},  # 小
+    ]
+    hook_result = SimpleNamespace(
+        issues=[SimpleNamespace(category="extra_person",
+                                description="图中实体人数 4 vs 名单 3（容差 0）",
+                                severity="critical")],
+        entities=hook_persons,
+    )
+    plan = build_repair_plan({}, "first_frame", hook_result)
+    assert plan["action"] == "edit", \
+        f"hook 场景（大框=躺卧杨旭）应放行 edit，实测 {plan['action']}, reason={plan.get('reason')}"
+
+    # shot5 场景：3 人，最大框是个站立者（不躺不持刀），主体识别不明确
+    # → smaller_person 返空 boxes → build_repair_plan 走 regen
+    shot5_persons = [
+        {"label": "person", "desc": "wearing white robe, standing", "bbox": [50, 100, 600, 800]},  # 大
+        {"label": "person", "desc": "wearing black, head above water", "bbox": [200, 800, 450, 950]},  # 小
+        {"label": "person", "desc": "wearing green dress, kneeling", "bbox": [400, 700, 700, 950]},  # 小
+    ]
+    shot5_result = SimpleNamespace(
+        issues=[SimpleNamespace(category="extra_person",
+                                description="图中实体人数 4 vs 名单 3（容差 0）",
+                                severity="critical")],
+        entities=shot5_persons,
+    )
+    plan = build_repair_plan({}, "first_frame", shot5_result)
+    # 主体不明确 → all_boxes 空 → 走 regen（而不是删错人）
+    assert plan["action"] == "regenerate", \
+        f"shot5 场景（大框=站立者非躺非持刀）主体不明确应 regen，实测 {plan['action']}"
