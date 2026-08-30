@@ -288,3 +288,82 @@ def test_collective_name_never_victim():
     assert _INJURY_ANCHOR_TAIL in script["shots"][1]["ff_desc"], (
         "location 2字头匹配（小舟船头↔小舟上）+ ff 纳入后应补 ff_desc"
     )
+
+
+# ── v6.x.x：hook 刺杀前蓄势态不补伤锚（08-30 实抽 hook 污染根因） ──
+
+def test_hook_pre_attack_state_skips_anchor():
+    """hook 含 victim + 缺 anchor + 文本无血词/无 post-state 词 → 不补 INJURY_ANCHOR_TAIL.
+
+    旧版只看"含 victim + 缺 anchor"就补，导致 hook.prompt 末尾被注入
+    "伤处白袍心口一片暗红血迹洇开"——与杨旭"闭目吟哦/仰卧未觉"自相矛盾。
+    修法：复用 BLOOD_STATE_WORDS + POST_STATE_KEYWORDS 反向判定。
+    """
+    from step01_script_gen.validation import _INJURY_ANCHOR_TAIL
+    from tests.step01_script_gen.conftest import make_ctx, make_script
+
+    # hook 是刺杀前蓄势瞬间：杨旭仰卧闭目 + 刺客破水待刺
+    hook = {
+        "index": 0,
+        "prompt": "弦月当空，杨旭素白袍袒腹仰卧船头，仰面朝上双目紧闭，闭目吟哦。"
+                  "神秘人湿衣伏于舟侧水下，仅露头部，一手持匕首于水面之下。",
+        "ff_desc": "杨旭闭目吟哦，神秘人潜伏水下",
+        "lf_desc": "",
+    }
+    script = make_script(
+        shots=[],
+        hook=hook,
+    )
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.injury_continuity import InjuryContinuityConstraint
+
+    repairs = InjuryContinuityConstraint().apply(ctx)
+
+    # 关键断言：前态 hook → 0 修复（不补伤锚）
+    assert len(repairs) == 0, f"前态 hook 不该补伤锚，实测 {len(repairs)} 修复"
+    assert _INJURY_ANCHOR_TAIL not in hook["prompt"], \
+        "前态 hook.prompt 末尾不该被注入 INJURY_ANCHOR_TAIL"
+
+
+def test_hook_post_attack_state_still_appends_anchor():
+    """hook 是刺杀后形态（含血词/含 post-state 词）→ 仍照常补 INJURY_ANCHOR_TAIL.
+
+    修法不能误伤刺杀后 hook（之前依赖此 Constraint 补锚的镜不应丢功能）。
+    """
+    from step01_script_gen.validation import _INJURY_ANCHOR_TAIL
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    # 必须有 build_idx 来源 shot（否则 victim=None，整段无修复）
+    # shot 0: build_idx（心口洇痕 + 杨旭倒下）
+    # hook: 刺杀后态（刺客已没入 + 杨旭血迹）
+    hook = {
+        "index": 0,
+        "prompt": "刺客已没入水中不见踪影。杨旭白衣心口洇开大片暗红，双目圆睁仰卧不动。",
+        "ff_desc": "",
+        "lf_desc": "刺客已没入水中，水面只剩涟漪",
+    }
+    script = make_script(
+        shots=[
+            make_shot(
+                index=1,
+                prompt="杨旭心口洇痕，仰面朝上",
+                location="小舟",
+                main_subject="杨旭",
+                char_layout=[
+                    {"name": "杨旭", "role": "次"},
+                    {"name": "刺客", "role": "主"},
+                ],
+            ),
+        ],
+        hook=hook,
+    )
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.injury_continuity import InjuryContinuityConstraint
+
+    repairs = InjuryContinuityConstraint().apply(ctx)
+
+    # 后态 hook → 至少 1 处修复（prompt 或 lf_desc 补伤锚）
+    assert len(repairs) >= 1, f"后态 hook 应照常补伤锚，实测 {len(repairs)} 修复"
+    appended = (_INJURY_ANCHOR_TAIL in hook["prompt"]
+                or _INJURY_ANCHOR_TAIL in hook["lf_desc"])
+    assert appended, f"后态 hook 至少 prompt/lf_desc 之一应被追加 {_INJURY_ANCHOR_TAIL}"

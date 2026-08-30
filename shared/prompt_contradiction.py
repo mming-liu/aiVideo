@@ -134,6 +134,35 @@ def _check_double_punctuation(prompt: str) -> list[str]:
     return []
 
 
+def _check_ff_lf_stage_conflict(prompt: str) -> list[str]:
+    """v6.x.x（08-30 实抽）：ff 既含"动作起始态"前置词 + 伤锚完整结束词 → 矛盾.
+
+    现场：hook.prompt 字段同时含"杨旭闭目吟哦/仰卧未觉"（前态）和
+    "伤处白袍心口一片暗红血迹洇开"（后态）——模型拿到自相矛盾的 prompt
+    自由发挥成"船里灌水/听香在船外"画面。F10 词表已在 step01 校验层
+    补 4 个词（08-30），这里是 step02a 提交前最后一道 fail-fast 兜底。
+
+    判定策略（避免误伤）：**仅当 ff 同时含"前置词" + "伤锚结束词"才报**。
+    - 纯前态（"闭目吟哦"+无伤锚）→ 不报
+    - 纯后态（"伤处白袍"+无前态词）→ 不报
+    - 前后态同现 → 报 "ff_lf_stage_conflict"
+    """
+    if not prompt:
+        return []
+    # 前态词：杨旭/受害者"还没受伤"语义
+    pre_state = ("闭目", "未觉", "尚未", "即将入", "即将没入", "未刺",
+                 "蓄势", "潜伏", "伏于", "蛰伏")
+    # 伤锚完整句（与 F10 _POST_STATE_WORDS 补的 4 词 + 历史锚句对齐）
+    injury_anchor = ("伤处白袍", "一片暗红血迹洇开", "血痕清晰可见",
+                     "暗红痕迹洇开", "心口洇开大片暗红", "胸口已刺入")
+    has_pre = any(w in prompt for w in pre_state)
+    has_anchor = any(w in prompt for w in injury_anchor)
+    if has_pre and has_anchor:
+        return ["ff_lf_stage_conflict（ff 同时含前态词+伤锚结束词，"
+                "如「杨旭闭目吟哦」+「伤处白袍心口一片暗红血迹洇开」→ 矛盾）"]
+    return []
+
+
 def find_contradictions(prompt: str) -> list[str]:
     """检测 prompt 内确定性自相矛盾，返回问题描述列表（空 = 通过）."""
     if not prompt or not isinstance(prompt, str):
@@ -143,6 +172,7 @@ def find_contradictions(prompt: str) -> list[str]:
     issues += _check_shadow_contradiction(prompt)
     issues += _check_duplicate_block(prompt)
     issues += _check_double_punctuation(prompt)
+    issues += _check_ff_lf_stage_conflict(prompt)
     return issues
 
 

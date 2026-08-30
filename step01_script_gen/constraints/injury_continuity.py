@@ -27,6 +27,7 @@ from step01_script_gen.prompt_semantic import (
     BLOOD_STATE_WORDS as _BLOOD_STATE_WORDS,
     COLLECTIVE_NAMES as _COLLECTIVE_NAMES,
     THREAT_KEYWORDS as _THREAT_KEYWORDS,
+    POST_STATE_KEYWORDS as _POST_STATE_KEYWORDS,
 )
 from .base import Constraint
 from .types import RepairRecord, Severity
@@ -221,6 +222,19 @@ class InjuryContinuityConstraint(Constraint):
                 + (hook.get("lf_desc", "") or "")
             )
             if victim in h_text and not self._already_repaired(hook):
+                # v6.x.x（08-30 实抽）：hook 是刺杀前蓄势瞬间时，**不该**补伤锚。
+                # 旧版只判定"含 victim + 缺 anchor"就补，导致 hook.prompt 末尾被
+                # 注入"伤处白袍心口一片暗红血迹洇开"——与杨旭"闭目吟哦/仰卧未觉"
+                # 自相矛盾，模型自由发挥成"船里灌水/听香在船外"画面。
+                # 复用既有词表判定 hook 剧情态（零新建）：
+                #   - 含 BLOOD_STATE_WORDS 或 POST_STATE_KEYWORDS → 刺杀后态 → 可补
+                #   - 否则 → 刺杀前蓄势 → 跳过
+                is_post_state = (
+                    any(w in h_text for w in _BLOOD_STATE_WORDS)
+                    or any(w in h_text for w in _POST_STATE_KEYWORDS)
+                )
+                if not is_post_state:
+                    return repairs
                 hp = hook.get("prompt", "") or ""
                 hl = hook.get("lf_desc", "") or ""
                 hp_has = any(w in hp for w in _BLOOD_STATE_WORDS)

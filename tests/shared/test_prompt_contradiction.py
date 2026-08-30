@@ -97,3 +97,43 @@ def test_assert_warns_in_lenient_mode(monkeypatch):
     # 不抛即通过（降级为告警）
     assert_no_contradictions(
         "匕首在杨旭手中。杨旭手中没有武器，没有刀。", "shot0 首帧")
+
+
+# ── v6.x.x（08-30 实抽）：ff_lf_stage_conflict 第 5 类矛盾 ──
+
+def test_ff_lf_stage_conflict_detected():
+    """ff 同时含前态词（闭目/未觉/潜伏） + 伤锚完整句 → 报 ff_lf_stage_conflict.
+
+    现场：hook.prompt 字段同时含"杨旭闭目吟哦"（前态）+ "伤处白袍心口一片暗红
+    血迹洇开"（后态），模型自由发挥成"船里灌水/听香在船外"画面。
+    """
+    prompt = (
+        "杨旭素白袍袒腹仰卧船头，仰面朝上双目紧闭，闭目吟哦。"
+        "神秘人潜伏在舟侧水下，仅露头部。"
+        "伤处白袍心口一片暗红血迹洇开，血痕清晰可见。"
+    )
+    issues = find_contradictions(prompt)
+    assert any("ff_lf_stage_conflict" in i for i in issues), \
+        f"应报 ff_lf_stage_conflict，实测 {issues}"
+
+
+def test_ff_lf_stage_pure_pre_state_ok():
+    """纯前态（闭目吟哦 + 无伤锚）→ 不报."""
+    prompt = (
+        "杨旭素白袍袒腹仰卧船头，仰面朝上双目紧闭，闭目吟哦。"
+        "神秘人潜伏在舟侧水下，仅露头部。"
+    )
+    issues = find_contradictions(prompt)
+    assert not any("ff_lf_stage_conflict" in i for i in issues), \
+        f"纯前态不该报，实测 {issues}"
+
+
+def test_ff_lf_stage_pure_post_state_ok():
+    """纯后态（伤处白袍 + 无前态词）→ 不报（合法刺杀后态）."""
+    prompt = (
+        "刺客已没入水中。杨旭仰卧不动，伤处白袍心口一片暗红血迹洇开，"
+        "血痕清晰可见。"
+    )
+    issues = find_contradictions(prompt)
+    assert not any("ff_lf_stage_conflict" in i for i in issues), \
+        f"纯后态不该报，实测 {issues}"

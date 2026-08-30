@@ -70,3 +70,40 @@ def test_no_attack_motion_not_flagged():
     repairs = FfLfTemporalConstraint().apply(ctx)
 
     assert repairs == []
+
+
+# ── v6.x.x（08-30 实抽）：补 4 个「伤锚完整句」形态词 ──
+
+def test_ff_injury_anchor_tail_full_sentence_flagged():
+    """v6.x.x：ff 含 INJURY_ANCHOR_TAIL 完整句（伤处白袍+血迹洇开）→ 违例.
+
+    08-30 实抽：hook.ff_desc 末尾被 Constraint 版 _INJURY_ANCHOR_TAIL 注入
+    "伤处白袍心口一片暗红血迹洇开"，但旧 _POST_STATE_WORDS 只覆盖
+    "洇痕扩大/已刺入/匕首依旧"等过渡态词，对"伤锚完整句"形态漏判。
+    4 个新增词：「一片暗红血迹洇开」「血痕清晰可见」「伤处白袍」「暗红痕迹洇开」。
+    """
+    from step01_script_gen.constraints.ff_lf_temporal import FfLfTemporalConstraint
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    # ff 文本 → 期望是否被 flag
+    cases = [
+        ("杨旭仰卧船头，伤处白袍心口一片暗红血迹洇开", True),   # 新增 1
+        ("杨旭仰卧船头，心口洇开大片暗红痕迹洇开", True),       # 新增 2
+        ("杨旭仰卧船头，心口血痕清晰可见", True),               # 新增 3
+        ("杨旭仰卧船头，胸口已刺入，匕首依旧", True),           # 旧词回归
+        ("杨旭仰卧船头手握钓竿，画右水中一道黑影上浮", False),  # 前态不报
+    ]
+    for ff, expect_flag in cases:
+        shot = make_shot(
+            index=1,
+            motion_desc="神秘人破水而出，右手匕首刺中杨旭心口，随即倒纵入水",
+            ff_desc=ff,
+            lf_desc="神秘人已没入水中",
+            main_subject="刺杀",
+        )
+        ctx = make_ctx(make_script([shot]))
+        repairs = FfLfTemporalConstraint().apply(ctx)
+        if expect_flag:
+            assert len(repairs) == 1, f"ff={ff!r} 应判违例，实测 {len(repairs)} 修复"
+        else:
+            assert repairs == [], f"ff={ff!r} 不该报，实测 {len(repairs)} 修复"
