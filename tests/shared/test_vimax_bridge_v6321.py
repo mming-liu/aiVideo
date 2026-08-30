@@ -32,11 +32,13 @@ def test_ff_prompt_assembly_outside_retry_loop(monkeypatch, tmp_path):
 
     设计：让前 2 次 attempt 的图片文件不达标（_validate_frame 返 False），
     强制走 3 次循环；第 3 次成功，捕获所有 prompt 比较。
+    v6.x C 项：per-attempt 微扰动只追加到 desc_full 尾部，**剥离扰动后
+    基础 prompt 应恒等**（08-29 重试膨胀修复的不变量保持）。
     """
     monkeypatch.setenv("PROMPT_CONTRADICTION_STRICT", "0")
     monkeypatch.setenv("QC_MAX_ATTEMPTS", "3")  # 总尝试 3 次
 
-    from shared.vimax_bridge import _gen_first_frame_async
+    from shared.vimax_bridge import _gen_first_frame_async, _ATTEMPT_VARIATIONS
 
     captured_prompts: list[str] = []
     validate_call_count = [0]
@@ -90,11 +92,20 @@ def test_ff_prompt_assembly_outside_retry_loop(monkeypatch, tmp_path):
 
     result = asyncio.run(run())
     assert result is not None
-    # 期望：3 次 prompt 字符串完全相等（无叠加）
+    # 期望：3 次 prompt 字符串都被捕获
     assert len(captured_prompts) == 3, f"期望 3 次 attempt，实测 {len(captured_prompts)}"
     p1, p2, p3 = captured_prompts
-    assert p1 == p2, f"attempt 1 vs 2 长度 {len(p1)} vs {len(p2)}（应恒等）"
-    assert p2 == p3, f"attempt 2 vs 3 长度 {len(p2)} vs {len(p3)}（应恒等）"
+    # v6.x C 项：剥离 per-attempt variation 后基础 prompt 应恒等
+    # attempt 0 = variation[0] = ""（无追加）
+    v1 = _ATTEMPT_VARIATIONS[1]
+    v2 = _ATTEMPT_VARIATIONS[2]
+    assert p2.endswith(v1), f"attempt 1 尾部应为 variation[1]={v1!r}，实测末尾 {p2[-30:]!r}"
+    assert p3.endswith(v2), f"attempt 2 尾部应为 variation[2]={v2!r}，实测末尾 {p3[-30:]!r}"
+    base1 = p2[: -len(v1)] if v1 else p2
+    base2 = p3[: -len(v2)] if v2 else p3
+    assert base1 == base2, "剥离 variation 后基础 prompt 应恒等（08-29 修复不变量保持）"
+    # attempt 0 的 prompt 等于 base（variation[0]=""）
+    assert p1 == base1, "attempt 0 (variation[0]='') 应等于剥离后的基础 prompt"
 
 
 # ── Bug 2: lf 矛盾软跳过（不抛） ─────────────────────────────────────
@@ -174,3 +185,562 @@ def test_invisible_threat_wording_passes_contradiction_check():
     issues = find_contradictions(full)
     assert not any("对称矛盾" in i for i in issues), \
         f"新措辞不应触发黑影自触矛盾，实测 issues={issues}"
+
+
+# ── Bug 4: 末次 attempt QC critical → 保留末版（attempts_exhausted）──
+# v6.32.1 后续兜底：兑现 `保留最不差一版 / 无图比坏图更伤链路` 注释意图。
+# 旧实现 unlink 跑在 attempt 检查前，末次仍删帧；新实现 unlink 只发生在
+# 还有下一次 attempt 时，末次保留并打 attempts_exhausted 留痕。
+
+
+def test_ff_attempts_exhausted_keeps_frame(monkeypatch, tmp_path):
+    """ff 3 次 attempt QC 都 critical → 末版保留 + 返回路径存在.
+
+    设计：mock _maybe_qc_frame 恒返 True；mock _try_qc_repair 恒返 False
+    （走删帧/重抽分支）；mock validate 恒 True（让文件保留在磁盘）。
+    末次 attempt 后断言：ff_path 仍存在；返回路径 == ff_path。
+    """
+    monkeypatch.setenv("PROMPT_CONTRADICTION_STRICT", "0")
+    monkeypatch.setenv("QC_MAX_ATTEMPTS", "3")
+
+    from shared.vimax_bridge import _gen_first_frame_async
+
+    class MockAdapter:
+        async def generate_single_image(self, **kwargs):
+            from PIL import Image
+            class _Out:
+                def __init__(self):
+                    self.data = Image.new("RGB", (1024, 1792), color="black")
+            return _Out()
+
+    shot = {
+        "index": 50,
+        "ff_desc": "杨旭与听香对坐舱中",
+        "lf_desc": "",
+        "motion_desc": "",
+        "scene": "小舟上",
+        "location": "小舟上",
+        "narration_segment": "",
+        "main_subject": "杨旭",
+    }
+    characters = [{"identifier": "杨旭"}, {"identifier": "听香"}]
+
+    from shared import vimax_bridge as vb
+
+    async def _always_critical(*a, **k): return True
+    async def _no_repair(*a, **k): return False
+    monkeypatch.setattr(vb, "_maybe_qc_frame", _always_critical)
+    monkeypatch.setattr(vb, "_try_qc_repair", _no_repair)
+    monkeypatch.setattr(vb, "_validate_frame", lambda p: True)
+    monkeypatch.setattr(vb.Path, "write_text", lambda *a, **k: None)
+
+    work_dir = tmp_path / "shots"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    ff_path = work_dir / "50" / "first_frame.png"
+
+    async def run():
+        return await _gen_first_frame_async(
+            MockAdapter(), work_dir, shot,
+            force=True, script_mtime=None,
+            reference_paths=None, max_retries=2,
+            empty_scene=False, characters=characters,
+        )
+
+    result = asyncio.run(run())
+    assert result is not None, "末次保留应返回非 None 路径"
+    assert result == str(ff_path), f"应返回 ff_path={ff_path}，实测 {result}"
+    assert Path(result).exists(), f"末次保留帧应存在磁盘，实测 {result} 不存在"
+
+
+def test_lf_attempts_exhausted_keeps_frame(monkeypatch, tmp_path):
+    """lf 3 次 attempt QC 都 critical → 末版保留 + 返回路径存在.
+
+    与 ff 对称，验证 lf 末次也走保留分支。
+    """
+    monkeypatch.setenv("PROMPT_CONTRADICTION_STRICT", "0")
+    monkeypatch.setenv("QC_MAX_ATTEMPTS", "3")
+
+    from shared.vimax_bridge import _gen_last_frame_async
+
+    class MockAdapter:
+        async def generate_single_image(self, **kwargs):
+            from PIL import Image
+            class _Out:
+                def __init__(self):
+                    self.data = Image.new("RGB", (1024, 1792), color="black")
+            return _Out()
+
+    shot = {
+        "index": 51,
+        "ff_desc": "杨旭与听香对坐舱中",
+        "lf_desc": "杨旭手持匕首刀锋寒光",
+        "motion_desc": "",
+        "scene": "小舟上",
+        "location": "小舟上",
+        "narration_segment": "",
+        "main_subject": "杨旭",
+    }
+    characters = [{"identifier": "杨旭"}, {"identifier": "听香"}]
+
+    from shared import vimax_bridge as vb
+
+    async def _always_critical(*a, **k): return True
+    async def _no_repair(*a, **k): return False
+    monkeypatch.setattr(vb, "_maybe_qc_frame", _always_critical)
+    monkeypatch.setattr(vb, "_try_qc_repair", _no_repair)
+    monkeypatch.setattr(vb, "_validate_frame", lambda p: True)
+    monkeypatch.setattr(vb.Path, "write_text", lambda *a, **k: None)
+
+    work_dir = tmp_path / "shots"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    lf_path = work_dir / "51" / "last_frame.png"
+
+    async def run():
+        return await _gen_last_frame_async(
+            MockAdapter(), work_dir, shot,
+            force=True, script_mtime=None,
+            reference_paths=None, max_retries=2,
+            empty_scene=False, characters=characters,
+        )
+
+    result = asyncio.run(run())
+    assert result is not None, "lf 末次保留应返回非 None 路径"
+    assert result == str(lf_path), f"应返回 lf_path={lf_path}，实测 {result}"
+    assert Path(result).exists(), f"lf 末次保留帧应存在磁盘，实测 {result} 不存在"
+
+
+def test_kf_attempts_exhausted_keeps_path(monkeypatch, tmp_path):
+    """kf 3 次 attempt QC 都 critical → 末版 append 到 kf_paths（不再丢弃）.
+
+    旧实现末次 critical 直接 break，kf 静默丢失；新实现末次 append + break，
+    坏 kf 进视频比没 kf 好（与 ff/lf 对齐）。
+    """
+    monkeypatch.setenv("PROMPT_CONTRADICTION_STRICT", "0")
+    monkeypatch.setenv("QC_MAX_ATTEMPTS", "3")
+
+    from shared.vimax_bridge import _gen_keyframes_async
+
+    class MockAdapter:
+        async def generate_single_image(self, **kwargs):
+            from PIL import Image
+            class _Out:
+                def __init__(self):
+                    self.data = Image.new("RGB", (1024, 1792), color="black")
+            return _Out()
+
+    # keyframes_data 是 list of {desc, t_sec, ...}；至少 1 个 kf。
+    # v6.34：必须走 t_sec + shot.duration_sec（is_middle_kf 严格判定）
+    kf_desc = "听香持匕首刺向杨旭胸口，刀光凛冽"
+    shot = {
+        "index": 52,
+        "ff_desc": "杨旭仰卧舱中",
+        "lf_desc": "杨旭仰卧舱中匕首没入胸口",
+        "motion_desc": "前2秒：听香破水出刺；2-4秒：匕首没入胸口杨旭闷哼",
+        "duration_sec": 4.0,
+        "duration": 4.0,
+        "keyframes": [
+            {"desc": kf_desc, "t_sec": 1.5, "stage": "approach"},
+        ],
+        "scene": "小舟上",
+        "location": "小舟上",
+        "narration_segment": "",
+        "main_subject": "听香",
+    }
+    characters = [{"identifier": "杨旭"}, {"identifier": "听香"}]
+
+    from shared import vimax_bridge as vb
+
+    async def _always_critical(*a, **k): return True
+    monkeypatch.setattr(vb, "_maybe_qc_frame", _always_critical)
+    monkeypatch.setattr(vb, "_validate_frame", lambda p: True)
+    monkeypatch.setattr(vb.Path, "write_text", lambda *a, **k: None)
+
+    work_dir = tmp_path / "shots"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    kf_path = work_dir / "52" / "keyframe_0.png"
+
+    async def run():
+        return await _gen_keyframes_async(
+            MockAdapter(), work_dir, shot,
+            force=True, script_mtime=None,
+            reference_paths=None, max_retries=2,
+            empty_scene=False, characters=characters,
+        )
+
+    kf_paths = asyncio.run(run())
+    assert isinstance(kf_paths, list), f"应返回 list，实测 {type(kf_paths)}"
+    assert len(kf_paths) == 1, f"应保留 1 个 kf（旧版会丢），实测 {len(kf_paths)}"
+    assert kf_paths[0] == str(kf_path), f"应保留 kf_path={kf_path}，实测 {kf_paths[0]}"
+    assert Path(kf_paths[0]).exists(), f"kf 末次保留帧应存在磁盘，实测 {kf_paths[0]} 不存在"
+
+
+# ── C 项：per-attempt prompt 微扰动（局部变量、零污染）─────────────────
+
+
+def test_attempt_variation_no_shot_pollution(monkeypatch, tmp_path):
+    """C 项：每次 attempt 追加 variation，shot 字段零污染 + 哈希键不变.
+
+    验证：
+    1. attempt 0 prompt 无 variation 尾缀（variation[0]=""）
+    2. attempt 1+ prompt 尾部追加对应 variation
+    3. shot 字段（如 ff_desc/keyframes）保持原值，未被回写
+    4. 哈希值在 attempt 间不变（key 不含 variation 维度）
+    """
+    monkeypatch.setenv("PROMPT_CONTRADICTION_STRICT", "0")
+    # QC_MAX_ATTEMPTS=4 → max_retries=3 → 4 次 attempt
+    monkeypatch.setenv("QC_MAX_ATTEMPTS", "4")
+
+    from shared.vimax_bridge import _gen_first_frame_async, _ATTEMPT_VARIATIONS
+
+    captured_prompts: list[str] = []
+    captured_hashes: list[str] = []
+    validate_call_count = [0]
+
+    class MockAdapter:
+        async def generate_single_image(self, **kwargs):
+            captured_prompts.append(kwargs["prompt"])
+            from PIL import Image
+            class _Out:
+                def __init__(self):
+                    self.data = Image.new("RGB", (1024, 1792), color="black")
+            return _Out()
+
+    shot = {
+        "index": 60,
+        "ff_desc": "杨旭与听香对坐舱中",
+        "lf_desc": "",
+        "motion_desc": "",
+        "scene": "小舟上",
+        "location": "小舟上",
+        "narration_segment": "",
+        "main_subject": "杨旭",
+    }
+    characters = [{"identifier": "杨旭"}, {"identifier": "听香"}]
+
+    from shared import vimax_bridge as vb
+
+    async def _no_qc(*a, **k): return False
+    monkeypatch.setattr(vb, "_maybe_qc_frame", _no_qc)
+
+    def _validate_v3(path):
+        validate_call_count[0] += 1
+        return validate_call_count[0] >= 4  # 强制 4 次 attempt
+    monkeypatch.setattr(vb, "_validate_frame", _validate_v3)
+
+    # 抓取 hash 写入
+    orig_write_text = vb.Path.write_text
+    def _capture_hash(self, *a, **k):
+        if a and "hash" in str(self).lower():
+            captured_hashes.append(a[0])
+        return None
+    monkeypatch.setattr(vb.Path, "write_text", _capture_hash)
+
+    work_dir = tmp_path / "shots"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    async def run():
+        return await _gen_first_frame_async(
+            MockAdapter(), work_dir, shot,
+            force=True, script_mtime=None, reference_paths=None,
+            max_retries=3,  # 总 4 次
+            empty_scene=False, characters=characters,
+        )
+
+    asyncio.run(run())
+
+    assert len(captured_prompts) == 4
+    # attempt 0 = variation[0]=""（无追加）
+    assert not captured_prompts[0].endswith(_ATTEMPT_VARIATIONS[1])
+    # attempt 1 = variation[1]
+    assert captured_prompts[1].endswith(_ATTEMPT_VARIATIONS[1])
+    # attempt 2 = variation[2]
+    assert captured_prompts[2].endswith(_ATTEMPT_VARIATIONS[2])
+    # attempt 3 = variation[3]
+    assert captured_prompts[3].endswith(_ATTEMPT_VARIATIONS[3])
+    # shot 字段零污染（ff_desc 不被回写）
+    assert shot["ff_desc"] == "杨旭与听香对坐舱中"
+    # 哈希值不变（取模后 4 次的 hash 都一样）
+    assert len(set(captured_hashes)) == 1, f"哈希应恒定，实测 {captured_hashes}"
+
+
+# ── A 项：扩 _LOCALIZED_FIX_PATTERNS 5→9 单元测试 ──────────────────────
+
+
+def test_new_fix_patterns_match_and_select():
+    """A 项：4 个新模式（costume_color/holding_wrong/multi_finger/face_expression）
+    都能匹配 build_repair_plan；person_count 仍走 regen（不做局部修复）。"""
+    from shared.image_qc import _LOCALIZED_FIX_PATTERNS, build_repair_plan
+    from types import SimpleNamespace
+
+    pattern_names = {p[0] for p in _LOCALIZED_FIX_PATTERNS}
+    # 4 个新模式在册
+    assert "costume_color" in pattern_names
+    assert "holding_wrong" in pattern_names
+    assert "multi_finger" in pattern_names
+    assert "face_expression" in pattern_names
+    # 注释说明不做的 2 个不在册
+    assert "person_count" not in pattern_names
+    assert "pose_wrong" not in pattern_names
+
+    # 模拟 critical issues 验证 build_repair_plan 分类正确
+    base_result = SimpleNamespace(
+        issues=[
+            SimpleNamespace(category="prompt_semantics", description="服装颜色不符描述", severity="critical"),
+        ],
+        entities=[
+            {"label": "person", "desc": "wearing red robe, standing", "bbox": [100, 100, 400, 900]},
+            {"label": "person", "desc": "wearing white robe, standing", "bbox": [500, 100, 800, 900]},
+        ],
+    )
+    plan = build_repair_plan({"char_layout": []}, "first_frame", base_result)
+    assert plan["action"] == "edit", f"costume_color 应触发 edit，实测 {plan['action']}"
+    assert "costume_color" in plan["matched_patterns"]
+
+
+# ── v6.x.x P0 修：4 模式正则收紧（属性词→问题形态词）回归测试 ──
+
+
+def test_new_patterns_no_false_positive_on_attribute_words():
+    """P0 修：4 新模式不再被"白袍""穿白衣"等裸属性词触发.
+
+    旧 `r"穿|衣|袍"` 单字匹配太宽——critical 描述几乎必含衣袍类字。
+    验证：纯属性词描述（"白袍角色"、"红衣人物"）不命中任何新模式。
+    """
+    from shared.image_qc import _LOCALIZED_FIX_PATTERNS
+    import re
+
+    # 找各模式的正则
+    pat_map = {p[0]: re.compile(p[1]) for p in _LOCALIZED_FIX_PATTERNS}
+
+    # 不应触发的纯属性词描述（"白袍角色睁眼"——睁眼是旧 eyes_closed 管的，
+    # 这里的描述里没有眼睛/闭眼/睁眼词，但有白袍/角色属性词）
+    false_positive_cases = [
+        ("白袍角色", "costume_color"),  # 裸"袍"应不命中
+        ("红衣人物", "costume_color"),
+        ("穿白衣的剑客", "costume_color"),  # 裸"穿/衣"应不命中
+        ("手中持刀", "holding_wrong"),  # 裸"持"应不命中（仅描述有持物，未言错）
+        ("手指纤细", "multi_finger"),  # 裸"手指"应不命中
+        ("表情温和", "face_expression"),  # 裸"表情"应不命中
+    ]
+    for desc, mode_name in false_positive_cases:
+        assert not pat_map[mode_name].search(desc), \
+            f"{mode_name} 不应被裸属性词 {desc!r} 触发（v6.x.x P0 修）"
+
+    # 应触发的"问题形态词"描述
+    true_positive_cases = [
+        ("服装颜色错", "costume_color"),
+        ("衣服颜色不符", "costume_color"),
+        ("穿错衣服", "costume_color"),
+        ("应持匕首", "holding_wrong"),
+        ("应拿伞", "holding_wrong"),
+        ("多指畸形", "multi_finger"),
+        ("手部畸形", "multi_finger"),
+        ("表情错", "face_expression"),
+        ("惊愕", "face_expression"),
+        ("痛苦", "face_expression"),
+    ]
+    for desc, mode_name in true_positive_cases:
+        assert pat_map[mode_name].search(desc), \
+            f"{mode_name} 应被 {desc!r} 触发（问题形态词）"
+
+
+def test_critical_can_match_multiple_patterns():
+    """P0 修：一条 critical 可同时命中多个模式，指令合并（first-match-wins 去除）.
+
+    场景："白袍角色睁眼+血迹"——眼睛/血迹都是真问题，red_mark + eyes_closed
+    都要修。旧实现 first-match-wins 会丢一个；新实现两个都命中、指令合并。
+    """
+    from shared.image_qc import build_repair_plan
+    from types import SimpleNamespace
+
+    mixed_result = SimpleNamespace(
+        issues=[
+            # 描述里既有"红色痕迹"又有"睁眼"，两个都该修
+            SimpleNamespace(
+                category="prompt_semantics",
+                description="白袍人物有红色痕迹，睁眼",
+                severity="critical",
+            ),
+        ],
+        entities=[
+            {"label": "person", "desc": "wearing white robe, lying", "bbox": [100, 100, 400, 900]},
+        ],
+    )
+    plan = build_repair_plan({"char_layout": []}, "first_frame", mixed_result)
+    assert plan["action"] == "edit", f"混合问题应触发 edit，实测 {plan['action']}"
+    # 两个模式都应命中
+    assert "red_mark" in plan["matched_patterns"], \
+        f"red_mark 应在 matched_patterns，实测 {plan['matched_patterns']}"
+    assert "eyes_closed" in plan["matched_patterns"], \
+        f"eyes_closed 应在 matched_patterns，实测 {plan['matched_patterns']}"
+    # 指令应包含两条
+    edit_prompt = plan["edit_prompt"]
+    assert "红色痕迹" in edit_prompt or "血迹" in edit_prompt, \
+        f"edit_prompt 应含 red_mark 指令，实测 {edit_prompt}"
+    assert "闭" in edit_prompt or "眼" in edit_prompt, \
+        f"edit_prompt 应含 eyes_closed 指令，实测 {edit_prompt}"
+
+
+
+
+def test_cache_hit_bad_qc_uses_variation1(monkeypatch, tmp_path):
+    """P1 修：缓存命中但 QC critical 时，continue 让 attempt 走到 1 触发 variation[1].
+
+    旧行为：缓存命中 → 删帧 → fall through 到 attempt=0 生成分支（variation[0]=""，
+    即用与缓存相同的原 prompt 重画）—— 缓存的图本身就是原 prompt 画的失败品，
+    用相同 prompt 画没意义。
+    新行为：缓存命中 + bad QC → continue → 下一轮 attempt=1 用 variation[1]
+    ("镜头构图稍紧，人物间距略近。") 重画。
+    """
+    monkeypatch.setenv("PROMPT_CONTRADICTION_STRICT", "0")
+    monkeypatch.setenv("QC_MAX_ATTEMPTS", "3")
+
+    from shared.vimax_bridge import _gen_first_frame_async, _ATTEMPT_VARIATIONS
+
+    captured_prompts: list[str] = []
+    call_count = [0]
+
+    class MockAdapter:
+        async def generate_single_image(self, **kwargs):
+            captured_prompts.append(kwargs["prompt"])
+            from PIL import Image
+            class _Out:
+                def __init__(self):
+                    self.data = Image.new("RGB", (1024, 1792), color="black")
+            return _Out()
+
+    # 写一个假帧 + 假哈希（模拟上次跑留下的"已失败"缓存）
+    work_dir = tmp_path / "shots"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    shot_dir = work_dir / "80"
+    shot_dir.mkdir(parents=True, exist_ok=True)
+    from PIL import Image as PILImage
+    PILImage.new("RGB", (1024, 1792), color="black").save(str(shot_dir / "first_frame.png"))
+    # 哈希需与 current_hash 匹配——直接调一次 _get_frame_content_hash 拿真实值
+    from shared.vimax_bridge import _get_frame_content_hash
+    shot = {
+        "index": 80,
+        "ff_desc": "杨旭与听香对坐舱中",
+        "lf_desc": "", "motion_desc": "",
+        "scene": "小舟上", "location": "小舟上",
+        "narration_segment": "", "main_subject": "杨旭",
+    }
+    characters = [{"identifier": "杨旭"}, {"identifier": "听香"}]
+    current_hash = _get_frame_content_hash(shot, False, None, lock_kind="layout")
+    (shot_dir / "frame_hash.txt").write_text(current_hash, encoding="utf-8")
+
+    from shared import vimax_bridge as vb
+
+    # QC 永远 critical（模拟缓存的图是"上次失败的坏图"）
+    async def _always_critical(*a, **k): return True
+    monkeypatch.setattr(vb, "_maybe_qc_frame", _always_critical)
+    # 关闭 _try_qc_repair 让 continue 路径生效（不走修复）
+    async def _no_repair(*a, **k): return False
+    monkeypatch.setattr(vb, "_try_qc_repair", _no_repair)
+    monkeypatch.setattr(vb, "_validate_frame", lambda p: True)
+    monkeypatch.setattr(vb.Path, "write_text", lambda *a, **k: None)
+
+    async def run():
+        return await _gen_first_frame_async(
+            MockAdapter(), work_dir, shot,
+            force=False,  # ← 关键：不 force，触发缓存命中路径
+            script_mtime=None, reference_paths=None,
+            max_retries=2, empty_scene=False, characters=characters,
+        )
+
+    asyncio.run(run())
+    # 缓存命中 + bad QC → continue → attempt=1 触发 variation[1]
+    # 第一次 generate_single_image 应该是 attempt=1 的 prompt
+    assert len(captured_prompts) >= 1
+    first_prompt = captured_prompts[0]
+    assert first_prompt.endswith(_ATTEMPT_VARIATIONS[1]), \
+        f"P1 修：缓存命中 bad QC 后第一次生成应带 variation[1]={_ATTEMPT_VARIATIONS[1]!r}，实测末尾 {first_prompt[-30:]!r}"
+
+
+# ── v6.x.x P5 修：kf 接 _try_qc_repair（v6.54.2 落地） ──
+
+
+def test_kf_qc_repair_keeps_path(monkeypatch, tmp_path):
+    """P5 修：kf QC critical 时先 _try_qc_repair，修复成功保留 kf 路径（不删帧重抽）.
+
+    旧行为：kf 跳 _try_qc_repair，直接删帧重抽——局部可修的 critical 也走完整
+    重抽循环，浪费 1 次模型调用 + 1 次 i2i 失败回退路径。
+    新行为：kf 也接 _try_qc_repair（v6.54.2 落地）——修复成功时 kf_paths 含路径
+    且哈希未删（下次缓存命中即修好的图）。
+    """
+    monkeypatch.setenv("PROMPT_CONTRADICTION_STRICT", "0")
+    monkeypatch.setenv("QC_MAX_ATTEMPTS", "3")
+
+    from shared.vimax_bridge import _gen_keyframes_async
+
+    class MockAdapter:
+        async def generate_single_image(self, **kwargs):
+            from PIL import Image
+            class _Out:
+                def __init__(self):
+                    self.data = Image.new("RGB", (1024, 1792), color="black")
+            return _Out()
+
+    kf_desc = "听香持匕首刺向杨旭胸口，刀光凛冽"
+    shot = {
+        "index": 90,
+        "ff_desc": "杨旭仰卧舱中",
+        "lf_desc": "杨旭仰卧舱中匕首没入胸口",
+        "motion_desc": "前2秒：听香破水出刺",
+        "duration_sec": 4.0, "duration": 4.0,
+        "keyframes": [{"desc": kf_desc, "t_sec": 1.5, "stage": "approach"}],
+        "scene": "小舟上", "location": "小舟上",
+        "narration_segment": "", "main_subject": "听香",
+    }
+    characters = [{"identifier": "杨旭"}, {"identifier": "听香"}]
+
+    from shared import vimax_bridge as vb
+
+    async def _always_critical(*a, **k): return True
+    async def _repair_success(*a, **k): return True
+    monkeypatch.setattr(vb, "_maybe_qc_frame", _always_critical)
+    monkeypatch.setattr(vb, "_try_qc_repair", _repair_success)
+    monkeypatch.setattr(vb, "_validate_frame", lambda p: True)
+    monkeypatch.setattr(vb.Path, "write_text", lambda *a, **k: None)
+
+    work_dir = tmp_path / "shots"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    kf_path = work_dir / "90" / "keyframe_0.png"
+
+    async def run():
+        return await _gen_keyframes_async(
+            MockAdapter(), work_dir, shot,
+            force=True, script_mtime=None, reference_paths=None,
+            max_retries=2, empty_scene=False, characters=characters,
+        )
+
+    kf_paths = asyncio.run(run())
+    assert len(kf_paths) == 1, f"P5 修：_try_qc_repair 成功应保留 kf，实测 {len(kf_paths)} 个"
+    assert kf_paths[0] == str(kf_path), f"应保留 kf 路径，实测 {kf_paths[0]}"
+
+
+# ── v6.x.x 实抽 bug 修：_try_qc_repair 复检路径 AttributeError ──
+
+
+def test_try_qc_repair_post_edit_qc_no_attribute_error():
+    """v6.x.x bug 修：_try_qc_repair 复检时用 _maybe_qc_frame 的 bool 返回值，
+    而不是错误地访问 bool.has_hallucination（旧代码触发 AttributeError）。
+
+    触发条件：_try_qc_repair 实际被调用 + 走到 i2i 编辑后的 QC 复检分支。
+    之前所有单测都 monkeypatch _try_qc_repair 返 True/False，从未走到内部 i2i+复检
+    路径——bug 一直藏到真实跑批才暴露。
+
+    本测试用源码静态检查：找旧 bug 的特征行 `bool(qc2 and qc2.has_hallucination`，
+    不在源码中即证明修复生效。
+    """
+    from pathlib import Path
+    src = Path(_PROJECT_ROOT / "shared" / "vimax_bridge.py").read_text(encoding="utf-8")
+    # 旧 bug 特征行：访问 .has_hallucination 必须在 bool(qc2 ...) 上下文
+    buggy_pattern = "bool(qc2 and qc2.has_hallucination"
+    assert buggy_pattern not in src, \
+        f"v6.x.x bug 修：_try_qc_repair 仍包含旧 bug 模式 `{buggy_pattern}`\n" \
+        f"（_maybe_qc_frame 返 bool，访问 .has_hallucination 必崩 AttributeError）"
+    # 同时确认修复后的正确模式存在
+    fixed_pattern = "qc2_critical = await _maybe_qc_frame"
+    assert fixed_pattern in src, \
+        f"v6.x.x bug 修：应包含 `{fixed_pattern}`\n（直接用 bool 返值）"

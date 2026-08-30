@@ -44,6 +44,28 @@ def _bridge_log(msg: str):
     except Exception:
         pass
 
+# v6.x 重抽多样性：per-attempt prompt 微扰动菜单。
+# 仅在 QC 重试时按 attempt 下标取模追加到 desc_full 尾部，**仅局部变量**——
+# 不回写 shot 字段（08-29 膨胀教训），哈希基于 shot 字段不受影响，
+# QC 断言源也不受影响。attempt 0 恒为原 prompt（variation[0]=""）。
+# 维度选「构图/机位/人物间距」：QC 断言不查的视觉维度，廉价偏移构图分布。
+#
+# 🔴 红线（v6.x.x P3）：换扰动词时**必须避开 QC 断言维度**——
+#   - `build_claim_checks`（image_qc.py）拆的原子子句会扫这些词
+#   - 避开：「画左/画右/画中/前景/中景/远景/船头/船尾/中舱/甲板/
+#          水中/水下/水面/岸边/门口/车辕/仰卧/仰面/躺/跪/蹲/探出/
+#          俯身/倒/刀/匕首/短刃/武器/持/握/蒙面/白袍/血/伤/洇/红/
+#          伞/灯笼/马车/箫/肩宽/船宽」等
+#   - 安全：「构图/机位/角度/透视/间距/松紧/视野/景别/色温/氛围/笔触」等
+#   - 命中红词 → 扰动维度被 QC 判"与描述不符"产生 critical → 反向放大问题
+#     （修复为「保持维度与描述一致」反而把扰动抹掉）
+_ATTEMPT_VARIATIONS = (
+    "",                                            # attempt 0: 原 prompt
+    "镜头构图稍紧，人物间距略近。",                  # attempt 1
+    "机位角度略低，仰角透视自然。",                  # attempt 2
+    "构图稍宽松，人物间距略远。",                    # attempt 3+ 取模回到 0/1/2
+)
+
 # 首帧/尾帧生成需要风格前缀（与视频生成保持一致）
 from style_prefix import STYLE_PREFIX, sanitize_prompt, ensure_prefix, is_empty_scene, add_image_strict_constraints, preprocess_prompt_for_image
 from style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT, image_lock_prompt
@@ -785,7 +807,8 @@ def _validate_frame(path: str, min_kb: float = 5) -> bool:
 
 async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
                           characters: list | None = None, empty_scene: bool = False,
-                          prompt: str | None = None) -> bool:
+                          prompt: str | None = None,
+                          variation: str = "") -> bool:
     """帧生成后执行视觉质检（软失败，不阻断流水线）.
 
     通过 shared/image_qc.py 调用 ds-vision-skill 的 vision-router.ps1 对帧图做内容质检；
@@ -852,6 +875,8 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
                 "answers": getattr(result, "answers", None),
                 "issues": [{"category": i.category, "severity": i.severity,
                             "description": i.description} for i in result.issues],
+                # v6.x C 项留痕：per-attempt 变体
+                "variation": variation,
             })
             log_path.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
@@ -900,9 +925,11 @@ async def _try_qc_repair(image_adapter, shot: dict, frame_path: str, frame_kind:
         _bridge_log("  [REPAIR] 编辑失败/输出无效，回落重抽")
         return False
     Path(edited).replace(frame_path)
-    qc2 = await _maybe_qc_frame(shot, frame_path, frame_kind, characters, empty_scene)
-    qc2_critical = bool(qc2 and qc2.has_hallucination and any(
-        getattr(i, "severity", "") == "critical" for i in qc2.issues))
+    # v6.x.x bug fix：_maybe_qc_frame 返回 bool，完整 QcResult 在 shot["_qc_last"]
+    # （旧代码用 `qc2.has_hallucination` 触发 AttributeError，触发条件：_try_qc_repair
+    # 实际被调用时——之前所有单测都 mock 掉 _try_qc_repair 返 True/False，从未走到
+    # 内部 i2i+复检路径，所以 bug 一直藏到真实跑批才暴露）。
+    qc2_critical = await _maybe_qc_frame(shot, frame_path, frame_kind, characters, empty_scene)
     if qc2_critical:
         _bridge_log("  [REPAIR] 修复后复检仍 critical，回落重抽")
         return False
@@ -2836,9 +2863,12 @@ async def _gen_first_frame_async(
                 saved_hash = ff_hash_path.read_text(encoding="utf-8").strip()
                 if saved_hash == current_hash and _validate_frame(str(ff_path)):
                     # B7：缓存命中但 QC critical → 删帧+删哈希，下次重生成
+                    # v6.x.x P1 修：continue 跳过 attempt=0 的 fall-through 生成，
+                    # 让 attempt 走到 1 触发 variation[1]——缓存的图本身就是原
+                    # prompt 画的"已失败一次"，再用 variation[0] 画没意义。
                     if await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene):
                         _del_frame_and_hash(ff_path, ff_hash_path, "首帧", idx, logger)
-                        # 继续走下方生成分支（attempt=0 未 ++，force 不变 → 重新生成）
+                        continue
                     else:
                         return str(ff_path)
                 else:
@@ -2847,18 +2877,23 @@ async def _gen_first_frame_async(
                 if _validate_frame(str(ff_path)):
                     if await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene):
                         _del_frame_and_hash(ff_path, ff_hash_path, "首帧", idx, logger)
+                        continue
                     else:
                         return str(ff_path)
             elif script_mtime is None and _validate_frame(str(ff_path)):
                 if await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene):
                     _del_frame_and_hash(ff_path, ff_hash_path, "首帧", idx, logger)
+                    continue
                 else:
                     return str(ff_path)
 
         logger.verbose(f"  [FRAME] 生成首帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
         # 2026-08-29：gen_kwargs 已在循环外组装，prompt 复用同一份；不再重新追加锚块。
+        # v6.x：per-attempt prompt 微扰动（仅局部变量，不回写 shot / 不影响哈希 / 不影响 QC 断言源）。
+        attempt_variation = _ATTEMPT_VARIATIONS[attempt % len(_ATTEMPT_VARIATIONS)]
+        attempt_kwargs = dict(gen_kwargs, prompt=ff_desc_full + attempt_variation)
         try:
-            img_out = await image_adapter.generate_single_image(**gen_kwargs)
+            img_out = await image_adapter.generate_single_image(**attempt_kwargs)
             if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                 img_out.data.save(str(ff_path))
             elif hasattr(img_out, "save"):
@@ -2875,12 +2910,14 @@ async def _gen_first_frame_async(
             # B7 修复：首帧 QC critical → unlink 坏帧 + 删哈希，重试循环重生成
             # v6.54.1：先修后抽——局部可修的 critical 走 bbox i2i 编辑（保已通过
             # 的构图/人脸），编辑失败或全局失败才删帧重抽
-            qc_critical = await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene)
+            qc_critical = await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene,
+                                                 variation=attempt_variation)
             if qc_critical:
                 if await _try_qc_repair(image_adapter, shot, str(ff_path), "first_frame",
                                         characters, empty_scene, idx):
                     pass  # 修复成功：哈希未删（下次缓存命中即修好的图），继续 spatial fallback
-                else:
+                elif attempt < max_retries:
+                    # 还有下一次 attempt → 删帧重抽（B7 修复）
                     logger.verbose(f"  [FRAME] 首帧 shot_{idx} QC critical，删帧重生成")
                     try:
                         Path(ff_path).unlink(missing_ok=True)
@@ -2890,9 +2927,9 @@ async def _gen_first_frame_async(
                         Path(ff_hash_path).unlink(missing_ok=True)
                     except Exception:
                         pass
-                    if attempt < max_retries:
-                        continue
-                    # v6.53 A.4：末次尝试仍 critical → 不删帧（保留最不差一版），
+                    continue
+                else:
+                    # 末次尝试仍 critical → 保留最不差一版（attempts_exhausted 留痕），
                     # sidecar 已带 critical 记录，留痕供人工复核；无图比坏图更伤链路
                     _bridge_log(f"  [QC] shot_{idx} {attempt+1} 次尝试均 critical，"
                                 "保留末版留痕（attempts_exhausted）")
@@ -3067,8 +3104,10 @@ async def _gen_last_frame_async(
                 saved_hash = lf_hash_path.read_text(encoding="utf-8").strip()
                 if saved_hash == current_hash and _validate_frame(str(lf_path)):
                     # B7：缓存命中但 QC critical → 删帧+删哈希，下次重生成
+                    # v6.x.x P1 修：continue 让 attempt 走到 1 触发 variation[1]
                     if await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene):
                         _del_frame_and_hash(lf_path, lf_hash_path, "尾帧", idx, logger)
+                        continue
                     else:
                         return str(lf_path)
                 else:
@@ -3077,20 +3116,24 @@ async def _gen_last_frame_async(
                 if _validate_frame(str(lf_path)):
                     if await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene):
                         _del_frame_and_hash(lf_path, lf_hash_path, "尾帧", idx, logger)
+                        continue
                     else:
                         return str(lf_path)
             elif script_mtime is None and _validate_frame(str(lf_path)):
                 if _validate_frame(str(lf_path)):
                     if await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene):
                         _del_frame_and_hash(lf_path, lf_hash_path, "尾帧", idx, logger)
+                        continue
                     else:
                         return str(lf_path)
 
         logger.verbose(f"  [FRAME] 生成尾帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
         # 2026-08-29：lf_desc_full 已在循环外组装，prompt 复用同一份；不再重新追加锚块。
+        # v6.x：per-attempt prompt 微扰动（仅局部变量，不回写 shot / 不影响哈希 / 不影响 QC 断言源）。
+        attempt_variation = _ATTEMPT_VARIATIONS[attempt % len(_ATTEMPT_VARIATIONS)]
         try:
             img_out = await image_adapter.generate_single_image(
-                prompt=lf_desc_full,
+                prompt=lf_desc_full + attempt_variation,
                 reference_image_paths=refs,
                 shot_index=idx,
                 frame_desc="尾帧",
@@ -3112,28 +3155,31 @@ async def _gen_last_frame_async(
             # 保存哈希值，供下次缓存检测使用
             lf_hash_path.write_text(current_hash, encoding="utf-8")
             # B7 修复：尾帧 QC critical → unlink 坏帧 + 删哈希，重试循环重生成
-            qc_critical = await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene)
+            qc_critical = await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene,
+                                                 variation=attempt_variation)
             if qc_critical:
                 # v6.54.1：先修后抽（与首帧同策略）
                 if await _try_qc_repair(image_adapter, shot, str(lf_path), "last_frame",
                                         characters, empty_scene, idx):
                     return str(lf_path)
-                logger.verbose(f"  [FRAME] 尾帧 shot_{idx} QC critical，删帧重生成")
-                try:
-                    Path(lf_path).unlink(missing_ok=True)
-                except Exception:
-                    pass
-                try:
-                    Path(lf_hash_path).unlink(missing_ok=True)
-                except Exception:
-                    pass
-                if attempt < max_retries:
+                elif attempt < max_retries:
+                    # 还有下一次 attempt → 删帧重抽（B7 修复）
+                    logger.verbose(f"  [FRAME] 尾帧 shot_{idx} QC critical，删帧重生成")
+                    try:
+                        Path(lf_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    try:
+                        Path(lf_hash_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
                     continue
-                # v6.53 A.4：末次尝试仍 critical → 不删帧（保留最不差一版），
-                # sidecar 已带 critical 记录，留痕供人工复核；无图比坏图更伤链路
-                _bridge_log(f"  [QC] shot_{idx} {attempt+1} 次尝试均 critical，"
-                            "保留末版留痕（attempts_exhausted）")
-                return str(lf_path)  # 2026-08-29 bug fix: 原误写 ff_path
+                else:
+                    # 末次尝试仍 critical → 保留最不差一版（attempts_exhausted 留痕），
+                    # sidecar 已带 critical 记录，留痕供人工复核；无图比坏图更伤链路
+                    _bridge_log(f"  [QC] shot_{idx} {attempt+1} 次尝试均 critical，"
+                                "保留末版留痕（attempts_exhausted）")
+                    return str(lf_path)
             return str(lf_path)
         if attempt < max_retries:
             logger.verbose(f"  [FRAME] 尾帧 shot_{idx} 第{attempt+1}次不达标，重试...")
@@ -3240,10 +3286,12 @@ async def _gen_keyframes_async(
                     saved_hash = kf_hash_path.read_text(encoding="utf-8").strip()
                     if saved_hash == current_hash and _validate_frame(str(kf_path)):
                         # B7：缓存命中但 QC critical → 删帧+删哈希，走下方重生成
+                        # v6.x.x P1 修：continue 让 attempt 走到 1 触发 variation[1]
                         if await _maybe_qc_frame(shot, str(kf_path), "keyframe",
                                                  characters, empty_scene,
                                                  prompt=shot.get(f"kf_{i}_desc_final")):
                             _del_frame_and_hash(kf_path, kf_hash_path, f"关键帧{i}", idx, _kf_logger)
+                            continue
                         else:
                             kf_paths.append(str(kf_path))
                             break
@@ -3255,6 +3303,7 @@ async def _gen_keyframes_async(
                                                  characters, empty_scene,
                                                  prompt=shot.get(f"kf_{i}_desc_final")):
                             _del_frame_and_hash(kf_path, kf_hash_path, f"关键帧{i}", idx, _kf_logger)
+                            continue
                         else:
                             kf_paths.append(str(kf_path))
                             break
@@ -3263,6 +3312,7 @@ async def _gen_keyframes_async(
                                              characters, empty_scene,
                                              prompt=shot.get(f"kf_{i}_desc_final")):
                         _del_frame_and_hash(kf_path, kf_hash_path, f"关键帧{i}", idx, _kf_logger)
+                        continue
                     else:
                         kf_paths.append(str(kf_path))
                         break
@@ -3314,8 +3364,10 @@ async def _gen_keyframes_async(
             refs = reference_paths if reference_paths else []
 
             try:
+                # v6.x：per-attempt prompt 微扰动（仅局部变量，不回写 shot / 不影响哈希）。
+                attempt_variation = _ATTEMPT_VARIATIONS[attempt % len(_ATTEMPT_VARIATIONS)]
                 img_out = await image_adapter.generate_single_image(
-                    prompt=kf_desc_full,
+                    prompt=kf_desc_full + attempt_variation,
                     reference_image_paths=refs,
                     shot_index=idx,
                     frame_desc=f"关键帧{i}(t={time_ratio:.1f})",
@@ -3338,22 +3390,34 @@ async def _gen_keyframes_async(
                 shot[f"kf_{i}_desc_final"] = kf_desc_full
                 qc_critical = await _maybe_qc_frame(
                     shot, str(kf_path), "keyframe", characters,
-                    empty_scene, prompt=kf_desc_full)
-                # B7 修复：关键帧 QC critical → unlink 坏帧 + 删哈希，下次重试循环重生成
-                # （原只记日志，坏帧继续进视频）
+                    empty_scene, prompt=kf_desc_full,
+                    variation=attempt_variation)
+                # B7 修复：关键帧 QC critical → 删帧 + 删哈希，下次重生成。
+                # v6.x 末次兜底：与 ff/lf 对齐——坏图比没图好，保留末版留痕。
+                # v6.x.x P5 修：关键帧也接 _try_qc_repair（v6.54.2 落地）——
+                # 局部可修的 critical（红痕/睁眼/篷/发光/刀接触等）走 i2i bbox 编辑，
+                # 复检通过直接保留，不消耗重抽额度。修复失败再走删帧/保留末版路径。
                 if qc_critical:
-                    _kf_logger.verbose(f"  [KEYFRAME] shot_{idx} keyframe_{i} QC critical，删帧重生成")
-                    try:
-                        Path(kf_path).unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                    try:
-                        Path(kf_hash_path).unlink(missing_ok=True)
-                    except Exception:
-                        pass
+                    if await _try_qc_repair(image_adapter, shot, str(kf_path), "keyframe",
+                                            characters, empty_scene, idx):
+                        # 修复成功：哈希未删（下次缓存命中即修好的图）
+                        kf_paths.append(str(kf_path))
+                        break
                     if attempt < max_retries:
+                        _kf_logger.verbose(f"  [KEYFRAME] shot_{idx} keyframe_{i} QC critical，删帧重生成")
+                        try:
+                            Path(kf_path).unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        try:
+                            Path(kf_hash_path).unlink(missing_ok=True)
+                        except Exception:
+                            pass
                         continue
-                    # 末次尝试 QC critical：帧已删除，不加入结果
+                    # 末次仍 critical → 保留（与 ff/lf 对齐：坏图比没图好）
+                    _kf_logger.verbose(f"  [QC] shot_{idx} keyframe_{i} {attempt+1} 次尝试均 critical，"
+                                       "保留末版留痕（attempts_exhausted）")
+                    kf_paths.append(str(kf_path))
                     break
                 # v6.30：doodle 区域编辑 fallback（关键帧同首帧——精确空间约束
                 # prompt 调不到位时走 i2i+红框二修）。失败保留原图（graceful degradation）。

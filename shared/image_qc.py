@@ -726,6 +726,11 @@ def _color_of(attrs: str) -> str:
 # 1 次命中的概率远高于整张重抽。全局失败（人数/复制/动作错/位置错）编辑
 # ≈ 重画，直接 regenerate。
 
+# v6.x A 项：5→9 新增 4 个模式（costume_color / holding_wrong / multi_finger /
+# face_expression）。**不做 person_count / pose_wrong**——
+# person_count 无法判定哪个是多余者，红框删错人风险高；pose_wrong 全身姿态
+# 重画 ≈ regen，bbox 局部编辑对全身姿态基本无效。并集 >70% 仍回 regen。
+
 # (名称, 问题文案匹配正则, 修复指令, bbox 选择器)
 _LOCALIZED_FIX_PATTERNS: list[tuple[str, str, str, str]] = (
     ("knife_contact", r"刀具|接触|切入|刺入",
@@ -743,6 +748,23 @@ _LOCALIZED_FIX_PATTERNS: list[tuple[str, str, str, str]] = (
     ("canopy", r"篷|顶棚|遮盖物",
      "移除船的顶棚与篷布，舱面完全敞开",
      "boat_upper_half"),
+    # v6.x 新增（v6.x.x 修正：4 模式正则收紧为"问题形态词"而非"属性词"）
+    # 旧 `r"穿|衣|袍|衫"` 单字匹配太宽——critical 描述几乎必含衣袍类属性词
+    # （如"白袍角色睁眼"、"红衣人物有血迹"），会先命中 costume_color
+    # 遮蔽同句里的 eyes_closed / red_mark 真正该修的问题。
+    # 修正：要求"属性词 + 错误语义"或"应+动作"等组合，不接受裸属性词。
+    ("costume_color", r"(?:服装|衣服|衣|袍).{0,6}(?:错|不符|不对|错误|不一致)|穿(?:错|成)|(?:衣|袍)色.{0,4}(?:错|不符|不对)",
+     "人物服装改为描述所述颜色与款式，其他细节保持不变",
+     "all_persons"),
+    ("holding_wrong", r"应(?:持|拿|握|提|撑)|(?:持|拿|握|提|撑).{0,6}(?:错|不符|不对|错误)|手中.{0,6}(?:错|不符|不对)|未持|未拿|未握",
+     "人物手中物品改为描述所述物品（若无持物则改为空手），姿势与位置保持不变",
+     "holder_bbox"),
+    ("multi_finger", r"多指|少指|手指畸形|畸指|手部畸形",
+     "修正人物手部为正常五指，形态自然",
+     "all_persons"),
+    ("face_expression", r"表情.{0,6}(?:错|不符|不对|错误)|惊愕|惊恐|痛苦|惊惶",
+     "让人物面部呈现描述所述表情，五官位置保持不变",
+     "person_face_top45"),
 )
 
 
@@ -771,6 +793,22 @@ def _is_knife_holder(entity: dict) -> bool:
     desc = str(entity.get("desc", "")).lower()
     return any(w in desc for w in ("holding", "持", "握", "刀", "匕首", "剑",
                                    "knife", "blade", "sword"))
+
+
+# v6.x 通用持物检测（holding_wrong 修复模式用）—— 比 _is_knife_holder
+# 词汇更广：伞/桨/橹/盘/灯/笼/缰/竿/杆/箫/扇/酒/信等常见道具都覆盖。
+# 与 _HOLDING_ALLOWED（持物允许集）对齐，新增词需同步更新两边。
+_ITEM_HOLDING_WORDS = (
+    "holding", "持", "握", "拿", "提", "撑",
+    "刀", "匕首", "剑", "短刃", "伞", "桨", "橹", "盘",
+    "灯", "笼", "缰", "竿", "杆", "箫", "扇", "酒", "信",
+    "knife", "blade", "sword", "umbrella", "oar", "lamp", "fan", "pipe",
+)
+
+
+def _is_item_holder(entity: dict) -> bool:
+    desc = str(entity.get("desc", "")).lower()
+    return any(w in desc for w in _ITEM_HOLDING_WORDS)
 
 
 def _knife_contact_zone(holders: list[dict], lying: list[dict]) -> list[float] | None:
@@ -897,6 +935,18 @@ def _select_bboxes_for_pattern(selector: str,
             if str(e.get("label", "")).lower() != "person" and _bbox_valid(e.get("bbox")):
                 x1, y1, x2, y2 = (float(v) for v in e["bbox"])
                 boxes.append([x1, y1, x2, y1 + (y2 - y1) * 0.5])
+    elif selector == "holder_bbox":
+        # v6.x：通用持物者框（holding_wrong 修复模式）。复用 _is_item_holder
+        # 广词，比 knife_zone 的 _is_knife_holder 覆盖更广。
+        for e in person_entities:
+            if _is_item_holder(e) and _bbox_valid(e.get("bbox")):
+                boxes.append(e["bbox"])
+    elif selector == "person_face_top45":
+        # v6.x：每个人物脸区（face_expression 修复模式）—— 框顶 45%。
+        for e in person_entities:
+            if _bbox_valid(e.get("bbox")):
+                x1, y1, x2, y2 = (float(v) for v in e["bbox"])
+                boxes.append([x1, y1, x2, y1 + (y2 - y1) * 0.45])
     return boxes
 
 
@@ -933,13 +983,23 @@ def build_repair_plan(shot: dict, frame_kind: str, result) -> dict:
     unmatched: list[str] = []
     for issue in issues:
         d = getattr(issue, "description", "") or ""
+        # v6.x.x：移除 `break`——一条 critical 可同时命中多个模式，指令合并
+        # （旧实现 first-match-wins 会让 costume_color 遮蔽同句里的 red_mark
+        # / eyes_closed，导致"先修错的东西"复检仍挂、又一轮重抽）。
+        # dedup 保证 (matched, instructions) 不重复。
+        issue_matched: list[str] = []
         for name, pat, instruction, selector in _LOCALIZED_FIX_PATTERNS:
             if re.search(pat, d):
-                matched.append(name)
-                instructions.append(instruction)
-                all_boxes.extend(_select_bboxes_for_pattern(selector, persons, entities))
-                break
-        else:
+                if name not in matched:
+                    matched.append(name)
+                if instruction not in instructions:
+                    instructions.append(instruction)
+                issue_matched.append(name)
+                # bbox 也按 (issue, selector) 收集；同一 issue+selector 只算一次
+                for b in _select_bboxes_for_pattern(selector, persons, entities):
+                    if b not in all_boxes:
+                        all_boxes.append(b)
+        if not issue_matched:
             unmatched.append(d[:40])
 
     if unmatched:
