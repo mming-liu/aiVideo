@@ -218,6 +218,13 @@ class ImageGeneratorAiVideoAdapter:
                 timeout=_IMAGE_GEN_TIMEOUT,
             )
         if not result.success or not result.save_path:
+            # 2026-08-29：区分"内容安全软跳过"与"真实失败"。
+            # 软跳过（如火山 OutputImageSensitiveContentDetected 全模型失败）属于
+            # prompt 端无法代码层修复的合规问题，标记日志后让上游 caller（_gen_first_frame_async
+            # 等）继续走 except Exception → return None 的现有软跳过路径，**不阻塞**后续 shot/帧。
+            # 真实失败（5xx/解析/限速等）继续 raise，由 max_retries 循环决定是否重试。
+            if result.soft_skip:
+                raise RuntimeError(f"[SOFT-SKIP] 图像因内容安全策略跳过: {result.error}")
             raise RuntimeError(f"图像生成失败: {result.error}")
         img = Image.open(result.save_path)
         img.load()

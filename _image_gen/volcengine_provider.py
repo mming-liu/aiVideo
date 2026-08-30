@@ -168,6 +168,12 @@ class VolcengineImageService(ImageGenerationService):
 
         model_idx = 0
         last_error = ""
+        # 2026-08-29：OutputImageSensitiveContentDetected 专用旗。
+        # 当主模型 + 所有 fallback 都因输出安全过滤失败时，标记为软跳过：
+        # 不阻塞整批生成（避免 1 张刺杀/流血图把整条 shot 链路 kill），
+        # 仅记录日志 + 标记 soft_skip=True，下游（vimax_adapters）不 raise。
+        # 与"真实失败"（如 5xx、限速、解析错误）区分——后者仍 raise 失败链路。
+        sensitive_skip = False
 
         while model_idx < len(self._model_queue):
             model = self._model_queue[model_idx]
@@ -264,6 +270,28 @@ class VolcengineImageService(ImageGenerationService):
                 last_error = f"所有模型均返回 403: {resp.text[:300]}"
                 break
 
+            # ---- 400 + OutputImageSensitiveContentDetected：输出图片被内容安全过滤拦截 ----
+            # 2026-08-29：触发场景=古风权谋刺杀/流血/持械对峙（钩子首帧的「黑衣人刺」、
+            # v6.32 强制伤处可见的「暗红洇在白袍」、尾帧「匕首没入水中」等）。
+            # 哪怕 prompt 已被 sanitize_prompt 替换成"出人命/倒下/暗红洇痕"，
+            # Seedream 生成的实际图片仍会含血/刀，output 端过滤器拒收。
+            # 处理：① 走 _model_queue 下一个模型（4.0/5.0-lite 规则基线可能不同）
+            #       ② 全失败则 soft_skip=True，下游不 raise 阻塞整批
+            # 不重写 prompt（确定性兜底范围外，应触发 LLM regen 而非代码层硬填）。
+            if resp.status_code == 400 and "OutputImageSensitiveContentDetected" in resp.text:
+                if model_idx + 1 < len(self._model_queue):
+                    model_idx += 1
+                    _verbose_write(f"  [镜头{req.shot_index}] [!] 模型 {model} 输出触发内容安全过滤，"
+                          f"切换到 {self._model_queue[model_idx]} 重试")
+                    continue
+                # 所有模型均因输出敏感失败 → soft_skip 标记，不阻塞后续分镜
+                last_error = (f"所有模型均因输出内容安全过滤失败 (OutputImageSensitiveContentDetected)；"
+                              f"该 shot 软跳过，需人工复核 prompt 是否含高敏画面元素")
+                sensitive_skip = True
+                _verbose_write(f"  [镜头{req.shot_index}] [SKIP] OutputImageSensitiveContentDetected "
+                      f"全模型失败，soft-skip（不阻塞后续 shot）")
+                break
+
             # ---- 400 且报 negative_prompt 不支持：去掉后重试一次 ----
             if resp.status_code == 400 and "negative_prompt" in resp.text and payload.get("negative_prompt"):
                 _verbose_write(f"  [镜头{req.shot_index}] [!] {model} 不支持 negative_prompt，去掉后重试")
@@ -279,7 +307,10 @@ class VolcengineImageService(ImageGenerationService):
             last_error = f"API 错误 [{resp.status_code}]: {resp.text[:300]}"
             break
 
-        return ImageGenerationResult(success=False, error=last_error)
+        return ImageGenerationResult(
+            success=False, error=last_error,
+            soft_skip=sensitive_skip,  # 2026-08-29：仅 OutputImageSensitiveContentDetected 全失败时为 True
+        )
 
     def _download(self, req: ImageGenerationRequest, img_url: str, model_idx: int) -> ImageGenerationResult:
         """下载图片到本地，区分首帧/尾帧/关键帧文件名."""

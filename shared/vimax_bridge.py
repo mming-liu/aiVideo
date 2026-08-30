@@ -2785,6 +2785,50 @@ async def _gen_first_frame_async(
         max_retries = max(0, int(os.getenv("QC_MAX_ATTEMPTS", str(max_retries + 1))) - 1)
     except (TypeError, ValueError):
         pass
+
+    # === 2026-08-29 重试膨胀修复：prompt 组装移出重试循环 ===
+    # 旧实现：组装段（costume/size/tone/锚定/prop 追加 + sanitize + strict_constraints）
+    # 在 for attempt 内 → 每次重试都跑一遍，部分 helper 若非严格幂等会叠加
+    # （实测多镜头 prompt 在 attempt=2 时比 attempt=1 长 25-40%）。现在
+    # **只算一次** ff_desc_full 与 gen_kwargs，重试画的是同一份 prompt。
+    # QC 复检、矛盾门、哈希、doodle 配置都基于这份不变 prompt 派生。
+    refs = reference_paths if reference_paths else []
+    is_action = _is_action_shot(shot, characters)  # 循环不变量
+    # 动作镜头：解除"场景布局不变"锁（普通镜头不传 → 适配器默认完整锁）。
+    # 注意不能传 None——适配器 kwargs.get("lock_prompt", DEFAULT) 会把 "None，" 拼进 prompt。
+    action_lock = IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT if is_action else None
+    # ---- prompt 组装（只算一次，重试复用） ----
+    _ff_pre = preprocess_prompt_for_image(ff_desc)
+    _ff_pre = _inject_character_costume(_ff_pre, characters, shot, frame_kind="first_frame")
+    # 场景物体尺寸锚定注入（船/车等物体比例防漂移，code-audit 08-06 钩子船太小）
+    _ff_pre = _inject_object_size_anchor(shot, _ff_pre)
+    # 场景色调锚定注入（color_tone：夜景冷蓝/暖金烛光等，防模型自造色调漂色）
+    _ff_pre = _inject_tone_anchor(shot, _ff_pre)
+    # 角色姿态/位置/朝向锚定块（代码级兜底——首帧若 LLM 漏写刺客朝向/角色姿态，
+    # 从 shot 全文提取补上；water_state=False 首帧是动作前一刻，不补船/水面状态）
+    _ff_anchor = _extract_char_layout(shot, characters,
+                                      role_scan_text=shot.get("ff_desc", ""),
+                                      water_state=False)
+    if _ff_anchor:
+        _ff_pre = f"{_ff_pre}。{_ff_anchor}"
+    # A3 修复：道具空间方位锚定块（提取同框手持道具的落点，防自由摆放重叠）
+    _ff_prop = _extract_prop_layout(shot, characters,
+                                    role_scan_text=shot.get("ff_desc", ""))
+    if _ff_prop:
+        _ff_pre = f"{_ff_pre}。{_ff_prop}"
+    ff_desc_full = sanitize_prompt(ensure_prefix(_ff_pre, STYLE_PREFIX), verbose=False)
+    ff_desc_full = add_image_strict_constraints(ff_desc_full, "首帧", shot=shot, characters=characters)
+    # ---- prompt 组装结束 ----
+    gen_kwargs = dict(
+        prompt=ff_desc_full,
+        reference_image_paths=refs,
+        shot_index=idx,
+        frame_desc="首帧",
+        force_multi_ref=True,
+    )
+    if action_lock is not None:
+        gen_kwargs["lock_prompt"] = action_lock
+
     for attempt in range(max_retries + 1):
         if ff_path.exists() and not force and attempt == 0:
             # 检查哈希文件是否存在且匹配
@@ -2812,45 +2856,7 @@ async def _gen_first_frame_async(
                     return str(ff_path)
 
         logger.verbose(f"  [FRAME] 生成首帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
-        # 添加风格前缀 + 严格约束（与视频生成保持一致，确保风格统一）
-        # 先预处理：替换 AI 可能误解的词汇
-        ff_desc = preprocess_prompt_for_image(ff_desc)
-        # v1.1：注入出镜角色服装特征（防"夜色深沉"背景下模型自由发挥深色衣）
-        # 首帧过滤动作结果/武器词（溅血/持刀）——dynamic_features 含全章状态，
-        # 首帧是动作前一刻，血污/武器不该出现（08-09 首帧杨旭胸口血迹/刺客血眼）。
-        ff_desc = _inject_character_costume(ff_desc, characters, shot, frame_kind="first_frame")
-        # 场景物体尺寸锚定注入（船/车等物体比例防漂移，code-audit 08-06 钩子船太小）
-        ff_desc = _inject_object_size_anchor(shot, ff_desc)
-        # 场景色调锚定注入（color_tone：夜景冷蓝/暖金烛光等，防模型自造色调漂色）
-        ff_desc = _inject_tone_anchor(shot, ff_desc)
-        # 角色姿态/位置/朝向锚定块（代码级兜底——首帧若 LLM 漏写刺客朝向/角色姿态，
-        # 从 shot 全文提取补上；water_state=False 首帧是动作前一刻，不补船/水面状态）
-        ff_anchor = _extract_char_layout(shot, characters,
-                                         role_scan_text=shot.get("ff_desc", ""),
-                                         water_state=False)
-        if ff_anchor:
-            ff_desc = f"{ff_desc}。{ff_anchor}"
-        # A3 修复：道具空间方位锚定块（提取同框手持道具的落点，防自由摆放重叠）
-        ff_prop = _extract_prop_layout(shot, characters,
-                                       role_scan_text=shot.get("ff_desc", ""))
-        if ff_prop:
-            ff_desc = f"{ff_desc}。{ff_prop}"
-        ff_desc_full = sanitize_prompt(ensure_prefix(ff_desc, STYLE_PREFIX), verbose=False)
-        ff_desc_full = add_image_strict_constraints(ff_desc_full, "首帧", shot=shot, characters=characters)
-        refs = reference_paths if reference_paths else []
-        # 动作镜头首帧：解除"场景布局不变"锁，允许人物动作/构图随描述演变
-        # （普通镜头不传 lock_prompt，保持适配器默认完整锁）。
-        # 注意不能传 None——适配器 kwargs.get("lock_prompt", DEFAULT) 会把 "None，" 拼进 prompt。
-        is_action = _is_action_shot(shot, characters)
-        gen_kwargs = dict(
-            prompt=ff_desc_full,
-            reference_image_paths=refs,
-            shot_index=idx,
-            frame_desc="首帧",
-            force_multi_ref=True,
-        )
-        if is_action:
-            gen_kwargs["lock_prompt"] = IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT
+        # 2026-08-29：gen_kwargs 已在循环外组装，prompt 复用同一份；不再重新追加锚块。
         try:
             img_out = await image_adapter.generate_single_image(**gen_kwargs)
             if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
@@ -2987,17 +2993,73 @@ async def _gen_last_frame_async(
         shot["lf_desc_final"] = _build_final_frame_prompt(shot, lf_desc, "last_frame", characters)
     except Exception:
         pass
-    # v6.50（08-28）矛盾自检器：与首帧同理
-    _assert_lf = shot.get("lf_desc_final")
-    if _assert_lf:
-        from shared.prompt_contradiction import assert_no_contradictions
-        assert_no_contradictions(_assert_lf, f"shot{idx} 尾帧")
+    # v6.50（08-28）矛盾自检器：与首帧同理。
+    # 2026-08-29：lf 软跳过补丁——包 try-except，矛盾时**跳过该帧并日志留痕**
+    # （返回 None），不再让 lf 矛盾 fail-fast 整条 shot。ff 仍 fail-fast 保留
+    # 主防线（ff 失败 = 整 shot 视觉基础崩，必须重抽；lf 失败可降级为缺尾帧）。
+    # 老版 raise PromptContradictionError 会让单帧矛盾 kill 整条链路。
 
     # v6.53 A.4：QC_MAX_ATTEMPTS=重抽总尝试次数（含首次）
     try:
         max_retries = max(0, int(os.getenv("QC_MAX_ATTEMPTS", str(max_retries + 1))) - 1)
     except (TypeError, ValueError):
         pass
+
+    # === 2026-08-29 重试膨胀修复：lf_desc_full 组装移出重试循环（与 ff 同策略）===
+    # 2026-08-29 软跳过补丁：lf 矛盾门包 try-except，矛盾时**跳过该帧并日志留痕**
+    # （返回 None），不再让 lf 矛盾 fail-fast 整条 shot——ff 仍 fail-fast 保留主防线
+    # （ff 失败 = 整 shot 视觉基础崩，必须重抽；lf 失败可降级为缺尾帧）。
+    from shared.prompt_contradiction import (
+        assert_no_contradictions,
+        PromptContradictionError,
+    )
+    _assert_lf = shot.get("lf_desc_final")
+    if _assert_lf:
+        try:
+            assert_no_contradictions(_assert_lf, f"shot{idx} 尾帧")
+        except PromptContradictionError as e:
+            _bridge_log(f"  [LF-SKIP] shot{idx} 尾帧 prompt 矛盾，软跳过（不阻塞整批）: {e}")
+            return None
+
+    refs = reference_paths if reference_paths else []
+    # ---- lf prompt 组装（只算一次，重试复用） ----
+    _lf_pre = preprocess_prompt_for_image(lf_desc)
+    # v1.1：注入出镜角色服装特征（与首帧一致）
+    _lf_pre = _inject_character_costume(_lf_pre, characters, shot)
+    # v1.1：尾帧目光修复（错别字 + 看向动作结果对象——听香看被刺倒的杨旭）
+    _lf_pre = fix_lf_desc_gaze(_lf_pre, shot, characters)
+    # 场景物体尺寸锚定注入（船/车等物体比例防漂移）
+    _lf_pre = _inject_object_size_anchor(shot, _lf_pre)
+    # 场景色调锚定注入（color_tone：夜景冷蓝/暖金烛光等，防模型自造色调漂色）
+    _lf_pre = _inject_tone_anchor(shot, _lf_pre)
+    # 角色姿态/位置/朝向锚定块（代码级兜底——lf_desc 是动作结果态，从 shot
+    # 全文提取出镜角色的终态姿态/位置，防"浪花消失/角色站位漂移"；
+    # water_state=True 尾帧也补船完整+水面状态）
+    _lf_anchor = _extract_char_layout(shot, characters,
+                                      role_scan_text=shot.get("lf_desc", ""),
+                                      water_state=True)
+    if _lf_anchor:
+        _lf_pre = f"{_lf_pre}。{_lf_anchor}"
+    # A3 修复：道具空间方位锚定块（尾帧同框道具落点，防自由摆放重叠）
+    _lf_prop = _extract_prop_layout(shot, characters,
+                                    role_scan_text=shot.get("lf_desc", ""))
+    if _lf_prop:
+        _lf_pre = f"{_lf_pre}。{_lf_prop}"
+    # 尾帧注入场景上下文 + 显式"重构图"指令：
+    # 参考图（首帧）只作人物/风格锚定，构图必须按 lf_desc 重新布局，
+    # 否则参考图会把动作结果帧也锁死在首帧构图上，三帧雷同、动作无法推进。
+    scene = shot.get("scene", "") or ""
+    location = shot.get("location", "") or ""
+    ctx = f"（场景：{location or scene}）" if (location or scene) else ""
+    lf_desc_full = (
+        f"{_lf_pre}{ctx}"
+        f"，构图需按尾帧描述重新布局，"
+        f"可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。"
+    )
+    lf_desc_full = sanitize_prompt(ensure_prefix(lf_desc_full, STYLE_PREFIX), verbose=False)
+    lf_desc_full = add_image_strict_constraints(lf_desc_full, "尾帧", shot=shot, characters=characters)
+    # ---- lf prompt 组装结束 ----
+
     for attempt in range(max_retries + 1):
         if lf_path.exists() and not force and attempt == 0:
             # 检查哈希文件是否存在且匹配
@@ -3018,49 +3080,14 @@ async def _gen_last_frame_async(
                     else:
                         return str(lf_path)
             elif script_mtime is None and _validate_frame(str(lf_path)):
-                if await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene):
-                    _del_frame_and_hash(lf_path, lf_hash_path, "尾帧", idx, logger)
-                else:
-                    return str(lf_path)
+                if _validate_frame(str(lf_path)):
+                    if await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene):
+                        _del_frame_and_hash(lf_path, lf_hash_path, "尾帧", idx, logger)
+                    else:
+                        return str(lf_path)
 
         logger.verbose(f"  [FRAME] 生成尾帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
-        # 添加风格前缀 + 严格约束（与视频生成保持一致，确保风格统一）
-        # 先预处理：替换 AI 可能误解的词汇
-        lf_desc = preprocess_prompt_for_image(lf_desc)
-        # v1.1：注入出镜角色服装特征（与首帧一致）
-        lf_desc = _inject_character_costume(lf_desc, characters, shot)
-        # v1.1：尾帧目光修复（错别字 + 看向动作结果对象——听香看被刺倒的杨旭）
-        lf_desc = fix_lf_desc_gaze(lf_desc, shot, characters)
-        # 场景物体尺寸锚定注入（船/车等物体比例防漂移）
-        lf_desc = _inject_object_size_anchor(shot, lf_desc)
-        # 场景色调锚定注入（color_tone：夜景冷蓝/暖金烛光等，防模型自造色调漂色）
-        lf_desc = _inject_tone_anchor(shot, lf_desc)
-        # 角色姿态/位置/朝向锚定块（代码级兜底——lf_desc 是动作结果态，从 shot
-        # 全文提取出镜角色的终态姿态/位置，防"浪花消失/角色站位漂移"；
-        # water_state=True 尾帧也补船完整+水面状态）
-        lf_anchor = _extract_char_layout(shot, characters,
-                                         role_scan_text=shot.get("lf_desc", ""))
-        if lf_anchor:
-            lf_desc = f"{lf_desc}。{lf_anchor}"
-        # A3 修复：道具空间方位锚定块（尾帧同框道具落点，防自由摆放重叠）
-        lf_prop = _extract_prop_layout(shot, characters,
-                                       role_scan_text=shot.get("lf_desc", ""))
-        if lf_prop:
-            lf_desc = f"{lf_desc}。{lf_prop}"
-        # 尾帧注入场景上下文 + 显式"重构图"指令：
-        # 参考图（首帧）只作人物/风格锚定，构图必须按 lf_desc 重新布局，
-        # 否则参考图会把动作结果帧也锁死在首帧构图上，三帧雷同、动作无法推进。
-        scene = shot.get("scene", "") or ""
-        location = shot.get("location", "") or ""
-        ctx = f"（场景：{location or scene}）" if (location or scene) else ""
-        lf_desc_full = (
-            f"{lf_desc}{ctx}"
-            f"，构图需按尾帧描述重新布局，"
-            f"可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。"
-        )
-        lf_desc_full = sanitize_prompt(ensure_prefix(lf_desc_full, STYLE_PREFIX), verbose=False)
-        lf_desc_full = add_image_strict_constraints(lf_desc_full, "尾帧", shot=shot, characters=characters)
-        refs = reference_paths if reference_paths else []
+        # 2026-08-29：lf_desc_full 已在循环外组装，prompt 复用同一份；不再重新追加锚块。
         try:
             img_out = await image_adapter.generate_single_image(
                 prompt=lf_desc_full,
@@ -3106,7 +3133,7 @@ async def _gen_last_frame_async(
                 # sidecar 已带 critical 记录，留痕供人工复核；无图比坏图更伤链路
                 _bridge_log(f"  [QC] shot_{idx} {attempt+1} 次尝试均 critical，"
                             "保留末版留痕（attempts_exhausted）")
-                return str(ff_path)
+                return str(lf_path)  # 2026-08-29 bug fix: 原误写 ff_path
             return str(lf_path)
         if attempt < max_retries:
             logger.verbose(f"  [FRAME] 尾帧 shot_{idx} 第{attempt+1}次不达标，重试...")

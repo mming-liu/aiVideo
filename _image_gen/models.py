@@ -57,3 +57,10 @@ class ImageGenerationResult:
     # 幻觉检测结果
     hallucination_detected: bool = False
     hallucination_issues: Optional[str] = None  # JSON string of issues
+    # 2026-08-29：软跳过标记（适用于内容安全过滤触发的"非真错"——
+    # 火山 Seedream 的 OutputImageSensitiveContentDetected 等）。
+    # True 时表示该图因安全策略被跳过，下游不应 raise 阻塞整批生成，
+    # 仅记录日志并以 None/空路径占位，让其他分镜继续跑。
+    # 与 success=False 配合使用：success=False + soft_skip=True = 已知安全跳过；
+    # success=False + soft_skip=False = 真实失败（重试/告警）。
+    soft_skip: bool = False

@@ -773,6 +773,100 @@ def _is_knife_holder(entity: dict) -> bool:
                                    "knife", "blade", "sword"))
 
 
+def _knife_contact_zone(holders: list[dict], lying: list[dict]) -> list[float] | None:
+    """持刀者 ∩ 躺卧者 接触区域（v6.32.1，2026-08-29）.
+
+    修复 knife_contact critical 的修复 bbox 选区——旧版用并集导致区域经常
+    超 70% 画幅，触发 `_bbox_area_pct > 70% → regenerate` 闸口，局部修复
+    永不触发。新版按几何分三档：
+
+    1. **交集 + 20% 边距**（推荐）：持刀者框 ∩ 躺卧者框即接触点所在，
+       向外扩 20% 边距覆盖接触带周边。90% 刺杀镜命中此档。
+    2. **连接带**（少见）：两框不相交但有间隙时，取两框最近边缘之间的
+       矩形带（厚度 = 较小框短边的 1/4 + 100px 等价坐标）。
+    3. **并集兜底**（罕见）：间隙 > 较大框短边时（持刀者离躺卧者太远，
+       实际不太可能刺中）退回并集，避免修复区域退化为零。
+
+    Args:
+        holders: 持刀者实体列表（已 bbox 验证）
+        lying: 躺卧者实体列表（已 bbox 验证）
+
+    Returns:
+        单个 4 元素 bbox 列表 [x1, y1, x2, y2]（0-1000 归一坐标），
+        或 None（无可用数据时）。
+    """
+    if not holders or not lying:
+        return None
+    h = holders[0]["bbox"]
+    l = lying[0]["bbox"]
+    hx1, hy1, hx2, hy2 = (float(v) for v in h)
+    lx1, ly1, lx2, ly2 = (float(v) for v in l)
+
+    # 1. 交集 + 20% 边距
+    ix1, iy1 = max(hx1, lx1), max(hy1, ly1)
+    ix2, iy2 = min(hx2, lx2), min(hy2, ly2)
+    if ix2 > ix1 and iy2 > iy1:
+        # 交集存在 → 外扩 20% 边距（按交集尺寸）
+        mx, my = (ix2 - ix1) * 0.2, (iy2 - iy1) * 0.2
+        return [
+            max(0.0, ix1 - mx), max(0.0, iy1 - my),
+            min(1000.0, ix2 + mx), min(1000.0, iy2 + my),
+        ]
+
+    # 2. 不相交 → 连接带
+    #    计算两框在 x/y 方向的重叠 vs 间隙；找较小间隙方向作为「通道」，
+    #    沿另一方向取两框重叠区间；带宽 = 较小框短边的 1/4。
+    #    间隙 > 较大框短边 → 退回并集（相距过远，修复无意义）
+    h_w, h_h = hx2 - hx1, hy2 - hy1
+    l_w, l_h = lx2 - lx1, ly2 - ly1
+    max_short = max(min(h_w, h_h), min(l_w, l_h))
+    # 投影到 x 轴：水平间隙
+    if hx2 < lx1:
+        gap_x = lx1 - hx2
+        x1, x2 = hx2, lx1
+    elif lx2 < hx1:
+        gap_x = hx1 - lx2
+        x1, x2 = lx2, hx1
+    else:
+        gap_x = 0  # x 方向重叠
+        x1, x2 = max(hx1, lx1), min(hx2, lx2)
+    # 投影到 y 轴：水平间隙
+    if hy2 < ly1:
+        gap_y = ly1 - hy2
+        y1, y2 = hy2, ly1
+    elif ly2 < hy1:
+        gap_y = hy1 - ly2
+        y1, y2 = ly2, hy1
+    else:
+        gap_y = 0
+        y1, y2 = max(hy1, ly1), min(hy2, ly2)
+    # 较小间隙方向作为通道；若都 0（不可能——已知无交集）选 x 方向
+    if gap_x == 0 and gap_y == 0:
+        # 不相交必有至少一个 gap > 0，这里兜底
+        gap_x = abs(hx1 - lx1)
+    gap = min(gap_x, gap_y) if (gap_x > 0 and gap_y > 0) else (gap_x or gap_y)
+    if gap > max_short:
+        # 3. 相距过远 → 并集兜底
+        return [
+            min(hx1, lx1), min(hy1, ly1),
+            max(hx2, lx2), max(hy2, ly2),
+        ]
+    # 连接带：带宽 = 较小框短边的 1/4（最多 100 归一坐标）
+    band = min(max_short / 4, 100.0)
+    # 沿间隙方向取两框之间，垂直方向取两框重叠区间
+    if gap_x <= gap_y:
+        # 间隙在 x 方向 → 带沿 x 方向延伸
+        cx1, cx2 = x1, x2
+        cy1 = max(0.0, min(hy1, ly1) - band / 2)
+        cy2 = min(1000.0, max(hy2, ly2) + band / 2)
+    else:
+        # 间隙在 y 方向 → 带沿 y 方向延伸
+        cy1, cy2 = y1, y2
+        cx1 = max(0.0, min(hx1, lx1) - band / 2)
+        cx2 = min(1000.0, max(hx2, lx2) + band / 2)
+    return [cx1, cy1, cx2, cy2]
+
+
 def _select_bboxes_for_pattern(selector: str,
                                person_entities: list[dict],
                                all_entities: list[dict]) -> list[list[float]]:
@@ -781,10 +875,18 @@ def _select_bboxes_for_pattern(selector: str,
     if selector == "all_persons":
         boxes = [e["bbox"] for e in person_entities if _bbox_valid(e.get("bbox"))]
     elif selector == "knife_zone":
-        for e in person_entities:
-            if _is_knife_holder(e) or _is_lying(e):
-                if _bbox_valid(e.get("bbox")):
-                    boxes.append(e["bbox"])
+        # 2026-08-29：knife_contact 改交集（v6.32.1）。
+        # 旧实现：持刀者 ∪ 躺卧者（并集），修复区域过大、超过 70% 画幅
+        # 触发 `_bbox_area_pct > 70% → regenerate` 闸口，导致局部修复永不触发。
+        # 新实现：取交集（接触点所在）+ 20% 边距；不相交取两框最近边缘的
+        # 连接带；相距过远（罕见）兜底用并集。详见 _knife_contact_zone。
+        holders = [e for e in person_entities
+                   if _is_knife_holder(e) and _bbox_valid(e.get("bbox"))]
+        lying = [e for e in person_entities
+                 if _is_lying(e) and _bbox_valid(e.get("bbox"))]
+        zone = _knife_contact_zone(holders, lying)
+        if zone:
+            boxes.append(zone)
     elif selector == "lying_face_top45":
         for e in person_entities:
             if _is_lying(e) and _bbox_valid(e.get("bbox")):

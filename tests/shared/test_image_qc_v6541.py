@@ -43,17 +43,63 @@ _ENTITIES = [
 _CRIT = lambda cat, d: QcIssue(category=cat, description=d, severity="critical")
 
 
-def test_knife_contact_edit_with_union_bbox():
-    """刀接触 critical → edit；bbox = 持刀者 ∪ 躺卧者."""
+def test_knife_contact_edit_with_intersection_bbox():
+    """刀接触 critical → edit；bbox = 持刀者 ∩ 躺卧者 + 20% 边距（v6.32.1）.
+
+    旧版用并集 → 区域超 70% 画幅 → 触发 regenerate 闸口，局部修复永不触发。
+    新版用交集：接触点所在即两框重叠处，向外扩 20% 边距覆盖接触带周边。
+    """
     result = _result([_CRIT("anchor_mismatch", "「刀具是否已接触或切入任何人的身体？」答 yes，期望 no")],
                      _ENTITIES)
     plan = build_repair_plan({}, "first_frame", result)
     assert plan["action"] == "edit"
     assert plan["matched_patterns"] == ["knife_contact"]
     x1, y1, x2, y2 = plan["bbox_ratio"]
-    # 持刀者(40,380,330,860) ∪ 躺卧者(300,500,900,720) → (40,380,900,860) → /1000
-    assert (x1, y1, x2, y2) == (0.04, 0.38, 0.9, 0.86)
+    # 持刀者 (40,380,330,860) ∩ 躺卧者 (300,500,900,720) = (300,500,330,720)
+    # 交集宽 = 30, 高 = 220 → 20% 边距 = 6 (x), 44 (y)
+    # 扩后 = (294, 456, 336, 764) → /1000 = (0.294, 0.456, 0.336, 0.764)
+    assert abs(x1 - 0.294) < 1e-6
+    assert abs(y1 - 0.456) < 1e-6
+    assert abs(x2 - 0.336) < 1e-6
+    assert abs(y2 - 0.764) < 1e-6
     assert "悬停" in plan["edit_prompt"] and "红框" in plan["edit_prompt"]
+
+
+def test_knife_contact_no_intersection_connecting_band():
+    """持刀者与躺卧者不重叠（间隙小）→ 取连接带."""
+    entities = [
+        {"label": "person", "desc": "black outfit holding sword standing",
+         "bbox": [100, 200, 250, 600]},   # 持刀者
+        {"label": "person", "desc": "white robe lying supine",
+         "bbox": [350, 300, 700, 600]},   # 躺卧者，x 间隙 = 100
+    ]
+    result = _result([_CRIT("anchor_mismatch", "「刀具是否已接触或切入任何人的身体？」答 yes，期望 no")],
+                     entities)
+    plan = build_repair_plan({}, "first_frame", result)
+    assert plan["action"] == "edit"
+    x1, y1, x2, y2 = plan["bbox_ratio"]
+    # 间隙在 x = 100；较小框短边 = min(150, 350) = 150；连接带带宽 = 150/4 = 37.5
+    # x 范围 (250, 350)；y 范围取两框重叠区间 (300, 600) + 37.5/2 上下扩
+    # = (281.25, 618.75) → /1000
+    # 验证连接带小于并集（修复区域更精准）
+    assert (x2 - x1) * (y2 - y1) < 0.4  # 远小于 0.86（旧版并集）
+
+
+def test_knife_contact_too_far_union_fallback():
+    """持刀者与躺卧者间隙 > 较大框短边 → 兜底用并集（罕见）."""
+    entities = [
+        {"label": "person", "desc": "black outfit holding sword",
+         "bbox": [50, 100, 150, 200]},   # 持刀者 100x100
+        {"label": "person", "desc": "white robe lying supine",
+         "bbox": [800, 500, 950, 700]},  # 躺卧者，x 间隙 = 650 > 100
+    ]
+    result = _result([_CRIT("anchor_mismatch", "「刀具是否已接触或切入任何人的身体？」答 yes，期望 no")],
+                     entities)
+    plan = build_repair_plan({}, "first_frame", result)
+    assert plan["action"] == "edit"
+    x1, y1, x2, y2 = plan["bbox_ratio"]
+    # 兜底并集：(50, 100, 950, 700) → /1000
+    assert (x1, y1, x2, y2) == (0.05, 0.1, 0.95, 0.7)
 
 
 def test_red_mark_edit_all_persons_union():

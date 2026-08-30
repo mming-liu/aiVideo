@@ -171,7 +171,12 @@ def test_count_anchor_reuse_ban_when_threat_visible():
 
 
 def test_count_anchor_invisible_threat_shows_entity_count():
-    """威胁仅黑影：人数只数实体角色，黑影不计入且防「第二个黑影」."""
+    """威胁仅黑影：人数只数实体角色，黑影不计入且防「第二个黑影」.
+
+    2026-08-29：措辞从「禁止…第二个黑影、第二个{名单}」改为「黑影只允许出现一个；
+    禁止出现任何其他人物或第二名{名单}角色」——把「黑影」从禁止从句移出，
+    避免命中 `禁止[^\n。]{0,24}?(黑影|人影)` 自检器（与剧情伏笔「水下黑影轮廓」自触）。
+    """
     from style_prefix import add_image_strict_constraints
     shot = {
         "location": "小舟上",
@@ -182,7 +187,38 @@ def test_count_anchor_invisible_threat_shows_entity_count():
     out = add_image_strict_constraints("杨旭仰卧，水下黑影", "首帧", shot=shot,
                                        characters=_CHARS)
     assert "不计入实体人数" in out
-    assert "第二个黑影" in out
+    # 新措辞：正向陈述「黑影只允许出现一个」+ 禁止「第二名{名单}角色」
+    assert "黑影只允许出现一个" in out
+    # 「第二名杨旭、听香角色」是连续子串；分别断言前 2 字 + 完整名单
+    assert "第二名杨旭" in out and "听香角色" in out
+    # 旧措辞「第二个黑影、第二个{名单}」必须废除（避免自触）
+    assert "第二个黑影" not in out
+
+
+def test_invisible_threat_wording_no_self_contradiction():
+    """2026-08-29：新增 — 新措辞代入最终 prompt 跑矛盾自检器，必须 0 报矛盾.
+
+    旧措辞「禁止…第二个黑影」+ 剧情「水下黑影轮廓」会触发对称矛盾
+    （禁止[^\n。]{0,24}?(黑影|人影) 命中 24 字内的「黑影」），导致 shot
+    fail-fast 整条链路崩。新措辞把「黑影」从禁止从句移出，正向陈述防第二黑影。
+
+    走 invisible_only 分支：ff_desc 只让威胁以"水下黑影"形式出现（无完整
+    刺客站姿/可见实体特征），触发 _threat_invisible_only=True → 应用新措辞。
+    """
+    from style_prefix import add_image_strict_constraints
+    from shared.prompt_contradiction import find_contradictions
+    shot = {
+        "location": "小舟上",
+        "ff_desc": "神秘人化作水下黑影一闪而过，杨旭仰卧未觉，听香在旁未察",
+        "lf_desc": "", "motion_desc": "",
+    }
+    base = "杨旭仰卧，水下黑影，"
+    tail = add_image_strict_constraints(base, "首帧", shot=shot, characters=_CHARS)
+    full = base + tail
+    issues = find_contradictions(full)
+    # 必须不报「对称矛盾：…禁止条款又禁掉它」
+    assert not any("对称矛盾" in i for i in issues), \
+        f"新措辞不应触发黑影自触矛盾，实测 issues={issues}"
 
 
 def test_hard_count_anchor_from_char_layout():
