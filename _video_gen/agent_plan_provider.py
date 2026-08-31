@@ -2,8 +2,10 @@
 
 与标准方舟 (api/v3) 的区别：
   - 端点：
-      提交 POST {base}/content_generation/tasks
-      轮询 GET  {base}/content_generation/tasks/{id}
+      提交 POST {base}/contents/generations/tasks
+      轮询 GET  {base}/contents/generations/tasks/{id}
+      列表 GET  {base}/contents/generations/tasks?page_num=&page_size=...
+      取消 DELETE {base}/contents/generations/tasks/{id}
   - 鉴权：Bearer AGENT_PLAN_API_KEY（**专属 key，不通用**）
   - 模型：doubao-seedance-2-0（默认；时长 4-15s；支持 reference_image/generate_audio）
   - 切换：VIDEO_PROVIDER=agent_plan（.env.content）；volcengine 不受影响
@@ -284,7 +286,7 @@ class AgentPlanVideoService(VideoGenerationService):
         for attempt in range(1, 5):  # 简化版：4 次重试（与 volcengine 共享 5xx/429 容忍）
             try:
                 resp = requests.post(
-                    f"{self._base_url}/content_generation/tasks",
+                    f"{self._base_url}/contents/generations/tasks",
                     json=payload,
                     headers=self._headers,
                     timeout=180,
@@ -353,7 +355,7 @@ class AgentPlanVideoService(VideoGenerationService):
     # =======================================================================
     def query_task(self, task_id: str) -> dict:
         resp = requests.get(
-            f"{self._base_url}/content_generation/tasks/{task_id}",
+            f"{self._base_url}/contents/generations/tasks/{task_id}",
             headers=self._headers,
             timeout=60,
         )
