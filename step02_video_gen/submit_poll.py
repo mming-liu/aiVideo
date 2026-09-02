@@ -168,10 +168,11 @@ def _get_shot_hash(shot: dict, script: dict) -> str:
     from step02_video_gen.prompt_builder import _build_prompt
     from style_prefix import STYLE_PREFIX, NEGATIVE_PROMPT
 
-    # 2026-08-20：volcengine 走精简路径，缓存哈希必须跟随
+    # Seedance 系（volcengine / agent_plan）走精简路径，缓存哈希必须跟随
     # （否则旧完整 prompt 生成的视频会被错误复用，refit 错乱）
-    _provider = (os.getenv("VIDEO_PROVIDER") or "").strip().lower()
-    if _provider == "volcengine":
+    # 用 active_video_is_seedance() 统一判断，新增 Seedance 系 provider 自动跟随。
+    from shared.model_caps import active_video_is_seedance
+    if active_video_is_seedance():
         from step02_video_gen.prompt_builder import _build_seedance_concise_prompt
         _prompt_for_hash = _build_seedance_concise_prompt(shot)
     else:

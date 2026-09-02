@@ -911,12 +911,12 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         get_cinematic_prefix(CINEMATIC_STYLE) if CINEMATIC_STYLE else ""
     )
     # Seedance 专用精简路径（2026-08-20 方案 2 上游精简）：从源头减少注入量，
-    # 让 prompt 自然 ≤500 字符，volcengine 的 _seedance_compress_prompt 沦为兜底。
+    # 让 prompt 自然 ≤500 字符，provider 侧 compress 沦为兜底。
     # 其他 provider（bailian/agnes/minimax）继续用完整 _build_prompt，
-    # 不影响其 prompt 架构。检测信号用 env 实时读（line 938 同款模式），
-    # 不用 module-level VIDEO_PROVIDER——避免同进程切 provider 时状态污染。
-    _provider = (os.getenv("VIDEO_PROVIDER") or "").strip().lower()
-    if _provider == "volcengine":
+    # 不影响其 prompt 架构。用 active_video_is_seedance() 统一判断——
+    # volcengine / agent_plan 等 Seedance 系 provider 自动跟随，避免硬编码名单。
+    from shared.model_caps import active_video_is_seedance
+    if active_video_is_seedance():
         # 跳过 cinematic_prefix + STYLE_PREFIX：Seedance 自身有风格倾向，
         # 长风格前缀是噪声（与"drop 风格收束"对称）
         full_prompt = _build_seedance_concise_prompt(shot)
@@ -1300,22 +1300,11 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
     # 参考图必须全部传过去。压缩后再生成「图N」清单（_build_r2v_purpose_list
     # 拿到的就是这份最终列表），编号与 provider media 顺序严格对齐。
     from shared.ref_compose import fit_refs, get_ref_limit
-    from shared.config import (
-        VIDEO_PROVIDER, BAILIAN_R2V_MODEL, VOLCENGINE_I2V_MODEL,
-        MINIMAX_H3_MODEL, AGNES_VIDEO_MODEL,
-    )
-    # r2v 参考图上限按「当前 VIDEO_PROVIDER 实际提交 r2v 的模型」解析，不写死百炼：
-    #   bailian → BAILIAN_R2V_MODEL（wan2.7-r2v=5 / happyhorse=9）
-    #   volcengine → VOLCENGINE_I2V_MODEL（Seedance 2.5=30 / 2.0=12）
-    #   minimax → MINIMAX_H3_MODEL（=9）；其余（agnes 等）→ AGNES_VIDEO_MODEL
-    if VIDEO_PROVIDER == "volcengine":
-        r2v_model = VOLCENGINE_I2V_MODEL
-    elif VIDEO_PROVIDER == "minimax":
-        r2v_model = MINIMAX_H3_MODEL
-    elif VIDEO_PROVIDER == "bailian":
-        r2v_model = BAILIAN_R2V_MODEL
-    else:
-        r2v_model = AGNES_VIDEO_MODEL
+    from shared.model_caps import active_video_model
+    # r2v 参考图上限按「当前 provider 实际提交 r2v 的模型」解析，
+    # 用 active_video_model() 统一推导——volcengine/agent_plan/bailian/minimax
+    # 都走同一份注册表，避免逐 provider 硬编码新增遗漏。
+    r2v_model = active_video_model() or ""
     media_limit = get_ref_limit(r2v_model, default=5)
     # 首帧构图锚点永远原图直传占第 1 名额（构图/时间/站位基准，拼表会严重损失）
     head_refs = composition_refs[:1]

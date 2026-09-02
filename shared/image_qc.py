@@ -1505,6 +1505,13 @@ def build_claim_checks_spec(shot: dict, frame_kind: str, kf_index: int | None = 
     for q in qs:
         if "视线看向" in q.get("q", ""):
             q["reliability"] = "high"
+    # 道具问句 reliability 强制 low（08-31 第 3 层降级）：
+    #   - VLM 判「持有小物件」本身不稳（遮挡/角度/手持 vs 放身边）
+    #   - spec 道具状态正确性未经实抽验证，有执法错误风险
+    #   首错只 warning，连错才升级 critical，避免误烧重抽额度
+    for q in qs:
+        if "持有" in q.get("q", ""):
+            q["reliability"] = "low"
     qs.sort(key=lambda q: not q["key"])
     return qs[:8]  # per-frame ≤8 问（腾出视线/道具名额）
 

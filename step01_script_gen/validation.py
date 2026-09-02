@@ -398,8 +398,9 @@ def _check_subtitle_char_coverage(shot_idx: int, subtitle: str, search_text: str
 def _check_audio_instruction(shots: list[dict]) -> None:
     """检查是否包含声音指令（v6.1 新增）.
 
-    旧供应商（bailian/agnes/dashscope）要求「（用中文说）」；volcengine/minimax
-    视频模型原生发声，prompt 写自然对白即可，跳过检查避免误报（08-16 适配）。
+    旧供应商（bailian/agnes/dashscope）要求「（用中文说）」；
+    原生发声供应商（volcengine/minimax/agent_plan）视频模型原生发声，
+    prompt 写自然对白即可，跳过检查避免误报。用 active_video_uses_native_voice() 统一判断。
     """
     from shared.model_caps import active_video_uses_native_voice
     if active_video_uses_native_voice():
@@ -2592,7 +2593,8 @@ def _check_camera_movement(shots: list[dict]) -> dict:
     warnings = []
     used_techniques = set()  # 全片运镜类型集合（含机位/角度，用于多样性统计）
 
-    # Seedance 官方明确「一个镜头尽量只指定 1 种运镜」，volcengine 下取消「跟拍可复合」豁免
+    # Seedance 官方明确「一个镜头尽量只指定 1 种运镜」，Seedance 系 provider
+    # （volcengine/agent_plan）下取消「跟拍可复合」豁免。用 active_video_is_seedance() 统一判断。
     from shared.model_caps import active_video_is_seedance
     seedance_strict = active_video_is_seedance()
 
@@ -4267,7 +4269,8 @@ def post_fix_shot_prompts(script: dict) -> dict:
     """
     from style_prefix import normalize_ff_desc
     from shared.model_caps import active_video_uses_native_voice
-    # volcengine/minimax 视频模型原生发声，不补「（用中文说）」；旧供应商保留历史行为
+    # 原生发声供应商（volcengine/minimax/agent_plan）不补「（用中文说）」；
+    # 旧供应商保留历史行为。用 active_video_uses_native_voice() 统一判断。
     native_voice = active_video_uses_native_voice()
     defined_ids = frozenset(
         c.get("identifier", "") for c in script.get("characters", []) if c.get("identifier")

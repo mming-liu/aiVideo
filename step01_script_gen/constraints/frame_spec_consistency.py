@@ -38,6 +38,19 @@ _EXIT_WORDS = (
     "已死", "死去", "倒地", "倒下", "不在",
 )
 
+# 道具「脱手/掉落」状态词（散文命中 + spec props 仍含该道具 → 矛盾）
+# 用「道具名 + 状态词」或「状态词 + 道具名」双向匹配
+_PROP_DROP_WORDS = (
+    "已脱手", "脱手", "滑落", "倾倒", "坠落", "掉落", "掉下", "掉在",
+    "放下", "放下了", "垂于水面", "垂于", "滑落水中", "跌入水中",
+)
+
+# 持有动词（pose 命中 + props 有该道具 → 正常；props 没有 → 可能漏写，WARN）
+_HOLD_VERBS = (
+    "握", "提", "执", "拿", "举", "持", "抓", "攥", "捧", "抱",
+    "扛", "背", "挎", "叼", "含",
+)
+
 
 class FrameSpecConsistencyConstraint(Constraint):
     """S. frame_spec_consistency：per-frame spec 必填 + 完整性 + desc 一致性.
@@ -207,6 +220,10 @@ class FrameSpecConsistencyConstraint(Constraint):
             # ff → ff_desc; lf → lf_desc（不检 motion_desc/prompt 以免误报）
             self._check_onscreen_consistency(ctx, fl, shot, shot_idx, label)
 
+            # === 检查 6：散文×spec 道具状态交叉校验（治道具时序倒流） ===
+            # 该帧散文命中「X已脱手/滑落/倾倒/…」+ spec props 仍含 X → WARN（进修复轮）
+            self._check_props_consistency(ctx, fl, shot, shot_idx, label)
+
         return repairs
 
     def _check_onscreen_consistency(
@@ -250,3 +267,147 @@ class FrameSpecConsistencyConstraint(Constraint):
                             )
                         )
                         break  # 一条违例一个角色
+
+    def _check_props_consistency(
+        self,
+        ctx,
+        fl: dict,
+        shot: dict,
+        shot_idx,
+        label: str,
+    ) -> None:
+        """散文×spec 道具状态交叉校验（治道具时序倒流）.
+
+        检测逻辑（WARN 级别，进修复轮）：
+          - 该帧散文命中「道具名 + 状态词」或「状态词 + 道具名」→ 道具已离手
+          - 同时 spec.props 含该道具名 或 spec.pose 含「[握提执拿举持]…道具名」 → 矛盾
+
+        覆盖 ff / lf / 所有 kf。
+        通用机制：状态词表 + 持有动词表封闭可扩展，对任何道具成立。
+        """
+        # 收集所有帧：(bucket名, desc文本, spec_items列表)
+        frames = []
+        # ff / lf
+        for bucket, desc_field in (("ff", "ff_desc"), ("lf", "lf_desc")):
+            items = fl.get(bucket)
+            desc = shot.get(desc_field) or ""
+            if isinstance(items, list) and isinstance(desc, str):
+                frames.append((f"frame_layouts.{bucket}", desc_field, desc, items))
+        # kfs
+        kfs_spec = fl.get("kfs") or []
+        kfs_desc = shot.get("keyframes") or []
+        if isinstance(kfs_spec, list) and isinstance(kfs_desc, list):
+            for i, (spec_items, kf) in enumerate(zip(kfs_spec, kfs_desc)):
+                desc = kf.get("desc", "") if isinstance(kf, dict) else ""
+                if isinstance(spec_items, list) and isinstance(desc, str):
+                    frames.append((
+                        f"frame_layouts.kfs[{i}]",
+                        f"keyframes[{i}].desc",
+                        desc,
+                        spec_items,
+                    ))
+
+        for spec_path, desc_field, desc, items in frames:
+            if not desc:
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name", "")).strip()
+                if not name:
+                    continue
+                props = item.get("props") or []
+                pose = str(item.get("pose", "") or "")
+                if not isinstance(props, list):
+                    continue
+
+                # 遍历所有道具名，检查 desc 中是否有该道具的"离手"状态
+                for prop_name in props:
+                    prop_str = str(prop_name).strip()
+                    if not prop_str:
+                        continue
+                    # 检查 desc 中是否有「prop + 状态词」或「状态词 + prop」
+                    dropped = self._is_prop_dropped(desc, prop_str)
+                    if dropped:
+                        ctx.record_violation(
+                            Violation(
+                                constraint_name=self.name,
+                                severity=Severity.WARN,
+                                shot_index=shot_idx,
+                                field=f"{spec_path}.props",
+                                message=(
+                                    f"{label} {desc_field} 体现「{prop_str}已离手」"
+                                    f"（命中：{dropped}），但 {spec_path} "
+                                    f"「{name}」props 仍含「{prop_str}」"
+                                    f"——props 应为空（道具不在手中）"
+                                ),
+                                evidence=dropped,
+                            )
+                        )
+
+                # 检查 pose 中的持有动作与 desc 的离手状态矛盾
+                # 道具名来源：① props 列表中明确列出的；② 从 pose 文本中用
+                # 「持有动词 + 2~4 字名词」正则提取的候选（治 props 已清空但
+                # pose 还写"握酒壶"的场景）
+                prop_candidates: set[str] = set()
+                for p in props:
+                    ps = str(p).strip()
+                    if ps:
+                        prop_candidates.add(ps)
+                # 从 pose 中提取持有动词+道具名候选（2~4 个汉字）
+                if pose:
+                    hold_pat = re.compile(
+                        f"({'|'.join(re.escape(v) for v in _HOLD_VERBS)})"
+                        r"([一-龥]{2,4})"
+                    )
+                    for m in hold_pat.finditer(pose):
+                        prop_candidates.add(m.group(2))
+
+                for prop_str in prop_candidates:
+                    if not prop_str:
+                        continue
+                    # 找到 pose 中该道具对应的持有动词（用于报错信息）
+                    matched_verb = ""
+                    for hold_v in _HOLD_VERBS:
+                        if f"{hold_v}{prop_str}" in pose:
+                            matched_verb = hold_v
+                            break
+                    # desc 中该道具已离手？
+                    dropped = self._is_prop_dropped(desc, prop_str)
+                    if dropped and matched_verb:
+                        ctx.record_violation(
+                            Violation(
+                                constraint_name=self.name,
+                                severity=Severity.WARN,
+                                shot_index=shot_idx,
+                                field=f"{spec_path}.pose",
+                                message=(
+                                    f"{label} {desc_field} 体现「{prop_str}已离手」"
+                                    f"（命中：{dropped}），但 {spec_path} "
+                                    f"「{name}」pose 写「{matched_verb}{prop_str}」"
+                                    f"——时间倒流，应删除持有动作"
+                                ),
+                                evidence=dropped,
+                            )
+                        )
+
+    def _is_prop_dropped(self, desc: str, prop_name: str) -> str:
+        """检查 desc 中 prop_name 是否处于"离手"状态.
+
+        匹配模式：
+          - prop_name + 状态词（如"酒壶已脱手"、"钓杆滑落"）
+          - 状态词 + prop_name（如"倾倒的酒壶"、"掉落的钓杆"）
+
+        返回命中的完整片段（用于 evidence）；未命中返回空字符串。
+        """
+        # prop_name + 状态词
+        for w in _PROP_DROP_WORDS:
+            pattern = f"{prop_name}{w}"
+            if pattern in desc:
+                return pattern
+        # 状态词 + prop_name（"的"字结构，如"滑落的酒壶"）
+        for w in _PROP_DROP_WORDS:
+            pattern = f"{w}的{prop_name}"
+            if pattern in desc:
+                return pattern
+        return ""

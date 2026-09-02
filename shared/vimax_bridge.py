@@ -3475,8 +3475,9 @@ async def _gen_keyframes_async(
                 kf_desc = f"{kf_desc}。{kf_prop}"
             kf_desc_full = (
                 f"{kf_desc}{ctx}"
-                f"，构图需按关键帧描述重新布局，"
-                f"可与首帧/参考图的景别、机位、人物位置不同，表现动作过程中的瞬间状态。"
+                f"，环境构图与首帧保持一致：船的朝向、月亮位置、背景建筑方位、"
+                f"镜头机位、水面荷叶分布不变，仅人物动作、表情与镜头景别按本帧描述变化，"
+                f"表现动作过程中的瞬间状态。"
             )
             kf_desc_full = sanitize_prompt(ensure_prefix(kf_desc_full, STYLE_PREFIX), verbose=False)
             kf_desc_full = add_image_strict_constraints(kf_desc_full, "关键帧", shot=shot, characters=characters)
@@ -3668,9 +3669,46 @@ async def gen_shot_frames(
     # 中间关键帧 generation（多关键帧叙事模式）
     # 模式B时跳过中间关键帧生成（已用尾帧接续替代关键帧锚定）
     if want_kf:
-        # 关键帧参考图：场景/角色/道具资产（锚定一致），不用首帧整图锁死构图
-        # （与尾帧同理——首帧整图会把关键帧的中间动作态锁死在起点构图上）。
-        kf_refs = frame_refs_kf or None
+        # 关键帧参考图策略（环境锚定制衡版，2a）：
+        #   [角色肖像拼图] + [首帧整图] + [道具资产拼图]
+        # 首帧整图 = 环境锚（船向/月亮/背景/机位），解决 kf 每帧翻船问题。
+        # 角色肖像 = 人物一致性锚。道具资产 = 道具外观锚。
+        # 场景资产图被首帧整图替代（首帧里已经有完整场景了）。
+        # 人物动作变化通过 prompt "环境不变、仅人物动作与景别变化" 引导（2b）。
+        from shared.ref_compose import active_image_ref_limit
+        ref_limit = active_image_ref_limit()
+        kf_refs: list[str] = []
+
+        # 优先级 1：角色肖像（人物一致性最关键）
+        portrait_refs = _collect_portrait_refs_for_shot(
+            shot, characters, limit=max(1, ref_limit - 2),
+            frame_desc=" ".join(filter(None, [
+                shot.get("ff_desc", ""), shot.get("lf_desc", ""),
+                shot.get("motion_desc", "") or shot.get("prompt", ""),
+            ])),
+        )
+        kf_refs.extend(portrait_refs)
+
+        # 优先级 2：首帧整图（环境锚定）—— 仅当首帧已生成
+        if ff_path_str and Path(ff_path_str).exists() and len(kf_refs) < ref_limit:
+            kf_refs.append(str(ff_path_str))
+
+        # 优先级 3：道具资产图（有剩余额度再加）
+        if len(kf_refs) < ref_limit:
+            prop_refs = _collect_prop_asset_refs(
+                shot, limit=ref_limit - len(kf_refs),
+                frame_desc=" ".join(filter(None, [
+                    shot.get("ff_desc", ""), shot.get("lf_desc", ""),
+                    shot.get("motion_desc", "") or shot.get("prompt", ""),
+                ])),
+                characters=characters,
+            )
+            kf_refs.extend(prop_refs[:ref_limit - len(kf_refs)])
+
+        # 兜底：如果上面组装失败（如空镜），回退原始 frame_refs_kf
+        if not kf_refs and frame_refs_kf:
+            kf_refs = list(frame_refs_kf)
+        kf_refs = kf_refs or None
         kf_paths = await _gen_keyframes_async(
             image_adapter, shots_dir, shot,
             force=force, script_mtime=script_mtime,

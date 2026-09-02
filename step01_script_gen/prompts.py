@@ -278,8 +278,9 @@ def _build_audio_instruction() -> str:
 
     旧供应商（bailian/agnes/dashscope）：保留「（用中文说）」指令格式（历史行为，
     TTS/模型靠它识别中文发音与情绪）。
-    新供应商（volcengine/minimax）：视频模型原生发声，prompt 写自然对白即可，
-    禁止添加「用中文说」指令前缀。
+    原生发声供应商（volcengine/minimax/agent_plan）：视频模型原生发声，
+    prompt 写自然对白即可，禁止添加「用中文说」指令前缀。
+    用 active_video_uses_native_voice() 统一判断。
     """
     from shared.model_caps import active_video_uses_native_voice
     if active_video_uses_native_voice():

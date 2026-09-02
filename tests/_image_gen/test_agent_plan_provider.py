@@ -259,6 +259,10 @@ def _make_video_service(monkeypatch, tmp_path):
     monkeypatch.setattr(shared_config, "AGENT_PLAN_API_KEY", "test-key")
     monkeypatch.setattr(ap_mod, "AGENT_PLAN_API_KEY", "test-key")
     monkeypatch.setattr(ap_mod, "AGENT_PLAN_BASE_URL", "http://fake")
+    # 显式锁定模型：测试断言基于 seedance-2.0（支持 r2v/有声/参考图）
+    # 不读 .env.content 的覆盖值——避免用户配置影响测试结果
+    monkeypatch.setattr(shared_config, "AGENT_PLAN_T2V_MODEL", "doubao-seedance-2-0")
+    monkeypatch.setattr(ap_mod, "AGENT_PLAN_T2V_MODEL", "doubao-seedance-2-0")
     # POLL_INTERVAL 不能为 0——否则 provider 内 timeout = MAX*INTERVAL = 0，
     # 循环条件 time.time()-start < 0 永真不进，3 次 attempt 都跳过直接 timeout
     # 测试用 1s + patch time.sleep 跳过快进
