@@ -169,13 +169,48 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
         lf_a = shot.get("lf_desc", "")
         if lf_a:
             shot_b["ff_desc"] = lf_a
-        # keyframes 清空（keyframe 由 motion_desc 派生，shot_b 不再有时间分段）
-        shot_b["keyframes"] = []
-        # v6.57+ frame_layouts.kfs 同步清空（与 keyframes 一一对应，kfs 留
-        # 在 child 但 keyframes 空 → frame_spec_consistency HARD 违例）
+        # v6.51: 从原镜 keyframes 截取后半段（t_sec > 切点时间的那些），
+        # 重新计算相对 t_sec（减去切点时间）。
+        # 之前直接清空导致拆分镜无 kf、纯靠 ff/lf 端点驱动，视频漂。
+        orig_kfs = shot.get("keyframes") or []
+        orig_dur = float(shot.get("duration_sec") or 0)
+        # 切点时间 = 按文本长度比例估算（narration 拆分的近似值）
+        split_ratio = split_at / max(len(text), 1)
+        cut_t = orig_dur * split_ratio
+        new_kfs = []
+        if orig_kfs and orig_dur > 0:
+            for kf in orig_kfs:
+                if not isinstance(kf, dict):
+                    continue
+                t = float(kf.get("t_sec", 0) or 0)
+                if t <= cut_t:
+                    continue  # 前半段的 kf，跳过
+                # 后半段的 kf，重新计算相对时间
+                new_t = round(t - cut_t, 3)
+                # 新镜时长 = 原时长 - cut_t
+                new_dur = round(orig_dur - cut_t, 3)
+                if new_t <= 0:
+                    new_t = 0.1  # 防止 0s 起点（FF 已经是 t=0）
+                if new_t >= new_dur:
+                    new_t = round(new_dur - 0.1, 3)  # 防止超出结尾
+                kf_copy = dict(kf)
+                kf_copy["t_sec"] = new_t
+                new_kfs.append(kf_copy)
+        shot_b["keyframes"] = new_kfs
+        # v6.57+ frame_layouts.kfs 同步截取（与 keyframes 一一对应）
         _fl_b = shot_b.get("frame_layouts")
-        if isinstance(_fl_b, dict):
-            _fl_b["kfs"] = []
+        if isinstance(_fl_b, dict) and orig_kfs and len(new_kfs) > 0:
+            orig_kfs_layout = _fl_b.get("kfs") or []
+            # 找出对应原 kfs 的索引
+            new_kfs_layout = []
+            for kf in new_kfs:
+                # 在原 kfs 中找匹配项（按 desc 匹配最稳）
+                desc = kf.get("desc", "")
+                for j, okf in enumerate(orig_kfs):
+                    if okf.get("desc", "") == desc and j < len(orig_kfs_layout):
+                        new_kfs_layout.append(orig_kfs_layout[j])
+                        break
+            _fl_b["kfs"] = new_kfs_layout
         if not shot_b.get("motion_desc"):
             # 没 motion_desc 时给个空的避免 validator 误报
             shot_b["motion_desc"] = ""

@@ -54,9 +54,9 @@ class FfMotionOverlapConstraint(Constraint):
             signals = detect_ff_multi_action(ff, None)
             if not signals:
                 continue
-            # 已在前一刻（即将/潜伏/欲/未）→ 跳过（幂等）
-            if any(marker in ff for marker in ("即将", "潜伏", "欲呼", "尚未", "未落", "未刺")):
-                continue
+            # v6.51: 不再用 marker 白名单跳过——"即将/潜伏/未"是 FF 应有的合法前一刻词，
+            # 但含这些词不代表已完全归一（可能只有部分分句含，其余仍是进行态）。
+            # normalize_ff_desc 内部已做幂等保护，直接调用即可。
             new_ff = normalize_ff_desc(ff, shot, ctx.characters_bank)
             if new_ff == ff or not new_ff:
                 continue
