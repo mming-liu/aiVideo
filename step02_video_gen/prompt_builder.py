@@ -22,6 +22,7 @@ from style_prefix import (
 )
 from shared.style_cinematic import get_cinematic_prefix, get_director_negative
 from shared.config import CINEMATIC_STYLE
+from shared.motion_segments import build_motion_segments, format_motion_segments, count_effective_segments
 
 # 是否允许视频模型自带语音（默认开启）：
 # 2026-08 架构变更：对话已交给视频模型（模型生成说话+口型+台词），step02 不再
@@ -846,6 +847,17 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
 
     prompt = "\n".join(parts)
 
+    # v6.58 (Phase C-2): motion_desc 时间分段显式标注。
+    # 若 motion_desc 含显式时段（如「前2秒：X；2-4秒：Y」），追加一段
+    # 「【时间分段】0-2秒：X；2-4秒：Y」让视频模型按段执行动作。
+    # 0/1 段时跳过——单段信息已在 motion_desc 文本里；用 effective count
+    # 排除 implicit 空段（如「前3秒」只产 1 段有效）。
+    motion_segs = build_motion_segments(shot)
+    if count_effective_segments(motion_segs) >= 2:
+        seg_text = format_motion_segments(motion_segs, style="zh")
+        if seg_text:
+            prompt = f"{prompt}\n\n【时间分段】{seg_text}"
+
     # ========== 10. 添加视觉衔接 ==========
     extras = []
     cb = shot.get("context_bridge", "").strip()
@@ -876,6 +888,10 @@ def _build_seedance_concise_prompt(shot: dict) -> str:
     仍超 500 字符的极端 case 由它按权重删低权重段。
     """
     parts = ["画面无任何字幕、文字、水印、logo、图标；禁止在画面中叠加文字。"]
+    # v6.58 (Phase C-1): 运镜指令提到最前，提升模型注意力权重
+    camera_movement = (shot.get("camera_movement") or "").strip()
+    if camera_movement:
+        parts.append(f"运镜：{camera_movement}")
     ff_desc = shot.get("ff_desc", "").strip()
     lf_desc = shot.get("lf_desc", "").strip()
     motion_desc = shot.get("motion_desc", "").strip() or shot.get("prompt", "")
@@ -885,6 +901,13 @@ def _build_seedance_concise_prompt(shot: dict) -> str:
         parts.append(f"【视频中段】{motion_desc}")
     if lf_desc:
         parts.append(f"【视频终点】{lf_desc}")
+    # v6.58 (Phase C-2): 精简路径下也加时间分段（Seedance 2.0+ 官方支持）
+    # —— 但 500 字硬约束下必须控成本：仅 2-3 段 + 分段文本简短时加
+    motion_segs = build_motion_segments(shot)
+    if 2 <= count_effective_segments(motion_segs) <= 4:
+        seg_text = format_motion_segments(motion_segs, style="en_s")  # Seedance 2.0 推荐英文 's'
+        if seg_text and len(seg_text) <= 80:
+            parts.append(f"【时间分段】{seg_text}")
     # 背景音效（audio_cue 单行）——对话/音色留给视频模型自己理解
     audio_cue = shot.get("audio_cue", "").strip()
     if audio_cue:
@@ -1054,6 +1077,9 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     if _REFERENCE_MODE == "r2v":
         shot["_r2v_refs_cache"] = list(reference_paths or [])
 
+    # 运镜指令：step01 端的 camera_movement 结构化字段（中文运镜词）
+    camera_movement = str(shot.get("camera_movement") or "").strip()
+
     return VideoGenerationRequest(
         prompt=full_prompt,
         clip_index=shot["index"],
@@ -1065,6 +1091,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         extra_keyframe_paths=extra_keyframe_paths,
         reference_paths=reference_paths,
         seed=_seed,
+        camera_movement=camera_movement,
     )
 
 

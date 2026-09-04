@@ -198,19 +198,39 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
                 new_kfs.append(kf_copy)
         shot_b["keyframes"] = new_kfs
         # v6.57+ frame_layouts.kfs 同步截取（与 keyframes 一一对应）
+        # B9 修复（2026-09-03）：
+        #   1. new_kfs 为空时也必须显式清空 _fl_b["kfs"]，否则 deepcopy 残留
+        #      原 layout.kfs，触发 v6.57 S 约束「kfs 数量 ≠ keyframes 数量」HARD
+        #   2. **按 index 对齐**（不是 desc 匹配）—— desc 在 LLM 输出可能重复或
+        #      微改（"杨旭拔刀" vs "杨旭拔刀"），按 index 对齐最稳
+        #   3. 原 layout.kfs 数量可能 < orig_kfs（边界情况），按 index 取可能
+        #      越界——只取 min(len(orig_kfs_layout), len(orig_kfs)) 范围内的
+        #      layout 项，多出的 new_kf 用最后一帧 layout 兜底（保证数量对齐）
         _fl_b = shot_b.get("frame_layouts")
-        if isinstance(_fl_b, dict) and orig_kfs and len(new_kfs) > 0:
-            orig_kfs_layout = _fl_b.get("kfs") or []
-            # 找出对应原 kfs 的索引
-            new_kfs_layout = []
-            for kf in new_kfs:
-                # 在原 kfs 中找匹配项（按 desc 匹配最稳）
-                desc = kf.get("desc", "")
-                for j, okf in enumerate(orig_kfs):
-                    if okf.get("desc", "") == desc and j < len(orig_kfs_layout):
+        if isinstance(_fl_b, dict):
+            orig_kfs_layout = list(_fl_b.get("kfs") or [])
+            new_kfs_layout: list = []
+            if orig_kfs and new_kfs:
+                # 计算每个 new_kf 对应原 kf 的 index（按 t_sec 排序后相对位置）
+                # 先按 t_sec 排序 orig_kfs，记录每个 orig kf 在原列表的 index
+                orig_with_idx = sorted(
+                    enumerate(orig_kfs),
+                    key=lambda t: float(t[1].get("t_sec", 0) or 0),
+                )
+                orig_idx_by_tsec = {
+                    float(okf.get("t_sec", 0) or 0): i
+                    for i, okf in orig_with_idx
+                }
+                for kf in new_kfs:
+                    t = float(kf.get("t_sec", 0) or 0)
+                    j = orig_idx_by_tsec.get(t)
+                    if j is not None and j < len(orig_kfs_layout):
                         new_kfs_layout.append(orig_kfs_layout[j])
-                        break
-            _fl_b["kfs"] = new_kfs_layout
+                    elif orig_kfs_layout:
+                        # 兜底：用最后一帧 layout 补齐（保证数量 == new_kfs）
+                        new_kfs_layout.append(orig_kfs_layout[-1])
+            # 严格按 new_kfs 数量截断（防御性）
+            _fl_b["kfs"] = new_kfs_layout[:len(new_kfs)]
         if not shot_b.get("motion_desc"):
             # 没 motion_desc 时给个空的避免 validator 误报
             shot_b["motion_desc"] = ""

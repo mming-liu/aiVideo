@@ -64,6 +64,13 @@ def _auto_register() -> None:
     except ImportError:
         pass
 
+    # 火山方舟 Agent Plan（doubao-seed-2-1-turbo 默认，2026-09-03 接入）
+    try:
+        from . import agent_plan_provider as _ap
+        register("agent_plan", _ap.AgentPlanTextService)
+    except ImportError:
+        pass
+
 
 def create_service(provider: Optional[str] = None) -> TextGenerationService:
     """根据 provider 名称创建服务实例.

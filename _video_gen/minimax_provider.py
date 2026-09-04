@@ -181,6 +181,9 @@ def _hailuo_camera_prefix(prompt: str) -> str:
     """把中文运镜词映射为 Hailuo v1 方括号指令前缀（≤3 组合，匹配不到返回空）.
 
     命中多个时按 prompt 出现顺序取前 3 个（官方同括号 ≤3；先用 1 个最稳）。
+
+    注意：此函数从 prompt 全文搜索，是旧路径。新路径优先用结构化字段
+    req.camera_movement，见 _hailuo_camera_from_structured。
     """
     if not prompt:
         return ""
@@ -198,6 +201,29 @@ def _hailuo_camera_prefix(prompt: str) -> str:
             matched.append(cmd)
         if len(matched) >= 3:
             break
+    return "[" + ",".join(matched) + "] "
+
+
+def _hailuo_camera_from_structured(camera_movement: str) -> str:
+    """从结构化 camera_movement 字段（中文运镜词）生成 Hailuo v1 方括号指令.
+
+    比 _hailuo_camera_prefix 更精准：字段值就是干净的运镜词，不会误匹配
+    prompt 正文中的"推开门"、"拉紧绳索"等含运镜字的普通动词。
+
+    返回形如 "[Push in] " 或 ""（无匹配时）。
+    官方推荐 ≤3 个组合，但结构化字段通常只有 1 个主运镜，直接全部映射。
+    """
+    if not camera_movement:
+        return ""
+    matched: list[str] = []
+    for pat, cmd in _HAILUO_CAMERA_RULES:
+        if re.search(pat, camera_movement):
+            if cmd not in matched:
+                matched.append(cmd)
+            if len(matched) >= 3:
+                break
+    if not matched:
+        return ""
     return "[" + ",".join(matched) + "] "
 
 
@@ -306,11 +332,12 @@ class MiniMaxVideoService(VideoGenerationService):
         last_error = ""
         for model in self._t2v_model_queue:
             resolution = self._resolve_v1_resolution(req, model)
+            # v6.58 (Phase C-1): 结构化 camera_movement 字段驱动方括号运镜指令，
+            # 比 prompt 全文搜索更精准（不会误匹配"推开门"等普通动词）。
+            cam_prefix = _hailuo_camera_from_structured(req.camera_movement or "")
             payload: dict = {
                 "model": model,
-                # 2026-08 决策：只留中文 prompt，不加官方英文方括号运镜指令
-                # （Hailuo 官方说明自然语言同样支持；_hailuo_camera_prefix 代码保留待用）
-                "prompt": req.prompt[:2000],
+                "prompt": (cam_prefix + req.prompt)[:2000],
                 "resolution": resolution,
                 "duration": self._resolve_v1_duration(req, model, resolution),
                 "prompt_optimizer": False,  # 已人工精调，关闭改写
@@ -334,11 +361,11 @@ class MiniMaxVideoService(VideoGenerationService):
         first_frame_b64 = _encode_media(first_frame) if first_frame else None
         for model in self._i2v_model_queue[self._current_i2v_index:]:
             resolution = self._resolve_v1_resolution(req, model)
+            # v6.58 (Phase C-1): 结构化 camera_movement 字段驱动方括号运镜指令
+            cam_prefix = _hailuo_camera_from_structured(req.camera_movement or "")
             payload: dict = {
                 "model": model,
-                # 2026-08 决策：只留中文 prompt，不加官方英文方括号运镜指令
-                # （Hailuo 官方说明自然语言同样支持；_hailuo_camera_prefix 代码保留待用）
-                "prompt": req.prompt[:2000],
+                "prompt": (cam_prefix + req.prompt)[:2000],
                 "resolution": resolution,
                 "duration": self._resolve_v1_duration(req, model, resolution),
                 "prompt_optimizer": False,

@@ -60,6 +60,9 @@ class RepairRecord:
         target: 修复目标（'prompt' / 'ff_desc' / 'lf_desc' / 'keyframes[N].desc'）
         before: 修改前文本（便于回归测试断言）
         after: 修改后文本
+        detail: 修复说明（2026-09-03 现场压测补：约束代码侧普遍传 detail=... 报
+            "__init__() got an unexpected keyword argument 'detail'"；与 violation.detail
+            同语义，供回放/日志使用）
     """
 
     constraint_name: str
@@ -68,6 +71,7 @@ class RepairRecord:
     target: str
     before: str = ""
     after: str = ""
+    detail: str = ""
 
 
 @dataclass

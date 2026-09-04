@@ -37,6 +37,12 @@ PROMPT_TEMPLATE = _load_prompt("main")
 SYSTEM_PROMPT = _load_prompt("system")
 HOOK_PROMPT_TEMPLATE = _load_prompt("hook")
 
+# doubao-seed-2-1-turbo 独立 prompt 集（2026-09-03 接入）
+# 仅 system prompt 不同（XML schema + 2 few-shot + 显式步骤链），
+# main.md / hook.md 复用 deepseek 版（业务规则一致；输出 schema 一致）。
+# 加载方式：TEXT_PROVIDER=agent_plan 时 _auto_select_prompt() 返回 doubao 系列。
+DOUBAO_SYSTEM_PROMPT = _load_prompt("doubao_system")
+
 def _build_character_anchors(bank) -> str:
     """构建角色锚点字符串，用于注入 Prompt"""
     if not bank:
@@ -541,6 +547,182 @@ def parse_hook_response(raw: str) -> dict:
     """
     from shared.utils.json_repair import safe_parse_json_object
     return safe_parse_json_object(raw.strip())
+
+
+# ---------------------------------------------------------------------------
+# doubao-seed-2-1-turbo 独立 prompt（2026-09-03 接入）
+# 复用 main.md / hook.md 主体，仅 system prompt 走 doubao_system.md
+# (XML schema + 2 few-shot + 显式步骤链；适配 thinking=disabled)。
+# ---------------------------------------------------------------------------
+
+# v6.59：分级截断（段边界 → 句号 → 字符兜底），原 09-03 实装仅做句号边界，
+# 切在段中间会丢开场伏笔/场景切换/冲突起始。
+# 不设最低保留比例：段落边界 50% 也比字符切碎好，强制 ≥70% 会让某些章开篇丢失。
+_PLOT_UNIT_ENDERS = ("\n\n", "。", "！", "？", "；")
+
+
+def _slice_by_plot_unit(text: str, max_chars: int) -> str:
+    """分级截断长文本为长度上限 max_chars，按以下顺序寻找截断点：
+      1. 段落边界（\\n\\n）——保完整剧情单元（场景/场景切换/段间空行）
+      2. 句号边界（。！？；）——保完整句子
+      3. 字符边界兜底——超出 max_chars 也强制截断
+
+    总是用「最晚出现的边界」（rfind），最大化保留上下文。
+    即使段落边界只保留 50%，也比字符切碎好——后者丢的不止是字符而是「剧情意义」。
+    """
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars]
+    for ender in _PLOT_UNIT_ENDERS:
+        idx = truncated.rfind(ender)
+        if idx > 0:
+            return truncated[:idx + len(ender)]
+    return truncated
+
+
+def build_doubao_prompt(novel_text: str, bank=None, objects_bank=None,
+                        outline_anchor: str = "") -> str:
+    """doubao-seed-2-1-turbo 专用分镜生成 prompt.
+
+    与 build_prompt 区别：
+      - system prompt 走 DOUBAO_SYSTEM_PROMPT（XML schema 块 + few-shot + workflow 9 步）
+      - main 主体复用 PROMPT_TEMPLATE（业务规则统一，schema 同步）
+      - **novel_text 截断到 ≤1600 字符**（2026-09-03 现场压测：doubao-seed-2-1-turbo
+        窗口 256k 但输入越大推理时间线性变慢，4847 字章节会撞 180s 客户端超时；
+        1600 字对应 60-90s 短剧所需情节密度，足够覆盖核心事件链）
+      - **outline_anchor 精简到 ≤200 字符**（main_events/climax 等压缩成 1-2 行
+        锚点，避免与"workflow 仅内部思考"指令冲突——main_events 完整注入会让模型
+        把它当 schema 字段，输出 main_events 等额外字段）
+      - 同样注入 character_anchors / scene_object_anchors / vocab / local_ctx / knowledge_ctx /
+        cap_ctx / total_dur_ctx（与 build_prompt 对齐）
+
+    用法：TEXT_PROVIDER=agent_plan 时 main.py 调用本函数；其他 provider 仍走 build_prompt。
+    """
+    from shared.config import SHOT_COUNT_MIN, SHOT_COUNT_MAX
+    char_anchors = _build_character_anchors(bank) if bank else "无已知角色"
+    scene_object_anchors = _build_scene_object_anchors(objects_bank) if objects_bank else "无场景物体"
+
+    # 2026-09-03 现场压测：4847 字符全章节 + system 9.7k + 注入大纲 → 撞 180s 超时。
+    # 1600 字符 ≈ 1 章核心情节密度（60-90s 短剧足够），再大推理时间线性暴涨。
+    # v6.59 改进：分级截断——优先段边界（\n\n），再句号边界（。！？；），最后字符边界。
+    #   - 段边界最干净（保完整剧情单元）
+    #   - 句号次之（保完整句子）
+    #   - 字符最后兜底（可能切碎但不超 1600 字符）
+    _DOUBAO_NOVEL_MAX = 1600
+    if len(novel_text) > _DOUBAO_NOVEL_MAX:
+        novel_text = _slice_by_plot_unit(novel_text, _DOUBAO_NOVEL_MAX)
+
+    # 2026-09-03 现场压测：main_events 完整注入会让模型把"大纲"当 schema 字段
+    # 输出额外字段（gender/age_range/main_events 等），违反 R6 规则。
+    # 精简到核心 1-2 行：只保留主事件 3 条 + 高潮 + 情绪弧线各 1 行（≤200 字符）。
+    if outline_anchor and len(outline_anchor) > 200:
+        lines = outline_anchor.splitlines()
+        compact = []
+        char_count = 0
+        for ln in lines:
+            if not ln.strip():
+                continue
+            if char_count + len(ln) > 200:
+                break
+            compact.append(ln)
+            char_count += len(ln)
+        outline_anchor = "\n".join(compact) if compact else ""
+
+    # 注入 doubao 专属 system + 复用 main 主体
+    main_body = PROMPT_TEMPLATE.format(
+        novel_text=novel_text,
+        character_anchors=char_anchors,
+        scene_object_anchors=scene_object_anchors,
+        audio_instruction=_build_audio_instruction(),
+        shot_count_min=SHOT_COUNT_MIN,
+        shot_count_max=SHOT_COUNT_MAX,
+    )
+    # system 在前，main 在后（system 给高优先级身份/规则/示例，main 给任务细节）
+    prompt = DOUBAO_SYSTEM_PROMPT + "\n\n" + main_body
+
+    if outline_anchor:
+        prompt = prompt + "\n\n### 本章大纲（分镜必须覆盖以下事件与高潮）\n" + outline_anchor
+
+    vocab = _build_cinematic_vocab()
+    if vocab:
+        prompt = prompt + "\n" + vocab
+    local_ctx = _load_local_skill_context()
+    if local_ctx:
+        prompt = prompt + local_ctx
+    knowledge_ctx = _load_knowledge_skills(novel_text=novel_text)
+    if knowledge_ctx:
+        prompt = prompt + knowledge_ctx
+    cap_ctx = _duration_cap_guidance()
+    if cap_ctx:
+        prompt = prompt + cap_ctx
+    total_dur_ctx = _build_total_duration_constraint(shot_count_min=SHOT_COUNT_MIN,
+                                                     shot_count_max=SHOT_COUNT_MAX)
+    if total_dur_ctx:
+        prompt = prompt + total_dur_ctx
+
+    return prompt
+
+
+def build_doubao_hook_prompt(novel_text: str, bank=None, objects_bank=None,
+                             forbidden_lines: list[str] | None = None) -> str:
+    """doubao 专用钩子分镜 prompt（复用 HOOK_PROMPT_TEMPLATE + 注入 doubao 风格锚点）.
+
+    注：钩子规模较小，few-shot 示例在 system 里已覆盖 schema 与 frame_layouts；
+    此处仅复用 main 的钩子模板 + 与 build_hook_prompt 同等的角色/物体锚点注入。
+    """
+    char_anchor_str = ""
+    if bank:
+        char_anchors = _build_character_anchors(bank)
+        if char_anchors and char_anchors != "无已知角色":
+            char_anchor_str = (
+                "\n\n### 角色参考\n"
+                "以下是已有角色及其特征，prompt 中必须使用角色名（而非'公子''小姐'等模糊称呼）：\n"
+                f"{char_anchors}"
+            )
+    obj_anchor_str = ""
+    if objects_bank:
+        obj_anchors = _build_scene_object_anchors(objects_bank)
+        if obj_anchors and obj_anchors != "无场景物体":
+            obj_anchor_str = (
+                "\n\n### 场景物体尺寸参考\n"
+                "以下是已锚定的场景物体尺寸，钩子画面涉及这些物体时必须写出锚定尺寸、使用统一称呼：\n"
+                f"{obj_anchors}"
+            )
+    prompt = HOOK_PROMPT_TEMPLATE.replace("{novel_text}", novel_text)
+    prompt = prompt.replace("{character_anchors}", char_anchor_str)
+    prompt = prompt.replace("{scene_object_anchors}", obj_anchor_str)
+    forbidden_str = ""
+    if forbidden_lines:
+        _items = [ln.strip()[:40] for ln in forbidden_lines if ln and ln.strip()]
+        if _items:
+            forbidden_str = (
+                "\n\n### 禁止台词（主分镜已使用，钩子不得重复）\n"
+                "钩子的 narration_segment 不得与下列任何一条相同或近似"
+                "（仅标点/语气词/重复字差异也算重复），必须换一句不同台词：\n"
+                + "\n".join(f"  - {ln}" for ln in _items)
+            )
+    prompt = prompt.replace("{forbidden_lines}", forbidden_str)
+    knowledge_ctx = _load_knowledge_skills(novel_text=novel_text)
+    if knowledge_ctx:
+        prompt = prompt + knowledge_ctx
+    cap_ctx = _duration_cap_guidance()
+    if cap_ctx:
+        prompt = prompt + cap_ctx
+    return prompt
+
+
+def auto_select_prompt_builder(provider: str):
+    """根据 TEXT_PROVIDER 自动选择 prompt builder.
+
+    Returns:
+        (build_main_fn, build_hook_fn) 元组，分别对应主分镜和钩子分镜构建函数。
+
+    用法：main.py 不再 hardcode build_prompt / build_hook_prompt，而是
+    `main_fn, hook_fn = auto_select_prompt_builder(TEXT_PROVIDER)` 后调用。
+    """
+    if provider == "agent_plan":
+        return build_doubao_prompt, build_doubao_hook_prompt
+    return build_prompt, build_hook_prompt
 
 
 # 兼容别名

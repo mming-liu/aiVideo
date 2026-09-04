@@ -1823,8 +1823,8 @@ _THREAT_VISIBLE_HINTS = (
     # 动作（破水而出/窜出/攻击/持械）
     "破水", "窜出", "冲出", "跃出", "腾空", "刺向", "刺入", "下刺",
     "劈", "砍", "挥", "扑", "抓", "拔", "抽", "攥", "举", "握", "持", "执",
-    # 目光/五官
-    "目光", "盯", "瞪", "斜", "望", "看",
+    # 目光/五官（v6.50 修复：「斜」单字太宽，"斜阳"/"斜坡"等无关命中）
+    "目光", "盯", "瞪", "斜望", "斜视", "看", "望",
     # 贴靠实体表面（非水下）
     "船舷", "船帮", "船头", "船尾", "岸边", "堤",
 )
@@ -1883,13 +1883,50 @@ def _threat_visible_in(desc: str, characters: list | None = None) -> bool | None
     # "刺客被完整画出且戴动物面具"根因之一）。
     _NON_ENTITY_HINTS = ("轮廓", "若隐若现", "隐约", "水下", "水面下", "水底", "黑影")
     _WEAK_FORM_HINTS = ("身影", "黑影", "轮廓")
+    # v6.50 修复（2026-09-04）：否定语境优先级——窗口含「未/不/没/无 + 露出/露面
+    # /浮出/冒头/破水/跃出」类显式否定 → 即使命中 visible hint，也算不可见证据。
+    # 样本：「蒙面神秘人完全潜伏水面下未露出任何身体部位」——窗口命中"蒙面" +
+    # "露出"（"未露出"里的子串），旧逻辑判 True → 默认分支硬塞「禁止…黑影」与
+    # ff_desc 「一道黑影…潜伏水下」对称矛盾，矛盾自检器 fail-fast 拦下。修后
+    # 窗口含「未露出」类显式否定 → 跳过该位置（不当可见证据），函数最终返 False →
+    # 走不可见分支（精化模板「正向陈述黑影」绕开正则匹配）。
+    _NEG_TOKENS = ("未", "不", "没", "无", "无任何", "未有任何", "未露出任何")
+    _NEG_VISIBLE_TARGETS = ("露出", "露面", "浮出", "冒头", "冒出", "破水", "跃出", "探出",
+                            "露头", "出水面", "窜出", "冲出", "现身", "出现")
     for i in occ:
+        # 否定语境检查用更长后文窗口（默认 visible hint 窗口是 i+18 不够——
+        # 「没冒出」/「未露出」可能在威胁源别名后 13-25 字符处）。
+        _neg_window = desc[max(0, i - 8):i + 30]
+        _has_neg = any(
+            (neg + tgt in _neg_window or tgt + neg in _neg_window)
+            for neg in _NEG_TOKENS
+            for tgt in _NEG_VISIBLE_TARGETS
+        )
+        if _has_neg:
+            # 找到「否定 + 可见动作」组合 → 跳过该位置（不当可见证据）
+            continue
+        # 无否定语境 → 走原 visible hint 判定（用原 18 字符窗口）
         window = desc[max(0, i - 8):i + 18]
         hit = [h for h in _THREAT_VISIBLE_HINTS if h in window]
         if not hit:
             continue
         # 命中全是弱形体词且窗口含非实体词 → 不可见
         if all(h in _WEAK_FORM_HINTS for h in hit) and any(n in window for n in _NON_ENTITY_HINTS):
+            continue
+        # v6.50 修复（2026-09-04）：「露出 Xcm/几厘米/一截/小截」= 部分露出
+        # （弱实体）→ 不当完整可见证据。样本 hook ff_desc「头顶斜上方一道黑影
+        # 潜伏水下，仅头顶约 2cm 露出水面」——命中"露出"+窗口含"2cm"，应判
+        # 不可见 → 走精化分支，否则默认分支硬塞「禁止…黑影」与描述「一道黑影」
+        # 对称矛盾。
+        # 注意：只接受具体小尺寸词，不含"只/部分/仅"（太宽泛，会把「只露头肩」
+        # 「部分露出上半身」等真实可见也误判）。
+        _PARTIAL_HINTS = ("露出", "露面", "露头", "浮出", "冒出")
+        _PARTIAL_QUANTIFIERS = ("小截", "一截", "Xcm", "cm",
+                                 "几厘米", "2cm", "3cm", "5cm", "10cm",
+                                 "0.5cm", "1cm", "1.5cm",
+                                 "0.1", "0.2", "0.3")
+        if any(h in _PARTIAL_HINTS for h in hit) and \
+           any(q in window for q in _PARTIAL_QUANTIFIERS):
             continue
         return True
     return False

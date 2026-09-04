@@ -117,6 +117,19 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 - `VOLCENGINE_VIDEO_DURATION`: 视频时长 override（秒，默认 0=按分镜 duration_sec）
 - `VOLCENGINE_VIDEO_POLL_INTERVAL` / `VOLCENGINE_VIDEO_MAX_POLL_ATTEMPTS`: 视频任务轮询参数
 
+### 火山方舟 Agent Plan 文本通道（2026-09-03 新增，doubao-seed-2-1-turbo 分解模型）
+
+`TEXT_PROVIDER=agent_plan` 走 `/api/plan/v3/chat/completions`（OpenAI 兼容），作为 step01 分镜分解的备选/对照模型（默认仍 `deepseek`，不切默认）。
+
+- 鉴权复用 `AGENT_PLAN_API_KEY`（与图片/视频同专属 key，**与 `VOLCENGINE_API_KEY` 不通用**——普通 ARK key 报 401）
+- 模型默认 `doubao-seed-2-1-turbo`（按 `AGENT_PLAN_TEXT_MODEL` 覆盖）
+- 支持 `response_format json_schema`（与 deepseek 路径同款 strict 结构化输出），用于 step01 分镜 JSON 强约束
+- 并发限速走 `AGENT_PLAN_TEXT_RPM`（默认 10 RPM，cooldown=6s）
+- 思考模式 `AGENT_PLAN_TEXT_REASONING_EFFORT`（none/minimal/low/medium/high/xhigh/max，默认 `none` 关闭）
+- 单次输出 token 上限 `AGENT_PLAN_TEXT_MAX_TOKENS`（0/空=不传；推荐分镜 40000-50000，钩子 8000，修复轮 50000）
+- 错误码映射：401→鉴权失败（提示申请专属 key）、403→套餐/燃料耗尽、5xx→4 次指数退避、429→按 `retry-after` 等待
+- Key 缺失时构造直接 `ValueError`（含「AGENT_PLAN_API_KEY」+「专属 key」文案，与 image/video provider 对齐）
+
 **Seedream/Seedance 模型能力矩阵**（值来自官方文档 2026-08 核对，实现见 `shared/model_caps.py`，provider 按模型子串查表收敛参数）：
 
 | 模型 | 时长(秒) | 分辨率 | 参考图(reference_image) | 有声(generate_audio) | 备注 |
@@ -210,8 +223,9 @@ step01 asset_extractor.py（LLM 提取，schema: SCENE_ASSETS_SCHEMA / PROPS_SCH
 - **Dataclass 模型**：请求和结果用 dataclass 定义
 
 **Provider 清单**（`_auto_register()` 注册）：
-- `_image_gen/`：`agnes`（OpenAI 兼容）、`bailian`（百炼 qwen-image）、`volcengine`（Seedream）、`minimax`（image-01）
-- `_video_gen/`：`dashscope`（通义万相）、`dashscope_http`（KF2V 首尾帧）、`agnes`、`bailian`（wan2.7/happyhorse）、`volcengine`（Seedance）、`minimax`（Hailuo v1 + H3 v2）
+- `_image_gen/`：`agnes`（OpenAI 兼容）、`bailian`（百炼 qwen-image）、`volcengine`（Seedream）、`minimax`（image-01）、`agent_plan`（火山方舟 Plan 通道 Seedream）
+- `_video_gen/`：`dashscope`（通义万相）、`dashscope_http`（KF2V 首尾帧）、`agnes`、`bailian`（wan2.7/happyhorse）、`volcengine`（Seedance）、`minimax`（Hailuo v1 + H3 v2）、`agent_plan`（火山方舟 Plan 通道 Seedance）
+- `_text_gen/`：`deepseek`（默认，OpenAI 兼容 Responses API）、`dashscope`（百炼 Qwen）、`agnes`（OpenAI 兼容）、`agent_plan`（火山方舟 Plan 通道 doubao-seed-2-1-turbo，2026-09-03 接入）
 - `_text_gen/`：DashScope Qwen、DeepSeek、Agnes
 - `tts/`：DashScope SDK、DashScope HTTP、OpenAI
 

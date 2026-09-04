@@ -244,6 +244,17 @@ AGENT_PLAN_VIDEO_POLL_INTERVAL = int(os.getenv("AGENT_PLAN_VIDEO_POLL_INTERVAL",
 AGENT_PLAN_VIDEO_MAX_POLL_ATTEMPTS = int(os.getenv("AGENT_PLAN_VIDEO_MAX_POLL_ATTEMPTS", "25"))
 # 套餐并发护栏（Agent Plan 按 Small 套餐并发数 2，避免按 VPS 申请 10 并发被拒）
 AGENT_PLAN_MAX_CONCURRENCY = int(os.getenv("AGENT_PLAN_MAX_CONCURRENCY", "2"))
+# 文生文（分镜/钩子/修复轮）— 默认 doubao-seed-2-1-turbo（2026-09-03 接入）
+# 鉴权复用 AGENT_PLAN_API_KEY（与图片/视频同专属 key）
+# 端点：POST {base}/chat/completions（OpenAI 兼容）
+AGENT_PLAN_TEXT_MODEL = os.getenv("AGENT_PLAN_TEXT_MODEL", "doubao-seed-2-1-turbo")
+AGENT_PLAN_TEXT_RPM = int(os.getenv("AGENT_PLAN_TEXT_RPM", "10"))
+# 思考模式强度：none/minimal/low/medium/high/xhigh/max（none 关闭；与 deepseek 路径同款）
+AGENT_PLAN_TEXT_REASONING_EFFORT = os.getenv("AGENT_PLAN_TEXT_REASONING_EFFORT", "none")
+# 单次输出 token 上限（0/None = 不传 max_tokens）
+AGENT_PLAN_TEXT_MAX_TOKENS: Optional[int] = (
+    int(os.getenv("AGENT_PLAN_TEXT_MAX_TOKENS") or "0") or None
+)
 
 
 # ============================================================================

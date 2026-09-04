@@ -51,6 +51,15 @@ SCRIPT_FILE = OUTPUT_FILE
 from shared.tee_logger import get_logger
 _logger = get_logger(CHAPTER_DIR / "step01.log", console_level="INFO")
 
+# v6.59 (2026-09-04)：检测 shell 环境变量是否覆盖 .env.content 的 PROVIDER 设置。
+# 不阻断，仅 WARN 提示。详细设计见 shared/env_guard.py 顶部。
+# 切到 agent_plan/doubao 调试时建议 raise_if_override=True 强约束，避免误以为 .env.content 生效。
+from shared.env_guard import warn_shell_overrides as _warn_shell_overrides
+_warn_shell_overrides(
+    ["TEXT_PROVIDER", "IMAGE_PROVIDER", "VIDEO_PROVIDER", "TTS_PROVIDER"],
+    logger=_logger,
+)
+
 
 # ============================================================================
 # 控制台静默：把运行期间的 print() 全部重定向到 step01.log
@@ -117,7 +126,16 @@ from step01_script_gen.prompts import (
     _load_gap_analysis_context, _build_regen_iron_rules,
     _build_character_anchors,
     _load_knowledge_skills, _load_local_skill_context,
+    build_doubao_prompt, build_doubao_hook_prompt, auto_select_prompt_builder,
 )
+
+# v2026-09-03: 按 TEXT_PROVIDER 自动选择 prompt builder。
+# agent_plan（doubao-seed-2-1-turbo）→ doubao 专属（XML schema + few-shot + workflow）
+# 其他 provider → 沿用 deepseek 调优的 build_prompt / build_hook_prompt
+_TEXT_PROVIDER = os.getenv("TEXT_PROVIDER", "deepseek").strip().lower()
+build_prompt, build_hook_prompt = auto_select_prompt_builder(_TEXT_PROVIDER)
+if _TEXT_PROVIDER == "agent_plan":
+    _logger.info(f"[INFO] 使用 doubao 专属 prompt (provider={_TEXT_PROVIDER})")
 from step01_script_gen.character_extractor import extract_characters
 from step01_script_gen.object_extractor import extract_scene_objects
 from step01_script_gen.asset_extractor import extract_scene_assets, extract_props

@@ -71,11 +71,19 @@ def _int_duration(value, cap: int | None = None) -> int:
 
 
 def _clip_prompt(req, model: str) -> str:
-    """按模型 prompt 长度上限截断（wan2.7/happyhorse=5000，官方 Input Requirements；未注册不截）."""
+    """按模型 prompt 长度上限截断（wan2.7/happyhorse=5000，官方 Input Requirements；未注册不截）.
+
+    v6.58 (Phase C-1): 如果有结构化 camera_movement 字段，自动提到 prompt 最前。
+    智能改写 (prompt_extend=True) 会优先看到运镜指令，权重更高。
+    幂等：已含"运镜："段则跳过（避免重复）。
+    """
+    prompt = req.prompt
+    if req.camera_movement and "运镜：" not in prompt[:20]:
+        prompt = f"运镜：{req.camera_movement}\n{prompt}"
     cap = _model_prompt_cap(model)
     if cap and cap > 0:
-        return req.prompt[:cap]
-    return req.prompt
+        return prompt[:cap]
+    return prompt
 
 
 def _append_image_refs(prompt: str, n: int) -> str:

@@ -75,6 +75,26 @@ class TextGenCfg:
     AGNES_TEXT_SUBMIT_RETRIES: int = int(os.getenv("AGNES_TEXT_SUBMIT_RETRIES", "3"))
     AGNES_TEXT_SUBMIT_RETRY_DELAY: int = int(os.getenv("AGNES_TEXT_SUBMIT_RETRY_DELAY", "30"))
 
+    # ---- 火山方舟 Agent Plan（doubao-seed-2-1-turbo 文本通道，2026-09-03 接入）----
+    # 鉴权复用 .env.keys 中 AGENT_PLAN_API_KEY（与图片/视频同专属 key，不通用）
+    # 端点：POST {AGENT_PLAN_BASE_URL}/chat/completions（OpenAI 兼容）
+    AGENT_PLAN_API_KEY: str = os.getenv("AGENT_PLAN_API_KEY", "")
+    AGENT_PLAN_BASE_URL: str = os.getenv(
+        "AGENT_PLAN_BASE_URL", "https://ark.cn-beijing.volces.com/api/plan/v3"
+    )
+    AGENT_PLAN_TEXT_MODEL: str = os.getenv(
+        "AGENT_PLAN_TEXT_MODEL", "doubao-seed-2-1-turbo"
+    )
+    AGENT_PLAN_TEXT_RPM: int = int(os.getenv("AGENT_PLAN_TEXT_RPM", "10"))
+    AGENT_PLAN_TEXT_REASONING_EFFORT: str = os.getenv(
+        "AGENT_PLAN_TEXT_REASONING_EFFORT", "none"
+    )
+    # 2026-09-04 现场压测：0=不传 → 走 agent_plan_provider.py 的 16384 fallback
+    # （不要走 65536 —— 实测 70k input + 65536 output 容量下生成 3-5 分钟慢章）
+    AGENT_PLAN_TEXT_MAX_TOKENS: Optional[int] = (
+        int(os.getenv("AGENT_PLAN_TEXT_MAX_TOKENS") or "16384") or None
+    )
+
     @classmethod
     def validate(cls) -> None:
         """验证当前供应商所需配置是否完整."""
@@ -82,6 +102,11 @@ class TextGenCfg:
             raise RuntimeError("TEXT_PROVIDER=dashscope 需要 DASHSCOPE_API_KEY")
         if cls.PROVIDER == "deepseek" and not cls.DEEPSEEK_API_KEY:
             raise RuntimeError("TEXT_PROVIDER=deepseek 需要 DEEPSEEK_API_KEY")
+        if cls.PROVIDER == "agent_plan" and not cls.AGENT_PLAN_API_KEY:
+            raise RuntimeError(
+                "TEXT_PROVIDER=agent_plan 需要 AGENT_PLAN_API_KEY（.env.keys 中设置，"
+                "Agent Plan 专属 key，与 VOLCENGINE_API_KEY 不通用）"
+            )
         if cls.PROVIDER == "agnes":
             # M7 修复 2026-08-14：补 BASE_URL 校验（此前只查 Key，URL 为空时
             # 请求打到相对路径/异常，错误信息难定位）。

@@ -61,6 +61,8 @@ from .short_shot_merge import ShortShotMergeConstraint  # F9 短镜合并（v6.4
 from .ff_lf_temporal import FfLfTemporalConstraint  # F10 ff/lf 时序协议（v6.50, 08-28）
 from .frame_spec_consistency import FrameSpecConsistencyConstraint  # S v6.57+ per-frame spec 一致性
 from .self_review import SelfReviewConstraint  # SR（LLM 自检回路）
+from .split_content_similarity import SplitContentSimilarityConstraint  # A7 拆分镜内容重复检测（v6.58, 09-03）
+from .mandatory_biz_fields import MandatoryBizFieldsConstraint  # B1 业务必填字段兜底（doubao 适配，2026-09-04）
 
 ALL_CONSTRAINTS.extend([
     # Phase 2
@@ -116,6 +118,8 @@ ALL_CONSTRAINTS.extend([
     FfLfTemporalConstraint(),  # F10 ff 时序协议：本镜有攻击时 ff 禁结束态（v6.50, 08-28）
     FrameSpecConsistencyConstraint(),  # S per-frame spec 必填 + 完整性 + desc 一致性（v6.57+）
     SelfReviewConstraint(),  # SR opt-in via SELF_REVIEW_ENABLED=1
+    SplitContentSimilarityConstraint(),  # A7 拆分镜内容重复检测（v6.58, 09-03）
+    MandatoryBizFieldsConstraint(),  # B1 业务必填字段兜底（doubao 适配，2026-09-04）
 ])
 
 __all__ = [

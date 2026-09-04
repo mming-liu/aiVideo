@@ -38,6 +38,9 @@ class VideoGenerationRequest:
     seed: Optional[int] = None
     # 推理步数（Agnes API 支持）
     num_inference_steps: Optional[int] = None
+    # 运镜指令（中文，如"推近"、"跟拍"、"固定机位"），由 step01 camera_movement 字段传入
+    # provider 自行决定如何消费：MiniMax 转方括号指令、Seedance/Bailian 提到 prompt 开头
+    camera_movement: str = ""
 
     def __post_init__(self):
         if self.extra_keyframe_paths is None:

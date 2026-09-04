@@ -330,7 +330,13 @@ class VolcengineVideoService(VideoGenerationService):
         """
         from shared.model_caps import get_seedance_cap
         cap = get_seedance_cap(model)
-        content: list[dict] = [{"type": "text", "text": req.prompt}]
+        # v6.58 (Phase C-1): 结构化 camera_movement 字段提到 prompt 最前，提升权重。
+        # 精简路径（_build_seedance_concise_prompt）已带"运镜：XXX"段，自动跳过；
+        # 完整 prompt 路径才会真正注入。
+        text = req.prompt
+        if req.camera_movement and "运镜：" not in text[:20]:
+            text = f"运镜：{req.camera_movement}\n{text}"
+        content: list[dict] = [{"type": "text", "text": text}]
 
         def _append_image(path, role):
             url = _encode_media(path)
