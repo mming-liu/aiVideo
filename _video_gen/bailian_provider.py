@@ -28,7 +28,7 @@ from shared.config import (
     BAILIAN_VIDEO_POLL_INTERVAL,
     BAILIAN_VIDEO_MAX_POLL_ATTEMPTS,
 )
-from shared.model_caps import _model_duration_cap, _model_prompt_cap
+from shared.model_caps import _model_duration_cap, _model_prompt_cap, video_supports_param
 
 # 初始化 Bailian workspace URL
 if BAILIAN_WORKSPACE_ID and BAILIAN_REGION:
@@ -42,16 +42,11 @@ from shared.log_utils import verbose_write as _verbose_write  # noqa: E402
 #   BAILIAN_T2V_MODEL=wan2.7-t2v-2026-06-12,happyhorse-1.1-t2v
 #   BAILIAN_I2V_MODEL=wan2.7-i2v-2026-04-25
 #   BAILIAN_I2V_FALLBACK_MODELS=happyhorse-1.0-i2v,happyhorse-1.1-i2v
-DEFAULT_T2V_MODELS = [m.strip() for m in BAILIAN_T2V_MODEL.split(",") if m.strip()] if BAILIAN_T2V_MODEL else ["wan2.7-t2v-2026-06-12"]
-DEFAULT_I2V_MODELS = (
-    [BAILIAN_I2V_MODEL] + BAILIAN_I2V_FALLBACK_MODELS
-    if BAILIAN_I2V_MODEL else
-    ["wan2.7-i2v-2026-04-25", "happyhorse-1.0-i2v", "happyhorse-1.1-i2v"]
-)
-DEFAULT_R2V_MODELS = (
-    [m.strip() for m in BAILIAN_R2V_MODEL.split(",") if m.strip()]
-    if BAILIAN_R2V_MODEL else ["wan2.7-r2v-2026-06-12"]
-)
+# 注意：config 默认值永不为空，此处不再保留字面量兜底副本（历史双份会在模型
+# 升级时漏改；兜底值唯一来源 = shared/config.py 的 env 默认）。
+DEFAULT_T2V_MODELS = [m.strip() for m in BAILIAN_T2V_MODEL.split(",") if m.strip()]
+DEFAULT_I2V_MODELS = [BAILIAN_I2V_MODEL] + BAILIAN_I2V_FALLBACK_MODELS
+DEFAULT_R2V_MODELS = [m.strip() for m in BAILIAN_R2V_MODEL.split(",") if m.strip()]
 
 
 def _int_duration(value, cap: int | None = None) -> int:
@@ -64,7 +59,7 @@ def _int_duration(value, cap: int | None = None) -> int:
     try:
         d = int(float(value))
     except (TypeError, ValueError):
-        d = 5
+        d = BAILIAN_VIDEO_DURATION  # 兜底时长单源 shared/config.py（默认 5）
     if cap and cap > 0:
         d = min(d, cap)
     return d
@@ -420,14 +415,14 @@ class BailianVideoService(VideoGenerationService):
         # 进剩余名额（前 N-1 原图 + 尾部拼参考表）——参考图必须全部传过去，
         # 不再丢弃尾部（2026-08-15 需求）。
         from shared.ref_compose import get_ref_limit, fit_flat
-        media_limit = get_ref_limit(model, default=5)
+        media_limit = get_ref_limit(model)
         n_frames = (1 if req.image_path else 0) + (1 if req.last_frame_image_path else 0)
         ref_budget = max(1, media_limit - n_frames)
 
         ref_paths = list(req.reference_paths or [])
         if len(ref_paths) > ref_budget:
-            from shared.paths import vimax_working_dir
-            sheet_dir = vimax_working_dir() / "shots" / str(req.clip_index)
+            from shared.paths import shot_work_dir
+            sheet_dir = shot_work_dir(req.clip_index)
             composed = fit_flat(ref_paths, ref_budget, sheet_dir, f"r2v{req.clip_index}")
             _verbose_write(
                 f"  [镜头{req.clip_index}] {model} media 上限 {media_limit}（含首尾帧×{n_frames}），"
@@ -477,11 +472,13 @@ class BailianVideoService(VideoGenerationService):
             'duration': _int_duration(req.duration or self._duration, _model_duration_cap(model)),
             'watermark': False,
         }
-        # happyhorse 不支持 negative_prompt；wan 支持
-        if not is_happyhorse and req.negative_prompt:
+        # happyhorse 不支持 negative_prompt；wan 支持（支持位注册表: model_caps.video_supports_param）
+        if req.negative_prompt and video_supports_param(model, "negative_prompt"):
             kwargs['negative_prompt'] = req.negative_prompt
 
         if audio_url:
+            # 注：能力表（model_caps._VIDEO_PARAM_UNSUPPORTED）标记 happyhorse 不支持
+            # audio_url；此处维持现状透传（当前 audio_url 仅 wan 路径会产生）。
             kwargs['reference_audio'] = audio_url
         if req.seed is not None:
             kwargs['seed'] = req.seed
@@ -594,12 +591,10 @@ class BailianVideoService(VideoGenerationService):
         import shutil
 
         # 保存路径 (使用 clip_index 命名)
-        from shared.paths import vimax_working_dir
+        from shared.paths import shot_video_file
 
-        work_dir = vimax_working_dir()
-        save_dir = work_dir / "shots" / str(req.clip_index)
-        save_dir.mkdir(parents=True, exist_ok=True)
-        save_path = save_dir / "video.mp4"
+        save_path = shot_video_file(req.clip_index)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
 
         _verbose_write(f"  [镜头{req.clip_index}] 下载视频: {video_url}")
 

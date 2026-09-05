@@ -12,6 +12,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_PROJECT_ROOT / ".env.content")
 load_dotenv(_PROJECT_ROOT / ".env.keys")
 
+from shared.constants import TEXT_PROVIDER_DEFAULT  # 默认值单源 shared/constants.py
+
 
 
 class TextGenCfg:
@@ -21,7 +23,7 @@ class TextGenCfg:
     # dashscope → 阿里云百炼 DashScope (Qwen)
     # deepseek  → DeepSeek (OpenAI 兼容接口) [默认]
     # agnes     → agnes ai (OpenAI 兼容协议)
-    PROVIDER: str = os.getenv("TEXT_PROVIDER", "deepseek")
+    PROVIDER: str = os.getenv("TEXT_PROVIDER", TEXT_PROVIDER_DEFAULT)
 
     # ---- DashScope (百炼) ----
     DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
@@ -89,10 +91,11 @@ class TextGenCfg:
     AGENT_PLAN_TEXT_REASONING_EFFORT: str = os.getenv(
         "AGENT_PLAN_TEXT_REASONING_EFFORT", "none"
     )
-    # 2026-09-04 现场压测：0=不传 → 走 agent_plan_provider.py 的 16384 fallback
+    # 0=不传 → 走 agent_plan_provider.py 的 16384 fallback
     # （不要走 65536 —— 实测 70k input + 65536 output 容量下生成 3-5 分钟慢章）
+    # 默认 None（不传），显式设 AGENT_PLAN_TEXT_MAX_TOKENS 才传值。
     AGENT_PLAN_TEXT_MAX_TOKENS: Optional[int] = (
-        int(os.getenv("AGENT_PLAN_TEXT_MAX_TOKENS") or "16384") or None
+        int(os.getenv("AGENT_PLAN_TEXT_MAX_TOKENS") or "0") or None
     )
 
     @classmethod

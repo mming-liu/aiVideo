@@ -49,6 +49,8 @@ from shared.config import (
     AGENT_PLAN_VIDEO_RESOLUTION,
     AGENT_PLAN_MAX_CONCURRENCY,
 )
+from shared.constants import AGENT_PLAN_VIDEO_SUBMIT_RETRIES
+from shared.model_caps import clamp_duration, resolve_resolution
 from shared.log_utils import verbose_write
 
 _verbose_write = partial(verbose_write, log_file="step02b.log")
@@ -56,8 +58,10 @@ _verbose_write = partial(verbose_write, log_file="step02b.log")
 _STATUS_SUCCEEDED = ("succeeded", "success", "done", "completed")
 _STATUS_FAILED = ("failed", "cancelled", "error", "expired")
 
-_RES_ORDER = ("480p", "720p", "1080p", "4k")
 _RATIO_VALID = ("16:9", "9:16", "1:1", "adaptive")
+# ⚠️ 与 volcengine provider 的已知分歧（本次只上移共用函数，不做行为对齐）：
+# 1) 本 provider 无 prompt 压缩兜底（volcengine 有 >cap-40 触发的压缩链）；
+# 2) 429 处理策略不同。对齐与否待后续决策（见硬编码清理计划 C1）。
 
 
 def _encode_media(path: Optional[str]) -> Optional[str]:
@@ -79,38 +83,8 @@ def _encode_media(path: Optional[str]) -> Optional[str]:
         return None
 
 
-def _clamp_duration(value, cap) -> int:
-    """夹到模型支持时长区间 [cap.duration_range]；解析失败回退区间中值."""
-    lo, hi = cap.duration_range
-    try:
-        d = int(float(value))
-    except (TypeError, ValueError):
-        return (lo + hi) // 2
-    return max(lo, min(hi, d))
-
-
-def _resolve_resolution(req: VideoGenerationRequest, cap) -> str:
-    """按模型能力推导分辨率（与 volcengine 同款逻辑）."""
-    override = (AGENT_PLAN_VIDEO_RESOLUTION or "").strip().lower()
-    size = (req.size or "").strip().lower().replace("*", "x")
-    if override in _RES_ORDER:
-        derived = override
-    else:
-        try:
-            w, h = size.split("x")
-            w, h = int(w), int(h)
-        except (ValueError, AttributeError):
-            derived = "720p"
-        else:
-            short = min(w, h)
-            derived = "1080p" if short >= 1080 else ("720p" if short >= 720 else "480p")
-    if derived in cap.resolutions:
-        return derived
-    best = cap.resolutions[0]
-    for r in cap.resolutions:
-        if _RES_ORDER.index(r) <= _RES_ORDER.index(derived):
-            best = r
-    return best
+# _clamp_duration / _RES_ORDER / _resolve_resolution 已上移 shared/model_caps.py
+# （clamp_duration / resolve_resolution，与 volcengine 共用单实现）。
 
 
 def _resolve_ratio(req: VideoGenerationRequest, cap, is_first_last_frames: bool = False) -> str:
@@ -199,11 +173,11 @@ class AgentPlanVideoService(VideoGenerationService):
                     f"r2v 模式请将 AGENT_PLAN_T2V_MODEL 设为 2.0/2.5 系列模型"
                 )
             from shared.ref_compose import get_ref_limit, fit_flat
-            ref_limit = get_ref_limit(model, default=12)
+            ref_limit = get_ref_limit(model)
             ref_paths = [p for p in (req.reference_paths or []) if p and Path(p).exists()]
             if len(ref_paths) > ref_limit:
-                from shared.paths import vimax_working_dir
-                sheet_dir = vimax_working_dir() / "shots" / str(req.clip_index)
+                from shared.paths import shot_work_dir
+                sheet_dir = shot_work_dir(req.clip_index)
                 ref_paths = fit_flat(ref_paths, ref_limit, sheet_dir, f"r2v{req.clip_index}")
                 _verbose_write(
                     f"  [镜头{req.clip_index}] Agent Plan 参考图 {len(req.reference_paths)} 张超上限 "
@@ -250,9 +224,9 @@ class AgentPlanVideoService(VideoGenerationService):
         payload: dict = {
             "model": model,
             "content": self._build_content(req, model),
-            "resolution": _resolve_resolution(req, cap),
+            "resolution": resolve_resolution(req.size, cap, AGENT_PLAN_VIDEO_RESOLUTION),
             "ratio": _resolve_ratio(req, cap, is_first_last_frames),
-            "duration": _clamp_duration(AGENT_PLAN_VIDEO_DURATION or req.duration, cap),
+            "duration": clamp_duration(AGENT_PLAN_VIDEO_DURATION or req.duration, cap),
             "watermark": False,
         }
         if cap.supports_generate_audio:
@@ -283,7 +257,7 @@ class AgentPlanVideoService(VideoGenerationService):
 
         last_error = ""
         backoff = 2.0
-        for attempt in range(1, 5):  # 简化版：4 次重试（与 volcengine 共享 5xx/429 容忍）
+        for attempt in range(1, 1 + AGENT_PLAN_VIDEO_SUBMIT_RETRIES):  # 简化版：4 次重试（与 volcengine 共享 5xx/429 容忍）
             try:
                 resp = requests.post(
                     f"{self._base_url}/contents/generations/tasks",
@@ -441,12 +415,10 @@ class AgentPlanVideoService(VideoGenerationService):
     def _download(self, req: VideoGenerationRequest, video_url: str) -> VideoGenerationResult:
         import shutil
         import tempfile
-        from shared.paths import vimax_working_dir
+        from shared.paths import shot_video_file
 
-        work_dir = vimax_working_dir()
-        save_dir = work_dir / "shots" / str(req.clip_index)
-        save_dir.mkdir(parents=True, exist_ok=True)
-        save_path = save_dir / "video.mp4"
+        save_path = shot_video_file(req.clip_index)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
 
         _verbose_write(f"  [镜头{req.clip_index}] Agent Plan 下载视频: {video_url}")
         try:

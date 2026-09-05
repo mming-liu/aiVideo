@@ -30,6 +30,12 @@ from vimax.interfaces import (
 )
 
 from shared.character_bank import CharacterBank, StyleBank
+from shared.paths import (
+    script_file,
+    shot_work_dir,
+    FIRST_FRAME_FILENAME,
+    LAST_FRAME_FILENAME,
+)
 
 import hashlib
 
@@ -331,7 +337,7 @@ async def _gen_frames_for_camera_group(
         shot_dir = shots_dir / str(idx)
 
         # -- 首帧生成（串行：需要前镜锚定） --
-        ff_path = shot_dir / "first_frame.png"
+        ff_path = shot_dir / FIRST_FRAME_FILENAME
         refs = _build_reference_list(
             shot, bank, style_bank, characters_data, camera_first_frames,
             cam_idx=cam_idx, is_first_in_cam=is_first_in_cam,
@@ -1284,7 +1290,7 @@ def _compose_frame_refs_by_category(
     ]
     n_total = len({p for _, items in buckets for p in (items or []) if p and Path(p).exists()})
     frame_tag = "ff" if for_frame == "首帧" else "lf"
-    shot_dir = vimax_working_dir() / "shots" / str(shot.get("index", 0))
+    shot_dir = shot_work_dir(shot.get("index", 0))
     composed = fit_refs(buckets, max_refs, shot_dir, frame_tag)
     if n_total > max_refs:
         _bridge_log(
@@ -1642,9 +1648,9 @@ def _inject_object_size_anchor(shot: dict, text: str) -> str:
     # 尺寸一律以本函数注入的 scene_objects 锚为准。幂等：剥完再跑无变化。
     text = re.sub(r"[（(][^（）()]*\d+(?:\.\d+)?米[^（）()]*[）)]", "", text)
     try:
-        from shared.paths import chapter_dir
+        from shared.paths import script_file
         import json as _json
-        script_path = chapter_dir() / "script_result.json"
+        script_path = script_file()
         if not script_path.exists():
             return text
         script = _json.load(open(script_path, encoding="utf-8"))
@@ -2132,8 +2138,8 @@ def _extract_char_layout(
         # 构图约束不是动作状态，不应随首帧省略。
         try:
             import json as _json
-            from shared.paths import chapter_dir
-            script_path = chapter_dir() / "script_result.json"
+            from shared.paths import script_file
+            script_path = script_file()
             if script_path.exists():
                 script = _json.load(open(script_path, encoding="utf-8"))
                 objs = script.get("scene_objects", {}) or {}
@@ -2226,8 +2232,8 @@ def _extract_prop_layout(
         # 从 script_result.json 读 prop_assets（道具名 + consistent_terms）
         try:
             import json as _json
-            from shared.paths import chapter_dir
-            script_path = chapter_dir() / "script_result.json"
+            from shared.paths import script_file
+            script_path = script_file()
             if not script_path.exists():
                 return ""
             script = _json.load(open(script_path, encoding="utf-8"))
@@ -2898,7 +2904,7 @@ async def _gen_first_frame_async(
     idx = shot["index"]
     shot_dir = shots_dir / str(idx)
     shot_dir.mkdir(parents=True, exist_ok=True)
-    ff_path = shot_dir / "first_frame.png"
+    ff_path = shot_dir / FIRST_FRAME_FILENAME
     ff_hash_path = shot_dir / "frame_hash.txt"
 
     # 日志输出到 step02.log，不污染控制台
@@ -3129,7 +3135,7 @@ async def _gen_last_frame_async(
     idx = shot["index"]
     shot_dir = shots_dir / str(idx)
     shot_dir.mkdir(parents=True, exist_ok=True)
-    lf_path = shot_dir / "last_frame.png"
+    lf_path = shot_dir / LAST_FRAME_FILENAME
     # 尾帧独立哈希文件：首帧/尾帧的参考图不同 → 哈希值不同，
     # 共用一个文件会互相覆盖，导致每次运行都误判失效、双双重做
     lf_hash_path = shot_dir / "last_frame_hash.txt"
@@ -3649,7 +3655,7 @@ async def gen_shot_frames(
     shot_dir.mkdir(parents=True, exist_ok=True)
 
     ff_ = {}
-    ff_path = shot_dir / "first_frame.png"
+    ff_path = shot_dir / FIRST_FRAME_FILENAME
     empty_scene = is_empty_scene(shot, characters or [])
 
     # 首帧参考图：场景资产图 + 出镜角色肖像 + 出镜道具资产图（图生图锚定）。

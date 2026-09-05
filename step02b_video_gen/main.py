@@ -26,7 +26,10 @@ import asyncio
 import json
 import os
 
-from shared.paths import script_file, vimax_working_dir, chapter_dir
+from shared.paths import (
+    script_file, vimax_working_dir, chapter_dir,
+    vimax_shots_dir, SHOT_VIDEO_FILENAME, FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME,
+)
 from shared.tee_logger import get_logger
 from step02_video_gen.submit_poll import _submit_video, _get_shot_hash, _failed_videos
 from shared.vimax_adapters import VideoGeneratorAiVideoAdapter
@@ -57,8 +60,8 @@ async def gen_all_videos(script: dict, working_dir: Path, script_file_path: Path
     shots_dir = working_dir / "shots"
     script_mtime = script_file_path.stat().st_mtime if script_file_path.exists() else None
 
-    # 加载配置
-    VIDEO_CONCURRENCY = int(os.getenv("VIDEO_CONCURRENCY", "4"))
+    # 加载配置（并发单源 shared/config.py，默认 4）
+    from shared.config import VIDEO_CONCURRENCY
     REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
 
     # Adapter
@@ -130,7 +133,7 @@ async def _process_one_shot_skip_frames(
 
     idx = shot["index"]
     shot_dir = shots_dir / str(idx)
-    video_path = shot_dir / "video.mp4"
+    video_path = shot_dir / SHOT_VIDEO_FILENAME
 
     # Cache check（force=True 时跳过）
     shot_hash = _get_shot_hash(shot, script)
@@ -139,10 +142,9 @@ async def _process_one_shot_skip_frames(
         if hash_path.exists():
             old_hash = hash_path.read_text(encoding="utf-8").strip()
             if old_hash == shot_hash:
-                from shared.paths import clips_dir as _clips_dir
-                clips_d = _clips_dir()
-                clip_file = clips_d / f"clip_{idx}.mp4"
-                if clip_file.exists() and clip_file.stat().st_size > 20 * 1024:
+                from shared.paths import clip_file
+                _clip_dst = clip_file(idx)
+                if _clip_dst.exists() and _clip_dst.stat().st_size > 20 * 1024:
                     logger.info(f"  [Shot {idx}] Cache hit, skip")
                     return None
 
@@ -156,8 +158,8 @@ async def _process_one_shot_skip_frames(
         logger.info(f"  [Shot {idx}] Mode: {REFERENCE_MODE.upper()} (no frame files)")
     else:
         # image 模式：使用首帧/尾帧/关键帧
-        ff = shot_dir / "first_frame.png"
-        lf = shot_dir / "last_frame.png"
+        ff = shot_dir / FIRST_FRAME_FILENAME
+        lf = shot_dir / LAST_FRAME_FILENAME
         kf = shot_dir / "keyframes"
         kf_paths = []
         if kf.exists():
@@ -195,7 +197,7 @@ def main():
         return
 
     REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
-    shots_dir = work_dir / "shots"
+    shots_dir = vimax_shots_dir()
 
     # r2v/text 模式不需要帧图片（r2v 参考图来自角色肖像注册表，非帧）
     if REFERENCE_MODE in ("r2v", "text"):
@@ -212,8 +214,8 @@ def main():
                 continue
             if only_indices is not None and idx not in only_indices:
                 continue
-            ff = d / "first_frame.png"
-            lf = d / "last_frame.png"
+            ff = d / FIRST_FRAME_FILENAME
+            lf = d / LAST_FRAME_FILENAME
             if idx == 0 or idx == 1:
                 if not ff.exists() or not lf.exists():
                     missing_frames.append((idx, "ff+lf"))

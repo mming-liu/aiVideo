@@ -115,7 +115,8 @@ def test_boat_relative_width_anchor(tmp_path, monkeypatch):
         "length_m": 7.0, "width_m": 1.6}}}
     (chapter / "script_result.json").write_text(
         json.dumps(script, ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr("shared.paths.chapter_dir", lambda: chapter)
+    # 兼容带参调用（script_file() 会以 chapter_dir(chapter) 形式间接调用）
+    monkeypatch.setattr("shared.paths.chapter_dir", lambda *a, **k: chapter)
     shot = {"location": "小舟上", "ff_desc": "杨旭仰卧船头"}
     out = _inject_object_size_anchor(shot, "杨旭仰卧船头")
     assert "窄身无篷舴艋舟" in out

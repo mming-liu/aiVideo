@@ -21,6 +21,9 @@ from shared.vimax_bridge import build_working_dir, gen_shot_frames
 from shared.vimax_adapters import ImageGeneratorAiVideoAdapter, VideoGeneratorAiVideoAdapter
 from shared.error_fmt import fmt_err as _fmt_err, parse_retry_after
 from step02_video_gen.continuity import ContinuityTracker, MODE_B_START_INDEX
+from shared.config import VIDEO_CONCURRENCY  # 并发单源: shared/config.py（默认 4）
+from shared.paths import SHOT_VIDEO_FILENAME, FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
+from shared.constants import VIDEO_SUBMIT_RETRIES, FRAME_COPY_RETRIES
 
 # Smart polling config: exponential backoff + jitter
 POLL_BASE_INTERVAL = int(os.getenv("POLL_BASE_INTERVAL", "180"))   # Initial poll interval (seconds) - 3 minutes
@@ -31,8 +34,7 @@ INITIAL_POLL_DELAY = int(os.getenv("INITIAL_POLL_DELAY", "180"))     # Wait afte
 
 # 视频提交并发：在 _submit_video 入口处用 Semaphore 控制，与 _video_gen provider
 # 的 KeyScheduler（每 Key 独立冷却）配合实现 Nx 吞吐。空闲 Key 越多，并发越多。
-# 不再使用全局 RateLimiter 单令牌串行闸。
-VIDEO_CONCURRENCY = int(os.getenv("VIDEO_CONCURRENCY", "8"))
+# 不再使用全局 RateLimiter 单令牌串行闸。（值单源 shared/config.py，默认 4）
 
 # A6 视频产物质检（08-11 修复）：_poll_video 此前成功判定=文件>20KB，时长/内容
 # 零校验，坏视频直接进 step04。现增加两级 QC：
@@ -285,7 +287,7 @@ async def _poll_video(
                     if same_file:
                         copy_ok = True
                     else:
-                        for copy_attempt in range(10):
+                        for copy_attempt in range(FRAME_COPY_RETRIES):
                             try:
                                 shutil.copy2(result.save_path, str(video_path))
                                 copy_ok = True
@@ -358,11 +360,11 @@ async def _poll_video(
                         (shot_dir / "prompt_hash.txt").write_text(shot_hash, encoding="utf-8")
 
                     # 同步复制到 clips/ 目录（step04 合并用；缓存检测用）
-                    from shared.paths import clips_dir as _clips_dir
-                    clips_d = _clips_dir()
-                    clips_d.mkdir(parents=True, exist_ok=True)
+                    from shared.paths import clip_file
+                    _clip_dst = clip_file(shot_idx)
+                    _clip_dst.parent.mkdir(parents=True, exist_ok=True)
                     try:
-                        shutil.copy2(str(video_path), str(clips_d / f"clip_{shot_idx}.mp4"))
+                        shutil.copy2(str(video_path), str(_clip_dst))
                     except OSError:
                         pass  # clips 目录失败不影响主流程
 
@@ -430,7 +432,7 @@ async def _submit_video(
     prompt = _build_prompt(shot, script, mode=mode)
     characters = script.get("characters", [])
 
-    for attempt in range(1, 4):
+    for attempt in range(1, 1 + VIDEO_SUBMIT_RETRIES):
         try:
             req = _make_request(video_adapter, prompt, frame_paths, shot,
                                 characters=characters,
@@ -497,7 +499,7 @@ async def _process_one_shot(
 
     idx = shot["index"]
     shot_dir = shots_dir / str(idx)
-    video_path = shot_dir / "video.mp4"
+    video_path = shot_dir / SHOT_VIDEO_FILENAME
 
     # Cache check: prompt_hash.txt + clips 目录双重验证
     shot_hash = _get_shot_hash(shot, script)
@@ -506,16 +508,15 @@ async def _process_one_shot(
         if hash_path.exists():
             old_hash = hash_path.read_text(encoding="utf-8").strip()
             if old_hash == shot_hash:
-                from shared.paths import clips_dir as _clips_dir
-                clips_d = _clips_dir()
-                clip_file = clips_d / f"clip_{idx}.mp4"
-                if clip_file.exists() and clip_file.stat().st_size > 20 * 1024:
+                from shared.paths import clip_file
+                _clip_dst = clip_file(idx)
+                if _clip_dst.exists() and _clip_dst.stat().st_size > 20 * 1024:
                     logger.verbose(f"  [Shot {idx}] Cache hit, skip (prompt unchanged + clip exists)")
                     return None
                 else:
                     logger.verbose(f"  [Shot {idx}] Clip missing, re-generate video only (skip frames)")
-                    ff = shot_dir / "first_frame.png"
-                    lf = shot_dir / "last_frame.png"
+                    ff = shot_dir / FIRST_FRAME_FILENAME
+                    lf = shot_dir / LAST_FRAME_FILENAME
                     frame_paths = [str(p) for p in [ff, lf] if p.exists()]
                     # 模式B：用上一镜尾帧替代首帧
                     if mode == "B" and continuity_ref_image:
@@ -637,7 +638,7 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     shots_dir = working_dir / "shots"
     script_mtime = script_actual_mtime
 
-    actual_concurrency = min(len(shots), VIDEO_CONCURRENCY)
+    actual_concurrency = max(1, min(len(shots), VIDEO_CONCURRENCY))
     poll_semaphore = asyncio.Semaphore(actual_concurrency)
 
     # 2. Dual-mode scheduling: shot 0+1 parallel Mode A, shot 2+ serial Mode B
@@ -687,7 +688,7 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
     # Extract tail frames from Mode A results for the chain
     for shot_dict, _, _ in mode_a_tasks:
         idx = shot_dict["index"]
-        video_path = shots_dir / str(idx) / "video.mp4"
+        video_path = shots_dir / str(idx) / SHOT_VIDEO_FILENAME
         if video_path.exists() and video_path.stat().st_size > 20 * 1024:
             tracker.advance(shot_dict, video_path)
 
@@ -715,7 +716,7 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
             await poll_task  # Wait for completion before next shot
 
         # Extract tail frame for next shot in chain
-        video_path = shots_dir / str(idx) / "video.mp4"
+        video_path = shots_dir / str(idx) / SHOT_VIDEO_FILENAME
         if video_path.exists() and video_path.stat().st_size > 20 * 1024:
             tracker.advance(shot, video_path)
 
@@ -736,7 +737,7 @@ async def generate_alls(script: dict, working_dir: Path, script_file: Path, forc
             reason = f"{err} | {tid}" if tid else err
             logger.info(f"  {'hook':>5}  A     FAIL    {reason}")
         else:
-            hook_video = shots_dir / "0" / "video.mp4"
+            hook_video = shots_dir / "0" / SHOT_VIDEO_FILENAME
             if hook_video.exists() and hook_video.stat().st_size > 20 * 1024:
                 logger.info(f"  {'hook':>5}  A     OK      -")
             else:

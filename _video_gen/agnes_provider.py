@@ -24,6 +24,7 @@ from .service import VideoGenerationService
 from .config import config
 from shared.error_fmt import parse_retry_after
 from shared.key_scheduler import KeyScheduler
+from shared.model_caps import AGNES_VIDEO_MAX_NUM_FRAMES, AGNES_VIDEO_NUM_FRAMES_MOD
 
 
 _SYNC_PREFIX = "__sync__"
@@ -131,19 +132,19 @@ class AgnesVideoService(VideoGenerationService):
         return [img for path in paths if (img := AgnesVideoService._encode_image(path))]
 
     # ------------------------------------------------------------------
-    # num_frames 约束
+    # num_frames 约束（常量单源 shared/model_caps.py）
     # ------------------------------------------------------------------
-    MAX_NUM_FRAMES = 441  # Agnes 硬限制
+    MAX_NUM_FRAMES = AGNES_VIDEO_MAX_NUM_FRAMES  # Agnes 硬限制
 
     @staticmethod
     def _clamp_num_frames(raw: int) -> int:
         """Agnes 约束: num_frames = 8n + 1，且 <= 441."""
         if raw < 1:
             return 1
-        n = round((raw - 1) / 8)
+        n = round((raw - 1) / AGNES_VIDEO_NUM_FRAMES_MOD)
         n = max(n, 0)
-        result = 8 * n + 1
-        # 硬限制：不超过 441
+        result = AGNES_VIDEO_NUM_FRAMES_MOD * n + 1
+        # 硬限制：不超过上限
         if result > AgnesVideoService.MAX_NUM_FRAMES:
             result = AgnesVideoService.MAX_NUM_FRAMES
         return result

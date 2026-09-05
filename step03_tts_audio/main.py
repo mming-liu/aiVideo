@@ -17,7 +17,7 @@ CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))
 BOOK_INDEX = int(os.getenv("BOOK_INDEX", "1"))
 
 # 输出目录（统一路径来源: shared/paths.py）
-from shared.paths import chapter_dir, script_file, audio_dir
+from shared.paths import chapter_dir, script_file, audio_dir, audio_file
 CHAPTER_DIR = chapter_dir()
 SCRIPT_FILE = script_file()
 AUDIO_OUTPUT_DIR = audio_dir()
@@ -62,7 +62,7 @@ def main():
     existing_count = 0
     for shot in shots:
         idx = shot.get("index", 0)
-        audio_path = AUDIO_OUTPUT_DIR / f"shot_{idx}.mp3"
+        audio_path = audio_file(idx)
         if audio_path.exists() and audio_path.stat().st_size > 10240:
             existing_count += 1
 

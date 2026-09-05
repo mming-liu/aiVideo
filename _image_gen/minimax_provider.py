@@ -33,6 +33,7 @@ from shared.config import (
     MINIMAX_BASE_URL,
     MINIMAX_T2I_MODEL,
     MINIMAX_T2I_FALLBACK_MODELS,
+    MINIMAX_IMAGE_RPM,
 )
 from shared.key_scheduler import KeyScheduler
 from shared.rate_limit import compute_429_wait
@@ -95,7 +96,7 @@ class MiniMaxImageService(ImageGenerationService):
         self._model_queue: list[str] = [MINIMAX_T2I_MODEL] + MINIMAX_T2I_FALLBACK_MODELS
         self._base_url = MINIMAX_BASE_URL.rstrip("/")
         # 单 key 限速
-        rpm = max(int(os.getenv("MINIMAX_IMAGE_RPM", "10")), 1)
+        rpm = max(MINIMAX_IMAGE_RPM, 1)
         self._key_scheduler = KeyScheduler(n_keys=1, cooldown=60.0 / rpm, name="minimax_image")
 
     @property
@@ -110,13 +111,13 @@ class MiniMaxImageService(ImageGenerationService):
 
         # 参考图上限按模型从 ref_compose 注册表解析（image-01=1），不写死在配置里
         from shared.ref_compose import get_ref_limit, fit_refs
-        ref_limit = get_ref_limit(MINIMAX_T2I_MODEL, default=1)
+        ref_limit = get_ref_limit(MINIMAX_T2I_MODEL)
         ref_paths = list(req.reference_image_paths or [])
         if not ref_paths and req.reference_image_path:
             ref_paths = [req.reference_image_path]
         if len(ref_paths) > ref_limit:
-            from shared.paths import vimax_working_dir
-            sheet_dir = vimax_working_dir() / "shots" / str(req.shot_index)
+            from shared.paths import shot_work_dir
+            sheet_dir = shot_work_dir(req.shot_index)
             merged = fit_refs([("all", ref_paths)], ref_limit, sheet_dir, f"shot{req.shot_index}")
             if merged:
                 _verbose_write(f"  [镜头{req.shot_index}] 参考图 {len(ref_paths)} 张超上限 "

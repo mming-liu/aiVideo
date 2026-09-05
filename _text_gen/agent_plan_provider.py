@@ -41,6 +41,7 @@ from .config import config
 from .models import TextGenerationRequest, TextGenerationResult
 from .service import TextGenerationService
 from shared.key_scheduler import KeyScheduler
+from shared.constants import AGENT_PLAN_TEXT_ATTEMPTS
 from shared.log_utils import verbose_write
 
 _verbose_write = partial(verbose_write, log_file="step01.log")
@@ -109,8 +110,8 @@ class AgentPlanTextService(TextGenerationService):
         # 2026-09-03 现场压测：服务端默认 4096 不够分镜生成
         # 2026-09-04 现场压测：65536 fallback 导致 3-5 分钟长尾（70k input + 65536 output 容量
         # 下模型倾向于"慢慢想"），已降为 16384（分镜 JSON 实际只需 20-40k，留 16384 足够避免
-        # finish_reason=length 截断）。_text_gen/config.py 与 .env.content 的 AGENT_PLAN_TEXT_MAX_TOKENS
-        # 默认值同步改为 16384，三处对齐。
+        # finish_reason=length 截断）。config.AGENT_PLAN_TEXT_MAX_TOKENS 默认 None（0=不传）
+        # → 走下面的 16384 fallback。
         max_completion_tokens = (
             req.max_tokens
             or config.AGENT_PLAN_TEXT_MAX_TOKENS
@@ -165,7 +166,7 @@ class AgentPlanTextService(TextGenerationService):
         )
 
         # 仅做 1 次退避：超时和 5xx 各 1 次，避免长任务重试浪费额度
-        for attempt in range(1, 3):  # 1 次重试（初始 + 1 次 = 共 2 次提交）
+        for attempt in range(1, 1 + AGENT_PLAN_TEXT_ATTEMPTS):  # 1 次重试（初始 + 1 次 = 共 2 次提交）
             try:
                 resp = requests.post(
                     url, json=payload, headers=self._headers, timeout=300  # 5 分钟客户端超时

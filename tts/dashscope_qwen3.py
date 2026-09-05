@@ -10,10 +10,9 @@ from .models import TTSRequest, TTSSuccessResult, TTSFailureResult, TTSServiceRe
 from .service import TTSServiceInterface
 
 
-DASHSCOPE_QWEN3_TTS_URL = (
-    "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
-)
-DASHSCOPE_QWEN3_TTS_MODEL = "qwen3-tts-vd-2026-01-26"
+# 端点/模型 ID 单源 tts/config.py（可 env 覆盖 DASHSCOPE_QWEN3_TTS_MODEL / _URL）
+DASHSCOPE_QWEN3_TTS_URL = config.QWEN3_TTS_URL
+DASHSCOPE_QWEN3_TTS_MODEL = config.QWEN3_TTS_MODEL
 DASHSCOPE_TTS_MAX_CHARS = 600
 
 KNOWN_VOICE_IDS = ["longxiaxiaoxuan", "longwan", "longchen", "longyue", "longyuan"]
@@ -36,7 +35,7 @@ _SPLIT_HINT_CHARS = {
 }
 
 
-def _split_text_by_limit(text, max_chars=600):
+def _split_text_by_limit(text, max_chars=DASHSCOPE_TTS_MAX_CHARS):
     trimmed = text.strip()
     if not trimmed:
         return []

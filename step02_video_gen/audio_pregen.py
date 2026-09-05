@@ -84,6 +84,7 @@ def _measure_actual_duration(video_path: Path) -> float:
 
 def _update_script_with_actual_durations(working_dir: Path, script_path: Path) -> None:
     """测量所有已生成视频的实际时长，回填到 script_Result.json."""
+    from shared.paths import SHOT_VIDEO_FILENAME
     shots_dir = working_dir / "shots"
     if not shots_dir.exists():
         print("[WARN] shots 目录不存在，跳过时长回填")
@@ -96,7 +97,7 @@ def _update_script_with_actual_durations(working_dir: Path, script_path: Path) -
 
     for shot in shots:
         idx = shot.get("index", 0)
-        video_path = shots_dir / str(idx) / "video.mp4"
+        video_path = shots_dir / str(idx) / SHOT_VIDEO_FILENAME
         if video_path.exists():
             actual_duration = _measure_actual_duration(video_path)
             if actual_duration > 0:

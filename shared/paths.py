@@ -104,6 +104,71 @@ def vimax_working_dir(chapter: int | None = None) -> Path:
     return chapter_dir(chapter) / "vimax_working"
 
 
+# ---- 逐镜产物文件名（跨模块契约常量） --------------------------------------
+# provider 落盘 / step02 缓存判定 / step04 合并读取必须同名；
+# 下面的 accessor 与 param 驱动代码（working_dir 由调用方传入时）共用这组常量。
+SHOT_VIDEO_FILENAME = "video.mp4"
+FIRST_FRAME_FILENAME = "first_frame.png"
+LAST_FRAME_FILENAME = "last_frame.png"
+CLIP_FILENAME_FMT = "clip_{}.mp4"
+SHOT_AUDIO_FILENAME_FMT = "shot_{}.mp3"
+
+
+def stretched_dir(chapter: int | None = None) -> Path:
+    """时长拉伸片段目录（step04 对短片段放速后的输出）."""
+    return chapter_dir(chapter) / "stretched"
+
+
+def vimax_shots_dir(chapter: int | None = None) -> Path:
+    """逐镜工作根目录: <vimax_working_dir>/shots/."""
+    return vimax_working_dir(chapter) / "shots"
+
+
+def shot_work_dir(idx: int, chapter: int | None = None) -> Path:
+    """单镜工作目录: <vimax_working_dir>/shots/<idx>/（帧/视频/哈希文件落此）."""
+    return vimax_shots_dir(chapter) / str(idx)
+
+
+def shot_video_file(idx: int, chapter: int | None = None) -> Path:
+    """单镜视频产物（视频 provider 统一输出）: shots/<idx>/video.mp4."""
+    return shot_work_dir(idx, chapter) / SHOT_VIDEO_FILENAME
+
+
+def first_frame_file(idx: int, chapter: int | None = None) -> Path:
+    """单镜首帧图: shots/<idx>/first_frame.png."""
+    return shot_work_dir(idx, chapter) / FIRST_FRAME_FILENAME
+
+
+def last_frame_file(idx: int, chapter: int | None = None) -> Path:
+    """单镜尾帧图: shots/<idx>/last_frame.png."""
+    return shot_work_dir(idx, chapter) / LAST_FRAME_FILENAME
+
+
+def clip_file(idx: int, chapter: int | None = None) -> Path:
+    """单镜成片片段: clips/clip_<idx>.mp4."""
+    return clips_dir(chapter) / CLIP_FILENAME_FMT.format(idx)
+
+
+def audio_file(idx: int, chapter: int | None = None) -> Path:
+    """单镜 TTS 音频: audio/shot_<idx>.mp3."""
+    return audio_dir(chapter) / SHOT_AUDIO_FILENAME_FMT.format(idx)
+
+
+def final_file(chapter: int | None = None) -> Path:
+    """最终成片: chapter/final.mp4."""
+    return chapter_dir(chapter) / "final.mp4"
+
+
+def subtitles_file(chapter: int | None = None) -> Path:
+    """字幕文件: chapter/subtitles.srt."""
+    return chapter_dir(chapter) / "subtitles.srt"
+
+
+def objects_bank_dir() -> Path:
+    """物件资产库（scene_objects_bank 场景内小物件）."""
+    return global_dir() / "objects_bank"
+
+
 def characters_bank_dir() -> Path:
     return global_dir() / "characters_bank"
 

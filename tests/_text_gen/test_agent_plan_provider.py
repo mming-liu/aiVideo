@@ -498,7 +498,21 @@ def test_text_config_default_reasoning_effort():
     assert tgcfg.AGENT_PLAN_TEXT_REASONING_EFFORT == "none"
 
 
-def test_text_config_default_max_tokens_is_none():
-    """TextGenCfg.AGENT_PLAN_TEXT_MAX_TOKENS 默认 None（0=不传）."""
-    from _text_gen import config as tgcfg
-    assert tgcfg.AGENT_PLAN_TEXT_MAX_TOKENS is None
+def test_text_config_default_max_tokens_is_none(monkeypatch):
+    """TextGenCfg.AGENT_PLAN_TEXT_MAX_TOKENS 默认 None（0=不传）.
+
+    .env.content 显式 pin 了 16384（2026-09-04 三处对齐决策），不能直接断言
+    已加载单例——置空串模拟「未配置」（load_dotenv 不覆盖已存在 env），
+    重载产线 config 模块后断言归一为 None（provider 侧另有 16384 fallback）。
+    finally 里按 .env 同值重载还原，避免污染后续测试。
+    """
+    import importlib
+    monkeypatch.setenv("AGENT_PLAN_TEXT_MAX_TOKENS", "")
+    _cfg = importlib.import_module("_text_gen.config")
+    importlib.reload(_cfg)
+    try:
+        assert _cfg.config.AGENT_PLAN_TEXT_MAX_TOKENS is None
+    finally:
+        monkeypatch.setenv("AGENT_PLAN_TEXT_MAX_TOKENS", "16384")
+        importlib.reload(_cfg)
+    assert _cfg.config.AGENT_PLAN_TEXT_MAX_TOKENS == 16384

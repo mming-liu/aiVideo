@@ -33,8 +33,10 @@ from shared.config import (
     AGENT_PLAN_API_KEY,
     AGENT_PLAN_BASE_URL,
     AGENT_PLAN_T2I_MODEL,
+    AGENT_PLAN_IMAGE_RPM,
 )
 from shared.key_scheduler import KeyScheduler
+from shared.image_size_fit import fit_pixel_size, fit_tier
 from shared.log_utils import verbose_write
 
 _verbose_write = partial(verbose_write, log_file="step02a.log")
@@ -77,7 +79,7 @@ class AgentPlanImageService(ImageGenerationService):
         self._model = AGENT_PLAN_T2I_MODEL
         self._base_url = AGENT_PLAN_BASE_URL.rstrip("/")
         # 单 key 限速：Agent Plan 免费档按 Small 套餐保守值 10 RPM（与 volcengine 默认对齐）
-        rpm = max(int(os.getenv("AGENT_PLAN_IMAGE_RPM", "10")), 1)
+        rpm = max(AGENT_PLAN_IMAGE_RPM, 1)
         self._key_scheduler = KeyScheduler(
             n_keys=1, cooldown=60.0 / rpm, name="agent_plan_image"
         )
@@ -121,21 +123,22 @@ class AgentPlanImageService(ImageGenerationService):
         # Agent Plan 端点 body 形态与 /v3 一致（model + prompt + size + image）；
         # 鉴权 key 决定走 plan 通道（命中按 AFP 燃料计费）。
         size = (req.size or "").strip().lower().replace("*", "x")
-        # 像素值合法性快速校验：拒绝空字符串、0x0、负数（按 Seedream 能力夹取）
+        # 像素值合法性快速校验：拒绝空字符串、0x0、负数（按 Seedream 能力收敛）
         m = re.fullmatch(r"(\d+)\s*x\s*(\d+)", size)
         if m:
             w, h = int(m.group(1)), int(m.group(2))
             total = w * h
             if total < cap.px_min or total > cap.px_max:
+                fitted = fit_pixel_size(w, h, cap.px_min, cap.px_max)
                 _verbose_write(
-                    f"  [镜头{req.shot_index}] size {w}x{h}={total} 超出 {self._model} 像素区间，"
-                    f"按 {cap.px_min}~{cap.px_max} 夹取到 1024x1792"
+                    f"  [镜头{req.shot_index}] size {w}x{h}={total} 超出 {self._model} 像素区间 "
+                    f"{cap.px_min}~{cap.px_max}，等比收敛到 {fitted}"
                 )
-                size = "1024x1792"
+                size = fitted
         else:
-            # 档位值：未在模型支持档位时回退到 2K
+            # 档位值：不在模型支持档位时按档位序就近收敛（shared/image_size_fit.fit_tier）
             if size.upper() not in {t.upper() for t in cap.tiers}:
-                size = "2K"
+                size = fit_tier(size, cap.tiers)
 
         payload: dict = {
             "model": self._model,

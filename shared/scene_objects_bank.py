@@ -32,7 +32,11 @@ class SceneObjectsBank:
     """跨章节场景物体尺寸持久化."""
 
     def __init__(self, bank_dir: str | None = None):
-        self._bank_dir = Path(bank_dir) if bank_dir else _book_global_dir() / "objects_bank"
+        if bank_dir:
+            self._bank_dir = Path(bank_dir)
+        else:
+            from shared.paths import objects_bank_dir
+            self._bank_dir = objects_bank_dir()
         self._bank_path = self._bank_dir / "objects_bank.json"
         self._data: dict = dict(_EMPTY_BANK)
 

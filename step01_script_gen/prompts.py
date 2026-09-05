@@ -232,7 +232,8 @@ def _build_total_duration_constraint(shot_count_min: int, shot_count_max: int) -
     镜头数不限时，提示「按需拆镜」+ 用「每镜平均时长」作为软目标，不再硬塞 N 镜。
     """
     from shared.model_caps import active_video_duration_cap
-    cap = active_video_duration_cap() or 12
+    from shared.constants import DEFAULT_VIDEO_DURATION_FALLBACK
+    cap = active_video_duration_cap() or DEFAULT_VIDEO_DURATION_FALLBACK
     # 60-90s 目标 → 平均每镜 6-8s（单镜硬上限 8s）
     min_per_shot = 6.0
     target_per_shot = 7.5

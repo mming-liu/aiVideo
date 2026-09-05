@@ -290,10 +290,7 @@ def _analyze_chapter_scenes(novel_path: str, chapter: int, full_text: str) -> di
         print(f"  [WARNING] 无法导入 text_gen，跳过场景分析")
         return {"chapter": chapter, "main_scenes": [], "main_characters": [], "filtered_sections": []}
 
-    try:
-        from shared.config import PROMPT_MAX_CHARS
-    except ImportError:
-        PROMPT_MAX_CHARS = 50000
+    from shared.config import PROMPT_MAX_CHARS  # 同包配置必在，死回退已删
 
     prompt = f"""分析以下小说章节，识别主线场景和支线场景。
 

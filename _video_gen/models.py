@@ -9,7 +9,8 @@ class VideoGenerationRequest:
     """单次视频生成请求.
 
     尺寸：推荐 9:16 竖屏用于短视频。
-    num_frames 必须 <= 441 且遵循 8n+1 规则。
+    num_frames 约束（<= 441 且 8n+1）仅 Agnes 视频模型有——常量单源
+    shared/model_caps.AGNES_VIDEO_MAX_NUM_FRAMES / AGNES_VIDEO_NUM_FRAMES_MOD。
 
     多关键帧模式支持:
     - 仅 image_path: 普通图生视频 (1帧)

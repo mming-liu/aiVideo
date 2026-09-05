@@ -112,9 +112,6 @@ SEEDANCE_CAPS: list[tuple[str, SeedanceCap]] = [
 ]
 
 # 未命中注册表时的兜底：按能力最弱档位，小尺寸/低版本请求不被误杀
-DEFAULT_SEEDANCE_CAP = SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, False, False, False, False)
-
-# 未命中注册表时的兜底：按能力最弱档位，小尺寸/低版本请求不被误杀
 DEFAULT_SEEDREAM_CAP = SeedreamCap(("1K", "2K", "4K"), 921_600, 16_777_216, 14)
 DEFAULT_SEEDANCE_CAP = SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, False, False, False, False)
 
@@ -195,6 +192,111 @@ _VIDEO_DURATION_CAPS: list[tuple[str, int]] = [
 ]
 
 
+# 视频时长区间注册表（下限, 上限）——仅官方声明了下限的模型才入表；未命中 (0, 0) = 不夹取。
+#   - MiniMax H3（v2）：官方 duration [4,15]
+_VIDEO_DURATION_RANGES: list[tuple[str, tuple[int, int]]] = [
+    ("minimax-h3", (4, 15)),
+]
+
+# v1 Hailuo 时长规则（官方：01 系列或 1080P 仅 6s；768P/512P 可 6 或 10s）。
+# model_caps 与 minimax_provider._resolve_v1_duration 共用同一组数字，禁止各自写死。
+MINIMAX_V1_ONLY_DURATION = 6
+MINIMAX_V1_MAX_DURATION = 10
+
+
+# KF2V（首尾帧）模型能力集合（dashscope HTTP 旧链路，模型 ID 精确匹配）
+KF2V_CAPABLE_MODELS = frozenset({"wan2.2-kf2v-flash", "wanx2.1-kf2v-plus", "wan2.7-i2v"})
+KF2V_ONLY_MODELS = frozenset({"wan2.2-kf2v-flash", "wanx2.1-kf2v-plus"})
+
+
+# Agnes 视频 num_frames 约束（num_frames = 8n+1；@24fps 441 帧 ≈ 18.4s →
+# _VIDEO_DURATION_CAPS 的 agnes-video=18 即由此换算，两处保持同源）
+AGNES_VIDEO_NUM_FRAMES_MOD = 8
+AGNES_VIDEO_MAX_NUM_FRAMES = 441
+
+
+# bailian 视频参数支持位（按模型子串查；未命中默认全部支持）。
+# happyhorse 系官方不支持 negative_prompt / audio_url（wan2.7 系支持）——
+# 支持/不支持属模型能力，禁止在 provider 里按模型名散写。
+_VIDEO_PARAM_UNSUPPORTED: list[tuple[str, frozenset]] = [
+    ("happyhorse", frozenset({"negative_prompt", "audio_url"})),
+]
+_VIDEO_KNOWN_PARAMS = frozenset({"negative_prompt", "audio_url"})
+
+
+def video_supports_param(model: str | None, param: str) -> bool:
+    """按模型 ID 查视频 API 参数支持位；未注册模型默认支持（True）.
+
+    用于 bailian provider 提交前的参数门控（happyhorse 不吃 negative_prompt）。
+    """
+    if param not in _VIDEO_KNOWN_PARAMS:
+        raise ValueError(f"未知视频参数支持位: {param}（已知: {sorted(_VIDEO_KNOWN_PARAMS)}）")
+    if not model:
+        return True
+    m = model.lower()
+    for pat, unsupported in _VIDEO_PARAM_UNSUPPORTED:
+        if pat in m:
+            return param not in unsupported
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Seedance 系 provider 共用推导（volcengine / agent_plan 视频提交前调用；
+# 2026-09 从两 provider 的逐字复制实现上移，只搬函数不改行为）
+# ---------------------------------------------------------------------------
+
+# 分辨率排序（升序），用于把推导档位收敛到模型允许的最高档
+RES_ORDER = ("480p", "720p", "1080p", "4k")
+
+
+def clamp_duration(value, cap) -> int:
+    """夹到模型支持时长区间 [cap.duration_range]；解析失败回退区间中值."""
+    lo, hi = cap.duration_range
+    try:
+        d = int(float(value))
+    except (TypeError, ValueError):
+        return (lo + hi) // 2
+    return max(lo, min(hi, d))
+
+
+def resolve_resolution(size: str | None, cap, override: str | None = None) -> str:
+    """按模型能力推导分辨率：先按 size（如 720x1280）短边定档，再收敛到
+    cap.resolutions 中「≤ 推导值」的最高档（如 2.5 只支持 720p，1080p 推导→720p）.
+    可选 override：provider 的 *_VIDEO_RESOLUTION env 非空则强制该档位（仍按能力收敛）.
+    """
+    ov = (override or "").strip().lower()
+    s = (size or "").strip().lower().replace("*", "x")
+    if ov in RES_ORDER:
+        derived = ov
+    else:
+        try:
+            w, h = s.split("x")
+            w, h = int(w), int(h)
+        except (ValueError, AttributeError):
+            derived = "720p"
+        else:
+            short = min(w, h)
+            derived = "1080p" if short >= 1080 else ("720p" if short >= 720 else "480p")
+    if derived in cap.resolutions:
+        return derived
+    best = cap.resolutions[0]
+    for r in cap.resolutions:
+        if RES_ORDER.index(r) <= RES_ORDER.index(derived):
+            best = r
+    return best
+
+
+def model_duration_range(model: str | None) -> tuple[int, int]:
+    """按模型 ID 子串查 (min, max) 时长区间；未注册返回 (0, 0)（不夹取）."""
+    if not model:
+        return (0, 0)
+    m = model.lower()
+    for pat, rng in _VIDEO_DURATION_RANGES:
+        if pat in m:
+            return rng
+    return (0, 0)
+
+
 def _model_duration_cap(model: str | None) -> int:
     """按模型 ID 子串查视频时长上限；未注册返回 0（不夹取，保持现状）."""
     if not model:
@@ -226,11 +328,14 @@ _PROMPT_LENGTH_CAPS: list[tuple[str, int]] = [
     ("seedance-1-5", 500),
     ("seedance-1-0", 500),
     ("seedance", 500),
-    # 百炼 / MiniMax 已知
+    # 百炼 / MiniMax 已知（Hailuo 泛化匹配 v1 全家族含 403 回退 ID；
+    # T2V-01/I2V-01 系不含 minimax/hailuo 子串，需单列——漏注册会从不截断漂移）
     ("wan2.7", 5000),
     ("happyhorse", 5000),
     ("minimax-h3", 7000),
-    ("minimax-hailuo", 2000),
+    ("hailuo", 2000),
+    ("t2v-01", 2000),
+    ("i2v-01", 2000),
 ]
 
 
@@ -251,9 +356,9 @@ def active_video_duration_cap() -> int:
     step01 timecode 用此值夹取单镜时长，防止长对白/长 motion 分段生成的镜头
     超过模型上限被 provider 截断（如 Seedance 1.5 pro=12s、Hailuo v1 720P=6s）。
       volcengine → Seedance 能力表上限（1.5 pro=12 / 2.0=15 / 2.5=30 / 1.0=12）
-      minimax    → r2v 走 H3（15）；text/image 走 v1 Hailuo，按 req.size 短边定档
-                   （与 provider _resolve_v1_resolution/_resolve_v1_duration 同源：
-                   ≥1080→1080P=6s；≥720→768P 可 6/10→取 10；01 系列→720P=6s）
+      minimax    → r2v 走 H3（区间表 (4,15) 上限 15）；text/image 走 v1 Hailuo，
+                   按 VIDEO_SIZE env 短边定档（≥1080→1080P=6s；≥720→768P 可 6/10→取 10；
+                   01 系列→720P=6s；数字与 provider 同源，size 口径差异见分支内注释）
       bailian/dashscope/agnes → 按 _VIDEO_DURATION_CAPS 注册表（wan2.7=15 / happyhorse=15 /
                    agnes=18）；未注册模型返回 0（保持现状）
     """
@@ -265,20 +370,26 @@ def active_video_duration_cap() -> int:
         return get_seedance_cap(active_video_model()).duration_range[1]
     if provider == "minimax":
         model = active_video_model() or ""
-        if "H3" in model:
-            return 15
-        # v1 Hailuo：与 provider 同源推导。provider _resolve_v1_resolution 按 req.size 短边
-        # 定档（step02b _make_request 固定发 720x1280→短边 720→768P）；不读 MINIMAX_VIDEO_RESOLUTION
-        # env——provider 只在 size 解析失败才读它，step02b 总能解析，读它反而误导 step01。
+        dmin, dmax = model_duration_range(model)
+        if dmax:
+            return dmax  # H3 等入区间表模型：上限即 cap[1]
+        # v1 Hailuo：数字与 provider _resolve_v1_duration 共用 MINIMAX_V1_* 常量。
+        # ⚠️ 两消费方取 size 的口径本就不同（行为保持，勿强行统一）：
+        #   - 本函数（step01 全局预算）按 VIDEO_SIZE env 短边定档
+        #   - provider 按 req.size 短边定档（step02b _make_request 固定发 720x1280→768P）；
+        #     不读 MINIMAX_VIDEO_RESOLUTION env——provider 只在 size 解析失败才读它。
+        #   VIDEO_SIZE 与 req.size 不一致时两边结论可能不同（如 VIDEO_SIZE=1440x2560
+        #   判 1080P=6s，而 provider 实发 768P=10s），切 minimax 前先对齐 VIDEO_SIZE。
         if "01" in model:
-            return 6  # 01 系列固定 720P=6s
+            return MINIMAX_V1_ONLY_DURATION  # 01 系列固定 720P=6s
         size = (os.getenv("VIDEO_SIZE", "720x1280") or "720x1280").strip().lower().replace("*", "x")
         try:
             w, h = size.split("x")
             short = min(int(w), int(h))
         except (ValueError, AttributeError):
             short = 720
-        return 6 if short >= 1080 else 10  # 1080P 仅 6s；768P/512P 可 6 或 10 → 取上限 10
+        # 1080P 仅 6s；768P/512P 可 6 或 10 → 取上限 10
+        return MINIMAX_V1_ONLY_DURATION if short >= 1080 else MINIMAX_V1_MAX_DURATION
     # bailian / dashscope / agnes：按当前模型查跨供应商时长注册表
     return _model_duration_cap(active_video_model())
 

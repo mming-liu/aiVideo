@@ -24,6 +24,7 @@ from shared.utils.json_repair import safe_parse_json_object, _fix_common_json_er
 import scene_compliance
 import storyboard_refs
 from shared.paths import chapter_dir
+from shared.constants import DEFAULT_VIDEO_DURATION_FALLBACK
 from shared.tee_logger import get_logger
 from shared.kf_time import (
     get_kf_t_sec, get_kf_stage, set_kf_t_sec, set_kf_stage,
@@ -6238,7 +6239,7 @@ def _hard_fix_split_long_dialogue_shot(shots: list, hook: dict | None = None) ->
     # 1. 拿视频模型时长上限
     try:
         from shared.model_caps import active_video_duration_cap
-        dur_cap = active_video_duration_cap() or 12.0
+        dur_cap = active_video_duration_cap() or float(DEFAULT_VIDEO_DURATION_FALLBACK)
     except Exception:
         dur_cap = 12.0
 
@@ -6979,7 +6980,7 @@ def _hard_fix_runtime_extend(
         return 0
     try:
         from shared.model_caps import active_video_duration_cap
-        per_shot_cap = float(active_video_duration_cap() or 12)
+        per_shot_cap = float(active_video_duration_cap() or DEFAULT_VIDEO_DURATION_FALLBACK)
     except Exception:
         per_shot_cap = 12.0
     # 08-23 用户规则：单镜 ≤ 8s（与模型 cap 取严）；钩子另算不受此限
@@ -9241,8 +9242,8 @@ def _check_prop_spatial_anchor(shots: list[dict], hook: dict = None,
     prop_assets: dict = {}
     try:
         import json as _json
-        from shared.paths import chapter_dir
-        script_path = chapter_dir() / "script_result.json"
+        from shared.paths import script_file
+        script_path = script_file()
         if script_path.exists():
             _script = _json.load(open(script_path, encoding="utf-8"))
             prop_assets = _script.get("prop_assets", {}) or {}

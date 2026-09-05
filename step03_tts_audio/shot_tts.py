@@ -18,6 +18,8 @@ import json
 from tts import create_provider, TTSRequest
 from tts.config import config as tts_config
 from tts.voice_registry import get_registry, NARRATOR_VOICE, AVAILABLE_VOICES
+from shared.paths import SHOT_AUDIO_FILENAME_FMT  # 单镜音频文件名单源: shared/paths.py
+from shared.constants import TTS_MAX_RETRIES  # 重试次数单源: shared/constants.py
 
 
 def _has_dialogue(text: str) -> bool:
@@ -29,10 +31,13 @@ def _has_dialogue(text: str) -> bool:
 from typing import Optional, List
 
 
-# 并发限流：百炼免费版 QPS=2
-TTS_SEMAPHORE = asyncio.Semaphore(2)
-MAX_RETRIES = 3
-MAX_TEXT_LENGTH = 300  # 单个 TTS 文本最大字符数
+# 并发限流：百炼免费版 QPS=2（可用 TTS_CONCURRENCY env 覆盖）
+TTS_CONCURRENCY = max(int(os.getenv("TTS_CONCURRENCY", "2")), 1)
+TTS_SEMAPHORE = asyncio.Semaphore(TTS_CONCURRENCY)
+MAX_RETRIES = TTS_MAX_RETRIES
+# 单段 TTS 文本上限：sambert 系 300 字/段。注意与 tts/dashscope_qwen3.py 的
+# DASHSCOPE_TTS_MAX_CHARS=600（qwen3-tts 上限）是两个不同模型的上限，勿混用。
+MAX_TEXT_LENGTH = 300
 
 
 def load_script(path: Path) -> dict:
@@ -247,7 +252,7 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
     else:
         voice_config = NARRATOR_VOICE.copy()
 
-    output_path = output_dir / f"shot_{idx}.mp3"
+    output_path = output_dir / SHOT_AUDIO_FILENAME_FMT.format(idx)
 
     # 缓存检查：文件存在且大小正常且音色匹配则跳过
     if output_path.exists() and output_path.stat().st_size > 10240:
@@ -300,7 +305,7 @@ async def _gen_shot_tts_async(shot: dict, output_dir: Path, provider,
     else:
         voice_config = NARRATOR_VOICE.copy()
 
-    output_path = output_dir / f"shot_{idx}.mp3"
+    output_path = output_dir / SHOT_AUDIO_FILENAME_FMT.format(idx)
 
     # 缓存检查（含音色比对）
     if output_path.exists() and output_path.stat().st_size > 10240:

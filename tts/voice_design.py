@@ -56,9 +56,7 @@ def validate_preview_text(preview_text: str) -> tuple[bool, Optional[str]]:
     return True, None
 
 
-VOICE_DESIGN_ENDPOINT = (
-    "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/customization"
-)
+VOICE_DESIGN_ENDPOINT = config.VOICE_DESIGN_URL  # 端点单源 tts/config.py
 
 
 def create_voice_design(
@@ -90,7 +88,7 @@ def create_voice_design(
         "model": "qwen-voice-design",
         "input": {
             "action": "create",
-            "target_model": "qwen3-tts-vd-2026-01-26",
+            "target_model": config.QWEN3_TTS_MODEL,  # 单源 tts/config.py（QWEN3_TTS_MODEL）
             "voice_prompt": input_data.voice_prompt.strip(),
             "preview_text": input_data.preview_text.strip(),
             "preferred_name": input_data.preferred_name,

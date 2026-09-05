@@ -18,22 +18,23 @@ CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))
 BOOK_INDEX = int(os.getenv("BOOK_INDEX", "1"))
 
 # 输出目录（统一路径来源: shared/paths.py）
-from shared.paths import chapter_dir, script_file, clips_dir, vimax_working_dir
+from shared.paths import (
+    chapter_dir, script_file, clips_dir, vimax_working_dir,
+    vimax_shots_dir, shot_video_file, clip_file, audio_file,
+    final_file, subtitles_file, stretched_dir,
+)
 CHAPTER_DIR = chapter_dir()
 SCRIPT_FILE = script_file()
-FINAL_OUT = CHAPTER_DIR / "final.mp4"
-SRT_OUT = CHAPTER_DIR / "subtitles.srt"
-TEMP_DIR = CHAPTER_DIR / "stretched"
+FINAL_OUT = final_file()
+SRT_OUT = subtitles_file()
+TEMP_DIR = stretched_dir()
 
 # 模块级日志
 from shared.tee_logger import get_logger
 
-# 编码预设（匹配 merge_core.py，默认 ultrafast）
-try:
-  from shared.config import MERGE_PRESET as _CFG_PRESET
-  VIDEO_PRESET = _CFG_PRESET
-except ImportError:
-  VIDEO_PRESET = "ultrafast"
+# 编码预设（匹配 merge_core.py；单源 shared/config.MERGE_PRESET）
+from shared.config import MERGE_PRESET as _CFG_PRESET
+VIDEO_PRESET = _CFG_PRESET
 
 _logger = get_logger(CHAPTER_DIR / "step04.log", console_level="INFO")
 
@@ -42,7 +43,7 @@ CLIP_SOURCE = os.getenv("CLIP_SOURCE", "vimax")
 # 合并模式：2026-08 起仅 native（纯视频拼接，语音/背景音由视频模型生成，保留视频原声）
 VIMAX_WD = vimax_working_dir()
 if CLIP_SOURCE == "vimax":
-  CLIP_DIR = VIMAX_WD / "shots"
+  CLIP_DIR = vimax_shots_dir()
 else:
   CLIP_DIR = Path(os.getenv("VIDEO_OUTPUT_DIR", str(clips_dir())))
 
@@ -349,8 +350,8 @@ def main():
   hook_clip = None
   hook = script.get("hook")
   if hook and isinstance(hook, dict):
-    from shared.paths import clips_dir
-    hook_clip_path = clips_dir() / "clip_0.mp4"
+    from shared.paths import clip_file
+    hook_clip_path = clip_file(0)
 
     if hook_clip_path.exists() and hook_clip_path.stat().st_size > 20000:
       hook_clip = hook_clip_path
@@ -378,7 +379,7 @@ def main():
     # 非 vimax（agens-clips 等）用扁平 clip_{idx}.mp4（此前硬编码 vimax 结构导致
     # 非 vimax 时合并路径不可用，code-review-2026-08-06 #10）
     if CLIP_SOURCE == "vimax":
-      clip_path = CLIP_DIR / str(idx) / "video.mp4"
+      clip_path = shot_video_file(idx)
     else:
       clip_path = CLIP_DIR / f"clip_{idx}.mp4"
     if not clip_path.exists():
@@ -456,12 +457,11 @@ def main():
   # tts_mix：为每个镜头找 step03 的 TTS 音频（audio/shot_{idx}.mp3）
   tts_paths = None
   if _AUDIO_MODE == "tts_mix":
-    from shared.paths import audio_dir
-    _adir = audio_dir()
+    from shared.paths import audio_file
     tts_paths = []
     n_found = 0
     for s in valid_shots:
-      _tp = _adir / f"shot_{s.get('index', 0)}.mp3"
+      _tp = audio_file(s.get('index', 0))
       if _tp.exists() and _tp.stat().st_size > 10240:
         tts_paths.append(str(_tp))
         n_found += 1

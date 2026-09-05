@@ -44,6 +44,30 @@ python step04_merge/main.py       # 阶段4: 片段 + 音频 + 字幕 → 最终
 - **设计原则**：硬修复层**对任何古风/权谋/刺杀/追逐镜头都适用**，不写死"小舟/杨旭"，换小说（主角变林平之、场景变镖局）代码不用动；幂等是硬要求（避免反复跑累积插入「目光紧盯」+「目光紧盯」…）
 - **位置**：`step01_script_gen/validation.py` → `hard_fix_shot_prompts()` → 由 `parse_response` 在 `post_fix_shot_prompts` 之后调用
 
+### step01 doubao 路径（v6.60，2026-09-05）
+- 目标：把 doubao-seed-2-1-turbo 分镜生成从综合分 78.7 → 92+，5+1 类 hard_fix 全填 + doubao_system.md 重写 + 3 处 prompt 路径一致性修复
+- 启用方法：`TEXT_PROVIDER=agent_plan`（与 deepseek 路径二选一，**默认仍为 deepseek**）
+- doubao 专用逻辑单开文件：
+  - `step01_script_gen/doubao_pipeline.py` — 修复轮/GAP 重生（与 deepseek `_regen_over_limit` / `_repair_shot_warnings` 同接口）
+  - `step01_script_gen/doubao_hardfix.py` — 7 个 doubao 专用 Constraint + `register_doubao_hardfixes()`
+  - `step01_script_gen/doubao_repair_prompts.py` — doubao 专用修复 prompt（与 deepseek 解耦）
+- 5+1 类 hard_fix（按 ALL_CONSTRAINTS append 顺序）：
+  - **B.1** 对白 narration_segment 兜底：main_subject 命中对话关键词 + 双向空 → 兜底"某：……"占位
+  - **B.2** GAP 关键词强注入：core_keywords 命中率低 → ff_desc 末尾追加 anchor 短句
+  - **B.3.1** 角色锚点注入：主角无 `[name: features]` → prompt 头部追加 ≤30 字特征
+  - **B.3.2** 开篇空镜插入：前 3 镜无空镜/特写 → index=1 插环境空镜 + 末镜 -2s 联动保 60-90s 总和
+  - **B.3.3** 高潮回灌：后半无高潮句 → 中点镜 prompt 追加"冲突到达顶点"短句
+  - **B.4** 过肩机位断裂修复：3 镜同景同 cam 同对白 → 中间镜改"过肩镜头"
+  - **B.5** frame_layouts 兜底：缺 pose / on_screen / kfs 长度不齐 → 字段补齐（on_screen 矛盾保守不动打 WARN）
+- 全部走 Constraint 框架（与 `validation.py` 36 类 hard_fix 同构），register 一次性 append
+- 全部幂等：每个 Constraint 自带 `repair_marker`，已修字段自动跳过
+- 温度参数：保留 `models.py` dataclass 默认 0.05（保 deepseek 路径零修改），doubao 路径在 doubao_pipeline.py 显式传 `temperature=0.2` 覆盖
+- main.py 最小侵入：顶部 1 行条件 import（仅 TEXT_PROVIDER=agent_plan）+ 3 处调用点改 if/else（每处 4 行）
+- 退出 doubao 模式：unset TEXT_PROVIDER 即可，register 永不调，deepseek 路径完全 revert
+- 仍保持 "doubao 2 次不切 deepseek" 决策（v6.59.1 user decision）— GAP fallback 走 doubao 自身修复轮，不升级 deepseek 兜底
+- 单测：tests/step01_script_gen/doubao_hardfix/ 8 个文件 34 用例全绿
+- A/B：tools/bench_text_provider_ab.py 跑红果 + 锦衣各 1 章，total_pass_rate ≥92% / narration 非空率 ≥80% / camera 种数 ≥3 / core_keywords 命中率 ≥60%
+
 ### step01 kf 物理时刻 = motion_desc 时段铁律（v6.33，2026-08-18）
 - **触发问题**：08-18 钩子实测，motion_desc 明确分「前2秒：破水+下刺 / 2-4秒：闷哼+推臂」两段，但 LLM 只生成 2 个 kf **都堆在 post 段**（杨旭已仰卧+血）——**根本没生成"破水+下刺"pre 帧**。08-16 v6.31 校验只检"单 frame pre+post 矛盾"，**不检"完全没有 pre 帧"这一类结构性塌缩**——校验覆盖盲区
 - **解决（双层）**：
@@ -126,7 +150,7 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 - 支持 `response_format json_schema`（与 deepseek 路径同款 strict 结构化输出），用于 step01 分镜 JSON 强约束
 - 并发限速走 `AGENT_PLAN_TEXT_RPM`（默认 10 RPM，cooldown=6s）
 - 思考模式 `AGENT_PLAN_TEXT_REASONING_EFFORT`（none/minimal/low/medium/high/xhigh/max，默认 `none` 关闭）
-- 单次输出 token 上限 `AGENT_PLAN_TEXT_MAX_TOKENS`（0/空=不传；推荐分镜 40000-50000，钩子 8000，修复轮 50000）
+- 单次输出 token 上限 `AGENT_PLAN_TEXT_MAX_TOKENS`（0/空=不传；推荐分镜 16384，钩子 8000，修复轮 16384）
 - 错误码映射：401→鉴权失败（提示申请专属 key）、403→套餐/燃料耗尽、5xx→4 次指数退避、429→按 `retry-after` 等待
 - Key 缺失时构造直接 `ValueError`（含「AGENT_PLAN_API_KEY」+「专属 key」文案，与 image/video provider 对齐）
 
@@ -157,7 +181,7 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
   - **关键镜头/验收**：切 MiniMax H3 或火山付费档（Seedance 2.0 起）
   - **恢复 r2v 角色一致性**：火山 Seedance 2.0+ / MiniMax H3 都支持，管线已适配（`_collect_r2v_references` 按 provider 自动收参考图）
   - 以上全部是 `.env` 配置切换，零代码改动——模型能力差异集中在 `shared/model_caps.py`（时长/分辨率/参考图/有声/prompt 上限）+ `shared/ref_compose.py`（参考图数）+ provider 内格式映射，新增/切换模型不改编码
-- `MINIMAX_VIDEO_RESOLUTION`（默认 768P）/ `MINIMAX_VIDEO_DURATION`（默认 6）/ 轮询参数
+- `MINIMAX_VIDEO_RESOLUTION`（默认 768P）/ 轮询参数（`MINIMAX_VIDEO_DURATION` 死配置已删——时长规则见 shared/model_caps.MINIMAX_V1_*）
 - **prompt 适配（2026-08，按官方指南）**：
   - H3（r2v 路径）：provider 自动把 step02 扁平 prompt 重组为官方**时间线三段结构**（`integrated_multimodal_description: [Shot 1] ...` + `overall_soundscape` + `non_diegetic_music`）；「（背景音效：X）」→ 音景；「（用中文普通话说，音色）"台词"」→ `(S1) says: <d>[Chinese] 台词</d>`；有首帧图时前置官方 I2V 对齐指令。见 `_video_gen/minimax_provider.py _h3_render`
   - Hailuo v1（text/image 路径）：中文运镜词自动映射为官方**方括号指令**前缀（`[Push in]`/`[Tracking shot]`/`[Static shot]` 等 15 种，按出现顺序 ≤3 组合）。见 `_hailuo_camera_prefix`

@@ -67,9 +67,11 @@ PROMPT_MAX_CHARS = int(os.getenv("PROMPT_MAX_CHARS", "50000"))
 # ============================================================================
 # 供应商配置
 # ============================================================================
+from shared.constants import TEXT_PROVIDER_DEFAULT as _TEXT_PROVIDER_DEFAULT
+
 VIDEO_PROVIDER = os.getenv("VIDEO_PROVIDER", "agnes")
 IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "agnes")
-TEXT_PROVIDER = os.getenv("TEXT_PROVIDER", "deepseek")
+TEXT_PROVIDER = os.getenv("TEXT_PROVIDER", _TEXT_PROVIDER_DEFAULT)
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "dashscope_sdk")
 
 # 导演风格配置（可选）：用于视频 prompt 添加电影感前缀
@@ -248,7 +250,8 @@ AGENT_PLAN_MAX_CONCURRENCY = int(os.getenv("AGENT_PLAN_MAX_CONCURRENCY", "2"))
 # 鉴权复用 AGENT_PLAN_API_KEY（与图片/视频同专属 key）
 # 端点：POST {base}/chat/completions（OpenAI 兼容）
 AGENT_PLAN_TEXT_MODEL = os.getenv("AGENT_PLAN_TEXT_MODEL", "doubao-seed-2-1-turbo")
-AGENT_PLAN_TEXT_RPM = int(os.getenv("AGENT_PLAN_TEXT_RPM", "10"))
+# AGENT_PLAN_TEXT_RPM 已删（唯一消费者 _text_gen/config.py 自读同 env，双份定义易漂移）
+AGENT_PLAN_IMAGE_RPM = int(os.getenv("AGENT_PLAN_IMAGE_RPM", "10"))  # 限速参考
 # 思考模式强度：none/minimal/low/medium/high/xhigh/max（none 关闭；与 deepseek 路径同款）
 AGENT_PLAN_TEXT_REASONING_EFFORT = os.getenv("AGENT_PLAN_TEXT_REASONING_EFFORT", "none")
 # 单次输出 token 上限（0/None = 不传 max_tokens）
@@ -301,7 +304,8 @@ MINIMAX_H3_MODEL = os.getenv("MINIMAX_H3_MODEL", "MiniMax-H3")
 # （step02b 固定 720x1280→768P），仅在 size 解析失败时作回退；step01 时长上限也已按 req.size
 # 同源推导（shared/model_caps.active_video_duration_cap）。想改分辨率需改 step02b _make_request 的 size。
 MINIMAX_VIDEO_RESOLUTION = os.getenv("MINIMAX_VIDEO_RESOLUTION", "768P")
-MINIMAX_VIDEO_DURATION = int(os.getenv("MINIMAX_VIDEO_DURATION", "6"))
+# 注：MINIMAX_VIDEO_DURATION 已删除（全仓无消费者——provider 用 req.duration or 6，
+# 时长规则见 shared/model_caps.MINIMAX_V1_*；时长上限经 active_video_duration_cap）。
 MINIMAX_VIDEO_POLL_INTERVAL = int(os.getenv("MINIMAX_VIDEO_POLL_INTERVAL", "15"))
 MINIMAX_VIDEO_MAX_POLL_ATTEMPTS = int(os.getenv("MINIMAX_VIDEO_MAX_POLL_ATTEMPTS", "120"))
 
@@ -318,6 +322,19 @@ DASHSCOPE_VIDEO_MODEL = os.getenv("DASHSCOPE_VIDEO_MODEL", "wan2.7-t2v")
 DASHSCOPE_VIDEO_DURATION = int(os.getenv("DASHSCOPE_VIDEO_DURATION", "0"))
 DASHSCOPE_POLL_INTERVAL = int(os.getenv("DASHSCOPE_POLL_INTERVAL", "8"))
 DASHSCOPE_MAX_POLL_ATTEMPTS = int(os.getenv("DASHSCOPE_MAX_POLL_ATTEMPTS", "120"))
+# DashScope 视频子端点（http_dashscope 直连版用；SDK 版走 DASHSCOPE_BASE_URL）
+DASHSCOPE_VIDEO_I2V_ENDPOINT = os.getenv(
+    "DASHSCOPE_VIDEO_I2V_ENDPOINT",
+    "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+)
+DASHSCOPE_VIDEO_KF2V_ENDPOINT = os.getenv(
+    "DASHSCOPE_VIDEO_KF2V_ENDPOINT",
+    "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis",
+)
+DASHSCOPE_TASK_QUERY_ENDPOINT = os.getenv(
+    "DASHSCOPE_TASK_QUERY_ENDPOINT",
+    "https://dashscope.aliyuncs.com/api/v1/tasks",
+)
 
 
 # ============================================================================
@@ -334,9 +351,25 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 
 # ============================================================================
+# QC 视觉理解渠道（shared/image_qc.py 三层检测用；key 缺失时渠道自动跳过）
+# ============================================================================
+# ARK 渠道视觉模型（doubao-seed-1-6 视觉 chat；当前账号未开通时 404 自动落
+# agnes/dashscope 渠道，见 image_qc._vision_chat）
+QC_ARK_MODEL = os.getenv("QC_ARK_MODEL", "doubao-seed-1-6-250615")
+# dashscope OpenAI 兼容端点（qwen-vl-max 视觉渠道）
+QC_DASHSCOPE_BASE_URL = os.getenv(
+    "QC_DASHSCOPE_BASE_URL",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+)
+
+
+# ============================================================================
 # 视频生成通用配置
 # ============================================================================
-VIDEO_CONCURRENCY = int(os.getenv("VIDEO_CONCURRENCY", "0"))  # 0=自动匹配镜头数
+# 视频提交并发（唯一默认定义处）：step02b main 与 submit_poll 均从这里读取。
+# 注意：当前 .env.content 未设此值时默认 4；不要在别处再写 getenv 兜底（历史三处
+# 三默认值 0/8/4 已单源化），0 值会产生 Semaphore(0) 永久死锁（submit_poll 已加 max(1) 防护）。
+VIDEO_CONCURRENCY = int(os.getenv("VIDEO_CONCURRENCY", "4"))
 VIDEO_MAX_RETRIES = int(os.getenv("VIDEO_MAX_RETRIES", "3"))
 
 

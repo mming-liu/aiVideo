@@ -30,7 +30,11 @@ import requests
 from .models import VideoGenerationRequest, VideoGenerationResult
 from .service import VideoGenerationService
 from .config import config
-from shared.model_caps import _model_prompt_cap
+from shared.model_caps import (
+    _model_prompt_cap,
+    clamp_duration,
+    resolve_resolution,
+)
 from shared.config import (
     VOLCENGINE_API_KEY,
     VOLCENGINE_BASE_URL,
@@ -44,6 +48,7 @@ from shared.config import (
     VOLCENGINE_VIDEO_RATIO,
     VOLCENGINE_VIDEO_DURATION,
 )
+from shared.constants import VOLCENGINE_VIDEO_SUBMIT_RETRIES
 from shared.log_utils import verbose_write
 
 _verbose_write = partial(verbose_write, log_file="step02b.log")
@@ -105,12 +110,13 @@ def _classify_sentence_weight(sent: str) -> int:
     return _SENT_WEIGHT_MID
 
 
-def _seedance_compress_prompt(full_prompt: str, max_chars: int = 480,
+def _seedance_compress_prompt(full_prompt: str, max_chars: int,
                               ref_tags: list[str] | None = None) -> str:
     """Seedance prompt 智能压缩（避免静默截断丢关键约束）.
 
     关键事实（2026-08 火山方舟官方）：Seedance 视频接口硬约束中文有效 prompt
-    上限 ≈ 500 字符，**超长部分静默截断不报错**；@图片引用标记不计入字符。
+    上限 ≈ 500 字符（注册表 _model_prompt_cap），**超长部分静默截断不报错**；
+    @图片引用标记不计入字符。
     粗暴 req.prompt[:500] 尾部截断会砍掉 prompt 末尾的关键约束（"动作连贯
     性/风格收束/视觉衔接/r2v 参考图清单"），导致角色漂移、抽卡暴涨等 bug。
 
@@ -123,7 +129,7 @@ def _seedance_compress_prompt(full_prompt: str, max_chars: int = 480,
 
     Args:
         full_prompt: 完整 prompt 字符串
-        max_chars: 正文最大字符数（不含 ref_tags；默认 480，留 20 字安全余量）
+        max_chars: 正文最大字符数（不含 ref_tags；由调用方按 cap 动态推导）
         ref_tags: 已抽取的 @引用 标记列表；None 时自动从 full_prompt 抽
     Returns:
         压缩后的 prompt（ref_tags 在前 + 保留句子按原顺序）
@@ -191,20 +197,10 @@ _STATUS_SUCCEEDED = ("succeeded", "success", "done", "completed")
 _STATUS_FAILED = ("failed", "cancelled", "error", "expired")
 # _submit 内部重试上限（429 限速/5xx 抖动/网络异常），与 403 回退机制正交。
 # 403 由 _create_t2v_task/_create_i2v_task 切下一个回退模型，不消耗本计数器。
-_SUBMIT_MAX_RETRIES = 4
+_SUBMIT_MAX_RETRIES = VOLCENGINE_VIDEO_SUBMIT_RETRIES  # 单源 shared/constants.py
 # 轮询查询的瞬态错误容忍次数（查询接口 5xx/网络异常连续发生 N 次才判失败，
 # 不再每次计入 attempts；与 VOLCENGINE_VIDEO_MAX_POLL_ATTEMPTS 配合使用）
 _POLL_TRANSIENT_TOLERANCE = 5
-
-
-def _clamp_duration(value, cap) -> int:
-    """夹到模型支持时长区间 [cap.duration_range]；解析失败回退区间中值."""
-    lo, hi = cap.duration_range
-    try:
-        d = int(float(value))
-    except (TypeError, ValueError):
-        return (lo + hi) // 2
-    return max(lo, min(hi, d))
 
 
 def _encode_media(path: Optional[str]) -> Optional[str]:
@@ -226,34 +222,8 @@ def _encode_media(path: Optional[str]) -> Optional[str]:
         return None
 
 
-# 分辨率排序（升序），用于把推导档位收敛到模型允许的最高档
-_RES_ORDER = ("480p", "720p", "1080p", "4k")
-
-
-def _resolve_resolution(req: VideoGenerationRequest, cap) -> str:
-    """按模型能力推导分辨率：先按 req.size（如 720x1280）定档，再收敛到
-    cap.resolutions 中「≤ 推导值」的最高档（如 2.5 只支持 720p，1080p 推导→720p）.
-    可选 override：VOLCENGINE_VIDEO_RESOLUTION 非空则强制该档位（仍按能力收敛）."""
-    override = (VOLCENGINE_VIDEO_RESOLUTION or "").strip().lower()
-    size = (req.size or "").strip().lower().replace("*", "x")
-    if override in _RES_ORDER:
-        derived = override
-    else:
-        try:
-            w, h = size.split("x")
-            w, h = int(w), int(h)
-        except (ValueError, AttributeError):
-            derived = "720p"
-        else:
-            short = min(w, h)
-            derived = "1080p" if short >= 1080 else ("720p" if short >= 720 else "480p")
-    if derived in cap.resolutions:
-        return derived
-    best = cap.resolutions[0]
-    for r in cap.resolutions:
-        if _RES_ORDER.index(r) <= _RES_ORDER.index(derived):
-            best = r
-    return best
+# _clamp_duration / _RES_ORDER / _resolve_resolution 已上移 shared/model_caps.py
+# （clamp_duration / resolve_resolution，volcengine 与 agent_plan 共用单实现）。
 
 
 def _resolve_ratio(req: VideoGenerationRequest, cap, is_first_last_frames: bool = False) -> str:
@@ -351,11 +321,11 @@ class VolcengineVideoService(VideoGenerationService):
                     f"r2v 模式请将 VOLCENGINE_I2V_MODEL 设为 2.0/2.5 模型"
                 )
             from shared.ref_compose import get_ref_limit, fit_flat
-            ref_limit = get_ref_limit(model, default=12)
+            ref_limit = get_ref_limit(model)
             ref_paths = [p for p in (req.reference_paths or []) if p and Path(p).exists()]
             if len(ref_paths) > ref_limit:
-                from shared.paths import vimax_working_dir
-                sheet_dir = vimax_working_dir() / "shots" / str(req.clip_index)
+                from shared.paths import shot_work_dir
+                sheet_dir = shot_work_dir(req.clip_index)
                 ref_paths = fit_flat(ref_paths, ref_limit, sheet_dir, f"r2v{req.clip_index}")
                 _verbose_write(f"  [镜头{req.clip_index}] 参考图 {len(req.reference_paths)} 张超上限 "
                       f"{ref_limit}，无损压缩为 {len(ref_paths)} 张")
@@ -396,9 +366,10 @@ class VolcengineVideoService(VideoGenerationService):
         # 超长静默截断不报错。粗暴 [:cap_len] 尾部截断会砍掉末尾关键约束
         # （动作连贯性/风格收束/视觉衔接/r2v 参考图清单），导致角色漂移、
         # 抽卡暴涨等诡异 bug。改为按权重剥离 @图引用 + 删中段低权重句子。
-        # 阈值 460 触发压缩：500 - 20字@图预留 - 20字安全余量
+        # 压缩触发阈值由注册表 cap 现算：cap - 20字@图预留 - 20字安全余量
+        # （cap=500 时即历史硬编码的 460；cap 变化时阈值自动跟随）
         cap_len = _model_prompt_cap(model)
-        if cap_len and len(req.prompt) > 460:
+        if cap_len and len(req.prompt) > cap_len - 40:
             ref_tags = re.findall(r"@\S+", req.prompt)
             # 正文目标 = cap - ref_tags 长度 - 20 余量
             ref_len = sum(len(t) + 1 for t in ref_tags)
@@ -426,9 +397,9 @@ class VolcengineVideoService(VideoGenerationService):
         payload: dict = {
             "model": model,
             "content": self._build_content(req, model),
-            "resolution": _resolve_resolution(req, cap),
+            "resolution": resolve_resolution(req.size, cap, VOLCENGINE_VIDEO_RESOLUTION),
             "ratio": _resolve_ratio(req, cap, is_first_last_frames),
-            "duration": _clamp_duration(VOLCENGINE_VIDEO_DURATION or req.duration, cap),
+            "duration": clamp_duration(VOLCENGINE_VIDEO_DURATION or req.duration, cap),
             "watermark": False,
         }
         # 有声视频：按 VIDEO_MODEL_VOICE 决定是否下发 generate_audio。
@@ -678,12 +649,10 @@ class VolcengineVideoService(VideoGenerationService):
     def _download(self, req: VideoGenerationRequest, video_url: str) -> VideoGenerationResult:
         import shutil
         import tempfile
-        from shared.paths import vimax_working_dir
+        from shared.paths import shot_video_file
 
-        work_dir = vimax_working_dir()
-        save_dir = work_dir / "shots" / str(req.clip_index)
-        save_dir.mkdir(parents=True, exist_ok=True)
-        save_path = save_dir / "video.mp4"
+        save_path = shot_video_file(req.clip_index)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
 
         _verbose_write(f"  [镜头{req.clip_index}] 下载视频: {video_url}")
         try:

@@ -56,6 +56,17 @@ class TTSCfg:
     AZURE_REGION: str = os.getenv("TTS_AZURE_REGION", "eastus")
     AZURE_VOICE: str = os.getenv("TTS_AZURE_VOICE", "zh-CN-YunxiNeural")
 
+    # ---- DashScope Qwen3 TTS / 音色设计（端点与模型 ID 均可 env 覆盖） ----
+    QWEN3_TTS_MODEL: str = os.getenv("DASHSCOPE_QWEN3_TTS_MODEL", "qwen3-tts-vd-2026-01-26")
+    QWEN3_TTS_URL: str = os.getenv(
+        "DASHSCOPE_QWEN3_TTS_URL",
+        "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+    )
+    VOICE_DESIGN_URL: str = os.getenv(
+        "TTS_VOICE_DESIGN_URL",
+        "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/customization",
+    )
+
     @classmethod
     def validate(cls) -> None:
         if cls.PROVIDER == "dashscope_sdk" and not cls.API_KEY:

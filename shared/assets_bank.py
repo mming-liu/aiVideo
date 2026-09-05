@@ -121,7 +121,11 @@ class SceneAssetsBank:
     """跨章节场景资产（大场景 + 近景）持久化."""
 
     def __init__(self, bank_dir: str | None = None):
-        self._bank_dir = Path(bank_dir) if bank_dir else _book_global_dir() / "scenes_bank"
+        if bank_dir:
+            self._bank_dir = Path(bank_dir)
+        else:
+            from shared.paths import scenes_bank_dir
+            self._bank_dir = scenes_bank_dir()
         self._bank_path = self._bank_dir / "scenes_bank.json"
         self._data: dict = deepcopy(_EMPTY_SCENES)
 
@@ -307,7 +311,11 @@ class PropAssetsBank:
     """跨章节道具资产（白底资产图）持久化."""
 
     def __init__(self, bank_dir: str | None = None):
-        self._bank_dir = Path(bank_dir) if bank_dir else _book_global_dir() / "props_bank"
+        if bank_dir:
+            self._bank_dir = Path(bank_dir)
+        else:
+            from shared.paths import props_bank_dir
+            self._bank_dir = props_bank_dir()
         self._bank_path = self._bank_dir / "props_bank.json"
         self._data: dict = deepcopy(_EMPTY_PROPS)
 

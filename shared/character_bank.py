@@ -4,17 +4,17 @@
   - CharacterBank: 角色外观 + 肖像图（前/侧/背面），跨章增量积累
   - StyleBank: 全局视觉风格锚点（Ch1 锁定，后续章引用）
 
-数据布局:
-  {OUTPUT_BASE}/book_{BOOK:02d}/global/characters_bank/
+数据布局（目录计算统一走 shared/paths.py）:
+  {OUTPUT_BASE}/{NOVEL_NAME}/global/characters_bank/
     characters_bank.json        ← 角色注册表
     <identifier>/front.png      ← 正面肖像
     <identifier>/side.png       ← 侧面肖像
     <identifier>/back.png       ← 背面肖像
-  {OUTPUT_BASE}/book_{BOOK:02d}/global/style_bank/
+  {OUTPUT_BASE}/{NOVEL_NAME}/global/style_bank/
     style_bank.json             ← 风格元数据
     style_anchor.png            ← Ch1 Shot1 首帧副本
 
-全局（跨章节）数据按书归档在 book 目录的 global/ 下，与各 chapter_NN/ 平级。
+全局（跨章节）数据在小说级 global/ 下，与部级 part_XX/ 及章级 chapter_NNN/ 平级。
 """
 
 import json
@@ -69,7 +69,11 @@ class CharacterBank:
     """跨章节角色外观 + 肖像持久化."""
 
     def __init__(self, bank_dir: str | None = None):
-        self._bank_dir = Path(bank_dir) if bank_dir else _book_global_dir() / "characters_bank"
+        if bank_dir:
+            self._bank_dir = Path(bank_dir)
+        else:
+            from shared.paths import characters_bank_dir
+            self._bank_dir = characters_bank_dir()
         self._bank_path = self._bank_dir / "characters_bank.json"
         self._data: dict = dict(_EMPTY_BANK)
 
@@ -265,7 +269,11 @@ class StyleBank:
     """
 
     def __init__(self, bank_dir: str | None = None):
-        self._dir = Path(bank_dir) if bank_dir else _book_global_dir() / "style_bank"
+        if bank_dir:
+            self._dir = Path(bank_dir)
+        else:
+            from shared.paths import style_bank_dir
+            self._dir = style_bank_dir()
         self._json_path = self._dir / "style_bank.json"
         self._data: dict = dict(_EMPTY_STYLE)
 

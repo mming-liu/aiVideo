@@ -155,7 +155,15 @@ def test_image_submit_basic_payload(monkeypatch, tmp_path):
     payload = call_args.kwargs.get("json") or call_args[1].get("json")
     assert payload["model"] == "doubao-seedream-5-0-lite"
     assert payload["prompt"] == "test prompt"
-    assert payload["size"] == "1024x1792"
+    # 1024x1792 低于 5-0-lite 像素下限，provider 必须等比收敛到 [px_min, px_max] 区间
+    # （历史硬兜底 1024x1792 自身越界会 400，见 shared/image_size_fit.fit_pixel_size）
+    from shared.model_caps import get_seedream_cap
+    _cap = get_seedream_cap("doubao-seedream-5-0-lite")
+    _w, _h = payload["size"].split("x")
+    _total = int(_w) * int(_h)
+    assert _cap.px_min <= _total <= _cap.px_max, (
+        f"size {payload['size']}={_total} 越界 [{_cap.px_min}, {_cap.px_max}]"
+    )
     assert payload["response_format"] == "url"
     assert payload["watermark"] is False
     # 无参考图时不带 image 字段

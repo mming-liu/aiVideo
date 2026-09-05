@@ -182,15 +182,15 @@ scene_compliance.py：
 
 视频生成（step02）：
 - VIDEO_CLIP_INTERVAL：视频提交间隔（同 key 61s/不同 key 30s）
-- VIDEO_CONCURRENCY：视频并发数（默认 6，自动匹配镜头数）
+- VIDEO_CONCURRENCY：视频提交并发（默认 4，单源 shared/config.py；.env.content 默认未设）
 - VIDEO_MAX_REQUESTS_PER_MINUTE：RPM 限流
 - VIDEO_MAX_RETRIES：单镜最大重试次数（默认 3）
-- **轮询参数**（POLL_xxx）：
-  - POLL_BASE_INTERVAL：初始轮询间隔（默认 10s）
-  - POLL_MAX_INTERVAL：最大轮询间隔（默认 60s）
+- **轮询参数**（POLL_xxx，定义在 step02_video_gen/submit_poll.py）：
+  - POLL_BASE_INTERVAL：初始轮询间隔（默认 180s）
+  - POLL_MAX_INTERVAL：最大轮询间隔（默认 180s——与 BASE 相等时指数退避不生效，恒定 180s）
   - POLL_EXPONENTIAL_FACTOR：退避系数（默认 1.5x）
-  - POLL_JITTER：随机抖动范围（默认 3s）
-  - INITIAL_POLL_DELAY：提交后首次等待（默认 60s）
+  - POLL_JITTER：随机抖动范围（默认 ±10s）
+  - INITIAL_POLL_DELAY：提交后首次等待（默认 180s）
 
 图片生成：
 - IMAGE_GEN_INTERVAL：图片生成间隔（默认 21s）

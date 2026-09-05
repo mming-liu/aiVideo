@@ -23,6 +23,7 @@ from style_prefix import (
 from shared.style_cinematic import get_cinematic_prefix, get_director_negative
 from shared.config import CINEMATIC_STYLE
 from shared.motion_segments import build_motion_segments, format_motion_segments, count_effective_segments
+from shared.paths import FIRST_FRAME_FILENAME, first_frame_file
 
 # 是否允许视频模型自带语音（默认开启）：
 # 2026-08 架构变更：对话已交给视频模型（模型生成说话+口型+台词），step02 不再
@@ -280,7 +281,7 @@ def _classify_reference_purpose(path: str, shot: dict, registry: dict,
     stem = _P(path).stem
 
     # 0. 本镜首帧：视频起点构图锚点（时间/场景/人物站位/动作起点以它为准）
-    if name == "first_frame.png":
+    if name == FIRST_FRAME_FILENAME:
         return ("视频起点构图锚点，画面从该静态瞬间开始，时间、场景、人物站位、"
                 "动作起点与图中完全一致，后续动作在此基础上推进")
 
@@ -1006,7 +1007,9 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         # 语义污染模型。r2v/text 模式本就不收集（用户决策 08-15：
         # keyframes 留给图生图用，其他两个模式不用）。
         # _provider 已在函数开头赋值（精简路径路由用），此处复用
-        _kf_enabled = _provider != "bailian"
+        # 2026-09-05 修复：原 _provider 实际未在 _make_request 内赋值（08-15 引入 bug），
+        # 改读 VIDEO_PROVIDER 环境变量（与 _USE_TEXT_TO_VIDEO / _REFERENCE_MODE 同源）
+        _kf_enabled = os.getenv("VIDEO_PROVIDER", "").strip().lower() != "bailian"
         if mode == "B" and continuity_ref_image:
             image_path = continuity_ref_image
             for i, fp in enumerate((frame_paths or [])):
@@ -1130,8 +1133,8 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
     # 首帧存在时以它为构图锚点，并在组装时替代场景资产图的环境锚定（避免时间冲突）。
     composition_refs: list[str] = []
     try:
-        from shared.paths import vimax_working_dir
-        ff_candidate = vimax_working_dir() / "shots" / str(shot.get("index", 0)) / "first_frame.png"
+        from shared.paths import first_frame_file as _fff
+        ff_candidate = _fff(shot.get("index", 0))
         if ff_candidate.exists() and ff_candidate.stat().st_size > 10 * 1024:
             composition_refs = [str(ff_candidate)]
             _log_r2v_collect(f"  首帧构图锚点: {ff_candidate.name}（动作起点/时间/人物站位以它为准）")
@@ -1332,7 +1335,7 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
     # 用 active_video_model() 统一推导——volcengine/agent_plan/bailian/minimax
     # 都走同一份注册表，避免逐 provider 硬编码新增遗漏。
     r2v_model = active_video_model() or ""
-    media_limit = get_ref_limit(r2v_model, default=5)
+    media_limit = get_ref_limit(r2v_model)
     # 首帧构图锚点永远原图直传占第 1 名额（构图/时间/站位基准，拼表会严重损失）
     head_refs = composition_refs[:1]
     buckets = [
@@ -1341,8 +1344,8 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
         ("chars", list(char_refs)),
         ("props", list(prop_refs)),
     ]
-    from shared.paths import vimax_working_dir as _vwd
-    sheet_dir = _vwd() / "shots" / str(shot.get("index", 0))
+    from shared.paths import shot_work_dir
+    sheet_dir = shot_work_dir(shot.get("index", 0))
     refs = head_refs + fit_refs(
         buckets, max(1, media_limit - len(head_refs)), sheet_dir, f"r2v{shot.get('index', 0)}",
     )

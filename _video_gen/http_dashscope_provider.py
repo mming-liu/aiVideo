@@ -19,24 +19,25 @@ from .models import VideoGenerationRequest, VideoGenerationResult
 from .service import VideoGenerationService
 from .config import config
 
+from shared.config import (
+    DASHSCOPE_VIDEO_I2V_ENDPOINT,
+    DASHSCOPE_VIDEO_KF2V_ENDPOINT,
+    DASHSCOPE_TASK_QUERY_ENDPOINT,
+)
+from shared.model_caps import KF2V_CAPABLE_MODELS, KF2V_ONLY_MODELS
 from shared.log_utils import verbose_write as _verbose_write
 
 
 # ===================================================================
-# 端点与常量（从 waoowaoo 源码提取）
+# 端点与常量（值单源 shared/config.py + shared/model_caps.py，可 env 覆盖）
 # ===================================================================
 
 # 普通 i2v 端点
-I2V_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
+I2V_ENDPOINT = DASHSCOPE_VIDEO_I2V_ENDPOINT
 # KF2V 首尾帧端点
-KF2V_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis"
+KF2V_ENDPOINT = DASHSCOPE_VIDEO_KF2V_ENDPOINT
 # 任务查询端点
-TASK_QUERY_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/tasks"
-
-# 支持首尾帧的模型
-KF2V_CAPABLE_MODELS = {"wan2.2-kf2v-flash", "wanx2.1-kf2v-plus", "wan2.7-i2v"}
-# 仅首尾帧模式的模型（不支持普通 i2v）
-KF2V_ONLY_MODELS = {"wan2.2-kf2v-flash", "wanx2.1-kf2v-plus"}
+TASK_QUERY_ENDPOINT = DASHSCOPE_TASK_QUERY_ENDPOINT
 
 
 def _is_first_last_frame(req: VideoGenerationRequest) -> bool:

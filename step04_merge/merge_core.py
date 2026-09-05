@@ -43,12 +43,9 @@ CONTRAST = float(os.getenv("FFMPEG_CONTRAST", "1.15"))
 SATURATION = float(os.getenv("FFMPEG_SATURATION", "0.85"))
 VIGNETTE_ANGLE = float(os.getenv("FFMPEG_VIGNETTE_ANGLE", "0.5"))
 
-# 编码预设（读取 shared.config，默认 ultrafast）
-try:
-    from shared.config import MERGE_PRESET as _CFG_PRESET
-    VIDEO_PRESET = _CFG_PRESET
-except ImportError:
-    VIDEO_PRESET = "ultrafast"
+# 编码预设（单源 shared.config.MERGE_PRESET；shared.config 随包必在，死回退已删）
+from shared.config import MERGE_PRESET as _CFG_PRESET
+VIDEO_PRESET = _CFG_PRESET
 
 
 def _run_cmd(cmd: list, **kwargs) -> subprocess.CompletedProcess:

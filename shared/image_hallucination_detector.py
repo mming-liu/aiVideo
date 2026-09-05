@@ -26,6 +26,7 @@ from typing import List, Optional
 import requests
 
 from _text_gen import config as text_config
+from shared.constants import HALLUCINATION_DETECT_RETRIES
 
 
 @dataclass
@@ -115,7 +116,7 @@ class ImageHallucinationDetector:
     """
 
     _TIMEOUT = 60  # 请求超时（秒）
-    _MAX_RETRIES = 3  # 最大重试次数
+    _MAX_RETRIES = HALLUCINATION_DETECT_RETRIES  # 最大重试次数（单源 shared/constants.py）
 
     def __init__(self, provider: str = "agnes"):
         self._provider = provider

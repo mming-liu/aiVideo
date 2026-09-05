@@ -249,10 +249,11 @@ async def gen_prop_assets(image_adapter, force: bool = False, hallucinated_ids: 
             continue
 
         # 生成白底资产图（B8 修复：QC critical 时重试最多 2 次）
+        from shared.constants import ASSET_GEN_ATTEMPTS
         prop_ok = False
-        for _attempt in range(1, 3):
+        for _attempt in range(1, 1 + ASSET_GEN_ATTEMPTS):
             logger.info(f"[ASSET] 生成道具 {ident} 白底资产图"
-                        f"{f'（重试 {_attempt}/2）' if _attempt > 1 else ''} ...")
+                        f"{f'（重试 {_attempt}/{ASSET_GEN_ATTEMPTS}）' if _attempt > 1 else ''} ...")
             try:
                 img_out = await gen.generate_prop(prop, save_path=str(prop_path))
                 if not _save_image(img_out, prop_path):

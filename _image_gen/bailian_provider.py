@@ -24,6 +24,7 @@ from shared.config import (
     BAILIAN_T2I_MODEL,
 )
 from shared.key_scheduler import KeyScheduler
+from shared.constants import BAILIAN_IMAGE_429_RETRIES
 from shared.error_fmt import parse_retry_after
 from shared.ref_compose import get_ref_limit, fit_flat
 
@@ -77,13 +78,10 @@ class BailianImageService(ImageGenerationService):
         ]
         self._model_queue: list[str] = [BAILIAN_T2I_MODEL] + fallback_models
 
-        # 模型参考图上限（I2I 模式）：
-        # qwen-image-2.0-2in1 / qwen-image 系列支持 0~3 个 image content items
-        # （0 = T2I，1~3 = I2I）。上层 force_multi_ref 会绕过 IMAGE_MULTI_REF 全传
-        # 参考图（钩子 5 张 = 场景 + 3 角色 + 道具），provider 必须在此裁剪到模型上限，
-        # 否则 400: "Model supports 0~3 image content items. Got N image items."
-        # 可通过环境变量 IMAGE_MAX_REFS 覆盖（部分模型支持更多参考图）。
-        self._max_image_refs = int(os.getenv("IMAGE_MAX_REFS", "3"))
+        # 模型参考图上限（I2I 模式）：统一走 shared.ref_compose.get_ref_limit
+        # （qwen-image 系列 0~3 个 image content items；上层 force_multi_ref 绕过
+        # IMAGE_MULTI_REF 全传时由 provider 裁剪，否则 400）。不再在此重复读
+        # IMAGE_MAX_REFS env（get_ref_limit 内部已有同一兜底逻辑）。
 
         # 设置 dashscope API key 和 Bailian Workspace URL
         dashscope.api_key = BAILIAN_API_KEY
@@ -105,19 +103,14 @@ class BailianImageService(ImageGenerationService):
         # #23 修复：acquire 加 timeout 上限（180s），429 长冷却时不无限阻塞
         self._key_scheduler.acquire(timeout=180)
 
-        # 解析 size (如 "10x24" -> ["10", "24"])
+        # 解析 size（内部统一为 "W*H" 形式后再查表；x 形键在 replace 后永不命中，
+        # 已清理——历史 x 形死键 6 个 + "720*12" 笔误，均为恒等映射，零行为变化）
         size_map = {
-            "10x24": "10*24",
-            "10x18": "10*18",
-            "10x16": "10*16",
-            "10x12": "10*12",
-            "720x1280": "720*1280",
-            "1024x1024": "10*10",
             "10*24": "10*24",
             "10*18": "10*18",
             "10*16": "10*16",
             "10*12": "10*12",
-            "720*12": "720*1280",
+            "720*1280": "720*1280",
             "10*10": "10*10",
         }
         size_str = size_map.get(req.size.replace("x", "*"), req.size.replace("x", "*"))
@@ -149,7 +142,7 @@ class BailianImageService(ImageGenerationService):
         # 策略：优先读服务端 Retry-After/错误体剩余秒数；读不到则按完整冷却窗口兜底。
         # 冷却窗口按 BAILIAN_IMAGE_RPM 推导（wan2.7-image 默认 RPS=5 ≈ 窗口 0.2s，
         # qwen-image RPM=1 ≈ 窗口 60s），兜底至少 5s 避免高并发下瞬时限流。
-        _MAX_429_RETRIES = 2
+        _MAX_429_RETRIES = BAILIAN_IMAGE_429_RETRIES  # 单源 shared/constants.py
         _429_RATE_LIMIT_WINDOW = 60.0 / _BAILIAN_IMAGE_RPM if _BAILIAN_IMAGE_RPM > 0 else 60.0  # 秒
         _429_RATE_LIMIT_WINDOW = max(_429_RATE_LIMIT_WINDOW, 5.0)  # 下限 5s
         _429_RETRY_BACKOFF = 2  # 秒：窗口末尾的额外缓冲（网络抖动/时钟偏差）
@@ -160,7 +153,7 @@ class BailianImageService(ImageGenerationService):
             # 注册表）+ 无损压缩：超上限保留前 N-1 张原图 + 尾部拼 1 张参考表，
             # 参考图信息不丢失（替换旧版「丢弃尾部」）。403 回退到不同上限的
             # 模型时各自按注册表重算。在编码前、重试循环外只做一次。
-            ref_limit = get_ref_limit(model, default=self._max_image_refs)
+            ref_limit = get_ref_limit(model)
             ref_paths = list(req.reference_image_paths or [])
             if not ref_paths and req.reference_image_path:
                 ref_paths = [req.reference_image_path]

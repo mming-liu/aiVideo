@@ -77,8 +77,8 @@ def qc_video_file(video_path: Path, shot_idx: int) -> bool:
     """
     try:
         from shared.image_qc import qc_image
-        from shared.paths import chapter_dir
-        with tempfile.TemporaryDirectory(dir=str(chapter_dir() / "vimax_working")) as td:
+        from shared.paths import vimax_working_dir
+        with tempfile.TemporaryDirectory(dir=str(vimax_working_dir())) as td:
             frames = [
                 (tag, _extract_frame(video_path, Path(td), ratio, tag))
                 for tag, ratio in _FRAME_RATIOS

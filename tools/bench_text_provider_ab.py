@@ -201,6 +201,20 @@ def process_trial(provider: str, raw_res: dict, novel_text: str) -> dict:
 
     warn_count = buf.getvalue().count("[WARN]")
     if parse_ok:
+        # v6.60+ (2026-09-05): agent_plan 路径上挂载 doubao 专用 hard_fix，与 main.py 保持一致
+        if provider == "agent_plan":
+            try:
+                from step01_script_gen import doubao_hardfix  # noqa: F401  触发 module-level register
+                # 从 script["characters"] 提取 bank，传入 ctx 以使 B.3.1/B.3.3 能跳出「空 bank」提前返回
+                _chars_list = (script.get("characters") or [])
+                _bank = {c.get("identifier", ""): c for c in _chars_list if c.get("identifier")}
+                from step01_script_gen.constraints.context import ConstraintContext
+                from step01_script_gen.constraints.engine import ALL_CONSTRAINTS
+                _ctx = ConstraintContext.from_script(script, characters_bank=_bank, is_final_pass=True)
+                for _cn in ALL_CONSTRAINTS:
+                    _cn.apply(_ctx)
+            except Exception as _bhfe:
+                print(f"{label} doubao hard_fix 失败（保留原版）: {_bhfe}")
         try:
             from step01_script_gen.timecode import _compute_timecodes
             _compute_timecodes(script)

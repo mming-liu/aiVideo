@@ -121,9 +121,9 @@ class ImageGeneratorAiVideoAdapter:
         # （qwen=3 / seedream 4.5=14 / image-01=1 ...），未注册模型回退 IMAGE_MAX_REFS；
         # 不写死在这里，跟具体模型走。
         from shared.ref_compose import fit_refs, fit_flat, active_image_ref_limit
-        from shared.paths import vimax_working_dir
+        from shared.paths import shot_work_dir
         max_refs = active_image_ref_limit()
-        sheet_dir = vimax_working_dir() / "shots" / str(shot_index)
+        sheet_dir = shot_work_dir(shot_index)
         if ref_paths and not getattr(self._svc, "supports_multi_ref", True):
             try:
                 merged = fit_refs([("all", ref_paths)], 1, sheet_dir, f"shot{shot_index}")
@@ -246,7 +246,7 @@ class VideoGeneratorAiVideoAdapter:
 
     def __init__(
         self,
-        size: str = "960x1792",  # 9:16 竖屏（与 _video_gen 默认一致）
+        size: str = "960x1792",  # 9:16 竖屏（⚠️ 与 _video_gen/models.py 默认 720x1280 不同，二者并存勿混用）
         duration: int = 5,
         negative_prompt: str | None = None,  # None=按 VIDEO_PROVIDER 自动（英文 token 仅 Agnes）
         prefix: str = STYLE_PREFIX_SHORT,

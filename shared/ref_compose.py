@@ -23,6 +23,8 @@
 import os
 from pathlib import Path
 
+from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
+
 # (模型名子串, 参考图上限)。顺序敏感：具体在前，泛化在后。
 MODEL_REF_LIMITS: list[tuple[str, int]] = [
     # --- 火山免费预置模型（带日期后缀，先匹配先命中）---
@@ -68,7 +70,13 @@ MODEL_REF_LIMITS: list[tuple[str, int]] = [
 
 
 def get_ref_limit(model: str | None, default: int | None = None) -> int:
-    """按模型名查参考图上限；未注册模型用 IMAGE_MAX_REFS 或 default."""
+    """按模型名查参考图上限；未注册模型统一兜底 IMAGE_MAX_REFS（默认 3）.
+
+    ⚠️ 2026-09 决策：provider 不再传 default= 抄注册表值——未注册新模型的兜底
+    统一走 IMAGE_MAX_REFS env。新增模型务必先在 MODEL_REF_LIMITS 注册，否则
+    参考图上限与真实能力可能不符（多传报错、少传浪费一致性）。
+    保留 default= 形参仅为向后兼容，生产代码勿再使用。
+    """
     if default is None:
         env = os.getenv("IMAGE_MAX_REFS")
         default = int(env) if env else 3
@@ -141,9 +149,10 @@ def describe_ref(path: str) -> str:
             ordered = "、".join(names_part.split("+"))
             label += f"；从左至右依次为：{ordered} 的头肩像，各自的长相与上装以对应位置为准"
         return label
-    if name == "first_frame.png":
+    # 文件名分类匹配（非路径构建）；文件名契约单源 shared/paths.py 的 *_FILENAME 常量
+    if name == FIRST_FRAME_FILENAME:
         return "视频起点画面（首帧，构图与人物站位基准）"
-    if name == "last_frame.png":
+    if name == LAST_FRAME_FILENAME:
         return "视频终点画面（尾帧）"
     if "/scenes_bank/" in p:
         return "场景环境参考（只取环境光线与布局，禁止把图中内容当人物）"

@@ -48,6 +48,12 @@ from shared.config import (
     MINIMAX_VIDEO_POLL_INTERVAL,
     MINIMAX_VIDEO_MAX_POLL_ATTEMPTS,
 )
+from shared.model_caps import (
+    MINIMAX_V1_MAX_DURATION,
+    MINIMAX_V1_ONLY_DURATION,
+    _model_prompt_cap,
+    model_duration_range,
+)
 from shared.log_utils import verbose_write
 
 _verbose_write = partial(verbose_write, log_file="step02b.log")
@@ -116,7 +122,7 @@ def _h3_render(req: VideoGenerationRequest) -> str:
     - 包装为「画面描述 / 环境音 / 背景音乐」三段
     - 有首帧图时前置首帧对齐指令
     """
-    text = (req.prompt or "")[:7000]  # 官方 Input Requirements: Prompt length ≤ 7000 chars
+    text = (req.prompt or "")[:_model_prompt_cap(MINIMAX_H3_MODEL)]  # 官方 Input Requirements: Prompt length ≤ 7000 chars
 
     # 1) 背景音效 → 环境音
     m = _AUDIO_CUE_RE.search(text)
@@ -149,10 +155,11 @@ def _h3_render(req: VideoGenerationRequest) -> str:
         body = (
             "目标视频 0 秒处完全参考 <图片1>（来自[镜头1]）。\n\n" + body
         )
-    # 兜底：组装后仍超 7000 则截断（官方 Input Requirements: Prompt length ≤ 7000 chars）
-    if len(body) > 7000:
-        body = body[:7000]
-        _verbose_write(f"  [镜头{req.clip_index}] [!] H3 prompt 超 7000 字，已截断为 7000 字")
+    # 兜底：组装后仍超上限则截断（上限按注册表 _model_prompt_cap，H3=7000）
+    _cap = _model_prompt_cap(MINIMAX_H3_MODEL)
+    if _cap and len(body) > _cap:
+        body = body[:_cap]
+        _verbose_write(f"  [镜头{req.clip_index}] [!] H3 prompt 超 {_cap} 字，已截断为 {_cap} 字")
     return body
 
 
@@ -293,14 +300,14 @@ class MiniMaxVideoService(VideoGenerationService):
         return "512P"
 
     def _resolve_v1_duration(self, req: VideoGenerationRequest, model: str, resolution: str) -> int:
-        """v1 时长：01 系列 / 1080P 仅 6s；其余 768P 可 6 或 10."""
+        """v1 时长：01 系列 / 1080P 仅 6s；其余 768P 可 6 或 10（数字注册表单源，见 model_caps）."""
         if "01" in model.lower() or resolution == "1080P":
-            return 6
+            return MINIMAX_V1_ONLY_DURATION
         try:
-            d = int(req.duration or 6)
+            d = int(req.duration or MINIMAX_V1_ONLY_DURATION)
         except (TypeError, ValueError):
-            return 6
-        return 6 if d <= 6 else 10
+            return MINIMAX_V1_ONLY_DURATION
+        return MINIMAX_V1_ONLY_DURATION if d <= MINIMAX_V1_ONLY_DURATION else MINIMAX_V1_MAX_DURATION
 
     def _submit_v1(self, req: VideoGenerationRequest, model: str, payload: dict) -> str:
         """提交单个 v1 任务，返回 task_id；失败抛异常."""
@@ -335,9 +342,11 @@ class MiniMaxVideoService(VideoGenerationService):
             # v6.58 (Phase C-1): 结构化 camera_movement 字段驱动方括号运镜指令，
             # 比 prompt 全文搜索更精准（不会误匹配"推开门"等普通动词）。
             cam_prefix = _hailuo_camera_from_structured(req.camera_movement or "")
+            _cap = _model_prompt_cap(model)
+            _prompt = cam_prefix + req.prompt
             payload: dict = {
                 "model": model,
-                "prompt": (cam_prefix + req.prompt)[:2000],
+                "prompt": _prompt[:_cap] if _cap else _prompt,
                 "resolution": resolution,
                 "duration": self._resolve_v1_duration(req, model, resolution),
                 "prompt_optimizer": False,  # 已人工精调，关闭改写
@@ -363,9 +372,11 @@ class MiniMaxVideoService(VideoGenerationService):
             resolution = self._resolve_v1_resolution(req, model)
             # v6.58 (Phase C-1): 结构化 camera_movement 字段驱动方括号运镜指令
             cam_prefix = _hailuo_camera_from_structured(req.camera_movement or "")
+            _cap = _model_prompt_cap(model)
+            _prompt = cam_prefix + req.prompt
             payload: dict = {
                 "model": model,
-                "prompt": (cam_prefix + req.prompt)[:2000],
+                "prompt": _prompt[:_cap] if _cap else _prompt,
                 "resolution": resolution,
                 "duration": self._resolve_v1_duration(req, model, resolution),
                 "prompt_optimizer": False,
@@ -405,11 +416,11 @@ class MiniMaxVideoService(VideoGenerationService):
         # ---- R2V 模式：参考图/参考音频 ----
         if req.reference_paths:
             from shared.ref_compose import get_ref_limit, fit_flat
-            ref_limit = get_ref_limit(MINIMAX_H3_MODEL, default=9)
+            ref_limit = get_ref_limit(MINIMAX_H3_MODEL)
             ref_paths = [p for p in (req.reference_paths or []) if p and Path(p).exists()]
             if len(ref_paths) > ref_limit:
-                from shared.paths import vimax_working_dir
-                sheet_dir = vimax_working_dir() / "shots" / str(req.clip_index)
+                from shared.paths import shot_work_dir
+                sheet_dir = shot_work_dir(req.clip_index)
                 ref_paths = fit_flat(ref_paths, ref_limit, sheet_dir, f"r2v{req.clip_index}")
                 _verbose_write(f"  [镜头{req.clip_index}] 参考图 {len(req.reference_paths)} 张超上限 "
                       f"{ref_limit}，无损压缩为 {len(ref_paths)} 张")
@@ -443,11 +454,16 @@ class MiniMaxVideoService(VideoGenerationService):
         content = self._build_h3_content(req)
         # ratio: T2V（纯 text）必须具体 ratio；i2v/r2v 必须 adaptive
         has_media = any(item["type"] != "text" for item in content)
+        # 时长区间走注册表（H3 = (4, 15)，见 model_caps._VIDEO_DURATION_RANGES）
+        _dmin, _dmax = model_duration_range(MINIMAX_H3_MODEL)
+        _duration = int(req.duration or 6)
+        if _dmax:
+            _duration = max(_dmin or 0, min(_dmax, _duration))
         payload: dict = {
             "model": MINIMAX_H3_MODEL,
             "content": content,
             "resolution": (MINIMAX_VIDEO_RESOLUTION or "768P").upper(),
-            "duration": max(4, min(15, int(req.duration or 6))),
+            "duration": _duration,
             "ratio": "adaptive" if has_media else _resolve_ratio(req),
         }
 
@@ -627,12 +643,10 @@ class MiniMaxVideoService(VideoGenerationService):
     def _download(self, req: VideoGenerationRequest, video_url: str) -> VideoGenerationResult:
         import shutil
         import tempfile
-        from shared.paths import vimax_working_dir
+        from shared.paths import shot_video_file
 
-        work_dir = vimax_working_dir()
-        save_dir = work_dir / "shots" / str(req.clip_index)
-        save_dir.mkdir(parents=True, exist_ok=True)
-        save_path = save_dir / "video.mp4"
+        save_path = shot_video_file(req.clip_index)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
 
         _verbose_write(f"  [镜头{req.clip_index}] 下载视频: {video_url}")
         try:

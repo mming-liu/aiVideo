@@ -42,7 +42,17 @@ from shared.config import (
 OUTLINE_ENABLED = os.getenv("OUTLINE_ENABLED", "1").strip() == "1"
 
 # 输出目录基于 book/chapter 计算（统一路径来源: shared/paths.py）
-from shared.paths import chapter_dir, script_file
+from shared.paths import (
+    chapter_dir,
+    script_file,
+    audio_dir,
+    vimax_working_dir,
+    vimax_shots_dir,
+    stretched_dir,
+    final_file,
+    subtitles_file,
+)
+from shared.constants import SCRIPT_PARSE_RETRIES, SCRIPT_PARSE_RETRY_SLEEP_SEC
 CHAPTER_DIR = chapter_dir()
 OUTPUT_FILE = script_file()
 SCRIPT_FILE = OUTPUT_FILE
@@ -132,7 +142,8 @@ from step01_script_gen.prompts import (
 # v2026-09-03: 按 TEXT_PROVIDER 自动选择 prompt builder。
 # agent_plan（doubao-seed-2-1-turbo）→ doubao 专属（XML schema + few-shot + workflow）
 # 其他 provider → 沿用 deepseek 调优的 build_prompt / build_hook_prompt
-_TEXT_PROVIDER = os.getenv("TEXT_PROVIDER", "deepseek").strip().lower()
+from _text_gen.config import TEXT_PROVIDER_DEFAULT
+_TEXT_PROVIDER = (os.getenv("TEXT_PROVIDER") or TEXT_PROVIDER_DEFAULT).strip().lower()
 build_prompt, build_hook_prompt = auto_select_prompt_builder(_TEXT_PROVIDER)
 if _TEXT_PROVIDER == "agent_plan":
     _logger.info(f"[INFO] 使用 doubao 专属 prompt (provider={_TEXT_PROVIDER})")
@@ -144,6 +155,16 @@ from step01_script_gen.timecode import _compute_timecodes
 from step01_script_gen.hash_cache import _prompt_changed, _hash_source
 from step01_script_gen.gap_analysis import validate_script_gap, generate_gap_report, print_gap_report
 
+
+# v6.60+ (2026-09-05): doubao 专用模块条件 import - 不影响 deepseek 路径.
+# TEXT_PROVIDER=agent_plan 时挂载 doubao_pipeline / doubao_hardfix (硬修复 Constraint);
+# deepseek 路径 zero change (register_doubao_hardfixes 仅 import 时自动尝试).
+if _TEXT_PROVIDER == "agent_plan":
+    try:
+        from step01_script_gen import doubao_pipeline  # noqa: F401
+        from step01_script_gen import doubao_hardfix  # noqa: F401
+    except ImportError:
+        pass
 import style_prefix
 import scene_compliance
 import shared.content_safety as content_safety
@@ -341,7 +362,7 @@ def _speech_body(narration: str) -> str:
     return _re.sub(r"[\s　，。！？、；：""''（）【】《》…—-]", "", body)
 
 def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=None,
-                      max_attempts: int = 2) -> dict:
+                      max_attempts: int | None = None) -> dict:
     """镜头数严重超限时，反馈给 LLM 合并冗余镜头，重新生成一次（软收敛）.
 
     与 gap_analysis 相互独立：这里只看「镜头数/总时长」超限，不校验内容分布。
@@ -355,6 +376,10 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
     全部跳过（不再 regen、不再 force-truncate），镜头数完全由 LLM 决定。
     """
     from shared.config import SHOT_COUNT_MAX
+
+    # 重试次数单源 shared.config.GAP_MAX_REGEN_ATTEMPTS（签名默认 None=不覆盖）
+    if max_attempts is None:
+        max_attempts = GAP_MAX_REGEN_ATTEMPTS
 
     # v6.43 镜头数不限：SHOT_COUNT_MAX<=0 时跳过整个函数（保留 LLM 原始生成）
     if SHOT_COUNT_MAX <= 0:
@@ -1523,27 +1548,27 @@ def main() -> None:
     # 解析失败时重新调用 LLM 重试，而不是让整个流水线崩溃（每次约 3-6 分钟）。
     script = None
     last_err = None
-    for attempt in range(1, 1 + 3):
+    for attempt in range(1, 1 + SCRIPT_PARSE_RETRIES):
         try:
             raw = gen_spy_script(novel_text, character_bank, scene_objects_bank,
                                   outline=pre_extracted_outline)
         except RuntimeError as e:
             # 生成失败（如 DeepSeek 返回空文本）：短暂等待后重试，而不是中断流水线
             last_err = e
-            _logger.warn(f"[WARN] LLM 生成失败（尝试 {attempt}/3）: {e}")
-            _console(f"  [重试] LLM 生成失败，重新调用（{attempt}/3）...")
+            _logger.warn(f"[WARN] LLM 生成失败（尝试 {attempt}/{SCRIPT_PARSE_RETRIES}）: {e}")
+            _console(f"  [重试] LLM 生成失败，重新调用（{attempt}/{SCRIPT_PARSE_RETRIES}）...")
             import time as _t
-            _t.sleep(5)
+            _t.sleep(SCRIPT_PARSE_RETRY_SLEEP_SEC)
             continue
         try:
             script = parse_response(raw, novel_text=novel_text)
             break
         except (ValueError, json.JSONDecodeError) as e:
             last_err = e
-            _logger.warn(f"[WARN] 分镜 JSON 解析失败（尝试 {attempt}/3）: {e}")
-            _console(f"  [重试] JSON 解析失败，重新调用 LLM（{attempt}/3）...")
+            _logger.warn(f"[WARN] 分镜 JSON 解析失败（尝试 {attempt}/{SCRIPT_PARSE_RETRIES}）: {e}")
+            _console(f"  [重试] JSON 解析失败，重新调用 LLM（{attempt}/{SCRIPT_PARSE_RETRIES}）...")
     if script is None:
-        raise RuntimeError(f"分镜 JSON 连续 3 次解析失败: {last_err}")
+        raise RuntimeError(f"分镜 JSON 连续 {SCRIPT_PARSE_RETRIES} 次解析失败: {last_err}")
 
     # ========== 差距分析（v5.0 新增）==========
     # 若差距过大，重新生成（最多2次）
@@ -1635,19 +1660,33 @@ def main() -> None:
 
     # v6.7: 镜头数严重超限时收敛重生成（独立于 gap_analysis，默认开启）
     if SHOT_COUNT_REGEN_ENABLED:
-        script = _regen_over_limit(
-            script, novel_text,
-            bank=character_bank, objects_bank=scene_objects_bank,
-        )
+        if _TEXT_PROVIDER == "agent_plan":
+            from step01_script_gen.doubao_pipeline import doubao_regen_over_limit
+            script = doubao_regen_over_limit(
+                script, novel_text,
+                bank=character_bank, objects_bank=scene_objects_bank,
+            )
+        else:
+            script = _regen_over_limit(
+                script, novel_text,
+                bank=character_bank, objects_bank=scene_objects_bank,
+            )
 
     # v6.35（08-15，P18 闭环）：GAP 通过后仍存在的高价值告警（开篇冲突/
     # 爆点密度/威胁源朝向/关键帧质量/内容密度等）→ 定向修复轮，只重写
     # 告警镜头（此前这些 WARN 纯打印落盘，无人修，带伤进 step02）。
     if REPAIR_ROUNDS_ENABLED:
-        script = _repair_shot_warnings(
-            script, novel_text,
-            bank=character_bank, objects_bank=scene_objects_bank,
-        )
+        if _TEXT_PROVIDER == "agent_plan":
+            from step01_script_gen.doubao_pipeline import doubao_repair_shot_warnings
+            script = doubao_repair_shot_warnings(
+                script, novel_text,
+                bank=character_bank, objects_bank=scene_objects_bank,
+            )
+        else:
+            script = _repair_shot_warnings(
+                script, novel_text,
+                bank=character_bank, objects_bank=scene_objects_bank,
+            )
 
     # 后处理：注入全局配置 + 合规过滤 + 敏感词校验
     script = _post_process(script)
@@ -1672,34 +1711,33 @@ def main() -> None:
                 f"（保留旧产物），新增/改动 {len(_diff.get('added', [])) + len(_diff.get('changed', []))} 镜重新生成"
             )
             # 只清理 changed/removed 镜头的帧/视频（未变镜头保留）
-            for _sub in ("vimax_working", "stretched"):
-                _sub_path = CHAPTER_DIR / _sub
+            for _sub_path, _shots_root in (
+                (vimax_working_dir(), vimax_shots_dir()),
+                (stretched_dir(), stretched_dir() / "shots"),
+            ):
                 if _sub_path.exists():
-                    _shots_root = _sub_path / "shots"
                     if _shots_root.exists():
                         for _sid in _diff.get("changed", []) + _diff.get("removed", []):
                             _shot_dir = _shots_root / str(_sid)
                             if _shot_dir.exists():
                                 import shutil as _sh
                                 _sh.rmtree(_shot_dir)
-                                _logger.verbose(f"  [已清理] {_sub}/shots/{_sid}/（内容变更）")
+                                _logger.verbose(f"  [已清理] {_sub_path.name}/shots/{_sid}/（内容变更）")
     except Exception as _preserve_err:
         _logger.warn(f"[PRESERVE] 逐镜对比失败，全量清理: {_preserve_err}")
 
     if not _preserve_shots:
         _logger.info(f"[INFO] 分镜脚本已更新，清理旧的音视频文件...")
-        for subdir in ("audio", "vimax_working", "stretched"):
-            subdir_path = CHAPTER_DIR / subdir
+        for subdir_path in (audio_dir(), vimax_working_dir(), stretched_dir()):
             if subdir_path.exists():
                 import shutil
                 shutil.rmtree(subdir_path)
-                _logger.verbose(f"  [已删除] {subdir}/")
+                _logger.verbose(f"  [已删除] {subdir_path.name}/")
     # 删除最终视频和字幕（脚本结构变了，最终产物必须重做）
-    for f in ("final.mp4", "subtitles.srt"):
-        fpath = CHAPTER_DIR / f
+    for fpath in (final_file(), subtitles_file()):
         if fpath.exists():
             fpath.unlink()
-            _logger.verbose(f"  [已删除] {f}")
+            _logger.verbose(f"  [已删除] {fpath.name}")
 
     # ========================================================================
     # 钩子分镜生成（v6 沿用 + v6.39 调用顺序硬约束）

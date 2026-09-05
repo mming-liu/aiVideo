@@ -30,6 +30,13 @@ from pathlib import Path
 import requests
 from PIL import Image
 
+from shared.config import (
+    AGNES_BASE_URL,
+    QC_ARK_MODEL,
+    QC_DASHSCOPE_BASE_URL,
+    VOLCENGINE_BASE_URL,
+)
+
 # 图片质检配置（与 shared/config.py 保持一致；此处直接读 env，避免循环依赖）
 QC_ENABLED = os.getenv("IMAGE_QC_ENABLED", "1").strip() == "1"
 QC_TIMEOUT_SEC = int(os.getenv("IMAGE_QC_TIMEOUT_SEC", "300"))
@@ -229,7 +236,7 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
     _cl_entities = [str(it.get("name", "")).strip() for it in (shot.get("char_layout") or [])
                     if isinstance(it, dict) and str(it.get("name", "")).strip()]
     if _cl_entities and not empty_scene:
-        _tol0 = int(os.getenv("QC_PERSON_TOLERANCE", "0"))
+        _tol0 = _PERSON_TOLERANCE
         lines.append(
             f"8. extra_person 清点画面中的实体人物数（蒙面/背影/水中半身都算，"
             f"水面倒影/水下暗影轮廓/画中画像不算）：本镜角色名单共 "
@@ -248,7 +255,7 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
     # QC_SEMANTICS_CRITICAL=1 → critical（删帧重生成，当场拦住）；默认 warning（只记录）。
     # v6.53 A.0：人数容差从写死的 +1 改为 QC_PERSON_TOLERANCE（默认 0——
     # try1 的 4 人图 vs 名单 3 人曾因 +1 容差漏放，0 容差下 critical）。
-    _tol = int(os.getenv("QC_PERSON_TOLERANCE", "0"))
+    _tol = _PERSON_TOLERANCE
     if os.getenv("QC_SEMANTICS_CRITICAL", "0") == "1":
         lines.append("- **关键锚点**（服装颜色、人物数量、威胁源状态如刺客是否出水）与「画面描述」明显不符 → critical（会删帧重生成）")
     else:
@@ -571,10 +578,14 @@ def qc_image(frame_path: str | Path, prompt: str | None = None,
 #   代码做计数断言 + 属性指纹查重 + 锚点符合性判定（它擅长的）
 # ============================================================================
 
-_ARK_VISION_MODEL = os.getenv("QC_ARK_MODEL", "doubao-seed-1-6-250615")
+_ARK_VISION_MODEL = QC_ARK_MODEL  # 默认值单源 shared/config.py（QC_ARK_MODEL）
 # Agnes 视觉响应慢（router 给它配 300s）——检测层默认 150s，单渠道失败自动
 # 落下一个渠道；末渠道重试 1 次。
 _ARK_TIMEOUT_SEC = int(os.getenv("QC_ARK_TIMEOUT_SEC", "150"))
+_ARK_MAX_TOKENS = 1500   # 视觉问答 max_tokens（调优旋钮，勿在调用点内联）
+_AGNES_TRIES = 2         # Agnes 超时重试次数（4xx 不重试）
+# 人数容差（extra_person 判定）：期望人数 ± 容差内不报 critical。默认 0（无容差）。
+_PERSON_TOLERANCE = int(os.getenv("QC_PERSON_TOLERANCE", "0"))
 _COLOR_WORDS = ("白", "黑", "青", "蓝", "红", "绿", "灰", "紫", "金", "银", "粉", "褐")
 # 检测模型属性行是英文（grounding prompt 为英文）——英文色词归一到中文键，
 # 与 characters features（中文）的颜色统计对齐
@@ -604,26 +615,26 @@ def _vision_chat(frame_path: str | Path, prompt: str) -> str:
     """
     attempts = []
     agnes_key = os.getenv("AGNES_API_KEY") or ""
-    if agnes_key:
-        base = (os.getenv("AGNES_BASE_URL") or "https://api.agnes-ai.cn").rstrip("/")
-        attempts.append(("agnes", f"{base}/v1/chat/completions",
+    agnes_base = (AGNES_BASE_URL or "").rstrip("/")
+    if agnes_key and agnes_base:  # AGNES_BASE_URL 未配置时跳过（config 必填语义，不猜端点）
+        attempts.append(("agnes", f"{agnes_base}/v1/chat/completions",
                          os.getenv("AGNES_VISION_MODEL", "agnes-2.5-flash"), agnes_key))
     ds_key = os.getenv("DASHSCOPE_API_KEY") or ""
     if ds_key:
-        attempts.append(("dashscope", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+        attempts.append(("dashscope", f"{QC_DASHSCOPE_BASE_URL.rstrip('/')}/chat/completions",
                          os.getenv("QC_DASHSCOPE_VISION_MODEL", "qwen-vl-max"), ds_key))
     ark_key = os.getenv("VOLCENGINE_API_KEY") or os.getenv("ARK_API_KEY") or ""
     if ark_key:
-        base = os.getenv("VOLCENGINE_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
-        attempts.append(("ark", f"{base.rstrip('/')}/chat/completions", _ARK_VISION_MODEL, ark_key))
+        attempts.append(("ark", f"{VOLCENGINE_BASE_URL.rstrip('/')}/chat/completions",
+                         _ARK_VISION_MODEL, ark_key))
 
     if not attempts:
         raise RuntimeError("无可用视觉理解渠道（AGNES/DASHSCOPE/VOLCENGINE key 均未配置）")
     data_url = _ark_image_data_url(frame_path)
     last_err = ""
     for name, url, model, key in attempts:
-        # Agnes 响应慢且偶发读超时——超时重试 1 次（4xx 不重试）
-        tries = 2 if name == "agnes" else 1
+        # Agnes 响应慢且偶发读超时——超时重试（4xx 不重试）
+        tries = _AGNES_TRIES if name == "agnes" else 1
         for attempt_i in range(tries):
             try:
                 resp = requests.post(
@@ -632,7 +643,7 @@ def _vision_chat(frame_path: str | Path, prompt: str) -> str:
                     json={"model": model, "messages": [{"role": "user", "content": [
                         {"type": "image_url", "image_url": {"url": data_url}},
                         {"type": "text", "text": prompt},
-                    ]}], "temperature": 0, "max_tokens": 1500,
+                    ]}], "temperature": 0, "max_tokens": _ARK_MAX_TOKENS,
                     },
                     timeout=_ARK_TIMEOUT_SEC,
                 )
@@ -1611,7 +1622,7 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
         person_count = len(persons)
         expected = _expected_persons(shot, frame_kind, characters, kf_index=kf_index)
         if expected is not None:
-            tol = int(os.getenv("QC_PERSON_TOLERANCE", "0"))
+            tol = _PERSON_TOLERANCE
             if abs(person_count - expected) > tol:
                 all_issues.append(QcIssue(
                     category="extra_person",

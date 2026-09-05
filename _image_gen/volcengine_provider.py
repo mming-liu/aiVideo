@@ -33,8 +33,10 @@ from shared.config import (
     VOLCENGINE_T2I_MODEL,
     VOLCENGINE_T2I_FALLBACK_MODELS,
     VOLCENGINE_IMAGE_SIZE,
+    VOLCENGINE_IMAGE_RPM,
 )
 from shared.key_scheduler import KeyScheduler
+from shared.image_size_fit import fit_pixel_size
 from shared.rate_limit import compute_429_wait
 from shared.log_utils import verbose_write
 
@@ -70,34 +72,7 @@ _RATIO_CANONICAL = {
 }
 
 
-def _fit_pixel_size(w: int, h: int, pmin: int, pmax: int) -> str:
-    """等比缩放宽高像素值到总像素 [pmin, pmax] 区间（偶数对齐，保持宽高比）.
-
-    取整后可能仍越界，微调较短边逐步收敛；落到区间即可（比例仅漂移几个像素）。
-    """
-    total = w * h
-    if pmin <= total <= pmax:
-        return f"{w}x{h}"
-    import math
-    target = pmin if total < pmin else pmax
-    scale = math.sqrt(target / total)
-    w2 = max(16, int(w * scale) // 2 * 2)
-    h2 = max(16, int(h * scale) // 2 * 2)
-    for _ in range(8):
-        t = w2 * h2
-        if pmin <= t <= pmax:
-            break
-        if t < pmin:
-            if h2 <= w2:
-                h2 += 2
-            else:
-                w2 += 2
-        else:
-            if h2 >= w2:
-                h2 -= 2
-            else:
-                w2 -= 2
-    return f"{w2}x{h2}"
+# 像素收敛 fit_pixel_size 已上移 shared/image_size_fit.py（volcengine / agent_plan 共用）
 
 
 def _resolve_size(req: ImageGenerationRequest, model: str) -> str:
@@ -117,7 +92,7 @@ def _resolve_size(req: ImageGenerationRequest, model: str) -> str:
     size = (VOLCENGINE_IMAGE_SIZE or req.size or "").strip().lower().replace("*", "x")
     m = re.fullmatch(r"(\d+)\s*x\s*(\d+)", size)
     if m:
-        return _fit_pixel_size(int(m.group(1)), int(m.group(2)), cap.px_min, cap.px_max)
+        return fit_pixel_size(int(m.group(1)), int(m.group(2)), cap.px_min, cap.px_max)
     tier = size.upper()  # 与 size 同源（override 优先）
     ratio = (req.ratio or "").strip().lower()
     if tier in cap.tiers and ratio not in _RATIO_CANONICAL:
@@ -126,7 +101,7 @@ def _resolve_size(req: ImageGenerationRequest, model: str) -> str:
     if tier and ratio in _RATIO_CANONICAL:
         _verbose_write(f"  [镜头{req.shot_index}] size={tier} 按 ratio={ratio} 推导像素 "
               f"size={base[0]}x{base[1]}")
-    return _fit_pixel_size(base[0], base[1], cap.px_min, cap.px_max)
+    return fit_pixel_size(base[0], base[1], cap.px_min, cap.px_max)
 
 
 class VolcengineImageService(ImageGenerationService):
@@ -145,8 +120,8 @@ class VolcengineImageService(ImageGenerationService):
             )
         self._model_queue: list[str] = [VOLCENGINE_T2I_MODEL] + VOLCENGINE_T2I_FALLBACK_MODELS
         self._base_url = VOLCENGINE_BASE_URL.rstrip("/")
-        # 单 key 限速
-        rpm = max(int(os.getenv("VOLCENGINE_IMAGE_RPM", "10")), 1)
+        # 单 key 限速（RPM 单源 shared/config.py）
+        rpm = max(VOLCENGINE_IMAGE_RPM, 1)
         self._key_scheduler = KeyScheduler(n_keys=1, cooldown=60.0 / rpm, name="volcengine_image")
 
     @property

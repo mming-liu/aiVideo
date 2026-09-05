@@ -112,6 +112,15 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 > 关键约束：`reference_image`（参考生视频/r2v）仅 2.5/2.0 支持；`generate_audio` 仅 2.5/2.0/1.5 pro。首帧/首尾帧、参考生视频、参考视频/音频三种场景互斥，provider 已按模型能力分配 role 并 fail-fast。
 > **调试省钱配置**：`VOLCENGINE_T2I_MODEL=doubao-seedream-4-0-250828`（4.0 像素下限低，1024x1792 直接透传）+ `VOLCENGINE_I2V_MODEL=doubao-seedance-2-0-260128`（r2v 且便宜）；纯文生视频省钱可 `doubao-seedance-1-0-lite-t2v-250408`（无声、无参考图）。生产再切回 4.5 / 1.5 pro。
 
+### step01 doubao 路径（v6.60，2026-09-05）— 详见 CLAUDE.md
+- doubao-seed-2-1-turbo 分镜生成从综合分 78.7 → 92+；启用方法：`TEXT_PROVIDER=agent_plan`（**默认仍为 deepseek**）
+- 5+1 类 hard_fix（B.1 对白兜底 / B.2 GAP 关键词强注入 / B.3.1 角色锚点 / B.3.2 开篇空镜 / B.3.3 高潮回灌 / B.4 过肩机位 / B.5 frame_layouts 兜底）
+- doubao 专用逻辑单开文件：`step01_script_gen/doubao_pipeline.py` + `doubao_hardfix.py` + `doubao_repair_prompts.py`
+- main.py 最小侵入：顶部条件 import + 3 处 if/else；deepseek 路径零修改
+- 退出 doubao 模式：unset TEXT_PROVIDER 即可，代码完全 revert
+- 单测：tests/step01_script_gen/doubao_hardfix/ 8 文件 34 用例全绿
+- **详细规则、5+1 hard_fix 函数表、A/B 验证指标**：见 CLAUDE.md `step01 doubao 路径（v6.60）` 段
+
 ### MiniMax 配置（国际站 api.minimax.io）
 - `MINIMAX_API_KEY`: MiniMax API Key（.env.keys）
 - `MINIMAX_BASE_URL`: 默认 `https://api.minimax.io`
@@ -123,7 +132,7 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
   - **关键镜头/验收**：切 MiniMax H3 或火山付费档（Seedance 2.0 起）
   - **恢复 r2v 角色一致性**：火山 Seedance 2.0+ / MiniMax H3 都支持，管线已适配（`_collect_r2v_references` 按 provider 自动收参考图）
   - 以上全部是 `.env` 配置切换，零代码改动——模型能力差异集中在 `shared/model_caps.py`（时长/分辨率/参考图/有声/prompt 上限）+ `shared/ref_compose.py`（参考图数）+ provider 内格式映射，新增/切换模型不改编码
-- `MINIMAX_VIDEO_RESOLUTION`（默认 768P）/ `MINIMAX_VIDEO_DURATION`（默认 6）/ 轮询参数
+- `MINIMAX_VIDEO_RESOLUTION`（默认 768P）/ 轮询参数（`MINIMAX_VIDEO_DURATION` 死配置已删——时长规则见 shared/model_caps.MINIMAX_V1_*）
 
 ## 架构设计
 
