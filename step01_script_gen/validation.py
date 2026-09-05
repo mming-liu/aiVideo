@@ -5297,6 +5297,195 @@ def _hard_fix_hook_witness_not_killer(hook: dict | None = None,
     return fixed
 
 
+def _hard_fix_frame_layout_consistency(shots: list | None = None,
+                                       hook: dict | None = None) -> int:
+    """W16 frame_layouts pose ↔ ff_desc 文本一致性硬修复（2026-09-04）.
+
+    触发问题：LLM 一次输出里 ff_desc 写「杨旭盘膝坐于船头」+ frame_layouts.ff[X].pose
+    写「袒腹仰卧」（lf 状态被错填到 ff 桶）。模型按 ff_desc 画「坐姿」但 QC 按
+    frame_layouts.ff 校验「仰卧在画右前景」→ 站位/视线全 critical（v6.57+ 副产物，
+    08-30 hook shot 0 实测）。
+
+    修法：让 frame_layouts.{ff/lf/kfs[i]}[X].pose 跟随同桶对应 desc（ff_desc/lf_desc/
+    kf[i].desc）的 POSE_REGISTRY 分类。改写只动 frame_layouts 结构，不动 desc 文本
+    （desc 是文本事实源，硬修复只能跟随）。含"对比/反差/前一刻/即将"等显式对比
+    措辞的 desc 跳过（用户故意写"lf 状态用于对比"的合法情况）。
+
+    幂等：① desc 与 frame_layouts.pose 已同属一个 pose 分类 → 跳过
+           ② frame_layouts 缺字段（老章降级）→ 跳过
+    返回改写条目数。
+    """
+    if not isinstance(hook, dict) and not shots:
+        return 0
+    from step01_script_gen.prompt_semantic.registry import (
+        POSE_REGISTRY, classify_pose,
+    )
+
+    COMPARE_HINT_RE = re.compile(r"对比|反差|对比之下|前一刻|即将|将要|尚未|还未|马上")
+    fields = ("prompt", "ff_desc", "lf_desc", "motion_desc")
+
+    def _bucket_desc_text(shot_or_hook: dict, bucket: str, kf_index: int | None = None) -> str:
+        if bucket == "ff":
+            return " ".join(str(shot_or_hook.get(f, "") or "") for f in fields)
+        if bucket == "lf":
+            return str(shot_or_hook.get("lf_desc", "") or "")
+        if bucket == "kfs" and kf_index is not None:
+            kfs = shot_or_hook.get("keyframes") or []
+            if 0 <= kf_index < len(kfs) and isinstance(kfs[kf_index], dict):
+                return str(kfs[kf_index].get("desc", "") or "")
+        return ""
+
+    def _choose_canonical_pose(desc_text: str, current_pose: str,
+                                char_name: str = "") -> str | None:
+        if not desc_text or COMPARE_HINT_RE.search(desc_text):
+            return None
+        cur_class = classify_pose(current_pose) if current_pose else ""
+        new_class = classify_pose(desc_text)
+        if cur_class and new_class and cur_class == new_class:
+            return None
+        if not new_class:
+            return None
+        # 角色级定位：取 char_name 后续 24 字符内的 pose 词——
+        # 治 ff_desc 多角色多姿态（"杨旭仰卧...听香跪坐"）整段首个 pose 误覆盖其他角色。
+        if char_name and char_name in desc_text:
+            idx = desc_text.find(char_name)
+            window = desc_text[idx:idx + 24]
+            for cat in ("reclining", "sitting", "standing", "kneeling"):
+                for w in POSE_REGISTRY.get(cat, ()):
+                    if w in window:
+                        return w
+            return None  # 该角色附近无 pose 词 → 不覆盖（保持 frame_layouts 原值）
+        # 无角色名：按文本首个 pose 词兜底（兼容老章无 frame_spec）
+        for cat in ("reclining", "sitting", "standing", "kneeling"):
+            for w in POSE_REGISTRY.get(cat, ()):
+                if w in desc_text:
+                    return w
+        return None
+
+    fixed = 0
+
+    def _process(shot_or_hook: dict) -> None:
+        nonlocal fixed
+        fl = shot_or_hook.get("frame_layouts")
+        if not isinstance(fl, dict):
+            return
+        for bucket in ("ff", "lf"):
+            items = fl.get(bucket)
+            if not isinstance(items, list):
+                continue
+            desc_text = _bucket_desc_text(shot_or_hook, bucket)
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                cur_pose = str(item.get("pose", "") or "")
+                char_name = str(item.get("name", "") or "").strip()
+                canonical = _choose_canonical_pose(desc_text, cur_pose, char_name)
+                if canonical and cur_pose and canonical not in cur_pose:
+                    item["pose"] = canonical
+                    fixed += 1
+        kfs_layouts = fl.get("kfs")
+        if isinstance(kfs_layouts, list):
+            for kf_idx, items in enumerate(kfs_layouts):
+                if not isinstance(items, list):
+                    continue
+                desc_text = _bucket_desc_text(shot_or_hook, "kfs", kf_idx)
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    cur_pose = str(item.get("pose", "") or "")
+                    char_name = str(item.get("name", "") or "").strip()
+                    canonical = _choose_canonical_pose(desc_text, cur_pose, char_name)
+                    if canonical and cur_pose and canonical not in cur_pose:
+                        item["pose"] = canonical
+                        fixed += 1
+
+    if isinstance(hook, dict):
+        _process(hook)
+    if isinstance(shots, list):
+        for s in shots:
+            if isinstance(s, dict):
+                _process(s)
+    return fixed
+
+
+def _hard_fix_hook_environment_anchor(hook: dict | None = None,
+                                       script: dict | None = None) -> int:
+    """W17 钩子水面/夜泊类镜头注入古风环境锚定 + 改写「X 厘米露出」自相矛盾（2026-09-04）.
+
+    触发问题：钩子「杨旭坐于船舷侧望向星斗、刺客潜伏水下」类场景，ff_desc 只写
+    「冷月映夜+荷花水湾」，缺远景柳丝/墨绿水色/古风风格锚定 → Seedream 默认走
+    「产品图+纯色背景」风格，蓝色船+灰白空间=游泳池小船玩具。同时「头顶 2cm
+    露出」类自相矛盾让刺客被画成 extra_person=3（08-30 hook 首帧实证）。
+
+    修法：
+      ① location 经 scene_anchors.get_scene_type 判定属横向水面场景（船/桥）或文本
+         含「水/夜/泊/月」词 → ff_desc/prompt 前缀注入 [ENV-ANCHOR] 哨兵
+         + 古风水岸锚定 + 禁词。scene_anchors 单一事实源，不硬编码"照月湾"。
+      ② 「露出 ... 厘米/cm/公分/指头/指甲盖」改写为「完全没入水下不可见」
+         （治 "2cm 露出" 矛盾）。
+
+    幂等：① ff_desc 已含 [ENV-ANCHOR] → 跳过
+           ② 文本无「水/夜/泊/月」且 location 非横向场景 → 不触发
+    返回改写字段数。
+    """
+    if not hook or not isinstance(hook, dict):
+        return 0
+    from step01_script_gen.scene_anchors import get_scene_type
+
+    location = str(hook.get("location", "") or "")
+    scene = get_scene_type(location)
+    HORIZONTAL_WATER = {"船", "桥"}
+    WATER_HINT_RE = re.compile(r"水|夜泊|泊|月色|月|夜|河|湖|湾|渡|渡口")
+
+    is_water_anchor = (
+        scene in HORIZONTAL_WATER
+        or bool(WATER_HINT_RE.search(location))
+        or any(WATER_HINT_RE.search(str(hook.get(f, "") or ""))
+               for f in ("prompt", "ff_desc", "lf_desc", "motion_desc"))
+    )
+    if not is_water_anchor:
+        return 0
+
+    ENV_PREFIX = (
+        "[ENV-ANCHOR] ancient Chinese cinematic realism, classical costume drama, "
+        "dark water reflecting moon, distant willow silhouette, lotus leaves surrounding. "
+        "Strictly no swimming pool, no indoor pool, no ceramic tile, no white tile surface, "
+        "no bathtub, no modern architecture. "
+    )
+
+    EXPOSE_RE = re.compile(
+        r"露出(?:.{0,6}(?:厘米|公分|cm|CM|指头|指甲盖))?"
+    )
+
+    fields_inject = ("ff_desc", "prompt")
+    fields_rewrite = ("prompt", "ff_desc", "lf_desc", "motion_desc")
+    fixed = 0
+
+    # 幂等：ff_desc 已有 [ENV-ANCHOR] → 整体跳过（视为已处理过本轮 hard_fix）
+    ff_desc_now = str(hook.get("ff_desc", "") or "")
+    if "[ENV-ANCHOR]" in ff_desc_now:
+        return 0
+
+    for f in fields_inject:
+        v = hook.get(f)
+        if not isinstance(v, str) or not v:
+            continue
+        hook[f] = ENV_PREFIX + v
+        fixed += 1
+
+    for f in fields_rewrite:
+        v = hook.get(f)
+        if not isinstance(v, str) or not v:
+            continue
+        if "完全没入水下不可见" in v:
+            continue
+        new_v = EXPOSE_RE.sub("完全没入水下不可见", v)
+        if new_v != v:
+            hook[f] = new_v
+            fixed += 1
+    return fixed
+
+
 def _hard_fix_boat_crop(shots: list, hook: dict | None = None) -> int:
     """船体裁切硬修复（08-23 用户反馈 shot0：船尾没画）.
 
@@ -7307,6 +7496,8 @@ def hard_fix_shot_prompts(script: dict) -> dict:
     u = _hard_fix_kneel_beside_victim(shots, hook)              # U 跪坐位→受害者身侧
     v = _hard_fix_boat_crop(shots, hook)                        # V 船体裁切短语剥离
     w15 = _hard_fix_hook_witness_not_killer(hook, script)         # W15 钩子目击者-凶手视觉歧义（registry 驱动）
+    w16 = _hard_fix_frame_layout_consistency(shots, hook)          # W16 frame_layouts pose ↔ desc 文本一致（08-30 hook ff 实证）
+    w17 = _hard_fix_hook_environment_anchor(hook, script)          # W17 钩子水面环境锚定 + 露出矛盾改写（08-30 hook ff 实证）
     # v6.41 P19 闭环 新增 11 类
     w3 = _hard_fix_combat_impact(shots, hook)                  # W3 打斗打击反馈
     w4 = _hard_fix_transition_keywords(shots, hook)            # W4 转场关键词
@@ -7318,7 +7509,7 @@ def hard_fix_shot_prompts(script: dict) -> dict:
     w11 = _hard_fix_axis_jump(shots, hook)                     # W11 轴线越轴
     w13 = _hard_fix_bridge_words(shots, hook)                  # W13 镜头衔接词
     counts = (a, b, c, d, e, f, g, h, i, i2, j, j2, k, l, m, n, o, p, q, r,
-              s_split, t1, t2, u, v, w3, w4, w5, w6, w7, w9, w10, w11, w13, w15)
+              s_split, t1, t2, u, v, w3, w4, w5, w6, w7, w9, w10, w11, w13, w15, w16, w17)
     if any(counts):
         _get_logger().info(
             f"[HARD-FIX] 致命伤 +{a} 镜 / 视线 +{b} 字段 / 道具 +{c} 镜 / "
@@ -7333,7 +7524,8 @@ def hard_fix_shot_prompts(script: dict) -> dict:
             f"打击反馈 +{w3} 镜 / 转场关键词 +{w4} 镜 / 站位纵深 +{w5} 镜 / "
             f"时长拉伸 +{w6} 镜 / 高潮分布 +{w7} 镜 / pre血语义 +{w9} 帧 / "
             f"景别跳跃 +{w10} 镜 / 轴线越轴 +{w11} 镜 / 衔接词 +{w13} 镜 "
-            f"（v6.41 08-23 P18+P19 闭环 34 类）"
+            f"/ frame_layout一致 +{w16} 项 / 钩子环境锚定 +{w17} 字段 "
+            f"（v6.41 08-23 P18+P19 闭环 36 类）"
         )
     return script
 

@@ -315,6 +315,9 @@ def gen_hook_script(novel_text: str, bank=None, objects_bank=None,
             for field in ("narration_segment", "subtitle"):
                 if hook.get(field):
                     hook[field] = content_safety.sanitize_narration(hook[field])
+            # W16/W17 兜底：标记 is_hook=True，让 step02a vimax_bridge 在生成层
+            # 追加泳池/室内禁词（即使 W17 因 hook ff_desc 缺水面词未触发）。
+            hook["is_hook"] = True
         return hook
     except Exception as e:
         _logger.warn(f"[WARN] 钩子分镜解析失败: {e}，跳过钩子")

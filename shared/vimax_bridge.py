@@ -2756,6 +2756,19 @@ def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
             text = fix_lf_desc_gaze(text, shot, characters)
         text = _inject_object_size_anchor(shot, text)
         text = _inject_tone_anchor(shot, text)
+        # 2026-09-04 W16/W17 兜底：钩子水面/夜泊类场景追加泳池禁词。
+        # Seedream 全档 supports_negative_prompt=False（shared/model_caps.py:53），
+        # 必须走 prompt 内文禁词。W17 step01 已在 [ENV-ANCHOR] 前缀注入过同类禁词，
+        # 哨兵存在则跳过避免重复叠加。
+        if shot.get("is_hook") is True and "[ENV-ANCHOR]" not in text:
+            import re as _re_hook
+            if _re_hook.search(
+                r"水|夜泊|泊|月色|月|夜|河|湖|湾|渡|舟|舴艋|船", text
+            ):
+                text += (
+                    " Strictly no swimming pool, no indoor pool, no ceramic tile, "
+                    "no white tile surface, no bathtub, no modern architecture."
+                )
         text = sanitize_prompt(ensure_prefix(text, STYLE_PREFIX), verbose=False)
         text = add_image_strict_constraints(text, "首帧" if frame_kind == "first_frame" else "尾帧", shot=shot, characters=characters)
         # v6.50：多模板拼接点的双句号归一化（防御性兜底，矛盾门此前会拦）
