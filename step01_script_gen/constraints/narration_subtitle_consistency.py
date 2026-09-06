@@ -24,6 +24,28 @@ from .base import Constraint
 from .types import RepairRecord, Severity
 
 
+_DIALOGUE_HINTS = (
+    "质问", "怒喝", "叫道", "对", "说", "答", "问",
+    "喊", "吼", "低声", "怒道", "厉声", "低语", "轻声道", "冷声",
+)
+_EMPTY_SUBJECTS = ("空镜", "场景", "环境", "远景")
+
+
+def _is_dialogue_shot(shot: dict) -> bool:
+    subject = str(shot.get("main_subject") or "")
+    if any(hint in subject for hint in _DIALOGUE_HINTS):
+        return True
+    return bool(str(shot.get("subtitle") or "").strip())
+
+
+def _dialogue_placeholder(shot: dict) -> str:
+    ff_desc = str(shot.get("ff_desc") or "").rstrip("。. ")
+    if ff_desc:
+        return f"{ff_desc[-20:]}，某：……"
+    subject = str(shot.get("main_subject") or "")
+    return f"{subject[:10] or '对白'}，某：……"
+
+
 def _normalize(text: str) -> str:
     """三连点 → 中文省略号；半角空格 → 移除；多个省略号折叠成 1 个.
 
@@ -54,6 +76,24 @@ class NarrationSubtitleConsistencyConstraint(Constraint):
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
             narr = shot.get("narration_segment")
             sub = shot.get("subtitle")
+            if not narr and not sub and _is_dialogue_shot(shot):
+                subject = str(shot.get("main_subject") or "")
+                if any(token in subject for token in _EMPTY_SUBJECTS):
+                    continue
+                placeholder = _dialogue_placeholder(shot)
+                shot["narration_segment"] = placeholder
+                shot["subtitle"] = placeholder
+                repairs.append(
+                    RepairRecord(
+                        constraint_name=self.name,
+                        shot_index=idx,
+                        action="set_field",
+                        target="narration_segment+subtitle",
+                        before="narr='' sub=''",
+                        after=placeholder,
+                    )
+                )
+                continue
             if not narr and not sub:
                 continue
             if not isinstance(narr, str):

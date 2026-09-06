@@ -28,6 +28,11 @@ from dotenv import load_dotenv
 load_dotenv(_PROJECT_ROOT / ".env.content")
 load_dotenv(_PROJECT_ROOT / ".env.keys")
 
+# step01 snapshots 轮转上限（main._snapshot_run_artifacts 用；env SNAPSHOTS_KEEP 可覆盖）。
+# v6.50 P3 设计意图：snapshot 是 LLM 原始输出的唯一回滚手段，默认保留 20 份
+# （按 script_result_*.json 计数，配对删除同名 step01_*.log）。
+MAX_SNAPSHOTS_PER_CHAPTER = max(1, int(os.getenv("SNAPSHOTS_KEEP", "20")))
+
 
 def _output_base() -> Path:
     raw = os.getenv("OUTPUT_BASE", "./output/video")

@@ -26,6 +26,7 @@ import storyboard_refs
 from shared.paths import chapter_dir
 from shared.constants import DEFAULT_VIDEO_DURATION_FALLBACK
 from step01_script_gen.climax_words import CLIMAX_WORDS_ARC
+from step01_script_gen.gap_analysis import normalize_core_keywords
 from shared.tee_logger import get_logger
 from shared.kf_time import (
     get_kf_t_sec, get_kf_stage, set_kf_t_sec, set_kf_stage,
@@ -490,6 +491,14 @@ def _check_grounding_and_warn(script: dict) -> None:
         if not _check_grounding(shot, _novel_text_for_validation):
             narration = shot.get("narration_segment", "").strip()
             ungrounded.append((idx, narration[:30] if narration else ""))
+
+    # v6.62（09-06）：hook narration 此前不在校验范围（09-05 hook 台词「你可看清
+    # 那匕首是何模样」纯杜撰——原文实际是「凶手是谁，如何刺杀了公子」——零告警
+    # 直接落盘）。hook 与 shots 同口径校验。
+    hook = script.get("hook")
+    if isinstance(hook, dict) and (hook.get("narration_segment") or "").strip():
+        if not _check_grounding(hook, _novel_text_for_validation):
+            ungrounded.append(("hook", hook["narration_segment"].strip()[:30]))
 
     if ungrounded:
         _get_logger().warn(f"原文锚点校验: 以下镜头的 narration 在原文中未找到对应内容:")
@@ -4111,68 +4120,11 @@ _REGEN_FEEDBACK_LABELS = {
 }
 
 
-def build_regen_feedback(script: dict, novel_text: str = "",
-                         max_categories: int = 99, per_line_chars: int = 300) -> str:
-    """把分镜检查表告警按类型聚合，生成给重生成 LLM 的「本地校验反馈」.
-
-    v6.33（08-12）：checklist 的 WARN 此前只 print 不返回，重生成 LLM
-    看不到内容密度/景别跳跃/致命伤等真实缺陷 → 重生成还是老问题。本函数重跑
-    _run_prompt_checklist（抑制 stdout 避免日志刷屏），把告警按类型聚合：
-    每类 1 行「- 类别 N处：首例」，取告警数最多的前 max_categories 类，
-    排除需人工判断/结构性的类别（_REGEN_FEEDBACK_EXCLUDE）。返回 "" 表示无反馈。
-
-    v6.36（08-15）：默认放开——max_categories=99（全部非排除类别，不再只取 top-5）
-    + per_line_chars=300（首例几乎完整，不再 72 字截断），重生成 LLM 看全量分析、
-    能修更多。若需控制 prompt 体积可显式传小值。
-
-    Args:
-        script: 当前待重生成的分镜脚本（重生成前已 parse_response，含完整字段）
-        novel_text: 小说原文（供原文锚点类检查；默认空则跳过）
-        max_categories: 最多反馈几类（默认 99=全部非排除类别）
-        per_line_chars: 每行首例截断长度（默认 300，几乎不截）
-    """
-    try:
-        if novel_text:
-            _set_novel_text(novel_text)
-        import io as _io
-        import contextlib as _ctx
-        _buf = _io.StringIO()
-        with _ctx.redirect_stdout(_buf):  # 抑制 刷屏
-            results = _run_prompt_checklist(script).get("results", {})
-    except Exception:
-        return ""
-    grouped = {}
-    for key, res in results.items():
-        if key in _REGEN_FEEDBACK_EXCLUDE or not isinstance(res, dict):
-            continue
-        warns = list(res.get("warnings") or []) + list(res.get("issues") or [])
-        if warns:
-            grouped[key] = warns
-    if not grouped:
-        return ""
-    top = sorted(grouped.items(), key=lambda kv: -len(kv[1]))[:max_categories]
-    lines = []
-    for key, warns in top:
-        label = _REGEN_FEEDBACK_LABELS.get(key, key)
-        # 08-20（v6.37）：改为每类全量例举（之前只首例，信息不足）。
-        # 提取每条 warning 的镜头号前缀，列出所有命中镜头号；再附首例完整文本（截断）。
-        import re as _re_b
-        shot_ids = set()
-        for w in warns:
-            for m in _re_b.finditer(r"镜头(\d+)(?:→(\d+))?|钩子", w):
-                for g in m.groups():
-                    if g:
-                        shot_ids.add(f"镜头{g}" if g.isdigit() else "钩子")
-        shot_str = ",".join(sorted(shot_ids, key=lambda s: int(s.replace("镜头", "")) if s.startswith("镜头") and s[2:].isdigit() else -1)) or "全局"
-        first = warns[0].strip()
-        if len(first) > per_line_chars:
-            first = first[:per_line_chars] + "…"
-        lines.append(f"- {label} {len(warns)}处（{shot_str}）：{first}")
-    body = "\n".join(lines)
-    return (
-        "\n\n# 本地校验反馈（来自分镜检查表，请针对性修正；「N处」=命中镜头数，括号内=镜头号）\n"
-        + body + "\n"
-    )
+# build_regen_feedback 已抽到 step01_script_gen/feedback.py（v6.60.1 工程卫生：
+# LLM 反馈生成器与 check 函数族解耦，改反馈文案不再动 check 本体）；
+# 此处 re-export 保持 main.py 既有 import 路径不炸。feedback 内部经延迟
+# import 回调本模块的 _run_prompt_checklist/_set_novel_text（避免循环导入）。
+from step01_script_gen.feedback import build_regen_feedback  # noqa: F401,E402
 
 
 _STOP_WORDS = {
@@ -4408,8 +4360,15 @@ def post_fix_shot_prompts(script: dict) -> dict:
                 if not is_middle_kf(_kf, shot):
                     continue
                 _kd = _kf.get("desc") or ""
-                if not _kd or "【角色锚定】" in _kd:
+                if not _kd:
                     continue
+                if "【角色锚定】" in _kd:
+                    if "未指定" not in _kd:
+                        continue
+                    # v6.62（09-06）历史坏块自救：块内含「未指定」占位符（09-05/06
+                    # 存盘数据被 _FALLBACK_SURFACE 污染，root-fix 见
+                    # shared/vimax_bridge.py surface 空值守卫）→ 剥掉坏块重新生成
+                    _kd = re.split(r"【角色锚定】", _kd, 1)[0].rstrip("。！？，,;；")
                 _role_scan = " ".join(filter(None, [
                     shot.get("ff_desc", ""), shot.get("lf_desc", ""),
                     shot.get("motion_desc", "") or shot.get("prompt", ""),
@@ -4896,11 +4855,22 @@ def _split_motion_to_seg_texts(motion: str, segs: list, dur: float) -> list[str]
                 if abs(a - float(a_v)) < 0.01 and abs(b - float(b_v)) < 0.01:
                     seg_idx = i
                     break
+        elif m.group(4) and m.group(5):
+            # v6.62：「2-5:放下酒壶」缺「秒」标签
+            a_v, b_v = int(m.group(4)), int(m.group(5))
+            if a_v > b_v:
+                a_v, b_v = b_v, a_v
+            for i, (a, b) in enumerate(segs):
+                if abs(a - float(a_v)) < 0.01 and abs(b - float(b_v)) < 0.01:
+                    seg_idx = i
+                    break
         if seg_idx < 0:
             continue
-        # 去掉时间标签前缀（「前2秒：」「2-4秒：」），保留段正文
+        # 去掉时间标签前缀（「前2秒：」「2-4秒：」「2-5放下酒壶」），保留段正文
         body = re.sub(
-            r"^(?:前|后)\s*\d+\s*秒\s*[:：]|^\d+\s*[-－~～]\s*\d+\s*秒\s*[:：]",
+            r"^(?:前|后)\s*\d+\s*秒\s*[:：]"
+            r"|^\d+\s*[-－~～]\s*\d+\s*秒\s*[:：]"
+            r"|^\d+\s*[-－~～]\s*\d+\s*",
             "",
             atom,
         ).strip()
@@ -7757,6 +7727,8 @@ def _coerce_schema_types(script: dict) -> None:
     for shot in script.get("shots", []) or []:
         if not isinstance(shot, dict):
             continue
+        if "core_keywords" in shot:
+            shot["core_keywords"] = normalize_core_keywords(shot.get("core_keywords"))
         for f, cast in (("index", lambda s: int(float(s))),
                         ("cam_idx", lambda s: int(float(s))),
                         ("duration", float),
@@ -7793,6 +7765,8 @@ def _coerce_schema_types(script: dict) -> None:
         for f in _STR_FIELDS:
             if f in hook:
                 hook[f] = _to_str(hook[f])
+        if "core_keywords" in hook:
+            hook["core_keywords"] = normalize_core_keywords(hook.get("core_keywords"))
         # hook kf 字段同 shot 同步处理
         for kf in hook.get("keyframes") or []:
             if isinstance(kf, dict):
@@ -8991,8 +8965,12 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
 #   - 「2-4秒：…」
 #   - 「2～4秒：…」（全角波浪号）
 #   - 「后2秒：…」（后段）
+# v6.62（09-06）：新增「2-5放下酒壶」（缺「秒」+「：」——09-05 shot2 实测，
+# 标签残缺导致 2-5 秒整段丢失 → 2 个 kf 全判越窗）。组 4/5 是「缺秒」的 M-N
+# 匹配：后随字符禁止数字/小数点/连字符/波浪/「秒/米/个」（排除 5.5米 误判）。
 _KF_TIME_SEG_PATTERN = re.compile(
     r"(?:前|后)\s*(\d+)\s*秒|(\d+)\s*[-－~～]\s*(\d+)\s*秒"
+    r"|(\d+)\s*[-－~～]\s*(\d+)\s*(?![0-9.\-－~～秒米个:])"
 )
 
 
@@ -9026,6 +9004,12 @@ def _parse_motion_time_segments(motion_desc: str, total_sec: float) -> list[tupl
                 out.append((0.0, min(float(n), total_sec)))
             else:
                 out.append((max(0.0, total_sec - n), total_sec))
+        elif m.group(4) and m.group(5) and not m.group(2):
+            # v6.62：「2-5:放下酒壶」类缺「秒」标签（组4/5），按 M-N 字面解析
+            a, b = int(m.group(4)), int(m.group(5))
+            if a > b:
+                a, b = b, a
+            out.append((float(a), min(float(b), total_sec)))
         elif m.group(2) and m.group(3):
             a, b = int(m.group(2)), int(m.group(3))
             if a > b:

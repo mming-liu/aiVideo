@@ -207,7 +207,7 @@ def test_derive_char_layout_from_spec_maps_fields():
     assert cl[0]["position"] == "画中"
     assert cl[0]["facing"] == "盘坐"  # pose 映射到 facing
     assert cl[0]["role"] == "主"
-    assert cl[0]["surface"] == "未指定"  # 旧 reader 不端 warning
+    assert cl[0]["surface"] == ""  # v6.62：占位符「未指定」废弃，改空串
     # 后续 on_screen 角色 role='次'
     assert cl[1]["name"] == "听香"
     assert cl[1]["role"] == "次"

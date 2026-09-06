@@ -67,4 +67,29 @@ class PromptSanitizeConstraint(Constraint):
                         after=cleaned[:60] + ("..." if len(cleaned) > 60 else ""),
                     )
                 )
+            # v6.62（09-06）：keyframes[].desc 同样是模型可见文本（step02a 生图
+            # prompt 的直接输入），一并消毒——hook kf 实测残留「可容可容2-3人
+            # （杨旭、听香、张十三）+ 炭炉…」旧损坏文本。
+            for _i, _kf in enumerate(shot.get("keyframes") or []):
+                if not isinstance(_kf, dict):
+                    continue
+                _text = _kf.get("desc")
+                if not isinstance(_text, str) or not _text.strip():
+                    continue
+                _before = _text
+                _cleaned = strip_spatial_anchors(_before)
+                _cleaned = strip_debug_markers(_cleaned)
+                if _cleaned == _before:
+                    continue
+                _kf["desc"] = _cleaned
+                repairs.append(
+                    RepairRecord(
+                        constraint_name=self.name,
+                        shot_index=idx if not is_hook else None,
+                        action="sanitize",
+                        target=f"keyframes[{_i}].desc",
+                        before=_before[:60] + ("..." if len(_before) > 60 else ""),
+                        after=_cleaned[:60] + ("..." if len(_cleaned) > 60 else ""),
+                    )
+                )
         return repairs

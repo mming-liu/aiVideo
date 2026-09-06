@@ -638,8 +638,7 @@ def build_doubao_prompt(novel_text: str, bank=None, objects_bank=None,
         shot_count_min=SHOT_COUNT_MIN,
         shot_count_max=SHOT_COUNT_MAX,
     )
-    # system 在前，main 在后（system 给高优先级身份/规则/示例，main 给任务细节）
-    prompt = DOUBAO_SYSTEM_PROMPT + "\n\n" + main_body
+    prompt = main_body
 
     if outline_anchor:
         prompt = prompt + "\n\n### 本章大纲（分镜必须覆盖以下事件与高潮）\n" + outline_anchor
@@ -724,6 +723,13 @@ def auto_select_prompt_builder(provider: str):
     if provider == "agent_plan":
         return build_doubao_prompt, build_doubao_hook_prompt
     return build_prompt, build_hook_prompt
+
+
+def auto_select_system_prompt(provider: str) -> str:
+    """Select the provider's system prompt without changing the main framework."""
+    if provider == "agent_plan":
+        return DOUBAO_SYSTEM_PROMPT
+    return SYSTEM_PROMPT
 
 
 # 兼容别名

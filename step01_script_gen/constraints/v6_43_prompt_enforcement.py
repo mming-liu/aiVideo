@@ -582,8 +582,23 @@ class V643PromptEnforcementConstraint(Constraint):
         if _rule_enabled("BOAT"):
             if boat_repl is None:
                 boat_repl = build_boat_replacement(shot, {})
+            # v6.62（09-06）守卫：替换文本自身必须括号平衡——09-05 hook 实测
+            # 替换文本含未闭合括号时，其后所有锚点注入/消毒都在破损文本上跑
+            # （prompt 半截截断），比不替换更糟。不平衡 → 剥掉括号段用裸词替换。
+            _repl = boat_repl
+            if _repl.count("（") != _repl.count("）") or _repl.count("(") != _repl.count(")"):
+                _repl = _repl.split("（")[0].split("(")[0].rstrip("，, ") or "无篷舴艋舟"
             for pat in _BOAT_PATTERNS:
-                out = pat.sub(boat_repl, out)
+                # v6.62（09-06）防叠：替换点紧邻前缀已是「舴艋/无篷/窄身」形制词时
+                # 不整词替换（原文「舴艋小舟」→「舴艋无篷舴艋舟」重复实测）——
+                # 只补尺寸段（含闭合括号），形制词由前缀 + 原文剩余字构成。
+                def _sub_guard(m: "re.Match[str]") -> str:
+                    head = out[max(0, m.start() - 2): m.start()]
+                    if any(w in head for w in ("舴艋", "无篷", "窄身")):
+                        _i = _repl.find("（")
+                        return _repl[_i:] if _i >= 0 else ""  # 「（长5.5米…，可容N人）」
+                    return _repl
+                out = pat.sub(_sub_guard, out)
         # 规则 2：仰卧 + 头部固定
         if _rule_enabled("HEAD_FIX") and _needs_head_fix(out):
             out = _append_head_fix(out)

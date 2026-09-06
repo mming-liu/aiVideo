@@ -39,6 +39,36 @@ from shared.paths import (
 
 import hashlib
 
+# ─── API 冻结（v6.60.1，硬编码清理后的工程卫生项）───────────────────────────
+# 本模块 3900+ 行，拆分为包的计划已排期但延后；冻结期内：
+#   1) 下列名字是全部被跨模块消费的 API（含 image_qc/validation/prompt_builder
+#      引用的下划线名——历史上它们按"模块私有"命名却被外部 import，冻结起见
+#      一并登记，改名前必须先迁移消费方）；
+#   2) 新增公共函数必须同步 __all__；
+#   3) 不在 __all__ 内的名字视为模块内部实现，外部新引用一律禁止。
+__all__ = [
+    # 公共入口（step02a / step02b 主链路）
+    "build_working_dir",
+    "gen_shot_frames",
+    # validation 回调（视线修复 / 空镜判定 re-export / kf 布局提取）
+    "fix_lf_desc_gaze",
+    "is_empty_scene",  # style_prefix 实现，经本模块 re-export
+    "_extract_char_layout",
+    # image_qc 门控 / 尺寸锚
+    "_threat_visible_in",
+    "_inject_object_size_anchor",
+    # prompt_builder / subject_state / asset_gen
+    "_extract_prop_layout",
+    "_char_aliases",
+    "_extract_kf_pose",
+    "_KF_POSE_STATES",
+    "_maybe_qc_frame",
+    # 测试消费（tests/shared/test_hook_shot0_v661）
+    "_inject_frame_spec",
+    "_doodle_refine_first_frame",
+    "_build_char_anchor",
+]
+
 # 静默日志: 桥接日志写入 step02.log，不污染控制台
 def _bridge_log(msg: str):
     """写入文件日志."""
@@ -2128,7 +2158,12 @@ def _extract_char_layout(
                 # 发挥成"船外的水面"——08-26 hook 0 听香站在水里实测。
                 # 强化策略：surface 用"在{surface}上"括号显式（"立船头" 弱 →"立船头（在舴艋舟上）"强），
                 # 防 image model 把"画右"读成远离船的方位把听香画到水里。
+                # v6.62（09-06）：_FALLBACK_SURFACE="未指定"（shared/frame_spec.py
+                # 派生兜底值）是 truthy 占位符，不能当真实 surface 拼进锚定块
+                # （实测 13/13 镜锚定块出现「在未指定上」垃圾文本）。
                 surface = str(layout_item.get("surface", "")).strip()
+                if surface in ("", "未指定"):
+                    surface = ""
                 if surface and not pose.endswith(surface):
                     seg += surface
                 if surface and f"在{surface}" not in seg:

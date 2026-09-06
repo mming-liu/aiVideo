@@ -26,6 +26,8 @@ from .bridge_words import BridgeWordsConstraint  # J
 from .camera_variety import CameraVarietyConstraint  # K
 from .char_layout_sync import CharLayoutSyncConstraint  # L
 from .climax_distribution import ClimaxDistributionConstraint  # M
+from .core_keyword_coverage import CoreKeywordCoverageConstraint
+from .frame_spec_repair import FrameSpecRepairConstraint
 from .combat_impact import CombatImpactConstraint  # N
 from .facing_to_gaze import FacingToGazeConstraint  # O
 from .framing_diversity_v2 import FramingDiversityV2Constraint  # P
@@ -36,6 +38,8 @@ from .lf_midstate import LfMidstateConstraint  # T
 from .multi_char_layout_depth import MultiCharLayoutDepthConstraint  # U
 from .narration_subtitle_consistency import NarrationSubtitleConsistencyConstraint  # V
 from .opening_hook import OpeningHookConstraint  # W
+from .opening_empty_shot_insert import OpeningEmptyShotInsertConstraint
+from .overshoulder_consistency import OvershoulderConsistencyConstraint
 from .platform_compliance import PlatformComplianceConstraint  # X
 from .prompt_repetition import PromptRepetitionConstraint  # Y
 from .punch_density import PunchDensityConstraint  # Z
@@ -60,9 +64,11 @@ from .climax_priority import ClimaxPriorityConstraint  # F8 高潮优先（v6.49
 from .short_shot_merge import ShortShotMergeConstraint  # F9 短镜合并（v6.49, 08-28）
 from .ff_lf_temporal import FfLfTemporalConstraint  # F10 ff/lf 时序协议（v6.50, 08-28）
 from .frame_spec_consistency import FrameSpecConsistencyConstraint  # S v6.57+ per-frame spec 一致性
+from .framing_prefix_fill import FramingPrefixFillConstraint  # F11 景别词回填（v6.62, 09-06）
 from .self_review import SelfReviewConstraint  # SR（LLM 自检回路）
 from .split_content_similarity import SplitContentSimilarityConstraint  # A7 拆分镜内容重复检测（v6.58, 09-03）
-from .mandatory_biz_fields import MandatoryBizFieldsConstraint  # B1 业务必填字段兜底（doubao 适配，2026-09-04）
+from .mandatory_biz_fields import MandatoryBizFieldsConstraint
+from .role_anchor import RoleAnchorConstraint
 
 ALL_CONSTRAINTS.extend([
     # Phase 2
@@ -70,6 +76,7 @@ ALL_CONSTRAINTS.extend([
     GazeDirectionConstraint(),
     PropPositionConstraint(),
     KfPrePostConflictConstraint(),
+    OpeningEmptyShotInsertConstraint(),
     # Phase 3
     KfTimeWindowAlignmentConstraint(),
     KfTSecBoundsConstraint(),
@@ -91,6 +98,8 @@ ALL_CONSTRAINTS.extend([
     LfMidstateConstraint(),
     MultiCharLayoutDepthConstraint(),
     NarrationSubtitleConsistencyConstraint(),
+    RoleAnchorConstraint(),
+    CoreKeywordCoverageConstraint(),
     OpeningHookConstraint(),
     # v6.43（08-23 审计）：PlatformCompliance 必须在所有 prompt 追加类
     # 约束（bridge_words / transition_keywords / prompt_repetition）之后
@@ -116,10 +125,13 @@ ALL_CONSTRAINTS.extend([
     ClimaxPriorityConstraint(),  # F8 高潮优先（v6.49, 08-28）
     ShortShotMergeConstraint(),  # F9 短镜合并 HARD（v6.49, 08-28）
     FfLfTemporalConstraint(),  # F10 ff 时序协议：本镜有攻击时 ff 禁结束态（v6.50, 08-28）
+    FrameSpecRepairConstraint(),
     FrameSpecConsistencyConstraint(),  # S per-frame spec 必填 + 完整性 + desc 一致性（v6.57+）
+    FramingPrefixFillConstraint(),  # F11 prompt 无景别词 → 推断前置「[景别]」（v6.62, 09-06）
     SelfReviewConstraint(),  # SR opt-in via SELF_REVIEW_ENABLED=1
     SplitContentSimilarityConstraint(),  # A7 拆分镜内容重复检测（v6.58, 09-03）
     MandatoryBizFieldsConstraint(),  # B1 业务必填字段兜底（doubao 适配，2026-09-04）
+    OvershoulderConsistencyConstraint(),
 ])
 
 __all__ = [

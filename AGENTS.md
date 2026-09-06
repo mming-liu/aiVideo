@@ -34,9 +34,9 @@ python step04_merge/main.py       # 阶段4: 片段 + 音频 + 字幕 → 最终
 
 ### 章节提取调试
 ```bash
-python chapter_reader.py 锦衣夜行_77119小说.txt
+python -m shared.chapter_reader 锦衣夜行_77119小说.txt
 ```
-- 此脚本为 thin re-export 层，实际实现在 `shared/chapter_reader.py`
+- 实现在 `shared/chapter_reader.py`（顶层无兼容层，2026-09-06 已删除历史 stub）
 - `PROMPT_MAX_CHARS` 控制传递给 LLM 的原文上限（默认 50000，改 .env.content 生效）
 
 ### 环境变量配置（.env.content / .env.keys）
@@ -216,10 +216,11 @@ step01 asset_extractor.py（LLM 提取，schema: SCENE_ASSETS_SCHEMA / PROPS_SCH
 ### 章节提取
 - 小说文件：`锦衣夜行_77119小说.txt`（UTF-8编码；`.bak` 为 GBK 原件）
 - 标题行格式：`第一部 杀青州 第001章 章节标题`（部名/章名由 `get_chapter_meta()` 解析并写入 script_result.json）
-- 使用 `chapter_reader.py` 提取完整章节
+- 使用 `shared.chapter_reader` 提取完整章节
 
 ## 关键参考文件
 - `skill_spy.txt` — Prompt 工程参考
+- `shared/style_prefix.py` — 风格前缀/改写函数（v6.60.1 自根目录迁入；根目录留 deprecated shim）
 - `step01_script_gen/prompts.py` — 包含详细的分镜生成 prompt
 
 ## Coding Style

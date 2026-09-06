@@ -96,8 +96,8 @@ def derive_char_layout(shot: dict) -> list[dict]:
       - pose → facing（兼容旧 reader；pose 是描述性状态，facing 也是描述性空间关系）
       - on_screen=False → 跳过（不出场就不写进 char_layout）
       - role: 旧 reader 关心主/次 → 第 1 个 on_screen 角色 role='主'，其余 '次'
-      - surface: 新 spec 无此字段，填 _FALLBACK_SURFACE（保持旧 _check_char_layout_surface
-        warning 不被无端触发；M2 真读 spec 后该 warning 会自然不再需要）
+      - surface: 新 spec 无此字段，填空串（v6.62 起不再填 _FALLBACK_SURFACE
+        占位符——"未指定" 是 truthy，曾被 surface 注入当真数据拼进锚定块）
 
     旧章（无 frame_layouts）→ 原样返回 char_layout。
     """
@@ -116,7 +116,11 @@ def derive_char_layout(shot: dict) -> list[dict]:
             "position": item.get("position", "画中"),
             "facing": item.get("pose", _FALLBACK_FACING),
             "role": "主" if i == 0 else "次",
-            "surface": _FALLBACK_SURFACE,
+            # v6.62（09-06）：surface 填空串而非 _FALLBACK_SURFACE——"未指定"
+            # 是 truthy 占位符，曾被 vimax_bridge surface 注入当真数据拼进
+            # 锚定块（13/13 镜「在未指定上」垃圾文本实测）。检查器对空串
+            # 同样报「缺 surface」，占位符失去存在价值。
+            "surface": "",
         })
     return out
 

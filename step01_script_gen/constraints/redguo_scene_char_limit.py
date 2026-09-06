@@ -43,6 +43,32 @@ _GENERIC_ALIASES = {
     "default": "群演",
 }
 
+# v6.62（09-06）：非人物 main_subject 值——空镜/场景标记不参与人物计数，
+# 也不能被 alias（实测「空镜·水波/树影/风」被当人物 alias 成「群演」后，
+# opening_empty_shot_insert 判定失效 → 每轮重复插入空镜）。
+_NON_CHAR_SUBJECTS = (
+    "空镜", "环境", "无人物", "no people",
+)
+
+
+def _is_non_char_subject(name: str) -> bool:
+    """main_subject 值是否为空镜/场景标记（非人物）."""
+    n = (name or "").strip()
+    return any(w in n for w in _NON_CHAR_SUBJECTS)
+
+
+def _split_subject_names(name: str) -> list[str]:
+    """把 main_subject 按「，」拆成单人物名.
+
+    v6.62（09-06）：role_anchor 会把「群演」改写为「杨旭，群演」复合名，
+    整串计数会让「杨旭，群演」挤进 top4（成了第 4 个"独立人物"），真实
+    配角被挤掉 → 每轮 char_counter>4 → HARD 永不收敛。拆分后按真实人物
+    计数；句号后缀（「杨旭，群演。冲突，反转」）在第一个「。」截断。
+    """
+    n = (name or "").strip().split("。", 1)[0]
+    parts = [p.strip() for p in n.split("，") if p.strip()]
+    return parts if parts else ([name.strip()] if name.strip() else [])
+
 
 def _scene_kind(location: str) -> str:
     """从 location 推断场景类型（决定群演别名）."""
@@ -78,13 +104,18 @@ class RedguoSceneCharLimitConstraint(Constraint):
             if sc:
                 scene_counter[sc] += 1
             ms = str(shot.get("main_subject", "")).strip()
-            if ms:
-                char_counter[ms] += 1
+            # v6.62：空镜/场景标记不是人物，跳过计数（「空镜·水波/树影/风」
+            # 此前被当人物计数 + alias，导致空镜插入约束每轮重复触发）
+            if ms and not _is_non_char_subject(ms):
+                # 复合名「杨旭，群演」按单人物拆分计数（治 top4 被复合名挤占）
+                for _n in _split_subject_names(ms):
+                    char_counter[_n] += 1
             for item in (shot.get("char_layout") or []):
                 if isinstance(item, dict):
                     cn = str(item.get("name", "")).strip()
-                    if cn:
-                        char_counter[cn] += 1
+                    if cn and not _is_non_char_subject(cn):
+                        for _n in _split_subject_names(cn):
+                            char_counter[_n] += 1
 
         # ---- 2. 场景合并：保留前 _MAX_SCENES 个高频，余下 alias 到最近一个 ----
         scene_keep = [s for s, _ in scene_counter.most_common(_MAX_SCENES)]
@@ -120,28 +151,54 @@ class RedguoSceneCharLimitConstraint(Constraint):
         # 优先保留 main_subject 出现频次最高的（主角）
         char_keep = [c for c, _ in char_counter.most_common(_MAX_CHARS)]
         char_drop = [c for c in char_counter if c not in char_keep]
+        # v6.62（09-06）：只在实际发生改名时记录 repair（此前每轮无条件 append
+        # repair 记录——「第 N 镜即使无 drop 人物也记 alias」——导致本约束
+        # 不幂等，`repairs` 恒非空，第 4 步 HARD 上报被永久抑制/或每轮重报）。
+        aliased_names: set[str] = set()
         if char_drop:
+            drop_set = set(char_drop)
             for shot in ctx.shots:
                 if not isinstance(shot, dict):
                     continue
                 alias = _GENERIC_ALIASES[_scene_kind(shot.get("location", ""))]
-                # main_subject
+                # main_subject：复合名「杨旭，群演」逐段判定——只把 drop 段换成
+                # alias，keep 段（杨旭）保留（整串替换会把主角名也抹掉）
                 ms = str(shot.get("main_subject", "")).strip()
-                if ms in char_drop:
-                    shot["main_subject"] = alias
+                ms_parts = _split_subject_names(ms)
+                if ms and any(p in drop_set for p in ms_parts):
+                    head, _, tailnote = ms.partition("。")
+                    new_parts = [
+                        alias if p in drop_set else p
+                        for p in _split_subject_names(head)
+                    ]
+                    # 去重保持顺序（多段 alias 同名合并）
+                    seen: list[str] = []
+                    for p in new_parts:
+                        if p not in seen:
+                            seen.append(p)
+                    shot["main_subject"] = "，".join(seen) + (f"。{tailnote}" if tailnote else "")
+                    aliased_names.update(p for p in ms_parts if p in drop_set)
                 # char_layout
                 for item in (shot.get("char_layout") or []):
                     if isinstance(item, dict):
                         cn = str(item.get("name", "")).strip()
-                        if cn in char_drop:
-                            item["name"] = alias
+                        cn_parts = _split_subject_names(cn)
+                        if cn and any(p in drop_set for p in cn_parts):
+                            new_cn = "，".join(
+                                dict.fromkeys(
+                                    alias if p in drop_set else p for p in cn_parts
+                                )
+                            )
+                            item["name"] = new_cn
+                            aliased_names.update(p for p in cn_parts if p in drop_set)
+            if aliased_names:
                 repairs.append(
                     RepairRecord(
                         constraint_name=self.name,
-                        shot_index=shot.get("index"),
+                        shot_index=None,
                         action="alias",
                         target="characters",
-                        before=",".join(char_drop),
+                        before=",".join(sorted(aliased_names)),
                         after=alias,
                     )
                 )
@@ -158,6 +215,9 @@ class RedguoSceneCharLimitConstraint(Constraint):
                             severity=Severity.HARD,
                             shot_index=None,
                             field="scene",
+                            # 已 alias 合并 → repaired=True（不再触发 regen 循环；
+                            # 实测 09-05/09-06 每轮跑完都剩本违例挂着）
+                            repaired=True,
                             message=(
                                 f"场景「{s}」（{c} 镜）超出红果 {_MAX_SCENES} 场景硬上限——"
                                 f"已 alias 合并到「{scene_keep[0] if scene_keep else '?'}」。"
@@ -175,6 +235,7 @@ class RedguoSceneCharLimitConstraint(Constraint):
                             severity=Severity.HARD,
                             shot_index=None,
                             field="characters",
+                            repaired=True,
                             message=(
                                 f"人物「{s}」（{c} 镜）超出红果 {_MAX_CHARS} 人物硬上限——"
                                 f"已 alias 为群演/村人/船夫等。"

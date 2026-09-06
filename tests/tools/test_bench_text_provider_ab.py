@@ -14,12 +14,10 @@ if str(PROJECT_ROOT) not in sys.path:
 pytest.importorskip("tools.bench_text_provider_ab")
 
 
-def test_doubao_hardfix_register_is_explicit(monkeypatch):
-    """A/B 工具不应依赖 TEXT_PROVIDER 才能挂载 doubao hard_fix。"""
-    monkeypatch.setenv("TEXT_PROVIDER", "deepseek")
-
+def test_final_hardfix_is_provider_neutral(monkeypatch):
+    """A/B 工具与生产入口共用同一套全局约束。"""
     from step01_script_gen.constraints import engine
-    from tools.bench_text_provider_ab import _apply_doubao_hardfixes
+    from tools.bench_text_provider_ab import _apply_final_hardfixes
 
     script = {
         "shots": [{
@@ -40,11 +38,12 @@ def test_doubao_hardfix_register_is_explicit(monkeypatch):
         "characters": [],
     }
 
-    script, report = _apply_doubao_hardfixes(script)
+    monkeypatch.setenv("TEXT_PROVIDER", "deepseek")
+    script, report = _apply_final_hardfixes(script)
 
     names = {c.name for c in engine.ALL_CONSTRAINTS}
-    assert "doubao_dialogue_narration_empty" in names
-    assert "杨旭说" in script["shots"][0]["main_subject"]
+    assert not any(name.startswith("doubao_") for name in names)
+    assert isinstance(report, int)
     assert isinstance(report, int)
 
 
@@ -108,7 +107,7 @@ def test_process_trial_counts_final_hard_unresolved_and_gap(monkeypatch):
     monkeypatch.setattr(
         bench,
         "_apply_final_hardfixes",
-        lambda provider, script: (script, 2),
+        lambda script: (script, 2),
     )
 
     def fake_validate(script, novel_text):

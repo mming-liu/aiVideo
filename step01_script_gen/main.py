@@ -132,11 +132,11 @@ from shared.character_bank import CharacterBank
 from shared.scene_objects_bank import SceneObjectsBank
 from shared.assets_bank import SceneAssetsBank, PropAssetsBank
 from step01_script_gen.prompts import (
-    build_prompt, SYSTEM_PROMPT, build_hook_prompt, parse_hook_response,
+    build_prompt, build_hook_prompt, parse_hook_response,
     _load_gap_analysis_context, _build_regen_iron_rules,
     _build_character_anchors,
     _load_knowledge_skills, _load_local_skill_context,
-    build_doubao_prompt, build_doubao_hook_prompt, auto_select_prompt_builder,
+    auto_select_prompt_builder, auto_select_system_prompt,
 )
 
 # v2026-09-03: 按 TEXT_PROVIDER 自动选择 prompt builder。
@@ -145,6 +145,7 @@ from step01_script_gen.prompts import (
 from _text_gen.config import TEXT_PROVIDER_DEFAULT
 _TEXT_PROVIDER = (os.getenv("TEXT_PROVIDER") or TEXT_PROVIDER_DEFAULT).strip().lower()
 build_prompt, build_hook_prompt = auto_select_prompt_builder(_TEXT_PROVIDER)
+_SYSTEM_PROMPT = auto_select_system_prompt(_TEXT_PROVIDER)
 if _TEXT_PROVIDER == "agent_plan":
     _logger.info(f"[INFO] 使用 doubao 专属 prompt (provider={_TEXT_PROVIDER})")
 from step01_script_gen.character_extractor import extract_characters
@@ -156,15 +157,6 @@ from step01_script_gen.hash_cache import _prompt_changed, _hash_source
 from step01_script_gen.gap_analysis import validate_script_gap, generate_gap_report, print_gap_report
 
 
-# v6.60+ (2026-09-05): doubao 专用模块条件 import - 不影响 deepseek 路径.
-# TEXT_PROVIDER=agent_plan 时挂载 doubao_pipeline / doubao_hardfix (硬修复 Constraint);
-# deepseek 路径 zero change (register_doubao_hardfixes 仅 import 时自动尝试).
-if _TEXT_PROVIDER == "agent_plan":
-    try:
-        from step01_script_gen import doubao_pipeline  # noqa: F401
-        from step01_script_gen import doubao_hardfix  # noqa: F401
-    except ImportError:
-        pass
 import style_prefix
 import scene_compliance
 import shared.content_safety as content_safety
@@ -220,7 +212,7 @@ def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
     prompt = build_prompt(novel_text, bank, objects_bank, outline_anchor)
     service = create_service()
     req = TextGenerationRequest(
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=_SYSTEM_PROMPT,
         user_prompt=prompt,
         temperature=0.2,  # v6.5: 降低温度防止幻觉
         json_schema=SCRIPT_SCHEMA,
@@ -428,7 +420,7 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         service = create_service()
         from _text_gen.deepseek_schema import SCRIPT_SCHEMA
         req = TextGenerationRequest(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=_SYSTEM_PROMPT,
             user_prompt=prompt,
             temperature=0.2,
             json_schema=SCRIPT_SCHEMA,
@@ -1152,7 +1144,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         service = create_service()
         from _text_gen.deepseek_schema import SCRIPT_SCHEMA
         req = TextGenerationRequest(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=_SYSTEM_PROMPT,
             user_prompt=prompt,
             user_inputs=_user_inputs,  # v6.37 结构化多轮
             temperature=0.2,
@@ -1386,8 +1378,9 @@ def _snapshot_run_artifacts(script: dict | None = None) -> None:
     """跑批快照（v6.50 P3，08-28）：script + step01.log 时间戳备份到 snapshots/.
 
     output 不进 git（P2 教训：想回滚 LLM 原始输出时无 .bak 无 raw 缓存），
-    每次落盘后快照一份，只保留最近 20 份（按 script_result_*.json 计，配对
-    删除同名 step01_*.log）。快照失败只告警，不影响主流程。
+    每次落盘后快照一份，只保留最近 N 份（N=SNAPSHOTS_KEEP env，默认 20，
+    单源 shared/paths.MAX_SNAPSHOTS_PER_CHAPTER；按 script_result_*.json 计，
+    配对删除同名 step01_*.log）。快照失败只告警，不影响主流程。
     """
     try:
         import shutil
@@ -1402,7 +1395,9 @@ def _snapshot_run_artifacts(script: dict | None = None) -> None:
         if log_file.exists():
             shutil.copy2(log_file, snap_dir / f"step01_{ts}.log")
         snaps = sorted(snap_dir.glob("script_result_*.json"))
-        for old in snaps[:-20]:
+        # 轮转上限单源 shared/paths.MAX_SNAPSHOTS_PER_CHAPTER（env SNAPSHOTS_KEEP，默认 20）
+        from shared.paths import MAX_SNAPSHOTS_PER_CHAPTER
+        for old in snaps[:-MAX_SNAPSHOTS_PER_CHAPTER]:
             old.unlink(missing_ok=True)
             log_pair = old.name.replace("script_result_", "step01_").replace(".json", ".log")
             (snap_dir / log_pair).unlink(missing_ok=True)
@@ -1618,7 +1613,7 @@ def main() -> None:
             service = create_service()
             from _text_gen.deepseek_schema import SCRIPT_SCHEMA
             req = TextGenerationRequest(
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=_SYSTEM_PROMPT,
                 user_prompt=prompt,
                 temperature=0.2,  # v6.5: 降低温度防止幻觉
                 json_schema=SCRIPT_SCHEMA,
@@ -1660,33 +1655,19 @@ def main() -> None:
 
     # v6.7: 镜头数严重超限时收敛重生成（独立于 gap_analysis，默认开启）
     if SHOT_COUNT_REGEN_ENABLED:
-        if _TEXT_PROVIDER == "agent_plan":
-            from step01_script_gen.doubao_pipeline import doubao_regen_over_limit
-            script = doubao_regen_over_limit(
-                script, novel_text,
-                bank=character_bank, objects_bank=scene_objects_bank,
-            )
-        else:
-            script = _regen_over_limit(
-                script, novel_text,
-                bank=character_bank, objects_bank=scene_objects_bank,
-            )
+        script = _regen_over_limit(
+            script, novel_text,
+            bank=character_bank, objects_bank=scene_objects_bank,
+        )
 
     # v6.35（08-15，P18 闭环）：GAP 通过后仍存在的高价值告警（开篇冲突/
     # 爆点密度/威胁源朝向/关键帧质量/内容密度等）→ 定向修复轮，只重写
     # 告警镜头（此前这些 WARN 纯打印落盘，无人修，带伤进 step02）。
     if REPAIR_ROUNDS_ENABLED:
-        if _TEXT_PROVIDER == "agent_plan":
-            from step01_script_gen.doubao_pipeline import doubao_repair_shot_warnings
-            script = doubao_repair_shot_warnings(
-                script, novel_text,
-                bank=character_bank, objects_bank=scene_objects_bank,
-            )
-        else:
-            script = _repair_shot_warnings(
-                script, novel_text,
-                bank=character_bank, objects_bank=scene_objects_bank,
-            )
+        script = _repair_shot_warnings(
+            script, novel_text,
+            bank=character_bank, objects_bank=scene_objects_bank,
+        )
 
     # 后处理：注入全局配置 + 合规过滤 + 敏感词校验
     script = _post_process(script)

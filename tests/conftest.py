@@ -16,7 +16,6 @@
 """
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -25,7 +24,8 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 # 1) 先于 shared.config 导入改写 OUTPUT_BASE（load_dotenv 不覆盖已存在的 env，
 #    此处显式设置即可压过 .env.content 里的值）
-_TMP_OUT = Path(tempfile.mkdtemp(prefix="aivideo_test_out_"))
+_TMP_OUT = Path(__file__).resolve().parent.parent / ".pytest_tmp"
+_TMP_OUT.mkdir(parents=True, exist_ok=True)
 os.environ["OUTPUT_BASE"] = str(_TMP_OUT)
 
 # 2) 清理可能从 shell 泄漏进来的行为开关（测试各自按需 setenv）

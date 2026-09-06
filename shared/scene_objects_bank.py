@@ -13,6 +13,7 @@
 """
 
 import json
+import re
 from pathlib import Path
 
 
@@ -238,6 +239,22 @@ def build_boat_replacement(shot: dict, scene_objects: dict) -> str:
         pass
     if not frags:
         return "无篷舴艋舟"
+    cap_txt = ""
     capacity = spec.get("capacity")
-    cap_txt = f"，可容{capacity}人" if capacity else ""
+    if capacity:
+        # capacity 原文可能是「可容2-3人（杨旭、听香、张十三） + 炭炉、酒菜…等」
+        # 这类 LLM 全句（2026-09-06 hook prompt 实测「可容可容…」+ 括号不闭合 +
+        # 半截截断的直接根因）。规范：剥掉「可容」前缀/「人」尾缀，再截到人数字面
+        # 为止（拒绝把载荷清单拼进 prompt）。
+        cap = str(capacity).strip()
+        cap = re.sub(r"^可容", "", cap)
+        cap = re.sub(r"人?\s*$", "", cap)
+        # 截断：只保留到第一个（前缀限定词/分隔符——「2-3人（杨旭…）」→「2-3」
+        m = re.match(r"[0-9０-９.\-－~～]+", cap)
+        if m:
+            cap = m.group(0)
+        else:
+            cap = ""
+        if cap:
+            cap_txt = f"，可容{cap}人"
     return f"无篷舴艋舟（{''.join(frags)}{cap_txt}）"

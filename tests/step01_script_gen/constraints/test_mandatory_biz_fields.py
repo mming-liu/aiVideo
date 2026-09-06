@@ -41,7 +41,8 @@ def test_fills_all_four_missing_fields():
 
     assert len(repairs) == 4
     # main_subject="空镜" 走 fallback defaults
-    assert s["core_keywords"] != "" and "古风" in s["core_keywords"]
+    assert isinstance(s["core_keywords"], list)
+    assert "古风" in s["core_keywords"]
     assert s["fx_effect"] == "无"
     assert s["clip_transition"] == "硬切"
     assert "承接" in s["context_bridge"]
@@ -58,7 +59,7 @@ def test_fills_only_missing_fields():
             ff_desc="杨旭盘膝坐船头",
             lf_desc="杨旭被刺",
             main_subject="杨旭",
-            core_keywords="杨旭,船头,静坐",  # 已有
+            core_keywords=["杨旭", "船头", "静坐"],  # 已有
             clip_transition="淡入淡出",        # 已有
         ),
     ])
@@ -71,7 +72,7 @@ def test_fills_only_missing_fields():
 
     assert len(repairs) == 2  # 只补 fx_effect + context_bridge
     s = script["shots"][0]
-    assert s["core_keywords"] == "杨旭,船头,静坐"  # 保留原值
+    assert s["core_keywords"] == ["杨旭", "船头", "静坐"]  # 保留原值
     assert s["clip_transition"] == "淡入淡出"     # 保留原值
     assert s["fx_effect"] == "无"                 # 兜底
     assert "承接" in s["context_bridge"]          # 兜底

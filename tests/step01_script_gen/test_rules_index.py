@@ -16,15 +16,9 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 
 def _real_constraint_names() -> set[str]:
-    """全部合法 Constraint 名：已注册 + doubao 路径（按 provider 条件注册）."""
+    """全部合法 Constraint 名：全局注册表（所有 provider 共用）."""
     from step01_script_gen.constraints import engine as eng
-    names = {c.name for c in eng.ALL_CONSTRAINTS}
-    try:
-        from step01_script_gen.doubao_hardfix import _DOUBAO_CONSTRAINT_CLASSES
-        names.update(cls.name for cls in _DOUBAO_CONSTRAINT_CLASSES)
-    except ImportError:
-        pass  # doubao 链缺依赖时至少校验已注册部分
-    return names
+    return {c.name for c in eng.ALL_CONSTRAINTS}
 
 
 def test_all_constraint_names_resolve():
@@ -107,7 +101,7 @@ def test_helper_functions():
         get_rule_version,
         latest_version,
     )
-    assert latest_version() == "v6.60"
+    assert latest_version() == "v6.61"
     assert get_rule_version("v6.5") is not None  # 模糊匹配 → v6.58（5x 最新）
     assert get_rule_version("v9.99") is None
     assert "ff_lf_temporal" in all_constraint_names()

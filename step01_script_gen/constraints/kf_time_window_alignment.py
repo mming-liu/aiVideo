@@ -71,14 +71,58 @@ class KfTimeWindowAlignmentConstraint(Constraint):
             if not isinstance(kfs, list):
                 continue
 
-            # 收集已有 kf 物理时刻
-            existing_t = []
+            # v6.62（09-06）：先修越窗——kf 物理时刻不在任一段内 → 拉到最近
+            # 段中点（确定性，幂等：修完在窗内不再触发）。09-05 实测 12/13 镜
+            # 存在越窗 kf（t_sec > duration_sec / t 落段外），检查器每轮都报
+            # 「N 个 kf 物理时刻不在时段内」但没有任何修复层管。
+            # 拉回目标优先「未被占用的段」：若最近段的 kf 已 ≥2 帧，改拉第二近
+            # 段——避免拉完后同段堆 2 帧而缺段判定又补 1 帧（重复 3 帧同段）。
+            existing_t = [
+                t for kf in kfs if isinstance(kf, dict)
+                for t in [get_kf_t_sec(kf, shot)] if t is not None
+            ]
+
+            def _seg_load(a: float, b: float) -> int:
+                return sum(1 for t0 in existing_t if a - 0.01 <= t0 <= b + 0.01)
+
+            orphans_fixed = 0
             for kf in kfs:
                 if not isinstance(kf, dict):
                     continue
                 t = get_kf_t_sec(kf, shot)
-                if t is not None:
-                    existing_t.append(t)
+                if t is None:
+                    continue
+                if any(a - 0.01 <= t <= b + 0.01 for a, b in segs):
+                    continue
+                # 按距中点排序取段：优先「时间最近且未占用」的段
+                ranked = sorted(segs, key=lambda ab: abs((ab[0] + ab[1]) / 2 - t))
+                best = ranked[0]
+                for cand in ranked:
+                    if _seg_load(*cand) < 1:
+                        best = cand
+                        break
+                mid = round((best[0] + best[1]) / 2, 3)
+                old_t = kf.get("t_sec")
+                kf["t_sec"] = mid
+                if kf.get("time_ratio") is not None:
+                    kf.pop("time_ratio", None)  # 直写秒数，双字段并存会被旧 reader 读错
+                orphans_fixed += 1
+                repairs.append(
+                    RepairRecord(
+                        constraint_name=self.name,
+                        shot_index=idx,
+                        action="clamp",
+                        target="keyframes[*].t_sec",
+                        before=str(old_t),
+                        after=str(mid),
+                    )
+                )
+            if orphans_fixed:
+                # 修完后重算 existing_t
+                existing_t = [
+                    t for kf in kfs if isinstance(kf, dict)
+                    for t in [get_kf_t_sec(kf, shot)] if t is not None
+                ]
 
             # 找缺段
             missing_segs = []

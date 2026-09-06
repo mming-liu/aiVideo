@@ -40,31 +40,55 @@ class RuleEntry(TypedDict, total=False):
 
 RULES_INDEX: dict[str, RuleEntry] = {
     # ========================================================================
-    # v6.60+ — doubao 专用链（agent_plan/TEXT_PROVIDER 路径，与 deepseek 解耦）
+    # v6.61 — provider-neutral step01 framework
+    # ========================================================================
+    "v6.61": {
+        "name": "共享生成/修复/GAP/硬修复框架：provider 只影响 prompt/system",
+        "date": "2026-09-06",
+        "prompt_sections": [],
+        "constraints": [
+            "narration_subtitle_consistency",
+            "core_keyword_coverage",
+            "role_anchor",
+            "opening_empty_shot_insert",
+            "climax_distribution",
+            "overshoulder_consistency",
+            "frame_spec_repair",
+            "mandatory_biz_fields",
+        ],
+        "validation_checks": [],
+        "tests": [
+            "tests/step01_script_gen/constraints",
+            "tests/step01_script_gen",
+            "tests/tools/test_bench_text_provider_ab.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.60 — historical provider-specific chain, superseded by v6.61
     # ========================================================================
     "v6.60": {
         "name": "doubao 专用链：DOUBAO_SYSTEM_PROMPT + 修复轮/GAP 重生 prompt + 7 个 hard_fix Constraint",
         "date": "2026-09-05",
         "prompt_sections": [
-            "prompts/doubao_system.md",  # 整文件（铁律 A-M/R1-R6/1-7 文本同源 doubao_repair_prompts._DOUBAO_HARD_RULE_LINES）
+            "prompts/doubao_system.md",
         ],
         "constraints": [
-            # 7 个 doubao 专用 Constraint（仅 agent_plan 路径注册，见 doubao_hardfix）
-            "doubao_dialogue_narration_empty",      # B.1 对白 narration 双空兜底
-            "doubao_gap_keyword_force_inject",      # B.2 GAP 关键词强制注入
-            "doubao_role_anchor_inject",            # B.3.1 角色锚点注入
-            "doubao_opening_empty_shot_insert",     # B.3.2 开篇空镜插入
-            "doubao_climax_back_inject",            # B.3.3 高潮回灌
-            "doubao_overshoulder_consistency",      # B.4 过肩机位一致性
-            "doubao_frame_spec_reconstruct",        # B.5 frame_layouts 兜底
+            # 历史专用约束已由 v6.61 的全局共享约束承接
+            "narration_subtitle_consistency",
+            "core_keyword_coverage",
+            "role_anchor",
+            "opening_empty_shot_insert",
+            "climax_distribution",
+            "overshoulder_consistency",
+            "frame_spec_repair",
         ],
         "validation_checks": [],
         "tests": [
-            "tests/step01_script_gen/doubao_hardfix",  # 7 文件 34 测（含 register 幂等）
+            "tests/step01_script_gen/constraints",
         ],
         # 非 Constraint 配套模块（构造器/规则行常量）：
-        #   doubao_pipeline.py（regen_over_limit / repair_shot_warnings / gap_regen）
-        #   doubao_repair_prompts.py（build_doubao_* 三构造器 + _DOUBAO_HARD_RULE_LINES）
+        # 该历史链已删除，功能由 v6.61 全局约束承接。
     },
 
     # ========================================================================

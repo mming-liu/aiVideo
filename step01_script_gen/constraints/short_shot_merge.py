@@ -61,12 +61,15 @@ class ShortShotMergeConstraint(Constraint):
                     )
                 )
             # 报告 HARD 违例（让 LLM 知道这是结构性问题）
+            # v6.62（09-06）：已拉长到下限 → repaired=True，不再每次跑都
+            # 触发 regen 建议（实测时长已修仍每轮报「短镜 2.0s」循环）
             ctx.record_violation(
                 Violation(
                     constraint_name=self.name,
                     severity=Severity.HARD,
                     shot_index=shot.get("index"),
                     field="duration_sec",
+                    repaired=True,
                     message=(
                         f"短镜 {dur:.1f}s < {_MIN_SHOT_DURATION}s 红果下限——"
                         f"已拉长到 {new_dur:.1f}s；建议 LLM 合并到下 1 镜或补充 motion_desc。"

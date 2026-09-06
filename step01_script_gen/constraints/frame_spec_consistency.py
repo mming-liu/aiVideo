@@ -234,9 +234,15 @@ class FrameSpecConsistencyConstraint(Constraint):
         shot_idx,
         label: str,
     ) -> None:
-        """on_screen=True 角色若对应 desc 体现退场/没入/倒下 → HARD 违例.
+        """on_screen=True 角色若对应 desc 体现退场/没入/倒下 → 确定性修复 + HARD 违例.
 
-        治 lf 互斥根因：spec 标在场 + desc 写「已没入水中」 = 数据矛盾 → regen.
+        治 lf 互斥根因：spec 标在场 + desc 写「已没入水中」 = 数据矛盾。
+
+        v6.62（09-06）：desc 是画面事实源（图片模型按它画），spec 漏标是
+        LLM 记账错误 → 直接把 on_screen 降为 False（确定性修复，消除 HARD
+        循环：09-05/09-06 实测每轮跑完都剩 frame_spec@shotN「已没入」挂着，
+        LLM regen 也修不掉）。修复后仍记录 HARD 违例（供日志审计），但
+        violations 不再进 hard_unresolved（record_violation → repaired=True）。
         """
         for bucket, desc_field in (("ff", "ff_desc"), ("lf", "lf_desc")):
             items = fl.get(bucket) or []
@@ -252,21 +258,34 @@ class FrameSpecConsistencyConstraint(Constraint):
                 # 在 desc 中找 name 出现位置，检其后 30 字符内是否有退场词
                 for m in re.finditer(re.escape(name), desc):
                     tail = desc[m.end(): m.end() + 30]
-                    if any(w in tail for w in _EXIT_WORDS):
-                        ctx.record_violation(
-                            Violation(
-                                constraint_name=self.name,
-                                severity=Severity.HARD,
-                                shot_index=shot_idx,
-                                field=desc_field,
-                                message=(
-                                    f"{label} {desc_field} 含 on_screen=true 角色「{name}」"
-                                    f"但 desc 体现退场（命中：{next(w for w in _EXIT_WORDS if w in tail)}）——"
-                                    f"frame_layouts.{bucket} 应把 {name} 标 on_screen=false"
-                                ),
-                            )
+                    hit = next((w for w in _EXIT_WORDS if w in tail), None)
+                    if not hit:
+                        continue
+                    # 确定性修复：desc 已把该角色画走 → spec 同步离场
+                    item["on_screen"] = False
+                    ctx.record_repair(
+                        self.name,
+                        shot_idx,
+                        "set_field",
+                        f"frame_layouts.{bucket}[{name}].on_screen",
+                        before="True",
+                        after="False",
+                    )
+                    ctx.record_violation(
+                        Violation(
+                            constraint_name=self.name,
+                            severity=Severity.HARD,
+                            shot_index=shot_idx,
+                            field=desc_field,
+                            repaired=True,
+                            message=(
+                                f"{label} {desc_field} 含 on_screen=true 角色「{name}」"
+                                f"但 desc 体现退场（命中：{hit}）——已确定性修复为 "
+                                f"on_screen=false（desc 是画面事实源）"
+                            ),
                         )
-                        break  # 一条违例一个角色
+                    )
+                    break  # 一条违例一个角色
 
     def _check_props_consistency(
         self,

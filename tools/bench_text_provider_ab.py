@@ -59,28 +59,8 @@ def _dump_raw(provider: str, raw: str, trial: int = 1) -> None:
     (dump_dir / f"{provider}__ab.json").write_text(raw, encoding="utf-8")
 
 
-def _apply_doubao_hardfixes(script: dict) -> tuple[dict, int]:
-    """显式挂载并执行 doubao hard_fix，不依赖全局 TEXT_PROVIDER。"""
-    from step01_script_gen.doubao_hardfix import register_doubao_hardfixes
-    from step01_script_gen.constraints import run_hard_fix
-
-    register_doubao_hardfixes()
-    script, report = run_hard_fix(
-        script,
-        is_in_repair_loop=False,
-        is_final_pass=True,
-        return_report=True,
-    )
-    return script, len(getattr(report, "hard_unresolved", []))
-
-
-def _apply_final_hardfixes(provider: str, script: dict) -> tuple[dict, int]:
-    """按生产入口跑 final hard_fix；agent_plan 额外挂载 doubao 专用约束。"""
-    if provider == "agent_plan":
-        from step01_script_gen.doubao_hardfix import register_doubao_hardfixes
-
-        register_doubao_hardfixes()
-
+def _apply_final_hardfixes(script: dict) -> tuple[dict, int]:
+    """Run the production final hard-fix chain shared by all providers."""
     from step01_script_gen.constraints import run_hard_fix
 
     script, report = run_hard_fix(
@@ -129,22 +109,26 @@ def _load_existing_banks() -> tuple:
 # ============================================================================
 
 def _build_prompts(novel_text: str, bank, objs_bank, outline) -> dict[str, str]:
-    """每个 provider 用各自的 prompt builder（生产配置）.
+    """每个 provider 用各自的 prompt builder 与 system prompt（生产配置）.
 
     bank / objs_bank 直接是 CharacterBank / SceneObjectsBank 实例（已 load()）。
     """
     from step01_script_gen.prompts import (
-        build_prompt, build_doubao_prompt, SYSTEM_PROMPT, DOUBAO_SYSTEM_PROMPT,
+        auto_select_prompt_builder,
+        auto_select_system_prompt,
     )
     from step01_script_gen.outline import outline_to_anchor
 
     outline_anchor = outline_to_anchor(outline) if outline else ""
 
-    return {
-        "deepseek": (build_prompt(novel_text, bank, objs_bank, outline_anchor), SYSTEM_PROMPT),
-        "agent_plan": (build_doubao_prompt(novel_text, bank, objs_bank, outline_anchor),
-                        DOUBAO_SYSTEM_PROMPT),
-    }
+    output = {}
+    for provider in ("deepseek", "agent_plan"):
+        build_main, _build_hook = auto_select_prompt_builder(provider)
+        output[provider] = (
+            build_main(novel_text, bank, objs_bank, outline_anchor),
+            auto_select_system_prompt(provider),
+        )
+    return output
 
 
 # ============================================================================
@@ -253,10 +237,9 @@ def process_trial(
     hard_unresolved_count = 0
     final_validation: dict = {}
     if parse_ok:
-        # 与 main.py 落盘前路径一致：双方都跑 final hard_fix；
-        # agent_plan 额外挂载 doubao 专用 hard_fix。
+        # 与 main.py 落盘前路径一致：双方共用 final hard_fix。
         try:
-            script, hard_unresolved_count = _apply_final_hardfixes(provider, script)
+            script, hard_unresolved_count = _apply_final_hardfixes(script)
         except Exception as _bhfe:
             print(f"{label} final hard_fix 失败（保留原版）: {_bhfe}")
         try:

@@ -39,6 +39,8 @@ class Violation:
         field: 违例字段名（'prompt' / 'ff_desc' / 'keyframes[2].desc' / None）
         message: 人/给 LLM 看的描述
         evidence: 触发违例的原文片段（用于日志）
+        repaired: v6.62：检测后已确定性修复（违例留档供日志/regen 反馈，
+            但不再计入 hard_unresolved——治「已修仍报 HARD」的循环）
     """
 
     constraint_name: str
@@ -47,6 +49,7 @@ class Violation:
     field: Optional[str] = None
     message: str = ""
     evidence: str = ""
+    repaired: bool = False
 
 
 @dataclass(frozen=True)
@@ -91,7 +94,8 @@ class RepairReport:
     @property
     def hard_unresolved(self) -> list[Violation]:
         """HARD severity 且未修复的违例（触发 regen）."""
-        return [v for v in self.violations_remaining if v.severity == Severity.HARD]
+        return [v for v in self.violations_remaining
+                if v.severity == Severity.HARD and not v.repaired]
 
     @property
     def repairs_by_constraint(self) -> dict[str, int]:
