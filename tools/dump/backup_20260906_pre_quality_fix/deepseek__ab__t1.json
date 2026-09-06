@@ -1,0 +1,662 @@
+{
+  "title": "溪上何人品玉箫·暗夜惊魂",
+  "characters": [
+    {
+      "identifier": "杨旭",
+      "gender": "male",
+      "age_range": "young",
+      "static_features": "剑眉星目，黑发束冠，身姿挺拔，皮肤白皙，面如冠玉。初时身着素白色轻袍，头戴平定四方巾；后解衣宽袍，内着雪白丝质中衣，袒腹仰卧，赤脚。",
+      "dynamic_features": "神态慵懒自若，好饮酒吹箫，风流不羁，被刺后心口受致命伤。"
+    },
+    {
+      "identifier": "听香",
+      "gender": "female",
+      "age_range": "young",
+      "static_features": "如花似玉，鹅蛋脸，柳叶眉，桃花眼，樱桃小嘴。一袭春衫（淡杏色襦裙，披帛），青丝挽慵懒美人髻，斜插一支步摇，颈子纤细，身段风流。披散头发后更显娇弱。",
+      "dynamic_features": "温柔娇媚，略带怯懦，擅长侍奉，遇刺后惊恐颤抖。"
+    },
+    {
+      "identifier": "张十三",
+      "gender": "male",
+      "age_range": "young",
+      "static_features": "面容冷峻，身形矫健，皮肤微黑，眉骨高俊。着青色短褐小帽，束腰带，脚蹬芒鞋，行动敏捷。",
+      "dynamic_features": "机警干练，忠心而狠辣，对杨旭之死震惊但迅速转为利害算计。"
+    },
+    {
+      "identifier": "神秘人",
+      "gender": "male",
+      "age_range": "young",
+      "static_features": "浑身湿透，全身黑色劲装，黑巾蒙面只露一双寒目，身形敏捷，手握一柄寒光短刃，刃长约一尺。",
+      "dynamic_features": "出手狠辣，一击即退，动作如电，如鬼魅般无影无踪。"
+    }
+  ],
+  "shots": [
+    {
+      "index": 1,
+      "narration_segment": "",
+      "subtitle": "",
+      "scene": "照月湾",
+      "location": "杨家别业荷花湾水上小舟",
+      "main_subject": "杨旭吹箫，听香撑伞",
+      "core_keywords": ["荷花湾", "吹箫", "夕阳", "小舟", "美人撑伞"],
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感，暖金余晖染天。满湾碧荷，一艘窄身无篷舴艋舟（长5.5米、宽1.5米）停在荷丛间。船头盘膝坐着一位二十岁左右的公子（杨旭）——剑眉星目，黑发束冠，身着素白色轻袍，头戴平定四方巾，双手横持一支碧玉箫，正启唇吹奏。他身旁一位鹅蛋脸、柳眉桃目的美人（听香）身穿杏色春衫襦裙，头上绾着美人髻斜插步摇，手撑一把油纸伞替他遮阳，裙角随风轻摆。中远景，人物与环境平衡，高清细节，画面稳定、不闪烁、动作流畅自然。",
+      "motion_desc": "0-2秒：暖金斜照，杨旭盘坐静吹箫；2-5秒：箫声余韵中，听香缓缓侧身，抬眼望向画右杨旭；5-6秒：二人相视一笑，水面荷叶轻摇。",
+      "ff_desc": "小舟船头，杨旭盘膝而坐，双手持箫抵于唇下，唇齿微启，眼微阖；身旁的听香立握油纸伞为杨旭遮住斜阳，目光望着杨旭侧脸，一色一静。",
+      "lf_desc": "杨旭放下竹箫，侧首含笑望向听香；听香亦是眉眼弯弯，收伞半倚在杨旭肩侧，小舟随微波轻晃。",
+      "context_bridge": "",
+      "audio_cue": "人声：无；音效：水波轻荡声，蝉鸣渐弱，远处偶尔一两声鸟鸣；背景音乐：悠扬清越的古箫独奏渐起。",
+      "fx_effect": "傍晚暖光晕染，水面金色碎光轻闪。",
+      "color_tone": "暖金+绯红过渡",
+      "cam_idx": 1,
+      "clip_transition": "硬切，0.2s",
+      "duration_sec": 6.0,
+      "variation_type": "medium",
+      "frame_layouts": {
+        "ff": [
+          {"name": "杨旭", "on_screen": true, "position": "画中偏左", "pose": "盘坐持箫", "gaze_target": "无", "props": ["碧玉箫"]},
+          {"name": "听香", "on_screen": true, "position": "画右", "pose": "站立撑伞", "gaze_target": "杨旭", "props": ["油纸伞"]}
+        ],
+        "lf": [
+          {"name": "杨旭", "on_screen": true, "position": "画中偏左", "pose": "放下箫侧身", "gaze_target": "听香", "props": []},
+          {"name": "听香", "on_screen": true, "position": "画右", "pose": "半倚杨旭肩", "gaze_target": "杨旭", "props": ["油纸伞"]}
+        ],
+        "kfs": [
+          [{"name": "杨旭", "on_screen": true, "position": "画中偏左", "pose": "吹箫入神", "gaze_target": "无", "props": ["碧玉箫"]},
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "举伞侍立", "gaze_target": "杨旭", "props": ["油纸伞"]}],
+          [{"name": "杨旭", "on_screen": true, "position": "画中偏左", "pose": "放下箫转头", "gaze_target": "听香", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "弯眼浅笑", "gaze_target": "杨旭", "props": ["油纸伞"]}],
+          [{"name": "杨旭", "on_screen": true, "position": "画中偏左", "pose": "张嘴欲语", "gaze_target": "听香", "props": ["碧玉箫"]},
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "低头抿嘴笑", "gaze_target": "杨旭", "props": []}]
+        ]
+      },
+      "keyframes": [
+        {"desc": "杨旭盘坐船头，双手持箫抵唇，眼睛微闭；听香站在他右侧上方，一手握油纸伞柄，伞面微斜，目光柔柔落在杨旭脸上，画面静止。", "stage": "pre", "t_sec": 1.0},
+        {"desc": "杨旭奏完一段，竹箫从唇边点落下，侧过脸含笑看听香；听香仍持伞侧身，眼睫轻轻一抬，与他对视。", "stage": "approach", "t_sec": 2.5},
+        {"desc": "杨旭已完全放下竹箫，伸手扶住听香的手腕，听香顺势把伞往他身后倾了倾，两人相视而笑，船头气氛亲近。", "stage": "climax", "t_sec": 4.5},
+        {"desc": "两人并肩坐在船头，听香倚着杨旭肩头，油纸伞已收起靠在一旁，杨旭侧头低看她，画面如黄昏恋歌般安静。", "stage": "after", "t_sec": 5.5}
+      ]
+    },
+    {
+      "index": 2,
+      "narration_segment": "",
+      "subtitle": "",
+      "scene": "照月湾",
+      "location": "夜荷小舟中",
+      "main_subject": "杨旭与听香夜宴亲昵",
+      "core_keywords": ["夜", "星月", "舟中对饮", "酒壶", "亲昵"],
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感，冷蓝夜色笼罩，满天繁星，一弯弦月斜挂天边。小舟已驶离荷丛，停在水面空旷处，船头悬挂一盏暖黄的琉璃灯。杨旭（剑眉星目，黑发束冠，身穿素白宽袍，已解开外袍露出雪白中衣，领口微敞）仰卧在船头，神情醺意半醉，左手提着一只瓷酒壶，右手搭在身侧。听香（杏色春衫被月色浸成浅灰蓝）跪坐在他身旁，身姿柔软，正举着酒杯凑到杨旭唇边，低头絮语。中近景，浅景深，灯笼暖光勾勒两人轮廓，画面暗调低饱和。",
+      "motion_desc": "0-2秒：杨旭仰卧提着酒壶，听香侧跪喂他；2-5秒：听香放下酒杯，俯身将半个身子伏在杨旭胸口，双臂环住他，杨旭轻笑着勾起她一缕秀发；5-7秒：杨旭随手将酒壶搁下，另一只手揽过听香的腰，两人愈发贴近。",
+      "ff_desc": "夜舟船头，杨旭袒腹仰卧，头枕臂弯，右手垂于船板，左手提酒壶举在胸膛上方；听香眉眼盈盈地跪坐在他身侧，双手举着一只小酒盏，正送到他唇边。",
+      "lf_desc": "酒盏已被搁在小几上，听香两手环住杨旭的脖颈侧卧在他怀里，杨旭抬臂搂住她的腰，二人额头相抵，含笑相望，小舟轻轻晃动。",
+      "context_bridge": "夕阳沉入水面，四周冷蓝夜色包裹小舟，头顶星光渐显，船头依次亮起琉璃灯暖光。",
+      "audio_cue": "人声：听香娇笑轻声耳语，杨旭低笑回应；音效：酒杯轻碰声，水波摇动，夜虫低鸣；背景音乐：委婉的琵琶与笛子小调。",
+      "fx_effect": "暖色灯光与水面上零星光点交织，发梢微光。",
+      "color_tone": "冷蓝+暖光配色",
+      "cam_idx": 2,
+      "clip_transition": "叠化0.3s",
+      "duration_sec": 7.0,
+      "variation_type": "medium",
+      "frame_layouts": {
+        "ff": [
+          {"name": "杨旭", "on_screen": true, "position": "画中横卧", "pose": "仰卧举壶", "gaze_target": "听香", "props": ["酒壶"]},
+          {"name": "听香", "on_screen": true, "position": "画右跪坐", "pose": "跪举酒盏", "gaze_target": "杨旭", "props": ["酒盏"]}
+        ],
+        "lf": [
+          {"name": "杨旭", "on_screen": true, "position": "画中横卧", "pose": "揽住听香腰", "gaze_target": "听香", "props": []},
+          {"name": "听香", "on_screen": true, "position": "画右靠入他怀", "pose": "伏卧侧抱", "gaze_target": "杨旭", "props": []}
+        ],
+        "kfs": [
+          [{"name": "杨旭", "on_screen": true, "position": "画中横卧", "pose": "仰卧提壶", "gaze_target": "听香", "props": ["酒壶"]},
+           {"name": "听香", "on_screen": true, "position": "画右跪坐", "pose": "双手举盏喂酒", "gaze_target": "杨旭", "props": ["酒盏"]}],
+          [{"name": "杨旭", "on_screen": true, "position": "画中横卧", "pose": "微微仰头饮酒", "gaze_target": "听香", "props": ["酒盏"]},
+           {"name": "听香", "on_screen": true, "position": "画右跪坐", "pose": "低头含笑", "gaze_target": "杨旭", "props": []}],
+          [{"name": "杨旭", "on_screen": true, "position": "画中横卧", "pose": "放下酒壶，伸臂", "gaze_target": "听香", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右侧身", "pose": "放下酒杯，扑入他怀", "gaze_target": "杨旭", "props": []}],
+          [{"name": "杨旭", "on_screen": true, "position": "画中横卧", "pose": "搂腰贴近", "gaze_target": "听香", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右侧卧", "pose": "环脖相偎", "gaze_target": "杨旭", "props": []}]
+        ]
+      },
+      "keyframes": [
+        {"desc": "杨旭仰卧船板，脑侧垫着白袍，右手垂在地板，左手高高拎着酒壶；听香跪在他右前方，双手捧着一只白瓷小酒盏，杨旭正低头啜酒。", "stage": "pre", "t_sec": 1.0},
+        {"desc": "杨旭咽下酒，眉尾一挑眼中带笑，听香也随之弯唇，酒杯已放下，双手牵住他空出的一只手。", "stage": "approach", "t_sec": 2.5},
+        {"desc": "听香顺势侧身扑入杨旭臂弯，上半身伏在他胸口，杨旭另一只手抬起抚上她的脸，两人气息相闻。", "stage": "climax", "t_sec": 4.5},
+        {"desc": "小舟微荡，两人已依偎在一起，听香枕在杨旭肩窝，杨旭揽着她的腰，闭眼含笑，船头吊灯在二人身上摇晃出一片暖光。", "stage": "after", "t_sec": 6.0}
+      ]
+    },
+    {
+      "index": 3,
+      "narration_segment": "",
+      "subtitle": "",
+      "scene": "照月湾",
+      "location": "夜荷小舟船头",
+      "main_subject": "水下黑影逼近，听香跪坐，杨旭仰卧",
+      "core_keywords": ["水下黑影", "刀尖", "杀机", "静谧"],
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感。俯拍特写：夜色下水纹层层漾开，一截寒光短刃的刀尖先从水面下方微微探出，如冷月。
+
+而后画面拉升——窄窄小舟横在银河下，杨旭（素白中衣，袒腹仰卧）闭目躺在船头，胸膛起伏，左手搭在船舷；跪坐身旁的听香（淡杏衫）正低着头，双手撑在船板，发髻上的步摇轻颤。中景偏俯视，冷蓝月光为主光，小舟周边幽暗，四周荷影如鬼魅。",
+      "motion_desc": "0-2秒：水面仅有刀尖悄悄划开一道细痕；2-5秒：水下黑影悄然游近船侧，几乎贴着水面；5-7秒：杨旭仍未察觉，听香手指微微收紧，水面上摇落的月影忽然碎开。",
+      "ff_desc": "水面孤舟，四周万籁俱寂。杨旭仰卧船头，闭眼，一手垂梢；听香跪坐在他身侧，低着头。船侧紧贴水面处，突然多出一圈微不可察的暗色涟漪，隐隐露出一截冷光刀尖。",
+      "lf_desc": "那截刀尖瞬间沉入水下，只在水面留下一道扩散的细波。听香似有所觉地抬起半脸，杨旭仍在闭眼享受，浑然不知大祸临头。",
+      "context_bridge": "方才还暖意融融，此刻四周水波不兴，唯头顶冷月似钩，将小舟圈成待宰之地。",
+      "audio_cue": "人声：无；音效：声音几乎消失，只剩小舟微弱吱呀、水波轻柔，偶尔一两滴水声；背景音乐：鼓点渐进，低频震颤，营造不祥。",
+      "fx_effect": "水下阴影渐移，月光在水面碎裂成片。",
+      "color_tone": "冷蓝深调",
+      "cam_idx": 3,
+      "clip_transition": "硬切0.2s",
+      "duration_sec": 5.0,
+      "variation_type": "large",
+      "frame_layouts": {
+        "ff": [
+          {"name": "杨旭", "on_screen": true, "position": "画中", "pose": "仰卧闭目", "gaze_target": "无", "props": []},
+          {"name": "听香", "on_screen": true, "position": "画右", "pose": "跪坐低头", "gaze_target": "杨旭", "props": ["步摇"]},
+          {"name": "神秘人", "on_screen": false, "position": "水下画下", "pose": "潜伏仅露刀尖", "gaze_target": "无", "props": ["短刃"]}
+        ],
+        "lf": [
+          {"name": "杨旭", "on_screen": true, "position": "画中", "pose": "仰卧闭目", "gaze_target": "无", "props": []},
+          {"name": "听香", "on_screen": true, "position": "画右", "pose": "惊觉抬头", "gaze_target": "水面", "props": []},
+          {"name": "神秘人", "on_screen": false, "position": "画下水中", "pose": "沉没待发", "gaze_target": "无", "props": []}
+        ],
+        "kfs": [
+          [{"name": "杨旭", "on_screen": true, "position": "画中", "pose": "仰卧闭目", "gaze_target": "无", "props": []}, 
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "低头轻声", "gaze_target": "杨旭", "props": ["步摇"]}],
+          [{"name": "杨旭", "on_screen": true, "position": "画中", "pose": "仍仰卧", "gaze_target": "无", "props": []}, 
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "抬头望水", "gaze_target": "画下水面", "props": []}],
+          [{"name": "杨旭", "on_screen": true, "position": "画中", "pose": "仰卧恍然", "gaze_target": "听香", "props": []}, 
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "惊惶转脸", "gaze_target": "水下", "props": ["步摇"]}],
+          [{"name": "杨旭", "on_screen": true, "position": "画中", "pose": "仰卧闭眼", "gaze_target": "无", "props": []}, 
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "猛地转头", "gaze_target": "画下", "props": []}]
+        ]
+      },
+      "keyframes": [
+        {"desc": "水面静静，舟侧一道极细的水线正在合拢，仿佛有什么已从水下掠过，一个蒙面人全身没入水中，只露出一只持刀的手，刀锋刚探出水面，杨旭仰卧毫无反应，听香低头未觉。", "stage": "pre", "t_sec": 1.0},
+        {"desc": "刀尖向下缩回，水面上只泛起一小圈涟漪。杨旭依然闭目，听香却不由自主地向水面撇了一眼，眼睫轻颤。", "stage": "approach", "t_sec": 2.0},
+        {"desc": "水下黑影潜至船侧正下方，手中短刃微扬，刃尖对向杨旭心口处水面上方的位置。听香忽然扭过头直直盯着船外，脸上血色褪去。", "stage": "climax", "t_sec": 3.5},
+        {"desc": "舟外水面猛然向上拱起半寸，水花破裂，一团黑影即将破水而出。杨旭仍仰卧不察，听香的惊叫已堵在喉咙口。", "stage": "react", "t_sec": 4.5}
+      ]
+    },
+    {
+      "index": 4,
+      "narration_segment": "听香：啊！！",
+      "subtitle": "啊！！",
+      "scene": "照月湾",
+      "location": "夜舟船头",
+      "main_subject": "刺客破水跃上，一刀没入杨旭心口",
+      "core_keywords": ["破水", "刺客", "寒刃", "刺心"],
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感，暴力水花溅开。近距离惊变：船侧“哗啦”一声，一个浑身湿透的蒙面黑衣人（神秘人，黑色劲装，黑巾蒙面，目露杀机）猛然破水而出，右手握着一柄寒光短刃，刀刃在月色下一闪，左手一撑船舷，身形飞掠，直扑仰卧的杨旭。杨旭（素白中衣，袒腹）瞬间睁大双眼，瞳孔骤缩，听香（杏色衫）跌坐在旁惊骇地张嘴。中景偏仰拍，水花四溅，匕首寒光。",
+      "motion_desc": "0-2秒：水波暴裂，黑衣人破水跃起，右手短刃高举；2-5秒：黑衣人借舷之力腾身掠上，刀尖带着寒芒闪电刺向杨旭心口；5-6秒：刀锋没入杨旭胸襟，杨旭闷哼，身体弓起，听香尖叫。",
+      "ff_desc": "船侧水面猛地爆开，一人上半身已探出水面，右手短刃刀尖直指前方仰卧的杨旭心口，刀刃尚悬在半空未落下；杨旭双眼刚睁开一线，听香张开嘴却未出声。",
+      "lf_desc": "黑衣人已单膝跪在杨旭身侧，右手仍握刀柄，刀锋已尽数没入杨旭穿白衣的心口；杨旭大睁双眼，胸膛渗开一朵暗红洇痕，听香向后踉跄跌坐，牙齿发颤。",
+      "context_bridge": "前一刻水面只剩微澜，这一刹那水花炸起，气氛陡然被撕裂。",
+      "audio_cue": "人声：听香“啊——”尖叫声；音效：水花爆裂声、刀刃入肉沉闷声、小舟剧晃嘎吱声；背景音乐：鼓点骤停，极短刺耳弦音。",
+      "fx_effect": "短刃寒光爆闪，水珠扬散，血雾（暗红细末）在月光下飞散。",
+      "color_tone": "冷蓝爆裂暗红",
+      "cam_idx": 4,
+      "clip_transition": "硬切0.1s（快节奏）",
+      "duration_sec": 7.0,
+      "variation_type": "large",
+      "frame_layouts": {
+        "ff": [
+          {"name": "杨旭", "on_screen": true, "position": "画中横卧", "pose": "刚睁眼惊恐", "gaze_target": "画右水浪", "props": []},
+          {"name": "听香", "on_screen": true, "position": "画左跌坐", "pose": "张嘴欲呼", "gaze_target": "杨旭", "props": ["步摇"]},
+          {"name": "神秘人", "on_screen": false, "position": "水下画右", "pose": "半身探水持刃", "gaze_target": "杨旭", "props": ["短刃"]}
+        ],
+        "lf": [
+          {"name": "杨旭", "on_screen": true, "position": "画中", "pose": "胸口中刃弓背", "gaze_target": "无", "props": ["短刃"]},
+          {"name": "听香", "on_screen": true, "position": "画左", "pose": "跌坐张大嘴", "gaze_target": "杨旭", "props": []},
+          {"name": "神秘人", "on_screen": true, "position": "画右船缘", "pose": "单膝跪压", "gaze_target": "杨旭", "props": ["短刃"]}
+        ],
+        "kfs": [
+          [{"name": "神秘人", "on_screen": false, "position": "画右水浪", "pose": "破水半身持刃", "gaze_target": "杨旭", "props": ["短刃"]},
+           {"name": "杨旭", "on_screen": true, "position": "画中", "pose": "仰卧刚睁眼", "gaze_target": "画右", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画左", "pose": "跌坐张嘴", "gaze_target": "杨旭", "props": []}],
+          [{"name": "神秘人", "on_screen": true, "position": "画右船头", "pose": "整个人跃上船舷", "gaze_target": "杨旭", "props": ["短刃"]},
+           {"name": "杨旭", "on_screen": true, "position": "画中", "pose": "瞳孔放大抬手欲挡", "gaze_target": "神秘人", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画左", "pose": "惊恐后仰", "gaze_target": "神秘人", "props": []}],
+          [{"name": "神秘人", "on_screen": true, "position": "画右压迫", "pose": "单膝跪压右手下劈", "gaze_target": "杨旭", "props": ["短刃"]},
+           {"name": "杨旭", "on_screen": true, "position": "画中", "pose": "胸口被刃没入，弓身", "gaze_target": "神秘人", "props": ["短刃"]},
+           {"name": "听香", "on_screen": true, "position": "画左", "pose": "捂嘴惊骇", "gaze_target": "杨旭", "props": []}],
+          [{"name": "神秘人", "on_screen": true, "position": "画右", "pose": "保持握刃不拔", "gaze_target": "杨旭", "props": ["短刃"]},
+           {"name": "杨旭", "on_screen": true, "position": "画中", "pose": "睁目仰倒，胸口洇红色", "gaze_target": "无", "props": ["短刃"]},
+           {"name": "听香", "on_screen": true, "position": "画左", "pose": "捂嘴泪涌", "gaze_target": "杨旭", "props": []}]
+        ]
+      },
+      "keyframes": [
+        {"desc": "黑衣刺客自水中破出，上半身湿漉漉探出船舷，右手高举短刃，刀尖下垂，正对杨旭心口；杨旭才刚睁眼，头微偏；听香跪坐在旁，双手捂嘴。", "stage": "climax", "t_sec": 2.5},
+        {"desc": "黑衣人已跃上船头，单膝跪在杨旭身侧，右手持刃从上往下撞进杨旭抵白衣的胸口，杨旭张大嘴，瞳孔骤缩，听香转身尖叫。", "stage": "climax", "t_sec": 3.5},
+        {"desc": "黑衣人仍单膝压制，右手握刃不放；杨旭已无力地陷在船板上，胸口洇开一片暗红，头歪向一侧；听香跌坐在画面左侧，眼睛瞪大。", "stage": "react", "t_sec": 5.0},
+        {"desc": "黑衣人松开刀柄，骤然后仰，准备倒纵入水，杨旭胸口仍插着短刃，听香吓得闭眼惨叫。", "stage": "exit", "t_sec": 6.5}
+      ]
+    },
+    {
+      "index": 5,
+      "narration_segment": "神秘人：（无声）",
+      "subtitle": "",
+      "scene": "照月湾",
+      "location": "夜舟船头",
+      "main_subject": "刺客倒纵入水消失，杨旭身亡",
+      "core_keywords": ["倒纵", "入水", "涟漪", "尸体"],
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感。船头画面：黑衣蒙面刺客双臂一展，身形后仰，瞬间没入船侧的水中，只留下一圈扩大的涟漪，把水中的月亮波纹震碎。只剩下重伤倒卧的杨旭仰躺在船板，心口一截刀柄直直矗立，白色中衣洇开大片暗红。听香伏在船舷边，发髻散乱，步摇滑落，脸上的暗红血点被月光照得惨白。全景略偏俯视，冷蓝月光洒满水面。",
+      "motion_desc": "0-2秒：黑衣人双腿蹬船，向后倒飞，没入水中不见踪迹；2-5秒：水面漪澜剧烈摇动，杨旭仅剩低微痉挛，手垂下；5-6秒：听香浑身发抖，扑到杨旭身边想拔刀又不敢，哭喊。",
+      "ff_desc": "黑衣人刚倒出船舷，双脚离船，整个人后仰悬在半空，眼看要落入水中；杨旭静静仰躺在船板上，胸口插着刀柄，暗红洇痕不再扩大；听香扑至杨旭身旁，双手悬在半空不敢碰他，泪水滚落。",
+      "lf_desc": "水面已恢复平静，只余一圈叠一圈的月影波纹。杨旭仰躺船板，气息全无，胸口刀柄在月光下投下阴影；听香跪坐在他身侧，泪痕满脸，衣衫凌乱，步摇早已脱落，白色素帕半染暗红。",
+      "context_bridge": "那具黑影如破布一般没入水湾，小舟剧烈颠簸后重新平稳，四周寂静得只剩虫鸣。",
+      "audio_cue": "人声：听香低声呜咽、抽泣；音效：水花溅落声迅速变小，小舟吱呀声，偶尔一声蛙鸣；背景音乐：弦乐凄凉如泣。",
+      "fx_effect": "水波纹反复扩散，月光粼粼，暗红洇痕漫漫晕开。",
+      "color_tone": "冷蓝死寂",
+      "cam_idx": 5,
+      "clip_transition": "硬切0.2s",
+      "duration_sec": 6.0,
+      "variation_type": "large",
+      "frame_layouts": {
+        "ff": [
+          {"name": "神秘人", "on_screen": true, "position": "画右上方倒纵", "pose": "身体后仰入水", "gaze_target": "画下水面", "props": ["短刃"]},
+          {"name": "杨旭", "on_screen": true, "position": "画中", "pose": "仰躺插刃", "gaze_target": "无", "props": ["短刃"]},
+          {"name": "听香", "on_screen": true, "position": "画左跪扑", "pose": "伸手却不敢触", "gaze_target": "杨旭", "props": []}
+        ],
+        "lf": [
+          {"name": "神秘人", "on_screen": false, "position": "画下水底", "pose": "已没入水中不见", "gaze_target": "无", "props": []},
+          {"name": "杨旭", "on_screen": true, "position": "画中", "pose": "仰躺头歪气绝", "gaze_target": "无", "props": ["短刃"]},
+          {"name": "听香", "on_screen": true, "position": "画左跪坐", "pose": "捂嘴泪流", "gaze_target": "杨旭", "props": []}
+        ],
+        "kfs": [
+          [{"name": "神秘人", "on_screen": true, "position": "画右半空", "pose": "倒飞将入水", "gaze_target": "水面", "props": ["短刃"]},
+           {"name": "杨旭", "on_screen": true, "position": "画中仰卧", "pose": "抽动渐弱", "gaze_target": "无", "props": ["短刃"]},
+           {"name": "听香", "on_screen": true, "position": "画左", "pose": "伸手欲扶", "gaze_target": "杨旭", "props": []}],
+          [{"name": "神秘人", "on_screen": false, "position": "画深水", "pose": "已不见踪影", "gaze_target": "无", "props": []},
+           {"name": "杨旭", "on_screen": true, "position": "画中", "pose": "痉挛停止仰卧", "gaze_target": "无", "props": ["短刃"]},
+           {"name": "听香", "on_screen": true, "position": "画左", "pose": "伏在他身上哭", "gaze_target": "杨旭", "props": []}],
+          [{"name": "神秘人", "on_screen": false, "position": "水深处", "pose": "已消失", "gaze_target": "无", "props": []},
+           {"name": "杨旭", "on_screen": true, "position": "画中", "pose": "仰躺气息全无", "gaze_target": "无", "props": ["短刃"]},
+           {"name": "听香", "on_screen": true, "position": "画左仰面", "pose": "大口呼吸满眼泪水", "gaze_target": "画上星空", "props": []}]
+        ]
+      },
+      "keyframes": [
+        {"desc": "黑衣人横着跃离船头，头朝下扎入水中，溅起一簇白色水花；杨旭仰卧船板，胸口刀柄直立，白色中衣洇满暗红；听香扑倒在他身边，双膝跪地。", "stage": "exit", "t_sec": 1.5},
+        {"desc": "水面只剩一圈圈倒退的涟漪，黑衣人已不见人影。杨旭身体松脱般彻底不再动弹，听香抓住他的手臂，失声痛哭。", "stage": "after", "t_sec": 3.0},
+        {"desc": "月影在水面上重新聚拢，船板上杨旭的胸口洇痕在冷冷清光下格外刺目。听香披头散发，脸部沾着暗红血点，对着夜空发出抽噎。", "stage": "after", "t_sec": 5.0}
+      ]
+    },
+    {
+      "index": 6,
+      "narration_segment": "听香：救命……啊……救命啊……",
+      "subtitle": "救命……啊……救命啊……",
+      "scene": "照月湾",
+      "location": "夜岸堤外小屋",
+      "main_subject": "听香惊恐尖叫求救",
+      "core_keywords": ["尖叫", "求救", "披头散发", "血点"],
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感。特写镜头：听香（鹅蛋脸，柳眉桃花眼，杏色春衫沾有斑斑暗红）披头散发瘫坐在船板上，双手捂住嘴，眼睛瞪得滚圆，泪水顺着苍白的脸颊滚落，喉咙里发出凄厉尖叫。在她背后小舟横陈，杨旭仰躺无声，胸口隐约可见刀柄。船头琉璃灯被风吹得乱晃，光影明暗交错。",
+      "motion_desc": "0-2秒：听香双目圆睁，胸脯剧烈起伏，双手捂嘴惊慑；2-4秒：她移开手，发出第一声破碎的哭喊；4-5秒：她连声喊救命，四下转着脑袋想找人，却只看到幽黑水面。",
+      "ff_desc": "听香跪坐在船板，双手紧紧捂住自己嘴巴，双眼含泪惊恐地瞪着头侧方向；被她挡住的画面外恰是杨旭仰卧的方向，灯光从她发顶打下，脸上血点触目已干涸。",
+      "lf_desc": "听香已放下手，脖子朝岸上一侧大声呼救，涨红着脸，肩头剧烈颤抖，泪水流下，发丝乱贴在颊上，身边是杨旭已静止的躯体。",
+      "context_bridge": "刺客消失在水中后，听香瘫软在船头片刻，忽然意识到这一切，旋即带着哭腔向小屋方向破声嘶喊。",
+      "audio_cue": "人声：听香尖利嘶喊“救命——啊——救命——”，声音破碎高亢；音效：夜风刮过苇叶，蛙声戛然而止；背景音乐：急促弦乐如裂帛。",
+      "fx_effect": "暗血点在脸上随表情牵动，灯光晃动使人影异常。",
+      "color_tone": "冷蓝+晃动的暖灯",
+      "cam_idx": 6,
+      "clip_transition": "硬切0.2s",
+      "duration_sec": 6.0,
+      "variation_type": "medium",
+      "frame_layouts": {
+        "ff": [
+          {"name": "听香", "on_screen": true, "position": "画中跪坐", "pose": "捂嘴瞪眼", "gaze_target": "杨旭方向画左", "props": []},
+          {"name": "杨旭", "on_screen": true, "position": "画左后景", "pose": "仰躺刀柄在胸", "gaze_target": "无", "props": ["短刃"]}
+        ],
+        "lf": [
+          {"name": "听香", "on_screen": true, "position": "画中跪坐", "pose": "仰头喊叫", "gaze_target": "画右岸上", "props": []},
+          {"name": "杨旭", "on_screen": true, "position": "画左后景", "pose": "仰躺不动", "gaze_target": "无", "props": ["短刃"]}
+        ],
+        "kfs": [
+          [{"name": "听香", "on_screen": true, "position": "画中", "pose": "双手捂嘴", "gaze_target": "画左船板", "props": []},
+           {"name": "杨旭", "on_screen": true, "position": "画左", "pose": "仰躺不动", "gaze_target": "无", "props": ["短刃"]}],
+          [{"name": "听香", "on_screen": true, "position": "画中", "pose": "放下手仰头张嘴", "gaze_target": "画右岸上", "props": []},
+           {"name": "杨旭", "on_screen": true, "position": "画左", "pose": "仰躺不动", "gaze_target": "无", "props": ["短刃"]}],
+          [{"name": "听香", "on_screen": true, "position": "画中", "pose": "拔高音喊救命", "gaze_target": "画右远方岸上房屋", "props": []},
+           {"name": "杨旭", "on_screen": true, "position": "画左", "pose": "仰躺", "gaze_target": "无", "props": ["短刃"]}],
+          [{"name": "听香", "on_screen": true, "position": "画中", "pose": "泣不成声伏地", "gaze_target": "画下甲板", "props": []},
+           {"name": "杨旭", "on_screen": true, "position": "画左", "pose": "仰躺", "gaze_target": "无", "props": ["短刃"]}]
+        ]
+      },
+      "keyframes": [
+        {"desc": "听香一边捂嘴一边身体向后缩，眼泪大颗滚落，同时拼命想要站起来，双腿打颤，杨旭在她身侧静止不动，胸口刀柄阴影。", "stage": "pre", "t_sec": 1.0},
+        {"desc": "听香松开手，露出染血的面容，仰头对着岸侧小屋发出全身心嘶喊，颈间青筋隐约。", "stage": "climax", "t_sec": 3.0},
+        {"desc": "听香一边哭喊一边磕磕绊绊爬到船舷朝着有灯光的方向喊，细碎脚步颠在船板，船身轻轻摇摆。", "stage": "react", "t_sec": 4.5},
+        {"desc": "听香握住船沿，泣不成声，声带嘶哑，只是本能地一遍遍低叫“救命”，杨旭尸体就静静躺在冷光中。", "stage": "after", "t_sec": 5.5}
+      ]
+    },
+    {
+      "index": 7,
+      "narration_segment": "张十三：公子，公子？听香姑娘，出了什么事？",
+      "subtitle": "公子，公子？听香姑娘，出了什么事？",
+      "scene": "照月湾",
+      "location": "岸边湾堤与船头",
+      "main_subject": "张十三闻声从屋中奔出跃上船",
+      "core_keywords": ["张十三", "跃舟", "灯盏"],
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感。画面分两层：左侧远景是岸上，透过树影可见一幢黛瓦小屋，窗棂映出一方暖黄灯光。紧随尖叫，屋门被猛推开，一个穿青衣小帽的矫健身影（张十三，面容冷峻，眉骨高俊）提着一盏油灯奔至湾堤，随即纵身一跃，凌空跳过一丈余宽的浅水，准确落在小舟船梢，压得船身猛然一沉。听香（披头散发，沾血点在苍白的脸上）跪在船头，满脸惊惶地看着他。中景，仰拍张十三落地动作，强烈动感。",
+      "motion_desc": "0-2秒：屋内灯光晃开，门扉打开，张十三持灯快步冲出；2-5秒：他冲到湾堤边，将灯盏一丢，纵身飞掠，踏过水波准确落在小舟船梢；5-6秒：小舟受重猛地晃动，张十三稳住身形，低头看向船中央的杨旭与听香。",
+      "ff_desc": "张十三还站在岸上小屋门内，一手推开木门，另一手举着一盏燃亮的油灯，脚尖刚迈出门槛，目光急切地望向夜色中的小舟方向，灯焰在风中朝他身后倾斜。",
+      "lf_desc": "张十三已纵身立在船梢，双脚微微下蹲稳住船身，手中油灯已扔在岸边，双手垂落，却死死盯着仰躺的杨旭与跪坐的听香，脸色大变。",
+      "context_bridge": "听香惊恐尖叫在夜空里回荡，惊动岸上一盏灯火。",
+      "audio_cue": "人声：张十三声音急切而沉，带着责问；音效：门轴吱呀，脚步声跑动，油灯落地声，纵身风声，船身咕咚作响；背景音乐：快板鼓点紧凑，制造小高潮。",
+      "fx_effect": "油灯抛出的小光弧坠向地面，飞身带起衣袂破风。",
+      "color_tone": "暖黄灯光与冷蓝夜色对比",
+      "cam_idx": 7,
+      "clip_transition": "硬切0.1s（压迫感）",
+      "duration_sec": 6.0,
+      "variation_type": "large",
+      "frame_layouts": {
+        "ff": [
+          {"name": "张十三", "on_screen": true, "position": "画右岸上", "pose": "推门举灯欲出", "gaze_target": "画左小舟方向", "props": ["灯盏"]},
+          {"name": "听香", "on_screen": false, "position": "画左远处小舟", "pose": "跪坐喊叫", "gaze_target": "画右岸上", "props": []}
+        ],
+        "lf": [
+          {"name": "张十三", "on_screen": true, "position": "画右船梢", "pose": "半蹲稳稳落船", "gaze_target": "杨旭", "props": []},
+          {"name": "听香", "on_screen": true, "position": "画左船上", "pose": "惊魂未定仰头", "gaze_target": "张十三", "props": []},
+          {"name": "杨旭", "on_screen": true, "position": "画中小舟中央", "pose": "仰躺不动刀柄在胸", "gaze_target": "无", "props": ["短刃"]}
+        ],
+        "kfs": [
+          [{"name": "张十三", "on_screen": true, "position": "画右岸上", "pose": "举灯朝水面望", "gaze_target": "画左小舟", "props": ["灯盏"]},
+           {"name": "听香", "on_screen": false, "position": "画左远处", "pose": "仰头哭泣", "gaze_target": "画右", "props": []}],
+          [{"name": "张十三", "on_screen": true, "position": "画右岸堤", "pose": "甩臂丢掉灯盏", "gaze_target": "画左舟", "props": ["灯盏"]},
+           {"name": "听香", "on_screen": false, "position": "画左舟上", "pose": "仍在喊叫", "gaze_target": "画右", "props": []}],
+          [{"name": "张十三", "on_screen": true, "position": "画右空中", "pose": "跃出落在船梢", "gaze_target": "画中船", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画左舟上", "pose": "上半身后仰", "gaze_target": "张十三", "props": []},
+           {"name": "杨旭", "on_screen": true, "position": "画中", "pose": "仰躺不动", "gaze_target": "无", "props": ["短刃"]}],
+          [{"name": "张十三", "on_screen": true, "position": "画右船梢", "pose": "蹲身稳住用手压船舷", "gaze_target": "杨旭", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画左船头", "pose": "被晃得跪伏", "gaze_target": "张十三", "props": []},
+           {"name": "杨旭", "on_screen": true, "position": "画中", "pose": "静静仰卧", "gaze_target": "无", "props": ["短刃"]}]
+        ]
+      },
+      "keyframes": [
+        {"desc": "张十三站在岸边的台阶上，掌中托着一盏油灯，目光循着声音望向水中央，听香身影模糊成一线，船头几乎看不见杨旭。", "stage": "pre", "t_sec": 1.0},
+        {"desc": "张十三丢下灯盏，双手握拳，一个箭步跃离岸堤，身体横在空中，夜色中衣袂翻卷。", "stage": "approach", "t_sec": 2.5},
+        {"desc": "张十三双腿一前一后落在小舟船梢，膝盖微曲卸力，溅起船尾一层水花，船身横向荡开。听香被颠得身体前倾，一手抓住船舷。", "stage": "climax", "t_sec": 4.0},
+        {"desc": "张十三已站定船梢，脸色铁青，眼眶瞠大，目光直勾勾射向船正中仰卧的杨旭，听香怯生生坐在船头看着他。", "stage": "react", "t_sec": 5.5}
+      ]
+    },
+    {
+      "index": 8,
+      "narration_segment": "张十三：死了？杨旭竟然死了！三年苦心栽培，大计刚刚有点希望，他竟然死了？凶手是谁，如何刺杀了公子，快说！",
+      "subtitle": "死了？杨旭竟然死了！三年苦心栽培，大计刚刚有点希望，他竟然死了？凶手是谁……快说！",
+      "scene": "照月湾",
+      "location": "夜舟船头",
+      "main_subject": "张十三确认杨旭已死，怒质听香",
+      "core_keywords": ["确认死亡", "怒视", "逼问"],
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感。近景移动：张十三（面容冷峻，青衣小帽）已蹲在杨旭身边，试探鼻息后手一颤，整个人像被雷击中般怔了一下。他脸上血色尽失，随即猛转头，双目圆睁，目光凶狠地射向跪在一旁的听香，大步逼近她，一把揪住她衣领把她从地上提起来。听香（杏衫凌乱，披发落泪）被他提到面前，吓得直打哆嗦。中近景，冷月从侧面照射，张十三脸部半明半暗，极有压迫感。",
+      "motion_desc": "0-2秒：张十三俯身探息，手尾发颤，脸色铁青；2-5秒：他霍然起身，转身两步逼近听香，抓住她衣领将她拉起，逼问；6-7秒：听香带着哭腔，断断续续试图说明。",
+      "ff_desc": "张十三蹲在杨旭身旁，左手刚刚搭到他鼻端的动作，整个人像凝固在地，脸色惨白，嘴唇发抖；听香跪在两步之外，惊惧地看着他。",
+      "lf_desc": "张十三已站起，一只铁手死死揪着听香的衣领，把她半提离地，脸几乎贴到她面前，牙齿咬得咯咯作响；听香被提离船板，脸色雪白，泪水纵横。",
+      "context_bridge": "确认杨旭死亡那一瞬，张十三巨大的震惊与愤怒猛然爆发。",
+      "audio_cue": "人声：张十三声音从颤抖到逐渐暴烈——低吼质问，最后近乎喊；听香只是低声呜咽；音效：衣料摩擦、船板响；背景音乐：低沉大提琴与密集鼓点。",
+      "fx_effect": "张十三眼中布满血丝，面部抽动，环境空气似凝滞。",
+      "color_tone": "冷蓝暗影，面部高光",
+      "cam_idx": 8,
+      "clip_transition": "硬切0.1s",
+      "duration_sec": 8.0,
+      "variation_type": "medium",
+      "frame_layouts": {
+        "ff": [
+          {"name": "张十三", "on_screen": true, "position": "画中蹲着", "pose": "探息后僵住", "gaze_target": "杨旭", "props": []},
+          {"name": "杨旭", "on_screen": true, "position": "画左船板", "pose": "仰躺刀柄在胸", "gaze_target": "无", "props": ["短刃"]},
+          {"name": "听香", "on_screen": true, "position": "画右跪坐", "pose": "双手捂嘴胆怯", "gaze_target": "张十三", "props": []}
+        ],
+        "lf": [
+          {"name": "张十三", "on_screen": true, "position": "画中站立", "pose": "揪衣领提起逼问", "gaze_target": "听香", "props": []},
+          {"name": "听香", "on_screen": true, "position": "画右被拎起", "pose": "双脚离地吓哭", "gaze_target": "张十三", "props": []},
+          {"name": "杨旭", "on_screen": true, "position": "画左仰躺", "pose": "静躺刀柄在胸", "gaze_target": "无", "props": ["短刃"]}
+        ],
+        "kfs": [
+          [{"name": "张十三", "on_screen": true, "position": "画中蹲", "pose": "手指贴着杨旭鼻端僵住", "gaze_target": "杨旭", "props": []},
+           {"name": "杨旭", "on_screen": true, "position": "画左", "pose": "仰躺不动", "gaze_target": "无", "props": ["短刃"]},
+           {"name": "听香", "on_screen": true, "position": "画右跪坐", "pose": "紧捂嘴浑身抖", "gaze_target": "张十三", "props": []}],
+          [{"name": "张十三", "on_screen": true, "position": "画中蹲起", "pose": "慢慢站直，眼神惊变", "gaze_target": "听香", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右跪坐", "pose": "吓得向后缩", "gaze_target": "张十三", "props": []},
+           {"name": "杨旭", "on_screen": true, "position": "画左", "pose": "静躺", "gaze_target": "无", "props": ["短刃"]}],
+          [{"name": "张十三", "on_screen": true, "position": "画中站立", "pose": "迈步上前伸手揪领", "gaze_target": "听香", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "两手扒地后退", "gaze_target": "张十三", "props": []}],
+          [{"name": "张十三", "on_screen": true, "position": "画中站立", "pose": "把听香提高，面面对面", "gaze_target": "听香", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "脚尖离地哭叫", "gaze_target": "张十三", "props": []}]
+        ]
+      },
+      "keyframes": [
+        {"desc": "张十三蹲在杨旭身边，食中二指并拢贴上杨旭人中，指尖停了片刻，随后面色剧变，浑身僵住；听香在旁跪着不敢出声。", "stage": "climax", "t_sec": 2.0},
+        {"desc": "张十三缓缓收回手，指尖颤抖，双眼圆睁，霍地站起身来，脚下一个趔趄，随即稳身。", "stage": "react", "t_sec": 3.5},
+        {"desc": "他大步冲向听香，右手一把抓住她的前襟将其拽起，暴吼质问她；听香被他拉得摇摇晃晃，泪如雨下。", "stage": "climax", "t_sec": 5.5},
+        {"desc": "张十三把听香高举到与自己平视，后者崩溃大哭，断断续续想开口解释却语无伦次。", "stage": "after", "t_sec": 6.5}
+      ]
+    },
+    {
+      "index": 9,
+      "narration_segment": "听香：不……不知道，那人……那人一下子从水里跳出来，就……就杀了公子，然后又……又跳进水里不见了，奴家……奴家连他是男是女都没看清……",
+      "subtitle": "不……不知道，那人……一下子从水里跳出来，就……杀了公子，然后又……跳进水里不见了……",
+      "scene": "照月湾",
+      "location": "夜舟船头",
+      "main_subject": "听香磕巴解释刺客从水中来去",
+      "core_keywords": ["听香", "语无伦次", "恐惧"],
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感。特写接中景：张十三已松开手，听香跌坐在船板上，双手撑着船底，身体不住地抖。她头发披散，泪水和血水糊了半边脸，声音破碎，拼命比划着水面方向。张十三站在她面前，居高临下俯视她，眼神像刀子一样。镜头缓慢推近听香脸部，她的瞳孔微茫，显然受了极大惊吓。",
+      "motion_desc": "0-2秒：听香跌坐在地，一边喘气一边摇头；2-5秒：她用发抖的手指向水面，结巴着描述刺客出水遁水的过程；5-7秒：张十三咬着牙听，不时用目光逼她，听香声音越来越小。",
+      "ff_desc": "张十三松开手，听香颓然跌坐船板，两手撑在身后仰视他，满脸泪痕与暗红血点，嘴唇抖得连不成线，正欲开口说话。",
+      "lf_desc": "听香已断断续续说完，整个人像脱力般伏在船板低泣，手指缝间还指着水面方向；张十三站在她面前，眼神晦暗如深潭。",
+      "context_bridge": "张十三松手让听香落地，却仍紧盯着她每一分神情。",
+      "audio_cue": "人声：听香声音断断续续、颤音、气若游丝，到句尾已近似呜咽；张十三偶尔低吼“说清楚”；音效：夜风、水波、听香抽泣；背景音乐：幽促的二胡旋律营造压抑怀疑。",
+      "fx_effect": "昏暗月色在眼泪上反射莹光，水波映照听香颤抖的侧脸。",
+      "color_tone": "冷蓝灰调",
+      "cam_idx": 9,
+      "clip_transition": "硬切0.2s",
+      "duration_sec": 7.0,
+      "variation_type": "medium",
+      "frame_layouts": {
+        "ff": [
+          {"name": "张十三", "on_screen": true, "position": "画中站", "pose": "俯视听香", "gaze_target": "听香", "props": []},
+          {"name": "听香", "on_screen": true, "position": "画右下坐", "pose": "仰头欲言", "gaze_target": "张十三", "props": []}
+        ],
+        "lf": [
+          {"name": "张十三", "on_screen": true, "position": "画中站", "pose": "冷厉凝视", "gaze_target": "听香", "props": []},
+          {"name": "听香", "on_screen": true, "position": "画右下伏地", "pose": "泣不成声", "gaze_target": "画下水面", "props": []}
+        ],
+        "kfs": [
+          [{"name": "张十三", "on_screen": true, "position": "画中站", "pose": "垂下双手紧绷下颌", "gaze_target": "听香", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右下", "pose": "撑地欲语", "gaze_target": "张十三", "props": []}],
+          [{"name": "张十三", "on_screen": true, "position": "画中站", "pose": "皱紧眉头", "gaze_target": "听香", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右下", "pose": "颤抖指水面", "gaze_target": "画外侧水面", "props": []}],
+          [{"name": "张十三", "on_screen": true, "position": "画中站", "pose": "向前一步逼视", "gaze_target": "听香", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右下", "pose": "惊惧摆手", "gaze_target": "张十三", "props": []}],
+          [{"name": "张十三", "on_screen": true, "position": "画中站", "pose": "冷脸沉默", "gaze_target": "听香", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右下", "pose": "伏地低泣", "gaze_target": "画下", "props": []}]
+        ]
+      },
+      "keyframes": [
+        {"desc": "张十三松开手，听香跌落船板，她扶着船舷瑟瑟发抖，抬眼看向张十三，眼神惊恐，想开口却牙齿打颤。", "stage": "pre", "t_sec": 1.0},
+        {"desc": "听香深吸一口气，开始结巴说着刺客从水中冒出的情景，一边用手比划出一个从下向上的动作，张十三目光微动。", "stage": "approach", "t_sec": 3.0},
+        {"desc": "听香说到这里又想起恐怖画面，声音卡住，猛捂起嘴不再往下说，只低声啜泣。张十三往前半步，逼问“然后呢！”，听香吓得往后退。", "stage": "climax", "t_sec": 5.0},
+        {"desc": "听香抽抽噎噎往下讲完“连男女都没看清”，便再也撑不住，整个人伏到船板，肩头直颤，张十三脸色阴沉。", "stage": "after", "t_sec": 6.5}
+      ]
+    },
+    {
+      "index": 10,
+      "narration_segment": "张十三：闭嘴！公子离奇遇刺，船上却只有你一人，你又说不出个所以然来，只说少爷是被人所刺，谁会信你？民心似铁，官法如炉！",
+      "subtitle": "闭嘴！……船上却只有你一人……谁会信你？民心似铁，官法如炉！",
+      "scene": "照月湾",
+      "location": "夜舟船头",
+      "main_subject": "张十三扇打听香，威胁其撇清干系",
+      "core_keywords": ["掌掴", "威胁", "掩盖", "恐惧"],
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感。中近景冲突：张十三（面容冷峻，目露凶光）一把拽过听香的衣领，另一手掌高高扬起，‘啪’一声重重扇在听香半边脸上。听香（鹅蛋脸，披头散发）被扇得脸偏过去，半面迅速红肿，血点和泪痕挂在颊上，她惊恐地抬头望向张十三，不敢再哭喊。张十三压低声音，一字一句地威胁她。冷蓝月光在两人间形成硬分割，一侧亮一侧暗。",
+      "motion_desc": "0-2秒：张十三闻言脸色一沉，反手一掌重重扇在听香脸上；2-4秒：听香半个身子被扇偏，身子一抖，捂着脸跪坐；4-6秒：张十三俯身逼近她，压低声音威吓，让她勿再多嘴；6-7秒：听香只能含着眼泪极力点头，又惊又怕。",
+      "ff_desc": "张十三一手拽住听香的肩口，另一只手刚举到半空，即将掴落的瞬间；听香下意识缩肩，眼中满是恐惧与不敢置信。",
+      "lf_desc": "听香半伏船板，半边脸颊明显红肿，泪水无声淌落却强忍着不敢哭出声；张十三依然居高临下盯着她，低声交代着话语，一手还拽着她的衣领。",
+      "context_bridge": "张十三审不出所以然，心知靠听香糊弄不过去，恐吓之意油然而生。",
+      "audio_cue": "人声：张十三声音从暴怒转为低沉的威胁，一字一顿；听香含糊应着“是”，气若游丝；音效：清脆掌掴声、衣料摩擦声、哭泣呜咽；背景音乐：弦乐急促后骤停，让人心中一紧。",
+      "fx_effect": "指印快速泛红，泪光在惨白的脸颊滑落，血点被泪水冲开一道淡痕。",
+      "color_tone": "冷蓝强对比",
+      "cam_idx": 10,
+      "clip_transition": "硬切0.1s",
+      "duration_sec": 7.0,
+      "variation_type": "medium",
+      "frame_layouts": {
+        "ff": [
+          {"name": "张十三", "on_screen": true, "position": "画中偏左站", "pose": "揪领举掌欲掴", "gaze_target": "听香", "props": []},
+          {"name": "听香", "on_screen": true, "position": "画右跪坐", "pose": "缩肩闭眼", "gaze_target": "张十三", "props": []}
+        ],
+        "lf": [
+          {"name": "张十三", "on_screen": true, "position": "画中偏左", "pose": "俯身贴脸威胁", "gaze_target": "听香", "props": []},
+          {"name": "听香", "on_screen": true, "position": "画右捂脸低泣", "pose": "震惊委屈", "gaze_target": "张十三", "props": []}
+        ],
+        "kfs": [
+          [{"name": "张十三", "on_screen": true, "position": "画中偏左", "pose": "拽住衣领举掌", "gaze_target": "听香", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "缩肩闭眼", "gaze_target": "无", "props": []}],
+          [{"name": "张十三", "on_screen": true, "position": "画中偏左", "pose": "掌落下按怒", "gaze_target": "听香", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "脸被打偏，身子歪", "gaze_target": "画下", "props": []}],
+          [{"name": "张十三", "on_screen": true, "position": "画中偏左", "pose": "低身逼视", "gaze_target": "听香", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "捂脸胆怯抖", "gaze_target": "张十三", "props": []}],
+          [{"name": "张十三", "on_screen": true, "position": "画中偏左", "pose": "一字一句告诫", "gaze_target": "听香", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右跪坐", "pose": "含泪点头", "gaze_target": "张十三", "props": []}]
+        ]
+      },
+      "keyframes": [
+        {"desc": "张十三手掌高高举起，听香吓得双眼紧闭，下意识偏过头，露出脆弱的颈侧。", "stage": "approach", "t_sec": 1.5},
+        {"desc": "“啪”的一声脆响，张十三的手掌已经抽在听香左脸，听香头猛地向一侧甩去，身子跟着歪倒，步摇早不见踪影。", "stage": "climax", "t_sec": 3.0},
+        {"desc": "听香捂着火辣辣的脸颊，半伏船板上，眼神从惊惧转为顺从，泪流满面却不敢大声；张十三冷冷俯视她。", "stage": "react", "t_sec": 4.5},
+        {"desc": "张十三伸手抬起听香的下巴，压低声音威胁，听香满脸是泪，不住轻声应着“是是是”。", "stage": "after", "t_sec": 6.0}
+      ]
+    },
+    {
+      "index": 11,
+      "narration_segment": "张十三：公子爷吃醉了酒，险些跌落水中，所以惊得听香姑娘尖叫起来。……去把公子的马车赶到水边来，我和听香姑娘要扶公子马上回城。",
+      "subtitle": "无事的，公子爷吃醉了酒……去把公子的马车赶到水边来，我和听香姑娘要扶公子马上回城。",
+      "scene": "杨府别庄",
+      "location": "别庄大门外岸边",
+      "main_subject": "张十三向佃仆撒谎，准备连夜带着杨旭尸体离开",
+      "core_keywords": ["张十三", "撒谎", "马车", "遮瞒"],
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感。镜头从船边缓缓拉起，岸上有几个佃仆提着灯笼正围拢过来。张十三已冷静下来，站在船头背对着众人，声音平稳而淡漠，仿佛刚才什么都没有发生。他一边说话一边已俯身将杨旭的身体裹上一件宽大的白袍，遮住胸口刀柄；听香紧抓着船板，尽力配合。远景微俯视，水面幽暗，岸上灯笼光晃动，人声嘈杂。",
+      "motion_desc": "0-2秒：张十三示意众仆无事，用无波的语调解释；2-4秒：他顺手扯过一领大氅盖住杨旭的上半身，听香泣泪点头；4-6秒：张十三环视众人，吩咐他们去把两轮轻便马车赶到水边来；6-7秒：众仆应声退去，张十三握了握拳，眼中暗色翻涌。",
+      "ff_desc": "张十三站在船头，背对岸上几盏灯笼，面色沉静，正说着话，一手却紧紧攥着身侧的白袍边；听香半跪在他身后，低头抹泪，尽量遮掩着躺在船板上的杨旭。",
+      "lf_desc": "岸上的佃仆们已转身离去，张十三收回视线，慢慢弯下腰，将宽大白袍完全盖过杨旭的脸，只余那截刀柄的轮廓被布料遮住，听香缩在一侧，垂着头浑身轻颤。",
+      "context_bridge": "张十三压住心事，摆出少爷随从的从容貌，安抚循声赶来的佃仆。",
+      "audio_cue": "人声：张十三声音平稳，带着不容置疑的下人应有的从容；远处佃仆们应“是”，脚步声退去；音效：草丛窸窸窣窣，灯笼晃动吱呀，水波拍打船身；背景音乐：压抑的低音弦乐推进，暗示暗波汹涌。",
+      "fx_effect": "暗夜里，灯笼的橘光勾勒出张十三侧脸冷峻，布帛覆盖尸首的动作沉重。",
+      "color_tone": "冷蓝+暖光点缀",
+      "cam_idx": 11,
+      "clip_transition": "硬切0.2s",
+      "duration_sec": 7.0,
+      "variation_type": "medium",
+      "frame_layouts": {
+        "ff": [
+          {"name": "张十三", "on_screen": true, "position": "画中偏左站", "pose": "面朝岸上说话", "gaze_target": "画右岸上佃仆", "props": []},
+          {"name": "听香", "on_screen": true, "position": "画右侧跪", "pose": "低头抽泣", "gaze_target": "画下甲板", "props": []},
+          {"name": "杨旭", "on_screen": true, "position": "画左下仰躺", "pose": "被白袍半盖", "gaze_target": "无", "props": ["短刃"]}
+        ],
+        "lf": [
+          {"name": "张十三", "on_screen": true, "position": "画中", "pose": "弯腰遮严尸身", "gaze_target": "杨旭", "props": []},
+          {"name": "听香", "on_screen": true, "position": "画右跪坐", "pose": "缩肩抽泣", "gaze_target": "杨旭", "props": []},
+          {"name": "杨旭", "on_screen": true, "position": "画左下", "pose": "白袍覆面，胸刀痕被掩", "gaze_target": "无", "props": ["短刃"]}
+        ],
+        "kfs": [
+          [{"name": "张十三", "on_screen": true, "position": "画中", "pose": "双手负后沉稳答话", "gaze_target": "画右岸人", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "跪低头", "gaze_target": "画下", "props": []},
+           {"name": "杨旭", "on_screen": true, "position": "画左", "pose": "平躺在船板", "gaze_target": "无", "props": ["短刃"]}],
+          [{"name": "张十三", "on_screen": true, "position": "画中", "pose": "侧身扯白袍", "gaze_target": "杨旭", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "低跪帮忙按住衣角", "gaze_target": "杨旭", "props": []},
+           {"name": "杨旭", "on_screen": true, "position": "画左", "pose": "白袍半遮身", "gaze_target": "无", "props": ["短刃"]}],
+          [{"name": "张十三", "on_screen": true, "position": "画中", "pose": "俯首对岸边点头", "gaze_target": "画右岸", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右", "pose": "伏在船沿", "gaze_target": "张十三", "props": []},
+           {"name": "杨旭", "on_screen": true, "position": "画左", "pose": "整个被白袍覆盖", "gaze_target": "无", "props": ["短刃"]}],
+          [{"name": "张十三", "on_screen": true, "position": "画中", "pose": "望着佃仆散去，眼神阴沉", "gaze_target": "画右远岸", "props": []},
+           {"name": "听香", "on_screen": true, "position": "画右跪坐", "pose": "低垂着头", "gaze_target": "画下", "props": []},
+           {"name": "杨旭", "on_screen": true, "position": "画左", "pose": "全身笼在白袍中", "gaze_target": "无", "props": []}]
+        ]
+      },
+      "keyframes": [
+        {"desc": "岸上灯笼逐一点亮靠近，张十三立在船头，将一只手背在身后，神容平静地朝他们开口，听香却跪在身后默默落泪。", "stage": "pre", "t_sec": 1.0},
+        {"desc": "张十三说着“公子吃醉酒”时，顺手拉过身旁一件白袍，自然盖在杨旭身上，遮住胸口那截短刃，动作流畅不见破绽。", "stage": "approach", "t_sec": 3.0},
+        {"desc": "张十三吩咐众人去赶马车，同时微微侧头对听香低声道“听香，扶好公子”，听香怔怔地点了点头，两人视线短促一碰即分。", "stage": "climax", "t_sec": 5.0},
+        {"desc": "岸上的灯笼渐渐转向离去，人声远去。张十三望着暗黑水面，双眉紧锁，心里谋划着如何掩饰这起死亡，听香缩在杨旭身后，泪痕未干。", "stage": "after", "t_sec": 6.5}
+      ]
+    },
+    {
+      "index": 12,
+      "narration_segment": "",
+      "subtitle": "",
+      "scene": "杨府别庄",
+      "location": "别庄大门外夜色中",
+      "main_subject": "马车疾驰出庄，载杨旭尸身离开",
+      "core_keywords": ["马车", "疾驰", "夜色", "未知"],
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感。全景：朱漆斑驳的杨府别庄大门洞开，两旁石狮子在暗蓝夜色中轮廓可辨。一辆两轮轻便马车（长4.5米，华盖平平）冲破黑暗，从大门中疾驰而出。赶车人端坐车辕，正是张十三（青衣小帽，身形挺拔），他一手持缰，一手扬鞭，神色在光影中半明半暗。车帘低垂，隐约能看到里面端坐的听香与横卧的人影，但看不真切。车后随着一溜扬起的尘土，随即迅速融入前方沉沉夜幕，远处隐约可见树木与田野。镜头快速后退拉远，最后定格在车轮碾过的泥道上，夜风掀起车帘一角。",
+      "motion_desc": "0-2秒：大门洞开，车夫一鞭，车轮滚滚；2-5秒：马车冲出大门，沿官道疾奔而走，后帘被风掀起又落下；5-7秒：镜头越拉越远，马车化作一个小点，消失在夜色尽头，只有轰隆声渐渐远去。",
+      "ff_desc": "夜色下别庄大门刚刚开了一条缝，昏黄的灯笼光从门缝里逸出，能看到一辆马车半探出大门，张十三的影子在车辕上弯腰抓紧缰绳，马匹前蹄还没迈出。",
+      "lf_desc": "大门重又掩闭，马车已消失在道路尽头，只剩一条笔直的泥路伸向暗黑，路旁草叶仍被疾风分离地低伏，远处一片寂静。",
+      "context_bridge": "张十三说服佃仆后，一盏茶时间就把马车与水边停好，他扶着“醉酒的公子”上车，听香默不作声跟上，关上车门，随即驱动马匹。",
+      "audio_cue": "人声：无（只有车轮声与夜风）；音效：木门轴磨声，马蹄急踏，车辙聒噪，车轮碾过碎石，风擦过车帘；背景音乐：更至广袤的夜风与低沉的鼓点，渐行渐远，留白感。",
+      "fx_effect": "马蹄掠起尘埃与碎叶，车帘被风卷动，边缘渐远融入黑暗。",
+      "color_tone": "冷蓝沉暗，远处有一抹青霭",
+      "cam_idx": 12,
+      "clip_transition": "硬切0.3s（末镜余韵）",
+      "duration_sec": 7.0,
+      "variation_type": "large",
+      "frame_layouts": {
+        "ff": [
+          {"name": "张十三", "on_screen": true, "position": "画右车辕", "pose": "执鞭握缰", "gaze_target": "画前方路", "props": []},
+          {"name": "马车", "on_screen": true, "position": "画中", "pose": "半出大门", "gaze_target": "无", "props": []},
+          {"name": "听香", "on_screen": false, "position": "车内", "pose": "低头坐", "gaze_target": "无", "props": []}
+        ],
+        "lf": [
+          {"name": "张十三", "on_screen": true, "position": "画左模糊", "pose": "驾车远去背影", "gaze_target": "前方", "props": []},
+          {"name": "马车", "on_screen": true, "position": "画左渐远", "pose": "奔向夜幕", "gaze_target": "无", "props": []},
+          {"name": "听香", "on_screen": false, "position": "车内", "pose": "随车颠簸", "gaze_target": "无", "props": []}
+        ],
+        "kfs": [
+          [{"name": "张十三", "on_screen": true, "position": "画右驾车位", "pose": "提缰正坐", "gaze_target": "前路", "props": []},
+           {"name": "马车", "on_screen": true, "position": "画中门内", "pose": "车头半露", "gaze_target": "无", "props": []},
+           {"name": "听香", "on_screen": false, "position": "车内", "pose": "默然坐于男尸旁", "gaze_target": "无", "props": []}],
+          [{"name": "张十三", "on_screen": true, "position": "画右车辕", "pose": "扬鞭驱使", "gaze_target": "前路", "props": []},
+           {"name": "马车", "on_screen": true, "position": "画中疾驰", "pose": "轮转尘扬", "gaze_target": "无", "props": []},
+           {"name": "听香", "on_screen": false, "position": "车内", "pose": "随车晃动", "gaze_target": "无", "props": []}],
+          [{"name": "张十三", "on_screen": true, "position": "画左模糊远影", "pose": "策马加速", "gaze_target": "前方", "props": []},
+           {"name": "马车", "on_screen": true, "position": "画左渐小", "pose": "没于暗夜", "gaze_target": "无", "props": []},
+           {"name": "听香", "on_screen": false, "position": "车内", "pose": "默不吭声", "gaze_target": "无", "props": []}]
+        ]
+      },
+      "keyframes": [
+        {"desc": "夜色黑透，别庄大门在月光下开启一半，一辆马车正驶出，车夫张十三微微侧着身子攥紧缰绳。", "stage": "pre", "t_sec": 1.0},
+        {"desc": "马车完全驶出大门，马蹄在泥地上扬起飞尘，张十三用力扬了一鞭，马匹纵蹄开始疾驰。", "stage": "approach", "t_sec": 2.5},
+        {"desc": "马车快速沿着土路奔向前方，车厢晃动，车帘被风吹开一角，露出黑色沉闷的车箱，却看不清里面的轮廓。", "stage": "climax", "t_sec": 4.5},
+        {"desc": "马车渐渐变成远处一个移动黑点，消失在旷野暗幕里，道路上只剩下飘荡的尘烟与夜风。", "stage": "after", "t_sec": 6.0}
+      ]
+    }
+  ],
+  "hook": {
+    "index": 0,
+    "narration_segment": "",
+    "subtitle": "",
+    "scene": "照月湾",
+    "location": "荷花湾水下",
+    "main_subject": "蒙面刺客持刃潜伏水中",
+    "core_keywords": ["水下黑影", "刀尖", "潜伏", "危机"],
+    "prompt": "古风真人影视剧，9:16竖屏，电影质感。从水面下向上仰拍的视角：月色笼罩的池塘，水面被搅成一片银色碎光，波光里一道黑色人形轮廓正静静悬浮在水中，只有一双眼睛透过水波紧盯上方。他缓缓抬起紧握短刃的手，刃尖在月光中泛着一点寒光。水面上方隐约可见小舟船底轮廓与垂下水中的一截钓线。画面一半浸在水下，一半浮出水面。高对比冷蓝调，气氛幽暗压抑。",
+    "motion_desc": "0-2秒：水下黑影藏身不动，只有手臂小幅度上移；2-4秒：他调整握刃姿势，令刀刃对准上方，双足轻摆，缓缓向上浮动，准备破水。",
+    "ff_desc": "幽暗水下，一团黑色人影潜伏在水草边缘，纹丝不动，只露出一双精光内敛的眼睛，右手握着短刃斜向上举，刃尖已贴近水面，水面只余一丝波动。",
+    "lf_desc": "人影快速向上窜动，搅起一串细小气泡，刀尖已探破水面，水波向外扩散，即将跃出。",
+    "context_bridge": "开场倒叙，把观众目光一下子拉进水底，将危险埋在祥和之下。",
+    "audio_cue": "音效：水下闷响，水泡上冒咕噜声，渐渐浮出水面，一丝金属轻擦。背景音乐：低沉的大提琴长音，压抑不祥。",
+    "fx_effect": "水波扭曲，光线透过水面摇曳。",
+    "color_tone": "冷蓝幽深",
+    "cam_idx": 3,
+    "clip_transition": "淡入，0.5s",
+    "duration_sec": 4.0,
+    "variation_type": "large",
+    "frame_layouts": {
+      "ff": [
+        {"name": "神秘人", "on_screen": true, "position": "画中水下", "pose": "悬浮水中刃朝上", "gaze_target": "画上方水面的船", "props": ["短刃"]}
+      ],
+      "lf": [
+        {"name": "神秘人", "on_screen": true, "position": "画中偏上", "pose": "上浮破水，刀尖出水面", "gaze_target": "画上小舟", "props": ["短刃"]}
+      ],
+      "kfs": [
+        [{"name": "神秘人", "on_screen": true, "position": "画中水下", "pose": "静潜不动，目视上方", "gaze_target": "画上", "props": ["短刃"]}],
+        [{"name": "神秘人", "on_screen": true, "position": "画中水下微上", "pose": "踢水上浮，刃尖将触水面", "gaze_target": "画上", "props": ["短刃"]}]
+      ]
+    },
+    "keyframes": [
+      {"desc": "水底幽暗，黑影半蹲在荷根之间，右手持一把寒刃，全身纹丝不动，只有水面折射的光在他紧绑的面巾上缓慢流动，刃尖距离水面数寸。", "stage": "pre", "t_sec": 1.0},
+      {"desc": "黑影微微屈膝，双手握刃，猛地向上窜升，刃尖率先破开水面划开一道银线，水珠四溅。", "stage": "climax", "t_sec": 3.0}
+    ]
+  }
+}

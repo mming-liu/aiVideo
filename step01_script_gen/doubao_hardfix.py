@@ -451,16 +451,20 @@ class ClimaxBackInjectConstraint(Constraint):
         if not shots or not isinstance(shots, list) or len(shots) < _CLIMAX_MIN_SHOTS:
             return repairs
         half = len(shots) // 2
-        # 后半已含高潮词 → 跳过
-        tail_text = " ".join(
-            (s.get("main_subject") or "") + (s.get("motion_desc") or "") + (s.get("narration_segment") or "")
-            for s in shots[half:] if isinstance(s, dict)
-        )
-        if any(t in tail_text for t in _CLIMAX_TAIL_TUPLE):
+        # GAP 只读 narration/subtitle/core_keywords；后半已有 3 镜命中才不修。
+        # 旧逻辑"任一镜命中即跳过"会在 climax_shots=1/3 时误判已修。
+        def _has_gap_climax(s: dict) -> bool:
+            text = " ".join(
+                str(s.get(k) or "") for k in ("narration_segment", "subtitle", "core_keywords")
+            )
+            return any(t in text for t in _CLIMAX_TAIL_TUPLE)
+
+        back_half = [s for s in shots[half:] if isinstance(s, dict)]
+        if sum(_has_gap_climax(s) for s in back_half) >= 3:
             return repairs
         # GAP 只读 narration/subtitle/core_keywords；后半至少 3 镜命中才满足蒙太奇规则。
         # 中点镜保留完整高潮句，其余两镜用短关键词，避免画面描述被重复句式淹没。
-        targets = [s for s in shots[half:] if isinstance(s, dict)][:3]
+        targets = back_half[:3]
         short_tail = _CLIMAX_INJECT_TAIL.lstrip("。")
         for pos, shot in enumerate(targets):
             before_ms = (shot.get("main_subject") or "").rstrip("。. ")

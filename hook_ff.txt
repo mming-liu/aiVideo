@@ -1,0 +1,35 @@
+--- ff_desc ---
+[ENV-ANCHOR] ancient Chinese cinematic realism, classical costume drama, dark water reflecting moon, distant willow silhouette, lotus leaves surrounding. Strictly no swimmpool,indooro ceramic tile whiteefaco bathtub modern arccture. 冷蓝月光下，一叶无篷舴艋舟（宽1.4米，可容3人）浮于荷花丛，杨旭白袍袒腹仰卧船头右提酒壶左垂钓竿，仰面朝上双目紧闭，头颈僵直不侧转，听香春衫披发跪坐其侧，船右水面涟漪暗涌，水下黑影潜伏静待。
+
+--- frame_layouts.ff ---
+[
+  {
+    "name": "杨旭",
+    "on_screen": true,
+    "position": "画中偏左，船头",
+    "pose": "仰卧",
+    "gaze_target": "画上星空",
+    "props": [
+      "酒壶",
+      "钓杆"
+    ]
+  },
+  {
+    "name": "听香",
+    "on_screen": true,
+    "position": "画左，杨旭左侧跪坐",
+    "pose": "跪坐",
+    "gaze_target": "画右水面",
+    "props": []
+  },
+  {
+    "name": "刺客",
+    "on_screen": true,
+    "position": "画右水下",
+    "pose": "潜伏水下",
+    "gaze_target": "画中杨旭",
+    "props": [
+      "匕首"
+    ]
+  }
+]

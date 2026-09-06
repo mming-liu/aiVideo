@@ -1,0 +1,929 @@
+{
+  "title": "照月湾箫声遇刺",
+  "shot_count": 10,
+  "characters": [
+    {
+      "identifier": "杨旭",
+      "static_features": "弱冠之年，剑眉星目，黑发束冠，身姿挺拔，身着素白色轻袍，头戴平定四方巾",
+      "dynamic_features": "吹箫垂钓，沉醉饮酒，心口遇刺倒地"
+    },
+    {
+      "identifier": "听香",
+      "static_features": "如花似玉，青丝挽美人髻，秀颈颀长，身段风流，一袭春衫，发间斜插步摇",
+      "dynamic_features": "撑伞侍立，衣衫凌乱，脸色苍白神情呆滞，半边脸肿起"
+    },
+    {
+      "identifier": "神秘人",
+      "static_features": "身形敏捷，黑衣蒙面，浑身沾水，手持寒光短刃",
+      "dynamic_features": "从水中跃出击刺，随即遁水消失"
+    },
+    {
+      "identifier": "张十三",
+      "static_features": "身材矫健，面容冷峻，青衣小帽打扮",
+      "dynamic_features": "举灯探问，跃上船确认状况，驾马车疾驰离开"
+    }
+  ],
+  "shots": [
+    {
+      "index": 1,
+      "scene": "照月湾",
+      "location": "荷塘水面",
+      "main_subject": "杨旭吹箫",
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感，暗调低饱和，写实古风风格，高清1080P。远景，缓慢推镜，大景深，满湾碧绿荷叶间一叶窄身无篷舴艋舟缓行，剑眉星目身穿素白轻袍头戴平定四方巾的杨旭盘膝坐船头吹箫，橙红夕阳余晖斜照，水面泛金，荷叶片片舒展。画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。",
+      "ff_desc": "满湾碧绿荷叶间一叶小舟静浮，杨旭盘膝坐船头，素白轻袍，双手持箫置于唇边，橙红夕照。",
+      "lf_desc": "小舟缓缓前移，荷叶向两侧分开，杨旭仍持箫吹奏，目光望向画右荷丛深处。",
+      "motion_desc": "前2秒：镜头锁定荷塘远景，小舟静浮荷间；2-5秒：镜头缓慢前推，小舟随水流缓缓前移，荷叶分开；5-7秒：杨旭指尖按箫孔，箫音持续，目光微转。",
+      "keyframes": [
+        {
+          "stage": "pre",
+          "t_sec": 1.0,
+          "desc": "满湾碧绿荷叶间一叶窄身舴艋舟静浮，杨旭盘膝坐船头，素白轻袍，双手持箫置于唇边，橙红夕照。"
+        },
+        {
+          "stage": "approach",
+          "t_sec": 4.0,
+          "desc": "小舟缓缓前移，荷叶向两侧分开，杨旭上身挺直，持箫吹奏，衣摆随晚风轻动，夕阳光线铺在水面。"
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中央船头",
+            "pose": "盘膝坐，双手持箫",
+            "gaze_target": "画右荷丛",
+            "props": ["箫"]
+          }
+        ],
+        "lf": [
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中央船头",
+            "pose": "盘膝坐，双手持箫",
+            "gaze_target": "画右荷丛",
+            "props": ["箫"]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中央船头",
+              "pose": "盘膝坐，双手持箫",
+              "gaze_target": "画右荷丛",
+              "props": ["箫"]
+            }
+          ],
+          [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中央船头",
+              "pose": "盘膝坐，双手持箫",
+              "gaze_target": "画右荷丛",
+              "props": ["箫"]
+            }
+          ]
+        ]
+      },
+      "core_keywords": "杨旭,吹箫,荷塘,小舟,橙红夕照",
+      "fx_effect": "无",
+      "clip_transition": "硬切",
+      "context_bridge": "承接钩子黑场淡出，开场建立照月湾荷塘场景",
+      "narration_segment": "",
+      "subtitle": "",
+      "color_tone": "橙红与深蓝紫红",
+      "audio_cue": "BGM=箫声清越，悠远舒缓; SFX=荷叶摩擦声+水流轻荡; VO=无",
+      "duration_sec": 7,
+      "variation_type": "large"
+    },
+    {
+      "index": 2,
+      "scene": "照月湾",
+      "location": "小舟中舱",
+      "main_subject": "听香撑伞侍立",
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感，暗调低饱和，写实古风风格，高清1080P。中景，过肩镜头，浅景深，从杨旭肩头望向画右的听香，她身着春衫，青丝挽美人髻，发间斜插步摇，秀颈颀长，手持油纸伞立于中舱，侧身面向杨旭，橙红夕光从画左斜照，伞面半映霞光。画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。",
+      "ff_desc": "过肩视角，听香立于中舱，春衫曳地，右手持油纸伞，侧身望向画左杨旭，步摇垂于发侧。",
+      "lf_desc": "听香指尖轻扶伞柄，头微低，步摇随动作轻晃，目光仍落在画左杨旭身上。",
+      "motion_desc": "前2秒：过肩镜头锁定听香侧身站立姿态；2-5秒：听香指尖轻扶伞柄，头部微低；5-7秒：步摇轻轻晃动，晚风拂动春衫下摆。",
+      "keyframes": [
+        {
+          "stage": "pre",
+          "t_sec": 1.5,
+          "desc": "过肩视角，听香立于小舟中舱，春衫曳地，右手持油纸伞，侧身望向画左杨旭，步摇垂于发侧。"
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右中舱",
+            "pose": "站立，右手持伞",
+            "gaze_target": "杨旭",
+            "props": ["油纸伞"]
+          }
+        ],
+        "lf": [
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右中舱",
+            "pose": "站立，右手扶伞柄",
+            "gaze_target": "杨旭",
+            "props": ["油纸伞"]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画右中舱",
+              "pose": "站立，右手持伞",
+              "gaze_target": "杨旭",
+              "props": ["油纸伞"]
+            }
+          ]
+        ]
+      },
+      "core_keywords": "听香,油纸伞,步摇,春衫,过肩",
+      "fx_effect": "无",
+      "clip_transition": "硬切",
+      "context_bridge": "由杨旭吹箫全景切至舟中听香侍立的过肩镜头",
+      "narration_segment": "",
+      "subtitle": "",
+      "color_tone": "橙红与深蓝紫红",
+      "audio_cue": "BGM=箫声渐弱，菱歌轻起; SFX=衣料轻动+伞面风动声; VO=无",
+      "duration_sec": 7,
+      "variation_type": "small"
+    },
+    {
+      "index": 3,
+      "scene": "照月湾",
+      "location": "小舟船头",
+      "main_subject": "杨旭垂钓饮酒",
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感，暗调低饱和，写实古风风格，高清1080P。中近景，固定机位，浅景深，杨旭半躺于船头，素白轻袍微敞，赤着双脚，左手持酒壶，右手搭钓杆垂入水中，夜色初临，冷蓝月光从画上方洒落，船板上摆着炭炉与酒菜，酒液在壶口泛光。画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。",
+      "ff_desc": "杨旭半躺船头，素白袍微敞，左手持酒壶于身侧，右手搭钓杆垂入画下水面，冷月光照。",
+      "lf_desc": "杨旭仰头饮下一口酒，酒壶倾斜，钓杆仍垂水面，目光迷离望向画上方夜空。",
+      "motion_desc": "前2秒：杨旭半躺船头，持壶静望水面；2-4秒：杨旭抬左手举酒壶至唇边；4-7秒：杨旭仰头饮酒，喉结微动，衣摆随船身轻晃。",
+      "keyframes": [
+        {
+          "stage": "pre",
+          "t_sec": 1.0,
+          "desc": "杨旭半躺于船头，素白轻袍微敞，左手持酒壶于身侧，右手搭钓杆垂入画下水面，冷月光铺在船板。"
+        },
+        {
+          "stage": "climax",
+          "t_sec": 5.0,
+          "desc": "杨旭仰头饮酒，左手举酒壶倾斜，酒液流入唇间，右手仍搭钓杆，目光迷离望向画上方夜空。"
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中央船头",
+            "pose": "半躺，左手持酒壶",
+            "gaze_target": "画下水面",
+            "props": ["酒壶", "钓杆"]
+          }
+        ],
+        "lf": [
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中央船头",
+            "pose": "半躺仰头，左手举酒壶",
+            "gaze_target": "画上方夜空",
+            "props": ["酒壶", "钓杆"]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中央船头",
+              "pose": "半躺，左手持酒壶",
+              "gaze_target": "画下水面",
+              "props": ["酒壶", "钓杆"]
+            }
+          ],
+          [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中央船头",
+              "pose": "半躺仰头，左手举酒壶",
+              "gaze_target": "画上方夜空",
+              "props": ["酒壶", "钓杆"]
+            }
+          ]
+        ]
+      },
+      "core_keywords": "杨旭,酒壶,钓杆,船头,冷蓝月光",
+      "fx_effect": "无",
+      "clip_transition": "硬切",
+      "context_bridge": "由听香侍立切至杨旭船头夜饮垂钓，时间推进至入夜",
+      "narration_segment": "",
+      "subtitle": "",
+      "color_tone": "冷蓝与星光",
+      "audio_cue": "BGM=丝竹轻缓，低回; SFX=水波轻拍船舷+酒液晃动声; VO=无",
+      "duration_sec": 7,
+      "variation_type": "small"
+    },
+    {
+      "index": 4,
+      "scene": "照月湾",
+      "location": "水下荷丛",
+      "main_subject": "神秘人潜伏",
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感，暗调低饱和，写实古风风格，高清1080P。近景，移镜，水下视角，黑衣蒙面的神秘人潜伏于画下方荷根阴影中，浑身沾水，右手持寒光短刃，刀刃微露，冷蓝水光从画上方透下，周围荷叶茎秆晃动，水泡缓缓上升。画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。",
+      "ff_desc": "水下荷根阴影中，神秘人蜷身潜伏，黑衣蒙面，右手持寒光短刃，刀刃朝上，水泡缓慢上升。",
+      "lf_desc": "神秘人双腿微屈蓄力，短刃仍举在身前，目光紧盯画上方船底，身体微微上浮。",
+      "motion_desc": "前2秒：水下镜头锁定神秘人潜伏姿态，水泡缓缓上升；2-4秒：神秘人手指收紧握稳短刃；4-6秒：神秘人双腿微屈，身体开始向上蓄力。",
+      "keyframes": [
+        {
+          "stage": "pre",
+          "t_sec": 1.5,
+          "desc": "水下荷根阴影中，神秘人蜷身潜伏，黑衣蒙面，浑身沾水，右手持寒光短刃，刀刃朝上，水泡缓慢上升。"
+        },
+        {
+          "stage": "approach",
+          "t_sec": 4.5,
+          "desc": "神秘人双腿微屈蓄力，右手举短刃于身前，目光紧盯画上方船底，身体微微上浮，周围水流晃动。"
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "神秘人",
+            "on_screen": true,
+            "position": "画下方水下",
+            "pose": "蜷身潜伏，右手持短刃",
+            "gaze_target": "画上方船底",
+            "props": ["寒光短刃"]
+          }
+        ],
+        "lf": [
+          {
+            "name": "神秘人",
+            "on_screen": true,
+            "position": "画下方水下",
+            "pose": "屈腿蓄力，右手举短刃",
+            "gaze_target": "画上方船底",
+            "props": ["寒光短刃"]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "神秘人",
+              "on_screen": true,
+              "position": "画下方水下",
+              "pose": "蜷身潜伏，右手持短刃",
+              "gaze_target": "画上方船底",
+              "props": ["寒光短刃"]
+            }
+          ],
+          [
+            {
+              "name": "神秘人",
+              "on_screen": true,
+              "position": "画下方水下",
+              "pose": "屈腿蓄力，右手举短刃",
+              "gaze_target": "画上方船底",
+              "props": ["寒光短刃"]
+            }
+          ]
+        ]
+      },
+      "core_keywords": "神秘人,短刃,水下,潜伏,冷蓝水光",
+      "fx_effect": "水下折射",
+      "clip_transition": "硬切",
+      "context_bridge": "由杨旭夜饮切至水下视角，暗示危机暗藏",
+      "narration_segment": "",
+      "subtitle": "",
+      "color_tone": "冷蓝与星光",
+      "audio_cue": "BGM=音乐骤停，只剩低频嗡鸣; SFX=水下气泡声+水流闷响; VO=无",
+      "duration_sec": 6,
+      "variation_type": "large"
+    },
+    {
+      "index": 5,
+      "scene": "照月湾",
+      "location": "船舷边",
+      "main_subject": "神秘人破水击刺",
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感，暗调低饱和，写实古风风格，高清1080P。近景，升格镜头，神秘人从画下方水中半身跃出，水花四溅，右手持寒光短刃向前掠出，目标是画左船头杨旭心口，冷蓝月光打在湿黑衣衫与刀刃上，水珠在空中定格。画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。",
+      "ff_desc": "神秘人半身破水而出，黑衣湿淋淋，右手持寒光短刃前伸，水花从身侧炸开，冷月光照。",
+      "lf_desc": "神秘人上身探上船舷，短刃尖抵近杨旭心口，杨旭半躺姿态未及反应，双目圆睁。",
+      "motion_desc": "前2秒：神秘人破水跃出，水花四溅，短刃前伸；2-4秒：神秘人左手攀住船舷，身体向上腾起；4-6秒：短刃尖逼近杨旭心口，水珠在空中悬停。",
+      "keyframes": [
+        {
+          "stage": "pre",
+          "t_sec": 1.0,
+          "desc": "神秘人半身破水而出，黑衣湿淋淋，右手持寒光短刃前伸，水花从身侧炸开，冷蓝月光打在刀刃上。"
+        },
+        {
+          "stage": "climax",
+          "t_sec": 4.0,
+          "desc": "神秘人上身探上船舷，右手短刃尖抵近杨旭心口，杨旭半躺于船头，双目圆睁，未及反应。"
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "神秘人",
+            "on_screen": true,
+            "position": "画下方水面",
+            "pose": "半身探出，右手持短刃前伸",
+            "gaze_target": "杨旭",
+            "props": ["寒光短刃"]
+          }
+        ],
+        "lf": [
+          {
+            "name": "神秘人",
+            "on_screen": true,
+            "position": "画中央船舷",
+            "pose": "探身船舷，右手持短刃前刺",
+            "gaze_target": "杨旭",
+            "props": ["寒光短刃"]
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画左船头",
+            "pose": "半躺，双手微抬",
+            "gaze_target": "神秘人",
+            "props": []
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "神秘人",
+              "on_screen": true,
+              "position": "画下方水面",
+              "pose": "半身探出，右手持短刃前伸",
+              "gaze_target": "杨旭",
+              "props": ["寒光短刃"]
+            }
+          ],
+          [
+            {
+              "name": "神秘人",
+              "on_screen": true,
+              "position": "画中央船舷",
+              "pose": "探身船舷，右手持短刃前刺",
+              "gaze_target": "杨旭",
+              "props": ["寒光短刃"]
+            },
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画左船头",
+              "pose": "半躺，双手微抬",
+              "gaze_target": "神秘人",
+              "props": []
+            }
+          ]
+        ]
+      },
+      "core_keywords": "神秘人,短刃,破水,杨旭,冷蓝月光",
+      "fx_effect": "升格",
+      "clip_transition": "硬切",
+      "context_bridge": "承接水下潜伏，神秘人破水发动击刺",
+      "narration_segment": "神秘人：受死！",
+      "subtitle": "神秘人：受死！",
+      "color_tone": "冷蓝与星光",
+      "audio_cue": "BGM=鼓点重击一声后骤停; SFX=水花爆响+利刃破风+闷哼; VO=神秘人低喝",
+      "duration_sec": 6,
+      "variation_type": "large"
+    },
+    {
+      "index": 6,
+      "scene": "照月湾",
+      "location": "船头甲板",
+      "main_subject": "杨旭中刀倒地",
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感，暗调低饱和，写实古风风格，高清1080P。中景，固定机位，浅景深，杨旭仰卧于船头甲板，素白轻袍心口处洇出大片暗红，右手无力垂在船板，酒壶翻倒在身侧，钓杆斜落一旁，神秘人已退至画右船舷边，短刃上沾红痕，冷蓝月光斜照，画面偏冷。画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。",
+      "ff_desc": "杨旭仰卧船头，素白袍心口暗红洇开，右手垂落船板，酒壶翻倒身侧，神秘人立画右船舷。",
+      "lf_desc": "杨旭双目失神，胸口暗红扩大，手指微微抽搐，神秘人转身欲跃回水中。",
+      "motion_desc": "前2秒：杨旭身体僵住，短刃拔离心口，暗红洇开；2-4秒：杨旭右手无力垂落，酒壶滚向船边；4-7秒：神秘人转身，单脚抬起准备跃回水中。",
+      "keyframes": [
+        {
+          "stage": "climax",
+          "t_sec": 1.5,
+          "desc": "杨旭仰卧于船头甲板，素白轻袍心口处暗红洇开，右手无力垂落船板，酒壶翻倒在身侧，神秘人立画右船舷。"
+        },
+        {
+          "stage": "exit",
+          "t_sec": 5.0,
+          "desc": "杨旭双目失神，胸口暗红范围扩大，手指微微抽搐，神秘人转身面向水面，单脚抬起准备跃下。"
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画左船头",
+            "pose": "仰卧，右手垂落",
+            "gaze_target": "画上方夜空",
+            "props": []
+          },
+          {
+            "name": "神秘人",
+            "on_screen": true,
+            "position": "画右船舷",
+            "pose": "站立，右手持带红短刃",
+            "gaze_target": "杨旭",
+            "props": ["寒光短刃"]
+          }
+        ],
+        "lf": [
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画左船头",
+            "pose": "仰卧，手指微抽",
+            "gaze_target": "画上方夜空",
+            "props": []
+          },
+          {
+            "name": "神秘人",
+            "on_screen": true,
+            "position": "画右船舷",
+            "pose": "转身抬脚，右手持短刃",
+            "gaze_target": "画下方水面",
+            "props": ["寒光短刃"]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画左船头",
+              "pose": "仰卧，右手垂落",
+              "gaze_target": "画上方夜空",
+              "props": []
+            },
+            {
+              "name": "神秘人",
+              "on_screen": true,
+              "position": "画右船舷",
+              "pose": "站立，右手持带红短刃",
+              "gaze_target": "杨旭",
+              "props": ["寒光短刃"]
+            }
+          ],
+          [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画左船头",
+              "pose": "仰卧，手指微抽",
+              "gaze_target": "画上方夜空",
+              "props": []
+            },
+            {
+              "name": "神秘人",
+              "on_screen": true,
+              "position": "画右船舷",
+              "pose": "转身抬脚，右手持短刃",
+              "gaze_target": "画下方水面",
+              "props": ["寒光短刃"]
+            }
+          ]
+        ]
+      },
+      "core_keywords": "杨旭,暗红,船头,神秘人,短刃",
+      "fx_effect": "无",
+      "clip_transition": "硬切",
+      "context_bridge": "承接神秘人击刺，杨旭中刀倒于船头",
+      "narration_segment": "",
+      "subtitle": "",
+      "color_tone": "冷蓝与暗红",
+      "audio_cue": "BGM=低频压抑弦乐; SFX=酒壶滚落声+粗重喘息+水滴落船板; VO=无",
+      "duration_sec": 7,
+      "variation_type": "large"
+    },
+    {
+      "index": 7,
+      "scene": "照月湾",
+      "location": "小舟中舱",
+      "main_subject": "听香惊惶呼救",
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感，暗调低饱和，写实古风风格，高清1080P。近景，推镜，浅景深，听香立于中舱，春衫凌乱，步摇掉落，头发披散半边，双眼圆睁，嘴唇微张，双手捂在嘴边，目光望向画左船头，冷蓝月光从画上方照下，脸色苍白。画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。",
+      "ff_desc": "听香立于中舱，春衫凌乱，头发披散半边，步摇不见，双手捂嘴，双眼圆睁望画左船头。",
+      "lf_desc": "听香身体微颤，张嘴欲呼，眼泪涌出眼眶，脚步踉跄向画左船头方向迈了半步。",
+      "motion_desc": "前2秒：听香僵立中舱，双手捂嘴，双目圆睁；2-4秒：听香肩膀剧烈颤抖，眼泪涌出；4-7秒：听香张嘴呼救，脚步踉跄向前半步。",
+      "keyframes": [
+        {
+          "stage": "react",
+          "t_sec": 2.0,
+          "desc": "听香立于中舱，春衫凌乱，头发披散半边，双手捂在嘴边，双眼圆睁望向画左船头，脸色苍白。"
+        },
+        {
+          "stage": "after",
+          "t_sec": 5.5,
+          "desc": "听香身体微颤，张嘴呼救，眼泪涌出眼眶，右脚向前迈出半步，身体前倾，目光仍锁定画左船头。"
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画中央中舱",
+            "pose": "站立，双手捂嘴",
+            "gaze_target": "杨旭",
+            "props": []
+          }
+        ],
+        "lf": [
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画中央中舱",
+            "pose": "站立前倾，张嘴呼救",
+            "gaze_target": "杨旭",
+            "props": []
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画中央中舱",
+              "pose": "站立，双手捂嘴",
+              "gaze_target": "杨旭",
+              "props": []
+            }
+          ],
+          [
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画中央中舱",
+              "pose": "站立前倾，张嘴呼救",
+              "gaze_target": "杨旭",
+              "props": []
+            }
+          ]
+        ]
+      },
+      "core_keywords": "听香,惊惶,呼救,中舱,冷蓝月光",
+      "fx_effect": "无",
+      "clip_transition": "硬切",
+      "context_bridge": "由杨旭中刀切至听香反应，展现冲击感",
+      "narration_segment": "听香：来人啊！救命！",
+      "subtitle": "听香：来人啊！救命！",
+      "color_tone": "冷蓝与星光",
+      "audio_cue": "BGM=弦乐骤然拔高; SFX=女子惊呼+喘息哭腔; VO=听香呼救",
+      "duration_sec": 7,
+      "variation_type": "small"
+    },
+    {
+      "index": 8,
+      "scene": "照月湾",
+      "location": "船梢甲板",
+      "main_subject": "张十三跃上船",
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感，暗调低饱和，写实古风风格，高清1080P。中景，摇镜，大景深，青衣小帽的张十三从画右岸边纵身跃上船梢，右手举着一盏灯盏，灯焰晃动，面容冷峻，目光扫向画左船头，冷蓝月光与暖黄灯光交织，船身微微晃动。画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。",
+      "ff_desc": "张十三从画右岸边跃出，青衣小帽，右手举灯盏，身体腾空，灯焰随动作晃动。",
+      "lf_desc": "张十三落于船梢，双脚站稳，右手仍举灯盏，目光紧盯画左船头方向，眉头紧锁。",
+      "motion_desc": "前2秒：张十三从岸边纵身跃起，身体腾空；2-4秒：张十三落向船梢，船身微晃；4-6秒：张十三站稳，举灯望向画左船头，眉头皱起。",
+      "keyframes": [
+        {
+          "stage": "approach",
+          "t_sec": 1.5,
+          "desc": "张十三从画右岸边纵身跃出，青衣小帽，右手举灯盏，身体腾空，灯焰随动作晃动，冷蓝月光下衣摆翻飞。"
+        },
+        {
+          "stage": "climax",
+          "t_sec": 4.0,
+          "desc": "张十三落于船梢，双脚分开站稳，右手举灯盏前照，面容冷峻，目光紧盯画左船头方向，眉头紧锁。"
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画右空中",
+            "pose": "纵身跃起，右手举灯",
+            "gaze_target": "画左船头",
+            "props": ["灯盏"]
+          }
+        ],
+        "lf": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画右船梢",
+            "pose": "站立，右手举灯前照",
+            "gaze_target": "杨旭",
+            "props": ["灯盏"]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画右空中",
+              "pose": "纵身跃起，右手举灯",
+              "gaze_target": "画左船头",
+              "props": ["灯盏"]
+            }
+          ],
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画右船梢",
+              "pose": "站立，右手举灯前照",
+              "gaze_target": "杨旭",
+              "props": ["灯盏"]
+            }
+          ]
+        ]
+      },
+      "core_keywords": "张十三,灯盏,跃上船,船梢,冷蓝暖黄",
+      "fx_effect": "无",
+      "clip_transition": "硬切",
+      "context_bridge": "承接听香呼救，张十三闻声从岸边跃上船",
+      "narration_segment": "张十三：出了什么事！",
+      "subtitle": "张十三：出了什么事！",
+      "color_tone": "冷蓝与暖黄交织",
+      "audio_cue": "BGM=急促鼓点; SFX=脚步踏船板声+灯焰晃动声+男子急问; VO=张十三厉声问",
+      "duration_sec": 6,
+      "variation_type": "small"
+    },
+    {
+      "index": 9,
+      "scene": "杨府别庄",
+      "location": "别庄大门外",
+      "main_subject": "张十三逼听香隐瞒",
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感，暗调低饱和，写实古风风格，高清1080P。中近景，过肩镜头，浅景深，从张十三肩头望向画右的听香，她半边脸肿起，头发披散，衣衫凌乱，脸色苍白神情呆滞，张十三青衣小帽立于画左前景，右手按在听香肩头，冷蓝月光从画上方洒落，背景是别庄大门的暗影。画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。",
+      "ff_desc": "过肩视角，张十三右手按在听香肩头，听香半边脸肿起，头发披散，神情呆滞望地面。",
+      "lf_desc": "张十三俯身凑近听香，嘴唇微动，听香身体微颤，目光仍低垂，手指攥紧衣衫。",
+      "motion_desc": "前2秒：过肩镜头锁定两人对峙姿态，张十三手按听香肩；2-4秒：张十三俯身凑近，语气压低；4-7秒：听香身体微颤，手指攥紧春衫衣角。",
+      "keyframes": [
+        {
+          "stage": "react",
+          "t_sec": 2.0,
+          "desc": "过肩视角，张十三右手按在听香肩头，听香半边脸肿起，头发披散，神情呆滞望向画下方地面。"
+        },
+        {
+          "stage": "after",
+          "t_sec": 5.0,
+          "desc": "张十三俯身凑近听香，嘴唇微动，听香身体微颤，目光低垂，右手手指攥紧春衫衣角，神色惊恐。"
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画左前景",
+            "pose": "站立，右手按听香肩",
+            "gaze_target": "听香",
+            "props": []
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "站立，头低垂",
+            "gaze_target": "画下方地面",
+            "props": []
+          }
+        ],
+        "lf": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画左前景",
+            "pose": "俯身凑近，右手按肩",
+            "gaze_target": "听香",
+            "props": []
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "站立，右手攥衣角",
+            "gaze_target": "画下方地面",
+            "props": []
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画左前景",
+              "pose": "站立，右手按听香肩",
+              "gaze_target": "听香",
+              "props": []
+            },
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "站立，头低垂",
+              "gaze_target": "画下方地面",
+              "props": []
+            }
+          ],
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画左前景",
+              "pose": "俯身凑近，右手按肩",
+              "gaze_target": "听香",
+              "props": []
+            },
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "站立，右手攥衣角",
+              "gaze_target": "画下方地面",
+              "props": []
+            }
+          ]
+        ]
+      },
+      "core_keywords": "张十三,听香,逼问,别庄大门,冷蓝月光",
+      "fx_effect": "无",
+      "clip_transition": "硬切",
+      "context_bridge": "由舟中场景切至别庄大门外，空间转移至岸上",
+      "narration_segment": "张十三：敢说出去，仔细你的命！",
+      "subtitle": "张十三：敢说出去，仔细你的命！",
+      "color_tone": "冷蓝与深褐",
+      "audio_cue": "BGM=压抑低沉弦乐; SFX=夜风掠过门檐+女子压抑啜泣; VO=张十三压低声音威胁",
+      "duration_sec": 7,
+      "variation_type": "small"
+    },
+    {
+      "index": 10,
+      "scene": "杨府别庄",
+      "location": "别庄大门外土路",
+      "main_subject": "张十三驾马车疾驰",
+      "prompt": "古风真人影视剧，9:16竖屏，电影质感，暗调低饱和，写实古风风格，高清1080P。全景，拉镜，大景深，两轮轻便马车从画左别庄大门驶出，沿土路向画右疾驰，张十三坐于车夫座挥鞭驾车，车厢封闭，冷蓝月光洒在车顶与路面，尘土在车轮后扬起，远处树影幢幢，夜色浓重。画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。",
+      "ff_desc": "两轮轻便马车停在别庄大门前，张十三坐车夫座，右手持鞭，马车轮廓在冷月光下清晰。",
+      "lf_desc": "马车向画右疾驰，车轮扬起尘土，张十三挥鞭，车厢隐在夜色中，前路暗藏未知。",
+      "motion_desc": "前2秒：马车停于大门前，张十三持鞭端坐；2-4秒：张十三挥鞭，马车启动，车轮转动；4-8秒：马车向画右疾驰，镜头后拉，尘土在车尾扬起。",
+      "keyframes": [
+        {
+          "stage": "pre",
+          "t_sec": 1.5,
+          "desc": "两轮轻便马车停在别庄大门前，张十三坐于车夫座，右手持鞭，马车轮廓在冷蓝月光下清晰。"
+        },
+        {
+          "stage": "climax",
+          "t_sec": 5.0,
+          "desc": "马车向画右疾驰，车轮扬起尘土，张十三坐车夫座挥鞭，车厢封闭隐在夜色中，前路树影幢幢。"
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画左车夫座",
+            "pose": "端坐，右手持鞭",
+            "gaze_target": "画右前路",
+            "props": ["马鞭"]
+          }
+        ],
+        "lf": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画中央车夫座",
+            "pose": "端坐挥鞭",
+            "gaze_target": "画右前路",
+            "props": ["马鞭"]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画左车夫座",
+              "pose": "端坐，右手持鞭",
+              "gaze_target": "画右前路",
+              "props": ["马鞭"]
+            }
+          ],
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画中央车夫座",
+              "pose": "端坐挥鞭",
+              "gaze_target": "画右前路",
+              "props": ["马鞭"]
+            }
+          ]
+        ]
+      },
+      "core_keywords": "马车,张十三,疾驰,别庄大门,冷蓝夜色",
+      "fx_effect": "无",
+      "clip_transition": "淡入淡出",
+      "context_bridge": "承接威胁对话，张十三驾马车连夜离开别庄",
+      "narration_segment": "",
+      "subtitle": "",
+      "color_tone": "冷蓝与深褐",
+      "audio_cue": "BGM=马蹄声配合急促弦乐，渐远; SFX=马蹄踏地+车轮碾土+马鞭破空; VO=无",
+      "duration_sec": 8,
+      "variation_type": "large"
+    }
+  ],
+  "hook": {
+    "index": 0,
+    "scene": "照月湾",
+    "location": "水下荷丛",
+    "main_subject": "神秘人水下潜伏",
+    "prompt": "古风真人影视剧，9:16竖屏，电影质感，暗调低饱和，写实古风风格，高清1080P。特写，固定机位，水下视角，黑衣蒙面神秘人的右手持寒光短刃，刀刃从画下方荷根阴影中缓缓向上微露，刀刃反光，周围水泡缓慢上升，冷蓝水光从画上方透下，荷茎在旁晃动。画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。",
+    "ff_desc": "水下荷根阴影中，一截寒光短刃尖微露于画下方，周围水泡缓慢上升，冷蓝水光透下。",
+    "lf_desc": "短刃向上抬起半寸，刀刃反光更亮，神秘人隐在阴影中仅见手部，水流微动。",
+    "motion_desc": "前2秒：镜头锁定水下短刃尖，水泡缓缓上升；2-3秒：短刃微微向上抬起；3-4秒：刀刃反光晃动，水流轻颤。",
+    "keyframes": [
+      {
+        "stage": "pre",
+        "t_sec": 1.0,
+        "desc": "水下荷根阴影中，一截寒光短刃尖微露于画下方，周围水泡缓慢上升，冷蓝水光从画上方透下。"
+      },
+      {
+        "stage": "approach",
+        "t_sec": 3.0,
+        "desc": "短刃向上抬起半寸，刀刃反光更亮，神秘人戴黑手套的手隐在阴影中，周围水流微动。"
+      }
+    ],
+    "frame_layouts": {
+      "ff": [
+        {
+          "name": "神秘人",
+          "on_screen": false,
+          "position": "画下方水下阴影",
+          "pose": "潜伏，仅露刀尖",
+          "gaze_target": "画上方",
+          "props": ["寒光短刃"]
+        }
+      ],
+      "lf": [
+        {
+          "name": "神秘人",
+          "on_screen": false,
+          "position": "画下方水下阴影",
+          "pose": "潜伏，抬手露刃",
+          "gaze_target": "画上方",
+          "props": ["寒光短刃"]
+        }
+      ],
+      "kfs": [
+        [
+          {
+            "name": "神秘人",
+            "on_screen": false,
+            "position": "画下方水下阴影",
+            "pose": "潜伏，仅露刀尖",
+            "gaze_target": "画上方",
+            "props": ["寒光短刃"]
+          }
+        ],
+        [
+          {
+            "name": "神秘人",
+            "on_screen": false,
+            "position": "画下方水下阴影",
+            "pose": "潜伏，抬手露刃",
+            "gaze_target": "画上方",
+            "props": ["寒光短刃"]
+          }
+        ]
+      ]
+    },
+    "core_keywords": "神秘人,短刃,水下,潜伏,冷蓝水光",
+    "fx_effect": "水下折射",
+    "clip_transition": "淡入淡出",
+    "context_bridge": "开场钩子，倒叙展示水下危机，随后淡出黑场接入正片",
+    "narration_segment": "",
+    "subtitle": "",
+    "color_tone": "冷蓝与星光",
+    "audio_cue": "BGM=低频嗡鸣，渐强; SFX=水下气泡声+水流闷响; VO=无",
+    "duration_sec": 4,
+    "variation_type": "large"
+  }
+}

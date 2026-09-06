@@ -38,9 +38,9 @@ def test_skips_when_back_half_has_climax():
         make_shot(index=1, main_subject="开场"),
         make_shot(index=2, main_subject="对话"),
         make_shot(index=3, main_subject="中段"),
-        make_shot(index=4, main_subject="反转揭露", motion_desc="反转揭露悬念陡升"),
-        make_shot(index=5, main_subject="收尾"),
-        make_shot(index=6, main_subject="结局"),
+        make_shot(index=4, main_subject="反转1", motion_desc="反转揭露", core_keywords="反转揭露"),
+        make_shot(index=5, main_subject="反转2", motion_desc="反转揭露", core_keywords="悬念陡升"),
+        make_shot(index=6, main_subject="反转3", motion_desc="反转揭露", core_keywords="身份暴露"),
     ]
     script = make_script(shots)
     ctx = make_ctx(script)
@@ -66,6 +66,25 @@ def test_preserves_existing_core_keywords():
     repairs = ClimaxBackInjectConstraint().apply(ctx)
     assert len(repairs) == 3
     assert script["shots"][3]["core_keywords"] == "水湾,小舟,冲突,顶点,悬念陡升"
+
+
+def test_repairs_when_only_one_gap_readable_climax_shot_exists():
+    """main_subject 有高潮词但 GAP 只能读到 1 镜 → 不能误判已修。"""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+    shots = [
+        make_shot(index=1, main_subject="开场"),
+        make_shot(index=2, main_subject="对话"),
+        make_shot(index=3, main_subject="中段"),
+        make_shot(index=4, main_subject="冲突到达顶点"),
+        make_shot(index=5, main_subject="结局"),
+        make_shot(index=6, main_subject="远景"),
+    ]
+    script = make_script(shots)
+    ctx = make_ctx(script)
+    from step01_script_gen.doubao_hardfix import ClimaxBackInjectConstraint
+    repairs = ClimaxBackInjectConstraint().apply(ctx)
+    assert len(repairs) == 3
+    assert all("悬念陡升" in s["core_keywords"] for s in script["shots"][3:6])
 
 
 def test_skips_when_too_few_shots():

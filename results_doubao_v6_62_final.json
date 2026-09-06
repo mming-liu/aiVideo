@@ -1,0 +1,82 @@
+{
+  "chapter": 1,
+  "providers": [
+    "agent_plan"
+  ],
+  "trials": 1,
+  "novel_len": 4847,
+  "prompts": {
+    "deepseek": {
+      "user_len": 31982,
+      "sys_len": 3840
+    },
+    "agent_plan": {
+      "user_len": 34713,
+      "sys_len": 10690
+    }
+  },
+  "weights": {
+    "parse": 3.0,
+    "schema": 2.0,
+    "gap": 2.0,
+    "subtitle_binding": 2.0,
+    "duration": 1.5,
+    "shot_count": 1.0,
+    "dialogue": 1.0,
+    "camera": 1.0,
+    "shot_size": 1.0,
+    "ff_lf": 1.0,
+    "keyframes": 0.5,
+    "warns": 1.0,
+    "cost": 0.5
+  },
+  "rows": [
+    {
+      "config": "agent_plan",
+      "n": 1,
+      "composite": 0.892554406926407,
+      "parse": 1.0,
+      "schema": 0.9090909090909091,
+      "gap": 1.0,
+      "subtitle_binding": 1.0,
+      "duration": 0.9166666666666666,
+      "shot_count": 1.0,
+      "dialogue": 0.5018181818181819,
+      "camera": 0.0,
+      "shot_size": 1.0,
+      "ff_lf": 1.0,
+      "keyframes": 0.9090909090909091,
+      "warns": 1.0,
+      "cost": 0.9403133333333333,
+      "out_tok": 8953.0,
+      "reason_ratio": 0.0,
+      "fails": 0
+    }
+  ],
+  "trials_raw": [
+    {
+      "config": "agent_plan",
+      "provider": "agent_plan",
+      "metrics": {
+        "parse": 1.0,
+        "schema": 0.9090909090909091,
+        "shot_count": 1.0,
+        "duration": 0.9166666666666666,
+        "subtitle_binding": 1.0,
+        "dialogue": 0.5018181818181819,
+        "camera": 0.0,
+        "shot_size": 1.0,
+        "ff_lf": 1.0,
+        "keyframes": 0.9090909090909091,
+        "gap": 1.0,
+        "warns": 1.0,
+        "cost": 0.9403133333333333,
+        "_reasoning_ratio": 0.0,
+        "_output_tokens": 8953.0
+      },
+      "elapsed": 114.7,
+      "text_len": 21405,
+      "parse_err": null
+    }
+  ]
+}
