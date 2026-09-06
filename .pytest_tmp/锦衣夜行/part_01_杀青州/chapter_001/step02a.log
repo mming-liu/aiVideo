@@ -27,3 +27,32 @@
 [2026-09-06 21:46:49] [DEBUG] agent_plan_image_submit: prompt全文=x
 [2026-09-06 21:46:49] [DEBUG] agent_plan_image_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2400569168560'>
 [2026-09-06 21:46:49]   [镜头99] [OK] [Agent Plan] 首帧已保存 -> C:\Users\ee54\AppData\Local\Temp\pytest-of-ee54\pytest-201\test_image_custom_save_path0\asset\portrait.png (8.0 KB)
+[2026-09-06 22:12:43]   [镜头5] size 1024x1792=1835008 超出 doubao-seedream-5-0-lite 像素区间 3686400~16777216，等比收敛到 1454x2538
+[2026-09-06 22:12:43]   [镜头5] [Agent Plan] 正在生成首帧 [doubao-seedream-5-0-lite]...
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit: model=doubao-seedream-5-0-lite, size=1454x2538, refs=0, seed=None
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit: prompt全文=test prompt
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit response: status=200, body={"data":[{"url":"http://x/y.png"}]}
+[2026-09-06 22:12:43]   [镜头5] [OK] [Agent Plan] 首帧已保存 -> C:\Users\ee54\AppData\Local\Temp\pytest-of-ee54\pytest-202\test_image_submit_basic_payloa0\shot_5_ff.png (8.0 KB)
+[2026-09-06 22:12:43]   [镜头1] [Agent Plan] 正在生成首帧 [doubao-seedream-5-0-lite]...
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit: model=doubao-seedream-5-0-lite, size=2k, refs=0, seed=None
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit: prompt全文=x
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-06 22:12:43]   [镜头1] [Agent Plan] 正在生成首帧 [doubao-seedream-5-0-lite]...
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit: model=doubao-seedream-5-0-lite, size=2k, refs=0, seed=None
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit: prompt全文=x
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-06 22:12:43]   [镜头3] [Agent Plan] 正在生成尾帧 [doubao-seedream-5-0-lite]...
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit: model=doubao-seedream-5-0-lite, size=2k, refs=0, seed=None
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit: prompt全文=x
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2329724547296'>
+[2026-09-06 22:12:43]   [镜头3] [OK] [Agent Plan] 尾帧已保存 -> C:\Users\ee54\AppData\Local\Temp\pytest-of-ee54\pytest-202\test_image_lf_frame_naming0\shot_3_lf.png (8.0 KB)
+[2026-09-06 22:12:43]   [镜头7] [Agent Plan] 正在生成关键帧2 [doubao-seedream-5-0-lite]...
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit: model=doubao-seedream-5-0-lite, size=2k, refs=0, seed=None
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit: prompt全文=x
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2329725994048'>
+[2026-09-06 22:12:43]   [镜头7] [OK] [Agent Plan] 关键帧2已保存 -> C:\Users\ee54\AppData\Local\Temp\pytest-of-ee54\pytest-202\test_image_kf_frame_naming0\shot_7_kf_2.png (8.0 KB)
+[2026-09-06 22:12:43]   [镜头99] [Agent Plan] 正在生成首帧 [doubao-seedream-5-0-lite]...
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit: model=doubao-seedream-5-0-lite, size=2k, refs=0, seed=None
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit: prompt全文=x
+[2026-09-06 22:12:43] [DEBUG] agent_plan_image_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2329725997744'>
+[2026-09-06 22:12:43]   [镜头99] [OK] [Agent Plan] 首帧已保存 -> C:\Users\ee54\AppData\Local\Temp\pytest-of-ee54\pytest-202\test_image_custom_save_path0\asset\portrait.png (8.0 KB)

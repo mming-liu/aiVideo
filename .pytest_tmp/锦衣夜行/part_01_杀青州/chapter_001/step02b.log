@@ -61,3 +61,66 @@
 [2026-09-06 21:46:50] [DEBUG] agent_plan_video_submit: content[0] text
 [2026-09-06 21:46:50] [DEBUG] agent_plan_video_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2400569727296'>
 [2026-09-06 21:46:50]   [镜头1] 任务已创建 [Agent Plan] -> task_id: task-r
+[2026-09-06 22:12:43]   [镜头1] [Agent Plan Seedance] 正在提交任务 [doubao-seedance-2-0]...
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: model=doubao-seedance-2-0, resolution=720p, ratio=9:16, duration=6, seed=None
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: prompt全文=test
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: content[0] text
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: content[1] image_url role=first_frame, len=374
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit response: status=200, body={"id":"task-1"}
+[2026-09-06 22:12:43]   [镜头1] 任务已创建 [Agent Plan] -> task_id: task-1
+[2026-09-06 22:12:43]   [镜头1] [Agent Plan Seedance] 正在提交任务 [doubao-seedance-2-0]...
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: model=doubao-seedance-2-0, resolution=720p, ratio=9:16, duration=6, seed=None
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: prompt全文=test
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: content[0] text
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: content[1] image_url role=first_frame, len=374
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: content[2] image_url role=last_frame, len=374
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2329726002112'>
+[2026-09-06 22:12:43]   [镜头1] 任务已创建 [Agent Plan] -> task_id: task-2
+[2026-09-06 22:12:43]   [镜头1] [Agent Plan Seedance] 正在提交任务 [doubao-seedance-2-0]...
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: model=doubao-seedance-2-0, resolution=720p, ratio=9:16, duration=6, seed=None
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: prompt全文=test
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: content[0] text
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: content[1] image_url role=reference_image, len=374
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: content[2] image_url role=reference_image, len=374
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2329726004464'>
+[2026-09-06 22:12:43]   [镜头1] 任务已创建 [Agent Plan] -> task_id: task-3
+[2026-09-06 22:12:43]   [镜头1] doubao-seedance-1-5-pro-251215 不支持参考生视频，多关键帧退化为首尾帧（丢弃中间 1 张）
+[2026-09-06 22:12:43]   [镜头1] [Agent Plan Seedance] 正在提交任务 [doubao-seedance-1-5-pro-251215]...
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: model=doubao-seedance-1-5-pro-251215, resolution=720p, ratio=9:16, duration=6, seed=None
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: prompt全文=test
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: content[0] text
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: content[1] image_url role=first_frame, len=374
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: content[2] image_url role=last_frame, len=374
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2329726006816'>
+[2026-09-06 22:12:43]   [镜头1] 任务已创建 [Agent Plan] -> task_id: task-4
+[2026-09-06 22:12:43]   [镜头8] Agent Plan 任务状态: succeeded (已等待 0s)
+[2026-09-06 22:12:43]   [镜头8] Agent Plan 下载视频: http://x/v.mp4
+[2026-09-06 22:12:43]   [镜头8] Agent Plan 视频已保存 -> C:\myFloders\git\aiVideo\.pytest_tmp\锦衣夜行\part_01_杀青州\chapter_001\vimax_working\shots\8\video.mp4
+[2026-09-06 22:12:43]   [镜头1] Agent Plan 任务状态: failed (已等待 0s)
+[2026-09-06 22:12:43]   [镜头1] Agent Plan 任务失败: InvalidInput - bad prompt
+[2026-09-06 22:12:43]   [镜头1] Agent Plan 任务状态: running (已等待 0s)
+[2026-09-06 22:12:43]   [镜头1] Agent Plan 任务状态: running (已等待 0s)
+[2026-09-06 22:12:43]   [镜头1] Agent Plan 任务状态: running (已等待 0s)
+[2026-09-06 22:12:43]   [镜头1] [Agent Plan Seedance] 正在提交任务 [doubao-seedance-2-0]...
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: model=doubao-seedance-2-0, resolution=720p, ratio=9:16, duration=6, seed=None
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: prompt全文=x
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: content[0] text
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit response: status=401, body={"error":"unauthorized"}
+[2026-09-06 22:12:43]   [镜头1] [Agent Plan Seedance] 正在提交任务 [doubao-seedance-2-0]...
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: model=doubao-seedance-2-0, resolution=720p, ratio=9:16, duration=6, seed=None
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: prompt全文=x
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: content[0] text
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit response: status=503, body={"error":"busy"}
+[2026-09-06 22:12:43]   [镜头1] [!] 服务端 503，2s 后重试 (尝试 1/4)
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit response: status=503, body={"error":"busy"}
+[2026-09-06 22:12:43]   [镜头1] [!] 服务端 503，4s 后重试 (尝试 2/4)
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit response: status=503, body={"error":"busy"}
+[2026-09-06 22:12:43]   [镜头1] [!] 服务端 503，8s 后重试 (尝试 3/4)
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit response: status=503, body={"error":"busy"}
+[2026-09-06 22:12:43]   [镜头1] [!] 服务端 503，16s 后重试 (尝试 4/4)
+[2026-09-06 22:12:43]   [镜头1] [Agent Plan Seedance] 正在提交任务 [doubao-seedance-2-0]...
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: model=doubao-seedance-2-0, resolution=720p, ratio=9:16, duration=6, seed=None
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: prompt全文=x
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit: content[0] text
+[2026-09-06 22:12:43] [DEBUG] agent_plan_video_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2329726556480'>
+[2026-09-06 22:12:43]   [镜头1] 任务已创建 [Agent Plan] -> task_id: task-r
