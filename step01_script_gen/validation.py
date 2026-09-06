@@ -4363,12 +4363,15 @@ def post_fix_shot_prompts(script: dict) -> dict:
                 if not _kd:
                     continue
                 if "【角色锚定】" in _kd:
-                    if "未指定" not in _kd:
-                        continue
+                    # 剥离逻辑单源 shared.frame_spec（frame_spec_repair 约束同用）
+                    from shared.frame_spec import strip_polluted_char_anchor_block
+                    _kd_clean = strip_polluted_char_anchor_block(_kd)
+                    if _kd_clean == _kd:
+                        continue  # 锚块干净 → 幂等跳过
                     # v6.62（09-06）历史坏块自救：块内含「未指定」占位符（09-05/06
                     # 存盘数据被 _FALLBACK_SURFACE 污染，root-fix 见
                     # shared/vimax_bridge.py surface 空值守卫）→ 剥掉坏块重新生成
-                    _kd = re.split(r"【角色锚定】", _kd, 1)[0].rstrip("。！？，,;；")
+                    _kd = _kd_clean
                 _role_scan = " ".join(filter(None, [
                     shot.get("ff_desc", ""), shot.get("lf_desc", ""),
                     shot.get("motion_desc", "") or shot.get("prompt", ""),

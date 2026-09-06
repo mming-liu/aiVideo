@@ -158,3 +158,26 @@ def spec_threat_visible(
         if any(kw in name for kw in threat_keywords):
             return True
     return False
+
+
+# 【角色锚定】注入块标记（生成端：shared/vimax_bridge.py _extract_char_layout；
+# validation post_fix / frame_spec_repair 坏块自救以该标记识别块边界）
+CHAR_ANCHOR_BLOCK_MARKER = "【角色锚定】"
+
+
+def strip_polluted_char_anchor_block(desc: str) -> str:
+    """剥掉被「未指定」占位符污染的【角色锚定】坏块，保留块前正文（历史坏数据自救）.
+
+    09-05/06 存盘 kf desc 的锚块内含 `_FALLBACK_SURFACE="未指定"` 占位符
+    （root-fix：vimax_bridge surface 空值守卫 + derive_char_layout 改填空串）。
+    块存在但未污染（无「未指定」）或块不存在时**原样返回**——调用方以
+    「返回值 != 入参」判定是否发生过剥离；剥掉的坏块由下游锚定注入
+    （validation post_fix / step02a / vimax_bridge 组装）用干净 surface 重建。
+
+    实现单源：validation.py post_fix 与 constraints/frame_spec_repair.py 共用本函数。
+    """
+    if not desc:
+        return desc
+    if CHAR_ANCHOR_BLOCK_MARKER not in desc or "未指定" not in desc:
+        return desc
+    return desc.split(CHAR_ANCHOR_BLOCK_MARKER, 1)[0].rstrip("。！？，,;；")

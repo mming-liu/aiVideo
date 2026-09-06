@@ -31,12 +31,13 @@ if str(_PROJECT_ROOT) not in sys.path:
 from .base import Constraint
 from .types import RepairRecord, Severity
 
+import storyboard_refs
 
-# 与 storyboard_refs.SHOT_SIZES 短名一致（validation._shot_size_level 同口径）
-_FRAMING_WORDS = (
-    "大特写", "特写", "中近景", "近景", "中景", "中远景",
-    "全景", "远景", "大远景", "鸟瞰远景",
-)
+# 官方景别短名 = SHOT_SIZES 每项首段（validation._shot_size_level 同口径），
+# 单源派生，不再手抄副本（旧副本曾多出「近景」与源头漂移）。
+# 「近景」不在官方 9 种内但属合法景别词：仅用于「已含景别词→跳过回填」判定；
+# 推断返回值仍只用官方词表，避免注入官方外景别。
+_FRAMING_WORDS = tuple(s.split(" ")[0] for s in storyboard_refs.SHOT_SIZES) + ("近景",)
 
 # 空镜/环境词（无人物画面）
 _EMPTY_SCENE_WORDS = ("空镜", "环境", "涟漪", "月光洒", "月色", "星光", "薄雾",

@@ -217,11 +217,12 @@ def sanitize_narration(text: str) -> str:
 # 本表只用于 400 重试前的二次降级（比全表激进，会软化剧情张力），不进
 # 常规 sanitize——常规路径若预替换这些词会拉低所有镜头的画面质量。
 # 长词优先；值不得含其它 key（链式铁律同上）。
+# 「抵近+人名」不做静态词条（旧版曾硬编码「抵近杨旭」，换角色即漏）——
+# 由 soften_input_text 内的正则动态保留宾语，见函数注释。
 # ========================================================================
 INPUT_SENSITIVE_SOFTEN = {
     "匕首柄抵近": "手持匕首悬停在",
     "匕首柄": "匕首",
-    "抵近杨旭": "悬停在杨旭上方",
     "抵近": "悬停在上方",
     "刺向": "指向",
     "刺入": "指向",
@@ -233,6 +234,14 @@ INPUT_SENSITIVE_SOFTEN = {
     "背后刺": "身后指向",
 }
 
+# 「抵近X」的 X 宾语捕获：2-4 个汉字（人名/身体部位/物体皆可）且后随标点/
+# 空白/串尾。首位排除助词（的了着过向至到），「抵近了杨旭」不命中——落回
+# 通用「抵近」替换（与旧版行为一致）。命中则产出「悬停在X上方」，宾语
+# 不丢失（旧版静态词条只覆盖「杨旭」一个名字，换角色/换书即漏）。
+_APPROACH_OBJECT_PATTERN = _re.compile(
+    r"抵近(?!的|了|着|过|向|至|到)([一-龥]{2,4}?)(?=[，。！？；、\s]|$)"
+)
+
 
 def soften_input_text(text: str) -> str:
     """输入侧 400 降级：持械逼临/刺击动词软化为悬停/指向（长词优先）.
@@ -240,10 +249,15 @@ def soften_input_text(text: str) -> str:
     仅在 API 400 InputTextSensitiveContentDetected 重试前调用——
     替换后 prompt 语义从「刺击」降为「指向/悬停」，保住构图要素
     （谁在哪里、持什么、朝向谁），牺牲打击接触感。
+
+    「抵近+宾语」由 _APPROACH_OBJECT_PATTERN 动态保留宾语
+    （「抵近听香，」→「悬停在听香上方」），先于通用「抵近」替换执行——
+    通用替换会把宾语悬在「悬停在上方」后面（旧版仅靠硬编码人名词条补救）。
     """
     if not text:
         return text
     out = text
+    out = _APPROACH_OBJECT_PATTERN.sub(r"悬停在\1上方", out)
     for old, new in sorted(
         INPUT_SENSITIVE_SOFTEN.items(), key=lambda kv: len(kv[0]), reverse=True
     ):

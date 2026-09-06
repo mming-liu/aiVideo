@@ -233,6 +233,13 @@ def test_soften_input_text_two_level():
         for k2 in keys:
             if k2 != k:
                 assert k2 not in v, (k, v, k2)
+    # 「抵近+人名」泛化（v6.62）：不留静态人名词条（旧版硬编码「抵近杨旭」
+    # 换角色即漏），由正则动态保留宾语——任意角色名都不得丢失
+    other = soften_input_text("短刃抵近听香，听香身躯后仰")
+    assert "抵近" not in other
+    assert "悬停在听香上方" in other
+    # 助词开头不命中捕获（落回通用替换，与旧版行为一致）
+    assert soften_input_text("抵近了杨旭，") == "悬停在上方了杨旭，"
 
 
 # ── 根因6：兽耳护栏负向列举 → 正向人类形态锚 ────────────────────────

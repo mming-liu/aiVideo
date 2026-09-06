@@ -11,6 +11,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from .base import Constraint
 from .types import RepairRecord, Severity
+from shared.frame_spec import strip_polluted_char_anchor_block
 
 
 class FrameSpecRepairConstraint(Constraint):
@@ -32,9 +33,15 @@ class FrameSpecRepairConstraint(Constraint):
             for _kf in keyframes:
                 if not isinstance(_kf, dict):
                     continue
+                # v6.62（09-06）历史坏块自救：09-05/06 存盘 kf desc 的【角色锚定】
+                # 块被 _FALLBACK_SURFACE="未指定" 占位符污染（root-fix 见
+                # shared/vimax_bridge.py surface 空值守卫 + validation.py post_fix
+                # 重生成）。存盘旧数据走新框架回放时在此剥坏块——下次锚定注入
+                # （step02a / vimax_bridge 组装）会用干净 surface 重建。
+                # 剥离逻辑单源 shared.frame_spec（与 validation.py post_fix 共用）。
                 _kd = _kf.get("desc") or ""
-                if "【角色锚定】" in _kd and "未指定" in _kd:
-                    _kd_clean = _kd.split("【角色锚定】", 1)[0].rstrip("。！？，,;；")
+                _kd_clean = strip_polluted_char_anchor_block(_kd)
+                if _kd_clean != _kd:
                     _kf["desc"] = _kd_clean
                     repairs.append(
                         RepairRecord(

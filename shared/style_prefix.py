@@ -910,6 +910,11 @@ def _preactionize_ff_transition(clause: str) -> str:
     return _staticize_ff_transition(c)   # 其余沿用旧静态化（欲起→半起身等）
 
 
+# 武器词交替组（water_break 分支共用：高举改写 + 未出水检测同源）
+_FF_WEAPON_ALT = r"(?:匕首|弯刀|短刃|长刀|剑|刃)"
+_FF_WEAPON_HELD_HIGH_RE = re.compile(r"高举的" + _FF_WEAPON_ALT)
+
+
 def _preactionize_associated_clause(clause: str, anchor: str | None) -> str | None:
     """动作前一刻路径下处理静态分句：删动作后效果、改写武器出水/视线落点/角色反应.
 
@@ -928,12 +933,13 @@ def _preactionize_associated_clause(clause: str, anchor: str | None) -> str | No
     # 3. water_break：视线汇聚匕首 → 汇聚水面；武器出水分句 → 未出水
     if anchor == "water_break":
         if "视线" in clause and any(k in clause for k in ("匕首", "高举", "寒光")):
-            return clause.replace("刺客高举的匕首", "水面涟漪") \
-                         .replace("高举的匕首", "水面涟漪") \
-                         .replace("高举的弯刀", "水面涟漪")
-        m = re.search(r"(匕首|弯刀|短刃|长刀|剑|刃)", clause)
-        if m and re.search(r"(高举|紧握|握).{0,4}(匕首|弯刀|短刃|长刀|剑|刃)", clause):
-            return f"{m.group(1)}未出水"
+            # 「[主语]高举的+武器」→ 水面涟漪。v6.62 正则化：原 3 条字面量里
+            # 「刺客高举的匕首」在合规折叠（刺客→神秘人）后永不命中（纯死条目），
+            # 且武器清单缺 短刃/长刀/剑——与下方未出水检测共用 _FF_WEAPON_ALT。
+            return _FF_WEAPON_HELD_HIGH_RE.sub("水面涟漪", clause)
+        m = re.search(_FF_WEAPON_ALT, clause)
+        if m and re.search(r"(高举|紧握|握).{0,4}" + _FF_WEAPON_ALT, clause):
+            return f"{m.group(0)}未出水"
     # 4. strike：高举武器 → 握（贴近目标，避免「高举+抵近」构图矛盾）
     if anchor == "strike" and "高举" in clause \
             and any(w in clause for w in ("匕首", "刀", "剑", "刃")):
@@ -942,14 +948,17 @@ def _preactionize_associated_clause(clause: str, anchor: str | None) -> str | No
 
 
 # 手持物+身体粘连病句：钓杆/鱼竿/伞/扇等手持物直接连在身体动作后，模型无法
-# 判断归属（「左手钓杆垂身体后仰」→ 钓杆到底在左手还是身体？）。长词优先。
+# 判断归属（「左手钓杆垂身体后仰」→ 钓杆到底在左手还是身体？）。
+# v6.62 正则化：原 5 条字面量按「左右手×物名」枚举，新物名/新主语就得加条；
+# 规则收敛为两种粘连模式（垂身体后仰 / 垂身），主语（左/右手）可选捕获，
+# 物名词表声明式维护。长模式在前。
 # ⚠️ 替换词禁用「入水/落水/没入」等 FF_MOTION_VERBS——会二次命中前一刻改写产生病句。
-_FF_GRAMMAR_HANDHELD = (
-    ("左手钓杆垂身体后仰", "左手握钓杆，钓杆垂向水面"),
-    ("右手钓杆垂身体后仰", "右手握钓杆，钓杆垂向水面"),
-    ("钓杆垂身体后仰", "握钓杆，钓杆垂向水面"),
-    ("钓杆垂身", "握钓杆，钓杆垂挂"),
-    ("鱼竿垂身体后仰", "握鱼竿，鱼竿垂向水面"),
+_FF_GRAMMAR_HANDHELD_OBJ = r"(钓杆|鱼竿|伞|扇)"
+_FF_GRAMMAR_HANDHELD_RULES = (
+    (re.compile(r"((?:左|右)手)?" + _FF_GRAMMAR_HANDHELD_OBJ + r"垂身体后仰"),
+     r"\1握\2，\2垂向水面"),
+    (re.compile(r"((?:左|右)手)?" + _FF_GRAMMAR_HANDHELD_OBJ + r"垂身"),
+     r"\1握\2，\2垂挂"),
 )
 
 
@@ -957,27 +966,14 @@ def _fix_ff_grammar(ff_desc: str) -> str:
     """ff_desc 病句语法修复（不依赖动作检测闸门，幂等）.
 
     修复 LLM 输出的手持物+身体粘连病句（钓杆/鱼竿/伞/扇 + 垂身/后仰混写），
-    让图片模型能正确理解「谁拿什么、身体什么姿势」。长词优先替换。
+    让图片模型能正确理解「谁拿什么、身体什么姿势」。长模式规则在前。
     """
     if not ff_desc:
         return ff_desc
     out = ff_desc
-    for old, new in _FF_GRAMMAR_HANDHELD:
-        if old in out:
-            out = out.replace(old, new)
+    for pat, repl in _FF_GRAMMAR_HANDHELD_RULES:
+        out = pat.sub(repl, out)
     return out
-
-
-# 潜伏威胁站位硬锚（08-09 首帧刺客朝左「背后长眼睛」）：潜伏水下+目光望向画X
-# 的目标，但没写明威胁源自己站在画左还是画右，模型自由发挥成背对目标或朝左。
-# 修复：检测「潜伏水下 + 目光望向画X的[角色]」，在分句前补「潜伏于画X水下」
-# 站位锚——威胁源站画左、望画右的目标，视线与站位同向（规则41）。
-_FF_LURK_POSITION_FIXES = (
-    # 潜伏水下 + 望向画右 → 威胁源站画左（左侧望右侧目标）
-    ("潜伏水下，目光", "潜伏于画左水下，目光"),
-    ("潜伏水下，目光", "潜伏于画左水下，目光"),
-    ("潜伏水下", "潜伏于画左水下"),
-)
 
 
 def _fix_ff_lurk_position(ff_desc: str) -> str:
