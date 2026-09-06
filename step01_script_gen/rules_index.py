@@ -40,6 +40,45 @@ class RuleEntry(TypedDict, total=False):
 
 RULES_INDEX: dict[str, RuleEntry] = {
     # ========================================================================
+    # v6.60+ — doubao 专用链（agent_plan/TEXT_PROVIDER 路径，与 deepseek 解耦）
+    # ========================================================================
+    "v6.60": {
+        "name": "doubao 专用链：DOUBAO_SYSTEM_PROMPT + 修复轮/GAP 重生 prompt + 7 个 hard_fix Constraint",
+        "date": "2026-09-05",
+        "prompt_sections": [
+            "prompts/doubao_system.md",  # 整文件（铁律 A-M/R1-R6/1-7 文本同源 doubao_repair_prompts._DOUBAO_HARD_RULE_LINES）
+        ],
+        "constraints": [
+            # 7 个 doubao 专用 Constraint（仅 agent_plan 路径注册，见 doubao_hardfix）
+            "doubao_dialogue_narration_empty",      # B.1 对白 narration 双空兜底
+            "doubao_gap_keyword_force_inject",      # B.2 GAP 关键词强制注入
+            "doubao_role_anchor_inject",            # B.3.1 角色锚点注入
+            "doubao_opening_empty_shot_insert",     # B.3.2 开篇空镜插入
+            "doubao_climax_back_inject",            # B.3.3 高潮回灌
+            "doubao_overshoulder_consistency",      # B.4 过肩机位一致性
+            "doubao_frame_spec_reconstruct",        # B.5 frame_layouts 兜底
+        ],
+        "validation_checks": [],
+        "tests": [
+            "tests/step01_script_gen/doubao_hardfix",  # 7 文件 34 测（含 register 幂等）
+        ],
+        # 非 Constraint 配套模块（构造器/规则行常量）：
+        #   doubao_pipeline.py（regen_over_limit / repair_shot_warnings / gap_regen）
+        #   doubao_repair_prompts.py（build_doubao_* 三构造器 + _DOUBAO_HARD_RULE_LINES）
+    },
+
+    # ========================================================================
+    # v6.59 — shell 环境变量覆盖 .env.content 的 PROVIDER 检测（仅 WARN）
+    # ========================================================================
+    "v6.59": {
+        "name": "PROVIDER shell 覆盖检测（shared/env_guard，不阻断）",
+        "date": "2026-09-04",
+        "constraints": [],   # 非 Constraint：main.py 模块级调 env_guard.warn_shell_overrides
+        "validation_checks": [],
+        "tests": [],
+    },
+
+    # ========================================================================
     # v6.58 — camera_movement 字段接入 3 个视频 provider（Phase C-1）
     #       + motion_desc 时间分段解析与 prompt 注入（Phase C-2）
     #       + A7 拆分镜内容重复检测 + B9 拆分镜 frame_layouts.kfs 修复
@@ -92,8 +131,9 @@ RULES_INDEX: dict[str, RuleEntry] = {
         "name": "时序三铁律（FF前一刻 / LF留接口 / motion分段写）+ 跨镜衔接 + 拆分镜kf派生",
         "date": "2026-09-02",
         "prompt_sections": [
-            "prompts/main.md:v6.51 时序三铁律（第22-25行）",
-            "prompts/hook.md:（同步适用）",
+            "prompts/main.md:v6.51 时序三铁律",
+            "prompts/main.md:v6.51.1 单镜内字段一致性",
+            "prompts/hook.md",  # 整文件同步适用
         ],
         "constraints": [
             # FF 前一刻
@@ -149,7 +189,7 @@ RULES_INDEX: dict[str, RuleEntry] = {
         "name": "红果标准（60-90s/3-8镜/≤3场景/≤4人物）+ F3-F10 硬修复",
         "date": "2026-08-28",
         "prompt_sections": [
-            "prompts/main.md:v6.49 红果场景/人物硬约束（第16-20行）",
+            "prompts/main.md:v6.49 红果场景/人物硬约束",
         ],
         "constraints": [
             "redguo_scene_char_limit",   # F5: 场景/人物硬上限（HARD）
@@ -216,16 +256,15 @@ RULES_INDEX: dict[str, RuleEntry] = {
         "name": "基础约束体系（42+ 个约束从 _hard_fix_* 迁移到 Constraint 框架）",
         "date": "2026-08-22",
         "constraints": [
-            # Phase 1 核心（A-D）
-            "injury_continuity",        # A: 致命伤持续
+            # Phase 1 核心（A-D）——名字与 ALL_CONSTRAINTS 实际 name 对齐（2026-09-06 核对）
+            "fatal_wound_continuity",   # A: 致命伤持续（旧称 injury_continuity）
             "gaze_direction",           # B: 视线方向
-            "prop_position",            # C: 道具空间方位
-            "kf_pre_post_conflict",     # D: kf 时序矛盾
+            "prop_spatial_anchor",      # C: 道具空间方位（旧称 prop_position）
+            "kf_temporal_consistency",  # D: kf 时序矛盾（旧称 kf_pre_post_conflict）
             # Phase 2（E-K）
             "kf_time_window_alignment", # E: kf 时段缺段
             "kf_t_sec_bounds",          # F: kf t_sec 越界
             "kf_monotonic",             # F1: kf 单调性
-            "kf_time_window_alignment", # E
             "hook_duration",            # R: hook 时长下限
             "opening_hook",             # K: 开篇冲突
             # Phase 3 更多（W开头+其他）
@@ -245,11 +284,10 @@ RULES_INDEX: dict[str, RuleEntry] = {
             "char_layout_sync",         # N: char_layout 同步
             "facing_to_gaze",           # T2: 面向→凝望
             "boat_width",               # T1: 船体宽度
-            "boat_crop",                # V: 船体裁切
+            "boat_crop_strip",          # V: 船体裁切（旧称 boat_crop）
             "prompt_repetition",        # P: 复读机
             "platform_compliance",      # O: 首镜 AI 生成标注
-            "conflict_detector",        # 矛盾检测器
-            "platform_compliance",
+            # conflict_detector：独立检测器（engine.detect_and_log 直调，非 Constraint 子类）
         ],
         "validation_checks": [
             # 旧 validation.py 中 50+ 个 _check_* 函数（逐步迁移到 Constraint）

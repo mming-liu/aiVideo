@@ -122,6 +122,7 @@ def run_hard_fix(
     *,
     is_in_repair_loop: bool = False,
     is_final_pass: bool = False,
+    return_report: bool = False,
 ) -> Any:
     """main.py 用的便捷入口：跑硬修复层.
 
@@ -131,7 +132,8 @@ def run_hard_fix(
         is_final_pass: True=main.py:1664 调用（_compute_timecodes 后）
 
     Returns:
-        修改后的 script（与旧 _hard_fix_shot_prompts 兼容，直接返回 script）
+        修改后的 script（与旧 _hard_fix_shot_prompts 兼容，直接返回 script）；
+        return_report=True 时返回 (script, RepairReport)
 
     Switch:
         - HARD_FIX_USE_OLD=1 → 走旧 _hard_fix_shot_prompts 路径（回退）
@@ -146,14 +148,15 @@ def run_hard_fix(
     if use_old:
         try:
             from step01_script_gen.validation import hard_fix_shot_prompts as _old_hfix
-            return _old_hfix(script)
+            script = _old_hfix(script)
+            return (script, RepairReport()) if return_report else script
         except Exception as e:
             try:
                 from shared.tee_logger import get_logger
                 get_logger().warn(f"[HARD_FIX] 旧路径失败: {e}")
             except Exception:
                 pass
-            return script
+            return (script, RepairReport()) if return_report else script
 
     # 默认：跑新 Constraint 框架
     try:
@@ -191,14 +194,14 @@ def run_hard_fix(
             script = trigger_regen_and_merge(script, report)
         except Exception:
             pass
-        return script
+        return (script, report) if return_report else script
     except Exception as e:
         try:
             from shared.tee_logger import get_logger
             get_logger().warn(f"[CONSTRAINT] 新框架失败: {e}，保留原版")
         except Exception:
             pass
-        return script
+        return (script, RepairReport()) if return_report else script
 
 
 # ============================================================================
@@ -219,4 +222,3 @@ def _maybe_run_conflict_detect_once() -> None:
         detect_and_log(ALL_CONSTRAINTS)
     except Exception:
         pass
-

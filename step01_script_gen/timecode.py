@@ -473,7 +473,9 @@ def _compute_timecodes(script: dict) -> None:
     _do_pre_split_oversized_shots(shots, shot_cap)
 
     # 钩子按模型 cap + fps 整数帧对齐（与 shots 一致；钩子本身不受 8s cap）
-    if hook_duration > 0:
+    if hook is None:
+        script["hook"] = None
+    elif hook_duration > 0:
         hook_duration = _align_frame_duration(hook_duration, fps)
         if dur_cap and hook_duration > dur_cap:
             hook_duration = _align_frame_duration(dur_cap, fps)

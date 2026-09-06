@@ -41,11 +41,55 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tools"))
 
 # 复用 bench_reasoning 的打分（保证横向可比）
 from bench_reasoning import score_one, _DEFAULT_WEIGHTS, aggregate, print_table, _strip_fences
 
 _PRE_EXTRACT_DIR = ROOT / "tools" / "bench_pre_extract"
+
+
+def _dump_raw(provider: str, raw: str, trial: int = 1) -> None:
+    """保存成功原始输出，便于复核解析与评分口径。"""
+    dump_dir = ROOT / "tools" / "dump"
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    name = f"{provider}__ab__t{trial}.json"
+    (dump_dir / name).write_text(raw, encoding="utf-8")
+    # 兼容旧路径：保留一个最新成功样本，方便直接打开复核。
+    (dump_dir / f"{provider}__ab.json").write_text(raw, encoding="utf-8")
+
+
+def _apply_doubao_hardfixes(script: dict) -> tuple[dict, int]:
+    """显式挂载并执行 doubao hard_fix，不依赖全局 TEXT_PROVIDER。"""
+    from step01_script_gen.doubao_hardfix import register_doubao_hardfixes
+    from step01_script_gen.constraints import run_hard_fix
+
+    register_doubao_hardfixes()
+    script, report = run_hard_fix(
+        script,
+        is_in_repair_loop=False,
+        is_final_pass=True,
+        return_report=True,
+    )
+    return script, len(getattr(report, "hard_unresolved", []))
+
+
+def _apply_final_hardfixes(provider: str, script: dict) -> tuple[dict, int]:
+    """按生产入口跑 final hard_fix；agent_plan 额外挂载 doubao 专用约束。"""
+    if provider == "agent_plan":
+        from step01_script_gen.doubao_hardfix import register_doubao_hardfixes
+
+        register_doubao_hardfixes()
+
+    from step01_script_gen.constraints import run_hard_fix
+
+    script, report = run_hard_fix(
+        script,
+        is_in_repair_loop=False,
+        is_final_pass=True,
+        return_report=True,
+    )
+    return script, len(getattr(report, "hard_unresolved", []))
 
 
 # ============================================================================
@@ -160,7 +204,13 @@ def fetch_stub() -> dict:
 # 主流程
 # ============================================================================
 
-def process_trial(provider: str, raw_res: dict, novel_text: str) -> dict:
+def process_trial(
+    provider: str,
+    raw_res: dict,
+    novel_text: str,
+    trial: int = 1,
+    dry_run: bool = False,
+) -> dict:
     """解析 + 打分（与 bench_reasoning.process_trial 同结构）."""
     cfg = provider
     label = f"[{cfg}]"
@@ -172,6 +222,8 @@ def process_trial(provider: str, raw_res: dict, novel_text: str) -> dict:
                 "elapsed": raw_res.get("elapsed", 0.0), "text_len": 0}
 
     raw = _strip_fences(raw_res["text"])
+    if not dry_run:
+        _dump_raw(provider, raw, trial)
     raw_json_ok = False
     try:
         from shared.utils.json_repair import safe_parse_json_object
@@ -193,33 +245,35 @@ def process_trial(provider: str, raw_res: dict, novel_text: str) -> dict:
         err = str(e)
         print(f"{label} 解析失败: {e}")
         import traceback
-        traceback.trace_exc = traceback.print_exc
         traceback.print_exc()
-        dump_dir = ROOT / "tools" / "dump"
-        dump_dir.mkdir(parents=True, exist_ok=True)
-        (dump_dir / f"{provider}__ab.json").write_text(raw, encoding="utf-8")
+        if not dry_run:
+            _dump_raw(provider, raw, trial)
 
     warn_count = buf.getvalue().count("[WARN]")
+    hard_unresolved_count = 0
+    final_validation: dict = {}
     if parse_ok:
-        # v6.60+ (2026-09-05): agent_plan 路径上挂载 doubao 专用 hard_fix，与 main.py 保持一致
-        if provider == "agent_plan":
-            try:
-                from step01_script_gen import doubao_hardfix  # noqa: F401  触发 module-level register
-                # 从 script["characters"] 提取 bank，传入 ctx 以使 B.3.1/B.3.3 能跳出「空 bank」提前返回
-                _chars_list = (script.get("characters") or [])
-                _bank = {c.get("identifier", ""): c for c in _chars_list if c.get("identifier")}
-                from step01_script_gen.constraints.context import ConstraintContext
-                from step01_script_gen.constraints.engine import ALL_CONSTRAINTS
-                _ctx = ConstraintContext.from_script(script, characters_bank=_bank, is_final_pass=True)
-                for _cn in ALL_CONSTRAINTS:
-                    _cn.apply(_ctx)
-            except Exception as _bhfe:
-                print(f"{label} doubao hard_fix 失败（保留原版）: {_bhfe}")
+        # 与 main.py 落盘前路径一致：双方都跑 final hard_fix；
+        # agent_plan 额外挂载 doubao 专用 hard_fix。
+        try:
+            script, hard_unresolved_count = _apply_final_hardfixes(provider, script)
+        except Exception as _bhfe:
+            print(f"{label} final hard_fix 失败（保留原版）: {_bhfe}")
         try:
             from step01_script_gen.timecode import _compute_timecodes
             _compute_timecodes(script)
+        except Exception as _tce:
+            warn_count += 1
+            print(f"{label} timecode 计算失败: {_tce}")
+        try:
+            from step01_script_gen.gap_analysis import validate_script_gap
+            with contextlib.redirect_stdout(io.StringIO()):
+                final_validation = validate_script_gap(script, novel_text)
+            if not final_validation.get("overall_pass"):
+                warn_count += 1
         except Exception:
-            pass
+            warn_count += 1
+        warn_count += hard_unresolved_count
         n = len(script.get("shots", []))
         out_tok = (raw_res["usage"] or {}).get("output_tokens")
         print(f"{label} OK: {n} 镜  warn={warn_count}  out_tok={out_tok}  "
@@ -231,6 +285,8 @@ def process_trial(provider: str, raw_res: dict, novel_text: str) -> dict:
                               raw_res["usage"], provider),
         "elapsed": raw_res["elapsed"], "text_len": len(raw_res["text"]),
         "parse_err": err,
+        "hard_unresolved_count": hard_unresolved_count,
+        "final_gap_pass": bool(final_validation.get("overall_pass")),
     }
 
 
@@ -249,7 +305,8 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=None,
                     help="覆盖 provider 默认 max_tokens（None=用 provider 自身配置）")
     ap.add_argument("--workers", type=int, default=2)
-    ap.add_argument("--dry-run", action="store_true", help="用桩数据验证管线")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="用桩数据验证管线（不覆盖真实 raw dump）")
     ap.add_argument("--results", default=str(ROOT / "tools" / "bench_ab_results.json"))
     args = ap.parse_args()
 
@@ -319,7 +376,9 @@ def main() -> None:
         for fut in as_completed(fut_map):
             p, t = fut_map[fut]
             raw = fut.result()
-            trials.append(process_trial(p, raw, novel_text))
+            trials.append(process_trial(
+                p, raw, novel_text, trial=t + 1, dry_run=args.dry_run
+            ))
 
     rows = aggregate(trials, _DEFAULT_WEIGHTS)
     print_table(rows, _DEFAULT_WEIGHTS)

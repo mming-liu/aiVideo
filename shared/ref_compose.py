@@ -23,6 +23,7 @@
 import os
 from pathlib import Path
 
+from shared.model_alias import normalize_model_name
 from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
 
 # (模型名子串, 参考图上限)。顺序敏感：具体在前，泛化在后。
@@ -39,7 +40,7 @@ MODEL_REF_LIMITS: list[tuple[str, int]] = [
     ("doubao-seedream-5-0-lite", 3),
     # --- 图片模型（I2I 参考图）---
     ("qwen-image", 3),
-    ("wan2.7-image", 9),
+    ("wan2-7-image", 9),
     ("wan2.6-image", 9),
     # Seedream 按官方档位细分（与 shared/model_caps.SEEDREAM_CAPS 一致）
     ("seedream-5-0-pro", 10),
@@ -57,7 +58,7 @@ MODEL_REF_LIMITS: list[tuple[str, int]] = [
     ("image-01", 1),
     # --- 视频模型（r2v 参考 media）---
     ("happyhorse", 9),
-    ("wan2.7-r2v", 5),
+    ("wan2-7-r2v", 5),
     ("wan2.6-r2v", 5),
     ("minimax-h3", 9),
     # 破折号形式匹配真实模型 ID（doubao-seedance-2-5-*）；点号形式兜底旧写法
@@ -82,7 +83,7 @@ def get_ref_limit(model: str | None, default: int | None = None) -> int:
         default = int(env) if env else 3
     if not model:
         return default
-    m = model.lower()
+    m = normalize_model_name(model)
     for pat, lim in MODEL_REF_LIMITS:
         if pat in m:
             return lim

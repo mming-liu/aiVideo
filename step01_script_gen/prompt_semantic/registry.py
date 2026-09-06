@@ -260,7 +260,10 @@ ANIMAL_FACE_KEYWORDS: Tuple[str, ...] = (
 )
 
 # 动物脸型护栏全文（追加到角色 anchor 末尾）
-NO_ANIMAL_FEATURES_GUARD: str = "（头面部无任何动物特征：无兽耳/无角/无犄角/无鳞/无羽毛）"
+# v6.61（2026-09-05 hook kf1 刺客猫耳根因）：负向列举「无兽耳/无角/无犄角」
+# 在 Seedream 5.0-lite 上是提到即渲染（负向词 priming，服从度弱）——改为
+# 正向人类形态锚（人类耳朵/无头饰遮挡），不再罗列动物器官名。
+NO_ANIMAL_FEATURES_GUARD: str = "（标准人类头面部：人类圆形耳廓，头部除发饰外无其他附加物）"
 
 # "X系脸"动物比喻 → 具体人类五官词（v6.50，08-28）。
 # 源头是 character_extractor 的脸型教学词表与 _FACE_SHAPE_MAPPING；比喻词

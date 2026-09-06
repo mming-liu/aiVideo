@@ -37,21 +37,31 @@ from step01_script_gen.prompt_semantic import (
 )
 
 from ._base_classes import Constraint, RepairRecord
+from shared.scene_objects_bank import build_boat_replacement
+
+
+def _rule_enabled(flag: str) -> bool:
+    """v6.43 单规则独立开关（对齐 base.py CONSTRAINT_<NAME>_ENABLED 惯例）.
+
+    env: CONSTRAINT_V643_<FLAG>_ENABLED，默认 "1"（全开=历史行为）。
+    每次调用现读（代价可忽略），支持 monkeypatch.setenv 测试与运行期热切。
+    """
+    import os
+    return os.getenv(f"CONSTRAINT_V643_{flag}_ENABLED", "1").strip() == "1"
 
 
 # === 规则 1：小舟 → 舴艋舟 ===
 
-# 匹配「一叶小舟/小舟/木舟/一叶舟」等无尺寸通用词
-# 1. 一叶小舟 → 一叶无篷舴艋舟（宽1.4米，可容3人）
-# 2. 小舟 → 同上
-# 3. 木舟 → 同上
-# 4. 一叶舟 → 同上
-_BOAT_REPLACEMENTS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"一叶小舟"), "一叶无篷舴艋舟（宽1.4米，可容3人）"),
-    (re.compile(r"一叶木舟"), "一叶无篷舴艋舟（宽1.4米，可容3人）"),
-    (re.compile(r"一叶舟"), "一叶无篷舴艋舟（宽1.4米，可容3人）"),
-    (re.compile(r"小舟"), "无篷舴艋舟（宽1.4米，可容3人）"),
-    (re.compile(r"木舟"), "无篷舴艋舟（宽1.4米，可容3人）"),
+# 匹配「一叶小舟/小舟/木舟/一叶舟」等无尺寸通用词（替换文本动态生成，见
+# shared/scene_objects_bank.build_boat_replacement——尺寸以 scene_objects 为
+# 唯一来源（v6.52 教训），未命中才回退历史兜底「宽1.4米，可容3人」）
+# 1. 一叶小舟 / 2. 小舟 / 3. 木舟 / 4. 一叶舟
+_BOAT_PATTERNS: list[re.Pattern] = [
+    re.compile(r"一叶小舟"),
+    re.compile(r"一叶木舟"),
+    re.compile(r"一叶舟"),
+    re.compile(r"小舟"),
+    re.compile(r"木舟"),
 ]
 # 兜底用：若 ff_desc/prompt 完全没出现"船/舟"，保留空白让 LLM 补（不强加）
 
@@ -432,6 +442,8 @@ class V643PromptEnforcementConstraint(Constraint):
         'int' object is not iterable 4 次。改为返回 []（修复次数已在 log 报告）。
         """
         fixed = 0
+        scene_objects = getattr(ctx, "script", None)
+        scene_objects = scene_objects.get("scene_objects") or {} if isinstance(scene_objects, dict) else {}
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
             # 先保存原始 ff_desc / lf_desc（kf 重叠检测需要 LLM 写的版本，不含改写后）
             orig_ff = shot.get("ff_desc", "")
@@ -441,31 +453,46 @@ class V643PromptEnforcementConstraint(Constraint):
             anchors = scene_anchors_for(shot_location)
             # 从 char_layout 抽角色名 + position（Rule 4 替换需要）
             char_names, char_positions = self._extract_char_names_and_positions(shot)
+            # 规则 1 替换文本：船尺寸以 scene_objects 为唯一来源（v6.52 教训）
+            boat_repl = build_boat_replacement(shot, scene_objects)
             for field in ("ff_desc", "lf_desc", "prompt", "motion_desc"):
                 text = shot.get(field, "")
                 if not text or not isinstance(text, str):
                     continue
-                new_text = self._enforce_all(text, shot, field, char_names, anchors, char_positions)
+                new_text = self._enforce_all(
+                    text, shot, field, char_names, anchors, char_positions,
+                    boat_repl=boat_repl,
+                )
                 if new_text != text:
                     shot[field] = new_text
                     fixed += 1
             # kf pre 复述 检测：对照原始 ff/lf（未改写版），更准
-            fixed += self._fix_kf_repetition(shot, orig_ff, orig_lf)
+            if _rule_enabled("KF_REPETITION"):
+                bank_names = [
+                    str(k) for k, v in (getattr(ctx, "characters_bank", None) or {}).items()
+                ]
+                fixed += self._fix_kf_repetition(shot, orig_ff, orig_lf, char_names + bank_names)
             # Rule 5：threat_source facing 背对 → 侧身
-            fixed += _fix_threat_facing(shot)
+            if _rule_enabled("THREAT_FACING"):
+                fixed += _fix_threat_facing(shot)
             # Rule 6：时序塌缩（pre-state + attack 混写）
-            fixed += _fix_temporal_collapse(shot)
+            if _rule_enabled("TEMPORAL_COLLAPSE"):
+                fixed += _fix_temporal_collapse(shot)
             # Rule 7：道具主谓歧义（"X手+道具" 误读为握）
-            fixed += _fix_handle_ambiguity(shot)
+            if _rule_enabled("HANDLE_AMBIGUITY"):
+                fixed += _fix_handle_ambiguity(shot)
             # Rule 8：锚点位置约束（"一点X" 模糊数量词追加空间方位）
-            fixed += _fix_vague_anchor(shot)
+            if _rule_enabled("VAGUE_ANCHOR"):
+                fixed += _fix_vague_anchor(shot)
             # Rule 9：模糊方位词替换（"回首"→"侧头凝望"）
-            fixed += _fix_vague_direction(shot)
+            if _rule_enabled("VAGUE_DIRECTION"):
+                fixed += _fix_vague_direction(shot)
             # === v6.43 实体-空间语义层（PromptSemanticNormalizer）===
             # 原 Rule 10/11/12（角色 anchor dedup / 道具物理位置 / 刺客水下矛盾）
             # 重构为通用语义层：新增 prop/角色/场景只改 prompt_semantic/registry.py
             # 数据表，不改代码。详见 step01_script_gen/prompt_semantic/ 包。
-            fixed += self._run_semantic_normalizer(shot, is_hook)
+            if _rule_enabled("SEMANTIC_NORMALIZER"):
+                fixed += self._run_semantic_normalizer(shot, is_hook)
         # v6.42 框架要求 list[RepairRecord]；按修复次数填占位记录（engine
         # 层走 repairs_by_constraint 计数，不消费元素内容）。
         if fixed > 0:
@@ -543,26 +570,38 @@ class V643PromptEnforcementConstraint(Constraint):
     def _enforce_all(
         self, text: str, shot: dict, field: str,
         char_names: list[str], anchors: tuple, char_positions: dict[str, str] | None = None,
+        boat_repl: str | None = None,
     ) -> str:
-        """对单字段应用所有规则."""
+        """对单字段应用所有规则（各段可经 CONSTRAINT_V643_*_ENABLED 独立禁用）.
+
+        boat_repl=None（默认）时按空 scene_objects 自动生成（走历史兜底文本）；
+        apply() 传本镜动态生成的替换文本。
+        """
         out = text
-        # 规则 1：小舟 → 舴艋舟
-        for pat, repl in _BOAT_REPLACEMENTS:
-            out = pat.sub(repl, out)
+        # 规则 1：小舟 → 舴艋舟（替换文本按本镜 scene_objects 动态生成）
+        if _rule_enabled("BOAT"):
+            if boat_repl is None:
+                boat_repl = build_boat_replacement(shot, {})
+            for pat in _BOAT_PATTERNS:
+                out = pat.sub(boat_repl, out)
         # 规则 2：仰卧 + 头部固定
-        if _needs_head_fix(out):
+        if _rule_enabled("HEAD_FIX") and _needs_head_fix(out):
             out = _append_head_fix(out)
         # 规则 4：抽象方位 → 具象（按本镜 location 场景 anchor 动态生成）
-        if anchors:
+        if _rule_enabled("ABSTRACT_ANCHOR") and anchors:
             replacements = _make_pattern_replacements(char_names, anchors, char_positions)
             for pat, repl in replacements:
                 out = pat.sub(repl, out)
         return out
 
-    def _fix_kf_repetition(self, shot: dict, orig_ff: str, orig_lf: str) -> int:
+    def _fix_kf_repetition(
+        self, shot: dict, orig_ff: str, orig_lf: str, candidate_names: list[str] | None = None,
+    ) -> int:
         """kf pre 与原始 ff_desc 文本重叠 >70% → 改写为构图级细节模板.
 
         用原始 ff/lf（未改写版）做对照：避免改写后重叠率被稀释导致漏检。
+        candidate_names：本镜可用角色名（char_layout + characters_bank），替代
+        写死的小说角色正则（v6.60.1）；出现在 ff 里的才进改写句。
         返回 1 表示修复了至少一个 kf，0 表示无 kf 需修复。
         """
         fixed = 0
@@ -586,17 +625,23 @@ class V643PromptEnforcementConstraint(Constraint):
             overlap = _overlap_ratio(kf_desc, ff)
             if overlap < 0.40:
                 continue
-            # 强制改写：保留 stage/t_sec/desc 长度相近，改为"构图级细节"模板
-            # 提取 ff_desc 的角色列表（粗略正则）保持信息密度
-            chars_in_ff = re.findall(r"刺客|杨旭|听香|张十三|老汉|肖管事|神秘人", ff)
-            chars_unique = list(dict.fromkeys(chars_in_ff))  # 保序去重
-            new_desc = (
-                f"中近景构图：静态定格。"
-                + "，".join(
+            # 强制改写：保留 stage/t_sec/desc 长度相近，改为"构图级细节"模板。
+            # 角色名从 char_layout/角色库动态取（v6.60.1 替代写死的小说角色正则），
+            # 出现在 ff 文本里的才点名（保序去重）；场景景物不再写死——旧模板的
+            # "船舷木纹/荷叶/冷月"是锦衣夜行专属，换小说即错，环境细节交给 scene_anchors。
+            chars_unique = [n for n in dict.fromkeys(candidate_names or []) if n and n in ff]
+            name_part = (
+                "，".join(
                     f"{c}姿态细节已在前一刻画面定格（不重复本镜 ff_desc 描述）"
                     for c in chars_unique
                 )
-                + "。前景船舷木纹/荷叶虚化，中景角色姿态定格，背景冷月/弦月倒影。镜头固定，等待动作启动。"
+                if chars_unique
+                else "出镜角色姿态细节已在前一刻画面定格（不重复本镜 ff_desc 描述）"
+            )
+            new_desc = (
+                f"中近景构图：静态定格。"
+                + name_part
+                + "。前景环境虚化，中景角色姿态定格，背景光位与首帧一致。镜头固定，等待动作启动。"
             )
             kf["desc"] = new_desc
             fixed += 1
@@ -614,10 +659,10 @@ class V643PromptEnforcementConstraint(Constraint):
             overlap = _overlap_ratio(kf_desc, lf)
             if overlap < 0.50:
                 continue
-            # 改写为 lf 后续环境留痕
+            # 改写为 lf 后续环境留痕（留痕类型按本镜场景选择，不写死水乡意象）
             kf["desc"] = (
                 "远景/中景构图：lf 静态定格后的环境留痕。"
-                "水面涟漪圈数/血迹扩散范围/散落物具体位置已标定。"
+                "环境留痕细节（水面涟漪/烟尘/散落物等，按本镜场景选择）位置已标定。"
                 "角色体态最终定格（手指松开/双眼圆睁角度固定）。"
                 "等待下一镜切换。"
             )

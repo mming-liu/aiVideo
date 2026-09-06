@@ -1649,6 +1649,7 @@ def _inject_object_size_anchor(shot: dict, text: str) -> str:
     text = re.sub(r"[（(][^（）()]*\d+(?:\.\d+)?米[^（）()]*[）)]", "", text)
     try:
         from shared.paths import script_file
+        from shared.scene_objects_bank import iter_matched_scene_objects
         import json as _json
         script_path = script_file()
         if not script_path.exists():
@@ -1664,25 +1665,8 @@ def _inject_object_size_anchor(shot: dict, text: str) -> str:
             shot.get("motion_desc", "") or shot.get("prompt", ""),
             shot.get("main_subject", ""),
         ]))
-        for name, obj in objs.items():
-            if not isinstance(obj, dict):
-                continue
-            # 匹配源：物体名 + consistent_terms（统一称呼）+ 形制字
-            match_sources = [name] + list(obj.get("consistent_terms", []) or [])
-            subtype = obj.get("subtype", "")
-            if subtype:
-                match_sources.append(subtype)
-            # 1) location 模糊匹配（B5：公共连续子串 ≥2 字）
-            from shared.assets_bank import scene_matches_location
-            loc_matched = any(
-                scene_matches_location(src, loc) for src in match_sources if src
-            )
-            # 2) 镜头全文子串匹配（对象名/称呼/形制字出现在 ff/lf/motion/prompt）
-            text_matched = any(
-                src and src in probe for src in match_sources if src
-            )
-            if not (loc_matched or text_matched):
-                continue
+        for name, obj in iter_matched_scene_objects(objs, loc, probe):
+            subtype = str(obj.get("subtype", "") or "")
             length = obj.get("length_m")
             width = obj.get("width_m")
             # B5 比例后验：长宽比离谱（长/宽 <1.5 或 >12）说明 LLM 推导的比例可疑，
@@ -1987,6 +1971,8 @@ def _extract_char_layout(
     characters: list | None = None,
     role_scan_text: str | None = None,
     water_state: bool = True,
+    frame_kind: str | None = None,
+    kf_index: int | None = None,
 ) -> str:
     """提取本镜出镜角色的姿态/位置/朝向锚定块（关键帧/首帧共用）.
 
@@ -1999,6 +1985,16 @@ def _extract_char_layout(
     water_state=False（首帧）：只取姿态/位置/朝向，不补水面浪花——但船体完整性
     （"完整小舟、船头船尾齐全"）是基础构图约束，无论首/尾/关键帧只要画面有船有
     角色都应补（08-23 用户反馈：首帧"船身延伸出画外"把船尾裁掉）。
+
+    v6.61（2026-09-05）spec 驱动迁移（治 09-05 hook lf 站立刺客 / kf 三重矛盾根因）：
+    - 传 frame_kind 时角色出镜表 = frame_layouts.{ff/lf/kfs[i]} on_screen=true
+      （与 _inject_frame_spec / QC _expected_persons 同源），威胁源可见性由
+      spec on_screen 字段判定，**不再用合并 scan 跑 _threat_visible_in**——
+      旧合并文本（含 ff/motion 的「潜伏/破水」）会让 lf 帧误判威胁源可见，
+      锚定块写出「神秘人…朝攻击目标」逼模型画站立刺客。
+    - on_screen=false 角色完全不进锚定块（lf 互斥在锚定块路径的复发即此修）。
+    - 老章降级：shot 无 frame_layouts 或未传 frame_kind → 旧合并 scan +
+      _threat_visible_in 启发式（保留兼容）。
 
     返回形如：
       【角色锚定】杨旭仰卧船头（面向画右），听香跪坐船尾（面向画左），
@@ -2017,19 +2013,44 @@ def _extract_char_layout(
         ]))
         if not scan:
             return ""
-        # 08-16：威胁源帧级可见性门控——该帧描述里威胁源仅以非实体方式出现
-        # （水下黑影/刀尖/没入水中）→ 不锚定为完整出场角色，否则【角色锚定】
-        # 写出"神秘人画右水下（面向画左的杨旭）"逼图片模型画出完整刺客。
-        def _char_in_stage(c):
-            ident = c.get("identifier", "")
-            if not ident:
-                return False
-            if not any(a in scan for a in _char_aliases(ident, characters)):
-                return False
-            if ident in _THREAT_IDS and _threat_visible_in(scan, characters) is not True:
-                return False
-            return True
-        onstage = [c for c in characters if _char_in_stage(c)]
+
+        # ── v6.61 spec 驱动出镜表（新章；与 _inject_frame_spec/QC 同源）──
+        # onstage/on_screen 决定谁进锚定块；威胁源可见性由 spec 判定，
+        # 不再走合并 scan 的 _threat_visible_in（旧路径误判 lf 可见）。
+        _fl = shot.get("frame_layouts")
+        _spec_items: list | None = None
+        if frame_kind and isinstance(_fl, dict):
+            try:
+                from shared.frame_spec import get_frame_spec
+                _spec_items = [
+                    s for s in get_frame_spec(shot, frame_kind, kf_index)
+                    if isinstance(s, dict) and s.get("on_screen") is True
+                ]
+            except Exception:
+                _spec_items = None
+        if _spec_items is not None:
+            # spec 模式：spec 里的名字经 alias 折叠映射回 characters
+            _spec_names = {str(s.get("name", "")).strip() for s in _spec_items
+                           if str(s.get("name", "")).strip()}
+            def _char_in_stage(c):
+                ident = c.get("identifier", "")
+                if not ident:
+                    return False
+                # spec 名（可能是合规替换后的"神秘人"）↔ identifier（"刺客"）
+                return any(nm in _spec_names for nm in _char_aliases(ident, characters))
+            onstage = [c for c in characters if _char_in_stage(c)]
+        else:
+            # 旧章降级：合并 scan 启发式 + 威胁源可见性门控（原逻辑）
+            def _char_in_stage(c):
+                ident = c.get("identifier", "")
+                if not ident:
+                    return False
+                if not any(a in scan for a in _char_aliases(ident, characters)):
+                    return False
+                if ident in _THREAT_IDS and _threat_visible_in(scan, characters) is not True:
+                    return False
+                return True
+            onstage = [c for c in characters if _char_in_stage(c)]
         if not onstage:
             return ""
 
@@ -2045,6 +2066,20 @@ def _extract_char_layout(
                         layout_by_name[nm] = item
 
         parts = []
+        # v6.61：spec 模式下建立 per-frame 站位表（name → spec item），
+        # 优先级高于 char_layout 与 scan 提取——spec 是该帧自己的出镜表，
+        # 治「神秘人潜伏水面（取自 ff_desc）vs 单膝跪船舷（kf1 desc）」三重矛盾。
+        _spec_by_ident: dict[str, dict] = {}
+        if _spec_items is not None:
+            for _si in _spec_items:
+                _snm = str(_si.get("name", "")).strip()
+                if not _snm:
+                    continue
+                # spec 名折叠回全部 identifier 别名（神秘人→刺客）
+                for _c in characters:
+                    _cid = str(_c.get("identifier", "")).strip()
+                    if _cid and _cid not in _spec_by_ident and _snm in _char_aliases(_cid, characters):
+                        _spec_by_ident[_cid] = _si
         for c in onstage:
             ident = c.get("identifier", "")
             pose = _extract_kf_pose(scan, ident)
@@ -2055,12 +2090,30 @@ def _extract_char_layout(
                 if _nm in layout_by_name:
                     layout_item = layout_by_name[_nm]
                     break
+            # v6.61：spec 站位优先（该帧自己的出镜表；char_layout 是全镜共享兜底）
+            _spec_item = _spec_by_ident.get(ident)
+            if _spec_item is not None:
+                layout_item = _spec_item
+                # spec 模式下 pose 以 spec 为准：scan 是合并全文（含 ff/lf/motion
+                # 的跨帧姿态「潜伏/仰倒」），与 kfs[i] 本帧 pose 直接矛盾——
+                # kf1 实测「潜伏（单膝跪舷）」双姿态并存。spec 有 pose 时丢弃
+                # scan 提取值，保证单帧单一姿态。
+                if str(_spec_item.get("pose", "")).strip():
+                    pose = ""
             seg = ident
             if pose:
                 seg += pose
             if layout_item:
                 pos = str(layout_item.get("position", "")).strip()
+                # v6.61：spec 项无 facing 字段——映射 pose（"单膝跪舷"）+
+                # gaze_target（"画中下方杨旭"）到朝向（与 derive_char_layout
+                # 的 pose→facing 映射同源）；char_layout 老结构仍读 facing。
                 facing = str(layout_item.get("facing", "")).strip()
+                if not facing:
+                    facing = str(layout_item.get("pose", "")).strip()
+                _gaze = str(layout_item.get("gaze_target", "")).strip()
+                if _gaze and _gaze not in ("无", "无视线", ""):
+                    facing = f"{facing}，目光看向{_gaze}" if facing else f"目光看向{_gaze}"
                 # v6.45 char_layout.surface 注入（站位错位兜底）：角色所在承重
                 # 面（如"船尾"/"船头"/"甲板"）必须在锚定块里出现，否则 LLM 自由
                 # 发挥成"船外的水面"——08-26 hook 0 听香站在水里实测。
@@ -2104,7 +2157,17 @@ def _extract_char_layout(
         block = "【角色锚定】" + "，".join(parts)
 
         # 威胁源朝向兜底：有威胁源而 scan 无朝向表达 → 追加描述句
-        has_threat = any(w in scan for w in _THREAT_WORDS_ENLARGED)
+        # v6.61：spec 模式下「威胁源在 onstage」= spec 判定该帧可见，scan 含
+        # ff/motion 的「潜伏/破水」不再影响判定——兜底只对真正的可见威胁源触发
+        # （旧逻辑 has_threat 查 scan 全文 → lf 威胁源已没入仍追加朝向句）。
+        if _spec_items is not None:
+            has_threat = any(
+                _spec_by_ident.get(c.get("identifier", ""), {}).get("name", "")
+                and any(a in _THREAT_KEYWORDS for a in _char_aliases(c.get("identifier", ""), characters))
+                for c in onstage
+            )
+        else:
+            has_threat = any(w in scan for w in _THREAT_WORDS_ENLARGED)
         has_orient = any(k in scan for k in (
             "面向", "朝向", "侧身", "紧盯画", "盯向画", "望向画", "朝画", "逼近",
         ))
@@ -2122,14 +2185,22 @@ def _extract_char_layout(
         _water_names: list[str] = []
         for c in onstage:
             ident_c = c.get("identifier", "")
-            li = None
-            for _nm in _char_aliases(ident_c, characters):
-                if _nm in layout_by_name:
-                    li = layout_by_name[_nm]
-                    break
-            _surf = str((li or {}).get("surface", "")) if isinstance(li, dict) else ""
-            _pose_c = _extract_kf_pose(scan, ident_c) or ""
-            if any(w in (_surf + _pose_c) for w in _WATER_MARKS):
+            li = _spec_by_ident.get(ident_c)
+            if li is None:
+                for _nm in _char_aliases(ident_c, characters):
+                    if _nm in layout_by_name:
+                        li = layout_by_name[_nm]
+                        break
+            _surf = str((li or {}).get("surface", "") or (li or {}).get("position", "")) \
+                if isinstance(li, dict) else ""
+            # v6.61：spec 模式水面状态只看 spec 的 position/pose（该帧自己的
+            # 事实）——scan 含 ff/lf/motion 跨帧水词（「潜伏水下」），KF2 刺客
+            # 半俯身船上会被误收「处于水面/水中」。
+            if _spec_items is not None:
+                _water_probe = _surf + str((li or {}).get("pose", "") if isinstance(li, dict) else "")
+            else:
+                _water_probe = _surf + (_extract_kf_pose(scan, ident_c) or "")
+            if any(w in _water_probe for w in _WATER_MARKS):
                 _water_names.append(ident_c)
 
         # 船体完整性锚（首/尾/关键帧共用）：场景含船且画面有角色 → 补"完整小舟、
@@ -2149,12 +2220,29 @@ def _extract_char_layout(
                     # v6.45（08-26）⚠️ 强调前缀——image model 对末尾约束遵守率低，
                     # 加 ⚠️ 符号提升视觉权重（与"画面稳定·不闪烁"等约束同款模式）。
                     if _water_names:
-                        # 有水面角色：船上/水中分句，并点名袭击姿态（防「推船随行」）
-                        _wnames = "、".join(_water_names)
-                        block += (f"。⚠️ 完整小舟在画中、船头船尾齐全不缺失。"
-                                  f"{_wnames}半身浸在船侧水中、身体静止面向船上目标，"
-                                  f"呈袭击/威胁姿态（禁止推船、撑船、扶船随行）；"
-                                  f"其余角色必须严格在船上，禁止出现在船外水面")
+                        # v6.61：spec 模式用各角色自己的 spec pose 描述水面状态——
+                        # 旧模板硬编码「半身浸在船侧水中、呈袭击/威胁姿态」，
+                        # 对 ff「潜伏水下仅暗影」过于激进（把模型推向画完整
+                        # 袭击者，09-05 hook ff 4 次 critical 链一环）。
+                        _pose_by_name = {
+                            str(((_spec_by_ident.get(c.get("identifier", "")) or {}).get("pose", "")) or "").strip()
+                            for c in onstage if c.get("identifier", "") in _water_names
+                        }
+                        _pose_by_name.discard("")
+                        if _spec_items is not None and _pose_by_name:
+                            _wnames = "、".join(_water_names)
+                            _poses = "、".join(sorted(_pose_by_name))
+                            block += (f"。⚠️ 完整小舟在画中、船头船尾齐全不缺失。"
+                                      f"{_wnames}处于水面/水中（{_poses}），"
+                                      f"身体朝向船上目标（禁止推船、撑船、扶船随行）；"
+                                      f"其余角色必须严格在船上，禁止出现在船外水面")
+                        else:
+                            # 有水面角色：船上/水中分句，并点名袭击姿态（防「推船随行」）
+                            _wnames = "、".join(_water_names)
+                            block += (f"。⚠️ 完整小舟在画中、船头船尾齐全不缺失。"
+                                      f"{_wnames}半身浸在船侧水中、身体静止面向船上目标，"
+                                      f"呈袭击/威胁姿态（禁止推船、撑船、扶船随行）；"
+                                      f"其余角色必须严格在船上，禁止出现在船外水面")
                     else:
                         block += "。⚠️ 完整小舟在画中、船头船尾齐全不缺失，**所有角色必须严格在船上**，禁止任何角色出现在船外水面/船头船尾缺失"
         except Exception:
@@ -2535,6 +2623,14 @@ def _build_char_anchor(ident: str, static: str, dynamic: str) -> str:
       - X 系脸 → 人类五官词替换（治听香鹿角幻觉）
       - 动物头面特征护栏
     """
+    # v6.61（09-05 hook kf1 刺客猫耳根因之一）：LLM 在 static_features 里
+    # 自带的负向兽化声明（「无兽化特征」「无任何兽化特征」）是**提到即渲染**
+    # 的 priming——Seedream 5.0-lite 对否定列举服从度弱，画了猫耳。入口剥掉
+    # 负向句（正面的 NO_ANIMAL_FEATURES_GUARD 已改正向人类形态锚）。
+    # 剥离必须在 canonical_anchor 组装**之前**（组装后改已无意义）。
+    import re as _re_beast
+    static = _re_beast.sub(r"无任何兽化特征[，。]?|无兽化特征[，。]?", "", static)
+    dynamic = _re_beast.sub(r"无任何兽化特征[，。]?|无兽化特征[，。]?", "", dynamic)
     conn = "，身着" if any(w in dynamic for w in _COSTUME_WORDS) else "，"
     _hair_state = next((w for w in _HAIR_STATE_WORDS if w in dynamic), "")
     try:
@@ -2866,12 +2962,18 @@ async def _doodle_refine_first_frame(
         img.save(annotated)
 
         # i2i 调用（单参考图 = 我们的 annotated doodle；force_multi_ref=False 走单图分支）
+        # v6.61（09-05 hook 根因 5）：显式传 save_path=output_path——provider
+        # _download 在 save_path 为空时按 frame_desc 落默认名（"doodle_refine"
+        # 不匹配首帧/尾帧/关键帧 → fallback "kf" → 存成 shot_N_kf.png 冒充
+        # 关键帧槽位，15:08 hook 实证）。显式落盘到调用方指定的临时文件，
+        # provider 中间产物不再污染关键帧命名空间。
         img_out = await image_adapter.generate_single_image(
             prompt=refined_prompt,
             reference_image_paths=[str(annotated)],
             shot_index=shot_index,
             frame_desc="doodle_refine",
             force_multi_ref=False,
+            save_path=str(output_path),
         )
         if img_out is None:
             return None
@@ -2994,9 +3096,12 @@ async def _gen_first_frame_async(
     _ff_pre = _inject_tone_anchor(shot, _ff_pre)
     # 角色姿态/位置/朝向锚定块（代码级兜底——首帧若 LLM 漏写刺客朝向/角色姿态，
     # 从 shot 全文提取补上；water_state=False 首帧是动作前一刻，不补船/水面状态）
+    # v6.61：frame_kind="first_frame" → spec 驱动出镜表（ff 威胁源潜伏水下
+    # on_screen 判定，不再走合并 scan 的 _threat_visible_in）
     _ff_anchor = _extract_char_layout(shot, characters,
                                       role_scan_text=shot.get("ff_desc", ""),
-                                      water_state=False)
+                                      water_state=False,
+                                      frame_kind="first_frame")
     if _ff_anchor:
         _ff_pre = f"{_ff_pre}。{_ff_anchor}"
     # A3 修复：道具空间方位锚定块（提取同框手持道具的落点，防自由摆放重叠）
@@ -3233,9 +3338,12 @@ async def _gen_last_frame_async(
     # 角色姿态/位置/朝向锚定块（代码级兜底——lf_desc 是动作结果态，从 shot
     # 全文提取出镜角色的终态姿态/位置，防"浪花消失/角色站位漂移"；
     # water_state=True 尾帧也补船完整+水面状态）
+    # v6.61：frame_kind="last_frame" → spec 驱动出镜表（lf 刺客 on_screen=false
+    # → 不再进锚定块，治 09-05 hook lf 站立刺客根因）
     _lf_anchor = _extract_char_layout(shot, characters,
                                       role_scan_text=shot.get("lf_desc", ""),
-                                      water_state=True)
+                                      water_state=True,
+                                      frame_kind="last_frame")
     if _lf_anchor:
         _lf_pre = f"{_lf_pre}。{_lf_anchor}"
     # A3 修复：道具空间方位锚定块（尾帧同框道具落点，防自由摆放重叠）
@@ -3520,7 +3628,12 @@ async def _gen_keyframes_async(
             # 角色姿态/位置/朝向锚定块（代码级兜底——kf_desc 常只一行动作描述，
             # 从 shot 全文提取出镜角色的姿态/位置/朝向，防"杨旭站立后倒/听香撑伞/
             # 刺客消失/船断"（code-audit 08-10 hook 关键帧质量）。首帧也注入。
-            kf_anchor = _extract_char_layout(shot, characters, role_scan_text=role_scan)
+            # v6.61：frame_kind="keyframe"+kf_index → spec 驱动出镜表（kfs[i]
+            # 自己的 on_screen + position/pose 直进锚定块，治「神秘人潜伏水面
+            # （ff_desc 残留）vs 单膝跪船舷（kf1 desc）」三重矛盾根因）。
+            kf_anchor = _extract_char_layout(shot, characters, role_scan_text=role_scan,
+                                             frame_kind="keyframe",
+                                             kf_index=_kf_idx_in_shot)
             # 08-15（PR-2）：脚本层 post_fix 已注入「【角色锚定】」骨架时跳过，防重复
             # 追加（幂等）。生成时仍由 _extract_char_layout 兜底补漏。
             if kf_anchor and "【角色锚定】" not in kf_desc:
@@ -3529,10 +3642,15 @@ async def _gen_keyframes_async(
             kf_prop = _extract_prop_layout(shot, characters, role_scan_text=role_scan)
             if kf_prop:
                 kf_desc = f"{kf_desc}。{kf_prop}"
+            # v6.61（09-05 hook kf 全部站位错根因之一）：删「环境构图与首帧保持
+            # 一致」恒定尾巴——kfs[i] 各帧站位不同（破水→跪舷→下压→倒纵），
+            # 硬说"构图与首帧一致"与 spec 差异化站位直接冲突，模型随机调和。
+            # 保留场景连续性语义但改为环境层（船/月/背景），不再约束人物布局；
+            # 人物布局由本帧 spec + desc 决定。
             kf_desc_full = (
                 f"{kf_desc}{ctx}"
-                f"，环境构图与首帧保持一致：船的朝向、月亮位置、背景建筑方位、"
-                f"镜头机位、水面荷叶分布不变，仅人物动作、表情与镜头景别按本帧描述变化，"
+                f"，环境延续首帧：船的朝向、月亮位置、背景建筑方位、"
+                f"水面荷叶分布不变（仅环境连续性约束，人物站位/动作以本帧描述为准），"
                 f"表现动作过程中的瞬间状态。"
             )
             kf_desc_full = sanitize_prompt(ensure_prefix(kf_desc_full, STYLE_PREFIX), verbose=False)

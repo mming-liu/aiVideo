@@ -303,7 +303,7 @@ class VolcengineImageService(ImageGenerationService):
                     fname_prefix = {
                         "首帧": "ff",
                         "尾帧": "lf",
-                    }.get(frame_label, "kf")
+                    }.get(frame_label, "misc")  # v6.61：未知帧类不再落 kf 槽位（doodle_refine 曾存成 shot_N_kf.png 冒充关键帧）
                 save_path = os.path.join(
                     config.OUTPUT_DIR, f"shot_{req.shot_index}_{fname_prefix}.png"
                 )

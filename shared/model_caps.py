@@ -24,13 +24,16 @@ provider 生成请求前先按模型查表，避免用全局固定常量导致�
 VIDEO_PROVIDER + VIDEO_REFERENCE_MODE 解析实际渲染分镜的视频模型
 （单镜时长上限 / 是否原生有声 / 对白发声指令风格），使上游脚本也能跟模型走。
 
-匹配策略与 shared/ref_compose.MODEL_REF_LIMITS 一致：模型 ID 小写子串匹配，
-顺序敏感（具体档位在前、泛化在后），未命中返回宽松默认值（按能力最弱档位兜底，
+匹配策略与 shared/ref_compose.MODEL_REF_LIMITS 一致：模型 ID 经
+shared.model_alias.normalize_model_name 规范化（小写 + 点号/下划线→破折号）后
+子串匹配，顺序敏感（具体档位在前、泛化在后），未命中返回宽松默认值（按能力最弱档位兜底，
 保证小尺寸/低版本请求不被误杀）。
 """
 
 import os
 from dataclasses import dataclass
+
+from shared.model_alias import normalize_model_name
 
 
 # ---------------------------------------------------------------------------
@@ -88,12 +91,9 @@ SEEDREAM_CAPS: list[tuple[str, SeedreamCap]] = [
     ("doubao-seedream-4-0-250828", SeedreamCap(("1K", "2K", "4K"), 921_600, 16_777_216, 3)),
     ("seedream-5-0-pro", SeedreamCap(("1K", "1.5K", "2K"), 921_600, 4_624_220, 10)),
     ("seedream-5-0-lite", SeedreamCap(("2K", "3K", "4K"), 3_686_400, 16_777_216, 14)),
-    # 点号形式兜底官方免费预置模型 ID（doubao-seedream-5.0-lite，方舟开通管理展示写法）
-    ("seedream-5.0-pro", SeedreamCap(("1K", "1.5K", "2K"), 921_600, 4_624_220, 10)),
-    ("seedream-5.0-lite", SeedreamCap(("2K", "3K", "4K"), 3_686_400, 16_777_216, 14)),
-    # 双点号形式（doubao-seedream-5.0.lite，方舟开通管理免费预置展示写法）
-    ("seedream-5.0.pro", SeedreamCap(("1K", "1.5K", "2K"), 921_600, 4_624_220, 10)),
-    ("seedream-5.0.lite", SeedreamCap(("2K", "3K", "4K"), 3_686_400, 16_777_216, 14)),
+    # 点号/下划线写法（doubao-seedream-5.0.lite、doubao_seedream_4_5）由
+    # shared.model_alias.normalize_model_name 归一为破折号后在此命中，
+    # 不再保留点号变体条目（v6.60.1 硬编码清理收敛）。
     ("seedream-4-5", SeedreamCap(("2K", "4K"), 3_686_400, 16_777_216, 14)),
     ("seedream-4-0", SeedreamCap(("1K", "2K", "4K"), 921_600, 16_777_216, 14)),
 ]
@@ -124,7 +124,7 @@ def get_seedream_cap(model: str | None, default: SeedreamCap | None = None) -> S
     """按模型 ID 子串查 Seedream 能力；未注册返回宽松默认."""
     if not model:
         return default or DEFAULT_SEEDREAM_CAP
-    m = model.lower()
+    m = normalize_model_name(model)
     for pat, cap in SEEDREAM_CAPS:
         if pat in m:
             return cap
@@ -135,7 +135,7 @@ def get_seedance_cap(model: str | None, default: SeedanceCap | None = None) -> S
     """按模型 ID 子串查 Seedance 能力；未注册返回宽松默认."""
     if not model:
         return default or DEFAULT_SEEDANCE_CAP
-    m = model.lower()
+    m = normalize_model_name(model)
     for pat, cap in SEEDANCE_CAPS:
         if pat in m:
             return cap
@@ -186,7 +186,8 @@ def active_video_model() -> str | None:
 #   - 百炼/dashscope wan2.7 全系列、happyhorse：官方时长 [2,15]s
 #   - Agnes：num_frames ≤441（8n+1），@24fps 最大 ≈18.4s → 取 18
 _VIDEO_DURATION_CAPS: list[tuple[str, int]] = [
-    ("wan2.7", 15),
+    # key 一律破折号形态（查表输入经 normalize_model_name 归一）
+    ("wan2-7", 15),
     ("happyhorse", 15),
     ("agnes-video", 18),
 ]
@@ -233,7 +234,7 @@ def video_supports_param(model: str | None, param: str) -> bool:
         raise ValueError(f"未知视频参数支持位: {param}（已知: {sorted(_VIDEO_KNOWN_PARAMS)}）")
     if not model:
         return True
-    m = model.lower()
+    m = normalize_model_name(model)
     for pat, unsupported in _VIDEO_PARAM_UNSUPPORTED:
         if pat in m:
             return param not in unsupported
@@ -290,7 +291,7 @@ def model_duration_range(model: str | None) -> tuple[int, int]:
     """按模型 ID 子串查 (min, max) 时长区间；未注册返回 (0, 0)（不夹取）."""
     if not model:
         return (0, 0)
-    m = model.lower()
+    m = normalize_model_name(model)
     for pat, rng in _VIDEO_DURATION_RANGES:
         if pat in m:
             return rng
@@ -301,7 +302,7 @@ def _model_duration_cap(model: str | None) -> int:
     """按模型 ID 子串查视频时长上限；未注册返回 0（不夹取，保持现状）."""
     if not model:
         return 0
-    m = model.lower()
+    m = normalize_model_name(model)
     for pat, cap in _VIDEO_DURATION_CAPS:
         if pat in m:
             return cap
@@ -330,7 +331,7 @@ _PROMPT_LENGTH_CAPS: list[tuple[str, int]] = [
     ("seedance", 500),
     # 百炼 / MiniMax 已知（Hailuo 泛化匹配 v1 全家族含 403 回退 ID；
     # T2V-01/I2V-01 系不含 minimax/hailuo 子串，需单列——漏注册会从不截断漂移）
-    ("wan2.7", 5000),
+    ("wan2-7", 5000),
     ("happyhorse", 5000),
     ("minimax-h3", 7000),
     ("hailuo", 2000),
@@ -343,7 +344,7 @@ def _model_prompt_cap(model: str | None) -> int:
     """按模型 ID 子串查 prompt 长度上限；未注册返回 0（不截断）."""
     if not model:
         return 0
-    m = model.lower()
+    m = normalize_model_name(model)
     for pat, cap in _PROMPT_LENGTH_CAPS:
         if pat in m:
             return cap

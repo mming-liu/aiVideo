@@ -123,3 +123,121 @@ class SceneObjectsBank:
         self._data["meta"]["last_updated_chapter"] = max(
             self._data["meta"]["last_updated_chapter"], chapter_num
         )
+
+
+# ===========================================================================
+# 船尺寸动态解析（v6.60.1 硬编码清理：v6_43 规则1 / T1 boat_width 共用）
+# ===========================================================================
+# 历史教训（v6.52）：硬编码「宽1.4米」与 scene_objects 动态锚（如 1.6米）并存时，
+# 模型两侧都不信、船宽随机抽奖——尺寸只允许一个来源：scene_objects。
+# 本组函数是唯一的匹配/取值入口，step01（ctx.script 内存）与 step02（bridge
+# 重读 script_result.json）共用同一协议，防两套匹配漂移。
+
+# scene_objects 未命中船规格时的兜底宽（v6.43 原硬编码值，保留为兜底而非删除）
+BOAT_FALLBACK_WIDTH_M = 1.4
+
+# B5 比例后验阈值（与 shared/vimax_bridge._inject_object_size_anchor 同口径）：
+# 长/宽比 <1.5 或 >12 视为 LLM 推导的尺寸可疑，宽度不可信
+_BOAT_RATIO_MIN, _BOAT_RATIO_MAX = 1.5, 12.0
+
+
+def iter_matched_scene_objects(
+    scene_objects: dict, loc: str, probe: str,
+) -> list[tuple[str, dict]]:
+    """v6.52 匹配协议：location 模糊匹配（公共连续子串 ≥2 字）∪ 镜头全文子串匹配.
+
+    匹配源 = 物体名 + consistent_terms（统一称呼）+ subtype（形制字）。
+    返回 [(name, obj)]，保持注册表顺序。
+    """
+    from shared.assets_bank import scene_matches_location
+    matched: list[tuple[str, dict]] = []
+    for name, obj in (scene_objects or {}).items():
+        if not isinstance(obj, dict):
+            continue
+        match_sources = [name] + list(obj.get("consistent_terms", []) or [])
+        subtype = obj.get("subtype", "")
+        if subtype:
+            match_sources.append(subtype)
+        loc_matched = any(
+            scene_matches_location(src, loc) for src in match_sources if src
+        )
+        text_matched = any(src and src in probe for src in match_sources if src)
+        if loc_matched or text_matched:
+            matched.append((name, obj))
+    return matched
+
+
+def resolve_boat_spec(shot: dict, scene_objects: dict) -> dict | None:
+    """找本镜关联的船类场景物体（v6_43 规则1 / T1 boat_width 的尺寸来源）.
+
+    判定：category 含「船/舟」，或 name/subtype 含「舟」。
+    未命中返回 None（调用方走 BOAT_FALLBACK_WIDTH_M 兜底）。
+    """
+    loc = str(shot.get("location", "") or shot.get("scene", "") or "")
+    probe = " ".join(filter(None, [
+        loc,
+        shot.get("ff_desc", "") or "",
+        shot.get("lf_desc", "") or "",
+        shot.get("motion_desc", "") or shot.get("prompt", "") or "",
+        shot.get("main_subject", "") or "",
+    ]))
+    for name, obj in iter_matched_scene_objects(scene_objects or {}, loc, probe):
+        category = str(obj.get("category", ""))
+        subtype = str(obj.get("subtype", ""))
+        if ("船" in category or "舟" in category
+                or "舟" in subtype or "舟" in name):
+            return obj
+    return None
+
+
+def _ratio_trusts_width(obj: dict) -> bool:
+    """B5 比例后验：长宽比离谱时宽度不可信（与 bridge 注入侧同口径）."""
+    length, width = obj.get("length_m"), obj.get("width_m")
+    if not length or not width:
+        return True  # 缺长度时无从验证，宽度按可信处理
+    try:
+        ratio = float(length) / float(width)
+    except (TypeError, ValueError):
+        return False
+    return _BOAT_RATIO_MIN <= ratio <= _BOAT_RATIO_MAX
+
+
+def boat_width_text(shot: dict, scene_objects: dict) -> str:
+    """本镜船宽文本「宽X米」：scene_objects 动态优先，未命中走兜底常量.
+
+    T1 boat_width（窄身→宽X米）消费。
+    """
+    spec = resolve_boat_spec(shot, scene_objects)
+    if spec and spec.get("width_m") and _ratio_trusts_width(spec):
+        try:
+            return f"宽{float(spec['width_m']):g}米"
+        except (TypeError, ValueError):
+            pass
+    return f"宽{BOAT_FALLBACK_WIDTH_M:g}米"
+
+
+def build_boat_replacement(shot: dict, scene_objects: dict) -> str:
+    """v6_43 规则1 的替换文本：小舟 → 无篷舴艋舟（长X米宽Y米[，可容N人]）.
+
+    尺寸优先 scene_objects（含 B5 比例后验）；未命中任何船规格时回退
+    历史硬编码文本「无篷舴艋舟（宽1.4米，可容3人）」（行为保持）。
+    """
+    spec = resolve_boat_spec(shot, scene_objects)
+    if not spec:
+        return f"无篷舴艋舟（宽{BOAT_FALLBACK_WIDTH_M:g}米，可容3人）"
+    length, width = spec.get("length_m"), spec.get("width_m")
+    if width and not _ratio_trusts_width(spec):
+        width = None  # 比例离谱：宽度不可信，不写
+    frags = []
+    try:
+        if length:
+            frags.append(f"长{float(length):g}米")
+        if width:
+            frags.append(f"宽{float(width):g}米")
+    except (TypeError, ValueError):
+        pass
+    if not frags:
+        return "无篷舴艋舟"
+    capacity = spec.get("capacity")
+    cap_txt = f"，可容{capacity}人" if capacity else ""
+    return f"无篷舴艋舟（{''.join(frags)}{cap_txt}）"

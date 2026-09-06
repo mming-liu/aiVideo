@@ -720,6 +720,27 @@ def frame_narrative_desc(shot: dict, frame_kind: str) -> str:
     return " ".join(filter(None, [shot.get("ff_desc", ""), shot.get("lf_desc", "")]))
 
 
+def _threat_shadow_not_counted(shot: dict, frame_kind: str, characters: list | None) -> bool:
+    """本帧威胁源是否「仅以水下黑影呈现、不计入实体人数」（v6.61，QC/prompt 同源）.
+
+    与 style_prefix.add_image_strict_constraints 的 _threat_invisible_only 分支
+    同一判定源（shared.vimax_bridge._threat_visible_in 对本帧叙事 desc）：
+    - prompt 层该分支写「威胁源以水下黑影呈现，不计入实体人数」→ 模型被引导
+      画（on_screen 实体数 - 威胁源）人；
+    - QC 第 1 层人数断言若仍按 spec/char_layout 全名单计数 → 两层规格互斥，
+      任何输出必 critical（09-05 hook ff 4 次 2vs3 烧光重试实证）。
+    返回 True = QC 期望人数应剔除 1（威胁源）。
+    """
+    desc = frame_narrative_desc(shot, frame_kind)
+    if not desc:
+        return False
+    try:
+        from shared.vimax_bridge import _threat_visible_in
+        return _threat_visible_in(desc, characters) is False
+    except Exception:
+        return False
+
+
 def _expected_persons(shot: dict, frame_kind: str, characters: list | None, kf_index: int | None = None) -> int | None:
     """本帧应出现人数 = spec on_screen 计数（新章）/ char_layout 实体数（老章）.
 
@@ -1621,6 +1642,16 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
         persons = [e for e in entries if str(e.get("label", "")).lower() == "person"]
         person_count = len(persons)
         expected = _expected_persons(shot, frame_kind, characters, kf_index=kf_index)
+        # v6.61（09-05 hook ff 4 次 critical 全烧根因）：prompt 层约束块
+        # （style_prefix.add_image_strict_constraints）在「威胁源仅以水下黑影呈现」
+        # 时写「仅实体可见角色：威胁源以水下黑影呈现，不计入实体人数」——此时
+        # prompt 逼模型画 2 人，QC 名单若仍含威胁源（期望 3 人），**任何输出
+        # 都必 critical**（4 次重试全 extra_person 2vs3/2vs3/1vs3/2vs3 实证）。
+        # 两侧规格必须同源：约束块判「黑影呈现」→ QC 期望人数同步剔除威胁源。
+        # 判定与 style_prefix 同一函数（_threat_visible_in 对本帧叙事 desc），
+        # 保证 prompt/QC 两层永不互斥。
+        if expected is not None and _threat_shadow_not_counted(shot, frame_kind, characters):
+            expected = max(0, expected - 1)
         if expected is not None:
             tol = _PERSON_TOLERANCE
             if abs(person_count - expected) > tol:

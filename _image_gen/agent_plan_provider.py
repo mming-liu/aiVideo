@@ -140,6 +140,12 @@ class AgentPlanImageService(ImageGenerationService):
             if size.upper() not in {t.upper() for t in cap.tiers}:
                 size = fit_tier(size, cap.tiers)
 
+        # v6.61（09-05 hook kf_2 两次 InputTextSensitiveContentDetected 根因）：
+        # 输入文本含高敏词（「匕首柄抵近杨旭」）→ 400 拒收。此前直接返回失败，
+        # 上游跳帧、磁盘留陈旧旧图。修法：命中输入侧敏感时用 shared.content_safety
+        # 全表 sanitize（输出侧 OutputImageSensitiveContentDetected 已有 fallback/
+        # soft-skip 路径，输入侧此路为唯一重试机会），重试 1 次——清洗后仍 400
+        # 则按真失败返回（不让敏感词无限烧额度）。
         payload: dict = {
             "model": self._model,
             "prompt": req.prompt,
@@ -169,6 +175,32 @@ class AgentPlanImageService(ImageGenerationService):
             )
         except Exception as e:
             return ImageGenerationResult(success=False, error=f"提交异常: {e}")
+
+        # ---- 400 + InputTextSensitiveContentDetected：两级清洗重试 ----
+        # v6.61：第 1 级 sanitize（全表，常已在组装期跑过 → 多半无变化）；
+        # 第 2 级 soften_input_text（输入侧专用降级表：匕首柄抵近→悬停、
+        # 刺向→指向——09-05 hook kf_2 两次 400 实证，触发词是持械逼临
+        # 组合，全表 sanitize 对已清洗 prompt 无效，必须二次降级）。
+        if resp.status_code == 400 and "InputTextSensitiveContentDetected" in resp.text:
+            from shared.content_safety import sanitize as _safety_sanitize, soften_input_text as _soften
+            sanitized = _safety_sanitize(req.prompt)
+            if sanitized == req.prompt:
+                sanitized = _soften(req.prompt)
+            if sanitized and sanitized != req.prompt:
+                _verbose_write(
+                    f"  [镜头{req.shot_index}] [!] InputTextSensitiveContentDetected，"
+                    f"合规清洗 prompt 后重试 1 次"
+                )
+                payload["prompt"] = sanitized
+                try:
+                    resp = requests.post(
+                        f"{self._base_url}/images/generations",
+                        json=payload,
+                        headers=self._headers,
+                        timeout=180,
+                    )
+                except Exception as e:
+                    return ImageGenerationResult(success=False, error=f"重试提交异常: {e}")
 
         _verbose_write(
             f"[DEBUG] agent_plan_image_submit response: status={resp.status_code}, "
@@ -239,7 +271,7 @@ class AgentPlanImageService(ImageGenerationService):
                     fname_prefix = {
                         "首帧": "ff",
                         "尾帧": "lf",
-                    }.get(frame_label, "kf")
+                    }.get(frame_label, "misc")  # v6.61：未知帧类不再落 kf 槽位（doodle_refine 曾存成 shot_N_kf.png 冒充关键帧）
                 save_path = os.path.join(
                     config.OUTPUT_DIR, f"shot_{req.shot_index}_{fname_prefix}.png"
                 )

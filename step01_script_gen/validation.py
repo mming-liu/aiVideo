@@ -6387,22 +6387,27 @@ def _hard_fix_split_long_dialogue_shot(shots: list, hook: dict | None = None) ->
 
 # T1 船体宽度硬修复（v6.40+，08-23）
 def _hard_fix_boat_width(shots: list, hook: dict | None = None) -> int:
-    """v6.40+（08-23）船体宽度硬修复：检测「窄身」「长X米…舴艋舟/小舟」但无宽度 → 补「宽1.4米」。
+    """v6.40+（08-23）船体宽度硬修复（HARD_FIX_USE_OLD=1 回滚路径）：检测「窄身」无宽度 → 补「宽W米」。
+
+    ⚠️ 常规路径走 Constraint boat_width（scene_objects 动态宽，见
+    shared/scene_objects_bank.boat_width_text）；本函数是回滚路径，保持历史
+    行为——宽度取 BOAT_FALLBACK_WIDTH_M 兜底常量（单源，勿再写字面量）。
 
     08-23 实测：shot 1 prompt 写「一叶小舟（长6米窄身无篷舴艋舟）」，「窄身」被模型
     忠实渲染成"木板"——杨旭和听香坐着就把船占满，无视觉余量。LLM 自改时倾向
     把"舴艋舟"删掉换"画舫"，但舴艋舟是原文场景标识不该改。确定性兜底：保留船型，
-    把"窄身"删/替换成"宽1.4米"。
+    把"窄身"删/替换成宽度。
 
     改写规则（按字段 prompt/ff_desc/lf_desc/motion_desc/keyframes[*].desc）：
-      ① 「长X米窄身」 → 「长X米宽1.4米」（保留米数，仅替"窄身"）
-      ② 「窄身无篷舴艋舟」/「窄身无篷小舟」 → 「宽1.4米无篷…」（删除"窄身"，插入宽度）
-      ③ 「长X米（…）舴艋舟」无"宽"字 → 同样插入"宽1.4米"在"无篷"前
+      ① 「长X米窄身」 → 「长X米宽W米」（保留米数，仅替"窄身"）
+      ② 「窄身无篷舴艋舟」/「窄身无篷小舟」 → 「宽W米无篷…」（删除"窄身"，插入宽度）
+      ③ 「长X米（…）舴艋舟」无"宽"字 → 同样插入"宽W米"在"无篷"前
 
     幂等：已含"宽X米"或"宽身"则跳过。
     返回改写字段数（含 kf 描述）。
     """
     import re as _re
+    from shared.scene_objects_bank import BOAT_FALLBACK_WIDTH_M
     if not shots:
         return 0
     targets = list(shots)
@@ -6429,19 +6434,19 @@ def _hard_fix_boat_width(shots: list, hook: dict | None = None) -> int:
             if _re.search(r"宽\d", v) or "宽身" in v:
                 continue
             new_v = v
-            # ① 「长X米窄身」 → 「长X米宽1.4米」
+            # ① 「长X米窄身」 → 「长X米宽W米」（W=BOAT_FALLBACK_WIDTH_M 兜底常量）
             new_v = _re.sub(
                 r"(长\d+(?:\.\d+)?米)窄身",
-                r"\1宽1.4米",
+                r"\1宽" + f"{BOAT_FALLBACK_WIDTH_M:g}米",
                 new_v,
             )
             # ② 单独「窄身」前后无"长X米" → 整段删"窄身"
             new_v = _re.sub(r"窄身", "", new_v)
-            # ③ 含"长X米...无篷"但无"宽"字 → 在"无篷"前插"宽1.4米"
+            # ③ 含"长X米...无篷"但无"宽"字 → 在"无篷"前插"宽W米"
             if "无篷" in new_v and not _re.search(r"宽\d", new_v):
                 new_v = _re.sub(
                     r"(长\d+(?:\.\d+)?米)无篷",
-                    r"\1宽1.4米无篷",
+                    r"\1宽" + f"{BOAT_FALLBACK_WIDTH_M:g}米无篷",
                     new_v,
                 )
             if new_v != v:

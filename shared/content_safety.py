@@ -208,6 +208,50 @@ def sanitize_narration(text: str) -> str:
     return out
 
 
+# ========================================================================
+# 输入侧高敏画面降级表（v6.61，2026-09-05）
+# 触发场景：Seedream 400 InputTextSensitiveContentDetected——prompt 已过
+# sanitize_prompt（全表替换后无显性敏感词）仍被 API 输入过滤器拒收。
+# 09-05 hook kf_2 两次 400 实证：触发词是「匕首柄抵近杨旭」类**持械逼临**
+# 组合（单独「匕首」或「抵近」都不敏感，组合才触发）。
+# 本表只用于 400 重试前的二次降级（比全表激进，会软化剧情张力），不进
+# 常规 sanitize——常规路径若预替换这些词会拉低所有镜头的画面质量。
+# 长词优先；值不得含其它 key（链式铁律同上）。
+# ========================================================================
+INPUT_SENSITIVE_SOFTEN = {
+    "匕首柄抵近": "手持匕首悬停在",
+    "匕首柄": "匕首",
+    "抵近杨旭": "悬停在杨旭上方",
+    "抵近": "悬停在上方",
+    "刺向": "指向",
+    "刺入": "指向",
+    "刺中": "指向",
+    "捅入": "指向",
+    "扎入": "指向",
+    "高举过顶": "举起",
+    "从背后": "在身后侧",
+    "背后刺": "身后指向",
+}
+
+
+def soften_input_text(text: str) -> str:
+    """输入侧 400 降级：持械逼临/刺击动词软化为悬停/指向（长词优先）.
+
+    仅在 API 400 InputTextSensitiveContentDetected 重试前调用——
+    替换后 prompt 语义从「刺击」降为「指向/悬停」，保住构图要素
+    （谁在哪里、持什么、朝向谁），牺牲打击接触感。
+    """
+    if not text:
+        return text
+    out = text
+    for old, new in sorted(
+        INPUT_SENSITIVE_SOFTEN.items(), key=lambda kv: len(kv[0]), reverse=True
+    ):
+        if old in out:
+            out = out.replace(old, new)
+    return collapse_doubled_tokens(out)
+
+
 # B10 链式自检（08-11）：替换表新增词/修改词后若含链式二次替换风险，静态扫描
 # 在 import 时即告警（不阻断），防止「刺入心口→刺入心口处→刺中心口处」这类
 # 词表自身互相抵消/二次污染的维护陷阱静默进入产物。此前 check_chain_safety()

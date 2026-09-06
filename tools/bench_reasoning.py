@@ -58,7 +58,7 @@ _DEFAULT_WEIGHTS = {
     "duration": 1.5,          # 总时长贴近 60s（抖音成片目标）
     "shot_count": 1.0,        # 镜头数在合理区间
     "dialogue": 1.0,          # 对白比例合理 + 台词 ≤15 字（爆点密度）
-    "camera": 1.0,            # cam_idx 摄像机分组多样性
+    "camera": 1.0,            # camera_movement / cam_idx 运镜多样性
     "shot_size": 1.0,         # 景别多样性
     "ff_lf": 1.0,             # 首尾帧描述完整（图生视频前导）
     "keyframes": 0.5,         # 关键帧存在
@@ -176,12 +176,21 @@ def score_one(script: dict, novel_text: str, parse_ok: bool, raw_json_ok: bool,
         len_score = 1.0 if mean_len <= 15 else (0.8 if mean_len <= 20 else 0.4)
         m["dialogue"] = 0.6 * ratio_score + 0.4 * len_score
 
-    # --- camera：cam_idx 分组多样性 ---
+    # --- camera：运镜类型多样性（兼容 camera_movement 与旧 cam_idx） ---
     if not parse_ok or n == 0:
         m["camera"] = 0.0
     else:
-        cams = {s.get("cam_idx") for s in shots if s.get("cam_idx") is not None}
-        d = len(cams)
+        movements = {
+            str(s.get("camera_movement", "")).strip()
+            for s in shots
+            if str(s.get("camera_movement", "")).strip()
+        }
+        cam_groups = {
+            s.get("cam_idx")
+            for s in shots
+            if s.get("cam_idx") is not None
+        }
+        d = max(len(movements), len(cam_groups))
         m["camera"] = 1.0 if 3 <= d <= 10 else (0.5 if d >= 2 else 0.0)
 
     # --- shot_size：景别多样性 ---
