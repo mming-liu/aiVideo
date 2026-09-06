@@ -153,6 +153,16 @@ THREAT_KEYWORDS: Tuple[str, ...] = (
     "蒙面剑客", "蒙面人", "匪",
 )
 
+# 威胁源可见性门控/QC 人数名单用的 6 词子集（⊂ THREAT_KEYWORDS，覆盖合规替换
+# 称谓：content_safety 会把「刺客」→「神秘人」等，本子集保证替换后的称谓仍可
+# 被门控识别）。消费方：shared/vimax_bridge._threat_visible_in、
+# shared/image_qc._expected_persons——历史上 bridge/image_qc 各持一份 6 词
+# 字面量手工同步（v6.60.1 收敛到此处单源）。
+# 跟进策略：THREAT_KEYWORDS 新增替换称谓时，同步检查本子集是否需要扩充。
+THREAT_VISIBILITY_KEYWORDS: Tuple[str, ...] = (
+    "神秘人", "刺客", "杀手", "黑衣人", "蒙面人", "黑影",
+)
+
 WEAPON_KEYWORDS: Tuple[str, ...] = (
     "刀尖", "匕首", "短刃", "寒光", "刀", "剑", "利刃",
 )
@@ -444,7 +454,7 @@ __all__ = [
     "get_surfaces",
     "INVALID_PROP_POSITIONS", "get_invalid_prop_patterns",
     "ANCHOR_DEDUP_PHRASES", "get_anchor_dedup_phrases",
-    "THREAT_KEYWORDS", "WEAPON_KEYWORDS", "ABOVE_WATER_PAT",
+    "THREAT_KEYWORDS", "THREAT_VISIBILITY_KEYWORDS", "WEAPON_KEYWORDS", "ABOVE_WATER_PAT",
     "COMMON_PERSON_NAMES",
     "VICTIM_SIGNS", "WEAPON_HANDLE_WORDS", "DIRECTION_WORDS",
     "MAIN_SUBJECT_PREFIXES", "STRONG_INJURY_ANCHORS",

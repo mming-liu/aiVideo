@@ -28,7 +28,7 @@ def test_injects_climax_in_back_half():
     # GAP 规则要求后半至少 3 个 climax shot。
     for shot in script["shots"][3:6]:
         assert "冲突" in shot["main_subject"] or "冲突到达顶点" in shot["prompt"]
-        assert "悬念陡升" in shot["core_keywords"]
+        assert "冲突" in shot["core_keywords"] and "真相" in shot["core_keywords"]
 
 
 def test_skips_when_back_half_has_climax():
@@ -39,7 +39,7 @@ def test_skips_when_back_half_has_climax():
         make_shot(index=2, main_subject="对话"),
         make_shot(index=3, main_subject="中段"),
         make_shot(index=4, main_subject="反转1", motion_desc="反转揭露", core_keywords="反转揭露"),
-        make_shot(index=5, main_subject="反转2", motion_desc="反转揭露", core_keywords="悬念陡升"),
+        make_shot(index=5, main_subject="反转2", motion_desc="反转揭露", core_keywords="真相"),
         make_shot(index=6, main_subject="反转3", motion_desc="反转揭露", core_keywords="身份暴露"),
     ]
     script = make_script(shots)
@@ -65,7 +65,7 @@ def test_preserves_existing_core_keywords():
     from step01_script_gen.doubao_hardfix import ClimaxBackInjectConstraint
     repairs = ClimaxBackInjectConstraint().apply(ctx)
     assert len(repairs) == 3
-    assert script["shots"][3]["core_keywords"] == "水湾,小舟,冲突,顶点,悬念陡升"
+    assert script["shots"][3]["core_keywords"] == "水湾,小舟,冲突,反转,真相"
 
 
 def test_repairs_when_only_one_gap_readable_climax_shot_exists():
@@ -84,7 +84,7 @@ def test_repairs_when_only_one_gap_readable_climax_shot_exists():
     from step01_script_gen.doubao_hardfix import ClimaxBackInjectConstraint
     repairs = ClimaxBackInjectConstraint().apply(ctx)
     assert len(repairs) == 3
-    assert all("悬念陡升" in s["core_keywords"] for s in script["shots"][3:6])
+    assert all("冲突" in s["core_keywords"] and "真相" in s["core_keywords"] for s in script["shots"][3:6])
 
 
 def test_skips_when_too_few_shots():

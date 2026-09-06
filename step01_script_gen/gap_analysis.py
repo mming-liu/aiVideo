@@ -18,10 +18,20 @@ from typing import Optional
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
+from step01_script_gen.climax_words import KEYWORD_SYNONYMS, climax_words_for_gap
+
 
 # ========================================================================
 # 1. Core Keywords Coverage Calculation
 # ========================================================================
+
+def normalize_core_keywords(value) -> list[str]:
+    """Normalize core_keywords from either schema array or legacy comma string."""
+    if isinstance(value, (list, tuple)):
+        return [str(kw).strip() for kw in value if str(kw).strip()]
+    if isinstance(value, str):
+        return [part.strip() for part in re.split(r"[，,、;；]+", value) if part.strip()]
+    return []
 
 def _keyword_covered(keyword: str, prompt: str) -> bool:
     """Check if keyword has visual match in prompt."""
@@ -36,39 +46,8 @@ def _keyword_covered(keyword: str, prompt: str) -> bool:
 
 
 def _get_synonyms(keyword: str) -> list:
-    """增强版同义词映射（v6.1 新增中文同义词）."""
-    synonyms_map = {
-        # 刺杀类
-        "刺杀": ["刺", "杀", "寒光", "匕首", "袭击", "突袭", "遇害"],
-        "刺": ["刺杀", "戳", "穿", "扎入"],
-        "杀": ["刺杀", "击杀", "斩", "劈"],
-        "寒光": ["剑光", "刀光", "银光", "闪光"],
-        "匕首": ["短剑", "利刃", "兵刃"],
-        "袭击": ["突袭", "攻击", "冲来", "杀来"],
-        # 冲突类
-        "冲突": ["对峙", "争吵", "打斗", "交锋", "矛盾"],
-        "对峙": ["冲突", "相持", "怒视", "对视"],
-        "打斗": ["交手", "过招", "搏斗", "争斗"],
-        "交锋": ["对决", "比拼", "争锋"],
-        # 逃离类
-        "逃离": ["疾驰", "逃跑", "离开", "马车", "离去", "奔逃", "遁走"],
-        "逃跑": ["逃离", "奔逃", "逃窜", "逃走"],
-        "疾驰": ["飞奔", "疾奔", "奔跑", "策马"],
-        "马车": ["车", "马车", "轿子", "车马"],
-        # 死亡类
-        "死亡": ["死", "亡", "断气", "瞳孔散大", "冰冷", "倒下", "毙命"],
-        "死": ["死亡", "亡", "断气", "毙命"],
-        "亡": ["死亡", "死", "灭亡"],
-        "倒下": ["倒地", "跪倒", "瘫倒"],
-        # 太阳/天气类
-        "sun": ["sun", "sunlight", "day star"],
-        "太阳": ["烈日", "骄阳", "火球", "日头"],
-        "earth": ["ground", "field", "soil", "land"],
-        "大地": ["地面", "田野", "土地", "田地"],
-        "dry": ["drought", "parched", "scorched"],
-        "干旱": ["干裂", "燥热", "炙烤"],
-    }
-    return synonyms_map.get(keyword, [])
+    """增强版同义词映射（v6.1 新增中文同义词；词表单源 climax_words.KEYWORD_SYNONYMS）."""
+    return KEYWORD_SYNONYMS.get(keyword, [])
 
 
 def calculate_keyword_coverage(shot: dict, novel_text: str) -> dict:
@@ -81,10 +60,8 @@ def calculate_keyword_coverage(shot: dict, novel_text: str) -> dict:
       帧描述里，单查 prompt 会漏报）
     - 返回 missing 列表：供 `_load_gap_analysis_context` 反馈给 LLM 具体缺了哪些词
     """
-    core_keywords = shot.get("core_keywords", [])
+    core_keywords = normalize_core_keywords(shot.get("core_keywords", []))
     prompt = shot.get("prompt", "")
-    if not isinstance(core_keywords, list):
-        core_keywords = []
     # 命中源：画面描述全字段（关键词可能只出现在帧描述里，单查 prompt 会漏报）
     search_pool = " ".join(filter(None, [
         prompt,
@@ -123,12 +100,9 @@ def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
     if not shots:
         return {"status": "error", "message": "未找到任何分镜"}
 
-    # 1. 高潮关键词库（已优化为中文，匹配 Agnes AI 的中文语境）
-    climax_keywords = [
-        "战斗", "刺杀", "决斗", "冲突", "反转", "爆炸", "死亡", "离开", "逃离",
-        "追逐", "阴谋", "暴露", "密信", "圣旨", "真相", "身份暴露", "杀", "死", "跑",
-        "寒光", "鲜血", "尖叫", "破水而出"  # 针对你当前文本的特化关键词
-    ]
+    # 1. 高潮关键词库（单源 climax_words；通用半跨小说 + 特化词经
+    #    script["meta"]["climax_keywords"] 注入，未提供时走锦衣夜行第一章兜底）
+    climax_keywords = climax_words_for_gap(script)
 
     # 2. 检查高潮覆盖情况
     has_climax_coverage = False
@@ -138,7 +112,7 @@ def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
         # 将对话、字幕和核心关键词拼接起来进行检测
         segment_text = shot.get("narration_segment", "") + " " + \
                        shot.get("subtitle", "") + " " + \
-                       " ".join(shot.get("core_keywords", []))
+                       " ".join(normalize_core_keywords(shot.get("core_keywords", [])))
 
         if any(kw in segment_text for kw in climax_keywords):
             has_climax_coverage = True

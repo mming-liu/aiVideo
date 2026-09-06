@@ -36,6 +36,8 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from .constraints.base import Constraint
 from .constraints.types import RepairRecord, Severity
+from .climax_words import CLIMAX_WORDS_GAP_GENERIC, CLIMAX_WORDS_GAP_INJECT
+from .gap_analysis import normalize_core_keywords
 from _text_gen.config import TEXT_PROVIDER_DEFAULT
 
 
@@ -58,14 +60,9 @@ _EMPTY_SHOT_KW = ("空镜", "远景", "特写", "环境", "水波", "树影", "�
 # B.4 过肩机位关键词（用于反向校验是否已修）
 _OVERSHOULDER_KW = ("过肩", "过肩镜头", "过肩机位")
 
-# B.3.3 高潮尾部词（命中 → 视为后半已有高潮）
-_CLIMAX_TAIL_TUPLE: Tuple[str, ...] = (
-    "冲突到达顶点",
-    "反转揭露",
-    "悬念陡升",
-    "身份暴露",
-    "矛盾激化",
-)
+# B.3.3 高潮检测词（单源 climax_words；修复词必须能被 GAP 读到）
+_CLIMAX_TAIL_TUPLE: Tuple[str, ...] = CLIMAX_WORDS_GAP_GENERIC
+_CLIMAX_GAP_INJECT_WORDS: Tuple[str, ...] = CLIMAX_WORDS_GAP_INJECT
 
 # B.3.1 泛化主语词（main_subject 命中 → 视为泛指，需回填角色名）
 # ⚠️ 与 prompt_semantic.registry.COLLECTIVE_NAMES（受害者侧泛指：群演/仆从/侍卫…）
@@ -428,7 +425,7 @@ class OpeningEmptyShotInsertConstraint(Constraint):
 # B.3.3 高潮回灌
 # ============================================================================
 
-_CLIMAX_INJECT_TAIL = "。冲突到达顶点，局势不可挽回，悬念陡升"
+_CLIMAX_INJECT_TAIL = "。" + "，".join(_CLIMAX_GAP_INJECT_WORDS) + "，局势骤变"
 
 
 class ClimaxBackInjectConstraint(Constraint):
@@ -437,7 +434,7 @@ class ClimaxBackInjectConstraint(Constraint):
     缺口：doubao 高潮集中在前 50% 时段，后半塌陷（2026-09-04 实测 climax fail）.
     兜底：取中点镜（shots[half-1]），在 main_subject + prompt 追加
           「冲突到达顶点，局势不可挽回，悬念陡升」.
-    幂等：后半任一镜含 _CLIMAX_TAIL_TUPLE 任一词 → 视为已修.
+    幂等：后半已有 >=3 镜命中 GAP 词表 → 视为已修.
     """
 
     name: ClassVar[str] = "doubao_climax_back_inject"
@@ -455,15 +452,15 @@ class ClimaxBackInjectConstraint(Constraint):
         # 旧逻辑"任一镜命中即跳过"会在 climax_shots=1/3 时误判已修。
         def _has_gap_climax(s: dict) -> bool:
             text = " ".join(
-                str(s.get(k) or "") for k in ("narration_segment", "subtitle", "core_keywords")
+                [str(s.get("narration_segment") or ""), str(s.get("subtitle") or "")]
+                + normalize_core_keywords(s.get("core_keywords"))
             )
             return any(t in text for t in _CLIMAX_TAIL_TUPLE)
 
         back_half = [s for s in shots[half:] if isinstance(s, dict)]
         if sum(_has_gap_climax(s) for s in back_half) >= 3:
             return repairs
-        # GAP 只读 narration/subtitle/core_keywords；后半至少 3 镜命中才满足蒙太奇规则。
-        # 中点镜保留完整高潮句，其余两镜用短关键词，避免画面描述被重复句式淹没。
+        # GAP 只读 narration/subtitle/core_keywords；注入词必须来自 GAP 词表。
         targets = back_half[:3]
         short_tail = _CLIMAX_INJECT_TAIL.lstrip("。")
         for pos, shot in enumerate(targets):
@@ -477,10 +474,11 @@ class ClimaxBackInjectConstraint(Constraint):
             if before_prompt:
                 shot["prompt"] = before_prompt + climax_text
             if isinstance(before_kws, list):
-                shot["core_keywords"] = list(before_kws) + ["冲突", "顶点", "悬念陡升"]
+                shot["core_keywords"] = list(before_kws) + list(_CLIMAX_GAP_INJECT_WORDS)
             else:
                 raw_kws = str(before_kws or "").rstrip("。. ")
-                shot["core_keywords"] = raw_kws + ",冲突,顶点,悬念陡升" if raw_kws else "冲突,顶点,悬念陡升"
+                joined = ",".join(_CLIMAX_GAP_INJECT_WORDS)
+                shot["core_keywords"] = raw_kws + "," + joined if raw_kws else joined
             repairs.append(
                 RepairRecord(
                     constraint_name=self.name,

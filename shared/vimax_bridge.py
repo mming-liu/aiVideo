@@ -1750,6 +1750,7 @@ _FG_DYNAMIC_WORDS = (
 from step01_script_gen.prompt_semantic import (
     THREAT_WORDS_ENLARGED as _THREAT_WORDS_ENLARGED,
     THREAT_STAB_VERBS as _THREAT_STAB_VERBS,
+    THREAT_VISIBILITY_KEYWORDS as _THREAT_VISIBILITY_KEYWORDS,
 )
 
 
@@ -1775,14 +1776,18 @@ def _char_aliases(char_id: str, characters: list | None = None) -> list[str]:
 
 
 # 威胁源标识（从 prompt_semantic.registry 引入；identifier 通常为"刺客"）
-# _char_aliases 仍只对核心三词展开通称别名（"刺客"+"神秘人"+"黑衣人"等）
+# _char_aliases 仍只对核心三词展开通称别名（"刺客"+"神秘人"+"黑衣人"等）。
+# 与 registry.THREAT_KEYWORDS / WEAPON_KEYWORDS 的关系：相关、互补——
+# _THREAT_IDS 是身份词的**精确前缀匹配**（identifier 命中），与词表的**文本
+# 子串匹配**（字级 vs 词级）语义不同源，勿互相替代或宣称对齐。
 _THREAT_IDS = ("刺客", "杀手", "黑衣人")  # 保留精确匹配；通用检测走 THREAT_KEYWORDS
 
-# v6.56：威胁源可见性门控用的扩展词表——6 词覆盖合规替换称谓（神秘人/蒙面人/
-# 黑影），与 shared.image_qc._THREAT 对齐。ident 命中即视为威胁源，别名表命中
-# 也算（解决「ident=刺客但 lf_desc 写神秘人」类偏移场景）。下游 _threat_visible_in
-# 仍以「是否伴随可见实体特征」判定是否注入。
-_THREAT_KEYWORDS = ("神秘人", "刺客", "杀手", "黑衣人", "蒙面人", "黑影")
+# v6.56：威胁源可见性门控用的扩展词表——覆盖合规替换称谓（神秘人/蒙面人/黑影）。
+# 词表单源 prompt_semantic.registry.THREAT_VISIBILITY_KEYWORDS（v6.60.1 收敛：
+# 历史上本处与 shared.image_qc._THREAT 各持一份 6 词字面量手工同步）。
+# ident 命中即视为威胁源，别名表命中也算（解决「ident=刺客但 lf_desc 写神秘人」
+# 类偏移场景）。下游 _threat_visible_in 仍以「是否伴随可见实体特征」判定是否注入。
+_THREAT_KEYWORDS = _THREAT_VISIBILITY_KEYWORDS
 
 
 def _is_threat_weapon_prop(pid: str) -> bool:
@@ -1791,6 +1796,10 @@ def _is_threat_weapon_prop(pid: str) -> bool:
     08-16 hook ff「刀悬浮」根因：刺客匕首这种威胁源武器在帧描述里只露刀尖
     （"一截刀尖微露水面"），通用位置词"在水面"太模糊，配合"正对杨旭方向"
     图片模型把整把刀抬到船与水之间。识别为威胁武器后单独改写位置措辞。
+
+    ⚠️ 与 registry.WEAPON_KEYWORDS 的关系：相关、互补——本表是道具 identifier
+    的**字级**匹配（startswith + 单字子串，针对 id 命名形态），WEAPON_KEYWORDS
+    是帧描述**词级**匹配；语义不同源，勿互相替代或宣称对齐。
     """
     if not pid:
         return False

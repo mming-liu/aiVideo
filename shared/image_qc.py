@@ -764,7 +764,10 @@ def _expected_persons(shot: dict, frame_kind: str, characters: list | None, kf_i
              if isinstance(it, dict) and str(it.get("name", "")).strip()]
     if not names:
         return None
-    _THREAT = ("神秘人", "刺客", "杀手", "黑衣人", "蒙面人", "黑影")
+    # 威胁源名单单源 prompt_semantic.registry.THREAT_VISIBILITY_KEYWORDS
+    # （v6.60.1 收敛：原 6 词字面量与 vimax_bridge 各持一份手工同步；
+    # 函数内延迟 import 跟随本文件既有风格，零模块级 step01 依赖）
+    from step01_script_gen.prompt_semantic import THREAT_VISIBILITY_KEYWORDS as _THREAT
     has_threat_name = any(n in _THREAT for n in names)
     if has_threat_name:
         try:

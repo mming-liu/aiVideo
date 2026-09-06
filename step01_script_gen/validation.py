@@ -25,6 +25,7 @@ import scene_compliance
 import storyboard_refs
 from shared.paths import chapter_dir
 from shared.constants import DEFAULT_VIDEO_DURATION_FALLBACK
+from step01_script_gen.climax_words import CLIMAX_WORDS_ARC
 from shared.tee_logger import get_logger
 from shared.kf_time import (
     get_kf_t_sec, get_kf_stage, set_kf_t_sec, set_kf_stage,
@@ -1365,8 +1366,8 @@ def _check_narrative_arc_distribution(shots: list[dict], script: dict) -> dict:
     first_third = total // 3
     last_third = total - total // 3
 
-    # 检测高潮关键词
-    climax_keywords = {"刺杀", "战斗", "对决", "反转", "死亡", "诀别", "暴露", "发现", "冲突", "搏杀", "跃出", "挥刀", "拔剑"}
+    # 检测高潮关键词（词表单源 climax_words.CLIMAX_WORDS_ARC，与 arc picker 注入侧同源）
+    climax_keywords = frozenset(CLIMAX_WORDS_ARC)
 
     # 统计各段的事件密度
     events_in_thirds = [0, 0, 0]  # 前/中/后
@@ -7175,13 +7176,10 @@ def _hard_fix_climax_distribution(shots: list, hook: dict | None = None) -> int:
         return 0
     # 改 main_subject 加 climax 关键词（validator 查 narration+main_subject）
     main_subject = target.get("main_subject", "") or ""
-    # 选一个未使用的 climax 关键词（_NARRATIVE_ARC_CLIMAX_KEYWORDS 与 validator 同源）
-    _NARRATIVE_ARC_CLIMAX_KEYWORDS = (
-        "刺杀", "战斗", "对决", "反转", "死亡", "诀别", "暴露", "发现",
-        "冲突", "搏杀", "跃出", "挥刀", "拔剑",
-    )
-    used_kw = [w for w in _NARRATIVE_ARC_CLIMAX_KEYWORDS if w in main_subject or w in target.get("prompt", "")]
-    target_kw = next((w for w in _NARRATIVE_ARC_CLIMAX_KEYWORDS if w not in used_kw), "反转")
+    # 选一个未使用的 climax 关键词（CLIMAX_WORDS_ARC 与三段密度检测侧共用同一
+    # 常量——真同源：注入的词必然可被检测命中）
+    used_kw = [w for w in CLIMAX_WORDS_ARC if w in main_subject or w in target.get("prompt", "")]
+    target_kw = next((w for w in CLIMAX_WORDS_ARC if w not in used_kw), "反转")
     target["main_subject"] = main_subject.rstrip("，,。") + f"，{target_kw}揭示"
     fixed += 1
     return fixed
