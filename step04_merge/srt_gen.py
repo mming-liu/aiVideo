@@ -92,17 +92,12 @@ def generate_srt(shots: List[dict], durations: List[float], output: Path) -> Non
             current_time += dur
             continue
 
-        # 检查是否是对话（有引号或说话动词）
-        # 全角/直角/ASCII 引号统一视为对话标记（与 shared/dialogue.py 标准一致）
-        has_dialogue = any(c in subtitle for c in ['「', '」', '『', '』', '“', '”', '"', '«', '»'])
-        # 说话动词必须后跟标点才视为对话（避免"一道道炊烟"的"道"误判）
-        has_speaker = False
-        for w in ['说', '道', '问', '答', '喊', '叫', '喝']:
-            pos = subtitle.find(w)
-            if pos >= 0 and pos + 1 < len(subtitle) and subtitle[pos + 1] in '：:,,，,.。':
-                has_speaker = True
-                break
-        is_dialogue = has_dialogue or has_speaker
+        # 检查是否是对话（判定单源 shared/dialogue.py，08-01 code-audit #2）
+        # 历史问题：此处内联判定——引号列表漏全角冒号「：」+ 说话动词表要求
+        # 「说/道/问…后跟标点」→「肖管事：抱歉的很，…」这类冒号台词整段不上屏
+        # （09-06 chapter_001 实测 3 条台词字幕全丢）。改调 has_dialogue 统一口径。
+        from shared.dialogue import has_dialogue
+        is_dialogue = has_dialogue(subtitle)
 
         if not is_dialogue:
             # 没有对话，跳过字幕

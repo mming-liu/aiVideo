@@ -35,6 +35,17 @@ BOOK_NAME = os.getenv("BOOK_NAME", "杀青州")
 # 用于兜住 LLM 抽风输出 2 镜或 50 镜这类废结果。
 SHOT_COUNT_MIN = int(os.getenv("SHOT_COUNT_MIN", "4"))
 SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "40"))
+
+
+def _TEXT_PROVIDER_DEFAULT_GAP_ATTEMPTS() -> str:
+    """GAP 重试默认值按 TEXT_PROVIDER 区分（v6.62.1，09-06）.
+
+    agent_plan（doubao）路径 09-06 实测 2 次 GAP 重试全部劣化回退（重试版
+    总时长塌缩 + 台词失锚），白烧 ~5 分钟——默认 1 次。deepseek 保留 2 次。
+    返回 str 供 int() 解析（保持本文件"load 时算好常量"的惯例）。
+    """
+    provider = (os.getenv("TEXT_PROVIDER") or "").strip().lower()
+    return "1" if provider == "agent_plan" else "2"
 CHARACTER_EXTRACTION_ENABLED = os.getenv("CHARACTER_EXTRACTION_ENABLED", "1").strip() == "1"
 # v6.6: 场景物体尺寸提取（从原文上下文推导船/车/厅堂等的合理尺寸，替代硬编码，防止画面比例漂移）
 SCENE_OBJECT_EXTRACTION_ENABLED = os.getenv("SCENE_OBJECT_EXTRACTION_ENABLED", "1").strip() == "1"
@@ -50,7 +61,15 @@ HOOK_ENABLED = os.getenv("HOOK_ENABLED", "1").strip() == "1"
 COMPLIANCE_STRICT = os.getenv("COMPLIANCE_STRICT", "0").strip() == "1"
 COMPLIANCE_AUTO_FIX = os.getenv("COMPLIANCE_AUTO_FIX", "1").strip() == "1"
 GAP_ANALYSIS_ENABLED = os.getenv("GAP_ANALYSIS_ENABLED", "1").strip() == "1"
-GAP_MAX_REGEN_ATTEMPTS = int(os.getenv("GAP_MAX_REGEN_ATTEMPTS", "2"))
+# GAP 重试上限。v6.62.1（09-06）：按文本供应商区分默认值——
+#   - deepseek：2 次（重试版质量常有提升，历史数据支持）
+#   - agent_plan（doubao）：1 次（09-06 chapter_001 实测 2 次重试全部劣化回退：
+#     「重试版总时长 60s < 上一版 66s + 台词失锚 4 条」，白烧 ~5 分钟/2 次 LLM 调用）
+# 可用 GAP_MAX_REGEN_ATTEMPTS 显式覆盖（配置文件仍可写死，env 优先）。
+GAP_MAX_REGEN_ATTEMPTS = int(
+    os.getenv("GAP_MAX_REGEN_ATTEMPTS", "") or _TEXT_PROVIDER_DEFAULT_GAP_ATTEMPTS()
+)
+
 # v6.7: 镜头数严重超限时的有界收敛重生成。
 # 触发条件：实际镜头数 > SHOT_COUNT_MAX（如默认 25）。超限时把「合并冗余镜头」反馈
 # 追加到 prompt 重新生成一次，防止 LLM 输出 32+ 镜拖垮下游（视频生成成本/时长翻倍）。

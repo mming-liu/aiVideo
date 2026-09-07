@@ -1,34 +1,36 @@
-"""L. 爆点密度约束（v6.42 迁移自 _hard_fix_punch_density）.
+"""L. 爆点密度约束：检测告警 + 历史注入残留剥离（v6.62 收敛）.
 
-每 30 秒应有 1 爆点。若总数 < 目标，给最后一镜 prompt 追加"局势骤变，N个
-爆点叠加"。
+旧版（≤v6.61）在爆点密度不足时给末镜 prompt 追加「。局势骤变，N个爆点叠加」
+——抽象节拍词对图片/视频模型无视觉意义，纯噪音 token。
 
-幂等：已含"局势骤变" → 跳过；全片达标 → 跳过。
+v6.62 现行为：
+  1. 剥离历史注入残留（climax_words.strip_injected_suffixes，幂等，留痕）
+  2. 爆点密度不足 → ctx.record_violation 上报（WARN，不改写数据）。
+     punch_density 在 validation._REGEN_FEEDBACK_EXCLUDE，不会引发 regen 空转。
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from step01_script_gen.climax_words import strip_injected_suffixes
 from step01_script_gen.validation import _PUNCH_WORDS
 from .base import Constraint
-from .types import RepairRecord, Severity
+from .types import RepairRecord, Severity, Violation
 
 
 class PunchDensityConstraint(Constraint):
-    """L. 爆点密度：每 30s 应有 1 爆点 → 不足则末镜追加'局势骤变'.
+    """L. 爆点密度：每 30s 应有 1 爆点（v6.62 起检测告警，不注入）.
 
-    severity=WARN: 爆点可由后续 repair round 修.
-    repair_marker="局势骤变".
+    severity=WARN：爆点密度属叙事全局问题，不进定向修复轮。
     """
 
     name = "punch_density"
     severity = Severity.WARN
-    repair_marker = "局势骤变"
     fields = ("prompt",)
 
     def apply(self, ctx) -> list[RepairRecord]:
@@ -37,6 +39,29 @@ class PunchDensityConstraint(Constraint):
         if not shots or not isinstance(shots, list):
             return repairs
 
+        # 1) 剥离历史注入残留（幂等）
+        for s in shots:
+            if not isinstance(s, dict):
+                continue
+            prompt = s.get("prompt")
+            if not isinstance(prompt, str) or not prompt:
+                continue
+            cleaned = strip_injected_suffixes(prompt)
+            if cleaned != prompt:
+                s["prompt"] = cleaned
+                repairs.append(
+                    RepairRecord(
+                        constraint_name=self.name,
+                        shot_index=s.get("index", 0),
+                        action="rewrite",
+                        target="prompt",
+                        before=prompt[:60],
+                        after=cleaned[:60],
+                        detail="剥离爆点注入残留（v6.62 收敛）",
+                    )
+                )
+
+        # 2) 密度检测 → 只上报不改写
         punch_count = 0
         total_dur = 0.0
         for s in shots:
@@ -61,22 +86,18 @@ class PunchDensityConstraint(Constraint):
             return repairs
 
         shortage = needed - punch_count
-        s = shots[-1]
-        if not isinstance(s, dict):
-            return repairs
-        prompt = s.get("prompt", "") or ""
-        if "局势骤变" in prompt:
-            return repairs
-        before = prompt
-        s["prompt"] = prompt.rstrip("。") + f"。局势骤变，{shortage}个爆点叠加"
-        repairs.append(
-            RepairRecord(
+        last = shots[-1] if isinstance(shots[-1], dict) else {}
+        ctx.record_violation(
+            Violation(
                 constraint_name=self.name,
-                shot_index=s.get("index", 0),
-                action="append",
-                target="prompt",
-                before=before,
-                after=s["prompt"],
+                severity=self.severity,
+                shot_index=last.get("index"),
+                field="prompt",
+                message=(
+                    f"爆点密度不足（{punch_count}/{needed}，缺 {shortage} 个）："
+                    "建议在镜头内容里增加真实的冲突/动作爆点，不要注入节拍词"
+                ),
+                evidence=str(last.get("prompt") or "")[:60],
             )
         )
         return repairs

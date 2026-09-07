@@ -19,7 +19,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 import json
-import re
 
 from shared.scene_objects_bank import SceneObjectsBank
 from _text_gen import create_service, TextGenerationRequest
@@ -136,24 +135,16 @@ def extract_scene_objects(novel_text: str, bank: SceneObjectsBank) -> list[dict]
         print(f"[WARN] 场景物体提取失败: {result.error}")
         return []
 
-    # 解析
-    raw = result.text.strip()
-    raw = re.sub(r"^```json\s*", "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
+    # 解析：走 shared json_repair 单源（09-06 实测 agent_plan 响应
+    # finish_reason=length 截断，旧手写裸 json.loads 断尾即整体失败 →
+    # 「预提取到 0 个场景物体」、物体库零增量；safe_parse_json 的
+    # _truncate_fix 兜底会丢弃未完成尾对象、保留完整对象）
+    from shared.utils.json_repair import safe_parse_json_object
     try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start != -1 and end != -1:
-            try:
-                data = json.loads(raw[start:end + 1])
-            except json.JSONDecodeError:
-                print(f"[WARN] 场景物体提取 JSON 解析失败")
-                return []
-        else:
-            print(f"[WARN] 场景物体提取 JSON 解析失败")
-            return []
+        data = safe_parse_json_object(result.text)
+    except (ValueError, json.JSONDecodeError) as e:
+        print(f"[WARN] 场景物体提取 JSON 解析失败（含截断恢复后仍失败）: {e}")
+        return []
 
     objs = data.get("scene_objects", [])
     # B3 修复（08-10）：物体尺寸合理性钳制——LLM 可能推「房间长500米」这类离谱值，

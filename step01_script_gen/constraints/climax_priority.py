@@ -4,10 +4,11 @@
   镜头 1 非高潮镜头（背景/过渡/日常），v6.35 规则 3.7 应为 0 镜——
   信息由旁白（narration_segment）一句带过，禁止单独成镜占用剧情预算。
 
-修法：扫每镜 prompt/motion/ff/lf，若无任何「核心事件」词（打斗/刺杀/
-追逐/情感爆发/揭秘/反转）且无台词（subtitle 空）→ 给 narration_segment
-追加「(本镜信息已并入旁白，本镜删除或合并)」标记，让 step04 merge 知道
-这是待合并的镜头。
+v6.62.1（09-06）修法变更：不再向 narration_segment 注入
+「[本镜信息已并入旁白，镜头降级为背景/过渡]」——step04 merge 从无消费代码
+（grep 全零），标记只污染锚点校验/字幕。改为写运行时元数据
+`shot["_merge_candidate"]=True`（下划线开头=运行时数据约定，不入下游读盘
+关注面），留待未来 step04 播放合并逻辑或人工删镜时使用。
 
 severity=WARN: 已有确定性改写.
 """
@@ -41,8 +42,20 @@ _DAILY_HINTS = (
     "日常", "背景", "过渡", "空镜", "山水", "远山",
 )
 
-_REPAIR_MARKER = "[本镜信息已并入旁白，镜头降级为背景/过渡]"
+# v6.62.1（09-06）：fixer 与 checker（validation._check_climax_priority）口径
+# 对齐——checker 用的 _CLIMAX_BG_HINTS（田埂/炊烟/媒人/家常…）此前 fixer 不读，
+# 出现「checker 每轮报 4 镜非高潮、fixer 只标 1 镜」的永修不掉（09-06 实测）。
+# 合并两表（checker 为主 + 内置兜底），单源：优先 import validation。
+def _bg_hints() -> tuple[str, ...]:
+    try:
+        from step01_script_gen.validation import _CLIMAX_BG_HINTS
+        return tuple(_CLIMAX_BG_HINTS) + _DAILY_HINTS
+    except Exception:
+        return _DAILY_HINTS
 
+# v6.62.1 起不再注入 narration（原 _REPAIR_MARKER 已停用，保留常量供
+# 历史数据剥离方引用：见 validation post_fix 剥「[本镜信息已并入旁白…]」残留）
+_REPAIR_MARKER = "[本镜信息已并入旁白，镜头降级为背景/过渡]"
 
 def _has_climax_event(text: str) -> bool:
     return any(w in text for w in _CLIMAX_EVENT_WORDS)
@@ -73,26 +86,29 @@ class ClimaxPriorityConstraint(Constraint):
             )
             if _has_climax_event(text):
                 continue  # 有核心事件 → 不可合并
-            # 含日常/过渡词 → 视为非高潮
-            if not any(w in text for w in _DAILY_HINTS):
+            # 含日常/过渡词 → 视为非高潮（词表与 checker 同源，v6.62.1）
+            if not any(w in text for w in _bg_hints()):
                 continue
-            narr = str(shot.get("narration_segment", "") or "")
-            if _REPAIR_MARKER in narr:
+            # v6.62.1（09-06）：合并候选标记改写运行时元数据 `_merge_candidate`，
+            # 不再注入 narration_segment——旧版把 _REPAIR_MARKER 写进 narration
+            # （注释自称"让 step04 merge 知道"，但 step04 从无消费代码），标记
+            # 却污染锚点校验（镜头10「实词覆盖率 22%」）+ 会进字幕。真实现
+            # "信息并入旁白"需动 step04 播放逻辑，交用户决策；本约束只留痕。
+            if shot.get("_merge_candidate"):
                 continue  # 幂等
-            new_narr = (
-                narr.rstrip("。.，,;；") + "。" + _REPAIR_MARKER
-                if narr.strip()
-                else _REPAIR_MARKER
+            shot["_merge_candidate"] = True
+            shot.setdefault("_run_metadata", {})["climax_priority"] = (
+                "非高潮背景/过渡镜（无台词+无核心事件）——候选合并/删除，"
+                "信息应由 narration 一句带过（v6.35 规则 3.7）"
             )
-            shot["narration_segment"] = new_narr
             repairs.append(
                 RepairRecord(
                     constraint_name=self.name,
                     shot_index=shot.get("index") if not is_hook else None,
-                    action="append",
-                    target="narration_segment",
-                    before=narr[:60] + ("..." if len(narr) > 60 else ""),
-                    after=new_narr[:60] + ("..." if len(new_narr) > 60 else ""),
+                    action="set_field",
+                    target="_merge_candidate",
+                    before="",
+                    after="True",
                 )
             )
         return repairs

@@ -9,8 +9,8 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 
-def test_non_climax_no_dialogue_appends_marker():
-    """非高潮+无台词 → 追加合并标记."""
+def test_non_climax_no_dialogue_marks_merge_candidate():
+    """非高潮+无台词 → 写运行时元数据 _merge_candidate（v6.62.1 起不注 narration）."""
     from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
 
     script = make_script([
@@ -28,7 +28,32 @@ def test_non_climax_no_dialogue_appends_marker():
     repairs = ClimaxPriorityConstraint().apply(ctx)
 
     assert len(repairs) == 1
-    assert "[本镜信息已并入旁白" in script["shots"][0]["narration_segment"]
+    assert script["shots"][0]["_merge_candidate"] is True
+    # narration 不被污染（v6.62.1：step04 无消费代码，注 narration 只污染字幕）
+    assert script["shots"][0]["narration_segment"] == ""
+
+
+def test_idempotent_second_pass():
+    """连跑 2 次：第 2 次零新增."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=1,
+            duration_sec=6.0,
+            prompt="[远景] 照月湾荷塘日落，背景远山",
+            subtitle="",
+            narration_segment="",
+        ),
+    ])
+    ctx = make_ctx(script)
+    from step01_script_gen.constraints.climax_priority import ClimaxPriorityConstraint
+
+    c = ClimaxPriorityConstraint()
+    r1 = c.apply(ctx)
+    r2 = c.apply(ctx)
+    assert len(r1) == 1
+    assert r2 == []
 
 
 def test_with_dialogue_skipped():

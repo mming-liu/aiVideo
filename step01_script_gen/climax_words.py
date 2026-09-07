@@ -24,6 +24,8 @@ NOVEL_FALLBACK——前瞻接口，写入方落地前零行为变化。写入方
 """
 from __future__ import annotations
 
+import re
+
 # ---------------------------------------------------------------------------
 # 叙事弧三段密度：检测（validation 三段统计）与注入（arc picker）的配对词表
 # ⚠️ 13 词**顺序不可重排**——arc picker 的 next(..., "反转") 按遍历序取第一个
@@ -52,6 +54,63 @@ CLIMAX_WORDS_GAP_INJECT: tuple[str, ...] = ("冲突", "反转", "真相")
 CLIMAX_WORDS_GAP_NOVEL_FALLBACK: tuple[str, ...] = (
     "密信", "圣旨", "破水而出",
 )
+
+# ---------------------------------------------------------------------------
+# 爆点/高潮「抽象节拍词」注入产物清单（v6.62 收敛，2026-09-06）——单一事实源
+#
+# 历史问题：高潮镜/爆点不足时，约束与硬修复曾把抽象节拍词追加进
+# narration_segment/subtitle/prompt/main_subject（09-06 chapter_001 实测：
+# prompt 尾部噪音、main_subject 污染 4 镜、narration 开头两遍纯节拍词——
+# 空镜 narration_segment 原本为空，注入后 suffix 成整段，会进字幕被观众看到）。
+# 抽象节拍词对图片/视频模型无视觉意义，v6.62 起全部停用注入，本清单用于
+# 约束层剥离历史数据残留（幂等）。新增注入点已禁止；如未来确需注入，
+# 必须先在此登记产物形态，保证可剥离。
+# ---------------------------------------------------------------------------
+# GAP 后半段注入后缀（旧 climax_distribution._inject 产物，随 GAP_INJECT 构造同步）
+CLIMAX_INJECTED_GAP_SUFFIX: str = "。" + "，".join(CLIMAX_WORDS_GAP_INJECT) + "，局势骤变"
+# W7 高潮分布尾缀（旧 validation._hard_fix_climax_distribution._CLIMAX_TAIL_TEMPLATES）
+CLIMAX_INJECTED_TAILS: tuple[str, ...] = (
+    "。局势骤变，真相大白",
+    "。气氛逆转，危机四伏",
+    "。身份暴露，矛盾激化",
+    "。反转揭露，悬念陡升",
+    "。冲突到达顶点，局势不可挽回",
+)
+# F2.5 爆点密度尾缀（旧 validation._hard_fix_punch_density / PunchDensityConstraint）
+CLIMAX_INJECTED_PUNCH_PATTERN: str = r"。局势骤变，\d+个爆点叠加"
+# F8 高潮优先合并标记（旧 climax_priority 注入 narration 的产物，09-06 实测
+# 镜头10 narration 整段变成该标记 → 锚点校验「实词覆盖率 22%」+ 险进字幕）
+CLIMAX_INJECTED_MERGE_MARKER: str = "[本镜信息已并入旁白，镜头降级为背景/过渡]"
+
+
+def strip_injected_suffixes(text: str) -> str:
+    """剥离爆点/高潮注入残留（幂等；无残留原样返回）.
+
+    处理 narration_segment/subtitle/prompt/main_subject 四类曾注入字段。
+    suffix 自带前导「。」（注入方 rstrip 掉原句尾后拼接），整段删除即还原。
+
+    v6.62.1（09-06）：兼容两种落盘形态——
+      a) 「前文。冲突，反转，真相，局势骤变」（正常拼接，整段剥前导「。」）
+      b) 「冲突，反转，真相，局势骤变」（纯 meta 整段——空 narration 被
+         旧注入方/LLM 直接填满 meta 词，无前文无「。」，09-06 实测形态）。
+    判定 (b) 的条件：整段剥掉空白后 == 纯 meta 串（3 词 + 「，」拼接 +
+    「，局势骤变」）→ 置空（meta 词不是原文散文，不能当 narration 上屏）。
+    """
+    if not text or not isinstance(text, str):
+        return text
+    out = text.replace(CLIMAX_INJECTED_GAP_SUFFIX, "")
+    for tail in CLIMAX_INJECTED_TAILS:
+        out = out.replace(tail, "")
+    out = re.sub(CLIMAX_INJECTED_PUNCH_PATTERN, "", out)
+    # F8 高潮优先合并标记残留（narration 里整段/句中拼接两种形态）
+    if CLIMAX_INJECTED_MERGE_MARKER in out:
+        out = out.replace(CLIMAX_INJECTED_MERGE_MARKER, "")
+        out = out.replace("。。", "。").strip("。， ")
+    # (b) 纯 meta 整段形态：剥掉suffix后剩下的就是 meta 词本体 → 置空
+    _bare = out.strip().strip("。")
+    if _bare == CLIMAX_INJECTED_GAP_SUFFIX.strip("。"):
+        return ""
+    return out
 
 # 历史 23 词**原序**表（含特化 3 词原位：第 13/14/23 位）。检测用 any() 匹配、
 # 顺序不影响语义，但为满足「无 meta 时与历史词表逐字有序一致」的零变化断言，
@@ -122,6 +181,11 @@ __all__ = [
     "CLIMAX_WORDS_GAP_GENERIC",
     "CLIMAX_WORDS_GAP_INJECT",
     "CLIMAX_WORDS_GAP_NOVEL_FALLBACK",
+    "CLIMAX_INJECTED_GAP_SUFFIX",
+    "CLIMAX_INJECTED_TAILS",
+    "CLIMAX_INJECTED_PUNCH_PATTERN",
+    "CLIMAX_INJECTED_MERGE_MARKER",
     "climax_words_for_gap",
+    "strip_injected_suffixes",
     "KEYWORD_SYNONYMS",
 ]

@@ -69,6 +69,9 @@ from .self_review import SelfReviewConstraint  # SR（LLM 自检回路）
 from .split_content_similarity import SplitContentSimilarityConstraint  # A7 拆分镜内容重复检测（v6.58, 09-03）
 from .mandatory_biz_fields import MandatoryBizFieldsConstraint
 from .role_anchor import RoleAnchorConstraint
+from .surface_backfill import SurfaceBackfillConstraint  # F12 surface 承重面回填（v6.62.1, 09-06）
+from .framing_variety import FramingVarietyConstraint  # F13 景别多样性达标（v6.62.1, 09-06）
+from .gaze_typo import GazeTypoConstraint  # F14 目光错别字归一（v6.62.1, 09-06）
 
 ALL_CONSTRAINTS.extend([
     # Phase 2
@@ -132,6 +135,9 @@ ALL_CONSTRAINTS.extend([
     SplitContentSimilarityConstraint(),  # A7 拆分镜内容重复检测（v6.58, 09-03）
     MandatoryBizFieldsConstraint(),  # B1 业务必填字段兜底（doubao 适配，2026-09-04）
     OvershoulderConsistencyConstraint(),
+    SurfaceBackfillConstraint(),  # F12 char_layout.surface 承重面回填（v6.62.1, 09-06）
+    FramingVarietyConstraint(),  # F13 景别多样性达标：unique<5 → 内容适配补缺（v6.62.1, 09-06）
+    GazeTypoConstraint(),  # F14 目光错别字归一：倒倒→紧紧（v6.62.1, 09-06）
 ])
 
 __all__ = [

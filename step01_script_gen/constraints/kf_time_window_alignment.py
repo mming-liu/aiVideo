@@ -148,6 +148,17 @@ class KfTimeWindowAlignmentConstraint(Constraint):
             for i, (a, b) in missing_segs:
                 seg_text = (seg_texts[i] if (seg_texts and i < len(seg_texts)) else motion)
                 if not seg_text:
+                    # v6.62.1（09-06）：implicit 尾段无 motion 文本 → 回退最后
+                    # 非空段文本 + 延续后缀（与 validation._hard_fix_kf_time_
+                    # window_alignment 同口径；否则缺段永修不掉，检查器每轮报）。
+                    _last_text = next(
+                        (t for t in reversed(seg_texts) if t) if seg_texts else "", ""
+                    )
+                    if _last_text:
+                        seg_text = f"{_last_text}（画面延续，保持该状态）"
+                    else:
+                        seg_text = motion
+                if not seg_text:
                     continue
                 desc = (scene_prefix + seg_text).strip("，。； ")
                 t_sec = (a + b) / 2

@@ -1,9 +1,9 @@
-"""W7. ClimaxDistributionConstraint 单元测试.
+"""W7. ClimaxDistributionConstraint 单元测试（v6.62 收敛后契约）.
 
-测试 3 类场景：
-  1. 修复：高潮全在前段 → 后半段中间一镜追加反转/揭穿/悬念
-  2. 幂等：连跑 2 次 = 第 2 次 0 改动
-  3. 隔离：高潮已在后段 / 全无 climax（追加末镜）→ 合理
+v6.62 起该约束**不再注入节拍词**（旧版把「。冲突，反转，真相，局势骤变」
+注入 5 字段——会进字幕、污染 main_subject），改为：
+  1. 剥离历史注入残留（幂等，留 RepairRecord）
+  2. 高潮镜不足 → record_violation 上报（WARN，不改数据）
 """
 from __future__ import annotations
 
@@ -14,139 +14,140 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from step01_script_gen.climax_words import (
+    CLIMAX_INJECTED_GAP_SUFFIX,
+    CLIMAX_INJECTED_TAILS,
+)
 
-def test_appends_climax_to_back_when_all_in_front():
-    """高潮全在前段 → 后半段中间一镜 main_subject 应被改."""
-    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
 
-    # 8 镜：shot 2 / shot 4 都是高潮镜，前半段已有 2 个。
-    script = make_script([
-        make_shot(index=1, prompt="[远景] 建立", main_subject="杨旭"),
-        make_shot(index=2, prompt="[中景] 刺杀", main_subject="刺客刺杀"),
-        make_shot(index=3, prompt="[中景] 后续", main_subject="杨旭"),
-        make_shot(index=4, prompt="[中景] 刺杀2", main_subject="刺客刺杀"),
-        make_shot(index=5, prompt="[中景] 场景5", main_subject="杨旭"),
-        make_shot(index=6, prompt="[中景] 场景6", main_subject="杨旭"),
-        make_shot(index=7, prompt="[中景] 场景7", main_subject="杨旭"),
-        make_shot(index=8, prompt="[中景] 场景8", main_subject="杨旭"),
-    ])
-    ctx = make_ctx(script)
+def _make_constraint():
     from step01_script_gen.constraints.climax_distribution import ClimaxDistributionConstraint
-
-    repairs = ClimaxDistributionConstraint().apply(ctx)
-
-    assert len(repairs) >= 1
-    repaired = [
-        s for s in script["shots"]
-        if "冲突" in s.get("core_keywords", []) and "真相" in s.get("core_keywords", [])
-    ]
-    assert len(repaired) >= 3
-    assert sum(s in script["shots"][len(script["shots"]) // 2:] for s in repaired) >= 1
+    return ClimaxDistributionConstraint()
 
 
-def test_is_idempotent_after_climax_appended():
-    """连跑 2 次 = 第 2 次 0 改动."""
-    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+class TestStripInjectedResidue:
+    """历史注入残留剥离."""
 
-    script = make_script([
-        make_shot(index=1, prompt="[远景] 建立", main_subject="杨旭"),
-        make_shot(index=2, prompt="[中景] 刺杀", main_subject="刺客刺杀"),
-        make_shot(index=3, prompt="[中景] 后续", main_subject="杨旭"),
-        make_shot(index=4, prompt="[中景] 刺杀2", main_subject="刺客刺杀"),
-        make_shot(index=5, prompt="[中景] 场景5", main_subject="杨旭"),
-        make_shot(index=6, prompt="[中景] 场景6", main_subject="杨旭"),
-        make_shot(index=7, prompt="[中景] 场景7", main_subject="杨旭"),
-        make_shot(index=8, prompt="[中景] 场景8", main_subject="杨旭"),
-    ])
-    ctx = make_ctx(script)
-    from step01_script_gen.constraints.climax_distribution import ClimaxDistributionConstraint
+    def test_strips_suffix_from_all_polluted_fields(self):
+        """prompt/main_subject/narration_segment 的注入残留都被剥掉."""
+        from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
 
-    c = ClimaxDistributionConstraint()
-    r1 = c.apply(ctx)
-    r2 = c.apply(ctx)
+        polluted = f"画面内容{CLIMAX_INJECTED_GAP_SUFFIX}"
+        script = make_script([
+            make_shot(index=1, prompt="[远景] 建立", main_subject="杨旭"),
+            make_shot(index=2, prompt=polluted, main_subject=f"群演{CLIMAX_INJECTED_GAP_SUFFIX}",
+                      narration_segment=polluted, subtitle=polluted),
+            make_shot(index=3, prompt="[中景] 场景3", main_subject="杨旭"),
+        ])
+        ctx = make_ctx(script)
+        repairs = _make_constraint().apply(ctx)
 
-    assert len(r1) >= 1
-    assert len(r2) == 0
+        assert len(repairs) >= 1
+        s2 = script["shots"][1]
+        assert s2["prompt"] == "画面内容"
+        assert s2["main_subject"] == "群演"
+        assert s2["narration_segment"] == "画面内容"
+        assert s2["subtitle"] == "画面内容"
 
+    def test_strip_is_idempotent(self):
+        """连跑 2 次：第 2 次无新增修复."""
+        from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
 
-def test_injects_remaining_when_one_gap_readable_climax_exists():
-    """GAP 可读高潮镜不足 3 个时，已有一个也继续补齐."""
-    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+        script = make_script([
+            make_shot(index=1, prompt=f"内容{CLIMAX_INJECTED_GAP_SUFFIX}"),
+            make_shot(index=2, prompt="[中景] 场景2"),
+            make_shot(index=3, prompt="[中景] 场景3"),
+        ])
+        ctx = make_ctx(script)
+        c = _make_constraint()
+        r1 = c.apply(ctx)
+        r2 = c.apply(ctx)
+        assert len(r1) >= 1
+        assert len(r2) == 0
+        assert script["shots"][0]["prompt"] == "内容"
 
-    # 8 镜：shot 7 是 climax（刺杀）→ index 7 >= 6
-    script = make_script([
-        make_shot(index=1, prompt="[远景] 建立", main_subject="杨旭"),
-        make_shot(index=2, prompt="[中景] 场景2", main_subject="杨旭"),
-        make_shot(index=3, prompt="[中景] 场景3", main_subject="杨旭"),
-        make_shot(index=4, prompt="[中景] 场景4", main_subject="杨旭"),
-        make_shot(index=5, prompt="[中景] 场景5", main_subject="杨旭"),
-        make_shot(index=6, prompt="[中景] 场景6", main_subject="杨旭"),
-        make_shot(index=7, prompt="[中景] 刺杀", main_subject="刺客刺杀",
-                  core_keywords=["刺杀"]),
-        make_shot(index=8, prompt="[中景] 场景8", main_subject="杨旭"),
-    ])
-    ctx = make_ctx(script)
-    from step01_script_gen.constraints.climax_distribution import ClimaxDistributionConstraint
+    def test_strips_w7_and_punch_tails_too(self):
+        """W7 尾缀与爆点密度尾缀（含数字）同样剥离."""
+        from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
 
-    repairs = ClimaxDistributionConstraint().apply(ctx)
+        script = make_script([
+            make_shot(index=1, prompt=f"内容{CLIMAX_INJECTED_TAILS[0]}"),
+            make_shot(index=2, prompt="末镜。局势骤变，3个爆点叠加"),
+            make_shot(index=3, prompt="[中景] 场景3"),
+        ])
+        ctx = make_ctx(script)
+        _make_constraint().apply(ctx)
+        assert script["shots"][0]["prompt"] == "内容"
+        assert script["shots"][1]["prompt"] == "末镜"
 
-    assert len(repairs) == 2
-    assert all(
-        "冲突" in s.get("core_keywords", []) and "真相" in s.get("core_keywords", [])
-        for s in script["shots"][4:6]
-    )
+    def test_clean_text_untouched(self):
+        """干净文本零操作（含真实含「冲突」的正文不得误删）."""
+        from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
 
-
-def test_ignores_semantic_climax_that_gap_cannot_read():
-    """main_subject 里的高潮词不能替代 GAP 可读字段."""
-    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
-
-    script = make_script([
-        make_shot(index=1, prompt="[远景] 建立", main_subject="杨旭"),
-        make_shot(index=2, prompt="[中景] 对话", main_subject="杨旭"),
-        make_shot(index=3, prompt="[中景] 铺垫", main_subject="杨旭"),
-        make_shot(index=4, prompt="[中景] 顶点", main_subject="冲突到达顶点"),
-        make_shot(index=5, prompt="[中景] 结局", main_subject="杨旭"),
-        make_shot(index=6, prompt="[中景] 远景", main_subject="杨旭"),
-    ])
-    ctx = make_ctx(script)
-    from step01_script_gen.constraints.climax_distribution import ClimaxDistributionConstraint
-
-    repairs = ClimaxDistributionConstraint().apply(ctx)
-
-    assert len(repairs) == 3
-    assert all(
-        "冲突" in s.get("core_keywords", []) and "真相" in s.get("core_keywords", [])
-        for s in script["shots"][3:]
-    )
+        script = make_script([
+            make_shot(index=1, prompt="[中景] 杨旭与刺客冲突爆发，刀刃相向"),
+            make_shot(index=2, prompt="[中景] 场景2"),
+            make_shot(index=3, prompt="[中景] 场景3"),
+        ])
+        ctx = make_ctx(script)
+        _make_constraint().apply(ctx)
+        assert script["shots"][0]["prompt"] == "[中景] 杨旭与刺客冲突爆发，刀刃相向"
 
 
-def test_appends_reversal_to_last_when_no_climax_at_all():
-    """全无 climax → 末镜应被追加反转."""
-    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+class TestShortageDetection:
+    """高潮镜不足 → 只上报不改写."""
 
-    script = make_script([
-        make_shot(index=1, prompt="[远景] 建立", main_subject="杨旭"),
-        make_shot(index=2, prompt="[中景] 喝酒", main_subject="杨旭"),
-        make_shot(index=3, prompt="[中景] 谈话", main_subject="杨旭"),
-    ])
-    ctx = make_ctx(script)
-    from step01_script_gen.constraints.climax_distribution import ClimaxDistributionConstraint
+    def _shortage_script(self):
+        from tests.step01_script_gen.conftest import make_script, make_shot
+        return make_script([
+            make_shot(index=i, prompt=f"[中景] 场景{i}", main_subject="杨旭")
+            for i in range(1, 9)
+        ])
 
-    repairs = ClimaxDistributionConstraint().apply(ctx)
+    def test_shortage_records_violation_without_mutation(self):
+        """全无高潮镜 → 记 Violation，但所有字段保持原样."""
+        from tests.step01_script_gen.conftest import make_ctx
 
-    assert len(repairs) >= 1
-    # 末镜应被追加反转相关词
-    last_prompt = script["shots"][-1]["prompt"]
-    assert "反转" in last_prompt or "局势" in last_prompt
+        script = self._shortage_script()
+        before = repr([(s["prompt"], s["main_subject"]) for s in script["shots"]])
+        ctx = make_ctx(script)
+        repairs = _make_constraint().apply(ctx)
+
+        violations = ctx.drain_violations()
+        assert len(violations) >= 1
+        assert all(v.constraint_name == "climax_distribution" for v in violations)
+        # 缺口数 = 3（全无 climax）
+        assert all("缺 3 个" in v.message for v in violations)
+        # 数据零改写
+        after = repr([(s["prompt"], s["main_subject"]) for s in script["shots"]])
+        assert before == after
+        assert repairs == []
+
+    def test_no_violation_when_sufficient(self):
+        """3 个高潮镜（GAP 可读字段含标记词）→ 零违例."""
+        from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+
+        script = make_script([
+            make_shot(index=1, prompt="[远景] 建立", main_subject="杨旭"),
+            make_shot(index=2, prompt="[中景] 刺杀", narration_segment="刺客刺杀", core_keywords=["刺杀"]),
+            make_shot(index=3, prompt="[中景] 后续", main_subject="杨旭"),
+            make_shot(index=4, prompt="[中景] 反转", narration_segment="真相曝光", core_keywords=["反转"]),
+            make_shot(index=5, prompt="[中景] 场景5", main_subject="杨旭"),
+            make_shot(index=6, prompt="[中景] 冲突", narration_segment="冲突升级", core_keywords=["冲突"]),
+            make_shot(index=7, prompt="[中景] 场景7", main_subject="杨旭"),
+            make_shot(index=8, prompt="[中景] 场景8", main_subject="杨旭"),
+        ])
+        ctx = make_ctx(script)
+        repairs = _make_constraint().apply(ctx)
+        assert repairs == []
+        assert ctx.drain_violations() == []
 
 
 def test_constraint_attributes():
     """验证 Constraint 类属性正确."""
-    from step01_script_gen.constraints.climax_distribution import ClimaxDistributionConstraint
     from step01_script_gen.constraints.types import Severity
 
-    c = ClimaxDistributionConstraint()
+    c = _make_constraint()
     assert c.name == "climax_distribution"
     assert c.severity == Severity.WARN
     assert c.skip_hook is True

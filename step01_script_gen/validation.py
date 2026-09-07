@@ -652,7 +652,20 @@ def _check_character_consistency(script: dict) -> dict:
                               "神秘人", "黑衣人", "蒙面人", "黑影", "偷袭者"]
                 # 合并所有文本进行检查
                 all_text = prompt + ff_desc + lf_desc
-                found_persons = [pw for pw in person_words if pw in all_text]
+                # v6.62.1（09-06）：style 前缀豁免——「古风真人影视剧」里的「真人」
+                # 是风格词（真人=live-action），「真人影视」含子串「人影」把纯空镜
+                # 误报「空镜含人影」（09-06 镜头 1/3/7 每轮 6 条）。剥掉风格前缀再扫。
+                _negations = (
+                    "空无一人", "不见人影", "无人物", "没有人物", "没有人", "画面无人",
+                    "不见人", "无一人", "无人烟", "无人", "杳无人迹", "人迹罕至",
+                    "可容2-3人", "可容3人", "可容4人", "可容5人", "可容2人", "可容1人",
+                    # 风格前缀（style_prefix.STYLE_PREFIX 固定头部，真人=live-action）
+                    "古风真人影视剧", "古风真人竖屏短视频", "真人影视剧", "真人影视",
+                )
+                _stripped = all_text
+                for _neg in _negations:
+                    _stripped = _stripped.replace(_neg, "")
+                found_persons = [pw for pw in person_words if pw in _stripped]
                 if found_persons:
                     # 检查是否 main_subject 本身就包含这些词（如"刺客出水"）
                     if not any(pw in main_subject for pw in found_persons):
@@ -3798,6 +3811,13 @@ def _check_climax_priority(shots: list[dict]) -> dict:
         has_emotion = any(h in fields for h in _CLIMAX_EMOTION_HINTS)
         if has_conflict or has_emotion:
             continue
+        # v6.62.1：与 fixer（climax_priority 约束）同口径——有台词的镜不可
+        # 合并（台词是信息载体，删镜丢剧情）。旧版不豁免 → 对白镜带「媒人/
+        # 家常」类背景词也报「应为 0 镜」不收敛（09-06 实测镜头 8/9 每轮 5 行）。
+        sub = (shot.get("subtitle", "") or "").strip()
+        narr = (shot.get("narration_segment", "") or "").strip()
+        if sub or narr:
+            continue
         # 开篇 1-2 镜（idx 1-2）若 duration ≤3s，视为合法快铺垫
         if idx in (1, 2):
             try:
@@ -4801,6 +4821,18 @@ def _hard_fix_kf_time_window_alignment(shots: list, hook: dict | None = None) ->
         for i, (a, b) in missing_segs:
             # 缺段对应文本（无显式时段时回退到 motion_desc 整体）
             seg_text = (seg_texts[i] if (seg_texts and i < len(seg_texts)) else motion)
+            if not seg_text:
+                # v6.62.1（09-06）：implicit 尾段（_parse_motion_time_segments
+                # 自动补的 (last_end, duration)）没有对应 motion 文本 → 空串
+                # 被跳过 → 缺段永修不掉（shot10 段 6-7s 实测：检查器每轮报、
+                # 修复器每轮静默跳）。回退链：最后一段非空文本 + 延续后缀。
+                _last_text = next(
+                    (t for t in reversed(seg_texts) if t) if seg_texts else "", ""
+                )
+                if _last_text:
+                    seg_text = f"{_last_text}（画面延续，保持该状态）"
+                else:
+                    seg_text = motion
             if not seg_text:
                 continue
             # 段文本是动作链 → 加场景前缀变静态画面
@@ -5870,13 +5902,13 @@ def _hard_fix_opening_hook(shots: list, hook: dict | None = None) -> int:
 
 # F2.5 爆点密度 hard_fix
 def _hard_fix_punch_density(shots: list, hook: dict | None = None) -> int:
-    """v6.40（08-22）P18 闭环扩展：爆点密度硬修复.
+    """v6.40（08-22）P18 闭环扩展：爆点密度检测（旧路径 HARD_FIX_USE_OLD=1 才走）.
 
-    8-22 跑批实测：2 次 regen 都报「全片爆点 N 个 < 目标」。
-    修法：每 30 秒应有 1 爆点。若 < 目标，每缺 1 爆点，给最后一镜 prompt
-    追加"局势骤变"提示（弱增强，避免污染叙事）。
-    幂等：已含爆点词则跳过。
-    返回改写镜头数。
+    v6.62（09-06）收敛：旧版给末镜 prompt 追加「。局势骤变，N个爆点叠加」——
+    抽象节拍词对图片/视频模型无视觉意义（纯噪音 token），且注入词会让检测层
+    误判已达标。现只 WARN 不改写；新框架 PunchDensityConstraint 同口径
+    （record_violation + 剥离残留，产物清单见 climax_words.CLIMAX_INJECTED_*）。
+    返回恒 0（无改写）。
     """
     if not shots:
         return 0
@@ -5905,16 +5937,12 @@ def _hard_fix_punch_density(shots: list, hook: dict | None = None) -> int:
     needed = max(1, int(total_dur // 30) + (1 if total_dur % 30 else 0))
     if punch_count >= needed:
         return 0
-    # 缺 N 个爆点：最后一镜追加
     shortage = needed - punch_count
-    s = shots[-1]
-    if not isinstance(s, dict):
-        return 0
-    prompt = s.get("prompt", "") or ""
-    if "局势骤变" in prompt:
-        return 0
-    s["prompt"] = prompt.rstrip("。") + f"。局势骤变，{shortage}个爆点叠加"
-    return 1
+    _get_logger().warn(
+        f"[HARD-FIX][F2.5] 爆点密度不足（{punch_count}/{needed}，缺 {shortage} 个）"
+        "——仅检测告警，v6.62 起不注入节拍词"
+    )
+    return 0
 
 
 # F2.7 lf_desc 字数 hard_fix
@@ -7082,80 +7110,40 @@ def _hard_fix_runtime_extend(
     return fixed
 
 
-# W7: 高潮分布硬修复
-_CLIMAX_TAIL_TEMPLATES = (
-    "。局势骤变，真相大白",
-    "。气氛逆转，危机四伏",
-    "。身份暴露，矛盾激化",
-    "。反转揭露，悬念陡升",
-    "。冲突到达顶点，局势不可挽回",
-)
-
-
+# W7: 高潮分布 → v6.62 收敛为只检测告警（不注入节拍词，见 climax_words.CLIMAX_INJECTED_TAILS）
 def _hard_fix_climax_distribution(shots: list, hook: dict | None = None) -> int:
-    """W7 v6.41 高潮分布硬修复（08-23）.
+    """W7 v6.41 高潮分布检测（旧路径 HARD_FIX_USE_OLD=1 才走）.
 
-    8-22 跑批：8 镜中 2 个 climax 镜（shot 3 刺杀 + shot 5 张十三质问）都集中在
-    前 1/2 段（0-20s），后半段 20-37s 平淡无爆点。
-
-    修法：检测 _CLIMAX_CONFLICT_HINTS 镜集中位置，若 < 1/2 时长在 climax 段 →
-    在后半段至少 1 镜（index > len//2）的 main_subject 追加反转/揭穿/悬念词，
-    并把 prompt 末尾追加 _CLIMAX_TAIL_TEMPLATES 之一。
-    幂等：已含"反转/揭露/揭穿/局势骤变"跳过。
+    8-23 起曾向后半段镜 main_subject/prompt 追加「局势骤变/真相大白」类抽象
+    节拍词——对图片/视频模型无视觉意义、污染 main_subject 肖像匹配，且注入
+    的词会被检测层读到而误判已达标（validator-gaming）。09-06 chapter_001
+    实测 narration 被填入纯节拍词进字幕。v6.62 收敛：只 WARN 不改写；新框架
+    ClimaxDistributionConstraint 同口径（record_violation + 剥离残留）。
+    返回恒 0（无改写）。
     """
     if not shots:
         return 0
-    # 复用 _CLIMAX_CONFLICT_HINTS（已存在模块级）
-    fixed = 0
-    climax_idx = []
-    for i, s in enumerate(shots):
-        if not isinstance(s, dict):
-            continue
-        text = " ".join([s.get("prompt", "") or "", s.get("main_subject", "") or "",
-                         s.get("motion_desc", "") or "", s.get("narration_segment", "") or ""])
-        if any(kw in text for kw in _CLIMAX_CONFLICT_HINTS):
-            climax_idx.append(i)
+    climax_idx = [
+        i for i, s in enumerate(shots)
+        if isinstance(s, dict) and any(
+            kw in " ".join([s.get("prompt", "") or "", s.get("main_subject", "") or "",
+                            s.get("motion_desc", "") or "", s.get("narration_segment", "") or ""])
+            for kw in _CLIMAX_CONFLICT_HINTS)
+    ]
     if not climax_idx:
-        # 全无 climax → 末镜追加反转
-        last = shots[-1]
-        if not isinstance(last, dict):
-            return 0
-        prompt = last.get("prompt", "") or ""
-        if any(w in prompt for w in ("反转", "揭露", "揭穿", "局势骤变", "真相")):
-            return 0
-        last["prompt"] = prompt.rstrip("。") + _CLIMAX_TAIL_TEMPLATES[0]
-        return 1
-    # 高潮分布判定：climax 在前 1/2 段
-    # 08-23 修复：validator (_check_narrative_arc_distribution) 用 1/3 段切分
-    # last_third = total - total // 3；高潮镜头需落入 index >= last_third 才算
-    # 后半段。原版用 mid=total//2 选 shot[5]，但 last_third=6（total=8），
-    # shot[5] 在 tier=1 不算后半段，validator 仍 WARN。改用 last_third 选。
+        _get_logger().warn(
+            "[HARD-FIX][W7] 全片无高潮镜（仅检测告警，v6.62 起不注入节拍词）"
+        )
+        return 0
     total = len(shots)
     last_third = total - total // 3
-    climax_in_first = sum(1 for i in climax_idx if i < last_third)
     climax_in_last = sum(1 for i in climax_idx if i >= last_third)
-    if climax_in_last >= 1:
-        return 0  # 后 1/3 段已有 climax
-    if climax_in_first < 1:
-        return 0  # 全部都不算 climax
-    # 后 1/3 段缺 climax：挑后 1/3 段中点
-    if total < 4:
-        return 0
-    target_idx = last_third + (total - last_third) // 2
-    if target_idx >= total:
-        target_idx = total - 1
-    target = shots[target_idx]
-    if not isinstance(target, dict):
-        return 0
-    # 改 main_subject 加 climax 关键词（validator 查 narration+main_subject）
-    main_subject = target.get("main_subject", "") or ""
-    # 选一个未使用的 climax 关键词（CLIMAX_WORDS_ARC 与三段密度检测侧共用同一
-    # 常量——真同源：注入的词必然可被检测命中）
-    used_kw = [w for w in CLIMAX_WORDS_ARC if w in main_subject or w in target.get("prompt", "")]
-    target_kw = next((w for w in CLIMAX_WORDS_ARC if w not in used_kw), "反转")
-    target["main_subject"] = main_subject.rstrip("，,。") + f"，{target_kw}揭示"
-    fixed += 1
-    return fixed
+    if climax_in_last < 1 and total >= 4:
+        _get_logger().warn(
+            f"[HARD-FIX][W7] 高潮镜集中前段（index {climax_idx}），后 1/3 段无爆点"
+            "——仅检测告警，v6.62 起不注入节拍词"
+        )
+    return 0
 
 
 # W9: kf stage='pre' 含「指尖沾血」豁免（语义区分：受害者手沾血 vs 受害者伤口血）

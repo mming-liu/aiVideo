@@ -1356,6 +1356,48 @@ def _extract_assets_and_update_script(script: dict) -> None:
             if k in _pa
         }
     script["prop_assets"] = _prop_assets_out
+    # v6.62.1（09-06）：分镜未引用的道具过滤——本次 LLM 提的道具若在任何分镜
+    # 文本（prompt/ff/lf/motion/kf/main_subject）都无命中（标准名/别名都不出现），
+    # step02a 仍会为它生成白底资产图（烧额度），step02b r2v 也永不引用。
+    # 「马车」09-06 实测：原文有、本章分镜没拍到 → 6 道具里白生成 1 张。
+    # 用 consistent_terms（含别名）做覆盖判定，命中任一分镜文本才保留。
+    _shot_text_pool = []
+    for _s in script.get("shots", []) + ([script.get("hook")] if isinstance(script.get("hook"), dict) else []):
+        if not isinstance(_s, dict):
+            continue
+        _parts = [str(_s.get(f) or "") for f in
+                  ("prompt", "ff_desc", "lf_desc", "motion_desc", "main_subject")]
+        for _kf in _s.get("keyframes") or []:
+            if isinstance(_kf, dict):
+                _parts.append(str(_kf.get("desc") or ""))
+        _shot_text_pool.append(" ".join(_parts))
+    _unused = []
+    _PROP_ACTION_VERBS = ("持", "握", "提", "拿", "举", "执", "放", "横放", "挂",
+                          "撑", "牵", "推", "掷", "抛", "拿好", "托", "抱", "挥")
+    for _pid in list(_prop_assets_out):
+        _terms = [str(t) for t in (_prop_assets_out[_pid].get("consistent_terms") or [])]
+        _probe_terms = [str(_pid), *_terms]
+        # 单字别名（车/箫/伞）在散文里歧义命中率高（09-06 实测「车轮大的红日」
+        # 的「车」把未出镜的「马车」误判已引用），但一刀切剔除又把真用的
+        # 「箫」（双手持箫/箫横放膝头）误删。单字 probe 收紧为
+        # 「动词+单字」形态（持箫/推车/撑伞）才算引用；≥2 字 probe 子串照旧。
+        _long_terms = [t for t in _probe_terms if len(t) >= 2]
+        _short_terms = [t for t in _probe_terms if len(t) == 1]
+        _short_patterns = [f"{v}{t}" for t in _short_terms for v in _PROP_ACTION_VERBS]
+
+        def _hit(text: str) -> bool:
+            if any(t in text for t in _long_terms):
+                return True
+            return any(p in text for p in _short_patterns)
+
+        _referenced = any(_hit(text) for text in _shot_text_pool if text)
+        if not _referenced:
+            _unused.append(_pid)
+            _prop_assets_out.pop(_pid)
+    if _unused:
+        _logger.info(
+            f"[INFO] 分镜未引用的道具已从 prop_assets 剔除（不生成资产图）: {sorted(_unused)}"
+        )
     if _scene_assets_out or _prop_assets_out:
         _logger.info(
             f"[INFO] 场景资产 {len(_scene_assets_out)} 个 / 道具资产 {len(_prop_assets_out)} 个 已写入 script_result.json"
