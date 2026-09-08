@@ -52,6 +52,17 @@ _LAST_SHOT_TARGET_SEC = 5.0
 _PER_ADD_CAP = 3.0
 _MAX_STRETCH_PASSES = 8     # 循环拉伸安全阀（正常 1-2 轮收敛）
 
+# v6.62.4（09-08）拉伸比告警阈值（**warning-only，不触发重生成**）。
+# 依据：本模块 v6.49 注释已认可「目标 60s → 聚合 1.30x」可接受，故聚合阈值取
+# 1.20 做提前预警；单镜取 1.35 抓离群镜。
+# 09-08 chapter_001 实测：聚合 1.23x、单镜最高 1.50x（shot10 4.00→6.00），
+# 且 7/11 镜 ≥1.25x —— 而「高节奏动作镜不拉伸」保护一次都没生效（该章无动作镜），
+# 于是拉伸全部落在静态铺垫镜上，把空镜/群演镜拉得更长。
+# 拉伸比高的**根因几乎总是内容不足**（镜头没覆盖原文高潮），正确解法是补镜头
+# 而非调拉伸算法，故这里只做可观测性，不改拉伸行为、不记 Violation。
+_STRETCH_WARN_TOTAL = 1.20
+_STRETCH_WARN_SHOT = 1.35
+
 
 # 高节奏动作词集（首次调用时构建）
 _ACTION_TEMPO_WORDS: frozenset | None = None
@@ -232,6 +243,13 @@ class RuntimeExtendConstraint(Constraint):
         # 2) 总时长计算——只算正片分镜，钩子时长另算（08-23 用户规则）
         total = _sum_duration(ctx.shots)
 
+        # v6.62.4：拉伸前基线快照，供步骤 3.5 算拉伸比（按列表位置对齐——
+        # 拉伸循环不增删镜头，位置稳定；index 可能是 8.5 这类小数不宜作键）
+        _pre_stretch_durs = [
+            _shot_dur(s) if isinstance(s, dict) else 0.0 for s in ctx.shots
+        ]
+        _pre_stretch_total = total
+
         # 3) 总时长不足：循环按比例拉伸，直到达标（60s）或全部顶到 cap
         for _pass in range(_MAX_STRETCH_PASSES):
             if total >= _REDGUO_TARGET_SEC:
@@ -287,6 +305,53 @@ class RuntimeExtendConstraint(Constraint):
             total = _sum_duration(ctx.shots)
             if not added_any:
                 break
+
+        # 3.5) v6.62.4（09-08）拉伸比告警 —— warning-only：只产出 action="warn"
+        #      的 RepairRecord，**不记 Violation、不触发任何重生成**（regen 由
+        #      GAP 零高潮检测负责，见 gap_analysis.analyze_shot_distribution）。
+        if _pre_stretch_total > 0:
+            _total_ratio = total / _pre_stretch_total
+            if _total_ratio > _STRETCH_WARN_TOTAL:
+                repairs.append(
+                    RepairRecord(
+                        constraint_name=self.name,
+                        shot_index=None,
+                        action="warn",
+                        target="duration_sec",
+                        before=f"{_pre_stretch_total:.2f}",
+                        after=f"{total:.2f}",
+                        detail=(
+                            f"正片整体拉伸 {_total_ratio:.2f}x "
+                            f"({_pre_stretch_total:.1f}s → {total:.1f}s) "
+                            f"> 告警阈值 {_STRETCH_WARN_TOTAL:.2f}x。"
+                            "根因通常是内容不足（镜头未覆盖原文高潮），"
+                            "靠拉时长会把静态镜拉得更长；正确解法是补镜头/补动作。"
+                        ),
+                    )
+                )
+        for _s, _pre_d in zip(ctx.shots, _pre_stretch_durs):
+            if not isinstance(_s, dict) or _pre_d <= 0:
+                continue
+            _cur_d = _shot_dur(_s)
+            if _cur_d <= 0:
+                continue
+            _shot_ratio = _cur_d / _pre_d
+            if _shot_ratio > _STRETCH_WARN_SHOT:
+                repairs.append(
+                    RepairRecord(
+                        constraint_name=self.name,
+                        shot_index=_s.get("index"),
+                        action="warn",
+                        target="duration_sec",
+                        before=f"{_pre_d:.2f}",
+                        after=f"{_cur_d:.2f}",
+                        detail=(
+                            f"单镜拉伸 {_shot_ratio:.2f}x ({_pre_d:.1f}s → {_cur_d:.1f}s) "
+                            f"> 告警阈值 {_STRETCH_WARN_SHOT:.2f}x —— 该镜内容量与时长不匹配，"
+                            "建议拆分动作/补反应镜而非拉长单镜。"
+                        ),
+                    )
+                )
 
         # 4) 全部顶到 cap 仍 < 60s 硬下限 → 镜头数不够，记 HARD Violation 走 regen
         #    （8s × N < 60 即 N < 8：加镜头才能解决，继续拉单镜时长违反 8s 上限）

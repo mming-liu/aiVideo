@@ -117,13 +117,41 @@ def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
         if any(kw in segment_text for kw in climax_keywords):
             has_climax_coverage = True
             climax_shots_count += 1
+            continue
+
+        # v6.62.4（09-08）扩检测面：上面 3 字段在实测中近乎全盲——09-08
+        # chapter_001 有 7/11 镜 narration_segment 为空，高潮若只写在
+        # main_subject/motion_desc 里就完全检测不到。补扫这两个「语义动作」
+        # 字段。**不扫 prompt**：prompt 带风格前缀（无重影/无伪影）与
+        # [角色: 特征] 锚点，是噪音源，实测相比 motion_desc 零增益。
+        # 单字词（杀/死/跑）在新字段易假命中（实测 shot1 的 prompt 因单字
+        # 「跑」假命中），故新字段只认 ≥2 字关键词，单字词仍只在上面 3 字段生效。
+        action_text = str(shot.get("main_subject", "") or "") + " " + \
+                      str(shot.get("motion_desc", "") or "")
+        if any(kw in action_text for kw in climax_keywords if len(kw) >= 2):
+            has_climax_coverage = True
+            climax_shots_count += 1
 
     # 3. 校验“蒙太奇拆分”规则（核心优化点）
     # 规则：如果检测到了高潮剧情，那么相关的镜头数量必须 >= 3
     montage_check_passed = True
     montage_message = ""
 
-    if has_climax_coverage and climax_shots_count < 3:
+    # v6.62.4（09-08）修零边界漏洞：旧实现写 `if has_climax_coverage and count < 3`
+    # —— count==0 时 has_climax_coverage 为 False，整个检查被**跳过**，于是
+    # 「1-2 个高潮镜」FAIL 而「0 个高潮镜」PASS，还打印「✅ 质量优秀」。
+    # 09-08 chapter_001 实测：正片 11 镜零高潮（刺客/刺杀/匕首/心口/破水/
+    # 尖叫/死 全 0 次，张十三 0 次出镜），GAP 报 status=pass、反馈为空，
+    # LLM 永远收不到「补高潮」指令。0 是比 1-2 更严重的缺陷，必须独立分支。
+    if climax_shots_count == 0:
+        montage_check_passed = False
+        montage_message = (
+            "⚠️ 严重：正片镜头**零高潮覆盖**——未检测到任何强事件词"
+            "（战斗/刺杀/反转/冲突/追逐/暴露等）。正片只拍了铺垫，"
+            "原文的核心冲突/高潮整段缺失。请重写：后半段至少 3 镜覆盖原文的"
+            "冲突/反转/动作高潮，且这些镜头必须有具体动作描述与台词。"
+        )
+    elif climax_shots_count < 3:
         montage_check_passed = False
         montage_message = f"⚠️ 警告：检测到高潮剧情，但仅生成了 {climax_shots_count} 个镜头。建议拆分为至少 3 个独立镜头（如：跃出水面、寒光一闪、刺入心口）以增强视觉冲击力。"
 

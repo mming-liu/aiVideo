@@ -2686,3 +2686,1160 @@
 [2026-09-08 21:26:38] [HARD_FIX] 本轮路径: 新 Constraint 框架
 [2026-09-08 21:26:38] [CONSTRAINT] 修复 21 处 (top: prompt_sanitize=4, mandatory_biz_fields=3, kf_time_window_alignment=2, runtime_extend=2, frame_layouts_required=2)
 [2026-09-08 21:26:38] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-08 21:57:22] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=enabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=400, body={"error":"bad param"}
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 21:57:22] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=429, body={"error":"rate limited","retry_after":3}
+[2026-09-08 21:57:22] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2348290340720'>
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2348290998688'>
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 21:57:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:57:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 21:57:22] [SPLIT] 1 个镜头估时 > 15.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:57:23] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 21:57:23] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 21:57:23] [shot7 尾帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「秘人匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 21:57:23] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-08 21:57:23]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-08 21:57:23] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-08 21:57:23] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-08 21:57:23] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:57:23]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 21:57:23] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:57:23] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:57:23]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 21:57:23] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:57:23] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:57:23]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 21:57:23] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:57:23] [REGEN] LLM 调用失败: API 失败
+[2026-09-08 21:57:23] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:57:23]   - axis_jump@shot2: 轴线跳
+[2026-09-08 21:57:23] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:57:23] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-08 21:57:23] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:57:23]   - axis_jump@shot2: 轴线跳
+[2026-09-08 21:57:23] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:57:23] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-08 21:57:24] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 21:57:24] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 21:57:24] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-08 21:57:24] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:57:24] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:57:24] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:57:24] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:57:24] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:57:24] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:57:24] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:57:24] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:57:24] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:57:24] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:57:24] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:57:24] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:57:24] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:57:24] [HARD_FIX] 本轮路径: 新 Constraint 框架
+[2026-09-08 21:57:24] [CONSTRAINT] 修复 23 处 (top: runtime_extend=4, prompt_sanitize=4, mandatory_biz_fields=3, kf_time_window_alignment=2, frame_layouts_required=2)
+[2026-09-08 21:57:24] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-08 22:34:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:34:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:34:50] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=8000
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=enabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=401, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: {"error":{"code":"Unauthorized"}}
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=403, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: {"error":"quota exhausted"}
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=400, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: {"error":"bad param"}
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=503, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: {"error":"busy"}
+[2026-09-08 22:34:51] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=503, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: {"error":"busy"}
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=429, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: {"error":"rate limited","retry_after":3}
+[2026-09-08 22:34:51] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: <MagicMock name='mock.text.__getitem__()' id='1863128803920'>
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=length, completion_tokens=None, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: <MagicMock name='mock.text.__getitem__()' id='1863128806272'>
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=567, max_completion_tokens=32768
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 22:34:51] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=50, max_completion_tokens=32768
+[2026-09-08 22:34:51] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=8000
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=enabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=401, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {"error":{"code":"Unauthorized"}}
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=403, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {"error":"quota exhausted"}
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=400, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {"error":"bad param"}
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=503, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {"error":"busy"}
+[2026-09-08 22:35:35] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=503, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {"error":"busy"}
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=429, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {"error":"rate limited","retry_after":3}
+[2026-09-08 22:35:35] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: <MagicMock name='mock.text.__getitem__()' id='2040167751296'>
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=length, completion_tokens=None, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: <MagicMock name='mock.text.__getitem__()' id='2040167753648'>
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=567, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=50, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=length, completion_tokens=32768, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '{"shots": [{"index": 1, "prompt": "半句被切'}, 'finish_reason': 'length'}], 'usage': {'prompt_tokens': 40000, 'completion_tokens': 32
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=length, completion_tokens=32768, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '{"shots": [{"index": 1, "prompt": "半句被切'}, 'finish_reason': 'length'}], 'usage': {'prompt_tokens': 40000, 'completion_tokens': 32
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=length, completion_tokens=12345, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '{"shots": [{"index": 1, "prompt": "半句被切'}, 'finish_reason': 'length'}], 'usage': {'prompt_tokens': 40000, 'completion_tokens': 12
+[2026-09-08 22:35:35] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:35:35] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:50] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=8000
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=enabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=401, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {"error":{"code":"Unauthorized"}}
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=403, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {"error":"quota exhausted"}
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=400, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {"error":"bad param"}
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=503, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {"error":"busy"}
+[2026-09-08 22:35:50] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=503, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {"error":"busy"}
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=429, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {"error":"rate limited","retry_after":3}
+[2026-09-08 22:35:50] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=None, completion_tokens=None, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: <MagicMock name='mock.text.__getitem__()' id='1786602980752'>
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=length, completion_tokens=None, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: <MagicMock name='mock.text.__getitem__()' id='1786602983104'>
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=567, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=50, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=length, completion_tokens=32768, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '{"shots": [{"index": 1, "prompt": "半句被切'}, 'finish_reason': 'length'}], 'usage': {'prompt_tokens': 40000, 'completion_tokens': 32
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=length, completion_tokens=32768, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '{"shots": [{"index": 1, "prompt": "半句被切'}, 'finish_reason': 'length'}], 'usage': {'prompt_tokens': 40000, 'completion_tokens': 32
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=length, completion_tokens=12345, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '{"shots": [{"index": 1, "prompt": "半句被切'}, 'finish_reason': 'length'}], 'usage': {'prompt_tokens': 40000, 'completion_tokens': 12
+[2026-09-08 22:35:50] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit response: status=200, finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:35:50] [DEBUG] agent_plan_text_submit body: {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:35:51] [SPLIT] 1 个镜头估时 > 15.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:35:51] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 22:35:51] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 22:35:51] [shot7 尾帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「秘人匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 22:35:51] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-08 22:35:51]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-08 22:35:51] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-08 22:35:51] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-08 22:35:52] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:35:52]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 22:35:52] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:35:52] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:35:52]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 22:35:52] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:35:52] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:35:52]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 22:35:52] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:35:52] [REGEN] LLM 调用失败: API 失败
+[2026-09-08 22:35:52] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:35:52]   - axis_jump@shot2: 轴线跳
+[2026-09-08 22:35:52] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:35:52] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-08 22:35:52] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:35:52]   - axis_jump@shot2: 轴线跳
+[2026-09-08 22:35:52] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:35:52] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-08 22:35:52] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 22:35:52] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 22:35:52] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-08 22:35:52] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:35:52] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:35:52] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:35:52] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:35:52] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:35:52] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:35:52] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:35:52] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:35:52] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:35:52] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:35:52] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:35:52] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:35:52] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:35:52] [HARD_FIX] 本轮路径: 新 Constraint 框架
+[2026-09-08 22:35:52] [CONSTRAINT] 修复 23 处 (top: runtime_extend=4, prompt_sanitize=4, mandatory_biz_fields=3, kf_time_window_alignment=2, frame_layouts_required=2)
+[2026-09-08 22:35:52] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=8000
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=enabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=400, body={"error":"bad param"}
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 22:42:22] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=429, body={"error":"rate limited","retry_after":3}
+[2026-09-08 22:42:22] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='1948844004016'>
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='1948844006368'>
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text finish_reason=length, completion_tokens=None, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=567, max_completion_tokens=32768
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=50, max_completion_tokens=32768
+[2026-09-08 22:42:22] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '{"shots": [{"index": 1, "prompt": "半句被切'}, 'finish_reason': 'length'}], 'usage': {'prompt_tokens': 40000, 'completion_tokens': 12
+[2026-09-08 22:42:22] [DEBUG] agent_plan_text finish_reason=length, completion_tokens=12345, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=8000
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=enabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=400, body={"error":"bad param"}
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 22:43:31] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=429, body={"error":"rate limited","retry_after":3}
+[2026-09-08 22:43:31] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='3129676799280'>
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='3129676801632'>
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text finish_reason=length, completion_tokens=None, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=567, max_completion_tokens=32768
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=50, max_completion_tokens=32768
+[2026-09-08 22:43:31] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '{"shots": [{"index": 1, "prompt": "半句被切'}, 'finish_reason': 'length'}], 'usage': {'prompt_tokens': 40000, 'completion_tokens': 12
+[2026-09-08 22:43:31] [DEBUG] agent_plan_text finish_reason=length, completion_tokens=12345, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:43:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:43:32] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=8000
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=enabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=400, body={"error":"bad param"}
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 22:43:33] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=429, body={"error":"rate limited","retry_after":3}
+[2026-09-08 22:43:33] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='1870089444656'>
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='1870089447008'>
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text finish_reason=length, completion_tokens=None, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=567, max_completion_tokens=32768
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=50, max_completion_tokens=32768
+[2026-09-08 22:43:33] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '{"shots": [{"index": 1, "prompt": "半句被切'}, 'finish_reason': 'length'}], 'usage': {'prompt_tokens': 40000, 'completion_tokens': 12
+[2026-09-08 22:43:33] [DEBUG] agent_plan_text finish_reason=length, completion_tokens=12345, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=8000
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=enabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=400, body={"error":"bad param"}
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 22:44:06] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=429, body={"error":"rate limited","retry_after":3}
+[2026-09-08 22:44:06] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2144287054816'>
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2144287057168'>
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text finish_reason=length, completion_tokens=None, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=567, max_completion_tokens=32768
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=50, max_completion_tokens=32768
+[2026-09-08 22:44:06] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '{"shots": [{"index": 1, "prompt": "半句被切'}, 'finish_reason': 'length'}], 'usage': {'prompt_tokens': 40000, 'completion_tokens': 12
+[2026-09-08 22:44:06] [DEBUG] agent_plan_text finish_reason=length, completion_tokens=12345, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=8000
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=enabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=400, body={"error":"bad param"}
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 22:44:32] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=429, body={"error":"rate limited","retry_after":3}
+[2026-09-08 22:44:32] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='1496743776608'>
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='1496743778960'>
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text finish_reason=length, completion_tokens=None, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=567, max_completion_tokens=32768
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=50, max_completion_tokens=32768
+[2026-09-08 22:44:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '{"shots": [{"index": 1, "prompt": "半句被切'}, 'finish_reason': 'length'}], 'usage': {'prompt_tokens': 40000, 'completion_tokens': 12
+[2026-09-08 22:44:32] [DEBUG] agent_plan_text finish_reason=length, completion_tokens=12345, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:44:34] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=8000
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=enabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=400, body={"error":"bad param"}
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 22:44:34] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=429, body={"error":"rate limited","retry_after":3}
+[2026-09-08 22:44:34] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='1781236430368'>
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='1781237088336'>
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text finish_reason=length, completion_tokens=None, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=567, max_completion_tokens=32768
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=50, max_completion_tokens=32768
+[2026-09-08 22:44:34] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '{"shots": [{"index": 1, "prompt": "半句被切'}, 'finish_reason': 'length'}], 'usage': {'prompt_tokens': 40000, 'completion_tokens': 12
+[2026-09-08 22:44:34] [DEBUG] agent_plan_text finish_reason=length, completion_tokens=12345, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:44:34] [SPLIT] 1 个镜头估时 > 15.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:44:34] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 22:44:34] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 22:44:35] [shot7 尾帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「秘人匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 22:44:35] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-08 22:44:35]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-08 22:44:35] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-08 22:44:35] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-08 22:44:35] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:44:35]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 22:44:35] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:44:35] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:44:35]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 22:44:35] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:44:35] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:44:35]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 22:44:35] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:44:35] [REGEN] LLM 调用失败: API 失败
+[2026-09-08 22:44:35] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:44:35]   - axis_jump@shot2: 轴线跳
+[2026-09-08 22:44:35] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:44:35] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-08 22:44:35] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:44:35]   - axis_jump@shot2: 轴线跳
+[2026-09-08 22:44:35] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:44:35] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-08 22:44:36] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 22:44:36] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 22:44:36] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-08 22:44:36] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:44:36] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:44:36] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:44:36] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:44:36] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:44:36] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:44:36] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:44:36] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:44:36] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:44:36] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:44:36] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:44:36] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:44:36] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:44:36] [HARD_FIX] 本轮路径: 新 Constraint 框架
+[2026-09-08 22:44:36] [CONSTRAINT] 修复 23 处 (top: runtime_extend=4, prompt_sanitize=4, mandatory_biz_fields=3, kf_time_window_alignment=2, frame_layouts_required=2)
+[2026-09-08 22:44:36] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-08 22:45:22] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=8000
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=enabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=400, body={"error":"bad param"}
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 22:45:23] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=429, body={"error":"rate limited","retry_after":3}
+[2026-09-08 22:45:23] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=200, max_completion_tokens=32768
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2499040917024'>
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2499041558608'>
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text finish_reason=length, completion_tokens=None, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=567, max_completion_tokens=32768
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=50, max_completion_tokens=32768
+[2026-09-08 22:45:23] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '{"shots": [{"index": 1, "prompt": "半句被切'}, 'finish_reason': 'length'}], 'usage': {'prompt_tokens': 40000, 'completion_tokens': 12
+[2026-09-08 22:45:23] [DEBUG] agent_plan_text finish_reason=length, completion_tokens=12345, max_completion_tokens=32768  <<< 输出被截断
+[2026-09-08 22:45:23] [SPLIT] 1 个镜头估时 > 15.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:45:23] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 22:45:23] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 22:45:23] [shot7 尾帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「秘人匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 22:45:23] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-08 22:45:23]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-08 22:45:23] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-08 22:45:23] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-08 22:45:24] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:45:24]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 22:45:24] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:45:24] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:45:24]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 22:45:24] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:45:24] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:45:24]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 22:45:24] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:45:24] [REGEN] LLM 调用失败: API 失败
+[2026-09-08 22:45:24] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:45:24]   - axis_jump@shot2: 轴线跳
+[2026-09-08 22:45:24] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:45:24] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-08 22:45:24] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 22:45:24]   - axis_jump@shot2: 轴线跳
+[2026-09-08 22:45:24] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 22:45:24] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-08 22:45:24] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 22:45:24] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 22:45:24] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-08 22:45:24] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:45:24] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:45:24] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:45:24] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:45:24] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:45:24] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:45:24] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:45:24] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:45:24] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:45:24] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:45:24] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:45:24] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:45:24] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 22:45:24] [HARD_FIX] 本轮路径: 新 Constraint 框架
+[2026-09-08 22:45:24] [CONSTRAINT] 修复 23 处 (top: runtime_extend=4, prompt_sanitize=4, mandatory_biz_fields=3, kf_time_window_alignment=2, frame_layouts_required=2)
+[2026-09-08 22:45:24] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone

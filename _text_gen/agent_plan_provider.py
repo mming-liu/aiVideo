@@ -13,9 +13,9 @@
       - 结构化输出：response_format.type="json_object"（方舟 Doubao 稳定；json_schema strict 视模型而定）
   - 思考模式默认 disabled：seed-2-1-turbo 默认开启深度思考会大量消耗思维链 token，
     拉长长 JSON 任务（分镜/修复轮）的推理耗时到 180s+ 触发客户端超时。
-  - max_completion_tokens 默认 16384：服务端默认仅 4096，对分镜生成不够；
-    显式给到 16384 避免 finish_reason=length 截断且不至于无界
-    （2026-09-04 现场压测：65536 fallback 导致 6+ 分钟长尾，已降为 16384）。
+  - max_completion_tokens **单一来源 .env.content**（AGENT_PLAN_TEXT_MAX_TOKENS）：
+    服务端默认仅 4096 不够分镜生成；provider 内不再留兜底常量
+    （v6.62.5 删——同一数字散三处的反模式）。沿革与阈值依据见 _build_payload 内注释。
   - **关闭自动重试**：长任务（>60s）的客户端超时不应立刻重发——旧请求仍在模型侧跑，
     重发只增加额度浪费和排队时间。改报"超时未完成"由上层业务队列决策。
   - 5xx/网络异常仍走 1 次退避（防瞬时网络抖）；401/403/400 不重试直接报错。
@@ -106,17 +106,21 @@ class AgentPlanTextService(TextGenerationService):
             else config.AGENT_PLAN_TEXT_REASONING_EFFORT
         )
         thinking_type = "disabled" if (not effort or effort == "none") else "enabled"
-        # max_completion_tokens 优先级：req.max_tokens → config.AGENT_PLAN_TEXT_MAX_TOKENS → 16384
-        # 2026-09-03 现场压测：服务端默认 4096 不够分镜生成
-        # 2026-09-04 现场压测：65536 fallback 导致 3-5 分钟长尾（70k input + 65536 output 容量
-        # 下模型倾向于"慢慢想"），已降为 16384（分镜 JSON 实际只需 20-40k，留 16384 足够避免
-        # finish_reason=length 截断）。config.AGENT_PLAN_TEXT_MAX_TOKENS 默认 None（0=不传）
-        # → 走下面的 16384 fallback。
-        max_completion_tokens = (
-            req.max_tokens
-            or config.AGENT_PLAN_TEXT_MAX_TOKENS
-            or 16384
-        )
+        # max_completion_tokens 单一事实源：**只在 .env.content 配**
+        # （AGENT_PLAN_TEXT_MAX_TOKENS，当前 32768）。req.max_tokens 可按调用点覆盖。
+        #
+        # 沿革：服务端默认 4096 不够分镜生成（09-03）→ 65536 撞 3-5 分钟长尾（09-04）
+        # → 降 16384 → **16384 低于全脚本实际需求**（09-08 v6.62.5）：实测 11 镜全脚本
+        # JSON ≈66k 字符 ≈26k tokens，4 个输出全脚本的站点必然 finish_reason=length，
+        # 且旧代码把截断当 success 静默下发 → 表现为「多次 JSON 解析失败」。
+        # （09-04 那版注释自称「实际只需 20-40k，留 16384 足够避免截断」自相矛盾。）
+        #
+        # v6.62.5 同时删掉了这里的 `or 16384` 兜底常量：同一个数字散在 .env + provider
+        # + 测试三处，改一次动三个文件，正是 CLAUDE.md「限制写死在配置里就该迁走，
+        # 别继续堆配置」的反模式。该值本质是**延迟 vs 输出长度的权衡参数**（非模型硬
+        # 能力），按项目约定归 .env。env 缺失（0/空）→ 不传 → 服务端默认 4096 → 必然
+        # 截断，但截断现在硬失败且打印 cap，配错立刻可见，无需代码再藏一个魔数兜底。
+        max_completion_tokens = req.max_tokens or config.AGENT_PLAN_TEXT_MAX_TOKENS
 
         payload: dict = {
             "model": model,
@@ -203,7 +207,9 @@ class AgentPlanTextService(TextGenerationService):
             )
 
             if resp.status_code == 200:
-                return self._parse_response(resp, model)
+                return self._parse_response(
+                    resp, model, payload.get("max_completion_tokens")
+                )
 
             if resp.status_code == 429:
                 # 限流：1 次退避后重试
@@ -240,8 +246,13 @@ class AgentPlanTextService(TextGenerationService):
     # ------------------------------------------------------------------
     # 响应解析
     # ------------------------------------------------------------------
-    def _parse_response(self, resp: requests.Response, model: str) -> TextGenerationResult:
-        """从 200 响应中提取文本 + usage."""
+    def _parse_response(
+        self, resp: requests.Response, model: str, cap: Optional[int] = None
+    ) -> TextGenerationResult:
+        """从 200 响应中提取文本 + usage.
+
+        cap: 本次请求的 max_completion_tokens，仅用于截断错误文案（v6.62.5）。
+        """
         try:
             data = resp.json()
         except Exception as e:
@@ -257,17 +268,54 @@ class AgentPlanTextService(TextGenerationService):
             )
         message = choices[0].get("message") or {}
         text = message.get("content") or ""
+        finish = choices[0].get("finish_reason")
+        usage = _usage_dict(data)
+
+        # v6.62.5（09-08）可观测性：旧实现只打 body 前 500 字符（日志里每行恒定 580
+        # 字符），finish_reason 与 usage 都在被截掉的尾部——这正是「截断导致多次 JSON
+        # 解析失败」跨多次跑批未被诊断的原因（grep completion_tokens 命中的 21 次全是
+        # max_completion_tokens 的子串误匹配，usage 一次都没记）。
+        # 放在这里而不是 submit 处：data/finish/usage 已解析好，无需二次 resp.json()。
+        _verbose_write(
+            f"[DEBUG] agent_plan_text finish_reason={finish}, "
+            f"completion_tokens={(usage or {}).get('output_tokens')}, "
+            f"max_completion_tokens={cap}"
+            + ("  <<< 输出被截断" if finish == "length" else "")
+        )
+
         if not text:
-            finish = choices[0].get("finish_reason")
             return TextGenerationResult(
                 success=False,
+                usage=usage,
                 error=(
                     f"Agent Plan 返回文本为空（model={model}, "
                     f"finish_reason={finish}, full={str(data)[:200]}）"
                 ),
             )
 
-        usage = _usage_dict(data)
+        # v6.62.5（09-08）截断不再静默成功 —— 这是「多次 JSON 解析失败」的根因。
+        # 旧实现只在 text **为空** 时才看 finish_reason；非空但被截断的半个 JSON
+        # 被当作 success=True 交给下游，于是失败以「无法解析 JSON」的形态出现在
+        # 很远的调用点，还把不可能完成的活（补全半个 JSON）派给
+        # shared/utils/json_repair._truncate_fix。
+        # 09-08 实测：单次跑批 20 次调用中 3 次 finish_reason=length，
+        # 与 3 次「JSON 解析失败」**1:1 对应**——0 次非截断导致的解析失败。
+        # 用户决策（09-08）：截断硬失败，不做自动升档重试。
+        if finish == "length":
+            # 注意 key：_usage_dict 把 completion_tokens 重命名为 output_tokens
+            _completion = (usage or {}).get("output_tokens")
+            return TextGenerationResult(
+                success=False,
+                usage=usage,
+                error=(
+                    f"Agent Plan 输出被截断（finish_reason=length, model={model}, "
+                    f"max_completion_tokens={cap}, completion_tokens={_completion}）"
+                    f"——输出 JSON 不完整，已整份丢弃（截断内容无法可靠修复）。"
+                    f"如为全脚本生成，请调高 AGENT_PLAN_TEXT_MAX_TOKENS："
+                    f"实测 11 镜全脚本约需 26k tokens。"
+                ),
+            )
+
         return TextGenerationResult(success=True, text=text, usage=usage)
 
     def _error_from_response(

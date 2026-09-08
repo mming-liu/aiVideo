@@ -150,7 +150,10 @@ python -m shared.chapter_reader 锦衣夜行_77119小说.txt
 - 支持 `response_format json_schema`（与 deepseek 路径同款 strict 结构化输出），用于 step01 分镜 JSON 强约束
 - 并发限速走 `AGENT_PLAN_TEXT_RPM`（默认 10 RPM，cooldown=6s）
 - 思考模式 `AGENT_PLAN_TEXT_REASONING_EFFORT`（none/minimal/low/medium/high/xhigh/max，默认 `none` 关闭）
-- 单次输出 token 上限 `AGENT_PLAN_TEXT_MAX_TOKENS`（0/空=不传；推荐分镜 16384，钩子 8000，修复轮 16384）
+- 单次输出 token 上限 `AGENT_PLAN_TEXT_MAX_TOKENS`（0/空=不传 → provider fallback 32768）
+  - **v6.62.5（09-08）**：16384 太低——全脚本 JSON 实测 ≈66k 字符 ≈**26k tokens**，4 个输出全脚本的站点（初始分镜/GAP 重生/定向修复/超限收敛）必然 `finish_reason=length`。已抬到 **32768**（26k + 25% 余量）
+  - 截断行为：provider 判 `success=False` 并整份丢弃（**不做**自动升档重试）；旧实现把截断当 `success=True` 静默下发，是「多次 JSON 解析失败」的根因
+  - 长尾若复现（v6.59 的 3-5 分钟问题），降级手段是**给小提取调用显式传小 `max_tokens`**，不要压低这个全局值（会重现截断）
 - 错误码映射：401→鉴权失败（提示申请专属 key）、403→套餐/燃料耗尽、5xx→4 次指数退避、429→按 `retry-after` 等待
 - Key 缺失时构造直接 `ValueError`（含「AGENT_PLAN_API_KEY」+「专属 key」文案，与 image/video provider 对齐）
 

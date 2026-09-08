@@ -153,7 +153,10 @@ def test_text_submit_basic_payload(monkeypatch):
     assert payload["top_p"] == 0.2
     assert payload["seed"] == 42
     # 火山方舟 Doubao 专用：max_completion_tokens（不是 max_tokens）
-    assert payload["max_completion_tokens"] == 16384
+    # v6.62.5：断言**读 provider 实际引用的 config 而非硬写数字**——该值单一来源是
+    # .env.content，测试里再写一遍就成了第三处副本（改一次要动三个文件）。
+    from _text_gen import agent_plan_provider as _ap
+    assert payload["max_completion_tokens"] == _ap.config.AGENT_PLAN_TEXT_MAX_TOKENS
     # 火山方舟 Doubao 专用：thinking.type=disabled（默认 reasoning_effort=none 映射）
     assert payload["thinking"] == {"type": "disabled"}
     # 默认 response_format=json_object（方舟 Doubao 稳定；json_schema strict 视模型而定）
@@ -499,20 +502,66 @@ def test_text_config_default_reasoning_effort():
 
 
 def test_text_config_default_max_tokens_is_none(monkeypatch):
-    """TextGenCfg.AGENT_PLAN_TEXT_MAX_TOKENS 默认 None（0=不传）.
+    """TextGenCfg.AGENT_PLAN_TEXT_MAX_TOKENS 未配置（0/空）时归一为 None（=不传）.
 
-    .env.content 显式 pin 了 16384（2026-09-04 三处对齐决策），不能直接断言
-    已加载单例——置空串模拟「未配置」（load_dotenv 不覆盖已存在 env），
-    重载产线 config 模块后断言归一为 None（provider 侧另有 16384 fallback）。
-    finally 里按 .env 同值重载还原，避免污染后续测试。
+    .env.content 显式 pin 了值，不能直接断言已加载单例——置空串模拟「未配置」
+    （load_dotenv 不覆盖已存在 env），重载产线 config 模块后断言归一为 None。
+
+    v6.62.5 修测试污染：原实现 finally 里 `setenv("...", "16384")` 再 reload，
+    于是**把 16384 泄漏给后续所有测试**（monkeypatch 只还原 env 变量，无法
+    还原已 reload 的模块），且硬写的 16384 与 .env 真值脱钩。改为 delenv 后
+    reload——此时 load_dotenv 会重新从 .env.content 读回真值。
     """
     import importlib
-    monkeypatch.setenv("AGENT_PLAN_TEXT_MAX_TOKENS", "")
     _cfg = importlib.import_module("_text_gen.config")
+    monkeypatch.setenv("AGENT_PLAN_TEXT_MAX_TOKENS", "")
     importlib.reload(_cfg)
     try:
         assert _cfg.config.AGENT_PLAN_TEXT_MAX_TOKENS is None
     finally:
-        monkeypatch.setenv("AGENT_PLAN_TEXT_MAX_TOKENS", "16384")
+        monkeypatch.delenv("AGENT_PLAN_TEXT_MAX_TOKENS", raising=False)
         importlib.reload(_cfg)
-    assert _cfg.config.AGENT_PLAN_TEXT_MAX_TOKENS == 16384
+    # 还原后应等于 .env.content 的真值（不硬写数字）
+    assert _cfg.config.AGENT_PLAN_TEXT_MAX_TOKENS is not None
+
+
+# ───────────────── v6.62.5（09-08）截断硬失败 ─────────────────
+#
+# 根因：旧实现只在 content **为空** 时才看 finish_reason；非空但被截断的半个 JSON
+# 被当成 success=True 交给下游，失败以「无法解析 JSON」的形态出现在很远的调用点。
+# 09-08 实测：单次跑批 20 次调用 3 次 finish_reason=length，与 3 次 JSON 解析失败
+# 1:1 对应。用户决策：截断硬失败，不做自动升档重试。
+
+def _truncated_response(completion_tokens: int = 32768) -> MagicMock:
+    """finish_reason=length 的响应：content 非空但 JSON 被切断."""
+    body = {
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant",
+                        "content": '{"shots": [{"index": 1, "prompt": "半句被切'},
+            "finish_reason": "length",
+        }],
+        "usage": {"prompt_tokens": 40000, "completion_tokens": completion_tokens,
+                  "total_tokens": 40000 + completion_tokens},
+    }
+    resp = MagicMock(status_code=200, text=str(body)[:200])
+    resp.json.return_value = body
+    return resp
+
+
+def test_truncated_output_is_hard_failure(monkeypatch):
+    """finish_reason=length + 非空内容 → success=False（旧行为是 success=True）.
+
+    附带断言 usage 回传：_usage_dict 把 completion_tokens 重命名为 output_tokens，
+    错误文案取值时用错 key 会静默打出 None（实现时踩过）。
+    """
+    svc = _make_text_service(monkeypatch)
+    from _text_gen import models
+    req = models.TextGenerationRequest(system_prompt="s", user_prompt="u")
+
+    with patch("requests.post", return_value=_truncated_response(completion_tokens=12345)):
+        result = svc.generate(req)
+
+    assert result.success is False, "截断必须硬失败，不能把半个 JSON 当成功交给下游"
+    assert "截断" in (result.error or "")
+    assert result.usage["output_tokens"] == 12345

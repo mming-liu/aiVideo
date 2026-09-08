@@ -1625,12 +1625,22 @@ def main() -> None:
     # 若差距过大，重新生成（最多2次）
 
     if GAP_ANALYSIS_ENABLED:
-        for attempt in range(GAP_MAX_REGEN_ATTEMPTS):
+        # v6.62.4（09-08）预算动态化：原 `for attempt in range(GAP_MAX_REGEN_ATTEMPTS)`。
+        # agent_plan(doubao) 预算是 1（v6.62.1 实测「2 次重试全部劣化回退、白烧
+        # 5 分钟」刻意压到 1）。但「正片零高潮覆盖」是**结构性缺陷**（整段剧情没拍），
+        # 不是措辞问题，值得单独破例给 1 次。仅在预算即将耗尽时追加，且只追加一次；
+        # deepseek（预算 2）不会凭空变 3，除非它也零高潮。
+        # 追加那次自动受下方 v6.47 `_is_retry_degraded` 回退保护（时长塌缩/台词
+        # 失锚即回退上一版），所以多给一次不引入劣化风险。
+        _gap_budget = GAP_MAX_REGEN_ATTEMPTS
+        _zero_climax_bonus_used = False
+        attempt = 0
+        while attempt < _gap_budget:
             # 快速校验
             validation = validate_script_gap(script, novel_text)
 
             if validation["overall_pass"]:
-                _logger.info(f"[GAP] 差距分析通过 (尝试 {attempt + 1}/{GAP_MAX_REGEN_ATTEMPTS})")
+                _logger.info(f"[GAP] 差距分析通过 (尝试 {attempt + 1}/{_gap_budget})")
                 # 保存脚本并生成完整报告
                 partial_path = CHAPTER_DIR / "script_result.partial.json"
                 with open(partial_path, "w", encoding="utf-8") as _f:
@@ -1648,7 +1658,20 @@ def main() -> None:
                 break
 
             # 发现问题，反馈给 LLM 重新生成
-            _logger.warn(f"[GAP] 发现差距问题， 重新生成 (尝试 {attempt + 1}/{GAP_MAX_REGEN_ATTEMPTS})...")
+            # v6.62.4：零高潮=结构性缺陷 → 预算耗尽前额外追加 1 次（只一次）
+            _dist = validation.get("distribution", {}) or {}
+            if (_dist.get("climax_shots", 0) == 0
+                    and not _zero_climax_bonus_used
+                    and attempt + 1 >= _gap_budget):
+                _gap_budget += 1
+                _zero_climax_bonus_used = True
+                _logger.warn(
+                    "[GAP] 正片零高潮覆盖（结构性缺陷：原文核心冲突整段未拍）"
+                    f"→ 额外追加 1 次重试预算（{_gap_budget} 次）"
+                )
+                _console("  [GAP] 正片零高潮覆盖 → 额外追加 1 次重试")
+
+            _logger.warn(f"[GAP] 发现差距问题， 重新生成 (尝试 {attempt + 1}/{_gap_budget})...")
 
             # 获取差距分析上下文并追加到 prompt（函数已在模块级导入）
             gap_context = _load_gap_analysis_context(validation)
@@ -1676,7 +1699,14 @@ def main() -> None:
             )
             result = service.generate(req)
             if not result.success:
-                raise RuntimeError(f"LLM 重新生成失败: {result.error}")
+                # v6.62.5（09-08）：原先这里 `raise RuntimeError` 会**穿出 GAP 循环
+                # 直接崩掉 step01**（本循环只 catch ValueError/JSONDecodeError）。
+                # v6.62.5 起 provider 把「输出截断」也判为 success=False，这条路径
+                # 从罕见（网络错误）变常见（截断），必须与站点 422/1146 一致地软降级：
+                # 保留上一版脚本继续跑，而不是让整个流水线挂掉。
+                _logger.warn(f"[WARN] GAP 重生成失败，保留上一版: {result.error}")
+                _console("  [GAP] 重生成失败（详见 step01.log），保留上一版")
+                break
 
             import re
             raw = result.text.strip()
@@ -1705,8 +1735,10 @@ def main() -> None:
             script = new_script
             # 不在循环内 post_process：循环退出后统一在 line 334 做一次
             # （code-audit 07-31 #7：原 :328 与 :334 重复调用 _post_process）
+            attempt += 1   # v6.62.4：while 循环手动推进（原 for 由 range 推进）
         else:
             # 达到最大尝试次数仍有问题，记录但不中断
+            # while...else 与原 for...else 语义一致：无 break 走完才告警
             _logger.warn("[GAP] 达到最大重试次数，仍有差距问题，将继续处理")
 
     # v6.7: 镜头数严重超限时收敛重生成（独立于 gap_analysis，默认开启）

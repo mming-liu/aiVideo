@@ -237,3 +237,67 @@ def test_constraint_attributes():
     assert c.name == "runtime_extend"
     assert c.severity == Severity.HARD
     assert c.skip_hook is True
+
+
+# ===========================================================================
+# v6.62.4（09-08）拉伸比告警 —— warning-only，不触发重生成
+#
+# 09-08 chapter_001 实测：聚合 1.23x、单镜最高 1.50x（shot10 4.00→6.00），
+# 7/11 镜 ≥1.25x，且「高节奏动作镜不拉伸」保护因该章无动作镜而完全没生效
+# —— 拉伸全落在静态铺垫镜上。加告警让问题可见，但**不改拉伸行为**。
+# ===========================================================================
+
+def test_stretch_ratio_warn_on_large_stretch():
+    """大幅拉伸（3s 起底，需拉到 60s）→ 出聚合 + 单镜 warn."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+    from step01_script_gen.constraints.runtime_extend import RuntimeExtendConstraint
+
+    # 12 镜 × 3s = 36s，拉到 60s 需 1.67x —— 远超两个阈值
+    script = make_script([make_shot(index=i, duration_sec=3.0) for i in range(1, 13)])
+    ctx = make_ctx(script)
+    repairs = RuntimeExtendConstraint().apply(ctx)
+
+    warns = [r for r in repairs if r.action == "warn"]
+    assert warns, "大幅拉伸应产生 warn"
+    assert any(r.shot_index is None and "整体拉伸" in (r.detail or "") for r in warns)
+    assert any(r.shot_index is not None and "单镜拉伸" in (r.detail or "") for r in warns)
+
+
+def test_stretch_ratio_no_warn_when_already_compliant():
+    """已达标（无需拉伸）→ 无 warn."""
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+    from step01_script_gen.constraints.runtime_extend import RuntimeExtendConstraint
+
+    # 9 镜 × 7s = 63s ≥ 60s，末镜 7s > 4s → 不拉伸
+    script = make_script([make_shot(index=i, duration_sec=7.0) for i in range(1, 10)])
+    ctx = make_ctx(script)
+    repairs = RuntimeExtendConstraint().apply(ctx)
+
+    warns = [r for r in repairs if r.action == "warn"]
+    assert not warns, f"无需拉伸时不应告警，实际: {[r.detail for r in warns]}"
+
+
+def test_stretch_ratio_warn_produces_no_violation():
+    """拉伸比告警是 warning-only：不得产生 Violation（不触发 regen）.
+
+    regen 由 GAP 零高潮检测负责（gap_analysis.analyze_shot_distribution），
+    W6 只做可观测性 —— 拉伸比高的根因是内容不足，正确解法是补镜头。
+    """
+    from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
+    from step01_script_gen.constraints.runtime_extend import RuntimeExtendConstraint
+
+    # 10 镜 × 4s = 40s：能靠拉伸达标（10×8=80 > 60），故不该有 HARD Violation
+    script = make_script([make_shot(index=i, duration_sec=4.0) for i in range(1, 11)])
+    ctx = make_ctx(script)
+    repairs = RuntimeExtendConstraint().apply(ctx)
+
+    assert any(r.action == "warn" for r in repairs)
+    assert ctx.drain_violations() == [], "拉伸比告警不得升级为 Violation"
+
+
+def test_stretch_ratio_thresholds_are_module_constants():
+    """阈值走模块常量（便于按实测调整，不散落魔数）."""
+    from step01_script_gen.constraints import runtime_extend as re_mod
+
+    assert re_mod._STRETCH_WARN_TOTAL == 1.20
+    assert re_mod._STRETCH_WARN_SHOT == 1.35

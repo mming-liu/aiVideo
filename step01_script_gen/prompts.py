@@ -444,16 +444,30 @@ def _load_gap_analysis_context(validation: dict) -> str:
 
     # 问题2: 镜头分布
     dist = validation.get("distribution", {})
-    if not dist.get("valid", True):
-        # C1 修复（08-11）：旧实现读 `arc.arc_coverage.has_climax_coverage`，但
-        # gap_analysis 返回的 distribution dict 用的是顶层 `has_climax_coverage`
-        # ——键路径不匹配，分支永远不进、分布问题反馈从不到达 LLM。改读真实键。
-        has_climax = bool(dist.get("has_climax_coverage", False))
-        if not has_climax:
-            issues.append(
-                "【镜头分布问题】后半段镜头未覆盖高潮剧情（战斗/刺杀/反转等强事件）"
-            )
-            issues.append("  → 请在最后几个镜头中覆盖原文结尾的冲突/反转/离去等情节")
+    # v6.62.4（09-08）解除二次遮蔽：旧实现把高潮分支嵌在 `if not dist["valid"]`
+    # 内，而零高潮时 gap_analysis 旧代码判 status=pass → valid=True → 外层进不去，
+    # 这个分支**正好在它该报的场景失效**（09-08 实测反馈文本为空）。
+    # 现改为：高潮覆盖独立判断，不受 valid 影响（防御纵深——即使上游 status
+    # 判定将来又被改动，补高潮的反馈仍能到达 LLM）。
+    _climax_shots = dist.get("climax_shots")
+    # C1 修复（08-11）：旧实现读 `arc.arc_coverage.has_climax_coverage`，但
+    # gap_analysis 返回的 distribution dict 用的是顶层 `has_climax_coverage`
+    # ——键路径不匹配，分支永远不进、分布问题反馈从不到达 LLM。改读真实键。
+    has_climax = bool(dist.get("has_climax_coverage", False))
+    if dist and not has_climax:
+        issues.append(
+            "【镜头分布问题】**正片零高潮覆盖**——后半段镜头完全未覆盖高潮剧情"
+            "（战斗/刺杀/反转/冲突/追逐等强事件）"
+        )
+        issues.append(
+            "  → 后半段至少 3 镜必须覆盖原文结尾的冲突/反转/动作高潮，"
+            "每镜写明具体动作（谁对谁做了什么）与台词；禁止用空镜/群演/环境镜充数"
+        )
+    elif isinstance(_climax_shots, int) and 0 < _climax_shots < 3:
+        issues.append(
+            f"【镜头分布问题】高潮镜仅 {_climax_shots} 个，少于 3 个"
+        )
+        issues.append("  → 请把高潮拆为至少 3 个独立镜头（如：跃出、寒光一闪、刺入）")
 
     # 生成反馈文本
     if issues:
