@@ -32,18 +32,20 @@ class PropSpec:
     can_be_dropped: bool = True
 
 
+# 注意：default_owner 留空——通用化（v6.62 清理硬编码）。运行时由 props_bank /
+# char_layout 关联注入；此处只声明"该 prop 有时可被角色持有"，不锁定小说特定角色。
 PROP_REGISTRY: dict[str, PropSpec] = {
-    "wine_jug":     PropSpec(("酒壶", "酒瓮"),            can_float=True,  default_owner="杨旭", can_be_dropped=True),
-    "wine_cup":     PropSpec(("酒杯",),                   can_float=True,  default_owner="",     can_be_dropped=True),
-    "fishing_rod":  PropSpec(("钓杆", "钓鱼竿", "钓竿"),   can_float=False, default_owner="杨旭", can_be_dropped=True),
-    "umbrella":     PropSpec(("油纸伞", "伞"),             can_float=False, default_owner="听香", can_be_dropped=True),
-    "flute":        PropSpec(("竹箫", "箫", "笛"),         can_float=False, default_owner="杨旭", can_be_dropped=True),
-    "lantern":      PropSpec(("灯笼",),                    can_float=False, default_owner="",     can_be_dropped=True),
-    "lamp":         PropSpec(("灯盏", "油灯"),             can_float=False, default_owner="",     can_be_dropped=True),
-    "stove":        PropSpec(("炭炉",),                    can_float=False, default_owner="",     can_be_dropped=True),
-    "dagger":       PropSpec(("刺客匕首", "匕首", "短刃", "利刃", "寒光"), can_float=False, default_owner="刺客", can_be_dropped=False),
-    "sword":        PropSpec(("剑", "长剑", "短剑"),       can_float=False, default_owner="",     can_be_dropped=False),
-    "hairpin":      PropSpec(("步摇",),                    can_float=False, default_owner="听香", can_be_dropped=False),
+    "wine_jug":     PropSpec(("酒壶", "酒瓮"),            can_float=True,  default_owner="", can_be_dropped=True),
+    "wine_cup":     PropSpec(("酒杯",),                   can_float=True,  default_owner="", can_be_dropped=True),
+    "fishing_rod":  PropSpec(("钓杆", "钓鱼竿", "钓竿"),   can_float=False, default_owner="", can_be_dropped=True),
+    "umbrella":     PropSpec(("油纸伞", "伞"),             can_float=False, default_owner="", can_be_dropped=True),
+    "flute":        PropSpec(("竹箫", "箫", "笛"),         can_float=False, default_owner="", can_be_dropped=True),
+    "lantern":      PropSpec(("灯笼",),                    can_float=False, default_owner="", can_be_dropped=True),
+    "lamp":         PropSpec(("灯盏", "油灯"),             can_float=False, default_owner="", can_be_dropped=True),
+    "stove":        PropSpec(("炭炉",),                    can_float=False, default_owner="", can_be_dropped=True),
+    "dagger":       PropSpec(("刺客匕首", "匕首", "短刃", "利刃", "寒光"), can_float=False, default_owner="", can_be_dropped=False),
+    "sword":        PropSpec(("剑", "长剑", "短剑"),       can_float=False, default_owner="", can_be_dropped=False),
+    "hairpin":      PropSpec(("步摇",),                    can_float=False, default_owner="", can_be_dropped=False),
     "boat":         PropSpec(("舴艋舟", "小舟", "木舟", "一叶舟", "扁舟"), can_float=True, default_owner="", can_be_dropped=False),
 }
 
@@ -361,10 +363,12 @@ THREAT_VISIBLE_HINTS: Tuple[str, ...] = (
 # 10. 通用人物名池（gaze_direction 兜底）
 # ============================================================================
 
-# 当 char_layout 不提供角色名时，用此兜底（兼容旧测试 / 单镜无 char_layout 场景）
+# 当 char_layout 不提供角色名时，用此兜底（兼容旧测试 / 单镜无 char_layout 场景）。
+# 通用化（v6.62）：只保留通用称谓/性别词，不绑定具体小说角色（杨旭/听香/刺客/张十三/老汉/肖管事
+# 全部移除——那些是《锦衣夜行》第一章角色，换小说即失效；运行时优先用 script.characters / char_layout）。
 COMMON_PERSON_NAMES: Tuple[str, ...] = (
-    "杨旭", "听香", "刺客", "张十三", "老汉", "肖管事", "神秘人",
     "那女子", "女子", "那男子", "男子", "公子", "姑娘",
+    "少年", "少女", "老翁", "老妪", "孩童", "书生", "侠客", "官吏", "士兵", "侍女",
 )
 
 

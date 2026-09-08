@@ -28,10 +28,13 @@ def test_prop_registry_has_core_props():
 
 
 def test_get_prop_spec_alias_lookup():
-    """中文别名能查到 PropSpec."""
+    """中文别名能查到 PropSpec.
+    通用化（v6.62）：default_owner 已清空——prop 主人由 props_bank + char_layout
+    运行时关联注入，不在 registry 硬编码。
+    """
     spec = get_prop_spec("酒壶")
     assert spec is not None
-    assert spec.default_owner == "杨旭"
+    assert spec.default_owner == ""
     assert spec.can_float is True
     assert spec.can_be_dropped is True
 
@@ -61,8 +64,9 @@ def test_sword_cannot_be_dropped():
 # ============================================================================
 
 def test_classify_pose_reclining():
-    assert classify_pose("杨旭仰卧船头") == "reclining"
-    assert classify_pose("听香昏迷") == "reclining"
+    # 通用化（v6.62）：用通用角色名（那女子/那男子）替代小说特化名（杨旭/听香）
+    assert classify_pose("那男子仰卧船头") == "reclining"
+    assert classify_pose("那女子昏迷") == "reclining"
     assert classify_pose("装死") == "reclining"
 
 
@@ -123,8 +127,9 @@ def test_threat_name_detection():
     assert is_threat_name("刺客") is True
     assert is_threat_name("神秘人") is True
     assert is_threat_name("黑衣人") is True
-    assert is_threat_name("杨旭") is False
-    assert is_threat_name("听香") is False
+    # 通用化（v6.62）：用通用角色名（那女子/那男子）替代小说特化名
+    assert is_threat_name("那男子") is False
+    assert is_threat_name("那女子") is False
 
 
 def test_weapon_name_detection():

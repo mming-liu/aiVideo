@@ -1553,11 +1553,25 @@ def main() -> None:
             script.update(get_chapter_meta("锦衣夜行_77119小说.txt", NOVEL_CHAPTER))
         # 重新计算时间轴（使用增强算法）
         _compute_timecodes(script)
-        # C5 修复（08-11）：fps 一致性校验（timeline 此时已存在）
-        _check_fps_consistency(script)
         # v7: 缓存命中时也要跑场景/道具资产提取（老缓存无 scene_assets/prop_assets），
         # 结果写回 script 再落盘，保证 step02a 资产生成能拿到数据
         _extract_assets_and_update_script(script)
+        # v6.62.3（09-08）：缓存命中路径此前**漏跑 hard_fix** —— 只算时间轴+提资产就
+        # 落盘，导致两个落盘点行为不一致（正常生成路径见 line ~1926「每次落盘前跑一次
+        # hard_fix」，v6.41 P19 铁律）。后果 09-08 实测：命中缓存把 v6.61 期的节拍词
+        # 占位（「冲突，反转，真相，局势骤变」17 处）+ F8 合并标记（3 处）原样重新落盘，
+        # 且 log 承诺的 W6 时长拉伸（constraints/runtime_extend）从未执行（正片 54.9s
+        # < 60s 硬下限）。必须放在所有 transform 之后、dump 之前，且**不可**再调
+        # _compute_timecodes（会按 motion_desc 覆盖 W6 拉伸的 duration_sec）。
+        from step01_script_gen.constraints import run_hard_fix as _hfix_cached
+        try:
+            script = _hfix_cached(script, is_in_repair_loop=False, is_final_pass=True)
+        except Exception as _hfe_c:
+            _logger.warn(f"[WARN] 缓存命中落盘前 hard_fix 失败（保留原版）: {_hfe_c}")
+        # C5 修复（08-11）：fps 一致性校验（timeline 此时已存在）
+        # v6.62.3：移到 hard_fix 之后 —— runtime_extend 会改 duration_sec，
+        # 早于 hard_fix 校验会拿到过期时长（与 line ~1931 非缓存路径同序）。
+        _check_fps_consistency(script)
         with open(SCRIPT_FILE, "w", encoding="utf-8") as f:
             json.dump(script, f, ensure_ascii=False, indent=2)
         _snapshot_run_artifacts(script)

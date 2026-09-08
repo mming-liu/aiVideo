@@ -39,6 +39,10 @@ from .multi_char_layout_depth import MultiCharLayoutDepthConstraint  # U
 from .narration_subtitle_consistency import NarrationSubtitleConsistencyConstraint  # V
 from .opening_hook import OpeningHookConstraint  # W
 from .opening_empty_shot_insert import OpeningEmptyShotInsertConstraint
+from .opening_character_presence import OpeningCharacterPresenceConstraint  # R2 开篇人物兜底（v6.62.2, 09-07 通用）
+from .dialogue_density import DialogueDensityConstraint  # R3 对白密度兜底（v6.62.2, 09-07 通用）
+from .frame_layouts_required import FrameLayoutsRequiredConstraint  # R4 frame_layouts 必填（v6.62.2, 09-07 通用）
+from .shot_count_bounds import ShotCountBoundsConstraint  # 镜头数/场景数范围加严（v6.62.2, 09-07 通用）
 from .overshoulder_consistency import OvershoulderConsistencyConstraint
 from .platform_compliance import PlatformComplianceConstraint  # X
 from .prompt_repetition import PromptRepetitionConstraint  # Y
@@ -138,6 +142,11 @@ ALL_CONSTRAINTS.extend([
     SurfaceBackfillConstraint(),  # F12 char_layout.surface 承重面回填（v6.62.1, 09-06）
     FramingVarietyConstraint(),  # F13 景别多样性达标：unique<5 → 内容适配补缺（v6.62.1, 09-06）
     GazeTypoConstraint(),  # F14 目光错别字归一：倒倒→紧紧（v6.62.1, 09-06）
+    # v6.62.2 (09-07) 通用兜底加严：4 个新约束，不绑小说角色，跨章节/换书自动跟随
+    OpeningCharacterPresenceConstraint(),  # R2 前 2 镜必含 1 个角色（从 script.characters 动态取）
+    DialogueDensityConstraint(),            # R3 对白镜占比 ≥ 30%（仅看通用对话关键词）
+    FrameLayoutsRequiredConstraint(),      # R4 frame_layouts 必填 + 长度对齐
+    ShotCountBoundsConstraint(),            # 镜头数/场景数范围加严（[10,18]/[1,5]）
 ])
 
 __all__ = [

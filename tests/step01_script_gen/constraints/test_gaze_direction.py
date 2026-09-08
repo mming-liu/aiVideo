@@ -16,13 +16,17 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 
 def test_rewrites_gaze_with_person_name():
-    """「看杨旭」无空间方位 → 应改写为「目光紧盯杨旭」."""
+    """「看<角色>」无空间方位 → 应改写为「目光紧盯<角色>」.
+    通用化（v6.62）：测试用通用角色名「那女子」（COMMON_PERSON_NAMES 兜底词），
+    旧版用「杨旭」——现 COMMON_PERSON_NAMES 已删除小说特化角色名。
+    """
     from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
 
+    target = "那女子"
     script = make_script([
         make_shot(
             index=1,
-            prompt="[中景] 他看杨旭",
+            prompt=f"[中景] 他看{target}",
             ff_desc="",
             lf_desc="",
         ),
@@ -33,17 +37,20 @@ def test_rewrites_gaze_with_person_name():
     repairs = GazeDirectionConstraint().apply(ctx)
 
     assert len(repairs) >= 1
-    assert "目光紧盯杨旭" in script["shots"][0]["prompt"]
+    assert f"目光紧盯{target}" in script["shots"][0]["prompt"]
 
 
 def test_is_idempotent_when_already_repaired():
-    """字段已含「目光」→ 跳过（幂等）."""
+    """字段已含「目光」→ 跳过（幂等）.
+    通用化（v6.62）：同样改为「那女子」避免小说特化。
+    """
     from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
 
+    target = "那女子"
     script = make_script([
         make_shot(
             index=1,
-            prompt="[中景] 他目光紧盯杨旭",
+            prompt=f"[中景] 他目光紧盯{target}",
             ff_desc="",
             lf_desc="",
         ),
@@ -84,6 +91,7 @@ def test_rewrites_multiple_fields():
 
     已知 v6.32 旧实现限制：lf_desc 字段可能因前面字段被改写后命中"目光"
     而被 skip（幂等保护）。本测试用 3 个独立字段验证基本功能.
+    通用化（v6.62）：用 COMMON_PERSON_NAMES 兜底词（那女子/那男子/公子）。
     """
     from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
 
@@ -91,10 +99,10 @@ def test_rewrites_multiple_fields():
     script = make_script([
         make_shot(
             index=1,
-            prompt="他望杨旭",          # 望+杨旭 → 目光紧盯（rule 1）
+            prompt="他望那女子",          # 望+人称 → 目光紧盯（rule 1）
             ff_desc="望他",              # 望+他 → 目光凝视（rule 2, 无"向"）
             lf_desc="",
-            motion_desc="刺客望肖管事",  # 望+肖管事 → 目光紧盯（rule 1）
+            motion_desc="刺客望那男子",  # 望+人称 → 目光紧盯（rule 1）
         ),
     ])
     ctx = make_ctx(script)
@@ -104,19 +112,21 @@ def test_rewrites_multiple_fields():
 
     # 3 字段命中（prompt / ff_desc / motion_desc）；lf_desc 故意空
     assert len(repairs) == 3
-    assert "目光紧盯杨旭" in script["shots"][0]["prompt"]
+    assert "目光紧盯那女子" in script["shots"][0]["prompt"]
     assert "目光凝视他" in script["shots"][0]["ff_desc"]
-    assert "目光紧盯肖管事" in script["shots"][0]["motion_desc"]
+    assert "目光紧盯那男子" in script["shots"][0]["motion_desc"]
 
 
 def test_processes_hook():
-    """hook 分镜也应被处理（除非 skip_hook=True）."""
+    """hook 分镜也应被处理（除非 skip_hook=True）.
+    通用化（v6.62）：用通用人称（那女子）。
+    """
     from tests.step01_script_gen.conftest import make_ctx, make_script, make_shot
 
     script = make_script(
         shots=[make_shot(index=1, prompt="[中景] 场景", ff_desc="", lf_desc="")],
         hook={
-            "prompt": "[特写] 她看杨旭",
+            "prompt": "[特写] 她看那女子",
             "ff_desc": "",
             "lf_desc": "",
         },
@@ -126,7 +136,7 @@ def test_processes_hook():
 
     repairs = GazeDirectionConstraint().apply(ctx)
 
-    assert "目光紧盯杨旭" in script["hook"]["prompt"]
+    assert "目光紧盯那女子" in script["hook"]["prompt"]
 
 
 def test_constraint_attributes():

@@ -1176,3 +1176,1513 @@
 [2026-09-07 07:53:06] [HARD_FIX] 本轮路径: 新 Constraint 框架
 [2026-09-07 07:53:06] [CONSTRAINT] 修复 18 处 (top: prompt_sanitize=4, mandatory_biz_fields=3, kf_time_window_alignment=2, runtime_extend=2, lf_desc_length=1)
 [2026-09-07 07:53:06] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-07 22:39:31] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-07 22:39:31] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-07 22:39:31]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-07 22:39:31] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-07 22:39:31] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-07 22:39:54] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-07 22:39:54] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-07 22:39:54]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-07 22:39:54] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-07 22:39:54] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-07 22:39:54] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:39:54]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 22:39:54] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:39:54] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:39:54]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 22:39:54] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:39:54] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:39:54]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 22:39:54] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:39:54] [REGEN] LLM 调用失败: API 失败
+[2026-09-07 22:39:54] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:39:54]   - axis_jump@shot2: 轴线跳
+[2026-09-07 22:39:54] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:39:54] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-07 22:39:54] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:39:54]   - axis_jump@shot2: 轴线跳
+[2026-09-07 22:39:54] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:39:54] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-07 22:39:54] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-07 22:39:54] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-07 22:39:54] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-07 22:39:55] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:39:55] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:39:55] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:39:55] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:39:55] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:39:55] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:39:55] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:39:55] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:39:55] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:39:55] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:39:55] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:39:55] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:39:55] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:40:29] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-07 22:40:29] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-07 22:40:29]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-07 22:40:29] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-07 22:40:29] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-07 22:40:30] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:40:30]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 22:40:30] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:40:30] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:40:30]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 22:40:30] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:40:30] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:40:30]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 22:40:30] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:40:30] [REGEN] LLM 调用失败: API 失败
+[2026-09-07 22:40:30] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:40:30]   - axis_jump@shot2: 轴线跳
+[2026-09-07 22:40:30] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:40:30] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-07 22:40:30] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:40:30]   - axis_jump@shot2: 轴线跳
+[2026-09-07 22:40:30] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:40:30] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-07 22:40:30] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-07 22:40:30] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-07 22:40:30] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-07 22:40:30] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:40:30] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:40:30] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:40:30] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:40:30] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:40:30] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:40:30] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:40:30] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:40:30] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:40:30] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:40:30] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:40:30] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:40:30] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:28] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=enabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=400, body={"error":"bad param"}
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-07 22:58:29] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=429, body={"error":"rate limited","retry_after":3}
+[2026-09-07 22:58:29] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2712212366608'>
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2712212368960'>
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-07 22:58:29] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-07 22:58:29] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-07 22:58:29] [SPLIT] 1 个镜头估时 > 15.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:29] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-07 22:58:29] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-07 22:58:30] [shot7 尾帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「秘人匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-07 22:58:30] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-07 22:58:30]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-07 22:58:30] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-07 22:58:30] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-07 22:58:30] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:58:30]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 22:58:30] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:58:30] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:58:30]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 22:58:30] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:58:30] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:58:30]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 22:58:30] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:58:30] [REGEN] LLM 调用失败: API 失败
+[2026-09-07 22:58:30] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:58:30]   - axis_jump@shot2: 轴线跳
+[2026-09-07 22:58:30] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:58:30] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-07 22:58:30] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:58:30]   - axis_jump@shot2: 轴线跳
+[2026-09-07 22:58:30] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:58:30] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-07 22:58:30] [HARD_FIX] 本轮路径: 新 Constraint 框架
+[2026-09-07 22:58:30] [CONSTRAINT] 修复 98 处 (top: prompt_sanitize=16, mandatory_biz_fields=16, runtime_extend=9, core_keyword_coverage=7, camera_movement_fill=7)
+[2026-09-07 22:58:30] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-07 22:58:31] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-07 22:58:31] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-07 22:58:31] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-07 22:58:31] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:31] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:31] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:31] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:31] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:31] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:31] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:31] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:31] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:31] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:31] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:31] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:31] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:58:31] [CONSTRAINT] 修复 18 处 (top: prompt_sanitize=4, mandatory_biz_fields=3, kf_time_window_alignment=2, runtime_extend=2, lf_desc_length=1)
+[2026-09-07 22:58:31] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-07 22:59:36] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-07 22:59:36] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-07 22:59:36]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-07 22:59:36] [CONSTRAINT] shot_count_bounds 异常: RepairRecord.__init__() got an unexpected keyword argument 'constraint'
+[2026-09-07 22:59:36] [CONSTRAINT] shot_count_bounds 异常: RepairRecord.__init__() got an unexpected keyword argument 'constraint'
+[2026-09-07 22:59:36] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-07 22:59:36] [CONSTRAINT] shot_count_bounds 异常: RepairRecord.__init__() got an unexpected keyword argument 'constraint'
+[2026-09-07 22:59:36] [CONSTRAINT] shot_count_bounds 异常: RepairRecord.__init__() got an unexpected keyword argument 'constraint'
+[2026-09-07 22:59:36] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-07 22:59:37] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:59:37]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 22:59:37] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:59:37] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:59:37]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 22:59:37] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:59:37] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:59:37]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 22:59:37] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:59:37] [REGEN] LLM 调用失败: API 失败
+[2026-09-07 22:59:37] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:59:37]   - axis_jump@shot2: 轴线跳
+[2026-09-07 22:59:37] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:59:37] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-07 22:59:37] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 22:59:37]   - axis_jump@shot2: 轴线跳
+[2026-09-07 22:59:37] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 22:59:37] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-07 22:59:37] [CONSTRAINT] frame_layouts_required 异常: RepairRecord.__init__() got an unexpected keyword argument 'constraint'
+[2026-09-07 22:59:37] [CONSTRAINT] shot_count_bounds 异常: RepairRecord.__init__() got an unexpected keyword argument 'constraint'
+[2026-09-07 22:59:37] [HARD_FIX] 本轮路径: 新 Constraint 框架
+[2026-09-07 22:59:37] [CONSTRAINT] dialogue_density 异常: RepairRecord.__init__() got an unexpected keyword argument 'constraint'
+[2026-09-07 22:59:37] [CONSTRAINT] frame_layouts_required 异常: RepairRecord.__init__() got an unexpected keyword argument 'constraint'
+[2026-09-07 22:59:37] [CONSTRAINT] shot_count_bounds 异常: RepairRecord.__init__() got an unexpected keyword argument 'constraint'
+[2026-09-07 22:59:37] [CONSTRAINT] 修复 98 处 (top: prompt_sanitize=16, mandatory_biz_fields=16, runtime_extend=9, core_keyword_coverage=7, camera_movement_fill=7)
+[2026-09-07 22:59:37] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-07 22:59:37] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-07 22:59:37] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-07 22:59:37] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-07 22:59:37] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:59:37] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:59:37] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:59:37] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:59:37] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:59:37] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:59:37] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:59:37] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:59:37] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:59:37] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:59:37] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:59:37] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 22:59:37] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:02:48] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-07 23:02:48] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-07 23:02:48]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-07 23:02:48] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-07 23:02:48] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-07 23:02:48] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:02:48]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 23:02:48] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:02:48] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:02:48]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 23:02:48] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:02:48] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:02:48]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 23:02:48] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:02:48] [REGEN] LLM 调用失败: API 失败
+[2026-09-07 23:02:48] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:02:48]   - axis_jump@shot2: 轴线跳
+[2026-09-07 23:02:48] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:02:48] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-07 23:02:48] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:02:48]   - axis_jump@shot2: 轴线跳
+[2026-09-07 23:02:48] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:02:48] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-07 23:02:48] [HARD_FIX] 本轮路径: 新 Constraint 框架
+[2026-09-07 23:02:48] [CONSTRAINT] 修复 115 处 (top: prompt_sanitize=16, mandatory_biz_fields=16, frame_layouts_required=14, runtime_extend=9, core_keyword_coverage=7)
+[2026-09-07 23:02:48] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-07 23:02:49] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-07 23:02:49] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-07 23:02:49] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-07 23:02:49] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:02:49] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:02:49] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:02:49] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:02:49] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:02:49] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:02:49] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:02:49] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:02:49] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:02:49] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:02:49] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:02:49] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:02:49] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:22] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-07 23:03:22] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-07 23:03:22]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-07 23:03:22] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-07 23:03:22] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-07 23:03:23] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:03:23]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 23:03:23] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:03:23] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:03:23]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 23:03:23] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:03:23] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:03:23]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 23:03:23] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:03:23] [REGEN] LLM 调用失败: API 失败
+[2026-09-07 23:03:23] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:03:23]   - axis_jump@shot2: 轴线跳
+[2026-09-07 23:03:23] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:03:23] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-07 23:03:23] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:03:23]   - axis_jump@shot2: 轴线跳
+[2026-09-07 23:03:23] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:03:23] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-07 23:03:23] [HARD_FIX] 本轮路径: 新 Constraint 框架
+[2026-09-07 23:03:23] [CONSTRAINT] 修复 115 处 (top: prompt_sanitize=16, mandatory_biz_fields=16, frame_layouts_required=14, runtime_extend=9, core_keyword_coverage=7)
+[2026-09-07 23:03:23] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-07 23:03:23] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-07 23:03:23] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-07 23:03:23] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-07 23:03:23] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:23] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:23] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:23] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:23] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:23] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:23] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:23] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:23] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:23] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:23] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:23] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:23] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:40] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-07 23:03:40] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-07 23:03:40]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-07 23:03:40] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-07 23:03:40] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-07 23:03:40] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:03:40]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 23:03:40] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:03:40] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:03:40]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 23:03:40] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:03:40] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:03:40]   - axis_jump@shot2: 轴线跳变
+[2026-09-07 23:03:40] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:03:40] [REGEN] LLM 调用失败: API 失败
+[2026-09-07 23:03:40] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:03:40]   - axis_jump@shot2: 轴线跳
+[2026-09-07 23:03:40] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:03:40] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-07 23:03:40] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-07 23:03:40]   - axis_jump@shot2: 轴线跳
+[2026-09-07 23:03:40] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-07 23:03:40] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-07 23:03:40] [HARD_FIX] 本轮路径: 新 Constraint 框架
+[2026-09-07 23:03:40] [CONSTRAINT] 修复 115 处 (top: prompt_sanitize=16, mandatory_biz_fields=16, frame_layouts_required=14, runtime_extend=9, core_keyword_coverage=7)
+[2026-09-07 23:03:40] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-07 23:03:40] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-07 23:03:40] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-07 23:03:40] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-07 23:03:40] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:40] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:40] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:40] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:40] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:40] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:41] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:41] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:41] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:41] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:41] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:41] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-07 23:03:41] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:31] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=enabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=400, body={"error":"bad param"}
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 20:48:32] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=429, body={"error":"rate limited","retry_after":3}
+[2026-09-08 20:48:32] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2414563130544'>
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2414563821280'>
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 20:48:32] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:48:32] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 20:48:32] [SPLIT] 1 个镜头估时 > 15.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:32] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 20:48:32] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 20:48:32] [shot7 尾帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「秘人匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 20:48:32] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-08 20:48:32]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-08 20:48:33] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-08 20:48:33] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-08 20:48:33] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:48:33]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 20:48:33] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:48:33] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:48:33]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 20:48:33] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:48:33] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:48:33]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 20:48:33] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:48:33] [REGEN] LLM 调用失败: API 失败
+[2026-09-08 20:48:33] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:48:33]   - axis_jump@shot2: 轴线跳
+[2026-09-08 20:48:33] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:48:33] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-08 20:48:33] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:48:33]   - axis_jump@shot2: 轴线跳
+[2026-09-08 20:48:33] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:48:33] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-08 20:48:33] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 20:48:33] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 20:48:33] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-08 20:48:33] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:33] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:33] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:33] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:33] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:33] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:33] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:33] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:33] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:33] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:33] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:33] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:33] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:48:33] [HARD_FIX] 本轮路径: 新 Constraint 框架
+[2026-09-08 20:48:33] [CONSTRAINT] 修复 22 处 (top: prompt_sanitize=4, mandatory_biz_fields=3, kf_time_window_alignment=2, runtime_extend=2, frame_layouts_required=2)
+[2026-09-08 20:48:33] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-08 20:49:11] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=enabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=400, body={"error":"bad param"}
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 20:49:12] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=429, body={"error":"rate limited","retry_after":3}
+[2026-09-08 20:49:12] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2157118853472'>
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2157118855824'>
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 20:49:12] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:49:12] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 20:49:12] [SPLIT] 1 个镜头估时 > 15.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:49:12] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 20:49:12] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 20:49:12] [shot7 尾帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「秘人匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 20:49:12] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-08 20:49:12]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-08 20:49:12] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-08 20:49:12] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-08 20:49:13] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:49:13]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 20:49:13] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:49:13] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:49:13]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 20:49:13] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:49:13] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:49:13]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 20:49:13] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:49:13] [REGEN] LLM 调用失败: API 失败
+[2026-09-08 20:49:13] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:49:13]   - axis_jump@shot2: 轴线跳
+[2026-09-08 20:49:13] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:49:13] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-08 20:49:13] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:49:13]   - axis_jump@shot2: 轴线跳
+[2026-09-08 20:49:13] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:49:13] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-08 20:49:13] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 20:49:13] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 20:49:13] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-08 20:49:13] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:49:13] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:49:13] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:49:13] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:49:13] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:49:13] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:49:13] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:49:13] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:49:13] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:49:13] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:49:13] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:49:13] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:49:13] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:49:13] [HARD_FIX] 本轮路径: 新 Constraint 框架
+[2026-09-08 20:49:13] [CONSTRAINT] 修复 22 处 (top: prompt_sanitize=4, mandatory_biz_fields=3, kf_time_window_alignment=2, runtime_extend=2, frame_layouts_required=2)
+[2026-09-08 20:49:13] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-08 20:51:42] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=enabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=400, body={"error":"bad param"}
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 20:51:42] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=429, body={"error":"rate limited","retry_after":3}
+[2026-09-08 20:51:42] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2017155955888'>
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2017156663008'>
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 20:51:42] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 20:51:42] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 20:51:42] [SPLIT] 1 个镜头估时 > 15.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:51:43] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 20:51:43] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 20:51:43] [shot7 尾帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「秘人匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 20:51:43] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-08 20:51:43]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-08 20:51:43] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-08 20:51:43] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-08 20:51:43] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:51:43]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 20:51:43] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:51:43] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:51:43]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 20:51:43] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:51:43] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:51:43]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 20:51:43] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:51:43] [REGEN] LLM 调用失败: API 失败
+[2026-09-08 20:51:43] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:51:43]   - axis_jump@shot2: 轴线跳
+[2026-09-08 20:51:43] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:51:43] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-08 20:51:43] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 20:51:43]   - axis_jump@shot2: 轴线跳
+[2026-09-08 20:51:43] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 20:51:43] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-08 20:51:44] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 20:51:44] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 20:51:44] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-08 20:51:44] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:51:44] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:51:44] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:51:44] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:51:44] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:51:44] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:51:44] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:51:44] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:51:44] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:51:44] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:51:44] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:51:44] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:51:44] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 20:51:44] [HARD_FIX] 本轮路径: 新 Constraint 框架
+[2026-09-08 20:51:44] [CONSTRAINT] 修复 22 处 (top: prompt_sanitize=4, mandatory_biz_fields=3, kf_time_window_alignment=2, runtime_extend=2, frame_layouts_required=2)
+[2026-09-08 20:51:44] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-08 21:25:35] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=enabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=400, body={"error":"bad param"}
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 21:25:39] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=429, body={"error":"rate limited","retry_after":3}
+[2026-09-08 21:25:39] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2575835607936'>
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2575835610288'>
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 21:25:39] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:25:39] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 21:25:39] [SPLIT] 1 个镜头估时 > 15.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:25:39] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 21:25:39] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 21:25:39] [shot7 尾帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「秘人匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 21:25:39] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-08 21:25:39]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-08 21:25:40] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-08 21:25:40] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-08 21:25:40] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:25:40]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 21:25:40] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:25:40] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:25:40]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 21:25:40] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:25:40] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:25:40]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 21:25:40] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:25:40] [REGEN] LLM 调用失败: API 失败
+[2026-09-08 21:25:40] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:25:40]   - axis_jump@shot2: 轴线跳
+[2026-09-08 21:25:40] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:25:40] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-08 21:25:40] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:25:40]   - axis_jump@shot2: 轴线跳
+[2026-09-08 21:25:40] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:25:40] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-08 21:25:40] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 21:25:40] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 21:25:40] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-08 21:25:41] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:25:41] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:25:41] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:25:41] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:25:41] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:25:41] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:25:41] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:25:41] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:25:41] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:25:41] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:25:41] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:25:41] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:25:41] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:25:41] [HARD_FIX] 本轮路径: 新 Constraint 框架
+[2026-09-08 21:25:41] [CONSTRAINT] 修复 21 处 (top: prompt_sanitize=4, mandatory_biz_fields=3, kf_time_window_alignment=2, runtime_extend=2, frame_layouts_required=2)
+[2026-09-08 21:25:41] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone
+[2026-09-08 21:26:36] [INFO] 使用 doubao 专属 prompt (provider=agent_plan)
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=4, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=8000, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=enabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=401, body={"error":{"code":"Unauthorized"}}
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=403, body={"error":"quota exhausted"}
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=400, body={"error":"bad param"}
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 21:26:36] [!] 服务端 503，2s 后重试 1 次 (尝试 1/2)
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=503, body={"error":"busy"}
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=429, body={"error":"rate limited","retry_after":3}
+[2026-09-08 21:26:36] [!] 429 限速，等待 3s 后重试 (尝试 1/2)
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [!] 客户端 300s 超时（长任务），不重试，改报「超时未完成」由上层业务决策
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '特定分镜内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2831290708864'>
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=200, body=<MagicMock name='mock.text.__getitem__()' id='2831290711216'>
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 1234, 'completion_tokens': 567, 'total_tokens': 1801, 'completion
+[2026-09-08 21:26:36] [INFO] 正在调用 Agent Plan (doubao-seed-2-1-turbo) 生成分镜脚本... max_completion_tokens=16384, thinking.type=disabled
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit: model=doubao-seed-2-1-turbo, messages=2, temperature=0.05, top_p=0.2, seed=42, response_format={'type': 'json_object'}
+[2026-09-08 21:26:36] [DEBUG] agent_plan_text_submit response: status=200, body={'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': '分镜脚本内容'}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150}}
+[2026-09-08 21:26:37] [SPLIT] 1 个镜头估时 > 15.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:26:37] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 21:26:37] [shot0 首帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 21:26:37] [shot7 尾帧] [CONTRADICTION] prompt 自相矛盾: 对称矛盾：断言「秘人匕首在杨旭手中」又断言「杨旭手中没有武器」
+[2026-09-08 21:26:37] [CONFLICT] 检测到 1 对约束冲突（PoC，只警告不阻断）:
+[2026-09-08 21:26:37]   - duplicate_append: a ↔ b: 两个约束都追加相同文本 '尾部'，会重复添加
+[2026-09-08 21:26:37] [CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径
+[2026-09-08 21:26:37] [CONSTRAINT] broken 异常: intentional failure
+[2026-09-08 21:26:38] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:26:38]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 21:26:38] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:26:38] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:26:38]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 21:26:38] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:26:38] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:26:38]   - axis_jump@shot2: 轴线跳变
+[2026-09-08 21:26:38] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳变
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:26:38] [REGEN] LLM 调用失败: API 失败
+[2026-09-08 21:26:38] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:26:38]   - axis_jump@shot2: 轴线跳
+[2026-09-08 21:26:38] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:26:38] [REGEN] merge 回原 script: target_shots=[2], regen_shots=1
+[2026-09-08 21:26:38] [REGEN] 触发局部 regen: 1 条 HARD 违例
+[2026-09-08 21:26:38]   - axis_jump@shot2: 轴线跳
+[2026-09-08 21:26:38] [REGEN] 反馈 prompt（前 500 字）:
+# ★ 硬约束未通过（v6.42 触发 regen）
+
+以下镜头的硬约束未通过修复兜底，请重新生成这些镜头：
+
+## shot 2
+  - [axis_jump] 轴线跳
+
+修复要求：
+  1. 保持原分镜的剧情/动作不变
+  2. 修正上述违例指向的问题
+  3. 修正后输出整个 script（不只是违例镜头）
+[2026-09-08 21:26:38] [REGEN] LLM 输出 JSON 解析失败，保留原版
+[2026-09-08 21:26:38] 红果标准: 红果总时长 40.0s < 60s（差 20.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 21:26:38] 红果标准: 红果总时长 5.0s < 60s（差 55.0s，不含钩子）。v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration（单镜 ≤ 8s）。
+[2026-09-08 21:26:38] 红果标准: 红果末镜（镜头5）duration 1.0s < 4s ——末镜必须够长以渲染悬念情绪。建议拉长到 4-6s。
+[2026-09-08 21:26:38] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:26:38] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:26:38] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:26:38] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:26:38] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:26:38] [SPLIT] 1 个镜头估时 > 8.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:26:38] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:26:38] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:26:38] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:26:38] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:26:38] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:26:38] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:26:38] [SPLIT] 1 个镜头估时 > 12.0s，已按 narration_segment 切为 2 镜
+[2026-09-08 21:26:38] [HARD_FIX] 本轮路径: 新 Constraint 框架
+[2026-09-08 21:26:38] [CONSTRAINT] 修复 21 处 (top: prompt_sanitize=4, mandatory_biz_fields=3, kf_time_window_alignment=2, runtime_extend=2, frame_layouts_required=2)
+[2026-09-08 21:26:38] [CONSTRAINT] HARD 未解决 1 处 (建议 regen): runtime_extend@shotNone

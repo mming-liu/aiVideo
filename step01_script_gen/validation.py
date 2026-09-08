@@ -4422,7 +4422,9 @@ def post_fix_shot_prompts(script: dict) -> dict:
                 if isinstance(_cl, dict) and _cl.get("name"):
                     _char_pool.append(str(_cl["name"]))
         if not _char_pool:
-            _char_pool = ["杨旭"]  # 兜底（与旧行为兼容）
+            _char_pool = []  # 通用化（v6.62）：删除旧硬编码 ["杨旭"]——无 char_layout 时不再
+                              # 注入"杨旭"假角色名，让上层 _extract_state_markers/pose 检查
+                              # 全部用空集合判定（warning-only，不污染 prompt）。
         for _char in _char_pool:
             _ff_p = _ff_poses.get(_char, "")
             if _ff_p not in ("盘坐", "盘膝", "端坐", "坐"):
@@ -6671,10 +6673,10 @@ def _hard_fix_framing_diversity_v2(shots: list, hook: dict | None = None) -> int
 _CAMERA_BY_SHOT_ROLE = [
     # (角色判定函数返回 True, 推荐运镜)
     ("远景建立", "。缓慢推近", lambda s: "远景" in (s.get("prompt", "") or "") and "推近" not in (s.get("prompt", "") or "")),
-    ("对话对望", "。过肩镜头", lambda s: any(kw in (s.get("main_subject", "") or "") for kw in ("张十三", "听香", "老汉", "肖管事")) and "过肩" not in (s.get("prompt", "") or "")),
+    ("对话对望", "。过肩镜头", lambda s: any(kw in (s.get("main_subject", "") or "") for kw in ("道", "说", "答", "问", "对望", "质问", "对话", "喝道", "答道", "怒道", "笑曰")) and "过肩" not in (s.get("prompt", "") or "")),
     ("打斗/刺杀", "。快速跟拍", lambda s: any(kw in (s.get("main_subject", "") or "") + (s.get("motion_desc", "") or "") for kw in ("刺杀", "打斗", "搏斗", "搏杀", "偷袭", "伏击")) and "跟拍" not in (s.get("prompt", "") or "")),
     ("质问/怒喝", "。缓推近", lambda s: any(kw in (s.get("narration_segment", "") or "") for kw in ("怒", "喝", "质问", "厉声", "骂道")) and "推" not in (s.get("prompt", "") or "")),
-    ("反应/特写", "。环绕镜", lambda s: any(kw in (s.get("main_subject", "") or "") for kw in ("听香", "刺客")) and "中近景" in (s.get("prompt", "") or "") and "环绕" not in (s.get("prompt", "") or "")),
+    ("反应/特写", "。环绕镜", lambda s: any(kw in (s.get("main_subject", "") or "") for kw in ("惊", "怔", "愣", "惧", "慌", "吓", "颤", "惊叫", "尖叫", "捂嘴")) and "中近景" in (s.get("prompt", "") or "") and "环绕" not in (s.get("prompt", "") or "")),
 ]
 
 
@@ -8722,9 +8724,37 @@ _THREAT_WATER_WORDS = (
     *_PS_THREAT_WATER,
     "没入水中", "已没入", "已彻底没入", "倒纵入水", "潜回水中", "潜伏",
 )
+# 通用化（v6.62）：从原"杨旭/听香"硬编码改为按姿态类别聚合——任何角色名只要
+# 出现在 _extract_state_markers 的 poses dict 中即可被下列规则命中。键名只是语义标签。
+_RECLINING_POSES = ("盘坐", "盘膝", "端坐", "坐", "跪坐", "半躺", "倚靠", "仰卧", "躺", "仰倒", "倒", "已躺下")
+_DOWN_POSES = ("仰卧", "躺", "仰倒", "倒", "已躺下")
+_SITTING_POSES = ("盘坐", "盘膝", "端坐", "坐", "跪坐", "撑伞")
+_UPRIGHT_POSES = ("撑伞", "立", "站", "捂嘴", "惊叫", "尖叫", "披头散发")
+
+
+def _find_char_with_pose(poses: dict, pose_set: tuple) -> str:
+    """通用化（v6.62）：从 poses dict 找出第一个姿势在 pose_set 集合内的角色名.
+    原实现用 m["poses"].get("杨旭") 硬编码查询——换小说直接 None 静默失败。
+    """
+    if not poses:
+        return ""
+    for _name, _p in poses.items():
+        if _p in pose_set:
+            return _name
+    return ""
+
+
+def _any_char_with_pose(poses: dict, pose_set: tuple) -> str:
+    """_find_char_with_pose 的别名（语义上"任意首个命中"），与下游可读性保持一致."""
+    return _find_char_with_pose(poses, pose_set)
+
+
+# 保留旧键名 `_SUBJECT_POSE_WORDS` 以避免破坏 import（向后兼容 6.62 之前）
+# 新代码请用 _RECLINING_POSES / _SITTING_POSES / _UPRIGHT_POSES。
 _SUBJECT_POSE_WORDS = {
-    "杨旭": ("盘坐", "盘膝", "端坐", "坐", "跪坐", "半躺", "倚靠", "仰卧", "躺", "仰倒", "倒", "已躺下"),
-    "听香": ("撑伞", "立", "站", "跪坐", "跪", "捂嘴", "惊叫", "尖叫", "披头散发"),
+    "reclining": _RECLINING_POSES,
+    "sitting": _SITTING_POSES,
+    "upright": _UPRIGHT_POSES,
 }
 
 
@@ -8800,17 +8830,20 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
             threat_just_out = m["threat_water_state"] in (
                 "刚出水面", "半身探出", "破水而出", "窜出", "浮出", "半身破水"
             )
-            yangxu_posture = m["poses"].get("杨旭", "")
-            # 真矛盾条件：刺客刚出 + 杨旭已躺下/仰倒 + 有血
-            yangxu_laying_down = yangxu_posture in ("仰卧", "躺", "仰倒", "倒", "已躺下")
-            if threat_just_out and yangxu_laying_down and m["has_blood"]:
+            # 通用化（v6.62）：从 poses dict 找"被打者"——任何角色躺下都算
+            victim_name = _find_char_with_pose(m["poses"], _DOWN_POSES)
+            victim_posture = m["poses"].get(victim_name, "") if victim_name else ""
+            # 真矛盾条件：刺客刚出 + 受害者已躺下/仰倒 + 有血
+            victim_laying_down = bool(victim_posture)
+            if threat_just_out and victim_laying_down and m["has_blood"]:
+                _victim = victim_name or "被打者"
                 warnings.append(
                     f"镜头{label} t={tr:.1f} 时序冲突：刺客「{m['threat_water_state']}」"
-                    f"（pre-state）+ 杨旭已「{yangxu_posture}」+ 心口有血（post-state）"
-                    f"——刺客刚出水面，杨旭不可能已躺下有血（刺杀瞬间还没完成）。"
-                    f"建议 pre-stab kf 写「刺客刚出/杨旭仍坐/无血」；"
-                    f"stab kf 写「刺客刺入/杨旭坐或刚仰/初现血」；"
-                    f"post-stab kf 写「刺客踞蹲/杨旭已躺/洇痕扩大」。"
+                    f"（pre-state）+ {_victim}已「{victim_posture}」+ 心口有血（post-state）"
+                    f"——刺客刚出水面，{_victim}不可能已躺下有血（刺杀瞬间还没完成）。"
+                    f"建议 pre-stab kf 写「刺客刚出/{_victim}仍坐/无血」；"
+                    f"stab kf 写「刺客刺入/{_victim}坐或刚仰/初现血」；"
+                    f"post-stab kf 写「刺客踞蹲/{_victim}已躺/洇痕扩大」。"
                 )
 
         # 2. kf[0..N] 状态单调性
@@ -8837,15 +8870,17 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
                     f"违反时间线单调性（刺客已没入不应再出水）。"
                 )
 
-        # 3. FF→kf[0] 状态连续性：FF 杨旭盘坐 + kf[0] 杨旭直接仰卧 = 跳变
-        if ff_m["poses"].get("杨旭") in ("盘坐", "盘膝", "端坐", "坐"):
+        # 3. FF→kf[0] 状态连续性：FF 受害者盘坐 + kf[0] 受害者直接仰卧 = 跳变
+        # 通用化（v6.62）：从 ff_m["poses"] 找"被打者"——任意角色坐姿→躺姿跳变都触发
+        ff_victim = _find_char_with_pose(ff_m["poses"], _SITTING_POSES)
+        if ff_victim:
             kf0_m = kf_markers[0]
-            kf0_pose = kf0_m["poses"].get("杨旭")
-            if kf0_pose in ("仰卧", "躺", "仰倒", "倒", "已躺下"):
+            kf0_victim = _find_char_with_pose(kf0_m["poses"], _DOWN_POSES)
+            if kf0_victim and kf0_victim == ff_victim:
                 tr0 = mid_kfs[0][0]
                 warnings.append(
-                    f"镜头{label} FF→kf[0] 杨旭状态跳变：FF「{ff_m['poses']['杨旭']}」"
-                    f"→ kf[0] t={tr0:.1f}「{kf0_pose}」缺过渡（盘坐→仰卧应至少 1 镜过渡："
+                    f"镜头{label} FF→kf[0] {ff_victim}状态跳变：FF「{ff_m['poses'][ff_victim]}」"
+                    f"→ kf[0] t={tr0:.1f}「{kf0_m['poses'][kf0_victim]}」缺过渡（盘坐→仰卧应至少 1 镜过渡："
                     f"「仍坐/察觉」或「被刺瞬间往后倒」）。"
                 )
             # FF 无血 + kf[0] 有血 = 跳变（除非 kf[0] 写「刚被刺」明示时序）
@@ -8887,14 +8922,14 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
                     f"镜头{label} 刺客状态跳变：kf 末尾 t={last_tr:.1f} 刺客已出水/破水 → LF 刺客「潜伏/黑影」凭空消失（中间缺「倒纵入水/没入」过渡）。"
                     f"建议 LF 写「刺客已没入水中/倒纵入水」明示消失方式。"
                 )
-            # 杨旭从躺回坐：kf 末尾杨旭躺下 + LF 杨旭坐起
-            kf_yangxu_laying = last_m["poses"].get("杨旭") in ("仰卧", "躺", "仰倒", "倒", "已躺下")
-            lf_yangxu_sitting = lf_m["poses"].get("杨旭") in ("盘坐", "盘膝", "端坐", "坐", "跪坐", "撑伞")
-            if kf_yangxu_laying and lf_yangxu_sitting:
+            # 通用化（v6.62）：任意角色"躺下→坐/站"都视为致命伤持续违反
+            kf_victim_laying = _find_char_with_pose(last_m["poses"], _DOWN_POSES)
+            lf_victim_sitting = _find_char_with_pose(lf_m["poses"], _SITTING_POSES)
+            if kf_victim_laying and lf_victim_sitting and kf_victim_laying == lf_victim_sitting:
                 warnings.append(
-                    f"镜头{label} 杨旭姿态回退：kf 末尾 t={last_tr:.1f} 杨旭「{last_m['poses']['杨旭']}」"
-                    f"→ LF 杨旭「{lf_m['poses']['杨旭']}」，违反致命伤持续规则（一旦倒下 LF 必须保持）。"
-                    f"建议 LF 写「杨旭仰倒船头/躺于船板」明示终态。"
+                    f"镜头{label} {kf_victim_laying}姿态回退：kf 末尾 t={last_tr:.1f} {kf_victim_laying}「{last_m['poses'][kf_victim_laying]}」"
+                    f"→ LF {lf_victim_sitting}「{lf_m['poses'][lf_victim_sitting]}」，违反致命伤持续规则（一旦倒下 LF 必须保持）。"
+                    f"建议 LF 写「{kf_victim_laying}仰倒/躺于地」明示终态。"
                 )
 
         # 5. v6.32 角色出现/消失时序合理性
