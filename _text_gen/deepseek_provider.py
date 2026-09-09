@@ -13,7 +13,7 @@
 """
 
 from .config import config
-from .models import TextGenerationRequest, TextGenerationResult
+from .models import TextGenerationRequest, TextGenerationResult, truncated_result
 from .service import TextGenerationService
 
 import re
@@ -97,14 +97,8 @@ class DeepSeekTextService(TextGenerationService):
 
         response = client.responses.create(**params)
 
-        # 截断/失败诊断
-        if getattr(response, "status", None) == "incomplete":
-            detail = getattr(response, "incomplete_details", None)
-            reason = getattr(detail, "reason", None) if detail else None
-            return TextGenerationResult(
-                success=False,
-                error=f"DeepSeek Responses 响应不完整 (incomplete_details.reason={reason})",
-            )
+        # 失败诊断（截断诊断挪到正文提取之后——allow_truncated=True 时要把已生成的
+        # 前缀交出去，v6.62.6）
         if getattr(response, "status", None) == "failed":
             err = getattr(response, "error", None)
             msg = getattr(err, "message", str(err)) if err else "未知错误"
@@ -121,6 +115,27 @@ class DeepSeekTextService(TextGenerationService):
         text = "".join(text_parts).strip()
 
         usage = _usage_dict(response)
+
+        # 截断诊断（v6.62.6，09-09）：status=incomplete 且 reason=max_output_tokens
+        # 才是「写到上限被切」，走通用 truncated_result 处置；其它 incomplete 原因
+        # （content_filter 等）与 allow_truncated 无关，一律硬失败。
+        if getattr(response, "status", None) == "incomplete":
+            detail = getattr(response, "incomplete_details", None)
+            reason = getattr(detail, "reason", None) if detail else None
+            err = f"DeepSeek Responses 响应不完整 (incomplete_details.reason={reason})"
+            if reason == "max_output_tokens":
+                return truncated_result(
+                    text=text,
+                    usage=usage,
+                    allow_truncated=req.allow_truncated,
+                    error=(
+                        f"{err}——输出 JSON 不完整，已整份丢弃。"
+                        f"如为全脚本生成请调高 DEEPSEEK_MAX_TOKENS"
+                        f"（当前 max_output_tokens={params.get('max_output_tokens')}，"
+                        f"思考模式下该上限包含思维链 token）。"
+                    ),
+                )
+            return TextGenerationResult(success=False, error=err, usage=usage)
 
         if not text:
             # json_schema 偶发空输出（官方已知），带诊断信息返回以便重试
@@ -212,6 +227,19 @@ class DeepSeekTextService(TextGenerationService):
                     ),
                     usage=usage,
                 )
+        # 截断诊断（v6.62.6，09-09）：正文非空但 finish_reason=length 说明写到上限
+        # 被切。旧实现只在**正文为空**时才看 finish_reason，非空的半个 JSON 照样
+        # success=True 下发——与 v6.62.5 在 agent_plan 修掉的是同一个缺陷。
+        if getattr(response.choices[0], "finish_reason", None) == "length":
+            return truncated_result(
+                text=text,
+                usage=usage,
+                allow_truncated=req.allow_truncated,
+                error=(
+                    f"DeepSeek 输出被截断（finish_reason=length, model={model}, "
+                    f"max_tokens={req.max_tokens}）——输出 JSON 不完整，已整份丢弃。"
+                ),
+            )
         return TextGenerationResult(success=True, text=text, usage=usage)
 
 

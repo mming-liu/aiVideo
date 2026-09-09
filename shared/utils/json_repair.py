@@ -359,6 +359,82 @@ def _truncate_fix(text: str) -> str:
     return head + closed
 
 
+def _truncate_to_last_element(text: str) -> str:
+    """截断恢复的第二策略：回退到**最后一个完整闭合的元素**（v6.62.6，09-09）.
+
+    `_truncate_fix` 只处理「截断落在字符串内部」这一种形态。实测另外三种同样常见
+    的形态它是**无操作**（前向扫描判定 in_str=False 直接原样返回），于是整份解析
+    失败、列表型提取拿到 0 项：
+      - 截在数值中间： {"objects": [{"id": "a"}, {"id": "b", "length_m": 3.2
+      - 截在字面量中间：{"objects": [{"id": "a"}, {"id": "b", "ok": tr
+      - 截在分隔符之后：{"objects": [{"id": "a"},
+
+    策略：正向扫描（跳过字符串内内容），记录最后一次「把嵌套深度降回 ≥1」的
+    闭合符位置——即最后一个**完整的列表元素/子对象**的末尾；从那里切断，去掉
+    尾随逗号，再收束外层括号。丢弃的只有本就不完整的尾部。
+
+    对完整 JSON 无操作（返回原文）。找不到可切点时也返回原文，交给上层报错。
+    """
+    n = len(text)
+    in_str = False
+    esc = False
+    depth = 0
+    cut = -1  # 最后一个「深度降回 ≥1」的闭合符下标（含）
+    for i, ch in enumerate(text):
+        if esc:
+            esc = False
+            continue
+        if ch == '\\':
+            esc = True
+            continue
+        if in_str:
+            if ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in '{[':
+            depth += 1
+        elif ch in '}]':
+            depth -= 1
+            # depth>=1 表示闭合的是**内层**元素，外层容器还开着 → 可切点
+            if depth >= 1:
+                cut = i
+    if depth <= 0 and not in_str:
+        return text  # 结构已收束（完整 JSON），无操作
+    if cut < 0:
+        return text  # 一个完整元素都没有，无从抢救
+
+    head = text[:cut + 1]
+    while head.endswith((',', ' ', '\n', '\r', '\t')):
+        head = head[:-1]
+
+    # 收束剩余未闭合括号（此时 head 保证不在字符串内）
+    open_stack: list[str] = []
+    in_str2 = False
+    esc2 = False
+    for ch in head:
+        if esc2:
+            esc2 = False
+            continue
+        if ch == '\\':
+            esc2 = True
+            continue
+        if in_str2:
+            if ch == '"':
+                in_str2 = False
+            continue
+        if ch == '"':
+            in_str2 = True
+        elif ch == '{':
+            open_stack.append('}')
+        elif ch == '[':
+            open_stack.append(']')
+        elif ch in '}]' and open_stack:
+            open_stack.pop()
+    return head + ''.join(reversed(open_stack))
+
+
 def safe_parse_json(text: str) -> Any:
     cleaned = strip_markdown_fence(text.strip())
 
@@ -399,6 +475,16 @@ def safe_parse_json(text: str) -> Any:
     if truncated != extracted:
         try:
             return json.loads(truncated)
+        except json.JSONDecodeError:
+            pass
+
+    # 截断恢复第二策略（v6.62.6）：截在数值/字面量/分隔符处时上面那步是无操作，
+    # 回退到最后一个完整闭合的元素。放在最后是因为它比 _truncate_fix 更有损
+    # （整个尾对象丢掉，而 _truncate_fix 能保住尾对象里已写完的字段）。
+    trimmed = _truncate_to_last_element(extracted)
+    if trimmed != extracted:
+        try:
+            return json.loads(trimmed)
         except json.JSONDecodeError:
             pass
 

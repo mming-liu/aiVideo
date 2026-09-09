@@ -565,3 +565,24 @@ def test_truncated_output_is_hard_failure(monkeypatch):
     assert result.success is False, "截断必须硬失败，不能把半个 JSON 当成功交给下游"
     assert "截断" in (result.error or "")
     assert result.usage["output_tokens"] == 12345
+    assert result.truncated is True
+
+
+def test_truncated_output_passes_through_when_allowed(monkeypatch):
+    """allow_truncated=True → success=True + truncated=True（v6.62.6）.
+
+    列表型提取（scene_objects 等）走 json_repair._truncate_fix，能丢弃未完成的
+    尾对象、保留前面完整对象；v6.62.5 的无条件硬失败把这条抢救路径也掐了。
+    """
+    svc = _make_text_service(monkeypatch)
+    from _text_gen import models
+    req = models.TextGenerationRequest(
+        system_prompt="s", user_prompt="u", allow_truncated=True
+    )
+
+    with patch("requests.post", return_value=_truncated_response()):
+        result = svc.generate(req)
+
+    assert result.success is True, "列表型提取要放行截断内容，交给 _truncate_fix 抢救"
+    assert result.truncated is True, "放行也必须置 truncated，供调用方打 WARN"
+    assert result.text, "放行时必须把（截断的）文本交给下游解析"

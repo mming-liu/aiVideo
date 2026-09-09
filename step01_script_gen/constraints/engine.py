@@ -175,15 +175,51 @@ def run_hard_fix(
         try:
             from shared.tee_logger import get_logger
             log = get_logger()
+            # get_logger() 声明返回 Optional[TeeLogger]，未初始化时（pytest / 非 main
+            # 调用）返回 None。此前直接 log.info(...) 抛 AttributeError，被下面的
+            # except 吞掉——**恰好把本段唯一的交付物（warn 明细）静默掉**，与它要修
+            # 的缺陷同形。兜底到 print（GBK 安全：仅 ASCII + 中文）。
+            def _emit(line: str, *, warn: bool = False) -> None:
+                if log is not None:
+                    (log.warn if warn else log.info)(line)
+                else:
+                    print(line)
+
             if report.repairs:
                 counts = report.repairs_by_constraint
                 top = ", ".join(f"{k}={v}" for k, v in sorted(counts.items(), key=lambda x: -x[1])[:5])
-                log.info(f"[CONSTRAINT] 修复 {len(report.repairs)} 处 (top: {top})")
+                _emit(f"[CONSTRAINT] 修复 {len(report.repairs)} 处 (top: {top})")
+            # v6.62.6（09-09）把 action='warn' 的记录**打出来**。
+            # 此前引擎只打聚合计数（「修复 N 处 (top: ...)」）和 HARD 未解决项，
+            # warn 类记录只存在于内存 report 里，落不到任何人能看到的地方——
+            # 于是 v6.62.4 按用户决策加的「W6 拉伸倍数过大只告警、不触发重生成」
+            # 成了死功能：09-08 实测正片拉伸 1.39x（阈值 1.20）却零告警输出。
+            # 告警是这类「只观测不干预」决策的**唯一交付物**，不打出来等于没做。
+            #
+            # v6.62.7（09-09）改「按记录取前 N」为**按约束分组、每类打 1 条样例**：
+            # 逐条截断会被高频约束刷屏——实测同一轮 18 条 warn 里 14 条来自
+            # frame_layouts_required，前 8 条几乎全被它占满，而真正稀有且高价值的
+            # 那几条（W6 拉伸超阈、对白密度 10%、开篇无角色）正好排在后面被吃掉。
+            # 告警的价值与出现次数成反比，分组后每类保底可见 1 条 + 总数。
+            warns = [r for r in report.repairs if getattr(r, "action", "") == "warn"]
+            if warns:
+                grouped: dict[str, list] = {}
+                for r in warns:
+                    grouped.setdefault(r.constraint_name, []).append(r)
+                for cname, items in sorted(grouped.items(), key=lambda kv: -len(kv[1])):
+                    head = items[0]
+                    _where = f"shot{head.shot_index}" if head.shot_index is not None else "script"
+                    _more = f"（另 {len(items) - 1} 处）" if len(items) > 1 else ""
+                    _emit(f"[CONSTRAINT-WARN] {cname}@{_where}{_more}: "
+                          f"{getattr(head, 'detail', '') or head.target}", warn=True)
+                _emit(f"[CONSTRAINT-WARN] 合计 {len(warns)} 条告警 / {len(grouped)} 类约束",
+                      warn=True)
             hard_unresolved = report.hard_unresolved
             if hard_unresolved:
-                log.warn(
+                _emit(
                     f"[CONSTRAINT] HARD 未解决 {len(hard_unresolved)} 处 (建议 regen): "
-                    + ", ".join(f"{v.constraint_name}@shot{v.shot_index}" for v in hard_unresolved[:5])
+                    + ", ".join(f"{v.constraint_name}@shot{v.shot_index}" for v in hard_unresolved[:5]),
+                    warn=True,
                 )
         except Exception:
             pass

@@ -7,7 +7,7 @@ import json
 import requests
 
 from .config import config
-from .models import TextGenerationRequest, TextGenerationResult
+from .models import TextGenerationRequest, TextGenerationResult, truncated_result
 from .service import TextGenerationService
 
 
@@ -56,14 +56,28 @@ class DashScopeTextService(TextGenerationService):
             choices = output.get("choices", [])
             if choices and isinstance(choices, list):
                 text = choices[0].get("message", {}).get("content", "")
+                finish = choices[0].get("finish_reason")
             else:
                 text = output.get("text", "")
+                finish = output.get("finish_reason")
 
             if not text:
                 return TextGenerationResult(
                     success=False,
                     error=f"API 返回文本为空，完整响应: "
                           f"{json.dumps(api_response, ensure_ascii=False)[:500]}",
+                )
+            # 截断（v6.62.6，09-09）：与其它 provider 同契约，见 models.truncated_result
+            if finish == "length":
+                return truncated_result(
+                    text=text,
+                    usage=None,
+                    allow_truncated=req.allow_truncated,
+                    error=(
+                        f"DashScope 输出被截断（finish_reason=length, "
+                        f"model={config.DASHSCOPE_TEXT_MODEL}, max_tokens={req.max_tokens}）"
+                        f"——输出 JSON 不完整，已整份丢弃。"
+                    ),
                 )
             return TextGenerationResult(success=True, text=text)
         except Exception as e:

@@ -16,7 +16,7 @@ from typing import Optional
 import requests
 
 from .config import config
-from .models import TextGenerationRequest, TextGenerationResult
+from .models import TextGenerationRequest, TextGenerationResult, truncated_result
 from .service import TextGenerationService
 from shared.error_fmt import parse_retry_after
 
@@ -186,6 +186,18 @@ class AgnesTextService(TextGenerationService):
                         print(f"  [INFO] 文本已回退到模型: {model}")
                     if self._current_key_index > 0:
                         print(f"  [INFO] 文本已回退到 API Key: {self._current_key_index + 1}/{len(self._api_keys)}")
+                    # 截断（v6.62.6，09-09）：与其它 provider 同契约——直接返回，
+                    # 不进模型回退队列（换模型不解决"输出超上限"）。
+                    if choices[0].get("finish_reason") == "length":
+                        return truncated_result(
+                            text=text,
+                            usage=None,
+                            allow_truncated=req.allow_truncated,
+                            error=(
+                                f"Agnes 输出被截断（finish_reason=length, model={model}, "
+                                f"max_tokens={req.max_tokens}）——输出 JSON 不完整，已整份丢弃。"
+                            ),
+                        )
                     return TextGenerationResult(success=True, text=text)
 
                 # ---- 429: 速率限制，优先切换 API Key（不同 key 限速独立），再用新 key 重试 ----

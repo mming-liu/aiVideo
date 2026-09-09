@@ -9,6 +9,9 @@ LLM 偶发输出「…」 vs 「...」、全/半角空格差异、标点不一�
   3. 同步 narration 与 subtitle（以 narration 为准，镜像到 subtitle）
 
 幂等：归一化前后无变化则跳过。
+
+v6.62.7（09-09）：删掉「对白镜双向空 → 用 ff_desc 后 20 字伪造台词」的兜底，
+改为纯告警。理由见 apply() 内注释——伪造值会一路烧进 SRT 与成片。
 """
 from __future__ import annotations
 
@@ -25,8 +28,8 @@ from .types import RepairRecord, Severity
 
 
 _DIALOGUE_HINTS = (
-    "质问", "怒喝", "叫道", "对", "说", "答", "问",
-    "喊", "吼", "低声", "怒道", "厉声", "低语", "轻声道", "冷声",
+    "质问", "怒喝", "叫道", "怒道", "厉声", "低语", "轻声道", "冷声",
+    "低声", "说道", "答道", "问道", "喊道", "吼道", "对话", "对白",
 )
 _EMPTY_SUBJECTS = ("空镜", "场景", "环境", "远景")
 
@@ -36,14 +39,6 @@ def _is_dialogue_shot(shot: dict) -> bool:
     if any(hint in subject for hint in _DIALOGUE_HINTS):
         return True
     return bool(str(shot.get("subtitle") or "").strip())
-
-
-def _dialogue_placeholder(shot: dict) -> str:
-    ff_desc = str(shot.get("ff_desc") or "").rstrip("。. ")
-    if ff_desc:
-        return f"{ff_desc[-20:]}，某：……"
-    subject = str(shot.get("main_subject") or "")
-    return f"{subject[:10] or '对白'}，某：……"
 
 
 def _normalize(text: str) -> str:
@@ -80,17 +75,27 @@ class NarrationSubtitleConsistencyConstraint(Constraint):
                 subject = str(shot.get("main_subject") or "")
                 if any(token in subject for token in _EMPTY_SUBJECTS):
                     continue
-                placeholder = _dialogue_placeholder(shot)
-                shot["narration_segment"] = placeholder
-                shot["subtitle"] = placeholder
+                # v6.62.7（09-09）**不再伪造台词**，只告警。
+                # 旧实现兜底成 f"{ff_desc[-20:]}，某：……"——拿**画面描述的后 20 字**
+                # 当旁白。这个值不是中间态：它同时写进 narration_segment 和
+                # subtitle，再被下面的 top-level 拼接收进 script["narration"]，
+                # 一路烧进 SRT 和视频模型的对白 prompt。09-08 实测 chapter_001
+                # 镜头8 落盘成「香站在中舱，手持油纸伞，嘴唇微闭，某」——从
+                # ff_desc 中间切开导致「听香」少了「听」，尾巴挂着半个占位符，
+                # 而全片 script["narration"] 一共只有 38 字，其中 17 字是这句。
+                # 空旁白只是「这镜没台词」（管线本就容忍，实测 8/10 镜为空照跑），
+                # 伪造的旁白是**错内容进成片**——后者严格更坏，故降级为告警。
                 repairs.append(
                     RepairRecord(
                         constraint_name=self.name,
                         shot_index=idx,
-                        action="set_field",
+                        action="warn",
                         target="narration_segment+subtitle",
-                        before="narr='' sub=''",
-                        after=placeholder,
+                        detail=(
+                            f"shot {idx} 疑似对白镜（main_subject={subject[:20]!r}）"
+                            f"但 narration_segment/subtitle 双向为空——"
+                            f"该镜将无字幕无旁白，需 LLM 补台词。"
+                        ),
                     )
                 )
                 continue

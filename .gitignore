@@ -55,3 +55,8 @@ test_output.mp3
 # 参考仓库（clone 供吸收参考，不入版本库）
 reference_skills/
 *.bak
+
+# 测试 OUTPUT_BASE（tests/conftest.py 把 OUTPUT_BASE 指到这里）——纯运行产物，
+# 每跑一次测试就变一次，不入库。原先跟踪的 4 个 step0X.log 已 git rm --cached，
+# 同目录的手写调试脚本 replay_agent_plan.py 已迁到 tools/。
+.pytest_tmp/

@@ -673,50 +673,117 @@ def _count_ungrounded_narrations(script: dict, novel_text: str) -> int:
 # （实测「镜头推近至」「惊觉对」ff_desc 尾部悬空「庄仆」直接落盘）。
 # 正常 prompt/ff/lf/motion 都应以终结标点收尾；台词 narration 允许逗号结尾
 # （跨镜拆分对白），故只查这 4 个字段。
-_TERMINAL_TAIL = tuple("。！？…」）】")
+#
+# v6.62.6（09-09）真实截断残句的判据：结尾停在**不能收句的虚词**上。
+#
+# 为什么换判据：旧实现用「不以终结标点收尾」当截断信号（原 _TERMINAL_TAIL，
+# 本次已随判据一并删除），09-08 实测在真实数据上命中 40/44 = 91%（上一版
+# 40/40 = 100%）——而命中的全是**完整**描述，只是 doubao 写描述性字段不习惯
+# 加句号（「…孩童嬉玩可见」「…昏昏欲睡」「…转场时长0.5s」）。
+# 于是 `new_trunc >= 2 and new_trunc > prev_trunc` 被行文风格的随机波动稳定触发，
+# **把几乎每一次 GAP 重试都判成退化回退掉**，其中包括 v6.62.4 刚加的零高潮专项
+# 重试（23:10 授予重试 → 23:13 以「48 > 39 个残句」回退 → 终稿仍零高潮）。
+# 两个修复互相抵消，且旧文案从不打印真正命中的判据，所以一直没被看见。
+#
+# 选词原则：只收**几乎不作名词结尾**的虚词，并排掉本域高频名词/形容词。
+# 古风权谋语料里以下字常作名词尾，**故意不收**：
+#   地(土地/空地) 把(刀把) 被(棉被) 由(理由) 跟(脚跟) 朝(王朝) 沿(河沿)
+#   将(大将) 向(方向) 和(柔和/温和) 得(取得/心得)
+_DANGLING_TAIL = tuple("的与及或而且并从往于让给至对")
+# _DANGLING_TAIL 里 于/对/至 三字仍有名词化/固定搭配风险（「甚至」「面对」是
+# 完整句的合法收尾，不是残句），按二字组合排除。
+# 不变式：**每一项都必须以 _DANGLING_TAIL 中的字结尾**，否则它是永不生效的死条目
+# ——由 tests/step01_script_gen/test_main_regen_guard.py 断言守住。
+_DANGLING_EXCEPT = (
+    "面对", "一对", "相对", "绝对", "对于", "至于", "甚至", "以至",
+    "由于", "在于", "属于", "等于", "终于", "过于",
+)
 
 
 def _count_mid_clause_tails(script: dict) -> int:
-    """统计 4 文本字段以非终结标点/汉字收尾的数量（截断 salvage 的强信号）."""
+    """统计 4 文本字段以**悬挂虚词**收尾的数量（截断 salvage 的强信号）.
+
+    判据见 `_DANGLING_TAIL`：09-08 实测把「缺句末标点」换成「悬挂虚词收尾」后，
+    真实数据命中率 91% → 0%，而 docstring 里的真实残句样例（「镜头推近至」
+    「惊觉对」「抬手指向」）仍全部命中。
+    """
     cnt = 0
     for sh in script.get("shots", []) or []:
         for fld in ("prompt", "ff_desc", "lf_desc", "motion_desc"):
             v = str(sh.get(fld) or "").strip()
-            if len(v) >= 10 and not v.endswith(_TERMINAL_TAIL):
+            if len(v) < 10:
+                continue
+            if v.endswith(_DANGLING_EXCEPT):
+                continue
+            if v.endswith(_DANGLING_TAIL):
                 cnt += 1
     return cnt
 
 
-def _is_retry_degraded(prev: dict, new: dict, novel_text: str) -> bool:
-    """判定重试版是否比上一版退化（回退保护的两个强信号）.
+def _retry_degrade_reason(prev: dict, new: dict, novel_text: str,
+                          *, climax_rescue: bool = False) -> str | None:
+    """返回重试版退化的**具体原因**，健康则返回 None（v6.62.6，09-09）.
 
-    1) **时长塌缩**：上一版健康（≥40s）而新版原始总时长 < 40s——LLM 明显没
-       响应总时长规则（08-27 重试版 11s 事故），事后拉伸会把 1s 镜头拉到 8s。
-    2) **台词失锚变多**：新版未在原文找到的台词数 > 上一版（原文幻觉，如
-       「凶手是谁？如何击杀了公子」）。≥2 条才判退化，防短语匹配误报。
-    3) **文本中途截断**（v6.50，08-28）：新版 ≥2 个文本字段以非终结标点
-       收尾且比上一版多——LLM 响应被截断、json_repair 捞回残句
-       （实测「镜头推近至」「惊觉对」直接落盘）。
+    与 `_is_retry_degraded` 同判据，只是把命中的那一条讲清楚。拆出来的原因：
+    09-08 实测日志打出「重试版质量退化（原始总时长 77s vs 上一版 66s，台词失锚
+    0 条），回退保留上一版」——两个被打印的指标**都不是**触发项（77s 未塌缩、
+    失锚 0 条），真正命中的是第 3 条「文本中途截断」，而它从不出现在文案里。
+    结果是运维读日志会得出「护栏把更好的版本判退化了」的错误结论。
 
-    Returns:
-        True = 重试版退化，应回退保留 prev。
+    Args:
+        climax_rescue: True = 上一版**零高潮**而重试版补上了高潮镜（见调用点）。
+            此时只保留判据 1（时长塌缩），判据 2/3 降级为告警不再触发回退——
+            理由是价值序：判据 2/3 拦的是**措辞瑕疵**（台词没逐字对上原文、
+            句子收尾不干净），判据 1 拦的是**不可挽回的物理损坏**（时长塌缩后
+            W6 拉伸把 1s 镜拉成 8s 慢动作）。而「整章高潮没拍」直接等于废片，
+            拿措辞瑕疵否决结构修复是错的价值序。
     """
     # 1) 时长塌缩
     prev_dur = _retry_raw_duration(prev)
     new_dur = _retry_raw_duration(new)
     if prev_dur >= 40 and new_dur < 40:
-        return True
+        return (f"时长塌缩（原始总时长 {new_dur:.0f}s < 40s，上一版 {prev_dur:.0f}s）"
+                f"——事后 W6 拉伸会把短镜拉成慢动作")
+    if climax_rescue:
+        return None
     # 2) 台词失锚变多
     if novel_text:
         prev_ung = _count_ungrounded_narrations(prev, novel_text)
         new_ung = _count_ungrounded_narrations(new, novel_text)
         if new_ung > prev_ung and new_ung >= 2:
-            return True
+            return (f"台词失锚变多（新版 {new_ung} 条未在原文找到，"
+                    f"上一版 {prev_ung} 条）——疑似原文幻觉")
     # 3) 文本中途截断变多
     new_trunc = _count_mid_clause_tails(new)
-    if new_trunc >= 2 and new_trunc > _count_mid_clause_tails(prev):
-        return True
-    return False
+    prev_trunc = _count_mid_clause_tails(prev)
+    if new_trunc >= 2 and new_trunc > prev_trunc:
+        return (f"文本中途截断变多（新版 {new_trunc} 个字段以悬挂虚词收尾，"
+                f"上一版 {prev_trunc} 个）——LLM 响应被截断后捞回了残句")
+    return None
+
+
+def _is_retry_degraded(prev: dict, new: dict, novel_text: str,
+                       *, climax_rescue: bool = False) -> bool:
+    """判定重试版是否比上一版退化（回退保护的三个强信号）.
+
+    1) **时长塌缩**：上一版健康（≥40s）而新版原始总时长 < 40s——LLM 明显没
+       响应总时长规则（08-27 重试版 11s 事故），事后拉伸会把 1s 镜头拉到 8s。
+    2) **台词失锚变多**：新版未在原文找到的台词数 > 上一版（原文幻觉，如
+       「凶手是谁？如何击杀了公子」）。≥2 条才判退化，防短语匹配误报。
+    3) **文本中途截断**（v6.50，08-28；判据 v6.62.6 重写）：新版 ≥2 个文本字段
+       以**悬挂虚词**（`_DANGLING_TAIL`：的/与/至/对/于…）收尾且比上一版多——
+       LLM 响应被截断、json_repair 捞回残句（实测「镜头推近至」「惊觉对」
+       直接落盘）。**不再**用「缺句末标点」当信号，那条在真实数据上 91% 是误报。
+
+    判据实现在 `_retry_degrade_reason`（单一事实源，附带命中原因文案）。
+    `climax_rescue=True` 时只保留判据 1，语义见该函数 docstring。
+
+    Returns:
+        True = 重试版退化，应回退保留 prev。
+    """
+    return _retry_degrade_reason(
+        prev, new, novel_text, climax_rescue=climax_rescue
+    ) is not None
 
 
 def _build_novel_slice_for_picked(picked: dict, shots_by_id: dict,
@@ -1720,18 +1787,35 @@ def main() -> None:
                 # 重生成结果 JSON 损坏 → 保留上一版，不中断流水线
                 _logger.warn(f"[WARN] 重生成 JSON 解析失败，保留上一版: {e}")
                 break
+            # v6.62.7（09-09）零高潮救援：先判断这次重试是不是**修好了结构性
+            # 缺陷**。回退保护此前对「结构性缺陷 vs 措辞瑕疵」一视同仁，于是把
+            # 唯一一次修好结构的重试也扔掉——09-08 实测链路：正片零高潮 →
+            # v6.62.4 特批 1 次重试 → 23:31 重试版以「台词失锚 2 条」被判退化回退
+            # → 终稿仍零高潮（原文 3100-4847 字的刺杀/尖叫/掩尸整段没拍，刺客与
+            # 张十三被提取进 characters 却零出镜，成片是 63s 吹箫风光片配一个
+            # 「公子遇刺」的钩子）。两个修复互相抵消，跟 v6.62.6 那次同构。
+            _new_climax = ((validate_script_gap(new_script, novel_text)
+                            .get("distribution") or {}).get("climax_shots", 0))
+            _climax_rescue = _dist.get("climax_shots", 0) == 0 and _new_climax > 0
+            # 救援态下被豁免的软判据仍要留痕，否则「放宽了什么」不可追溯
+            _waived = (_retry_degrade_reason(script, new_script, novel_text)
+                       if _climax_rescue else None)
             # v6.47（08-27）回退保护：重试版质量退化（时长塌缩/台词失锚变多）→
             # 保留上一版。GAP 通过≠质量好——08-27 重试版 11 镜×1s 靠加镜头骗过
             # 覆盖检查但时长崩了，事后 W6 把 1s 拉到 8s（8 倍慢动作）。
-            if _is_retry_degraded(script, new_script, novel_text):
-                _logger.warn(
-                    f"[GAP] 重试版质量退化（原始总时长 {_retry_raw_duration(new_script):.0f}s "
-                    f"vs 上一版 {_retry_raw_duration(script):.0f}s，台词失锚 "
-                    f"{_count_ungrounded_narrations(new_script, novel_text)} 条），"
-                    f"回退保留上一版"
-                )
-                _console("  [GAP] 重试版质量退化，回退保留上一版（时长塌缩/台词失锚）")
+            if _is_retry_degraded(script, new_script, novel_text,
+                                  climax_rescue=_climax_rescue):
+                _reason = _retry_degrade_reason(script, new_script, novel_text,
+                                                climax_rescue=_climax_rescue)
+                _logger.warn(f"[GAP] 重试版质量退化：{_reason}，回退保留上一版")
+                _console(f"  [GAP] 重试版质量退化，回退保留上一版（{_reason}）")
                 break
+            if _climax_rescue:
+                _logger.warn(
+                    f"[GAP] 零高潮救援：上一版 0 个高潮镜 → 重试版 {_new_climax} 个，"
+                    f"采纳重试版" + (f"（已豁免软判据：{_waived}）" if _waived else "")
+                )
+                _console(f"  [GAP] 零高潮救援：采纳重试版（+{_new_climax} 高潮镜）")
             script = new_script
             # 不在循环内 post_process：循环退出后统一在 line 334 做一次
             # （code-audit 07-31 #7：原 :328 与 :334 重复调用 _post_process）

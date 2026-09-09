@@ -14,7 +14,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 import json
 import re
 from shared.character_bank import CharacterBank
-from _text_gen import create_service, TextGenerationRequest
+from _text_gen import create_service, TextGenerationRequest, config as text_config
 
 
 # ========================================================================
@@ -149,7 +149,12 @@ def extract_characters(novel_text: str, bank: CharacterBank) -> list[dict]:
     req = TextGenerationRequest(
         system_prompt="你是小说人物分析专家，精确提取出场人物信息。只输出纯JSON，不要任何额外文字。",
         user_prompt=prompt,
-        max_tokens=20000,
+        # v6.62.6（09-09）20000 → TEXT_EXTRACT_MAX_TOKENS（默认 6000）：给偶发重复
+        # 退化封顶（09-08 实测本调用正常输出仅 596 tokens，同批 object_extractor
+        # 退化时一路写到 20000 顶）。人物特别多的章节可在 .env.content 调高。
+        # 不开 allow_truncated：下面是裸 json.loads + 花括号切片，没有 _truncate_fix
+        # 那样的列表项抢救能力，放行截断只会换成一句更含糊的「JSON 解析失败」。
+        max_tokens=text_config.TEXT_EXTRACT_MAX_TOKENS,
         temperature=0.3,
         json_schema=CHARACTERS_SCHEMA,
     )
@@ -168,7 +173,16 @@ def extract_characters(novel_text: str, bank: CharacterBank) -> list[dict]:
         start = raw.find("{")
         end = raw.rfind("}")
         if start != -1 and end != -1:
-            data = json.loads(raw[start:end + 1])
+            # v6.62.6（09-09）修潜在崩溃：这行原本**未包 try**——截断响应恰好满足
+            # 「找到 { 且找到 }」（末尾 } 来自更早的嵌套对象）却切不出合法 JSON 时，
+            # JSONDecodeError 会穿出本函数、经 concurrent_extract 冒泡把 step01 打挂。
+            # 同文件另两个提取器（asset_extractor 的场景/道具）都正确包了 try，
+            # 只有这里漏了。行为对齐：解析不出就 WARN + 返回空表。
+            try:
+                data = json.loads(raw[start:end + 1])
+            except json.JSONDecodeError:
+                print(f"[WARN] 角色提取 JSON 解析失败（截断或结构损坏）")
+                return []
         else:
             print(f"[WARN] 角色提取 JSON 解析失败")
             return []

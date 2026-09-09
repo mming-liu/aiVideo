@@ -183,3 +183,66 @@ def test_constraint_attributes():
     assert c.severity == Severity.WARN
     assert "narration_segment" in c.fields
     assert "subtitle" in c.fields
+
+
+# ---------------------------------------------------------------------------
+# v6.62.7（09-09）对白镜双向空：只告警，**不得伪造台词**。
+# 旧实现兜底成 f"{ff_desc[-20:]}，某：……"，把画面描述后 20 字当旁白写进
+# narration_segment + subtitle，一路烧进 SRT。09-08 实测落盘
+# 「香站在中舱，手持油纸伞，嘴唇微闭，某」（从 ff_desc 中间切断，「听香」少了「听」）。
+# ---------------------------------------------------------------------------
+
+def _apply(script):
+    from tests.step01_script_gen.conftest import make_ctx
+    from step01_script_gen.constraints.narration_subtitle_consistency import (
+        NarrationSubtitleConsistencyConstraint,
+    )
+    return NarrationSubtitleConsistencyConstraint().apply(make_ctx(script))
+
+
+def test_empty_dialogue_shot_is_not_backfilled_from_ff_desc():
+    """对白镜双向空 → 字段保持为空，绝不写入 ff_desc 切片."""
+    from tests.step01_script_gen.conftest import make_script, make_shot
+
+    script = make_script([
+        make_shot(
+            index=8,
+            main_subject="肖管事说道，媒人",
+            narration_segment="",
+            subtitle="",
+            ff_desc="别庄门前石阶上，肖管事拱手立于画中央，听香站在中舱，手持油纸伞，嘴唇微闭",
+        ),
+    ])
+    _apply(script)
+    shot = script["shots"][0]
+    assert shot["narration_segment"] == ""
+    assert shot["subtitle"] == ""
+    assert "某" not in str(shot["subtitle"])
+    assert "油纸伞" not in str(shot["narration_segment"])
+
+
+def test_empty_dialogue_shot_emits_warn_record():
+    """不伪造 ≠ 不上报：必须留一条 warn（引擎会打进 step01.log）."""
+    from tests.step01_script_gen.conftest import make_script, make_shot
+
+    script = make_script([
+        make_shot(index=8, main_subject="肖管事说道，媒人",
+                  narration_segment="", subtitle="", ff_desc="别庄门前石阶"),
+    ])
+    repairs = _apply(script)
+    warns = [r for r in repairs if r.action == "warn"]
+    assert len(warns) == 1
+    assert warns[0].shot_index == 8
+    assert "双向为空" in warns[0].detail
+
+
+def test_single_char_hints_no_longer_overtrigger():
+    """main_subject 含「对/说/答/问」单字不再误判为对白镜（旧 _DIALOGUE_HINTS 收了单字）."""
+    from tests.step01_script_gen.conftest import make_script, make_shot
+
+    script = make_script([
+        make_shot(index=6, main_subject="老汉牵牛走过田埂，面对夕阳",
+                  narration_segment="", subtitle="", ff_desc="田埂远景，老汉牵牛"),
+    ])
+    repairs = _apply(script)
+    assert [r for r in repairs if r.action == "warn"] == []

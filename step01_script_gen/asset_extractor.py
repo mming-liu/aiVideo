@@ -28,7 +28,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 import json
 import re
 
-from _text_gen import create_service, TextGenerationRequest
+from _text_gen import create_service, TextGenerationRequest, config as text_config
 
 
 # ========================================================================
@@ -153,7 +153,10 @@ def extract_scene_assets(script: dict, bank) -> list[dict]:
     req = TextGenerationRequest(
         system_prompt="你是影视美术指导，擅长从分镜脚本中抽象主要场景，生成电影级大场景建立镜头与近景功能场景描述，保证场景统一参考与空间逻辑可信。只输出纯JSON，不要任何额外文字。",
         user_prompt=prompt,
-        max_tokens=20000,
+        # v6.62.6（09-09）20000 → TEXT_EXTRACT_MAX_TOKENS（默认 6000）：给偶发重复
+        # 退化封顶（实测正常输出 818 tokens）。场景多的章节可在 .env.content 调高。
+        # 不开 allow_truncated：裸 json.loads 无列表项抢救能力，理由同 character_extractor。
+        max_tokens=text_config.TEXT_EXTRACT_MAX_TOKENS,
         temperature=0.2,
         json_schema=SCENE_ASSETS_SCHEMA,
     )
@@ -207,7 +210,9 @@ def extract_props(script: dict, bank) -> list[dict]:
     req = TextGenerationRequest(
         system_prompt="你是影视道具师，擅长从分镜脚本中提取核心道具并给出可绘画的具体外观描述，用于白底道具资产图生成。只输出纯JSON，不要任何额外文字。",
         user_prompt=prompt,
-        max_tokens=12000,
+        # v6.62.6（09-09）12000 → TEXT_EXTRACT_MAX_TOKENS（默认 6000）：同上封顶
+        # （实测正常输出 784 tokens）。
+        max_tokens=text_config.TEXT_EXTRACT_MAX_TOKENS,
         temperature=0.2,
         json_schema=PROPS_SCHEMA,
     )

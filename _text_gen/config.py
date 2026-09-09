@@ -54,6 +54,16 @@ class TextGenCfg:
         int(os.getenv("DEEPSEEK_MAX_TOKENS") or "0") or None
     )
 
+    # 列表型「预提取」调用（scene_objects / characters / scene_assets / props）的
+    # 输出 token 上限（v6.62.6，09-09）。
+    # 语义是**给重复退化封顶**，不是「给足余量」：09-08 实测这批调用正常输出
+    # 596-1039 tokens，而模型偶发进入重复退化时会把上限当目标一路写到顶
+    # （20000 tokens / 3m49s / 整份作废）。6000 ≈ 实测需求 6-10x 余量。
+    # 供应商无关（不是模型能力上限，故不进 shared/model_caps.py 注册表），
+    # 但**可调**——章节人物/场景/道具特别多导致正常输出逼近上限时，
+    # 在 .env.content 调高 TEXT_EXTRACT_MAX_TOKENS 即可，不必改代码。
+    TEXT_EXTRACT_MAX_TOKENS: int = int(os.getenv("TEXT_EXTRACT_MAX_TOKENS") or "6000")
+
     # ---- agnes (OpenAI 兼容) ----
     AGNES_API_KEY: str = os.getenv("AGNES_API_KEY", "")
     AGNES_API_KEY_2: str = os.getenv("AGNES_API_KEY_2", "")  # 备用 Key

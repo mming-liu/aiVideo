@@ -38,7 +38,7 @@ from typing import Optional
 import requests
 
 from .config import config
-from .models import TextGenerationRequest, TextGenerationResult
+from .models import TextGenerationRequest, TextGenerationResult, truncated_result
 from .service import TextGenerationService
 from shared.key_scheduler import KeyScheduler
 from shared.constants import AGENT_PLAN_TEXT_ATTEMPTS
@@ -208,7 +208,8 @@ class AgentPlanTextService(TextGenerationService):
 
             if resp.status_code == 200:
                 return self._parse_response(
-                    resp, model, payload.get("max_completion_tokens")
+                    resp, model, payload.get("max_completion_tokens"),
+                    allow_truncated=req.allow_truncated,
                 )
 
             if resp.status_code == 429:
@@ -247,11 +248,13 @@ class AgentPlanTextService(TextGenerationService):
     # 响应解析
     # ------------------------------------------------------------------
     def _parse_response(
-        self, resp: requests.Response, model: str, cap: Optional[int] = None
+        self, resp: requests.Response, model: str, cap: Optional[int] = None,
+        allow_truncated: bool = False,
     ) -> TextGenerationResult:
         """从 200 响应中提取文本 + usage.
 
         cap: 本次请求的 max_completion_tokens，仅用于截断错误文案（v6.62.5）。
+        allow_truncated: 见 TextGenerationRequest.allow_truncated（v6.62.6）。
         """
         try:
             data = resp.json()
@@ -304,9 +307,15 @@ class AgentPlanTextService(TextGenerationService):
         if finish == "length":
             # 注意 key：_usage_dict 把 completion_tokens 重命名为 output_tokens
             _completion = (usage or {}).get("output_tokens")
-            return TextGenerationResult(
-                success=False,
+            # v6.62.6（09-09）：硬失败只对**不能容忍截断**的调用点（全脚本生成）。
+            # 列表型提取显式 allow_truncated=True → 放行给 _truncate_fix 抢救完整
+            # 列表项；v6.62.5 无条件硬失败把这条真实抢救路径也掐了（截断 → 上层
+            # return [] → 物体库零增量），属于过度收敛。
+            # 分支落法收敛到 models.truncated_result（4 个 provider 同一份）。
+            return truncated_result(
+                text=text,
                 usage=usage,
+                allow_truncated=allow_truncated,
                 error=(
                     f"Agent Plan 输出被截断（finish_reason=length, model={model}, "
                     f"max_completion_tokens={cap}, completion_tokens={_completion}）"

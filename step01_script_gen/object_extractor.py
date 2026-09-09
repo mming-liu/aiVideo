@@ -21,7 +21,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 import json
 
 from shared.scene_objects_bank import SceneObjectsBank
-from _text_gen import create_service, TextGenerationRequest
+from _text_gen import create_service, TextGenerationRequest, config as text_config
 
 
 # ========================================================================
@@ -126,14 +126,32 @@ def extract_scene_objects(novel_text: str, bank: SceneObjectsBank) -> list[dict]
     req = TextGenerationRequest(
         system_prompt="你是古装剧场景设计专家，擅长依据原文上下文推导场景物体的合理尺寸、容量与结构，保证画面物理可信。只输出纯JSON，不要任何额外文字。",
         user_prompt=prompt,
-        max_tokens=20000,
+        # v6.62.6（09-09）20000 → TEXT_EXTRACT_MAX_TOKENS（默认 6000）：
+        # **上限不是"给足余量"，而是"给退化封顶"**。
+        # 09-08 实测本调用正常输出仅 1039 tokens（4 个物体，含 size_reasoning），
+        # 而 4 次跑批里 3 次 finish_reason=length 卡在 completion_tokens=20000
+        # ——即模型偶发进入重复退化、把上限当目标一路写到顶，单次烧 3m49s
+        # （~87 tok/s）后整份作废。6000 = 实测需求 5.8x 余量，正常输出不受影响，
+        # 但退化的代价从 230s/20k tokens 降到 ~70s/6k tokens。
+        # 走配置而非字面量：物体特别多的章节可在 .env.content 调高，不改代码。
+        # 注意：这**不是**退化的根因修复（根因在采样端，见下），是给它封顶。
+        # 未改采样参数：temperature=0.2 + 全局 top_p=0.2 是极贪心解码，正是
+        # 重复退化的经典触发条件；但 v6.41 刻意收窄以治结构漂移，改动波及所有
+        # 文本调用（含 deepseek 分镜生成），不在本次范围内单方面动。
+        max_tokens=text_config.TEXT_EXTRACT_MAX_TOKENS,
         temperature=0.2,
         json_schema=SCENE_OBJECTS_SCHEMA,
+        # 列表型提取：截断可由 _truncate_fix 抢救完整物体，不该整份丢弃
+        allow_truncated=True,
     )
     result = service.generate(req)
     if not result.success:
         print(f"[WARN] 场景物体提取失败: {result.error}")
         return []
+    if result.truncated:
+        # 截断已放行，但必须显式告知：下面「提取到 N 个」会少报，静默少报正是
+        # 09-08 那串问题的共同点
+        print("[WARN] 场景物体提取输出被截断，仅保留已完整的物体（可能少于实际）")
 
     # 解析：走 shared json_repair 单源（09-06 实测 agent_plan 响应
     # finish_reason=length 截断，旧手写裸 json.loads 断尾即整体失败 →
@@ -147,6 +165,14 @@ def extract_scene_objects(novel_text: str, bank: SceneObjectsBank) -> list[dict]
         return []
 
     objs = data.get("scene_objects", [])
+    # 截断残渣过滤（v6.62.6，09-09）：json_repair 抢救截断输出时，尾部那个没写完
+    # 的物体会被削成 `{}`（截断落在**下一个 key** 上时，整对 key/value 一起丢）。
+    # 无 identifier 的条目对下游毫无意义（bank 以 identifier 为主键，打印成 '?'），
+    # 直接滤掉，别让抢救行为反过来往库里塞空壳。
+    _raw_n = len(objs)
+    objs = [o for o in objs if isinstance(o, dict) and str(o.get("identifier") or "").strip()]
+    if len(objs) < _raw_n:
+        print(f"[WARN] 场景物体提取丢弃 {_raw_n - len(objs)} 个无 identifier 的残缺条目（截断残渣）")
     # B3 修复（08-10）：物体尺寸合理性钳制——LLM 可能推「房间长500米」这类离谱值，
     # 原样入库入帧会导致画面比例崩坏（船画成巨轮/房间画成广场）。按 category 分档
     # 钳制到合理范围，越界值 WARN 并修正。
