@@ -20,6 +20,41 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from step01_script_gen.climax_words import KEYWORD_SYNONYMS, climax_words_for_gap
 
+def find_novel_climax_excerpt(novel_text, length=400):
+    """Locate the most conflict-dense passage in novel text (climax segment).
+
+    Returns the excerpt string. Empty string if cannot locate.
+    """
+    if not novel_text or len(novel_text) < length:
+        return novel_text if novel_text else ""
+
+    keywords = []
+    for main_kw, syns in KEYWORD_SYNONYMS.items():
+        keywords.append(main_kw)
+        keywords.extend(syns)
+    keywords = [k for k in keywords if re.search(r"[\u4e00-\u9fff]", k)]
+
+    if not keywords:
+        return novel_text[-length:]
+
+    step = max(50, length // 8)
+    best_pos = 0
+    best_score = 0
+    for pos in range(0, len(novel_text) - length + 1, step):
+        seg = novel_text[pos:pos + length]
+        score = sum(1 for kw in keywords[:30] if kw in seg)
+        if score > best_score:
+            best_score = score
+            best_pos = pos
+
+    if best_score == 0:
+        return novel_text[-length:]
+
+    start = max(0, best_pos - 50)
+    end = min(len(novel_text), best_pos + length + 50)
+    return novel_text[start:end]
+
+
 
 # ========================================================================
 # 1. Core Keywords Coverage Calculation
@@ -91,6 +126,61 @@ def calculate_keyword_coverage(shot: dict, novel_text: str) -> dict:
 # 2. Shot Distribution Validation
 # ========================================================================
 
+# v6.62.8（09-09）原文台词直引池：给 LLM 一份**可照抄的台词清单**。
+# 起因：09-09 只加「高潮镜全哑」反馈（让 LLM「补台词」）反而更糟——重试版
+# 凭空编了 5 条原文没有的台词，被回退保护判退化扔掉，终稿台词镜 2→1。
+# 「要求补台词」与「台词必须逐字来自原文」两条规则单独看都对，合在一起对
+# LLM 就是既要又要；不给料让它自己找，它就编。故把原文引号内的台词直接抽出来
+# 附在反馈里，把「创作」降级成「挑选」。
+# 通用性：常见中英文引号，不绑任何小说/角色名。
+_DIALOGUE_QUOTE_RE = re.compile(
+    "“([^”]{2,60})”"
+    "|\"([^\"]{2,60})\""
+    "|‘([^’]{2,60})’"
+    "|「([^」]{2,60})」"
+    "|『([^』]{2,60})』"
+)
+# 纯拟声/感叹（无实义，做不了字幕）——按「不含常用实词」粗筛太重，直接列常见几类
+_ONOMATOPOEIA = ("泼啦", "卟嗵", "哎呀", "咕咚", "哗啦", "吱呀", "砰", "嗖")
+
+
+def extract_source_dialogue(novel_text: str, tail_ratio: float = 0.5,
+                            limit: int = 8) -> list[str]:
+    """抽原文**后半段**引号内的可引用台词（4-24 字），供 GAP 反馈照抄.
+
+    Args:
+        tail_ratio: 从原文该比例位置之后开始抽——高潮/冲突集中在后半段，
+            前半段多是环境铺陈，抽出来的台词对补高潮镜没用。
+        limit: 最多返回条数（反馈区不宜过长，长了会淹没其它规则）。
+
+    Returns:
+        去重后保序的台词列表；原文无引号对白时返回 []。
+    """
+    if not novel_text:
+        return []
+    start = int(len(novel_text) * tail_ratio)
+    out: list[str] = []
+    seen: set[str] = set()
+    for m in _DIALOGUE_QUOTE_RE.finditer(novel_text):
+        if m.end() < start:
+            continue
+
+        line = next(
+            (group for group in m.groups() if group is not None), ""
+        ).strip()
+        if not (4 <= len(line) <= 24):
+            continue
+        if any(o in line for o in _ONOMATOPOEIA):
+            continue
+        if line in seen:
+            continue
+        seen.add(line)
+        out.append(line)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
     """
     分析分镜脚本的分布情况，检查是否覆盖了小说的高潮剧情，
@@ -107,6 +197,8 @@ def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
     # 2. 检查高潮覆盖情况
     has_climax_coverage = False
     climax_shots_count = 0
+    # v6.62.8（09-09）记下**哪些**高潮镜没台词，供 R1(c) 检查与 LLM 反馈定位。
+    silent_climax_shots = []
 
     for shot in shots:
         # 将对话、字幕和核心关键词拼接起来进行检测
@@ -114,23 +206,33 @@ def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
                        shot.get("subtitle", "") + " " + \
                        " ".join(normalize_core_keywords(shot.get("core_keywords", [])))
 
+        _is_climax = False
         if any(kw in segment_text for kw in climax_keywords):
-            has_climax_coverage = True
-            climax_shots_count += 1
-            continue
+            _is_climax = True
+        else:
+            # v6.62.4（09-08）扩检测面：上面 3 字段在实测中近乎全盲——09-08
+            # chapter_001 有 7/11 镜 narration_segment 为空，高潮若只写在
+            # main_subject/motion_desc 里就完全检测不到。补扫这两个「语义动作」
+            # 字段。**不扫 prompt**：prompt 带风格前缀（无重影/无伪影）与
+            # [角色: 特征] 锚点，是噪音源，实测相比 motion_desc 零增益。
+            # 单字词（杀/死/跑）在新字段易假命中（实测 shot1 的 prompt 因单字
+            # 「跑」假命中），故新字段只认 ≥2 字关键词，单字词仍只在上面 3 字段生效。
+            action_text = str(shot.get("main_subject", "") or "") + " " + \
+                          str(shot.get("motion_desc", "") or "")
+            if any(kw in action_text for kw in climax_keywords if len(kw) >= 2):
+                _is_climax = True
 
-        # v6.62.4（09-08）扩检测面：上面 3 字段在实测中近乎全盲——09-08
-        # chapter_001 有 7/11 镜 narration_segment 为空，高潮若只写在
-        # main_subject/motion_desc 里就完全检测不到。补扫这两个「语义动作」
-        # 字段。**不扫 prompt**：prompt 带风格前缀（无重影/无伪影）与
-        # [角色: 特征] 锚点，是噪音源，实测相比 motion_desc 零增益。
-        # 单字词（杀/死/跑）在新字段易假命中（实测 shot1 的 prompt 因单字
-        # 「跑」假命中），故新字段只认 ≥2 字关键词，单字词仍只在上面 3 字段生效。
-        action_text = str(shot.get("main_subject", "") or "") + " " + \
-                      str(shot.get("motion_desc", "") or "")
-        if any(kw in action_text for kw in climax_keywords if len(kw) >= 2):
+        if _is_climax:
             has_climax_coverage = True
             climax_shots_count += 1
+            narration = str(
+                shot.get("narration_segment")
+                or shot.get("narration")
+                or shot.get("subtitle")
+                or ""
+            ).strip()
+            if not narration:
+                silent_climax_shots.append(shot.get("index", "?"))
 
     # 3. 校验“蒙太奇拆分”规则（核心优化点）
     # 规则：如果检测到了高潮剧情，那么相关的镜头数量必须 >= 3
@@ -195,6 +297,25 @@ def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
         opening_check_passed = False
         opening_message = "⚠️ 建议：开篇前 3 个镜头建议增加环境空镜或特写（如：烈日、知了、荷叶），避免直接切入人物导致节奏过快。"
 
+    # 5.5 高潮镜对白覆盖（v6.62.8，09-09）——doubao_system.md R1(c)
+    # 「高潮镜（climax kf）必有对白，禁止全镜沉默」此前**只写在 prompt 里、
+    # 无任何检查**，于是规则形同虚设：09-09 实跑正片终于拍出高潮（镜 5/6/10
+    # 潜伏→破水→跃入行刺），但三镜 narration_segment 全空，全片 11 镜只有
+    # 1 镜有台词（对白密度 9%），成片 70s 只有 2 条字幕——而原文高潮段
+    # （3100-4847 字）恰恰是全章对白最密集的地方（「救命啊」「公子离奇遇刺，
+    # 船上却只有你一人」「十三郎，真的不关奴家的事啊」）。
+    # 只在**确实拍到高潮**时才检查：零高潮由上面的 montage 分支管，两者不重叠。
+    climax_dialogue_passed = True
+    climax_dialogue_message = ""
+    if climax_shots_count > 0 and len(silent_climax_shots) == climax_shots_count:
+        climax_dialogue_passed = False
+        climax_dialogue_message = (
+            f"⚠️ 警告：{climax_shots_count} 个高潮镜"
+            f"（镜头 {', '.join(str(i) for i in silent_climax_shots)}）"
+            f"**全部无台词**——违反 R1(c)「高潮镜必有对白，禁止全镜沉默」。"
+            f"原文高潮段的对白必须落到这些镜头上（逐字引用原文，禁止编造）。"
+        )
+
     # 6. 汇总分析结果
     overall_status = "pass"
     messages = []
@@ -202,6 +323,9 @@ def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
     if not montage_check_passed:
         overall_status = "fail"
         messages.append(montage_message)
+    if not climax_dialogue_passed:
+        overall_status = "warning" if overall_status == "pass" else "fail"
+        messages.append(climax_dialogue_message)
     if not consistency_check_passed:
         overall_status = "warning" if overall_status == "pass" else "fail"
         messages.append(consistency_message)
@@ -219,6 +343,7 @@ def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
         "has_climax_coverage": has_climax_coverage,  # 新增：供差距反馈使用
         "total_shots": len(shots),
         "climax_shots": climax_shots_count,
+        "silent_climax_shots": silent_climax_shots,  # v6.62.8 R1(c)
         "messages": messages
     }
 
@@ -332,6 +457,10 @@ def validate_script_gap(script: dict, novel_text: str) -> dict:
             "overall_pass": bool,
         }
     """
+    # P2.2: outline pre-validation (structural check before shot-level analysis)
+    from step01_script_gen.outline_validator import validate_outline
+    _outline_fatal, _outline_warn = validate_outline(script, novel_text)
+
     dist = analyze_shot_distribution(script, novel_text)
 
     # 将 analyze_shot_distribution 的输出转换为 _load_gap_analysis_context 期望的格式
@@ -354,6 +483,15 @@ def validate_script_gap(script: dict, novel_text: str) -> dict:
                 "missing": cov.get("missing", [])[:5],
             })
 
+    # P2.2: merge outline validation results into distribution messages
+    _dist_msgs = list(dist.get("messages") or [])
+    for _m in _outline_fatal:
+        _dist_msgs.append(f"⚠️ 大纲错误: {_m}")
+    for _m in _outline_warn:
+        _dist_msgs.append(f"💡 大纲建议: {_m}")
+    if _dist_msgs:
+        dist["messages"] = _dist_msgs
+
     # 检查是否有失败或警告消息
     has_messages = bool(dist.get("messages")) and any(
         "⚠️" in m or "警告" in m for m in dist.get("messages", [])
@@ -367,7 +505,23 @@ def validate_script_gap(script: dict, novel_text: str) -> dict:
             "valid": status == "pass",  # pass 状态表示通过
             "messages": dist.get("messages", []),
             "climax_shots": dist.get("climax_shots", 0),
+            "silent_climax_shots": dist.get("silent_climax_shots", []),
+            # v6.62.8：只在「高潮镜全哑」时才带台词池，避免无谓拉长反馈区
+            "source_dialogue": (
+                extract_source_dialogue(novel_text)
+                if dist.get("silent_climax_shots")
+                and len(dist.get("silent_climax_shots", []))
+                == dist.get("climax_shots", 0)
+                else []
+            ),
             "total_shots": dist.get("total_shots", 0),
+            # v6.63 (09-10): zero-climax rescue - attach original climax excerpt
+            # so LLM can "shot-by-shot from text" instead of inventing plot
+            "novel_climax_excerpt": (
+                find_novel_climax_excerpt(novel_text)
+                if not has_climax_coverage and novel_text
+                else ""
+            ),
         },
         "overall_pass": status == "pass" and not has_messages,
     }

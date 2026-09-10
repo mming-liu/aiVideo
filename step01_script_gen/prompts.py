@@ -463,11 +463,50 @@ def _load_gap_analysis_context(validation: dict) -> str:
             "  → 后半段至少 3 镜必须覆盖原文结尾的冲突/反转/动作高潮，"
             "每镜写明具体动作（谁对谁做了什么）与台词；禁止用空镜/群演/环境镜充数"
         )
+            # 附原文高潮段（v6.63, 09-10）
+        # 只说"补高潮"而不给原文，LLM 容易瞎编剧情走向
+        # 直接贴原文 → LLM 只需"对着原文拆3镜"，大幅降低规划方差
+        _excerpt = dist.get("novel_climax_excerpt") or ""
+        if _excerpt:
+            issues.append("  → 以下是原文冲突最密集的段落（高潮段），请据此拆至少3镜：")
+            # 每行加缩进，保持反馈区格式一致
+            for _line in _excerpt.strip().splitlines():
+                if _line.strip():
+                    issues.append("     " + _line.strip())
+            issues.append("  → 要求：逐镜标注原文哪一句对应镜头画面（grounding 校验用）")
+
     elif isinstance(_climax_shots, int) and 0 < _climax_shots < 3:
         issues.append(
             f"【镜头分布问题】高潮镜仅 {_climax_shots} 个，少于 3 个"
         )
         issues.append("  → 请把高潮拆为至少 3 个独立镜头（如：跃出、寒光一闪、刺入）")
+
+    # 问题3: 高潮镜全哑（v6.62.8，09-09）——doubao_system.md R1(c)
+    # 09-09 实跑：正片终于拍出高潮（镜 5/6/10），但三镜台词全空，
+    # 全片 11 镜仅 1 镜有台词、70s 只有 2 条字幕。而原文高潮段恰是全章
+    # 对白最密集处。R1(c) 规则一直写在 system prompt 里但**无人校验**，
+    # 于是从未生效——补一条定位到具体镜号的反馈。
+    _silent_climax = dist.get("silent_climax_shots") or []
+    if _silent_climax and isinstance(_climax_shots, int) and _climax_shots > 0:
+        if len(_silent_climax) == _climax_shots:
+            issues.append(
+                f"【高潮镜全哑】高潮镜 {', '.join(str(i) for i in _silent_climax)} "
+                f"的 narration_segment/subtitle **全部为空**——违反 R1(c)"
+                f"「高潮镜必有对白，禁止全镜沉默」"
+            )
+            issues.append(
+                "  → 从原文高潮段逐字摘对白填进这些镜头（格式「角色名：台词」，"
+                "5-15 字）；原文该段本就对白密集，禁止编造原文没有的台词"
+            )
+            # v6.62.8：附**可直接照抄的台词池**。只说「补台词」而不给料，
+            # LLM 会自己编——09-09 实测重试版凭空造 5 条原文没有的台词，
+            # 被回退保护判退化扔掉，终稿台词镜反而 2→1。给了池子就是「挑选」
+            # 而非「创作」，与「台词必须逐字来自原文」不再互相矛盾。
+            _src_lines = dist.get("source_dialogue") or []
+            if _src_lines:
+                issues.append("  → 可直接引用的原文台词（照抄，勿改字）：")
+                for _ln in _src_lines:
+                    issues.append(f"     · {_ln}")
 
     # 生成反馈文本
     if issues:

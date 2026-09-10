@@ -39,8 +39,10 @@ from .multi_char_layout_depth import MultiCharLayoutDepthConstraint  # U
 from .narration_subtitle_consistency import NarrationSubtitleConsistencyConstraint  # V
 from .opening_hook import OpeningHookConstraint  # W
 from .opening_empty_shot_insert import OpeningEmptyShotInsertConstraint
+from .opening_empty_shot_cap import OpeningEmptyShotCapConstraint  # F15 开头空镜硬上限
 from .opening_character_presence import OpeningCharacterPresenceConstraint  # R2 开篇人物兜底（v6.62.2, 09-07 通用）
 from .dialogue_density import DialogueDensityConstraint  # R3 对白密度兜底（v6.62.2, 09-07 通用）
+from .dialogue_grounding import DialogueGroundingConstraint  # F16 失锚台词硬替换
 from .frame_layouts_required import FrameLayoutsRequiredConstraint  # R4 frame_layouts 必填（v6.62.2, 09-07 通用）
 from .shot_count_bounds import ShotCountBoundsConstraint  # 镜头数/场景数范围加严（v6.62.2, 09-07 通用）
 from .overshoulder_consistency import OvershoulderConsistencyConstraint
@@ -65,6 +67,7 @@ from .redguo_scene_char_limit import RedguoSceneCharLimitConstraint  # F5 红果
 from .post_combat_blank import PostCombatBlankConstraint  # F6 打斗战后空镜收尾（v6.49, 08-28）
 from .restrained_emotion_chain import RestrainedEmotionChainConstraint  # F7 克制情绪时间链（v6.49, 08-28）
 from .climax_priority import ClimaxPriorityConstraint  # F8 高潮优先（v6.49, 08-28）
+from .climax_completeness import ClimaxCompletenessConstraint  # F17 高潮完整性校验
 from .short_shot_merge import ShortShotMergeConstraint  # F9 短镜合并（v6.49, 08-28）
 from .ff_lf_temporal import FfLfTemporalConstraint  # F10 ff/lf 时序协议（v6.50, 08-28）
 from .frame_spec_consistency import FrameSpecConsistencyConstraint  # S v6.57+ per-frame spec 一致性
@@ -84,6 +87,7 @@ ALL_CONSTRAINTS.extend([
     PropPositionConstraint(),
     KfPrePostConflictConstraint(),
     OpeningEmptyShotInsertConstraint(),
+    OpeningEmptyShotCapConstraint(),
     # Phase 3
     KfTimeWindowAlignmentConstraint(),
     KfTSecBoundsConstraint(),
@@ -130,6 +134,7 @@ ALL_CONSTRAINTS.extend([
     PostCombatBlankConstraint(),  # F6 打斗战后空镜收尾（v6.49, 08-28）
     RestrainedEmotionChainConstraint(),  # F7 克制情绪时间链（v6.49, 08-28）
     ClimaxPriorityConstraint(),  # F8 高潮优先（v6.49, 08-28）
+    ClimaxCompletenessConstraint(),
     ShortShotMergeConstraint(),  # F9 短镜合并 HARD（v6.49, 08-28）
     FfLfTemporalConstraint(),  # F10 ff 时序协议：本镜有攻击时 ff 禁结束态（v6.50, 08-28）
     FrameSpecRepairConstraint(),
@@ -145,6 +150,7 @@ ALL_CONSTRAINTS.extend([
     # v6.62.2 (09-07) 通用兜底加严：4 个新约束，不绑小说角色，跨章节/换书自动跟随
     OpeningCharacterPresenceConstraint(),  # R2 前 2 镜必含 1 个角色（从 script.characters 动态取）
     DialogueDensityConstraint(),            # R3 对白镜占比 ≥ 30%（仅看通用对话关键词）
+    DialogueGroundingConstraint(),
     FrameLayoutsRequiredConstraint(),      # R4 frame_layouts 必填 + 长度对齐
     ShotCountBoundsConstraint(),            # 镜头数/场景数范围加严（[10,18]/[1,5]）
 ])

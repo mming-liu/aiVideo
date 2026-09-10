@@ -48,11 +48,20 @@ python step04_merge/main.py       # 阶段4: 片段 + 音频 + 字幕 → 最终
 - 目标：把 doubao-seed-2-1-turbo 分镜生成从综合分 78.7 → 92+，5+1 类 hard_fix 全填 + doubao_system.md 重写 + 3 处 prompt 路径一致性修复
 - 启用方法：`TEXT_PROVIDER=agent_plan`（与 deepseek 路径二选一，**默认仍为 deepseek**）
 - doubao 专用逻辑单开文件：
-  - `step01_script_gen/doubao_pipeline.py` — 修复轮/GAP 重生（与 deepseek `_regen_over_limit` / `_repair_shot_warnings` 同接口）
-  - `step01_script_gen/doubao_hardfix.py` — 7 个 doubao 专用 Constraint + `register_doubao_hardfixes()`
-  - `step01_script_gen/doubao_repair_prompts.py` — doubao 专用修复 prompt（与 deepseek 解耦）
-- 5+1 类 hard_fix（按 ALL_CONSTRAINTS append 顺序）：
-  - **B.1** 对白 narration_segment 兜底：main_subject 命中对话关键词 + 双向空 → 兜底"某：……"占位
+  - ⚠️ **这 3 个文件已于 54e4bfa（2026-09-06）删除，逻辑迁入 `step01_script_gen/constraints/`**——
+    删除是**有意的**（去掉与主 Constraint 框架并行的第二套注册路径），
+    别再判成误删去恢复：曾有一次误判为「误删」而重新注册，造成重复注册回归。
+  - ~~`step01_script_gen/doubao_pipeline.py`~~ → 修复轮/GAP 重生已并回 `main.py`（`_regen_over_limit` / `_repair_shot_warnings` 统一走一条路径）
+  - ~~`step01_script_gen/doubao_hardfix.py`~~ → 7 个 Constraint 迁入 `constraints/`，随 `ALL_CONSTRAINTS` 一起注册，无需 `register_doubao_hardfixes()`
+  - ~~`step01_script_gen/doubao_repair_prompts.py`~~ → 修复 prompt 并入 `prompts.py`
+  - 现存 doubao 专属文件只剩 `step01_script_gen/prompts/doubao_system.md`（system prompt）
+- 5+1 类 hard_fix（**下列编号是历史命名，现对应 `constraints/` 下的同名约束**）：
+  - **B.1** → `constraints/narration_subtitle_consistency.py`。
+    ⚠️ v6.62.7（09-09）**已删除**「双向空 → 兜底 `某：……` 占位」这一兜底动作，改为纯告警：
+    旧实现拿 `ff_desc[-20:]`（画面描述后 20 字）当旁白，会同时写进 narration_segment +
+    subtitle + `script["narration"]`，一路烧进 SRT 和视频模型对白 prompt
+    （实测落盘「香站在中舱，手持油纸伞，嘴唇微闭，某」——从中间切断，「听香」少了「听」）。
+    **空旁白只是「这镜没台词」，伪造旁白是错内容进成片。**
   - **B.2** GAP 关键词强注入：core_keywords 命中率低 → ff_desc 末尾追加 anchor 短句
   - **B.3.1** 角色锚点注入：主角无 `[name: features]` → prompt 头部追加 ≤30 字特征
   - **B.3.2** 开篇空镜插入：前 3 镜无空镜/特写 → index=1 插环境空镜 + 末镜 -2s 联动保 60-90s 总和
@@ -61,11 +70,11 @@ python step04_merge/main.py       # 阶段4: 片段 + 音频 + 字幕 → 最终
   - **B.5** frame_layouts 兜底：缺 pose / on_screen / kfs 长度不齐 → 字段补齐（on_screen 矛盾保守不动打 WARN）
 - 全部走 Constraint 框架（与 `validation.py` 36 类 hard_fix 同构），register 一次性 append
 - 全部幂等：每个 Constraint 自带 `repair_marker`，已修字段自动跳过
-- 温度参数：保留 `models.py` dataclass 默认 0.05（保 deepseek 路径零修改），doubao 路径在 doubao_pipeline.py 显式传 `temperature=0.2` 覆盖
-- main.py 最小侵入：顶部 1 行条件 import（仅 TEXT_PROVIDER=agent_plan）+ 3 处调用点改 if/else（每处 4 行）
-- 退出 doubao 模式：unset TEXT_PROVIDER 即可，register 永不调，deepseek 路径完全 revert
+- 温度参数：保留 `models.py` dataclass 默认 0.05（保 deepseek 路径零修改），doubao 路径在 `main.py` GAP/修复调用点显式传 `temperature=0.2` 覆盖
+- main.py 最小侵入：顶部按 TEXT_PROVIDER 选 prompt builder（`auto_select_prompt_builder`），不再有 doubao 专用 if/else 分支
+- 退出 doubao 模式：unset TEXT_PROVIDER 即可回 deepseek（约束层两条路径共用，无需 revert）
 - 仍保持 "doubao 2 次不切 deepseek" 决策（v6.59.1 user decision）— GAP fallback 走 doubao 自身修复轮，不升级 deepseek 兜底
-- 单测：tests/step01_script_gen/doubao_hardfix/ 8 个文件 34 用例全绿
+- 单测：已随文件迁移并入 `tests/step01_script_gen/`（`tests/step01_script_gen/doubao_hardfix/` 目录已不存在）
 - A/B：tools/bench_text_provider_ab.py 跑红果 + 锦衣各 1 章，total_pass_rate ≥92% / narration 非空率 ≥80% / camera 种数 ≥3 / core_keywords 命中率 ≥60%
 
 ### step01 kf 物理时刻 = motion_desc 时段铁律（v6.33，2026-08-18）

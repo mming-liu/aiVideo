@@ -360,3 +360,40 @@ def test_head_fix_multi_sentence_targets_second_match():
     out = _append_head_fix("听香捂脸俯首，吓得几乎昏迷。杨旭仰卧船头，钓竿垂入水面")
     assert "吓得几乎昏迷，仰面朝上" not in out
     assert "杨旭仰卧船头，仰面朝上双目紧闭，头颈僵直不侧转，钓竿垂入水面" in out
+
+
+# ---------------------------------------------------------------------------
+# v6.62.9（09-10）守卫 3 两处漏判 —— run5 实测 shot6 落盘自相矛盾：
+# 「杨旭仍仰卧船头，仰面朝上双目紧闭，头颈僵直不侧转，…，双眼半阖，望向画上方夜空」
+#   ① 定长窗 m.end()+12 看不到 20+ 字外的睁眼态
+#   ② _EYE_OPEN_WORDS 只收「圆睁/瞪」，漏「半阖」这类半睁态
+# ---------------------------------------------------------------------------
+
+def test_half_open_eyes_late_in_sentence_blocks_injection():
+    """睁眼态写在同句靠后位置（超出旧定长窗）也必须拦住头部固定注入."""
+    from step01_script_gen.constraints.v6_43_prompt_enforcement import _append_head_fix
+    text = "杨旭仍仰卧船头，酒壶垂在身侧，壶口朝下，酒液洒在船板上，双眼半阖，望向画上方夜空"
+    assert _append_head_fix(text) == text
+    assert "双目紧闭" not in _append_head_fix(text)
+
+
+def test_partial_open_eye_words_are_guarded():
+    """半睁/微睁/眼睑微张 与「双目紧闭」冲突，同样要拦."""
+    from step01_script_gen.constraints.v6_43_prompt_enforcement import _append_head_fix
+    for eye in ("双眼半阖", "双眼半睁", "双目微睁", "眼睑微张"):
+        text = f"杨旭仰卧船头，{eye}，望向夜空"
+        assert _append_head_fix(text) == text, eye
+
+
+def test_genuine_corpse_line_still_gets_head_fix():
+    """真尸体描述（无任何睁眼态）仍要注入——不能因为放宽守卫而失效."""
+    from step01_script_gen.constraints.v6_43_prompt_enforcement import _append_head_fix
+    out = _append_head_fix("杨旭仰卧船头，素白轻袍心口一片暗红")
+    assert "仰面朝上双目紧闭，头颈僵直不侧转" in out
+
+
+def test_eye_open_in_next_sentence_does_not_block():
+    """睁眼态在**下一句**（句号后）不应误拦本句注入——守卫按句边界切分."""
+    from step01_script_gen.constraints.v6_43_prompt_enforcement import _append_head_fix
+    out = _append_head_fix("杨旭仰卧船头，心口暗红洇痕。听香双眼圆睁，扑到船边")
+    assert "仰面朝上双目紧闭" in out

@@ -331,3 +331,50 @@ def test_terminal_tail_constant_removed():
     import step01_script_gen.main as m
 
     assert not hasattr(m, "_TERMINAL_TAIL")
+
+
+# ---------------------------------------------------------------------------
+# v6.62.8（09-09）高潮塌缩护栏 —— 与「零高潮救援」对称的反向保护。
+# 09-10 run3 实测：retry1 把高潮镜 0→1（救援采纳），retry2 又打回 0，
+# 三条旧判据都不看高潮 → retry2 静默通过，终稿高潮镜 0 / 台词镜 0。
+# ---------------------------------------------------------------------------
+
+_CLIMAX_NOVEL = "杨旭吹箫。刺客破水而出，短刀刺杀，鲜血溅开。听香尖叫。"
+
+
+def _climax_shot(idx, motion=""):
+    return {"index": idx, "duration_sec": 7.5, "narration_segment": "",
+            "subtitle": "", "core_keywords": [], "main_subject": "",
+            "motion_desc": motion, "prompt": ""}
+
+
+def test_climax_collapse_to_zero_is_rolled_back():
+    """上一版有高潮、新版归零 → 判退化回退."""
+    from step01_script_gen.main import _retry_degrade_reason, _climax_count
+    prev = {"shots": [_climax_shot(1, "刺客破水而出，短刀举起"),
+                      _climax_shot(2, "短刀刺杀，鲜血溅开")]
+                     + [_climax_shot(i) for i in range(3, 9)]}
+    new = {"shots": [_climax_shot(i, "杨旭盘膝端坐吹箫") for i in range(1, 9)]}
+    assert _climax_count(prev, _CLIMAX_NOVEL) == 2
+    assert _climax_count(new, _CLIMAX_NOVEL) == 0
+    reason = _retry_degrade_reason(prev, new, _CLIMAX_NOVEL)
+    assert reason is not None and "高潮塌缩" in reason
+
+
+def test_climax_reduced_but_nonzero_is_allowed():
+    """高潮镜减少但未归零 → 不判退化（只拦「又变回零高潮」这个明确退化态）."""
+    from step01_script_gen.main import _retry_degrade_reason
+    prev = {"shots": [_climax_shot(1, "刺客破水而出"), _climax_shot(2, "短刀刺杀")]
+                     + [_climax_shot(i) for i in range(3, 9)]}
+    new = {"shots": [_climax_shot(1, "短刀刺杀，鲜血溅开")]
+                    + [_climax_shot(i) for i in range(2, 9)]}
+    assert _retry_degrade_reason(prev, new, _CLIMAX_NOVEL) is None
+
+
+def test_climax_collapse_not_waived_by_rescue_flag():
+    """高潮塌缩不受 climax_rescue 豁免（结构性缺陷永远优先于措辞瑕疵）."""
+    from step01_script_gen.main import _retry_degrade_reason
+    prev = {"shots": [_climax_shot(1, "刺客破水而出")] + [_climax_shot(i) for i in range(2, 9)]}
+    new = {"shots": [_climax_shot(i, "杨旭吹箫") for i in range(1, 9)]}
+    reason = _retry_degrade_reason(prev, new, _CLIMAX_NOVEL, climax_rescue=True)
+    assert reason is not None and "高潮塌缩" in reason

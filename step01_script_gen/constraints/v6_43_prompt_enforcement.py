@@ -83,7 +83,9 @@ def _needs_head_fix(text: str) -> bool:
 
 # 睁眼态词：仰卧子句内已有时不再追加「双目紧闭」（避免相邻自相矛盾，
 # 如「仰卧船头，双眼圆睁」+「双目紧闭」——留给 LLM/修复轮裁决）
-_EYE_OPEN_WORDS = ("双眼圆睁", "双目圆睁", "双目暴睁", "瞪", "睁眼", "双眼瞪")
+_EYE_OPEN_WORDS = ("双眼圆睁", "双目圆睁", "双目暴睁", "瞪", "睁眼", "双眼瞪",
+                   "双眼半阖", "双目半阖", "眼半阖", "眼睑半阖",
+                   "半睁", "微睁", "眼睑微张", "半闭半睁")
 
 
 # v6.50（08-29）shot13.5 变体双守卫：
@@ -125,7 +127,17 @@ def _append_head_fix(text: str) -> str:
         clause_start = m.start()
         while clause_start > 0 and text[clause_start - 1] not in "。；！？":
             clause_start -= 1
-        clause = text[clause_start: m.end() + 12]
+        # v6.62.9（09-10）前向扫到**句末**，不再是 m.end()+12 的定长窗。
+        # 定长窗只能看见紧邻的十来个字，睁眼态写在同句靠后位置就漏判——
+        # run5 实测 lf_desc「杨旭仍仰卧船头，…，酒壶垂在身侧，壶口朝下，
+        # 酒液洒在船板上，双眼半阖，望向画上方夜空」里「双眼半阖」距匹配点
+        # 20+ 字，守卫 3 看不到，于是「双目紧闭」被追加进同一句，
+        # 落盘成「双目紧闭…双眼半阖」自相矛盾。
+        # 与守卫 2「回扫到句首」同口径：整句可见，宁可漏加（安全侧）不误拼。
+        clause_end = m.end()
+        while clause_end < len(text) and text[clause_end] not in "。；！？":
+            clause_end += 1
+        clause = text[clause_start: clause_end]
         if any(w in clause for w in _UPRIGHT_CONFLICT_WORDS):
             continue
         # 守卫 3：仰卧主语子句已含睁眼态 → 不追加（「双目紧闭」紧邻「双眼圆睁」）

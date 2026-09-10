@@ -720,6 +720,33 @@ def _count_mid_clause_tails(script: dict) -> int:
     return cnt
 
 
+def _climax_count(script: dict, novel_text: str) -> int:
+    """该脚本被硬回退护栏判定为「高潮镜」的镜头数.
+
+    回退护栏用更严格的语义字段判定：只看叙述/字幕/主体/动作，不把
+    core_keywords 自身算进匹配池，也不让单字高潮词（杀/死/跑）虚增计数。
+    """
+    try:
+        from step01_script_gen.climax_words import climax_words_for_gap
+        words = [w for w in climax_words_for_gap(script) if len(w) >= 2]
+        semantic_fields = (
+            "narration_segment",
+            "subtitle",
+            "main_subject",
+            "motion_desc",
+        )
+        count = 0
+        for shot in script.get("shots", []):
+            semantic_text = " ".join(
+                str(shot.get(field) or "") for field in semantic_fields
+            )
+            if any(word in semantic_text for word in words):
+                count += 1
+        return count
+    except Exception:
+        return 0
+
+
 def _retry_degrade_reason(prev: dict, new: dict, novel_text: str,
                           *, climax_rescue: bool = False) -> str | None:
     """返回重试版退化的**具体原因**，健康则返回 None（v6.62.6，09-09）.
@@ -732,11 +759,10 @@ def _retry_degrade_reason(prev: dict, new: dict, novel_text: str,
 
     Args:
         climax_rescue: True = 上一版**零高潮**而重试版补上了高潮镜（见调用点）。
-            此时只保留判据 1（时长塌缩），判据 2/3 降级为告警不再触发回退——
+            此时判据 2/3 降级为告警不再触发回退，判据 1/1.5（时长塌缩/高潮塌缩）仍硬拦截——
             理由是价值序：判据 2/3 拦的是**措辞瑕疵**（台词没逐字对上原文、
-            句子收尾不干净），判据 1 拦的是**不可挽回的物理损坏**（时长塌缩后
-            W6 拉伸把 1s 镜拉成 8s 慢动作）。而「整章高潮没拍」直接等于废片，
-            拿措辞瑕疵否决结构修复是错的价值序。
+            句子收尾不干净），判据 1/1.5 拦的是**不可挽回的结构性损坏**
+            （时长塌缩后 W6 拉伸把 1s 镜拉成 8s 慢动作；整章高潮没拍直接等于废片）。
     """
     # 1) 时长塌缩
     prev_dur = _retry_raw_duration(prev)
@@ -744,6 +770,17 @@ def _retry_degrade_reason(prev: dict, new: dict, novel_text: str,
     if prev_dur >= 40 and new_dur < 40:
         return (f"时长塌缩（原始总时长 {new_dur:.0f}s < 40s，上一版 {prev_dur:.0f}s）"
                 f"——事后 W6 拉伸会把短镜拉成慢动作")
+    # 1.5) 高潮塌缩（v6.62.8，09-09）——与「零高潮救援」对称的反向护栏。
+    # 09-10 run3 实测：retry1 把高潮镜从 0 补到 1（救援采纳），retry2 又打回 0，
+    # 而三条判据都不看高潮，于是 retry2 被静默接受，终稿高潮镜 0、台词镜 0。
+    # 「零高潮」正是当初特批 bonus 重试要解决的那个缺陷——绝不能让后一次重试
+    # 把它悄悄还原。**不受 climax_rescue 豁免**（救援态下 prev 恒为 0，本条
+    # 天然不会命中，放在豁免之前只是为了「结构性缺陷永远优先」这个次序清晰）。
+    if novel_text:
+        prev_climax = _climax_count(prev, novel_text)
+        if prev_climax > 0 and _climax_count(new, novel_text) == 0:
+            return (f"高潮塌缩（上一版 {prev_climax} 个高潮镜 → 新版 0 个）"
+                    f"——原文核心冲突整段又没拍，退回零高潮态")
     if climax_rescue:
         return None
     # 2) 台词失锚变多
@@ -764,10 +801,12 @@ def _retry_degrade_reason(prev: dict, new: dict, novel_text: str,
 
 def _is_retry_degraded(prev: dict, new: dict, novel_text: str,
                        *, climax_rescue: bool = False) -> bool:
-    """判定重试版是否比上一版退化（回退保护的三个强信号）.
+    """判定重试版是否比上一版退化（回退保护的四个强信号）.
 
     1) **时长塌缩**：上一版健康（≥40s）而新版原始总时长 < 40s——LLM 明显没
        响应总时长规则（08-27 重试版 11s 事故），事后拉伸会把 1s 镜头拉到 8s。
+    1.5) **高潮塌缩**：上一版有高潮镜而新版归零——整章核心冲突整段没拍，
+       属于不可挽回的结构性缺陷，必须硬拦截。
     2) **台词失锚变多**：新版未在原文找到的台词数 > 上一版（原文幻觉，如
        「凶手是谁？如何击杀了公子」）。≥2 条才判退化，防短语匹配误报。
     3) **文本中途截断**（v6.50，08-28；判据 v6.62.6 重写）：新版 ≥2 个文本字段
@@ -776,7 +815,7 @@ def _is_retry_degraded(prev: dict, new: dict, novel_text: str,
        直接落盘）。**不再**用「缺句末标点」当信号，那条在真实数据上 91% 是误报。
 
     判据实现在 `_retry_degrade_reason`（单一事实源，附带命中原因文案）。
-    `climax_rescue=True` 时只保留判据 1，语义见该函数 docstring。
+    `climax_rescue=True` 时只保留判据 1 和 1.5，语义见该函数 docstring。
 
     Returns:
         True = 重试版退化，应回退保留 prev。

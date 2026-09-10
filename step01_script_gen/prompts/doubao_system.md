@@ -10,6 +10,7 @@
 {
   "title": "string, ≤20 字",
   "shot_count": <integer, 总镜数>,
+  "outline": [<outline_beat>],
   "characters": [{"identifier": "string", "static_features": "string", "dynamic_features": "string"}],
   "shots": [<shot_object>],
   "hook": {<shot_object>} | null
@@ -17,6 +18,21 @@
 ```
 > hook：无钩子必须输出 null，禁止输出空对象 {}
 > characters 必须出现在 shots/hook 中才视为有效；纯路人 NPC 不列入。
+
+<schema name="outline_beat">
+Plot outline beats (3-5 total). **Write outline BEFORE shots** - structure drives content.
+`json
+{
+  "position_pct": <integer, 0-100, position on the full timeline in percent>,
+  "beat_summary": "string, 20-40 chars, core event/emotional shift of this segment",
+  "has_dialogue": <boolean, whether this beat includes character dialogue>,
+  "intensity": "string, low | medium | high, conflict intensity level"
+}
+`
+> **3-5 beats total, sorted by position_pct ascending**
+> **Last beat MUST be at >= 70%** (climax/reversal/twist in second half)
+> **At least 1 beat with has_dialogue=true** (no zero-dialogue videos)
+> Intensity must have progression/variation. All-low or all-high is invalid.
 
 <schema name="shot_object">
 每镜必填字段（**任一缺失 = 拒收**）：
@@ -125,6 +141,12 @@ R6. **末镜下一段衔接钩子**：末镜 lf_desc 留悬念词（"未完/将�
 R8. **frame_layouts 6 字段必填**：name / on_screen / position / pose / gaze_target / props 缺一即拒。
 
 R9. **prompt 末尾防崩**：强制追加「画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。」。
+
+R10. **Outline pre-validation** (structural iron rule):
+    - Write outline first, then shots; shots must follow outline beats
+    - 3-5 beats, position_pct increasing, last beat >= 70%
+    - At least 1 beat with dialogue (has_dialogue=true)
+    - Intensity curve has progression, forbidden all-low / all-high
 </rules>
 
 <machine_lexicon>
@@ -139,7 +161,7 @@ stage 枚举：pre / approach / climax / react / exit / after
 <workflow>
 请按以下步骤完成任务（**不要跳步**）：
 1. **理解原文**：阅读小说章节（最长1600字），识别核心人物/事件/场景/冲突。
-2. **规划大纲**（仅内部思考，禁止输出任何大纲文本）：梳理主事件链、情绪弧线、高潮点。
+2. **Write outline**: Fill outline field first (3-5 beats, last >=70%, at least 1 with dialogue, intensity progression), then write shots.
 3. **场景划分**：按物理地点划分 1-3 个 scene（禁按情节切分）。
 4. **机位规划**（R2 强制）：先确定 camera_movement 序列（≥3 种），再开始写镜。
 5. **对白规划**（R1 强制）：先标高潮镜 → 必填对白三件套。
@@ -159,6 +181,11 @@ stage 枚举：pre / approach / climax / react / exit / after
 {
   "title": "照月湾问罪",
   "shot_count": 8,
+  "outline": [
+    {"position_pct": 15, "beat_summary": "Xia Xun infiltrates Buddha hall, discovers guard setup, senses danger", "has_dialogue": false, "intensity": "low"},
+    {"position_pct": 45, "beat_summary": "Ji Gang confronts, verbal sparring, both test each other", "has_dialogue": true, "intensity": "medium"},
+    {"position_pct": 80, "beat_summary": "Xia Xun throws evidence, Ji Gang reacts, situation reverses", "has_dialogue": true, "intensity": "high"}
+  ],
   "characters": [
     {"identifier": "杨旭", "static_features": "白衣书生, 二十出头, 腰悬长剑", "dynamic_features": "质问群臣"},
     {"identifier": "纣王", "static_features": "黑袍金冠, 不惑之年, 怒目", "dynamic_features": "怒喝回击"}
