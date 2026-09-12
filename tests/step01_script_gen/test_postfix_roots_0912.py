@@ -100,3 +100,29 @@ def test_combat_fx_land_context_keeps_sparks():
     assert "火星四溅" in m
 
 
+
+
+# ---------------------------------------------------------------------------
+# hook 分支同款治理（2026-09-12 P1 残留补修：hook 旧长度截尾会误删合法短句）
+# ---------------------------------------------------------------------------
+
+def _postfix_with_hook(hook_prompt: str) -> dict:
+    from step01_script_gen.validation import post_fix_shot_prompts
+    script = {"shots": [], "characters": [],
+              "hook": {"prompt": hook_prompt, "motion_desc": "",
+                       "ff_desc": "", "lf_desc": "", "duration_sec": 4.0}}
+    post_fix_shot_prompts(script)
+    return script["hook"]["prompt"]
+
+
+def test_hook_tail_short_sentence_preserved():
+    """hook 的合法短句不得被当残片误删（审查实测误删样本）."""
+    out = _postfix_with_hook("张十三站在船头。他看向远方")
+    assert out.endswith("他看向远方")
+
+
+def test_hook_tail_garbage_known_signature_trimmed():
+    """hook 的已知残片形态照常剔除（「氛围手指」实战样本）."""
+    out = _postfix_with_hook("张十三立在船头厉声喝止，冷蓝暗调。水面泛着银辉，氛围手指")
+    assert "氛围手指" not in out
+    assert "水面泛着银辉" in out

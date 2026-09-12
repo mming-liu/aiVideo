@@ -4730,13 +4730,9 @@ def post_fix_shot_prompts(script: dict) -> dict:
     if hook and isinstance(hook, dict):
         hook["prompt"] = _fix_lighting_quantization(hook.get("prompt", "") or "")
         hook["prompt"] = _fix_forbidden_abstract(hook.get("prompt", "") or "")
-        # 2026-09-12：与 shots 同款 prompt 截断残片治理（实测 hook 尾部「氛围手指」）
-        _hp = hook.get("prompt", "") or ""
-        if _hp:
-            _hp_last = max(_hp.rfind(c) for c in "。！？；…")
-            _hp_tail = _hp[_hp_last + 1:]
-            if _hp_last >= 0 and 0 < len(_hp_tail) <= 30:
-                hook["prompt"] = _hp[:_hp_last + 1]
+        # 2026-09-12（P1 修正）：与 shots 同款——已知残片形态清单精确剔除。
+        # 旧「句读后 ≤30 字一律截除」会误删合法短句（实测「他看向远方」被截）。
+        hook["prompt"] = _strip_prompt_tail_garbage(hook.get("prompt", "") or "")
         hook["motion_desc"] = _fix_forbidden_abstract(hook.get("motion_desc", "") or "")
         # 08-15 bug 修复（与 shot 3.2.1 一致）：hook 的 ff/lf 也确定性删抽象词
         for _f in ("ff_desc", "lf_desc"):
