@@ -390,6 +390,8 @@ async def _poll_video(
                             logger.verbose(f"  [Shot {shot_idx}] [{key_display}] Processing (interval {poll_interval:.0f}s, failures {consecutive_failures})")
                         continue
                     _failed_videos[shot_idx].append({"attempt": -1, "error": err, "task_id": task_id})
+                    # 2026-09-12 用户要求：终态失败打印完整报错（不走 fmt_err 截断）
+                    logger.verbose(f"  [Shot {shot_idx}] [{key_display}] 最终失败完整报错: {err}")
                     return False
             except Exception as e:
                 err_str = str(e)
@@ -412,6 +414,8 @@ async def _poll_video(
                         logger.verbose(f"  [Shot {shot_idx}] [{key_display}] Poll error (interval {poll_interval:.0f}s): {_fmt_err(err_str)}")
                     continue
                 _failed_videos[shot_idx].append({"attempt": -1, "error": err_str, "task_id": task_id})
+                # 2026-09-12 用户要求：终态失败打印完整报错（不走 fmt_err 截断）
+                logger.verbose(f"  [Shot {shot_idx}] [{key_display}] 最终失败完整报错: {err_str}")
                 return False
 
 

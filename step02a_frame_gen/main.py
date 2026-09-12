@@ -33,8 +33,9 @@ from shared.shot_selector import parse_shot_selector, parse_frame_selector
 
 
 async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
-                         only_indices: set[int] | None = None,
-                         frames: set[str] | None = None) -> dict:
+                         only_indices: set | None = None,
+                         frames: set[str] | None = None,
+                         concurrency: int | None = None) -> dict:
     """生成所有镜头的首帧/尾帧/关键帧图片
 
     Args:
@@ -42,6 +43,10 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
         only_indices: 只生成指定 index 的镜头帧（None=全部）
         frames: 帧类型选择（ff/lf/kf/kf0/kf1...，见 parse_frame_selector）——
             None=默认 Mode A/B 行为；提供时精确控制生成哪些图片（调试用）
+        concurrency: 镜头级并发数（2026-09-12 新增；None=读 STEP02A_CONCURRENCY
+            env，默认 3）。1=串行（旧行为）。每镜一个独立协程（gen_shot_frames
+            只写自己的 shot dict 与 shot_dir，无共享可变状态），信号量限流，
+            单镜失败只记日志不中断整轮。
 
     Returns:
         dict: {shot_index: {"ff": path, "lf": path, "kf": [paths]}}
@@ -51,6 +56,10 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
 
     log_dir = chapter_dir()
     logger = get_logger(log_dir / "step02a.log", console_level="INFO")
+
+    if concurrency is None:
+        concurrency = int(os.getenv("STEP02A_CONCURRENCY", "3") or "3")
+    concurrency = max(1, concurrency)
 
     # 加载 script
     with open(script_path, "r", encoding="utf-8") as f:
@@ -64,43 +73,50 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
     image_adapter = ImageGeneratorAiVideoAdapter()
     script_mtime = script_path.stat().st_mtime if script_path.exists() else None
 
-    results = {}
+    results: dict = {}
 
-    # 生成 hook 帧
+    # 组装任务列表（hook + 各镜头，统一并发单元）
+    tasks_spec: list[tuple[int, dict, bool]] = []
     if hook and hook.get("prompt"):
         if only_indices is None or 0 in only_indices:
-            logger.info(f"\n[INFO] ===== Hook frame generation (index=0) =====")
             hook["index"] = 0
-            hook_result = await gen_shot_frames(
-                hook, shots_dir, image_adapter,
-                script_mtime, force=force,
-                characters=characters,
-                skip_first_frame=False,
-                frames=frames,
-            )
-            results[0] = hook_result
-            _log_shot_frames(0, hook_result, logger)
-
-    # 生成各镜头帧
+            tasks_spec.append((0, hook, False))
     for shot in shots:
         idx = shot["index"]
         if only_indices is not None and idx not in only_indices:
             continue
-        logger.info(f"\n[INFO] ===== Shot {idx} frame generation =====")
+        skip_first = idx >= 2  # Mode B: shot>=2 跳过首帧（用上一镜尾帧）
+        tasks_spec.append((idx, shot, skip_first))
 
-        # Mode A: shot 0, 1 使用完整帧生成
-        # Mode B: shot >=2 跳过首帧（用上一镜尾帧）
-        skip_first = idx >= 2  # Mode B start
+    sem = asyncio.Semaphore(concurrency)
+    logger.info(f"[INFO] 帧生成并发数: {concurrency}（{len(tasks_spec)} 个镜头单元）")
 
-        result = await gen_shot_frames(
-            shot, shots_dir, image_adapter,
-            script_mtime, force=force,
-            characters=characters,
-            skip_first_frame=skip_first,
-            frames=frames,
+    async def _one(idx: int, shot: dict, skip_first: bool):
+        async with sem:
+            logger.info(f"\n[INFO] ===== Shot {idx} frame generation =====")
+            result = await gen_shot_frames(
+                shot, shots_dir, image_adapter,
+                script_mtime, force=force,
+                characters=characters,
+                skip_first_frame=skip_first,
+                frames=frames,
+            )
+        return idx, result
+
+    # 并发执行 + 失败隔离：单镜失败只记日志，不中断整轮（失败的镜头无 results
+    # 条目，下游 step02b 按缺帧自行处理/重生成）
+    if tasks_spec:
+        gathered = await asyncio.gather(
+            *(_one(idx, shot, skip_first) for idx, shot, skip_first in tasks_spec),
+            return_exceptions=True,
         )
-        results[idx] = result
-        _log_shot_frames(idx, result, logger)
+        for (idx, _shot, _skip), res in zip(tasks_spec, gathered):
+            if isinstance(res, BaseException):
+                logger.error(f"[ERROR] Shot {idx} 帧生成失败（不中断整轮）: {res}")
+                continue
+            idx_ok, result = res
+            results[idx_ok] = result
+            _log_shot_frames(idx_ok, result, logger)
 
     # v6.18：gen_shot_frames 内归一化会回写 shot["ff_desc"]（多动作→静态瞬间），
     # 落盘让 script_result.json 反映真实用于生图的文本，也保证 step02b 读到
@@ -197,6 +213,9 @@ def main():
     frame_grp.add_argument("--frames", default=None,
                            help="只生成指定图片类型（逗号分隔）：ff=首帧, lf=尾帧, "
                                 "kf=全部关键帧, kf0/kf1...=指定关键帧；默认=Mode A/B 行为")
+    parser.add_argument("--concurrency", "-c", type=int, default=None,
+                        help="镜头级并发数（默认读 STEP02A_CONCURRENCY env，缺省 3；"
+                             "1=串行旧行为）。图片供应商限速由 KeyScheduler 独立保证")
     args = parser.parse_args()
 
     only_indices = parse_shot_selector(args.shots)
@@ -240,7 +259,8 @@ def main():
     # 资产图是横屏参考，独立于竖屏帧；在帧生成前跑，保证 r2v 参考图就绪
     try:
         from step02a_frame_gen.asset_gen import gen_all_assets
-        asset_result = asyncio.run(gen_all_assets(force=args.force))
+        asset_result = asyncio.run(gen_all_assets(force=args.force,
+                                                  concurrency=args.concurrency))
         logger.info(f"[ASSET] 资产图: 场景{asset_result.get('scenes', 0)} / 道具{asset_result.get('props', 0)}")
     except Exception as e:
         logger.warn(f"[ASSET] 资产图生成失败（不阻断帧生成）: {e}")
@@ -249,6 +269,7 @@ def main():
     results = asyncio.run(gen_all_frames(
         script_path, work_dir, force=args.force,
         only_indices=only_indices, frames=frames,
+        concurrency=args.concurrency,
     ))
 
     logger.info(f"\n[INFO] step02a_frame_gen done!")

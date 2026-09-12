@@ -138,6 +138,7 @@ from step01_script_gen.prompts import (
     _build_character_anchors,
     _load_knowledge_skills, _load_local_skill_context,
     auto_select_prompt_builder, auto_select_system_prompt,
+    resolve_model_prompt_profile,
 )
 
 # v2026-09-03: 按 TEXT_PROVIDER 自动选择 prompt builder。
@@ -212,10 +213,14 @@ def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
             _logger.info("[INFO] 章节大纲已预提取（并发），注入分镜 prompt")
         except Exception as e:
             _logger.warn(f"[WARN] 大纲转 anchor 失败: {e}，继续无大纲生成")
-    prompt = build_prompt(novel_text, bank, objects_bank, outline_anchor)
+    # v6.68: prompt/system 跟着实际模型走——deepseek-v4-flash → deepseek 剖面
+    # （system.md + 全文 novel，无 1600 截断）；doubao → doubao 剖面（1600 截断）。
+    # 此前 agent_plan 下所有模型共用 doubao prompt，是候选结构性零高潮的根因。
+    _main_builder, _system = resolve_model_prompt_profile(model)
+    prompt = _main_builder(novel_text, bank, objects_bank, outline_anchor)
     service = create_service()
     req = TextGenerationRequest(
-        system_prompt=_SYSTEM_PROMPT,
+        system_prompt=_system,
         user_prompt=prompt,
         temperature=temperature,  # v6.5: 降低温度防止幻觉；v6.64 多候选用不同温度增加多样性
         json_schema=SCRIPT_SCHEMA,
@@ -357,8 +362,31 @@ def _speech_body(narration: str) -> str:
     body = _re.split(r"[:：]", narration, maxsplit=1)[-1]
     return _re.sub(r"[\s　，。！？、；：""''（）【】《》…—-]", "", body)
 
+def _complementary_repair_model(winner_model: str | None) -> str | None:
+    """接力修复（v6.67，09-12）：按产出模型取 SCRIPT_CANDIDATE_MODELS 中的互补模型.
+
+    核心问题：修复轮和生成轮是同一个模型——deepseek 稿看不到自己的时长膨胀，
+    doubao 稿看不到自己的台词编造。赢家生成、输家修复，换视角 + 互补能力。
+
+    规则（命中任一即返回 None = provider 默认模型，零行为变化）：
+      - SCRIPT_CANDIDATE_MODELS 为空 / 只有 1 个模型
+      - 产出模型为 None（未走跨模型候选池）
+      - 产出模型不在候选列表中（异常态，不臆测互补关系）
+    """
+    from shared.config import SCRIPT_CANDIDATE_MODELS
+    if not winner_model or len(SCRIPT_CANDIDATE_MODELS) < 2:
+        return None
+    if winner_model not in SCRIPT_CANDIDATE_MODELS:
+        return None
+    for _m in SCRIPT_CANDIDATE_MODELS:
+        if _m != winner_model:
+            return _m
+    return None
+
+
 def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=None,
-                      max_attempts: int | None = None) -> dict:
+                      max_attempts: int | None = None,
+                      model: str | None = None) -> dict:
     """镜头数严重超限时，反馈给 LLM 合并冗余镜头，重新生成一次（软收敛）.
 
     与 gap_analysis 相互独立：这里只看「镜头数/总时长」超限，不校验内容分布。
@@ -418,16 +446,19 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         _checklist_fb = build_regen_feedback(script, novel_text)
         if _checklist_fb:
             feedback = feedback + _checklist_fb
-        prompt = build_prompt(novel_text, bank, objects_bank)
+        # v6.68: prompt/system 跟着实际模型走（接力模型可能是另一家模型）
+        _rl_builder, _rl_system = resolve_model_prompt_profile(model)
+        prompt = _rl_builder(novel_text, bank, objects_bank)
         prompt = prompt + feedback
 
         service = create_service()
         from _text_gen.deepseek_schema import SCRIPT_SCHEMA
         req = TextGenerationRequest(
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=_rl_system,
             user_prompt=prompt,
             temperature=0.2,
             json_schema=SCRIPT_SCHEMA,
+            model=model,  # v6.67 接力修复：None=provider 默认（零行为变化）
         )
         try:
             result = service.generate(req)
@@ -821,6 +852,21 @@ def _score_script(script: dict, novel_text: str) -> dict:
         score += 5
     detail_parts.append(f"镜数{n}")
 
+    # 7) 相邻镜重复视觉惩罚（2026-09-12 打分盲区复盘：镜12/12.5 文本逐字重复
+    # 曾拿 95 分）。相邻镜动作文本 Jaccard ≥0.85 视为凑镜重复，每对扣 8 分。
+    try:
+        from shared.split_similarity import jaccard_bigram, shot_action_text
+        _dup_pairs = sum(
+            1 for _i in range(n - 1)
+            if jaccard_bigram(shot_action_text(shots[_i]),
+                              shot_action_text(shots[_i + 1])) >= 0.85
+        )
+        if _dup_pairs:
+            score = max(0.0, score - 8.0 * _dup_pairs)
+            detail_parts.append(f"重复镜-{8 * _dup_pairs}")
+    except Exception:
+        _dup_pairs = 0
+
     detail = ", ".join(detail_parts) + f" → {score:.0f}分"
 
     return {
@@ -978,7 +1024,8 @@ def _build_novel_slice_for_picked(picked: dict, shots_by_id: dict,
 
 
 def _repair_shot_warnings(script: dict, novel_text: str,
-                          bank=None, objects_bank=None) -> dict:
+                          bank=None, objects_bank=None,
+                          model: str | None = None) -> dict:
     """定向修复轮（v6.35，P18 闭环核心）。
 
     GAP 通过后仍有高价值告警 → 只重写告警镜头的相关字段，重新校验，收敛即停。
@@ -1302,7 +1349,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 向后兼容：旧 user_prompt 也保留（其他 provider 走 chat 时仍拼一段）
         # 旧实现：prompt = build_prompt(novel_text, bank, objects_bank) + repair_prompt
         # 新实现：user_inputs 拆两条；user_prompt 用作"未支持多轮的 provider"的回退
-        prompt = build_prompt(novel_text, bank, objects_bank)
+        # v6.68: prompt/system 跟着实际模型走（修复 prompt 本身 provider 中立）
+        _rep_builder, _rep_system = resolve_model_prompt_profile(model)
+        prompt = _rep_builder(novel_text, bank, objects_bank)
 
         # 08-21 mode 合并：单一 unified fallback（与 _repair_turn 同源，压缩为单行 + 决策树/正反例/跨镜一致性）
         prompt = prompt + (
@@ -1337,11 +1386,12 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         service = create_service()
         from _text_gen.deepseek_schema import SCRIPT_SCHEMA
         req = TextGenerationRequest(
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=_rep_system,
             user_prompt=prompt,
             user_inputs=_user_inputs,  # v6.37 结构化多轮
             temperature=0.2,
             json_schema=SCRIPT_SCHEMA,
+            model=model,  # v6.67 接力修复：None=provider 默认（零行为变化）
         )
         try:
             result = service.generate(req)
@@ -1651,6 +1701,7 @@ def _generate_script_candidates(
     """多路径候选生成（v6.65 并行化，09-12）.
 
     生成 SCRIPT_CANDIDATE_TOPK 个独立候选，返回 [(score_dict, script)]（分数降序）。
+    score_dict 额外带 "_model" 键（生成本候选的模型 ID，供 v6.67 接力修复选互补模型）。
     - TOPK=1：串行路径零变化（deepseek 默认）
     - TOPK>1：并行生成——doubao 单候选 2-3 分钟，串行 3 候选 8 分钟是流水线
       最大耗时项；AGENT_PLAN_TEXT_RPM=10 限速下 3 路并发合法。
@@ -1677,6 +1728,8 @@ def _generate_script_candidates(
         )
         _cand = parse_response(raw, novel_text=novel_text)
         _scr = _score_script(_cand, novel_text)
+        # v6.67 接力修复：把生成本候选的模型挂在分数上，main() 据此选互补修复模型
+        _scr["_model"] = _model
         return _scr, _cand
 
     if SCRIPT_CANDIDATE_TOPK <= 1:
@@ -1984,6 +2037,10 @@ def main() -> None:
     # 选总分最高的候选
     _candidates.sort(key=lambda x: -x[0]["total"])
     _best_score, script = _candidates[0]
+    # v6.67 接力修复：记录当前稿件的产出模型。GAP 重生成若被采纳会重置为 None
+    #（产出者回到 provider 默认模型，接力标识失效）——见下方 GAP 循环。
+    _producer_model = _best_score.get("_model")
+    _logger.warn(f"[DEBUG-RELAY] _best_score keys={list(_best_score.keys())[:5]}, _producer_model={_producer_model!r}")
     if SCRIPT_CANDIDATE_TOPK > 1:
         _logger.info(
             f"[CANDIDATE] 多路径择优完成：{len(_candidates)} 个候选 → "
@@ -2071,13 +2128,17 @@ def main() -> None:
                 gap_context = gap_context + _checklist_fb
 
             # 追加差距反馈到 prompt，重新生成
-            prompt = build_prompt(novel_text, character_bank, scene_objects_bank)
+            # v6.68: GAP 重生成未指定模型（=provider 默认模型），prompt 剖面同步跟随。
+            # 默认模型 deepseek-v4-flash → deepseek 剖面不截断，救援能直接看到原文高潮
+            #（此前 1600 截断下救援只能靠 gap_context 里的高潮摘录）。
+            _gap_builder, _gap_system = resolve_model_prompt_profile(None)
+            prompt = _gap_builder(novel_text, character_bank, scene_objects_bank)
             prompt = prompt + gap_context
 
             service = create_service()
             from _text_gen.deepseek_schema import SCRIPT_SCHEMA
             req = TextGenerationRequest(
-                system_prompt=_SYSTEM_PROMPT,
+                system_prompt=_gap_system,
                 user_prompt=prompt,
                 temperature=0.2,  # v6.5: 降低温度防止幻觉；v6.64 多候选用不同温度增加多样性
                 json_schema=SCRIPT_SCHEMA,
@@ -2135,6 +2196,8 @@ def main() -> None:
                 )
                 _console(f"  [GAP] 零高潮救援：采纳重试版（+{_new_climax} 高潮镜）")
             script = new_script
+            # v6.67 接力修复：GAP 重生成走的是 provider 默认模型，产出者标识重置
+            _producer_model = None
             # 不在循环内 post_process：循环退出后统一在 line 334 做一次
             # （code-audit 07-31 #7：原 :328 与 :334 重复调用 _post_process）
             attempt += 1   # v6.62.4：while 循环手动推进（原 for 由 range 推进）
@@ -2143,11 +2206,25 @@ def main() -> None:
             # while...else 与原 for...else 语义一致：无 break 走完才告警
             _logger.warn("[GAP] 达到最大重试次数，仍有差距问题，将继续处理")
 
+    # v6.67（09-12）接力修复：赢家生成、输家修复——修复轮用互补模型换视角。
+    # 修复 prompt 已有「只动告警镜头」+ Mask 字段约束，换模型影响面可控。
+    # 候选池空/单模型/产出者无标识（GAP 重生成已采纳）→ _repair_model=None=
+    # 同 provider 默认模型，零行为变化。GAP 重生成本身暂不接力（方案②范围）。
+    _repair_model = _complementary_repair_model(_producer_model)
+    if _repair_model:
+        _logger.info(
+            f"[RELAY] 产出模型 {_producer_model} → 修复轮接力 {_repair_model}"
+        )
+        _console(
+            f"  [接力] 修复轮改用 {_repair_model}（产出模型 {_producer_model} 的互补模型）"
+        )
+
     # v6.7: 镜头数严重超限时收敛重生成（独立于 gap_analysis，默认开启）
     if SHOT_COUNT_REGEN_ENABLED:
         script = _regen_over_limit(
             script, novel_text,
             bank=character_bank, objects_bank=scene_objects_bank,
+            model=_repair_model,
         )
 
     # v6.35（08-15，P18 闭环）：GAP 通过后仍存在的高价值告警（开篇冲突/
@@ -2157,6 +2234,7 @@ def main() -> None:
         script = _repair_shot_warnings(
             script, novel_text,
             bank=character_bank, objects_bank=scene_objects_bank,
+            model=_repair_model,
         )
 
     # 后处理：注入全局配置 + 合规过滤 + 敏感词校验

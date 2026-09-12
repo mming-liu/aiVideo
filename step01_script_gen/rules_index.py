@@ -40,6 +40,49 @@ class RuleEntry(TypedDict, total=False):
 
 RULES_INDEX: dict[str, RuleEntry] = {
     # ========================================================================
+    # v6.69 — 旧 _hard_fix_* 家族删除 + 结构归一约束三件套（2026-09-12）
+    # ========================================================================
+    "v6.69": {
+        "name": "旧 hard_fix 家族删除（-2973 行）+ kf 归一/重复合并/侧翻转约束 + 拆分验证回滚",
+        "date": "2026-09-12",
+        "prompt_sections": [],
+        "constraints": [
+            # 新增三件套（95 分稿复盘根治）
+            "kf_timeline_normalize",     # kf 时间线归一：同刻重排/越界钳制/标签错位/hold帧回归
+            "duplicate_shot_merge",      # 相邻镜重复视觉 HARD 合并（12/12.5 凑镜根治）
+            "char_side_continuity",      # 同地点连续镜角色侧翻转交换（10→11 越轴根治）
+            # 随家族删除一并变更：ship-integrity 条款加「本镜在船上」门控（vimax_bridge）
+            # timecode 超长拆镜器补接 differentiate + 拆分后验证回滚（b.ff/b.lf、a.lf/b.lf ≥0.85 不拆）
+            # post_fix：motion「N-M三」归一 / prompt 句读终端不变量 / 打斗反馈水体选词
+        ],
+        "validation_checks": [],
+        "tests": [
+            "tests/step01_script_gen/constraints/test_kf_timeline_normalize.py",
+            "tests/step01_script_gen/constraints/test_structure_fixes_0912.py",
+            "tests/step01_script_gen/test_postfix_roots_0912.py",
+        ],
+        # 删除记录：legacy-only 行为 kneel_beside_victim / frame_layout_consistency /
+        # hook_env_anchor / hook_witness_not_killer 随家族移除（v6.42 起未在默认管线
+        # 运行；git 历史可找回）。约束共享常量 16 个迁至 validation 顶部保留。
+    },
+
+    # ========================================================================
+    # v6.68 — per-model prompt 剖面（2026-09-12）
+    # ========================================================================
+    "v6.68": {
+        "name": "prompt/system 跟实际模型走（MODEL_PROMPT_PROFILES）：根治候选结构性零高潮",
+        "date": "2026-09-12",
+        "prompt_sections": [
+            "prompts.py:MODEL_PROMPT_PROFILES",
+        ],
+        "constraints": [],
+        "validation_checks": [],
+        "tests": [
+            "tests/step01_script_gen/test_model_prompt_profile.py",
+        ],
+    },
+
+    # ========================================================================
     # v6.61 — provider-neutral step01 framework
     # ========================================================================
     "v6.61": {

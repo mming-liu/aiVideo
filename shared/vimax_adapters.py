@@ -205,10 +205,16 @@ class ImageGeneratorAiVideoAdapter:
         if ImageGeneratorAiVideoAdapter._MAX_CONCURRENT > 0:
             concurrency = ImageGeneratorAiVideoAdapter._MAX_CONCURRENT
         else:
-            # 单 key 供应商（bailian/volcengine/minimax/agent_plan）走串行；Agnes 有 8 Key 可并行
+            # 2026-09-12：agent_plan 不再随单 key 降为 1——plan 端提交限速由
+            # provider 内 KeyScheduler（AGENT_PLAN_IMAGE_RPM，默认 10 RPM）独立
+            # 保证，服务端并发生成不受限；实测串行时吞吐仅 ~1 张/60-90s，是
+            # step02a 最大耗时项。保守取 3（10 RPM 提交间隔自动摊平突发）。
+            # bailian/volcengine/minimax 维持 1（各自配额口径未重估，行为不变）；
+            # Agnes 8 Key 并行不变。IMAGE_MAX_CONCURRENT >0 时覆盖一切。
             from _image_gen.config import config as _img_config
             _p = _img_config.PROVIDER
-            concurrency = 1 if _p in ("bailian", "volcengine", "minimax", "agent_plan") else 8
+            concurrency = 3 if _p == "agent_plan" else (
+                1 if _p in ("bailian", "volcengine", "minimax") else 8)
         _sem = ImageGeneratorAiVideoAdapter._global_semaphores.get(concurrency)
 
         # 并发控制：Semaphore 保证同时只有 N 个任务在飞，超出排队等待

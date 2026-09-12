@@ -62,6 +62,7 @@ class SceneObjectsBank:
 
     def save(self) -> None:
         """原子写入：先写 .tmp 再 rename，防止写入中断损坏 bank."""
+        self._consolidate_aliases()
         self._data["meta"]["total_objects"] = len(self._data.get("objects", {}))
         self._bank_dir.mkdir(parents=True, exist_ok=True)
         tmp = self._bank_path.with_suffix(".json.tmp")
@@ -71,6 +72,48 @@ class SceneObjectsBank:
             tmp.replace(self._bank_path)
         except OSError as e:
             print(f"[bank] 保存场景物体库失败: {e}")
+
+    def _consolidate_aliases(self) -> None:
+        """同物异名合并（2026-09-12 根因修复）：≤2 字泛名是某长名的子串 → 折叠.
+
+        LLM 抽取会把同一实体注册两条并给出互相矛盾的尺寸（实测：「舟」长5.5米
+        宽1.5米 vs「无篷舴艋舟」宽1.4米），prompt 把两份尺寸参考都喂给模型 →
+        帧描述出现两套打架的船体规格。折叠规则：泛名降级为长名条目的
+        consistent_term；尺寸取「长宽齐全」的一侧（更完整推导优先），缺项互补；
+        章节取 min/max。幂等，每次 save 归一。
+        """
+        objects = self._data.get("objects", {})
+        folded = True
+        while folded:
+            folded = False
+            for short in list(objects):
+                if len(short) > 2:
+                    continue
+                target = next(
+                    (long_name for long_name in objects
+                     if long_name != short and short in long_name),
+                    None,
+                )
+                if not target:
+                    continue
+                _s, _l = objects.pop(short), objects[target]
+                _s_complete = bool(_s.get("length_m") and _s.get("width_m"))
+                _l_complete = bool(_l.get("length_m") and _l.get("width_m"))
+                for k in ("length_m", "width_m", "height_m", "capacity"):
+                    if _s.get(k) is None:
+                        continue
+                    if _l.get(k) is None or (_s_complete and not _l_complete):
+                        _l[k] = _s[k]
+                terms = (set(_l.get("consistent_terms", []) or [])
+                         | set(_s.get("consistent_terms", []) or [])
+                         | {short})
+                _l["consistent_terms"] = sorted(t for t in terms if t)
+                _l["first_chapter"] = min(
+                    _l.get("first_chapter", 9999), _s.get("first_chapter", 9999))
+                _l["last_chapter"] = max(
+                    _l.get("last_chapter", 0), _s.get("last_chapter", 0))
+                folded = True
+                break
 
     # -- 查询 ----------------------------------------------------------------
 

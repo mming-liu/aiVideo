@@ -288,6 +288,33 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
                             shot_b[_fld] = _t.rstrip("。") + f"。{_IAT}"
         except Exception:
             pass
+        # 2026-09-12 根因修复：本拆镜器此前漏接 v6.50 视觉差异化（另一处拆镜器
+        # 已接）——shot_b.ff=原lf / shot_b.lf=原lf 深拷贝 → ff==lf 必现，且与
+        # 前镜 lf 相同 → 相邻镜 0.94 重复（12/12.5 复盘实测）。按后半镜差异化
+        # 对齐另一拆镜器口径。
+        try:
+            from step01_script_gen.split_visuals import differentiate_split_visuals
+            differentiate_split_visuals(shot, shot_b, part_i=1)
+        except Exception:
+            pass
+        # 2026-09-12 根因修复：拆分后验证——后镜必须提供**新增视觉信息**，否则
+        # 回滚不拆。判定（相邻重复不变量，12/12.5 复盘：0.94 重复镜占 12.8s）：
+        #   a) 后镜自身非静态：jaccard(b.ff, b.lf) < 0.85
+        #   b) 后镜终点推进：jaccard(a.lf, b.lf) < 0.85
+        # （b.ff=a.lf 接续是分镜设计，不算重复。）差异化后仍不达标（如静态水面
+        # 场景只有换景别词的伪差异化）⇒ 保留单镜长时长，视频生成端 clamp 兜底。
+        try:
+            from shared.split_similarity import jaccard_bigram as _jb_verify
+            _a_lf = shot.get("lf_desc") or ""
+            _b_ff = shot_b.get("ff_desc") or ""
+            _b_lf = shot_b.get("lf_desc") or ""
+            if _a_lf and _b_ff and _b_lf:
+                if (_jb_verify(_b_ff, _b_lf) >= 0.85
+                        or _jb_verify(_a_lf, _b_lf) >= 0.85):
+                    i += 1
+                    continue
+        except Exception:
+            pass
         # shot_a 留前半段
         shots[i]["narration_segment"] = text[:split_at].strip()
         if shots[i].get("subtitle"):

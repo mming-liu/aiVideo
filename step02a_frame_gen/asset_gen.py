@@ -11,9 +11,15 @@
 
 资产图是横屏参考资产（供 r2v 场景/道具一致性参考），与竖屏视频帧不同：
 专用横屏适配器 + 跳过风格前缀（资产图不做 9:16 竖屏约束）。
+
+并发（2026-09-12）：场景/道具按对象并行（每场景 wide→near→side 场景内串行，
+每道具 重试+QC 道具内串行），信号量限流；bank 收尾单次保存，并行任务不各自
+save（防并发写坏 JSON）。并发数与帧图共用 STEP02A_CONCURRENCY 旋钮（默认 3，
+1=串行旧行为）；提交端限速由图片 provider 的 KeyScheduler 独立保证。
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -86,14 +92,27 @@ async def _qc_asset_image(asset_path: Path, ident: str, desc: str,
         return False
 
 
-async def gen_scene_assets(image_adapter, force: bool = False, hallucinated_ids: set | None = None) -> int:
+def _asset_concurrency() -> int:
+    """资产图生成并发数：与帧图共用 STEP02A_CONCURRENCY 旋钮（默认 3，1=串行）.
+
+    提交端限速由图片 provider 的 KeyScheduler（AGENT_PLAN_IMAGE_RPM）独立保证；
+    这里的信号量只限制同时在飞的生成请求数。
+    """
+    return max(1, int(os.getenv("STEP02A_CONCURRENCY", "3") or "3"))
+
+
+async def gen_scene_assets(image_adapter, force: bool = False, hallucinated_ids: set | None = None,
+                           concurrency: int | None = None) -> int:
     """为场景资产库中缺图的场景生成大场景图 + 近景功能场景图.
 
     Args:
-        script: script_result.json（含 scene_assets 描述，但 bank 才是权威源）
         image_adapter: 图片生成适配器（横屏专用，见调用方）
         force: 忽略缓存强制重生成
         hallucinated_ids: audit 识别的幻觉 prop/scene 集合 → 这些直接跳过不调 4.5
+        concurrency: 场景级并发数（2026-09-12；None=读 STEP02A_CONCURRENCY，默认 3）。
+            每场景一个独立协程（wide→near→side 场景内串行：near/side 以 wide 为
+            参考图），信号量限流；bank 收尾单次保存，并行任务不各自 save
+            （防并发写坏 JSON）。
 
     Returns:
         int: 成功生成/复用的场景资产数
@@ -106,6 +125,10 @@ async def gen_scene_assets(image_adapter, force: bool = False, hallucinated_ids:
     from shared.tee_logger import get_logger
     logger = get_logger(chapter_dir() / "step02a.log", console_level="INFO")
 
+    if concurrency is None:
+        concurrency = _asset_concurrency()
+    concurrency = max(1, concurrency)
+
     bank = SceneAssetsBank()
     bank.load()
 
@@ -113,6 +136,7 @@ async def gen_scene_assets(image_adapter, force: bool = False, hallucinated_ids:
     gen = SceneAssetsGenerator(image_generator=image_adapter)
 
     total = 0
+    pending: list[str] = []
     for ident in bank.get_all_identifiers():
         # v6.40 08-22：audit 识别的幻觉 scene 直接跳过（不调 4.5 重生成）
         if ident in hallucinated_ids:
@@ -121,9 +145,7 @@ async def gen_scene_assets(image_adapter, force: bool = False, hallucinated_ids:
         entry = bank.get_scene(ident)
         if not entry:
             continue
-        scene = scene_assets_from_bank(entry)
         scene_dir = bank.get_asset_dir(ident)
-        scene_dir.mkdir(parents=True, exist_ok=True)
         wide_path = scene_dir / "wide.png"
 
         if not force and wide_path.exists() and wide_path.stat().st_size > 5 * 1024:
@@ -138,73 +160,96 @@ async def gen_scene_assets(image_adapter, force: bool = False, hallucinated_ids:
             total += 1
             logger.info(f"[ASSET] 场景 {ident}: 大场景图已存在，复用")
             continue
+        pending.append(ident)
 
-        # 生成大场景建立镜头图
-        # v6.40 08-23：跳过视觉 QC——专用 wide prompt 已 4 次强约束"不得出现任何
-        # 人物/身影/人影/轮廓或人形"，且专用横屏适配器关闭了幻觉锁图。ds-vision-skill
-        # 视觉模型对 2560x1440 大场景空镜（远景屋脊/炊烟/水面倒影/树丛阴影）
-        # 误判率高，每个新场景首生成浪费 1 张 3.69M 像素档位的 wide.png。
-        # 风险：完全依赖 prompt 强约束，已与 line 128-139 复用分支保持一致。
-        try:
-            img_out = await gen.generate_wide(scene, save_path=str(wide_path))
-            if not _save_image(img_out, wide_path):
-                logger.warn(f"[ASSET] 场景 {ident} 大场景图生成失败，跳过该场景")
-                continue
-            logger.info(f"[ASSET] 场景 {ident} 大场景图 -> {wide_path}")
-        except Exception as e:
-            logger.warn(f"[ASSET] 场景 {ident} 大场景图生成异常: {e}，跳过")
+    sem = asyncio.Semaphore(concurrency)
+    logger.info(f"[ASSET] 场景资产并发数: {concurrency}（待生成 {len(pending)} 个）")
+
+    async def _scene_task(ident: str):
+        """单场景任务：wide→near→side 场景内串行，返回 assets dict 或 None."""
+        async with sem:
+            entry = bank.get_scene(ident)
+            scene = scene_assets_from_bank(entry)
+            scene_dir = bank.get_asset_dir(ident)
+            scene_dir.mkdir(parents=True, exist_ok=True)
+            wide_path = scene_dir / "wide.png"
+
+            # v6.40 08-23：跳过视觉 QC——专用 wide prompt 已 4 次强约束"不得出现任何
+            # 人物/身影/人影/轮廓或人形"，且专用横屏适配器关闭了幻觉锁图。
+            # ds-vision-skill 视觉模型对 2560x1440 大场景空镜误判率高（详见 git 历史）。
+            try:
+                img_out = await gen.generate_wide(scene, save_path=str(wide_path))
+                if not _save_image(img_out, wide_path):
+                    logger.warn(f"[ASSET] 场景 {ident} 大场景图生成失败，跳过该场景")
+                    return None
+                logger.info(f"[ASSET] 场景 {ident} 大场景图 -> {wide_path}")
+            except Exception as e:
+                logger.warn(f"[ASSET] 场景 {ident} 大场景图生成异常: {e}，跳过")
+                return None
+
+            assets = {
+                "wide": {"path": str(wide_path.resolve()),
+                         "description": f"{ident} 大场景建立镜头参考图"},
+            }
+
+            # 近景功能场景图（可选，从大场景派生）
+            near_path = scene_dir / "near.png"
+            if SCENE_NEAR_SHOT_ENABLED and (not near_path.exists() or force):
+                try:
+                    img_out = await gen.generate_near(scene, str(wide_path), save_path=str(near_path))
+                    if img_out is not None and _save_image(img_out, near_path):
+                        assets["near"] = {"path": str(near_path.resolve()),
+                                          "description": f"{ident} 近景功能场景参考图"}
+                        logger.info(f"[ASSET] 场景 {ident} 近景功能场景图 -> {near_path}")
+                except Exception as e:
+                    logger.warn(f"[ASSET] 场景 {ident} 近景图生成异常: {e}（保留大场景图）")
+            elif near_path.exists():
+                assets["near"] = {"path": str(near_path.resolve()),
+                                  "description": f"{ident} 近景功能场景参考图"}
+
+            # v6.23：侧面全景图（可选，从大场景派生，多视图）
+            side_path = scene_dir / "side.png"
+            if SCENE_NEAR_SHOT_ENABLED and (not side_path.exists() or force):
+                try:
+                    img_out = await gen.generate_side(scene, str(wide_path), save_path=str(side_path))
+                    if img_out is not None and _save_image(img_out, side_path):
+                        assets["side"] = {"path": str(side_path.resolve()),
+                                          "description": f"{ident} 侧面全景参考图"}
+                        logger.info(f"[ASSET] 场景 {ident} 侧面全景图 -> {side_path}")
+                except Exception as e:
+                    logger.warn(f"[ASSET] 场景 {ident} 侧面全景图生成异常: {e}（保留大场景图）")
+            elif side_path.exists():
+                assets["side"] = {"path": str(side_path.resolve()),
+                                  "description": f"{ident} 侧面全景参考图"}
+
+            return assets
+
+    results = await asyncio.gather(
+        *(_scene_task(ident) for ident in pending), return_exceptions=True)
+    for ident, res in zip(pending, results):
+        if isinstance(res, BaseException):
+            logger.error(f"[ASSET] 场景 {ident} 资产生成失败（不中断整轮）: {res}")
             continue
-
-        assets = {
-            "wide": {"path": str(wide_path.resolve()),
-                     "description": f"{ident} 大场景建立镜头参考图"},
-        }
-
-        # 近景功能场景图（可选，从大场景派生）
-        near_path = scene_dir / "near.png"
-        if SCENE_NEAR_SHOT_ENABLED and (not near_path.exists() or force):
-            try:
-                img_out = await gen.generate_near(scene, str(wide_path), save_path=str(near_path))
-                if img_out is not None and _save_image(img_out, near_path):
-                    assets["near"] = {"path": str(near_path.resolve()),
-                                      "description": f"{ident} 近景功能场景参考图"}
-                    logger.info(f"[ASSET] 场景 {ident} 近景功能场景图 -> {near_path}")
-            except Exception as e:
-                logger.warn(f"[ASSET] 场景 {ident} 近景图生成异常: {e}（保留大场景图）")
-        elif near_path.exists():
-            assets["near"] = {"path": str(near_path.resolve()),
-                              "description": f"{ident} 近景功能场景参考图"}
-
-        # v6.23：侧面全景图（可选，从大场景派生，多视图）
-        side_path = scene_dir / "side.png"
-        if SCENE_NEAR_SHOT_ENABLED and (not side_path.exists() or force):
-            try:
-                img_out = await gen.generate_side(scene, str(wide_path), save_path=str(side_path))
-                if img_out is not None and _save_image(img_out, side_path):
-                    assets["side"] = {"path": str(side_path.resolve()),
-                                      "description": f"{ident} 侧面全景参考图"}
-                    logger.info(f"[ASSET] 场景 {ident} 侧面全景图 -> {side_path}")
-            except Exception as e:
-                logger.warn(f"[ASSET] 场景 {ident} 侧面全景图生成异常: {e}（保留大场景图）")
-        elif side_path.exists():
-            assets["side"] = {"path": str(side_path.resolve()),
-                              "description": f"{ident} 侧面全景参考图"}
-
-        bank.set_assets(ident, assets)
-        bank.save()
+        if not res:
+            continue
+        bank.set_assets(ident, res)
         total += 1
+    bank.save()  # 收尾单次保存（并行任务不各自 save，防并发写坏 JSON）
 
     return total
 
 
-async def gen_prop_assets(image_adapter, force: bool = False, hallucinated_ids: set | None = None) -> int:
+async def gen_prop_assets(image_adapter, force: bool = False, hallucinated_ids: set | None = None,
+                          concurrency: int | None = None) -> int:
     """为道具资产库中缺图的道具生成白底资产图.
 
     Args:
-        script: script_result.json（含 prop_assets 描述，但 bank 才是权威源）
         image_adapter: 图片生成适配器（横屏专用，见调用方）
         force: 忽略缓存强制重生成
         hallucinated_ids: audit 识别的幻觉 prop/scene 集合 → 这些直接跳过不调 4.5
+        concurrency: 道具级并发数（2026-09-12；None=读 STEP02A_CONCURRENCY，默认 3）。
+            每道具一个独立协程（生成+QC critical 重试，道具内串行），信号量限流；
+            bank 收尾单次保存。
 
     Returns:
         int: 成功生成/复用的道具资产数
@@ -217,6 +262,10 @@ async def gen_prop_assets(image_adapter, force: bool = False, hallucinated_ids: 
     from shared.tee_logger import get_logger
     logger = get_logger(chapter_dir() / "step02a.log", console_level="INFO")
 
+    if concurrency is None:
+        concurrency = _asset_concurrency()
+    concurrency = max(1, concurrency)
+
     bank = PropAssetsBank()
     bank.load()
 
@@ -224,6 +273,7 @@ async def gen_prop_assets(image_adapter, force: bool = False, hallucinated_ids: 
     gen = PropAssetsGenerator(image_generator=image_adapter)
 
     total = 0
+    pending: list[str] = []
     for ident in bank.get_all_identifiers():
         # v6.40 08-22：audit 识别的幻觉 prop 直接跳过（不调 4.5 重生成）
         if ident in hallucinated_ids:
@@ -232,57 +282,73 @@ async def gen_prop_assets(image_adapter, force: bool = False, hallucinated_ids: 
         entry = bank.get_prop(ident)
         if not entry:
             continue
-        prop = prop_from_bank(entry)
         prop_dir = bank.get_asset_dir(ident)
-        prop_dir.mkdir(parents=True, exist_ok=True)
         prop_path = prop_dir / "prop.png"
 
         if not force and prop_path.exists() and prop_path.stat().st_size > 5 * 1024:
             # 已入库道具图直接复用（生成时已过内容质检），不再每轮复检——
             # 省掉每轮对全部道具跑视觉 QC 的 API 开销，也避免 QC 抖动导致
-            # 已接受的图（如活虾）被反复判 critical、每轮删图重生成烧额度。
+            # 已接受的图被反复判 critical、每轮删图重生成烧额度。
             # 需要重审时用 --force 或删掉 prop.png 再跑。
             bank.set_asset(ident, {"path": str(prop_path.resolve()),
                                    "description": f"{ident} 道具资产参考图"})
             total += 1
             logger.info(f"[ASSET] 道具 {ident}: 资产图已存在，复用")
             continue
+        pending.append(ident)
 
-        # 生成白底资产图（B8 修复：QC critical 时重试最多 2 次）
-        from shared.constants import ASSET_GEN_ATTEMPTS
-        prop_ok = False
-        for _attempt in range(1, 1 + ASSET_GEN_ATTEMPTS):
-            logger.info(f"[ASSET] 生成道具 {ident} 白底资产图"
-                        f"{f'（重试 {_attempt}/{ASSET_GEN_ATTEMPTS}）' if _attempt > 1 else ''} ...")
-            try:
-                img_out = await gen.generate_prop(prop, save_path=str(prop_path))
-                if not _save_image(img_out, prop_path):
-                    logger.warn(f"[ASSET] 道具 {ident} 资产图生成失败，跳过")
-                    break
-                # B8：内容质检（白底道具图带手/多余物），critical → 删图重试
-                _critical = await _qc_asset_image(
-                    prop_path, ident, (entry.get("appearance") or "")[:120],
-                    empty_scene=False,
-                )
-                if _critical:
-                    continue
-                prop_ok = True
-                break
-            except Exception as e:
-                logger.warn(f"[ASSET] 道具 {ident} 资产图生成异常: {e}，跳过")
-                break
-        if not prop_ok:
+    sem = asyncio.Semaphore(concurrency)
+    logger.info(f"[ASSET] 道具资产并发数: {concurrency}（待生成 {len(pending)} 个）")
+
+    async def _prop_task(ident: str):
+        """单道具任务：生成 + QC critical 重试（道具内串行），成功返回 assets / 失败 None."""
+        async with sem:
+            entry = bank.get_prop(ident)
+            prop = prop_from_bank(entry)
+            prop_dir = bank.get_asset_dir(ident)
+            prop_dir.mkdir(parents=True, exist_ok=True)
+            prop_path = prop_dir / "prop.png"
+
+            # 生成白底资产图（B8 修复：QC critical 时重试最多 2 次）
+            from shared.constants import ASSET_GEN_ATTEMPTS
+            for _attempt in range(1, 1 + ASSET_GEN_ATTEMPTS):
+                logger.info(f"[ASSET] 生成道具 {ident} 白底资产图"
+                            f"{f'（重试 {_attempt}/{ASSET_GEN_ATTEMPTS}）' if _attempt > 1 else ''} ...")
+                try:
+                    img_out = await gen.generate_prop(prop, save_path=str(prop_path))
+                    if not _save_image(img_out, prop_path):
+                        logger.warn(f"[ASSET] 道具 {ident} 资产图生成失败，跳过")
+                        return None
+                    # B8：内容质检（白底道具图带手/多余物），critical → 删图重试
+                    _critical = await _qc_asset_image(
+                        prop_path, ident, (entry.get("appearance") or "")[:120],
+                        empty_scene=False,
+                    )
+                    if _critical:
+                        continue
+                    return {"path": str(prop_path.resolve()),
+                            "description": f"{ident} 道具资产参考图"}
+                except Exception as e:
+                    logger.warn(f"[ASSET] 道具 {ident} 资产图生成异常: {e}，跳过")
+                    return None
+            return None
+
+    results = await asyncio.gather(
+        *(_prop_task(ident) for ident in pending), return_exceptions=True)
+    for ident, res in zip(pending, results):
+        if isinstance(res, BaseException):
+            logger.error(f"[ASSET] 道具 {ident} 资产生成失败（不中断整轮）: {res}")
             continue
-
-        bank.set_asset(ident, {"path": str(prop_path.resolve()),
-                               "description": f"{ident} 道具资产参考图"})
-        bank.save()
+        if not res:
+            continue
+        bank.set_asset(ident, res)
         total += 1
+    bank.save()  # 收尾单次保存（并行任务不各自 save，防并发写坏 JSON）
 
     return total
 
 
-async def gen_all_assets(force: bool = False) -> dict:
+async def gen_all_assets(force: bool = False, concurrency: int | None = None) -> dict:
     """step02a 入口：生成全部场景/道具资产图.
 
     使用专用横屏适配器（资产图是横屏参考，不加风格前缀，不做合规清洗——
@@ -291,6 +357,9 @@ async def gen_all_assets(force: bool = False) -> dict:
     v6.40 08-22：先调 audit_orphan_props 拿 hallucinated_now 集合，
     传给 gen_scene_assets/gen_prop_assets → 幻觉 scene/prop 直接跳过
     （不调 4.5 重生成，节省额度）。已存在则跳过的逻辑保留。
+
+    concurrency: 对象级并发数（None=读 STEP02A_CONCURRENCY，默认 3），
+    透传给场景/道具两个生成阶段。
     """
     if not ASSET_GEN_ENABLED:
         return {"scenes": 0, "props": 0}
@@ -339,8 +408,12 @@ async def gen_all_assets(force: bool = False) -> dict:
         enable_hallucination_lock=False,
     )
 
-    n_scenes = await gen_scene_assets(asset_adapter, force=force, hallucinated_ids=_hallucinated)
-    n_props = await gen_prop_assets(asset_adapter, force=force, hallucinated_ids=_hallucinated)
+    n_scenes = await gen_scene_assets(asset_adapter, force=force,
+                                      hallucinated_ids=_hallucinated,
+                                      concurrency=concurrency)
+    n_props = await gen_prop_assets(asset_adapter, force=force,
+                                    hallucinated_ids=_hallucinated,
+                                    concurrency=concurrency)
 
     from shared.paths import chapter_dir
     from shared.tee_logger import get_logger

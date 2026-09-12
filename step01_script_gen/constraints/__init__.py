@@ -16,6 +16,9 @@ from .kf_pre_post_conflict import KfPrePostConflictConstraint  # D
 # Phase 3 迁移：E/F
 from .kf_time_window_alignment import KfTimeWindowAlignmentConstraint  # E
 from .kf_t_sec_bounds import KfTSecBoundsConstraint  # F
+from .kf_timeline_normalize import KfTimelineNormalizeConstraint  # kf 时间线归一（2026-09-12）
+from .duplicate_shot_merge import DuplicateShotMergeConstraint  # 相邻镜重复视觉合并（2026-09-12）
+from .char_side_continuity import CharSideContinuityConstraint  # 同地点角色侧翻转交换（2026-09-12）
 from .kf_monotonic import KfMonotonicConstraint  # F1 (v6.43, 08-23)
 
 # Phase 4 迁移：G~Z + T1/T2（08-22 ~ 08-23 跑批累计）
@@ -91,6 +94,7 @@ ALL_CONSTRAINTS.extend([
     OpeningEmptyShotCapConstraint(),
     # Phase 3
     KfTimeWindowAlignmentConstraint(),
+    KfTimelineNormalizeConstraint(),  # kf 时间线归一：同刻重排/越界钳制/标签错位/hold帧回归（2026-09-12）
     KfTSecBoundsConstraint(),
     KfMonotonicConstraint(),
     # Phase 4
@@ -155,6 +159,10 @@ ALL_CONSTRAINTS.extend([
     DialogueGroundingConstraint(),
     FrameLayoutsRequiredConstraint(),      # R4 frame_layouts 必填 + 长度对齐
     ShotCountBoundsConstraint(),            # 镜头数/场景数范围加严（[10,18]/[1,5]）
+    # 2026-09-12 结构归一约束置于链尾：文本清洗类约束跑完后再看最终文本，
+    # 否则相似度在后续改写中漂移会漏判（首跑实测 0.83→0.89 漂移漏合并）
+    DuplicateShotMergeConstraint(),   # 相邻镜重复视觉 HARD 合并
+    CharSideContinuityConstraint(),   # 同地点连续镜角色侧翻转交换
 ])
 
 __all__ = [

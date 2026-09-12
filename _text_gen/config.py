@@ -108,6 +108,22 @@ class TextGenCfg:
         int(os.getenv("AGENT_PLAN_TEXT_MAX_TOKENS") or "0") or None
     )
 
+    # provider → 该 provider 的默认文本模型属性名（v6.68 per-model prompt 剖面用：
+    # model=None 的调用点（GAP 重生成等）按默认模型解析剖面，保证 prompt 与
+    # 实际提交的模型一致）
+    _PROVIDER_DEFAULT_MODEL_KEYS = {
+        "dashscope": "DASHSCOPE_TEXT_MODEL",
+        "deepseek": "DEEPSEEK_MODEL",
+        "agnes": "AGNES_TEXT_MODEL",
+        "agent_plan": "AGENT_PLAN_TEXT_MODEL",
+    }
+
+    @classmethod
+    def default_text_model(cls) -> str:
+        """当前 provider 的默认文本模型 ID；未注册 provider 返回空串."""
+        _key = cls._PROVIDER_DEFAULT_MODEL_KEYS.get(cls.PROVIDER, "")
+        return getattr(cls, _key, "") if _key else ""
+
     @classmethod
     def validate(cls) -> None:
         """验证当前供应商所需配置是否完整."""

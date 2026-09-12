@@ -283,13 +283,23 @@ def _build_total_duration_constraint(shot_count_min: int, shot_count_max: int) -
 def _build_audio_instruction() -> str:
     """按当前视频供应商返回对白/声音生成指令段（模板 {audio_instruction} 占位）.
 
-    旧供应商（bailian/agnes/dashscope）：保留「（用中文说）」指令格式（历史行为，
-    TTS/模型靠它识别中文发音与情绪）。
-    原生发声供应商（volcengine/minimax/agent_plan）：视频模型原生发声，
+    无声模型（2026-09-12，如 volcengine Seedance 1.0 系列）：prompt 明令禁止
+    BGM/SFX/VO 等声音指令——模型不生成声音，写了也是无效 token 且可能干扰画面；
+    台词照常写（说话人道：台词），仅作字幕与 step03 配音文本锚。
+    原生发声供应商（volcengine/minimax/agent_plan 有声模型）：视频模型原生发声，
     prompt 写自然对白即可，禁止添加「用中文说」指令前缀。
-    用 active_video_uses_native_voice() 统一判断。
+    旧供应商（bailian/agnes/dashscope）：保留「（用中文说）」指令格式（历史行为）。
     """
-    from shared.model_caps import active_video_uses_native_voice
+    from shared.model_caps import (
+        active_video_supports_audio, active_video_uses_native_voice,
+    )
+    if not active_video_supports_audio():
+        return (
+            "### 声音生成指令（无声视频模型，最高优先级覆盖上述声音规则）\n"
+            "当前视频模型不生成任何声音：prompt 与 motion 中**禁止**出现 BGM/SFX/VO/"
+            "背景音效/「说出」「喊出」等声音类指令（写了模型也无法执行，后期配音负责声音）。\n"
+            "台词按规则0照常写（说话人道：台词），仅作为字幕与配音文本锚。\n"
+        )
     if active_video_uses_native_voice():
         return (
             "### 声音生成指令（视频模型自带语音）\n"
@@ -747,6 +757,58 @@ def auto_select_system_prompt(provider: str) -> str:
     if provider == "agent_plan":
         return DOUBAO_SYSTEM_PROMPT
     return SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# v6.68: 按实际模型选 prompt 剖面（per-model prompt profile）
+# ---------------------------------------------------------------------------
+# 背景（2026-09-12 47 分事故分析）：TEXT_PROVIDER=agent_plan 时所有候选模型共用
+# build_doubao_prompt + DOUBAO_SYSTEM_PROMPT，novel 被 _DOUBAO_NOVEL_MAX=1600 截断。
+# 该截断是 09-03 为 doubao 180s 超时压测定的——本章高潮在原文 2878-4847 字，被切在
+# prompt 外 → 候选结构性零高潮，全靠 GAP 救援兜底；deepseek-v4-flash 无此超时约束，
+# 却被塞了同一套 doubao prompt。
+# 规则：子串匹配、大小写不敏感、具体在前泛化在后（同 shared/ref_compose 惯例）。
+# novel 截断策略由 builder 自带（build_doubao_prompt=1600 / build_prompt=不截断，
+# 上游 chapter_reader 另有 PROMPT_MAX_CHARS 总闸）。
+
+MODEL_PROMPT_PROFILES = [
+    # (模型名子串, main_builder, system_prompt)
+    ("doubao", build_doubao_prompt, DOUBAO_SYSTEM_PROMPT),
+    ("deepseek", build_prompt, SYSTEM_PROMPT),
+]
+
+
+def resolve_model_prompt_profile(model: str | None = None):
+    """按实际模型解析 (main_builder, system_prompt)，prompt 跟着模型走.
+
+    - model 给定：按 MODEL_PROMPT_PROFILES 子串匹配（大小写不敏感）
+    - model=None：按 provider 默认模型解析（_text_gen.config.default_text_model），
+      保证 GAP 重生成等「不指定模型」的调用点与实际提交的模型一致
+    - 未注册模型/解析失败：回退 provider 级选择（auto_select_prompt_builder，旧行为）
+
+    Returns:
+        (build_main_fn, system_prompt) 二元组
+    """
+    if not model:
+        try:
+            from _text_gen.config import config as _tg_cfg
+            model = _tg_cfg.default_text_model()
+        except Exception:
+            model = None
+    if model:
+        _m = model.lower()
+        for _sub, _builder, _system in MODEL_PROMPT_PROFILES:
+            if _sub in _m:
+                return _builder, _system
+    # 未注册模型 → provider 级选择兜底（旧行为）
+    try:
+        from _text_gen.config import config as _tg_cfg
+        _provider = _tg_cfg.PROVIDER
+    except Exception:
+        from shared.constants import TEXT_PROVIDER_DEFAULT
+        _provider = TEXT_PROVIDER_DEFAULT
+    _main_fn, _ = auto_select_prompt_builder(_provider)
+    return _main_fn, auto_select_system_prompt(_provider)
 
 
 # 兼容别名

@@ -101,7 +101,7 @@ def test_helper_functions():
         get_rule_version,
         latest_version,
     )
-    assert latest_version() == "v6.61"
+    assert latest_version() == "v6.69"
     assert get_rule_version("v6.5") is not None  # 模糊匹配 → v6.58（5x 最新）
     assert get_rule_version("v9.99") is None
     assert "ff_lf_temporal" in all_constraint_names()

@@ -232,6 +232,14 @@ class AgentPlanVideoService(VideoGenerationService):
         if cap.supports_generate_audio:
             voice_enabled = os.getenv("VIDEO_MODEL_VOICE", "1").strip() == "1"
             payload["generate_audio"] = voice_enabled
+        # 2026-09-12（移植官方 byted-ark-seedance-skill）：draft 样片 / flex 服务档——
+        # 仅能力开启的模型透传（1.5 pro 支持，2.5 官方明确不支持）；默认关（不传字段）
+        if getattr(cap, "supports_draft", False) \
+                and os.getenv("AGENT_PLAN_VIDEO_DRAFT", "").strip().lower() in ("1", "true"):
+            payload["draft"] = True
+        _service_tier = os.getenv("AGENT_PLAN_VIDEO_SERVICE_TIER", "").strip().lower()
+        if getattr(cap, "supports_flex_tier", False) and _service_tier:
+            payload["service_tier"] = _service_tier
         if req.seed is not None and getattr(cap, "supports_seed", False):
             payload["seed"] = req.seed
 
@@ -394,6 +402,8 @@ class AgentPlanVideoService(VideoGenerationService):
                 code = err.get("code") if isinstance(err, dict) else ""
                 msg = err.get("message") if isinstance(err, dict) else str(err)
                 _verbose_write(f"  [镜头{req.clip_index}] Agent Plan 任务失败: {code} - {msg}")
+                # 2026-09-12 用户要求：失败时日志打印完整报错（不截断，便于排障）
+                _verbose_write(f"[DEBUG] [镜头{req.clip_index}] Agent Plan 任务失败完整响应: {output}")
                 return VideoGenerationResult(
                     clip_index=req.clip_index,
                     success=False,

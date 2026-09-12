@@ -628,6 +628,8 @@ class VolcengineVideoService(VideoGenerationService):
                 code = err.get("code") if isinstance(err, dict) else ""
                 msg = err.get("message") if isinstance(err, dict) else str(err)
                 _verbose_write(f"  [镜头{req.clip_index}] 任务失败: {code} - {msg}")
+                # 2026-09-12 用户要求：失败时日志打印完整报错（不截断，便于排障）
+                _verbose_write(f"[DEBUG] [镜头{req.clip_index}] 任务失败完整响应: {output}")
                 return VideoGenerationResult(
                     clip_index=req.clip_index,
                     success=False,

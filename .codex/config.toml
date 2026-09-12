@@ -1,12 +1,12 @@
-# Codex Project Configuration
-# This file sets up sandbox and trust level for this project
-
 [project]
 name = "aiVideo"
 path = 'c:\myfloders\git\aivideo'
 
+[project.'c:\myfloders\git\aivideo']
+trust_level = "trusted"
+
 [windows]
 sandbox = "unelevated"
 
-[project.'c:\myfloders\git\aivideo']
-trust_level = "trusted"
+[mcp_servers.firecrawl]
+url = "https://mcp.firecrawl.dev/v2/mcp-oauth"

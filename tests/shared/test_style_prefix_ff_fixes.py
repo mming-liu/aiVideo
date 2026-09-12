@@ -75,3 +75,41 @@ class TestWaterBreakGazeRewrite:
         assert _preactionize_associated_clause(
             "他紧握匕首蓄力", "water_break"
         ) == "匕首未出水"
+
+
+# ---------------------------------------------------------------------------
+# v6.69：帧 desc 用黑影做剧情要素时，人物数量禁令不得含「黑影」
+# （shot4 尾帧拦帧事故回归：默认禁令「禁止…黑影」与 lf_desc「水面下黑影」
+# 对称矛盾，prompt_contradiction fail-fast 拦下整镜帧图）
+# ---------------------------------------------------------------------------
+
+from shared.style_prefix import add_image_strict_constraints
+
+
+def test_shadow_in_frame_desc_not_banned():
+    """lf_desc 含黑影（无威胁称谓词）→ 禁令保留人影、不含黑影."""
+    shot = {
+        "main_subject": "杨旭",
+        "ff_desc": "杨旭仰卧船头",
+        "lf_desc": "船边水面下黑影更清晰，朝船头方向移动",
+        "motion_desc": "",
+        "location": "照月湾小舟",
+    }
+    out = add_image_strict_constraints("x", frame_type="尾帧", shot=shot,
+                                       characters=[{"identifier": "杨旭"}])
+    assert "禁止出现任何其他人物、人影" in out
+    assert "禁止出现任何其他人物、黑影" not in out
+
+
+def test_no_shadow_keeps_full_ban():
+    """desc 无黑影 → 维持原禁令（黑影、人影全禁）."""
+    shot = {
+        "main_subject": "杨旭",
+        "ff_desc": "杨旭仰卧船头",
+        "lf_desc": "杨旭仍仰卧船头，酒壶倾斜",
+        "motion_desc": "",
+        "location": "照月湾小舟",
+    }
+    out = add_image_strict_constraints("x", frame_type="尾帧", shot=shot,
+                                       characters=[{"identifier": "杨旭"}])
+    assert "禁止出现任何其他人物、黑影、人影" in out

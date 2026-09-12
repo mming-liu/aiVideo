@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """拆镜视觉差异化（v6.50，08-29）单元测试.
 
-治「拆镜照抄」：_hard_fix_split_long_dialogue_shot 此前把 prompt/ff/lf 原样
+拆镜差异化（v6.50 起 timecode 拆镜器口径；旧 _hard_fix_split_long_dialogue_shot 已删）——此前把 prompt/ff/lf 原样
 复制给每个子镜（13:46 run 实测 shot9↔10 prompt 一字不差、shot9/10/12 ff==lf）。
 """
 from __future__ import annotations
@@ -14,9 +14,6 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
-
-from step01_script_gen.validation import _hard_fix_split_long_dialogue_shot
-
 
 def _make_long_dialogue_shot(index: int = 8, sentences: int = 5) -> dict:
     """构造会触发拆镜的长对话镜（sentences 个句子 → 拆 2-3 镜）."""
@@ -51,55 +48,6 @@ def _make_long_dialogue_shot(index: int = 8, sentences: int = 5) -> dict:
 def _sim(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a, b).ratio()
 
-
-def test_split_three_parts_prompt_ratio_below_085():
-    """拆 3 镜场景：任意两子镜 prompt 相似度 < 0.85（审计单测要求）."""
-    shots = [_make_long_dialogue_shot(sentences=6)]
-    n = _hard_fix_split_long_dialogue_shot(shots, None)
-    assert n >= 2 and len(shots) >= 2
-    for a, b in itertools.combinations(shots, 2):
-        r = _sim(a["prompt"], b["prompt"])
-        assert r < 0.85, f"子镜 {a['__split_part']}↔{b['__split_part']} prompt 相似度 {r:.2f} ≥ 0.85"
-
-
-def test_split_ff_ratio_below_085_and_ff_ne_lf():
-    """ff 相似度 < 0.85（image 模式真正决定画面的字段）且每个子镜 ff≠lf."""
-    shots = [_make_long_dialogue_shot(sentences=6)]
-    _hard_fix_split_long_dialogue_shot(shots, None)
-    for a, b in itertools.combinations(shots, 2):
-        r = _sim(a["ff_desc"], b["ff_desc"])
-        assert r < 0.85, f"子镜 ff 相似度 {r:.2f} ≥ 0.85"
-    for s in shots:
-        assert s["ff_desc"] != s["lf_desc"], f"子镜 {s['__split_part']} ff==lf 未破除"
-
-
-def test_split_over_shoulder_alternates_across_parts():
-    """相邻子镜过肩方向交换（正反打：越 A 肩 ↔ 越 B 肩）."""
-    shots = [_make_long_dialogue_shot(sentences=6)]
-    _hard_fix_split_long_dialogue_shot(shots, None)
-    assert len(shots) >= 2
-    p1, p2 = shots[0], shots[1]
-    assert "越听香的肩望向张十三" in p1["ff_desc"]
-    assert "越张十三的肩望向听香" in p2["ff_desc"]
-
-
-def test_split_framing_escalates():
-    """景别随拆分深度推近（对话张力升级 = 镜头推近）."""
-    shots = [_make_long_dialogue_shot(sentences=6)]
-    _hard_fix_split_long_dialogue_shot(shots, None)
-    assert len(shots) >= 2
-    # part1 保持原景别（中景），part2 至少推近一级（中近景/近景）
-    assert "中景" in shots[0]["prompt"]
-    assert any(w in shots[1]["prompt"] for w in ("中近景", "近景", "特写"))
-
-
-def test_split_idempotent():
-    """已拆子镜（__split_from_idx）不再拆."""
-    shots = [_make_long_dialogue_shot(sentences=6)]
-    _hard_fix_split_long_dialogue_shot(shots, None)
-    before = len(shots)
-    n2 = _hard_fix_split_long_dialogue_shot(shots, None)
-    assert n2 == 0 and len(shots) == before
 
 
 def test_timecode_splitter_differentiates_half_index_shot():

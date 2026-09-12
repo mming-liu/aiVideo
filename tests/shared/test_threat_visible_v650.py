@@ -165,3 +165,40 @@ def test_partial_upper_body_visible():
     assert _threat_visible_in(
         "神秘人从水中部分露出上半身", []
     ) is True
+
+
+# ---------------------------------------------------------------------------
+# v6.69：窗口不跨句 + 方向目标排除（shot4 尾帧拦帧事故回归 2026-09-12）
+# ---------------------------------------------------------------------------
+
+def test_window_not_cross_sentence():
+    """上一句的「船舷」不得跨句充当本句黑影的贴靠证据（v6.69 前窗跨句 bug）."""
+    from shared.vimax_bridge import _threat_visible_in
+    assert _threat_visible_in(
+        "钓杆仍靠船舷垂入水中。船边水面下黑影更清晰", []
+    ) is False
+
+
+def test_direction_target_not_position():
+    """「朝船头方向移动」的船头是移动目标 → 不可见（shot4 尾帧实战样本）."""
+    from shared.vimax_bridge import _threat_visible_in
+    assert _threat_visible_in(
+        "船边水面下黑影更清晰，朝船头方向移动，侧身朝画左", []
+    ) is False
+
+
+def test_shot4_lf_real_desc_invisible():
+    """shot4 真实 lf_desc（上一句含船舷 + 朝船头移动）→ False."""
+    from shared.vimax_bridge import _threat_visible_in
+    desc = ("杨旭仍仰卧船头，仰面朝上双目紧闭，头颈僵直不侧转，右手酒壶倾斜，"
+            "酒液洒在胸口白袍上，双目微闭。钓杆仍靠船舷垂入水中。"
+            "船边水面下黑影更清晰，朝船头方向移动，侧身朝画左")
+    assert _threat_visible_in(desc, []) is False
+
+
+def test_real_surface_position_still_visible():
+    """真实贴靠（踞蹲船舷）不被方向排除误伤 → True."""
+    from shared.vimax_bridge import _threat_visible_in
+    assert _threat_visible_in(
+        "神秘人浑身湿透踞蹲船舷，右手紧握匕首", []
+    ) is True

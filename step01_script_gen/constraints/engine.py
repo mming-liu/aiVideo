@@ -6,13 +6,12 @@ apply_constraints(ctx) 是整个框架的唯一对外入口：
   3. 收集 RepairRecord + Violation
   4. 返回 RepairReport
 
-run_hard_fix(script) 是 main.py 用的便捷入口：
-  - 默认：跑新 Constraint 框架（29 条全部）
-  - HARD_FIX_USE_OLD=1：回退到旧 _hard_fix_shot_prompts 路径
+run_hard_fix(script) 是 main.py 用的便捷入口：跑 Constraint 框架。
 
 回退机制：
-  - HARD_FIX_USE_OLD=1: 完全回退到旧 _hard_fix_* 路径（Phase 1-4 兜底）
   - per-Constraint feature flag: CONSTRAINT_<NAME>_ENABLED=0 关闭单个约束
+  - 旧 _hard_fix_* 路径与 HARD_FIX_USE_OLD 全局开关已于 2026-09-12 删除
+    （新约束只在 Constraint 框架，旧路径回退即降级；开关残留仅告警不生效）
 """
 from __future__ import annotations
 
@@ -47,16 +46,9 @@ def apply_constraints(
     Returns:
         RepairReport 含 repairs / violations_remaining / duration_ms
     """
-    # 紧急回退：HARD_FIX_USE_OLD=1 直接返回空 report（Phase 1-4 兜底）
-    if os.getenv("HARD_FIX_USE_OLD", "0").strip() == "1":
-        try:
-            from shared.tee_logger import get_logger
-            get_logger().warn(
-                "[CONSTRAINT] HARD_FIX_USE_OLD=1, 跳过所有 Constraint, 走旧 _hard_fix_* 路径"
-            )
-        except Exception:
-            pass
-        return RepairReport()
+    # 2026-09-12：HARD_FIX_USE_OLD 紧急回退已随旧 _hard_fix_* 路径删除——
+    # 该开关在此处原语义是「返回空 report 什么都不修」，旧路径删除后会变成
+    # 静默空转，比降级更危险，故一并移除（run_hard_fix 侧保留告警）。
 
     report = RepairReport()
     start = time.time()
@@ -145,22 +137,65 @@ def run_hard_fix(
         - is_in_repair_loop: 标记 repair loop 末尾，避免某些约束在 repair 阶段误触
         - is_final_pass: 标记 _compute_timecodes 之后，确保 RuntimeExtendConstraint 时长拉伸生效
     """
-    use_old = os.getenv("HARD_FIX_USE_OLD", "0").strip() == "1"
-    _announce_path(use_old)
-    if use_old:
-        try:
-            from step01_script_gen.validation import hard_fix_shot_prompts as _old_hfix
-            script = _old_hfix(script)
-            return (script, RepairReport()) if return_report else script
-        except Exception as e:
-            try:
-                from shared.tee_logger import get_logger
-                get_logger().warn(f"[HARD_FIX] 旧路径失败: {e}")
-            except Exception:
-                pass
-            return (script, RepairReport()) if return_report else script
+# 日志判断本轮跑的是哪条路径（还被 pytest 混进来的同名告警误导）。
+_PATH_ANNOUNCED = False
 
-    # 默认：跑新 Constraint 框架
+
+def _announce_path() -> None:
+    global _PATH_ANNOUNCED
+    if _PATH_ANNOUNCED:
+        return
+    _PATH_ANNOUNCED = True
+    try:
+        from shared.tee_logger import get_logger
+        log = get_logger()
+        if log is None:
+            return
+        log.info("[HARD_FIX] 本轮路径: Constraint 框架")
+    except Exception:
+        pass
+
+
+def run_hard_fix(
+    script: Any,
+    *,
+    is_in_repair_loop: bool = False,
+    is_final_pass: bool = False,
+    return_report: bool = False,
+    novel_text: str = "",
+) -> Any:
+    """main.py 用的便捷入口：跑硬修复层.
+
+    Args:
+        script: 完整 script dict
+        is_in_repair_loop: True=main.py:1055 调用（repair round 末尾）
+        is_final_pass: True=main.py:1664 调用（_compute_timecodes 后）
+        novel_text: 小说原文（用于 grounding 类约束，如 dialogue_grounding / dialogue_density 注入）
+
+    Returns:
+        修改后的 script（直接返回 script）；
+        return_report=True 时返回 (script, RepairReport)
+
+    2026-09-12：旧 _hard_fix_* 正则路径（HARD_FIX_USE_OLD=1 回退）已删除——
+    新约束（kf_timeline_normalize/duplicate_shot_merge/char_side_continuity 等）
+    只存在于 Constraint 框架，旧路径早已功能落后，回退即降级。若仍设置该环境
+    变量仅告警一次并按新框架执行。
+
+    Context 参数（v6.42 接入）：
+        - is_in_repair_loop: 标记 repair loop 末尾，避免某些约束在 repair 阶段误触
+        - is_final_pass: 标记 _compute_timecodes 之后，确保 RuntimeExtendConstraint 时长拉伸生效
+    """
+    if os.getenv("HARD_FIX_USE_OLD", "").strip() == "1":
+        try:
+            from shared.tee_logger import get_logger
+            get_logger().warn(
+                "[HARD_FIX] HARD_FIX_USE_OLD=1 已失效：旧 _hard_fix_* 路径已于 "
+                "2026-09-12 删除（新约束只在 Constraint 框架，旧路径回退即降级）。"
+                "按 Constraint 框架执行。请 unset 该环境变量。"
+            )
+        except Exception:
+            pass
+    _announce_path()
     try:
         # 一次性：在新框架首次启用时跑一次冲突检测（v6.42 PoC）
         _maybe_run_conflict_detect_once()

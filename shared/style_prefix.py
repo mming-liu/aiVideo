@@ -1503,8 +1503,15 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                     f"给蒙面人画第二个分身），每个角色在画面中只出现一次。"
                 )
             else:
+                # v6.69：帧描述自身把黑影当剧情要素（水下黑影伏笔等，如 shot4
+                # lf「水面下黑影更清晰」）时，默认禁令不得含「黑影」——否则与
+                # 帧描述对称矛盾，prompt_contradiction fail-fast 拦下整镜帧图。
+                # 禁「人影」保留：暗影轮廓仍不得画成人形（与 v6.50 精化分支
+                # 「正向陈述黑影」同一原则）。
+                _shadow_in_frame = "黑影" in _threat_desc
+                _extra_ban = "" if _shadow_in_frame else "、黑影"
                 _banned_tail = (
-                    "禁止出现任何其他人物、黑影、人影。"
+                    f"禁止出现任何其他人物{_extra_ban}、人影。"
                     "禁止复制/复用画面已列角色作为新人物（如把同一角色画两次、"
                     "给蒙面人画第二个分身），每个角色在画面中只出现一次。"
                 )

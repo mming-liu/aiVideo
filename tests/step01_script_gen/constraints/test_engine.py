@@ -202,7 +202,12 @@ def test_apply_constraints_runs_registered(monkeypatch):
 
 
 def test_apply_constraints_hard_fix_use_old_env(monkeypatch):
-    """HARD_FIX_USE_OLD=1 应跳过所有 Constraint."""
+    """HARD_FIX_USE_OLD=1 开关已失效（旧路径 2026-09-12 删除）：约束照常执行.
+
+    旧契约「开关=1 → 跳过所有 Constraint 返回空 report」随旧 _hard_fix_* 家族
+    一并删除——开关残留时 run_hard_fix 只告警，apply_constraints 必须照常执行，
+    防止开关残留把硬修复变成静默空转。
+    """
     monkeypatch.setenv("HARD_FIX_USE_OLD", "1")
     from step01_script_gen.constraints import (
         ALL_CONSTRAINTS,
@@ -225,8 +230,7 @@ def test_apply_constraints_hard_fix_use_old_env(monkeypatch):
     try:
         ctx = ConstraintContext.from_script({"shots": []})
         report = apply_constraints(ctx)
-        assert report.repairs == []
-        assert MockConstraint.call_count == 0
+        assert MockConstraint.call_count == 1, "开关已失效，约束必须照常执行"
     finally:
         ALL_CONSTRAINTS[:] = original
 

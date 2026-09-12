@@ -1858,6 +1858,30 @@ _THREAT_VISIBLE_HINTS = (
     "船舷", "船帮", "船头", "船尾", "岸边", "堤",
 )
 
+# v6.69（09-12 shot4 尾帧拦帧事故）：贴靠表面词紧邻方向词时是**移动目标**不是
+# 位置证据——「水面下黑影更清晰，朝船头方向移动」≠ 黑影贴在船头。旧逻辑把
+# 「船头」当可见证据 → 判可见实体 → 默认分支注入「禁止…黑影」与剧情黑影对称
+# 矛盾，prompt_contradiction fail-fast 拦下整镜帧图。
+_SURFACE_HINTS = ("船舷", "船帮", "船头", "船尾", "岸边", "堤")
+_DIR_PRECHARS = "朝向往至到近"
+_DIR_BIGRAMS = ("游向", "移向", "滑向", "扑向", "划向", "逼向", "逼近", "靠近")
+_SENT_ENDS = "。！？；\n"
+
+
+def _surface_hint_all_direction(window: str, h: str) -> bool:
+    """表面词 h 在 window 内的**全部**出现都紧跟方向词 → 移动目标非位置证据.
+
+    任一真实贴靠出现（如「踞蹲船舷」）即不算全方向 → 返回 False（保留证据）.
+    """
+    starts = [p for p in range(len(window)) if window.startswith(h, p)]
+    if not starts:
+        return False
+    return all(
+        (p > 0 and window[p - 1] in _DIR_PRECHARS)
+        or (p > 1 and window[p - 2:p] in _DIR_BIGRAMS)
+        for p in starts
+    )
+
 
 def _threat_visible_in(desc: str, characters: list | None = None) -> bool | None:
     """威胁源（刺客/杀手/黑衣人）是否在 desc 中作为「可见实体」出现.
@@ -1873,6 +1897,9 @@ def _threat_visible_in(desc: str, characters: list | None = None) -> bool | None
       hook kf0  "画右水面刺客半身探出、右手举匕首…"         → True（可见）
       shot6 ff  "神秘人潜伏于画左水下，只露头肩，目光斜望…" → True（露头肩）
       shot7 ff  "神秘人浑身湿透踞蹲船舷，右手紧握匕首…"     → True（踞蹲船舷）
+      shot4 lf  "…水面下黑影更清晰，朝船头方向移动…"        → False（v6.69：
+                「朝船头」是移动目标非贴靠位置；且前窗不跨句，「上一句的船舷」
+                不再充当本句黑影的位置证据）
     """
     if not desc:
         return None
@@ -1935,8 +1962,20 @@ def _threat_visible_in(desc: str, characters: list | None = None) -> bool | None
             # 找到「否定 + 可见动作」组合 → 跳过该位置（不当可见证据）
             continue
         # 无否定语境 → 走原 visible hint 判定（用原 18 字符窗口）
-        window = desc[max(0, i - 8):i + 18]
+        # v6.69：窗口不跨句——8 字前窗曾跨过句号把上一句的「船舷」捞进本句
+        # 威胁源窗口（「钓杆仍靠船舷垂入水中。船边水面下黑影…」实测），上一句
+        # 的贴靠证据被误记到本句黑影头上 → 误判可见 → 同上对称矛盾拦帧。
+        _head = desc[max(0, i - 8):i]
+        _hcuts = [_head.rfind(_b) for _b in _SENT_ENDS if _head.rfind(_b) >= 0]
+        if _hcuts:
+            _head = _head[max(_hcuts) + 1:]
+        _tail_full = desc[i:i + 18]
+        _tcuts = [_tail_full.find(_b) for _b in _SENT_ENDS if _tail_full.find(_b) >= 0]
+        _tail = _tail_full[:min(_tcuts)] if _tcuts else _tail_full
+        window = _head + _tail
         hit = [h for h in _THREAT_VISIBLE_HINTS if h in window]
+        hit = [h for h in hit
+               if not (h in _SURFACE_HINTS and _surface_hint_all_direction(window, h))]
         if not hit:
             continue
         # 命中全是弱形体词且窗口含非实体词 → 不可见
@@ -2260,7 +2299,16 @@ def _extract_char_layout(
                 objs = script.get("scene_objects", {}) or {}
                 boat = next((o for o in objs.values()
                              if isinstance(o, dict) and o.get("category") == "船"), None)
-                if boat and "完整小舟" not in block and "整船" not in block:
+                # 2026-09-12 根因修复：船体完整性条款加「本镜在船上」门控——原实现
+                # 只要 bank 有船条目就对本章所有镜头全局开火，把岸上镜头的角色也硬
+                # 扳到船上（镜8 张十三在湾堤上，连续 3 次被画成在船上/水中）。
+                # 仅当本镜 location/scene 表明是船上场景（船/舟/舱/甲板）才注入。
+                _loc_scan = " ".join(filter(None, [
+                    str(shot.get("location", "") or ""), str(shot.get("scene", "") or ""),
+                ]))
+                _on_boat_scene = any(w in _loc_scan for w in ("船", "舟", "舱", "甲板"))
+                if (boat and _on_boat_scene
+                        and "完整小舟" not in block and "整船" not in block):
                     # v6.45（08-26）⚠️ 强调前缀——image model 对末尾约束遵守率低，
                     # 加 ⚠️ 符号提升视觉权重（与"画面稳定·不闪烁"等约束同款模式）。
                     if _water_names:

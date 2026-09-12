@@ -12,17 +12,20 @@
 from __future__ import annotations
 
 
-def parse_shot_selector(spec: str | None) -> set[int] | None:
+def parse_shot_selector(spec: str | None) -> set[int | float] | None:
     """解析分镜选择器字符串。
 
     Args:
         spec: 如 "3,5-7,9"；None 或空串表示不限制（返回 None = 全部镜头）
+        单值支持半整数（"13.5"——拆镜器产出的合法 index，2026-09-12 补）；
+        区间端点仍须整数（半整数区间语义不明，单独列出）。
 
     Returns:
-        set[int] 指定镜头 index 集合；None 表示全部镜头
+        set[int | float] 指定镜头 index 集合；None 表示全部镜头
 
     Raises:
-        ValueError: 含非法 token（非数字 / 区间起点大于终点 / 负数）
+        ValueError: 含非法 token（非数字 / 区间起点大于终点 / 负数 /
+                    半整数区间端点）
     """
     if spec is None:
         return None
@@ -30,24 +33,26 @@ def parse_shot_selector(spec: str | None) -> set[int] | None:
     if not spec:
         return None
 
-    indices: set[int] = set()
+    indices: set[int | float] = set()
     for part in spec.split(","):
         part = part.strip()
         if not part:
             continue
         if "-" in part:
             lo_s, hi_s = part.split("-", 1)
-            lo, hi = int(lo_s.strip()), int(hi_s.strip())
+            lo, hi = float(lo_s.strip()), float(hi_s.strip())
             if lo < 0 or hi < 0:
                 raise ValueError(f"非法镜头区间（负数）: {part}")
             if lo > hi:
                 raise ValueError(f"非法镜头区间（起点>终点）: {part}")
-            indices.update(range(lo, hi + 1))
+            if lo != int(lo) or hi != int(hi):
+                raise ValueError(f"区间端点须为整数（半整数索引请单独列出）: {part}")
+            indices.update(range(int(lo), int(hi) + 1))
         else:
-            val = int(part)
+            val = float(part)
             if val < 0:
                 raise ValueError(f"非法镜头序号（负数）: {part}")
-            indices.add(val)
+            indices.add(int(val) if val == int(val) else val)
 
     return indices or None
 

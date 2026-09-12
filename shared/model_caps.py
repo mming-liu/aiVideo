@@ -76,6 +76,10 @@ class SeedanceCap:
     supports_reference_audio: bool = False
     supports_seed: bool = False
     i2v_frames_ratio_adaptive: bool = False
+    # 2026-09-12（源自官方 byted-ark-seedance-skill 模型矩阵）：1.5 pro 支持
+    # draft 样片档 + flex 服务档（省钱调试）；2.0/2.5 系列官方矩阵均 false
+    supports_draft: bool = False
+    supports_flex_tier: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -99,14 +103,17 @@ SEEDREAM_CAPS: list[tuple[str, SeedreamCap]] = [
 ]
 
 SEEDANCE_CAPS: list[tuple[str, SeedanceCap]] = [
-    # 参数顺序：(duration, resolutions, supports_reference_image, supports_generate_audio,
-    #            i2v_frames_ratio_adaptive, supports_reference_audio, supports_seed)
+    # 位置参数按 dataclass 字段序：(duration, resolutions, supports_reference_image,
+    #            supports_generate_audio, supports_reference_audio, supports_seed,
+    #            i2v_frames_ratio_adaptive)
     # 2.5/2.0 系列支持参考音频（按官方文档全模态参考生视频场景）
+    # draft/flex 仅 1.5 pro 支持（官方 seedance skill 模型矩阵，2026-09-12）
     ("seedance-2-5", SeedanceCap((4, 30), ("480p", "720p"), True, True, True, True, True)),
     ("seedance-2-0-fast", SeedanceCap((4, 15), ("480p", "720p"), True, True, False, True, False)),
     ("seedance-2-0-mini", SeedanceCap((4, 15), ("480p", "720p"), True, True, False, True, False)),
     ("seedance-2-0", SeedanceCap((4, 15), ("480p", "720p", "1080p", "4k"), True, True, False, True, False)),
-    ("seedance-1-5-pro", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, True, False, False, False)),
+    ("seedance-1-5-pro", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, True, False, False, False,
+                                     supports_draft=True, supports_flex_tier=True)),
     ("seedance-1-5", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, False, False, False, False)),
     ("seedance-1-0", SeedanceCap((2, 12), ("480p", "720p", "1080p"), False, False, False, False, False)),
 ]
@@ -427,6 +434,22 @@ def active_video_uses_native_voice() -> bool:
     bailian / agnes / dashscope = False（沿用「（用中文说）」指令格式，历史行为）。
     """
     return os.getenv("VIDEO_PROVIDER", "bailian") in ("volcengine", "minimax", "agent_plan")
+
+
+def active_video_supports_audio() -> bool:
+    """当前视频模型是否支持 generate_audio（2026-09-12 新增）.
+
+    无声模型（如 volcengine Seedance 1.0 系列）下 prompt 不应携带任何
+    BGM/SFX/VO/口型类声音指令——模型执行不了，白占 token 且可能干扰画面
+    （对白由 step03 TTS + step04 后期呈现）。step01 音频指令段按此门控。
+    """
+    provider = os.getenv("VIDEO_PROVIDER", "bailian")
+    if provider in ("volcengine", "agent_plan"):
+        cap = get_seedance_cap(active_video_model())
+        return bool(cap.supports_generate_audio)
+    if provider == "minimax":
+        return True  # Hailuo v1 / H3 均有声
+    return False  # bailian / agnes / dashscope 旧链路无声（历史口径）
 
 
 def active_video_is_seedance() -> bool:

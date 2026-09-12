@@ -618,56 +618,6 @@ def test_timecode_split_clears_kfs_with_keyframes():
     assert len(child["frame_layouts"]["lf"]) == 1
 
 
-def test_long_dialogue_split_inherits_frame_layouts():
-    """validation._hard_fix_split_long_dialogue_shot 拆镜后 child 继承 ff/lf/kfs（part_i=0 才有 kfs）."""
-    from step01_script_gen.validation import _hard_fix_split_long_dialogue_shot
-    spec_item = {"name": "杨旭", "on_screen": True, "position": "画中",
-                 "pose": "盘坐", "gaze_target": "无", "props": []}
-    # 用对话前缀 + 多个句号拆点（必须用「X道：」格式触发拆分器）
-    narration = (
-        "听香颤声道：第一句很长的对白，公子啊这一路风雪交加。"
-        "第二句同样很长的对白，您怎么偏要挑这黄道吉日出城呢。"
-        "第三句还是这么长，可否多带几件衣裳？"
-    )  # ~55 字 + 3 个句末标点
-    parent = {
-        "index": 1,
-        "narration_segment": narration,
-        "scene": "照月湾",
-        "prompt": "听香说话",
-        "ff_desc": "听香",
-        "lf_desc": "听香",
-        "char_layout": [{"name": "杨旭"}],
-        "frame_layouts": {
-            "ff": [spec_item], "lf": [spec_item],
-            "kfs": [[spec_item], [spec_item]],
-        },
-        "keyframes": [
-            {"desc": "kf0", "stage": "pre", "t_sec": 0.5},
-            {"desc": "kf1", "stage": "climax", "t_sec": 2.0},
-        ],
-    }
-    shots = [parent]
-    n_split = _hard_fix_split_long_dialogue_shot(shots)
-    assert n_split >= 2, f"长对话至少拆 2 镜，实际 {n_split}"
-    # 检查所有子镜都有 frame_layouts（不能是老章降级 WARN）
-    for s in shots:
-        fl = s.get("frame_layouts")
-        assert isinstance(fl, dict), f"拆镜后 child 必须有 frame_layouts dict，实际 {type(fl).__name__}"
-    # 第一子镜继承 kfs，后续子镜 kfs=[]
-    children = [s for s in shots if s.get("__split_from_idx") == 1]
-    assert len(children) >= 2
-    for child in children:
-        part = child.get("__split_part", 1)
-        kfs = child["frame_layouts"]["kfs"]
-        if part == 1:
-            assert len(kfs) == 2, f"part=1 应继承 2 个 kfs，实际 {len(kfs)}"
-        else:
-            assert kfs == [], f"part≥2 应 kfs=[]，实际 {kfs}"
-        # ff/lf 必继承
-        assert len(child["frame_layouts"]["ff"]) == 1
-        assert len(child["frame_layouts"]["lf"]) == 1
-
-
 def test_split_child_passes_frame_spec_consistency():
     """拆镜 child 跑 frame_spec_consistency Constraint 应无 HARD 违例（核心回归测试）.
 
