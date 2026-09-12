@@ -1,4 +1,4 @@
-"""约束引擎入口.
+﻿"""约束引擎入口.
 
 apply_constraints(ctx) 是整个框架的唯一对外入口：
   1. 遍历 ALL_CONSTRAINTS 注册表
@@ -123,6 +123,7 @@ def run_hard_fix(
     is_in_repair_loop: bool = False,
     is_final_pass: bool = False,
     return_report: bool = False,
+    novel_text: str = "",
 ) -> Any:
     """main.py 用的便捷入口：跑硬修复层.
 
@@ -130,6 +131,7 @@ def run_hard_fix(
         script: 完整 script dict
         is_in_repair_loop: True=main.py:1055 调用（repair round 末尾）
         is_final_pass: True=main.py:1664 调用（_compute_timecodes 后）
+        novel_text: 小说原文（用于 grounding 类约束，如 dialogue_grounding / dialogue_density 注入）
 
     Returns:
         修改后的 script（与旧 _hard_fix_shot_prompts 兼容，直接返回 script）；
@@ -169,6 +171,7 @@ def run_hard_fix(
             markers=ElementMarkers(),
             is_in_repair_loop=is_in_repair_loop,
             is_final_pass=is_final_pass,
+            novel_text=novel_text,
         )
         report = apply_constraints(ctx)
         # 日志：报告修复次数 + HARD 未解决数

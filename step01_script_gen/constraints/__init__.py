@@ -1,4 +1,4 @@
-from .types import Severity, Violation, RepairRecord, RepairReport
+﻿from .types import Severity, Violation, RepairRecord, RepairReport
 from .context import ConstraintContext
 from .base import Constraint
 from .engine import apply_constraints, run_hard_fix, ALL_CONSTRAINTS
@@ -41,6 +41,7 @@ from .opening_hook import OpeningHookConstraint  # W
 from .opening_empty_shot_insert import OpeningEmptyShotInsertConstraint
 from .opening_empty_shot_cap import OpeningEmptyShotCapConstraint  # F15 开头空镜硬上限
 from .opening_character_presence import OpeningCharacterPresenceConstraint  # R2 开篇人物兜底（v6.62.2, 09-07 通用）
+from .opening_empty_shot_remove import OpeningEmptyShotRemoveConstraint  # R2b 开头空镜硬删除（v6.64, P4.3+）
 from .dialogue_density import DialogueDensityConstraint  # R3 对白密度兜底（v6.62.2, 09-07 通用）
 from .dialogue_grounding import DialogueGroundingConstraint  # F16 失锚台词硬替换
 from .frame_layouts_required import FrameLayoutsRequiredConstraint  # R4 frame_layouts 必填（v6.62.2, 09-07 通用）
@@ -142,13 +143,14 @@ ALL_CONSTRAINTS.extend([
     FramingPrefixFillConstraint(),  # F11 prompt 无景别词 → 推断前置「[景别]」（v6.62, 09-06）
     SelfReviewConstraint(),  # SR opt-in via SELF_REVIEW_ENABLED=1
     SplitContentSimilarityConstraint(),  # A7 拆分镜内容重复检测（v6.58, 09-03）
-    MandatoryBizFieldsConstraint(),  # B1 业务必填字段兜底（doubao 适配，2026-09-04）
+    MandatoryBizFieldsConstraint(),  # B1 业务必填字段兜底（v6.60 doubao 适配引入，v6.61 起全 provider 共用）
     OvershoulderConsistencyConstraint(),
     SurfaceBackfillConstraint(),  # F12 char_layout.surface 承重面回填（v6.62.1, 09-06）
     FramingVarietyConstraint(),  # F13 景别多样性达标：unique<5 → 内容适配补缺（v6.62.1, 09-06）
     GazeTypoConstraint(),  # F14 目光错别字归一：倒倒→紧紧（v6.62.1, 09-06）
     # v6.62.2 (09-07) 通用兜底加严：4 个新约束，不绑小说角色，跨章节/换书自动跟随
     OpeningCharacterPresenceConstraint(),  # R2 前 2 镜必含 1 个角色（从 script.characters 动态取）
+    OpeningEmptyShotRemoveConstraint(),     # R2b 开头空镜硬删除
     DialogueDensityConstraint(),            # R3 对白镜占比 ≥ 30%（仅看通用对话关键词）
     DialogueGroundingConstraint(),
     FrameLayoutsRequiredConstraint(),      # R4 frame_layouts 必填 + 长度对齐

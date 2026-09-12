@@ -20,6 +20,57 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from step01_script_gen.climax_words import KEYWORD_SYNONYMS, climax_words_for_gap
 
+# ============================================================================
+# 台词定位（v6.63.1 自 main.py 下沉：constraints 层需复用，反向 import main
+# 会造成重依赖 + 循环导入风险 + 触发 style_prefix 弃用 shim。main.py 保留
+# 同名兼容导出，行为零变化。）
+# ============================================================================
+
+def _locate_narration_in_novel(narration: str, novel_text: str) -> tuple:
+    """在 novel_text 里找 narration 的最长公共子串（LCS 简化：滑动窗口）。
+
+    返回 (start, end) 字符偏移；找不到返回 (-1, -1)。
+    - 完整 narration 命中：直接返回
+    - 标点归一化（：→"，" → "等）：再尝试一次
+    - 按标点/空白切 narration 为多个 8-16 字短语（短句优先匹配）
+    - 每个短语在 novel_text 里找首次出现位置
+    - 取**最靠后**的短语位置作 end，往前推 64 字作 start（保证覆盖整句）
+    """
+    if not narration or not novel_text:
+        return (-1, -1)
+    import re as _re_loc
+    # 标点归一化：把中文引号/弯引号统一，全角冒号 → 半角冒号
+    def _normalize(s: str) -> str:
+        s = s.replace("：", ":")  # 全角冒号 → 半角
+        s = s.replace("\u201c", '"').replace("\u201d", '"')  # CN curly double quotes -> ASCII
+        s = s.replace("\u2018", "'").replace("\u2019", "'")  # CN curly single quotes -> ASCII
+        s = s.replace("…", "...")  # 横向省略号 → 三点
+        s = s.replace("。", ".")  # 句号归一
+        s = s.replace("，", ",")  # 逗号归一
+        return s
+    narr_norm = _normalize(narration)
+    novel_norm = _normalize(novel_text)
+    # 1) 完整 narration 命中（归一化后）：直接返回
+    if narr_norm in novel_norm:
+        idx = novel_norm.find(narr_norm)
+        return (idx, idx + len(narr_norm))
+    # 2) 切短语（按标点 / 「道:」切）—— 阈值从 6 放宽到 3，避免「啊…啊…救命啊」整段被切碎
+    chunks = _re_loc.split(r'[,.!?;:\n]', narr_norm)
+    chunks = [c.strip() for c in chunks if c and len(c.strip()) >= 3]
+    if not chunks:
+        return (-1, -1)
+    # 3) 找「人名 + 动词/对象」短语作锚（剥离「道:」前缀）
+    # 优先尝试最长的 chunk，再依次退到短的
+    chunks.sort(key=len, reverse=True)
+    for chunk in chunks[:5]:  # 试 5 个最长的
+        pos = novel_norm.find(chunk)
+        if pos >= 0:
+            end = pos + len(chunk)
+            start = max(0, pos - 64)
+            return (start, end)
+    return (-1, -1)
+
+
 def find_novel_climax_excerpt(novel_text, length=400):
     """Locate the most conflict-dense passage in novel text (climax segment).
 
@@ -140,8 +191,14 @@ _DIALOGUE_QUOTE_RE = re.compile(
     "|「([^」]{2,60})」"
     "|『([^』]{2,60})』"
 )
+DIALOGUE_QUOTE_RE = _DIALOGUE_QUOTE_RE  # 公开别名（v6.63.1，dialogue_grounding 复用）
 # 纯拟声/感叹（无实义，做不了字幕）——按「不含常用实词」粗筛太重，直接列常见几类
-_ONOMATOPOEIA = ("泼啦", "卟嗵", "哎呀", "咕咚", "哗啦", "吱呀", "砰", "嗖")
+# v6.63.1：与 dialogue_grounding 的拟声词表合并为单一事实源（公开名供跨模块复用）
+ONOMATOPOEIA = (
+    "泼啦", "卟嗵", "哎呀", "咕咚", "哗啦", "吱呀", "砰", "嗖",
+    "啊", "呃", "嗯", "哦", "呀", "哇", "哼", "呵",
+)
+_ONOMATOPOEIA = ONOMATOPOEIA  # 兼容本模块既有引用
 
 
 def extract_source_dialogue(novel_text: str, tail_ratio: float = 0.5,

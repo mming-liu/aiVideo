@@ -10,8 +10,7 @@ env 变量，而不是再加字面量。
 
 # ---- 供应商默认值 ----
 # TEXT_PROVIDER 默认值（供应商选择出现于 shared/config.py 全局段与
-# _text_gen/config.py 包配置两处，默认值必须同源；main.py 挂载门与
-# doubao_hardfix 自动注册钩子也引用此常量）
+# _text_gen/config.py 包配置两处，默认值必须同源；main.py 挂载门也引用此常量）
 TEXT_PROVIDER_DEFAULT = "deepseek"
 
 # ---- 分镜 JSON 解析（step01 main，解析失败重试） ----

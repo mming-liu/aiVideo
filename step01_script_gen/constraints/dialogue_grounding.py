@@ -31,38 +31,51 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from .base import Constraint
 from .types import RepairRecord, Severity
-
-
-# 引号正则（复用 gap_analysis 的模式，避免循环 import）
-_DIALOGUE_QUOTE_RE = re.compile(
-    r"「([^」]{2,60})」"
-    r"|『([^』]{2,60})』"
-    r"|\"([^\"]{2,60})\""
-    r"|'([^']{2,60})'"
+# v6.63.1：引号正则/拟声词表/台词定位函数统一从 gap_analysis 取（单一事实源），
+# 不再反向 import main.py（重依赖 + 循环导入风险 + 触发 style_prefix 弃用 shim）。
+# 修复：旧引号正则缺中文弯引号 “”——真实小说 31110 处 “”、0 处「」，
+# 导致 _extract_dialogue_in_range 永远抽不到候选 → 失锚台词全被清空而非替换。
+from step01_script_gen.gap_analysis import (
+    DIALOGUE_QUOTE_RE,
+    ONOMATOPOEIA,
+    _locate_narration_in_novel,
 )
 
-# 拟声词/纯感叹（过滤掉，不作有效台词）
-_ONOMATOPOEIA = ("啊", "呃", "嗯", "哦", "呀", "哇", "哼", "呵")
+
+# 说话人识别：引号前紧邻的「XX道：/XX喝道：」形态（v6.63.1）
+_SPEAKER_RE = re.compile(r"([\u4e00-\u9fff]{1,6})[道曰说]\s*[：:]?\s*$")
 
 
 def _extract_dialogue_in_range(text, start=0, end=None, limit=5):
-    """从 text[start:end] 范围内提取引号内台词."""
+    """从 text[start:end] 范围内提取引号内台词.
+
+    Returns:
+        [(line, speaker), ...]——speaker 为引号前紧邻「XX道：」的说话人，
+        识别不到为 ""（供 _pick_best_dialogue 做同角色优先匹配）。
+    """
     if end is None:
         end = len(text)
     out = []
     seen = set()
-    for m in _DIALOGUE_QUOTE_RE.finditer(text, start, end):
+    for m in DIALOGUE_QUOTE_RE.finditer(text, start, end):
         line = next(
             (g for g in m.groups() if g is not None), ""
         ).strip()
         if not (4 <= len(line) <= 30):
             continue
-        if any(o in line for o in _ONOMATOPOEIA) and len(line) <= 2:
+        # v6.63.1 修复拟声词过滤（旧条件 and len(line) <= 2 在 len>=4 保证下
+        # 永远为假，是死代码）：剥掉非汉字后只剩拟声字 → 纯感叹，无实义，跳过
+        han = re.sub(r"[^\u4e00-\u9fff]", "", line)
+        if han and all(ch in ONOMATOPOEIA for ch in han):
             continue
         if line in seen:
             continue
         seen.add(line)
-        out.append(line)
+        # 说话人：引号前 ≤12 字内的「XX道：」
+        prefix = text[max(0, m.start() - 12):m.start()]
+        sm = _SPEAKER_RE.search(prefix)
+        speaker = sm.group(1) if sm else ""
+        out.append((line, speaker))
         if len(out) >= limit:
             break
     return out
@@ -121,15 +134,19 @@ def _locate_shot_in_novel(shot, novel_text):
 def _pick_best_dialogue(candidates, bad_line):
     """从候选台词中选一句最合适的替换 bad_line.
 
+    Args:
+        candidates: [(line, speaker), ...]——speaker 为原文「XX道：」识别的说话人
+        bad_line: 被替换的失锚台词
+
     策略：
-    1. 长度最接近的优先
-    2. 有相同角色名的优先（如果 bad_line 含「XX：」格式）
-    3. 含相同关键词的优先
+    1. 说话人匹配的强优先（原文「XX道：”与失锚台词「XX：」同角色）
+       ——避免把张三的台词安进李四嘴里（v6.63.1 错位缓解）
+    2. 台词内容含原角色名的次优先
+    3. 长度最接近 + 字符重叠加权
     """
     if not candidates:
         return ""
 
-    bad_len = len(bad_line)
     bad_stripped = bad_line
 
     # 提取角色名（如果是「角色：台词」格式）
@@ -143,13 +160,20 @@ def _pick_best_dialogue(candidates, bad_line):
         bad_role = parts[0].strip()
         bad_stripped = parts[1].strip()
 
-    def score(cand):
+    def _role_match(a, b):
+        return bool(a) and bool(b) and (a == b or a in b or b in a)
+
+    def score(item):
+        cand, speaker = item
         s = 0
         # 长度接近度
         s -= abs(len(cand) - len(bad_stripped)) * 2
         # 角色名匹配（如果 bad_line 有角色名，cand 可能没前缀，但台词内容匹配）
         if bad_role and bad_role in cand:
             s += 10
+        # 说话人匹配（原文「XX道：」标注与台词角色前缀一致）——强信号
+        if _role_match(bad_role, speaker):
+            s += 25
         # 关键词重叠
         bad_chars = set(bad_stripped)
         cand_chars = set(cand)
@@ -158,7 +182,7 @@ def _pick_best_dialogue(candidates, bad_line):
         return s
 
     best = max(candidates, key=score)
-    return best
+    return best[0]
 
 
 class DialogueGroundingConstraint(Constraint):
@@ -180,9 +204,8 @@ class DialogueGroundingConstraint(Constraint):
             if not narr:
                 continue  # 没台词，跳过
 
-            # 检查是否在原文中有出处
-            from step01_script_gen.main import _locate_narration_in_novel
-            s, e = _locate_narration_in_novel(narr, ctx.novel_text)
+            # 检查是否在原文中有出处（v6.63.1 改从 gap_analysis 导入，见模块头说明）
+            s, _e = _locate_narration_in_novel(narr, ctx.novel_text)
             if s >= 0:
                 continue  # 有出处，跳过
 

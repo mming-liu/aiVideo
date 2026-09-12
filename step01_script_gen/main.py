@@ -1,4 +1,4 @@
-"""step01_script_gen - 分镜脚本生成入口（v6 增强版）
+﻿"""step01_script_gen - 分镜脚本生成入口（v6 增强版）
 
 功能：
   - 从小说提取章节内容
@@ -36,6 +36,7 @@ from shared.config import (
     GAP_ANALYSIS_ENABLED, GAP_MAX_REGEN_ATTEMPTS,
     SHOT_COUNT_REGEN_ENABLED,
     REPAIR_ROUNDS_ENABLED,
+    SCRIPT_CANDIDATE_TOPK,
 )
 
 # v6.23：大纲两阶段开关（ShortVideoDirector director-outline 吸收，默认开启）
@@ -191,7 +192,9 @@ def _check_fps_consistency(script: dict) -> None:
 # ============================================================================
 
 def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
-                   outline: dict | None = None) -> str:
+                   outline: dict | None = None,
+                   temperature: float = 0.2,
+                   model: str | None = None) -> str:
     """调用 LLM 生成脚本，返回原始文本.
 
     Args:
@@ -214,8 +217,9 @@ def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
     req = TextGenerationRequest(
         system_prompt=_SYSTEM_PROMPT,
         user_prompt=prompt,
-        temperature=0.2,  # v6.5: 降低温度防止幻觉
+        temperature=temperature,  # v6.5: 降低温度防止幻觉；v6.64 多候选用不同温度增加多样性
         json_schema=SCRIPT_SCHEMA,
+        model=model,  # v6.66: 跨模型候选池——per-request model 覆盖（None=用 provider 默认）
     )
     _logger.info("[INFO] 正在调用 LLM 生成分镜脚本...")
     _console("  [生成] 正在调用 LLM 生成分镜脚本（18 镜，约需 3-6 分钟）...")
@@ -296,7 +300,7 @@ def gen_hook_script(novel_text: str, bank=None, objects_bank=None,
     req = TextGenerationRequest(
         system_prompt="你是短视频脚本大师，擅长在视频开头制造悬念和吸引力。禁止血腥暴力细节。",
         user_prompt=prompt,
-        temperature=0.2,  # v6.5: 降低温度防止幻觉
+        temperature=0.2,  # v6.5: 降低温度防止幻觉；v6.64 多候选用不同温度增加多样性
         json_schema=HOOK_SCHEMA,
     )
     _logger.info("[INFO] 正在调用 LLM 生成钩子分镜...")
@@ -594,50 +598,26 @@ def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
     return {"_has_hard": has_hard, "shots": per_shot}
 
 
-def _locate_narration_in_novel(narration: str, novel_text: str) -> tuple:
-    """在 novel_text 里找 narration 的最长公共子串（LCS 简化：滑动窗口）。
+# v6.63.1：_locate_narration_in_novel 下沉至 gap_analysis（constraints 层复用，
+# 反向 import main 有重依赖 + 循环导入风险 + 触发 style_prefix 弃用 shim）。
+# 此处保留同名兼容导出，行为零变化。
+from step01_script_gen.gap_analysis import _locate_narration_in_novel  # noqa: F401,E402
 
-    返回 (start, end) 字符偏移；找不到返回 (-1, -1)。
-    - 完整 narration 命中：直接返回
-    - 标点归一化（：→"，" → "等）：再尝试一次
-    - 按标点/空白切 narration 为多个 8-16 字短语（短句优先匹配）
-    - 每个短语在 novel_text 里找首次出现位置
-    - 取**最靠后**的短语位置作 end，往前推 64 字作 start（保证覆盖整句）
+
+def _strip_runtime_fields(obj):
+    """递归剥掉 dict 下划线开头的 key（运行时数据，不入盘）.
+
+    与 step02a_frame_gen.main._strip_runtime_fields 同约定：下划线开头键 =
+    「不入盘」信号（_run_metadata/_merge_candidate/_qc_last 等只留在内存）。
+    v6.63.1：step01 落盘时统一剥——此前只有 step02a 回写时才剥，
+    _run_metadata 会泄进 script_result.json。
     """
-    if not narration or not novel_text:
-        return (-1, -1)
-    import re as _re_loc
-    # 标点归一化：把中文引号/弯引号统一，全角冒号 → 半角冒号
-    def _normalize(s: str) -> str:
-        s = s.replace("：", ":")  # 全角冒号 → 半角
-        s = s.replace('"', '"').replace('"', '"')  # 中文弯引号 → ASCII
-        s = s.replace(''', "'").replace(''', "'")  # 中文单引号 → ASCII
-        s = s.replace("…", "...")  # 横向省略号 → 三点
-        s = s.replace("。", ".")  # 句号归一
-        s = s.replace("，", ",")  # 逗号归一
-        return s
-    narr_norm = _normalize(narration)
-    novel_norm = _normalize(novel_text)
-    # 1) 完整 narration 命中（归一化后）：直接返回
-    if narr_norm in novel_norm:
-        idx = novel_norm.find(narr_norm)
-        return (idx, idx + len(narr_norm))
-    # 2) 切短语（按标点 / 「道:」切）—— 阈值从 6 放宽到 3，避免「啊…啊…救命啊」整段被切碎
-    chunks = _re_loc.split(r'[,.!?;:\n]', narr_norm)
-    chunks = [c.strip() for c in chunks if c and len(c.strip()) >= 3]
-    if not chunks:
-        return (-1, -1)
-    # 3) 找「人名 + 动词/对象」短语作锚（剥离「道:」前缀）
-    # 优先尝试最长的 chunk，再依次退到短的
-    chunks.sort(key=len, reverse=True)
-    for chunk in chunks[:5]:  # 试 5 个最长的
-        pos = novel_norm.find(chunk)
-        if pos >= 0:
-            end = pos + len(chunk)
-            start = max(0, pos - 64)
-            return (start, end)
-    return (-1, -1)
-
+    if isinstance(obj, dict):
+        return {k: _strip_runtime_fields(v) for k, v in obj.items()
+                if not (isinstance(k, str) and k.startswith("_"))}
+    if isinstance(obj, list):
+        return [_strip_runtime_fields(v) for v in obj]
+    return obj
 
 # ============================================================================
 # GAP 重试回退保护（v6.47，08-27）——重试版质量退化时保留上一版
@@ -746,6 +726,113 @@ def _climax_count(script: dict, novel_text: str) -> int:
     except Exception:
         return 0
 
+
+
+def _score_script(script: dict, novel_text: str) -> dict:
+    """通用脚本质量打分（v6.64，P4.5 多路径择优）。
+
+    纯量化指标，零硬编码，换小说自动跟随。用于多候选择优：分数越高越好。
+
+    返回 {
+        "total": float,        # 总分 0-100
+        "climax_count": int,   # 高潮镜数
+        "climax_complete": bool,  # 高潮是否有结果
+        "dialogue_ratio": float,  # 对白镜占比 0-1
+        "ungrounded_count": int,  # 失锚台词数
+        "duration_sec": float,    # 原始总时长
+        "shot_count": int,        # 镜头数
+        "detail": str,            # 人类可读摘要
+    }
+    """
+    shots = script.get("shots", []) or []
+    n = len(shots)
+    score = 0.0
+    detail_parts = []
+
+    # 1) 高潮镜数（满分 25 分）：0=0, 1=10, 2=20, 3+=25
+    climax_n = _climax_count(script, novel_text)
+    if climax_n >= 3:
+        score += 25
+    elif climax_n == 2:
+        score += 20
+    elif climax_n == 1:
+        score += 10
+    detail_parts.append(f"高潮{climax_n}镜")
+
+    # 2) 高潮完整性（满分 15 分）：有结果态 vs 只有起势
+    try:
+        from step01_script_gen.constraints.climax_completeness import (
+            _get_climax_shots, _has_result,
+        )
+        cidx = _get_climax_shots(shots)
+        climax_complete = bool(cidx) and any(
+            _has_result(shots[i]) for i in cidx if i < n
+        )
+    except Exception:
+        climax_complete = False
+    if climax_complete:
+        score += 15
+    elif climax_n == 0:
+        pass  # 零高潮，本条不加分也不减分（由高潮镜数项负责）
+    else:
+        score += 5  # 有高潮但不完整，给部分分
+    detail_parts.append("高潮完整" if climax_complete else "高潮不完整")
+
+    # 3) 对白密度（满分 20 分）：≥40%=20, ≥30%=15, ≥20%=10, ≥10%=5, 0=0
+    from step01_script_gen.constraints.dialogue_density import _has_dialogue
+    dlg_n = sum(1 for s in shots if _has_dialogue(s.get("narration_segment", "")))
+    dlg_ratio = dlg_n / n if n else 0
+    if dlg_ratio >= 0.40:
+        score += 20
+    elif dlg_ratio >= 0.30:
+        score += 15
+    elif dlg_ratio >= 0.20:
+        score += 10
+    elif dlg_ratio >= 0.10:
+        score += 5
+    detail_parts.append(f"对白{dlg_n}/{n}={int(dlg_ratio*100)}%")
+
+    # 4) 台词锚定率（满分 20 分）：0 失锚=20, 1=15, 2=10, 3+=5
+    ung = _count_ungrounded_narrations(script, novel_text) if novel_text else 0
+    if ung == 0:
+        score += 20
+    elif ung == 1:
+        score += 15
+    elif ung == 2:
+        score += 10
+    else:
+        score += 5
+    detail_parts.append(f"失锚{ung}条")
+
+    # 5) 时长合规（满分 10 分）：60-90s=10, 50-60=7, 90-120=7, <50=3, >120=3
+    dur = _retry_raw_duration(script)
+    if 60 <= dur <= 90:
+        score += 10
+    elif 50 <= dur < 60 or 90 < dur <= 120:
+        score += 7
+    else:
+        score += 3
+    detail_parts.append(f"时长{dur:.0f}s")
+
+    # 6) 镜数合规（满分 10 分）：8-20=10, 5-7=5, 20+=5, <5=0
+    if 8 <= n <= 20:
+        score += 10
+    elif 5 <= n < 8 or n > 20:
+        score += 5
+    detail_parts.append(f"镜数{n}")
+
+    detail = ", ".join(detail_parts) + f" → {score:.0f}分"
+
+    return {
+        "total": round(score, 1),
+        "climax_count": climax_n,
+        "climax_complete": climax_complete,
+        "dialogue_ratio": round(dlg_ratio, 3),
+        "ungrounded_count": ung,
+        "duration_sec": round(dur, 1),
+        "shot_count": n,
+        "detail": detail,
+    }
 
 def _retry_degrade_reason(prev: dict, new: dict, novel_text: str,
                           *, climax_rescue: bool = False) -> str | None:
@@ -1320,7 +1407,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     # v6.42：改用新 Constraint 框架（29 条），保留 HARD_FIX_USE_OLD=1 回退开关
     from step01_script_gen.constraints import run_hard_fix as _hfix
     try:
-        script = _hfix(script, is_in_repair_loop=True, is_final_pass=False)
+        script = _hfix(script, is_in_repair_loop=True, is_final_pass=False, novel_text=novel_text)
     except Exception as _hfx:
         _logger.warn(f"[WARN] 修复后 hard_fix 兜底失败（保留原版）: {_hfx}")
     # 08-19：hard_fix_injury_continuity 按 location 精确匹配 + victim 提取不准，
@@ -1555,6 +1642,189 @@ def _snapshot_run_artifacts(script: dict | None = None) -> None:
         except Exception:
             pass
 
+def _generate_script_candidates(
+    novel_text: str,
+    character_bank=None,
+    scene_objects_bank=None,
+    outline: dict | None = None,
+) -> list:
+    """多路径候选生成（v6.65 并行化，09-12）.
+
+    生成 SCRIPT_CANDIDATE_TOPK 个独立候选，返回 [(score_dict, script)]（分数降序）。
+    - TOPK=1：串行路径零变化（deepseek 默认）
+    - TOPK>1：并行生成——doubao 单候选 2-3 分钟，串行 3 候选 8 分钟是流水线
+      最大耗时项；AGENT_PLAN_TEXT_RPM=10 限速下 3 路并发合法。
+      每轮并行补齐差额，失败/解析坏的候选进入下一轮重试（至 _max_attempts）。
+    - 不同候选用不同温度增加多样性（第1个默认 0.2，后续 +0.15 递增）
+    """
+    from shared.config import SCRIPT_CANDIDATE_TOPK, SCRIPT_CANDIDATE_MODELS
+    _candidates: list = []  # [(score_dict, script)]
+    _last_err: Exception | None = None
+    _max_attempts = SCRIPT_PARSE_RETRIES * max(1, SCRIPT_CANDIDATE_TOPK)
+    _attempt = 0
+    _task_idx = 0  # 候选序号（温度梯度 0.2 + 0.15*idx）
+
+    def _gen_one_candidate(_idx: int):
+        """生成单个候选：调 LLM → 解析 → 打分（线程内完成，返回 (score, script)）."""
+        _temp = 0.2 + 0.15 * _idx
+        # v6.66: 跨模型候选池——候选按序号轮转分配模型；空列表=全用默认模型
+        _model = SCRIPT_CANDIDATE_MODELS[_idx % len(SCRIPT_CANDIDATE_MODELS)] if SCRIPT_CANDIDATE_MODELS else None
+        raw = gen_spy_script(
+            novel_text, character_bank, scene_objects_bank,
+            outline=outline,
+            temperature=_temp,
+            model=_model,
+        )
+        _cand = parse_response(raw, novel_text=novel_text)
+        _scr = _score_script(_cand, novel_text)
+        return _scr, _cand
+
+    if SCRIPT_CANDIDATE_TOPK <= 1:
+        # TOPK=1：原串行路径零变化（deepseek 默认，含重试 sleep 语义）
+        while _attempt < SCRIPT_PARSE_RETRIES:
+            _attempt += 1
+            try:
+                _scr, _cand = _gen_one_candidate(_task_idx)
+                _candidates.append((_scr, _cand))
+                break
+            except RuntimeError as e:
+                _last_err = e
+                _logger.warn(f"[WARN] LLM 生成失败（尝试 {_attempt}/{SCRIPT_PARSE_RETRIES}）: {e}")
+                _console(f"  [重试] LLM 生成失败，重新调用（{_attempt}/{SCRIPT_PARSE_RETRIES}）...")
+                import time as _t
+                _t.sleep(SCRIPT_PARSE_RETRY_SLEEP_SEC)
+            except (ValueError, json.JSONDecodeError) as e:
+                _last_err = e
+                _logger.warn(f"[WARN] 分镜 JSON 解析失败（尝试 {_attempt}/{SCRIPT_PARSE_RETRIES}）: {e}")
+                _console(f"  [重试] JSON 解析失败，重新调用 LLM（{_attempt}/{SCRIPT_PARSE_RETRIES}）...")
+    else:
+        import concurrent.futures as _fut
+        while len(_candidates) < SCRIPT_CANDIDATE_TOPK and _attempt < _max_attempts:
+            _need = SCRIPT_CANDIDATE_TOPK - len(_candidates)
+            _batch = min(_need, _max_attempts - _attempt)
+            if _batch <= 0:
+                break
+            with _fut.ThreadPoolExecutor(max_workers=_batch) as _ex:
+                _futs = {
+                    _ex.submit(_gen_one_candidate, _task_idx + _j): _j
+                    for _j in range(_batch)
+                }
+                _task_idx += _batch
+                for _f in _fut.as_completed(_futs):
+                    _attempt += 1
+                    try:
+                        _scr, _cand = _f.result()
+                        _candidates.append((_scr, _cand))
+                        _logger.info(
+                            f"[CANDIDATE] 候选 {len(_candidates)}/{SCRIPT_CANDIDATE_TOPK}: "
+                            f"{_scr['detail']}"
+                        )
+                    except RuntimeError as e:
+                        _last_err = e
+                        _logger.warn(f"[WARN] LLM 生成失败（尝试 {_attempt}/{_max_attempts}）: {e}")
+                        _console(f"  [重试] LLM 生成失败（{_attempt}/{_max_attempts}）...")
+                    except (ValueError, json.JSONDecodeError) as e:
+                        _last_err = e
+                        _logger.warn(f"[WARN] 分镜 JSON 解析失败（尝试 {_attempt}/{_max_attempts}）: {e}")
+                        _console(f"  [重试] JSON 解析失败（{_attempt}/{_max_attempts}）...")
+
+    if not _candidates:
+        raise RuntimeError(f"分镜 JSON 连续 {_max_attempts} 次解析失败: {_last_err}")
+    _candidates.sort(key=lambda x: -x[0]["total"])
+    return _candidates
+
+
+def _cross_run_best_guard(script: dict, novel_text: str) -> None:
+    """跨 run 保优护栏（P4.6，2026-09-11）：防止更好的历史版本被差 run 覆盖.
+
+    背景：doubao 输出方差大（实测同章 38~90 分），90 分终稿可能被下一次
+    60 分 run 直接覆盖。快照机制只留档不比较，用户事后才知道被回退。
+
+    行为：
+      1. 给新终稿打分
+      2. 给 snapshots/ 里最近 N（env BEST_GUARD_SCAN_N，默认 8）份快照打分，
+         取最优（**不含本次快照**——按时间戳排除）
+      3. 快照最优 > 新终稿 + BEST_GUARD_MARGIN（默认 3 分）：
+         - env KEEP_BEST_SNAPSHOT=1（默认）→ 自动恢复最优快照为正式输出，
+           本次较差版本仍留在 snapshots/ 可随时取回
+         - 否则只告警不动作
+      4. 打分/恢复失败只告警，不影响主流程
+    """
+    try:
+        import os as _os
+        import shutil as _shutil
+
+        snap_dir = OUTPUT_FILE.parent / "snapshots"
+        if not snap_dir.is_dir():
+            return
+        snaps = sorted(snap_dir.glob("script_result_*.json"))
+        if not snaps:
+            return
+
+        scan_n = max(1, int(_os.getenv("BEST_GUARD_SCAN_N", "8")))
+        margin = float(_os.getenv("BEST_GUARD_MARGIN", "3"))
+        keep_best = _os.getenv("KEEP_BEST_SNAPSHOT", "1") == "1"
+
+        new_score = _score_script(script, novel_text)["total"]
+
+        # 本次快照是 snaps 里最新一份（刚由 _snapshot_run_artifacts 写入）
+        candidates = snaps[:-1] if len(snaps) > 1 else []
+        candidates = candidates[-scan_n:]
+
+        best_path = None
+        best_score = -1.0
+        for sp in candidates:
+            try:
+                with open(sp, "r", encoding="utf-8") as f:
+                    old = json.load(f)
+                sc = _score_script(old, novel_text)["total"]
+            except Exception:
+                continue
+            if sc > best_score:
+                best_score = sc
+                best_path = sp
+
+        if best_path is None or best_score <= new_score + margin:
+            return
+
+        _logger.warn(
+            "[BEST-GUARD] 新终稿 " + str(new_score) + " 分 < 快照最优 " +
+            str(best_score) + " 分（" + best_path.name + "）"
+        )
+        if not keep_best:
+            _logger.warn("[BEST-GUARD] KEEP_BEST_SNAPSHOT=0 → 仅告警，保留新终稿")
+            return
+        with open(best_path, "r", encoding="utf-8") as f:
+            best_script = json.load(f)
+        # 恢复版补跑标准 hard_fix（与落盘前管线同路径）：快照可能出自
+        # 旧代码版本，补跑让它享受最新 constraint 修复（幂等，失败不阻断）
+        try:
+            from step01_script_gen.constraints import run_hard_fix as _bg_hfix
+            best_script = _bg_hfix(
+                best_script, is_in_repair_loop=False,
+                is_final_pass=True, novel_text=novel_text,
+            )
+        except Exception as _bg_he:
+            _logger.warn(f"[BEST-GUARD] 恢复版补跑 hard_fix 失败（保留原样）: {_bg_he}")
+        restored_score = _score_script(best_script, novel_text)["total"]
+        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+            json.dump(_strip_runtime_fields(best_script), f, ensure_ascii=False, indent=2)
+        _logger.warn(
+            "[BEST-GUARD] 已自动恢复快照最优版为正式输出（补修复后 "
+            + str(restored_score) + " 分）；本次 " + str(new_score)
+            + " 分版本保留于 snapshots/"
+        )
+        _console(
+            "  [BEST-GUARD] 本次 " + str(new_score) + " 分低于历史最优 "
+            + str(best_score) + " 分，已恢复历史最优版（补修复后 "
+            + str(restored_score) + " 分；本次版本在 snapshots/ 可取回）"
+        )
+    except Exception as _bg_e:
+        try:
+            _logger.warn(f"[BEST-GUARD] 护栏执行失败（不影响主流程）: {_bg_e}")
+        except Exception:
+            pass
+
 
 def main() -> None:
     """主流程：读取章节 → 生成脚本 → 生成钩子 → 验证 → 后处理 → 保存.
@@ -1671,7 +1941,7 @@ def main() -> None:
         # _compute_timecodes（会按 motion_desc 覆盖 W6 拉伸的 duration_sec）。
         from step01_script_gen.constraints import run_hard_fix as _hfix_cached
         try:
-            script = _hfix_cached(script, is_in_repair_loop=False, is_final_pass=True)
+            script = _hfix_cached(script, is_in_repair_loop=False, is_final_pass=True, novel_text=novel_text)
         except Exception as _hfe_c:
             _logger.warn(f"[WARN] 缓存命中落盘前 hard_fix 失败（保留原版）: {_hfe_c}")
         # C5 修复（08-11）：fps 一致性校验（timeline 此时已存在）
@@ -1679,7 +1949,7 @@ def main() -> None:
         # 早于 hard_fix 校验会拿到过期时长（与 line ~1931 非缓存路径同序）。
         _check_fps_consistency(script)
         with open(SCRIPT_FILE, "w", encoding="utf-8") as f:
-            json.dump(script, f, ensure_ascii=False, indent=2)
+            json.dump(_strip_runtime_fields(script), f, ensure_ascii=False, indent=2)
         _snapshot_run_artifacts(script)
         _logger.info("时间轴已重新计算")
         # 缓存命中：恢复 stdout 并显示最终摘要
@@ -1703,29 +1973,38 @@ def main() -> None:
     # 生成脚本（含 JSON 解析重试）
     # LLM 偶发输出损坏的 JSON（DeepSeek 尤甚：内部中文引号未转义/缺逗号等）。
     # 解析失败时重新调用 LLM 重试，而不是让整个流水线崩溃（每次约 3-6 分钟）。
-    script = None
-    last_err = None
-    for attempt in range(1, 1 + SCRIPT_PARSE_RETRIES):
+    # v6.64（P4.5，09-11）：多路径择优——生成 SCRIPT_CANDIDATE_TOPK 个独立候选，
+    # 取质量分最高的进入 GAP 循环。用 token 换稳定性，对冲模型方差。
+    # 默认 doubao=2 / deepseek=1（向下兼容：=1 时行为零变化）。
+    _candidates = _generate_script_candidates(
+        novel_text, character_bank, scene_objects_bank, pre_extracted_outline,
+    )
+
+
+    # 选总分最高的候选
+    _candidates.sort(key=lambda x: -x[0]["total"])
+    _best_score, script = _candidates[0]
+    if SCRIPT_CANDIDATE_TOPK > 1:
+        _logger.info(
+            f"[CANDIDATE] 多路径择优完成：{len(_candidates)} 个候选 → "
+            f"最优分 {_best_score['total']}（{_best_score['detail']}）"
+        )
+        _console(
+            f"  [择优] {len(_candidates)} 个候选 → 最优 {_best_score['total']}分 "
+            f"（{_best_score['detail']}）"
+        )
+        # 其余候选存盘供调试
         try:
-            raw = gen_spy_script(novel_text, character_bank, scene_objects_bank,
-                                  outline=pre_extracted_outline)
-        except RuntimeError as e:
-            # 生成失败（如 DeepSeek 返回空文本）：短暂等待后重试，而不是中断流水线
-            last_err = e
-            _logger.warn(f"[WARN] LLM 生成失败（尝试 {attempt}/{SCRIPT_PARSE_RETRIES}）: {e}")
-            _console(f"  [重试] LLM 生成失败，重新调用（{attempt}/{SCRIPT_PARSE_RETRIES}）...")
-            import time as _t
-            _t.sleep(SCRIPT_PARSE_RETRY_SLEEP_SEC)
-            continue
-        try:
-            script = parse_response(raw, novel_text=novel_text)
-            break
-        except (ValueError, json.JSONDecodeError) as e:
-            last_err = e
-            _logger.warn(f"[WARN] 分镜 JSON 解析失败（尝试 {attempt}/{SCRIPT_PARSE_RETRIES}）: {e}")
-            _console(f"  [重试] JSON 解析失败，重新调用 LLM（{attempt}/{SCRIPT_PARSE_RETRIES}）...")
-    if script is None:
-        raise RuntimeError(f"分镜 JSON 连续 {SCRIPT_PARSE_RETRIES} 次解析失败: {last_err}")
+            import copy as _cp
+            _cand_dir = CHAPTER_DIR / "candidates"
+            _cand_dir.mkdir(parents=True, exist_ok=True)
+            for _ci, (_cs, _cscript) in enumerate(_candidates):
+                _cpath = _cand_dir / f"candidate_{_ci+1}_score{int(_cs['total'])}.json"
+                with open(_cpath, "w", encoding="utf-8") as _cf:
+                    json.dump(_strip_runtime_fields(_cp.deepcopy(_cscript)), _cf,
+                              ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     # ========== 差距分析（v5.0 新增）==========
     # 若差距过大，重新生成（最多2次）
@@ -1750,7 +2029,7 @@ def main() -> None:
                 # 保存脚本并生成完整报告
                 partial_path = CHAPTER_DIR / "script_result.partial.json"
                 with open(partial_path, "w", encoding="utf-8") as _f:
-                    json.dump(script, _f, ensure_ascii=False, indent=2)
+                    json.dump(_strip_runtime_fields(script), _f, ensure_ascii=False, indent=2)
                 report = generate_gap_report(
                     str(partial_path),
                     "锦衣夜行_77119小说.txt",
@@ -1800,7 +2079,7 @@ def main() -> None:
             req = TextGenerationRequest(
                 system_prompt=_SYSTEM_PROMPT,
                 user_prompt=prompt,
-                temperature=0.2,  # v6.5: 降低温度防止幻觉
+                temperature=0.2,  # v6.5: 降低温度防止幻觉；v6.64 多候选用不同温度增加多样性
                 json_schema=SCRIPT_SCHEMA,
             )
             result = service.generate(req)
@@ -2094,7 +2373,7 @@ def main() -> None:
     # v6.42：改用新 Constraint 框架（is_final_pass=True 让 RuntimeExtendConstraint 拉伸时长）
     from step01_script_gen.constraints import run_hard_fix as _hfix_final
     try:
-        script = _hfix_final(script, is_in_repair_loop=False, is_final_pass=True)
+        script = _hfix_final(script, is_in_repair_loop=False, is_final_pass=True, novel_text=novel_text)
     except Exception as _hfe:
         _logger.warn(f"[WARN] 落盘前 hard_fix 失败（保留原版）: {_hfe}")
     # C5 修复（08-11）：fps 一致性校验（timeline 此时已存在）
@@ -2113,10 +2392,11 @@ def main() -> None:
     # parse 期校正之后，元数据会落后实际镜头数（15:12 run 16 vs 20 实测）
     script["shot_count"] = len(script.get("shots", []))
 
-    # 保存
+    # 保存（v6.63.1：剥运行时字段——_run_metadata 等下划线键不入盘）
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        json.dump(script, f, ensure_ascii=False, indent=2)
+        json.dump(_strip_runtime_fields(script), f, ensure_ascii=False, indent=2)
     _snapshot_run_artifacts(script)
+    _cross_run_best_guard(script, novel_text)
 
     _logger.info(f"[OK] 分镜脚本已保存至 {OUTPUT_FILE}")
 

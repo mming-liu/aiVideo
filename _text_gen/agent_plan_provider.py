@@ -1,4 +1,4 @@
-"""火山方舟 Agent Plan (/api/plan/v3) 文本生成 — doubao-seed-2-1-turbo 默认.
+﻿"""火山方舟 Agent Plan (/api/plan/v3) 文本生成 — doubao-seed-2-1-turbo 默认.
 
 与标准方舟（/api/v3）的区别：
   - 端点：POST {base}/chat/completions（OpenAI 兼容 messages 数组）
@@ -45,6 +45,11 @@ from shared.constants import AGENT_PLAN_TEXT_ATTEMPTS
 from shared.log_utils import verbose_write
 
 _verbose_write = partial(verbose_write, log_file="step01.log")
+
+# 客户端读超时（秒）。默认 600：doubao 长任务（18 镜 TOPK + 深度 prompt）
+# 实测可超 300s，旧默认值会让 GAP 重试 100% 超时失败（2026-09-11 实机复盘）。
+# 可用 env AGENT_PLAN_TEXT_TIMEOUT_SEC 覆盖；模型能力项不进配置文件，仅操作参数进 env。
+AGENT_PLAN_TEXT_TIMEOUT_SEC = int(os.getenv("AGENT_PLAN_TEXT_TIMEOUT_SEC", "600"))
 
 
 class AgentPlanTextService(TextGenerationService):
@@ -173,21 +178,23 @@ class AgentPlanTextService(TextGenerationService):
         for attempt in range(1, 1 + AGENT_PLAN_TEXT_ATTEMPTS):  # 1 次重试（初始 + 1 次 = 共 2 次提交）
             try:
                 resp = requests.post(
-                    url, json=payload, headers=self._headers, timeout=300  # 5 分钟客户端超时
+                    url, json=payload, headers=self._headers,
+                    timeout=AGENT_PLAN_TEXT_TIMEOUT_SEC,
                 )
             except requests.exceptions.Timeout:
                 # 长任务客户端超时：直接报错不重试（旧请求仍在模型侧跑）
                 if attempt == 1:
                     _verbose_write(
-                        f"[!] 客户端 300s 超时（长任务），不重试，"
-                        f"改报「超时未完成」由上层业务决策"
+                        f"[!] 客户端 {AGENT_PLAN_TEXT_TIMEOUT_SEC}s 超时（长任务），"
+                        f"不重试，改报「超时未完成」由上层业务决策"
                     )
                 return TextGenerationResult(
                     success=False,
                     error=(
-                        f"Agent Plan 客户端超时 (300s) — 长任务不应自动重试，"
-                        f"旧请求仍在模型侧跑；请上层业务队列决定是否重发。"
-                        f"（model={model}）"
+                        f"Agent Plan 客户端超时 ({AGENT_PLAN_TEXT_TIMEOUT_SEC}s) — "
+                        f"长任务不应自动重试，旧请求仍在模型侧跑；"
+                        f"请上层业务队列决定是否重发。"
+                        f"（model={model}，可用 AGENT_PLAN_TEXT_TIMEOUT_SEC 调整）"
                     ),
                 )
             except requests.exceptions.RequestException as e:

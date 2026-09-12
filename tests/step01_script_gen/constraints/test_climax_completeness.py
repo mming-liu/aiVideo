@@ -21,8 +21,8 @@ def _make_shot(index, prompt="", narration="", core_keywords=None, **extra):
     )
 
 
-def test_incomplete_climax_triggers_warning():
-    """高潮只有起势没有结果 → 标记不完整."""
+def test_incomplete_climax_triggers_hard_fix():
+    """高潮只有起势没有结果 → 硬修复追加结果态（v6.64 P4.6）."""
     from tests.step01_script_gen.conftest import make_ctx, make_script
     from step01_script_gen.constraints.climax_completeness import ClimaxCompletenessConstraint
 
@@ -35,10 +35,11 @@ def test_incomplete_climax_triggers_warning():
     repairs = ClimaxCompletenessConstraint().apply(ctx)
 
     assert len(repairs) >= 1
-    # 应该有 violation
-    violations = ctx.drain_violations()
-    assert len(violations) >= 1
-    assert any("不完整" in v.message for v in violations)
+    # v6.64: 硬修复——lf_desc 应被追加结果态
+    assert any("result" in r.action for r in repairs)
+    # 验证 lf_desc 被修改
+    shots = ctx.shots
+    assert any("刺入" in (s.get("lf_desc") or "") for s in shots)
 
 
 def test_complete_climax_no_warning():
@@ -108,7 +109,7 @@ def test_constraint_attributes():
     from step01_script_gen.constraints.types import Severity
     c = ClimaxCompletenessConstraint()
     assert c.name == "climax_completeness"
-    assert c.severity == Severity.WARN
+    assert c.severity == Severity.INFO
     assert c.skip_hook is True
 
 
@@ -126,5 +127,30 @@ def test_threat_only_is_incomplete():
     ctx = make_ctx(script)
     repairs = ClimaxCompletenessConstraint().apply(ctx)
 
-    # 有冲突（刺杀/逼近）但没结果 → 不完整
+    # 有冲突（刺杀/逼近）但没结果 → 硬修复
     assert len(repairs) >= 1
+    assert any("result" in r.action for r in repairs)
+
+
+def test_background_action_word_no_longer_completes():
+    """v6.63.1 回归：背景镜含日常动作词（抓住/点头）不再把高潮误判为完整.
+
+    旧版全片扫描结果词 + 词表含「抓住/点头」这类日常词 → 任意背景镜出现
+    「抓住船舷」「点点头」高潮就被判完整，F17 实际永不触发。修复后：
+    结果只看高潮镜 + 其后 2 镜，且泛化词已从词表剔除。
+    """
+    from tests.step01_script_gen.conftest import make_ctx, make_script
+    from step01_script_gen.constraints.climax_completeness import ClimaxCompletenessConstraint
+
+    script = make_script([
+        _make_shot(1, "杨旭抓住船舷，看着河面点点头。", "", ["杨旭", "船舷"]),
+        _make_shot(2, "黑影破水而出，手持匕首。", "", ["破水", "匕首"]),
+        _make_shot(3, "刺客举刃逼近，寒光闪烁。", "", ["刺杀", "逼近", "举刃"]),
+        _make_shot(4, "杨旭后退半步，握紧折扇。", "", ["对峙", "折扇"]),
+    ])
+    ctx = make_ctx(script)
+    repairs = ClimaxCompletenessConstraint().apply(ctx)
+
+    # 背景镜的「抓住/点头」不算结果，高潮仍无结果 → 硬修复触发
+    assert len(repairs) >= 1
+    assert any("result" in r.action for r in repairs)

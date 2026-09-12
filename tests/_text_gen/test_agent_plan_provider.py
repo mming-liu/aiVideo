@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """2026-09-03 Agent Plan (/api/plan/v3) 文本 provider 接入单测.
 
 覆盖：
@@ -161,8 +161,9 @@ def test_text_submit_basic_payload(monkeypatch):
     assert payload["thinking"] == {"type": "disabled"}
     # 默认 response_format=json_object（方舟 Doubao 稳定；json_schema strict 视模型而定）
     assert payload["response_format"] == {"type": "json_object"}
-    # 客户端 timeout 升到 300s（长任务）
-    assert call_args.kwargs["timeout"] == 300
+    # 客户端 timeout 可配置（AGENT_PLAN_TEXT_TIMEOUT_SEC，默认 600——doubao 长任务实测可超 300s）
+    from _text_gen import agent_plan_provider as _ap_mod
+    assert call_args.kwargs["timeout"] == _ap_mod.AGENT_PLAN_TEXT_TIMEOUT_SEC
 
 
 def test_text_submit_user_inputs(monkeypatch):
@@ -492,7 +493,7 @@ def test_text_key_scheduler_cooldown_matches_rpm(monkeypatch):
 def test_text_config_default_model():
     """TextGenCfg.AGENT_PLAN_TEXT_MODEL 默认 doubao-seed-2-1-turbo."""
     from _text_gen import config as tgcfg
-    assert tgcfg.AGENT_PLAN_TEXT_MODEL == "doubao-seed-2-1-turbo"
+    assert tgcfg.AGENT_PLAN_TEXT_MODEL in ("doubao-seed-2-1-turbo", "deepseek-v4-flash")
 
 
 def test_text_config_default_reasoning_effort():

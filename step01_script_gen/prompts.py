@@ -1,4 +1,4 @@
-"""step01_script_gen.prompts - Prompt 模板定义（v5.0 增强版）
+﻿"""step01_script_gen.prompts - Prompt 模板定义（v5.0 增强版）
 
 包含：
 - PROMPT_TEMPLATE: 分镜生成主模板（含扩展词库 + 四大维度优化规则）
@@ -40,7 +40,7 @@ HOOK_PROMPT_TEMPLATE = _load_prompt("hook")
 # doubao-seed-2-1-turbo 独立 prompt 集（2026-09-03 接入）
 # 仅 system prompt 不同（XML schema + 2 few-shot + 显式步骤链），
 # main.md / hook.md 复用 deepseek 版（业务规则一致；输出 schema 一致）。
-# 加载方式：TEXT_PROVIDER=agent_plan 时 _auto_select_prompt() 返回 doubao 系列。
+# 加载方式：TEXT_PROVIDER=agent_plan 时 auto_select_prompt_builder() 返回 doubao 系列。
 DOUBAO_SYSTEM_PROMPT = _load_prompt("doubao_system")
 
 def _build_character_anchors(bank) -> str:
@@ -718,50 +718,14 @@ def build_doubao_prompt(novel_text: str, bank=None, objects_bank=None,
 
 def build_doubao_hook_prompt(novel_text: str, bank=None, objects_bank=None,
                              forbidden_lines: list[str] | None = None) -> str:
-    """doubao 专用钩子分镜 prompt（复用 HOOK_PROMPT_TEMPLATE + 注入 doubao 风格锚点）.
+    """doubao 钩子分镜 prompt：与 build_hook_prompt 逐字等价，委托单源实现.
 
-    注：钩子规模较小，few-shot 示例在 system 里已覆盖 schema 与 frame_layouts；
-    此处仅复用 main 的钩子模板 + 与 build_hook_prompt 同等的角色/物体锚点注入。
+    v6.60 时代两者是双写实现；v6.61 provider-neutral 后经 AST 对比确认零差异，
+    改为直接委托。保留函数名是因为 auto_select_prompt_builder 返回 (main, hook)
+    函数对，test_prompt_provider_selection 锁定该选择契约。
     """
-    char_anchor_str = ""
-    if bank:
-        char_anchors = _build_character_anchors(bank)
-        if char_anchors and char_anchors != "无已知角色":
-            char_anchor_str = (
-                "\n\n### 角色参考\n"
-                "以下是已有角色及其特征，prompt 中必须使用角色名（而非'公子''小姐'等模糊称呼）：\n"
-                f"{char_anchors}"
-            )
-    obj_anchor_str = ""
-    if objects_bank:
-        obj_anchors = _build_scene_object_anchors(objects_bank)
-        if obj_anchors and obj_anchors != "无场景物体":
-            obj_anchor_str = (
-                "\n\n### 场景物体尺寸参考\n"
-                "以下是已锚定的场景物体尺寸，钩子画面涉及这些物体时必须写出锚定尺寸、使用统一称呼：\n"
-                f"{obj_anchors}"
-            )
-    prompt = HOOK_PROMPT_TEMPLATE.replace("{novel_text}", novel_text)
-    prompt = prompt.replace("{character_anchors}", char_anchor_str)
-    prompt = prompt.replace("{scene_object_anchors}", obj_anchor_str)
-    forbidden_str = ""
-    if forbidden_lines:
-        _items = [ln.strip()[:40] for ln in forbidden_lines if ln and ln.strip()]
-        if _items:
-            forbidden_str = (
-                "\n\n### 禁止台词（主分镜已使用，钩子不得重复）\n"
-                "钩子的 narration_segment 不得与下列任何一条相同或近似"
-                "（仅标点/语气词/重复字差异也算重复），必须换一句不同台词：\n"
-                + "\n".join(f"  - {ln}" for ln in _items)
-            )
-    prompt = prompt.replace("{forbidden_lines}", forbidden_str)
-    knowledge_ctx = _load_knowledge_skills(novel_text=novel_text)
-    if knowledge_ctx:
-        prompt = prompt + knowledge_ctx
-    cap_ctx = _duration_cap_guidance()
-    if cap_ctx:
-        prompt = prompt + cap_ctx
-    return prompt
+    return build_hook_prompt(novel_text, bank=bank, objects_bank=objects_bank,
+                             forbidden_lines=forbidden_lines)
 
 
 def auto_select_prompt_builder(provider: str):

@@ -1,4 +1,4 @@
-"""统一配置管理 — 所有模块从这里读取 .env.content / .env.keys 配置。
+﻿"""统一配置管理 — 所有模块从这里读取 .env.content / .env.keys 配置。
 
 使用方式：
     from shared.config import CHAPTER_INDEX, SHOT_COUNT_MIN, AGNES_API_KEY, ...
@@ -57,6 +57,25 @@ PROP_ASSET_EXTRACTION_ENABLED = os.getenv("PROP_ASSET_EXTRACTION_ENABLED", "1").
 ASSET_GEN_ENABLED = os.getenv("ASSET_GEN_ENABLED", "1").strip() == "1"
 # v7: 近景功能场景图（从大场景派生）开关，关闭时只生成大场景图
 SCENE_NEAR_SHOT_ENABLED = os.getenv("SCENE_NEAR_SHOT_ENABLED", "1").strip() == "1"
+# v6.64（P4.5，09-11）：多路径择优候选数。
+# 默认 1 = 关闭（兼容现有行为）。doubao 不稳定时建议 2-3：生成 N 个独立首版，
+# 取质量分最高的进入 GAP 循环。用 token 换稳定性，对模型方差问题最有效。
+# 按 TEXT_PROVIDER 区分默认值：doubao 方差大默认 2，deepseek 稳定默认 1。
+def _SCRIPT_CANDIDATE_TOPK_DEFAULT() -> str:
+    provider = (os.getenv("TEXT_PROVIDER") or "").strip().lower()
+    return "3" if provider == "agent_plan" else "1"
+SCRIPT_CANDIDATE_TOPK = int(
+    os.getenv("SCRIPT_CANDIDATE_TOPK", "") or _SCRIPT_CANDIDATE_TOPK_DEFAULT()
+)
+
+# v6.66: 跨模型候选池——逗号分隔模型 ID 列表，候选按序号轮转分配。
+# 空/未设置 = 全部候选用 AGENT_PLAN_TEXT_MODEL（零行为变化）。
+# 示例: SCRIPT_CANDIDATE_MODELS=deepseek-v4-flash,doubao-seed-2-1-turbo
+# 仅对 TEXT_PROVIDER=agent_plan 生效（其他 provider 无此多模型概念）。
+SCRIPT_CANDIDATE_MODELS = [
+    m.strip() for m in os.getenv("SCRIPT_CANDIDATE_MODELS", "").split(",")
+    if m.strip()
+]
 HOOK_ENABLED = os.getenv("HOOK_ENABLED", "1").strip() == "1"
 COMPLIANCE_STRICT = os.getenv("COMPLIANCE_STRICT", "0").strip() == "1"
 COMPLIANCE_AUTO_FIX = os.getenv("COMPLIANCE_AUTO_FIX", "1").strip() == "1"

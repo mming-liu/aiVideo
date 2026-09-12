@@ -59,9 +59,9 @@ def test_three_empty_shots_merges_to_one():
     assert "空镜" in script["shots"][0]["main_subject"]
     # 第二镜应是人物镜
     assert script["shots"][1]["main_subject"] == "杨旭"
-    # 时长合并
-    assert abs(script["shots"][0]["duration_sec"] - 10.0) < 0.01, \
-        f"expected 10.0s, got {script['shots'][0]['duration_sec']}"
+    # 时长合并（v6.63.1：钳到单镜硬上限 8s——3+3+4=10s 超限会被 timecode 拆回 2 镜）
+    assert abs(script["shots"][0]["duration_sec"] - 8.0) < 0.01, \
+        f"expected 8.0s (clamped), got {script['shots'][0]['duration_sec']}"
     # 重新编号正确
     assert script["shots"][0]["index"] == 1
     assert script["shots"][1]["index"] == 2
@@ -163,6 +163,30 @@ def test_idempotent_second_pass():
     r2 = c.apply(ctx)
     assert len(r1) == 1
     assert len(r2) == 0
+
+
+def test_merged_duration_clamped_to_timecode_cap(monkeypatch):
+    """v6.63.1：合并时长钳到单镜硬上限（timecode.MAX_SHOT_DURATION）.
+
+    3+3+4=10s 在 8s 规则下超限——超限镜会被 timecode pre-pass 拆回多镜，
+    合并白做；钳制后保持单镜合法。此处把 cap 调成 6s 验证钳制生效。
+    """
+    import step01_script_gen.timecode as tc
+    from tests.step01_script_gen.conftest import make_ctx, make_script
+    from step01_script_gen.constraints.opening_empty_shot_cap import OpeningEmptyShotCapConstraint
+
+    monkeypatch.setattr(tc, "MAX_SHOT_DURATION", 6.0)
+    script = make_script([
+        _make_empty_shot(1, "空镜·烈日", 3.0),
+        _make_empty_shot(2, "空镜·柳荫", 3.0),
+        _make_empty_shot(3, "空镜·荷湾", 4.0),
+        _make_char_shot(4),
+    ])
+    ctx = make_ctx(script)
+    OpeningEmptyShotCapConstraint().apply(ctx)
+
+    assert abs(script["shots"][0]["duration_sec"] - 6.0) < 0.01, \
+        f"expected 6.0s (clamped), got {script['shots'][0]['duration_sec']}"
 
 
 def test_constraint_attributes():

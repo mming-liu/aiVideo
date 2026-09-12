@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -52,6 +53,8 @@ class TeeLogger:
         self.console_level = self._LEVELS.get(console_level.upper(), 30)
         self.auto_timestamp = auto_timestamp
         self._fp: Optional[object] = None
+        # 线程安全锁（v6.65：多候选并行生成时多线程并发写同一日志文件）
+        self._lock = threading.Lock()
         # 静默控制台：stdout 被重定向到日志时置 True，避免 logger 的 print
         # 回流日志文件造成每条消息双写（see step01 main.py _redirect_to_log）
         self.console_silent = False
@@ -64,13 +67,14 @@ class TeeLogger:
             self._fp = open(str(self.log_path), "a", encoding="utf-8")
 
     def _write_file(self, msg: str):
-        self._open()
-        if self.auto_timestamp:
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self._fp.write(f"[{ts}] {msg}\n")
-        else:
-            self._fp.write(f"{msg}\n")
-        self._fp.flush()
+        with self._lock:
+            self._open()
+            if self.auto_timestamp:
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self._fp.write(f"[{ts}] {msg}\n")
+            else:
+                self._fp.write(f"{msg}\n")
+            self._fp.flush()
 
     def _should_console(self, level: str) -> bool:
         lv = self._LEVELS.get(level.upper(), 40)

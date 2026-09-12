@@ -56,3 +56,29 @@ def test_auto_select_prompt_builder_returns_main_and_hook_builders():
         build_prompt,
         build_hook_prompt,
     )
+
+
+def test_doubao_hook_prompt_delegates_to_build_hook_prompt(monkeypatch):
+    """build_doubao_hook_prompt 必须与 build_hook_prompt 逐字等价.
+
+    v6.60 时代两者是双写实现，v6.61 清理时改为委托单源。此测试锁定委托
+    契约：若未来有人在任一侧加 provider 专属逻辑导致输出分叉，此处报警。
+    """
+    from step01_script_gen.prompts import (
+        build_doubao_hook_prompt,
+        build_hook_prompt,
+    )
+
+    monkeypatch.setattr(
+        "step01_script_gen.prompts.HOOK_PROMPT_TEMPLATE",
+        "正文:{novel_text}\n{character_anchors}\n{scene_object_anchors}\n{forbidden_lines}",
+    )
+    kwargs_variants = [
+        {},
+        {"forbidden_lines": ["凶手是谁？", " 如何击杀了公子？？…… "]},
+        {"forbidden_lines": ["", "   ", "短句"]},  # 空白行剔除分支
+    ]
+    for kwargs in kwargs_variants:
+        assert build_doubao_hook_prompt("章节原文", **kwargs) == build_hook_prompt(
+            "章节原文", **kwargs
+        )

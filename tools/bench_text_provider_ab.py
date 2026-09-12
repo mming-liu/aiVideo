@@ -200,10 +200,12 @@ def process_trial(
     label = f"[{cfg}]"
     if not raw_res["success"]:
         print(f"{label} 生成失败: {raw_res['error']}")
-        return {"config": cfg, "provider": provider,
+        return {"config": cfg, "provider": provider, "trial": trial,
+                "parse_ok": False, "raw_json_ok": False,
                 "metrics": score_one(None, novel_text, False, False, 0,
                                       raw_res["usage"], provider),
-                "elapsed": raw_res.get("elapsed", 0.0), "text_len": 0}
+                "elapsed": raw_res.get("elapsed", 0.0), "text_len": 0,
+                "script": None}
 
     raw = _strip_fences(raw_res["text"])
     if not dry_run:
@@ -263,13 +265,15 @@ def process_trial(
               f"elapsed={raw_res['elapsed']}s")
 
     return {
-        "config": cfg, "provider": provider,
+        "config": cfg, "provider": provider, "trial": trial,
+        "parse_ok": parse_ok, "raw_json_ok": raw_json_ok,
         "metrics": score_one(script, novel_text, parse_ok, raw_json_ok, warn_count,
                               raw_res["usage"], provider),
         "elapsed": raw_res["elapsed"], "text_len": len(raw_res["text"]),
         "parse_err": err,
         "hard_unresolved_count": hard_unresolved_count,
         "final_gap_pass": bool(final_validation.get("overall_pass")),
+        "script": script if parse_ok else None,
     }
 
 

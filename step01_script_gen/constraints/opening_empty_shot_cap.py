@@ -31,7 +31,7 @@ _EVENT_HINTS = (
 )
 
 _WINDOW = 3  # 检查前 N 镜
-_MAX_EMPTY = 1  # 前 N 镜最多允许 N 个空镜
+_MAX_EMPTY = 1  # 前 N 镜最多允许 1 个空镜（v6.63.1 修正注释：原注释误写「N 个」）
 
 
 def _is_empty_shot(shot):
@@ -73,6 +73,29 @@ def _shot_info_score(shot):
     if isinstance(kw, list):
         score += len(kw) * 10
     return score
+
+
+def _shot_duration_cap():
+    """合并后单镜时长硬上限（与 timecode 同口径：8s 用户规则 ∧ 模型 cap 取严）.
+
+    v6.63.1 新增——旧版合并时长 = 各镜直加，3 个 4s 空镜合成 12s，违反
+    timecode.MAX_SHOT_DURATION=8s 硬规则（08-23 用户规则；超限镜会被
+    timecode pre-pass 拆回 2 镜，F15 的合并白做）。
+    """
+    cap = 8.0
+    try:
+        from step01_script_gen.timecode import MAX_SHOT_DURATION
+        cap = float(MAX_SHOT_DURATION)
+    except Exception:
+        pass  # 保持 8.0 兜底（与 timecode 常量同值）
+    try:
+        from shared.model_caps import active_video_duration_cap
+        model_cap = active_video_duration_cap()
+        if model_cap and model_cap > 0:
+            cap = min(cap, float(model_cap))
+    except Exception:
+        pass  # 模型 cap 查询失败 → 只按 8s 硬规则
+    return cap
 
 
 class OpeningEmptyShotCapConstraint(Constraint):
@@ -126,7 +149,9 @@ class OpeningEmptyShotCapConstraint(Constraint):
             if isinstance(shot, dict):
                 shot["index"] = pos
 
-        new_dur = round(keep_dur + total_removed_dur, 1)
+        # v6.63.1：合并时长钳到单镜硬上限（8s 用户规则 ∧ 模型 cap 取严）——
+        # 超限镜会被 timecode pre-pass 拆回多镜，F15 的合并就白做了
+        new_dur = min(round(keep_dur + total_removed_dur, 1), _shot_duration_cap())
         keep_shot["duration_sec"] = new_dur
         keep_shot["duration"] = new_dur
 

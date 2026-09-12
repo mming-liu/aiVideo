@@ -1,4 +1,4 @@
-"""step01_script_gen.validation - 脚本验证模块（v5.0 增强版）
+﻿"""step01_script_gen.validation - 脚本验证模块（v5.0 增强版）
 
 功能：
 - _validate_script(): 验证脚本结构与数据完整性（含景别多样性、字幕-画面绑定）
@@ -7843,7 +7843,7 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
     # 避免与 main.py:1055 / 1664 重复执行。保留 HARD_FIX_USE_OLD=1 兜底。
     from step01_script_gen.constraints import run_hard_fix as _hfix
     try:
-        _hfix(script, is_in_repair_loop=False, is_final_pass=False)
+        _hfix(script, is_in_repair_loop=False, is_final_pass=False, novel_text=novel_text)
     except Exception as _hfe:
         _get_logger().warn(f"[WARN] parse_response 末尾 hard_fix 失败: {_hfe}")
 
