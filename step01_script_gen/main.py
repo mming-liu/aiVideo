@@ -1454,7 +1454,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     # 08-19：C 模式默认后，修复轮 LLM 可能删掉致命伤锚定（A→C 实测 2 个镜头"
     # 心口暗红洇痕"被删，违反规则 8 最高优先级）。修复完成后跑 hard_fix 致命伤
     # 兜底 + kf 时段对齐，把 LLM 弄丢的确定性补回来（幂等，不伤已有正确内容）。
-    # v6.42：改用新 Constraint 框架（29 条），保留 HARD_FIX_USE_OLD=1 回退开关
+    # v6.42：改用新 Constraint 框架；HARD_FIX_USE_OLD 回退开关已删除（2026-09-12）
     from step01_script_gen.constraints import run_hard_fix as _hfix
     try:
         script = _hfix(script, is_in_repair_loop=True, is_final_pass=False, novel_text=novel_text)

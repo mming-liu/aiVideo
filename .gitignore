@@ -60,3 +60,10 @@ reference_skills/
 # 每跑一次测试就变一次，不入库。原先跟踪的 4 个 step0X.log 已 git rm --cached，
 # 同目录的手写调试脚本 replay_agent_plan.py 已迁到 tools/。
 .pytest_tmp/
+
+# 2026-09-12：运行时/临时产物
+step01_*.log
+step02_*.log
+.review_tmp_best_guard/
+_tmp_*
+*_tmp_*.json

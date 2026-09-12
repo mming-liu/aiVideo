@@ -74,6 +74,7 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
     script_mtime = script_path.stat().st_mtime if script_path.exists() else None
 
     results: dict = {}
+    failed: list[int] = []
 
     # 组装任务列表（hook + 各镜头，统一并发单元）
     tasks_spec: list[tuple[int, dict, bool]] = []
@@ -112,11 +113,16 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
         )
         for (idx, _shot, _skip), res in zip(tasks_spec, gathered):
             if isinstance(res, BaseException):
+                failed.append(idx)
                 logger.error(f"[ERROR] Shot {idx} 帧生成失败（不中断整轮）: {res}")
                 continue
             idx_ok, result = res
             results[idx_ok] = result
             _log_shot_frames(idx_ok, result, logger)
+    if failed:
+        logger.error(
+            f"[ERROR] 本轮 {len(failed)} 个镜头帧生成失败（部分失败，非全量成功）: "
+            f"{sorted(failed)}——下游 step02b 对缺帧镜头自行按其帧计划处理")
 
     # v6.18：gen_shot_frames 内归一化会回写 shot["ff_desc"]（多动作→静态瞬间），
     # 落盘让 script_result.json 反映真实用于生图的文本，也保证 step02b 读到

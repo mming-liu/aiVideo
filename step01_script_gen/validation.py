@@ -4441,6 +4441,22 @@ def _extract_speaker(narration: str, defined_ids: frozenset | None = None) -> st
     return speaker or ""
 
 
+# 已知 prompt 尾部残片形态（只删确认过的 LLM 垃圾，不做宽泛截断；
+# 新形态随实跑沉淀进此清单，配套单测见 test_postfix_roots_0912）
+_PROMPT_TAIL_GARBAGE_RES = (
+    re.compile(r"氛围手指$"),                      # 09-12 hook 实测：氛围词+身体词残片
+    re.compile(r"淡入淡出转场时长[0-9.]{0,8}$"),   # 09-12 shot4 实测：截断参数数字收尾
+)
+
+
+def _strip_prompt_tail_garbage(prompt: str) -> str:
+    """剔除 prompt 末尾的已知残片形态，保留合法短句（含句读与否均不碰）."""
+    out = prompt
+    for pat in _PROMPT_TAIL_GARBAGE_RES:
+        out = pat.sub("", out)
+    return out.rstrip("，。； ")
+
+
 def post_fix_shot_prompts(script: dict) -> dict:
     """解析后、校验前的自动修复（v6.9 新增）。
 
@@ -4481,14 +4497,13 @@ def post_fix_shot_prompts(script: dict) -> dict:
         if re.search(r"\d+\s*[-－~～]\s*\d+三", motion_desc):
             shot["motion_desc"] = motion_desc = re.sub(
                 r"(\d+)\s*([-－~～])\s*(\d+)三", r"\1\2\3秒：", motion_desc)
-        # 3.2（2026-09-12 根因修复）：prompt 末尾截断残片——LLM 输出被截在句中时
-        # （实测「氛围手指」「淡入淡出转场时长0」），拖尾碎片会原样进图片模型。
-        # 不变量：prompt 是句读散文，最后一个句读之后的 ≤30 字碎片视为残片截除。
-        if prompt:
-            _last_punct = max(prompt.rfind(c) for c in "。！？；…")
-            _tail = prompt[_last_punct + 1:]
-            if _last_punct >= 0 and 0 < len(_tail) <= 30:
-                shot["prompt"] = prompt = prompt[:_last_punct + 1]
+        # 3.2（2026-09-12 P1 修正）：prompt 末尾截断残片——只针对**已知残片形态**
+        # 精确剔除。此前的「最后一个句读后 ≤30 字一律截除」会误删合法短句
+        # （实测误删：「张十三站在船头。他看向远方」「张三拔刀。刀光一闪」）。
+        # 已知形态清单随实跑沉淀：
+        #   - 「氛围手指」：氛围词+身体词的 LLM 字段尾幻觉（hook 实测）
+        #   - 「淡入淡出转场时长0」：截断参数数字收尾（shot4 实测）
+        shot["prompt"] = prompt = _strip_prompt_tail_garbage(prompt)
         is_dialogue = ("：" in narration) or (":" in narration) or ("：" in subtitle) or (":" in subtitle)
 
         # 1. 声音指令（跳过 hook；原生发声模型不补「用中文说」）
@@ -5203,7 +5218,7 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
     post_fix_shot_prompts(script)
 
     # v6.42：改走新 Constraint 框架（29 条 vs 旧 34 类——新框架更精简一致），
-    # 避免与 main.py:1055 / 1664 重复执行。保留 HARD_FIX_USE_OLD=1 兜底。
+    # 避免与 main.py:1055 / 1664 重复执行。HARD_FIX_USE_OLD 兜底已删除（2026-09-12）。
     from step01_script_gen.constraints import run_hard_fix as _hfix
     try:
         _hfix(script, is_in_repair_loop=False, is_final_pass=False, novel_text=novel_text)

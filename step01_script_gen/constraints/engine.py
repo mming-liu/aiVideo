@@ -79,65 +79,10 @@ def apply_constraints(
 
 
 # ============================================================================
-# main.py 集成入口（新旧切换）
+# main.py 集成入口
 # ============================================================================
 
-# v6.50（08-28）：进程内只声明一次当前硬修复路径——
-# 08-28 排障实测：日志里只有旧路径才有提示、新框架静默，读者无法从
-# 日志判断本轮跑的是哪条路径（还被 pytest 混进来的同名告警误导）。
-_PATH_ANNOUNCED = False
-
-
-def _announce_path(use_old: bool) -> None:
-    global _PATH_ANNOUNCED
-    if _PATH_ANNOUNCED:
-        return
-    _PATH_ANNOUNCED = True
-    try:
-        from shared.tee_logger import get_logger
-        log = get_logger()
-        if log is None:
-            return
-        if use_old:
-            log.warn(
-                "[HARD_FIX] 本轮路径: 旧 _hard_fix_* 正则路径（HARD_FIX_USE_OLD=1）——"
-                "若非有意切换请 unset 该环境变量"
-            )
-        else:
-            log.info("[HARD_FIX] 本轮路径: 新 Constraint 框架")
-    except Exception:
-        pass
-
-
-def run_hard_fix(
-    script: Any,
-    *,
-    is_in_repair_loop: bool = False,
-    is_final_pass: bool = False,
-    return_report: bool = False,
-    novel_text: str = "",
-) -> Any:
-    """main.py 用的便捷入口：跑硬修复层.
-
-    Args:
-        script: 完整 script dict
-        is_in_repair_loop: True=main.py:1055 调用（repair round 末尾）
-        is_final_pass: True=main.py:1664 调用（_compute_timecodes 后）
-        novel_text: 小说原文（用于 grounding 类约束，如 dialogue_grounding / dialogue_density 注入）
-
-    Returns:
-        修改后的 script（与旧 _hard_fix_shot_prompts 兼容，直接返回 script）；
-        return_report=True 时返回 (script, RepairReport)
-
-    Switch:
-        - HARD_FIX_USE_OLD=1 → 走旧 _hard_fix_shot_prompts 路径（回退）
-        - 默认 → 跑新 Constraint 框架（29 条全部）
-
-    Context 参数（v6.42 接入）：
-        - is_in_repair_loop: 标记 repair loop 末尾，避免某些约束在 repair 阶段误触
-        - is_final_pass: 标记 _compute_timecodes 之后，确保 RuntimeExtendConstraint 时长拉伸生效
-    """
-# 日志判断本轮跑的是哪条路径（还被 pytest 混进来的同名告警误导）。
+# 日志只声明一次当前硬修复路径（08-28 排障遗留；现仅一条路径，保留单次声明）。
 _PATH_ANNOUNCED = False
 
 

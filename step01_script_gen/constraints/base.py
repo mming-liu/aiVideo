@@ -6,7 +6,7 @@
   3. severity 是类属性，子类无需重写 __init__
   4. 限速：fields 类属性决定要扫描的字段（默认 prompt/ff_desc/lf_desc）
   5. per-Constraint feature flag: CONSTRAINT_<NAME>_ENABLED=0 关闭单个
-  6. 全局回退: HARD_FIX_USE_OLD=1 走旧 _hard_fix_* 路径
+  6. 全局回退: HARD_FIX_USE_OLD 已删除（2026-09-12）；设置仅告警，仍走 Constraint 框架
 
 新缺陷 = 加 1 个 Constraint 子类，不写新函数。
 """

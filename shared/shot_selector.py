@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import re
+
 
 def parse_shot_selector(spec: str | None) -> set[int | float] | None:
     """解析分镜选择器字符串。
@@ -40,6 +42,10 @@ def parse_shot_selector(spec: str | None) -> set[int | float] | None:
             continue
         if "-" in part:
             lo_s, hi_s = part.split("-", 1)
+            for _endpoint in (lo_s.strip(), hi_s.strip()):
+                # 2026-09-12 P3：严格数字契约——float() 会放过 1e3/nan/inf
+                if not re.fullmatch(r"\d+(\.\d{1,4})?", _endpoint):
+                    raise ValueError(f"非法镜头序号（仅支持正整数/最多4位小数）: {part}")
             lo, hi = float(lo_s.strip()), float(hi_s.strip())
             if lo < 0 or hi < 0:
                 raise ValueError(f"非法镜头区间（负数）: {part}")
@@ -49,9 +55,10 @@ def parse_shot_selector(spec: str | None) -> set[int | float] | None:
                 raise ValueError(f"区间端点须为整数（半整数索引请单独列出）: {part}")
             indices.update(range(int(lo), int(hi) + 1))
         else:
+            # 2026-09-12 P3：严格数字契约——拒绝 1e3/nan/inf 等异常浮点
+            if not re.fullmatch(r"\d+(\.\d{1,4})?", part):
+                raise ValueError(f"非法镜头序号（仅支持正整数/最多4位小数）: {part}")
             val = float(part)
-            if val < 0:
-                raise ValueError(f"非法镜头序号（负数）: {part}")
             indices.add(int(val) if val == int(val) else val)
 
     return indices or None
