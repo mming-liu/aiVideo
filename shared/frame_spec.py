@@ -26,6 +26,20 @@ _FALLBACK_SURFACE = "未指定"
 _FALLBACK_FACING = ""
 
 
+def is_on_screen(entry: dict, default: bool = True) -> bool:
+    """spec 条目是否在场（on_screen 缺省判定，单一事实源）.
+
+    缺省 True（保守估计在场）——与本站「缺失字段 on_screen=True」的降级原则
+    一致（frame_spec_repair 也把缺失补 True）。**所有读 on_screen 的代码必须
+    走本函数**：历史上 vimax_bridge._frame_spec_roster 用 `get("on_screen", True)`
+    而 QC/spec_on_screen_names 用 falsy 判定，同一缺省字段一侧「在场」一侧
+    「不在场」→ 参考图拼了肖像、QC 期望人数却不算，触发删帧死循环（09-13 审查）。
+    """
+    if not isinstance(entry, dict):
+        return False
+    return bool(entry.get("on_screen", default))
+
+
 def get_frame_spec(
     shot: dict,
     frame_kind: str,
@@ -87,6 +101,104 @@ def _legacy_spec_from_char_layout(shot: dict) -> list[dict]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# gaze 状态豁免（09-13 hook ff 视线矛盾根因）
+#
+# schema 强制 spec 每角色必填 gaze_target，LLM 对「双目紧闭/昏迷」角色也只能
+# 编一个视线目标 → QC 拿编出来的锚点问 VLM 必判 no → 删帧重抽 3 次耗尽
+# （hook ff 杨旭双目紧闭 vs 「视线看向画右刺客」实测）。「无视线」是合法状态
+# （gaze_target='无'本就豁免出题），此处提供状态判定，供 QC 出题跳过与
+# step01 校验共用（单一事实源）。
+# ---------------------------------------------------------------------------
+
+GAZE_BLOCKED_STATES = (
+    "双目紧闭", "双眼紧闭", "紧闭双眼", "紧闭", "闭眼", "闭目",
+    "昏迷", "不省人事", "失去意识", "昏死", "晕厥",
+)
+
+
+def _find_all(text: str, sub: str) -> list[int]:
+    out, p = [], text.find(sub)
+    while p >= 0:
+        out.append(p)
+        p = text.find(sub, p + 1)
+    return out
+
+
+def gaze_blocked_names(frame_text: str, names: list) -> set:
+    """帧文本中处于无视线状态的角色集合（最近名归属法）.
+
+    每个状态词归属**离它最近的角色名**（前后 ≤16 字）——对称窗口会把旁边
+    的健康角色一起误豁免（实测：「杨旭…双目紧闭…听香跪坐中舱」±12 窗口
+    把听香也盖住；最近名归属下只有杨旭被豁免）。
+    两个归属细节（实测校准）：
+      1. 状态词区间先合并重叠——「双目紧闭」含子串「紧闭」，短词锚点右移
+         会把状态错归给后一个角色；
+      2. 等距时优先取状态词**之前**的名字（中文「主体…状态」语序，状态的
+         主语在前）。
+    """
+    blocked: set = set()
+    text = frame_text or ""
+    cand = [str(n).strip() for n in (names or []) if str(n).strip()]
+    if not text or not cand:
+        return blocked
+    spans: list[tuple[int, int]] = []
+    for w in GAZE_BLOCKED_STATES:
+        for p in _find_all(text, w):
+            spans.append((p, p + len(w)))
+    spans.sort()
+    merged: list[list[int]] = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    for a, b in merged:
+        best, best_d, best_before = None, 17, False
+        for n in cand:
+            for q in _find_all(text, n):
+                if q + len(n) <= a:            # 名在状态词前
+                    d, before = a - (q + len(n)), True
+                elif q >= b:                   # 名在状态词后
+                    d, before = q - b, False
+                else:                           # 名与状态词重叠（罕见）
+                    d, before = 0, True
+                if d < best_d or (d == best_d and before and not best_before):
+                    best, best_d, best_before = n, d, before
+        if best is not None:
+            blocked.add(best)
+    return blocked
+
+
+def gaze_blocked_for(name: str, spec_entry: dict | None = None,
+                     frame_text: str = "", names: list | None = None) -> bool:
+    """角色在本帧是否处于「无视线」状态（双目紧闭/昏迷等）.
+
+    判定两路（任一命中即豁免）：
+      1. spec 条目自身的 pose/position 含状态词；
+      2. 帧描述文本：names 提供时走最近名归属（gaze_blocked_names，精确）；
+         未提供时退回 ±12 字窗口共现（粗粒度，兼容旧调用）。
+    """
+    if not name:
+        return False
+    if spec_entry:
+        own = " ".join(str(spec_entry.get(k) or "") for k in ("pose", "position"))
+        if any(w in own for w in GAZE_BLOCKED_STATES):
+            return True
+    text = frame_text or ""
+    if not text:
+        return False
+    if names is not None:
+        return name in gaze_blocked_names(text, names)
+    for w in GAZE_BLOCKED_STATES:
+        p = text.find(w)
+        while p >= 0:
+            if name in text[max(0, p - 12):p + len(w) + 12]:
+                return True
+            p = text.find(w, p + 1)
+    return False
+
+
 def derive_char_layout(shot: dict) -> list[dict]:
     """frame_layouts.ff → 旧 char_layout 视图（供未迁移读者临时使用，M4 删除）.
 
@@ -106,7 +218,7 @@ def derive_char_layout(shot: dict) -> list[dict]:
         # 已是 char_layout（无 frame_layouts）→ 原样返回
         return [item for item in (shot.get("char_layout") or []) if isinstance(item, dict)]
     ff = fl.get("ff") or []
-    on_screen_items = [s for s in ff if isinstance(s, dict) and s.get("on_screen")]
+    on_screen_items = [s for s in ff if is_on_screen(s)]
     if not on_screen_items:
         return []
     out: list[dict] = []
@@ -135,7 +247,7 @@ def spec_on_screen_names(shot: dict, frame_kind: str, kf_index: Optional[int] = 
     return [
         s.get("name", "")
         for s in spec
-        if isinstance(s, dict) and s.get("on_screen") and s.get("name")
+        if is_on_screen(s) and s.get("name")
     ]
 
 
@@ -152,12 +264,50 @@ def spec_threat_visible(
     """
     spec = get_frame_spec(shot, frame_kind, kf_index)
     for s in spec:
-        if not isinstance(s, dict) or not s.get("on_screen"):
+        if not is_on_screen(s):
             continue
         name = s.get("name", "")
         if any(kw in name for kw in threat_keywords):
             return True
     return False
+
+
+def spec_roster_or_none(
+    shot: dict,
+    frame_kind: str,
+    kf_index: Optional[int] = None,
+) -> Optional[set[str]]:
+    """本帧出镜名单（on_screen=True 的 name 集合），保留「缺失 vs 明确无人」区分.
+
+    与 spec_on_screen_names 的区别：本函数额外区分
+      - None  = spec 缺失/无条目（frame_layouts 无该帧 / kfs 越界 / 该帧为空表）
+                → 调用方应回退文本匹配（旧行为）
+      - set() = spec 存在且**明确本帧无人出镜**（全 on_screen=False）
+                → 调用方必须照空名单处理，禁止回退文本
+
+    专供 vimax_bridge 参考图/拼图「用到才拼」的 None 语义（get_frame_spec 的
+    [] 无法区分这两种情况）。on_screen 缺省走 is_on_screen（True）。
+    """
+    fl = shot.get("frame_layouts")
+    if not isinstance(fl, dict):
+        return None
+    if frame_kind == "keyframe":
+        kfs = fl.get("kfs") or []
+        if kf_index is None or kf_index < 0 or kf_index >= len(kfs):
+            return None
+        entries = kfs[kf_index]
+    else:
+        entries = fl.get(frame_kind)
+    if not entries:
+        return None
+    roster: set[str] = set()
+    for e in entries:
+        if not is_on_screen(e):
+            continue
+        name = str(e.get("name", "")).strip()
+        if name:
+            roster.add(name)
+    return roster
 
 
 # 【角色锚定】注入块标记（生成端：shared/vimax_bridge.py _extract_char_layout；

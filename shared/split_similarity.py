@@ -98,10 +98,28 @@ def text_sim_ratio(text_a: str, text_b: str) -> float:
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 
+# ---------------------------------------------------------------------------
+# kf 帧级冗余阈值注册表（09-13 审查收敛，2026-09-13）
+# 单一事实源：shared/vimax_bridge._compose_kf_refs 与
+# step01_script_gen/constraints/kf_frame_redundancy 都从这里 import。
+# chapter_001 实测校准：
+#   - 问题对（hook climax kf0 vs ff）text_sim_ratio = 0.508
+#   - 正常 mid 帧 ≤ 0.193
+#   - pre 帧 0.62-0.90（≈ff 是阶段语义设计，豁免）
+# 阈值 0.40 居中，正常/异常余量都够；相邻 kf 字面重复阈值 0.90 防误报。
+KF_FF_SIM_THRESHOLD = 0.40
+KF_PAIR_SIM_THRESHOLD = 0.90
+# 阶段豁免：pre≈ff、exit/after≈lf 是 v6.34 阶段语义设计，相似不触发替换。
+KF_FF_ANCHOR_EXEMPT_STAGES = ("pre", "exit", "after")
+
+
 __all__ = [
     "jaccard_bigram",
     "shot_action_text",
     "split_pair_similarity",
     "is_split_pair",
     "text_sim_ratio",
+    "KF_FF_SIM_THRESHOLD",
+    "KF_PAIR_SIM_THRESHOLD",
+    "KF_FF_ANCHOR_EXEMPT_STAGES",
 ]

@@ -24,15 +24,17 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from shared.split_similarity import text_sim_ratio  # 单一事实源（09-13 审查：与 vimax_bridge 共用）
+from shared.split_similarity import (
+    KF_FF_SIM_THRESHOLD as _MID_KF_FF_SIM_THRESHOLD,
+    KF_PAIR_SIM_THRESHOLD as _KF_PAIR_SIM_THRESHOLD,
+    text_sim_ratio,  # 单一事实源（09-13 审查：与 vimax_bridge 共用）
+)
 
 from .base import Constraint
 from .ff_lf_redundancy import _STATIC_SHOT_MARKERS  # 同口径静态镜豁免（单一事实源）
 from .types import RepairRecord, Severity
 
-# 与 shared/vimax_bridge._KF_FF_SIM_THRESHOLD 同源同值（chapter_001 实测校准）
-_MID_KF_FF_SIM_THRESHOLD = 0.40
-_KF_PAIR_SIM_THRESHOLD = 0.90
+# 阈值已迁入 shared/split_similarity（v6.70.1 review：单一事实源 = split_similarity，kf_frame_redundancy + vimax_bridge 共用）
 _MID_STAGES = ("approach", "climax", "react")
 
 

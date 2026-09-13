@@ -1,4 +1,4 @@
-﻿"""step01_script_gen.validation - 脚本验证模块（v5.0 增强版）
+"""step01_script_gen.validation - 脚本验证模块（v5.0 增强版）
 
 功能：
 - _validate_script(): 验证脚本结构与数据完整性（含景别多样性、字幕-画面绑定）
@@ -4154,6 +4154,10 @@ def _run_prompt_checklist(script: dict) -> dict:
     # 落点锚，否则图片模型画悬浮武器。与 frame_weapon_legality 互补，warning-only）
     results["weapon_holder"] = _check_weapon_holder(shots, hook, script.get("characters", []))
 
+    # 09-13 新增：gaze_target 与无视线状态互斥（hook ff 杨旭双目紧闭 vs 视线锚
+    # QC 三连耗尽根因——schema 必填 gaze_target 逼 LLM 给昏迷角色编视线）
+    results["gaze_state_conflict"] = _check_gaze_state_conflict(shots, hook, script.get("characters", []))
+
     # v6.8 新增：情绪可视化检查（将抽象情绪词转化为具体肢体动作）
     results["emotion_visualization"] = _check_emotion_visualization(shots, hook)
 
@@ -4362,6 +4366,7 @@ _REGEN_FEEDBACK_LABELS = {
     "multi_person_staging": "多人站位",
     "frame_weapon_legality": "非战斗镜头武器词",
     "weapon_holder": "武器持握主体(09-13)",
+    "gaze_state_conflict": "视线-状态互斥(09-13)",
     "subtitle_leak": "画面无字幕(规则40)",
     "grounding": "原文锚点校验",
     "climax_priority": "高潮优先原则(v6.35)",
@@ -5372,8 +5377,8 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
     逐帧检查（ff/lf/kf desc）：武器词所在分句无 holder 动词（握/持/拔/…）
     且无落点锚（插在/落地/没入/…），frame_layouts 对应帧所有角色 props
     又为空 → WARN。隐藏武器（未出鞘/藏/潜伏 ±8 字窗口）豁免。
-    warning-only：「自画外斜入」在悬念戏是合法镜头语言，先观察误报率再定
-    是否升级拒收（与 _check_frame_weapon_legality 互补：那个管「非战斗镜
+    v6.70.1 review：隐藏武器豁免保留（避免「藏书上架」误报），但命中走 issues 路径
+    → _regen_over_limit 触发 LLM 修复轮（与 _check_frame_weapon_legality 互补：那个管「非战斗镜
     不该有武器」，这个管「武器必须有主」）。
     """
     from shared.content_safety import (WEAPON_WORDS as _W_WORDS,
@@ -5424,10 +5429,58 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
             )
             if held:
                 continue
-            warnings.append(
+            issues.append(
                 f"{label} {flabel}: 武器词「{hit}」无持握主体/落点锚（frame_layouts "
                 f"props 空 + 同句无握持/落点动词）——图片模型只能画悬浮武器；"
                 f"补 holder（如「画外伸入一只握刀的手」）或删除该句")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+def _check_gaze_state_conflict(shots: list[dict], hook: dict | None = None,
+                               characters: list | None = None) -> dict:
+    """gaze_target 与「无视线状态」互斥检查（09-13 hook ff 视线矛盾根因）.
+
+    schema 强制 spec 每角色必填 gaze_target，LLM 对「双目紧闭/昏迷」角色也
+    只能编一个视线目标——QC 拿编出来的锚点问 VLM 必判 no，删帧重抽 3 次
+    耗尽（hook ff 杨旭双目紧闭 vs「视线看向画右刺客」实测，kf spec 复制把
+    矛盾灌进每个 kf）。
+
+    逐帧（ff/lf/kf spec 条目）：gaze_target 为真实目标（≠无/无视线）且该角色
+    处于无视线状态（shared.frame_spec.gaze_blocked_for：pose/position 含状态
+    词，或帧 desc 中状态词 ±12 字内有角色名）→ WARN（正确写法：gaze_target
+    填「无」）。warning-only：观察一轮误报率再定是否升级 issue 触发修复轮。
+    """
+    from shared.frame_spec import gaze_blocked_for
+    issues, warnings = [], []
+    checks = [(s, f"镜头{s.get('index')}") for s in shots]
+    if hook:
+        checks.insert(0, (hook, "钩子"))
+    for shot, label in checks:
+        fl = shot.get("frame_layouts") or {}
+        kfs_data = shot.get("keyframes") or []
+        frames = [("ff", fl.get("ff") or [], shot.get("ff_desc", "") or ""),
+                  ("lf", fl.get("lf") or [], shot.get("lf_desc", "") or "")]
+        kfs_spec = fl.get("kfs") or []
+        for ki in range(len(kfs_data)):
+            spec = kfs_spec[ki] if ki < len(kfs_spec) else []
+            desc = (kfs_data[ki] or {}).get("desc", "") if isinstance(kfs_data[ki], dict) else ""
+            frames.append((f"kf{ki}", spec if isinstance(spec, list) else [], desc or ""))
+        for flabel, spec_entries, frame_text in frames:
+            _frame_names = [str(e.get("name", "")).strip()
+                            for e in spec_entries
+                            if isinstance(e, dict) and e.get("on_screen") is True]
+            for e in spec_entries:
+                if not isinstance(e, dict) or e.get("on_screen") is not True:
+                    continue
+                name = str(e.get("name", "")).strip()
+                gaze = str(e.get("gaze_target", "")).strip()
+                if not name or not gaze or gaze in ("无", "无视线"):
+                    continue
+                if gaze_blocked_for(name, e, frame_text, _frame_names):
+                    warnings.append(
+                        f"{label} {flabel}: {name} 处于无视线状态（双目紧闭/昏迷类）但 "
+                        f"gaze_target=「{gaze}」——闭眼角色画不出视线，QC 必败烧重试；"
+                        f"gaze_target 应填「无」")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 

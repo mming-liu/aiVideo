@@ -90,3 +90,13 @@ tests/tools/test_ab_tools.py
 # 09-13 跑批产物（A/B bench + dump 备份）
 tools/bench_ab_results*.json
 tools/dump/backup_*/
+
+# 09-13 跑批/调试产物防跟踪
+tools/bench_results*.json
+step*_run.out
+step*_run.err
+step0*_debug*.log
+step0*_relay*.log
+
+# 09-13 调试草稿/ pytest 临时目录（不入库，另一会话收尾后可删）
+.tmp*/

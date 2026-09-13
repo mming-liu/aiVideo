@@ -421,6 +421,37 @@ async def _gen_frames_for_camera_group(
 # 参考图列表构建（摄像机锚定）
 # ---------------------------------------------------------------------------
 
+def _build_kf_prop_scan(shot: dict, kf_idx_in_shot: int | None, kf_desc_raw: str) -> str:
+    """per-frame 道具扫描文本（09-13 逐帧重配根因：合并全文让 ff 武器词漏进无关帧）.
+
+    Returns:
+        ``<kf_desc_raw> <spec_parts>`` 当本帧 spec 存在且非空；否则降级 ``kf_desc_raw``。
+
+    静默 fallback（review 5）：
+      - frame_layouts 缺失 / 非 dict / 缺 kfs → kf_desc_raw
+      - kf_idx_in_shot 越界 / 为 None → kf_desc_raw
+      - kfs[kf_idx_in_shot] 是非 list / 元素非 dict → skip 该 entry
+      - 任何异常（数据污染）→ swallow，回 kf_desc_raw
+    永不返回空字符串（kf_desc_raw 前置非空保证）；不抛异常给上游。
+    """
+    try:
+        _kfs_spec = (shot.get("frame_layouts") or {}).get("kfs") or []
+        if kf_idx_in_shot is None or kf_idx_in_shot >= len(_kfs_spec):
+            return kf_desc_raw
+        _spec_parts: list[str] = []
+        for _e in (_kfs_spec[kf_idx_in_shot] or []):
+            if not isinstance(_e, dict):
+                continue
+            _spec_parts.extend(t for t in (_e.get("position"), _e.get("pose")) if t)
+            _pr = _e.get("props") or []
+            _spec_parts.extend(str(p) for p in (_pr if isinstance(_pr, list) else [_pr]) if p)
+        if _spec_parts:
+            return f"{kf_desc_raw} {' '.join(_spec_parts)}"
+    except Exception:
+        pass
+    return kf_desc_raw
+
+
 def _build_reference_list(
     shot: dict,
     bank: CharacterBank,
@@ -1350,6 +1381,13 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
     # 动作镜头首帧：不注入场景资产图
     is_action_ff = (for_frame == "首帧") and _is_action_shot(shot, characters) and not empty_scene
     scene_refs = [] if is_action_ff else _collect_scene_asset_refs(shot)
+    # 09-13 特写帧场景门控：spec 含「特写」的帧是局部构图，广角场景资产图会
+    # 把构图拉回全景（shot_4 lf 手部特写 3 次 QC 未中根因）——跳过场景参考。
+    if scene_refs and for_frame in ("首帧", "尾帧"):
+        _fk = "ff" if for_frame == "首帧" else "lf"
+        if _frame_spec_closeup(shot, _fk):
+            scene_refs = []
+            _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 特写帧跳过场景资产图（防广角拉构图）")
     if empty_scene:
         return scene_refs[:limit]
 
@@ -1371,8 +1409,17 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
             shot.get("lf_desc", ""),
             shot.get("motion_desc", "") or shot.get("prompt", ""),
         ]))
+    # 09-13「用到才拼」：肖像按本帧 spec 出镜名单过滤（v6.57 per-frame 事实源），
+    # 文本提到≠出镜——「刺客已遁水」类离场语境下文本匹配会把缺席角色拼进
+    # 参考图（shot_0 lf extra_person 3 vs 1 根因）。spec 缺失时 roster=None
+    # 回退纯文本匹配（旧行为）。
+    _roster = None
+    if for_frame == "首帧":
+        _roster = _frame_spec_roster(shot, "ff")
+    elif for_frame == "尾帧":
+        _roster = _frame_spec_roster(shot, "lf")
     portrait_refs = _collect_portrait_refs_for_shot(
-        shot, characters, limit=max(2, limit - 1), frame_desc=frame_desc,
+        shot, characters, limit=max(2, limit - 1), frame_desc=frame_desc, roster=_roster,
     )
     prop_refs = _collect_prop_asset_refs(shot, limit=3, frame_desc=frame_desc, characters=characters)
 
@@ -1470,9 +1517,55 @@ def _head_portrait_path(src: str) -> str:
         return src
 
 
+def _frame_spec_closeup(shot: dict, frame_kind: str,
+                        kf_index: int | None = None) -> bool:
+    """特写帧判定（场景资产图门控用）.
+
+    spec 条目（ff/lf/kfs[i]）的 position/pose 含「特写」→ 本帧是局部特写。
+    场景资产图是广角建立镜头，塞进特写帧参考图会把构图拉回全景
+    （09-13 shot_4 lf「手部特写」3 次 QC 未中根因：参考图全是广角场景+肖像，
+    模型只会画全景）。shot_size 字段不可靠（实测为 None），特写信号以 spec
+    文本为准（如「画中央（手部特写）」）。
+    """
+    fl = shot.get("frame_layouts") or {}
+    if frame_kind == "keyframe":
+        kfs = fl.get("kfs") or []
+        entries = (kfs[kf_index]
+                   if (kf_index is not None and 0 <= kf_index < len(kfs)) else [])
+    else:
+        entries = fl.get(frame_kind) or []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        if "特写" in (str(e.get("position") or "") + str(e.get("pose") or "")):
+            return True
+    return False
+
+
+def _frame_spec_roster(shot: dict, frame_kind: str,
+                       kf_index: int | None = None) -> set[str] | None:
+    """本帧出镜名单（frame_layouts spec，v6.57 per-frame 事实源）.
+
+    09-13「用到才拼」根修：参考图/拼图只放本帧实际出镜的角色。文本提到 ≠
+    出镜——「刺客已遁水」「钓杆已脱手」类离场/否定语境会把缺席角色带进
+    文本匹配，全量拼接诱导模型画全员（09-13 shot_0 lf extra_person 3 vs 1
+    根因：QC 名单 1 人但 3 张肖像都在 refs 里）。
+
+    frame_kind: "ff" / "lf" / "keyframe"（keyframe 需 kf_index——keyframes
+    数组序号，frame_layouts.kfs 与其一一对应）。
+    返回 on_screen=true 的 name 集合（**空集 = spec 明确本帧无人出镜**——
+    空镜/离场帧，调用方必须照空名单处理，禁止回退文本）；spec 缺失/无条目
+    → None（调用方回退文本匹配）。on_screen 缺省判定走 shared.frame_spec.
+    is_on_screen（True，单一事实源，与 QC 侧一致）。
+    """
+    from shared.frame_spec import spec_roster_or_none
+    return spec_roster_or_none(shot, frame_kind, kf_index)
+
+
 def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
                                     limit: int = 3,
-                                    frame_desc: str | None = None) -> list[str]:
+                                    frame_desc: str | None = None,
+                                    roster: set[str] | None = None) -> list[str]:
     """从 character_portraits_registry.json 为本镜头出镜角色收集肖像参考图.
 
     用于 step02a 首帧/尾帧图生图：给图片模型注入本镜出镜角色的肖像作参考，
@@ -1487,6 +1580,11 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
     帧仅以非实体方式呈现（水下黑影/刀尖微露/没入水中）→ 不注入肖像——画面
     没有完整刺客，参考图会诱导图片模型画出完整刺客还回头盯镜头（08-16
     hook ff 根因）。返回 None/False 皆跳过。
+
+    roster: **本帧出镜名单**（frame_layouts spec，_frame_spec_roster 返回值）。
+    非 None 时只拼名单内角色——文本提到≠出镜（「刺客已遁水」类离场语境
+    文本匹配拦不住），全量拼接诱导模型画全员（09-13 shot_0 lf extra_person
+    3 vs 1 根因）。None = 回退纯文本匹配（旧行为）。
 
     characters: script['characters']（含 identifier）；缺省时只依赖注册表 key。
     """
@@ -1564,6 +1662,11 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
 
         refs: list[str] = []
         for ident in char_names:
+            # 09-13 逐帧出镜名单过滤（spec 事实源，用到才拼）：roster 非 None
+            # 时本帧只拼名单内角色肖像——名单外的缺席角色不进入参考图/拼图。
+            if roster is not None and not any(
+                    a in roster for a in _char_aliases(ident, characters)):
+                continue
             # 出镜判定支持威胁源别名（刺客→神秘人/黑衣人——合规替换后文本用
             # "神秘人"，但角色注册表 key 是"刺客"，仅靠 ident in search_text 会漏掉
             # 刺客肖像，导致关键帧/首帧参考图缺威胁源形象、图片模型画不出刺客）。
@@ -2766,6 +2869,39 @@ def _build_char_anchor(ident: str, static: str, dynamic: str) -> str:
     return combined
 
 
+def _closeup_directive(shot: dict, frame_kind: str, kf_index: int | None = None) -> str:
+    """spec 含「X特写」时生成特写构图指令（注入帧 prompt）.
+
+    09-13 shot_4 lf 根因：QC 锚点要「手部特写」但帧 prompt 无特写指令——
+    spec 构图要求只进 QC 不进 prompt，模型只能画全景，重抽必然复败
+    （场景参考图门控见 _frame_spec_closeup，只是半价；prompt 指令才是根修）。
+    spec 构图要求必须与 QC 同源地进 prompt。
+    """
+    fl = shot.get("frame_layouts") or {}
+    if frame_kind == "keyframe":
+        kfs = fl.get("kfs") or []
+        entries = (kfs[kf_index]
+                   if (kf_index is not None and 0 <= kf_index < len(kfs)) else [])
+    elif frame_kind in ("first_frame", "last_frame"):
+        entries = fl.get("ff" if frame_kind == "first_frame" else "lf") or []
+    else:
+        entries = []
+    import re as _re
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        for field in ("position", "pose"):
+            v = str(e.get(field) or "")
+            m = _re.search(r"（([^）]*特写)）", v)
+            if m:
+                obj = m.group(1)                                # 手部特写 / 面部特写…
+                core = obj[:-2] if obj.endswith("特写") else obj  # 手部 / 面部
+                base = _re.sub(r"（[^）]*）", "", v).strip() or "画中央"
+                return (f"【特写构图】{obj}镜头：画面聚焦{core}，主体位于{base}，"
+                        f"背景大幅虚化，禁止全景式环境展示")
+    return ""
+
+
 def _inject_frame_spec(
     desc: str,
     shot: dict,
@@ -2838,6 +2974,18 @@ def _inject_frame_spec(
         return desc
     except Exception:
         return desc
+
+
+def _inject_frame_spec_and_closeup(desc: str, shot: dict, characters: list | None,
+                                   frame_kind: str, kf_index: int | None = None) -> str:
+    """_inject_frame_spec + 特写构图指令（统一注入点，生成链/QC 重建链同走）."""
+    text = _inject_frame_spec(desc, shot, characters,
+                              frame_kind=frame_kind, kf_index=kf_index)
+    if "特写" not in text:
+        directive = _closeup_directive(shot, frame_kind, kf_index)
+        if directive:
+            text = f"{text.rstrip('。')}。{directive}"
+    return text
 
 
 # 首帧禁注入的动作结果/武器词：收敛到 shared/content_safety（审计 S2），
@@ -2945,7 +3093,7 @@ def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
         text = preprocess_prompt_for_image(desc)
         # v1.1：注入出镜角色服装特征（与 _gen_first_frame_async 生成链一致）
         # 首帧过滤动作结果/武器词，保证 QC 与图片模型看到的 prompt 一致
-        text = _inject_frame_spec(text, shot, characters, frame_kind=frame_kind)
+        text = _inject_frame_spec_and_closeup(text, shot, characters, frame_kind=frame_kind)
         # v1.1：尾帧目光修复（与 _gen_last_frame_async 一致，QC 看到修复后 prompt）
         if frame_kind == "last_frame":
             text = fix_lf_desc_gaze(text, shot, characters)
@@ -3182,7 +3330,7 @@ async def _gen_first_frame_async(
     action_lock = IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT if is_action else None
     # ---- prompt 组装（只算一次，重试复用） ----
     _ff_pre = preprocess_prompt_for_image(ff_desc)
-    _ff_pre = _inject_frame_spec(_ff_pre, shot, characters, frame_kind="first_frame")
+    _ff_pre = _inject_frame_spec_and_closeup(_ff_pre, shot, characters, frame_kind="first_frame")
     # 场景物体尺寸锚定注入（船/车等物体比例防漂移，code-audit 08-06 钩子船太小）
     _ff_pre = _inject_object_size_anchor(shot, _ff_pre)
     # 场景色调锚定注入（color_tone：夜景冷蓝/暖金烛光等，防模型自造色调漂色）
@@ -3421,7 +3569,7 @@ async def _gen_last_frame_async(
     # ---- lf prompt 组装（只算一次，重试复用） ----
     _lf_pre = preprocess_prompt_for_image(lf_desc)
     # v1.1：注入出镜角色服装特征（与首帧一致）
-    _lf_pre = _inject_frame_spec(_lf_pre, shot, characters, frame_kind="last_frame")
+    _lf_pre = _inject_frame_spec_and_closeup(_lf_pre, shot, characters, frame_kind="last_frame")
     # v1.1：尾帧目光修复（错别字 + 看向动作结果对象——听香看被刺倒的杨旭）
     _lf_pre = fix_lf_desc_gaze(_lf_pre, shot, characters)
     # 场景物体尺寸锚定注入（船/车等物体比例防漂移）
@@ -3566,21 +3714,14 @@ def _dump_json(path: Path, model) -> None:
 # 中间关键帧生成（多关键帧叙事模式）
 # ---------------------------------------------------------------------------
 
-# 09-13 微动作帧 ff 整图锚条件化阈值：mid 阶段 kf desc 与 ff_desc 相似度 ≥ 此
-# 值时摘掉 ff 整图环境锚（防 i2i 把 kf 锁成 ff 复刻——09-13 hook kf0 悬空匕
-# 首根因：kf0 文本无刀，但 ff 整图参考让 i2i 把 ff 里的无主悬浮匕首原样抄入）。
-# 校准（chapter_001 实测，text_sim_ratio）：问题对（hook climax kf0 vs ff）
-# =0.508，正常 mid 帧 ≤0.193，pre 帧 0.62-0.90（≈ff 是阶段语义设计，豁免）→ 取 0.40。
-_KF_FF_SIM_THRESHOLD = 0.40
-# 豁免阶段：pre≈ff、exit/after≈lf 是 v6.34 阶段语义设计，相似不触发替换
-_KF_FF_ANCHOR_EXEMPT_STAGES = ("pre", "exit", "after")
-
-
-def _text_sim_ratio(a: str, b: str) -> float:
-    """shared.split_similarity.text_sim_ratio 的本地别名（09-13 审查：单一事实源，
-    与 constraints/kf_frame_redundancy 共用同一实现，阈值 0.40 不分叉）."""
-    from shared.split_similarity import text_sim_ratio
-    return text_sim_ratio(a, b)
+# ff 整图锚条件化阈值 / 阶段豁免：单一事实源 = shared.split_similarity
+# （与 step01 constraints/kf_frame_redundancy 共用，禁止在此重定义——本地副本会
+# 被下方 import 静默覆盖，改本地值不生效。校准数据见 split_similarity.KF_FF_*）。
+from shared.split_similarity import (
+    KF_FF_SIM_THRESHOLD as _KF_FF_SIM_THRESHOLD,
+    KF_FF_ANCHOR_EXEMPT_STAGES as _KF_FF_ANCHOR_EXEMPT_STAGES,
+    text_sim_ratio as _text_sim_ratio,
+)
 
 
 def _compose_kf_refs(base_refs: list, *, kf_desc_raw: str, ff_desc: str,
@@ -3589,10 +3730,13 @@ def _compose_kf_refs(base_refs: list, *, kf_desc_raw: str, ff_desc: str,
                      scene_alt_refs: list | None = None,
                      prop_ref_paths: list | None = None,
                      prop_scan: str = "",
+                     portrait_ref_paths: list | None = None,
+                     portrait_replacements: list | None = None,
+                     lf_image_path: str | None = None,
+                     closeup: bool = False,
                      shot: dict | None = None,
                      characters: list | None = None,
                      ref_limit: int | None = None,
-                     prop_collector=None,
                      logger=None) -> list:
     """逐帧组装 kf 参考图（09-13 悬空匕首 / ff-kf0 同源双根因修复）.
 
@@ -3603,31 +3747,60 @@ def _compose_kf_refs(base_refs: list, *, kf_desc_raw: str, ff_desc: str,
         （≈ff/≈lf 是阶段语义设计）；stage 缺失视为 mid。⚠️ ff 整图锚本身
         是 2a 治「kf 每帧翻船」的修复（见 gen_shot_frames 注释），不能全删，
         只在高相似 mid 帧条件化替换。
-    (b) 道具参图 per-frame 化：kf_refs 组装按 ff+lf+motion 合并文本匹配道具
-        （打耳光镜漏进刺杀戏「神秘人匕首」prop.png），改为本帧 desc+spec
-        逐帧匹配。prop_collector 可注入（默认 _collect_prop_asset_refs，
-        原生支持 frame_desc + 威胁可见性门控）。
+     (b) 道具参图 per-frame 化：kf_refs 组装按 ff+lf+motion 合并文本匹配道具
+         （打耳光镜漏进刺杀戏「神秘人匕首」prop.png），改为本帧 desc+spec
+         逐帧匹配。
+
+    closeup: 本帧是否特写（调用方经 _frame_spec_closeup 判定后传入，避免在此
+        重复实现「特写」文本扫描）。特写帧不补场景资产图——广角图会把特写
+        构图拉回全景，与 ff 整图锚同害（09-13 shot_4 lf 手部特写根因）。
 
     base_refs 不变时原样返回（保持哈希/缓存语义不变）。
     """
     refs = list(base_refs) if base_refs else []
-    if not refs or (not ff_image_path and not prop_ref_paths):
+    if not refs or (not ff_image_path and not prop_ref_paths and not portrait_ref_paths):
         return refs
     if ref_limit is None:
         from shared.ref_compose import active_image_ref_limit
         ref_limit = active_image_ref_limit()
-    if prop_collector is None:
-        prop_collector = _collect_prop_asset_refs
 
-    mid_action = (kf_stage or "").strip().lower() not in _KF_FF_ANCHOR_EXEMPT_STAGES
+    # (c) 肖像逐帧替换（09-13「用到才拼」）：portrait_replacements 非 None 时
+    # 把 per-shot 组装的肖像整组换成本帧 on_screen 名单过滤后的结果——
+    # 名单外的缺席角色不拼图（extra_person 根因）。替换组保持肖像优先序
+    # （名额裁剪从尾部道具开始，不挤肖像）。
+    if portrait_ref_paths and portrait_replacements is not None:
+        base = [r for r in refs if r not in portrait_ref_paths]
+        new_refs = ([p for p in portrait_replacements if p not in base]
+                    + base)[:ref_limit]
+        if new_refs != refs:
+            refs = new_refs
+            if logger:
+                logger.verbose("  [KEYFRAME] 肖像参图按本帧 on_screen 名单重配（per-frame）")
+
+    # (d) after/exit 帧环境锚换 lf 整图（09-13 shot_0 kf3 实测）：after/exit≈lf
+    # 是阶段语义设计，但环境锚仍挂 ff 整图——ff 里的刺客被 i2i 抄进「刺客已
+    # 遁水」的 after 帧（extra_person 3 vs 2）。lf 已生成时换 lf 作环境锚
+    # （既保环境连续性，又不带回已离场角色）。
+    stage_l = (kf_stage or "").strip().lower()
+    if (stage_l in ("after", "exit") and lf_image_path and ff_image_path
+            and ff_image_path in refs and Path(str(lf_image_path)).exists()):
+        refs = [str(lf_image_path) if r == ff_image_path else r for r in refs]
+        if logger:
+            logger.verbose("  [KEYFRAME] after/exit 帧环境锚：ff 整图→lf 整图"
+                           "（防已离场角色经图像通道回流）")
+
+    mid_action = stage_l not in _KF_FF_ANCHOR_EXEMPT_STAGES
     if (mid_action and ff_image_path and ff_image_path in refs
             and _text_sim_ratio(kf_desc_raw, ff_desc) >= _KF_FF_SIM_THRESHOLD):
         kept = [r for r in refs if r != ff_image_path]
-        for sr in (scene_alt_refs or []):
-            if len(kept) >= ref_limit:
-                break
-            if sr and str(sr) not in kept and Path(str(sr)).exists():
-                kept.append(str(sr))
+        # 特写帧不补场景资产图（广角图会把特写构图拉回全景，与 ff 锚同害）；
+        # closeup 由调用方判定传入，不在此扫描 prop_scan 文本（口径唯一）。
+        if not closeup:
+            for sr in (scene_alt_refs or []):
+                if len(kept) >= ref_limit:
+                    break
+                if sr and str(sr) not in kept and Path(str(sr)).exists():
+                    kept.append(str(sr))
         if kept:  # 防御：替换后不得为空（空则保留原 refs）
             refs = kept
             if logger:
@@ -3640,7 +3813,7 @@ def _compose_kf_refs(base_refs: list, *, kf_desc_raw: str, ff_desc: str,
         # 优先（08-16 钓竿幻觉教训：道具参图本身会诱导模型画道具）；漏补的
         # 代价仅是本帧道具外观与 bank 略漂移，可接受。
         base = [r for r in refs if r not in prop_ref_paths]
-        per_kf = prop_collector(
+        per_kf = _collect_prop_asset_refs(
             shot or {}, limit=max(0, ref_limit - len(base)),
             frame_desc=prop_scan, characters=characters) or []
         new_refs = base + [p for p in per_kf if p not in base]
@@ -3662,6 +3835,8 @@ async def _gen_keyframes_async(
     ff_image_path: str | None = None,
     scene_alt_refs: list | None = None,
     prop_ref_paths: list | None = None,
+    portrait_ref_paths: list | None = None,
+    lf_image_path: str | None = None,
 ) -> list[str]:
     """为镜头生成中间关键帧图片（多关键帧叙事模式）。
 
@@ -3798,7 +3973,7 @@ async def _gen_keyframes_async(
                     _kf_idx_in_shot = _all_kfs.index(kf)
             except Exception:
                 pass
-            kf_desc = _inject_frame_spec(
+            kf_desc = _inject_frame_spec_and_closeup(
                 kf_desc, shot, characters,
                 frame_kind="keyframe", kf_index=_kf_idx_in_shot,
             )
@@ -3825,21 +4000,7 @@ async def _gen_keyframes_async(
             # ff+lf+motion 合并全文——合并文本让 ff 的武器词经 props_bank 别名
             # 匹配漏进无关帧（hook kf1「神秘人匕首单独摆放」脏锚定根因；spec
             # 是 v6.57 per-frame 事实源，道具在不在本帧以它+本帧 desc 为准）。
-            _kf_prop_scan = kf_desc_raw
-            try:
-                _kfs_spec = (shot.get("frame_layouts") or {}).get("kfs") or []
-                if _kf_idx_in_shot is not None and _kf_idx_in_shot < len(_kfs_spec):
-                    _spec_parts: list[str] = []
-                    for _e in (_kfs_spec[_kf_idx_in_shot] or []):
-                        if not isinstance(_e, dict):
-                            continue
-                        _spec_parts.extend(t for t in (_e.get("position"), _e.get("pose")) if t)
-                        _pr = _e.get("props") or []
-                        _spec_parts.extend(str(p) for p in (_pr if isinstance(_pr, list) else [_pr]) if p)
-                    if _spec_parts:
-                        _kf_prop_scan = f"{kf_desc_raw} {' '.join(_spec_parts)}"
-            except Exception:
-                pass
+            _kf_prop_scan = _build_kf_prop_scan(shot, _kf_idx_in_shot, kf_desc_raw)
             kf_prop = _extract_prop_layout(shot, characters, role_scan_text=_kf_prop_scan)  # _kf_prop_scan 恒非空（kf_desc_raw 前置非空保证）；无 fallback——回合并全文=污染回归
             if kf_prop:
                 kf_desc = f"{kf_desc}。{kf_prop}"
@@ -3857,14 +4018,29 @@ async def _gen_keyframes_async(
             kf_desc_full = sanitize_prompt(ensure_prefix(kf_desc_full, STYLE_PREFIX), verbose=False)
             kf_desc_full = add_image_strict_constraints(kf_desc_full, "关键帧", shot=shot, characters=characters)
             refs = reference_paths if reference_paths else []
-            # 09-13：逐帧重配参考图（ff 整图锚条件化 + 道具参图 per-frame）。
+            # 09-13：逐帧重配参考图（ff 整图锚条件化 + 道具/肖像参图 per-frame）。
             # 零 prompt 改动，只动参考图；base_refs 不变时原样返回（缓存语义不变）。
-            if refs and (ff_image_path or prop_ref_paths):
+            if refs and (ff_image_path or prop_ref_paths or portrait_ref_paths):
+                # 肖像逐帧名单（spec on_screen）：本帧缺席角色的肖像不拼图——
+                # 全量肖像会拉模型画全员（shot_0 lf extra_person 3 vs 1 根因）。
+                # roster=None（spec 缺失）→ 不换，保留 per-shot 组装结果。
+                _kf_portraits = None
+                if portrait_ref_paths is not None:
+                    _kf_roster = _frame_spec_roster(shot, "keyframe", _kf_idx_in_shot)
+                    if _kf_roster is not None:
+                        from shared.ref_compose import active_image_ref_limit as _arl
+                        _kf_portraits = _collect_portrait_refs_for_shot(
+                            shot, characters, limit=max(1, _arl() - 2),
+                            frame_desc=_kf_prop_scan, roster=_kf_roster)
                 refs = _compose_kf_refs(
                     refs, kf_desc_raw=kf_desc_raw, ff_desc=shot.get("ff_desc", ""),
                     kf_stage=kf.get("stage"),
                     ff_image_path=ff_image_path, scene_alt_refs=scene_alt_refs,
                     prop_ref_paths=prop_ref_paths, prop_scan=_kf_prop_scan,
+                    portrait_ref_paths=portrait_ref_paths,
+                    portrait_replacements=_kf_portraits,
+                    lf_image_path=lf_image_path,
+                    closeup=_frame_spec_closeup(shot, "keyframe", _kf_idx_in_shot),
                     shot=shot, characters=characters, logger=_kf_logger)
 
             try:
@@ -4108,6 +4284,9 @@ async def gen_shot_frames(
                            if ff_path_str and Path(ff_path_str).exists() else None),
             scene_alt_refs=_collect_scene_asset_refs(shot),
             prop_ref_paths=prop_refs_for_kf or None,
+            portrait_ref_paths=portrait_refs or None,
+            lf_image_path=(str(lf_path_str)
+                           if lf_path_str and Path(lf_path_str).exists() else None),
         )
     else:
         kf_paths = []

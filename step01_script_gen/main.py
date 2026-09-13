@@ -552,6 +552,7 @@ _REPAIR_PRIORITY_CATEGORIES = (
     "over_shoulder_lock", "occlusion_layering", "gaze_direction", "gaze_convergence",
     # === 画面描述（4） ===
     "ff_lf_completeness", "ff_desc_length", "ff_multi_action", "frame_weapon_legality",
+    "weapon_holder",  # v6.70.1：09-13 hook 悬空匕首根因，由 warn-only 升级 issue 触发 LLM 修复轮
     # === 打斗/致命（1） ===
     # v6.43 08-25：fatal_wound_continuity 移除——hard_fix 阶段
     # InjuryContinuityConstraint 已确定性补 anchor（prompt/lf_desc 追加
@@ -2284,13 +2285,24 @@ def main() -> None:
         for subdir_path in (audio_dir(), vimax_working_dir(), stretched_dir()):
             if subdir_path.exists():
                 import shutil
-                shutil.rmtree(subdir_path)
-                _logger.verbose(f"  [已删除] {subdir_path.name}/")
+                try:
+                    shutil.rmtree(subdir_path)
+                    _logger.verbose(f"  [已删除] {subdir_path.name}/")
+                except PermissionError as _e:
+                    # 09-13 实测：Explorer/看图器/杀毒占用目录 → WinError 32。
+                    # 清理失败就 FATAL 会吞掉整个 LLM 生成结果（此时 script 尚未
+                    # 落盘，两轮实跑各 ~10 min 全白跑）。旧帧由内容哈希自动失效
+                    # （ff/kf desc 变更 → hash mismatch → step02a 重抽），跳过即可。
+                    _logger.warn(f"  [WARN] {subdir_path.name}/ 被占用（{type(_e).__name__}），"
+                                 "跳过清理——旧文件由内容哈希自动失效")
     # 删除最终视频和字幕（脚本结构变了，最终产物必须重做）
     for fpath in (final_file(), subtitles_file()):
         if fpath.exists():
-            fpath.unlink()
-            _logger.verbose(f"  [已删除] {fpath.name}")
+            try:
+                fpath.unlink()
+                _logger.verbose(f"  [已删除] {fpath.name}")
+            except PermissionError:
+                _logger.warn(f"  [WARN] {fpath.name} 被占用（播放器？），跳过重删")
 
     # ========================================================================
     # 钩子分镜生成（v6 沿用 + v6.39 调用顺序硬约束）

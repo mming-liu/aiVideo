@@ -235,8 +235,19 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
     # v6.52 防线1：人数断言——给视觉模型一个具体数字去清点（模糊的「人物数量」
     # 检查项会被跳过；hook ff 画了 4 人 QC 判 0 问题实测）。容忍 +1（威胁源
     # 双实例/背景 1 路人），超出即 critical（IMAGE_QC_WRITE_CRITICAL=1 删帧重生成）。
-    _cl_entities = [str(it.get("name", "")).strip() for it in (shot.get("char_layout") or [])
-                    if isinstance(it, dict) and str(it.get("name", "")).strip()]
+    # 09-13：名单改读 per-frame spec（frame_layouts.{ff,lf}.on_screen，v6.57
+    # 事实源）——旧读 char_layout 全镜单表，lf「刺客遁水剩 2 人」被名单 1
+    # 卡 critical 连烧 3 次（shot_0 lf 实测）；spec 缺失/空 → 回退 char_layout。
+    from shared.frame_spec import get_frame_spec as _get_spec
+    _spec_names: list[str] = []
+    if frame_kind in ("first_frame", "last_frame"):
+        _spec_names = [str(s.get("name", "")).strip()
+                       for s in (_get_spec(shot, frame_kind) or [])
+                       if isinstance(s, dict) and s.get("on_screen") is True
+                       and str(s.get("name", "")).strip()]
+    _cl_entities = _spec_names or [
+        str(it.get("name", "")).strip() for it in (shot.get("char_layout") or [])
+        if isinstance(it, dict) and str(it.get("name", "")).strip()]
     if _cl_entities and not empty_scene:
         _tol0 = _PERSON_TOLERANCE
         lines.append(
@@ -782,6 +793,32 @@ def _expected_persons(shot: dict, frame_kind: str, characters: list | None, kf_i
         except Exception:
             pass
     return len(names)
+
+
+def _adjust_expected_for_shadow(shot: dict, frame_kind: str, characters,
+                                expected: int | None,
+                                kf_index: int | None = None) -> int | None:
+    """「威胁源以水下黑影呈现、不计入实体人数」时的期望人数调整（防重复剔除）.
+
+    v6.61 原意：prompt 约束块把威胁源写成黑影（不计入实体人数）时，QC 期望
+    同步 -1，保证 prompt/QC 两侧规格同源（4 次 critical 全烧根修）。
+    09-13 重复剔除 bug（shot_0 lf 3 次耗尽根因）：新章 spec 路径下威胁源
+    on_screen=false **已被排除在计数外**（_expected_persons=2 正确），此处
+    再 -1 → 名单 1 → 2 人图永远 critical。仅当威胁源**仍在本帧在场名单**
+    （spec on_screen=true 但以黑影呈现，或老章 char_layout 含威胁源）才 -1。
+    """
+    if expected is None:
+        return None
+    if not _threat_shadow_not_counted(shot, frame_kind, characters):
+        return expected
+    from step01_script_gen.prompt_semantic import THREAT_VISIBILITY_KEYWORDS as _TKW
+    if isinstance(shot.get("frame_layouts"), dict):
+        # 新章 spec 路径：威胁源在场才减（on_screen=false 已剔除，不重复减）
+        from shared.frame_spec import spec_on_screen_names as _son
+        on = _son(shot, frame_kind, kf_index=kf_index)
+        if not any(any(kw in n for kw in _TKW) for n in on):
+            return expected
+    return max(0, expected - 1)
 
 
 def _color_of(attrs: str) -> str:
@@ -1516,10 +1553,26 @@ def build_claim_checks_spec(shot: dict, frame_kind: str, kf_index: int | None = 
                 "expect": "yes", "key": True,
             })
     # 3) 视线（key=True，视线答错走 regen）
+    # 09-13 gaze 状态豁免：角色处于「双目紧闭/昏迷」等无视线状态时即使 spec
+    # 填了 gaze_target 也不出题——闭眼的人画不出"看向X"，必判 no 烧重试
+    # （hook ff 杨旭双目紧闭 vs「视线看向画右刺客」3 次耗尽根因）。判定走
+    # shared.frame_spec.gaze_blocked_for（与 step01 校验单一事实源）。
+    from shared.frame_spec import gaze_blocked_for as _gaze_blocked
+    _kfs_data = shot.get("keyframes") or []
+    _frame_text = ""
+    if frame_kind == "first_frame":
+        _frame_text = shot.get("ff_desc", "") or ""
+    elif frame_kind == "last_frame":
+        _frame_text = shot.get("lf_desc", "") or ""
+    elif frame_kind == "keyframe" and kf_index is not None and kf_index < len(_kfs_data):
+        _frame_text = (_kfs_data[kf_index] or {}).get("desc", "") or ""
+    _on_names = [str(s.get("name", "")).strip() for s in on_screen_items]
     for s in on_screen_items:
         name = str(s.get("name", "")).strip()
         gaze = str(s.get("gaze_target", "")).strip()
         if name and gaze and gaze not in ("无", "无视线", ""):
+            if _gaze_blocked(name, s, _frame_text, _on_names):
+                continue  # 无视线状态（双目紧闭/昏迷）——不出视线题
             qs.append({
                 "q": f"画面是否表现：{name}的视线看向{gaze}？",
                 "expect": "yes", "key": True,
@@ -1538,10 +1591,16 @@ def build_claim_checks_spec(shot: dict, frame_kind: str, kf_index: int | None = 
     # v6.55 D 方案：reliability 标（生成期一次完成）
     for q in qs:
         q["reliability"] = _claim_reliability(q["q"])
-    # 视线问句 reliability 强制 high（不含 low 触发词，答错走 regen）
+    # 视线问句 reliability 强制 low（09-13 降级，与道具问句同档）：
+    #   - 视线方向是图片模型与 VLM 双弱的语义判定（09-13 听香「视线看向画右
+    #     水面」图像视觉正确但 VLM 3 连判 no、烧满重试实测）；
+    #   - key=True + high 时答错即 regen = 每个含 gaze 镜头固定烧 2-3 张。
+    #   首错 warning、连错才升级 critical（v6.55 D 方案低可靠档）。
+    #   视线矛盾类问题（双目紧闭角色）已由 gaze_blocked_for 在出题前豁免，
+    #   此处处理的是「合法但判不准」的剩余视线题。
     for q in qs:
         if "视线看向" in q.get("q", ""):
-            q["reliability"] = "high"
+            q["reliability"] = "low"
     # 道具问句 reliability 强制 low（08-31 第 3 层降级）：
     #   - VLM 判「持有小物件」本身不稳（遮挡/角度/手持 vs 放身边）
     #   - spec 道具状态正确性未经实抽验证，有执法错误风险
@@ -1655,8 +1714,9 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
         # 两侧规格必须同源：约束块判「黑影呈现」→ QC 期望人数同步剔除威胁源。
         # 判定与 style_prefix 同一函数（_threat_visible_in 对本帧叙事 desc），
         # 保证 prompt/QC 两层永不互斥。
-        if expected is not None and _threat_shadow_not_counted(shot, frame_kind, characters):
-            expected = max(0, expected - 1)
+        # 09-13：抽 _adjust_expected_for_shadow（防 spec on_screen=false 重复剔除）。
+        expected = _adjust_expected_for_shadow(shot, frame_kind, characters,
+                                               expected, kf_index=kf_index)
         if expected is not None:
             tol = _PERSON_TOLERANCE
             if abs(person_count - expected) > tol:
