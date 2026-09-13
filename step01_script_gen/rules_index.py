@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import TypedDict
 
 
@@ -39,6 +40,33 @@ class RuleEntry(TypedDict, total=False):
 # ---------------------------------------------------------------------------
 
 RULES_INDEX: dict[str, RuleEntry] = {
+    # ========================================================================
+    # v6.70 — 总时长规划目标 70-80s + 武器 holder 校验 + kf 帧级冗余（2026-09-13）
+    # ========================================================================
+    "v6.70": {
+        "name": "总时长规划目标 70-80s（合法带 60-90s 不动）+ weapon_holder 校验 + kf 帧级冗余 + kf 参考图 per-frame 化",
+        "date": "2026-09-13",
+        "prompt_sections": [
+            "prompts/system.md:K3. mid 阶段 kf 必须与 ff 拉开动作差异",
+            "prompts/system.md:规划目标 70-80s（按 ~75s 分配）",
+            "prompts/doubao_system.md:RULE-13b",
+            "prompts/doubao_system.md:RULE-8",
+            "prompts.py:_build_total_duration_constraint",
+            "prompts.py:_build_regen_iron_rules",
+        ],
+        "constraints": [
+            "kf_frame_redundancy",       # K9: mid-kf≈ff / kf≈kf / spec 复制检测（WARN）
+        ],
+        "validation_checks": [
+            "_check_weapon_holder",      # 武器词必须有持握主体/落点锚（WARN，hook 悬空匕首根因）
+        ],
+        "tests": [
+            "tests/step01_script_gen/constraints/test_kf_frame_redundancy.py",
+            "tests/step01_script_gen/test_weapon_holder.py",
+            "tests/shared/test_kf_refs_per_frame.py",  # vimax_bridge._compose_kf_refs（step02a 侧）
+        ],
+    },
+
     # ========================================================================
     # v6.69 — 旧 _hard_fix_* 家族删除 + 结构归一约束三件套（2026-09-12）
     # ========================================================================
@@ -377,6 +405,13 @@ RULES_INDEX: dict[str, RuleEntry] = {
 # 辅助函数
 # ---------------------------------------------------------------------------
 
+def _version_key(v: str) -> tuple[int, int]:
+    """版本号数值排序键（"v6.100" > "v6.99"）——字符串字典序在 v6.100 边界
+    翻车（"v6.100" < "v6.70"），latest/get_rule_version 必须走数值序。"""
+    m = re.fullmatch(r"v(\d+)\.(\d+)", v)
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
 def get_rule_version(version: str) -> RuleEntry | None:
     """获取指定版本的规则条目（支持不精确匹配：v6.5 匹配 v6.5x 最新版）."""
     if version in RULES_INDEX:
@@ -385,12 +420,12 @@ def get_rule_version(version: str) -> RuleEntry | None:
     candidates = [k for k in RULES_INDEX if k.startswith(version)]
     if not candidates:
         return None
-    return RULES_INDEX[sorted(candidates)[-1]]
+    return RULES_INDEX[max(candidates, key=_version_key)]
 
 
 def latest_version() -> str:
-    """返回最新版本号."""
-    return sorted(RULES_INDEX.keys())[-1]
+    """返回最新版本号（数值序——09-13 修：字符串序在 v6.100 处翻车）."""
+    return max(RULES_INDEX.keys(), key=_version_key)
 
 
 def all_constraint_names() -> set[str]:

@@ -101,7 +101,18 @@ def test_helper_functions():
         get_rule_version,
         latest_version,
     )
-    assert latest_version() == "v6.69"
-    assert get_rule_version("v6.5") is not None  # 模糊匹配 → v6.58（5x 最新）
+    # latest_version 语义断言：数值最大者（不写死版本号——写死是 change
+    # detector，每次加版本都要改测试却测不到任何行为）
+    from step01_script_gen.rules_index import RULES_INDEX, _version_key
+    assert latest_version() == max(RULES_INDEX.keys(), key=_version_key)
+    assert get_rule_version("v6.5") is not None  # 模糊匹配 → v6.5x 最新
     assert get_rule_version("v9.99") is None
     assert "ff_lf_temporal" in all_constraint_names()
+
+
+def test_version_sort_is_numeric():
+    """数值序回归（09-13）：字符串字典序在 v6.100 边界翻车（"v6.100"<"v6.70"）."""
+    from step01_script_gen.rules_index import _version_key
+    assert _version_key("v6.100") > _version_key("v6.70")
+    assert _version_key("v6.100") > _version_key("v6.99")
+    assert _version_key("v7.1") > _version_key("v6.100")

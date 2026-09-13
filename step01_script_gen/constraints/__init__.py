@@ -66,6 +66,7 @@ from .prompt_sanitize import PromptSanitizeConstraint  # J4 prompt 消毒（v6.5
 from .prop_prompt_consistency import PropPromptConsistencyConstraint  # L2 道具名一致性（v6.51, 09-02）
 from .cross_shot_continuity import CrossShotContinuityConstraint  # K2 跨镜衔接（v6.51, 09-02）
 from .ff_lf_redundancy import FfLfRedundancyConstraint  # K3 三态冗余检测（v6.51, 09-02）
+from .kf_frame_redundancy import KfFrameRedundancyConstraint  # K9 kf 帧级冗余（09-13）
 from .kf_pose_anchor import KfPoseAnchorConstraint  # F4 kf 姿态+位置+威胁朝向（v6.49, 08-28）
 from .redguo_scene_char_limit import RedguoSceneCharLimitConstraint  # F5 红果场景/人物硬上限（v6.49, 08-28）
 from .post_combat_blank import PostCombatBlankConstraint  # F6 打斗战后空镜收尾（v6.49, 08-28）
@@ -134,6 +135,7 @@ ALL_CONSTRAINTS.extend([
     PropPromptConsistencyConstraint(),  # L2 道具名一致性：别名→标准名（v6.51, 09-02）
     CrossShotContinuityConstraint(),   # K2 跨镜衔接：场景转场+状态跳变检测（v6.51, 09-02）
     FfLfRedundancyConstraint(),        # K3 三态冗余：FF/LF/Motion 内容重复检测（v6.51, 09-02）
+    KfFrameRedundancyConstraint(),     # K9 kf 帧级冗余：mid-kf≈ff / kf≈kf / spec 复制（09-13）
     KfPoseAnchorConstraint(),  # F4 kf 姿态+位置+威胁朝向（v6.49, 08-28）
     RedguoSceneCharLimitConstraint(),  # F5 红果场景/人物硬上限 HARD（v6.49, 08-28）
     PostCombatBlankConstraint(),  # F6 打斗战后空镜收尾（v6.49, 08-28）

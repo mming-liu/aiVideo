@@ -50,6 +50,7 @@ RULE-12 **高潮 kf 分布**：必须落在 50-90% 时段，禁止全在前 50%�
 【格式规则 · 中优先级（不拒收但会扣分）】
 
 RULE-13 **kf t_sec 范围**：0.05 ≤ t_sec < duration_sec，超界即非法。
+RULE-13b **mid 阶段 kf 与 ff 拉开差异**：approach/climax/react 帧 desc 与 ff_desc 不得雷同（姿态/手臂/角度/头部朝向 ≥2 项可量化不同）；写不出差异就 keyframes=[]（无 kf 合法），禁止 ff 复读帧（高相似 kf 生图必复刻 ff）。pre 可近 ff、after/exit 可近 lf。
 RULE-14 **kf desc 自我完备**：禁止"同上/动作相同/参考前镜"等占位模板。
 RULE-15 **frame_layouts 6 字段必填**：name / on_screen / position / pose / gaze_target / props 缺一即拒。
 RULE-16 **角色锚点填 main_subject**：有人物出镜时必填「角色名+动作」（如"杨旭垂钓"），从 characters.identifier 挑选。

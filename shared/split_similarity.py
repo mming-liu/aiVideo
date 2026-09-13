@@ -81,9 +81,27 @@ def is_split_pair(shot: dict) -> bool:
     return "." in str(idx)
 
 
+def text_sim_ratio(text_a: str, text_b: str) -> float:
+    """去标点空白后的 difflib 字符级相似度（0-1）.
+
+    09-13 自 shared/vimax_bridge 迁入（单一事实源）：kf↔ff 同源判定共用
+    （vimax_bridge._compose_kf_refs 与 constraints/kf_frame_redundancy）。
+    与 jaccard_bigram 的区别：difflib 保序，对「同骨架微调语序」更敏感；
+    去标点防「同文异标点」拉低分值。
+    """
+    import difflib
+    import re as _re
+    _clean = lambda s: _re.sub(r"[\s，。；：、（）()【】\"'“”…—-]", "", s or "")
+    a, b = _clean(text_a), _clean(text_b)
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
 __all__ = [
     "jaccard_bigram",
     "shot_action_text",
     "split_pair_similarity",
     "is_split_pair",
+    "text_sim_ratio",
 ]

@@ -4150,6 +4150,10 @@ def _run_prompt_checklist(script: dict) -> dict:
     # 08-15 新增：非战斗镜头武器词检查（拦截描述层武器泄漏，hook 帧被塞匕首）
     results["frame_weapon_legality"] = _check_frame_weapon_legality(shots, hook, script.get("characters", []))
 
+    # 09-13 新增：武器 holder 校验（hook 悬空匕首根因——武器词必须有持握主体/
+    # 落点锚，否则图片模型画悬浮武器。与 frame_weapon_legality 互补，warning-only）
+    results["weapon_holder"] = _check_weapon_holder(shots, hook, script.get("characters", []))
+
     # v6.8 新增：情绪可视化检查（将抽象情绪词转化为具体肢体动作）
     results["emotion_visualization"] = _check_emotion_visualization(shots, hook)
 
@@ -4357,6 +4361,7 @@ _REGEN_FEEDBACK_LABELS = {
     "action_overlap": "动作重叠",
     "multi_person_staging": "多人站位",
     "frame_weapon_legality": "非战斗镜头武器词",
+    "weapon_holder": "武器持握主体(09-13)",
     "subtitle_leak": "画面无字幕(规则40)",
     "grounding": "原文锚点校验",
     "climax_priority": "高潮优先原则(v6.35)",
@@ -5352,6 +5357,77 @@ def _check_frame_weapon_legality(shots: list[dict], hook: dict | None = None,
             warnings.append(
                 f"{label}:非战斗/无威胁镜头 ff/lf/prompt 出现武器词({','.join(hit)}),"
                 "图片模型会渲染出该武器;若角色确实空手请删除,或改为明确归属")
+    return {"pass": True, "issues": issues, "warnings": warnings}
+
+
+def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
+                         characters: list | None = None) -> dict:
+    """武器名词必须有持握主体或落点锚（09-13 hook 悬空匕首根因）.
+
+    hook ff_desc「一支短刃自画外斜入画面，刀尖抵近张十三身侧」——
+    frame_layouts.ff 两人 props 全空、同句无 holder 动词，图片模型画不出
+    「画外手」，只能画一把悬浮刀（实测 ff/kf0 两图均现悬空匕首，kf0 经
+    ff 整图参考 i2i 传播）。
+
+    逐帧检查（ff/lf/kf desc）：武器词所在分句无 holder 动词（握/持/拔/…）
+    且无落点锚（插在/落地/没入/…），frame_layouts 对应帧所有角色 props
+    又为空 → WARN。隐藏武器（未出鞘/藏/潜伏 ±8 字窗口）豁免。
+    warning-only：「自画外斜入」在悬念戏是合法镜头语言，先观察误报率再定
+    是否升级拒收（与 _check_frame_weapon_legality 互补：那个管「非战斗镜
+    不该有武器」，这个管「武器必须有主」）。
+    """
+    from shared.content_safety import (WEAPON_WORDS as _W_WORDS,
+                                       WEAPON_HIDDEN_WORDS as _W_HIDDEN)
+    _W_EXTRA = ("短刃", "利刃", "兵刃")  # WEAPON_WORDS 不含「刃」系单作词，本地补充
+    _ALL_W = list(_W_WORDS) + list(_W_EXTRA)
+    _HOLDER_VERBS = ("握", "持", "拔", "抽", "执", "攥", "拎", "提", "按", "掷", "甩", "接")
+    _DROP_ANCHORS = ("插在", "刺在", "钉在", "落地", "掉落", "坠入", "没入", "沉入",
+                     "置于", "放在", "横在")
+    issues, warnings = [], []
+    checks = [(s, f"镜头{s.get('index')}") for s in shots]
+    if hook:
+        checks.insert(0, (hook, "钩子"))
+    for shot, label in checks:
+        fl = shot.get("frame_layouts") or {}
+        frames = [("ff", shot.get("ff_desc", "") or "", fl.get("ff") or []),
+                  ("lf", shot.get("lf_desc", "") or "", fl.get("lf") or [])]
+        kfs = shot.get("keyframes") or []
+        kfs_spec = fl.get("kfs") or []
+        for ki, kf in enumerate(kfs):
+            if not isinstance(kf, dict):
+                continue
+            spec = kfs_spec[ki] if ki < len(kfs_spec) else []
+            frames.append((f"kf{ki}", kf.get("desc", "") or "",
+                           spec if isinstance(spec, list) else []))
+        for flabel, text, spec_entries in frames:
+            if not text:
+                continue
+            t = text
+            for excl in ("戟指", "剑眉", "刀眉", "烟枪"):  # 与武器词检查同口径
+                t = t.replace(excl, "")
+            hit = next((w for w in _ALL_W if w in t), None)
+            if not hit:
+                continue
+            hp = t.find(hit)
+            win = t[max(0, hp - 6):hp + len(hit) + 8]
+            if any(w in win for w in _W_HIDDEN):
+                continue  # 隐藏武器（未出鞘/藏/潜伏）豁免——本来就不该画出来
+            seg = next((s for s in re.split(r"[，。；！？\n]", t) if hit in s), t)
+            if any(v in seg for v in _HOLDER_VERBS) or any(a in seg for a in _DROP_ANCHORS):
+                continue
+            held = any(
+                isinstance(e, dict) and any(
+                    isinstance(p, str) and any(w in p for w in _ALL_W)
+                    for p in (e.get("props") or [])
+                )
+                for e in spec_entries
+            )
+            if held:
+                continue
+            warnings.append(
+                f"{label} {flabel}: 武器词「{hit}」无持握主体/落点锚（frame_layouts "
+                f"props 空 + 同句无握持/落点动词）——图片模型只能画悬浮武器；"
+                f"补 holder（如「画外伸入一只握刀的手」）或删除该句")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
