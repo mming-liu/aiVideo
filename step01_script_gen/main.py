@@ -213,8 +213,8 @@ def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
             _logger.info("[INFO] 章节大纲已预提取（并发），注入分镜 prompt")
         except Exception as e:
             _logger.warn(f"[WARN] 大纲转 anchor 失败: {e}，继续无大纲生成")
-    # v6.68: prompt/system 跟着实际模型走——deepseek-v4-flash → deepseek 剖面
-    # （system.md + 全文 novel，无 1600 截断）；doubao → doubao 剖面（1600 截断）。
+    # v6.68: prompt/system 跟着实际模型走——deepseek-v4-flash → deepseek 剖面；
+    # doubao → doubao 剖面。两者都保留完整 novel，由 PROMPT_MAX_CHARS 统一控上限。
     # 此前 agent_plan 下所有模型共用 doubao prompt，是候选结构性零高潮的根因。
     _main_builder, _system = resolve_model_prompt_profile(model)
     prompt = _main_builder(novel_text, bank, objects_bank, outline_anchor)

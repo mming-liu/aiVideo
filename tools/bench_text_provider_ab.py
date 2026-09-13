@@ -12,9 +12,8 @@ v6.59 (2026-09-04) 新增：
       - doubao:   build_doubao_prompt + DOUBAO_SYSTEM_PROMPT + json_object (no strict schema)
   - **pre-extract 共用**：角色/物体/大纲预提取只跑一次（用 deepseek 基线），存盘后 A/B 共用。
   - **打分复用 bench_reasoning.score_one**（与生产流水线一致），横向可比。
-  - **公平性警示**：doubao novel_text 被截到 1600 字（build_doubao_prompt 内置），
-    deepseek 用全章。这反映了"生产配置"差异，不强行做"同输入对比"——那种对比
-    对工程选型无指导意义。
+  - **输入对齐**：deepseek 与 doubao 均使用同一份全章 novel_text；章节总上限
+    由上游 PROMPT_MAX_CHARS 统一控制。
   - **成本控制**：默认 trials=1（每 provider 1 次 LLM 调用），约 5-7 分钟。
     提高 trials 会指数级拉长（doubao 单次 3-5 分钟 + deepseek 1-2 分钟）。
 

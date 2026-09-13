@@ -115,7 +115,7 @@ python -m shared.chapter_reader 锦衣夜行_77119小说.txt
 ### step01 doubao 路径（v6.61 provider-neutral，2026-09-06）— 详见 CLAUDE.md
 - 启用方法：`TEXT_PROVIDER=agent_plan`（doubao-seed-2-1-turbo，**默认仍为 deepseek**）；退出：unset TEXT_PROVIDER 即可
 - 修复栈全 provider 单路径共享：GAP 重生/修复轮走 `main.py` 统一实现（`_regen_over_limit` / `_repair_shot_warnings`），hardfix 走 `constraints/` 共享 `ALL_CONSTRAINTS`（原 doubao 7 个专用 Constraint 已于 v6.61 并入；`doubao_pipeline.py` / `doubao_hardfix.py` / `doubao_repair_prompts.py` 三文件已删除）
-- doubao 专属仅剩：`prompts/doubao_system.md`（XML schema + few-shot system prompt）+ prompt 截断策略（novel ≤1600 字 / outline ≤200 字）
+- doubao 专属仅剩：`prompts/doubao_system.md`（XML schema + few-shot system prompt）+ outline_anchor 精简（≤200 字）；novel 不做 Doubao 私有截断，统一走 `PROMPT_MAX_CHARS` 上限
 - main.py 无 doubao 专用 if/else 分支：`auto_select_prompt_builder` / `auto_select_system_prompt` 按 TEXT_PROVIDER 选层（doubao 调用点显式传 `temperature=0.2`）
 - 防回归守卫：`tests/step01_script_gen/constraints/test_registry.py` 断言约束名不得以 `doubao_` 开头、无 provider 专属 repair_marker
 - 单测：已并入 tests/step01_script_gen/（`doubao_hardfix/` 子目录已不存在）

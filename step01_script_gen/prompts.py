@@ -657,6 +657,40 @@ def _slice_by_plot_unit(text: str, max_chars: int) -> str:
     return truncated
 
 
+def _compact_doubao_outline_anchor(outline_anchor: str, max_chars: int = 200) -> str:
+    """Compress outline anchors while always retaining the climax line."""
+    lines = [line.strip() for line in outline_anchor.splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    def joined_len(parts: list[str]) -> int:
+        return sum(len(part) for part in parts) + max(len(parts) - 1, 0)
+
+    if joined_len(lines) <= max_chars:
+        return "\n".join(lines)
+
+    climax = next(
+        (line for line in lines if line.startswith("【高潮事件】")),
+        "",
+    )
+    if not climax:
+        kept: list[str] = []
+        for line in lines:
+            if joined_len(kept + [line]) > max_chars:
+                break
+            kept.append(line)
+        return "\n".join(kept)
+
+    kept = []
+    for line in lines:
+        if line == climax:
+            continue
+        if joined_len(kept + [line]) + 1 + len(climax) > max_chars:
+            break
+        kept.append(line)
+    return "\n".join(kept + [climax])
+
+
 def build_doubao_prompt(novel_text: str, bank=None, objects_bank=None,
                         outline_anchor: str = "") -> str:
     """doubao-seed-2-1-turbo 专用分镜生成 prompt.
@@ -664,12 +698,10 @@ def build_doubao_prompt(novel_text: str, bank=None, objects_bank=None,
     与 build_prompt 区别：
       - system prompt 走 DOUBAO_SYSTEM_PROMPT（XML schema 块 + few-shot + workflow 9 步）
       - main 主体复用 PROMPT_TEMPLATE（业务规则统一，schema 同步）
-      - **novel_text 截断到 ≤1600 字符**（2026-09-03 现场压测：doubao-seed-2-1-turbo
-        窗口 256k 但输入越大推理时间线性变慢，4847 字章节会撞 180s 客户端超时；
-        1600 字对应 60-90s 短剧所需情节密度，足够覆盖核心事件链）
-      - **outline_anchor 精简到 ≤200 字符**（main_events/climax 等压缩成 1-2 行
-        锚点，避免与"workflow 仅内部思考"指令冲突——main_events 完整注入会让模型
-        把它当 schema 字段，输出 main_events 等额外字段）
+      - 不做 Doubao 私有截断；由上游 PROMPT_MAX_CHARS 统一控制章节上限，
+        避免后半段高潮/反转被切到 prompt 外
+      - **outline_anchor 精简到约 200 字符且必保【高潮事件】**（避免完整大纲
+        被当成 schema 字段；高潮行是分镜分布的最关键锚点，压缩时不可丢弃）
       - 同样注入 character_anchors / scene_object_anchors / vocab / local_ctx / knowledge_ctx /
         cap_ctx / total_dur_ctx（与 build_prompt 对齐）
 
@@ -679,31 +711,11 @@ def build_doubao_prompt(novel_text: str, bank=None, objects_bank=None,
     char_anchors = _build_character_anchors(bank) if bank else "无已知角色"
     scene_object_anchors = _build_scene_object_anchors(objects_bank) if objects_bank else "无场景物体"
 
-    # 2026-09-03 现场压测：4847 字符全章节 + system 9.7k + 注入大纲 → 撞 180s 超时。
-    # 1600 字符 ≈ 1 章核心情节密度（60-90s 短剧足够），再大推理时间线性暴涨。
-    # v6.59 改进：分级截断——优先段边界（\n\n），再句号边界（。！？；），最后字符边界。
-    #   - 段边界最干净（保完整剧情单元）
-    #   - 句号次之（保完整句子）
-    #   - 字符最后兜底（可能切碎但不超 1600 字符）
-    _DOUBAO_NOVEL_MAX = 1600
-    if len(novel_text) > _DOUBAO_NOVEL_MAX:
-        novel_text = _slice_by_plot_unit(novel_text, _DOUBAO_NOVEL_MAX)
-
     # 2026-09-03 现场压测：main_events 完整注入会让模型把"大纲"当 schema 字段
     # 输出额外字段（gender/age_range/main_events 等），违反 R6 规则。
-    # 精简到核心 1-2 行：只保留主事件 3 条 + 高潮 + 情绪弧线各 1 行（≤200 字符）。
+    # 精简到核心 1-2 行：优先保留主事件与高潮；情绪弧线/结尾钩子可让位。
     if outline_anchor and len(outline_anchor) > 200:
-        lines = outline_anchor.splitlines()
-        compact = []
-        char_count = 0
-        for ln in lines:
-            if not ln.strip():
-                continue
-            if char_count + len(ln) > 200:
-                break
-            compact.append(ln)
-            char_count += len(ln)
-        outline_anchor = "\n".join(compact) if compact else ""
+        outline_anchor = _compact_doubao_outline_anchor(outline_anchor)
 
     # 注入 doubao 专属 system + 复用 main 主体
     main_body = PROMPT_TEMPLATE.format(
@@ -778,11 +790,10 @@ def auto_select_system_prompt(provider: str) -> str:
 # 背景（2026-09-12 47 分事故分析）：TEXT_PROVIDER=agent_plan 时所有候选模型共用
 # build_doubao_prompt + DOUBAO_SYSTEM_PROMPT，novel 被 _DOUBAO_NOVEL_MAX=1600 截断。
 # 该截断是 09-03 为 doubao 180s 超时压测定的——本章高潮在原文 2878-4847 字，被切在
-# prompt 外 → 候选结构性零高潮，全靠 GAP 救援兜底；deepseek-v4-flash 无此超时约束，
-# 却被塞了同一套 doubao prompt。
+# prompt 外 → 候选结构性零高潮，全靠 GAP 救援兜底。该私有截断已于本轮移除；
+# 章节长度统一由上游 PROMPT_MAX_CHARS 控制。
 # 规则：子串匹配、大小写不敏感、具体在前泛化在后（同 shared/ref_compose 惯例）。
-# novel 截断策略由 builder 自带（build_doubao_prompt=1600 / build_prompt=不截断，
-# 上游 chapter_reader 另有 PROMPT_MAX_CHARS 总闸）。
+# 威胁源统一写「神秘人」的 main 规则由后处理折叠约束处理，不作为模型画像差异。
 
 MODEL_PROMPT_PROFILES = [
     # (模型名子串, main_builder, system_prompt)
