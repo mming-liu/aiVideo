@@ -414,17 +414,28 @@ def active_video_prompt_cap() -> int:
 def active_video_supports_audio() -> bool:
     """当前视频模型是否自带语音（generate_audio / 原生发声）.
 
-    False 表示成片无声：Seedance 1.0 系列、MiniMax v1 Hailuo。
-    架构默认 VIDEO_MODEL_VOICE=1（对话交给视频模型），此处为 False 时必须提示
-    换有声模型或设 VIDEO_MODEL_VOICE=0 走 step03 TTS，否则成片静音。
+    2026-09-13 审计修复：本函数此前在 414/439 重复定义，后者覆盖前者且两者
+    口径互相矛盾（MiniMax 全判有声 vs 仅 H3 有声；bailian 全判无声 vs wan2.7
+    有声），现合并为单一实现，口径与模型能力矩阵对齐：
+
+    - volcengine / agent_plan（Seedance）：按能力表（1.0 无声，1.5pro/2.0/2.5 有声）
+    - minimax：仅 H3 有声（r2v 路径自动升 H3）；v1 Hailuo 无声
+    - bailian：wan2.7 系列有声（对话/背景音由视频模型生成），happyhorse 无声
+      （step04 注释实证：happyhorse 产出片段无音频轨）
+    - agnes / dashscope：无声（历史链路，对白走 step03 TTS）
+
+    消费点：step01 音频指令段门控 + _warn_silent_video_model；step02
+    prompt_builder 对话/背景音注入门控（无声模型注入声音指令是 prompt 噪声）。
     """
     provider = os.getenv("VIDEO_PROVIDER", "bailian")
-    mode = (os.getenv("VIDEO_REFERENCE_MODE", "text") or "text").strip().lower()
     if provider in ("volcengine", "agent_plan"):
-        return get_seedance_cap(active_video_model()).supports_generate_audio
+        return bool(get_seedance_cap(active_video_model()).supports_generate_audio)
     if provider == "minimax":
-        return mode == "r2v"  # 仅 H3 有声；v1 Hailuo 无声
-    return True  # bailian(wan2.7 系列) / agnes / dashscope 默认有声
+        mode = (os.getenv("VIDEO_REFERENCE_MODE", "text") or "text").strip().lower()
+        return mode == "r2v" or "h3" in active_video_model().lower()
+    if provider == "bailian":
+        return "wan" in active_video_model().lower()
+    return False  # agnes / dashscope 旧链路无声（历史口径）
 
 
 def active_video_uses_native_voice() -> bool:
@@ -434,22 +445,6 @@ def active_video_uses_native_voice() -> bool:
     bailian / agnes / dashscope = False（沿用「（用中文说）」指令格式，历史行为）。
     """
     return os.getenv("VIDEO_PROVIDER", "bailian") in ("volcengine", "minimax", "agent_plan")
-
-
-def active_video_supports_audio() -> bool:
-    """当前视频模型是否支持 generate_audio（2026-09-12 新增）.
-
-    无声模型（如 volcengine Seedance 1.0 系列）下 prompt 不应携带任何
-    BGM/SFX/VO/口型类声音指令——模型执行不了，白占 token 且可能干扰画面
-    （对白由 step03 TTS + step04 后期呈现）。step01 音频指令段按此门控。
-    """
-    provider = os.getenv("VIDEO_PROVIDER", "bailian")
-    if provider in ("volcengine", "agent_plan"):
-        cap = get_seedance_cap(active_video_model())
-        return bool(cap.supports_generate_audio)
-    if provider == "minimax":
-        return True  # Hailuo v1 / H3 均有声
-    return False  # bailian / agnes / dashscope 旧链路无声（历史口径）
 
 
 def active_video_is_seedance() -> bool:

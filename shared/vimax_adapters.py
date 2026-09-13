@@ -21,9 +21,9 @@ import _image_gen
 import _video_gen
 from _image_gen import ImageGenerationRequest
 from _video_gen import VideoGenerationRequest
-from style_prefix import STYLE_PREFIX, STYLE_PREFIX_SHORT, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt
-from style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT, IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT, IMAGE_HALLUCINATION_EXTRA_NEGATIVE
-from style_prefix import image_negative_prompt, video_negative_prompt, image_lock_prompt
+from shared.style_prefix import STYLE_PREFIX, STYLE_PREFIX_SHORT, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt
+from shared.style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT, IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT, IMAGE_HALLUCINATION_EXTRA_NEGATIVE
+from shared.style_prefix import image_negative_prompt, video_negative_prompt, image_lock_prompt
 
 from vimax.interfaces import ImageOutput, VideoOutput
 
@@ -271,19 +271,57 @@ class VideoGeneratorAiVideoAdapter:
 
     _VIDEO_SUBMIT_TIMEOUT = int(os.getenv("AGNES_VIDEO_SUBMIT_TIMEOUT", "180"))
     _VIDEO_FETCH_TIMEOUT = int(os.getenv("AGNES_VIDEO_FETCH_TIMEOUT", "1200"))
+    # asyncio.wait_for 无法取消底层线程（to_thread 的线程会继续跑）：外层 wait_for
+    # 只作兜底，主超时语义下沉到 provider 内部（轮询次数×间隔上限/HTTP timeout）。
+    # 兜底余量保证正常路径由 provider 自己结束，避免外层超时后重试与孤儿线程并发。
+    _TIMEOUT_BACKSTOP_GRACE = int(os.getenv("VIDEO_TIMEOUT_BACKSTOP_GRACE", "120"))
 
     async def submit_task(self, req) -> str:
         """提交视频生成任务，返回 task_id（不等待完成）."""
-        return await asyncio.wait_for(
-            asyncio.to_thread(self._svc.create_task, req),
-            timeout=self._VIDEO_SUBMIT_TIMEOUT,
-        )
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._svc.create_task, req),
+                timeout=self._VIDEO_SUBMIT_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            # 底层线程可能仍在提交（requests 自带 HTTP timeout，最终会返回/报错），
+            # 但 task_id 已拿不到——上层若重试会产生重复任务（烧额度），必须显式告警
+            from shared.tee_logger import get_logger
+            from shared.paths import chapter_dir
+            get_logger(chapter_dir() / "step02.log", console_level="INFO").warn(
+                f"  [WARN] 视频提交 {self._VIDEO_SUBMIT_TIMEOUT}s 外层超时；底层请求"
+                f"可能仍在进行，重试可能产生重复任务（建议检查网络/供应商状态后重跑）"
+            )
+            raise
+
+    def _wait_for_completion_with_timeout(self, req, task_id: str, timeout: int):
+        """优先把墙钟超时传给 provider（支持 timeout 参数的 provider 内部自己收口）.
+
+        volcengine / minimax / bailian / agent_plan 接受 timeout；agnes / dashscope
+        无该参数，但其内部轮询受 attempts×interval 上限约束，线程不会无限存活。
+        """
+        import inspect
+        fn = self._svc.wait_for_completion
+        try:
+            if "timeout" in inspect.signature(fn).parameters:
+                return fn(req, task_id, timeout=timeout)
+        except (TypeError, ValueError):
+            pass  # 签名不可探测（C 扩展/装饰器），按无 timeout 参数调用
+        return fn(req, task_id)
 
     async def fetch_result(self, req, task_id: str) -> "_video_gen.VideoGenerationResult":
-        """轮询等待任务完成并下载，返回结果."""
+        """轮询等待任务完成并下载，返回结果.
+
+        超时语义下沉：provider 内部在 _VIDEO_FETCH_TIMEOUT 墙钟内自行结束轮询；
+        外层 wait_for 加余量仅作兜底（防 provider 内部卡死），正常路径不触发——
+        避免外层超时取消后孤儿线程与上层重试并发轮询/下载/写文件。
+        """
         return await asyncio.wait_for(
-            asyncio.to_thread(self._svc.wait_for_completion, req, task_id),
-            timeout=self._VIDEO_FETCH_TIMEOUT,
+            asyncio.to_thread(
+                self._wait_for_completion_with_timeout, req, task_id,
+                self._VIDEO_FETCH_TIMEOUT,
+            ),
+            timeout=self._VIDEO_FETCH_TIMEOUT + self._TIMEOUT_BACKSTOP_GRACE,
         )
 
     async def generate_single_video(

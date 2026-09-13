@@ -102,14 +102,22 @@ def _update_script_with_actual_durations(working_dir: Path, script_path: Path) -
             actual_duration = _measure_actual_duration(video_path)
             if actual_duration > 0:
                 shot["actual_duration"] = round(actual_duration, 2)
-                # 相对于音频时长的偏差
+                # 2026-09-13 审计修复：期望时长用权威字段 duration_sec（step01
+                # timecode 权威计算）；此前用 shot.get("duration", 5)，字段名不对
+                # 且缺字段静默退回 5 秒，时长偏差统计基准全错。缺失时跳过偏差统计。
                 audio_ref = shot.get("actual_audio_duration", 0)
-                expected = audio_ref if audio_ref > 0 else shot.get("duration", 5)
-                deviation = abs(actual_duration - expected) / expected * 100 if expected > 0 else 0
-                shot["duration_deviation_pct"] = round(deviation, 1)
+                expected = audio_ref if audio_ref > 0 else (
+                    shot.get("duration_sec") or shot.get("duration") or 0
+                )
+                if expected > 0:
+                    deviation = abs(actual_duration - expected) / expected * 100
+                    shot["duration_deviation_pct"] = round(deviation, 1)
+                else:
+                    shot.pop("duration_deviation_pct", None)
                 updated_count += 1
 
     if updated_count > 0:
-        with open(script_path, "w", encoding="utf-8") as f:
-            json.dump(script, f, ensure_ascii=False, indent=2)
+        # 原子写：防半截 JSON（2026-09-13 审计修复，收敛 shared.json_io）
+        from shared.json_io import atomic_dump_json
+        atomic_dump_json(script_path, script, ensure_ascii=False, indent=2)
         print(f"[INFO] 已回填 {updated_count} 个镜头实际时长")

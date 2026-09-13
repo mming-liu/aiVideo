@@ -534,7 +534,11 @@ class BailianVideoService(VideoGenerationService):
         attempts = 0
         while attempts < BAILIAN_VIDEO_MAX_POLL_ATTEMPTS and time.time() - start_time < timeout:
             attempts += 1
-            time.sleep(self._cooldown)
+            # 2026-09-13 审计修复：首次查询不睡 cooldown——外层 submit_poll 已等过
+            # INITIAL_POLL_DELAY（默认 180s），这里再睡 cooldown + POLL_INTERVAL
+            # 会造成三重等待叠加
+            if attempts > 1:
+                time.sleep(self._cooldown)
 
             # 查询状态
             try:
@@ -569,13 +573,6 @@ class BailianVideoService(VideoGenerationService):
 
             # PENDING 或 RUNNING：按配置间隔等待后继续轮询
             time.sleep(BAILIAN_VIDEO_POLL_INTERVAL)
-
-        # 超时
-        return VideoGenerationResult(
-            clip_index=req.clip_index,
-            success=False,
-            error=f"轮询超时 ({timeout}s): {last_error}",
-        )
 
         # 超时
         return VideoGenerationResult(

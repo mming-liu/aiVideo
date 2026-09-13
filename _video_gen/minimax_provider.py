@@ -570,6 +570,18 @@ class MiniMaxVideoService(VideoGenerationService):
                 output = self.query_task(task_id)
             except RuntimeError as e:
                 last_error = str(e)
+                # 2026-09-13 审计修复：4xx（鉴权失效/参数错误/任务不存在）是终态，
+                # 继续轮询只会把轮询预算白耗完——fail-fast 返回失败
+                if any(f"[{c}]" in last_error for c in (400, 401, 403, 404)):
+                    _verbose_write(
+                        f"  [镜头{req.clip_index}] [!] MiniMax 查询终态错误，"
+                        f"停止轮询: {last_error[:200]}"
+                    )
+                    return VideoGenerationResult(
+                        clip_index=req.clip_index,
+                        success=False,
+                        error=f"查询终态失败: {last_error}",
+                    )
                 time.sleep(2)
                 continue
 

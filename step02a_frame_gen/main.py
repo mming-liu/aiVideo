@@ -168,26 +168,9 @@ def _strip_runtime_fields(obj):
 
 
 def _atomic_dump_json(path, obj, **kwargs):
-    """原子写 JSON：先写 .tmp，os.replace 替换原文件.
-
-    即使 json.dump 中途抛错（不可序列化对象/磁盘满/中断），原文件仍完好
-    ——避免上次的"半截文件污染原 JSON"事故（v6.x 实抽）。
-    """
-    tmp_path = Path(str(path) + ".tmp")
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(obj, f, **kwargs)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, path)
-    except Exception:
-        # 清理残留 .tmp，原文件保持完整
-        if tmp_path.exists():
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
-        raise
+    """原子写 JSON（2026-09-13 收敛到 shared.json_io，保留本地别名兼容调用点）."""
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(path, obj, **kwargs)
 
 
 def _log_shot_frames(idx: int, result: dict, logger):

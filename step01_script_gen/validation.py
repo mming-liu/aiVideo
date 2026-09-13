@@ -316,6 +316,10 @@ def _validate_script(script: dict) -> None:
     if "shots" not in script:
         raise ValueError("缺少 shots 字段")
     shots = script.get("shots", [])
+    # 2026-09-13 审计修复：结构硬门槛——空分镜直接拒绝（此前 fail-open 继续
+    # 落盘，下游 step02/04 拿到不可用脚本白烧生成额度）
+    if not shots:
+        raise ValueError("shots 为空：LLM 未产出任何有效分镜，拒绝落盘")
 
     # --- 镜头数校验（软护栏：v4.1 起数量交由 LLM 决定，此处只拦极端废输出） ---
     reported_count = script.get("shot_count")
@@ -358,6 +362,14 @@ def _validate_script(script: dict) -> None:
                 shot["subtitle"] = shot.get("narration_segment", "")
             if "prompt" in missing:
                 shot["prompt"] = ""
+
+    # 2026-09-13 审计修复：prompt 全空 = 脚本不可用，硬失败（部分空仍 WARN 放行，
+    # 由 post_fix / hard_fix 层兜底修复）
+    empty_prompt = sum(1 for s in shots if not str(s.get("prompt", "")).strip())
+    if empty_prompt == len(shots):
+        raise ValueError("全部镜头 prompt 为空：脚本不可用，拒绝落盘")
+    if empty_prompt:
+        _get_logger().warn(f"{empty_prompt}/{len(shots)} 个镜头 prompt 为空")
 
     # v5.0: 校验新增必填字段（仅 WARN 不阻断）
     for i, shot in enumerate(shots, 1):
@@ -2028,7 +2040,7 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
     # style_prefix.detect_lf_midstate 闸门，词库单一来源——取代窄正则武器残留）。
     # 视频模型把 lf_desc 当【视频终点】定格，任何中间态（正在刺/即将刺/半截刀尖
     # 露水面/缓缓没入中）都会被定格成诡异画面（08-09 钩子坑「匕首尖停水面」）。
-    from style_prefix import detect_lf_midstate
+    from shared.style_prefix import detect_lf_midstate
     _midstate_warns = []
     for _shot in list(shots) + ([hook] if hook else []):
         _idx = _shot.get("index", "?")
@@ -2370,7 +2382,7 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
         # 首帧定格在动作进行中，与 motion_desc 首段动作重叠，视频模型会把
         # 动作做两遍。提示改前一刻（自动修复见 style_prefix.normalize_ff_desc）。
         if not completed:
-            from style_prefix import detect_ff_multi_action
+            from shared.style_prefix import detect_ff_multi_action
             prog = detect_ff_multi_action(ff, None)
             pre = [p for p in prog if p.get("type") == "pre_action"]
             if pre:
@@ -2457,7 +2469,7 @@ def _check_ff_multi_action(shots: list[dict], hook: dict = None,
     注意过滤 pre_action 类型——它是"应被 normalize 自动改写"的信号（post_fix
     已先归一化，正常不会出现），不是"多动作堆叠"问题。
     """
-    from style_prefix import detect_ff_multi_action
+    from shared.style_prefix import detect_ff_multi_action
     warnings = []
     issues = []
 
@@ -2509,7 +2521,7 @@ def validate_hook(hook: dict, characters: list | None = None) -> None:
 
     characters: script['characters']，用于多动作/空镜判定；缺省时传空列表。
     """
-    from style_prefix import normalize_ff_desc
+    from shared.style_prefix import normalize_ff_desc
     if not hook or not isinstance(hook, dict):
         return
     chars = characters or []
@@ -4471,7 +4483,7 @@ def post_fix_shot_prompts(script: dict) -> dict:
       5. 正文净化：从 prompt 主体中剥离「画面/镜头」等禁止词
     只追加不删除（净化除外），安全幂等。hook 由独立逻辑处理，不在此处。
     """
-    from style_prefix import normalize_ff_desc
+    from shared.style_prefix import normalize_ff_desc
     from shared.model_caps import active_video_uses_native_voice
     # 原生发声供应商（volcengine/minimax/agent_plan）不补「（用中文说）」；
     # 旧供应商保留历史行为。用 active_video_uses_native_voice() 统一判断。
@@ -4600,7 +4612,7 @@ def post_fix_shot_prompts(script: dict) -> dict:
         # 取代 v6.28 的 _fix_lf_weapon_residue 窄正则（审计 S1：_fix_* 小函数收敛为管道）。
         # 覆盖残留/半身/过渡/即将/进行 五类中间态（武器残留是其一）。
         if shot.get("lf_desc"):
-            from style_prefix import normalize_lf_desc
+            from shared.style_prefix import normalize_lf_desc
             shot["lf_desc"] = normalize_lf_desc(
                 shot["lf_desc"], shot, script.get("characters", []))
 
@@ -4762,7 +4774,7 @@ def post_fix_shot_prompts(script: dict) -> dict:
 
         # v6.29：hook 尾帧终态归一化（同 shot，取代 v6.28 武器残留窄正则）
         if hook.get("lf_desc"):
-            from style_prefix import normalize_lf_desc
+            from shared.style_prefix import normalize_lf_desc
             hook["lf_desc"] = normalize_lf_desc(
                 hook["lf_desc"], hook, script.get("characters", []))
         # 08-15 B1/B2：hook ff/lf 同样注入服装色锚 + 威胁朝向（与 shot 一致）
@@ -5226,7 +5238,7 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
     # 提前到校验前注入：inject_global_config_into_script 幂等（不覆盖已有字段），
     # 后续 _post_process 再跑一次无副作用，且让校验能检查真实注入值。
     try:
-        import style_prefix as _sp
+        from shared import style_prefix as _sp
         _sp.inject_global_config_into_script(script)
     except Exception:
         pass  # 注入失败则维持原状，_validate_script 会提示缺失（可接受的降级）

@@ -38,6 +38,20 @@ def main():
     _logger.info("  (Multi-voice support enabled)")
     _logger.separator()
 
+    # 2026-09-13 审计修复：当前架构下 step04 native 模式不消费 step03 产物
+    # （对话/背景音由视频模型生成）。VIDEO_MODEL_VOICE=1 且 MERGE_AUDIO_MODE=native
+    # 时跑 TTS 纯属浪费额度——默认跳过；STEP03_FORCE=1 强制执行（备音/调试）
+    voice_by_model = os.getenv("VIDEO_MODEL_VOICE", "1").strip() == "1"
+    audio_mode = os.getenv("MERGE_AUDIO_MODE", "native").strip().lower()
+    forced = os.getenv("STEP03_FORCE", "0").strip() == "1"
+    if voice_by_model and audio_mode == "native" and not forced:
+        _logger.info(
+            "[SKIP] VIDEO_MODEL_VOICE=1 且 MERGE_AUDIO_MODE=native：成片音频由视频"
+            "模型原生生成，step04 不消费 step03 产物，跳过 TTS 生成"
+            "（需要 TTS 备音轨请设 MERGE_AUDIO_MODE=tts_mix，或 STEP03_FORCE=1 强制执行）"
+        )
+        return
+
     # 检查前置步骤产物
     if not SCRIPT_FILE.exists():
         raise FileNotFoundError(
@@ -93,6 +107,23 @@ def main():
     except Exception as e:
         _logger.error(f"[ERROR] {e}")
         sys.exit(1)
+
+    # 2026-09-13 审计修复：单镜 TTS 失败此前被吞（返回 None 仅打印 [FAIL]），
+    # step04 tts_mix 只记缺失数量——缺对白镜头会静默保留原声进成片。
+    # 现在收尾核对：有台词的镜头必须存在有效音频，否则本阶段失败。
+    required = [s for s in shots if str(s.get("narration_segment", "")).strip()]
+    missing = [
+        s.get("index", 0) for s in required
+        if not (audio_file(s.get("index", 0)).exists()
+                and audio_file(s.get("index", 0)).stat().st_size > 10240)
+    ]
+    if missing:
+        _logger.error(
+            f"[ERROR] {len(missing)}/{len(required)} 个有台词镜头缺少 TTS 音频"
+            f"（shot index: {missing}）——tts_mix 模式会缺对白，判定 step03 失败"
+        )
+        sys.exit(1)
+    _logger.info(f"[OK] TTS 完成：{len(required)} 个有台词镜头音频齐全")
 
 
 if __name__ == "__main__":

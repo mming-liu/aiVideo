@@ -483,8 +483,10 @@ class AgnesVideoService(VideoGenerationService):
         from shared.paths import chapter_dir
         _vlog = get_logger(chapter_dir() / "step02.log", console_level="INFO")
         _vlog.verbose(f"[DEBUG] query_task: GET {url}")
-        _vlog.verbose(f"[DEBUG] query_task: key_idx={bound_key_idx}, key={bound_key[:30]}...")
-        _vlog.verbose(f"[DEBUG] query_task: header=Authorization: Bearer {bound_key[:40]}...")
+        # 2026-09-13 安全修复：日志只留 key 后 4 位——此前打印前 30/40 位，
+        # key 前缀足以泄露大部分密钥（step02.log 会随章节目录流转）
+        _vlog.verbose(f"[DEBUG] query_task: key_idx={bound_key_idx}, key=...{bound_key[-4:]}")
+        _vlog.verbose(f"[DEBUG] query_task: header=Authorization: Bearer ...{bound_key[-4:]}")
         try:
             res = requests.get(
                 url,

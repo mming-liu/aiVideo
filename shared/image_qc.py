@@ -40,7 +40,9 @@ from shared.config import (
 # 图片质检配置（与 shared/config.py 保持一致；此处直接读 env，避免循环依赖）
 QC_ENABLED = os.getenv("IMAGE_QC_ENABLED", "1").strip() == "1"
 QC_TIMEOUT_SEC = int(os.getenv("IMAGE_QC_TIMEOUT_SEC", "300"))
-QC_WRITE_CRITICAL = os.getenv("IMAGE_QC_WRITE_CRITICAL", "0").strip() == "1"
+# 2026-09-13 审计修复：默认值与 shared/config.py 对齐为 "1"（此前这里默认 "0"、
+# config.py 默认 "1"，删显式配置后行为随导入位置漂移）
+QC_WRITE_CRITICAL = os.getenv("IMAGE_QC_WRITE_CRITICAL", "1").strip() == "1"
 
 # ds-vision-skill router 相对项目根的位置
 _ROUTER_REL = Path(".agents") / "skills" / "ds-vision-skill" / "scripts" / "vision-router.ps1"

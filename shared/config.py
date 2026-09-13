@@ -284,6 +284,9 @@ AGENT_PLAN_VIDEO_POLL_INTERVAL = int(os.getenv("AGENT_PLAN_VIDEO_POLL_INTERVAL",
 AGENT_PLAN_VIDEO_MAX_POLL_ATTEMPTS = int(os.getenv("AGENT_PLAN_VIDEO_MAX_POLL_ATTEMPTS", "25"))
 # 套餐并发护栏（Agent Plan 按 Small 套餐并发数 2，避免按 VPS 申请 10 并发被拒）
 AGENT_PLAN_MAX_CONCURRENCY = int(os.getenv("AGENT_PLAN_MAX_CONCURRENCY", "2"))
+# 视频提交限速（2026-09-13 审计修复）：此前视频侧只有并发信号量、无 RPM 调度，
+# 提交突发全靠 429 事后重试；与图片侧 AGENT_PLAN_IMAGE_RPM 同口径
+AGENT_PLAN_VIDEO_RPM = int(os.getenv("AGENT_PLAN_VIDEO_RPM", "10"))
 # 文生文（分镜/钩子/修复轮）— 默认 doubao-seed-2-1-turbo（2026-09-03 接入）
 # 鉴权复用 AGENT_PLAN_API_KEY（与图片/视频同专属 key）
 # 端点：POST {base}/chat/completions（OpenAI 兼容）

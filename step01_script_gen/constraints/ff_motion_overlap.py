@@ -42,7 +42,7 @@ class FfMotionOverlapConstraint(Constraint):
     def apply(self, ctx) -> list[RepairRecord]:
         repairs: list[RepairRecord] = []
         # 惰性导入：style_prefix 是顶层模块，懒加载避免循环依赖
-        from style_prefix import detect_ff_multi_action, normalize_ff_desc
+        from shared.style_prefix import detect_ff_multi_action, normalize_ff_desc
 
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
             if not isinstance(shot, dict):

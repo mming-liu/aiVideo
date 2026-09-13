@@ -159,7 +159,7 @@ from step01_script_gen.hash_cache import _prompt_changed, _hash_source
 from step01_script_gen.gap_analysis import validate_script_gap, generate_gap_report, print_gap_report
 
 
-import style_prefix
+from shared import style_prefix
 import scene_compliance
 import shared.content_safety as content_safety
 
@@ -182,7 +182,7 @@ def _check_fps_consistency(script: dict) -> None:
     不对齐整数帧，视频生成会多/少一帧导致卡顿。只 WARN 不阻断。
     """
     try:
-        from style_prefix import validate_fps_consistency
+        from shared.style_prefix import validate_fps_consistency
         validate_fps_consistency(script)
     except Exception:
         pass
@@ -1674,8 +1674,9 @@ def _snapshot_run_artifacts(script: dict | None = None) -> None:
         snap_dir.mkdir(parents=True, exist_ok=True)
         ts = _time.strftime("%Y%m%d_%H%M%S")
         if script is not None:
-            with open(snap_dir / f"script_result_{ts}.json", "w", encoding="utf-8") as f:
-                json.dump(script, f, ensure_ascii=False, indent=2)
+            from shared.json_io import atomic_dump_json as _adj
+            _adj(snap_dir / f"script_result_{ts}.json", script,
+                 ensure_ascii=False, indent=2)
         log_file = OUTPUT_FILE.parent / "step01.log"
         if log_file.exists():
             shutil.copy2(log_file, snap_dir / f"step01_{ts}.log")
@@ -1860,8 +1861,9 @@ def _cross_run_best_guard(script: dict, novel_text: str) -> None:
         except Exception as _bg_he:
             _logger.warn(f"[BEST-GUARD] 恢复版补跑 hard_fix 失败（保留原样）: {_bg_he}")
         restored_score = _score_script(best_script, novel_text)["total"]
-        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-            json.dump(_strip_runtime_fields(best_script), f, ensure_ascii=False, indent=2)
+        from shared.json_io import atomic_dump_json as _adj
+        _adj(OUTPUT_FILE, _strip_runtime_fields(best_script),
+             ensure_ascii=False, indent=2)
         _logger.warn(
             "[BEST-GUARD] 已自动恢复快照最优版为正式输出（补修复后 "
             + str(restored_score) + " 分）；本次 " + str(new_score)
@@ -2001,8 +2003,9 @@ def main() -> None:
         # v6.62.3：移到 hard_fix 之后 —— runtime_extend 会改 duration_sec，
         # 早于 hard_fix 校验会拿到过期时长（与 line ~1931 非缓存路径同序）。
         _check_fps_consistency(script)
-        with open(SCRIPT_FILE, "w", encoding="utf-8") as f:
-            json.dump(_strip_runtime_fields(script), f, ensure_ascii=False, indent=2)
+        from shared.json_io import atomic_dump_json as _adj
+        _adj(SCRIPT_FILE, _strip_runtime_fields(script),
+             ensure_ascii=False, indent=2)
         _snapshot_run_artifacts(script)
         _logger.info("时间轴已重新计算")
         # 缓存命中：恢复 stdout 并显示最终摘要
@@ -2053,13 +2056,13 @@ def main() -> None:
         # 其余候选存盘供调试
         try:
             import copy as _cp
+            from shared.json_io import atomic_dump_json as _adj
             _cand_dir = CHAPTER_DIR / "candidates"
             _cand_dir.mkdir(parents=True, exist_ok=True)
             for _ci, (_cs, _cscript) in enumerate(_candidates):
                 _cpath = _cand_dir / f"candidate_{_ci+1}_score{int(_cs['total'])}.json"
-                with open(_cpath, "w", encoding="utf-8") as _cf:
-                    json.dump(_strip_runtime_fields(_cp.deepcopy(_cscript)), _cf,
-                              ensure_ascii=False, indent=2)
+                _adj(_cpath, _strip_runtime_fields(_cp.deepcopy(_cscript)),
+                     ensure_ascii=False, indent=2)
         except Exception:
             pass
 
@@ -2085,8 +2088,9 @@ def main() -> None:
                 _logger.info(f"[GAP] 差距分析通过 (尝试 {attempt + 1}/{_gap_budget})")
                 # 保存脚本并生成完整报告
                 partial_path = CHAPTER_DIR / "script_result.partial.json"
-                with open(partial_path, "w", encoding="utf-8") as _f:
-                    json.dump(_strip_runtime_fields(script), _f, ensure_ascii=False, indent=2)
+                from shared.json_io import atomic_dump_json as _adj
+                _adj(partial_path, _strip_runtime_fields(script),
+                     ensure_ascii=False, indent=2)
                 report = generate_gap_report(
                     str(partial_path),
                     "锦衣夜行_77119小说.txt",
@@ -2470,9 +2474,11 @@ def main() -> None:
     # parse 期校正之后，元数据会落后实际镜头数（15:12 run 16 vs 20 实测）
     script["shot_count"] = len(script.get("shots", []))
 
-    # 保存（v6.63.1：剥运行时字段——_run_metadata 等下划线键不入盘）
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        json.dump(_strip_runtime_fields(script), f, ensure_ascii=False, indent=2)
+    # 保存（v6.63.1：剥运行时字段——_run_metadata 等下划线键不入盘；
+    # 2026-09-13 原子写，防中断留半截 JSON）
+    from shared.json_io import atomic_dump_json as _adj
+    _adj(OUTPUT_FILE, _strip_runtime_fields(script),
+         ensure_ascii=False, indent=2)
     _snapshot_run_artifacts(script)
     _cross_run_best_guard(script, novel_text)
 

@@ -48,6 +48,7 @@ from shared.config import (
     AGENT_PLAN_VIDEO_RATIO,
     AGENT_PLAN_VIDEO_RESOLUTION,
     AGENT_PLAN_MAX_CONCURRENCY,
+    AGENT_PLAN_VIDEO_RPM,
 )
 from shared.constants import AGENT_PLAN_VIDEO_SUBMIT_RETRIES
 from shared.model_caps import clamp_duration, resolve_resolution
@@ -133,6 +134,19 @@ class AgentPlanVideoService(VideoGenerationService):
         self._semaphore = threading.BoundedSemaphore(
             value=max(1, AGENT_PLAN_MAX_CONCURRENCY)
         )
+        # 提交限速（2026-09-13 审计修复）：此前只有并发信号量，提交突发全靠
+        # 429 事后重试；与文本/图片侧 RPM 调度同口径，提交前主动摊平间隔
+        self._submit_lock = threading.Lock()
+        self._last_submit_ts = 0.0
+        self._min_submit_interval = 60.0 / max(1, AGENT_PLAN_VIDEO_RPM)
+
+    def _throttle_submit(self) -> None:
+        """按 AGENT_PLAN_VIDEO_RPM 摊平提交间隔（与并发信号量互补）."""
+        with self._submit_lock:
+            wait = self._min_submit_interval - (time.time() - self._last_submit_ts)
+            if wait > 0:
+                time.sleep(wait)
+            self._last_submit_ts = time.time()
 
     @property
     def _headers(self) -> dict:
@@ -146,6 +160,7 @@ class AgentPlanVideoService(VideoGenerationService):
     # =======================================================================
     def create_task(self, req: VideoGenerationRequest) -> str:
         with self._semaphore:
+            self._throttle_submit()
             return self._submit(req)
 
     def _build_content(self, req: VideoGenerationRequest, model: str) -> list[dict]:
@@ -212,10 +227,36 @@ class AgentPlanVideoService(VideoGenerationService):
         return content
 
     def _submit(self, req: VideoGenerationRequest) -> str:
-        from shared.model_caps import get_seedance_cap
+        from shared.model_caps import get_seedance_cap, _model_prompt_cap
 
         model = self._model
         cap = get_seedance_cap(model)
+
+        # 2026-09-13 审计修复：接入 prompt 长度上限（此前 req.prompt 原样进请求体，
+        # 超 Seedance 500 字符上限被服务端 400 或静默截断）。复用 volcengine 的
+        # 语义优先压缩链（@图引用保留 + 低权重句子剥离），兜底硬截断。
+        cap_len = _model_prompt_cap(model)
+        if cap_len and len(req.prompt) > cap_len - 40:
+            from .volcengine_provider import _seedance_compress_prompt
+            ref_tags = re.findall(r"@\S+", req.prompt)
+            ref_len = sum(len(t) + 1 for t in ref_tags)
+            target_body = max(200, cap_len - ref_len - 20)
+            compressed = _seedance_compress_prompt(
+                req.prompt, max_chars=target_body, ref_tags=ref_tags
+            )
+            if len(compressed) < len(req.prompt):
+                _verbose_write(
+                    f"  [镜头{req.clip_index}] [INFO] Seedance 智能压缩 prompt "
+                    f"{len(req.prompt)}→{len(compressed)} 字符 "
+                    f"（@图引用 {len(ref_tags)} 个，正文目标 {target_body}）"
+                )
+            req.prompt = compressed
+        if cap_len and len(req.prompt) > cap_len:
+            _verbose_write(
+                f"  [镜头{req.clip_index}] [WARN] {model} 压缩后仍超 cap {cap_len}，"
+                f"硬截断兜底"
+            )
+            req.prompt = req.prompt[:cap_len]
 
         # 首帧/首尾帧场景（图生视频-首帧/首尾帧，非全模态参考）
         is_first_last_frames = bool(req.image_path or req.last_frame_image_path) \
@@ -251,7 +292,12 @@ class AgentPlanVideoService(VideoGenerationService):
             f"resolution={payload['resolution']}, ratio={payload['ratio']}, "
             f"duration={payload['duration']}, seed={req.seed}"
         )
-        _verbose_write(f"[DEBUG] agent_plan_video_submit: prompt全文={req.prompt}")
+        # 2026-09-13 审计修复：debug 不再打印 prompt 全文（单条可达数千字符，
+        # 刷屏且日志随章节目录流转）；压缩后长度已在上条日志体现
+        _verbose_write(
+            f"[DEBUG] agent_plan_video_submit: prompt长度={len(req.prompt)}, "
+            f"前200字={req.prompt[:200]}"
+        )
         for i, item in enumerate(payload["content"]):
             if item["type"] == "text":
                 _verbose_write(f"[DEBUG] agent_plan_video_submit: content[{i}] text")
@@ -371,6 +417,18 @@ class AgentPlanVideoService(VideoGenerationService):
                 output = self.query_task(task_id)
             except RuntimeError as e:
                 last_error = str(e)
+                # 2026-09-13 审计修复：4xx（鉴权失效/参数错误/任务不存在）是终态，
+                # 继续轮询只会把轮询预算白耗完——fail-fast 返回失败
+                if any(f"[{c}]" in last_error for c in (400, 401, 403, 404)):
+                    _verbose_write(
+                        f"  [镜头{req.clip_index}] [!] Agent Plan 查询终态错误，"
+                        f"停止轮询: {last_error[:200]}"
+                    )
+                    return VideoGenerationResult(
+                        clip_index=req.clip_index,
+                        success=False,
+                        error=f"查询终态失败: {last_error}",
+                    )
                 _verbose_write(
                     f"  [镜头{req.clip_index}] [!] Agent Plan 查询失败: {last_error[:200]}"
                 )

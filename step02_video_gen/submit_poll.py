@@ -21,7 +21,7 @@ from shared.vimax_bridge import build_working_dir, gen_shot_frames
 from shared.vimax_adapters import ImageGeneratorAiVideoAdapter, VideoGeneratorAiVideoAdapter
 from shared.error_fmt import fmt_err as _fmt_err, parse_retry_after
 from step02_video_gen.continuity import ContinuityTracker, MODE_B_START_INDEX
-from shared.config import VIDEO_CONCURRENCY  # 并发单源: shared/config.py（默认 4）
+from shared.config import VIDEO_CONCURRENCY, VIDEO_MAX_RETRIES  # 并发/重试单源: shared/config.py
 from shared.paths import SHOT_VIDEO_FILENAME, FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
 from shared.constants import VIDEO_SUBMIT_RETRIES, FRAME_COPY_RETRIES
 
@@ -168,7 +168,7 @@ def _get_shot_hash(shot: dict, script: dict) -> str:
         return t
 
     from step02_video_gen.prompt_builder import _build_prompt
-    from style_prefix import STYLE_PREFIX, NEGATIVE_PROMPT
+    from shared.style_prefix import STYLE_PREFIX, NEGATIVE_PROMPT
 
     # Seedance 系（volcengine / agent_plan）走精简路径，缓存哈希必须跟随
     # （否则旧完整 prompt 生成的视频会被错误复用，refit 错乱）
@@ -442,9 +442,11 @@ async def _submit_video(
                                 characters=characters,
                                 continuity_ref_image=continuity_ref_image, mode=mode)
             task_id = await video_adapter.submit_task(req)
+            # 2026-09-13 审计修复：轮询连续失败上限走 VIDEO_MAX_RETRIES 配置
+            # （此前正常路径硬编码 99、content-policy 路径硬编码 3，配置被架空）
             task = asyncio.create_task(
                 _poll_video(video_adapter, poll_semaphore, req, task_id, idx,
-                           shot_dir, video_path, 99, shot_hash,
+                           shot_dir, video_path, VIDEO_MAX_RETRIES, shot_hash,
                            qc_resubmit_limit=VIDEO_QC_RESUBMIT)
             )
             return task
@@ -468,7 +470,7 @@ async def _submit_video(
                         task_id = await video_adapter.submit_task(req)
                         task = asyncio.create_task(
                             _poll_video(video_adapter, poll_semaphore, req, task_id, idx,
-                                       shot_dir, video_path, 3, shot_hash,
+                                       shot_dir, video_path, VIDEO_MAX_RETRIES, shot_hash,
                                        qc_resubmit_limit=VIDEO_QC_RESUBMIT)
                         )
                         return task

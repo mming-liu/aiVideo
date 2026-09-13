@@ -55,6 +55,10 @@ async def gen_all_videos(script: dict, working_dir: Path, script_file_path: Path
     log_dir = chapter_dir()
     logger = get_logger(log_dir / "step02b.log", console_level="INFO")
 
+    # 2026-09-13 审计修复：入口清空失败记录——旧入口 generate_alls() 会清，
+    # 本入口不清，同进程复用/测试/工具调用会累计上一轮旧失败
+    _failed_videos.clear()
+
     shots = script.get("shots", [])
     hook = script.get("hook")
     shots_dir = working_dir / "shots"
@@ -245,9 +249,17 @@ def main():
         only_indices=only_indices, force=args.force,
     ))
 
-    # 将可能回填的字段写回 script（如 actual_duration / duration_deviation_pct）
-    with open(script_path, "w", encoding="utf-8") as f:
-        json.dump(script, f, ensure_ascii=False, indent=2)
+    # 将可能回填的字段写回 script（原子写，防半截 JSON；2026-09-13 审计修复）
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(script_path, script, ensure_ascii=False, indent=2)
+
+    # 2026-09-13 审计修复：回填实际视频时长（actual_duration / duration_deviation_pct）
+    # ——此前注释承诺但从未调用，元数据契约缺失
+    try:
+        from step02_video_gen.audio_pregen import _update_script_with_actual_durations
+        _update_script_with_actual_durations(work_dir, script_path)
+    except Exception as e:
+        logger.warn(f"[WARN] 实际时长回填失败（不影响已生成视频）: {e}")
 
     logger.info(f"\n[INFO] step02b_video_gen done! Failed: {failed}")
 

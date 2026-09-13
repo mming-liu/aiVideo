@@ -25,6 +25,10 @@ output/
 # Claude Code 本地配置
 .claude/
 
+# 本地 agent / 会话计划
+.agents/
+.zcode/
+
 # OS
 Thumbs.db
 .DS_Store
@@ -34,6 +38,7 @@ video.md
 
 # 调试残留（历史误提交，已清理）
 *.jpg
+_qc_crops/
 llm_response_dump_*.txt
 debug_*.txt
 candidate_json.txt
@@ -60,6 +65,10 @@ reference_skills/
 # 每跑一次测试就变一次，不入库。原先跟踪的 4 个 step0X.log 已 git rm --cached，
 # 同目录的手写调试脚本 replay_agent_plan.py 已迁到 tools/。
 .pytest_tmp/
+.pytest*/
+.review_tmp*/
+review_tmp*/
+/tmp*/
 
 # 2026-09-12：运行时/临时产物
 step01_*.log
@@ -67,3 +76,13 @@ step02_*.log
 .review_tmp_best_guard/
 _tmp_*
 *_tmp_*.json
+
+# A/B experiment local helpers and generated artifacts
+tools/ab_experiment_runner.py
+tools/script_quality_eval.py
+tools/_report.py
+tools/ab_experiment_design.md
+tools/ab_results/
+tools/dump/*__ab*.json
+tools/dump/backup_20260906_pre_quality_fix/
+tests/tools/test_ab_tools.py

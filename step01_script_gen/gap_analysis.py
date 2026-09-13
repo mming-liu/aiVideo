@@ -613,6 +613,6 @@ if __name__ == "__main__":
             print(f"  Issue: {issue}")
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, indent=2)
+        from shared.json_io import atomic_dump_json
+        atomic_dump_json(args.output, report, ensure_ascii=False, indent=2)
         print(f"\nReport saved to: {args.output}")

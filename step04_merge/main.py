@@ -400,11 +400,12 @@ def main():
   target_durations = [get_media_duration(c) for c in clips]
   zero_durations = [(i, str(c)) for i, c in enumerate(clips) if target_durations[i] <= 0]
   if zero_durations:
-    # M9 修复 2026-08-14：时长探测失败不再静默——明确告警，字幕时间轴将受影响
-    _logger.warn(f"[WARN] {len(zero_durations)} 个片段时长探测失败（为0），"
-                 f"字幕时间轴可能错位: {[c for _, c in zero_durations]}")
-  audio_duration = sum(target_durations)
-  _logger.info(f"[INFO] Total video duration: {audio_duration:.1f}s")
+    # 2026-09-13 审计修复：时长探测失败 fail-fast——继续合并会基于 0 秒构建
+    # 字幕/转场/filter，产出坏片或抛难定位的 ffmpeg filter 错误
+    raise RuntimeError(
+      f"{len(zero_durations)} 个片段时长探测失败（ffprobe 返回 0 或报错），"
+      f"无法构建字幕时间轴与转场，停止合并: {[c for _, c in zero_durations]}"
+    )
 
   # 4. Native merge（唯一模式，2026-08 起删除版本A/B双输出与TTS混音路径）：
   #    对话/背景音由视频模型生成，直接拼接保留每段视频原声。
@@ -417,6 +418,10 @@ def main():
     kind, tdur = native_transitions[i]
     srt_durations.append(target_durations[i] if kind == "cut" else target_durations[i] - tdur)
   target_durations = srt_durations
+  # 2026-09-13 审计修复：总时长在转场重叠扣减后求和——此前用扣减前的值，
+  # 与成片实际时长不符，误导排障
+  audio_duration = sum(target_durations)
+  _logger.info(f"[INFO] Total video duration (after transition overlap): {audio_duration:.1f}s")
   _logger.info(f"[INFO] Native transitions: {[(k, round(t, 2)) for k, t in native_transitions]}")
 
   # 5. Generate SRT subtitles
@@ -460,6 +465,7 @@ def main():
     from shared.paths import audio_file
     tts_paths = []
     n_found = 0
+    missing_tts = []
     for s in valid_shots:
       _tp = audio_file(s.get('index', 0))
       if _tp.exists() and _tp.stat().st_size > 10240:
@@ -467,8 +473,20 @@ def main():
         n_found += 1
       else:
         tts_paths.append(None)
-    _logger.info(f"[INFO] tts_mix: {n_found}/{len(valid_shots)} 镜头有 TTS 音频"
-                 f"（缺失的镜头保持纯视频原声；请先运行 step03）")
+        missing_tts.append(s.get('index', 0))
+    if missing_tts:
+      # 2026-09-13 审计修复：tts_mix 下「需要 TTS 的镜头缺失」默认判定为失败——
+      # 此前只记数量继续成片，缺失镜头静默保留视频原声（对白可能完全丢失）。
+      # 显式降级：TTS_MIX_ALLOW_MISSING=1 恢复旧行为（缺失镜头保持纯视频原声）
+      if os.getenv("TTS_MIX_ALLOW_MISSING", "0").strip() != "1":
+        raise RuntimeError(
+          f"tts_mix 模式缺少 {len(missing_tts)}/{len(valid_shots)} 个镜头的 TTS 音频"
+          f"（shot index: {missing_tts}）。请先运行 step03 生成，"
+          f"或设 TTS_MIX_ALLOW_MISSING=1 显式允许缺失镜头保持视频原声。"
+        )
+      _logger.warn(f"[WARN] tts_mix: {len(missing_tts)} 个镜头缺 TTS 音频，"
+                   f"按 TTS_MIX_ALLOW_MISSING=1 保持纯视频原声: {missing_tts}")
+    _logger.info(f"[INFO] tts_mix: {n_found}/{len(valid_shots)} 镜头有 TTS 音频")
 
   _logger.info("[INFO] Native mode: applying transitions + concat filter")
   filter_complex, v_label, a_label, _, _, n_extra = _build_native_transition_filter(
@@ -491,7 +509,20 @@ def main():
   ])
   _logger.info(f"[INFO] 编码: preset={VIDEO_PRESET} crf={_CRF} 分辨率={OUT_W}x{OUT_H}"
                f"（MERGE_RESOLUTION 可调；上线 1080x1920 时同步改 BAILIAN_VIDEO_RESOLUTION=1080P）")
-  subprocess.run(cmd, check=True)
+  # 2026-09-13 审计修复：先写临时文件，成功后 os.replace——此前直接覆盖
+  # final.mp4，ffmpeg 中断会留下损坏文件被误当作可复用产物
+  final_tmp = FINAL_OUT.with_name(FINAL_OUT.stem + ".tmp.mp4")
+  cmd[-1] = str(final_tmp)
+  try:
+    subprocess.run(cmd, check=True)
+    os.replace(final_tmp, FINAL_OUT)
+  except Exception:
+    if final_tmp.exists():
+      try:
+        final_tmp.unlink()
+      except OSError:
+        pass
+    raise
   _logger.info(f"[OK] Final video generated: {FINAL_OUT}")
 
   # 7. Report

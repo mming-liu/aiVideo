@@ -308,7 +308,7 @@ def validate_script(script: dict, strict_mode: bool = False) -> dict:
 
 def auto_sanitize_shot_prompts(script: dict, verbose: bool = True) -> dict:
     """自动修复场景矛盾（敏感词替换 + 矛盾词删除）。"""
-    from style_prefix import sanitize_prompt
+    from shared.style_prefix import sanitize_prompt
 
     for shot in script.get("shots", []):
         subtitle = shot.get("subtitle", "")

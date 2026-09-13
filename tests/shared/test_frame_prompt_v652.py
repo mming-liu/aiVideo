@@ -159,7 +159,7 @@ def test_describe_ref_recognizes_crop_cache():
 
 def test_count_anchor_reuse_ban_when_threat_visible():
     """威胁可见：人数限制含「复制/复用」禁令（第 4 蒙面人=别名复用漏网）."""
-    from style_prefix import add_image_strict_constraints
+    from shared.style_prefix import add_image_strict_constraints
     shot = {
         "location": "小舟上",
         "ff_desc": "神秘人半身探出水面直指杨旭，听香在旁惊愕",
@@ -178,7 +178,7 @@ def test_count_anchor_invisible_threat_shows_entity_count():
     禁止出现任何其他人物或第二名{名单}角色」——把「黑影」从禁止从句移出，
     避免命中 `禁止[^\n。]{0,24}?(黑影|人影)` 自检器（与剧情伏笔「水下黑影轮廓」自触）。
     """
-    from style_prefix import add_image_strict_constraints
+    from shared.style_prefix import add_image_strict_constraints
     shot = {
         "location": "小舟上",
         # 含威胁名（has_threat）但黑影/水下非实体词压过可见性 → invisible 分支
@@ -206,7 +206,7 @@ def test_invisible_threat_wording_no_self_contradiction():
     走 invisible_only 分支：ff_desc 只让威胁以"水下黑影"形式出现（无完整
     刺客站姿/可见实体特征），触发 _threat_invisible_only=True → 应用新措辞。
     """
-    from style_prefix import add_image_strict_constraints
+    from shared.style_prefix import add_image_strict_constraints
     from shared.prompt_contradiction import find_contradictions
     shot = {
         "location": "小舟上",
@@ -224,7 +224,7 @@ def test_invisible_threat_wording_no_self_contradiction():
 
 def test_hard_count_anchor_from_char_layout():
     """char_layout ≥3 条 → 人数硬锚带名单与清点指令（防线2）."""
-    from style_prefix import add_image_strict_constraints
+    from shared.style_prefix import add_image_strict_constraints
     shot = _hook_shot()
     out = add_image_strict_constraints("神秘人半身探出水面", "首帧", shot=shot,
                                        characters=_CHARS)

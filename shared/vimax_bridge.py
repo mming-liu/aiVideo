@@ -103,8 +103,8 @@ _ATTEMPT_VARIATIONS = (
 )
 
 # 首帧/尾帧生成需要风格前缀（与视频生成保持一致）
-from style_prefix import STYLE_PREFIX, sanitize_prompt, ensure_prefix, is_empty_scene, add_image_strict_constraints, preprocess_prompt_for_image
-from style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT, image_lock_prompt
+from shared.style_prefix import STYLE_PREFIX, sanitize_prompt, ensure_prefix, is_empty_scene, add_image_strict_constraints, preprocess_prompt_for_image
+from shared.style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT, image_lock_prompt
 
 
 # 注意: 视频级缓存哈希 (prompt_hash.txt) 的唯一读写实现在
@@ -220,21 +220,22 @@ async def build_working_dir(
                     dynamic_features=char.get("dynamic_features", ""),
                 ).model_dump()
             )
-        with open(chars_path, "w", encoding="utf-8") as f:
-            json.dump(char_objects, f, ensure_ascii=False, indent=2)
+        # 原子写：防中断留半截 JSON（2026-09-13 审计修复，收敛 shared.json_io）
+        from shared.json_io import atomic_dump_json as _adj
+        _adj(chars_path, char_objects, ensure_ascii=False, indent=2)
         if char_objects:
             _bridge_log(f"  [bridge] characters.json: {len(char_objects)} 个角色")
     elif not characters_data:
         if not chars_path.exists():
-            with open(chars_path, "w", encoding="utf-8") as f:
-                json.dump([], f, ensure_ascii=False, indent=2)
+            from shared.json_io import atomic_dump_json as _adj
+            _adj(chars_path, [], ensure_ascii=False, indent=2)
 
     # ---- 2. character_portraits_registry.json ----
     # 每次都重写：registry 由 bank 实时导出，旧文件可能残留迁移前的失效路径
     registry_path = working_dir / "character_portraits_registry.json"
     if registry:
-        with open(registry_path, "w", encoding="utf-8") as f:
-            json.dump(registry, f, ensure_ascii=False, indent=2)
+        from shared.json_io import atomic_dump_json as _adj
+        _adj(registry_path, registry, ensure_ascii=False, indent=2)
         _bridge_log(f"  [bridge] character_portraits_registry.json: {len(registry)} 个角色")
 
     # ---- 3. storyboard.json（cam_idx 从 script 读取）----
@@ -1535,7 +1536,7 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
             _s_idx = search_text.find(action_subject)
             if _s_idx >= 0:
                 _tail = search_text[_s_idx:_s_idx + 30]
-                from style_prefix import ORIENTATION_KW
+                from shared.style_prefix import ORIENTATION_KW
                 if any(kw in _tail for kw in ORIENTATION_KW):
                     subject_view = "side"
 
@@ -2217,7 +2218,7 @@ def _extract_char_layout(
                     seg += pos
                 # 朝向：extract_orientation 有(主体,目标) → 面向{目标}
                 try:
-                    from style_prefix import extract_orientation
+                    from shared.style_prefix import extract_orientation
                     orient = extract_orientation(scan, characters)
                     for subject, target in orient:
                         if subject == ident:
@@ -2937,7 +2938,7 @@ def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
     保证 QC 拿到的"画面描述"与图片模型实际收到的一致（code-audit 2026-08-08）。
     """
     try:
-        from style_prefix import (
+        from shared.style_prefix import (
             preprocess_prompt_for_image, sanitize_prompt, ensure_prefix,
             add_image_strict_constraints,
         )
@@ -3135,7 +3136,7 @@ async def _gen_first_frame_async(
     # 不回写则归一化后缓存永不失效。回写保证帧 prompt、step02a 落盘、
     # step02b 的【视频起点】三处一致。
     if ff_desc and not empty_scene:
-        from style_prefix import normalize_ff_desc
+        from shared.style_prefix import normalize_ff_desc
         norm = normalize_ff_desc(ff_desc, shot, characters)
         if norm != ff_desc:
             shot["ff_desc"] = ff_desc = norm
@@ -3373,7 +3374,7 @@ async def _gen_last_frame_async(
     # v6.29：尾帧终态归一化兜底（与 step01 post_fix 对称）——lf_desc 中间态在
     # 帧生成前也清洗一次，保证 step02a 直接跑时尾帧不画中间态；回写保证哈希正确失效。
     if lf_desc:
-        from style_prefix import normalize_lf_desc
+        from shared.style_prefix import normalize_lf_desc
         _norm_lf = normalize_lf_desc(lf_desc, shot, characters)
         if _norm_lf != lf_desc:
             shot["lf_desc"] = lf_desc = _norm_lf

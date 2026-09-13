@@ -15,8 +15,8 @@ import re
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-import style_prefix
-from style_prefix import (
+from shared import style_prefix
+from shared.style_prefix import (
     STYLE_PREFIX, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt,
     is_empty_scene, video_negative_prompt,
 )
@@ -648,7 +648,7 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     # 也保证视频缓存自动失效（帧变了视频该重做）。r2v/text 模式不依赖
     # step02a 时，这里兜底让视频起点也用静态文本。
     if ff_desc:
-        from style_prefix import normalize_ff_desc
+        from shared.style_prefix import normalize_ff_desc
         norm = normalize_ff_desc(ff_desc, shot, characters)
         if norm != ff_desc:
             shot["ff_desc"] = ff_desc = norm
@@ -656,7 +656,7 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     # v6.29：视频终点兜底归一化（与 step01 post_fix 对称，保证 step02 直接跑时
     # 中间态 lf 也被清洗；回写保证视频哈希正确失效）
     if lf_desc:
-        from style_prefix import normalize_lf_desc
+        from shared.style_prefix import normalize_lf_desc
         _norm_lf = normalize_lf_desc(lf_desc, shot, characters)
         if _norm_lf != lf_desc:
             shot["lf_desc"] = lf_desc = _norm_lf

@@ -205,8 +205,9 @@ class ContinuityTracker:
                 str(idx): mode for idx, mode in self._mode_log.items()
             },
         }
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # 原子写：防中断留半截 meta（2026-09-13 审计修复，收敛 shared.json_io）
+        from shared.json_io import atomic_dump_json
+        atomic_dump_json(meta_path, data, ensure_ascii=False, indent=2)
 
     @staticmethod
     def load_meta(working_dir: Path | str) -> dict | None:

@@ -171,7 +171,7 @@ def test_invisible_threat_wording_passes_contradiction_check():
     设定（保证走 _threat_invisible_only 分支，应用新措辞）。
     """
     from shared.prompt_contradiction import find_contradictions
-    from style_prefix import add_image_strict_constraints
+    from shared.style_prefix import add_image_strict_constraints
 
     shot = {
         "location": "小舟上",
