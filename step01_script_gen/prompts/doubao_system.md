@@ -40,8 +40,8 @@ RULE-5  **对白密度铁律**：对白镜占比 ≥ 40%（12 镜至少 5 镜有
 
 RULE-6  **场景 ≤3 个**硬约束；超 3 场景拒收（场景按物理地点划分，禁按情节切分）。
 RULE-7  **人物 ≤4 人**（特殊卧底戏可破例）；纯路人 NPC 不列入 characters。
-RULE-8  **总时长 60-90s**（不含钩子，钩子另算）。30s 不合法。
-RULE-9  **单镜 ≤8s**（8s 硬上限）。对话镜 6-8s / 动作镜 3-5s。
+RULE-8  **总时长合法 60-90s，规划目标 70-80s**（不含钩子，钩子另算）。按 ~75s 分配每镜时长；30s 不合法，>90s 截断。
+RULE-9  **单镜 ≤8s**（8s 硬上限）。对话镜 5-6s / 动作镜 3-5s / 空镜·过渡镜 3-4s；禁止全章统一默认 5-6s（16 镜 × 5.5s = 88s 顶格超目标，按规划失败处理）。
 RULE-10 **镜数 8-20**，密度自然可分；过密合并、过疏拆分。
 RULE-11 **末镜未完成态**：lf_desc 必须是危机/悬念/争夺/对望/行动中任一；禁出现"完结/圆满/归隐/相守"。
 RULE-12 **高潮 kf 分布**：必须落在 50-90% 时段，禁止全在前 50%。
@@ -117,10 +117,11 @@ stage 枚举：pre / approach / climax / react / exit / after
    - 前 3 镜内必有主要角色（RULE-4）
    - 前 2 镜单镜 ≤5s（快速切入）
    - 空镜连续不超过 2 镜
+   - **时长预算**：按 RULE-8 目标 70-80s 反推——先估镜数 N，每镜均值 = 75s ÷ N（如 N=15 → 均值 5.0s），再按 RULE-9 按镜头类型拉开（对话 5-6s / 动作 3-5s / 空镜 3-4s），禁止全镜同值。
 
 8. **写每镜字段**（严格按 schema 顺序）：scene → location → main_subject → prompt → ff_desc → lf_desc → motion_desc → keyframes → frame_layouts → narration_segment → subtitle → core_keywords → fx_effect → clip_transition → context_bridge → color_tone → audio_cue → variation_type。
 
-9. **kf 自检**：每写完一镜 kf 数组，自检  .05 ≤ t_sec < duration_sec + stage 枚举 + desc 自完备。
+9. **kf 自检**：每写完一镜 kf 数组，自检 0.05 ≤ t_sec < duration_sec + stage 枚举 + desc 自完备。
 
 10. **内容质量自检（最重要的自检，必须做）**：
     10a. **忠于原文自检**（RULE-1）：所有对白都能在原文中找到出处？没有编造的角色名/台词/剧情？

@@ -55,7 +55,7 @@ _DEFAULT_WEIGHTS = {
     "schema": 2.0,            # 每镜必填字段齐全
     "gap": 2.0,               # 章节覆盖（validate_script_gap 自身门槛）
     "subtitle_binding": 2.0,  # subtitle == narration_segment（音画同步基础）
-    "duration": 1.5,          # 总时长贴近 60s（抖音成片目标）
+    "duration": 1.5,          # 总时长贴近 75s（规划目标 70-80s 中点，09-13 由 60s 上调）
     "shot_count": 1.0,        # 镜头数在合理区间
     "dialogue": 1.0,          # 对白比例合理 + 台词 ≤15 字（爆点密度）
     "camera": 1.0,            # camera_movement / cam_idx 运镜多样性
@@ -145,14 +145,14 @@ def score_one(script: dict, novel_text: str, parse_ok: bool, raw_json_ok: bool,
     else:
         m["shot_count"] = 0.0
 
-    # --- duration：贴近 60s，超 110s 判 0 ---
+    # --- duration：贴近 75s（规划目标 70-80s 中点，09-13 用户决策由 60s 上调），超 110s 判 0 ---
     total = float(script.get("total_duration", 0) or 0) if parse_ok else 0
     if not parse_ok or total <= 0:
         m["duration"] = 0.0
     elif total > 110:
         m["duration"] = 0.0
     else:
-        m["duration"] = max(0.0, 1.0 - abs(total - 60.0) / 60.0)
+        m["duration"] = max(0.0, 1.0 - abs(total - 75.0) / 75.0)
 
     # --- subtitle_binding ---
     if not parse_ok or n == 0:

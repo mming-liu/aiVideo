@@ -86,3 +86,7 @@ tools/ab_results/
 tools/dump/*__ab*.json
 tools/dump/backup_20260906_pre_quality_fix/
 tests/tools/test_ab_tools.py
+
+# 09-13 跑批产物（A/B bench + dump 备份）
+tools/bench_ab_results*.json
+tools/dump/backup_*/
