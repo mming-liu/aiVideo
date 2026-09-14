@@ -1,7 +1,7 @@
 """S. frame_spec_consistency（v6.57+ per-frame spec 一致性约束）.
 
 LLM 输出的 frame_layouts（ff/lf/kfs 三桶）作为 QC + prompt 组装的事实源。
-本约束 5 类违例：
+本约束 7 类违例：
 
   1. frame_layouts 缺失 / 三桶不全 → HARD（HARD 未修触发 LLM regen 修复轮）
   2. 每项 6 必填字段缺一 → HARD
@@ -9,6 +9,9 @@ LLM 输出的 frame_layouts（ff/lf/kfs 三桶）作为 QC + prompt 组装的事
   4. kfs 数量 ≠ keyframes 数量 → HARD（治 kf 时序塌缩 + spec-keyframes 错位）
   5. on_screen=True 角色在对应 desc 中体现「退场/没入/倒下」→ HARD
      （治 lf 互斥根因：spec 标在场 + desc 写已没入水中 = 矛盾 → regen）
+  6. 散文×spec 道具状态交叉校验（desc 离手 vs spec 仍持有）→ WARN
+  7. desc 提及角色不在该帧 spec → 确定性补条目 + HARD（已修）
+     （治 09-13 hook 残 spec 根因：QC 名单按残表打架）
 
 老章（无 frame_layouts）走 char_layout 降级 → 全部降为 WARN（不阻塞 regen）。
 """
@@ -24,6 +27,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from .base import Constraint
 from .types import RepairRecord, Severity, Violation
+from shared.frame_spec import is_on_screen
 
 
 # spec 每项必填 6 字段（与 _FRAME_SPEC_ITEM schema 同步）
@@ -51,6 +55,9 @@ _HOLD_VERBS = (
     "扛", "背", "挎", "叼", "含",
 )
 
+# 否定提及前缀（desc 写「已无X」类退场叙事 → 不是 spec 缺标，检查 7 不补）
+_NEGATION_PREFIX = ("已无", "没有", "不见", "再无", "失去", "已逝")
+
 
 class FrameSpecConsistencyConstraint(Constraint):
     """S. frame_spec_consistency：per-frame spec 必填 + 完整性 + desc 一致性.
@@ -66,7 +73,6 @@ class FrameSpecConsistencyConstraint(Constraint):
     skip_hook = False
 
     def apply(self, ctx) -> list[RepairRecord]:
-        repairs: list[RepairRecord] = []
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
             if not isinstance(shot, dict):
                 continue
@@ -224,7 +230,14 @@ class FrameSpecConsistencyConstraint(Constraint):
             # 该帧散文命中「X已脱手/滑落/倾倒/…」+ spec props 仍含 X → WARN（进修复轮）
             self._check_props_consistency(ctx, fl, shot, shot_idx, label)
 
-        return repairs
+            # === 检查 7：desc 提及角色必须在 spec 出镜表内（09-13 hook 残 spec 根因） ===
+            # desc 在场但 spec 缺人 → 确定性补条目（desc 是画面事实源，v6.62 原则）
+            self._check_roster_coverage(ctx, shot, is_hook, shot_idx, label)
+
+        # 09-13 修正：返回 drain 而非恒空列表——此前 record_repair 的记录滞留
+        # ctx._pending_repairs，report.repairs/[CONSTRAINT] 日志永远看不到本约束
+        # 的修复（检查 5/7 都中招）
+        return ctx.drain_repairs()
 
     def _check_onscreen_consistency(
         self,
@@ -250,7 +263,7 @@ class FrameSpecConsistencyConstraint(Constraint):
             if not isinstance(items, list) or not isinstance(desc, str) or not desc:
                 continue
             for item in items:
-                if not isinstance(item, dict) or item.get("on_screen") is not True:
+                if not is_on_screen(item):
                     continue
                 name = str(item.get("name", "")).strip()
                 if not name:
@@ -415,7 +428,7 @@ class FrameSpecConsistencyConstraint(Constraint):
 
         匹配模式：
           - prop_name + 状态词（如"酒壶已脱手"、"钓杆滑落"）
-          - 状态词 + prop_name（如"倾倒的酒壶"、"掉落的钓杆"）
+          - 状态词 + prop_name（"的"字结构，如"滑落的酒壶"）
 
         返回命中的完整片段（用于 evidence）；未命中返回空字符串。
         """
@@ -430,3 +443,129 @@ class FrameSpecConsistencyConstraint(Constraint):
             if pattern in desc:
                 return pattern
         return ""
+
+    def _check_roster_coverage(
+        self,
+        ctx,
+        shot: dict,
+        is_hook: bool,
+        shot_idx,
+        label: str,
+    ) -> None:
+        """desc 提及的注册角色不在该帧 spec → 确定性补条目 + HARD 违例（已修）.
+
+        根因（09-13 hook 实测）：ff_desc 写「船头杨旭仰卧」，frame_layouts.ff 只有
+        听香——检查 5 只查「spec 在场 vs desc 退场」这一个方向，「desc 在场 vs
+        spec 缺人」反向漏检：残 spec 落进 step02a 后 QC 名单 1 vs 画面 2 全线
+        critical 连烧、doodle 按错名单抹人。desc 是画面事实源（v6.62 同一原则）
+        → 确定性补 on_screen=true 条目，不依赖 LLM regen（v6.62 教训：LLM 修不
+        掉的矛盾只会循环烧）。
+
+        角色名单来源：分镜 = char_layout；hook（无 char_layout）= script.characters。
+        否决前缀：desc 写「已无X/没有X」类否定提及 → 不补（退场叙事不是缺标）。
+        空镜天然不触发（desc 无角色名）。
+        """
+        fl = shot.get("frame_layouts")
+        if not isinstance(fl, dict):
+            return
+        if is_hook:
+            chars = [str(c.get("identifier", "")).strip()
+                     for c in (ctx.script.get("characters") or [])
+                     if isinstance(c, dict)]
+        else:
+            chars = [str(e.get("name", "")).strip()
+                     for e in (shot.get("char_layout") or [])
+                     if isinstance(e, dict)]
+        chars = [c for c in chars if c]
+        if not chars:
+            return
+        cl_pos = {str(e.get("name", "")).strip(): str(e.get("position", "")).strip()
+                  for e in (shot.get("char_layout") or []) if isinstance(e, dict)}
+        frames = [("ff", "ff_desc", shot.get("ff_desc", "") or "", fl.get("ff")),
+                  ("lf", "lf_desc", shot.get("lf_desc", "") or "", fl.get("lf"))]
+        kfs_spec = fl.get("kfs") or []
+        for i, kf in enumerate(shot.get("keyframes") or []):
+            if i >= len(kfs_spec) or not isinstance(kfs_spec[i], list):
+                continue  # 桶数错位由检查 4 负责，修复后下一轮再跑本检查
+            desc = kf.get("desc", "") if isinstance(kf, dict) else ""
+            frames.append(
+                (f"kfs[{i}]", f"keyframes[{i}].desc", desc or "", kfs_spec[i]))
+
+        for bucket, desc_field, desc, items in frames:
+            if not desc or not isinstance(items, list):
+                continue
+            # 覆盖只认 on_screen=true；同名 off_screen 条目仍是「desc 在场 vs
+            # spec 退场」矛盾（09-14 复审：只看 name 会把 off_screen 当覆盖，
+            # QC 继续按 0 人/残名单打架）。
+            present = {str(e.get("name", "")).strip() for e in items
+                       if isinstance(e, dict) and is_on_screen(e)}
+            for name in chars:
+                if name in present or name not in desc:
+                    continue
+                # 否决前缀：名字前 4 字内含否定词（「画面中已无杨旭」不是缺标）
+                negated = any(
+                    any(neg in desc[max(0, m.start() - 4):m.start()]
+                        for neg in _NEGATION_PREFIX)
+                    for m in re.finditer(re.escape(name), desc)
+                )
+                if negated:
+                    continue
+                offscreen = next(
+                    (e for e in items
+                     if isinstance(e, dict)
+                     and str(e.get("name", "")).strip() == name
+                     and not is_on_screen(e)),
+                    None,
+                )
+                if offscreen is not None:
+                    offscreen["on_screen"] = True
+                    ctx.record_repair(
+                        self.name, shot_idx, "set_on_screen",
+                        f"frame_layouts.{bucket}",
+                        before="off_screen", after=name,
+                    )
+                    ctx.record_violation(
+                        Violation(
+                            constraint_name=self.name,
+                            severity=Severity.HARD,
+                            shot_index=shot_idx,
+                            field=f"frame_layouts.{bucket}",
+                            repaired=True,
+                            message=(
+                                f"{label} {desc_field} 提及角色「{name}」但 frame_layouts."
+                                f"{bucket} 无此条目在场标记（on_screen=false）"
+                                f"（09-14 复审：off_screen 不能算覆盖）——已确定性翻成 "
+                                f"on_screen=true（desc 是画面事实源）"
+                            ),
+                        )
+                    )
+                    continue
+                entry = {
+                    "name": name,
+                    "on_screen": True,
+                    "position": cl_pos.get(name) or "画中",
+                    "pose": "",
+                    "gaze_target": "无",
+                    "props": [],
+                }
+                items.append(entry)
+                ctx.record_repair(
+                    self.name, shot_idx, "add_item",
+                    f"frame_layouts.{bucket}",
+                    before="缺条目", after=name,
+                )
+                ctx.record_violation(
+                    Violation(
+                        constraint_name=self.name,
+                        severity=Severity.HARD,
+                        shot_index=shot_idx,
+                        field=f"frame_layouts.{bucket}",
+                        repaired=True,
+                        message=(
+                            f"{label} {desc_field} 提及角色「{name}」但 frame_layouts."
+                            f"{bucket} 无此条目（09-13 hook 残 spec 根因：QC 名单按残表 "
+                            f"打架）——已确定性补条目（position={entry['position']}，"
+                            f"desc 是画面事实源）"
+                        ),
+                    )
+                )

@@ -175,26 +175,28 @@ class AgentPlanTextService(TextGenerationService):
         )
 
         # 仅做 1 次退避：超时和 5xx 各 1 次，避免长任务重试浪费额度
+        # v6.70.3（09-14）：超时随请求走（req.timeout_sec 分级），None 回退全局
+        _timeout = int(req.timeout_sec) if req.timeout_sec else AGENT_PLAN_TEXT_TIMEOUT_SEC
         for attempt in range(1, 1 + AGENT_PLAN_TEXT_ATTEMPTS):  # 1 次重试（初始 + 1 次 = 共 2 次提交）
             try:
                 resp = requests.post(
                     url, json=payload, headers=self._headers,
-                    timeout=AGENT_PLAN_TEXT_TIMEOUT_SEC,
+                    timeout=_timeout,
                 )
             except requests.exceptions.Timeout:
                 # 长任务客户端超时：直接报错不重试（旧请求仍在模型侧跑）
                 if attempt == 1:
                     _verbose_write(
-                        f"[!] 客户端 {AGENT_PLAN_TEXT_TIMEOUT_SEC}s 超时（长任务），"
+                        f"[!] 客户端 {_timeout}s 超时（长任务），"
                         f"不重试，改报「超时未完成」由上层业务决策"
                     )
                 return TextGenerationResult(
                     success=False,
                     error=(
-                        f"Agent Plan 客户端超时 ({AGENT_PLAN_TEXT_TIMEOUT_SEC}s) — "
+                        f"Agent Plan 客户端超时 ({_timeout}s) — "
                         f"长任务不应自动重试，旧请求仍在模型侧跑；"
                         f"请上层业务队列决定是否重发。"
-                        f"（model={model}，可用 AGENT_PLAN_TEXT_TIMEOUT_SEC 调整）"
+                        f"（model={model}，可用 AGENT_PLAN_TEXT_TIMEOUT_SEC 调整或请求级 timeout_sec）"
                     ),
                 )
             except requests.exceptions.RequestException as e:

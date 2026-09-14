@@ -357,3 +357,39 @@
   - **5 步复核清单必须 5 步全走**：①schema ②pattern 合法 ③**有效口径（实际喂模型字段）** ④metadata 周边（拆镜链式调用）⑤**软硬分级**——漏 ③④ 直接翻车
 - **v6.50 教训深化**：**"每修一类问题，它的近似变体和时序变体就成为新盲区"**——本轮 P22 → P23 完美验证：v6.50 修的"差 2-3 字自抄"在 16:34 退化为"整段复制"+"ff 不补"+"location 失明"+"群演误判"+"双实现漂移" 5 个新盲区
 - **下一步**：跑 step02a 重点抽验 shot7.5/7.75/9.5（焦点轮换是否让首尾帧画面真正不同）+ shot6/7（补锚后杨旭倒地是否带伤）
+
+## 2026-09-13 v6.70.1 钩子残 spec 事故与根因修复
+
+- **事故**：21:11 新生成的 hook frame_layouts.ff 只有听香（ff_desc 明写杨旭仰卧 2-3 人）→ step02a QC「人数 2 vs 名单 1」shot_0 ff/lf/kf0/kf1 全线 critical 连烧 + doodle 按错名单抹人，整镜烧穿（另连带 lf_desc 病句「舴艋舟已倾倒脱手」——应为钓杆——与无主刀尖「刀尖抵近」）。
+- **根因三连**：
+  1. `frame_spec_consistency` 只查「spec 在场 vs desc 退场」（检查5），不查反方向「desc 在场 vs spec 缺人」→ 残 spec 静默入库（shot 7/8/9 群演同病）；
+  2. 钩子生成时点在定向修复轮**之后**（main.py gen_hook_script 在 _repair_shot_warnings 之后），checklist 驱动的 LLM 修复轮结构性轮不到 hook；当晚修复轮还 600s 超时「保留原版」；
+  3. 病句/无主刀尖为钩子 LLM 原生输出，此前无确定性护栏能拦。
+- **本轮修复**：检查 7（desc 覆盖→确定性补条目）、钩子后置校验轮（互补模型重生 1 次）、落盘前未解决 issue 汇总、weapon_holder 逐武器词+±1 相邻分句窗口（观察期暂不进修复轮）、on_screen 全仓单源 `is_on_screen`（9 处裸读清零）+ image_qc 回退口径精化（空桶回退/全员 off_screen 信任 0）。
+- **观察项（未修，勿丢）**：
+  - 定向修复轮超时**无互补模型 relay**——v6.67 接力只覆盖候选生成/GAP 链路，`_repair_shot_warnings` 超时即静默保留原版；且 `AGENT_PLAN_TEXT_TIMEOUT_SEC=600` 单次盲等 10 分钟，建议后续接 relay 或降超时。
+  - weapon_holder 观察期：跑一章统计命中/误报（「提」在 holder 词表会漏报、「刀」子串会误报剪刀类）再定是否放开修复轮。
+
+## 2026-09-14 重跑 step01 验证新暴露的两类问题（已修）
+
+- **① parse 结构炸穿**：候选 LLM 偶发把 shots 输出成字符串/混入字符串元素，`_fill_missing_new_fields` 对 str 调 setdefault 抛 AttributeError——穿透 RuntimeError/ValueError 重试网（main.py 只捕这两类）FATAL 打穿整个 run（40 分钟候选白烧）。修复：parse_response 在 `_coerce_schema_types` 后按「shots 结构非法」抛 ValueError 走既有重试网 + fill 循环兜底跳过非 dict。
+- **② BEST-GUARD 恢复绕过全部质量门**：新 run 88 分 < 快照最优 100 分（script_result_20260913_211116=带病句+无主刀尖的旧版）→ 自动恢复快照为正式输出，绕过钩子后置校验轮/SAVE-WARN；且「补修复」（对旧快照重跑全套约束）**非幂等**：刀尖句翻倍、尺寸对象库碎片（可容3-4人）、血可见）、「定锚。定锚」重复注入 hook desc。修复：`_ensure_hook_quality` 抽为共享质量门，BEST-GUARD 恢复路径强制过门（重生钩子+检查7 补 spec）；`_cross_run_best_guard` 改为返回最终写盘 script，SAVE-WARN 汇总移到恢复之后对最终产物生效。
+- **遗留（勿丢）**：补修复的非幂等注入器未逐个根修（style_prefix 前一刻改写/prop_spatial_anchor 类追加型约束对已含锚文本的 desc 重跑会累积）——当前靠钩子质量门兜住 hook 段；其他镜头若未来被恢复+补修复复盖，需审计 diff。病句族（舴艋舟已倾倒脱手类语义荒诞）仍无确定性检查，重生有抽样风险，依赖人工/终验兜底。
+- **本次最终数据**：正式输出=恢复快照+补修复+检查7（spec 全绿）+钩子确定性修补（病句→钓杆句、无主刀尖→画外持刃手、碎片清理、杨旭 spec 条目升级船头/仰卧）。
+
+## 2026-09-14 step01 17m38s 事故审计 + v6.70.3 修复（09-14 定位 → 09-15 落地）
+
+- **事故形态**（21:04-21:22 run B + 20:45 run A 并发交错）：
+  1. **并发写**：两个 step01 进程（PID 37964/39012）同时跑同一章——run A 21:13:27 存过一版 BEST-GUARD 恢复稿，被 run B 21:22:29 的 20 镜/123s 稿覆盖；step01.log 两 run 行级交错
+  2. **早停失效**：100 分候选（17 镜/84s）21:06:10 已到手，仍等 600s 慢候选到 21:18:02
+  3. **越修越差**：GAP 重生 21 镜/108s 版**静默替换** 100 分 17 镜候选（旧退化判据只看「塌缩/失锚/截断」方向，膨胀一个不命中）→ 终稿 20 镜/123s + 97 条告警
+- **根因链**：①无章节锁；②早停 break 后 `with ThreadPoolExecutor` 退出仍 `shutdown(wait=True)` 等慢线程；③`_retry_degrade_reason` 无镜数/时长膨胀判据；④全站点共用 `AGENT_PLAN_TEXT_TIMEOUT_SEC=600` 单值
+- **修复（v6.70.3，1235 测全过）**：
+  1. `.step01.lock` single-flight（O_EXCL + PID 存活探测，Windows `os.kill(pid,0)` 实测不杀进程）
+  2. 早停 `shutdown(wait=False)` 真正放行（+回归测试：慢候选 3s、总耗时 <1.5s）
+  3. 膨胀判据 1.6：prev 带内（≥60s）+ new 出带（>90s）或镜数 +3 → 判退化回退（09-14 序列 17镜84s→21镜108s 实测被拦；带内 +2 镜放行）
+  4. `TextGenerationRequest.timeout_sec` 请求级契约：候选/GAP 300s、修复/hook 180s（env 可调，0=回退全局）；.env 全局同步 600→300
+  5. `STEP01_TOTAL_BUDGET_SEC=900` 总预算：超时跳过可选修复轮（保留原版语义，无数据风险），核心链路不受影响
+  6. `step01_timing.json` 阶段耗时指标（候选/GAP/hook/修复/资产，毫秒级开销）
+- **未做（有意）**：多人站位 129 条告警的确定性回填——派生 char_layout 需语义理解超出确定性边界（v6.33 同款决策），且 `multi_person_staging` 已在 `_REPAIR_PRIORITY_CATEGORIES`，修复轮降超时后该链路自动受益；评分三层拆分（A 剧情层/B 结构层/C QC 风险层）为中期重构，本轮早停护栏已含结构判据（镜数/时长/钩子）
+- **教训**：①「早停」必须验证到 **shutdown 语义**——break 只退出迭代不退出等待；②回退保护必须对称看双向（塌缩与膨胀都是退化）；③单值超时是隐式全站耦合，改一个站点先查其他站点语义（「保留原版」站点可以短，全脚本站点需要长）

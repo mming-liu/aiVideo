@@ -195,12 +195,15 @@ def _check_fps_consistency(script: dict) -> None:
 def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
                    outline: dict | None = None,
                    temperature: float = 0.2,
-                   model: str | None = None) -> str:
+                   model: str | None = None,
+                   timeout_sec: int | None = None) -> str:
     """调用 LLM 生成脚本，返回原始文本.
 
     Args:
         outline: 预提取的章节大纲（v6.43 08-25 改为 main() 入口并发预提取，
             避免本函数再独立调一次 LLM 浪费 ~6s）。
+        timeout_sec: 请求级客户端超时（v6.70.3 分级——候选 300s，防 600s 慢请求
+            拖死整轮；None=provider 默认）。
     """
     from _text_gen.deepseek_schema import SCRIPT_SCHEMA
     # v6.23：大纲两阶段（ShortVideoDirector director-outline 吸收）——大纲作分镜
@@ -225,6 +228,7 @@ def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
         temperature=temperature,  # v6.5: 降低温度防止幻觉；v6.64 多候选用不同温度增加多样性
         json_schema=SCRIPT_SCHEMA,
         model=model,  # v6.66: 跨模型候选池——per-request model 覆盖（None=用 provider 默认）
+        timeout_sec=timeout_sec,  # v6.70.3: 候选 300s 分级超时
     )
     _logger.info("[INFO] 正在调用 LLM 生成分镜脚本...")
     _console("  [生成] 正在调用 LLM 生成分镜脚本（18 镜，约需 3-6 分钟）...")
@@ -281,7 +285,8 @@ def _post_process(script: dict) -> dict:
 
 def gen_hook_script(novel_text: str, bank=None, objects_bank=None,
                     forbidden_lines: list[str] | None = None,
-                    dup_note: str | None = None) -> dict | None:
+                    dup_note: str | None = None,
+                    model: str | None = None) -> dict | None:
     """调用 LLM 生成钩子分镜，返回 hook dict 或 None.
 
     Args:
@@ -292,6 +297,8 @@ def gen_hook_script(novel_text: str, bank=None, objects_bank=None,
             注入钩子 prompt 防「钩子台词与主分镜重复」倒叙穿帮。
         dup_note: v6.32（08-12）重生成时的去重反馈——上一版钩子台词与主分镜镜头
             重复，把具体重复台词 + 换台词/改纯画面开场的选择喂给 LLM，引导它换一句。
+        model: v6.70.1 钩子后置校验轮——互补模型重生钩子（None=provider 默认，
+            零行为变化）
     """
     if not HOOK_ENABLED:
         return None
@@ -307,6 +314,8 @@ def gen_hook_script(novel_text: str, bank=None, objects_bank=None,
         user_prompt=prompt,
         temperature=0.2,  # v6.5: 降低温度防止幻觉；v6.64 多候选用不同温度增加多样性
         json_schema=HOOK_SCHEMA,
+        model=model,  # v6.70.1 钩子后置校验轮：互补模型重生（None=provider 默认）
+        timeout_sec=_repair_timeout_sec(),  # v6.70.3: hook 180s（09-13 实测 600s 超时已让重生白等）
     )
     _logger.info("[INFO] 正在调用 LLM 生成钩子分镜...")
     _console("  [生成] 正在生成钩子分镜（约 30 秒）...")
@@ -459,6 +468,7 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
             temperature=0.2,
             json_schema=SCRIPT_SCHEMA,
             model=model,  # v6.67 接力修复：None=provider 默认（零行为变化）
+            timeout_sec=_repair_timeout_sec(),  # v6.70.3: 超限收敛 180s
         )
         try:
             result = service.generate(req)
@@ -552,7 +562,9 @@ _REPAIR_PRIORITY_CATEGORIES = (
     "over_shoulder_lock", "occlusion_layering", "gaze_direction", "gaze_convergence",
     # === 画面描述（4） ===
     "ff_lf_completeness", "ff_desc_length", "ff_multi_action", "frame_weapon_legality",
-    "weapon_holder",  # v6.70.1：09-13 hook 悬空匕首根因，由 warn-only 升级 issue 触发 LLM 修复轮
+    # weapon_holder 不进修复轮（09-13 决策：无误报观察数据，先跑一章统计命中/误报；
+    # issue 分级保留——仍经 feedback.build_regen_feedback 聚合进 GAP/regen 反馈文本。
+    # 钩子的无主武器由 main.py「钩子后置校验轮」兜底，不经本清单）
     # === 打斗/致命（1） ===
     # v6.43 08-25：fatal_wound_continuity 移除——hard_fix 阶段
     # InjuryContinuityConstraint 已确定性补 anchor（prompt/lf_desc 追加
@@ -628,6 +640,100 @@ def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
                 per_shot.setdefault(_tid, []).append(f"[{label}] {w.strip()}")
     # v6.43 08-25：返回 _has_hard 标记，_repair_shot_warnings 见到 False 直接 skip 修复轮
     return {"_has_hard": has_hard, "shots": per_shot}
+
+
+# hook 质量门只消费高价值 warning（避免普通告警触发重生循环）。
+# gaze_state_conflict 是 09-13 实证会烧穿 QC 的确定性矛盾：闭眼角色 gaze 非无。
+_HOOK_QC_WARNING_CATEGORIES = {"gaze_state_conflict"}
+
+
+def _collect_hook_issues(script: dict) -> list[str]:
+    """钩子后置校验轮（v6.70.1，09-14）：取 hook 桶 issue + 高价值 warning.
+
+    结构性背景：钩子生成时点在定向修复轮之后（gen_hook_script 在
+    _repair_shot_warnings 之后调用），checklist 驱动的 LLM 修复轮永远轮不到
+    hook——hook 的 issue 只能在这里消费（互补模型重生钩子）或留痕。
+    归桶口径与 _collect_repair_warnings 一致：issue 消息含「钩子」或「镜头hook」
+    即 hook 桶（两种标签并存：checklist 多数检查用「钩子镜头(index=N)」，
+    kf 时序类检查用「镜头hook」）。
+
+    warning 不全收：普通 warning 会把质量门变成重生循环。只收白名单内的
+    高价值 warning（当前 gaze_state_conflict——闭眼/昏迷 gaze 非无，图片 QC
+    必败），与 build_qc_prompt 的「空 spec 回退」同为确定性互斥修复。
+    """
+    import io as _io
+    import contextlib as _ctx
+    _buf = _io.StringIO()
+    with _ctx.redirect_stdout(_buf):
+        results = _run_prompt_checklist(script).get("results", {})
+    issues: list[str] = []
+    for _key, _res in results.items():
+        if not isinstance(_res, dict):
+            continue
+        for _w in (_res.get("issues") or []):
+            _ws = str(_w)
+            if "钩子" in _ws or "镜头hook" in _ws:
+                issues.append(f"[{_key}] {_ws.strip()}")
+        if _key not in _HOOK_QC_WARNING_CATEGORIES:
+            continue
+        for _w in (_res.get("warnings") or []):
+            _ws = str(_w)
+            if "钩子" in _ws or "镜头hook" in _ws:
+                issues.append(f"[{_key}] {_ws.strip()}")
+    return issues
+
+
+def _ensure_hook_quality(script: dict, *, novel_text: str, bank=None,
+                         objects_bank=None, forbidden_lines=None,
+                         producer_model=None) -> list[str]:
+    """钩子质量门（v6.70.1，09-13；09-14 抽出供 BEST-GUARD 恢复路径共用）.
+
+    hook 有 checklist issue → 换互补模型重生 1 次（钩子生成实测 ~7s）→ 复检。
+    正式输出有两条来源（本次 run / BEST-GUARD 恢复的快照+补修复），门必须对
+    两者同等生效——09-14 实测：恢复路径绕过本门，旧快照的病句/无主刀尖经
+    非幂等补修复污染（刀尖句翻倍 + 对象库碎片）直接落盘。重生后补跑检查 7
+    （FrameSpec 出镜覆盖）——重生钩子的 spec 同样可能漏人。返回残余 issues
+    （空 = 过门）。
+    """
+    issues = _collect_hook_issues(script)
+    if not issues:
+        return []
+    _logger.warn(
+        f"[HOOK-QC] 钩子检出 {len(issues)} 条 issue，互补模型重生："
+        + " | ".join(issues[:3]))
+    _console(f"  [钩子校验] 检出 {len(issues)} 条 issue → 互补模型重生钩子…")
+    _hook_regen = gen_hook_script(
+        novel_text, bank=bank, objects_bank=objects_bank,
+        forbidden_lines=forbidden_lines,
+        model=_complementary_repair_model(producer_model),
+    )
+    if not _hook_regen:
+        _logger.warn("[HOOK-QC] ⚠️ 钩子重生失败，带 issue 落盘（人工过目）：\n  - "
+                     + "\n  - ".join(issues))
+        _console("  [钩子校验] ⚠️ 重生失败，钩子带 issue 落盘")
+        return issues
+    script["hook"] = _hook_regen
+    try:
+        from step01_script_gen.validation import post_fix_shot_prompts, validate_hook
+        post_fix_shot_prompts(script)
+        validate_hook(script["hook"], script.get("characters", []))
+        from step01_script_gen.constraints import ConstraintContext
+        from step01_script_gen.constraints.element_markers import ElementMarkers
+        from step01_script_gen.constraints.frame_spec_consistency import (
+            FrameSpecConsistencyConstraint)
+        FrameSpecConsistencyConstraint().apply(
+            ConstraintContext.from_script(script, markers=ElementMarkers()))
+    except Exception as _e:
+        _logger.warn(f"[WARN] 重生钩子修复/校验异常（不阻断）: {_e}")
+    remaining = _collect_hook_issues(script)
+    if remaining:
+        _logger.warn("[HOOK-QC] ⚠️ 重生后钩子仍有 issue（保留落盘，人工过目）：\n  - "
+                     + "\n  - ".join(remaining))
+        _console("  [钩子校验] ⚠️ 重生后仍有 issue，已按原样落盘（见日志）")
+    else:
+        _logger.info("[OK] 钩子后置校验通过（互补模型重生版）")
+        _console("  [钩子校验] 重生钩子通过校验")
+    return remaining
 
 
 # v6.63.1：_locate_narration_in_novel 下沉至 gap_analysis（constraints 层复用，
@@ -904,6 +1010,17 @@ def _retry_degrade_reason(prev: dict, new: dict, novel_text: str,
     if prev_dur >= 40 and new_dur < 40:
         return (f"时长塌缩（原始总时长 {new_dur:.0f}s < 40s，上一版 {prev_dur:.0f}s）"
                 f"——事后 W6 拉伸会把短镜拉成慢动作")
+    # 1.6) 镜数/时长膨胀（v6.70.3，09-14）——塌缩的镜像判据。09-14 实测：100 分
+    # 候选 17 镜 84s 被采纳后，GAP 重生版 21 镜 108s **静默替换**（三条旧判据只看
+    # 「变差」方向：塌缩查 <40s、失锚查变多、截断查变多——膨胀一个都不命中），
+    # 终稿 20 镜 123s。上一版健康（≥60s ≤90s 合法带内）而新版膨胀出带（>90s）或
+    # 镜数多 3+ → 判退化回退。救援态不豁免（救援补高潮不靠膨胀镜头数达成）。
+    _prev_n = len(prev.get("shots", []) or [])
+    _new_n = len(new.get("shots", []) or [])
+    if (prev_dur >= 60 and new_dur > 90) or (_new_n - _prev_n >= 3):
+        return (f"镜数/时长膨胀（新版 {_new_n} 镜 {new_dur:.0f}s，上一版 {_prev_n} 镜 "
+                f"{prev_dur:.0f}s）——重生版把镜头预算炸出合法带（60-90s），"
+                f"越修越多的镜头会把 60s 短剧拖成 2 分钟流水账")
     # 1.5) 高潮塌缩（v6.62.8，09-09）——与「零高潮救援」对称的反向护栏。
     # 09-10 run3 实测：retry1 把高潮镜从 0 补到 1（救援采纳），retry2 又打回 0，
     # 而三条判据都不看高潮，于是 retry2 被静默接受，终稿高潮镜 0、台词镜 0。
@@ -941,6 +1058,9 @@ def _is_retry_degraded(prev: dict, new: dict, novel_text: str,
        响应总时长规则（08-27 重试版 11s 事故），事后拉伸会把 1s 镜头拉到 8s。
     1.5) **高潮塌缩**：上一版有高潮镜而新版归零——整章核心冲突整段没拍，
        属于不可挽回的结构性缺陷，必须硬拦截。
+    1.6) **镜数/时长膨胀**（v6.70.3，09-14）：上一版在合法带内（≥60s）而新版
+       膨胀出带（>90s）或镜数多 3+——「越修越多」与「越修越塌」同样是退化。
+       09-14 实测：100 分 17 镜候选被 GAP 重生 21 镜版静默替换，终稿 123s。
     2) **台词失锚变多**：新版未在原文找到的台词数 > 上一版（原文幻觉，如
        「凶手是谁？如何击杀了公子」）。≥2 条才判退化，防短语匹配误报。
     3) **文本中途截断**（v6.50，08-28；判据 v6.62.6 重写）：新版 ≥2 个文本字段
@@ -1393,6 +1513,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             temperature=0.2,
             json_schema=SCRIPT_SCHEMA,
             model=model,  # v6.67 接力修复：None=provider 默认（零行为变化）
+            timeout_sec=_repair_timeout_sec(),  # v6.70.3: 修复轮 180s——超时保留原版，不再盲等 600s
         )
         try:
             result = service.generate(req)
@@ -1694,6 +1815,210 @@ def _snapshot_run_artifacts(script: dict | None = None) -> None:
         except Exception:
             pass
 
+def _acquire_step01_lock() -> bool:
+    """章节级 single-flight 锁：禁止两个 step01 并发写同一章.
+
+    O_EXCL 创建 .step01.lock；创建者 PID 已退出才允许接管 stale 锁。
+    """
+    import os as _os
+    import time as _time
+    CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = CHAPTER_DIR / ".step01.lock"
+    try:
+        fd = _os.open(lock_path, _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL)
+        with _os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"pid": _os.getpid(), "started_at": _time.strftime("%Y-%m-%d %H:%M:%S")}, f)
+        return True
+    except FileExistsError:
+        try:
+            with open(lock_path, "r", encoding="utf-8") as f:
+                info = json.load(f)
+            pid = int(info.get("pid", 0))
+        except Exception:
+            pid = 0
+        if pid <= 0:
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+            return _acquire_step01_lock()
+        try:
+            _os.kill(pid, 0)
+            alive = True
+        except OSError:
+            alive = False
+        if alive:
+            _logger.warn(f"[LOCK] 已有 step01 运行中（PID={pid}），本次跳过")
+            _console(f"[LOCK] 已有 step01 运行中（PID={pid}），本次跳过")
+            return False
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+        return _acquire_step01_lock()
+
+
+def _release_step01_lock() -> None:
+    """仅删除本进程创建的锁，避免释放他人锁."""
+    import os as _os
+    lock_path = CHAPTER_DIR / ".step01.lock"
+    try:
+        if not lock_path.exists():
+            return
+        with open(lock_path, "r", encoding="utf-8") as f:
+            info = json.load(f)
+        if int(info.get("pid", 0)) == _os.getpid():
+            lock_path.unlink()
+    except Exception as _e:
+        _logger.warn(f"[LOCK] 释放 step01 锁失败: {_e}")
+
+
+def _candidate_early_stop_enabled() -> bool:
+    """候选早停开关，默认开启；=0 时保持 v6.65「凑满 TOPK」旧行为."""
+    import os as _os
+    return _os.getenv("CANDIDATE_EARLY_STOP", "1").strip() != "0"
+
+
+def _candidate_gen_timeout_sec() -> int | None:
+    """候选生成请求级超时（v6.70.3，默认 300s；env 设 0 = 回退 provider 默认 600s）.
+
+    09-14 实测：候选 3 耗 12 分钟把「100 分候选 64s 到手」的 run 拖成 17m38s；
+    超时判 success=False → 走既有「失败重试/凑不够就用手头候选」路径，不再盲等。
+    """
+    import os as _os
+    try:
+        _v = int(_os.getenv("CANDIDATE_GEN_TIMEOUT_SEC", "300"))
+    except ValueError:
+        _v = 300
+    return _v if _v > 0 else None
+
+
+def _full_script_timeout_sec() -> int | None:
+    """全脚本级 LLM 调用超时（GAP 重生，v6.70.3 默认 300s）."""
+    import os as _os
+    try:
+        _v = int(_os.getenv("FULL_SCRIPT_TIMEOUT_SEC", "300"))
+    except ValueError:
+        _v = 300
+    return _v if _v > 0 else None
+
+
+def _repair_timeout_sec() -> int | None:
+    """定向修复/超限收敛/hook 超时（v6.70.3 默认 180s）.
+
+    这些站点失败语义都是「保留原版继续」，600s 盲等只会把整轮拖死（09-13/14
+    两晚修复轮 + hook 重生各白等一次 600s）。
+    """
+    import os as _os
+    try:
+        _v = int(_os.getenv("REPAIR_TIMEOUT_SEC", "180"))
+    except ValueError:
+        _v = 180
+    return _v if _v > 0 else None
+
+
+# ============================================================================
+# v6.70.3（09-14）：阶段计时 + 总预算
+# 09-14 监控审计发现 17m38s 的 run 无任何结构化耗时数据，事后只能靠日志时间戳
+# 人工拼时间线。timing 落盘 step01_timing.json；预算超时跳过「失败即保留原版」
+# 语义的可选修复轮（regen_over_limit / repair rounds），核心链路（候选/GAP/hook）不受影响。
+# ============================================================================
+_STEP_TIMING: list = []
+_STEP_TIMING_T0 = None
+
+
+def _timing_start() -> None:
+    """run 级计时起点（main() 拿锁后调用）."""
+    global _STEP_TIMING_T0
+    import time as _t
+    _STEP_TIMING_T0 = _t.time()
+    _STEP_TIMING.clear()
+
+
+def _timing_mark(phase: str, status: str = "ok", **fields) -> None:
+    """记录一个阶段完成点（毫秒级开销，失败静默）."""
+    import time as _t
+    try:
+        if _STEP_TIMING_T0 is None:
+            return
+        _rec = {"phase": phase, "status": status,
+                "elapsed_sec": round(_t.time() - _STEP_TIMING_T0, 1)}
+        _rec.update(fields)
+        _STEP_TIMING.append(_rec)
+    except Exception:
+        pass
+
+
+def _timing_dump(path) -> None:
+    """落盘 timing JSON（失败只告警，绝不影响主流程）."""
+    try:
+        import time as _t
+        if _STEP_TIMING_T0 is not None:
+            _STEP_TIMING.append({
+                "phase": "_total", "status": "ok",
+                "elapsed_sec": round(_t.time() - _STEP_TIMING_T0, 1),
+            })
+        _payload = {"run_started": _STEP_TIMING_T0, "phases": _STEP_TIMING}
+        import json as _json
+        from shared.json_io import atomic_dump_json as _adj
+        _adj(path, _payload, ensure_ascii=False, indent=2)
+    except Exception as _e:
+        try:
+            _logger.warn(f"[TIMING] timing 落盘失败（不阻断）: {_e}")
+        except Exception:
+            pass
+
+
+def _total_budget_sec() -> float:
+    """run 总预算（v6.70.3 默认 900s；0 = 不限时）."""
+    import os as _os
+    try:
+        _v = float(_os.getenv("STEP01_TOTAL_BUDGET_SEC", "900"))
+    except ValueError:
+        _v = 900.0
+    return _v
+
+
+def _budget_exceeded() -> bool:
+    """超预算判定（未 start 或预算 0 = False）."""
+    import time as _t
+    if _STEP_TIMING_T0 is None or _total_budget_sec() <= 0:
+        return False
+    return (_t.time() - _STEP_TIMING_T0) > _total_budget_sec()
+
+
+def _early_stop_score() -> float:
+    """早停阈值；默认 95，可用 env 调整（非法值回退 95）."""
+    import os as _os
+    try:
+        return float(_os.getenv("CANDIDATE_EARLY_STOP_SCORE", "95"))
+    except ValueError:
+        return 95.0
+
+
+def _candidate_is_early_stop(score: dict, script: dict) -> bool:
+    """高分候选 + 基础结构健康 → 允许放弃等待慢候选.
+
+    只做确定性结构护栏（shot 数 / 时长 / 钩子），避免把「剧情高分但不可生成」
+    的候选误判为终稿；下游 hard gate 仍照常执行。
+    """
+    if not _candidate_early_stop_enabled():
+        return False
+    if float(score.get("total", 0) or 0) < _early_stop_score():
+        return False
+    shots = script.get("shots", [])
+    if not shots:
+        return False
+    if len(shots) > 18:
+        return False
+    duration = sum(float(shot.get("duration_sec", 0) or 0) for shot in shots)
+    if not 60.0 <= duration <= 90.0:
+        return False
+    if not script.get("hook"):
+        return False
+    return True
+
+
 def _generate_script_candidates(
     novel_text: str,
     character_bank=None,
@@ -1727,6 +2052,7 @@ def _generate_script_candidates(
             outline=outline,
             temperature=_temp,
             model=_model,
+            timeout_sec=_candidate_gen_timeout_sec(),  # v6.70.3: 300s——慢候选由早停+超时双通道兜住
         )
         _cand = parse_response(raw, novel_text=novel_text)
         _scr = _score_script(_cand, novel_text)
@@ -1759,12 +2085,14 @@ def _generate_script_candidates(
             _batch = min(_need, _max_attempts - _attempt)
             if _batch <= 0:
                 break
-            with _fut.ThreadPoolExecutor(max_workers=_batch) as _ex:
-                _futs = {
-                    _ex.submit(_gen_one_candidate, _task_idx + _j): _j
-                    for _j in range(_batch)
-                }
-                _task_idx += _batch
+            _early_stop_hit = False  # v6.70.3：置位后 shutdown(wait=False) 放行慢线程
+            _ex = _fut.ThreadPoolExecutor(max_workers=_batch)
+            _futs = {
+                _ex.submit(_gen_one_candidate, _task_idx + _j): _j
+                for _j in range(_batch)
+            }
+            _task_idx += _batch
+            try:
                 for _f in _fut.as_completed(_futs):
                     _attempt += 1
                     try:
@@ -1774,6 +2102,18 @@ def _generate_script_candidates(
                             f"[CANDIDATE] 候选 {len(_candidates)}/{SCRIPT_CANDIDATE_TOPK}: "
                             f"{_scr['detail']}"
                         )
+                        # v6.68：高分早停。批量提交仍保留（不额外发请求），当前批剩余
+                        # 未完成候选不再阻塞等待；provider 请求无法可靠取消，已发出的
+                        # 调用会自然结束。
+                        if _candidate_is_early_stop(_scr, _cand):
+                            _remaining = len(_futs) - (_attempt - 1)
+                            _logger.info(
+                                f"[CANDIDATE] 早停：候选分 {_scr['total']} ≥ "
+                                f"CANDIDATE_EARLY_STOP_SCORE={_early_stop_score()}，"
+                                f"放弃等待 {_remaining} 个慢候选"
+                            )
+                            _early_stop_hit = True
+                            break
                     except RuntimeError as e:
                         _last_err = e
                         _logger.warn(f"[WARN] LLM 生成失败（尝试 {_attempt}/{_max_attempts}）: {e}")
@@ -1782,6 +2122,15 @@ def _generate_script_candidates(
                         _last_err = e
                         _logger.warn(f"[WARN] 分镜 JSON 解析失败（尝试 {_attempt}/{_max_attempts}）: {e}")
                         _console(f"  [重试] JSON 解析失败（{_attempt}/{_max_attempts}）...")
+            finally:
+                # v6.70.3（09-14）：早停必须真正不等慢线程——with 块退出会
+                # shutdown(wait=True)，09-14 实测 break 后仍被 600s 慢候选拖住
+                # （100 分候选 64s 到手，总耗时 17m38s）。wait=False 让
+                # _generate_script_candidates 立即返回；孤儿线程随进程退出，
+                # 不影响主流程（写盘都在主线程）。
+                _ex.shutdown(wait=not _early_stop_hit)
+            if _early_stop_hit:
+                break
 
     if not _candidates:
         raise RuntimeError(f"分镜 JSON 连续 {_max_attempts} 次解析失败: {_last_err}")
@@ -1789,7 +2138,8 @@ def _generate_script_candidates(
     return _candidates
 
 
-def _cross_run_best_guard(script: dict, novel_text: str) -> None:
+def _cross_run_best_guard(script: dict, novel_text: str,
+                          hook_ctx: dict | None = None) -> dict | None:
     """跨 run 保优护栏（P4.6，2026-09-11）：防止更好的历史版本被差 run 覆盖.
 
     背景：doubao 输出方差大（实测同章 38~90 分），90 分终稿可能被下一次
@@ -1811,10 +2161,10 @@ def _cross_run_best_guard(script: dict, novel_text: str) -> None:
 
         snap_dir = OUTPUT_FILE.parent / "snapshots"
         if not snap_dir.is_dir():
-            return
+            return None
         snaps = sorted(snap_dir.glob("script_result_*.json"))
         if not snaps:
-            return
+            return None
 
         scan_n = max(1, int(_os.getenv("BEST_GUARD_SCAN_N", "8")))
         margin = float(_os.getenv("BEST_GUARD_MARGIN", "3"))
@@ -1840,7 +2190,7 @@ def _cross_run_best_guard(script: dict, novel_text: str) -> None:
                 best_path = sp
 
         if best_path is None or best_score <= new_score + margin:
-            return
+            return None
 
         _logger.warn(
             "[BEST-GUARD] 新终稿 " + str(new_score) + " 分 < 快照最优 " +
@@ -1848,7 +2198,7 @@ def _cross_run_best_guard(script: dict, novel_text: str) -> None:
         )
         if not keep_best:
             _logger.warn("[BEST-GUARD] KEEP_BEST_SNAPSHOT=0 → 仅告警，保留新终稿")
-            return
+            return None
         with open(best_path, "r", encoding="utf-8") as f:
             best_script = json.load(f)
         # 恢复版补跑标准 hard_fix（与落盘前管线同路径）：快照可能出自
@@ -1861,6 +2211,13 @@ def _cross_run_best_guard(script: dict, novel_text: str) -> None:
             )
         except Exception as _bg_he:
             _logger.warn(f"[BEST-GUARD] 恢复版补跑 hard_fix 失败（保留原样）: {_bg_he}")
+        # 09-14：恢复版必须过与正式落盘相同的钩子质量门——旧快照的病句/无主
+        # 刀尖 + 非幂等补修复污染（刀尖句翻倍/对象库碎片）曾绕过全部门直接落盘
+        if hook_ctx:
+            try:
+                _ensure_hook_quality(best_script, novel_text=novel_text, **hook_ctx)
+            except Exception as _bg_he2:
+                _logger.warn(f"[BEST-GUARD] 恢复版钩子质量门异常（不阻断）: {_bg_he2}")
         restored_score = _score_script(best_script, novel_text)["total"]
         from shared.json_io import atomic_dump_json as _adj
         _adj(OUTPUT_FILE, _strip_runtime_fields(best_script),
@@ -1875,6 +2232,7 @@ def _cross_run_best_guard(script: dict, novel_text: str) -> None:
             + str(best_score) + " 分，已恢复历史最优版（补修复后 "
             + str(restored_score) + " 分；本次版本在 snapshots/ 可取回）"
         )
+        return best_script
     except Exception as _bg_e:
         try:
             _logger.warn(f"[BEST-GUARD] 护栏执行失败（不影响主流程）: {_bg_e}")
@@ -1894,645 +2252,717 @@ def main() -> None:
     _logger.info("  新增: 钩子分镜 + 敏感词校验")
     _logger.separator()
 
-    # 无声视频模型告警：VIDEO_MODEL_VOICE=1（对话交给视频模型）但当前模型不生成语音时，
-    # 成片会无对白/背景音。Seedance 1.0 系列 / MiniMax v1 Hailuo 均无声（08-16 适配）。
-    _warn_silent_video_model()
+    # v6.70.2：章节级 single-flight 锁——禁止两个 step01 并发写同一章
+    # （09-14 实测两个 Python 进程交错写 step01.log/script_result.json）。
+    if not _acquire_step01_lock():
+        return
 
-    # 创建输出目录
-    CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
+    _timing_start()  # v6.70.3: 阶段计时起点（拿锁成功 = 本 run 独占计时器）
 
-    # 运行期间 print() 全部重定向到 step01.log，控制台静默
-    # 最终摘要用 _console() 写 _REAL_STDOUT（模块级保存的真实 stdout）
-    # 同时让 logger 控制台输出静默，避免 logger.print 经重定向回流日志造成双写
-    sys.stdout = _redirect_to_log()
-    _logger.console_silent = True
+    try:
+        # 无声视频模型告警：VIDEO_MODEL_VOICE=1（对话交给视频模型）但当前模型不生成语音时，
+        # 成片会无对白/背景音。Seedance 1.0 系列 / MiniMax v1 Hailio 均无声（08-16 适配）。
+        _warn_silent_video_model()
 
-    # 读取章节
-    novel_text = read_chapter("锦衣夜行_77119小说.txt", chapter=NOVEL_CHAPTER)
-    novel_preview = novel_text[:1000]
+        # 创建输出目录
+        CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 加载角色库（v6.1 新增）
-    character_bank = CharacterBank()
-    character_bank.load()
+        # 运行期间 print() 全部重定向到 step01.log，控制台静默
+        # 最终摘要用 _console() 写 _REAL_STDOUT（模块级保存的真实 stdout）
+        # 同时让 logger 控制台输出静默，避免 logger.print 经重定向回流日志造成双写
+        sys.stdout = _redirect_to_log()
+        _logger.console_silent = True
 
-    # 加载场景物体库（v6.6 新增）
-    scene_objects_bank = SceneObjectsBank()
-    scene_objects_bank.load()
+        # 读取章节
+        novel_text = read_chapter("锦衣夜行_77119小说.txt", chapter=NOVEL_CHAPTER)
+        novel_preview = novel_text[:1000]
 
-    # v6.43（08-25）：3 个 LLM 预提取并发跑（角色/场景物体/大纲）——
-    # 原来按顺序执行 = 3 × LLM 延迟（~16s 总耗时），并发后 = max(3) ≈ 5s，
-    # 节省 ~10s。3 个 extractor 各自独立 schema/服务/写入目标，并发安全。
-    pre_extracted_outline = None
-    if CHARACTER_EXTRACTION_ENABLED or SCENE_OBJECT_EXTRACTION_ENABLED:
-        _logger.info("[INFO] 并发预提取 角色/场景物体/大纲（3 路并发）...")
-        from step01_script_gen.concurrent_extract import extract_all_concurrent
-        pre_results = extract_all_concurrent(
-            novel_text,
-            character_bank,
-            scene_objects_bank,
-            enable_characters=CHARACTER_EXTRACTION_ENABLED,
-            enable_scene_objects=SCENE_OBJECT_EXTRACTION_ENABLED,
-            enable_outline=OUTLINE_ENABLED,
-            log_func=_logger.info,
+        # 加载角色库（v6.1 新增）
+        character_bank = CharacterBank()
+        character_bank.load()
+
+        # 加载场景物体库（v6.6 新增）
+        scene_objects_bank = SceneObjectsBank()
+        scene_objects_bank.load()
+
+        # v6.43（08-25）：3 个 LLM 预提取并发跑（角色/场景物体/大纲）——
+        # 原来按顺序执行 = 3 × LLM 延迟（~16s 总耗时），并发后 = max(3) ≈ 5s，
+        # 节省 ~10s。3 个 extractor 各自独立 schema/服务/写入目标，并发安全。
+        pre_extracted_outline = None
+        if CHARACTER_EXTRACTION_ENABLED or SCENE_OBJECT_EXTRACTION_ENABLED:
+            _logger.info("[INFO] 并发预提取 角色/场景物体/大纲（3 路并发）...")
+            from step01_script_gen.concurrent_extract import extract_all_concurrent
+            pre_results = extract_all_concurrent(
+                novel_text,
+                character_bank,
+                scene_objects_bank,
+                enable_characters=CHARACTER_EXTRACTION_ENABLED,
+                enable_scene_objects=SCENE_OBJECT_EXTRACTION_ENABLED,
+                enable_outline=OUTLINE_ENABLED,
+                log_func=_logger.info,
+            )
+            # === 角色：注册到 bank（主流程后段仍可复用） ===
+            chars = pre_results.get("characters")
+            if chars is not None:
+                pre_extracted_chars = chars
+                for c in chars:
+                    ident = c.get("identifier", "")
+                    if not ident:
+                        continue
+                    if c.get("is_new", True):
+                        character_bank.register_character(
+                            ident,
+                            c.get("static_features", ""),
+                            c.get("dynamic_features", ""),
+                            NOVEL_CHAPTER,
+                        )
+                    elif c.get("dynamic_features"):
+                        character_bank.update_dynamic_features(
+                            ident, c.get("dynamic_features", ""),
+                        )
+                        character_bank.update_character_chapter(ident, NOVEL_CHAPTER)
+                character_bank.save()
+                _logger.info(f"[INFO] 预提取到 {len(chars)} 个角色特征（已保存到角色库）")
+            # === 场景物体：注册到 bank ===
+            objs = pre_results.get("scene_objects")
+            if objs is not None:
+                for o in objs:
+                    scene_objects_bank.register_object(o, NOVEL_CHAPTER)
+                scene_objects_bank.save()
+                _logger.info(f"[INFO] 预提取到 {len(objs)} 个场景物体（已保存到场景物体库）")
+            # === 大纲：预提取，主分镜生成时注入 prompt ===
+            pre_extracted_outline = pre_results.get("outline")
+
+        # 检查缓存（场景物体库内容变化也视为源变更，v6.6）
+        objects_bank_data = json.dumps(
+            scene_objects_bank._data, ensure_ascii=False, sort_keys=True
         )
-        # === 角色：注册到 bank（主流程后段仍可复用） ===
-        chars = pre_results.get("characters")
-        if chars is not None:
-            pre_extracted_chars = chars
-            for c in chars:
-                ident = c.get("identifier", "")
-                if not ident:
-                    continue
-                if c.get("is_new", True):
-                    character_bank.register_character(
-                        ident,
-                        c.get("static_features", ""),
-                        c.get("dynamic_features", ""),
-                        NOVEL_CHAPTER,
-                    )
-                elif c.get("dynamic_features"):
-                    character_bank.update_dynamic_features(
-                        ident, c.get("dynamic_features", ""),
-                    )
-                    character_bank.update_character_chapter(ident, NOVEL_CHAPTER)
-            character_bank.save()
-            _logger.info(f"[INFO] 预提取到 {len(chars)} 个角色特征（已保存到角色库）")
-        # === 场景物体：注册到 bank ===
-        objs = pre_results.get("scene_objects")
-        if objs is not None:
-            for o in objs:
-                scene_objects_bank.register_object(o, NOVEL_CHAPTER)
-            scene_objects_bank.save()
-            _logger.info(f"[INFO] 预提取到 {len(objs)} 个场景物体（已保存到场景物体库）")
-        # === 大纲：预提取，主分镜生成时注入 prompt ===
-        pre_extracted_outline = pre_results.get("outline")
+        prompt_changed = _prompt_changed(
+            Path(__file__).parent / "prompts.py", SCRIPT_FILE, novel_preview, NOVEL_CHAPTER,
+            objects_bank_data,
+        )
 
-    # 检查缓存（场景物体库内容变化也视为源变更，v6.6）
-    objects_bank_data = json.dumps(
-        scene_objects_bank._data, ensure_ascii=False, sort_keys=True
-    )
-    prompt_changed = _prompt_changed(
-        Path(__file__).parent / "prompts.py", SCRIPT_FILE, novel_preview, NOVEL_CHAPTER,
-        objects_bank_data,
-    )
+        if not prompt_changed:
+            _logger.info(f"[CACHE] 脚本已缓存: {SCRIPT_FILE}")
+            with open(SCRIPT_FILE, "r", encoding="utf-8") as f:
+                script = json.load(f)
+            # 补写章节元信息（部名/章名，老缓存可能缺失）
+            if not script.get("chapter_title"):
+                script.update(get_chapter_meta("锦衣夜行_77119小说.txt", NOVEL_CHAPTER))
+            # 重新计算时间轴（使用增强算法）
+            _compute_timecodes(script)
+            # v7: 缓存命中时也要跑场景/道具资产提取（老缓存无 scene_assets/prop_assets），
+            # 结果写回 script 再落盘，保证 step02a 资产生成能拿到数据
+            _extract_assets_and_update_script(script)
+            # v6.62.3（09-08）：缓存命中路径此前**漏跑 hard_fix** —— 只算时间轴+提资产就
+            # 落盘，导致两个落盘点行为不一致（正常生成路径见 line ~1926「每次落盘前跑一次
+            # hard_fix」，v6.41 P19 铁律）。后果 09-08 实测：命中缓存把 v6.61 期的节拍词
+            # 占位（「冲突，反转，真相，局势骤变」17 处）+ F8 合并标记（3 处）原样重新落盘，
+            # 且 log 承诺的 W6 时长拉伸（constraints/runtime_extend）从未执行（正片 54.9s
+            # < 60s 硬下限）。必须放在所有 transform 之后、dump 之前，且**不可**再调
+            # _compute_timecodes（会按 motion_desc 覆盖 W6 拉伸的 duration_sec）。
+            from step01_script_gen.constraints import run_hard_fix as _hfix_cached
+            try:
+                script = _hfix_cached(script, is_in_repair_loop=False, is_final_pass=True, novel_text=novel_text)
+            except Exception as _hfe_c:
+                _logger.warn(f"[WARN] 缓存命中落盘前 hard_fix 失败（保留原版）: {_hfe_c}")
+            # C5 修复（08-11）：fps 一致性校验（timeline 此时已存在）
+            # v6.62.3：移到 hard_fix 之后 —— runtime_extend 会改 duration_sec，
+            # 早于 hard_fix 校验会拿到过期时长（与 line ~1931 非缓存路径同序）。
+            _check_fps_consistency(script)
+            from shared.json_io import atomic_dump_json as _adj
+            _adj(SCRIPT_FILE, _strip_runtime_fields(script),
+                 ensure_ascii=False, indent=2)
+            _snapshot_run_artifacts(script)
+            _logger.info("时间轴已重新计算")
+            # 缓存命中：恢复 stdout 并显示最终摘要
+            sys.stdout = _REAL_STDOUT
+            _logger.console_silent = False
+            shots = script.get("shots", [])
+            _console("")
+            _console("=" * 56)
+            _console("  [步骤1] 分镜脚本摘要（缓存命中，未重新生成）")
+            _console("=" * 56)
+            _console(f"  输出: {SCRIPT_FILE}")
+            _console(f"  镜头数: {len(shots)}" + ("  + 钩子" if script.get("hook") else ""))
+            _console(f"  总时长: {script.get('total_duration', 0):.1f}s")
+            _sa = script.get("scene_assets", {})
+            _pa = script.get("prop_assets", {})
+            if _sa or _pa:
+                _console(f"  资产: 场景{len(_sa)} / 道具{len(_pa)}")
+            _console("=" * 56)
+            return
 
-    if not prompt_changed:
-        _logger.info(f"[CACHE] 脚本已缓存: {SCRIPT_FILE}")
-        with open(SCRIPT_FILE, "r", encoding="utf-8") as f:
-            script = json.load(f)
-        # 补写章节元信息（部名/章名，老缓存可能缺失）
-        if not script.get("chapter_title"):
-            script.update(get_chapter_meta("锦衣夜行_77119小说.txt", NOVEL_CHAPTER))
-        # 重新计算时间轴（使用增强算法）
-        _compute_timecodes(script)
-        # v7: 缓存命中时也要跑场景/道具资产提取（老缓存无 scene_assets/prop_assets），
-        # 结果写回 script 再落盘，保证 step02a 资产生成能拿到数据
-        _extract_assets_and_update_script(script)
-        # v6.62.3（09-08）：缓存命中路径此前**漏跑 hard_fix** —— 只算时间轴+提资产就
-        # 落盘，导致两个落盘点行为不一致（正常生成路径见 line ~1926「每次落盘前跑一次
-        # hard_fix」，v6.41 P19 铁律）。后果 09-08 实测：命中缓存把 v6.61 期的节拍词
-        # 占位（「冲突，反转，真相，局势骤变」17 处）+ F8 合并标记（3 处）原样重新落盘，
-        # 且 log 承诺的 W6 时长拉伸（constraints/runtime_extend）从未执行（正片 54.9s
-        # < 60s 硬下限）。必须放在所有 transform 之后、dump 之前，且**不可**再调
-        # _compute_timecodes（会按 motion_desc 覆盖 W6 拉伸的 duration_sec）。
-        from step01_script_gen.constraints import run_hard_fix as _hfix_cached
+        # 生成脚本（含 JSON 解析重试）
+        # LLM 偶发输出损坏的 JSON（DeepSeek 尤甚：内部中文引号未转义/缺逗号等）。
+        # 解析失败时重新调用 LLM 重试，而不是让整个流水线崩溃（每次约 3-6 分钟）。
+        # v6.64（P4.5，09-11）：多路径择优——生成 SCRIPT_CANDIDATE_TOPK 个独立候选，
+        # 取质量分最高的进入 GAP 循环。用 token 换稳定性，对冲模型方差。
+        # 默认 doubao=2 / deepseek=1（向下兼容：=1 时行为零变化）。
+        _candidates = _generate_script_candidates(
+            novel_text, character_bank, scene_objects_bank, pre_extracted_outline,
+        )
+        _timing_mark("candidate_generation",
+                     n_candidates=len(_candidates),
+                     best_score=_candidates[0][0]["total"] if _candidates else None)
+
+
+        # 选总分最高的候选
+        _candidates.sort(key=lambda x: -x[0]["total"])
+        _best_score, script = _candidates[0]
+        # v6.67 接力修复：记录当前稿件的产出模型。GAP 重生成若被采纳会重置为 None
+        #（产出者回到 provider 默认模型，接力标识失效）——见下方 GAP 循环。
+        _producer_model = _best_score.get("_model")
+        _logger.warn(f"[DEBUG-RELAY] _best_score keys={list(_best_score.keys())[:5]}, _producer_model={_producer_model!r}")
+        if SCRIPT_CANDIDATE_TOPK > 1:
+            _logger.info(
+                f"[CANDIDATE] 多路径择优完成：{len(_candidates)} 个候选 → "
+                f"最优分 {_best_score['total']}（{_best_score['detail']}）"
+            )
+            _console(
+                f"  [择优] {len(_candidates)} 个候选 → 最优 {_best_score['total']}分 "
+                f"（{_best_score['detail']}）"
+            )
+            # 其余候选存盘供调试
+            try:
+                import copy as _cp
+                from shared.json_io import atomic_dump_json as _adj
+                _cand_dir = CHAPTER_DIR / "candidates"
+                _cand_dir.mkdir(parents=True, exist_ok=True)
+                for _ci, (_cs, _cscript) in enumerate(_candidates):
+                    _cpath = _cand_dir / f"candidate_{_ci+1}_score{int(_cs['total'])}.json"
+                    _adj(_cpath, _strip_runtime_fields(_cp.deepcopy(_cscript)),
+                         ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
+        # ========== 差距分析（v5.0 新增）==========
+        # 若差距过大，重新生成（最多2次）
+
+        if GAP_ANALYSIS_ENABLED:
+            # v6.62.4（09-08）预算动态化：原 `for attempt in range(GAP_MAX_REGEN_ATTEMPTS)`。
+            # agent_plan(doubao) 预算是 1（v6.62.1 实测「2 次重试全部劣化回退、白烧
+            # 5 分钟」刻意压到 1）。但「正片零高潮覆盖」是**结构性缺陷**（整段剧情没拍），
+            # 不是措辞问题，值得单独破例给 1 次。仅在预算即将耗尽时追加，且只追加一次；
+            # deepseek（预算 2）不会凭空变 3，除非它也零高潮。
+            # 追加那次自动受下方 v6.47 `_is_retry_degraded` 回退保护（时长塌缩/台词
+            # 失锚即回退上一版），所以多给一次不引入劣化风险。
+            _gap_budget = GAP_MAX_REGEN_ATTEMPTS
+            _zero_climax_bonus_used = False
+            attempt = 0
+            while attempt < _gap_budget:
+                # 快速校验
+                validation = validate_script_gap(script, novel_text)
+
+                if validation["overall_pass"]:
+                    _logger.info(f"[GAP] 差距分析通过 (尝试 {attempt + 1}/{_gap_budget})")
+                    # 保存脚本并生成完整报告
+                    partial_path = CHAPTER_DIR / "script_result.partial.json"
+                    from shared.json_io import atomic_dump_json as _adj
+                    _adj(partial_path, _strip_runtime_fields(script),
+                         ensure_ascii=False, indent=2)
+                    report = generate_gap_report(
+                        str(partial_path),
+                        "锦衣夜行_77119小说.txt",
+                        NOVEL_CHAPTER
+                    )
+                    # 打印报告摘要
+                    print_gap_report(report)
+                    # 清理临时文件
+                    if partial_path.exists():
+                        partial_path.unlink()
+                    break
+
+                # 发现问题，反馈给 LLM 重新生成
+                # v6.62.4：零高潮=结构性缺陷 → 预算耗尽前额外追加 1 次（只一次）
+                _dist = validation.get("distribution", {}) or {}
+                if (_dist.get("climax_shots", 0) == 0
+                        and not _zero_climax_bonus_used
+                        and attempt + 1 >= _gap_budget):
+                    _gap_budget += 1
+                    _zero_climax_bonus_used = True
+                    _logger.warn(
+                        "[GAP] 正片零高潮覆盖（结构性缺陷：原文核心冲突整段未拍）"
+                        f"→ 额外追加 1 次重试预算（{_gap_budget} 次）"
+                    )
+                    _console("  [GAP] 正片零高潮覆盖 → 额外追加 1 次重试")
+
+                _logger.warn(f"[GAP] 发现差距问题， 重新生成 (尝试 {attempt + 1}/{_gap_budget})...")
+
+                # 获取差距分析上下文并追加到 prompt（函数已在模块级导入）
+                gap_context = _load_gap_analysis_context(validation)
+                # v6.47（08-27）反馈前置：重生成铁律放在反馈区**最前**——长 prompt 后段
+                # 规则易失声（实测重试版把总时长写塌到 11s、编造原文没有的台词），
+                # 必须在反馈前重申非协商规则作为拒收标准
+                gap_context = _build_regen_iron_rules() + gap_context
+                # v6.33（08-12）：附加 checklist 聚合反馈——差距分析之外，把内容密度/景别
+                # 跳跃/致命伤等真实缺陷也喂给重生成 LLM（此前只喂覆盖率/分布，重生成还是老问题）
+                _checklist_fb = build_regen_feedback(script, novel_text)
+                if _checklist_fb:
+                    gap_context = gap_context + _checklist_fb
+
+                # 追加差距反馈到 prompt，重新生成
+                # v6.68: GAP 重生成未指定模型（=provider 默认模型），prompt 剖面同步跟随。
+                # 默认模型 deepseek-v4-flash → deepseek 剖面不截断，救援能直接看到原文高潮
+                #（此前 1600 截断下救援只能靠 gap_context 里的高潮摘录）。
+                _gap_builder, _gap_system = resolve_model_prompt_profile(None)
+                prompt = _gap_builder(novel_text, character_bank, scene_objects_bank)
+                prompt = prompt + gap_context
+
+                service = create_service()
+                from _text_gen.deepseek_schema import SCRIPT_SCHEMA
+                req = TextGenerationRequest(
+                    system_prompt=_gap_system,
+                    user_prompt=prompt,
+                    temperature=0.2,  # v6.5: 降低温度防止幻觉；v6.64 多候选用不同温度增加多样性
+                    json_schema=SCRIPT_SCHEMA,
+                    timeout_sec=_full_script_timeout_sec(),  # v6.70.3: GAP 重生 300s 分级
+                )
+                result = service.generate(req)
+                if not result.success:
+                    # v6.62.5（09-08）：原先这里 `raise RuntimeError` 会**穿出 GAP 循环
+                    # 直接崩掉 step01**（本循环只 catch ValueError/JSONDecodeError）。
+                    # v6.62.5 起 provider 把「输出截断」也判为 success=False，这条路径
+                    # 从罕见（网络错误）变常见（截断），必须与站点 422/1146 一致地软降级：
+                    # 保留上一版脚本继续跑，而不是让整个流水线挂掉。
+                    _logger.warn(f"[WARN] GAP 重生成失败，保留上一版: {result.error}")
+                    _console("  [GAP] 重生成失败（详见 step01.log），保留上一版")
+                    break
+
+                import re
+                raw = result.text.strip()
+                raw = re.sub(r"^```json\s*", "", raw, flags=re.MULTILINE)
+                raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
+                raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
+
+                try:
+                    new_script = parse_response(raw, novel_text=novel_text)
+                except (ValueError, json.JSONDecodeError) as e:
+                    # 重生成结果 JSON 损坏 → 保留上一版，不中断流水线
+                    _logger.warn(f"[WARN] 重生成 JSON 解析失败，保留上一版: {e}")
+                    break
+                # v6.62.7（09-09）零高潮救援：先判断这次重试是不是**修好了结构性
+                # 缺陷**。回退保护此前对「结构性缺陷 vs 措辞瑕疵」一视同仁，于是把
+                # 唯一一次修好结构的重试也扔掉——09-08 实测链路：正片零高潮 →
+                # v6.62.4 特批 1 次重试 → 23:31 重试版以「台词失锚 2 条」被判退化回退
+                # → 终稿仍零高潮（原文 3100-4847 字的刺杀/尖叫/掩尸整段没拍，刺客与
+                # 张十三被提取进 characters 却零出镜，成片是 63s 吹箫风光片配一个
+                # 「公子遇刺」的钩子）。两个修复互相抵消，跟 v6.62.6 那次同构。
+                _new_climax = ((validate_script_gap(new_script, novel_text)
+                                .get("distribution") or {}).get("climax_shots", 0))
+                _climax_rescue = _dist.get("climax_shots", 0) == 0 and _new_climax > 0
+                # 救援态下被豁免的软判据仍要留痕，否则「放宽了什么」不可追溯
+                _waived = (_retry_degrade_reason(script, new_script, novel_text)
+                           if _climax_rescue else None)
+                # v6.47（08-27）回退保护：重试版质量退化（时长塌缩/台词失锚变多）→
+                # 保留上一版。GAP 通过≠质量好——08-27 重试版 11 镜×1s 靠加镜头骗过
+                # 覆盖检查但时长崩了，事后 W6 把 1s 拉到 8s（8 倍慢动作）。
+                if _is_retry_degraded(script, new_script, novel_text,
+                                      climax_rescue=_climax_rescue):
+                    _reason = _retry_degrade_reason(script, new_script, novel_text,
+                                                    climax_rescue=_climax_rescue)
+                    _logger.warn(f"[GAP] 重试版质量退化：{_reason}，回退保留上一版")
+                    _console(f"  [GAP] 重试版质量退化，回退保留上一版（{_reason}）")
+                    break
+                if _climax_rescue:
+                    _logger.warn(
+                        f"[GAP] 零高潮救援：上一版 0 个高潮镜 → 重试版 {_new_climax} 个，"
+                        f"采纳重试版" + (f"（已豁免软判据：{_waived}）" if _waived else "")
+                    )
+                    _console(f"  [GAP] 零高潮救援：采纳重试版（+{_new_climax} 高潮镜）")
+                script = new_script
+                # v6.67 接力修复：GAP 重生成走的是 provider 默认模型，产出者标识重置
+                _producer_model = None
+                # 不在循环内 post_process：循环退出后统一在 line 334 做一次
+                # （code-audit 07-31 #7：原 :328 与 :334 重复调用 _post_process）
+                attempt += 1   # v6.62.4：while 循环手动推进（原 for 由 range 推进）
+            else:
+                # 达到最大尝试次数仍有问题，记录但不中断
+                # while...else 与原 for...else 语义一致：无 break 走完才告警
+                _logger.warn("[GAP] 达到最大重试次数，仍有差距问题，将继续处理")
+            _timing_mark("gap_loop")  # v6.70.3: 通过/耗尽均在此收口（含 else 分支）
+
+        # v6.67（09-12）接力修复：赢家生成、输家修复——修复轮用互补模型换视角。
+        # 修复 prompt 已有「只动告警镜头」+ Mask 字段约束，换模型影响面可控。
+        # 候选池空/单模型/产出者无标识（GAP 重生成已采纳）→ _repair_model=None=
+        # 同 provider 默认模型，零行为变化。GAP 重生成本身暂不接力（方案②范围）。
+        _repair_model = _complementary_repair_model(_producer_model)
+        if _repair_model:
+            _logger.info(
+                f"[RELAY] 产出模型 {_producer_model} → 修复轮接力 {_repair_model}"
+            )
+            _console(
+                f"  [接力] 修复轮改用 {_repair_model}（产出模型 {_producer_model} 的互补模型）"
+            )
+
+        # v6.7: 镜头数严重超限时收敛重生成（独立于 gap_analysis，默认开启）
+        # v6.70.3: 超总预算 → 跳过可选修复轮（失败即保留原版语义，跳过无数据风险）
+        if SHOT_COUNT_REGEN_ENABLED and not _budget_exceeded():
+            _timing_mark("pre_regen_over_limit")
+            script = _regen_over_limit(
+                script, novel_text,
+                bank=character_bank, objects_bank=scene_objects_bank,
+                model=_repair_model,
+            )
+            _timing_mark("regen_over_limit")
+        elif SHOT_COUNT_REGEN_ENABLED:
+            _timing_mark("regen_over_limit", status="skipped_budget")
+            _logger.warn("[BUDGET] 总预算超时，跳过镜头超限收敛轮（保留当前稿）")
+            _console("  [预算] 总预算超时，跳过镜头超限收敛轮")
+
+        # v6.35（08-15，P18 闭环）：GAP 通过后仍存在的高价值告警（开篇冲突/
+        # 爆点密度/威胁源朝向/关键帧质量/内容密度等）→ 定向修复轮，只重写
+        # 告警镜头（此前这些 WARN 纯打印落盘，无人修，带伤进 step02）。
+        if REPAIR_ROUNDS_ENABLED and not _budget_exceeded():
+            _timing_mark("pre_repair_rounds")
+            script = _repair_shot_warnings(
+                script, novel_text,
+                bank=character_bank, objects_bank=scene_objects_bank,
+                model=_repair_model,
+            )
+            _timing_mark("repair_rounds")
+        elif REPAIR_ROUNDS_ENABLED:
+            _timing_mark("repair_rounds", status="skipped_budget")
+            _logger.warn("[BUDGET] 总预算超时，跳过定向修复轮（保留当前稿，告警仍会落 SAVE-WARN）")
+            _console("  [预算] 总预算超时，跳过定向修复轮")
+
+        # 后处理：注入全局配置 + 合规过滤 + 敏感词校验
+        script = _post_process(script)
+
+        # 脚本已更新，删除旧的音频和视频文件。
+        # 2026-08-09 用户需求：若新旧脚本只是分镜数量差异且总时长≤3min，逐镜对比后
+        # 保留未变镜头的帧/视频产物，只清理新增/改动/删除的镜头（避免重跑 step02 全量
+        # 重新生成白烧额度）。
+        # 2026-08-09 修复：原实现把此段放在 script 生成之前，引用未赋值变量 script
+        # 触发 UnboundLocalError，逐镜保留从未生效（每次都全量清理）。现在移到
+        # _post_process 之后——新分镜已定稿（含收敛/合规过滤），旧 script_result.json
+        # 仍在磁盘可读，对比才有意义；且 LLM 生成失败时旧产物也不会被提前删掉。
+        _preserve_shots: list[int] = []
         try:
-            script = _hfix_cached(script, is_in_repair_loop=False, is_final_pass=True, novel_text=novel_text)
-        except Exception as _hfe_c:
-            _logger.warn(f"[WARN] 缓存命中落盘前 hard_fix 失败（保留原版）: {_hfe_c}")
+            from shared.shot_diff import compute_shot_diff, should_preserve_artifacts
+            _old_script = json.load(open(SCRIPT_FILE, encoding="utf-8")) if SCRIPT_FILE.exists() else None
+            if _old_script and should_preserve_artifacts(_old_script, script):
+                _diff = compute_shot_diff(_old_script, script)
+                _preserve_shots = _diff.get("unchanged", [])
+                _logger.info(
+                    f"[PRESERVE] 逐镜对比放行：未变 {len(_preserve_shots)} 镜"
+                    f"（保留旧产物），新增/改动 {len(_diff.get('added', [])) + len(_diff.get('changed', []))} 镜重新生成"
+                )
+                # 只清理 changed/removed 镜头的帧/视频（未变镜头保留）
+                for _sub_path, _shots_root in (
+                    (vimax_working_dir(), vimax_shots_dir()),
+                    (stretched_dir(), stretched_dir() / "shots"),
+                ):
+                    if _sub_path.exists():
+                        if _shots_root.exists():
+                            for _sid in _diff.get("changed", []) + _diff.get("removed", []):
+                                _shot_dir = _shots_root / str(_sid)
+                                if _shot_dir.exists():
+                                    import shutil as _sh
+                                    _sh.rmtree(_shot_dir)
+                                    _logger.verbose(f"  [已清理] {_sub_path.name}/shots/{_sid}/（内容变更）")
+        except Exception as _preserve_err:
+            _logger.warn(f"[PRESERVE] 逐镜对比失败，全量清理: {_preserve_err}")
+
+        if not _preserve_shots:
+            _logger.info(f"[INFO] 分镜脚本已更新，清理旧的音视频文件...")
+            for subdir_path in (audio_dir(), vimax_working_dir(), stretched_dir()):
+                if subdir_path.exists():
+                    import shutil
+                    try:
+                        shutil.rmtree(subdir_path)
+                        _logger.verbose(f"  [已删除] {subdir_path.name}/")
+                    except PermissionError as _e:
+                        # 09-13 实测：Explorer/看图器/杀毒占用目录 → WinError 32。
+                        # 清理失败就 FATAL 会吞掉整个 LLM 生成结果（此时 script 尚未
+                        # 落盘，两轮实跑各 ~10 min 全白跑）。旧帧由内容哈希自动失效
+                        # （ff/kf desc 变更 → hash mismatch → step02a 重抽），跳过即可。
+                        _logger.warn(f"  [WARN] {subdir_path.name}/ 被占用（{type(_e).__name__}），"
+                                     "跳过清理——旧文件由内容哈希自动失效")
+        # 删除最终视频和字幕（脚本结构变了，最终产物必须重做）
+        for fpath in (final_file(), subtitles_file()):
+            if fpath.exists():
+                try:
+                    fpath.unlink()
+                    _logger.verbose(f"  [已删除] {fpath.name}")
+                except PermissionError:
+                    _logger.warn(f"  [WARN] {fpath.name} 被占用（播放器？），跳过重删")
+
+        # ========================================================================
+        # 钩子分镜生成（v6 沿用 + v6.39 调用顺序硬约束）
+        # ========================================================================
+        # 严格 3 步调用顺序（C4 修复 08-11 + v6.32 强化 08-12），禁止任何步骤乱序：
+        #
+        #   ┌─────────────────────────────────────────────────────────────┐
+        #   │  ① 提取 forbidden_lines  ← 必须在主分镜 shots 落盘后做         │
+        #   │     (剥说话人前缀的台词体列表，注入钩子 prompt 防重复穿帮)      │
+        #   │                          ↓                                  │
+        #   │  ② 调用 hook = gen_hook_script(forbidden_lines=...)          │
+        #   │     (钩子 LLM 在 prompt 看到禁止清单，从源头不写重复台词)       │
+        #   │                          ↓                                  │
+        #   │  ③ 合并 + 去重 retry + 兜底清空                               │
+        #   │     (挂载后比对台词，仍重复则重试 2 次；再重复则清空台词字段)     │
+        #   └─────────────────────────────────────────────────────────────┘
+        #
+        # 关键 invariant（破坏任意一条会引发「钩子台词=主分镜台词」倒叙穿帮）：
+        #   - 步骤① forbidden_lines 必须在 shots 落盘后才能采集（空列表=无效）
+        #   - 步骤② gen_hook_script 调用时 forbidden_lines 必须非 None
+        #   - 步骤③ _hook_dup_hits 比对时 shots 列表未变（避免 race）
+        # ========================================================================
+        _forbidden_lines: list[str] | None = None
+        if HOOK_ENABLED:
+            # ===== ① 提取 forbidden_lines（assert 保护调用顺序）=====
+            _shots_for_hook = script.get("shots", [])
+            assert _shots_for_hook, (
+                "HOOK pipeline 顺序保护：步骤②前必须先生成主分镜 shots。"
+                "当前 script['shots'] 为空——主分镜 LLM 调用可能失败或被跳过。"
+            )
+            _forbidden_lines: list[str] = []
+            for _s in _shots_for_hook:
+                _body = _speech_body(_s.get("narration_segment", ""))
+                if _body:
+                    _forbidden_lines.append(_body)
+            _logger.info(f"[INFO] 钩子禁止台词清单已就绪（{len(_forbidden_lines)} 条）")
+
+            # ===== ② 调用 hook LLM（注入 forbidden_lines）=====
+            _logger.info("\n[INFO] 开始生成钩子分镜...")
+            hook = gen_hook_script(
+                novel_text,
+                bank=character_bank,
+                objects_bank=scene_objects_bank,
+                forbidden_lines=_forbidden_lines,  # 必传参数，v6.32 强约束
+            )
+            _timing_mark("hook_generation", ok=hook is not None)
+
+            if hook:
+                # ===== ③ 合并 + 去重 retry + 兜底清空 =====
+                script["hook"] = hook
+                _logger.info(f"[OK] 钩子分镜已生成: {hook.get('narration_segment', '')[:30]}...")
+
+                # 闭包：引用外层 _shots_for_hook（步骤③ shots 列表不变 invariant）
+                def _hook_dup_hits() -> list:
+                    """钩子台词与主分镜任一镜头台词重复的镜头 index 列表（空=无重复）."""
+                    _hl = _speech_body(hook.get("narration_segment", ""))
+                    _hits = []
+                    if not _hl:
+                        return _hits
+                    for _s in _shots_for_hook:  # ← 闭包用 _shots_for_hook 而非 script.get，避免 race
+                        _sb = _speech_body(_s.get("narration_segment", ""))
+                        if _sb and (_hl == _sb or _hl in _sb or _sb in _hl):
+                            _hits.append(_s.get("index", "?"))
+                    return _hits
+
+                # C4 修复（08-11）+ v6.32 强化（08-12）：挂载后立即比对台词去重，
+                # 重复则自动重新生成钩子（换一句台词），最多再试 2 次；仍重复才 WARN
+                # 提示人工处理。钩子是「最精彩瞬间」的倒叙，与主分镜台词重复会直接
+                # 穿帮（观众刚在钩子听到、又在下个镜头原样听到）。
+                _dup_hits = _hook_dup_hits()
+                _regen_attempt = 0
+                while _dup_hits and _regen_attempt < 2:
+                    _regen_attempt += 1
+                    _hook_line_prev = _speech_body(hook.get("narration_segment", ""))
+                    _logger.warn(
+                        f"[WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复（C4 修复），"
+                        f"自动重新生成钩子换台词（尝试 {_regen_attempt}/2）..."
+                    )
+                    _console(f"  [WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复，重新生成钩子（{_regen_attempt}/2）...")
+                    _dup_note = (
+                        f"上一版钩子台词「{_hook_line_prev[:30]}」与主分镜镜头 {_dup_hits} 的台词重复"
+                        f"（观众刚在钩子听到、又在正片听到，倒叙穿帮）。请严格换一句完全不同的台词：\n"
+                        f"1. 优先选主分镜其它镜头未用过的对话（如张十三的质问/密谋、杨旭的台词、肖管事的试探）；\n"
+                        f"2. 若所有人物对话都与主分镜重复，则把 narration_segment 和 subtitle 设为空字符串\"\"，"
+                        f"钩子改纯画面动作开场（刺客破水而出、匕首出鞘的瞬间），靠视觉冲击不靠台词。"
+                    )
+                    _hook_retry = gen_hook_script(
+                        novel_text, bank=character_bank, objects_bank=scene_objects_bank,
+                        forbidden_lines=_forbidden_lines, dup_note=_dup_note,
+                    )
+                    if not _hook_retry:
+                        break  # 重生成失败，保留原钩子
+                    hook = _hook_retry
+                    script["hook"] = hook
+                    _logger.info(f"[OK] 钩子分镜已重新生成: {hook.get('narration_segment', '')[:30]}...")
+                    _dup_hits = _hook_dup_hits()
+                if _dup_hits:
+                    # 确定性兜底（08-12）：重试仍重复则清空钩子台词，改纯画面开场——
+                    # 钩子画面（刺客破水+匕首下刺）本身是强开场，宁可无台词也不倒叙穿帮。
+                    hook["narration_segment"] = ""
+                    hook["subtitle"] = ""
+                    _logger.warn(
+                        f"[WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复且重生成仍未解决，"
+                        f"已强制改为纯画面开场（narration_segment 清空）——无台词优于倒叙穿帮。"
+                    )
+                    _console(f"  [WARN] 钩子台词仍重复，已改为纯画面开场")
+                # v6.18：钩子在 parse_response 之后才挂载（_validate_script 已跑完），
+                # 必须补自动修复 + 校验，否则钩子 ff_desc 零校验零修复（多动作堆叠
+                # 直接落盘，导致首帧图画不出三个同时态动作）。
+                try:
+                    from step01_script_gen.validation import post_fix_shot_prompts, validate_hook
+                    post_fix_shot_prompts(script)  # 幂等：shots 已修复过，主要触发 hook 分支
+                    validate_hook(script["hook"], script.get("characters", []))
+                except Exception as _hook_fix_err:
+                    _logger.warn(f"[WARN] 钩子修复/校验异常（不阻断）: {_hook_fix_err}")
+
+                # ===== ④ 钩子后置校验轮（v6.70.1，09-13；09-14 抽出共享门）=====
+                # 结构性缺口：钩子生成时点在定向修复轮之后，checklist 的 LLM 修复轮
+                # 永远轮不到 hook——09-13 实测：修复轮 600s 超时保留原版 + 钩子原生
+                # 输出带无主刀尖直接落盘 → step02a QC 名单打架整镜烧穿。质量门抽为
+                # _ensure_hook_quality 共享：对两条正式输出来源（本次 run /
+                # BEST-GUARD 恢复的快照）同等生效。
+                try:
+                    _ensure_hook_quality(
+                        script, novel_text=novel_text, bank=character_bank,
+                        objects_bank=scene_objects_bank,
+                        forbidden_lines=_forbidden_lines,
+                        producer_model=_producer_model)
+                except Exception as _e:
+                    _logger.warn(f"[WARN] 钩子后置校验异常（不阻断）: {_e}")
+            else:
+                _logger.info("[INFO] 跳过钩子分镜")
+
+        # 提取角色（跨章节一致性）
+        if CHARACTER_EXTRACTION_ENABLED:
+            if pre_extracted_chars is not None:
+                # 复用预提取结果，避免二次 LLM 调用（角色库已在预提取阶段保存）
+                chars = pre_extracted_chars
+                _logger.info(f"[INFO] 复用预提取的 {len(chars)} 个角色")
+            else:
+                # 预提取阶段失败时才重新提取
+                _logger.info("[INFO] 提取角色信息...")
+                # #26 修复 2026-08-14：LLM 提取失败不应中断整条流水线——
+                # 回退到脚本解析阶段已收集的 characters（可能为空），仅 WARN。
+                try:
+                    chars = extract_characters(novel_text, character_bank)
+                except Exception as _char_err:
+                    _logger.warn(
+                        f"[WARN] 角色提取失败（不阻断）: {_char_err}，"
+                        f"回退使用脚本内已有 characters")
+                    chars = script.get("characters", []) or []
+            script["characters"] = chars
+            # 注意：角色库已在预提取阶段保存，无需重复保存
+            _logger.info(f"[INFO] 已提取 {len(chars)} 个角色")
+
+        # 写入场景物体锚定（v6.6）：供下游 step02/validation 引用统一尺寸
+        _scene_objects_out = {}
+        for _oid in scene_objects_bank.get_all_identifiers():
+            _obj = scene_objects_bank.get_object(_oid)
+            if _obj:
+                _scene_objects_out[_oid] = {
+                    k: _obj[k] for k in ("category", "subtype", "length_m", "width_m",
+                                         "height_m", "capacity", "structure",
+                                         "consistent_terms")
+                    if k in _obj
+                }
+        script["scene_objects"] = _scene_objects_out
+
+        # v7: 场景/道具资产提取（依赖 script 的 shots[].scene/location/prompt，
+        # 必须在脚本生成/收敛之后执行；缓存命中路径也调用同一函数）
+        _extract_assets_and_update_script(script)
+        _timing_mark("asset_extraction")
+
+        # 计算时间轴（v5.0 运镜量化参数）
+        _compute_timecodes(script)
+        # 08-23 v6.41 P19 闭环：硬修复层必须在 _compute_timecodes 之后调用——
+        # 此前 hard_fix 在 REPAIR 内部调用，但 line 1659 _compute_timecodes 会按
+        # motion_desc 重算 duration_sec，覆盖 W6 时长拉伸的值。改为：每次落盘前
+        # 跑一次 hard_fix_shot_prompts（含 W6 时长拉伸），保证最终值持久化。
+        # v6.42：改用新 Constraint 框架（is_final_pass=True 让 RuntimeExtendConstraint 拉伸时长）
+        from step01_script_gen.constraints import run_hard_fix as _hfix_final
+        try:
+            script = _hfix_final(script, is_in_repair_loop=False, is_final_pass=True, novel_text=novel_text)
+        except Exception as _hfe:
+            _logger.warn(f"[WARN] 落盘前 hard_fix 失败（保留原版）: {_hfe}")
         # C5 修复（08-11）：fps 一致性校验（timeline 此时已存在）
-        # v6.62.3：移到 hard_fix 之后 —— runtime_extend 会改 duration_sec，
-        # 早于 hard_fix 校验会拿到过期时长（与 line ~1931 非缓存路径同序）。
         _check_fps_consistency(script)
+
+        # 章节元信息（部名/章名，来自小说标题行「第一部 杀青州 第NNN章 章名」）
+        script.update(get_chapter_meta("锦衣夜行_77119小说.txt", NOVEL_CHAPTER))
+
+        # 写入 hash
+        script["_source_hash"] = _hash_source(
+            str(Path(__file__).parent / "prompts.py"), novel_preview, NOVEL_CHAPTER,
+            objects_bank_data,
+        )
+
+        # v6.50（08-29）：保存前重算 shot_count——timecode pre-pass 拆镜发生在
+        # parse 期校正之后，元数据会落后实际镜头数（15:12 run 16 vs 20 实测）
+        script["shot_count"] = len(script.get("shots", []))
+
+        # 保存（v6.63.1：剥运行时字段——_run_metadata 等下划线键不入盘；
+        # 2026-09-13 原子写，防中断留半截 JSON）
         from shared.json_io import atomic_dump_json as _adj
-        _adj(SCRIPT_FILE, _strip_runtime_fields(script),
+        _adj(OUTPUT_FILE, _strip_runtime_fields(script),
              ensure_ascii=False, indent=2)
         _snapshot_run_artifacts(script)
-        _logger.info("时间轴已重新计算")
-        # 缓存命中：恢复 stdout 并显示最终摘要
-        sys.stdout = _REAL_STDOUT
-        _logger.console_silent = False
+        # v6.70.1（09-14）：BEST-GUARD 可能恢复历史快照为正式输出——钩子质量门
+        # 必须对恢复版同样生效（实测恢复版曾绕过全部门：旧快照病句/无主刀尖 +
+        # 非幂等补修复污染直接落盘）。返回实际写盘的最终 script（无恢复返回 None）。
+        script = _cross_run_best_guard(script, novel_text, hook_ctx={
+            "bank": character_bank, "objects_bank": scene_objects_bank,
+            "forbidden_lines": _forbidden_lines,
+            "producer_model": _producer_model,
+        }) or script
+
+        # v6.70.1（09-13，09-14 移到 BEST-GUARD 之后）：落盘前未解决 issue 汇总——
+        # 对最终写盘版本（本次 run 或恢复版）生效。定向修复轮超时/失败走「保留
+        # 原版」时只有一行 WARN，残伤数据静默落盘（09-13 hook 无主刀尖即此形态），
+        # 这里显式打出（不阻塞；确定性护栏已在 hard_fix 修过一轮，剩下的是 LLM 级）。
+        try:
+            _final_hook_issues = _collect_hook_issues(script) if script.get("hook") else []
+            _final_hard = _collect_repair_warnings(script, novel_text)
+            _n_hard_shots = len([k for k in (_final_hard.get("shots") or {})
+                                 if k not in ("_has_hard",)])
+            if _final_hard.get("_has_hard") or _final_hook_issues:
+                _logger.warn(
+                    f"[SAVE-WARN] ⚠️ 落盘脚本仍带未解决 issue：{_n_hard_shots} 镜 + "
+                    f"钩子 {len(_final_hook_issues)} 条——修复轮可能超时保留原版，"
+                    f"请过目 step01 日志再进 step02a")
+                _console(f"  ⚠️ 落盘前仍有未解决 issue（{_n_hard_shots} 镜 / 钩子 "
+                         f"{len(_final_hook_issues)} 条），详见日志")
+        except Exception as _e:
+            _logger.warn(f"[WARN] 落盘前 issue 汇总异常（不阻断）: {_e}")
+
+        _logger.info(f"[OK] 分镜脚本已保存至 {OUTPUT_FILE}")
+
+        # ---- 最终摘要：写真实 stdout（控制台），绕过重定向 ----
         shots = script.get("shots", [])
         _console("")
         _console("=" * 56)
-        _console("  [步骤1] 分镜脚本摘要（缓存命中，未重新生成）")
+        _console("  [步骤1] 完成 —— 分镜脚本摘要")
         _console("=" * 56)
-        _console(f"  输出: {SCRIPT_FILE}")
+        _console(f"  输出: {OUTPUT_FILE}")
         _console(f"  镜头数: {len(shots)}" + ("  + 钩子" if script.get("hook") else ""))
         _console(f"  总时长: {script.get('total_duration', 0):.1f}s")
+        _scene_objs = script.get("scene_objects", {})
+        if _scene_objs:
+            _console(f"  场景物体: {', '.join(_scene_objs.keys())}")
         _sa = script.get("scene_assets", {})
         _pa = script.get("prop_assets", {})
         if _sa or _pa:
-            _console(f"  资产: 场景{len(_sa)} / 道具{len(_pa)}")
+            _console(f"  资产: 场景{len(_sa)}个 {', '.join(_sa.keys())} / 道具{len(_pa)}个 {', '.join(_pa.keys())}")
+        for k in ("resolution", "ratio", "fps", "render_style"):
+            if k in script:
+                _console(f"  {k}: {script[k]}")
+        _console("  前 3 镜:")
+        for shot in shots[:3]:
+            idx = shot.get("index", "?")
+            sub = (shot.get('subtitle', '') or '').strip()
+            if sub:
+                _console(f"    - 镜{idx}: {sub[:42]}")
+            else:
+                # subtitle 为空时回退到 main_subject（避免误报"空镜"）
+                ms = (shot.get('main_subject', '') or '').strip()
+                _console(f"    - 镜{idx}: [{ms[:42]}] （subtitle 空）" if ms else f"    - 镜{idx}: (无 main_subject)")
         _console("=" * 56)
-        return
+        _console("  ⚠️ 详细校验 WARN 已写入 step01.log，控制台不再重复输出")
+        _console("=" * 56)
 
-    # 生成脚本（含 JSON 解析重试）
-    # LLM 偶发输出损坏的 JSON（DeepSeek 尤甚：内部中文引号未转义/缺逗号等）。
-    # 解析失败时重新调用 LLM 重试，而不是让整个流水线崩溃（每次约 3-6 分钟）。
-    # v6.64（P4.5，09-11）：多路径择优——生成 SCRIPT_CANDIDATE_TOPK 个独立候选，
-    # 取质量分最高的进入 GAP 循环。用 token 换稳定性，对冲模型方差。
-    # 默认 doubao=2 / deepseek=1（向下兼容：=1 时行为零变化）。
-    _candidates = _generate_script_candidates(
-        novel_text, character_bank, scene_objects_bank, pre_extracted_outline,
-    )
-
-
-    # 选总分最高的候选
-    _candidates.sort(key=lambda x: -x[0]["total"])
-    _best_score, script = _candidates[0]
-    # v6.67 接力修复：记录当前稿件的产出模型。GAP 重生成若被采纳会重置为 None
-    #（产出者回到 provider 默认模型，接力标识失效）——见下方 GAP 循环。
-    _producer_model = _best_score.get("_model")
-    _logger.warn(f"[DEBUG-RELAY] _best_score keys={list(_best_score.keys())[:5]}, _producer_model={_producer_model!r}")
-    if SCRIPT_CANDIDATE_TOPK > 1:
-        _logger.info(
-            f"[CANDIDATE] 多路径择优完成：{len(_candidates)} 个候选 → "
-            f"最优分 {_best_score['total']}（{_best_score['detail']}）"
-        )
-        _console(
-            f"  [择优] {len(_candidates)} 个候选 → 最优 {_best_score['total']}分 "
-            f"（{_best_score['detail']}）"
-        )
-        # 其余候选存盘供调试
-        try:
-            import copy as _cp
-            from shared.json_io import atomic_dump_json as _adj
-            _cand_dir = CHAPTER_DIR / "candidates"
-            _cand_dir.mkdir(parents=True, exist_ok=True)
-            for _ci, (_cs, _cscript) in enumerate(_candidates):
-                _cpath = _cand_dir / f"candidate_{_ci+1}_score{int(_cs['total'])}.json"
-                _adj(_cpath, _strip_runtime_fields(_cp.deepcopy(_cscript)),
-                     ensure_ascii=False, indent=2)
-        except Exception:
-            pass
-
-    # ========== 差距分析（v5.0 新增）==========
-    # 若差距过大，重新生成（最多2次）
-
-    if GAP_ANALYSIS_ENABLED:
-        # v6.62.4（09-08）预算动态化：原 `for attempt in range(GAP_MAX_REGEN_ATTEMPTS)`。
-        # agent_plan(doubao) 预算是 1（v6.62.1 实测「2 次重试全部劣化回退、白烧
-        # 5 分钟」刻意压到 1）。但「正片零高潮覆盖」是**结构性缺陷**（整段剧情没拍），
-        # 不是措辞问题，值得单独破例给 1 次。仅在预算即将耗尽时追加，且只追加一次；
-        # deepseek（预算 2）不会凭空变 3，除非它也零高潮。
-        # 追加那次自动受下方 v6.47 `_is_retry_degraded` 回退保护（时长塌缩/台词
-        # 失锚即回退上一版），所以多给一次不引入劣化风险。
-        _gap_budget = GAP_MAX_REGEN_ATTEMPTS
-        _zero_climax_bonus_used = False
-        attempt = 0
-        while attempt < _gap_budget:
-            # 快速校验
-            validation = validate_script_gap(script, novel_text)
-
-            if validation["overall_pass"]:
-                _logger.info(f"[GAP] 差距分析通过 (尝试 {attempt + 1}/{_gap_budget})")
-                # 保存脚本并生成完整报告
-                partial_path = CHAPTER_DIR / "script_result.partial.json"
-                from shared.json_io import atomic_dump_json as _adj
-                _adj(partial_path, _strip_runtime_fields(script),
-                     ensure_ascii=False, indent=2)
-                report = generate_gap_report(
-                    str(partial_path),
-                    "锦衣夜行_77119小说.txt",
-                    NOVEL_CHAPTER
-                )
-                # 打印报告摘要
-                print_gap_report(report)
-                # 清理临时文件
-                if partial_path.exists():
-                    partial_path.unlink()
-                break
-
-            # 发现问题，反馈给 LLM 重新生成
-            # v6.62.4：零高潮=结构性缺陷 → 预算耗尽前额外追加 1 次（只一次）
-            _dist = validation.get("distribution", {}) or {}
-            if (_dist.get("climax_shots", 0) == 0
-                    and not _zero_climax_bonus_used
-                    and attempt + 1 >= _gap_budget):
-                _gap_budget += 1
-                _zero_climax_bonus_used = True
-                _logger.warn(
-                    "[GAP] 正片零高潮覆盖（结构性缺陷：原文核心冲突整段未拍）"
-                    f"→ 额外追加 1 次重试预算（{_gap_budget} 次）"
-                )
-                _console("  [GAP] 正片零高潮覆盖 → 额外追加 1 次重试")
-
-            _logger.warn(f"[GAP] 发现差距问题， 重新生成 (尝试 {attempt + 1}/{_gap_budget})...")
-
-            # 获取差距分析上下文并追加到 prompt（函数已在模块级导入）
-            gap_context = _load_gap_analysis_context(validation)
-            # v6.47（08-27）反馈前置：重生成铁律放在反馈区**最前**——长 prompt 后段
-            # 规则易失声（实测重试版把总时长写塌到 11s、编造原文没有的台词），
-            # 必须在反馈前重申非协商规则作为拒收标准
-            gap_context = _build_regen_iron_rules() + gap_context
-            # v6.33（08-12）：附加 checklist 聚合反馈——差距分析之外，把内容密度/景别
-            # 跳跃/致命伤等真实缺陷也喂给重生成 LLM（此前只喂覆盖率/分布，重生成还是老问题）
-            _checklist_fb = build_regen_feedback(script, novel_text)
-            if _checklist_fb:
-                gap_context = gap_context + _checklist_fb
-
-            # 追加差距反馈到 prompt，重新生成
-            # v6.68: GAP 重生成未指定模型（=provider 默认模型），prompt 剖面同步跟随。
-            # 默认模型 deepseek-v4-flash → deepseek 剖面不截断，救援能直接看到原文高潮
-            #（此前 1600 截断下救援只能靠 gap_context 里的高潮摘录）。
-            _gap_builder, _gap_system = resolve_model_prompt_profile(None)
-            prompt = _gap_builder(novel_text, character_bank, scene_objects_bank)
-            prompt = prompt + gap_context
-
-            service = create_service()
-            from _text_gen.deepseek_schema import SCRIPT_SCHEMA
-            req = TextGenerationRequest(
-                system_prompt=_gap_system,
-                user_prompt=prompt,
-                temperature=0.2,  # v6.5: 降低温度防止幻觉；v6.64 多候选用不同温度增加多样性
-                json_schema=SCRIPT_SCHEMA,
-            )
-            result = service.generate(req)
-            if not result.success:
-                # v6.62.5（09-08）：原先这里 `raise RuntimeError` 会**穿出 GAP 循环
-                # 直接崩掉 step01**（本循环只 catch ValueError/JSONDecodeError）。
-                # v6.62.5 起 provider 把「输出截断」也判为 success=False，这条路径
-                # 从罕见（网络错误）变常见（截断），必须与站点 422/1146 一致地软降级：
-                # 保留上一版脚本继续跑，而不是让整个流水线挂掉。
-                _logger.warn(f"[WARN] GAP 重生成失败，保留上一版: {result.error}")
-                _console("  [GAP] 重生成失败（详见 step01.log），保留上一版")
-                break
-
-            import re
-            raw = result.text.strip()
-            raw = re.sub(r"^```json\s*", "", raw, flags=re.MULTILINE)
-            raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
-            raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
-
-            try:
-                new_script = parse_response(raw, novel_text=novel_text)
-            except (ValueError, json.JSONDecodeError) as e:
-                # 重生成结果 JSON 损坏 → 保留上一版，不中断流水线
-                _logger.warn(f"[WARN] 重生成 JSON 解析失败，保留上一版: {e}")
-                break
-            # v6.62.7（09-09）零高潮救援：先判断这次重试是不是**修好了结构性
-            # 缺陷**。回退保护此前对「结构性缺陷 vs 措辞瑕疵」一视同仁，于是把
-            # 唯一一次修好结构的重试也扔掉——09-08 实测链路：正片零高潮 →
-            # v6.62.4 特批 1 次重试 → 23:31 重试版以「台词失锚 2 条」被判退化回退
-            # → 终稿仍零高潮（原文 3100-4847 字的刺杀/尖叫/掩尸整段没拍，刺客与
-            # 张十三被提取进 characters 却零出镜，成片是 63s 吹箫风光片配一个
-            # 「公子遇刺」的钩子）。两个修复互相抵消，跟 v6.62.6 那次同构。
-            _new_climax = ((validate_script_gap(new_script, novel_text)
-                            .get("distribution") or {}).get("climax_shots", 0))
-            _climax_rescue = _dist.get("climax_shots", 0) == 0 and _new_climax > 0
-            # 救援态下被豁免的软判据仍要留痕，否则「放宽了什么」不可追溯
-            _waived = (_retry_degrade_reason(script, new_script, novel_text)
-                       if _climax_rescue else None)
-            # v6.47（08-27）回退保护：重试版质量退化（时长塌缩/台词失锚变多）→
-            # 保留上一版。GAP 通过≠质量好——08-27 重试版 11 镜×1s 靠加镜头骗过
-            # 覆盖检查但时长崩了，事后 W6 把 1s 拉到 8s（8 倍慢动作）。
-            if _is_retry_degraded(script, new_script, novel_text,
-                                  climax_rescue=_climax_rescue):
-                _reason = _retry_degrade_reason(script, new_script, novel_text,
-                                                climax_rescue=_climax_rescue)
-                _logger.warn(f"[GAP] 重试版质量退化：{_reason}，回退保留上一版")
-                _console(f"  [GAP] 重试版质量退化，回退保留上一版（{_reason}）")
-                break
-            if _climax_rescue:
-                _logger.warn(
-                    f"[GAP] 零高潮救援：上一版 0 个高潮镜 → 重试版 {_new_climax} 个，"
-                    f"采纳重试版" + (f"（已豁免软判据：{_waived}）" if _waived else "")
-                )
-                _console(f"  [GAP] 零高潮救援：采纳重试版（+{_new_climax} 高潮镜）")
-            script = new_script
-            # v6.67 接力修复：GAP 重生成走的是 provider 默认模型，产出者标识重置
-            _producer_model = None
-            # 不在循环内 post_process：循环退出后统一在 line 334 做一次
-            # （code-audit 07-31 #7：原 :328 与 :334 重复调用 _post_process）
-            attempt += 1   # v6.62.4：while 循环手动推进（原 for 由 range 推进）
-        else:
-            # 达到最大尝试次数仍有问题，记录但不中断
-            # while...else 与原 for...else 语义一致：无 break 走完才告警
-            _logger.warn("[GAP] 达到最大重试次数，仍有差距问题，将继续处理")
-
-    # v6.67（09-12）接力修复：赢家生成、输家修复——修复轮用互补模型换视角。
-    # 修复 prompt 已有「只动告警镜头」+ Mask 字段约束，换模型影响面可控。
-    # 候选池空/单模型/产出者无标识（GAP 重生成已采纳）→ _repair_model=None=
-    # 同 provider 默认模型，零行为变化。GAP 重生成本身暂不接力（方案②范围）。
-    _repair_model = _complementary_repair_model(_producer_model)
-    if _repair_model:
-        _logger.info(
-            f"[RELAY] 产出模型 {_producer_model} → 修复轮接力 {_repair_model}"
-        )
-        _console(
-            f"  [接力] 修复轮改用 {_repair_model}（产出模型 {_producer_model} 的互补模型）"
-        )
-
-    # v6.7: 镜头数严重超限时收敛重生成（独立于 gap_analysis，默认开启）
-    if SHOT_COUNT_REGEN_ENABLED:
-        script = _regen_over_limit(
-            script, novel_text,
-            bank=character_bank, objects_bank=scene_objects_bank,
-            model=_repair_model,
-        )
-
-    # v6.35（08-15，P18 闭环）：GAP 通过后仍存在的高价值告警（开篇冲突/
-    # 爆点密度/威胁源朝向/关键帧质量/内容密度等）→ 定向修复轮，只重写
-    # 告警镜头（此前这些 WARN 纯打印落盘，无人修，带伤进 step02）。
-    if REPAIR_ROUNDS_ENABLED:
-        script = _repair_shot_warnings(
-            script, novel_text,
-            bank=character_bank, objects_bank=scene_objects_bank,
-            model=_repair_model,
-        )
-
-    # 后处理：注入全局配置 + 合规过滤 + 敏感词校验
-    script = _post_process(script)
-
-    # 脚本已更新，删除旧的音频和视频文件。
-    # 2026-08-09 用户需求：若新旧脚本只是分镜数量差异且总时长≤3min，逐镜对比后
-    # 保留未变镜头的帧/视频产物，只清理新增/改动/删除的镜头（避免重跑 step02 全量
-    # 重新生成白烧额度）。
-    # 2026-08-09 修复：原实现把此段放在 script 生成之前，引用未赋值变量 script
-    # 触发 UnboundLocalError，逐镜保留从未生效（每次都全量清理）。现在移到
-    # _post_process 之后——新分镜已定稿（含收敛/合规过滤），旧 script_result.json
-    # 仍在磁盘可读，对比才有意义；且 LLM 生成失败时旧产物也不会被提前删掉。
-    _preserve_shots: list[int] = []
-    try:
-        from shared.shot_diff import compute_shot_diff, should_preserve_artifacts
-        _old_script = json.load(open(SCRIPT_FILE, encoding="utf-8")) if SCRIPT_FILE.exists() else None
-        if _old_script and should_preserve_artifacts(_old_script, script):
-            _diff = compute_shot_diff(_old_script, script)
-            _preserve_shots = _diff.get("unchanged", [])
-            _logger.info(
-                f"[PRESERVE] 逐镜对比放行：未变 {len(_preserve_shots)} 镜"
-                f"（保留旧产物），新增/改动 {len(_diff.get('added', [])) + len(_diff.get('changed', []))} 镜重新生成"
-            )
-            # 只清理 changed/removed 镜头的帧/视频（未变镜头保留）
-            for _sub_path, _shots_root in (
-                (vimax_working_dir(), vimax_shots_dir()),
-                (stretched_dir(), stretched_dir() / "shots"),
-            ):
-                if _sub_path.exists():
-                    if _shots_root.exists():
-                        for _sid in _diff.get("changed", []) + _diff.get("removed", []):
-                            _shot_dir = _shots_root / str(_sid)
-                            if _shot_dir.exists():
-                                import shutil as _sh
-                                _sh.rmtree(_shot_dir)
-                                _logger.verbose(f"  [已清理] {_sub_path.name}/shots/{_sid}/（内容变更）")
-    except Exception as _preserve_err:
-        _logger.warn(f"[PRESERVE] 逐镜对比失败，全量清理: {_preserve_err}")
-
-    if not _preserve_shots:
-        _logger.info(f"[INFO] 分镜脚本已更新，清理旧的音视频文件...")
-        for subdir_path in (audio_dir(), vimax_working_dir(), stretched_dir()):
-            if subdir_path.exists():
-                import shutil
-                try:
-                    shutil.rmtree(subdir_path)
-                    _logger.verbose(f"  [已删除] {subdir_path.name}/")
-                except PermissionError as _e:
-                    # 09-13 实测：Explorer/看图器/杀毒占用目录 → WinError 32。
-                    # 清理失败就 FATAL 会吞掉整个 LLM 生成结果（此时 script 尚未
-                    # 落盘，两轮实跑各 ~10 min 全白跑）。旧帧由内容哈希自动失效
-                    # （ff/kf desc 变更 → hash mismatch → step02a 重抽），跳过即可。
-                    _logger.warn(f"  [WARN] {subdir_path.name}/ 被占用（{type(_e).__name__}），"
-                                 "跳过清理——旧文件由内容哈希自动失效")
-    # 删除最终视频和字幕（脚本结构变了，最终产物必须重做）
-    for fpath in (final_file(), subtitles_file()):
-        if fpath.exists():
-            try:
-                fpath.unlink()
-                _logger.verbose(f"  [已删除] {fpath.name}")
-            except PermissionError:
-                _logger.warn(f"  [WARN] {fpath.name} 被占用（播放器？），跳过重删")
-
-    # ========================================================================
-    # 钩子分镜生成（v6 沿用 + v6.39 调用顺序硬约束）
-    # ========================================================================
-    # 严格 3 步调用顺序（C4 修复 08-11 + v6.32 强化 08-12），禁止任何步骤乱序：
-    #
-    #   ┌─────────────────────────────────────────────────────────────┐
-    #   │  ① 提取 forbidden_lines  ← 必须在主分镜 shots 落盘后做         │
-    #   │     (剥说话人前缀的台词体列表，注入钩子 prompt 防重复穿帮)      │
-    #   │                          ↓                                  │
-    #   │  ② 调用 hook = gen_hook_script(forbidden_lines=...)          │
-    #   │     (钩子 LLM 在 prompt 看到禁止清单，从源头不写重复台词)       │
-    #   │                          ↓                                  │
-    #   │  ③ 合并 + 去重 retry + 兜底清空                               │
-    #   │     (挂载后比对台词，仍重复则重试 2 次；再重复则清空台词字段)     │
-    #   └─────────────────────────────────────────────────────────────┘
-    #
-    # 关键 invariant（破坏任意一条会引发「钩子台词=主分镜台词」倒叙穿帮）：
-    #   - 步骤① forbidden_lines 必须在 shots 落盘后才能采集（空列表=无效）
-    #   - 步骤② gen_hook_script 调用时 forbidden_lines 必须非 None
-    #   - 步骤③ _hook_dup_hits 比对时 shots 列表未变（避免 race）
-    # ========================================================================
-    if HOOK_ENABLED:
-        # ===== ① 提取 forbidden_lines（assert 保护调用顺序）=====
-        _shots_for_hook = script.get("shots", [])
-        assert _shots_for_hook, (
-            "HOOK pipeline 顺序保护：步骤②前必须先生成主分镜 shots。"
-            "当前 script['shots'] 为空——主分镜 LLM 调用可能失败或被跳过。"
-        )
-        _forbidden_lines: list[str] = []
-        for _s in _shots_for_hook:
-            _body = _speech_body(_s.get("narration_segment", ""))
-            if _body:
-                _forbidden_lines.append(_body)
-        _logger.info(f"[INFO] 钩子禁止台词清单已就绪（{len(_forbidden_lines)} 条）")
-
-        # ===== ② 调用 hook LLM（注入 forbidden_lines）=====
-        _logger.info("\n[INFO] 开始生成钩子分镜...")
-        hook = gen_hook_script(
-            novel_text,
-            bank=character_bank,
-            objects_bank=scene_objects_bank,
-            forbidden_lines=_forbidden_lines,  # 必传参数，v6.32 强约束
-        )
-
-        if hook:
-            # ===== ③ 合并 + 去重 retry + 兜底清空 =====
-            script["hook"] = hook
-            _logger.info(f"[OK] 钩子分镜已生成: {hook.get('narration_segment', '')[:30]}...")
-
-            # 闭包：引用外层 _shots_for_hook（步骤③ shots 列表不变 invariant）
-            def _hook_dup_hits() -> list:
-                """钩子台词与主分镜任一镜头台词重复的镜头 index 列表（空=无重复）."""
-                _hl = _speech_body(hook.get("narration_segment", ""))
-                _hits = []
-                if not _hl:
-                    return _hits
-                for _s in _shots_for_hook:  # ← 闭包用 _shots_for_hook 而非 script.get，避免 race
-                    _sb = _speech_body(_s.get("narration_segment", ""))
-                    if _sb and (_hl == _sb or _hl in _sb or _sb in _hl):
-                        _hits.append(_s.get("index", "?"))
-                return _hits
-
-            # C4 修复（08-11）+ v6.32 强化（08-12）：挂载后立即比对台词去重，
-            # 重复则自动重新生成钩子（换一句台词），最多再试 2 次；仍重复才 WARN
-            # 提示人工处理。钩子是「最精彩瞬间」的倒叙，与主分镜台词重复会直接
-            # 穿帮（观众刚在钩子听到、又在下个镜头原样听到）。
-            _dup_hits = _hook_dup_hits()
-            _regen_attempt = 0
-            while _dup_hits and _regen_attempt < 2:
-                _regen_attempt += 1
-                _hook_line_prev = _speech_body(hook.get("narration_segment", ""))
-                _logger.warn(
-                    f"[WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复（C4 修复），"
-                    f"自动重新生成钩子换台词（尝试 {_regen_attempt}/2）..."
-                )
-                _console(f"  [WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复，重新生成钩子（{_regen_attempt}/2）...")
-                _dup_note = (
-                    f"上一版钩子台词「{_hook_line_prev[:30]}」与主分镜镜头 {_dup_hits} 的台词重复"
-                    f"（观众刚在钩子听到、又在正片听到，倒叙穿帮）。请严格换一句完全不同的台词：\n"
-                    f"1. 优先选主分镜其它镜头未用过的对话（如张十三的质问/密谋、杨旭的台词、肖管事的试探）；\n"
-                    f"2. 若所有人物对话都与主分镜重复，则把 narration_segment 和 subtitle 设为空字符串\"\"，"
-                    f"钩子改纯画面动作开场（刺客破水而出、匕首出鞘的瞬间），靠视觉冲击不靠台词。"
-                )
-                _hook_retry = gen_hook_script(
-                    novel_text, bank=character_bank, objects_bank=scene_objects_bank,
-                    forbidden_lines=_forbidden_lines, dup_note=_dup_note,
-                )
-                if not _hook_retry:
-                    break  # 重生成失败，保留原钩子
-                hook = _hook_retry
-                script["hook"] = hook
-                _logger.info(f"[OK] 钩子分镜已重新生成: {hook.get('narration_segment', '')[:30]}...")
-                _dup_hits = _hook_dup_hits()
-            if _dup_hits:
-                # 确定性兜底（08-12）：重试仍重复则清空钩子台词，改纯画面开场——
-                # 钩子画面（刺客破水+匕首下刺）本身是强开场，宁可无台词也不倒叙穿帮。
-                hook["narration_segment"] = ""
-                hook["subtitle"] = ""
-                _logger.warn(
-                    f"[WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复且重生成仍未解决，"
-                    f"已强制改为纯画面开场（narration_segment 清空）——无台词优于倒叙穿帮。"
-                )
-                _console(f"  [WARN] 钩子台词仍重复，已改为纯画面开场")
-            # v6.18：钩子在 parse_response 之后才挂载（_validate_script 已跑完），
-            # 必须补自动修复 + 校验，否则钩子 ff_desc 零校验零修复（多动作堆叠
-            # 直接落盘，导致首帧图画不出三个同时态动作）。
-            try:
-                from step01_script_gen.validation import post_fix_shot_prompts, validate_hook
-                post_fix_shot_prompts(script)  # 幂等：shots 已修复过，主要触发 hook 分支
-                validate_hook(script["hook"], script.get("characters", []))
-            except Exception as _hook_fix_err:
-                _logger.warn(f"[WARN] 钩子修复/校验异常（不阻断）: {_hook_fix_err}")
-        else:
-            _logger.info("[INFO] 跳过钩子分镜")
-
-    # 提取角色（跨章节一致性）
-    if CHARACTER_EXTRACTION_ENABLED:
-        if pre_extracted_chars is not None:
-            # 复用预提取结果，避免二次 LLM 调用（角色库已在预提取阶段保存）
-            chars = pre_extracted_chars
-            _logger.info(f"[INFO] 复用预提取的 {len(chars)} 个角色")
-        else:
-            # 预提取阶段失败时才重新提取
-            _logger.info("[INFO] 提取角色信息...")
-            # #26 修复 2026-08-14：LLM 提取失败不应中断整条流水线——
-            # 回退到脚本解析阶段已收集的 characters（可能为空），仅 WARN。
-            try:
-                chars = extract_characters(novel_text, character_bank)
-            except Exception as _char_err:
-                _logger.warn(
-                    f"[WARN] 角色提取失败（不阻断）: {_char_err}，"
-                    f"回退使用脚本内已有 characters")
-                chars = script.get("characters", []) or []
-        script["characters"] = chars
-        # 注意：角色库已在预提取阶段保存，无需重复保存
-        _logger.info(f"[INFO] 已提取 {len(chars)} 个角色")
-
-    # 写入场景物体锚定（v6.6）：供下游 step02/validation 引用统一尺寸
-    _scene_objects_out = {}
-    for _oid in scene_objects_bank.get_all_identifiers():
-        _obj = scene_objects_bank.get_object(_oid)
-        if _obj:
-            _scene_objects_out[_oid] = {
-                k: _obj[k] for k in ("category", "subtype", "length_m", "width_m",
-                                     "height_m", "capacity", "structure",
-                                     "consistent_terms")
-                if k in _obj
-            }
-    script["scene_objects"] = _scene_objects_out
-
-    # v7: 场景/道具资产提取（依赖 script 的 shots[].scene/location/prompt，
-    # 必须在脚本生成/收敛之后执行；缓存命中路径也调用同一函数）
-    _extract_assets_and_update_script(script)
-
-    # 计算时间轴（v5.0 运镜量化参数）
-    _compute_timecodes(script)
-    # 08-23 v6.41 P19 闭环：硬修复层必须在 _compute_timecodes 之后调用——
-    # 此前 hard_fix 在 REPAIR 内部调用，但 line 1659 _compute_timecodes 会按
-    # motion_desc 重算 duration_sec，覆盖 W6 时长拉伸的值。改为：每次落盘前
-    # 跑一次 hard_fix_shot_prompts（含 W6 时长拉伸），保证最终值持久化。
-    # v6.42：改用新 Constraint 框架（is_final_pass=True 让 RuntimeExtendConstraint 拉伸时长）
-    from step01_script_gen.constraints import run_hard_fix as _hfix_final
-    try:
-        script = _hfix_final(script, is_in_repair_loop=False, is_final_pass=True, novel_text=novel_text)
-    except Exception as _hfe:
-        _logger.warn(f"[WARN] 落盘前 hard_fix 失败（保留原版）: {_hfe}")
-    # C5 修复（08-11）：fps 一致性校验（timeline 此时已存在）
-    _check_fps_consistency(script)
-
-    # 章节元信息（部名/章名，来自小说标题行「第一部 杀青州 第NNN章 章名」）
-    script.update(get_chapter_meta("锦衣夜行_77119小说.txt", NOVEL_CHAPTER))
-
-    # 写入 hash
-    script["_source_hash"] = _hash_source(
-        str(Path(__file__).parent / "prompts.py"), novel_preview, NOVEL_CHAPTER,
-        objects_bank_data,
-    )
-
-    # v6.50（08-29）：保存前重算 shot_count——timecode pre-pass 拆镜发生在
-    # parse 期校正之后，元数据会落后实际镜头数（15:12 run 16 vs 20 实测）
-    script["shot_count"] = len(script.get("shots", []))
-
-    # 保存（v6.63.1：剥运行时字段——_run_metadata 等下划线键不入盘；
-    # 2026-09-13 原子写，防中断留半截 JSON）
-    from shared.json_io import atomic_dump_json as _adj
-    _adj(OUTPUT_FILE, _strip_runtime_fields(script),
-         ensure_ascii=False, indent=2)
-    _snapshot_run_artifacts(script)
-    _cross_run_best_guard(script, novel_text)
-
-    _logger.info(f"[OK] 分镜脚本已保存至 {OUTPUT_FILE}")
-
-    # ---- 最终摘要：写真实 stdout（控制台），绕过重定向 ----
-    shots = script.get("shots", [])
-    _console("")
-    _console("=" * 56)
-    _console("  [步骤1] 完成 —— 分镜脚本摘要")
-    _console("=" * 56)
-    _console(f"  输出: {OUTPUT_FILE}")
-    _console(f"  镜头数: {len(shots)}" + ("  + 钩子" if script.get("hook") else ""))
-    _console(f"  总时长: {script.get('total_duration', 0):.1f}s")
-    _scene_objs = script.get("scene_objects", {})
-    if _scene_objs:
-        _console(f"  场景物体: {', '.join(_scene_objs.keys())}")
-    _sa = script.get("scene_assets", {})
-    _pa = script.get("prop_assets", {})
-    if _sa or _pa:
-        _console(f"  资产: 场景{len(_sa)}个 {', '.join(_sa.keys())} / 道具{len(_pa)}个 {', '.join(_pa.keys())}")
-    for k in ("resolution", "ratio", "fps", "render_style"):
-        if k in script:
-            _console(f"  {k}: {script[k]}")
-    _console("  前 3 镜:")
-    for shot in shots[:3]:
-        idx = shot.get("index", "?")
-        sub = (shot.get('subtitle', '') or '').strip()
-        if sub:
-            _console(f"    - 镜{idx}: {sub[:42]}")
-        else:
-            # subtitle 为空时回退到 main_subject（避免误报"空镜"）
-            ms = (shot.get('main_subject', '') or '').strip()
-            _console(f"    - 镜{idx}: [{ms[:42]}] （subtitle 空）" if ms else f"    - 镜{idx}: (无 main_subject)")
-    _console("=" * 56)
-    _console("  ⚠️ 详细校验 WARN 已写入 step01.log，控制台不再重复输出")
-    _console("=" * 56)
-
-    # 恢复 stdout
-    sys.stdout = _REAL_STDOUT
-    _logger.console_silent = False
-
+        # 恢复 stdout
+        sys.stdout = _REAL_STDOUT
+        _logger.console_silent = False
+    finally:
+        _release_step01_lock()
+        _timing_dump(CHAPTER_DIR / "step01_timing.json")  # v6.70.3: 阶段耗时指标落盘
 
 
 if __name__ == "__main__":

@@ -51,6 +51,11 @@ class TextGenerationRequest:
     # 修复轮用此分离"INPUT(原文+当前分镜)"与"REPAIR FEEDBACK"，避免拼成一段。
     # 旧 user_prompt 仍保留作回退（None 时使用）。
     user_inputs: Optional[list] = None
+    # v6.70.3（09-14）：单次请求客户端超时（秒，供应商无关契约）。None = 用
+    # provider 默认（agent_plan 走 AGENT_PLAN_TEXT_TIMEOUT_SEC=600）。按调用点
+    # 语义分级：候选生成 300 / 定向修复+hook 180——09-14 实测 600s 单值让
+    # 「一个慢请求拖死整轮」（候选 3 耗 12 分钟，修复轮超时保留原版烧穿整镜）。
+    timeout_sec: Optional[int] = None
 
 
 @dataclass

@@ -103,10 +103,8 @@ class FramingPrefixFillConstraint(Constraint):
             has_chars = False
             fl = shot.get("frame_layouts")
             if isinstance(fl, dict):
-                has_chars = any(
-                    isinstance(it, dict) and it.get("on_screen")
-                    for it in (fl.get("ff") or [])
-                )
+                from shared.frame_spec import is_on_screen
+                has_chars = any(is_on_screen(it) for it in (fl.get("ff") or []))
             if not has_chars:
                 has_chars = bool(shot.get("char_layout"))
             ms = str(shot.get("main_subject") or "")

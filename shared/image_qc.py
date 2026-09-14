@@ -237,17 +237,28 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
     # 双实例/背景 1 路人），超出即 critical（IMAGE_QC_WRITE_CRITICAL=1 删帧重生成）。
     # 09-13：名单改读 per-frame spec（frame_layouts.{ff,lf}.on_screen，v6.57
     # 事实源）——旧读 char_layout 全镜单表，lf「刺客遁水剩 2 人」被名单 1
-    # 卡 critical 连烧 3 次（shot_0 lf 实测）；spec 缺失/空 → 回退 char_layout。
-    from shared.frame_spec import get_frame_spec as _get_spec
+    # 卡 critical 连烧 3 次（shot_0 lf 实测）。
+    # on_screen 缺省判定走 shared.frame_spec.is_on_screen（缺省 True，与
+    # roster/肖像拼接侧单源一致）。回退口径：spec 条目存在但全员 off_screen →
+    # 信任 spec 计 0 人（回退 char_layout 会重新引入人数打架）；spec 桶为空
+    # （空镜合法形态 / LLM 漏写整桶）→ 回退 char_layout（shot1 空 ff 实证）。
+    from shared.frame_spec import get_frame_spec as _get_spec, is_on_screen as _on_screen
     _spec_names: list[str] = []
+    _spec_trusted = False
     if frame_kind in ("first_frame", "last_frame"):
-        _spec_names = [str(s.get("name", "")).strip()
-                       for s in (_get_spec(shot, frame_kind) or [])
-                       if isinstance(s, dict) and s.get("on_screen") is True
-                       and str(s.get("name", "")).strip()]
-    _cl_entities = _spec_names or [
-        str(it.get("name", "")).strip() for it in (shot.get("char_layout") or [])
-        if isinstance(it, dict) and str(it.get("name", "")).strip()]
+        _spec_entries = [s for s in (_get_spec(shot, frame_kind) or [])
+                         if isinstance(s, dict)]
+        if _spec_entries:
+            _spec_names = [str(s.get("name", "")).strip()
+                           for s in _spec_entries
+                           if _on_screen(s) and str(s.get("name", "")).strip()]
+            _spec_trusted = True
+    if _spec_trusted:
+        _cl_entities = _spec_names
+    else:
+        _cl_entities = [
+            str(it.get("name", "")).strip() for it in (shot.get("char_layout") or [])
+            if isinstance(it, dict) and str(it.get("name", "")).strip()]
     if _cl_entities and not empty_scene:
         _tol0 = _PERSON_TOLERANCE
         lines.append(
@@ -762,14 +773,29 @@ def _expected_persons(shot: dict, frame_kind: str, characters: list | None, kf_i
     窗口匹配启发式（8-30 hook lf count=3 实证：旧路径 + 启发式破译 = 期望错；新路径
     = spec 直读 = 0 误判）。
 
-    老章降级：shot 无 frame_layouts → 走 char_layout 路径 + _threat_visible_in 兜底。
+    老章/空 spec 桶降级：无 frame_layouts 或本帧 spec 桶为空 → 走 char_layout
+    （与 build_qc_prompt 同口径）；spec 条目存在且全员 off_screen → 才信任 0。
     """
-    # 新章路径：仅当 frame_layouts 真实存在时走 spec（否则 spec_on_screen_names
-    # 会从 char_layout 派生 → 全部 on_screen=True → 威胁源未被剔除）
+    # 新章路径：仅当 frame_layouts 真实存在且本帧 spec 桶非空时才信任 spec。
+    # 09-14 复审：空桶返回 0 会与 build_qc_prompt 的 char_layout 回退互斥
+    # （prompt 名单 2 人、QC 期望 0）——只有「条目存在且全员 off_screen」才
+    # 是可信 0；空桶/缺桶按 prompt 同口径回退 char_layout。
     if isinstance(shot.get("frame_layouts"), dict):
         try:
-            from shared.frame_spec import spec_on_screen_names
-            return len(spec_on_screen_names(shot, frame_kind, kf_index=kf_index))
+            from shared.frame_spec import get_frame_spec, is_on_screen
+            spec_entries = [e for e in get_frame_spec(
+                shot, frame_kind, kf_index=kf_index) if isinstance(e, dict)]
+            if spec_entries:
+                return sum(
+                    1 for e in spec_entries
+                    if is_on_screen(e) and str(e.get("name", "")).strip()
+                )
+            names = [
+                str(it.get("name", "")).strip()
+                for it in (shot.get("char_layout") or [])
+                if isinstance(it, dict) and str(it.get("name", "")).strip()
+            ]
+            return len(names) if names else None
         except Exception:
             pass
     # 老章降级
@@ -1525,12 +1551,11 @@ def build_claim_checks_spec(shot: dict, frame_kind: str, kf_index: int | None = 
 
     旧章节（无 frame_layouts）/ spec 为空：返回 []——调用方应回退到 build_claim_checks。
     """
-    from shared.frame_spec import get_frame_spec
+    from shared.frame_spec import get_frame_spec, is_on_screen
     spec = get_frame_spec(shot, frame_kind, kf_index)
     if not spec:
         return []
-    on_screen_items = [s for s in spec
-                       if isinstance(s, dict) and s.get("on_screen") is True]
+    on_screen_items = [s for s in spec if is_on_screen(s)]
     if not on_screen_items:
         return []
     qs: list[dict] = []
@@ -1543,8 +1568,10 @@ def build_claim_checks_spec(shot: dict, frame_kind: str, kf_index: int | None = 
                 "q": f"画面是否表现：{name}位于{position}？",
                 "expect": "yes", "key": True,
             })
-    # P1-B: off_screen 缺席断言（spec on_screen=false → 画面中是否已无）
-    off_items = [s for s in spec if isinstance(s, dict) and s.get("on_screen") is False]
+    # P1-B: off_screen 缺席断言（spec on_screen=false → 画面中是否已无）；
+    # 判定走 is_on_screen（缺省 True）——只有显式 false 才出缺席断言
+    off_items = [s for s in spec
+                 if isinstance(s, dict) and not is_on_screen(s)]
     for s in off_items:
         name = str(s.get("name", "")).strip()
         if name:

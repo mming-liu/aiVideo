@@ -4151,7 +4151,9 @@ def _run_prompt_checklist(script: dict) -> dict:
     results["frame_weapon_legality"] = _check_frame_weapon_legality(shots, hook, script.get("characters", []))
 
     # 09-13 新增：武器 holder 校验（hook 悬空匕首根因——武器词必须有持握主体/
-    # 落点锚，否则图片模型画悬浮武器。与 frame_weapon_legality 互补，warning-only）
+    # 落点锚，否则图片模型画悬浮武器。与 frame_weapon_legality 互补。issue 级，
+    # 暂不进 _REPAIR_PRIORITY_CATEGORIES（09-13 决策：先观察误报率）；
+    # GAP/regen 反馈文本仍会带上）
     results["weapon_holder"] = _check_weapon_holder(shots, hook, script.get("characters", []))
 
     # 09-13 新增：gaze_target 与无视线状态互斥（hook ff 杨旭双目紧闭 vs 视线锚
@@ -4401,6 +4403,10 @@ def _fill_missing_new_fields(script: dict) -> None:
     """补全视频钩子版本的新字段（如果 LLM 未返回则用默认值填充）."""
     # 补全 shots
     for shot in script.get("shots", []):
+        # 2026-09-13：非 dict 元素跳过（parse_response 已在入口按 ValueError 拒收
+        # 并重试，这里兜底防其他调用路径炸 AttributeError）
+        if not isinstance(shot, dict):
+            continue
         shot.setdefault("content", "")
         shot.setdefault("camera_movement", "")
         shot.setdefault("framing", "")
@@ -5222,6 +5228,19 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
     # 按 schema 类型归位后再填充/校验，同类 type-pollution 一并防御。
     _coerce_schema_types(script)
 
+    # 2026-09-13：shots 结构性校验——LLM 偶发把 shots 输出成字符串或元素混入
+    # 字符串（09-13 候选 3 实测：AttributeError 穿透 RuntimeError/ValueError
+    # 重试网 FATAL 打穿整个 run，40 分钟候选白烧）。结构错无法按 schema 归位
+    # → 按解析失败抛 ValueError，走既有重试网换一次生成。
+    _shots_raw = script.get("shots")
+    if not isinstance(_shots_raw, list):
+        raise ValueError(
+            f"shots 结构非法（应为 list，得到 {type(_shots_raw).__name__}）——按解析失败重试")
+    _bad_shots = sum(1 for _s in _shots_raw if not isinstance(_s, dict))
+    if _bad_shots:
+        raise ValueError(
+            f"shots 结构非法（{len(_shots_raw)} 元素中 {_bad_shots} 个非 dict）——按解析失败重试")
+
     # v6.4 新增：补全新添加的字段（如果 LLM 没有返回）
     _fill_missing_new_fields(script)
 
@@ -5374,12 +5393,15 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
     「画外手」，只能画一把悬浮刀（实测 ff/kf0 两图均现悬空匕首，kf0 经
     ff 整图参考 i2i 传播）。
 
-    逐帧检查（ff/lf/kf desc）：武器词所在分句无 holder 动词（握/持/拔/…）
-    且无落点锚（插在/落地/没入/…），frame_layouts 对应帧所有角色 props
-    又为空 → WARN。隐藏武器（未出鞘/藏/潜伏 ±8 字窗口）豁免。
-    v6.70.1 review：隐藏武器豁免保留（避免「藏书上架」误报），但命中走 issues 路径
-    → _regen_over_limit 触发 LLM 修复轮（与 _check_frame_weapon_legality 互补：那个管「非战斗镜
-    不该有武器」，这个管「武器必须有主」）。
+    逐帧检查（ff/lf/kf desc，逐武器词）：武器词所在分句 ±1 相邻句无 holder 动词
+    （握/持/拔/…）且无落点锚（插在/落地/没入/…），frame_layouts 对应帧所有
+    角色 props 又为空 → issue。隐藏武器（未出鞘/藏/潜伏 ±8 字窗口）豁免。
+    v6.70.1：隐藏武器豁免保留（避免「藏书上架」误报）；命中记 issue（GAP/regen
+    反馈文本仍会带上），但暂不进 _REPAIR_PRIORITY_CATEGORIES——09-13 决策：
+    无误报观察数据，先跑一章统计命中/误报再定。注意本检查对 hook 的告警进不了
+    定向修复轮（钩子生成时点在修复轮之后），hook 无主武器由 main.py「钩子后置
+    校验轮」兜底。与 _check_frame_weapon_legality 互补：那个管「非战斗镜不该有
+    武器」，这个管「武器必须有主」。
     """
     from shared.content_safety import (WEAPON_WORDS as _W_WORDS,
                                        WEAPON_HIDDEN_WORDS as _W_HIDDEN)
@@ -5410,16 +5432,6 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
             t = text
             for excl in ("戟指", "剑眉", "刀眉", "烟枪"):  # 与武器词检查同口径
                 t = t.replace(excl, "")
-            hit = next((w for w in _ALL_W if w in t), None)
-            if not hit:
-                continue
-            hp = t.find(hit)
-            win = t[max(0, hp - 6):hp + len(hit) + 8]
-            if any(w in win for w in _W_HIDDEN):
-                continue  # 隐藏武器（未出鞘/藏/潜伏）豁免——本来就不该画出来
-            seg = next((s for s in re.split(r"[，。；！？\n]", t) if hit in s), t)
-            if any(v in seg for v in _HOLDER_VERBS) or any(a in seg for a in _DROP_ANCHORS):
-                continue
             held = any(
                 isinstance(e, dict) and any(
                     isinstance(p, str) and any(w in p for w in _ALL_W)
@@ -5429,10 +5441,33 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
             )
             if held:
                 continue
-            issues.append(
-                f"{label} {flabel}: 武器词「{hit}」无持握主体/落点锚（frame_layouts "
-                f"props 空 + 同句无握持/落点动词）——图片模型只能画悬浮武器；"
-                f"补 holder（如「画外伸入一只握刀的手」）或删除该句")
+            clauses = [s for s in re.split(r"[，。；！？\n]", t) if s]
+            # v6.70.1：逐武器词检查——原 next() 只取 _ALL_W 元组序首个命中词，
+            # 同帧其余武器词全部漏判（hook ff「短刃…刀尖」双词只查一词的实测）。
+            reported_segs: set[str] = set()  # 同分句多词只报一条
+            for hit in _ALL_W:
+                if hit not in t:
+                    continue
+                hp = t.find(hit)
+                win = t[max(0, hp - 6):hp + len(hit) + 8]
+                if any(w in win for w in _W_HIDDEN):
+                    continue  # 隐藏武器（未出鞘/藏/潜伏）豁免——本来就不该画出来
+                ci = next((i for i, s in enumerate(clauses) if hit in s), None)
+                seg = clauses[ci] if ci is not None else t
+                if seg in reported_segs:
+                    continue
+                # holder/落点判定扩到 ±1 相邻分句——「画外伸入一只握刀的手，
+                # 刀尖抵近…」持有手与刀尖分属两句，同句口径连 v6.70 药方都误报
+                win_clauses = clauses[max(0, ci - 1):ci + 2] if ci is not None else [t]
+                win_text = "".join(win_clauses)
+                if any(v in win_text for v in _HOLDER_VERBS) or any(
+                        a in win_text for a in _DROP_ANCHORS):
+                    continue
+                reported_segs.add(seg)
+                issues.append(
+                    f"{label} {flabel}: 武器词「{hit}」无持握主体/落点锚（frame_layouts "
+                    f"props 空 + 本句±相邻句无握持/落点动词）——图片模型只能画悬浮武器；"
+                    f"补 holder（如「画外伸入一只握刀的手」）或删除该句")
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
@@ -5450,7 +5485,7 @@ def _check_gaze_state_conflict(shots: list[dict], hook: dict | None = None,
     词，或帧 desc 中状态词 ±12 字内有角色名）→ WARN（正确写法：gaze_target
     填「无」）。warning-only：观察一轮误报率再定是否升级 issue 触发修复轮。
     """
-    from shared.frame_spec import gaze_blocked_for
+    from shared.frame_spec import gaze_blocked_for, is_on_screen
     issues, warnings = [], []
     checks = [(s, f"镜头{s.get('index')}") for s in shots]
     if hook:
@@ -5468,9 +5503,9 @@ def _check_gaze_state_conflict(shots: list[dict], hook: dict | None = None,
         for flabel, spec_entries, frame_text in frames:
             _frame_names = [str(e.get("name", "")).strip()
                             for e in spec_entries
-                            if isinstance(e, dict) and e.get("on_screen") is True]
+                            if isinstance(e, dict) and is_on_screen(e)]
             for e in spec_entries:
-                if not isinstance(e, dict) or e.get("on_screen") is not True:
+                if not is_on_screen(e):
                     continue
                 name = str(e.get("name", "")).strip()
                 gaze = str(e.get("gaze_target", "")).strip()

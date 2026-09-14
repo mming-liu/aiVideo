@@ -2203,10 +2203,10 @@ def _extract_char_layout(
         _spec_items: list | None = None
         if frame_kind and isinstance(_fl, dict):
             try:
-                from shared.frame_spec import get_frame_spec
+                from shared.frame_spec import get_frame_spec, is_on_screen
                 _spec_items = [
                     s for s in get_frame_spec(shot, frame_kind, kf_index)
-                    if isinstance(s, dict) and s.get("on_screen") is True
+                    if is_on_screen(s)
                 ]
             except Exception:
                 _spec_items = None
@@ -2929,7 +2929,7 @@ def _inject_frame_spec(
     try:
         if is_empty_scene(shot, characters):
             return desc
-        from shared.frame_spec import get_frame_spec
+        from shared.frame_spec import get_frame_spec, is_on_screen
         spec = get_frame_spec(shot, frame_kind, kf_index)
         # 老章降级（spec 为空——无 frame_layouts / 全 off_screen）
         if not spec:
@@ -2937,9 +2937,8 @@ def _inject_frame_spec(
                 desc, characters, shot,
                 frame_kind=frame_kind,
             )
-        # spec 驱动：on_screen=true 才注入
-        on_screen_items = [s for s in spec
-                           if isinstance(s, dict) and s.get("on_screen") is True]
+        # spec 驱动：on_screen=true 才注入（判定走 is_on_screen 单源）
+        on_screen_items = [s for s in spec if is_on_screen(s)]
         if not on_screen_items:
             return desc
         char_by_ident = {c.get("identifier", ""): c for c in characters
