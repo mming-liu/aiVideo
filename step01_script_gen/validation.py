@@ -27,6 +27,7 @@ from shared.paths import chapter_dir
 from shared.constants import DEFAULT_VIDEO_DURATION_FALLBACK
 from step01_script_gen.climax_words import CLIMAX_WORDS_ARC
 from step01_script_gen.gap_analysis import normalize_core_keywords
+from step01_script_gen.prompt_semantic.registry import COLLECTIVE_NAMES
 from shared.tee_logger import get_logger
 from shared.kf_time import (
     get_kf_t_sec, get_kf_stage, set_kf_t_sec, set_kf_stage,
@@ -747,7 +748,16 @@ def _check_character_consistency(script: dict) -> dict:
     """
     shots = script.get("shots", [])
     characters = script.get("characters", [])
-    defined_ids = {c.get("identifier", "") for c in characters if c.get("identifier")}
+    # 「群演/路人」是集合性主体，不是可生成肖像的具体角色。把它们当已知角色
+    # 会强制要求 [群演: 特征] 锚点；09-16 实测 13 镜因此被判 HARD，触发
+    # 180s 修复轮后超时，100 分候选被拖成 92 分。直接从具体角色集合排除，
+    # 不生成 warning，也不进入后续跨镜特征/对话缺失检查。
+    _collective = set(COLLECTIVE_NAMES)
+    defined_ids = {
+        c.get("identifier", "")
+        for c in characters
+        if c.get("identifier") and c.get("identifier") not in _collective
+    }
 
     if not defined_ids or not shots:
         return {"pass": True, "issues": [], "warnings": []}
@@ -765,7 +775,10 @@ def _check_character_consistency(script: dict) -> dict:
         if main_subject in defined_ids:
             if not re.search(rf"\[{re.escape(main_subject)}[:：]", prompt):
                 missing_anchor.append(idx)
-                issues.append(
+                # 具体角色的缺失锚点由 RoleAnchorConstraint 在 hard_fix 阶段
+                # 从 characters/bank 确定性补齐；若标成 HARD 会先触发 LLM
+                # 修复轮，和群演误报同一类问题。
+                warnings.append(
                     f"镜头{idx}: main_subject=\"{main_subject}\" 是已知角色，"
                     f"但 prompt 中缺少 [{main_subject}: 特征] 角色锚点"
                 )
@@ -1721,12 +1734,6 @@ def _check_person_boat_position(shots: list[dict]) -> dict:
         "移动", "滑行", "漂移", "荡", "摇", "晃",
     ]
 
-    # 需要添加的负面提示词模板
-    negative_suggestions = [
-        "不要在水面上跳", "不要蹦跳", "不要站立在水面",
-        "不要在船上走动", "不要跳入水中", "不要从水面跃出",
-    ]
-
     for shot in shots:
         idx = shot.get("index", "?")
         prompt = shot.get("prompt", "")
@@ -1761,25 +1768,12 @@ def _check_person_boat_position(shots: list[dict]) -> dict:
             for action in ambiguous_action_words
         )
 
-        # 5. 检查是否有负面提示词
-        has_negative_prompt = shot.get("negative_prompt", "").strip()
-        has_negative_about_boat = any(
-            neg in (has_negative_prompt or "").lower()
-            for neg in ["跳", "蹦", "水面", "船"]
-        )
-
         # 判断是否需要警告
         if is_boat_scene and has_char_anchor:
             if has_ambiguous_action and not has_position_constraint:
                 warnings.append(
                     f"镜头{idx}: 船只/水面场景检测到歧义动作词但缺少位置约束词，"
                     f"建议添加\"端坐\"、\"稳坐\"、\"盘膝\"等明确位置描述"
-                )
-
-            if has_ambiguous_action and not has_negative_about_boat:
-                warnings.append(
-                    f"镜头{idx}: 船只/水面场景建议添加负面提示词防止幻觉，"
-                    f"如：\"不要在水面蹦跳、不要站立在水面\""
                 )
 
     if issues:
@@ -3719,9 +3713,10 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
     空镜/单角色不触发（防误报刷屏，同 P1-7 视线门控思路）。
     """
     issues, warnings = [], []
-    known = {c.get("identifier") for c in (characters or []) if c.get("identifier")}
+    known = {c.get("identifier") for c in (characters or []) if c.get("identifier") and c.get("identifier") not in set(COLLECTIVE_NAMES)}
     # Plan A（2026-08-14）：hook 同为 index=0 的镜头，必须一并检查站位蓝图
     targets = list(shots) + ([hook] if hook and isinstance(hook, dict) else [])
+    _static_staging = ("仰卧", "仰面", "躺", "卧", "跪坐", "跪", "坐", "蹲", "趴", "俯卧", "蜷缩", "缩身", "缩在", "后倾", "伏身", "站立", "站", "跃起")
     for shot in targets:
         idx = shot.get("index", "?")
         label = "钩子镜头(index=0)" if (hook and shot is hook) else f"镜头{idx}"
@@ -3776,7 +3771,7 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
                     hint = "（画左/画右/画中/前景/中景/后景），规则51"
                 warnings.append(
                     f"{label}: {name} 站位「{pos}」缺空间词{hint}")
-            if facing and not is_valid_facing(facing):
+            if facing and not is_valid_facing(facing) and not any(w in facing for w in _static_staging):
                 warnings.append(
                     f"{label}: {name} 朝向「{facing}」缺朝向词"
                     f"（面向/背对/侧身/正对），规则51")
@@ -4953,7 +4948,7 @@ def _split_motion_to_seg_texts(motion: str, segs: list, dur: float) -> list[str]
         seg_idx = -1
         if m.group(1) and not m.group(2):
             # 「前N秒」「后N秒」
-            n = int(m.group(1))
+            n = float(m.group(1))
             kw = atom[m.start():m.end()]
             if "前" in kw:
                 end = min(float(n), dur)
@@ -4968,7 +4963,7 @@ def _split_motion_to_seg_texts(motion: str, segs: list, dur: float) -> list[str]
                         seg_idx = i
                         break
         elif m.group(2) and m.group(3):
-            a_v, b_v = int(m.group(2)), int(m.group(3))
+            a_v, b_v = float(m.group(2)), float(m.group(3))
             if a_v > b_v:
                 a_v, b_v = b_v, a_v
             for i, (a, b) in enumerate(segs):
@@ -4977,7 +4972,7 @@ def _split_motion_to_seg_texts(motion: str, segs: list, dur: float) -> list[str]
                     break
         elif m.group(4) and m.group(5):
             # v6.62：「2-5:放下酒壶」缺「秒」标签
-            a_v, b_v = int(m.group(4)), int(m.group(5))
+            a_v, b_v = float(m.group(4)), float(m.group(5))
             if a_v > b_v:
                 a_v, b_v = b_v, a_v
             for i, (a, b) in enumerate(segs):
@@ -5457,13 +5452,13 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
                 if seg in reported_segs:
                     continue
                 # holder/落点判定扩到 ±1 相邻分句——「画外伸入一只握刀的手，
+                # holder/落点判定扩到 ±1 相邻分句——「画外伸入一只握刀的手，
                 # 刀尖抵近…」持有手与刀尖分属两句，同句口径连 v6.70 药方都误报
                 win_clauses = clauses[max(0, ci - 1):ci + 2] if ci is not None else [t]
                 win_text = "".join(win_clauses)
                 if any(v in win_text for v in _HOLDER_VERBS) or any(
                         a in win_text for a in _DROP_ANCHORS):
                     continue
-                reported_segs.add(seg)
                 issues.append(
                     f"{label} {flabel}: 武器词「{hit}」无持握主体/落点锚（frame_layouts "
                     f"props 空 + 本句±相邻句无握持/落点动词）——图片模型只能画悬浮武器；"
@@ -6276,8 +6271,8 @@ _THREAT_WATER_WORDS = (
 )
 # 通用化（v6.62）：从原"杨旭/听香"硬编码改为按姿态类别聚合——任何角色名只要
 # 出现在 _extract_state_markers 的 poses dict 中即可被下列规则命中。键名只是语义标签。
-_RECLINING_POSES = ("盘坐", "盘膝", "端坐", "坐", "跪坐", "半躺", "倚靠", "仰卧", "躺", "仰倒", "倒", "已躺下")
-_DOWN_POSES = ("仰卧", "躺", "仰倒", "倒", "已躺下")
+_RECLINING_POSES = ("盘坐", "盘膝", "端坐", "坐", "跪坐", "半躺", "倚靠", "仰卧", "躺", "仰倒", "倒下", "倒地", "倒卧", "已躺下")
+_DOWN_POSES = ("仰卧", "躺", "仰倒", "倒下", "倒地", "倒卧", "已躺下")
 _SITTING_POSES = ("盘坐", "盘膝", "端坐", "坐", "跪坐", "撑伞")
 _UPRIGHT_POSES = ("撑伞", "立", "站", "捂嘴", "惊叫", "尖叫", "披头散发")
 
@@ -6545,8 +6540,8 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
 # 标签残缺导致 2-5 秒整段丢失 → 2 个 kf 全判越窗）。组 4/5 是「缺秒」的 M-N
 # 匹配：后随字符禁止数字/小数点/连字符/波浪/「秒/米/个」（排除 5.5米 误判）。
 _KF_TIME_SEG_PATTERN = re.compile(
-    r"(?:前|后)\s*(\d+)\s*秒|(\d+)\s*[-－~～]\s*(\d+)\s*秒"
-    r"|(\d+)\s*[-－~～]\s*(\d+)\s*(?![0-9.\-－~～秒米个:])"
+    r"(?:前|后)\s*(\d+(?:\.\d+)?)\s*秒|(\d+(?:\.\d+)?)\s*[-－~～]\s*(\d+(?:\.\d+)?)\s*秒"
+    r"|(\d+(?:\.\d+)?)\s*[-－~～]\s*(\d+(?:\.\d+)?)\s*(?![0-9.\-－~～秒米个:])"
 )
 
 
@@ -6575,19 +6570,19 @@ def _parse_motion_time_segments(motion_desc: str, total_sec: float) -> list[tupl
         if m.group(1) and not m.group(2):
             # 「前N秒」或「后N秒」
             kw = seg[m.start():m.end()]
-            n = int(m.group(1))
+            n = float(m.group(1))
             if "前" in kw:
                 out.append((0.0, min(float(n), total_sec)))
             else:
                 out.append((max(0.0, total_sec - n), total_sec))
         elif m.group(4) and m.group(5) and not m.group(2):
             # v6.62：「2-5:放下酒壶」类缺「秒」标签（组4/5），按 M-N 字面解析
-            a, b = int(m.group(4)), int(m.group(5))
+            a, b = float(m.group(4)), float(m.group(5))
             if a > b:
                 a, b = b, a
             out.append((float(a), min(float(b), total_sec)))
         elif m.group(2) and m.group(3):
-            a, b = int(m.group(2)), int(m.group(3))
+            a, b = float(m.group(2)), float(m.group(3))
             if a > b:
                 a, b = b, a
             out.append((float(a), min(float(b), total_sec)))

@@ -1,4 +1,4 @@
-﻿from .types import Severity, Violation, RepairRecord, RepairReport
+from .types import Severity, Violation, RepairRecord, RepairReport
 from .context import ConstraintContext
 from .base import Constraint
 from .engine import apply_constraints, run_hard_fix, ALL_CONSTRAINTS
@@ -77,6 +77,7 @@ from .short_shot_merge import ShortShotMergeConstraint  # F9 短镜合并（v6.4
 from .ff_lf_temporal import FfLfTemporalConstraint  # F10 ff/lf 时序协议（v6.50, 08-28）
 from .frame_spec_consistency import FrameSpecConsistencyConstraint  # S v6.57+ per-frame spec 一致性
 from .framing_prefix_fill import FramingPrefixFillConstraint  # F11 景别词回填（v6.62, 09-06）
+from .gaze_state_repair import GazeStateRepairConstraint  # F15 无视线状态 gaze_target 修复
 from .self_review import SelfReviewConstraint  # SR（LLM 自检回路）
 from .split_content_similarity import SplitContentSimilarityConstraint  # A7 拆分镜内容重复检测（v6.58, 09-03）
 from .mandatory_biz_fields import MandatoryBizFieldsConstraint
@@ -84,6 +85,7 @@ from .role_anchor import RoleAnchorConstraint
 from .surface_backfill import SurfaceBackfillConstraint  # F12 surface 承重面回填（v6.62.1, 09-06）
 from .framing_variety import FramingVarietyConstraint  # F13 景别多样性达标（v6.62.1, 09-06）
 from .gaze_typo import GazeTypoConstraint  # F14 目光错别字归一（v6.62.1, 09-06）
+from .final_quality_normalizer import FinalQualityNormalizerConstraint  # 链尾：prompt 预算/单运镜/kf 时间窗/blood 过渡
 
 ALL_CONSTRAINTS.extend([
     # Phase 2
@@ -147,6 +149,7 @@ ALL_CONSTRAINTS.extend([
     FrameSpecRepairConstraint(),
     FrameSpecConsistencyConstraint(),  # S per-frame spec 必填 + 完整性 + desc 一致性（v6.57+）
     FramingPrefixFillConstraint(),  # F11 prompt 无景别词 → 推断前置「[景别]」（v6.62, 09-06）
+    GazeStateRepairConstraint(),  # F15 无视线状态 gaze_target 修复
     SelfReviewConstraint(),  # SR opt-in via SELF_REVIEW_ENABLED=1
     SplitContentSimilarityConstraint(),  # A7 拆分镜内容重复检测（v6.58, 09-03）
     MandatoryBizFieldsConstraint(),  # B1 业务必填字段兜底（v6.60 doubao 适配引入，v6.61 起全 provider 共用）
@@ -165,6 +168,7 @@ ALL_CONSTRAINTS.extend([
     # 否则相似度在后续改写中漂移会漏判（首跑实测 0.83→0.89 漂移漏合并）
     DuplicateShotMergeConstraint(),   # 相邻镜重复视觉 HARD 合并
     CharSideContinuityConstraint(),   # 同地点连续镜角色侧翻转交换
+    FinalQualityNormalizerConstraint(),  # 链尾最终质量归一
 ])
 
 __all__ = [

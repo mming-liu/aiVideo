@@ -1,4 +1,4 @@
-﻿"""step01_script_gen - 分镜脚本生成入口（v6 增强版）
+"""step01_script_gen - 分镜脚本生成入口（v6 增强版）
 
 功能：
   - 从小说提取章节内容
@@ -156,7 +156,12 @@ from step01_script_gen.asset_extractor import extract_scene_assets, extract_prop
 from step01_script_gen.validation import parse_response, build_regen_feedback, _set_novel_text, _run_prompt_checklist
 from step01_script_gen.timecode import _compute_timecodes
 from step01_script_gen.hash_cache import _prompt_changed, _hash_source
-from step01_script_gen.gap_analysis import validate_script_gap, generate_gap_report, print_gap_report
+from step01_script_gen.gap_analysis import (
+    gap_needs_full_regen,
+    generate_gap_report,
+    print_gap_report,
+    validate_script_gap,
+)
 
 
 from shared import style_prefix
@@ -683,6 +688,74 @@ def _collect_hook_issues(script: dict) -> list[str]:
     return issues
 
 
+_QUALITY_BLOCKING_CATEGORIES = {
+    "gaze_state_conflict",
+    "weapon_holder",
+    "kf_temporal_consistency",
+    "kf_time_window_alignment",
+    "kf_frame_redundancy",
+    "frame_layouts_required",
+    "prompt_length_budget",
+    "person_boat_position",
+    "multi_person_staging",
+    "ff_lf_redundancy",
+    "cross_shot_continuity",
+    "ff_desc_length",
+}
+
+
+_VIDEO_ONLY_CATEGORIES = {
+    "camera_movement",
+    "camera_upgrade",
+    "transition_keywords",
+    "focal_switch",
+    "prompt_length_budget",
+}
+
+
+def _write_step01_quality_gate(script: dict, novel_text: str) -> dict:
+    """Write final quality-gate report and classify blocking vs advisory."""
+    try:
+        results = _run_prompt_checklist(script).get("results", {})
+    except Exception as exc:
+        results = {}
+        _logger.warn(f"[QUALITY-GATE] checklist failed: {exc}")
+    hard = []
+    visual = []
+    video_advisory = []
+    advisory = []
+    for category, result in results.items():
+        if not isinstance(result, dict):
+            continue
+        for msg in list(result.get("issues") or []):
+            hard.append({"category": category, "message": str(msg)})
+        for msg in list(result.get("warnings") or []):
+            item = {"category": category, "message": str(msg)}
+            if category in _VIDEO_ONLY_CATEGORIES:
+                video_advisory.append(item)
+            elif category in _QUALITY_BLOCKING_CATEGORIES:
+                visual.append(item)
+            else:
+                advisory.append(item)
+    payload = {
+        "hard_count": len(hard),
+        "visual_risk_count": len(visual),
+        "advisory_count": len(advisory),
+        "video_advisory_count": len(video_advisory),
+        "hard": hard,
+        "visual_risk": visual,
+        "advisory": advisory,
+        "video_advisory": video_advisory,
+        "blocking": bool(hard or visual),
+        "blocking_categories": sorted({x["category"] for x in hard + visual}),
+    }
+    try:
+        from shared.json_io import atomic_dump_json
+        atomic_dump_json(CHAPTER_DIR / "step01_quality.json", payload, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        _logger.warn(f"[QUALITY-GATE] write failed: {exc}")
+    return payload
+
 def _ensure_hook_quality(script: dict, *, novel_text: str, bank=None,
                          objects_bank=None, forbidden_lines=None,
                          producer_model=None) -> list[str]:
@@ -942,22 +1015,35 @@ def _score_script(script: dict, novel_text: str) -> dict:
         score += 5
     detail_parts.append(f"失锚{ung}条")
 
-    # 5) 时长合规（满分 10 分）：60-90s=10, 50-60=7, 90-120=7, <50=3, >120=3
+    # 5) 时长合规（满分 10 分）：按 timecode 拆镜后的有效时长评分。
+    # LLM 原始 duration_sec 常低估长台词；若按原值打分会把拆镜后超 90s
+    # 的候选误判为满分（09-16：原始 17镜/75.5s → 拆后 21镜/97.6s）。
     dur = _retry_raw_duration(script)
-    if 60 <= dur <= 90:
+    from step01_script_gen.timecode import project_post_split_metrics
+    _projected = project_post_split_metrics(shots, fps=script.get("fps", 24))
+    eff_dur = float(_projected.get("duration_sec", dur) or dur)
+    eff_n = int(_projected.get("shot_count", n) or n)
+    _split_n = int(_projected.get("split_count", 0) or 0)
+    if 60 <= eff_dur <= 90:
         score += 10
-    elif 50 <= dur < 60 or 90 < dur <= 120:
+    elif 50 <= eff_dur < 60 or 90 < eff_dur <= 120:
         score += 7
     else:
         score += 3
-    detail_parts.append(f"时长{dur:.0f}s")
+    if abs(eff_dur - dur) >= 0.5:
+        detail_parts.append(f"时长{dur:.0f}s→{eff_dur:.0f}s")
+    else:
+        detail_parts.append(f"时长{dur:.0f}s")
 
-    # 6) 镜数合规（满分 10 分）：8-20=10, 5-7=5, 20+=5, <5=0
-    if 8 <= n <= 20:
+    # 6) 镜数合规（满分 10 分）：按拆镜后的有效镜数评分
+    if 8 <= eff_n <= 20:
         score += 10
-    elif 5 <= n < 8 or n > 20:
+    elif 5 <= eff_n < 8 or eff_n > 20:
         score += 5
-    detail_parts.append(f"镜数{n}")
+    if eff_n != n:
+        detail_parts.append(f"镜数{n}→{eff_n}(拆{_split_n})")
+    else:
+        detail_parts.append(f"镜数{n}")
 
     # 7) 相邻镜重复视觉惩罚（2026-09-12 打分盲区复盘：镜12/12.5 文本逐字重复
     # 曾拿 95 分）。相邻镜动作文本 Jaccard ≥0.85 视为凑镜重复，每对扣 8 分。
@@ -984,6 +1070,9 @@ def _score_script(script: dict, novel_text: str) -> dict:
         "ungrounded_count": ung,
         "duration_sec": round(dur, 1),
         "shot_count": n,
+        "projected_duration_sec": round(eff_dur, 1),
+        "projected_shot_count": eff_n,
+        "projected_split_count": _split_n,
         "detail": detail,
     }
 
@@ -1675,6 +1764,36 @@ def _extract_assets_and_update_script(script: dict) -> None:
                                     "wide_desc", "near_desc", "consistent_terms")
                 if k in _sa
             }
+    # 场景别名 canonical merge：同一物理场景的细分命名只保留一个主场景，
+    # 避免 15 个 scene asset 造成 step02a 重复生图和 shot_count_bounds 假超限。
+    _scene_alias_map = {}
+    _scene_canonical = {}
+    for _scene_name in sorted(_scene_assets_out, key=lambda x: (len(x), x)):
+        _base = next(
+            (_b for _b in sorted(_scene_canonical, key=len, reverse=True)
+             if len(_b) >= 2 and _scene_name.startswith(_b)),
+            None,
+        )
+        if _base is None:
+            _scene_canonical[_scene_name] = dict(_scene_assets_out[_scene_name])
+            _scene_alias_map[_scene_name] = _scene_name
+            continue
+        _dst = _scene_canonical[_base]
+        _src = _scene_assets_out[_scene_name]
+        for _k, _v in _src.items():
+            if _k == "consistent_terms":
+                _merged = list(dict.fromkeys(list(_dst.get(_k) or []) + list(_v or [])))
+                if _merged:
+                    _dst[_k] = _merged
+            elif not _dst.get(_k) and _v:
+                _dst[_k] = _v
+        _scene_alias_map[_scene_name] = _base
+    if len(_scene_canonical) < len(_scene_assets_out):
+        _scene_assets_out = _scene_canonical
+        for _s in list(script.get("shots") or []) + ([script.get("hook")] if isinstance(script.get("hook"), dict) else []):
+            if isinstance(_s, dict) and _s.get("scene") in _scene_alias_map:
+                _s["scene"] = _scene_alias_map[_s["scene"]]
+        _logger.info(f"[ASSET] 场景别名合并：{len(_scene_alias_map)} → {len(_scene_canonical)}")
     script["scene_assets"] = _scene_assets_out
 
     _prop_assets_out = {}
@@ -1815,6 +1934,42 @@ def _snapshot_run_artifacts(script: dict | None = None) -> None:
         except Exception:
             pass
 
+
+def _pid_is_alive(pid: int) -> bool:
+    """安全查询 PID 是否存活（Windows 不使用 os.kill(pid, 0)）.
+
+    Windows 的 os.kill(pid, 0) 会调用 TerminateProcess，而不是 POSIX 的
+    「只探测不发送信号」。因此 Windows 必须走 OpenProcess；无权查询时保守
+    当作存活，避免误删其他进程持有的 chapter 锁。
+    """
+    if pid <= 0:
+        return False
+    import os as _os
+    if _os.name != "nt":
+        try:
+            _os.kill(pid, 0)
+            return True
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+
+    import ctypes
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _process_query_limited_information = 0x1000
+    _synchronize = 0x00100000
+    _handle = _kernel32.OpenProcess(
+        _process_query_limited_information | _synchronize,
+        False,
+        pid,
+    )
+    if _handle:
+        _kernel32.CloseHandle(_handle)
+        return True
+    # ERROR_ACCESS_DENIED：进程存在但当前用户无权打开。
+    return ctypes.get_last_error() == 5
+
+
 def _acquire_step01_lock() -> bool:
     """章节级 single-flight 锁：禁止两个 step01 并发写同一章.
 
@@ -1842,12 +1997,7 @@ def _acquire_step01_lock() -> bool:
             except OSError:
                 pass
             return _acquire_step01_lock()
-        try:
-            _os.kill(pid, 0)
-            alive = True
-        except OSError:
-            alive = False
-        if alive:
+        if _pid_is_alive(pid):
             _logger.warn(f"[LOCK] 已有 step01 运行中（PID={pid}），本次跳过")
             _console(f"[LOCK] 已有 step01 运行中（PID={pid}），本次跳过")
             return False
@@ -1996,6 +2146,22 @@ def _early_stop_score() -> float:
         return 95.0
 
 
+def _candidate_early_stop_max_shots() -> int:
+    """早停镜头上限；默认 20，0 = 不限制.
+
+    09-15 实测：100 分、20 镜、90s、高潮完整的候选已经拿到，却因旧的
+    `len(shots) > 18` 不放行，继续等同一模型两次 300s 超时，候选阶段
+    861.7s。20 镜仍是下游可生成规模，且分数已包含高潮完整性，因此把
+    上限做成配置，默认 20。
+    """
+    import os as _os
+    try:
+        _v = int(_os.getenv("CANDIDATE_EARLY_STOP_MAX_SHOTS", "20"))
+    except ValueError:
+        _v = 20
+    return _v if _v > 0 else 0
+
+
 def _candidate_is_early_stop(score: dict, script: dict) -> bool:
     """高分候选 + 基础结构健康 → 允许放弃等待慢候选.
 
@@ -2006,10 +2172,13 @@ def _candidate_is_early_stop(score: dict, script: dict) -> bool:
         return False
     if float(score.get("total", 0) or 0) < _early_stop_score():
         return False
+    if score.get("climax_complete") is not True:
+        return False
     shots = script.get("shots", [])
     if not shots:
         return False
-    if len(shots) > 18:
+    _max_shots = _candidate_early_stop_max_shots()
+    if _max_shots and len(shots) > _max_shots:
         return False
     duration = sum(float(shot.get("duration_sec", 0) or 0) for shot in shots)
     if not 60.0 <= duration <= 90.0:
@@ -2036,24 +2205,61 @@ def _generate_script_candidates(
     - 不同候选用不同温度增加多样性（第1个默认 0.2，后续 +0.15 递增）
     """
     from shared.config import SCRIPT_CANDIDATE_TOPK, SCRIPT_CANDIDATE_MODELS
+    import threading as _threading
     _candidates: list = []  # [(score_dict, script)]
     _last_err: Exception | None = None
     _max_attempts = SCRIPT_PARSE_RETRIES * max(1, SCRIPT_CANDIDATE_TOPK)
     _attempt = 0
     _task_idx = 0  # 候选序号（温度梯度 0.2 + 0.15*idx）
+    _model_list = list(SCRIPT_CANDIDATE_MODELS or [])
+    _model_cooldowns: set[str] = set()
+    _model_lock = _threading.Lock()
+
+    def _pick_model(_idx: int) -> str | None:
+        """候选模型轮转；超时模型本 run 冷却，优先改用其他模型."""
+        if not _model_list:
+            return None
+        with _model_lock:
+            _cooled = set(_model_cooldowns)
+        _available = [m for m in _model_list if m not in _cooled]
+        _pool = _available or _model_list
+        return _pool[_idx % len(_pool)]
+
+    def _cool_model_after_timeout(_err: RuntimeError) -> None:
+        """把超时模型加入本 run 冷却，避免同模型继续高成本重试."""
+        if not getattr(_err, "candidate_timed_out", False):
+            return
+        _model = getattr(_err, "candidate_model", None)
+        if not _model:
+            return
+        with _model_lock:
+            if _model in _model_cooldowns:
+                return
+            _model_cooldowns.add(_model)
+        _logger.warn(
+            f"[CANDIDATE] 模型 {_model} 候选超时，本 run 冷却，"
+            f"后续候选改用其他模型"
+        )
 
     def _gen_one_candidate(_idx: int):
         """生成单个候选：调 LLM → 解析 → 打分（线程内完成，返回 (score, script)）."""
         _temp = 0.2 + 0.15 * _idx
         # v6.66: 跨模型候选池——候选按序号轮转分配模型；空列表=全用默认模型
-        _model = SCRIPT_CANDIDATE_MODELS[_idx % len(SCRIPT_CANDIDATE_MODELS)] if SCRIPT_CANDIDATE_MODELS else None
-        raw = gen_spy_script(
-            novel_text, character_bank, scene_objects_bank,
-            outline=outline,
-            temperature=_temp,
-            model=_model,
-            timeout_sec=_candidate_gen_timeout_sec(),  # v6.70.3: 300s——慢候选由早停+超时双通道兜住
-        )
+        _model = _pick_model(_idx)
+        try:
+            raw = gen_spy_script(
+                novel_text, character_bank, scene_objects_bank,
+                outline=outline,
+                temperature=_temp,
+                model=_model,
+                timeout_sec=_candidate_gen_timeout_sec(),  # v6.70.3: 300s——慢候选由早停+超时双通道兜住
+            )
+        except RuntimeError as _e:
+            _e.candidate_model = _model
+            _e.candidate_timed_out = (
+                "超时" in str(_e) or "timeout" in str(_e).lower()
+            )
+            raise
         _cand = parse_response(raw, novel_text=novel_text)
         _scr = _score_script(_cand, novel_text)
         # v6.67 接力修复：把生成本候选的模型挂在分数上，main() 据此选互补修复模型
@@ -2080,21 +2286,23 @@ def _generate_script_candidates(
                 _console(f"  [重试] JSON 解析失败，重新调用 LLM（{_attempt}/{SCRIPT_PARSE_RETRIES}）...")
     else:
         import concurrent.futures as _fut
+        _early_stop_hit = False
         while len(_candidates) < SCRIPT_CANDIDATE_TOPK and _attempt < _max_attempts:
             _need = SCRIPT_CANDIDATE_TOPK - len(_candidates)
             _batch = min(_need, _max_attempts - _attempt)
             if _batch <= 0:
                 break
-            _early_stop_hit = False  # v6.70.3：置位后 shutdown(wait=False) 放行慢线程
             _ex = _fut.ThreadPoolExecutor(max_workers=_batch)
             _futs = {
                 _ex.submit(_gen_one_candidate, _task_idx + _j): _j
                 for _j in range(_batch)
             }
             _task_idx += _batch
+            _batch_done = 0
             try:
                 for _f in _fut.as_completed(_futs):
                     _attempt += 1
+                    _batch_done += 1
                     try:
                         _scr, _cand = _f.result()
                         _candidates.append((_scr, _cand))
@@ -2106,7 +2314,7 @@ def _generate_script_candidates(
                         # 未完成候选不再阻塞等待；provider 请求无法可靠取消，已发出的
                         # 调用会自然结束。
                         if _candidate_is_early_stop(_scr, _cand):
-                            _remaining = len(_futs) - (_attempt - 1)
+                            _remaining = len(_futs) - _batch_done
                             _logger.info(
                                 f"[CANDIDATE] 早停：候选分 {_scr['total']} ≥ "
                                 f"CANDIDATE_EARLY_STOP_SCORE={_early_stop_score()}，"
@@ -2115,6 +2323,7 @@ def _generate_script_candidates(
                             _early_stop_hit = True
                             break
                     except RuntimeError as e:
+                        _cool_model_after_timeout(e)
                         _last_err = e
                         _logger.warn(f"[WARN] LLM 生成失败（尝试 {_attempt}/{_max_attempts}）: {e}")
                         _console(f"  [重试] LLM 生成失败（{_attempt}/{_max_attempts}）...")
@@ -2471,6 +2680,13 @@ def main() -> None:
                     # 清理临时文件
                     if partial_path.exists():
                         partial_path.unlink()
+                    break
+                if not gap_needs_full_regen(validation):
+                    _logger.warn(
+                        "[GAP] 仅软告警（角色特征锚点等确定性可修复项），"
+                        "跳过整稿重生，转交下游约束修复"
+                    )
+                    _console("  [GAP] 仅软告警，跳过整稿重生")
                     break
 
                 # 发现问题，反馈给 LLM 重新生成
@@ -2922,6 +3138,16 @@ def main() -> None:
         except Exception as _e:
             _logger.warn(f"[WARN] 落盘前 issue 汇总异常（不阻断）: {_e}")
 
+        _quality = _write_step01_quality_gate(script, novel_text)
+        if _quality.get("blocking"):
+            _logger.warn(
+                f"[QUALITY-GATE] BLOCK: hard={_quality.get("hard_count", 0)}, "
+                f"visual={_quality.get("visual_risk_count", 0)}; "
+                f"categories={_quality.get("blocking_categories", [])}"
+            )
+            _console("  [QUALITY-GATE] BLOCK: 仍有生图阻塞告警，见 step01_quality.json")
+        else:
+            _logger.info("[QUALITY-GATE] PASS: 无 HARD / VisualRisk 阻塞项")
         _logger.info(f"[OK] 分镜脚本已保存至 {OUTPUT_FILE}")
 
         # ---- 最终摘要：写真实 stdout（控制台），绕过重定向 ----

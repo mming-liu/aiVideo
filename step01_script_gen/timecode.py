@@ -29,6 +29,8 @@ def _log():
 SPEECH_RATE = 3.5
 PAUSE_PER_SHOT = 1.5
 MIN_SHOT_DURATION = 3.0
+# 无对白旁白镜固定时长（投影评分与正式 timecode 同源）
+NARRATION_FIXED_DURATION = 4.0
 # 单镜硬上限（08-23 用户规则）：正片单镜时长不长于 8s。
 # 钩子时长另算（不受 8s 限制，见 _compute_timecodes hook 段）。
 MAX_SHOT_DURATION = 8.0
@@ -435,6 +437,74 @@ def _align_frame_duration(raw: float, fps: float) -> float:
     return frames / fps
 
 
+def project_post_split_metrics(shots: list, *, fps=None, shot_cap=None) -> dict:
+    """预估 timecode 拆镜后的有效镜数/时长，不修改输入、不写日志.
+
+    候选打分必须在 timecode 拆镜前使用这个投影值：LLM 常给出 5s 的镜头，
+    但 narration 实际估时 9-15s，_compute_timecodes 会拆成 2 镜并按语音重估
+    时长。09-16 实测原始 17 镜/75.5s 的 100 分候选，拆后变成 21 镜/97.6s。
+    """
+    _shots = [s for s in (shots or []) if isinstance(s, dict)]
+    try:
+        _fps = float(fps or 24)
+    except (TypeError, ValueError):
+        _fps = 24.0
+    if _fps <= 0:
+        _fps = 24.0
+    if shot_cap is None:
+        _dur_cap = active_video_duration_cap()
+        shot_cap = MAX_SHOT_DURATION if not _dur_cap else min(_dur_cap, MAX_SHOT_DURATION)
+    try:
+        shot_cap = float(shot_cap)
+    except (TypeError, ValueError):
+        shot_cap = MAX_SHOT_DURATION
+    if shot_cap <= 0:
+        shot_cap = MAX_SHOT_DURATION
+
+    def _duration_for_text(text: str, motion_duration: float | None) -> float:
+        speech_duration = _estimate_duration(text) if _has_dialogue(text) else 0.0
+        if motion_duration and motion_duration > 0:
+            base = max(motion_duration, speech_duration) if speech_duration > 0 else motion_duration
+        elif _has_dialogue(text):
+            base = speech_duration
+        else:
+            base = NARRATION_FIXED_DURATION
+        raw = max(base, MIN_SHOT_DURATION)
+        duration = _align_frame_duration(raw, _fps)
+        if duration > shot_cap:
+            duration = _align_frame_duration(shot_cap, _fps)
+        return duration
+
+    projected_shots = 0
+    projected_duration = 0.0
+    split_count = 0
+    for shot in _shots:
+        text = str(shot.get("narration_segment") or "")
+        motion_duration = _extract_motion_duration(
+            str(shot.get("motion_desc") or "")
+        )
+        if text and _estimate_duration(text) > shot_cap:
+            split_at = _find_split_point_within_cap(text, shot_cap)
+            if 0 < split_at < len(text) - 1:
+                left = text[:split_at].strip()
+                right = text[split_at:].strip()
+                projected_duration += (
+                    _duration_for_text(left, motion_duration)
+                    + _duration_for_text(right, motion_duration)
+                )
+                projected_shots += 2
+                split_count += 1
+                continue
+        projected_duration += _duration_for_text(text, motion_duration)
+        projected_shots += 1
+
+    return {
+        "shot_count": projected_shots,
+        "duration_sec": round(projected_duration, 2),
+        "split_count": split_count,
+    }
+
+
 def _compute_timecodes(script: dict) -> None:
     """根据 motion_desc 时间分段或对话字数计算每个镜头的 timecode。
 
@@ -521,8 +591,6 @@ def _compute_timecodes(script: dict) -> None:
     # v6.43：正片 shots 起始时间 = hook_duration（钩子在播放顺序头部）
     current_time = hook_duration
     timeline = []
-    NARRATION_FIXED_DURATION = 4.0  # 纯旁白固定时长
-
     for shot in shots:
         text = shot.get("narration_segment", "")
         motion_desc = shot.get("motion_desc", "")

@@ -47,7 +47,7 @@ class KfBloodMonotonicConstraint(Constraint):
             if not isinstance(shot, dict):
                 continue
             kfs = shot.get("keyframes") or []
-            if not isinstance(kfs, list) or len(kfs) < 2:
+            if not isinstance(kfs, list):
                 continue
 
             # 按 t_sec 升序收集 (t, desc, kf_idx)
@@ -59,14 +59,15 @@ class KfBloodMonotonicConstraint(Constraint):
                 if t is None:
                     continue
                 indexed.append((float(t), j))
-            if len(indexed) < 2:
-                continue
             indexed.sort(key=lambda x: x[0])
 
             # 维护一个 "blood_active" 状态：一旦在前序 kf 看到血词，
             # 所有后续 kf 必须保留血词（否则视为回退）
-            blood_active = False
-            for t, kf_j in indexed:
+            blood_active = False if len(indexed) >= 2 else any(
+                any(w in (kf.get("desc", "") or "") for w in BLOOD_STATE_WORDS)
+                for kf in kfs if isinstance(kf, dict)
+            )
+            for t, kf_j in (indexed if len(indexed) >= 2 else []):
                 kf = kfs[kf_j]
                 if not isinstance(kf, dict):
                     continue
@@ -96,6 +97,26 @@ class KfBloodMonotonicConstraint(Constraint):
                             target=f"keyframes[{kf_j}].desc",
                             before=desc[:80] + ("..." if len(desc) > 80 else ""),
                             after=new_desc[:80] + ("..." if len(new_desc) > 80 else ""),
+                        )
+                    )
+
+            # kf 已经有血时，尾帧也必须保持；否则 step02b 最后一帧会画出
+            # 血迹消失，直接违反致命伤持续规则。
+            if blood_active:
+                lf_desc = shot.get("lf_desc", "") or ""
+                if isinstance(lf_desc, str) and lf_desc and not any(
+                    w in lf_desc for w in BLOOD_STATE_WORDS
+                ):
+                    new_lf = lf_desc.rstrip("。.，,;；") + "。" + INJURY_ANCHOR_TAIL
+                    shot["lf_desc"] = new_lf
+                    repairs.append(
+                        RepairRecord(
+                            constraint_name=self.name,
+                            shot_index=shot.get("index") if not is_hook else None,
+                            action="append",
+                            target="lf_desc",
+                            before=lf_desc[:80] + ("..." if len(lf_desc) > 80 else ""),
+                            after=new_lf[:80] + ("..." if len(new_lf) > 80 else ""),
                         )
                     )
         return repairs

@@ -125,10 +125,10 @@ class KfPoseAnchorConstraint(Constraint):
                         desc = desc.rstrip("。.，,;；") + "。" + anchor
 
                 # (B) P1-6 威胁源朝向
-                # 豁免：威胁源已含姿态词（仰卧/跪坐/立/站）= 已落位静止，无需朝向
-                # 仅「潜伏/半身探出/破水/举刀/出剑」等动作态需要写朝向。
+                # 威胁源即使处于踞蹲/站立等静态姿态，也仍需要明确朝向目标；
+                # 图片模型无法从「踞蹲举刃」推断刀尖应该指向谁。
                 if _has_threat_word(desc) and "侧身朝目标" not in desc:
-                    if not _has_orientation_word(desc) and not _has_static_pose_word(desc):
+                    if not _has_orientation_word(desc):
                         # 在末尾追加朝向锚（如果 desc 已有标点，先剥再加）
                         if desc.endswith(("。", ".", "！", "!", "？", "?")):
                             desc = desc + "威胁源侧身朝目标，紧盯目标。"

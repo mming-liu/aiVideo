@@ -17,6 +17,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from .base import Constraint
 from .types import RepairRecord, Severity
+from shared.frame_spec import derive_char_layout
 
 
 class CharLayoutSyncConstraint(Constraint):
@@ -35,6 +36,19 @@ class CharLayoutSyncConstraint(Constraint):
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
             layout = shot.get("char_layout")
             if not isinstance(layout, list) or not layout:
+                derived = derive_char_layout(shot)
+                if derived:
+                    shot["char_layout"] = derived
+                    repairs.append(
+                        RepairRecord(
+                            constraint_name=self.name,
+                            shot_index=None if is_hook else shot.get("index", idx),
+                            action="backfill",
+                            target="char_layout",
+                            before="[]",
+                            after=f"{len(derived)} 个角色",
+                        )
+                    )
                 continue
             text = " ".join([
                 shot.get("prompt", ""),

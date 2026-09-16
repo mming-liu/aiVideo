@@ -244,6 +244,15 @@ def main():
     with open(script_path, "r", encoding="utf-8") as f:
         script = json.load(f)
 
+    # Step02b owns video-prompt validation. Seedance-specific duration/motion/
+    # camera/transition checks run on the actual assembled video prompt.
+    try:
+        from step02_video_gen.video_prompt_quality import collect_video_prompt_quality
+        _vq = collect_video_prompt_quality(script)
+        logger.info(f"[VIDEO-QA] warnings: {_vq.get("warning_count", 0)}")
+    except Exception as e:
+        logger.warn(f"[VIDEO-QA] video prompt quality gate failed: {e}")
+
     failed = asyncio.run(gen_all_videos(
         script, work_dir, script_path,
         only_indices=only_indices, force=args.force,

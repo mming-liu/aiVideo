@@ -19,6 +19,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from step01_script_gen.climax_words import KEYWORD_SYNONYMS, climax_words_for_gap
+from step01_script_gen.prompt_semantic.registry import COLLECTIVE_NAMES
 
 # ============================================================================
 # 台词定位（v6.63.1 自 main.py 下沉：constraints 层需复用，反向 import main
@@ -321,7 +322,12 @@ def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
     missing_anchor_shots = []
 
     # 获取脚本中定义的角色名
-    defined_characters = [c.get("identifier", "") for c in script.get("characters", []) if c.get("identifier")]
+    _collective = set(COLLECTIVE_NAMES)
+    defined_characters = [
+        c.get("identifier", "")
+        for c in script.get("characters", [])
+        if c.get("identifier") and c.get("identifier") not in _collective
+    ]
 
     for shot in shots:
         prompt = shot.get("prompt", "")
@@ -582,6 +588,45 @@ def validate_script_gap(script: dict, novel_text: str) -> dict:
         },
         "overall_pass": status == "pass" and not has_messages,
     }
+
+
+_GAP_SOFT_WARNING_MARKERS = (
+    "缺少 [角色名: 特征] 格式的锚点",
+)
+
+
+def gap_needs_full_regen(validation: dict) -> bool:
+    """GAP 失败是否必须走整稿重生.
+
+    09-15 chapter_001 实测：100 分候选的 GAP 只有「Prompt 缺少角色特征锚点」
+    一条 warning，无低覆盖镜头、已有 >=3 个高潮镜；旧逻辑仍整稿重生 216s，
+    改差后又触发 180s 定向修复。角色锚点属于下游确定性约束可修复项，不应
+    占用整稿重生预算。只有结构缺口（零/不足高潮、低覆盖、台词缺口或其他
+    非软告警）才返回 True。
+    """
+    if validation.get("overall_pass"):
+        return False
+    if validation.get("low_coverage_shots"):
+        return True
+    dist = validation.get("distribution") or {}
+    if not dist.get("has_climax_coverage"):
+        return True
+    try:
+        if int(dist.get("climax_shots", 0) or 0) < 3:
+            return True
+    except (TypeError, ValueError):
+        return True
+    messages = [
+        str(m).strip()
+        for m in (dist.get("messages") or [])
+        if str(m).strip()
+    ]
+    if not messages:
+        return True
+    return any(
+        not any(marker in message for marker in _GAP_SOFT_WARNING_MARKERS)
+        for message in messages
+    )
 
 
 # ========================================================================

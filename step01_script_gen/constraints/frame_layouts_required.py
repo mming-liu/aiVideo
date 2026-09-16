@@ -16,6 +16,24 @@ from .base import Constraint
 from .types import RepairRecord, Severity
 
 
+_EMPTY_SCENE_MARKERS = ("空镜", "空景", "环境", "无人物", "no people", "无人")
+
+
+def _is_explicit_empty_scene(shot: dict, frame_layouts: dict) -> bool:
+    """空镜是 frame_layouts 为空的合法场景，不应按“漏角色条目”报警."""
+    subject = str(shot.get("main_subject") or shot.get("prompt") or "")
+    if not any(marker in subject for marker in _EMPTY_SCENE_MARKERS):
+        return False
+    for key in ("ff", "lf", "kfs"):
+        value = frame_layouts.get(key)
+        if key == "kfs":
+            if isinstance(value, list) and any(isinstance(bucket, list) and bucket for bucket in value):
+                return False
+        elif isinstance(value, list) and value:
+            return False
+    return True
+
+
 class FrameLayoutsRequiredConstraint(Constraint):
     """frame_layouts 必填校验（warning-only）.
 
@@ -48,6 +66,8 @@ class FrameLayoutsRequiredConstraint(Constraint):
                     target="frame_layouts",
                     detail=f"shot {idx} 缺 frame_layouts 字段（应至少含 ff/lf/kfs）。",
                 ))
+                continue
+            if _is_explicit_empty_scene(shot, fl):
                 continue
             # ff/lf 至少 1 条
             for sub in ("ff", "lf"):
