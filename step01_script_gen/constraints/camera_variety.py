@@ -124,34 +124,29 @@ class CameraVarietyConstraint(Constraint):
             if not isinstance(s, dict):
                 continue
             prompt = s.get("prompt", "") or ""
-            cnt = sum(1 for w in movement_words if w in prompt)
-            if cnt >= 2:
+            prompt = s.get("prompt", "") or ""
+            cam_now = str(s.get("camera_movement") or "").strip()
+            if not cam_now:
+                cam_now = next((w for w in movement_words if w in prompt), "")
+                if cam_now:
+                    s["camera_movement"] = cam_now
+            if cam_now:
                 continue
             for label, tail, predicate in _CAMERA_BY_SHOT_ROLE:
                 if not predicate(s):
                     continue
-                # 已含静态标记 → 先去掉再加
-                if any(
-                    m in prompt
-                    for m in ("固定机位", "静止", "不动", "静态", "锁机位", "定格")
-                ):
-                    prompt = _STATIC_MARKERS_RE.sub("", prompt)
-                    s["prompt"] = prompt
-                # 已含本运镜词 → 跳过
-                if any(w in prompt for w in movement_words):
-                    break
-                before = prompt
-                s["prompt"] = prompt.rstrip("。") + tail
+                cam_value = tail.lstrip("。 ")
+                before = cam_now
+                s["camera_movement"] = cam_value
                 repairs.append(
                     RepairRecord(
                         constraint_name=self.name,
                         shot_index=s.get("index"),
-                        action="append",
-                        target="prompt",
+                        action="set_field",
+                        target="camera_movement",
                         before=before,
-                        after=s["prompt"],
+                        after=cam_value,
                     )
                 )
-                prompt = s["prompt"]
                 break
         return repairs

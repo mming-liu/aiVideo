@@ -6,6 +6,14 @@
 
 ## 硬约束：见 system.md §1（A-K）
 
+## 字段职责（最高优先级）
+- prompt：仅图片构图与画面事实：主体、角色外观、姿态、位置、道具、光位。禁止写运镜、转场、时长节奏、视频防崩句、模型参数或 negative prompt。
+- camera_movement：只在这里写运镜。
+- clip_transition：只在这里写转场与转场时长。
+- motion_desc：写视频动作与时间分段。
+- audio_cue：写声音、对白和音效。
+- Step02b 会把 ff_desc + motion_desc + lf_desc + camera_movement 组装成最终视频 prompt；clip_transition / fx_effect 不进入视频 prompt（clip_transition 在 Step04 合并时转成 xfade 转场）。
+
 ## 业务规则（5 条）
 1. 写镜原则：每镜只承载一个核心动作/情绪转折；动作链必须**拆多镜**用 clip_transition=硬切0.2s 拼接，禁拉长单镜
 2. 时长分配：对话镜 6-8s / 动作/打斗/空镜 3-5s / 过渡 4-6s / 末镜 ≥ 4s
@@ -82,7 +90,7 @@
       "scene": "物理地点（与原文事件一致）",
       "location": "物理地点",
       "main_subject": "画面主体",
-      "prompt": "【画面描述 + 镜头景别 + 光影色调 + 运镜】\n【必须以角色外貌描述开头（如'剑眉星目身穿白袍的杨旭...'）】\n【打斗镜铁律：每镜只写1个核心动作（2-3s），连贯招式靠短镜快切】",
+      "prompt": "【静态画面描述 + 角色外观/姿态/构图 + 光影色调】\n【禁写运镜/转场/时长/视频防崩句；这些分别写 camera_movement、clip_transition 和 motion_desc】",
       "motion_desc": "动作描述（按时间段或单动作）",
       "ff_desc": "动作前一刻静态定格（≤120 字符，禁多动作/时间推进）",
       "lf_desc": "动作结束后定格（必填、含 ff 全部角色、姿态显著不同）",

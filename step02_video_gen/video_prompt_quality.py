@@ -32,7 +32,8 @@ _MOVEMENT_WORDS = (
 
 def collect_video_prompt_quality(script: dict) -> dict:
     """Build video prompts and return/write non-blocking video QA report."""
-    from step02_video_gen.prompt_builder import _build_prompt
+    from step02_video_gen.prompt_builder import _build_prompt, _build_seedance_concise_prompt
+    from shared.model_caps import active_video_is_seedance
 
     work = copy.deepcopy(script)
     shots = list(work.get("shots") or [])
@@ -48,7 +49,15 @@ def collect_video_prompt_quality(script: dict) -> dict:
             continue
         idx = shot.get("index", 0)
         try:
-            prompt = _build_prompt(shot, work, mode="A")
+            if active_video_is_seedance():
+                prompt = _build_seedance_concise_prompt(shot)
+                if prompt_cap:
+                    from _video_gen.volcengine_provider import _seedance_compress_prompt
+                    prompt = _seedance_compress_prompt(
+                        prompt, max_chars=max(200, prompt_cap - 20)
+                    )
+            else:
+                prompt = _build_prompt(shot, work, mode="A")
         except Exception as exc:
             warnings.append({"category": "video_prompt_build", "shot": idx,
                              "message": str(exc)})

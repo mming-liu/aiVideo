@@ -3716,7 +3716,17 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
     known = {c.get("identifier") for c in (characters or []) if c.get("identifier") and c.get("identifier") not in set(COLLECTIVE_NAMES)}
     # Plan A（2026-08-14）：hook 同为 index=0 的镜头，必须一并检查站位蓝图
     targets = list(shots) + ([hook] if hook and isinstance(hook, dict) else [])
-    _static_staging = ("仰卧", "仰面", "躺", "卧", "跪坐", "跪", "坐", "蹲", "趴", "俯卧", "蜷缩", "缩身", "缩在", "后倾", "伏身", "站立", "站", "跃起")
+    _static_staging = (
+        "仰卧", "仰面", "躺", "卧", "跪坐", "跪", "坐", "蹲", "趴", "俯卧",
+        "蜷缩", "缩身", "缩在", "后倾", "伏身", "站立", "站", "跃起",
+        # v6.73: facing is frequently populated with an action/pose phrase by
+        # the model.  It is a schema-role mismatch, not a missing direction;
+        # demanding 面向/背对/侧身 here created false VisualRisk blockers.
+        "俯身", "弯腰", "躬身", "驾辕", "牵牛", "行走", "探出", "探身",
+        "探水", "高举", "举刀", "举匕首", "举剑", "扬刀", "挥刀",
+        "拱手", "抱拳", "伸手", "抬手", "低头", "抬头", "回头",
+        "侧头", "仰头",
+    )
     for shot in targets:
         idx = shot.get("index", "?")
         label = "钩子镜头(index=0)" if (hook and shot is hook) else f"镜头{idx}"
@@ -3771,7 +3781,9 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
                     hint = "（画左/画右/画中/前景/中景/后景），规则51"
                 warnings.append(
                     f"{label}: {name} 站位「{pos}」缺空间词{hint}")
-            if facing and not is_valid_facing(facing) and not any(w in facing for w in _static_staging):
+            if (facing and not is_valid_facing(facing)
+                    and not any(w in facing for w in _static_staging)
+                    and name not in set(COLLECTIVE_NAMES)):
                 warnings.append(
                     f"{label}: {name} 朝向「{facing}」缺朝向词"
                     f"（面向/背对/侧身/正对），规则51")
@@ -6324,6 +6336,47 @@ def _extract_state_markers(text: str) -> dict:
     return markers
 
 
+def _extract_named_poses(text: str, shot: dict) -> dict[str, str]:
+    """Extract pose words only when they occur in the same clause as a known role.
+
+    The legacy generic ``poses["sitting"]/["reclining"]`` markers merge all
+    characters in a shot.  A perfectly valid frame such as "杨旭仰卧，听香跪坐"
+    was therefore reported as the same character falling back to sitting.
+    """
+    if not text or not isinstance(shot, dict):
+        return {}
+    names: list[str] = []
+    for layout_key in ("frame_layouts", "char_layout"):
+        layout = shot.get(layout_key)
+        if isinstance(layout, dict):
+            buckets = []
+            for key in ("ff", "lf"):
+                buckets.extend(layout.get(key) or [])
+            layout = buckets
+        if isinstance(layout, list):
+            for item in layout:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip()
+                if name and name not in names:
+                    names.append(name)
+    if not names:
+        return {}
+    out: dict[str, str] = {}
+    clauses = re.split(r"[，。；、]", text)
+    for name in names:
+        for clause in clauses:
+            if name not in clause:
+                continue
+            for pose in (*_DOWN_POSES, *_SITTING_POSES, *_UPRIGHT_POSES):
+                if pose in clause:
+                    out[name] = pose
+                    break
+            if name in out:
+                break
+    return out
+
+
 def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict:
     """v6.31 关键帧时序一致性检查（warning-only）.
 
@@ -6467,15 +6520,20 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
                     f"镜头{label} 刺客状态跳变：kf 末尾 t={last_tr:.1f} 刺客已出水/破水 → LF 刺客「潜伏/黑影」凭空消失（中间缺「倒纵入水/没入」过渡）。"
                     f"建议 LF 写「刺客已没入水中/倒纵入水」明示消失方式。"
                 )
-            # 通用化（v6.62）：任意角色"躺下→坐/站"都视为致命伤持续违反
-            kf_victim_laying = _find_char_with_pose(last_m["poses"], _DOWN_POSES)
-            lf_victim_sitting = _find_char_with_pose(lf_m["poses"], _SITTING_POSES)
-            if kf_victim_laying and lf_victim_sitting and kf_victim_laying == lf_victim_sitting:
-                warnings.append(
-                    f"镜头{label} {kf_victim_laying}姿态回退：kf 末尾 t={last_tr:.1f} {kf_victim_laying}「{last_m['poses'][kf_victim_laying]}」"
-                    f"→ LF {lf_victim_sitting}「{lf_m['poses'][lf_victim_sitting]}」，违反致命伤持续规则（一旦倒下 LF 必须保持）。"
-                    f"建议 LF 写「{kf_victim_laying}仰倒/躺于地」明示终态。"
-                )
+            # 通用化（v6.62）：任意角色"躺下→坐/站"都视为致命伤持续违反。
+            # v6.73: compare per-character clauses; a multi-person shot where
+            # victim A lies down and extra B sits is not a rollback.
+            kf_named = _extract_named_poses(mid_kfs[-1][1], s)
+            lf_named = _extract_named_poses(lf_text, s)
+            for _name, _kf_pose in kf_named.items():
+                _lf_pose = lf_named.get(_name, "")
+                if _kf_pose in _DOWN_POSES and _lf_pose in _SITTING_POSES:
+                    warnings.append(
+                        f"镜头{label} {_name}姿态回退：kf 末尾 t={last_tr:.1f} {_name}「{_kf_pose}」"
+                        f"→ LF {_name}「{_lf_pose}」，违反致命伤持续规则（一旦倒下 LF 必须保持）。"
+                        f"建议 LF 写「{_name}仰倒/躺于地」明示终态。"
+                    )
+                    break
 
         # 5. v6.32 角色出现/消失时序合理性
         #    FF + KFs + LF 必须含连贯的角色链——刺客不能凭空出现/消失

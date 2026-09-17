@@ -221,6 +221,16 @@ def main():
     work_dir = wd()
 
     logger = get_logger(chapter_dir() / "step02a.log", console_level="INFO")
+    # Step02a owns image-prompt validation. Seedream/Qwen image constraints
+    # are checked against the image fields before any frame generation.
+    try:
+        from step02a_frame_gen.image_prompt_quality import collect_image_prompt_quality
+        with open(script_path, "r", encoding="utf-8") as _sf:
+            _script_for_qa = json.load(_sf)
+        _iq = collect_image_prompt_quality(_script_for_qa)
+        logger.info(f"[IMAGE-QA] warnings: {_iq.get("warning_count", 0)}")
+    except Exception as e:
+        logger.warn(f"[IMAGE-QA] image prompt quality gate failed: {e}")
 
     if not script_path.exists():
         logger.error(f"[ERROR] script not found: {script_path}")

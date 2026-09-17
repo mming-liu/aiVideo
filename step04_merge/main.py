@@ -390,7 +390,10 @@ def main():
     valid_shots.append(shot)
 
   if missing_idxs:
-    _logger.warn(f"[WARN] Skipped {len(missing_idxs)} missing shots: {missing_idxs}")
+    raise FileNotFoundError(
+      f"缺少 {len(missing_idxs)} 个分镜视频（shot index: {missing_idxs}），"
+      "停止合并，避免成片丢失剧情。请先完成 step02b。"
+    )
   if not clips:
     raise FileNotFoundError(f"No valid video clips. Please run step02 first")
 
@@ -471,9 +474,11 @@ def main():
       if _tp.exists() and _tp.stat().st_size > 10240:
         tts_paths.append(str(_tp))
         n_found += 1
-      else:
+      elif str(s.get("narration_segment", "")).strip():
         tts_paths.append(None)
         missing_tts.append(s.get('index', 0))
+      else:
+        tts_paths.append(None)
     if missing_tts:
       # 2026-09-13 审计修复：tts_mix 下「需要 TTS 的镜头缺失」默认判定为失败——
       # 此前只记数量继续成片，缺失镜头静默保留视频原声（对白可能完全丢失）。

@@ -9,6 +9,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from shared.kf_time import get_kf_t_sec
+from shared.utils.text import text_integrity_errors
 from .base import Constraint
 from .types import RepairRecord, Severity
 
@@ -37,6 +38,7 @@ class FinalQualityNormalizerConstraint(Constraint):
             repairs.extend(self._early_blood_transition(shot, sid))
             repairs.extend(self._normalize_weapon_holder(shot, sid))
             repairs.extend(self._trim_ff_desc(shot, sid))
+            repairs.extend(self._trim_lf_desc(shot, sid))
             repairs.extend(self._fix_boat_position(shot, sid))
         return repairs
 
@@ -195,14 +197,18 @@ class FinalQualityNormalizerConstraint(Constraint):
             text = shot.get(field)
             if not isinstance(text, str) or ("握刃" not in text and "刀尖" not in text):
                 continue
-            weapon = "短刃" if "短刃" in text else ("匕首" if "匕首" in text else "刀")
-            new_text = text
-            if "刀尖" in new_text and "握着刀" not in new_text:
-                holder = "神秘人握着刀" if "神秘人" in new_text else "画外伸入一只握着刀的手"
-                new_text = new_text.replace("刀尖", f"{holder}，刀尖", 1)
+            weapon = "匕首" if "匕首" in text else ("短刃" if "短刃" in text else "刀")
+            new_text = text.replace("握刃", f"握着{weapon}")
+            new_text = new_text.replace("着匕首的手", "神秘人握着匕首的手")
             new_text = new_text.replace("匕首刀尖抵近", "神秘人握着匕首，刀尖抵近")
             new_text = new_text.replace("匕首刺中", "神秘人握着匕首，刺中")
-            new_text = new_text.replace("握刃", f"握着{weapon}")
+            if "握刃" not in text and "刀尖" in new_text and "握着" not in new_text:
+                holder = "神秘人握着刀" if "神秘人" in new_text else "画外伸入一只握着刀的手"
+                new_text = new_text.replace("刀尖", f"{holder}，刀尖", 1)
+            # Collapse stacked holder prefixes produced by older passes:
+            # 神秘人握神秘人握着刀 / 神秘人握握着刀 -> 神秘人握着刀
+            new_text = new_text.replace("神秘人握神秘人", "神秘人")
+            new_text = new_text.replace("神秘人握握着", "神秘人握着")
             if new_text != text:
                 shot[field] = new_text
                 repairs.append(RepairRecord(
@@ -220,14 +226,18 @@ class FinalQualityNormalizerConstraint(Constraint):
             text = kf.get("desc")
             if not isinstance(text, str) or ("握刃" not in text and "刀尖" not in text):
                 continue
-            weapon = "短刃" if "短刃" in text else ("匕首" if "匕首" in text else "刀")
-            new_text = text
-            if "刀尖" in new_text and "握着刀" not in new_text:
-                holder = "神秘人握着刀" if "神秘人" in new_text else "画外伸入一只握着刀的手"
-                new_text = new_text.replace("刀尖", f"{holder}，刀尖", 1)
+            weapon = "匕首" if "匕首" in text else ("短刃" if "短刃" in text else "刀")
+            new_text = text.replace("握刃", f"握着{weapon}")
+            new_text = new_text.replace("着匕首的手", "神秘人握着匕首的手")
             new_text = new_text.replace("匕首刀尖抵近", "神秘人握着匕首，刀尖抵近")
             new_text = new_text.replace("匕首刺中", "神秘人握着匕首，刺中")
-            new_text = new_text.replace("握刃", f"握着{weapon}")
+            if "握刃" not in text and "刀尖" in new_text and "握着" not in new_text:
+                holder = "神秘人握着刀" if "神秘人" in new_text else "画外伸入一只握着刀的手"
+                new_text = new_text.replace("刀尖", f"{holder}，刀尖", 1)
+            # Collapse stacked holder prefixes produced by older passes:
+            # 神秘人握神秘人握着刀 / 神秘人握握着刀 -> 神秘人握着刀
+            new_text = new_text.replace("神秘人握神秘人", "神秘人")
+            new_text = new_text.replace("神秘人握握着", "神秘人握着")
             if new_text != text:
                 kf["desc"] = new_text
                 repairs.append(RepairRecord(
@@ -255,9 +265,14 @@ class FinalQualityNormalizerConstraint(Constraint):
             head, tail = stripped.rsplit("。", 1)
             if not tail.strip():
                 break
-            current = head + "。"
-        if len(current) > 120:
-            current = current[:119].rstrip("，, ") + "。"
+            candidate = head + "。"
+            # Never hard-cut at an arbitrary character. A broken parenthesis
+            # or dangling size token is worse than an over-budget description:
+            # the final quality gate can reject the latter, while downstream
+            # image/video prompts cannot reliably recover from the former.
+            if text_integrity_errors(candidate):
+                break
+            current = candidate
         if current == original:
             return []
         shot["ff_desc"] = current
@@ -296,4 +311,35 @@ class FinalQualityNormalizerConstraint(Constraint):
             before=prompt[-80:],
             after=new_prompt[-80:],
             detail="船只承重面位置补锚",
+        )]
+
+    @staticmethod
+    def _trim_lf_desc(shot: dict, sid) -> list[RepairRecord]:
+        text = shot.get("lf_desc")
+        if not isinstance(text, str) or len(text) <= 120:
+            return []
+        original = text
+        current = text
+        while len(current) > 120 and "。" in current:
+            stripped = current.rstrip("。")
+            if "。" not in stripped:
+                break
+            head, tail = stripped.rsplit("。", 1)
+            if not tail.strip():
+                break
+            candidate = head + "。"
+            if text_integrity_errors(candidate):
+                break
+            current = candidate
+        if current == original:
+            return []
+        shot["lf_desc"] = current
+        return [RepairRecord(
+            constraint_name="final_quality_normalizer",
+            shot_index=sid,
+            action="rewrite",
+            target="lf_desc",
+            before=original[-80:],
+            after=current[-80:],
+            detail="lf_desc 长度裁剪",
         )]

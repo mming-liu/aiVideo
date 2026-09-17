@@ -87,6 +87,86 @@ _EYE_OPEN_WORDS = ("双眼圆睁", "双目圆睁", "双目暴睁", "瞪", "睁�
                    "双眼半阖", "双目半阖", "眼半阖", "眼睑半阖",
                    "半睁", "微睁", "眼睑微张", "半闭半睁")
 
+# v6.73: "仰卧" alone is not a death/unconscious signal.  Apply the rigid
+# head-state suffix only when the shot itself carries a death/injury signal,
+# otherwise a living character resting or fishing is turned into a corpse.
+_HEAD_FIX_CONTEXT_WORDS = (
+    "刺中", "刺入", "中刀", "中剑", "刀伤", "剑伤", "伤口", "伤处",
+    "心口", "胸口", "暗红", "洇痕", "血痕", "血迹", "血染", "流血",
+    "断气", "身亡", "尸", "死", "昏迷", "气绝", "失去意识", "毙命",
+    "杀死", "击杀", "倒地",
+)
+_THREAT_WORDS = ("刺客", "神秘人", "黑衣人", "凶手")
+_POST_ATTACK_WORDS = ("没入水中", "遁走", "逃走", "已死", "尸体", "断气", "气绝")
+
+
+def _head_fix_context_ok(shot: dict | None, text: str) -> bool:
+    """Whether a rigid "closed eyes / stiff neck" suffix is semantically safe.
+
+    Direct helper tests may pass ``shot=None`` and retain the historical
+    behavior.  Real constraint runs always pass the whole shot so a living
+    "仰卧吹箫/饮酒" description is not converted into a corpse pose.
+    """
+    if not isinstance(shot, dict):
+        return True
+    parts = [text]
+    for _field in ("prompt", "ff_desc", "lf_desc", "motion_desc", "main_subject",
+                   "narration_segment", "subtitle"):
+        _v = shot.get(_field)
+        if isinstance(_v, str) and _v:
+            parts.append(_v)
+    combined = " ".join(parts)
+    if any(_w in combined for _w in _HEAD_FIX_CONTEXT_WORDS):
+        return True
+    # Post-attack threat handoff: assassin has already submerged / fled.
+    if any(_w in combined for _w in _THREAT_WORDS) and any(
+        _w in combined for _w in _POST_ATTACK_WORDS
+    ):
+        return True
+    return False
+
+
+_HEAD_STATE_FRAGMENTS = (
+    "，仰面朝上双目紧闭，头颈僵直不侧转",
+    "。仰面朝上双目紧闭，头颈僵直不侧转",
+    "仰面朝上双目紧闭，头颈僵直不侧转，",
+    "仰面朝上双目紧闭，头颈僵直不侧转。",
+    "仰面朝上双目紧闭，头颈僵直不侧转",
+    "，仰面朝上双目紧闭",
+    "仰面朝上双目紧闭，",
+    "仰面朝上双目紧闭",
+)
+
+
+def _remove_invalid_head_state(text: str, shot: dict | None) -> str:
+    """Remove a previously injected corpse-state fragment when it is invalid.
+
+    The gate above prevents *new* bad injections.  Historical snapshots and
+    model-authored fields may already contain the suffix, so the same rule
+    must be able to undo it before they are promoted back to production.
+    """
+    if not any(_frag in text for _frag in _HEAD_STATE_FRAGMENTS):
+        return text
+    has_open_eye = any(_w in text for _w in _EYE_OPEN_WORDS)
+    if _head_fix_context_ok(shot, text) and not has_open_eye:
+        return text
+    out = text
+    for _frag in _HEAD_STATE_FRAGMENTS:
+        out = out.replace(_frag, "")
+    out = re.sub(r"[，,]{2,}", "，", out)
+    out = re.sub(r"[。]{2,}", "。", out)
+    return out.strip("，,。 ")
+
+
+_BOAT_SPEC_RE = re.compile(
+    r"(?:无篷)?(?:舴艋舟|小舟|木舟)[（(][^）)]{0,48}(?:长|宽|高|可容)"
+)
+
+
+def _has_boat_spec(text: str) -> bool:
+    """Return True when this field already carries one concrete boat spec."""
+    return bool(_BOAT_SPEC_RE.search(text or ""))
+
 
 # v6.50（08-29）shot13.5 变体双守卫：
 # 1) 否定前缀——「并未昏迷/不曾熟睡」说的是“没躺”，不能追加头固定
@@ -600,20 +680,32 @@ class V643PromptEnforcementConstraint(Constraint):
             _repl = boat_repl
             if _repl.count("（") != _repl.count("）") or _repl.count("(") != _repl.count(")"):
                 _repl = _repl.split("（")[0].split("(")[0].rstrip("，, ") or "无篷舴艋舟"
+            _seen_boat_spec = _has_boat_spec(out)
             for pat in _BOAT_PATTERNS:
                 # v6.62（09-06）防叠：替换点紧邻前缀已是「舴艋/无篷/窄身」形制词时
                 # 不整词替换（原文「舴艋小舟」→「舴艋无篷舴艋舟」重复实测）——
                 # 只补尺寸段（含闭合括号），形制词由前缀 + 原文剩余字构成。
                 def _sub_guard(m: "re.Match[str]") -> str:
+                    nonlocal _seen_boat_spec
                     head = out[max(0, m.start() - 2): m.start()]
                     if any(w in head for w in ("舴艋", "无篷", "窄身")):
                         _i = _repl.find("（")
                         return _repl[_i:] if _i >= 0 else ""  # 「（长5.5米…，可容N人）」
+                    # One concrete spec per field is enough.  re.sub invokes
+                    # this guard for every match before assigning `out`, so a
+                    # plain _has_boat_spec(out) check would still duplicate
+                    # when two generic 小舟 exist in the same pass.
+                    if _seen_boat_spec:
+                        return "无篷舴艋舟"
+                    _seen_boat_spec = True
                     return _repl
                 out = pat.sub(_sub_guard, out)
         # 规则 2：仰卧 + 头部固定
-        if _rule_enabled("HEAD_FIX") and _needs_head_fix(out):
-            out = _append_head_fix(out)
+        # 只允许死亡/受伤/昏迷上下文；活人仰卧吹箫、饮酒、仰望不得被修成尸体态。
+        if _rule_enabled("HEAD_FIX"):
+            out = _remove_invalid_head_state(out, shot)
+            if _needs_head_fix(out) and _head_fix_context_ok(shot, out):
+                out = _append_head_fix(out)
         # 规则 4：抽象方位 → 具象（按本镜 location 场景 anchor 动态生成）
         if _rule_enabled("ABSTRACT_ANCHOR") and anchors:
             replacements = _make_pattern_replacements(char_names, anchors, char_positions)

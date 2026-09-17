@@ -27,7 +27,7 @@ class OvershoulderConsistencyConstraint(Constraint):
 
     name = "overshoulder_consistency"
     severity = Severity.WARN
-    fields = ("camera_movement", "prompt")
+    fields = ("camera_movement",)
     skip_hook = True
 
     def apply(self, ctx) -> list[RepairRecord]:
@@ -56,9 +56,9 @@ class OvershoulderConsistencyConstraint(Constraint):
             if _OVERSHOULDER in camera:
                 continue
             middle["camera_movement"] = "过肩镜头"
-            prompt = str(middle.get("prompt") or "")
-            if _OVERSHOULDER not in prompt:
-                middle["prompt"] = prompt.rstrip("。. ") + "，过肩镜头。"
+
+
+
             repairs.append(
                 RepairRecord(
                     constraint_name=self.name,

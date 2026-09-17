@@ -12,6 +12,11 @@
 - keyframe 字段：stage (pre/approach/climax/react/exit/after) + t_sec (0 < t_sec < duration_sec)
 - 严格遵守 schema；缺字段 = 拒收
 
+## 字段职责（最高优先级）
+- `prompt` 只写静态画面事实：主体、角色外观/姿态/位置、道具、构图、光位。禁止写运镜、转场、时长、视频防崩句、模型参数、negative prompt。
+- `camera_movement` 写运镜；`clip_transition` 写转场；`motion_desc` 写视频动作与时间分段；`audio_cue` 写声音。
+- Seedream/Qwen 图片参数只在 Step02a 使用；Seedance/Wan 视频参数只在 Step02b 使用。
+
 ## 1. ★ 硬约束（10 条，违反 = 全章拒收重生成）
 
 **A. 总时长**：正片 SUM(duration_sec) **60-90s**（不含钩子，钩子另算），**规划目标 70-80s（按 ~75s 分配）**。**30s 不合法**。
@@ -23,7 +28,7 @@
 **G. 致命伤持续**：被刺后所有镜头（即使主体是刺客逃跑/听香反应）必须含伤处 anchor（如"心口白袍暗红洇痕"），不能完全消失。
 **H. 视线方位**：所有"看/盯/望/瞧"+人名必须带画方位（画左/画右/画上方/画下方）——"盯着她"/"望一眼星空"都不合格，写"盯向画左的听香"/"仰望画上方星空"。单人叙事镜视线可保持原文。**无视线状态豁免**：昏迷/双目紧闭/背对的角色 `gaze_target` 必须填「无」——「无」是合法值，给闭眼角色编视线目标 = QC 必败重抽（09-13 hook ff 杨旭双目紧闭 vs 视线锚三连耗尽根因）。
 **I. 服装色锚定**：出镜角色 ff_desc/prompt 必须重述服装色（每个出镜角色都要有，缺一不可）。
-**J. 空镜禁人物**：main_subject = 空镜/场景/环境时，prompt 禁止任何人物/轮廓/影子；ff_desc 必须强调"空无一人/无人/无人物"；负向提示词含 "禁止人物, no people, empty scene"。
+**J. 空镜禁人物**：main_subject = 空镜/场景/环境时，prompt 禁止任何人物/轮廓/影子；ff_desc 必须强调"空无一人/无人/无人物"；空镜 negative prompt 由下游生成层注入，不写进正向 prompt。
 **K. kf 字段值范围**：keyframe 数组的每项 `t_sec` 满足 **`0.05 ≤ t_sec ≤ 8.0`**（**单镜 ≤8s 硬规则**）。`stage` 必须是 6 值 enum 之一：pre/approach/climax/react/exit/after。**t_sec > 8.0 = 单镜拒收**。**典型 t_sec 范围**（按 shot.duration_sec 比例）：
 - 5s 镜：`t_sec` = 1.0 / 2.0 / 3.0 / 4.0（4 帧）
 - 6s 镜：`t_sec` = 1.2 / 2.4 / 3.6 / 4.8（4 帧）
@@ -51,7 +56,7 @@
 
 ## 4. 画面/运镜/转场/光位/招式
 
-运镜/转场/光位/招式从下方词库选，禁止自造新词。
+光位/招式属于画面字段；运镜只写 camera_movement，转场只写 clip_transition，禁止把运镜/转场塞进 prompt。
 
 ## 5. 末镜下集预告锚点
 
@@ -65,6 +70,6 @@
 - **frame_layouts 字段（v6.57+ per-frame spec 事实源）**：每镜必填 `{ff:[...], lf:[...], kfs:[[...]]}`，每项 `{name, on_screen, position, pose, gaze_target, props}` **6 字段全必填**。`on_screen` 决定 QC 期望人数：lf「神秘人已没入水中」→ 该角色 **on_screen=false**（否则 QC 互斥 bug）；空镜 = 三桶全 `[]`（**禁止**哨兵行如 `{"name":"空镜"}`）；`kfs` 与 `keyframes` 顺序一一对应（数组长度相等）
   - **props 语义铁律**：`props` 列的是**该帧时刻该角色实际手中持有/身上佩戴的道具**，不是角色标配/全镜通用道具。该帧散文含「X已脱手/滑落/倾倒/坠落/掉/放下」→ 该帧 props **不得含 X**，pose **不得含「握X/提X/执X/拿X/举X/持X」**
   - 正反例：① ff 散文写"酒壶已脱手、钓杆垂于水面"→ ff props=`[]`、pose 不含"握酒壶/执钓杆"（✅正确）；② ff 散文写"酒壶已脱手"但 ff props=`["酒壶"]`、pose="右手握酒壶"（❌违例，时间倒流）；③ kf2 散文写"酒壶倾倒在船板上"→ props=`[]`（酒壶不在手中，✅正确）
-- 防止画面崩：prompt 末尾追加 "画面稳定 · 不闪烁 · 不重影 · 不模糊 · 动作流畅自然 · 不卡顿"（选 3-5 个）
+- 画面防崩、风格前缀、negative prompt 由 Step02a/Step02b builder 注入；Step01 prompt 不写这些视频层约束。
 
 只输出纯 JSON，不要任何额外文字。

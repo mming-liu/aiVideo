@@ -228,7 +228,8 @@ def extract_source_dialogue(novel_text: str, tail_ratio: float = 0.5,
         ).strip()
         if not (4 <= len(line) <= 24):
             continue
-        if any(o in line for o in _ONOMATOPOEIA):
+        # 仅过滤整句拟声词；“啊……救命啊……”含语气词但仍是有效台词。
+        if line.strip("。！？，、…~～!?,. ") in _ONOMATOPOEIA:
             continue
         if line in seen:
             continue

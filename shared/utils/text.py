@@ -115,10 +115,54 @@ def strip_debug_markers(text: str) -> str:
             out.append(ch)
         text = "".join(out)
     text = re.sub(r"([，、。；：])[，、。；：]+", r"\1", text)
+    # Exact duplicate parenthetical fragments are almost always repair echoes
+    # (e.g. 「（黑影是独立物体…）」 repeated 3×).  Keep the first occurrence;
+    # do not fuzzy-match so legitimate repeated coordinates stay intact.
+    _seen_parens: set[str] = set()
+
+    def _dedup_paren(m):
+        phrase = m.group(0)
+        if phrase in _seen_parens:
+            return ""
+        _seen_parens.add(phrase)
+        return phrase
+
+    text = re.sub(r"[（(][^）)]{2,80}[）)]", _dedup_paren, text)
+    text = re.sub(r"([，、。；：])[，、。；：]+", r"\1", text)
     return text.strip("，、。；： ")
+
+
+def text_integrity_errors(text: str) -> list[str]:
+    """Return deterministic corruption markers for model-visible text.
+
+    This is intentionally structural, not semantic: line-level trimmers and
+    snapshot gates must never accept a broken parenthesis, dangling clause, or
+    repeated size token merely because it is short enough.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return []
+    stripped = text.rstrip()
+    errors: list[str] = []
+    if stripped.count("（") != stripped.count("）"):
+        errors.append("全角括号未闭合")
+    if stripped.count("(") != stripped.count(")"):
+        errors.append("半角括号未闭合")
+    if stripped.endswith(("，", ",", "、", "；", ";", "：", ":")):
+        errors.append("半句结尾")
+    if re.search(r"[（(][^）)]*$", stripped):
+        errors.append("括号内容截断")
+    if re.search(r"(?:长|宽|高)\d+(?:\.\d+)?米?$", stripped):
+        errors.append("尺寸描述截断")
+    if re.search(r"可容[\d０-９.\-－~～]+人?$", stripped):
+        errors.append("容量描述截断")
+    size_tokens = re.findall(r"(?:长|宽|高)\d+(?:\.\d+)?米", stripped)
+    if len(size_tokens) >= 3 and len(set(size_tokens)) <= 2:
+        errors.append("尺寸锚重复")
+    return errors
 
 
 __all__ = [
     "strip_spatial_anchors",
     "strip_debug_markers",
+    "text_integrity_errors",
 ]

@@ -78,8 +78,7 @@ class BridgeWordsConstraint(Constraint):
                 cb = (s.get("context_bridge", "") or "").strip()
                 if cb and any(w in cb for w in _BRIDGE_TRANSITION_WORDS):
                     continue
-                before_p = prompt
-                s["prompt"] = prompt.rstrip("。") + _BRIDGE_TAIL_PROMPT
+                before_cb = cb
                 if cb:
                     s["context_bridge"] = cb.rstrip("。") + "，" + _BRIDGE_TAIL_CONTEXT
                 else:
@@ -88,10 +87,14 @@ class BridgeWordsConstraint(Constraint):
                     RepairRecord(
                         constraint_name=self.name,
                         shot_index=s.get("index", idx),
-                        action="append",
-                        target="prompt",
-                        before=before_p,
-                        after=s["prompt"],
+                        action="set_field",
+                        target="context_bridge",
+                        before=before_cb,
+                        after=s.get("context_bridge", ""),
                     )
                 )
         return repairs
+
+    def _already_repaired(self, s: dict) -> bool:
+        text = str(s.get("prompt") or "") + " " + str(s.get("context_bridge") or "")
+        return any(w in text for w in _BRIDGE_TRANSITION_WORDS)

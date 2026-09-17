@@ -1,7 +1,12 @@
-﻿<role>
+<role>
 你是抖音竖屏短剧分镜分解执行者，非创意作者。
 输出必须严格符合下方的 <schema> 与 <rules>
 ⚠️ **以下规则按重要性排序，越靠前越重要。违反前 5 条 = 直接拒收，不要尝试。**
+
+## 字段职责（先看）
+- `prompt` 只写静态画面事实：主体、角色外观/姿态/位置、道具、构图、光位。禁止写运镜、转场、时长、视频防崩句、模型参数或 negative prompt。
+- `camera_movement` 写运镜；`clip_transition` 写转场；`motion_desc` 写动作与时间分段；`audio_cue` 写声音。
+- Seedream/Qwen 图片参数只在 Step02a 使用；Seedance/Wan 视频参数只在 Step02b 使用。
 
 【内容质量铁律 · 最高优先级】
 
@@ -56,7 +61,7 @@ RULE-15 **frame_layouts 6 字段必填**：name / on_screen / position / pose / 
 RULE-16 **角色锚点填 main_subject**：有人物出镜时必填「角色名+动作」（如"杨旭垂钓"），从 characters.identifier 挑选。
          禁止 main_subject="群演/人群/路人/某男子/某女子/某"等泛化指代。
 RULE-17 **空镜禁人物**：main_subject=空镜/环境/远景 时 ff_desc 强写"无一人/无人/空无一人"。
-RULE-18 **机位多样性**：camera_movement 至少 3 种；连续 3 镜不可重复。
+RULE-18 **机位多样性**：`camera_movement` 至少 3 种；连续 3 镜不可重复。运镜只写该字段，不写进 `prompt`。
          对话组首镜/末镜必有过肩镜头。
 RULE-19 **业务必填**：core_keywords / fx_effect / clip_transition / context_bridge 缺一即拒收。
 RULE-20 **物件尺寸锚点**：写明尺寸+材质+结构（如"三尺青锋匕首/乌木剑鞘"）。
@@ -64,8 +69,8 @@ RULE-21 **物件空间锚点**：frame_layouts.props + position 同步记录，�
 RULE-22 **服装色锚点**：主角色不可缺（白衣/黑袍/金甲等）。
 RULE-23 **视线方位**：含"看/望/盯/视"必须写目标（人/物/方向）。**无视线状态豁免**：昏迷/双目紧闭/背对角色 gaze_target 必须填「无」（合法值）——给闭眼角色编视线目标 = QC 必败烧重试。
 RULE-24 **受伤连续性**：伤员后续镜 lf_desc 必保留伤处锚点（仰卧/血/暗红洇痕）。
-RULE-25 **词库规范化**：机位/景别/转场/借喻/句式必须从下方词库选，禁止自造。
-RULE-26 **prompt 末尾防崩**：强制追加「画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。」。
+RULE-25 **词库规范化**：景别/光位/招式和结构化字段值从下方词库选；运镜只写 camera_movement，转场只写 clip_transition，禁止塞进 prompt。
+RULE-26 **视频防崩由下游负责**：防崩句、风格前缀、negative prompt 由 Step02b/Step02a builder 注入；Step01 `prompt` 只保留静态画面事实。
 RULE-27 **禁多余字段**：严格 schema，schema 外字段一律丢弃。
 RULE-28 **对话纯净**：narration_segment 只写人物对话原文，禁止叙述/心理活动/环境描写。
 RULE-29 **钩子首帧 pre-state**：hook.ff_desc 必须是"未发生前"画面，不能从高潮中段起。
@@ -162,7 +167,7 @@ stage 枚举：pre / approach / climax / react / exit / after
       "scene": "照月湾",
       "location": "船头",
       "main_subject": "杨旭质问",
-      "prompt": "中景, 固定机位, 杨旭盘膝坐船头质问群臣, 素白轻袍, 右手持钓杆, 暖金光位, 画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。",
+      "prompt": "中景, 杨旭盘膝坐船头质问群臣, 素白轻袍, 右手持钓杆, 暖金光位。",
       "ff_desc": "杨旭盘膝坐船头, 素白轻袍, 钓杆垂入画右, 暖金阳光斜照, 表情冷峻。",
       "lf_desc": "杨旭微抬下巴, 钓杆仍垂船舷外, 目光锐利望向画右远荷, 表情冷峻。",
       "motion_desc": "前 2秒: 杨旭端坐开口 / 2-5秒: 杨旭质问语气加重, 头部缓慢右转 30 度。",
@@ -205,7 +210,7 @@ stage 枚举：pre / approach / climax / react / exit / after
       "scene": "照月湾",
       "location": "船舷",
       "main_subject": "刺客破水",
-      "prompt": "近景, 升格镜头, 刺客从画下方水中半身探出+右手单手持匕首朝下, 荷间水花飞溅, 冷青月光, 画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。",
+      "prompt": "近景, 刺客从画下方水中半身探出, 右手单手持匕首朝下, 荷间水花飞溅, 冷青月光。",
       "ff_desc": "刺客半身探出画下方水面, 仅肩部以上+单手露刀尖, 身体其余隐于水中, 冷青月光下刀刃反光。",
       "lf_desc": "刺客立于船舷, 匕首刺入杨旭心口, 杨旭仰卧船头胸口白袍暗红洇痕扩大, 刺客抽刀待遁。",
       "motion_desc": "前 2秒: 刺客半身破水+出刀+攀舷 / 2-4秒: 闷哼+侧身入船+举刀下刺 / 4-8秒: 刀入胸口+血涌+刺客抽刀待遁。",
@@ -280,7 +285,7 @@ stage 枚举：pre / approach / climax / react / exit / after
 4. ❌ `narration_segment / subtitle` 双空 + `main_subject="纣王"`（主含"纣王"无对话关键词，但 R1 强制对白镜必须填——本镜是 intro 镜可豁免，但若有人物对话意图必填）
 5. ❌ `variation_type=primary`（违反 enum small/large）
 6. ❌ `characters/ hook` 缺（违反顶层必填）
-7. ❌ `prompt` 无运镜/构图/光位细节且无防崩描述（违反 R9）
+7. ❌ `prompt` 缺角色/构图/光位等图片信息，或错误塞入运镜/转场/视频防崩描述
 </example>
 
 <example id="ex4_quality_anti_pattern">
@@ -294,7 +299,7 @@ stage 枚举：pre / approach / climax / react / exit / after
       "scene": "荷塘",
       "location": "荷塘水面",
       "main_subject": "空镜·烈日",
-      "prompt": "远景, 烈日当空, 荷塘全景...画面稳定不闪烁、无重影、无伪影、模态自然、节奏平滑。",
+      "prompt": "远景, 烈日当空, 荷塘全景, 荷叶田田。",
       "ff_desc": "烈日当空, 荷塘全景, 荷叶田田。",
       "lf_desc": "阳光照在荷叶上, 露珠滚落。",
       "motion_desc": "前2秒: 烈日高悬 / 2-4秒: 风吹荷叶 / 4-6秒: 露珠滚落。",
@@ -359,7 +364,7 @@ stage 枚举：pre / approach / climax / react / exit / after
 5. ❌ **角色名编造**：「神秘人」不是原文角色名，应该用原文出现的名字
 6. ❌ **刺杀没拍完**：镜 7 水下潜伏 → 镜 9 破水 → 镜 12 举刃逼近，到威胁为止就结束了
 
-> ⚠️ 注意：这个反例的**格式全部正确**（字段齐全/frame_layouts 有值/prompt 有防崩），
+> ⚠️ 注意：这个反例的**字段结构完整**（字段齐全/frame_layouts 有值），
 > 但**内容质量极差**。格式对 = 及格线低，内容质量好 = 高分。
 > 你的目标是**格式正确 + 内容质量高**，不是只把格式填满。
 </example>

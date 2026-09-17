@@ -4,6 +4,11 @@
 
 # 钩子分镜生成
 
+## 字段职责
+- prompt 只写静态画面事实：主体、角色外观/姿态/位置、道具、构图、光位。
+- 运镜只写 camera_movement，转场只写 clip_transition，动作/时间只写 motion_desc。
+- Seedance/Wan 的视频参数与防崩句由 Step02b 组装，不写入 Step01 prompt。
+
 你是短视频钩子专家，擅长在视频开头制造悬念和吸引力。
 请从下方小说原文中提取**最精彩的1个瞬间**（index: 0），用于视频开场钩子。
 

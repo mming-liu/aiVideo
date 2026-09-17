@@ -54,6 +54,7 @@ from shared.paths import (
     subtitles_file,
 )
 from shared.constants import SCRIPT_PARSE_RETRIES, SCRIPT_PARSE_RETRY_SLEEP_SEC
+from shared.utils.text import text_integrity_errors
 CHAPTER_DIR = chapter_dir()
 OUTPUT_FILE = script_file()
 SCRIPT_FILE = OUTPUT_FILE
@@ -701,6 +702,7 @@ _QUALITY_BLOCKING_CATEGORIES = {
     "ff_lf_redundancy",
     "cross_shot_continuity",
     "ff_desc_length",
+    "text_integrity",
 }
 
 
@@ -711,6 +713,122 @@ _VIDEO_ONLY_CATEGORIES = {
     "focal_switch",
     "prompt_length_budget",
 }
+
+
+def _collect_text_integrity_issues(script: dict) -> list[str]:
+    """Deterministic structural integrity scan for model-visible fields."""
+    issues: list[str] = []
+    shots = list(script.get("shots") or [])
+    targets = [(f"镜头{shot.get('index', i + 1)}", shot) for i, shot in enumerate(shots)]
+    hook = script.get("hook")
+    if isinstance(hook, dict):
+        targets.append(("钩子镜头(index=0)", hook))
+    _fields = ("prompt", "ff_desc", "lf_desc", "motion_desc")
+    _injury_words = (
+        "刺中", "刺入", "中刀", "中剑", "心口", "胸口", "暗红", "洇痕",
+        "血痕", "血迹", "血染", "伤口", "断气", "身亡", "尸体", "昏迷",
+    )
+    _open_eye_words = (
+        "双目圆睁", "双眼圆睁", "双目大睁", "双眼大睁", "双目暴睁", "双眼暴睁",
+    )
+    for label, shot in targets:
+        if not isinstance(shot, dict):
+            continue
+        # Context is shot-level.  A body-state phrase in ff_desc is valid when
+        # an adjacent field such as lf_desc already records the wound.
+        shot_text = " ".join(
+            str(shot.get(f) or "") for f in (
+                *_fields, "main_subject", "narration_segment", "subtitle"
+            )
+        )
+        for field in _fields:
+            text = shot.get(field)
+            if not isinstance(text, str) or not text.strip():
+                continue
+            for err in text_integrity_errors(text):
+                issues.append(f"{label}.{field}: {err}")
+            if (("双目紧闭" in text or "头颈僵直" in text)
+                    and any(w in text for w in _open_eye_words)):
+                issues.append(f"{label}.{field}: 闭眼/睁眼状态矛盾")
+            if "仰面朝上双目紧闭" in text and not any(
+                w in shot_text for w in _injury_words
+            ):
+                issues.append(f"{label}.{field}: 无伤情上下文却写死亡头态")
+    return issues
+
+
+def _candidate_quality_summary(script: dict, novel_text: str = "") -> dict:
+    """Run the same checklist categories used by the final Step01 gate.
+
+    Candidate ranking/early-stop must not treat a high raw story score as
+    sufficient when the same candidate carries blocking visual risks or
+    structurally corrupted prompt text.
+    """
+    try:
+        if novel_text:
+            _set_novel_text(novel_text)
+        import io as _io
+        import contextlib as _ctx
+        _buf = _io.StringIO()
+        with _ctx.redirect_stdout(_buf):
+            results = _run_prompt_checklist(script).get("results", {})
+    except Exception:
+        return {
+            "quality_checked": False,
+            "blocking_risk_count": None,
+            "integrity_ok": None,
+            "integrity_issues": [],
+        }
+    blocking = 0
+    for category, result in results.items():
+        if not isinstance(result, dict):
+            continue
+        blocking += len(result.get("issues") or [])
+        # Mirror _write_step01_quality_gate: video-only warnings are advisory
+        # for Step02b and must not block candidate early-stop.
+        if category not in _VIDEO_ONLY_CATEGORIES and category in _QUALITY_BLOCKING_CATEGORIES:
+            blocking += len(result.get("warnings") or [])
+    integrity_issues = _collect_text_integrity_issues(script)
+    blocking += len(integrity_issues)
+    return {
+        "quality_checked": True,
+        "blocking_risk_count": blocking,
+        "integrity_ok": not integrity_issues,
+        "integrity_issues": integrity_issues,
+    }
+
+
+def _candidate_sort_key(item: tuple[dict, dict]) -> tuple:
+    """Sort clean candidates ahead of dirty high-score candidates."""
+    score = item[0] if isinstance(item, tuple) and item else {}
+    if score.get("quality_checked") is False:
+        return (2, 10**6, -float(score.get("total", 0) or 0))
+    integrity_bad = 0
+    if score.get("quality_checked") and score.get("integrity_ok") is not True:
+        integrity_bad = 1
+    return (
+        integrity_bad,
+        int(score.get("blocking_risk_count", 0) or 0),
+        -float(score.get("total", 0) or 0),
+    )
+
+
+def _quality_rank(score: float, quality: dict | None) -> tuple:
+    """Lower is better: integrity first, then blocking risks, then raw score."""
+    quality = quality or {}
+    integrity_ok = quality.get("integrity_ok")
+    if integrity_ok is True:
+        integrity_bad = 0
+    elif integrity_ok is False:
+        integrity_bad = 1
+    else:
+        integrity_bad = 2  # unknown must never outrank a verified clean version
+    risks = quality.get("blocking_risk_count")
+    risks = 10**6 if risks is None else int(risks or 0)
+    if quality.get("quality_checked") is False:
+        integrity_bad = max(integrity_bad, 2)
+        risks = max(risks, 10**6)
+    return (integrity_bad, risks, -float(score or 0))
 
 
 def _write_step01_quality_gate(script: dict, novel_text: str) -> dict:
@@ -737,6 +855,8 @@ def _write_step01_quality_gate(script: dict, novel_text: str) -> dict:
                 visual.append(item)
             else:
                 advisory.append(item)
+    for _msg in _collect_text_integrity_issues(script):
+        visual.append({"category": "text_integrity", "message": _msg})
     payload = {
         "hard_count": len(hard),
         "visual_risk_count": len(visual),
@@ -2174,6 +2294,14 @@ def _candidate_is_early_stop(score: dict, script: dict) -> bool:
         return False
     if score.get("climax_complete") is not True:
         return False
+    # Quality-aware gate: a raw 100 with blocking visual risks or corrupted
+    # text must not win early-stop and lock the run into an unsafe candidate.
+    if score.get("quality_checked") is False:
+        return False
+    if int(score.get("blocking_risk_count", 0) or 0) > 0:
+        return False
+    if score.get("quality_checked") and score.get("integrity_ok") is not True:
+        return False
     shots = script.get("shots", [])
     if not shots:
         return False
@@ -2262,6 +2390,14 @@ def _generate_script_candidates(
             raise
         _cand = parse_response(raw, novel_text=novel_text)
         _scr = _score_script(_cand, novel_text)
+        # v6.73: attach the same blocking-risk/integrity view used by the final
+        # gate before candidate ranking and early-stop decide anything.
+        _scr.update(_candidate_quality_summary(_cand, novel_text))
+        if _scr.get("quality_checked"):
+            _scr["detail"] = (
+                f"{_scr.get('detail', '')}，风险{_scr.get('blocking_risk_count', 0)}"
+                f"{'' if _scr.get('integrity_ok') else '，完整性异常'}"
+            )
         # v6.67 接力修复：把生成本候选的模型挂在分数上，main() 据此选互补修复模型
         _scr["_model"] = _model
         return _scr, _cand
@@ -2343,7 +2479,7 @@ def _generate_script_candidates(
 
     if not _candidates:
         raise RuntimeError(f"分镜 JSON 连续 {_max_attempts} 次解析失败: {_last_err}")
-    _candidates.sort(key=lambda x: -x[0]["total"])
+    _candidates.sort(key=_candidate_sort_key)
     return _candidates
 
 
@@ -2380,6 +2516,8 @@ def _cross_run_best_guard(script: dict, novel_text: str,
         keep_best = _os.getenv("KEEP_BEST_SNAPSHOT", "1") == "1"
 
         new_score = _score_script(script, novel_text)["total"]
+        new_quality = _candidate_quality_summary(script, novel_text)
+        new_rank = _quality_rank(new_score, new_quality)
 
         # 本次快照是 snaps 里最新一份（刚由 _snapshot_run_artifacts 写入）
         candidates = snaps[:-1] if len(snaps) > 1 else []
@@ -2387,23 +2525,47 @@ def _cross_run_best_guard(script: dict, novel_text: str,
 
         best_path = None
         best_score = -1.0
+        best_quality = None
+        best_rank = None
         for sp in candidates:
             try:
                 with open(sp, "r", encoding="utf-8") as f:
                     old = json.load(f)
                 sc = _score_script(old, novel_text)["total"]
+                q = _candidate_quality_summary(old, novel_text)
+                rank = _quality_rank(sc, q)
             except Exception:
                 continue
-            if sc > best_score:
+            # v6.73: compare integrity -> blocking risks -> total, not only
+            # the raw story score.  A clean 90 must not lose to a corrupted 100.
+            if best_rank is None or rank < best_rank:
                 best_score = sc
+                best_quality = q
+                best_rank = rank
                 best_path = sp
 
-        if best_path is None or best_score <= new_score + margin:
+        if best_path is None:
             return None
 
+        _same_risk_tier = (
+            best_rank[0] == new_rank[0] and best_rank[1] == new_rank[1]
+        )
+        if _same_risk_tier:
+            if best_score <= new_score + margin:
+                return None
+        else:
+            # Prefer the safer snapshot whenever its integrity/risk tier is
+            # strictly better than the new run, regardless of raw score.
+            if not (best_rank[0] < new_rank[0]
+                    or (best_rank[0] == new_rank[0] and best_rank[1] < new_rank[1])):
+                return None
+
         _logger.warn(
-            "[BEST-GUARD] 新终稿 " + str(new_score) + " 分 < 快照最优 " +
-            str(best_score) + " 分（" + best_path.name + "）"
+            "[BEST-GUARD] 新终稿 " + str(new_score) + " 分/风险"
+            + str(new_quality.get("blocking_risk_count")) + " < 快照最优 "
+            + str(best_score) + " 分/风险"
+            + str((best_quality or {}).get("blocking_risk_count"))
+            + "（" + best_path.name + "）"
         )
         if not keep_best:
             _logger.warn("[BEST-GUARD] KEEP_BEST_SNAPSHOT=0 → 仅告警，保留新终稿")
@@ -2428,18 +2590,37 @@ def _cross_run_best_guard(script: dict, novel_text: str,
             except Exception as _bg_he2:
                 _logger.warn(f"[BEST-GUARD] 恢复版钩子质量门异常（不阻断）: {_bg_he2}")
         restored_score = _score_script(best_script, novel_text)["total"]
+        restored_quality = _candidate_quality_summary(best_script, novel_text)
+        restored_rank = _quality_rank(restored_score, restored_quality)
+        # A historical snapshot that still fails the current integrity/risk
+        # gate must never overwrite the new output.  This is the guard that
+        # retires old pre-v6.73 corrupted snapshots.
+        if (restored_quality.get("quality_checked") is not True
+                or restored_rank[0] > 0 or restored_rank[1] > 0):
+            _logger.warn(
+                "[BEST-GUARD] 恢复版未通过当前质量门，放弃恢复"
+                f"（风险{restored_quality.get('blocking_risk_count')}，"
+                f"完整性={'OK' if restored_quality.get('integrity_ok') else '异常'}）"
+            )
+            return None
         from shared.json_io import atomic_dump_json as _adj
         _adj(OUTPUT_FILE, _strip_runtime_fields(best_script),
              ensure_ascii=False, indent=2)
         _logger.warn(
             "[BEST-GUARD] 已自动恢复快照最优版为正式输出（补修复后 "
-            + str(restored_score) + " 分）；本次 " + str(new_score)
-            + " 分版本保留于 snapshots/"
+            + str(restored_score) + " 分/风险"
+            + str(restored_quality.get("blocking_risk_count")) + "）；本次 "
+            + str(new_score) + " 分版本保留于 snapshots/"
         )
         _console(
-            "  [BEST-GUARD] 本次 " + str(new_score) + " 分低于历史最优 "
-            + str(best_score) + " 分，已恢复历史最优版（补修复后 "
-            + str(restored_score) + " 分；本次版本在 snapshots/ 可取回）"
+            "  [BEST-GUARD] 本次 " + str(new_score) + " 分/风险"
+            + str(new_quality.get("blocking_risk_count")) + " 低于历史最优 "
+            + str(best_score) + " 分/风险"
+            + str((best_quality or {}).get("blocking_risk_count"))
+            + "，已恢复历史最优版（补修复后 "
+            + str(restored_score) + " 分/风险"
+            + str(restored_quality.get("blocking_risk_count"))
+            + "；本次版本在 snapshots/ 可取回）"
         )
         return best_script
     except Exception as _bg_e:
@@ -2617,7 +2798,7 @@ def main() -> None:
 
 
         # 选总分最高的候选
-        _candidates.sort(key=lambda x: -x[0]["total"])
+        _candidates.sort(key=_candidate_sort_key)
         _best_score, script = _candidates[0]
         # v6.67 接力修复：记录当前稿件的产出模型。GAP 重生成若被采纳会重置为 None
         #（产出者回到 provider 默认模型，接力标识失效）——见下方 GAP 循环。

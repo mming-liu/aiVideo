@@ -44,19 +44,17 @@ class PlatformComplianceConstraint(Constraint):
             return repairs
         if s.get("index", 0) != 1:
             return repairs
-        prompt = s.get("prompt", "") or ""
-        if any(kw in prompt for kw in _AI_KEYWORDS):
+        if str(s.get("platform_label") or "").strip():
             return repairs
-        before = prompt
-        s["prompt"] = prompt.rstrip("。") + _TAIL
+        s["platform_label"] = "AI生成"
         repairs.append(
             RepairRecord(
                 constraint_name=self.name,
                 shot_index=s.get("index", 0),
-                action="append",
-                target="prompt",
-                before=before,
-                after=s["prompt"],
+                action="set_field",
+                target="platform_label",
+                before="",
+                after=s["platform_label"],
             )
         )
         return repairs

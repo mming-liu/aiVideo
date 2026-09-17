@@ -45,6 +45,7 @@ class CameraMovementFillConstraint(Constraint):
                 prompt,
                 str(shot.get("ff_desc") or ""),
                 str(shot.get("motion_desc") or ""),
+                str(shot.get("camera_movement") or ""),
             ])
             if self._has_camera_language(text):
                 # v6.51: 已有运镜语言 → 从文本中提取填入 camera_movement 字段
@@ -62,16 +63,17 @@ class CameraMovementFillConstraint(Constraint):
             cam_value = tail.lstrip("。 ")
             if cam_value:
                 shot["camera_movement"] = cam_value
-            before = prompt
-            shot["prompt"] = prompt.rstrip("。") + tail
+            before_cam = str(shot.get("camera_movement") or "")
+            if cam_value:
+                shot["camera_movement"] = cam_value
             repairs.append(
                 RepairRecord(
                     constraint_name=self.name,
                     shot_index=idx,
-                    action="append",
-                    target="prompt+camera_movement",
-                    before=before,
-                    after=shot["prompt"],
+                    action="set_field",
+                    target="camera_movement",
+                    before=before_cam,
+                    after=shot.get("camera_movement", ""),
                 )
             )
         # --- P1-2: 连续多镜同 camera_movement 告警（全片扫描） ---
