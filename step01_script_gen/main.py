@@ -55,6 +55,10 @@ from shared.paths import (
 )
 from shared.constants import SCRIPT_PARSE_RETRIES, SCRIPT_PARSE_RETRY_SLEEP_SEC
 from shared.utils.text import text_integrity_errors
+from shared.quality_gate import ensure_script_revision, attach_gate_metadata
+from step01_script_gen.quality_issues import (
+    collect_structured_issues, is_blocking, RULE_VERSION,
+)
 CHAPTER_DIR = chapter_dir()
 OUTPUT_FILE = script_file()
 SCRIPT_FILE = OUTPUT_FILE
@@ -155,7 +159,11 @@ from step01_script_gen.character_extractor import extract_characters
 from step01_script_gen.object_extractor import extract_scene_objects
 from step01_script_gen.asset_extractor import extract_scene_assets, extract_props
 from step01_script_gen.validation import parse_response, build_regen_feedback, _set_novel_text, _run_prompt_checklist
-from step01_script_gen.timecode import _compute_timecodes
+from step01_script_gen.timecode import (
+    _compute_timecodes,
+    write_timeline_from_durations,
+    timeline_consistency_errors,
+)
 from step01_script_gen.hash_cache import _prompt_changed, _hash_source
 from step01_script_gen.gap_analysis import (
     gap_needs_full_regen,
@@ -591,61 +599,41 @@ _REPAIR_MAX_ROUNDS = 1
 
 
 def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
-    """重跑 checklist，收集高价值告警，按镜头聚合.
+    """Return structured blocking issues for targeted repair.
 
-    v6.43 08-25 HARD-only 策略：
-    - 区分 `issues` (HARD 硬约束违反，代码层不可忽略)
-       vs `warnings` (WARN 软建议，可由 hard_fix 兜底)
-    - 只 picked 镜头含 issues（HARD）才进入修复轮
-    - 纯 warnings 不再触发 LLM 修复轮（节省 60s LLM 调用）
-    - 返回 {"_has_hard": bool, "shots": {shot_N: [warns]}, "hook": [warns]}
-
-    Returns:
-        {"_has_hard": bool, "shots": {...}, "hook": [...]}（无 issues 时 _has_hard=False）
+    Candidate ranking, repair selection and the final gate all consume the same
+    ``collect_structured_issues`` result.  Legacy callers still receive the
+    historical ``{_has_hard, shots}`` shape.
     """
-    try:
-        if novel_text:
-            _set_novel_text(novel_text)
-        import io as _io
-        import contextlib as _ctx
-        _buf = _io.StringIO()
-        with _ctx.redirect_stdout(_buf):
-            results = _run_prompt_checklist(script).get("results", {})
-    except Exception as _e:
-        import traceback
-        _logger.warn(f"[WARN] 定向修复收集告警异常: {_e}")
-        traceback.print_exc()
-        return {"_has_hard": False, "shots": {}, "hook": []}
-    from step01_script_gen.validation import _REGEN_FEEDBACK_LABELS
+    if novel_text:
+        _set_novel_text(novel_text)
+    issues, checker_failed, rule_version = collect_structured_issues(
+        script, _QUALITY_BLOCKING_CATEGORIES, _VIDEO_ONLY_CATEGORIES,
+        checklist_runner=_run_prompt_checklist,
+    )
     per_shot: dict = {}
-    has_hard = False
-    for key, res in results.items():
-        if key not in _REPAIR_PRIORITY_CATEGORIES or not isinstance(res, dict):
+    for issue in issues:
+        if not is_blocking(issue):
             continue
-        # v6.43 08-25：只收集 issues（HARD），warnings（WARN）由 hard_fix 兜底不再走 LLM
-        issues = list(res.get("issues") or [])
-        if not issues:
+        ids = []
+        if issue.shot_id is not None:
+            ids.append(issue.shot_id)
+        ids.extend(issue.related_shot_ids or [])
+        if not ids:
+            per_shot.setdefault("global", []).append(issue.message)
             continue
-        has_hard = True
-        label = _REGEN_FEEDBACK_LABELS.get(key, key)
-        import re as _re
-        for w in issues:
-            m = _re.match(r"镜头([\d]+)(?:→(\d+))?", w)
-            if m:
-                _tid = f"shot_{m.group(1)}"
-                per_shot.setdefault(_tid, []).append(f"[{label}] {w.strip()}")
-                # 08-15（PR-3）：跨镜告警（镜头衔接「镜头N→M」/动作重叠「镜头N→M」）
-                # 涉及的**两镜**都归入修复——动作重叠/衔接的修复动作常落在 M 的
-                # ff/prompt（下一镜承接上一镜结尾动作），M 不在 picked 则 merge 门闩
-                # 丢弃其改写，永远修不干净。只加告警句点名的对镜，不把整串 run 全加。
-                if m.group(2):
-                    per_shot.setdefault(f"shot_{m.group(2)}",
-                                         []).append(f"[{label}] {w.strip()}")
+        for sid in ids:
+            if str(sid) in ("0", "hook"):
+                per_shot.setdefault("hook", []).append(issue.message)
             else:
-                _tid = "hook" if "钩子" in w else "global"
-                per_shot.setdefault(_tid, []).append(f"[{label}] {w.strip()}")
-    # v6.43 08-25：返回 _has_hard 标记，_repair_shot_warnings 见到 False 直接 skip 修复轮
-    return {"_has_hard": has_hard, "shots": per_shot}
+                per_shot.setdefault(f"shot_{sid}", []).append(issue.message)
+    return {
+        "_has_hard": any(is_blocking(i) for i in issues),
+        "shots": per_shot,
+        "checker_failed": checker_failed,
+        "rule_version": rule_version,
+        "issues": [i.to_dict() for i in issues],
+    }
 
 
 # hook 质量门只消费高价值 warning（避免普通告警触发重生循环）。
@@ -654,39 +642,20 @@ _HOOK_QC_WARNING_CATEGORIES = {"gaze_state_conflict"}
 
 
 def _collect_hook_issues(script: dict) -> list[str]:
-    """钩子后置校验轮（v6.70.1，09-14）：取 hook 桶 issue + 高价值 warning.
-
-    结构性背景：钩子生成时点在定向修复轮之后（gen_hook_script 在
-    _repair_shot_warnings 之后调用），checklist 驱动的 LLM 修复轮永远轮不到
-    hook——hook 的 issue 只能在这里消费（互补模型重生钩子）或留痕。
-    归桶口径与 _collect_repair_warnings 一致：issue 消息含「钩子」或「镜头hook」
-    即 hook 桶（两种标签并存：checklist 多数检查用「钩子镜头(index=N)」，
-    kf 时序类检查用「镜头hook」）。
-
-    warning 不全收：普通 warning 会把质量门变成重生循环。只收白名单内的
-    高价值 warning（当前 gaze_state_conflict——闭眼/昏迷 gaze 非无，图片 QC
-    必败），与 build_qc_prompt 的「空 spec 回退」同为确定性互斥修复。
-    """
-    import io as _io
-    import contextlib as _ctx
-    _buf = _io.StringIO()
-    with _ctx.redirect_stdout(_buf):
-        results = _run_prompt_checklist(script).get("results", {})
-    issues: list[str] = []
-    for _key, _res in results.items():
-        if not isinstance(_res, dict):
+    """Return all blocking issues attached to the hook shot."""
+    issues, checker_failed, _ = collect_structured_issues(
+        script, _QUALITY_BLOCKING_CATEGORIES, _VIDEO_ONLY_CATEGORIES,
+        checklist_runner=_run_prompt_checklist,
+    )
+    out: list[str] = []
+    if checker_failed:
+        out.append("[CHECK_FAILED] 质量检查器异常")
+    for issue in issues:
+        if str(issue.shot_id) not in ("0", "hook"):
             continue
-        for _w in (_res.get("issues") or []):
-            _ws = str(_w)
-            if "钩子" in _ws or "镜头hook" in _ws:
-                issues.append(f"[{_key}] {_ws.strip()}")
-        if _key not in _HOOK_QC_WARNING_CATEGORIES:
-            continue
-        for _w in (_res.get("warnings") or []):
-            _ws = str(_w)
-            if "钩子" in _ws or "镜头hook" in _ws:
-                issues.append(f"[{_key}] {_ws.strip()}")
-    return issues
+        if is_blocking(issue):
+            out.append(f"[{issue.code}] {issue.message}")
+    return out
 
 
 _QUALITY_BLOCKING_CATEGORIES = {
@@ -758,43 +727,29 @@ def _collect_text_integrity_issues(script: dict) -> list[str]:
 
 
 def _candidate_quality_summary(script: dict, novel_text: str = "") -> dict:
-    """Run the same checklist categories used by the final Step01 gate.
-
-    Candidate ranking/early-stop must not treat a high raw story score as
-    sufficient when the same candidate carries blocking visual risks or
-    structurally corrupted prompt text.
-    """
-    try:
-        if novel_text:
-            _set_novel_text(novel_text)
-        import io as _io
-        import contextlib as _ctx
-        _buf = _io.StringIO()
-        with _ctx.redirect_stdout(_buf):
-            results = _run_prompt_checklist(script).get("results", {})
-    except Exception:
-        return {
-            "quality_checked": False,
-            "blocking_risk_count": None,
-            "integrity_ok": None,
-            "integrity_issues": [],
-        }
-    blocking = 0
-    for category, result in results.items():
-        if not isinstance(result, dict):
-            continue
-        blocking += len(result.get("issues") or [])
-        # Mirror _write_step01_quality_gate: video-only warnings are advisory
-        # for Step02b and must not block candidate early-stop.
-        if category not in _VIDEO_ONLY_CATEGORIES and category in _QUALITY_BLOCKING_CATEGORIES:
-            blocking += len(result.get("warnings") or [])
-    integrity_issues = _collect_text_integrity_issues(script)
-    blocking += len(integrity_issues)
+    """Candidate risk summary from the same structured issue collector."""
+    if novel_text:
+        _set_novel_text(novel_text)
+    issues, checker_failed, rule_version = collect_structured_issues(
+        script, _QUALITY_BLOCKING_CATEGORIES, _VIDEO_ONLY_CATEGORIES,
+        checklist_runner=_run_prompt_checklist,
+    )
+    blocking = [i for i in issues if is_blocking(i)]
+    integrity_codes = {
+        "text_integrity", "eye_state_conflict",
+        "action_time_out_of_range", "state_order_replay",
+        "pose_conflict", "surface_conflict",
+        "offscreen_character_action", "weapon_holder_missing",
+    }
+    integrity_issues = [i for i in blocking if i.code in integrity_codes]
     return {
-        "quality_checked": True,
-        "blocking_risk_count": blocking,
-        "integrity_ok": not integrity_issues,
-        "integrity_issues": integrity_issues,
+        "quality_checked": not checker_failed,
+        "blocking_risk_count": None if checker_failed else len(blocking),
+        "integrity_ok": not checker_failed and not integrity_issues,
+        "integrity_issues": [i.message for i in integrity_issues],
+        "rule_version": rule_version,
+        "checker_failed": checker_failed,
+        "structured_issues": [i.to_dict() for i in issues if is_blocking(i)],
     }
 
 
@@ -832,31 +787,17 @@ def _quality_rank(score: float, quality: dict | None) -> tuple:
 
 
 def _write_step01_quality_gate(script: dict, novel_text: str) -> dict:
-    """Write final quality-gate report and classify blocking vs advisory."""
-    try:
-        results = _run_prompt_checklist(script).get("results", {})
-    except Exception as exc:
-        results = {}
-        _logger.warn(f"[QUALITY-GATE] checklist failed: {exc}")
-    hard = []
-    visual = []
-    video_advisory = []
-    advisory = []
-    for category, result in results.items():
-        if not isinstance(result, dict):
-            continue
-        for msg in list(result.get("issues") or []):
-            hard.append({"category": category, "message": str(msg)})
-        for msg in list(result.get("warnings") or []):
-            item = {"category": category, "message": str(msg)}
-            if category in _VIDEO_ONLY_CATEGORIES:
-                video_advisory.append(item)
-            elif category in _QUALITY_BLOCKING_CATEGORIES:
-                visual.append(item)
-            else:
-                advisory.append(item)
-    for _msg in _collect_text_integrity_issues(script):
-        visual.append({"category": "text_integrity", "message": _msg})
+    """Write the final structured quality-gate report."""
+    if novel_text:
+        _set_novel_text(novel_text)
+    issues, checker_failed, rule_version = collect_structured_issues(
+        script, _QUALITY_BLOCKING_CATEGORIES, _VIDEO_ONLY_CATEGORIES,
+        checklist_runner=_run_prompt_checklist,
+    )
+    hard = [i.to_dict() for i in issues if i.severity == "hard"]
+    visual = [i.to_dict() for i in issues if i.severity == "visual_risk"]
+    video_advisory = [i.to_dict() for i in issues if i.severity == "video_advisory"]
+    advisory = [i.to_dict() for i in issues if i.severity in ("advisory", "unverified")]
     payload = {
         "hard_count": len(hard),
         "visual_risk_count": len(visual),
@@ -866,15 +807,19 @@ def _write_step01_quality_gate(script: dict, novel_text: str) -> dict:
         "visual_risk": visual,
         "advisory": advisory,
         "video_advisory": video_advisory,
-        "blocking": bool(hard or visual),
-        "blocking_categories": sorted({x["category"] for x in hard + visual}),
+        "blocking": bool(hard or visual or checker_failed),
+        "blocking_categories": sorted({x["code"] for x in hard + visual}),
+        "checker_failed": checker_failed,
+        "rule_version": rule_version,
     }
+    attach_gate_metadata(payload, script, stage="step01.quality_gate")
     try:
         from shared.json_io import atomic_dump_json
         atomic_dump_json(CHAPTER_DIR / "step01_quality.json", payload, ensure_ascii=False, indent=2)
     except Exception as exc:
         _logger.warn(f"[QUALITY-GATE] write failed: {exc}")
     return payload
+
 
 def _ensure_hook_quality(script: dict, *, novel_text: str, bank=None,
                          objects_bank=None, forbidden_lines=None,
@@ -2589,6 +2534,16 @@ def _cross_run_best_guard(script: dict, novel_text: str,
                 _ensure_hook_quality(best_script, novel_text=novel_text, **hook_ctx)
             except Exception as _bg_he2:
                 _logger.warn(f"[BEST-GUARD] 恢复版钩子质量门异常（不阻断）: {_bg_he2}")
+        # Old snapshots may predate timeline unification.  Rebuild from final
+        # duration_sec before scoring/gating the restored version.
+        try:
+            write_timeline_from_durations(best_script)
+            _tl_errs = timeline_consistency_errors(best_script)
+            if _tl_errs:
+                raise ValueError("; ".join(_tl_errs))
+        except Exception as _bg_tl:
+            _logger.warn(f"[BEST-GUARD] 恢复版时间轴归一失败，放弃恢复: {_bg_tl}")
+            return None
         restored_score = _score_script(best_script, novel_text)["total"]
         restored_quality = _candidate_quality_summary(best_script, novel_text)
         restored_rank = _quality_rank(restored_score, restored_quality)
@@ -2604,6 +2559,7 @@ def _cross_run_best_guard(script: dict, novel_text: str,
             )
             return None
         from shared.json_io import atomic_dump_json as _adj
+        ensure_script_revision(best_script)
         _adj(OUTPUT_FILE, _strip_runtime_fields(best_script),
              ensure_ascii=False, indent=2)
         _logger.warn(
@@ -2729,7 +2685,7 @@ def main() -> None:
         )
         prompt_changed = _prompt_changed(
             Path(__file__).parent / "prompts.py", SCRIPT_FILE, novel_preview, NOVEL_CHAPTER,
-            objects_bank_data,
+            objects_bank_data, rule_version=RULE_VERSION,
         )
 
         if not prompt_changed:
@@ -2756,11 +2712,21 @@ def main() -> None:
                 script = _hfix_cached(script, is_in_repair_loop=False, is_final_pass=True, novel_text=novel_text)
             except Exception as _hfe_c:
                 _logger.warn(f"[WARN] 缓存命中落盘前 hard_fix 失败（保留原版）: {_hfe_c}")
+            # v6.73: hard_fix 可能改 duration_sec；必须按最终 duration 重建
+            # timecode/timeline/total，禁止三套时长字段各自漂移。
+            try:
+                write_timeline_from_durations(script)
+                _tl_errs = timeline_consistency_errors(script)
+                if _tl_errs:
+                    raise ValueError("; ".join(_tl_errs))
+            except Exception as _tl_e:
+                _logger.warn(f"[WARN] 缓存命中最终时间轴归一失败: {_tl_e}")
             # C5 修复（08-11）：fps 一致性校验（timeline 此时已存在）
             # v6.62.3：移到 hard_fix 之后 —— runtime_extend 会改 duration_sec，
             # 早于 hard_fix 校验会拿到过期时长（与 line ~1931 非缓存路径同序）。
             _check_fps_consistency(script)
             from shared.json_io import atomic_dump_json as _adj
+            ensure_script_revision(script)
             _adj(SCRIPT_FILE, _strip_runtime_fields(script),
                  ensure_ascii=False, indent=2)
             _snapshot_run_artifacts(script)
@@ -3269,6 +3235,15 @@ def main() -> None:
             script = _hfix_final(script, is_in_repair_loop=False, is_final_pass=True, novel_text=novel_text)
         except Exception as _hfe:
             _logger.warn(f"[WARN] 落盘前 hard_fix 失败（保留原版）: {_hfe}")
+        # v6.73: final hard_fix may have changed duration_sec (runtime extend,
+        # merges, split cleanup). Rebuild one authoritative timeline before dump.
+        try:
+            write_timeline_from_durations(script)
+            _tl_errs = timeline_consistency_errors(script)
+            if _tl_errs:
+                raise ValueError("; ".join(_tl_errs))
+        except Exception as _tl_e:
+            _logger.warn(f"[WARN] 最终时间轴归一失败: {_tl_e}")
         # C5 修复（08-11）：fps 一致性校验（timeline 此时已存在）
         _check_fps_consistency(script)
 
@@ -3278,7 +3253,7 @@ def main() -> None:
         # 写入 hash
         script["_source_hash"] = _hash_source(
             str(Path(__file__).parent / "prompts.py"), novel_preview, NOVEL_CHAPTER,
-            objects_bank_data,
+            objects_bank_data, rule_version=RULE_VERSION,
         )
 
         # v6.50（08-29）：保存前重算 shot_count——timecode pre-pass 拆镜发生在
@@ -3287,6 +3262,9 @@ def main() -> None:
 
         # 保存（v6.63.1：剥运行时字段——_run_metadata 等下划线键不入盘；
         # 2026-09-13 原子写，防中断留半截 JSON）
+        # v6.73: freeze a stage revision so stale quality reports can be rejected
+        # by step02a/02b/03/04 even when their JSON files still exist.
+        ensure_script_revision(script)
         from shared.json_io import atomic_dump_json as _adj
         _adj(OUTPUT_FILE, _strip_runtime_fields(script),
              ensure_ascii=False, indent=2)

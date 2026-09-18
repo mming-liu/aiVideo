@@ -140,7 +140,7 @@ async def _process_one_shot_skip_frames(
     video_path = shot_dir / SHOT_VIDEO_FILENAME
 
     # Cache check（force=True 时跳过）
-    shot_hash = _get_shot_hash(shot, script)
+    shot_hash = _get_shot_hash(shot, script, shot_dir=shot_dir)
     if not force and video_path.exists() and video_path.stat().st_size > 20 * 1024:
         hash_path = shot_dir / "prompt_hash.txt"
         if hash_path.exists():
@@ -161,14 +161,18 @@ async def _process_one_shot_skip_frames(
         frame_paths = []
         logger.info(f"  [Shot {idx}] Mode: {REFERENCE_MODE.upper()} (no frame files)")
     else:
-        # image 模式：使用首帧/尾帧/关键帧
+        # image 模式：使用首帧/尾帧/关键帧；首帧缺失必须失败，禁止尾帧顶上。
         ff = shot_dir / FIRST_FRAME_FILENAME
         lf = shot_dir / LAST_FRAME_FILENAME
+        if not ff.exists() or not lf.exists():
+            raise FileNotFoundError(
+                f"[Shot {idx}] image 模式缺少首/尾帧: ff={ff.exists()} lf={lf.exists()}"
+            )
         kf = shot_dir / "keyframes"
         kf_paths = []
         if kf.exists():
             kf_paths = [str(p) for p in kf.glob("*.png")]
-        frame_paths = [str(p) for p in [ff, lf] if p.exists()]
+        frame_paths = [str(ff), str(lf)]
         frame_paths.extend(kf_paths)
         logger.info(f"  [Shot {idx}] Mode: IMAGE (reuse step02a frames)")
 
@@ -203,34 +207,44 @@ def main():
     REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
     shots_dir = vimax_shots_dir()
 
+    # Load script before frame validation: downstream must key off explicit shot ids,
+    # not directory order.
+    with open(script_path, "r", encoding="utf-8") as f:
+        script = json.load(f)
+
+    from shared.quality_gate import require_gate
+    require_gate(chapter_dir() / "step01_quality.json", script, stage="step01")
+    if REFERENCE_MODE == "image":
+        require_gate(chapter_dir() / "step02a_quality.json", script, stage="step02a")
+
     # r2v/text 模式不需要帧图片（r2v 参考图来自角色肖像注册表，非帧）
     if REFERENCE_MODE in ("r2v", "text"):
         logger.info(f"[INFO] Reference mode: {REFERENCE_MODE}（无需帧图片，跳过帧检查）")
-    elif shots_dir.exists():
-        # image 模式：提示缺帧，但允许继续（提交时缺帧自动降级 text-to-video）
+    else:
+        if not shots_dir.exists():
+            raise FileNotFoundError(
+                f"image 模式缺少帧目录: {shots_dir}；请先运行 step02a_frame_gen/main.py"
+            )
+        expected = []
+        hook = script.get("hook")
+        if hook and (only_indices is None or 0 in only_indices):
+            expected.append(0)
+        for shot in script.get("shots", []):
+            idx = shot.get("index", 0)
+            if only_indices is None or idx in only_indices:
+                expected.append(idx)
         missing_frames = []
-        for d in shots_dir.iterdir():
-            if not d.is_dir():
-                continue
-            try:
-                idx = int(d.name)
-            except ValueError:
-                continue
-            if only_indices is not None and idx not in only_indices:
-                continue
+        for idx in expected:
+            d = shots_dir / str(idx)
             ff = d / FIRST_FRAME_FILENAME
             lf = d / LAST_FRAME_FILENAME
-            if idx == 0 or idx == 1:
-                if not ff.exists() or not lf.exists():
-                    missing_frames.append((idx, "ff+lf"))
-            else:
-                if not lf.exists():
-                    missing_frames.append((idx, "lf"))
-
+            if not ff.exists() or not lf.exists():
+                missing_frames.append((idx, "ff+lf"))
         if missing_frames:
-            logger.warn(f"[WARN] Missing frames (image 模式将降级为 text-to-video):")
-            for idx, needed in missing_frames:
-                logger.warn(f"    Shot {idx}: missing {needed}")
+            detail = ", ".join(f"shot {idx}: missing {need}" for idx, need in missing_frames)
+            raise FileNotFoundError(
+                f"image 模式必需首尾帧缺失（禁止尾帧冒充首帧/静默降级）: {detail}"
+            )
 
     logger.info(f"[INFO] step02b_video_gen start")
     logger.info(f"  script: {script_path}")
@@ -240,18 +254,15 @@ def main():
     if args.force:
         logger.info(f"  force: True (忽略缓存)")
 
-    # 加载 script
-    with open(script_path, "r", encoding="utf-8") as f:
-        script = json.load(f)
-
     # Step02b owns video-prompt validation. Seedance-specific duration/motion/
     # camera/transition checks run on the actual assembled video prompt.
     try:
         from step02_video_gen.video_prompt_quality import collect_video_prompt_quality
         _vq = collect_video_prompt_quality(script)
-        logger.info(f"[VIDEO-QA] warnings: {_vq.get("warning_count", 0)}")
+        logger.info(f"[VIDEO-QA] warnings: {_vq.get('warning_count', 0)}")
     except Exception as e:
-        logger.warn(f"[VIDEO-QA] video prompt quality gate failed: {e}")
+        logger.error(f"[VIDEO-QA] video prompt quality gate failed: {e}")
+        raise
 
     failed = asyncio.run(gen_all_videos(
         script, work_dir, script_path,

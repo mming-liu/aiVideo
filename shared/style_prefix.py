@@ -871,6 +871,11 @@ def _preactionize_strike(clause: str, names: set) -> str:
 
 def _preactionize_ff_motion(clause: str, names: set) -> str:
     """进行态动作分句 → 前一刻（长词短语替换优先，刺/劈/砍/挥走目标保留正则）."""
+    # Inanimate movement subjects must not be rewritten into a human pose.
+    # 审核实测：马车疾驰 → 马车身体前倾，蓄势待发（语义完全错误）。
+    _subject_head = clause[:14]
+    if any(w in _subject_head for w in ("马车", "车辆", "船", "舟", "轿", "辇")):
+        return clause
     if any(v in _mask_subjects(clause, names) for v in ("刺", "劈", "砍", "斩", "挥", "砸下")):
         return _preactionize_strike(clause, names)
     for old, new in FF_MOTION_TO_PREACTION:

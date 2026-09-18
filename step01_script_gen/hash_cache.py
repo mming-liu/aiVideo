@@ -14,7 +14,7 @@ import json
 
 
 def _hash_source(build_py_path: str, novel_preview: str, chapter: int,
-                 objects_bank_data: str = "") -> str:
+                 objects_bank_data: str = "", rule_version: str = "") -> str:
     """计算源内容指纹（用于缓存比对）.
 
     objects_bank_data: 场景物体库序列化内容——场景物体锚点已注入 prompt，
@@ -46,11 +46,12 @@ def _hash_source(build_py_path: str, novel_preview: str, chapter: int,
     h.update(novel_preview.encode())
     h.update(str(chapter).encode())
     h.update(objects_bank_data.encode())
+    h.update(str(rule_version or "").encode())
     return h.hexdigest()[:16]
 
 
 def _prompt_changed(build_py: Path, script_json: Path, novel_preview: str, chapter: int,
-                    objects_bank_data: str = "") -> bool:
+                    objects_bank_data: str = "", rule_version: str = "") -> bool:
     """检测 prompt 是否变更（通过源文件 hash 比对）."""
     if not script_json.exists():
         return True
@@ -59,7 +60,8 @@ def _prompt_changed(build_py: Path, script_json: Path, novel_preview: str, chapt
         with open(script_json, "r", encoding="utf-8") as f:
             old_script = json.load(f)
         old_hash = old_script.get("_source_hash", "")
-        new_hash = _hash_source(str(build_py), novel_preview, chapter, objects_bank_data)
+        new_hash = _hash_source(str(build_py), novel_preview, chapter,
+                                objects_bank_data, rule_version=rule_version)
         return new_hash != old_hash
     except Exception:
         return True

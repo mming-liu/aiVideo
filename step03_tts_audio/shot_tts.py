@@ -5,6 +5,7 @@ import os
 import asyncio
 import time
 import random
+import hashlib
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -20,6 +21,32 @@ from tts.config import config as tts_config
 from tts.voice_registry import get_registry, NARRATOR_VOICE, AVAILABLE_VOICES
 from shared.paths import SHOT_AUDIO_FILENAME_FMT  # 单镜音频文件名单源: shared/paths.py
 from shared.constants import TTS_MAX_RETRIES  # 重试次数单源: shared/constants.py
+from shared.dialogue import strip_speaker_prefix
+
+
+
+def _tts_cache_sig(text: str, voice_config: dict) -> str:
+    """TTS cache identity: voice + exact spoken text (not only voice id)."""
+    digest = hashlib.sha256(str(text or "").strip().encode("utf-8")).hexdigest()[:16]
+    return f"{voice_config.get('id', '')}|{digest}"
+
+
+
+def _validate_tts_duration(output_path: Path, shot: dict) -> float:
+    """Fail if TTS is unreadable or exceeds the shot's planned duration."""
+    from step04_merge.stretch import get_media_duration
+    actual = float(get_media_duration(output_path) or 0)
+    if actual <= 0.2:
+        raise RuntimeError(f"TTS 音频无效或时长探测失败: {output_path}")
+    expected = float(shot.get("duration_sec") or shot.get("duration") or 0)
+    if expected > 0:
+        tolerance = max(0.35, expected * 0.08)
+        if actual > expected + tolerance:
+            raise RuntimeError(
+                f"TTS 超出镜头时长: actual={actual:.2f}s expected={expected:.2f}s "
+                f"tolerance={tolerance:.2f}s。请改台词/停顿/镜头，禁止合并时截句。"
+            )
+    return actual
 
 
 def _has_dialogue(text: str) -> bool:
@@ -216,18 +243,19 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
         生成的音频文件路径，失败返回 None
     """
     idx = shot.get("index", 0)
-    text = shot.get("narration_segment", "").strip()
-    if not text:
+    raw_text = shot.get("narration_segment", "").strip()
+    if not raw_text:
         print(f"  [SKIP] Shot {idx}: no narration_segment")
         return None
 
     # v6.6: 只有对话才生成 TTS，旁白（纯描述）不生成
-    if not _has_dialogue(text):
+    if not _has_dialogue(raw_text):
         print(f"  [SKIP] Shot {idx}: narration only (no dialogue), no TTS")
         return None
 
     # 1. 识别说话人角色（优先从对话中检测）
-    narration_text = shot.get("narration_segment", "")
+    narration_text = raw_text
+    text = strip_speaker_prefix(raw_text, characters)
 
     # 优先从对话中检测说话人
     detected_speaker = None
@@ -257,11 +285,18 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
     # 缓存检查：文件存在且大小正常且音色匹配则跳过
     if output_path.exists() and output_path.stat().st_size > 10240:
         voice_meta = output_path.with_suffix(".voice")
-        cached_voice = voice_meta.read_text(encoding="utf-8").strip() if voice_meta.exists() else ""
-        if cached_voice == voice_config.get("id", ""):
-            print(f"  [CACHE] Shot {idx}: cached ({speaker_name or 'Narrator'})")
-            return str(output_path)
-        print(f"  [CACHE] Shot {idx}: voice changed ({cached_voice or 'none'} -> {voice_config.get('id', '')}), regenerating")
+        cached_sig = voice_meta.read_text(encoding="utf-8").strip() if voice_meta.exists() else ""
+        wanted_sig = _tts_cache_sig(text, voice_config)
+        if cached_sig == wanted_sig:
+            try:
+                _validate_tts_duration(output_path, shot)
+                print(f"  [CACHE] Shot {idx}: cached ({speaker_name or 'Narrator'})")
+                return str(output_path)
+            except Exception as _cache_err:
+                print(f"  [CACHE] Shot {idx}: cached audio invalid, regenerating: {_cache_err}")
+                output_path.unlink(missing_ok=True)
+                voice_meta.unlink(missing_ok=True)
+        print(f"  [CACHE] Shot {idx}: text/voice changed, regenerating")
 
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -270,11 +305,17 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
         display_name = speaker_name or "Narrator"
         print(f"  [TTS] Shot {idx} [{display_name}] <- {voice_config['id']}")
         gen_single_tts(text, output_path, provider, voice_config)
+        _validate_tts_duration(output_path, shot)
         # 写入音色元数据，供缓存检查比对（防止 step02b 默认音色音频阻塞多角色生成）
-        output_path.with_suffix(".voice").write_text(voice_config.get("id", ""), encoding="utf-8")
+        output_path.with_suffix(".voice").write_text(_tts_cache_sig(text, voice_config), encoding="utf-8")
         return str(output_path)
     except Exception as e:
         print(f"  [FAIL] Shot {idx}: {e}")
+        try:
+            output_path.unlink(missing_ok=True)
+            output_path.with_suffix(".voice").unlink(missing_ok=True)
+        except OSError:
+            pass
         return None
 
 
@@ -282,14 +323,17 @@ async def _gen_shot_tts_async(shot: dict, output_dir: Path, provider,
                               voice_registry, characters: List[dict]) -> Optional[str]:
     """异步版本的单分镜 TTS 生成."""
     idx = shot.get("index", 0)
-    text = shot.get("narration_segment", "").strip()
+    raw_text = shot.get("narration_segment", "").strip()
+    if not raw_text:
+        return None
+    text = strip_speaker_prefix(raw_text, characters)
     if not text:
         return None
 
-    # 1. 识别说话人
+    # 1. 识别说话人（在清洗前识别，避免把说话人前缀一起删掉）
     detected_speaker = None
     if characters:
-        detected_speaker = _detect_speaker_from_narration(text, characters)
+        detected_speaker = _detect_speaker_from_narration(raw_text, characters)
 
     main_subject = shot.get("main_subject", "").strip()
     speaker_name = detected_speaker or (main_subject if main_subject and len(main_subject) <= 4 else None)
@@ -310,21 +354,34 @@ async def _gen_shot_tts_async(shot: dict, output_dir: Path, provider,
     # 缓存检查（含音色比对）
     if output_path.exists() and output_path.stat().st_size > 10240:
         voice_meta = output_path.with_suffix(".voice")
-        cached_voice = voice_meta.read_text(encoding="utf-8").strip() if voice_meta.exists() else ""
-        if cached_voice == voice_config.get("id", ""):
-            print(f"  [CACHE] Shot {idx}: cached ({speaker_name or 'Narrator'})")
-            return str(output_path)
-        print(f"  [CACHE] Shot {idx}: voice changed ({cached_voice or 'none'} -> {voice_config.get('id', '')}), regenerating")
+        cached_sig = voice_meta.read_text(encoding="utf-8").strip() if voice_meta.exists() else ""
+        wanted_sig = _tts_cache_sig(text, voice_config)
+        if cached_sig == wanted_sig:
+            try:
+                _validate_tts_duration(output_path, shot)
+                print(f"  [CACHE] Shot {idx}: cached ({speaker_name or 'Narrator'})")
+                return str(output_path)
+            except Exception as _cache_err:
+                print(f"  [CACHE] Shot {idx}: cached audio invalid, regenerating: {_cache_err}")
+                output_path.unlink(missing_ok=True)
+                voice_meta.unlink(missing_ok=True)
+        print(f"  [CACHE] Shot {idx}: text/voice changed, regenerating")
 
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
         display_name = speaker_name or "Narrator"
         print(f"  [TTS] Shot {idx} [{display_name}] <- {voice_config['id']}")
         result = await _gen_single_tts_async(text, output_path, provider, voice_config)
-        output_path.with_suffix(".voice").write_text(voice_config.get("id", ""), encoding="utf-8")
+        _validate_tts_duration(output_path, shot)
+        output_path.with_suffix(".voice").write_text(_tts_cache_sig(text, voice_config), encoding="utf-8")
         return result
     except Exception as e:
         print(f"  [FAIL] Shot {idx}: {e}")
+        try:
+            output_path.unlink(missing_ok=True)
+            output_path.with_suffix(".voice").unlink(missing_ok=True)
+        except OSError:
+            pass
         return None
 
 
@@ -342,7 +399,9 @@ def gen_all_shot_tts(script: dict, output_dir: Path,
         成功生成的音频文件路径列表
     """
     shots = script.get("shots", [])
-    if not shots:
+    hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
+    units = ([hook] if hook else []) + list(shots)
+    if not units:
         print("[WARN] No shots data")
         return []
 
@@ -359,14 +418,14 @@ def gen_all_shot_tts(script: dict, output_dir: Path,
 
     provider = create_provider()
     results = []
-    print(f"[INFO] Generating TTS for {len(shots)} shots with dynamic voices...\n")
+    print(f"[INFO] Generating TTS for {len(units)} units (hook + shots) with dynamic voices...\n")
 
     if use_async:
         # 异步并发模式：利用限流信号量控制并发
         async def run_async():
             tasks = [
-                _gen_shot_tts_async(shot, output_dir, provider, voice_registry, characters)
-                for shot in shots
+                _gen_shot_tts_async(unit, output_dir, provider, voice_registry, characters)
+                for unit in units
             ]
             return await asyncio.gather(*tasks)
 
@@ -374,10 +433,10 @@ def gen_all_shot_tts(script: dict, output_dir: Path,
         results = [r for r in results if r]  # 过滤 None
     else:
         # 原有串行模式（保持向后兼容）
-        for shot in shots:
-            path = gen_shot_tts(shot, output_dir, provider, voice_registry, characters)
+        for unit in units:
+            path = gen_shot_tts(unit, output_dir, provider, voice_registry, characters)
             if path:
                 results.append(path)
 
-    print(f"\n[INFO] Shot TTS done: {len(results)}/{len(shots)} success")
+    print(f"\n[INFO] TTS done: {len(results)}/{len(units)} success")
     return results

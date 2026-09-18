@@ -8,8 +8,7 @@
     python step02a_frame_gen/main.py --shots 3,5-7   # 只生成指定镜头帧
     python step02a_frame_gen/main.py --shots 3 --force  # 强制重生成（忽略缓存）
     python step02a_frame_gen/main.py --shots 3 --all-frames  # 一次生成 shot 3 全部图片
-                            # （首帧+尾帧+全部关键帧，覆盖 idx>=2 的 Mode B 跳过；
-                            #  调试整镜视觉检查用，会浪费额度）
+                            # （首帧+尾帧+全部关键帧；默认每镜已生成首帧）
     python step02a_frame_gen/main.py --shots 3 --frames lf   # 只生成 shot 3 尾帧
     python step02a_frame_gen/main.py --shots 3 --frames ff,kf0  # 首帧+第0个关键帧
 """
@@ -86,7 +85,12 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
         idx = shot["index"]
         if only_indices is not None and idx not in only_indices:
             continue
-        skip_first = idx >= 2  # Mode B: shot>=2 跳过首帧（用上一镜尾帧）
+        # v6.73: step02b 已统一为独立镜头提交，默认每镜必须有自己的首帧。
+        # 仅显式设置 STEP02A_USE_CONTINUITY_FRAME=1 时才允许旧 Mode B 跳过。
+        skip_first = (
+            os.getenv("STEP02A_USE_CONTINUITY_FRAME", "0").strip() == "1"
+            and idx >= 2
+        )
         tasks_spec.append((idx, shot, skip_first))
 
     sem = asyncio.Semaphore(concurrency)
@@ -197,8 +201,8 @@ def main():
                         help="忽略缓存强制重生成")
     frame_grp = parser.add_mutually_exclusive_group()
     frame_grp.add_argument("--all-frames", action="store_true",
-                           help="对指定分镜一次性生成全部图片（首帧+尾帧+全部关键帧），"
-                                "覆盖 idx>=2 的 Mode B 跳过；调试整镜视觉检查用，会浪费额度")
+                           help="对指定分镜一次性生成全部图片（首帧+尾帧+全部关键帧）；"
+                                "调试整镜视觉检查用")
     frame_grp.add_argument("--frames", default=None,
                            help="只生成指定图片类型（逗号分隔）：ff=首帧, lf=尾帧, "
                                 "kf=全部关键帧, kf0/kf1...=指定关键帧；默认=Mode A/B 行为")
@@ -225,12 +229,15 @@ def main():
     # are checked against the image fields before any frame generation.
     try:
         from step02a_frame_gen.image_prompt_quality import collect_image_prompt_quality
+        from shared.quality_gate import require_gate
         with open(script_path, "r", encoding="utf-8") as _sf:
             _script_for_qa = json.load(_sf)
+        require_gate(chapter_dir() / "step01_quality.json", _script_for_qa, stage="step01")
         _iq = collect_image_prompt_quality(_script_for_qa)
-        logger.info(f"[IMAGE-QA] warnings: {_iq.get("warning_count", 0)}")
+        logger.info(f"[IMAGE-QA] warnings: {_iq.get('warning_count', 0)}")
     except Exception as e:
-        logger.warn(f"[IMAGE-QA] image prompt quality gate failed: {e}")
+        logger.error(f"[IMAGE-QA] upstream quality gate failed: {e}")
+        raise
 
     if not script_path.exists():
         logger.error(f"[ERROR] script not found: {script_path}")

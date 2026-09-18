@@ -71,28 +71,50 @@ _SCENE_FALLBACK = (
 )
 
 
+_CONTAINER_POSITION_FALLBACK = (
+    ("车厢", "车厢内"), ("车内", "车厢内"), ("轿内", "轿内"),
+    ("船舱", "舱内"), ("舱内", "舱内"), ("马背", "马背"), ("鞍上", "鞍上"),
+)
+
+
 def _derive_surface(shot: dict, item: dict) -> str:
-    """从本镜文本/position/scene 推导该角色的承重面（首个命中者胜）."""
-    # 1) 本镜文本显式 surface 词（position 优先——它就是该角色的站位描述）
+    """Derive one character's bearing surface without cross-character leakage.
+
+    Multi-person shots must only use that character's own ``position``.  The
+    old whole-shot scan could assign "院内地面" to a person whose own position
+    was "画左" merely because the scene was 杨府别庄 or another character was
+    standing in the courtyard.
+    """
+    layout = [x for x in (shot.get("char_layout") or []) if isinstance(x, dict)]
     position = str(item.get("position", "") or "")
-    scan_fields = (
-        position,
-        shot.get("location", "") or "",
-        shot.get("ff_desc", "") or "",
-        shot.get("lf_desc", "") or "",
-        shot.get("prompt", "") or "",
-    )
-    for text in scan_fields:
-        if not text:
-            continue
+
+    # 1) Role-local position is always authoritative.
+    if position:
         for w in _SURFACE_WORDS:
-            if w in text:
+            if w in position:
                 return w
-    # 2) scene/location 场景兜底
-    scene = (shot.get("scene", "") or "") + (shot.get("location", "") or "")
-    for key, surf in _SCENE_FALLBACK:
-        if key in scene:
-            return surf
+        for key, surf in _CONTAINER_POSITION_FALLBACK:
+            if key in position:
+                return surf
+
+    # 2) Only single-character shots may use whole-shot/scene fallback.
+    if len(layout) <= 1:
+        scan_fields = (
+            shot.get("location", "") or "",
+            shot.get("ff_desc", "") or "",
+            shot.get("lf_desc", "") or "",
+            shot.get("prompt", "") or "",
+        )
+        for text in scan_fields:
+            if not text:
+                continue
+            for w in _SURFACE_WORDS:
+                if w in text:
+                    return w
+        scene = (shot.get("scene", "") or "") + (shot.get("location", "") or "")
+        for key, surf in _SCENE_FALLBACK:
+            if key in scene:
+                return surf
     return ""
 
 

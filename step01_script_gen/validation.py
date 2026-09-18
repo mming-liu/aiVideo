@@ -4876,7 +4876,9 @@ def _build_char_gaze_pattern(char_names: tuple[str, ...]) -> re.Pattern:
     # 按名字长度降序排列（避免"听香"被"香"先匹配）
     sorted_names = sorted(char_names, key=len, reverse=True)
     alt = "|".join(re.escape(n) for n in sorted_names)
-    return re.compile(r"(?:看|盯|望)向?(" + alt + r")")
+    # Do not rewrite 「查看/观看/探看/检查」: the gaze verb is part of a
+    # compound verb, not a direction expression (审核实测：查看杨旭→查目光紧盯杨旭).
+    return re.compile(r"(?<![查观探检考参])(?:看|盯|望)向?(" + alt + r")")
 
 
 def _build_char_gaze_loose_pattern(char_names: tuple[str, ...]) -> re.Pattern:

@@ -16,6 +16,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from shared.json_io import atomic_dump_json
 from shared.paths import chapter_dir
+from shared.quality_gate import attach_gate_metadata
 
 _VIDEO_ONLY_TERMS = ("运镜", "推镜", "推近", "拉镜", "拉远", "跟拍", "环绕镜", "转场", "时长")
 
@@ -53,5 +54,6 @@ def collect_image_prompt_quality(script: dict) -> dict:
         "source": "step02a.image_prompt_quality",
         "skill_contract": ["byted-ark-seedream-skill", "qianwen-image-generation"],
     }
+    attach_gate_metadata(payload, script, stage='step02a.image_prompt_quality')
     atomic_dump_json(chapter_dir() / "step02a_quality.json", payload, ensure_ascii=False, indent=2)
     return payload

@@ -17,7 +17,7 @@ CHAPTER_INDEX = int(os.getenv("NOVEL_CHAPTER", "1"))
 BOOK_INDEX = int(os.getenv("BOOK_INDEX", "1"))
 
 # 输出目录（统一路径来源: shared/paths.py）
-from shared.paths import chapter_dir, script_file, audio_dir, audio_file
+from shared.paths import chapter_dir, script_file, audio_dir, audio_file, clip_file
 CHAPTER_DIR = chapter_dir()
 SCRIPT_FILE = script_file()
 AUDIO_OUTPUT_DIR = audio_dir()
@@ -38,20 +38,6 @@ def main():
     _logger.info("  (Multi-voice support enabled)")
     _logger.separator()
 
-    # 2026-09-13 审计修复：当前架构下 step04 native 模式不消费 step03 产物
-    # （对话/背景音由视频模型生成）。VIDEO_MODEL_VOICE=1 且 MERGE_AUDIO_MODE=native
-    # 时跑 TTS 纯属浪费额度——默认跳过；STEP03_FORCE=1 强制执行（备音/调试）
-    voice_by_model = os.getenv("VIDEO_MODEL_VOICE", "1").strip() == "1"
-    audio_mode = os.getenv("MERGE_AUDIO_MODE", "native").strip().lower()
-    forced = os.getenv("STEP03_FORCE", "0").strip() == "1"
-    if voice_by_model and audio_mode == "native" and not forced:
-        _logger.info(
-            "[SKIP] VIDEO_MODEL_VOICE=1 且 MERGE_AUDIO_MODE=native：成片音频由视频"
-            "模型原生生成，step04 不消费 step03 产物，跳过 TTS 生成"
-            "（需要 TTS 备音轨请设 MERGE_AUDIO_MODE=tts_mix，或 STEP03_FORCE=1 强制执行）"
-        )
-        return
-
     # 检查前置步骤产物
     if not SCRIPT_FILE.exists():
         raise FileNotFoundError(
@@ -65,7 +51,35 @@ def main():
 
     # Load script
     script = load_script_module(SCRIPT_FILE)
+    from shared.quality_gate import require_gate
+    require_gate(CHAPTER_DIR / "step01_quality.json", script, stage="step01")
     shots = script.get("shots", [])
+
+    # v6.73: model capability + actual clip audio streams determine the source.
+    from shared.audio_policy import resolve_audio_policy
+    from step04_merge.stretch import has_audio_stream
+    hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
+    clip_paths = ([clip_file(0)] if hook else []) + [clip_file(s.get("index", 0)) for s in shots]
+    existing_clips = [p for p in clip_paths if p.exists()]
+    actual_audio_present = (
+        all(has_audio_stream(p) for p in existing_clips)
+        if existing_clips else None
+    )
+    policy = resolve_audio_policy(actual_audio_present=actual_audio_present)
+    forced = os.getenv("STEP03_FORCE", "0").strip() == "1"
+    _logger.info(
+        f"[AUDIO-POLICY] model={policy.video_model or 'unknown'} "
+        f"native_supported={policy.model_supports_audio} "
+        f"actual_clip_audio={actual_audio_present} "
+        f"tts_required={policy.tts_required} effective={policy.effective_merge_mode} "
+        f"reason={policy.reason}"
+    )
+    if not policy.tts_required and not forced:
+        _logger.info(
+            "[SKIP] 视频模型原生发声且实际 clips 已有音频；跳过 TTS。"
+            "需要备音轨请设 MERGE_AUDIO_MODE=tts_mix 或 STEP03_FORCE=1"
+        )
+        return
 
     _logger.info(f"Shots: {len(shots)}")
     _logger.info(f"Chapter: {CHAPTER_INDEX}, Book: {BOOK_INDEX}")
@@ -111,7 +125,8 @@ def main():
     # 2026-09-13 审计修复：单镜 TTS 失败此前被吞（返回 None 仅打印 [FAIL]），
     # step04 tts_mix 只记缺失数量——缺对白镜头会静默保留原声进成片。
     # 现在收尾核对：有台词的镜头必须存在有效音频，否则本阶段失败。
-    required = [s for s in shots if str(s.get("narration_segment", "")).strip()]
+    audio_units = ([hook] if hook else []) + shots
+    required = [s for s in audio_units if str(s.get("narration_segment", "")).strip()]
     missing = [
         s.get("index", 0) for s in required
         if not (audio_file(s.get("index", 0)).exists()

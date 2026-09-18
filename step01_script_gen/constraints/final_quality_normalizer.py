@@ -202,9 +202,12 @@ class FinalQualityNormalizerConstraint(Constraint):
             new_text = new_text.replace("着匕首的手", "神秘人握着匕首的手")
             new_text = new_text.replace("匕首刀尖抵近", "神秘人握着匕首，刀尖抵近")
             new_text = new_text.replace("匕首刺中", "神秘人握着匕首，刺中")
-            if "握刃" not in text and "刀尖" in new_text and "握着" not in new_text:
-                holder = "神秘人握着刀" if "神秘人" in new_text else "画外伸入一只握着刀的手"
-                new_text = new_text.replace("刀尖", f"{holder}，刀尖", 1)
+            if ("握刃" not in text and "刀尖" in new_text
+                    and "握着" not in new_text and "神秘人" in new_text):
+                # Only repair when the holder already exists in this shot's
+                # evidence.  Inventing “画外伸入一只握着刀的手” created plot
+                # facts that were absent from the script and source.
+                new_text = new_text.replace("刀尖", "神秘人握着刀，刀尖", 1)
             # Collapse stacked holder prefixes produced by older passes:
             # 神秘人握神秘人握着刀 / 神秘人握握着刀 -> 神秘人握着刀
             new_text = new_text.replace("神秘人握神秘人", "神秘人")
@@ -231,9 +234,12 @@ class FinalQualityNormalizerConstraint(Constraint):
             new_text = new_text.replace("着匕首的手", "神秘人握着匕首的手")
             new_text = new_text.replace("匕首刀尖抵近", "神秘人握着匕首，刀尖抵近")
             new_text = new_text.replace("匕首刺中", "神秘人握着匕首，刺中")
-            if "握刃" not in text and "刀尖" in new_text and "握着" not in new_text:
-                holder = "神秘人握着刀" if "神秘人" in new_text else "画外伸入一只握着刀的手"
-                new_text = new_text.replace("刀尖", f"{holder}，刀尖", 1)
+            if ("握刃" not in text and "刀尖" in new_text
+                    and "握着" not in new_text and "神秘人" in new_text):
+                # Only repair when the holder already exists in this shot's
+                # evidence.  Inventing “画外伸入一只握着刀的手” created plot
+                # facts that were absent from the script and source.
+                new_text = new_text.replace("刀尖", "神秘人握着刀，刀尖", 1)
             # Collapse stacked holder prefixes produced by older passes:
             # 神秘人握神秘人握着刀 / 神秘人握握着刀 -> 神秘人握着刀
             new_text = new_text.replace("神秘人握神秘人", "神秘人")

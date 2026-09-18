@@ -67,7 +67,9 @@ def split_subtitle_by_punctuation(text: str, max_chars: int = 30) -> List[str]:
     return result if result else [text[:max_chars]]
 
 
-def generate_srt(shots: List[dict], durations: List[float], output: Path) -> None:
+def generate_srt(shots: List[dict], durations: List[float], output: Path,
+                 clip_windows: List[tuple[float, float]] | None = None,
+                 speech_durations: List[float | None] | None = None) -> None:
     """Generate SRT subtitle file based on per-shot target durations.
 
     v5.2 优化: 长字幕按标点符号智能拆分，而非简单截断
@@ -83,13 +85,19 @@ def generate_srt(shots: List[dict], durations: List[float], output: Path) -> Non
     subtitle_count = 0
 
     for i, (shot, dur) in enumerate(zip(shots, durations), 1):
+        if clip_windows and i - 1 < len(clip_windows):
+            start, end = clip_windows[i - 1]
+            dur = max(0.0, end - start)
+        else:
+            start = current_time
+            end = current_time + dur
         # 只对有对话的镜头生成字幕
         # 对话判断标准：文本包含引号（"「」""）或说话动词（说/道/问/答/喊/叫/喝）
         subtitle = shot.get("subtitle", "").strip()
         narration_segment = shot.get("narration_segment", "").strip()
 
         if not subtitle:
-            current_time += dur
+            current_time = end
             continue
 
         # 检查是否是对话（判定单源 shared/dialogue.py，08-01 code-audit #2）
@@ -101,11 +109,15 @@ def generate_srt(shots: List[dict], durations: List[float], output: Path) -> Non
 
         if not is_dialogue:
             # 没有对话，跳过字幕
-            current_time += dur
+            current_time = end
             continue
 
-        start = current_time
-        end = current_time + dur
+        # TTS 模式优先跟随实际发声长度；缺失时才铺满整个镜头。
+        subtitle_duration = dur
+        if speech_durations and i - 1 < len(speech_durations):
+            _sp = speech_durations[i - 1]
+            if _sp and _sp > 0:
+                subtitle_duration = max(0.1, min(dur, float(_sp)))
 
         # 优化: 智能拆分长字幕，而非简单截断
         # 规则：
@@ -116,13 +128,13 @@ def generate_srt(shots: List[dict], durations: List[float], output: Path) -> Non
 
         if len(subtitle_parts) == 1:
             # 单段字幕，直接使用
-            if dur > max_display_time:
-                # 如果单个镜头音频太长，警告但保持完整（因为已按标点拆分）
-                print(f"  [WARN] Shot {i} subtitle duration {dur:.1f}s > {max_display_time}s (consider splitting in script)")
+            if subtitle_duration > max_display_time:
+                print(f"  [WARN] Shot {i} subtitle duration {subtitle_duration:.1f}s > {max_display_time}s (consider splitting in script)")
 
             subtitle_count += 1
+            subtitle_end = start + subtitle_duration
             srt_lines.append(str(subtitle_count))
-            srt_lines.append(f"{seconds_to_srt_time(start)} --> {seconds_to_srt_time(end)}")
+            srt_lines.append(f"{seconds_to_srt_time(start)} --> {seconds_to_srt_time(subtitle_end)}")
             srt_lines.append(subtitle)
             srt_lines.append("")
         else:
@@ -132,7 +144,7 @@ def generate_srt(shots: List[dict], durations: List[float], output: Path) -> Non
             for j, part_text in enumerate(subtitle_parts, 1):
                 # 按字符比例分配时间
                 part_ratio = len(part_text) / total_chars if total_chars > 0 else 1.0 / len(subtitle_parts)
-                part_duration = dur * part_ratio
+                part_duration = subtitle_duration * part_ratio
 
                 part_start = temp_start
                 part_end = temp_start + part_duration

@@ -64,7 +64,9 @@ def _probe_video_duration(video_path: Path) -> float:
         return 0.0
 
 
-def _qc_video_product(video_path: Path, shot_idx: int, expected_duration: float) -> bool:
+def _qc_video_product(video_path: Path, shot_idx: int, expected_duration: float,
+                      shot: dict | None = None,
+                      characters: list | None = None) -> bool:
     """视频产物内容质检（A6 修复 08-11）.
 
     Returns:
@@ -99,7 +101,7 @@ def _qc_video_product(video_path: Path, shot_idx: int, expected_duration: float)
         if VIDEO_QC_ENABLED:
             try:
                 from step02_video_gen.video_qc import qc_video_file
-                bad = qc_video_file(video_path, shot_idx)
+                bad = qc_video_file(video_path, shot_idx, shot=shot, characters=characters)
                 if bad:
                     logger.warn(f"  [Shot {shot_idx}] 视频 QC 视觉检测发现问题，重生成")
                     return False
@@ -145,7 +147,7 @@ def _check_keyframe_hallucination(frame_path: str) -> dict:
     return {"has_critical": False, "issues": []}
 
 
-def _get_shot_hash(shot: dict, script: dict) -> str:
+def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> str:
     """
     计算分镜的哈希值，用于判断是否需要重新生成视频。
 
@@ -180,13 +182,21 @@ def _get_shot_hash(shot: dict, script: dict) -> str:
     else:
         _prompt_for_hash = _build_prompt(shot, script)
 
+    def _file_digest(fp: Path) -> str:
+        try:
+            h = hashlib.sha1()
+            with open(fp, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                    h.update(chunk)
+            return f"{fp.name}:{h.hexdigest()}"
+        except Exception:
+            return f"{fp.name}:unreadable"
+
     key_parts = [
         # 供应商/模式/声音开关：这些维度变化都应触发缓存失效
         f"provider={os.getenv('VIDEO_PROVIDER', '')}",
         f"ref_mode={os.getenv('VIDEO_REFERENCE_MODE', '')}",
         f"model_voice={os.getenv('VIDEO_MODEL_VOICE', '1')}",
-        # r2v 模式：参考图列表路径纳入哈希（换图/换注册表都触发重做）
-        f"r2v_refs={','.join(shot.get('_r2v_refs_cache', []) or [])}",
         STYLE_PREFIX,
         NEGATIVE_PROMPT,
         _prompt_for_hash,
@@ -202,6 +212,43 @@ def _get_shot_hash(shot: dict, script: dict) -> str:
             if isinstance(kf, dict):
                 key_parts.append(_normalize(kf.get("desc", "")))
                 key_parts.append(str(kf.get("time_ratio", "")))
+
+    # v6.73: actual image bytes are part of the request in image/r2v modes.
+    # Text-only hashes reused stale videos when a frame was regenerated with
+    # the same prompt but different pixels.
+    if shot_dir is not None:
+        try:
+            candidates = []
+            for name in ("first_frame.png", "last_frame.png"):
+                fp = Path(shot_dir) / name
+                if fp.exists():
+                    candidates.append(fp)
+            kf_dir = Path(shot_dir) / "keyframes"
+            if kf_dir.exists():
+                candidates.extend(sorted(kf_dir.glob("*.png")))
+            for _fp in candidates:
+                key_parts.append(_file_digest(_fp))
+        except Exception:
+            pass
+
+    # r2v: resolve the actual references now.  `_r2v_refs_cache` is a runtime
+    # underscore field and is stripped on save, so relying on it here caused
+    # portrait/asset changes to be silently ignored after a restart.
+    if os.getenv("VIDEO_REFERENCE_MODE", "").strip().lower() == "r2v":
+        try:
+            from step02_video_gen.prompt_builder import (
+                _collect_r2v_references, _load_character_registry,
+            )
+            _refs = _collect_r2v_references(
+                shot, characters=script.get("characters") or [],
+                registry=_load_character_registry(),
+            )
+            for _ref in _refs:
+                _fp = Path(_ref)
+                if _fp.exists():
+                    key_parts.append(_file_digest(_fp))
+        except Exception:
+            pass
     key = "|".join(key_parts)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
@@ -229,6 +276,8 @@ async def _poll_video(
     shot_dir: Path, video_path: Path, max_retries: int,
     shot_hash: str = "",
     qc_resubmit_limit: int = 0,
+    shot: dict | None = None,
+    characters: list | None = None,
 ) -> bool:
     """Background poll with exponential backoff + jitter - reduces API queries."""
     from shared.tee_logger import get_logger
@@ -312,7 +361,8 @@ async def _poll_video(
                     #   2. 视觉质检（VIDEO_QC_ENABLED=1 时抽中段帧跑 ds-vision-skill）。
                     # QC 失败不写哈希（下次缓存检测不会命中），返回 False 走失败重试。
                     _expected_dur = float(getattr(req, "duration", 0) or 0)
-                    if not _qc_video_product(video_path, shot_idx, _expected_dur):
+                    if not _qc_video_product(video_path, shot_idx, _expected_dur,
+                                             shot=shot, characters=characters):
                         # v6.35：QC 失败自动重提交（相同 req = 相同 seed，结果可复现）。
                         # 固定 seed 前重提交=抽卡，好坏反复横跳；固定 seed 后同 prompt
                         # 同参考重提交仍有概率出不同结果（模型概率性），给 2 次机会，
@@ -447,7 +497,8 @@ async def _submit_video(
             task = asyncio.create_task(
                 _poll_video(video_adapter, poll_semaphore, req, task_id, idx,
                            shot_dir, video_path, VIDEO_MAX_RETRIES, shot_hash,
-                           qc_resubmit_limit=VIDEO_QC_RESUBMIT)
+                           qc_resubmit_limit=VIDEO_QC_RESUBMIT,
+                           shot=shot, characters=characters)
             )
             return task
         except Exception as e:
@@ -471,7 +522,8 @@ async def _submit_video(
                         task = asyncio.create_task(
                             _poll_video(video_adapter, poll_semaphore, req, task_id, idx,
                                        shot_dir, video_path, VIDEO_MAX_RETRIES, shot_hash,
-                                       qc_resubmit_limit=VIDEO_QC_RESUBMIT)
+                                       qc_resubmit_limit=VIDEO_QC_RESUBMIT,
+                                       shot=shot, characters=characters)
                         )
                         return task
                     except Exception:
@@ -508,7 +560,7 @@ async def _process_one_shot(
     video_path = shot_dir / SHOT_VIDEO_FILENAME
 
     # Cache check: prompt_hash.txt + clips 目录双重验证
-    shot_hash = _get_shot_hash(shot, script)
+    shot_hash = _get_shot_hash(shot, script, shot_dir=shot_dir)
     if not force_first_frame and video_path.exists() and video_path.stat().st_size > 20 * 1024:
         hash_path = shot_dir / "prompt_hash.txt"
         if hash_path.exists():

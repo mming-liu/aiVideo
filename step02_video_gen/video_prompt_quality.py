@@ -22,6 +22,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 from shared.json_io import atomic_dump_json
 from shared.model_caps import active_video_duration_cap, active_video_prompt_cap
 from shared.paths import chapter_dir
+from shared.quality_gate import attach_gate_metadata
 
 
 _MOVEMENT_WORDS = (
@@ -106,6 +107,7 @@ def collect_video_prompt_quality(script: dict) -> dict:
         "source": "step02b.prompt_builder._build_prompt",
         "skill_contract": ["byted-ark-seedance-skill", "byted-ark-seedream-skill"],
     }
+    attach_gate_metadata(payload, script, stage='step02b.video_prompt_quality')
     atomic_dump_json(chapter_dir() / "step02b_quality.json", payload,
                      ensure_ascii=False, indent=2)
     return payload

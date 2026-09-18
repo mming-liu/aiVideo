@@ -48,6 +48,25 @@ _SPEAKER_TRAIL_VERB_RE = re.compile(
     r'(?:扬|怒|颤|冷|漫|惊|厉|高|低|轻|重|急|缓)?声?(?:道|说|喊|喝|叫|问|答|叹|曰)$')
 
 
+
+def strip_speaker_prefix(narration: str,
+                         characters: Optional[List[dict]] = None) -> str:
+    """Return only the spoken line, removing 「角色+说话动词+：」 prefix."""
+    text = (narration or "").strip()
+    if not text:
+        return ""
+    speaker = detect_speaker(text, characters)
+    if speaker:
+        m = re.match(r"^" + re.escape(speaker) + r".*?[:：]", text)
+        if m:
+            return text[m.end():].strip()
+    for pattern in _SPEAKER_PATTERNS:
+        m = re.match(pattern, text)
+        if m:
+            return text[m.end():].strip()
+    return text
+
+
 def detect_speaker(narration: str, characters: Optional[List[dict]] = None) -> Optional[str]:
     """从叙述文本中检测说话人角色名.
 
@@ -99,3 +118,5 @@ def detect_speaker(narration: str, characters: Optional[List[dict]] = None) -> O
                 return char_name
 
     return None
+
+__all__ = ["has_dialogue", "detect_speaker", "strip_speaker_prefix"]

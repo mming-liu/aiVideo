@@ -69,15 +69,19 @@ def _extract_frame(video_path: Path, out_dir: Path, ratio: float, tag: str) -> P
         return None
 
 
-def qc_video_file(video_path: Path, shot_idx: int) -> bool:
+def qc_video_file(video_path: Path, shot_idx: int,
+                  shot: dict | None = None,
+                  characters: list | None = None) -> bool:
     """对视频文件做视觉质检（v6.35：首/中/尾三帧）.
 
     Returns:
         bool: True = 检出 critical 问题（应重生成）；False = 无问题/软失败。
     """
     try:
-        from shared.image_qc import qc_image
+        from shared.image_qc import maybe_qc_sync
         from shared.paths import vimax_working_dir
+        real_shot = dict(shot or {})
+        real_shot.setdefault("index", shot_idx)
         with tempfile.TemporaryDirectory(dir=str(vimax_working_dir())) as td:
             frames = [
                 (tag, _extract_frame(video_path, Path(td), ratio, tag))
@@ -87,17 +91,29 @@ def qc_video_file(video_path: Path, shot_idx: int) -> bool:
             if not frames:
                 return False  # 抽帧全部失败，软失败不误杀
 
-            # 三帧任一检出 critical 问题 → 重生成（首尾帧防黑场/淡出吞画面）
+            # 三帧任一检出 critical 问题 → 重生成。每帧使用真实 shot/spec，
+            # 否则“人物名单为空”会让人数与动作检查永远无法生效。
             for tag, frame in frames:
-                result = qc_image(
+                frame_kind = "first_frame"
+                kf_index = None
+                if tag == "end":
+                    frame_kind = "last_frame"
+                elif tag == "mid":
+                    kfs = real_shot.get("keyframes") or []
+                    if kfs:
+                        frame_kind = "keyframe"
+                        kf_index = min(len(kfs) - 1, max(0, len(kfs) // 2))
+                empty_scene = "空镜" in str(real_shot.get("main_subject") or "")
+                result = maybe_qc_sync(
                     frame,
-                    shot={"index": shot_idx, "scene": f"视频{tag}段", "main_subject": ""},
-                    frame_kind="first_frame",
-                    characters=[],
-                    empty_scene=False,
+                    shot=real_shot,
+                    frame_kind=frame_kind,
+                    characters=characters or [],
+                    empty_scene=empty_scene,
+                    kf_index=kf_index,
                 )
                 if not result.ok:
-                    continue  # 质检本身失败，软失败（该帧跳过，不误杀）
+                    continue  # 质检服务失败=未验证，软失败不误杀
                 if result.has_hallucination and any(
                     getattr(i, "severity", "") == "critical" for i in result.issues
                 ):

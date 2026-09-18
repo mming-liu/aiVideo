@@ -70,6 +70,11 @@ try:
     )
 except ImportError:
     _RES, _CRF, _AUDIO_MODE, _LOUDNORM = "720x1280", "18", "native", "1"
+
+# v6.73: resolve the real audio source from model capability + user mode.
+from shared.audio_policy import resolve_audio_policy
+_AUDIO_POLICY = resolve_audio_policy()
+_AUDIO_MODE = _AUDIO_POLICY.effective_merge_mode
 _m = re.match(r"(\d+)x(\d+)", _RES.strip())
 if not _m:
     raise ValueError(f"MERGE_RESOLUTION 格式错误（应为 WxH，如 720x1280）: {_RES!r}")
@@ -169,6 +174,30 @@ def _parse_transition(text: str, default_dur: float = 0.5):
     return kind, dur
 
 
+def _compute_clip_windows(durations, transitions):
+    """Return per-clip final (start,end) and total duration.
+
+    xfade overlaps make cumulative-duration subtraction ambiguous.  The windows
+    below are the single source shared by the ffmpeg filter and subtitles.
+    """
+    durs = list(durations or [])
+    if not durs:
+        return [], 0.0
+    windows = [(0.0, float(durs[0]))]
+    total = float(durs[0])
+    for i in range(1, len(durs)):
+        kind, tdur = transitions[i] if i < len(transitions) else ("cut", 0.0)
+        if kind == "cut" or tdur <= 0.01:
+            start = total
+            end = start + float(durs[i])
+        else:
+            start = max(0.0, total - float(tdur))
+            end = start + float(durs[i])
+        windows.append((round(start, 3), round(end, 3)))
+        total = end
+    return windows, round(total, 3)
+
+
 def _build_native_transition_filter(clips, transitions, video_filter,
                                     tts_paths=None):
     """为 native 模式构建带转场的 filter_complex。
@@ -188,9 +217,9 @@ def _build_native_transition_filter(clips, transitions, video_filter,
         TTS 缺失的镜保持纯原声。
 
     Returns:
-        (filter_complex, video_label, audio_label, total_duration, srt_durations,
+        (filter_complex, video_label, audio_label, total_duration, clip_windows,
          n_extra_inputs)
-        srt_durations 已按转场重叠量扣减，供字幕时间轴对齐。
+        clip_windows 是每个片段在最终时间轴上的真实 (start, end)，字幕直接复用。
         n_extra_inputs: 额外音频输入数（tts_mix 模式，追加在视频输入之后）。
     """
     from step04_merge.stretch import has_audio_stream
@@ -256,7 +285,7 @@ def _build_native_transition_filter(clips, transitions, video_filter,
             _a_chain += f"[na{i}]"
         parts.append(_a_chain)
 
-    total = durs[0]
+    clip_windows, total = _compute_clip_windows(durs, transitions)
     cur_v, cur_a = "[nv0]", "[na0]"
     x = 0
     # transitions[i] 描述「从 clip i-1 进入 clip i」的转场
@@ -267,9 +296,8 @@ def _build_native_transition_filter(clips, transitions, video_filter,
             parts.append(f"{cur_v}[nv{i}]concat=n=2:v=1:a=0[vx{x}]")
             parts.append(f"{cur_a}[na{i}]concat=n=2:v=0:a=1[ax{x}]")
             cur_v, cur_a = f"[vx{x}]", f"[ax{x}]"
-            total += durs[i]
         else:
-            offset = max(0.0, total - tdur - 0.001)
+            offset = max(0.0, clip_windows[i][0] - 0.001)
             x += 1
             # v6.22：xfade transition 类型动态（fade/wipeleft/slideleft/fadeblack...），
             # kind 直接作 xfade transition 参数；非法回退 fade
@@ -279,7 +307,6 @@ def _build_native_transition_filter(clips, transitions, video_filter,
             )
             parts.append(f"{cur_a}[na{i}]acrossfade=d={tdur:.3f}[ax{x}]")
             cur_v, cur_a = f"[vx{x}]", f"[ax{x}]"
-            total = total + durs[i] - tdur
 
     # 最后一个镜头的「淡出」→ 末尾淡出到黑
     if transitions[n - 1][0] == "fade_out":
@@ -290,14 +317,52 @@ def _build_native_transition_filter(clips, transitions, video_filter,
     # 字幕+调色叠加在最终视频流上（与 filter_complex 同图，不能另用 -vf）
     parts.append(f"{cur_v}{video_filter}[outv]")
 
-    # 字幕时长：首镜全量；后续每镜按转场重叠量扣减（xfade 时）
-    srt_durations = [durs[0]]
-    for i in range(1, n):
-        kind, tdur = transitions[i]
-        srt_durations.append(durs[i] if kind == "cut" else durs[i] - tdur)
-
     parts = [p for p in parts if p]  # 清理占位空段
-    return ";".join(parts), "[outv]", cur_a, total, srt_durations, n_extra
+    return ";".join(parts), "[outv]", cur_a, total, clip_windows, n_extra
+
+
+def _resolve_hook_clip(hook):
+    """Return hook clip path or fail when the script planned a hook."""
+    if not hook or not isinstance(hook, dict):
+        return None
+    from shared.paths import clip_file
+    p = clip_file(0)
+    if p.exists() and p.stat().st_size > 20000:
+        return p
+    raise FileNotFoundError(
+        f"脚本包含 hook，但 hook 视频缺失或损坏: {p}。\n"
+        "禁止静默跳过；请先完成 step02b 的 hook 生成。"
+    )
+
+
+def _validate_final_output(final_path: Path, expected_duration: float) -> float:
+    """Decode-check the final file, duration tolerance and audio stream."""
+    from step04_merge.merge_core import _find_exe
+    from step04_merge.stretch import has_audio_stream
+    if not final_path.exists() or final_path.stat().st_size <= 20 * 1024:
+        raise RuntimeError(f"final.mp4 缺失或过小: {final_path}")
+    actual = get_media_duration(final_path)
+    if actual <= 0:
+        raise RuntimeError(f"final.mp4 时长探测失败: {final_path}")
+    tolerance = max(1.0, float(expected_duration or actual) * 0.03)
+    if abs(actual - float(expected_duration or actual)) > tolerance:
+        raise RuntimeError(
+            f"final.mp4 时长偏差过大: actual={actual:.2f}s expected={expected_duration:.2f}s "
+            f"tolerance={tolerance:.2f}s"
+        )
+    if not has_audio_stream(final_path):
+        raise RuntimeError("final.mp4 无音频流，拒绝标记为可发布")
+    ffmpeg = _find_exe("ffmpeg")
+    proc = subprocess.run(
+        [ffmpeg, "-v", "error", "-i", str(final_path), "-f", "null", "-"],
+        capture_output=True, text=True, timeout=180, check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "final.mp4 完整解码失败: "
+            + (proc.stderr or proc.stdout or "")[-500:]
+        )
+    return actual
 
 
 def main():
@@ -339,6 +404,10 @@ def main():
   with open(SCRIPT_FILE, "r", encoding="utf-8") as f:
     script = json.load(f)
 
+  from shared.quality_gate import require_gate
+  require_gate(CHAPTER_DIR / "step01_quality.json", script, stage="step01")
+  require_gate(CHAPTER_DIR / "step02b_quality.json", script, stage="step02b")
+
   shots = script.get("shots", [])
   if not shots:
     raise ValueError("No shots in script")
@@ -347,17 +416,10 @@ def main():
 
   # 1.5. Check for hook video
   # Hook视频位置: clips/clip_0.mp4
-  hook_clip = None
   hook = script.get("hook")
-  if hook and isinstance(hook, dict):
-    from shared.paths import clip_file
-    hook_clip_path = clip_file(0)
-
-    if hook_clip_path.exists() and hook_clip_path.stat().st_size > 20000:
-      hook_clip = hook_clip_path
-      _logger.info(f"[INFO] Hook video found: {hook_clip_path}")
-    else:
-      _logger.info("[INFO] Hook video not found (skipping)")
+  hook_clip = _resolve_hook_clip(hook)
+  if hook_clip:
+    _logger.info(f"[INFO] Hook video found: {hook_clip}")
 
 
   # 2. Collect video clips
@@ -399,6 +461,20 @@ def main():
 
   _logger.info(f"[INFO] Video clips ready: {len(clips)}")
 
+  # v6.73: resolve audio source from model capability + the real clip streams.
+  # If native is advertised but clips are silent, switch to tts_mix; the TTS
+  # presence check below then prevents silent final output.
+  from step04_merge.stretch import has_audio_stream
+  actual_audio_present = all(has_audio_stream(c) for c in clips)
+  _policy = resolve_audio_policy(actual_audio_present=actual_audio_present)
+  global _AUDIO_MODE
+  _AUDIO_MODE = _policy.effective_merge_mode
+  _logger.info(
+    f"[AUDIO-POLICY] model={_policy.video_model or 'unknown'} "
+    f"native_supported={_policy.model_supports_audio} actual_clip_audio={actual_audio_present} "
+    f"effective={_AUDIO_MODE} reason={_policy.reason}"
+  )
+
   # 3. Get target durations (视频模型生成，native 模式直接以视频实际时长为准)
   target_durations = [get_media_duration(c) for c in clips]
   zero_durations = [(i, str(c)) for i, c in enumerate(clips) if target_durations[i] <= 0]
@@ -414,21 +490,24 @@ def main():
   #    对话/背景音由视频模型生成，直接拼接保留每段视频原声。
   _logger.info("[INFO] Native merge: 直接拼接视频并保留原声（语音由视频模型生成）")
 
-  # 解析每个分镜的转场（native 模式下转场时长会重叠，字幕时长需同步扣减）
+  # 解析每个分镜的转场，并生成最终片段 (start,end) 单一时间表。
   native_transitions = [_parse_transition(s.get("clip_transition")) for s in valid_shots]
-  srt_durations = [target_durations[0]]
-  for i in range(1, len(target_durations)):
-    kind, tdur = native_transitions[i]
-    srt_durations.append(target_durations[i] if kind == "cut" else target_durations[i] - tdur)
-  target_durations = srt_durations
-  # 2026-09-13 审计修复：总时长在转场重叠扣减后求和——此前用扣减前的值，
-  # 与成片实际时长不符，误导排障
-  audio_duration = sum(target_durations)
+  clip_windows, audio_duration = _compute_clip_windows(target_durations, native_transitions)
   _logger.info(f"[INFO] Total video duration (after transition overlap): {audio_duration:.1f}s")
+  _logger.info(f"[INFO] Clip windows: {clip_windows}")
   _logger.info(f"[INFO] Native transitions: {[(k, round(t, 2)) for k, t in native_transitions]}")
 
-  # 5. Generate SRT subtitles
-  generate_srt(valid_shots, target_durations, SRT_OUT)
+  # 5. Generate SRT subtitles.  In tts_mix mode, follow the real TTS duration
+  # instead of stretching text across the whole clip.
+  speech_durations = None
+  if _AUDIO_MODE == "tts_mix":
+    from shared.paths import audio_file
+    speech_durations = []
+    for _s in valid_shots:
+      _ap = audio_file(_s.get("index", 0))
+      speech_durations.append(get_media_duration(_ap) if _ap.exists() else None)
+  generate_srt(valid_shots, target_durations, SRT_OUT,
+               clip_windows=clip_windows, speech_durations=speech_durations)
 
   # 6. Merge video - native（默认）：直接拼接保留视频原声；
   #    tts_mix（可选）：叠加 step03 TTS 对白轨（视频原声不满意时切换）
@@ -520,6 +599,8 @@ def main():
   cmd[-1] = str(final_tmp)
   try:
     subprocess.run(cmd, check=True)
+    # Validate the temp file before replacing the previous publishable output.
+    duration = _validate_final_output(final_tmp, audio_duration)
     os.replace(final_tmp, FINAL_OUT)
   except Exception:
     if final_tmp.exists():
@@ -531,7 +612,6 @@ def main():
   _logger.info(f"[OK] Final video generated: {FINAL_OUT}")
 
   # 7. Report
-  duration = get_media_duration(FINAL_OUT)
   _logger.info("[INFO] Merge Report:")
   _logger.info(f" Audio:       Original video audio (native mode, 语音由视频模型生成)")
   _logger.info(f" Final duration: {duration:.1f}s")

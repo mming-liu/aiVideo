@@ -505,6 +505,107 @@ def project_post_split_metrics(shots: list, *, fps=None, shot_cap=None) -> dict:
     }
 
 
+def write_timeline_from_durations(script: dict) -> None:
+    """Rebuild timecodes/timeline from the final authoritative durations.
+
+    `_compute_timecodes` estimates or clamps durations from motion/dialogue.
+    Final hard-fix constraints can change `duration_sec` afterwards (runtime
+    extension, merges, split cleanup).  This function never re-estimates; it
+    only serializes the already-final durations into one consistent timeline.
+    """
+    shots = script.get("shots") or []
+    if not shots:
+        return
+    hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
+    old_timeline = {
+        e.get("index"): e for e in (script.get("timeline") or [])
+        if isinstance(e, dict) and e.get("index") is not None
+    }
+    timeline: list[dict] = []
+    current = 0.0
+
+    if hook:
+        try:
+            hook_duration = float(hook.get("duration_sec") or hook.get("duration") or 0)
+        except (TypeError, ValueError):
+            hook_duration = 0.0
+        if hook_duration > 0:
+            hook_duration = round(hook_duration, 2)
+            hook["duration"] = hook_duration
+            hook["duration_sec"] = hook_duration
+            hook["timecode"] = {"start": 0.0, "end": hook_duration}
+            entry = dict(old_timeline.get(0) or {})
+            entry.update({
+                "index": 0,
+                "is_hook": True,
+                "start": 0.0,
+                "end": hook_duration,
+                "duration": hook_duration,
+                "effective_duration": hook_duration,
+            })
+            timeline.append(entry)
+            current = hook_duration
+
+    for shot in shots:
+        if not isinstance(shot, dict):
+            continue
+        idx = shot.get("index", len(timeline))
+        try:
+            duration = float(shot.get("duration_sec") or shot.get("duration") or 0)
+        except (TypeError, ValueError):
+            duration = 0.0
+        if duration <= 0:
+            raise ValueError(f"shot {idx} has invalid duration_sec={duration!r}")
+        duration = round(duration, 2)
+        shot["duration"] = duration
+        shot["duration_sec"] = duration
+        shot["timecode"] = {
+            "start": round(current, 2),
+            "end": round(current + duration, 2),
+        }
+        entry = dict(old_timeline.get(idx) or {})
+        entry.update({
+            "index": idx,
+            "start": round(current, 2),
+            "end": round(current + duration, 2),
+            "duration": duration,
+            "effective_duration": duration,
+        })
+        for key in ("variation_type", "keyframe_sample_count",
+                    "movement_speed_multiplier", "blank_hold_duration"):
+            if key not in entry and key in shot:
+                entry[key] = shot[key]
+        timeline.append(entry)
+        current += duration
+
+    script["timeline"] = timeline
+    script["total_duration"] = round(current, 2)
+    script["total_effective_duration"] = round(current, 2)
+
+
+def timeline_consistency_errors(script: dict) -> list[str]:
+    """Return deterministic consistency errors for the final timeline."""
+    shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+    timeline = [e for e in (script.get("timeline") or []) if isinstance(e, dict)]
+    errors: list[str] = []
+    expected = []
+    hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
+    if hook and float(hook.get("duration_sec") or hook.get("duration") or 0) > 0:
+        expected.append(0)
+    expected.extend(s.get("index") for s in shots)
+    timeline_indexes = [e.get("index") for e in timeline]
+    if timeline_indexes != expected:
+        errors.append(f"timeline indexes {timeline_indexes} != expected {expected}")
+    total = float(script.get("total_duration") or 0)
+    if timeline and abs(float(timeline[-1].get("end") or 0) - total) > 0.011:
+        timeline_end = timeline[-1].get("end")
+        errors.append(f"timeline end {timeline_end}s != total_duration {total}s")
+    if abs(sum(float(s.get("duration_sec") or 0) for s in shots)
+           + (float(hook.get("duration_sec") or 0) if hook else 0.0) - total) > 0.011:
+        errors.append("sum(duration_sec) != total_duration")
+    return errors
+
+
 def _compute_timecodes(script: dict) -> None:
     """根据 motion_desc 时间分段或对话字数计算每个镜头的 timecode。
 

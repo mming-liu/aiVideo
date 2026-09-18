@@ -997,6 +997,11 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         reference_paths = _collect_r2v_references(
             shot, characters=characters or [], registry=_load_character_registry(),
         )
+        if not reference_paths:
+            raise RuntimeError(
+                f"[Shot {shot.get('index', '?')}] r2v 模式未收集到任何参考图，"
+                "拒绝静默降级 text-to-video；请先补齐角色肖像/场景/道具资产。"
+            )
     else:
         # 图生视频模式：使用帧图片作为参考
         reference_paths = []
@@ -1032,9 +1037,14 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
 
     # 时长改由 shot["duration_sec"] 控制（step01 timecode 权威计算）。
     # 不再由 TTS 音频时长驱动——视频模型自带对话/背景音后，音频不再是时长来源。
-    # 回退到 duration（旧分镜脚本无 duration_sec 字段）。
-    # 强制 int：API 要求 parameters.duration 为整数（脚本里可能是 3.0 float，会被拒）。
-    duration = int(shot.get("duration_sec") or shot.get("duration", 5))
+    # API 整数秒用 round，不用 int 截断：7.875s 不允许被缩短成 7s。
+    try:
+        planned_duration = float(shot.get("duration_sec") or shot.get("duration", 5))
+    except (TypeError, ValueError):
+        planned_duration = 5.0
+    duration = max(1, int(round(planned_duration)))
+    shot["planned_duration_sec"] = round(planned_duration, 3)
+    shot["submitted_duration_sec"] = duration
 
     # 多关键帧优先：3+ 帧时使用多关键帧模式，2帧时使用首尾双锚定
     if extra_keyframe_paths:

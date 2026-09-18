@@ -57,7 +57,7 @@ def _int_duration(value, cap: int | None = None) -> int:
     cap 非空时按模型时长上限夹取（防御纵深；step01 timecode 已按模型夹取一次）。
     """
     try:
-        d = int(float(value))
+        d = max(1, int(round(float(value))))
     except (TypeError, ValueError):
         d = BAILIAN_VIDEO_DURATION  # 兜底时长单源 shared/config.py（默认 5）
     if cap and cap > 0:
