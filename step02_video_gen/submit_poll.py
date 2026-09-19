@@ -192,11 +192,22 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
         except Exception:
             return f"{fp.name}:unreadable"
 
+    from shared.model_caps import active_video_model
+    _resolution = (
+        shot.get("resolution")
+        or os.getenv("VOLCENGINE_VIDEO_RESOLUTION", "")
+        or os.getenv("MINIMAX_VIDEO_RESOLUTION", "")
+        or ""
+    )
     key_parts = [
         # 供应商/模式/声音开关：这些维度变化都应触发缓存失效
         f"provider={os.getenv('VIDEO_PROVIDER', '')}",
+        f"model={active_video_model() or ''}",
         f"ref_mode={os.getenv('VIDEO_REFERENCE_MODE', '')}",
         f"model_voice={os.getenv('VIDEO_MODEL_VOICE', '1')}",
+        f"merge_audio={os.getenv('MERGE_AUDIO_MODE', 'native')}",
+        f"duration={shot.get('duration_sec') or shot.get('duration') or ''}",
+        f"resolution={_resolution}",
         STYLE_PREFIX,
         NEGATIVE_PROMPT,
         _prompt_for_hash,
@@ -223,9 +234,7 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
                 fp = Path(shot_dir) / name
                 if fp.exists():
                     candidates.append(fp)
-            kf_dir = Path(shot_dir) / "keyframes"
-            if kf_dir.exists():
-                candidates.extend(sorted(kf_dir.glob("*.png")))
+            candidates.extend(sorted(Path(shot_dir).glob("keyframe_*.png")))
             for _fp in candidates:
                 key_parts.append(_file_digest(_fp))
         except Exception:

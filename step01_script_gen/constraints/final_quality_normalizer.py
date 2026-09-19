@@ -1,6 +1,8 @@
 """Final deterministic normalizer for production-facing script fields."""
 from __future__ import annotations
 
+import re
+
 import sys
 from pathlib import Path
 
@@ -87,32 +89,16 @@ class FinalQualityNormalizerConstraint(Constraint):
         ff = shot.get("ff_desc") if isinstance(shot.get("ff_desc"), str) else ""
         lf = shot.get("lf_desc") if isinstance(shot.get("lf_desc"), str) else ""
         narration = shot.get("narration_segment") if isinstance(shot.get("narration_segment"), str) else ""
-        fixed_len = len(ff) + len(lf) + len(narration)
-        if len(prompt) + fixed_len <= 500:
+        if len(prompt) + len(ff) + len(lf) + len(narration) <= 500:
             return []
-        original = prompt
-        current = prompt
-        removed = []
-        while len(current) + fixed_len > 500:
-            stripped = current.rstrip("。")
-            if "。" not in stripped:
-                break
-            head, tail = stripped.rsplit("。", 1)
-            if not tail.strip():
-                break
-            removed.append(tail.strip() + "。")
-            current = head + "。"
-        if current == original:
-            return []
-        shot["prompt"] = current
         return [RepairRecord(
             constraint_name="final_quality_normalizer",
             shot_index=sid,
-            action="rewrite",
+            action="warn",
             target="prompt",
-            before=original[-80:],
-            after=current[-80:],
-            detail=f"prompt 预算裁剪，移除 {len(removed)} 个尾句",
+            before=prompt[-120:],
+            after=prompt[-120:],
+            detail="prompt/描述总量超过预算；保留原文，禁止自动删除尾句",
         )]
 
     @staticmethod
@@ -131,40 +117,28 @@ class FinalQualityNormalizerConstraint(Constraint):
         segments = _parse_motion_time_segments(motion, dur)
         if not segments:
             return []
-        repairs = []
+        warnings = []
         for j, kf in enumerate(kfs):
             if not isinstance(kf, dict):
                 continue
             t = get_kf_t_sec(kf, shot)
             if t is None:
                 continue
-            if any(a - 0.01 <= t <= b + 0.01 for a, b in segments):
+            if any(a < t < b for a, b in segments):
                 continue
-            existing = [
-                x for k in kfs if isinstance(k, dict)
-                for x in [get_kf_t_sec(k, shot)] if x is not None
-            ]
-            ranked = sorted(segments, key=lambda ab: abs((ab[0] + ab[1]) / 2 - t))
-            best = ranked[0]
-            for cand in ranked:
-                load = sum(1 for x in existing if cand[0] - 0.01 <= x <= cand[1] + 0.01)
-                if load < 1:
-                    best = cand
-                    break
-            mid = round((best[0] + best[1]) / 2, 3)
-            before = kf.get("t_sec")
-            kf["t_sec"] = mid
-            kf.pop("time_ratio", None)
-            repairs.append(RepairRecord(
+            warnings.append(RepairRecord(
                 constraint_name="final_quality_normalizer",
                 shot_index=sid,
-                action="clamp",
+                action="warn",
                 target=f"keyframes[{j}].t_sec",
-                before=str(before),
-                after=str(mid),
-                detail="kf 时间窗回中",
+                before=str(t),
+                after=str(t),
+                detail=(
+                    "关键帧时间不在任何 motion 严格区间内；保留原时间，"
+                    "禁止为通过时间窗检查自动搬到区间中点。"
+                ),
             ))
-        return repairs
+        return warnings
 
     @staticmethod
     def _early_blood_transition(shot: dict, sid) -> list[RepairRecord]:
@@ -177,41 +151,46 @@ class FinalQualityNormalizerConstraint(Constraint):
             if any(w in kf0 for w in _BLOOD_WORDS) and not any(
                 w in kf0 for w in _BLOOD_TRANSITION_WORDS
             ):
-                before = kf0
-                kfs[0]["desc"] = kf0.rstrip("。.，,;；") + "。刺入瞬间，此刻初现血迹。"
                 return [RepairRecord(
                     constraint_name="final_quality_normalizer",
                     shot_index=sid,
-                    action="append",
+                    action="warn",
                     target="keyframes[0].desc",
-                    before=before[-80:],
-                    after=kfs[0]["desc"][-80:],
-                    detail="补早期血迹过渡",
+                    before=kf0[-80:],
+                    after=kf0[-80:],
+                    detail=(
+                        "尾帧/关键帧出现血迹但首帧无伤情过渡；"
+                        "保留原文，未自动追加“刺入瞬间，此刻初现血迹”。"
+                    ),
                 )]
         return []
 
     @staticmethod
     def _normalize_weapon_holder(shot: dict, sid) -> list[RepairRecord]:
+        """Normalize only explicit, generic holder syntax.
+
+        Earlier versions hard-coded “神秘人” and turned any standalone “刀尖”
+        into a held weapon. That invented a holder whenever the description
+        merely mentioned a weapon tip (for example after the weapon had been
+        released). Semantic holder changes remain in the evidence-bound weapon
+        constraint/audit layer; this normalizer only removes exact duplicated
+        syntax and expands the lexical phrase “握刃”.
+        """
         repairs = []
+
+        def _normalize(text: str) -> str:
+            weapon = "匕首" if "匕首" in text else ("短刃" if "短刃" in text else "刀")
+            out = text.replace("握刃", f"握着{weapon}")
+            # Collapse only an exact adjacent repetition: “甲握甲握着刀”.
+            out = re.sub(r"([\u4e00-\u9fff]{2,4})握\1握", r"\1握", out)
+            out = re.sub(r"([\u4e00-\u9fff]{2,4})握握着", r"\1握着", out)
+            return out
+
         for field in ("prompt", "ff_desc", "lf_desc"):
             text = shot.get(field)
-            if not isinstance(text, str) or ("握刃" not in text and "刀尖" not in text):
+            if not isinstance(text, str) or not text:
                 continue
-            weapon = "匕首" if "匕首" in text else ("短刃" if "短刃" in text else "刀")
-            new_text = text.replace("握刃", f"握着{weapon}")
-            new_text = new_text.replace("着匕首的手", "神秘人握着匕首的手")
-            new_text = new_text.replace("匕首刀尖抵近", "神秘人握着匕首，刀尖抵近")
-            new_text = new_text.replace("匕首刺中", "神秘人握着匕首，刺中")
-            if ("握刃" not in text and "刀尖" in new_text
-                    and "握着" not in new_text and "神秘人" in new_text):
-                # Only repair when the holder already exists in this shot's
-                # evidence.  Inventing “画外伸入一只握着刀的手” created plot
-                # facts that were absent from the script and source.
-                new_text = new_text.replace("刀尖", "神秘人握着刀，刀尖", 1)
-            # Collapse stacked holder prefixes produced by older passes:
-            # 神秘人握神秘人握着刀 / 神秘人握握着刀 -> 神秘人握着刀
-            new_text = new_text.replace("神秘人握神秘人", "神秘人")
-            new_text = new_text.replace("神秘人握握着", "神秘人握着")
+            new_text = _normalize(text)
             if new_text != text:
                 shot[field] = new_text
                 repairs.append(RepairRecord(
@@ -221,29 +200,15 @@ class FinalQualityNormalizerConstraint(Constraint):
                     target=field,
                     before=text[-80:],
                     after=new_text[-80:],
-                    detail="武器 holder 归一",
+                    detail="武器 holder 语法归一（不推断持有者）",
                 ))
         for j, kf in enumerate(shot.get("keyframes") or []):
             if not isinstance(kf, dict):
                 continue
             text = kf.get("desc")
-            if not isinstance(text, str) or ("握刃" not in text and "刀尖" not in text):
+            if not isinstance(text, str) or not text:
                 continue
-            weapon = "匕首" if "匕首" in text else ("短刃" if "短刃" in text else "刀")
-            new_text = text.replace("握刃", f"握着{weapon}")
-            new_text = new_text.replace("着匕首的手", "神秘人握着匕首的手")
-            new_text = new_text.replace("匕首刀尖抵近", "神秘人握着匕首，刀尖抵近")
-            new_text = new_text.replace("匕首刺中", "神秘人握着匕首，刺中")
-            if ("握刃" not in text and "刀尖" in new_text
-                    and "握着" not in new_text and "神秘人" in new_text):
-                # Only repair when the holder already exists in this shot's
-                # evidence.  Inventing “画外伸入一只握着刀的手” created plot
-                # facts that were absent from the script and source.
-                new_text = new_text.replace("刀尖", "神秘人握着刀，刀尖", 1)
-            # Collapse stacked holder prefixes produced by older passes:
-            # 神秘人握神秘人握着刀 / 神秘人握握着刀 -> 神秘人握着刀
-            new_text = new_text.replace("神秘人握神秘人", "神秘人")
-            new_text = new_text.replace("神秘人握握着", "神秘人握着")
+            new_text = _normalize(text)
             if new_text != text:
                 kf["desc"] = new_text
                 repairs.append(RepairRecord(
@@ -253,7 +218,7 @@ class FinalQualityNormalizerConstraint(Constraint):
                     target=f"keyframes[{j}].desc",
                     before=text[-80:],
                     after=new_text[-80:],
-                    detail="武器 holder 归一",
+                    detail="武器 holder 语法归一（不推断持有者）",
                 ))
         return repairs
 
@@ -262,34 +227,14 @@ class FinalQualityNormalizerConstraint(Constraint):
         text = shot.get("ff_desc")
         if not isinstance(text, str) or len(text) <= 120:
             return []
-        original = text
-        current = text
-        while len(current) > 120 and "。" in current:
-            stripped = current.rstrip("。")
-            if "。" not in stripped:
-                break
-            head, tail = stripped.rsplit("。", 1)
-            if not tail.strip():
-                break
-            candidate = head + "。"
-            # Never hard-cut at an arbitrary character. A broken parenthesis
-            # or dangling size token is worse than an over-budget description:
-            # the final quality gate can reject the latter, while downstream
-            # image/video prompts cannot reliably recover from the former.
-            if text_integrity_errors(candidate):
-                break
-            current = candidate
-        if current == original:
-            return []
-        shot["ff_desc"] = current
         return [RepairRecord(
             constraint_name="final_quality_normalizer",
             shot_index=sid,
-            action="rewrite",
+            action="warn",
             target="ff_desc",
-            before=original[-80:],
-            after=current[-80:],
-            detail="ff_desc 长度裁剪",
+            before=text[-80:],
+            after=text[-80:],
+            detail="ff_desc 超长；保留原文，禁止自动删除尾句",
         )]
 
     @staticmethod
@@ -307,16 +252,18 @@ class FinalQualityNormalizerConstraint(Constraint):
             return []
         if any(w in probe for w in positions):
             return []
-        new_prompt = prompt.rstrip("。") + "。人物稳定位于船板，身体不动。"
-        shot["prompt"] = new_prompt
+        # A moving/airborne action does not prove that the subject is stably
+        # standing on the boat deck.  The old fallback appended exactly that
+        # claim and contradicted jumps/splashes.  Report the ambiguity instead.
         return [RepairRecord(
             constraint_name="final_quality_normalizer",
             shot_index=sid,
-            action="append",
+            action="warn",
             target="prompt",
-            before=prompt[-80:],
-            after=new_prompt[-80:],
-            detail="船只承重面位置补锚",
+            detail=(
+                "船只/水面镜头含位移或腾空动作，但缺少明确的承重面或稳定状态；"
+                "保留原文，交 audit 判断，禁止自动追加“人物稳定位于船板”。"
+            ),
         )]
 
     @staticmethod
@@ -324,28 +271,12 @@ class FinalQualityNormalizerConstraint(Constraint):
         text = shot.get("lf_desc")
         if not isinstance(text, str) or len(text) <= 120:
             return []
-        original = text
-        current = text
-        while len(current) > 120 and "。" in current:
-            stripped = current.rstrip("。")
-            if "。" not in stripped:
-                break
-            head, tail = stripped.rsplit("。", 1)
-            if not tail.strip():
-                break
-            candidate = head + "。"
-            if text_integrity_errors(candidate):
-                break
-            current = candidate
-        if current == original:
-            return []
-        shot["lf_desc"] = current
         return [RepairRecord(
             constraint_name="final_quality_normalizer",
             shot_index=sid,
-            action="rewrite",
+            action="warn",
             target="lf_desc",
-            before=original[-80:],
-            after=current[-80:],
-            detail="lf_desc 长度裁剪",
+            before=text[-80:],
+            after=text[-80:],
+            detail="lf_desc 超长；保留原文，禁止自动删除尾句",
         )]

@@ -25,7 +25,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from step01_script_gen.scene_anchors import BASE_POS_WORDS, SCENE_ANCHORS
 from .base import Constraint
-from .types import RepairRecord, Severity
+from .types import RepairRecord, Severity, Violation
 
 
 def _build_gaze_directions() -> tuple[str, ...]:
@@ -84,6 +84,10 @@ class ThreatGazeCouplingConstraint(Constraint):
 
     def apply(self, ctx) -> list[RepairRecord]:
         repairs: list[RepairRecord] = []
+        vague = ("", "身旁", "旁边", "其侧", "附近", "不远处", "一侧")
+        concrete_words = tuple(_GAZE_DIRECTIONS) + (
+            "前景", "中景", "后景", "画中", "船", "桥", "街", "厅", "院", "门",
+        )
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
             discoverer_gaze = _find_discoverer_gaze(shot)
             if not discoverer_gaze:
@@ -91,30 +95,69 @@ class ThreatGazeCouplingConstraint(Constraint):
             layout = shot.get("char_layout")
             if not isinstance(layout, list):
                 continue
-            changed = False
-            for item in layout:
-                if not isinstance(item, dict):
-                    continue
-                name = str(item.get("name", "")).strip()
-                if not _is_threat_name(name):
-                    continue
-                pos = str(item.get("position", "")).strip()
-                if discoverer_gaze in pos:
-                    continue
-                new_pos = re.sub(r"画左|画右", discoverer_gaze, pos)
-                if new_pos == pos:
-                    new_pos = discoverer_gaze
-                item["position"] = new_pos
-                changed = True
-            if changed:
-                repairs.append(
-                    RepairRecord(
+            threats = [
+                item for item in layout
+                if isinstance(item, dict)
+                and _is_threat_name(str(item.get("name", "")).strip())
+            ]
+            if len(threats) != 1:
+                if threats:
+                    ctx.record_violation(Violation(
                         constraint_name=self.name,
-                        shot_index=idx,
-                        action="set_field",
+                        severity=Severity.WARN,
+                        shot_index=None if is_hook else idx,
+                        field="char_layout",
+                        message=(
+                            f"视线方向 {discoverer_gaze} 无法确定性绑定到唯一威胁源；"
+                            "保留全部原文站位，交由 audit 判断。"
+                        ),
+                        evidence=str([str(t.get('name') or '') for t in threats]),
+                        repaired=False,
+                    ))
+                    repairs.append(RepairRecord(
+                        constraint_name=self.name,
+                        shot_index=None if is_hook else idx,
+                        action="warn",
                         target="char_layout",
-                        before="",
-                        after="",
-                    )
-                )
+                        detail="多个威胁源，拒绝按视线方向改写站位",
+                    ))
+                continue
+            item = threats[0]
+            pos = str(item.get("position", "")).strip()
+            if pos in vague or not any(w in pos for w in concrete_words):
+                item["position"] = discoverer_gaze
+                repairs.append(RepairRecord(
+                    constraint_name=self.name,
+                    shot_index=None if is_hook else idx,
+                    action="set_field",
+                    target="char_layout.position",
+                    before=pos,
+                    after=discoverer_gaze,
+                    detail="仅用视线方向补全缺失/抽象站位，不覆盖已有具体站位",
+                ))
+            elif discoverer_gaze not in pos:
+                ctx.record_violation(Violation(
+                    constraint_name=self.name,
+                    severity=Severity.WARN,
+                    shot_index=None if is_hook else idx,
+                    field="char_layout",
+                    message=(
+                        f"威胁源已有具体站位“{pos}”，与发现者视线方向 {discoverer_gaze} 不一致；"
+                        "保留站位，交由 audit 复核，禁止自动覆盖。"
+                    ),
+                    evidence=pos,
+                    repaired=False,
+                ))
+                repairs.append(RepairRecord(
+                    constraint_name=self.name,
+                    shot_index=None if is_hook else idx,
+                    action="warn",
+                    target="char_layout.position",
+                    before=pos,
+                    after=pos,
+                    detail="具体站位与视线方向冲突，保留原文交由 audit",
+                ))
         return repairs
+
+
+__all__ = ["ThreatGazeCouplingConstraint"]

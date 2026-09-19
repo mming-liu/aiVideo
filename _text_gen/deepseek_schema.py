@@ -597,8 +597,59 @@ OUTLINE_SCHEMA = {
                 "items": {"type": "string"},
                 "description": "需要重点刻画的关键场景",
             },
+            "required_facts": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "必须保留的剧情事实，每条包含事实和原文证据",
+            },
+            "causal_chain": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "起因→行动→结果→悬念",
+            },
+            "character_motives": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "角色想做什么、为什么、原文证据",
+            },
+            "shot_beats": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "镜头节拍、信息目的和原文依据",
+            },
+            "time_budget": {
+                "type": "string",
+                "description": "对白、动作、反应的大致时间预算",
+            },
         },
-        "required": ["main_events", "characters", "emotional_arc", "climax", "end_hook", "key_scenes"],
+        "required": ["main_events", "characters", "emotional_arc", "climax", "end_hook", "key_scenes",
+                     "required_facts", "causal_chain", "character_motives", "shot_beats", "time_budget"],
+        "additionalProperties": False,
+    },
+}
+
+
+REPAIR_PATCH_SCHEMA = {
+    "name": "repair_patches",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "patches": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "shot_id": {"type": "string"},
+                        "field_path": {"type": "string"},
+                        "value": {"type": "string"},
+                    },
+                    "required": ["shot_id", "field_path", "value"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["patches"],
         "additionalProperties": False,
     },
 }

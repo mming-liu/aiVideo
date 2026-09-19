@@ -40,7 +40,7 @@ def _validate_tts_duration(output_path: Path, shot: dict) -> float:
         raise RuntimeError(f"TTS 音频无效或时长探测失败: {output_path}")
     expected = float(shot.get("duration_sec") or shot.get("duration") or 0)
     if expected > 0:
-        tolerance = max(0.35, expected * 0.08)
+        tolerance = max(0.05, expected * 0.02)
         if actual > expected + tolerance:
             raise RuntimeError(
                 f"TTS 超出镜头时长: actual={actual:.2f}s expected={expected:.2f}s "

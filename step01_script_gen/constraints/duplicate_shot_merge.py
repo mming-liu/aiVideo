@@ -69,6 +69,16 @@ def _same_location_family(shot_a: dict, shot_b: dict) -> bool:
     sb = (shot_b.get("scene") or "").strip()
     return bool(sa and sb and sa == sb)
 
+def _is_split_shot(shot: dict) -> bool:
+    try:
+        index = float(shot.get("index"))
+        if abs(index - round(index)) >= 1e-9:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return bool(shot.get("_split_from"))
+
+
 class DuplicateShotMergeConstraint(Constraint):
     """相邻镜重复视觉 HARD 合并（治同 visual 凑镜拖时长）."""
 
@@ -88,6 +98,8 @@ class DuplicateShotMergeConstraint(Constraint):
             for i in range(len(shots) - 1):
                 a, b = shots[i], shots[i + 1]
                 if not isinstance(a, dict) or not isinstance(b, dict):
+                    continue
+                if _is_split_shot(a) or _is_split_shot(b):
                     continue
                 # 同地点（相等或包含关系）才谈「重复视觉」
                 if not _same_location_family(a, b):
@@ -110,7 +122,21 @@ class DuplicateShotMergeConstraint(Constraint):
                     a["lf_desc"] = b["lf_desc"]  # 推进终点取后镜
                 if b.get("motion_desc"):
                     a["motion_desc"] = b["motion_desc"]
-                a.pop("keyframes", None)  # 重复视觉的后镜 kf 无信息量，丢弃由下游重派生
+                # v6.76（09-19）：**不再** pop("keyframes")。
+                #
+                # 原注释称「重复视觉的后镜 kf 无信息量，丢弃由下游重派生」——但唯一
+                # 的「重派生者」kf_time_window_alignment 已在本版降为只报告，pop 之后
+                # 没有任何模块会重建 KF。实测后果比「无 KF」更重：
+                #   frame_spec_repair / frame_spec_consistency 都拿 len(keyframes) 当
+                #   对齐基准，keyframes 缺失（=0）会把 frame_layouts.kfs 一并弹空 →
+                #   该镜在 step02a 一个关键帧图都不生成（实测 kfs: 1 → 0）。
+                # 本约束 docstring 第 12 行本就写明「keyframes 保留前镜」，pop 与之矛盾。
+                #
+                # 保留后 KF 会被自动分摊到合并后的时间轴：本处只写 duration_sec 不写
+                # duration（全仓唯一的非对称写入），shared/kf_time 的惰性重标定据此
+                # 算出 ratio = 新时长/旧时长 并等比放大 KF 的有效时刻。这是全仓唯一
+                # 会触发该重标定的位置——若日后把此处改成对称写入，KF 会退回旧时刻、
+                # 尾部变成无覆盖时段（由 kf_time_window_alignment 上报）。
                 shots.pop(i + 1)
                 merged = True
                 repairs.append(RepairRecord(

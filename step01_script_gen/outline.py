@@ -31,19 +31,29 @@ OUTLINE_PROMPT = """
   "emotional_arc": "本章情绪弧线（如：平静→惊疑→爆发→余波）",
   "climax": "本章高潮事件（冲突/转折点）",
   "end_hook": "结尾钩子（吸引观众看下一集）",
-  "key_scenes": ["关键场景1", "场景2", ...]
+  "key_scenes": ["关键场景1", "场景2", ...],
+  "required_facts": ["事实A｜原文证据：...", "事实B｜原文证据：..."],
+  "causal_chain": ["起因→行动→结果→悬念"],
+  "character_motives": ["角色：想做什么；为什么；原文证据：..."],
+  "shot_beats": ["节拍：...｜本镜信息目的：...｜原文依据：..."],
+  "time_budget": "对白约Xs；动作约Ys；反应约Zs"
 }}
 
 # 规则
 - main_events: 按时间顺序列出 3-6 个主要事件，覆盖全章
+- required_facts: 不得省略的关键事实，必须附原文证据
+- causal_chain: 每个关键转折必须具备起因→行动→结果→悬念
+- character_motives: 说明角色为什么这样做，并附原文证据
+- shot_beats: 每个节拍只承载一条主要信息，标出信息目的和证据
+- time_budget: 给对白、动作、反应预留可执行时间，不能靠加速朗读掩盖
 - emotional_arc: 一句话概括情绪走向
 - climax: 全章最震撼/冲突最强的事件
-- end_hook: 结尾留的悬念/钩子
+- end_hook: 结尾留的悬念/钩子，必须有原文依据
 - key_scenes: 需要重点刻画的关键场景（动作/情感高潮）
 """
 
 
-def generate_outline(novel_text: str) -> dict | None:
+def generate_outline(novel_text: str, model: str | None = None) -> dict | None:
     """调用 LLM 生成章节大纲，返回 dict；失败返回 None（不阻断分镜生成）."""
     if not novel_text:
         return None
@@ -55,6 +65,7 @@ def generate_outline(novel_text: str) -> dict | None:
         max_tokens=4000,
         temperature=0.3,
         json_schema=OUTLINE_SCHEMA,
+        model=model,
     )
     result = service.generate(req)
     if not result.success:
@@ -130,4 +141,14 @@ def outline_to_anchor(outline: dict | None) -> str:
         parts.append(f"【结尾钩子】{outline['end_hook']}")
     if outline.get("characters"):
         parts.append("【出场角色】" + "、".join(outline["characters"]))
+    if outline.get("required_facts"):
+        parts.append("【必须保留事实】" + "；".join(outline["required_facts"]))
+    if outline.get("causal_chain"):
+        parts.append("【因果链】" + "；".join(outline["causal_chain"]))
+    if outline.get("character_motives"):
+        parts.append("【角色动机】" + "；".join(outline["character_motives"]))
+    if outline.get("shot_beats"):
+        parts.append("【镜头节拍】" + "；".join(outline["shot_beats"]))
+    if outline.get("time_budget"):
+        parts.append(f"【时间预算】{outline['time_budget']}")
     return "\n".join(parts)

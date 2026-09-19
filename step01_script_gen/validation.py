@@ -1734,6 +1734,8 @@ def _check_person_boat_position(shots: list[dict]) -> dict:
         "移动", "滑行", "漂移", "荡", "摇", "晃",
     ]
 
+    from step01_script_gen.scene_anchors import is_valid_position
+
     for shot in shots:
         idx = shot.get("index", "?")
         prompt = shot.get("prompt", "")
@@ -1756,15 +1758,38 @@ def _check_person_boat_position(shots: list[dict]) -> dict:
             # 没有角色锚点，可能是空镜，跳过
             continue
 
-        # 3. 检查是否有明确的位置约束词
+        # 3. 位置约束：既接受文本中的姿态词，也接受结构化 char_layout
+        #    的合法位置。否则「画右/画远处/岸边」这类明确站位会被误判成缺约束。
+        char_names = re.findall(r"\[([^\]：:]+)[：:]", prompt)
+        layout = shot.get("char_layout")
+        if isinstance(layout, list):
+            for item in layout:
+                if isinstance(item, dict):
+                    name = str(item.get("name") or "").strip()
+                    if name and name not in char_names:
+                        char_names.append(name)
+
         has_position_constraint = any(
             constraint in check_text
             for constraint in position_constraint_words
         )
+        if not has_position_constraint and isinstance(layout, list):
+            has_position_constraint = any(
+                isinstance(item, dict)
+                and bool(str(item.get("position") or "").strip())
+                and is_valid_position(
+                    str(item.get("position") or "").strip(),
+                    str(shot.get("location") or shot.get("scene") or ""),
+                )
+                for item in layout
+            )
 
-        # 4. 检查是否有歧义动作词
+        # 4. 歧义动作词必须与角色名出现在同一分句才触发；否则「灯笼晃动」
+        #    /「水波晃动」会被错误算到人物身上。
+        clauses = [c.strip() for c in re.split(r"[，。；！？\n]", check_text) if c.strip()]
         has_ambiguous_action = any(
-            action in check_text
+            action in clause and any(name and name in clause for name in char_names)
+            for clause in clauses
             for action in ambiguous_action_words
         )
 
@@ -1957,10 +1982,18 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
 
         # 计算相似度
         if ff_normalized == lf_normalized:
-            issues.append(
-                f"镜头{idx}: ff_desc 和 lf_desc 完全相同，生成的视频将只是静态图片的淡入淡出！"
-                f"ff_desc=\"{ff_desc}\", lf_desc=\"{lf_desc}\""
-            )
+            _motion = str(shot.get("motion_desc") or "")
+            _static = any(w in _motion for w in ("啜泣", "说话", "盯视", "凝视", "聆听", "回答", "沉默", "等待", "皱眉", "颤抖"))
+            _moving = any(w in _motion for w in ("跃", "跳", "冲", "落", "刺", "劈", "跑", "倒", "丢", "脱手", "入水", "出水"))
+            _ff_heads = {w for w in ("抬头", "低头", "仰面") if w in ff_desc}
+            _kf_text = " ".join(str(kf.get("desc") or "") for kf in (shot.get("keyframes") or []) if isinstance(kf, dict))
+            _kf_heads = {w for w in ("抬头", "低头", "仰面") if w in _kf_text}
+            _intermediate = bool(_ff_heads and _kf_heads and _ff_heads != _kf_heads)
+            if not (any(w in _motion for w in ("承接前半镜终态", "保持当前姿态")) or (_static and not _moving) or _intermediate):
+                issues.append(
+                    f"镜头{idx}: ff_desc 和 lf_desc 完全相同，生成的视频将只是静态图片的淡入淡出！"
+                    f"ff_desc=\"{ff_desc}\", lf_desc=\"{lf_desc}\""
+                )
         elif ff_normalized in lf_normalized or lf_normalized in ff_normalized:
             # 检查是否有明显的动作变化词
             action_keywords = ["跃", "跳", "冲", "飞", "跑", "倒下", "倒地", "刺", "劈", "砍",
@@ -2046,7 +2079,7 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
                 f"镜头{_idx}: lf_desc 含中间态（{'/'.join(sorted(_kinds))}）——"
                 f"尾帧必须是动作彻底结束的终态，中间态会被视频模型当【视频终点】定格成"
                 f"诡异画面（如匕首尖一直戳水面）。应让武器/人物彻底没入或已结束"
-                f"（规则609，normalize_lf_desc 会自动修复）。"
+                f"（规则609；不得确定性改写成已刺入/已倒下，转 LLM regen 修复）。"
             )
     for w in _midstate_warns:
         _get_logger().warn(f"尾帧中间态: {w}")
@@ -3725,7 +3758,21 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
         "俯身", "弯腰", "躬身", "驾辕", "牵牛", "行走", "探出", "探身",
         "探水", "高举", "举刀", "举匕首", "举剑", "扬刀", "挥刀",
         "拱手", "抱拳", "伸手", "抬手", "低头", "抬头", "回头",
-        "侧头", "仰头",
+        "侧头", "仰头", "歪倒", "倒伏",
+        # 位置短语常被写进 facing；这不是朝向缺失。
+        "立于", "站在", "坐于", "蹲于", "卧于", "位于", "伏于",
+        # 09-19 复审：facing 里常写入动作/情绪短语，不应再要求模型补朝向。
+        # 这些是画面状态，不是方向缺失；否则会把合法镜头全部升级为 VisualRisk。
+        "依偎", "摸唇", "摸脸", "捂脸", "捂嘴", "尖叫", "呼喊", "低语",
+        "盯视", "凝视", "眺望", "怒视", "瞪视", "颤抖", "发抖", "瑟缩",
+        "呆滞", "惊恐", "愤怒", "悲伤", "哭泣", "落泪", "冷笑", "微笑",
+        "咬牙", "皱眉", "摇头", "点头", "抓船舷", "扶船舷", "抓栏杆",
+        "举灯", "赶来", "逼近", "退后", "踉跄", "瘫坐", "倚靠", "环抱",
+        "扬声说话", "低声说话", "开口", "发问", "质问", "责问", "喝止",
+        "吩咐", "命令", "回答", "回应", "恐吓", "劝告", "解释", "汇报",
+        "抱头", "指水", "指画", "指向", "指着", "指向画", "指认",
+        "跃出", "从水中跃出", "窜出", "破水而出", "纵身跃上", "飞掠上船",
+        "倒纵", "倒纵入水", "没入", "入水", "退入水中",
     )
     for shot in targets:
         idx = shot.get("index", "?")
@@ -3769,7 +3816,8 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
             facing = str(item.get("facing", "")).strip()
             # 编造判定：既不在注册表、也不在本镜文本中可见 → 才提示。
             # 防误伤文本可见的临时角色（如「小娃娃」在 ff_desc 出现但不在顶层 characters）
-            if name not in known and not any(a in probe for a in (name,)):
+            if (name not in known and name not in set(COLLECTIVE_NAMES)
+                    and not any(a in probe for a in (name,))):
                 warnings.append(
                     f"{label}: char_layout 角色「{name}」不在角色注册表内且未在本镜文本出现"
                     f"（规则51要求与顶层 characters 一致）")
@@ -4257,6 +4305,7 @@ def _run_prompt_checklist(script: dict) -> dict:
 
     # v6.38 红果 60-90s 短剧标准检查（08-22 起，warning-only）
     results["redguo_standard"] = _check_redguo_standard(shots, script.get("characters", []))
+    results["action_load"] = _check_action_load(shots, script.get("hook"))
 
     # v6.35 站位台吸收（规则51）：多人站位蓝图检查（warning-only，不进 hard_fail）
     results["multi_person_staging"] = _check_multi_person_staging(
@@ -4381,6 +4430,7 @@ _REGEN_FEEDBACK_LABELS = {
     "climax_priority": "高潮优先原则(v6.35)",
     "long_dash_usage": "长破折号使用(规则56/v6.38)",
     "redguo_standard": "红果60-90s标准(v6.38)",
+    "action_load": "动作负荷(单镜事件组合)",
     "kf_stage_consistency": "kf阶段标签一致性(v6.40)",
 }
 
@@ -4506,14 +4556,10 @@ def post_fix_shot_prompts(script: dict) -> dict:
       5. 正文净化：从 prompt 主体中剥离「画面/镜头」等禁止词
     只追加不删除（净化除外），安全幂等。hook 由独立逻辑处理，不在此处。
     """
-    from shared.style_prefix import normalize_ff_desc
     from shared.model_caps import active_video_uses_native_voice
     # 原生发声供应商（volcengine/minimax/agent_plan）不补「（用中文说）」；
     # 旧供应商保留历史行为。用 active_video_uses_native_voice() 统一判断。
     native_voice = active_video_uses_native_voice()
-    defined_ids = frozenset(
-        c.get("identifier", "") for c in script.get("characters", []) if c.get("identifier")
-    )
     shots = script.get("shots", [])
     for i, shot in enumerate(shots):
         # v6.69（2026-09-12 回写陷阱重构）：本循环读写统一 shot 直读直写——旧实现
@@ -4546,30 +4592,16 @@ def post_fix_shot_prompts(script: dict) -> dict:
             if "（用中文说）" not in prompt and "(用中文说)" not in prompt:
                 shot["prompt"] = prompt = prompt.rstrip() + "（用中文说）"
 
-        # 2. 说话人入画（跳过 hook）
-        if shot.get("index") != 0 and is_dialogue:
-            speaker = _extract_speaker(narration, defined_ids) or _extract_speaker(subtitle, defined_ids)
-            if speaker and speaker not in prompt:
-                shot["prompt"] = prompt = prompt.rstrip() + f"。画面中说话人「{speaker}」正开口说话，口型与台词同步"
-
-        # 3. 光位量化：模糊光词（自然光/柔和光线）→ 具体灯位。先于情绪可视化，
-        #    让「浪漫/诡异」等情绪词在 _fix_emotion_visualization 替换前仍可被
-        #    _fix_lighting_quantization 用来挑选对应光位（校验项 _check_lighting_position 依赖；
-        #    8种AI人像专业光位教程吸收）
-        shot["prompt"] = prompt = _fix_lighting_quantization(prompt)
-
         # 3.2 禁抽象形容词/比喻词（A5 修复 08-11，规则5.1）：「快速出剑」「身形矫健」
         #    这类抽象词视频模型画不出具体动作。确定性删除抽象修饰词，保留主体与动作
         #    （校验项 _check_forbidden_abstract 依赖）。motion_desc 同样处理。
-        shot["prompt"] = prompt = _fix_forbidden_abstract(prompt)
-        shot["motion_desc"] = motion_desc = _fix_forbidden_abstract(motion_desc)
+        # Visual prose is frozen after generation; semantic cleanup belongs to
+        # validation/audit plus the LLM repair round, not this write path.
         # 3.2.1 08-15 bug 修复：_check_forbidden_abstract 扫 prompt/motion/ff/lf 四字段，
         # 但此前这里只修 prompt/motion →「迅速」出现在 ff/lf（shot25 lf_desc 实测）
         # 检到了没修到、每次运行都报。ff/lf 同样确定性删抽象词（幂等）。
-        for _f in ("ff_desc", "lf_desc"):
-            _v = shot.get(_f)
-            if _v:
-                shot[_f] = _fix_forbidden_abstract(_v)
+        # ff/lf descriptions are audit inputs and must remain byte-for-byte
+        # unchanged here.
 
         # 3.2.2 规则39 远景禁五官：确定性剥离精细五官词（校验项 _check_wide_shot_facial
         # 依赖）——远景人物只留身份+服装主色+剪影，精细五官（剑眉/星目/朱唇）会让模型
@@ -4580,14 +4612,7 @@ def post_fix_shot_prompts(script: dict) -> dict:
             shot.get("ff_desc", ""), prompt,
             shot.get("location", ""), shot.get("scene", "")]) for w in _WIDE_SHOT_WORDS)
         if _is_wide:
-            shot["prompt"] = prompt = _fix_wide_shot_facial(prompt)
-            _vf = shot.get("ff_desc")
-            if _vf:
-                shot["ff_desc"] = _fix_wide_shot_facial(_vf)
-
-        # 3.5 情绪可视化：抽象情绪词 → 追加可视化动作（prompt + motion_desc）
-        shot["prompt"] = prompt = _fix_emotion_visualization(prompt)
-        shot["motion_desc"] = motion_desc = _fix_emotion_visualization(motion_desc)
+            pass
 
         # 3.6 对白超长句确定性断句（B9 修复 08-11，规则43）：无标点连续 >15 字
         #    的单句在语义停顿点插入「，」，只改标点不改文字（规则31 兼容）。
@@ -4610,203 +4635,21 @@ def post_fix_shot_prompts(script: dict) -> dict:
             shot["subtitle"] = _fix_trailing_dash_punct(subtitle)
             narration = _fixed_dash
 
-        # 4. 转场关键词：场景切换镜补淡入淡出（跳过 hook）
-        if shot.get("index") != 0 and i < len(shots) - 1:
-            curr_loc = shot.get("location", "") or shot.get("scene", "")
-            next_loc = shots[i + 1].get("location", "") or shots[i + 1].get("scene", "")
-            if curr_loc and next_loc and curr_loc != next_loc:
-                if not any(kw in prompt for kw in ("淡入淡出", "转场", "自然过渡", "叠化")):
-                    shot["prompt"] = prompt = prompt.rstrip() + "。淡入淡出转场，转场时长0.5s"
 
-        # v6.18：ff_desc 静态化归一化（多动作/进行态堆叠 → 单一静态瞬间）
-        if shot.get("ff_desc"):
-            shot["ff_desc"] = normalize_ff_desc(
-                shot["ff_desc"], shot, script.get("characters", []))
-
-        # v1.1：尾帧 lf_desc 目光修复（错别字 + 看向动作结果对象——听香看被刺倒的杨旭）
-        if shot.get("lf_desc"):
-            from shared.vimax_bridge import fix_lf_desc_gaze
-            shot["lf_desc"] = fix_lf_desc_gaze(
-                shot["lf_desc"], shot, script.get("characters", []))
-
-        # v6.28：尾帧武器残留确定性修复（从根上解决「匕首尖停水面」）。
-        # LLM 常把「刺客没入水中」写成「仅余一截刀尖刺破水面」——刀尖半截卡在水面，
-        # v6.29：lf_desc 终态归一化（中间态 → 彻底结束；与 ff 侧 normalize_ff_desc 对称）。
-        # 取代 v6.28 的 _fix_lf_weapon_residue 窄正则（审计 S1：_fix_* 小函数收敛为管道）。
-        # 覆盖残留/半身/过渡/即将/进行 五类中间态（武器残留是其一）。
-        if shot.get("lf_desc"):
-            from shared.style_prefix import normalize_lf_desc
-            shot["lf_desc"] = normalize_lf_desc(
-                shot["lf_desc"], shot, script.get("characters", []))
-
-        # 08-15 B1/B2：ff/lf 确定性锚注入（规则13.7 服装色短锚防漂色 / 规则41 威胁
-        # 朝向防背对）。放在各 normalize 之后，锚不被归一化剥离；幂等——已有锚跳过。
-        for _f in ("ff_desc", "lf_desc"):
-            _v = shot.get(_f)
-            if _v:
-                _v = _inject_dress_anchor(_v, script.get("characters", []))
-                _v = _inject_threat_facing(_v, shot)
-                shot[_f] = _v
-
-        # 08-15（PR-2）：中间关键帧确定性骨架锚定——ff/lf 定稿后，把与 step02a 生成时
-        # 同款的 _extract_char_layout「角色姿态/位置/朝向」块追加到 0<tr<1 的 keyframe
-        # desc（脚本层先落地，step02a 幂等跳过）。治「24 个中间关键帧缺姿态/位置锚定」
-        # 聚合告警，威胁源朝向兜底（面向目标/禁止背对）随之注入；空镜（无角色）返回
-        # 空跳过。幂等：「【角色锚定】」标记已在则不动。
-        _kfs = shot.get("keyframes") or []
-        if _kfs and isinstance(_kfs, list):
-            from shared.vimax_bridge import _extract_char_layout as _kf_layout
-            for _kf in _kfs:
-                if not isinstance(_kf, dict):
-                    continue
-                # v6.34 字段迁移：走 shared.kf_time.is_middle_kf（t_sec 优先 + time_ratio fallback）
-                if not is_middle_kf(_kf, shot):
-                    continue
-                _kd = _kf.get("desc") or ""
-                if not _kd:
-                    continue
-                if "【角色锚定】" in _kd:
-                    # 剥离逻辑单源 shared.frame_spec（frame_spec_repair 约束同用）
-                    from shared.frame_spec import strip_polluted_char_anchor_block
-                    _kd_clean = strip_polluted_char_anchor_block(_kd)
-                    if _kd_clean == _kd:
-                        continue  # 锚块干净 → 幂等跳过
-                    # v6.62（09-06）历史坏块自救：块内含「未指定」占位符（09-05/06
-                    # 存盘数据被 _FALLBACK_SURFACE 污染，root-fix 见
-                    # shared/vimax_bridge.py surface 空值守卫）→ 剥掉坏块重新生成
-                    _kd = _kd_clean
-                _role_scan = " ".join(filter(None, [
-                    shot.get("ff_desc", ""), shot.get("lf_desc", ""),
-                    shot.get("motion_desc", "") or shot.get("prompt", ""),
-                    _kd,
-                ]))
-                _anchor = _kf_layout(shot, script.get("characters", []),
-                                     role_scan_text=_role_scan)
-                if _anchor:
-                    # v6.43（08-23 审计）：原 f"{_kd}。{_anchor}" 在 _kd 末尾已
-                    # 有「。」时会产生「。。」双句号（实测 24 处）。rstrip 句末
-                    # 标点后再拼接。
-                    _kd_stripped = _kd.rstrip("。！？，,;；")
-                    _kf["desc"] = f"{_kd_stripped}。{_anchor}"
-
-        # 08-17（P18 闭环）：kf 坐→仰卧跳变自动改写过渡态
-        # v6.43（08-23 审计）：原版写死「杨旭」——切到其他小说失效。改为
-        # 遍历 shot.char_layout / script.characters 所有出镜角色，每个角色
-        # 都检查「首帧坐姿 → kf 仰卧/躺倒」跳变。
-        # 只输出 WARN 等 LLM 修，跨轮残留。改为确定性改写：kf[0] 改成过渡态
-        # 「身体后倾、即将倒地」类描述 + 标记「（过渡态）」，step02a/vimax_bridge
-        # 锚定能直接用。幂等：「（过渡态）」已在则跳过。
-        _ff_pose_m = _extract_state_markers(shot.get("ff_desc", "") or "")
-        _ff_poses = _ff_pose_m.get("poses", {}) or {}
-        # 收集本镜出镜角色：优先 char_layout，兜底 script.characters
-        _char_pool = list(_ff_poses.keys())
-        if not _char_pool:
-            for _cl in shot.get("char_layout") or []:
-                if isinstance(_cl, dict) and _cl.get("name"):
-                    _char_pool.append(str(_cl["name"]))
-        if not _char_pool:
-            _char_pool = []  # 通用化（v6.62）：删除旧硬编码 ["杨旭"]——无 char_layout 时不再
-                              # 注入"杨旭"假角色名，让上层 _extract_state_markers/pose 检查
-                              # 全部用空集合判定（warning-only，不污染 prompt）。
-        for _char in _char_pool:
-            _ff_p = _ff_poses.get(_char, "")
-            if _ff_p not in ("盘坐", "盘膝", "端坐", "坐"):
-                continue
-            handled = False
-            for _kf in _kfs:
-                if not isinstance(_kf, dict):
-                    continue
-                if not is_middle_kf(_kf, shot):
-                    continue
-                _kd = _kf.get("desc") or ""
-                if "（过渡态）" in _kd or "过渡态）" in _kd:
-                    continue
-                _kf_m = _extract_state_markers(_kd)
-                _kf_p = _kf_m.get("poses", {}).get(_char, "")
-                if _kf_p in ("仰卧", "躺", "仰倒", "倒", "已躺下"):
-                    _new_kd = re.sub(
-                        re.escape(_char) + r"[^，。！？；、]*?(仰卧|躺下|仰倒|倒下)",
-                        f"{_char}身体后倾、即将倒地",
-                        _kd,
-                    )
-                    if _new_kd != _kd:
-                        _kf["desc"] = f"{_new_kd}（过渡态）"
-                        handled = True
-                        break  # 仅改第一个命中（kf[0]），后续 kf 仍按自然推进
-            if handled:
-                continue
-
-        # 08-17（P18 闭环）：打斗镜 motion_desc 自动补打击反馈元素
-        # 原逻辑：combat_action WARN 等 LLM 修，跨轮残留。改为确定性补强：
-        # 检测到打斗镜头（按 _COMBAT_KEYWORDS），motion_desc 末尾追加打击反馈词，
-        # 让 AI 视频模型有「打到了」的具体画面（不靠 LLM 自觉）。幂等：
-        # 已含「火星四溅/衣袂翻飞/冲击波」任一则跳过。
-        _motion_now = shot.get("motion_desc", "") or ""
-        _is_combat = any(kw in _motion_now for kw in _COMBAT_KEYWORDS) or \
-            any(kw in (shot.get("ff_desc", "") or "") for kw in _COMBAT_KEYWORDS)
-        if _is_combat:
-            _hit_fx = ("火星四溅", "衣袂翻飞", "冲击波", "动态模糊", "碎屑飞溅",
-                       "水花飞溅", "水花四溅")
-            if not any(w in _motion_now for w in _hit_fx):
-                # 2026-09-12 根因修复：打击反馈按场景物理选词——水下/水面等水体
-                # 上下文注「火星四溅」是物理矛盾（prompt_semantic 水下矛盾同族），
-                # 改注水花系；陆战维持火星系。
-                _fx_ctx = " ".join(filter(None, [
-                    _motion_now, shot.get("scene", "") or "",
-                    shot.get("location", "") or "", shot.get("ff_desc", "") or "",
-                ]))
-                _water_ctx = any(w in _fx_ctx for w in
-                                 ("水下", "水面", "水底", "水中", "湖", "河", "江", "船底"))
-                _fx = "水花四溅、衣袂翻飞" if _water_ctx else "火星四溅、衣袂翻飞"
-                shot["motion_desc"] = f"{_motion_now.rstrip('。')}，{_fx}"
-
-    # hook 也需要光位量化 + 情绪可视化修复（光位先，让情绪词先驱动光位选择）
+    # hook 只做无损格式/清洗；视觉事实的语义修补交给校验报告 + LLM 修复轮。
     hook = script.get("hook")
     if hook and isinstance(hook, dict):
-        hook["prompt"] = _fix_lighting_quantization(hook.get("prompt", "") or "")
-        hook["prompt"] = _fix_forbidden_abstract(hook.get("prompt", "") or "")
+        # Hook visual fields are also frozen after generation.
         # 2026-09-12（P1 修正）：与 shots 同款——已知残片形态清单精确剔除。
         # 旧「句读后 ≤30 字一律截除」会误删合法短句（实测「他看向远方」被截）。
         hook["prompt"] = _strip_prompt_tail_garbage(hook.get("prompt", "") or "")
-        hook["motion_desc"] = _fix_forbidden_abstract(hook.get("motion_desc", "") or "")
         # 08-15 bug 修复（与 shot 3.2.1 一致）：hook 的 ff/lf 也确定性删抽象词
-        for _f in ("ff_desc", "lf_desc"):
-            _hv = hook.get(_f)
-            if _hv:
-                hook[_f] = _fix_forbidden_abstract(_hv)
-        hook["prompt"] = _fix_emotion_visualization(hook.get("prompt", "") or "")
-        hook["motion_desc"] = _fix_emotion_visualization(hook.get("motion_desc", "") or "")
         # 08-15（P18）：hook 同样剥离远景精细五官词（_check_wide_shot_facial 覆盖 hook）
         _hook_wide = any(w in " ".join([
             hook.get("ff_desc", ""), hook.get("prompt", ""),
             hook.get("location", ""), hook.get("scene", "")]) for w in _WIDE_SHOT_WORDS)
         if _hook_wide:
-            hook["prompt"] = _fix_wide_shot_facial(hook.get("prompt", "") or "")
-            _hvf = hook.get("ff_desc")
-            if _hvf:
-                hook["ff_desc"] = _fix_wide_shot_facial(_hvf)
-        # v6.18：hook ff_desc 同样归一化
-        if hook.get("ff_desc"):
-            hook["ff_desc"] = normalize_ff_desc(
-                hook["ff_desc"], hook, script.get("characters", []))
-        # v1.1：hook 尾帧 lf_desc 目光修复（与 shot 一致）
-        if hook.get("lf_desc"):
-            from shared.vimax_bridge import fix_lf_desc_gaze
-            hook["lf_desc"] = fix_lf_desc_gaze(
-                hook["lf_desc"], hook, script.get("characters", []))
-
-        # v6.29：hook 尾帧终态归一化（同 shot，取代 v6.28 武器残留窄正则）
-        if hook.get("lf_desc"):
-            from shared.style_prefix import normalize_lf_desc
-            hook["lf_desc"] = normalize_lf_desc(
-                hook["lf_desc"], hook, script.get("characters", []))
-        # 08-15 B1/B2：hook ff/lf 同样注入服装色锚 + 威胁朝向（与 shot 一致）
-        for _f in ("ff_desc", "lf_desc"):
-            _hv = hook.get(_f)
-            if _hv:
-                _hv = _inject_dress_anchor(_hv, script.get("characters", []))
-                _hv = _inject_threat_facing(_hv, hook)
-                hook[_f] = _hv
+            pass
         # 08-15（P18）：hook 台词破折号裸收尾补「！」（_check_voice_punctuation 覆盖 hook）
         if hook.get("narration_segment"):
             hook["narration_segment"] = _fix_trailing_dash_punct(hook["narration_segment"])
@@ -5417,8 +5260,11 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
     _W_EXTRA = ("短刃", "利刃", "兵刃")  # WEAPON_WORDS 不含「刃」系单作词，本地补充
     _ALL_W = list(_W_WORDS) + list(_W_EXTRA)
     _HOLDER_VERBS = ("握", "持", "拔", "抽", "执", "攥", "拎", "提", "按", "掷", "甩", "接")
+    # 「已脱手/脱手」是武器释放的明确落点锚：武器已不在人物手中时不需要
+    # 再补 holder。09-19 真实产物 hook kf1「匕首已脱手」曾被误报为无主武器。
     _DROP_ANCHORS = ("插在", "刺在", "钉在", "落地", "掉落", "坠入", "没入", "沉入",
-                     "置于", "放在", "横在")
+                     "置于", "放在", "横在", "脱手", "已脱手", "脱手飞出",
+                     "脱手坠地", "滑落水中", "沉入水中")
     issues, warnings = [], []
     checks = [(s, f"镜头{s.get('index')}") for s in shots]
     if hook:
@@ -5439,7 +5285,11 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
             if not text:
                 continue
             t = text
-            for excl in ("戟指", "剑眉", "刀眉", "烟枪"):  # 与武器词检查同口径
+            for excl in (
+                "戟指", "剑眉", "刀眉", "烟枪",
+                # 受伤结果/视觉现象不是可被握持的武器实体。
+                "中刀", "中剑", "刀伤", "剑伤", "刀痕", "剑痕",
+            ):
                 t = t.replace(excl, "")
             held = any(
                 isinstance(e, dict) and any(
@@ -6472,10 +6322,12 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
 
         # 3. FF→kf[0] 状态连续性：FF 受害者盘坐 + kf[0] 受害者直接仰卧 = 跳变
         # 通用化（v6.62）：从 ff_m["poses"] 找"被打者"——任意角色坐姿→躺姿跳变都触发
-        ff_victim = _find_char_with_pose(ff_m["poses"], _SITTING_POSES)
+        ff_named = _extract_named_poses(ff_text, s)
+        ff_victim = _find_char_with_pose(ff_named, _SITTING_POSES)
         if ff_victim:
             kf0_m = kf_markers[0]
-            kf0_victim = _find_char_with_pose(kf0_m["poses"], _DOWN_POSES)
+            kf0_named = _extract_named_poses(mid_kfs[0][1], s)
+            kf0_victim = _find_char_with_pose(kf0_named, _DOWN_POSES)
             if kf0_victim and kf0_victim == ff_victim:
                 tr0 = mid_kfs[0][0]
                 warnings.append(
@@ -6540,11 +6392,35 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
         # 5. v6.32 角色出现/消失时序合理性
         #    FF + KFs + LF 必须含连贯的角色链——刺客不能凭空出现/消失
         if mid_kfs:
-            ff_has_threat = any(w in ff_text for w in ("刺客", "神秘人", "黑衣人", "杀手", "蒙面人"))
-            lf_has_threat = any(w in lf_text for w in ("刺客", "神秘人", "黑衣人", "杀手", "蒙面人"))
-            kfs_have_threat = any(
-                any(w in d for w in ("刺客", "神秘人", "黑衣人", "杀手", "蒙面人"))
-                for _, d in mid_kfs
+            from shared.frame_spec import is_on_screen
+            threat_words = ("刺客", "神秘人", "黑衣人", "杀手", "蒙面人", "蒙面黑影", "黑影")
+            threat_names = ("刺客", "神秘人", "黑衣人", "杀手", "蒙面人")
+
+            def _spec_has_visible_threat(entries) -> bool:
+                return any(
+                    isinstance(e, dict)
+                    and str(e.get("name") or "").strip() in threat_names
+                    and is_on_screen(e)
+                    for e in (entries or [])
+                )
+
+            layouts = s.get("frame_layouts") if isinstance(s.get("frame_layouts"), dict) else {}
+            kfs_spec_has_threat = any(
+                _spec_has_visible_threat(spec)
+                for spec in (layouts.get("kfs") or [])
+                if isinstance(spec, list)
+            )
+            ff_has_threat = (
+                any(w in ff_text for w in threat_words)
+                or _spec_has_visible_threat(layouts.get("ff"))
+            )
+            lf_has_threat = (
+                any(w in lf_text for w in threat_words)
+                or _spec_has_visible_threat(layouts.get("lf"))
+            )
+            kfs_have_threat = (
+                kfs_spec_has_threat
+                or any(any(w in d for w in threat_words) for _, d in mid_kfs)
             )
             # 合理链：
             #   FF ✓ KFs ✓ LF ✓  → 刺客全程在场（合理）
@@ -6715,12 +6591,29 @@ def _check_kf_time_window_alignment(shots: list[dict], hook: dict = None) -> dic
             )
             continue
 
-        # 检测 1：时段覆盖率
-        if len(mid_kfs) < len(segs):
+        # 检测 1：时段覆盖率。允许段边界帧同时覆盖相邻两段，避免
+        # t_sec=1.0 这种合法边界被误报成“缺段”。
+        covered_segments = set()
+        for _tr, _desc, t_sec in mid_kfs:
+            for _i, (a, b) in enumerate(segs):
+                if a - 0.01 <= t_sec <= b + 0.01:
+                    covered_segments.add(_i)
+        # implicit 空尾段不需要生成“无事件关键帧”。
+        try:
+            _seg_texts = _split_motion_to_seg_texts(motion, segs, float(dur))
+            _required_segments = {
+                i for i, text in enumerate(_seg_texts) if str(text or "").strip()
+            } or set(range(len(segs)))
+        except Exception:
+            _required_segments = set(range(len(segs)))
+        missing_seg_indices = [
+            i for i in sorted(_required_segments) if i not in covered_segments
+        ]
+        if missing_seg_indices:
             seg_summary = "、".join(f"{a:g}-{b:g}秒" for a, b in segs)
             warnings.append(
                 f"镜头{label} motion_desc 分 {len(segs)} 段（{seg_summary}）"
-                f"但只有 {len(mid_kfs)} 个 kf，缺段（每段至少 1 帧定格）。"
+                f"但缺段索引 {missing_seg_indices}，只有 {len(mid_kfs)} 个 kf。"
                 f"建议：写 kf 前先列时段表，每段生成 1 帧 time_ratio = 段中点 / duration_sec。"
             )
 
@@ -7705,6 +7598,64 @@ _REDGUO_CLOSING_WORDS = (
     "握手言和", "和好如初", "阖家团圆", "凯旋归来", "圆满落幕",
     "完美谢幕", "本集终",
 )
+
+
+def _check_action_load(shots: list[dict] = None, hook: dict = None) -> dict:
+    """Advisory: detect shots whose key actions likely exceed one-model focus.
+
+    This is intentionally not a verb-count rule.  It fires on combinations:
+    multiple dramatic event groups, multiple characters initiating changes,
+    prop ownership transfer, or entry/movement/contact/fall/exit chains.
+    """
+    warnings: list[str] = []
+    targets = list(shots or []) + ([hook] if isinstance(hook, dict) else [])
+    event_groups = {
+        "attack": ("刺", "砍", "劈", "挥刀", "攻击", "刺入", "劈砍"),
+        "movement": ("跃", "冲", "扑", "翻", "跳", "起身", "站起", "冲上", "掠上"),
+        "contact": ("抓住", "按住", "抱住", "相撞", "贴身", "接触", "夺"),
+        "fall": ("倒下", "倒地", "仰卧", "跪倒", "跌落", "瘫倒"),
+        "exit": ("没入", "入水", "退场", "逃走", "沉入", "离场"),
+    }
+    prop_change = ("脱手", "掉", "夺过", "接过", "交出", "递出", "递给", "抛", "掷")
+    for shot in targets:
+        if not isinstance(shot, dict):
+            continue
+        idx = shot.get("index", "?")
+        text = " ".join(filter(None, [
+            str(shot.get("motion_desc") or ""),
+            str(shot.get("prompt") or ""),
+        ]))
+        if not text:
+            continue
+        groups = [name for name, words in event_groups.items() if any(w in text for w in words)]
+        names: set[str] = set()
+        for item in (shot.get("char_layout") or []):
+            if isinstance(item, dict) and item.get("name"):
+                names.add(str(item["name"]))
+        layout = shot.get("frame_layouts")
+        if isinstance(layout, dict):
+            for bucket in ("ff", "lf"):
+                for item in (layout.get(bucket) or []):
+                    if isinstance(item, dict) and item.get("name"):
+                        names.add(str(item["name"]))
+        multi_actor = len(names) >= 2
+        has_prop_change = any(w in text for w in prop_change)
+        high_load = (
+            len(groups) >= 3
+            or (multi_actor and len(groups) >= 2)
+            or (has_prop_change and len(groups) >= 2)
+        )
+        if not high_load:
+            continue
+        warnings.append(
+            f"镜头{idx}: 动作负荷偏高（关键事件组={groups}, 多人={multi_actor}, "
+            f"道具易手={has_prop_change}）。视频模型可能只呈现前 1-2 个动作；"
+            "建议明确唯一关键动作，把准备态放首帧，把独立剧情事件移到下一镜；"
+            "不要靠增加关键帧或延长时长掩盖。"
+        )
+    for w in warnings:
+        _get_logger().warn(f"动作负荷: {w}")
+    return {"pass": True, "issues": [], "warnings": warnings}
 
 
 def _check_redguo_standard(shots, characters=None):

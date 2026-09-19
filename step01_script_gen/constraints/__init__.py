@@ -17,6 +17,9 @@ from .kf_pre_post_conflict import KfPrePostConflictConstraint  # D
 from .kf_time_window_alignment import KfTimeWindowAlignmentConstraint  # E
 from .kf_t_sec_bounds import KfTSecBoundsConstraint  # F
 from .kf_timeline_normalize import KfTimelineNormalizeConstraint  # kf 时间线归一（2026-09-12）
+from .kf_event_order import KfEventOrderConstraint
+from .split_continuity import SplitContinuityConstraint
+from .motion_time_integrity import MotionTimeIntegrityConstraint
 from .duplicate_shot_merge import DuplicateShotMergeConstraint  # 相邻镜重复视觉合并（2026-09-12）
 from .char_side_continuity import CharSideContinuityConstraint  # 同地点角色侧翻转交换（2026-09-12）
 from .kf_monotonic import KfMonotonicConstraint  # F1 (v6.43, 08-23)
@@ -28,9 +31,14 @@ from .boat_width import BoatWidthConstraint  # I
 from .bridge_words import BridgeWordsConstraint  # J
 from .camera_variety import CameraVarietyConstraint  # K
 from .char_layout_sync import CharLayoutSyncConstraint  # L
+from .identity_unification import IdentityUnificationConstraint
 from .climax_distribution import ClimaxDistributionConstraint  # M
 from .core_keyword_coverage import CoreKeywordCoverageConstraint
+from .core_keyword_pollution_cleanup import CoreKeywordPollutionCleanupConstraint
 from .frame_spec_repair import FrameSpecRepairConstraint
+from .frame_anchor_rebuild import FrameAnchorRebuildConstraint
+from .frame_text_state_cleanup import FrameTextStateCleanupConstraint
+from .group_actor_continuity import GroupActorContinuityConstraint
 from .combat_impact import CombatImpactConstraint  # N
 from .facing_to_gaze import FacingToGazeConstraint  # O
 from .framing_diversity_v2 import FramingDiversityV2Constraint  # P
@@ -76,6 +84,9 @@ from .climax_completeness import ClimaxCompletenessConstraint  # F17 高潮完�
 from .short_shot_merge import ShortShotMergeConstraint  # F9 短镜合并（v6.49, 08-28）
 from .ff_lf_temporal import FfLfTemporalConstraint  # F10 ff/lf 时序协议（v6.50, 08-28）
 from .frame_spec_consistency import FrameSpecConsistencyConstraint  # S v6.57+ per-frame spec 一致性
+from .offscreen_action_consistency import OffscreenActionConsistencyConstraint
+from .motion_time_bounds import MotionTimeBoundsConstraint
+from .duration_budget import DurationBudgetConstraint
 from .framing_prefix_fill import FramingPrefixFillConstraint  # F11 景别词回填（v6.62, 09-06）
 from .gaze_state_repair import GazeStateRepairConstraint  # F15 无视线状态 gaze_target 修复
 from .self_review import SelfReviewConstraint  # SR（LLM 自检回路）
@@ -86,6 +97,36 @@ from .surface_backfill import SurfaceBackfillConstraint  # F12 surface 承重面
 from .framing_variety import FramingVarietyConstraint  # F13 景别多样性达标（v6.62.1, 09-06）
 from .gaze_typo import GazeTypoConstraint  # F14 目光错别字归一（v6.62.1, 09-06）
 from .final_quality_normalizer import FinalQualityNormalizerConstraint  # 链尾：prompt 预算/单运镜/kf 时间窗/blood 过渡
+from .emotion_visualization_repair import EmotionVisualizationRepairConstraint
+from .weapon_state_consistency import WeaponStateConsistencyConstraint
+
+# v6.76（09-19）：删除 3 个**纯重复**注册的 _Final 变体。
+# 判据：只有「基类已降为只报告」的约束，其 _Final 实例才是纯重复——它只是把
+# 同一条只读检测再跑一遍、产出重复告警，不改变任何字段。
+#   - _KfTimeWindowAlignmentFinal（基类 v6.76 降为只报告）
+#   - _KfEventOrderFinal（基类此前已只报告）
+#   - _KfPoseAnchorFinal（基类此前已只报告）
+# 以下 4 个实例**保留**：其基类仍会写 `keyframes[*].desc`，而链尾
+# FrameAnchorRebuildConstraint(:187) 会重建 kf.desc 块、丢掉血锚/姿态锚/群体
+# 在场标记——这些 _Final 正是「重建后再补回」。删掉等于少跑一遍写入，属行为
+# 变更，须与各自基类的降级一并进行（见文档后续阶段）。
+class _GroupActorContinuityFinal(GroupActorContinuityConstraint):
+    """Re-apply crowd continuity after the final keyframe rebuild."""
+    name = "group_actor_continuity_final"
+
+class _KfBloodMonotonicFinal2(KfBloodMonotonicConstraint):
+    """Restore blood continuity after the final keyframe rebuild."""
+    name = "kf_blood_monotonic_final2"
+
+class _FrameTextStateCleanupFinal(FrameTextStateCleanupConstraint):
+    """Clean stale frame prose after every anchor/layout writer."""
+    name = "frame_text_state_cleanup_final"
+
+
+class _KfBloodMonotonicFinal(KfBloodMonotonicConstraint):
+    """Restore blood continuity after event-order selection."""
+    name = "kf_blood_monotonic_final"
+
 
 ALL_CONSTRAINTS.extend([
     # Phase 2
@@ -96,16 +137,22 @@ ALL_CONSTRAINTS.extend([
     OpeningEmptyShotInsertConstraint(),
     OpeningEmptyShotCapConstraint(),
     # Phase 3
+    MotionTimeIntegrityConstraint(),  # 先修非法时间段，再进入拆镜/关键帧链
+    SplitContinuityConstraint(),  # 先修拆分边界，再生成/校正关键帧
     KfTimeWindowAlignmentConstraint(),
     KfTimelineNormalizeConstraint(),  # kf 时间线归一：同刻重排/越界钳制/标签错位/hold帧回归（2026-09-12）
     KfTSecBoundsConstraint(),
     KfMonotonicConstraint(),
+    KfEventOrderConstraint(),  # 只报告：核对事件时刻/阶段（v6.76 起不再删同段重复帧）
+    _KfBloodMonotonicFinal(),  # 保留：事件顺序定稿后恢复 kf/LF 血状态单调（基类仍写 desc）
+
     # Phase 4
     AxisJumpConstraint(),  # G HARD
     BoatCropConstraint(),
     BoatWidthConstraint(),
     BridgeWordsConstraint(),
     CameraVarietyConstraint(),
+    IdentityUnificationConstraint(),  # 别名/群演占位必须先于锚点与 char_layout 消费
     CharLayoutSyncConstraint(),
     ClimaxDistributionConstraint(),
     CombatImpactConstraint(),
@@ -118,6 +165,7 @@ ALL_CONSTRAINTS.extend([
     MultiCharLayoutDepthConstraint(),
     NarrationSubtitleConsistencyConstraint(),
     RoleAnchorConstraint(),
+    CoreKeywordPollutionCleanupConstraint(),
     CoreKeywordCoverageConstraint(),
     OpeningHookConstraint(),
     # v6.43（08-23 审计）：PlatformCompliance 必须在所有 prompt 追加类
@@ -131,6 +179,8 @@ ALL_CONSTRAINTS.extend([
     V643PromptEnforcementConstraint(),  # v6.43 prompt 强化（早执行，独立于 LLM）
     KfWeakTemplateConstraint(),  # W16 kf弱模板占位（v6.45, 08-26）
     CameraMovementFillConstraint(),  # J3 运镜缺失补填（v6.47, 08-27）
+    FrameTextStateCleanupConstraint(),  # 再清理首尾帧里无标记的旧状态分句
+    FrameAnchorRebuildConstraint(),  # 先重建锚块，再让血状态单调约束补回锚
     KfBloodMonotonicConstraint(),  # F2 kf 血状态单调（v6.49, 08-28）
     FfMotionOverlapConstraint(),  # F3 ff_desc 动作重叠（v6.49, 08-28）
     PromptSanitizeConstraint(),   # J4 prompt 消毒：清理（画中X）/（AI生成）等噪声（v6.51, 09-02）
@@ -148,6 +198,8 @@ ALL_CONSTRAINTS.extend([
     FfLfTemporalConstraint(),  # F10 ff 时序协议：本镜有攻击时 ff 禁结束态（v6.50, 08-28）
     FrameSpecRepairConstraint(),
     FrameSpecConsistencyConstraint(),  # S per-frame spec 必填 + 完整性 + desc 一致性（v6.57+）
+    OffscreenActionConsistencyConstraint(),  # on_screen=false vs 可见动作矛盾
+    MotionTimeBoundsConstraint(),  # motion 时段 > duration 时扩时长，禁止静默截断
     FramingPrefixFillConstraint(),  # F11 prompt 无景别词 → 推断前置「[景别]」（v6.62, 09-06）
     GazeStateRepairConstraint(),  # F15 无视线状态 gaze_target 修复
     SelfReviewConstraint(),  # SR opt-in via SELF_REVIEW_ENABLED=1
@@ -168,7 +220,14 @@ ALL_CONSTRAINTS.extend([
     # 否则相似度在后续改写中漂移会漏判（首跑实测 0.83→0.89 漂移漏合并）
     DuplicateShotMergeConstraint(),   # 相邻镜重复视觉 HARD 合并
     CharSideContinuityConstraint(),   # 同地点连续镜角色侧翻转交换
+    DurationBudgetConstraint(),  # 正片 60-90s：只压缩冗余时长，最低需求仍超限则 BLOCK
     FinalQualityNormalizerConstraint(),  # 链尾最终质量归一
+    EmotionVisualizationRepairConstraint(),  # 最终模型可见字段情绪可视化门
+    WeaponStateConsistencyConstraint(),  # 同帧持握/脱手状态最终一致性
+    GroupActorContinuityConstraint(),  # 恢复群体主体并同步关键帧在场状态
+    _GroupActorContinuityFinal(),  # 最终重建后再次同步群体在场状态
+    _KfBloodMonotonicFinal2(),  # 最终重建后恢复血状态单调，避免丢伤处锚
+    _FrameTextStateCleanupFinal(),  # 所有文本写入后清理首尾帧残留状态
 ])
 
 __all__ = [

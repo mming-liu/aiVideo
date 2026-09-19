@@ -41,6 +41,143 @@ class RuleEntry(TypedDict, total=False):
 
 RULES_INDEX: dict[str, RuleEntry] = {
     # ========================================================================
+    # v6.76 — 时间轴证据门：KF 时间写入者全降为只报告（2026-09-19）
+    #
+    # 与 v6.75 同属 "evidence-gated writes" campaign 的另一半：
+    #   v6.75 覆盖 **desc 层**写入者（不确定的文本修复保留原文并报告）；
+    #   v6.76 覆盖 **时间层**写入者（t_sec / duration_sec），即
+    #   docs/step01-temporal-writers-audit-2026-09-19.md 的第一阶段。
+    #
+    # 另删除 3 个纯重复注册的 _Final 变体（kf_time_window_alignment_final /
+    # kf_event_order_final / kf_pose_anchor_final）——其基类已降为只报告，
+    # 实例只是把同一条只读检测再跑一遍。另 4 个 _Final（血状态×2 / 群体在场 /
+    # 帧文本清理）**保留**：基类仍写 kf.desc，用于链尾 frame_anchor_rebuild
+    # 重建后回补锚点，删掉属行为变更，须与各自基类降级一并进行。
+    # ========================================================================
+    "v6.76": {
+        "name": "时间轴证据门：KF 时间写入者降为只报告 + 修复轮禁拆镜 + 时长不再拉伸",
+        "date": "2026-09-19",
+        "constraints": [
+            "kf_monotonic",
+            "kf_t_sec_bounds",
+            "kf_timeline_normalize",
+            "kf_time_window_alignment",
+            "kf_temporal_consistency",
+            "hook_duration",
+            "runtime_extend",
+        ],
+        "validation_checks": [],
+        "timecode_changes": [
+            "_compute_timecodes 新增 allow_split 闸门：修复轮传 False，只重建 timeline 不增删镜头",
+        ],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/constraints/test_kf_monotonic.py",
+            "tests/step01_script_gen/constraints/test_kf_t_sec_bounds.py",
+            "tests/step01_script_gen/constraints/test_kf_timeline_normalize.py",
+            "tests/step01_script_gen/constraints/test_kf_time_window_alignment.py",
+            "tests/step01_script_gen/constraints/test_kf_pre_post_conflict.py",
+            "tests/step01_script_gen/constraints/test_hook_duration.py",
+            "tests/step01_script_gen/constraints/test_runtime_extend.py",
+            "tests/step01_script_gen/constraints/test_full_hardfix_kf_idempotency.py",
+            "tests/step01_script_gen/test_timecode_split_gate.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.75 — 语义写入安全门 + 全约束源码指纹（2026-09-19）
+    # ========================================================================
+    "v6.75": {
+        "name": "evidence-gated writes：不确定的语义修复保留原文并报告，禁止自动猜状态/删内容",
+        "date": "2026-09-19",
+        "constraints": [
+            "axis_jump",
+            "char_side_continuity",
+            "threat_gaze_coupling",
+            "prop_spatial_anchor",
+            "surface_backfill",
+            "frame_spec_repair",
+            "kf_pose_anchor",
+            "climax_completeness",
+            "restrained_emotion_chain",
+            "redguo_scene_char_limit",
+            "dialogue_density",
+            "v6_43_prompt_enforcement",
+            "final_quality_normalizer",
+            "group_actor_continuity",
+            "split_continuity",
+        ],
+        "validation_checks": [],
+        "timecode_changes": [],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/constraints/test_axis_jump.py",
+            "tests/step01_script_gen/constraints/test_structure_fixes_0912.py",
+            "tests/step01_script_gen/constraints/test_threat_gaze_coupling.py",
+            "tests/step01_script_gen/constraints/test_prop_position.py",
+            "tests/step01_script_gen/constraints/test_surface_backfill.py",
+            "tests/step01_script_gen/constraints/test_frame_spec_repair.py",
+            "tests/step01_script_gen/constraints/test_kf_pose_anchor.py",
+            "tests/step01_script_gen/constraints/test_climax_completeness.py",
+            "tests/step01_script_gen/constraints/test_restrained_emotion_chain.py",
+            "tests/step01_script_gen/constraints/test_redguo_scene_char_limit.py",
+            "tests/step01_script_gen/constraints/test_v6_62_2_generic_fallbacks.py",
+            "tests/step01_script_gen/constraints/test_prompt_enforcement.py",
+            "tests/step01_script_gen/constraints/test_final_quality_normalizer.py",
+            "tests/step01_script_gen/constraints/test_group_actor_continuity.py",
+            "tests/step01_script_gen/constraints/test_split_continuity.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.74 — 60-90s 硬时长门 + 修复契约 + hook 结构前置（2026-09-19）
+    # ========================================================================
+    "v6.74": {
+        "name": "正片 60-90s 硬时长门 + patch-only 修复接受条件 + hook 质检前结构补齐",
+        "date": "2026-09-19",
+        "constraints": [
+            "duration_budget",
+            "motion_time_bounds",
+            "offscreen_action_consistency",
+            "identity_unification",
+            "frame_anchor_rebuild",
+            "kf_event_order",
+            # "kf_time_window_alignment_final" 已于 v6.76 删除（纯重复注册实例）
+            "split_continuity",
+            "core_keyword_pollution_cleanup",
+            "emotion_visualization_repair",
+        ],
+        "validation_checks": [
+            "_check_weapon_holder",
+            "_check_multi_person_staging",
+            "_check_person_boat_position",
+            "_check_action_load",
+        ],
+        "timecode_changes": [
+            "motion_desc 范围缺少“秒”时仍按区间终点计算",
+            "正片 duration_sec 之和纳入 60-90s 验收区间",
+        ],
+        "tests": [
+            "tests/step01_script_gen/constraints/test_duration_budget.py",
+            "tests/step01_script_gen/constraints/test_new_quality_guards.py",
+            "tests/step01_script_gen/test_repair_acceptance.py",
+            "tests/step01_script_gen/test_repair_patches.py",
+            "tests/step01_script_gen/test_metrics.py",
+            "tests/step01_script_gen/test_hook_quality_gate.py",
+            "tests/step01_script_gen/test_weapon_holder.py",
+            "tests/step01_script_gen/test_multi_person_staging_actions.py",
+            "tests/step01_script_gen/test_person_boat_position.py",
+            "tests/step01_script_gen/test_action_load.py",
+            "tests/step01_script_gen/constraints/test_identity_unification.py",
+            "tests/step01_script_gen/constraints/test_frame_anchor_rebuild.py",
+            "tests/step01_script_gen/constraints/test_kf_event_order.py",
+            "tests/step01_script_gen/constraints/test_split_continuity.py",
+            "tests/step01_script_gen/constraints/test_core_keyword_pollution_cleanup.py",
+            "tests/step01_script_gen/constraints/test_emotion_visualization_repair.py",
+        ],
+    },
+
+    # ========================================================================
     # v6.70 — 总时长规划目标 70-80s + 武器 holder 校验 + kf 帧级冗余（2026-09-13）
     # ========================================================================
     "v6.70": {

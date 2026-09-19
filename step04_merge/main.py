@@ -405,8 +405,10 @@ def main():
     script = json.load(f)
 
   from shared.quality_gate import require_gate
-  require_gate(CHAPTER_DIR / "step01_quality.json", script, stage="step01")
-  require_gate(CHAPTER_DIR / "step02b_quality.json", script, stage="step02b")
+  require_gate(CHAPTER_DIR / "step01_quality.json", script, stage="step01",
+               required_report_type="quality_gate")
+  require_gate(CHAPTER_DIR / "step02b_quality.json", script, stage="step02b",
+               required_report_type="product_acceptance", verify_outputs=True)
 
   shots = script.get("shots", [])
   if not shots:
@@ -548,9 +550,20 @@ def main():
     tts_paths = []
     n_found = 0
     missing_tts = []
-    for s in valid_shots:
+    for _i, s in enumerate(valid_shots):
       _tp = audio_file(s.get('index', 0))
       if _tp.exists() and _tp.stat().st_size > 10240:
+        # A TTS track longer than the actual clip cannot be silently atrim'd.
+        if _i < len(clips):
+          _clip_dur = get_media_duration(clips[_i])
+          _tts_dur = get_media_duration(_tp)
+          if (_clip_dur > 0 and _tts_dur > _clip_dur + 0.05
+                  and os.getenv("TTS_MIX_ALLOW_TRIM", "0").strip() != "1"):
+            raise RuntimeError(
+              f"shot {s.get('index')} TTS 超出实际视频时长: "
+              f"tts={_tts_dur:.2f}s clip={_clip_dur:.2f}s。请调整台词/停顿/镜头，"
+              "禁止 step04 静默截句。显式允许可设 TTS_MIX_ALLOW_TRIM=1。"
+            )
         tts_paths.append(str(_tp))
         n_found += 1
       elif str(s.get("narration_segment", "")).strip():

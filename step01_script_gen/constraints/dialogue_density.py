@@ -322,120 +322,19 @@ class DialogueDensityConstraint(Constraint):
         if ratio >= self._MIN_RATIO:
             return repairs
 
-        target_count = max(1, int(n * self._MIN_RATIO) - n_diag + 1)
-
-        # 收集候选镜头：有张力、无对白、非开篇、能识别具体角色
-        candidates = []
-        for i, sh in enumerate(shots):
-            if i in diag_indices:
-                continue
-            if i < self._SKIP_FIRST_N:
-                continue  # 跳过开篇定场镜
-            if sh.get("narration_segment"):
-                continue  # 已有旁白的不覆盖
-            chars = _get_shot_characters(sh)
-            score = _shot_tension_score(sh)
-            if not chars:
-                continue  # 没有具体角色的镜头不注入（避免把台词塞给群众）
-            if score <= 0:
-                # 即使张力分 0，只要有具体角色且在剧情中后段，也可作为低优先级候选
-                if i >= n * 0.3:
-                    score = 0.1
-                else:
-                    continue
-            candidates.append((i, score, sh, chars))
-
-        candidates.sort(key=lambda x: -x[1])
-
-        injected = 0
-        used_lines: list[str] = []  # 已注入的台词，避免重复
-
-        for idx, _score, shot, chars in candidates:
-            if injected >= target_count:
-                break
-            if not novel_text:
-                continue
-
-            try:
-                start, end = _locate_shot_in_novel(shot, novel_text)
-            except Exception:
-                continue
-            if start <= 0 or end <= 0 or end <= start:
-                start, end = 0, len(novel_text)
-
-            s = max(0, start - 100)
-            e = min(len(novel_text), end + 200)
-
-            dialogues = _extract_dialogue_in_range(novel_text, s, e, limit=8)
-            if not dialogues:
-                continue
-
-            # 优先选：说话人在镜头角色中 + 未使用过的台词
-            best_line = ""
-            best_speaker = ""
-            for line, sp in dialogues:
-                if not sp or not line:
-                    continue
-                # 说话人必须是镜头里的角色
-                if sp not in chars:
-                    continue
-                # 检查是否与已注入台词重复
-                formatted_candidate = _format_dialogue_line(line, sp)
-                if any(_line_similar(formatted_candidate, ul) for ul in used_lines):
-                    continue
-                best_line, best_speaker = line, sp
-                break
-
-            # 兜底：如果没有匹配到说话人，选第一条未重复的（但要求说话人是常见 2-4 字中文名）
-            if not best_line:
-                for line, sp in dialogues:
-                    if not line:
-                        continue
-                    formatted_candidate = _format_dialogue_line(line, sp or chars[0])
-                    if any(_line_similar(formatted_candidate, ul) for ul in used_lines):
-                        continue
-                    best_line = line
-                    best_speaker = sp or chars[0]
-                    break
-
-            if not best_line:
-                continue
-
-            display_speaker = best_speaker or chars[0]
-            formatted = _format_dialogue_line(best_line, display_speaker)
-
-            shot["narration_segment"] = formatted
-            shot["subtitle"] = formatted
-            ms = str(shot.get("main_subject") or "")
-            if ms and "道" not in ms and "说" not in ms and "问" not in ms and "开口" not in ms:
-                shot["main_subject"] = ms + "开口"
-
-            used_lines.append(formatted)
-            injected += 1
-            repairs.append(RepairRecord(
-                constraint_name=self.name,
-                shot_index=idx,
-                action="inject_novel_dialogue",
-                target="narration_segment",
-                detail="注入原文对白: " + formatted[:20],
-            ))
-
-        # Always report WARN
-        new_n_diag = sum(
-            1 for sh in shots if _has_dialogue(sh.get("narration_segment", ""))
-        )
-        new_ratio = new_n_diag / n if n else 0
+        # Density is a policy signal, not proof that a specific shot must speak.
+        # Earlier versions selected the nearest original dialogue and could
+        # attach it to the wrong speaker/shot (including a fallback to the
+        # first character).  Keep the script unchanged and make the shortage
+        # visible for audit/LLM repair.
         repairs.append(RepairRecord(
             constraint_name=self.name,
             shot_index=None,
             action="warn",
             target="narration_segment",
             detail=(
-                "对白镜 " + str(n_diag) + "/" + str(n) + " = " + str(int(ratio*100)) +
-                "% → 注入后 " + str(new_n_diag) + "/" + str(n) + " = " +
-                str(int(new_ratio*100)) + "%（要求 ≥ " +
-                str(int(self._MIN_RATIO*100)) + "%，注入 " + str(injected) +
-                " 条原文对白）"
+                f"对白镜 {n_diag}/{n} = {int(ratio * 100)}%，低于 "
+                f"{int(self._MIN_RATIO * 100)}%；保留原文，禁止按邻近段落自动注入台词。"
             ),
         ))
         return repairs

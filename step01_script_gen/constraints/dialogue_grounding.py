@@ -195,83 +195,30 @@ class DialogueGroundingConstraint(Constraint):
     def apply(self, ctx):
         repairs = []
         if not ctx.novel_text:
-            return repairs  # 没有原文，没法 grounding
+            return repairs  # 没有原文，没法判断 grounding
 
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
             if not isinstance(shot, dict):
                 continue
             narr = str(shot.get("narration_segment") or "").strip()
             if not narr:
-                continue  # 没台词，跳过
-
-            # 检查是否在原文中有出处（v6.63.1 改从 gap_analysis 导入，见模块头说明）
+                continue
             s, _e = _locate_narration_in_novel(narr, ctx.novel_text)
             if s >= 0:
-                continue  # 有出处，跳过
-
-            # 幂等性：已处理过的跳过
-            meta = shot.get('_run_metadata') or {}
-            if meta.get('dialogue_grounded'):
                 continue
-
-            # 失锚：找替换台词
-            # 1. 定位镜头在原文中的大致位置
-            seg_start, seg_end = _locate_shot_in_novel(shot, ctx.novel_text)
-            if seg_start >= seg_end:
-                seg_start, seg_end = 0, len(ctx.novel_text)
-
-            # 2. 从该段原文中提取台词
-            candidates = _extract_dialogue_in_range(
-                ctx.novel_text, seg_start, seg_end, limit=8
-            )
-
-            # 3. 选最合适的一句
-            replacement = _pick_best_dialogue(candidates, narr)
-
-            old_narr = narr
-            old_sub = str(shot.get("subtitle") or "")
-
-            if replacement:
-                # 保留原角色名前缀（如果有），替换台词内容
-                new_narr = narr
-                if "：" in narr:
-                    role = narr.split("：", 1)[0]
-                    new_narr = role + "：" + replacement
-                elif ":" in narr:
-                    role = narr.split(":", 1)[0]
-                    new_narr = role + "：" + replacement
-                else:
-                    new_narr = replacement
-
-                shot["narration_segment"] = new_narr
-                shot["subtitle"] = new_narr
-
-                shot.setdefault("_run_metadata", {})["dialogue_grounded"] = True
-                repairs.append(
-                    RepairRecord(
-                        constraint_name=self.name,
-                        shot_index=idx,
-                        action="replace_grounded_dialogue",
-                        target="narration_segment",
-                        before=old_narr,
-                        after=new_narr,
-                    )
-                )
-            else:
-                # 找不到合适的 → 置空（宁可静音也不编造）
-                shot["narration_segment"] = ""
-                shot["subtitle"] = ""
-
-                shot.setdefault("_run_metadata", {})["dialogue_grounded"] = True
-                repairs.append(
-                    RepairRecord(
-                        constraint_name=self.name,
-                        shot_index=idx,
-                        action="clear_ungrounded_dialogue",
-                        target="narration_segment",
-                        before=old_narr,
-                        after="(empty - 未找到原文出处，已清空)",
-                    )
-                )
-
+            # A fuzzy locator failure is not evidence that the authored line is
+            # wrong.  Replacing/clearing it can attach an unrelated novel quote
+            # to the wrong speaker and shot.  Keep the original and report.
+            repairs.append(RepairRecord(
+                constraint_name=self.name,
+                shot_index=None if is_hook else shot.get("index", idx),
+                action="warn",
+                target="narration_segment",
+                before=narr[:120],
+                after=narr[:120],
+                detail="台词未能定位到原文；保留原文，禁止自动替换或清空",
+            ))
         return repairs
+
+
+__all__ = ["DialogueGroundingConstraint"]

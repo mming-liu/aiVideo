@@ -52,7 +52,8 @@ def main():
     # Load script
     script = load_script_module(SCRIPT_FILE)
     from shared.quality_gate import require_gate
-    require_gate(CHAPTER_DIR / "step01_quality.json", script, stage="step01")
+    require_gate(CHAPTER_DIR / "step01_quality.json", script, stage="step01",
+                 required_report_type="quality_gate")
     shots = script.get("shots", [])
 
     # v6.73: model capability + actual clip audio streams determine the source.

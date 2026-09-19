@@ -46,30 +46,6 @@ _SURFACE_WORDS = (
 
 # 表 2：场景（scene/location）→ 兜底承重面（scene_anchors 同构思路，
 # 表是「场景类型 → 物理承重面」的封闭映射，跨小说通用）
-_SCENE_FALLBACK = (
-    # (场景词, 兜底承重面) — 长词优先
-    ("船", "船板"),
-    ("舟", "船板"),
-    ("湾", "船板"),
-    ("车", "车板"),
-    ("轿", "轿内"),
-    ("厅", "厅内地面"),
-    ("堂", "堂内地面"),
-    ("亭", "亭内地面"),
-    ("庄", "院内地面"),
-    ("府", "院内地面"),
-    ("镇", "街面"),
-    ("街", "街面"),
-    ("市", "街面"),
-    ("山", "坡地"),
-    ("林", "林地"),
-    ("田", "田埂"),
-    ("郊", "地面"),
-    ("野", "地面"),
-    ("崖", "崖顶"),
-    ("桥", "桥面"),
-)
-
 
 _CONTAINER_POSITION_FALLBACK = (
     ("车厢", "车厢内"), ("车内", "车厢内"), ("轿内", "轿内"),
@@ -88,14 +64,16 @@ def _derive_surface(shot: dict, item: dict) -> str:
     layout = [x for x in (shot.get("char_layout") or []) if isinstance(x, dict)]
     position = str(item.get("position", "") or "")
 
-    # 1) Role-local position is always authoritative.
-    if position:
-        for w in _SURFACE_WORDS:
-            if w in position:
-                return w
-        for key, surf in _CONTAINER_POSITION_FALLBACK:
-            if key in position:
-                return surf
+    # 1) Role-local fields are authoritative.  ``facing``/``pose`` may contain
+    #    an explicit bearing-surface word ("跪坐船头", "坐在车辕"), but generic
+    #    posture alone ("站立") must never be promoted to "地面".
+    role_text = " ".join(str(item.get(k) or "") for k in ("position", "facing", "pose"))
+    for w in _SURFACE_WORDS:
+        if w in role_text:
+            return w
+    for key, surf in _CONTAINER_POSITION_FALLBACK:
+        if key in role_text:
+            return surf
 
     # 2) Only single-character shots may use whole-shot/scene fallback.
     if len(layout) <= 1:
@@ -111,10 +89,10 @@ def _derive_surface(shot: dict, item: dict) -> str:
             for w in _SURFACE_WORDS:
                 if w in text:
                     return w
-        scene = (shot.get("scene", "") or "") + (shot.get("location", "") or "")
-        for key, surf in _SCENE_FALLBACK:
-            if key in scene:
-                return surf
+        # Scene-name fallback is not proof of the character's bearing
+        # surface: “湾” can mean bank, pier, boat, or water.  Without an
+        # explicit surface/container in the character's own text or in a
+        # single-character shot, leave it unresolved for audit/LLM repair.
     return ""
 
 

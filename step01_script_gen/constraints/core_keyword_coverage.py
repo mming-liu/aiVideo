@@ -10,36 +10,39 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from step01_script_gen.gap_analysis import calculate_keyword_coverage
 from .base import Constraint
-from .types import RepairRecord, Severity
+from .types import RepairRecord, Severity, Violation
 
 
 class CoreKeywordCoverageConstraint(Constraint):
-    """Append at most three missing keywords to the first-frame description."""
+    """Report missing core keywords without mutating visual descriptions.
+
+    Missing keywords may be abstract, malformed, or non-visual fragments.  A
+    previous version appended them as ``，<keyword>可见。``, which produced
+    pollution such as ``庄仆、举灯盏扬可见`` and ``旭心口暗可见`` in ff_desc.
+    The safe contract is: diagnose only; the LLM or a dedicated visual
+    normalizer must decide whether and where a real visual concept belongs.
+    """
 
     name = "core_keyword_coverage"
     severity = Severity.WARN
     fields = ("ff_desc",)
 
     def apply(self, ctx) -> list[RepairRecord]:
-        repairs: list[RepairRecord] = []
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
             missing = calculate_keyword_coverage(shot, ctx.novel_text).get("missing") or []
             if not missing:
                 continue
-            inject = "、".join(missing[:3])
-            ff_desc = str(shot.get("ff_desc") or "")
-            suffix = f"，{inject}可见。"
-            if inject in ff_desc:
-                continue
-            shot["ff_desc"] = ff_desc.rstrip("。. ") + suffix
-            repairs.append(
-                RepairRecord(
-                    constraint_name=self.name,
-                    shot_index=shot.get("index", idx),
-                    action="append",
-                    target="ff_desc",
-                    before=ff_desc,
-                    after=shot["ff_desc"],
-                )
-            )
-        return repairs
+            preview = "、".join(str(x) for x in missing[:5])
+            ctx.record_violation(Violation(
+                constraint_name=self.name,
+                severity=Severity.WARN,
+                shot_index=None if is_hook else shot.get("index", idx),
+                field="ff_desc",
+                message=(
+                    f"core_keywords 覆盖不足（missing={preview}）——"
+                    "只记录，不自动拼接；请通过正式重生成或专门视觉归一化补齐"
+                ),
+                evidence=str(shot.get("core_keywords") or ""),
+                repaired=False,
+            ))
+        return []

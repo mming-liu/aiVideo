@@ -1,4 +1,4 @@
-"""kf 时间线归一（2026-09-12，shot 95 分稿质量复盘根治项）.
+"""kf 时间线归一（2026-09-12 引入；2026-09-19 v6.76 降为只报告）.
 
 背景（95 分终稿复盘实锤）：kf 由多个生产者写入（模型直出 / 弱模板回填 /
 时段对齐派生 / frame_layouts 派生），没有任何单一执行点保证时间线不变量，
@@ -8,18 +8,27 @@
      镜12 kf@3.933/4.892 回到开头态
   3. 首尾帧标签错位——镜12.5 首帧位置被填「本帧画面即尾帧静态状态」文本
   4. hold 帧抄错内容——「（画面延续，保持该状态）」帧的底文抄了 ff_desc
-     而非时间序上前一帧（上游 hold 填充在分段错位时选错 _last_text）
+     而非时间序上前一帧
 
-本约束是这些**不变量**的单一执行点（对齐「新缺陷 = 加 1 个 Constraint」惯例）：
-任何生产者写坏，这里统一归一。修复动作：
-  - t_sec 越界（>duration）→ 钳到 duration×0.95
-  - 相邻 t_sec 差 ≤0.15s 的同刻簇 → 在前后邻刻之间均匀重排
-  - 「本帧画面即首帧静态状态」仅允许出现在第 0 帧；「…尾帧静态状态」仅允许
-    出现在最后一帧——错位则剥掉标签保留内容
-  - hold 帧（含「画面延续，保持该状态」）底文与 ff_desc 高度相似且存在更早的
-    差异 kf → 底文改写为前一 kf 文本（延续语义归真）
+引入时的定位是「这些不变量的**单一执行点**」——任何生产者写坏，这里统一归一。
 
-幂等：归一后再跑不再产生修改。
+v6.76（2026-09-19）**降为只报告**，不再归一并写回。原因：
+  1. 「单一执行点」的定位不成立：本约束自身的修复会被其后注册的
+     _KfTimeWindowAlignmentFinal（v6.76 已删除） 再次改写（它 append 新帧且不重排），
+     所以归一是**不保持**的——实测同一脚本连跑两次 run_hard_fix 结果不同
+     （tests/.../test_full_hardfix_kf_idempotency.py 当前失败）。
+  2. 四类缺陷的根因都在上游（拆镜按字符比例切、补帧 append 到末尾、
+     多层描述写入者互相撤销），在链中段做归一只是把症状挪走，
+     不改变「谁有权决定 kf 的时刻与内容」这一根本问题。
+  3. 时刻与内容归属只能由事件结构决定，见
+     docs/step01-temporal-writers-audit-2026-09-19.md。
+
+现状：四类缺陷全部**只检测 + 上报**（Violation(repaired=False) +
+RepairRecord(action="warn")），保留原值交 audit / regen。
+
+保留导出（勿删，被外部引用）：
+  - `_strip_frame_label`：`emotion_visualization_repair` 依赖
+  - `_FIRST_FRAME_LABEL` / `_LAST_FRAME_LABEL` / `_HOLD_SUFFIX` / `_DUP_T_EPS`
 """
 from __future__ import annotations
 
@@ -32,7 +41,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from .base import Constraint
-from .types import RepairRecord, Severity
+from .types import RepairRecord, Severity, Violation
 
 # 首尾帧静态标签（weak-template W16 锚定语，错位时剥标签留内容）
 _FIRST_FRAME_LABEL = "本帧画面即首帧静态状态"
@@ -61,14 +70,39 @@ def _similar(a: str, b: str) -> float:
 
 
 class KfTimelineNormalizeConstraint(Constraint):
-    """kf 时间线不变量单一执行点：同刻重排/越界钳制/标签错位/hold 帧回归."""
+    """kf 时间线不变量：同刻堆叠/越界/标签错位/hold 帧回归 —— 只检测并上报（v6.76 起）."""
 
     name = "kf_timeline_normalize"
     severity = Severity.HARD
     fields = ("keyframes",)
 
+    def _report(
+        self, ctx, repairs: list[RepairRecord], shot_idx, kind: str,
+        *, target: str, message: str, evidence: str, detail: str,
+    ) -> None:
+        """统一「只报告」出口。severity 用类声明级（HARD）——这些是结构性缺陷，
+        本地修不了，属 regen 材料；REGEN_AUTO_TRIGGER 默认关闭，不产生 LLM 调用。"""
+        ctx.record_violation(Violation(
+            constraint_name=self.name,
+            severity=self.severity,
+            shot_index=shot_idx,
+            field=target,
+            message=message,
+            evidence=evidence[:200],
+            repaired=False,
+        ))
+        repairs.append(RepairRecord(
+            constraint_name=self.name,
+            shot_index=shot_idx,
+            action="warn",
+            target=target,
+            before=evidence[:80],
+            after=evidence[:80],
+            detail=detail,
+        ))
+
     def apply(self, ctx) -> list[RepairRecord]:
-        from shared.kf_time import get_kf_t_sec, set_kf_t_sec
+        from shared.kf_time import get_kf_t_sec
 
         repairs: list[RepairRecord] = []
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
@@ -88,21 +122,27 @@ class KfTimelineNormalizeConstraint(Constraint):
             shot_idx = shot.get("index") if not is_hook else None
             t_secs = [get_kf_t_sec(k, shot) for k in kfs]
 
-            # ---- 1. 越界钳制 ----
+            # ---- 1. 越界 ----
             for i, t in enumerate(t_secs):
                 if t is not None and t > dur:
-                    new_t = round(dur * 0.95, 3)
-                    set_kf_t_sec(kfs[i], new_t)
-                    t_secs[i] = new_t
-                    repairs.append(RepairRecord(
-                        constraint_name=self.name, shot_index=shot_idx,
-                        action="set_field",
+                    self._report(
+                        ctx, repairs, shot_idx, "oob",
                         target=f"keyframes[{i}].t_sec",
-                        before=f"{t:.3f}", after=f"{new_t:.3f}",
-                    ))
+                        message=(
+                            f"关键帧时刻 {t:.3f}s 超出镜头时长 {dur:.3f}s；"
+                            "保留原值未钳制——越界说明该镜时间轴不可信，交 regen 重写。"
+                        ),
+                        evidence=f"t_sec={t:.3f} > duration_sec={dur:.3f}",
+                        detail="关键帧时刻越界，保留原值交由 audit/regen",
+                    )
 
-            # ---- 2. 同刻簇重排（相邻差 ≤eps 视为堆叠）----
-            ordered = sorted(range(len(kfs)), key=lambda i: (t_secs[i] if t_secs[i] is not None else 0))
+            # ---- 2. 同刻堆叠（相邻差 ≤eps）----
+            # 只检测不重排：原实现按 (lo, hi) 均匀铺开，位置无原文依据，
+            # 且铺开后会被后续 _KfTimeWindowAlignmentFinal（v6.76 已删除） 再次打乱。
+            ordered = sorted(
+                range(len(kfs)),
+                key=lambda i: (t_secs[i] if t_secs[i] is not None else 0),
+            )
             i = 0
             while i < len(ordered) - 1:
                 j = i
@@ -110,22 +150,22 @@ class KfTimelineNormalizeConstraint(Constraint):
                         (t_secs[ordered[j + 1]] or 0) - (t_secs[ordered[j]] or 0)) <= _DUP_T_EPS:
                     j += 1
                 if j > i:
-                    lo = t_secs[ordered[i]] or 0.0
-                    hi_candidates = [t_secs[k] for k in ordered
-                                     if (t_secs[k] or 0) > lo + _DUP_T_EPS]
-                    hi = min(hi_candidates) if hi_candidates else min(dur * 0.95, lo + 0.8 * (j - i + 1))
-                    span = max(hi - lo, 0.1 * (j - i + 1))
-                    for offset, k_idx in enumerate(ordered[i:j + 1]):
-                        new_t = round(lo + span * offset / (j - i), 3)
-                        if abs(new_t - (t_secs[k_idx] or 0)) > 0.01:
-                            set_kf_t_sec(kfs[k_idx], new_t)
-                            t_secs[k_idx] = new_t
-                            repairs.append(RepairRecord(
-                                constraint_name=self.name, shot_index=shot_idx,
-                                action="set_field",
-                                target=f"keyframes[{k_idx}].t_sec",
-                                before="同刻堆叠", after=f"{new_t:.3f}",
-                            ))
+                    cluster = ordered[i:j + 1]
+                    _txt = ", ".join(
+                        f"kf[{k}]={t_secs[k]:.3f}s" if t_secs[k] is not None
+                        else f"kf[{k}]=<none>" for k in cluster
+                    )
+                    self._report(
+                        ctx, repairs, shot_idx, "dup_cluster",
+                        target="keyframes[*].t_sec",
+                        message=(
+                            f"{len(cluster)} 个关键帧时刻堆叠在同一时刻附近（{_txt}，"
+                            f"阈值 {_DUP_T_EPS}s）；保留原值未重排——铺开位置无原文依据，"
+                            "交 regen 重写该镜时间结构。"
+                        ),
+                        evidence=_txt,
+                        detail="同刻堆叠，保留原值交由 audit/regen",
+                    )
                 i = j + 1
 
             # ---- 3. 首尾帧标签错位 ----
@@ -133,41 +173,41 @@ class KfTimelineNormalizeConstraint(Constraint):
                 desc = kf.get("desc") or ""
                 if not isinstance(desc, str) or not desc:
                     continue
-                fixed = desc
-                if i != 0 and _FIRST_FRAME_LABEL in fixed:
-                    fixed = _strip_frame_label(fixed) if _LAST_FRAME_LABEL not in fixed else fixed
-                if i != len(kfs) - 1 and _LAST_FRAME_LABEL in fixed:
-                    fixed = fixed.replace(_LAST_FRAME_LABEL + "：", "").replace(_LAST_FRAME_LABEL, "")
-                    fixed = fixed.replace("（）", "").strip("，。； ")
-                if fixed != desc:
-                    kf["desc"] = fixed
-                    repairs.append(RepairRecord(
-                        constraint_name=self.name, shot_index=shot_idx,
-                        action="rewrite",
+                bad = (i != 0 and _FIRST_FRAME_LABEL in desc) or \
+                      (i != len(kfs) - 1 and _LAST_FRAME_LABEL in desc)
+                if bad:
+                    self._report(
+                        ctx, repairs, shot_idx, "label_misposition",
                         target=f"keyframes[{i}].desc",
-                        before=desc[:50], after=fixed[:50],
-                    ))
+                        message=(
+                            f"首尾帧静态标签错位：第 {i} 帧（共 {len(kfs)} 帧）"
+                            "出现了只应属于首/尾帧的标签文本；保留原文未剥标签，"
+                            "交 regen 明确该帧的真实状态。"
+                        ),
+                        evidence=desc,
+                        detail="首尾帧标签错位，保留原文交由 audit/regen",
+                    )
 
-            # ---- 4. hold 帧内容回归（底文抄 ff → 改抄前一 kf）----
+            # ---- 4. hold 帧内容回归（底文抄 ff）----
             ff_text = (shot.get("ff_desc") or "").strip()
             for i in range(1, len(kfs)):
-                kf = kfs[i]
-                desc = kf.get("desc") or ""
+                desc = kfs[i].get("desc") or ""
                 if not isinstance(desc, str) or _HOLD_SUFFIX not in desc:
                     continue
                 base = _strip_hold_suffix(desc)
                 prev_base = _strip_hold_suffix(kfs[i - 1].get("desc") or "")
                 if not base or not prev_base or base == prev_base:
                     continue
-                # 底文与 ff 高度相似、且与前一 kf 差异明显 → 内容时间回归
                 if _similar(base, ff_text) >= 0.55 and _similar(base, prev_base) < 0.55:
-                    new_desc = f"{prev_base}{_HOLD_SUFFIX}"
-                    kf["desc"] = new_desc
-                    repairs.append(RepairRecord(
-                        constraint_name=self.name, shot_index=shot_idx,
-                        action="rewrite",
+                    self._report(
+                        ctx, repairs, shot_idx, "hold_regression",
                         target=f"keyframes[{i}].desc",
-                        before=desc[:50], after=new_desc[:50],
-                    ))
+                        message=(
+                            "hold 帧底文与首帧高度相似而与时间序上前一帧差异明显"
+                            "（内容时间回归）；保留原文未改写，交 regen 确认延续状态。"
+                        ),
+                        evidence=desc,
+                        detail="hold 帧内容时间回归，保留原文交由 audit/regen",
+                    )
 
         return repairs

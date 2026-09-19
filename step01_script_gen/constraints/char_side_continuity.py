@@ -22,7 +22,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from .base import Constraint
-from .types import RepairRecord, Severity
+from .types import RepairRecord, Severity, Violation
 
 _SWAP_FIELDS = ("prompt", "ff_desc", "lf_desc", "motion_desc")
 
@@ -65,7 +65,7 @@ class CharSideContinuityConstraint(Constraint):
     """同地点连续镜角色侧翻转 → 后镜整体交换画左/画右."""
 
     name = "char_side_continuity"
-    severity = Severity.HARD
+    severity = Severity.WARN
     fields = ()
 
     def apply(self, ctx) -> list[RepairRecord]:
@@ -95,23 +95,29 @@ class CharSideContinuityConstraint(Constraint):
                     break
             if not flip:
                 continue
-            changed = []
-            for field in _SWAP_FIELDS:
-                text = b.get(field)
-                if isinstance(text, str) and ("画左" in text or "画右" in text):
-                    b[field] = _swap_sides(text)
-                    changed.append(field)
-            for kf in b.get("keyframes") or []:
-                if isinstance(kf, dict) and isinstance(kf.get("desc"), str) \
-                        and ("画左" in kf["desc"] or "画右" in kf["desc"]):
-                    kf["desc"] = _swap_sides(kf["desc"])
-            if changed:
-                repairs.append(RepairRecord(
-                    constraint_name=self.name,
-                    shot_index=b.get("index"),
-                    action="swap_sides",
-                    target=",".join(changed),
-                    before=f"同地点与镜{a.get('index')}角色侧翻转",
-                    after="后镜整体交换画左/画右",
-                ))
+            # A side flip can be a legitimate camera-axis change, a new
+            # head-on framing, or a deliberate crossing.  Wording alone does
+            # not prove which side should be authoritative, so keep the
+            # authored layout and report the continuity risk.
+            ctx.record_violation(Violation(
+                constraint_name=self.name,
+                severity=Severity.WARN,
+                shot_index=b.get("index", i),
+                field="ff_desc,char_layout",
+                message=(
+                    f"同地点相邻镜角色左右侧翻转（镜{a.get('index')}→镜{b.get('index')}）；"
+                    "保留原文，禁止自动交换画左/画右。"
+                ),
+                evidence=f"prev={ff_a[-120:]}; curr={ff_b[-120:]}",
+                repaired=False,
+            ))
+            repairs.append(RepairRecord(
+                constraint_name=self.name,
+                shot_index=b.get("index", i),
+                action="warn",
+                target="prompt,ff_desc,lf_desc,motion_desc",
+                before=f"同地点与镜{a.get('index')}角色侧翻转",
+                after=f"同地点与镜{a.get('index')}角色侧翻转",
+                detail="角色侧翻转缺少机位证据，保留原文交由 audit",
+            ))
         return repairs

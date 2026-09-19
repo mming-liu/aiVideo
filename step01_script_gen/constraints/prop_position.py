@@ -32,7 +32,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 from step01_script_gen.scene_anchors import get_prop_position_hint
 from step01_script_gen.prompt_semantic import PROP_REGISTRY
 from .base import Constraint
-from .types import RepairRecord, Severity
+from .types import RepairRecord, Severity, Violation
 
 
 def _get_managed_props() -> tuple[str, ...]:
@@ -98,46 +98,50 @@ class PropPositionConstraint(Constraint):
         repairs: list[RepairRecord] = []
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
             if is_hook:
-                continue  # 旧实现不处理 hook
-            # shot.location 决定位置 hint
+                continue
             location = str(shot.get("location", "") or shot.get("scene", "") or "")
+            warned: set[tuple[str, str]] = set()
             for fld in self.fields:
-                v = shot.get(fld)
-                if not isinstance(v, str) or not v:
+                value = shot.get(fld)
+                if not isinstance(value, str) or not value:
                     continue
-                new_v = v
-                changed = False
                 for prop in _MANAGED_PROPS:
-                    fallback = get_prop_position_hint(prop, location)
-                    # 倒序处理：在文内插入会使后续匹配坐标右移，正序插入会把
-                    # 「（画X）」插进错误位置（08-23 审计「打洞」根因之一）；
-                    # 倒序插入只影响已处理完的右侧文本，坐标稳定。
-                    for m in list(_prop_match_pattern(prop).finditer(new_v))[::-1]:
-                        ctx_after = new_v[m.end():m.end() + 20]
-                        ctx_before = new_v[max(0, m.start() - 5):m.start()]
-                        if any(w in ctx_after for w in _POS_WORDS):
+                    for match in _prop_match_pattern(prop).finditer(value):
+                        after = value[match.end():match.end() + 20]
+                        before = value[max(0, match.start() - 5):match.start()]
+                        if any(w in after for w in _POS_WORDS):
                             continue
-                        # 已有任何「（画X）」标记（可能隔 Size 锚）→ 幂等跳过。
-                        # 旧版只查紧邻相同后缀，跨过「（宽1.4米…）」后会二次追加
-                        # 出「（画中）（宽1.4米，可容3人）（画中）」双标记。
-                        if "（画" in ctx_after:
+                        if "（画" in after:
                             continue
-                        if any(w in ctx_before for w in _POS_WORDS):
+                        if any(w in before for w in _POS_WORDS):
                             continue
-                        insert_at = m.end()
-                        suffix = f"（{fallback}）"
-                        new_v = new_v[:insert_at] + suffix + new_v[insert_at:]
-                        changed = True
-                if changed:
-                    shot[fld] = new_v
-                    repairs.append(
-                        RepairRecord(
+                        key = (fld, prop)
+                        if key in warned:
+                            continue
+                        warned.add(key)
+                        hint = get_prop_position_hint(prop, location)
+                        ctx.record_violation(Violation(
                             constraint_name=self.name,
-                            shot_index=idx,
-                            action="append",
+                            severity=Severity.WARN,
+                            shot_index=shot.get("index", idx),
+                            field=fld,
+                            message=(
+                                f"道具「{prop}」缺少可证的空间方位；保留原文，"
+                                f"未自动插入默认位置「{hint}」。"
+                            ),
+                            evidence=value[max(0, match.start() - 20):match.end() + 40],
+                            repaired=False,
+                        ))
+                        repairs.append(RepairRecord(
+                            constraint_name=self.name,
+                            shot_index=shot.get("index", idx),
+                            action="warn",
                             target=fld,
-                            before=v,
-                            after=new_v,
-                        )
-                    )
+                            before=value[max(0, match.start() - 20):match.end() + 40],
+                            after=value[max(0, match.start() - 20):match.end() + 40],
+                            detail=f"道具 {prop} 方位缺失，禁止自动注入默认方位",
+                        ))
         return repairs
+
+
+__all__ = ["PropPositionConstraint"]

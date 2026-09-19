@@ -261,7 +261,8 @@ def clamp_duration(value, cap) -> int:
     """夹到模型支持时长区间 [cap.duration_range]；解析失败回退区间中值."""
     lo, hi = cap.duration_range
     try:
-        d = max(1, int(round(float(value))))
+        import math as _math
+        d = max(1, int(_math.ceil(float(value))))
     except (TypeError, ValueError):
         return (lo + hi) // 2
     return max(lo, min(hi, d))

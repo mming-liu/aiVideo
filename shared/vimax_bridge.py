@@ -35,6 +35,7 @@ from shared.paths import (
     shot_work_dir,
     FIRST_FRAME_FILENAME,
     LAST_FRAME_FILENAME,
+    KEYFRAME_FILENAME_FMT,
 )
 
 import hashlib
@@ -2276,12 +2277,9 @@ def _extract_char_layout(
             _spec_item = _spec_by_ident.get(ident)
             if _spec_item is not None:
                 layout_item = _spec_item
-                # spec 模式下 pose 以 spec 为准：scan 是合并全文（含 ff/lf/motion
-                # 的跨帧姿态「潜伏/仰倒」），与 kfs[i] 本帧 pose 直接矛盾——
-                # kf1 实测「潜伏（单膝跪舷）」双姿态并存。spec 有 pose 时丢弃
-                # scan 提取值，保证单帧单一姿态。
-                if str(_spec_item.get("pose", "")).strip():
-                    pose = ""
+                # spec 模式下 pose 是唯一事实源。spec pose 为空时也必须清空
+                # scan 提取值，否则合并全文里的其他帧姿态会串进本帧。
+                pose = str(_spec_item.get("pose", "") or "").strip()
             seg = ident
             if pose:
                 seg += pose
@@ -2784,6 +2782,10 @@ def _inject_character_costume(desc: str, characters: list | None,
             dynamic = (c.get("dynamic_features") or "").strip()
             if not static and not dynamic:
                 continue
+            # Current-frame explicit costume/state wins over the cross-chapter
+            # bank description.  Stable facial features still come from static.
+            if dynamic and _current_frame_has_costume(desc, ident, characters):
+                dynamic = ""
             # 首帧过滤动作结果/武器词（溅血/持刀/血迹/洇痕等），保留静态服装/发型
             if frame_kind == "first_frame":
                 dynamic = _strip_frame_action_result(dynamic)
@@ -2808,6 +2810,32 @@ def _inject_character_costume(desc: str, characters: list | None,
         return desc
     except Exception:
         return desc
+
+
+_CURRENT_FRAME_COLOR_WORDS = (
+    "素白", "白色", "白衣", "玄色", "黑衣", "青色", "青衣", "藕荷", "春衫",
+    "红衣", "血色", "暗红", "黑", "白", "青", "红", "蓝", "灰", "褐", "金", "银",
+)
+
+
+def _current_frame_has_costume(desc: str, ident: str, characters: list | None) -> bool:
+    """Whether this frame already specifies this character's costume/state."""
+    if not desc or not ident:
+        return False
+    import re as _re_costume
+    for alias in _char_aliases(ident, characters):
+        for match in _re_costume.finditer(re.escape(alias), desc):
+            window = desc[max(0, match.start() - 20):match.end() + 50]
+            has_color = any(w in window for w in _CURRENT_FRAME_COLOR_WORDS)
+            has_garment = (
+                any(w in window for w in _COSTUME_WORDS)
+                or any(w in window for w in ("劲装", "铠甲", "女装", "男装", "扮相"))
+            )
+            if has_color and has_garment:
+                return True
+            if any(w in window for w in ("伪装", "换上", "披头散发", "血染", "湿透")):
+                return True
+    return False
 
 
 def _build_char_anchor(ident: str, static: str, dynamic: str) -> str:
@@ -2955,6 +2983,10 @@ def _inject_frame_spec(
             dynamic = (c.get("dynamic_features") or "").strip()
             if not static and not dynamic:
                 continue
+            # Current-frame explicit costume/state wins over the cross-chapter
+            # bank description.  Stable facial features still come from static.
+            if dynamic and _current_frame_has_costume(desc, ident, characters):
+                dynamic = ""
             # 首帧过滤动作结果/武器词；非首帧（lf / kf）做惰性态剥离
             if frame_kind == "first_frame":
                 dynamic = _strip_frame_action_result(dynamic)
@@ -3013,18 +3045,13 @@ _LF_VICTIM_HINTS = ("倒下", "仰面倒", "仰面躺", "中刀", "被刺", "心
 
 def fix_lf_desc_gaze(lf_desc: str, shot: dict | None = None,
                      characters: list | None = None) -> str:
-    """修复尾帧 lf_desc 的角色目光（错别字 + 看向动作结果对象）.
+    """Normalize known gaze typos without changing the gaze target.
 
-    用户反馈：尾帧听香「目光倒倒盯着画右水面刺客消失之处」——盯刺客消失的
-    水面，且"倒倒"是错别字。期望听香看向被刺倒的杨旭（被刺的同伴）。
-
-    修复逻辑（确定性，保守）：
-    1. 错别字：倒倒/倒到→紧紧 等叠字错写
-    2. 目光语义：若 lf_desc 含「目光/盯着/看向 + 消失/水面/刺客」且场景含
-       受伤结果对象（杨旭倒下/心口洇开），把该目光改写为「目光看向倒下的
-       杨旭」——看被刺的同伴，而非已消失的刺客。
-
-    保守触发：只修"明显在看不在场/消失对象"的目光；不含受伤结果对象时不动。
+    The previous implementation changed a character's gaze to the wounded
+    victim based on scene heuristics.  That is a semantic rewrite after the
+    step01 audit and is intentionally not performed here.  Gaze-target
+    conflicts are reported by validation and must be repaired by the LLM from
+    the original story evidence.  Only typo correction is lossless.
     """
     if not lf_desc:
         return lf_desc
@@ -3032,44 +3059,6 @@ def fix_lf_desc_gaze(lf_desc: str, shot: dict | None = None,
     text = lf_desc
     for old, new in _LF_GAZE_TYPO:
         text = text.replace(old, new)
-
-    # 2. 目光语义修复：看消失对象 → 看向动作结果对象
-    try:
-        victim = None
-        for c in (characters or []):
-            ident = c.get("identifier", "") or ""
-            if ident and ident in text and any(h in text for h in _LF_VICTIM_HINTS):
-                victim = ident
-                break
-        if not victim:
-            return text
-        # 检测"目光 + 看/盯 + 消失对象"
-        gaze_patterns = (
-            ("目光倒倒盯着", "目光紧紧看向"),
-            ("目光紧紧盯着", "目光紧紧看向"),
-            ("目光盯着", "目光看向"),
-            ("目光望向", "目光看向"),
-            ("双眼盯着", "双眼看向"),
-            ("盯着", "看向"),
-        )
-        for gaze_old, gaze_new in gaze_patterns:
-            if gaze_old in text:
-                idx = text.find(gaze_old)
-                # 从 gaze 位置后到句尾/标点前 = 目光宾语段（"画右水面刺客消失之处"）
-                seg = text[idx + len(gaze_old):]
-                # 宾语段终止于中文标点
-                for _i, _ch in enumerate(seg):
-                    if _ch in "，。；！？":
-                        seg = seg[:_i]
-                        break
-                # 确认宾语段含消失对象（水面/消失/刺客）
-                if any(l in seg for l in _LF_GAZE_LOST_OBJECT):
-                    text = text.replace(gaze_old, gaze_new)
-                    # 整个宾语段替换为"倒下的{victim}"
-                    text = text[:idx + len(gaze_new)] + f"倒下的{victim}" + text[idx + len(gaze_old) + len(seg):]
-                    break
-    except Exception:
-        pass
     return text
 
 
@@ -3257,14 +3246,8 @@ async def _gen_first_frame_async(
 
     ff_desc = shot.get("ff_desc", "").strip()
     if not ff_desc:
-        # ff_Desc 缺失时，从 location/scene + narration 构建静态首帧
-        location = shot.get("location", "") or shot.get("scene", "")
-        scene = shot.get("scene", "") or location
-        narration = shot.get("narration_segment", "")
-        main_subj = shot.get("main_subject", "")
-        ff_desc = f"{location}，{main_subj}，静态画面。"
-        if narration:
-            ff_desc += f" {narration[:50]}。" if len(narration) > 50 else f" {narration}。"
+        _bridge_log(f"  [FRAME] 首帧 shot_{idx} 缺少 ff_desc，拒绝凭 scene/main_subject 虚构画面")
+        return None
     else:
         # ff_Desc 存在时，检查是否是纯相机运动描述（无静态画面）
         motion_keywords = ["上移", "下移", "左移", "右移", "推进", "拉远", "跃起", "冲出",
@@ -3278,16 +3261,7 @@ async def _gen_first_frame_async(
     if empty_scene:
         ff_desc = f"{ff_desc}\n空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
 
-    # v6.18：ff_desc 归一化 + 回写（多动作/进行态堆叠 → 单一静态瞬间）。
-    # 必须在哈希计算之前——_get_frame_content_hash 哈希的是 shot["ff_desc"]，
-    # 不回写则归一化后缓存永不失效。回写保证帧 prompt、step02a 落盘、
-    # step02b 的【视频起点】三处一致。
-    if ff_desc and not empty_scene:
-        from shared.style_prefix import normalize_ff_desc
-        norm = normalize_ff_desc(ff_desc, shot, characters)
-        if norm != ff_desc:
-            shot["ff_desc"] = ff_desc = norm
-            _bridge_log(f"  [bridge] 镜头{idx}: ff_desc 归一化（多动作→静态瞬间）")
+    # 描述已在 step01 语义审计后冻结；桥接层不得回写或改写帧事实。
 
     # 计算当前哈希值（核心意图 + 空镜约束 + 参考图 + 锁类型，任一变化都重新生成）
     # 动作镜头用 NO_LAYOUT 锁图（prompt 语义变化），锁类型纳入哈希键而非魔法后缀。
@@ -3464,6 +3438,25 @@ async def _gen_first_frame_async(
     return str(ff_path) if ff_path.exists() else None
 
 
+def _resolve_missing_lf_desc(shot: dict) -> str | None:
+    """Return a lossless static fallback for a missing ``lf_desc``.
+
+    Only the same shot's static ``ff_desc`` may be reused.  Deriving a new
+    last-frame scene from ``scene`` / ``main_subject`` / narration would create
+    semantic facts after the step01 audit, so that path is deliberately refused.
+    """
+    ff_desc = str((shot or {}).get("ff_desc") or "").strip()
+    if not ff_desc:
+        return None
+    motion_keywords = (
+        "上移", "下移", "左移", "右移", "推进", "拉远", "跃起", "冲出",
+        "穿越", "飞", "跑", "跳", "蹦", "滑", "冲", "快速", "缓慢",
+    )
+    if any(kw in ff_desc for kw in motion_keywords):
+        return None
+    return ff_desc
+
+
 async def _gen_last_frame_async(
     image_adapter, shots_dir: Path, shot: dict, force: bool,
     script_mtime: float | None = None,
@@ -3493,38 +3486,19 @@ async def _gen_last_frame_async(
 
     lf_desc = shot.get("lf_desc", "").strip()
     if not lf_desc:
-        # lf_desc 缺失时回退逻辑：
-        # 1. 先尝试 ff_desc（如果是静态画面描述）
-        # 2. 如果 ff_desc 也是动作描述（如"快速上移"、"跃起"），则用 scene 或 narration 生成静态结尾
-        ff_desc = shot.get("ff_desc", "").strip()
-        motion_keywords = ["上移", "下移", "左移", "右移", "推进", "拉远", "跃起", "冲出",
-                          "穿越", "飞", "跑", "跳", "蹦", "滑", "冲", "快速", "缓慢"]
-        is_motion_desc = any(kw in ff_desc for kw in motion_keywords)
-
-        if ff_desc and not is_motion_desc:
-            # ff_Desc 是静态画面，可以用作尾帧
-            lf_desc = f"{ff_desc}（镜头收尾画面，场景延续，构图自然）"
-        else:
-            # ff_Desc 是动作描述，生成安全的静态结尾画面
-            # 从 scene + narration 提取关键元素构建静态尾帧
-            scene = shot.get("scene", "")
-            narration = shot.get("narration_segment", "")
-            # 提取主体静态画面
-            main_subj = shot.get("main_subject", "")
-            lf_desc = f"{scene}，{main_subj}，静态画面，夜晚冷蓝月光，水面平静。"
-            if narration:
-                # 截取narration描述的最后一个动作结果作为尾帧
-                lf_desc += f" {narration}。"
+        # 只允许无损复用同一镜头的静态 ff_desc；不得从 scene /
+        # main_subject / narration 推断新的尾帧事实。
+        lf_desc = _resolve_missing_lf_desc(shot) or ""
+        if not lf_desc:
+            logger.warn(
+                f"  [FRAME] 尾帧 shot_{idx} 缺少 lf_desc，且 ff_desc 不是可复用静态画面；"
+                "拒绝凭 scene/main_subject 虚构尾帧，交由上游审计/LLM 修复"
+            )
+            return None
     if empty_scene:
         lf_desc = f"{lf_desc}\n空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
 
-    # v6.29：尾帧终态归一化兜底（与 step01 post_fix 对称）——lf_desc 中间态在
-    # 帧生成前也清洗一次，保证 step02a 直接跑时尾帧不画中间态；回写保证哈希正确失效。
-    if lf_desc:
-        from shared.style_prefix import normalize_lf_desc
-        _norm_lf = normalize_lf_desc(lf_desc, shot, characters)
-        if _norm_lf != lf_desc:
-            shot["lf_desc"] = lf_desc = _norm_lf
+    # 描述已在 step01 语义审计后冻结；桥接层不得把中间态改写成结果态。
 
     # 计算当前哈希值（核心意图 + 空镜约束 + 参考图 + 锁类型）
     # 尾帧用 NO_LAYOUT 锁图（构图随动作演变），锁类型纳入哈希键（审计 S4）。
@@ -3892,7 +3866,7 @@ async def _gen_keyframes_async(
 
         time_ratio = get_kf_t_sec(kf, shot) or 0.5
         t_sec = time_ratio  # v6.34 迁移后变量值是绝对秒数（不是 ratio），rename 给下游用
-        kf_path = shot_dir / f"keyframe_{i}.png"
+        kf_path = shot_dir / KEYFRAME_FILENAME_FMT.format(i)
         kf_hash_path = shot_dir / f"keyframe_{i}_hash.txt"
 
         if empty_scene:

@@ -280,31 +280,31 @@ class ClimaxCompletenessConstraint(Constraint):
         if has_result_any:
             return repairs  # 已有结果，完整
 
-        # 高潮不完整：硬修复最后一个高潮镜
         last_shot = shots[last_climax]
         if not isinstance(last_shot, dict):
             return repairs
 
-        ctype = _climax_type(last_shot)
-        old_lf = last_shot.get("lf_desc", "")
-        old_motion = last_shot.get("motion_desc", "")
-
-        new_lf = _append_result_to_lf(last_shot, ctype)
-        new_motion = _append_result_to_motion(last_shot, ctype)
-
-        if new_lf != old_lf:
-            last_shot["lf_desc"] = new_lf
-            repairs.append(RepairRecord(
-                constraint_name=self.name,
-                shot_index=last_shot.get("index", last_climax + 1),
-                action="append_result_lf",
-                target="lf_desc",
-                before="高潮无结果态",
-                after="追加结果态描述",
-                detail=f"高潮类型={ctype}，lf_desc 追加结果动作",
-            ))
-
-        # v6.64.1: 不修改 motion_desc——regex 替换可能丢失原文高潮关键词
-        # 导致高潮检测索引变化。只改 lf_desc（不被高潮检测扫描）。
-
+        # Detection-only.  The old repair appended a fabricated “刺入/中招/倒地”
+        # result to the last climax shot, which can change the plot even when
+        # the source only reached a threat or preparation beat.  The audit/LLM
+        # layer must decide whether a result actually exists.
+        ctx.record_violation(Violation(
+            constraint_name=self.name,
+            severity=Severity.WARN,
+            shot_index=last_shot.get("index", last_climax + 1),
+            field="lf_desc",
+            message=(
+                "高潮相关镜头及后两镜未找到明确结果态；保留原文，"
+                "禁止自动追加兵刃刺中、受伤或败露等虚构结果。"
+            ),
+            evidence=str(last_shot.get("lf_desc") or last_shot.get("motion_desc") or "")[-180:],
+            repaired=False,
+        ))
+        repairs.append(RepairRecord(
+            constraint_name=self.name,
+            shot_index=last_shot.get("index", last_climax + 1),
+            action="warn",
+            target="lf_desc",
+            detail="高潮缺少可证结果，保留原文交由 audit/LLM 裁决",
+        ))
         return repairs

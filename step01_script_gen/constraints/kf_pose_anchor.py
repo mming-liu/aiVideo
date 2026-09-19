@@ -33,7 +33,7 @@ from step01_script_gen.prompt_semantic.registry import (
     THREAT_WORDS_ENLARGED,
 )
 from .base import Constraint
-from .types import RepairRecord, Severity
+from .types import RepairRecord, Severity, Violation
 
 
 # 位置词（场景内/画面空间）—— 简版，可与 scene_anchors 联动
@@ -115,36 +115,59 @@ class KfPoseAnchorConstraint(Constraint):
                 if not isinstance(desc, str) or not desc.strip():
                     continue
 
-                original = desc
+                missing_pose = not _has_pose_word(desc)
+                missing_position = not _has_position_word(desc)
+                if missing_pose or missing_position:
+                    # "see the first frame" is a cross-time reference, not a
+                    # current-frame state.  Leaving the text untouched and
+                    # reporting the gap lets audit/LLM bind the correct
+                    # character and frame instead of manufacturing a generic
+                    # anchor that later overwrites real state.
+                    ctx.record_violation(Violation(
+                        constraint_name=self.name,
+                        severity=Severity.WARN,
+                        shot_index=None if is_hook else shot.get("index", idx),
+                        field=f"keyframes[{j}].desc",
+                        message=(
+                            "关键帧缺少当前帧姿态或位置证据；保留原文，未追加"
+                            "“本帧各角色姿态位置见首帧静态定格”跨时间引用。"
+                        ),
+                        evidence=desc[-120:],
+                        repaired=False,
+                    ))
+                    repairs.append(RepairRecord(
+                        constraint_name=self.name,
+                        shot_index=None if is_hook else shot.get("index", idx),
+                        action="warn",
+                        target=f"keyframes[{j}].desc",
+                        before=desc[-80:],
+                        after=desc[-80:],
+                        detail="缺少当前帧姿态/位置证据，保留原文交由 audit",
+                    ))
 
-                # (A) P1-5 姿态+位置锚定
-                # 已含「本帧各角色」视为已修（W16 弱模板注入锚同源）
-                if "本帧各角色" not in desc:
-                    if not _has_pose_word(desc) or not _has_position_word(desc):
-                        anchor = "（本帧各角色姿态位置见首帧静态定格）"
-                        desc = desc.rstrip("。.，,;；") + "。" + anchor
-
-                # (B) P1-6 威胁源朝向
-                # 威胁源即使处于踞蹲/站立等静态姿态，也仍需要明确朝向目标；
-                # 图片模型无法从「踞蹲举刃」推断刀尖应该指向谁。
-                if _has_threat_word(desc) and "侧身朝目标" not in desc:
-                    if not _has_orientation_word(desc):
-                        # 在末尾追加朝向锚（如果 desc 已有标点，先剥再加）
-                        if desc.endswith(("。", ".", "！", "!", "？", "?")):
-                            desc = desc + "威胁源侧身朝目标，紧盯目标。"
-                        else:
-                            desc = desc.rstrip("。.，,;；") + "。威胁源侧身朝目标，紧盯目标。"
-
-                if desc != original:
-                    kf["desc"] = desc
-                    repairs.append(
-                        RepairRecord(
-                            constraint_name=self.name,
-                            shot_index=shot.get("index") if not is_hook else None,
-                            action="append",
-                            target=f"keyframes[{j}].desc",
-                            before=original[:60] + ("..." if len(original) > 60 else ""),
-                            after=desc[:60] + ("..." if len(desc) > 60 else ""),
-                        )
-                    )
+                if _has_threat_word(desc) and not _has_orientation_word(desc):
+                    ctx.record_violation(Violation(
+                        constraint_name=self.name,
+                        severity=Severity.WARN,
+                        shot_index=None if is_hook else shot.get("index", idx),
+                        field=f"keyframes[{j}].desc",
+                        message=(
+                            "威胁源缺少明确朝向；保留原文，未自动追加"
+                            "“威胁源侧身朝目标”这一无主体目标锚。"
+                        ),
+                        evidence=desc[-120:],
+                        repaired=False,
+                    ))
+                    repairs.append(RepairRecord(
+                        constraint_name=self.name,
+                        shot_index=None if is_hook else shot.get("index", idx),
+                        action="warn",
+                        target=f"keyframes[{j}].desc",
+                        before=desc[-80:],
+                        after=desc[-80:],
+                        detail="威胁源朝向缺乏明确目标，保留原文交由 audit",
+                    ))
         return repairs
+
+
+__all__ = ["KfPoseAnchorConstraint"]

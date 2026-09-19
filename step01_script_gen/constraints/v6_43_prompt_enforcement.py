@@ -534,6 +534,7 @@ class V643PromptEnforcementConstraint(Constraint):
         'int' object is not iterable 4 次。改为返回 []（修复次数已在 log 报告）。
         """
         fixed = 0
+        warnings: list[RepairRecord] = []
         scene_objects = getattr(ctx, "script", None)
         scene_objects = scene_objects.get("scene_objects") or {} if isinstance(scene_objects, dict) else {}
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
@@ -558,12 +559,37 @@ class V643PromptEnforcementConstraint(Constraint):
                 if new_text != text:
                     shot[field] = new_text
                     fixed += 1
-            # kf pre 复述 检测：对照原始 ff/lf（未改写版），更准
+            # kf pre 复述检测：只报告，不再用固定构图模板覆盖 KF 事件正文。
             if _rule_enabled("KF_REPETITION"):
-                bank_names = [
-                    str(k) for k, v in (getattr(ctx, "characters_bank", None) or {}).items()
-                ]
-                fixed += self._fix_kf_repetition(shot, orig_ff, orig_lf, char_names + bank_names)
+                for kf_i, kf in enumerate(shot.get("keyframes") or []):
+                    if not isinstance(kf, dict):
+                        continue
+                    stage = str(kf.get("stage") or "")
+                    desc = str(kf.get("desc") or "")
+                    if not desc:
+                        continue
+                    if stage in ("pre", "approach") and orig_ff:
+                        overlap = _overlap_ratio(desc, orig_ff)
+                        if overlap < 0.40:
+                            continue
+                    elif stage in ("after", "exit", "react") and orig_lf:
+                        overlap = _overlap_ratio(desc, orig_lf)
+                        if overlap < 0.50:
+                            continue
+                    else:
+                        continue
+                    warnings.append(RepairRecord(
+                        constraint_name=self.name,
+                        shot_index=None if is_hook else shot.get("index", idx),
+                        action="warn",
+                        target=f"keyframes[{kf_i}].desc",
+                        before=desc[:120],
+                        after=desc[:120],
+                        detail=(
+                            f"关键帧与 {'ff' if stage in ('pre','approach') else 'lf'} "
+                            f"文本重叠 {overlap:.2f}；保留事件原文，交 audit/LLM 改写"
+                        ),
+                    ))
             # Rule 5：threat_source facing 背对 → 侧身
             if _rule_enabled("THREAT_FACING"):
                 fixed += _fix_threat_facing(shot)
@@ -588,11 +614,11 @@ class V643PromptEnforcementConstraint(Constraint):
         # v6.42 框架要求 list[RepairRecord]；按修复次数填占位记录（engine
         # 层走 repairs_by_constraint 计数，不消费元素内容）。
         if fixed > 0:
-            return [RepairRecord(
+            return warnings + [RepairRecord(
                 constraint_name=self.name, shot_index=None,
                 action="rewrite", target="multi", before="", after="",
             )] * fixed
-        return []
+        return warnings
 
     def _log_repair_count(self, count: int) -> None:
         """把 fixed 计数写入 log（替代旧的 return int）."""

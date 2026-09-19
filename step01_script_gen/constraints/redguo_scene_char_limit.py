@@ -90,13 +90,16 @@ class RedguoSceneCharLimitConstraint(Constraint):
     severity = Severity.HARD
 
     def apply(self, ctx) -> list[RepairRecord]:
-        repairs: list[RepairRecord] = []
         if not isinstance(ctx.shots, list) or not ctx.shots:
-            return repairs
+            return []
 
-        # ---- 1. 统计 scene / character 实际使用频次 ----
         scene_counter: Counter[str] = Counter()
         char_counter: Counter[str] = Counter()
+        registered = {
+            str(c.get("identifier") or c.get("name") or "").strip()
+            for c in (ctx.script.get("characters") or [])
+            if isinstance(c, dict) and str(c.get("identifier") or c.get("name") or "").strip()
+        }
         for shot in ctx.shots:
             if not isinstance(shot, dict):
                 continue
@@ -104,144 +107,54 @@ class RedguoSceneCharLimitConstraint(Constraint):
             if sc:
                 scene_counter[sc] += 1
             ms = str(shot.get("main_subject", "")).strip()
-            # v6.62：空镜/场景标记不是人物，跳过计数（「空镜·水波/树影/风」
-            # 此前被当人物计数 + alias，导致空镜插入约束每轮重复触发）
             if ms and not _is_non_char_subject(ms):
-                # 复合名「杨旭，群演」按单人物拆分计数（治 top4 被复合名挤占）
                 for _n in _split_subject_names(ms):
-                    char_counter[_n] += 1
+                    if _n in registered:
+                        char_counter[_n] += 1
             for item in (shot.get("char_layout") or []):
                 if isinstance(item, dict):
                     cn = str(item.get("name", "")).strip()
                     if cn and not _is_non_char_subject(cn):
                         for _n in _split_subject_names(cn):
-                            char_counter[_n] += 1
+                            if _n in registered:
+                                char_counter[_n] += 1
 
-        # ---- 2. 场景合并：保留前 _MAX_SCENES 个高频，余下 alias 到最近一个 ----
-        scene_keep = [s for s, _ in scene_counter.most_common(_MAX_SCENES)]
-        scene_drop = [s for s in scene_counter if s not in scene_keep]
-        if scene_drop:
-            # 按主场景索引循环分配（drop 的用 keep[0]）
-            scene_alias: dict[str, str] = {s: scene_keep[0] for s in scene_drop}
-            for shot in ctx.shots:
-                if not isinstance(shot, dict):
-                    continue
-                sc = str(shot.get("scene", "") or shot.get("location", "")).strip()
-                if sc in scene_alias:
-                    new_sc = scene_alias[sc]
-                    shot["scene"] = new_sc
-                    shot["location"] = new_sc
-                    # prompt 中的别名也替换
-                    for fld in ("prompt", "ff_desc", "lf_desc", "motion_desc"):
-                        v = shot.get(fld)
-                        if isinstance(v, str) and sc in v:
-                            shot[fld] = v.replace(sc, new_sc)
-                    repairs.append(
-                        RepairRecord(
-                            constraint_name=self.name,
-                            shot_index=shot.get("index"),
-                            action="set_field",
-                            target="scene",
-                            before=sc,
-                            after=new_sc,
-                        )
-                    )
-
-        # ---- 3. 人物 alias：保留前 _MAX_CHARS，余下 alias 为群演 ----
-        # 优先保留 main_subject 出现频次最高的（主角）
-        char_keep = [c for c, _ in char_counter.most_common(_MAX_CHARS)]
-        char_drop = [c for c in char_counter if c not in char_keep]
-        # v6.62（09-06）：只在实际发生改名时记录 repair（此前每轮无条件 append
-        # repair 记录——「第 N 镜即使无 drop 人物也记 alias」——导致本约束
-        # 不幂等，`repairs` 恒非空，第 4 步 HARD 上报被永久抑制/或每轮重报）。
-        aliased_names: set[str] = set()
-        if char_drop:
-            drop_set = set(char_drop)
-            for shot in ctx.shots:
-                if not isinstance(shot, dict):
-                    continue
-                alias = _GENERIC_ALIASES[_scene_kind(shot.get("location", ""))]
-                # main_subject：复合名「杨旭，群演」逐段判定——只把 drop 段换成
-                # alias，keep 段（杨旭）保留（整串替换会把主角名也抹掉）
-                ms = str(shot.get("main_subject", "")).strip()
-                ms_parts = _split_subject_names(ms)
-                if ms and any(p in drop_set for p in ms_parts):
-                    head, _, tailnote = ms.partition("。")
-                    new_parts = [
-                        alias if p in drop_set else p
-                        for p in _split_subject_names(head)
-                    ]
-                    # 去重保持顺序（多段 alias 同名合并）
-                    seen: list[str] = []
-                    for p in new_parts:
-                        if p not in seen:
-                            seen.append(p)
-                    shot["main_subject"] = "，".join(seen) + (f"。{tailnote}" if tailnote else "")
-                    aliased_names.update(p for p in ms_parts if p in drop_set)
-                # char_layout
-                for item in (shot.get("char_layout") or []):
-                    if isinstance(item, dict):
-                        cn = str(item.get("name", "")).strip()
-                        cn_parts = _split_subject_names(cn)
-                        if cn and any(p in drop_set for p in cn_parts):
-                            new_cn = "，".join(
-                                dict.fromkeys(
-                                    alias if p in drop_set else p for p in cn_parts
-                                )
-                            )
-                            item["name"] = new_cn
-                            aliased_names.update(p for p in cn_parts if p in drop_set)
-            if aliased_names:
-                repairs.append(
-                    RepairRecord(
-                        constraint_name=self.name,
-                        shot_index=None,
-                        action="alias",
-                        target="characters",
-                        before=",".join(sorted(aliased_names)),
-                        after=alias,
-                    )
-                )
-
-        # ---- 4. HARD 违例上报（如果 LLM 生成时就已超）----
-        # v6.49 fix：只有当 repairs 为空（即 LLM 仍未合并且硬修复失败）才报 HARD。
-        # 实际修复后 scene 已 alias 到 top 3，violation 会让 regen 误以为未修，触发 regen 循环。
-        if scene_counter and len(scene_counter) > _MAX_SCENES and not repairs:
-            for s, c in scene_counter.most_common(_MAX_SCENES + 1):
-                if s in scene_drop:
-                    ctx.record_violation(
-                        Violation(
-                            constraint_name=self.name,
-                            severity=Severity.HARD,
-                            shot_index=None,
-                            field="scene",
-                            # 已 alias 合并 → repaired=True（不再触发 regen 循环；
-                            # 实测 09-05/09-06 每轮跑完都剩本违例挂着）
-                            repaired=True,
-                            message=(
-                                f"场景「{s}」（{c} 镜）超出红果 {_MAX_SCENES} 场景硬上限——"
-                                f"已 alias 合并到「{scene_keep[0] if scene_keep else '?'}」。"
-                                f"原文若需独立场景，prompt 应明确合并到主场景。"
-                            ),
-                        )
-                    )
-                    break  # 只报一个
-        if char_counter and len(char_counter) > _MAX_CHARS:
-            for s, c in char_counter.most_common(_MAX_CHARS + 1):
-                if s in char_drop:
-                    ctx.record_violation(
-                        Violation(
-                            constraint_name=self.name,
-                            severity=Severity.HARD,
-                            shot_index=None,
-                            field="characters",
-                            repaired=True,
-                            message=(
-                                f"人物「{s}」（{c} 镜）超出红果 {_MAX_CHARS} 人物硬上限——"
-                                f"已 alias 为群演/村人/船夫等。"
-                            ),
-                        )
-                    )
+        # Platform limits are production constraints, not permission to rename
+        # authored people or merge distinct scenes.  Report the overflow and
+        # let regeneration/simplification change the story with evidence.
+        if len(scene_counter) > _MAX_SCENES:
+            for scene, count in scene_counter.most_common():
+                if len(scene_counter) - _MAX_SCENES == 0:
                     break
+                ctx.record_violation(Violation(
+                    constraint_name=self.name,
+                    severity=Severity.HARD,
+                    shot_index=None,
+                    field="scene",
+                    repaired=False,
+                    message=(
+                        f"场景「{scene}」共出现 {count} 镜；当前脚本有 {len(scene_counter)} 个场景，"
+                        f"超过红果上限 {_MAX_SCENES}。禁止自动把不同地点改名合并，必须精简或重生成。"
+                    ),
+                    evidence=str(dict(scene_counter.most_common())),
+                ))
+                break
+        if len(char_counter) > _MAX_CHARS:
+            for name, count in char_counter.most_common():
+                ctx.record_violation(Violation(
+                    constraint_name=self.name,
+                    severity=Severity.HARD,
+                    shot_index=None,
+                    field="characters",
+                    repaired=False,
+                    message=(
+                        f"人物「{name}」共出现 {count} 次；当前脚本有 {len(char_counter)} 个主要人物，"
+                        f"超过红果上限 {_MAX_CHARS}。禁止自动改名为群演/村人，必须重生成或明确合并身份。"
+                    ),
+                    evidence=str(dict(char_counter.most_common())),
+                ))
+                break
+        return []
 
-        return repairs
+
+__all__ = ["RedguoSceneCharLimitConstraint"]

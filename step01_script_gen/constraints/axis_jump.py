@@ -26,7 +26,7 @@ from step01_script_gen.scene_anchors import (
 )
 from step01_script_gen.validation import _extract_shot_directions
 from ._base_classes import InterShotConstraint
-from .types import RepairRecord, Severity
+from .types import RepairRecord, Severity, Violation
 
 
 def _is_scene_switch(s1: dict, s2: dict) -> bool:
@@ -69,109 +69,54 @@ class AxisJumpConstraint(InterShotConstraint):
     """
 
     name = "axis_jump"
-    severity = Severity.HARD
+    severity = Severity.WARN
     skip_hook = True
 
     def _check_pair(self, prev, curr, ctx, prev_idx, curr_idx):
         if not isinstance(prev, dict) or not isinstance(curr, dict):
             return None
-        # 场景切换豁免
         if _is_scene_switch(prev, curr):
             return None
-        # 方向判定
-        t1 = " ".join([
-            prev.get("prompt", "") or "",
-            prev.get("ff_desc", "") or "",
-        ])
-        t2 = " ".join([
-            curr.get("prompt", "") or "",
-            curr.get("ff_desc", "") or "",
-        ])
+        t1 = " ".join([prev.get("prompt", "") or "", prev.get("ff_desc", "") or ""])
+        t2 = " ".join([curr.get("prompt", "") or "", curr.get("ff_desc", "") or ""])
         d1 = _extract_shot_directions(t1)
         d2 = _extract_shot_directions(t2)
         if not d1 or not d2:
             return None
-        # 公共 location（取 curr 的；prev/curr 场景未切换时一致）
         location = str(curr.get("location", "") or curr.get("scene", "") or
                        prev.get("location", "") or prev.get("scene", "") or "")
-        before = curr.get("prompt", "") or ""
-        # 1) 横向场景：anchor 首尾翻转
+        conflict = None
         anchor_pair = _get_horizontal_anchor_pair(location)
         if anchor_pair:
             a_first, a_last = anchor_pair
-            # 翻 1：a_first → a_last（后镜从前端翻到末端）
             if _has_only_direction(d1, a_first) and _has_only_direction(d2, a_last):
-                new_prompt = before.replace(a_last, a_first)
-                if new_prompt != before:
-                    curr["prompt"] = new_prompt
-                for item in (curr.get("char_layout") or []):
-                    if not isinstance(item, dict):
-                        continue
-                    pos = str(item.get("position", "")).strip()
-                    if a_last in pos:
-                        item["position"] = pos.replace(a_last, a_first)
-                return RepairRecord(
-                    constraint_name=self.name,
-                    shot_index=curr_idx,
-                    action="rewrite",
-                    target="prompt",
-                    before=before,
-                    after=curr.get("prompt", before),
-                )
-            # 翻 2：a_last → a_first
-            if _has_only_direction(d1, a_last) and _has_only_direction(d2, a_first):
-                new_prompt = before.replace(a_first, a_last)
-                if new_prompt != before:
-                    curr["prompt"] = new_prompt
-                for item in (curr.get("char_layout") or []):
-                    if not isinstance(item, dict):
-                        continue
-                    pos = str(item.get("position", "")).strip()
-                    if a_first in pos:
-                        item["position"] = pos.replace(a_first, a_last)
-                return RepairRecord(
-                    constraint_name=self.name,
-                    shot_index=curr_idx,
-                    action="rewrite",
-                    target="prompt",
-                    before=before,
-                    after=curr.get("prompt", before),
-                )
-        # 2) 通用：画左 ↔ 画右
-        if _has_only_direction(d1, "画左") and _has_only_direction(d2, "画右"):
-            new_prompt = before.replace("画右", "画左")
-            if new_prompt != before:
-                curr["prompt"] = new_prompt
-            for item in (curr.get("char_layout") or []):
-                if not isinstance(item, dict):
-                    continue
-                pos = str(item.get("position", "")).strip()
-                if "画右" in pos:
-                    item["position"] = pos.replace("画右", "画左")
-            return RepairRecord(
-                constraint_name=self.name,
-                shot_index=curr_idx,
-                action="rewrite",
-                target="prompt",
-                before=before,
-                after=curr.get("prompt", before),
-            )
-        if _has_only_direction(d1, "画右") and _has_only_direction(d2, "画左"):
-            new_prompt = before.replace("画左", "画右")
-            if new_prompt != before:
-                curr["prompt"] = new_prompt
-            for item in (curr.get("char_layout") or []):
-                if not isinstance(item, dict):
-                    continue
-                pos = str(item.get("position", "")).strip()
-                if "画左" in pos:
-                    item["position"] = pos.replace("画左", "画右")
-            return RepairRecord(
-                constraint_name=self.name,
-                shot_index=curr_idx,
-                action="rewrite",
-                target="prompt",
-                before=before,
-                after=curr.get("prompt", before),
-            )
-        return None
+                conflict = (a_first, a_last)
+            elif _has_only_direction(d1, a_last) and _has_only_direction(d2, a_first):
+                conflict = (a_last, a_first)
+        if conflict is None and _has_only_direction(d1, "画左") and _has_only_direction(d2, "画右"):
+            conflict = ("画左", "画右")
+        if conflict is None and _has_only_direction(d1, "画右") and _has_only_direction(d2, "画左"):
+            conflict = ("画右", "画左")
+        if conflict is None:
+            return None
+        ctx.record_violation(Violation(
+            constraint_name=self.name,
+            severity=Severity.WARN,
+            shot_index=curr.get("index", curr_idx),
+            field="prompt,char_layout",
+            message=(
+                f"同场景相邻镜方向由 {conflict[0]} 翻转为 {conflict[1]}，"
+                "但缺少机位/轴线切换证据；保留原文，禁止自动镜像站位。"
+            ),
+            evidence=f"prev={t1[-120:]}; curr={t2[-120:]}",
+            repaired=False,
+        ))
+        return RepairRecord(
+            constraint_name=self.name,
+            shot_index=curr.get("index", curr_idx),
+            action="warn",
+            target="prompt,char_layout",
+            before=f"{conflict[0]}→{conflict[1]}",
+            after=f"{conflict[0]}→{conflict[1]}",
+            detail="方向翻转缺乏机位证据，保留原文交由 audit",
+        )

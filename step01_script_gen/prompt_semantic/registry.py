@@ -447,6 +447,7 @@ BLOOD_STATE_WORDS: Tuple[str, ...] = STRONG_INJURY_ANCHORS + (
 COLLECTIVE_NAMES: Tuple[str, ...] = (
     "群演", "村人", "船夫", "众人", "路人", "仆从", "仆人",
     "侍卫", "百姓", "家丁", "围观", "人群", "宾客", "侍女", "丫鬟",
+    "庄仆", "佃仆", "家仆", "仆役", "随从",
 )
 
 

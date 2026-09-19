@@ -64,25 +64,31 @@ class FrameSpecRepairConstraint(Constraint):
                     if not isinstance(frame, dict):
                         continue
                     if not frame.get("pose"):
-                        frame["pose"] = str(shot.get("main_subject") or "静止")[:15]
+                        # main_subject is not a pose.  Copying it into pose
+                        # produced entries such as “杨旭” and then the anchor
+                        # layer rendered that as a state fact.  Missing pose
+                        # remains unresolved until a current-frame source or
+                        # audit supplies evidence.
                         repairs.append(
                             RepairRecord(
                                 constraint_name=self.name,
                                 shot_index=shot.get("index", idx),
-                                action="set_field",
+                                action="warn",
                                 target=f"frame_layouts.{frame_key}[*].pose",
-                                after=frame["pose"],
+                                detail="帧姿态缺失；保留空值交由 audit，禁止用 main_subject 冒充姿态",
                             )
                         )
                     if "on_screen" not in frame:
-                        frame["on_screen"] = True
+                        # Visibility is semantic state.  Defaulting every
+                        # missing entry to True can resurrect departed
+                        # characters, so report it instead of guessing.
                         repairs.append(
                             RepairRecord(
                                 constraint_name=self.name,
                                 shot_index=shot.get("index", idx),
-                                action="set_field",
+                                action="warn",
                                 target=f"frame_layouts.{frame_key}[*].on_screen",
-                                after="True",
+                                detail="帧在场状态缺失；保留未填交由 audit，禁止默认 True",
                             )
                         )
 

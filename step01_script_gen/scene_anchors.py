@@ -25,6 +25,13 @@ BASE_POS_WORDS: Tuple[str, ...] = (
     "前景", "中景", "后景",
 )
 
+# 远景/画远处是合法的构图位置提示，不应被当成“缺空间词”。
+# 09-19 真实产物「群演 站位 画远处」曾被 multi_person_staging 误报。
+DISTANT_POS_WORDS: Tuple[str, ...] = (
+    "画远处", "远处", "远景", "背景", "深处",
+)
+
+
 # 朝向词（stable：任何角色任何场景都适用）
 BASE_FACING_WORDS: Tuple[str, ...] = (
     "面向", "背对", "侧身", "正对", "面朝", "朝向",
@@ -146,6 +153,8 @@ def is_valid_position(pos: str, location: str = "") -> bool:
     if not pos:
         return True
     if any(k in pos for k in BASE_POS_WORDS):
+        return True
+    if any(k in pos for k in DISTANT_POS_WORDS):
         return True
     # location 场景的具象词
     for anchor in scene_anchors_for(location):

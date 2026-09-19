@@ -105,9 +105,67 @@ def collect_video_prompt_quality(script: dict) -> dict:
         "warning_count": len(warnings),
         "warnings": warnings,
         "source": "step02b.prompt_builder._build_prompt",
+        "report_type": "prompt_precheck",
+        "status": "PASS",
         "skill_contract": ["byted-ark-seedance-skill", "byted-ark-seedream-skill"],
     }
     attach_gate_metadata(payload, script, stage='step02b.video_prompt_quality')
+    atomic_dump_json(chapter_dir() / "step02b_prompt_quality.json", payload,
+                     ensure_ascii=False, indent=2)
+    return payload
+
+
+def _file_digest(path: Path) -> str:
+    import hashlib
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_video_product_quality(script: dict, work_dir: Path) -> dict:
+    """Validate actual Step02b video products and write acceptance report."""
+    from pathlib import Path as _Path
+    from shared.paths import SHOT_VIDEO_FILENAME
+    from shared.audio_policy import resolve_audio_policy
+    from step04_merge.stretch import get_media_duration, has_audio_stream
+    from step01_script_gen.quality_issues import RULE_VERSION
+
+    policy = resolve_audio_policy()
+    require_audio = policy.effective_merge_mode == "native"
+    units = []
+    if isinstance(script.get("hook"), dict):
+        units.append(script["hook"])
+    units.extend([s for s in (script.get("shots") or []) if isinstance(s, dict)])
+    missing = []
+    outputs = {}
+    for shot in units:
+        idx = shot.get("index", 0)
+        video = _Path(work_dir) / "shots" / str(idx) / SHOT_VIDEO_FILENAME
+        if not video.exists() or video.stat().st_size <= 20 * 1024:
+            missing.append(f"shot {idx}: missing/too small {video.name}")
+            continue
+        duration = get_media_duration(video)
+        if duration <= 0:
+            missing.append(f"shot {idx}: duration probe failed")
+        if require_audio and not has_audio_stream(video):
+            missing.append(f"shot {idx}: missing audio stream")
+        outputs[str(idx)] = {
+            "video": {"path": str(video), "sha1": _file_digest(video)},
+            "duration_sec": round(float(duration or 0), 3),
+            "has_audio": bool(has_audio_stream(video)),
+        }
+    payload = {
+        "source": "step02b.product_acceptance",
+        "report_type": "product_acceptance",
+        "rule_version": RULE_VERSION,
+        "status": "BLOCK" if missing else "PASS",
+        "blocking": bool(missing),
+        "missing": missing,
+        "outputs": outputs,
+    }
+    attach_gate_metadata(payload, script, stage="step02b.product_acceptance")
     atomic_dump_json(chapter_dir() / "step02b_quality.json", payload,
                      ensure_ascii=False, indent=2)
     return payload

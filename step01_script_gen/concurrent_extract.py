@@ -21,6 +21,7 @@ def extract_all_concurrent(
     enable_characters: bool = True,
     enable_scene_objects: bool = True,
     enable_outline: bool = True,
+    model: str | None = None,
     log_func=None,
 ) -> dict[str, Any]:
     """并发跑 3 个 LLM 预提取（角色/场景物体/大纲），返回 dict 各项.
@@ -48,7 +49,7 @@ def extract_all_concurrent(
 
     def _do_outline() -> dict | None:
         from step01_script_gen.outline import generate_outline
-        return generate_outline(novel_text)
+        return generate_outline(novel_text, model=model)
 
     # 提交 3 个任务
     futures = {}

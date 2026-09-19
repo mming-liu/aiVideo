@@ -90,6 +90,68 @@ def _has_dialogue(text: str) -> bool:
 _SPLIT_DELIMS_PRIORITY = ("。", "？", "！", "…", "，")
 
 
+def _rewrite_motion_time(atom: str, new_a: float, new_b: float) -> str:
+    """Rebase one motion atom onto local time for the right split half."""
+    import re as _re_motion
+    body = atom
+    m = _re_motion.search(
+        r"^\s*(\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(\d+(?:\.\d+)?)\s*(?:秒|s)?\s*[:：]?\s*",
+        atom,
+    )
+    if m:
+        body = atom[m.end():].strip()
+    else:
+        m = _re_motion.search(r"^\s*(?:前|后)\s*\d+(?:\.\d+)?\s*秒\s*[:：]?\s*", atom)
+        if m:
+            body = atom[m.end():].strip()
+    return f"{new_a:g}-{new_b:g}秒：{body}" if body else ""
+
+
+def _split_motion_desc_at_cut(motion: str, cut_t: float, total_sec: float) -> tuple[str, str]:
+    """Split explicit motion time segments into before/after local-time halves."""
+    if not motion:
+        return "", ""
+    import re as _re_motion
+    left: list[str] = []
+    right: list[str] = []
+    for atom in _re_motion.split(r"[;；。]", motion):
+        atom = atom.strip()
+        if not atom:
+            continue
+        a = b = None
+        m = _re_motion.search(
+            r"(\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(\d+(?:\.\d+)?)\s*(?:秒|s)?",
+            atom,
+        )
+        if m:
+            a, b = float(m.group(1)), float(m.group(2))
+        else:
+            m = _re_motion.search(r"前\s*(\d+(?:\.\d+)?)\s*秒", atom)
+            if m:
+                a, b = 0.0, float(m.group(1))
+            else:
+                m = _re_motion.search(r"后\s*(\d+(?:\.\d+)?)\s*秒", atom)
+                if m:
+                    a, b = max(0.0, float(total_sec) - float(m.group(1))), float(total_sec)
+        if a is None or b is None:
+            continue
+        if a > b:
+            a, b = b, a
+        if b <= cut_t + 0.01:
+            left.append(atom)
+        elif a >= cut_t - 0.01:
+            shifted = _rewrite_motion_time(atom, a - cut_t, b - cut_t)
+            if shifted:
+                right.append(shifted)
+        else:
+            # Segment crosses the cut: the right half continues it from local
+            # zero; do not leave the original global timestamp in shot_b.
+            shifted = _rewrite_motion_time(atom, 0.0, max(0.1, b - cut_t))
+            if shifted:
+                right.append(shifted)
+    return "；".join(left), "；".join(right)
+
+
 def _find_best_split_point(text: str) -> int:
     """在 text 中找最接近中点的优先级切点.
 
@@ -179,9 +241,9 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
         # 切点时间 = 按文本长度比例估算（narration 拆分的近似值）
         split_ratio = split_at / max(len(text), 1)
         cut_t = orig_dur * split_ratio
-        new_kfs = []
+        new_kfs_with_idx: list[tuple[int, dict]] = []
         if orig_kfs and orig_dur > 0:
-            for kf in orig_kfs:
+            for orig_idx, kf in enumerate(orig_kfs):
                 if not isinstance(kf, dict):
                     continue
                 t = float(kf.get("t_sec", 0) or 0)
@@ -197,8 +259,32 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
                     new_t = round(new_dur - 0.1, 3)  # 防止超出结尾
                 kf_copy = dict(kf)
                 kf_copy["t_sec"] = new_t
-                new_kfs.append(kf_copy)
+                new_kfs_with_idx.append((orig_idx, kf_copy))
+        new_kfs = [kf for _, kf in new_kfs_with_idx]
         shot_b["keyframes"] = new_kfs
+        # Split explicit motion segments too; never copy the whole motion_desc
+        # into both halves.  If no explicit segment survives, leave a short
+        # continuation description rather than duplicating the original action.
+        motion_left, motion_right = _split_motion_desc_at_cut(
+            str(shot.get("motion_desc") or ""), cut_t, orig_dur)
+        if motion_left or motion_right:
+            shot["motion_desc"] = motion_left or (
+                "从首帧推进到切分状态，完成："
+                + str(shot.get("lf_desc") or shot.get("ff_desc") or "").strip()
+            )
+            shot_b["motion_desc"] = motion_right or (
+                "承接首帧状态，完成："
+                + str(shot_b.get("lf_desc") or shot_b.get("ff_desc") or "").strip()
+            )
+        else:
+            shot["motion_desc"] = (
+                "从首帧推进到切分状态，完成："
+                + str(shot.get("lf_desc") or shot.get("ff_desc") or "").strip()
+            )
+            shot_b["motion_desc"] = (
+                "承接首帧状态，完成："
+                + (str(shot_b.get("lf_desc") or shot_b.get("ff_desc") or "").strip())
+            )
         # v6.57+ frame_layouts.kfs 同步截取（与 keyframes 一一对应）
         # B9 修复（2026-09-03）：
         #   1. new_kfs 为空时也必须显式清空 _fl_b["kfs"]，否则 deepcopy 残留
@@ -212,25 +298,13 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
         if isinstance(_fl_b, dict):
             orig_kfs_layout = list(_fl_b.get("kfs") or [])
             new_kfs_layout: list = []
-            if orig_kfs and new_kfs:
-                # 计算每个 new_kf 对应原 kf 的 index（按 t_sec 排序后相对位置）
-                # 先按 t_sec 排序 orig_kfs，记录每个 orig kf 在原列表的 index
-                orig_with_idx = sorted(
-                    enumerate(orig_kfs),
-                    key=lambda t: float(t[1].get("t_sec", 0) or 0),
-                )
-                orig_idx_by_tsec = {
-                    float(okf.get("t_sec", 0) or 0): i
-                    for i, okf in orig_with_idx
-                }
-                for kf in new_kfs:
-                    t = float(kf.get("t_sec", 0) or 0)
-                    j = orig_idx_by_tsec.get(t)
-                    if j is not None and j < len(orig_kfs_layout):
-                        new_kfs_layout.append(orig_kfs_layout[j])
-                    elif orig_kfs_layout:
-                        # 兜底：用最后一帧 layout 补齐（保证数量 == new_kfs）
-                        new_kfs_layout.append(orig_kfs_layout[-1])
+            for orig_idx, _kf in new_kfs_with_idx:
+                if orig_idx < len(orig_kfs_layout):
+                    new_kfs_layout.append(orig_kfs_layout[orig_idx])
+                elif orig_kfs_layout:
+                    # 只在原 layout 本身缺项时才兜底；不得用“减完 cut_t 的新
+                    # t_sec”去反查原索引，那会把所有帧都匹配到最后一帧。
+                    new_kfs_layout.append(orig_kfs_layout[-1])
             # 严格按 new_kfs 数量截断（防御性）
             _fl_b["kfs"] = new_kfs_layout[:len(new_kfs)]
         if not shot_b.get("motion_desc"):
@@ -321,6 +395,29 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
         shots[i]["narration_segment"] = text[:split_at].strip()
         if shots[i].get("subtitle"):
             shots[i]["subtitle"] = shots[i]["narration_segment"]
+        # A split dialogue shot must not inherit the original victim/subject
+        # verbatim.  When each half carries an explicit speaker, promote that
+        # speaker to main_subject so downstream character anchors do not treat
+        # a listener or corpse as the shot subject.
+        try:
+            from step01_script_gen.split_visuals import extract_speaker as _extract_split_speaker
+            _split_char_names = [
+                str(item.get("name") or "").strip()
+                for item in (shots[i].get("char_layout") or [])
+                if isinstance(item, dict) and str(item.get("name") or "").strip()
+            ]
+            _speaker_a = _extract_split_speaker(
+                str(shots[i].get("narration_segment") or ""), _split_char_names
+            )
+            _speaker_b = _extract_split_speaker(
+                str(shot_b.get("narration_segment") or ""), _split_char_names
+            )
+            _split_speaker = _speaker_a or _speaker_b
+            if _split_speaker:
+                shots[i]["main_subject"] = _speaker_a or _split_speaker
+                shot_b["main_subject"] = _speaker_b or _split_speaker
+        except Exception:
+            pass
         shots[i]["_split_to"] = shot_b["index"]
         # 插入到 i+1
         shots.insert(i + 1, shot_b)
@@ -398,7 +495,12 @@ def _extract_motion_duration(motion_desc: str) -> float | None:
     pre_post = sum(float(x) for x in m1) + sum(float(x) for x in m2)
 
     # 格式2: "X-Y秒：..." (范围格式，取所有区间终点)
-    m3 = re.findall(r'(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*秒', motion_desc)
+    # 09-19：`秒` 必须可选，和 quality_issues._action_time_issues 同口径。
+    # 真实产物「4-6望星空」曾在这里漏掉末段，导致 timecode 重算回 4 秒。
+    m3 = re.findall(
+        r'(\d+(?:\.\d+)?)\s*[-–~至到]\s*(\d+(?:\.\d+)?)\s*(?:秒|s)?',
+        motion_desc,
+    )
     ranges = [float(end) for start, end in m3 if float(end) > float(start)]
     range_max = max(ranges) if ranges else 0.0
 
@@ -606,7 +708,7 @@ def timeline_consistency_errors(script: dict) -> list[str]:
     return errors
 
 
-def _compute_timecodes(script: dict) -> None:
+def _compute_timecodes(script: dict, *, allow_split: bool = True) -> None:
     """根据 motion_desc 时间分段或对话字数计算每个镜头的 timecode。
 
     v6.6 修复：
@@ -618,6 +720,12 @@ def _compute_timecodes(script: dict) -> None:
     →正片），所以 timecode 0..hook_duration 归 hook，正片 shots 从
     hook_duration..hook_duration+shots_total。但 shots_total（正片分镜总时长）
     用于"60-90s"硬约束检查时**仍只算 shots（不含钩子）**——钩子另算。
+
+    v6.76（2026-09-19）新增 `allow_split`：`False` 时**不执行拆镜 pre-pass**，
+    只重建 timeline。用于定向修复轮——拆镜会深拷贝语义字段、按旁白字符比例
+    重算 KF 时刻，并在接受判定里以新 shot_id（如 11.5）制造 new_blocking，
+    导致整轮回退（见 docs/step01-temporal-writers-audit-2026-09-19.md §5）。
+    需要时由上游完整 regen 重写镜头，而不是在修复轮里就地切分。
     """
     shots = script.get("shots", [])
     if not shots:
@@ -668,7 +776,24 @@ def _compute_timecodes(script: dict) -> None:
     # v6.43（08-25）：拆镜 pre-pass——估时 > shot_cap 的 shot 按 narration_segment
     # 句号切为 2 镜，避免 timecode 静默 clamp 截断长对话镜头（违反 v6.43 用户规则）。
     # 放在 fps/dur_cap 推导之后，让 _estimate_duration / 拆分都走同一 shot_cap。
-    _do_pre_split_oversized_shots(shots, shot_cap)
+    # v6.76：allow_split=False（修复轮）时只报数不拆——拆镜是可增删镜头的结构操作，
+    # 修复轮的接受判定会把新 shot_id 当全新身份键 → new_blocking → 整轮回退。
+    if allow_split:
+        _do_pre_split_oversized_shots(shots, shot_cap)
+    else:
+        _oversized = [
+            s for s in shots
+            if isinstance(s, dict)
+            and "_split_from" not in s and "_split_to" not in s
+            and s.get("narration_segment")
+            and _estimate_duration(s.get("narration_segment")) > shot_cap
+        ]
+        if _oversized:
+            _log().warn(
+                f"修复轮禁止拆镜：{len(_oversized)} 个镜头旁白估时 > {shot_cap:.1f}s "
+                f"（index={[s.get('index') for s in _oversized]}）需拆分，"
+                "本次只重建 timeline 不增删镜头；需要拆分请走上游完整 regen"
+            )
 
     # 钩子按模型 cap + fps 整数帧对齐（与 shots 一致；钩子本身不受 8s cap）
     if hook is None:

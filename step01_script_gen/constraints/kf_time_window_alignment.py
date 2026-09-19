@@ -1,7 +1,31 @@
-"""E. kf 时段缺段约束（v6.42 迁移自 _hard_fix_kf_time_window_alignment）.
+"""E. kf 时段缺段约束（v6.42 迁移自 _hard_fix_kf_time_window_alignment；v6.76 只报告）.
 
-motion_desc 显式分 N 段时，缺段（无 kf 覆盖）应派生补帧.
-已含 kf 覆盖全部段的镜头跳过（幂等）.
+检测两类缺陷：
+  1. 越窗——kf 物理时刻不在 motion_desc 的任何显式时段内
+  2. 缺段——某时段没有任何 kf 覆盖
+
+历史修法（v6.42~v6.73）：
+  - 越窗 → 拉到「最近且未被占用」的段中点
+  - 缺段 → 从 `_split_motion_to_seg_texts` 取段文本，派生新 kf 并 **append 到列表末尾**
+
+v6.76（2026-09-19）降为**只报告**，不再搬时刻、不再补帧。原因：
+  1. append 不排序。补出的帧落在列表末尾，而唯一做「降序 → 重整」的
+     kf_monotonic 跑在本约束**之前**，于是补出的早时刻帧逃过单调性修复，
+     直接产出逆序 kf（实测 chapter_001 index 11.5：kf4=2.548s, kf5=0.189s）。
+  2. 「段中点」没有任何原文依据——motion_desc 的段是叙述顺序，不等于事件的
+     真实物理时刻；用它当 kf 时刻等于把推断写成事实。
+  3. 缺段的**根因在上游**：`runtime_extend` 拉伸 duration_sec 而不同步事件区间，
+     人为制造出「没有内容的尾部时段」，本约束再把它补成「（画面延续，保持该状态）」
+     的伪 hold 帧。在链尾补帧只是把症状固化。
+  4. 段文本经 `_split_motion_to_seg_texts` 剥离时间标签，而该函数的正则
+     **只认整数**（`\\d+`，不支持小数点），会把 `0-0.378378秒：...` 剥成
+     `.378378秒：...` 残片直接写进 kf.desc —— 实测产出的残缺时间文本即此路径。
+     本约束改为只报告后，该写路径随之消失。
+
+现状：record_violation(repaired=False) + RepairRecord(action="warn")，
+保留原值交 audit / regen。
+
+幂等：只报告，天然幂等。
 """
 from __future__ import annotations
 
@@ -12,10 +36,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from step01_script_gen.validation import _extract_scene_prefix  # OK（无循环）
 from shared.kf_time import get_kf_t_sec
 from .base import Constraint
-from .types import RepairRecord, Severity
+from .types import RepairRecord, Severity, Violation
 
 
 def _get_duration(shot: dict) -> float:
@@ -37,23 +60,43 @@ def _get_duration(shot: dict) -> float:
 
 
 class KfTimeWindowAlignmentConstraint(Constraint):
-    """E. kf 物理时刻 = motion_desc 时段铁律（派生补帧）.
+    """E. kf 物理时刻 = motion_desc 时段：只检测并上报（v6.76 起）.
 
-    severity=WARN: 派生补帧确定性，剩余违例由 repair round 修.
-    幂等：已有 kf 覆盖全部段 → 跳过.
+    severity=WARN: 缺段/越窗的根因在上游（时长拉伸、拆镜），交 regen 处理.
+    幂等：只报告，不改字段.
     """
 
     name = "kf_time_window_alignment"
     severity = Severity.WARN
     fields = ()  # 不扫文本字段，处理的是 keyframes
 
+    def _report(
+        self, ctx, repairs: list[RepairRecord], idx, *, target: str,
+        message: str, evidence: str, detail: str,
+    ) -> None:
+        ctx.record_violation(Violation(
+            constraint_name=self.name,
+            severity=self.severity,
+            shot_index=idx,
+            field=target,
+            message=message,
+            evidence=evidence[:200],
+            repaired=False,
+        ))
+        repairs.append(RepairRecord(
+            constraint_name=self.name,
+            shot_index=idx,
+            action="warn",
+            target=target,
+            before=evidence[:80],
+            after=evidence[:80],
+            detail=detail,
+        ))
+
     def apply(self, ctx) -> list[RepairRecord]:
-        # Lazy import: validation.py 顶部 6510 行 import constraints 包，会回到
-        # 本模块；本模块顶层 import validation 函数会形成循环（partially initialized）。
-        from step01_script_gen.validation import (
-            _parse_motion_time_segments,
-            _split_motion_to_seg_texts,
-        )
+        # Lazy import: validation.py 顶部会 import constraints 包，形成循环。
+        from step01_script_gen.validation import _parse_motion_time_segments
+
         repairs: list[RepairRecord] = []
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
             motion = (shot.get("motion_desc") or "").strip()
@@ -71,22 +114,14 @@ class KfTimeWindowAlignmentConstraint(Constraint):
             if not isinstance(kfs, list):
                 continue
 
-            # v6.62（09-06）：先修越窗——kf 物理时刻不在任一段内 → 拉到最近
-            # 段中点（确定性，幂等：修完在窗内不再触发）。09-05 实测 12/13 镜
-            # 存在越窗 kf（t_sec > duration_sec / t 落段外），检查器每轮都报
-            # 「N 个 kf 物理时刻不在时段内」但没有任何修复层管。
-            # 拉回目标优先「未被占用的段」：若最近段的 kf 已 ≥2 帧，改拉第二近
-            # 段——避免拉完后同段堆 2 帧而缺段判定又补 1 帧（重复 3 帧同段）。
             existing_t = [
                 t for kf in kfs if isinstance(kf, dict)
                 for t in [get_kf_t_sec(kf, shot)] if t is not None
             ]
 
-            def _seg_load(a: float, b: float) -> int:
-                return sum(1 for t0 in existing_t if a - 0.01 <= t0 <= b + 0.01)
-
-            orphans_fixed = 0
-            for kf in kfs:
+            # ---- 1. 越窗 ----
+            orphans: list[tuple[int, float]] = []
+            for j, kf in enumerate(kfs):
                 if not isinstance(kf, dict):
                     continue
                 t = get_kf_t_sec(kf, shot)
@@ -94,85 +129,45 @@ class KfTimeWindowAlignmentConstraint(Constraint):
                     continue
                 if any(a - 0.01 <= t <= b + 0.01 for a, b in segs):
                     continue
-                # 按距中点排序取段：优先「时间最近且未占用」的段
-                ranked = sorted(segs, key=lambda ab: abs((ab[0] + ab[1]) / 2 - t))
-                best = ranked[0]
-                for cand in ranked:
-                    if _seg_load(*cand) < 1:
-                        best = cand
-                        break
-                mid = round((best[0] + best[1]) / 2, 3)
-                old_t = kf.get("t_sec")
-                kf["t_sec"] = mid
-                if kf.get("time_ratio") is not None:
-                    kf.pop("time_ratio", None)  # 直写秒数，双字段并存会被旧 reader 读错
-                orphans_fixed += 1
-                repairs.append(
-                    RepairRecord(
-                        constraint_name=self.name,
-                        shot_index=idx,
-                        action="clamp",
-                        target="keyframes[*].t_sec",
-                        before=str(old_t),
-                        after=str(mid),
-                    )
+                orphans.append((j, t))
+            if orphans:
+                _txt = ", ".join(f"keyframes[{j}]={t:.3f}s" for j, t in orphans)
+                _segs = "/".join(f"{a:g}-{b:g}s" for a, b in segs)
+                self._report(
+                    ctx, repairs, idx, target="keyframes[*].t_sec",
+                    message=(
+                        f"{len(orphans)} 个关键帧的物理时刻不在 motion 任何时段内"
+                        f"（{_txt}；时段 {_segs}）；保留原值未搬到段中点——"
+                        "段中点是推断不是证据，交 regen 重写该镜时间轴。"
+                    ),
+                    evidence=_txt,
+                    detail="关键帧越出 motion 时段，保留原值交由 audit/regen",
                 )
-            if orphans_fixed:
-                # 修完后重算 existing_t
-                existing_t = [
-                    t for kf in kfs if isinstance(kf, dict)
-                    for t in [get_kf_t_sec(kf, shot)] if t is not None
-                ]
 
-            # 找缺段
-            missing_segs = []
+            # ---- 2. 缺段 ----
+            missing_segs: list[tuple[int, tuple[float, float]]] = []
             for i, (a, b) in enumerate(segs):
                 covered = any(a - 0.01 <= t <= b + 0.01 for t in existing_t)
                 if not covered:
                     missing_segs.append((i, (a, b)))
 
-            # F1.4 增强：motion_desc 无显式时段（仅 1 段 = (0, dur)），
-            # 若 kfs < 1，补 1 个 after 帧
+            # F1.4 增强（保留原判定）：motion_desc 无显式时段（仅 1 段 = (0, dur)），
+            # 若 kfs < 1，视段 0 为缺段
             if len(segs) < 2 and not missing_segs and len(existing_t) < 1:
                 missing_segs = [(0, segs[0])]
 
-            if not missing_segs:
-                continue
-
-            # 切分 motion_desc 为段文本
-            seg_texts = _split_motion_to_seg_texts(motion, segs, dur)
-            ff_text = (shot.get("ff_desc") or "").strip()
-            scene_prefix = _extract_scene_prefix(ff_text)
-
-            # 派生 kf
-            for i, (a, b) in missing_segs:
-                seg_text = (seg_texts[i] if (seg_texts and i < len(seg_texts)) else motion)
-                if not seg_text:
-                    # v6.62.1（09-06）：implicit 尾段无 motion 文本 → 回退最后
-                    # 非空段文本 + 延续后缀（与 validation._hard_fix_kf_time_
-                    # window_alignment 同口径；否则缺段永修不掉，检查器每轮报）。
-                    _last_text = next(
-                        (t for t in reversed(seg_texts) if t) if seg_texts else "", ""
-                    )
-                    if _last_text:
-                        seg_text = f"{_last_text}（画面延续，保持该状态）"
-                    else:
-                        seg_text = motion
-                if not seg_text:
-                    continue
-                desc = (scene_prefix + seg_text).strip("，。； ")
-                t_sec = (a + b) / 2
-                new_kf = {"desc": desc, "t_sec": round(t_sec, 3), "stage": "after"}
-                kfs.append(new_kf)
-                existing_t.append(t_sec)
-                repairs.append(
-                    RepairRecord(
-                        constraint_name=self.name,
-                        shot_index=idx,
-                        action="set_field",
-                        target=f"keyframes[{len(kfs) - 1}]",
-                        before="",
-                        after=f"desc={desc[:40]}..., t_sec={t_sec:.3f}, stage=after",
-                    )
+            if missing_segs:
+                _txt = ", ".join(f"段{i}({a:g}-{b:g}s)" for i, (a, b) in missing_segs)
+                self._report(
+                    ctx, repairs, idx, target="keyframes",
+                    message=(
+                        f"{len(missing_segs)} 个 motion 时段无关键帧覆盖（{_txt}）；"
+                        "保留原样未派生补帧——补帧时刻取段中点无原文依据，且 append "
+                        "到列表末尾会产出逆序帧（逃过 kf_monotonic）。"
+                        "缺段根因通常是时长拉伸产生了无内容的尾部时段，交 regen 处理。"
+                    ),
+                    evidence=_txt,
+                    detail="motion 时段缺关键帧，保留原样交由 audit/regen",
                 )
+
         return repairs

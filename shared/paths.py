@@ -115,6 +115,7 @@ def vimax_working_dir(chapter: int | None = None) -> Path:
 SHOT_VIDEO_FILENAME = "video.mp4"
 FIRST_FRAME_FILENAME = "first_frame.png"
 LAST_FRAME_FILENAME = "last_frame.png"
+KEYFRAME_FILENAME_FMT = "keyframe_{}.png"
 CLIP_FILENAME_FMT = "clip_{}.mp4"
 SHOT_AUDIO_FILENAME_FMT = "shot_{}.mp3"
 
@@ -147,6 +148,16 @@ def first_frame_file(idx: int, chapter: int | None = None) -> Path:
 def last_frame_file(idx: int, chapter: int | None = None) -> Path:
     """单镜尾帧图: shots/<idx>/last_frame.png."""
     return shot_work_dir(idx, chapter) / LAST_FRAME_FILENAME
+
+
+def keyframe_file(idx: int, kf_index: int, chapter: int | None = None) -> Path:
+    """单镜中间关键帧图: shots/<idx>/keyframe_<kf_index>.png."""
+    return shot_work_dir(idx, chapter) / KEYFRAME_FILENAME_FMT.format(kf_index)
+
+
+def keyframe_files(idx: int, chapter: int | None = None) -> list[Path]:
+    """单镜全部已生成关键帧，按文件序号排序。"""
+    return sorted(shot_work_dir(idx, chapter).glob("keyframe_*.png"))
 
 
 def clip_file(idx: int, chapter: int | None = None) -> Path:

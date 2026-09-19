@@ -50,6 +50,41 @@ class CharLayoutSyncConstraint(Constraint):
                         )
                     )
                 continue
+            # The first-frame spec is the authoritative source for the
+            # initial staging.  Sync char_layout from it before any text-based
+            # inference; this prevents two competing initial layouts.
+            layouts = shot.get("frame_layouts")
+            ff_spec = layouts.get("ff") if isinstance(layouts, dict) else None
+            if isinstance(ff_spec, list):
+                by_name = {
+                    str(item.get("name") or "").strip(): item
+                    for item in ff_spec
+                    if isinstance(item, dict) and item.get("name")
+                }
+                for j, item in enumerate(layout):
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get("name") or "").strip()
+                    source = by_name.get(name)
+                    if not source:
+                        continue
+                    source_pos = str(source.get("position") or "").strip()
+                    current_pos = str(item.get("position") or "").strip()
+                    if source_pos and source_pos != current_pos:
+                        item["position"] = source_pos
+                        repairs.append(RepairRecord(
+                            constraint_name=self.name,
+                            shot_index=idx,
+                            action="rewrite",
+                            target=f"char_layout[{j}].position",
+                            before=current_pos,
+                            after=source_pos,
+                            detail="以首帧 frame spec 统一初始站位",
+                        ))
+                # Once a first-frame spec exists it is authoritative for
+                # initial staging; do not let text proximity re-infer it.
+                continue
+
             text = " ".join([
                 shot.get("prompt", ""),
                 shot.get("ff_desc", ""),

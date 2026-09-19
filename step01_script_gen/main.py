@@ -18,6 +18,7 @@ import sys
 import os
 from pathlib import Path
 import json
+import re
 from contextlib import redirect_stdout
 
 # 确保从项目根目录解析导入
@@ -57,7 +58,7 @@ from shared.constants import SCRIPT_PARSE_RETRIES, SCRIPT_PARSE_RETRY_SLEEP_SEC
 from shared.utils.text import text_integrity_errors
 from shared.quality_gate import ensure_script_revision, attach_gate_metadata
 from step01_script_gen.quality_issues import (
-    collect_structured_issues, is_blocking, RULE_VERSION,
+    Issue, collect_structured_issues, is_blocking, RULE_VERSION, RULE_SOURCE_FINGERPRINT,
 )
 CHAPTER_DIR = chapter_dir()
 OUTPUT_FILE = script_file()
@@ -235,6 +236,7 @@ def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
     # 此前 agent_plan 下所有模型共用 doubao prompt，是候选结构性零高潮的根因。
     _main_builder, _system = resolve_model_prompt_profile(model)
     prompt = _main_builder(novel_text, bank, objects_bank, outline_anchor)
+    _metrics_inc("calls.script_generation")
     service = create_service()
     req = TextGenerationRequest(
         system_prompt=_system,
@@ -321,6 +323,7 @@ def gen_hook_script(novel_text: str, bank=None, objects_bank=None,
                                forbidden_lines=forbidden_lines)
     if dup_note:
         prompt = prompt + f"\n\n# 钩子台词去重反馈（必须遵守）\n{dup_note}"
+    _metrics_inc("calls.hook_generation")
     service = create_service()
     from _text_gen.deepseek_schema import HOOK_SCHEMA
     req = TextGenerationRequest(
@@ -386,22 +389,21 @@ def _speech_body(narration: str) -> str:
     return _re.sub(r"[\s　，。！？、；：""''（）【】《》…—-]", "", body)
 
 def _complementary_repair_model(winner_model: str | None) -> str | None:
-    """接力修复（v6.67，09-12）：按产出模型取 SCRIPT_CANDIDATE_MODELS 中的互补模型.
+    """Resolve the repair model.
 
-    核心问题：修复轮和生成轮是同一个模型——deepseek 稿看不到自己的时长膨胀，
-    doubao 稿看不到自己的台词编造。赢家生成、输家修复，换视角 + 互补能力。
-
-    规则（命中任一即返回 None = provider 默认模型，零行为变化）：
-      - SCRIPT_CANDIDATE_MODELS 为空 / 只有 1 个模型
-      - 产出模型为 None（未走跨模型候选池）
-      - 产出模型不在候选列表中（异常态，不臆测互补关系）
+    Multi-model mode keeps the historical complementary-model behavior.  In
+    single-model mode we explicitly keep planning/generation/audit/repair on
+    the same model instead of falling through to the provider default model.
     """
     from shared.config import SCRIPT_CANDIDATE_MODELS
-    if not winner_model or len(SCRIPT_CANDIDATE_MODELS) < 2:
+    models = list(SCRIPT_CANDIDATE_MODELS or [])
+    if len(models) == 1:
+        return winner_model or models[0]
+    if not winner_model or len(models) < 2:
         return None
-    if winner_model not in SCRIPT_CANDIDATE_MODELS:
+    if winner_model not in models:
         return None
-    for _m in SCRIPT_CANDIDATE_MODELS:
+    for _m in models:
         if _m != winner_model:
             return _m
     return None
@@ -428,42 +430,69 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
     if max_attempts is None:
         max_attempts = GAP_MAX_REGEN_ATTEMPTS
 
-    # v6.43 镜头数不限：SHOT_COUNT_MAX<=0 时跳过整个函数（保留 LLM 原始生成）
-    if SHOT_COUNT_MAX <= 0:
+    shots = script.get("shots", [])
+    raw_shots_total = sum(float(s.get("duration_sec") or s.get("duration") or 0)
+                          for s in shots if isinstance(s, dict))
+    try:
+        from step01_script_gen.timecode import project_post_split_metrics
+        _proj = project_post_split_metrics(shots, fps=script.get("fps", 24))
+        shots_total = float(_proj.get("duration_sec") or raw_shots_total)
+    except Exception:
+        shots_total = raw_shots_total
+    duration_over = shots_total > 90.0 + 0.01
+    over_max = SHOT_COUNT_MAX > 0 and len(shots) > SHOT_COUNT_MAX
+
+    # 镜头数不限时仍需保留时长硬约束：一次显式压缩重生成优于让 100s
+    # 脚本静默通过，晚到生图/合成阶段才返工。
+    if SHOT_COUNT_MAX <= 0 and not duration_over:
         return script
 
-    shots = script.get("shots", [])
-    total_duration = float(script.get("total_duration", 0) or 0)
-    over_max = len(shots) > SHOT_COUNT_MAX
-
     for attempt in range(1, 1 + max_attempts):
-        if not over_max:
+        if not over_max and not duration_over:
             break
 
         current = len(script.get("shots", []))
-        _logger.warn(
-            f"[COUNT] 镜头数 {current} 超上限 {SHOT_COUNT_MAX}，"
-            f"反馈 LLM 合并冗余镜头（尝试 {attempt}/{max_attempts}）..."
-        )
-        _console(f"  [收敛] 镜头数 {current} 超上限 {SHOT_COUNT_MAX}，重新生成精简版（{attempt}/{max_attempts}）...")
+        if over_max:
+            _logger.warn(
+                f"[COUNT] 镜头数 {current} 超上限 {SHOT_COUNT_MAX}，"
+                f"反馈 LLM 合并冗余镜头（尝试 {attempt}/{max_attempts}）..."
+            )
+            _console(f"  [收敛] 镜头数 {current} 超上限 {SHOT_COUNT_MAX}，重新生成精简版（{attempt}/{max_attempts}）...")
+        if duration_over:
+            _logger.warn(
+                f"[DURATION] 正片 {shots_total:.1f}s > 90s，"
+                f"反馈 LLM 精简/合并到 70-80s（尝试 {attempt}/{max_attempts}）..."
+            )
+            _console(f"  [时长] 正片 {shots_total:.1f}s 超 90s，重新规划为 70-80s（{attempt}/{max_attempts}）...")
 
-        # 反馈上下文：镜头数与总时长双重提示，要求合并同场景/冗余过渡镜头
-        # （08-12 用户决策：60s/110s 总时长目标「先不改」，只收敛镜头数超限的废输出）
-        # v6.40 08-22：升级为"硬约束"措辞 + 强调"本轮拒收"，LLM 软话不收敛。
-        from shared.config import SHOT_COUNT_MAX as _max
-        feedback = (
-            f"\n\n# ★ 镜头数硬约束（v6.40 08-22 升级，本轮拒收）\n"
-            f"你上一轮出了 {current} 镜，超上限 {_max} {current - _max} 镜。\n"
-            f"**本轮拒收 ≤ {_max} 镜的输出——必须严格 ≤ {_max} 镜**。\n\n"
-            f"严格合并规则：\n"
-            f"1. 同一主体 + 同一地点 + 连续同一动作 = 1 镜（用动作重叠法或 clip_transition=硬切合并）\n"
-            f"2. 相机角度微调 / 同对话正反打 = 1 镜（不要拆）\n"
-            f"3. 只有主体变 / 地点变 / 时空跳跃 / 旁白主题切换 = 拆镜\n"
-            f"4. 删减冗余过渡镜头与重复表达的空镜\n"
-            f"5. 保留全部关键剧情节点（开篇冲突 / 刺杀 / 高潮 / 收尾），不删剧情只合并冗余\n"
-            f"6. **不要把多镜拆成单镜的细碎画面**——一镜只承载 1 个核心动作/情绪转折\n\n"
-            f"v6.38 红果硬约束：3-8 镜、正片总时长 60-90s（钩子另算）、单镜 3-8s（单镜硬上限 8s）。当前 14 镜是历史包袱，本轮必须压到 ≤ {_max} 镜。\n"
-        )
+        feedback = ""
+        if over_max:
+            from shared.config import SHOT_COUNT_MAX as _max
+            feedback += (
+                f"\n\n# ★ 镜头数硬约束（v6.40 08-22 升级，本轮拒收）\n"
+                f"你上一轮出了 {current} 镜，超上限 {_max} {current - _max} 镜。\n"
+                f"**本轮拒收 ≤ {_max} 镜的输出——必须严格 ≤ {_max} 镜**。\n\n"
+                f"严格合并规则：\n"
+                f"1. 同一主体 + 同一地点 + 连续同一动作 = 1 镜（用动作重叠法或 clip_transition=硬切合并）\n"
+                f"2. 相机角度微调 / 同对话正反打 = 1 镜（不要拆）\n"
+                f"3. 只有主体变 / 地点变 / 时空跳跃 / 旁白主题切换 = 拆镜\n"
+                f"4. 删减冗余过渡镜头与重复表达的空镜\n"
+                f"5. 保留全部关键剧情节点（开篇冲突 / 刺杀 / 高潮 / 收尾），不删剧情只合并冗余\n"
+                f"6. **不要把多镜拆成单镜的细碎画面**——一镜只承载 1 个核心动作/情绪转折\n\n"
+                f"v6.38 红果硬约束：正片总时长 60-90s（钩子另算）、单镜 3-8s。\n"
+            )
+        if duration_over:
+            feedback += (
+                f"\n\n# ★ 正片时长硬约束（本轮拒收，最高优先级）\n"
+                f"当前正片分镜合计 {shots_total:.1f}s，超过 90s 上限。\n"
+                f"**本轮必须把正片分镜 duration_sec 之和压到 70-80s，最多 90s**。\n"
+                f"禁止删掉关键剧情（开篇冲突/刺杀/高潮/收尾）、致命伤、武器归属或台词原文依据。\n"
+                f"允许的压缩方式：\n"
+                f"1. 合并同地点、同主体、连续动作或重复信息镜头；\n"
+                f"2. 删除纯重复反应、无信息过渡、重复空镜；\n"
+                f"3. 精简 motion_desc 的冗余动作，不为凑时长保留重复动作；\n"
+                f"4. 按台词实际语速和动作分段重新分配时长，禁止靠加速朗读压缩。\n"
+            )
         # v6.33（08-12）：附加 checklist 聚合反馈——镜头数收敛之外，把内容密度/景别
         # 跳跃/致命伤等真实缺陷也喂给 LLM（此前只喂镜头数/覆盖率，LLM 重生成还是老问题）
         _checklist_fb = build_regen_feedback(script, novel_text)
@@ -474,12 +503,12 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         prompt = _rl_builder(novel_text, bank, objects_bank)
         prompt = prompt + feedback
 
+        _metrics_inc("calls.regen_over_limit")
         service = create_service()
         from _text_gen.deepseek_schema import SCRIPT_SCHEMA
         req = TextGenerationRequest(
             system_prompt=_rl_system,
             user_prompt=prompt,
-            temperature=0.2,
             json_schema=SCRIPT_SCHEMA,
             model=model,  # v6.67 接力修复：None=provider 默认（零行为变化）
             timeout_sec=_repair_timeout_sec(),  # v6.70.3: 超限收敛 180s
@@ -514,12 +543,24 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         script = new_script
         _compute_timecodes(script)
         total_duration = float(script.get("total_duration", 0) or 0)
-        if len(new_shots) <= SHOT_COUNT_MAX:
+        try:
+            from step01_script_gen.timecode import project_post_split_metrics
+            _new_proj = project_post_split_metrics(new_shots, fps=script.get("fps", 24))
+            shots_total = float(_new_proj.get("duration_sec") or 0)
+        except Exception:
+            shots_total = sum(float(s.get("duration_sec") or 0) for s in new_shots)
+        duration_over = shots_total > 90.0 + 0.01
+        if over_max:
+            if len(new_shots) <= SHOT_COUNT_MAX:
+                _logger.info(
+                    f"[COUNT] 收敛成功: {current} → {len(new_shots)} 镜, "
+                    f"总时长 {total_duration:.0f}s"
+                )
+            over_max = len(new_shots) > SHOT_COUNT_MAX
+        if not duration_over:
             _logger.info(
-                f"[COUNT] 收敛成功: {current} → {len(new_shots)} 镜, "
-                f"总时长 {total_duration:.0f}s"
+                f"[DURATION] 时长收敛成功: 正片 {shots_total:.1f}s（目标 70-80s）"
             )
-        over_max = len(new_shots) > SHOT_COUNT_MAX
 
     if over_max:
         # v6.40 08-22：regen 全部失败后不再"保留原版"——按 v6.38 红果硬约束**强制截断**
@@ -632,6 +673,7 @@ def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
         "shots": per_shot,
         "checker_failed": checker_failed,
         "rule_version": rule_version,
+        "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
         "issues": [i.to_dict() for i in issues],
     }
 
@@ -740,6 +782,7 @@ def _candidate_quality_summary(script: dict, novel_text: str = "") -> dict:
         "action_time_out_of_range", "state_order_replay",
         "pose_conflict", "surface_conflict",
         "offscreen_character_action", "weapon_holder_missing",
+        "duration_budget",
     }
     integrity_issues = [i for i in blocking if i.code in integrity_codes]
     return {
@@ -748,6 +791,7 @@ def _candidate_quality_summary(script: dict, novel_text: str = "") -> dict:
         "integrity_ok": not checker_failed and not integrity_issues,
         "integrity_issues": [i.message for i in integrity_issues],
         "rule_version": rule_version,
+        "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
         "checker_failed": checker_failed,
         "structured_issues": [i.to_dict() for i in issues if is_blocking(i)],
     }
@@ -764,7 +808,7 @@ def _candidate_sort_key(item: tuple[dict, dict]) -> tuple:
     return (
         integrity_bad,
         int(score.get("blocking_risk_count", 0) or 0),
-        -float(score.get("total", 0) or 0),
+        -float(score.get("final_score", score.get("total", 0)) or 0),
     )
 
 
@@ -811,14 +855,53 @@ def _write_step01_quality_gate(script: dict, novel_text: str) -> dict:
         "blocking_categories": sorted({x["code"] for x in hard + visual}),
         "checker_failed": checker_failed,
         "rule_version": rule_version,
+        "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
+        "status": "BLOCK" if (hard or visual or checker_failed) else "PASS",
     }
     attach_gate_metadata(payload, script, stage="step01.quality_gate")
     try:
         from shared.json_io import atomic_dump_json
+        # attach_gate_metadata recomputes script_revision from final content.
+        # Persist that revision back to script_result.json in the same step so
+        # BEST-GUARD / downstream gates can never observe report != script.
+        atomic_dump_json(OUTPUT_FILE, _strip_runtime_fields(script),
+                         ensure_ascii=False, indent=2)
         atomic_dump_json(CHAPTER_DIR / "step01_quality.json", payload, ensure_ascii=False, indent=2)
     except Exception as exc:
         _logger.warn(f"[QUALITY-GATE] write failed: {exc}")
     return payload
+
+
+def _prepare_hook_for_qc(script: dict) -> None:
+    _metrics_inc("hook.prepare")
+    """Deterministically normalize a hook before the quality gate.
+
+    Hook generation happens after the main hard-fix pass.  Without this, a hook
+    with complete ``frame_layouts`` but missing legacy ``char_layout`` is sent
+    for a full LLM regeneration, which is slow and random.  These constraints
+    only synchronize already-known structure; they do not invent plot content.
+    """
+    from step01_script_gen.validation import post_fix_shot_prompts
+    from step01_script_gen.constraints import ConstraintContext
+    from step01_script_gen.constraints.element_markers import ElementMarkers
+    from step01_script_gen.constraints.frame_spec_consistency import (
+        FrameSpecConsistencyConstraint)
+    from step01_script_gen.constraints.char_layout_sync import (
+        CharLayoutSyncConstraint)
+    from step01_script_gen.constraints.surface_backfill import (
+        SurfaceBackfillConstraint)
+    from step01_script_gen.constraints.gaze_state_repair import (
+        GazeStateRepairConstraint)
+
+    post_fix_shot_prompts(script)
+    ctx = ConstraintContext.from_script(script, markers=ElementMarkers())
+    for constraint in (
+        FrameSpecConsistencyConstraint(),
+        CharLayoutSyncConstraint(),
+        SurfaceBackfillConstraint(),
+        GazeStateRepairConstraint(),
+    ):
+        constraint.apply(ctx)
 
 
 def _ensure_hook_quality(script: dict, *, novel_text: str, bank=None,
@@ -826,20 +909,27 @@ def _ensure_hook_quality(script: dict, *, novel_text: str, bank=None,
                          producer_model=None) -> list[str]:
     """钩子质量门（v6.70.1，09-13；09-14 抽出供 BEST-GUARD 恢复路径共用）.
 
-    hook 有 checklist issue → 换互补模型重生 1 次（钩子生成实测 ~7s）→ 复检。
+    hook 先过确定性结构补齐，再进 checklist；仍有 issue 才换互补模型重生 1 次。
     正式输出有两条来源（本次 run / BEST-GUARD 恢复的快照+补修复），门必须对
     两者同等生效——09-14 实测：恢复路径绕过本门，旧快照的病句/无主刀尖经
     非幂等补修复污染（刀尖句翻倍 + 对象库碎片）直接落盘。重生后补跑检查 7
     （FrameSpec 出镜覆盖）——重生钩子的 spec 同样可能漏人。返回残余 issues
     （空 = 过门）。
     """
+    try:
+        _prepare_hook_for_qc(script)
+    except Exception as _prep_err:
+        _logger.warn(f"[WARN] 钩子质量门前结构补齐失败（继续检查）: {_prep_err}")
     issues = _collect_hook_issues(script)
+    _metrics_set("hook.initial_issues", len(issues))
     if not issues:
+        _metrics_set("hook.final_issues", 0)
         return []
     _logger.warn(
         f"[HOOK-QC] 钩子检出 {len(issues)} 条 issue，互补模型重生："
         + " | ".join(issues[:3]))
     _console(f"  [钩子校验] 检出 {len(issues)} 条 issue → 互补模型重生钩子…")
+    _metrics_inc("hook.regenerations")
     _hook_regen = gen_hook_script(
         novel_text, bank=bank, objects_bank=objects_bank,
         forbidden_lines=forbidden_lines,
@@ -852,18 +942,13 @@ def _ensure_hook_quality(script: dict, *, novel_text: str, bank=None,
         return issues
     script["hook"] = _hook_regen
     try:
-        from step01_script_gen.validation import post_fix_shot_prompts, validate_hook
-        post_fix_shot_prompts(script)
+        from step01_script_gen.validation import validate_hook
+        _prepare_hook_for_qc(script)
         validate_hook(script["hook"], script.get("characters", []))
-        from step01_script_gen.constraints import ConstraintContext
-        from step01_script_gen.constraints.element_markers import ElementMarkers
-        from step01_script_gen.constraints.frame_spec_consistency import (
-            FrameSpecConsistencyConstraint)
-        FrameSpecConsistencyConstraint().apply(
-            ConstraintContext.from_script(script, markers=ElementMarkers()))
     except Exception as _e:
         _logger.warn(f"[WARN] 重生钩子修复/校验异常（不阻断）: {_e}")
     remaining = _collect_hook_issues(script)
+    _metrics_set("hook.final_issues", len(remaining))
     if remaining:
         _logger.warn("[HOOK-QC] ⚠️ 重生后钩子仍有 issue（保留落盘，人工过目）：\n  - "
                      + "\n  - ".join(remaining))
@@ -1298,9 +1383,303 @@ def _build_novel_slice_for_picked(picked: dict, shots_by_id: dict,
     return "\n".join(out_lines)
 
 
+_PATCH_ALLOWED_RE = re.compile(
+    r"^(prompt|ff_desc|lf_desc|motion_desc|color_tone)$"
+    r"|^keyframes\[\d+\]\.(desc|t_sec|stage)$"
+    r"|^keyframes\.append$"
+    r"|^frame_layouts\.(ff|lf)\[\d+\]\.(pose|gaze_target|position|on_screen|surface|props)$"
+    r"|^frame_layouts\.kfs\[\d+\]\[\d+\]\.(pose|gaze_target|position|on_screen|surface|props)$"
+    r"|^frame_layouts\.kfs\.append$"
+    r"|^char_layout\[\d+\]\.position$"
+)
+
+
+def _patch_tokens(field_path: str) -> list:
+    tokens = []
+    for part in str(field_path or "").split("."):
+        m = re.match(r"^([A-Za-z_]+)((?:\[\d+\])*)$", part)
+        if not m:
+            return []
+        tokens.append(m.group(1))
+        tokens.extend(int(x) for x in re.findall(r"\[(\d+)\]", m.group(2)))
+    return tokens
+
+
+def _locked_repair_signature(script: dict) -> str:
+    import json as _json
+    out = []
+    units = []
+    if isinstance(script.get("hook"), dict):
+        units.append(("hook", script["hook"]))
+    units.extend((str(s.get("index")), s) for s in (script.get("shots") or []))
+    for sid, shot in units:
+        if not isinstance(shot, dict):
+            continue
+        out.append({
+            "id": sid,
+            "index": shot.get("index"),
+            "duration_sec": shot.get("duration_sec"),
+            "narration_segment": shot.get("narration_segment"),
+            "subtitle": shot.get("subtitle"),
+            "scene": shot.get("scene"),
+            "location": shot.get("location"),
+            "variation_type": shot.get("variation_type"),
+        })
+    return _json.dumps(out, ensure_ascii=False, sort_keys=True)
+
+
+def _apply_repair_patches(script: dict, patches: list, picked: set[str]) -> tuple[dict, int]:
+    """Apply narrow field patches only to picked shots; reject unknown paths."""
+    import copy as _copy
+    merged = _copy.deepcopy(script)
+    applied = 0
+    for patch in patches or []:
+        if not isinstance(patch, dict):
+            continue
+        sid = str(patch.get("shot_id") or "").strip()
+        field_path = str(patch.get("field_path") or "").strip()
+        value = patch.get("value")
+        if not sid or not field_path or not _PATCH_ALLOWED_RE.match(field_path):
+            continue
+        target = None
+        if sid in ("0", "hook"):
+            if "hook" in picked:
+                target = merged.get("hook")
+        else:
+            # Patches are scoped to explicitly picked shots.  A valid field on
+            # an unpicked shot must still be rejected.
+            if f"shot_{sid}" not in picked:
+                continue
+            for shot in merged.get("shots", []):
+                if str(shot.get("index")) == sid:
+                    target = shot
+                    break
+        if not isinstance(target, dict):
+            continue
+        import json as _patch_json_value
+        if field_path == "keyframes.append":
+            try:
+                item = value if isinstance(value, dict) else _patch_json_value.loads(str(value))
+            except Exception:
+                continue
+            if not isinstance(item, dict) or not str(item.get("desc") or "").strip():
+                continue
+            try:
+                t_sec = float(item.get("t_sec"))
+            except (TypeError, ValueError):
+                continue
+            try:
+                duration = float(target.get("duration_sec") or target.get("duration") or 0)
+            except (TypeError, ValueError):
+                duration = 0.0
+            if t_sec < 0 or (duration > 0 and t_sec > duration + 0.01):
+                continue
+            item = dict(item)
+            item["t_sec"] = round(t_sec, 3)
+            kfs = target.setdefault("keyframes", [])
+            if not isinstance(kfs, list):
+                continue
+            kfs.append(item)
+            kfs.sort(key=lambda k: float(k.get("t_sec") or k.get("time_ratio") or 0)
+                     if isinstance(k, dict) else 0)
+            applied += 1
+            continue
+        if field_path == "frame_layouts.kfs.append":
+            try:
+                item = value if isinstance(value, list) else _patch_json_value.loads(str(value))
+            except Exception:
+                continue
+            if not isinstance(item, list) or not item:
+                continue
+            if not all(isinstance(x, dict) and str(x.get("name") or "").strip()
+                       for x in item):
+                continue
+            layout = target.setdefault("frame_layouts", {})
+            if not isinstance(layout, dict):
+                continue
+            layout.setdefault("kfs", []).append(item)
+            applied += 1
+            continue
+        tokens = _patch_tokens(field_path)
+        if not tokens:
+            continue
+        cur = target
+        ok = True
+        for tok in tokens[:-1]:
+            try:
+                cur = cur[tok]
+            except Exception:
+                ok = False
+                break
+        if not ok:
+            continue
+        last = tokens[-1]
+        if not isinstance(cur, dict) or last not in cur:
+            continue
+        if last == "on_screen":
+            raw_value = str(value).strip().lower()
+            if raw_value not in ("1", "0", "true", "false", "yes", "no", "是", "否"):
+                continue
+            value = raw_value in ("1", "true", "yes", "是")
+        elif last == "props":
+            try:
+                value = value if isinstance(value, list) else _patch_json_value.loads(str(value))
+            except Exception:
+                value = [x.strip() for x in str(value).split(",") if x.strip()]
+            if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+                continue
+            value = [x.strip() for x in value if x.strip()]
+        elif last == "t_sec":
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+            try:
+                duration = float(target.get("duration_sec") or target.get("duration") or 0)
+            except (TypeError, ValueError):
+                duration = 0.0
+            if value < 0 or (duration > 0 and value > duration + 0.01):
+                continue
+            value = round(value, 3)
+        elif last in ("desc", "stage", "pose", "gaze_target", "position", "surface",
+                      "prompt", "ff_desc", "lf_desc", "motion_desc", "color_tone"):
+            if not isinstance(value, str):
+                continue
+            value = value.strip()
+            if not value or len(value) > 2000:
+                continue
+            if last == "stage":
+                from shared.kf_time import KF_STAGE_ENUM
+                if value not in KF_STAGE_ENUM:
+                    continue
+            if last == "position":
+                from step01_script_gen.scene_anchors import is_valid_position
+                if not is_valid_position(
+                    value, str(target.get("location") or target.get("scene") or "")
+                ):
+                    continue
+        else:
+            continue
+        cur[last] = value
+        applied += 1
+    return merged, applied
+
+
+def _blocking_record_key(rec: dict) -> tuple:
+    """Identity used to compare before/after repair outcomes.
+
+    The audit contract is intentionally locator-based: code + shot + frame +
+    entity + field.  Message wording is not identity and must never make an
+    unchanged issue look like a newly introduced blocker.
+    """
+    return (
+        str(rec.get("code") or ""),
+        str(rec.get("shot_id") if rec.get("shot_id") is not None else ""),
+        str(rec.get("frame_id") or ""),
+        str(rec.get("entity_id") or ""),
+        str(rec.get("field_path") or ""),
+    )
+
+
+def _blocking_record_keys(state: dict | None) -> set[tuple]:
+    keys: set[tuple] = set()
+    for rec in (state or {}).get("issues") or []:
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("severity") or "") not in ("hard", "visual_risk"):
+            continue
+        keys.add(_blocking_record_key(rec))
+    return keys
+
+
+def _audit_issue_resolved(script: dict, issue: Issue) -> bool:
+    """Best-effort verification for an audit-only issue without a second LLM call.
+
+    An audit issue is considered resolved only when its original evidence is no
+    longer present in the targeted text.  This is deliberately conservative:
+    unverifiable audit issues cannot justify keeping a patch.
+    """
+    evidence = str(getattr(issue, "evidence", "") or "").strip()
+    if len(evidence) < 8:
+        return False
+    sid = str(getattr(issue, "shot_id", "") or "")
+    shot = script.get("hook") if sid in ("0", "hook") else None
+    if shot is None:
+        for item in script.get("shots") or []:
+            if str(item.get("index")) == sid:
+                shot = item
+                break
+    if not isinstance(shot, dict):
+        return True  # target shot was removed by a structural patch
+
+    texts: list[str] = []
+    field_path = str(getattr(issue, "field_path", "") or "")
+    if field_path in ("prompt", "ff_desc", "lf_desc", "motion_desc", "color_tone"):
+        texts.append(str(shot.get(field_path) or ""))
+    else:
+        for field in ("prompt", "ff_desc", "lf_desc", "motion_desc"):
+            texts.append(str(shot.get(field) or ""))
+        for kf in shot.get("keyframes") or []:
+            if isinstance(kf, dict):
+                texts.append(str(kf.get("desc") or ""))
+    return not any(evidence in text for text in texts)
+
+
+def _repair_acceptance_decision(before_state: dict | None,
+                                after_state: dict | None,
+                                audit_issues: list[Issue] | None,
+                                script_after: dict,
+                                locked_changed: bool) -> dict:
+    """Pure acceptance decision for one targeted-repair round.
+
+    Required conditions:
+      * both checker runs completed successfully;
+      * no new blocking issue identity appears;
+      * locked fields are unchanged;
+      * at least one target issue (deterministic or audit) is verifiably gone.
+    """
+    before_keys = _blocking_record_keys(before_state)
+    after_keys = _blocking_record_keys(after_state)
+    resolved = before_keys - after_keys
+    new_blocking = after_keys - before_keys
+    checker_failed = bool((before_state or {}).get("checker_failed")
+                          or (after_state or {}).get("checker_failed"))
+    audit_targets = [i for i in (audit_issues or []) if is_blocking(i)]
+    audit_resolved = sum(1 for i in audit_targets if _audit_issue_resolved(script_after, i))
+    has_targets = bool(before_keys or audit_targets)
+    accepted = (
+        not checker_failed
+        and not new_blocking
+        and not locked_changed
+        and (not has_targets or bool(resolved) or audit_resolved > 0)
+    )
+    reason = ""
+    if checker_failed:
+        reason = "checker_failed"
+    elif new_blocking:
+        reason = "new_blocking"
+    elif locked_changed:
+        reason = "locked_changed"
+    elif has_targets and not resolved and audit_resolved <= 0:
+        reason = "no_target_resolved"
+    return {
+        "accepted": accepted,
+        "reason": reason,
+        "before": len(before_keys),
+        "after": len(after_keys),
+        "resolved": len(resolved),
+        "new_blocking": len(new_blocking),
+        "audit_targets": len(audit_targets),
+        "audit_resolved": audit_resolved,
+        "checker_failed": checker_failed,
+        "locked_changed": bool(locked_changed),
+    }
+
+
 def _repair_shot_warnings(script: dict, novel_text: str,
                           bank=None, objects_bank=None,
-                          model: str | None = None) -> dict:
+                          model: str | None = None,
+                          audit_issues: list[Issue] | None = None) -> dict:
     """定向修复轮（v6.35，P18 闭环核心）。
 
     GAP 通过后仍有高价值告警 → 只重写告警镜头的相关字段，重新校验，收敛即停。
@@ -1317,6 +1696,26 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     """
     for _round in range(1, _REPAIR_MAX_ROUNDS + 1):
         per_shot_dict = _collect_repair_warnings(script, novel_text)
+        import copy as _copy_before_accept
+        _det_before_state = _copy_before_accept.deepcopy(per_shot_dict)
+        # Merge same-model audit findings into the first repair round.  Audit is
+        # auxiliary input; deterministic checks still decide final acceptance.
+        if _round == 1 and audit_issues:
+            audited = per_shot_dict.setdefault("shots", {})
+            for _issue in audit_issues:
+                if not is_blocking(_issue):
+                    continue
+                per_shot_dict["_has_hard"] = True
+                _sid = _issue.shot_id
+                _detail = (
+                    f"[model_audit] code={_issue.code} frame={_issue.frame_id or '-'} "
+                    f"entity={_issue.entity_id or '-'} field={_issue.field_path or '-'} "
+                    f"evidence={_issue.evidence or '-'} :: {_issue.message}"
+                )
+                if str(_sid) in ("0", "hook"):
+                    audited.setdefault("hook", []).append(_detail)
+                elif _sid is not None:
+                    audited.setdefault(f"shot_{_sid}", []).append(_detail)
         # v6.43 08-25：HARD-only 触发——没 hard violation 就不调 LLM
         if not per_shot_dict.get("_has_hard", False):
             if _round == 1:
@@ -1343,6 +1742,18 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             picked = dict(shot_items)
         if not picked:
             return script
+        import copy as _copy_repair
+        _round_before_script = _copy_repair.deepcopy(script)
+        _locked_before = _locked_repair_signature(script)
+        _locked_after_patch = _locked_before
+        _det_before_count = sum(
+            len(v) for k, v in per_shot_dict.get("shots", {}).items()
+            if k.startswith("shot_") or k == "hook"
+        )
+        _audit_before_count = (
+            sum(1 for _i in (audit_issues or []) if is_blocking(_i))
+            if _round == 1 else 0
+        )
         # 08-15（PR-3）：跨镜告警对镜补选——top-6 按告警数排序时，被选镜告警里的
         # 「镜头N→M」对镜可能掉出前 6（两镜告警数相同会一起进，但若 N 另有别的
         # 告警挤掉 M 就散了）。补选保证 N 入选时 M 必然一起，merge 门闩才能采纳
@@ -1448,8 +1859,12 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # - input[1]：REPAIR FEEDBACK（结构化 JSON）+ TASK（修复指令）——纯修复内容
         # 关键：移除 novel text，避免 LLM 看到原文后重新拆镜（违反"手术刀原则"）
         import json as _json
+        _repair_context = {
+            "hook": shots_by_id.get("hook") if "hook" in picked else None,
+            "shots": {tid: shots_by_id[tid] for tid in picked if tid in shots_by_id},
+        }
         _current_script_json = _json.dumps(
-            script, ensure_ascii=False, indent=1, default=str
+            _repair_context, ensure_ascii=False, indent=1, default=str
         )
 
         # 角色锚点（仅含服装色等查询字段，不含规则）——修 服装色 必备
@@ -1510,6 +1925,17 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # Turn 2：REPAIR FEEDBACK + TASK
         # 警告转为结构化 JSON（按 shot_xxx 分组），避免 freeform 文本混排字段
         # 08-21 mode 合并：总是带全片错误分布
+        _audit_by_shot = {}
+        for _ai in (audit_issues or []):
+            _aid = "hook" if str(_ai.shot_id) in ("0", "hook") else f"shot_{_ai.shot_id}"
+            _audit_by_shot.setdefault(_aid, []).append({
+                "code": _ai.code,
+                "frame_id": _ai.frame_id,
+                "entity_id": _ai.entity_id,
+                "field_path": _ai.field_path,
+                "evidence": _ai.evidence,
+                "message": _ai.message,
+            })
         _feedback_json = {
             "mode": "unified",
             "global_error_distribution": [
@@ -1522,6 +1948,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 continue
             _s = shots_by_id.get(_tid) or {}
             _feedback_json["shots"][_tid] = {
+                "audit_issues": _audit_by_shot.get(_tid, []),
                 "current": {
                     "ff_desc": _s.get("ff_desc", ""),
                     "lf_desc": _s.get("lf_desc", ""),
@@ -1542,7 +1969,14 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             + _top3_hint +
             "## TASK（精简修复）\n"
             "请**逐条**修复下方列出的问题，每条 warn 改一处字段即可。\n"
-            "输出完整修正后的分镜 JSON（保留全部镜头结构与未提及字段）。\n\n"
+            "只输出补丁 JSON，不输出完整分镜。格式：{\"patches\":[{\"shot_id\":\"hook\",\"field_path\":\"keyframes[1].desc\",\"value\":\"...\"}]}\n"
+            "允许的 field_path：prompt / ff_desc / lf_desc / motion_desc / color_tone；"
+            "keyframes[N].desc|t_sec|stage；keyframes.append；"
+            "frame_layouts.ff|lf[N].pose|gaze_target|position|on_screen|surface|props；"
+            "frame_layouts.kfs[N][M].pose|gaze_target|position|on_screen|surface|props；"
+            "frame_layouts.kfs.append；char_layout[N].position。\n"
+            "未选镜头即使字段合法也会被拒绝；缺关键帧时同时提交 keyframes.append 和 "
+            "frame_layouts.kfs.append；站位问题改 char_layout[N].position。\n\n"
             "**手术刀原则（最高优先级）**：\n"
             "1. 一条 warn 改一处字段——不要批量重写整镜\n"
             "2. 禁止新增任何短语（动作/情绪/运镜/光位/转场/视角/装饰性方位），"
@@ -1550,7 +1984,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "禁止砍/省略，但**禁止写成「望着她」「看杨旭」这类无空间方位词**\n"
             "3. 禁止改景别/时长/台词/剧情/narration_segment 文本\n"
             "4. 禁止增删镜头、改 shot.index\n"
-            "5. 修完输出整本 JSON，未列问题的镜头**逐字保留**\n"
+            "5. 只输出 patches 数组，不输出整本脚本；未列问题的镜头绝不进入 patches，"
+            "patch 未覆盖的字段**逐字保留**\n"
             "6. **lf_desc 至少 40 字，含本镜所有出镜角色的完整静态布局**（姿态/位置/服装色/视线）"
             "——过短（如「已没入水下，杨旭仰卧船头」单句）会丢角色状态、产生内部矛盾\n\n"
             "**关键字段保留白名单（最高优先级，违反 = 致命伤/漂色/连续性破缺）**：\n"
@@ -1632,7 +2067,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         prompt = prompt + (
             "\n\n# 定向修复\n"
             "以下是分镜问题清单。请**逐条**修复，每条 warn 改一处字段即可。"
-            "输出完整修正后的分镜 JSON（保留全部镜头结构与未提及字段）。"
+            "只输出补丁 JSON，不输出完整分镜。格式：{\"patches\":[{\"shot_id\":\"4\",\"field_path\":\"keyframes[1].desc\",\"value\":\"...\"}]}"
             f"{_global_block}"
             + _top3_hint +
             "**手术刀原则（最高优先级）**：一条 warn 改一处——不要批量重写整镜；"
@@ -1658,14 +2093,16 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             + "\n".join(parts)
         )
 
+        _metrics_inc("calls.repair_round")
         service = create_service()
-        from _text_gen.deepseek_schema import SCRIPT_SCHEMA
+        from _text_gen.deepseek_schema import REPAIR_PATCH_SCHEMA
         req = TextGenerationRequest(
             system_prompt=_rep_system,
             user_prompt=prompt,
             user_inputs=_user_inputs,  # v6.37 结构化多轮
-            temperature=0.2,
-            json_schema=SCRIPT_SCHEMA,
+            max_tokens=int(os.getenv("REPAIR_MAX_OUTPUT_TOKENS", "8000") or "8000"),
+            temperature=0.1,
+            json_schema=REPAIR_PATCH_SCHEMA,
             model=model,  # v6.67 接力修复：None=provider 默认（零行为变化）
             timeout_sec=_repair_timeout_sec(),  # v6.70.3: 修复轮 180s——超时保留原版，不再盲等 600s
         )
@@ -1678,44 +2115,40 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             _logger.warn(f"[WARN] 定向修复失败（保留原版）: {result.error}")
             break
 
-        import re as _re
+        import re as _re, json as _patch_json
         raw = result.text.strip()
         raw = _re.sub(r"^```json\s*", "", raw, flags=_re.MULTILINE)
         raw = _re.sub(r"^```\s*", "", raw, flags=_re.MULTILINE)
         raw = _re.sub(r"```\s*$", "", raw, flags=_re.MULTILINE)
         try:
-            new_script = parse_response(raw, novel_text=novel_text)
-        except (ValueError, json.JSONDecodeError) as e:
-            _logger.warn(f"[WARN] 定向修复 JSON 解析失败（保留原版）: {e}")
+            _patch_data = _patch_json.loads(raw)
+        except Exception as e:
+            _logger.warn(f"[WARN] 定向修复补丁 JSON 解析失败（保留原版）: {e}")
             break
-
-        if not new_script.get("shots"):
-            _logger.warn("[WARN] 定向修复返回空 shots，保留原版")
+        _patches = _patch_data.get("patches") if isinstance(_patch_data, dict) else None
+        if not isinstance(_patches, list) or not _patches:
+            _logger.warn("[WARN] 定向修复未返回有效补丁，保留原版")
             break
-
-        # 只采纳修复过的镜头，其余镜头保持原样（合并回 script）
-        # 08-15（v6.36 P18 修复）：merge 强制以 picked 为门闩——此前只按 index 匹配就
-        # 全量采纳修复 LLM 的整本重写（25/25 镜），非选中镜头（23/25）的改写也一并落地，
-        # 光位×4/开篇冲突/爆点密度/内容密度 等新告警全由「全量采纳」引入。注释写「只
-        # 采纳修复过的镜头」但代码从没查 picked——v6.36 回归根因。现在 picked 镜内仍受
-        # 「手术刀原则」约束；跨镜告警（衔接/越轴）的对镜纳入 picked 属 PR-3。
-        merged = dict(script)
-        merged["shots"] = []
-        for old_s in script.get("shots", []):
-            idx = old_s.get("index")
-            new_s = next((n for n in new_script.get("shots", [])
-                          if n.get("index") == idx), None)
-            if new_s and f"shot_{idx}" in picked:
-                merged["shots"].append(new_s)
-            else:
-                merged["shots"].append(old_s)
-        if "hook" in picked and new_script.get("hook"):
-            merged["hook"] = new_script["hook"]
+        merged, _n_applied = _apply_repair_patches(script, _patches, set(picked))
+        if _n_applied <= 0:
+            _logger.warn("[WARN] 定向修复补丁均未通过字段/镜头定位，保留原版")
+            break
+        _logger.info(f"[REPAIR] 应用补丁 {_n_applied} 条")
+        script = merged
+        # Locked-field comparison must measure what the LLM patch changed.
+        # Deterministic post-processing (timecode/hard_fix) may legitimately
+        # adjust duration_sec afterwards and must not reject an otherwise safe patch.
+        _locked_after_patch = _locked_repair_signature(script)
         # 修复后需重新算时间轴/注入全局渲染参数
         # 08-15 修复：正确函数在 style_prefix（_post_process:186 同款），原 import 自
         # shared.vimax_bridge 不存在 → 修复轮合并后 ImportError 崩溃，修复结果从未落地
         merged = style_prefix.inject_global_config_into_script(merged)
-        _compute_timecodes(merged)
+        # v6.76（09-19）：修复轮只重建 timeline，**禁止拆镜**。
+        # 拆镜是增删镜头的结构操作，而本轮接受判定比较的是「patch + 全部后处理
+        # 副作用」——新 shot_id（如 11.5）会以全新身份键进入 new_blocking，
+        # 导致刚修好的镜头被整轮回退（实测：解决 24 个阻断 → 新增 17 个 → 回退）。
+        # 需要拆分时由上游完整 regen 重写镜头。
+        _compute_timecodes(merged, allow_split=False)
         script = merged
         _logger.info(f"[REPAIR] 第 {_round} 轮定向修复完成，重新校验...")
     # 08-15：修复轮合并后强制再跑一遍 post_fix_shot_prompts（幂等）——merge 保留的
@@ -1768,6 +2201,44 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             _inj_fixed += 1
     if _inj_fixed:
         _logger.info(f"[REPAIR] 致命伤兜底补锚: {_inj_fixed} 镜（C 模式修复轮后丢失的伤处锚）")
+
+    # Acceptance is identity-based, not message-count based.  The same
+    # structured collector runs before and after; audit-only findings are
+    # verified by evidence disappearance.  Any checker failure or new blocking
+    # identity rolls the round back.
+    try:
+        _after_state = _collect_repair_warnings(script, novel_text)
+        _locked_changed = _locked_before != _locked_after_patch
+        _decision = _repair_acceptance_decision(
+            _det_before_state, _after_state, audit_issues, script, _locked_changed)
+        _logger.info(
+            "[REPAIR] 接受条件: "
+            f"before={_decision['before']}+audit{_decision['audit_targets']} "
+            f"after={_decision['after']} resolved={_decision['resolved']} "
+            f"audit_resolved={_decision['audit_resolved']} "
+            f"new={_decision['new_blocking']}"
+        )
+        _metrics_inc("repair.decisions")
+        _metrics_update("repair.last_decision", _decision)
+        if _decision["accepted"]:
+            _metrics_inc("repair.accepted")
+        else:
+            _metrics_inc("repair.rejected")
+        if not _decision["accepted"]:
+            script = _round_before_script
+            _logger.warn(
+                "[REPAIR] 修复未满足接受条件"
+                f"（reason={_decision['reason']}, resolved={_decision['resolved']}, "
+                f"audit_resolved={_decision['audit_resolved']}, "
+                f"new={_decision['new_blocking']}, "
+                f"checker_failed={_decision['checker_failed']}, "
+                f"locked_changed={_decision['locked_changed']}），回退本轮修复"
+            )
+    except Exception as _acc_err:
+        script = _round_before_script
+        _metrics_inc("repair.check_failed")
+        _metrics_set("repair.last_error", str(_acc_err))
+        _logger.warn(f"[REPAIR] 接受条件检查失败，回退本轮修复: {_acc_err}")
     return script
 
 
@@ -2140,24 +2611,135 @@ def _repair_timeout_sec() -> int | None:
 # ============================================================================
 _STEP_TIMING: list = []
 _STEP_TIMING_T0 = None
+_STEP_LAST_MARK_T = None
+_RUN_METRICS: dict = {}
+_METRICS_LOCK = None
+
+
+def _metrics_lock():
+    global _METRICS_LOCK
+    if _METRICS_LOCK is None:
+        import threading as _threading
+        _METRICS_LOCK = _threading.Lock()
+    return _METRICS_LOCK
+
+
+def _metrics_bucket(path: str) -> dict:
+    """Create/return a nested metrics bucket for dotted path."""
+    cur = _RUN_METRICS
+    for part in path.split("."):
+        if not part:
+            continue
+        nxt = cur.get(part)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            cur[part] = nxt
+        cur = nxt
+    return cur
+
+
+def _metrics_inc(path: str, n: int = 1) -> None:
+    try:
+        with _metrics_lock():
+            parts = path.split(".")
+            cur = _RUN_METRICS
+            for part in parts[:-1]:
+                nxt = cur.get(part)
+                if not isinstance(nxt, dict):
+                    nxt = {}
+                    cur[part] = nxt
+                cur = nxt
+            key = parts[-1]
+            cur[key] = int(cur.get(key, 0) or 0) + int(n)
+    except Exception:
+        pass
+
+
+def _metrics_set(path: str, value) -> None:
+    try:
+        with _metrics_lock():
+            parts = path.split(".")
+            cur = _RUN_METRICS
+            for part in parts[:-1]:
+                nxt = cur.get(part)
+                if not isinstance(nxt, dict):
+                    nxt = {}
+                    cur[part] = nxt
+                cur = nxt
+            cur[parts[-1]] = value
+    except Exception:
+        pass
+
+
+def _metrics_update(path: str, values: dict) -> None:
+    try:
+        with _metrics_lock():
+            bucket = _metrics_bucket(path)
+            bucket.update(values or {})
+    except Exception:
+        pass
+
+
+def _metrics_dump(path) -> None:
+    """Persist structured call/time/repair metrics without affecting the run."""
+    try:
+        import time as _t
+        from shared.json_io import atomic_dump_json as _adj
+
+        payload = dict(_RUN_METRICS)
+        payload["phases"] = list(_STEP_TIMING)
+        if _STEP_TIMING_T0 is not None:
+            payload["total_elapsed_sec"] = round(_t.time() - _STEP_TIMING_T0, 1)
+        _adj(path, payload, ensure_ascii=False, indent=2)
+    except Exception as _e:
+        try:
+            _logger.warn(f"[METRICS] metrics 落盘失败（不阻断）: {_e}")
+        except Exception:
+            pass
 
 
 def _timing_start() -> None:
     """run 级计时起点（main() 拿锁后调用）."""
-    global _STEP_TIMING_T0
+    global _STEP_TIMING_T0, _STEP_LAST_MARK_T
     import time as _t
     _STEP_TIMING_T0 = _t.time()
+    _STEP_LAST_MARK_T = _STEP_TIMING_T0
     _STEP_TIMING.clear()
+    _RUN_METRICS.clear()
+    _RUN_METRICS.update({
+        "run_started": _STEP_TIMING_T0,
+        "calls": {},
+        "repair": {},
+        "audit": {},
+        "hook": {},
+        "duration": {},
+        "quality": {},
+    })
 
 
 def _timing_mark(phase: str, status: str = "ok", **fields) -> None:
-    """记录一个阶段完成点（毫秒级开销，失败静默）."""
+    """记录一个阶段完成点（毫秒级开销，失败静默）.
+
+    ``elapsed_sec`` is cumulative since run start and is retained for backward
+    compatibility.  ``phase_duration_sec`` is the independent duration since
+    the previous mark, which is the field optimization work should consume.
+    """
+    global _STEP_LAST_MARK_T
     import time as _t
     try:
         if _STEP_TIMING_T0 is None:
             return
-        _rec = {"phase": phase, "status": status,
-                "elapsed_sec": round(_t.time() - _STEP_TIMING_T0, 1)}
+        now = _t.time()
+        last = _STEP_LAST_MARK_T if _STEP_LAST_MARK_T is not None else _STEP_TIMING_T0
+        _rec = {
+            "phase": phase,
+            "status": status,
+            "phase_duration_sec": round(max(0.0, now - last), 1),
+            "elapsed_since_start_sec": round(now - _STEP_TIMING_T0, 1),
+            # Backward-compatible alias; treat as cumulative, not phase cost.
+            "elapsed_sec": round(now - _STEP_TIMING_T0, 1),
+        }
+        _STEP_LAST_MARK_T = now
         _rec.update(fields)
         _STEP_TIMING.append(_rec)
     except Exception:
@@ -2169,9 +2751,14 @@ def _timing_dump(path) -> None:
     try:
         import time as _t
         if _STEP_TIMING_T0 is not None:
+            now = _t.time()
+            last = _STEP_LAST_MARK_T if _STEP_LAST_MARK_T is not None else _STEP_TIMING_T0
             _STEP_TIMING.append({
                 "phase": "_total", "status": "ok",
-                "elapsed_sec": round(_t.time() - _STEP_TIMING_T0, 1),
+                "phase_duration_sec": round(max(0.0, now - last), 1),
+                "elapsed_since_start_sec": round(now - _STEP_TIMING_T0, 1),
+                # Backward-compatible alias; cumulative, not phase cost.
+                "elapsed_sec": round(now - _STEP_TIMING_T0, 1),
             })
         _payload = {"run_started": _STEP_TIMING_T0, "phases": _STEP_TIMING}
         import json as _json
@@ -2235,7 +2822,9 @@ def _candidate_is_early_stop(score: dict, script: dict) -> bool:
     """
     if not _candidate_early_stop_enabled():
         return False
-    if float(score.get("total", 0) or 0) < _early_stop_score():
+    if score.get("gate_status") == "BLOCK":
+        return False
+    if float(score.get("final_score", score.get("total", 0)) or 0) < _early_stop_score():
         return False
     if score.get("climax_complete") is not True:
         return False
@@ -2338,11 +2927,22 @@ def _generate_script_candidates(
         # v6.73: attach the same blocking-risk/integrity view used by the final
         # gate before candidate ranking and early-stop decide anything.
         _scr.update(_candidate_quality_summary(_cand, novel_text))
-        if _scr.get("quality_checked"):
-            _scr["detail"] = (
-                f"{_scr.get('detail', '')}，风险{_scr.get('blocking_risk_count', 0)}"
-                f"{'' if _scr.get('integrity_ok') else '，完整性异常'}"
-            )
+        content_score = float(_scr.get("total", 0) or 0)
+        q = _scr
+        gate_pass = (
+            q.get("quality_checked") is True
+            and int(q.get("blocking_risk_count", 0) or 0) == 0
+            and q.get("integrity_ok") is True
+        )
+        _scr["content_score"] = round(content_score, 1)
+        _scr["final_score"] = round(content_score if gate_pass else min(content_score, 95.0), 1)
+        _scr["gate_status"] = "PASS" if gate_pass else "BLOCK"
+        _scr["detail"] = (
+            f"{_scr.get('detail', '')}，内容{_scr['content_score']:.0f}"
+            f"，最终{_scr['final_score']:.0f}，{_scr['gate_status']}"
+            f"，风险{_scr.get('blocking_risk_count')}"
+            f"{'' if _scr.get('integrity_ok') else '，完整性异常'}"
+        )
         # v6.67 接力修复：把生成本候选的模型挂在分数上，main() 据此选互补修复模型
         _scr["_model"] = _model
         return _scr, _cand
@@ -2354,6 +2954,8 @@ def _generate_script_candidates(
             try:
                 _scr, _cand = _gen_one_candidate(_task_idx)
                 _candidates.append((_scr, _cand))
+                _logger.info(f"[CANDIDATE] 候选 1/1: {_scr.get('detail', '')}")
+                _console(f"  [候选] 1/1: {_scr.get('detail', '')}")
                 break
             except RuntimeError as e:
                 _last_err = e
@@ -2638,6 +3240,8 @@ def main() -> None:
         if CHARACTER_EXTRACTION_ENABLED or SCENE_OBJECT_EXTRACTION_ENABLED:
             _logger.info("[INFO] 并发预提取 角色/场景物体/大纲（3 路并发）...")
             from step01_script_gen.concurrent_extract import extract_all_concurrent
+            from shared.config import SCRIPT_CANDIDATE_MODELS as _pre_models
+            _pre_model = _pre_models[0] if len(_pre_models) == 1 else None
             pre_results = extract_all_concurrent(
                 novel_text,
                 character_bank,
@@ -2645,6 +3249,7 @@ def main() -> None:
                 enable_characters=CHARACTER_EXTRACTION_ENABLED,
                 enable_scene_objects=SCENE_OBJECT_EXTRACTION_ENABLED,
                 enable_outline=OUTLINE_ENABLED,
+                model=_pre_model,
                 log_func=_logger.info,
             )
             # === 角色：注册到 bank（主流程后段仍可复用） ===
@@ -2872,6 +3477,7 @@ def main() -> None:
                 prompt = _gap_builder(novel_text, character_bank, scene_objects_bank)
                 prompt = prompt + gap_context
 
+                _metrics_inc("calls.gap_regen")
                 service = create_service()
                 from _text_gen.deepseek_schema import SCRIPT_SCHEMA
                 req = TextGenerationRequest(
@@ -2951,12 +3557,16 @@ def main() -> None:
         # 同 provider 默认模型，零行为变化。GAP 重生成本身暂不接力（方案②范围）。
         _repair_model = _complementary_repair_model(_producer_model)
         if _repair_model:
-            _logger.info(
-                f"[RELAY] 产出模型 {_producer_model} → 修复轮接力 {_repair_model}"
-            )
-            _console(
-                f"  [接力] 修复轮改用 {_repair_model}（产出模型 {_producer_model} 的互补模型）"
-            )
+            if _repair_model == _producer_model:
+                _logger.info(f"[RELAY] 单模型继续修复: {_repair_model}")
+                _console(f"  [单模型] 规划/生成/审查/修复均使用 {_repair_model}")
+            else:
+                _logger.info(
+                    f"[RELAY] 产出模型 {_producer_model} → 修复轮接力 {_repair_model}"
+                )
+                _console(
+                    f"  [接力] 修复轮改用 {_repair_model}（产出模型 {_producer_model} 的互补模型）"
+                )
 
         # v6.7: 镜头数严重超限时收敛重生成（独立于 gap_analysis，默认开启）
         # v6.70.3: 超总预算 → 跳过可选修复轮（失败即保留原版语义，跳过无数据风险）
@@ -2973,6 +3583,53 @@ def main() -> None:
             _logger.warn("[BUDGET] 总预算超时，跳过镜头超限收敛轮（保留当前稿）")
             _console("  [预算] 总预算超时，跳过镜头超限收敛轮")
 
+        # v6.73: same-model independent audit before targeted repair.
+        _audit_issues = []
+        try:
+            from shared.config import SCRIPT_CANDIDATE_MODELS as _audit_models
+            _audit_enabled = (
+                len(_audit_models) == 1
+                and os.getenv("SINGLE_MODEL_AUDIT", "1").strip() == "1"
+            )
+            if _audit_enabled and not _budget_exceeded():
+                from step01_script_gen.audit import run_same_model_audit_with_status
+                _metrics_inc("calls.audit")
+                _audit_result = run_same_model_audit_with_status(
+                    novel_text, pre_extracted_outline, script,
+                    model=_repair_model or _producer_model,
+                    timeout_sec=int(os.getenv("AUDIT_TIMEOUT_SEC", "180") or "180"),
+                )
+                _audit_issues = _audit_result.issues
+                _metrics_set("audit.status", _audit_result.status)
+                _metrics_set("audit.issues", len(_audit_issues))
+                try:
+                    from shared.json_io import atomic_dump_json as _audit_dump
+                    _audit_dump(
+                        CHAPTER_DIR / "step01_audit.json",
+                        {
+                            "status": _audit_result.status,
+                            "model": _repair_model or _producer_model,
+                            "error": _audit_result.error,
+                            "issues": [i.to_dict() for i in _audit_issues],
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                except Exception as _audit_dump_err:
+                    _logger.warn(f"[AUDIT] 审查结果落盘失败（不阻断）: {_audit_dump_err}")
+                if _audit_result.status == "ok":
+                    _logger.info(f"[AUDIT] same-model audit issues={len(_audit_issues)}")
+                else:
+                    _metrics_set("audit.error", _audit_result.error)
+                    _logger.warn(
+                        f"[AUDIT] same-model audit {_audit_result.status}"
+                        f"（区别于 0 issue，不阻断）: {_audit_result.error}"
+                    )
+        except Exception as _audit_err:
+            _metrics_set("audit.status", "exception")
+            _metrics_set("audit.error", str(_audit_err))
+            _logger.warn(f"[AUDIT] same-model audit failed（不阻断）: {_audit_err}")
+
         # v6.35（08-15，P18 闭环）：GAP 通过后仍存在的高价值告警（开篇冲突/
         # 爆点密度/威胁源朝向/关键帧质量/内容密度等）→ 定向修复轮，只重写
         # 告警镜头（此前这些 WARN 纯打印落盘，无人修，带伤进 step02）。
@@ -2982,6 +3639,7 @@ def main() -> None:
                 script, novel_text,
                 bank=character_bank, objects_bank=scene_objects_bank,
                 model=_repair_model,
+                audit_issues=_audit_issues,
             )
             _timing_mark("repair_rounds")
         elif REPAIR_ROUNDS_ENABLED:
@@ -3298,6 +3956,25 @@ def main() -> None:
             _logger.warn(f"[WARN] 落盘前 issue 汇总异常（不阻断）: {_e}")
 
         _quality = _write_step01_quality_gate(script, novel_text)
+        _shot_total = sum(float(s.get("duration_sec") or 0) for s in script.get("shots", []))
+        _hook_total = float((script.get("hook") or {}).get("duration_sec") or 0)
+        _metrics_update("duration", {
+            "shots_total_sec": round(_shot_total, 3),
+            "hook_sec": round(_hook_total, 3),
+            "total_sec": round(_shot_total + _hook_total, 3),
+            "budget_status": (
+                "PASS" if 60.0 - 0.01 <= _shot_total <= 90.0 + 0.01 else "BLOCK"
+            ),
+        })
+        _metrics_update("quality", {
+            "status": _quality.get("status"),
+            "hard_count": _quality.get("hard_count", 0),
+            "visual_risk_count": _quality.get("visual_risk_count", 0),
+            "advisory_count": _quality.get("advisory_count", 0),
+            "video_advisory_count": _quality.get("video_advisory_count", 0),
+            "blocking_categories": _quality.get("blocking_categories", []),
+            "rule_version": _quality.get("rule_version"),
+        })
         if _quality.get("blocking"):
             _logger.warn(
                 f"[QUALITY-GATE] BLOCK: hard={_quality.get("hard_count", 0)}, "
@@ -3348,6 +4025,7 @@ def main() -> None:
     finally:
         _release_step01_lock()
         _timing_dump(CHAPTER_DIR / "step01_timing.json")  # v6.70.3: 阶段耗时指标落盘
+        _metrics_dump(CHAPTER_DIR / "step01_metrics.json")  # 调用/修复/时长结构化指标
 
 
 if __name__ == "__main__":

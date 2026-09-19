@@ -1,25 +1,34 @@
-"""W6. 红果时长约束（v6.42 迁移自 _hard_fix_runtime_extend；08-23 加单镜上限）.
+"""W6. 红果时长约束（v6.42 迁移自 _hard_fix_runtime_extend；v6.76 只报告）.
 
 08-23 用户规则（本版核心）：
   - **正片分镜总时长（不含钩子）≥ 60s**——钩子时长另算，不计入 60s 下限
   - **单镜时长 ≤ 8s**（MAX_SHOT_DURATION，与视频模型 cap 取严）
-  - 钩子时长另算：不受 8s 上限/60s 下限约束（hook 有自己的下限规则，见
-    constraints/hook_duration.py）
+  - 钩子时长另算：不受 8s 上限/60s 下限约束（hook 有自己的下限规则）
 
 历史背景：8-22 跑批实测 8 镜总时长 42.25s < 60s 红果下限，末镜 3.04s < 4s 红果下限。
 
-修法：
-  0. 单镜 > per_shot_cap（min(模型 cap, 8s)）→ 夹到 cap
-  1. 末镜 ≤ 4s → 强制夹到 5-6s
-  2. 正片分镜总时长（**不含钩子**）< 60s（红果下限，v6.49 收紧去掉 5s 安全裕度）
-     → 循环按比例放大每镜 duration，直到达标或全部顶到 cap
-     - 单镜上限不超 per_shot_cap
-     - 单轮 per_add 上限 3.0s
-  3. 全部顶到 cap 仍 < 60s（镜头数不够：8s × N < 60 即 N < 8）
-     → 记 HARD Violation，走 regen 反馈要求**加镜头**（而非继续拉单镜时长）
-  4. 不论是否拉伸，timecode 永远和 shot["duration"] 同步（关键修复）
+v6.76（2026-09-19）降为**只报告**，不再以任何方式**增加**时长。原因：
+  1. 拉伸只改 `duration_sec`，不增加任何有原文证据的事件——新增的秒数没有内容。
+     而系统里唯一设计来「时长变了同步 KF 时刻」的机制（`shared/kf_time.py:95-103`
+     的惰性重标定）实测**从不触发**（`duration` 与 `duration_sec` 恒等，ratio≡1.0），
+     于是 kf 仍停在原绝对秒数，尾部成为「无 kf 覆盖的时段」，
+     由 kf_time_window_alignment 补出「（画面延续，保持该状态）」伪 hold 帧。
+  2. 实测证据：`chapter_001/index 12` duration_sec=7.88，kf4 t=7.088 即此类伪帧。
+  3. 该文件自身 60-62 行的旧注释已承认根因：「拉伸比高的根因几乎总是**内容不足**
+     （镜头没覆盖原文高潮），正确解法是补镜头而非调拉伸算法」——
+     本版把这条判断从注释变成行为。
 
-幂等：单镜 ≤ cap 且总时长 ≥ 60s（或 need < 2 的贴线态）且末镜 > 4s → 跳过所有修改。
+**保留**的动作：单镜 > cap 的夹取（步骤 0）。那是「减时长」防 provider 截断内容，
+不是造时长；且是模型能力约束。**移出**的动作：末镜夹取（步骤 1）与按比例拉伸
+（步骤 2/3）——两者都在无内容支撑的情况下增加时长，改为报告。
+
+现状：
+  - 单镜 > cap → 夹到 cap（保留，action="clamp"）
+  - 末镜 ≤ 4s → 报告（不再夹到 5s）
+  - 正片总时长 < 60s → 报告 + HARD Violation（建议**增加镜头数**，禁止拉单镜凑数）
+  - timecode 永远与 `duration_sec` 同步（保留）
+
+幂等：只报告 + 夹取（夹后不再 >cap），连跑两次结果一致。
 """
 from __future__ import annotations
 
@@ -43,65 +52,7 @@ except Exception:  # pragma: no cover - 导入失败回退
     _MAX_SHOT_SEC = 8.0
     _REDGUO_MIN_SEC = 60.0
 
-_REDGUO_TARGET_SEC = 60.0   # v6.49（08-28）收紧：红果下限 60s 不加安全裕度——
-                                   # 1.41x 拉伸比（原 65s 目标）会把过渡镜拉到 7-8s
-                                   # 内容贫瘠；目标 60s 拉伸比 1.30x 更稳。
-                                   # 安全裕度改由「末镜强制 ≥ 4s」承担（见 _LAST_SHOT_MIN_SEC）。
-_LAST_SHOT_MIN_SEC = 4.0
-_LAST_SHOT_TARGET_SEC = 5.0
-_PER_ADD_CAP = 3.0
-_MAX_STRETCH_PASSES = 8     # 循环拉伸安全阀（正常 1-2 轮收敛）
-
-# v6.62.4（09-08）拉伸比告警阈值（**warning-only，不触发重生成**）。
-# 依据：本模块 v6.49 注释已认可「目标 60s → 聚合 1.30x」可接受，故聚合阈值取
-# 1.20 做提前预警；单镜取 1.35 抓离群镜。
-# 09-08 chapter_001 实测：聚合 1.23x、单镜最高 1.50x（shot10 4.00→6.00），
-# 且 7/11 镜 ≥1.25x —— 而「高节奏动作镜不拉伸」保护一次都没生效（该章无动作镜），
-# 于是拉伸全部落在静态铺垫镜上，把空镜/群演镜拉得更长。
-# 拉伸比高的**根因几乎总是内容不足**（镜头没覆盖原文高潮），正确解法是补镜头
-# 而非调拉伸算法，故这里只做可观测性，不改拉伸行为、不记 Violation。
-_STRETCH_WARN_TOTAL = 1.20
-_STRETCH_WARN_SHOT = 1.35
-
-
-# 高节奏动作词集（首次调用时构建）
-_ACTION_TEMPO_WORDS: frozenset | None = None
-
-
-def _action_tempo_words() -> frozenset:
-    """高节奏动作词（拉伸会变慢动作 → 不参与拉伸分配）.
-
-    复用 validation._COMBAT_KEYWORDS（打斗/刺杀/冲刺等，与 combat_impact 同源）
-    + 补充高节奏位移/出击词。构建一次后缓存。
-    """
-    global _ACTION_TEMPO_WORDS
-    if _ACTION_TEMPO_WORDS is None:
-        try:
-            from step01_script_gen.validation import _COMBAT_KEYWORDS
-            base = set(_COMBAT_KEYWORDS)
-        except Exception:  # pragma: no cover - 兜底
-            base = {"打斗", "战斗", "格斗", "刺杀", "攻击", "砍杀", "挥刀", "拔剑", "跃出", "冲刺"}
-        base |= {
-            # 高节奏位移 / 出击（拉伸即慢动作）
-            "追逐", "奔驰", "奔逃", "疾奔", "疾驰", "狂奔", "飞驰", "冲出", "奔袭",
-            "追击", "搏斗", "交手", "破水", "跃上", "猛刺", "挥砍", "扬鞭", "快马", "扑出", "翻身跃",
-        }
-        _ACTION_TEMPO_WORDS = frozenset(base)
-    return _ACTION_TEMPO_WORDS
-
-
-def _is_high_tempo_shot(shot: dict) -> bool:
-    """判定镜是否高节奏动作（拉伸会变慢动作 → 不参与拉伸分配）.
-
-    08-27（P1-2）：W6 拉伸逐镜均匀 +0.9s，打斗/追逐镜被拉成慢动作。改为——
-    动作镜不拉，反应/情绪/建立镜集中拉满（延长 = 蓄势悬念），观感自然。
-    扫 prompt/motion/ff/lf + narration 双通道（与 combat_impact._is_combat 同款）。
-    """
-    text = " ".join(
-        str(shot.get(f) or "") for f in ("prompt", "motion_desc", "ff_desc", "lf_desc")
-    )
-    narr = str(shot.get("narration_segment") or "")
-    return any(kw in text or kw in narr for kw in _action_tempo_words())
+_LAST_SHOT_MIN_SEC = 4.0    # 红果末镜下限（现仅作报告判据）
 
 
 def _align_frame_duration(raw: float, fps: float = 24.0) -> float:
@@ -138,16 +89,14 @@ def _sum_duration(items: list[dict]) -> float:
 
 
 def _sync_timecode(shots: list, hook: dict | None, script: dict | None, fps: float) -> None:
-    """timecode 永远和 shot["duration"] 同步（不论是否拉伸都跑）.
+    """timecode 永远和 shot["duration"] 同步（不论是否修改都跑）.
 
-    v6.43（08-23）钩子在播放顺序头部：hook.timecode = 0..hook_duration，
-    shots 从 hook_duration 开始累加。timeline[] 数组**不再重建**——
-    _compute_timecodes 已按 hook-first 建好正确顺序，下游（step04/03/02b）不读
-    timeline，W6 拉伸只更新 shot.timecode.start/end 即可，避免重复工作+顺序错乱。
+    钩子在播放顺序头部：hook.timecode = 0..hook_duration，shots 从 hook_duration
+    开始累加。timeline[] 数组**不再重建**——_compute_timecodes 已按 hook-first
+    建好正确顺序，下游（step04/03/02b）不读 timeline。
     """
     if script is None:
         return
-    # 钩子在头部：先设它的 timecode（0..hook_duration），shots 起始时间累加 hook_duration
     cumulative = 0.0
     hook_dur = 0.0
     if hook and isinstance(hook, dict):
@@ -169,11 +118,10 @@ def _sync_timecode(shots: list, hook: dict | None, script: dict | None, fps: flo
     script["total_duration"] = round(cumulative, 2)
     if "total_effective_duration" in script:
         script["total_effective_duration"] = round(cumulative, 2)
-    # timeline[] 数组不再重建（_compute_timecodes 已建好 hook-first 顺序；下游不读）
 
 
 class RuntimeExtendConstraint(Constraint):
-    """W6. 红果时长约束：正片分镜（不含钩子）≥ 60s / 单镜 ≤ 8s / 末镜 > 4s.
+    """W6. 红果时长约束：单镜 ≤ 8s（夹取）/ 正片 ≥ 60s 与末镜 > 4s（只报告）.
 
     severity=HARD: 60s 红果标准是硬约束（structural）。
     skip_hook=True: 钩子时长另算——不进总时长统计、不受 8s 上限约束。
@@ -182,6 +130,29 @@ class RuntimeExtendConstraint(Constraint):
     name = "runtime_extend"
     severity = Severity.HARD
     skip_hook = True
+
+    def _report(
+        self, ctx, repairs: list[RepairRecord], shot_index, *, target: str,
+        message: str, evidence: str, detail: str, severity=None,
+    ) -> None:
+        ctx.record_violation(Violation(
+            constraint_name=self.name,
+            severity=severity or Severity.WARN,
+            shot_index=shot_index,
+            field=target,
+            message=message,
+            evidence=evidence[:200],
+            repaired=False,
+        ))
+        repairs.append(RepairRecord(
+            constraint_name=self.name,
+            shot_index=shot_index,
+            action="warn",
+            target=target,
+            before=evidence[:80],
+            after=evidence[:80],
+            detail=detail,
+        ))
 
     def apply(self, ctx) -> list[RepairRecord]:
         repairs: list[RepairRecord] = []
@@ -197,7 +168,7 @@ class RuntimeExtendConstraint(Constraint):
             except (TypeError, ValueError):
                 fps = 24.0
 
-        # 0) 单镜硬上限夹取：> per_shot_cap → 夹到 cap
+        # 0) 单镜硬上限夹取（保留：减时长防 provider 截断，不是造时长）
         for s in ctx.shots:
             if not isinstance(s, dict):
                 continue
@@ -218,160 +189,57 @@ class RuntimeExtendConstraint(Constraint):
                     )
                 )
 
-        # 1) 末镜时长夹取
+        # 1) 末镜时长下限 —— 只报告（v6.76：不再夹到 5s，那会凭空加 1~2s 无内容时长）
         last = ctx.shots[-1]
         if isinstance(last, dict):
             last_dur = _shot_dur(last)
             if 0 < last_dur <= _LAST_SHOT_MIN_SEC:
-                new_last = _align_frame_duration(
-                    min(_LAST_SHOT_TARGET_SEC, per_shot_cap), fps,
-                )
-                before_dur = last.get("duration_sec")
-                last["duration_sec"] = new_last
-                last["duration"] = new_last
-                repairs.append(
-                    RepairRecord(
-                        constraint_name=self.name,
-                        shot_index=last.get("index", len(ctx.shots) - 1),
-                        action="clamp",
-                        target="duration_sec",
-                        before=str(before_dur),
-                        after=str(new_last),
-                    )
+                self._report(
+                    ctx, repairs, last.get("index", len(ctx.shots) - 1),
+                    target="duration_sec",
+                    message=(
+                        f"末镜时长 {last_dur:.2f}s ≤ 红果下限 {_LAST_SHOT_MIN_SEC:.0f}s；"
+                        "保留原值未夹取——补齐末镜应补充有原文依据的收束内容，"
+                        "而不是给现有画面加无内容时长。"
+                    ),
+                    evidence=f"末镜 duration_sec={last_dur:.2f}",
+                    detail="末镜时长不足红果下限，保留原值交由 audit/regen",
                 )
 
-        # 2) 总时长计算——只算正片分镜，钩子时长另算（08-23 用户规则）
+        # 2) 正片总时长（只算分镜，钩子另算）
         total = _sum_duration(ctx.shots)
 
-        # v6.62.4：拉伸前基线快照，供步骤 3.5 算拉伸比（按列表位置对齐——
-        # 拉伸循环不增删镜头，位置稳定；index 可能是 8.5 这类小数不宜作键）
-        _pre_stretch_durs = [
-            _shot_dur(s) if isinstance(s, dict) else 0.0 for s in ctx.shots
-        ]
-        _pre_stretch_total = total
-
-        # 3) 总时长不足：循环按比例拉伸，直到达标（60s）或全部顶到 cap
-        for _pass in range(_MAX_STRETCH_PASSES):
-            if total >= _REDGUO_TARGET_SEC:
-                break
-            need = _REDGUO_TARGET_SEC - total
-            if need < 0.1:
-                break  # 贴线态（如 FPS 对齐后 59.9s ≈ 60s）：不再微调
-            # v6.49（08-28）：need < 2 的旧 break 太宽，会让 9 镜 5s → 9×6.625=59.625s
-            # 卡死在 60s 下限下。改为 < 0.1s，允许多轮微调跨过 60s 阈值。
-            extensible: list[dict] = []
-            high_tempo: list[dict] = []
-            for s in ctx.shots:
-                if not isinstance(s, dict):
-                    continue
-                d = _shot_dur(s)
-                if d > 0 and d < per_shot_cap - 1.0:
-                    # 08-27（P1-2）智能分配：高节奏动作镜不拉（拉伸=慢动作），
-                    # 只拉反应/情绪/建立镜——集中拉满观感自然
-                    (high_tempo if _is_high_tempo_shot(s) else extensible).append(s)
-            if not extensible:
-                # 全是高节奏镜（纯打斗/追逐章）→ 回退拉全部，避免时长落空
-                extensible = high_tempo
-            if not extensible:
-                break  # 全部顶到 cap，无余量
-            per_add = min(_PER_ADD_CAP, need / len(extensible))
-            # v6.49（08-28）贴线态保护：per_add < 0.2 时 FPS 对齐会吃光增量（如
-            # 9×6.625=59.625 卡在 60s 下限下），强制最小 0.5 步长确保跨过阈值。
-            if per_add < 0.5 and total >= _REDGUO_TARGET_SEC - 1.0:
-                per_add = 0.5
-            added_any = False
-            for s in extensible:
-                cur = _shot_dur(s)
-                new_d = min(per_shot_cap, cur + per_add)
-                if new_d - cur <= 0.1:
-                    continue
-                aligned = min(_align_frame_duration(new_d, fps), per_shot_cap)
-                if aligned <= cur:
-                    continue
-                before_dur = s.get("duration_sec")
-                s["duration_sec"] = aligned
-                s["duration"] = aligned
-                repairs.append(
-                    RepairRecord(
-                        constraint_name=self.name,
-                        shot_index=s.get("index"),
-                        action="clamp",
-                        target="duration_sec",
-                        before=str(before_dur),
-                        after=str(aligned),
-                    )
-                )
-                added_any = True
-            total = _sum_duration(ctx.shots)
-            if not added_any:
-                break
-
-        # 3.5) v6.62.4（09-08）拉伸比告警 —— warning-only：只产出 action="warn"
-        #      的 RepairRecord，**不记 Violation、不触发任何重生成**（regen 由
-        #      GAP 零高潮检测负责，见 gap_analysis.analyze_shot_distribution）。
-        if _pre_stretch_total > 0:
-            _total_ratio = total / _pre_stretch_total
-            if _total_ratio > _STRETCH_WARN_TOTAL:
-                repairs.append(
-                    RepairRecord(
-                        constraint_name=self.name,
-                        shot_index=None,
-                        action="warn",
-                        target="duration_sec",
-                        before=f"{_pre_stretch_total:.2f}",
-                        after=f"{total:.2f}",
-                        detail=(
-                            f"正片整体拉伸 {_total_ratio:.2f}x "
-                            f"({_pre_stretch_total:.1f}s → {total:.1f}s) "
-                            f"> 告警阈值 {_STRETCH_WARN_TOTAL:.2f}x。"
-                            "根因通常是内容不足（镜头未覆盖原文高潮），"
-                            "靠拉时长会把静态镜拉得更长；正确解法是补镜头/补动作。"
-                        ),
-                    )
-                )
-        for _s, _pre_d in zip(ctx.shots, _pre_stretch_durs):
-            if not isinstance(_s, dict) or _pre_d <= 0:
-                continue
-            _cur_d = _shot_dur(_s)
-            if _cur_d <= 0:
-                continue
-            _shot_ratio = _cur_d / _pre_d
-            if _shot_ratio > _STRETCH_WARN_SHOT:
-                repairs.append(
-                    RepairRecord(
-                        constraint_name=self.name,
-                        shot_index=_s.get("index"),
-                        action="warn",
-                        target="duration_sec",
-                        before=f"{_pre_d:.2f}",
-                        after=f"{_cur_d:.2f}",
-                        detail=(
-                            f"单镜拉伸 {_shot_ratio:.2f}x ({_pre_d:.1f}s → {_cur_d:.1f}s) "
-                            f"> 告警阈值 {_STRETCH_WARN_SHOT:.2f}x —— 该镜内容量与时长不匹配，"
-                            "建议拆分动作/补反应镜而非拉长单镜。"
-                        ),
-                    )
-                )
-
-        # 4) 全部顶到 cap 仍 < 60s 硬下限 → 镜头数不够，记 HARD Violation 走 regen
-        #    （8s × N < 60 即 N < 8：加镜头才能解决，继续拉单镜时长违反 8s 上限）
+        # 3) 总时长不足 —— 只报告（v6.76：不再按比例拉伸；拉伸＝造无内容时长）
+        #    HARD：总时长是平台硬约束，未解决需走补镜 regen。
+        #    注意只记这一条——历史上步骤 3 与 4 会各记一条，同一条件下重复。
         if total < _REDGUO_MIN_SEC:
             max_reach = len(ctx.shots) * per_shot_cap
-            ctx.record_violation(
-                Violation(
-                    constraint_name=self.name,
-                    severity=Severity.HARD,
-                    shot_index=None,
-                    field=None,
-                    message=(
-                        f"正片分镜总时长 {total:.1f}s < {_REDGUO_MIN_SEC:.0f}s 硬下限（不含钩子，钩子另算）。"
-                        f"当前 {len(ctx.shots)} 镜即使全部顶到 {per_shot_cap:.0f}s/镜 也只有 {max_reach:.0f}s——"
-                        f"必须**增加镜头数**（拆分关键动作/补反应镜，单镜 ≤ {per_shot_cap:.0f}s），"
-                        f"禁止靠拉长单镜时长凑数。"
-                    ),
+            if max_reach >= _REDGUO_MIN_SEC:
+                _hint = (
+                    f"当前 {len(ctx.shots)} 镜即使全部顶到 {per_shot_cap:.0f}s/镜 "
+                    f"也只有 {max_reach:.0f}s，可通过**补镜头/补内容**达标"
+                    "（拆分关键动作，或补有原文依据的反应镜/建立镜）"
                 )
+            else:
+                _hint = (
+                    f"当前 {len(ctx.shots)} 镜即使全部顶到 {per_shot_cap:.0f}s/镜 也只有 "
+                    f"{max_reach:.0f}s——必须**增加镜头数**（拆分关键动作/补反应镜，"
+                    f"单镜 ≤ {per_shot_cap:.0f}s），禁止靠拉长单镜时长凑数"
+                )
+            self._report(
+                ctx, repairs, None,
+                target="duration_sec",
+                message=(
+                    f"正片分镜总时长 {total:.1f}s < {_REDGUO_MIN_SEC:.0f}s 硬下限"
+                    f"（不含钩子，钩子另算）；保留原值未拉伸——"
+                    "拉伸只增时长不增事件，会让尾部变成无 KF 覆盖的伪时段"
+                    "（被下游补成「画面延续」假帧）。" + _hint + "。"
+                ),
+                evidence=f"shots_total={total:.2f}s, {len(ctx.shots)} 镜",
+                detail="正片总时长不足红果下限，保留原值交由 audit/regen",
+                severity=Severity.HARD,
             )
 
-        # 5) timecode 同步（不论是否拉伸）
+        # 4) timecode 同步（不论是否修改）
         _sync_timecode(ctx.shots, ctx.hook, ctx.script if isinstance(ctx.script, dict) else None, fps)
         return repairs

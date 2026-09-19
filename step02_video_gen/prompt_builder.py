@@ -1042,7 +1042,10 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         planned_duration = float(shot.get("duration_sec") or shot.get("duration", 5))
     except (TypeError, ValueError):
         planned_duration = 5.0
-    duration = max(1, int(round(planned_duration)))
+    # Integer-second APIs must choose a duration that can still execute the
+    # planned action.  Use ceil (5.25→6), never round-down/truncate.
+    import math as _math
+    duration = max(1, int(_math.ceil(planned_duration)))
     shot["planned_duration_sec"] = round(planned_duration, 3)
     shot["submitted_duration_sec"] = duration
 

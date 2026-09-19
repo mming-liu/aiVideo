@@ -137,6 +137,27 @@ def dedupe_text_4char(v: str) -> str:
     return "".join(parts)
 
 
+_MOTION_PREFIX_RE = re.compile(
+    r"^(\s*\d+(?:\.\d+)?\s*(?:-|~|至|到)\s*\d+(?:\.\d+)?\s*(?:秒|s)?\s*[:：]\s*)(.*)$"
+)
+
+
+def _dedupe_motion_body(v: str) -> str:
+    parts = re.split(r"([;；])", v)
+    out = []
+    for part in parts:
+        if part in (";", "；"):
+            out.append(part)
+            continue
+        atom = part.strip()
+        m = _MOTION_PREFIX_RE.match(atom)
+        if m:
+            out.append(m.group(1) + dedupe_text_4char(m.group(2)))
+        else:
+            out.append(dedupe_text_4char(atom))
+    return "".join(out)
+
+
 class PromptRepetitionConstraint(Constraint):
     """P. 复读机：4-char 短语 ≥2 次 → 删第 2 次起.
 
@@ -162,7 +183,11 @@ class PromptRepetitionConstraint(Constraint):
                 v = shot.get(fld)
                 if not v or not isinstance(v, str) or len(v) < 8:
                     continue
-                new_v = dedupe_text_4char(v)
+                # Do not delete arbitrary 4-char semantic spans.  Distinct
+                # characters can legitimately perform the same action in one
+                # sentence.  Only explicit repair-echo/template fragments are
+                # cleaned here; semantic dedupe belongs to event/audit logic.
+                new_v = _collapse_name_runs(v)
                 new_v = _strip_repair_echo(new_v)
                 new_v = self._strip_dangling_names(new_v, char_names)
                 if new_v != v:

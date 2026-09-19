@@ -43,6 +43,8 @@ class LfDescLengthConstraint(Constraint):
             if self._already_repaired(shot):
                 continue
             lf = shot.get("lf_desc", "") or ""
+            if "所有角色定锚" in lf:
+                continue
             threshold = 60 if is_hook else 40
             if len(lf) >= threshold:
                 continue

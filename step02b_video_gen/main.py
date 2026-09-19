@@ -29,6 +29,7 @@ import os
 from shared.paths import (
     script_file, vimax_working_dir, chapter_dir,
     vimax_shots_dir, SHOT_VIDEO_FILENAME, FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME,
+    keyframe_files,
 )
 from shared.tee_logger import get_logger
 from step02_video_gen.submit_poll import _submit_video, _get_shot_hash, _failed_videos
@@ -168,10 +169,7 @@ async def _process_one_shot_skip_frames(
             raise FileNotFoundError(
                 f"[Shot {idx}] image 模式缺少首/尾帧: ff={ff.exists()} lf={lf.exists()}"
             )
-        kf = shot_dir / "keyframes"
-        kf_paths = []
-        if kf.exists():
-            kf_paths = [str(p) for p in kf.glob("*.png")]
+        kf_paths = [str(p) for p in keyframe_files(idx)]
         frame_paths = [str(ff), str(lf)]
         frame_paths.extend(kf_paths)
         logger.info(f"  [Shot {idx}] Mode: IMAGE (reuse step02a frames)")
@@ -213,9 +211,11 @@ def main():
         script = json.load(f)
 
     from shared.quality_gate import require_gate
-    require_gate(chapter_dir() / "step01_quality.json", script, stage="step01")
+    require_gate(chapter_dir() / "step01_quality.json", script, stage="step01",
+                 required_report_type="quality_gate")
     if REFERENCE_MODE == "image":
-        require_gate(chapter_dir() / "step02a_quality.json", script, stage="step02a")
+        require_gate(chapter_dir() / "step02a_quality.json", script, stage="step02a",
+                     required_report_type="product_acceptance", verify_outputs=True)
 
     # r2v/text 模式不需要帧图片（r2v 参考图来自角色肖像注册表，非帧）
     if REFERENCE_MODE in ("r2v", "text"):
@@ -268,6 +268,15 @@ def main():
         script, work_dir, script_path,
         only_indices=only_indices, force=args.force,
     ))
+
+    # Separate product acceptance from the pre-generation prompt report.
+    try:
+        from step02_video_gen.video_prompt_quality import write_video_product_quality
+        _pq = write_video_product_quality(script, work_dir)
+        logger.info(f"[VIDEO-PRODUCT] status={_pq.get('status')} missing={len(_pq.get('missing') or [])}")
+    except Exception as _pq_err:
+        logger.error(f"[VIDEO-PRODUCT] product acceptance failed: {_pq_err}")
+        raise
 
     # 将可能回填的字段写回 script（原子写，防半截 JSON；2026-09-13 审计修复）
     from shared.json_io import atomic_dump_json

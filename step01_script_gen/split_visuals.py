@@ -85,6 +85,23 @@ def _upsert_camera_push(lf: str, framing: str) -> str:
     return lf.rstrip("。") + f"，镜头较首帧缓推至{framing}。"
 
 
+_INERT_SPLIT_WORDS = (
+    "已死", "尸体", "断气", "气绝", "昏迷", "失去意识", "无生命",
+    "仰卧", "仰面躺", "倒地不起", "没入水中", "不见踪影",
+)
+
+
+def _char_inert_in_text(name: str, text: str) -> bool:
+    if not name or not text:
+        return False
+    import re as _re_inert
+    for m in _re_inert.finditer(_re_inert.escape(name), text):
+        window = text[max(0, m.start() - 12):m.end() + 24]
+        if any(w in window for w in _INERT_SPLIT_WORDS):
+            return True
+    return False
+
+
 def differentiate_split_visuals(orig: dict, new_shot: dict, part_i: int) -> None:
     """就地差异化子镜的 prompt/ff_desc/lf_desc（两个拆镜器共用）.
 
@@ -100,7 +117,16 @@ def differentiate_split_visuals(orig: dict, new_shot: dict, part_i: int) -> None
     # 切的是后半段、无前缀——08-29 实测「画面聚焦（说话神情）」空名根因）
     speaker = (extract_speaker(orig.get("narration_segment", ""), char_names)
                or extract_speaker(new_shot.get("narration_segment", ""), char_names))
-    listener = next((n for n in char_names if n and n != speaker), "")
+    _combined_text = " ".join(filter(None, [
+        str(orig.get("ff_desc") or ""), str(orig.get("lf_desc") or ""),
+        str(orig.get("motion_desc") or ""), str(orig.get("prompt") or ""),
+        str(new_shot.get("ff_desc") or ""), str(new_shot.get("lf_desc") or ""),
+    ]))
+    listener = next(
+        (n for n in char_names
+         if n and n != speaker and not _char_inert_in_text(n, _combined_text)),
+        "",
+    )
 
     # ff/lf 先剥运镜短语（必须在 A 景别位移之前——否则 A 会把继承推镜短语里
     # 的景别词错位升级，产出「推至中景…缓推至近景」双指令；也保证幂等：

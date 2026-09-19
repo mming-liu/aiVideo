@@ -78,25 +78,19 @@ class RestrainedEmotionChainConstraint(Constraint):
             motion = str(shot.get("motion_desc", "") or "")
             count = _count_micro_expression_pats(motion)
             if count >= 3:
-                continue  # 已有 ≥3 拍
-            # 幂等：已含模板视为已修
-            if _RESTRICTED_CHAIN_TEMPLATE in motion:
                 continue
-            # 追加到 motion_desc
-            new_motion = (
-                motion.rstrip("。.，,;；") + "。" + _RESTRICTED_CHAIN_TEMPLATE
-                if motion.strip()
-                else _RESTRICTED_CHAIN_TEMPLATE
-            )
-            shot["motion_desc"] = new_motion
-            repairs.append(
-                RepairRecord(
-                    constraint_name=self.name,
-                    shot_index=shot.get("index") if not is_hook else None,
-                    action="append",
-                    target="motion_desc",
-                    before=motion[:60] + ("..." if len(motion) > 60 else ""),
-                    after=new_motion[:60] + ("..." if len(new_motion) > 60 else ""),
-                )
-            )
+            repairs.append(RepairRecord(
+                constraint_name=self.name,
+                shot_index=shot.get("index") if not is_hook else None,
+                action="warn",
+                target="motion_desc",
+                before=motion[:60] + ("..." if len(motion) > 60 else ""),
+                detail=(
+                    "克制情绪镜头微表情拍数不足；保留原文，禁止自动追加"
+                    "“低头隐忍→泪光→苦笑”固定表演模板。"
+                ),
+            ))
         return repairs
+
+
+__all__ = ["RestrainedEmotionChainConstraint"]

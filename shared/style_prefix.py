@@ -1008,35 +1008,15 @@ def _fix_ff_lurk_position(ff_desc: str) -> str:
 
 
 def _fix_ff_weapon_visible(ff_desc: str, motion_desc: str) -> str:
-    """武器 t=0 不可见确定性修复（v6.32，08-12；08-09 钩子坑2 的 post_fix 兜底）.
+    """Legacy semantic repair is intentionally disabled.
 
-    校验项（validation._check_ff_motion_timeline）只 WARN 不修。这里在生成源头兜底：
-    ff 含武器词 + 隐藏态词（未出水/未出鞘），motion 又有刺入/挥砍动作，且 motion
-    首段也未建立「举刀出水面」可见起点 → 把 ff 的「未出水/未出鞘」改为「刀尖/刀锋
-    微露水面，寒光一点」（规则48 方案1：水下黑影 + 一截刀尖微露水面），保证 t=0
-    武器有可见起点，视频模型不至于「凭空变」出武器。
-
-    幂等：产物「微露水面」在 WEAPON_VISIBLE_WORDS 里，二次调用早退。
-    只改隐藏态描述，不删句不挪词；条件不满足时原样返回。
+    Changing an explicitly hidden weapon into a visible blade tip fabricates a
+    visual fact that the source description does not establish.  Keep this
+    compatibility entry point as a no-op so older callers remain import-safe;
+    validation reports the timeline conflict and the semantic repair is left to
+    the LLM repair round.
     """
-    if not ff_desc or not motion_desc:
-        return ff_desc
-    if not any(w in ff_desc for w in WEAPON_WORDS):
-        return ff_desc
-    if not any(v in motion_desc for v in WEAPON_STAB_VERBS):
-        return ff_desc
-    if not any(w in ff_desc for w in WEAPON_HIDDEN_WORDS):
-        return ff_desc
-    if any(w in ff_desc for w in WEAPON_VISIBLE_WORDS):
-        return ff_desc  # 已可见（含规则48 方案1 的「微露水面」）
-    # motion 首段若已建立武器可见起点（破水而出 + 举刀/出水），视频模型有武器轨迹，无需改 ff
-    first_seg = motion_desc.split("；")[0]
-    if any(k in first_seg for k in ("出水", "破水", "举刀", "挥出")) or \
-            any(v in first_seg for v in WEAPON_VISIBLE_WORDS):
-        return ff_desc
-    out = (ff_desc.replace("未出水", "刀尖微露水面，寒光一点")
-                 .replace("未出鞘", "刀锋微露，寒光一点"))
-    return out if out != ff_desc else ff_desc
+    return ff_desc
 
 
 def normalize_ff_desc(ff_desc: str, shot: dict | None = None,
@@ -1056,9 +1036,6 @@ def normalize_ff_desc(ff_desc: str, shot: dict | None = None,
     ff_desc = _fix_ff_grammar(ff_desc)
     # 潜伏威胁站位硬锚：刺客「潜伏水下+望向画X」缺站位 → 补「潜伏于画X水下」
     ff_desc = _fix_ff_lurk_position(ff_desc)
-    # v6.32：武器 t=0 不可见确定性修复（规则48 方案1 兜底；与多动作归一化正交，
-    # 放在 early-return 前，保证隐藏武器镜头也会被处理）
-    ff_desc = _fix_ff_weapon_visible(ff_desc, (shot or {}).get("motion_desc", ""))
     if not detect_ff_multi_action(ff_desc, characters):
         return ff_desc
     text = _strip_ff_time_advance(ff_desc)
@@ -1257,35 +1234,14 @@ def _finalize_lf_clause(clause: str, names: set) -> str:
 
 def normalize_lf_desc(lf_desc: str, shot: dict | None = None,
                       characters=None) -> str:
-    """lf_desc 归一化：中间态表达 → 动作彻底结束的终态（幂等、保守）.
+    """Return ``lf_desc`` unchanged.
 
-    视频模型把 lf_desc 当【视频终点】定格，任何「正在刺/即将刺/半截刀尖露
-    水面/缓缓没入中」都会被定格成诡异画面。本函数把中间态确定性改写为终态。
-
-    v6.29 语义：终态 = 动作已彻底结束（已没入/已刺入/已倒下/水面只剩涟漪），
-    与 ff_desc 的「前一刻」对称（ff 前一刻 静止、lf 已结束 静止）。
+    Rewriting "about to stab" into "already stabbed" (or "falling" into
+    "fallen") invents the action result.  ``detect_lf_midstate`` remains the
+    audit primitive; callers must report the conflict and let the LLM repair
+    round rewrite the frame from the original story evidence.
     """
-    if not lf_desc or not isinstance(lf_desc, str):
-        return lf_desc
-    # 闸门：无中间态则原样返回（幂等保守）
-    if not detect_lf_midstate(lf_desc, characters):
-        return lf_desc
-
-    text = lf_desc
-    for w in LF_STRIP_PREFIXES:
-        text = text.replace(w, "")
-    clauses = _split_ff_clauses(text)
-    names = _subject_names(characters)
-
-    out: list[str] = []
-    for c in clauses:
-        c = _finalize_lf_clause(c, names)
-        if c:
-            out.append(c)
-    joined = "，".join(out).strip("，、。 ")
-    joined = re.sub(r"[，、]{2,}", "，", joined)
-    joined = re.sub(r"\s{2,}", " ", joined)
-    return joined
+    return lf_desc
 
 
 # 朝向强化触发词（与 vimax_bridge._collect_portrait_refs_for_shot 的 subject_view
