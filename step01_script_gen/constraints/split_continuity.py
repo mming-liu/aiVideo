@@ -5,6 +5,7 @@ import copy
 import difflib
 import re
 
+from shared import motion_segments as _ms
 from .base import Constraint
 from .types import RepairRecord, Severity, Violation
 from step01_script_gen.state_updates import (
@@ -13,28 +14,11 @@ from step01_script_gen.state_updates import (
 
 
 def _rebase_motion_times(text: str, offset: float) -> str:
-    if not text or offset <= 0:
-        return text
-    out = []
-    for atom in re.split(r"[;；。]", text):
-        atom = atom.strip()
-        if not atom:
-            continue
-        m = re.search(
-            r"(\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(\d+(?:\.\d+)?)\s*(?:秒|s)?",
-            atom,
-        )
-        if not m:
-            out.append(atom)
-            continue
-        a, b = float(m.group(1)), float(m.group(2))
-        if a < offset - 0.01:
-            out.append(atom)
-            continue
-        body = atom[m.end():].lstrip("：: ").strip()
-        out.append(f"{max(0.0, a - offset):g}-{max(0.1, b - offset):g}秒：{body}")
-    return "；".join(out)
+    """把整段 motion 文本的时间轴平移 -offset（v6.76 起委托统一解析器）.
 
+    实现迁至 `shared.motion_segments.rebase_motion_times`。
+    """
+    return _ms.rebase_motion_times(text, offset)
 
 def _split_clauses(text: str) -> list[str]:
     return [x for x in re.split(r"[，。；、]", text or "") if x.strip()]
@@ -45,12 +29,8 @@ def _split_segments(text: str) -> list[str]:
 
 
 def _match_segment(text: str):
-    return re.match(
-        r"(?P<range>\d+(?:\.\d+)?\s*(?:-|~|至|到)\s*\d+(?:\.\d+)?\s*秒?)"
-        r"\s*[：:]\s*(?P<body>.*)",
-        text or "",
-    )
-
+    """匹配「N-M[秒]：正文」（v6.76 起委托统一解析器）."""
+    return _ms.match_segment(text)
 
 _HEAD_TOKENS = ("抬头", "低头", "仰面")
 _BODY_TOKENS = ("跪坐", "站立", "俯身", "仰卧", "躺", "坐", "直起")

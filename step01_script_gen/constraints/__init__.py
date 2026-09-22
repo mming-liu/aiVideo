@@ -20,6 +20,8 @@ from .kf_timeline_normalize import KfTimelineNormalizeConstraint  # kf 时间线
 from .kf_event_order import KfEventOrderConstraint
 from .split_continuity import SplitContinuityConstraint
 from .motion_time_integrity import MotionTimeIntegrityConstraint
+from .kf_start_time_normalize import KfStartTimeNormalizeConstraint
+from .shot_index_renumber import ShotIndexRenumberConstraint
 from .duplicate_shot_merge import DuplicateShotMergeConstraint  # 相邻镜重复视觉合并（2026-09-12）
 from .char_side_continuity import CharSideContinuityConstraint  # 同地点角色侧翻转交换（2026-09-12）
 from .kf_monotonic import KfMonotonicConstraint  # F1 (v6.43, 08-23)
@@ -100,35 +102,114 @@ from .final_quality_normalizer import FinalQualityNormalizerConstraint  # 链尾
 from .emotion_visualization_repair import EmotionVisualizationRepairConstraint
 from .weapon_state_consistency import WeaponStateConsistencyConstraint
 
-# v6.76（09-19）：删除 3 个**纯重复**注册的 _Final 变体。
-# 判据：只有「基类已降为只报告」的约束，其 _Final 实例才是纯重复——它只是把
-# 同一条只读检测再跑一遍、产出重复告警，不改变任何字段。
-#   - _KfTimeWindowAlignmentFinal（基类 v6.76 降为只报告）
-#   - _KfEventOrderFinal（基类此前已只报告）
-#   - _KfPoseAnchorFinal（基类此前已只报告）
-# 以下 4 个实例**保留**：其基类仍会写 `keyframes[*].desc`，而链尾
-# FrameAnchorRebuildConstraint(:187) 会重建 kf.desc 块、丢掉血锚/姿态锚/群体
-# 在场标记——这些 _Final 正是「重建后再补回」。删掉等于少跑一遍写入，属行为
-# 变更，须与各自基类的降级一并进行（见文档后续阶段）。
-class _GroupActorContinuityFinal(GroupActorContinuityConstraint):
-    """Re-apply crowd continuity after the final keyframe rebuild."""
-    name = "group_actor_continuity_final"
+# v6.76/v6.77（09-19）：**7 个 _Final 重复注册实例已全部删除**。
+#
+# 判据（两步都过才删）：
+#   1. 基类已降为只报告 —— v6.76 删 3 个（kf_time_window_alignment_final /
+#      kf_event_order_final / kf_pose_anchor_final）：只读检测重复跑没有意义。
+#   2. 基类仍是写入者，v6.77 删 4 个（kf_blood_monotonic_final /
+#      kf_blood_monotonic_final2 / group_actor_continuity_final /
+#      frame_text_state_cleanup_final），**理由是顺序依赖，不是「全输入等价」**：
+#
+#      ⚠️ **v6.79 复核（审核发现 6）纠正了本段原措辞**。原注释依据是「造一个
+#      同时触发三个基类的 fixture，逐个摘掉 _Final 跑 run_hard_fix —— 输出
+#      字节级相同」，并把它写成对四个实例的等价证明。那个证明只覆盖该 fixture
+#      的状态，**不构成交换律证明**；中段 `_KfBloodMonotonicFinal` 有确定反例：
+#
+#        `KfBloodMonotonicConstraint` 不只在 kf.desc 补血锚，还会把伤情锚追加到
+#        `lf_desc`；而 `V643PromptEnforcementConstraint._head_fix_context_ok()`
+#        读 `lf_desc` 里的「伤处/暗红/洇痕」决定是否补「仰面朝上双目紧闭，
+#        头颈僵直不侧转」这类**结果态**。两者**不满足交换律**：
+#
+#          旧顺序 blood → v6_43：lf_desc 同时出现伤情锚 + 闭眼/僵直
+#          新顺序 v6_43 → blood：lf_desc 只有伤情锚，没有闭眼/僵直
+#
+#        也就是说，删掉中段 blood 实例**有意**移除了「后加的伤情锚触发 v6_43
+#        补造死亡姿态」这条路径。最终对象明确不相等——这是**有意的语义变更**
+#        （更符合「不要凭伤情虚构死亡姿态」的方向），不是 no-op。
+#        回归见 `tests/step01_script_gen/constraints/test_constraint_order_dependency.py`。
+#
+#      其余三个实例仍按原 fixture 判定为链尾重复，但同样只在该 fixture 状态上
+#      成立；若要证明「基类之后的写入者重新制造缺陷」，需要各自构造触发 fixture。
+#
+# 原注释给出的理由已不成立：
+#   - 「事件顺序定稿后」—— `kf_event_order` 已改为只报告（不再删/补帧）
+#   - 「最终重建后补回」—— `frame_anchor_rebuild._replace_anchor` 只替换
+#     `【角色锚定】` 标记块，标记外的血锚尾部会保留
+#
+# 详见 docs/step01-temporal-writers-audit-2026-09-19.md 与
+# docs/step01-temporal-writers-implementation-review-2026-09-19.md 发现 6。
 
-class _KfBloodMonotonicFinal2(KfBloodMonotonicConstraint):
-    """Restore blood continuity after the final keyframe rebuild."""
-    name = "kf_blood_monotonic_final2"
-
-class _FrameTextStateCleanupFinal(FrameTextStateCleanupConstraint):
-    """Clean stale frame prose after every anchor/layout writer."""
-    name = "frame_text_state_cleanup_final"
-
-
-class _KfBloodMonotonicFinal(KfBloodMonotonicConstraint):
-    """Restore blood continuity after event-order selection."""
-    name = "kf_blood_monotonic_final"
-
+# ===========================================================================
+# v6.84（二次审核发现 2）：约束链的**显式三阶段**
+#
+# 原实现是一条混合链：文本归一、语义改写、时间派生和只读审计混在一起，靠人工
+# 排序维持。屏障（`shared/semantic_barrier.py`）能**发现**越权写入，却不能自动
+# 把写入者搬到正确阶段——本次重跑实测 `v6_43_prompt_enforcement`（第 39 位）与
+# `prompt_sanitize`（第 46 位）都在 KF 审计（第 8 位起）之后改 `motion_desc`，
+# 屏障正确地报了 blocking，但链路本身仍然是错的。
+#
+# 三段语义：
+#   ① `PRE_TEMPORAL_NORMALIZE`：文本消毒、对象别名/尺寸归一、确有必要的结构改写。
+#      所有会写 `motion_desc` / 时长的确定性约束都必须在这里跑完。
+#   ② `TEMPORAL_DERIVE`：唯一一次 duration / timecode / KF 时间派生
+#      （在 `timecode._compute_timecodes` / `write_timeline_from_durations`，
+#      不在本链内）。
+#   ③ `POST_TEMPORAL_AUDIT`：只读检查；运行时断言语义 payload 零写入。
+#
+# `TEMPORAL_DERIVE_START` 是 ①/③ 的分界名字——`semantic_barrier` 直接引用它，
+# 不再各自维护一份「审计段起点」。分界之后的约束**不得**写
+# `duration` / `duration_sec` / `motion_desc` / `keyframes[*].t_sec`。
+# ===========================================================================
+PRE_TEMPORAL_NORMALIZE = "pre_temporal_normalize"
+TEMPORAL_DERIVE = "temporal_derive"
+POST_TEMPORAL_AUDIT = "post_temporal_audit"
+# ①/③ 分界：此约束**及其之后**属审计段。
+# 定义在 `shared.semantic_barrier`（屏障要用它判断写入发生在哪一段），这里
+# **引用同一份**而不是各写一个字面量——两个名字指向两个值正是这类守卫失效的常见形态。
+from shared.semantic_barrier import AUDIT_SEGMENT_START as TEMPORAL_DERIVE_START  # noqa: E402
+# 分界之后禁止写入的时间字段（与 `shared.semantic_barrier.SHOT_TIME_FIELDS` 同源）
+POST_AUDIT_LOCKED_WRITERS: tuple = ()
 
 ALL_CONSTRAINTS.extend([
+    # ===== ① PRE_TEMPORAL_NORMALIZE：所有时间字段写入者必须在这里跑完 =====
+    # v6.84（发现 2）：两个「靠后注册却在写 motion_desc」的约束前移到这里。
+    #   `prompt_sanitize`：清（画中X）/（AI生成）等噪声——纯文本消毒，本属第 1 段。
+    #   `v6_43_prompt_enforcement`：船体尺寸扩写/头部定态/抽象方位具象化会改
+    #     `motion_desc`，必须在 KF/事件表生成之前完成。
+    # v6.84（09-21 用户决定）：**第一位**——模型自造的半整数 index（9.5/10.5）
+    # 会让下游按「拆镜子镜」处理它们。先归一成 1..N 连续整数，
+    # 后面所有约束（含结构插入类）都按干净 index 组织。
+    ShotIndexRenumberConstraint(),
+    PromptSanitizeConstraint(),   # J4 prompt 消毒（v6.51, 09-02）
+    V643PromptEnforcementConstraint(),  # v6.43 prompt 强化（v6.84 起前置于时间派生之前）
+    # v6.84（09-21 重跑发现）：`group_actor_continuity` 会写 `motion_desc`
+    # （恢复群体动作主体），注册位置却在审计段之后 → 实测第二条
+    # `time_field_audit_write` 就是它（`shot 11.motion_desc`）。同步前移到第 1 段。
+    #
+    # 静态检查漏掉它的原因：它用 `shot[field] = fixed` 这种**变量下标**写入，
+    # 按字面量匹配的防腐测试看不见——所以那条检查也一并加宽（见
+    # `tests/shared/test_semantic_barrier.py::test_late_constraints_are_report_only`）。
+    GroupActorContinuityConstraint(),  # 恢复群体主体并同步关键帧在场状态
+    # v6.84：`emotion_visualization_repair` 的 `shot[field] = fixed` 走的字段表
+    # 含 `motion_desc`——同样是**审计段里的时间字段写入者**（只是本片数据还没
+    # 触发）。加宽的静态检查抓到它，一并前移。
+    EmotionVisualizationRepairConstraint(),  # 最终模型可见字段情绪可视化门
+    # v6.94（2026-09-22 21:32 实测）：`prompt_repetition` 的字段表
+    # `fields = ("prompt", "ff_desc", "lf_desc", "motion_desc")` 含 `motion_desc`，
+    # 而写入是 `for fld in self.fields: shot[fld] = new_v`——**变量下标**。
+    # 注册位置在审计段之后 → 真实运行报出第三条 `time_field_audit_write`
+    # （`shot 14.motion_desc`）。
+    #
+    # 静态防腐测试漏掉它的原因：那条检查只匹配 `for <var> in (<字面量元组>)`，
+    # 而这里迭代的是**类属性** `self.fields`。检查已一并加宽到能解析类属性/模块常量
+    # （见 `tests/shared/test_semantic_barrier.py`）。它是纯文本去重（复读机/名字连跑/
+    # 修复指令回显），本属第 1 段。
+    PromptRepetitionConstraint(),
+    # v6.94（09-22）：加宽后的**静态防腐检查**当场抓到同类第二个——`boat_width`
+    # 的字段表同为 `("prompt", "ff_desc", "lf_desc", "motion_desc")`、写入同为
+    # `shot[fld] = new_var`，注册位置也在审计段（本片数据未触发，属潜在写入者）。
+    BoatWidthConstraint(),
     # Phase 2
     InjuryContinuityConstraint(),
     GazeDirectionConstraint(),
@@ -139,17 +220,18 @@ ALL_CONSTRAINTS.extend([
     # Phase 3
     MotionTimeIntegrityConstraint(),  # 先修非法时间段，再进入拆镜/关键帧链
     SplitContinuityConstraint(),  # 先修拆分边界，再生成/校正关键帧
+    # v6.84（09-21 重跑发现）：钩子首个 KF 稳定写成 t_sec=0.0，钩子门重生 2 次都
+    # 改不掉——按规则 16.4「kf 时刻 = 时段中点」在第 1 段确定性归一。
+    KfStartTimeNormalizeConstraint(),
     KfTimeWindowAlignmentConstraint(),
     KfTimelineNormalizeConstraint(),  # kf 时间线归一：同刻重排/越界钳制/标签错位/hold帧回归（2026-09-12）
     KfTSecBoundsConstraint(),
     KfMonotonicConstraint(),
     KfEventOrderConstraint(),  # 只报告：核对事件时刻/阶段（v6.76 起不再删同段重复帧）
-    _KfBloodMonotonicFinal(),  # 保留：事件顺序定稿后恢复 kf/LF 血状态单调（基类仍写 desc）
 
     # Phase 4
     AxisJumpConstraint(),  # G HARD
     BoatCropConstraint(),
-    BoatWidthConstraint(),
     BridgeWordsConstraint(),
     CameraVarietyConstraint(),
     IdentityUnificationConstraint(),  # 别名/群演占位必须先于锚点与 char_layout 消费
@@ -172,18 +254,15 @@ ALL_CONSTRAINTS.extend([
     # 约束（bridge_words / transition_keywords / prompt_repetition）之后
     # 执行，否则「（AI生成）」会被推挤到 prompt 中段。
     TransitionKeywordsConstraint(),
-    PromptRepetitionConstraint(),
     RuntimeExtendConstraint(),  # HARD
     ThreatGazeCouplingConstraint(),
     PlatformComplianceConstraint(),
-    V643PromptEnforcementConstraint(),  # v6.43 prompt 强化（早执行，独立于 LLM）
     KfWeakTemplateConstraint(),  # W16 kf弱模板占位（v6.45, 08-26）
     CameraMovementFillConstraint(),  # J3 运镜缺失补填（v6.47, 08-27）
     FrameTextStateCleanupConstraint(),  # 再清理首尾帧里无标记的旧状态分句
     FrameAnchorRebuildConstraint(),  # 先重建锚块，再让血状态单调约束补回锚
     KfBloodMonotonicConstraint(),  # F2 kf 血状态单调（v6.49, 08-28）
     FfMotionOverlapConstraint(),  # F3 ff_desc 动作重叠（v6.49, 08-28）
-    PromptSanitizeConstraint(),   # J4 prompt 消毒：清理（画中X）/（AI生成）等噪声（v6.51, 09-02）
     PropPromptConsistencyConstraint(),  # L2 道具名一致性：别名→标准名（v6.51, 09-02）
     CrossShotContinuityConstraint(),   # K2 跨镜衔接：场景转场+状态跳变检测（v6.51, 09-02）
     FfLfRedundancyConstraint(),        # K3 三态冗余：FF/LF/Motion 内容重复检测（v6.51, 09-02）
@@ -222,12 +301,7 @@ ALL_CONSTRAINTS.extend([
     CharSideContinuityConstraint(),   # 同地点连续镜角色侧翻转交换
     DurationBudgetConstraint(),  # 正片 60-90s：只压缩冗余时长，最低需求仍超限则 BLOCK
     FinalQualityNormalizerConstraint(),  # 链尾最终质量归一
-    EmotionVisualizationRepairConstraint(),  # 最终模型可见字段情绪可视化门
     WeaponStateConsistencyConstraint(),  # 同帧持握/脱手状态最终一致性
-    GroupActorContinuityConstraint(),  # 恢复群体主体并同步关键帧在场状态
-    _GroupActorContinuityFinal(),  # 最终重建后再次同步群体在场状态
-    _KfBloodMonotonicFinal2(),  # 最终重建后恢复血状态单调，避免丢伤处锚
-    _FrameTextStateCleanupFinal(),  # 所有文本写入后清理首尾帧残留状态
 ])
 
 __all__ = [

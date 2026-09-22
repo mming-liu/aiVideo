@@ -13,6 +13,7 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
+from shared import motion_segments as _ms
 from shared.model_caps import active_video_duration_cap, active_video_model
 from shared.paths import chapter_dir
 from shared.tee_logger import get_logger
@@ -31,13 +32,35 @@ PAUSE_PER_SHOT = 1.5
 MIN_SHOT_DURATION = 3.0
 # 无对白旁白镜固定时长（投影评分与正式 timecode 同源）
 NARRATION_FIXED_DURATION = 4.0
-# 单镜硬上限（08-23 用户规则）：正片单镜时长不长于 8s。
-# 钩子时长另算（不受 8s 限制，见 _compute_timecodes hook 段）。
-MAX_SHOT_DURATION = 8.0
+# 单镜硬上限（**项目编辑规则**，与视频模型能力取严：`min(model_cap, 本值)`）。
+#
+# v6.93（用户决定，2026-09-22）：8.0 → **15.0**。
+# 依据：当前视频模型（`wan2.7-t2v-*`）的项目注册 cap 就是 15s，8s 是 2026-08-23 的
+# 编辑规则。实测本章台词需求 9.8 / 12.5 / 14.7 / 20.2s——放宽后只剩 20.2 那条需要
+# 拆镜，且 89 字那句从「切 4 镜」降到「切 2 镜」，成片节奏实质改善。
+# 仍与模型取严：换成 cap 更小的模型（如 Seedance 1.0 = 12s）时自动跟随。
+# 钩子时长另算（见 _compute_timecodes hook 段）。
+MAX_SHOT_DURATION = 15.0
 # 正片分镜总时长硬下限（08-23 用户规则）：不含钩子 ≥ 60s。
 # 实际拉伸动作在 constraints/runtime_extend.py（W6，目标 65s 留裕度），
 # 此处仅用于日志告警。钩子时长另算，不计入该下限。
 MIN_TOTAL_SHOTS_DURATION = 60.0
+
+
+def active_shot_cap() -> float:
+    """**生效单镜上限** = `min(视频模型能力, 项目 MAX_SHOT_DURATION)`——全仓唯一源.
+
+    v6.97（2026-09-22）：此前有 7 处各算各的，其中 3 处**写死 8.0**（把项目值从 8
+    改成 15 时漏改）。最要命的是 `duration_budget._SHOT_CAP`——它按 8s 报
+    `Severity.HARD`「必须拆镜」，把 8-12s 的**合法**镜头判成超载，顶起 `_has_hard`。
+
+    模型参数限制必须跟着模型走（CLAUDE.md），所以只留这一份实现。
+    """
+    try:
+        cap = float(active_video_duration_cap())
+    except (TypeError, ValueError):
+        cap = 0.0
+    return MAX_SHOT_DURATION if cap <= 0 else min(cap, MAX_SHOT_DURATION)
 
 
 def _estimate_duration(text: str) -> float:
@@ -91,52 +114,33 @@ _SPLIT_DELIMS_PRIORITY = ("。", "？", "！", "…", "，")
 
 
 def _rewrite_motion_time(atom: str, new_a: float, new_b: float) -> str:
-    """Rebase one motion atom onto local time for the right split half."""
-    import re as _re_motion
-    body = atom
-    m = _re_motion.search(
-        r"^\s*(\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(\d+(?:\.\d+)?)\s*(?:秒|s)?\s*[:：]?\s*",
-        atom,
-    )
-    if m:
-        body = atom[m.end():].strip()
-    else:
-        m = _re_motion.search(r"^\s*(?:前|后)\s*\d+(?:\.\d+)?\s*秒\s*[:：]?\s*", atom)
-        if m:
-            body = atom[m.end():].strip()
-    return f"{new_a:g}-{new_b:g}秒：{body}" if body else ""
+    """把一个 motion 原子段重写到本地时间轴（拆镜用）.
 
+    v6.76：剥标签与时间格式化统一走 `shared.motion_segments`。原先用
+    `f"{new_a:g}"` 输出 6 位有效数字，`cut_t=1.621622` 这类小数会写出
+    「0-0.378378秒」残缺文本；`fmt_time` 统一截 2 位小数。
+    """
+    body = _ms.strip_time_label(atom)
+    if not body:
+        return ""
+    return f"{_ms.fmt_time(new_a)}-{_ms.fmt_time(new_b)}秒：{body}"
 
 def _split_motion_desc_at_cut(motion: str, cut_t: float, total_sec: float) -> tuple[str, str]:
-    """Split explicit motion time segments into before/after local-time halves."""
+    """把显式 motion 时段按 cut_t 切成左/右两半（各自本地时间轴）.
+
+    v6.76：解析改走 `shared.motion_segments.atom_range`（与全仓同一套正则，
+    分隔符集为并集、支持小数）。切分语义不变：跨越切点的原子段只写右半
+    （本地时间从 0 起），左半不留内容——由调用方决定父镜如何回退。
+    """
     if not motion:
         return "", ""
-    import re as _re_motion
     left: list[str] = []
     right: list[str] = []
-    for atom in _re_motion.split(r"[;；。]", motion):
-        atom = atom.strip()
-        if not atom:
+    for atom in _ms.atoms(motion):
+        rng = _ms.atom_range(atom, total_sec)
+        if rng is None:
             continue
-        a = b = None
-        m = _re_motion.search(
-            r"(\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(\d+(?:\.\d+)?)\s*(?:秒|s)?",
-            atom,
-        )
-        if m:
-            a, b = float(m.group(1)), float(m.group(2))
-        else:
-            m = _re_motion.search(r"前\s*(\d+(?:\.\d+)?)\s*秒", atom)
-            if m:
-                a, b = 0.0, float(m.group(1))
-            else:
-                m = _re_motion.search(r"后\s*(\d+(?:\.\d+)?)\s*秒", atom)
-                if m:
-                    a, b = max(0.0, float(total_sec) - float(m.group(1))), float(total_sec)
-        if a is None or b is None:
-            continue
-        if a > b:
-            a, b = b, a
+        a, b = rng
         if b <= cut_t + 0.01:
             left.append(atom)
         elif a >= cut_t - 0.01:
@@ -144,13 +148,11 @@ def _split_motion_desc_at_cut(motion: str, cut_t: float, total_sec: float) -> tu
             if shifted:
                 right.append(shifted)
         else:
-            # Segment crosses the cut: the right half continues it from local
-            # zero; do not leave the original global timestamp in shot_b.
+            # 跨切点：本段在右半从本地 0 续起
             shifted = _rewrite_motion_time(atom, 0.0, max(0.1, b - cut_t))
             if shifted:
                 right.append(shifted)
     return "；".join(left), "；".join(right)
-
 
 def _find_best_split_point(text: str) -> int:
     """在 text 中找最接近中点的优先级切点.
@@ -175,6 +177,50 @@ def _find_best_split_point(text: str) -> int:
         if best[0] >= 0:
             return best[0]
     return -1
+
+
+def _event_boundary_cut(shot: dict, split_at: int, text: str, dur: float):
+    """在 `temporal_plan` 的事件边界里挑物理切点；无可用边界 → None.
+
+    v6.77（第三阶段）：把切点从「旁白字符比例 × 原时长」改为**事件边界**。
+    字符位置与事件时刻本无关系——实测 `cut_t = 1.621622` 而 motion 分段落在
+    2/4/5 秒，两者互不对齐，导致子镜 KF 归属错位（时间错配的根因）。
+
+    旁白切点比例**只用来给候选边界排序**（取最接近的那个），不直接当时刻。
+
+    v6.79（09-20，决定 1）**只接受确定性派生的边界**：`source == "llm"` 的
+    事件表在本轮迁移验收完成前**不得驱动结构写入**。LLM 事件表进入
+    `validate_events` 的严格校验（整镜覆盖 / 原文出处 / 与 motion 一致）之后，
+    仍然只是「候选事实源」——它可能整段虚构却恰好结构合法，而拆镜会据此
+    永久改变镜头结构。迁移期它只参与审计与一致性统计（`_check_temporal_plan`）。
+    验收口径见 docs/step01-temporal-writers-audit-2026-09-19.md 决定 1：
+    每个 provider 抽样 ≥100 镜，首轮结构合格率 ≥95%、一次 regen 后 100%。
+
+    Returns:
+        内部边界的秒数；无 `temporal_plan` / 无内部边界 / 仅有 LLM 事件表 → None
+    """
+    from shared.motion_segments import derive_temporal_plan
+
+    if dur <= 0:
+        return None
+    plan = derive_temporal_plan(shot)
+    if not plan or plan.get("source") != "derived":
+        if plan and plan.get("source") == "llm":
+            _log().warn(
+                f"[SPLIT-BLOCKED] 镜头 {shot.get('index')} 只有 LLM 直出 temporal_plan，"
+                "迁移验收完成前不用于拆镜切点（只参与审计统计）；"
+                "需由上游完整 regen 生成带显式时段的 motion_desc 或多个完整子镜"
+            )
+        return None
+    bounds = sorted(
+        {round(ev["start_sec"], 3) for ev in plan["events"]}
+        | {round(ev["end_sec"], 3) for ev in plan["events"]}
+    )
+    interior = [b for b in bounds if 0.05 < b < dur - 0.05]
+    if not interior:
+        return None
+    target = dur * (split_at / max(len(text), 1))
+    return min(interior, key=lambda b: (abs(b - target), b))
 
 
 def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
@@ -238,9 +284,20 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
         # 之前直接清空导致拆分镜无 kf、纯靠 ff/lf 端点驱动，视频漂。
         orig_kfs = shot.get("keyframes") or []
         orig_dur = float(shot.get("duration_sec") or 0)
-        # 切点时间 = 按文本长度比例估算（narration 拆分的近似值）
-        split_ratio = split_at / max(len(text), 1)
-        cut_t = orig_dur * split_ratio
+        # v6.77（第三阶段）：切点取 **temporal_plan 事件边界**，不再用字符比例。
+        cut_t = _event_boundary_cut(shot, split_at, text, orig_dur)
+        if cut_t is None:
+            # 无合法事件边界 → **不拆**（原实现会退化到「只要左段 ≤ cap」硬切，
+            # 切点与事件无关 → KF 归属错位）。正确解法是让 LLM 把该镜重写成
+            # 结构更清晰的多事件镜头；此处只做可观测上报，交上游 regen。
+            _log().warn(
+                f"[SPLIT-BLOCKED] 镜头 {shot.get('index')} 旁白估时 {estimated:.1f}s > "
+                f"{shot_cap:.1f}s 需拆分，但其 temporal_plan 无可用事件边界"
+                "（motion_desc 无时段标记、或只有一个事件）——保留原镜不拆，"
+                "需 LLM 重写为多事件镜头"
+            )
+            i += 1
+            continue
         new_kfs_with_idx: list[tuple[int, dict]] = []
         if orig_kfs and orig_dur > 0:
             for orig_idx, kf in enumerate(orig_kfs):
@@ -265,26 +322,13 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
         # Split explicit motion segments too; never copy the whole motion_desc
         # into both halves.  If no explicit segment survives, leave a short
         # continuation description rather than duplicating the original action.
+        # v6.77：切点在事件边界上，故两侧各自持有本侧的事件段文本。
+        # **不再**在任一侧为空时伪造「从首帧推进到切分状态，完成：<lf_desc>」
+        # ——那是把首尾帧描述冒充动作过程。真的为空就让它为空并交由检查器上报。
         motion_left, motion_right = _split_motion_desc_at_cut(
             str(shot.get("motion_desc") or ""), cut_t, orig_dur)
-        if motion_left or motion_right:
-            shot["motion_desc"] = motion_left or (
-                "从首帧推进到切分状态，完成："
-                + str(shot.get("lf_desc") or shot.get("ff_desc") or "").strip()
-            )
-            shot_b["motion_desc"] = motion_right or (
-                "承接首帧状态，完成："
-                + str(shot_b.get("lf_desc") or shot_b.get("ff_desc") or "").strip()
-            )
-        else:
-            shot["motion_desc"] = (
-                "从首帧推进到切分状态，完成："
-                + str(shot.get("lf_desc") or shot.get("ff_desc") or "").strip()
-            )
-            shot_b["motion_desc"] = (
-                "承接首帧状态，完成："
-                + (str(shot_b.get("lf_desc") or shot_b.get("ff_desc") or "").strip())
-            )
+        shot["motion_desc"] = motion_left
+        shot_b["motion_desc"] = motion_right
         # v6.57+ frame_layouts.kfs 同步截取（与 keyframes 一一对应）
         # B9 修复（2026-09-03）：
         #   1. new_kfs 为空时也必须显式清空 _fl_b["kfs"]，否则 deepcopy 残留
@@ -364,15 +408,8 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
                             shot_b[_fld] = _t.rstrip("。") + f"。{_IAT}"
         except Exception:
             pass
-        # 2026-09-12 根因修复：本拆镜器此前漏接 v6.50 视觉差异化（另一处拆镜器
-        # 已接）——shot_b.ff=原lf / shot_b.lf=原lf 深拷贝 → ff==lf 必现，且与
-        # 前镜 lf 相同 → 相邻镜 0.94 重复（12/12.5 复盘实测）。按后半镜差异化
-        # 对齐另一拆镜器口径。
-        try:
-            from step01_script_gen.split_visuals import differentiate_split_visuals
-            differentiate_split_visuals(shot, shot_b, part_i=1)
-        except Exception:
-            pass
+        # v6.77：删除重复的差异化调用——此前同一函数内被调了两次
+        # （2026-09-12 追加时漏看上方已有），纯重复执行。
         # 2026-09-12 根因修复：拆分后验证——后镜必须提供**新增视觉信息**，否则
         # 回滚不拆。判定（相邻重复不变量，12/12.5 复盘：0.94 重复镜占 12.8s）：
         #   a) 后镜自身非静态：jaccard(b.ff, b.lf) < 0.85
@@ -473,46 +510,15 @@ def _find_split_point_within_cap(text: str, cap: float) -> int:
 
 
 def _extract_motion_duration(motion_desc: str) -> float | None:
-    """从 motion_desc 中提取时间分段，计算实际时长。
+    """从 motion_desc 推算实际时长（v6.76 起委托统一解析器）.
 
-    解析格式如：
-    - "前3秒：推镜过程；后3秒：镜头稳定" -> 6秒
-    - "前2秒：开场；中间3秒：动作；后2秒：收尾" -> 7秒
-    - "0-2秒：A动作；2-4秒：B动作" -> 4秒
+    实现迁至 `shared.motion_segments.extract_total_duration`。并集法取最大：
+    「前N秒」+「后M秒」求和 / 「N-M秒」取最大终点 / 「共N秒」显式声明。
 
-    Returns:
-        计算出的总时长（秒），解析失败返回 None
+    统一后分隔符集扩为并集（新增全角 `～`）——实测 `2～4秒：挥下` 原先返回
+    None（正则漏了全角波浪号），会让 timecode 把该镜时长算回默认值。
     """
-    if not motion_desc:
-        return None
-
-    # 匹配 "前X秒"/"后X秒" 或 "X-Y秒" 格式。
-    # 支持混合格式（"前2秒：A；2-4秒：B；后1秒：C"），用并集法取最大值，
-    # 避免单格式正则漏掉后段区间（code-audit 08-01 #8 的防重复累加由取 max 替代）。
-    # 格式1: "前N秒：...；后M秒：..."
-    m1 = re.findall(r'前(\d+(?:\.\d+)?)秒', motion_desc)
-    m2 = re.findall(r'后(\d+(?:\.\d+)?)秒', motion_desc)
-    pre_post = sum(float(x) for x in m1) + sum(float(x) for x in m2)
-
-    # 格式2: "X-Y秒：..." (范围格式，取所有区间终点)
-    # 09-19：`秒` 必须可选，和 quality_issues._action_time_issues 同口径。
-    # 真实产物「4-6望星空」曾在这里漏掉末段，导致 timecode 重算回 4 秒。
-    m3 = re.findall(
-        r'(\d+(?:\.\d+)?)\s*[-–~至到]\s*(\d+(?:\.\d+)?)\s*(?:秒|s)?',
-        motion_desc,
-    )
-    ranges = [float(end) for start, end in m3 if float(end) > float(start)]
-    range_max = max(ranges) if ranges else 0.0
-
-    # 格式3: 末尾总时长说明 "共N秒" 或 "时长N秒"
-    match = re.search(r'(?:共|时长|总)\s*(\d+(?:\.\d+)?)\s*秒', motion_desc)
-    explicit = float(match.group(1)) if match else 0.0
-
-    # 取所有能确定时长的来源的最大值（并集），防止漏段
-    candidates = [pre_post, range_max, explicit]
-    positives = [c for c in candidates if c > 0]
-    return max(positives) if positives else None
-
+    return _ms.extract_total_duration(motion_desc)
 
 def _align_frame_duration(raw: float, fps: float) -> float:
     """时长对齐整数帧 + 输出 ≤3 位小数（08-23 用户要求 duration 保留 2-3 位小数）.
@@ -708,7 +714,118 @@ def timeline_consistency_errors(script: dict) -> list[str]:
     return errors
 
 
-def _compute_timecodes(script: dict, *, allow_split: bool = True) -> None:
+def max_kf_t_sec(shot: dict) -> float:
+    """该镜 `keyframes[].t_sec` 的**最大合法值**（无有效帧 → 0.0）.
+
+    「帧写在哪个物理时刻，镜头就必须长到能拍到它」——钩子（`derive_hook_duration`）
+    与单镜定向拆分的子镜都用这一条，故抽出来共用。
+    """
+    out = 0.0
+    for kf in (shot.get("keyframes") or []):
+        if not isinstance(kf, dict):
+            continue
+        try:
+            t = float(kf.get("t_sec"))
+        except (TypeError, ValueError):
+            continue
+        if t > out:
+            out = t
+    return out
+
+
+def derive_hook_duration(hook: dict, fps: float = 24.0) -> float:
+    """钩子的**权威时长**：`max(motion 分段, LLM duration, 台词估时, KF 最大 t_sec)`，
+    下限 `MIN_SHOT_DURATION`，按 fps 对齐整数帧；无法推导 → 0.
+
+    v6.87：把 **KF 最大 `t_sec`** 也纳入候选——关键帧写在哪个物理时刻，镜头就必须
+    长到能拍到它（实测缺这一项导致钩子 3.0s 而 KF 到 7.2s，2 条 HARD）。
+
+    v6.84（二次审核发现 5）：本函数从 `_compute_timecodes` 的钩子分支抽出，
+    让**钩子质量门**也能在收集 issue 之前先把时长/时间轴定下来。原实现只在
+    `_compute_timecodes` 里算时长，而钩子质量门跑在它**之前**——于是钩子的
+    `t_sec=0` 首帧在质量门里看不见（`duration_sec` 还没派生），一路漏到落盘前
+    的最终时间不变量才暴露，那时已经没有 regen 机会了。
+    """
+    if not isinstance(hook, dict):
+        return 0.0
+    # 1) motion_desc 时间分段（如"前2秒…2-4秒…4-6秒"→6s）优先，动作必须播完
+    motion_duration = (_extract_motion_duration(hook.get("motion_desc", ""))
+                       if hook.get("motion_desc") else None)
+    # 2) LLM 给出的 duration（仅作参考）
+    llm_duration = None
+    raw = hook.get("duration_sec")
+    if raw is None:
+        raw = hook.get("duration")
+    if raw is not None:
+        try:
+            llm_duration = float(raw)
+        except (TypeError, ValueError):
+            llm_duration = None
+    # 3) 对话字数估算（钩子通常是尖叫/对话，留足口型时间）
+    hook_text = hook.get("narration_segment", "")
+    speech_duration = _estimate_duration(hook_text) if hook_text else 0.0
+
+    # 4) **KF 时刻**：关键帧写在哪个物理时刻，镜头就必须长到能拍到它。
+    #
+    # v6.87（2026-09-21 23:19 实测）：原候选只有 (motion 分段, LLM duration, 台词估时)，
+    # 不含 KF —— 于是模型按「约 7.2s 的钩子」写了 KF `t_sec=[2.4, 4.8, 7.2]`，
+    # 而钩子时长被推成 **3.0s**（motion 只写到 3 秒、无台词），落盘产生 2 条
+    # `kf_time_out_of_shot` HARD（「该帧不可能被拍到」）。
+    #
+    # 修法与 `kf_start_time_normalize` 同一原则：**用已经写好的数据推导容器，
+    # 而不是搬动已写内容**（把 KF 挪到 3s 内会破坏模型设计的节拍）。钩子不受
+    # 正片 60-90s 约束，且 7.2s 仍在单镜 8s 上限内。
+    _kf_max = max_kf_t_sec(hook)
+    kf_duration = _kf_max if _kf_max > 0 else None
+
+    candidates = [d for d in (motion_duration, llm_duration, speech_duration, kf_duration)
+                  if d and d > 0]
+    dur = max(candidates) if candidates else MIN_SHOT_DURATION
+    # 下限保护：钩子是开场悬念，至少给足动作时间，禁止 < MIN_SHOT_DURATION
+    dur = max(dur, MIN_SHOT_DURATION)
+    dur = _align_frame_duration(dur, fps or 24.0)
+    # v6.88（2026-09-22 07:11 实测）：**覆盖内容优先于帧对齐**。
+    #
+    # `_align_frame_duration` 会把时长向最近的整数帧取整，方向可能向下：
+    # 4.8s → 4.75s，于是「推导出的时长」把自己那条 KF（t_sec=4.8）挤出镜头，
+    # 落盘产生 `kf_time_out_of_shot`（「该帧不可能被拍到」）。
+    # 上一步已经把 KF 时刻纳入候选，这里必须保证对齐之后**仍然装得下**——
+    # 否则等于修了一半。向上加帧直到覆盖（帧步长 = 1/fps，循环有硬上限）。
+    _fps = float(fps or 24.0)
+    if kf_duration and _fps > 0 and dur < kf_duration - 1e-9:
+        _step = 1.0 / _fps
+        for _ in range(240):
+            dur = round(dur + _step, 6)
+            if dur >= kf_duration - 1e-9:
+                break
+    return dur
+
+
+def sync_hook_timeline(script: dict) -> float:
+    """把钩子的 `duration` / `duration_sec` / `timecode` 派生成一致的一组值.
+
+    钩子不受单镜 8s cap（时长另算），但仍受**模型 cap** 约束。返回钩子时长
+    （0 = 无钩子）。
+    """
+    hook = script.get("hook")
+    if not isinstance(hook, dict):
+        return 0.0
+    fps = float(script.get("fps", 24) or 24)
+    if fps <= 0:
+        fps = 24.0
+    dur = derive_hook_duration(hook, fps)
+    if dur <= 0:
+        return 0.0
+    dur_cap = active_video_duration_cap()
+    if dur_cap and dur > dur_cap:
+        dur = _align_frame_duration(dur_cap, fps)
+    hook["duration"] = round(dur, 2)
+    hook["duration_sec"] = round(dur, 2)
+    hook["timecode"] = {"start": 0.0, "end": round(dur, 2)}
+    return dur
+
+
+def _compute_timecodes(script: dict, *, allow_split: bool = False) -> None:
     """根据 motion_desc 时间分段或对话字数计算每个镜头的 timecode。
 
     v6.6 修复：
@@ -721,11 +838,23 @@ def _compute_timecodes(script: dict, *, allow_split: bool = True) -> None:
     hook_duration..hook_duration+shots_total。但 shots_total（正片分镜总时长）
     用于"60-90s"硬约束检查时**仍只算 shots（不含钩子）**——钩子另算。
 
-    v6.76（2026-09-19）新增 `allow_split`：`False` 时**不执行拆镜 pre-pass**，
-    只重建 timeline。用于定向修复轮——拆镜会深拷贝语义字段、按旁白字符比例
-    重算 KF 时刻，并在接受判定里以新 shot_id（如 11.5）制造 new_blocking，
-    导致整轮回退（见 docs/step01-temporal-writers-audit-2026-09-19.md §5）。
-    需要时由上游完整 regen 重写镜头，而不是在修复轮里就地切分。
+    ## `allow_split`（v6.76 新增，v6.79 默认值反转为 False）
+
+    `True` 时执行拆镜 pre-pass（`_do_pre_split_oversized_shots`）：估时超 cap 的
+    镜头按 narration 切点复制成两个镜头。这个 pre-pass **已移出默认生产路径**
+    （决定 3，见 `docs/step01-temporal-writers-implementation-review-2026-09-19.md`）：
+
+      - 它复制 KF、按文字切 narration、深拷贝语义字段、制造半整数镜头 ID
+        （`index + 0.5`），并把 ff/lf 抄成同一份文本；
+      - 切点用旁白字符位置，与事件时刻无关，导致子镜 KF 归属错位；
+      - 拆出的新 shot_id 对下游是全新身份，审计/修复轮的按镜判定全部要重算。
+
+    正确流程是**在生成 ff/motion/KF/lf 之前**就把超 cap 镜头拆好，或让模型
+    返回两个完整子镜——而不是在 timecode 阶段对已经写好的详细镜头做字段拼接。
+    默认 `False` 时超 cap 只上报（`_oversized` 分支 + gate 侧
+    `quality_issues._shot_duration_issues`），由完整镜头 regen 处理。
+
+    `allow_split=True` 保留给旧数据诊断与迁移测试；新代码不应传入。
     """
     shots = script.get("shots", [])
     if not shots:
@@ -735,27 +864,9 @@ def _compute_timecodes(script: dict, *, allow_split: bool = True) -> None:
     hook = script.get("hook")
     hook_duration = 0.0
     if hook and isinstance(hook, dict):
-        # 1) motion_desc 时间分段（如"前2秒…2-4秒…4-6秒"→6s）优先，动作必须播完
-        motion_duration = _extract_motion_duration(hook.get("motion_desc", "")) if hook.get("motion_desc") else None
-        # 2) LLM 给出的 duration（仅作参考）
-        llm_duration = None
-        raw_duration = hook.get("duration")
-        if raw_duration is not None:
-            try:
-                llm_duration = float(raw_duration)
-            except (TypeError, ValueError):
-                llm_duration = None
-        # 3) 对话字数估算（钩子通常是尖叫/对话，留足口型时间）
-        hook_text = hook.get("narration_segment", "")
-        speech_duration = _estimate_duration(hook_text) if hook_text else 0.0
-
-        candidates = [d for d in (motion_duration, llm_duration, speech_duration) if d and d > 0]
-        if candidates:
-            hook_duration = max(candidates)
-        else:
-            hook_duration = MIN_SHOT_DURATION
-        # 下限保护：钩子是开场悬念，至少给足动作时间，禁止 < MIN_SHOT_DURATION
-        hook_duration = max(hook_duration, MIN_SHOT_DURATION)
+        # v6.84：时长推导抽到 `derive_hook_duration()`——钩子质量门也要用同一份
+        # 实现（发现 5：门跑在时间派生之前，看不见 t_sec=0）。
+        hook_duration = derive_hook_duration(hook, float(script.get("fps", 24) or 24))
 
     # 视频帧率对齐（v6.32，08-12）：时长 × fps 必须是整数帧，否则视频生成
     # 多/少一帧导致卡顿（step01.log 反复报「duration 与 fps=24 不对齐」）。
@@ -776,8 +887,13 @@ def _compute_timecodes(script: dict, *, allow_split: bool = True) -> None:
     # v6.43（08-25）：拆镜 pre-pass——估时 > shot_cap 的 shot 按 narration_segment
     # 句号切为 2 镜，避免 timecode 静默 clamp 截断长对话镜头（违反 v6.43 用户规则）。
     # 放在 fps/dur_cap 推导之后，让 _estimate_duration / 拆分都走同一 shot_cap。
-    # v6.76：allow_split=False（修复轮）时只报数不拆——拆镜是可增删镜头的结构操作，
-    # 修复轮的接受判定会把新 shot_id 当全新身份键 → new_blocking → 整轮回退。
+    #
+    # v6.79（09-20，决定 3）：默认路径**不再拆镜**。拆镜是可增删镜头的结构操作：
+    # 它复制 KF、按旁白字符位置切 narration、深拷贝语义字段、制造半整数镜头 ID。
+    # 超 cap 的正确处置是**先在生成详细视觉字段之前拆好**，或让模型返回两个完整
+    # 子镜；对已经写好的镜头做字段拼接必然产出 ff==lf / KF 归属错位的子镜。
+    # 这里只上报，由完整镜头 regen 处理（gate 侧 blocking 判定见
+    # `quality_issues._shot_duration_issues`）。
     if allow_split:
         _do_pre_split_oversized_shots(shots, shot_cap)
     else:
@@ -790,9 +906,10 @@ def _compute_timecodes(script: dict, *, allow_split: bool = True) -> None:
         ]
         if _oversized:
             _log().warn(
-                f"修复轮禁止拆镜：{len(_oversized)} 个镜头旁白估时 > {shot_cap:.1f}s "
-                f"（index={[s.get('index') for s in _oversized]}）需拆分，"
-                "本次只重建 timeline 不增删镜头；需要拆分请走上游完整 regen"
+                f"[SPLIT-BLOCKED] {len(_oversized)} 个镜头旁白估时 > {shot_cap:.1f}s "
+                f"（index={[s.get('index') for s in _oversized]}）需拆分；"
+                "本阶段不增删镜头（拆镜已在生产路径停用），需由上游完整 regen "
+                "在生成详细视觉字段前完成拆分"
             )
 
     # 钩子按模型 cap + fps 整数帧对齐（与 shots 一致；钩子本身不受 8s cap）

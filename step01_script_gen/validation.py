@@ -29,6 +29,13 @@ from step01_script_gen.climax_words import CLIMAX_WORDS_ARC
 from step01_script_gen.gap_analysis import normalize_core_keywords
 from step01_script_gen.prompt_semantic.registry import COLLECTIVE_NAMES
 from shared.tee_logger import get_logger
+from shared import motion_segments as _ms
+from shared.motion_segments import (
+    TIME_SEG_RE as _KF_TIME_SEG_PATTERN,   # v6.76：解析正则统一到 shared
+    parse_segments,
+    mentions_duration,
+    split_segment_texts,
+)
 from shared.kf_time import (
     get_kf_t_sec, get_kf_stage, set_kf_t_sec, set_kf_stage,
     is_middle_kf, sort_kfs_by_t, stage_to_index,
@@ -2323,7 +2330,6 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
         "反身", "出水", "入水", "破水", "倒纵", "拔", "抽", "抓", "夺",
         "撞", "击", "挥出", "跃起", "跃上",
     )
-    _TIME_SEGMENT_RE = re.compile(r"前\d+秒|后\d+秒|\d+\s*[-–]\s*\d+\s*秒|共\d+秒|时长\d+秒")
 
     def _check_one(shot: dict, label: str):
         ff = shot.get("ff_desc", "").strip() or ""
@@ -2347,13 +2353,13 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
             "瘫坐", "倒地", "倒下", "晕厥", "昏迷", "捂住脸", "捂脸",
             "泪水滑落", "痛哭", "大哭", "抽搐",
         )
-        _TIME_SEG_RE = re.compile(r"前\d+秒|后\d+秒|\d+\s*[-–]\s*\d+\s*秒")
-        if _TIME_SEG_RE.search(motion) and not _is_hook:
+        # v6.77：改用统一解析器（原先本地正则不认小数、分隔符只有 [-–]）
+        _seg_hits = list(_ms.TIME_SEG_RE.finditer(motion))
+        if _seg_hits and not _is_hook:
             # v6.34：状态词在 motion 首个时间段已存在 → 是 t=0 已成立的
             # 先在状态而非动作结果，放行；只有后续时间段才出现的才属「结果被提前」
-            _m1 = _TIME_SEG_RE.search(motion)
-            _m2 = _TIME_SEG_RE.search(motion, _m1.end())
-            _first_text = motion[_m1.start():(_m2.start() if _m2 else len(motion))]
+            _first_text = motion[_seg_hits[0].start():(
+                _seg_hits[1].start() if len(_seg_hits) > 1 else len(motion))]
             polluted = [
                 w for w in _RESULT_STATE_WORDS
                 if w in ff and w in motion and w not in _first_text
@@ -2436,7 +2442,8 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
             return
         # motion 是否有进行态动作
         has_progressive = any(v in motion for v in _MOTION_PROGRESSIVE)
-        has_time_seg = bool(_TIME_SEGMENT_RE.search(motion))
+        # v6.77：统一解析器（含 共N秒/时长N秒 声明；原先本地正则不认小数）
+        has_time_seg = _ms.mentions_duration(motion)
         if not (has_progressive or has_time_seg):
             return
         # 更严格：完成态动作与 motion 里同一动作词族冲突才告警（减少误报）。
@@ -3030,7 +3037,6 @@ _COMBAT_FEEDBACK_TERMS = (
 )
 # 节奏修饰必须带时长分配（三段式），命中下面"裸节奏词"却无时长分段 → 提示
 _COMBAT_RHYTHM_NUDES = ("时间凝滞", "定格", "慢动作", "慢镜头")
-_COMBAT_TIMING_PATTERN = re.compile(r"前?\d+\.?\d*\s*秒|(\d|秒)[-–—](\d|秒)")
 
 
 def _check_combat_action(shots: list[dict]) -> dict:
@@ -3078,7 +3084,9 @@ def _check_combat_action(shots: list[dict]) -> dict:
 
         # 3. 节奏修饰必须带时长分配
         nude_rhythm = [r for r in _COMBAT_RHYTHM_NUDES if r in text]
-        if nude_rhythm and not _COMBAT_TIMING_PATTERN.search(text):
+        # v6.77：统一解析器（TIME_MENTION_RE 覆盖「[前]N秒」；TIME_SEG_RE 覆盖区间）
+        _has_timing = bool(_ms.TIME_MENTION_RE.search(text) or _ms.TIME_SEG_RE.search(text))
+        if nude_rhythm and not _has_timing:
             warnings.append(
                 f"镜头{idx}: 用了「{'/'.join(nude_rhythm)}」但未写时段分配，"
                 f"建议「前X秒：常速；X-X+2秒：定格；剩余：恢复」"
@@ -3752,6 +3760,12 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
     _static_staging = (
         "仰卧", "仰面", "躺", "卧", "跪坐", "跪", "坐", "蹲", "趴", "俯卧",
         "蜷缩", "缩身", "缩在", "后倾", "伏身", "站立", "站", "跃起",
+        # v6.86（用户决定 2026-09-21）：**检查器同义词漏项**——模型把「直立」
+        # 「直立扬手」这类**姿态词**写进 facing 字段，属于 schema 角色错配，不是
+        # 朝向缺失；且画面里没有任何左右方位事实可供确定性推断，报出来也无从修复。
+        # 实测 22:22 重跑 `multi_person_staging` × 5 里 4 条是 `朝向「直立」`
+        # （镜头 10/11/12/13）。子串匹配，故 `直立扬手` 一并豁免。
+        "直立",
         # v6.73: facing is frequently populated with an action/pose phrase by
         # the model.  It is a schema-role mismatch, not a missing direction;
         # demanding 面向/背对/侧身 here created false VisualRisk blockers.
@@ -4332,6 +4346,9 @@ def _run_prompt_checklist(script: dict) -> dict:
     # v6.33 新增：关键帧物理时刻 = motion_desc 时段对齐（08-18 钩子坑：kfs 全堆 post 段、缺 pre 帧）
     results["kf_time_window_alignment"] = _check_kf_time_window_alignment(shots, script.get("hook"))
 
+    # v6.77 新增：结构化事件不变式（事件身份 + 事件边界 + 覆盖/重复采样）
+    results["temporal_plan"] = _check_temporal_plan(shots, script.get("hook"))
+
     # v6.40 新增：kf stage 标签一致性（stage enum + 与 desc 词表匹配 + t_sec 越界）
     results["kf_stage_consistency"] = _check_kf_stage_consistency(shots, script.get("hook"))
 
@@ -4786,72 +4803,15 @@ _KF_POST_KW = (
     "奔远", "远去", "不见踪影", "已被", "被擒",
 )
 def _split_motion_to_seg_texts(motion: str, segs: list, dur: float) -> list[str]:
-    """按段顺序切分 motion_desc 为段文本列表.
+    """按段顺序切分 motion_desc 为段文本列表（v6.76 起委托统一解析器）.
 
-    切分策略：按中文分号/句号分段，匹配每段开头的「前N秒/M-N秒」标签，
-    按段顺序对齐（容忍标签缺失/乱序）。
+    实现迁至 `shared.motion_segments.split_segment_texts`。原先本处的剥标签
+    正则只认整数（不支持小数点），会把 `0-0.378378秒：…` 剥成 `.378378秒：…` 残片
+    （该残片经 kf_time_window_alignment 写进 keyframes[*].desc，实测
+    chapter_001 index 11.5）。统一后解析与剥离共用一套正则，不可能再错配。
     """
-    if not motion or not segs:
-        return []
-    # 切原始文本为原子段（按 ；；；。)
-    raw = re.split(r"[;；。]", motion)
-    raw = [r.strip() for r in raw if r.strip()]
-    # 给每个原子段打段序号（按 _KF_TIME_SEG_PATTERN 匹配到的秒数归到对应段）
-    out: list[str | None] = [None] * len(segs)
-    for atom in raw:
-        m = _KF_TIME_SEG_PATTERN.search(atom)
-        if not m:
-            continue
-        seg_idx = -1
-        if m.group(1) and not m.group(2):
-            # 「前N秒」「后N秒」
-            n = float(m.group(1))
-            kw = atom[m.start():m.end()]
-            if "前" in kw:
-                end = min(float(n), dur)
-                for i, (a, b) in enumerate(segs):
-                    if abs(a - 0.0) < 0.01 and abs(b - end) < 0.01:
-                        seg_idx = i
-                        break
-            else:
-                start = max(0.0, dur - float(n))
-                for i, (a, b) in enumerate(segs):
-                    if abs(a - start) < 0.01 and abs(b - dur) < 0.01:
-                        seg_idx = i
-                        break
-        elif m.group(2) and m.group(3):
-            a_v, b_v = float(m.group(2)), float(m.group(3))
-            if a_v > b_v:
-                a_v, b_v = b_v, a_v
-            for i, (a, b) in enumerate(segs):
-                if abs(a - float(a_v)) < 0.01 and abs(b - float(b_v)) < 0.01:
-                    seg_idx = i
-                    break
-        elif m.group(4) and m.group(5):
-            # v6.62：「2-5:放下酒壶」缺「秒」标签
-            a_v, b_v = float(m.group(4)), float(m.group(5))
-            if a_v > b_v:
-                a_v, b_v = b_v, a_v
-            for i, (a, b) in enumerate(segs):
-                if abs(a - float(a_v)) < 0.01 and abs(b - float(b_v)) < 0.01:
-                    seg_idx = i
-                    break
-        if seg_idx < 0:
-            continue
-        # 去掉时间标签前缀（「前2秒：」「2-4秒：」「2-5放下酒壶」），保留段正文
-        body = re.sub(
-            r"^(?:前|后)\s*\d+\s*秒\s*[:：]"
-            r"|^\d+\s*[-－~～]\s*\d+\s*秒\s*[:：]"
-            r"|^\d+\s*[-－~～]\s*\d+\s*",
-            "",
-            atom,
-        ).strip()
-        if body and out[seg_idx] is None:
-            out[seg_idx] = body
-    # 缺段用空字符串占位（调用方会跳过）
-    return [x or "" for x in out]
 
-
+    return split_segment_texts(motion, segs, dur)
 
 def _extract_scene_prefix(ff_text: str) -> str:
     """从 ff_desc 提取场景前缀.
@@ -5236,6 +5196,41 @@ def _check_frame_weapon_legality(shots: list[dict], hook: dict | None = None,
     return {"pass": True, "issues": issues, "warnings": warnings}
 
 
+def _clause_index_at(text: str, clauses: list, pos: int) -> int | None:
+    """`clauses` 由 `text` 按标点切分而来，返回包含 `text[pos]` 的分句下标."""
+    off = 0
+    for i, c in enumerate(clauses):
+        start = text.find(c, off)
+        if start < 0:  # 理论上不会发生（clauses 来自 text）——退化时回退顺序匹配
+            start = off
+        end = start + len(c)
+        if start <= pos < end:
+            return i
+        off = end
+    return None
+
+
+def _first_literal_occurrence(text: str, word: str,
+                              simile_before: tuple, simile_after: tuple) -> int:
+    """返回 `word` 在 `text` 中**首个非比喻**出现位置；全是比喻时返回 -1.
+
+    「目光如刀」这类比喻/借代里的武器词不是可被握持的实体（2026-09-21 实测被判
+    「无持握主体」HARD）。原实现用 `t.find(hit)` 只看**首个**出现位置：首个是比喻
+    就整词漏判，首个是实体则后面的比喻也无所谓——按出现位置逐个判才对。
+    """
+    start = 0
+    while True:
+        hp = text.find(word, start)
+        if hp < 0:
+            return -1
+        before = text[max(0, hp - 2):hp]
+        after = text[hp + len(word):hp + len(word) + 2]
+        if not any(b in before for b in simile_before) and not any(
+                a in after for a in simile_after):
+            return hp
+        start = hp + len(word)
+
+
 def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
                          characters: list | None = None) -> dict:
     """武器名词必须有持握主体或落点锚（09-13 hook 悬空匕首根因）.
@@ -5260,11 +5255,49 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
     _W_EXTRA = ("短刃", "利刃", "兵刃")  # WEAPON_WORDS 不含「刃」系单作词，本地补充
     _ALL_W = list(_W_WORDS) + list(_W_EXTRA)
     _HOLDER_VERBS = ("握", "持", "拔", "抽", "执", "攥", "拎", "提", "按", "掷", "甩", "接")
+    # v6.84 续（2026-09-21 实测误报）：`挥鞭` / `舞剑` / `举刀` / `横刀` 这类
+    # **动宾复合**写法本身就是持握证据，但「挥/舞/抡/举/擎/横」不在上面的表里，
+    # 于是真实产物镜头 16 的 kf1「张十三挥鞭」被判成「无持握主体」HARD。
+    # 这些动词与武器词绑定很紧（动宾之间几乎不插字），因此**只在武器词±3 字内**
+    # 认账——放宽到整句窗口会让「挥手示意，腰间的刀…」这类无关动词误豁免。
+    _WIELD_VERBS = ("挥", "舞", "抡", "举", "擎", "横", "抄")
+    # 比喻/借代用法不是可被握持的武器实体：「目光如刀」实测被判成悬浮武器 HARD。
+    # 只在武器词**紧邻**位置认比喻（前 1-2 字或后 1-2 字），避免把正常叙述误豁免。
+    _SIMILE_BEFORE = ("如", "似", "若", "像", "宛如", "仿佛", "好似", "犹如")
+    _SIMILE_AFTER = ("般", "似的", "一样")
     # 「已脱手/脱手」是武器释放的明确落点锚：武器已不在人物手中时不需要
     # 再补 holder。09-19 真实产物 hook kf1「匕首已脱手」曾被误报为无主武器。
     _DROP_ANCHORS = ("插在", "刺在", "钉在", "落地", "掉落", "坠入", "没入", "沉入",
                      "置于", "放在", "横在", "脱手", "已脱手", "脱手飞出",
                      "脱手坠地", "滑落水中", "沉入水中")
+    # v6.84（二次审核发现 4）：**关系级**落点判定。
+    #
+    # 原 `_DROP_ANCHORS` 只认「插在/刺在/钉在…」这类固定短语，于是真实产物里
+    # 的「心口插匕首」（插入动词在中间、无「在」）和跨帧延续写法「心口匕首依旧」
+    # 双双漏检——武器明明嵌在伤者身上，却被升级成「悬浮武器」HARD。本次 12 条
+    # hard 里 6 条是这么来的（镜头 6/8）。
+    #
+    # 判据（只有当「武器实体既无 holder、又无落点关系」才报告）：
+    #   A. 身体部位/伤口/衣物部位词 + 插入动词，同在武器词 ±8 字内；
+    #   B. 身体部位词 + 延续词（依旧/仍然/仍…）同在武器词 ±8 字内
+    #      ——「心口匕首依旧」这类省略了插入动词的持续态；
+    # 显式悬浮标记（悬在半空/漂浮…）**覆盖**上面两条：写明了在飘就必须报。
+    _BODY_ANCHORS = ("心口", "胸口", "胸膛", "腹部", "小腹", "背上", "后背", "肩头",
+                     "肩膀", "咽喉", "喉头", "脖颈", "颈侧", "太阳穴", "额头", "眉心",
+                     "手臂", "手腕", "手掌", "大腿", "小腿", "脚踝", "尸身", "尸首",
+                     "身体", "身上", "腰间", "怀中", "袖中")
+    _INSERT_VERBS = ("插着", "插有", "插入", "插进", "插", "嵌着", "嵌入", "嵌",
+                     "没入", "刺入", "扎入", "扎进", "钉入", "留于", "留在")
+    _CONTINUATION = ("依旧", "仍然", "仍是", "依然", "照旧", "如故", "还在", "仍在")
+    # v6.84 续（2026-09-21）：**随身携带位**与「伤者身上的伤口位」不是一回事。
+    # 「腰间/怀中/袖中/背上」这些位置本身就意味着「挂在身上」——不可能悬空挂在
+    # 某人的腰间，所以出现在武器词 ±8 字内即认定有落点，不再要求插入/延续动词。
+    # 「心口/胸口」则相反：可以只是描述伤处附近的武器，必须真有插入或持续态才算，
+    # 否则会把「刀尖抵在心口前」这类**确属悬浮**的写法误豁免。
+    _CARRIED_ANCHORS = ("腰间", "怀中", "袖中", "背上", "后背", "肩头", "肩膀",
+                        "手中", "手里", "掌中")
+    _FLOATING_MARKS = ("悬在半空", "悬浮", "悬于", "悬在", "漂浮", "浮在半空",
+                       "浮在", "飘在", "凭空", "停在半空", "无主")
     issues, warnings = [], []
     checks = [(s, f"镜头{s.get('index')}") for s in shots]
     if hook:
@@ -5307,11 +5340,15 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
             for hit in _ALL_W:
                 if hit not in t:
                     continue
-                hp = t.find(hit)
+                hp = _first_literal_occurrence(t, hit, _SIMILE_BEFORE, _SIMILE_AFTER)
+                if hp < 0:
+                    continue  # 全部出现位置都是比喻/借代 → 不是武器实体，不报
                 win = t[max(0, hp - 6):hp + len(hit) + 8]
                 if any(w in win for w in _W_HIDDEN):
                     continue  # 隐藏武器（未出鞘/藏/潜伏）豁免——本来就不该画出来
-                ci = next((i for i, s in enumerate(clauses) if hit in s), None)
+                # 分句归属必须按**字面出现位置** hp 定位：首个出现位置是比喻时
+                # `hit in s` 会命中比喻那一句，把 holder/落点窗口挪到错的句子。
+                ci = _clause_index_at(t, clauses, hp)
                 seg = clauses[ci] if ci is not None else t
                 if seg in reported_segs:
                     continue
@@ -5323,6 +5360,19 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
                 if any(v in win_text for v in _HOLDER_VERBS) or any(
                         a in win_text for a in _DROP_ANCHORS):
                     continue
+                # 动宾复合（挥鞭/举刀/舞剑）：只在武器词紧邻处认，防无关动词误豁免
+                if any(v in t[max(0, hp - 3):hp] for v in _WIELD_VERBS):
+                    continue
+                # 关系级落点：只看武器词 ±8 字（比 ±1 相邻分句更窄——避免把别处
+                # 提到的「心口」借过来豁免本句的悬浮武器）。显式悬浮标记优先。
+                hit_win = t[max(0, hp - 8):hp + len(hit) + 8]
+                if not any(f in hit_win for f in _FLOATING_MARKS):
+                    if any(c in hit_win for c in _CARRIED_ANCHORS):
+                        continue
+                    _body = any(b in hit_win for b in _BODY_ANCHORS)
+                    if _body and (any(v in hit_win for v in _INSERT_VERBS)
+                                  or any(c in hit_win for c in _CONTINUATION)):
+                        continue
                 issues.append(
                     f"{label} {flabel}: 武器词「{hit}」无持握主体/落点锚（frame_layouts "
                     f"props 空 + 本句±相邻句无握持/落点动词）——图片模型只能画悬浮武器；"
@@ -6467,68 +6517,21 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
 # 个数做最小覆盖率检查。
 # ========================================================================
 
-# 匹配 motion_desc 中的时段标签：
-#   - 「前2秒：…」
-#   - 「2-4秒：…」
-#   - 「2～4秒：…」（全角波浪号）
-#   - 「后2秒：…」（后段）
-# v6.62（09-06）：新增「2-5放下酒壶」（缺「秒」+「：」——09-05 shot2 实测，
-# 标签残缺导致 2-5 秒整段丢失 → 2 个 kf 全判越窗）。组 4/5 是「缺秒」的 M-N
-# 匹配：后随字符禁止数字/小数点/连字符/波浪/「秒/米/个」（排除 5.5米 误判）。
-_KF_TIME_SEG_PATTERN = re.compile(
-    r"(?:前|后)\s*(\d+(?:\.\d+)?)\s*秒|(\d+(?:\.\d+)?)\s*[-－~～]\s*(\d+(?:\.\d+)?)\s*秒"
-    r"|(\d+(?:\.\d+)?)\s*[-－~～]\s*(\d+(?:\.\d+)?)\s*(?![0-9.\-－~～秒米个:])"
-)
 
 
 def _parse_motion_time_segments(motion_desc: str, total_sec: float) -> list[tuple[float, float]]:
-    """从 motion_desc 解析时段列表.
+    """从 motion_desc 解析时段列表（v6.76 起委托统一解析器）.
 
-    返回: [(start_sec, end_sec), ...]
-    - 显式时段（如「2-4秒」）按字面
-    - 「前N秒」按 (0, N)
-    - 「后N秒」按 (total_sec - N, total_sec)
-    - 无显式时段 → 返回空列表（让上层决定是否走全局 kfs 检查）
-    - 显式时段未覆盖到 duration_sec 末尾时，**自动补一个 implicit 段**（last_end, total_sec）
-      —— motion_desc 只写「前2秒/2-4秒」时，剩余 4-duration_sec 归到 implicit post 段
+    实现迁至 `shared.motion_segments.parse_segments`。本调用点特有的语义
+    （其它调用点不需要）：
+      - `implicit_tail=True`：显式时段未覆盖到 duration 末尾时自动补
+        `(last_end, total_sec)` 段（间距 > 0.5s）
+      - `clamp=True`：end 夹到 total_sec
+    统一后分隔符集扩为并集（新增 `至`/`到`/全角 `－`/`～`），与
+    timecode 侧口径一致。
     """
-    if not motion_desc or total_sec <= 0:
-        return []
-    out: list[tuple[float, float]] = []
-    # 按中文分号/句号分段
-    for seg in re.split(r"[;；。]", motion_desc):
-        seg = seg.strip()
-        if not seg:
-            continue
-        m = _KF_TIME_SEG_PATTERN.search(seg)
-        if not m:
-            continue
-        if m.group(1) and not m.group(2):
-            # 「前N秒」或「后N秒」
-            kw = seg[m.start():m.end()]
-            n = float(m.group(1))
-            if "前" in kw:
-                out.append((0.0, min(float(n), total_sec)))
-            else:
-                out.append((max(0.0, total_sec - n), total_sec))
-        elif m.group(4) and m.group(5) and not m.group(2):
-            # v6.62：「2-5:放下酒壶」类缺「秒」标签（组4/5），按 M-N 字面解析
-            a, b = float(m.group(4)), float(m.group(5))
-            if a > b:
-                a, b = b, a
-            out.append((float(a), min(float(b), total_sec)))
-        elif m.group(2) and m.group(3):
-            a, b = float(m.group(2)), float(m.group(3))
-            if a > b:
-                a, b = b, a
-            out.append((float(a), min(float(b), total_sec)))
-    # 自动补 implicit 末尾段（last_end < total_sec 且间距 > 0.5s）
-    if out:
-        last_end = max(b for _, b in out)
-        if last_end + 0.5 < total_sec:
-            out.append((last_end, total_sec))
-    return out
 
+    return parse_segments(motion_desc, total_sec, implicit_tail=True, clamp=True)
 
 def _check_kf_time_window_alignment(shots: list[dict], hook: dict = None) -> dict:
     """v6.33 关键帧物理时刻 = motion_desc 时段铁律检查（warning-only）.
@@ -6663,6 +6666,231 @@ def _check_kf_time_window_alignment(shots: list[dict], hook: dict = None) -> dic
 # ============================================================================
 # v6.40（08-22）新增：kf stage 标签一致性检查
 # ============================================================================
+
+def _check_temporal_plan(shots: list[dict], hook: dict = None) -> dict:
+    """v6.77 结构化事件不变式（warning-only）——第二阶段「唯一时间事实源」的校验面.
+
+    把 `motion_desc` 经 `derive_temporal_plan` 派生成**带事件身份**的事件表
+    （`event_id` / `start_sec` / `end_sec` / `description`），再用事件身份而非
+    「时间窗关键词」检查 KF，四类缺陷各自独立成条：
+
+      1. `kf_outside_events`  错窗帧——KF 的 t_sec 不落在任何事件窗口内
+      2. `event_resampled`    **重复采样**——同一事件窗口内出现**近似重合**的多个
+         KF（时间跨度 < `_RESAMPLE_EPS` × 帧数）
+      3. `event_uncovered`    缺帧——某事件窗口无任何 KF 覆盖
+      4. `event_order_reversed` 时序倒装——KF 按 t 升序后其事件序号回退
+
+    **「一个事件允许多少个 KF」的契约（v6.79，发现 5 定案）**：允许多个。v6.33 的
+    「kf 物理时刻 = motion_desc 时段铁律」只要求 `kf 个数 >= 时段数`，没要求逐个
+    时段恰好一帧；同一时段内的**不同**采样点（如 0-4 秒段内的 t=1.0 与 t=2.0）
+    是合法的一镜内渐变，不是缺陷。因此本检查**不把「同事件」本身叫重复**——
+    只有两帧几乎落在同一时刻（跨度 < `_RESAMPLE_EPS` × 帧数）才算重复采样。
+    原先 docstring 写「≥2 个 KF 即重复」、告警文案写「同段应有且仅有一个定格」，
+    与实现和 `test_distinct_samples_in_one_event_are_not_resampled` 互相矛盾
+    （审核发现 5 指出的三处不一致），现统一到上面这条契约。
+
+    与既有检查的关系（**有意重叠**，不替换）：
+      - 1/3/4 与 `_check_kf_time_window_alignment`、`kf_monotonic` 同源
+      - **2 是独有贡献**：`kf_frame_redundancy` 只看相邻帧的文本相似度、
+        `kf_timeline_normalize` 只看"完全同刻堆叠"，两者都漏掉「同一事件内
+        近似重合但不完全相等」的一对帧（如 0-2 秒段内的 t=1.0 与 t=1.02）——
+        它们描述的是同一瞬间，却因为不字面相等而都留在时间线上。
+
+    只做 warning，不改写任何字段。
+    """
+    from shared.kf_time import get_kf_t_sec
+    from shared.motion_segments import (
+        bare_range_atoms, derive_temporal_plan, event_of, out_of_window_atoms,
+        validate_events,
+    )
+
+    warnings: list[str] = []
+    # blocking 项：证据**可证伪**的缺陷（引文越出本镜原文窗口）。发现 5：
+    # 描述与 motion 段正文「无任何共同内容」只作为 plan 拒绝理由 + 告警——
+    # 它是字符级的**必要判据**，场景名词无法穷举（「镜头固定，水面平静」这类
+    # 纯环境段的残余词会被误判），把它升级成 blocking 会假封正常镜头。
+    # 该表本来就不驱动结构（决定 1：只读），拒绝消费已经足够安全。
+    issues: list[str] = []
+    # 同事件内两帧「近似重合」的判据：**跨度** < 0.05s × 帧数。
+    # 用跨度而非相邻间隔，是为了让夹在中间的一对重复帧也能被判出
+    # （t=[1.0, 1.02, 3.0] 相邻间隔 0.02/1.98，只有跨度能一次抓住）。
+    _RESAMPLE_EPS = 0.05
+
+    def _norm_text(x: str) -> str:
+        import re as _re_g
+        import unicodedata as _ud
+        return "".join(
+            ch for ch in _ud.normalize("NFKC", str(x or ""))
+            if not ch.isspace() and not _re_g.match(r"[^\w]", ch)
+        )
+
+    def _shot_source_window(shot: dict) -> tuple | None:
+        """本镜台词在**原文中的窗口** `(start, end)`；无法定位 → None.
+
+        v6.83（二次审核发现 5）：`source_quote` 此前只要求「出现在整章任意位置」，
+        于是**引用同章另一场景的真实句子**也能给本镜的虚构事件盖上 grounded 章。
+        这里把范围收到「本镜 narration_segment 在原文里出现的位置 ± 300 字」——
+        事件表的出处必须是**本镜这段剧情**的文字。
+        """
+        novel = globals().get("_novel_text_for_validation") or ""
+        if not novel:
+            return None
+        import re as _re_w
+        n = _norm_text(novel)
+        for fld in ("narration_segment", "subtitle"):
+            raw = str(shot.get(fld) or "").strip()
+            if not raw:
+                continue
+            # 剥「说话人：」前缀——前缀是分镜格式，原文里没有
+            body = _re_w.sub(r"^[^：:]{1,12}[：:]\s*", "", raw)
+            b = _norm_text(body)
+            if len(b) < 4:
+                continue
+            pos = n.find(b)
+            if pos < 0:
+                continue
+            return (max(0, pos - 300), min(len(n), pos + len(b) + 300))
+        return None
+
+    def _quote_grounded(quote: str, shot: dict) -> tuple:
+        """`source_quote` 是否能在**本镜原文窗口**内定位 → `(ok, scoped)`.
+
+        - `ok=True`：引文可定位（或无原文可用 → 不判负，避免离线误报）；
+        - `scoped=False`：本镜没有可定位的台词，退化为「整章可定位」——
+          这种情况只能告警，不能判 blocking（没有窗口就无法证明越界）。
+        """
+        novel = globals().get("_novel_text_for_validation") or ""
+        if not novel or not quote:
+            return (True, True)
+        q = _norm_text(quote)
+        if not q:
+            return (True, True)
+        win = _shot_source_window(shot)
+        if win is None:
+            return (q in _norm_text(novel), False)
+        return (q in _norm_text(novel)[win[0]:win[1]], True)
+
+    def _one(shot: dict, label: str) -> None:
+        # v6.77：LLM 直出的 temporal_plan 若不合格，必须**上报**。严格迁移口径是
+        # 「格式严格、无歧义的才迁移；解析失败报 regen，不能猜」——所以这里既不
+        # 修补也不静默丢弃，而是把原因暴露出来，同时回退到派生继续做结构校验。
+        # v6.79：校验带上 motion_desc——「事件表与 motion 分段一一对应」是 schema
+        # 自己声明的契约，不传等于没查（发现 10）。
+        _motion = str(shot.get("motion_desc") or "")
+        try:
+            _dur = float(shot.get("duration_sec") or shot.get("duration") or 0)
+        except (TypeError, ValueError):
+            _dur = 0.0
+        _llm = shot.get("temporal_plan")
+        if isinstance(_llm, dict):
+            _reason = validate_events(_llm.get("events"), _dur, motion_desc=_motion or None)
+            if _reason:
+                warnings.append(
+                    f"{label}: LLM 直出 temporal_plan 不合格（{_reason}）"
+                    "——已回退到 motion_desc 派生，未做任何修补"
+                )
+            else:
+                # 结构合格 → 再查证据（发现 10 #2 / 发现 5：引文必须落在**本镜**
+                # 的原文窗口内，而不是「整章任意位置」——后者会让「引用同章另一
+                # 场景的真实句子」给本镜的虚构事件盖上 grounded 章）。
+                _bad_quote, _bad_unscoped = [], []
+                for ev in (_llm.get("events") or []):
+                    if not isinstance(ev, dict):
+                        continue
+                    _q = str(ev.get("source_quote") or "")
+                    _ok, _scoped = _quote_grounded(_q, shot)
+                    if _ok:
+                        continue
+                    (_bad_quote if _scoped else _bad_unscoped).append(_q)
+                if _bad_quote:
+                    issues.append(
+                        f"{label}: temporal_plan 有 {len(_bad_quote)} 条 source_quote "
+                        f"不在**本镜**原文窗口内（{_bad_quote[:2]}）——引文越界，"
+                        "该表不得驱动结构写入，需整镜 regen"
+                    )
+                if _bad_unscoped:
+                    warnings.append(
+                        f"{label}: temporal_plan 有 {len(_bad_unscoped)} 条 source_quote "
+                        f"在整章内也找不到（{_bad_unscoped[:2]}）——本镜无可定位台词，"
+                        "范围无法收窄，仅告警"
+                    )
+        # v6.79：完全落在镜头时长之外的原子段会被 `parse_segments` 丢弃（丢弃是
+        # 对的——它们不是本镜的事件），但丢弃必须**可观测**：原实现直接
+        # `b = min(b, total_sec)` 会把它变成 `(9.0, 4.0)` 这种反向区间写进事件表，
+        # 之后任何 KF 都不可能落进去，事件覆盖/排序判断随之失真（发现 4）。
+        # 发现 4：裸范围（没有「秒/s」单位）是被接受的**歧义写法**——它靠
+        # 「段首 + 尾部不接量词」才没被误判成人数/步数。审核要求「只报告迁移，
+        # 不参与确定性写入」；这里是那半个「报告」：段仍参与事件表（拒绝会丢真实
+        # 时段），但每次都会出现在 warnings 里，便于把 LLM 输出推向规范写法。
+        if _motion:
+            _bare = bare_range_atoms(_motion)
+            if _bare:
+                warnings.append(
+                    f"{label}: motion_desc 有 {len(_bare)} 段使用了**无单位**的时间写法"
+                    f"（{_bare[:2]}）——已按裸范围解析，请改写为「N-M秒」"
+                )
+        if _dur > 0:
+            _oow = out_of_window_atoms(_motion, _dur)
+            if _oow:
+                warnings.append(
+                    f"{label}: motion_desc 有 {len(_oow)} 个时段完全越出镜头时长 "
+                    f"{_dur:g}s（{[a for a, _s, _e in _oow]}），已从事件表剔除；"
+                    "请拆镜或改写动作时段"
+                )
+        plan = derive_temporal_plan(shot)
+        if not plan:
+            return
+        events = plan.get("events") or []
+        kfs = [k for k in (shot.get("keyframes") or []) if isinstance(k, dict)]
+        if not kfs:
+            return
+        tr = []
+        for k in kfs:
+            t = get_kf_t_sec(k, shot)
+            if t is None:
+                continue
+            ev = event_of(plan, t)
+            tr.append((t, ev["event_id"] if ev else None))
+
+        outside = [(t, eid) for t, eid in tr if eid is None]
+        if outside:
+            warnings.append(
+                f"{label}: {len(outside)} 个 kf 物理时刻不落在任何事件窗口内"
+                f"（{[round(t,3) for t,_ in outside]}），事件表 {[ev['event_id'] for ev in events]}"
+            )
+
+        by_ev: dict[str, list[float]] = {}
+        for t, eid in tr:
+            if eid is not None:
+                by_ev.setdefault(eid, []).append(t)
+        for eid, ts in by_ev.items():
+            ts_sorted = sorted(ts)
+            if len(ts_sorted) >= 2 and (ts_sorted[-1] - ts_sorted[0]) < _RESAMPLE_EPS * len(ts_sorted):
+                warnings.append(
+                    f"{label}: 事件 {eid} 被 {len(ts_sorted)} 个 kf 重复采样"
+                    f"（t={[round(x,3) for x in ts_sorted]}）——同段内两帧几乎同刻，"
+                    "属重复采样（同一事件内的不同采样点是合法的）"
+                )
+        uncovered = [ev["event_id"] for ev in events if ev["event_id"] not in by_ev]
+        if uncovered:
+            warnings.append(f"{label}: 事件 {uncovered} 无任何 kf 覆盖（缺帧）")
+
+        ranks = []
+        for t, eid in sorted(tr, key=lambda x: x[0]):
+            if eid is None:
+                continue
+            ranks.append(next(i for i, ev in enumerate(events) if ev["event_id"] == eid))
+        if any(ranks[i] > ranks[i + 1] for i in range(len(ranks) - 1)):
+            warnings.append(f"{label}: kf 按 t 升序后其事件序号倒装（{ranks}）")
+
+    for i, shot in enumerate(shots or []):
+        if isinstance(shot, dict):
+            _one(shot, f"shot{shot.get('index', i)}")
+    if isinstance(hook, dict):
+        _one(hook, "hook")
+    return {"pass": not issues, "issues": issues, "warnings": warnings}
+
+
 
 def _check_kf_stage_consistency(shots: list[dict], hook: dict = None) -> dict:
     """v6.40（08-22）新增：kf stage 标签一致性检查（warning-only）.
@@ -7588,7 +7816,13 @@ _REDGUO_SCENE_MAX = 3        # 保留：≤ 3 场景（与时长/镜数解耦的
 _REDGUO_CHAR_MAX = 4         # 保留：≤ 4 人物
 _REDGUO_LAST_SHOT_DURATION_MIN = 4.0
 # 08-23 用户规则：单镜时长不长于 8s（与 timecode.MAX_SHOT_DURATION 同值）
-_REDGUO_SHOT_DURATION_MAX = 8.0
+def _redguo_shot_duration_max() -> float:
+    """生效单镜上限（v6.97：委托唯一源；此前写死 8.0，日志会写「超 8s 上限」而实际是 12s）."""
+    try:
+        from step01_script_gen.timecode import active_shot_cap
+        return float(active_shot_cap())
+    except Exception:
+        return 8.0
 
 # 末镜禁闭环词（与 prompts.py 规则 60 同步）
 _REDGUO_CLOSING_WORDS = (
@@ -7692,7 +7926,7 @@ def _check_redguo_standard(shots, characters=None):
             warnings.append(
                 f"红果总时长 {total_dur:.1f}s < 60s（差 {under:.1f}s，不含钩子）。"
                 f"v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration"
-                f"（单镜 ≤ {_REDGUO_SHOT_DURATION_MAX:.0f}s）。"
+                f"（单镜 ≤ {_redguo_shot_duration_max():.0f}s）。"
             )
 
     # ⑦ 单镜时长上限（08-23 用户规则：单镜不长于 8s；钩子另算不检查）
@@ -7702,14 +7936,14 @@ def _check_redguo_standard(shots, characters=None):
             d = float(s.get("duration", 0) or 0)
         except (TypeError, ValueError):
             continue
-        if d > _REDGUO_SHOT_DURATION_MAX:
+        if d > _redguo_shot_duration_max():
             over_shots.append((s.get("index"), d))
     if over_shots:
         detail = ", ".join(f"shot{idx}={d:.1f}s" for idx, d in over_shots[:5])
         warnings.append(
-            f"单镜时长超 {_REDGUO_SHOT_DURATION_MAX:.0f}s 上限：{detail}"
+            f"单镜时长超 {_redguo_shot_duration_max():.0f}s 上限：{detail}"
             f"（{len(over_shots)} 镜）。拆分动作链为多镜（单镜 ≤ "
-            f"{_REDGUO_SHOT_DURATION_MAX:.0f}s），禁止长镜头拖延。"
+            f"{_redguo_shot_duration_max():.0f}s），禁止长镜头拖延。"
         )
 
     # ② 镜头数（v6.43：取消镜数上下限检查，按动作密度自然拆分）

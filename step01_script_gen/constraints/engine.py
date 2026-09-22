@@ -35,6 +35,7 @@ def apply_constraints(
     *,
     only: Optional[Tuple[Type[Constraint], ...]] = None,
     skip: Optional[Tuple[Type[Constraint], ...]] = None,
+    on_constraint_done: Optional[Callable[[str, Any], None]] = None,
 ) -> RepairReport:
     """执行所有 Constraint，返回 RepairReport.
 
@@ -64,6 +65,10 @@ def apply_constraints(
             repairs = c.apply(ctx)
             if repairs:
                 report.repairs.extend(repairs)
+            # v6.80：阶段屏障钩子——每个约束执行后回调，供写入跟踪使用
+            # （见 shared/semantic_barrier.py）。默认 None = 零行为变更。
+            if on_constraint_done is not None:
+                on_constraint_done(c.name, ctx.script)
         except Exception as e:
             try:
                 from shared.tee_logger import get_logger
@@ -108,6 +113,7 @@ def run_hard_fix(
     is_final_pass: bool = False,
     return_report: bool = False,
     novel_text: str = "",
+    on_constraint_done: Optional[Callable[[str, Any], None]] = None,
 ) -> Any:
     """main.py 用的便捷入口：跑硬修复层.
 
@@ -153,7 +159,13 @@ def run_hard_fix(
             is_final_pass=is_final_pass,
             novel_text=novel_text,
         )
-        report = apply_constraints(ctx)
+        # v6.80：仅在真的传了钩子时才带参调用——保持默认调用形状不变，
+        # 避免破坏 `apply_constraints = lambda ctx: report` 这类 monkeypatch
+        # （带关键字参数会 TypeError，并被下方宽 except 静默吞掉）。
+        if on_constraint_done is not None:
+            report = apply_constraints(ctx, on_constraint_done=on_constraint_done)
+        else:
+            report = apply_constraints(ctx)
         # 日志：报告修复次数 + HARD 未解决数
         try:
             from shared.tee_logger import get_logger
@@ -206,13 +218,23 @@ def run_hard_fix(
                 )
         except Exception:
             pass
-        # v6.42: HARD 未解决 → 触发 regen（opt-in: REGEN_AUTO_TRIGGER=1），
-        # LLM 输出解析后 merge 回原 script
-        try:
-            from .regen_trigger import trigger_regen_and_merge
-            script = trigger_regen_and_merge(script, report)
-        except Exception:
-            pass
+        # v6.98（2026-09-22 审核 P0-4 复核确认）：**run_hard_fix 里不再调 LLM**。
+        #
+        # 原实现在约束循环**全部结束之后**调 `trigger_regen_and_merge()`——也就是
+        # `on_constraint_done` 取完最后一个快照之后。后果不是一个字段的问题：
+        #   · `TimeFieldWriteTracker`（阶段屏障）看不见它的任何时间写入；
+        #   · `preserved.update(new_shot)` 可覆盖任意字段，hook 只要在输出里出现就
+        #     **整对象替换**，characters 按 ident 新增/覆盖——目标集合、字段授权、
+        #     blocking 身份、内容清单**一个门都没有**；
+        #   · merge 之后不重跑约束链、不重算语义 revision、不观察 tracker 终态。
+        # `REGEN_AUTO_TRIGGER` 当前在 `.env.content` 里未启用（默认 0），所以这是一条
+        # **已接线但未通电**的生产路径——不能靠「默认关闭」证明门禁闭环。
+        #
+        # 审核建议的首选修法：确定性 hard-fix **只产出结构化违例**，LLM 侧统一交给
+        # main 中已有的事务式修复/收敛管线（`_repair_shot_warnings` /
+        # `_regen_over_limit` / `_regen_structural_over_limit`——那里有目标集合、字段
+        # 授权、不退化验收、逐镜 revision 快照）。`report.hard_unresolved` 已被主流程
+        # 消费，`regen_trigger` 的 LLM 能力保留给显式调用方与测试。
         return (script, report) if return_report else script
     except Exception as e:
         try:

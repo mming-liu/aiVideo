@@ -24,42 +24,31 @@ import re
 from shared.alias_map import CHARACTER_ALIASES
 from shared.kf_time import get_kf_t_sec, set_kf_t_sec
 
+from shared import motion_segments as _ms
 from .base import Constraint
 from .types import RepairRecord, Severity, Violation
 
 
-_RANGE_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(\d+(?:\.\d+)?)\s*(?:秒|s)?"
-)
 _MIN_GAP = 0.08
 
 
 def _segments(motion: str, total: float) -> list[tuple[float, float, str]]:
-    out: list[tuple[float, float, str]] = []
-    for atom in re.split(r"[;；。]", motion or ""):
-        atom = atom.strip()
-        if not atom:
-            continue
-        m = _RANGE_RE.search(atom)
-        if m:
-            a, b = float(m.group(1)), float(m.group(2))
-        else:
-            m = re.search(r"前\s*(\d+(?:\.\d+)?)\s*秒", atom)
-            if m:
-                a, b = 0.0, float(m.group(1))
-            else:
-                m = re.search(r"后\s*(\d+(?:\.\d+)?)\s*秒", atom)
-                if not m:
-                    continue
-                a, b = max(0.0, total - float(m.group(1))), total
-        if a > b:
-            a, b = b, a
-        body = _RANGE_RE.sub("", atom, count=1)
-        body = re.sub(r"^(?:前|后)\s*\d+(?:\.\d+)?\s*秒\s*[:：]?", "", body)
-        body = body.lstrip("：: ").strip()
-        out.append((max(0.0, a), min(max(0.0, b), total) if total > 0 else b, body or atom))
-    return out
+    """解析 motion 为 [(start, end, body), ...]（v6.76 起走统一解析器）.
 
+    与全仓同一套正则（分隔符并集、支持小数）；body 由 strip_time_label 剥离，
+    与解析出的区间同源——不再有「解析认小数、剥标签不认」的错配。
+    """
+    out: list[tuple[float, float, str]] = []
+    for atom in _ms.atoms(motion or ""):
+        rng = _ms.atom_range(atom, total)
+        if rng is None:
+            continue
+        a, b = rng
+        body = _ms.strip_time_label(atom) or atom
+        out.append((max(0.0, a),
+                    min(max(0.0, b), total) if total > 0 else b,
+                    body))
+    return out
 
 def _event_text(desc: str) -> str:
     text = str(desc or "")

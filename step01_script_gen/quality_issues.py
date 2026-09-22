@@ -8,10 +8,12 @@ from __future__ import annotations
 import contextlib
 import io
 import re
+
+from shared import motion_segments as _ms
 from dataclasses import dataclass, field
 from typing import Iterable
 
-RULE_VERSION = "2026-09-19.16"
+RULE_VERSION = "2026-09-22.10"
 RULE_IMPLEMENTATION = "evidence-gated-writes-v1"
 
 
@@ -29,7 +31,13 @@ def _compute_rule_source_fingerprint() -> str:
         root / "split_visuals.py",
         project / "shared" / "style_prefix.py",
         project / "shared" / "vimax_bridge.py",
-        *sorted((root / "constraints").glob("*.py")),
+        # v6.83（二次审核发现 6）：这三份 shared 实现 + 文本 schema 直接决定
+        # 「什么算 blocking / 事件表怎么校验 / 时间字段谁能写」，却不在指纹里
+        # ——只改它们而不动 step01 目录，旧报告会被错误地当成仍然有效。
+        project / "shared" / "motion_segments.py",
+        project / "shared" / "quality_gate.py",
+        project / "shared" / "semantic_barrier.py",
+        project / "_text_gen" / "deepseek_schema.py",
     ]
     digest = hashlib.sha256()
     for path in files:
@@ -137,10 +145,7 @@ def _eye_conflicts(shot: dict, shot_id) -> list[Issue]:
         for sentence in re.split(r"[。；！？]", text):
             current_names: list[str] = []
             states: dict[str, set[str]] = {}
-            has_explicit_time = bool(
-                re.search(r"\d+(?:\.\d+)?\s*(?:-|~|至|到)\s*\d+(?:\.\d+)?\s*秒", sentence)
-                or re.search(r"(?:前|第)?\s*\d+(?:\.\d+)?\s*秒", sentence)
-            )
+            has_explicit_time = bool(_ms.TIME_MENTION_RE.search(sentence))
             for clause in _clauses(sentence):
                 if has_explicit_time:
                     states = {}
@@ -184,19 +189,9 @@ def _action_time_issues(shot: dict, shot_id) -> list[Issue]:
     motion = str(shot.get("motion_desc") or "")
     if duration <= 0 or not motion:
         return []
-    ends = []
-    # Support 4-5秒 and legacy/compact 4-5低头往前赶.
-    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(\d+(?:\.\d+)?)\s*(?:秒|s)?", motion):
-        try:
-            ends.append(float(m.group(2)))
-        except ValueError:
-            pass
-    # Single-end expressions such as 前2秒 / 第3秒.
-    for m in re.finditer(r"(?:前|第)?\s*(\d+(?:\.\d+)?)\s*秒", motion):
-        try:
-            ends.append(float(m.group(1)))
-        except ValueError:
-            pass
+    # v6.76：与 motion_time_bounds 合并到 shared.motion_segments.max_mentioned_second
+    _max_sec = _ms.max_mentioned_second(motion)
+    ends = [] if _max_sec is None else [_max_sec]
     if ends and max(ends) > duration + 0.01:
         return [Issue(
             code="action_time_out_of_range", severity="visual_risk",
@@ -415,6 +410,203 @@ def _prop_release_owner_issues(shot: dict, shot_id) -> list[Issue]:
     return issues
 
 
+def _time_field_audit_issues(script: dict) -> list[Issue]:
+    """阶段屏障上报的**审计段越权写入** → blocking（v6.83，二次审核发现 1）.
+
+    `shared/semantic_barrier.TimeFieldWriteTracker` 在落盘前的 final pass 上实测
+    一遍「审计段（`kf_time_window_alignment` 起）是否还有约束写时间字段」。
+    第一版把结果只写日志——发现 1 指出那是 fail-open：越权写入照样重建 timeline、
+    算 revision、落盘，正式结果里看不出任何异常。这里把它接进质量门，**任何
+    审计段写入都是 blocking**，正式落盘状态不可能是 PASS。
+
+    记录由 `main.py::finalize_step01_script` 写入 `script["_time_field_write_audit"]`
+    （下划线键，不入盘；只在同一次运行的 gate 收集期可见）。
+    """
+    audit = script.get("_time_field_write_audit")
+    if not isinstance(audit, dict):
+        return []
+    out: list[Issue] = []
+    for rec in audit.get("unauthorized") or []:
+        if not isinstance(rec, dict):
+            continue
+        name = str(rec.get("constraint") or "?")
+        diff = rec.get("diff") or []
+        first = str(diff[0]) if diff else ""
+        out.append(Issue(
+            "time_field_audit_write", "hard",
+            f"审计段约束 {name} 写了时间字段（{len(diff)} 处）：{first}"
+            " —— 链前 KF/时长检查的结论对最终对象不成立；"
+            "该写入必须降为只报告或前移到 KF 生成之前",
+            shot_id=_audit_shot_id(first),
+            field_path="duration_sec",
+            evidence="; ".join(str(d) for d in diff[:3]),
+            repairable=False,
+        ))
+    return out
+
+
+def _semantic_audit_shot_id(diff_line: str):
+    """从 `镜头#3 语义变化` 取出 shot id（列表位置 +1，仅用于可读性）."""
+    m = re.search(r"镜头#(\d+)", str(diff_line or ""))
+    return m.group(1) if m else None
+
+
+def _semantic_write_audit_issues(script: dict) -> list[Issue]:
+    """阶段屏障上报的**语义/结构**写入 → blocking / advisory（v6.98，审核 P0-3）.
+
+    屏障此前只快照**时间字段**，于是审计段里「`del shots[ri]`」这类语义级写入
+    完全不可见：审核实测 `opening_empty_shot_remove` 在审计边界之后 `shots.pop(0)`，
+    删掉的是完整镜头对象（prompt / ff / lf / motion / KF / 布局 / 姿态 / 道具），
+    而屏障零报告——「审计段只读」这条契约只在注释里成立。
+
+    两类落盘（由 `main.py::_record_semantic_write_audit` 写入 `_semantic_write_audit`）：
+      - `unauthorized`：审计段内**未受豁免**的语义/结构写入 → **blocking**
+        （镜头增删、重排、逐镜语义改写、hook / characters 变更）；
+      - `sanctioned`：受豁免者（`STRUCTURAL_SANCTIONED_WRITERS`，当前是开篇空镜删除）
+        → **不阻塞**，但转成 advisory 留证：正式报告里看得见「开篇被删了几个空镜」，
+        而不是像以前那样静默消失。
+    """
+    audit = script.get("_semantic_write_audit")
+    if not isinstance(audit, dict):
+        return []
+    out: list[Issue] = []
+    for rec in audit.get("unauthorized") or []:
+        if not isinstance(rec, dict):
+            continue
+        name = str(rec.get("constraint") or "?")
+        diff = rec.get("diff") or []
+        first = str(diff[0]) if diff else ""
+        out.append(Issue(
+            "semantic_audit_write", "hard",
+            f"审计段约束 {name} 改动了语义/结构（{len(diff)} 处）：{first}"
+            " —— 审计段必须只读；镜头增删/重排/语义改写会让链前结论对最终对象不成立；"
+            "该写入必须降为只报告，或登记进 STRUCTURAL_SANCTIONED_WRITERS 并给出理由",
+            shot_id=_semantic_audit_shot_id(first),
+            field_path="shots",
+            evidence="; ".join(str(d) for d in diff[:3]),
+            repairable=False,
+        ))
+    for rec in audit.get("sanctioned") or []:
+        if not isinstance(rec, dict):
+            continue
+        name = str(rec.get("constraint") or "?")
+        diff = rec.get("diff") or []
+        first = str(diff[0]) if diff else ""
+        out.append(Issue(
+            "structural_write_sanctioned", "advisory",
+            f"审计段受豁免的结构写入 {name}（{len(diff)} 处）：{first}"
+            " —— 产品行为（开篇空镜合并），默认不阻塞；被删镜的 KF/环境多样性随 del 丢失",
+            shot_id=_semantic_audit_shot_id(first),
+            field_path="shots",
+            evidence="; ".join(str(d) for d in diff[:3]),
+            repairable=False,
+        ))
+    return out
+
+
+def _audit_shot_id(diff_line: str):
+    """从 `shot 3.duration_sec: 4 -> 8` 取出 shot id；取不到就返回 None."""
+    m = re.search(r"index=([^)]+)\)", str(diff_line or ""))
+    if m:
+        return m.group(1)
+    m = re.match(r"shot\s+(\S+?)\.", str(diff_line or ""))
+    return m.group(1) if m else None
+
+
+def final_time_invariant_issues(script: dict) -> list[Issue]:
+    """**最终时间不变量**（v6.83，二次审核发现 1 实施 #4）.
+
+    必须在**最后一个**时间写入者之后运行——即 `finalize_step01_script()` 里
+    hard-fix 与 timeline 序列化都跑完之后。三条判据针对的是同一个失效模式：
+    某个写入者在 KF 时间检查之后改了时长，于是链前的「KF 落在镜内」结论对最终
+    对象不再成立。
+
+      - 每个 KF `0 < t_sec <= duration_sec` → `hard`
+      - `duration == duration_sec`（同值口径）→ `hard`
+      - `duration == timecode.end - timecode.start`（时间轴自洽）→ `hard`
+
+    与 `_keyframe_timeline_issues` 的分工：那里查帧**之间**的关系（递增/过近/
+    重复），这里查帧与**镜头时长的边界**关系——两者此前都没有覆盖
+    `t_sec > duration_sec`，所以 12s 夹成 8s 后 `t_sec=10` 的帧可以静默落盘。
+    """
+    from shared.kf_time import get_kf_t_sec
+
+    out: list[Issue] = []
+    units: list[tuple[object, dict]] = []
+    if isinstance(script.get("hook"), dict):
+        units.append(("hook", script["hook"]))
+    units += [(s.get("index", i + 1), s) for i, s in enumerate(script.get("shots") or [])
+              if isinstance(s, dict)]
+
+    for shot_id, shot in units:
+        # v6.84（二次审核发现 5）：`duration_sec` 缺失时**回退 `duration`**。
+        # 原实现只读 `duration_sec`，而钩子/新生成镜头按 schema 只保证 `duration`
+        # ——于是钩子质量门（跑在时间派生之前）里 dur=0，整个 KF 检查被
+        # `if dur <= 0: continue` 跳过，`t_sec=0` 一路漏到落盘前才暴露。
+        try:
+            dur = float(shot.get("duration_sec") or shot.get("duration") or 0)
+        except (TypeError, ValueError):
+            dur = 0.0
+        raw_d = shot.get("duration")
+        if raw_d is not None:
+            try:
+                if abs(float(raw_d) - dur) > 0.011:
+                    out.append(Issue(
+                        "duration_two_calibers", "hard",
+                        f"duration({raw_d}) 与 duration_sec({shot.get('duration_sec')}) 不一致"
+                        " —— 时长的唯一口径是 duration_sec 派生出的同值",
+                        shot_id=shot_id, field_path="duration_sec",
+                        evidence=f"{raw_d} vs {shot.get('duration_sec')}",
+                        repairable=False,
+                    ))
+            except (TypeError, ValueError):
+                pass
+        tc = shot.get("timecode")
+        if isinstance(tc, dict):
+            try:
+                span = float(tc.get("end")) - float(tc.get("start"))
+            except (TypeError, ValueError):
+                span = None
+            if span is not None and abs(span - dur) > 0.011:
+                out.append(Issue(
+                    "timecode_span_mismatch", "hard",
+                    f"timecode 跨度 {span:.2f}s ≠ duration_sec {dur:.2f}s",
+                    shot_id=shot_id, field_path="duration_sec",
+                    evidence=f"span={span:.3f} dur={dur:.3f}",
+                    repairable=False,
+                ))
+        if dur <= 0:
+            continue
+        for j, kf in enumerate(shot.get("keyframes") or []):
+            if not isinstance(kf, dict):
+                continue
+            t = get_kf_t_sec(kf, shot)
+            if t is None:
+                continue
+            if t <= 0:
+                # v6.84（发现 5）：`t_sec<=0` 是**首帧重复**问题（首帧与镜头起点
+                # 重合，等于让图片模型连画两帧同一时刻），不是「时长被链后写坏」。
+                # 单独编码，避免误导定位。
+                out.append(Issue(
+                    "kf_at_shot_start", "hard",
+                    f"第{j}个关键帧 t_sec={t:.3f}s 落在镜头起点（契约要求 "
+                    f"0 < t_sec <= duration_sec）——首帧与开场态重复",
+                    shot_id=shot_id, frame_id=f"kf{j}", field_path="keyframes.t_sec",
+                    evidence=f"t_sec={t:.3f} duration_sec={dur:.3f}",
+                    repairable=False,
+                ))
+            elif t > dur + 0.01:
+                out.append(Issue(
+                    "kf_time_out_of_shot", "hard",
+                    f"第{j}个关键帧 t_sec={t:.3f}s 越出镜长 {dur:.2f}s"
+                    " —— 时长在 KF 检查之后被改过（链后写入），该帧不可能被拍到",
+                    shot_id=shot_id, frame_id=f"kf{j}", field_path="keyframes.t_sec",
+                    evidence=f"t_sec={t:.3f} duration_sec={dur:.3f}",
+                    repairable=False,
+                ))
+    return out
+
+
 def _keyframe_timeline_issues(shot: dict, shot_id) -> list[Issue]:
     """Validate the final keyframe contract as one unit.
 
@@ -577,24 +769,24 @@ def _keyframe_timeline_issues(shot: dict, shot_id) -> list[Issue]:
 
 
 def _split_boundary_issues(script: dict) -> list[Issue]:
-    """Reject half-shots that replay the previous shot's completed action."""
+    """后镜重放了**前一镜尾帧已完成**的动作 → blocking（v6.84 起覆盖所有相邻镜对）.
+
+    原实现只对**半整数** index 生效（`_do_pre_split_oversized_shots` 当年拆出的
+    子镜）。阶段 1 的 `shot_index_renumber` 把 index 归一成连续整数之后，这条检测
+    会彻底失效——而它抓的缺陷（后镜把前一镜已经演完的动作再演一遍）**与拆镜无关**，
+    任何相邻镜对都可能发生。所以把范围从「拆镜对」放成「所有相邻镜对」，
+    判据、阈值和状态回退守卫都不变。
+    """
     from difflib import SequenceMatcher
     from step01_script_gen.state_updates import (
         extract_states, has_role_state_regression,
     )
 
     shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
-    by_index = {str(s.get("index")): s for s in shots}
     issues: list[Issue] = []
 
-    for shot in shots:
-        try:
-            idx = float(shot.get("index"))
-        except (TypeError, ValueError):
-            continue
-        if abs(idx - round(idx)) < 1e-9:
-            continue
-        prev = by_index.get(str(round(idx - 0.5, 4))) or by_index.get(str(int(idx)))
+    for pair_i in range(1, len(shots)):
+        shot, prev = shots[pair_i], shots[pair_i - 1]
         if not isinstance(prev, dict):
             continue
         prev_lf = str(prev.get("lf_desc") or "").strip()
@@ -632,7 +824,9 @@ def _split_boundary_issues(script: dict) -> list[Issue]:
             if score >= 0.62 and not _intermediate_change(earlier_bodies, body):
                 issues.append(Issue(
                     code="split_boundary_replay", severity="visual_risk",
-                    message=f"镜头{shot.get('index')} {m.group('range')} 重复前半镜尾帧已完成的动作（相似度 {score:.0%}）",
+                    message=(f"镜头{shot.get('index')} {m.group('range')} 重复前一镜"
+                             f"（镜头{prev.get('index')}）尾帧已完成的动作"
+                             f"（相似度 {score:.0%}）"),
                     shot_id=shot.get("index"),
                     field_path="motion_desc",
                     evidence=body,
@@ -682,6 +876,172 @@ def _duration_budget_issues(script: dict) -> list[Issue]:
                "需补充有效镜头或重新分配时长")
     return [Issue("duration_budget", "visual_risk", msg,
                   field_path="total_duration", repairable=False)]
+
+
+def _adjacent_duplicate_issues(script: dict) -> list[Issue]:
+    """相邻镜视觉重复 → blocking issue（v6.79，2026-09-20）.
+
+    2026-09-19 审核发现 2：`duplicate_shot_merge` 的自动合并已被删除
+    （Jaccard 相似不等于事件等价，按比例缩放 KF 会把关键帧搬离它所属的事件）。
+    检测本身仍然必要——重复视觉会白占时长、拉低观感——所以缺陷改由 gate 侧
+    以 blocking 上报，走**完整镜头 regen** 重写其中一镜。
+
+    判定与 Constraint 层共用 `duplicate_shot_merge.find_adjacent_duplicate_pairs()`，
+    不存在第二套阈值。
+    """
+    shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+    if len(shots) < 2:
+        return []
+    try:
+        from step01_script_gen.constraints.duplicate_shot_merge import (
+            find_adjacent_duplicate_pairs,
+        )
+    except Exception:
+        return []
+    issues: list[Issue] = []
+    for _i, _j, sim in find_adjacent_duplicate_pairs(shots):
+        a, b = shots[_i], shots[_j]
+        issues.append(Issue(
+            code="adjacent_duplicate_visuals",
+            severity="visual_risk",
+            message=(
+                f"镜头{a.get('index')}/{b.get('index')} 相邻且视觉重复"
+                f"（动作文本相似度 {sim:.0%}，同地点同说话人）——"
+                "需重写其中一镜的动作/构图，不能靠自动合并（会删除后镜事件与关键帧）"
+            ),
+            shot_id=b.get("index"),
+            related_shot_ids=[a.get("index")],
+            field_path="motion_desc",
+            evidence=f"jaccard={sim:.4f}",
+            repairable=False,
+        ))
+    return issues
+
+
+# 结构收敛类阻塞码（v6.84，二次审核发现 1）：
+# 这两类缺陷**不能**由字段级修复解决——它们要求重新规划镜头切分（把超载段落拆成
+# 多个完整子镜、把过短镜头并入相邻剧情）。把它们单独成集，是为了让候选选择与
+# 收敛轮能**精确点名**结构问题，而不是混在 29 条 blocking 里被稀释。
+STRUCTURAL_SHOT_CODES = ("shot_content_over_cap", "shot_duration_below_min")
+
+
+def _shot_duration_issues(script: dict) -> list[Issue]:
+    """单镜时长硬不变量 → blocking（v6.79，2026-09-20）.
+
+    2026-09-19 审核发现 1：链尾的四个时长写入者（`short_shot_merge` 拉长短镜、
+    `motion_time_bounds` 按动作文本扩时长、`duplicate_shot_merge` 求和、
+    `duration_budget` 按比例压缩）全部发生在 KF 时间检查（约束序号 8-11）之后，
+    使「审计通过的时长」≠「最终时长」。它们已全部降为只报告，缺口由此处补上：
+
+      - **单镜超上限** `min(项目 8s, 模型 cap)` → `hard`
+        （链尾 `redguo_standard` 只产生 advisory 且不在 blocking 类别里，
+         等于没有强制力——这里是它缺失的强制面）
+      - **内容最低需求超上限**（台词念不完 / 动作时段超过 cap）→ `hard`
+        v6.79 决定 3：拆镜 pre-pass 已移出生产路径，超 cap 镜头不再被悄悄
+        复制成两镜，而是在这里 BLOCK 并进入结构 regen。必须报「需求」而不是
+        「当前时长」——`_compute_timecodes` 会把时长夹到 cap，只看最终时长
+        永远发现不了内容放不下。
+      - **非末镜短于 3.5s** → `visual_risk`
+        （末镜由 W6 单独保证 ≥ 4s）
+
+    阈值与 `constraints/short_shot_merge.py` 同源，不另立一套。
+    """
+    shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+    if not shots:
+        return []
+    try:
+        from step01_script_gen.timecode import (
+            MAX_SHOT_DURATION, MIN_SHOT_DURATION, NARRATION_FIXED_DURATION,
+            _estimate_duration, _extract_motion_duration,
+        )
+    except Exception:
+        MAX_SHOT_DURATION, MIN_SHOT_DURATION, NARRATION_FIXED_DURATION = 15.0, 3.0, 4.0
+        _estimate_duration = _extract_motion_duration = None
+    try:
+        from shared.dialogue import has_dialogue
+    except Exception:
+        has_dialogue = None
+    try:
+        from shared.model_caps import active_video_duration_cap
+        _model_cap = float(active_video_duration_cap() or 0)
+    except Exception:
+        _model_cap = 0.0
+    try:
+        from step01_script_gen.timecode import active_shot_cap as _asc
+        shot_cap = _asc()
+    except Exception:
+        shot_cap = min(float(MAX_SHOT_DURATION), _model_cap) if _model_cap > 0 \
+            else float(MAX_SHOT_DURATION)
+    try:
+        from step01_script_gen.constraints.short_shot_merge import MIN_SHOT_DURATION_SEC
+    except Exception:
+        MIN_SHOT_DURATION_SEC = 3.5
+
+    issues: list[Issue] = []
+    for i, shot in enumerate(shots):
+        try:
+            dur = float(shot.get("duration_sec") or shot.get("duration") or 0)
+        except (TypeError, ValueError):
+            continue
+        if dur <= 0:
+            continue
+        if dur > shot_cap + 0.01:
+            issues.append(Issue(
+                code="shot_duration_over_cap",
+                severity="hard",
+                message=(
+                    f"镜头{shot.get('index')} 时长 {dur:.2f}s 超过单镜上限 {shot_cap:.1f}s"
+                    "（项目 8s 与模型 cap 取严）——必须拆镜或精简动作，"
+                    "不得依赖链尾约束事后压缩"
+                ),
+                shot_id=shot.get("index"),
+                field_path="duration_sec",
+                evidence=f"duration_sec={dur} shot_cap={shot_cap}",
+                repairable=False,
+            ))
+        # 内容最低需求 vs 单镜上限：只在能拿到估时函数时算
+        if _estimate_duration is not None:
+            narration = str(shot.get("narration_segment") or "")
+            motion_min = (_extract_motion_duration(str(shot.get("motion_desc") or "")) or 0.0)
+            speech_min = 0.0
+            if narration:
+                if has_dialogue is not None and has_dialogue(narration):
+                    speech_min = _estimate_duration(narration)
+                elif has_dialogue is None:
+                    speech_min = _estimate_duration(narration)
+                else:
+                    speech_min = float(NARRATION_FIXED_DURATION)
+            need = max(motion_min, speech_min, float(MIN_SHOT_DURATION))
+            if need > shot_cap + 0.01:
+                issues.append(Issue(
+                    code="shot_content_over_cap",
+                    severity="hard",
+                    message=(
+                        f"镜头{shot.get('index')} 内容最低需求 {need:.1f}s 超过单镜上限 "
+                        f"{shot_cap:.1f}s（台词估时 {speech_min:.1f}s / 动作时段 "
+                        f"{motion_min:.1f}s）——必须拆成多个子镜或精简台词/动作。"
+                        "拆镜 pre-pass 已停用，本镜不会被自动拆分"
+                    ),
+                    shot_id=shot.get("index"),
+                    field_path="duration_sec",
+                    evidence=f"need={need:.2f} shot_cap={shot_cap}",
+                    repairable=False,
+                ))
+        is_last = (i == len(shots) - 1)
+        if not is_last and dur < MIN_SHOT_DURATION_SEC - 0.01:
+            issues.append(Issue(
+                code="shot_duration_below_min",
+                severity="visual_risk",
+                message=(
+                    f"镜头{shot.get('index')} 时长 {dur:.2f}s 低于 {MIN_SHOT_DURATION_SEC}s 下限"
+                    "——需合并到相邻镜或补充 motion_desc/台词，不能靠事后加秒数"
+                ),
+                shot_id=shot.get("index"),
+                field_path="duration_sec",
+                evidence=f"duration_sec={dur}",
+                repairable=False,
+            ))
+    return issues
 
 
 def _text_integrity_issues(script: dict) -> list[Issue]:
@@ -741,7 +1101,9 @@ def collect_structured_issues(script: dict, blocking_categories: set[str],
     issues.extend(_text_integrity_issues(script))
     issues.extend(_timeline_issues(script))
     issues.extend(_duration_budget_issues(script))
+    issues.extend(_shot_duration_issues(script))
     issues.extend(_split_boundary_issues(script))
+    issues.extend(_adjacent_duplicate_issues(script))
     targets = [("hook", script.get("hook"))] if isinstance(script.get("hook"), dict) else []
     targets += [(s.get("index", i + 1), s) for i, s in enumerate(script.get("shots") or [])]
     for shot_id, shot in targets:
@@ -755,6 +1117,12 @@ def collect_structured_issues(script: dict, blocking_categories: set[str],
         issues.extend(_onscreen_prop_issues(shot, shot_id))
         issues.extend(_prop_release_owner_issues(shot, shot_id))
         issues.extend(_keyframe_timeline_issues(shot, shot_id))
+    # v6.83（二次审核发现 1）：阶段屏障 + 最终时间不变量——两者都必须在**最后一个**
+    # 时间写入者之后判定，所以放在这里（gate 收集期即落盘前最终对象）。
+    issues.extend(_time_field_audit_issues(script))
+    # v6.98（2026-09-22 审核 P0-3）：语义/结构写入与时间写入**同一时点**判定。
+    issues.extend(_semantic_write_audit_issues(script))
+    issues.extend(final_time_invariant_issues(script))
     # Stable dedupe.
     seen = set()
     out = []
@@ -771,4 +1139,4 @@ def is_blocking(issue: Issue) -> bool:
     return issue.severity in ("hard", "visual_risk")
 
 
-__all__ = ["Issue", "RULE_VERSION", "RULE_IMPLEMENTATION", "RULE_SOURCE_FINGERPRINT", "collect_structured_issues", "is_blocking", "parse_shot_ref"]
+__all__ = ["Issue", "RULE_VERSION", "RULE_IMPLEMENTATION", "RULE_SOURCE_FINGERPRINT", "collect_structured_issues", "is_blocking", "parse_shot_ref", "final_time_invariant_issues", "STRUCTURAL_SHOT_CODES"]

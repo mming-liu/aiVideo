@@ -160,7 +160,11 @@ class RuntimeExtendConstraint(Constraint):
             return repairs
 
         # 单镜上限 = min(视频模型 cap, 8s 硬限)（08-23 用户规则）
-        per_shot_cap = min(_video_duration_cap(), _MAX_SHOT_SEC)
+        try:
+            from step01_script_gen.timecode import active_shot_cap as _asc
+            per_shot_cap = _asc()
+        except Exception:
+            per_shot_cap = min(_video_duration_cap(), _MAX_SHOT_SEC)
         fps = 24.0
         if isinstance(ctx.script, dict):
             try:
@@ -168,25 +172,37 @@ class RuntimeExtendConstraint(Constraint):
             except (TypeError, ValueError):
                 fps = 24.0
 
-        # 0) 单镜硬上限夹取（保留：减时长防 provider 截断，不是造时长）
+        # 0) 单镜硬上限：**只报告，不夹取**（v6.83，二次审核发现 1）
+        #
+        # 原实现把超 cap 的 `duration` / `duration_sec` 直接缩短，理由是「减时长
+        # 防 provider 截断内容，不是造时长」。但**缩短时长会改变所有时间坐标的
+        # 合法域**：本约束位于 `kf_time_window_alignment` / `kf_t_sec_bounds` /
+        # `kf_monotonic` **之后**，夹取一旦发生，链前那些检查的结论对最终对象
+        # 就不再成立——实测 12s 镜头夹成 8s 后，`t_sec=10` 的 KF 留在最终对象里，
+        # 且当时的 quality gate 不检查 `t_sec <= duration_sec`，越界帧可以静默
+        # 落盘。这正是本审计的原始根因（链后写入使链前结论失效）。
+        #
+        # 正确处置：cap 夹取属**时长派生**，只能发生在所有 KF 生成与检查之前。
+        # `timecode._compute_timecodes` 已在权威派生点按 `min(模型 cap, 8s)` 夹取
+        # 并打 WARN；此处若仍发现超 cap，说明有写入者在本约束之前改过时长——
+        # 报 HARD 交完整镜头 regen（拆镜/重写），不再由链尾静默压缩。
         for s in ctx.shots:
             if not isinstance(s, dict):
                 continue
             d = _shot_dur(s)
             if d > per_shot_cap:
-                new_d = _align_frame_duration(per_shot_cap, fps)
-                before_dur = s.get("duration_sec")
-                s["duration_sec"] = new_d
-                s["duration"] = new_d
-                repairs.append(
-                    RepairRecord(
-                        constraint_name=self.name,
-                        shot_index=s.get("index"),
-                        action="clamp",
-                        target="duration_sec",
-                        before=str(before_dur),
-                        after=str(new_d),
-                    )
+                self._report(
+                    ctx, repairs, s.get("index"),
+                    target="duration_sec",
+                    message=(
+                        f"镜长 {d:.2f}s > 单镜上限 {per_shot_cap:.2f}s"
+                        f"（min(模型 {_video_duration_cap():g}s, {_MAX_SHOT_SEC:g}s)）；"
+                        "本约束不再夹取——夹取会改变 KF 时间坐标的合法域，必须在"
+                        "KF 生成/检查之前完成（拆镜或整镜 regen）"
+                    ),
+                    evidence=f"duration_sec={d:.3f} cap={per_shot_cap:.3f}",
+                    detail="链尾夹取已停用（v6.83，二次审核发现 1）：cap 夹取属时长派生",
+                    severity=Severity.HARD,
                 )
 
         # 1) 末镜时长下限 —— 只报告（v6.76：不再夹到 5s，那会凭空加 1~2s 无内容时长）

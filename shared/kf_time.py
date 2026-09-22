@@ -25,16 +25,29 @@ LLM 给的全是 `stage + t_sec`，`time_ratio` 不存在 → 硬修复层全部
 | `exit` | 施动者退场 | 倒纵入水、没入、退入、消失、离去 | 逼近、举刀、破水而出 |
 | `after` | 最终结果态 | 已倒、仰卧、洇痕扩大、只剩涟漪、余波 | 破水、举刀、正在刺 |
 
-## 惰性重标定
+## 惰性重标定 —— **已于 v6.77 删除，此处记录迁移契约**
 
-LLM 直写 `t_sec` 时是基于"当时预估的 duration"，但落盘后 `_compute_timecodes`
-会按模型 cap + fps 对齐重新计算 `duration_sec`，可能与原 duration 不同。
+历史上的读侧实现是 `effective_t = t_sec × (duration_sec / duration)`（"惰性重标定"）。
+它存在的前提是：「LLM 直写 `t_sec` 时基于当时预估的 duration，落盘后
+`_compute_timecodes` 会按模型 cap + fps 对齐重算 `duration_sec`，两者可能不同」。
 
-读侧 `get_kf_t_sec(kf, shot)` 做惰性重标定：
-  `effective_t = t_sec × (duration_sec / duration)`
-保持"t_sec 在原始 duration 中的语义位置"。
+**该前提现已不成立**，全仓所有写入点都成对写同值（`duration` == `duration_sec`），
+唯一会制造非对称的 `duplicate_shot_merge` 也已改为显式落盘重算。于是缩放因子
+恒为 1.0，分支不可达；而它的存在本身是「存的值 ≠ 读到的值」这一双真相的来源。
 
-旧 chapter 走 `time_ratio × duration_sec` fallback（向后兼容 08-22 之前数据）。
+**当前契约（`get_kf_t_sec`）**：
+  - 有 `t_sec` → **原样返回落盘值，不做任何缩放**；
+  - 无 `t_sec` → `time_ratio × duration_sec`（08-22 之前旧数据的兼容分支），
+    该分支优先取 `duration_sec`，缺失时退回 `duration`；
+  - 两者都没有 → `None`。
+  也就是说，当 `duration != duration_sec` 时，本函数返回的是**原始秒数**，
+  不是按新时长缩放的秒数。
+
+迁移后果：08-22 之前落盘的 `script_result.json`（只有 `time_ratio`）继续走
+fallback 分支，无需升级；v6.34 之后的数据本来就是 `t_sec` + 对称 duration，
+也不受影响。**唯一需要留意的是任何仍然假设「读到的 t_sec 会按时长比例缩放」
+的旧代码**——那正是 2026-09-19 审核发现 2 指出的、会把 KF 从自己所属事件
+挪到空白尾段的机制。契约回归见 `tests/shared/test_kf_time_contract.py`。
 """
 from __future__ import annotations
 
@@ -72,12 +85,14 @@ KF_STAGE_FORBIDDEN_WORDS = {
 def get_kf_t_sec(kf: dict, shot: dict) -> float | None:
     """读 kf 物理时刻（秒数），优先 `t_sec`，fallback `time_ratio`。
 
-    惰性重标定：若 shot 同时有 `duration` + `duration_sec`（timecode 重算后），
-    则 `effective_t = t_sec × (duration_sec / duration)`，保持 LLM 原意。
+    **无缩放契约**：`t_sec` 存在时**原样返回**，不按
+    `duration_sec / duration` 重标定（惰性重标定已于 v6.77 删除，见模块
+    docstring「惰性重标定」章节）。`shot` 只在 `time_ratio` fallback 分支
+    里被读取，用来把 0-1 比例换算成秒数。
 
     Args:
         kf: kf dict（必须有 `desc` / `t_sec` / `time_ratio` 之一）
-        shot: 所属 shot dict（提供 `duration` / `duration_sec`）
+        shot: 所属 shot dict（仅 fallback 分支需要，提供 `duration_sec` / `duration`）
 
     Returns:
         物理秒数（float），或 None（字段缺失或无法解析）。
@@ -91,16 +106,13 @@ def get_kf_t_sec(kf: dict, shot: dict) -> float | None:
             t = float(raw_t)
         except (TypeError, ValueError):
             return None
-        # 惰性重标定
-        new_dur = shot.get("duration_sec") if isinstance(shot, dict) else None
-        old_dur = shot.get("duration") if isinstance(shot, dict) else None
-        if new_dur and old_dur:
-            try:
-                ratio = float(new_dur) / float(old_dur) if float(old_dur) else 1.0
-                if abs(ratio - 1.0) > 0.01:  # 显著变化才重标定
-                    t = t * ratio
-            except (TypeError, ValueError, ZeroDivisionError):
-                pass
+        # v6.77：删除读取期「惰性重标定」。
+        #
+        # 原实现按 ratio = duration_sec/duration 在**读取时**缩放 t_sec。但全仓
+        # 所有写入点都成对写同值（ratio 恒为 1.0），唯一会触发它的是
+        # duplicate_shot_merge 的非对称写入——而那处已改为**显式**落盘重算
+        # （见 constraints/duplicate_shot_merge.py）。于是该分支彻底不可达，
+        # 且它的存在本身是「存的值 ≠ 读到的值」这一双真相的来源，故移除。
         return t
     # 2. Fallback time_ratio × duration_sec
     raw_tr = kf.get("time_ratio")

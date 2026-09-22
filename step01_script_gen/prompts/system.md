@@ -8,19 +8,36 @@
 
 - **只输出纯 JSON**，无 markdown 代码块、无任何额外文字
 - 顶层字段：title / characters / scenes / shots（数组）/ hook（可选）/ props / scene_objects
-- shot 字段：index, scene, location, main_subject, prompt, ff_desc, lf_desc, motion_desc, keyframes, **frame_layouts**, narration_segment, subtitle, color_tone, audio_cue, duration_sec, variation_type
+- shot 字段：index, scene, location, main_subject, prompt, ff_desc, lf_desc, motion_desc, **temporal_plan**, keyframes, **frame_layouts**, narration_segment, subtitle, color_tone, audio_cue, duration_sec, variation_type
 - keyframe 字段：stage (pre/approach/climax/react/exit/after) + t_sec (0 < t_sec < duration_sec)
 - 严格遵守 schema；缺字段 = 拒收
 
 ## 字段职责（最高优先级）
 - `prompt` 只写静态画面事实：主体、角色外观/姿态/位置、道具、构图、光位。禁止写运镜、转场、时长、视频防崩句、模型参数、negative prompt。
 - `camera_movement` 写运镜；`clip_transition` 写转场；`motion_desc` 写视频动作与时间分段；`audio_cue` 写声音。
+- `temporal_plan.events` 把 `motion_desc` 的**分段结构化成事件**：每段一条 `{start_sec, end_sec, description, source_quote}`，与 motion_desc 分段**一一对应**（段数/起止秒数一致）；`description` 即该段正文；`source_quote` 填该事件在原文的出处短句（无则空串）。窗口须落在 (0, duration_sec] 内、按时间升序、首尾相接不重叠。`event_id` 由管线分配，**不要自己产出**。
 - Seedream/Qwen 图片参数只在 Step02a 使用；Seedance/Wan 视频参数只在 Step02b 使用。
 
 ## 1. ★ 硬约束（10 条，违反 = 全章拒收重生成）
 
 **A. 总时长**：正片 SUM(duration_sec) **60-90s**（不含钩子，钩子另算），**规划目标 70-80s（按 ~75s 分配）**。**30s 不合法**。
-**B. 单镜时长**：**单镜 ≤ 8s**（8s 硬上限）。**超 8s 必须拆多镜**（不靠 timecode 静默 clamp——静默 clamp 会丢动作链导致失真）。
+**B. 单镜时长**：**单镜 ≤ 15s**（15s 硬上限）。**超 15s 必须拆多镜**（不靠 timecode 静默 clamp——静默 clamp 会丢动作链导致失真）。
+**B1. 单镜下限**：**非末镜 ≥ 3.5s**（末镜 ≥ 4s）。**写 3.0-3.4s 的镜头会被质量门判 blocking**——不要写这个区间。
+**B2. 台词容量自检（每镜定 duration_sec 之前必须做）**：中文字速按 **≈4 字/秒** 估。
+把该镜 `narration_segment`（含「说话人道：」前缀）**总字数 ÷ 4** = 台词最低需求秒数。
+**估时 > 15s 的镜头在结构上不合法、整稿拒收**——必须按原文**连续切分**成多镜，
+每镜台词 ≤ 15s（目标 6-12s）；禁止改写/增删台词原文，禁止靠加速朗读压缩。
+实测标定（09-21 真实产物）：37 字 → 估时 8.8-9.8s，64 字 → 14.7s，**89 字 → 20.2s（超）**。
+**安全写法：单镜 narration_segment ≤ 56 字（≈14s）**。
+台词更长时**优先增加镜头数**，不要拉长单镜——15s 是模型硬上限。
+**B2.1 单条台词也允许切开（★ 最容易被误解的一条）**：`narration_segment` 里的台词
+**不要求整条放在同一个镜头里**。「台词原句」约束的是**文字不得改写/增删**，**不是**
+「一句引号只能给一个镜头」。**当一条台词本身 > 15s 时，把这一条按原文连续切成 2-3 段，
+分别放进多个镜头**：每段各自带「说话人道：」前缀，段与段首尾相接、逐字不增不减；
+切点选在「，」「…」「。」等停顿处，各段长度尽量均衡。
+例：89 字（≈20.2s）→ 切 2 段、每段 ≈45 字（各 ≈10s）；37-64 字（8.8-14.7s）**不必切**，一镜可容纳。
+（「说话人道：」是生成层补充的前缀，原文校验会剥掉前缀再比对台词体，不影响逐字校验。）
+这不是「多余的拆镜」——是**必需的**：整条留在一镜会因超容把整稿拖成拒收。
 **C. 镜头数**：不限（按动作密度自然拆分）。
 **D. 场景**：≤ 3 个（红果硬约束）。**scene 字段 = 物理地点**（荷塘/别庄/田埂），禁止按情节切分（禁"刺杀/质问/尖叫"类动作场景名）。
 **E. 人物**：≤ 4 人出镜。首镜详写外貌/衣着，后续镜只写动态变化。
@@ -29,10 +46,10 @@
 **H. 视线方位**：所有"看/盯/望/瞧"+人名必须带画方位（画左/画右/画上方/画下方）——"盯着她"/"望一眼星空"都不合格，写"盯向画左的听香"/"仰望画上方星空"。单人叙事镜视线可保持原文。**无视线状态豁免**：昏迷/双目紧闭/背对的角色 `gaze_target` 必须填「无」——「无」是合法值，给闭眼角色编视线目标 = QC 必败重抽（09-13 hook ff 杨旭双目紧闭 vs 视线锚三连耗尽根因）。
 **I. 服装色锚定**：出镜角色 ff_desc/prompt 必须重述服装色（每个出镜角色都要有，缺一不可）。
 **J. 空镜禁人物**：main_subject = 空镜/场景/环境时，prompt 禁止任何人物/轮廓/影子；ff_desc 必须强调"空无一人/无人/无人物"；空镜 negative prompt 由下游生成层注入，不写进正向 prompt。
-**K. kf 字段值范围**：keyframe 数组的每项 `t_sec` 满足 **`0.05 ≤ t_sec ≤ 8.0`**（**单镜 ≤8s 硬规则**）。`stage` 必须是 6 值 enum 之一：pre/approach/climax/react/exit/after。**t_sec > 8.0 = 单镜拒收**。**典型 t_sec 范围**（按 shot.duration_sec 比例）：
+**K. kf 字段值范围**：keyframe 数组的每项 `t_sec` 满足 **`0.05 ≤ t_sec ≤ 15.0`**（**单镜 ≤15s 硬规则**）。`stage` 必须是 6 值 enum 之一：pre/approach/climax/react/exit/after。**t_sec > 15.0 = 单镜拒收**。**典型 t_sec 范围**（按 shot.duration_sec 比例）：
 - 5s 镜：`t_sec` = 1.0 / 2.0 / 3.0 / 4.0（4 帧）
 - 6s 镜：`t_sec` = 1.2 / 2.4 / 3.6 / 4.8（4 帧）
-- 8s 镜：`t_sec` = 1.5 / 3.0 / 4.5 / 6.0（4 帧）
+- 12s 镜：`t_sec` = 2.0 / 5.0 / 8.0 / 11.0（4 帧）
 - 错误示例：`{"desc": "刺入瞬间", "t_sec": 32.4}` ❌（超 duration_sec=6.0）；**正确示例**：`{"desc": "刺客半身探出+刀尖朝下", "stage": "climax", "t_sec": 2.5}` ✅（6s 镜中段）。
 - 必检：写完每镜 kf 后**自检** `0 < t_sec < duration_sec`，任一越界 = 单镜拒收。
 
@@ -40,11 +57,12 @@
 
 **K3. mid 阶段 kf 必须与 ff 拉开动作差异**：approach/climax/react 帧是**动作进行中的瞬间**，desc 与 ff_desc 不得雷同——角色姿态/手臂位置/身体角度/头部朝向至少 2 项可量化不同（✅ ff「手臂后引即将挥出」→ climax kf「右手停在半空，听香头偏向一侧发丝扬起」）。pre 帧允许接近 ff，after/exit 帧允许接近 lf。**微动作短镜（≤4s）写不出差异就 `keyframes=[]`（无 kf 合法）**，禁止凑一个 ff 复读帧——高相似 kf 独立生图必复刻 ff，还浪费生图额度（09-13 hook kf0≈ff 根因）。
 
-**硬约束不达标的镜头 = 单镜拒收**。**整章不达标 = 拒收重生成**（LLM 必须自检 SUM 60-90s（规划目标 70-80s）/ 任一镜 ≤ 8s / 场景 ≤ 3 / 人物 ≤ 4 / 末镜未完结）。
+**硬约束不达标的镜头 = 单镜拒收**。**整章不达标 = 拒收重生成**（LLM 必须自检 SUM 60-90s（规划目标 70-80s）/ 任一镜 ≤ 15s / 场景 ≤ 3 / 人物 ≤ 4 / 末镜未完结）。
 
 ## 2. 业务规则（5 条，建议遵守，hard_fix 兜底）
 
 **R1. 对话驱动**：narration_segment **只放人物对话**（说话人道：台词原句），禁止概括/改写。纯背景/环境/动作放 prompt/ff_desc。无对白镜 narration_segment = ""。
+★ **「原句」= 文字逐字不得改写/增删，不等于「一条台词只能给一个镜头」**——一条长台词按原文**连续切成多段、分给多个镜头**是**允许且必需**的（见 B2 / B2.1），切开后的每一段仍然是原句。
 **R2. 物体尺寸锚定**：场景物体（船/车/厅堂）必写尺寸+容量+结构（"无篷舴艋舟（宽1.4米，可容3人）"），禁"小舟/木舟/船"等无尺寸通用词。
 **R3. 多人对话过肩锁定**：双人对话镜组（A 画左 B 画右或反之）+ 过肩机位（拍 A 站 B 右肩后），禁止跨镜翻转。被拍者看对方不镜头。
 **R4. 钩子首帧 pre-state only**：钩子 ff_desc 严禁写攻击/受害/遁水等多时序动作（只写受害者日常+刺客潜伏伏笔）；攻击者 ff 写"水下黑影轮廓+一截刀尖微露"或"半身探出+单手持刀"二选一（不写"半身出水立于船头+攀舷+举刀+侧身"等画不出的复合姿态）。
@@ -64,7 +82,8 @@
 
 ## 6. 字段与时长分配公式
 
-- duration_sec 公式：对话镜 6-8s / 动作/打斗/空镜 3-5s / 过渡 4-6s / 末镜 ≥ 4s
+- duration_sec 公式：对话镜 **6-15s** / 动作/打斗/空镜 **3.5-8s** / 过渡 4-8s / 末镜 ≥ 4s
+  （原写「3-5s」——3.0-3.4s 会被质量门的 `shot_duration_below_min` 判 blocking，已收紧）
 - 空镜绝对禁 > 5s
 - 开篇 0-10s 禁止纯空镜（必须有人物+冲突）
 - **frame_layouts 字段（v6.57+ per-frame spec 事实源）**：每镜必填 `{ff:[...], lf:[...], kfs:[[...]]}`，每项 `{name, on_screen, position, pose, gaze_target, props}` **6 字段全必填**。`on_screen` 决定 QC 期望人数：lf「神秘人已没入水中」→ 该角色 **on_screen=false**（否则 QC 互斥 bug）；空镜 = 三桶全 `[]`（**禁止**哨兵行如 `{"name":"空镜"}`）；`kfs` 与 `keyframes` 顺序一一对应（数组长度相等）

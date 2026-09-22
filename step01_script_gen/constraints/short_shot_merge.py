@@ -1,13 +1,26 @@
-"""F9. 短镜合并硬修复（v6.49 新增，08-28 跑批实测）.
+"""F9. 短镜检测（v6.49 新增，08-28 跑批实测）.
 
 08-28 chapter_001 跑批实测 1 处短镜告警：
   镜头 4 dur=3.0s 太短（红果末镜情绪渲染下限 4s + W6 已强制末镜 ≥ 4s，
   但中间转场镜 3.0s 仍存在）。
 
-修法：扫每镜 duration_sec < 3.5s 且非末镜 → 拉长到 4s。
-（实际合并留给 LLM regen 反馈；本约束只标记 + 拉长。）
+## v6.79（2026-09-20）：停止「拉长到 4s」的写入
 
-severity=HARD: 短镜是结构性缺陷，违反触发 regen.
+原实现在 `apply()` 里直接把 `duration_sec` 拉长到 3.5s，并记 `repaired=True`。
+问题是**加秒数不是修复**：
+
+  - 它发生在 KF 时间检查（`kf_time_window_alignment` / `kf_t_sec_bounds` /
+    `kf_monotonic`，注册序号 8-11）**之后**（本约束序号 57），于是「审计通过的
+    时长」不再等于「最终时长」；同一 run 里同一个不变量被检查了一次就不再成立。
+  - 短镜的成因是**内容不足**（动作/台词撑不满），把时长填到 3.5s 只会得到
+    一个更慢的空镜，而不是更完整的一镜。
+  - 拉长还会撤销 `runtime_extend` 之前的单镜 cap 夹取。
+
+现在只报告：HARD 违例 + 未改写记录，交完整镜头 regen 合并到相邻镜或补内容。
+blocking 判定在 `quality_issues._shot_duration_issues`（gate 侧），两处共用
+`_MIN_SHOT_DURATION` 阈值。
+
+幂等：纯检测，无副作用。
 """
 from __future__ import annotations
 
@@ -21,21 +34,23 @@ if str(_PROJECT_ROOT) not in sys.path:
 from .base import Constraint
 from .types import RepairRecord, Severity, Violation
 
-_MIN_SHOT_DURATION = 3.5  # 短镜阈值（v6.49 红果下限 4s - 0.5s 安全裕度）
+MIN_SHOT_DURATION_SEC = 3.5  # 短镜阈值（v6.49 红果下限 4s - 0.5s 安全裕度）
+_MIN_SHOT_DURATION = MIN_SHOT_DURATION_SEC  # 向后兼容的历史名字
 
 
 class ShortShotMergeConstraint(Constraint):
-    """F9. 短镜合并：duration_sec < 3.5s → 标记合并 + 拉长到 4s."""
+    """F9. 短镜检测：duration_sec < 3.5s 且非末镜 → HARD 报告（不改写时长）."""
 
     name = "short_shot_merge"
     severity = Severity.HARD
+    fields = ()
 
     def apply(self, ctx) -> list[RepairRecord]:
         repairs: list[RepairRecord] = []
         if not isinstance(ctx.shots, list) or len(ctx.shots) < 2:
             return repairs
 
-        for i, shot in enumerate(ctx.shots[:-1]):  # 跳过末镜
+        for shot in ctx.shots[:-1]:  # 跳过末镜（W6 单独保证末镜 ≥ 4s）
             if not isinstance(shot, dict):
                 continue
             try:
@@ -44,36 +59,31 @@ class ShortShotMergeConstraint(Constraint):
                 continue
             if dur >= _MIN_SHOT_DURATION:
                 continue
-            # 短镜：拉长到 _MIN_SHOT_DURATION（保留 motion 内容）
-            # 末镜已是 W6 强制 ≥ 4s；中间转场镜拉长到 4s
-            new_dur = _MIN_SHOT_DURATION
-            if abs(new_dur - dur) > 0.05:
-                shot["duration_sec"] = new_dur
-                shot["duration"] = new_dur
-                repairs.append(
-                    RepairRecord(
-                        constraint_name=self.name,
-                        shot_index=shot.get("index"),
-                        action="clamp",
-                        target="duration_sec",
-                        before=str(dur),
-                        after=str(new_dur),
-                    )
-                )
-            # 报告 HARD 违例（让 LLM 知道这是结构性问题）
-            # v6.62（09-06）：已拉长到下限 → repaired=True，不再每次跑都
-            # 触发 regen 建议（实测时长已修仍每轮报「短镜 2.0s」循环）
+            idx = shot.get("index")
             ctx.record_violation(
                 Violation(
                     constraint_name=self.name,
                     severity=Severity.HARD,
-                    shot_index=shot.get("index"),
+                    shot_index=idx,
                     field="duration_sec",
-                    repaired=True,
+                    repaired=False,
                     message=(
-                        f"短镜 {dur:.1f}s < {_MIN_SHOT_DURATION}s 红果下限——"
-                        f"已拉长到 {new_dur:.1f}s；建议 LLM 合并到下 1 镜或补充 motion_desc。"
+                        f"短镜 {dur:.1f}s < {_MIN_SHOT_DURATION}s 红果下限。"
+                        "本约束**不再拉长时长**（加秒数只得到更慢的空镜，且发生在 "
+                        "KF 时间检查之后，会让已审计的时长失效）——"
+                        "请合并到相邻镜或补充 motion_desc/台词，由完整镜头 regen 处理。"
                     ),
+                    evidence=f"duration_sec={dur}",
+                )
+            )
+            repairs.append(
+                RepairRecord(
+                    constraint_name=self.name,
+                    shot_index=idx,
+                    action="detect",
+                    target="duration_sec",
+                    before=str(dur),
+                    after="(HARD, 未改写；需合并或补内容后完整 regen)",
                 )
             )
         return repairs

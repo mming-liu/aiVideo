@@ -82,20 +82,13 @@ def _shot_duration_cap():
     timecode.MAX_SHOT_DURATION=8s 硬规则（08-23 用户规则；超限镜会被
     timecode pre-pass 拆回 2 镜，F15 的合并白做）。
     """
-    cap = 8.0
+    # v6.97：改走唯一源（`timecode.active_shot_cap()`）——原先这里自己拼
+    # 「项目值 + 模型取严」，且兜底写死 8.0，是 7 处重复实现之一。
     try:
-        from step01_script_gen.timecode import MAX_SHOT_DURATION
-        cap = float(MAX_SHOT_DURATION)
+        from step01_script_gen.timecode import active_shot_cap
+        return active_shot_cap()
     except Exception:
-        pass  # 保持 8.0 兜底（与 timecode 常量同值）
-    try:
-        from shared.model_caps import active_video_duration_cap
-        model_cap = active_video_duration_cap()
-        if model_cap and model_cap > 0:
-            cap = min(cap, float(model_cap))
-    except Exception:
-        pass  # 模型 cap 查询失败 → 只按 8s 硬规则
-    return cap
+        return 8.0
 
 
 class OpeningEmptyShotCapConstraint(Constraint):

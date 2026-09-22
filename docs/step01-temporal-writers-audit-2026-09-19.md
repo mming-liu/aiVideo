@@ -200,21 +200,38 @@ Right contains one more item:
 系统把自由文本 `motion_desc` 当作可反复解析的事实源。不同模块用不同正则和关键词重新解释它，无法稳定表示事件身份、事件边界和 KF 归属。
 
 
-`motion_desc` 时间段目前有 **11 套互不一致的解析器**：
+`motion_desc` 时间段有 **16 处互不一致的解析点**（初版数出 11 处，收尾时又发现 5 处——见下表末 5 行）。
 
-| 函数 | 位置 | 支持小数 |
-|---|---|---|
-| `_rewrite_motion_time` | `timecode.py:93-107` | 是 |
-| `_split_motion_desc_at_cut` | `timecode.py:110-152` | 是 |
-| `_extract_motion_duration` | `timecode.py:475-514` | 是 |
-| `_KF_TIME_SEG_PATTERN` | `validation.py:6478-6481` | **否** |
-| `_parse_motion_time_segments` | `validation.py:6484-6530` | 否 |
-| `_split_motion_to_seg_texts` | `validation.py:4788-4852` | **否** |
-| `_rebase_motion_times` | `split_continuity.py:15-36` | 是（`:g` 输出） |
-| `_RANGE_RE` | `motion_time_bounds.py:16-19` | 否 |
-| `_segments` | `kf_event_order.py:31-62` | 否 |
-| `_action_time_issues` | `quality_issues.py:141-142` | 是 |
-| `final_quality_normalizer` | `final_quality_normalizer.py:116-117` | 否 |
+**勘误（v6.77 复核）**：本表初版把「小数」列标错——`_KF_TIME_SEG_PATTERN` 与
+`_parse_motion_time_segments` **其实支持小数**（正则里就是带可选小数位的写法）。
+真正不认小数的**只有** `_split_motion_to_seg_texts` 里那段**剥标签正则**——
+它就是 `.378378` 残片的**唯一**来源。下表已更正，并补上分隔符集一列
+（初版漏了这项，而它才是「两套正则互不覆盖」的实证）。
+
+| 函数 | 位置 | 分隔符集 | 小数 |
+|---|---|---|---|
+| `timecode._rewrite_motion_time` | `timecode.py:93` | `- ~ 至 到` | 是 |
+| `timecode._split_motion_desc_at_cut` | `timecode.py:110` | `- ~ 至 到` | 是 |
+| `timecode._extract_motion_duration` | `timecode.py:475` | `- – ~ 至 到` | 是 |
+| `validation._KF_TIME_SEG_PATTERN` | `validation.py:6478` | `- － ~ ～` | 是 |
+| `validation._split_motion_to_seg_texts`（**剥标签正则**） | `validation.py:4842` | `- － ~ ～` | **否** ← 残片来源 |
+| `split_continuity._rebase_motion_times` | `split_continuity.py:15` | `- ~ 至 到` | 是 |
+| `split_continuity._match_segment` | `split_continuity.py:47` | `- ~ 至 到` | 是 |
+| `motion_time_bounds._RANGE_RE` | `motion_time_bounds.py:16` | `- ~ 至 到` | 是 |
+| `kf_event_order._RANGE_RE` | `kf_event_order.py:31` | `- ~ 至 到` | 是 |
+| `quality_issues`（区间支 + 提及支） | `quality_issues.py:141,189,195` | `- ~ 至 到` | 是 |
+| `validation._TIME_SEGMENT_RE` | `validation.py:2331` | `[-–]` | **否** |
+| `validation._TIME_SEG_RE`（局部 shadow） | `validation.py:2355` | `[-–]` | **否** |
+| `validation._COMBAT_TIMING_PATTERN` | `validation.py:3038` | `[-–—]` | 是 |
+| `weapon_state_consistency._SEG_RE` | `weapon_state_consistency.py:15` | `- ~ 至 到` | 是 |
+| `final_quality_normalizer` | `final_quality_normalizer.py:116` | 复用 validation | — |
+
+**两组分隔符互不覆盖**：`至/到` 只有一半解析器认，全角 `－/～` 只有另一半认——
+同一份 motion_desc 交给不同模块会得到不同段数。
+
+> **v6.77（2026-09-19）已统一**：全部收敛到 `shared/motion_segments`（唯一事实源），
+> 分隔符取并集、小数全链路支持、时间标签统一截 2 位小数。
+> 详见「落地进度」章节。
 
 `.378378秒` 正是“一个支持小数、一个只认整数”的直接产物：
 
@@ -364,6 +381,24 @@ LLM 返回字段补丁后，系统会重新计算 timecode、再次拆镜并运�
 
 ---
 
+> ## ⚠️ 本文结论已被后续实现审核修正（2026-09-20）
+>
+> `docs/step01-temporal-writers-implementation-review-2026-09-19.md` 对本轮实现做了
+> 11 项发现级复核，**推翻了本文若干"已完成"的结论**。阅读时请以下列为准：
+>
+> | 本文原结论 | 复核后的真实状态 |
+> |---|---|
+> | 第一阶段"已完成" | **局部完成**：五个 KF 写入者已降级，但**字段所有权与 late writers 当时尚未收敛**——`short_shot_merge` / `motion_time_bounds` / `duplicate_shot_merge` / `duration_budget` 仍在链尾写 `duration_sec`，而 KF 时间检查注册在它们之前（发现 1，P0） |
+> | 选项 (c)：`duplicate_shot_merge` 显式按比例缩放 KF | **已否决作为生产语义策略**：Jaccard 相似 ≠ 事件等价，缩放会把 KF 移出它所属的事件（发现 2，P0）。该约束已降为 `warn + 完整镜头 regen` |
+> | 7 个 `_Final` 已删除 | **保留但证据不足**：单一 fixture 的等价结果不等于全输入等价证明，需补顺序依赖测试（发现 6） |
+> | 拆镜改为事件边界 | **方向正确但未完成**：`allow_split` 默认已反转为 `False`（停用生产自动拆镜）；"拆镜前移到视觉字段生成之前"的目标流程尚未实现（发现 3、决定 3） |
+> | `temporal_plan` LLM 直出优先 | **当前只读**：过渡态下不得驱动拆镜/合并/duration/KF 写入；必填切换需按依赖顺序发布（发现 10/11、决定 1） |
+>
+> 修正在 v6.79 / v6.80 落地：四个链尾写入者降为只报告、`temporal_plan` 纳入
+> semantic revision 并升级 `QUALITY_RULE_VERSION`、`validate_events` 补全整镜覆盖/
+> grounding/motion 一致性、拆镜移除"按相似度删位置分句"、新增阶段屏障
+> （`shared/semantic_barrier.py`）。
+
 ## 落地进度
 
 ### 版本号：v6.76（2026-09-19）
@@ -379,7 +414,20 @@ LLM 返回字段补丁后，系统会重新计算 timecode、再次拆镜并运�
 
 若希望合并为一条版本记录，把 v6.76 的 `constraints` / `tests` 并入 v6.75 即可。
 
-### 第一阶段：停止继续制造时间语义 —— 已完成
+### 第一阶段：停止继续制造时间语义 —— **局部完成**（下表为当时的判断）
+
+> **v6.79 复核更正**：下表是 v6.76 时点的结论，**不能读作端到端保证**。真实状态是
+> 「五个 KF 写入者已降级，但字段所有权与 late writers 当时尚未收敛」——四个时长
+> 写入者（`short_shot_merge` / `motion_time_bounds` / `duplicate_shot_merge` /
+> `duration_budget`）当时仍注册在序号 57-80，**在 KF 时间检查（8-11）之后**，
+> 链后写入足以让链前检查失效。它们已在 v6.79 全部降为只报告，v6.80 起有阶段屏障
+> 守卫（`shared/semantic_barrier.py`），v6.82 起该守卫接进落盘前的 final pass。
+> 详见 `step01-temporal-writers-implementation-review-2026-09-19.md` 发现 1。
+>
+> 另：表中「修复轮禁止拆镜」一行描述的是 `_compute_timecodes(..., allow_split=False)`。
+> 复核发现该布尔**只关掉拆镜 pre-pass**，后续完整估时逻辑照跑，仍会覆盖每个 shot 的
+> `duration` / `duration_sec`——修复轮已改调纯序列化函数
+> `write_timeline_from_durations`（发现 3）。
 
 | 项 | 改动 | 验证 |
 |---|---|---|
@@ -398,7 +446,17 @@ LLM 返回字段补丁后，系统会重新计算 timecode、再次拆镜并运�
 （`validation.py:4842-4848`），会把 `0-0.378378秒：…` 剥成 `.378378秒：…`
 残片写进 `kf.desc`。降为只报告后该写路径消失。
 
-### `_Final` 重复注册：只删了 3 组，另 4 个实例**有意保留**
+### `_Final` 重复注册：只删了 3 组，另 4 个实例**有意保留** —— 该判断已被推翻
+
+> **v6.79 复核更正**：七个 `_Final` 在 v6.77 已**全部删除**。删除**成立**，但理由要
+> 改写：不是「全输入字节级等价」，而是**顺序依赖**——原中段
+> `_KfBloodMonotonicFinal` 有确定反例（`KfBloodMonotonicConstraint` 往 `lf_desc`
+> 追加伤情锚 → `v6_43_prompt_enforcement._head_fix_context_ok()` 据此补造
+> 「仰面朝上双目紧闭，头颈僵直不侧转」这类结果态；两约束不满足交换律）。
+> 新链序 `v6_43 → kf_blood_monotonic` **有意**移除了这条「后加伤情锚触发死亡姿态
+> 补造」的路径。回归见
+> `tests/step01_script_gen/constraints/test_constraint_order_dependency.py`，
+> 说明见 `constraints/__init__.py` 与审核发现 6。
 
 判据是「基类是否仍写字段」——只有当基类已降为只报告时，`_Final` 实例才是纯重复。
 
@@ -426,14 +484,271 @@ LLM 返回字段补丁后，系统会重新计算 timecode、再次拆镜并运�
 3. `rules_index.py` 的 v6.74 条目引用了本批删除的 `kf_time_window_alignment_final`，
    被守卫测试 `test_all_constraint_names_resolve` 抓到，已移除该引用。
 
-### 遗留（未做）
+### `duplicate_shot_merge` 的 KF 整份删除 —— 已修复（**该合并路径随后被整体删除**）
 
-- `duplicate_shot_merge.py:125` 的 `a.pop("keyframes", None)`（整份删除）未处理——
-  它不在点名的 5 个写入者里，且属"删除"而非"写入"，需单独评估。
-- `motion_desc` 的 11 套解析器未统一（第二阶段范围）。
+> **v6.79 复核更正**：本节记录的「不再 pop keyframes」只是消除了症状。复核发现
+> `duplicate_shot_merge` 的**自动合成本身**不成立——Jaccard 相似 ≠ 事件等价，
+> 按比例缩放前镜 KF 会把帧移出它所属的事件（实测「收刀」KF 被挪到没有正文的
+> 空白尾段）。该约束已整体降为**只报告**：不删镜头、不拼接 narration、不求和
+> duration、不缩放 KF；检出即 HARD 违例，交 LLM 完整重写其中一镜。
+> 详见审核发现 2 与 `constraints/duplicate_shot_merge.py` 的模块说明。
+
+原 `duplicate_shot_merge.py:125` 在合并相邻重复镜后执行 `a.pop("keyframes", None)`，
+注释称「重复视觉的后镜 kf 无信息量，**丢弃由下游重派生**」。
+
+**但那个下游已经不存在了**：唯一的重派生者是 `kf_time_window_alignment`（按 motion
+缺段派生补帧），而它已在本版降为只报告。pop 之后没有任何模块会重建 KF。
+
+实测后果比「无 KF」更重：
+
+```
+合并前:  keyframes=2 帧,  frame_layouts.kfs=1
+合并后:  keyframes 键消失,  frame_layouts.kfs 仍为 1（陈旧）
+再跑 frame_spec_repair:  frame_layouts.kfs 被弹到 0
+```
+
+`frame_spec_repair` 以 `len(keyframes)` 为基准对齐 `frame_layouts.kfs`，
+keyframes 缺失（=0）会把 kfs 一并弹空 → **该镜在 step02a 一个关键帧图都不生成**。
+
+**修法**：移除 `pop`，keyframes 保留前镜——这本来就是该文件 docstring 第 12 行
+写明的语义（`keyframes 保留前镜`），是**实现与自己的 docstring 相矛盾**。
+
+实测新行为（`duration` 与 `duration_sec` 都在的真实形态）：
+
+```
+合并后  duration=4.0  duration_sec=8.0  ratio=2.00
+   stored t_sec=1.0 -> effective 2.0   (镜长 8.0)
+   stored t_sec=3.0 -> effective 6.0
+```
+
+KF 被 `shared/kf_time.py` 的惰性重标定**等比摊到合并后的时间轴**——正好是合并想要
+的语义，且**本处是全仓唯一会触发该重标定的位置**（只写 `duration_sec` 不写
+`duration`，构成唯一的非对称写入）。已在代码注释中标注：若日后把此处改成对称写入，
+KF 会退回旧时刻、尾部变成无覆盖时段（由 `kf_time_window_alignment` 上报）。
+
+新增回归测试 `test_merged_shot_keeps_keyframes_and_layout_kfs`。
+
+### `duplicate_shot_merge` 的 motion_desc 取前镜 —— 已修复（**「取前镜/后镜」语义已不存在**）
+
+> **v6.79 复核更正**：该约束不再合并，因此「motion 取前镜、lf 取后镜」这组字段
+> 拼盘语义整体消失——两镜各自的 `motion_desc` / `lf_desc` 都保持原样
+> （回归：`test_duplicate_pair_keeps_both_motion_descs`）。本节只作为历史记录保留。
+
+同一文件的 docstring 第 11 行写「`ff/motion` 取前镜（开场态），lf 取后镜（推进终点）」，
+但实现是：
+
+```python
+if b.get("lf_desc"):
+    a["lf_desc"] = b["lf_desc"]        # ✓ 与 docstring 一致
+if b.get("motion_desc"):
+    a["motion_desc"] = b["motion_desc"]  # ✗ 取后镜，与 docstring 相反
+```
+
+即 **ff 用 a 的开场态、motion 却写 b 的动作**，本身也不自洽。
+
+**修法**：不再覆盖 `a["motion_desc"]`。a 无 motion_desc 时也**不回退**到 b——
+空的 motion 是待上报的缺陷，用邻镜文本顶替等于拿另一个镜头的时间描述冒充本镜事实
+（与 v6.75/v6.76 的 evidence-gated 原则一致）。
+
+**验证不引入新阻断**（A/B 对比，同一合并镜分别取 a/b 的 motion 跑 `run_hard_fix`）：
+
+| | HARD 未解决 | KF 只报告条目 | 告警总数 |
+|---|---|---|---|
+| 取前镜 a（改动后） | 1 | 3 | 10 |
+| 取后镜 b（原实现） | 1 | 3 | 10 |
+
+两者**完全一致**——因为 a、b 相似度 ≥0.85、时间分段结构相同，合并后 8s 都超出
+motion 的 0-4s 覆盖，`kf_time_window_alignment` 在两种取法下都报同一件事。
+
+新增回归测试 `test_merged_shot_takes_front_shot_motion_desc`（fixture 相似度实测
+0.886 ≥ 0.85，确保真的走合并分支）。
+
+### v6.77：motion_desc 时间解析统一 —— 已完成（16 处）
+
+**动因**：§6.10 的 16 处解析点里，两组分隔符**互不覆盖**（`至/到` 只有一半认，
+全角 `－/～` 只有另一半认），且剥标签正则不认小数——`0-0.378378秒：…` 被剥成
+`.378378秒：…` 残片，经 kf_time_window_alignment 写进 `keyframes[*].desc`
+（实测 chapter_001 index 11.5 / 12.5）。
+
+**做法**：全部收敛到 `shared/motion_segments`（唯一事实源）。
+
+| 原解析器 | 处置 |
+|---|---|
+| `validation._parse_motion_time_segments` | 薄委托 `parse_segments(implicit_tail=True, clamp=True)` |
+| `validation._split_motion_to_seg_texts` | 薄委托 `split_segment_texts` |
+| `validation._KF_TIME_SEG_PATTERN` | 删除，别名指向 `TIME_SEG_RE` |
+| `timecode._rewrite_motion_time` | 用 `strip_time_label` + `fmt_time` |
+| `timecode._split_motion_desc_at_cut` | 用 `atoms` + `atom_range` |
+| `timecode._extract_motion_duration` | 薄委托 `extract_total_duration` |
+| `split_continuity._rebase_motion_times` / `_match_segment` | 薄委托 |
+| `motion_time_bounds._RANGE_RE` / `_SINGLE_RE` | 删除，改用 `TIME_SEG_RE` + `SINGLE_TIME_RE` |
+| `kf_event_order._RANGE_RE` / `_segments` | 删除本地正则，改用统一解析 |
+| `quality_issues`（区间支 + 提及支） | 改用 `TIME_MENTION_RE` |
+| `validation._TIME_SEGMENT_RE`（:2331） | 改用 `mentions_duration`（含 共/时长N秒 声明） |
+| `validation._TIME_SEG_RE`（:2355 局部 shadow） | 改用 `TIME_SEG_RE.finditer` |
+| `validation._COMBAT_TIMING_PATTERN`（:3038） | 改用 `TIME_MENTION_RE` + `TIME_SEG_RE` |
+| `weapon_state_consistency._SEG_RE` / `_motion_segments` | 改用 `atoms` + `atom_range` + `strip_time_label`（保留「无标签段 → (0, inf)」的调用方语义） |
+
+顺带**合并了两处重复实现**：`motion_time_bounds` 与 `quality_issues._action_time_issues`
+原先各写了一遍「文本提到的最大秒数」提取逻辑，现统一为 `max_mentioned_second()`。
+
+**顺带解除了反向耦合**：`shared/motion_segments` 此前反向 `import step01_script_gen.validation`
+（step02 用它 = step02→step01）。现在依赖方向是单向的。
+
+**等价性验证**（迁移前，真实语料 + 合成边界共 29 例逐条对比新旧实现）：
+每一个差异都是**预期修复，零回归**——
+
+| 用例 | 旧 → 新 | 性质 |
+|---|---|---|
+| `至` / `到` 区间 | `[]` → `[(2,4)]` | 分隔符并集 |
+| 全角 `～` 估时长 | `None` → `4.0` | 同上 |
+| real idx=11.5 / 12.5 | `.378378秒：…` → `…` | **残片修复** |
+| `前1.5秒：起手` | 未剥标签 → `起手` | 小数剥标签修复 |
+| `0-3秒…3-9秒`（夹取） | `['A','']` → `['A','B']` | 旧实现拿未夹的 9 比已夹的段 → 丢文本 |
+
+**时间标签不再出现长小数**：`rebase_motion_times` 现在输出 `0-1.38秒`
+（原先 `:g` 给 `0-1.621622秒`）；`fmt_time` 统一截 2 位小数。
+
+**新增测试**：`tests/shared/test_motion_segments.py` +29 例（含 `.378378` 残片回归守卫）。
+全仓 `1496 passed`。
+
+### 遗留（未做） —— 已于 v6.79～v6.82 收口，逐条对照见下
+
+> **v6.79～v6.82 复核更正**：本节列出的「未做」现已全部有确定处置——
+> 另 4 个 `_Final` 已删（理由改为顺序依赖，见上）；`kf_time.py` 惰性重标定已删除
+> 并补契约测试（`tests/shared/test_kf_time_contract.py`，发现 8）；
+> `duplicate_shot_merge` 的合并路径与其覆盖缺口一并消失（不再合并）。
+> 以下原文保留作历史记录。
+
 - 另 4 个 `_Final` 待各自基类降级后再删。
+- `shared/kf_time.py` 惰性重标定「唯一触发点是 duplicate_shot_merge 的非对称写入」
+  这一结构性问题未根治（第二阶段 `duration`/`duration_sec` 双字段清理范围）。
+- `duplicate_shot_merge` 合并后 duration 翻倍（a+b）而 `motion_desc` 只覆盖前半段
+  —— 覆盖缺口由 `kf_time_window_alignment` 上报，属预期行为；根治需第二阶段
+  把 duration 改为由事件时间轴推导。
 
 ### 下一阶段前建议先补的测试基础设施
 
 见「可测性分级」：`payload_signature()`（字节级一致性）、`tests/**/fixtures/`
 落盘 `chapter_001` 基线、修复轮逐镜 revision 快照通道。
+
+### v6.78：第二 / 三 / 四阶段落地 —— 已完成
+
+#### 第二阶段：`temporal_plan` 事件表
+
+- `shared.motion_segments.derive_temporal_plan(shot)` 产出带**事件身份**的结构
+  （`event_id` / `start_sec` / `end_sec` / `description` / `source_quote`）
+- **LLM 直出优先，不合格严格回退派生**：`validate_events()` 做严格校验
+  （窗口越界 / 重叠 / 倒序 / 空描述一律拒），拒了就回退 `motion_desc` 派生
+  并**上报原因**——遵循「格式严格、无歧义的才迁移；解析失败报 regen，不能猜」
+- `_SHOT` / `_HOOK` 新增 `temporal_plan`（**非必填**，与 `duration_sec` 同级）；
+  system.md / main.md 同步声明。`event_id` 由管线按 index 分配，模型不产出
+- **为什么非必填**：强制会让 `source_hash` 缓存立即全量失效、且需要重跑基线验分，
+  而这属无法离线验证的 prompt 变更。逐章积累「LLM 事件切分是否可靠」的证据后再收紧
+
+#### 第三阶段：拆镜改为按事件边界
+
+| 变更 | 说明 |
+|---|---|
+| 切点来源 | `cut_t` 由「旁白字符比例 × 原时长」改为 **`temporal_plan` 事件边界**（新增 `_event_boundary_cut`）。字符位置与事件时刻本无关系——实测 `cut_t=1.621622` 而 motion 分段在 2/4/5 秒，这正是「时间错配」的根因 |
+| 无边界时 | **不拆**，打 `[SPLIT-BLOCKED]` 上报（原实现退化到「只要左段 ≤ cap」硬切） |
+| 伪造文本 | 移除「从首帧推进到切分状态，完成：\<lf_desc\>」——那是把首尾帧描述冒充动作过程 |
+| 语义注入 | 移除 `differentiate_split_visuals` 的**过肩视角 / 情绪递进 / 焦点轮换**——拆镜只应改变镜头语言，不该替故事决定「谁的视角、什么情绪、聚焦谁」。保留景别推近与 ff≈lf 推镜兜底（镜头层） |
+| 重复调用 | 同一函数内被调两次的 `differentiate_split_visuals` 删掉一处 |
+
+> **保留 E2b 的说明**：它把 lf 推近后与近景构图矛盾的「X位于画…」全景站位从句剥除。
+> 这是**构图一致性维护，不是编造内容**；移除它会让拆出的两半相似度过高，
+> 从而被拆镜自身的相似度校验回滚——等于拆镜功能失效。故把它从已移除的「焦点轮换」
+> 下**移入** ff≈lf 兜底分支。
+
+#### 第四阶段：修复轮改为完整镜头事务
+
+| 旧 | 新 |
+|---|---|
+| `REPAIR_PATCH_SCHEMA`：字段级 `patches[]` | `REPAIR_SHOT_REPLACEMENT_SCHEMA`：`shot_replacements[]`，`shot` 复用 `_SHOT` |
+| LLM 可只补想到的字段 → 结构字段互不一致 | **结构字段成套出现由 schema 保证** |
+| `_apply_repair_patches` 逐字段定位 | `_apply_shot_replacements` 校验后**原子替换**；任一镜不通过**整条丢弃**（不做部分应用） |
+| 接受判据只看聚合 blocking 身份 | 新增 **`non_target_changed`**：未被点名的镜头语义 revision 一变即拒 |
+
+新增 `_validate_replacement_shot`：结构字段齐全 / index 不可改 / duration 合理 /
+kf 的 stage 与 t_sec 合法 / `frame_layouts.kfs` 与 `keyframes` 等长 /
+旁白不得暴涨（原文引用越界的代理判据）。
+
+旧 patch 路径**保留但已不接线**，作为回滚兜底（确认新路径稳定后可整体删除）。
+
+### 测试基础设施（本次补齐）
+
+| 前置 | 落地物 |
+|---|---|
+| 字节级一致性比较 | `shared.quality_gate.semantic_payload_json()` / `payload_diff()` |
+| `chapter_001` golden 基线 | `tests/step01_script_gen/fixtures/chapter_001_semantic_payload.json` |
+| 修复轮逐镜 revision 快照 | `shared.quality_gate.per_shot_revisions()` / `changed_shot_keys()` |
+
+golden 测试实测：
+
+```
+连跑两次 hard-fix 字节级一致        True    ← 验收条件 #1
+KF 语义相对原始 fixture 未变        True    ← 验收条件 #7「不得自动改写」
+payload 全部差异                    1 条（hook.clip_transition 转场补全，非 KF/时间语义）
+结构化事件检查告警                   3 条（镜 1/2 重复采样 + 镜 12.5 缺帧），精确命中
+```
+
+### 约束表清理
+
+7 个 `_Final` 重复注册实例**全部删除**（`ALL_CONSTRAINTS` 92 → **85**，无重名）：
+
+- v6.76 删 3 个（基类已降为只报告）
+- v6.78 删 4 个（基类仍是写入者，但**实证**链尾再跑一次不产生任何变化）——
+  实证方法：造一个同时触发三个基类、且让 `frame_anchor_rebuild` 也实际改动
+  `kf.desc` 的镜头，逐个摘掉 `_Final` 跑 `run_hard_fix`，输出**字节级相同**，
+  改动明细显示「基类改动了 / `_Final` 均未改动」
+
+---
+
+## 原待确认事项（已于同步代码审核定案）
+
+> **v6.79～v6.82 落地状态**：三项决定均已落地或已在代码里显式标注——
+> 决定 1（`temporal_plan` 目标必填、当前只读）：字段可选 + 严格校验（整镜覆盖 /
+> grounding / motion 一致）+ 已纳入 semantic revision（发现 10/11），必填切换待
+> 真实模型跑批后发布；决定 2（保留整镜 replacement、禁止回退字段补丁）：旧
+> `_apply_repair_patches` / `REPAIR_PATCH_SCHEMA` 保留但在 docstring 里显式标注
+> **禁止运行时回退**，跑批通过后删除；决定 3（拆镜前移、停用 timecode 自动拆镜）：
+> `_compute_timecodes` 默认 `allow_split=False`，生产入口不再自动拆镜，
+> 超 cap 镜走 blocking + 结构 regen。
+
+原 5 项中 4 项已落地（见上「v6.78」）。其余事项已在
+`step01-temporal-writers-implementation-review-2026-09-19.md` 的
+“对原审计‘待确认事项’的决定”中定案；以下保留问题背景并同步决策，不再表示开放选择。
+
+### 1. `temporal_plan` 由「可选」收紧为「必填」
+
+现状：schema 已声明该字段但**非必填**，LLM 给了就用（严格校验）、没给或不合格
+就回退派生。这是**刻意的迁移态**——避免在没有真实跑批证据的情况下强制一个
+无法离线验证的 prompt 变更（会立即全量失效 `source_hash` 缓存、且需重跑基线验分）。
+
+**决定**：目标契约收紧为必填；当前版本先保持可选并改成只读审计，禁止未经完整验证的
+plan 驱动拆镜或其他结构写入。完成整镜覆盖/连续性/grounding/motion 一致性校验、纳入
+semantic revision、升级规则版本和旧缓存迁移后，再对 `_SHOT` / `_HOOK` / replacement
+schema 一次性设为 required。模型跑批决定启用时机，不改变 fail-closed 原则。
+
+### 2. 修复轮新契约的**真实模型表现**未验证
+
+`shot_replacements`（完整镜头）的 schema 与 prompt 已改，管线端到端接线完成，
+单元测试覆盖了校验/原子替换/revision 隔离。但**模型在真实调用下能否稳定产出
+合规的完整镜头**，只能通过跑批验证——不跑 API 无法离线判定。
+
+**决定**：保留完整镜头 replacement 作为唯一演进契约，禁止生产运行时自动回退旧字段
+patch。新契约不合格时保留原镜并走 `WARN/BLOCK + full regen`。旧 helper 仅短期用于差异
+测试，完成 hook 类型、duration 所有权、整批原子性和最终字段 mask 后跑真实样例；通过后
+删除旧 schema/helper。
+
+### 3. 拆镜「移到 KF 生成前」的 LLM 侧尚未做
+
+文档第三阶段还要求「两个子镜**各自完整生成** ff/motion/KF/lf/frame_layouts」
+（即拆镜发生在 LLM 生成阶段，而不是 timecode 阶段对已有产物切分）。
+本次完成的是**切点正确性**（事件边界 + 不伪造），但仍在已有详细镜头上拆分。
+
+**决定**：生产 timecode 阶段停用自动拆镜；超 cap 镜头作为 blocking issue 进入结构 regen。
+目标流程增加 shot-plan 阶段，先生成 narration、稳定 shot/event ID、`temporal_plan` 和
+duration，完成 cap 校验与拆分后再生成 ff/motion/KF/lf/frame_layouts。现有启发式拆镜只
+保留作旧数据诊断，不能继续作为生产语义写入者。

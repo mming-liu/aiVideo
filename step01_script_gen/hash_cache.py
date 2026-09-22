@@ -59,7 +59,11 @@ def _prompt_changed(build_py: Path, script_json: Path, novel_preview: str, chapt
     try:
         with open(script_json, "r", encoding="utf-8") as f:
             old_script = json.load(f)
-        old_hash = old_script.get("_source_hash", "")
+        # v6.83（二次审核发现 6）：落盘键从 `_source_hash` 改为 `source_hash`
+        # ——前者会被 `_strip_runtime_fields()` 删掉，导致缓存永不命中。
+        # 旧文件仍按 `_source_hash` 读，保证已有 chapter 目录不需要迁移。
+        old_hash = (old_script.get("source_hash")
+                    or old_script.get("_source_hash", ""))
         new_hash = _hash_source(str(build_py), novel_preview, chapter,
                                 objects_bank_data, rule_version=rule_version)
         return new_hash != old_hash

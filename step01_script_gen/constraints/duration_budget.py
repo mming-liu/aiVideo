@@ -1,11 +1,27 @@
 """Duration budget: enforce the project's 60-90s acceptance range.
 
 The prompt plans for 70-80s and the final gate used to treat the 60-90s
-standard as advisory.  This constraint only trims *headroom* above the
-minimum required by dialogue speed and explicit motion segments.  It never
-shortens a shot below those minima.  If the sum of minima itself exceeds
-90s, the issue remains unresolved and hard-fails the final gate; the story
-must be simplified or shots merged instead of silently truncating audio.
+standard as advisory.
+
+## v6.79（2026-09-20）：停止「按比例压缩镜头」
+
+原实现在总量超 90s 时，把超额部分**按各镜 headroom 比例摊派**到每个镜头的
+`duration_sec` 上。这同样是链尾改写（本约束序号 80，KF 时间检查在序号 8-11）：
+
+  - 压缩后的时长不再被任何 KF 时间检查看过，`kf_time_window_alignment` 的
+    「kf 物理时刻 = 时段铁律」在最终对象上可能已经不成立；
+  - 「按比例摊」没有语义依据——它不知道哪个镜头的余量是真正冗余的，
+    只会把每个镜头各削一刀；
+  - 它撤销了 `runtime_extend` 之前的单镜 cap 夹取。
+
+现在只报告：把**需要重写/拆分的镜头集合**输出给完整镜头事务
+（`repaired=False` 的 HARD 违例），由 LLM regen 精简剧情或合并镜头。
+
+仍然保留的两条硬判据（原本就是报告、不写入）：
+  - 单镜真实最低需求即超过 `min(项目 8s, 模型 cap)` → 必须拆镜/精简动作；
+  - 所有镜头最低需求之和已 > 90s → 精简剧情，禁止静默截断台词/动作。
+
+幂等：纯检测，无副作用。
 """
 from __future__ import annotations
 
@@ -14,7 +30,8 @@ from .types import RepairRecord, Severity, Violation
 
 _MIN_TOTAL = 60.0
 _MAX_TOTAL = 90.0
-_SHOT_CAP = 8.0
+# v6.97：删除写死的 `_SHOT_CAP = 8.0`——它让本约束按 8s 报 `Severity.HARD`
+# 「必须拆镜」，把当前上限（模型 12s）下**合法**的 8-12s 镜头判成超载。改走唯一源。
 
 
 class DurationBudgetConstraint(Constraint):
@@ -37,7 +54,11 @@ class DurationBudgetConstraint(Constraint):
         from shared.model_caps import active_video_duration_cap
 
         model_cap = float(active_video_duration_cap() or 0)
-        shot_cap = min(_SHOT_CAP, model_cap) if model_cap else _SHOT_CAP
+        try:
+            from step01_script_gen.timecode import active_shot_cap as _asc
+            shot_cap = _asc()
+        except Exception:
+            shot_cap = min(8.0, model_cap) if model_cap else 8.0
 
         durations: list[float] = []
         minima: list[float] = []
@@ -102,44 +123,48 @@ class DurationBudgetConstraint(Constraint):
             ))
             return []
 
+        # v6.79：有可压缩余量也**不再自动压缩**——按比例摊派没有语义依据，
+        # 且改写发生在 KF 时间检查之后。改为列出候选镜头交完整镜头事务。
         need = total - _MAX_TOTAL
         reducible = sum(max(0.0, d - m) for d, m in zip(durations, minima))
         if reducible <= 0:
             return []
 
-        repairs: list[RepairRecord] = []
-        for i, shot in enumerate(shots):
-            headroom = max(0.0, durations[i] - minima[i])
-            if headroom <= 0:
-                continue
-            cut = need * (headroom / reducible)
-            new_duration = max(minima[i], durations[i] - cut)
-            new_duration = round(new_duration, 3)
-            if abs(new_duration - durations[i]) < 0.001:
-                continue
-            before = shot.get("duration_sec")
-            shot["duration_sec"] = new_duration
-            if "duration" in shot:
-                shot["duration"] = new_duration
-            repairs.append(RepairRecord(
+        candidates = [
+            (i, durations[i] - minima[i])
+            for i in range(len(shots))
+            if durations[i] - minima[i] > 0.01
+        ]
+        candidates.sort(key=lambda x: -x[1])
+        detail = ", ".join(
+            f"shot{shots[i].get('index', i)}（余量 {h:.1f}s）"
+            for i, h in candidates[:5]
+        )
+        ctx.record_violation(Violation(
+            constraint_name=self.name,
+            severity=Severity.HARD,
+            field="duration_sec",
+            message=(
+                f"正片总时长 {total:.1f}s 超出 {_MAX_TOTAL:.0f}s {need:.1f}s，"
+                f"可压缩余量 {reducible:.1f}s（{detail}）。"
+                "本约束不再按比例压缩镜头——压缩发生在 KF 时间检查之后，"
+                "会让已审计的时长失效。请由 LLM 重写/合并上述镜头。"
+            ),
+            evidence=f"shots={len(shots)}, need={need:.1f}s, reducible={reducible:.1f}s",
+            repaired=False,
+        ))
+        return [
+            RepairRecord(
                 constraint_name=self.name,
-                shot_index=shot.get("index", i),
-                action="set_field",
+                shot_index=shots[i].get("index", i),
+                action="detect",
                 target="duration_sec",
-                before=str(before),
-                after=str(new_duration),
-                detail="压缩冗余时长到台词/动作最低需求，收敛至 90s 内",
-            ))
-        if repairs:
-            ctx.record_violation(Violation(
-                constraint_name=self.name,
-                severity=Severity.HARD,
-                field="duration_sec",
-                message=f"正片总时长 {total:.1f}s 超出 90s，已压缩冗余时长至合法区间",
-                evidence=f"shots={len(shots)}, reduced={total - sum(float(s.get('duration_sec') or 0) for s in shots):.1f}s",
-                repaired=True,
-            ))
-        return repairs
+                before=str(durations[i]),
+                after="(HARD, 未改写；候选压缩镜)",
+                detail="总时长超 90s：只报告候选，交完整镜头事务重写",
+            )
+            for i, _h in candidates[:5]
+        ]
 
 
 __all__ = ["DurationBudgetConstraint"]

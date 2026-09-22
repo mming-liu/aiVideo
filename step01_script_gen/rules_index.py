@@ -41,6 +41,752 @@ class RuleEntry(TypedDict, total=False):
 
 RULES_INDEX: dict[str, RuleEntry] = {
     # ========================================================================
+    # v6.97 — 「生效单镜上限」收敛为唯一源（用户批准，2026-09-22）
+    #
+    # v6.93 把项目单镜上限 8s → 15s 时，**有 3 处写死的 8.0 漏改**，另有多处各算各的：
+    #   · `duration_budget._SHOT_CAP = 8.0` → **真缺陷**：`min(8, 模型 12) = 8`，
+    #     于是凡台词需求 8-12s 的镜头（当前上限下**合法**）都被报成 `Severity.HARD`
+    #     「必须拆镜」→ 顶起 `_has_hard`、可能触发无事可修的修复轮；
+    #   · `validation._REDGUO_SHOT_DURATION_MAX = 8.0` → 日志写「单镜时长超 8s 上限：
+    #     shot1=12.0s」，与真实口径矛盾，误导人/模型；
+    #   · `opening_empty_shot_cap` 的 `cap = 8.0` 兜底；
+    #   · `main._shot_cap` / `quality_issues` / `runtime_extend` / `motion_time_bounds`
+    #     各自内联 `min(项目, 模型)`——4 份重复实现，改一处漏三处。
+    # 修法：`timecode.active_shot_cap()` 作为**全仓唯一源**（`main._shot_cap` 的实现
+    # 搬过去），7 处全部调用它。这正是 CLAUDE.md 的要求：「模型参数限制跟着模型走，
+    # 禁止写死」。
+    # ========================================================================
+    "v6.97": {
+        "name": "生效单镜上限收敛为唯一源（清掉 3 处写死的 8.0）",
+        "date": "2026-09-22",
+        "prompt_sections": [],
+        "constraints": [
+            "duration_budget",
+            "motion_time_bounds",
+            "opening_empty_shot_cap",
+            "runtime_extend",
+        ],
+        "validation_checks": [],
+        "timecode_changes": [
+            "新增 `active_shot_cap()`：生效单镜上限 = min(视频模型 cap, 项目 "
+            "MAX_SHOT_DURATION)，全仓唯一源",
+        ],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/constraints/test_duration_budget.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.96 — ① `locked_changed` 假拒绝 + ② 子镜时长与 KF 对账（用户指示，2026-09-22）
+    #
+    # ① `_locked_after_patch` 名字写着「patch 之后」，赋值却在**尾部、归一化与还原
+    #    之后**（实测第十次：拆分子镜台词末尾的「，」被管线清掉 → 判成 LLM 越权 →
+    #    整轮假拒绝——`new_blocking=0`、`非目标镜头被改动`=0、`resolved=5` 全被这
+    #    一个闸门否掉）。挪到**合并后立刻取**，与 v6.87 修 mask 基线同一原则：
+    #    **闸门只管 LLM 的写入**。
+    # ② 第十次 `shot_content_over_cap` 归零，但新暴露 `kf_time_out_of_shot` × 3：
+    #    子镜的 `keyframes[].t_sec` 是模型按自己以为的时长写的，而子镜时长由**内容
+    #    需求**派生——两者没对账。修法同发现 18（钩子）：**时长必须覆盖自己的最大
+    #    KF 时刻**（帧对齐取整到略小则向上加一帧）；KF 超出单镜上限则**带反馈重试**。
+    #    抽出 `timecode.max_kf_t_sec()` 给钩子与拆分共用。
+    # ========================================================================
+    "v6.96": {
+        "name": "锁定字段基线挪到合并后 + 子镜时长覆盖自己的 KF 时刻",
+        "date": "2026-09-22",
+        "prompt_sections": [],
+        "constraints": [],
+        "validation_checks": [],
+        "timecode_changes": [
+            "新增 `max_kf_t_sec()`：钩子与拆分子镜共用「帧时刻决定时长下限」这条判据",
+        ],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_scoped_shot_split.py",
+            "tests/step01_script_gen/test_repair_mask_baseline.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.95 — ③ 带反馈重试 + `locked_changed` 字段级诊断（用户指示，2026-09-22）
+    #
+    # ③ **视觉重复**：prompt 写明「相邻子镜必须换机位/景别、说话人保持在画面内」
+    #    后模型仍照抄（第九次实测相似度 98%）——与发现 14 同型：**prompt 说了、
+    #    模型不做**。改为视觉重复被拒时**带反馈重试一次**：把「你的子镜1/2 相似度
+    #    98%」这个**具体失败事实**回喂（与「反馈格式教了模型一个错误写法」同一经验：
+    #    泛泛要求不如具体到某两个子镜）。只对这一类重试；结构类失败（段数不符 /
+    #    台词不逐字）是没照**给定输入**做，重试不划算。上限 `_SPLIT_MAX_ATTEMPTS=2`。
+    # `locked_changed` **字段级诊断**：它是第九次重跑后修复轮**唯一**的绑定闸门，
+    #    而判据是「7 个字段的整串 JSON 变了没有」——不看变了什么、也不看本轮授权了
+    #    什么。新增 `_locked_signature_diff()` 打印 `镜头.字段: 旧 → 新`，先拿到字段名
+    #    再决定修法（与 v6.87/`non_target_changed` 两处同族：**闸门不认本事务自己
+    #    授权的改动**，疑似同类假拒绝）。
+    # ========================================================================
+    "v6.95": {
+        "name": "拆分视觉重复带反馈重试 + 锁定字段闸门字段级诊断",
+        "date": "2026-09-22",
+        "prompt_sections": [],
+        "constraints": [],
+        "validation_checks": [],
+        "timecode_changes": [],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_scoped_shot_split.py",
+            "tests/step01_script_gen/test_repair_acceptance.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.94 — 第八次重跑暴露的三项（用户指示 ②③④ 一起修，2026-09-22）
+    #
+    # ② **审计段后写时间字段**：`prompt_repetition` 与 `boat_width` 的字段表都是
+    #    `("prompt", "ff_desc", "lf_desc", "motion_desc")`、写入都是
+    #    `for fld in self.fields: shot[fld] = new_v`，注册位置却在审计段。
+    #    `prompt_repetition` 真实触发（`shot 14.motion_desc`），`boat_width` 是
+    #    加宽静态检查后当场抓到的潜在写入者。两者前移到第 1 段。
+    #    **静态防腐检查加宽**：原只匹配 `for <var> in (<字面量元组>)`，看不见
+    #    「类属性/模块常量」形式（`for fld in self.fields`）——已支持解析类属性元组。
+    # ③ **拆分子镜视觉重复 100%**：拆分 prompt 写明「相邻子镜必须换机位/景别、
+    #    说话人保持在画面内（不能切听者反应镜，否则视频模型没有嘴型对象）」，
+    #    并给出 ≥85% 相似度即拒的具体阈值。
+    # ④ **`非目标镜头被改动` 命中拆分子镜（假拒绝）**：根因是轮尾 `run_hard_fix`
+    #    会跑 `shot_index_renumber`（无 repair-loop 守卫），把半整数子镜归一成整数
+    #    → 其后 index 平移 → 按 index 标识的**快照/还原**与**点名目标**双双失配。
+    #    修法：`shot_index_renumber` 加 `ctx.is_in_repair_loop` 守卫（轮内不重编号）；
+    #    快照/还原改为**按列表位置**为键（保留重编号后的 index），双保险。
+    #    与 `shared/semantic_barrier` 在 v6.84 踩过的坑同源。
+    # ========================================================================
+    "v6.94": {
+        "name": "审计段写入者清尾 + 拆分 prompt 机位差异 + 修复轮内不重编号",
+        "date": "2026-09-22",
+        "prompt_sections": [],
+        "constraints": [
+            "prompt_repetition",
+            "boat_width",
+            "shot_index_renumber",
+        ],
+        "validation_checks": [],
+        "timecode_changes": [],
+        "style_prefix": [],
+        "tests": [
+            "tests/shared/test_semantic_barrier.py",
+            "tests/step01_script_gen/constraints/test_shot_index_renumber.py",
+            "tests/step01_script_gen/test_repair_shot_replacements.py",
+            "tests/step01_script_gen/test_scoped_shot_split.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.93 — 单镜上限 8s → 15s（用户决定，2026-09-22）
+    #
+    # 依据：**cap 是 `min(视频模型能力, 项目编辑规则)`**，而当前注册的视频模型
+    # （`doubao-seedance-1-0-pro-250528`，免费档）cap = 12s，所以项目值放到 15
+    # 后**生效值是 12s**；换到 Seedance 2.0 / wan2.7（均 15s）时自动拿到 15。
+    # 8s 是 2026-08-23 的编辑规则，不是模型限制。
+    #
+    # 实测收益（本章台词需求 9.8 / 12.5 / 14.7 / 20.2s）：
+    #   · cap 8  → 全部要拆镜，89 字那条要切 **4 镜**
+    #   · cap 12 → 9.8s 一镜合法，89 字那条切 **2 镜**
+    #   · cap 15 → 9.8/12.5/14.7 一镜合法，只剩 20.2 那条要拆
+    #
+    # 同步移动的地方（门禁放到 15 而提示词还教 8 = 没放）：
+    #   `timecode.MAX_SHOT_DURATION`（唯一源）、`quality_issues` 兜底常量、
+    #   `prompts/{system,main,doubao_system}.md` 里全部 8s 表述。
+    #   各约束模块（motion_time_bounds / opening_empty_shot_cap / runtime_extend）
+    #   与拆分路径都读同一常量，自动跟随。
+    # ========================================================================
+    "v6.93": {
+        "name": "单镜上限 8s → 15s（生效值 = min(模型 cap, 项目值)）",
+        "date": "2026-09-22",
+        "prompt_sections": [
+            "prompts/system.md:B. 单镜时长",
+            "prompts/system.md:B2. 台词容量自检",
+            "prompts/main.md:2. 时长分配",
+            "prompts/doubao_system.md:RULE-9",
+        ],
+        "constraints": [],
+        "validation_checks": [],
+        "timecode_changes": [
+            "`MAX_SHOT_DURATION` 8.0 → 15.0；各约束与拆分路径经同一常量自动跟随",
+        ],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/constraints/test_runtime_extend.py",
+            "tests/step01_script_gen/constraints/test_opening_empty_shot_cap.py",
+            "tests/step01_script_gen/test_projected_timecode_score.py",
+            "tests/step01_script_gen/test_scoped_shot_split.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.92 — 拆分的**切点改为确定性计算**（用户指示，2026-09-22）
+    #
+    # 第六次重跑（20:49）把「切点交给模型」走死了：4 次请求只有 1 次采纳，
+    # 三种失败全是同一族「模型不肯切 / 切得不对」：
+    #   · 镜头15「子镜仍要 11.9s」——**不均衡**（补了段数算术 prompt，无效）
+    #   · 镜头16「子镜数 1」——20.2s 那条直接**拒绝拆**
+    #   · 上一轮镜头11「原 76 字 → 拼回 120 字」——**补字/改写**
+    #
+    # 关键认识：**「台词逐字连续」是唯一语义约束 → 切在哪是 `(台词文本, 上限)` 的
+    # 纯函数**。`timecode._find_best_split_point()` 早就在算这件事；当年被禁的是
+    # **复制视觉字段**造子镜，不是算切点。
+    #
+    # 改为：`_deterministic_narration_cuts()` 按标点边界切出 N 段（N = ⌈需求÷上限⌉，
+    # 各段 ≤ 上限、长度均衡），**模型只撰写视觉字段**，且 prompt 里直接列出每段的
+    # narration 原文；采纳时逐段做逐字比对（`_narration_body` 相等）。
+    # 「逐字连续」「各段均衡」「段数正确」全部由构造成立。
+    #   · 无标点可切 → 退化为等字长切（刻意兜底：宁可略生硬，也不要留一处必然 hard）
+    #   · 需求段数 > 4（schema 上限）→ 交整脚本 regen
+    # ========================================================================
+    "v6.92": {
+        "name": "拆分切点确定性化：代码切台词、模型只写视觉字段",
+        "date": "2026-09-22",
+        "prompt_sections": [],
+        "constraints": [],
+        "validation_checks": [],
+        "timecode_changes": [
+            "新增 `_deterministic_narration_cuts()` / `_balanced_cut_points()`："
+            "按标点边界确定性切分台词，各段估时 ≤ 单镜上限",
+        ],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_scoped_shot_split.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.91 — 未授权路径**强制回填**（用户决定，2026-09-22）
+    #
+    # 来源：第五次重跑（07:39）修复轮 3/3 目标因「越权改动」被拒 → 产出 0。
+    # replacement 契约要求返回**完整**镜头对象（24 字段全必填，schema 层强约束），
+    # 而授权只覆盖少数几个路径——模型把未授权字段的措辞写得略有不同（哪怕同义）
+    # 就判越权、整条作废。修复 prompt 已两处写「未授权字段逐字照抄原镜」，模型不遵守。
+    #
+    # 改法：提交前用 `merge_authorized()` 把未授权路径**从原镜回填**——
+    # 「未授权路径 = 原样」由**构造保证**（提交后与原镜的差异**只**在授权路径内，
+    # 正是 `check_replacement_authorized` 自己那条判据），原判据保留为**纵深防御**
+    # （它能抓到回填器自身的 bug）。
+    #   · 列表长度变化 = 结构改动，需**整表授权**才放行（叶子授权不放行增删元素）
+    #   · `new` 多出的未授权键 → 丢弃；缺字段 → 回填原值
+    #   · 只记**确实被改过**的回填路径（`index` 这类恒定字段不得塞满日志）
+    # ========================================================================
+    "v6.91": {
+        "name": "未授权路径强制回填：越权改动丢弃而不是作废整条替换",
+        "date": "2026-09-22",
+        "prompt_sections": [],
+        "constraints": [],
+        "validation_checks": [],
+        "timecode_changes": [],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_repair_fields.py",
+            "tests/step01_script_gen/test_repair_shot_replacements.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.90 — 拆分路径的三条改进（2026-09-22 07:40 实测后）
+    #
+    # 第一次真实生效的拆分（4 请求 → 2 采纳 / 2 拒绝）暴露了三件事：
+    #   1. **子镜相邻视觉重复**：最终门带出 `adjacent_duplicate_visuals`（镜头11/12
+    #      相似度 89%）——两条子镜来自同一父镜，模型把同一动作写了两遍。拆分 prompt
+    #      里写了「禁止同一个动作各演一遍」，模型不遵守 → 做成**确定性采纳判据**
+    #      `_split_has_duplicate_pair()`，复用全仓唯一判定 `find_adjacent_duplicate_pairs`
+    #      （阈值 0.85 与条件都不复制；该判定会跳过拆镜子镜，故先用临时整数 index 复制）
+    #   2. **拆得不均衡被拒**（镜头 10：子镜仍要 11.9s）→ prompt 补**段数算术**：
+    #      最少段数 = ⌈需求 ÷ 上限⌉、每段均衡、每段 ≤ 上限，并给正/反例
+    #   3. **补字被拒**（镜头 11：原文 76 字 → 拼回 120 字）→ prompt 明确
+    #      「段数不够就继续切，**不是**往段里补字」
+    # 另：`SPLIT_SHOT_SCHEMA` 的 maxItems 3 → 4——提示词要求「最少段数 = ⌈需求÷上限⌉」，
+    # 若某镜需求 > 3×上限，3 段就**不可能**满足，上限必须容得下那条指令。
+    # ========================================================================
+    "v6.90": {
+        "name": "拆分路径收口：子镜近似重复判据 + 段数算术 + 不许补字",
+        "date": "2026-09-22",
+        "prompt_sections": [],
+        "constraints": [],
+        "validation_checks": [],
+        "timecode_changes": [],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_scoped_shot_split.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.89 — 发现 14 选项 2：**单镜定向拆分**（2026-09-22）
+    #
+    # prompt 侧的显式许可（v6.88）**已被证伪**：07:11 三个候选的超载数值与加规则前
+    # 逐字一致（9.8 / 12.5 / 14.7s）。根因是「**单条**原文台词本身超长」——原文里
+    # 那是一整句、一整对引号（89 字 → 20.2s），模型稳定地不切。
+    #
+    # 故改为：对**单个**被点名的超载镜头发一次定向拆分请求（`SPLIT_SHOT_SCHEMA`），
+    # 返回 2-3 个**完整**子镜。与当年被禁止的「复制字段拆镜」的区别：那时是**代码
+    # 复制**父镜字段、产出 ff==lf 空壳；这里是**模型重新生成**每个子镜。
+    #   · `SPLIT_SHOT_SCHEMA` 复用 `_SHOT`（24 字段全必填）→ 子镜在 schema 层不可能是空壳
+    #   · 采纳判据：①台词**逐字连续**（拼回与父镜相等，`_narration_continuous`）
+    #     ②每个子镜容量合格——**直接问质量门本体** `_shot_duration_issues`，不复制判据
+    #   · 子镜时长由**内容需求**派生（不照抄模型给的 duration），下限 3.5s
+    #   · 只动被点名那一镜，其它镜头逐字节不动；整脚本 regen 退居兜底
+    #   · 每次运行最多 3 个（`_STRUCT_SPLIT_MAX_SHOTS`）
+    # ========================================================================
+    "v6.89": {
+        "name": "单镜定向拆分：把一条装不下的台词拆成多个完整子镜",
+        "date": "2026-09-22",
+        "prompt_sections": [],
+        "constraints": [],
+        "validation_checks": [],
+        "timecode_changes": [],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_scoped_shot_split.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.88 — 发现 14 的 prompt 侧修复：显式许可「单条长台词切开」（2026-09-22）
+    #
+    # 来源：docs/step01-temporal-writers-postrun-review-2026-09-21.md 发现 14。
+    # 三轮运行的 `shot_content_over_cap` 数值完全一致（9.8/12.5/14.7/8.8/20.2s），
+    # 查原文确认超长台词是**一整句、一整对引号**（89 字 → 20.2s）——只能把同一条
+    # 台词切成两段。合法切分存在，但 `narration_segment 只放台词原句，禁止概括/改写`
+    # 这条**竞争性指令**让模型把「一句引号」当成不可分原子。
+    #
+    # 本次只**解除那个误解**，不新增机制：
+    #   · `system.md` 新增 **B2.1**：一条台词 >8s 时按原文连续切 2-3 段分给多镜，
+    #     各段自带「说话人道：」前缀、段间首尾相接、逐字不增不减 + 工作示例；
+    #   · `system.md` **R1** 在冲突指令旁加旁注：「原句」= 文字不得改写/增删，
+    #     **不等于**「一条台词只能给一个镜头」；
+    #   · `main.md` 新增 **2c**（用户 prompt 侧同一许可）；
+    #   · `doubao_system.md` 同步 **RULE-9a/9b** 与 **RULE-28** 旁注——同一缺陷
+    #     在 doubao profile 上同样存在，不能让两条 profile 在这条根因上分叉。
+    # ========================================================================
+    "v6.88": {
+        "name": "发现 14 prompt 侧修复：单条长台词连续切开的显式许可",
+        "date": "2026-09-22",
+        "prompt_sections": [
+            "prompts/system.md:B2.1 单条台词也允许切开",
+            "prompts/system.md:不等于「一条台词只能给一个镜头」",
+            "prompts/main.md:2c. ★",
+            "prompts/doubao_system.md:RULE-9b",
+        ],
+        "constraints": [],
+        "validation_checks": [],
+        "timecode_changes": [
+            "`derive_hook_duration()`：**覆盖内容优先于帧对齐**——"
+            "`_align_frame_duration(4.8, 24)` 会向下取整成 4.75，把 KF（4.8）挤出镜头；"
+            "对齐后装不下就按帧步长向上加帧（硬上限防死循环）",
+        ],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_hook_time_invariant.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.87 — v6.86 重跑暴露的两个「判据永远不可能通过」缺陷（2026-09-21 23:19）
+    #
+    # 来源：docs/step01-temporal-writers-postrun-review-2026-09-21.md
+    # 真实重跑 BLOCK / hard=7 / visual=21（结构性超载仍在，见该文档发现 14）。
+    #   · **完整性判据由布尔改计数**：原判据 `new_q["integrity_ok"] is False` 在
+    #     **原稿本身就不干净**时恒为真（三个候选摘要全标「完整性异常」）→ 结构轮
+    #     5 → 4 的改善稿被拒，采纳分支永不通过 = 没有收敛轮。新增
+    #     `integrity_count`（checker 失败为 None，未知不得当成干净）+
+    #     `_integrity_not_degraded()`：**不退化**（用户文档用词）而非「必须干净」。
+    #     结构轮与时长轮共用。
+    #   · **锁定字段闸门的基线改到「合并后、后处理前」**：旧基线是本轮开始前，中间
+    #     隔着 post_fix / hard_fix / write_timeline_from_durations 一串**管线自己的
+    #     确定性归一化**，于是 B.1 `narration_subtitle_consistency` 去掉被点名镜头
+    #     subtitle 末尾句号也被算成 LLM 越权 → `non_target_changed` → 整轮回退，
+    #     `resolved=11` 一起丢。已确定性复现（tests/.../test_repair_mask_baseline.py）。
+    #   · **闸门分开命名 + 打出到底什么变了**：`non_target_changed` 连续三次成为
+    #     回退原因而日志从不说明是哪个镜头哪个字段；现拆为
+    #     `non_target_changed` / `locked_field_changed`，并在回退前打印具体条目。
+    #   · `_rejected` 日志拆「真被拒」与「部分提交说明」（A1 逐目标提交后语义不同）。
+    # ========================================================================
+    "v6.87": {
+        "name": "采纳判据收口：完整性按「不退化」比较 + 锁定字段基线改合并后 + "
+                "回退原因分开命名",
+        "date": "2026-09-21",
+        "prompt_sections": [],
+        "constraints": [],
+        "validation_checks": [],
+        "timecode_changes": [
+            "新增 `_integrity_not_degraded()` 与 `_candidate_quality_summary` 的 "
+            "`integrity_count`：采纳判据统一按「不退化」比较",
+            "`derive_hook_duration()` 候选增加 **KF 最大 `t_sec`**：关键帧写在哪个"
+            "物理时刻，镜头就必须长到能拍到它（实测钩子 3.0s 而 KF 到 7.2s → 2 条 "
+            "`kf_time_out_of_shot` HARD）",
+        ],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_repair_mask_baseline.py",
+            "tests/step01_script_gen/test_repair_acceptance.py",
+            "tests/step01_script_gen/test_structural_convergence.py",
+            "tests/step01_script_gen/test_duration_convergence.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.86 — 用户决定 A1 / B1+B2 / 朝向同义词豁免（2026-09-21）
+    #
+    # 来源：用户审阅 docs/step01-temporal-writers-postrun-review-2026-09-21.md
+    # 的「待决问题」后给出的决定。真实重跑 hard=7 / visual=20。
+    #   · 发现 10 → **A1 逐目标提交**：合法且授权的目标独立生效，缺项/越权只丢
+    #     自己；缺项作为**如实回报**进 `rejected`。保留批次级安全网（全局完整性 /
+    #     非目标 revision / 阻塞退化 / 锁定字段签名）。
+    #   · 发现 11 → **B1 判定口径改实际 `Σduration_sec`**（原用拆镜后投影，而生产
+    #     已停用拆镜 pre-pass）；**B2 采纳判据 = 严格改善 + 内容完整性 + 内容不退化**
+    #     （原为解析成功即无条件替换）。「内容不退化」由 `_content_degradation()`
+    #     给出：结构非法镜头数不增加、原文覆盖**率**不退化、grounding **率**不退化
+    #     ——缩短时长不得用「删内容」换。两条度量刻意用**比率**：计数口径会把
+    #     「合法合并镜头」误判成退化，让这条守卫变成新的「永不收敛」缺口。
+    #     修复预算**暂时保持 1 次**。
+    #   · `multi_person_staging`：`直立` / `直立扬手` 属检查器同义词漏项 → 豁免；
+    #     `站位「水面」`没有左右方位事实、不能确定性推断 → **继续报告**交 LLM。
+    # ========================================================================
+    "v6.86": {
+        "name": "用户决定落地：逐目标提交 + 时长收敛实际口径与采纳守卫 + "
+                "朝向姿态词豁免",
+        "date": "2026-09-21",
+        "prompt_sections": [],
+        "constraints": [],
+        "validation_checks": [
+            "_check_multi_person_staging",
+        ],
+        "timecode_changes": [
+            "新增 `_actual_shots_total()`：时长收敛统一用实际 Σduration_sec，"
+            "拆镜投影口径只留给候选打分",
+            "新增 `_content_degradation()`：B2 的内容退化判据（结构非法镜头数 / "
+            "原文覆盖率 / grounding 率，用比率保镜头数无关）",
+        ],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_duration_convergence.py",
+            "tests/step01_script_gen/test_repair_shot_replacements.py",
+            "tests/step01_script_gen/test_multi_person_staging_actions.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.85 — 半整数重编号后重跑审查的收敛路径缺口（2026-09-21 22:22 实测）
+    #
+    # 来源：docs/step01-temporal-writers-postrun-review-2026-09-21.md
+    # 真实重跑 hard=7 / visual=20（16 镜 / 正片 93.3s）。
+    #   · 结构收敛轮的采纳判据**由内容分主导**，实测把「非法镜头 7 → 5」判成
+    #     「未改善」丢弃 → 改为「结构非法数严格变少即采纳」，唯一附加守卫是
+    #     不许引入完整性异常（`integrity_ok is False`）
+    #   · `kf_event_window_mismatch`（最大阻塞桶 18 → 9 条）既不在修复轮白名单、
+    #     也不是结构类 → **无任何收敛路径**；接进 `_REPAIR_PRIORITY_CATEGORIES`，
+    #     并在 `repair_fields` 登记 canonical 形态 `keyframes.*.desc`
+    #     （原 `field_path="keyframes.desc"` 过不了 `path_allowed`）
+    #   · `weapon_holder` 新增两类误报：比喻（目光如刀）、动宾（挥鞭）；
+    #     首位出现位置是比喻时整词漏判（`t.find` 只看首个）→ 逐出现位置判定
+    #   · `prompts`：补「单镜台词容量自检（总字数 ÷ 4 ≤ 8s，安全值 ≤ 28 字）」；
+    #     把「动作/空镜 3-5s」收紧为 **3.5-5s**——原写法推荐的 3.0-3.4s 正好落在
+    #     质量门 `shot_duration_below_min` 的 blocking 区间，提示词与门禁直接矛盾
+    # ========================================================================
+    "v6.85": {
+        "name": "收敛路径接线：结构采纳判据 + kf_event_window_mismatch 入修复轮 + "
+                "武器 holder 比喻/动宾误报 + 提示词与门禁口径对齐",
+        "date": "2026-09-21",
+        "prompt_sections": [
+            "prompts/system.md:B1. 单镜下限",
+            "prompts/system.md:B2. 台词容量自检",
+            "prompts/main.md:2b. 台词容量",
+        ],
+        "constraints": [],
+        "validation_checks": [
+            "_check_weapon_holder",
+            "_first_literal_occurrence",
+            "_clause_index_at",
+        ],
+        "timecode_changes": [],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_structural_convergence.py",
+            "tests/step01_script_gen/test_weapon_holder.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.84 — 重跑审查 6 项收口（2026-09-21）
+    #
+    # 来源：docs/step01-temporal-writers-postrun-review-2026-09-21.md
+    # 真实重跑结果 hard=12 / visual_risk=9，缺口在**生成与修复的收敛路径**。
+    #   发现 1（P0）：超长/过短镜头只有报告，没有可执行的上游收敛路径。
+    #       · `_regen_structural_over_limit()`：结构问题点名反馈给 LLM **重做
+    #         shot-plan**（超限段落拆成多个完整子镜 / 过短镜头并入相邻剧情），
+    #         新稿只有不劣化才采纳；预算用尽明确 BLOCK
+    #       · 候选选择把 `shot_content_over_cap` / `shot_duration_below_min`
+    #         当**拒收条件**（有预算重取，没预算明确 BLOCK）
+    #       · `_candidate_quality_summary` 增 `structural_ok` 档，置于排序首位
+    #   发现 2（P0）：屏障有效，但注册顺序仍让两个写入者落在审计段之后。
+    #       · 约束链拆成显式三阶段（PRE_TEMPORAL_NORMALIZE / TEMPORAL_DERIVE /
+    #         POST_TEMPORAL_AUDIT），分界 `TEMPORAL_DERIVE_START` 与
+    #         `semantic_barrier.AUDIT_SEGMENT_START` **同一份定义**
+    #       · `prompt_sanitize` 与 `v6_43_prompt_enforcement` 前移到第 1 段
+    #         （两者都在写 motion_desc）
+    #   发现 3（P1）：修复调用失败后仍跑全局后处理 → 模型失败立即 return；
+    #       事务内后处理只作用于被点名镜头（未点名镜头快照-还原）；批次 6→3。
+    #   发现 4（P1）：`weapon_holder` 把「匕首插在心口」误判成悬浮武器 →
+    #       关系级落点判定（身体部位 + 插入动词 / 延续词），显式悬浮标记优先。
+    #   发现 5（P1）：hook `t_sec=0` 到最终门才暴露 → 钩子质量门内先
+    #       `sync_hook_timeline()` 再检查；`duration_sec` 缺失回退 `duration`；
+    #       `t_sec<=0` 单独编码为 `kf_at_shot_start`。
+    #   发现 6（P2）：`temporal_plan` 保持只读，候选报告统计
+    #       present/valid/grounded 积累真实样本。
+    # ========================================================================
+    "v6.84": {
+        "name": "重跑收口：结构收敛路径 + 约束链三阶段 + 事务范围收口 + "
+                "武器落点关系 + 钩子时间不变量",
+        "date": "2026-09-21",
+        "constraints": [
+            "prompt_sanitize",
+            "v6_43_prompt_enforcement",
+            "group_actor_continuity",
+            "emotion_visualization_repair",
+            "kf_start_time_normalize",
+            "shot_index_renumber",
+            "runtime_extend",
+        ],
+        "validation_checks": [
+            "_check_weapon_holder",
+        ],
+        "timecode_changes": [
+            "抽出 derive_hook_duration()/sync_hook_timeline()：钩子质量门与 "
+            "_compute_timecodes 共用同一份时长推导（发现 5）",
+        ],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_structural_convergence.py",
+            "tests/step01_script_gen/test_hook_time_invariant.py",
+            "tests/step01_script_gen/test_temporal_plan_migration_stats.py",
+            "tests/step01_script_gen/test_weapon_holder.py",
+            "tests/step01_script_gen/test_repair_shot_replacements.py",
+            "tests/shared/test_semantic_barrier.py",
+            "tests/step01_script_gen/test_temporal_plan_migration_stats.py",
+            "tests/step01_script_gen/constraints/test_shot_index_renumber.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.83 — 二次审核 6 项收口（2026-09-20）
+    #
+    # 来源：docs/step01-temporal-writers-rereview-2026-09-20.md
+    #   发现 1（P0）：阶段屏障 fail-open —— 白名单放行链尾 `runtime_extend`，
+    #     12s 镜头夹成 8s 后 `t_sec=10` 的 KF 留在最终对象里。
+    #       · `SANCTIONED_TIME_WRITERS` 清空（审计段不允许任何时间字段写入者）
+    #       · `runtime_extend` 的单镜 cap 夹取降为 HARD 报告（cap 属时长派生，
+    #         只能发生在 KF 生成之前；`_compute_timecodes` 已在权威派生点夹取）
+    #       · 新增 `finalize_step01_script()`：正常生成 / 缓存命中 / BEST-GUARD
+    #         三条路径统一走「hard-fix(含屏障) → timeline 序列化 → 最终不变量」
+    #       · 屏障结果进质量门（`time_field_audit_write`，blocking）
+    #       · 新增最终时间不变量检查（`kf_time_out_of_shot` /
+    #         `duration_two_calibers` / `timecode_span_mismatch`）
+    #   发现 2（P0）：整镜事务只锁固定结构字段 → 新增 `repair_fields.py`，
+    #     按 issue 推导授权字段 + canonical 路径 diff；`duration` 补进最终 mask。
+    #   发现 3（P1）：hook-only replacement 在主路径不可达 → envelope 两个键
+    #     都允许为空；hook 必须由 `hook_replacement` 承载。
+    #   发现 4（P1）：整批原子未校验目标集合 → 每个 picked 目标恰好出现一次。
+    #   发现 5（P1）：事件表只比边界不比语义 → 描述与 motion 段正文「无任何共同
+    #     内容」即拒；`source_quote` 范围收到**本镜**原文窗口（越界 = blocking）。
+    #   发现 6（P2）：`_source_hash` 被运行时字段清理删除 → 改落 `source_hash`
+    #     （读侧兼容旧键）；规则源指纹纳入 4 份共享实现。
+    #   另修一处**未在审核中报告**的静默 bug：`allowed_targets` 是未定义名，
+    #     整段接受判定抛 NameError 被 except 吞掉并回退整轮修复——v6.79～v6.82
+    #     新增的 non-target gate / 最终 mask 在生产里从未真正跑过。
+    # ========================================================================
+    "v6.83": {
+        "name": "二次审核收口：屏障 fail-closed + 按 issue 授权 + 事务完整性 + "
+                "缓存身份",
+        "date": "2026-09-20",
+        "constraints": [
+            "runtime_extend",
+        ],
+        "validation_checks": [
+            "_check_temporal_plan",
+        ],
+        "timecode_changes": [
+            "新增 finalize_step01_script()：三条落盘路径统一的「hard-fix(含阶段"
+            "屏障) → write_timeline_from_durations → 最终时间不变量」收口",
+        ],
+        "style_prefix": [],
+        "tests": [
+            "tests/shared/test_semantic_barrier.py",
+            "tests/shared/test_motion_segments.py",
+            "tests/step01_script_gen/test_repair_fields.py",
+            "tests/step01_script_gen/test_repair_shot_replacements.py",
+            "tests/step01_script_gen/test_rule_version_cache.py",
+            "tests/step01_script_gen/constraints/test_runtime_extend.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.82 — 复核剩余项收口（2026-09-20，发现 3/4/5/6/7/8/11）
+    #
+    # 上一批（v6.79～v6.81）把四个链尾写入者降为只报告、统一了解析器、接上了
+    # 整镜事务与阶段屏障。本批处理复核里**剩下的**那一类问题：契约文字与实现
+    # 互相矛盾、缺回归、以及守卫只存在于测试里。
+    #   发现 11：temporal_plan 纳入 semantic revision（已随 v6.79 落地）+
+    #            规则版本升级使旧 audit 失效 —— 本版补齐 revision 回归
+    #   发现 3 ：修复轮改调纯序列化 write_timeline_from_durations（不重估时长）+
+    #            锁定字段 mask 在**全部后处理结束后**比较 + 增删镜头由逐镜
+    #            revision gate 拒绝 —— 本版补齐「时长/mask/revision 三重不变」回归
+    #   发现 4 ：权威时间语法拒绝句内裸量词范围（人数/步数/尺寸）、丢弃完全越界段
+    #            而非产出反向区间；`extract_total_duration` 不再另持一套正则；
+    #            裸范围保留兼容但**可观测**（bare_range_atoms → 校验上报）
+    #   发现 5 ：事件窗口统一半开区间 [start, end)（末段闭合）；重复采样契约
+    #            三处对齐（docstring / 告警文案 / 实现），边界归属锁定到具体事件
+    #   发现 6 ：`_Final` 删除理由改为如实的「顺序依赖」而非「全输入字节级等价」；
+    #            新增 blood monotonic ↔ v6_43 的交换律反例回归
+    #   发现 7 ：拆镜差异化不得删除人物位置/道具/姿态事实（补事实守恒回归）
+    #   发现 8 ：`get_kf_t_sec` 双 duration 不一致时的兼容契约补测试
+    # ========================================================================
+    "v6.82": {
+        "name": "复核剩余项：契约一致化 + 顺序依赖回归 + 阶段屏障运行时守卫",
+        "date": "2026-09-20",
+        "constraints": [
+            "kf_blood_monotonic",
+        ],
+        "validation_checks": [
+            "_check_temporal_plan",
+        ],
+        "timecode_changes": [
+            "修复轮不再调用 _compute_timecodes(allow_split=False)，改调纯序列化 "
+            "write_timeline_from_durations（发现 3）",
+        ],
+        "style_prefix": [],
+        "tests": [
+            "tests/shared/test_kf_time_contract.py",
+            "tests/shared/test_semantic_barrier.py",
+            "tests/shared/test_quality_gate.py",
+            "tests/shared/test_motion_segments.py",
+            "tests/step01_script_gen/constraints/test_constraint_order_dependency.py",
+            "tests/step01_script_gen/constraints/test_structure_fixes_0912.py",
+            "tests/step01_script_gen/test_repair_shot_replacements.py",
+            "tests/step01_script_gen/test_split_shot_differentiation.py",
+            "tests/step01_script_gen/test_golden_chapter_001.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.81 — 整镜事务边界收口（2026-09-20，发现 9/10）
+    #
+    # 发现 9：hook 与普通镜头 schema 分离；`duration_sec` 单一派生口径；
+    #         整批全有或全无；事务末尾再比一次最终字段 mask
+    # 发现 10：source_quote 必须在原文可定位（+ 对抗测试）
+    # ========================================================================
+    "v6.81": {
+        "name": "整镜事务边界收口：hook 分离 / duration 单一口径 / 整批原子 / 最终 mask / 引文 grounding",
+        "date": "2026-09-20",
+        "constraints": [],
+        "validation_checks": ["_check_temporal_plan"],
+        "timecode_changes": [],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_repair_shot_replacements.py",
+            "tests/shared/test_motion_segments.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.80 — 阶段屏障：时间字段写入跟踪（2026-09-20）
+    #
+    # 对应 implementation-review 发现 1 的实施方案 #1/#2：约束链是单遍流水线，
+    # 链后写入会让链前检查失效。本版给引擎加可选钩子（默认 None，零行为变更）
+    # 并新增 shared/semantic_barrier.py，把「审计段不得写时间字段」变成
+    # **可执行守卫**而不是靠人工维持的注册顺序约定。
+    # ========================================================================
+    "v6.80": {
+        "name": "阶段屏障：时间字段写入跟踪 + 引擎回调钩子",
+        "date": "2026-09-20",
+        "constraints": [],
+        "validation_checks": [],
+        "timecode_changes": [],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_golden_chapter_001.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.78 — 时间结构落地：事件表 + 事件边界拆镜 + 镜头事务修复（2026-09-19）
+    #
+    # 文档 docs/step01-temporal-writers-audit-2026-09-19.md 第二/三/四阶段：
+    #   二阶段：temporal_plan 事件表（LLM 直出可选，不合格严格回退派生）
+    #   三阶段：拆镜切点改为**事件边界**（不再用旁白字符比例）；无合法边界不拆；
+    #           移除拆镜的语义注入（过肩/情绪/焦点）
+    #   四阶段：修复轮改为**完整镜头事务**（shot_replacements），
+    #           并新增「非目标镜头 revision 必须不变」判据
+    # ========================================================================
+    "v6.78": {
+        "name": "时间结构落地：temporal_plan 事件表 + 事件边界拆镜 + 镜头事务修复",
+        "date": "2026-09-19",
+        "constraints": [
+            "motion_time_integrity",
+            "split_continuity",
+        ],
+        "validation_checks": [
+            "_check_temporal_plan",
+        ],
+        "timecode_changes": [
+            "拆镜切点改为 temporal_plan 事件边界（新增 _event_boundary_cut），不再用旁白字符比例",
+            "无合法事件边界时不拆（[SPLIT-BLOCKED] 上报），不再退化硬切",
+            "移除拆镜伪造的 motion 文本（「从首帧推进到切分状态，完成：…」）",
+            "移除同一函数内重复的 differentiate_split_visuals 调用",
+        ],
+        "style_prefix": [],
+        "tests": [
+            "tests/shared/test_motion_segments.py",
+            "tests/step01_script_gen/test_golden_chapter_001.py",
+            "tests/step01_script_gen/test_repair_shot_replacements.py",
+            "tests/step01_script_gen/test_split_shot_differentiation.py",
+            "tests/step01_script_gen/test_split_frame_layouts_kfs.py",
+            "tests/step01_script_gen/test_timecode_split_gate.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.77 — motion_desc 时间解析统一（2026-09-19）
+    #
+    # 同一件事（从 motion_desc 抽时间段）原先有 **11 套互不一致的解析器**：
+    # 分隔符两组互不覆盖（`至/到` vs 全角 `－/～`），且剥标签正则只认整数
+    # ——`0-0.378378秒：…` 被剥成 `.378378秒：…` 残片写进 keyframes[*].desc。
+    # 现全部收敛到 `shared/motion_segments`（唯一事实源），并解除
+    # step02→step01 的反向 import。
+    # ========================================================================
+    "v6.77": {
+        "name": "motion_desc 时间解析统一：16 处解析点收敛到 shared/motion_segments",
+        "date": "2026-09-19",
+        "constraints": [
+            "motion_time_bounds",
+            "kf_event_order",
+            "split_continuity",
+            "final_quality_normalizer",
+            "kf_time_window_alignment",
+            "kf_temporal_consistency",
+            "duration_budget",
+            "weapon_state_consistency",
+        ],
+        "validation_checks": [
+            "_parse_motion_time_segments",
+            "_split_motion_to_seg_texts",
+            "_check_kf_time_window_alignment",
+            "_check_temporal_plan",
+        ],
+        "timecode_changes": [
+            "_rewrite_motion_time / _split_motion_desc_at_cut / _extract_motion_duration 委托 shared.motion_segments",
+            "时间标签统一截 2 位小数（原先 :g 输出 6 位有效数字 → 消除「0-0.378378秒」残缺文本）",
+        ],
+        "style_prefix": [],
+        "tests": [
+            "tests/shared/test_motion_segments.py",
+            "tests/step01_script_gen/test_golden_chapter_001.py",
+        ],
+    },
+
+    # ========================================================================
     # v6.76 — 时间轴证据门：KF 时间写入者全降为只报告（2026-09-19）
     #
     # 与 v6.75 同属 "evidence-gated writes" campaign 的另一半：
@@ -65,6 +811,7 @@ RULES_INDEX: dict[str, RuleEntry] = {
             "kf_temporal_consistency",
             "hook_duration",
             "runtime_extend",
+            "duplicate_shot_merge",
         ],
         "validation_checks": [],
         "timecode_changes": [
@@ -81,6 +828,7 @@ RULES_INDEX: dict[str, RuleEntry] = {
             "tests/step01_script_gen/constraints/test_runtime_extend.py",
             "tests/step01_script_gen/constraints/test_full_hardfix_kf_idempotency.py",
             "tests/step01_script_gen/test_timecode_split_gate.py",
+            "tests/step01_script_gen/constraints/test_structure_fixes_0912.py",
         ],
     },
 

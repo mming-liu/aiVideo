@@ -1,5 +1,4 @@
-# -*- coding: utf-8 -*-
-"""拆镜视觉差异化共用模块（v6.50，08-29）.
+"""拆镜视觉差异化共用模块（v6.50，08-29；v6.79 evidence-gated）.
 
 背景（13:46 run + 14:22 run 双实测）：项目里有**两个**拆镜器，都会把
 prompt/ff/lf 原样复制给子镜——
@@ -8,12 +7,20 @@ prompt/ff/lf 原样复制给子镜——
      索引来源；shot_b.ff=shot_a.lf（接续）但 shot_b.lf 是同一文本深拷贝
      → ff==lf 必然出现；prompt 深拷贝 → 相邻相似度 1.00）
 
-本模块提供两处共用的差异化三件套（确定性，对 Seedance image 模式有效——
-差异必须落在 ff/lf 上，它们才是图片模型的实际输入）：
+本模块只做**镜头层**差异化（确定性，对 Seedance image 模式有效——差异必须
+落在 ff/lf 上，它们才是图片模型的实际输入）：
   A. 景别按拆分深度推近（对白张力升级 = 镜头推近）
-  B. 过肩正反打：相邻子镜交换机位方向
-  C. part≥1 情绪递进 + 缓镜；焦点轮换（双人→说话人→听者反应）
-  D. ff==lf 兜底：lf 追加镜头缓推
+  D. ff==lf 兜底：lf 追加/改写镜头缓推指令
+
+**已删除的三项**（v6.77 起）：B 过肩正反打、C 情绪递进 + 焦点轮换、
+以及 D 分支里按说话人删除「X位于…」位置分句。它们都是**编造或删除故事
+事实**——谁的视角、什么情绪、画面聚焦谁、角色站在哪，原文都没有依据或
+本就是事实。拆镜只应改变**镜头语言**，不该替故事做决定。
+（见 docs/step01-temporal-writers-audit-2026-09-19.md 第三阶段、
+  docs/step01-temporal-writers-implementation-review-2026-09-19.md 发现 7）
+
+若两半仍高度相似（静态场景），由 `split_content_similarity` WARN 上报，
+不再靠编造内容或删除事实掩盖。
 """
 from __future__ import annotations
 
@@ -22,10 +29,6 @@ import re
 FRAMING_LADDER: tuple[str, ...] = (
     "大远景", "远景", "全景", "中景", "中近景", "近景", "特写", "大特写",
 )
-
-# 情绪阶梯（镜头内也递进：ff=第 N 级，lf=第 N+1 级）——ff/lf 共享基底+
-# 过肩+伤锚时（接续拆分必现），靠焦点轮换+推近+情绪递进三重差异破自抄
-_MOOD_LADDER: tuple[str, ...] = ("气氛骤紧", "气氛愈发紧绷", "气氛剑拔弩张", "一触即发")
 
 
 def shift_framing(text: str, steps: int) -> tuple[str, str]:
@@ -103,34 +106,28 @@ def _char_inert_in_text(name: str, text: str) -> bool:
 
 
 def differentiate_split_visuals(orig: dict, new_shot: dict, part_i: int) -> None:
-    """就地差异化子镜的 prompt/ff_desc/lf_desc（两个拆镜器共用）.
+    """就地差异化子镜的 prompt/ff_desc/lf_desc —— **只做镜头层**差异化.
 
     Args:
-        orig: 原始（被拆）镜头 dict——取 char_layout
+        orig: 原始（被拆）镜头 dict
         new_shot: 新构造的子镜 dict——就地改写 prompt/ff_desc/lf_desc
-        part_i: 子镜序号（0 起）。0=保持原描述；≥1 逐级推近+换机位+情绪递进
-    """
-    char_names = [str(it.get("name", "")).strip()
-                  for it in (orig.get("char_layout") or []) if isinstance(it, dict)]
-    char_names = [n for n in char_names if n]
-    # 说话人优先从原镜 narration 抽（前缀在原镜首句；timecode 拆分器给子镜
-    # 切的是后半段、无前缀——08-29 实测「画面聚焦（说话神情）」空名根因）
-    speaker = (extract_speaker(orig.get("narration_segment", ""), char_names)
-               or extract_speaker(new_shot.get("narration_segment", ""), char_names))
-    _combined_text = " ".join(filter(None, [
-        str(orig.get("ff_desc") or ""), str(orig.get("lf_desc") or ""),
-        str(orig.get("motion_desc") or ""), str(orig.get("prompt") or ""),
-        str(new_shot.get("ff_desc") or ""), str(new_shot.get("lf_desc") or ""),
-    ]))
-    listener = next(
-        (n for n in char_names
-         if n and n != speaker and not _char_inert_in_text(n, _combined_text)),
-        "",
-    )
+        part_i: 子镜序号（0 起）。0=保持原描述；≥1 景别逐级推近
 
-    # ff/lf 先剥运镜短语（必须在 A 景别位移之前——否则 A 会把继承推镜短语里
-    # 的景别词错位升级，产出「推至中景…缓推至近景」双指令；也保证幂等：
-    # 二次应用时先剥掉上次追加的推镜再重加，结果收敛不漂移）
+    v6.77（第三阶段，evidence-gated）：**移除语义注入**。原先还会追加
+    「过肩视角，越X的肩望向Y」「气氛骤紧 / 气氛剑拔弩张」「画面聚焦X
+    （说话神情 / 聆听反应）」。这些是**编造的故事事实**——谁的视角、什么情绪、
+    画面聚焦谁，原文都没有依据。拆镜只应改变**镜头语言**，不该替故事做决定
+    （见 docs/step01-temporal-writers-audit-2026-09-19.md 第三阶段）。
+
+    保留的两项都属镜头层：
+      A. 景别按拆分深度推近（FRAMING_LADDER）
+      D. ff≈lf 兜底：相似度 ≥0.85 时给 lf 补一条推镜指令
+
+    若两半仍高度相似（静态场景），由 `split_content_similarity` WARN 上报，
+    不再靠编造内容掩盖。
+    """
+    # ff/lf 先剥运镜短语（幂等保证：二次应用先剥掉上次追加的推镜再重加，
+    # 结果收敛不漂移）
     ff = _strip_camera_push(new_shot.get("ff_desc", "") or "")
     lf = _strip_camera_push(new_shot.get("lf_desc", "") or "")
 
@@ -140,81 +137,24 @@ def differentiate_split_visuals(orig: dict, new_shot: dict, part_i: int) -> None
     ff, _ = shift_framing(ff, steps)
     lf, _ = shift_framing(lf, steps)
 
-    # B. 过肩正反打：偶数子镜越听者肩望说者，奇数子镜反向
-    if speaker and listener:
-        pov = (f"过肩视角，越{listener}的肩望向{speaker}" if part_i % 2 == 0
-               else f"过肩视角，越{speaker}的肩望向{listener}")
-        if "过肩" not in ff:
-            ff = ff.rstrip("。") + f"，{pov}。"
-        if "过肩" not in lf:
-            lf = lf.rstrip("。") + f"，{pov}。"
-        if "过肩" not in prompt:
-            prompt = prompt.rstrip("。") + f"。{pov}。"
-
-    # C. part≥1 情绪递进 + 缓镜（镜头内 ff→lf 也沿阶梯进一级）
-    if part_i >= 1:
-        mood_idx = 1 if part_i == 1 else 2
-        mood = _MOOD_LADDER[mood_idx]
-        mood_lf = _MOOD_LADDER[min(mood_idx + 1, len(_MOOD_LADDER) - 1)]
-        if mood not in prompt:
-            prompt = prompt.rstrip("。") + f"。{mood}，镜头缓推向对话双方。"
-        if mood not in ff:
-            ff = ff.rstrip("。") + f"，{mood}。"
-        if mood_lf not in lf:
-            lf = lf.rstrip("。") + f"，{mood_lf}。"
-
-    # E. 焦点轮换（对白三镜覆盖：双人 → 说话人 → 听者反应）
-    if part_i >= 1 and (speaker or listener):
-        focus, kind = ((speaker, "说话神情") if part_i % 2 == 1
-                       else (listener or speaker, "聆听反应"))
-        tag = f"画面聚焦{focus}（{kind}）"
-        if tag not in prompt:
-            prompt = prompt.rstrip("。") + f"。{tag}。"
-        if tag not in ff:
-            ff = ff.rstrip("。") + f"，{tag}。"
-        # E2. ff/lf 结构性差异化：lf = 推近一级（景别梯子）+ 焦点换到另一侧
-        #     （说话神情 ↔ 聆听反应）。接续拆分的 lf 与 ff 共享 90+ 字基底、
-        #     同侧焦点与同一伤锚，文本相似度 0.85-0.94、成图近乎同帧（16:34
-        #     run shot7.5/8.0/9.5 实测）——image 模式下视频没有动作可插值。
-        #     换焦点+推近后两帧画面主体与景别都不同。
-        lfocus, lkind = ((listener or speaker, "聆听反应") if kind == "说话神情"
-                         else (speaker, "说话神情"))
-        ltag = f"画面聚焦{lfocus}（{lkind}）"
-        # E2b. lf 推近到反应特写后，说话人/听者的全景站位从句（「X位于画…」）
-        #      与近景构图矛盾，且是 ff/lf 最大的共享块（16:34 run sim 0.85-0.94
-        #      主因）。按从句剥除；受害者/道具站位行保留（伤锚连续性依赖）。
-        _segs = re.split(r"([，。；])", lf)
-        _kept: list[str] = []
-        for _k in range(0, len(_segs), 2):
-            _seg, _delim = _segs[_k], (_segs[_k + 1] if _k + 1 < len(_segs) else "")
-            if ((_seg.startswith(speaker + "位于") if speaker else False)
-                    or (_seg.startswith(listener + "位于") if listener else False)):
-                continue
-            _kept.append(_seg + _delim)
-        lf = "".join(_kept)
-        if ltag not in lf:
-            # 推近目标按拆分深度走梯子（近景→特写），与「画面聚焦」主体
-            # 突出语义一致，避免出现「推至远景却聚焦面部」的自相矛盾
-            push_target = "特写" if part_i >= 2 else "近景"
-            lf = lf.rstrip("。") + f"，镜头较首帧缓推至{push_target}，{ltag}。"
-        elif "缓推至" not in lf:
-            # 幂等补齐：上次应用过（ltag 在）但本函数开头的剥镜把推镜短语
-            # 一并剥掉了——原位重插到 ltag 前，保证二次应用字节级收敛
-            push_target = "特写" if part_i >= 2 else "近景"
-            _anchor = f"，{ltag}。"
-            if _anchor in lf:
-                lf = lf.replace(_anchor, f"，镜头较首帧缓推至{push_target}{_anchor}", 1)
-            else:
-                lf = lf.rstrip("。") + f"，镜头较首帧缓推至{push_target}。"
-
-    # D. ff≈lf 终检（无说话人/听者可轮换时的兜底，如动作镜拆分）：
-    #    v6.50 口径：相似度 ≥0.85 即破（15:12 run 实测差 2-3 字的"自抄"
-    #    变体逃过精确匹配）
-    if ff and lf and not (part_i >= 1 and (speaker or listener)):
+    # D. ff≈lf 终检（拆镜后 ff/lf 常共享长基底；相似度 ≥0.85 即破）
+    if ff and lf:
         import difflib
         if difflib.SequenceMatcher(None, ff.rstrip("。"), lf.rstrip("。")).ratio() >= 0.85:
-            push = framing or "近景"
-            lf = _upsert_camera_push(lf, push)
+            # lf 补一条推镜指令——**镜头层**差异化
+            lf = _upsert_camera_push(lf, framing or "近景")
+            # v6.79（2026-09-20）：**删除**原先在此处的「构图一致性修复」。
+            #
+            # 旧实现在 lf≈ff 时按说话人前缀删除 lf_desc 里所有「X位于…」分句，
+            # 理由是「lf 已推近，全景站位与之矛盾」。但推近镜头**并不证明角色
+            # 不再位于画左**——那个位置仍是 frame_layout、轴线连续性和下一镜
+            # 衔接需要的事实。删除它等于用相似度这个质量信号去删事实字段
+            # （实测 `中景，张三位于画左，手持刀` 拆分后丢掉「张三位于画左」）。
+            #
+            # 正确处置：只保留景别/运镜词的结构化更新，不删任何人物、道具、
+            # 姿态、位置分句；两半仍高度相似时由 `split_content_similarity`
+            # WARN 上报并触发完整子镜重生。
+            # 见 docs/step01-temporal-writers-implementation-review-2026-09-19.md 发现 7。
 
     new_shot["prompt"] = prompt
     new_shot["ff_desc"] = ff

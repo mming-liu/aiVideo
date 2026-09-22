@@ -6,15 +6,13 @@ import re
 from shared.alias_map import CHARACTER_ALIASES
 from shared.content_safety import WEAPON_WORDS
 from shared.kf_time import get_kf_t_sec
+from shared import motion_segments as _ms
 from .base import Constraint
 from .types import RepairRecord, Severity, Violation
 
 
 _HOLD = ("握着", "手持", "持刀", "持匕首", "紧握", "右手持", "左手持", "扬起寒光")
 _RELEASE = ("已脱手", "脱手", "滑落", "掉落", "坠入", "没入", "沉入")
-_SEG_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(\d+(?:\.\d+)?)\s*(?:秒|s)?\s*[：:]?\s*(.*)"
-)
 
 
 def _name_variants(name: str) -> set[str]:
@@ -105,14 +103,19 @@ def _release_owner(text: str, prop: str, names: list[str], owners: list[str]) ->
 
 
 def _motion_segments(motion: str) -> list[tuple[float, float, str]]:
+    """把 motion 切成 [(start, end, body), ...]（v6.77 走统一解析器）.
+
+    解析改用 `shared.motion_segments`（分隔符并集、支持小数）。
+    **保留本处特有语义**：无时间标签的原子段给 `(0.0, inf, body)`——表示
+    「该状态适用于整镜」，查某时刻所属状态时不会漏。这一点与
+    `kf_event_order._segments`（无标签段跳过）不同，属调用方语义，不下沉。
+    """
     out: list[tuple[float, float, str]] = []
-    for atom in re.split(r"[;；。]", str(motion or "")):
-        atom = atom.strip()
-        if not atom:
-            continue
-        m = _SEG_RE.search(atom)
-        if m:
-            out.append((float(m.group(1)), float(m.group(2)), m.group(3).strip()))
+    for atom in _ms.atoms(motion):
+        rng = _ms.atom_range(atom, 0.0)
+        if rng is not None:
+            a, b = rng
+            out.append((a, b, _ms.strip_time_label(atom)))
         else:
             out.append((0.0, float("inf"), atom))
     return out

@@ -132,6 +132,59 @@ _FRAME_LAYOUTS = {
 # 镜头 shot
 # ========================================================================
 
+# ===========================================================================
+# v6.77（第二阶段）：结构化事件表 temporal_plan
+#
+# 目标：把「时间」从自由文本 motion_desc 提升为结构化事实——每个事件有明确的
+# 起止秒数与出处，KF 可按事件身份归属，而不是反复用正则猜。
+#
+# 迁移策略（决定 1，2026-09-20）：**目标必填，当前过渡态先保持可选且只读**，
+# 切换必须按依赖顺序发布——先补全整镜覆盖/连续性/grounding/motion 一致性校验
+# （发现 10），再把 canonical plan 纳入 script/per-shot revision 并升级规则版本
+# （发现 11），然后所有结构消费者只读同一个已验证 plan，最后才同时把
+# `_SHOT`/`_HOOK`/replacement schema 改为 required（旧缓存统一失效）。
+# 过渡态下该字段**只参与审计与对比统计**：不得驱动拆镜、合并、duration 或 KF 写入。
+# 见 docs/step01-temporal-writers-implementation-review-2026-09-19.md 决定 1。
+#
+# `event_id` 由管线按镜头 index 确定性分配（`<index>_e<n>`），不由模型产出——
+# 避免模型自造 id 冲突或与镜头对不上号。
+# ===========================================================================
+_TEMPORAL_EVENT = {
+    "type": "object",
+    "properties": {
+        "start_sec": {"type": "number", "minimum": 0},
+        "end_sec": {"type": "number", "minimum": 0},
+        "description": {
+            "type": "string",
+            "description": "该时段发生的事件（动词+主体+方向），与 motion_desc 对应段一致",
+        },
+        "source_quote": {
+            "type": "string",
+            "description": "该事件在原文中的出处短句；原文无对应句时为空字符串",
+        },
+    },
+    "required": ["start_sec", "end_sec", "description", "source_quote"],
+    "additionalProperties": False,
+}
+
+_TEMPORAL_PLAN = {
+    "type": "object",
+    "properties": {
+        "events": {
+            "type": "array",
+            "description": (
+                "本镜的事件表，**按时间升序、首尾相接、覆盖 (0, duration]**；"
+                "通常 2-4 个事件。start_sec/end_sec 必须落在镜头时长内。"
+                "与 motion_desc 的分段一一对应。"
+            ),
+            "items": _TEMPORAL_EVENT,
+        },
+    },
+    "required": ["events"],
+    "additionalProperties": False,
+}
+
+
 _SHOT = {
     "type": "object",
     "properties": {
@@ -165,6 +218,7 @@ _SHOT = {
         },
         "variation_type": {"type": "string", "enum": ["small", "large"]},
         "keyframes": {"type": "array", "items": _KEYFRAME},
+        "temporal_plan": _TEMPORAL_PLAN,
         # v6.21：人物朝向（镜头组接规则33，可选——同场景连续镜头朝向一致性校验用）
         "subject_direction": {"type": "string", "description": "人物朝向（左/右/面向镜头/背对），可选；同场景相邻镜头朝向不应翻转"},
         # v6.57+：per-frame spec 事实源（必填；QC + prompt 组装均走它，逐帧独立出镜表）。
@@ -211,6 +265,7 @@ _HOOK = {
             "description": "本镜头视频目标时长（秒）——由 step01 timecode 权威计算，视频生成以它为准",
         },
         "keyframes": {"type": "array", "items": _KEYFRAME},
+        "temporal_plan": _TEMPORAL_PLAN,
         "ff_desc": {"type": "string", "description": "钩子首帧静态画面描述。必须定格在 motion 第一个动作的「前一刻」（动作尚未发生），禁止动作进行态（破水而出/正在刺向/张嘴尖叫）；破水而出→潜伏水下/水面微澜、刺向→刀尖抵近/即将触及、尖叫→张嘴欲呼；禁止时间推进/多动作堆叠、禁止完成态动词（已刺中/倒地）；多人视线用画左/画右锚定并汇聚到同一焦点。用短句动词前置，钩子 ≤160 字符；只删冗余不删角色/前一刻/明确朝向/服装色。"},
         "lf_desc": {"type": "string"},
         "motion_desc": {"type": "string"},
@@ -628,6 +683,105 @@ OUTLINE_SCHEMA = {
     },
 }
 
+
+
+# ===========================================================================
+# v6.77（第四阶段）：修复轮改为「完整镜头事务」
+#
+# 旧契约 `REPAIR_PATCH_SCHEMA` 返回字段级 `patches[]`。问题是：LLM 只补它想到
+# 的字段，结构字段之间可以互不一致（补了 motion 没补 keyframes、补了 lf 没补
+# frame_layouts.kfs），系统还得再跑 post_fix / hard_fix / timecode 去"兜"，
+# 而接受判定比较的是「补丁 + 全部后处理副作用」——后处理引入的新阻断会把
+# 本该通过的局部修复整轮拖回滚。
+#
+# 新契约要求返回**完整镜头对象**（与首次生成同构，复用 `_SHOT`），
+# 使「结构字段成套出现」成为 schema 层保证，而不是事后校验。
+# ===========================================================================
+# v6.89（发现 14 选项 2，2026-09-22）：**单镜定向拆分**的响应契约。
+#
+# 背景：单镜内容需求 > cap（实测 9.8 / 12.5 / 14.7 / 20.2s）是唯一没被任何修复
+# 路径消掉的桶，而 prompt 侧的「单条台词也可以切开」显式许可**已被证伪**——三个
+# 候选行为逐字不变。故改为对**单个**被点名的超载镜头做一次定向拆分请求。
+#
+# 关键：`items` 直接复用 `_SHOT`（**24 个必填字段**）——返回的子镜在 schema 层
+# 就不可能是空壳。这正是当年禁止「复制字段拆镜」要防的东西，而模型重生成的
+# 子镜天然不踩（子镜的视觉字段是模型新写的，不是从父镜复制的）。
+SPLIT_SHOT_SCHEMA = {
+    "name": "split_over_cap_shot",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "sub_shots": {
+                "type": "array",
+                "minItems": 2,
+                # v6.89 续：上限 3 → 4。提示词要求「最少段数 = ⌈需求 ÷ 上限⌉」，
+                # 若某镜需求 > 3×上限（>24s），3 段就**不可能**满足——上限必须
+                # 容得下那条指令，否则又是一处「判据永远不可能通过」。
+                "maxItems": 4,
+                "description": (
+                    "把被点名的那**一个**超载镜头拆成的 2-4 个**完整**子镜。"
+                    "每个子镜必须是与首次生成同构的完整镜头对象（24 个字段成套出现），"
+                    "禁止只给变化字段、禁止留空壳。台词按原文**连续切分**、逐字不增不减。"
+                ),
+                "items": _SHOT,
+            },
+        },
+        "required": ["sub_shots"],
+        "additionalProperties": False,
+    },
+}
+
+
+REPAIR_SHOT_REPLACEMENT_SCHEMA = {
+    "name": "repair_shot_replacements",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "shot_replacements": {
+                "type": "array",
+                "description": (
+                    "只放**被点名镜头**的完整替换版本。未点名的镜头不要出现在这里。"
+                    "每个 shot 必须是结构完整的镜头对象（与首次生成同构："
+                    "narration/subtitle/prompt/motion_desc/ff_desc/lf_desc/"
+                    "keyframes/frame_layouts/duration 等成套出现），"
+                    "禁止只给发生变化的字段。"
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "shot_id": {
+                            "type": "string",
+                            "description": "目标普通镜头 index（如 \"4\"）",
+                        },
+                        "shot": _SHOT,
+                    },
+                    "required": ["shot_id", "shot"],
+                    "additionalProperties": False,
+                },
+            },
+            # v6.80（发现 9 #1）：hook 与普通镜头**字段要求不同**，必须分开承载。
+            # 旧契约让 hook 也走 `_SHOT`，而真实 hook 用 `_HOOK`（多 mask_area、
+            # 少 scene/location 等），模型只能产出不合规对象或被迫填假字段。
+            "hook_replacement": {
+                "type": "object",
+                "description": "hook 的完整替换版本（只在 hook 被点名时输出）",
+                "properties": {
+                    "shot_id": {
+                        "type": "string",
+                        "description": "固定为 \"hook\"",
+                    },
+                    "shot": _HOOK,
+                },
+                "required": ["shot_id", "shot"],
+                "additionalProperties": False,
+            },
+        },
+        "required": ["shot_replacements"],
+        "additionalProperties": False,
+    },
+}
 
 REPAIR_PATCH_SCHEMA = {
     "name": "repair_patches",
