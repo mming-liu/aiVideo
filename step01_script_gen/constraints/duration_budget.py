@@ -53,12 +53,16 @@ class DurationBudgetConstraint(Constraint):
         from shared.dialogue import has_dialogue
         from shared.model_caps import active_video_duration_cap
 
+        from step01_script_gen.timecode import active_shot_cap as _asc
+
+        # v6.98（2026-09-22 审核 P1-1）：**删掉异常回退 8.0**。
+        #
+        # 唯一源导入失败时静默恢复旧规则，等于「没有唯一源」：系统会按 8s 报假
+        # HARD（实测 cap 8 时多报 3 条合法镜头），而且**看不出来**发生了回退。
+        # 现在让 ImportError 直接冒出去（引擎会按 `[CONSTRAINT] 异常` 打出约束名，
+        # 不是静默）——失败要可见，不要伪装成正常结果。
+        shot_cap = _asc()
         model_cap = float(active_video_duration_cap() or 0)
-        try:
-            from step01_script_gen.timecode import active_shot_cap as _asc
-            shot_cap = _asc()
-        except Exception:
-            shot_cap = min(8.0, model_cap) if model_cap else 8.0
 
         durations: list[float] = []
         minima: list[float] = []

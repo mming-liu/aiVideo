@@ -41,6 +41,238 @@ class RuleEntry(TypedDict, total=False):
 
 RULES_INDEX: dict[str, RuleEntry] = {
     # ========================================================================
+    # ========================================================================
+    # v6.102 — 第十五次重跑暴露的三项（用户：全部修复）
+    #
+    # 1. **修复轮空转**：第十五次第 2/3 轮 `before/after/resolved` **完全相同**
+    #    （`resolved=0`），却都通过验收——靠的是 `audit_resolved=2`，而这个数
+    #    **幂等**：`_audit_issue_resolved()` 问的是「evidence 现在还在不在稿子里」，
+    #    第 1 轮清掉后永远为真。于是同一批 4 镜被白改两次、烧掉 2 次 LLM 调用。
+    #    修法：新增 `_audit_issue_newly_resolved(script_after, script_before, issue)`
+    #    ——基线里已经解决的不算本轮功绩；`_repair_acceptance_decision` 增加
+    #    `script_before` 参数（调用点传 `_round_before_script`）。
+    #    另加防御：**通过验收但零改善**（resolved=0 且 audit_resolved=0）→ 回退本轮
+    #    并停止后续轮次（`_no_gain`）。
+    # 2. **候选浪费**：同两条长台词（原文 50 / 59 字）让候选 1/2/3 全部结构不合法，
+    #    每轮白烧 3 个候选（各 ~26k token），而第三个已是 100 分。修法：新增
+    #    `_candidate_only_splittable()`——候选的**唯一**结构问题是
+    #    `shot_content_over_cap`（有确定性修复路径：定向拆分）时**提前采纳**；
+    #    `shot_duration_below_min` 无确定性路径，仍拒收重取。摘要新增
+    #    `structural_codes`（消息文本判不出类型）。
+    # 3. **KF 数 < 时段数**（第十五次 5 条，最大一类）：规则 16.4 模型稳定违反，
+    #    而 CLAUDE.md 禁止「代码派生 kf desc」。新增约束
+    #    `motion_segment_kf_align`（①段末尾）：**按 KF 落点分组**把 `motion_desc`
+    #    的时段合并到与 KF 数一致——只加宽时间窗、文本一字不丢、不派生任何 kf。
+    #    保守边界：无 KF 的镜头不碰；目标段数不低于 2（压到 1 段会被检查器整段
+    #    跳过 = 藏告警）；`kf 数 = 1` 的镜头修不掉，告警如实保留交修复轮。
+    # ========================================================================
+    "v6.102": {
+        "name": "修复轮空转（audit 判据改「新解决」）/ 候选提前采纳 / 时段合并对齐 KF 数",
+        "date": "2026-09-23",
+        "prompt_sections": [],
+        "constraints": ["motion_segment_kf_align"],
+        "validation_checks": [],
+        "timecode_changes": [],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/constraints/test_motion_segment_kf_align.py",
+            "tests/step01_script_gen/test_repair_acceptance.py",
+            "tests/step01_script_gen/test_repair_shot_replacements.py",
+            "tests/step01_script_gen/test_candidate_parallel.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.101 — 第十四次重跑的另外三项（用户：全部修复）
+    #
+    # 1. **修复预算**：`_REPAIR_MAX_ROUNDS` 1 → 3、`_REPAIR_MAX_SHOTS_PER_ROUND`
+    #    3 → 4、`REPAIR_MAX_OUTPUT_TOKENS` 8000 → 16000。第十四次实测 22 条阻塞
+    #    分布在 14 镜上，而一轮只动 3 镜、只解掉 1 条——真正的瓶颈是预算。
+    #    **必须一起改的两处**（否则轮数放开就出事）：
+    #      · 原实现只有第 1 轮限量，第 2 轮起 `picked = dict(shot_items)` 全量
+    #        → 一次性发 10+ 个镜头对象 → `finish_reason=length` 整份丢弃；
+    #      · 接受判定原本在**循环外**（整段后处理 + 一次验收）→ 前两轮的提交
+    #        完全不设防。改为**每轮一个独立事务**（后处理 + 快照还原 + 验收都在
+    #        轮内；未通过则回退本轮并停止）。
+    #    另加：每轮开始前复查 `_budget_exceeded()`（入口那次只保证开始时没超）。
+    # 2. **结构收敛轮超时**：`_repair_timeout_sec()`（180s）→
+    #    `_full_script_timeout_sec()`（300s）。它是**全脚本级**请求（输入整章 +
+    #    输出 ~26k token），第十四次实测 180s 直接客户端超时 → 连候选都没拿到。
+    # 3. **开篇空镜接入结构 regen**：v6.99 把两个空镜约束改成 report-only（代码
+    #    不再删镜头）时，审核要求「删除诉求交结构 regen」**没有落地**——收敛轮
+    #    只读 `_shot_duration_issues`，看不见空镜。现在：
+    #      · `quality_issues.opening_empty_shot_issues()` / `is_opening_empty_shot()`
+    #        是**唯一检测源**（`opening_empty_shot_cap` 改为复用，去掉自带的三件套）；
+    #      · `_structural_shot_issues()` 纳入该 issue（**advisory**，不新增阻塞）；
+    #      · `_structural_feedback()` 补第 5 条修法（合并/替换成带主体的建立镜，
+    #        **不是**删镜头）。
+    # ========================================================================
+    "v6.101": {
+        "name": "修复预算 3 轮×4 镜（每轮独立事务）/ 结构轮超时 300s / 开篇空镜接入结构 regen",
+        "date": "2026-09-23",
+        "prompt_sections": [
+            "main.py:def _structural_feedback",
+        ],
+        "constraints": [
+            "opening_empty_shot_cap",
+            "opening_empty_shot_remove",
+        ],
+        "validation_checks": [],
+        "timecode_changes": [],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_repair_shot_replacements.py",
+            "tests/step01_script_gen/test_structural_convergence.py",
+            "tests/step01_script_gen/constraints/test_opening_empty_shot_cap.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.100 — 第十四次重跑实测：mask 闸门不认「本轮授权过的改动」
+    #
+    # 实测（2026-09-23 21:03:46）：
+    #   [REPAIR] 接受条件: before=25+audit1 after=15 resolved=10 audit_resolved=1 new=0
+    #   [REPAIR] LLM 改动了锁定字段 2 处: ['shot 4.duration: 4.0 -> 6.0', 'shot 7.duration: 4.0 -> 5.0']
+    #   [REPAIR] 修复未满足接受条件（reason=locked_field_changed, ...），回退本轮修复
+    #
+    # `_final_field_mask_violations()` 拿 `_FINAL_LOCKED_FIELDS`（含 `duration`）当
+    # 唯一判据，而 `duration` **正是**时长类 issue 授权改的字段
+    # （`_REPAIR_CODE_FIELDS["shot_duration"] == ("duration",)`；消息里的「时长」也会被
+    # `_fields_from_text` 解析成 `duration`）。旁证：shot 7 的「未授权路径已回填」列表
+    # **不含** duration——它确实在授权集合内、被 merge 有意放行。
+    # 结果：10 条已解决的阻塞被这一个闸门否掉。**主线 B 的新形态**：不是「不认管线
+    # 自己的归一化」，而是「**不认本事务自己授权的改动**」。
+    #
+    # 修法：mask 判据改为「锁定字段中**本轮未授权**的那些」，调用点传
+    # `allowed_by_target`。授权层按 issue 推导（具体），`_FINAL_LOCKED_FIELDS` 是
+    # 粗粒度默认值（兜底）——具体优先于默认，默认仍管住没被授权的锁定字段。
+    # 同时修掉修复 prompt 里自相矛盾的一句：原文把 `duration` 列为「本轮禁止修改」，
+    # 后半句却说「duration_sec 由 duration 派生，你**只**给 duration」。
+    # ========================================================================
+    "v6.100": {
+        "name": "mask 闸门改为授权感知：不得把本轮授权过的 duration 改动判成越权",
+        "date": "2026-09-23",
+        "prompt_sections": [
+            "main.py:Mask 字段清单（本轮禁止修改）",
+        ],
+        "constraints": [],
+        "validation_checks": [],
+        "timecode_changes": [],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_repair_mask_baseline.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.99 — 二次代码复核（2026-09-23）的 2 P0 + 2 P1
+    #
+    # 复核文档：`docs/step01-convergence-fixes-review-2026-09-22.md` 第八节。
+    # v6.98 的 6 项里 4 项复核通过，4 项有缺口：
+    #
+    #   P0-A **统一验收没比较全部 blocking**：`_accept_regen_candidate()` 只检查
+    #        手工列出的 9 个 `integrity_codes`。确定性反例：候选只多一个越界 KF
+    #        （`kf_time_out_of_shot`，hard），`integrity_ids` 完全相同 → 旧判据
+    #        返回 `(True, [])`。修法：新增 `_blocking_not_degraded()`，用
+    #        **Counter 多重集**比较**全部** hard/visual_risk 身份（集合会漏「同一
+    #        问题 1 次→3 次」，总数会漏「修掉 A、引入 B」）。身份与镜头序号无关。
+    #   P0-B **空镜删除的 sanctioned 方案与时间屏障冲突**：只豁免结构检查、没豁免
+    #        时间检查 → 删首镜让后续镜头按**位置**前移 → 实测 20 条
+    #        `time_field_audit_write` HARD，与 advisory 同发。用户决定（选项 B）：
+    #        `opening_empty_shot_cap` / `opening_empty_shot_remove` **全部改
+    #        report-only**（不删/不合并/不重编号/不改时长），
+    #        `STRUCTURAL_SANCTIONED_WRITERS` **恢复空集**。
+    #   P1-A **结构屏障看不见等数量替换**：`del` 一镜 + `insert` 一镜（总数不变）在
+    #        digest 层面与「逐镜文本改写」同形。修法：结构判定改用
+    #        **对象身份 + 内容多重集**双信号（`diff_shot_structure`）——同一对象原地
+    #        改写 = content；对象增删/替换且内容多重集也变 = structural；纯重排 =
+    #        structural；深拷贝重建（内容逐字相同）= content。
+    #   P1-B **cap 只在运行时追加块里统一**：`.md` 静态模板仍写死「单镜 ≤ 15s」
+    #        「对话镜 6-15s」「安全值 ≤56 字」，cap=6/12 时模型同时看到两个值。
+    #        修法：模板改占位符（`{{SHOT_CAP}}` / `{{SHOT_CAP_DEC}}` /
+    #        `{{NARR_MAX_CHARS}}` / `{{DIALOGUE_TARGET}}` / `{{DUR_RANGES}}`），
+    #        `_load_prompt()` 导入期统一渲染；残留占位符**抛错**（fail-closed）。
+    # ========================================================================
+    "v6.99": {
+        "name": "二次复核修复：全部 blocking 验收 / 空镜 report-only / 结构身份判定 / 模板 cap 占位符",
+        "date": "2026-09-23",
+        "prompt_sections": [
+            "prompts/system.md:B. 单镜时长",
+            "prompts/main.md:2. 时长分配",
+            "prompts/doubao_system.md:RULE-9",
+        ],
+        "constraints": [
+            "opening_empty_shot_cap",
+            "opening_empty_shot_remove",
+        ],
+        "validation_checks": [],
+        "timecode_changes": [],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_regen_acceptance_gates.py",
+            "tests/step01_script_gen/constraints/test_opening_empty_shot_cap.py",
+            "tests/step01_script_gen/constraints/test_opening_empty_shot_remove.py",
+            "tests/shared/test_semantic_barrier.py",
+        ],
+    },
+
+    # ========================================================================
+    # v6.98 — 收敛闭环审核（2026-09-22）的 6 项修复：4 项 P0/P1 缺口 + 2 项 P2
+    #
+    # 审核文档 `docs/step01-convergence-fixes-review-2026-09-22.md` 提出 4 P0 +
+    # 2 P1 + 2 P2；逐条复核后**全部成立**（P0-3 的产品取舍部分单列待定），
+    # 确定性反例见该文档第六节与 `_verify_review.py`。
+    #
+    #   P0-1 结构收敛 `N → 0` 走提前返回 → **绕过完整性与内容门**：
+    #        修得最干净的那次重生反而验收最弱。修法：取消快速返回，
+    #        所有 `N → M`（含 `M=0`）统一走 `_accept_regen_candidate()`。
+    #   P0-2 B2 内容不退化的**分母由候选自己提供** + 异常 fail-open：
+    #        实测 5 种逃逸（删光 core_keywords / 删光台词 / 按比例删内容 /
+    #        同数量换身份 / 检查器抛异常）。修法：`_content_inventory()` 从
+    #        **旧稿**导出固定清单（已覆盖关键词 + 台词锚），异常一律按退化。
+    #   P0-3 屏障只保护**时间字段**，审计段里 `del shots[ri]` 完全不可见：
+    #        新增 `semantic_payload_digest` / `diff_semantic_payload`，
+    #        跟踪镜头增删、重排、逐镜语义、hook/characters；
+    #        未受豁免 → `semantic_audit_write`(hard)；受豁免
+    #        （`STRUCTURAL_SANCTIONED_WRITERS`）→ advisory 留证。
+    #   P0-4 `run_hard_fix()` 在跟踪器最后一次回调之后调 LLM merge：
+    #        时间屏障看不见、hook 整对象替换、无目标集合/字段授权/身份验收。
+    #        修法（审核首选）：删除该调用，LLM 侧统一交事务式修复管线。
+    #   P1-1 「单镜上限唯一源」未覆盖**实际生成提示**：`min(8.0, cap)` 与
+    #        「超 8s 必拆镜」仍在 → 生成层主动拆开 8-12s 合法镜头、抬高总时长；
+    #        另有「拆成多个 2-3 秒短镜」低于最短时长 3.5s。修法：提示词一律
+    #        按 `timecode.active_shot_cap()` 渲染（含类型推荐区间夹取），
+    #        并删除各模块 `except: return 8.0` 的静默回退。
+    #   P1-2 完整性「数量不增加」不能证明没有新问题：新增与序号无关的
+    #        `integrity_ids` 身份集合，要求 `new_ids - old_ids == ∅`。
+    #   P2-1 mask 纵深检查**恒为空**（比较的是旧稿 vs 旧稿）：改比 `merged`。
+    #   P2-2 汇总文档与实现不同步（在重跑后一并更新）。
+    #
+    # 待定（产品取舍，未在本次改动内）：P0-3 的空镜删除是否改为 report-only。
+    # ========================================================================
+    "v6.98": {
+        "name": "收敛闭环审核修复：统一验收 / 内容清单 / 语义屏障 / 提示词 cap 唯一源",
+        "date": "2026-09-22",
+        "prompt_sections": [
+            "prompts.py:def _build_total_duration_constraint",
+            "prompts.py:def _duration_cap_guidance",
+            "prompts.py:def _dur_range",
+            "prompts.py:def _build_regen_iron_rules",
+            "main.py:def _structural_feedback",
+        ],
+        "constraints": [],
+        "validation_checks": [],
+        "timecode_changes": [],
+        "style_prefix": [],
+        "tests": [
+            "tests/step01_script_gen/test_regen_acceptance_gates.py",
+            "tests/step01_script_gen/test_structural_convergence.py",
+            "tests/shared/test_semantic_barrier.py",
+            "tests/step01_script_gen/constraints/test_regen_trigger.py",
+            "tests/step01_script_gen/test_repair_shot_replacements.py",
+        ],
+    },
+
     # v6.97 — 「生效单镜上限」收敛为唯一源（用户批准，2026-09-22）
     #
     # v6.93 把项目单镜上限 8s → 15s 时，**有 3 处写死的 8.0 漏改**，另有多处各算各的：

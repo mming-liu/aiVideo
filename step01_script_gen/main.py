@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import json
 import re
+from collections import Counter as _Counter
 from contextlib import redirect_stdout
 
 # 确保从项目根目录解析导入
@@ -433,11 +434,18 @@ def _actual_shots_total(script: dict) -> float:
 _INTEGRITY_NUM_RE = re.compile(r"[0-9]+(?:[.][0-9]+)?")
 
 
-def _integrity_identity(issue) -> str:
-    """完整性问题身份：code + 帧 + 实体 + 字段 + **去数字后的消息**.
+def _blocking_identity(issue) -> str:
+    """blocking 问题身份：code + 帧 + 实体 + 字段 + **去数字后的消息**.
 
     消息里的数字（镜头号、秒数、字数）全部归一成 `#`——它们随重排/收敛而变，
     不属于「问题身份」。
+
+    v6.99（2026-09-23 二次审核 P0-A）：**所有 blocking 都走这一个身份函数**。
+    原实现只给 9 个 `integrity_codes` 建身份，于是「统一验收」名不副实：
+    `kf_time_out_of_shot` / `kf_layout_count_mismatch` / `kf_event_window_mismatch`
+    等不在那 9 个码里的 blocking，**新稿引入它们照样被采纳**（确定性反例见审核
+    文档第八节 P0-A：候选只多一个 `t_sec=9.0` 的 KF，`_accept_regen_candidate`
+    返回 `(True, [])`，而其中 `kf_time_out_of_shot` 是 hard）。
     """
     msg = str(getattr(issue, "message", "") or "")
     msg = _INTEGRITY_NUM_RE.sub("#", msg)
@@ -449,6 +457,41 @@ def _integrity_identity(issue) -> str:
         msg,
     )
     return "|".join(parts)
+
+
+def _blocking_not_degraded(old_q: dict, new_q: dict) -> tuple:
+    """**全部 blocking**（hard + visual_risk）相对旧稿是否未退化；返回 (是否通过, 原因).
+
+    v6.99（二次审核 P0-A）：「统一候选验收」此前只比较手工列出的 9 个
+    `integrity_codes`，其余 blocking 一概不看——候选可以在解决结构超载的同时
+    引入新的 KF 越界类阻塞并被采纳（第十一次重跑「超载归零、同时新出现 3 条 KF
+    越界」就是这一型）。
+
+    判据用 **Counter 多重集**，不是集合也不是总数：
+      - 用集合会漏掉「同一问题从 1 次涨到 3 次」；
+      - 用总数会漏掉「修掉 A、引入 B」（数量不变）。
+    要求 `Counter(新) - Counter(旧) == 空`：目标问题允许消失，**不允许出现新身份，
+    也不允许既有身份次数增加**。
+
+    身份与镜头序号无关（见 `_blocking_identity`），所以整脚本重生造成的
+    镜头重排不会把每个问题都算成「新身份」。
+    """
+    _new_ids = list(new_q.get("blocking_ids") or [])
+    _old_ids = list(old_q.get("blocking_ids") or [])
+    if not _new_ids:
+        return True, ""
+    if not _old_ids:
+        # 旧稿干净而新稿不干净 → 只要新稿有 blocking 就是退化
+        return False, "新稿出现 %d 条 blocking（旧稿 0 条）：%s" % (
+            len(_new_ids), _new_ids[0][:80])
+    _extra = _Counter(_new_ids) - _Counter(_old_ids)
+    if _extra:
+        _items = list(_extra.items())
+        # 报「**净增**次数」而不是原文重述：`Counter` 差集给的是增量，
+        # 写成「×N」会被读成「总次数」，日志里判不出是新增还是变多。
+        _desc = "; ".join("%s（净增 %d 次）" % (k[:70], v) for k, v in _items[:3])
+        return False, "新 blocking 身份 %d 类: %s" % (len(_items), _desc)
+    return True, ""
 
 
 def _integrity_not_degraded(old_q: dict, new_q: dict) -> tuple:
@@ -639,6 +682,9 @@ def _accept_regen_candidate(before: dict, candidate: dict, novel_text: str) -> t
     目标指标的最佳值，不代表其他维度安全。所有 `N → M`（含 `M=0`）都只能从这里出去。
 
     判据（全部 fail-closed）：
+      0. **全部 blocking 不退化**（无新身份、既有身份次数不增，见
+         `_blocking_not_degraded`——v6.99 起是这道门的**主体**；只比 integrity
+         子集会让「新引入 KF 类阻塞」的候选照样通过）；
       1. 完整性**不退化**（计数不增 + 无新身份，见 `_integrity_not_degraded`）；
       2. 内容**不退化**（结构非法数 / 台词清单 / 已覆盖关键词清单 / grounding 率，
          见 `_content_degradation`——清单取自 `before`，候选不能提供自己的分母）。
@@ -655,9 +701,15 @@ def _accept_regen_candidate(before: dict, candidate: dict, novel_text: str) -> t
     except Exception as e:
         return False, [f"候选完整性摘要检查器异常，按拒绝处理: {e}"]
     reasons: list = []
-    _ok, _why = _integrity_not_degraded(old_q, new_q)
+    # v6.99（二次审核 P0-A）：**第一道门就是「全部 blocking 不退化」**。
+    # 它比下面的 integrity 子集更宽（9 个码 → 全部 hard/visual_risk），
+    # 因为「统一验收」必须覆盖候选能引入的**所有**阻塞。
+    _ok, _why = _blocking_not_degraded(old_q, new_q)
     if not _ok:
-        reasons.append("完整性退化：" + str(_why))
+        reasons.append("blocking 退化：" + str(_why))
+    _ok_i, _why_i = _integrity_not_degraded(old_q, new_q)
+    if not _ok_i:
+        reasons.append("完整性退化：" + str(_why_i))
     reasons.extend(_content_degradation(before, candidate, novel_text))
     return (not reasons), reasons
 
@@ -745,7 +797,7 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
                 f"4. 删减冗余过渡镜头与重复表达的空镜\n"
                 f"5. 保留全部关键剧情节点（开篇冲突 / 刺杀 / 高潮 / 收尾），不删剧情只合并冗余\n"
                 f"6. **不要把多镜拆成单镜的细碎画面**——一镜只承载 1 个核心动作/情绪转折\n\n"
-                f"v6.38 红果硬约束：正片总时长 60-90s（钩子另算）、单镜 3-8s。\n"
+                f"v6.38 红果硬约束：正片总时长 60-90s（钩子另算）、单镜 3.5-{_shot_cap():.0f}s（不得超过 {_shot_cap():.0f}s）。\n"
             )
         if duration_over:
             feedback += (
@@ -877,12 +929,21 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
 
 
 def _structural_shot_issues(script: dict) -> list:
-    """只取「结构收敛类」的单镜问题（内容需求超 cap / 时长低于下限）."""
+    """结构收敛轮的目标集合：内容需求超 cap / 时长低于下限 / **开篇空镜过多**.
+
+    v6.101（2026-09-23）：空镜问题也进这里。两个空镜约束 v6.99 起是 report-only
+    （用户决定 B：代码不再删镜头），审核与用户都要求把删除诉求**交结构 regen**——
+    但当时没有落地：收敛轮只读 `_shot_duration_issues`，看不见空镜问题。
+    现在把 `opening_empty_shot_issues()`（advisory）纳入目标集合，
+    于是「重做这几镜」会和超载/过短一样被点名、并受统一候选验收约束。
+    """
     from step01_script_gen.quality_issues import (
-        STRUCTURAL_SHOT_CODES, _shot_duration_issues,
+        STRUCTURAL_SHOT_CODES, _shot_duration_issues, opening_empty_shot_issues,
     )
-    return [i for i in _shot_duration_issues(script)
-            if i.code in STRUCTURAL_SHOT_CODES]
+    out = [i for i in _shot_duration_issues(script)
+           if i.code in STRUCTURAL_SHOT_CODES]
+    out.extend(opening_empty_shot_issues(script))
+    return out
 
 
 def _structural_feedback(issues: list) -> str:
@@ -898,11 +959,14 @@ def _structural_feedback(issues: list) -> str:
         "1. **内容需求超单镜上限**：把该段剧情拆成**多个完整镜头**——每个子镜头自带\n"
         "   narration_segment / motion_desc / ff_desc / lf_desc / keyframes / frame_layouts\n"
         "   与自己的 duration_sec；台词按原文**连续切分**，禁止改写、禁止增删字，\n"
-        "   每个子镜的台词估时都必须 ≤ 8s（留余量，目标 4-7s）。\n"
+        f"   每个子镜的台词估时都必须 ≤ {_shot_cap():.0f}s（留余量，目标 4-7s）。\n"
         "2. **时长低于下限**：把该镜合并进相邻的同地点连续剧情，或补足动作/台词——\n"
         "   禁止靠事后加秒数凑时长。\n"
-        "3. 单镜 duration_sec 必须落在 3.5-8s；正片合计 60-90s（钩子另算）。\n"
+        f"3. 单镜 duration_sec 必须落在 3.5-{_shot_cap():.0f}s；正片合计 60-90s（钩子另算）。\n"
         "4. 禁止复制字段制造 ff==lf 的空壳子镜；每个子镜都要有独立的事件与画面。\n"
+        "5. **开篇空镜过多**：抖音黄金 3 秒必须有主体入场——把多余的开篇空镜"
+        "**合并或替换成带主体的建立镜**（人物入画、手持道具、明确动作），"
+        "**不是**让你删镜头；每个替代镜仍要自带全部字段。\n"
     )
 
 
@@ -1487,12 +1551,17 @@ def _regen_structural_over_limit(script: dict, novel_text: str, bank=None,
         _metrics_inc("calls.regen_structural")
         service = create_service()
         from _text_gen.deepseek_schema import SCRIPT_SCHEMA
+        # v6.101（2026-09-23 第十四次重跑实测）：结构收敛轮是**全脚本级**请求
+        # （输入整章原文 + 反馈，输出 ~26k token），却一直用**修复轮**的 180s 超时。
+        # 第十四次实测直接 `Agent Plan 客户端超时 (180s)` → 连候选都没拿到，
+        # 「2 个超载镜重做 shot-plan」这条路整轮作废（第七次重跑时它能产出 → 属延迟波动）。
+        # 改走与 GAP 重生同档的 `_full_script_timeout_sec()`（默认 300s）。
         req = TextGenerationRequest(
             system_prompt=_sb_system,
             user_prompt=prompt,
             json_schema=SCRIPT_SCHEMA,
             model=model,
-            timeout_sec=_repair_timeout_sec(),
+            timeout_sec=_full_script_timeout_sec(),
         )
         try:
             result = service.generate(req)
@@ -1642,7 +1711,12 @@ _REPAIR_PRIORITY_CATEGORIES = (
 )
 # 08-15（v6.36）：2 轮 → 1 轮——实测修复轮越改越糟（38→55），降为单轮 top-6
 # 聚焦最严重，杜绝「第2轮全量」把没问题的镜头也重写一遍。
-_REPAIR_MAX_ROUNDS = 1
+# v6.101（2026-09-23，用户决定「提高修复预算」）：1 → 3。
+#
+# 第十四次重跑：22 条阻塞分布在 14 个镜头上，而一轮只动 3 镜、只解掉 1 条
+# （`before=25 after=25`）。KF 类那 17 条**全在修复轮白名单里**，只是排不进
+# 那 3 个名额——真正的瓶颈是预算，不是任何单个检查器。
+_REPAIR_MAX_ROUNDS = 3
 
 
 def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
@@ -1840,6 +1914,8 @@ def _candidate_quality_summary(script: dict, novel_text: str = "") -> dict:
     return {
         "structural_ok": not checker_failed and not structural_issues,
         "structural_issues": [i.message for i in structural_issues],
+        # v6.102：结构问题的 **code**（消息文本无法可靠判类型，候选采纳要按类型分流）
+        "structural_codes": [i.code for i in structural_issues],
         # v6.87：**完整性异常计数**。布尔 `integrity_ok` 不能用来判「新稿是否劣化」——
         # 原稿本身就不干净时，任何新稿也必然 False，采纳判据会变成永远不通过
         # （2026-09-21 23:17 实测：结构轮 5 → 4 被拒，两个候选摘要都标「完整性异常」）。
@@ -1848,7 +1924,11 @@ def _candidate_quality_summary(script: dict, novel_text: str = "") -> dict:
         "integrity_count": None if checker_failed else len(integrity_issues),
         # v6.98（审核 P1-2）：身份集合——数量只用于日志与排序，安全门看身份差。
         "integrity_ids": ([] if checker_failed
-                          else sorted(_integrity_identity(i) for i in integrity_issues)),
+                          else sorted(_blocking_identity(i) for i in integrity_issues)),
+        # v6.99（二次审核 P0-A）：**全部 blocking** 的身份（含重复次数）。
+        # 统一验收消费的是这一份，不再是上面那个手工子集——名称与行为必须同义。
+        "blocking_ids": ([] if checker_failed
+                         else [_blocking_identity(i) for i in blocking]),
         "temporal_plan_stats": _temporal_plan_stats(script),
         "quality_checked": not checker_failed,
         "blocking_risk_count": None if checker_failed else len(blocking),
@@ -1859,6 +1939,22 @@ def _candidate_quality_summary(script: dict, novel_text: str = "") -> dict:
         "checker_failed": checker_failed,
         "structured_issues": [i.to_dict() for i in issues if is_blocking(i)],
     }
+
+
+def _candidate_only_splittable(score: dict) -> bool:
+    """候选的**唯一**结构问题是不是「内容超载」（= 有确定性修复路径）.
+
+    v6.102（第十六次修复项 #2）：实测第十二～十五次每一轮都一样——同两条长台词
+    （原文 50 / 59 字）让候选 1/2/3 全部结构不合法，每次白烧 3 个候选（各 ~26k token），
+    而第三个候选手上已经是 100 分。`shot_content_over_cap` **有确定性修复路径**：
+    后面的定向拆分（`_scoped_split_over_cap_shots`）会按时长上限把它切开、拆完照样
+    过统一验收。既然一定能修掉，就没必要为了「结构干净」再抽两次卡。
+
+    只放行这一类：`shot_duration_below_min`（过短）**没有**确定性路径
+    （只能靠整脚本 regen 合并），所以仍然拒收重取。
+    """
+    codes = set(score.get("structural_codes") or [])
+    return bool(codes) and codes <= {"shot_content_over_cap"}
 
 
 def _candidate_sort_key(item: tuple[dict, dict]) -> tuple:
@@ -3011,12 +3107,30 @@ _FINAL_LOCKED_FIELDS = (
 _LOCKED_NUMERIC_TOL = 0.011
 
 
-def _final_field_mask_violations(before: dict, after: dict, picked: set[str]) -> list[str]:
-    """比较**全部处理结束后**的最终对象，找出被点名镜头里被改动的「锁定字段」.
+def _final_field_mask_violations(before: dict, after: dict, picked: set[str],
+                                 allowed_by_target: dict | None = None) -> list[str]:
+    """找出被点名镜头里被改动的「锁定字段」中**本轮没有授权**的那些.
 
     发现 9 #4：上一版只在 patch 之后、后处理**之前**取一次 locked 快照，于是
-    `post_fix` / `hard_fix` / 伤情兜底对锁定字段的写入逃过比较。这里在事务末尾
-    再比一次，未授权字段变化一律拒绝。
+    `post_fix` / `hard_fix` / 伤情兜底对锁定字段的写入逃过比较。
+
+    v6.99（2026-09-23 第十四次重跑实测）：本闸门与**字段授权层**互相矛盾，
+    把**授权过**的改动判成越权，整轮回退掉了 10 条已解决的阻塞：
+
+    ```text
+    [REPAIR] 接受条件: before=25+audit1 after=15 resolved=10 audit_resolved=1 new=0
+    [REPAIR] LLM 改动了锁定字段 2 处: ['shot 4.duration: 4.0 -> 6.0', 'shot 7.duration: 4.0 -> 5.0']
+    [REPAIR] 修复未满足接受条件（reason=locked_field_changed, ...），回退本轮修复
+    ```
+
+    而 `duration` **正是**时长类 issue 授权改的字段（`repair_fields._REPAIR_CODE_FIELDS`
+    把 `shot_duration → ("duration",)`；消息里的「时长」也会被 `_fields_from_text`
+    解析成 `duration`）。旁证：日志里 shot 7 的「未授权路径已回填」**不含** duration
+    ——说明它确实在授权集合内、被 `merge_authorized` 有意放行。
+
+    判据改为：**锁定字段中本轮未授权的那些**才算越权。授权层是**按 issue** 推导的
+    具体判断，`_FINAL_LOCKED_FIELDS` 是粗粒度默认值——具体优先于默认，而默认仍
+    兜住「没被授权的锁定字段」（这才是纵深防御的本意）。
     """
     out: list[str] = []
 
@@ -3035,7 +3149,15 @@ def _final_field_mask_violations(before: dict, after: dict, picked: set[str]) ->
         sb, sa = b.get(key), a.get(key)
         if not isinstance(sb, dict) or not isinstance(sa, dict):
             continue
+        # v6.99：本轮**授权过**的字段不算越权（授权按 issue 推导，比默认值具体）
+        _allowed = set()
+        if allowed_by_target:
+            for _p in (allowed_by_target.get("shot_%s" % key)
+                       or allowed_by_target.get(key) or ()):
+                _allowed.add(str(_p))
         for f in _FINAL_LOCKED_FIELDS:
+            if f in _allowed:
+                continue
             vb, va = sb.get(f), sa.get(f)
             if isinstance(vb, (int, float)) and isinstance(va, (int, float)) \
                     and not isinstance(vb, bool) and not isinstance(va, bool):
@@ -3188,6 +3310,31 @@ def _blocking_record_keys(state: dict | None) -> set[tuple]:
     return keys
 
 
+def _audit_issue_newly_resolved(script_after: dict, script_before: dict | None,
+                                issue: Issue) -> bool:
+    """该 audit issue 是否**在本轮内新解决**（v6.102）.
+
+    `_audit_issue_resolved()` 问的是「evidence **现在**还在不在稿子里」——它是
+    **幂等**的：第 1 轮清掉之后永远为真。第十六次修复前的实测（第十五次）：
+
+    ```text
+    第 2 轮: before=10+audit2 after=10 resolved=0 audit_resolved=2
+    第 3 轮: before=10+audit2 after=10 resolved=0 audit_resolved=2   ← 数字一模一样
+    ```
+
+    两轮 `resolved=0`，却都靠这个**陈旧的 2** 通过验收（接受条件里
+    `audit_resolved > 0` 即可），于是同一批 4 镜被反复改写两次、白烧 2 次 LLM 调用
+    而没有任何可测量的收益。
+
+    加一个基线口径：**基线里已经「解决」的不算本轮功绩**——只有基线里 evidence
+    仍在、本轮之后才消失的，才算新解决。
+    """
+    if script_before is None:
+        return _audit_issue_resolved(script_after, issue)
+    return (not _audit_issue_resolved(script_before, issue)
+            and _audit_issue_resolved(script_after, issue))
+
+
 def _audit_issue_resolved(script: dict, issue: Issue) -> bool:
     """Best-effort verification for an audit-only issue without a second LLM call.
 
@@ -3226,6 +3373,7 @@ def _repair_acceptance_decision(before_state: dict | None,
                                 audit_issues: list[Issue] | None,
                                 script_after: dict,
                                 locked_changed: bool,
+                                script_before: dict | None = None,
                                 non_target_changed: list | None = None,
                                 locked_by_llm_changed: list | None = None) -> dict:
     """Pure acceptance decision for one targeted-repair round.
@@ -3247,7 +3395,11 @@ def _repair_acceptance_decision(before_state: dict | None,
     checker_failed = bool((before_state or {}).get("checker_failed")
                           or (after_state or {}).get("checker_failed"))
     audit_targets = [i for i in (audit_issues or []) if is_blocking(i)]
-    audit_resolved = sum(1 for i in audit_targets if _audit_issue_resolved(script_after, i))
+    # v6.102：audit 判据必须是「**本轮新**解决」——`_audit_issue_resolved` 本身幂等，
+    # 拿它当轮内功绩会让空转轮次靠陈旧计数通过验收。
+    audit_resolved = sum(
+        1 for i in audit_targets
+        if _audit_issue_newly_resolved(script_after, script_before, i))
     has_targets = bool(before_keys or audit_targets)
     _non_target = list(non_target_changed or [])
     # v6.87：LLM 对锁定字段的写入与「非目标镜头被改动」是**两个不同的闸门**，
@@ -3294,7 +3446,11 @@ def _repair_acceptance_decision(before_state: dict | None,
 # v6.84（二次审核发现 3 实施 #4）：每轮定向修复的镜头数。
 # 6 个完整镜头对象 + 上下文会顶到 8000 token 上限（本次实测 `finish_reason=length`
 # 整份丢弃）；按 3 镜分批，靠**批数**而不是靠抬高 token 上限来解决上下文体积。
-_REPAIR_MAX_SHOTS_PER_ROUND = 3
+# 每轮名下的镜头数（v6.101：3 → 4）。配套把 `REPAIR_MAX_OUTPUT_TOKENS`
+# 从 8000 抬到 16000——4 个完整镜头对象 + 上下文按实测约 5-7k token，
+# 16k 有 2 倍余量；**不靠抬 token 掩盖上下文体积**这条原则仍然成立，
+# 所以批量只加到 4，不是 6/8。
+_REPAIR_MAX_SHOTS_PER_ROUND = 4
 
 
 def _shot_field_diff(before: dict, after: dict, *, limit: int = 8) -> list:
@@ -3417,6 +3573,13 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     # 的 `index=7` 改成 `1`，导致 audit issue 的 `shot_id` 失配、修复轮提前退出。
 
     for _round in range(1, _REPAIR_MAX_ROUNDS + 1):
+        # v6.101：轮数从 1 放到 3 之后，**每轮开始前**再查一次总预算。
+        # 调用点（`main` 里 `REPAIR_ROUNDS_ENABLED and not _budget_exceeded()`）
+        # 只保证「开始修的时候没超预算」，挡不住多轮叠加把单次 run 拖到 20 分钟
+        # （第十四次重跑已经 12 分钟）。已完成的轮次保留，只是不再发下一批。
+        if _round > 1 and _budget_exceeded():
+            _logger.warn("[BUDGET] 总预算超时，停止后续定向修复轮（已通过的轮次保留）")
+            return script
         per_shot_dict = _collect_repair_warnings(script, novel_text)
         import copy as _copy_before_accept
         _det_before_state = _copy_before_accept.deepcopy(per_shot_dict)
@@ -3457,16 +3620,17 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 重新校验当前脚本：第1轮已修的告警消失、未修的保留，故第2轮"全部"天然覆盖
         # 第1轮遗留 + 第2轮新增。
         import itertools
-        if _round == 1:
-            # v6.84（二次审核发现 3 实施 #4）：每批 **3 镜**（原 6）。
-            # 6 个完整镜头对象 + 上下文会顶到 8000 token 上限——本次实测直接
-            # `finish_reason=length` 整份丢弃。按 2-3 镜分批，每批仍执行目标集合
-            # 精确相等与原子提交；**不靠提高 token 上限掩盖上下文体积问题**。
-            picked = dict(itertools.islice(
-                sorted(shot_items.items(), key=lambda kv: -len(kv[1])),
-                _REPAIR_MAX_SHOTS_PER_ROUND))
-        else:
-            picked = dict(shot_items)
+        # v6.101：**每一轮都按告警数取前 K**。
+        #
+        # 原实现只有第 1 轮限量，第 2 轮起 `picked = dict(shot_items)`（全部带告警的
+        # 镜头）——08-15 的用意是「低告警镜头别永远轮不到修补」，但那条路径在
+        # `_REPAIR_MAX_ROUNDS = 1` 下**从未执行过**。现在轮数放开到 3，若照原样
+        # 第 2 轮会一次性发 10+ 个完整镜头对象，必然 `finish_reason=length`
+        # 整份丢弃（v6.84 定分批的原始原因）。改为**每轮都限量**：
+        # 按告警数排序取前 K，多轮自然覆盖「第 1 轮遗留 + 新增」。
+        picked = dict(itertools.islice(
+            sorted(shot_items.items(), key=lambda kv: -len(kv[1])),
+            _REPAIR_MAX_SHOTS_PER_ROUND))
         if not picked:
             return script
         import copy as _copy_repair
@@ -3768,8 +3932,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "  - **color_tone**（场景色调基底词，如「冷蓝星光」/「暖金烛光」——跨镜共享）\n\n"
             "**Mask 字段清单（本轮禁止修改）**：\n"
             "  - narration_segment（台词，原文锚定，改则 grounding 校验必挂）\n"
-            "  - index / duration（结构性字段，动了会改镜头排序或时长）\n"
-            "    （duration_sec 由时间轴序列化函数从 duration 统一派生，你**只**给 duration） "
+            "  - index（结构性字段，动了会改镜头排序）\n"
+            "  - duration_sec（由时间轴序列化函数从 duration 统一派生；**需要改时长时改 duration**，且仅限本轮 warn 明确授权的镜头）\n"
             "  - subtitle（与 narration_segment 逐字相同，规则 1 锁定）\n"
             "  - variation_type（small/large 变体类型，动了会改 keyframe 数量）\n"
             "  - scene / location（场景字段，规则 7.5 锁定）\n\n"
@@ -3878,7 +4042,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             system_prompt=_rep_system,
             user_prompt=prompt,
             user_inputs=_user_inputs,  # v6.37 结构化多轮
-            max_tokens=int(os.getenv("REPAIR_MAX_OUTPUT_TOKENS", "8000") or "8000"),
+            # v6.101：8000 → 16000（每批 4 个完整镜头对象 + 上下文）。
+            # agent_plan 的全局上限是 32768，16k 不触顶，留了 2 倍余量。
+            max_tokens=int(os.getenv("REPAIR_MAX_OUTPUT_TOKENS", "16000") or "16000"),
             temperature=0.1,
             json_schema=REPAIR_SHOT_REPLACEMENT_SCHEMA,
             model=model,  # v6.67 接力修复：None=provider 默认（零行为变化）
@@ -3977,7 +4143,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 实测确认：该区间内 `script` 未被就地改写，唯一赋值点即 `script = merged`。
         # 现在改成对 `merged` 比较——它正是「合并后、后处理前」，只含 LLM 的写入。
         _mask_violations_after_patch = _final_field_mask_violations(
-            _round_before_script, merged, set(picked))
+            _round_before_script, merged, set(picked),
+            allowed_by_target=_allowed_by_target)
         script = merged
         # v6.95（①，2026-09-22 实测）：**锁定字段基线必须在合并后立刻取**。
         #
@@ -4018,184 +4185,217 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     # 如此），于是「LLM 合法修复 + 后处理顺手动了别镜」被 `non_target_changed` 判为
     # 违规、整轮回滚，`resolved=0`——合法修复白做。这里先把未点名镜头逐字节快照，
     # 后处理跑完再还原：后处理只负责收拾本轮改动可能引入的问题。
-    _frozen = _snapshot_untargeted(script, set(picked))
-    from step01_script_gen.validation import post_fix_shot_prompts as _pfix
-    try:
-        script = _pfix(script)
-    except Exception as _pfx:
-        _logger.warn(f"[WARN] 修复后 post_fix 失败（保留原版）: {_pfx}")
-    # 08-19：C 模式默认后，修复轮 LLM 可能删掉致命伤锚定（A→C 实测 2 个镜头"
-    # 心口暗红洇痕"被删，违反规则 8 最高优先级）。修复完成后跑 hard_fix 致命伤
-    # 兜底 + kf 时段对齐，把 LLM 弄丢的确定性补回来（幂等，不伤已有正确内容）。
-    # v6.42：改用新 Constraint 框架；HARD_FIX_USE_OLD 回退开关已删除（2026-09-12）
-    from step01_script_gen.constraints import run_hard_fix as _hfix
-    try:
-        script = _hfix(script, is_in_repair_loop=True, is_final_pass=False, novel_text=novel_text)
-    except Exception as _hfx:
-        _logger.warn(f"[WARN] 修复后 hard_fix 兜底失败（保留原版）: {_hfx}")
-    # 08-19：hard_fix_injury_continuity 按 location 精确匹配 + victim 提取不准，
-    # 会漏补"杨旭在船上仰卧但镜头 location 写岸边"这类情况。再加一道轻量兜底：
-    # 扫所有镜头，**刺杀发生后**（build_idx 之后）的镜头里，ff_desc/lf_desc/prompt
-    # 有"杨旭仰卧/倒下/躺"但没 anchor 词 → prompt 末尾追加伤处锚。
-    # 只在修复轮后调用，范围小。用 build_idx 作分界避免把"夜宴仰卧喝酒"也补成带伤。
-    _injury_lay_words = ("仰卧", "倒下", "仰倒", "躺于", "躺倒", "倒地", "瘫倒")
-    # v6.50（08-29）：build 判定改用 STRONG 词表——"白袍"等服装词会让
-    # 刺杀前镜头（开篇白袍吹箫）被当致命伤建立点
-    from step01_script_gen.prompt_semantic.registry import STRONG_INJURY_ANCHORS as _anchor_words
-    # 找 build_idx（第一个有 anchor 词的镜头 = 致命伤建立点）
-    _build_idx = None
-    for _i, _s in enumerate(script.get("shots", [])):
-        _txt = _s.get("prompt", "") + _s.get("ff_desc", "")
-        if any(w in _txt for w in _anchor_words):
-            _build_idx = _i
-            break
-    _inj_fixed = 0
-    if _build_idx is not None:
+        _frozen = _snapshot_untargeted(script, set(picked))
+        from step01_script_gen.validation import post_fix_shot_prompts as _pfix
+        try:
+            script = _pfix(script)
+        except Exception as _pfx:
+            _logger.warn(f"[WARN] 修复后 post_fix 失败（保留原版）: {_pfx}")
+        # 08-19：C 模式默认后，修复轮 LLM 可能删掉致命伤锚定（A→C 实测 2 个镜头"
+        # 心口暗红洇痕"被删，违反规则 8 最高优先级）。修复完成后跑 hard_fix 致命伤
+        # 兜底 + kf 时段对齐，把 LLM 弄丢的确定性补回来（幂等，不伤已有正确内容）。
+        # v6.42：改用新 Constraint 框架；HARD_FIX_USE_OLD 回退开关已删除（2026-09-12）
+        from step01_script_gen.constraints import run_hard_fix as _hfix
+        try:
+            script = _hfix(script, is_in_repair_loop=True, is_final_pass=False, novel_text=novel_text)
+        except Exception as _hfx:
+            _logger.warn(f"[WARN] 修复后 hard_fix 兜底失败（保留原版）: {_hfx}")
+        # 08-19：hard_fix_injury_continuity 按 location 精确匹配 + victim 提取不准，
+        # 会漏补"杨旭在船上仰卧但镜头 location 写岸边"这类情况。再加一道轻量兜底：
+        # 扫所有镜头，**刺杀发生后**（build_idx 之后）的镜头里，ff_desc/lf_desc/prompt
+        # 有"杨旭仰卧/倒下/躺"但没 anchor 词 → prompt 末尾追加伤处锚。
+        # 只在修复轮后调用，范围小。用 build_idx 作分界避免把"夜宴仰卧喝酒"也补成带伤。
+        _injury_lay_words = ("仰卧", "倒下", "仰倒", "躺于", "躺倒", "倒地", "瘫倒")
+        # v6.50（08-29）：build 判定改用 STRONG 词表——"白袍"等服装词会让
+        # 刺杀前镜头（开篇白袍吹箫）被当致命伤建立点
+        from step01_script_gen.prompt_semantic.registry import STRONG_INJURY_ANCHORS as _anchor_words
+        # 找 build_idx（第一个有 anchor 词的镜头 = 致命伤建立点）
+        _build_idx = None
         for _i, _s in enumerate(script.get("shots", [])):
-            if _i <= _build_idx:
-                continue  # 刺杀发生前的镜头不补（夜宴仰卧喝酒不算伤）
-            _text = _s.get("prompt", "") + _s.get("ff_desc", "") + _s.get("lf_desc", "")
-            if not any(w in _text for w in _injury_lay_words):
-                continue  # 杨旭没倒下，不用补
-            if any(w in _text for w in _anchor_words):
-                continue  # 已有伤处锚，幂等跳过
-            if "杨旭" not in _text:
-                continue  # 倒下的不是杨旭，不补
-            _s["prompt"] = (_s.get("prompt", "") or "").rstrip("。") + "。伤处白袍暗红洇痕持续可见"
-            _inj_fixed += 1
-    if _inj_fixed:
-        _logger.info(f"[REPAIR] 致命伤兜底补锚: {_inj_fixed} 镜（C 模式修复轮后丢失的伤处锚）")
+            _txt = _s.get("prompt", "") + _s.get("ff_desc", "")
+            if any(w in _txt for w in _anchor_words):
+                _build_idx = _i
+                break
+        _inj_fixed = 0
+        if _build_idx is not None:
+            for _i, _s in enumerate(script.get("shots", [])):
+                if _i <= _build_idx:
+                    continue  # 刺杀发生前的镜头不补（夜宴仰卧喝酒不算伤）
+                _text = _s.get("prompt", "") + _s.get("ff_desc", "") + _s.get("lf_desc", "")
+                if not any(w in _text for w in _injury_lay_words):
+                    continue  # 杨旭没倒下，不用补
+                if any(w in _text for w in _anchor_words):
+                    continue  # 已有伤处锚，幂等跳过
+                if "杨旭" not in _text:
+                    continue  # 倒下的不是杨旭，不补
+                _s["prompt"] = (_s.get("prompt", "") or "").rstrip("。") + "。伤处白袍暗红洇痕持续可见"
+                _inj_fixed += 1
+        if _inj_fixed:
+            _logger.info(f"[REPAIR] 致命伤兜底补锚: {_inj_fixed} 镜（C 模式修复轮后丢失的伤处锚）")
 
-    # v6.84：还原未点名镜头（`_frozen` 快照）——后处理不得改动事务外的镜头。
-    _restored_n = _restore_untargeted(script, _frozen)
-    if _restored_n:
-        _logger.info(f"[REPAIR] 事务内后处理已限定范围：还原 {_restored_n} 个未点名镜头")
+        # v6.84：还原未点名镜头（`_frozen` 快照）——后处理不得改动事务外的镜头。
+        _restored_n = _restore_untargeted(script, _frozen)
+        if _restored_n:
+            _logger.info(f"[REPAIR] 事务内后处理已限定范围：还原 {_restored_n} 个未点名镜头")
 
-    # Acceptance is identity-based, not message-count based.  The same
-    # structured collector runs before and after; audit-only findings are
-    # verified by evidence disappearance.  Any checker failure or new blocking
-    # identity rolls the round back.
-    try:
-        _after_state = _collect_repair_warnings(script, novel_text)
-        # v6.79（09-20）：Mask 字段签名在**全部后处理结束后**才取。
-        #
-        # 原先在 `_apply_shot_replacements` 之后立刻取值，比较的是「LLM patch 直接
-        # 造成的变化」；随后跑的 timeline 序列化 / post_fix_shot_prompts / hard_fix
-        # 对 `duration_sec`、`narration_segment`、`subtitle` 等 Mask 字段的副作用
-        # **不进比较**，于是它们随整轮一起被接受——「duration_sec 是 Mask 字段」
-        # 这条 prompt 契约在运行时并不成立（审核发现 3）。
-        #
-        # Mask 字段清单与修复 prompt 里给 LLM 的清单同源
-        # （narration_segment / index / duration_sec / subtitle / variation_type /
-        #  scene / location），见 `_locked_repair_signature`。未点名镜头的变化另由
-        # 下面的逐镜 revision gate 兜住。
-        # v6.95：`_locked_after_patch` 已在**合并后立刻**取（见循环内），这里不再重取
-        # ——重取会把归一化/还原的写入算进来，正是上面那个假拒绝的成因。
-        _locked_changed = _locked_before != _locked_after_patch
-        # v6.77（第四阶段）：修复轮是「镜头事务」——只许动被点名的镜头。
-        # 用逐镜语义 revision 快照判定：不在 picked 里的镜头若发生任何语义变化，
-        # 本轮即拒绝（原判据只看聚合的 blocking 身份，看不见"顺手动别镜"）。
-        from shared.quality_gate import per_shot_revisions, changed_shot_keys
-        _picked_keys = {str(_p)[5:] for _p in picked if str(_p).startswith("shot_")}
-        if "hook" in picked:
-            _picked_keys.add("hook")
-        _non_target = [
-            _k for _k in changed_shot_keys(
-                per_shot_revisions(_round_before_script), per_shot_revisions(script))
-            if str(_k) not in _picked_keys
-        ]
-        # v6.80（发现 9 #4）想抓的是「后处理对锁定字段的写入逃过比较」。
-        # v6.87 修正了它的方向：后处理是**管线自己的确定性归一化**，不算越权；
-        # 真正要抓的是 **LLM** 的写入，而那个基线只能在合并后立刻取
-        # （`_mask_violations_after_patch`，见上）。两者分开命名，日志才指得清。
-        _locked_by_llm = list(_mask_violations_after_patch or [])
-        # v6.83：`allowed_targets` 此前是**未定义名**（HEAD 里传的是全部
-        # `audit_issues`，工作树改成这个名字时漏了定义）——整段接受判定被外层
-        # `except` 吞掉并**回退整轮修复**，于是 v6.79～v6.82 加的
-        # non-target gate / 最终字段 mask 在生产里从未真正跑过。
-        # 这里按名字的本义补齐：只把**本轮点名目标**的 audit issue 当作可解目标
-        # ——非点名镜头的问题本轮修不了，把它们算进 `has_targets` 只会让
-        # `no_target_resolved` 误判。
-        _allowed_targets = [
-            _ai for _ai in (audit_issues or [])
-            if ("hook" if str(_ai.shot_id) in ("0", "hook")
-                else f"shot_{_ai.shot_id}") in picked
-        ]
-        _decision = _repair_acceptance_decision(
-            _det_before_state, _after_state, _allowed_targets, script, _locked_changed,
-            non_target_changed=_non_target,
-            locked_by_llm_changed=_locked_by_llm)
-        _logger.info(
-            "[REPAIR] 接受条件: "
-            f"before={_decision['before']}+audit{_decision['audit_targets']} "
-            f"after={_decision['after']} resolved={_decision['resolved']} "
-            f"audit_resolved={_decision['audit_resolved']} "
-            f"new={_decision['new_blocking']}"
-        )
-        _metrics_inc("repair.decisions")
-        _metrics_update("repair.last_decision", _decision)
-        if _decision["accepted"]:
-            _metrics_inc("repair.accepted")
-        else:
-            _metrics_inc("repair.rejected")
-        if not _decision["accepted"]:
-            # v6.93 修（自查发现的 bug）：诊断必须在**回退之前**抓快照。
+        _round_ok = False   # v6.101：本轮事务是否被接受
+        _no_gain = False    # v6.102：本轮是否「通过验收但零改善」
+        # Acceptance is identity-based, not message-count based.  The same
+        # structured collector runs before and after; audit-only findings are
+        # verified by evidence disappearance.  Any checker failure or new blocking
+        # identity rolls the round back.
+        try:
+            _after_state = _collect_repair_warnings(script, novel_text)
+            # v6.79（09-20）：Mask 字段签名在**全部后处理结束后**才取。
             #
-            # 原实现把 `_shot_field_diff(_round_before_script, script)` 放在
-            # `script = _round_before_script` **之后**——那时 `script` 已经等于基线，
-            # 于是永远得到空 diff（2026-09-22 21:31 实测：`非目标镜头被改动 9 处`
-            # 后面没有 `变化字段:` 行，就是这么来的）。诊断自己失效 = 白加。
-            _script_at_reject = script
-            script = _round_before_script
-            # v6.87：**必须打出到底什么变了**——`non_target_changed` 连续三次成为
-            # 回退原因，而日志从不说明是哪个镜头/哪个字段，只能靠事后复现才能定位。
-            if _decision.get("non_target_changed"):
-                _logger.warn(
-                    f"[REPAIR] 非目标镜头被改动 {len(_decision['non_target_changed'])} 处: "
-                    f"{_decision['non_target_changed'][:5]}"
-                )
-                # 字段级定位（v6.92）：否则只能靠重新复现一次运行来猜是哪个字段
-                try:
-                    _fld = _shot_field_diff(_round_before_script, _script_at_reject)
-                except Exception:
-                    _fld = []
-                if _fld:
-                    _logger.warn(f"[REPAIR] 变化字段: {_fld}")
-                else:
-                    # 自相矛盾要**说出来**，不能静默：`changed_shot_keys` 说这些镜头变了，
-                    # 而语义字段逐个比对却无差异 → 说明两者口径不一致（或诊断调用点写错）。
-                    # 这是把「诊断失效」本身变成可见信号——v6.93 就吃过一次静默失效。
-                    _logger.warn(
-                        "[REPAIR] ⚠️ 非目标改动不在语义字段内（诊断与逐镜 revision 口径不一致，"
-                        "请查 `_shot_field_diff` 的调用点是否在回退之后）"
-                    )
-            if _decision.get("locked_changed"):
-                # v6.94：字段级定位——`locked_changed` 只有布尔，从不说变了什么
-                try:
-                    _lsd = _locked_signature_diff(_locked_before, _locked_after_patch)
-                except Exception:
-                    _lsd = []
-                if _lsd:
-                    _logger.warn("[REPAIR] 锁定字段变化: %s" % _lsd)
-            if _decision.get("locked_by_llm_changed"):
-                _logger.warn(
-                    f"[REPAIR] LLM 改动了锁定字段 "
-                    f"{len(_decision['locked_by_llm_changed'])} 处: "
-                    f"{_decision['locked_by_llm_changed'][:5]}"
-                )
-            _logger.warn(
-                "[REPAIR] 修复未满足接受条件"
-                f"（reason={_decision['reason']}, resolved={_decision['resolved']}, "
-                f"audit_resolved={_decision['audit_resolved']}, "
-                f"new={_decision['new_blocking']}, "
-                f"checker_failed={_decision['checker_failed']}, "
-                f"locked_changed={_decision['locked_changed']}），回退本轮修复"
+            # 原先在 `_apply_shot_replacements` 之后立刻取值，比较的是「LLM patch 直接
+            # 造成的变化」；随后跑的 timeline 序列化 / post_fix_shot_prompts / hard_fix
+            # 对 `duration_sec`、`narration_segment`、`subtitle` 等 Mask 字段的副作用
+            # **不进比较**，于是它们随整轮一起被接受——「duration_sec 是 Mask 字段」
+            # 这条 prompt 契约在运行时并不成立（审核发现 3）。
+            #
+            # Mask 字段清单与修复 prompt 里给 LLM 的清单同源
+            # （narration_segment / index / duration_sec / subtitle / variation_type /
+            #  scene / location），见 `_locked_repair_signature`。未点名镜头的变化另由
+            # 下面的逐镜 revision gate 兜住。
+            # v6.95：`_locked_after_patch` 已在**合并后立刻**取（见循环内），这里不再重取
+            # ——重取会把归一化/还原的写入算进来，正是上面那个假拒绝的成因。
+            _locked_changed = _locked_before != _locked_after_patch
+            # v6.77（第四阶段）：修复轮是「镜头事务」——只许动被点名的镜头。
+            # 用逐镜语义 revision 快照判定：不在 picked 里的镜头若发生任何语义变化，
+            # 本轮即拒绝（原判据只看聚合的 blocking 身份，看不见"顺手动别镜"）。
+            from shared.quality_gate import per_shot_revisions, changed_shot_keys
+            _picked_keys = {str(_p)[5:] for _p in picked if str(_p).startswith("shot_")}
+            if "hook" in picked:
+                _picked_keys.add("hook")
+            _non_target = [
+                _k for _k in changed_shot_keys(
+                    per_shot_revisions(_round_before_script), per_shot_revisions(script))
+                if str(_k) not in _picked_keys
+            ]
+            # v6.80（发现 9 #4）想抓的是「后处理对锁定字段的写入逃过比较」。
+            # v6.87 修正了它的方向：后处理是**管线自己的确定性归一化**，不算越权；
+            # 真正要抓的是 **LLM** 的写入，而那个基线只能在合并后立刻取
+            # （`_mask_violations_after_patch`，见上）。两者分开命名，日志才指得清。
+            _locked_by_llm = list(_mask_violations_after_patch or [])
+            # v6.83：`allowed_targets` 此前是**未定义名**（HEAD 里传的是全部
+            # `audit_issues`，工作树改成这个名字时漏了定义）——整段接受判定被外层
+            # `except` 吞掉并**回退整轮修复**，于是 v6.79～v6.82 加的
+            # non-target gate / 最终字段 mask 在生产里从未真正跑过。
+            # 这里按名字的本义补齐：只把**本轮点名目标**的 audit issue 当作可解目标
+            # ——非点名镜头的问题本轮修不了，把它们算进 `has_targets` 只会让
+            # `no_target_resolved` 误判。
+            _allowed_targets = [
+                _ai for _ai in (audit_issues or [])
+                if ("hook" if str(_ai.shot_id) in ("0", "hook")
+                    else f"shot_{_ai.shot_id}") in picked
+            ]
+            _decision = _repair_acceptance_decision(
+                _det_before_state, _after_state, _allowed_targets, script, _locked_changed,
+                non_target_changed=_non_target,
+                locked_by_llm_changed=_locked_by_llm,
+                script_before=_round_before_script)
+            _logger.info(
+                "[REPAIR] 接受条件: "
+                f"before={_decision['before']}+audit{_decision['audit_targets']} "
+                f"after={_decision['after']} resolved={_decision['resolved']} "
+                f"audit_resolved={_decision['audit_resolved']} "
+                f"new={_decision['new_blocking']}"
             )
-    except Exception as _acc_err:
-        script = _round_before_script
-        _metrics_inc("repair.check_failed")
-        _metrics_set("repair.last_error", str(_acc_err))
-        _logger.warn(f"[REPAIR] 接受条件检查失败，回退本轮修复: {_acc_err}")
+            _metrics_inc("repair.decisions")
+            _metrics_update("repair.last_decision", _decision)
+            if _decision["accepted"]:
+                _metrics_inc("repair.accepted")
+                _round_ok = True
+            else:
+                _metrics_inc("repair.rejected")
+            # v6.102（第十六次修复项 #1）：**通过验收但零改善**也是空转。
+            #
+            # 实测（第十五次）：第 2/3 轮的 `before/after/resolved` **完全相同**
+            # （`resolved=0`），却仍被判「接受」——靠的是 `audit_resolved=2`，
+            # 而这个数**第 2 轮起是陈旧的**：调用点把 `_audit_before_count` 写成
+            # `if _round == 1 else 0`，而 audit 判据问的是「evidence 是否还在稿子里」，
+            # 第 1 轮清掉后它**永远为真**。于是同一批 4 镜被反复改写两次、
+            # 白烧 2 次 LLM 调用，没有任何可测量的收益。
+            #
+            # 判据：被接受 **且** `resolved == 0` **且** `audit_resolved == 0`
+            # → 等价于空操作：回退它的写入并结束循环（下一批还是同一批目标）。
+            _no_gain = (bool(_decision.get("accepted"))
+                        and not int(_decision.get("resolved") or 0)
+                        and not int(_decision.get("audit_resolved") or 0))
+            if not _decision["accepted"]:
+                # v6.93 修（自查发现的 bug）：诊断必须在**回退之前**抓快照。
+                #
+                # 原实现把 `_shot_field_diff(_round_before_script, script)` 放在
+                # `script = _round_before_script` **之后**——那时 `script` 已经等于基线，
+                # 于是永远得到空 diff（2026-09-22 21:31 实测：`非目标镜头被改动 9 处`
+                # 后面没有 `变化字段:` 行，就是这么来的）。诊断自己失效 = 白加。
+                _script_at_reject = script
+                script = _round_before_script
+                # v6.87：**必须打出到底什么变了**——`non_target_changed` 连续三次成为
+                # 回退原因，而日志从不说明是哪个镜头/哪个字段，只能靠事后复现才能定位。
+                if _decision.get("non_target_changed"):
+                    _logger.warn(
+                        f"[REPAIR] 非目标镜头被改动 {len(_decision['non_target_changed'])} 处: "
+                        f"{_decision['non_target_changed'][:5]}"
+                    )
+                    # 字段级定位（v6.92）：否则只能靠重新复现一次运行来猜是哪个字段
+                    try:
+                        _fld = _shot_field_diff(_round_before_script, _script_at_reject)
+                    except Exception:
+                        _fld = []
+                    if _fld:
+                        _logger.warn(f"[REPAIR] 变化字段: {_fld}")
+                    else:
+                        # 自相矛盾要**说出来**，不能静默：`changed_shot_keys` 说这些镜头变了，
+                        # 而语义字段逐个比对却无差异 → 说明两者口径不一致（或诊断调用点写错）。
+                        # 这是把「诊断失效」本身变成可见信号——v6.93 就吃过一次静默失效。
+                        _logger.warn(
+                            "[REPAIR] ⚠️ 非目标改动不在语义字段内（诊断与逐镜 revision 口径不一致，"
+                            "请查 `_shot_field_diff` 的调用点是否在回退之后）"
+                        )
+                if _decision.get("locked_changed"):
+                    # v6.94：字段级定位——`locked_changed` 只有布尔，从不说变了什么
+                    try:
+                        _lsd = _locked_signature_diff(_locked_before, _locked_after_patch)
+                    except Exception:
+                        _lsd = []
+                    if _lsd:
+                        _logger.warn("[REPAIR] 锁定字段变化: %s" % _lsd)
+                if _decision.get("locked_by_llm_changed"):
+                    _logger.warn(
+                        f"[REPAIR] LLM 改动了锁定字段 "
+                        f"{len(_decision['locked_by_llm_changed'])} 处: "
+                        f"{_decision['locked_by_llm_changed'][:5]}"
+                    )
+                _logger.warn(
+                    "[REPAIR] 修复未满足接受条件"
+                    f"（reason={_decision['reason']}, resolved={_decision['resolved']}, "
+                    f"audit_resolved={_decision['audit_resolved']}, "
+                    f"new={_decision['new_blocking']}, "
+                    f"checker_failed={_decision['checker_failed']}, "
+                    f"locked_changed={_decision['locked_changed']}），回退本轮修复"
+                )
+        except Exception as _acc_err:
+            script = _round_before_script
+            _metrics_inc("repair.check_failed")
+            _metrics_set("repair.last_error", str(_acc_err))
+            _logger.warn(f"[REPAIR] 接受条件检查失败，回退本轮修复: {_acc_err}")
+        if not _round_ok:
+            # 本轮已被回退 → 停止（本轮失败，再发下一批没有意义）
+            return script
+        if _no_gain:
+            # v6.102：通过验收但零改善 → 回退本轮（不留无收益的改写）并停止后续轮次
+            script = _round_before_script
+            _metrics_inc("repair.no_gain_rolled_back")
+            _logger.warn(
+                "[REPAIR] 本轮无任何可测量改善（resolved=0 / audit_resolved=0）→ "
+                "回退本轮并停止后续轮次（继续发只会重复同一批目标）"
+            )
+            return script
+        _metrics_inc("repair.rounds_accepted")
+        # 本轮通过验收 → 继续下一批（v6.101：每轮一个独立事务）
+
     return script
 
 
@@ -4537,7 +4737,12 @@ def _candidate_gen_timeout_sec() -> int | None:
 
 
 def _full_script_timeout_sec() -> int | None:
-    """全脚本级 LLM 调用超时（GAP 重生，v6.70.3 默认 300s）."""
+    """全脚本级 LLM 调用超时（GAP 重生 / 结构收敛，v6.70.3 默认 300s）.
+
+    v6.101：结构收敛轮从 `_repair_timeout_sec()`（180s）改到本档——它也是
+    「整章输入 + 整脚本输出（~26k token）」，与 GAP 重生同量级；
+    第十四次重跑实测 180s 不够（客户端超时 → 候选拿不到）。
+    """
     import os as _os
     try:
         _v = int(_os.getenv("FULL_SCRIPT_TIMEOUT_SEC", "300"))
@@ -4921,6 +5126,24 @@ def _generate_script_candidates(
                 # 再在末尾抱怨」。候选在结构上不合法（内容需求超 cap / 时长低于
                 # 下限）时，只要还有生成预算就继续取下一个候选；预算用尽则明确
                 # 结束为 BLOCK——由质量门判定，不假装收敛成功。
+                # v6.102（第十六次修复项 #2）：**只有「超载」一类结构问题时提前采纳**。
+                #
+                # 实测（第十二～十五次每轮都一样）：同两条长台词（原文 50 / 59 字）
+                # 让候选 1、2、3 全部结构不合法，每次白烧 3 个候选（各 ~26k token），
+                # 而第三个候选手上已经是 100 分。而 `shot_content_over_cap` **有确定性
+                # 修复路径**——后面的定向拆分（`_scoped_split_over_cap_shots`）会把它
+                # 按时长上限切开，拆完照样过验收。既然问题一定能被修掉，就没必要为了
+                # 「结构干净」再抽两次卡。
+                #
+                # 只放行这一类：`shot_duration_below_min`（过短）**没有**确定性路径
+                # （要靠整脚本 regen 合并），所以仍然拒收重取。
+                if _candidate_only_splittable(_scr):
+                    _logger.info(
+                        "[CANDIDATE] 候选只有「内容超载」（可被定向拆分确定性修掉）→ "
+                        f"提前采纳，不再耗费候选：{(_scr.get('structural_issues') or [])[:2]}"
+                    )
+                    _console("  [候选] 仅超载（定向拆分可修），提前采纳")
+                    break
                 if _scr.get("structural_ok") is not True and _attempt < SCRIPT_PARSE_RETRIES:
                     _logger.warn(
                         "[CANDIDATE] 候选结构不合法（内容超 cap / 低于下限），"

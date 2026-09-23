@@ -1033,4 +1033,5 @@ def _compute_timecodes(script: dict, *, allow_split: bool = False) -> None:
         # clamp 压缩时长（会丢失动作链）。让跑批时一眼看到 prompt 哪里没拆。
         _log().warn(f"{clamped_count} 个镜头时长超过单镜上限 {shot_cap}s{cap_src}，"
               f"已夹取到 {shot_cap}s（active model: {active_video_model()}）。"
-              f"v6.43 用户规则：单镜 > 8s 应在 prompt 层拆成多镜，不靠此处静默 clamp。")
+              f"v6.43 用户规则：单镜 > {shot_cap}s 应在 prompt 层拆成多镜，"
+              f"不靠此处静默 clamp。")

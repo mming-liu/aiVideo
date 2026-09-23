@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 
-QUALITY_RULE_VERSION = "2026-09-22.10"
+QUALITY_RULE_VERSION = "2026-09-23.4"
 
 
 class QualityGateError(RuntimeError):
@@ -207,30 +207,75 @@ def semantic_payload_digest(script: dict) -> dict:
     """
     shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
     hook = script.get("hook")
+    digests = [shot_semantic_digest(s) for s in shots]
     return {
         "count": len(shots),
-        "shots": [shot_semantic_digest(s) for s in shots],
+        "shots": digests,
+        # `order` / `set` 只用于**区分「重排」与「逐镜改写」**：两者在逐位置比较
+        # 下长得一样（都是「镜头#i 语义变化」），而语义完全不同——
+        # 重排会改变分镜叙事顺序（必须拦），逐镜改写是本层约束的**设计行为**（不能拦）。
+        "order": _hash_json(digests),
+        "set": _hash_json(sorted(digests)),
         "hook": shot_semantic_digest(hook) if isinstance(hook, dict) else "",
         "characters": _hash_json([_semantic_character(c)
                                   for c in (script.get("characters") or [])]),
+        # 结构红线的**粗粒度身份**：hook 只有「在不在」（整对象替换与整对象改写
+        # 难以区分，而审计段对 hook 的合法写入就是追加文本）；characters 看
+        # **identifier 集合**（新增/删除角色是结构变更，`dynamic_features` 随章节
+        # 与约束改写是正常行为）。
+        "hook_present": isinstance(hook, dict),
+        "character_ids": sorted(str(c.get("identifier") or "")
+                                for c in (script.get("characters") or [])
+                                if isinstance(c, dict) and c.get("identifier")),
     }
 
 
-def diff_semantic_payload(before: dict, after: dict, *, max_items: int = 20) -> list[str]:
-    """比较两个 `semantic_payload_digest`，返回人可读差异（结构变更 + 逐镜语义变更）."""
+def diff_semantic_structure(before: dict, after: dict, *, max_items: int = 20) -> list[str]:
+    """只比**结构**：镜头数 / 顺序 / hook / characters——审计段真正的红线.
+
+    v6.98（2026-09-22 审核 P0-3）：审核发现「审计段能静默删掉一整个镜头对象」。
+    但**逐镜文本改写不能算红线**——`kf_time_window_alignment` 之后的硬修复层
+    （补景别前缀 / 锚点重建 / 合规替换 / 冗余清洗…共 71 个约束）**本来就是靠写
+    `prompt`/`ff_desc`/`lf_desc` 工作的**；把逐镜语义也判越权，等于让每一次运行
+    都必然 BLOCK（实测该层每天在跑，这正是「自己造 blocking」）。
+    所以红线只取结构与顺序：
+
+      - 镜头数变化（增/删）→ 叙事被删或凭空多出；
+      - **纯重排**（`set` 相同、`order` 不同）→ 叙事顺序被改；
+      - hook **消失/出现**；characters 的 **identifier 集合**增删。
+
+    **刻意不判**的：对 hook / 角色的**文本改写**——`transition_keywords` 之类的
+    追加类约束本来就会写 hook 的 prompt，角色的 `dynamic_features` 也随章节更新
+    （真实链条实测：把 hook 的「任何变化」当红线 → `transition_keywords` 立刻
+    误报）。整对象替换难以与整对象改写区分，所以 hook 的红线只取「在不在」。
+    """
     out: list[str] = []
     _bc, _ac = before.get("count"), after.get("count")
     if _bc != _ac:
         out.append("镜头数 %s -> %s" % (_bc, _ac))
+    elif (before.get("set") == after.get("set")
+          and before.get("order") != after.get("order")):
+        out.append("镜头顺序变化（内容相同、顺序不同）")
+    if bool(before.get("hook_present")) != bool(after.get("hook_present")):
+        out.append("hook %s -> %s" % ("有" if before.get("hook_present") else "无",
+                                      "有" if after.get("hook_present") else "无"))
+    _bid, _aid = set(before.get("character_ids") or []), set(after.get("character_ids") or [])
+    if _bid != _aid:
+        out.append("角色集合变化 +%s -%s" % (sorted(_aid - _bid), sorted(_bid - _aid)))
+    return out[:max_items]
+
+
+def diff_semantic_payload(before: dict, after: dict, *, max_items: int = 20) -> list[str]:
+    """比较两个 `semantic_payload_digest`，返回人可读差异（结构变更 + 逐镜语义变更）.
+
+    诊断用（谁改了什么）；**判越权请用 `diff_semantic_structure`**——逐镜文本改写
+    是审计段硬修复层的设计行为，不是违规。
+    """
+    out: list[str] = list(diff_semantic_structure(before, after, max_items=max_items))
     _bs, _as = before.get("shots") or [], after.get("shots") or []
     for i in range(min(len(_bs), len(_as))):
         if _bs[i] != _as[i]:
             out.append("镜头#%d 语义变化" % (i + 1))
-            if len(out) >= max_items:
-                return out
-    for k in ("hook", "characters"):
-        if before.get(k) != after.get(k):
-            out.append("%s 语义变化" % k)
             if len(out) >= max_items:
                 return out
     return out
@@ -425,6 +470,7 @@ __all__ = [
     "semantic_payload_digest",
     "shot_semantic_digest",
     "diff_semantic_payload",
+    "diff_semantic_structure",
     "semantic_payload_json",
     "payload_diff",
     "per_shot_revisions",

@@ -13,7 +13,7 @@ from shared import motion_segments as _ms
 from dataclasses import dataclass, field
 from typing import Iterable
 
-RULE_VERSION = "2026-09-22.10"
+RULE_VERSION = "2026-09-23.4"
 RULE_IMPLEMENTATION = "evidence-gated-writes-v1"
 
 
@@ -451,6 +451,84 @@ def _semantic_audit_shot_id(diff_line: str):
     return m.group(1) if m else None
 
 
+# ---------------------------------------------------------------------------
+# v6.101（2026-09-23）：**开篇空镜过多的单一检测源**
+#
+# 背景：两个空镜约束 v6.99 起改为 report-only（用户决定 B：不删镜头），删除诉求
+# 交结构 regen。但「交结构 regen」当时没有落地——收敛轮的目标集合只看
+# `_shot_duration_issues`，看不见空镜问题。这里提供**唯一一份**检测实现：
+#   · `opening_empty_shot_issues()` → 结构化 issue（供 `_structural_shot_issues` 消费）
+#   · `is_opening_empty_shot()`     → 谓词（供 `opening_empty_shot_cap` 约束复用）
+# 两处消费同一实现，避免「同一规则两份启发式」再次漂移。
+#
+# 严重度取 **advisory**：它是**节奏**问题，不是硬正确性问题——接进收敛轮是为了
+# 给它一条修复路径，不是为了让门禁再多拦一类。要改成阻塞只需把 severity 换成
+# `visual_risk`（一行）。
+# ---------------------------------------------------------------------------
+_OPENING_EMPTY_WINDOW = 3      # 只看前 N 镜
+_OPENING_EMPTY_MAX = 1         # 前 N 镜最多允许几个空镜
+
+# 空镜关键词（与 `opening_empty_shot_insert` 同组词表）
+_OPENING_EMPTY_HINTS = ("空镜", "环境", "远景", "水波", "树影")
+# 核心事件词——含这些的镜头即使 main_subject 像空镜也不算
+_OPENING_EVENT_HINTS = (
+    "刺杀", "打斗", "跃出", "破水", "冲入", "现身", "遇刺", "倒地",
+    "对峙", "质问", "怒喝", "惊叫", "揭露", "反转", "逼近",
+)
+
+
+def is_opening_empty_shot(shot) -> bool:
+    """是否空镜/环境镜（**唯一实现**，`opening_empty_shot_cap` 也用它）."""
+    if not isinstance(shot, dict):
+        return False
+    ms = str(shot.get("main_subject") or "")
+    prompt = str(shot.get("prompt") or "")
+    ff = str(shot.get("ff_desc") or "")
+    lf = str(shot.get("lf_desc") or "")
+    all_text = ms + prompt + ff + lf
+
+    # 有台词 → 不是空镜
+    if str(shot.get("narration_segment") or "").strip():
+        return False
+    if str(shot.get("subtitle") or "").strip():
+        return False
+    # 含核心事件词 → 不是空镜
+    if any(h in all_text for h in _OPENING_EVENT_HINTS):
+        return False
+    # main_subject 含空镜关键词 → 算空镜
+    if any(h in ms for h in _OPENING_EMPTY_HINTS):
+        return True
+    if "环境空镜" in ff or "无人" in ff or "空无一人" in ff:
+        return True
+    return False
+
+
+def opening_empty_shot_issues(script: dict) -> list[Issue]:
+    """前 N 镜空镜超上限 → advisory issue（交结构 regen 重做建立镜）."""
+    shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+    if len(shots) < _OPENING_EMPTY_WINDOW:
+        return []
+    window = shots[:_OPENING_EMPTY_WINDOW]
+    empty_idx = [i for i, sh in enumerate(window) if is_opening_empty_shot(sh)]
+    if len(empty_idx) <= _OPENING_EMPTY_MAX:
+        return []
+    _names = ["镜头%s(%s)" % (window[i].get("index", i + 1),
+                              str(window[i].get("main_subject") or "")[:16])
+              for i in empty_idx]
+    return [Issue(
+        code="opening_empty_shot_overload", severity="advisory",
+        message=("开篇前 %d 镜有 %d 个空镜（上限 %d）：%s —— 抖音黄金 3 秒必须有主体"
+                 "入场；请**重做这几镜**（合并或替换成带主体的建立镜），"
+                 "代码不再自动删镜头（v6.99 report-only）"
+                 % (_OPENING_EMPTY_WINDOW, len(empty_idx), _OPENING_EMPTY_MAX,
+                    "、".join(_names))),
+        shot_id=window[empty_idx[0]].get("index", empty_idx[0] + 1),
+        field_path="main_subject",
+        evidence="; ".join(_names),
+        repairable=True,
+    )]
+
+
 def _semantic_write_audit_issues(script: dict) -> list[Issue]:
     """阶段屏障上报的**语义/结构**写入 → blocking / advisory（v6.98，审核 P0-3）.
 
@@ -460,11 +538,15 @@ def _semantic_write_audit_issues(script: dict) -> list[Issue]:
     而屏障零报告——「审计段只读」这条契约只在注释里成立。
 
     两类落盘（由 `main.py::_record_semantic_write_audit` 写入 `_semantic_write_audit`）：
-      - `unauthorized`：审计段内**未受豁免**的语义/结构写入 → **blocking**
-        （镜头增删、重排、逐镜语义改写、hook / characters 变更）；
-      - `sanctioned`：受豁免者（`STRUCTURAL_SANCTIONED_WRITERS`，当前是开篇空镜删除）
-        → **不阻塞**，但转成 advisory 留证：正式报告里看得见「开篇被删了几个空镜」，
-        而不是像以前那样静默消失。
+
+      - `unauthorized` → **blocking**：审计段里**未受豁免的结构写入**——
+        **镜头数变化 / 对象增删替换（含等数量替换）/ 纯重排 / hook 有无 /
+        角色 identifier 集合变化**。**逐镜语义字段的改写不在其列**：审计段之后的
+        71 个硬修复约束本来就是靠写 `prompt`/`ff_desc`/`lf_desc` 工作的，
+        把它们判越权会让每次运行必然 BLOCK（见 v6.98/v6.99 的两次收窄记录）。
+      - `sanctioned` → **advisory 留证**：`STRUCTURAL_SANCTIONED_WRITERS` 里的约束。
+        **v6.99 起该白名单为空集**（开篇空镜删除已改为 report-only），保留这条分支
+        是为了让「审计段允许哪些结构写入者」继续是一个可审查的显式声明。
     """
     audit = script.get("_semantic_write_audit")
     if not isinstance(audit, dict):
@@ -1102,6 +1184,8 @@ def collect_structured_issues(script: dict, blocking_categories: set[str],
     issues.extend(_timeline_issues(script))
     issues.extend(_duration_budget_issues(script))
     issues.extend(_shot_duration_issues(script))
+    # v6.101：开篇空镜过多——**非阻塞**，但进结构化收集（结构收敛轮据此定位）
+    issues.extend(opening_empty_shot_issues(script))
     issues.extend(_split_boundary_issues(script))
     issues.extend(_adjacent_duplicate_issues(script))
     targets = [("hook", script.get("hook"))] if isinstance(script.get("hook"), dict) else []
@@ -1139,4 +1223,4 @@ def is_blocking(issue: Issue) -> bool:
     return issue.severity in ("hard", "visual_risk")
 
 
-__all__ = ["Issue", "RULE_VERSION", "RULE_IMPLEMENTATION", "RULE_SOURCE_FINGERPRINT", "collect_structured_issues", "is_blocking", "parse_shot_ref", "final_time_invariant_issues", "STRUCTURAL_SHOT_CODES"]
+__all__ = ["Issue", "RULE_VERSION", "RULE_IMPLEMENTATION", "RULE_SOURCE_FINGERPRINT", "collect_structured_issues", "is_blocking", "parse_shot_ref", "final_time_invariant_issues", "STRUCTURAL_SHOT_CODES", "is_opening_empty_shot", "opening_empty_shot_issues"]

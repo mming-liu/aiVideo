@@ -33,11 +33,10 @@ from .types import RepairRecord, Severity, Violation
 # 这里独立常量会漂移——导入放在函数内以避免模块级循环依赖，见 `_project_shot_cap()`。
 def _project_shot_cap() -> float:
     """生效单镜上限（v6.97：委托唯一源；此前只取项目值，与本文件下方的取严重复）."""
-    try:
-        from step01_script_gen.timecode import active_shot_cap
-        return active_shot_cap()
-    except Exception:
-        return 8.0
+    # v6.98（2026-09-22 审核 P1-1）：**删掉异常回退 8.0**——唯一源拿不到时应当
+    # 明确失败（引擎会打出 `[CONSTRAINT] <name> 异常`），而不是悄悄按旧规则算。
+    from step01_script_gen.timecode import active_shot_cap
+    return active_shot_cap()
 
 
 class MotionTimeBoundsConstraint(Constraint):

@@ -1,4 +1,4 @@
-﻿"""step01_script_gen.prompts - Prompt 模板定义（v5.0 增强版）
+"""step01_script_gen.prompts - Prompt 模板定义（v5.0 增强版）
 
 包含：
 - PROMPT_TEMPLATE: 分镜生成主模板（含扩展词库 + 四大维度优化规则）
@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -21,8 +22,57 @@ import storyboard_refs
 # 改 prompt 内容只改 .md，不再动 .py——避免 SyntaxError / git checkout 反复回滚
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
+# v6.99（2026-09-23 二次审核 P1-B）：**模板里的时长硬数字必须是占位符**。
+#
+# 原状态：`.md` 里写死「单镜 ≤ 15s」「对话镜 6-15s / 动作 3.5-8s」「安全值 ≤56 字」，
+# 而运行时再追加一段「生效上限是 12s，以本值为准」。cap=6 或 12 时，模型**同时**
+# 看到静态 15s 与运行时 6/12s——追加一句「以本值为准」能降低冲突影响，但不等于
+# 单一事实源（长 prompt 里规则的权重与位置会直接影响遵循率）。
+#
+# 现在模板只写占位符，`_load_prompt()` 在**导入期**统一渲染成生效值：
+#   {{SHOT_CAP}}        生效单镜上限（整数，如 12）
+#   {{SHOT_CAP_DEC}}    同上（一位小数，用于 t_sec 区间表达）
+#   {{NARR_MAX_CHARS}}  台词安全字数 = cap × 4 字/秒 − 4（cap=15 → 56，与原值一致）
+#   {{DIALOGUE_TARGET}} 对话镜建议区间（已夹到 cap）
+#   {{DUR_RANGES}}      按镜头类型的推荐区间（全部夹到 cap）
+#
+# 渲染后若还有残留占位符 → **直接抛错**：让模型看到 `{{...}}` 比少一条规则更糟。
+_PLACEHOLDER_RE = re.compile(r"\{\{[A-Z_]+\}\}")
+
+
+def _cap_range(lo: float, hi: float, cap: float) -> str:
+    """类型推荐区间——上限夹到生效 cap，下限不低于 3.5s（与 `_dur_range` 同口径）."""
+    lo = max(float(lo), 3.5)
+    hi = min(float(hi), float(cap))
+    return "≤%.0fs" % float(cap) if hi <= lo else "%g-%gs" % (lo, hi)
+
+
+def render_prompt_template(text: str) -> str:
+    """把模板中的时长占位符渲染成**运行时生效值**（v6.99，审核 P1-B）."""
+    from step01_script_gen.timecode import active_shot_cap
+
+    cap = active_shot_cap()
+    table = {
+        "SHOT_CAP": "%.0f" % cap,
+        "SHOT_CAP_DEC": "%.1f" % cap,
+        "NARR_MAX_CHARS": str(int(cap * 4) - 4),
+        "DIALOGUE_TARGET": _cap_range(6, 12, cap),
+        "DUR_RANGES": "对话镜 %s / 动作·打斗·空镜 %s / 过渡 %s" % (
+            _cap_range(6, 15, cap), _cap_range(3.5, 8, cap), _cap_range(4, 8, cap)),
+    }
+    out = text
+    for key, value in table.items():
+        out = out.replace("{{%s}}" % key, value)
+    leftover = sorted(set(_PLACEHOLDER_RE.findall(out)))
+    if leftover:
+        raise ValueError(
+            "prompt 模板残留未渲染占位符 %s（拼写错误或新增了未注册的占位符）"
+            % leftover)
+    return out
+
+
 def _load_prompt(name: str) -> str:
-    """从 prompts/<name>.md 读模板内容（去掉开头 HTML 注释行）."""
+    """从 prompts/<name>.md 读模板内容（去掉开头 HTML 注释行 + 渲染时长占位符）."""
     path = _PROMPTS_DIR / f"{name}.md"
     text = path.read_text(encoding="utf-8")
     # 去掉 <!-- ... --> 注释行
@@ -31,7 +81,7 @@ def _load_prompt(name: str) -> str:
         if line.lstrip().startswith("<!--"):
             continue
         lines.append(line)
-    return chr(10).join(lines).strip(chr(10))
+    return render_prompt_template(chr(10).join(lines).strip(chr(10)))
 
 PROMPT_TEMPLATE = _load_prompt("main")
 SYSTEM_PROMPT = _load_prompt("system")
@@ -210,6 +260,21 @@ def build_prompt(novel_text: str, bank=None, objects_bank=None,
     return prompt
 
 
+def _dur_range(lo: float, hi: float, cap: float) -> str:
+    """按镜头类型的**推荐**时长区间——上限一律夹到生效 cap，下限不低于 3.5s.
+
+    v6.98（审核 P1-1 第 3 条）：推荐区间可以存在，但**不得与生效硬上限矛盾**。
+    原实现写死「动作镜 3.5-8s / 对话镜 6-15s」，cap=6 时提示里就同时出现
+    「上限 6s」与「3.5-8s」两条互斥指令——模型只能二选一。这是「提示与门禁
+    不同源」的另一种形态。
+    """
+    lo = max(float(lo), 3.5)
+    hi = min(float(hi), float(cap))
+    if hi <= lo:
+        return f"≤{float(cap):.0f}s"
+    return f"{lo:g}-{hi:g}s"
+
+
 def _build_total_duration_constraint(shot_count_min: int, shot_count_max: int) -> str:
     """v6.41 P19 闭环：红果 60-90s 总时长硬约束（08-23 增，08-23 改 8-10 镜）.
 
@@ -243,10 +308,18 @@ def _build_total_duration_constraint(shot_count_min: int, shot_count_max: int) -
     from shared.model_caps import active_video_duration_cap
     from shared.constants import DEFAULT_VIDEO_DURATION_FALLBACK
     cap = active_video_duration_cap() or DEFAULT_VIDEO_DURATION_FALLBACK
-    # 规划目标 70-80s → 平均每镜 4-5s（单镜硬上限 8s）
+    # 规划目标 70-80s → 平均每镜 4-5s（单镜硬上限 = 运行时生效值，见下）
     min_per_shot = 4.0
     target_per_shot = 5.0
-    max_per_shot = min(8.0, cap)  # 单镜 cap（08-23 用户规则：≤8s，与模型 cap 取严）
+    # v6.98（2026-09-22 审核 P1-1）：单镜硬上限**只有一个源**。
+    #
+    # 原实现是 `min(8.0, cap)`——项目上限早已放宽到 15s（v6.93），这里却仍把 8s
+    # 当模板硬上限，于是**生成层主动把 8-12s 的合法镜头拆开**（下面还写着
+    # 「超 8s 必拆镜」），而质量门按 12s 收——多出来的镜头受最短时长（3.5s）约束
+    # 后又抬高总时长，是「正片顶格」的一个**代码侧**来源（审核 P1-1 的实测推论）。
+    # 现在与门禁同源。
+    from step01_script_gen.timecode import active_shot_cap
+    max_per_shot = active_shot_cap()
 
     # v6.43 镜头数不限：min/max 任一 ≤0 时按"按需拆镜"措辞，不再硬塞 N 镜数字
     unlimited = shot_count_min <= 0 or shot_count_max <= 0
@@ -254,7 +327,7 @@ def _build_total_duration_constraint(shot_count_min: int, shot_count_max: int) -
         plan_line = (
             f"**镜头数不限**，按动作密度自然拆分：总时长目标 70-80s ÷ 每镜平均 "
             f"4.5-{target_per_shot:.1f}s ≈ 14-17 镜"
-            f"（单镜 ≤ {max_per_shot:.0f}s 硬上限，超 8s 必拆镜）。\n"
+            f"（单镜 ≤ {max_per_shot:.0f}s 硬上限，超 {max_per_shot:.0f}s 必拆镜）。\n"
         )
     else:
         plan_line = (
@@ -270,8 +343,8 @@ def _build_total_duration_constraint(shot_count_min: int, shot_count_max: int) -
         f"**规划方式**（按镜头类型拉开时长差，禁止一刀切）：\n"
         f"- 开场/建立镜：4-5s（含人物姿态、空间关系建立）\n"
         f"- 对话/反应镜：5-6s（必须能念完台词+展示反应）\n"
-        f"- 打斗/动作镜：3-5s（动作链拆多镜短镜快切，不靠拉长单镜）\n"
-        f"- 空镜/过渡镜：3-4s（无对白无关键动作，从简）\n"
+        f"- 打斗/动作镜：{_dur_range(3.5, 5, max_per_shot)}（动作链拆多镜短镜快切，不靠拉长单镜；**不得低于 3.5s**）\n"
+        f"- 空镜/过渡镜：{_dur_range(3.5, 4.5, max_per_shot)}（无对白无关键动作，从简；**不得低于 3.5s**）\n"
         f"- 末镜/留白镜：4-5s（情绪渲染时间）\n"
         f"\n"
         f"**硬约束**：\n"
@@ -321,21 +394,27 @@ def _build_audio_instruction() -> str:
 
 
 def _duration_cap_guidance() -> str:
-    """当前视频模型单镜时长上限引导（仅当上限 < 模板里的 ≤8s 硬上限时收紧）.
+    """当前**生效**单镜时长上限引导（v6.98：无条件按唯一源渲染，不再以 8s 为模板值）.
 
     模板已要求「单镜头时长：特写/空镜 2-4秒，中景 3-6秒，远景/动作 5-8秒，
     严禁超过 8 秒（08-23 用户规则硬上限）」。对上限更低的模型（如 Hailuo v1
     720P=6s）必须覆盖该引导，否则 LLM 会按 8s 规划、生成超上限镜头被 provider 截断。
     """
-    from shared.model_caps import active_video_duration_cap
-    cap = active_video_duration_cap()
-    if not cap or cap >= 8:
+    # v6.98（审核 P1-1）：**无条件**按唯一源渲染，且拆镜下限改为 3.5s。
+    #
+    # 原实现只在 `cap < 8` 时才输出、并称其为「覆盖上述 8 秒引导」——cap=12 时这条
+    # 引导**整条消失**，模板里「超 8s 会被截断」的措辞却还在。另外「拆成多个
+    # **2-3 秒**短镜快切」低于最短时长 3.5s，是 `shot_duration_below_min` 的
+    # 一条**指令层**来源。
+    from step01_script_gen.timecode import active_shot_cap
+    cap = active_shot_cap()
+    if not cap:
         return ""
     return (
-        f"\n\n### 视频模型时长上限 {cap} 秒（必须遵守，覆盖上述 8 秒引导）\n"
-        f"当前视频模型单镜时长上限为 {cap} 秒。任何镜头（含钩子）时长不得超过 {cap} 秒，"
+        f"\n\n### 生效单镜时长上限 {cap:.0f} 秒（必须遵守，优先于正文里任何其它单镜时长数字——更大或更小都以本值为准）\n"
+        f"当前生效的单镜时长上限为 {cap:.0f} 秒（= min(视频模型能力, 项目上限)）。任何镜头（含钩子）时长不得超过 {cap:.0f} 秒，"
         f"超出会被视频服务截断。动作/对白规划必须落在 {cap} 秒内；"
-        f"无法在 {cap} 秒内完成的动作拆成多个 2-3 秒短镜快切。\n"
+        f"无法在 {cap} 秒内完成的动作拆成多个 **3.5-6 秒**短镜快切（**不得低于 3.5 秒**，低于下限同样拒收）。\n"
     )
 
 
@@ -543,10 +622,12 @@ def _build_regen_iron_rules() -> str:
     尾部反馈淹没，重试版把时长写塌到 11s、编造原文没有的台词）。重试 prompt
     必须在反馈前重申非协商规则，作为「本轮拒收标准」。
     """
+    from step01_script_gen.timecode import active_shot_cap
+    _cap = active_shot_cap()
     return (
         "\n\n# ★ 重生成铁律（最高优先级，违反本轮拒收）\n"
         "1. **正片分镜 SUM(duration_sec) 必须在 [60s, 90s]，规划目标 70-80s**（不含钩子），"
-        "每镜 3-8s（对话镜 5-6s / 动作镜 3-5s / 空镜 3-4s）；"
+        f"每镜 ≥3.5s 且 ≤ {_cap:.0f}s 上限（对话镜 {_dur_range(6, 15, _cap)} / 动作镜 {_dur_range(3.5, 8, _cap)} / 空镜 {_dur_range(3.5, 6, _cap)}）；"
         "禁止 1-2s 短镜堆叠凑镜头数，也禁止全章一刀切默认 6s——写时长时先算 SUM，"
         "不足 60s 就加长对话镜/加反应镜，超 80s 就压缩无对白过渡镜。\n"
         "2. **台词（narration_segment/subtitle）必须逐字来自原文**——禁止编造原文没有的"

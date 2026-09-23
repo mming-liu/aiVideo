@@ -1,4 +1,4 @@
-﻿"""opening_empty_shot_remove — 开头空镜硬删除（v6.64 P4.3+）.
+"""opening_empty_shot_remove — 开头空镜硬删除（v6.64 P4.3+）.
 
 doubao 经常开头 2-3 镜全是空镜，节奏太慢。
 策略：只删真正的"空镜"（main_subject 明确标记为"空镜"），不删有人物的群演/远景镜。
@@ -62,10 +62,12 @@ def _total_duration(shots: list) -> float:
 
 
 class OpeningEmptyShotRemoveConstraint(Constraint):
-    """开头空镜硬删除：第 1 镜不能是纯空镜.
+    """开头空镜**报告**：第 1 镜是纯空镜时报出来（v6.99 起 report-only）.
 
-    检测：如果第 1 镜是纯空镜，且前 3 镜内有角色镜，删除多余的空镜。
-    修复：最多删除 2 个纯空镜，保证删完后仍 >= 8 镜、>= 55s。
+    检测：如果第 1 镜是纯空镜，且前 3 镜内有角色镜，报告多余的空镜数量与证据。
+    **不再删除**：`shots.pop(0)` 会连同 prompt/KF/布局一起丢掉一整个镜头对象，
+    且会让后续镜头位置前移、把按位置比较的时间快照全部判成越权写入
+    （2026-09-23 二次审核 P0-B + 用户决定 B）。
     """
 
     name = "opening_empty_shot_remove"
@@ -138,20 +140,35 @@ class OpeningEmptyShotRemoveConstraint(Constraint):
             if len(shots) - (n_remove + 1) < self._MIN_SHOTS_AFTER:
                 break
 
+            # v6.99（二次审核 P0-B，用户决定**选项 B**）：**只记账，不删除**。
             removed.append(shot.get("main_subject", "")[:20])
             total_dur -= shot_dur
             n_remove += 1
-            shots.pop(0)
 
+        # ⚠️ 这里**没有** `shots.pop(0)` —— v6.99 起本约束是 report-only。
+        #
+        # 原实现 `shots.pop(0)` 最多删 2 个完整镜头对象：prompt / ff / lf / motion /
+        # KF / 布局 / 姿态 / 道具随 `del` 一起消失，而判据只是「`main_subject` 含
+        # 『空镜』且 ff/lf 不含人物称谓」这一条窄文本启发式——**无法证明被删镜
+        # 不含独立的环境、道具、姿态、KF 或事件结果**。
+        #
+        # 而且它在**审计段之后**执行：删首镜 → 后续镜头按列表位置前移 → 时间快照
+        # （按位置比较）把每个前移镜头的 duration/motion/KF 都算成「被写过」→
+        # 实测「删 1 镜 → 20 条未授权时间写入」，同一动作既得 advisory 又得
+        # `time_field_audit_write` HARD。
+        #
+        # 审核建议 B：把删除诉求交结构 regen（生成完整替代镜头 + 统一候选验收）。
+        # 本约束只报告命中的镜头与判空证据。
         if n_remove > 0:
             repairs.append(RepairRecord(
                 constraint_name=self.name,
                 shot_index=1,
-                action="remove_pure_empty",
+                action="warn",
                 target="shots",
-                before=f"前{n_remove}镜为纯空镜",
-                after=f"删除{n_remove}个纯空镜",
-                detail=f"删除了 {n_remove} 个纯空镜: {removed}",
+                before=f"前{n_remove}镜为纯空镜（首镜即空镜）",
+                after="**只报告，未删除任何镜头**（v6.99 report-only）",
+                detail=(f"开篇 {n_remove} 个纯空镜建议由结构 regen 重新规划："
+                        f"{removed}；本约束不再 `shots.pop()`"),
             ))
 
         return repairs

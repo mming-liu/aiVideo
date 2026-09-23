@@ -21,46 +21,20 @@ from .base import Constraint
 from .types import RepairRecord, Severity
 
 
-# 与 opening_empty_shot_insert 同组词表（空镜关键词）
-_EMPTY_HINTS = ("空镜", "环境", "远景", "水波", "树影")
-
-# 核心事件词——含这些的镜头即使 main_subject 像空镜也不算
-_EVENT_HINTS = (
-    "刺杀", "打斗", "跃出", "破水", "冲入", "现身", "遇刺", "倒地",
-    "对峙", "质问", "怒喝", "惊叫", "揭露", "反转", "逼近",
-)
-
-_WINDOW = 3  # 检查前 N 镜
-_MAX_EMPTY = 1  # 前 N 镜最多允许 1 个空镜（v6.63.1 修正注释：原注释误写「N 个」）
+# v6.101：空镜谓词**只有一份实现**（在 `quality_issues` 里，结构收敛轮也用它）。
+# 本模块此前自带 `_EMPTY_HINTS` / `_EVENT_HINTS` / `_is_empty_shot` 三件套——
+# 与收敛轮各自的启发式一旦漂移，就会出现「约束说超上限、收敛轮看不见」这类
+# 两边不一致。现在统一从 `quality_issues` 取（沿用本仓既有方向：约束 → quality_issues，
+# 且**函数内导入**避免模块级环）。
+# 窗口/上限与 `quality_issues._OPENING_EMPTY_WINDOW/_MAX` **同值**：检测源统一，
+# 但本约束自己的判定阈值仍在这里声明（约束的严重度与报告措辞也归它）。
+_WINDOW = 3      # 检查前 N 镜
+_MAX_EMPTY = 1   # 前 N 镜最多允许 1 个空镜
 
 
-def _is_empty_shot(shot):
-    """判断是否为空镜/环境镜."""
-    if not isinstance(shot, dict):
-        return False
-    ms = str(shot.get("main_subject") or "")
-    prompt = str(shot.get("prompt") or "")
-    ff = str(shot.get("ff_desc") or "")
-    lf = str(shot.get("lf_desc") or "")
-    all_text = ms + prompt + ff + lf
-
-    # 有台词 → 不是空镜
-    if str(shot.get("narration_segment") or "").strip():
-        return False
-    if str(shot.get("subtitle") or "").strip():
-        return False
-
-    # 含核心事件词 → 不是空镜
-    if any(h in all_text for h in _EVENT_HINTS):
-        return False
-
-    # main_subject 含空镜关键词 → 算空镜
-    if any(h in ms for h in _EMPTY_HINTS):
-        return True
-    if "环境空镜" in ff or "无人" in ff or "空无一人" in ff:
-        return True
-
-    return False
+def _is_empty_shot(shot) -> bool:
+    from step01_script_gen.quality_issues import is_opening_empty_shot
+    return is_opening_empty_shot(shot)
 
 
 def _shot_info_score(shot):
@@ -75,24 +49,12 @@ def _shot_info_score(shot):
     return score
 
 
-def _shot_duration_cap():
-    """合并后单镜时长硬上限（与 timecode 同口径：8s 用户规则 ∧ 模型 cap 取严）.
-
-    v6.63.1 新增——旧版合并时长 = 各镜直加，3 个 4s 空镜合成 12s，违反
-    timecode.MAX_SHOT_DURATION=8s 硬规则（08-23 用户规则；超限镜会被
-    timecode pre-pass 拆回 2 镜，F15 的合并白做）。
-    """
-    # v6.97：改走唯一源（`timecode.active_shot_cap()`）——原先这里自己拼
-    # 「项目值 + 模型取严」，且兜底写死 8.0，是 7 处重复实现之一。
-    try:
-        from step01_script_gen.timecode import active_shot_cap
-        return active_shot_cap()
-    except Exception:
-        return 8.0
-
-
 class OpeningEmptyShotCapConstraint(Constraint):
-    """F15. 开头空镜硬上限：前3镜空镜>1时合并多余的."""
+    """F15. 开头空镜**超上限报告**：前3镜空镜>1时报告（v6.99 起 report-only）.
+
+    2026-09-23 二次审核 P0-B + 用户决定：**不再删除/合并**——语义删除无法证明等价，
+    且删镜头会让按位置比较的时间快照把后续镜头全判成「时间字段被写」。
+    """
 
     name = "opening_empty_shot_cap"
     severity = Severity.WARN
@@ -119,56 +81,41 @@ class OpeningEmptyShotCapConstraint(Constraint):
         if not remove_indices:
             return repairs
 
-        keep_shot = window[keep_idx]
-        keep_dur = float(keep_shot.get("duration_sec", 0) or 0)
-        total_removed_dur = 0.0
-        removed_kw = []
-
-        for ri in sorted(remove_indices, reverse=True):
-            removed = window[ri]
-            dur = float(removed.get("duration_sec", 0) or 0)
-            total_removed_dur += dur
-            ms = str(removed.get("main_subject") or "")
-            if "\u00b7" in ms:
-                kw_part = ms.split("\u00b7", 1)[1]
-                for k in kw_part.replace("/", "\u3001").split("\u3001"):
-                    k = k.strip()
-                    if k and k not in removed_kw:
-                        removed_kw.append(k)
-            del shots[ri]
-
-        # 重新编号
-        for pos, shot in enumerate(shots, 1):
-            if isinstance(shot, dict):
-                shot["index"] = pos
-
-        # v6.63.1：合并时长钳到单镜硬上限（8s 用户规则 ∧ 模型 cap 取严）——
-        # 超限镜会被 timecode pre-pass 拆回多镜，F15 的合并就白做了
-        new_dur = min(round(keep_dur + total_removed_dur, 1), _shot_duration_cap())
-        keep_shot["duration_sec"] = new_dur
-        keep_shot["duration"] = new_dur
-
-        # 合并 main_subject 关键词
-        if removed_kw:
-            keep_ms = str(keep_shot.get("main_subject") or "空镜")
-            if "\u00b7" in keep_ms:
-                base, kw_part = keep_ms.split("\u00b7", 1)
-                existing = [k.strip() for k in kw_part.replace("/", "\u3001").split("\u3001") if k.strip()]
-                for k in removed_kw:
-                    if k not in existing:
-                        existing.append(k)
-                keep_shot["main_subject"] = base + "\u00b7" + "\u3001".join(existing)
-            else:
-                keep_shot["main_subject"] = keep_ms + "\u00b7" + "\u3001".join(removed_kw)
-
+        # v6.99（2026-09-23 二次审核 P0-B，用户决定**选项 B**）：**只报告，不改写**。
+        #
+        # 原实现按窄文本启发式把多余的开场空镜 `del shots[ri]`，再把时长相加、
+        # 关键词并入保留镜。审核指出这是**无法证明等价的语义删除**：被删镜的
+        # prompt / ff / lf / motion / KF / 布局 / 姿态 / 道具 / 事件结果随 `del`
+        # 一起消失，而「并入 main_subject 关键词 + 时长相加」不能证明这些信息
+        # 仍然存在。v6.98 曾试图把它登记为「受豁免的结构写入者」保留行为——
+        # 二次审核证明那条路**同时**踩了两个坑：
+        #   1. 只豁免了结构检查，没豁免时间屏障——删首镜会让后续镜头按列表位置
+        #      前移，而时间快照正是按位置比较的 → 同一动作既得 advisory 又得
+        #      `time_field_audit_write` HARD（实测：删 1 镜 → 20 条未授权时间写入）；
+        #   2. 即使豁免时间检查，被删镜的语义仍无等价证明。
+        #
+        # 所以改为 report-only：**不删除、不合并、不重编号、不改时长**，
+        # 只把「命中的镜头 + 判空证据 + 建议保留顺序」报出来，交结构 regen /
+        # 人工处理。这条约束自此不再写 `shots`，阶段契约「审计段只读」对它成立。
+        hits = []
+        for ri in sorted(remove_indices):
+            sh = window[ri]
+            hits.append("镜头%s(%s, %.1fs)" % (
+                sh.get("index", ri + 1),
+                str(sh.get("main_subject") or "")[:18],
+                float(sh.get("duration_sec", 0) or 0)))
         repairs.append(
             RepairRecord(
                 constraint_name=self.name,
-                shot_index=keep_shot.get("index", 1),
-                action="merge_empty_shots",
+                shot_index=window[keep_idx].get("index", 1),
+                action="warn",
                 target="shots[0:%d]" % _WINDOW,
-                before="前%d镜%d个空镜" % (_WINDOW, len(empty_indices)),
-                after="合并为1个空镜，时长%.1fs→%.1fs" % (keep_dur, new_dur),
+                before="前%d镜有 %d 个空镜（上限 %d）" % (_WINDOW, len(empty_indices), _MAX_EMPTY),
+                after="**只报告，未做任何改写**（v6.99 report-only）",
+                detail=("开篇空镜超上限：建议保留信息最丰富的镜头%s，其余 %d 个请由"
+                        "结构 regen 重新规划（本约束不再删除镜头）；候选：%s"
+                        % (window[keep_idx].get("index", 1), len(remove_indices),
+                           "、".join(hits))),
             )
         )
         return repairs

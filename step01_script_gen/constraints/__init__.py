@@ -87,6 +87,7 @@ from .short_shot_merge import ShortShotMergeConstraint  # F9 短镜合并（v6.4
 from .ff_lf_temporal import FfLfTemporalConstraint  # F10 ff/lf 时序协议（v6.50, 08-28）
 from .frame_spec_consistency import FrameSpecConsistencyConstraint  # S v6.57+ per-frame spec 一致性
 from .offscreen_action_consistency import OffscreenActionConsistencyConstraint
+from .motion_segment_kf_align import MotionSegmentKfAlignConstraint  # v6.102 时段合并
 from .motion_time_bounds import MotionTimeBoundsConstraint
 from .duration_budget import DurationBudgetConstraint
 from .framing_prefix_fill import FramingPrefixFillConstraint  # F11 景别词回填（v6.62, 09-06）
@@ -210,6 +211,10 @@ ALL_CONSTRAINTS.extend([
     # 的字段表同为 `("prompt", "ff_desc", "lf_desc", "motion_desc")`、写入同为
     # `shot[fld] = new_var`，注册位置也在审计段（本片数据未触发，属潜在写入者）。
     BoatWidthConstraint(),
+    # v6.102（第十六次修复项 #3）：**时段数 > KF 数 → 合并相邻时段**。
+    # 放在①段的**最后**：它要读已经定稿的 `motion_desc` 与 `keyframes`，
+    # 而它写的是 `motion_desc`（时间字段），必须在审计段之前跑完。
+    MotionSegmentKfAlignConstraint(),
     # Phase 2
     InjuryContinuityConstraint(),
     GazeDirectionConstraint(),

@@ -7818,11 +7818,11 @@ _REDGUO_LAST_SHOT_DURATION_MIN = 4.0
 # 08-23 用户规则：单镜时长不长于 8s（与 timecode.MAX_SHOT_DURATION 同值）
 def _redguo_shot_duration_max() -> float:
     """生效单镜上限（v6.97：委托唯一源；此前写死 8.0，日志会写「超 8s 上限」而实际是 12s）."""
-    try:
-        from step01_script_gen.timecode import active_shot_cap
-        return float(active_shot_cap())
-    except Exception:
-        return 8.0
+    # v6.98（2026-09-22 审核 P1-1）：**删掉异常回退 8.0**——拿不到唯一源时让异常
+    # 冒到校验器外层（`collect_structured_issues` 会把它记成 `checker_failed`），
+    # 按审核建议「明确失败或报告 checker failure」，不再静默恢复旧规则。
+    from step01_script_gen.timecode import active_shot_cap
+    return float(active_shot_cap())
 
 # 末镜禁闭环词（与 prompts.py 规则 60 同步）
 _REDGUO_CLOSING_WORDS = (
