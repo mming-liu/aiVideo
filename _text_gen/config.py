@@ -36,7 +36,7 @@ class TextGenCfg:
     # ---- DeepSeek ----
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-    DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+    DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
     # 思考模式强度 (reasoning.effort): none/minimal/low/medium/high/xhigh/max
     # （none 关闭思考；minimal/low=低强度；medium/high/xhigh=高强度；max=最强）。
     # 同时作用于 Responses API（v4-flash/v4-pro）与 reasoner 老模型 chat 回退路径。

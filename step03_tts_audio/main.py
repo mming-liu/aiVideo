@@ -51,9 +51,11 @@ def main():
 
     # Load script
     script = load_script_module(SCRIPT_FILE)
-    from shared.quality_gate import require_gate
+    from shared.quality_gate import require_gate, verify_step01_commit_manifest
     require_gate(CHAPTER_DIR / "step01_quality.json", script, stage="step01",
                  required_report_type="quality_gate")
+    # v6.103：三份 step01 产物必须属于同一个提交批次（见 shared/quality_gate）
+    verify_step01_commit_manifest(CHAPTER_DIR, script, stage="step01")
     shots = script.get("shots", [])
 
     # v6.73: model capability + actual clip audio streams determine the source.

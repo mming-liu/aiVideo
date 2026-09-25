@@ -234,7 +234,12 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
                 fp = Path(shot_dir) / name
                 if fp.exists():
                     candidates.append(fp)
-            candidates.extend(sorted(Path(shot_dir).glob("keyframe_*.png")))
+            # v6.110：排除二修标注中间产物（`keyframe_<N>_doodle.png`）——
+            # 它会被当成「帧」参与哈希，而且 step02b 的 frame_paths 走的是
+            # `shared.paths.keyframe_files`（同一口径）。
+            from shared.paths import is_core_keyframe_file
+            candidates.extend(sorted(p for p in Path(shot_dir).glob("keyframe_*.png")
+                                     if is_core_keyframe_file(p)))
             for _fp in candidates:
                 key_parts.append(_file_digest(_fp))
         except Exception:

@@ -18,6 +18,12 @@ RULE_IMPLEMENTATION = "evidence-gated-writes-v1"
 
 
 def _compute_rule_source_fingerprint() -> str:
+    """**判定版本**指纹：决定「什么算 blocking / 什么能修 / 旧报告是否仍然有效」.
+
+    只有会改变旧报告有效性的代码才进这里。**生成/修复提示词不进**——改提示词
+    改变的是 script 内容，而内容变化已被 `script_revision` 覆盖，把它塞进来只会
+    让门禁无谓失效（见 `_compute_prompt_source_fingerprint`）。
+    """
     import hashlib
     from pathlib import Path
 
@@ -34,11 +40,58 @@ def _compute_rule_source_fingerprint() -> str:
         # v6.83（二次审核发现 6）：这三份 shared 实现 + 文本 schema 直接决定
         # 「什么算 blocking / 事件表怎么校验 / 时间字段谁能写」，却不在指纹里
         # ——只改它们而不动 step01 目录，旧报告会被错误地当成仍然有效。
+        # v6.111（审核 P2-5）：这三份**直接决定「什么算 blocking / 什么能修」**，
+        # 却不在指纹里——改了检测器或审计实现，旧质量报告/审计结论会被错误地
+        # 当成仍然有效。
+        root / "audit.py",
+        root / "cross_field_checks.py",
+        root / "kf_structural_guard.py",
+        # v6.112：约束框架的版本索引——决定「哪些约束在跑、跑的是哪一版」，
+        # 与下面的 constraints/ 目录同为判定实现。
+        root / "rules_index.py",
         project / "shared" / "motion_segments.py",
         project / "shared" / "quality_gate.py",
         project / "shared" / "semantic_barrier.py",
         project / "_text_gen" / "deepseek_schema.py",
     ]
+    # v6.112（总计划 §1.3 / 审核 P2-5 后半段）：判定实现还有两处成建制的目录——
+    # `constraints/`（70+ 条硬修复 + engine + rules_index）与 `prompt_semantic/`
+    # （关键词表，如 STRONG_INJURY_ANCHORS）。它们直接决定告警与阻塞口径，
+    # 此前不在指纹里：**只改判定、不改内容**的改动（例如某条约束改为只降级不写入）
+    # 会让旧报告/旧审计被错误地复用。按目录整体纳入，避免以后逐条往清单里补。
+    for _sub in ("constraints", "prompt_semantic"):
+        _dir = root / _sub
+        if _dir.is_dir():
+            files.extend(p for p in sorted(_dir.rglob("*.py")) if p.is_file())
+    digest = hashlib.sha256()
+    for path in files:
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            continue
+    return digest.hexdigest()[:16]
+
+
+def _compute_prompt_source_fingerprint() -> str:
+    """**生成/修复提示词版本**指纹（诊断字段，**不参与门禁、不参与复用判定**）.
+
+    覆盖「稿子怎么生成、被点名后怎么改」的那几处：`prompts.py` / `prompts/`
+    （system prompt 与各站点模板）、`outline.py`（大纲与时长预算）、`main.py`
+    （修复 prompt 与接受判据就写在这里面）。
+
+    刻意**不**并入 `RULE_SOURCE_FINGERPRINT`：改这些只改变稿件内容，而内容变化
+    已经由 `script_revision` 覆盖——把整个 `main.py` 加进判定指纹只会让门禁在
+    「旧报告其实仍然有效」时无谓失效（审核 P2-5 的边界）。它只被记录：
+    `step01_audit.json` 元数据 + `step01_commit.json` + 每轮审计台账。
+    """
+    import hashlib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent
+    files = [root / "prompts.py", root / "outline.py", root / "main.py"]
+    _prompt_dir = root / "prompts"
+    if _prompt_dir.is_dir():
+        files.extend(p for p in sorted(_prompt_dir.rglob("*")) if p.is_file())
     digest = hashlib.sha256()
     for path in files:
         try:
@@ -49,6 +102,7 @@ def _compute_rule_source_fingerprint() -> str:
 
 
 RULE_SOURCE_FINGERPRINT = _compute_rule_source_fingerprint()
+PROMPT_SOURCE_FINGERPRINT = _compute_prompt_source_fingerprint()
 
 
 @dataclass
@@ -62,6 +116,20 @@ class Issue:
     field_path: str = ""
     evidence: str = ""
     related_shot_ids: list = field(default_factory=list)
+    # v6.119（方案 A 其二，2026-09-25 用户决定）：审计给出的**成对修复目标**
+    # `[{shot_id, field_path}]`——「哪个镜头改哪个字段」。
+    # `shot_id`/`field_path` 仍是**问题定位**（问题出现在哪）；只有这里的成对条目
+    # 用于**授权**。两条平行数组（field_paths + related_shot_ids）会形成过宽的
+    # 笛卡尔积授权，故不采用。
+    #
+    # **三态**（缺一不可，混成 `[]` 会让「模型明确说不修」被当成「旧条目没提供」
+    # 而回退到定位字段推导 —— v6.119 审核实测）：
+    #   - `None` ：**未提供**（旧审计产物 / 旧 payload）→ 走兼容路径（原 `code`/
+    #              `field_path` 推导）；
+    #   - `[]`   ：**显式**「这条问题没有明确修复目标」→ **不授权**（也不给结构码
+    #              的 KF 列表能力），该目标本轮不进定向修复；
+    #   - 非空   ：成对模式，**只有**这些 (镜头, 字段) 进授权面。
+    repair_targets: "list | None" = None
     repairable: bool = False
 
     def to_dict(self) -> dict:
@@ -75,6 +143,7 @@ class Issue:
             "field_path": self.field_path,
             "evidence": self.evidence,
             "related_shot_ids": self.related_shot_ids,
+            "repair_targets": self.repair_targets,
             "repairable": self.repairable,
         }
 
@@ -838,15 +907,162 @@ def _keyframe_timeline_issues(shot: dict, shot_id) -> list[Issue]:
                         continue
                     best = max(range(len(scores)), key=lambda x: scores[x])
                     if best != own and scores[best] >= 0.45 and scores[best] >= scores[own] + 0.12:
+                        # v6.106（2026-09-24 第二十八次重跑实测）：原标题只说「更匹配
+                        # 另一个时段」，模型连改两轮都没改对（判据是字符重叠相似度，
+                        # 它不知道往哪儿写）。把**本时段该写什么**直接给出——与缺段
+                        # 告警给「缺段内容」同一做法：可确定的部分算好交给模型。
                         issues.append(Issue(
                             code="kf_event_window_mismatch", severity="visual_risk",
-                            message=f"kf{i} 位于 {segs[own][0]:g}-{segs[own][1]:g}s，但内容更匹配 {segs[best][0]:g}-{segs[best][1]:g}s 的事件",
+                            message=(
+                                f"kf{i} 位于 {segs[own][0]:g}-{segs[own][1]:g}s，"
+                                f"但内容更匹配 {segs[best][0]:g}-{segs[best][1]:g}s 的事件。"
+                                f"**必须动作**：把该帧 desc 改写成描写**本时段**"
+                                f"[{segs[own][0]:g}-{segs[own][1]:g}s] 的事件"
+                                f"（该时段内容：「{str(segs[own][2] if len(segs[own]) > 2 else '')[:40]}」），"
+                                f"不得再描写 {segs[best][0]:g}-{segs[best][1]:g}s 的事件"
+                                f"（「{str(segs[best][2] if len(segs[best]) > 2 else '')[:30]}」），"
+                                f"也不得改动该帧的 t_sec。"
+                            ),
                             shot_id=shot_id, frame_id=f"kf{i}", field_path="keyframes.desc",
                             evidence=str(kf.get("desc") or "")[-120:], repairable=True,
                         ))
         except Exception:
             pass
 
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# v6.124（用户口径 (a) 窄版）：kf 描述里**明确可见**的人物缺 `frame_layouts.kfs[i]`
+# 条目 → 结构化门 blocking
+#
+# 为什么要有它（2026-09-25 冻结稿实测）：
+#   · 这类缺陷**确定性存在**——约束引擎 `frame_spec_consistency` 在冻结稿上报了
+#     19 处 HARD（`[CONSTRAINT] HARD 未解决 37 处` 的一部分）；
+#   · 但**质量门 blocking = 0**——`collect_structured_issues` 里没有这一类的检测器，
+#     所以「把类别名加进 `_QUALITY_BLOCKING_CATEGORIES`」解决不了漏检（那只影响
+#     checklist 告警的严重度分级）；
+#   · 而模型审计只在部分轮次报出来（同一 revision 两次独立审计：3 vs 10 条 blocking、
+#     code 无一重合）。
+#   → 于是「最终 blocking 为零」推不出「没有已知 HARD 缺陷」。
+#
+# 为什么是**窄版**：`frame_spec_consistency._check_roster_coverage` 只要 desc 里
+# 出现名字就报冲突（连「已无某人」「已走远」这类画外描述也报）。整类升级为 blocking
+# 会造出大量**误拦**（用户 2026-09-25 核对）。这里只拦**能确认画面上看得见**的：
+#   · 名字后紧跟可见状态/动作/体征词（`_KF_VISIBLE_MARKERS`）；
+#   · 且名字附近没有画外/封闭/否定标记（`_KF_OFFSCREEN_MARKERS`）；
+#   · 拿不准的（「听香在车厢内」「转向听香，盯着她」）**不拦**——只收窄召回，
+#     不制造不可修的 BLOCK。
+# ---------------------------------------------------------------------------
+# 名字**之后**（同一分句内）出现的可见证据。刻意只收「能在画面里被看到」的词：
+# 姿态/位置/外观/动作/伤情。**不含**「盯/看/望」这类注意动词——被注视的人未必入画。
+_KF_VISIBLE_MARKERS = (
+    # 姿态 / 位置 / 外观
+    "撑伞", "静立", "站立", "站着", "起身", "跪坐", "跪", "坐", "躺", "仰卧",
+    "俯身", "趴", "伏", "靠", "倚", "蹲", "披头散发", "满面", "脸色", "神情",
+    # 动作（手/身体可被看到）
+    "环住", "抱", "搂", "扶", "牵", "拎", "提", "握", "持", "抬", "伸", "挥",
+    "按", "推", "拉", "扇", "拍", "抓", "捂", "指", "点", "摇", "跪伏",
+    # 可见表情 / 发声动作
+    "尖叫", "唱歌", "哭", "笑", "点头", "摇头", "瞪", "睁", "张口", "张嘴",
+    # 伤情 / 体征（画面上可见）
+    "心口", "胸口", "洇痕", "血痕", "血迹", "伤口", "暗红",
+)
+# 名字**附近**出现这些 → 不判「明确可见」（画外 / 封闭空间 / 否定 / 仅声音）
+_KF_OFFSCREEN_MARKERS = (
+    "已走远", "走远", "不见踪影", "没入", "入水", "沉入", "尚未现身", "未现身",
+    "没有出现", "画外", "画面外", "背对", "背影", "只有声音", "传来", "声音",
+    "听见", "车厢", "车内", "屋内", "屋里", "门内", "门后", "屏风后", "帐内",
+    "远处", "消失", "不见", "已无", "不在了", "没有",
+)
+
+
+def _kf_name_clearly_visible(name: str, desc: str) -> bool:
+    """`name` 在该 desc 里是否有**可确认的可见证据**（保守判据，无证据即不判）.
+
+    **按分句判定**（v6.124 实测修正）：画外/否定标记必须与本名字在**同一分句**内
+    才算数——按固定字符窗口看会把别人的状态算到这个名字头上：
+
+        「…听香轻启朱唇唱歌，老农已走远」→ 12 字窗口里含「走远」→ 误判她画外。
+
+    同一分句内再要求「名字**之后**」出现可见证据（`听香←撑伞/跪坐/尖叫`），
+    避免把「A 盯着 B」里的 B 算成明确可见。
+    """
+    import re as _re
+
+    for clause in _re.split(r"[，。；、！？：,;!?]", desc or ""):
+        if name not in clause:
+            continue
+        if any(w in clause for w in _KF_OFFSCREEN_MARKERS):
+            continue
+        for m in _re.finditer(_re.escape(name), clause):
+            after = clause[m.end():]
+            if any(w in after for w in _KF_VISIBLE_MARKERS):
+                return True
+    return False
+
+
+def _kf_person_visibility_issues(shot: dict, shot_id) -> list[Issue]:
+    """明确可见但在该帧布局里没有条目的人物（v6.124，窄版）.
+
+    **成对修复目标**（v6.124.1，用户 2026-09-25 核对）：本检测器自己声明精确的
+    `repair_targets` = `keyframes[i].desc` + `frame_layouts.kfs[i]`，**点名到帧**。
+    此前靠 `_KF_STRUCTURAL_CODES` 给「KF 列表本身」的列表级授权，会让模型连带
+    获得同镜**其他帧**的 `keyframes`/`frame_layouts.kfs` 权限（用户两帧最小样例
+    复现：只报 kf0 缺人，kf1 的描述与布局也可改）——超出窄检测器的本意。
+    """
+    from shared.frame_spec import is_on_screen
+
+    fl = shot.get("frame_layouts")
+    if not isinstance(fl, dict):
+        return []
+    # v6.124.1：**不得**先过滤掉非列表行再按下标取帧。`kfs` 里混进一行坏数据时，
+    # 过滤会让其后的帧整体前移一位，`kfs[i]` 与 `keyframes[i]` 就此错位（漏真帧、
+    # 报错帧）。按**原始下标**对齐：坏行 = 该帧没有任何有效条目，照常判缺人
+    # ——坏数据不是「没问题」（准则 7），且修复目标 `frame_layouts.kfs[i]` 仍然
+    # 是该镜的真实路径，能被授权改写回一个合法列表。
+    kfs = fl.get("kfs")
+    if not isinstance(kfs, list):
+        return []
+    roster = [str(e.get("name", "")).strip()
+              for e in (shot.get("char_layout") or []) if isinstance(e, dict)]
+    roster = [n for n in roster if n]
+    if not roster or not kfs:
+        return []
+
+    issues: list[Issue] = []
+    for i, kf in enumerate(shot.get("keyframes") or []):
+        if not isinstance(kf, dict) or i >= len(kfs):
+            continue
+        desc = str(kf.get("desc") or "")
+        if not desc:
+            continue
+        _row = kfs[i] if isinstance(kfs[i], list) else []
+        present = {str(e.get("name", "")).strip() for e in _row
+                   if isinstance(e, dict) and is_on_screen(e)}
+        for name in roster:
+            if name in present or name not in desc:
+                continue
+            if not _kf_name_clearly_visible(name, desc):
+                continue
+            issues.append(Issue(
+                code="kf_person_missing_in_layout", severity="hard",
+                message=(
+                    f"关键帧 kf{i} 的描述明确可见「{name}」，但 "
+                    f"frame_layouts.kfs[{i}] 里没有该角色条目——按布局出图会少一个人。"
+                    f"修法二选一：①在 `frame_layouts.kfs[{i}]` 补该角色的条目"
+                    f"（name/pose/position 等与描述一致）；②若她/他其实不在画面内，"
+                    f"把 `keyframes[{i}].desc` 改成明确画外的写法。"),
+                shot_id=shot_id, frame_id=f"kf{i}", entity_id=name,
+                field_path=f"frame_layouts.kfs[{i}]",
+                # 两种修法各自对应**本帧**的一个字段，点名到帧（不带下标 = 授权整镜
+                # 同名字段，那正是要避免的越权面）
+                repair_targets=[
+                    {"shot_id": shot_id, "field_path": f"keyframes[{i}].desc"},
+                    {"shot_id": shot_id, "field_path": f"frame_layouts.kfs[{i}]"},
+                ],
+                evidence=desc[:180], repairable=True,
+            ))
     return issues
 
 
@@ -1201,6 +1417,24 @@ def collect_structured_issues(script: dict, blocking_categories: set[str],
         issues.extend(_onscreen_prop_issues(shot, shot_id))
         issues.extend(_prop_release_owner_issues(shot, shot_id))
         issues.extend(_keyframe_timeline_issues(shot, shot_id))
+        # v6.124（用户口径 (a) 窄版）：kf 明确可见的人物缺布局条目 → blocking
+        issues.extend(_kf_person_visibility_issues(shot, shot_id))
+    # v6.103（2026-09-23 总计划阶段 2）：四类**跨字段**矛盾（在场/持物/帧阶段/
+    # 结果动作支撑）。此前只有 model audit 能发现它们，结构化层看不见——于是
+    # audit 报 blocking 而确定性层 PASS，两条口径互相矛盾、谁也无法驱动修复。
+    # 检测是纯读的（`cross_field_checks` 不改写任何字段），修复走字段授权事务。
+    # 局部 import：`cross_field_checks` 反向上依赖本模块的 `Issue`。
+    from step01_script_gen.cross_field_checks import cross_field_issues
+    _cf_issues, _cf_failures = cross_field_issues(script)
+    issues.extend(_cf_issues)
+    if _cf_failures:
+        # 检测器异常 = 该镜头**没有被检测**，不能当成「没问题」（审核 P1-2）。
+        checker_failed = True
+        issues.append(Issue(
+            "CHECK_FAILED", "hard",
+            "跨字段检测器异常（该镜头未被检测，禁止按 PASS 处理）: "
+            + "; ".join(str(x) for x in _cf_failures[:3]),
+            repairable=False))
     # v6.83（二次审核发现 1）：阶段屏障 + 最终时间不变量——两者都必须在**最后一个**
     # 时间写入者之后判定，所以放在这里（gate 收集期即落盘前最终对象）。
     issues.extend(_time_field_audit_issues(script))
@@ -1223,4 +1457,5 @@ def is_blocking(issue: Issue) -> bool:
     return issue.severity in ("hard", "visual_risk")
 
 
-__all__ = ["Issue", "RULE_VERSION", "RULE_IMPLEMENTATION", "RULE_SOURCE_FINGERPRINT", "collect_structured_issues", "is_blocking", "parse_shot_ref", "final_time_invariant_issues", "STRUCTURAL_SHOT_CODES", "is_opening_empty_shot", "opening_empty_shot_issues"]
+__all__ = ["Issue", "RULE_VERSION", "RULE_IMPLEMENTATION", "RULE_SOURCE_FINGERPRINT", "PROMPT_SOURCE_FINGERPRINT",
+    "collect_structured_issues", "is_blocking", "parse_shot_ref", "final_time_invariant_issues", "STRUCTURAL_SHOT_CODES", "is_opening_empty_shot", "opening_empty_shot_issues"]

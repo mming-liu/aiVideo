@@ -25,6 +25,14 @@ SENSITIVE_SUBSTITUTIONS = {
     # B10 修复（08-11）：原「刺杀→掠杀」值含 key「杀」，链式二次替换成「掠击」；
     # 改为直接映射「掠击」，值不含任何 key，消除链式风险。
     "杀": "击", "刺杀": "掠击", "死": "倒", "毙命": "倒地",
+    # v6.112（审核后真实重跑实测）：「杀→击」是**逐字**替换，会把「杀气」变成
+    # 不成词的「击气」——实测 shot 6/7 的 lf_desc/ff_desc/motion_desc/prompt 四处
+    # 出现「击气腾腾」，模型审计判为错别字（**判得对**），而这条错误的产物来自
+    # 本表自己：修复轮改一次、下一次生成又造一次。
+    # `sanitize()` 按**长词优先**应用，所以补短语级映射即可根治（值不含本表其它 key，
+    # 链式安全由 `_validate_chain_safety_on_import` 在导入时校验）。
+    "杀气": "煞气", "杀意": "煞气", "杀机": "凶险之机", "杀心": "狠意",
+    "击杀": "击倒", "厮杀": "缠斗", "杀出": "冲出", "追杀": "追击",
     # ============ 尸体/死亡相关 ============
     "尸体": "身影", "死亡": "倒下", "尸骸": "遗影",
     # ============ 面色描述（防图片模型按字面颜色渲染皮肤）============
@@ -152,6 +160,21 @@ _DOUBLED_TOKEN_RE = _re.compile(r"([\u4e00-\u9fff]{2})\1")
 # 连续同类标点折叠（16:34 run「瞪大，，，扭曲」实测）：regen 轮 LLM 自产的
 # 连续逗号/句号。…（省略号）与 ——（破折号）是合法重复形态，刻意不在表内。
 _CONSEC_PUNCT_RE = _re.compile(r"([，。；：、！？,;])\1+")
+
+
+# 连续重复词/句组（v6.112）：保守口径——**至少连出 3 次**才折叠，两连重复与
+# 合法叠词（慢慢/粼粼…）一律不动。模型审计实测：「motion_desc 中『眼神』重复
+# 数十次，且『嘴角平直，眉头微蹙，下颚微抬』重复多次，描述混乱无法执行」。
+_REPEATED_WORD = _re.compile(r"([\u4e00-\u9fff]{2})\1{2,}")
+_REPEATED_CLAUSES = _re.compile(r"((?:[\u4e00-\u9fff]{2,12}[，,]){2,4})\1{2,}")
+
+
+def collapse_repetition(text: str) -> str:
+    """折叠**连续 ≥3 次**的重复双字词与重复句组（保留一次）."""
+    if not text or not isinstance(text, str) or len(text) < 6:
+        return text
+    out = _REPEATED_CLAUSES.sub(r"\1", text)
+    return _REPEATED_WORD.sub(r"\1", out)
 
 
 def collapse_doubled_tokens(text: str) -> str:

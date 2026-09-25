@@ -113,7 +113,7 @@ def _semantic_character(char) -> dict:
 def _stable_payload(script: dict) -> dict:
     keys = (
         "title", "chapter_index", "chapter_title", "book_name",
-        "outline", "characters", "shots", "hook", "narration",
+        "outline", "chapter_outline", "characters", "shots", "hook", "narration",
         "negative_prompt", "scene_objects", "resolution", "ratio", "fps",
         "render_style",
     )
@@ -421,6 +421,152 @@ def require_semantic_gate(quality_path: Path, audit_path: Path, script: dict,
     return {"quality": quality, "audit": audit}
 
 
+# ===========================================================================
+# step01 唯一提交点的 manifest（v6.103，总计划阶段 4）
+# ===========================================================================
+# 三份正式产物必须**同属一个提交批次**。文件系统不支持「三个文件同时原子替换」，
+# 所以提交完成的标志是一个独立的 manifest：它记录 revision / 规则指纹 / audit
+# scope 与三份文件的 SHA1。下游除了原有的三份检查，还要核对 manifest——
+# 缺失、状态非 COMMITTED、revision 不符或任一摘要不符，一律 fail-closed。
+#
+# 这样即使进程在替换中途崩溃（正式路径出现新旧混合），manifest 也对不上，
+# 混合版本不会被误用。
+STEP01_COMMIT_FILENAME = "step01_commit.json"
+STEP01_ARTIFACT_FILES = ("script_result.json", "step01_quality.json", "step01_audit.json")
+STEP01_MANIFEST_VERSION = 1
+
+
+def sha1_file(path: Path) -> str:
+    return _sha1_file(Path(path))
+
+
+def build_step01_commit_manifest(*, run_id: str, created_at: str, revision: str,
+                                 rule_source_fingerprint: str, rule_version: str,
+                                 audit_scope: str, chapter_dir: Path,
+                                 status: str = "COMMITTED",
+                                 blocking: list | None = None,
+                                 detail: str = "",
+                                 prompt_source_fingerprint: str = "") -> dict:
+    """构造 commit manifest；`status=COMMITTED` 时才带三份产物的摘要.
+
+    `prompt_source_fingerprint`（v6.112）是**诊断字段**：记录本批产物出自哪一版
+    生成/修复提示词与大纲预算。它**不参与**任何准入或复用判定——改提示词改变的
+    是稿件内容，内容变化已由 `script_revision` 覆盖；只有
+    `rule_source_fingerprint` 才决定旧报告是否仍然有效。
+    """
+    payload = {
+        "manifest_version": STEP01_MANIFEST_VERSION,
+        "status": status,
+        "run_id": run_id,
+        "created_at": created_at,
+        "script_revision": revision,
+        "rule_source_fingerprint": rule_source_fingerprint,
+        "rule_version": rule_version,
+        "prompt_source_fingerprint": prompt_source_fingerprint,
+        "audit_scope": audit_scope,
+        "blocking_count": len(blocking or []),
+        "blocking": list(blocking or [])[:20],
+        "detail": detail,
+        "artifacts": {},
+    }
+    if status == "COMMITTED":
+        for name in STEP01_ARTIFACT_FILES:
+            path = Path(chapter_dir) / name
+            if path.exists():
+                payload["artifacts"][name] = {
+                    "sha1": sha1_file(path),
+                    "bytes": path.stat().st_size,
+                }
+    return payload
+
+
+def write_step01_commit_manifest(chapter_dir: Path, manifest: dict) -> Path:
+    """原子写 manifest（提交完成的唯一标志）."""
+    from shared.json_io import atomic_dump_json
+
+    path = Path(chapter_dir) / STEP01_COMMIT_FILENAME
+    atomic_dump_json(path, manifest, ensure_ascii=False, indent=2)
+    return path
+
+
+def verify_step01_commit_manifest(chapter_dir: Path, script: dict,
+                                  *, stage: str = "step01") -> dict:
+    """核对三份正式产物与 `step01_commit.json` 的 revision 与摘要.
+
+    失败一律抛 `QualityGateError`（fail-closed）：manifest 缺失、状态不是
+    COMMITTED、revision 与当前 script 不符、任一产物缺失或摘要不符。
+    """
+    path = Path(chapter_dir) / STEP01_COMMIT_FILENAME
+    if not path.exists():
+        raise QualityGateError(
+            f"{stage} commit manifest missing: {path}. "
+            "step01 must finish its atomic commit before step02 consumes the outputs."
+        )
+    manifest = load_gate(path)
+    status = str(manifest.get("status") or "").strip().upper()
+    if status != "COMMITTED":
+        raise QualityGateError(
+            f"{stage} commit manifest is not COMMITTED (status={status or 'missing'}, "
+            f"blocking={manifest.get('blocking_count')}): {manifest.get('detail') or ''}"
+        )
+    revision = ensure_script_revision(script)
+    manifest_rev = str(manifest.get("script_revision") or "").strip()
+    if manifest_rev != revision:
+        raise QualityGateError(
+            f"{stage} commit manifest revision mismatch: "
+            f"manifest={manifest_rev or 'missing'} current={revision}"
+        )
+    artifacts = manifest.get("artifacts") or {}
+    if not isinstance(artifacts, dict) or not artifacts:
+        raise QualityGateError(f"{stage} commit manifest carries no artifact digests")
+    for name in STEP01_ARTIFACT_FILES:
+        item = artifacts.get(name)
+        if not isinstance(item, dict) or not item.get("sha1"):
+            raise QualityGateError(
+                f"{stage} commit manifest is missing the digest of {name}")
+        target = Path(chapter_dir) / name
+        if not target.exists():
+            raise QualityGateError(f"{stage} committed artifact missing: {target}")
+        actual = sha1_file(target)
+        if actual != str(item.get("sha1")):
+            raise QualityGateError(
+                f"{stage} committed artifact changed after commit: {name} "
+                f"(manifest={item.get('sha1')} actual={actual})"
+            )
+    return manifest
+
+
+def require_step01_upstream(chapter_dir: Path, script: "dict | None" = None,
+                           *, stage: str = "step01") -> dict:
+    """**step01 上游准入的唯一入口**：语义门 + commit manifest 两道都要过（v6.111）.
+
+    为什么要有这个函数：此前四个消费点各写各的——`video_ab_experiment` 调两道，
+    而 `experiment_context` / 联系表 / prompt 基线工具只调 `verify_step01_commit_manifest`。
+    manifest 只证明「三份产物的摘要与 revision 一致」，**不直接证明 quality/audit
+    是 PASS**（报告文件若被单独改动，manifest 摘要校验未必覆盖到）。只调一道的
+    工具会把不 eligible 的上游标成 `eligible`。
+
+    与真实生成走**同一对检查**（`require_semantic_gate` + `verify_step01_commit_manifest`），
+    避免「工具说可以、真跑被拒」的分叉。
+
+    Returns:
+        manifest dict（调用方常要 revision / blocking_count）。
+
+    Raises:
+        QualityGateError: 任一环节不通过。
+    """
+    ch = Path(chapter_dir)
+    if script is None:
+        import json as _json
+        try:
+            script = _json.loads((ch / "script_result.json").read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise QualityGateError(f"{stage} 上游 script_result.json 读取失败: {exc}")
+    require_semantic_gate(ch / "step01_quality.json", ch / "step01_audit.json",
+                          script, stage=stage)
+    return verify_step01_commit_manifest(ch, script, stage=stage)
+
+
 def require_gate(report_path: Path, script: dict, *, stage: str,
                  allow_blocking: bool = False,
                  required_report_type: str | None = None,
@@ -466,6 +612,12 @@ def require_gate(report_path: Path, script: dict, *, stage: str,
 
 
 __all__ = [
+    "STEP01_ARTIFACT_FILES",
+    "STEP01_COMMIT_FILENAME",
+    "build_step01_commit_manifest",
+    "sha1_file",
+    "verify_step01_commit_manifest",
+    "write_step01_commit_manifest",
     "semantic_payload",
     "semantic_payload_digest",
     "shot_semantic_digest",

@@ -21,6 +21,8 @@ _MOVEMENT_PHRASES = (
 )
 _BLOOD_WORDS = ("洇痕", "暗红", "血迹", "血痕", "血污", "渗血")
 _BLOOD_TRANSITION_WORDS = ("刚被刺", "刺入瞬间", "此刻", "正对", "刺入")
+_REPEATED_WORD = re.compile(r"([\u4e00-\u9fff]{2})\1{2,}")
+_REPEATED_CLAUSES = re.compile(r"((?:[\u4e00-\u9fff]{2,12}[，,]){2,4})\1{2,}")
 
 
 class FinalQualityNormalizerConstraint(Constraint):
@@ -34,6 +36,7 @@ class FinalQualityNormalizerConstraint(Constraint):
         repairs: list[RepairRecord] = []
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
             sid = None if is_hook else shot.get("index", idx)
+            repairs.extend(self._collapse_repetition(shot, sid))
             repairs.extend(self._single_camera(shot, sid))
             repairs.extend(self._trim_prompt_budget(shot, sid))
             repairs.extend(self._align_kf_windows(shot, sid))
@@ -42,6 +45,40 @@ class FinalQualityNormalizerConstraint(Constraint):
             repairs.extend(self._trim_ff_desc(shot, sid))
             repairs.extend(self._trim_lf_desc(shot, sid))
             repairs.extend(self._fix_boat_position(shot, sid))
+        return repairs
+
+    @staticmethod
+    def _collapse_repetition(shot: dict, sid) -> list[RepairRecord]:
+        """只折叠连续出现三次以上的同词或同句组，保留一次。"""
+        repairs: list[RepairRecord] = []
+        # ⚠️ 本约束在**时间派生边界之后**，`motion_desc` 被时间屏障视为时间字段
+        # （时段标记写在里面）——晚写会让已派生的 timecode 失配，所以这里**不含**
+        # `motion_desc`：它的重复清理在早段 `post_fix_shot_prompts` 完成
+        # （v6.112；守卫 `test_late_constraints_do_not_write_time_fields_via_...`
+        # 拦的就是这一类能力违规）。
+        targets = [(shot, field, field) for field in
+                   ("prompt", "ff_desc", "lf_desc")]
+        targets.extend((kf, "desc", f"keyframes[{i}].desc")
+                       for i, kf in enumerate(shot.get("keyframes") or [])
+                       if isinstance(kf, dict))
+        for owner, field, target in targets:
+            before = owner.get(field)
+            if not isinstance(before, str) or not before:
+                continue
+            from shared.content_safety import collapse_repetition
+            after = collapse_repetition(before)
+            if after == before:
+                continue
+            owner[field] = after
+            repairs.append(RepairRecord(
+                constraint_name="final_quality_normalizer",
+                shot_index=sid,
+                action="rewrite",
+                target=target,
+                before=before[-80:],
+                after=after[-80:],
+                detail="折叠连续三次以上的完全重复文本",
+            ))
         return repairs
 
     @staticmethod

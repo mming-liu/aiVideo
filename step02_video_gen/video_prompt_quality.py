@@ -109,6 +109,14 @@ def collect_video_prompt_quality(script: dict) -> dict:
         "status": "PASS",
         "skill_contract": ["byted-ark-seedance-skill", "byted-ark-seedream-skill"],
     }
+    # v6.103（总计划阶段 7 / 工作包 E）：把「实验可追踪」字段接进生产报告——
+    # 它们让静态 prompt 检查、真实视频 QC 与人工 A/B 评分能关联到同一次实验。
+    # 只进报表，**不**回写 script、**不**改 revision；缺 experiment_id 时字段为
+    # None，老报告读取不受影响。
+    from step02_video_gen.experiment_context import (
+        apply_upstream_override, build_step02_context)
+    payload.update(build_step02_context(script, chapter_dir_path=chapter_dir()))
+    apply_upstream_override(payload)
     attach_gate_metadata(payload, script, stage='step02b.video_prompt_quality')
     atomic_dump_json(chapter_dir() / "step02b_prompt_quality.json", payload,
                      ensure_ascii=False, indent=2)
@@ -165,6 +173,14 @@ def write_video_product_quality(script: dict, work_dir: Path) -> dict:
         "missing": missing,
         "outputs": outputs,
     }
+    # v6.103（工作包 E）：产品验收报告同样带上实验上下文与上游状态。
+    # ⚠️ **不**在这里把 status 降级成 upstream_blocked：本报告是 step02b/step04 的
+    # 准入门（`require_gate(..., verify_outputs=True)`），降级会让「视频已经生成完
+    # 了却因为上游 manifest 缺失而无法合并」。上游阻塞的拦截点在**step02a**
+    # （生图之前），那里已经 fail-closed；`upstream_gate_status` 字段供报告读者
+    # 判断本次产物是否可用于 A/B 结论。
+    from step02_video_gen.experiment_context import build_step02_context
+    payload.update(build_step02_context(script, chapter_dir_path=chapter_dir()))
     attach_gate_metadata(payload, script, stage="step02b.product_acceptance")
     atomic_dump_json(chapter_dir() / "step02b_quality.json", payload,
                      ensure_ascii=False, indent=2)

@@ -229,7 +229,8 @@ def main():
     # are checked against the image fields before any frame generation.
     try:
         from step02a_frame_gen.image_prompt_quality import collect_image_prompt_quality
-        from shared.quality_gate import require_semantic_gate
+        from shared.quality_gate import (require_semantic_gate,
+                                         verify_step01_commit_manifest)
         with open(script_path, "r", encoding="utf-8") as _sf:
             _script_for_qa = json.load(_sf)
         require_semantic_gate(
@@ -238,6 +239,12 @@ def main():
             _script_for_qa,
             stage="step01",
         )
+        # v6.103（总计划阶段 4）：三份产物还必须属于**同一个提交批次**——
+        # 逐个文件检查 revision 只能证明「每份都对得上当前 script」，证明不了
+        # 「它们是同一次提交写出来的」。manifest 缺失 / 状态非 COMMITTED /
+        # 任一摘要不符，一律 fail-closed（step01 BLOCK 时不写新产物，只写
+        # BLOCK manifest，下游因此不会带着未解决的 blocking 继续生图）。
+        verify_step01_commit_manifest(chapter_dir(), _script_for_qa, stage="step01")
         _iq = collect_image_prompt_quality(_script_for_qa)
         logger.info(f"[IMAGE-QA] warnings: {_iq.get('warning_count', 0)}")
     except Exception as e:

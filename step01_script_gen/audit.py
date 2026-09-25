@@ -7,6 +7,7 @@ checks remain the final authority.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -27,7 +28,16 @@ AUDIT_SCHEMA = {
                     "properties": {
                         "code": {"type": "string"},
                         "severity": {"type": "string", "enum": ["blocking", "warning", "info"]},
-                        "shot_id": {"type": "string"},
+                        # v6.120：记法**显式钉死在 schema 里**（配上
+                        # `_AUDIT_RULES_TEMPLATE` 的 repair_targets 段）。此前两处
+                        # `shot_id` 都没有格式说明，而规则里的举例写的是 `shot5`——
+                        # 同一份提示词下模型会随机选一种读法（2026-09-25 实测：
+                        # 第 1 轮 `"5"`、第 2 轮 `"shot5"`，temperature=0.0）。
+                        "shot_id": {
+                            "type": "string",
+                            "description": ("该镜在上文分镜里的 index 裸数字，如 \"5\"；"
+                                            "钩子写 \"0\""),
+                        },
                         "frame_id": {"type": "string"},
                         "entity_id": {"type": "string"},
                         "field_path": {"type": "string"},
@@ -35,9 +45,44 @@ AUDIT_SCHEMA = {
                         "impact": {"type": "string"},
                         "minimal_fix": {"type": "string"},
                         "stage": {"type": "string", "enum": ["pre", "process", "result"]},
+                        # v6.119：**成对修复目标**——「哪个镜头改哪个字段」。
+                        # 授权只看这里；上面的 shot_id/field_path 只用于问题定位。
+                        "repair_targets": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "shot_id": {
+                                        "type": "string",
+                                        "description": ("该镜在上文分镜里的 index 裸数字，"
+                                                        "如 \"5\"；钩子写 \"0\""),
+                                    },
+                                    # v6.121：**成对目标**这才是授权来源，形状必须钉死。
+                                    # 2026-09-25 14:52 实测：模型写
+                                    # `frame_layouts.kfs[1].props` / `[2].props`（漏人物
+                                    # 下标）→ 整条 blocking 作废 → 提交点 BLOCK。
+                                    # 真实结构是「关键帧列表 → 人物列表」两层，且 kf2
+                                    # 确实有 2 个出镜人物 → 系统不替它猜是谁。
+                                    "field_path": {
+                                        "type": "string",
+                                        "description": (
+                                            "要修改的字段叶子。布局路径按两种形状写、"
+                                            "下标一层都不能省：ff/lf 是人物列表一层"
+                                            "（frame_layouts.ff[0].pose）；kfs 是"
+                                            "关键帧→人物两层，两个下标都要写"
+                                            "（frame_layouts.kfs[2][0].props）。"
+                                            "写 frame_layouts.kfs[2].props 这类漏人物"
+                                            "下标的形状会让该条问题整体作废。"),
+                                    },
+                                },
+                                "required": ["shot_id", "field_path"],
+                                "additionalProperties": False,
+                            },
+                        },
                     },
                     "required": ["code", "severity", "shot_id", "frame_id", "entity_id",
-                                 "field_path", "evidence", "impact", "minimal_fix"],
+                                 "field_path", "evidence", "impact", "minimal_fix",
+                                 "repair_targets"],
                     "additionalProperties": False,
                 },
             }
@@ -49,7 +94,9 @@ AUDIT_SCHEMA = {
 
 
 _AUDIT_SYSTEM = """你是独立分镜审查员。不要证明脚本优秀，只找可验证的问题。
-只输出 JSON。最多返回 20 条问题；每条 evidence/impact/minimal_fix 尽量控制在 80 字以内。每个问题必须给出镜头、字段、证据和最小修复建议。程序检查是最终权威。
+**只输出 JSON**（严格遵守给定 schema：不要 markdown 报告、不要标题、不要项目符号列表、不要在 JSON 之外写任何说明）。
+先逐镜扫描全章，再统一输出问题，避免修复一处后才发现下一处。优先报告所有确定影响剧情或可执行性的 blocking，再报告 warning/info；总数最多 20 条，数量不足时舍弃 warning/info。每条 evidence/impact/minimal_fix 尽量控制在 80 字以内。每个问题必须给出镜头、字段、证据和最小修复建议。程序检查是最终权威。
+逐镜检查明显错词、连续重复词句、截断文本和跨字段状态矛盾；相同缺陷出现在多个镜头时逐镜给出字段与证据。
 
 帧职责边界（必须遵守）：
 - frame_id=ff：只审「动作开始前的准备态」。不得要求 ff 已经完成 motion_desc 中的过程动作或 lf_desc 中的结果动作。
@@ -61,30 +108,131 @@ _AUDIT_SYSTEM = """你是独立分镜审查员。不要证明脚本优秀，只�
 """
 
 
+# 送给审计的镜头字段（v6.114）：**审查规则要求逐镜检查错词/重复/截断**，而这里
+# 此前没有 `prompt` —— 模型看不到该字段却被告知要审它（提示与输入范围不一致）。
+# 本表同时进 `audit_prompt_version()`：改输入范围 = 换审计对象，旧结论必须失效。
+_COMPACT_SHOT_FIELDS: tuple = (
+    "index", "duration_sec", "main_subject", "ff_desc", "lf_desc",
+    "motion_desc", "prompt", "narration_segment", "frame_layouts", "keyframes",
+)
+
+
 def _compact_script(script: dict) -> dict:
     shots = []
     for s in script.get("shots") or []:
         if not isinstance(s, dict):
             continue
-        shots.append({
-            "index": s.get("index"),
-            "duration_sec": s.get("duration_sec"),
-            "main_subject": s.get("main_subject"),
-            "ff_desc": s.get("ff_desc"),
-            "lf_desc": s.get("lf_desc"),
-            "motion_desc": s.get("motion_desc"),
-            "narration_segment": s.get("narration_segment"),
-            "frame_layouts": s.get("frame_layouts"),
-            "keyframes": s.get("keyframes"),
-        })
+        shots.append({_f: s.get(_f) for _f in _COMPACT_SHOT_FIELDS})
     return {"hook": script.get("hook"), "shots": shots,
             "total_duration": script.get("total_duration")}
+
+
+# 审计调用的固定参数（总计划 §1.3：模型、温度与 prompt 版本都要写进 audit 元数据）
+AUDIT_TEMPERATURE = 0.0
+
+# ---- 审计专用文本通道（方案 A，2026-09-25）----------------------------------
+# 背景：`TEXT_PROVIDER=agent_plan` 时 `AgentPlanTextService._build_payload()` 把
+# `json_schema` 降级成 `response_format={"type":"json_object"}`（schema 内容整体丢弃）。
+# 实测 2026-09-24 21:54:41 那次审计：HTTP 200、`finish_reason=stop`、
+# `completion_tokens=3432`（**未截断**），正文却是 Markdown 报告（`# 分镜审查报告`…）
+# → 解析器找不到 JSON → `parse_failed` → 提交点「调用失败 != 0 issue」直接 BLOCK。
+# 因此把**最终审计**单独路由到支持 strict `json_schema` 的原生 DeepSeek；
+# 不动全局 `TEXT_PROVIDER`（生成/修复/提取仍在原通道）。
+#
+# 未设置 `AUDIT_TEXT_PROVIDER` → `(None, None)` = 完全沿用现状（零行为变化）。
+AUDIT_PROVIDER_ENV = "AUDIT_TEXT_PROVIDER"
+AUDIT_MODEL_ENV = "AUDIT_TEXT_MODEL"
+
+
+def resolve_audit_channel() -> tuple:
+    """审计专用通道 `(provider, model)`；未配置时返回 `(None, None)`.
+
+    **通道与模型 ID 必须一起换**：调用方传来的模型名来自 `SCRIPT_CANDIDATE_MODELS`，
+    那是 **plan 通道**的名字（如 `deepseek-v4-flash`），而原生 DeepSeek 的 Responses
+    API 只接受 `deepseek-flash` / `deepseek-v4-pro`（官方 create-response 文档，
+    2026-09-25 核对）。只换 provider 而沿用旧模型名，请求会被直接拒。
+
+    设了通道却缺模型名 → **显式抛错**：静默沿用调用方的 plan 通道模型名，等于把 400
+    留到跑批时才暴露（宁可显式失败，不可静默降级）。
+    """
+    provider = (os.getenv(AUDIT_PROVIDER_ENV) or "").strip().lower()
+    if not provider:
+        return None, None
+    model = (os.getenv(AUDIT_MODEL_ENV) or "").strip()
+    if not model:
+        raise ValueError(
+            f"{AUDIT_PROVIDER_ENV}={provider} 但未设置 {AUDIT_MODEL_ENV}："
+            f"审计专用通道必须显式给出该通道可用的模型 ID——不能沿用 "
+            f"SCRIPT_CANDIDATE_MODELS 里的 plan 通道模型名"
+            f"（原生 DeepSeek 只认 deepseek-flash / deepseek-v4-pro）。"
+        )
+    return provider, model
+
+
+def audit_prompt_version() -> str:
+    """审计提示词版本 = hash(system prompt + 输出 schema)（v6.111，审核 P2-5）.
+
+    为什么必须显式记录：`_reusable_final_audit` 的复用条件只有
+    revision + 规则指纹 + scope，而规则指纹**不含本文件**——改了审计提示词或
+    输出契约，旧审计结论仍会被复用，等于拿旧规则的结论给新稿盖章。把版本写进
+    元数据并纳入复用判定，prompt 一变就自动失效。
+
+    只覆盖**提示词与输出契约**；调用参数（温度/超时/token 上限）用元数据里的
+    显式字段记录，不混进版本哈希。
+    """
+    import hashlib
+    import json as _json
+    blob = _json.dumps(
+        {"system": _AUDIT_SYSTEM, "schema": AUDIT_SCHEMA,
+         # v6.114（审核）：四条来源都要覆盖，否则「只改其中一条」时旧审计仍被复用：
+         #   system prompt / 输出 schema / build_audit_prompt 的审查规则 / 送审字段范围
+         "rules": _AUDIT_RULES_TEMPLATE, "compact_fields": list(_COMPACT_SHOT_FIELDS)},
+        ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
+
+
+# 审查规则的**静态模板**（v6.114）：抽成常量是为了让 `audit_prompt_version()` 能
+# 覆盖它——此前版本哈希只含 system prompt 与 schema，**只改这里的规则时旧审计
+# 仍会被复用**。
+_AUDIT_RULES_TEMPLATE = """# 审查规则
+重点检查：
+1. 观众是否知道人物为什么这样做；
+2. 是否省略理解剧情必需的信息；
+3. 首帧→动作→关键帧→尾帧是否成立；
+4. 哪些镜头重复表达同一信息；
+{hook_rule}
+
+帧职责：
+- ff 只检查动作开始前准备态；
+- kf 只检查对应中间过程；
+- lf 只检查结果态；
+- 后续动作缺失必须指向 motion_desc/对应 kf/lf，禁止要求 ff 提前完成过程或结果动作。
+
+每个问题必须给 shot_id、frame_id、entity_id、field_path、evidence、impact、minimal_fix。
+**field_path 必须是你建议「修改」的那个字段，不是矛盾被观察到的字段**：要改 ff_desc 就写 `ff_desc`；要改动作时序/过程就写 `motion_desc`；要改某一关键帧就写 `keyframes[N].desc`；要改布局条目按下面**两种形状**写（写错形状该条问题整体作废）。定位到观察点而非修改点，会把修复引导到错误字段。
+
+**布局路径的两种形状（下标一层都不能省）**：
+- `ff` / `lf` 是**人物列表**（一层）：`frame_layouts.ff[人物下标].<叶子>`，如 `frame_layouts.ff[0].pose`。
+- `kfs` 是**关键帧列表 → 人物列表（两层）**：`frame_layouts.kfs[关键帧下标][人物下标].<叶子>`，如 `frame_layouts.kfs[2][0].props`。**两个下标都要写**。
+- 反例（**无效**，会被判「不是该镜头的真实字段路径」→ 该条问题整条作废）：`frame_layouts.kfs[2].props`（漏人物下标——一个关键帧里可能有多个出镜人物，系统**不会**替你猜是谁）、`frame_layouts.ff.props`（漏人物下标）、`frame_layouts.kfs`（只写列表名）。
+
+## repair_targets（**唯一被用于授权的字段**）
+一对一的 `(shot_id, field_path)` 列表，写清「要修好这条问题，必须**一起**修改的全部镜头与字段」：
+- **必须联动修改的字段一个都不能漏**：修复端只被授权改这里列出的字段，没列出的改动会被**回填**；漏掉的那部分会让修复自相矛盾（半条修复）→ 引入新的阻塞 → **整组被回退**。典型漏法：kf 时序矛盾通常要同时改 `keyframes[N].desc` + `keyframes[N].stage` + `frame_layouts.kfs[N][n].props`，只写 `desc` 必然被回填。
+- `shot_id` 一律写该镜在上文分镜里的 **`index` 裸数字**（如 `5`；钩子写 `0`）。不要写 `shot5` / `shot_5` / `第5镜` 之类的写法——**本文档全篇的镜头号都按裸数字读**，下面举例中的「5 号镜」等价于 `"shot_id": "5"`。
+- 只写该镜头里**真实存在**的字段叶子：`ff_desc` / `lf_desc` / `motion_desc` / `prompt` / `keyframes[N].desc` / `keyframes[N].stage` / `keyframes[N].t_sec` / `frame_layouts.ff[N].<叶子>` / `frame_layouts.lf[N].<叶子>` / `frame_layouts.kfs[N][n].<叶子>` / `temporal_plan`。不要写 `ff_desc.props` 这类组合路径，也不要编造字段——校验不通过时该条问题的授权会被整体作废。
+- 一条问题需要跨镜联动才能修好时（例如同一事实在 5 号镜的 ff_desc 与 7、8、9 号镜的 ff_desc 里互相矛盾），**每一镜各写一条**。系统把它们当成**一个事务**：整组修、整组验收、整组回退——写漏一镜会让整组被回退。
+- 只改一个字段就写一条（**不要多写**没必要的字段：多列的条目同样要一起改完才算通过）。确实无法确定要改哪个字段时写空数组 `[]`，该问题本轮不进入定向修复。
+- `shot_id` / `field_path` 仍要填，用来**定位问题出现在哪里**（可与 repair_targets 不同：问题出现在这镜，要改的是别的镜）。
+严重级别：blocking=确定影响剧情/可执行性；warning=可能影响；info=优化建议。
+"""
 
 
 def build_audit_prompt(novel_text: str, plan: dict | None, script: dict,
                        audit_focus: list[str] | None = None,
                        metadata: dict | None = None) -> str:
     focus_lines = "\n".join(f"- {item}" for item in (audit_focus or [])) or "- 无额外定向项"
+    hook_rule = "5. 钩子和结尾是否真的来自当前故事。" if script.get("hook") else "5. 结尾是否真的来自当前故事。"
     metadata_text = json.dumps(metadata or {}, ensure_ascii=False, indent=2)
     return f"""# 审查元数据
 {metadata_text}
@@ -101,22 +249,7 @@ def build_audit_prompt(novel_text: str, plan: dict | None, script: dict,
 # 当前分镜
 {json.dumps(_compact_script(script), ensure_ascii=False)}
 
-# 审查规则
-重点检查：
-1. 观众是否知道人物为什么这样做；
-2. 是否省略理解剧情必需的信息；
-3. 首帧→动作→关键帧→尾帧是否成立；
-4. 哪些镜头重复表达同一信息；
-5. 钩子和结尾是否真的来自当前故事。
-
-帧职责：
-- ff 只检查动作开始前准备态；
-- kf 只检查对应中间过程；
-- lf 只检查结果态；
-- 后续动作缺失必须指向 motion_desc/对应 kf/lf，禁止要求 ff 提前完成过程或结果动作。
-
-每个问题必须给 shot_id、frame_id、entity_id、field_path、evidence、impact、minimal_fix。
-严重级别：blocking=确定影响剧情/可执行性；warning=可能影响；info=优化建议。
+{_AUDIT_RULES_TEMPLATE.format(hook_rule=hook_rule)}
 """
 
 
@@ -144,12 +277,108 @@ def _parse_issues_with_status(text: str) -> tuple[list[dict], str]:
         issues = None
     if not isinstance(issues, list):
         return [], "parse_failed"
-    return [x for x in issues if isinstance(x, dict)], "ok"
+    # v6.114（审核）：**只检查 `issues` 是列表**会放行形状错误的 JSON——
+    # 实测 `{"issues":[1,2]}` 与 `{"issues":[{"foo":1}]}` 都被判 `ok` + 零问题，
+    # 于是「审计没跑对」被当成「审计通过」（比 BLOCK 更危险：静默假绿）。
+    # Agent Plan 通道把 `json_schema` 降级为 `response_format=json_object`
+    # （`_text_gen/agent_plan_provider.py`），schema 的**唯一执行点就是这里**。
+    #
+    # 判据（按 schema 里真正决定行为的字段）：
+    #   - 每条必须是对象；
+    #   - `severity` 必须是 blocking/warning/info 之一（它决定这条算不算 blocking）；
+    #   - 至少要有一个可执行/可核对的描述字段，否则这条问题无法被处理。
+    for item in issues:
+        if not isinstance(item, dict):
+            return [], "parse_failed"
+        if str(item.get("severity") or "").strip() not in ("blocking", "warning", "info"):
+            return [], "parse_failed"
+        if not any(str(item.get(k) or "").strip()
+                   for k in ("evidence", "impact", "minimal_fix", "message")):
+            return [], "parse_failed"
+    return list(issues), "ok"
 
 
 def _parse_issues(text: str) -> list[dict]:
     """Backward-compatible list-only parser."""
     return _parse_issues_with_status(text)[0]
+
+
+def _normalize_repair_targets(item: dict) -> "list | None":
+    """把一条 issue 的 `repair_targets` 规整成 `[{"shot_id": str, "field_path": str}]`.
+
+    **三态必须保住**（v6.119 审核）：字段**缺** → `None`（旧条目，走兼容路径）；
+    字段在但为空/null/非数组 → `[]`（**显式**「无修复目标」→ 不授权）。
+    把两者都归一成 `[]`，会让「模型明确说不修」被当成「旧条目没提供」而回退到定位
+    字段推导——正是这次要修掉的那类静默降级。
+
+    只做**形状**归一（丢空值/非对象条目）；**路径是否真实存在**由授权层按当前镜头
+    逐项校验（`repair_fields.validate_repair_targets`）——解析层拿不到镜头对象。
+    """
+    if "repair_targets" not in (item or {}):
+        return None
+    raw = (item or {}).get("repair_targets")
+    out: list = []
+    for _entry in (raw if isinstance(raw, list) else []):
+        if not isinstance(_entry, dict):
+            continue
+        _sid = str(_entry.get("shot_id") or "").strip()
+        _fp = str(_entry.get("field_path") or "").strip()
+        if not _sid or not _fp:
+            continue
+        out.append({"shot_id": _sid, "field_path": _fp})
+    return out
+
+
+def _required_issue_fields() -> tuple:
+    """`issues[]` 的 required 字段——从 AUDIT_SCHEMA 推导，不另抄一份."""
+    return tuple(AUDIT_SCHEMA["schema"]["properties"]["issues"]["items"]["required"])
+
+
+def _schema_deviations(issues: list) -> list:
+    """逐条列出响应体与 `AUDIT_SCHEMA` 的偏离（**归一化前**观测到的）.
+
+    为什么是「记录」而不是「硬失败」（v6.117，方案 A）：通道降级后 schema 不再由
+    服务端执行，本地解析器是唯一执行点。但把 required 缺失直接判 `parse_failed`
+    会造成**另一种静默失败**——实测 2026-09-24 落盘的 20 条 issue **全部**缺 `code`
+    （归一化后统一成 `model_audit_issue`），硬失败等于「每次审计都 BLOCK、可用结论
+    整份丢弃」。所以这里的口径是：**归一化继续做，偏离显式记录**，由审计边界
+    （台账 + WARN 日志）暴露通道是否真的在守 schema。
+    """
+    if not issues:
+        return []
+    total = len(issues)
+    out: list = []
+    _missing_code = sum(1 for i in issues if not str(i.get("code") or "").strip())
+    if _missing_code:
+        out.append(f"{_missing_code}/{total} 条缺 `code`（schema required）"
+                   f"——已归一为 `model_audit_issue`")
+    _num_types = sorted({
+        type(i.get("shot_id")).__name__ for i in issues
+        if i.get("shot_id") is not None and not isinstance(i.get("shot_id"), str)
+    })
+    if _num_types:
+        out.append(f"`shot_id` 非 string（实际 {'/'.join(_num_types)}）——已 `str()` 归一")
+    # 类型感知：**数组字段的空数组是合法值**（`repair_targets: []` 的语义是
+    # 「这条问题没有明确修复目标」），用 `str(v or "")` 判非空会把它误报成缺字段。
+    # 字段类型同样从 AUDIT_SCHEMA 推导，不另抄一份。
+    _props = (AUDIT_SCHEMA.get("schema", {}).get("properties", {})
+              .get("issues", {}).get("items", {}).get("properties", {}))
+    for _f in _required_issue_fields():
+        if _f in ("code", "shot_id"):
+            continue
+        _ftype = (_props.get(_f) or {}).get("type")
+        _bad = 0
+        for i in issues:
+            if _f not in i or i.get(_f) is None:
+                _bad += 1
+            elif _ftype == "array":
+                if not isinstance(i.get(_f), list):
+                    _bad += 1
+            elif not str(i.get(_f)).strip():
+                _bad += 1
+        if _bad:
+            out.append(f"{_bad}/{total} 条缺 `{_f}`（schema required）")
+    return out
 
 
 @dataclass
@@ -158,6 +387,18 @@ class AuditResult:
     issues: list[Issue] = field(default_factory=list)
     error: str = ""
     raw_text: str = ""
+    # 本次审计**实际**走的通道与提交的模型（v6.117，方案 A）：台账与产物据此记录归属。
+    # 空串 = 未配置专用通道，沿用全局 TEXT_PROVIDER（`main._active_text_provider()`）。
+    channel_provider: str = ""
+    channel_model: str = ""
+    # 响应体与 AUDIT_SCHEMA 的偏离清单（**观测字段，不参与解析结论**，见上）。
+    schema_deviations: list = field(default_factory=list)
+    # provider 自报的 token 用量（v6.118，方案 A 观测项）。**取不到就是 None**——
+    # 观测字段不参与任何判定，也**禁止用估算值填充**：填了估算就再也分不清
+    # 「实际花了这么多」和「我们猜的」。各 provider 的 usage 键不完全一致
+    # （agent_plan / deepseek 均为 input_tokens / output_tokens / reasoning_tokens /
+    # total_tokens），台账原样记为 dict，不做归一。
+    usage: dict | None = None
 
 
 def run_same_model_audit_with_status(
@@ -171,26 +412,43 @@ def run_same_model_audit_with_status(
     metadata: dict | None = None,
 ) -> AuditResult:
     """Run audit while preserving failure state for logs and repair acceptance."""
-    service = create_service()
+    # 审计专用通道（方案 A）：未配置 → provider=None，`create_service()` 仍按
+    # 全局 TEXT_PROVIDER 建服务、`req.model` 仍用调用方传来的模型名（零行为变化）。
+    channel_provider, channel_model = resolve_audit_channel()
+    service = create_service() if channel_provider is None else create_service(channel_provider)
     import os as _os
     _audit_max_tokens = int(_os.getenv("AUDIT_MAX_OUTPUT_TOKENS", "16000") or "16000")
+    # v6.124（验证计划 (c)）：**审计专用**思考档位，便于「固定输入 × 不同 effort ×
+    # 重复运行」的稳定性/召回实验。未设置 → 不传 → 沿用 provider 全局
+    # `DEEPSEEK_REASONING_EFFORT`（零行为变化）。
+    _audit_effort = (_os.getenv("AUDIT_REASONING_EFFORT") or "").strip() or None
     req = TextGenerationRequest(
         system_prompt=_AUDIT_SYSTEM,
         user_prompt=build_audit_prompt(novel_text, plan, script, audit_focus=audit_focus, metadata=metadata),
         max_tokens=_audit_max_tokens,
-        temperature=0.1,
+        temperature=AUDIT_TEMPERATURE,
         json_schema=AUDIT_SCHEMA,
-        model=model,
+        # 专用通道下**必须**用该通道的模型 ID 覆盖调用方传来的值（那是 plan 通道的名字）
+        model=channel_model or model,
         timeout_sec=timeout_sec,
+        reasoning_effort=_audit_effort,
     )
+    _chan = {"channel_provider": channel_provider or "",
+             "channel_model": channel_model or ""}
     result = service.generate(req)
+    # v6.118：usage 原样带走（取不到 None），供台账记录实际消耗
+    _usage = getattr(result, "usage", None)
     if not result.success:
-        return AuditResult("request_failed", [], str(getattr(result, "error", "") or ""), str(getattr(result, "text", "") or ""))
+        return AuditResult("request_failed", [], str(getattr(result, "error", "") or ""),
+                           str(getattr(result, "text", "") or ""), usage=_usage, **_chan)
     parsed, status = _parse_issues_with_status(result.text)
     if status != "ok":
-        return AuditResult(status, [], "audit output is not valid JSON or lacks issues[]", result.text)
+        return AuditResult(status, [], "audit output is not valid JSON or lacks issues[]",
+                           result.text, usage=_usage, **_chan)
+    _deviations = _schema_deviations(parsed)
     out: list[Issue] = []
     for d in parsed:
+        _rt = _normalize_repair_targets(d)
         sev_raw = str(d.get("severity") or "warning").strip().lower()
         impact_raw = str(d.get("impact") or "").strip().lower()
         # Model occasionally writes "blocking" into impact while leaving
@@ -211,9 +469,10 @@ def run_same_model_audit_with_status(
             entity_id=str(d.get("entity_id") or ""),
             field_path=str(d.get("field_path") or ""),
             evidence=str(d.get("evidence") or ""),
+            repair_targets=_rt,
             repairable=True,
         ))
-    return AuditResult("ok", out)
+    return AuditResult("ok", out, schema_deviations=_deviations, usage=_usage, **_chan)
 
 
 def run_same_model_audit(novel_text: str, plan: dict | None, script: dict,
@@ -226,6 +485,6 @@ def run_same_model_audit(novel_text: str, plan: dict | None, script: dict,
 
 
 __all__ = [
-    "AUDIT_SCHEMA", "AuditResult", "build_audit_prompt",
-    "run_same_model_audit", "run_same_model_audit_with_status",
+    "AUDIT_SCHEMA", "AuditResult", "build_audit_prompt", "resolve_audit_channel",
+    "run_same_model_audit", "run_same_model_audit_with_status", "audit_prompt_version",
 ]

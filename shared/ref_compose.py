@@ -70,6 +70,29 @@ MODEL_REF_LIMITS: list[tuple[str, int]] = [
 ]
 
 
+def model_supports_reference_image(model: str | None) -> bool:
+    """该模型是否支持 `reference_image`（r2v）（v6.111，审核 P1-3）.
+
+    **参考图数量 ≠ 模型能力**：`MODEL_REF_LIMITS` 里有泛化的 `seedance` 条目，
+    它会给 Seedance 1.x 也返回数量 12，而能力表明确
+    `supports_reference_image=False`——用「数量 > 0」当能力判据会把 1.x 放进来
+    （实测 `doubao-seedance-1-0-pro-250528`：limit=12 / supports=False）。
+
+    判定顺序：命中 Seedance 能力表 → 以表为准；否则（bailian/minimax 等）
+    退回参考图数量注册表。
+    """
+    from shared.model_alias import normalize_model_name
+    try:
+        from shared.model_caps import SEEDANCE_CAPS
+    except Exception:
+        SEEDANCE_CAPS = []
+    m = normalize_model_name(model or "")
+    for pat, cap in SEEDANCE_CAPS:
+        if pat in m:
+            return bool(getattr(cap, "supports_reference_image", False))
+    return get_ref_limit(model) > 0
+
+
 def get_ref_limit(model: str | None, default: int | None = None) -> int:
     """按模型名查参考图上限；未注册模型统一兜底 IMAGE_MAX_REFS（默认 3）.
 

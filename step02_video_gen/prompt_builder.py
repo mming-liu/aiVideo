@@ -352,9 +352,162 @@ def _classify_reference_purpose(path: str, shot: dict, registry: dict,
     return "一致性参考，图中人物与场景风格以参考图为准"
 
 
+# ---------------------------------------------------------------------------
+# r2v 参考图「继承 / 禁止继承」边界（总计划阶段 7 / 工作包 C）
+# ---------------------------------------------------------------------------
+# 来源：awesome-seedance 的 reference image identity lock —— 现有用途清单只写
+# 「从图中取什么」，实测背景、姿势、构图、白底与拼表布局仍会污染成片。外部模板
+# 证明**显式写出「不得从图中取什么」**能显著减少这类污染。
+#
+# 三类语义必须分开（非 step01 吸收计划 §3.2）：
+#   - 角色肖像：继承身份；不继承背景/姿势/构图/原灯光/文字
+#   - 场景资产：继承空间与光线；不继承偶然人物/文字/临时道具/参考图边框
+#   - 道具资产：继承材质结构；不继承白底/展示台/手势/构图
+#
+# ⚠️ 首帧/尾帧**不套用**这些排除规则：它们的构图、人物状态与姿势本来就是视频的
+# 起点或终点，套用「不继承姿势/构图」会直接破坏 image 模式。
+_R2V_KIND_INHERIT_EXCLUDE = {
+    "character": (
+        "只取身份、五官、脸型、发型、服装与配饰",
+        "不取背景、姿势、构图、机位、原图光线与文字",
+    ),
+    "scene": (
+        "只取建筑与空间布局、季节、时间氛围、光线与色调",
+        "不取偶然人物、文字、临时道具与参考图边框",
+    ),
+    "prop": (
+        "只取材质、颜色、结构、尺寸与磨损",
+        "不取白底、展示台、手势、构图与文字",
+    ),
+    "space_object": (
+        "只取外形、结构、绝对/相对尺度以及与人物的空间关系",
+        "不取白底、展示角度、无关环境与文字",
+    ),
+    "character_sheet": (
+        "只取每个角色各自的身份与服装",
+        "不取表格布局、标签文字、分格边界，禁止角色之间交换五官与服装",
+    ),
+    "prop_sheet": (
+        "只取每件道具各自的外观",
+        "不取表格布局、标签文字、分格边界，禁止道具之间融合",
+    ),
+    "consistency": (
+        "只取与本镜头明确匹配的主体特征",
+        "不得据此决定新人物、新场景或新动作",
+    ),
+}
+
+_MULTI_CHAR_ISOLATION = (
+    "多角色镜头：一个角色一个编号，禁止角色之间交换五官、服饰与持物。"
+)
+
+
+def _classify_reference_kind(path: str, shot: dict, registry: dict,
+                             characters: list) -> str:
+    """参考图的**类型**（决定继承/排除边界）；判定顺序与
+    `_classify_reference_purpose` 保持一致，两函数必须同口径。
+
+    类型取值：`character` / `scene` / `prop` / `space_object` /
+    `character_sheet` / `prop_sheet` / `consistency`。
+    """
+    from pathlib import Path as _P
+    p = str(path or "").replace("\\", "/")
+    name = _P(p).name
+    stem = _P(p).stem
+    parent_dir = _P(p).parent.name
+
+    if name.startswith("ref_sheet_"):
+        base = name[:-4] if name.endswith(".png") else name
+        for pt in base.split("_"):
+            if pt == "chars":
+                return "character_sheet"
+            if pt == "props":
+                return "prop_sheet"
+        return "character_sheet"
+
+    for ch in characters or []:
+        ident = ch.get("identifier", "")
+        if ident and ident in (name, stem):
+            return "character"
+    for ident in registry or {}:
+        if ident and ident in (name, stem):
+            return "character"
+
+    # 肖像注册表命中
+    for ident, views in (registry or {}).items():
+        if not ident or not isinstance(views, dict):
+            continue
+        for view_data in views.values():
+            if not isinstance(view_data, dict):
+                continue
+            rp = str(view_data.get("path") or "").replace("\\", "/")
+            if rp and rp == p:
+                return "character"
+
+    if "scenes_bank" in p:
+        return "scene"
+    if "props_bank" in p:
+        if _is_space_object_identifier(parent_dir) or _is_space_object_identifier(stem):
+            return "space_object"
+        return "prop"
+    if "characters_bank" in p or "portrait_crops" in p:
+        return "character"
+    return "consistency"
+
+
+def r2v_policy_mode() -> str:
+    """r2v 参考图策略模式（v6.111，审核 P1-4）.
+
+    这是视频级 A/B 的**唯一变量**（非 step01 吸收计划 §6.2：A = 当前生产 prompt，
+    B = 只加入本工作包要验证的一项变化，例如「参考图 exclude 规则」）：
+
+      - `inherit_exclude`（默认）：逐图附「只取…／不取…」边界；
+      - `plain`：工作包 C 之前的旧行为（不带该边界）——A/B 的对照组。
+
+    v6.111（审核 P1-4）：A/B 需要**两组不同的策略**才谈得上对照，而此前没有切换点，
+    两组必然完全相同。**默认值保持现状（生产行为不变）**——是否按
+    【非 step01 吸收计划 §5.6】把工作包 C 改回休眠，是产品决定，不在本次修复范围内，
+    已作为待决项上报。
+
+    未设置/非法值一律按生产默认，避免拼错环境变量就把生产 prompt 悄悄改掉。
+    """
+    v = os.getenv("R2V_REF_POLICY", "").strip().lower()
+    return "plain" if v == "plain" else "inherit_exclude"
+
+
+def _reference_inherit_exclude(kind: str) -> str:
+    if r2v_policy_mode() != "inherit_exclude":
+        return ""
+    pair = _R2V_KIND_INHERIT_EXCLUDE.get(kind)
+    if not pair:
+        return ""
+    return "；%s，%s" % pair
+
+
+def r2v_reference_budget(used_chars: int) -> int | None:
+    """r2v 参考图清单的剩余字符预算 = 模型 cap − 余量 − 已组装长度.
+
+    **唯一事实源**：运行时（`_build_prompt`）与离线基线工具
+    （`tools/bench_video_prompt_patterns.py`）都调它，避免两边各算一遍，导致
+    「报告里的 prompt 不是模型真正收到的那个」。
+
+    余量 20 与 provider 压缩口径一致（`volcengine_provider._submit` 的
+    `target_body = cap - ref_len - 20`）。未注册 cap（返回 0）→ `None`（不裁剪）。
+    """
+    try:
+        from shared.model_caps import active_video_prompt_cap
+        cap = int(active_video_prompt_cap() or 0)
+    except Exception:
+        return None
+    if cap <= 0:
+        return None
+    return max(0, cap - 20 - int(used_chars))
+
+
 def _build_r2v_purpose_list(shot: dict, registry: dict = None,
                             characters: list | None = None,
-                            ref_paths: list | None = None) -> str:
+                            ref_paths: list | None = None,
+                            max_chars: int | None = None) -> str:
     """构建 r2v 参考图逐图用途清单（seedance2-skill @引用语义吸收）.
 
     与运行时 _build_reference_list（豆包模板吸收）不同：后者只声明首帧/尾帧/
@@ -362,33 +515,82 @@ def _build_r2v_purpose_list(shot: dict, registry: dict = None,
     （人物形象/场景/道具/一致性），实现 seedance2-skill 的「@图片N 作为XX」。
     无注册表信息时回退为通用「一致性参考」声明，不丢原有语义。
 
-    shot: 当前镜头 dict
-    registry: character_portraits_registry.json 内容（可选）
-    characters: script["characters"]（可选，用于角色名匹配）
-    ref_paths: 实际传入 provider 的 reference_paths 列表（r2v 模式的参考图）
+    v6.103（总计划阶段 7 / 工作包 C）：每张图额外写出**禁止继承边界**
+    （`_R2V_KIND_INHERIT_EXCLUDE`），减少背景/姿势/构图/白底/拼表布局的污染。
+    首帧/尾帧不在此列——它们的构图与姿势就是视频起点/终点，套用排除规则会破坏
+    image 模式（`_build_reference_list` 那条路径完全不受本函数影响）。
+
+    Args:
+        shot: 当前镜头 dict
+        registry: character_portraits_registry.json 内容（可选）
+        characters: script["characters"]（可选，用于角色名匹配）
+        ref_paths: 实际传入 provider 的 reference_paths 列表（r2v 模式的参考图）
+        max_chars: 该清单在本镜 prompt 里的**字符预算**（由调用方按模型 cap 与
+            已用长度算出）。接近上限时按固定优先级裁剪：
+            **图号与用途 > 正向继承 > 跨角色隔离 > 排除项细节**——即先丢排除细节，
+            再丢跨角色隔离，编号与用途永不裁掉。`None` = 不裁剪（离线/测试用）。
     """
     registry = registry if registry is not None else _load_character_registry()
     characters = characters or []
     refs = []
+    excludes = []
+    char_refs = 0
     # v6.24：图N = 参考图列表第N张（与 provider media 顺序一致，同 happyhorse [Image N]）。
     # 修正 v6.22 缺陷：旧实现只数角色肖像，遇到前置首帧/场景参考图时编号错位。
     idx = 0
     for p in (ref_paths or []):
         if not p or not Path(p).exists():
             continue
+        # 编号必须**按实际提交顺序连续**：不存在的路径直接跳过、不占号
+        # （否则会出现「图3 缺失」导致模型把图4 当图3）。
         idx += 1
         purpose = _classify_reference_purpose(str(p), shot, registry, characters)
+        kind = _classify_reference_kind(str(p), shot, registry, characters)
+        if kind in ("character", "character_sheet"):
+            char_refs += 1
         refs.append(f"- 图{idx}（{Path(p).name}）：{purpose}")
+        excl = _reference_inherit_exclude(kind)
+        if excl:
+            excludes.append(f"  图{idx}{excl}")
     if not refs:
         return ""
-    head = ("【参考图用途】以下每张参考图用途不同，图N 严格对应参考图列表第N张"
-            "（首帧/场景/道具也占位编号），严格按标注用途取用："
-            "人物参考只取人物特征，场景参考只取环境光线，"
-            "禁止把人物参考当场景、把场景参考当人物。")
-    head += ("\n  多人镜头请用角色所在位置的「图N」指代该角色并分配其行为"
-             "（如'图3的杨旭握紧酒壶，图4的听香望向画右'——编号以本清单标注为准），"
-             "一个角色一个编号，禁止混用。")
-    return head + "\n" + "\n".join(refs)
+
+    head_lines = [
+        # 紧凑模板（非 step01 吸收计划 §5.4）：**不为每张图重复大段通用说明**——
+        # 通用语义压到一行，逐图信息全部落在各自的「图N」行上。
+        "【参考图用途】图N 严格对应参考图列表第N张（含场景/道具占位），按各自标注取用。",
+    ]
+    isolation = _MULTI_CHAR_ISOLATION if char_refs >= 2 else ""
+
+    def _compose_parts(iso: str, base_refs: list, extra: list) -> str:
+        parts = list(head_lines)
+        if iso:
+            parts.append("  " + iso)
+        parts.extend(base_refs)
+        parts.extend(extra)
+        return "\n".join(parts)
+
+    kept_excludes = list(excludes)
+    out = _compose_parts(isolation, refs, kept_excludes)
+    # v6.111（审核 P2-7）：**必须区分 `None` 与 `0`**。
+    #
+    # `0` 是合法预算——`r2v_reference_budget()` 返回 `max(0, cap - 20 - used)`，
+    # 当正文已经顶到 cap 时**恰好是 0**。原判断 `max_chars and max_chars > 0`
+    # 把 0 当成「不限制」，于是完整参考图块照发（实测 122 字），把「接近上限时
+    # 先丢排除细节、编号与用途永不裁掉」这条优先级整个跳过，只剩 provider 的
+    # 句级压缩兜底（可能整行丢掉某张参考图的编号）。
+    if max_chars is not None and len(out) > max_chars:
+        # ① 先丢「排除项细节」——**逐条从后往前丢**，尽量多保留几张图的边界。
+        # 整块丢会让前几张图的边界也一起消失，收益明显更小。
+        while kept_excludes and len(
+                _compose_parts(isolation, refs, kept_excludes)) > max_chars:
+            kept_excludes.pop()
+        out = _compose_parts(isolation, refs, kept_excludes)
+        if len(out) > max_chars:
+            # ② 再丢「跨角色隔离」
+            out = _compose_parts("", refs, kept_excludes)
+        # ③ 图号与用途永不裁掉；仍超预算由 provider 的句级压缩兜底
+    return out
 
 
 def _build_scene_environment(shot: dict) -> str:
@@ -1063,9 +1265,14 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     if _REFERENCE_MODE == "r2v":
         # r2v：给每张参考图标注具体用途（人物形象/场景/一致性），
         # 实现 seedance2-skill 的「@图片N 作为XX」逐图语义声明。
+        # v6.103：把本镜的**剩余字符预算**传下去——模型 cap 减去已组装的
+        # concise prompt，让「接近上限时先丢排除细节、编号与用途永不裁掉」
+        # 这条优先级在**源头上**成立，而不是交给 provider 的句级压缩去碰运气
+        # （句级压缩按权重丢句子，可能整行丢掉某张参考图的编号）。
+        _budget = r2v_reference_budget(len(full_prompt))
         r2v_purposes = _build_r2v_purpose_list(
             shot, registry=_load_character_registry(), characters=characters or [],
-            ref_paths=reference_paths,
+            ref_paths=reference_paths, max_chars=_budget,
         )
         if r2v_purposes:
             full_prompt = full_prompt + "\n\n" + r2v_purposes

@@ -19,6 +19,14 @@ from .service import TextGenerationService
 import re
 
 
+# v6.118（2026-09-25）：客户端重试次数**显式钉 0**。
+# OpenAI SDK 默认 `max_retries=2`（实测 openai 2.44.0 / `_constants.DEFAULT_MAX_RETRIES`），
+# 即 5xx / 429 / 连接错误时会**静默重发两次**——审计单次约 16.8k input tokens，
+# 一次抖动最坏变三次提交。本通道按「长任务不自动重试、由上层决策」的既有取向
+# （见 agent_plan_provider.generate 的同类说明）钉成单次提交。
+DEEPSEEK_MAX_RETRIES = 0
+
+
 class DeepSeekTextService(TextGenerationService):
     """DeepSeek (Responses API) 文本生成实现.
 
@@ -49,6 +57,12 @@ class DeepSeekTextService(TextGenerationService):
             client = OpenAI(
                 api_key=config.DEEPSEEK_API_KEY,
                 base_url=config.DEEPSEEK_BASE_URL,
+                # ⚠️ `max_retries` 是**构造器**参数，不是请求级参数（实测 openai 2.44.0：
+                # `responses.create` / `chat.completions.create` 的签名里都没有它，
+                # 传了直接 `TypeError: unexpected keyword argument` → 审计 request_failed
+                # → 提交点 BLOCK，2026-09-25 13:25 实跑就是这个形态）。
+                # 与 `timeout` 相反——`timeout` 两者都收（请求级优先）。别把两者写一处。
+                max_retries=DEEPSEEK_MAX_RETRIES,
             )
 
             if self._uses_responses():
@@ -94,6 +108,13 @@ class DeepSeekTextService(TextGenerationService):
                     "schema": req.json_schema["schema"],
                 }
             }
+
+        # v6.117：`timeout_sec` 是**供应商无关契约**（见 models.py），本 provider 此前
+        # 完全没实现它——全文 `timeout` 零命中，而 OpenAI client 只用 api_key/base_url
+        # 构造，于是请求吃 SDK 默认 `read=600s`：审计传的 `AUDIT_TIMEOUT_SEC=180` 在原生
+        # 通道**静默失效**（2026-09-25 探针实测）。None = 不传 = 保持 SDK 默认（零行为变化）。
+        if req.timeout_sec:
+            params["timeout"] = float(req.timeout_sec)
 
         response = client.responses.create(**params)
 
@@ -182,6 +203,10 @@ class DeepSeekTextService(TextGenerationService):
         effort = req.reasoning_effort or config.DEEPSEEK_REASONING_EFFORT
         if "reasoner" in model.lower():
             api_params["reasoning_effort"] = effort
+
+        # v6.117：同上——chat 回退路径同样必须执行请求级超时契约
+        if req.timeout_sec:
+            api_params["timeout"] = float(req.timeout_sec)
 
         print(f"[INFO] 正在调用 DeepSeek ({model}) 生成分镜脚本...")
 

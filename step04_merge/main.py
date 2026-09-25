@@ -404,9 +404,11 @@ def main():
   with open(SCRIPT_FILE, "r", encoding="utf-8") as f:
     script = json.load(f)
 
-  from shared.quality_gate import require_gate
+  from shared.quality_gate import require_gate, verify_step01_commit_manifest
   require_gate(CHAPTER_DIR / "step01_quality.json", script, stage="step01",
                required_report_type="quality_gate")
+  # v6.103：三份 step01 产物必须属于同一个提交批次（见 shared/quality_gate）
+  verify_step01_commit_manifest(CHAPTER_DIR, script, stage="step01")
   require_gate(CHAPTER_DIR / "step02b_quality.json", script, stage="step02b",
                required_report_type="product_acceptance", verify_outputs=True)
 

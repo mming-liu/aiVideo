@@ -4,8 +4,36 @@ from __future__ import annotations
 import re
 
 from shared.alias_map import CHARACTER_ALIASES
+from shared.frame_spec import is_on_screen
 from .base import Constraint
 from .types import RepairRecord, Severity
+
+
+# 明确的退场姿态词。**只用于「写 False」这一个方向**（v6.106，2026-09-24）.
+#
+# 实测（第二十七次重跑）：本约束对**已有条目**也做双向赋值
+# `on_screen = pose not in (退下/退场/离场)`——非退场 pose 被当成「在场证据」，
+# 把描述里已写明离场的群体**翻回 true**：
+#
+#   shot 1：`frame_presence_consistency` 报「描述称老农已走远，布局仍 on_screen=true」
+#   → 修复轮改成 false → 本轮后处理又被本约束翻回 true
+#   → 同一处修复连做 4 轮、`resolved=0`，阻塞永远清不掉（BLOCK 的直接成因之一）
+#
+# 事实源优先级（总计划 §1.2）：**帧描述 > frame_layouts**。布局是描述派生出来的，
+# 拿一个 3 词的姿态词表去推翻描述，等于把这个优先级倒过来。
+#
+# 所以：pose 明确是退场词 → 可以安全写 False；pose 不是退场词 → **不构成在场
+# 证据**，已有 false 原样保留。缺条目时的新建仍按原逻辑（描述里提到了该群体），
+# 是否与描述矛盾交由跨字段检测 + 修复轮判定。
+_EXIT_POSES: tuple = ("退下", "退场", "离场")
+
+
+def _apply_presence(existing: dict, pose: str) -> bool:
+    """按「只降不升」写已有条目的 `on_screen`；返回是否发生改动."""
+    if pose in _EXIT_POSES and is_on_screen(existing):
+        existing["on_screen"] = False
+        return True
+    return False
 
 
 def _group_aliases() -> set[str]:
@@ -143,7 +171,7 @@ class GroupActorContinuityConstraint(Constraint):
                     None,
                 )
                 pose = _pose_for(text)
-                on_screen = pose not in ("退下", "退场", "离场")
+                on_screen = pose not in _EXIT_POSES
                 if existing is None:
                     existing = {
                         "name": source.get("name", label),
@@ -163,10 +191,7 @@ class GroupActorContinuityConstraint(Constraint):
                         detail="补齐首/尾帧群体在场状态",
                     ))
                 else:
-                    changed = False
-                    if existing.get("on_screen") is not on_screen:
-                        existing["on_screen"] = on_screen
-                        changed = True
+                    changed = _apply_presence(existing, pose)
                     if pose and existing.get("pose") != pose:
                         existing["pose"] = pose
                         changed = True
@@ -196,7 +221,7 @@ class GroupActorContinuityConstraint(Constraint):
                     None,
                 )
                 pose = _pose_for(text)
-                on_screen = pose not in ("退下", "退场", "离场")
+                on_screen = pose not in _EXIT_POSES
                 if existing is None:
                     existing = {
                         "name": source.get("name", label),
@@ -216,10 +241,7 @@ class GroupActorContinuityConstraint(Constraint):
                         detail="补齐关键帧群体在场状态",
                     ))
                 else:
-                    changed = False
-                    if existing.get("on_screen") is not on_screen:
-                        existing["on_screen"] = on_screen
-                        changed = True
+                    changed = _apply_presence(existing, pose)
                     if pose and existing.get("pose") != pose:
                         before = existing.get("pose", "")
                         existing["pose"] = pose

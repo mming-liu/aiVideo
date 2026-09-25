@@ -155,9 +155,41 @@ def keyframe_file(idx: int, kf_index: int, chapter: int | None = None) -> Path:
     return shot_work_dir(idx, chapter) / KEYFRAME_FILENAME_FMT.format(kf_index)
 
 
+def is_core_keyframe_file(path) -> bool:
+    """是否为核心关键帧文件（`keyframe_<N>.png`，v6.110）.
+
+    **必须排除二修标注中间产物** `keyframe_<N>_doodle.png`：那是区域编辑
+    （`vimax_bridge._doodle_refine_first_frame`）画了红框的**输入**标注图，
+    编辑结果会覆盖原文件，doodle 文件本身不是产物。把它当成关键帧有两个后果：
+
+      1. **掩盖缺图**——实测 shot 3 缺 `keyframe_0.png`，却因为多了一张
+         `keyframe_1_doodle.png` 让 `len(kfs) >= expected` 成立，
+         step02a 验收报 `PASS / missing 0`（假的绿）；
+      2. **下游把标注图当帧发**——step02b 的 `frame_paths` 会带上它，
+         视频模型看到的是带红框的图。
+    """
+    import re as _re
+    m = _re.match(r"^keyframe_(\d+)\.png$", getattr(path, "name", "") or "")
+    return bool(m)
+
+
+def core_keyframe_files(idx: int, chapter: int | None = None) -> list[Path]:
+    """单镜**核心**关键帧文件，按**数字序号**排序（`keyframe_10` 不再排在
+    `keyframe_2` 前）。"""
+    out = [p for p in shot_work_dir(idx, chapter).glob("keyframe_*.png")
+           if is_core_keyframe_file(p)]
+    return sorted(out, key=lambda p: int(p.stem.split("_")[1]))
+
+
 def keyframe_files(idx: int, chapter: int | None = None) -> list[Path]:
-    """单镜全部已生成关键帧，按文件序号排序。"""
-    return sorted(shot_work_dir(idx, chapter).glob("keyframe_*.png"))
+    """单镜全部已生成关键帧（排除二修标注中间产物），按文件名字典序。
+
+    排序口径保持原样（`keyframe_10` 仍在 `keyframe_2` 前）——顺序迁移见
+    `docs/step01-and-awesome-seedance-master-plan-2026-09-23.md` §9.4「已知取舍」，
+    需要数字序的调用点请用 `core_keyframe_files()`。
+    """
+    return sorted(p for p in shot_work_dir(idx, chapter).glob("keyframe_*.png")
+                  if is_core_keyframe_file(p))
 
 
 def clip_file(idx: int, chapter: int | None = None) -> Path:

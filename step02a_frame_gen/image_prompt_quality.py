@@ -97,14 +97,29 @@ def write_image_product_quality(script: dict, work_dir: Path) -> dict:
         shot_dir = Path(work_dir) / "shots" / str(idx)
         ff = shot_dir / FIRST_FRAME_FILENAME
         lf = shot_dir / LAST_FRAME_FILENAME
-        kfs = sorted(shot_dir.glob("keyframe_*.png"))
-        expected_kfs = sum(1 for k in (shot.get("keyframes") or []) if isinstance(k, dict) and str(k.get("desc") or "").strip())
+        # v6.110：只认**核心**关键帧文件，并按**序号逐一核对**。
+        #
+        # 原实现有两个漏洞（实测 shot 3 缺 `keyframe_0.png` 却报 PASS）：
+        #   ① `keyframe_*.png` 把二修标注图 `keyframe_1_doodle.png` 也算进来 →
+        #      数量凑够，缺图被掩盖；
+        #   ② 只比**数量**不比**序号** → 即便没有 doodle，「缺 0 号、多一个 4 号」
+        #      这种错位也照样通过。
+        from shared.paths import is_core_keyframe_file
+        expected_kfs = sum(1 for k in (shot.get("keyframes") or [])
+                           if isinstance(k, dict) and str(k.get("desc") or "").strip())
+        kfs = sorted([p for p in shot_dir.glob("keyframe_*.png")
+                      if is_core_keyframe_file(p)],
+                     key=lambda p: int(p.stem.split("_")[1]))
         if not ff.exists() or ff.stat().st_size <= 0 or not _image_decodable(ff):
             missing.append(f"shot {idx}: missing/undecodable {ff.name}")
         if not lf.exists() or lf.stat().st_size <= 0 or not _image_decodable(lf):
             missing.append(f"shot {idx}: missing/undecodable {lf.name}")
-        if len(kfs) < expected_kfs:
-            missing.append(f"shot {idx}: keyframes {len(kfs)}/{expected_kfs}")
+        _miss_kf = [i for i in range(expected_kfs)
+                    if not (shot_dir / ("keyframe_%d.png" % i)).exists()]
+        if _miss_kf:
+            missing.append(
+                f"shot {idx}: 缺关键帧文件 {_miss_kf}（应有 {expected_kfs} 帧，"
+                f"实有核心帧 {len(kfs)} 个）")
         for kf in kfs:
             if not _image_decodable(kf):
                 missing.append(f"shot {idx}: undecodable {kf.name}")

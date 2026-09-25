@@ -208,7 +208,7 @@ def _build_cinematic_vocab() -> str:
 # ========================================================================
 
 def build_prompt(novel_text: str, bank=None, objects_bank=None,
-                 outline_anchor: str = "") -> str:
+                 outline_anchor: str = "", prop_anchor_block: str = "") -> str:
     """构建最终发送给 LLM 的 prompt，注入完整镜头语言库 + 扩展词库 + 角色锚点 + 场景物体锚点 + 大纲锚点."""
     from shared.config import SHOT_COUNT_MIN, SHOT_COUNT_MAX
     char_anchors = _build_character_anchors(bank) if bank else "无已知角色"
@@ -256,6 +256,13 @@ def build_prompt(novel_text: str, bank=None, objects_bank=None,
                                                      shot_count_max=SHOT_COUNT_MAX)
     if total_dur_ctx:
         prompt = prompt + total_dur_ctx
+
+    # v6.125.2（用户 2026-09-25 决定）：道具状态候选走**独立短提示**追加在**末尾**
+    # ——不并进 `outline_anchor`（doubao/agent_plan 剖面会把大纲锚点压到约 200 字，
+    # 除【高潮事件】外的行会被裁掉，候选锚点必被吞）。两条剖面统一走这条路径，
+    # 便于对照。本块**只影响提示词**：不接 BEST-GUARD、不接质量门、不自动删 props。
+    if prop_anchor_block:
+        prompt = prompt + "\n\n" + prop_anchor_block
 
     return prompt
 
@@ -773,7 +780,7 @@ def _compact_doubao_outline_anchor(outline_anchor: str, max_chars: int = 200) ->
 
 
 def build_doubao_prompt(novel_text: str, bank=None, objects_bank=None,
-                        outline_anchor: str = "") -> str:
+                        outline_anchor: str = "", prop_anchor_block: str = "") -> str:
     """doubao-seed-2-1-turbo 专用分镜生成 prompt.
 
     与 build_prompt 区别：
@@ -828,6 +835,13 @@ def build_doubao_prompt(novel_text: str, bank=None, objects_bank=None,
                                                      shot_count_max=SHOT_COUNT_MAX)
     if total_dur_ctx:
         prompt = prompt + total_dur_ctx
+
+    # v6.125.2（用户 2026-09-25 决定）：道具状态候选走**独立短提示**追加在**末尾**
+    # ——不并进 `outline_anchor`（doubao/agent_plan 剖面会把大纲锚点压到约 200 字，
+    # 除【高潮事件】外的行会被裁掉，候选锚点必被吞）。两条剖面统一走这条路径，
+    # 便于对照。本块**只影响提示词**：不接 BEST-GUARD、不接质量门、不自动删 props。
+    if prop_anchor_block:
+        prompt = prompt + "\n\n" + prop_anchor_block
 
     return prompt
 

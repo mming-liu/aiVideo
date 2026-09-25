@@ -4595,6 +4595,18 @@ def post_fix_shot_prompts(script: dict) -> dict:
         if re.search(r"\d+\s*[-－~～]\s*\d+三", motion_desc):
             shot["motion_desc"] = motion_desc = re.sub(
                 r"(\d+)\s*([-－~～])\s*(\d+)三", r"\1\2\3秒：", motion_desc)
+        # v6.112：连续重复词/句组的确定性清理放在**这里**（时间派生之前）。
+        # 不能放在晚约束（`final_quality_normalizer`）里——motion_desc 含时段标记，
+        # 被时间屏障视为时间字段，晚写会让已派生的 timecode 失配
+        # （`test_late_constraints_do_not_write_time_fields_via_variable_subscript`
+        # 正是拦这个）。早段清理既保住功能，也不越界。
+        try:
+            from shared.content_safety import collapse_repetition as _collapse_rep
+            _cleaned = _collapse_rep(motion_desc)
+            if _cleaned != motion_desc:
+                shot["motion_desc"] = motion_desc = _cleaned
+        except Exception:
+            pass
         # 3.2（2026-09-12 P1 修正）：prompt 末尾截断残片——只针对**已知残片形态**
         # 精确剔除。此前的「最后一个句读后 ≤30 字一律截除」会误删合法短句
         # （实测误删：「张十三站在船头。他看向远方」「张三拔刀。刀光一闪」）。
@@ -6614,10 +6626,42 @@ def _check_kf_time_window_alignment(shots: list[dict], hook: dict = None) -> dic
         ]
         if missing_seg_indices:
             seg_summary = "、".join(f"{a:g}-{b:g}秒" for a, b in segs)
+            # v6.104.1（2026-09-24 第二十四次重跑实测）：原标题只写「建议：每段生成
+            # 1 帧」，模型收到后的实际动作是**改写/合并 motion_desc**（把 3 段写成 2 段），
+            # 而 motion 未授权 → 被 `merge_authorized` 回填 → 一条也没解决（resolved=0）。
+            # 缺段是**只能靠新增帧**修的缺陷，所以告警直接把「新增几帧、t_sec 取多少」
+            # 写成必须动作，并显式禁止用改写 motion 消警——把可确定的都算好交给模型，
+            # 不留给它自己选策略。
+            #
+            # 措辞避免出现 ASCII 整词 `frame_layouts`：文案回退路径
+            # （`repair_fields._fields_from_text`）会把该词解析成「授权整个
+            # frame_layouts」，而本条需要的授权面由结构化 code 精确给出。
+            _mids = "、".join(
+                f"{(segs[i][0] + segs[i][1]) / 2:g}" for i in missing_seg_indices)
+            # 缺段内容一并给出：新增帧的 desc 必须描写**该段的动作**，否则新帧会
+            # 立刻触发 `kf_event_window_mismatch`（实测：模型补了帧但 desc 写的是
+            # 别的时段的内容 → 补帧换来一条新阻塞）。
+            _seg_txts = []
+            for _i in missing_seg_indices:
+                _t = ""
+                try:
+                    _t = str(_seg_texts[_i] or "").strip()
+                except Exception:
+                    _t = ""
+                if _t:
+                    _seg_txts.append(f"[{_i}] {_t[:30]}")
+            _seg_txt_hint = ("（缺段内容：" + "；".join(_seg_txts) +
+                             "——新增帧的 desc 必须描写**该段动作**）") if _seg_txts else ""
             warnings.append(
                 f"镜头{label} motion_desc 分 {len(segs)} 段（{seg_summary}）"
                 f"但缺段索引 {missing_seg_indices}，只有 {len(mid_kfs)} 个 kf。"
-                f"建议：写 kf 前先列时段表，每段生成 1 帧 time_ratio = 段中点 / duration_sec。"
+                f"**必须动作**：在 keyframes 列表**新增 {len(missing_seg_indices)} 帧**"
+                f"（t_sec 依次取 {_mids}，即各缺段中点；time_ratio = 段中点 / duration_sec）"
+                f"{_seg_txt_hint}，"
+                f"并在帧布局的 kfs 列表**按同序号追加等长条目**"
+                f"（两表长度必须始终相等）。"
+                f"**禁止**改写、删除或合并 motion_desc 来消除本告警——"
+                f"那只会让告警消失，动作证据并没有增加。"
             )
 
         # 检测 2：每个 kf 物理时刻是否落在任一时段内
