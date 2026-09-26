@@ -269,11 +269,15 @@ def _parse_issues_with_status(text: str) -> tuple[list[dict], str]:
             data = json.loads(raw[start:end + 1])
         except Exception:
             return [], "parse_failed"
-    if isinstance(data, list):
-        issues = data
-    elif isinstance(data, dict):
+    if isinstance(data, dict):
         issues = data.get("issues")
     else:
+        # v6.134.1（审核，2026-09-26）：**只接受根对象里的 `issues` 数组**。
+        # AUDIT_SCHEMA 要求根对象必含 `issues`；顶层 JSON 数组不符合契约，此前
+        # 却被整份当作 issues——顶层 `[]` 尤其危险：合法 JSON、解析 ok、零条问题，
+        # 等于把「响应无效」当成「审计通过」（比 BLOCK 更危险的静默假绿）。
+        # 服务端 schema 执行不能当作保障（台账实测 19 轮 1 轮输出不合预期），
+        # 根形状必须在本地 fail-closed。
         issues = None
     if not isinstance(issues, list):
         return [], "parse_failed"
@@ -287,10 +291,13 @@ def _parse_issues_with_status(text: str) -> tuple[list[dict], str]:
     #   - 每条必须是对象；
     #   - `severity` 必须是 blocking/warning/info 之一（它决定这条算不算 blocking）；
     #   - 至少要有一个可执行/可核对的描述字段，否则这条问题无法被处理。
+    #   v6.134：severity 判据 `.lower()`——与下方归一化（`sev_raw…lower()`）同口径。
+    #   此前门比归一化严一档：`"BLOCKING"` 会让**整份审计** parse_failed，而归一化
+    #   层本来就能吃下它；大小写不改变语义，不属于放水。
     for item in issues:
         if not isinstance(item, dict):
             return [], "parse_failed"
-        if str(item.get("severity") or "").strip() not in ("blocking", "warning", "info"):
+        if str(item.get("severity") or "").strip().lower() not in ("blocking", "warning", "info"):
             return [], "parse_failed"
         if not any(str(item.get(k) or "").strip()
                    for k in ("evidence", "impact", "minimal_fix", "message")):
@@ -399,6 +406,40 @@ class AuditResult:
     # （agent_plan / deepseek 均为 input_tokens / output_tokens / reasoning_tokens /
     # total_tokens），台账原样记为 dict，不做归一。
     usage: dict | None = None
+    # v6.134（2026-09-26 BLOCK 根因）：本次审计**实际**发出的调用次数。1 = 单次调用；
+    # >1 = 输出不可解析后按 `AUDIT_PARSE_RETRIES` 重试过。只记事实，参与方（提交点）
+    # 的 fail-closed 语义不变。
+    attempts: int = 1
+    # v6.134.1（审核）：被重试掉的失败尝试的**完整留档**——attempt 编号、响应头部、
+    # 总长与该次自报用量。此前「重试后成功」的路径只留 attempts=2：坏响应与第一次
+    # 的用量都不进产物，事后无法还原（总用量 = 本字段各次 + 顶层 usage）。
+    # 只记**被重试覆盖**的尝试；最后一次失败已由顶层 raw_text/usage 覆盖，不重复。
+    failed_attempts: list = field(default_factory=list)
+
+
+def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
+    """读一个整数型 env：**非法值一律 WARN 后回退默认**，绝不抛异常.
+
+    v6.134（2026-09-26 复核）：审计参数此前直接 `int(os.getenv(...))`。实测
+    `AUDIT_PARSE_RETRIES=abc` 会在**审计调用处**抛 `ValueError`，而提交链没有
+    try/except —— 整轮会崩在提交链上：既不是 BLOCK、也不写欠账台账、三份产物
+    停在半路。手误一个 env 不该有这种后果（与 `REPAIR_MAX_OUTPUT_TOKENS`
+    同一条口径：非法值 WARN 后回退，不因手误改变保护强度）。
+
+    `minimum=None` = 不设下限；`minimum=0` = 允许 0（显式关闭），负数按默认。
+    """
+    _raw = (os.getenv(name) or "").strip()
+    if not _raw:
+        return default
+    try:
+        _n = int(_raw)
+    except ValueError:
+        print(f"[WARN] {name}={_raw!r} 不是整数，按默认 {default} 处理")
+        return default
+    if minimum is not None and _n < minimum:
+        print(f"[WARN] {name}={_raw!r} 小于下限 {minimum}，按默认 {default} 处理")
+        return default
+    return _n
 
 
 def run_same_model_audit_with_status(
@@ -415,9 +456,18 @@ def run_same_model_audit_with_status(
     # 审计专用通道（方案 A）：未配置 → provider=None，`create_service()` 仍按
     # 全局 TEXT_PROVIDER 建服务、`req.model` 仍用调用方传来的模型名（零行为变化）。
     channel_provider, channel_model = resolve_audit_channel()
-    service = create_service() if channel_provider is None else create_service(channel_provider)
+    _chan = {"channel_provider": channel_provider or "",
+             "channel_model": channel_model or ""}
+    # v6.134.1（审核）：工厂初始化（含 config.validate / provider 注册）此前在
+    # 结果处理之外——异常会直接冒出，既不是 request_failed、也不进审计台账，
+    # 整轮崩在提交链上。收进来按调用失败处置（提交点 BLOCK 语义不变，台账有据）。
+    try:
+        service = create_service() if channel_provider is None else create_service(channel_provider)
+    except Exception as exc:
+        return AuditResult("request_failed", [], f"audit service init failed: {exc}",
+                           attempts=1, **_chan)
     import os as _os
-    _audit_max_tokens = int(_os.getenv("AUDIT_MAX_OUTPUT_TOKENS", "16000") or "16000")
+    _audit_max_tokens = _env_int("AUDIT_MAX_OUTPUT_TOKENS", 16000, minimum=1)
     # v6.124（验证计划 (c)）：**审计专用**思考档位，便于「固定输入 × 不同 effort ×
     # 重复运行」的稳定性/召回实验。未设置 → 不传 → 沿用 provider 全局
     # `DEEPSEEK_REASONING_EFFORT`（零行为变化）。
@@ -433,18 +483,65 @@ def run_same_model_audit_with_status(
         timeout_sec=timeout_sec,
         reasoning_effort=_audit_effort,
     )
-    _chan = {"channel_provider": channel_provider or "",
-             "channel_model": channel_model or ""}
-    result = service.generate(req)
-    # v6.118：usage 原样带走（取不到 None），供台账记录实际消耗
-    _usage = getattr(result, "usage", None)
-    if not result.success:
-        return AuditResult("request_failed", [], str(getattr(result, "error", "") or ""),
-                           str(getattr(result, "text", "") or ""), usage=_usage, **_chan)
-    parsed, status = _parse_issues_with_status(result.text)
-    if status != "ok":
-        return AuditResult(status, [], "audit output is not valid JSON or lacks issues[]",
-                           result.text, usage=_usage, **_chan)
+    # v6.134（2026-09-26 实跑 BLOCK 根因）：`parse_failed` 是**采样噪声**，不是内容结论。
+    #   - DeepSeek Responses 的 `text.format` 官方只有 type/name/schema 三字段、没有
+    #     strict 开关（2026-09-26 核对 api-docs.deepseek.com/api/create-response），
+    #     json_schema 的执行是服务端尽力而为；
+    #   - 思考模式下 temperature=0 被 API 静默忽略（deepseek_provider 头注释），
+    #     审计每次都是一次重采样；
+    #   - 台账实测 19 轮审计 1 轮输出不可解析（2026-09-26 01:02），而同一输入的
+    #     最小复现 ok——单次失败不可避免，但提交点此前把它当确定性致命错误直接
+    #     BLOCK，整章进欠账台账。
+    # 因此对 parse_failed 做**有界重试**（`AUDIT_PARSE_RETRIES`，默认 1 次）：请求
+    # 不变、换一次采样。request_failed **不**重试——截断/超时重试大概率同样失败，
+    # 只烧钱不收敛。全部尝试失败仍按原 status 返回——fail-closed 语义不变。
+    # `0` 合法（= 关闭重试，与旧版一致）；非法/负数回退默认 1——手误不该把保护关掉
+    _parse_retries = _env_int("AUDIT_PARSE_RETRIES", 1, minimum=0)
+    _failed_attempts: list = []
+    _attempts = 0
+    while True:
+        _attempts += 1
+        # v6.134：审计调用自报家门——provider 里是所有调用共用的一句硬编码
+        # "生成分镜脚本" 日志，排查时无法从日志区分调用点（2026-09-26 实录）。
+        print(f"[AUDIT] 最终语义审计第 {_attempts} 次调用"
+              f"（provider={channel_provider or '全局TEXT_PROVIDER'}，"
+              f"model={channel_model or model}）")
+        try:
+            result = service.generate(req)
+        except Exception as exc:
+            # v6.134.1（审核）：provider 大多自行捕获异常，但漏网异常同样不得
+            # 崩出提交链——按调用失败处置（不重试：异常多为结构性，重试不收敛）。
+            return AuditResult("request_failed", [], f"audit call raised: {exc}",
+                               attempts=_attempts, failed_attempts=_failed_attempts,
+                               **_chan)
+        # v6.118：usage 原样带走（取不到 None），供台账记录实际消耗。
+        # 重试后记的是**最后一次**调用的用量；前面各次的用量进 failed_attempts，
+        # 合计 = failed_attempts 各次 + 顶层 usage。
+        _usage = getattr(result, "usage", None)
+        if not result.success:
+            return AuditResult("request_failed", [], str(getattr(result, "error", "") or ""),
+                               str(getattr(result, "text", "") or ""), usage=_usage,
+                               attempts=_attempts, failed_attempts=_failed_attempts,
+                               **_chan)
+        parsed, status = _parse_issues_with_status(result.text)
+        if status == "ok":
+            break
+        if _attempts > _parse_retries:
+            return AuditResult(status, [], "audit output is not valid JSON or lacks issues[]",
+                               result.text, usage=_usage, attempts=_attempts,
+                               failed_attempts=_failed_attempts, **_chan)
+        # v6.134.1（审核）：这一轮是被重试**覆盖**的失败尝试——必须留档，否则
+        # 「重试后成功」路径上坏响应与首次用量双双消失（attempts=2 只能说明发生过）。
+        # 头部封顶与 main._DIAG_RAW_HEAD_MAX 同值（2000 字符）。
+        _text = str(result.text or "")
+        _failed_attempts.append({
+            "attempt": _attempts,
+            "raw_text_head": _text[:2000],
+            "raw_text_len": len(_text),
+            "usage": _usage,
+        })
+        print(f"[AUDIT] 第 {_attempts} 次审计输出不可解析（{status}），"
+              f"同请求重采样重试（还剩 {_parse_retries + 1 - _attempts} 次机会）")
     _deviations = _schema_deviations(parsed)
     out: list[Issue] = []
     for d in parsed:
@@ -472,7 +569,8 @@ def run_same_model_audit_with_status(
             repair_targets=_rt,
             repairable=True,
         ))
-    return AuditResult("ok", out, schema_deviations=_deviations, usage=_usage, **_chan)
+    return AuditResult("ok", out, schema_deviations=_deviations, usage=_usage,
+                       attempts=_attempts, failed_attempts=_failed_attempts, **_chan)
 
 
 def run_same_model_audit(novel_text: str, plan: dict | None, script: dict,

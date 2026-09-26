@@ -103,4 +103,24 @@ step0*_relay*.log
 
 # 09-13 用户决策：tests/ 测试套件不入库（保留本地，pytest 照常）
 tests/
+# 09-25 用户决策（补正交付边界）：**基线回归与其夹具随仓库交付**，否则 "2290 passed"
+# 只证明本机基线，别的检出环境跑不了。只放行这一个回归文件与 fixtures/ 目录，
+# tests/ 其余仍不入库。
+!tests/
+tests/*
+!tests/step01_script_gen/
+tests/step01_script_gen/*
+!tests/step01_script_gen/fixtures/
+!tests/step01_script_gen/fixtures/**
+!tests/step01_script_gen/test_plan_to_commit_baseline.py
+# 09-25 收口：第二步（计划边界）的判别测试随仓库交付，理由同上
+!tests/step01_script_gen/test_plan_feasibility.py
 /docs/
+# 09-25 用户决定：**只精确放行**「计划边界」这条线的四份留档，不放开整个 docs/。
+# git 不会进入被排除的目录，所以要逐级放行父目录（与上面 tests/ 同构）。
+!/docs/
+/docs/*
+!docs/step01-plan-feasibility-gate-2026-09-25.md
+!docs/step01-plan-boundary-closure-2026-09-25.md
+!docs/step01-plan-reselection-and-cross-model-anchor-2026-09-25.md
+!docs/step01-contract-positioning-and-replan-semantics-2026-09-25.md

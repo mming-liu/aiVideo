@@ -1,0 +1,56 @@
+{
+  "note": "第十六次落盘产物上 model audit 报出的 blocking（目录 12 四条）。身份口径 = (code, shot_id, frame_id, entity_id, field_path)，不含文案。",
+  "source_revision": "6236ef931396b7cf4c0af8ab9a26b44d9ff3d7e7943f1def32951e1693e3aab5",
+  "rule_source_fingerprint": "7f75221ed6263cc3",
+  "count": 4,
+  "blockers": [
+    {
+      "code": "model_audit_issue",
+      "severity": "visual_risk",
+      "message": "尾帧描述与布局矛盾，老农应已离场但布局仍显示在场；建议：将lf中群演on_screen改为false，或调整lf_desc为'老农仍在远处'",
+      "shot_id": "1",
+      "frame_id": "lf",
+      "entity_id": "群演",
+      "field_path": "frame_layouts.lf[2].pose",
+      "evidence": "lf_desc写'老农已走远'，但frame_layouts.lf中群演仍on_screen=true且pose为'牵牛行走'",
+      "related_shot_ids": [],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_issue",
+      "severity": "visual_risk",
+      "message": "首帧道具状态与描述冲突，画面呈现不一致；建议：统一ff_desc与props，若已脱手则props应为[]或仅'钓杆'",
+      "shot_id": "2",
+      "frame_id": "ff",
+      "entity_id": "杨旭",
+      "field_path": "frame_layouts.ff[0].props",
+      "evidence": "ff props含['钓杆','酒壶']，但ff_desc写'钓杆已脱手垂湖面，酒壶已脱手'，与props矛盾",
+      "related_shot_ids": [],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_issue",
+      "severity": "visual_risk",
+      "message": "尾帧状态与原文不符，应呈现落船结果而非跃起过程；建议：将lf pose改为'落在船梢'或'踞立船梢'",
+      "shot_id": "5",
+      "frame_id": "lf",
+      "entity_id": "张十三",
+      "field_path": "frame_layouts.lf[0].pose",
+      "evidence": "lf pose为'纵身跃起'，但lf_desc写'纵身一跃飞掠上船'，且原文'隔着一丈多远的距离，他竟然嗵地一声飞掠上船，准确地落在船梢'，lf应呈现'落在船梢'而非'跃起'",
+      "related_shot_ids": [],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_issue",
+      "severity": "visual_risk",
+      "message": "打耳光动作未在motion_desc中体现，动作链不完整；建议：在motion_desc中补充'张十三反手一掌'动作",
+      "shot_id": "7",
+      "frame_id": "lf",
+      "entity_id": "听香",
+      "field_path": "frame_layouts.lf[1].pose",
+      "evidence": "lf pose为'跪坐捂脸'，但motion_desc 4-5秒为'听香吓得再度尖叫'，lf_desc写'耳光扇在她脸上'，捂脸应在被打后，但motion_desc未提及打耳光动作",
+      "related_shot_ids": [],
+      "repairable": true
+    }
+  ]
+}

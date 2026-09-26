@@ -268,13 +268,16 @@ def main(argv=None) -> int:
         # 时点定位（v6.127，用户 2026-09-25 复核）：`cause_at`（起因帧）与
         # `release_at`（稿件**实际写出**的释放）**分开记录**，不做"起因帧⇒释放帧"
         # 的推导；对不上就记「未知」——不得据此清 `props`，也没有执行许可字段。
+        # v6.128：同时给出**离线事件关联**（原文事件 → 大纲节拍 → 稿件帧）。
         _anchor = {"prop_guess": _guess, "evidence": a.get("evidence")}
-        _loc = locate_release(script, _anchor, None, chapter_text=novel_text)
+        _loc = locate_release(script, _anchor, None, chapter_text=novel_text,
+                              outline=outline)
         _ver = release_verification(script, _anchor, None,
                                     cause_at=(_loc["cause_at"]
                                               if _loc["cause_usable"] else None))
         # 只读差异报告：精确到叶子的残留 + 描述 + 再次拾取/转交（**不自动改**）
-        _diff = precise_state_diff(script, _anchor, None, chapter_text=novel_text)
+        _diff = precise_state_diff(script, _anchor, None, chapter_text=novel_text,
+                                   outline=outline)
         report.setdefault("per_anchor", []).append(dict(
             a, **_rep,
             release_state=_ver["state"],
@@ -283,13 +286,14 @@ def main(argv=None) -> int:
             release_known=_loc["release_known"],
             release_reason=_loc["release_reason"] or _loc["reason"],
             source_pair=_loc["source_pair"],
+            cause_assoc=_loc["cause_assoc"], release_assoc=_loc["release_assoc"],
             release_events=[(e["shot_index"], e["frame"], e["relation"])
                             for e in _ver["release_events"]],
             diff={k: _diff[k] for k in (
                 "reference", "reference_kind", "timing_state", "residuals",
                 "premature_residuals", "descriptions_still_holding",
-                "re_pickup", "transfer", "clear_candidates", "advisory_only",
-                "blocked_reason", "read_only", "apply")},
+                "re_pickup", "transfer", "clear_candidates", "joint_task",
+                "advisory_only", "blocked_reason", "read_only", "apply")},
             prop_name_match=(_guess in _released),
             released_prop_names=_released,
             released_prop_names_other_than_candidate=_other,

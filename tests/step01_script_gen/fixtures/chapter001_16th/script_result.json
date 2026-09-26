@@ -1,0 +1,2779 @@
+{
+  "title": "溪上何人品玉箫",
+  "characters": [
+    {
+      "identifier": "杨旭",
+      "gender": "male",
+      "age_range": "young",
+      "static_features": "国字脸，剑眉星目，黑发束冠，身姿挺拔，脸型方正，轮廓分明",
+      "dynamic_features": "素白色轻袍，头戴平定四方巾，赤脚，手持钓杆",
+      "is_visible": true,
+      "is_new": false
+    },
+    {
+      "identifier": "听香",
+      "gender": "female",
+      "age_range": "young",
+      "static_features": "杏圆脸，大而清澈的杏眼，眼神温润，青丝挽美人髻，秀颈颀长，身段风流",
+      "dynamic_features": "一袭春衫，轻腰欲折，头戴步摇，后步摇落水，披头散发",
+      "is_visible": true,
+      "is_new": false
+    },
+    {
+      "identifier": "张十三",
+      "gender": "male",
+      "age_range": "young",
+      "static_features": "国字脸，身材矫健，面容冷峻，脸型瘦削，眼神锐利",
+      "dynamic_features": "青衣小帽",
+      "is_visible": true,
+      "is_new": false
+    },
+    {
+      "identifier": "老汉",
+      "gender": "male",
+      "age_range": "old",
+      "static_features": "佝偻身子，老农模样，圆脸，自然肤色，质朴五官",
+      "dynamic_features": "负着双手，手中牵绳，绳拖老牛，牛脊上坐小娃娃",
+      "is_visible": true,
+      "is_new": false
+    },
+    {
+      "identifier": "刺客",
+      "gender": "male",
+      "age_range": "young",
+      "static_features": "身形敏捷，动作如电，细长丹凤眼，眼尾微挑，眼神清冷警觉",
+      "dynamic_features": "蒙面，浑身湿透",
+      "is_visible": true,
+      "is_new": false
+    },
+    {
+      "identifier": "肖管事",
+      "gender": "male",
+      "age_range": "middle",
+      "static_features": "国字脸，无具体描述",
+      "dynamic_features": "无具体描述",
+      "is_visible": false,
+      "is_new": false
+    }
+  ],
+  "shots": [
+    {
+      "index": 1,
+      "narration_segment": "",
+      "subtitle": "",
+      "scene": "照月湾",
+      "location": "照月湾",
+      "main_subject": "杨旭与听香在荷塘小舟上",
+      "prompt": "[杨旭: 弱冠之年，剑眉星目，黑发束冠，身姿挺拔。素白色轻袍，头戴平定] 黄昏时分，夕阳西下，余晖似雾，一片烟红。无篷舴艋舟（长7米宽1.5米）行于碧绿荷塘间，船头盘膝坐着一位身着素白色轻袍、头戴平定四方巾的年轻公子杨旭，手持玉箫。身旁一位一袭春衫、头戴步摇的美人儿听香撑着油纸伞，面朝公子站立。远景处，一位佝偻老农牵绳拖老牛，牛脊上坐小娃娃。暖金色余晖从画左斜照，水面泛金光",
+      "motion_desc": "前2秒：无篷舴艋舟（宽1.4米，可容3人）缓缓前行，荷叶向两侧分开；2-4秒：杨旭吹箫，箫音悠扬，听香静立；4-5秒：老农牵牛从远处田埂走过，红日半没于天涯",
+      "ff_desc": "无篷舴艋舟（宽1.4米，可容3人）静止于荷塘中，杨旭盘膝坐船头持箫，听香撑伞立于身旁，老农牵牛在远处田埂",
+      "lf_desc": "杨旭放下玉箫，听香轻启朱唇开始唱歌，老农已走远，红日完全没入地平线",
+      "context_bridge": "开场建立镜头，展示照月湾宁静美好的黄昏景象。",
+      "audio_cue": "人声：无；音效：箫声悠扬，蝉鸣渐歇，水波轻拍船舷；背景音乐：悠扬古筝渐起",
+      "fx_effect": "水面波光粼粼，金色余晖粒子飘散",
+      "color_tone": "暖金与橙红",
+      "cam_idx": 1,
+      "clip_transition": "硬切，0.2s",
+      "duration_sec": 5.0,
+      "variation_type": "medium",
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中偏左",
+            "pose": "盘坐持箫",
+            "gaze_target": "画右",
+            "props": [
+              "玉箫"
+            ]
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "站立撑伞",
+            "gaze_target": "画左",
+            "props": [
+              "油纸伞"
+            ]
+          },
+          {
+            "name": "群演",
+            "on_screen": true,
+            "position": "画左远景",
+            "pose": "牵牛行走",
+            "gaze_target": "画右",
+            "props": [
+              "牵绳"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中偏左",
+            "pose": "盘坐",
+            "gaze_target": "画右",
+            "props": []
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "站立撑伞",
+            "gaze_target": "画左",
+            "props": [
+              "油纸伞"
+            ]
+          },
+          {
+            "name": "群演",
+            "on_screen": true,
+            "position": "画左远景",
+            "pose": "牵牛行走",
+            "gaze_target": "画右",
+            "props": [
+              "牵绳"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中偏左",
+              "pose": "盘坐持箫",
+              "gaze_target": "画右",
+              "props": [
+                "玉箫"
+              ]
+            },
+            {
+              "name": "群演",
+              "on_screen": true,
+              "position": "画左远景",
+              "pose": "",
+              "gaze_target": "画右",
+              "props": [
+                "牵绳"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中偏左",
+              "pose": "盘坐吹箫",
+              "gaze_target": "画右",
+              "props": [
+                "玉箫"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中偏左",
+              "pose": "盘坐",
+              "gaze_target": "画右",
+              "props": []
+            },
+            {
+              "name": "群演",
+              "on_screen": true,
+              "position": "画左远景",
+              "pose": "",
+              "gaze_target": "画右",
+              "props": [
+                "牵绳"
+              ]
+            }
+          ]
+        ]
+      },
+      "keyframes": [
+        {
+          "desc": "小舟静止于荷塘，杨旭盘膝坐船头，手持玉箫，听香撑伞立于身旁，老农牵牛在远处田埂",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "杨旭吹箫，箫音悠扬，听香静立撑伞，荷叶随小舟分开",
+          "stage": "approach",
+          "t_sec": 2.5
+        },
+        {
+          "desc": "杨旭放下玉箫，听香轻启朱唇唱歌，老农已走远",
+          "stage": "react",
+          "t_sec": 4.0
+        }
+      ],
+      "content": "",
+      "camera_movement": "缓慢推近",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 5.0,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [
+        {
+          "name": "杨旭",
+          "position": "画中偏左",
+          "facing": "盘坐持箫",
+          "role": "主",
+          "surface": ""
+        },
+        {
+          "name": "听香",
+          "position": "画右",
+          "facing": "站立撑伞",
+          "role": "次",
+          "surface": ""
+        },
+        {
+          "name": "群演",
+          "position": "画左远景",
+          "facing": "牵牛行走",
+          "role": "次",
+          "surface": ""
+        }
+      ],
+      "timecode": {
+        "start": 4.0,
+        "end": 9.0
+      },
+      "platform_label": "AI生成",
+      "core_keywords": [
+        "杨旭与听香在荷塘小舟上",
+        "无篷舴艋",
+        "可容",
+        "静止于荷",
+        "塘中"
+      ],
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 2,
+      "narration_segment": "",
+      "subtitle": "",
+      "scene": "照月湾",
+      "location": "照月湾",
+      "main_subject": "杨旭与听香在舟中亲昵",
+      "prompt": "[中远景][杨旭: 弱冠之年，剑眉星目，黑发束冠，身姿挺拔。素白色轻袍，头戴平定] 夜晚，弦月斜挂，星光闪烁。无篷舴艋舟（宽1.4米，可容3人）停于荷塘中，杨旭解衣宽袍，袒腹仰卧船头，钓杆已脱手垂在湖面，酒壶已脱手。听香跪坐其身旁，云鬓花颜，头戴步摇，正俯身侍奉。冷蓝色月光从画上方洒落，水面泛银光",
+      "motion_desc": "前2秒：杨旭仰卧饮酒，听香俯身侍奉；2-4秒：听香轻舒玉臂环住杨旭脖子，亲昵嬉笑；4-6秒：杨旭闷哼一声，丢了酒壶，酒水洒向甲板，手抓住听香头发，步摇碰落掉入水中",
+      "ff_desc": "杨旭袒腹仰卧船头，钓杆已脱手垂湖面，酒壶已脱手，听香跪坐身旁俯身侍奉",
+      "lf_desc": "杨旭右手已空，酒壶倒在甲板上，左手仍握钓杆，听香披头散发，步摇已落水，神情惊愕。",
+      "context_bridge": "承接上镜黄昏，时间推进至夜晚，弦月斜挂，小舟中杯筹交错后归于亲昵，紧接着延续前镜动作与构图，自然过渡到本镜。",
+      "audio_cue": "人声：听香咯咯娇笑；音效：酒水汩汩洒向甲板，步摇落水咚一声，水波荡漾；背景音乐：暧昧轻快的古风小调",
+      "fx_effect": "水面涟漪，月光洒落，酒水飞溅",
+      "color_tone": "冷蓝与星光",
+      "cam_idx": 2,
+      "clip_transition": "硬切，0.2s",
+      "duration_sec": 6.0,
+      "variation_type": "medium",
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "仰卧",
+            "gaze_target": "画上",
+            "props": [
+              "钓杆",
+              "酒壶"
+            ]
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "跪坐俯身",
+            "gaze_target": "画左",
+            "props": [
+              "步摇"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "仰卧",
+            "gaze_target": "画上",
+            "props": [
+              "钓杆"
+            ]
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "跪坐",
+            "gaze_target": "画左",
+            "props": []
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中",
+              "pose": "仰卧",
+              "gaze_target": "画上",
+              "props": [
+                "钓杆",
+                "酒壶"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中",
+              "pose": "仰卧",
+              "gaze_target": "画上",
+              "props": [
+                "钓杆",
+                "酒壶"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中",
+              "pose": "仰卧",
+              "gaze_target": "画上",
+              "props": [
+                "钓杆"
+              ]
+            }
+          ]
+        ]
+      },
+      "keyframes": [
+        {
+          "desc": "杨旭袒腹仰卧船头，左手钓杆垂湖面，右手提酒壶，听香跪坐身旁俯身侍奉，步摇在发间",
+          "stage": "pre",
+          "t_sec": 1.2
+        },
+        {
+          "desc": "听香轻舒玉臂环住杨旭脖子，亲昵嬉笑，杨旭右手仍提酒壶",
+          "stage": "approach",
+          "t_sec": 3.0
+        },
+        {
+          "desc": "杨旭闷哼一声，右手已空，酒壶倒在甲板上，左手仍握钓杆，听香披头散发，步摇已落水",
+          "stage": "climax",
+          "t_sec": 5.0
+        }
+      ],
+      "content": "",
+      "camera_movement": "固定机位",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 6.0,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [
+        {
+          "name": "杨旭",
+          "position": "画中",
+          "facing": "仰卧",
+          "role": "主",
+          "surface": ""
+        },
+        {
+          "name": "听香",
+          "position": "画右",
+          "facing": "跪坐俯身",
+          "role": "次",
+          "surface": ""
+        }
+      ],
+      "timecode": {
+        "start": 9.0,
+        "end": 15.0
+      },
+      "core_keywords": [
+        "杨旭与听香在舟中亲昵",
+        "杨旭袒腹",
+        "仰卧船头",
+        "钓杆已脱",
+        "手垂湖面"
+      ],
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 3,
+      "narration_segment": "",
+      "subtitle": "",
+      "scene": "照月湾",
+      "location": "照月湾",
+      "main_subject": "刺客从水中跃出刺杀杨旭",
+      "prompt": "[杨旭: 国字脸，剑眉星目，黑发束冠，身姿挺拔，脸型方正，轮廓分明] [中景][神秘人: 身形敏捷，蒙面，浑身湿透] 夜晚，冷蓝色月光下，无篷舴艋舟（宽1.4米，可容3人）一侧水面突然波分浪裂，一道黑影（黑影是独立物体，不是从角色身上长出来的）（黑影是独立物体，不是从角色身上长出来的）从水中窜出，蒙面，浑身湿透，右手一扬，手中一道寒光（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）如弦月般刺向杨旭心口",
+      "motion_desc": "前1秒：水面波分浪裂，神秘人从水中窜出；1-3秒：神秘人一按船舷跃上船头，踞蹲在船舷上；3-4秒：右手一扬，寒光一闪，刺中杨旭心口；4-5秒：神秘人推臂一送，双腿一弹，倒纵入水消失",
+      "ff_desc": "无篷舴艋舟（宽1.4米，可容3人）一侧水面平静，杨旭仰卧船头，仰面朝上双目紧闭，头颈僵直不侧转，听香跪坐身旁，神秘人尚未现身",
+      "lf_desc": "神秘人已没入水中不见踪影，水面剧烈震荡，杨旭心口白袍暗红洇痕，双目圆睁，左手钓杆无力垂在船舷",
+      "context_bridge": "承接上镜亲昵场景，杨旭正欲仙欲死之际，刺客从水中突袭。",
+      "audio_cue": "人声：杨旭闷哼一声；音效：泼啦一声水响，噗一声利刃入体，水波剧烈震荡；背景音乐：骤然紧张的鼓点，弦乐急促",
+      "fx_effect": "水花四溅，寒光一闪，水面剧烈涟漪",
+      "color_tone": "冷蓝与血红",
+      "cam_idx": 3,
+      "clip_transition": "硬切，0.2s",
+      "duration_sec": 5.0,
+      "variation_type": "large",
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "跪坐",
+            "gaze_target": "画左",
+            "props": []
+          },
+          {
+            "name": "刺客",
+            "on_screen": false,
+            "position": "画左水下",
+            "pose": "潜伏",
+            "gaze_target": "无",
+            "props": []
+          }
+        ],
+        "lf": [
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "仰卧",
+            "gaze_target": "画上",
+            "props": [
+              "钓杆"
+            ]
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "跪坐",
+            "gaze_target": "画左",
+            "props": []
+          },
+          {
+            "name": "刺客",
+            "on_screen": false,
+            "position": "画左水下",
+            "pose": "遁水",
+            "gaze_target": "无",
+            "props": []
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中",
+              "pose": "仰卧",
+              "gaze_target": "画上",
+              "props": [
+                "钓杆"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "刺客",
+              "on_screen": true,
+              "position": "画左船舷",
+              "pose": "踞蹲",
+              "gaze_target": "画右",
+              "props": [
+                "短刃"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "刺客",
+              "on_screen": true,
+              "position": "画左船舷",
+              "pose": "挥刃",
+              "gaze_target": "画右",
+              "props": [
+                "短刃"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "刺客",
+              "on_screen": false,
+              "position": "画左水下",
+              "pose": "遁水",
+              "gaze_target": "无",
+              "props": []
+            }
+          ]
+        ]
+      },
+      "keyframes": [
+        {
+          "desc": "小舟一侧水面平静，杨旭仰卧船头，听香跪坐身旁，神秘人尚未现身",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "神秘人从水中窜出，一按船舷跃上船头，踞蹲在船舷上，右手持短刃",
+          "stage": "approach",
+          "t_sec": 2.0
+        },
+        {
+          "desc": "神秘人右手一扬，寒光一闪，短刃刺入杨旭心口，杨旭双目圆睁",
+          "stage": "climax",
+          "t_sec": 3.5
+        },
+        {
+          "desc": "神秘人已没入水中不见踪影，水面剧烈震荡，杨旭心口白袍暗红洇痕",
+          "stage": "exit",
+          "t_sec": 4.5
+        }
+      ],
+      "content": "",
+      "camera_movement": "快速跟拍",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 5.0,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [
+        {
+          "name": "杨旭",
+          "position": "画中",
+          "facing": "仰卧",
+          "role": "主",
+          "surface": ""
+        },
+        {
+          "name": "听香",
+          "position": "画右",
+          "facing": "跪坐",
+          "role": "次",
+          "surface": ""
+        }
+      ],
+      "timecode": {
+        "start": 15.0,
+        "end": 20.0
+      },
+      "core_keywords": [
+        "神秘人从水中跃出刺杀杨旭",
+        "无篷舴艋",
+        "可容",
+        "一侧水面",
+        "平静"
+      ],
+      "keyframe_sample_count": 3,
+      "movement_speed_multiplier": 0.3,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 4,
+      "narration_segment": "听香道：啊…啊…救命啊…",
+      "subtitle": "听香道：啊…啊…救命啊…",
+      "scene": "照月湾",
+      "location": "照月湾",
+      "main_subject": "听香惊恐尖叫",
+      "prompt": "[特写][听香: 如花似玉，青丝挽美人髻，秀颈颀长，身段风流。一袭春衫，轻腰欲] 夜晚，冷蓝色月光下，无篷舴艋舟（宽1.4米，可容3人）上，听香披头散发，脸色苍白，神情呆滞，跪坐在杨旭身旁，杨旭仰卧船头，心口白袍暗红洇痕，双目圆睁。听香哆哆嗦嗦伸出手，摸了摸自己濡湿的嘴唇，眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲尖叫",
+      "motion_desc": "0-2秒：听香脸色苍白，神情呆滞，哆哆嗦嗦伸手摸嘴唇 / 2-5秒：听香身子猛地一颤，一声凄厉眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲的尖叫夺唇而出；受叫声惊吓，一只只蛙儿从荷叶上跃入水中",
+      "ff_desc": "听香披头散发跪坐船头，脸色苍白，神情呆滞，手微抬，杨旭仰卧身旁，仰面朝上双目紧闭，头颈僵直不侧转，心口暗红洇痕",
+      "lf_desc": "听香双手捂嘴，眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲尖叫，蛙儿纷纷跃入水中，水面涟漪四起。伤处白袍心口一片暗红痕迹洇开，暗红痕迹清晰可见",
+      "context_bridge": "承接上镜刺杀瞬间，刺客已遁水，听香惊魂未定。",
+      "audio_cue": "人声：听香凄厉尖叫，声音颤抖惊恐；音效：蛙儿卟嗵卟嗵跃入水中；背景音乐：紧张弦乐持续，心跳声",
+      "fx_effect": "水面涟漪，蛙儿跃水",
+      "color_tone": "冷蓝与血红",
+      "cam_idx": 2,
+      "clip_transition": "硬切，0.2s；淡入淡出，镜头拉远，自然过渡，转场时长0.5s；叠化，0.5s",
+      "duration_sec": 5.0,
+      "variation_type": "medium",
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "跪坐",
+            "gaze_target": "画下",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画左",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "跪坐捂嘴",
+            "gaze_target": "画上",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画左",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画中",
+              "pose": "跪坐",
+              "gaze_target": "画下",
+              "props": []
+            }
+          ],
+          [
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画中",
+              "pose": "跪坐捂嘴",
+              "gaze_target": "画上",
+              "props": []
+            }
+          ]
+        ]
+      },
+      "keyframes": [
+        {
+          "desc": "听香披头散发跪坐船头，脸色苍白，神情呆滞，杨旭仰卧身旁，心口暗红洇痕",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "听香双手捂嘴，眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲尖叫，蛙儿纷纷跃入水中。伤处白袍心口一片暗红血迹洇开，血痕清晰可见",
+          "stage": "climax",
+          "t_sec": 3.5
+        }
+      ],
+      "content": "",
+      "camera_movement": "固定机位",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 5.0,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [
+        {
+          "name": "听香",
+          "position": "画中",
+          "facing": "跪坐",
+          "role": "主",
+          "surface": ""
+        },
+        {
+          "name": "杨旭",
+          "position": "画左",
+          "facing": "仰卧",
+          "role": "次",
+          "surface": ""
+        }
+      ],
+      "timecode": {
+        "start": 20.0,
+        "end": 25.0
+      },
+      "core_keywords": [
+        "听香惊恐尖叫",
+        "听香披头",
+        "散发跪坐",
+        "船头",
+        "脸色苍白"
+      ],
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 5,
+      "narration_segment": "张十三道：公子，公子？听香姑娘，出了什么事？",
+      "subtitle": "张十三道：公子，公子？听香姑娘，出了什么事？",
+      "scene": "杨府别庄",
+      "location": "杨府别庄湾堤",
+      "main_subject": "张十三在岸上询问",
+      "prompt": "[近景][张十三: 身材矫健，面容冷峻。青衣小帽] 夜晚，岸上不远处有一幢房屋，窗棂上映着灯光。张十三青衣小帽，身材矫健，面容冷峻，举着灯盏快步走出门，站在湾堤上，俯视画下方水面湾中的无篷舴艋舟（宽1.4米，可容3人），扬声询问。无篷舴艋舟上听香披头散发跪坐，杨旭仰卧，仰面朝上双目紧闭，头颈僵直不侧转。伤处白袍暗红洇痕持续可见",
+      "motion_desc": "0-2秒：张十三举灯盏快步走出门，站在湾堤上 / 2-5.88秒：张十三扬声询问，望向无篷舴艋舟（宽1.4米，可容3人）；听香颤抖着回应",
+      "ff_desc": "张十三站在门口，举灯盏，望向水湾中的无篷舴艋舟（宽1.4米，可容3人），神情眉头紧锁，目光急切，不停张望",
+      "lf_desc": "张十三听到听香回应，脸色一变，急忙丢了灯盏，纵身一跃飞掠上船。杨旭位于画左远景、仰卧，仰面朝上双目紧闭，头颈僵直不侧转",
+      "context_bridge": "承接上镜听香尖叫，惊动岸上房屋中的张十三。",
+      "audio_cue": "人声：张十三焦急询问，声音洪亮；听香颤抖回应，语无伦次；音效：门扉吱呀一声，脚步声急促；背景音乐：紧张弦乐持续",
+      "fx_effect": "灯盏火光摇曳",
+      "color_tone": "冷蓝与暖黄",
+      "cam_idx": 2,
+      "clip_transition": "淡入淡出，0.5s；淡入淡出，镜头拉远，自然过渡，转场时长0.5s",
+      "duration_sec": 5.88,
+      "variation_type": "medium",
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "站立举灯",
+            "gaze_target": "画左",
+            "props": [
+              "灯盏"
+            ]
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画左远景",
+            "pose": "跪坐",
+            "gaze_target": "画右",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画左远景",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "纵身跃起",
+            "gaze_target": "画左",
+            "props": []
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画左远景",
+            "pose": "跪坐",
+            "gaze_target": "画右",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画左远景",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "站立举灯",
+              "gaze_target": "画左",
+              "props": [
+                "灯盏"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "纵身跃起",
+              "gaze_target": "画左",
+              "props": []
+            }
+          ]
+        ]
+      },
+      "keyframes": [
+        {
+          "desc": "张十三举灯盏站在湾堤上，望向水湾中的小舟，神情眉头紧锁，目光急切，不停张望",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "张十三听到回应，脸色一变，丢了灯盏，纵身跃起飞掠上船",
+          "stage": "climax",
+          "t_sec": 3.5
+        }
+      ],
+      "content": "",
+      "camera_movement": "固定机位",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 5.88,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [
+        {
+          "name": "张十三",
+          "position": "画右",
+          "facing": "站立举灯",
+          "role": "主",
+          "surface": ""
+        },
+        {
+          "name": "听香",
+          "position": "画左远景",
+          "facing": "跪坐",
+          "role": "次",
+          "surface": ""
+        },
+        {
+          "name": "杨旭",
+          "position": "画左远景",
+          "facing": "仰卧",
+          "role": "次",
+          "surface": ""
+        }
+      ],
+      "timecode": {
+        "start": 25.0,
+        "end": 30.88
+      },
+      "core_keywords": [
+        "张十三在岸上询问",
+        "张十三举",
+        "灯盏站在",
+        "湾堤上",
+        "望向水湾"
+      ],
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 6,
+      "narration_segment": "张十三道：死了？杨旭竟然死了！三年苦心栽培，大计刚刚有点希望，他竟然死了？",
+      "subtitle": "张十三道：死了？杨旭竟然死了！三年苦心栽培，大计刚刚有点希望，他竟然死了？",
+      "scene": "照月湾",
+      "location": "照月湾小舟",
+      "main_subject": "张十三验尸震惊",
+      "prompt": "[特写][张十三: 身材矫健，面容冷峻。青衣小帽] 夜晚，冷蓝色月光下，无篷舴艋舟（宽1.4米，可容3人）上，张十三青衣小帽，俯身查看杨旭仰卧船头，素白轻袍，心口白袍暗红洇痕，双目圆睁，钓杆已脱手无力垂在船舷。听香披头散发跪坐一旁，脸色苍白。张十三面色凝重，双手发抖",
+      "motion_desc": "0-2秒：张十三急急俯身，就着星光月色仔细查看杨旭 / 2-9.88秒：张十三面色凝重，双手发抖，内心眉峰上扬，眼睛微睁，嘴角微张，眼神眉毛上扬，眼睛睁大，身体微顿愤懑；张十三忽地转向听香，狠狠地盯着她",
+      "ff_desc": "张十三俯身查看杨旭仰卧，心口暗红洇痕，听香跪坐一旁",
+      "lf_desc": "张十三转向听香，狠狠地盯着她，击气腾腾，听香眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲低头。伤处白袍心口一片暗红痕迹洇开，暗红痕迹清晰可见",
+      "context_bridge": "承接上镜张十三跃上船，俯身验尸。",
+      "audio_cue": "人声：张十三内心独白，声音颤抖压抑，充满愤懑；音效：心跳声，呼吸粗重声；背景音乐：低沉压抑的弦乐",
+      "fx_effect": "星光月色洒落，水面微光",
+      "color_tone": "冷蓝与暗红",
+      "cam_idx": 3,
+      "clip_transition": "淡入淡出，0.5s；镜头推近，节奏缓慢，模糊转场，转场时长0.3s",
+      "duration_sec": 9.88,
+      "variation_type": "medium",
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "俯身查看",
+            "gaze_target": "画下",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画左",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "跪坐",
+            "gaze_target": "画左",
+            "props": []
+          }
+        ],
+        "lf": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "站立",
+            "gaze_target": "画右",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画左",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "跪坐低头",
+            "gaze_target": "画下",
+            "props": []
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画中",
+              "pose": "俯身查看",
+              "gaze_target": "画下",
+              "props": []
+            }
+          ],
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画中",
+              "pose": "站立",
+              "gaze_target": "画右",
+              "props": []
+            }
+          ]
+        ]
+      },
+      "keyframes": [
+        {
+          "desc": "张十三俯身查看杨旭，杨旭仰卧，心口暗红洇痕，听香跪坐一旁",
+          "stage": "pre",
+          "t_sec": 1.2
+        },
+        {
+          "desc": "张十三脸色铁青，双手发抖，转向听香，狠狠地盯着她。伤处白袍心口一片暗红血迹洇开，血痕清晰可见",
+          "stage": "climax",
+          "t_sec": 4.5
+        }
+      ],
+      "content": "",
+      "camera_movement": "固定机位",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 9.88,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [
+        {
+          "name": "张十三",
+          "position": "画中",
+          "facing": "俯身查看",
+          "role": "主",
+          "surface": ""
+        },
+        {
+          "name": "杨旭",
+          "position": "画左",
+          "facing": "仰卧",
+          "role": "次",
+          "surface": ""
+        },
+        {
+          "name": "听香",
+          "position": "画右",
+          "facing": "跪坐",
+          "role": "次",
+          "surface": ""
+        }
+      ],
+      "timecode": {
+        "start": 30.88,
+        "end": 40.76
+      },
+      "core_keywords": [
+        "张十三验尸震惊",
+        "张十三俯",
+        "身查看杨",
+        "旭仰卧",
+        "心口暗红"
+      ],
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 7,
+      "narration_segment": "张十三道：凶手是谁，如何击杀了公子，快说！",
+      "subtitle": "张十三道：凶手是谁，如何击杀了公子，快说！",
+      "scene": "照月湾",
+      "location": "照月湾小舟",
+      "main_subject": "张十三质问听香",
+      "prompt": "[特写][张十三: 身材矫健，面容冷峻。青衣小帽] 夜晚，冷蓝色月光下，无篷舴艋舟（宽1.4米，可容3人）上，张十三青衣小帽，面容冷峻，击气腾腾地盯着听香。听香披头散发，脸色苍白，跪坐船头，眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲地指着水面。杨旭仰卧一旁，仰面朝上双目紧闭，头颈僵直不侧转，心口暗红洇痕",
+      "motion_desc": "前2秒：张十三击气腾腾地盯着听香，厉声质问；2-4秒：听香颤抖着指着水面，结巴回应；4-5秒：一阵风来，荷叶乱动，听香吓得再度尖叫",
+      "ff_desc": "张十三站立，击气腾腾盯着听香跪坐，眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲指水面。伤处白袍心口一片暗红痕迹洇开，暗红痕迹清晰可见",
+      "lf_desc": "听香再度尖叫，张十三怒极，反手一掌，一个清脆的耳光扇在她脸上。伤处白袍心口一片暗红痕迹洇开，暗红痕迹清晰可见",
+      "context_bridge": "承接上镜张十三转向听香，开始质问，紧接着延续前镜动作与构图，自然过渡到本镜。",
+      "audio_cue": "人声：张十三厉声质问，声音冰冷；听香颤抖回应，语无伦次；音效：风声，荷叶沙沙响；背景音乐：紧张弦乐持续",
+      "fx_effect": "荷叶晃动，水面涟漪",
+      "color_tone": "冷蓝与暗红",
+      "cam_idx": 2,
+      "clip_transition": "硬切，0.2s；镜头推近，节奏缓慢，模糊转场，转场时长0.3s",
+      "duration_sec": 5.38,
+      "variation_type": "medium",
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画左",
+            "pose": "站立",
+            "gaze_target": "画右",
+            "props": []
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "跪坐",
+            "gaze_target": "画左",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画左",
+            "pose": "站立",
+            "gaze_target": "画右",
+            "props": []
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "跪坐捂脸",
+            "gaze_target": "画左",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画左",
+              "pose": "站立",
+              "gaze_target": "画右",
+              "props": []
+            }
+          ],
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画左",
+              "pose": "站立",
+              "gaze_target": "画右",
+              "props": []
+            }
+          ]
+        ]
+      },
+      "keyframes": [
+        {
+          "desc": "张十三站立，杀气腾腾盯着听香，听香跪坐，眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲指水面",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "听香再度尖叫，张十三怒极，反手一掌，耳光扇在她脸上",
+          "stage": "climax",
+          "t_sec": 4.0
+        }
+      ],
+      "content": "",
+      "camera_movement": "过肩镜头",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 5.38,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [
+        {
+          "name": "张十三",
+          "position": "画左",
+          "facing": "站立",
+          "role": "主",
+          "surface": ""
+        },
+        {
+          "name": "听香",
+          "position": "画右",
+          "facing": "跪坐",
+          "role": "次",
+          "surface": ""
+        },
+        {
+          "name": "杨旭",
+          "position": "画中",
+          "facing": "仰卧",
+          "role": "次",
+          "surface": ""
+        }
+      ],
+      "timecode": {
+        "start": 40.76,
+        "end": 46.14
+      },
+      "core_keywords": [
+        "张十三质问听香",
+        "张十三站",
+        "杀气腾腾",
+        "盯着听香",
+        "跪坐"
+      ],
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 8,
+      "scene": "照月湾",
+      "location": "照月湾小舟",
+      "main_subject": "张十三恐吓听香",
+      "prompt": "[中景][张十三: 身材矫健，面容冷峻。青衣小帽] 夜晚，冷蓝色月光下，无篷舴艋舟（宽1.4米，可容3人）上，张十三青衣小帽，面容冷峻，身体前倾，低声对听香说话。听香披头散发，脸色苍白，跪坐船头，眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲地看着张十三。杨旭仰卧一旁，仰面朝上双目紧闭，头颈僵直不侧转，心口暗红洇痕。远处有几盏灯笼晃动，庄中佃仆正向这边寻来",
+      "ff_desc": "张十三身体前倾，低声对听香说话，听香眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲跪坐，远处灯笼晃动。伤处白袍心口一片暗红痕迹洇开，暗红痕迹清晰可见",
+      "lf_desc": "张十三说完前半句，微微停顿，目光紧盯听香身体微微发抖，仍跪坐。伤处白袍心口一片暗红痕迹洇开，暗红痕迹清晰可见",
+      "motion_desc": "0-2秒：张十三身体前倾，低声对听香说话，语气眼神眼神眼神冰冷，嘴角平直，眉头微蹙，下颌微抬，嘴角平直，眉头微蹙，下颌微抬，嘴角平直，眉头微蹙，下颌微抬，眉头微蹙 / 2-7.62秒：听香身体发抖，张十三目光紧盯，继续说话；张十三说完前半句，微微停顿，听香六神无主",
+      "duration_sec": 7.62,
+      "camera_movement": "固定机位，中景平视",
+      "clip_transition": "硬切，0.2s",
+      "audio_cue": "人声：张十三低声恐吓，声音冰冷压抑；听香哭诉，声音颤抖；音效：远处佃仆大呼小叫声，脚步声；背景音乐：低沉压抑的弦乐",
+      "color_tone": "冷蓝与暗红",
+      "narration_segment": "张十三道：公子离奇遇刺，船上却只有你一人，你又说不出个所以然来",
+      "subtitle": "张十三道：公子离奇遇刺，船上却只有你一人，你又说不出个所以然来",
+      "keyframes": [
+        {
+          "desc": "张十三身体前倾，低声对听香说话，听香眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲跪坐，远处灯笼晃动",
+          "stage": "pre",
+          "t_sec": 1.2
+        },
+        {
+          "desc": "张十三说完前半句，微微停顿，目光紧盯听香，听香身体微微发抖",
+          "stage": "climax",
+          "t_sec": 4.5
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画左",
+            "pose": "站立前倾",
+            "gaze_target": "画右",
+            "props": []
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "跪坐",
+            "gaze_target": "画左",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          },
+          {
+            "name": "群演",
+            "on_screen": true,
+            "position": "画左远景",
+            "pose": "举灯笼走来",
+            "gaze_target": "画右",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画左",
+            "pose": "站立前倾",
+            "gaze_target": "画右",
+            "props": []
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "跪坐发抖",
+            "gaze_target": "画左",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          },
+          {
+            "name": "群演",
+            "on_screen": true,
+            "position": "画左远景",
+            "pose": "举灯笼走来",
+            "gaze_target": "画右",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画左",
+              "pose": "站立前倾",
+              "gaze_target": "画右",
+              "props": []
+            },
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "跪坐",
+              "gaze_target": "画左",
+              "props": []
+            }
+          ],
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画左",
+              "pose": "站立前倾",
+              "gaze_target": "画右",
+              "props": []
+            },
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "跪坐发抖",
+              "gaze_target": "画左",
+              "props": []
+            }
+          ]
+        ]
+      },
+      "variation_type": "medium",
+      "core_keywords": [
+        "张十三恐吓听香",
+        "张十三低声对听香说话",
+        "听香眼睛瞪大",
+        "杨旭仰卧"
+      ],
+      "duration": 7.62,
+      "timecode": {
+        "start": 46.14,
+        "end": 53.76
+      },
+      "context_bridge": "紧接着延续前镜动作与构图，自然过渡到本镜。",
+      "char_layout": [
+        {
+          "name": "张十三",
+          "position": "画左",
+          "facing": "站立前倾",
+          "role": "主",
+          "surface": ""
+        },
+        {
+          "name": "听香",
+          "position": "画右",
+          "facing": "跪坐",
+          "role": "次",
+          "surface": ""
+        },
+        {
+          "name": "杨旭",
+          "position": "画中",
+          "facing": "仰卧",
+          "role": "次",
+          "surface": ""
+        },
+        {
+          "name": "群演",
+          "position": "画左远景",
+          "facing": "举灯笼走来",
+          "role": "次",
+          "surface": ""
+        }
+      ],
+      "fx_effect": "无",
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 9,
+      "scene": "照月湾",
+      "location": "照月湾小舟",
+      "main_subject": "张十三继续恐吓听香",
+      "prompt": "[近景][张十三: 身材矫健，面容冷峻。青衣小帽] 夜晚，冷蓝色月光下，无篷舴艋舟（宽1.4米，可容3人）上，张十三青衣小帽，面容冷峻，从听香右肩后探身，低头逼视听香。听香披头散发，脸色苍白，跪坐船头，眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲地看着张十三。杨旭仰卧一旁，仰面朝上双目紧闭，头颈僵直不侧转，心口暗红洇痕。远处有几盏灯笼晃动，庄中佃仆正向这边寻来",
+      "ff_desc": "张十三从听香右肩后探身，低头逼视听香眼睛神色平静，瞳孔收缩，嘴巴张开，面部肌肉扭曲跪坐，远处灯笼晃动，伤处白袍心口一片暗红痕迹洇开，暗红痕迹清晰可见",
+      "lf_desc": "张十三说完最后一句，目光阴冷，听香哭着点头答应，身体颤抖。伤处白袍心口一片暗红痕迹洇开，暗红痕迹清晰可见",
+      "motion_desc": "0-2秒：张十三从听香右肩后探身，低头逼视听香，语气加重 / 2-9.38秒：听香哭着点头，张十三目光阴冷；张十三说完最后一句，听香身体颤抖，答应听从吩咐",
+      "duration_sec": 9.38,
+      "camera_movement": "过肩机位，近景，从张十三右肩后拍听香",
+      "clip_transition": "硬切，0.2s；淡入淡出，镜头拉远，自然过渡，转场时长0.5s",
+      "audio_cue": "人声：张十三低声恐吓，声音冰冷压抑；听香哭诉，声音颤抖；音效：远处佃仆大呼小叫声，脚步声；背景音乐：低沉压抑的弦乐",
+      "color_tone": "冷蓝与暗红",
+      "narration_segment": "张十三道：只说少爷是被人所击，谁会信你？这场官司打到官府里，你便休想脱身了",
+      "subtitle": "张十三道：只说少爷是被人所击，谁会信你？这场官司打到官府里，你便休想脱身了",
+      "keyframes": [
+        {
+          "desc": "张十三从听香右肩后探身，低头逼视听香，听香眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲跪坐，远处灯笼晃动",
+          "stage": "pre",
+          "t_sec": 1.2
+        },
+        {
+          "desc": "张十三说完最后一句，目光阴冷，听香哭着点头答应，身体颤抖",
+          "stage": "climax",
+          "t_sec": 4.5
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "探身低头",
+            "gaze_target": "画左",
+            "props": []
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画左",
+            "pose": "跪坐",
+            "gaze_target": "画右",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          },
+          {
+            "name": "群演",
+            "on_screen": true,
+            "position": "画左远景",
+            "pose": "举灯笼走来",
+            "gaze_target": "画右",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "探身低头",
+            "gaze_target": "画左",
+            "props": []
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画左",
+            "pose": "跪坐点头",
+            "gaze_target": "画右",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          },
+          {
+            "name": "群演",
+            "on_screen": true,
+            "position": "画左远景",
+            "pose": "举灯笼走来",
+            "gaze_target": "画右",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "探身低头",
+              "gaze_target": "画左",
+              "props": []
+            },
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画左",
+              "pose": "跪坐",
+              "gaze_target": "画右",
+              "props": []
+            }
+          ],
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "探身低头",
+              "gaze_target": "画左",
+              "props": []
+            },
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画左",
+              "pose": "跪坐点头",
+              "gaze_target": "画右",
+              "props": []
+            }
+          ]
+        ]
+      },
+      "variation_type": "medium",
+      "core_keywords": [
+        "张十三恐吓听香",
+        "张十三低声对听香说话",
+        "听香哭着点头",
+        "杨旭仰卧"
+      ],
+      "duration": 9.38,
+      "timecode": {
+        "start": 53.76,
+        "end": 63.14
+      },
+      "context_bridge": "紧接着延续前镜动作与构图，自然过渡到本镜。",
+      "char_layout": [
+        {
+          "name": "张十三",
+          "position": "画右",
+          "facing": "探身低头",
+          "role": "主",
+          "surface": ""
+        },
+        {
+          "name": "听香",
+          "position": "画左",
+          "facing": "跪坐",
+          "role": "次",
+          "surface": ""
+        },
+        {
+          "name": "杨旭",
+          "position": "画中",
+          "facing": "仰卧",
+          "role": "次",
+          "surface": ""
+        },
+        {
+          "name": "群演",
+          "position": "画左远景",
+          "facing": "举灯笼走来",
+          "role": "次",
+          "surface": ""
+        }
+      ],
+      "fx_effect": "无",
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 10,
+      "narration_segment": "张十三道：没什么事…公子爷吃醉了酒，险些跌落水中，所以惊得听香姑娘尖叫起来",
+      "subtitle": "张十三道：没什么事…公子爷吃醉了酒，险些跌落水中，所以惊得听香姑娘尖叫起来",
+      "scene": "杨府别庄",
+      "location": "杨府别庄湾堤",
+      "main_subject": "张十三",
+      "prompt": "[中景][张十三: 身材矫健，面容冷峻。青衣小帽] 夜晚，岸上，几个庄中佃仆（群演）打着灯笼，提着叉子粪铲，站在湾堤上。张十三青衣小帽，站在船头，沉住气，漫声说话。听香披头散发跪坐船头，杨旭仰卧一旁",
+      "motion_desc": "前2秒：张十三沉住气，漫声对岸上佃仆说话；2-4秒：佃仆们哄笑起来，七嘴八舌回应；4-5秒：张十三目光微闪，吩咐佃仆去赶马车",
+      "ff_desc": "张十三站在船头，沉声对岸上佃仆说话，佃仆们举灯笼站立",
+      "lf_desc": "佃仆们哄笑退下，张十三目光微闪，望向远处，听香低头跪坐。杨旭位于画右远景、仰卧",
+      "context_bridge": "承接上镜张十三恐吓听香，佃仆们赶到岸边询问。",
+      "audio_cue": "人声：张十三漫声说话，语气平静；佃仆们哄笑回应，七嘴八舌；音效：脚步声，灯笼晃动声；背景音乐：舒缓但略带压抑的弦乐",
+      "fx_effect": "灯笼火光摇曳",
+      "color_tone": "冷蓝与暖黄",
+      "cam_idx": 2,
+      "clip_transition": "淡入淡出，0.5s；淡入淡出，镜头拉远，自然过渡，转场时长0.5s",
+      "duration_sec": 8.88,
+      "variation_type": "medium",
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "站立",
+            "gaze_target": "画左",
+            "props": []
+          },
+          {
+            "name": "群演",
+            "on_screen": true,
+            "position": "画左",
+            "pose": "举灯笼站立",
+            "gaze_target": "画右",
+            "props": [
+              "灯笼"
+            ]
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右远景",
+            "pose": "跪坐",
+            "gaze_target": "画下",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画右远景",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画右",
+            "pose": "站立",
+            "gaze_target": "画左",
+            "props": []
+          },
+          {
+            "name": "群演",
+            "on_screen": true,
+            "position": "画左",
+            "pose": "哄笑",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右远景",
+            "pose": "跪坐",
+            "gaze_target": "画下",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画右远景",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": [
+              "钓杆"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "站立",
+              "gaze_target": "画左",
+              "props": []
+            },
+            {
+              "name": "群演",
+              "on_screen": true,
+              "position": "画左",
+              "pose": "",
+              "gaze_target": "画右",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "站立",
+              "gaze_target": "画左",
+              "props": []
+            },
+            {
+              "name": "群演",
+              "on_screen": true,
+              "position": "画左",
+              "pose": "哄笑",
+              "gaze_target": "画右",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ]
+        ]
+      },
+      "keyframes": [
+        {
+          "desc": "张十三站在船头，沉声对岸上佃仆说话，佃仆们举灯笼站立",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "佃仆们哄笑退下，张十三目光微闪，望向远处",
+          "stage": "climax",
+          "t_sec": 4.0
+        }
+      ],
+      "content": "",
+      "camera_movement": "固定机位",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 8.88,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [
+        {
+          "name": "张十三",
+          "position": "画右",
+          "facing": "站立",
+          "role": "主",
+          "surface": ""
+        },
+        {
+          "name": "群演",
+          "position": "画左",
+          "facing": "举灯笼站立",
+          "role": "次",
+          "surface": ""
+        },
+        {
+          "name": "听香",
+          "position": "画右远景",
+          "facing": "跪坐",
+          "role": "次",
+          "surface": ""
+        },
+        {
+          "name": "杨旭",
+          "position": "画右远景",
+          "facing": "仰卧",
+          "role": "次",
+          "surface": ""
+        }
+      ],
+      "timecode": {
+        "start": 63.14,
+        "end": 72.02
+      },
+      "core_keywords": [
+        "张十三",
+        "张十三站",
+        "在船头",
+        "沉声对岸",
+        "上佃仆说"
+      ],
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 11,
+      "narration_segment": "",
+      "subtitle": "",
+      "scene": "杨府别庄",
+      "location": "杨府别庄大门",
+      "main_subject": "张十三驾马车连夜离开",
+      "prompt": "[中远景][张十三: 身材矫健，面容冷峻。青衣小帽] 夜晚，杨府别庄大门洞开，一辆两轮轻便马车（长4.5米宽1.8米）疾驰而出，张十三青衣小帽，驾辕驱马。车厢内隐约可见听香披头散发坐姿，杨旭仰卧。马车迅速投入茫茫夜色之中，冷蓝色月光洒落",
+      "motion_desc": "前2秒：别庄大门洞开，马车疾驰而出；2-4秒：张十三驾辕驱马，马车迅速远去；4-5秒：马车投入茫茫夜色，只余尘土飞扬",
+      "ff_desc": "别庄大门洞开，马车停在门口，张十三坐车夫座，听香在车厢内",
+      "lf_desc": "马车已远去，消失在茫茫夜色中，只余尘土与月光",
+      "context_bridge": "承接上镜张十三支开佃仆，吩咐赶马车，一柱香后驾车离开。",
+      "audio_cue": "人声：无；音效：马蹄声急促，车轮辘辘，大门吱呀声；背景音乐：低沉压抑的弦乐渐弱，留白",
+      "fx_effect": "尘土飞扬，月光洒落",
+      "color_tone": "冷蓝与暗黑",
+      "cam_idx": 1,
+      "clip_transition": "淡出黑场，0.5s；淡入淡出，镜头拉远，自然过渡，转场时长0.5s",
+      "duration_sec": 5.0,
+      "variation_type": "large",
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "张十三",
+            "on_screen": true,
+            "position": "画中",
+            "pose": "坐车夫座",
+            "gaze_target": "画前",
+            "props": [
+              "马鞭"
+            ]
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画右车厢",
+            "pose": "坐姿",
+            "gaze_target": "画下",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画右车厢",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": []
+          }
+        ],
+        "lf": [
+          {
+            "name": "张十三",
+            "on_screen": false,
+            "position": "画外",
+            "pose": "驾车远去",
+            "gaze_target": "无",
+            "props": []
+          },
+          {
+            "name": "听香",
+            "on_screen": false,
+            "position": "画外",
+            "pose": "坐姿",
+            "gaze_target": "无",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": false,
+            "position": "画外",
+            "pose": "仰卧",
+            "gaze_target": "无",
+            "props": []
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画中",
+              "pose": "坐车夫座",
+              "gaze_target": "画前",
+              "props": [
+                "马鞭"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画中",
+              "pose": "驾车",
+              "gaze_target": "画前",
+              "props": [
+                "马鞭"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "张十三",
+              "on_screen": false,
+              "position": "画外",
+              "pose": "驾车远去",
+              "gaze_target": "无",
+              "props": []
+            }
+          ]
+        ]
+      },
+      "keyframes": [
+        {
+          "desc": "别庄大门洞开，马车停在门口，张十三坐车夫座，听香在车厢内",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "张十三驾辕驱马，马车疾驰而出，迅速远去",
+          "stage": "approach",
+          "t_sec": 2.5
+        },
+        {
+          "desc": "马车已远去，消失在茫茫夜色中，只余尘土与月光",
+          "stage": "exit",
+          "t_sec": 4.5
+        }
+      ],
+      "content": "",
+      "camera_movement": "固定机位",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 5.0,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [
+        {
+          "name": "张十三",
+          "position": "画中",
+          "facing": "坐车夫座",
+          "role": "主",
+          "surface": ""
+        },
+        {
+          "name": "听香",
+          "position": "画右车厢",
+          "facing": "坐姿",
+          "role": "次",
+          "surface": "车厢内"
+        },
+        {
+          "name": "杨旭",
+          "position": "画右车厢",
+          "facing": "仰卧",
+          "role": "次",
+          "surface": "车厢内"
+        }
+      ],
+      "timecode": {
+        "start": 72.02,
+        "end": 77.02
+      },
+      "core_keywords": [
+        "张十三驾马车连夜离开",
+        "别庄大门",
+        "洞开",
+        "马车停在",
+        "门口"
+      ],
+      "keyframe_sample_count": 3,
+      "movement_speed_multiplier": 0.3,
+      "blank_hold_duration": 1.5
+    }
+  ],
+  "hook": {
+    "index": 0,
+    "narration_segment": "",
+    "subtitle": "",
+    "scene": "照月湾夜刺",
+    "location": "照月湾小舟",
+    "main_subject": "刺客从水中跃出刺杀杨旭",
+    "core_keywords": [
+      "月夜",
+      "荷花",
+      "小舟",
+      "刺客",
+      "匕首",
+      "寒光"
+    ],
+    "fx_effect": "水花四溅，涟漪扩散，月光碎影",
+    "audio_cue": "水花破开声，匕首刺入声，闷哼声",
+    "mask_area": "无",
+    "color_tone": "冷蓝月光，暖黄船灯，暗红血痕",
+    "clip_transition": "硬切",
+    "cam_idx": 1,
+    "variation_type": "large",
+    "frame_layouts": {
+      "ff": [
+        {
+          "name": "刺客",
+          "on_screen": true,
+          "position": "画右前景",
+          "pose": "半身探出水面，右手高举匕首",
+          "gaze_target": "杨旭",
+          "props": [
+            "匕首"
+          ]
+        },
+        {
+          "name": "杨旭",
+          "on_screen": true,
+          "position": "画左中景",
+          "pose": "仰卧船头，左手持钓杆",
+          "gaze_target": "刺客",
+          "props": [
+            "钓杆"
+          ]
+        },
+        {
+          "name": "听香",
+          "on_screen": true,
+          "position": "画左后景",
+          "pose": "跪坐舱中，双手撑地",
+          "gaze_target": "刺客",
+          "props": []
+        }
+      ],
+      "lf": [
+        {
+          "name": "刺客",
+          "on_screen": false,
+          "position": "画右前景",
+          "pose": "已没入水中，不见踪影",
+          "gaze_target": "无",
+          "props": []
+        },
+        {
+          "name": "杨旭",
+          "on_screen": true,
+          "position": "画左中景",
+          "pose": "仰卧船头，胸口暗红洇痕，左手垂落",
+          "gaze_target": "无",
+          "props": []
+        },
+        {
+          "name": "听香",
+          "on_screen": true,
+          "position": "画左后景",
+          "pose": "跪坐舱中，双手捂嘴，双眼圆睁",
+          "gaze_target": "杨旭",
+          "props": []
+        }
+      ],
+      "kfs": [
+        [
+          {
+            "name": "刺客",
+            "on_screen": true,
+            "position": "画右前景",
+            "pose": "半身探出水面，右手高举匕首",
+            "gaze_target": "杨旭",
+            "props": [
+              "匕首"
+            ]
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画左中景",
+            "pose": "仰卧船头，左手持钓杆",
+            "gaze_target": "刺客",
+            "props": [
+              "钓杆"
+            ]
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画左后景",
+            "pose": "跪坐舱中，双手撑地",
+            "gaze_target": "刺客",
+            "props": []
+          }
+        ],
+        [
+          {
+            "name": "刺客",
+            "on_screen": true,
+            "position": "画右前景",
+            "pose": "半身探出水面，右手持匕首刺向杨旭胸口",
+            "gaze_target": "杨旭",
+            "props": [
+              "匕首"
+            ]
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画左中景",
+            "pose": "仰卧船头，胸口被匕首刺中，左手松开钓杆",
+            "gaze_target": "刺客",
+            "props": []
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画左后景",
+            "pose": "跪坐舱中，双手捂嘴，双眼圆睁",
+            "gaze_target": "杨旭",
+            "props": []
+          }
+        ],
+        [
+          {
+            "name": "刺客",
+            "on_screen": false,
+            "position": "画右前景",
+            "pose": "已没入水中，不见踪影",
+            "gaze_target": "无",
+            "props": []
+          },
+          {
+            "name": "杨旭",
+            "on_screen": true,
+            "position": "画左中景",
+            "pose": "仰卧船头，胸口暗红洇痕，左手垂落",
+            "gaze_target": "无",
+            "props": []
+          },
+          {
+            "name": "听香",
+            "on_screen": true,
+            "position": "画左后景",
+            "pose": "跪坐舱中，双手捂嘴，双眼圆睁",
+            "gaze_target": "杨旭",
+            "props": []
+          }
+        ]
+      ]
+    },
+    "ff_desc": "月夜，一叶小舟浮于荷花丛中，杨旭仰卧船头，左手持钓杆，右手提酒壶，听香跪坐舱中，画右水面破开，神秘人半身探出，右手高举匕首，刀尖朝下，直指杨旭胸口",
+    "lf_desc": "神秘人已没入水中，水面只剩剧烈涟漪，杨旭仰卧船头，胸口素白袍上暗红洇痕，左手无力垂落，钓杆滑入水中，听香跪坐舱中，双手捂嘴，双眼圆睁。",
+    "motion_desc": "神秘人从水中跃出，右手匕首刺中杨旭胸口，随即拔刀倒纵入水，水花四溅，涟漪扩散，杨旭闷哼一声，左手松开钓杆，钓杆滑落水中。",
+    "keyframes": [
+      {
+        "desc": "月夜，一叶小舟浮于荷花丛中，杨旭仰卧船头，左手持钓杆，右手提酒壶，听香跪坐舱中。画右水面破开，刺客半身探出，右手高举匕首，刀尖朝下，直指杨旭胸口。",
+        "stage": "approach",
+        "t_sec": 0.8
+      },
+      {
+        "desc": "刺客右手匕首刺入杨旭胸口，杨旭闷哼一声，左手松开钓杆，钓杆滑落，听香跪坐舱中，双手捂嘴，双眼圆睁。",
+        "stage": "climax",
+        "t_sec": 2.4
+      },
+      {
+        "desc": "刺客已没入水中，水面只剩剧烈涟漪，杨旭仰卧船头，胸口素白袍上暗红洇痕，左手无力垂落，钓杆滑入水中，听香跪坐舱中，双手捂嘴，双眼圆睁。",
+        "stage": "after",
+        "t_sec": 4.0
+      }
+    ],
+    "context_bridge": "开场钩子，倒叙展示刺客刺杀瞬间，随后淡出黑场进入正片。",
+    "prompt": "月夜，一叶小舟浮于荷花丛中，杨旭仰卧船头，左手持钓杆，右手提酒壶，听香跪坐舱中。画右水面破开，神秘人半身探出，右手高举匕首，刀尖朝下，直指杨旭胸口。冷蓝月光，暖黄船灯，水花四溅，涟漪扩散",
+    "is_hook": true,
+    "char_layout": [
+      {
+        "name": "刺客",
+        "position": "画右前景",
+        "facing": "半身探出水面，右手高举匕首",
+        "role": "主",
+        "surface": "水面"
+      },
+      {
+        "name": "杨旭",
+        "position": "画左中景",
+        "facing": "仰卧船头，左手持钓杆",
+        "role": "次",
+        "surface": "船头"
+      },
+      {
+        "name": "听香",
+        "position": "画左后景",
+        "facing": "跪坐舱中，双手撑地",
+        "role": "次",
+        "surface": ""
+      }
+    ],
+    "duration": 4.0,
+    "duration_sec": 4.0,
+    "timecode": {
+      "start": 0.0,
+      "end": 4.0
+    }
+  },
+  "total_duration": 77.02,
+  "style": "",
+  "narration": "听香道：啊…啊…救命啊…张十三道：公子，公子？听香姑娘，出了什么事？张十三道：死了？杨旭竟然死了！三年苦心栽培，大计刚刚有点希望，他竟然死了？张十三道：凶手是谁，如何击杀了公子，快说！张十三道：公子离奇遇刺，船上却只有你一人，你又说不出个所以然来张十三道：只说少爷是被人所击，谁会信你？这场官司打到官府里，你便休想脱身了张十三道：没什么事…公子爷吃醉了酒，险些跌落水中，所以惊得听香姑娘尖叫起来",
+  "resolution": "1440*2560",
+  "ratio": "9:16",
+  "fps": 24,
+  "render_style": "古风真人",
+  "global_lighting": "电影质感，暗调低饱和，光源随场景（白天日光/夜晚烛火灯笼）",
+  "global_camera_base": "浅景深，支持缓慢向前推镜，推镜速度约 0.3 倍常规",
+  "global_weather": "酷暑燥热",
+  "global_atmosphere": "燥热慵懒感，空气蒸腾扭曲，金色扬尘弥漫",
+  "negative_prompt": "动漫风格、动画、2D渲染、卡通脸、卡通人物、三头身、Q版、动漫脸、画风突变、畸形五官、异形船只、四叶草、现代服装、现代建筑、现代楼房、水泥建筑、玻璃幕墙、电线杆、汽车、摩托车、现代设施、3D渲染、塑料质感、English text, watermark, logo, English speech、画面字幕、中文文字、水印、过曝高光、赛博荧光、西式建筑、机械齿轮",
+  "shot_count": 11,
+  "timeline": [
+    {
+      "index": 0,
+      "is_hook": true,
+      "start": 0.0,
+      "end": 4.0,
+      "duration": 4.0,
+      "effective_duration": 4.0,
+      "variation_type": "large",
+      "keyframe_sample_count": 3,
+      "movement_speed_multiplier": 0.3,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 1,
+      "start": 4.0,
+      "end": 9.0,
+      "duration": 5.0,
+      "effective_duration": 5.0,
+      "variation_type": "medium",
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 2,
+      "start": 9.0,
+      "end": 15.0,
+      "duration": 6.0,
+      "effective_duration": 6.0,
+      "variation_type": "medium",
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 3,
+      "start": 15.0,
+      "end": 20.0,
+      "duration": 5.0,
+      "effective_duration": 5.0,
+      "variation_type": "large",
+      "keyframe_sample_count": 3,
+      "movement_speed_multiplier": 0.3,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 4,
+      "start": 20.0,
+      "end": 25.0,
+      "duration": 5.0,
+      "effective_duration": 5.0,
+      "variation_type": "medium",
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 5,
+      "start": 25.0,
+      "end": 30.88,
+      "duration": 5.88,
+      "effective_duration": 5.88,
+      "variation_type": "medium",
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 6,
+      "start": 30.88,
+      "end": 40.76,
+      "duration": 9.88,
+      "effective_duration": 9.88,
+      "variation_type": "medium",
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 7,
+      "start": 40.76,
+      "end": 46.14,
+      "duration": 5.38,
+      "effective_duration": 5.38,
+      "variation_type": "medium",
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 8,
+      "start": 46.14,
+      "end": 53.76,
+      "duration": 7.62,
+      "effective_duration": 7.62,
+      "variation_type": "medium",
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 9,
+      "start": 53.76,
+      "end": 63.14,
+      "duration": 9.38,
+      "effective_duration": 9.38,
+      "variation_type": "medium",
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 10,
+      "start": 63.14,
+      "end": 72.02,
+      "duration": 8.88,
+      "effective_duration": 8.88,
+      "variation_type": "large",
+      "keyframe_sample_count": 3,
+      "movement_speed_multiplier": 0.3,
+      "blank_hold_duration": 1.5
+    },
+    {
+      "index": 11,
+      "start": 72.02,
+      "end": 77.02,
+      "duration": 5.0,
+      "effective_duration": 5.0,
+      "variation_type": "large",
+      "keyframe_sample_count": 3,
+      "movement_speed_multiplier": 0.3,
+      "blank_hold_duration": 1.5
+    }
+  ],
+  "total_effective_duration": 77.02,
+  "scene_objects": {
+    "照月湾小舟": {
+      "category": "船",
+      "subtype": "窄身无篷舴艋舟",
+      "length_m": 7.0,
+      "width_m": 1.5,
+      "height_m": 0.5,
+      "capacity": "可容3-4人 + 炭炉、酒菜、食具、钓具、油纸伞等",
+      "structure": "船头/中舱/船梢三段；船头可盘膝坐、仰卧垂钓，中舱敞舱可生炭炉烹煮、摆酒菜，船梢收窄可容一人站立",
+      "consistent_terms": [
+        "一叶小舟",
+        "叶小舟",
+        "小舟",
+        "小船",
+        "小船儿",
+        "照月湾小舟",
+        "照月湾窄身无篷舴艋小舟",
+        "照月湾窄身无篷舴艋舟",
+        "窄身小舟",
+        "窄身无篷舴艋舟",
+        "窄身舴艋舟",
+        "舟中",
+        "舴艋舟",
+        "船上",
+        "身下那叶小舟",
+        "这叶小舟",
+        "这条舴艋舟",
+        "那叶小舟",
+        "那条小船"
+      ]
+    },
+    "杨府马车": {
+      "category": "车",
+      "subtype": "两轮轻便马车",
+      "length_m": 4.5,
+      "width_m": 1.8,
+      "height_m": 2.2,
+      "capacity": "可容杨旭（躺放）、听香乘坐，张十三驾辕，另可存放少量行李",
+      "structure": "单马两轮，车厢前部为车夫座，后部为封闭车厢，车厢内可安放躺卧人员与一位坐姿乘客",
+      "consistent_terms": [
+        "两轮轻便马车",
+        "公子的马车",
+        "公子马车",
+        "杨家的马车",
+        "杨家马车",
+        "杨府两轮轻便马车",
+        "杨府轻便马车",
+        "杨府马车",
+        "这辆马车",
+        "那辆马车",
+        "马车"
+      ]
+    },
+    "照月湾": {
+      "category": "其它",
+      "subtype": "乡野天然水湾",
+      "length_m": 50.0,
+      "width_m": 30.0,
+      "height_m": 6.0,
+      "capacity": "可容纳多叶小舟穿行，遍植荷花，周边有柳树、桑椹树",
+      "structure": "弥河支流形成的天然水湾，湾中遍植荷花，岸侧有老柳探向湖面，与杨府别庄湾堤相接",
+      "consistent_terms": [
+        "一叶小舟",
+        "乡下别庄",
+        "云河镇照月湾",
+        "别庄",
+        "小船",
+        "杨家别业",
+        "杨府别业",
+        "杨府别庄",
+        "水湾",
+        "湖",
+        "湖上",
+        "湖面",
+        "照月湾",
+        "照月湾小舟",
+        "窄身小舟",
+        "自家庄子",
+        "舴艋舟"
+      ]
+    },
+    "杨府别庄": {
+      "category": "院落",
+      "subtype": "乡居避暑别业",
+      "length_m": 60.0,
+      "width_m": 40.0,
+      "height_m": 6.0,
+      "capacity": "可住主人、家眷、佃仆、伴当等数十人，有房屋、院落、湾堤，与照月湾相连",
+      "structure": "临照月湾而建，有大门、主屋、佃仆居所，湾堤与水湾相接，湾堤旁设值守房舍，周边有田地、桑椹树；大门可通行马车",
+      "consistent_terms": [
+        "乡下别庄",
+        "云河镇杨府别庄",
+        "别庄",
+        "庄子",
+        "庄院",
+        "杨家别业",
+        "杨府别庄",
+        "自家别庄"
+      ]
+    }
+  },
+  "scene_assets": {
+    "云河镇": {
+      "location": "青州云河镇镇内土街及镇中低洼空地",
+      "time_of_day": "盛夏正午至黄昏",
+      "weather": "晴，热浪蒸腾，空气扭曲",
+      "color_tone": "暖金焦褐，暗调低饱和，金色扬尘",
+      "wide_desc": "超广角全景建立镜头，画面中不得出现人物。展现云河镇盛夏的镇街整体风貌，前景是干裂翻卷着巴掌大卷边土皮的低洼土街，热浪在路面微微蒸腾扭曲，金色扬尘漂浮在空气里；中景是低矮土墙与木构民居，屋檐低垂，柳荫稀疏；远景是镇口老柳树与郊野田埂，半轮红日垂于天际。整体色调为暖金焦褐，空气透视强烈，蝉鸣聒噪，一派盛夏干旱景象。",
+      "near_desc": "与大场景属于同一个地点，位于云河镇镇口老柳树下及低洼土路旁。近景功能场景为镇口老柳树下的阴凉空地，龟裂土皮卷起如瓦，热浪在路面蒸腾，柳枝低垂，树影斑驳；土路旁有田埂延伸向郊野，可供人牵牛行走。黄昏时夕阳从西侧低角度照射，拉长树影，整体保持暖金焦褐色调与热浪扭曲的空气质感，与大场景同一季节、时间、天气与光线方向，画面中不得出现人物。",
+      "consistent_terms": [
+        "云河镇",
+        "镇中低洼土路",
+        "镇口老柳树下",
+        "云河镇低洼路面",
+        "云河镇街",
+        "云河镇街路",
+        "云河镇街面",
+        "低洼空地",
+        "土街",
+        "大柳树",
+        "镇中低洼空地",
+        "镇口",
+        "镇街",
+        "云河镇郊野",
+        "云河镇郊野田埂",
+        "土路",
+        "田埂",
+        "田埂小路",
+        "郊野",
+        "郊野土路"
+      ]
+    },
+    "照月湾": {
+      "location": "青州云河镇杨府别业照月湾荷花丛水面",
+      "time_of_day": "盛夏黄昏至深夜",
+      "weather": "黄昏余晖似雾，入夜后弦月斜挂、星光闪烁",
+      "color_tone": "暖金色余晖过渡至冷蓝色月光，水面泛金光转银光",
+      "wide_desc": "超广角俯瞰全景建立镜头，画面中不得出现人物。展现青州云河镇外杨府别业照月湾整体风貌，五六亩水面遍植碧绿荷叶，白荷与莲蓬错落其间，水面零星浮着细碎浮萍；一叶窄身无篷舴艋舟静泊于荷花丛间，船身长七米宽约一米五，可容数人。远处岸线隐约可见杨府别庄青瓦木构的屋脊与门楼剪影，更远处是低矮田埂与郊野土路。黄昏时暖金色余晖从画左斜照，水面泛金光；入夜后冷蓝色月光从画上方洒落，水面泛银光，弦月倒影碎于涟漪间。",
+      "near_desc": "与大场景属于同一个地点，位于照月湾荷花丛中的小舟内部及近旁水面。无篷舴艋舟宽约一米四，船板平整可容三人活动，船头船尾留有操作空间。四周碧绿荷叶高过船舷，白荷与莲蓬触手可及，水面浮萍随波轻荡。冷蓝色月光从画上方洒落，水面泛银光，船侧水面因扰动而涟漪震荡，摇碎一湾弦月倒影。远处岸上杨府别庄窗棂透出暖黄灯光，与冷蓝月光形成微弱对比。",
+      "consistent_terms": [
+        "小舟",
+        "小舟船舷边",
+        "无篷舴艋舟",
+        "柳树",
+        "水下荷根处",
+        "照月湾",
+        "田埂",
+        "碧荷",
+        "老柳",
+        "舴艋舟",
+        "荷丛",
+        "荷花丛",
+        "荷花湾",
+        "荷间小舟",
+        "荷间水面",
+        "一叶小舟",
+        "小舟上",
+        "小舟船头",
+        "扁舟",
+        "无篷小船",
+        "杨府别业水湾",
+        "水湾荷丛",
+        "照月湾·舟上",
+        "照月湾小舟",
+        "照月湾水湾小舟",
+        "照月湾水面小舟",
+        "照月湾湖心",
+        "照月湾荷塘",
+        "照月湾荷塘小舟上",
+        "照月湾荷花丛中",
+        "照月湾荷花荡",
+        "照月湾荷花间",
+        "窄身无篷舴艋舟",
+        "荷塘",
+        "荷塘小舟",
+        "荷塘扁舟",
+        "荷塘水面",
+        "荷塘泛舟",
+        "荷塘边",
+        "荷田",
+        "荷花丛中",
+        "荷花丛中小舟",
+        "荷花丛中舴艋舟",
+        "荷花湾小舟",
+        "荷花荡",
+        "荷花荡中的舴艋舟",
+        "别庄岸堤",
+        "别庄房屋前",
+        "土路",
+        "岸上",
+        "岸上房屋门前",
+        "岸上湾堤",
+        "岸边",
+        "岸边屋舍",
+        "岸边房屋",
+        "岸边房屋前",
+        "岸边柳树下",
+        "房屋前",
+        "杨府别庄湾堤",
+        "湾堤",
+        "湾堤上",
+        "湾堤房屋",
+        "湾岸田埂",
+        "湾边田埂",
+        "照月湾岸边",
+        "田埂岸边",
+        "荷塘岸边",
+        "郊野土路",
+        "水湾",
+        "照月湾水湾",
+        "照月湾水面",
+        "照月湾田埂",
+        "照月湾荷花丛",
+        "荷丛小舟",
+        "照月湾湾堤",
+        "云河镇杨府别业水湾",
+        "白荷"
+      ]
+    },
+    "出村官道": {
+      "location": "云河镇外的官道上，通往夜色深处",
+      "time_of_day": "深夜",
+      "weather": "冷蓝月色，夜色浓重",
+      "color_tone": "冷蓝夜色，土石路面，两侧低矮灌木剪影",
+      "wide_desc": "超广角全景建立镜头，画面中不得出现人物。深夜冷蓝月色下，一条两轮马车驶过的官道延伸向远方黑暗。官道为土石路面，两侧是低矮灌木与田野剪影，远处地平线消失于浓重夜色。",
+      "near_desc": "与大场景属于同一个地点。近景功能场景为官道上的行车路面，宽约4米，可容两轮马车通行。路面为土石压实，车辙痕迹隐约可见，两侧灌木低矮，月光下投下稀疏阴影。",
+      "consistent_terms": [
+        "出村官道",
+        "土石路面",
+        "夜色",
+        "官道"
+      ]
+    },
+    "杨府别庄": {
+      "location": "青州云河镇杨府别庄大门内外及前厅",
+      "time_of_day": "深夜",
+      "weather": "冷蓝色月光，夜色浓重",
+      "color_tone": "冷蓝夜色，朱门暖灯，青瓦木构",
+      "wide_desc": "超广角全景建立镜头，画面中不得出现人物。展现云河镇杨府别庄大门及前厅的整体风貌，青瓦木构门楼飞檐翘角矗立在照月湾一侧，两扇朱漆大门洞开，门旁立着两尊石狮子，门槛外是青石板路延伸向夜色深处。门楼内可见前厅轮廓，深色实木梁柱与木格门窗构成主体框架，地面铺着青灰色石砖，厅中陈设隐约可见。冷蓝色月光从画上方洒落，门楼檐下灯笼暖光映照朱门，夜色中马车扬尘未散，气氛凝重。",
+      "near_desc": "与大场景属于同一个地点，为杨府别庄大门内外的近景功能场景。大门洞开，门洞宽可容一辆两轮轻便马车（长4.5米、宽1.8米、高2.2米）疾驰而出，门槛高约一尺，门内前厅地面铺青灰色石砖，厅中深色实木梁柱与木格门窗构成主体框架，檐下廊前可容人站立或行走。冷蓝色月光从画上方洒落，门旁石狮子投下阴影，灯笼暖光在门洞内形成明暗对比，地面石砖反射微光。",
+      "consistent_terms": [
+        "前厅",
+        "大门",
+        "大门内影壁前",
+        "大门外阶前",
+        "杨府别庄",
+        "湾堤",
+        "石狮子",
+        "内院",
+        "别庄内院",
+        "厅房",
+        "杨府别庄内院",
+        "别庄前厅",
+        "庄内厅堂",
+        "廊柱",
+        "木格门窗",
+        "杨府别庄前厅",
+        "檐下廊前",
+        "云河镇杨府别庄大门",
+        "云河镇杨府别庄大门外",
+        "别庄大门",
+        "别庄大门内",
+        "别庄大门外",
+        "别庄大门外水边",
+        "别庄门前",
+        "别庄门口",
+        "别庄门楼",
+        "大门外",
+        "大门外道路",
+        "大门外青瓦门楼",
+        "庄门",
+        "朱漆大门",
+        "朱漆门",
+        "杨府别庄前门",
+        "杨府别庄大门",
+        "杨府别庄大门外",
+        "杨府别庄门前",
+        "杨府别庄门前大道",
+        "门内暖黄灯盏光",
+        "门楼",
+        "青石板路",
+        "岸边",
+        "房屋",
+        "杨府别庄湾堤",
+        "照月湾",
+        "照月湾岸边",
+        "田埂"
+      ]
+    }
+  },
+  "prop_assets": {
+    "玉箫": {
+      "category": "乐器",
+      "appearance": "天然竹制，长约45厘米，直径约2.5厘米，表面保留竹节纹理，浅黄褐色，吹口处有轻微磨损和包浆，音孔边缘圆润，整体素雅无装饰。",
+      "consistent_terms": [
+        "玉箫",
+        "竹箫"
+      ]
+    },
+    "油纸伞": {
+      "category": "雨具",
+      "appearance": "古风油纸伞，伞面为淡青色桐油纸，伞骨为竹制，伞柄为木质，伞面有轻微使用痕迹和细密裂纹，边缘略有磨损，整体素雅。",
+      "consistent_terms": [
+        "油纸伞"
+      ]
+    },
+    "步摇": {
+      "category": "首饰",
+      "appearance": "翠绿玉质步摇，簪杆细长，顶端缀有数片薄玉叶片，雕云纹，叶片边缘有轻微磕碰痕迹，整体精致但带有使用旧感。",
+      "consistent_terms": [
+        "步摇"
+      ]
+    },
+    "舴艋舟": {
+      "category": "交通工具",
+      "appearance": "窄身无篷舴艋舟，木质船体，长约7米，宽约1.5米，可容3人。船身深褐色，有使用磨损和水渍痕迹，船沿有磕碰和旧伤，船底微有青苔，整体轻便古旧。",
+      "consistent_terms": [
+        "舴艋舟",
+        "无篷舴艋舟"
+      ]
+    },
+    "钓杆": {
+      "category": "渔具",
+      "appearance": "竹制钓杆，长约3米，杆身细长，浅黄褐色，表面有竹节纹理和轻微磨损，杆梢系有细线，线端带鱼钩，整体朴素。",
+      "consistent_terms": [
+        "钓杆"
+      ]
+    },
+    "酒壶": {
+      "category": "器物",
+      "appearance": "陶瓷酒壶，小口细颈，圆腹，底部略收，壶身施青釉，釉面有细碎开片纹，壶嘴和壶柄处有轻微磨损，整体古朴。",
+      "consistent_terms": [
+        "酒壶"
+      ]
+    },
+    "灯盏": {
+      "category": "器物",
+      "appearance": "铜质灯盏，浅碗形，盏口略外撇，盏心有灯芯，盏身有铜绿锈迹和磨损痕迹，整体古旧。",
+      "consistent_terms": [
+        "灯盏"
+      ]
+    },
+    "灯笼": {
+      "category": "器物",
+      "appearance": "纸质灯笼，圆形，竹骨纸面，纸面为暖黄色，有轻微褶皱和污渍，顶部有提绳，底部有木座，整体朴素。",
+      "consistent_terms": [
+        "灯笼"
+      ]
+    },
+    "叉子粪铲": {
+      "category": "农具",
+      "appearance": "农用叉子粪铲，木柄铁头，铁头为三齿叉状，木柄深褐色有磨损，铁头有锈迹和泥土痕迹，整体粗重。",
+      "consistent_terms": [
+        "叉子粪铲"
+      ]
+    },
+    "马车": {
+      "category": "交通工具",
+      "appearance": "两轮轻便马车，木质车体，长约4.5米，宽约1.8米，高约2.2米，车身为深褐色，有漆面剥落和划痕，车轮为木制，轮毂有铁箍，车辕为单马拉行，车帘低垂，整体结实但显旧。",
+      "consistent_terms": [
+        "马车",
+        "两轮轻便马车"
+      ]
+    },
+    "平定四方巾": {
+      "category": "头饰",
+      "appearance": "古风男子软帽，方形帽顶，四周垂布角，深蓝色布面，略有褶皱和磨损，顶部有系绳结扣，整体儒雅旧态。",
+      "consistent_terms": [
+        "平定四方巾",
+        "平定"
+      ]
+    },
+    "竹箫": {
+      "category": "乐器",
+      "appearance": "天然竹制，长约45厘米，直径约2.5厘米，表面保留竹节纹理，浅黄褐色，吹口处有轻微磨损和包浆，音孔边缘圆润，整体素雅无装饰。",
+      "consistent_terms": [
+        "洞箫",
+        "玉箫",
+        "竹笛",
+        "竹箫",
+        "箫",
+        "青竹箫"
+      ]
+    },
+    "刺客匕首": {
+      "category": "武器",
+      "appearance": "寒光匕首，刀身狭长，银白色金属，刀刃锋利，刀柄缠有黑色粗布，刀身有细微划痕，整体冷峻，刀尖处轻微磨损。",
+      "consistent_terms": [
+        "冷刃",
+        "刀",
+        "刀尖",
+        "利刃",
+        "刺客匕首",
+        "匕首",
+        "单刃",
+        "寒光",
+        "寒光利刃",
+        "寒光匕首",
+        "寒光短刃",
+        "短刀",
+        "短刃",
+        "短匕",
+        "窄刃短刀",
+        "银白色匕首"
+      ]
+    },
+    "农具": {
+      "category": "农具",
+      "appearance": "农用叉子粪铲，木柄铁头，铁头为三齿叉状，木柄深褐色有磨损，铁头有锈迹和泥土痕迹，整体粗重。",
+      "consistent_terms": [
+        "农具",
+        "叉子粪铲"
+      ]
+    }
+  },
+  "chapter_index": 1,
+  "chapter_title": "溪上何人品玉箫",
+  "book_name": "杀青州",
+  "volume_label": "第一部 杀青州",
+  "source_hash": "258aada39ffe5bba",
+  "script_revision": "6236ef931396b7cf4c0af8ab9a26b44d9ff3d7e7943f1def32951e1693e3aab5"
+}

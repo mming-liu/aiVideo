@@ -1,0 +1,459 @@
+{
+  "input_revision": "0fe1f2b27b3cb4de63b61441334a5bddc0fc1e09c421c927b33f6e6dca3541b9",
+  "rule_version": "2026-09-23.4",
+  "rule_source_fingerprint": "9d2586ca00dfde01",
+  "prompt_source_fingerprint": "a11f826a6a137f04",
+  "audit_scope": "final_after_deterministic_fixes",
+  "audit_prompt_version": "6bb99412bda5",
+  "audit_focus_version": "066a87e6da63",
+  "audit_temperature": 0.0,
+  "run_id": "20260925T175311-34420",
+  "status": "ok",
+  "model": "deepseek-flash",
+  "channel_provider": "deepseek",
+  "schema_deviations": [],
+  "usage": {
+    "input_tokens": 18105,
+    "output_tokens": 13653,
+    "reasoning_tokens": 10721,
+    "total_tokens": 31758
+  },
+  "error": "",
+  "issues": [
+    {
+      "code": "model_audit_PROP_STATE_PERSIST",
+      "severity": "visual_risk",
+      "message": "钓杆在死亡后仍持续存在于杨旭身上，与原文道具释放事实矛盾；建议：删除lf中'左手钓杆无力垂在船舷'，并同步清除3-10镜杨旭props中的'钓杆'",
+      "shot_id": "3",
+      "frame_id": "lf",
+      "entity_id": "杨旭",
+      "field_path": "lf_desc",
+      "evidence": "原文'咬钩的肥鱼便拖着那钓杆急急逃走了'，钓杆应已离船；本镜lf仍写'左手钓杆无力垂在船舷'",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "3",
+          "field_path": "lf_desc"
+        },
+        {
+          "shot_id": "3",
+          "field_path": "frame_layouts.lf[0].props"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "frame_layouts.ff[1].props"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "frame_layouts.lf[1].props"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.ff[2].props"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.lf[2].props"
+        },
+        {
+          "shot_id": "6",
+          "field_path": "frame_layouts.ff[1].props"
+        },
+        {
+          "shot_id": "6",
+          "field_path": "frame_layouts.lf[1].props"
+        },
+        {
+          "shot_id": "7",
+          "field_path": "frame_layouts.ff[2].props"
+        },
+        {
+          "shot_id": "7",
+          "field_path": "frame_layouts.lf[2].props"
+        },
+        {
+          "shot_id": "8",
+          "field_path": "frame_layouts.ff[2].props"
+        },
+        {
+          "shot_id": "8",
+          "field_path": "frame_layouts.lf[2].props"
+        },
+        {
+          "shot_id": "9",
+          "field_path": "frame_layouts.ff[2].props"
+        },
+        {
+          "shot_id": "9",
+          "field_path": "frame_layouts.lf[2].props"
+        },
+        {
+          "shot_id": "10",
+          "field_path": "frame_layouts.ff[3].props"
+        },
+        {
+          "shot_id": "10",
+          "field_path": "frame_layouts.lf[3].props"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_KF_STATE_CONTRADICT",
+      "severity": "visual_risk",
+      "message": "丢灯→跃船的时序被倒置，画面自相矛盾；建议：kf3改为张十三已上船俯身查看、灯盏已丢，并清除kfs[2][0]的灯盏",
+      "shot_id": "5",
+      "frame_id": "kf3",
+      "entity_id": "张十三",
+      "field_path": "keyframes[2].desc",
+      "evidence": "kf3(4.5s)写'张十三举灯盏站立倾听'，但原文'急忙丢了灯盏，纵身一跃'，且kfs[1]已纵身跃起props为空",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "5",
+          "field_path": "keyframes[2].desc"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.kfs[2][0].props"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.kfs[2][0].pose"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_POSE_CONTRADICT",
+      "severity": "visual_risk",
+      "message": "捂嘴与张嘴尖叫互斥，且为无事件依据的动作补充；建议：去掉'双手捂嘴'，保留眼睛瞪大、张嘴尖叫",
+      "shot_id": "4",
+      "frame_id": "lf",
+      "entity_id": "听香",
+      "field_path": "lf_desc",
+      "evidence": "lf/kf2同时写'双手捂嘴'与'嘴巴张开…尖叫'，motion_desc只写伸手摸唇后尖叫，无捂嘴依据",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "4",
+          "field_path": "lf_desc"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "keyframes[1].desc"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "frame_layouts.lf[0].pose"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_TEXT_CORRUPT",
+      "severity": "advisory",
+      "message": "连续重复词句导致动作描述不可执行；建议：删除重复串，保留一次'嘴角平直，眉头微蹙，下颌微抬'",
+      "shot_id": "8",
+      "frame_id": "kf2",
+      "entity_id": "张十三",
+      "field_path": "motion_desc",
+      "evidence": "'语气眼神眼神眼神冰冷，嘴角平直，眉头微蹙，下颌微抬'连写三遍",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "8",
+          "field_path": "motion_desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_TEXT_CORRUPT",
+      "severity": "advisory",
+      "message": "动作时序不可读，分镜无法照此执行；建议：改为'听香身子一颤，眼睛瞪大、嘴巴张开，发出凄厉尖叫'",
+      "shot_id": "4",
+      "frame_id": "kf2",
+      "entity_id": "听香",
+      "field_path": "motion_desc",
+      "evidence": "'一声凄厉眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲的尖叫夺唇而出'语序断裂",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "4",
+          "field_path": "motion_desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_TEXT_CORRUPT",
+      "severity": "advisory",
+      "message": "面部动作重复且掺入内心描写，无法转化为画面；建议：精简为一次面部反应，删除'内心''眼神眉毛上扬'等重复项",
+      "shot_id": "6",
+      "frame_id": "kf2",
+      "entity_id": "张十三",
+      "field_path": "motion_desc",
+      "evidence": "'内心眉峰上扬，眼睛微睁，嘴角微张，眼神眉毛上扬，眼睛睁大，身体微顿愤懑'重复堆叠",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "6",
+          "field_path": "motion_desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_DIALOG_MISATTRIB",
+      "severity": "visual_risk",
+      "message": "隐瞒死讯的密谋被当众说出，听香在场，剧情逻辑崩塌；建议：改为画外内心独白或删除该句对白标注",
+      "shot_id": "6",
+      "frame_id": "lf",
+      "entity_id": "张十三",
+      "field_path": "narration_segment",
+      "evidence": "原文此段为张十三内心独白'三年苦心栽培，大计刚刚有点希望'，分镜写成'张十三道：…'",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "6",
+          "field_path": "narration_segment"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_TYPO",
+      "severity": "advisory",
+      "message": "错别字影响可读性与画面情绪指示；建议：'击气腾腾'改为'杀气腾腾'",
+      "shot_id": "7",
+      "frame_id": "ff",
+      "entity_id": "张十三",
+      "field_path": "ff_desc",
+      "evidence": "'击气腾腾地盯着听香'，6镜lf亦作'击气腾腾'",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "7",
+          "field_path": "ff_desc"
+        },
+        {
+          "shot_id": "7",
+          "field_path": "prompt"
+        },
+        {
+          "shot_id": "6",
+          "field_path": "lf_desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_TYPO",
+      "severity": "advisory",
+      "message": "凶器为短刃刺杀，'击杀'与原文事实不符；建议：'击杀了'改为'刺杀了'",
+      "shot_id": "7",
+      "frame_id": "lf",
+      "entity_id": "张十三",
+      "field_path": "narration_segment",
+      "evidence": "'凶手是谁，如何击杀了公子，快说！'原文为'如何刺杀了公子'",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "7",
+          "field_path": "narration_segment"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_TYPO",
+      "severity": "advisory",
+      "message": "与刺杀设定矛盾，削弱证词可信度；建议：'所击'改为'所刺'",
+      "shot_id": "9",
+      "frame_id": "lf",
+      "entity_id": "张十三",
+      "field_path": "narration_segment",
+      "evidence": "'只说少爷是被人所击'，原文为'只说少爷是被人所刺'",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "9",
+          "field_path": "narration_segment"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_KF_TIMING_CONTRADICT",
+      "severity": "advisory",
+      "message": "关键帧与动作时序冲突，老农位置前后矛盾；建议：kf3改为老农仍在田埂行走，'走远'留到lf",
+      "shot_id": "1",
+      "frame_id": "kf3",
+      "entity_id": "群演",
+      "field_path": "keyframes[2].desc",
+      "evidence": "kf3(t=4.0)写'老农已走远'，motion_desc却写'4-5秒：老农牵牛从远处田埂走过'",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "1",
+          "field_path": "keyframes[2].desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_STATE_CONTRADICT",
+      "severity": "advisory",
+      "message": "佃仆提前退场，与随后赶马车回城的因果链断裂；建议：改为佃仆哄笑应答后领命去赶马车，不写'退下'",
+      "shot_id": "10",
+      "frame_id": "lf",
+      "entity_id": "群演",
+      "field_path": "lf_desc",
+      "evidence": "lf/kf2写'佃仆们哄笑退下'，motion_desc写'七嘴八舌回应'，原文佃仆被留下赶马车",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "10",
+          "field_path": "lf_desc"
+        },
+        {
+          "shot_id": "10",
+          "field_path": "keyframes[1].desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_DESC_SELF_CONTRADICT",
+      "severity": "advisory",
+      "message": "准备态表情自相矛盾，无法确定听香状态；建议：删除'神色平静'，统一为惊恐状态",
+      "shot_id": "9",
+      "frame_id": "ff",
+      "entity_id": "听香",
+      "field_path": "ff_desc",
+      "evidence": "同一ff_desc先写'眼睛神色平静'，后又写'瞳孔收缩，嘴巴张开，面部肌肉扭曲'",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "9",
+          "field_path": "ff_desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_FUTURE_STATE_IN_PROMPT",
+      "severity": "advisory",
+      "message": "提示词提前呈现尾帧状态，与准备态冲突；建议：prompt改为杨旭左手持钓杆、右手提酒壶",
+      "shot_id": "2",
+      "frame_id": "ff",
+      "entity_id": "杨旭",
+      "field_path": "prompt",
+      "evidence": "prompt写'钓杆已脱手垂在湖面，酒壶已脱手'，而ff_desc为'左手持钓杆垂于湖面，右手提酒壶'",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "2",
+          "field_path": "prompt"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_TEXT_DUPLICATE",
+      "severity": "advisory",
+      "message": "提示词冗余，可能干扰生成；建议：各保留一处括注",
+      "shot_id": "3",
+      "frame_id": "ff",
+      "entity_id": "刺客",
+      "field_path": "prompt",
+      "evidence": "'（黑影是独立物体，不是从角色身上长出来的）'与'（寒光是独立物体…）'各连写两遍",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "3",
+          "field_path": "prompt"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_POSITION_JUMP",
+      "severity": "advisory",
+      "message": "相邻镜人物左右关系突跳，观众空间感断裂；建议：9镜ff/lf恢复张十三画左、听香画右",
+      "shot_id": "9",
+      "frame_id": "ff",
+      "entity_id": "张十三",
+      "field_path": "frame_layouts.ff[0].position",
+      "evidence": "8镜ff张十三画左、听香画右，9镜ff张十三画右、听香画左，中间无走位动作",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "9",
+          "field_path": "frame_layouts.ff[0].position"
+        },
+        {
+          "shot_id": "9",
+          "field_path": "frame_layouts.ff[1].position"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_EMPTY_FIELD",
+      "severity": "advisory",
+      "message": "关键帧人物姿态缺失，画面无法确定；建议：补为'举灯笼站立'",
+      "shot_id": "10",
+      "frame_id": "kf1",
+      "entity_id": "群演",
+      "field_path": "frame_layouts.kfs[0][1].pose",
+      "evidence": "kfs[0][1].pose为空字符串",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "10",
+          "field_path": "frame_layouts.kfs[0][1].pose"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_KF_TIMING_CONTRADICT",
+      "severity": "advisory",
+      "message": "关键帧与动作时序不符；建议：kf1改为小舟缓行、荷叶分开",
+      "shot_id": "1",
+      "frame_id": "kf1",
+      "entity_id": "杨旭",
+      "field_path": "keyframes[0].desc",
+      "evidence": "kf1(t=1.0)写'小舟静止于荷塘'，motion_desc写'前2秒：小舟缓缓前行'",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "1",
+          "field_path": "keyframes[0].desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_OFFSCREEN_POSE_RESIDUE",
+      "severity": "advisory",
+      "message": "离场人物残留姿态字段，易造成误渲染；建议：清空pose或删除该条目",
+      "shot_id": "1",
+      "frame_id": "lf",
+      "entity_id": "群演",
+      "field_path": "frame_layouts.lf[2].pose",
+      "evidence": "lf中群演on_screen=false，pose仍为'牵牛行走'",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "1",
+          "field_path": "frame_layouts.lf[2].pose"
+        }
+      ],
+      "repairable": true
+    }
+  ],
+  "created_at": "2026-09-25T17:56:08"
+}

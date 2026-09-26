@@ -60,6 +60,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 
 from step01_script_gen.cross_field_checks import (
@@ -548,6 +549,25 @@ def uncovered_holding_fields(script: dict, prop: str, prop_assets: dict,
 _ALLOWED_PATTERNS = ("motion_away", "marker_after")
 
 
+def prop_anchor_block_enabled() -> bool:
+    """道具候选短提示块是否注入生产提示：**默认关闭**.
+
+    用户 2026-09-25：两次诊断生成都没过验收（第一次写了释放但提前、布局不跟随；第二次
+    连释放都不写、持有铺到 42 帧），提示词路线**暂停**——生产默认**不注入**，
+    离线代码与取证保留；将来要复测时置 `STEP01_PROP_ANCHOR_BLOCK=1` 即可，
+    **不需要改代码**。
+    """
+    return str(os.environ.get("STEP01_PROP_ANCHOR_BLOCK", "")).strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def prop_anchor_block_for(outline: dict | None) -> str:
+    """生产注入唯一入口：关闭时返回**空串**（调用点无需各自判断开关）."""
+    if not prop_anchor_block_enabled():
+        return ""
+    return render_prop_anchor_block((outline or {}).get("prop_state_candidates"))
+
+
 def outline_prop_anchors(chapter_text: str, *, limit: int = 6) -> list:
     """大纲阶段随稿携带的道具状态候选（**只**取两种形状，带位置与待核实标记）.
 
@@ -619,6 +639,13 @@ _REL_STATE_UNKNOWN = "written_timing_unknown"
 _REL_STATE_EARLY = "written_before_cause"
 _REL_STATE_AT_CAUSE = "written_at_cause_frame"
 _REL_STATE_AFTER = "written_after_cause"
+
+# 「释放写在起因帧本身」时是否给清理清单：**诊断期保守规则，非永久禁止**。
+# 用户 2026-09-25：「同帧释放暂不给清单，我也同意作为诊断期的保守规则，但不应定为
+# 永久禁止——将来若能核实同帧内"先受创、后离手"的顺序，可以重新判定」。
+# 因此做成开关：将来有帧内顺序证据（分句先后 + 动作链可核对）时置 True 即可重判，
+# 不需要改动判定链本身。
+_SAME_FRAME_RELEASE_GIVES_ADVISORY = False
 
 
 def release_event_sequence(script: dict, anchor: dict, prop_assets: dict = None,
@@ -875,6 +902,192 @@ def pair_release_with_cause(chapter_text: str, candidate: dict) -> dict:
             "reason": ""}
 
 
+# v6.128（用户 2026-09-25 决定）：**离线事件关联**（**只报不判**，暂停继续扩展）
+#
+# 用户口径（原文）：
+#   · 「给原文的起因、释放事件保留可核对的位置和事件标识，再关联大纲节拍与
+#     稿件帧；关联不唯一就保持未知」；
+#   · 「3 句窗口继续只作诊断筛选，**不能替代**事件关联」；
+#   · 随后叫停扩展：「现在应暂停扩展这条离线链路，保留现有只读取证；**不要继续加
+#     事件 ID 或自动修复**」——原因是这条链路只提高了诊断严谨性，**尚未证明 Step01
+#     质量提升**，也**没有缩短运行时间**。
+#
+# 因此本节的产出**只作报告**：不参与 `locate_release()` / `precise_state_diff()` 的
+# 任何判据（已把先前加过的关联门禁撤回），也没有清理授权。
+# 已知不精确（**暂停在此，未修**）：节拍匹配用「公共子串 ≥4 字 or 关键词命中」，
+# 实测第 1 章起因事件会同时命中 beat_6 与 beat_8（后者靠很短的公共片段），
+# 要用于判据前必须先收紧阈值或换成事件关联。
+# ---------------------------------------------------------------------------
+def _longest_common_substring(a: str, b: str) -> int:
+    """两串最长公共子串长度（**朴素**实现：诊断规模下够用，无第三方依赖）."""
+    a, b = str(a or ""), str(b or "")
+    if not a or not b:
+        return 0
+    best = 0
+    # 滚动一维 DP：dp[j] = 以 b[j] 结尾的最长公共子串长度
+    prev = [0] * (len(b) + 1)
+    for i in range(1, len(a) + 1):
+        cur = [0] * (len(b) + 1)
+        for j in range(1, len(b) + 1):
+            if a[i - 1] == b[j - 1]:
+                cur[j] = prev[j - 1] + 1
+                best = max(best, cur[j])
+        prev = cur
+    return best
+
+
+def source_events(chapter_text: str, *, tokens=None) -> list:
+    """原文事件清单（带**可核对标识**与位置）：起因事件 + 释放候选事件.
+
+    `tokens` 给定时，释放事件只取点名该道具（写法集合）的那些；不给则取全部候选。
+
+    Returns `[{event_id, kind, evidence, sentence_index, char_start, char_end,
+    marker, keys}]`，`event_id` = `cause#N` / `release#N`（按原文出现顺序编号）。
+    """
+    out: list = []
+    for i, c in enumerate(cause_candidates(chapter_text or ""), start=1):
+        out.append({"event_id": f"cause#{i}", "kind": "cause",
+                    "evidence": c["evidence"], "sentence_index": c["sentence_index"],
+                    "char_start": c["char_start"], "char_end": c["char_end"],
+                    "marker": c["marker"], "keys": [c["marker"]]})
+    _cands, _skips = extract_release_candidates(chapter_text or "")
+    # 先对**全部**候选编号再按 `tokens` 过滤 —— 标识必须稳定：同一段原文，
+    # 换一个道具去查时同一条事件的 `event_id` 不能变。
+    for n, c in enumerate(_cands, start=1):
+        if tokens and c.get("noun") not in set(tokens):
+            continue
+        out.append({"event_id": f"release#{n}", "kind": "release",
+                    "evidence": c.get("evidence"), "sentence_index": c.get("sentence_index"),
+                    "char_start": c.get("char_start"), "char_end": c.get("char_end"),
+                    "marker": c.get("pattern"), "keys": [c.get("noun")]})
+    out.sort(key=lambda e: (e.get("char_start") if isinstance(e.get("char_start"), int)
+                            else 10 ** 9, e["event_id"]))
+    return out
+
+
+def outline_beats(outline: dict | None) -> list:
+    """大纲节拍清单（带可核对标识）：`[{beat_id, text, evidence}]`.
+
+    来源是大纲的 `shot_beats`（生成规则要求每条都带「原文依据」）；`beat_id` 按
+    列表顺序编号 `beat_1..n`。没有节拍时返回空表（**不做**任何补偿推导）。
+    """
+    out: list = []
+    for i, b in enumerate((outline or {}).get("shot_beats") or [], start=1):
+        _t = str(b or "").strip()
+        if not _t:
+            continue
+        _ev = ""
+        for _part in re.split(r"[｜|]", _t):
+            if "原文依据" in _part or "原文证据" in _part:
+                _ev = _part.strip()
+                break
+        out.append({"beat_id": f"beat_{i}", "text": _t, "evidence": _ev})
+    return out
+
+
+def associate_event_to_beats(event: dict, beats) -> dict:
+    """事件 ↔ 大纲节拍：`{"beat_ids", "methods"}`（命中 0 或 ≥2 条即不唯一）."""
+    _ids, _methods = [], {}
+    _ev = str(event.get("evidence") or "")
+    for b in beats or []:
+        _hay = b["text"] + " " + b["evidence"]
+        _hits = []
+        if _longest_common_substring(_ev, _hay) >= 4:
+            _hits.append("evidence_substring")
+        if any(k and k in _hay for k in (event.get("keys") or [])):
+            _hits.append("key_term")
+        if _hits:
+            _ids.append(b["beat_id"])
+            _methods[b["beat_id"]] = _hits
+    return {"beat_ids": _ids, "methods": _methods}
+
+
+def associate_event_to_draft(script: dict, event: dict, *, tokens=None) -> dict:
+    """事件 ↔ 稿件帧：`{"frames", "shots", "clauses", "method"}`（按帧序）.
+
+    起因事件的取帧方式：先按**该事件自己的**起因词（如「刺进」）找；一条都没有时
+    退回"稿件里任意起因词"的帧，并把 `method` 记为 `any_cause_marker`——**措辞不必
+    与原文逐字相同**（实测：原文写「刺进」、诊断稿写「刺入」），但这条退路更松，
+    必须让调用方看得见（用户：措辞匹配只是诊断用，生产接线要换成事件关联）。
+    """
+    if not script:
+        return {"frames": [], "shots": [], "clauses": [], "method": ""}
+    _frames: list = []
+    _method = ""
+    if event.get("kind") == "cause":
+        _marker = str(event.get("marker") or "")
+        for shot in _shots_in_order(script):
+            for fid in frame_ids(shot):
+                _clause = _first_clause_with(frame_text(shot, fid), (_marker,))
+                if _clause:
+                    _frames.append((shot.get("index"), fid, _clause))
+        _method = "marker_exact"
+        if not _frames:
+            _frames = [(c[0], c[1], c[2]) for c in cause_frames(script)]
+            _method = "any_cause_marker" if _frames else ""
+    else:
+        _tk = set(tokens or event.get("keys") or [])
+        _frames = _release_frames_for_tokens(script, _tk, after=None)
+        _method = "release_tokens" if _frames else ""
+    return {"frames": _frames, "shots": sorted({f[0] for f in _frames}, key=str),
+            "clauses": [f[2] for f in _frames], "method": _method}
+
+
+def event_association(chapter_text: str, *, outline: dict | None = None,
+                      script: dict | None = None, tokens=None) -> dict:
+    """**三方关联**：原文事件 → 大纲节拍 + 稿件帧；任一侧不唯一即 `unique=False`.
+
+    Returns `{"events": [...], "available": {"outline","draft"}, "n_events"}`，
+    每条事件含 `beat_ids` / `draft_shots` / `unique` / `reason`。
+
+    ⚠️ 本函数只产出**诊断**结论（用户 2026-09-25：只做离线事件关联，不接生产门）。
+    """
+    _events = source_events(chapter_text or "", tokens=tokens)
+    _beats = outline_beats(outline)
+    rows: list = []
+    for e in _events:
+        _b = associate_event_to_beats(e, _beats)
+        _d = associate_event_to_draft(script or {}, e, tokens=tokens)
+        _ok_b = len(_b["beat_ids"]) == 1
+        _ok_d = len(_d["shots"]) == 1
+        _why = []
+        if not _beats:
+            _why.append("没有提供大纲节拍")
+        elif not _ok_b:
+            _why.append("节拍命中 %d 条（需唯一）" % len(_b["beat_ids"]))
+        if not script:
+            _why.append("没有提供稿件")
+        elif not _ok_d:
+            _why.append("稿件帧命中 %d 个镜头（需唯一）" % len(_d["shots"]))
+        rows.append(dict(e, beat_ids=_b["beat_ids"], beat_methods=_b["methods"],
+                         draft_frames=[(f[0], f[1]) for f in _d["frames"]],
+                         draft_shots=_d["shots"], draft_method=_d["method"],
+                         unique=(_ok_b and _ok_d), reason="；".join(_why)))
+    return {"events": rows, "n_events": len(rows),
+            "available": {"outline": bool(_beats), "draft": bool(script)}}
+
+
+def association_of(assoc: dict | None, kind: str, *, prop_noun: str = "") -> dict:
+    """从关联结果里取某一类事件的**唯一**一条：`{"event_id","unique","reason"}`.
+
+    多条同类事件（如"多个相似起因"）时**不合并**——直接判不唯一并说明有几条。
+    """
+    _rows = [r for r in ((assoc or {}).get("events") or []) if r.get("kind") == kind]
+    if prop_noun:
+        _hit = [r for r in _rows if prop_noun in (r.get("keys") or [])]
+        if _hit:
+            _rows = _hit
+    if not _rows:
+        return {"event_id": None, "unique": False, "reason": "原文没有该类事件"}
+    if len(_rows) > 1:
+        return {"event_id": None, "unique": False,
+                "reason": "原文有 %d 条同类事件（%s），无法确定是哪一条"
+                          % (len(_rows), [r["event_id"] for r in _rows])}
+    return {"event_id": _rows[0]["event_id"], "unique": bool(_rows[0]["unique"]),
+            "reason": _rows[0]["reason"],
+            "beat_ids": _rows[0]["beat_ids"], "draft_shots": _rows[0]["draft_shots"]}
+
+
 def _draft_prop_names(script: dict) -> set:
     """稿件 `frame_layouts` 里出现过的全部道具名."""
     out: set = set()
@@ -913,7 +1126,8 @@ def _find_release_candidate(chapter_text: str, tokens) -> dict | None:
 
 
 def locate_release(script: dict, anchor: dict, prop_assets: dict = None,
-                   *, chapter_text=None, candidate=None) -> dict:
+                   *, chapter_text=None, candidate=None,
+                   outline: dict | None = None) -> dict:
     """**分别**定位 `cause_at`（起因帧）与 `release_at`（稿件**实际写出**的释放）.
 
     用户 2026-09-25 复核：「代码目前取的是最早的**起因帧**；原文相隔 2 句只证明
@@ -932,7 +1146,12 @@ def locate_release(script: dict, anchor: dict, prop_assets: dict = None,
 
     Returns `{"tokens","identity","cause_at","cause_gates","cause","cause_usable",
     "source_pair","release_at","release_known","release_shot","release_events",
-    "release_reason","relation","reason"}`。
+    "release_reason","relation","reason","association"}`。
+
+    另附 `association`（v6.128，**只作离线事件关联**）：原文的起因/释放事件 → 大纲
+    节拍 → 稿件帧三方关联结果；`cause_assoc` / `release_assoc` 给出各自是否唯一。
+    关联不唯一**不改变**本函数的稿件侧结论（`release_at` 是稿件事实），但它是
+    `precise_state_diff()` 给清理清单的**额外前提**（用户：关联不唯一就保持未知）。
     """
     prop = str((anchor or {}).get("prop") or (anchor or {}).get("prop_guess") or "")
     _tokens = _prop_tokens_of(prop, prop_assets)
@@ -942,7 +1161,18 @@ def locate_release(script: dict, anchor: dict, prop_assets: dict = None,
              "cause": None, "cause_usable": False, "source_pair": None,
              "release_at": None, "release_known": False, "release_shot": None,
              "release_events": [], "release_reason": "", "relation": "",
-             "reason": ""}
+             "reason": "", "association": None, "cause_assoc": None,
+             "release_assoc": None}
+    # v6.128：**关联结果只作报告，不参与判据**。用户 2026-09-25 已叫停这条离线链路
+    # 的继续扩展（诊断严谨性 ≠ Step01 质量提升），原始「关联不唯一就保持未知」的
+    # 门禁未接线：下面的结论口径与 v6.127 完全一致，关联只作为附带信息返回。
+    if chapter_text:
+        _assoc = event_association(chapter_text, outline=outline, script=script,
+                                   tokens=_tokens)
+        _base["association"] = _assoc
+        _base["cause_assoc"] = association_of(_assoc, "cause")
+        _base["release_assoc"] = association_of(
+            _assoc, "release", prop_noun=sorted(_tokens)[0] if _tokens else "")
     if not prop:
         return dict(_base, reason="锚点没有道具名")
 
@@ -983,6 +1213,7 @@ def locate_release(script: dict, anchor: dict, prop_assets: dict = None,
     elif _cause_frame is not None:
         _base["source_pair"] = {"order": None, "gap": None,
                                 "reason": "没有提供原文，无法核对起因与释放的先后"}
+    # v6.128：**关联不参与判据**（只报不判，见上）；`cause_usable` 口径与 v6.127 一致。
     _base["cause_usable"] = bool(_base["cause_gates"]["cause_unique"]
                                  and _base["cause_gates"]["source_pair"])
 
@@ -1058,6 +1289,7 @@ def _holding_clause(text: str, tokens) -> str:
 
 def precise_state_diff(script: dict, anchor: dict, prop_assets: dict = None, *,
                        release_at=None, chapter_text=None, candidate=None,
+                       outline: dict | None = None,
                        apply: bool = False) -> dict:
     """**只读**差异报告：释放点之后仍持有的**叶子级**字段 + 相关描述 + 再次拾取/转交.
 
@@ -1095,7 +1327,8 @@ def precise_state_diff(script: dict, anchor: dict, prop_assets: dict = None, *,
     prop = str((anchor or {}).get("prop") or (anchor or {}).get("prop_guess") or "")
     _tokens = _prop_tokens_of(prop, prop_assets)
     _loc = locate_release(script, anchor, prop_assets,
-                          chapter_text=chapter_text, candidate=candidate)
+                          chapter_text=chapter_text, candidate=candidate,
+                          outline=outline)
     _ord = _frame_order(script)
     _first_event = None
     if _loc["release_events"]:
@@ -1113,7 +1346,17 @@ def precise_state_diff(script: dict, anchor: dict, prop_assets: dict = None, *,
     _ref, _ref_kind = _ver["reference"], _ver["reference_kind"]
     _ref_ord = _ord.get(_ref, -1) if _ref else -1
     _pickup = _ver["re_pickup_or_transfer"]
-    _exempt_from = min([p["order"] for p in _pickup], default=None)
+    # **豁免窗口**（v6.128，用户复核）：从拾取/转交帧起豁免后续持有，但**到下一次
+    # 释放事件为止**——"释放→拾取→再次释放→仍持有"里的第二次释放之后，持有重新
+    # 成为残留，不得再被豁免（旧实现从**首次**拾取起无脑豁免到最后，会把这条盖住）。
+    _rel_orders = sorted(e["order"] for e in _ver["release_events"])
+    _exempt_windows = []
+    for _p in _pickup:
+        _nxt = next((o for o in _rel_orders if o > _p["order"]), None)
+        _exempt_windows.append((_p["order"], _nxt if _nxt is not None else 10 ** 9))
+
+    def _is_exempt(order: int) -> bool:
+        return any(a <= order < b for a, b in _exempt_windows)
 
     _shots_by_index = {s.get("index"): s for s in _shots_in_order(script)}
     # 提前释放点之后的残留（"提前释放 + 后续残留"是同一条缺陷的两半，必须一起看）
@@ -1138,7 +1381,7 @@ def precise_state_diff(script: dict, anchor: dict, prop_assets: dict = None, *,
             })
         if _ref is None or _o <= _ref_ord:
             continue
-        _exempted = _exempt_from is not None and _o >= _exempt_from
+        _exempted = _is_exempt(_o)
         _residuals.append({
             "shot_id": idx, "frame": fid, "entry_index": ei, "holder": holder,
             "props": _props,
@@ -1185,18 +1428,37 @@ def precise_state_diff(script: dict, anchor: dict, prop_assets: dict = None, *,
     elif _ver["premature_events"]:
         _blocked = ("存在提前释放（早于起因帧 %s）：不得据此清后续 props"
                     % (_cause_at,))
-    elif _ver["state"] == _REL_STATE_AT_CAUSE:
+    elif _ver["state"] == _REL_STATE_AT_CAUSE and not _SAME_FRAME_RELEASE_GIVES_ADVISORY:
         _blocked = ("释放写在**起因帧本身**（%s）：同帧不等于同一事件，落点未被独立"
                     "确认——不得据此清 props" % (_cause_at,))
     elif _pickup:
         _blocked = ("释放点之后有再次拾取/转交 %s：其后的持有合法，不得整段清"
                     % [(p["shot_index"], p["frame"], p["kind"]) for p in _pickup])
+    elif _descs:
+        # v6.128（用户复核第 1 条）：描述层仍声明持有 → **不可拆的联合任务**。
+        # 只清 props 而不动描述就是半条修复，所以清单为空，改为给出联合任务。
+        _blocked = ("描述层仍有 %d 处声明持有：`props` 与描述是**不可拆的联合任务**"
+                    "（单清 props = 半条修复）——清单为空，联合任务见 `joint_task`"
+                    % len(_descs))
     else:
         _blocked = ""
     _clear = [] if _blocked else [
         {"shot_id": r["shot_id"], "frame": r["frame"], "holder": r["holder"],
          "field_path": r["field_path"], "auth_field_path": r["auth_field_path"]}
         for r in _residuals if not r["exempted"]]
+    _joint_task = {
+        "required": bool(_descs),
+        "descriptions": [{"shot_id": d["shot_id"], "frame": d["frame"],
+                          "field_path": d["field_path"], "clause": d["clause"]}
+                         for d in _descs],
+        "layout_leaves": [{"shot_id": r["shot_id"], "frame": r["frame"],
+                           "holder": r["holder"], "field_path": r["field_path"],
+                           "auth_field_path": r["auth_field_path"]}
+                          for r in _residuals if not r["exempted"]],
+        "reason": ("描述与布局必须同批处理：只清 props 会留下"
+                   "「描述说持有、布局已清」的新矛盾（用户 2026-09-25）"
+                   if _descs else ""),
+    }
     return {"prop": prop, "tokens": sorted(_tokens), "locate": _loc,
             "cause_at": _cause_at, "cause_usable": _loc["cause_usable"],
             "reference": _ref, "reference_kind": _ref_kind,
@@ -1212,6 +1474,7 @@ def precise_state_diff(script: dict, anchor: dict, prop_assets: dict = None, *,
             "re_pickup": [p for p in _pickup if p["kind"] == "pickup"],
             "transfer": [p for p in _pickup if p["kind"] == "transfer"],
             "clear_candidates": _clear,
+            "joint_task": _joint_task,
             "advisory_only": True,      # 只读建议：**不是**执行许可
             "blocked_reason": _blocked,
             "apply": False,   # 恒 False：本模块不写盘、不改稿

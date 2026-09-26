@@ -745,8 +745,72 @@ def _slice_by_plot_unit(text: str, max_chars: int) -> str:
     return truncated
 
 
+# ============================================================================
+# 生成执行契约（**不压缩**）：本集选用的全部台词 + 必保留事实 + 事件顺序
+# ============================================================================
+#: 契约块标头。用例按它**切出整块**再断言完整集合——不能在整份 prompt 里搜台词：
+#: 小说原文本身也含那些句子，搜到不能证明契约真的传到了。
+CONTRACT_BLOCK_HEADER = "### 本集生成执行契约（计划已定，只能展开，不得重新选材）"
+
+
+def render_execution_contract(plan) -> str:
+    """渲染**生成执行契约**块（完整、不压缩），四个完整稿生成入口共用.
+
+    用户 2026-09-25 决定：**保留 200 字作为 doubao/agent_plan 的大纲摘要**（那个限制原本是
+    为避免完整大纲干扰输出结构，不该靠抬高上限解决），另设这一块完整传递"计划已经决定的事"：
+
+    - **本集选用的全部台词**（逐字；压缩剖面只列前 N 句，约束不到"7 句全拍"的取舍）
+    - **必保留事实**（一条都不许省）
+    - **事件顺序**（不得调换）
+
+    只传递计划已定的内容，不含新判据：生成只能展开，不得重新选材。
+    """
+    from step01_script_gen.plan_feasibility import plan_dialogue_lines
+    _lines = plan_dialogue_lines(plan)
+    _facts = [str(x).strip() for x in ((plan or {}).get("required_facts") or [])
+              if str(x).strip()]
+    _events = [str(x).strip() for x in ((plan or {}).get("main_events") or [])
+               if str(x).strip()]
+    if not (_lines or _facts or _events):
+        return ""
+    parts = [CONTRACT_BLOCK_HEADER]
+    if _lines:
+        parts.append("一、本集选用的全部台词（共 %d 句，**逐字**，不得替换、不得另编；"
+                     "确需增减须回规划层按「可省略内容」重选）：" % len(_lines))
+        parts += ["%d. %s" % (i, x) for i, x in enumerate(_lines, 1)]
+    if _facts:
+        parts.append("二、必保留事实（**一条都不许省**，原文证据随附）：")
+        parts += ["%d. %s" % (i, x) for i, x in enumerate(_facts, 1)]
+    if _events:
+        parts.append("三、事件顺序（**不得调换**）：")
+        parts += ["%d. %s" % (i, x) for i, x in enumerate(_events, 1)]
+    return "\n".join(parts)
+
+
+def append_execution_contract(prompt: str, contract: str) -> str:
+    """把执行契约块追加到**最终提示的最末尾**（唯一追加点）.
+
+    v6.132（用户 2026-09-25 收口）：契约必须由**最终组装处**追加。四个完整稿生成入口在
+    builder 返回之后还要追加各自的反馈（GAP 的 `gap_context`、结构收敛的
+    `_structural_feedback`、超限收敛的时长反馈），放在 builder 里就等于契约**不在末尾**
+    ——长 prompt 后段易失声（实测提示 3.4 万字符），"块在提示里"不等于"块在最后一眼"。
+    """
+    if not contract:
+        return prompt
+    return prompt + "\n\n" + contract
+
+
 def _compact_doubao_outline_anchor(outline_anchor: str, max_chars: int = 200) -> str:
-    """Compress outline anchors while always retaining the climax line."""
+    """Compress outline anchors while always retaining the climax line.
+
+    v6.132（用户 2026-09-25）：这一块是**大纲摘要**，本集选材由**不压缩的
+    `render_execution_contract()` 块**完整传递（四个完整稿生成入口共用），所以这里
+    不再试图塞台词——塞不下会挤掉摘要本身的内容（实测：7 句 + 标头 ≈ 180 字）。
+
+    保留的修正是"**跳过装不下的行继续试**"，不再 `break`：第 1 章【本章主要事件】一行就
+    178 字，`break` 会让它后面的行全部消失——旧实现在这一章上压缩锚点只剩 **26 字**
+    （仅【高潮事件】），等于 doubao/agent_plan 剖面根本没有大纲锚点。
+    """
     lines = [line.strip() for line in outline_anchor.splitlines() if line.strip()]
     if not lines:
         return ""
@@ -761,22 +825,16 @@ def _compact_doubao_outline_anchor(outline_anchor: str, max_chars: int = 200) ->
         (line for line in lines if line.startswith("【高潮事件】")),
         "",
     )
-    if not climax:
-        kept: list[str] = []
-        for line in lines:
-            if joined_len(kept + [line]) > max_chars:
-                break
-            kept.append(line)
-        return "\n".join(kept)
-
-    kept = []
+    kept: list[str] = []
     for line in lines:
         if line == climax:
             continue
-        if joined_len(kept + [line]) + 1 + len(climax) > max_chars:
-            break
+        if joined_len(kept + [line]) + (1 + len(climax) if climax else 0) > max_chars:
+            continue
         kept.append(line)
-    return "\n".join(kept + [climax])
+    return "\n".join(kept + ([climax] if climax else []))
+
+
 
 
 def build_doubao_prompt(novel_text: str, bank=None, objects_bank=None,

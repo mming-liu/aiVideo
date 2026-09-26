@@ -672,13 +672,27 @@ OUTLINE_SCHEMA = {
                 "items": {"type": "string"},
                 "description": "镜头节拍、信息目的和原文依据",
             },
+            # v6.130（用户 2026-09-25 第二步）：计划是**本集内容取舍与预算的权威**
+            # （小说原文仍是事实与台词的依据）。下面两个字段是"生成前可行性"的输入：
+            # 选用的逐字台词（代码据此估时）与可省略内容（重选时的候选池）。
+            "dialogue_lines": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "本集选用的逐字台词/独白，从原文逐字摘出（不改写、不自造）",
+            },
+            "omittable": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "本集可省略的原文内容（不拍也不影响主线，重选时的候选池）",
+            },
             "time_budget": {
                 "type": "string",
-                "description": "对白、动作、反应的大致时间预算",
+                "description": "对白、动作、反应的大致分配倾向（不必报精确秒数，时长由代码估算）",
             },
         },
         "required": ["main_events", "characters", "emotional_arc", "climax", "end_hook", "key_scenes",
-                     "required_facts", "causal_chain", "character_motives", "shot_beats", "time_budget"],
+                     "required_facts", "causal_chain", "character_motives", "shot_beats",
+                     "dialogue_lines", "omittable", "time_budget"],
         "additionalProperties": False,
     },
 }

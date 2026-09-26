@@ -146,7 +146,8 @@ from step01_script_gen.prompts import (
     _build_character_anchors,
     _load_knowledge_skills, _load_local_skill_context,
     auto_select_prompt_builder, auto_select_system_prompt,
-    resolve_model_prompt_profile,
+    resolve_model_prompt_profile, render_execution_contract,
+    append_execution_contract,
 )
 
 # v2026-09-03: 按 TEXT_PROVIDER 自动选择 prompt builder。
@@ -224,30 +225,55 @@ def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
     """
     from _text_gen.deepseek_schema import SCRIPT_SCHEMA
     # v6.23：大纲两阶段（ShortVideoDirector director-outline 吸收）——大纲作分镜
-    # 锚点，保证冲突/高潮分布。失败不阻断（空锚点）。
+    # 锚点，保证冲突/高潮分布。
+    # v6.132（用户 2026-09-25）：构造失败**不再降级为「无锚点继续生成」**——见下方 except。
     outline_anchor = ""
     prop_anchor_block = ""
+    contract_block = ""
     if outline:
+        # v6.131（2026-09-25 收口）：**可行性门不在本函数里**。本函数是"每个候选都会走"
+        # 的路径，门放这里等于每个候选重算一遍，而且会被候选循环的 `except RuntimeError`
+        # 当成生成失败重试。门已上移到候选扇出入口 `_generate_script_candidates()`，
+        # 一轮只验算一次、在**完整分镜生成之前**（角色/场景物体/大纲三个提取模型此前
+        # 已并发调用过，所以不是"任何模型调用之前"）。
         try:
             from step01_script_gen.outline import outline_to_anchor
-            outline_anchor = outline_to_anchor(outline)
-            # v6.125.2：道具状态候选走独立短提示（不并进 outline_anchor——会被
-            # agent_plan 的 200 字大纲压缩吞掉）。内容为「待核实」候选，只影响提示词。
-            from step01_script_gen.prop_state_anchor import render_prop_anchor_block
-            prop_anchor_block = render_prop_anchor_block(
-                (outline or {}).get("prop_state_candidates"))
+            outline_anchor = outline_to_anchor(outline, novel_text)
+            # v6.132（用户 2026-09-25）：**生成执行契约**（不压缩）——本集选用的全部台词 +
+            # 必保留事实 + 事件顺序。200 字大纲摘要（doubao/agent_plan 剖面）只能装摘要，
+            # 选材必须走这一块；四个完整稿生成入口共用。
+            contract_block = render_execution_contract(outline)
+            # v6.128（用户 2026-09-25 决定）：道具候选短提示**默认不再注入**。
+            # 两次诊断生成都没过验收（提前释放且布局不跟随 / 连释放都不写），提示词
+            # 路线暂停；离线代码与取证保留，`STEP01_PROP_ANCHOR_BLOCK=1` 可复测。
+            from step01_script_gen.prop_state_anchor import prop_anchor_block_for
+            prop_anchor_block = prop_anchor_block_for(outline)
             if prop_anchor_block:
                 _logger.info("[INFO] 道具状态候选锚点 %d 条已注入独立短提示"
                              % len((outline or {}).get("prop_state_candidates") or []))
+            elif (outline or {}).get("prop_state_candidates"):
+                _logger.info("[INFO] 道具候选短提示已关闭（默认；"
+                             "STEP01_PROP_ANCHOR_BLOCK=1 可开启），本轮不注入")
             _logger.info("[INFO] 章节大纲已预提取（并发），注入分镜 prompt")
         except Exception as e:
-            _logger.warn(f"[WARN] 大纲转 anchor 失败: {e}，继续无大纲生成")
+            # v6.132（用户 2026-09-25 收口）：这里**不再吞异常**。门已经判过计划可行，
+            # 走到本函数说明计划应当被完整传递；构造失败还继续生成，就会产出一份
+            # **没有执行契约**的稿子（选材不受约束），而报告仍会说"已过计划门"。
+            # 显式失败 —— 异常在 `create_service()` 之前抛出，**不会调用模型**。
+            # 用 `PlanInfeasibleError`（非 RuntimeError）：候选循环的 `except RuntimeError`
+            # 是"生成失败→重试"语义，而这是确定性的计划传递失败，重试没有意义。
+            from step01_script_gen.plan_feasibility import PlanInfeasibleError
+            raise PlanInfeasibleError(
+                "计划锚点／执行契约构造失败 ⇒ 不生成（否则稿件不受选材约束）：%s" % e
+            ) from e
     # v6.68: prompt/system 跟着实际模型走——deepseek-v4-flash → deepseek 剖面；
     # doubao → doubao 剖面。两者都保留完整 novel，由 PROMPT_MAX_CHARS 统一控上限。
     # 此前 agent_plan 下所有模型共用 doubao prompt，是候选结构性零高潮的根因。
     _main_builder, _system = resolve_model_prompt_profile(model)
-    prompt = _main_builder(novel_text, bank, objects_bank, outline_anchor,
-                           prop_anchor_block=prop_anchor_block)
+    prompt = append_execution_contract(
+        _main_builder(novel_text, bank, objects_bank, outline_anchor,
+                      prop_anchor_block=prop_anchor_block),
+        contract_block)
     _metrics_inc("calls.script_generation")
     service = create_service()
     req = TextGenerationRequest(
@@ -739,9 +765,33 @@ def _accept_regen_candidate(before: dict, candidate: dict, novel_text: str) -> t
     return (not reasons), reasons
 
 
+def _build_gap_regen_prompt(novel_text: str, bank, objects_bank, outline, contract: str,
+                            gap_context: str) -> tuple:
+    """GAP 重生的**最终提示组装**：大纲锚点 → 反馈（gap_context）→ **执行契约（末尾）**.
+
+    v6.132（用户 2026-09-25）：契约必须由最终组装处追加——builder 之后还有 gap_context，
+    契约在 builder 里就不在末尾。
+
+    Returns `(prompt, system_prompt)`。
+    """
+    _gap_builder, _gap_system = resolve_model_prompt_profile(None)
+    # v6.116（审核）：GAP 重生同样复用大纲锚点
+    from step01_script_gen.outline import outline_to_anchor as _o2a
+    # v6.128：道具候选短提示默认关闭（用户 2026-09-25 决定）
+    from step01_script_gen.prop_state_anchor import prop_anchor_block_for as _pabf
+    prompt = _gap_builder(
+        novel_text, bank, objects_bank,
+        _o2a(outline, novel_text),
+        prop_anchor_block=_pabf(outline))
+    prompt = prompt + gap_context
+    return append_execution_contract(prompt, contract), _gap_system
+
+
 def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=None,
                       max_attempts: int | None = None,
-                      model: str | None = None) -> dict:
+                      model: str | None = None,
+                      outline_anchor: str = "",
+                      contract_block: str = "") -> dict:
     """镜头数/正片时长超限时，反馈给 LLM 合并精简，重新生成一次（软收敛）.
 
     与 gap_analysis 相互独立：这里只看「镜头数/总时长」超限，不校验内容分布。
@@ -843,8 +893,13 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
             feedback = feedback + _checklist_fb
         # v6.68: prompt/system 跟着实际模型走（接力模型可能是另一家模型）
         _rl_builder, _rl_system = resolve_model_prompt_profile(model)
-        prompt = _rl_builder(novel_text, bank, objects_bank)
+        # v6.131（2026-09-25 收口）：超限收敛也是**完整稿生成入口**，必须同样带上大纲锚点
+        # ——否则它会绕开计划（选用的逐字台词/必保留事实/事件顺序）另写一版，等于在收敛
+        # 这一步重新决定选材。此处此前只传 novel_text/bank/objects_bank（漏了大纲锚点）。
+        prompt = _rl_builder(novel_text, bank, objects_bank, outline_anchor)
         prompt = prompt + feedback
+        # 契约**最后**追加（用户 2026-09-25）：反馈之后才是模型最后一眼看到的内容
+        prompt = append_execution_contract(prompt, contract_block)
 
         _metrics_inc("calls.regen_over_limit")
         service = create_service()
@@ -1526,7 +1581,8 @@ def _regen_structural_over_limit(script: dict, novel_text: str, bank=None,
                                  objects_bank=None, max_attempts: int | None = None,
                                  model: str | None = None,
                                  outline_anchor: str = "",
-                                 prop_anchor_block: str = "") -> dict:
+                                 prop_anchor_block: str = "",
+                                 contract_block: str = "") -> dict:
     """**结构收敛轮**：单镜超 cap / 低于下限 → 重做 shot-plan（整脚本重生成）.
 
     二次审核发现 1（P0）：系统取消了「先复制字段、后拆镜」这一错误做法，却没有补上
@@ -1577,6 +1633,8 @@ def _regen_structural_over_limit(script: dict, novel_text: str, bank=None,
                 prompt += _checklist_fb
         except Exception:
             pass
+        # 契约**最后**追加（用户 2026-09-25）：所有反馈之后
+        prompt = append_execution_contract(prompt, contract_block)
 
         _metrics_inc("calls.regen_structural")
         service = create_service()
@@ -2330,6 +2388,9 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
         audit_focus=focus or _final_audit_focus(script, None),
         metadata=metadata,
     )
+    # v6.134：parse_failed 有界重试后的**真实**调用次数（audit.AuditResult.attempts）。
+    # 仅 ≠1 时进产物——单次成功的 payload 形状与历史完全一致（同 raw_text_head 口径）。
+    _attempts = int(getattr(result, "attempts", 1) or 1)
     # v6.117（方案 A）：审计可能走**专用**通道（`AUDIT_TEXT_PROVIDER`），此时调用方
     # 传来的 `model` 是生成侧的名字、并非实际提交的模型。产物与台账必须记**实际**值，
     # 否则「这份审计由哪个通道/模型产出」在事后无从核对。
@@ -2348,6 +2409,21 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
         "error": result.error,
         "issues": [i.to_dict() for i in result.issues],
         "created_at": _step01_now(),
+        # v6.133（2026-09-26 实跑 BLOCK：final audit parse_failed，00:58 那次重跑）：
+        # 失败时**必须**留下原始响应头——`AuditResult.raw_text` 本来带着原文，但原先
+        # 没进 payload，台账里只剩一句 "not valid JSON or lacks issues[]"，于是
+        # 「根本不是 JSON」与「是 JSON 但形状不符」这两种**处置完全不同的**故障
+        # 事后无从区分（前者要改通道/提示词，后者要改 shape 判据）。
+        # 同"修复调用失败"的同一标准：失败原因进结构化诊断，而不是只活在 step01.log。
+        **({"raw_text_head": str(getattr(result, "raw_text", "") or "")[:_DIAG_RAW_HEAD_MAX],
+            "raw_text_len": len(str(getattr(result, "raw_text", "") or ""))}
+           if result.status != "ok" else {}),
+        # v6.134：重试发生时记录真实调用次数（≠1 才出现，单次调用产物形状不变）
+        **({"attempts": _attempts} if _attempts != 1 else {}),
+        # v6.134.1（审核）：被重试覆盖的失败尝试留档（坏响应头部/总长/该次用量）——
+        # 仅非空时出现；「重试后成功」的 payload 不再丢失坏响应证据
+        **({"failed_attempts": list(getattr(result, "failed_attempts", None) or [])}
+           if getattr(result, "failed_attempts", None) else {}),
     }
 
 
@@ -2426,6 +2502,12 @@ def _record_audit_diag(audit: "dict | None", *, phase: str, round_index: int,
         "blocking": [(str(i.get("shot_id")), str(i.get("code"))) for i in _blocking][:20],
         "issues": issues,
     }
+    # v6.133：审计**失败**轮带上原始响应头与总长（成功轮不带这两个键）；
+    # v6.134：parse_failed 重试发生时带真实调用次数（payload 仅 ≠1 时携带）；
+    # v6.134.1：被重试覆盖的失败尝试留档（payload 仅非空时携带）
+    for _k in ("raw_text_head", "raw_text_len", "attempts", "failed_attempts"):
+        if _payload.get(_k) is not None:
+            rec[_k] = _payload.get(_k)
     if not rec["input_revision"] and script is not None:
         try:
             from shared.quality_gate import compute_script_revision
@@ -2442,6 +2524,9 @@ def _record_audit_diag(audit: "dict | None", *, phase: str, round_index: int,
         _logger.warn(f"[AUDIT] 每轮审计台账写入失败（不影响结论）: {exc}")
 
 
+# 失败响应留档上限（字符）：只留头部，够判"是不是 JSON / 断在哪"即可，避免台账膨胀。
+_DIAG_RAW_HEAD_MAX = 2000
+
 _REPAIR_DIAG_NAME = "step01_repair_rounds.json"
 # 保留条数：单条约 1KB，与审计台账同样封顶
 _REPAIR_DIAG_KEEP = max(5, int(os.getenv("REPAIR_DIAG_KEEP", "40") or "40"))
@@ -2453,6 +2538,13 @@ def _record_repair_diag(*, run_id: str, attempt: int, records: list) -> None:
     为什么单独一个文件、而不并进 `step01_audit_rounds.json`：两者粒度不同
     （审计轮 vs 修复轮），且审计台账的字段契约已被既有测试锁定；混进同一数组会
     逼消费方按形状过滤。
+
+    v6.133（用户 2026-09-25~26）：台账里现在有**四类**记录，靠 `kind` 区分——
+    `call_ok`（成功调用，带 max_tokens 与 reasoning/output token 用量）/
+    `call_failed`（调用异常或响应被截断：整份丢弃、稿件没变）/
+    `patch_unusable`（响应完整但补丁不可用：解析失败 / 结构无效 / 空补丁 /
+    全被校验拒）；其余（有 `accepted`/`resolved` 字段的）是修复事务本身的逐轮诊断。
+    三类调用记录此前都没有，BLOCK 的直接原因只会被外层记成"零改善"。
 
     为什么必须有它：2026-09-25 离线取证实测——一次真实重跑只留下 `new=3` 这个
     **计数**。`new_blocking_keys` 原本只在「整轮回退」分支打印，而该轮走的是
@@ -2588,8 +2680,13 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                            plan: "dict | None" = None,
                            hook_ctx: "dict | None" = None,
                            audit_model: "str | None" = None,
-                           label: str = "落盘前") -> tuple:
+                           label: str = "落盘前",
+                           source_revision: str = "") -> tuple:
     """**唯一最终提交点**：三条入口（正常 / 缓存 / BEST-GUARD）都只走这里.
+
+    `source_revision`：BEST-GUARD 选中的**历史快照自身**的 revision（选稿边界算好
+    带过来的，v6.129）。它可能与本函数入口的 revision 不同（大纲覆盖会改哈希），
+    也不等于修后 revision——BLOCK 时三者都要登记，否则选稿那边永远查不到这份欠账。
 
     Returns:
         `(script, summary)`。`summary["status"]` 是 `COMMITTED` / `BLOCK`；
@@ -2604,6 +2701,10 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
 
     run_id = _step01_run_id()
     summary: dict = {"status": "BLOCK", "run_id": run_id, "audit_repair_rounds": 0,
+                     # v6.133：修复轮结论（improved / no_progress / call_failed /
+                     # patch_unusable / oversized_group）——"零改善"不再吞掉
+                     # "修复调用失败"与"响应不可用"这两类
+                     "repair_outcome": "",
                      "blocking": [], "reused_audit": False, "detail": ""}
     _metrics_inc("commit.attempts")
 
@@ -2747,6 +2848,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         # 这一轮没有调用 LLM、也不会再发审计（省下两轮修复 + 两次审计调用）：
         # 组超过上限时跳过它只会让同一份审计每轮重复声明、直到额度耗尽。
         if _repair_block_reasons:
+            summary["repair_outcome"] = "oversized_group"
             summary["detail"] = (
                 "联动修复目标超出单轮可修上限（%d 条）：%s"
                 % (len(_repair_block_reasons), _repair_block_reasons[:2]))
@@ -2754,11 +2856,53 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             break
         summary["audit_repair_rounds"] += 1
         # 零改善：修复轮被拒或没动一个字 → 再发一轮只会重复同一批目标。
+        #
+        # v6.133（用户 2026-09-25）：**"模型没修好"与"修复请求没得到完整结果"必须分开报**。
+        # 09-25 实跑的真实 BLOCK 直接原因是修复响应被截断（`max_output_tokens`，16k 上限含
+        # 思维链 token）→ 整份丢弃 → 稿件一个字没变 → 这里只报"零改善"，把调用失败说成了
+        # 内容结论。现在按台账里的 `kind="call_failed"` 记录区分，并把原因写进 detail。
         if compute_script_revision(repaired) == _before_rev:
-            summary["detail"] = "提交前修复轮零改善，停止修复"
-            _logger.warn(f"[COMMIT] {summary['detail']}")
+            _call_failed = [r for r in _repair_diag if r.get("kind") == "call_failed"]
+            # v6.133（2026-09-26 复核补口）：**"响应不可用"与"没改动稿件"也要分开**。
+            # API 调用成功但补丁 JSON 解析失败 / envelope 结构无效 / 没返回替换 /
+            # 替换全被校验拒——这四条此前只打日志，提交层看不见记录，于是与
+            # "补丁有效但零改善"共用一个 `no_progress`，把"收到不可用响应"说成了
+            # "修复没进展"。现在它们各自落 `kind="patch_unusable"` + `reason`。
+            _unusable = [r for r in _repair_diag if r.get("kind") == "patch_unusable"]
+            if _call_failed:
+                summary["repair_outcome"] = "call_failed"
+                summary["detail"] = ("修复调用失败/响应不完整（未得到完整结果，"
+                                     "不是「修复无进展」）：%s"
+                                     % str(_call_failed[-1].get("error") or "调用失败")[:200])
+                _logger.error(f"[COMMIT] {summary['detail']}")
+            elif _unusable:
+                _u_last = _unusable[-1]
+                summary["repair_outcome"] = "patch_unusable"
+                summary["detail"] = (
+                    "修复响应不可用（拿到了完整响应、但补丁不可用，不是「修复无进展」）："
+                    "%s%s" % (_u_last.get("reason") or "unknown",
+                              ("｜%s" % _u_last.get("detail"))
+                              if _u_last.get("detail") else ""))
+                _logger.error(f"[COMMIT] {summary['detail']}")
+            else:
+                # `no_progress` 只表示**稿件没有改动**（且台账里没有调用失败/不可用补丁
+                # 记录）；能取到上一轮事务时把它的结论一并写出，便于分辨"改完被回滚"
+                # 与"根本没动"。
+                _tx = [r for r in _repair_diag if "accepted" in r]
+                summary["repair_outcome"] = "no_progress"
+                if _tx:
+                    summary["detail"] = (
+                        "提交前修复轮零改善（稿件未变；上一轮事务 accepted=%s resolved=%s "
+                        "reason=%s），停止修复"
+                        % (bool(_tx[-1].get("accepted")), _tx[-1].get("resolved"),
+                           str(_tx[-1].get("reason") or "-")[:80]))
+                else:
+                    summary["detail"] = ("提交前修复轮零改善（稿件未变；台账中无调用失败/"
+                                         "不可用补丁记录），停止修复")
+                _logger.warn(f"[COMMIT] {summary['detail']}")
             script = repaired
             break
+        summary["repair_outcome"] = "improved"
         script = _finalize(repaired)
 
     # ---- 写后不可变守卫：audit 前后 revision 必须相同 ----
@@ -2788,6 +2932,15 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                 "[COMMIT] 欠账台账同时登记进入提交点的原稿 revision %s"
                 "（修后 %s）——否则该历史稿会因漏记而在后续选稿中再次入选"
                 % (_entry_revision[:12], revision[:12]))
+        # v6.129（用户 2026-09-25 根因）：**选稿边界**记录的快照自身 revision 也要
+        # 登记。它与入口/修后 revision 都可能不同（大纲覆盖参与哈希），而 guard 下次
+        # 恰恰是用这个值查台账——不记它，同一份欠账稿会第三次被选中。
+        if source_revision and source_revision not in (revision, _entry_revision):
+            _record_blocked_revision(source_revision)
+            _logger.warn(
+                "[COMMIT] 欠账台账登记**被选中的历史快照自身** revision %s"
+                "（提交入口 %s / 修后 %s）——BEST-GUARD 用快照自身 revision 判欠账"
+                % (source_revision[:12], (_entry_revision or "")[:12], revision[:12]))
         _write_blocked_audit_sidecar(audit)
         _write_blocked_manifest(revision, run_id=run_id,
                                detail=summary["detail"], blocking=blocking)
@@ -4935,6 +5088,190 @@ def _restore_targets(script: dict, before_script: dict, targets: set) -> dict:
     return out
 
 
+def _record_repair_call_failure(repair_diag: list | None, repair_round: int, *,
+                                error: str, truncated: bool = False,
+                                usage: dict | None = None,
+                                max_tokens: int | None = None) -> None:
+    """把"修复调用没拿到完整结果"记进修复台账（用户 2026-09-25）.
+
+    为什么必须单独记：2026-09-25 实跑的 BLOCK 直接原因是定向修复响应被截断
+    （`incomplete_details.reason=max_output_tokens`，16k 上限含思维链 token），
+    整份丢弃后稿件一个字没变，提交层只看到 revision 相同 → 记为"零改善"。
+    于是**结构化诊断里没有"导致 BLOCK 的直接原因"**，只能翻 `step01.log`。
+    这里把调用失败与"改了但没进展"分开落台账；`usage` 一并留下，为上限该设多大提供实测依据。
+    **口径（2026-09-26 复核更正）**：`output_tokens` 已包含思维链 token，`reasoning_tokens`
+    只是它内部的明细——余量只看 `output_tokens`（见 `_repair_cap_margin`），
+    两个数相加会把思维链扣两遍。
+    """
+    if repair_diag is None:
+        return
+    _u = dict(usage or {})
+    repair_diag.append({
+        "repair_round": repair_round,
+        "kind": "call_failed",          # 与"accepted/zero_gain"那类记录区分开
+        "truncated": bool(truncated),
+        "error": error[:400],
+        "usage": _u,
+        "max_tokens": max_tokens,       # 本轮**请求**的上限；None = 未收窄（跟随通道全局值）
+        "reasoning_tokens": _u.get("reasoning_tokens"),
+        "output_tokens": _u.get("output_tokens") or _u.get("completion_tokens"),
+    })
+
+
+def _record_repair_unusable(repair_diag: list | None, repair_round: int, *,
+                            reason: str, detail: str = "",
+                            raw_head: str = "") -> None:
+    """记一次"拿到了完整响应、但补丁不可用"（`kind="patch_unusable"`）.
+
+    v6.133（2026-09-26 用户复核）：此前只有 **API 调用失败/截断**才算 `call_failed`，
+    而「调用成功但补丁 JSON 解析失败 / envelope 结构无效 / 没返回任何替换 /
+    替换全被校验拒」这四条早退路径**只打日志**——提交层看不到记录，
+    于是一律报 `no_progress`，把"收到不可用响应"说成了"修复没有进展"。
+    现在这四条各带 `reason` 落台账，提交层据此把它报成 `patch_unusable`。
+
+    `reason` 取值：`parse_failed` / `invalid_structure` / `empty_patch` /
+    `rejected_by_validation`（另可用 `budget_exhausted` 之类后续扩）。
+
+    `raw_head`：**响应原文的头部**（封顶 `_DIAG_RAW_HEAD_MAX`）。与审计侧同一条理由：
+    只留一句错误文案时，"模型回了一段散文"和"JSON 断在中间"事后分不开。
+    """
+    if repair_diag is None:
+        return
+    _raw = str(raw_head or "")
+    repair_diag.append({
+        "repair_round": repair_round,
+        "kind": "patch_unusable",
+        "reason": str(reason),
+        "detail": str(detail)[:300],
+        "raw_text_head": _raw[:_DIAG_RAW_HEAD_MAX],
+        "raw_text_len": len(_raw),
+    })
+
+
+def _repair_max_output_tokens() -> int | None:
+    """修复轮的输出上限：**默认为 `None`** = 跟随所在文本通道的全局上限（不额外收窄）.
+
+    v6.133（用户 2026-09-25，实跑 BLOCK 根因）：这里原来硬编码 `16000`，注释理由是
+    "agent_plan 的全局上限是 32768，16k 不触顶，留了 2 倍余量"——该假设在**文本通道切到
+    原生 DeepSeek 后不再成立**，而 `.env.content` 对修复轮的推荐值本来就是 **50000**：
+
+      - `DEEPSEEK_MAX_TOKENS=50000`，其注释写明"推荐分镜生成场景：40000-50000；
+        钩子：8000；**修复轮：50000**"；
+      - 且 `max_output_tokens` **包含思维链 token**（provider 注释与审计路径实测同证）。
+
+    ⚠️ **适用范围**（2026-09-26 复核）：只有 **DeepSeek**（`req.max_tokens or
+    config.DEEPSEEK_MAX_TOKENS`）与 **AgentPlan**（`AGENT_PLAN_TEXT_MAX_TOKENS`）
+    这两条通道有项目级回退，默认 `None` 才等于"跟随通道全局值"；**DashScope / Agnes
+    把 `req.max_tokens` 原样透传**，`None` 不会回退到任何项目上限（交给服务端默认）。
+    文本通道切到这两条时，下面这段的前提不成立。
+
+    实测（2026-09-25，`.tmp/repair_truncation_probe.py`，真实修复路径两次调用）：
+    同一请求同一 16000 上限，**一次截断**（`incomplete_details.reason=max_output_tokens`，
+    整份 JSON 丢弃 → 稿件零变化 → 提交层报"零改善"→ BLOCK）、**一次成功**，
+    成功那次 `output_tokens=8172`（其中思维链 3695；**余量按 `output_tokens` 算**：
+    16000−8172≈7.8k，不能再减一次 `reasoning_tokens`）；把上限放到
+    32768 后两次都成功（`output 7553 / reasoning 2380`）。⇒ 16k 只是"典型调用的 2 倍"，
+    思维链一长就踩线；这跟同一天审计路径 17:33 的截断是**同一个根因**（当时 16000 → 32000）。
+
+    保留 `REPAIR_MAX_OUTPUT_TOKENS` 作为**显式收窄**的手段（设了才生效，值非法则 WARN 后
+    回退为不传——宁可放宽也不要因为一个手误把上限变小）。
+    """
+    _v = os.getenv("REPAIR_MAX_OUTPUT_TOKENS", "").strip()
+    if not _v:
+        return None
+    try:
+        _n = int(_v)
+    except ValueError:
+        _logger.warn(f"[WARN] REPAIR_MAX_OUTPUT_TOKENS={_v!r} 不是整数，本轮不设上限"
+                     f"（跟随文本通道全局值）")
+        return None
+    # v6.133（2026-09-26 用户复核）：本变量**只用于收窄**——`0`/负数不是合法上限，
+    # 高于当前通道项目上限的值会**放宽**上限（与说明矛盾）。两者都不接受：
+    # 记 WARN 后当作"未设置"，跟随通道全局值（宁可放宽也不因手误把上限变小，
+    # 更不能因为一个手误把契约说反）。
+    if _n <= 0:
+        _logger.warn(f"[WARN] REPAIR_MAX_OUTPUT_TOKENS={_v!r} 不是正数，本轮不设上限"
+                     f"（跟随文本通道全局值）")
+        return None
+    _chan_cap = _channel_text_max_tokens()
+    if _chan_cap and _n > _chan_cap:
+        _logger.warn(f"[WARN] REPAIR_MAX_OUTPUT_TOKENS={_n} 高于当前文本通道"
+                     f"（{_active_text_provider() or '未知'}）的项目上限 {_chan_cap}——"
+                     f"该变量只用于收窄，本轮忽略它（跟随通道全局值 {_chan_cap}）")
+        return None
+    return _n
+
+
+def _channel_text_max_tokens() -> int | None:
+    """当前文本通道的**项目级**输出上限；该通道没有项目级上限时返回 `None`.
+
+    DeepSeek / AgentPlan 在 provider 里做 `req.max_tokens or config.X` 回退；
+    DashScope / Agnes 把 `req.max_tokens` 原样透传（没有项目级上限）——
+    对它们而言"收窄"没有可比较的基准，`REPAIR_MAX_OUTPUT_TOKENS` 原样生效。
+    """
+    _p = (_active_text_provider() or "").strip().lower()
+    try:
+        from _text_gen.config import config as _tcfg
+    except Exception:
+        return None
+    if _p == "deepseek":
+        return getattr(_tcfg, "DEEPSEEK_MAX_TOKENS", None)
+    if _p == "agent_plan":
+        return getattr(_tcfg, "AGENT_PLAN_TEXT_MAX_TOKENS", None)
+    return None
+
+
+def _repair_cap_margin(record: dict) -> int | None:
+    """单条修复调用记录的**剩余上限**（`max_tokens - output_tokens`）；数不全则 `None`.
+
+    **口径（2026-09-26 用户复核更正）**：`output_tokens`（= `completion_tokens`）
+    **已经包含**思维链 token，`reasoning_tokens` 只是它内部的明细
+    （DeepSeek 官方把后者列在 `output_tokens_details` 下）——所以**不能**再减一次
+    `reasoning_tokens`，那会把思维链扣两遍。两个数都留在台账里：
+    `output_tokens` 用来算余量，`reasoning_tokens` 用来看思维链占比。
+    """
+    _cap = record.get("max_tokens")
+    _out = record.get("output_tokens") or record.get("completion_tokens")
+    if _cap is None or _out is None:
+        return None
+    try:
+        return int(_cap) - int(_out)
+    except (TypeError, ValueError):
+        return None
+
+
+def _record_repair_call_usage(repair_diag: list | None, repair_round: int, *,
+                              usage: dict | None = None,
+                              max_tokens: int | None = None) -> None:
+    """记一次**成功**的修复调用的 token 用量（`kind="call_ok"`）.
+
+    用途是把"上限够不够"从感觉变成数字：`REPAIR_MAX_OUTPUT_TOKENS` 是**输出上限**，
+    而 DeepSeek Responses 路径上 `max_output_tokens` **包含思维链 token**——所以要看的是
+    `max_tokens - output_tokens`（见 `_repair_cap_margin`；**不**再减 `reasoning_tokens`）。
+    2026-09-25：同一请求同一 16000 上限，一次 `incomplete/max_output_tokens` 截断、
+    一次成功 ⇒ 余量已在临界，抬上限要有数字依据。
+    """
+    if repair_diag is None:
+        return
+    _u = dict(usage or {})
+    _rec = {
+        "repair_round": repair_round,
+        "kind": "call_ok",
+        "usage": _u,
+        "max_tokens": max_tokens,
+        "reasoning_tokens": _u.get("reasoning_tokens"),
+        "output_tokens": _u.get("output_tokens") or _u.get("completion_tokens"),
+        "total_tokens": _u.get("total_tokens"),
+    }
+    repair_diag.append(_rec)
+    # 把"余量"直接打进 step01.log：不必翻台账就知道这次离上限多近（口径同上）
+    _margin = _repair_cap_margin(_rec)
+    _logger.info("[REPAIR] 输出用量 output_tokens=%s（其中思维链 %s）｜本轮上限 %s｜余量 %s"
+                 % (_rec["output_tokens"], _rec["reasoning_tokens"],
+                    max_tokens if max_tokens is not None else "通道全局值",
+                    _margin if _margin is not None else "未知"))
+
+
 def _repair_shot_warnings(script: dict, novel_text: str,
                           bank=None, objects_bank=None,
                           model: str | None = None,
@@ -5680,15 +6017,30 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         )
 
         _metrics_inc("calls.repair_round")
-        service = create_service()
+        # v6.133：上限只在这里取一次——既发给请求，也随调用记录落台账（余量可算）
+        _repair_cap = _repair_max_output_tokens()
+        # v6.133（2026-09-26 用户复核）：`create_service()` 原先在 try **之外**——
+        # 工厂因配置/依赖问题抛异常时既不会被记成 `call_failed`，也进不了提交层归因
+        # （只会以未捕获异常收场）。现在把初始化也纳入同一条失败记录路径
+        # （`_repair_cap` 因此必须先取，否则记录里带不出本轮上限）。
+        try:
+            service = create_service()
+        except Exception as e:
+            _logger.warn(f"[WARN] 定向修复服务初始化失败（保留原版，未做任何后处理）: {e}")
+            _record_repair_call_failure(repair_diag, _round,
+                                        error="服务初始化失败：%s" % e,
+                                        max_tokens=_repair_cap)
+            return script
         from _text_gen.deepseek_schema import REPAIR_SHOT_REPLACEMENT_SCHEMA
         req = TextGenerationRequest(
             system_prompt=_rep_system,
             user_prompt=prompt,
             user_inputs=_user_inputs,  # v6.37 结构化多轮
             # v6.101：8000 → 16000（每批 4 个完整镜头对象 + 上下文）。
-            # agent_plan 的全局上限是 32768，16k 不触顶，留了 2 倍余量。
-            max_tokens=int(os.getenv("REPAIR_MAX_OUTPUT_TOKENS", "16000") or "16000"),
+            # v6.133（用户 2026-09-25 实跑 BLOCK）：**不再硬编码 16000**——该上限含
+            # 思维链 token，实测同一请求一次截断一次成功（见 `_repair_max_output_tokens`），
+            # 而 .env.content 对修复轮的推荐值本就是 50000。默认不传 = 跟随通道全局值。
+            max_tokens=_repair_cap,
             temperature=0.1,
             json_schema=REPAIR_SHOT_REPLACEMENT_SCHEMA,
             model=model,  # v6.67 接力修复：None=provider 默认（零行为变化）
@@ -5705,10 +6057,22 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             result = service.generate(req)
         except Exception as e:
             _logger.warn(f"[WARN] 定向修复失败（保留原版，未做任何后处理）: {e}")
+            _record_repair_call_failure(repair_diag, _round, error=str(e),
+                                        max_tokens=_repair_cap)
             return script
         if not result.success:
             _logger.warn(f"[WARN] 定向修复失败（保留原版，未做任何后处理）: {result.error}")
+            _record_repair_call_failure(
+                repair_diag, _round, error=str(result.error),
+                truncated=bool(getattr(result, "truncated", False)),
+                usage=getattr(result, "usage", None), max_tokens=_repair_cap)
             return script
+        # v6.133：**成功调用也记 usage**——判断 `REPAIR_MAX_OUTPUT_TOKENS` 该设多大，
+        # 靠的是"实际花了多少输出 token（含思维链）"，而不是"这次有没有踩线"。
+        # 2026-09-25 实测：同一请求同一上限，一次截断一次成功 ⇒ 余量已在临界。
+        _record_repair_call_usage(repair_diag, _round,
+                                  usage=getattr(result, "usage", None),
+                                  max_tokens=_repair_cap)
 
         import re as _re, json as _patch_json
         raw = result.text.strip()
@@ -5719,6 +6083,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             _patch_data = _patch_json.loads(raw)
         except Exception as e:
             _logger.warn(f"[WARN] 定向修复补丁 JSON 解析失败（保留原版，未做任何后处理）: {e}")
+            _record_repair_unusable(repair_diag, _round,
+                                    reason="parse_failed", detail=str(e),
+                                    raw_head=result.text)
             return script
         # v6.77（第四阶段）：修复轮收**完整镜头替换**，不再是字段级补丁。
         # 结构字段成套出现由 schema（复用 _SHOT）保证；这里再做一遍语义校验，
@@ -5735,11 +6102,18 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         if not isinstance(_repls, list):
             _logger.warn("[WARN] 定向修复 shot_replacements 不是数组，保留原版"
                          "（未做任何后处理）")
+            _record_repair_unusable(repair_diag, _round, reason="invalid_structure",
+                                    detail="shot_replacements 不是数组：%s"
+                                           % type(_repls).__name__,
+                                    raw_head=result.text)
             return script
         if not _repls and not isinstance(_hook_repl, dict):
             _logger.warn("[WARN] 定向修复未返回任何替换镜头"
                          "（shot_replacements 与 hook_replacement 皆空），保留原版"
                          "（未做任何后处理）")
+            _record_repair_unusable(repair_diag, _round, reason="empty_patch",
+                                    detail="shot_replacements 与 hook_replacement 皆空",
+                                    raw_head=result.text)
             return script
         # v6.80（发现 9 #1/#2）：hook 走独立的 `_HOOK` 承载；整批校验通过才提交。
         # v6.83（发现 4）：`expected_targets` 要求每个 picked 目标**恰好出现一次**——
@@ -5763,6 +6137,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 _logger.info(f"[REPAIR] 部分提交说明: {_info_only[:2]}")
         if _n_applied <= 0:
             _logger.warn("[WARN] 定向修复替换镜头均未通过校验，保留原版（未做任何后处理）")
+            _record_repair_unusable(repair_diag, _round, reason="rejected_by_validation",
+                                    detail="；".join(str(x) for x in _rejected[:3]))
             return script
         _logger.info(f"[REPAIR] 应用完整镜头替换 {_n_applied} 镜")
         # v6.87（2026-09-21 23:19 实测）：**锁定字段权威快照必须在合并后立刻取**。
@@ -6853,6 +7229,13 @@ def _generate_script_candidates(
       每轮并行补齐差额，失败/解析坏的候选进入下一轮重试（至 _max_attempts）。
     - 不同候选用不同温度增加多样性（第1个默认 0.2，后续 +0.15 递增）
     """
+    # v6.131（2026-09-25 收口）：**生成前的计划门**——原文核验 + 预算核算，挂在候选扇出
+    # **之前**，因此一轮只验算一次；不可行/不可评估/缺计划时**零次候选生成**，直接终止。
+    # `PlanInfeasibleError` 不是 `RuntimeError`，下方候选循环的 `except RuntimeError`
+    # （"生成失败→重试"语义）接不住它，不存在"每个候选重试一次"。
+    from step01_script_gen.plan_feasibility import check_plan_before_generation
+    check_plan_before_generation(outline, chapter_dir=CHAPTER_DIR, novel_text=novel_text)
+
     from shared.config import SCRIPT_CANDIDATE_TOPK, SCRIPT_CANDIDATE_MODELS
     import threading as _threading
     _candidates: list = []  # [(score_dict, script)]
@@ -7379,6 +7762,20 @@ def _cross_run_best_guard(script: dict, novel_text: str) -> tuple:
         )
         meta["selected"] = True
         meta["reason"] = "snapshot_strictly_better"
+        # v6.129（用户 2026-09-25 根因）：**在选稿边界**把快照**自身**的 revision
+        # 一并带出去。它在选稿时成立，但主流程随后会用**本轮大纲**覆盖
+        # `script["chapter_outline"]`，而 `chapter_outline` 参与 revision 哈希
+        # （`shared/quality_gate._stable_payload`）→ 分镜一字未改，进入提交点时
+        # revision 已经变成另一个值（实测 f434e509→380da4c1→0fe1f2b2）。
+        # 台账若只记后两者，下次 guard 仍拿快照自身的 revision 查台账 → 漏拦、
+        # 同一份欠账稿被反复选中（这就是旧稿反复入选的完整触发链）。
+        meta["selected_path"] = str(best_path)
+        try:
+            meta["selected_revision"] = compute_script_revision(best_script)
+        except Exception as _rv_e:
+            meta["selected_revision"] = ""
+            _logger.warn(f"[BEST-GUARD] 快照自身 revision 计算失败"
+                         f"（欠账台账可能漏一条）: {_rv_e}")
         return best_script, meta
     except Exception as _bg_e:
         try:
@@ -7580,6 +7977,12 @@ def main() -> None:
         # v6.64（P4.5，09-11）：多路径择优——生成 SCRIPT_CANDIDATE_TOPK 个独立候选，
         # 取质量分最高的进入 GAP 循环。用 token 换稳定性，对冲模型方差。
         # 默认 doubao=2 / deepseek=1（向下兼容：=1 时行为零变化）。
+        # v6.132（用户 2026-09-25）：生成执行契约（不压缩）——四个完整稿生成入口共用。
+        # 在这里算：计划已定稿（缓存命中或重选都已完成），后续 GAP/收敛轮直接复用。
+        _contract = render_execution_contract(pre_extracted_outline)
+        _logger.info("[INFO] 生成执行契约 %d 字符（选用台词 %d 句）"
+                     % (len(_contract),
+                        len((pre_extracted_outline or {}).get("dialogue_lines") or [])))
         _candidates = _generate_script_candidates(
             novel_text, character_bank, scene_objects_bank, pre_extracted_outline,
         )
@@ -7693,17 +8096,12 @@ def main() -> None:
                 # v6.68: GAP 重生成未指定模型（=provider 默认模型），prompt 剖面同步跟随。
                 # 默认模型 deepseek-v4-flash → deepseek 剖面不截断，救援能直接看到原文高潮
                 #（此前 1600 截断下救援只能靠 gap_context 里的高潮摘录）。
-                _gap_builder, _gap_system = resolve_model_prompt_profile(None)
-                # v6.116（审核）：GAP 重生同样复用大纲锚点
-                from step01_script_gen.outline import outline_to_anchor as _o2a
-                from step01_script_gen.prop_state_anchor import (
-                    render_prop_anchor_block as _rpa)
-                prompt = _gap_builder(
+                # v6.132（用户 2026-09-25）：最终组装（锚点 → 反馈 → **契约在末尾**）
+                # 抽成 `_build_gap_regen_prompt()`——"块在提示里"不等于"块在末尾"，
+                # 抽出来才能对**最终请求**断言末尾位置。
+                prompt, _gap_system = _build_gap_regen_prompt(
                     novel_text, character_bank, scene_objects_bank,
-                    _o2a(pre_extracted_outline),
-                    prop_anchor_block=_rpa(
-                        (pre_extracted_outline or {}).get("prop_state_candidates")))
-                prompt = prompt + gap_context
+                    pre_extracted_outline, _contract, gap_context)
 
                 _metrics_inc("calls.gap_regen")
                 service = create_service()
@@ -7800,10 +8198,14 @@ def main() -> None:
         # v6.70.3: 超总预算 → 跳过可选修复轮（失败即保留原版语义，跳过无数据风险）
         if SHOT_COUNT_REGEN_ENABLED and not _budget_exceeded():
             _timing_mark("pre_regen_over_limit")
+            from step01_script_gen.outline import outline_to_anchor as _o2a
             script = _regen_over_limit(
                 script, novel_text,
                 bank=character_bank, objects_bank=scene_objects_bank,
                 model=_repair_model,
+                # v6.131：与 GAP 重生/结构收敛同源——带上大纲锚点（含核验过的选用台词）
+                outline_anchor=_o2a(pre_extracted_outline, novel_text),
+                contract_block=_contract,
             )
             _timing_mark("regen_over_limit")
         elif SHOT_COUNT_REGEN_ENABLED:
@@ -7818,16 +8220,16 @@ def main() -> None:
         if SHOT_COUNT_REGEN_ENABLED and not _budget_exceeded():
             _timing_mark("pre_regen_structural")
             from step01_script_gen.outline import outline_to_anchor as _o2a
+            # v6.128：结构收敛轮的道具候选短提示同样默认关闭（用户 2026-09-25 决定）
             from step01_script_gen.prop_state_anchor import (
-                render_prop_anchor_block as _rpa)
+                prop_anchor_block_for as _pabf)
             script = _regen_structural_over_limit(
                 script, novel_text,
                 bank=character_bank, objects_bank=scene_objects_bank,
                 model=_repair_model,
-                outline_anchor=_o2a(pre_extracted_outline),
-                # v6.125.2：结构收敛轮同样带道具候选短提示
-                prop_anchor_block=_rpa(
-                    (pre_extracted_outline or {}).get("prop_state_candidates")),
+                outline_anchor=_o2a(pre_extracted_outline, novel_text),
+                prop_anchor_block=_pabf(pre_extracted_outline),
+                contract_block=_contract,
             )
             _timing_mark("regen_structural")
         elif SHOT_COUNT_REGEN_ENABLED:
@@ -8220,7 +8622,9 @@ def main() -> None:
                       "forbidden_lines": _forbidden_lines,
                       "producer_model": _producer_model},
             audit_model=_repair_model or _producer_model,
-            label="落盘前提交")
+            label="落盘前提交",
+            # v6.129：选稿边界记录的快照自身 revision（见 `_cross_run_best_guard`）
+            source_revision=str(_bg_meta.get("selected_revision") or ""))
         # C5 修复（08-11）：fps 一致性校验（finalize 之后 timeline 已存在）
         _check_fps_consistency(script)
         # 提交成功后留档（失败时提交点自己会写诊断快照）

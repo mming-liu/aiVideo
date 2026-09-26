@@ -1,0 +1,480 @@
+{
+  "note": "四类跨字段矛盾的最小反例，逐条取自第十六次 chapter_001 的真实镜头。每条只保留检测器判据需要的字段，供 test_cross_field_checks.py 正例使用。",
+  "cases": [
+    {
+      "issue": "frame_presence_consistency",
+      "shot_id": 1,
+      "why": "lf_desc/kf2 desc 写「老农已走远」，frame_layouts 里折叠后的「群演」仍 on_screen=true",
+      "shot": {
+        "index": 1,
+        "duration_sec": 5.0,
+        "ff_desc": "无篷舴艋舟（宽1.4米，可容3人）静止于荷塘中，杨旭盘膝坐船头持箫，听香撑伞立于身旁，老农牵牛在远处田埂",
+        "lf_desc": "杨旭放下玉箫，听香轻启朱唇开始唱歌，老农已走远，红日完全没入地平线",
+        "motion_desc": "前2秒：无篷舴艋舟（宽1.4米，可容3人）缓缓前行，荷叶向两侧分开；2-4秒：杨旭吹箫，箫音悠扬，听香静立；4-5秒：老农牵牛从远处田埂走过，红日半没于天涯",
+        "keyframes": [
+          {
+            "desc": "小舟静止于荷塘，杨旭盘膝坐船头，手持玉箫，听香撑伞立于身旁，老农牵牛在远处田埂",
+            "stage": "pre",
+            "t_sec": 1.0
+          },
+          {
+            "desc": "杨旭吹箫，箫音悠扬，听香静立撑伞，荷叶随小舟分开",
+            "stage": "approach",
+            "t_sec": 2.5
+          },
+          {
+            "desc": "杨旭放下玉箫，听香轻启朱唇唱歌，老农已走远",
+            "stage": "react",
+            "t_sec": 4.0
+          }
+        ],
+        "frame_layouts": {
+          "ff": [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中偏左",
+              "pose": "盘坐持箫",
+              "gaze_target": "画右",
+              "props": [
+                "玉箫"
+              ]
+            },
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "站立撑伞",
+              "gaze_target": "画左",
+              "props": [
+                "油纸伞"
+              ]
+            },
+            {
+              "name": "群演",
+              "on_screen": true,
+              "position": "画左远景",
+              "pose": "牵牛行走",
+              "gaze_target": "画右",
+              "props": [
+                "牵绳"
+              ]
+            }
+          ],
+          "lf": [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中偏左",
+              "pose": "盘坐",
+              "gaze_target": "画右",
+              "props": []
+            },
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "站立撑伞",
+              "gaze_target": "画左",
+              "props": [
+                "油纸伞"
+              ]
+            },
+            {
+              "name": "群演",
+              "on_screen": true,
+              "position": "画左远景",
+              "pose": "牵牛行走",
+              "gaze_target": "画右",
+              "props": [
+                "牵绳"
+              ]
+            }
+          ],
+          "kfs": [
+            [
+              {
+                "name": "杨旭",
+                "on_screen": true,
+                "position": "画中偏左",
+                "pose": "盘坐持箫",
+                "gaze_target": "画右",
+                "props": [
+                  "玉箫"
+                ]
+              },
+              {
+                "name": "群演",
+                "on_screen": true,
+                "position": "画左远景",
+                "pose": "",
+                "gaze_target": "画右",
+                "props": [
+                  "牵绳"
+                ]
+              }
+            ],
+            [
+              {
+                "name": "杨旭",
+                "on_screen": true,
+                "position": "画中偏左",
+                "pose": "盘坐吹箫",
+                "gaze_target": "画右",
+                "props": [
+                  "玉箫"
+                ]
+              }
+            ],
+            [
+              {
+                "name": "杨旭",
+                "on_screen": true,
+                "position": "画中偏左",
+                "pose": "盘坐",
+                "gaze_target": "画右",
+                "props": []
+              },
+              {
+                "name": "群演",
+                "on_screen": true,
+                "position": "画左远景",
+                "pose": "",
+                "gaze_target": "画右",
+                "props": [
+                  "牵绳"
+                ]
+              }
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "issue": "prop_possession_consistency",
+      "shot_id": 2,
+      "why": "ff_desc 写「钓杆已脱手垂湖面，酒壶已脱手」，frame_layouts.ff 的 props 仍是 [钓杆, 酒壶]",
+      "shot": {
+        "index": 2,
+        "duration_sec": 6.0,
+        "ff_desc": "杨旭袒腹仰卧船头，钓杆已脱手垂湖面，酒壶已脱手，听香跪坐身旁俯身侍奉",
+        "lf_desc": "杨旭右手已空，酒壶倒在甲板上，左手仍握钓杆，听香披头散发，步摇已落水，神情惊愕。",
+        "motion_desc": "前2秒：杨旭仰卧饮酒，听香俯身侍奉；2-4秒：听香轻舒玉臂环住杨旭脖子，亲昵嬉笑；4-6秒：杨旭闷哼一声，丢了酒壶，酒水洒向甲板，手抓住听香头发，步摇碰落掉入水中",
+        "keyframes": [
+          {
+            "desc": "杨旭袒腹仰卧船头，左手钓杆垂湖面，右手提酒壶，听香跪坐身旁俯身侍奉，步摇在发间",
+            "stage": "pre",
+            "t_sec": 1.2
+          },
+          {
+            "desc": "听香轻舒玉臂环住杨旭脖子，亲昵嬉笑，杨旭右手仍提酒壶",
+            "stage": "approach",
+            "t_sec": 3.0
+          },
+          {
+            "desc": "杨旭闷哼一声，右手已空，酒壶倒在甲板上，左手仍握钓杆，听香披头散发，步摇已落水",
+            "stage": "climax",
+            "t_sec": 5.0
+          }
+        ],
+        "frame_layouts": {
+          "ff": [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中",
+              "pose": "仰卧",
+              "gaze_target": "画上",
+              "props": [
+                "钓杆",
+                "酒壶"
+              ]
+            },
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "跪坐俯身",
+              "gaze_target": "画左",
+              "props": [
+                "步摇"
+              ]
+            }
+          ],
+          "lf": [
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中",
+              "pose": "仰卧",
+              "gaze_target": "画上",
+              "props": [
+                "钓杆"
+              ]
+            },
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "跪坐",
+              "gaze_target": "画左",
+              "props": []
+            }
+          ],
+          "kfs": [
+            [
+              {
+                "name": "杨旭",
+                "on_screen": true,
+                "position": "画中",
+                "pose": "仰卧",
+                "gaze_target": "画上",
+                "props": [
+                  "钓杆",
+                  "酒壶"
+                ]
+              }
+            ],
+            [
+              {
+                "name": "杨旭",
+                "on_screen": true,
+                "position": "画中",
+                "pose": "仰卧",
+                "gaze_target": "画上",
+                "props": [
+                  "钓杆",
+                  "酒壶"
+                ]
+              }
+            ],
+            [
+              {
+                "name": "杨旭",
+                "on_screen": true,
+                "position": "画中",
+                "pose": "仰卧",
+                "gaze_target": "画上",
+                "props": [
+                  "钓杆"
+                ]
+              }
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "issue": "frame_stage_pose_consistency",
+      "shot_id": 5,
+      "why": "lf 是结果帧，frame_layouts.lf 的 pose 仍是「纵身跃起」过程态",
+      "shot": {
+        "index": 5,
+        "duration_sec": 5.88,
+        "ff_desc": "张十三站在门口，举灯盏，望向水湾中的无篷舴艋舟（宽1.4米，可容3人），神情眉头紧锁，目光急切，不停张望",
+        "lf_desc": "张十三听到听香回应，脸色一变，急忙丢了灯盏，纵身一跃飞掠上船。杨旭位于画左远景、仰卧，仰面朝上双目紧闭，头颈僵直不侧转",
+        "motion_desc": "0-2秒：张十三举灯盏快步走出门，站在湾堤上 / 2-5.88秒：张十三扬声询问，望向无篷舴艋舟（宽1.4米，可容3人）；听香颤抖着回应",
+        "keyframes": [
+          {
+            "desc": "张十三举灯盏站在湾堤上，望向水湾中的小舟，神情眉头紧锁，目光急切，不停张望",
+            "stage": "pre",
+            "t_sec": 1.0
+          },
+          {
+            "desc": "张十三听到回应，脸色一变，丢了灯盏，纵身跃起飞掠上船",
+            "stage": "climax",
+            "t_sec": 3.5
+          }
+        ],
+        "frame_layouts": {
+          "ff": [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "站立举灯",
+              "gaze_target": "画左",
+              "props": [
+                "灯盏"
+              ]
+            },
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画左远景",
+              "pose": "跪坐",
+              "gaze_target": "画右",
+              "props": []
+            },
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画左远景",
+              "pose": "仰卧",
+              "gaze_target": "无",
+              "props": [
+                "钓杆"
+              ]
+            }
+          ],
+          "lf": [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "纵身跃起",
+              "gaze_target": "画左",
+              "props": []
+            },
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画左远景",
+              "pose": "跪坐",
+              "gaze_target": "画右",
+              "props": []
+            },
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画左远景",
+              "pose": "仰卧",
+              "gaze_target": "无",
+              "props": [
+                "钓杆"
+              ]
+            }
+          ],
+          "kfs": [
+            [
+              {
+                "name": "张十三",
+                "on_screen": true,
+                "position": "画右",
+                "pose": "站立举灯",
+                "gaze_target": "画左",
+                "props": [
+                  "灯盏"
+                ]
+              }
+            ],
+            [
+              {
+                "name": "张十三",
+                "on_screen": true,
+                "position": "画右",
+                "pose": "纵身跃起",
+                "gaze_target": "画左",
+                "props": []
+              }
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "issue": "result_action_support",
+      "shot_id": 7,
+      "why": "lf_desc 有「反手一掌/耳光扇在她脸上」，motion_desc 无对应过程段",
+      "shot": {
+        "index": 7,
+        "duration_sec": 5.38,
+        "ff_desc": "张十三站立，击气腾腾盯着听香跪坐，眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲指水面。伤处白袍心口一片暗红痕迹洇开，暗红痕迹清晰可见",
+        "lf_desc": "听香再度尖叫，张十三怒极，反手一掌，一个清脆的耳光扇在她脸上。伤处白袍心口一片暗红痕迹洇开，暗红痕迹清晰可见",
+        "motion_desc": "前2秒：张十三击气腾腾地盯着听香，厉声质问；2-4秒：听香颤抖着指着水面，结巴回应；4-5秒：一阵风来，荷叶乱动，听香吓得再度尖叫",
+        "keyframes": [
+          {
+            "desc": "张十三站立，杀气腾腾盯着听香，听香跪坐，眼睛瞪大，瞳孔收缩，嘴巴张开，面部肌肉扭曲指水面",
+            "stage": "pre",
+            "t_sec": 1.0
+          },
+          {
+            "desc": "听香再度尖叫，张十三怒极，反手一掌，耳光扇在她脸上",
+            "stage": "climax",
+            "t_sec": 4.0
+          }
+        ],
+        "frame_layouts": {
+          "ff": [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画左",
+              "pose": "站立",
+              "gaze_target": "画右",
+              "props": []
+            },
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "跪坐",
+              "gaze_target": "画左",
+              "props": []
+            },
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中",
+              "pose": "仰卧",
+              "gaze_target": "无",
+              "props": [
+                "钓杆"
+              ]
+            }
+          ],
+          "lf": [
+            {
+              "name": "张十三",
+              "on_screen": true,
+              "position": "画左",
+              "pose": "站立",
+              "gaze_target": "画右",
+              "props": []
+            },
+            {
+              "name": "听香",
+              "on_screen": true,
+              "position": "画右",
+              "pose": "跪坐捂脸",
+              "gaze_target": "画左",
+              "props": []
+            },
+            {
+              "name": "杨旭",
+              "on_screen": true,
+              "position": "画中",
+              "pose": "仰卧",
+              "gaze_target": "无",
+              "props": [
+                "钓杆"
+              ]
+            }
+          ],
+          "kfs": [
+            [
+              {
+                "name": "张十三",
+                "on_screen": true,
+                "position": "画左",
+                "pose": "站立",
+                "gaze_target": "画右",
+                "props": []
+              }
+            ],
+            [
+              {
+                "name": "张十三",
+                "on_screen": true,
+                "position": "画左",
+                "pose": "站立",
+                "gaze_target": "画右",
+                "props": []
+              }
+            ]
+          ]
+        }
+      }
+    }
+  ]
+}

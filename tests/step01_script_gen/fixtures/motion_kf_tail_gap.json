@@ -1,0 +1,39 @@
+{
+  "note": "总计划阶段 0 的第二类最小反例：3 个非空 motion 时段、只有 2 个 KF，且两个 KF 都落在前段 —— 尾段没有任何帧证据。确定性层**不得**通过合并时段把它归零（见 motion_segment_kf_align）。",
+  "script": {
+    "shots": [
+      {
+        "index": 1,
+        "duration": 6.0,
+        "duration_sec": 6.0,
+        "motion_desc": "0-2秒：破水而出；2-4秒：举匕首下刺；4-6秒：闷哼推臂",
+        "keyframes": [
+          {
+            "desc": "破水而出",
+            "stage": "pre",
+            "t_sec": 1.0
+          },
+          {
+            "desc": "举匕首下刺",
+            "stage": "climax",
+            "t_sec": 3.0
+          }
+        ],
+        "prompt": "[中景] 水面破开",
+        "ff_desc": "水面平静",
+        "lf_desc": "杨旭仰卧船头，血染衣襟",
+        "narration_segment": "",
+        "subtitle": "",
+        "frame_layouts": {
+          "ff": [],
+          "lf": [],
+          "kfs": [
+            [],
+            []
+          ]
+        }
+      }
+    ],
+    "hook": null
+  }
+}

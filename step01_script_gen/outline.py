@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import re
 import sys
 from pathlib import Path
@@ -37,21 +38,212 @@ OUTLINE_PROMPT = """
   "causal_chain": ["起因→行动→结果→悬念"],
   "character_motives": ["角色：想做什么；为什么；原文证据：..."],
   "shot_beats": ["节拍：...｜本镜信息目的：...｜原文依据：..."],
-  "time_budget": "对白约Xs；动作约Ys；反应约Zs"
+  "dialogue_lines": ["逐字台词1（原文原话）", "逐字台词2"],
+  "omittable": ["可省略内容1", "..."],
+  "time_budget": "对白/动作/反应的大致分配（不必报精确秒数）"
 }}
 
 # 规则
-- main_events: 按时间顺序列出 3-6 个主要事件，覆盖全章
-- required_facts: 不得省略的关键事实，必须附原文证据
+- main_events: 按时间顺序列出 3-6 个主要事件，覆盖全章 = **本集的事件顺序**
+- required_facts: **必保留事实**（"必保留"的唯一清单），不得省略，必须附原文证据
+- dialogue_lines: 本集**选用的逐字台词/独白**，从原文**逐字摘出**（不改写、不润色、不自造）；
+  只收真正要拍的句子，宁少勿滥——每一句都占用时长，而时长由代码逐句估算（自报秒数不参与判定）
+- omittable: 本集**可省略的内容**（不拍也不影响主线的原文段落），供预算不够时重选
+- 时长预算（**先算再选，v6.132**）：本集正片**合法 60-90 秒**、**规划目标 70-80 秒**。
+  对白是时长的最大一项，**必须给画面动作/反应/过场留出时间**——每场只留最关键的一两句，
+  不要把整段对话都列进来。**选多了本集就装不下**：会被预算门打回重选（反馈会带上代码
+  算出的秒数），白费一轮；更严重的是会把整集挤爆。
 - causal_chain: 每个关键转折必须具备起因→行动→结果→悬念
 - character_motives: 说明角色为什么这样做，并附原文证据
 - shot_beats: 覆盖每条 main_events，按原文顺序排列；每个节拍只承载一条主要信息，标出信息目的和证据
-- time_budget: 给对白、动作、反应预留可执行时间，不能靠加速朗读掩盖
+- time_budget: 只写大致的分配倾向（**不必**报精确秒数——时长由代码按 dialogue_lines 逐句估算，
+  自报秒数不参与判定）；对白与**同时发生**的画面动作不要重复计时
 - emotional_arc: 一句话概括情绪走向
 - climax: 全章最震撼/冲突最强的事件
 - end_hook: 本章结尾已有的悬念，必须有原文依据；不得为了另拍钩子视频虚构事件
 - key_scenes: 需要重点刻画的关键场景（动作/情感高潮）
 """
+
+
+_OUTLINE_SYSTEM_PROMPT = "你是短视频编剧，擅长从小说章节提炼叙事大纲，供分镜参考。只输出纯JSON。"
+
+# ---------------------------------------------------------------------------
+# 规划层重选（**一轮，带代码算出的数字**）——用户 2026-09-25 决定 ①
+# ---------------------------------------------------------------------------
+#: 最多重选几轮。用户明确要求"**一次**有数值反馈的规划重选"——这不是可调容量，
+#: 不要为了"再多试一次"抬高：重选解决的是"选材超预算"，第二次不会变成另一种问题。
+#: **口径（用户 2026-09-25 补充）**："一次"指**同一计划版本一次**，不是每次调用一次：
+#: 已尝试过的结论记在 `plan_replan` 并随缓存持久化，计划/规则没变就直接沿用。
+_REPLAN_MAX_ROUNDS = 1
+#: 重选**允许**改动的字段；其余字段必须原样返回（必保留事实与事件顺序不得变）
+_REPLAN_FREE_FIELDS = ("dialogue_lines", "omittable", "time_budget")
+
+#: 强制重跑这一轮重选的开关（用户 2026-09-25：不自动重试，但要有**明确的重新规划入口**）.
+#: 置 1 = 忽略计划里已记录的重选结论，重新跑一轮；默认空 = 沿用已记录的结论。
+FORCE_REPLAN_ENV = "STEP01_FORCE_REPLAN"
+
+
+def _force_replan() -> bool:
+    return os.getenv(FORCE_REPLAN_ENV, "").strip() == "1"
+
+_PLAN_BUDGET_FEEDBACK = """
+# ★ 重选本集台词（预算反馈；本轮**只改台词**）
+
+代码按**逐句时长估算器**核算了你上一版计划选用的台词（**不采信自报秒数**）：
+- 已过原文逐字核验的台词：{lines} 句，估时 **{dialogue_sec:.2f} 秒**
+- 本集正片**合法 {bmin:.0f}-{bmax:.0f} 秒**，**规划目标 {tmin}-{tmax} 秒**（画面动作、反应、
+  过场都要占时间）
+- 镜头节拍 {beats} 个，画面下界 {floor:.2f} 秒
+
+⇒ 对白一项就 {dialogue_sec:.2f} 秒，**本集按当前选材装不下**。请重新选择原文台词：
+
+1. **只从原文逐字摘**真正必须拍的对白——不改写、不润色、不自造、不拿旁白当台词；
+2. 按**规划目标**把对白估时压到 **{tmax} 秒以内**：可以少选，每场只留最关键的一两句；
+3. **其余字段必须与上一版完全一致**（`main_events` / `required_facts` / `causal_chain` /
+   `character_motives` / `shot_beats` / `climax` / `end_hook` / `key_scenes` / `characters`）：
+   必保留事实一句都不能删，事件顺序不许改——**改了就会被拒收，这一轮白费**；
+4. 顺带更新 `omittable`（可省略内容）与 `time_budget`（倾向性文字，不必报精确秒数）。
+
+## 上一版计划（除台词/可省略/时间倾向外，请原样返回）
+{plan_json}
+"""
+
+
+def _parse_outline_json(raw: str) -> dict | None:
+    """剥 code fence + 解析 JSON（首版大纲与重选共用同一条解析路径）."""
+    raw = str(raw or "").strip()
+    raw = re.sub(r"^```json\s*", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        start, end = raw.find("{"), raw.rfind("}")
+        if start == -1 or end == -1:
+            return None
+        try:
+            return json.loads(raw[start:end + 1])
+        except json.JSONDecodeError:
+            return None
+
+
+def _budget_feedback_block(rep: dict, plan: dict) -> str:
+    """把**代码算出**的数字反馈给规划阶段（数字全部来自 `evaluate_plan`，不含自报值）."""
+    _b = rep.get("budget") or {}
+    return _PLAN_BUDGET_FEEDBACK.format(
+        lines=rep.get("dialogue_lines", 0),
+        dialogue_sec=float(rep.get("dialogue_sec") or 0.0),
+        bmin=float(_b.get("min") or 0.0), bmax=float(_b.get("max") or 0.0),
+        tmin=_TARGET_MIN_SEC, tmax=_TARGET_MAX_SEC,
+        beats=rep.get("beats", 0),
+        floor=float(rep.get("beats_floor_sec") or 0.0),
+        plan_json=json.dumps(plan, ensure_ascii=False, indent=2),
+    )
+
+
+def _plan_core_preserved(old: dict, new: dict) -> str:
+    """重选后核心字段是否原样保留；返回第一个被改动/丢失的字段名（空串=通过）.
+
+    "保持必保留事实和事件顺序"是用户给这轮重选的硬边界——模型改写这些字段就**不接受**
+    （宁可用首版计划去报告需拆集，也不接受一份事实被悄悄改过的计划）。
+    """
+    for key in sorted(set(old or {}) | set(new or {})):
+        if key in _REPLAN_FREE_FIELDS or key.startswith("prop_state") or key == "plan_replan":
+            continue
+        if (old or {}).get(key) != (new or {}).get(key):
+            return key
+    return ""
+
+
+def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
+                                  base_prompt=None, system_prompt=None) -> dict | None:
+    """**带数值反馈的规划重选**：只重选台词，核心字段必须原样（唯一一轮）.
+
+    Returns `(新计划, "")`；调用失败 / 解析失败 / 校验不过 / 核心字段被改动 →
+    `(None, 原因)`——**原因要分别记录**（用户 2026-09-25）：调用/解析失败**不是**判定结论，
+    不能据此报告"需拆集"（见 `check_plan_before_generation` 的 `_replan_note`）。
+    """
+    from shared.config import PROMPT_MAX_CHARS
+    _base = base_prompt or OUTLINE_PROMPT.format(novel_text=novel_text[:PROMPT_MAX_CHARS])
+    _prompt = _base + "\n" + _budget_feedback_block(rep, plan)
+    try:
+        service = create_service()
+        result = service.generate(TextGenerationRequest(
+            system_prompt=system_prompt or _OUTLINE_SYSTEM_PROMPT,
+            user_prompt=_prompt, max_tokens=4000, temperature=0.3,
+            json_schema=OUTLINE_SCHEMA, model=model))
+    except Exception as exc:
+        print(f"[WARN] 规划重选调用异常（保留首版计划）: {exc}")
+        return None, "call_failed: %s" % exc
+    if not result.success:
+        print(f"[WARN] 规划重选失败（保留首版计划）: {result.error}")
+        return None, "call_failed: %s" % result.error
+    data = _parse_outline_json(result.text)
+    new_plan = _validate_outline(data, novel_text) if isinstance(data, dict) else None
+    if not new_plan:
+        print("[WARN] 规划重选结果不合法（保留首版计划）")
+        return None, "invalid_result"
+    _broken = _plan_core_preserved(plan, new_plan)
+    if _broken:
+        print("[WARN] 规划重选改动了核心字段「%s」——不接受（必保留事实/事件顺序必须原样）"
+              % _broken)
+        return None, "core_field_changed: %s" % _broken
+    return new_plan, ""
+
+
+def enforce_budget_by_replanning(plan, novel_text, *, model=None,
+                                 base_prompt=None, system_prompt=None) -> tuple:
+    """规划阶段出口：代码验算 → 超预算就**带数字重选一次** → 再验算（`_REPLAN_MAX_ROUNDS`）.
+
+    Returns `(plan, info)`；`info` 记录这一轮读数（写进计划的 `plan_replan` 供诊断留档），
+    未触发重选时为空 dict。
+
+    **不在这里判"需拆集"**：判定仍归生成前的门（`plan_feasibility.check_plan_before_generation`）
+    ——重选后仍超限时它照旧停止，诊断里带上两次读数。
+    """
+    from step01_script_gen.plan_feasibility import evaluate_plan
+    rep = evaluate_plan(plan, novel_text=novel_text)
+    if rep["verdict"] != "infeasible" or _REPLAN_MAX_ROUNDS < 1:
+        return plan, {}
+    # 用户 2026-09-25 定口径：**"只重选一次" = 同一计划版本一次**，不是每次调用一次。
+    # 上一轮已经把"重选后仍超限 / 重选失败"的结论记在计划里（`plan_replan`，随缓存持久化），
+    # 计划与规则都没变时直接沿用结论——否则缓存里那份计划会让每轮运行都再烧一次模型。
+    _prev = plan.get("plan_replan") if isinstance(plan, dict) else None
+    if (isinstance(_prev, dict) and _prev.get("result") in ("infeasible", "replan_failed")
+            and not _force_replan()):
+        print("[PLAN] 这一版计划已重选过一轮（%s）→ 不再重复重选（同一计划版本只重选一次）；"
+              "如需重跑该轮：%s=1" % (_prev.get("result"), FORCE_REPLAN_ENV))
+        return plan, dict(_prev, skipped="already_attempted")
+    if isinstance(_prev, dict) and _force_replan():
+        print("[PLAN] %s=1 → 忽略已记录的重选结论（%s），重跑这一轮"
+              % (FORCE_REPLAN_ENV, _prev.get("result")))
+    print("[PLAN] 首版计划超预算（对白 %.2fs / %d 句，上限 %.0fs）→ 带数字反馈重选台词（%d 轮）"
+          % (rep["dialogue_sec"], rep["dialogue_lines"], rep["budget"]["max"], _REPLAN_MAX_ROUNDS))
+    info = {"rounds": _REPLAN_MAX_ROUNDS,
+            "before_dialogue_sec": rep["dialogue_sec"], "before_lines": rep["dialogue_lines"]}
+    new_plan, _why = replan_dialogue_within_budget(plan, rep, novel_text, model=model,
+                                                   base_prompt=base_prompt,
+                                                   system_prompt=system_prompt)
+    if new_plan is None:
+        # "重选没跑成"（调用/解析/校验失败）与"重选后仍超预算"是**两回事**：
+        # 前者没有判定结论，不能据此说本集需拆集。
+        info["result"] = "replan_failed"
+        info["detail"] = _why
+        print("[PLAN] 规划层重选未完成（%s）——这**不是**「本集不可行」的判定；"
+              "重跑该轮：%s=1" % (_why, FORCE_REPLAN_ENV))
+        return plan, info
+    rep2 = evaluate_plan(new_plan, novel_text=novel_text)
+    info.update({"result": rep2["verdict"], "after_dialogue_sec": rep2["dialogue_sec"],
+                 "after_lines": rep2["dialogue_lines"],
+                 "rejected": len(rep2["dialogue_rejected"])})
+    if rep2["verdict"] == "infeasible":
+        print("[PLAN] 重选后仍超预算（对白 %.2fs / %d 句 > %.0fs）→ 由生成前的门报告「需拆集」"
+              % (rep2["dialogue_sec"], rep2["dialogue_lines"], rep2["budget"]["max"]))
+        return new_plan, info
+    print("[PLAN] 重选后进入预算（对白 %.2fs → %.2fs；%d 句 → %d 句）"
+          % (info["before_dialogue_sec"], info["after_dialogue_sec"],
+             info["before_lines"], info["after_lines"]))
+    return new_plan, info
 
 
 def generate_outline(novel_text: str, model: str | None = None,
@@ -61,15 +253,17 @@ def generate_outline(novel_text: str, model: str | None = None,
         return None
     from shared.config import PROMPT_MAX_CHARS
     prompt = OUTLINE_PROMPT.format(novel_text=novel_text[:PROMPT_MAX_CHARS])
-    system_prompt = "你是短视频编剧，擅长从小说章节提炼叙事大纲，供分镜参考。只输出纯JSON。"
+    system_prompt = _OUTLINE_SYSTEM_PROMPT
     # v6.125.2（用户 2026-09-25 决定）：道具状态**候选锚点**随大纲一起携带。
     # 它由**确定性扫描**从原文得出（不经 LLM），只取 `motion_away` / `marker_after`
     # 两种形状，带原文位置与 `status="待核实"`；生成/GAP 重生用**独立短提示**注入
-    # （不能并进 `outline_anchor`——agent_plan 会把大纲锚点压到约 200 字，
-    # 除【高潮事件】外的行会被裁掉）。
+    # （不能并进 `outline_anchor`——doubao/agent_plan 剖面会把大纲锚点压到约 200 字，
+    # v6.132 起必保【高潮事件】与【选用台词】，其余行只保留装得下的）。
     from step01_script_gen.prop_state_anchor import outline_prop_anchors
     _prop_anchors = outline_prop_anchors(novel_text)
     cache_key = None
+    outline = None
+    _from_cache = False
     if cache_path is not None:
         from _text_gen.config import TextGenCfg
         cache_path = Path(cache_path)
@@ -92,52 +286,55 @@ def generate_outline(novel_text: str, model: str | None = None,
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
             if (isinstance(cached, dict) and cached.get("source_hash") == cache_key
-                    and _validate_outline(cached.get("outline"))):
+                    and _validate_outline(cached.get("outline"), novel_text)):
                 print(f"[CACHE] 复用章节大纲: {cache_path}")
+                outline = cached["outline"]
+                _from_cache = True
                 # 缓存里若缺该字段（旧缓存但键相同——理论上不会，键已含锚点），
                 # 用本次算出的补上，避免调用方拿到 None 而丢掉独立短提示
-                if isinstance(cached["outline"], dict):
-                    cached["outline"].setdefault("prop_state_candidates", _prop_anchors)
-                return cached["outline"]
+                if isinstance(outline, dict):
+                    outline.setdefault("prop_state_candidates", _prop_anchors)
         except (OSError, ValueError, TypeError):
             pass
-    service = create_service()
-    req = TextGenerationRequest(
-        system_prompt=system_prompt,
-        user_prompt=prompt,
-        max_tokens=4000,
-        temperature=0.3,
-        json_schema=OUTLINE_SCHEMA,
-        model=model,
-    )
-    result = service.generate(req)
-    if not result.success:
-        return None
-
-    raw = result.text.strip()
-    raw = re.sub(r"^```json\s*", "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start != -1 and end != -1:
-            data = json.loads(raw[start:end + 1])
-        else:
+    if outline is None:
+        service = create_service()
+        req = TextGenerationRequest(
+            system_prompt=system_prompt,
+            user_prompt=prompt,
+            max_tokens=4000,
+            temperature=0.3,
+            json_schema=OUTLINE_SCHEMA,
+            model=model,
+        )
+        result = service.generate(req)
+        if not result.success:
             return None
-    # C2 修复（08-11）：大纲零校验——此前 main_events/climax 非空零校验，
-    # 空大纲静默注入分镜 prompt（大纲锚点是一堆空标签，LLM 拿不到任何约束）。
-    # 补两条校验：① 关键字段非空（main_events 至少1条、climax 非空）；
-    # ② main_events 元素非空字符串。不合格时返回 None（调用方按"大纲生成失败"
-    # 处理，不注入空锚点）。
-    outline = _validate_outline(data)
-    if outline:
+        data = _parse_outline_json(result.text)
+        if data is None:
+            return None
+        # C2 修复（08-11）：大纲零校验——此前 main_events/climax 非空零校验，
+        # 空大纲静默注入分镜 prompt（大纲锚点是一堆空标签，LLM 拿不到任何约束）。
+        # 补两条校验：① 关键字段非空（main_events 至少1条、climax 非空）；
+        # ② main_events 元素非空字符串。不合格时返回 None（调用方按"大纲生成失败"
+        # 处理，不注入空锚点）。
+        outline = _validate_outline(data, novel_text)
+        if not outline:
+            return None
         # 候选锚点是**确定性**产物（不经 LLM），挂在大纲 dict 上随稿流动；
         # `_validate_outline` 只做字段净化、不重建 dict，所以不会把它丢掉。
         outline["prop_state_candidates"] = _prop_anchors
-    if outline and cache_path is not None:
+
+    # v6.132（用户 2026-09-25 决定 ①）：规划阶段出口的**预算重选**——代码验算后发现选材
+    # 超预算，就把代码算出的数字反馈给规划阶段重选一次（只重选台词，核心字段原样）。
+    # 放在这里而不是生成前的门那里，是因为**缓存命中的计划同样要过这一关**：否则一份
+    # 超预算的计划会被缓存下来，每轮都在门口被拦、永远没有重选的机会。
+    outline, _replan = enforce_budget_by_replanning(
+        outline, novel_text, model=model, base_prompt=prompt, system_prompt=system_prompt)
+    if _replan:
+        outline["plan_replan"] = _replan
+
+    # 重选过就回写缓存（键不变）——下次直接复用选好的计划，不重复烧这一轮
+    if cache_path is not None and cache_key is not None and not (_from_cache and not _replan):
         try:
             from shared.json_io import atomic_dump_json
             cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -148,7 +345,37 @@ def generate_outline(novel_text: str, model: str | None = None,
     return outline
 
 
-def _validate_outline(outline: dict | None) -> dict | None:
+def _check_outline_dialogue_grounding(outline: dict, novel_text: str) -> None:
+    """大纲校验补充（v6.131，2026-09-25 收口）：选用的台词必须**逐字来自原文**.
+
+    与 `plan_feasibility.check_plan_before_generation()` **同一条边界、同一套函数**：
+    原来的 `_validate_outline` 只净化字段（strip/去空），不核实 `dialogue_lines` 是否真
+    来自原文——计划因此还不是"内容取舍的权威"。这里不重复实现核验逻辑，只调用它；核验
+    不过的台词**从大纲里剔除**（剔除后为空 → 交给生成前可行性门按 fail-closed 停止，
+    本函数不抛异常：`_validate_outline` 的契约是"返回可用大纲或 None"）。
+
+    无原文可核验时（调用方没传）原样返回——判定留给生成前那道门，不在校验层造第二个判据。
+    """
+    if not str(novel_text or "").strip():
+        return
+    lines = (outline or {}).get("dialogue_lines")
+    if not isinstance(lines, list) or not lines:
+        return
+    try:
+        from step01_script_gen.plan_feasibility import (
+            plan_dialogue_lines, verify_dialogue_lines)
+        kept, rejected = verify_dialogue_lines(plan_dialogue_lines(outline), novel_text)
+    except Exception as exc:  # 核验器异常不得静默降级为"全部通过"
+        print(f"[WARN] 大纲台词原文核验异常（保留原样，由生成前可行性门判定）: {exc}")
+        return
+    if not rejected:
+        return
+    outline["dialogue_lines"] = kept
+    print("[WARN] 大纲选用台词 %d 句未在原文中逐字找到，已剔除：%s"
+          % (len(rejected), "；".join(str(d.get("line"))[:20] for d in rejected)))
+
+
+def _validate_outline(outline: dict | None, novel_text: str = "") -> dict | None:
     """大纲合法性校验（C2 修复 08-11）.
 
     校验项：
@@ -156,6 +383,7 @@ def _validate_outline(outline: dict | None) -> dict | None:
     2. climax 非空（高潮事件是分镜分布的锚点，空则锚点失效）
     3. required_facts / causal_chain 非空，shot_beats 至少覆盖每条事件
     4. 净化：列表元素 strip、过滤空串
+    5. v6.131：`dialogue_lines` **逐字来自原文**核验（见 `_check_outline_dialogue_grounding`）
     不合格返回 None（调用方不注入空锚点，避免「【本章主要事件】」空标签进 prompt）。
     """
     if not isinstance(outline, dict) or not outline:
@@ -187,6 +415,15 @@ def _validate_outline(outline: dict | None) -> dict | None:
         print("[WARN] 大纲校验失败：climax（高潮事件）为空（不注入空大纲锚点）")
         return None
     outline["climax"] = climax
+    # v6.131：`dialogue_lines` / `omittable` 只净化（去空/去空白），**不在这里判空**——
+    # 「本集一句台词都没选用」由生成前可行性门按 fail-closed 停止（单一判据，不造第二个）。
+    # 字段缺失时**不补空列表**：保持"缺字段"语义，诊断才能指出"计划不完整"而不是"没选台词"。
+    for field in ("dialogue_lines", "omittable"):
+        values = outline.get(field)
+        if isinstance(values, list):
+            outline[field] = [item.strip() for item in values
+                              if isinstance(item, str) and item.strip()]
+    _check_outline_dialogue_grounding(outline, novel_text)
     return outline
 
 
@@ -226,13 +463,17 @@ def _calibrate_time_budget(budget: str) -> str:
         "（已按目标 %d-%d 秒校准）" % (_TARGET_MIN_SEC, _TARGET_MAX_SEC))
 
 
-def outline_to_anchor(outline: dict | None) -> str:
+def outline_to_anchor(outline: dict | None, novel_text: str = "") -> str:
     """把大纲 dict 转成可注入分镜 prompt 的锚点文本.
 
     C2 修复：内部先过 _validate_outline——无效大纲（空 main_events/空 climax）
     返回空串，不注入空标签。
+
+    v6.131：`novel_text` 透传给 `_validate_outline`，使**任何**渲染锚点的路径都做同一次
+    原文核验（GAP 重生/结构收敛/超限收敛各自渲染时不会再出现未核验的台词）。默认空
+    = 已验证过（主流程在候选扇出前已核验并就地收窄），此时不重复核验。
     """
-    outline = _validate_outline(outline)
+    outline = _validate_outline(outline, novel_text)
     if not outline:
         return ""
     parts = []
@@ -252,6 +493,14 @@ def outline_to_anchor(outline: dict | None) -> str:
         parts.append("【因果链】" + "；".join(outline["causal_chain"]))
     if outline.get("character_motives"):
         parts.append("【角色动机】" + "；".join(outline["character_motives"]))
+    if outline.get("dialogue_lines"):
+        # v6.131（2026-09-25 收口）：本集**选用的逐字台词**必须进锚点——否则生成模型看不到
+        # 计划选了哪些台词，仍会自行决定对白，"计划是内容取舍的权威"落不了地。这一组已过
+        # 原文逐字核验（未通过的已被剔除，见 `_check_outline_dialogue_grounding`）。
+        # 约束写进**标头**（标头不含 `；`）：条目区必须是纯台词，压缩剖面按 `；` 整条保留，
+        # 混进说明文字会被切成假条目。
+        parts.append("【选用台词·逐字，本集只拍这些，不得替换或另编；增减须回规划层】"
+                     + "；".join(outline["dialogue_lines"]))
     if outline.get("shot_beats"):
         parts.append("【镜头节拍】" + "；".join(outline["shot_beats"]))
     # v6.116：预算先校准——大纲写 120s 而生成目标 70-80s 会让模型超配时长
