@@ -69,9 +69,8 @@ SCRIPT_CANDIDATE_TOPK = int(
 )
 
 # v6.66: 跨模型候选池——逗号分隔模型 ID 列表，候选按序号轮转分配。
-# 空/未设置 = 全部候选用 AGENT_PLAN_TEXT_MODEL（零行为变化）。
-# 示例: SCRIPT_CANDIDATE_MODELS=deepseek-v4-flash,doubao-seed-2-1-turbo
-# 仅对 TEXT_PROVIDER=agent_plan 生效（其他 provider 无此多模型概念）。
+# 空/未设置 = 全部候选用当前文本 provider 的默认模型。
+# 显式设置时，模型 ID 必须属于当前 TEXT_PROVIDER；Step01 当前只用 deepseek-flash。
 SCRIPT_CANDIDATE_MODELS = [
     m.strip() for m in os.getenv("SCRIPT_CANDIDATE_MODELS", "").split(",")
     if m.strip()
@@ -383,7 +382,7 @@ DASHSCOPE_TASK_QUERY_ENDPOINT = os.getenv(
 # ============================================================================
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
 
 
 # ============================================================================
