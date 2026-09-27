@@ -618,8 +618,12 @@ def test_force_replan_env_is_the_explicit_entry(monkeypatch):
     """`STEP01_FORCE_REPLAN=1` = 明确的重新规划入口：忽略已记录的结论重跑一轮（不自动重试）."""
     import step01_script_gen.outline as o
 
+    from step01_script_gen.plan_feasibility import replan_criteria_version
+
     plan = _plan()
-    plan["plan_replan"] = {"rounds": 1, "result": "replan_failed", "detail": "call_failed: x"}
+    # 判据版本必须匹配才会「沿用旧结论」（v6.143，见下一条用例）
+    plan["plan_replan"] = {"rounds": 1, "result": "replan_failed", "detail": "call_failed: x",
+                           "criteria_version": replan_criteria_version()}
     # 默认：沿用已记录的结论，不调模型
     box = _patch_outline_service(monkeypatch, [_plan_response(_LINES[:2])])
     monkeypatch.delenv("STEP01_FORCE_REPLAN", raising=False)
@@ -631,6 +635,31 @@ def test_force_replan_env_is_the_explicit_entry(monkeypatch):
     _back2, info2 = o.enforce_budget_by_replanning(plan, _SOURCE)
     assert len(box2["prompts"]) == 1, "FORCE=1 必须真的重跑这一轮"
     assert info2["result"] == "feasible", info2
+
+
+def test_replan_conclusion_not_reused_when_criteria_version_changed(monkeypatch):
+    """判据变了 → 旧结论不再沿用（2026-09-27 复核：用旧尺子的量数否定新尺子的重试是错的）."""
+    import step01_script_gen.outline as o
+
+    plan = _plan()
+    plan["plan_replan"] = {"rounds": 1, "result": "infeasible", "detail": "",
+                           "criteria_version": "old-version-xx"}
+    monkeypatch.delenv("STEP01_FORCE_REPLAN", raising=False)
+    box = _patch_outline_service(monkeypatch, [_plan_response(_LINES[:2])])
+    _back, info = o.enforce_budget_by_replanning(plan, _SOURCE)
+    assert len(box.get("prompts") or []) == 1, "判据版本不匹配时必须真正重跑这一轮"
+    assert info.get("skipped") != "already_attempted", info
+    assert info.get("criteria_version"), info
+
+
+def test_replan_conclusion_records_criteria_version(monkeypatch):
+    """重选结论必须记下判据版本（否则下次无从判断能不能沿用）."""
+    import step01_script_gen.outline as o
+
+    monkeypatch.setenv("STEP01_FORCE_REPLAN", "1")
+    _patch_outline_service(monkeypatch, [_plan_response(_LINES[:2])])
+    _back, info = o.enforce_budget_by_replanning(_plan(), _SOURCE)
+    assert info.get("criteria_version"), info
 
 
 def test_cached_plan_is_still_checked_and_replan_is_written_back(tmp_path, monkeypatch):
@@ -1050,6 +1079,87 @@ _X84 = ("且慢，我刚刚收到城里传来的消息，有些生意上的事�
         "公子如今酩酊大醉，难以起身，你们来的正好，去把公子的马车赶到水边来，"
         "我和听香姑娘要扶公子马上回城。")
 _SRC_AB = _X64 + "\n" + _X84 + "\n" + "住嘴！"
+
+
+_CARR_SRC = '甲道：“住嘴！”乙道：“你先走。”丙喊了一声“快跑啊”。'
+
+
+def _carrier_plan(beats):
+    return {"main_events": ["一", "二", "三"], "climax": "一",
+            "required_facts": ['甲喝止｜原文证据："住嘴！"'],
+            "causal_chain": ["a→b"],
+            "shot_beats": list(beats),
+            "dialogue_lines": ["住嘴！", "你先走。"],
+            "time_budget": "对白约50%"}
+
+
+def test_evaluate_plan_rejects_dialogue_without_carrier():
+    """判别性反例（09-27 复核指定）：**选中的台词没有任何节拍承载** → 必须判不可行.
+
+    实损形态：重选把 D1 换成「拿主意？」，又把原来指向 D1 的 beat 2 改成「载体：画面」
+    ——D1 从此无人承载。旧判据只查「节拍指向已不存在的台词」（反向），于是误报
+    `feasible`；而后果不在计划层显形：生成契约里没有哪条节拍告诉模型这句放哪儿，
+    成片大概率不出这句，**候选层台词门**（每句必须逐字出现）随后整稿拒收。
+    """
+    from step01_script_gen.plan_feasibility import evaluate_plan
+
+    rep = evaluate_plan(_carrier_plan([
+        '节拍：甲喝止｜原文依据："住嘴！"｜载体：画面',
+        '节拍：乙走｜原文依据："你先走。"｜载体：台词2',
+        '节拍：收尾｜原文依据："快跑啊。"｜载体：画面',
+    ]), novel_text=_CARR_SRC)
+    assert rep["dialogue_orphan"] == ["D1"], rep["dialogue_orphan"]
+    assert rep["verdict"] == "infeasible"
+
+
+def test_evaluate_plan_rejects_duplicate_carrier_tag():
+    """同一个节拍声明多个载体 → 承载关系不是唯一记录（实跑出现「｜载体：画面｜载体：画面」）."""
+    from step01_script_gen.plan_feasibility import evaluate_plan
+
+    rep = evaluate_plan(_carrier_plan([
+        '节拍：甲喝止｜原文依据："住嘴！"｜载体：台词1｜载体：台词1',
+        '节拍：乙走｜原文依据："你先走。"｜载体：台词2',
+        '节拍：收尾｜原文依据："快跑啊。"｜载体：画面',
+    ]), novel_text=_CARR_SRC)
+    assert rep["beat_carrier_duplicate"] == ["B1"], rep["beat_carrier_duplicate"]
+    assert rep["verdict"] == "infeasible"
+
+
+def test_evaluate_plan_accepts_closed_carrier_relation():
+    """双向闭合（每句有承载、每节拍唯一载体）→ 不因这两条判不可行."""
+    from step01_script_gen.plan_feasibility import evaluate_plan
+
+    rep = evaluate_plan(_carrier_plan([
+        '节拍：甲喝止｜原文依据："住嘴！"｜载体：台词1',
+        '节拍：乙走｜原文依据："你先走。"｜载体：台词2',
+        '节拍：收尾｜原文依据："快跑啊。"｜载体：画面',
+    ]), novel_text=_CARR_SRC)
+    assert rep["dialogue_orphan"] == [] and rep["beat_carrier_duplicate"] == []
+
+
+def test_evaluate_plan_requires_every_beat_to_have_exactly_one_carrier():
+    """计划**带了**标注 ⇒ 每条节拍恰有一个载体（09-27 复核：只查「台词被别人覆盖」不够）."""
+    from step01_script_gen.plan_feasibility import evaluate_plan
+
+    rep = evaluate_plan(_carrier_plan([
+        '节拍：甲喝止｜原文依据："住嘴！"｜载体：台词1',
+        '节拍：乙走｜原文依据："你先走。"｜载体：台词2',
+        '节拍：收尾｜原文依据："快跑啊。"',          # ← 缺载体标注
+    ]), novel_text=_CARR_SRC)
+    assert rep["beat_carrier_unlabeled"] == ["B3"], rep["beat_carrier_unlabeled"]
+    assert rep["verdict"] == "infeasible"
+
+
+def test_evaluate_plan_tolerates_legacy_plan_without_carrier_tags():
+    """旧缓存计划根本没有载体标注 → 不判孤儿（无可核 ≠ 被破坏，与 ⑦ 同口径）."""
+    from step01_script_gen.plan_feasibility import evaluate_plan
+
+    rep = evaluate_plan(_carrier_plan([
+        '节拍：甲喝止｜原文依据："住嘴！"',
+        '节拍：乙走｜原文依据："你先走。"',
+        '节拍：收尾｜原文依据："快跑啊。"',
+    ]), novel_text=_CARR_SRC)
+    assert rep["dialogue_orphan"] == []
 
 
 def test_check_dialogue_representable_64_char_line_is_kept():

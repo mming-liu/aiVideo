@@ -40,17 +40,28 @@ from step01_script_gen.plan_feasibility import (  # noqa: E402
     _beat_carrier,
     _split_speaker_prefix,
     check_event_contract,
+    check_script_dialogue_integrity,
+    coerce_ref_index,
     evaluate_plan,
+    bind_plan_identity,
+    check_event_contract,
     find_legal_split,
+    plan_identity,
     verify_dialogue_lines,
 )
 
 SOURCE = "张十三说：住嘴。他吓坏了。\n原文里有且只有这一句旁白。"
 
 
-def _mk_script(*shots):
-    """最小稿：shots 逐镜给 {"index", "narration_segment", "plan_refs"}."""
-    return {"shots": list(shots)}
+def _mk_script(*shots, plan_id=None):
+    """最小稿：shots 逐镜给 {"index", "narration_segment", "plan_refs"}.
+
+    2026-09-27：`plan_refs` 必须带**计划版本身份**（本文件所有声明都是对着唯一那份
+    `PLAN` 作的，故默认按它盖戳）。不带身份的稿子无法核验 → 契约门返回
+    `declared=False`、不再判覆盖/顺序（「不可核 ≠ 被破坏」，与缺声明同口径）。
+    """
+    return {"shots": list(shots),
+            "plan_id": plan_identity(PLAN) if plan_id is None else plan_id}
 
 
 def _refs(beats=(), lines=()):
@@ -60,6 +71,37 @@ def _refs(beats=(), lines=()):
 PLAN = {"shot_beats": ["B1 黄昏泛舟", "B2 刺杀", "B3 尖叫验尸",
                        "B4 恐吓隐瞒", "B5 赶车离开"],
         "dialogue_lines": ["张十三道：住嘴！", "听香道：杀人啦……"]}
+
+def test_event_contract_refs_from_another_plan_version_are_refused():
+    """**同号误认**反例（2026-09-27 复核点名）：旧快照的 B2 编号仍合法，但指的不是同一条节拍.
+
+    计划被重选改动（`insert_after` 在 B1 之后插了一条）→ 编号整体顺延；历史快照里按
+    **旧计划**作的声明若不换号照用，B2 仍 ≤ 节拍数，只查范围的实现会静默放行——
+    那正是「编号在范围内 ≠ 同一条节拍」。身份不符必须拒收。
+    """
+    new_plan = {"shot_beats": ["B0 新插的一条"] + PLAN["shot_beats"],
+                "dialogue_lines": PLAN["dialogue_lines"]}
+    script = _mk_script(
+        {"index": 1, "narration_segment": "", "plan_refs": _refs([1, 2], [])},
+        {"index": 2, "narration_segment": '张十三道：住嘴！听香道：杀人啦……',
+         "plan_refs": _refs([3, 4, 5], [1, 2])},
+        plan_id=plan_identity(PLAN))
+    assert max(max(s["plan_refs"]["beats"]) for s in script["shots"])         <= len(new_plan["shot_beats"]), "前提：旧声明的编号在新计划里**全部**合法"
+    ok, violations, declared = check_event_contract(script, new_plan)
+    assert not ok and declared
+    assert [v["code"] for v in violations] == ["plan_refs_stale_plan"], violations
+    # 反证：同一份声明对着**它自己那版**计划仍然成立（不是把门一律关死）
+    ok2, v2, _ = check_event_contract(script, PLAN)
+    assert ok2, v2
+
+
+def test_event_contract_unstamped_script_is_not_treated_as_this_plans_declaration():
+    """不带身份 = **无法核验**：不得当成当前计划的声明，但也不据「不可核」判违规."""
+    script = {"shots": [{"index": 1, "narration_segment": "",
+                         "plan_refs": _refs([1, 2, 3, 4, 5], [1, 2])}]}
+    ok, violations, declared = check_event_contract(script, PLAN)
+    assert ok and violations == [] and declared is False
+
 
 # ---------------------------------------------------------------------------
 # ① check_event_contract：覆盖 / 顺序 / 越界 / 缺声明 / 旧稿容忍
@@ -408,7 +450,13 @@ def test_outline_cache_rotation_backs_up_and_warns_on_regression(tmp_path, capsy
 
 
 def test_outline_cache_rotation_silent_when_not_regressing_or_same_key(tmp_path, capsys):
-    """新计划选材未变少 → 只留档不告警；键相同（重选回写）→ 完全 no-op."""
+    """新计划选材未变少 → 只留档不告警；键相同（重选回写）→ **不再 no-op**.
+
+    v6.143（2026-09-27 复核）：同键覆盖正是**规划重选**的场景，旧实现在这里直接
+    return，把原计划**就地抹掉**（09-26 实测：章 2 那份不可行计划被重选结果替换，
+    `.bak` 不存在、没有恢复入口）。现在无论键是否变化都先落 `.bak`；告警仍只在
+    键变化（规则演进）时报。
+    """
     import json
 
     from step01_script_gen.outline import _rotate_outline_cache_on_regen
@@ -432,3 +480,181 @@ def test_outline_cache_rotation_silent_when_not_regressing_or_same_key(tmp_path,
     _rotate_outline_cache_on_regen(
         cache, "new-key", {"dialogue_lines": [], "shot_beats": ["b"]})
     assert "[WARN]" not in capsys.readouterr().out
+    # 同键覆盖也必须留旧版（重选回写场景）
+    _bak = json.loads((tmp_path / "chapter_outline.cache.json.bak").read_text(
+        encoding="utf-8"))
+    assert _bak["outline"]["dialogue_lines"] == ["一", "二", "三"], _bak
+
+
+# ---------------------------------------------------------------------------
+# ①b 候选门口径（2026-09-27 复核 P0-1）：**先绑定身份、再要求声明过且通过**
+# ---------------------------------------------------------------------------
+
+def _undeclared(*shots):
+    """无 `plan_id` 的稿子（= 生成 schema 不产出该字段时新稿的真实形态）."""
+    return _mk_script(*shots, plan_id="")
+
+
+def test_undeclared_new_candidate_is_rejected_when_declaration_required():
+    """**P0-1 反例（复核给定）**：无 `plan_id`、缺 B4 的新候选必须拒收入池.
+
+    旧顺序（先核验、通过后才落戳）下，无 `plan_id` 的稿子在核验时直接返回「未声明」，
+    于是**绕过覆盖/顺序核验**又被盖上「已核验」的身份——比不盖章更糟。
+    """
+    script = _undeclared(
+        {"index": 1, "narration_segment": "", "plan_refs": _refs([1, 2, 3], [])},
+        {"index": 2, "narration_segment": "", "plan_refs": _refs([5], [1, 2])})
+    # 默认（兼容口径）：不据「不可核」判违规
+    ok, violations, declared = check_event_contract(script, PLAN)
+    assert ok and violations == [] and declared is False
+    # 候选门口径：必须声明过 → 直接判未声明
+    ok2, v2, declared2 = check_event_contract(script, PLAN, require_declaration=True)
+    assert not ok2 and declared2 is False
+    assert [v["code"] for v in v2] == ["plan_refs_missing"], v2
+
+
+def test_binding_then_requiring_declaration_still_validates_coverage():
+    """**绑定 ≠ 免检**：绑定当前计划身份后仍逐项核验（缺 B2 被拒）——这才是 P0-1 的修法."""
+    script = _undeclared(
+        {"index": 1, "narration_segment": "", "plan_refs": _refs([1], [])},
+        {"index": 2, "narration_segment": '张十三道：住嘴！听香道：杀人啦……',
+         "plan_refs": _refs([3, 4, 5], [1, 2])})
+    assert bind_plan_identity(script, PLAN) == plan_identity(PLAN)
+    assert script["plan_id"] == plan_identity(PLAN)
+    ok, violations, declared = check_event_contract(script, PLAN,
+                                                    require_declaration=True)
+    assert not ok and declared is True
+    assert [v["code"] for v in violations] == ["beats_not_carried"], violations
+
+
+def test_binding_never_overwrites_an_existing_identity():
+    """已有身份**一律不覆盖**——覆盖等于把「对另一版计划作的声明」洗成对当前计划的."""
+    script = {"plan_id": "deadbeef0000", "shots": []}
+    assert bind_plan_identity(script, PLAN) == "deadbeef0000"
+    assert script["plan_id"] == "deadbeef0000"
+
+
+def test_binding_a_fresh_candidate_that_passes_is_then_verifiable():
+    """正向：绑定 → 声明过且覆盖/顺序都对 → 通过；此后身份与本轮一致，不再是「不可核」."""
+    script = _undeclared(
+        {"index": 1, "narration_segment": "", "plan_refs": _refs([1, 2, 3], [])},
+        {"index": 2, "narration_segment": '张十三道：住嘴！听香道：杀人啦……',
+         "plan_refs": _refs([4, 5], [1, 2])})
+    bind_plan_identity(script, PLAN)
+    ok, violations, declared = check_event_contract(script, PLAN,
+                                                    require_declaration=True)
+    assert ok and declared is True and violations == []
+
+
+# ---------------------------------------------------------------------------
+# ①c plan_refs 编号形态（2026-09-27 02:10 重跑实测：门误拒 "B1" 字符串）
+# ---------------------------------------------------------------------------
+
+def test_plan_refs_accepts_b_and_d_prefixed_strings():
+    """**实跑反例**：模型按契约块字面填 `["B1"]`/`["D1"]` → 归一化后照常通过.
+
+    修复前：`isinstance(b, int)` 直接判 `plan_refs_out_of_range`，detail 打出 `BB1`
+    （模板 `"B%s 不存在"` 套在字符串上）——白烧 1/3 候选预算，最坏整池拒收终止整章。
+    为何以前没暴露：P0-1 修复前无 `plan_id` 的稿子在校验函数里 early-return，这些
+    非法 refs **静默通过**（正是「未核验却盖上已核验」的假绿）。
+    """
+    script = _mk_script(
+        {"index": 1, "narration_segment": "", "plan_refs": _refs(["B1", "B2"], [])},
+        {"index": 2, "narration_segment": '张十三道：住嘴！',
+         "plan_refs": _refs(["b3", "B4"], ["D1"])},
+        {"index": 3, "narration_segment": '听香道：杀人啦……', "plan_refs": _refs(["B5"], ["2"])},
+    )
+    ok, violations, declared = check_event_contract(script, PLAN)
+    assert ok, violations
+    assert declared is True
+
+
+def test_plan_refs_coercion_accepts_int_digit_string_and_prefixed_forms():
+    """三种写法语义一致：`1` / `"1"` / `"B1"`（含小写、空格、分隔符）."""
+    for v in (1, "1", "B1", "b1", " B 1 ", "B-1", "B_1", "B:1"):
+        assert coerce_ref_index(v, "B") == 1, v
+    assert coerce_ref_index("D2", "D") == 2
+    assert coerce_ref_index("1", "D") == 1
+    # 标签不匹配 / 非编号 → None（由调用方报 not_a_number）
+    for v in ("", None, "第1个", "B", "Bx", True, False, [], {}):
+        assert coerce_ref_index(v, "B") is None, v
+
+
+def test_plan_refs_junk_gets_its_own_code_not_out_of_range():
+    """非编号项报 `plan_refs_not_a_number`（不再冒充「越界」，detail 也不再打出 BB1）."""
+    script = _mk_script(
+        {"index": 1, "narration_segment": "",
+         "plan_refs": _refs([1, 2, 3, 4, 5], ["第1句"])})
+    ok, violations, declared = check_event_contract(script, PLAN)
+    assert not ok and declared
+    codes = [v["code"] for v in violations]
+    assert codes == ["plan_refs_not_a_number"], violations
+    assert "BB" not in violations[0]["detail"], violations[0]["detail"]
+
+
+def test_plan_refs_range_is_still_enforced_after_coercion():
+    """归一化**不降判据强度**：`"B9"`（共 5 个节拍）照旧判越界，且 detail 是人话."""
+    script = _mk_script(
+        {"index": 1, "narration_segment": "",
+         "plan_refs": _refs(["B1", "B2", "B3", "B4", "B9"], [])})
+    ok, violations, _ = check_event_contract(script, PLAN)
+    assert not ok
+    _oor = [v for v in violations if v["code"] == "plan_refs_out_of_range"]
+    assert len(_oor) == 1 and "B9 不存在" in _oor[0]["detail"], violations
+
+
+# ---------------------------------------------------------------------------
+# ①d Dk 必须锚在**声明它的那一镜**（2026-09-27 复核：两门都过的假绿）
+# ---------------------------------------------------------------------------
+
+def test_line_declared_on_the_wrong_shot_is_rejected():
+    """**复核给的假绿反例**：shot 1 声明 D1、shot 2 才说 D1.
+
+    整稿台词门通过（D1/D2 都在稿里）、契约门当时只核编号范围与顺序 → 一路放行。
+    现在按镜核验：D1 最早的声明镜是 shot 1，而 shot 1 的旁白锚不住这句 ⇒ 拒收。
+    """
+    script = _mk_script(
+        {"index": 1, "narration_segment": "他转身就走。",
+         "plan_refs": _refs([1, 2, 3], [1])},
+        {"index": 2, "narration_segment": "张十三道：住嘴！听香道：杀人啦……",
+         "plan_refs": _refs([4, 5], [2])})
+    _dlg_ok, _ = check_script_dialogue_integrity(script, PLAN)
+    assert _dlg_ok, "前提：台词确实都在稿里（只是不在声明它的那一镜）"
+    ok, violations, declared = check_event_contract(script, PLAN)
+    assert not ok and declared
+    assert [v["code"] for v in violations] == ["plan_refs_line_not_in_shot"], violations
+    assert "镜头 1" in violations[0]["detail"] and "D1" in violations[0]["detail"]
+
+
+def test_line_declared_by_a_shot_without_narration_is_rejected():
+    """声明了台词、但该镜**没有旁白** → 拒收（空旁白镜不可能承载台词）."""
+    script = _mk_script(
+        {"index": 1, "narration_segment": "", "plan_refs": _refs([1, 2, 3], [1])},
+        {"index": 2, "narration_segment": "听香道：杀人啦……",
+         "plan_refs": _refs([4, 5], [2])})
+    ok, violations, _ = check_event_contract(script, PLAN)
+    assert not ok
+    assert "没有旁白" in violations[0]["detail"], violations
+
+
+def test_line_declared_on_its_own_shot_passes():
+    """正向：声明镜确实说这句 → 通过（判据不误伤正常稿）."""
+    script = _mk_script(
+        {"index": 1, "narration_segment": "张十三道：住嘴！", "plan_refs": _refs([1, 2, 3], [1])},
+        {"index": 2, "narration_segment": "听香道：杀人啦……", "plan_refs": _refs([4, 5], [2])})
+    ok, violations, declared = check_event_contract(script, PLAN)
+    assert ok and declared and violations == [], violations
+
+
+def test_cross_shot_split_line_declared_on_its_first_shot_passes():
+    """跨镜拆分的台词：声明在**首镜**上通过（判据与整稿门同源，不误伤合法拆分）."""
+    long_line = "张十三道：住嘴！他转身便走，脚下生风，一路行去竟不回头。"
+    plan = {"shot_beats": ["节拍一"], "dialogue_lines": [long_line]}
+    script = _mk_script(
+        {"index": 1, "narration_segment": "张十三道：住嘴！",
+         "plan_refs": _refs([1], [1])},
+        {"index": 2, "narration_segment": "他转身便走，脚下生风，一路行去竟不回头。",
+         "plan_refs": _refs([1], [])},
+        plan_id=plan_identity(plan))
+    ok, violations, declared = check_event_contract(script, plan)
+    assert ok and declared, violations

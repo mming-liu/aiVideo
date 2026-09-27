@@ -7524,6 +7524,7 @@ def _generate_script_candidates(
                                                     EventContractBrokenError,
                                                     check_event_contract,
                                                     check_script_dialogue_integrity,
+                                                    bind_plan_identity,
                                                     dump_dialogue_incomplete,
                                                     plan_dialogue_lines)
     check_plan_before_generation(outline, chapter_dir=CHAPTER_DIR, novel_text=novel_text)
@@ -7613,8 +7614,15 @@ def _generate_script_candidates(
         # 越界（确定性、零模型调用）。台词逐字已由上一道门收口；这里核「声明与
         # 计划一致」，缺载节拍（如「恐吓隐瞒」无承载）在入池前就判无效，不再等
         # 提交点语义审计撞上修复轮不可修复死锁。
+        # 2026-09-27（复核 P0-1）：**先绑定身份、再核验**。绑定是「替新稿声明来源」，
+        # 不是「免检」——已有身份**不覆盖**（覆盖会把「对另一版计划作的声明」洗成对
+        # 当前计划的），随后 `require_declaration=True` 要求它真的声明过并逐项核验。
+        # 旧顺序（先核验、通过后才落戳）有洞：新稿没有 `plan_id` ⇒ 校验函数直接按
+        # 「未声明」返回 ⇒ **未经覆盖/顺序核验**就被盖上「已核验」的身份。
+        bind_plan_identity(_cand, outline)
         try:
-            _ct_ok, _ct_viol, _ct_declared = check_event_contract(_cand, outline)
+            _ct_ok, _ct_viol, _ct_declared = check_event_contract(
+                _cand, outline, require_declaration=True)
         except Exception as _e:
             raise _CandidateGateError(str(_e)) from _e
         if not _ct_ok:
@@ -8109,6 +8117,23 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
         # 的计划与本轮不同，它没保住本轮选材 = 进提交门后必然死锁（09-26 实损链）。
         # 门**不参与**下方"全欠账放宽"（那是欠账台账的例外，不是完整性门的）。
         _dlg_broken_snaps: list = []
+        _stale_plan_snaps: list = []
+
+        def _plan_snapshot_reason(old: dict) -> str:
+            """快照的 `plan_refs` 是不是**对本轮计划**作的声明（2026-09-27 复核 P0-2）.
+
+            带身份且与本轮计划不符 → 排除（它的编号指的不是同一条节拍；只查编号范围
+            会静默放行——`insert_after`/`split` 会重排 B 编号）。**无身份**的老快照按
+            既定兼容政策继续参与排名，但**不算**「通过了本轮事件契约」（提交门的语义
+            审计仍是它的兜底）。
+            """
+            if plan is None:
+                return ""
+            # 就地 import：本闭包所在的 BEST-GUARD 函数与候选门的 import 块**不在同一
+            # 作用域**（实跑被 `test_best_guard_excludes_broken_snapshot...` 抓到：
+            # NameError 被外围的「护栏失败不影响主流程」吞掉，身份门**静默失效**）。
+            from step01_script_gen.plan_feasibility import plan_identity_mismatch
+            return plan_identity_mismatch(old, plan)
 
         def _dlg_snapshot_reason(old: dict) -> str:
             if plan is None:
@@ -8151,6 +8176,10 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
             if _dlg_why:
                 _dlg_broken_snaps.append(f"{sp.name}（{_dlg_why}）")
                 continue
+            _plan_why = _plan_snapshot_reason(old)
+            if _plan_why:
+                _stale_plan_snaps.append(f"{sp.name}（{_plan_why}）")
+                continue
             candidates.append((sp, old))
         _snap_debt: dict = {}
         if not candidates and _blocked_names:
@@ -8185,8 +8214,18 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
                 if _dlg_why:
                     _dlg_broken_snaps.append(f"{sp.name}（{_dlg_why}）")
                     continue
+                # P0-2：身份门**不随欠账放宽**——放开的只是欠账台账那条护栏
+                _plan_why = _plan_snapshot_reason(old)
+                if _plan_why:
+                    _stale_plan_snaps.append(f"{sp.name}（{_plan_why}）")
+                    continue
                 _snap_debt[str(sp)] = int(_debt_map.get(_old_rev2, 1))
                 candidates.append((sp, old))
+        # 去重：两个筛选循环（常规 + 欠账放开）都会 append 到同一张清单，同一份
+        # 快照会被记两次——诊断数字会翻倍（2026-09-27 实测「16 份」实为 8 份）。
+        # 准则 7 要的是**准确**的可见性，不是更大的数字。
+        _dlg_broken_snaps = list(dict.fromkeys(_dlg_broken_snaps))
+        _stale_plan_snaps = list(dict.fromkeys(_stale_plan_snaps))
         if _dlg_broken_snaps:
             # 显式记录（准则 7）：哪几份快照因台词破损被排除，为什么
             _logger.warn(
@@ -8195,6 +8234,16 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
                 % (len(_dlg_broken_snaps), _dlg_broken_snaps[:6])
             )
             meta["dialogue_broken_snapshots"] = _dlg_broken_snaps
+        if _stale_plan_snaps:
+            # 显式记录（准则 7 / 复核 P0-2）：哪几份快照因**计划身份不符**被排除。
+            # 这些快照的 plan_refs 是对另一版计划作的声明，编号即使仍在范围内也指向
+            # 别的节拍（`insert_after`/`split` 会重排 B 编号）。
+            _logger.warn(
+                "[BEST-GUARD] 计划身份不符，排除 %d 份历史快照（它们的 plan_refs 不是"
+                "对本轮计划作的声明，不参与评分）：%s"
+                % (len(_stale_plan_snaps), _stale_plan_snaps[:6])
+            )
+            meta["stale_plan_snapshots"] = _stale_plan_snaps
         if _invalid:
             # 显式记录（准则 7）：跳过的原因必须能看见，否则"为什么没选历史稿"无从归因
             _logger.warn(
@@ -8211,12 +8260,25 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
         best_rank = None
         best_script = None
         best_debt = None
+        _prefilter_rejected: list[str] = []
         for sp, old in candidates:
             try:
                 sc = _score_script(old, novel_text)["total"]
                 q = _candidate_quality_summary(old, novel_text)
                 rank = _quality_rank(sc, q)
             except Exception:
+                continue
+            # 初筛是候选资格，不是冠军资格。先排除不合格快照再排名，
+            # 否则第一名被拒后，同一窗口内的次优合格快照永远得不到机会。
+            _new_risk = new_quality.get("blocking_risk_count")
+            _old_risk = q.get("blocking_risk_count")
+            if (q.get("quality_checked") is not True
+                    or rank[0] > 0 or rank[1] > 0
+                    or (_new_risk is not None and _old_risk is not None
+                        and int(_old_risk) > int(_new_risk))):
+                _prefilter_rejected.append(
+                    f"{sp.name}（风险{_old_risk}，结构={q.get('structural_ok')}，"
+                    f"完整性={q.get('integrity_ok')}）")
                 continue
             # v6.73: compare integrity -> blocking risks -> total, not only
             # the raw story score.  A clean 90 must not lose to a corrupted 100.
@@ -8233,12 +8295,21 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
                 best_script = old
 
         if best_path is None:
+            if _prefilter_rejected:
+                _logger.warn("[BEST-GUARD] %d 份快照未通过当前质量初筛：%s"
+                             % (len(_prefilter_rejected), _prefilter_rejected[:6]))
+                meta["prefilter_rejected_snapshots"] = _prefilter_rejected
+                meta["reason"] = "snapshot_failed_prefilter"
             return None, meta
+        if _prefilter_rejected:
+            _logger.warn("[BEST-GUARD] %d 份快照未通过当前质量初筛：%s"
+                         % (len(_prefilter_rejected), _prefilter_rejected[:6]))
+            meta["prefilter_rejected_snapshots"] = _prefilter_rejected
         meta.update({"best_score": best_score, "best_path": str(best_path),
                      "best_risk": (best_quality or {}).get("blocking_risk_count")})
 
         _same_risk_tier = (
-            best_rank[0] == new_rank[0] and best_rank[1] == new_rank[1]
+            best_rank[:3] == new_rank[:3]
         )
         # 09-26 P1：**新稿胜出也要留日志**。此前只有「快照胜出」有两行 WARN，
         # 新稿胜出（同档在 margin 内 / 新稿风险档不更差）静默 return——20:49 run
@@ -8265,15 +8336,14 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
         else:
             # Prefer the safer snapshot whenever its integrity/risk tier is
             # strictly better than the new run, regardless of raw score.
-            if not (best_rank[0] < new_rank[0]
-                    or (best_rank[0] == new_rank[0] and best_rank[1] < new_rank[1])):
+            if not (best_rank[:3] < new_rank[:3]):
                 meta["reason"] = "new_tier_not_worse"
-                _log_new_kept("新稿完整性/风险档不更差")
+                _log_new_kept("新稿结构/完整性/风险档不更差")
                 return None, meta
 
         _logger.warn(
-            "[BEST-GUARD] 新终稿 " + str(new_score) + " 分/风险"
-            + str(new_quality.get("blocking_risk_count")) + " < 快照最优 "
+            "[BEST-GUARD] 快照综合排序胜出：新终稿 " + str(new_score) + " 分/风险"
+            + str(new_quality.get("blocking_risk_count")) + "；快照最优 "
             + str(best_score) + " 分/风险"
             + str((best_quality or {}).get("blocking_risk_count"))
             + "（" + best_path.name + "）"
@@ -8281,29 +8351,6 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
         if not keep_best:
             _logger.warn("[BEST-GUARD] KEEP_BEST_SNAPSHOT=0 → 仅告警，保留新终稿")
             meta["reason"] = "keep_best_disabled"
-            return None, meta
-
-        # 历史快照必须通过**当前版本**的质量初筛才有资格成为候选。这是初筛，
-        # 不是准入：真正的准入是公共管线里的 final semantic audit。
-        #
-        # v6.103：初筛口径 = ①质量检查器真的跑过（`quality_checked is True`，
-        # 否则「不知道」不能当「干净」）；②结构/完整性不为异常档；
-        # ③**blocking 风险不比本次稿更多**——旧实现只看分差，一个 53 分/风险 2 的
-        # 快照会压掉 33 分/风险 0 的新稿（`_quality_rank` 把风险排在分数之前，
-        # 选择阶段已按它排序，初筛却把它丢了）。收紧后「选一个更冒险的旧版本」
-        # 不再可能：风险持平或更低时才按分数比。
-        _new_risk = new_quality.get("blocking_risk_count")
-        _best_risk = best_quality.get("blocking_risk_count")
-        if (best_quality.get("quality_checked") is not True
-                or best_rank[0] > 0 or best_rank[1] > 0
-                or (_new_risk is not None and _best_risk is not None
-                    and int(_best_risk) > int(_new_risk))):
-            _logger.warn(
-                "[BEST-GUARD] 快照最优版未通过当前质量初筛，不作为候选"
-                f"（风险{best_quality.get('blocking_risk_count')}，"
-                f"完整性={'OK' if best_quality.get('integrity_ok') else '异常'}）"
-            )
-            meta["reason"] = "snapshot_failed_prefilter"
             return None, meta
 
         # v6.123：文案必须与事实一致——真写了才说「已留档 <路径>」，没写成要说没写成。
@@ -8318,7 +8365,7 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
         )
         _console(
             "  [BEST-GUARD] 本次 " + str(new_score) + " 分/风险"
-            + str(new_quality.get("blocking_risk_count")) + " 低于历史最优 "
+            + str(new_quality.get("blocking_risk_count")) + "，快照综合排序更优："
             + str(best_score) + " 分/风险"
             + str((best_quality or {}).get("blocking_risk_count"))
             + "，已**选中**历史最优版为候选（仍须通过公共提交与最终审计）"

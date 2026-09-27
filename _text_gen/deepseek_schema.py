@@ -868,7 +868,7 @@ REPLAN_OPS_SCHEMA = {
                     "properties": {
                         "index": {
                             "type": "integer",
-                            "description": "第几句（1-based，对应反馈里的台词编号）",
+                            "description": "第几句（1-based，只填数字如 1，不要带 D 前缀）",
                         },
                         "replace_with": {
                             "type": "string",
@@ -881,24 +881,48 @@ REPLAN_OPS_SCHEMA = {
             },
             "beat_ops": {
                 "type": "array",
-                "description": "节拍重排操作；没有要改的就给空数组",
+                "description": "节拍操作；没有要改的就给空数组",
                 "items": {
                     "type": "object",
                     "properties": {
+                        "op": {
+                            "type": "string",
+                            "enum": ["replace", "insert_after", "split"],
+                            "description": "replace=改写该节拍；insert_after=在该节拍之后插入一条新节拍（index 给 0 = 插到最前）；split=把该节拍原地拆成 parts 里的多条",
+                        },
                         "index": {
                             "type": "integer",
-                            "description": "第几个节拍（1-based）",
+                            "description": "第几个节拍（1-based，只填数字如 2，不要带 B 前缀；指**改之前**的编号；insert_after 可用 0）",
                         },
                         "new_text": {
                             "type": "string",
-                            "description": "该节拍的新正文（不含｜载体：段），必须自带 ｜原文依据：\"…\"",
+                            "description": "该节拍的新正文（不含｜载体：段），必须自带 ｜原文依据：“…”；op=split 时给空字符串",
                         },
                         "new_carrier": {
                             "type": "string",
-                            "description": "该节拍的载体标注：画面，或 台词k（k 为台词编号）",
+                            "description": "载体标注：画面，或 台词k（k 为台词编号）；留空=沿用原载体；op=split 时给空字符串",
+                        },
+                        "parts": {
+                            "type": "array",
+                            "description": "仅 op=split 用：拆出来的各段（至少两段）；其他操作给空数组",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "new_text": {
+                                        "type": "string",
+                                        "description": "该段正文（不含｜载体：段），必须自带 ｜原文依据：“…”",
+                                    },
+                                    "new_carrier": {
+                                        "type": "string",
+                                        "description": "该段载体：画面，或 台词k",
+                                    },
+                                },
+                                "required": ["new_text", "new_carrier"],
+                                "additionalProperties": False,
+                            },
                         },
                     },
-                    "required": ["index", "new_text", "new_carrier"],
+                    "required": ["op", "index", "new_text", "new_carrier", "parts"],
                     "additionalProperties": False,
                 },
             },

@@ -202,7 +202,8 @@ def _budget_feedback_block(rep: dict, plan: dict, novel_text: str = "") -> str:
         )
     _unrep = rep.get("dialogue_unrepresentable") or []
     if _unrep:
-        from step01_script_gen.plan_feasibility import representable_replacements
+        from step01_script_gen.plan_feasibility import (
+            cross_quote_replacements, representable_replacements)
         from step01_script_gen.timecode import active_shot_cap
         _lines_block = "\n".join(
             "- 「%s」（估时 %.1f 秒；%s）"
@@ -216,22 +217,44 @@ def _budget_feedback_block(rep: dict, plan: dict, novel_text: str = "") -> str:
         for u in _unrep:
             _line = str(u.get("line") or "")
             _cands = representable_replacements(_line, novel_text)
-            _reps.append("- 「%s」→ %s" % (
-                _line[:34],
-                "；".join("「%s」" % c for c in _cands) if _cands else
-                "**出处通篇没有句末标点，没有可表示替代 ⇒ 按第 4 条重排载体"
-                "（禁止改派说话人、禁止逗号截断半句）**"))
+            if _cands:
+                _reps.append("- 「%s」→ %s" % (
+                    _line[:34], "；".join("「%s」" % c for c in _cands)))
+                continue
+            # 2026-09-26 实测：只说「没有候选、请重排载体」时模型去**截断本句**
+            # （给逗号半句，被应用器拒）。把**跨出处**的合法短句摆到它面前——
+            # 同场景相邻发言里本来就有能承载同一事实的完整短句。
+            _cross = cross_quote_replacements(_line, novel_text)
+            _menu = ("；".join("「%s」（%s）" % (c["text"], c["from"]) for c in _cross)
+                     if _cross else "（附近也没有可用短句）")
+            _reps.append(
+                "- 「%s」→ **本句出处通篇没有句末标点，不许截断本句**（逗号收尾的半句"
+                "一律非法）。两条合法出路：① 换成**原文别处**的完整短句，候选：%s；"
+                "② 用 `beat_ops` 把该节拍改成画面承载、该事实由别的合法短句承载"
+                "（**禁止把某人的台词改派给另一个角色**）" % (_line[:34], _menu))
         block += _PLAN_REPRESENTABILITY_FEEDBACK.format(
             n=len(_unrep), cap=active_shot_cap(), lines_block=_lines_block,
             replacements_block="\n".join(_reps))
     # v6.138（九审根因 1）：节拍载体悬空反馈——重选删承载台词必须同步更新载体标注
+    # v6.143（2026-09-27 复核）：承载缺陷（重复标注 / 孤儿台词）与可表示性一样，
+    # 都是「结构性问题」，必须走**操作式**修复——要求模型重写整份计划时它可以原样
+    # 回抄（实测），承载关系反而没人动。
+    _dup_c = rep.get("beat_carrier_duplicate") or []
+    _orphan_c = rep.get("dialogue_orphan") or []
+    _unlabeled_c = rep.get("beat_carrier_unlabeled") or []
+    if _dup_c or _orphan_c or _unlabeled_c:
+        block += _PLAN_CARRIER_RELATION_FEEDBACK.format(
+            dup=("、".join(_dup_c) or "无"),
+            orphan=("、".join(_orphan_c) or "无"),
+            unlabeled=("、".join(_unlabeled_c) or "无"),
+            n_lines=int(rep.get("dialogue_lines") or 0))
     _dangling = rep.get("beat_carrier_dangling") or []
     if _dangling:
         block += _PLAN_CARRIER_FEEDBACK.format(
             n=len(_dangling),
             lines_block="\n".join("- %s" % d for d in _dangling))
     if block:
-        if _unrep:
+        if _unrep or _dup_c or _orphan_c or _unlabeled_c:
             # 操作式（v6.143）：计划只作**只读上下文**，不再要求模型整份重写——
             # 上一版的「除…外请原样返回」正是模型回抄旧计划的退路。
             block += (_PLAN_OPS_INSTRUCTION
@@ -281,6 +304,10 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
     # 「什么都不改、回抄旧稿」的退路（实测两次都这样），也让验收只能事后比对。
     # 预算超限触发仍走原路径（本来就是「只改台词」，另有全套核心字段校验）。
     _unrep = rep.get("dialogue_unrepresentable") or []
+    # 承载缺陷走同一条操作式通道（见 `_budget_feedback_block` 的说明）
+    _ops_mode = bool(_unrep or rep.get("beat_carrier_duplicate")
+                     or rep.get("dialogue_orphan")
+                     or rep.get("beat_carrier_unlabeled"))
     _base = base_prompt or OUTLINE_PROMPT.format(novel_text=novel_text[:PROMPT_MAX_CHARS])
     _prompt = _base + "\n" + _budget_feedback_block(rep, plan, novel_text)
     try:
@@ -288,7 +315,8 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
         result = service.generate(TextGenerationRequest(
             system_prompt=system_prompt or _OUTLINE_SYSTEM_PROMPT,
             user_prompt=_prompt, max_tokens=4000, temperature=0.3,
-            json_schema=REPLAN_OPS_SCHEMA if _unrep else OUTLINE_SCHEMA, model=model))
+            json_schema=REPLAN_OPS_SCHEMA if _ops_mode else OUTLINE_SCHEMA,
+            model=model))
     except Exception as exc:
         print(f"[WARN] 规划重选调用异常（保留首版计划）: {exc}")
         return None, "call_failed: %s" % exc
@@ -296,7 +324,10 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
         print(f"[WARN] 规划重选失败（保留首版计划）: {result.error}")
         return None, "call_failed: %s" % result.error
     data = _parse_outline_json(result.text)
-    if _unrep:
+    if _ops_mode:
+        if not isinstance(data, dict):
+            print("[WARN] 规划重选结果解析失败（保留首版计划）")
+            return None, "invalid_result: JSON 解析失败"
         new_plan, _why = apply_replan_ops(plan, data, novel_text)
         if new_plan is None:
             if _why == "no_change":
@@ -315,27 +346,11 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
         return None, "invalid_result"
     _broken = _plan_core_preserved(plan, new_plan)
     if _broken:
-        # 2026-09-26 用户决定：**单镜可表示性**触发的重选，允许重排节拍与载体
-        # （冯检校那句出处通篇没有句末标点，只能把该节拍拆成「画面动作」+
-        # 「由别人在原文里的完整短句承载同一事实」）。这是 `_plan_core_preserved`
-        # 的例外，所以**换一道更严的闸**而不是放宽它：新版本里每一条节拍、
-        # 每一条必保留事实都必须带逐字可核的原文引文（`_plan_evidence_intact`）。
-        # 预算超限触发的重选**不享受**这个例外——那条路仍然只许改台词。
-        if rep.get("dialogue_unrepresentable"):
-            # 先守不变量（事实不得删除、事件顺序不得调换），再核原文证据——
-            # 顺序不能反：证据闸只看新稿里**还在**的条目（2026-09-26 复核实测）。
-            _inv = _plan_invariants_intact(plan, new_plan)
-            if _inv:
-                print("[WARN] 重选破坏了计划不变量（%s）——不接受" % _inv)
-                return None, "core_field_changed: %s（%s）" % (_broken, _inv)
-            _why = _plan_evidence_intact(new_plan, novel_text)
-            if not _why:
-                print("[PLAN] 重选按「可表示性」重排了节拍/载体（核心字段「%s」有改动）"
-                      "——已通过原文证据核验，作为**新计划版本**接受" % _broken)
-                return new_plan, ""
-            print("[WARN] 重选改动了核心字段「%s」且原文证据核验不过（%s）——不接受"
-                  % (_broken, _why))
-            return None, "core_field_changed: %s（%s）" % (_broken, _why)
+        # 预算超限触发的重选：核心字段必须原样（只许改台词）。
+        # 可表示性触发的那条路已在上面的 ops 分支 early-return——**不再**存在
+        # 「用『新计划剩余条目有原文引文』代替旧计划核心字段比对」那种例外
+        # （2026-09-27 复核：引文核验是**附加**条件，替代不了逐项比对，
+        # 证明不了必保留事实没被删除、事件顺序没被调换）。
         print("[WARN] 规划重选改动了核心字段「%s」——不接受（必保留事实/事件顺序必须原样）"
               % _broken)
         return None, "core_field_changed: %s" % _broken
@@ -343,31 +358,38 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
 
 
 def _rotate_outline_cache_on_regen(cache_path, new_key, new_outline) -> None:
-    """重生成覆盖大纲缓存前：旧计划留 `.bak`（单文件轮换）+ 选材退化告警（v6.138.1）.
+    """覆盖大纲缓存前：**无条件**留一份旧版 `.bak` + 选材退化告警（v6.138.1 / v6.143）.
 
     缓存键含 outline prompt——**规则演进必然整批失效重生成**，而重新抽样可能显著
     变差（2026-09-26 实证：6 句→2 句，成片 38s 撞 duration_budget 硬门；且计划一换，
     全部历史快照因选材门失格，跨 run 收敛棘轮归零）。留档让退化可恢复；是否采用
     新计划仍由运行者裁决——**内容取舍不代决**，这里只保证可见。
+
+    v6.143（2026-09-27 复核）：**同键覆盖也要留旧版**。旧实现在 `source_hash` 未变时
+    直接 return——而**规划重选**恰恰是同键覆盖（计划变了、键没变），于是那次覆盖
+    把原计划**就地抹掉**、连恢复入口都没有（09-26 实测：章 2 那份不可行计划在缓存里
+    被重选结果替换，`.bak` 不存在）。现在无论键是否变化都先落 `.bak`；
+    「选材退化」的告警仍只在键变化（规则演进）时报，避免重选也被当成规则演进。
     """
     from step01_script_gen.plan_feasibility import plan_dialogue_lines
     try:
         old = json.loads(Path(cache_path).read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         return
-    if not isinstance(old, dict) or old.get("source_hash") == new_key:
+    if not isinstance(old, dict):
         return
+    _key_changed = old.get("source_hash") != new_key
     old_outline = old.get("outline") if isinstance(old.get("outline"), dict) else None
     _old_n = len(plan_dialogue_lines(old_outline))
     _new_n = len(plan_dialogue_lines(new_outline))
+    _bak = Path(str(cache_path) + ".bak")
     try:
-        Path(str(cache_path) + ".bak").write_text(
-            json.dumps(old, ensure_ascii=False, indent=2), encoding="utf-8")
+        _bak.write_text(json.dumps(old, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError:
         pass
-    if _new_n < _old_n:
+    if _key_changed and _new_n < _old_n:
         print(f"[WARN] 大纲缓存因规则变化重生成：选用台词 {_old_n} 句 → {_new_n} 句"
-              f"（新计划选材变少，成片时长下界随之下降；旧计划已留档 {Path(str(cache_path) + '.bak').name}，"
+              f"（新计划选材变少，成片时长下界随之下降；旧计划已留档 {_bak.name}，"
               "如需恢复请回拷并核对缓存键）")
 
 
@@ -389,12 +411,22 @@ def enforce_budget_by_replanning(plan, novel_text, *, model=None,
     # 上一轮已经把"重选后仍超限 / 重选失败"的结论记在计划里（`plan_replan`，随缓存持久化），
     # 计划与规则都没变时直接沿用结论——否则缓存里那份计划会让每轮运行都再烧一次模型。
     _prev = plan.get("plan_replan") if isinstance(plan, dict) else None
+    from step01_script_gen.plan_feasibility import replan_criteria_version
+    _crit_ver = replan_criteria_version()
+    _prev_ver = str((_prev or {}).get("criteria_version") or "") if isinstance(_prev, dict) else ""
+    _ver_matches = bool(_crit_ver) and _prev_ver == _crit_ver
     if (isinstance(_prev, dict)
             and _prev.get("result") in ("infeasible", "replan_failed", "no_change")
+            and _ver_matches
             and not _force_replan()):
         print("[PLAN] 这一版计划已重选过一轮（%s）→ 不再重复重选（同一计划版本只重选一次）；"
               "如需重跑该轮：%s=1" % (_prev.get("result"), FORCE_REPLAN_ENV))
         return plan, dict(_prev, skipped="already_attempted")
+    if isinstance(_prev, dict) and _prev.get("result") and not _ver_matches and not _force_replan():
+        # 判据版本变了 ⇒ 旧结论不再代表「本判据下也不可行」，按没试过重跑一次
+        # （2026-09-27 复核：沿用旧尺子的量数否定新尺子的重试是错的）
+        print("[PLAN] 重选判据版本已变化（%s → %s）→ 旧结论不再沿用，重跑这一轮"
+              % (_prev_ver or "无", _crit_ver))
     if isinstance(_prev, dict) and _force_replan():
         print("[PLAN] %s=1 → 忽略已记录的重选结论（%s），重跑这一轮"
               % (FORCE_REPLAN_ENV, _prev.get("result")))
@@ -402,7 +434,7 @@ def enforce_budget_by_replanning(plan, novel_text, *, model=None,
           "→ 带数字反馈重选台词（%d 轮）"
           % (rep["dialogue_sec"], rep["dialogue_lines"], rep["budget"]["max"],
              len(rep.get("dialogue_unrepresentable") or []), _REPLAN_MAX_ROUNDS))
-    info = {"rounds": _REPLAN_MAX_ROUNDS,
+    info = {"rounds": _REPLAN_MAX_ROUNDS, "criteria_version": _crit_ver,
             "before_dialogue_sec": rep["dialogue_sec"], "before_lines": rep["dialogue_lines"]}
     new_plan, _why = replan_dialogue_within_budget(plan, rep, novel_text, model=model,
                                                    base_prompt=base_prompt,
@@ -545,22 +577,166 @@ def generate_outline(novel_text: str, model: str | None = None,
 _EVIDENCE_QUOTE = re.compile(r'[“"]([^”"]{4,})[”"]')
 
 
+_PLAN_CARRIER_RELATION_FEEDBACK = """
+# ★ 承载关系必须**双向闭合**（当前计划不满足，本轮只修这个）
+
+- 同一个节拍写了**多个**「｜载体：…」段（承载关系不是唯一记录，代码只认第一段）：
+  {dup}
+- **没有任何节拍承载**的选中台词（生成契约里没人告诉模型这句放哪儿，成片会丢这句，
+  候选层台词门随后整稿拒收）：{orphan}
+- **没有载体标注**的节拍（计划带了标注就必须每条节拍恰有一个载体）：{unlabeled}
+
+本集共 {n_lines} 句选用台词。请用 `beat_ops` 把承载关系补成闭合：每句台词都有
+（且只有）一个节拍用「载体：台词k」声明承载它；每条节拍只留**一个**载体段。
+**一条节拍要同时承载画面与台词时必须 `split`**（或 `insert_after` 另立一条）
+——单条节拍只能有一个载体，用替换是改不出来的。
+**改某条节拍的载体时，要同时把失去承载的那句指派到别的节拍上。**
+"""
+
+
 _PLAN_OPS_INSTRUCTION = """
 ## 请**只输出操作**（不要重写整份计划）
 
 上面已给出代码验算过的替代与硬边界。你**只回要改的地方**，代码会把它应用到上一版
 计划上——所以「什么都不改」是允许的，但要**显式回空数组**，不要靠回抄旧计划表达。
 
-- `dialogue_ops`：`[{"index": 台词编号, "replace_with": "换成哪句逐字原文"}]`。
-  有列出替代的，`replace_with` 必须**取自列出的候选**；该句没有候选（出处无句末标点）时
-  不要给它编替代，改走 `beat_ops` 重排载体。
-- `beat_ops`：`[{"index": 节拍编号, "new_text": "新正文（含 ｜原文依据：\"…\"）",
-  "new_carrier": "画面 或 台词k"}]`。
+- `dialogue_ops`：`[{"index": 1, "replace_with": "换成哪句逐字原文"}]`
+  （`index` 只填**数字**，如 `1`；不要写 `D1`/`"D1"`）。
+  **不得截断本句**——以「__ILLEGAL_CUT__」收尾的半句一律非法（成片里是没说完的话）；
+  `replace_with` 必须是原文里**逐字存在**且**单镜装得下**的**完整短句**（可以是别的
+  角色、别的段落的句子）。有列出候选的，优先从候选里选；该句没列候选时，**不要截断它**，
+  改走 `beat_ops` 重排载体。
+- `beat_ops`：节拍操作，`op` 三选一（不写 `op` = `replace`）：
+  - `{"op": "replace", "index": 2, "new_text": "新正文（含 ｜原文依据：“…”）",
+     "new_carrier": "画面 或 台词k"}`——改写该节拍；
+  - `{"op": "insert_after", "index": 2, "new_text": …同上…,
+     "new_carrier": …}`——在该节拍**之后插入一条新节拍**（`index` 给 0 = 插到最前）；
+  - `{"op": "split", "index": 2, "parts": [{"new_text": …, "new_carrier": …},
+     {"new_text": …, "new_carrier": …}]}`——把该节拍**原地拆成多条**（至少两段，
+     每段各自带原文依据与载体）。**一条节拍同时要承载画面和台词时，用 `split`**。
+  （以上 `index` 一律只填**数字**，如 `2`；不要写 `B2`/`"B2"`。）
+
+**索引一律指「改之前」的节拍编号**（你在上面看到的那份计划）：`split`/`insert_after`
+会让编号顺延，所以同一批操作里**不要**引用还没出现的新编号。**同一条节拍一批里至多
+一条操作**（同一编号出现两次 = 冲突，整轮拒收）。`new_carrier` 留空 = 沿用该节拍原有
+载体；`split` 的每一段必须自己写载体（拆分的**目的**就是给各段不同载体）。
 
 **不变量**（代码会逐项核，违反即整轮拒收）：`main_events` 不得增删或调换顺序；
 **必保留事实一条都不许少**；`climax` 不得改。节拍正文改动后**必须**带逐字可核的
 「原文依据」（长引文 ≥8 字连续命中；4-7 字的短引文要整段逐字）。
+
+**承载关系必须双向闭合**：每条节拍至多一个「｜载体：…」段；**每一句选中的台词
+都要至少被一个节拍声明承载**（`载体：台词k`）。你改某条节拍的载体时，要保证没有
+哪句台词因此失去全部承载——把原承载改掉就同时把新承载指派到别的节拍上。
+（代码会重新验算整张承载关系，违反即整轮拒收。）
 """
+
+
+#: 节拍操作的种类（2026-09-27 用户决定，合并方案第 2 步）：从「只能替换」扩到可
+#: 插入/拆分。评审指出章 2 不收敛的根因之一是「节拍操作表达能力不足」——替换改不了
+#: 节拍**数量**，而承载关系缺陷恰恰需要「把一条节拍拆成画面 + 台词两条」（一条节拍
+#: 同时承载两个事实时，替换没法让它只承载一个）或「补一条承载 D1 的节拍」。
+BEAT_OP_REPLACE = "replace"
+BEAT_OP_INSERT_AFTER = "insert_after"
+BEAT_OP_SPLIT = "split"
+BEAT_OP_KINDS = (BEAT_OP_REPLACE, BEAT_OP_INSERT_AFTER, BEAT_OP_SPLIT)
+
+
+#: 提示里的非法切点字符表**由判据侧的常量渲染**（不在提示里手抄一遍字符）——
+#: 复核口径：提示文字是手写规则，一致性必须由**守卫用例**保证，而不是靠同步习惯。
+from step01_script_gen.plan_feasibility import CUT_ILLEGAL_CHARS as _ILLEGAL_CUT
+
+_PLAN_OPS_INSTRUCTION = _PLAN_OPS_INSTRUCTION.replace(
+    "__ILLEGAL_CUT__", "」「".join(_ILLEGAL_CUT))
+
+#: 同类守卫用的标记：提示里确实渲染进了全部非法字符（空表时视为未接）
+assert "__ILLEGAL_CUT__" not in _PLAN_OPS_INSTRUCTION
+
+
+def _norm_beat_carrier(raw, n_lines: int, old_record) -> tuple:
+    """规范化一条操作给的载体 → `(载体文本, 原因)`；`原因` 非空 = 拒收.
+
+    - 空 → 沿用 `old_record`（被改节拍）原有的载体——模型常常只想改正文，这比整轮
+      拒收有用；沿用不到（原节拍本来就没有载体段）时留空，由承载关系验收判
+      （那才是唯一判据）；
+    - `画面` → 照收；`台词k` → k 必须在 `1..n_lines` 内（节拍操作**不**改台词条数）；
+    - 其余一律拒收：载体是**唯一记录**，含糊值等于没声明（宁可显式失败）。
+    """
+    from step01_script_gen.plan_feasibility import _BEAT_CARRIER_DIALOGUE_PREFIX
+    car = str(raw or "").strip()
+    if not car and old_record is not None:
+        kind, k = old_record.carrier()
+        car = ("台词%d" % k) if (kind == "dialogue" and k) else (
+            "画面" if kind == "visual" else "")
+    if not car:
+        return "", ""
+    if car == "画面":
+        return car, ""
+    if car.startswith(_BEAT_CARRIER_DIALOGUE_PREFIX):
+        digits = ""
+        for ch in car[len(_BEAT_CARRIER_DIALOGUE_PREFIX):]:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        k = int(digits) if digits else 0
+        if 1 <= k <= int(n_lines or 0):
+            return "台词%d" % k, ""
+        return "", "载体「%s」越界（本集共 %d 句台词）" % (car[:12], int(n_lines or 0))
+    return "", "载体只能是「画面」或「台词k」，收到「%s」" % car[:12]
+
+
+def _coerce_op_index(raw, tag: str, axis: str) -> tuple:
+    """操作 `index` → `(int, 原因)`；按**字段轴**解析编号.
+
+    与 `plan_refs` 同源（`coerce_ref_index`）：接受整数 / 数字串 / **本轴**标签串
+    （台词操作 `D1`、节拍操作 `B1`）。
+
+    **错轴标签必须拒绝**：`"B1"` 出现在 `dialogue_ops` 里说明模型把两套编号体系搞混了
+    ——按数字静默照收（B1 → 1）会把改动落到**另一条**对象上，比拒收危险得多。
+    """
+    from step01_script_gen.plan_feasibility import coerce_ref_index
+    _v = coerce_ref_index(raw, tag)
+    if _v is not None:
+        return _v, ""
+    _s = str(raw or "").strip()
+    _other = "B" if tag == "D" else "D"
+    if _s[:1].upper() == _other:
+        return None, ("index 用了**另一套编号**「%s」——%s操作填的是%s编号（只填数字，"
+                      "如 1）" % (_s[:12], axis, "台词" if tag == "D" else "节拍"))
+    return None, "index 不是编号：%r（只填数字，如 1；不要带 %s 前缀）" % (raw, tag)
+
+
+def _render_beat_op(new_text, new_carrier, old_record, n_lines: int, *,
+                    require_carrier: bool = False) -> tuple:
+    """把一条操作的 `(new_text, new_carrier)` 落成节拍文本 → `(文本, 原因)`.
+
+    判据读 `BeatRecord` 的**字段**，不再靠字符串拼接：`new_text` 是**整条节拍正文**
+    （自带「｜原文依据：…」）；模型若把旧标注一起抄进 `new_text`，这里**先删干净再
+    重建**，从表示上消除「｜载体：画面｜载体：画面」这类重复标注（实跑出现过——
+    旧实现靠事后数字符串才发现）。
+    """
+    from step01_script_gen.plan_feasibility import (
+        BEAT_SEG_CARRIER, BEAT_SEG_EVIDENCE, BeatRecord)
+    _rec = BeatRecord.parse(new_text)
+    if not _rec.body:
+        return None, "节拍正文为空"
+    if not _rec.has(BEAT_SEG_EVIDENCE):
+        return None, "节拍正文缺「原文依据」"
+    _car, _why = _norm_beat_carrier(new_carrier, n_lines, old_record)
+    if _why:
+        return None, _why
+    if require_carrier and not _car:
+        # P1-4（2026-09-27 复核）：**新建**的节拍没有「原有载体」可沿用——留空就等于
+        # 凭空多出一条没有承载记录的节拍。旧计划**整体**无标注时兼容分支不会报未标注
+        # （`carrier_relation_problems` 的「计划带了标注才判」口径），这条新节拍会静默
+        # 无标注 ⇒ 必须在这里显式失败，而不是靠下游兜。
+        return None, ("新建的节拍必须显式给 `new_carrier`（画面 或 台词k）——"
+                      "没有旧节拍可沿用载体，留空等于多出一条无承载记录的节拍")
+    _rec.drop(BEAT_SEG_CARRIER)
+    if _car:
+        _rec.set(BEAT_SEG_CARRIER, _car)
+    return _rec.render(), ""
 
 
 def apply_replan_ops(plan: dict, ops, novel_text: str) -> tuple:
@@ -570,25 +746,62 @@ def apply_replan_ops(plan: dict, ops, novel_text: str) -> tuple:
     「没改动」判成合规——要求模型整份重写既给了它「什么都不改」的退路，也让验收
     只能事后比对。改成操作式后：**改了什么由操作决定**，模型没有「回抄」这一退路。
 
+    2026-09-27 用户决定（合并方案第 2 步）：操作从「只能替换」扩到
+    `replace` / `insert_after` / `split`，并改为**整批三步走**：
+
+    ① **先检查**——全部操作对着**修改前**的快照验（种类、编号范围、一批内不冲突、
+       正文自带原文依据、载体合法且不越界）；一条不过整轮拒收，不半途改一半；
+    ② **再统一应用**——对快照做纯函数变换（`split` 原地展开、`insert_after` 顺插）；
+    ③ **后重新编号**——编号 = **应用后**的位置（B1..B%d）。下游生成契约
+       （`prompts.render_execution_contract` 的 `B%d` / `D%d` 标签）与候选层
+       `plan_refs` 一律按位置渲染，故自动跟随；本函数接收的 `index` 只在**这一轮**
+       对照模型看到的反馈有意义，**不得**跨轮复用。
+
     Returns `(new_plan, "")`；`(None, "no_change")` = 模型没给任何操作（**显式**，
     不再算一次有效重选）；其余为拒收原因。
     """
     from step01_script_gen.plan_feasibility import (
-        check_dialogue_representable, plan_dialogue_lines, source_contains)
-    _ops = ops if isinstance(ops, dict) else {}
-    _dlg = [o for o in (_ops.get("dialogue_ops") or []) if isinstance(o, dict)]
-    _bat = [o for o in (_ops.get("beat_ops") or []) if isinstance(o, dict)]
+        BeatRecord, check_dialogue_representable, is_sentence_end_terminated,
+        plan_dialogue_lines, source_contains)
+    # 1b（2026-09-27 复核）：**解析失败 / 结构错误 / 真正的空操作**必须分开——
+    # 前两者落成 `no_change` 会把「模型没按契约回」记成「模型认为无需改动」，
+    # 诊断上彻底指错方向（而且会被当成一次有效结论存进 plan_replan）。
+    if not isinstance(ops, dict):
+        return None, "invalid_result: 重选结果不是 JSON 对象"
+    for _key in ("dialogue_ops", "beat_ops"):
+        _v = ops.get(_key)
+        if _v is None:
+            continue
+        if not isinstance(_v, list):
+            return None, "invalid_result: %s 不是数组" % _key
+        if any(not isinstance(x, dict) for x in _v):
+            return None, "invalid_result: %s 里有非对象条目" % _key
+    _dlg = list(ops.get("dialogue_ops") or [])
+    _bat = list(ops.get("beat_ops") or [])
     if not _dlg and not _bat:
         return None, "no_change"
+
     new = json.loads(json.dumps(plan, ensure_ascii=False))
     lines = list(plan_dialogue_lines(new))
+    n_lines = len(lines)
+    #: **修改前的快照**：本批全部 `index` 都对着它编号（节拍操作会改变条数与顺序，
+    #: 若边改边编号，同一批里 `split` 之后的操作就会指到别的节拍上）。
+    beats_in = list(new.get("shot_beats") or [])
+    n_beats = len(beats_in)
+    snapshot = [BeatRecord.parse(b) for b in beats_in]
+
+    # ---- ① 台词操作：规范化 + 批内冲突检查 ---------------------------------
+    _dlg_seen: dict = {}
     for op in _dlg:
-        try:
-            _i = int(op.get("index"))
-        except (TypeError, ValueError):
-            return None, "dialogue_op 的 index 不是整数：%r" % (op.get("index"),)
-        if not 1 <= _i <= len(lines):
-            return None, "dialogue_op index %s 越界（共 %d 句）" % (op.get("index"), len(lines))
+        _i, _why_i = _coerce_op_index(op.get("index"), "D", "台词")
+        if _why_i:
+            return None, "dialogue_op：%s" % _why_i
+        if not 1 <= _i <= n_lines:
+            return None, "dialogue_op index %s 越界（共 %d 句）" % (op.get("index"), n_lines)
+        if _i in _dlg_seen:
+            # 一批里同一句被换两次 ⇒ 结果取决于应用顺序，不是**唯一记录**
+            return None, "操作冲突：D%d 同时被多条台词操作替换（同一句至多一条）" % _i
+        _dlg_seen[_i] = True
         _rep = str(op.get("replace_with") or "").strip()
         if not _rep:
             return None, "dialogue_op 第 %d 句的 replace_with 为空" % _i
@@ -596,26 +809,117 @@ def apply_replan_ops(plan: dict, ops, novel_text: str) -> tuple:
             return None, "第 %d 句的替代未在原文逐字找到：%s" % (_i, _rep[:24])
         if not check_dialogue_representable(_rep)["representable"]:
             return None, "第 %d 句的替代不可单镜表示：%s" % (_i, _rep[:24])
+        # 1a（2026-09-27 复核）：**逗号/顿号结尾的半句一律非法**——提示里明令禁止过
+        # （实测模型两次都拿自己出处的逗号截断前缀当替代），但当时只有提示、没人拦：
+        # 短半句是"可表示"的，能一路通过。判据与提示同源（`is_sentence_end_terminated`）。
+        if not is_sentence_end_terminated(_rep):
+            return None, ("第 %d 句的替代以「%s」收尾——逗号/顿号截断的半句一律非法"
+                          "（成片里是没说完的话）：%s"
+                          % (_i, _rep[-1] if _rep else "", _rep[:24]))
         lines[_i - 1] = _rep
     new["dialogue_lines"] = lines
-    beats = list(new.get("shot_beats") or [])
-    _changed: list = []
+
+    # ---- ② 节拍操作：**先整批检查**（范围/冲突/正文/载体），一条不过整轮拒收 ----
+    #: index → {"edited": 改过它的操作种类 or None, "inserted": 是否已在其后插入}
+    #: P1-3（2026-09-27 复核）：**两个槽位分别判**。「只记上一条操作种类」有洞——
+    #: `replace → insert_after → replace` 时，第三条看到「上一条是插入」就被放行，
+    #: 随后**覆盖**掉第一条 replace（改动被静默吞掉）。改该节拍 / 在它后面插入是
+    #: **两件互不覆盖**的事，各自至多一次。
+    _beat_seen: dict = {}
+    _edit_ops: dict = {}          # index → (kind, [渲染好的节拍文本, ...])——改该节拍
+    _insert_ops: dict = {}        # index → [渲染好的节拍文本, ...]——在该节拍**之后**插入
     for op in _bat:
-        try:
-            _i = int(op.get("index"))
-        except (TypeError, ValueError):
-            return None, "beat_op 的 index 不是整数：%r" % (op.get("index"),)
-        if not 1 <= _i <= len(beats):
-            return None, "beat_op index %s 越界（共 %d 条）" % (op.get("index"), len(beats))
-        _txt = str(op.get("new_text") or "").strip()
-        _car = str(op.get("new_carrier") or "").strip()
-        if "原文依据" not in _txt:
-            return None, "第 %d 条节拍的新正文缺「原文依据」" % _i
-        if not _car:
-            return None, "第 %d 条节拍缺载体标注" % _i
-        beats[_i - 1] = _txt + "｜载体：" + _car
-        _changed.append(beats[_i - 1])
-    new["shot_beats"] = beats
+        _kind = str(op.get("op") or "").strip() or BEAT_OP_REPLACE
+        if _kind not in BEAT_OP_KINDS:
+            return None, "beat_op 的操作种类非法：%r（只能是 %s）" % (
+                _kind, " / ".join(BEAT_OP_KINDS))
+        _i, _why_i = _coerce_op_index(op.get("index"), "B", "节拍")
+        if _why_i:
+            return None, "beat_op：%s" % _why_i
+        # `insert_after` 的 0 号位 = 插到最前（其余操作必须指到已有节拍）
+        _lo, _hi = (0, n_beats) if _kind == BEAT_OP_INSERT_AFTER else (1, n_beats)
+        if not _lo <= _i <= _hi:
+            return None, ("beat_op index %s 越界（%s 允许 %d..%d，共 %d 条节拍）"
+                          % (op.get("index"), _kind, _lo, _hi, n_beats))
+        _slot = _beat_seen.setdefault(_i, {"edited": None, "inserted": False})
+        _is_insert = (_kind == BEAT_OP_INSERT_AFTER)
+        if _slot["inserted"] if _is_insert else (_slot["edited"] is not None):
+            _prev_kind = "insert_after" if _is_insert else _slot["edited"]
+            return None, ("操作冲突：B%d 同时被「%s」与「%s」两条操作改动"
+                          "（同一节拍至多一条**改动** + 一条**插入**——索引指"
+                          "**修改前**的编号，同槽位重复时后一条会覆盖前一条）"
+                          % (_i, _prev_kind, _kind))
+        if _is_insert:
+            _slot["inserted"] = True
+        else:
+            _slot["edited"] = _kind
+        # 被改节拍的旧记录（`insert_after` 是**新增**一条，没有旧载体可沿用）
+        _old = snapshot[_i - 1] if _kind != BEAT_OP_INSERT_AFTER else None
+        if _kind == BEAT_OP_SPLIT:
+            _parts = op.get("parts")
+            if not isinstance(_parts, list) or len(_parts) < 2:
+                return None, "第 %d 条节拍的 split 至少要给两段" % _i
+            _rendered = []
+            for _j, _p in enumerate(_parts, 1):
+                if not isinstance(_p, dict):
+                    return None, "第 %d 条节拍的 split 第 %d 段不是对象" % (_i, _j)
+                # split 的每段都必须自己写载体（拆分的**目的**就是给两段不同载体，
+                # 沿用旧载体等于没拆）——故不传 `old_record`。
+                _txt, _why = _render_beat_op(_p.get("new_text"),
+                                             _p.get("new_carrier"), None, n_lines,
+                                             require_carrier=True)
+                if _why:
+                    return None, "第 %d 条节拍 split 第 %d 段：%s" % (_i, _j, _why)
+                _rendered.append(_txt)
+            _edit_ops[_i] = (_kind, _rendered)
+        elif _kind == BEAT_OP_INSERT_AFTER:
+            _txt, _why = _render_beat_op(op.get("new_text"), op.get("new_carrier"),
+                                         None, n_lines, require_carrier=True)
+            if _why:
+                return None, "第 %d 条节拍（插入）：%s" % (_i, _why)
+            _insert_ops[_i] = [_txt]
+        else:
+            _txt, _why = _render_beat_op(op.get("new_text"), op.get("new_carrier"),
+                                         _old, n_lines)
+            if _why:
+                return None, "第 %d 条节拍：%s" % (_i, _why)
+            _edit_ops[_i] = (_kind, [_txt])
+
+    # ---- ③ 统一应用（对**快照**做纯函数变换；位置即**应用后**的编号）--------
+    out: list = list(_insert_ops.get(0) or [])      # insert_after index=0 → 插到最前
+    for _i, _b in enumerate(beats_in, 1):
+        _edit = _edit_ops.get(_i)
+        if _edit is None:
+            out.append(_b)
+        else:
+            _kind, _rendered = _edit
+            if _kind == BEAT_OP_SPLIT:
+                out.extend(_rendered)               # 原地展开成多段
+            else:
+                out.append(_rendered[0])
+        out.extend(_insert_ops.get(_i) or [])       # 插在该节拍**之后**
+    new["shot_beats"] = out
+    # 本批**改写过**的条目（改写的 + 插入的）——原文证据只核这些（见下方说明）
+    _changed = ([t for _k, _ts in _edit_ops.values() for t in _ts]
+                + [t for _ts in _insert_ops.values() for t in _ts])
+
+    # 逐项保护必保留事实与事件顺序（操作只在旧计划上打补丁，结构上本就不会破——
+    # 2026-09-27 复核要求把它作为**显式**验收写进代码，而不是靠"结构上不会"）
+    _inv = _plan_invariants_intact(plan, new)
+    if _inv:
+        return None, _inv
+    # 替换台词后**重新验算整张承载关系**（不能只验算字数）——2026-09-27 复核：
+    # 重选可能把某句换掉、又把原指向它的节拍改成「载体：画面」，让那句**无人承载**；
+    # 这种事不在计划层显形，会一路拖到候选层才被台词门整稿拒收。
+    from step01_script_gen.plan_feasibility import carrier_relation_problems
+    _dup, _orphan, _unlabeled = carrier_relation_problems(
+        new.get("shot_beats"), len(plan_dialogue_lines(new)))
+    if _dup:
+        return None, "节拍载体标注重复：%s（每条节拍只许一个载体）" % "，".join(_dup[:4])
+    if _unlabeled:
+        return None, "节拍缺载体标注：%s（计划带了标注就必须每条恰有一个载体）" % "，".join(_unlabeled[:4])
+    if _orphan:
+        return None, "替换后 %s 无任何节拍承载（承载关系必须双向闭合）" % "，".join(_orphan[:4])
     # 只核**被改写的**条目：未改动的条目是既有状态（早就过了流水线），把整份计划
     # 一起核会把「原本就抄得不精确的旧条目」也算到本轮头上而误拒——操作式的语义
     # 是「代码在旧计划上打补丁」，责任范围就是补丁本身。

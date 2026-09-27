@@ -39,9 +39,9 @@ _Q_WITH_END = ("吃的灯草灰，放的轻巧屁！罗大人几时这般心慈�
                "你又不是不知道，我锦衣卫现在处境何等艰难，想要翻身，依赖的就是咱们了。")
 # 长引文（归一化 17 字，走「≥8 字连续命中」档）
 _LONG_CITE = "丙吓得发抖，连手里的茶盏都拿不稳了。"
-# 短引文（归一化 7 字，走「整段逐字」档）
+# 短引文（归一化 7 字，走「整段逐字」档）；**单独作为一条引语**，给跨出处菜单用
 _SHORT_CITE = "丁把茶壶踢翻了。"
-_SRC = ('甲道：“%s”乙道：“%s”%s%s'
+_SRC = ('甲道：“%s”乙道：“%s”%s丙道：“%s”'
         % (_Q_NO_END, _Q_WITH_END, _LONG_CITE, _SHORT_CITE))
 
 
@@ -72,6 +72,41 @@ def test_replacements_never_return_comma_terminated_fragments():
 
 def test_replacements_empty_for_line_not_in_source():
     assert representable_replacements("这句原文里根本没有的话。", _SRC) == []
+
+
+# ---------------------------------------------------------------------------
+# ①b cross_quote_replacements：无出处候选时给**相邻引语**里的合法短句
+# ---------------------------------------------------------------------------
+
+def test_cross_quote_offers_a_neighbouring_short_line():
+    """实测形态：出处通篇无句末标点时，把同场景相邻发言里的完整短句摆出来.
+
+    章 2 冯检校那句的合法载体本来就在旁边（安员外「杨旭死了，咱们的差事算是办砸了，
+    现在该怎么办？」）——只说「没有候选」时模型会去截断本句，把菜单给它就不必猜。
+    """
+    from step01_script_gen.plan_feasibility import _SENT_END_CHARS, cross_quote_replacements
+    from step01_script_gen.plan_feasibility import _source_norm
+    got = cross_quote_replacements(_Q_NO_END, _SRC)
+    assert got, "相邻引语里有合法短句时必须列出来"
+    texts = [c["text"] for c in got]
+    assert _SHORT_CITE in texts, "同场景的完整短句应当在候选里：%s" % texts
+    for c in got:
+        assert c["text"][-1] in _SENT_END_CHARS, "候选必须句末收尾：%s" % c["text"]
+        assert c["text"] in _SRC and _source_norm(c["text"]) != _source_norm(_Q_NO_END)
+        assert c["from"].startswith("相邻第")
+
+
+def test_cross_quote_candidates_fit_one_shot():
+    """跨出处候选只收**单镜装得下**的——50-110 字那种换过去只是把长度问题搬个家."""
+    from step01_script_gen.plan_feasibility import (check_dialogue_representable,
+                                                    cross_quote_replacements)
+    for c in cross_quote_replacements(_Q_NO_END, _SRC):
+        assert check_dialogue_representable(c["text"]).get("split") is None, c["text"]
+
+
+def test_cross_quote_empty_for_line_not_in_source():
+    from step01_script_gen.plan_feasibility import cross_quote_replacements
+    assert cross_quote_replacements("原文里没有这句。", _SRC) == []
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +227,7 @@ def test_apply_ops_rejects_beat_with_fabricated_evidence():
         _old_plan(),
         _ops(beat=[{"index": 1,
                     "new_text": '节拍：编造｜原文依据："此人手持长剑立于城头之上，风吹衣袂猎猎作响。"',
-                    "new_carrier": "画面"}]), _SRC)
+                    "new_carrier": "台词1"}]), _SRC)
     assert _n is None and "节拍 1" in why, why
 
 
@@ -202,12 +237,79 @@ def test_apply_ops_rewrites_beat_and_keeps_invariants():
         _old_plan(),
         _ops(beat=[{"index": 1,
                     "new_text": '节拍：丙失手（画面动作）｜原文依据："%s"' % _LONG_CITE,
-                    "new_carrier": "画面"}]), _SRC)
+                    "new_carrier": "台词1"}]), _SRC)
     assert new is not None, why
-    assert new["shot_beats"][0].endswith("｜载体：画面")
+    assert new["shot_beats"][0].endswith("｜载体：台词1")
     # 操作**结构上**改不到事实与事件（只在旧计划上打补丁）
     assert new["main_events"] == _old_plan()["main_events"]
     assert new["required_facts"] == _old_plan()["required_facts"]
+
+
+def test_apply_ops_does_not_duplicate_carrier_tag():
+    """模型常在 new_text 里自带一份「｜载体：…」——不得拼成两遍（实跑出现过）."""
+    from step01_script_gen.outline import apply_replan_ops
+    new, why = apply_replan_ops(
+        _old_plan(),
+        _ops(beat=[{"index": 1,
+                    "new_text": '节拍：丙失手｜原文依据："%s"｜载体：台词9' % _LONG_CITE,
+                    "new_carrier": "台词1"}]), _SRC)
+    assert new is not None, why
+    assert new["shot_beats"][0].count("｜载体：") == 1, new["shot_beats"][0]
+    assert new["shot_beats"][0].endswith("｜载体：台词1"), new["shot_beats"][0]
+
+
+def test_apply_ops_rejects_ops_that_orphan_a_dialogue_line():
+    """判别性反例（09-27 复核指定）：把承载某句的节拍改成「画面」→ 该句无人承载 → 拒收.
+
+    实损形态：重选把 D1 换掉、又把原指向 D1 的节拍改成画面，D1 从此无人承载；
+    旧验收只验字数/引文，误报通过，问题一路拖到候选层台词门才炸。
+    """
+    from step01_script_gen.outline import apply_replan_ops
+    new, why = apply_replan_ops(
+        _old_plan(),
+        _ops(beat=[{"index": 1,
+                    "new_text": '节拍：甲喝止（画面动作）｜原文依据："%s"' % _LONG_CITE,
+                    "new_carrier": "画面"}]), _SRC)
+    assert new is None and "无任何节拍承载" in why, why
+
+
+def test_apply_ops_rejects_comma_truncated_replacement():
+    """1a 判别性：**短**的半句本身"可表示"，只有半句判据能拦（提示早就禁了，但没人拦）.
+
+    实跑形态：模型两次把长句换成自己出处的逗号截断前缀——短到单镜装得下，
+    于是 `representable` 放行、`source_contains` 也放行，一路通过。
+    """
+    from step01_script_gen.plan_feasibility import check_dialogue_representable as cdr
+    from step01_script_gen.outline import apply_replan_ops
+    half = "杨旭让人宰了，"                      # _Q_NO_END 的逗号截断前缀
+    assert half in _SRC and cdr(half)["representable"], "夹具必须是**可表示**的半句"
+    new, why = apply_replan_ops(_old_plan(), _ops([{"index": 1, "replace_with": half}]), _SRC)
+    assert new is None and "半句" in why, why
+
+
+def test_apply_ops_distinguishes_structure_error_from_no_change():
+    """1b：结构错误不得落成 `no_change`（那是「模型认为无需改动」，两回事）."""
+    from step01_script_gen.outline import apply_replan_ops
+    for bad in ("not-a-dict", {"dialogue_ops": "x"}, {"beat_ops": [1, 2]}):
+        new, why = apply_replan_ops(_old_plan(), bad, _SRC)
+        assert new is None and why.startswith("invalid_result"), (bad, why)
+
+
+def test_ops_mode_parse_failure_is_not_no_change(monkeypatch):
+    """1b：模型回的不是 JSON → `invalid_result`，不能记成 no_change."""
+    import step01_script_gen.outline as o
+
+    class _Svc:
+        def generate(self, req):
+            class _R:
+                success = True
+                error = ""
+                text = "这不是 JSON"
+            return _R()
+
+    monkeypatch.setattr(o, "create_service", lambda *a, **k: _Svc())
+    plan, why = o.replan_dialogue_within_budget(_old_plan(), _REP_UNREP, _SRC)
+    assert plan is None and why.startswith("invalid_result"), why
 
 
 def test_apply_ops_empty_is_no_change():
@@ -262,10 +364,10 @@ def _old_plan():
         "climax": "丙失手",
         "required_facts": ['丙失手｜原文证据："%s"' % _LONG_CITE],
         "causal_chain": ["甲喝止→乙发抖→丙失手"],
-        "shot_beats": ['节拍：甲喝止｜原文依据："%s"' % _LONG_CITE,
-                       '节拍：乙发抖｜原文依据："%s"' % _SHORT_CITE,
-                       '节拍：丙失手｜原文依据："%s"' % _LONG_CITE,
-                       '节拍：收尾｜原文依据："%s"' % _SHORT_CITE],
+        "shot_beats": ['节拍：甲喝止｜原文依据："%s"｜载体：台词1' % _LONG_CITE,
+                       '节拍：乙发抖｜原文依据："%s"｜载体：画面' % _SHORT_CITE,
+                       '节拍：丙失手｜原文依据："%s"｜载体：画面' % _LONG_CITE,
+                       '节拍：收尾｜原文依据："%s"｜载体：画面' % _SHORT_CITE],
         "dialogue_lines": [_Q_NO_END],
         "time_budget": "对白约50%",
     }
@@ -289,12 +391,12 @@ def test_ops_mode_uses_the_ops_schema_and_applies_operations(monkeypatch):
     payload = _ops(
         [{"index": 1, "replace_with": cand}],
         [{"index": 1, "new_text": '节拍：丙失手（画面动作）｜原文依据："%s"' % _LONG_CITE,
-          "new_carrier": "画面"}])
+          "new_carrier": "台词1"}])
     (plan, why), svc = _run(monkeypatch, payload, _REP_UNREP)
     assert plan is not None, why
     assert svc.reqs[0].json_schema is REPLAN_OPS_SCHEMA, "可表示性触发必须走 ops schema"
     assert plan["dialogue_lines"][0] == cand
-    assert plan["shot_beats"][0].endswith("｜载体：画面")
+    assert plan["shot_beats"][0].endswith("｜载体：台词1")
     assert plan["main_events"] == _old_plan()["main_events"], "事实/事件不得被动到"
 
 

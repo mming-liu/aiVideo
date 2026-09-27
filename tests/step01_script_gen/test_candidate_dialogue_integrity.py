@@ -472,3 +472,46 @@ def test_dump_conclusion_follows_failure_type(tmp_path):
     pf.dump_dialogue_incomplete(tmp_path, [[{"line": "", "reason": "gate_error: x"}]],
                                 layer="终稿层")
     assert "终稿层" in _read()["note"]
+
+
+def test_best_guard_excludes_snapshot_declared_against_another_plan(tmp_path, monkeypatch):
+    """P0-2（2026-09-27 复核）：带**另一版计划身份**的快照不得参加排名，并留原因.
+
+    构造：旧计划身份快照分数最高。只按分数/台词门筛，它会被选中——而它的 `plan_refs`
+    是对**另一版计划**作的声明（`insert_after`/`split` 会重排 B 编号，同号不代表同一条
+    节拍）。身份门必须把它排除，让无身份的老快照（按兼容政策可参与）胜出。
+    """
+    import step01_script_gen.main as m
+
+    out_file = tmp_path / "script_result.json"
+    monkeypatch.setattr(m, "OUTPUT_FILE", out_file)
+    snap_dir = tmp_path / "snapshots"
+    snap_dir.mkdir(parents=True, exist_ok=True)
+
+    _stale = _good_script()
+    _stale["shots"] = _stale["shots"] + [
+        {"index": 2, "prompt": "p", "duration_sec": 2.0},
+        {"index": 3, "prompt": "p", "duration_sec": 2.0}]
+    _stale["plan_id"] = "00000000dead"          # 不是本轮计划的身份
+    _legacy = _good_script()
+    _legacy["shots"] = _legacy["shots"] + [
+        {"index": 2, "prompt": "p", "duration_sec": 2.0}]   # 无 plan_id（老快照）
+    (snap_dir / "script_result_20260101_000001.json").write_text(
+        json.dumps(_stale, ensure_ascii=False), encoding="utf-8")
+    (snap_dir / "script_result_20260101_000002.json").write_text(
+        json.dumps(_legacy, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(m, "_score_script", lambda script, novel_text="": {
+        "total": {3: 99.0, 2: 90.0}.get(len(script.get("shots") or []), 50.0),
+        "detail": "mock"})
+    monkeypatch.setattr(m, "_candidate_quality_summary", lambda s, n: {
+        "quality_checked": True, "blocking_risk_count": 0, "integrity_ok": True,
+        "structural_ok": True, "structural_issues": []})
+
+    selected, meta = m._cross_run_best_guard(_good_script(), "原文", plan=dict(_PLAN))
+
+    _stale_log = meta.get("stale_plan_snapshots") or []
+    assert len(_stale_log) == 1, meta
+    assert "script_result_20260101_000001.json" in _stale_log[0]
+    assert "另一版计划" in _stale_log[0]
+    assert selected is not None and len(selected["shots"]) == 2, "无身份的老快照胜出"

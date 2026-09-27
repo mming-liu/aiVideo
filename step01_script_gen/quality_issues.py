@@ -13,6 +13,8 @@ from shared import motion_segments as _ms
 from dataclasses import dataclass, field
 from typing import Iterable
 
+from step01_script_gen.subject_attribution import leading_named_span
+
 RULE_VERSION = "2026-09-23.4"
 RULE_IMPLEMENTATION = "evidence-gated-writes-v1"
 
@@ -46,6 +48,7 @@ def _compute_rule_source_fingerprint() -> str:
         root / "audit.py",
         root / "cross_field_checks.py",
         root / "kf_structural_guard.py",
+        root / "subject_attribution.py",
         # v6.112：约束框架的版本索引——决定「哪些约束在跑、跑的是哪一版」，
         # 与下面的 constraints/ 目录同为判定实现。
         root / "rules_index.py",
@@ -841,13 +844,19 @@ def _keyframe_timeline_issues(shot: dict, shot_id) -> list[Issue]:
             if not desc:
                 continue
             frame = layout_kfs[i] if i < len(layout_kfs) and isinstance(layout_kfs[i], list) else []
+            frame_names = [str(item.get("name") or "").strip() for item in frame
+                           if isinstance(item, dict)]
             for item in frame:
                 if not isinstance(item, dict):
                     continue
                 name = str(item.get("name") or "").strip()
                 if not name or name not in desc:
                     continue
-                clauses = [c.strip() for c in re.split(r"[，。；！？、]", desc) if name in c]
+                clauses = []
+                for clause in re.split(r"[，。；！？、]", desc):
+                    subject, span = leading_named_span(clause, frame_names)
+                    if subject == name:
+                        clauses.append(span)
                 if not clauses:
                     continue
                 if any(w in "".join(clauses) for w in ("从", "转为", "随后", "继而", "起身", "坐起", "躺下", "倒下", "翻倒")):

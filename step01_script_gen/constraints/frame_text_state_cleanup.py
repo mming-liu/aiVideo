@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 
 from shared.alias_map import CHARACTER_ALIASES
+from step01_script_gen.subject_attribution import leading_named_span
 from .base import Constraint
 from .types import RepairRecord, Severity
 
@@ -154,17 +155,23 @@ def _clean_text(text: str, layout: dict[str, dict], names: list[str],
 
     for clause, delimiter in _split_clauses(text):
         mentioned = [name for name in names if name in clause]
-        subject = mentioned[-1] if mentioned else last_subject
-        if mentioned:
-            last_subject = mentioned[-1]
+        subject, actor_clause = leading_named_span(clause, names)
+        if subject:
+            last_subject = subject
+        elif not mentioned:
+            subject = last_subject
+        else:
+            last_subject = ""
+        # An object/location mention does not identify the actor. Do not carry
+        # the previous actor into an ambiguous clause containing another name.
 
-        cats = _pose_categories(clause)
+        cats = _pose_categories(actor_clause) if subject else set()
         item = layout.get(subject) if subject else None
         drop = False
 
         if item and item.get("on_screen") is False:
-            visible = bool(cats) or any(w in clause for w in _VISIBLE_WORDS)
-            absent = any(w in clause for w in _ABSENT_WORDS)
+            visible = bool(cats) or any(w in actor_clause for w in _VISIBLE_WORDS)
+            absent = any(w in actor_clause for w in _ABSENT_WORDS)
             if visible and not absent:
                 drop = True
 
@@ -174,7 +181,7 @@ def _clean_text(text: str, layout: dict[str, dict], names: list[str],
                     or ("lie" in layout_cats and "sit" in cats)):
                 drop = True
 
-        if subject and cats and not drop and not any(w in clause for w in _TRANSITION_WORDS):
+        if subject and cats and not drop and not any(w in actor_clause for w in _TRANSITION_WORDS):
             prior = seen_pose.get(subject)
             if prior and (("sit" in prior and "lie" in cats)
                           or ("lie" in prior and "sit" in cats)):

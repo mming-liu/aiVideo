@@ -434,17 +434,100 @@ def representable_replacements(line: str, novel_text: str, *, limit: int = 6) ->
         quote = m.group(1)
         if anchor not in _source_norm(quote):
             continue
-        out = []
-        for k, ch in enumerate(quote):
-            if ch not in _SENT_END_CHARS:
-                continue
-            cand = quote[:k + 1].strip()
-            if len(cand) < 6 or _source_norm(cand) == anchor:
-                continue
-            if cand not in out and check_dialogue_representable(cand)["representable"]:
-                out.append(cand)
-        return sorted(out, key=len, reverse=True)[:limit]
+        return _quote_span_candidates(quote, anchor, limit=limit)
     return []
+
+
+def _quote_span_candidates(quote: str, exclude_norm: str, *, limit: int,
+                           one_shot: bool = False):
+    """一条引语里**句末收尾且可表示**的逐字片段（按保留信息量降序）.
+
+    `one_shot=True` 只留**单镜装得下**（无需切分）的片段——跨出处候选要的是
+    「替代某一句」的短句，50-110 字那种虽然可表示（能切段），但换过去只是把
+    长度问题搬了个家，当候选只会淹没提示。
+    """
+    out = []
+    for k, ch in enumerate(quote):
+        if ch not in _SENT_END_CHARS:
+            continue
+        cand = quote[:k + 1].strip()
+        if len(cand) < 6 or _source_norm(cand) == exclude_norm or cand in out:
+            continue
+        r = check_dialogue_representable(cand)
+        if not r["representable"]:
+            continue
+        if one_shot and r.get("split"):
+            continue
+        out.append(cand)
+    return sorted(out, key=len, reverse=True)[:limit]
+
+
+def cross_quote_replacements(line: str, novel_text: str, *, window: int = 3,
+                             limit: int = 4) -> list:
+    """**跨出处**的可表示替代：同一场景里**相邻引语**中句末收尾的逐字短句.
+
+    为什么需要（2026-09-26 实测）：章 2 冯检校那句的出处通篇只有逗号，本函数之外的
+    `representable_replacements` 只能返回空表；反馈因此只说「没有候选，请用 beat_ops
+    重排载体」，模型于是去**截断本句**（给出逗号半句），被应用器按「不可单镜表示」拒收。
+    用户决定的修法是把**相邻引语**里的合法短句也摆到它面前——例如同场景里安员外那句
+    「杨旭死了，咱们的差事算是办砸了，现在该怎么办？」，本来就是承载同一事实的合法载体。
+
+    **不引入语义启发式**：只按**原文位置**取被点名台词所在引语前后各 `window` 条引语，
+    枚举其中句末收尾且可表示的片段——「同场景相邻发言」是位置事实，不需要判断相关性。
+    排序：先按与出处的距离（近者优先），同距离内长者优先（尽量少丢信息）。
+
+    Returns: `[{"text": …, "from": "相邻第N条引语"}, …]`（空表 = 附近也没有可用短句）。
+    """
+    src = str(novel_text or "")
+    anchor_norm = _source_norm(line)
+    if not src or not anchor_norm:
+        return []
+    quotes = list(re.finditer(r"[\u201c「]([^\u201d」]{2,})[\u201d」]", src))
+    _hit = [i for i, m in enumerate(quotes) if anchor_norm in _source_norm(m.group(1))]
+    if not _hit:
+        return []
+    _at = _hit[0]
+    out: list = []
+    seen: set = set()
+    for _d in range(1, window + 1):
+        for _j in (_at - _d, _at + _d):
+            if not 0 <= _j < len(quotes):
+                continue
+            q = quotes[_j].group(1)
+            for cand in _quote_span_candidates(q, anchor_norm, limit=limit,
+                                                one_shot=True):
+                if cand in seen:
+                    continue
+                seen.add(cand)
+                out.append({"text": cand, "from": "相邻第%d条引语" % _d})
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+#: **明确非法**的切点字符（句中停顿）：成片里接下去还有话，切在这里就是半句.
+#: 重选提示里那句「以「，」「、」收尾的半句一律非法」由本常量**渲染**，
+#: 守卫用例再钉住「提示文本 ↔ 判据函数」一致——2026-09-27 复核：此前提示是手写的
+#: 字符表，与应用器只是**当时**一致，不算长期保证。
+CUT_ILLEGAL_CHARS = "，,、"
+
+
+def is_sentence_end_terminated(text: str) -> bool:
+    """台词是否以**句末标点**收尾（不是逗号/顿号截断的半句）.
+
+    实测模型两次都把长句换成它自己出处的**逗号截断前缀**。这里是**唯一判据函数**：
+    应用器 `apply_replan_ops` 直接调用它；重选提示里的非法字符表由
+    `CUT_ILLEGAL_CHARS` 渲染。两者一致**不靠人肉同步**——由
+    `test_cut_point_rule_in_prompt_matches_the_criterion` 的守卫用例钉住
+    （2026-09-27 复核：提示文本仍是手写规则，不宜把「目前一致」当长期保证）。
+    """
+    _t = str(text or "").strip()
+    while _t and _t[-1] in _CLOSERS_TAIL:
+        _t = _t[:-1].rstrip()
+    return bool(_t) and _t[-1] in _SENT_END_CHARS
+
+
+_CLOSERS_TAIL = "”’」』》〉）)]" + chr(34) + chr(39) + " 　"
 
 
 def _speaker_body(text: str) -> str:
@@ -500,6 +583,88 @@ def _match_forms(text: str) -> list:
     return out
 
 
+def _line_forms(line: str) -> list:
+    """一条计划台词的全部归一化形态（原文 / 去说话人前缀 × 净化后 / 原样）."""
+    out: list = []
+    for f in (line, _speaker_body(line)):
+        for nf in _match_forms(f):
+            if nf and nf not in out:
+                out.append(nf)
+    return out
+
+
+def _line_hit_in_units(line: str, units_raw: list, start: int | None = None) -> tuple:
+    """台词是否逐字落在镜头旁白序列里 → `(hit, joinable)`.
+
+    **单一实现**：整稿台词门（`start=None`，任一起点）与事件履约契约的按镜核验
+    （`start=k`，只许从声明那一镜起算）共用本函数。抽出来是因为 2026-09-27 复核指出的
+    假绿——「shot 1 声明 D1、shot 2 才说 D1」两门都能过：整稿门只证明 D1 **在某处**，
+    而契约门当时只核编号范围/顺序。修它必须让两门**同一个判据**，复制一份必然漂移。
+
+    判据（与 v6.135 硬门逐字一致，未放宽也未收紧）：
+    - `hit①`：某形态**整句包含**在某个镜头的旁白形态里；
+    - `hit②`：跨镜**连续**分解——起点镜旁白从头对齐且句末完整 → 中间镜整镜消费且句末
+      完整 → 末镜可只消费前缀。
+    `joinable` 只用于失败分类（`cross_shot_split` vs `not_found`），不参与命中判定。
+    """
+    unit_forms_full = [_match_forms(u) for u in units_raw]
+    unit_forms_body = [_match_forms(_speaker_body(u)) for u in units_raw]
+    flat_unit_forms = [f for pair in (unit_forms_full + unit_forms_body) for f in pair]
+    body_plain = [p[-1] for p in unit_forms_body]
+    body_sanitized = [p[0] for p in unit_forms_body]
+    n = len(units_raw)
+    _starts = list(range(n)) if start is None else [int(start)]
+    hit = False
+    joinable = False
+    # `start` 给定时，命中必须**锚在该镜**：hit① 只看该镜的旁白形态（不能扫全稿——
+    # 那正是「shot 1 声明 D1、shot 2 才说 D1」能溜过的路径），hit② 的起点也钉在该镜。
+    _hit1_forms = (flat_unit_forms if start is None
+                   else ([f for f in (unit_forms_full[start] + unit_forms_body[start])
+                          if f] if 0 <= start < n else []))
+    for nf in _line_forms(line):
+        if hit:
+            break
+        # ① 单镜包含
+        if any(nf in u for u in _hit1_forms):
+            return True, False
+        # ② 跨镜整段拼接（`start` 限定起点镜）；净化/原样两套连贯形态都试
+        for bodies in (body_sanitized, body_plain):
+            if hit:
+                break
+            if nf and nf in "".join(bodies):
+                joinable = True
+            for i in _starts:
+                if not 0 <= i < n:
+                    continue
+                u0 = bodies[i]
+                if not u0 or not nf.startswith(u0):
+                    continue
+                if not _ends_sentence(_speaker_body(units_raw[i])):
+                    continue  # 首镜句中截断 ⇒ 拼接救不回（09-26 实损形态）
+                acc = u0
+                j = i + 1
+                while j < n:
+                    cand = acc + bodies[j]
+                    if cand == nf:
+                        hit = True
+                        break
+                    if nf.startswith(cand):
+                        if not _ends_sentence(_speaker_body(units_raw[j])):
+                            break  # 中间镜句中截断
+                        acc = cand
+                        j += 1
+                        continue
+                    if cand.startswith(nf):
+                        hit = True  # 台词在末镜前缀内结束（末镜句首对齐）
+                        break
+                    break
+                if hit:
+                    break
+            if hit:
+                break
+    return hit, joinable
+
+
 def check_script_dialogue_integrity(script: dict, plan: dict | None) -> tuple:
     """**台词完整性硬门**（纯函数、确定性、零模型调用）：计划选用的台词是否逐字保住.
 
@@ -539,64 +704,17 @@ def check_script_dialogue_integrity(script: dict, plan: dict | None) -> tuple:
             if _n:
                 units_raw.append(_n)
     # 镜头侧形态：全文/去说话人前缀 × 未还原/已还原（`_match_forms` 每文本给两形态）
+    # 排他性检查（下方 extra_dialogue）要按镜取形态；命中判定本身在 `_line_hit_in_units`
+    # 内部自算（判据单一实现，避免两处形态口径分叉）
     unit_forms_full = [_match_forms(u) for u in units_raw]
     unit_forms_body = [_match_forms(_speaker_body(u)) for u in units_raw]
-    flat_unit_forms = [f for pair in (unit_forms_full + unit_forms_body) for f in pair]
-    # 跨镜拼接需要**连贯**的形态集（不能逐镜混用净化/原样）：`_match_forms` 约定
-    # [净化后, 原样]（无安全词时二者相同）
-    body_plain = [p[-1] for p in unit_forms_body]
-    body_sanitized = [p[0] for p in unit_forms_body]
 
     broken: list = []
     all_line_forms: list = []
     for line in lines:
-        line_forms: list = []
-        for f in (line, _speaker_body(line)):
-            for nf in _match_forms(f):
-                if nf and nf not in line_forms:
-                    line_forms.append(nf)
-        all_line_forms.extend(line_forms)
-        hit = False
-        _joinable = False
-        for nf in line_forms:
-            if hit:
-                break
-            # ① 单镜包含（镜头侧全部形态都试）
-            if any(nf in u for u in flat_unit_forms if u):
-                hit = True
-                break
-            # ② 跨镜整段拼接（约束见函数 docstring）；净化/原样两套连贯形态都试
-            for bodies in (body_sanitized, body_plain):
-                if hit:
-                    break
-                if nf and nf in "".join(bodies):
-                    _joinable = True
-                n = len(units_raw)
-                for i in range(n):
-                    u0 = bodies[i]
-                    if not u0 or not nf.startswith(u0):
-                        continue
-                    if not _ends_sentence(_speaker_body(units_raw[i])):
-                        continue  # 首镜句中截断 ⇒ 拼接救不回（09-26 实损形态）
-                    acc = u0
-                    j = i + 1
-                    while j < n:
-                        cand = acc + bodies[j]
-                        if cand == nf:
-                            hit = True
-                            break
-                        if nf.startswith(cand):
-                            if not _ends_sentence(_speaker_body(units_raw[j])):
-                                break  # 中间镜句中截断
-                            acc = cand
-                            j += 1
-                            continue
-                        if cand.startswith(nf):
-                            hit = True  # 台词在末镜前缀内结束（末镜句首对齐）
-                            break
-                        break
-                    if hit:
-                        break
+        all_line_forms.extend(_line_forms(line))
+        # 整稿门：**任一起点**均可；判据本体与事件门的按镜核验同源
+        hit, _joinable = _line_hit_in_units(line, units_raw)
         if not hit:
             broken.append({"line": str(line)[:60],
                            "reason": "cross_shot_split" if _joinable else "not_found"})
@@ -641,23 +759,126 @@ class EventContractBrokenError(DialogueIncompleteError):
     """
 
 
-#: 节拍载体标注段前缀（`shot_beats` 条目的「｜载体：…」段，v6.138）
-_BEAT_CARRIER_TAG = "载体："
+#: `shot_beats` 条目的**段标签**（`｜` 分隔；顺序即渲染顺序）
+BEAT_SEG_BODY = "节拍："
+BEAT_SEG_PURPOSE = "本镜信息目的："
+BEAT_SEG_EVIDENCE = "原文依据："
+BEAT_SEG_CARRIER = "载体："
+BEAT_SEG_FACTS = "事实："
+#: 已认识的段标签。**未识别**的段（如旧文书的「信息目的：」、未来的新标签）不判错，
+#: 按原样保留在记录里、原样渲染回去——解析器不认识 ≠ 可以丢内容。
+BEAT_SEG_TAGS = (BEAT_SEG_BODY, BEAT_SEG_PURPOSE, BEAT_SEG_EVIDENCE,
+                 BEAT_SEG_CARRIER, BEAT_SEG_FACTS)
+
+#: 节拍载体标注段前缀（`shot_beats` 条目的「｜载体：…」段，v6.138）——历史别名
+_BEAT_CARRIER_TAG = BEAT_SEG_CARRIER
 _BEAT_CARRIER_DIALOGUE_PREFIX = "台词"
 
 
-def _beat_carrier(beat_text: str) -> tuple:
-    """解析节拍的「｜载体：…」标注 → `("dialogue", k)` / `("visual", None)` / `(None, None)`.
+class BeatRecord:
+    """`shot_beats` 单条节拍的**结构化内部记录**（`parse` ⇄ `render` **逐字往返**）.
 
-    未声明（旧缓存计划没有该段）→ `(None, None)`：**没有契约可核 ≠ 契约被破坏**
-    （与台词门对「无台词计划」的口径一致）。`载体：台词k` 的 k 取随后的整数；
-    其余取值一律按画面承载处理。
+    2026-09-27 用户决定（合并方案第 2 步）：此前节拍是「一整串靠 `｜` 拼起来的文本」，
+    载体/原文依据/事实编号全靠**子串扫描**判断（`_beat_carrier` 找「载体：」、
+    `_strip_beat_carrier` 删所有载体段）。这种表示下：
+
+    - **判据依赖拼接形态**：多一个载体段、少一个，只有事后数字符串才发现；
+    - **改不了**：想给一条节拍补一段事实编号，只能重新拼整串；
+    - **加不了节拍**：操作只能**替换**已有条目，不能插入/拆分——而评审指出章 2 不
+      收敛的根因之一正是「节拍操作表达能力不足」（改不了节拍**数量**，可承载关系缺陷
+      恰恰需要「把一条节拍拆成画面 + 台词两条」或「补一条承载 D1 的节拍」）。
+
+    故先把条目解析成记录，判据一律读记录字段（`body` / `evidence` / `carrier()` /
+    `facts()`），需要落盘时再 `render()` 回现文本格式。
+
+    **往返是逐字等价的**：`segments` 保存每个 `｜` 段的**原始文本**，`render()` 只是
+    重新 `｜` 拼接——对**任意**输入 `parse(x).render() == x`（含前导空白、未识别段、
+    重复段）。这一点是硬要求：`_plan_core_preserved` 用**去载体后的原字符串**比较节拍，
+    解析若顺手做了规范化，就会凭空制造「核心字段被改动」而误拒合法重选。
     """
-    for seg in str(beat_text or "").split("｜"):
-        seg = seg.strip()
-        if not seg.startswith(_BEAT_CARRIER_TAG):
-            continue
-        val = seg[len(_BEAT_CARRIER_TAG):].strip()
+
+    __slots__ = ("segments",)
+
+    def __init__(self, segments=None):
+        #: `[(tag, raw)]`；`tag` = 识别到的段标签（`None` = 无标签/未识别段），
+        #: `raw` = 该段的**完整原文**（含标签本身与任何前导空白）
+        self.segments = [(t, r) for t, r in (segments or [])]
+
+    # ---- 解析 / 渲染 ------------------------------------------------------
+    @classmethod
+    def parse(cls, text) -> "BeatRecord":
+        segs = []
+        for seg in str(text or "").split("｜"):
+            _stripped = seg.lstrip()
+            for tag in BEAT_SEG_TAGS:
+                if _stripped.startswith(tag):
+                    segs.append((tag, seg))
+                    break
+            else:
+                segs.append((None, seg))
+        return cls(segs)
+
+    def render(self) -> str:
+        return "｜".join(raw for _, raw in self.segments)
+
+    @staticmethod
+    def _off(raw: str, tag: str) -> int:
+        """标签在段原文里的起始下标（段可能有前导空白，如 `｜ 载体：台词2`）."""
+        return len(raw) - len(raw.lstrip())
+
+    # ---- 段级访问器 ------------------------------------------------------
+    def has(self, tag: str) -> bool:
+        return any(t == tag for t, _ in self.segments)
+
+    def count(self, tag: str) -> int:
+        return sum(1 for t, _ in self.segments if t == tag)
+
+    def get(self, tag: str, default: str = "") -> str:
+        for t, raw in self.segments:
+            if t == tag:
+                return raw[self._off(raw, tag) + len(tag):]
+        return default
+
+    def set(self, tag: str, value: str) -> None:
+        """改写**第一个**该标签段；不存在则追加到末尾（段序可预测）."""
+        for i, (t, raw) in enumerate(self.segments):
+            if t == tag:
+                off = self._off(raw, tag)
+                self.segments[i] = (tag, raw[:off + len(tag)] + value)
+                return
+        self.segments.append((tag, tag + value))
+
+    def drop(self, tag: str) -> None:
+        """删掉**所有**该标签段（`_strip_beat_carrier` 的语义：重复标注一并清掉）."""
+        self.segments = [(t, raw) for t, raw in self.segments if t != tag]
+
+    # ---- 字段访问器（判据一律读这里，不再扫字符串）------------------------
+    @property
+    def body(self) -> str:
+        """节拍正文（`节拍：` 段，去首尾空白）."""
+        return self.get(BEAT_SEG_BODY).strip()
+
+    @property
+    def purpose(self) -> str:
+        """本镜信息目的（旧文书写「信息目的：」→ 未识别段，这里为空，不误判）."""
+        return self.get(BEAT_SEG_PURPOSE).strip()
+
+    @property
+    def evidence(self) -> str:
+        """原文依据（含引号，原样）."""
+        return self.get(BEAT_SEG_EVIDENCE).strip()
+
+    def carrier(self) -> tuple:
+        """载体 → `("dialogue", k)` / `("visual", None)` / `(None, None)`（未声明）.
+
+        **只读第一段**（与 v6.138 的原口径一致）；「写了多段」这件事由
+        `count(BEAT_SEG_CARRIER) > 1` 单独判（承载关系必须是**唯一记录**）。
+        未声明 = `(None, None)`：**没有契约可核 ≠ 契约被破坏**（与台词门对
+        「无台词计划」的口径一致）。`载体：台词k` 的 k 取随后的整数；其余取值按画面。
+        """
+        if not self.has(BEAT_SEG_CARRIER):
+            return None, None
+        val = self.get(BEAT_SEG_CARRIER).strip()
         if val.startswith(_BEAT_CARRIER_DIALOGUE_PREFIX):
             digits = ""
             for ch in val[len(_BEAT_CARRIER_DIALOGUE_PREFIX):]:
@@ -668,16 +889,200 @@ def _beat_carrier(beat_text: str) -> tuple:
             if digits:
                 return "dialogue", int(digits)
         return "visual", None
-    return None, None
+
+    def set_carrier(self, kind, index=None) -> None:
+        """按 `carrier()` 的取值口径写回载体段（`kind="dialogue"` 需给 `index`）."""
+        self.set(BEAT_SEG_CARRIER,
+                 ("台词%d" % int(index)) if (kind == "dialogue" and index) else "画面")
+
+    def facts(self) -> list:
+        """「事实：F1、F3」→ `[1, 3]`（无该段 → `[]`，旧计划即此形态）.
+
+        第 3 步（事实拆到可承载粒度）会用这张表建立「事实—节拍」关系；本步只把
+        字段**接进记录**（解析/渲染/往返），不新增判据。
+        """
+        return [int(x) for x in re.findall(r"\d+", self.get(BEAT_SEG_FACTS))]
+
+    def set_facts(self, ids) -> None:
+        _ids = [int(i) for i in (ids or [])]
+        if _ids:
+            self.set(BEAT_SEG_FACTS, "、".join("F%d" % i for i in _ids))
+        else:
+            self.drop(BEAT_SEG_FACTS)
+
+
+def _beat_carrier(beat_text: str) -> tuple:
+    """（历史入口，语义不变）节拍载体标注 → `("dialogue", k)` / `("visual", None)`.
+
+    实现已迁到 `BeatRecord.carrier`——判据读记录字段，不再扫字符串。
+    """
+    return BeatRecord.parse(beat_text).carrier()
 
 
 def _strip_beat_carrier(beat_text: str) -> str:
-    """去掉节拍条目的「｜载体：…」段——规划重选核心字段比较用（只许改载体标注）."""
-    return "｜".join(seg for seg in str(beat_text or "").split("｜")
-                     if not seg.strip().startswith(_BEAT_CARRIER_TAG))
+    """去掉节拍条目的**所有**「｜载体：…」段——规划重选核心字段比较用（只许改载体标注）."""
+    _rec = BeatRecord.parse(beat_text)
+    _rec.drop(BEAT_SEG_CARRIER)
+    return _rec.render()
 
 
-def check_event_contract(script: dict, plan: dict | None) -> tuple:
+def replan_criteria_version() -> str:
+    """重选**验收判据**的版本指纹（这两个文件承载全部重选规则）.
+
+    2026-09-27 复核：`plan_replan` 记着 `result=infeasible/no_change` 时，后续运行会
+    直接沿用（「同一计划版本只重选一次」）。但**判据本身变了**（例如新增承载关系验收、
+    收紧半句判据）之后，那条旧结论就不再代表「本判据下也不可行」——沿用等于用旧尺子
+    的量数否定新尺子的重试。故把判据版本一并记进 `plan_replan`，不匹配就当作没试过。
+
+    ⚠️ 为什么不复用 `RULE_SOURCE_FINGERPRINT`：那个指纹的构成里**不含**
+    `plan_feasibility.py` / `outline.py`，改这两处的规则它不会变。
+
+    ⚠️ **失效宽度是「整个文件」**（改注释、改日志也会换版本）——这是**有意**的保守
+    取舍：宁可多跑一轮重选，也不因为「只改了函数体」的乐观假设而沿用旧结论。
+    可接受的代价：Step 2 动过这两个文件 ⇒ 章 2 那份旧缓存下次运行会**重跑一轮
+    重选**（预期结果，不是故障）。
+    """
+    import hashlib
+    from pathlib import Path
+    _d = Path(__file__).resolve().parent
+    _h = hashlib.sha256()
+    for _name in ("plan_feasibility.py", "outline.py"):
+        try:
+            _h.update((_d / _name).read_bytes())
+        except OSError:
+            return ""
+    return _h.hexdigest()[:12]
+
+
+def carrier_relation_problems(beats, n_lines: int) -> tuple:
+    """承载关系验收（**双向闭合**）：返回 `(duplicate, orphan, unlabeled)` 三张清单.
+
+    2026-09-27 复核：规划层原先只有**单向**检查——「节拍指向已不存在的台词」
+    （`beat_carrier_dangling`）。缺的两面是：
+
+      ① **重复载体**：同一个节拍写了多个「｜载体：…」段。`_beat_carrier` 只读第一段，
+         后面的被静默忽略——承载关系不是**唯一记录**，实跑出现过
+         「｜载体：画面｜载体：画面」（应用器把模型自带的旧标注又追加了一遍）。
+      ② **选中台词无人承载**：台词被选中却没有节拍声明承载它。后果不在计划层显形：
+         生成契约里没有哪条节拍告诉模型这句放哪儿 → 成片大概率不出这句 →
+         **候选层台词门**（每句必须逐字出现）整稿拒收，问题被从计划层挪到候选层。
+         实跑形态：重选把 D1 换掉、又把原指向 D1 的节拍改成「载体：画面」。
+
+    调用方：`evaluate_plan`（计划验收）、`apply_replan_ops`（重选应用后**重新验算
+    整张承载关系**，不能只验算字数）。`beats` 里**一条载体标注都没有**时不判孤儿
+    （旧缓存计划无可核 ≠ 被破坏，与 `beat_carrier_dangling` 同口径）。
+    """
+    _beats = [str(b).strip() for b in (beats or []) if str(b).strip()]
+    _recs = [BeatRecord.parse(b) for b in _beats]
+    # 重复载体：同一节拍写了**多个**「｜载体：…」段（承载关系不是唯一记录，
+    # `carrier()` 只读第一段、后面的被静默忽略）。按**段**判定——不再数字符串里
+    # 出现了几次标签（引文里提到「载体：」不算标注）。
+    duplicate = ["B%d" % i for i, r in enumerate(_recs, 1)
+                 if r.count(BEAT_SEG_CARRIER) > 1]
+    orphan: list = []
+    unlabeled: list = []
+    if any(r.has(BEAT_SEG_CARRIER) for r in _recs):
+        # 计划**带了**标注 ⇒ 承载关系是**唯一且完整**的记录：每条节拍**恰有一个**
+        # 载体（2026-09-27 复核：只查「所有台词被别人覆盖」不够——允许部分节拍没有
+        # 标注，等于同一份计划里两种口径混用，承载关系不再可判定）。
+        unlabeled = ["B%d" % i for i, r in enumerate(_recs, 1)
+                     if not r.has(BEAT_SEG_CARRIER)]
+        carried = set()
+        for r in _recs:
+            kind, k = r.carrier()
+            if kind == "dialogue" and k:
+                carried.add(k)
+        orphan = ["D%d" % i for i in range(1, int(n_lines or 0) + 1)
+                  if i not in carried]
+    return duplicate, orphan, unlabeled
+
+
+def plan_identity(plan) -> str:
+    """**计划版本身份**：节拍序列 + 选用台词序列（逐字）的指纹（12 位十六进制）.
+
+    2026-09-27 复核点名的「同号误认」：`plan_refs` 是**对着某一份计划**作的声明
+    （`B1..Bn` 按 `shot_beats` 的**位置**编号）。重选一旦改动节拍——尤其
+    `insert_after` / `split` 会**重排编号**——旧声明可能**编号仍在范围内**却指向
+    完全不同的节拍；只查「在不在范围内」会把它当成本轮计划的声明静默放行。
+
+    身份**只由编号的所指决定**：节拍文本序列 + 台词文本序列。合同无关字段
+    （时间预算、人物动机、`plan_replan` 留档等）不进指纹——它们变了不改编号含义。
+    """
+    import hashlib
+    _h = hashlib.sha256()
+    for _key in ("shot_beats", "dialogue_lines"):
+        _h.update(("\x00" + _key + "\x00").encode("utf-8"))
+        for _x in ((plan or {}).get(_key) or []):
+            _h.update((str(_x or "") + "\n").encode("utf-8"))
+    return _h.hexdigest()[:12]
+
+
+def plan_identity_mismatch(script, plan) -> str:
+    """脚本携带的计划身份与本轮计划**不符**时返回原因；相符 / 无身份 → `""`。
+
+    「不符」是**可证**的过期声明（`plan_refs` 的编号指的不是同一条节拍）；
+    「无身份」是**不可核**（早于本字段的历史稿）——两者必须分开处置：前者拒收/排除，
+    后者按兼容政策放行但**不得**称其「通过了本轮事件契约」。
+    """
+    _decl = str((script or {}).get("plan_id") or "").strip()
+    if not _decl:
+        return ""
+    _cur = plan_identity(plan)
+    if not _cur or _decl == _cur:
+        return ""
+    return ("plan_refs 是对**另一版计划**（%s）作的声明，当前计划是 %s——编号即使仍在"
+            "范围内也不指向同一条节拍，必须按当前计划重新声明" % (_decl, _cur))
+
+
+def bind_plan_identity(script: dict, plan) -> str:
+    """给**新稿**绑定本轮计划身份；**已有身份一律不覆盖**（返回最终身份）。
+
+    安全关键点就在「不覆盖」：候选稿的 `plan_refs` 是模型**对着本轮计划**写的，
+    所以调用方可以替它声明来源；但一份**历史快照**自带旧身份时，覆盖它等于把
+    「这份声明是对另一版计划作的」洗成「对当前计划作的」——同号误认正是这么发生的。
+    故绑定用 `setdefault` 语义，随后 `check_event_contract(..., require_declaration=True)`
+    必须返回 `declared=True` 且通过（绑定 ≠ 免检）。
+    """
+    _cur = plan_identity(plan)
+    _decl = str((script or {}).get("plan_id") or "").strip()
+    if _decl:
+        return _decl
+    if isinstance(script, dict) and _cur:
+        script["plan_id"] = _cur
+    return _cur
+
+
+#: `plan_refs` 编号的标签前缀（`"B1"` / `"D2"`——模型常按契约块的 `B序号` 字面填）
+_REF_TAGS = {"beats": "B", "lines": "D"}
+
+
+def coerce_ref_index(value, tag: str):
+    """`plan_refs` 的一个编号 → `int`；无法识别 → `None`.
+
+    接受三种形态（**语义完全一致**，差别只在写法）：
+    - 整数 `1`（schema 期望的形态）；
+    - 纯数字串 `"1"`（`json_object` 降级后被 JSON 当字符串传回来的情形）；
+    - 带标签串 `"B1"` / `"b1"` / `"B 1"` / `"B-1"`——契约块写的是
+      `{"beats": [B序号…]}`，字面就支持这种读法。
+
+    为什么**归一化**而不是判越界：前缀只是标签，指代无歧义；判越界会烧掉候选预算
+    （2026-09-27 02:10 实测 1/3）、最坏整池拒收终止整章——那是**误拒**，不是严谨。
+    真正越界（`"B9"` 超出节拍数）照旧由范围判据拒收，判据强度不减。
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    _t = str(value or "").strip()
+    if not _t:
+        return None
+    if _t[:1].upper() == str(tag or "").upper():
+        _t = _t[1:].strip(" -_:#")
+    return int(_t) if _t.isdigit() else None
+
+
+def check_event_contract(script: dict, plan: dict | None, *,
+                         require_declaration: bool = False) -> tuple:
     """**事件履约契约**（纯函数、确定性、零模型调用）：`plan_refs` 声明的覆盖与顺序.
 
     计划侧单位（编号在 `prompts.render_execution_contract` 的契约块里给出）：
@@ -705,6 +1110,20 @@ def check_event_contract(script: dict, plan: dict | None) -> tuple:
              if str(x).strip()]
     n_lines = len(plan_dialogue_lines(plan))
     shots = [s for s in (script or {}).get("shots") or [] if isinstance(s, dict)]
+    # ① 身份（2026-09-27 复核 P0/P0-2）：声明是**对着哪一版计划**作的？
+    #    - 可证过期（带身份且不符）→ 拒收；
+    #    - 不可核（无身份）→ 不据「不可核」判违规，但调用方要求时必须**显式失败**，
+    #      否则新稿会绕过覆盖/顺序核验、还被盖上「已核验」的身份。
+    _stale = plan_identity_mismatch(script, plan)
+    if _stale:
+        return False, [{"code": "plan_refs_stale_plan", "shot": "",
+                        "detail": _stale}], True
+    if not str((script or {}).get("plan_id") or "").strip():
+        if require_declaration and shots:
+            return False, [{"code": "plan_refs_missing", "shot": "", "detail":
+                            "整稿没有任何 plan_refs 声明（新生成稿必须逐镜声明"
+                            "事件履约契约）"}], False
+        return True, [], False
     refs_list: list = []
     missing: list = []
     for s in shots:
@@ -732,21 +1151,33 @@ def check_event_contract(script: dict, plan: dict | None) -> tuple:
     line_seq: list = []
     for s, r in zip(shots, refs_list):
         sid = str(s.get("index"))
-        for b in r["beats"]:
-            if not isinstance(b, int) or isinstance(b, bool) \
-                    or b < 1 or b > len(beats):
+        for _raw in r["beats"]:
+            b = coerce_ref_index(_raw, "B")
+            if b is None:
+                violations.append({
+                    "code": "plan_refs_not_a_number", "shot": sid,
+                    "detail": "plan_refs.beats 里有非编号项 %r（只填数字，如 1；"
+                              "不要带 B 前缀）" % (_raw,)})
+                continue
+            if b < 1 or b > len(beats):
                 violations.append({
                     "code": "plan_refs_out_of_range", "shot": sid,
-                    "detail": "B%s 不存在（节拍共 %d 个）" % (b, len(beats))})
+                    "detail": "B%d 不存在（节拍共 %d 个）" % (b, len(beats))})
                 continue
             covered.add(b)
             beat_seq.append((sid, b))
-        for d in r["lines"]:
-            if not isinstance(d, int) or isinstance(d, bool) \
-                    or d < 1 or d > n_lines:
+        for _raw in r["lines"]:
+            d = coerce_ref_index(_raw, "D")
+            if d is None:
+                violations.append({
+                    "code": "plan_refs_not_a_number", "shot": sid,
+                    "detail": "plan_refs.lines 里有非编号项 %r（只填数字，如 1；"
+                              "不要带 D 前缀）" % (_raw,)})
+                continue
+            if d < 1 or d > n_lines:
                 violations.append({
                     "code": "plan_refs_out_of_range", "shot": sid,
-                    "detail": "D%s 不存在（选用台词共 %d 句）" % (d, n_lines)})
+                    "detail": "D%d 不存在（选用台词共 %d 句）" % (d, n_lines)})
                 continue
             line_seq.append((sid, d))
     for seq, code, tag in ((beat_seq, "beats_order_violation", "B"),
@@ -763,6 +1194,41 @@ def check_event_contract(script: dict, plan: dict | None) -> tuple:
             violations.append({
                 "code": "beats_not_carried", "shot": "",
                 "detail": "B%d（%s…）没有被任何镜头声明承载" % (i, beat[:36])})
+    # ② **Dk 必须锚在声明它的那一镜**（2026-09-27 复核）
+    # 契约块要求「台词 Dk 必须**逐字**落在声明它的那个镜头的 narration_segment 里」，
+    # 但本门此前只核编号范围/顺序，整稿台词门只证明 Dk **在某处**——两门各自都过、
+    # 合起来是**假绿**：shot 1 声明 D1、shot 2 才说 D1 能一路通过。判据与整稿门同源
+    # （`_line_hit_in_units`，只把起点钉在声明那一镜），不新造第二套匹配口径。
+    _units_raw: list = []
+    _unit_pos: dict = {}          # 镜头序号 → 在 `_units_raw` 里的位置（无旁白则不登记）
+    for _sh in shots:
+        _n = str(_sh.get("narration_segment") or "").strip()
+        if _n:
+            _unit_pos[str(_sh.get("index"))] = len(_units_raw)
+            _units_raw.append(_n)
+    _decl_shots: dict = {}        # D 编号 → 按镜序**最早**声明它的镜头序号
+    for _sh, _r in zip(shots, refs_list):
+        for _raw in _r["lines"]:
+            _d = coerce_ref_index(_raw, "D")
+            if _d is None or not 1 <= _d <= n_lines:
+                continue          # 非编号/越界已在上方报过，不重复计
+            _decl_shots.setdefault(_d, str(_sh.get("index")))
+    _plan_lines = plan_dialogue_lines(plan)
+    for _d, _sid in sorted(_decl_shots.items()):
+        _pos = _unit_pos.get(_sid)
+        if _pos is None:
+            violations.append({
+                "code": "plan_refs_line_not_in_shot", "shot": _sid,
+                "detail": "镜头 %s 声明承载 D%d，但该镜没有旁白（台词不在本镜）"
+                          % (_sid, _d)})
+            continue
+        _hit, _ = _line_hit_in_units(_plan_lines[_d - 1], _units_raw, start=_pos)
+        if not _hit:
+            violations.append({
+                "code": "plan_refs_line_not_in_shot", "shot": _sid,
+                "detail": "镜头 %s 声明承载 D%d，但该镜旁白里找不到这句台词"
+                          "（逐字/跨镜连续分解均不成立）：%s…"
+                          % (_sid, _d, str(_plan_lines[_d - 1])[:24])})
     return (not violations), violations, True
 
 
@@ -934,7 +1400,35 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
         if _kind == "dialogue" and not (1 <= (_k or 0) <= len(kept)):
             _dangling.append("B%d 载体「台词%s」不在当前选用台词中（共 %d 句）"
                              % (_i, _k, len(kept)))
+    # ⑧ 载体标注**重复**（v6.143，2026-09-27 复核）：同一个节拍声明了多个载体段
+    # ⇒ 承载关系不是**唯一记录**，而 `_beat_carrier` 只读第一段、后面的段被静默忽略。
+    # 实测形态：重选应用器把模型自带的旧标注又追加了一遍 →「｜载体：画面｜载体：画面」。
+    # ⑨ 选中台词**无人承载**（v6.143，同上）：⑦ 只查「节拍指向已不存在的台词」，这是
+    # 它的**镜像面**——台词被选中却没有任何节拍声明承载它。后果不在计划层显形：生成
+    # 契约里没有哪条节拍告诉模型这句该放哪儿 → 成片大概率不出这句 → **候选层台词门**
+    # 判决（每句必须逐字出现）整稿拒收，等于把问题从计划层挪到了候选层。
+    # 承载关系必须**双向**闭合。与 ⑦ 同口径：旧缓存计划**根本没有**载体标注时不判
+    # （无可核 ≠ 被破坏）。
+    _dup_carrier, _orphan, _unlabeled = carrier_relation_problems(_beats_list, len(kept))
     _no_carrier = "载体缺失：无合适承载" in str((plan or {}).get("time_budget") or "")
+    if _unlabeled:
+        reasons.append(
+            "%d 个节拍**没有载体标注**（计划带了标注就必须每条节拍恰有一个载体）：%s"
+            % (len(_unlabeled), "，".join(_unlabeled[:6])))
+        suggestions.append(
+            "为每条节拍补一个「｜载体：…」段（台词k，或「画面」）——承载关系是唯一记录")
+    if _dup_carrier:
+        reasons.append(
+            "%d 个节拍的载体标注**重复**（同一节拍声明了多个载体，承载关系不是唯一记录）：%s"
+            % (len(_dup_carrier), "，".join(_dup_carrier[:4])))
+        suggestions.append(
+            "每个节拍只保留**一个**「｜载体：…」段（重选/重排时先剥掉旧标注再写新的）")
+    if _orphan:
+        reasons.append(
+            "%d 句**选中的台词没有任何节拍承载**（承载关系必须双向闭合）：%s"
+            % (len(_orphan), "，".join(_orphan[:6])))
+        suggestions.append(
+            "为每句选中台词指定承载节拍（改该节拍的「｜载体：台词k」），或把该句移出本集选材")
     if _dangling:
         reasons.append(
             "%d 个节拍的载体标注指向已移出的台词：%s"
@@ -967,14 +1461,21 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
             "按生成稿的**实际正片时长**判断：若确实低于下限，再回规划层补内容"
             "（反应/环境/过场）或合并章节")
     return {"verdict": "infeasible" if (lower > bmax or _unrep or _no_alt
-                                        or _dangling or _no_carrier) else "feasible",
+                                        or _dangling or _no_carrier
+                                        or _dup_carrier or _orphan
+                                        or _unlabeled) else "feasible",
             "feasible": (lower <= bmax and not _unrep and not _no_alt
-                         and not _dangling and not _no_carrier),
+                         and not _dangling and not _no_carrier
+                         and not _dup_carrier and not _orphan
+                         and not _unlabeled),
             "evaluable": True, "missing": [],
             "dialogue_lines": len(kept), "dialogue_sec": _dlg,
             "dialogue_verified": kept, "dialogue_rejected": rejected,
             "dialogue_unrepresentable": _unrep,
             "beat_carrier_dangling": _dangling,
+            "beat_carrier_duplicate": _dup_carrier,
+            "dialogue_orphan": _orphan,
+            "beat_carrier_unlabeled": _unlabeled,
             "beats": int(round(_floor / float(MIN_SHOT_DURATION))), "beats_floor_sec": _floor,
             "lower_bound_sec": lower,
             # 只作诊断：两者可同时发生，**不得**用来判可行性（用户 2026-09-25）
