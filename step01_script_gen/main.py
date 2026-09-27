@@ -159,7 +159,17 @@ _TEXT_PROVIDER = (os.getenv("TEXT_PROVIDER") or TEXT_PROVIDER_DEFAULT).strip().l
 build_prompt, build_hook_prompt = auto_select_prompt_builder(_TEXT_PROVIDER)
 _SYSTEM_PROMPT = auto_select_system_prompt(_TEXT_PROVIDER)
 if _TEXT_PROVIDER == "agent_plan":
-    _logger.info(f"[INFO] 使用 doubao 专属 prompt (provider={_TEXT_PROVIDER})")
+    # v6.143：这行原写「使用 doubao 专属 prompt」——**错**。v6.68 起 prompt 剖面跟
+    # **模型**走（`resolve_model_prompt_profile`，见 `MODEL_PROMPT_PROFILES`）：
+    # agent_plan 通道跑 deepseek-v4-flash 时用的是 `build_prompt` + `system.md`，
+    # 与 doubao 毫无关系。硬编码这句话会主动误导「step01 在用 doubao」——
+    # 2026-09-26 用户据此提出「改用 deepseek-flash」，而实测 764 次提交**全是**
+    # deepseek-v4-flash。改为按**实际候选模型**逐个解析后打印。
+    from shared.config import SCRIPT_CANDIDATE_MODELS as _CAND_MODELS
+    _profiles = ", ".join(
+        "%s→%s" % (_m, resolve_model_prompt_profile(_m)[0].__name__)
+        for _m in (_CAND_MODELS or [None])) or "(provider 默认)"
+    _logger.info("[INFO] agent_plan 通道：prompt 剖面按模型解析 = %s" % _profiles)
 from step01_script_gen.character_extractor import extract_characters
 from step01_script_gen.object_extractor import extract_scene_objects
 from step01_script_gen.asset_extractor import extract_scene_assets, extract_props

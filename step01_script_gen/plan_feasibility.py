@@ -410,6 +410,43 @@ def check_dialogue_representable(line: str, cap: float | None = None, *,
             "reason": reason}
 
 
+_CLAUSE_BOUNDARY = "，、；："
+
+
+def representable_replacements(line: str, novel_text: str, *, limit: int = 6) -> list:
+    """从该台词的**原文出处**里列出「句末收尾且可表示」的逐字替代（2026-09-26 用户决定）.
+
+    用途：规划重选的反馈里给出**已验算过**的替代集合，让规划层从这个集合里选，
+    而不是自由重抽（实测自由重选会把不可表示的句子原样留下）。
+
+    只收**句末标点（。！？…；）收尾**的片段——逗号截断的片段虽然单镜装得下，
+    成片里听起来是没说完的半句，用户明确不采用。因此当出处通篇没有句末标点时
+    （章 2 冯检校那句正是），返回空列表；反馈块据此改为要求**按原文顺序重排载体**
+    （画面动作 + 由别人在原文里的完整短句承载同一事实），而不是硬拆。
+
+    排序：按长度降序（尽量少丢信息）。
+    """
+    src = str(novel_text or "")
+    anchor = _source_norm(line)
+    if not src or not anchor:
+        return []
+    for m in re.finditer(r"[“「]([^”」]{2,})[”」]", src):
+        quote = m.group(1)
+        if anchor not in _source_norm(quote):
+            continue
+        out = []
+        for k, ch in enumerate(quote):
+            if ch not in _SENT_END_CHARS:
+                continue
+            cand = quote[:k + 1].strip()
+            if len(cand) < 6 or _source_norm(cand) == anchor:
+                continue
+            if cand not in out and check_dialogue_representable(cand)["representable"]:
+                out.append(cand)
+        return sorted(out, key=len, reverse=True)[:limit]
+    return []
+
+
 def _speaker_body(text: str) -> str:
     """去说话人前缀（`张十三道：…` → `…`）——生成层规则0补的，不逐字来自计划.
 

@@ -197,6 +197,26 @@ def test_split_guidance_cut_points_match_the_hard_gate():
             "%s 未声明「安全字数 ≠ 存在合法切点」（超字数但没有句末切点时不可表示）" % name)
 
 
+def test_agent_plan_log_line_names_the_actual_model_profile():
+    """启动日志不得再硬编码「doubao 专属 prompt」——剖面跟**模型**走.
+
+    实损（2026-09-26）：`main.py` 在 agent_plan 通道下无条件打印「使用 doubao 专属
+    prompt」，而 `SCRIPT_CANDIDATE_MODELS=deepseek-v4-flash` 实际走 `build_prompt` +
+    `system.md`。用户据此判断「step01 在用 doubao、能力太弱」并提出改模型配置——
+    实测 764 次提交**全是** deepseek-v4-flash。**日志主动误导比日志缺失更糟**：
+    它会把排障引到错误的模型上。
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2]
+           / "step01_script_gen" / "main.py").read_text(encoding="utf-8")
+    for line in src.splitlines():
+        if "doubao 专属 prompt" in line:
+            assert line.lstrip().startswith("#"), (
+                "启动日志不得再硬编码「doubao 专属 prompt」（只许留在说明注释里）：%s" % line)
+    assert "prompt 剖面按模型解析" in src, "启动日志必须按实际候选模型解析并打印剖面"
+
+
 def test_doubao_prompt_compact_outline_keeps_climax(monkeypatch):
     """超长大纲压缩时必须保留高潮锚点，不能被前置事件行挤掉."""
     from step01_script_gen.prompts import build_doubao_prompt

@@ -111,7 +111,7 @@ _PLAN_BUDGET_FEEDBACK = """
 """
 
 _PLAN_REPRESENTABILITY_FEEDBACK = """
-# ★ 重选本集台词（单镜可表示性反馈；本轮**只改台词**）
+# ★ 重选本集台词 / 载体（单镜可表示性反馈）
 
 以下 {n} 句选用台词**无法装进单镜 {cap:.0f} 秒**，且句内没有可用的**句末边界**
 （。！？…；）切成 ≤4 段、每段 ≤ 上限——单镜装不下、按其他标点拆开会把一句台词
@@ -119,18 +119,26 @@ _PLAN_REPRESENTABILITY_FEEDBACK = """
 
 {lines_block}
 
-请重新选择原文台词，硬边界如下：
+**已验算的可表示替代**（句末收尾、逐字来自原文，按保留信息量降序）：
 
-1. **只从原文逐字摘**，不改写、不润色、不自造——替换台词同样必须逐字来自原文；
-2. **必保留事实与事件顺序不得静默删除**：被点名台词承载的事实（例如某人传话的
-   内容）必须改由其他**原文**台词或镜头节拍承载；事件顺序保持不变；
-3. **多句**超长台词（句内有句号/叹号/省略号分界的）不用换——按句末切分装得下
-   会自动通过；只有**单句超长**（句内只有逗号）的台词必须换成更短的原文台词；
-4. 若原文确实**没有**能承载这些事实的更短台词，请在 `time_budget` 里**明确写明
-   「台词不可表示：无合适替代」**——代码会据此显式停止，把内容取舍交还用户，
-   而不是硬拆；
-5. **其余字段必须与上一版完全一致**（必保留事实/事件顺序改动会被拒收，这一轮白费）；
-   唯一例外：`shot_beats` 的「｜载体：…」标注必须随台词增删同步更新（节拍本体不许动）。
+{replacements_block}
+
+请**按原文顺序重新规划受影响的节拍与载体**，硬边界如下：
+
+1. **只从原文逐字摘**，不改写、不润色、不自造；
+2. **有列出替代的，从列出的替代里选**（都已过单镜可表示性验算），不要另抽一句；
+3. **不许用逗号截断的半句**——以「，」「、」收尾的片段虽然单镜装得下，成片里听起来
+   是没说完的半句，不作替代；
+4. 某句**没列替代**（它的出处通篇没有句末标点）时：**不得把某人的台词改派给另一个角色**，
+   而要**按原文先后顺序重排载体**——把该节拍拆成「画面动作镜」+「由**别人**在原文里
+   指向同一事实的完整短句承载」，两个动作的顺序必须与原文一致；
+5. **本轮允许改动 `shot_beats` 的正文与载体**（这是唯一例外）：但每条节拍必须带
+   「原文依据："…"」，引文要**逐字复制原文**（至少连续 8 字逐字命中，少抄字会核不过）；
+   **必保留事实**（`required_facts`）每条的「原文证据："…"」同样要逐字可核。
+   **没有原文证据的节拍/必保留事实一律拒收**；
+6. `main_events` 不得删除，**事件顺序**不得调换；
+7. 若原文确实没有能承载这些事实的合法台词与节拍，请在 `time_budget` 里**明确写明**
+   「台词不可表示：无合适替代」——代码会据此显式停止，把内容取舍交还用户，而不是硬拆。
 """
 
 _PLAN_CARRIER_FEEDBACK = """
@@ -170,7 +178,7 @@ def _parse_outline_json(raw: str) -> dict | None:
             return None
 
 
-def _budget_feedback_block(rep: dict, plan: dict) -> str:
+def _budget_feedback_block(rep: dict, plan: dict, novel_text: str = "") -> str:
     """把**代码算出**的数字反馈给规划阶段（数字全部来自 `evaluate_plan`，不含自报值）.
 
     v6.136：反馈按实际失败类型拼装——**超预算**块只在对白下界真超上限时给出
@@ -194,14 +202,28 @@ def _budget_feedback_block(rep: dict, plan: dict) -> str:
         )
     _unrep = rep.get("dialogue_unrepresentable") or []
     if _unrep:
+        from step01_script_gen.plan_feasibility import representable_replacements
         from step01_script_gen.timecode import active_shot_cap
         _lines_block = "\n".join(
             "- 「%s」（估时 %.1f 秒；%s）"
             % (str(u.get("line") or "")[:60], float(u.get("est_sec") or 0.0),
                u.get("reason") or "")
             for u in _unrep)
+        # 2026-09-26 用户决定：给**已验算过**的替代集合，不再让规划层自由重抽
+        # （实测自由重选会把不可表示的句子原样留下）；没有句末收尾替代时，
+        # 明确要求按原文顺序重排载体，而不是逗号硬拆。
+        _reps = []
+        for u in _unrep:
+            _line = str(u.get("line") or "")
+            _cands = representable_replacements(_line, novel_text)
+            _reps.append("- 「%s」→ %s" % (
+                _line[:34],
+                "；".join("「%s」" % c for c in _cands) if _cands else
+                "**出处通篇没有句末标点，没有可表示替代 ⇒ 按第 4 条重排载体"
+                "（禁止改派说话人、禁止逗号截断半句）**"))
         block += _PLAN_REPRESENTABILITY_FEEDBACK.format(
-            n=len(_unrep), cap=active_shot_cap(), lines_block=_lines_block)
+            n=len(_unrep), cap=active_shot_cap(), lines_block=_lines_block,
+            replacements_block="\n".join(_reps))
     # v6.138（九审根因 1）：节拍载体悬空反馈——重选删承载台词必须同步更新载体标注
     _dangling = rep.get("beat_carrier_dangling") or []
     if _dangling:
@@ -209,7 +231,14 @@ def _budget_feedback_block(rep: dict, plan: dict) -> str:
             n=len(_dangling),
             lines_block="\n".join("- %s" % d for d in _dangling))
     if block:
-        block += ("\n## 上一版计划（除台词/可省略/时间倾向外，请原样返回）\n"
+        # ⚠️ 这句是模型**最后**读到的指令，必须与上面各块的口径一致：可表示性块开了
+        # 「允许重排 shot_beats 正文与载体」的口子，这里若仍写「请原样返回」，等于
+        # 让模型收到两句相反的话——实测首版就是这么被顶回去的（模型原样返回、
+        # `_plan_core_preserved` 直接通过，例外分支根本没被走到）。
+        _free = ("台词/可省略/时间倾向" if not _unrep else
+                 "台词/可省略/时间倾向，以及**按上面第 4、5 条重排的 `shot_beats` "
+                 "正文与载体**（重排后的每条节拍都要带逐字可核的「原文依据」）")
+        block += ("\n## 上一版计划（除%s外，请原样返回）\n" % _free
                   + json.dumps(plan, ensure_ascii=False, indent=2))
     return block
 
@@ -248,7 +277,7 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
     """
     from shared.config import PROMPT_MAX_CHARS
     _base = base_prompt or OUTLINE_PROMPT.format(novel_text=novel_text[:PROMPT_MAX_CHARS])
-    _prompt = _base + "\n" + _budget_feedback_block(rep, plan)
+    _prompt = _base + "\n" + _budget_feedback_block(rep, plan, novel_text)
     try:
         service = create_service()
         result = service.generate(TextGenerationRequest(
@@ -268,6 +297,27 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
         return None, "invalid_result"
     _broken = _plan_core_preserved(plan, new_plan)
     if _broken:
+        # 2026-09-26 用户决定：**单镜可表示性**触发的重选，允许重排节拍与载体
+        # （冯检校那句出处通篇没有句末标点，只能把该节拍拆成「画面动作」+
+        # 「由别人在原文里的完整短句承载同一事实」）。这是 `_plan_core_preserved`
+        # 的例外，所以**换一道更严的闸**而不是放宽它：新版本里每一条节拍、
+        # 每一条必保留事实都必须带逐字可核的原文引文（`_plan_evidence_intact`）。
+        # 预算超限触发的重选**不享受**这个例外——那条路仍然只许改台词。
+        if rep.get("dialogue_unrepresentable"):
+            # 先守不变量（事实不得删除、事件顺序不得调换），再核原文证据——
+            # 顺序不能反：证据闸只看新稿里**还在**的条目（2026-09-26 复核实测）。
+            _inv = _plan_invariants_intact(plan, new_plan)
+            if _inv:
+                print("[WARN] 重选破坏了计划不变量（%s）——不接受" % _inv)
+                return None, "core_field_changed: %s（%s）" % (_broken, _inv)
+            _why = _plan_evidence_intact(new_plan, novel_text)
+            if not _why:
+                print("[PLAN] 重选按「可表示性」重排了节拍/载体（核心字段「%s」有改动）"
+                      "——已通过原文证据核验，作为**新计划版本**接受" % _broken)
+                return new_plan, ""
+            print("[WARN] 重选改动了核心字段「%s」且原文证据核验不过（%s）——不接受"
+                  % (_broken, _why))
+            return None, "core_field_changed: %s（%s）" % (_broken, _why)
         print("[WARN] 规划重选改动了核心字段「%s」——不接受（必保留事实/事件顺序必须原样）"
               % _broken)
         return None, "core_field_changed: %s" % _broken
@@ -463,6 +513,99 @@ def generate_outline(novel_text: str, model: str | None = None,
         except OSError as exc:
             print(f"[WARN] 章节大纲缓存写入失败（本次继续使用）: {exc}")
     return outline
+
+
+# 「原文依据/原文证据」里的引文（全角引号；生成层固定用这一对）
+_EVIDENCE_QUOTE = re.compile(r'[“"]([^”"]{4,})[”"]')
+
+
+def _plan_invariants_intact(old: dict, new: dict) -> str:
+    """重排版本必须守住的不变量；返回 "" = 通过.
+
+    2026-09-26 复核发现：只靠 `_plan_evidence_intact` 挡不住「**删掉一条必保留事实**
+    或**调换事件顺序**，同时让剩下的条目都带合法引文」——那只核对了新稿里**仍然存在**
+    的条目，对「少了什么 / 顺序变了没有」完全不看（实测：删事实 + 倒序 main_events
+    仍判通过）。而 `_plan_core_preserved` 恰恰是因为这些字段**变了**才把控制权交过来，
+    所以这一段必须逐项比对：
+
+    - `main_events`：**逐项且同序**一致（事件顺序不得调换，事实不得删除）；
+    - `required_facts`：旧条目**一条都不许少**（允许新增——重排只会让承载更明确）；
+    - `climax`：不得改动。
+    """
+    _old = old or {}
+    _new = new or {}
+    if list(_old.get("main_events") or []) != list(_new.get("main_events") or []):
+        return "main_events 被删除或调换了顺序"
+    _miss = [f for f in (_old.get("required_facts") or [])
+             if f not in (_new.get("required_facts") or [])]
+    if _miss:
+        return "必保留事实被删除 %d 条（如 %s）" % (len(_miss), str(_miss[0])[:26])
+    if str(_old.get("climax") or "") != str(_new.get("climax") or ""):
+        return "climax 被改动"
+    return ""
+
+
+def _plan_evidence_intact(plan: dict, novel_text: str) -> str:
+    """重排过节拍/载体的**新计划版本**的原文证据核验；返回 "" = 通过.
+
+    为什么需要：单镜可表示性触发的重选，**允许改动 `shot_beats` 的正文与载体**
+    （2026-09-26 用户决定：冯检校的长句出处通篇没有句末标点，只能把该节拍按原文
+    顺序拆成「画面动作」+「由别人在原文里的完整短句承载同一事实」）。这是对
+    `_plan_core_preserved` 的**例外**，所以必须换一道**更严**的闸，而不是把核心字段
+    校验放宽：新版本里**每一条节拍、每一条必保留事实都必须带逐字可核的原文引文**。
+
+    引文按「省略号分段，任一段 ≥4 字逐字命中原文」判定——模型引用时惯用
+    「前段……」（如 `"杨旭让人宰了……"`），整串包含会因为省略号残留而永远不命中
+    （与 `_check_grounding` 的单字/截断问题同源），故按段取最长命中。
+    """
+    if not str(novel_text or "").strip():
+        return "无原文可核（调用方未传原文）"
+    from step01_script_gen.plan_feasibility import _source_norm
+    novel_norm = _source_norm(novel_text)
+
+    _MIN_RUN = 8      # 长引文：至少要有这么长的**连续**逐字命中
+    _MIN_SHORT = 4    # 短引文：整段必须逐字命中；归一化后不足这个长度不算证据
+
+    def _hit(text: str) -> bool:
+        """引文（按省略号分段）是否**逐字有据**（每段单独判定，任一段成立即算）.
+
+        为什么不用「整段包含」：模型抄引文经常少一两个字（实测章 2
+        `"这人虽是一身寒酸…"`，原文是「**这**个人虽是…」——丢了开头一个「个」），
+        整段包含会把这种**内容忠实**的引文判死，机制永远跑不动。
+        为什么不用「5 字滑窗任一命中」（`validation._check_grounding` 的口径）：
+        那是给**改写过的旁白**用的最松档，拿它当「节拍有没有原文依据」的闸太松，
+        伪造的节拍靠常用词组就能蒙过去。取「≥8 字连续命中」——单一规则、可陈述，
+        少抄一两字不误杀、编造节拍过不去。
+
+        短引文（归一化后 4-7 字，如 `"住嘴！"`）走**整段**逐字：这类引文本来就短，
+        再允许少抄字就等于不设闸；归一化后不足 4 字的（纯标点/两字词）**不算证据**，
+        避免拿 `"好！"` 这种当原文依据。
+        """
+        for quoted in _EVIDENCE_QUOTE.findall(str(text or "")):
+            for seg in re.split(r"…+|\.{2,}", quoted):
+                seg = _source_norm(seg.strip())
+                if len(seg) < _MIN_SHORT:
+                    continue
+                if len(seg) < _MIN_RUN:
+                    if seg in novel_norm:
+                        return True
+                    continue
+                if any(seg[i:i + _MIN_RUN] in novel_norm
+                       for i in range(len(seg) - _MIN_RUN + 1)):
+                    return True
+        return False
+
+    for i, beat in enumerate((plan or {}).get("shot_beats") or [], 1):
+        if "原文依据" not in str(beat or ""):
+            return "节拍 %d 缺「原文依据」（重排过的版本必须逐条给原文出处）" % i
+        if not _hit(beat):
+            return "节拍 %d 的原文依据逐字核不过：%s" % (i, str(beat)[:60])
+    for i, fact in enumerate((plan or {}).get("required_facts") or [], 1):
+        if "原文证据" not in str(fact or ""):
+            return "必保留事实 %d 缺「原文证据」" % i
+        if not _hit(fact):
+            return "必保留事实 %d 的原文证据逐字核不过：%s" % (i, str(fact)[:60])
+    return ""
 
 
 def _check_outline_dialogue_grounding(outline: dict, novel_text: str) -> None:
