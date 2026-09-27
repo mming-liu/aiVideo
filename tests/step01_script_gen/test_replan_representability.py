@@ -139,8 +139,85 @@ def test_evidence_gate_requires_source():
 
 
 # ---------------------------------------------------------------------------
-# ③ 验收路径：可表示性触发时允许重排核心字段，但要有原文证据
+# ③ apply_replan_ops：模型回**操作**，代码在旧计划上应用（v6.143 用户决定）
 # ---------------------------------------------------------------------------
+
+def _ops(dlg=(), beat=()):
+    return {"dialogue_ops": list(dlg), "beat_ops": list(beat)}
+
+
+def test_apply_ops_replaces_dialogue_with_a_verified_candidate():
+    from step01_script_gen.outline import apply_replan_ops
+    cand = representable_replacements(_Q_WITH_END, _SRC)[0]
+    new, why = apply_replan_ops(_old_plan(), _ops([{"index": 1, "replace_with": cand}]), _SRC)
+    assert new is not None, why
+    assert new["dialogue_lines"][0] == cand
+
+
+def test_apply_ops_rejects_replacement_not_in_source():
+    from step01_script_gen.outline import apply_replan_ops
+    new, why = apply_replan_ops(
+        _old_plan(), _ops([{"index": 1, "replace_with": "这句原文里根本没有。"}]), _SRC)
+    assert new is None and "未在原文逐字找到" in why, why
+
+
+def test_apply_ops_rejects_unrepresentable_replacement():
+    from step01_script_gen.outline import apply_replan_ops
+    new, why = apply_replan_ops(
+        _old_plan(), _ops([{"index": 1, "replace_with": _Q_NO_END}]), _SRC)
+    assert new is None and "不可单镜表示" in why, why
+
+
+def test_apply_ops_rejects_out_of_range_index():
+    from step01_script_gen.outline import apply_replan_ops
+    _n, why = apply_replan_ops(_old_plan(), _ops([{"index": 9, "replace_with": "住嘴！"}]), _SRC)
+    assert _n is None and "越界" in why, why
+    _n2, why2 = apply_replan_ops(
+        _old_plan(), _ops(beat=[{"index": 9, "new_text": "x｜原文依据：\"%s\"" % _LONG_CITE,
+                                 "new_carrier": "画面"}]), _SRC)
+    assert _n2 is None and "越界" in why2, why2
+
+
+def test_apply_ops_rejects_beat_without_evidence():
+    from step01_script_gen.outline import apply_replan_ops
+    _n, why = apply_replan_ops(
+        _old_plan(), _ops(beat=[{"index": 1, "new_text": "节拍：编造的画面",
+                                 "new_carrier": "画面"}]), _SRC)
+    assert _n is None and "原文依据" in why, why
+
+
+def test_apply_ops_rejects_beat_with_fabricated_evidence():
+    from step01_script_gen.outline import apply_replan_ops
+    _n, why = apply_replan_ops(
+        _old_plan(),
+        _ops(beat=[{"index": 1,
+                    "new_text": '节拍：编造｜原文依据："此人手持长剑立于城头之上，风吹衣袂猎猎作响。"',
+                    "new_carrier": "画面"}]), _SRC)
+    assert _n is None and "节拍 1" in why, why
+
+
+def test_apply_ops_rewrites_beat_and_keeps_invariants():
+    from step01_script_gen.outline import apply_replan_ops
+    new, why = apply_replan_ops(
+        _old_plan(),
+        _ops(beat=[{"index": 1,
+                    "new_text": '节拍：丙失手（画面动作）｜原文依据："%s"' % _LONG_CITE,
+                    "new_carrier": "画面"}]), _SRC)
+    assert new is not None, why
+    assert new["shot_beats"][0].endswith("｜载体：画面")
+    # 操作**结构上**改不到事实与事件（只在旧计划上打补丁）
+    assert new["main_events"] == _old_plan()["main_events"]
+    assert new["required_facts"] == _old_plan()["required_facts"]
+
+
+def test_apply_ops_empty_is_no_change():
+    """模型显式回空操作 → `no_change`（**不算**一次有效重选，不再有「回抄旧稿」的退路）."""
+    from step01_script_gen.outline import apply_replan_ops
+    new, why = apply_replan_ops(_old_plan(), _ops(), _SRC)
+    assert new is None and why == "no_change"
+
+
+# ---- 端到端：重选函数在可表示性触发时走 ops 通道 ----
 
 class _Svc:
     def __init__(self, payload):
@@ -164,23 +241,17 @@ _BEATS_REPLANNED_OK = [
     '节拍：收尾甲｜原文依据："%s"' % _LONG_CITE,
     '节拍：收尾乙｜原文依据："%s"' % _SHORT_CITE,
 ]
-_BEATS_REPLANNED_BAD = [
-    '节拍：编造的画面｜原文依据："此人手持长剑立于城头之上，风吹衣袂猎猎作响。"',
-    '节拍：由丁的动作承载后续｜原文依据："%s"' % _SHORT_CITE,
-    '节拍：收尾甲｜原文依据："%s"' % _LONG_CITE,
-    '节拍：收尾乙｜原文依据："%s"' % _SHORT_CITE,
-]
 
 
 def _replannable_payload(beats):
-    """一份能过 `_validate_outline` 的新计划（3 事件 + 4 节拍 + 台词逐字来自原文）."""
+    """一份能过 `_validate_outline` 的完整计划（**预算**通道仍走整份重写）."""
     return {
         "main_events": ["甲喝止", "乙发抖", "丙失手"],
         "climax": "丙失手",
         "required_facts": ['丙失手｜原文证据："%s"' % _LONG_CITE],
         "causal_chain": ["甲喝止→乙发抖→丙失手"],
         "shot_beats": list(beats),
-        "dialogue_lines": [_Q_WITH_END],   # 逐字来自 _SRC
+        "dialogue_lines": [_Q_WITH_END],
         "time_budget": "对白约50%",
     }
 
@@ -208,102 +279,35 @@ def _run(monkeypatch, payload, rep, plan=None):
     import step01_script_gen.outline as o
     svc = _Svc(payload)
     monkeypatch.setattr(o, "create_service", lambda *a, **k: svc)
-    return o.replan_dialogue_within_budget(plan or _old_plan(), rep, _SRC)
+    return o.replan_dialogue_within_budget(plan or _old_plan(), rep, _SRC), svc
 
 
-def test_feedback_tail_does_not_contradict_the_replan_permission():
-    """反馈**末尾**那句「请原样返回」必须跟着放开——它是模型最后读到的指令.
-
-    实损：首版只改了上面的条款，尾部仍写「除台词/可省略/时间倾向外，请原样返回」，
-    模型据此把计划原样退回（`_plan_core_preserved` 直接通过，例外分支根本没走到）。
-    两句相反的话放在同一个提示里，后一句赢。
-    """
-    import step01_script_gen.outline as o
-
-    plan = {"dialogue_lines": [_Q_NO_END], "shot_beats": ["b1", "b2"]}
-    with_unrep = o._budget_feedback_block(_REP_UNREP, plan, _SRC)
-    assert "除台词/可省略/时间倾向外，请原样返回" not in with_unrep,         "尾部仍在要求原样返回，与「允许重排节拍」自相矛盾"
-    assert "重排的 `shot_beats` 正文与载体" in with_unrep
-    # 没有可表示性问题时，尾部保持原口径（不给预算路径开后门）
-    plain = o._budget_feedback_block(
-        {"dialogue_unrepresentable": [], "budget": {"min": 60, "max": 90},
-         "dialogue_lines": 1, "dialogue_sec": 200.0, "lower_bound_sec": 200.0,
-         "beats": 3, "beats_floor_sec": 9.0}, plan, _SRC)
-    assert "除台词/可省略/时间倾向外，请原样返回" in plain
-
-
-# ---------------------------------------------------------------------------
-# ②b _plan_invariants_intact：删事实 / 调换事件顺序一律拒收（复核实测的验收漏洞）
-# ---------------------------------------------------------------------------
-
-def test_invariants_reject_deleted_fact():
-    from step01_script_gen.outline import _plan_invariants_intact
-    old = {"main_events": ["a", "b"], "required_facts": ["f1", "f2"], "climax": "a"}
-    new = {"main_events": ["a", "b"], "required_facts": ["f1"], "climax": "a"}
-    assert "必保留事实被删除" in _plan_invariants_intact(old, new)
-
-
-def test_invariants_reject_reordered_events():
-    from step01_script_gen.outline import _plan_invariants_intact
-    old = {"main_events": ["a", "b", "c"], "required_facts": ["f1"], "climax": "a"}
-    new = {"main_events": ["c", "b", "a"], "required_facts": ["f1"], "climax": "a"}
-    assert "main_events" in _plan_invariants_intact(old, new)
-
-
-def test_invariants_reject_changed_climax():
-    from step01_script_gen.outline import _plan_invariants_intact
-    old = {"main_events": ["a"], "required_facts": ["f1"], "climax": "a"}
-    new = {"main_events": ["a"], "required_facts": ["f1"], "climax": "b"}
-    assert "climax" in _plan_invariants_intact(old, new)
-
-
-def test_invariants_allow_added_fact():
-    from step01_script_gen.outline import _plan_invariants_intact
-    old = {"main_events": ["a"], "required_facts": ["f1"], "climax": "a"}
-    new = {"main_events": ["a"], "required_facts": ["f1", "f2"], "climax": "a"}
-    assert _plan_invariants_intact(old, new) == ""
-
-
-def test_replan_rejects_fact_deletion_even_with_valid_citations(monkeypatch):
-    """复核实测形态：删掉一条必保留事实、其余条目引文都合法 → 仍须拒收.
-
-    这是「只核对新稿里还在的条目」的盲区——`_plan_core_preserved` 正是因为这些字段
-    变了才把控制权交过来，所以不变量必须在证据闸**之前**逐项比对。
-    """
-    payload = _replannable_payload(_BEATS_REPLANNED_OK)
-    payload["required_facts"] = ['换了一条事实｜原文证据："%s"' % _SHORT_CITE]
-    plan, why = _run(monkeypatch, payload, _REP_UNREP)
-    assert plan is None and "必保留事实被删除" in why, why
-
-
-def test_replan_rejects_event_reorder_even_with_valid_citations(monkeypatch):
-    payload = _replannable_payload(_BEATS_REPLANNED_OK)
-    payload["main_events"] = list(reversed(payload["main_events"]))
-    plan, why = _run(monkeypatch, payload, _REP_UNREP)
-    assert plan is None and "main_events" in why, why
-
-
-def test_replan_accepts_replanned_beats_with_evidence(monkeypatch):
-    """可表示性触发 + 节拍正文被重排（核心字段改动）+ 引文可核 → 接受为新计划版本."""
-    plan, why = _run(monkeypatch, _replannable_payload(_BEATS_REPLANNED_OK), _REP_UNREP)
+def test_ops_mode_uses_the_ops_schema_and_applies_operations(monkeypatch):
+    """可表示性触发 → 请求用 `REPLAN_OPS_SCHEMA`，操作由代码应用."""
+    from _text_gen.deepseek_schema import REPLAN_OPS_SCHEMA
+    cand = representable_replacements(_Q_WITH_END, _SRC)[0]
+    payload = _ops(
+        [{"index": 1, "replace_with": cand}],
+        [{"index": 1, "new_text": '节拍：丙失手（画面动作）｜原文依据："%s"' % _LONG_CITE,
+          "new_carrier": "画面"}])
+    (plan, why), svc = _run(monkeypatch, payload, _REP_UNREP)
     assert plan is not None, why
-    assert plan["shot_beats"][0].startswith("节拍：丙失手（画面动作）")
+    assert svc.reqs[0].json_schema is REPLAN_OPS_SCHEMA, "可表示性触发必须走 ops schema"
+    assert plan["dialogue_lines"][0] == cand
+    assert plan["shot_beats"][0].endswith("｜载体：画面")
+    assert plan["main_events"] == _old_plan()["main_events"], "事实/事件不得被动到"
 
 
-def test_replan_rejects_replanned_beats_without_evidence(monkeypatch):
-    """节拍被重排但引文核不过 → 拒收（例外不是放宽，是换更严的闸）."""
-    plan, why = _run(monkeypatch, _replannable_payload(_BEATS_REPLANNED_BAD), _REP_UNREP)
-    assert plan is None and "core_field_changed" in why, why
+def test_ops_mode_reports_no_change(monkeypatch):
+    (plan, why), _svc = _run(monkeypatch, _ops(), _REP_UNREP)
+    assert plan is None and why == "no_change", why
 
 
-def test_replan_still_rejects_core_change_when_not_representability(monkeypatch):
-    """**预算**触发的重选不享受例外：改了核心字段照旧拒收（只许改台词）."""
-    plan, why = _run(monkeypatch, _replannable_payload(_BEATS_REPLANNED_OK),
-                     {"dialogue_unrepresentable": []})
-    assert plan is None and "core_field_changed" in why, why
-
-
-def test_replan_unchanged_core_still_passes_without_evidence_rule(monkeypatch):
-    """核心字段没动 → 走原有路径，不因新增的证据闸多一道要求."""
-    plan, why = _run(monkeypatch, _replannable_payload(_old_plan()["shot_beats"]), _REP_UNREP)
-    assert plan is not None, why
+def test_budget_trigger_still_uses_the_full_plan_schema(monkeypatch):
+    """预算通道不变：仍用 `OUTLINE_SCHEMA` 整份重写 + 核心字段校验."""
+    from _text_gen.deepseek_schema import OUTLINE_SCHEMA
+    (_plan_obj, why), svc = _run(
+        monkeypatch, _replannable_payload(_old_plan()["shot_beats"]),
+        {"dialogue_unrepresentable": []})
+    assert svc.reqs[0].json_schema is OUTLINE_SCHEMA
+    assert _plan_obj is not None, why

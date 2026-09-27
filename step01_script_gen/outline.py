@@ -16,7 +16,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from _text_gen import create_service, TextGenerationRequest
-from _text_gen.deepseek_schema import OUTLINE_SCHEMA
+from _text_gen.deepseek_schema import OUTLINE_SCHEMA, REPLAN_OPS_SCHEMA
 
 
 OUTLINE_PROMPT = """
@@ -231,15 +231,15 @@ def _budget_feedback_block(rep: dict, plan: dict, novel_text: str = "") -> str:
             n=len(_dangling),
             lines_block="\n".join("- %s" % d for d in _dangling))
     if block:
-        # ⚠️ 这句是模型**最后**读到的指令，必须与上面各块的口径一致：可表示性块开了
-        # 「允许重排 shot_beats 正文与载体」的口子，这里若仍写「请原样返回」，等于
-        # 让模型收到两句相反的话——实测首版就是这么被顶回去的（模型原样返回、
-        # `_plan_core_preserved` 直接通过，例外分支根本没被走到）。
-        _free = ("台词/可省略/时间倾向" if not _unrep else
-                 "台词/可省略/时间倾向，以及**按上面第 4、5 条重排的 `shot_beats` "
-                 "正文与载体**（重排后的每条节拍都要带逐字可核的「原文依据」）")
-        block += ("\n## 上一版计划（除%s外，请原样返回）\n" % _free
-                  + json.dumps(plan, ensure_ascii=False, indent=2))
+        if _unrep:
+            # 操作式（v6.143）：计划只作**只读上下文**，不再要求模型整份重写——
+            # 上一版的「除…外请原样返回」正是模型回抄旧计划的退路。
+            block += (_PLAN_OPS_INSTRUCTION
+                      + "\n## 上一版计划（**只读上下文，不要重写它**）\n"
+                      + json.dumps(plan, ensure_ascii=False, indent=2))
+        else:
+            block += ("\n## 上一版计划（除台词/可省略/时间倾向外，请原样返回）\n"
+                      + json.dumps(plan, ensure_ascii=False, indent=2))
     return block
 
 
@@ -276,6 +276,11 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
     不能据此报告"需拆集"（见 `check_plan_before_generation` 的 `_replan_note`）。
     """
     from shared.config import PROMPT_MAX_CHARS
+    # v6.143（2026-09-26 用户决定）：**可表示性触发**的重选走**操作式**——模型只回
+    # 「换哪句台词 / 改哪条节拍」，由代码在旧计划上应用。要求它重写整份计划既给了
+    # 「什么都不改、回抄旧稿」的退路（实测两次都这样），也让验收只能事后比对。
+    # 预算超限触发仍走原路径（本来就是「只改台词」，另有全套核心字段校验）。
+    _unrep = rep.get("dialogue_unrepresentable") or []
     _base = base_prompt or OUTLINE_PROMPT.format(novel_text=novel_text[:PROMPT_MAX_CHARS])
     _prompt = _base + "\n" + _budget_feedback_block(rep, plan, novel_text)
     try:
@@ -283,7 +288,7 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
         result = service.generate(TextGenerationRequest(
             system_prompt=system_prompt or _OUTLINE_SYSTEM_PROMPT,
             user_prompt=_prompt, max_tokens=4000, temperature=0.3,
-            json_schema=OUTLINE_SCHEMA, model=model))
+            json_schema=REPLAN_OPS_SCHEMA if _unrep else OUTLINE_SCHEMA, model=model))
     except Exception as exc:
         print(f"[WARN] 规划重选调用异常（保留首版计划）: {exc}")
         return None, "call_failed: %s" % exc
@@ -291,6 +296,19 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
         print(f"[WARN] 规划重选失败（保留首版计划）: {result.error}")
         return None, "call_failed: %s" % result.error
     data = _parse_outline_json(result.text)
+    if _unrep:
+        new_plan, _why = apply_replan_ops(plan, data, novel_text)
+        if new_plan is None:
+            if _why == "no_change":
+                print("[PLAN] 重选**没有给出任何操作**（显式空操作）——记 no_change，"
+                      "不算一次有效重选")
+            else:
+                print("[WARN] 重选操作应用失败（%s）——保留首版计划" % _why)
+            return None, _why
+        print("[PLAN] 重选操作已应用（台词 %d 处 / 节拍 %d 处）——作为新计划版本接受"
+              % (len((data or {}).get("dialogue_ops") or []),
+                 len((data or {}).get("beat_ops") or [])))
+        return new_plan, ""
     new_plan = _validate_outline(data, novel_text) if isinstance(data, dict) else None
     if not new_plan:
         print("[WARN] 规划重选结果不合法（保留首版计划）")
@@ -371,7 +389,8 @@ def enforce_budget_by_replanning(plan, novel_text, *, model=None,
     # 上一轮已经把"重选后仍超限 / 重选失败"的结论记在计划里（`plan_replan`，随缓存持久化），
     # 计划与规则都没变时直接沿用结论——否则缓存里那份计划会让每轮运行都再烧一次模型。
     _prev = plan.get("plan_replan") if isinstance(plan, dict) else None
-    if (isinstance(_prev, dict) and _prev.get("result") in ("infeasible", "replan_failed")
+    if (isinstance(_prev, dict)
+            and _prev.get("result") in ("infeasible", "replan_failed", "no_change")
             and not _force_replan()):
         print("[PLAN] 这一版计划已重选过一轮（%s）→ 不再重复重选（同一计划版本只重选一次）；"
               "如需重跑该轮：%s=1" % (_prev.get("result"), FORCE_REPLAN_ENV))
@@ -393,6 +412,13 @@ def enforce_budget_by_replanning(plan, novel_text, *, model=None,
         # 前者没有判定结论，不能据此说本集需拆集。
         info["result"] = "replan_failed"
         info["detail"] = _why
+        # v6.143：`no_change`（模型显式回空操作）**是**一个结论——它等于「规划层
+        # 认为没有可改的地方」，与"没跑成"分开记，否则诊断里看不出是哪种。
+        if _why == "no_change":
+            info["result"] = "no_change"
+            print("[PLAN] 规划层重选**没有给出任何操作**——按 no_change 记录"
+                  "（计划不变，仍不可行）；如需重跑：%s=1" % FORCE_REPLAN_ENV)
+            return plan, info
         print("[PLAN] 规划层重选未完成（%s）——这**不是**「本集不可行」的判定；"
               "重跑该轮：%s=1" % (_why, FORCE_REPLAN_ENV))
         return plan, info
@@ -517,6 +543,88 @@ def generate_outline(novel_text: str, model: str | None = None,
 
 # 「原文依据/原文证据」里的引文（全角引号；生成层固定用这一对）
 _EVIDENCE_QUOTE = re.compile(r'[“"]([^”"]{4,})[”"]')
+
+
+_PLAN_OPS_INSTRUCTION = """
+## 请**只输出操作**（不要重写整份计划）
+
+上面已给出代码验算过的替代与硬边界。你**只回要改的地方**，代码会把它应用到上一版
+计划上——所以「什么都不改」是允许的，但要**显式回空数组**，不要靠回抄旧计划表达。
+
+- `dialogue_ops`：`[{"index": 台词编号, "replace_with": "换成哪句逐字原文"}]`。
+  有列出替代的，`replace_with` 必须**取自列出的候选**；该句没有候选（出处无句末标点）时
+  不要给它编替代，改走 `beat_ops` 重排载体。
+- `beat_ops`：`[{"index": 节拍编号, "new_text": "新正文（含 ｜原文依据：\"…\"）",
+  "new_carrier": "画面 或 台词k"}]`。
+
+**不变量**（代码会逐项核，违反即整轮拒收）：`main_events` 不得增删或调换顺序；
+**必保留事实一条都不许少**；`climax` 不得改。节拍正文改动后**必须**带逐字可核的
+「原文依据」（长引文 ≥8 字连续命中；4-7 字的短引文要整段逐字）。
+"""
+
+
+def apply_replan_ops(plan: dict, ops, novel_text: str) -> tuple:
+    """把模型给的**操作**应用到旧计划上（**代码执行**，模型不重写整份 JSON）.
+
+    2026-09-26 用户决定：实测两次重选，模型把上一版计划原样回显，而事后比对把
+    「没改动」判成合规——要求模型整份重写既给了它「什么都不改」的退路，也让验收
+    只能事后比对。改成操作式后：**改了什么由操作决定**，模型没有「回抄」这一退路。
+
+    Returns `(new_plan, "")`；`(None, "no_change")` = 模型没给任何操作（**显式**，
+    不再算一次有效重选）；其余为拒收原因。
+    """
+    from step01_script_gen.plan_feasibility import (
+        check_dialogue_representable, plan_dialogue_lines, source_contains)
+    _ops = ops if isinstance(ops, dict) else {}
+    _dlg = [o for o in (_ops.get("dialogue_ops") or []) if isinstance(o, dict)]
+    _bat = [o for o in (_ops.get("beat_ops") or []) if isinstance(o, dict)]
+    if not _dlg and not _bat:
+        return None, "no_change"
+    new = json.loads(json.dumps(plan, ensure_ascii=False))
+    lines = list(plan_dialogue_lines(new))
+    for op in _dlg:
+        try:
+            _i = int(op.get("index"))
+        except (TypeError, ValueError):
+            return None, "dialogue_op 的 index 不是整数：%r" % (op.get("index"),)
+        if not 1 <= _i <= len(lines):
+            return None, "dialogue_op index %s 越界（共 %d 句）" % (op.get("index"), len(lines))
+        _rep = str(op.get("replace_with") or "").strip()
+        if not _rep:
+            return None, "dialogue_op 第 %d 句的 replace_with 为空" % _i
+        if not source_contains(novel_text, _rep):
+            return None, "第 %d 句的替代未在原文逐字找到：%s" % (_i, _rep[:24])
+        if not check_dialogue_representable(_rep)["representable"]:
+            return None, "第 %d 句的替代不可单镜表示：%s" % (_i, _rep[:24])
+        lines[_i - 1] = _rep
+    new["dialogue_lines"] = lines
+    beats = list(new.get("shot_beats") or [])
+    _changed: list = []
+    for op in _bat:
+        try:
+            _i = int(op.get("index"))
+        except (TypeError, ValueError):
+            return None, "beat_op 的 index 不是整数：%r" % (op.get("index"),)
+        if not 1 <= _i <= len(beats):
+            return None, "beat_op index %s 越界（共 %d 条）" % (op.get("index"), len(beats))
+        _txt = str(op.get("new_text") or "").strip()
+        _car = str(op.get("new_carrier") or "").strip()
+        if "原文依据" not in _txt:
+            return None, "第 %d 条节拍的新正文缺「原文依据」" % _i
+        if not _car:
+            return None, "第 %d 条节拍缺载体标注" % _i
+        beats[_i - 1] = _txt + "｜载体：" + _car
+        _changed.append(beats[_i - 1])
+    new["shot_beats"] = beats
+    # 只核**被改写的**条目：未改动的条目是既有状态（早就过了流水线），把整份计划
+    # 一起核会把「原本就抄得不精确的旧条目」也算到本轮头上而误拒——操作式的语义
+    # 是「代码在旧计划上打补丁」，责任范围就是补丁本身。
+    if _changed:
+        _why = _plan_evidence_intact({"shot_beats": _changed, "required_facts": []},
+                                     novel_text)
+        if _why:
+            return None, _why
+    return new, ""
 
 
 def _plan_invariants_intact(old: dict, new: dict) -> str:

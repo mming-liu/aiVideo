@@ -1142,7 +1142,10 @@ def test_replan_resolves_unrepresentable_dialogue(monkeypatch):
     import step01_script_gen.outline as o
 
     plan = _plan(lines=[_X84])
-    box = _patch_outline_service(monkeypatch, [_plan_response(["住嘴！"])])
+    # v6.143：可表示性触发走**操作式**——模型回操作，代码在旧计划上应用
+    box = _patch_outline_service(monkeypatch, [json.dumps(
+        {"dialogue_ops": [{"index": 1, "replace_with": "住嘴！"}], "beat_ops": []},
+        ensure_ascii=False)])
     new_plan, info = o.enforce_budget_by_replanning(
         plan, _SRC_AB, model=None, base_prompt="BASE", system_prompt="SYS")
     assert "必保留事实" in box["prompts"][0], "反馈必须点名可表示性问题"

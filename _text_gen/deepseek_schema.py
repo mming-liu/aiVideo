@@ -844,3 +844,66 @@ REPAIR_PATCH_SCHEMA = {
         "additionalProperties": False,
     },
 }
+
+
+# ========================================================================
+# 规划重选的**操作** schema（v6.143，2026-09-26 用户决定）
+# ========================================================================
+# 为什么不再要整份计划：实测两次重选，模型把上一版计划**原样回显**（8 条节拍、
+# 5 条事实逐字未动），而 `_plan_core_preserved` 把「没改动」判成合规 → 一次
+# **毫无进展**的重选被记成成功。要求模型重写整份 JSON 既给了它「什么都不改」的
+# 退路，也让验收只能靠事后比对。改成**只回操作**、由代码在旧计划上应用：
+# 改了什么由操作决定，「什么都没改」变成显式的空操作，判据由代码给出。
+REPLAN_OPS_SCHEMA = {
+    "name": "replan_ops",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "dialogue_ops": {
+                "type": "array",
+                "description": "台词替换操作；没有要换的就给空数组",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {
+                            "type": "integer",
+                            "description": "第几句（1-based，对应反馈里的台词编号）",
+                        },
+                        "replace_with": {
+                            "type": "string",
+                            "description": "换成哪个**逐字原文**片段（有列出替代的，必须取自反馈列出的候选）",
+                        },
+                    },
+                    "required": ["index", "replace_with"],
+                    "additionalProperties": False,
+                },
+            },
+            "beat_ops": {
+                "type": "array",
+                "description": "节拍重排操作；没有要改的就给空数组",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {
+                            "type": "integer",
+                            "description": "第几个节拍（1-based）",
+                        },
+                        "new_text": {
+                            "type": "string",
+                            "description": "该节拍的新正文（不含｜载体：段），必须自带 ｜原文依据：\"…\"",
+                        },
+                        "new_carrier": {
+                            "type": "string",
+                            "description": "该节拍的载体标注：画面，或 台词k（k 为台词编号）",
+                        },
+                    },
+                    "required": ["index", "new_text", "new_carrier"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["dialogue_ops", "beat_ops"],
+        "additionalProperties": False,
+    },
+}
