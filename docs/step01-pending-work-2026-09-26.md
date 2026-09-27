@@ -3,7 +3,7 @@
 > 本文件原为「未做完的事」清单。P0/P1/P2 已在本轮收口，此处改写为**结项记录 + 剩余项**。
 > 过程记录见 `docs/step01-plan-feasibility-gate-2026-09-25.md`；分级盘点见
 > `docs/step01-grading-inventory-2026-09-26.md`。
-> 提交：`db95d0b`（v6.135~v6.141 主体，20 文件 +4701 −170）。
+> 提交：`db95d0b`（v6.135~v6.141 主体，20 文件 +4701 −170）、`fc19b67`（P1-3/P1-4，4 文件 +304 −103）。
 
 ---
 
@@ -67,23 +67,30 @@ run 终局仍 BLOCK，但发生在**提交层**（真内容缺陷：末轮 shot 
 
 - 新增记忆：`aivideo-dialogue-integrity-gate-v6135`、`step01-log-path-isolation`、
   `bde-trial-verdict-and-prompt-surface-trap`；MEMORY.md 索引已加三条。
-- 提交 `db95d0b`。**P1-3/P1-4 的改动尚未提交**（见「剩余项」）。
+- 提交 `db95d0b`（主体）与 `fc19b67`（P1-3/P1-4）。
 
 ### B′/D′/E′ 合并对照试跑 —— 已跑，**三项全平，已回退**
 
-- 计划写的改动面 `prompts/system.md` 对当前 provider **不生效**
-  （`TEXT_PROVIDER=agent_plan` 读 `doubao_system.md` + `main.md`）——照原方案改等于零生效。
-  三批改落 `main.md`，两臂 prompt 指纹 `67f86b87…`（baseline）vs `b6ee5f64…`（treated），
-  臂隔离干净。产物 `.tmp/trial_bde/20260926_2215/`。
+- **〔09-26 复核修正〕** 本文档初版写「`prompts/system.md` 对当前 provider 不生效」——
+  **错的**。剖面按**模型名**解析（`prompts.py:984 MODEL_PROMPT_PROFILES`，
+  `main.py:273` 等 6 处走 `resolve_model_prompt_profile(model)`）；
+  `SCRIPT_CANDIDATE_MODELS=deepseek-v4-flash` ⇒ 实际是 `build_prompt` + **`system.md`**，
+  provider 级 `auto_select_*` 只是未注册模型的回退。初版只看 provider 就下了结论。
+  三批最终落 `main.md`（`build_prompt` 经 `PROMPT_TEMPLATE` 用它）**仍然生效**，
+  但两臂记的指纹取了 `DOUBAO_SYSTEM_PROMPT` ⇒ **记录的指纹不能标识真实请求的 system**。
+  产物 `.tmp/trial_bde/20260926_2215/`。
 - **读数**：B′ 相对时间词 5.33→5.33；D′ 中段镜 2.33→0（不可比）；E′ 承载句 0→0、
   ff_desc 均长 44.7→46.8；守卫镜数/时长/字数无塌缩。
-- **免跑语料核验**（55 份稿件 / 703 镜）直接证伪两条前提：占位承载句 **0 次**、
+- **免跑语料核验**（55 份稿件 / 703 镜）证伪两条前提：占位承载句 **0 次**、
   ff_desc 均 **39.6 字**（软指引 800）⇒ E′ 无从改善；B′ 的正则把顺序连接词
   （紧接着 276 / 然后 105）算成了相对时长词，只留真·时长词全语料仅 14 次，
   且两臂逐项完全一致（随后 4 vs 4）——**B′ 对规则自己点名的「随后」一个没少**。
-- **判别性诊断**：两臂 6 候选全是「8 节拍 → 8 镜 / 42-49s」，看着像锚定复发；
-  但**去掉契约块四/五节后仍是 8 镜 / 44s** ⇒ 章 2 的产出与节拍块无关，是本章形态，
-  且 42s 低于 60s 红果下限（退化配置）——故「全平」是**结论不可用**，不是「证明无效」。
+- **〔09-26 复核修正〕两次「消融」都是无效方法**，原写「两条假设已排除」不成立：
+  ① 去主要事件的探针改的是 `_compact_doubao_outline_anchor`——`build_prompt`
+  **根本不调用**它；② 去节拍的探针只删了契约块，而 `build_prompt` 注入的**完整大纲
+  锚点仍含【镜头节拍】8 条**（`outline_to_anchor` 标签实测），**节拍输入从未被移除**。
+  ③ 且试跑脚本**绕过了计划门**（见下），10 份是「不可行计划下的诊断稿」，
+  按正式候选解释不成立。⇒ 章 2「一节拍一镜」仍只是**未被证伪的线索**。
 - **回退**：`prompts/main.md` 三段 + `rules_index` v6.143 条目已 revert；
   回退后 prompt 指纹回到 `67f86b877ffb6b7b`，rules_index 回到 43 条。
 
@@ -91,15 +98,40 @@ run 终局仍 BLOCK，但发生在**提交层**（真内容缺陷：末轮 shot 
 
 ## 剩余项
 
-1. **P1-3/P1-4 改动未提交**（`audit.py` / `main.py` / `test_repair_target_rollback.py`，
-   全量 **2427 passed / 1 skipped**）。等提交授权。
-2. **章 2 生成形态（新观察，未立项）**：两臂 6 候选 + 去节拍块 2 候选，全部 8 镜 / 41-49s，
-   低于 60s 红果下限（`runtime_extend` 只 WARN、`shot_count_bounds` 只 WARN，
-   候选层 `structural_ok` 不看总时长）。**需要先定这是缺陷还是本章正常**，再谈要不要立判据。
-3. **B′/D′/E′ 若要重跑**：须先解决第 2 项（退化配置上的对照没有判别力），
+1. **提示与硬门的切点冲突（09-26 复核第 2 项，本次已修）**：`system.md` 与
+   `main.md` 一直写着「切点选在「，」「…」「。」处」，而统一判据
+   （`plan_feasibility._SENT_END_CHARS`）**逗号切点一律非法**——提示教模型按逗号拆、
+   硬门按句末拒收，章 2 第 1 句（80 字，通篇只有逗号）正是这条冲突的靶子。
+   已改为「切点只许落在句末标点（。！？…；）之后」，并补「安全字数 ≠ 存在合法切点
+   （超了却没有句末切点 ⇒ 不可表示，回规划层另选）」。两处示例的旧标定
+   （37-64 字一镜可容纳）也一并改掉。
+   守卫：`test_model_prompt_profile.py::test_split_guidance_cut_points_match_the_hard_gate`
+   + `::test_system_prompt_split_examples_match_shot_cap`（回退旧文案两条都判红，已验）。
+2. **测试文件未跟踪 ⇒ 回归不会随提交交付（09-26 复核第 3 项，本次已补）**：
+   `tests/` 被 `.gitignore` 忽略，`test_model_prompt_profile.py` / `test_best_guard.py` /
+   `test_step01_commit.py` 三个含本轮回归的文件此前 `git ls-files` 查不到。
+   已 `git add -f` 纳入。
+3. **★ 章 2 计划本身不可行（09-26 复核定位，比「8 镜」重要得多）**：
+   `chapter_outline.cache.json` 的 `plan_replan.result = "infeasible"`、
+   `after_unrepresentable = 2`（`skipped="already_attempted"`，重选已跑过且无改善）。
+   逐句核验：第 1 句 80 字 ≈19.8s **句内无句末边界**（只有逗号/顿号）；
+   第 3 句 70 字 ≈17.7s 只有 1 个句末边界、切不出每段 ≤12s 的合法解。
+   ⇒ 正式流程在 `main.py:7519 check_plan_before_generation`（**候选扇出之前**）就停，
+   **章 2 当前生成不出正式候选**。先前那 10 份诊断稿是绕过该门的产物，不代表本章正常产出。
+   **下一步应先让章 2 计划变可行，再做镜数归因**；走哪条路（改选材/改重选策略/动切分判据）
+   属已定判据与容量，需用户批准。
+   - 判据面事实（独立于上述）：`runtime_extend` 与 `shot_count_bounds` 都只 WARN，
+     候选层 `structural_ok` 不看总时长 ⇒ 低于 60s 的稿子不会被候选层拦下。
+
+4. **`system.md` 陈旧标定（本次已修）**：原文「37-64 字（8.8-14.7s）**不必切**，一镜可容纳」
+   是按 **15s** 上限标定的旧校准，与同段上文的 `SHOT_CAP=12s` / `NARR_MAX_CHARS=44` 自相矛盾，
+   等于教模型把超容台词留在一镜（诊断稿实测：256 字对白塞进合计 27s 的 5 镜，需 64s）。
+   已改为「≤44 字（≈12s 以内）不必切，超过就必须切」，并加守卫用例
+   `test_model_prompt_profile.py::test_system_prompt_split_guidance_matches_shot_cap`。
+5. **B′/D′/E′ 若要重跑**：须先解决第 2 项（退化配置上的对照没有判别力），
    并先修 B′ 判据口径（区分相对时长词与顺序连接词）。
-4. **F′ 三视图**：规划见 grading-inventory §4；02a 报量确认、02b 逐项确认两个门保留。
-5. **A′ 核心提案待批**：`rule_tier` 独立元数据 + 注册期 lint（craft/taste 约束禁止配套
+6. **F′ 三视图**：规划见 grading-inventory §4；02a 报量确认、02b 逐项确认两个门保留。
+7. **A′ 核心提案待批**：`rule_tier` 独立元数据 + 注册期 lint（craft/taste 约束禁止配套
    blocking code）。
 
 ## 预存已知项（勿误判为新问题）
