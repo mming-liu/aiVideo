@@ -611,3 +611,110 @@ def test_commit_defers_failed_group_and_keeps_repairing_others(tmp_path, monkeyp
     _shots = {str(x.get("index")): x for x in script.get("shots", [])}
     assert SOLO not in str(_shots["2"]["prompt"])
     assert GHOST in str(_shots["3"]["prompt"]), "失败组保持原样（暂缓 ≠ 半条修复）"
+
+
+def test_non_executable_target_does_not_kill_the_whole_round(tmp_path, monkeypatch):
+    """v6.142（09-26 用户决定，P1-3）：一条坏目标不再连坐整轮修复.
+
+    实损（09-26 20:25 run）：shot 3 的 12 条越界 repair_targets 让
+    `_audit_repair_target_problems` 判「缺少可执行的定向修复目标」→ 进修复轮
+    **之前**就显式 BLOCK，同轮里完全可修的其它目标一个都没动。
+
+    判别性：审计同时给「越界目标」（shot 3）与「合法目标」（shot 2）。
+    旧口径下 `seq.n == 0`（一次修复都没发）；新口径下修复照发，且请求里
+    带的是合法目标那条的证据。坏条目**仍保留 blocking**（终局照常 BLOCK）。
+    """
+    import json
+
+    import step01_script_gen.main as m
+
+    from tests.step01_script_gen.test_candidate_dialogue_integrity import (
+        _LONG_LINE, _PLAN)
+    from tests.step01_script_gen.test_repair_targets import _complete_shot
+
+    BAD = "BAD_MARK 越界目标指向的缺陷"
+    GOOD = "GOOD_MARK 可修的缺陷"
+
+    def _shot(i, prompt):
+        s = _complete_shot(i)
+        s["narration_segment"] = ""
+        s["subtitle"] = ""
+        s["prompt"] = prompt
+        return s
+
+    # 旁白与字幕同源：提交层终稿台词门要求计划台词逐字保住，夹具必须带上
+    _s1 = _shot(1, "中景，无标记的描述")
+    _s1["narration_segment"] = "张十三道：" + _LONG_LINE
+    _s1["subtitle"] = _s1["narration_segment"]
+    _base = {"shots": [_s1, _shot(2, "近景，" + GOOD),
+                       _shot(3, "特写，" + BAD)], "total_duration": 18.0}
+
+    _audit = {"status": "ok", "issues": [
+        # 越界路径：该镜 kfs 只有 3 项，[9][9] 不是它的真实字段 → 逐条剔除
+        {"code": "model_audit_TEXT_ERROR", "severity": "visual_risk",
+         "shot_id": "3", "frame_id": "", "entity_id": "", "field_path": "prompt",
+         "message": "描述不可执行。", "evidence": BAD,
+         "repair_targets": [{"shot_id": "3",
+                             "field_path": "frame_layouts.kfs[9][9].pose"}]},
+        {"code": "model_audit_TEXT_ERROR", "severity": "visual_risk",
+         "shot_id": "2", "frame_id": "", "entity_id": "", "field_path": "prompt",
+         "message": "描述不可执行。", "evidence": GOOD,
+         "repair_targets": [{"shot_id": "2", "field_path": "prompt"}]},
+    ]}
+
+    class _Seq:
+        def __init__(self):
+            self.n = 0
+            self.reqs = []
+
+        def generate(self, req):
+            self.n += 1
+            self.reqs.append(req)
+
+            class _R:
+                success = True
+                error = ""
+                text = json.dumps({"shot_replacements": [
+                    {"shot_id": "2", "shot": _shot(2, "近景，已改成无标记的描述")},
+                ], "hook_replacement": None}, ensure_ascii=False)
+
+            return _R()
+
+    _warns: list = []
+
+    class _Log:
+        def warn(self, msg, *a, **k):
+            _warns.append(str(msg))
+
+        def error(self, msg, *a, **k):
+            _warns.append(str(msg))
+
+        def info(self, *a, **k):
+            pass
+
+        def verbose(self, *a, **k):
+            pass
+
+    seq = _Seq()
+    monkeypatch.setattr(m, "CHAPTER_DIR", tmp_path)
+    monkeypatch.setattr(m, "OUTPUT_FILE", tmp_path / "script_result.json")
+    monkeypatch.setattr(m, "_logger", _Log())
+    monkeypatch.setattr(m, "_run_final_semantic_audit", lambda *a, **k: dict(_audit))
+    monkeypatch.setattr(m, "_build_step01_quality_gate",
+                        lambda s, n: {"hard": [], "visual_risk": [],
+                                      "checker_failed": False, "status": "ok"})
+    monkeypatch.setattr(m, "_collect_repair_warnings",
+                        lambda s, n: {"_has_hard": False, "shots": {}, "issues": []})
+    monkeypatch.setattr(m, "create_service", lambda *a, **k: seq)
+
+    _script, summary = m._commit_step01_outputs(_base, "原文", plan=dict(_PLAN))
+
+    assert seq.n >= 1, "一条坏目标不得掐掉整轮修复（旧口径这里恒为 0）"
+    _turn1 = seq.reqs[0].user_inputs[-1]["content"]
+    assert GOOD in _turn1, "合法目标必须照常进修复轮"
+    assert any("缺少可执行的定向修复目标" in w for w in _warns), (
+        "坏目标必须留下显式告警（准则 7：不许静默降级）：%s" % _warns[:4])
+    # 坏条目**保留 blocking** → 终局照常 BLOCK，不做半条提交
+    assert summary["status"] == "BLOCK", summary
+    assert any(b.get("code") == "model_audit_TEXT_ERROR"
+               for b in (summary.get("blocking") or [])), summary.get("blocking")

@@ -72,7 +72,7 @@ AUDIT_SCHEMA = {
                                             "关键帧→人物两层，两个下标都要写"
                                             "（frame_layouts.kfs[2][0].props）。"
                                             "写 frame_layouts.kfs[2].props 这类漏人物"
-                                            "下标的形状会让该条问题整体作废。"),
+                                            "下标的形状会让该条目标被剔除（问题本身仍保留为 blocking，但这一轮拿不到修复授权）。"),
                                     },
                                 },
                                 "required": ["shot_id", "field_path"],
@@ -209,18 +209,18 @@ _AUDIT_RULES_TEMPLATE = """# 审查规则
 - 后续动作缺失必须指向 motion_desc/对应 kf/lf，禁止要求 ff 提前完成过程或结果动作。
 
 每个问题必须给 shot_id、frame_id、entity_id、field_path、evidence、impact、minimal_fix。
-**field_path 必须是你建议「修改」的那个字段，不是矛盾被观察到的字段**：要改 ff_desc 就写 `ff_desc`；要改动作时序/过程就写 `motion_desc`；要改某一关键帧就写 `keyframes[N].desc`；要改布局条目按下面**两种形状**写（写错形状该条问题整体作废）。定位到观察点而非修改点，会把修复引导到错误字段。
+**field_path 必须是你建议「修改」的那个字段，不是矛盾被观察到的字段**：要改 ff_desc 就写 `ff_desc`；要改动作时序/过程就写 `motion_desc`；要改某一关键帧就写 `keyframes[N].desc`；要改布局条目按下面**两种形状**写（写错形状该条目标会被剔除，该问题本轮拿不到修复授权）。定位到观察点而非修改点，会把修复引导到错误字段。
 
 **布局路径的两种形状（下标一层都不能省）**：
 - `ff` / `lf` 是**人物列表**（一层）：`frame_layouts.ff[人物下标].<叶子>`，如 `frame_layouts.ff[0].pose`。
 - `kfs` 是**关键帧列表 → 人物列表（两层）**：`frame_layouts.kfs[关键帧下标][人物下标].<叶子>`，如 `frame_layouts.kfs[2][0].props`。**两个下标都要写**。
-- 反例（**无效**，会被判「不是该镜头的真实字段路径」→ 该条问题整条作废）：`frame_layouts.kfs[2].props`（漏人物下标——一个关键帧里可能有多个出镜人物，系统**不会**替你猜是谁）、`frame_layouts.ff.props`（漏人物下标）、`frame_layouts.kfs`（只写列表名）。
+- 反例（**无效**，会被判「不是该镜头的真实字段路径」→ 该条目标被剔除）：`frame_layouts.kfs[2].props`（漏人物下标——一个关键帧里可能有多个出镜人物，系统**不会**替你猜是谁）、`frame_layouts.ff.props`（漏人物下标）、`frame_layouts.kfs`（只写列表名）。
 
 ## repair_targets（**唯一被用于授权的字段**）
 一对一的 `(shot_id, field_path)` 列表，写清「要修好这条问题，必须**一起**修改的全部镜头与字段」：
 - **必须联动修改的字段一个都不能漏**：修复端只被授权改这里列出的字段，没列出的改动会被**回填**；漏掉的那部分会让修复自相矛盾（半条修复）→ 引入新的阻塞 → **整组被回退**。典型漏法：kf 时序矛盾通常要同时改 `keyframes[N].desc` + `keyframes[N].stage` + `frame_layouts.kfs[N][n].props`，只写 `desc` 必然被回填。
 - `shot_id` 一律写该镜在上文分镜里的 **`index` 裸数字**（如 `5`；钩子写 `0`）。不要写 `shot5` / `shot_5` / `第5镜` 之类的写法——**本文档全篇的镜头号都按裸数字读**，下面举例中的「5 号镜」等价于 `"shot_id": "5"`。
-- 只写该镜头里**真实存在**的字段叶子：`ff_desc` / `lf_desc` / `motion_desc` / `prompt` / `keyframes[N].desc` / `keyframes[N].stage` / `keyframes[N].t_sec` / `frame_layouts.ff[N].<叶子>` / `frame_layouts.lf[N].<叶子>` / `frame_layouts.kfs[N][n].<叶子>` / `temporal_plan`。不要写 `ff_desc.props` 这类组合路径，也不要编造字段——校验不通过时该条问题的授权会被整体作废。
+- 只写该镜头里**真实存在**的字段叶子：`ff_desc` / `lf_desc` / `motion_desc` / `prompt` / `keyframes[N].desc` / `keyframes[N].stage` / `keyframes[N].t_sec` / `frame_layouts.ff[N].<叶子>` / `frame_layouts.lf[N].<叶子>` / `frame_layouts.kfs[N][n].<叶子>` / `temporal_plan`。不要写 `ff_desc.props` 这类组合路径，也不要编造字段。**数组下标必须落在本稿该镜的实际长度内**（该镜 `keyframes` 只有 2 项就不要写 `keyframes[2]`；`frame_layouts.kfs[0]` 的出镜表只有 1 人就别写 `[0][1]`）——越界、编造的路径会被逐条剔除，该问题本轮拿不到修复授权，白等一轮审计。
 - 一条问题需要跨镜联动才能修好时（例如同一事实在 5 号镜的 ff_desc 与 7、8、9 号镜的 ff_desc 里互相矛盾），**每一镜各写一条**。系统把它们当成**一个事务**：整组修、整组验收、整组回退——写漏一镜会让整组被回退。
 - 只改一个字段就写一条（**不要多写**没必要的字段：多列的条目同样要一起改完才算通过）。确实无法确定要改哪个字段时写空数组 `[]`，该问题本轮不进入定向修复。
 - `shot_id` / `field_path` 仍要填，用来**定位问题出现在哪里**（可与 repair_targets 不同：问题出现在这镜，要改的是别的镜）。

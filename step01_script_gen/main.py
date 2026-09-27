@@ -2183,7 +2183,7 @@ def _target_of_record(_rec) -> str:
 def _audit_repair_target_problems(audit: "dict | None", shots_by_id: dict) -> list:
     """审计 blocking 条目的**成对目标契约**是否可执行（v6.119，用户口径）.
 
-    三类都算「不可执行」，调用方据此**显式 BLOCK**、且**不自动重发审计**：
+    三类都算「不可执行」：
 
       ① 缺 `repair_targets` —— 契约未遵守（schema 里它是 required）；
       ② 显式 `[]` —— 该 blocking 问题没有可授权的定向修复；
@@ -2192,9 +2192,13 @@ def _audit_repair_target_problems(audit: "dict | None", shots_by_id: dict) -> li
 
     只查 blocking 条目：advisory/info 不驱动定向修复，不构成阻塞。
 
-    返回可读原因（空列表 = 契约可执行）。这类失败**不是「重跑就能解决」**的：
-    要么审计没按契约输出，要么这条问题本身无法定向修复——所以报错文案必须指向
-    「检查契约或稿件」，而不是暗示原样重跑。
+    返回可读原因（空列表 = 全部条目契约可执行）。
+
+    **v6.142（09-26 用户决定，P1-3）：调用方不再据此就地 BLOCK**。旧口径
+    「有一条不可执行就整轮 BLOCK、一轮修复都不发」被 20:25 run 证伪——一条坏
+    目标（shot 3 的 12 条越界路径）把同轮其它可修目标全部连坐。现在调用方只
+    **告警 + 保留 blocking**，本轮不授权这条、其余目标照常修；改不动的终局由
+    「提交前修复轮零改善」判据给出。所以本函数是**诊断**，不是**判决**。
     """
     from step01_script_gen.repair_fields import (validate_repair_targets,
                                                  _is_structural_code)
@@ -2826,13 +2830,17 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                          % (len(_sid_aliases), _sid_aliases[:8]))
         _rt_problems = _audit_repair_target_problems(audit, _shots_by_id_rt)
         if _rt_problems:
-            summary["detail"] = (
-                "审计条目缺少可执行的定向修复目标（%d 条）：%s"
-                "——请检查审计契约或稿件本身；若属契约/记法问题应先修契约，"
-                "**不要靠反复重跑碰运气**"
+            # v6.142（09-26 用户决定，P1-3）：**降级为告警，不再就地 BLOCK**。
+            # 旧口径（v6.119）是「任一条目标无效 → 整条拒绝」+「有一条不可执行就
+            # 整轮 BLOCK、**一轮修复都不发**」。20:25 run 实锤：shot 3 的 12 条越界
+            # 目标把整轮修复全部掐掉，同轮里完全可修的其它目标一个都没动——被一条
+            # 坏目标连坐。新口径：有问题的条目**保留 blocking**（下一轮审计照常
+            # 重报），本轮不授权它；其余合法目标照常进修复轮。改不动 / 全是坏目标
+            # 的终局，由既有「提交前修复轮零改善即停」判据给出（失败照常显式）。
+            _logger.warn(
+                "[COMMIT] %d 条审计条目缺少可执行的定向修复目标"
+                "（保留 blocking；本轮不授权该条，本轮其余目标继续修）：%s"
                 % (len(_rt_problems), _rt_problems[:3]))
-            _logger.error(f"[COMMIT] {summary['detail']}")
-            break
         # ---- 受限修复（字段授权 + 内容保留 + 候选验收，全部走修复事务）----
         _before_rev = compute_script_revision(script)
         _repair_diag: list = []
@@ -7890,24 +7898,75 @@ def _record_blocked_revision(revision: str) -> None:
     为什么需要：BEST-GUARD 按**确定性**分数与风险排序，它**不知道**某份历史快照
     还欠哪些**语义**问题——实测 run 17/18 反复选回 21:55 的旧快照，而那份保留着
     Rule-7 造成的旧文本（审计每轮重报）。台账让选稿能避开已知欠账的旧稿。
+
+    v6.142（09-26 P1-4）：同时记 `debt[revision]` = **该稿卷入过几次 BLOCK 的
+    run**（每次登记 +1）。台账原本只是个集合——「全部快照都欠账」时整表放开、
+    改按分数/风险选，于是**欠账最重的那份照样被反复选中**（P1-4 实损形态）。
+    有了次数，饱和放开时就能「优先选欠账最少的一份」，且被选中者下一轮计数
+    +1、自然降位——棘轮不再失效。
     """
     if not revision:
         return
     try:
         path = _blocked_ledger_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        cur = []
+        cur, debt = [], {}
         try:
             with open(path, "r", encoding="utf-8") as f:
-                cur = list((json.load(f) or {}).get("revisions") or [])
+                _data = json.load(f) or {}
+            cur = list(_data.get("revisions") or [])
+            # 容错口径与 `_load_blocked_debt` 同一处（`_coerce_debt_map`）——
+            # 一条脏计数**不得**让整张台账写不进去（那等于静默废掉护栏）
+            debt = _coerce_debt_map(_data.get("debt"), cur)
         except Exception:
-            cur = []
+            cur, debt = [], {}
         cur = [str(x) for x in cur if str(x) != revision]
         cur.append(str(revision))
+        cur = cur[-64:]
+        debt = {k: v for k, v in debt.items() if k in set(cur)}
+        debt[str(revision)] = int(debt.get(str(revision), 0)) + 1
         from shared.json_io import atomic_dump_json
-        atomic_dump_json(path, {"revisions": cur[-64:]}, ensure_ascii=False, indent=2)
+        atomic_dump_json(path, {"revisions": cur, "debt": debt},
+                         ensure_ascii=False, indent=2)
     except Exception as exc:
         _logger.warn(f"[BEST-GUARD] 欠账台账写入失败（不影响结论）: {exc}")
+
+
+def _coerce_debt_map(raw, revisions) -> dict:
+    """把台账里的 `debt` 段规整成 `{revision: episodes}`（**读写两侧共用**）.
+
+    容错口径只有一处，读写必须一致——否则「读出来是 1 轮、再登记一次却变回 1」
+    这种自相矛盾会让棘轮计数无声漂移：
+      - 段缺失 / 不是 dict（老台账）→ 表内每条记 **1 轮**（至少欠过一次；记 0 会
+        让老条目在饱和放开时无条件胜出，正是 P1-4 要治的方向）；
+      - 单条脏值 → 只按「1 轮」计它自己，**不牵连同表其余条目**；
+      - 不在 `revisions` 表内的键丢弃（表只留最近 64 条，计数跟着表走）。
+    """
+    _revs = {str(x) for x in (revisions or [])}
+    if not isinstance(raw, dict):
+        return {r: 1 for r in _revs}
+    out: dict = {}
+    for k, v in raw.items():
+        try:
+            out[str(k)] = int(v)
+        except (TypeError, ValueError):
+            out[str(k)] = 1
+    return {k: v for k, v in out.items() if k in _revs}
+
+
+def _load_blocked_debt() -> dict:
+    """台账里的「欠账轮次」：`{revision: episodes}`（读坏/缺失返回空 dict）.
+
+    老台账（只有 `revisions`、没有 `debt`）→ 一律按 1 轮计：它们至少欠过一次，
+    但不知道欠了几次；按 1 计不会让任何一份凭空占优（不写 = 0 会让老条目
+    无条件胜出，正是要治的那个方向）。
+    """
+    try:
+        with open(_blocked_ledger_path(), "r", encoding="utf-8") as f:
+            data = json.load(f) or {}
+        return _coerce_debt_map(data.get("debt"), data.get("revisions"))
+    except Exception:
+        return {}
 
 
 def _snapshot_new_candidate(script: dict) -> str:
@@ -8083,11 +8142,17 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
                 _dlg_broken_snaps.append(f"{sp.name}（{_dlg_why}）")
                 continue
             candidates.append((sp, old))
+        _snap_debt: dict = {}
         if not candidates and _blocked_names:
             # 全都有欠账 → 放开限制（否则护栏整个失效，比选一份欠账稿更糟）
+            # v6.142（09-26 P1-4）：放开时**不再只按分数/风险**——先按台账里的
+            # 「欠账轮次」升序，欠得最少的优先（同档才比分数/风险）。旧实现丢掉
+            # 了台账唯一携带的信息，低风险但反复欠账的旧稿照样被反复选中。
+            _debt_map = _load_blocked_debt()
             _logger.warn(
                 f"[BEST-GUARD] 全部历史快照都在欠账台账内（{len(_blocked_names)} 份）"
-                "——本轮不排除，仍按分数/风险选")
+                "——本轮不排除，改按**欠账轮次升序**优先选欠账最少的一份"
+                "（同档再比分数/风险）")
             for sp in snaps:
                 try:
                     with open(sp, "r", encoding="utf-8") as f:
@@ -8102,13 +8167,15 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
                     continue
                 if not HOOK_ENABLED:
                     old.pop("hook", None)
-                if compute_script_revision(old) == _cur_rev:
+                _old_rev2 = compute_script_revision(old)
+                if _old_rev2 == _cur_rev:
                     continue
                 # v6.135：台词完整性门**不随欠账放宽**——破损稿进提交门 = 死锁
                 _dlg_why = _dlg_snapshot_reason(old)
                 if _dlg_why:
                     _dlg_broken_snaps.append(f"{sp.name}（{_dlg_why}）")
                     continue
+                _snap_debt[str(sp)] = int(_debt_map.get(_old_rev2, 1))
                 candidates.append((sp, old))
         if _dlg_broken_snaps:
             # 显式记录（准则 7）：哪几份快照因台词破损被排除，为什么
@@ -8133,6 +8200,7 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
         best_quality = None
         best_rank = None
         best_script = None
+        best_debt = None
         for sp, old in candidates:
             try:
                 sc = _score_script(old, novel_text)["total"]
@@ -8142,10 +8210,15 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
                 continue
             # v6.73: compare integrity -> blocking risks -> total, not only
             # the raw story score.  A clean 90 must not lose to a corrupted 100.
-            if best_rank is None or rank < best_rank:
+            # v6.142（P1-4）：欠账放开态下 `_snap_debt` 有值，欠账轮次排在分数/风险
+            # **之前**——否则「按欠账最少选」只是句空话。
+            _debt = int(_snap_debt.get(str(sp), 0))
+            _key = (_debt, rank)
+            if best_rank is None or _key < (best_debt, best_rank):
                 best_score = sc
                 best_quality = q
                 best_rank = rank
+                best_debt = _debt
                 best_path = sp
                 best_script = old
 
