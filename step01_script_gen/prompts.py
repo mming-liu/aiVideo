@@ -771,7 +771,9 @@ def render_execution_contract(plan) -> str:
               if str(x).strip()]
     _events = [str(x).strip() for x in ((plan or {}).get("main_events") or [])
                if str(x).strip()]
-    if not (_lines or _facts or _events):
+    _beats = [str(x).strip() for x in ((plan or {}).get("shot_beats") or [])
+              if str(x).strip()]
+    if not (_lines or _facts or _events or _beats):
         return ""
     parts = [CONTRACT_BLOCK_HEADER]
     if _lines:
@@ -784,6 +786,37 @@ def render_execution_contract(plan) -> str:
     if _events:
         parts.append("三、事件顺序（**不得调换**）：")
         parts += ["%d. %s" % (i, x) for i, x in enumerate(_events, 1)]
+    # v6.138（九审根因 1）：节拍编号 + 事件履约声明——「哪个镜头承载哪些节拍/台词」
+    # 变成显式、可确定性核验的声明（plan_refs，判据在 plan_feasibility.check_event_contract）。
+    # 此前节拍只是参考信息，重选删掉承载台词后节拍在成片无承载（实跑审计
+    # MISSING_PLOT/MISSING_ACTION 的来源），只能在提交点靠语义审计发现、而修复轮
+    # 不许改台词 ⇒ 结构性死锁。
+    if _beats:
+        parts.append("四、镜头节拍（**叙事单元，不是镜头清单**；按序编号 B1..B%d，"
+                     "画面呈现顺序必须与之一致）：%d 个"
+                     % (len(_beats), len(_beats)))
+        parts += ["B%d. %s" % (i, x) for i, x in enumerate(_beats, 1)]
+        # v6.141（09-26 回归）：**节拍数 ≠ 镜头数**。v6.138 的节拍编号块把计划节拍
+        # 摆成了紧凑的 B1..Bn 清单，模型据此把它当镜头骨架、按「每节拍恰好一镜」
+        # 最小满足第五节的覆盖要求——实跑 3/3 候选取 6 节拍→7 镜 28s（加块前同计划
+        # 13-14 镜 48-52s；契约块长度 825→1576 字符与回归窗口逐字对上）。塌缩稿装不下
+        # 6 句台词，3 句 not_found，被台词门整体判破损、无合格候选，run exit 1。
+        # 这里显式切断「节拍→镜头」映射，并把镜数来源重申回时长预算（RULE-8 口径）。
+        parts.append("**节拍数 ≠ 镜头数**：B1..B%d 是剧情节拍，每个通常展开为 2-4 个"
+                     "镜头（建立/动作/反应/细节），**不是逐条拍一镜的清单**；镜头数由"
+                     "**总时长目标反推**（正片 60-90s、规划 70-80s ÷ 每镜平均时长），"
+                     "不由节拍数决定。" % len(_beats))
+    parts.append("五、事件履约声明（**每镜必填 plan_refs 字段**）：")
+    parts += [
+        "- 每个镜头输出 `\"plan_refs\": {\"beats\": [B序号…], \"lines\": [D序号…]}`——"
+        "beats 填本镜承载的节拍编号（上面第四节的 B1..B%d），lines 填本镜台词对应的"
+        "选用台词编号（第一节的 1..%d）；" % (len(_beats), len(_lines)),
+        "- **每个节拍都必须被至少一个镜头承载**（一个节拍可由多个镜头共同承载）；"
+        "纯过渡镜（不承载任何节拍/台词）写空数组；",
+        "- **声明顺序不得回退**：后位节拍/台词不得在前位完成前呈现——供述/传话类台词"
+        "未完成时，不得提前呈现其后果画面（如尖叫、掌掴、离场）；",
+        "- 台词 Dk 必须**逐字**落在声明它的那个镜头的 narration_segment 里。",
+    ]
     return "\n".join(parts)
 
 

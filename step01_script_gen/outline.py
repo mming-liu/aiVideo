@@ -37,7 +37,7 @@ OUTLINE_PROMPT = """
   "required_facts": ["事实A｜原文证据：...", "事实B｜原文证据：..."],
   "causal_chain": ["起因→行动→结果→悬念"],
   "character_motives": ["角色：想做什么；为什么；原文证据：..."],
-  "shot_beats": ["节拍：...｜本镜信息目的：...｜原文依据：..."],
+  "shot_beats": ["节拍：...｜本镜信息目的：...｜原文依据：...｜载体：台词k 或 画面"],
   "dialogue_lines": ["逐字台词1（原文原话）", "逐字台词2"],
   "omittable": ["可省略内容1", "..."],
   "time_budget": "对白/动作/反应的大致分配（不必报精确秒数）"
@@ -55,7 +55,10 @@ OUTLINE_PROMPT = """
   算出的秒数），白费一轮；更严重的是会把整集挤爆。
 - causal_chain: 每个关键转折必须具备起因→行动→结果→悬念
 - character_motives: 说明角色为什么这样做，并附原文证据
-- shot_beats: 覆盖每条 main_events，按原文顺序排列；每个节拍只承载一条主要信息，标出信息目的和证据
+- shot_beats: 覆盖每条 main_events，按原文顺序排列；每个节拍只承载一条主要信息，标出信息目的和证据；
+  末尾必须标**载体**（v6.138 事件履约契约）：`载体：台词k` = 由 `dialogue_lines` 第 k 句承载
+  （k 按 dialogue_lines 顺序编号）；`载体：画面` = 由画面动作承载、不占台词时长。
+  一个节拍只能有一个载体；之后重选台词增删时，受影响节拍的载体必须同步更新
 - time_budget: 只写大致的分配倾向（**不必**报精确秒数——时长由代码按 dialogue_lines 逐句估算，
   自报秒数不参与判定）；对白与**同时发生**的画面动作不要重复计时
 - emotional_arc: 一句话概括情绪走向
@@ -102,10 +105,50 @@ _PLAN_BUDGET_FEEDBACK = """
 3. **其余字段必须与上一版完全一致**（`main_events` / `required_facts` / `causal_chain` /
    `character_motives` / `shot_beats` / `climax` / `end_hook` / `key_scenes` / `characters`）：
    必保留事实一句都不能删，事件顺序不许改——**改了就会被拒收，这一轮白费**；
+   唯一例外：`shot_beats` 的「｜载体：…」标注**必须**随台词增删同步更新
+   （被删台词承载的节拍改标保留台词或「载体：画面」；节拍本体不许动）；
 4. 顺带更新 `omittable`（可省略内容）与 `time_budget`（倾向性文字，不必报精确秒数）。
+"""
 
-## 上一版计划（除台词/可省略/时间倾向外，请原样返回）
-{plan_json}
+_PLAN_REPRESENTABILITY_FEEDBACK = """
+# ★ 重选本集台词（单镜可表示性反馈；本轮**只改台词**）
+
+以下 {n} 句选用台词**无法装进单镜 {cap:.0f} 秒**，且句内没有可用的**句末边界**
+（。！？…；）切成 ≤4 段、每段 ≤ 上限——单镜装不下、按其他标点拆开会把一句台词
+拆成句中碎片，下游硬门一律拒收（判据与拆分器/台词完整性门同源）：
+
+{lines_block}
+
+请重新选择原文台词，硬边界如下：
+
+1. **只从原文逐字摘**，不改写、不润色、不自造——替换台词同样必须逐字来自原文；
+2. **必保留事实与事件顺序不得静默删除**：被点名台词承载的事实（例如某人传话的
+   内容）必须改由其他**原文**台词或镜头节拍承载；事件顺序保持不变；
+3. **多句**超长台词（句内有句号/叹号/省略号分界的）不用换——按句末切分装得下
+   会自动通过；只有**单句超长**（句内只有逗号）的台词必须换成更短的原文台词；
+4. 若原文确实**没有**能承载这些事实的更短台词，请在 `time_budget` 里**明确写明
+   「台词不可表示：无合适替代」**——代码会据此显式停止，把内容取舍交还用户，
+   而不是硬拆；
+5. **其余字段必须与上一版完全一致**（必保留事实/事件顺序改动会被拒收，这一轮白费）；
+   唯一例外：`shot_beats` 的「｜载体：…」标注必须随台词增删同步更新（节拍本体不许动）。
+"""
+
+_PLAN_CARRIER_FEEDBACK = """
+# ★ 更新节拍载体标注（载体反馈；本轮**只改台词与节拍的载体标注**）
+
+以下 {n} 个节拍的载体标注指向的台词**不在当前选用台词里**（v6.138 事件履约契约）：
+
+{lines_block}
+
+节拍没有承载，成片就拍不出这件事（审计 MISSING_PLOT/MISSING_ACTION 的直接来源）。
+请修复：
+
+1. 把承载该节拍的**原文**台词重新选回 `dialogue_lines`（逐字，不改写）；
+2. 或把该节拍的载体标注改为仍保留的台词（`载体：台词k`，k 按选用台词顺序编号）；
+3. 或改标 `载体：画面`（由画面动作承载，不占台词时长）；
+4. **节拍内容与顺序不得改动**——只许改「｜载体：…」标注，改了节拍本体整轮白费；
+5. 若确实既无台词也无画面可承载，请在 `time_budget` 明确写「载体缺失：无合适承载」
+   ——代码会据此显式停止，把内容取舍交还用户。
 """
 
 
@@ -128,17 +171,47 @@ def _parse_outline_json(raw: str) -> dict | None:
 
 
 def _budget_feedback_block(rep: dict, plan: dict) -> str:
-    """把**代码算出**的数字反馈给规划阶段（数字全部来自 `evaluate_plan`，不含自报值）."""
+    """把**代码算出**的数字反馈给规划阶段（数字全部来自 `evaluate_plan`，不含自报值）.
+
+    v6.136：反馈按实际失败类型拼装——**超预算**块只在对白下界真超上限时给出
+    （否则"本集装不下"是假命题）；**单镜可表示性**块在存在不可表示台词时给出
+    （A 判据，点名台词 + 必保留事实/事件顺序硬边界）。
+    **完整旧计划附在尾部**（六审 P1-1）：反馈要求"其余字段原样返回"，模型必须
+    看得见旧字段——可表示性单独触发时（预算内）预算块不渲染，旧计划若只在
+    预算块里，重选会因核心字段对不上被 `_plan_core_preserved` 拒收。
+    """
     _b = rep.get("budget") or {}
-    return _PLAN_BUDGET_FEEDBACK.format(
-        lines=rep.get("dialogue_lines", 0),
-        dialogue_sec=float(rep.get("dialogue_sec") or 0.0),
-        bmin=float(_b.get("min") or 0.0), bmax=float(_b.get("max") or 0.0),
-        tmin=_TARGET_MIN_SEC, tmax=_TARGET_MAX_SEC,
-        beats=rep.get("beats", 0),
-        floor=float(rep.get("beats_floor_sec") or 0.0),
-        plan_json=json.dumps(plan, ensure_ascii=False, indent=2),
-    )
+    block = ""
+    _lower = rep.get("lower_bound_sec")
+    if _lower is not None and float(_lower) > float(_b.get("max") or 0.0):
+        block += _PLAN_BUDGET_FEEDBACK.format(
+            lines=rep.get("dialogue_lines", 0),
+            dialogue_sec=float(rep.get("dialogue_sec") or 0.0),
+            bmin=float(_b.get("min") or 0.0), bmax=float(_b.get("max") or 0.0),
+            tmin=_TARGET_MIN_SEC, tmax=_TARGET_MAX_SEC,
+            beats=rep.get("beats", 0),
+            floor=float(rep.get("beats_floor_sec") or 0.0),
+        )
+    _unrep = rep.get("dialogue_unrepresentable") or []
+    if _unrep:
+        from step01_script_gen.timecode import active_shot_cap
+        _lines_block = "\n".join(
+            "- 「%s」（估时 %.1f 秒；%s）"
+            % (str(u.get("line") or "")[:60], float(u.get("est_sec") or 0.0),
+               u.get("reason") or "")
+            for u in _unrep)
+        block += _PLAN_REPRESENTABILITY_FEEDBACK.format(
+            n=len(_unrep), cap=active_shot_cap(), lines_block=_lines_block)
+    # v6.138（九审根因 1）：节拍载体悬空反馈——重选删承载台词必须同步更新载体标注
+    _dangling = rep.get("beat_carrier_dangling") or []
+    if _dangling:
+        block += _PLAN_CARRIER_FEEDBACK.format(
+            n=len(_dangling),
+            lines_block="\n".join("- %s" % d for d in _dangling))
+    if block:
+        block += ("\n## 上一版计划（除台词/可省略/时间倾向外，请原样返回）\n"
+                  + json.dumps(plan, ensure_ascii=False, indent=2))
+    return block
 
 
 def _plan_core_preserved(old: dict, new: dict) -> str:
@@ -146,12 +219,22 @@ def _plan_core_preserved(old: dict, new: dict) -> str:
 
     "保持必保留事实和事件顺序"是用户给这轮重选的硬边界——模型改写这些字段就**不接受**
     （宁可用首版计划去报告需拆集，也不接受一份事实被悄悄改过的计划）。
+
+    v6.138 例外：`shot_beats` 允许**纯载体标注**差异——重选增删台词时「｜载体：…」
+    标注必须随行更新（九审根因 1），但节拍本体（去载体段后）必须逐字一致。
     """
     for key in sorted(set(old or {}) | set(new or {})):
         if key in _REPLAN_FREE_FIELDS or key.startswith("prop_state") or key == "plan_replan":
             continue
-        if (old or {}).get(key) != (new or {}).get(key):
-            return key
+        if (old or {}).get(key) == (new or {}).get(key):
+            continue
+        if key == "shot_beats":
+            from step01_script_gen.plan_feasibility import _strip_beat_carrier
+            _old = [_strip_beat_carrier(x) for x in ((old or {}).get(key) or [])]
+            _new = [_strip_beat_carrier(x) for x in ((new or {}).get(key) or [])]
+            if _old == _new:
+                continue
+        return key
     return ""
 
 
@@ -191,6 +274,35 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
     return new_plan, ""
 
 
+def _rotate_outline_cache_on_regen(cache_path, new_key, new_outline) -> None:
+    """重生成覆盖大纲缓存前：旧计划留 `.bak`（单文件轮换）+ 选材退化告警（v6.138.1）.
+
+    缓存键含 outline prompt——**规则演进必然整批失效重生成**，而重新抽样可能显著
+    变差（2026-09-26 实证：6 句→2 句，成片 38s 撞 duration_budget 硬门；且计划一换，
+    全部历史快照因选材门失格，跨 run 收敛棘轮归零）。留档让退化可恢复；是否采用
+    新计划仍由运行者裁决——**内容取舍不代决**，这里只保证可见。
+    """
+    from step01_script_gen.plan_feasibility import plan_dialogue_lines
+    try:
+        old = json.loads(Path(cache_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return
+    if not isinstance(old, dict) or old.get("source_hash") == new_key:
+        return
+    old_outline = old.get("outline") if isinstance(old.get("outline"), dict) else None
+    _old_n = len(plan_dialogue_lines(old_outline))
+    _new_n = len(plan_dialogue_lines(new_outline))
+    try:
+        Path(str(cache_path) + ".bak").write_text(
+            json.dumps(old, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    if _new_n < _old_n:
+        print(f"[WARN] 大纲缓存因规则变化重生成：选用台词 {_old_n} 句 → {_new_n} 句"
+              f"（新计划选材变少，成片时长下界随之下降；旧计划已留档 {Path(str(cache_path) + '.bak').name}，"
+              "如需恢复请回拷并核对缓存键）")
+
+
 def enforce_budget_by_replanning(plan, novel_text, *, model=None,
                                  base_prompt=None, system_prompt=None) -> tuple:
     """规划阶段出口：代码验算 → 超预算就**带数字重选一次** → 再验算（`_REPLAN_MAX_ROUNDS`）.
@@ -217,8 +329,10 @@ def enforce_budget_by_replanning(plan, novel_text, *, model=None,
     if isinstance(_prev, dict) and _force_replan():
         print("[PLAN] %s=1 → 忽略已记录的重选结论（%s），重跑这一轮"
               % (FORCE_REPLAN_ENV, _prev.get("result")))
-    print("[PLAN] 首版计划超预算（对白 %.2fs / %d 句，上限 %.0fs）→ 带数字反馈重选台词（%d 轮）"
-          % (rep["dialogue_sec"], rep["dialogue_lines"], rep["budget"]["max"], _REPLAN_MAX_ROUNDS))
+    print("[PLAN] 首版计划不可行（对白 %.2fs / %d 句，上限 %.0fs；单镜不可表示 %d 句）"
+          "→ 带数字反馈重选台词（%d 轮）"
+          % (rep["dialogue_sec"], rep["dialogue_lines"], rep["budget"]["max"],
+             len(rep.get("dialogue_unrepresentable") or []), _REPLAN_MAX_ROUNDS))
     info = {"rounds": _REPLAN_MAX_ROUNDS,
             "before_dialogue_sec": rep["dialogue_sec"], "before_lines": rep["dialogue_lines"]}
     new_plan, _why = replan_dialogue_within_budget(plan, rep, novel_text, model=model,
@@ -235,10 +349,13 @@ def enforce_budget_by_replanning(plan, novel_text, *, model=None,
     rep2 = evaluate_plan(new_plan, novel_text=novel_text)
     info.update({"result": rep2["verdict"], "after_dialogue_sec": rep2["dialogue_sec"],
                  "after_lines": rep2["dialogue_lines"],
-                 "rejected": len(rep2["dialogue_rejected"])})
+                 "rejected": len(rep2["dialogue_rejected"]),
+                 "after_unrepresentable": len(rep2.get("dialogue_unrepresentable") or [])})
     if rep2["verdict"] == "infeasible":
-        print("[PLAN] 重选后仍超预算（对白 %.2fs / %d 句 > %.0fs）→ 由生成前的门报告「需拆集」"
-              % (rep2["dialogue_sec"], rep2["dialogue_lines"], rep2["budget"]["max"]))
+        print("[PLAN] 重选后仍不可行（对白 %.2fs / %d 句 > %.0fs；单镜不可表示 %d 句）"
+              "→ 由生成前的门报告「需拆集／无合适替代」"
+              % (rep2["dialogue_sec"], rep2["dialogue_lines"], rep2["budget"]["max"],
+                 len(rep2.get("dialogue_unrepresentable") or [])))
         return new_plan, info
     print("[PLAN] 重选后进入预算（对白 %.2fs → %.2fs；%d 句 → %d 句）"
           % (info["before_dialogue_sec"], info["after_dialogue_sec"],
@@ -336,6 +453,9 @@ def generate_outline(novel_text: str, model: str | None = None,
     # 重选过就回写缓存（键不变）——下次直接复用选好的计划，不重复烧这一轮
     if cache_path is not None and cache_key is not None and not (_from_cache and not _replan):
         try:
+            # v6.138.1：键变化 = 规则演进导致的重生成——覆盖前旧计划留 .bak 并在
+            # 选材退化时告警（2026-09-26 实证：6 句→2 句的坏抽样会连锁打穿下游）
+            _rotate_outline_cache_on_regen(cache_path, cache_key, outline)
             from shared.json_io import atomic_dump_json
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             atomic_dump_json(cache_path, {"source_hash": cache_key, "outline": outline},

@@ -79,6 +79,8 @@ RULE-28 **对话纯净**：narration_segment 只写人物对话原文，禁止�
 RULE-29 **钩子首帧 pre-state**：hook.ff_desc 必须是"未发生前"画面，不能从高潮中段起。
 RULE-30 **core_keywords 命中率 ≥60%**（5 个关键词至少 3 个在 prompt/ff_desc/lf_desc/motion_desc 出现）。
 
+RULE-31 **plan_refs 事件履约声明**：user prompt 末尾「生成执行契约」把镜头节拍编号为 B1..Bn、选用台词编号为 D1..Dm；每镜输出 `"plan_refs": {"beats": [B…], "lines": [D…]}`（本镜承载哪些节拍/台词）。**每个节拍都必须被至少一镜承载**；声明顺序不得回退——后位节拍/台词不得在前位完成前呈现（供述/传话未完不得提前出现尖叫、掌掴、离场等后果画面）；纯过渡镜写空数组。
+
 </rules>
 
 <machine_lexicon>
@@ -128,7 +130,7 @@ stage 枚举：pre / approach / climax / react / exit / after
    - 空镜连续不超过 2 镜
    - **时长预算**：按 RULE-8 目标 70-80s 反推——先估镜数 N，每镜均值 = 75s ÷ N（如 N=15 → 均值 5.0s），再按 RULE-9 按镜头类型拉开（{{DUR_RANGES}}），禁止全镜同值。
 
-8. **写每镜字段**（严格按 schema 顺序）：scene → location → main_subject → prompt → ff_desc → lf_desc → motion_desc → keyframes → frame_layouts → narration_segment → subtitle → core_keywords → fx_effect → clip_transition → context_bridge → color_tone → audio_cue → variation_type。
+8. **写每镜字段**（严格按 schema 顺序）：scene → location → main_subject → prompt → ff_desc → lf_desc → motion_desc → keyframes → frame_layouts → narration_segment → subtitle → core_keywords → fx_effect → clip_transition → context_bridge → color_tone → audio_cue → plan_refs（RULE-31）→ variation_type。
 
 9. **kf 自检**：每写完一镜 kf 数组，自检 0.05 ≤ t_sec < duration_sec + stage 枚举 + desc 自完备。
 

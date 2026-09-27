@@ -23,7 +23,7 @@ from datetime import datetime
 from shared.utils.json_repair import safe_parse_json_object, _fix_common_json_errors
 import scene_compliance
 import storyboard_refs
-from shared.paths import chapter_dir
+from shared.paths import step01_log_file
 from shared.constants import DEFAULT_VIDEO_DURATION_FALLBACK
 from step01_script_gen.climax_words import CLIMAX_WORDS_ARC
 from step01_script_gen.gap_analysis import normalize_core_keywords
@@ -261,7 +261,7 @@ _LIGHT_POSITION_DESC = {
 def _get_logger():
     global _logger
     if _logger is None:
-        _logger = get_logger(chapter_dir() / "step01.log", console_level="INFO")
+        _logger = get_logger(step01_log_file(), console_level="INFO")
     return _logger
 
 
@@ -695,11 +695,12 @@ def _check_grounding(shot: dict, novel_text: str) -> bool:
     # → 当前"杀…出人命啦"）。_check_grounding 应当容忍这些合规替换，不报误报。
     # 这里不直接调用 sanitize（避免破坏 narration 字段本身），而是把合规词对做一次
     # 双向归一化：narration 里的"出人命"还原为"杀人"以跟原文对齐。
+    # 2026-09-26（审核）：还原逻辑抽为 `shared.content_safety.
+    # restore_narration_substitutions` 共享——台词完整性门（plan_feasibility）需要
+    # 同一语义，各抄一份必然漂移。
     try:
-        from shared.content_safety import NARRATION_SUBSTITUTIONS as _NSR
-        for _orig, _safe in _NSR.items():
-            if _safe in narration_clean and _orig not in narration_clean:
-                narration_clean = narration_clean.replace(_safe, _orig)
+        from shared.content_safety import restore_narration_substitutions as _restore
+        narration_clean = _restore(narration_clean)
     except Exception:
         pass
     if len(narration_clean) < 5:

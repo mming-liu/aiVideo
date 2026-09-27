@@ -48,6 +48,7 @@ OUTLINE_ENABLED = os.getenv("OUTLINE_ENABLED", "1").strip() == "1"
 from shared.paths import (
     chapter_dir,
     script_file,
+    step01_log_file,
     audio_dir,
     vimax_working_dir,
     vimax_shots_dir,
@@ -68,7 +69,7 @@ SCRIPT_FILE = OUTPUT_FILE
 
 # 模块级日志
 from shared.tee_logger import get_logger
-_logger = get_logger(CHAPTER_DIR / "step01.log", console_level="INFO")
+_logger = get_logger(step01_log_file(), console_level="INFO")
 
 # v6.59 (2026-09-04)：检测 shell 环境变量是否覆盖 .env.content 的 PROVIDER 设置。
 # 不阻断，仅 WARN 提示。详细设计见 shared/env_guard.py 顶部。
@@ -1080,7 +1081,10 @@ def _narration_body(narration: str) -> str:
     text = str(narration or "")
     if not text:
         return ""
-    body = re.split(r"[:：]", text, maxsplit=1)[-1]
+    # v6.138（九审 P1-3）：与台词门/核验层同一说话人前缀判据（单一事实源）——
+    # 冒号前段含子句标点（"且慢，我告诉你："）不是前缀，不得从比对正文里丢掉
+    from step01_script_gen.plan_feasibility import _split_speaker_prefix as _ssp
+    body = _ssp(text)[1]
     body = body.replace(" ", "")
     body = re.sub(r"\.{2,}|…{1,}", "§", body)
     for ch in _NARRATION_STRIP_PUNCT:
@@ -1199,108 +1203,22 @@ def _split_has_duplicate_pair(sub_shots: list) -> tuple:
     return True, ""
 
 
-_CUT_DELIMS = "，。！？…；、)）】」』"
-
-
-def _narration_parts(narr: str) -> tuple:
-    """把 `narration_segment` 拆成 (说话人前缀, 台词正文)（正文保留原标点）."""
-    text = str(narr or "")
-    m = re.split(r"[:：]", text, maxsplit=1)
-    if len(m) == 2:
-        return m[0] + "：", m[1]
-    return "", text
-
-
-def _cut_bounds(body: str) -> list:
-    """可切位置 = 标点**之后**（切成半句话不可读，也让原文 5 字块校验更易失配）."""
-    return [i + 1 for i, ch in enumerate(body)
-            if ch in _CUT_DELIMS and 0 < i + 1 < len(body)]
-
-
-def _segments_at(body: str, cuts: list) -> list:
-    """按切点把正文切成 `len(cuts)+1` 段（保留原标点）."""
-    out, prev = [], 0
-    for c in cuts:
-        out.append(body[prev:c])
-        prev = c
-    out.append(body[prev:])
-    return out
-
-
 def _deterministic_narration_cuts(narr: str, cap: float, max_parts: int = 4):
-    """按标点边界把一条台词确定性地切成 N 段，使**每段估时 ≤ cap**.
+    """按**句末合法切点**把一条台词确定性地切成 N 段，使**每段估时 ≤ cap**（B：统一判据）.
 
-    返回分段后的 `narration_segment` 字符串列表（各带原说话人前缀）；
-    **需求段数 > `max_parts`** → None（交整脚本 regen）。
+    2026-09-26 用户决策 A+B：切点判据与台词完整性门/规划层可表示性检查**单源**
+    （`plan_feasibility.find_legal_split`，见其 docstring）——只认句末边界
+    （。！？…；）；**逗号/顿号切点与等字长兜底废除**：句中碎片正是终稿台词门
+    `cross_shot_split` 判破损、审计报"同一句被截成两半"的形态，"拆分成功、终稿
+    失败"的直接机制（09-26 三次实跑复现）。无合法切法 → None——调用方
+    `_scoped_split_one` 据此在**调用拆分模型之前**停下（原 v6.92 的"标点不足
+    交整脚本 regen"路径收窄为"无句末合法切点"）。
 
-    无标点可切时退化为**等字长切**（刻意保留的兜底）：切在词中间读起来略生硬，
-    但拒绝切分 = 该镜保持超载 = 一条必然的 hard 阻塞。中文长句极少完全无标点。
-
-    v6.92：切点不交给模型。见模块注释：切在哪是 `(台词文本, 上限)` 的纯函数，
-    交给模型只会得到「不均衡 / 只回一段 / 补字」三种失败（实测采纳率 1/4-2/4）。
+    v6.92 历史注（仍然成立）：切点不交给模型——模型切分实测采纳率 1/4-2/4；
+    本函数保持确定性纯函数，只是合法切点集合收窄为句末。
     """
-    import itertools
-    import math
-
-    from step01_script_gen.timecode import _estimate_duration
-
-    prefix, body = _narration_parts(narr)
-    if not body:
-        return None
-    need = _estimate_duration(str(narr or ""))
-    min_parts = max(2, int(math.ceil(need / cap - 1e-9)))
-    bounds = _cut_bounds(body)
-
-    def _ok(cuts) -> list:
-        segs = _segments_at(body, list(cuts))
-        texts = [prefix + s for s in segs if s]
-        if len(texts) < 2:
-            return []
-        ests = [_estimate_duration(t) for t in texts]
-        if all(e <= cap + 0.01 for e in ests):
-            return ests
-        return []
-
-    for n in range(min_parts, max_parts + 1):
-        if n - 1 == 0:
-            continue
-        if len(bounds) < n - 1:
-            break                      # 标点不够切这么多段
-        # v6.92 修：**不能只试「均衡」切点**。
-        #
-        # 实测（2026-09-22 21:08，20.2s 那条台词）：可用标点位置不均匀，均衡解恰好
-        # 把中间一段撑到 8.7s（切点 [27,57] → 27/30/27 字），于是判定「无法切分」
-        # 而交回整脚本 regen——**非均衡解本来是合格的**。
-        # 改为在标点位置里**穷举**，以「先全部 ≤ 上限、再最小化最长段」为序选解。
-        cand = bounds
-        if len(cand) > 16:             # 标点很多时按理想位置取窗口，避免组合爆炸
-            ideal = [len(body) * k / n for k in range(1, n)]
-            near = set()
-            for t in ideal:
-                near.update(sorted(cand, key=lambda b: abs(b - t))[:5])
-            cand = sorted(near)
-        best = None                    # (最长段估时, 切点)
-        for cuts in itertools.combinations(cand, n - 1):
-            ests = _ok(cuts)
-            if not ests:
-                continue
-            m_ = max(ests)
-            if best is None or m_ < best[0]:
-                best = (m_, list(cuts))
-        if best is not None:
-            return [prefix + s for s in _segments_at(body, best[1])]
-    # 标点解穷举不出合格切分 → **等字长兜底**（刻意保留）。
-    # 切在词中间读起来略生硬，但拒绝切分 = 该镜保持超载 = 一条必然的 hard 阻塞；
-    # 中文长句极少完全无标点，所以这条兜底实际很少触发。
-    for n in range(min_parts, max_parts + 1):
-        cuts = [int(round(len(body) * k / n)) for k in range(1, n)]
-        cuts = sorted(set(c for c in cuts if 0 < c < len(body)))
-        if len(cuts) != n - 1:
-            continue
-        ests = _ok(cuts)
-        if ests:
-            return [prefix + s for s in _segments_at(body, cuts)]
-    return None
+    from step01_script_gen.plan_feasibility import find_legal_split
+    return find_legal_split(narr, cap, max_parts=max_parts)
 
 
 def _split_source_window(shot: dict, novel_text: str, span: int = 400) -> str:
@@ -1407,8 +1325,11 @@ def _scoped_split_one(shot: dict, novel_text: str, *, cap: float, fps: float,
     # v6.92：**切点由代码确定性计算**，模型只撰写视觉字段。
     segments = _deterministic_narration_cuts(shot.get("narration_segment"), cap)
     if not segments:
+        # v6.136 B：无**句末合法切点**（逗号/等字长兜底已废除，与台词完整性门同判据）
+        # ——在调用拆分模型之前停下，交整脚本 regen / 规划层处理
         _logger.warn(
-            "[SPLIT] 镜头%s 无法确定性切分（标点不足或需求段数超过 4）——交整脚本 regen"
+            "[SPLIT] 镜头%s 无句末合法切点（单句超长且句内只有逗号）——"
+            "不调用拆分模型，交整脚本 regen／规划层重选"
             % idx
         )
         return None
@@ -1490,6 +1411,11 @@ def _scoped_split_one(shot: dict, novel_text: str, *, cap: float, fps: float,
         for k, sub in enumerate(subs):
             if base is not None:
                 sub["index"] = round(base + (k + 1) / (len(subs) + 1), 3)
+            # v6.138：事件履约声明随拆分继承——子镜承载与父镜相同的节拍/台词（台词
+            # 已按段逐字校验，B/D 序列非降由「同值重复」构造成立，覆盖不变）
+            if isinstance(shot.get("plan_refs"), dict):
+                import copy as _copy_mod
+                sub["plan_refs"] = _copy_mod.deepcopy(shot["plan_refs"])
             # v6.95（②）：时长由**内容需求**派生，但**必须同时覆盖该子镜自己的最大
             # KF 时刻**——帧写在哪个时刻，镜头就得长到能拍到它（同发现 18 的钩子）。
             # 只按内容需求派生的后果：模型写的 KF 落在镜长之外 → `kf_time_out_of_shot`。
@@ -2174,7 +2100,11 @@ def _write_step01_quality_gate(script: dict, novel_text: str) -> dict:
 # 「final audit 之后禁止任何语义写入」由两件事保证：① 提交点之后不再调用任何
 # 修复/约束/post_fix；② audit 前后各算一次 revision，不等则本轮审计作废。
 STEP01_AUDIT_SCOPE = "final_after_deterministic_fixes"
-STEP01_AUDIT_REPAIR_MAX_ROUNDS = 2      # 总计划 §1.1：最多 2 个修复轮
+# v6.137（2026-09-26 用户决策）：2 → 4。§1.1 定 2 轮时修复轮还不可靠（零改善/
+# new_blocking 死路一轮即弃）；v6.137 之后每轮都有验收闸兜底且实测连续净改善
+# （resolved=4/6、new=0），2 轮不够把 24 条 blocking 收敛到 0（实测 24→21→13）。
+# 4 轮 = 修复调用 ≤4 次 + 每轮 1 次新审计（脚本已变不可复用），成本约 +5 分钟/次。
+STEP01_AUDIT_REPAIR_MAX_ROUNDS = 4
 
 
 def _step01_run_id() -> str:
@@ -2748,11 +2678,70 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
     audit = None
     quality = None
     blocking: list = []
+    # v6.135（工作包 sunny-kindling-wilkinson，审核约束③）：提交层**二次校验**（辅门，
+    # 防单候选/缓存路径绕过候选层门）。位置契约：hook QC、finalize 等**所有可能改动
+    # narration 的步骤之后**、最终提交判定之前。破损 ⇒ 不进审计/修复轮（修复按锁定
+    # 契约不可修 `narration_segment`，09-26 02:30 实损：locked_changed 死锁），
+    # BLOCK 原因记 `dialogue_truncated`（与 locked_changed/零改善区分，决策点 2 口径：
+    # 这是生成稿完整性问题，不触发计划重选语义）。
+    _dlg_skip_audit = False
+    # v6.135：门只核「稿件 vs 本轮计划的选材台词」。**计划覆盖面（三审 P2-1 更正）**：
+    # 生成/快照两入口的计划经 `check_plan_before_generation` 保证 dialogue_lines 非空；
+    # **缓存入口的旧缓存可能没有 chapter_outline——此时门不启用（兼容取舍，显式记录），
+    # 这类稿件不受台词门保护**，不得引申为"三入口均受硬门保护"。要给旧缓存补保护，
+    # 需先给缓存路径接计划来源（另一工作包）。
+    from step01_script_gen.plan_feasibility import (check_script_dialogue_integrity,
+                                                    plan_dialogue_lines)
+    _dlg_plan_lines = plan_dialogue_lines(plan) if plan else []
+    _dlg_ok, _dlg_broken = True, []
+    if _dlg_plan_lines:
+        try:
+            _dlg_ok, _dlg_broken = check_script_dialogue_integrity(script, plan)
+        except Exception as _e:
+            # v6.135 三审 P1-1：门自身异常 = **无法证明台词完整** → fail-closed BLOCK，
+            # 不放行（缓存路径只靠本门复核，放行 = 门失效时裸奔进审计/提交）。
+            _dlg_ok = False
+            _dlg_broken = [{"line": "", "reason": "gate_error: %s" % _e}]
+            _logger.error(f"[COMMIT] 台词完整性门异常，fail-closed BLOCK：{_e}")
+    if not _dlg_ok:
+        _dlg_total = len(_dlg_plan_lines)
+        _gate_error = bool(_dlg_broken) and str(
+            _dlg_broken[0].get("reason") or "").startswith("gate_error")
+        # v6.135 四审 P2：门自身异常 ≠ 稿件截断——结构化消费者按 repair_outcome/
+        # blocking[0].code 统计，检查故障不得计入 dialogue_truncated（把门故障算成
+        # 稿件问题会污染"截断率"口径）。独立代码 dialogue_gate_error，detail 已区分。
+        summary["repair_outcome"] = "dialogue_gate_error" if _gate_error \
+            else "dialogue_truncated"
+        summary["detail"] = (
+            ("台词完整性硬门自身异常（fail-closed 不放行）：%s"
+             % str(_dlg_broken[0].get("reason") or "")[:200])
+            if _gate_error else
+            "台词完整性硬门：%d/%d 句破损（%s），需在候选层重取——"
+            "提交前修复按锁定契约不可修 narration_segment（09-26 locked_changed 死锁）"
+            % (len(_dlg_broken), _dlg_total,
+               "；".join("%s（%s）" % (b.get("line", "")[:30], b.get("reason"))
+                         for b in _dlg_broken[:3])))
+        _logger.error(f"[COMMIT] x {summary['detail']}")
+        _console(f"  [COMMIT] 台词完整性硬门 BLOCK（{len(_dlg_broken)}/{_dlg_total} 句破损）")
+        blocking = [{"code": summary["repair_outcome"], "severity": "blocking",
+                     "message": summary["detail"]}]
+        _dlg_skip_audit = True
     # `audit_ok` 必须**显式**记录：只看 `audit` 是否为 None 是 fail-open ——
     # 审计「调用失败」时 payload 照样是 dict（status=request_failed），
     # `if blocking or not audit` 会放行到提交。调用失败 **不等于** 0 issue。
     audit_ok = False
-    for _attempt in range(STEP01_AUDIT_REPAIR_MAX_ROUNDS + 1):
+    # v6.135：台词完整性门已判破损时**零轮循环**——直接落到 BLOCK 路径
+    # （blocking 已带 dialogue_truncated；summary["detail"] 已写）。
+    _retry_state: dict = {}   # v6.137：修复轮 new_blocking 拒绝后的跨 attempt 重试状态
+    # v6.139（修复 2，九审根因 2）：跨 attempt 的「已尝试未核实」审计问题身份集
+    # ——触达兜底对同一身份只记一次账； `(shot, family)` 归并措辞漂移。
+    _audit_attempted: set = set()
+    _prev_audit_ids: set = set()   # 上一轮审计的身份集（跨轮比对：仍在/消失/新现）
+    # v6.140（修复 3，九审根因 3）：本 run **暂缓**的联动组成员——某轮零解决且
+    # 失败者是联动组时整组暂缓，剩余预算继续修其他目标；组问题留待提交门按
+    # BLOCK（不做半条修复）。止损从「全局停机」限定到「失败组」。
+    _deferred_targets: set = set()
+    for _attempt in range(0 if _dlg_skip_audit else STEP01_AUDIT_REPAIR_MAX_ROUNDS + 1):
         quality = _build_step01_quality_gate(script, novel_text)
         _timing_mark("commit_quality", status=quality.get("status"))
         _q_blocking = _quality_blocking_records(quality)
@@ -2790,6 +2779,24 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                len(_q_blocking),
                [(b.get("shot_id"), b.get("code")) for b in blocking[:5]])
         )
+        # v6.139（修复 2）：审计问题**跨轮身份比对**——按 (shot, family) 归并措辞
+        # 漂移（同一问题四轮四名是实测常态），跨轮追踪「具体哪些事件矛盾还在」，
+        # 不以审计条数判断收敛。
+        _audit_issue_recs = _audit_payload_to_issues(audit)
+        _now_ids = {_audit_issue_identity(i) for i in _audit_issue_recs
+                    if is_blocking(i)}
+        if _prev_audit_ids:
+            _still = _now_ids & _prev_audit_ids
+            _gone = _prev_audit_ids - _now_ids
+            _fresh = _now_ids - _prev_audit_ids
+            _logger.warn(
+                "[COMMIT] 审计身份比对（(镜头,族) 归并措辞漂移）：仍在 %s｜消失 %s｜"
+                "新现 %s%s"
+                % (sorted(_still) or "无", sorted(_gone) or "无", sorted(_fresh) or "无",
+                   "｜其中 %s 为已尝试未核实身份（触达兜底已停用）"
+                   % sorted(_fresh & _audit_attempted) if _fresh & _audit_attempted else "")
+            )
+        _prev_audit_ids = _now_ids
         if _attempt >= STEP01_AUDIT_REPAIR_MAX_ROUNDS:
             summary["detail"] = (
                 "达到 %d 个修复轮上限后仍有 %d 条 blocking"
@@ -2839,6 +2846,9 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             max_rounds=1,          # §1.1：提交点每一轮只发一次修复调用
             repair_diag=_repair_diag,
             block_reasons=_repair_block_reasons,
+            retry_state=_retry_state,
+            audit_attempted=_audit_attempted,
+            defer_targets=_deferred_targets,
         )
         # v6.119：修复事务诊断立刻落台账（不等提交结果）——BLOCK 路径正是最需要它
         # 的时候，而 BLOCK 时后续代码可能直接 break/return。
@@ -2862,6 +2872,16 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         # 思维链 token）→ 整份丢弃 → 稿件一个字没变 → 这里只报"零改善"，把调用失败说成了
         # 内容结论。现在按台账里的 `kind="call_failed"` 记录区分，并把原因写进 detail。
         if compute_script_revision(repaired) == _before_rev:
+            # v6.137：new_blocking 被拒 → 重试状态已导出（脚本回到基线，revision
+            # 与被审计稿一致 ⇒ 下一轮审计走 _reusable 复用，零审计调用）。只在
+            # 下一次 attempt 仍属修复预算（§1.1 最多 2 轮）时续跑。
+            if (_retry_state.get("feedback")
+                    and _attempt + 1 < STEP01_AUDIT_REPAIR_MAX_ROUNDS):
+                _logger.warn(
+                    "[COMMIT] 修复轮被拒（new_blocking）但带反馈重试待跑"
+                    "（剔除 %s）→ 下一轮继续"
+                    % (_retry_state.get("excluded"),))
+                continue
             _call_failed = [r for r in _repair_diag if r.get("kind") == "call_failed"]
             # v6.133（2026-09-26 复核补口）：**"响应不可用"与"没改动稿件"也要分开**。
             # API 调用成功但补丁 JSON 解析失败 / envelope 结构无效 / 没返回替换 /
@@ -2889,6 +2909,37 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                 # 记录）；能取到上一轮事务时把它的结论一并写出，便于分辨"改完被回滚"
                 # 与"根本没动"。
                 _tx = [r for r in _repair_diag if "accepted" in r]
+                # v6.140（修复 3，九审根因 3）：零解决发生在**真联动组**（≥2 成员，
+                # `_linked_repair_groups` 会把单镜问题也折成单成员组）身上 → 止损
+                # 局部化——组整组暂缓（本 run 后续轮次不再选它），剩余预算继续修
+                # 其他目标；组的 blocking 保留，仍会照常 BLOCK（不做半条修复）。
+                # 只有当 blocking 里还存在**组外**目标时才值得续跑，否则与直接
+                # 停止等价、白烧一轮。
+                _grp_members: set = set()
+                if _tx:
+                    for _g in (_tx[-1].get("groups") or []):
+                        if len(_g) >= 2:
+                            _grp_members.update(_g)
+                _outside_exists = False
+                if _grp_members:
+                    from step01_script_gen.repair_fields import _target_id_of
+                    for _b in blocking:
+                        _tid = _target_id_of(str(_b.get("shot_id") or ""))
+                        if _tid and _tid not in _grp_members:
+                            _outside_exists = True
+                            break
+                if (_grp_members and _outside_exists
+                        and _attempt + 1 < STEP01_AUDIT_REPAIR_MAX_ROUNDS):
+                    _deferred_targets |= _grp_members
+                    _logger.warn(
+                        "[COMMIT] 联动组 %s 本轮零解决（reason=%s）→ 整组暂缓"
+                        "（本 run 后续轮次不再选它）；组外目标（如 %s）继续用剩余"
+                        "预算修复；组的 blocking 保留、仍会照常 BLOCK"
+                        % (sorted(_grp_members), _tx[-1].get("reason"),
+                           [b.get("shot_id") for b in blocking
+                            if _target_id_of(str(b.get("shot_id") or ""))
+                            not in _grp_members][:3]))
+                    continue
                 summary["repair_outcome"] = "no_progress"
                 if _tx:
                     summary["detail"] = (
@@ -4403,8 +4454,45 @@ def _blocking_record_keys(state: dict | None,
     return keys
 
 
+#: audit 问题代码 → **跨轮稳定 family**（v6.139，修复 2）。同一语义问题跨轮换名
+#: 是实测常态（FUTURE_STATE → FUTURE_STATE_IN_FF → result_shown_in_ff →
+#: FUTURE_STATE_IN_PRE_FRAME，2026-09-26 20:49 run 四轮四名）——按 (shot, family)
+#: 归并才能比对「同一问题」，这是触达兜底单次记账与跨轮身份比对的事实源。
+#: 匹配子串、大小写不敏感、具体在前；都不命中 → family = 代码本身（保守不归并）。
+_AUDIT_FAMILY_PATTERNS: tuple = (
+    ("future_state_in_frame", ("future_state", "result_shown", "_in_ff",
+                               "_in_pre", "premature", "state_in_")),
+    ("state_contradiction", ("contradict", "inconsistency", "mismatch",
+                             "conflict", "garbled", "state_chain")),
+    ("missing_beat", ("missing",)),
+    ("prop_state", ("prop",)),
+    ("text_truncation", ("truncat", "text_error", "garbled_text")),
+    ("layout_gap", ("layout", "person_missing", "frame_duty",
+                    "frame_role", "duty")),
+    ("temporal_window", ("time_window", "temporal", "kf_")),
+)
+
+
+def _audit_issue_identity(issue) -> tuple:
+    """audit 问题的**跨轮稳定身份** `(shot, family)`.
+
+    family 按代码子串归并（见 `_AUDIT_FAMILY_PATTERNS`）；`shot` 经
+    `_issue_shot_index` 归一（`shot5`/`5` 同身份）。措辞漂移不影响身份；
+    同镜同族的两个不同问题会被视为同一身份——对「兜底记账只记一次」这是
+    保守方向（少记功绩），可接受。
+    """
+    code = str(getattr(issue, "code", "") or "")
+    lower = code.lower()
+    family = code[len("model_audit_"):] if lower.startswith("model_audit_") else code
+    for fam, keys in _AUDIT_FAMILY_PATTERNS:
+        if any(k in lower for k in keys):
+            family = fam
+            break
+    return (str(_issue_shot_index(issue)), family)
+
+
 def _audit_issue_newly_resolved(script_after: dict, script_before: dict | None,
-                                issue: Issue) -> bool:
+                                issue: Issue, attempted: set | None = None) -> bool:
     """该 audit issue 是否**在本轮内新解决**（v6.102）.
 
     `_audit_issue_resolved()` 问的是「evidence **现在**还在不在稿子里」——它是
@@ -4436,6 +4524,13 @@ def _audit_issue_newly_resolved(script_after: dict, script_before: dict | None,
         # 兜底口径：改前不可判 → 用「本轮是否动过该 issue 点名的字段」计一次
         # 已解决。**这不是放宽最终门禁**：提交循环每轮都会重跑全量审计，
         # `blocking = 审计 ∪ 确定性` 必须为空才可能提交；改得不对下一轮会再次报出来。
+        # v6.139（修复 2，九审根因 2）：兜底记账**每个问题身份只记一次**——同一问题
+        # 靠「动过字段」反复通过验收 = 把尝试当进展（18:46 run 台账第 21 条
+        # accepted/resolved=0 实锤；触达证明尝试过，不证明语义已解决）。已尝试
+        # 未被后续审计核实的身份，第二轮起不再给兜底分——要么真解决（证据判据
+        # 不受影响），要么如实 no_target_resolved。
+        if attempted and _audit_issue_identity(issue) in attempted:
+            return False
         return _audit_issue_field_touched(script_before, script_after, issue)
     return _audit_issue_resolved(script_after, issue)
 
@@ -4701,7 +4796,8 @@ def _repair_acceptance_decision(before_state: dict | None,
                                 non_target_changed: list | None = None,
                                 locked_by_llm_changed: list | None = None,
                                 evidence_removed: list | None = None,
-                                kf_structural_violations: list | None = None) -> dict:
+                                kf_structural_violations: list | None = None,
+                                audit_attempted: set | None = None) -> dict:
     """Pure acceptance decision for one targeted-repair round.
 
     Required conditions:
@@ -4730,9 +4826,15 @@ def _repair_acceptance_decision(before_state: dict | None,
     audit_targets = [i for i in (audit_issues or []) if is_blocking(i)]
     # v6.102：audit 判据必须是「**本轮新**解决」——`_audit_issue_resolved` 本身幂等，
     # 拿它当轮内功绩会让空转轮次靠陈旧计数通过验收。
-    audit_field_touched = sum(
-        1 for i in audit_targets
-        if _audit_issue_newly_resolved(script_after, script_before, i))
+    # v6.139：`audit_attempted` = 本 run 已尝试过（触达兜底记过账）的问题身份集——
+    # 同一身份不再给兜底分（见 `_audit_issue_newly_resolved`）。
+    _touched_ids: list = []
+    audit_field_touched = 0
+    for i in audit_targets:
+        if _audit_issue_newly_resolved(script_after, script_before, i,
+                                       attempted=audit_attempted):
+            audit_field_touched += 1
+            _touched_ids.append(_audit_issue_identity(i))
     has_targets = bool(before_keys or audit_targets)
     _non_target = list(non_target_changed or [])
     # v6.87：LLM 对锁定字段的写入与「非目标镜头被改动」是**两个不同的闸门**，
@@ -4791,6 +4893,9 @@ def _repair_acceptance_decision(before_state: dict | None,
         # 不证明矛盾消失。真实解决数以**修复后的审计复核**为准，不得用它推导
         # 「每轮净修 N 条」（那会高估修复效率）。
         "audit_field_touched": audit_field_touched,
+        # v6.139：本轮靠兜底记账的问题身份（shot, family）——调用方据此维护
+        # 「已尝试未核实」集合，同一身份第二轮起不再给兜底分。
+        "audit_touched_ids": _touched_ids,
         "checker_failed": checker_failed,
         "locked_changed": bool(locked_changed),
         "non_target_changed": _non_target,
@@ -4932,17 +5037,24 @@ def _deterministic_targets(issues) -> set:
     return out
 
 
-def _pick_repair_targets(shot_items: dict, deterministic: set, limit: int) -> dict:
+def _pick_repair_targets(shot_items: dict, deterministic: set, limit: int,
+                         excluded=()) -> dict:
     """本轮修复目标（v6.107）：**带确定性阻塞的镜头优先**，其次按告警条数.
 
     实测（第二十九次重跑）：提交点第 1 轮有 1 条确定性阻塞 + 4 条审计问题，4 个名额
     按告警条数排序时两类打平 → 带确定性阻塞的那一镜掉出前 4 → 该轮**根本没尝试**
     它，`resolved=0` → 停止修复 → BLOCK。质量门计量的是确定性阻塞，名额分配必须
     先满足它，否则修复预算花在计量不到的目标上。
+
+    v6.138（九审 P1-2）：`excluded`（上轮肇事目标）在**排序取名额之前**过滤——
+    旧实现"取前 4 再剔除"会让被剔除目标的名额空转（后续目标补不上来）。反例：
+    5 个目标、前 2 个被排除 → 旧实现本轮只修 2 镜；本实现修满 4 镜。
     """
     import itertools as _it
+    _ex = set(excluded or ())
+    _pool = {k: v for k, v in shot_items.items() if k not in _ex}
     return dict(_it.islice(
-        sorted(shot_items.items(),
+        sorted(_pool.items(),
                key=lambda kv: (0 if kv[0] in deterministic else 1, -len(kv[1]))),
         limit))
 
@@ -5278,7 +5390,10 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                           audit_issues: list[Issue] | None = None,
                           max_rounds: int | None = None,
                           repair_diag: list | None = None,
-                          block_reasons: list | None = None) -> dict:
+                          block_reasons: list | None = None,
+                          retry_state: dict | None = None,
+                          audit_attempted: set | None = None,
+                          defer_targets: set | None = None) -> dict:
     """定向修复轮（v6.35，P18 闭环核心）。
 
     GAP 通过后仍有高价值告警 → 只重写告警镜头的相关字段，重新校验，收敛即停。
@@ -5324,7 +5439,29 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     # LLM 修复调用，与已确认的预算不符。提交路径显式传 `max_rounds=1`，由外层
     # 的两轮循环精确控制总预算；GAP 路径不传，保持原有的分批收敛能力。
     _rounds = max(1, int(max_rounds)) if max_rounds else _REPAIR_MAX_ROUNDS
+    # v6.137（2026-09-26 第七次实跑根因）：**new_blocking 型拒绝带反馈重试一轮**。
+    # 实测（run 20260926T083731）：4 个目标里只有 shot_4 的补丁引入新 blocking，
+    # 按目标回退后其余 3 个目标的补丁也未通过验收（resolved=0/字段触达=0）→
+    # `not _round_ok` 直接 return——修复阶段一轮即死，提交层"零改善 BLOCK"。
+    # 而拒绝原因本身可反馈：肇事目标已定位（剔除不再重试）、其余目标"上一轮
+    # 补丁没修掉"也该告诉 LLM。重试只做一次（_retry_used），其余拒绝原因
+    # （locked_changed/non_target_changed 等）保持原停止语义。
+    # v6.137：重试状态**跨调用**——提交路径每次只给 max_rounds=1，内层 continue
+    # 装不下第二轮；调用方（提交层）传同一个 dict 进来：入口预载上一轮的
+    # 「剔除目标+反馈」并清空（消费），出口在 new_blocking 终拒时回填新状态，
+    # 由调用方决定是否用下一次 attempt 续跑（预算仍由外层 §1.1 上限管住）。
+    _rejected_targets: set = set(retry_state.get("excluded") or [])         if retry_state else set()
+    _retry_feedback = str(retry_state.get("feedback") or "")         if retry_state else ""
+    _retry_used = bool(_retry_feedback)
+    if retry_state:
+        retry_state.clear()
+    # v6.140（修复 3，九审根因 3）：调用方传来的**本 run 暂缓目标**（失败联动组
+    # 的成员）与重试剔除集合同一过滤口径——暂缓的组不再被重发。⚠️ 合并集必须
+    # **每轮重算**（`_rejected_targets` 会在轮次间被重试门更新），不能在循环外
+    # 快照——2026-09-26 单测实锤：快照版让重试轮的剔除静默失效。
+    _defer = set(defer_targets or ())
     for _round in range(1, _rounds + 1):
+        _excluded_all = _rejected_targets | _defer   # v6.140：每轮重算（见上）
         # v6.101：轮数从 1 放到 3 之后，**每轮开始前**再查一次总预算。
         # 调用点（`main` 里 `REPAIR_ROUNDS_ENABLED and not _budget_exceeded()`）
         # 只保证「开始修的时候没超预算」，挡不住多轮叠加把单次 run 拖到 20 分钟
@@ -5337,7 +5474,10 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         _det_before_state = _copy_before_accept.deepcopy(per_shot_dict)
         # Merge same-model audit findings into the first repair round.  Audit is
         # auxiliary input; deterministic checks still decide final acceptance.
-        if _round == 1 and audit_issues:
+        # v6.137：**重试轮同样合并**——new_blocking 重试轮的遗留目标往往只有
+        # audit 类告警（确定性阻塞可能已在上一轮解决），不合并则 picked 为空、
+        # 重试轮空转返回。
+        if (_round == 1 or _retry_feedback) and audit_issues:
             audited = per_shot_dict.setdefault("shots", {})
             for _issue in audit_issues:
                 if not is_blocking(_issue):
@@ -5395,8 +5535,18 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 并行判据），质量门也是按它判 BLOCK。所以排序主键用「是否带确定性阻塞」，
         # 次键才用告警条数——否则修复轮会把预算花在计量不到的目标上。
         _det_targets = _deterministic_targets(per_shot_dict.get("issues"))
+        # v6.138（九审 P1-2）：上轮肇事目标在**取名额之前**过滤——剔除后空出的名额
+        # 由排序中的后续目标补齐，重试轮不再空转容量。v6.140：本 run 暂缓的联动组
+        # 成员同一过滤口径。
         picked = _pick_repair_targets(shot_items, _det_targets,
-                                      _REPAIR_MAX_SHOTS_PER_ROUND)
+                                      _REPAIR_MAX_SHOTS_PER_ROUND,
+                                      excluded=_excluded_all)
+        if _excluded_all:
+            _skipped = sorted(set(shot_items) & _excluded_all)
+            if _skipped:
+                _logger.warn("[REPAIR] 本轮剔除目标（肇事剔除 %s｜联动组暂缓 %s）"
+                             % (sorted(set(shot_items) & _rejected_targets),
+                                sorted(set(shot_items) & _defer)))
         if not picked:
             return script
         import copy as _copy_repair
@@ -5421,7 +5571,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 _pm = _pr3re.search(r"镜头\d+→(\d+)", _w)
                 if _pm:
                     _partner = f"shot_{_pm.group(1)}"
-                    if _partner in shot_items and _partner not in picked:
+                    # v6.138（九审 P1-2）/v6.140：补选不得越过肇事剔除与本 run 暂缓集
+                    if (_partner in shot_items and _partner not in picked
+                            and _partner not in _excluded_all):
                         picked[_partner] = shot_items[_partner]
 
         # 构建单镜修复 prompt：只带被选镜头原文 + 告警
@@ -5476,6 +5628,16 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 结构性失败（同一份审计每轮都会声明它，跳过=必然 BLOCK）。
         _exclusive_taken = False
         for _grp in sorted(_repair_groups, key=lambda g: (-len(g), sorted(g))):
+            # v6.138（九审 P1-2）：扩选入口同一排除约束——组内含上轮肇事目标 →
+            # 整组跳过（组是原子事务，剔除单个成员=半组修复；重发大概率复发）。
+            # v6.140：本 run 已暂缓的联动组同理（失败组不重发）。该组的阻塞留待
+            # 提交门按 BLOCK 处理，与其他组的修复互不拖累。
+            if _grp & _excluded_all:
+                _logger.warn(
+                    "[REPAIR] 联动组 %s 含剔除/暂缓目标 %s → 整组跳过"
+                    "（重发大概率复发；该组问题留待提交门）"
+                    % (sorted(_grp), sorted(_grp & _excluded_all)))
+                continue
             if len(_grp) > _REPAIR_MAX_SHOTS_PER_ROUND:
                 # **大组独占本轮名额**：组外目标（含其他联动组的成员）整批让位。
                 # 让位是**整组推迟**而不是拆分——其他组的成员要么全在组外、要么
@@ -5827,7 +5989,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "```json\n"
             f"{_json.dumps(_feedback_json, ensure_ascii=False, indent=1)}\n"
             "```\n\n"
-            + _top3_hint +
+            + _top3_hint + _retry_feedback +
             "## TASK（精简修复）\n"
             # v6.120（用户决定）：原文案要求「一条 warn 只动一处」，与成对授权
             # 直接冲突：一条 kf 时序矛盾的正解往往是 `kf.desc + kf.stage +
@@ -6013,6 +6175,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "**3 组正反例（按例做）**：致命伤保护=追加5字不删anchor；视线方位=加方位词不砍原意；"
             "lf_desc完整性=追加不砍到<40字（防「已没入水下」+「举刀正对」矛盾）。\n"
             "**同角色跨镜一致性**：服装色/状态/kf顺序跨镜一致（杨旭素白轻袍不中途换色，致命伤持续到所有伤后镜）。"
+            + _retry_feedback
             + "\n".join(parts)
         )
 
@@ -6334,16 +6497,27 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 locked_by_llm_changed=_locked_by_llm,
                 script_before=_round_before_script,
                 evidence_removed=_evidence_removed,
-                kf_structural_violations=_kf_struct)
+                kf_structural_violations=_kf_struct,
+                audit_attempted=audit_attempted)
             _logger.info(
                 "[REPAIR] 接受条件: "
                 f"before={_decision['before']}+audit{_decision['audit_targets']} "
                 f"after={_decision['after']} resolved={_decision['resolved']} "
                 f"字段触达={_decision.get('audit_field_touched', 0)} "
                 f"new={_decision['new_blocking']}"
+                # 09-26 P0-2：把兜底记账的**问题身份**一并打出来。只报计数时
+                # 「同一身份第二轮不再给兜底分」（v6.139 修复 2）在真 run 里
+                # **无法核验**——本轮 3 次修复轮都是 `字段触达=N` 而无身份，
+                # 只能靠单测证明该判据存在。
+                + (" 触达身份=" + str(_decision.get("audit_touched_ids"))
+                   if _decision.get("audit_touched_ids") else "")
             )
             _metrics_inc("repair.decisions")
             _metrics_update("repair.last_decision", _decision)
+            # v6.139：本轮兜底记账的问题身份先暂存——**轮次最终落定**（未被零改善/
+            # 回退路径撤销）后才并入「已尝试」集合；被回退轮次的触达没进稿子，
+            # 不消耗该身份的一次兜底记账名额。
+            _touched_ids_round = list(_decision.get("audit_touched_ids") or [])
             if _decision["accepted"]:
                 _metrics_inc("repair.accepted")
                 _round_ok = True
@@ -6383,8 +6557,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             # 那条日志再也不会执行。2026-09-25 离线取证时确认：`new=3` 只剩计数，
             # 「哪三条」无从回答。keys 在此捕获后被下游覆盖也不受影响。
             _nb_keys_round = [list(k) for k in (_decision.get("new_blocking_keys") or [])]
-            _offend_round = _new_blocking_targets(
+            _offend_raw = _new_blocking_targets(
                 _decision.get("new_blocking_keys") or [], set(picked))
+            _offend_round = _offend_raw
             _rolled_back_groups: list = []
             if not _decision["accepted"] and _decision.get("reason") == "new_blocking":
                 if _nb_keys_round:
@@ -6427,6 +6602,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                         script = _try_script
                         _decision = _dec_try
                         _round_ok = True
+                        # v6.139：决策换成了按目标回退后的版本，兜底记账身份同步
+                        _touched_ids_round = list(_dec_try.get("audit_touched_ids") or [])
                         # 决策换了，no-gain 判据必须跟着重算（否则会拿被否决那轮
                         # 的 accepted=False 当作「不是空转」）
                         _no_gain = (bool(_dec_try.get("accepted"))
@@ -6439,6 +6616,15 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                             "resolved=%d new=0（同轮其余目标的修复保留）"
                             % (sorted(_offend), _dec_try.get("resolved") or 0)
                         )
+                    elif _dec_try:
+                        # v6.137：回退重试失败必须可见（本 run 的盲区——重试为何没过无从归因）
+                        _logger.warn(
+                            "[REPAIR] 按目标回退 %s 后仍未通过验收"
+                            "（reason=%s resolved=%s 字段触达=%s new=%s）→ 整轮回退"
+                            % (sorted(_offend), _dec_try.get("reason"),
+                               _dec_try.get("resolved") or 0,
+                               _dec_try.get("audit_field_touched") or 0,
+                               _dec_try.get("new_blocking") or 0))
             if not _decision["accepted"] or not _round_ok:
                 # v6.93 修（自查发现的 bug）：诊断必须在**回退之前**抓快照。
                 #
@@ -6543,13 +6729,53 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     "round_ok": bool(_round_ok),
                     "resolved": int(_decision.get("resolved") or 0),
                     "reason": str(_decision.get("reason") or ""),
+                    "audit_field_touched": int(
+                        _decision.get("audit_field_touched") or 0),
+                    "audit_touched_ids": [list(t) for t in
+                                          (_decision.get("audit_touched_ids") or [])],
                     "revision_before": _csr_diag(_round_before_script),
                     "revision_after": _csr_diag(script),
                 })
             except Exception as _diag_err:
                 _logger.warn(f"[REPAIR] 修复轮诊断记录失败（不影响结论）: {_diag_err}")
         if not _round_ok:
-            # 本轮已被回退 → 停止（本轮失败，再发下一批没有意义）
+            # v6.137：new_blocking 型拒绝 → **带反馈重试一次**（剔除肇事目标）。
+            # 内层还有轮次就内层 continue（GAP 路径，max_rounds>=2）；没有（提交
+            # 路径 max_rounds=1）就把状态导出 retry_state，由调用方用下一次
+            # attempt 续跑（预算仍由外层 §1.1 上限管住，审计经 _reusable 复用）。
+            # 其余拒绝原因（locked_changed / non_target_changed / evidence_removed
+            # 等系统性越权）保持原停止语义——那些不是"换个目标重发"能解决的。
+            #
+            # v6.138（九审 P1-2）：排除集只用**真实肇事目标**（`_offend_raw`），不用
+            # 组扩展后的回退集——整组回退是**回滚原子性**（v6.119），不是该组成员
+            # 都引入了新 blocking；把非肇事成员也排除，会让"整组回退"退化为
+            # "整组放弃"（重试轮名额被白吃，剩余目标无人修）。
+            _remaining = [p for p in picked if p not in _offend_raw]
+            _retry_fb_text = ""
+            if (_decision.get("reason") == "new_blocking"
+                    and _offend_raw and _remaining):
+                _retry_fb_text = (
+                    "\n**上一轮补丁被拒（带反馈重试）**：\n"
+                    "- 目标 %s 的补丁引入了新 blocking（%s），**该目标已从本轮移除**，"
+                    "不要再输出它；\n"
+                    "- 其余目标（%s）上一轮的补丁**未通过验收**（问题证据仍在稿中），"
+                    "请给出真正消除矛盾的修改，不是换一种说法复述现状。\n"
+                    % (sorted(_offend_raw),
+                       str(_nb_keys_round[:2])[:200],
+                       sorted(_remaining)))
+                if retry_state is not None:
+                    retry_state.clear()
+                    retry_state.update({"excluded": sorted(_offend_raw),
+                                        "feedback": _retry_fb_text})
+            if (not _retry_used and _retry_fb_text):
+                _retry_used = True
+                _rejected_targets |= set(_offend_raw)
+                _retry_feedback = _retry_fb_text
+                _logger.warn(
+                    "[REPAIR] 带反馈重试：剔除肇事目标 %s，其余 %s 重新修复（仅一次）"
+                    % (sorted(_offend_round), sorted(_remaining)))
+                continue
+            # 本轮已被回退 → 停止（其余原因：再发下一批没有意义）
             return script
         if _no_gain:
             # v6.102：通过验收但零改善 → 回退本轮（不留无收益的改写）并停止后续轮次
@@ -6561,6 +6787,10 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             )
             return script
         _metrics_inc("repair.rounds_accepted")
+        # v6.139：轮次落定 → 本轮兜底触达正式记入「已尝试」集合（下一轮起同一
+        # 问题身份不再给兜底分，见 `_repair_acceptance_decision`）。
+        if audit_attempted is not None and _touched_ids_round:
+            audit_attempted.update(_touched_ids_round)
         # 本轮通过验收 → 继续下一批（v6.101：每轮一个独立事务）
 
     return script
@@ -7213,6 +7443,43 @@ def _candidate_is_early_stop(score: dict, script: dict) -> bool:
     return True
 
 
+class _CandidateDialogueBroken(Exception):
+    """单候选台词完整性破损（内部控制流标记）：携带 broken 明细，不进候选池.
+
+    不继承 RuntimeError——候选循环的 `except RuntimeError` 是"生成失败→重试"语义，
+    台词破损是**内容结论**，必须与 LLM 调用失败分开计数、分开报告。
+    """
+
+    def __init__(self, broken):
+        super().__init__("%d 句破损" % len(broken or []))
+        self.broken = list(broken or [])
+
+
+class _CandidateGateError(Exception):
+    """台词完整性门**自身异常**（如净化器 `sanitize_narration` 抛错），不是稿件破损.
+
+    v6.135 四审 P1：门内匹配不再吞净化异常退回原样（那会在"两侧原样恰好相同"时
+    静默放行、fail-closed 分支收不到错误）——异常向外传播到这里转成独立控制流标记。
+    fail-closed：异常候选判无效不进池、尝试名额照常消耗；计数进 attempt_stats 的
+    `gate_errors` 桶，**不得混入 dialogue_broken**（把检查故障统计成稿件截断 =
+    四审 P2 同型误归因）。
+    """
+
+
+class _CandidateContractBroken(Exception):
+    """候选违反**事件履约契约**（v6.138）——节拍覆盖/声明顺序/引用越界.
+
+    与台词破损同性质（内容结论、非检查故障）：fail-closed 不进池、尝试名额照常
+    消耗；独立类型独立计数（attempt_stats.contract_broken），**不得混入
+    dialogue_broken**——把「节拍无承载」统计成「台词截断」= 五审同型误归因。
+    """
+
+    def __init__(self, violations):
+        super().__init__(violations)
+        #: check_event_contract 的 violations（list[dict]：code/shot/detail）
+        self.violations = violations
+
+
 def _generate_script_candidates(
     novel_text: str,
     character_bank=None,
@@ -7234,12 +7501,25 @@ def _generate_script_candidates(
     # `PlanInfeasibleError` 不是 `RuntimeError`，下方候选循环的 `except RuntimeError`
     # （"生成失败→重试"语义）接不住它，不存在"每个候选重试一次"。
     from step01_script_gen.plan_feasibility import check_plan_before_generation
+    from step01_script_gen.plan_feasibility import (DialogueGateError,
+                                                    DialogueIncompleteError,
+                                                    EventContractBrokenError,
+                                                    check_event_contract,
+                                                    check_script_dialogue_integrity,
+                                                    dump_dialogue_incomplete,
+                                                    plan_dialogue_lines)
     check_plan_before_generation(outline, chapter_dir=CHAPTER_DIR, novel_text=novel_text)
 
     from shared.config import SCRIPT_CANDIDATE_TOPK, SCRIPT_CANDIDATE_MODELS
     import threading as _threading
     _candidates: list = []  # [(score_dict, script)]
     _last_err: Exception | None = None
+    # v6.135：台词完整性硬门的破损明细（每元素 = 一个破损候选的 broken 列表）
+    _dialogue_broken: list = []
+    _dialogue_gate_errs: list = []
+    # v6.138：事件履约契约的违规明细（每元素 = 一个违规候选的 violations 列表）
+    _contract_broken: list = []
+    _dlg_total = len(plan_dialogue_lines(outline))
     _max_attempts = SCRIPT_PARSE_RETRIES * max(1, SCRIPT_CANDIDATE_TOPK)
     _attempt = 0
     _task_idx = 0  # 候选序号（温度梯度 0.2 + 0.15*idx）
@@ -7293,6 +7573,34 @@ def _generate_script_candidates(
             )
             raise
         _cand = parse_response(raw, novel_text=novel_text)
+        # v6.135（工作包 sunny-kindling-wilkinson；预算语义 2026-09-26 二审 C1 定稿）：
+        # 候选层**台词完整性硬门**——破损候选直接判无效、不占合格名额；**差额在既有
+        # `_max_attempts` 预算内继续补取**（与解析失败共用同一预算池，不扩预算）；
+        # 预算用尽仍不足 → 按实际合格数收池，**全部候选破损才显式失败**；早停只由
+        # 合格候选触发。
+        # ⚠️ 职责边界（二审 H3）：本门在 parse（含 post_fix/hard_fix）之后、但在
+        # `finalize_step01_script` 与 `_scoped_split_over_cap_shots` **之前**——
+        # 拆分层产生的句中碎片**不由本门负责**，由主流程 finalize 后、BEST-GUARD 前
+        # 的终稿门负责（那里才盖到送选稿/提交门的最终形态）。
+        # 在评分之前跑（确定性、零模型调用），省掉破损稿的评分/质检开销。
+        try:
+            _dlg_ok, _dlg_broken = check_script_dialogue_integrity(_cand, outline)
+        except Exception as _e:
+            # v6.135 四审 P1：门自身异常（净化器故障等）不得退回原样匹配放行，
+            # 也不得计入"台词破损"——独立类型，循环层 fail-closed 分账。
+            raise _CandidateGateError(str(_e)) from _e
+        if not _dlg_ok:
+            raise _CandidateDialogueBroken(_dlg_broken)
+        # v6.138（九审根因 1）：**事件履约契约**——plan_refs 声明的节拍覆盖/顺序/
+        # 越界（确定性、零模型调用）。台词逐字已由上一道门收口；这里核「声明与
+        # 计划一致」，缺载节拍（如「恐吓隐瞒」无承载）在入池前就判无效，不再等
+        # 提交点语义审计撞上修复轮不可修复死锁。
+        try:
+            _ct_ok, _ct_viol, _ct_declared = check_event_contract(_cand, outline)
+        except Exception as _e:
+            raise _CandidateGateError(str(_e)) from _e
+        if not _ct_ok:
+            raise _CandidateContractBroken(_ct_viol)
         _scr = _score_script(_cand, novel_text)
         # v6.73: attach the same blocking-risk/integrity view used by the final
         # gate before candidate ranking and early-stop decide anything.
@@ -7377,6 +7685,37 @@ def _generate_script_candidates(
                 _console(f"  [重试] LLM 生成失败，重新调用（{_attempt}/{SCRIPT_PARSE_RETRIES}）...")
                 import time as _t
                 _t.sleep(SCRIPT_PARSE_RETRY_SLEEP_SEC)
+            except _CandidateDialogueBroken as _e:
+                # v6.135：台词破损 = 内容结论，与"生成失败"分开计数分开报告；
+                # 尝试名额照常消耗（预算语义见 _gen_one_candidate 注释）
+                _dialogue_broken.append(_e.broken)
+                _logger.warn(
+                    "[CANDIDATE] dialogue integrity failed（台词完整性硬门，判无效不进池，"
+                    f"{len(_e.broken)}/{_dlg_total} 句破损）："
+                    + "；".join("%s（%s）" % (b.get("line", "")[:40], b.get("reason"))
+                                for b in _e.broken[:3]))
+                _console(f"  [候选] 台词破损（{len(_e.broken)}/{_dlg_total} 句），判无效"
+                         f"（{_attempt}/{SCRIPT_PARSE_RETRIES}）...")
+            except _CandidateGateError as _e:
+                # v6.135 四审 P1：门自身异常 fail-closed——判无效不进池、名额消耗，
+                # 与"台词破损"分账（attempt_stats.gate_errors），不裸崩不放行
+                _dialogue_gate_errs.append(str(_e))
+                _logger.error(
+                    "[CANDIDATE] dialogue gate error（台词门自身异常，fail-closed 判无效"
+                    f"不进池，{_attempt}/{SCRIPT_PARSE_RETRIES}）：{_e}")
+                _console(f"  [候选] 台词门异常（fail-closed，"
+                         f"{_attempt}/{SCRIPT_PARSE_RETRIES}）...")
+            except _CandidateContractBroken as _e:
+                # v6.138：事件契约破损 = 内容结论，独立分账（attempt_stats.contract_broken）
+                _contract_broken.append(_e.violations)
+                _logger.warn(
+                    "[CANDIDATE] event contract failed（事件履约契约，判无效不进池，"
+                    f"{_attempt}/{SCRIPT_PARSE_RETRIES}）："
+                    + "；".join("%s@%s:%s" % (v.get("code"), v.get("shot"),
+                                             str(v.get("detail"))[:60])
+                                for v in _e.violations[:3]))
+                _console(f"  [候选] 事件契约破损（{len(_e.violations)} 条），判无效"
+                         f"（{_attempt}/{SCRIPT_PARSE_RETRIES}）...")
             except (ValueError, json.JSONDecodeError) as e:
                 _last_err = e
                 _logger.warn(f"[WARN] 分镜 JSON 解析失败（尝试 {_attempt}/{SCRIPT_PARSE_RETRIES}）: {e}")
@@ -7419,6 +7758,33 @@ def _generate_script_candidates(
                             )
                             _early_stop_hit = True
                             break
+                    except _CandidateDialogueBroken as _e:
+                        # v6.135：同串行路径——破损候选不进池，尝试名额照常消耗
+                        _dialogue_broken.append(_e.broken)
+                        _logger.warn(
+                            "[CANDIDATE] dialogue integrity failed（台词完整性硬门，"
+                            f"判无效不进池，{len(_e.broken)}/{_dlg_total} 句破损）："
+                            + "；".join("%s（%s）" % (b.get("line", "")[:40], b.get("reason"))
+                                        for b in _e.broken[:3]))
+                    except _CandidateGateError as _e:
+                        # v6.135 四审 P1：同串行路径——门自身异常 fail-closed 分账
+                        _dialogue_gate_errs.append(str(_e))
+                        _logger.error(
+                            "[CANDIDATE] dialogue gate error（台词门自身异常，"
+                            f"fail-closed 判无效不进池，{_attempt}/{_max_attempts}）：{_e}")
+                        _console(f"  [候选] 台词门异常（fail-closed，"
+                                 f"{_attempt}/{_max_attempts}）...")
+                    except _CandidateContractBroken as _e:
+                        # v6.138：同串行路径——事件契约破损独立分账
+                        _contract_broken.append(_e.violations)
+                        _logger.warn(
+                            "[CANDIDATE] event contract failed（事件履约契约，判无效不进池，"
+                            f"{_attempt}/{_max_attempts}）："
+                            + "；".join("%s@%s:%s" % (v.get("code"), v.get("shot"),
+                                                     str(v.get("detail"))[:60])
+                                        for v in _e.violations[:3]))
+                        _console(f"  [候选] 事件契约破损（{len(_e.violations)} 条），判无效"
+                                 f"（{_attempt}/{_max_attempts}）...")
                     except RuntimeError as e:
                         _cool_model_after_timeout(e)
                         _last_err = e
@@ -7439,6 +7805,62 @@ def _generate_script_candidates(
                 break
 
     if not _candidates:
+        # v6.135 四审 P1：门自身异常与"台词破损"都无合格候选 ⇒ 显式失败，
+        # 但三者在计数与文案里严格分账（检查故障 ≠ 稿件截断 ≠ 生成失败）。
+        # v6.135 五审：顶层结论随实际失败类型区分——纯门故障抛 `DialogueGateError`
+        # + 诊断 `conclusion=dialogue_gate_error`（稿件完整性未被判定）；
+        # 含真实破损（含混合失败）抛 `DialogueIncompleteError` + `dialogue_incomplete`，
+        # 各类计数留在 attempt_stats。
+        if _dialogue_broken or _dialogue_gate_errs or _contract_broken:
+            # v6.135（决策点 1，用户采纳审核建议）：存在台词破损且无合格候选 → **显式失败**，
+            # 不回退"最少破损"候选、不静默落回历史快照（破损稿进提交门 = 死锁）。
+            # v6.135 三审 P2-2：尝试构成**分开计数**——破损与生成/解析失败不得混写成
+            # "全部破损"（混合失败时那句结论会掩盖另一类故障）。
+            # v6.138：事件契约破损同样显式失败，第四个独立分账桶（contract_broken）。
+            _n_broken = len(_dialogue_broken)
+            _n_gate = len(_dialogue_gate_errs)
+            _n_contract = len(_contract_broken)
+            _n_other = max(0, _attempt - _n_broken - _n_gate - _n_contract)
+            _stats = {"total": _attempt, "dialogue_broken": _n_broken,
+                      "gate_errors": _n_gate, "contract_broken": _n_contract,
+                      "other_failed": _n_other}
+            _mix = ("%d 次台词破损、%d 次台词门异常、%d 次事件契约破损、%d 次生成/解析失败"
+                    % (_n_broken, _n_gate, _n_contract, _n_other))
+            if _dialogue_broken:
+                _dump_batches = _dialogue_broken
+                _first = _dialogue_broken[0][0] if _dialogue_broken[0] else {}
+                _exc_cls = DialogueIncompleteError
+                _head = "候选层台词完整性硬门"
+                _tail = "（破损稿在提交门不可修复，见 09-26 实跑 locked_changed 死锁）"
+            elif _contract_broken:
+                _dump_batches = [[{"line": "",
+                                   "reason": "event_contract: %s"
+                                             % _contract_broken[0][0].get("code")}]]
+                _first = {"line": "事件履约契约违规（%s…）"
+                                  % str(_contract_broken[0][0].get("detail"))[:40],
+                          "reason": "event_contract: %s"
+                                    % _contract_broken[0][0].get("code")}
+                _exc_cls = EventContractBrokenError
+                _head = "候选层事件履约契约（节拍承载/声明顺序）"
+                _tail = "（无承载节拍的稿子在提交门不可修复，见 09-26 实跑 MISSING_PLOT 死锁）"
+            else:
+                _first = {"line": "",
+                          "reason": "gate_error: %s" % _dialogue_gate_errs[0]}
+                _dump_batches = [[_first]]
+                _exc_cls = DialogueGateError
+                _head = "候选层台词完整性门自身异常"
+                _tail = "（fail-closed 不进入选稿/提交）"
+            dump_dialogue_incomplete(CHAPTER_DIR, _dump_batches,
+                                     total_lines=_dlg_total, attempt_stats=_stats,
+                                     conclusion=("event_contract_broken"
+                                                 if _exc_cls is EventContractBrokenError
+                                                 else None))
+            raise _exc_cls(
+                "%s：%d 次尝试中 %s"
+                "（计划 %d 句；示例：%s…［%s］）⇒ 无合格候选，不进入选稿/提交%s"
+                % (_head, _attempt, _mix, _dlg_total,
+                   str(_first.get("line") or "")[:40], _first.get("reason"), _tail),
+                broken_batches=_dump_batches)
         raise RuntimeError(f"分镜 JSON 连续 {_max_attempts} 次解析失败: {_last_err}")
     _candidates.sort(key=_candidate_sort_key)
     return _candidates
@@ -7552,7 +7974,8 @@ def _non_script_snapshot_reason(obj) -> str:
     return ""
 
 
-def _cross_run_best_guard(script: dict, novel_text: str) -> tuple:
+def _cross_run_best_guard(script: dict, novel_text: str, *,
+                          plan: "dict | None" = None) -> tuple:
     """跨 run 保优护栏（P4.6，2026-09-11）：防止更好的历史版本被差 run 覆盖.
 
     v6.103（2026-09-23 总计划阶段 4.1）：**它只选择候选，不再落盘**。
@@ -7574,6 +7997,7 @@ def _cross_run_best_guard(script: dict, novel_text: str) -> tuple:
                   "best_score": None, "best_path": None}
     try:
         import os as _os
+        from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
         from shared.quality_gate import compute_script_revision
 
         snap_dir = OUTPUT_FILE.parent / "snapshots"
@@ -7612,6 +8036,26 @@ def _cross_run_best_guard(script: dict, novel_text: str) -> tuple:
 
         # v6.124.2：非分镜稿**不进候选池**（见 `_non_script_snapshot_reason`）
         _invalid: list = []
+        # v6.135（审核约束①）：历史快照也按**本轮计划**执行台词完整性门——快照生成时
+        # 的计划与本轮不同，它没保住本轮选材 = 进提交门后必然死锁（09-26 实损链）。
+        # 门**不参与**下方"全欠账放宽"（那是欠账台账的例外，不是完整性门的）。
+        _dlg_broken_snaps: list = []
+
+        def _dlg_snapshot_reason(old: dict) -> str:
+            if plan is None:
+                return ""
+            try:
+                _ok, _broken = check_script_dialogue_integrity(old, plan)
+            except Exception as _e:
+                # v6.135 四审 P1：门自身异常 → 该快照**无法证明台词完整** → 排除出
+                # 候选池（fail-closed：宁可不选，不可选中无法验证的快照），原因留痕
+                return "gate_error: %s" % _e
+            if _ok:
+                return ""
+            return "%d 句破损，例：%s（%s）" % (
+                len(_broken), str((_broken or [{}])[0].get("line") or "")[:30],
+                (_broken or [{}])[0].get("reason"))
+
         candidates = []
         for sp in snaps:
             try:
@@ -7633,6 +8077,10 @@ def _cross_run_best_guard(script: dict, novel_text: str) -> tuple:
             # （所以此前总被选中），却带着审计反复报的旧问题。
             if _old_rev in _blocked_revs:
                 _blocked_names.append(sp.name)
+                continue
+            _dlg_why = _dlg_snapshot_reason(old)
+            if _dlg_why:
+                _dlg_broken_snaps.append(f"{sp.name}（{_dlg_why}）")
                 continue
             candidates.append((sp, old))
         if not candidates and _blocked_names:
@@ -7656,7 +8104,20 @@ def _cross_run_best_guard(script: dict, novel_text: str) -> tuple:
                     old.pop("hook", None)
                 if compute_script_revision(old) == _cur_rev:
                     continue
+                # v6.135：台词完整性门**不随欠账放宽**——破损稿进提交门 = 死锁
+                _dlg_why = _dlg_snapshot_reason(old)
+                if _dlg_why:
+                    _dlg_broken_snaps.append(f"{sp.name}（{_dlg_why}）")
+                    continue
                 candidates.append((sp, old))
+        if _dlg_broken_snaps:
+            # 显式记录（准则 7）：哪几份快照因台词破损被排除，为什么
+            _logger.warn(
+                "[BEST-GUARD] 台词完整性门排除 %d 份历史快照（未过本轮计划的选材门，"
+                "不参与评分）：%s"
+                % (len(_dlg_broken_snaps), _dlg_broken_snaps[:6])
+            )
+            meta["dialogue_broken_snapshots"] = _dlg_broken_snaps
         if _invalid:
             # 显式记录（准则 7）：跳过的原因必须能看见，否则"为什么没选历史稿"无从归因
             _logger.warn(
@@ -7696,9 +8157,27 @@ def _cross_run_best_guard(script: dict, novel_text: str) -> tuple:
         _same_risk_tier = (
             best_rank[0] == new_rank[0] and best_rank[1] == new_rank[1]
         )
+        # 09-26 P1：**新稿胜出也要留日志**。此前只有「快照胜出」有两行 WARN，
+        # 新稿胜出（同档在 margin 内 / 新稿风险档不更差）静默 return——20:49 run
+        # 日志里只能看到 BEST-GUARD 存在，看不出快照为什么失利，稳定版与新版本的
+        # 取舍无法复核。这里补一行对称 WARN（含 best/new 分数与风险、tier、margin）。
+        def _log_new_kept(_reason: str):
+            _logger.warn(
+                "[BEST-GUARD] 保留新终稿（" + _reason + "）：本次 "
+                + str(new_score) + " 分/风险"
+                + str(new_quality.get("blocking_risk_count"))
+                + " vs 快照最优 " + str(best_score) + " 分/风险"
+                + str((best_quality or {}).get("blocking_risk_count"))
+                + "（" + best_path.name + "，tier "
+                + str(tuple(best_rank)) + " vs " + str(tuple(new_rank))
+                + "，margin=" + str(margin) + "）"
+                + "——快照未胜出，不替换"
+            )
+
         if _same_risk_tier:
             if best_score <= new_score + margin:
                 meta["reason"] = "same_tier_within_margin"
+                _log_new_kept("同风险档，快照分未超出新稿 + margin")
                 return None, meta
         else:
             # Prefer the safer snapshot whenever its integrity/risk tier is
@@ -7706,6 +8185,7 @@ def _cross_run_best_guard(script: dict, novel_text: str) -> tuple:
             if not (best_rank[0] < new_rank[0]
                     or (best_rank[0] == new_rank[0] and best_rank[1] < new_rank[1])):
                 meta["reason"] = "new_tier_not_worse"
+                _log_new_kept("新稿完整性/风险档不更差")
                 return None, meta
 
         _logger.warn(
@@ -8597,7 +9077,49 @@ def main() -> None:
         # 公共提交管线（hook QC → finalize → revision → quality → final audit）。
         if not HOOK_ENABLED:
             script.pop("hook", None)
-        _bg_selected, _bg_meta = _cross_run_best_guard(script, novel_text)
+        # v6.135（工作包 sunny-kindling-wilkinson，审核约束③时序）：**终稿台词完整性门**
+        # ——盖在定向拆分（`_scoped_split_over_cap_shots` 会重排 narration）与
+        # finalize **之后**、BEST-GUARD 之前：这一版才是实际送入选稿/提交门的最终形态。
+        # 09-26 02:30 实损证明碎片可能由拆分层产生（候选层单镜完整、拆后句中截断），
+        # 只查候选会漏。破损 ⇒ 显式失败（决策点 1），不静默落回历史快照。
+        from step01_script_gen.plan_feasibility import (DialogueGateError,
+                                                        DialogueIncompleteError,
+                                                        check_script_dialogue_integrity,
+                                                        dump_dialogue_incomplete,
+                                                        plan_dialogue_lines)
+        try:
+            _dlg_ok, _dlg_broken = check_script_dialogue_integrity(script, pre_extracted_outline)
+        except Exception as _e:
+            # v6.135 四审 P1：门自身异常 = 无法证明台词完整 → fail-closed 显式 BLOCK
+            # （独立诊断），不裸崩、不退回原样匹配放行
+            _dlg_ok = False
+            _dlg_broken = [{"line": "", "reason": "gate_error: %s" % _e}]
+            _logger.error(f"[CANDIDATE] 台词门异常（终稿层，fail-closed BLOCK）：{_e}")
+        if not _dlg_ok:
+            _dlg_total = len(plan_dialogue_lines(pre_extracted_outline))
+            dump_dialogue_incomplete(CHAPTER_DIR, [_dlg_broken], total_lines=_dlg_total,
+                                     layer="终稿层")
+            _dlg_gate_err = str(_dlg_broken[0].get("reason") or "").startswith("gate_error")
+            _logger.error(
+                "[CANDIDATE] dialogue integrity failed（终稿台词完整性门，拆分/finalize 后）："
+                + "；".join("%s（%s）" % (b.get("line", "")[:40], b.get("reason"))
+                            for b in _dlg_broken[:3]))
+            if _dlg_gate_err:
+                # v6.135 五审：纯门故障 ≠ 稿件不完整——独立异常类 + 诊断
+                # conclusion=dialogue_gate_error（dump 按批次自动归类）
+                raise DialogueGateError(
+                    "终稿台词完整性硬门自身异常（fail-closed 不放行）：%s"
+                    % str(_dlg_broken[0].get("reason") or "")[:200],
+                    broken_batches=[_dlg_broken])
+            raise DialogueIncompleteError(
+                "终稿台词完整性硬门：%d/%d 句破损（示例：%s…［%s］）——"
+                "碎片大概率由定向拆分产生，破损稿不进入选稿/提交门"
+                % (len(_dlg_broken), _dlg_total,
+                   str(_dlg_broken[0].get("line") or "")[:40],
+                   _dlg_broken[0].get("reason")),
+                broken_batches=[_dlg_broken])
+        _bg_selected, _bg_meta = _cross_run_best_guard(script, novel_text,
+                                                       plan=pre_extracted_outline)
         if _bg_selected is not None:
             script = _bg_selected
         if pre_extracted_outline:

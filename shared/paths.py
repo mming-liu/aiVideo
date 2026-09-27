@@ -89,6 +89,22 @@ def script_file(chapter: int | None = None) -> Path:
     return chapter_dir(chapter) / "script_result.json"
 
 
+def step01_log_file(chapter: int | None = None) -> Path:
+    """step01 日志文件路径（全库唯一来源，禁止各处自行拼 `chapter_dir()/step01.log`）.
+
+    `STEP01_LOG_PATH` 可整体覆盖：诊断脚本 / 探针 / 并行进程导入
+    `step01_script_gen.main` 时，模块级 logger 会绑定到**生产章目录**的
+    step01.log，把探针自己的 CONSTRAINT-WARN 混进产线日志（09-26 实测：
+    `.tmp/probe_contract_anchoring.py` 单次运行即写入 142 行，事后无法从
+    step01.log 区分哪几行属于正式 run——正是排查 P0 时踩到的取证障碍）。
+    覆盖后三处 logger 初始化（main / timecode / validation）一起跟随。
+    """
+    raw = os.getenv("STEP01_LOG_PATH", "").strip()
+    if raw:
+        return Path(raw)
+    return chapter_dir(chapter) / "step01.log"
+
+
 def audio_dir(chapter: int | None = None) -> Path:
     return chapter_dir(chapter) / "audio"
 

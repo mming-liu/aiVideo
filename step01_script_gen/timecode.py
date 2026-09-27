@@ -15,7 +15,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from shared import motion_segments as _ms
 from shared.model_caps import active_video_duration_cap, active_video_model
-from shared.paths import chapter_dir
+from shared.paths import step01_log_file
 from shared.tee_logger import get_logger
 
 # v6.43（08-23 用户规则）：用项目 logger 统一记录，不再 print 散落
@@ -23,7 +23,7 @@ _logger = None
 def _log():
     global _logger
     if _logger is None:
-        _logger = get_logger(chapter_dir() / "step01.log", console_level="INFO")
+        _logger = get_logger(step01_log_file(), console_level="INFO")
     return _logger
 
 # 语速配置（字符/秒）

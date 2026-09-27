@@ -185,10 +185,25 @@ _TEMPORAL_PLAN = {
 }
 
 
+# v6.138 事件履约声明：本镜承载的节拍(B)/台词(D)序号（编号见「生成执行契约」块；
+# 判据在 plan_feasibility.check_event_contract——覆盖/顺序/越界确定性核验）
+_PLAN_REFS = {
+    "type": "object",
+    "description": "事件履约声明：beats=本镜承载的节拍编号 B1..Bn（生成执行契约第四节），"
+                   "lines=本镜台词对应的选用台词编号（第一节）；纯过渡镜写空数组",
+    "properties": {
+        "beats": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+        "lines": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+    },
+    "required": ["beats", "lines"],
+    "additionalProperties": False,
+}
+
 _SHOT = {
     "type": "object",
     "properties": {
         "index": {"type": "integer"},
+        "plan_refs": _PLAN_REFS,
         "narration_segment": {
             "type": "string",
             "description": "人物对话原文，格式「说话人道：台词」；无对白为空字符串",
@@ -226,7 +241,7 @@ _SHOT = {
         "frame_layouts": _FRAME_LAYOUTS,
     },
     "required": [
-        "index", "narration_segment", "subtitle", "scene", "location",
+        "index", "plan_refs", "narration_segment", "subtitle", "scene", "location",
         "main_subject", "core_keywords", "prompt", "motion_desc",
         "ff_desc", "lf_desc", "context_bridge", "audio_cue", "fx_effect",
         "color_tone", "cam_idx", "clip_transition", "duration",
@@ -720,6 +735,14 @@ OUTLINE_SCHEMA = {
 # 关键：`items` 直接复用 `_SHOT`（**24 个必填字段**）——返回的子镜在 schema 层
 # 就不可能是空壳。这正是当年禁止「复制字段拆镜」要防的东西，而模型重生成的
 # 子镜天然不踩（子镜的视觉字段是模型新写的，不是从父镜复制的）。
+# plan_refs 是**管线维护的契约状态**（v6.138）：只在首次生成 schema 强制必填；
+# 拆分/修复返回的镜头对象里**可选**——拆分子镜由管线按父镜注入（_scoped_split_one），
+# 修复替换由 merge_authorized 按 target 保留，模型不声明也不算违约。
+_SHOT_OPTIONAL_REFS = {
+    **_SHOT,
+    "required": [f for f in _SHOT["required"] if f != "plan_refs"],
+}
+
 SPLIT_SHOT_SCHEMA = {
     "name": "split_over_cap_shot",
     "strict": True,
@@ -738,7 +761,7 @@ SPLIT_SHOT_SCHEMA = {
                     "每个子镜必须是与首次生成同构的完整镜头对象（24 个字段成套出现），"
                     "禁止只给变化字段、禁止留空壳。台词按原文**连续切分**、逐字不增不减。"
                 ),
-                "items": _SHOT,
+                "items": _SHOT_OPTIONAL_REFS,
             },
         },
         "required": ["sub_shots"],
@@ -769,7 +792,7 @@ REPAIR_SHOT_REPLACEMENT_SCHEMA = {
                             "type": "string",
                             "description": "目标普通镜头 index（如 \"4\"）",
                         },
-                        "shot": _SHOT,
+                        "shot": _SHOT_OPTIONAL_REFS,
                     },
                     "required": ["shot_id", "shot"],
                     "additionalProperties": False,

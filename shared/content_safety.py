@@ -231,6 +231,26 @@ def sanitize_narration(text: str) -> str:
     return out
 
 
+def restore_narration_substitutions(text: str) -> str:
+    """把台词里的合规替换词**还原**为原文用词（「与原文逐字对齐」类匹配的共享落点）.
+
+    为什么必须有这个共享函数（2026-09-26 审核）：`杀人→出人命` 这类替换此前只在
+    `validation._check_grounding` 里就地还原——台词完整性门（plan_feasibility）需要
+    同一还原语义，各抄一份必然漂移。方向固定为 **safe → orig**（稿件侧被
+    `sanitize_narration` 替换过，原文/计划侧是原词）；`orig` 已在文中时**不还原**
+    （原词已在，逐字匹配本就能命中，还原反而可能双向互相干扰）。键值互不为对方
+    子串问题：与 `sanitize_narration` 同一群众所周知的约束——值不含任何 key
+    （无链式替换风险），本函数沿用同一保证。
+
+    与 `_check_grounding` 的历史实现逐字等价（那里改为转调本函数）。
+    """
+    out = str(text or "")
+    for orig, safe in NARRATION_SUBSTITUTIONS.items():
+        if safe in out and orig not in out:
+            out = out.replace(safe, orig)
+    return out
+
+
 # ========================================================================
 # 输入侧高敏画面降级表（v6.61，2026-09-05）
 # 触发场景：Seedream 400 InputTextSensitiveContentDetected——prompt 已过

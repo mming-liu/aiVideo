@@ -608,7 +608,8 @@ def test_replan_still_over_budget_is_reported_as_teardown(monkeypatch, tmp_path)
         pf.check_plan_before_generation(plan, chapter_dir=tmp_path, novel_text=_SOURCE)
     _msg = str(_e.value)
     assert _msg.split("：", 1)[0] == "本集规划不可行／需拆集", _msg
-    assert "已重选 1 轮后仍超预算" in _msg, _msg
+    # v6.136：文案从"仍超预算"改为"仍不可行"——重选失败含超预算与台词不可表示两类
+    assert "已重选 1 轮后仍不可行" in _msg, _msg
     _d = json.loads((tmp_path / "step01_plan_infeasible.json").read_text(encoding="utf-8"))
     assert _d["conclusion"] == "teardown", _d["conclusion"]
 
@@ -780,3 +781,459 @@ def test_outline_schema_requires_the_plan_fields_the_gate_needs():
     from step01_script_gen import timecode
     assert pf._estimate_duration is timecode._estimate_duration
     assert pf.MIN_SHOT_DURATION == timecode.MIN_SHOT_DURATION
+
+
+# ---------------------------------------------------------------------------
+# 台词完整性硬门（2026-09-26，工作包 sunny-kindling-wilkinson）
+#
+# 背景：09-26 02:30 实跑 BLOCK——选材台词被拆镜截断（shot12 "…急需" 句中碎片），
+# 审计报 truncated_text，唯一正确修复字段是 narration_segment（锁定）→
+# locked_changed 死锁。本门把完整性前移：破损稿不进 BEST-GUARD／提交门。
+# ---------------------------------------------------------------------------
+def _mk_script(*narrations):
+    """最小稿：narrations 逐镜给旁白；其余字段按最小合法形状."""
+    return {"shots": [{"index": i + 1, "narration_segment": n,
+                       "ff_desc": "f", "lf_desc": "l", "prompt": "p"}
+                      for i, n in enumerate(narrations)]}
+
+
+def test_dialogue_integrity_single_shot_hit_with_prefix_tolerance():
+    """命中①：台词逐字在单镜旁白里；说话人前缀宽容（计划无前缀/稿有前缀都算）."""
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    plan = {"dialogue_lines": ["张十三道：住嘴！"], "shot_beats": ["b"]}
+    # 稿件带前缀、计划也带 → 全形态命中
+    ok, broken = check_script_dialogue_integrity(
+        _mk_script("张十三道：住嘴！"), plan)
+    assert ok and broken == []
+    # 稿件丢前缀 → 台词体形态命中（宽容与 verify_dialogue_lines 同源）
+    ok2, broken2 = check_script_dialogue_integrity(_mk_script("住嘴！"), plan)
+    assert ok2 and broken2 == []
+
+
+def test_dialogue_integrity_compliance_restore_hit():
+    """合规替换还原后命中：计划/原文侧"杀人"、稿件侧被 sanitize 成"出人命"."""
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    plan = {"dialogue_lines": ["听香道：公……公子他……杀……杀人啦……"], "shot_beats": ["b"]}
+    ok, broken = check_script_dialogue_integrity(
+        _mk_script("听香道：公…公子他…杀…出人命啦…"), plan)
+    assert ok, broken
+    assert broken == []
+
+
+def test_dialogue_integrity_clean_cross_shot_split_hits():
+    """命中②：跨镜整段拼接——每个参审镜头都以句末收尾（干净拆分）.
+
+    只有多句长台词按**句界**拆分才可能干净（单句台词任何跨镜拆分都必然留下
+    逗号/句中结尾的碎片 → 判破损，见下方反例）——这正是审计 truncated_text 的
+    触发形态与提交门死锁的预测口径。真实计划里的张十三长台词（4 句）是典型。
+    """
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    plan = {"dialogue_lines": [
+        "且慢，我刚刚收到城里传来的消息。有些生意上的事情急需公子爷赶回去处理。"],
+        "shot_beats": ["b"]}
+    ok, broken = check_script_dialogue_integrity(_mk_script(
+        "张十三道：且慢，我刚刚收到城里传来的消息。",
+        "有些生意上的事情急需公子爷赶回去处理。",
+        "别的内容。"), plan)
+    assert ok, broken
+
+
+def test_dialogue_integrity_fragment_split_is_broken():
+    """反例①（09-26 实损形态）：句中截断 + 下一镜补前缀——拼接救不回，判破损.
+
+    纯整稿拼接会把台词拼回来（实测 02:30 快照 0/7 破损＝放行死锁稿），所以
+    跨镜命中必须要求每个参审镜头句末完整。shot12 "…急需" 无句末标点 ⇒ 破损。
+
+    v6.138（九审 P2-4）：本夹具的 shot2/shot3 还各自带**计划外**的后续对白
+    （"公子如今酩酊大醉…"、"去把公子的马车…"不在计划句里）——排他性检查把它们
+    各记一条 `extra_dialogue`；台词门现在同时拦「计划句破损」与「自选对白」两类。
+    """
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    plan = {"dialogue_lines": [
+        "且慢，我刚刚收到城里传来的消息，有些生意上的事情急需公子爷赶回去处理。"],
+        "shot_beats": ["b"]}
+    ok, broken = check_script_dialogue_integrity(_mk_script(
+        "张十三道：且慢，我刚刚收到城里传来的消息，有些生意上的事情急需",
+        "张十三道：公子爷赶回去处理，公子如今酩酊大醉，难以起身，你们来的正好",
+        "张十三道：去把公子的马车赶到水边来，我和听香姑娘要扶公子马上回城"), plan)
+    assert not ok
+    _by_reason: dict = {}
+    for b in broken:
+        _by_reason.setdefault(b["reason"], []).append(b)
+    assert len(_by_reason.get("cross_shot_split", [])) == 1
+    assert "且慢" in _by_reason["cross_shot_split"][0]["line"]
+    assert len(_by_reason.get("extra_dialogue", [])) == 2, broken
+
+
+def test_dialogue_integrity_exclusive_dialogue_set():
+    """v6.138（九审 P2-4）：排他性——5/5 命中 + 1 句自选对白必须判破损.
+
+    - 自选句带说话人前缀、正文与任何计划句无包含关系 → `extra_dialogue`；
+    - 计划句的**跨镜碎片**（正文是某计划句的子串）不算自选；
+    - 无说话人前缀的旁白（描述/画外音）不按对白拦截（审查明确要求）。
+    """
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    plan = {"dialogue_lines": ["张十三道：住嘴！", "听香道：公……公子他……杀……杀人啦……"],
+            "shot_beats": ["b"]}
+    # 全中 + 1 句自选
+    ok, broken = check_script_dialogue_integrity(_mk_script(
+        "听香道：公……公子他……杀……杀人啦……",
+        "张十三道：住嘴！",
+        "张十三道：闭嘴，公子是何等人物。"), plan)
+    assert not ok, "自选对白必须拦下"
+    assert len(broken) == 1 and broken[0]["reason"] == "extra_dialogue", broken
+    assert "闭嘴" in broken[0]["line"]
+
+    # 计划句碎片 + 无前缀旁白 → 不误报
+    ok2, broken2 = check_script_dialogue_integrity(_mk_script(
+        "听香道：公……公子他……杀……",
+        "杀人啦……",
+        "张十三道：住嘴！",
+        "湖面恢复平静。"), plan)
+    assert ok2, broken2
+
+
+def test_dialogue_integrity_accidental_boundary_join_is_broken():
+    """反例②：相邻镜头偶然跨界拼接——起点未对齐（首镜只含台词尾部片段）判破损."""
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    plan = {"dialogue_lines": ["他说要杀公子。"], "shot_beats": ["b"]}
+    # 首镜只含台词的**尾部片段**（"他说"），且不以句末收尾——偶然拼接不得命中
+    ok, broken = check_script_dialogue_integrity(
+        _mk_script("他说", "要杀公子。"), plan)
+    assert not ok
+    assert broken[0]["reason"] in ("cross_shot_split", "not_found")
+
+
+def test_dialogue_integrity_missing_line_is_broken():
+    """台词整句在稿件里找不到（含拼接）→ not_found."""
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    plan = {"dialogue_lines": ["张十三道：这句台词稿子里根本没有。"], "shot_beats": ["b"]}
+    ok, broken = check_script_dialogue_integrity(
+        _mk_script("张十三道：别的台词。", "听香道：另一句。"), plan)
+    assert not ok
+    # v6.138 排他性：两句旁白都是带前缀的计划外对白 → 各记 extra_dialogue；
+    # 计划句找不到仍是 not_found。
+    _reasons = sorted(b["reason"] for b in broken)
+    assert _reasons == ["extra_dialogue", "extra_dialogue", "not_found"]
+    assert any(b["reason"] == "not_found" and "根本没有" in b["line"] for b in broken)
+
+
+def test_dialogue_integrity_empty_dialogue_lines_fail_closed():
+    """`dialogue_lines` 为空 → 不可评估 → fail-closed 判不合格（同 evaluate_plan 口径）."""
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    ok, broken = check_script_dialogue_integrity(_mk_script("张十三道：住嘴！"), {})
+    assert not ok
+    assert broken and "fail-closed" in broken[0]["reason"]
+
+
+def test_dialogue_integrity_hook_narration_not_counted():
+    """hook 按设计不含选用台词——其旁白不参与命中，台词落在 hook 里仍判破损."""
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    plan = {"dialogue_lines": ["张十三道：住嘴！"], "shot_beats": ["b"]}
+    script = _mk_script("别的画面。")
+    script["hook"] = {"index": 0, "narration_segment": "张十三道：住嘴！"}
+    ok, broken = check_script_dialogue_integrity(script, plan)
+    assert not ok
+    assert broken and broken[0]["reason"] == "not_found"
+
+
+def test_dialogue_integrity_rejects_broken_fixtures():
+    """冻结失败稿：184302 夹具的破损形态被本门判破损；跨镜拆散记 cross_shot_split.
+
+    该夹具是 09-25 18:43 的 pre-BEST-GUARD 新稿——张十三长台词被拆到 shot17/18/19，
+    shot17 句中截断（"…急需"）+ shot18 重复前缀，与 09-26 02:30 实损同形。
+    台词取自本章真实计划（chapter_outline.cache.json 的 7 句中与本夹具相关的句子）。
+    """
+    import json
+    from pathlib import Path
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    _fix = Path(__file__).resolve().parent / "fixtures"
+    script = json.loads((_fix / "draft_failed_20260925_184302.json").read_text(encoding="utf-8"))
+    plan = {"dialogue_lines": [
+        "且慢，我刚刚收到城里传来的消息，有些生意上的事情急需公子爷赶回去处理，"
+        "公子如今酩酊大醉，难以起身，你们来的正好，去把公子的马车赶到水边来，"
+        "我和听香姑娘要扶公子马上回城。"], "shot_beats": ["b"]}
+    ok, broken = check_script_dialogue_integrity(script, plan)
+    assert not ok
+    _by_reason: dict = {}
+    for b in broken:
+        _by_reason.setdefault(b["reason"], []).append(b)
+    assert len(_by_reason.get("cross_shot_split", [])) == 1
+    assert "且慢" in _by_reason["cross_shot_split"][0]["line"]
+    # v6.138 排他性：该夹具的旁白还带大量**计划外**对白（fixture 的 plan 只列了
+    # 与本夹具相关的一句）——这些各自记 extra_dialogue，不再被"计划句都在"放过。
+    assert len(_by_reason.get("extra_dialogue", [])) >= 1
+
+
+def test_dialogue_integrity_restore_both_forms_edges():
+    """二审 M1：还原的**双形态**边界——只保留"还原后"会误伤两类真实形态.
+
+    ① 原文/计划本身就用安全词（"自尽"），稿件逐字引用——还原分支匹配不上，
+       未还原分支必须命中；
+    ② 单字 safe（"春药"→"药"）："抓药去了"会被还原成"抓春药去了"
+       （`_check_grounding` 08-17 起的潜伏缺陷，整句门下是硬失败）——未还原分支命中；
+    ③ 双词并存（"杀人"与"出人命"同稿）——守卫不还原，直接命中。
+    """
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    ok, broken = check_script_dialogue_integrity(
+        _mk_script("张十三道：他自尽了。"), {"dialogue_lines": ["他自尽了。"], "shot_beats": ["b"]})
+    assert ok, broken
+
+    ok2, broken2 = check_script_dialogue_integrity(
+        _mk_script("张十三道：他到镇上抓药去了。"),
+        {"dialogue_lines": ["他到镇上抓药去了。"], "shot_beats": ["b"]})
+    assert ok2, broken2
+
+    ok3, broken3 = check_script_dialogue_integrity(
+        _mk_script("听香道：杀人了…不，是出人命了"),
+        {"dialogue_lines": ["杀人了。"], "shot_beats": ["b"]})
+    assert ok3, broken3
+
+
+def test_dialogue_integrity_comma_ending_split_is_broken():
+    """二审 M2 固化边界：逗号/顿号结尾的分句跨镜 = 破损（有意从严）.
+
+    句中碎片正是审计 `truncated_text` 的触发形态——不做"逗号也算句末"的宽容，
+    宁可显式失败。长台词要干净跨镜只能按句号/问号/叹号等句末拆。
+    """
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    plan = {"dialogue_lines": [
+        "且慢，我刚刚收到城里传来的消息，有些生意上的事情急需公子爷赶回去处理。"],
+        "shot_beats": ["b"]}
+    ok, broken = check_script_dialogue_integrity(_mk_script(
+        "张十三道：且慢，我刚刚收到城里传来的消息，",
+        "有些生意上的事情急需公子爷赶回去处理。"), plan)
+    assert not ok
+    assert broken and broken[0]["reason"] == "cross_shot_split"
+
+
+def test_terminal_gate_intercepts_full_line_split_fragment():
+    """二审 H2②：终稿门拦截**拆分层**产生的句中碎片（09-26 三镜全句复刻）.
+
+    职责边界：候选层门在拆分之前（对拆分碎片天然不敏感），终稿门（finalize 后、
+    BEST-GUARD 前）才盖到送选稿/提交门的最终形态。本用例用 09-26 的三镜全句复刻
+    钉住该形态：三镜拼接恰为完整台词、但首镜句中截断 → 判破损。
+    """
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    plan = {"dialogue_lines": [
+        "且慢，我刚刚收到城里传来的消息，有些生意上的事情急需公子爷赶回去处理，"
+        "公子如今酩酊大醉，难以起身，你们来的正好，去把公子的马车赶到水边来，"
+        "我和听香姑娘要扶公子马上回城。"], "shot_beats": ["b"] * 3}
+    ok, broken = check_script_dialogue_integrity(_mk_script(
+        "张十三道：且慢，我刚刚收到城里传来的消息，有些生意上的事情急需",
+        "张十三道：公子爷赶回去处理，公子如今酩酊大醉，难以起身，你们来的正好",
+        "张十三道：去把公子的马车赶到水边来，我和听香姑娘要扶公子马上回城"), plan)
+    assert not ok
+    assert len(broken) == 1 and broken[0]["reason"] == "cross_shot_split"
+
+
+# ---------------------------------------------------------------------------
+# v6.136 A+B 统一判据（2026-09-26 用户决策）：单镜可表示性
+# ---------------------------------------------------------------------------
+
+_X64 = ("听香道：不……不知道，那人……那人一下子从水里跳出来，就……就杀了公子，"
+        "然后又……又跳进水里不见了，奴家……奴家连他是男是女都没看清……")
+_X84 = ("且慢，我刚刚收到城里传来的消息，有些生意上的事情急需公子爷赶回去处理，"
+        "公子如今酩酊大醉，难以起身，你们来的正好，去把公子的马车赶到水边来，"
+        "我和听香姑娘要扶公子马上回城。")
+_SRC_AB = _X64 + "\n" + _X84 + "\n" + "住嘴！"
+
+
+def test_check_dialogue_representable_64_char_line_is_kept():
+    """A 判据（用户决策反例①）：64 字口吃台词按省略号句末切分 → **可保留**.
+
+    判据**不是**"整条 ≤12s"——原镜约 12.5s，但句末切分后每段 ≤ 上限
+    （cap 12s 下 DP 解为两段；cap 8s 下三段 ≈5.9/5.9/3.8s），必须保留；
+    只有"无合法切点"才重选。
+    """
+    import step01_script_gen.plan_feasibility as pf
+    from step01_script_gen.timecode import _estimate_duration
+
+    r = pf.check_dialogue_representable(_X64)
+    assert r["representable"], r
+    assert r["split"] and 2 <= len(r["split"]) <= 4, r
+    for part in r["split"]:
+        assert _estimate_duration(part) <= pf.active_shot_cap() + 0.01, part
+        assert part.rstrip()[-1] in "。！？…；", part
+
+
+def test_check_dialogue_representable_84_char_single_sentence_is_rejected():
+    """A 判据（用户决策反例②）：84 字**单句**台词（句内只有逗号）→ 不可表示.
+
+    09-26 三次实跑的确定性失败源：整条装不进单镜、拆开必产生句中碎片。
+    reason 必须点名"无句末边界"，重选反馈据此让规划阶段换原文台词。
+    """
+    import step01_script_gen.plan_feasibility as pf
+
+    r = pf.check_dialogue_representable(_X84)
+    assert not r["representable"], r
+    assert r["split"] is None
+    assert "无句末边界" in r["reason"]
+
+
+def test_find_legal_split_returns_none_when_whole_line_fits():
+    """整条已装得下 → None（无切分需求，不是"不可切"）."""
+    import step01_script_gen.plan_feasibility as pf
+
+    assert pf.find_legal_split("张十三道：住嘴！", 12.0) is None
+
+
+def test_evaluate_plan_flags_unrepresentable_dialogue():
+    """A 判据接入 evaluate_plan：不可表示台词 → infeasible + 结构化明细.
+
+    **不是静默剔除**（对比 `_drop_unverified` 只删原文没有的台词）——走
+    infeasible → 规划重选反馈（点名台词）→ 仍不可行才显式停止交内容取舍。
+    """
+    from step01_script_gen.plan_feasibility import evaluate_plan
+    rep = evaluate_plan(_plan(lines=[_X84]), novel_text=_SRC_AB)
+    assert rep["verdict"] == "infeasible"
+    assert len(rep["dialogue_unrepresentable"]) == 1
+    assert rep["dialogue_unrepresentable"][0]["line"] == _X84
+    assert any("无句末合法切分" in r for r in rep["reasons"])
+    assert any("必保留事实" in s for s in rep["suggestions"])
+    # 预算内但不可表示 ⇒ 不可行的原因是可表示性，不是预算
+    assert rep["lower_bound_sec"] <= rep["budget"]["max"]
+
+
+def test_evaluate_plan_keeps_multi_sentence_long_line_feasible():
+    """64 字多句（省略号分句）台词 → 计划可行（不误伤可合法切分的台词）."""
+    from step01_script_gen.plan_feasibility import evaluate_plan
+    rep = evaluate_plan(_plan(lines=[_X64]), novel_text=_SRC_AB)
+    assert rep["verdict"] == "feasible", rep["reasons"]
+    assert rep["dialogue_unrepresentable"] == []
+
+
+def test_replan_feedback_names_unrepresentable_lines():
+    """重选反馈必须点名不可表示台词并带上必保留事实/事件顺序硬边界."""
+    import step01_script_gen.outline as o
+
+    rep = {"budget": {"min": 60, "max": 90}, "dialogue_lines": 1,
+           "dialogue_sec": 21.59, "lower_bound_sec": 21.59,
+           "beats": 3, "beats_floor_sec": 9.0,
+           "dialogue_unrepresentable": [{"line": _X84, "est_sec": 21.59,
+                                         "reason": "估时 21.6s 超单镜上限 12s…"}]}
+    block = o._budget_feedback_block(rep, {"dialogue_lines": [_X84],
+                                           "shot_beats": ["b1", "b2"]})
+    assert "且慢" in block and "21.6" in block, "必须点名台词与估时"
+    assert "必保留事实" in block and "事件顺序" in block, "必须带上硬边界"
+    assert "逐字" in block, "替换台词同样必须逐字来自原文"
+    # 六审 P1-1：可表示性单独触发（预算内）也必须附完整旧计划——
+    # "其余字段原样返回"要求模型看得见旧字段，否则重选必被 _plan_core_preserved 拒收
+    assert '"dialogue_lines"' in block and '"shot_beats"' in block,         "旧计划 JSON 必须附在反馈里"
+    # 预算未超 → 不得出现预算块（"装不下"是假命题）
+    assert "对白一项就" not in block
+
+
+def test_replan_resolves_unrepresentable_dialogue(monkeypatch):
+    """A 判据贯通：计划含不可表示台词 → 重选反馈 → 换成合法原文台词后采纳."""
+    import step01_script_gen.outline as o
+
+    plan = _plan(lines=[_X84])
+    box = _patch_outline_service(monkeypatch, [_plan_response(["住嘴！"])])
+    new_plan, info = o.enforce_budget_by_replanning(
+        plan, _SRC_AB, model=None, base_prompt="BASE", system_prompt="SYS")
+    assert "必保留事实" in box["prompts"][0], "反馈必须点名可表示性问题"
+    assert info["result"] == "feasible" and info["after_unrepresentable"] == 0, info
+    assert new_plan["dialogue_lines"] == ["住嘴！"]
+
+
+def test_find_legal_split_prefers_fewest_parts_and_never_cuts_inside_punct_run():
+    """六审 P2：最少段数优先（两段合法不选三段）+ 不在 `……` 标点串中间切.
+
+    64 字口吃台词 cap 12s：两段合法解存在（DP 解 ≈6.4/8.2s；用户 2026-09-26
+    判断"两段可保留"的正是这条）——跨段数取「最长段最短」会误选三段。
+    """
+    from step01_script_gen.plan_feasibility import (find_legal_split,
+                                                    _SENT_END_CHARS,
+                                                    _split_speaker_prefix)
+    from step01_script_gen.timecode import _estimate_duration
+
+    parts = find_legal_split(_X64, 12.0)
+    assert parts and len(parts) == 2, parts
+    for p in parts:
+        assert _estimate_duration(p) <= 12.01
+    for a, b in zip(parts, parts[1:]):
+        head = _split_speaker_prefix(b)[1]
+        assert head and head[0] not in _SENT_END_CHARS, \
+            "切点落在标点串中间（下一段以句末标点开头）: %r" % b
+
+
+def test_find_legal_split_is_exact_with_many_bounds():
+    """六审 P1-3：切点多（>14）时**不得截窗**——DP 精确解与穷举参考一致.
+
+    本判据直接驱动规划重选/显式停止，漏掉合法切点会误报"不可表示"、引发错误的
+    内容取舍。用种子化伪随机句长造 21 个切点的台词，与穷举参考在可行性与
+    最少段数上必须一致（可行解的最长段不得差于穷举最优）。
+    """
+    import itertools
+    import random
+
+    import step01_script_gen.plan_feasibility as pf
+    from step01_script_gen.timecode import _estimate_duration
+
+    rnd = random.Random(42)
+    sents = []
+    for _ in range(22):
+        n = rnd.choice([2, 3, 5, 8, 12, 16])
+        sents.append("甲" * n + "。")
+    body = "".join(sents)
+    text = "张十三道：" + body
+    bounds = [i + 1 for i, ch in enumerate(body)
+              if ch in pf._SENT_END_CHARS and 0 < i + 1 < len(body)
+              and body[i + 1] not in pf._SENT_END_CHARS]
+    assert len(bounds) > 14, "夹具必须覆盖旧实现的截窗路径"
+
+    def brute(cap):
+        best = None
+        for k in range(2, 5):
+            for cuts in itertools.combinations(bounds, k - 1):
+                prev, parts = 0, []
+                for c in cuts:
+                    parts.append(body[prev:c]); prev = c
+                parts.append(body[prev:])
+                ests = [_estimate_duration("张十三道：" + p) for p in parts]
+                if all(e <= cap + 0.01 for e in ests):
+                    m = max(ests)
+                    if best is None or (k, m) < best[:2]:
+                        best = (k, m)
+        return best
+
+    for cap in (10.0, 8.0, 6.0):
+        dp = pf.find_legal_split(text, cap)
+        ref = brute(cap)
+        assert (dp is None) == (ref is None), (cap, dp is None, ref)
+        if dp is not None:
+            assert len(dp) == ref[0], (cap, len(dp), ref)
+            assert max(_estimate_duration(p) for p in dp) <= ref[1] + 0.01, (cap, ref)
+
+
+def test_evaluate_plan_no_alternative_marker_stops_plan():
+    """六审 P1-2：「无合适替代」标记有代码出口——即使其余全部可行也判 infeasible.
+
+    提示要求模型在原文没有更短替代时在 `time_budget` 明写该标记；标记 = 内容
+    取舍状态（必保留事实被静默丢弃的风险由用户裁决），代码不代决、不放行。
+    """
+    from step01_script_gen.plan_feasibility import evaluate_plan
+
+    plan = _plan(lines=["住嘴！"],
+                 time_budget="台词不可表示：无合适替代")
+    rep = evaluate_plan(plan, novel_text="住嘴！他说完就跳了河。住嘴！")
+    assert rep["verdict"] == "infeasible"
+    assert any("无合适替代" in r for r in rep["reasons"])
+    assert any("用户决策" in s or "内容取舍" in s for s in rep["suggestions"])
+    # 预算与可表示性都不是原因——原因只有标记本身
+    assert rep["lower_bound_sec"] <= rep["budget"]["max"]
+    assert rep["dialogue_unrepresentable"] == []
