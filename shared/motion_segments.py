@@ -49,7 +49,7 @@
 from __future__ import annotations
 
 import re
-from typing import TypedDict
+from typing import NamedTuple, TypedDict
 
 # ===========================================================================
 # 唯一正则事实源
@@ -79,20 +79,34 @@ _NOT_TIME_TAIL = (
 # 裸范围只认原子段开头（行首 / 空白 / 原子分隔符之后）
 _ATOM_START = r"(?<![^;；。\s])"
 
-# 三个分支（有序，前面的优先）：
+# 四个分支（有序，前面的优先）：
 #   1. 前N秒 / 后N秒
 #   2. N-M秒 / N-Ms（带单位——有单位就允许出现在段中任意位置）
 #   3. N-M（缺「秒」→ 只认段首 + 尾部不接量词）
+#   4. N秒后（= **从第 N 秒起**；与分支 1 的「后N秒」= **末尾 N 秒**语义相反）
+#
+# 分支 4 是 2026-09-27 补的（工作包 A）：提示规定的三段式是
+# `前X秒：…；X-Y秒：…；Y秒后：…`，而「Y秒后」在统一前**任何解析器都不认**——
+# `parse_segments` 直接跳过它、`has_explicit_time` 也判 False，于是分段式 motion
+# 的末段对整条时序链（时段表 / 覆盖检查 / 时长推算）完全隐形。
+# 与分支 3 一样必须**段首锚定**：正文里的「三秒后他转身」不得冒充段首标签。
 TIME_SEG_RE = re.compile(
     r"(?:前|后)\s*(" + _NUM + r")\s*秒"
     r"|(" + _NUM + r")\s*" + _SEP + r"\s*(" + _NUM + r")\s*(?:秒|s)"
     r"|" + _ATOM_START + r"(" + _NUM + r")\s*" + _SEP + r"\s*(" + _NUM + r")\s*" + _NOT_TIME_TAIL
+    # 第 4 分支必须**显式 `+`**：上一行以变量（`_NOT_TIME_TAIL`）结尾，直接续一个
+    # 字符串字面量会变成「两个表达式并置」→ SyntaxError（隐式拼接只在相邻
+    # **字面量**之间成立）。组号仍是 6，前 5 组不变。
+    + (r"|" + _ATOM_START + r"(" + _NUM + r")\s*秒\s*后")
 )
 
 # 剥时间标签前缀（保留正文）。**必须支持小数**——这是 .378378 残片的根因修复点。
 TIME_LABEL_PREFIX_RE = re.compile(
     r"^(?:前|后)\s*" + _NUM + r"\s*秒\s*[:：]?"
     r"|^" + _NUM + r"\s*" + _SEP + r"\s*" + _NUM + r"\s*(?:秒|s)?\s*[:：]?"
+    # 2026-09-27：「N秒后」是分支 4 的标签形态，剥离必须同源——
+    # 否则 `strip_time_label("4秒后：他收手")` 会把「4秒后：」留在正文里。
+    r"|^" + _NUM + r"\s*秒\s*后\s*[:：]?"
 )
 
 # 原子段切分（中文分号/句号）
@@ -141,11 +155,15 @@ def raw_atom_span(atom: str):
     「统一事实源」实际有两套语法）。见审核发现 4。
 
     「前N秒」→ `("pre", 0, N)`；「后N秒」→ `("post", 0, N)`（起点由调用方按
-    total 求，见 `atom_range`）；「N-M」→ `("range", N, M)`（未排序）。
+    total 求，见 `atom_range`）；「N-M」→ `("range", N, M)`（未排序）；
+    「N秒后」→ `("after", N, 0.0)`——**起点 = N、终点由 total 求**，与「后N秒」
+    的「末尾 N 秒」是**相反语义**（b 位只作占位，消费者必须经 `atom_range`）。
     """
     m = TIME_SEG_RE.search(atom or "")
     if not m:
         return None
+    if m.group(6) is not None:
+        return ("after", float(m.group(6)), 0.0)
     if m.group(1) is not None and m.group(2) is None:
         kw = (atom or "")[m.start():m.end()]
         return ("pre" if "前" in kw else "post", 0.0, float(m.group(1)))
@@ -179,8 +197,10 @@ def bare_range_atoms(motion_desc: str) -> list[str]:
 def atom_range(atom: str, total_sec: float):
     """解析单个原子段 → (start, end) 或 None.
 
-    「前N秒」→ (0, N)；「后N秒」→ (total-N, total)；「N-M」→ (N, M)。
-    `a > b` 时自动交换（`4-2秒` 视为 `2-4秒`）。
+    「前N秒」→ (0, N)；「后N秒」→ (total-N, total)；「N-M」→ (N, M)；
+    「N秒后」→ (N, total)。
+    `a > b` 时自动交换（`4-2秒` 视为 `2-4秒`）——**本函数保留这一 legacy 宽容**，
+    「倒置区间」的报错在 `head_label()`（校验侧要看见倒置，写入侧仍照旧兼容）。
     """
     span = raw_atom_span(atom)
     if span is None:
@@ -190,6 +210,10 @@ def atom_range(atom: str, total_sec: float):
         return (0.0, b)
     if kind == "post":
         return (max(0.0, total_sec - b), total_sec)
+    if kind == "after":
+        # 「N秒后」= 从第 N 秒起。终点必须有 total 才能定；无 total（≤0）时
+        # **返回 None**，让调用方原样保留该段（`rebase_motion_times` 传 0.0）。
+        return (a, total_sec) if total_sec > 0 else None
     if a > b:
         a, b = b, a
     return (a, b)
@@ -248,6 +272,129 @@ def parse_segments(
     return out
 
 
+#: 段首标签区的**字符集**判据（不是「含数字」——那会误伤正文）：
+#: 标签区**整段只由时间标签合法字符组成**（数字 / 小数点 / 区间分隔符 / 「秒s」/
+#: 「前 后 第」/空白），且至少含一个数字或「秒」→ 这一段的**本意就是个时间标签**，
+#: 只是没解析成功（残片）。
+#:
+#: 反例（必须**不**被判成残片）：`画面中1-2人向前走3-5步` 里有数字也有区间，但整段
+#: 不是由标签字符组成，是正文——v6.79 用 `_NOT_TIME_TAIL` 专门保下来的场景，
+#: 不能在新增解析器上被推翻。
+_LABEL_CHARS = r"[0-9.\-－–~～至到秒sS前后第\s]+"
+_LABEL_CHARS_RE = re.compile(_LABEL_CHARS)
+_LABEL_HAS_NUM_RE = re.compile(r"\d|秒")
+
+
+class HeadLabel(NamedTuple):
+    """段首锚定的时间标签解析结果（`head_label()` 的返回值）.
+
+    Attributes:
+        atom: 原始原子段（未改动）
+        label: 段首时间标签原文（无标签 → `""`）
+        span: 标签在 `atom` 中的 `[start, end)` 下标（无标签 → `(-1, -1)`）
+        kind: `"pre"`（前N秒）| `"post"`（后N秒，末尾 N 秒）|
+            `"after"`（N秒后，从 N 秒起）| `"range"`（N-M[秒]）| `"none"`
+        start / end: 解析出的秒数区间（`"after"` 的 end = total_sec；
+            无标签或不可解析 → None）
+        error: `""` | `"unparseable"`（**整段只由标签字符组成**但解析不了，
+            即残片；正文里的数字不算）|
+            `"reversed"`（区间倒置）| `"zero_length"`（起止相等，不是时段；
+            **任何标签类型**都判，`前0秒`/`后0秒`/`2-2秒` 一视同仁）|
+            `"negative"` | `"out_of_range"`
+            （**整段**落在镜头时长之外；部分越界是既有 clamp 语义，不算错）
+    """
+
+    atom: str
+    label: str
+    span: tuple
+    kind: str
+    start: "float | None"
+    end: "float | None"
+    error: str
+
+
+def head_label(atom: str, total_sec: float = 0.0) -> HeadLabel:
+    """解析**段首锚定**的时间标签 → `HeadLabel`（`head_label` 的单一入口）.
+
+    为什么需要它（2026-09-27 工作包 A）：`motion_time_integrity` 此前自带一条
+    **只认区间**的正则，于是提示规定的 `前X秒：…` 被判成「时间前缀非法或损坏」，
+    而且因为提示强制中段写 `X-Y秒`，那条件恒真——**每一镜必被误报**。判据必须
+    与本模块同一套语法（`TIME_SEG_RE`），不再各持一份。
+
+    与 `raw_atom_span()` 的两点区别：
+      - **段首锚定**：只用 `.match()`（等价于要求标签落在原子段开头），正文中的
+        时间词不冒充标签；
+      - **返回解析错误**（`error`）：倒置区间在这里**报错**而不是像 `atom_range`
+        那样静默交换——校验要看得出倒置，写入仍走 `atom_range` 的 legacy 宽容。
+    """
+    raw = atom or ""
+    head = raw.lstrip()
+    off = len(raw) - len(head)
+    m = TIME_SEG_RE.match(head) if head else None
+    if m is None:
+        # 无段首标签：形状像标签（标签区含数字/「秒」）→ 残片；否则是纯正文。
+        _zone = head.split("：", 1)[0].split(":", 1)[0]
+        _is_label_shape = (bool(_zone)
+                           and bool(_LABEL_CHARS_RE.fullmatch(_zone))
+                           and bool(_LABEL_HAS_NUM_RE.search(_zone)))
+        err = "unparseable" if _is_label_shape else ""
+        return HeadLabel(raw, "", (-1, -1), "none", None, None, err)
+    label = m.group(0)
+    span = (off + m.start(), off + m.end())
+
+    if m.group(1) is not None and m.group(2) is None:
+        n = float(m.group(1))
+        if "前" in label:
+            kind, start, end = "pre", 0.0, n
+        else:  # 「后N秒」= 末尾 N 秒
+            kind = "post"
+            start, end = ((max(0.0, total_sec - n), total_sec)
+                          if total_sec > 0 else (None, None))
+    elif m.group(6) is not None:  # 「N秒后」= 从第 N 秒起
+        kind = "after"
+        n = float(m.group(6))
+        start, end = (n, total_sec) if total_sec > 0 else (n, None)
+    else:
+        kind = "range"
+        start = float(m.group(2) if m.group(2) is not None else m.group(4))
+        end = float(m.group(3) if m.group(3) is not None else m.group(5))
+        if start > end:
+            return HeadLabel(raw, label, span, kind, start, end, "reversed")
+
+    # 零长度（起止相等）**不是合法时段**：`parse_segments` / `kf_coverage.segments`
+    # 都会丢弃它（`b <= a` → 不进时段表），故段首校验必须同样判失败——否则同一份
+    # 稿会出现「标签合法但段不存在」的分叉。复核 2-1 先只覆盖了区间写法（`2-2秒`）；
+    # 复核三轮 2 指出 `前0秒：` 仍返回无错误、`后0秒` 还错报越界，故判定移到
+    # **所有类型算完 start/end 之后**统一做（顺序：reversed → zero_length →
+    # negative → out_of_range）。
+    if start is not None and end is not None and start == end:
+        return HeadLabel(raw, label, span, kind, start, end, "zero_length")
+
+    if start is not None and start < 0:
+        return HeadLabel(raw, label, span, kind, start, end, "negative")
+    if total_sec > 0 and start is not None and start >= total_sec:
+        # **整段**在镜头之外（部分越界是既有 clamp 语义，不算错）
+        return HeadLabel(raw, label, span, kind, start, end, "out_of_range")
+    return HeadLabel(raw, label, span, kind, start, end, "")
+
+
+def overlapping_labels(labels, *, tol: float = 0.05) -> list:
+    """列出**严格重叠**的标签对 → `[(HeadLabel, HeadLabel), ...]`.
+
+    首尾相接（`(2,4)` 与 `(4,6)`）不算重叠；只比较可解析且未报错的标签。
+    """
+    ok = [l for l in (labels or [])
+          if l.kind != "none" and not l.error
+          and l.start is not None and l.end is not None and l.end > l.start]
+    out: list = []
+    for i in range(len(ok)):
+        for j in range(i + 1, len(ok)):
+            a, b = ok[i], ok[j]
+            if a.start < b.end - tol and b.start < a.end - tol:
+                out.append((a, b))
+    return out
+
+
 def out_of_window_atoms(motion_desc: str, total_sec: float) -> list[tuple[str, float, float]]:
     """列出**完全落在镜头时长之外**的原子段 → `[(atom, start, end), ...]`.
 
@@ -302,6 +449,7 @@ def extract_total_duration(motion_desc: str) -> float | None:
     并集法取最大值，避免单格式正则漏段：
       - 「前N秒」+「后M秒」求和
       - 「N-M秒」取最大终点
+      - 「N秒后」取起点（末段开口，只能给出**下界**）
       - 「共N秒 / 时长N秒 / 总N秒」显式声明
     """
     if not motion_desc:
@@ -324,6 +472,8 @@ def extract_total_duration(motion_desc: str) -> float | None:
             pre_sum += b
         elif kind == "post":
             post_sum += b
+        elif kind == "after":
+            range_max = max(range_max, a)
         elif b > a:
             range_max = max(range_max, b)
 
@@ -377,6 +527,10 @@ def max_mentioned_second(text: str) -> float | None:
             vals.append(float(m.group(3)))
         elif m.group(4) is not None:
             vals.append(float(m.group(5)))
+        elif m.group(6) is not None:
+            # 「N秒后」的 N 同样是「提到了第几秒」——不认它会让
+            # motion_time_bounds 看不见末段标签，超出镜头时长也不延长。
+            vals.append(float(m.group(6)))
     for m in SINGLE_TIME_RE.finditer(text or ""):
         vals.append(float(m.group(1)))
     return max(vals) if vals else None
@@ -661,7 +815,9 @@ def event_of(plan: dict | None, t_sec: float, *, tol: float = 0.01) -> dict | No
             a, b = float(ev["start_sec"]), float(ev["end_sec"])
         except (KeyError, TypeError, ValueError):
             continue
-        if a <= t_sec < b or (i == last_i and t_sec <= b):
+        # 2026-09-27（复核三轮 1）：末段必须**两端都判**。原写成 `t <= b`，
+        # 于是时段/事件之间有空档时（`0-2s、4-6s` 的 `t=3s`）会被归给末段。
+        if a <= t_sec < b or (i == last_i and a <= t_sec <= b):
             return ev
     for ev in events:
         try:
@@ -778,6 +934,9 @@ __all__ = [
     "atoms",
     "atom_range",
     "raw_atom_span",
+    "HeadLabel",
+    "head_label",
+    "overlapping_labels",
     "out_of_window_atoms",
     "bare_range_atoms",
     "descriptions_conflict_with_body",

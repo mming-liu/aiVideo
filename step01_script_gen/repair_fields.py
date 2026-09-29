@@ -18,9 +18,11 @@
 1. **允许集合来自问题本身**：每个 target 的允许字段路径由它的 deterministic
    warning / audit issue 推导（`allowed_repair_fields`）。**推不出字段路径的问题
    不得走定向修复**——那类镜头交由整镜 regen，不在本模块兜底。
-   例外：`kf_time_window_alignment` / `result_action_support` 这类**只能靠增删
+   例外：`result_action_support` / `kf_segment_missing` 这类**只能靠增删
    KF 修**的问题，授权面包含 **KF 列表本身**（`keyframes` / `frame_layouts.kfs`）
    ——详见 `_KF_STRUCTURAL_CODES`；配套确定性验收见 `kf_structural_guard`。
+   （`kf_time_window_alignment` 2026-09-27 移出该列：它的缺段检测已并入
+   `kf_segment_missing`，剩下的越窗/顺序只改叶子。）
 2. **canonical 路径 diff**：replacement 与原镜做路径级比较，除允许路径与纯派生
    字段（`duration_sec` / `timecode`，由 `write_timeline_from_durations` 统一生成）
    外，任何差异整批拒绝。
@@ -134,6 +136,10 @@ _REPAIR_CODE_FIELDS: dict = {
     # 不支持「父字段反向包含子路径」，所以单靠 `field_path` 授权必然被拒。
     # 显式登记规范形态，与同族的 `kf_time_window_alignment` 对齐。
     "kf_event_window_mismatch": ("keyframes.*.desc",),
+    # v6.143（2026-09-27）：缺段只能靠**新增帧**修——列表增长 + 同序号
+    # `frame_layouts.kfs` 条目，属联动修改（帧/时间/布局一起动才自洽）。
+    "kf_segment_missing": ("keyframes.*.t_sec", "keyframes.*.desc",
+                           "keyframes.*.stage", "frame_layouts"),
     "duration_two_calibers": ("duration",),
     "timecode_span_mismatch": ("duration",),
     "time_field_audit_write": ("duration",),
@@ -191,8 +197,26 @@ _REPAIR_CODE_FIELDS: dict = {
 # 授权列表 = 允许增删 KF，代价由配套的确定性验收补回（`kf_structural_guard`）：
 #   ① KF 必须落在镜内且按时段单调；② `motion_desc` 的原事件文本必须仍在、顺序不变。
 _KF_STRUCTURAL_CODES: tuple = (
-    "kf_time_window_alignment",   # 时段覆盖率：kfs 数 < 非空时段数 → 只能补帧
     "result_action_support",      # LF 结果动作在 motion 里缺过程段 → 补过程段 + 补帧
+    # 2026-09-27（用户裁决 3）：`kf_time_window_alignment` **已移出本列**。
+    #
+    # 它此前凭「检测 1：kfs 数 < 非空时段数 → 只能补帧」拿结构权限；而检测 1
+    # 现在移出了该类别（缺段由 `kf_segment_missing` 单独阻塞，见
+    # `validation._check_kf_time_window_alignment` 的 docstring）。本类别剩下的
+    # 两类——越窗（orphan KF）与时段倒装——**都只需改叶子**（`keyframes.*.t_sec`
+    # / `.desc`），不需要增删整张 KF 列表。继续挂在结构码上等于给同一 code 留一个
+    # 更宽的授权面（可增删帧而问题并不需要），与总计划 §2.3「禁止顺带修改」相反。
+    # 叶子授权仍由 `_REPAIR_CODE_FIELDS["kf_time_window_alignment"]` 给出。
+    #
+    # 2026-09-27（复核 1-1）：`kf_segment_missing` 同理——「某明确动作时段没有任何
+    # 帧归属它」只能靠**新增帧**修，而成对目标是列表级（`keyframes` +
+    # `frame_layouts.kfs`）。不登记在本列时，`validate_repair_targets(..., structural
+    # =False)` 会把这两条目标全判成「不是该镜头的真实字段路径」→ 整条 issue 被跳过
+    # → **质量门报得出、修复轮拿不到任何授权**（resolved=0 的结构性死路）。
+    # 代价与 `result_action_support` 相同：授权 = 允许增删 KF，由
+    # `kf_structural_guard`（镜内 + 单调 + motion 事件不丢）与「新增阻塞即回退」补回；
+    # 布局没跟上会引入 `kf_layout_count_mismatch`（blocking）→ 整组回退。
+    "kf_segment_missing",
     # ⚠️ v6.124.1（用户 2026-09-25 核对后收窄）：`kf_person_missing_in_layout`
     # **不在**此列。它的修法之一是「给 `frame_layouts.kfs[i]` 补一个角色条目」，
     # 曾据此按结构码授权「KF 列表本身」——但列表级授权同时放开了 `keyframes` 与

@@ -56,15 +56,26 @@ _DISTINCT = [
 ]
 
 
+def _frames_for(motion, dur):
+    """按时段中点给每段一帧——夹具**帧合规**（v6.143 P3 起结构轮把缺帧算结构问题）."""
+    from step01_script_gen.kf_coverage import segments as _segments
+
+    return [{"t_sec": round((a + b) / 2, 3), "stage": "approach",
+             "desc": str(body or "定格")}
+            for a, b, body in _segments(motion, dur)]
+
+
 def _shot(index, narration="", dur=5.0, *, motion=None, prompt=None, lf=None):
+    _motion = motion or "0-2秒：开口；2-4秒：收势"
+    _kfs = _frames_for(_motion, dur)
     return {"index": index, "duration": dur, "duration_sec": dur,
             "narration_segment": narration, "subtitle": narration,
             "scene": "照月湾", "location": "照月湾船头",
-            "motion_desc": motion or "0-2秒：开口；2-4秒：收势",
+            "motion_desc": _motion,
             "prompt": prompt or "中景",
             "ff_desc": "船头，张十三直立", "lf_desc": lf or "船头，张十三垂手",
-            "core_keywords": ["船头"], "keyframes": [],
-            "frame_layouts": {"ff": [], "lf": [], "kfs": []}}
+            "core_keywords": ["船头"], "keyframes": _kfs,
+            "frame_layouts": {"ff": [], "lf": [], "kfs": [[] for _ in _kfs]}}
 
 
 def _compliant_subs(shot, cap=None):

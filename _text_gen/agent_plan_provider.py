@@ -37,11 +37,11 @@ from typing import Optional
 
 import requests
 
+from . import retry_policy
 from .config import config
 from .models import TextGenerationRequest, TextGenerationResult, truncated_result
 from .service import TextGenerationService
 from shared.key_scheduler import KeyScheduler
-from shared.constants import AGENT_PLAN_TEXT_ATTEMPTS
 from shared.log_utils import verbose_write
 
 _verbose_write = partial(verbose_write, log_file="step01.log")
@@ -174,40 +174,57 @@ class AgentPlanTextService(TextGenerationService):
             f"response_format={payload.get('response_format')}"
         )
 
-        # 仅做 1 次退避：超时和 5xx 各 1 次，避免长任务重试浪费额度
+        # 重试判定/次数/退避/时间预算统一走 `_text_gen.retry_policy`（N6，2026-09-28）：
+        # provider 不再自带常量与 `except` 分支里的判定——否则「哪些错可重试」会随
+        # provider 漂移，上层也无从判断该不该再叠一层重试。
+        # 语义要点：**读超时不重试**（旧请求仍在模型侧跑，重发 = 双份长任务）。
         # v6.70.3（09-14）：超时随请求走（req.timeout_sec 分级），None 回退全局
         _timeout = int(req.timeout_sec) if req.timeout_sec else AGENT_PLAN_TEXT_TIMEOUT_SEC
-        for attempt in range(1, 1 + AGENT_PLAN_TEXT_ATTEMPTS):  # 1 次重试（初始 + 1 次 = 共 2 次提交）
+        _attempts = retry_policy.submit_attempts()
+        _t0 = time.time()
+        for attempt in range(1, 1 + _attempts):
             try:
                 resp = requests.post(
                     url, json=payload, headers=self._headers,
                     timeout=_timeout,
                 )
-            except requests.exceptions.Timeout:
-                # 长任务客户端超时：直接报错不重试（旧请求仍在模型侧跑）
-                if attempt == 1:
+            except requests.exceptions.RequestException as e:
+                _fc = retry_policy.classify_exception(e)
+                if _fc is retry_policy.FailureClass.TRANSPORT_TIMEOUT:
                     _verbose_write(
                         f"[!] 客户端 {_timeout}s 超时（长任务），"
                         f"不重试，改报「超时未完成」由上层业务决策"
                     )
-                return TextGenerationResult(
-                    success=False,
-                    error=(
-                        f"Agent Plan 客户端超时 ({_timeout}s) — "
-                        f"长任务不应自动重试，旧请求仍在模型侧跑；"
-                        f"请上层业务队列决定是否重发。"
-                        f"（model={model}，可用 AGENT_PLAN_TEXT_TIMEOUT_SEC 调整或请求级 timeout_sec）"
-                    ),
-                )
-            except requests.exceptions.RequestException as e:
-                # 非超时网络异常：1 次退避后重试
-                if attempt == 2:
                     return TextGenerationResult(
                         success=False,
-                        error=f"Agent Plan 提交网络异常: {e}（重试 1 次后仍失败）",
+                        error=(
+                            f"Agent Plan 客户端超时 ({_timeout}s) — "
+                            f"长任务不应自动重试，旧请求仍在模型侧跑；"
+                            f"请上层业务队列决定是否重发。"
+                            f"（model={model}，可用 AGENT_PLAN_TEXT_TIMEOUT_SEC 调整或请求级 timeout_sec）"
+                        ),
                     )
-                _verbose_write(f"[!] 提交网络异常: {e}，2s 后重试 (尝试 {attempt}/2)")
-                time.sleep(2.0)
+                _elapsed = time.time() - _t0
+                # 类别可重试 **且** 次数与时间预算都有余量 → 由本层退避重发；
+                # 否则把分类带回上层（上层**不得**再对传输类叠加重试）。
+                if not retry_policy.should_retry(_fc, attempts_used=attempt,
+                                                 elapsed_sec=_elapsed):
+                    return TextGenerationResult(
+                        success=False,
+                        error=(
+                            f"Agent Plan 提交失败[{_fc.value}]: {e}"
+                            f"（尝试 {attempt}/{retry_policy.submit_attempts(_fc)}，"
+                            f"已用 {_elapsed:.1f}s；"
+                            f"重试预算 {retry_policy.submit_budget_sec():g}s）"
+                        ),
+                    )
+                _wait = retry_policy.submit_backoff_sec(attempt)
+                _verbose_write(
+                    f"[!] 提交失败[{_fc.value}]: {e}，"
+                    f"{_wait:g}s 后重试 (尝试 {attempt}/"
+                    f"{retry_policy.submit_attempts(_fc)})"
+                )
+                time.sleep(_wait)
                 continue
 
             _verbose_write(
@@ -296,6 +313,21 @@ class AgentPlanTextService(TextGenerationService):
         )
 
         if not text:
+            # v6.62.6 契约：**截断必须经 `truncated_result` 统一落法**（四个 provider
+            # 同一份）——本分支此前把「空正文」一律当普通失败，于是
+            # 「思维链吃光配额、正文一个字没吐」被记成 `request_failed`，上层
+            # 按「不可重试」处置并直接终局（2026-09-28 审计实测 BLOCK）。
+            # 截断的正确归类是 `truncated=True`：换一次采样就可能不再截断。
+            if finish == "length":
+                return truncated_result(
+                    text="",
+                    usage=usage,
+                    allow_truncated=allow_truncated,
+                    error=(
+                        f"Agent Plan 输出被截断且正文为空（finish_reason=length, "
+                        f"model={model}, max_completion_tokens={cap}）"
+                    ),
+                )
             return TextGenerationResult(
                 success=False,
                 usage=usage,

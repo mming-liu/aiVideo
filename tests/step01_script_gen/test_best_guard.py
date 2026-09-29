@@ -86,24 +86,27 @@ def test_new_score_higher_no_selection(tmp_path, monkeypatch):
     assert json.loads(out.read_text(encoding="utf-8")) == {}
 
 
-def test_ledger_saturation_prefers_least_indebted(tmp_path, monkeypatch):
-    """v6.142（09-26 用户决定，P1-4）：台账全饱和时按**欠账轮次升序**选，不再只看分数.
+def test_ledger_saturation_selects_no_snapshot(tmp_path, monkeypatch):
+    """2026-09-27（用户裁决 4）：台账全饱和时**一份都不选**——让新稿进提交门检验.
 
-    旧实现（v6.115）：全部快照都在台账内 → 整表放开、仍按分数/风险选。于是
-    「低风险但反复欠账」的那份照样被反复选中——台账唯一携带的信息（欠过几次）
-    被丢掉了，棘轮形同失效。
+    旧口径（v6.142 P1-4）：全欠账 → 整表放开、按欠账轮次升序选一份。实测 08:11
+    run：全部 20 份快照都在台账内 → 选中上一轮刚 BLOCK 的 `072416`（那 2 分风险
+    只是**确定性**风险，欠的语义问题不在这个数里）→ 重跑同一套审计、同样的
+    4 条 blocking、`resolved=0` → 再 BLOCK。每轮原地空转，还把「确定性风险低」
+    读成了「已能提交」。
 
-    判别性：高分快照欠 5 轮、低分快照欠 1 轮 → 必须选低分那份。
-    旧口径下高分者胜（`_quality_rank` 只看分数/风险），本用例会红。
+    判别性：两份快照都在台账内（其中一份分数明显更高）→ 必须**一份都不选**；
+    旧口径下会返回高分那份。
     """
     import json as _json
 
     from shared.quality_gate import compute_script_revision as _rev
 
     m, out, snap_dir = _setup(tmp_path, monkeypatch)
-    _hot = _write_snapshot(snap_dir, "20260924_231100", _script_with_dialogue(4))
-    _calm = _write_snapshot(snap_dir, "20260924_215530", _script_with_dialogue(2))
-    assert m._score_script(_script_with_dialogue(4), "")["total"] >         m._score_script(_script_with_dialogue(2), "")["total"], "夹具必须有分差"
+    _write_snapshot(snap_dir, "20260924_231100", _script_with_dialogue(4))
+    _write_snapshot(snap_dir, "20260924_215530", _script_with_dialogue(2))
+    assert m._score_script(_script_with_dialogue(4), "")["total"] > \
+        m._score_script(_script_with_dialogue(2), "")["total"], "夹具必须有分差"
 
     (snap_dir / "_blocked_revisions.json").write_text(_json.dumps({
         "revisions": [_rev(_script_with_dialogue(4)), _rev(_script_with_dialogue(2))],
@@ -112,25 +115,78 @@ def test_ledger_saturation_prefers_least_indebted(tmp_path, monkeypatch):
     }, ensure_ascii=False), encoding="utf-8")
 
     selected, meta = m._cross_run_best_guard(_script_with_dialogue(0), "")
-    assert meta["best_path"] == str(_calm), (
-        "欠账少的必须优先，不能只按分数选：%s" % meta)
+    assert selected is None, "欠账稿不得再作为「最佳」稿被重复修复"
+    assert meta["best_path"] is None and meta["selected"] is False, meta
+    assert meta["reason"] == "all_snapshots_owed", meta
+    assert json.loads(out.read_text(encoding="utf-8")) == {}
 
 
-def test_ledger_without_debt_counts_reads_as_one_episode(tmp_path, monkeypatch):
-    """老台账（只有 `revisions`、没有 `debt`）按 1 轮计——不写=0 会让老条目无条件胜出."""
+def test_criteria_change_re_admits_a_blocked_snapshot(tmp_path, monkeypatch):
+    """判据指纹变了 → 旧欠账不再作数，该稿按**现行判据**重新评估（用户裁决 4）.
+
+    理由：旧结论可能正是被修掉的那条判据得出的（本轮就有两条：
+    `frame_presence_consistency` 的时态误判、缺段重复计量）。指纹不符就永久排除
+    等于「判据修好了也换不回重评机会」。
+    """
     import json as _json
 
     from shared.quality_gate import compute_script_revision as _rev
 
     m, out, snap_dir = _setup(tmp_path, monkeypatch)
-    _old = _write_snapshot(snap_dir, "20260924_231100", _script_with_dialogue(4))
+    _hot = _write_snapshot(snap_dir, "20260924_231100", _script_with_dialogue(4))
+    rev = _rev(_script_with_dialogue(4))
+    (snap_dir / "_blocked_revisions.json").write_text(_json.dumps({
+        "revisions": [rev],
+        "criteria": {rev: {"rules": "OLD-RULES", "prompts": "OLD-PROMPTS"}},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    assert m._load_blocked_revisions() == set(), (
+        "指纹不符的条目不得再当欠账——否则判据修好也换不回重评")
+    _sel, meta = m._cross_run_best_guard(_script_with_dialogue(0), "")
+    assert meta["best_path"] == str(_hot), meta
+
+
+def test_ledger_without_criteria_stays_blocked(tmp_path, monkeypatch):
+    """老台账条目（无判据指纹）按**仍然欠账**处理——保守方向.
+
+    无法核对旧结论是在哪版判据下得出的，就不凭它把该稿放回候选池。
+    """
+    import json as _json
+
+    from shared.quality_gate import compute_script_revision as _rev
+
+    m, out, snap_dir = _setup(tmp_path, monkeypatch)
+    _write_snapshot(snap_dir, "20260924_231100", _script_with_dialogue(4))
+    (snap_dir / "_blocked_revisions.json").write_text(
+        _json.dumps({"revisions": [_rev(_script_with_dialogue(4))]}),
+        encoding="utf-8")
+
+    _sel, meta = m._cross_run_best_guard(_script_with_dialogue(0), "")
+    assert _sel is None and meta["reason"] == "all_snapshots_owed", meta
+
+
+def test_recorded_criteria_match_the_current_fingerprints(tmp_path, monkeypatch):
+    """登记时写入的指纹 = 现行指纹 → 同判据下再读仍是欠账（棘轮不被自己抹掉）."""
+    m, out, snap_dir = _setup(tmp_path, monkeypatch)
+    m._record_blocked_revision("rev_abc")
+    data = json.loads((snap_dir / "_blocked_revisions.json").read_text(encoding="utf-8"))
+    assert data["criteria"]["rev_abc"] == m._current_criteria()
+    assert m._load_blocked_revisions() == {"rev_abc"}
+
+
+def test_ledger_without_debt_counts_reads_as_one_episode(tmp_path, monkeypatch):
+    """老台账（只有 `revisions`、没有 `debt`）按 1 轮计——只影响欠账轮次的读数."""
+    import json as _json
+
+    from shared.quality_gate import compute_script_revision as _rev
+
+    m, out, snap_dir = _setup(tmp_path, monkeypatch)
+    _write_snapshot(snap_dir, "20260924_231100", _script_with_dialogue(4))
     (snap_dir / "_blocked_revisions.json").write_text(
         _json.dumps({"revisions": [_rev(_script_with_dialogue(4))]}),
         encoding="utf-8")
 
     assert m._load_blocked_debt() == {_rev(_script_with_dialogue(4)): 1}
-    _sel, meta = m._cross_run_best_guard(_script_with_dialogue(0), "")
-    assert meta["best_path"] == str(_old)
 
 
 def test_ledger_survives_a_corrupt_debt_entry(tmp_path, monkeypatch):
@@ -375,19 +431,20 @@ def test_non_script_snapshot_never_wins_the_guard(tmp_path, monkeypatch):
         "夹具没能复现现场：风险 0 的非分镜稿应当压过真稿：%s" % meta2)
 
 
-def test_non_script_snapshot_never_enters_the_relaxed_pool(tmp_path, monkeypatch):
-    """「全部快照欠账 → 放开排除」的放宽分支**不得**放宽「是不是稿件」这一条."""
+def test_non_script_snapshot_never_enters_selection(tmp_path, monkeypatch):
+    """欠账稿不再放进候选池（放宽分支已删）；非分镜稿也仍然进不了候选."""
     m, out, snap_dir = _setup(tmp_path, monkeypatch)
     monkeypatch.setattr(m, "_candidate_quality_summary", _risk_by_shape)
     _non_script = snap_dir / "script_result_20260926_000000.audit.r1.json"
     _non_script.write_text(json.dumps({"issues": [], "diagnostic": True}),
                            encoding="utf-8")
-    # 唯一真稿在欠账台账里 → 触发放宽分支
+    # 唯一真稿在欠账台账里 → 本轮没有任何合格候选
     _blocked = _write_snapshot(snap_dir, "20260924_231100", _script_with_dialogue(8))
     from shared.quality_gate import compute_script_revision as _rev
     monkeypatch.setattr(m, "_load_blocked_revisions",
                         lambda: {_rev(_script_with_dialogue(8))})
     _selected, meta = m._cross_run_best_guard(_script_with_dialogue(1), "")
+    assert _selected is None and meta["reason"] == "all_snapshots_owed", meta
     assert not (meta.get("best_path") or "").endswith("audit.r1.json"), meta
     assert any("audit.r1.json" in r for r in meta.get("invalid_candidates") or []), meta
 
@@ -427,8 +484,9 @@ def test_blocked_revision_snapshot_is_skipped_in_selection(tmp_path, monkeypatch
     现场：run 193736 只登记了修后 revision，被选中的历史稿自身 revision 不在台账内
     → 下一轮又能选中它、再 BLOCK。
 
-    ⚠️ 只保证「**有别的候选时**不选它」：全部候选都欠账时护栏会走「放开限制」的
-    兜底分支（有意保留，否则护栏整个失效）——**不是**永久排除。
+    2026-09-27（用户裁决 4）：判据指纹未变时这是**排除**（不再是「有别的候选时才
+    不选」的软护栏）；没有其它候选时返回 None，由新稿进提交门（见
+    `test_ledger_saturation_selects_no_snapshot`）。
     """
     import json as _json
 
@@ -453,3 +511,144 @@ def test_blocked_revision_snapshot_is_skipped_in_selection(tmp_path, monkeypatch
     _sel2, meta2 = m._cross_run_best_guard(_script_with_dialogue(0), "")
     assert meta2["best_path"] == str(_hot), (
         "夹具没有让高分稿本该获胜（否则 ① 不具判别性）：%s" % meta2)
+
+
+# ---------------------------------------------------------------------------
+# v6.149（复核根因 3）：欠账按**具体未解决问题 + 其所依赖判据**记录
+# ---------------------------------------------------------------------------
+
+
+def test_debt_issue_records_split_by_criterion(monkeypatch):
+    """审计类欠账依赖**审计提示版本**，确定性欠账依赖**规则源指纹**."""
+    import step01_script_gen.audit as au
+    import step01_script_gen.main as m
+    monkeypatch.setattr(au, "audit_prompt_version", lambda: "APV-1")
+
+    recs = m._debt_issue_records([
+        {"code": "model_audit_STATE_CHAIN_CONFLICT", "shot_id": "8",
+         "field_path": "lf_desc"},
+        {"code": "result_action_support", "shot_id": "8", "field_path": "motion_desc"},
+    ])
+    assert [r["crit_kind"] for r in recs] == ["audit", "rules"]
+    assert recs[0]["crit_fp"] == "APV-1"
+    assert recs[1]["crit_fp"] == str(m.RULE_SOURCE_FINGERPRINT or "")
+
+
+def test_issue_in_force_uses_its_own_criterion(monkeypatch):
+    """只有**该条**依赖的判据变了才算作废——另一类判据的变动不影响它."""
+    import step01_script_gen.audit as au
+    import step01_script_gen.main as m
+
+    monkeypatch.setattr(au, "audit_prompt_version", lambda: "APV-1")
+    audit_rec = m._debt_issue_records(
+        [{"code": "model_audit_X", "shot_id": "8"}])[0]
+    assert m._debt_issue_in_force(audit_rec) is True
+    monkeypatch.setattr(au, "audit_prompt_version", lambda: "APV-2")
+    assert m._debt_issue_in_force(audit_rec) is False
+
+    monkeypatch.setattr(m, "RULE_SOURCE_FINGERPRINT", "R1")
+    rules_rec = m._debt_issue_records(
+        [{"code": "result_action_support", "shot_id": "8"}])[0]
+    assert m._debt_issue_in_force(rules_rec) is True
+    monkeypatch.setattr(m, "RULE_SOURCE_FINGERPRINT", "R2")
+    assert m._debt_issue_in_force(rules_rec) is False
+
+    # 认不出判据 → 保守按仍然欠账
+    assert m._debt_issue_in_force({"crit_kind": "???", "crit_fp": "x"}) is True
+
+
+def test_unrelated_prompt_change_does_not_wash_audit_debt(tmp_path, monkeypatch):
+    """**改无关提示不能自动洗掉审计类欠账**（旧口径整批放行 59 份的根因）."""
+    import step01_script_gen.audit as au
+    import step01_script_gen.main as m
+    m, out, snap_dir = _setup(tmp_path, monkeypatch)
+
+    monkeypatch.setattr(au, "audit_prompt_version", lambda: "APV-1")
+    monkeypatch.setattr(m, "PROMPT_SOURCE_FINGERPRINT", "P1")
+    m._record_blocked_revision("rev_x", issues=m._debt_issue_records(
+        [{"code": "model_audit_X", "shot_id": "8", "field_path": "lf_desc"}]))
+    assert m._load_blocked_revisions() == {"rev_x"}
+
+    # 提示源指纹变了（与审计提示无关的改动）→ 旧口径会整批放行；新口径仍排除
+    monkeypatch.setattr(m, "PROMPT_SOURCE_FINGERPRINT", "P2")
+    assert m._load_blocked_revisions() == {"rev_x"}
+
+    # 审计提示本身变了 → 该条欠账作废，恢复候选资格
+    monkeypatch.setattr(au, "audit_prompt_version", lambda: "APV-2")
+    assert m._load_blocked_revisions() == set()
+
+
+def test_partially_stale_debt_still_excluded(tmp_path, monkeypatch):
+    """一条稿上两类欠账：只有一类判据变了 → 仍排除（只作废变了的那条）."""
+    import step01_script_gen.audit as au
+    import step01_script_gen.main as m
+    m, out, snap_dir = _setup(tmp_path, monkeypatch)
+
+    monkeypatch.setattr(au, "audit_prompt_version", lambda: "APV-1")
+    monkeypatch.setattr(m, "RULE_SOURCE_FINGERPRINT", "R1")
+    m._record_blocked_revision("rev_y", issues=m._debt_issue_records([
+        {"code": "model_audit_X", "shot_id": "8", "field_path": "lf_desc"},
+        {"code": "result_action_support", "shot_id": "8", "field_path": "motion_desc"},
+    ]))
+
+    monkeypatch.setattr(au, "audit_prompt_version", lambda: "APV-2")   # 审计那条作废
+    assert m._load_blocked_revisions() == {"rev_y"}                    # 规则那条仍在
+
+    monkeypatch.setattr(m, "RULE_SOURCE_FINGERPRINT", "R2")            # 规则那条也作废
+    assert m._load_blocked_revisions() == set()
+
+
+def test_snapshot_cross_field_blocking_is_the_commit_point_criterion(monkeypatch):
+    """候选资格初筛用**与提交点同源**的跨字段判据（治「选中即将被判死的旧稿」）."""
+    import step01_script_gen.main as m
+
+    bad = {"shots": [{"index": 8, "duration_sec": 5.0,
+                      "lf_desc": "寒光短刃刺中杨旭心口，白袍洇出暗红",
+                      "motion_desc": "前2秒：那人右手一扬；2-4秒：寒光剑光掠过杨旭心口；"
+                                     "4-5秒：那人推臂一送，白袍洇出暗红"}]}
+    codes = [getattr(i, "code", "") for i in m._snapshot_cross_field_blocking(bad)]
+    assert "result_action_support" in codes
+
+    ok = {"shots": [{"index": 8, "duration_sec": 5.0,
+                     "lf_desc": "白袍洇出暗红",
+                     "motion_desc": "前2秒：那人右手一扬；2-4秒：寒光刺入杨旭心口；"
+                                    "4-5秒：那人推臂一送，白袍洇出暗红"}]}
+    assert m._snapshot_cross_field_blocking(ok) == []
+
+
+def test_reblock_under_new_criteria_overwrites_the_stale_record(tmp_path, monkeypatch):
+    """复核发现 2：R1 判据作废 → R2 下**同一问题再次 BLOCK** → 必须重新排除.
+
+    旧实现按 `(code, shot, field)` 去重且**旧的排在前**，于是新记录被跳过，台账里
+    留下已过期的 R1 指纹 → `_load_blocked_revisions` 判「可重评」把它放回候选池。
+    """
+    import step01_script_gen.audit as au
+    import step01_script_gen.main as m
+    m, out, snap_dir = _setup(tmp_path, monkeypatch)
+
+    monkeypatch.setattr(au, "audit_prompt_version", lambda: "APV-1")
+    _issue = [{"code": "model_audit_X", "shot_id": "8", "field_path": "lf_desc"}]
+    m._record_blocked_revision("rev_z", issues=m._debt_issue_records(_issue))
+    assert m._load_blocked_revisions() == {"rev_z"}
+
+    # 判据变了 → 该条作废，恢复候选资格
+    monkeypatch.setattr(au, "audit_prompt_version", lambda: "APV-2")
+    assert m._load_blocked_revisions() == set()
+
+    # 新判据下**同一问题再次 BLOCK** → 记录必须被现行判据覆盖 → 重新排除
+    m._record_blocked_revision("rev_z", issues=m._debt_issue_records(_issue))
+    rows = (m._load_blocked_ledger().get("issues") or {}).get("rev_z") or []
+    assert [r["crit_fp"] for r in rows] == ["APV-2"], rows
+    assert m._load_blocked_revisions() == {"rev_z"}
+
+
+def test_cross_field_validator_exception_means_unverified(monkeypatch):
+    """复核发现 4：校验器异常 → `None`（**未能校验**），不得等同「无 blocking」."""
+    import step01_script_gen.main as m
+    import step01_script_gen.cross_field_checks as cfc
+
+    def _boom(script):
+        raise RuntimeError("validator down")
+
+    monkeypatch.setattr(cfc, "cross_field_issues", _boom)
+    assert m._snapshot_cross_field_blocking({"shots": []}) is None

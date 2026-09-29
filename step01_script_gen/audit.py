@@ -148,25 +148,20 @@ def resolve_audit_channel() -> tuple:
     """审计专用通道 `(provider, model)`；未配置时返回 `(None, None)`.
 
     **通道与模型 ID 必须一起换**：调用方传来的模型名来自 `SCRIPT_CANDIDATE_MODELS`，
-    那是 **plan 通道**的名字（如 `deepseek-v4-flash`），而原生 DeepSeek 的 Responses
+    那是 **plan 通道**的名字（如 `deepseek-v4.1-flash`），而原生 DeepSeek 的 Responses
     API 只接受 `deepseek-flash` / `deepseek-v4-pro`（官方 create-response 文档，
     2026-09-25 核对）。只换 provider 而沿用旧模型名，请求会被直接拒。
 
     设了通道却缺模型名 → **显式抛错**：静默沿用调用方的 plan 通道模型名，等于把 400
     留到跑批时才暴露（宁可显式失败，不可静默降级）。
+
+    解析实现已收敛到单一来源 `shared.text_channel.resolve_channel`（定向修复的通道
+    覆盖用同一份语义，2026-09-28）。
     """
-    provider = (os.getenv(AUDIT_PROVIDER_ENV) or "").strip().lower()
-    if not provider:
-        return None, None
-    model = (os.getenv(AUDIT_MODEL_ENV) or "").strip()
-    if not model:
-        raise ValueError(
-            f"{AUDIT_PROVIDER_ENV}={provider} 但未设置 {AUDIT_MODEL_ENV}："
-            f"审计专用通道必须显式给出该通道可用的模型 ID——不能沿用 "
-            f"SCRIPT_CANDIDATE_MODELS 里的 plan 通道模型名"
-            f"（原生 DeepSeek 只认 deepseek-flash / deepseek-v4-pro）。"
-        )
-    return provider, model
+    from shared.text_channel import resolve_channel
+    return resolve_channel(
+        AUDIT_PROVIDER_ENV, AUDIT_MODEL_ENV,
+        hint="原生 DeepSeek 只认 deepseek-flash / deepseek-v4-pro。")
 
 
 def audit_prompt_version() -> str:
@@ -202,13 +197,20 @@ _AUDIT_RULES_TEMPLATE = """# 审查规则
 4. 哪些镜头重复表达同一信息；
 {hook_rule}
 
+合规替换（不算缺陷）：
+- 台词字段 `narration_segment` / `subtitle` 与原文的差异若属于既定合规映射（`杀人→出人命`、`击杀→制服`、`刺客→神秘人` 等，见 `shared/content_safety.NARRATION_SUBSTITUTIONS` / `SENSITIVE_SUBSTITUTIONS`）则不判为错词/改词/漏词；
+- 以 `出人命` 等合规词判错词前，先确认原文该句是否含对应被替换词（如原文含 `杀人` 则 `出人命` 为合规产物）。
+
 帧职责：
 - ff 只检查动作开始前准备态；
 - kf 只检查对应中间过程；
 - lf 只检查结果态；
 - 后续动作缺失必须指向 motion_desc/对应 kf/lf，禁止要求 ff 提前完成过程或结果动作。
 
-每个问题必须给 shot_id、frame_id、entity_id、field_path、evidence、impact、minimal_fix。
+每个问题必须给 code、shot_id、frame_id、entity_id、field_path、evidence、impact、minimal_fix。
+- `code`：该缺陷的**族名**，大写蛇形（如 `STATE_CHAIN_CONFLICT`、`PROP_CONTINUITY`、`FF_RESULT_LEAK`、`KF_STAGE_MISMATCH`）。**同类缺陷在不同镜头必须用同一个 `code`**——下游按它归族统计与判优先级；不得留空，也不得写 `ISSUE`/`UNKNOWN`/`PROBLEM` 这类无信息名。
+- `field_path` 必须是**非空**的具体字段路径（就是你建议「修改」的那个字段）；留空的问题本轮**拿不到修复授权**，等于白报。
+  ⚠️ 这两条是硬要求：通道不支持 json_schema 时（schema 里的 required 不再被强制）只能靠本段约束，实测漏掉会让全部问题退化成同一个无名族。
 **field_path 必须是你建议「修改」的那个字段，不是矛盾被观察到的字段**：要改 ff_desc 就写 `ff_desc`；要改动作时序/过程就写 `motion_desc`；要改某一关键帧就写 `keyframes[N].desc`；要改布局条目按下面**两种形状**写（写错形状该条目标会被剔除，该问题本轮拿不到修复授权）。定位到观察点而非修改点，会把修复引导到错误字段。
 
 **布局路径的两种形状（下标一层都不能省）**：
@@ -222,6 +224,7 @@ _AUDIT_RULES_TEMPLATE = """# 审查规则
 - `shot_id` 一律写该镜在上文分镜里的 **`index` 裸数字**（如 `5`；钩子写 `0`）。不要写 `shot5` / `shot_5` / `第5镜` 之类的写法——**本文档全篇的镜头号都按裸数字读**，下面举例中的「5 号镜」等价于 `"shot_id": "5"`。
 - 只写该镜头里**真实存在**的字段叶子：`ff_desc` / `lf_desc` / `motion_desc` / `prompt` / `keyframes[N].desc` / `keyframes[N].stage` / `keyframes[N].t_sec` / `frame_layouts.ff[N].<叶子>` / `frame_layouts.lf[N].<叶子>` / `frame_layouts.kfs[N][n].<叶子>` / `temporal_plan`。不要写 `ff_desc.props` 这类组合路径，也不要编造字段。**数组下标必须落在本稿该镜的实际长度内**（该镜 `keyframes` 只有 2 项就不要写 `keyframes[2]`；`frame_layouts.kfs[0]` 的出镜表只有 1 人就别写 `[0][1]`）——越界、编造的路径会被逐条剔除，该问题本轮拿不到修复授权，白等一轮审计。
 - 一条问题需要跨镜联动才能修好时（例如同一事实在 5 号镜的 ff_desc 与 7、8、9 号镜的 ff_desc 里互相矛盾），**每一镜各写一条**。系统把它们当成**一个事务**：整组修、整组验收、整组回退——写漏一镜会让整组被回退。
+- **单条问题的 repair_targets 最多覆盖 6 个镜头**（联动组容量上限）。systemic 缺陷（例如某字段取值全篇非法）**按镜拆成多条问题**，每条只覆盖它自己的那几镜。**跨 7 镜以上的单条声明修复侧整组做不完，会整轮停在门口**（不调修复、不再发审计）——拆成多条才能逐镜修掉。
 - 只改一个字段就写一条（**不要多写**没必要的字段：多列的条目同样要一起改完才算通过）。确实无法确定要改哪个字段时写空数组 `[]`，该问题本轮不进入定向修复。
 - `shot_id` / `field_path` 仍要填，用来**定位问题出现在哪里**（可与 repair_targets 不同：问题出现在这镜，要改的是别的镜）。
 严重级别：blocking=确定影响剧情/可执行性；warning=可能影响；info=优化建议。
@@ -467,6 +470,7 @@ def run_same_model_audit_with_status(
         return AuditResult("request_failed", [], f"audit service init failed: {exc}",
                            attempts=1, **_chan)
     import os as _os
+    import time as _time
     _audit_max_tokens = _env_int("AUDIT_MAX_OUTPUT_TOKENS", 16000, minimum=1)
     # v6.124（验证计划 (c)）：**审计专用**思考档位，便于「固定输入 × 不同 effort ×
     # 重复运行」的稳定性/召回实验。未设置 → 不传 → 沿用 provider 全局
@@ -493,8 +497,10 @@ def run_same_model_audit_with_status(
     #     最小复现 ok——单次失败不可避免，但提交点此前把它当确定性致命错误直接
     #     BLOCK，整章进欠账台账。
     # 因此对 parse_failed 做**有界重试**（`AUDIT_PARSE_RETRIES`，默认 1 次）：请求
-    # 不变、换一次采样。request_failed **不**重试——截断/超时重试大概率同样失败，
-    # 只烧钱不收敛。全部尝试失败仍按原 status 返回——fail-closed 语义不变。
+    # 不变、换一次采样。v6.144（2026-09-28）把**截断**并入同一预算——截断同样
+    # 取决于采样（思维链长度 7.5k ↔ 32k+），换一次就可能不截断；
+    # 而**传输/超时**失败**不**重试（provider 层已尽力，见 `_text_gen.retry_policy`，
+    # 上层不得再叠一层）。全部尝试失败仍按原 status 返回——fail-closed 语义不变。
     # `0` 合法（= 关闭重试，与旧版一致）；非法/负数回退默认 1——手误不该把保护关掉
     _parse_retries = _env_int("AUDIT_PARSE_RETRIES", 1, minimum=0)
     _failed_attempts: list = []
@@ -506,6 +512,10 @@ def run_same_model_audit_with_status(
         print(f"[AUDIT] 最终语义审计第 {_attempts} 次调用"
               f"（provider={channel_provider or '全局TEXT_PROVIDER'}，"
               f"model={channel_model or model}）")
+        # v6.152（复核要求 2）：每次审计都记**耗时 / 输出与思维链 token / 停止依据**。
+        # 抬高输出上限后要回答的第一个问题是「64k 能不能在时间预算内跑完」——
+        # 没有这一行就只能靠猜（今天三次截断都是事后从 DEBUG 行反推的）。
+        _t_call = _time.time()
         try:
             result = service.generate(req)
         except Exception as exc:
@@ -519,7 +529,64 @@ def run_same_model_audit_with_status(
         # 合计 = failed_attempts 各次 + 顶层 usage。
         _usage = getattr(result, "usage", None)
         if not result.success:
-            return AuditResult("request_failed", [], str(getattr(result, "error", "") or ""),
+            # v6.144（2026-09-28 跑批实测）：**截断**与「传输/超时失败」是两类，处置不同。
+            #   - 截断（`truncated=True`，含「思维链吃光配额、正文为空」）：同请求**换一次
+            #     采样就可能不再截断**——实测同一稿的思维链长度在 7.5k ↔ 32k+ 之间波动，
+            #     撞顶与否取决于采样。故并入**同一个有界重采样预算**（`AUDIT_PARSE_RETRIES`），
+            #     不新开一层、不叠加传输类重试。
+            #   - 传输/超时（`truncated=False`）：provider 层已尽力（见 retry_policy），
+            #     这里**一次都不重试**，直接按 request_failed 终局。
+            _dur = _time.time() - _t_call
+            _u = getattr(result, "usage", None) or {}
+            _out = _u.get("output_tokens") or _u.get("completion_tokens")
+            _rsn = _u.get("reasoning_tokens")
+            print(f"[AUDIT] 第 {_attempts} 次返回：耗时 {_dur:.1f}s，"
+                  f"max_completion_tokens={req.max_tokens or '全局'}，"
+                  f"output={_out}（思维链 {_rsn}），"
+                  f"truncated={bool(getattr(result, 'truncated', False))}，"
+                  f"success={bool(getattr(result, 'success', False))}")
+            _truncated = bool(getattr(result, "truncated", False))
+            if _truncated and _attempts <= _parse_retries:
+                _failed_attempts.append({
+                    "attempt": _attempts,
+                    "raw_text_head": str(result.text or "")[:2000],
+                    "raw_text_len": len(str(result.text or "")),
+                    "usage": _usage,
+                    "failure": "truncated",
+                })
+                # v6.151（实跑根因）：截断的根因是**思维链把 `max_tokens` 吃光**
+                # ——实测同一稿两次调用都恰好撞 32000 且正文 0 token、`finish_reason`
+                # 都是 length。同请求重采样等于同一枚硬币再抛一次，救不了；改成
+                # **换更省的思考档位重采样**（默认 `minimal`：探针实测思维链 ~16.4k，
+                # 32000 上限下留得下正文）。不动上限是有意的——抬高上限会把生成时间
+                # 拉长，撞上审计自身的超时（超时**不重试**，见 `retry_policy`）。
+                # v6.152（复核更正 v6.151）：**换 `reasoning_effort` 在这个通道上改不动
+                # 发出的请求**
+                # ——provider 把 `low`/`minimal` 都序列化成 `thinking.type=enabled`，
+                # 两份 HTTP payload 完全相同（实测首跑两次调用：32,000 全为思维链、
+                # 正文为空）。该通道能改变 payload 的思考降档只有「开关思考」，而
+                # **关思考的审计质量未验证**（探针：3 次里 2 次首个采样解析失败）。
+                # 故改成**给重采样更多输出余量**：`req.max_tokens` 确实进 payload
+                # （provider: `max_completion_tokens = req.max_tokens or 全局值`）。
+                # 只加在**重采样**上——首跑上限不动，避免把每次审计都拉长撞超时。
+                import dataclasses as _dc
+                # 默认 **0 = 不抬**：首跑上限已按实测放到 64000（.env
+                # `AUDIT_MAX_OUTPUT_TOKENS`），重采样就是「同请求再采一次」。
+                # 保留这个 env 是为将来验证过更高上限时留口子。
+                _retry_cap = _env_int("AUDIT_TRUNCATION_RETRY_MAX_TOKENS", 0,
+                                      minimum=0)
+                _bumped = False
+                if _retry_cap and _retry_cap > int(_audit_max_tokens or 0):
+                    req = _dc.replace(req, max_tokens=_retry_cap)
+                    _bumped = True
+                print(f"[AUDIT] 第 {_attempts} 次审计输出被截断"
+                      f"（{str(getattr(result, 'error', '') or '')[:80]}），"
+                      + (f"重采样并把输出上限抬到 {_retry_cap}"
+                         if _bumped else "同请求重采样")
+                      + f"（还剩 {_parse_retries + 1 - _attempts} 次机会）")
+                continue
+            return AuditResult("truncated" if _truncated else "request_failed", [],
+                               str(getattr(result, "error", "") or ""),
                                str(getattr(result, "text", "") or ""), usage=_usage,
                                attempts=_attempts, failed_attempts=_failed_attempts,
                                **_chan)

@@ -33,6 +33,10 @@ def _compute_rule_source_fingerprint() -> str:
     project = root.parent
     files = [
         root / "quality_issues.py",
+        # 2026-09-27（复核 1-3）：kf ↔ 时段覆盖的**唯一判据**。质量门的新 blocking
+        # `kf_segment_missing` 完全由它决定——只改覆盖判据（不动 quality_issues.py）
+        # 时，旧报告必须失效，否则会被复用。
+        root / "kf_coverage.py",
         root / "state_updates.py",
         root / "validation.py",
         root / "timecode.py",
@@ -761,6 +765,68 @@ def final_time_invariant_issues(script: dict) -> list[Issue]:
     return out
 
 
+def _kf_segment_missing_issues(shot: dict, shot_id) -> list[Issue]:
+    """缺段检测：某明确动作时段没有任何帧归属它 → 结构化 blocking.
+
+    v6.143（2026-09-27 用户裁决）：判据来自唯一事实源 `kf_coverage.analyze`
+    ——「一帧只归属一个明确事件」，边界帧不再同时充当相邻两段的证据。
+    CLAUDE.md v6.33 的「kf 个数 ≥ 时段数」此前只在约束层（HARD、无消费者）
+    与校验层（warning-only）报，质量门不收，于是「约束报缺帧 + 质量门 PASS」
+    并存。这里只接入**已核实**的那一类；其它约束 HARD 不顺带升级。
+
+    **零帧也要报**：显式分 N 段却一帧都没有是最严重的一类，故本函数在
+    `_keyframe_timeline_issues` 的「无帧早退」**之前**调用。
+    """
+    # v6.143（2026-09-27 用户裁决）：**缺段**接入结构化质量门。
+    #
+    # 判据来自唯一事实源 `kf_coverage.analyze`——「一帧只归属一个明确事件」，
+    # 边界帧不再同时充当相邻两段的证据。CLAUDE.md v6.33 的「kf 个数 ≥ 时段数」
+    # 此前只在约束层（HARD、无消费者）与校验层（warning-only）报，质量门不收，
+    # 于是「约束报缺帧 + 质量门 PASS」并存。这里只接入**已核实**的那一类：
+    # 某明确动作时段没有任何帧归属它。其它约束 HARD 不顺带升级。
+    # 某明确动作时段没有任何帧归属它
+    issues: list[Issue] = []
+    motion = str(shot.get("motion_desc") or "").strip()
+    if motion:
+        from step01_script_gen.kf_coverage import analyze as _analyze_kf_cov2
+        _cov2 = _analyze_kf_cov2(shot)
+        for _si in _cov2.missing:
+            _a, _b, _body = _cov2.segments[_si]
+            issues.append(Issue(
+                code="kf_segment_missing", severity="visual_risk",
+                message=(
+                    f"motion 时段 {_a:g}-{_b:g}s「{str(_body)[:40]}」没有**按时间"
+                    f"归属**它的关键帧（本镜 {len(_cov2.slots)} 帧 / "
+                    f"{len(_cov2.required)} 个需要独立帧的时段）。"
+                    f"**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有"
+                    f"一帧、且该帧文案描写的是它自己那段**）："
+                    f"① 在 keyframes **新增 1 帧**（t_sec 取 {(_a + _b) / 2:g}，"
+                    f"即该段中点；time_ratio = 段中点 / duration_sec），desc 描写"
+                    f"**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**"
+                    f"（两表长度必须始终相等）；"
+                    f"② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，"
+                    f"或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与"
+                    f"对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、"
+                    f"或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的"
+                    f"「反手一掌」被画在 2.5s、文案写「掌风扫向」）。"
+                    f"**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案"
+                    f"描写它自己那段」，①②怎么组合都算修好——同一帧若另有"
+                    f"`kf_event_window_mismatch`（那条要求不改 t_sec），照它的"
+                    f"要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。"
+                    f"**禁止**改写、删除或合并 motion_desc 来消除本条"
+                    f"——那只会让告警消失，动作证据并没有增加。"
+                ),
+                shot_id=shot_id, frame_id=f"seg{_si}", field_path="keyframes",
+                evidence=f"seg[{_si}] {_a:g}-{_b:g}s = {str(_body)[:60]}",
+                repair_targets=[
+                    {"shot_id": shot_id, "field_path": "keyframes"},
+                    {"shot_id": shot_id, "field_path": "frame_layouts.kfs"},
+                ],
+                repairable=True,
+            ))
+    return issues
+
+
 def _keyframe_timeline_issues(shot: dict, shot_id) -> list[Issue]:
     """Validate the final keyframe contract as one unit.
 
@@ -771,9 +837,10 @@ def _keyframe_timeline_issues(shot: dict, shot_id) -> list[Issue]:
     from shared.kf_time import get_kf_t_sec
 
     kfs = [k for k in (shot.get("keyframes") or []) if isinstance(k, dict)]
+    # v6.143：缺段先判——**零帧**是最严重的缺段，不能落在早退之后
+    issues: list[Issue] = _kf_segment_missing_issues(shot, shot_id)
     if not kfs:
-        return []
-    issues: list[Issue] = []
+        return issues
 
     timed: list[tuple[int, dict, float | None]] = []
     for i, kf in enumerate(kfs):
@@ -883,58 +950,40 @@ def _keyframe_timeline_issues(shot: dict, shot_id) -> list[Issue]:
     motion = str(shot.get("motion_desc") or "").strip()
     if motion and len(timed) >= 2:
         try:
-            from step01_script_gen.constraints.kf_event_order import _match_score, _segments
-            try:
-                dur = float(shot.get("duration_sec") or shot.get("duration") or 0)
-            except (TypeError, ValueError):
-                dur = 0.0
-            segs = _segments(motion, dur)
+            # 2026-09-27：归属与错位判据改走**唯一判据** `kf_coverage.analyze`
+            # ——同一函数也是 `kf_event_order` 与 `_check_kf_time_window_alignment`
+            # 的判据来源，三处不再各持一套口径。阈值未动（0.45 / 0.12）。
+            from step01_script_gen.kf_coverage import analyze as _analyze_kf_coverage
             scene_prefix = str(shot.get("ff_desc") or "").split("，", 1)[0].strip()
             if scene_prefix:
                 scene_prefix += "，"
+            _cov = _analyze_kf_coverage(shot, scene_prefix=scene_prefix)
+            segs = _cov.segments
             if len(segs) >= 2:
-                for i, kf, t in timed:
-                    if t is None:
+                for _slot in _cov.slots:
+                    if not _slot.mismatched:
                         continue
-                    own = None
-                    scores = []
-                    in_windows: list[int] = []
-                    desc_for_match = str(kf.get("desc") or "")
-                    if scene_prefix and desc_for_match.startswith(scene_prefix):
-                        desc_for_match = desc_for_match[len(scene_prefix):]
-                    for si, (a, b, body) in enumerate(segs):
-                        score = _match_score(desc_for_match, body)
-                        scores.append(score)
-                        if a - 0.01 <= t <= b + 0.01:
-                            in_windows.append(si)
-                    if in_windows:
-                        own = min(
-                            in_windows,
-                            key=lambda si: abs(t - (segs[si][0] + segs[si][1]) / 2.0),
-                        )
-                    if own is None or not scores:
-                        continue
-                    best = max(range(len(scores)), key=lambda x: scores[x])
-                    if best != own and scores[best] >= 0.45 and scores[best] >= scores[own] + 0.12:
-                        # v6.106（2026-09-24 第二十八次重跑实测）：原标题只说「更匹配
-                        # 另一个时段」，模型连改两轮都没改对（判据是字符重叠相似度，
-                        # 它不知道往哪儿写）。把**本时段该写什么**直接给出——与缺段
-                        # 告警给「缺段内容」同一做法：可确定的部分算好交给模型。
-                        issues.append(Issue(
-                            code="kf_event_window_mismatch", severity="visual_risk",
-                            message=(
-                                f"kf{i} 位于 {segs[own][0]:g}-{segs[own][1]:g}s，"
-                                f"但内容更匹配 {segs[best][0]:g}-{segs[best][1]:g}s 的事件。"
-                                f"**必须动作**：把该帧 desc 改写成描写**本时段**"
-                                f"[{segs[own][0]:g}-{segs[own][1]:g}s] 的事件"
-                                f"（该时段内容：「{str(segs[own][2] if len(segs[own]) > 2 else '')[:40]}」），"
-                                f"不得再描写 {segs[best][0]:g}-{segs[best][1]:g}s 的事件"
-                                f"（「{str(segs[best][2] if len(segs[best]) > 2 else '')[:30]}」），"
-                                f"也不得改动该帧的 t_sec。"
-                            ),
-                            shot_id=shot_id, frame_id=f"kf{i}", field_path="keyframes.desc",
-                            evidence=str(kf.get("desc") or "")[-120:], repairable=True,
-                        ))
+                    own, best = _slot.own, _slot.best
+                    # v6.106（2026-09-24 第二十八次重跑实测）：原标题只说「更匹配
+                    # 另一个时段」，模型连改两轮都没改对（判据是字符重叠相似度，
+                    # 它不知道往哪儿写）。把**本时段该写什么**直接给出——与缺段
+                    # 告警给「缺段内容」同一做法：可确定的部分算好交给模型。
+                    issues.append(Issue(
+                        code="kf_event_window_mismatch", severity="visual_risk",
+                        message=(
+                            f"kf{_slot.index} 位于 {segs[own][0]:g}-{segs[own][1]:g}s，"
+                            f"但内容更匹配 {segs[best][0]:g}-{segs[best][1]:g}s 的事件。"
+                            f"**必须动作**：把该帧 desc 改写成描写**本时段**"
+                            f"[{segs[own][0]:g}-{segs[own][1]:g}s] 的事件"
+                            f"（该时段内容：「{str(segs[own][2] if len(segs[own]) > 2 else '')[:40]}」），"
+                            f"不得再描写 {segs[best][0]:g}-{segs[best][1]:g}s 的事件"
+                            f"（「{str(segs[best][2] if len(segs[best]) > 2 else '')[:30]}」），"
+                            f"也不得改动该帧的 t_sec。"
+                        ),
+                        shot_id=shot_id, frame_id=f"kf{_slot.index}",
+                        field_path="keyframes.desc",
+                        evidence=_slot.desc[-120:], repairable=True,
+                    ))
         except Exception:
             pass
 

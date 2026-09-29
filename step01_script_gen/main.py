@@ -1027,6 +1027,14 @@ def _structural_shot_issues(script: dict) -> list:
     但当时没有落地：收敛轮只读 `_shot_duration_issues`，看不见空镜问题。
     现在把 `opening_empty_shot_issues()`（advisory）纳入目标集合，
     于是「重做这几镜」会和超载/过短一样被点名、并受统一候选验收约束。
+
+    ⚠️ **缺帧（`kf_segment_missing`）不在此集合**（2026-09-28 复核决定，撤回 v6.143 P3）：
+    十次跑实测 11 次「缺帧触发整篇结构重生成」**0 次被采纳**（每次 3.3–4.3 分钟，
+    并把 7/10 次跑顶过 900s 总预算、截断仍在收敛的定向修复轮）。缺帧的收敛通道是
+    **质量门 `kf_segment_missing` + 定向修复轮**（实测 run 03 一轮 `resolved=6` 且
+    `kf_structural_violations=[]` 被正常采纳）——整篇重写这条杠杆对它不成立：
+    结构轮是「重做 shot-plan」，而候选验收要求「零新 blocking 身份」，整篇重写
+    必然改动切分与内容 → 结构性不可采纳。
     """
     from step01_script_gen.quality_issues import (
         STRUCTURAL_SHOT_CODES, _shot_duration_issues, opening_empty_shot_issues,
@@ -1035,7 +1043,6 @@ def _structural_shot_issues(script: dict) -> list:
            if i.code in STRUCTURAL_SHOT_CODES]
     out.extend(opening_empty_shot_issues(script))
     return out
-
 
 def _structural_feedback(issues: list) -> str:
     """把结构问题写成**可执行的重做 shot-plan 指令**."""
@@ -1551,11 +1558,14 @@ def _regen_structural_over_limit(script: dict, novel_text: str, bank=None,
         issues = _structural_shot_issues(script)
         if not issues:
             return script
+        # v6.143 P3 已撤回（2026-09-28 复核）：目标集合回到「超载/过短 + 开篇空镜」，
+        # 缺帧不再触发整篇重生成——它走质量门 + 定向修复轮（见 `_structural_shot_issues`）。
         _logger.warn(
-            f"[STRUCT] {len(issues)} 个镜头结构不合法（内容超 cap / 低于下限）："
+            f"[STRUCT] {len(issues)} 个镜头结构不合法（内容超 cap / 低于下限 / 开篇空镜）："
             f"{[str(i.shot_id) for i in issues]}，重做 shot-plan（尝试 {attempt}/{max_attempts}）"
         )
-        _console(f"  [结构] {len(issues)} 个镜头超载/过短，重做分镜规划（{attempt}/{max_attempts}）...")
+        _console(f"  [结构] {len(issues)} 镜超载/过短/空镜，重做分镜规划"
+                 f"（{attempt}/{max_attempts}）...")
 
         _sb_builder, _sb_system = resolve_model_prompt_profile(model)
         # v6.116（审核）：重生必须**复用首稿用过的大纲锚点**——否则「花 79 秒重做
@@ -1637,7 +1647,8 @@ def _regen_structural_over_limit(script: dict, novel_text: str, bank=None,
         # 不需要再迭代（提交后直接结束），而不是绕过验收。
         if len(new_issues) >= len(issues):
             _logger.warn(
-                f"[STRUCT] 新稿未改善（{len(issues)} → {len(new_issues)} 个非法镜头），保留原版"
+                f"[STRUCT] 新稿未改善（{len(issues)} → {len(new_issues)} 个非法镜头），"
+                f"保留原版"
             )
             return script
         _ok, _why = _accept_regen_candidate(script, new_script, novel_text)
@@ -2145,6 +2156,56 @@ def _audit_blocking_records(payload: "dict | None") -> list:
     ]
 
 
+#: 单条审计问题的成对目标**最多覆盖的镜头数** = 联动组上限（`_REPAIR_MAX_SHOTS_PER_GROUP`）。
+#: 定义在这里而不是从 audit.py 反向 import：本文件是消费方，且审计侧只负责**声明**，
+#: 上限属于修复侧的容量契约。两侧同值由 `test_audit_oversize_target_split.py` 锁定。
+_AUDIT_MAX_TARGET_SHOTS = 6
+
+
+def _split_oversize_repair_targets(rt, *, cap: int = _AUDIT_MAX_TARGET_SHOTS) -> list:
+    """把成对目标按**镜头**分块（每块 ≤ `cap` 镜，块内保留该镜的全部目标）.
+
+    v6.143（2026-09-27 十次连跑根因 P2）：实测 4/10 次 BLOCK 的直接原因是
+    **单条审计问题**声明了 7/8/10/12/14 个镜头的成对目标，而修复侧联动组上限是 6
+    且**拒绝拆组**（拆组=半条修复）→ `_linked_repair_groups` 判 `oversize` →
+    不调 LLM、不再发审计，直接 BLOCK。
+
+    取证（`docs/step01-ten-run-problem-report-2026-09-27.md` P2）：逐轮扫描审计台账里
+    `repair_targets` 覆盖镜头数 > 6 的条目，`run 02/04/06/10` 四次**全部是单条声明**
+    （7/7+12/14/8+10 镜），没有一次是多条合并出来的组。
+
+    拆的**只是「一条问题的声明范围」**，不是「联动事务」：
+      - 同一镜头内的多条目标**始终留在同一块里** → 镜内原子性（帧+布局的联动修）
+        完全不变；
+      - 跨镜目标本来就该按契约「每一镜各写一条」声明（见 `audit._AUDIT_RULES_TEMPLATE`
+        的 repair_targets 段），模型写成一条时，拆条正是把它还原成契约形状；
+      - 块与块之间是**独立**的可修单元（systemic 缺陷如「stage 取值非法遍布全篇」
+        本来就逐镜独立），所以不存在「半条修复」。
+
+    Returns:
+        `[chunk, ...]`；`rt` 为 `None`（旧条目）/ `[]`（显式无目标）/ 块数 ≤ 1 时
+        **原样**返回单元素列表——三态语义不在本函数里改变。
+    """
+    if not isinstance(rt, list) or not rt:
+        return [rt]
+    _by_shot: dict = {}
+    for _t in rt:
+        if not isinstance(_t, dict):
+            continue
+        _sid = str(_t.get("shot_id") or "").strip()
+        _by_shot.setdefault(_sid, []).append(_t)
+    if len(_by_shot) <= cap:
+        return [rt]
+    _keys = list(_by_shot)
+    out: list = []
+    for _i in range(0, len(_keys), cap):
+        _chunk: list = []
+        for _k in _keys[_i:_i + cap]:
+            _chunk.extend(_by_shot[_k])
+        out.append(_chunk)
+    return out
+
+
 def _audit_payload_to_issues(payload: "dict | None") -> list:
     """把审计 payload 里的 blocking 条目还原成 `Issue`（供受限修复轮消费）.
 
@@ -2155,24 +2216,42 @@ def _audit_payload_to_issues(payload: "dict | None") -> list:
 
     `repair_targets` 的三态必须原样带走（`None`=旧条目 / `[]`=显式无目标 /
     非空=成对），**不能**用 `or []` 把前两者合并——那正是上一条要修的静默降级。
+
+    v6.143（P2）：**单条声明超限（> `_AUDIT_MAX_TARGET_SHOTS` 镜）时按镜拆成多条
+    Issue**（见 `_split_oversize_repair_targets`）。这里是审计 payload → `Issue` 的
+    唯一转换点，也是联动组分组（`_linked_repair_groups`）的唯一输入源；不在这一跳拆，
+    超限声明就会带着 7-14 个镜头进分组、被判 `oversize` 后整轮 BLOCK。
     """
     out: list = []
+    _split_n = 0
     for rec in _audit_blocking_records(payload):
         _rt = rec.get("repair_targets")
         if _rt is not None and not isinstance(_rt, list):
             _rt = []          # 形状非法 → 按「显式无目标」处理（fail-closed）
-        out.append(Issue(
-            code=str(rec.get("code") or "model_audit_issue"),
-            severity="visual_risk",
-            message=str(rec.get("message") or ""),
-            shot_id=rec.get("shot_id"),
-            frame_id=str(rec.get("frame_id") or ""),
-            entity_id=str(rec.get("entity_id") or ""),
-            field_path=str(rec.get("field_path") or ""),
-            evidence=str(rec.get("evidence") or ""),
-            repair_targets=_rt,
-            repairable=True,
-        ))
+        _chunks = _split_oversize_repair_targets(_rt)
+        if len(_chunks) > 1:
+            _split_n += len(_chunks) - 1
+            _logger.warn(
+                "[COMMIT] 审计问题 %s 的成对目标覆盖 %d 镜 > 上限 %d → 按镜拆成 %d 条"
+                "（镜内目标保持整组；这是声明粒度，不是拆联动事务）"
+                % (rec.get("code"), len({str(t.get("shot_id")) for t in _rt
+                                        if isinstance(t, dict)}),
+                   _AUDIT_MAX_TARGET_SHOTS, len(_chunks)))
+        for _chunk in _chunks:
+            out.append(Issue(
+                code=str(rec.get("code") or "model_audit_issue"),
+                severity="visual_risk",
+                message=str(rec.get("message") or ""),
+                shot_id=rec.get("shot_id"),
+                frame_id=str(rec.get("frame_id") or ""),
+                entity_id=str(rec.get("entity_id") or ""),
+                field_path=str(rec.get("field_path") or ""),
+                evidence=str(rec.get("evidence") or ""),
+                repair_targets=_chunk,
+                repairable=True,
+            ))
+    if _split_n:
+        _metrics_inc("commit.audit_targets_split", _split_n)
     return out
 
 
@@ -2660,8 +2739,10 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
     # 自身 revision `f434e5090d7b` **不在台账内** → 下一轮选稿照样可以选中它 →
     # 又 BLOCK 一次。台账的本意（"让选稿避开已知欠账的旧稿"）在这条路径上落空。
     #
-    # ⚠️ 不宣称这能永久解决：`_cross_run_best_guard` 里「全部候选都欠账 → 放开
-    # 限制」的兜底分支仍会把它放回候选（那是有意保留的，否则护栏整个失效）。
+    # 2026-09-27（用户裁决 4）：`_cross_run_best_guard` 里「全部候选都欠账 →
+    # 放开限制」的兜底分支**已删除**——判据指纹未变的欠账稿不再被放回候选池
+    # （没有合格历史候选时由新稿进提交门）。这条登记因此是**硬排除**，不再是
+    # 只在「有别的候选时」生效的软护栏。
     _entry_revision = ""
     try:
         _entry_revision = compute_script_revision(script)
@@ -2992,11 +3073,12 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         summary["detail"] = summary["detail"] or (
             "final semantic audit 未通过" if audit_ok else "final semantic audit 未产出可用结论")
         _metrics_inc("commit.blocked")
-        _record_blocked_revision(revision)
+        _debt_issues = _debt_issue_records(blocking)
+        _record_blocked_revision(revision, issues=_debt_issues)
         # v6.125（第 1 项）：同时登记**原稿** revision——被选中的历史稿本身才是
         # 「已知欠账的那一份」，只记修后版本等于把它留在候选池里反复入选。
         if _entry_revision and _entry_revision != revision:
-            _record_blocked_revision(_entry_revision)
+            _record_blocked_revision(_entry_revision, issues=_debt_issues)
             _logger.warn(
                 "[COMMIT] 欠账台账同时登记进入提交点的原稿 revision %s"
                 "（修后 %s）——否则该历史稿会因漏记而在后续选稿中再次入选"
@@ -3005,7 +3087,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         # 登记。它与入口/修后 revision 都可能不同（大纲覆盖参与哈希），而 guard 下次
         # 恰恰是用这个值查台账——不记它，同一份欠账稿会第三次被选中。
         if source_revision and source_revision not in (revision, _entry_revision):
-            _record_blocked_revision(source_revision)
+            _record_blocked_revision(source_revision, issues=_debt_issues)
             _logger.warn(
                 "[COMMIT] 欠账台账登记**被选中的历史快照自身** revision %s"
                 "（提交入口 %s / 修后 %s）——BEST-GUARD 用快照自身 revision 判欠账"
@@ -3703,6 +3785,14 @@ def _locked_signature_diff(before_sig: str, after_sig: str, *, limit: int = 8) -
     return out
 
 
+#: 修复轮**实际执行**的锁定契约——`_locked_repair_signature` 逐字取自这几项。
+#: v6.149：**修复可执行性预检**必须用它，不能只读 `_FINAL_LOCKED_FIELDS`——后者对
+#: 「已授权字段」有例外，而轮级签名照旧锁住这几项（实测：审计把 `narration_segment`
+#: 列为目标 → 授权通过 → 修复改了它 → `locked_changed` 回退，白花一轮修复调用）。
+_ROUND_LOCKED_SHOT_FIELDS = ("duration_sec", "narration_segment", "subtitle",
+                             "scene", "location", "variation_type")
+
+
 def _locked_repair_signature(script: dict) -> str:
     import json as _json
     out = []
@@ -3713,17 +3803,24 @@ def _locked_repair_signature(script: dict) -> str:
     for sid, shot in units:
         if not isinstance(shot, dict):
             continue
-        out.append({
-            "id": sid,
-            "index": shot.get("index"),
-            "duration_sec": shot.get("duration_sec"),
-            "narration_segment": shot.get("narration_segment"),
-            "subtitle": shot.get("subtitle"),
-            "scene": shot.get("scene"),
-            "location": shot.get("location"),
-            "variation_type": shot.get("variation_type"),
-        })
+        rec = {"id": sid, "index": shot.get("index")}
+        for f in _ROUND_LOCKED_SHOT_FIELDS:      # 轮级锁定契约：单源
+            rec[f] = shot.get(f)
+        out.append(rec)
     return _json.dumps(out, ensure_ascii=False, sort_keys=True)
+
+
+def _split_executable_allowed(allowed) -> tuple:
+    """把某目标的授权字段拆成 `(可执行字段, 命中的锁定字段)`（v6.149 可执行性预检）.
+
+    修复轮**实际执行**的锁定契约是 `_ROUND_LOCKED_SHOT_FIELDS`（轮级签名），比
+    `_FINAL_LOCKED_FIELDS` 严：后者对「已授权字段」有例外，前者没有。授权面里出现
+    锁定字段 = 这条问题**最终修复不可执行**——预检据此把它摘出来（保留 blocking、
+    交上游阶段），而不是让它进修复调用再被 `locked_changed` 回退。
+    """
+    _locked = {str(f) for f in _ROUND_LOCKED_SHOT_FIELDS}
+    _all = [str(a) for a in (allowed or [])]
+    return [a for a in _all if a not in _locked], sorted(set(_all) & _locked)
 
 
 def _apply_repair_patches(script: dict, patches: list, picked: set[str]) -> tuple[dict, int]:
@@ -4013,6 +4110,68 @@ from step01_script_gen.repair_fields import (merge_authorized as _merge_authoriz
                                           canonical_path_diff)
 
 
+def _assemble_keyframe_additions(target: dict, additions) -> tuple:
+    """把「帧 + 对应布局」的**成对数据**装配进完整镜头 → `(new_shot, 拒绝原因)`.
+
+    2026-09-27（用户决定）：缺段这类**联动**修复不再要求模型返回一个自洽的完整
+    镜头。实测模型会把 `keyframes` 加到 4 而 `frame_layouts.kfs` 留在 3 →
+    长度校验把整条替换拒收（两轮都没修成）。改为模型只给**成对的两半**
+    `{"frame": {...}, "layout": [...]}`，由代码按 `t_sec` 的时间顺序把两半装进
+    **同一声序号**。
+
+    **代码只做配对与装配**：不从邻帧或 `motion_desc` 猜测人物姿态/持物等布局
+    语义（那样的回填等于伪造布局）。缺任一半 → 拒收并记明原因。
+    """
+    if not isinstance(additions, list) or not additions:
+        return None, "keyframe_additions 必须是非空列表"
+    import copy as _copy
+
+    from shared.kf_time import get_kf_t_sec
+
+    out = _copy.deepcopy(target)
+    kfs = out.get("keyframes")
+    if not isinstance(kfs, list):
+        return None, "目标镜头没有 keyframes 列表"
+    _fl = out.get("frame_layouts")
+    lkfs = _fl.get("kfs") if isinstance(_fl, dict) else None
+    if not isinstance(lkfs, list):
+        return None, "目标镜头没有 frame_layouts.kfs 列表"
+    try:
+        dur = float(out.get("duration_sec") or out.get("duration") or 0)
+    except (TypeError, ValueError):
+        dur = 0.0
+
+    for i, item in enumerate(additions):
+        if not isinstance(item, dict):
+            return None, f"keyframe_additions[{i}] 不是对象"
+        frame, layout = item.get("frame"), item.get("layout")
+        if not isinstance(frame, dict):
+            return None, f"keyframe_additions[{i}] 缺 frame——必须与 layout **成对**给出"
+        if not isinstance(layout, list):
+            return None, f"keyframe_additions[{i}] 缺 layout——必须与 frame **成对**给出"
+        if not str(frame.get("desc") or "").strip():
+            return None, f"keyframe_additions[{i}] 的 frame 缺 desc"
+        t = get_kf_t_sec(frame, out)
+        if t is None:
+            return None, f"keyframe_additions[{i}] 的 frame 缺可解析的 t_sec/time_ratio"
+        if dur > 0 and not (0 < t <= dur + 0.01):
+            return None, f"keyframe_additions[{i}] t_sec={t:g} 越出镜长 {dur:g}"
+        # 按**时间顺序**定位插入点（与 keyframes 的升序约定一致），
+        # `frame` 与 `layout` 插到**同一个下标**——配对由代码保证。
+        idx = len(kfs)
+        for j, kf in enumerate(kfs):
+            tj = get_kf_t_sec(kf, out)
+            if tj is not None and t < tj:
+                idx = j
+                break
+        kfs.insert(idx, frame)
+        lkfs.insert(idx, layout)
+
+    if len(kfs) != len(lkfs):
+        return None, "装配后 keyframes 与 frame_layouts.kfs 长度不等"
+    return out, ""
+
+
 def _apply_shot_replacements(script: dict, replacements: list,
                              picked: set[str],
                              hook_replacement: dict | None = None,
@@ -4083,6 +4242,14 @@ def _apply_shot_replacements(script: dict, replacements: list,
         if expected_targets is not None and sid not in {str(t) for t in expected_targets}:
             rejected.append(f"shot {sid} 不在本轮点名集合内（该条丢弃）")
             return
+        # 2026-09-27（用户决定）：联动修复的**成对数据**形状——模型只给
+        # 「帧 + 对应布局」，代码按时间顺序把两半装进同一声序号。缺任一半即拒收。
+        if new_shot is None and item.get("keyframe_additions") is not None:
+            new_shot, _why = _assemble_keyframe_additions(
+                target, item.get("keyframe_additions"))
+            if _why:
+                rejected.append(f"shot {sid}: {_why}")
+                return
         allowed = None
         if isinstance(allowed_by_target, dict):
             allowed = allowed_by_target.get(f"shot_{sid}", allowed_by_target.get(sid))
@@ -4723,19 +4890,39 @@ def _audit_issue_resolved(script: dict, issue: Issue) -> bool:
 # 钓杆垂在湖面」），而闸门会把这条正解判成「删证据」→ 整轮 resolved=0 → BLOCK。
 # 那两类的方向交给模型按原文切片决定，确定性层只保证「矛盾必须消失」
 # （修复后重跑同一检测）+「不许越权改别处」。
+# v6.144（2026-09-29，用户批准改判据）：口径从**逐字**改为**事件级**。
+# 逐字口径实测把审计自己要求的改写判成「删证据」：第一章第 3 轮的 `minimal_fix`
+# 明令把结果句改写为同义表述（「刺中」→「刺入」），照办的修复被按目标回退，
+# 下一轮审计再报同一条，三轮空转在同一个镜头上。事件级只拦「这句的结果动作没了」。
 _CROSS_FIELD_EVIDENCE_GUARD = {
     "result_action_support": "lf",
 }
+
+#: 按 code 走**事件级**口径的清单。事件级 = 「同一结果动作组里任一表述仍在」
+#: 即通过（措辞可变）；只有该组**一个表述都不剩**才算「删证据」——那正是让
+#: `result_action_support` 闭嘴所需的唯一动作，所以拦它不会误伤合法改写。
+#: v6.145（2026-09-29 复核反例）：**逐组**判定——同一分句可命中多组
+#: （`_clauses` 不切「、」），并成一次 `any()` 会漏掉「第二个动作整段被删」。
+#: 不在表里的 code 只能逐字比：认不出动作**不放行**（准则 7）。
+_CROSS_FIELD_EVIDENCE_IDENTITY_CODES = {"result_action_support"}
 
 
 def _cross_field_evidence_removed(before_state: dict | None, script_after: dict,
                                   picked: set) -> list[str]:
     """跨字段 issue 判据证据在修复后**从高优先字段消失**的清单（空 = 通过）.
 
-    只检查被点名镜头；证据按 `" | "` 拆分后**逐段**要求仍在（`result_action_support`
-    会把同一帧的多个缺失动作段拼在 evidence 里）。
+    只检查被点名镜头；证据按 `" | "` 拆分后**逐段**判定，两条口径按 code 选：
+
+    - **事件级**（`_CROSS_FIELD_EVIDENCE_IDENTITY_CODES`，v6.144/.145）：证据是
+      「含结果动词的整个分句」，要求**每个命中的结果动作组都还剩一个表述**
+      （词表单源 `cross_field_checks._RESULT_ACTIONS`）。措辞可变——审计自己的
+      `minimal_fix` 就可能明令改写；但**当事角色的替换不在覆盖内**（见
+      `result_action_evidence_groups` 的未覆盖声明）；
+    - **逐字**（其余 code，或分句里认不出结果动作时）：证据必须原样仍在。
+      「认不出」是退回严口径的理由，**不是**放行的理由。
     """
-    from step01_script_gen.cross_field_checks import frame_text
+    from step01_script_gen.cross_field_checks import (
+        frame_text, result_action_evidence_groups)
 
     by_key: dict = {}
     for s in script_after.get("shots") or []:
@@ -4762,11 +4949,27 @@ def _cross_field_evidence_removed(before_state: dict | None, script_after: dict,
         if not frame_id:
             continue
         text = frame_text(shot, frame_id)
+        _code = str(rec.get("code") or "")
+        _event_level = _code in _CROSS_FIELD_EVIDENCE_IDENTITY_CODES
         for part in str(rec.get("evidence") or "").split(" | "):
             part = part.strip()
-            if part and part not in text:
+            if not part:
+                continue
+            _groups = (result_action_evidence_groups(part)
+                       if _event_level else ())
+            if _groups:
+                # **逐组**要求还剩一个表述——并成一次 any() 会让同一分句里的
+                # 第二个动作整段被删也判通过（复核反例）。
+                _lost = [g for g in _groups if not any(w in text for w in g)]
+                if _lost:
+                    removed.append(
+                        f"{tid}.{frame_id} 结果动作被删除（{_code}）："
+                        f"「{part[:40]}」（%d/%d 个动作组无残留）"
+                        % (len(_lost), len(_groups))
+                    )
+            elif part not in text:
                 removed.append(
-                    f"{tid}.{frame_id} 判据证据被删除（{rec.get('code')}）：「{part[:40]}」"
+                    f"{tid}.{frame_id} 判据证据被删除（{_code}）：「{part[:40]}」"
                 )
     return removed
 
@@ -4781,8 +4984,10 @@ def _cross_field_evidence_removed(before_state: dict | None, script_after: dict,
 # 「假拒绝 → resolved=0」形态。范围收在「本轮拿到列表授权」的镜头上。
 def _kf_structural_violations(before_script: dict, after_script: dict,
                               allowed_by_target: dict | None,
-                              picked: set) -> list[str]:
-    from step01_script_gen.kf_structural_guard import kf_structural_violations
+                              picked: set, novel_text: str = "") -> list[str]:
+    from step01_script_gen.kf_structural_guard import (
+        kf_structural_violations, narrow_motion_patch)
+    from step01_script_gen.validation import shot_source_window_raw
 
     def _shot(script: dict, tid: str):
         if tid == "hook":
@@ -4793,15 +4998,65 @@ def _kf_structural_violations(before_script: dict, after_script: dict,
                 return s
         return None
 
+    # v6.146：**名册**（本脚本自己的角色名 + 布局里的名字）——纠错判据用它查
+    # 「施事/受事是否被换掉」。取自脚本自身，不写死任何具体角色名。
+    _canonical: set = set()
+    for _c in (before_script.get("characters") or []):
+        if isinstance(_c, dict):
+            _nm = str(_c.get("identifier") or "").strip()
+            if _nm:
+                _canonical.add(_nm)     # 正名：出处关系校验要求「同句含全部当事角色」
+
+    def _collect_names(node) -> None:
+        if isinstance(node, dict):
+            _nm = str(node.get("name") or "").strip()
+            if _nm:
+                _roster.add(_nm)
+        elif isinstance(node, list):
+            for _x in node:
+                _collect_names(_x)
+
+    _collect_names(before_script.get("frame_layouts"))
+    for _s in (before_script.get("shots") or []):
+        if isinstance(_s, dict):
+            _collect_names(_s.get("frame_layouts"))
+    if isinstance(before_script.get("hook"), dict):
+        _collect_names(before_script["hook"].get("frame_layouts"))
+
     out: list[str] = []
     for tid in picked or ():
         allowed = (allowed_by_target or {}).get(tid) or ()
-        if "keyframes" not in {str(a) for a in allowed}:
+        _allowed_set = {str(a) for a in allowed}
+        if "keyframes" not in _allowed_set:
             continue                      # 本轮未授权改 KF 列表 → 不适用
         before, after = _shot(before_script, tid), _shot(after_script, tid)
         if not isinstance(before, dict) or not isinstance(after, dict):
             continue
-        out.extend("%s: %s" % (tid, m) for m in kf_structural_violations(before, after))
+        # v6.149（复核收窄）：本轮**授权改 motion_desc** 时，由**代码**做范围收窄——
+        # `narrow_motion_patch` 只采纳通过「同一原文事件里的动作 + 施事/受事」校验的
+        # 时段，其余时段**按基线原样合回**（改错了不会被采纳，而不是把整轮判死）。
+        # 合回后本函数不再叠加逐字事件保全（`skip_motion`），否则会把刚采纳的时段
+        # 判成「原事件文本丢失」。
+        _editable_motion = any(a == "motion_desc" or a.startswith("motion_desc.")
+                               for a in _allowed_set)
+        _skip_motion = False
+        if _editable_motion:
+            _window, _strict = shot_source_window_raw(before, novel_text)
+            _new_motion, _notes = narrow_motion_patch(
+                before, after, canonical=_canonical, novel_window=_window,
+                window_strict=_strict)
+            if _new_motion is None:
+                # 结构不可安全合并（段数变了/解析不出）→ 按违例处理，不放行
+                out.extend("%s: %s" % (tid, m) for m in _notes)
+            else:
+                for _n in _notes:
+                    _logger.info("[REPAIR] %s 动作范围收窄: %s" % (tid, _n))
+                if _new_motion != str(after.get("motion_desc") or ""):
+                    # `after` 就是 `after_script` 里的那个镜头对象 → 原地写回即生效
+                    after["motion_desc"] = _new_motion
+                _skip_motion = True
+        out.extend("%s: %s" % (tid, m) for m in kf_structural_violations(
+            before, after, skip_motion=_skip_motion))
     return out
 
 
@@ -4947,6 +5202,19 @@ _REPAIR_MAX_SHOTS_PER_ROUND = 4
 # 内——**不靠抬 token 预算掩盖上下文体积**这条原则不变。超过 6 的组属「一次改不完」
 # → 调用方**立即 BLOCK**，不再空耗修复轮与审计调用。
 _REPAIR_MAX_SHOTS_PER_GROUP = 6
+
+
+def _shot_by_target_id(script: dict, tid: str):
+    """按修复目标名取镜头对象（`shot_N` / 裸镜号 / `hook`）——取不到返回 None."""
+    if not isinstance(script, dict):
+        return None
+    if str(tid) == "hook":
+        return script.get("hook") if isinstance(script.get("hook"), dict) else None
+    sid = str(tid)[5:] if str(tid).startswith("shot_") else str(tid)
+    for s in script.get("shots") or []:
+        if isinstance(s, dict) and str(s.get("index")) == sid:
+            return s
+    return None
 
 
 def _shot_field_diff(before: dict, after: dict, *, limit: int = 8) -> list:
@@ -5096,6 +5364,70 @@ def _new_blocking_targets(keys, picked) -> set:
             return set()
         out.add(tid)
     return out
+
+
+#: `_final_field_mask_violations` 的消息形状：`shot <id>.<字段>: 旧 -> 新`
+_LOCKED_VIOLATION_RE = re.compile(r"^shot (\S+?)\.(\w+):")
+#: `_kf_structural_violations` 的消息形状：`<目标名>: <违例说明>`
+_KF_STRUCT_VIOLATION_RE = re.compile(r"^([A-Za-z_0-9]+):\s")
+
+
+def _norm_target_name(raw) -> str:
+    """把消息里的目标名归一到 `shot_<id>` / `hook`（与本文件其余口径一致）."""
+    _t = str(raw or "").strip()
+    if not _t:
+        return ""
+    if _t in ("0", "hook"):
+        return "hook"
+    if _t.startswith("shot_"):
+        return _t
+    return f"shot_{_t}"
+
+
+def _locate_offending_targets(decision: dict, picked: set,
+                              locked_diff: list | None = None) -> set:
+    """从闸门给出的消息里定位**肇事目标**（v6.143 P4，纯函数）.
+
+    为什么要它：`locked_changed` / `locked_field_changed` / `kf_structure_invalid`
+    三个闸门此前都只给出**轮级**结论，于是「一处越界 → 整轮 `resolved` 清零」——
+    实测 10 次跑 20 个修复轮算出 `resolved=109`，其中 **60 条（55%）**被整轮丢弃，
+    `run 03` 一次就丢 13 条。
+
+    可定位性来自消息本身（都是既有格式，不新增字段）：
+      · `locked_field_changed` → `_final_field_mask_violations` 的 `shot <id>.<字段>: 旧 -> 新`；
+      · `locked_changed`（round 级签名变化，可能来自**已授权**的锁定字段）→
+        回退到 `_locked_signature_diff` 的 `<id>.<字段>: 旧 -> 新`（由调用方传入）；
+      · `kf_structure_invalid` → `_kf_structural_violations` 的 `<目标名>: 违例`。
+
+    **不可定位**的一律返回空集 → 调用方保持**整轮**回退语义（不是放松）：
+      · `non_target_changed`：肇事镜头在 `picked` **之外**，回退被点名镜头解决不了；
+      · `evidence_removed` / `checker_failed`：前者是「改写检测输入」这类整体性违规，
+        后者是基础设施失败——都不该按目标部分采纳。
+
+    只返回**本轮点名的**目标：定位到 `picked` 之外说明归因有误，宁可退回整轮。
+    """
+    out: set = set()
+    for _msg in (decision.get("locked_by_llm_changed") or []):
+        _m = _LOCKED_VIOLATION_RE.match(str(_msg))
+        if _m:
+            _tid = _norm_target_name(_m.group(1))
+            if _tid in picked:
+                out.add(_tid)
+    for _msg in (decision.get("kf_structural_violations") or []):
+        _m = _KF_STRUCT_VIOLATION_RE.match(str(_msg))
+        if _m:
+            _tid = _norm_target_name(_m.group(1))
+            if _tid in picked:
+                out.add(_tid)
+    if not out:
+        for _msg in (locked_diff or []):
+            _m = re.match(r"^(\S+?)\.\w+: ", str(_msg))
+            if _m:
+                _tid = _norm_target_name(_m.group(1))
+                if _tid in picked:
+                    out.add(_tid)
+    return out
+
 
 
 def _linked_repair_groups(audit_issues, shots_by_id: dict, picked, *, cap: int) -> tuple:
@@ -5400,6 +5732,25 @@ def _record_repair_call_usage(repair_diag: list | None, repair_round: int, *,
                  % (_rec["output_tokens"], _rec["reasoning_tokens"],
                     max_tokens if max_tokens is not None else "通道全局值",
                     _margin if _margin is not None else "未知"))
+
+
+REPAIR_PROVIDER_ENV = "REPAIR_TEXT_PROVIDER"
+REPAIR_MODEL_ENV = "REPAIR_TEXT_MODEL"
+
+
+def resolve_repair_channel() -> tuple:
+    """定向修复的通道覆盖 → `(provider | None, model | None)`；未配置时 `(None, None)`.
+
+    为什么要单开（2026-09-28 实测）：agent_plan 通道把 `json_schema` 降级成
+    `response_format=json_object`（`REPAIR_SHOT_REPLACEMENT_SCHEMA` 整体失效），
+    `deepseek-v4.1-flash` 在该条件下**整镜原样回抄**——6/6 次 `resolved=0`、
+    `audit_field_touched=0`、没有任何「授权字段实际改动」行，修复轮等于不可用；
+    原生 deepseek 通道保留 strict json_schema。
+
+    解析语义（三态、缺模型显式抛错）见单一来源 `shared.text_channel.resolve_channel`。
+    """
+    from shared.text_channel import resolve_channel
+    return resolve_channel(REPAIR_PROVIDER_ENV, REPAIR_MODEL_ENV)
 
 
 def _repair_shot_warnings(script: dict, novel_text: str,
@@ -5882,7 +6233,22 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         from step01_script_gen.repair_fields import (validate_repair_targets,
                                                      _is_structural_code,
                                                      _target_id_of)
+        _inexec_issue_keys: list = []      # 只能改锁定字段的审计问题（v6.150）
         for _ai in (audit_issues or []):
+            # v6.150（复核发现 3）：**按问题**过滤，而不是只按字段授权面过滤。
+            # 同一镜头可能同时挂着「只能改锁定字段」与「可修」的问题——只过滤字段
+            # 会让前者仍进反馈、仍被模型要求修（白耗轮次），而它最终修复不可执行。
+            _ai_paths = [str(getattr(_ai, "field_path", "") or "")]
+            _ai_declared = getattr(_ai, "repair_targets", None)
+            if isinstance(_ai_declared, list):
+                for _p in _ai_declared:
+                    if isinstance(_p, dict) and _p.get("field_path"):
+                        _ai_paths.append(str(_p.get("field_path")))
+            _ai_exec, _ai_locked = _split_executable_allowed(_ai_paths)
+            if _ai_paths and not _ai_exec:
+                _inexec_issue_keys.append((str(getattr(_ai, "code", "") or ""),
+                                           _ai_locked[:2]))
+                continue
             _detail = {
                 "code": _ai.code,
                 "frame_id": _ai.frame_id,
@@ -5906,6 +6272,12 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             for _k in _keys:
                 if _k:
                     _audit_by_shot.setdefault(_k, []).append(_detail)
+        if _inexec_issue_keys:
+            _logger.warn(
+                "[REPAIR] %d 条审计问题**只能改锁定字段**——最终修复不可执行，"
+                "已从本轮修复反馈中摘除（保留 blocking 交上游）：%s"
+                % (len(_inexec_issue_keys), _inexec_issue_keys[:4]))
+            _metrics_inc("repair.inexecutable_locked_issues", len(_inexec_issue_keys))
         # v6.83（二次审核发现 2）：**按 issue 授权**——每个 target 只允许改它自己的
         # 问题点名的字段。允许集合由 deterministic warning + audit issue 推导
         # （`repair_fields.allowed_repair_fields`）；**推不出字段路径的目标不进本轮
@@ -5951,6 +6323,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
 
         _allowed_by_target: dict = {}
         _unauthorized_targets: list = []
+        _inexecutable_locked: dict = {}     # tid → 命中的锁定字段（v6.149 预检）
         for _tid, _ws in picked.items():
             if _tid == "global":
                 continue
@@ -5963,7 +6336,13 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             if not _allowed:
                 _unauthorized_targets.append(_tid)
                 continue
-            _allowed_by_target[_tid] = _allowed
+            # v6.149 可执行性预检：摘掉轮级锁定字段。逐**目标**判断——同一目标若还有
+            # 别的可执行字段，照常进修复（不按 code 一刀切）。
+            _exec, _locked_hit = _split_executable_allowed(_allowed)
+            if not _exec:
+                _inexecutable_locked[_tid] = _locked_hit or [str(a) for a in _allowed]
+                continue
+            _allowed_by_target[_tid] = _exec
         if _unauthorized_targets:
             _logger.warn(
                 "[REPAIR] %d 个目标的问题未点名字段路径，本轮不走定向修复：%s"
@@ -5971,6 +6350,14 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 "仍不通过就由提交点 BLOCK（不放开授权去硬修）"
                 % (len(_unauthorized_targets), _unauthorized_targets[:6])
             )
+        if _inexecutable_locked:
+            _logger.warn(
+                "[REPAIR] %d 个目标的修复**只能改锁定字段**——最终修复不可执行，"
+                "保留 blocking 交上游阶段（本轮不为它们发起修复，也不放开授权硬修）：%s"
+                % (len(_inexecutable_locked),
+                   dict(list(_inexecutable_locked.items())[:4])))
+            _metrics_inc("repair.inexecutable_locked_targets",
+                         len(_inexecutable_locked))
         if not _allowed_by_target:
             _logger.warn("[REPAIR] 无任何目标具备明确字段授权，跳过本轮定向修复")
             return script
@@ -6021,6 +6408,18 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "\"hook_replacement\":{\"shot_id\":\"hook\",\"shot\":{...}}}\n"
             "**hook 必须放在 `hook_replacement` 里**（它与普通镜头字段不同，无 scene/location），"
             "普通镜头放 `shot_replacements`；两个键都可为空数组/省略。\n"
+            # 2026-09-27（用户决定）：缺帧这类**联动**修复改「成对数据」形状——
+            # 模型给帧 + 对应布局，**代码**按时间顺序装配两半。实测返回完整镜头时
+            # 模型会把 keyframes 加到 4 而 frame_layouts.kfs 留在 3，长度校验整条拒收。
+            "**联动修复（问题里出现「缺帧 / 没有按时间归属它的关键帧」时）用成对形状**："
+            "{\"shot_replacements\":[{\"shot_id\":\"3\",\"keyframe_additions\":"
+            "[{\"frame\":{\"desc\":\"…描写该时段动作…\",\"t_sec\":0.5,"
+            "\"stage\":\"pre\"},\"layout\":[{\"name\":\"…\",\"pose\":\"…\","
+            "\"on_screen\":true}]}]}]}——`frame` 与 `layout` **必须成对给出**，"
+            "代码按 `frame.t_sec` 的时间顺序把两半装进**同一声序号**"
+            "（两表长度由装配保证一致），缺任一半整条拒收。"
+            "**代码不会替你猜姿态/持物**：`layout` 里的角色姿态、持物、on_screen "
+            "必须由你写全。\n"
             "shot 必须与首次生成**同构**——index/narration_segment/subtitle/prompt/motion_desc/"
             "ff_desc/lf_desc/duration/keyframes/frame_layouts 等**成套出现**，缺一即被拒。\n"
             "**未点名的镜头绝不允许出现在 shot_replacements 里**；每个被点名镜头**恰好出现一次**"
@@ -6042,10 +6441,15 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "④ **`motion_desc` 的原有事件文本逐字保留、顺序不变**——"
             "只允许追加过程描述，禁止删事件、改顺序、合并时段"
             "（那是让告警消失而不是修好，会被确定性闸门整轮回退）；"
-            "⑤ **已有帧逐字保留**：只在 `keyframes` 列表里**追加**新帧，"
-            "不要改动已有帧的 desc / t_sec / stage——把已有帧挪到别的时刻会让"
-            "它的内容落进另一个时段，立刻触发新的 `kf_event_window_mismatch`"
-            "（实测：补 1 帧换来 1 条新阻塞，整轮被回退）。\n\n"
+            "⑤ **默认不动已有帧**（只在列表里**追加**新帧）：把已有帧挪到别的"
+            "时刻却**不改它的文案**，会让内容落进另一个时段，立刻触发新的"
+            "`kf_event_window_mismatch`（实测：补 1 帧换来 1 条新阻塞，整轮被回退）。"
+            "**例外（问题文案明确要求时）**：当问题写「已有帧与相邻段**时间/内容"
+            "错位**」时，允许**一并调整**该帧的 `t_sec` / `desc` 与**对应序号**的"
+            "`frame_layouts.kfs` 条目——但改 `t_sec` 必须与改文案**成对**做；"
+            "只搬时刻不改文案等于把缺陷挪到相邻段（实测：1-2s 的「反手一掌」"
+            "被画在 2.5s、文案写「掌风扫向」）。**验收口径：每个需帧时段都有一帧、"
+            "且该帧文案描写的是它自己那段。**\n\n"
             "**手术刀原则（最高优先级）**：\n"
             "1. 一条 warn 只改**它授权范围内的字段值**；镜头内其余字段**逐字保留**——"
             "输出完整镜头不等于重写整镜。"
@@ -6185,7 +6589,11 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "**若 `allowed_fields` 含 `keyframes`**（「kf 时段缺段」这类问题）："
             "允许增删帧，但 `frame_layouts.kfs` 必须同步增删（等长、序号对应）、"
             "t_sec 落在 (0, duration] 且按时间升序、新帧对应 motion_desc 未覆盖时段；"
-            "**motion_desc 原有事件文本逐字保留、顺序不变**（只可追加，禁删改合并）；**已有帧的 desc/t_sec/stage 逐字保留**，只在列表末尾追加新帧（挪动已有帧会让它落进别的时段 → 立刻多出一条窗口错配）。\n"
+            "**motion_desc 原有事件文本逐字保留、顺序不变**（只可追加，禁删改合并）；"
+            "**已有帧默认逐字保留**，只在列表追加新帧（只挪时刻不改文案会让它落进"
+            "别的时段 → 立刻多出一条窗口错配）；**仅当问题文案说「时间/内容错位」时**，"
+            "才可同时改该帧的 t_sec + desc + 对应布局条目（改时刻必须与改文案成对）；"
+            "缺帧优先用 `keyframe_additions` 成对形状（frame + layout 一起给，代码装配）。\n"
             "**同镜内 warn 改字段时必须保留同字段 anchor（最高优先级）**：改 ff_desc/lf_desc/prompt"
             " 的某条 warn 时，**禁止**顺手删该字段已有的 anchor 子句（致命伤/服装色/角色状态）。\n"
             "**修复决策树**（精简版）：缺服装色→追加；视线无方位→加画X/目光；致命伤缺→补洇痕；"
@@ -6204,8 +6612,16 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 工厂因配置/依赖问题抛异常时既不会被记成 `call_failed`，也进不了提交层归因
         # （只会以未捕获异常收场）。现在把初始化也纳入同一条失败记录路径
         # （`_repair_cap` 因此必须先取，否则记录里带不出本轮上限）。
+        # 定向修复的**通道覆盖**（2026-09-28 实测后新增，语义与审计同源）：
+        # agent_plan 通道把 `json_schema` 降级成 json_object → 修复的形状契约失效 →
+        # `deepseek-v4.1-flash` **整镜原样回抄**（6/6 次 resolved=0、audit_field_touched=0），
+        # 修复轮等于不可用；原生 deepseek 通道保留 strict json_schema。
+        # 放在 try **之外**：配置写错（设了 provider 没给 model）必须**显式失败**，
+        # 不能被下面「服务初始化失败 → 保留原版」吞成静默降级。
+        _rep_channel_provider, _rep_channel_model = resolve_repair_channel()
         try:
-            service = create_service()
+            service = (create_service() if _rep_channel_provider is None
+                       else create_service(_rep_channel_provider))
         except Exception as e:
             _logger.warn(f"[WARN] 定向修复服务初始化失败（保留原版，未做任何后处理）: {e}")
             _record_repair_call_failure(repair_diag, _round,
@@ -6224,7 +6640,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             max_tokens=_repair_cap,
             temperature=0.1,
             json_schema=REPAIR_SHOT_REPLACEMENT_SCHEMA,
-            model=model,  # v6.67 接力修复：None=provider 默认（零行为变化）
+            # 通道覆盖优先（2026-09-28）：设了修复专用通道就用它的模型；
+            # 否则沿用调用方模型（v6.67 接力修复语义不变）。
+            model=_rep_channel_model or model,
             timeout_sec=_repair_timeout_sec(),  # v6.70.3: 修复轮 180s——超时保留原版，不再盲等 600s
         )
         # v6.84（二次审核发现 3）：模型调用失败/截断**立即返回**，不进提交尾部。
@@ -6356,7 +6774,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 丢失」→ 本轮 3 个已提交的替换被整轮回退，`resolved=0`。这与 v6.87/v6.95
         # 修的是同一类缺陷：闸门只管 LLM 的写入，管线自己的确定性清洗不算越权。
         _kf_struct_after_patch = _kf_structural_violations(
-            _round_before_script, merged, _allowed_by_target, set(picked))
+            _round_before_script, merged, _allowed_by_target, set(picked),
+            novel_text)
         script = merged
         # v6.95（①，2026-09-22 实测）：**锁定字段基线必须在合并后立刻取**。
         #
@@ -6366,6 +6785,15 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 假拒绝（`new_blocking=0`、`非目标镜头被改动`=0、`resolved=5` 全被这一个闸门否掉）。
         # 这与 v6.87 修 mask 基线是**同一原则**：闸门只管 **LLM 的**写入。
         _locked_after_patch = _locked_repair_signature(script)
+        # v6.143（P4）：**合并后立刻**取字段级差异，供两处消费——① 被拒时的日志
+        # （原来只在 `locked_changed` 分支里现算）；② `_locate_offending_targets`
+        # 的兜底定位源（锁定字段**已授权**时 `_final_field_mask_violations` 会跳过它，
+        # 但轮级签名照样变了，此时只能靠这份 diff 定位到镜）。
+        _locked_diff_round: list = []
+        try:
+            _locked_diff_round = _locked_signature_diff(_locked_before, _locked_after_patch)
+        except Exception:
+            _locked_diff_round = []
         # 修复后需重新算时间轴/注入全局渲染参数
         # 08-15 修复：正确函数在 style_prefix（_post_process:186 同款），原 import 自
         # shared.vimax_bridge 不存在 → 修复轮合并后 ImportError 崩溃，修复结果从未落地
@@ -6577,9 +7005,36 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             _nb_keys_round = [list(k) for k in (_decision.get("new_blocking_keys") or [])]
             _offend_raw = _new_blocking_targets(
                 _decision.get("new_blocking_keys") or [], set(picked))
+            # v6.143（P4，2026-09-27 十次连跑根因）：**其余可定位闸门也走按目标回退**。
+            #
+            # 此前只有 `new_blocking` 能按目标回退（v6.105）；`locked_changed` /
+            # `locked_field_changed` / `kf_structure_invalid` 一律**整轮**回退——
+            # 实测 10 次跑 20 个修复轮算出 `resolved=109`，其中 **60 条（55%）**被
+            # 整轮丢弃（`locked_changed` 5轮丢35、`new_blocking` 2轮丢12、
+            # `kf_structure_invalid` 3轮丢13），`run 03` 一次丢 **13 条**。
+            #
+            # 三个闸门本身都对（都在防「让告警消失而不是修好」），错的只是粒度：
+            # 「shot 6 改了锁定台词」不该让同轮 shot 1/5/9 的真修复一起陪葬。
+            # 定位源见 `_locate_offending_targets`（消息里的 `<目标名>` 前缀）；
+            # **定位不到就保持整轮语义**（`non_target_changed` / `evidence_removed`
+            # / `checker_failed` 明确不在此列——见该函数 docstring）。
+            if not _offend_raw:
+                _offend_raw = _locate_offending_targets(
+                    _decision, set(picked), _locked_diff_round)
+                if _offend_raw:
+                    _logger.info(
+                        "[REPAIR] 按闸门消息定位到肇事目标 %s（reason=%s）→ 只回退它们，"
+                        "同轮其余目标的修复保留"
+                        % (sorted(_offend_raw), _decision.get("reason")))
             _offend_round = _offend_raw
+            # 原始拒绝原因（`_decision` 会被 `_dec_try` 覆盖，日志要报的是**起因**）
+            _origin_reason = str(_decision.get("reason") or "")
+            # v6.144 取证：按目标回退会把 `_decision` 换成回退后那版（accepted，
+            # reason 恒为空），起因与被保护/被删的证据文本随之丢失——台账里只能看到
+            # 一个空 reason，事后无法判断模型是**删了**证据还是**改写**了证据。
+            _evidence_removed_round = list(_decision.get("evidence_removed") or [])
             _rolled_back_groups: list = []
-            if not _decision["accepted"] and _decision.get("reason") == "new_blocking":
+            if not _decision["accepted"] and _offend_raw:
                 if _nb_keys_round:
                     _logger.warn(
                         "[REPAIR] 新增 blocking %d 条（**按目标回退前**记录）: %s%s  "
@@ -6596,13 +7051,28 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     _offend_round, _active_groups)
                 _offend_round = _offend
                 if _offend and _offend != set(picked):
+                    # v6.144 取证：`script` 下面会被换成回退后的版本，肇事目标的
+                    # **修复文本**必须先抓下来，否则「删了证据还是改写了证据」
+                    # 在日志里无从区分。
+                    _rb_texts = {}
+                    for _t_rb in _offend:
+                        _s_rb = _shot_by_target_id(script, _t_rb) or {}
+                        _rb_texts[_t_rb] = {
+                            _f: str(_s_rb.get(_f) or "")
+                            for _f in ("lf_desc", "motion_desc", "ff_desc", "prompt")}
                     try:
                         _try_script = _restore_targets(script, _round_before_script, _offend)
                         _merged_try = _restore_targets(merged, _round_before_script, _offend)
+                        # v6.143（P4）：锁定字段判据必须**按回退后的稿子重算**。
+                        # 传原来的轮级 `_locked_changed` 会让 locked 型拒绝在回退后
+                        # 依然为真（它描述的是**回退前**那一版），按目标回退永远过不了
+                        # 验收——这正是 P4 要修的那条链。
+                        _locked_try = (_locked_before
+                                       != _locked_repair_signature(_merged_try))
                         _dec_try = _repair_acceptance_decision(
                             _det_before_state,
                             _collect_repair_warnings(_try_script, novel_text),
-                            _allowed_targets, _try_script, _locked_changed,
+                            _allowed_targets, _try_script, _locked_try,
                             non_target_changed=_non_target,
                             locked_by_llm_changed=_final_field_mask_violations(
                                 _round_before_script, _merged_try, set(picked),
@@ -6612,7 +7082,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                                 _det_before_state, _try_script, set(picked)),
                             kf_structural_violations=_kf_structural_violations(
                                 _round_before_script, _merged_try,
-                                _allowed_by_target, set(picked)))
+                                _allowed_by_target, set(picked), novel_text))
                     except Exception as _try_err:
                         _logger.warn(f"[REPAIR] 按目标回退尝试失败（退回整轮回退）: {_try_err}")
                         _dec_try = None
@@ -6630,10 +7100,23 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                         _metrics_inc("repair.accepted_after_target_rollback")
                         _metrics_update("repair.last_decision", _dec_try)
                         _logger.info(
-                            "[REPAIR] 按目标回退 %s（这些目标引入了新阻塞）后通过验收："
+                            "[REPAIR] 按目标回退 %s（origin_reason=%s）后通过验收："
                             "resolved=%d new=0（同轮其余目标的修复保留）"
-                            % (sorted(_offend), _dec_try.get("resolved") or 0)
+                            % (sorted(_offend), _origin_reason,
+                               _dec_try.get("resolved") or 0)
                         )
+                        if _evidence_removed_round:
+                            _logger.warn(
+                                "[REPAIR] 回退前判定（origin,%s）%s"
+                                % (_origin_reason, str(_evidence_removed_round[:2])[:300]))
+                        for _t_rb in sorted(_rb_texts):
+                            _s_after = _shot_by_target_id(script, _t_rb) or {}
+                            for _f, _bv in _rb_texts[_t_rb].items():
+                                _av = str(_s_after.get(_f) or "")
+                                if _bv != _av:
+                                    _logger.warn(
+                                        "[REPAIR] 回退目标 %s.%s 修复稿⇒回退后：%s ⇒ %s"
+                                        % (_t_rb, _f, _bv[:110], _av[:110]))
                     elif _dec_try:
                         # v6.137：回退重试失败必须可见（本 run 的盲区——重试为何没过无从归因）
                         _logger.warn(
@@ -6643,6 +7126,17 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                                _dec_try.get("resolved") or 0,
                                _dec_try.get("audit_field_touched") or 0,
                                _dec_try.get("new_blocking") or 0))
+                        # v6.146 取证：**回退失败**这条分支此前不打修复稿文本，
+                        # 于是「模型把哪一段改成了什么」在事后无从判断——而它决定
+                        # 「合法改写被误杀」还是「动作被改没了」这两种相反结论。
+                        for _t_rb in sorted(_rb_texts):
+                            _rb_base = _shot_by_target_id(_round_before_script, _t_rb) or {}
+                            for _f, _rep in _rb_texts[_t_rb].items():
+                                _bs = str(_rb_base.get(_f) or "")
+                                if _bs != _rep:
+                                    _logger.warn(
+                                        "[REPAIR] 回退未过 目标 %s.%s 基线⇒修复稿：%s ⇒ %s"
+                                        % (_t_rb, _f, _bs[:110], _rep[:110]))
             if not _decision["accepted"] or not _round_ok:
                 # v6.93 修（自查发现的 bug）：诊断必须在**回退之前**抓快照。
                 #
@@ -6710,8 +7204,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     _logger.warn(
                         "[REPAIR] KF 结构验收未过 "
                         f"{len(_decision['kf_structural_violations'])} 处（授权增删 KF 的"
-                        "配套闸门：KF 须落在镜内且按时段单调，motion 原事件文本须仍在、"
-                        "顺序不变）："
+                        "配套闸门，**只计本轮新引入/恶化的**：KF 须落在镜内且按时段单调，"
+                        "motion 原事件文本须仍在、顺序不变；稿内既有越窗帧由最终质量门"
+                        "绝对判定）："
                         f"{_decision['kf_structural_violations'][:3]}"
                     )
                 _logger.warn(
@@ -6747,6 +7242,10 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     "round_ok": bool(_round_ok),
                     "resolved": int(_decision.get("resolved") or 0),
                     "reason": str(_decision.get("reason") or ""),
+                    # v6.144 取证：按目标回退后 `reason` 恒为空，起因（origin_reason）
+                    # 与证据明细只能从这里读。
+                    "origin_reason": _origin_reason,
+                    "evidence_removed": _evidence_removed_round,
                     "audit_field_touched": int(
                         _decision.get("audit_field_touched") or 0),
                     "audit_touched_ids": [list(t) for t in
@@ -7900,17 +8399,140 @@ def _blocked_ledger_path():
     return OUTPUT_FILE.parent / "snapshots" / _BLOCKED_LEDGER_NAME
 
 
-def _load_blocked_revisions() -> set:
-    """本轮 BLOCK 过的 revision 集合（读坏/缺失都返回空集，不阻断选稿）."""
+def _current_criteria() -> dict:
+    """当前判据指纹（规则源 + 提示源）——台账按它判断「欠账是否仍然成立」."""
+    return {"rules": str(RULE_SOURCE_FINGERPRINT or ""),
+            "prompts": str(PROMPT_SOURCE_FINGERPRINT or "")}
+
+
+def _load_blocked_ledger() -> dict:
+    """台账原样读出（读坏/缺失 → 空 dict，不阻断选稿）."""
     try:
         with open(_blocked_ledger_path(), "r", encoding="utf-8") as f:
             data = json.load(f)
-        return {str(x) for x in (data.get("revisions") or [])}
+        return data if isinstance(data, dict) else {}
     except Exception:
-        return set()
+        return {}
 
 
-def _record_blocked_revision(revision: str) -> None:
+def _load_blocked_revisions() -> set:
+    """**在现行判据下仍然欠账**的 revision 集合（读坏/缺失都返回空集，不阻断选稿）.
+
+    2026-09-27（用户裁决 4）：台账条目带上登记时的判据指纹。判据/提示变了
+    （`rules` / `prompts` 指纹不同）→ 那条欠账是**旧判据下**的结论，不再据此
+    排除该稿：判据本身可能已经修掉（本轮 `frame_presence_consistency` 的时态误判、
+    缺段重复计量都是这一类）。指纹不符的条目在选稿日志里显式列出，不静默丢弃。
+
+    没有指纹的老条目（本改动之前登记的）按**仍然欠账**处理——保守方向：
+    宁可少选一份旧稿，不可凭无法核对的旧结论放它回来。
+    """
+    data = _load_blocked_ledger()
+    revs = [str(x) for x in (data.get("revisions") or [])]
+    crit = data.get("criteria")
+    cur = _current_criteria()
+    if not isinstance(crit, dict):
+        return set(revs)
+    _issues = data.get("issues") if isinstance(data.get("issues"), dict) else {}
+    out, stale = set(), []
+    _partly: list = []
+    for rev in revs:
+        _rec = crit.get(rev)
+        _iss = _issues.get(rev)
+        if isinstance(_iss, list) and _iss:
+            # v6.149：**逐条**判——只把「所依赖判据已变」的那些条目作废，
+            # 其余仍然排除该稿（旧口径是任何指纹一动就整批放行）。
+            _force = [it for it in _iss
+                      if isinstance(it, dict) and _debt_issue_in_force(it)]
+            if _force:
+                out.add(rev)
+                if len(_force) < len(_iss):
+                    _partly.append((rev, len(_iss) - len(_force)))
+                continue
+            stale.append(rev)
+            continue
+        # 老条目（无逐条记录）：退回整条指纹口径
+        if isinstance(_rec, dict) and (_rec.get("rules"), _rec.get("prompts")) != (
+                cur["rules"], cur["prompts"]):
+            stale.append(rev)
+            continue
+        out.add(rev)
+    if _partly:
+        _logger.info(
+            "[BEST-GUARD] 台账里 %d 份欠账稿**部分**问题所依赖的判据已变"
+            "（按具体问题计入，其余仍排除）：%s"
+            % (len(_partly), ["%s×%d" % (r[:12], n) for r, n in _partly[:6]]))
+    if stale:
+        _logger.info(
+            "[BEST-GUARD] 台账里 %d 份欠账稿是在**旧判据**下登记的（规则/提示指纹已变）"
+            "——本轮不据此排除，按现行判据重新评估：%s"
+            % (len(stale), [r[:12] for r in stale[:6]]))
+    return out
+
+
+def _snapshot_cross_field_blocking(script: dict):
+    """快照在**现行确定性判据**下的跨字段 blocking（v6.149 候选资格初筛用）.
+
+    与提交点同源（`cross_field_issues`），而不是质量门的风险计数——实测
+    2026-09-29：快照 `script_result_20260929_053150.json` 以「风险1」入选，一进
+    提交点就带 `result_action_support` 被判 blocking，反复被选中、反复 BLOCK。
+    读坏/异常 → 空表（不阻断选稿）。
+    """
+    from step01_script_gen.cross_field_checks import cross_field_issues
+    try:
+        return [i for i in (cross_field_issues(script)[0] or [])
+                if str(getattr(i, "severity", "") or "")
+                in ("hard", "visual_risk", "blocking")]
+    except Exception as exc:
+        # v6.150（复核发现 4）：**校验器异常 ≠ 没有问题**。旧实现返回空表，与「无
+        # blocking」不可区分——校验器一旦坏掉，所有快照都会「干净」地进候选池。
+        # 返回 None 表示**未能校验**，调用方据此让该快照本次失去候选资格。
+        _logger.warn("[BEST-GUARD] 快照跨字段校验器异常（本次不具候选资格）: %s" % exc)
+        return None
+
+
+def _debt_issue_records(blocking) -> list:
+    """把 BLOCK 清单转成**逐条欠账记录**（v6.149，复核根因 3）.
+
+    每条记 `code/shot/field` + **该条所依赖的判据指纹**。判据分流：
+      · `model_audit_*` → **审计提示版本** `audit_prompt_version()`；
+      · 其余（确定性）→ **规则源指纹** `RULE_SOURCE_FINGERPRINT`。
+
+    为什么必须逐条：旧口径只在整条 entry 上记「规则源 + 提示源」两个**全局**指纹，
+    任何一处提示改动都会让**整批**欠账（实测 59 份）一起恢复候选资格，「改无关提示
+    不能自动洗掉欠账」这条就守不住。分流之后，无关提示改动不再移动
+    `audit_prompt_version()`，审计类欠账继续排除。
+    """
+    from step01_script_gen.audit import audit_prompt_version
+    out: list = []
+    for b in (blocking or []):
+        if not isinstance(b, dict):
+            continue
+        code = str(b.get("code") or "").strip()
+        if not code:
+            continue
+        if code.startswith("model_audit_"):
+            kind, fp = "audit", str(audit_prompt_version() or "")
+        else:
+            kind, fp = "rules", str(RULE_SOURCE_FINGERPRINT or "")
+        out.append({"code": code,
+                    "shot": str(b.get("shot_id") if b.get("shot_id") is not None else ""),
+                    "field": str(b.get("field_path") or ""),
+                    "crit_kind": kind, "crit_fp": fp})
+    return out
+
+
+def _debt_issue_in_force(rec: dict) -> bool:
+    """这条欠账的判据**未变** → 仍然成立（现行判据下还会报同一条）."""
+    from step01_script_gen.audit import audit_prompt_version
+    kind = str(rec.get("crit_kind") or "")
+    if kind == "audit":
+        return str(rec.get("crit_fp") or "") == str(audit_prompt_version() or "")
+    if kind == "rules":
+        return str(rec.get("crit_fp") or "") == str(RULE_SOURCE_FINGERPRINT or "")
+    return True          # 认不出判据 → 保守：按仍然欠账
+
+
+def _record_blocked_revision(revision: str, issues=None) -> None:
     """把 BLOCK 的 revision 记进台账（v6.115，审核）.
 
     为什么需要：BEST-GUARD 按**确定性**分数与风险排序，它**不知道**某份历史快照
@@ -7922,13 +8544,18 @@ def _record_blocked_revision(revision: str) -> None:
     改按分数/风险选，于是**欠账最重的那份照样被反复选中**（P1-4 实损形态）。
     有了次数，饱和放开时就能「优先选欠账最少的一份」，且被选中者下一轮计数
     +1、自然降位——棘轮不再失效。
+
+    2026-09-27（用户裁决 4）：同时记 `criteria[revision]` = 登记时的**判据指纹**
+    （规则源 + 提示源）。判据/提示改过之后，「已知 BLOCK」不再等于「现在还会
+    BLOCK」（本轮就有两条：`frame_presence_consistency` 的时态误判、缺段重复计量）
+    ——没有这个字段，修好的判据也换不回那份稿的重评机会。
     """
     if not revision:
         return
     try:
         path = _blocked_ledger_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        cur, debt = [], {}
+        cur, debt, crit, iss = [], {}, {}, {}
         try:
             with open(path, "r", encoding="utf-8") as f:
                 _data = json.load(f) or {}
@@ -7936,15 +8563,45 @@ def _record_blocked_revision(revision: str) -> None:
             # 容错口径与 `_load_blocked_debt` 同一处（`_coerce_debt_map`）——
             # 一条脏计数**不得**让整张台账写不进去（那等于静默废掉护栏）
             debt = _coerce_debt_map(_data.get("debt"), cur)
+            _raw_crit = _data.get("criteria")
+            if isinstance(_raw_crit, dict):
+                crit = {str(k): v for k, v in _raw_crit.items() if isinstance(v, dict)}
+            _raw_iss = _data.get("issues")
+            if isinstance(_raw_iss, dict):
+                iss = {str(k): v for k, v in _raw_iss.items() if isinstance(v, list)}
         except Exception:
-            cur, debt = [], {}
+            cur, debt, crit, iss = [], {}, {}, {}
         cur = [str(x) for x in cur if str(x) != revision]
         cur.append(str(revision))
         cur = cur[-64:]
         debt = {k: v for k, v in debt.items() if k in set(cur)}
         debt[str(revision)] = int(debt.get(str(revision), 0)) + 1
+        # 2026-09-27（用户裁决 4）：记下**登记时的判据指纹**——下次读台账才知道
+        # 这条欠账是不是在现行判据下得出的（判据变了要重新评估，不能一直排除）。
+        crit = {k: v for k, v in crit.items() if k in set(cur)}
+        crit[str(revision)] = _current_criteria()
+        # v6.149：逐条欠账（含各自依赖的判据指纹）。**只补不覆盖**——同一条 revision
+        # 多次 BLOCK 时，把新出现的条目并进去，已排除过的问题不会因覆盖而丢。
+        if issues:
+            _old_iss = iss.get(str(revision)) or []
+            _merged, _seen = [], set()
+            # v6.150（复核发现 2）：**新的在前**——同一 `(code, shot, field)` 在现行
+            # 判据下再次 BLOCK 时，必须由新记录**覆盖**旧版。旧实现把旧条目排在前面，
+            # 于是新记录被去重跳过、台账留着**已过期**的判据指纹，该稿下次又被判「可重评」
+            # 放回候选池（正是要治的那条）。`[:40]` 截断同理——留最新的 40 条。
+            for _it in list(issues) + list(_old_iss):
+                if not isinstance(_it, dict):
+                    continue
+                _k = (str(_it.get("code")), str(_it.get("shot")), str(_it.get("field")))
+                if _k in _seen:
+                    continue
+                _seen.add(_k)
+                _merged.append(_it)
+            iss[str(revision)] = _merged[:40]
+        iss = {k: v for k, v in iss.items() if k in set(cur)}
         from shared.json_io import atomic_dump_json
-        atomic_dump_json(path, {"revisions": cur, "debt": debt},
+        atomic_dump_json(path, {"revisions": cur, "debt": debt, "criteria": crit,
+                                "issues": iss},
                          ensure_ascii=False, indent=2)
     except Exception as exc:
         _logger.warn(f"[BEST-GUARD] 欠账台账写入失败（不影响结论）: {exc}")
@@ -7974,6 +8631,10 @@ def _coerce_debt_map(raw, revisions) -> dict:
 
 def _load_blocked_debt() -> dict:
     """台账里的「欠账轮次」：`{revision: episodes}`（读坏/缺失返回空 dict）.
+
+    2026-09-27（用户裁决 4）：**不再参与选稿排序**（候选池里已没有欠账稿）。
+    保留读取口径是为了**可见性**：选稿日志会打出「欠账最重的几份」，
+    以及台账写侧的容错读数（`_coerce_debt_map` 读写同源）。
 
     老台账（只有 `revisions`、没有 `debt`）→ 一律按 1 轮计：它们至少欠过一次，
     但不知道欠了几次；按 1 计不会让任何一份凭空占优（不写 = 0 会让老条目
@@ -8181,49 +8842,8 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
                 _stale_plan_snaps.append(f"{sp.name}（{_plan_why}）")
                 continue
             candidates.append((sp, old))
-        _snap_debt: dict = {}
-        if not candidates and _blocked_names:
-            # 全都有欠账 → 放开限制（否则护栏整个失效，比选一份欠账稿更糟）
-            # v6.142（09-26 P1-4）：放开时**不再只按分数/风险**——先按台账里的
-            # 「欠账轮次」升序，欠得最少的优先（同档才比分数/风险）。旧实现丢掉
-            # 了台账唯一携带的信息，低风险但反复欠账的旧稿照样被反复选中。
-            _debt_map = _load_blocked_debt()
-            _logger.warn(
-                f"[BEST-GUARD] 全部历史快照都在欠账台账内（{len(_blocked_names)} 份）"
-                "——本轮不排除，改按**欠账轮次升序**优先选欠账最少的一份"
-                "（同档再比分数/风险）")
-            for sp in snaps:
-                try:
-                    with open(sp, "r", encoding="utf-8") as f:
-                        old = json.load(f)
-                except Exception as _e:
-                    _invalid.append(f"{sp.name}（JSON 解析失败：{_e}）")
-                    continue
-                # v6.124.2：放宽欠账排除时**仍然**不放宽"是不是稿件"这一条
-                _why = _non_script_snapshot_reason(old)
-                if _why:
-                    _invalid.append(f"{sp.name}（{_why}）")
-                    continue
-                if not HOOK_ENABLED:
-                    old.pop("hook", None)
-                _old_rev2 = compute_script_revision(old)
-                if _old_rev2 == _cur_rev:
-                    continue
-                # v6.135：台词完整性门**不随欠账放宽**——破损稿进提交门 = 死锁
-                _dlg_why = _dlg_snapshot_reason(old)
-                if _dlg_why:
-                    _dlg_broken_snaps.append(f"{sp.name}（{_dlg_why}）")
-                    continue
-                # P0-2：身份门**不随欠账放宽**——放开的只是欠账台账那条护栏
-                _plan_why = _plan_snapshot_reason(old)
-                if _plan_why:
-                    _stale_plan_snaps.append(f"{sp.name}（{_plan_why}）")
-                    continue
-                _snap_debt[str(sp)] = int(_debt_map.get(_old_rev2, 1))
-                candidates.append((sp, old))
-        # 去重：两个筛选循环（常规 + 欠账放开）都会 append 到同一张清单，同一份
-        # 快照会被记两次——诊断数字会翻倍（2026-09-27 实测「16 份」实为 8 份）。
-        # 准则 7 要的是**准确**的可见性，不是更大的数字。
+        # 诊断清单去重（`invalid` / 台词破损 / 计划不符各自只扫一遍，但同一份快照
+        # 可能同时命中多条）——准则 7 要的是**准确**的可见性，不是更大的数字。
         _dlg_broken_snaps = list(dict.fromkeys(_dlg_broken_snaps))
         _stale_plan_snaps = list(dict.fromkeys(_stale_plan_snaps))
         if _dlg_broken_snaps:
@@ -8252,6 +8872,36 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
                 % (len(_invalid), _invalid[:6])
             )
             meta["invalid_candidates"] = _invalid
+        # ------------------------------------------------------------------
+        # 2026-09-27（用户裁决 4）：**欠账稿不再放回候选池**。
+        #
+        # 旧行为是「全都有欠账 → 放开限制，按欠账轮次升序选一份」。实测（08:11
+        # run）：全部 20 份快照都在台账内 → 选中上一轮刚 BLOCK 的 `072416`
+        # （风险 2 只是**确定性**风险，欠的语义问题不在这个数里）→ 重跑同一套审计、
+        # 同样的 4 条 blocking、`resolved=0` → 再 BLOCK，并把它自己的新 revision
+        # 也写进台账。每轮原地空转：既拿不到新稿的检验结果，又把「确定性风险低」
+        # 读成了「已能提交」。
+        #
+        # 现在的语义：**已 BLOCK 且判据/修复契约未变**的稿不再作为「最佳」稿被重复
+        # 修复；没有合格历史候选时如实返回 None——本轮新稿照常进提交门（门仍可
+        # BLOCK，正式产物仍受保护：不过门只写 BLOCK manifest）。
+        #
+        # 判据变过的欠账稿不在此列：`_load_blocked_revisions()` 只把**指纹相符**的
+        # 条目当欠账（旧结论可能正是被修掉的那条判据得出的）。
+        if not candidates and _blocked_names:
+            _debt_map = _load_blocked_debt()
+            _owed = sorted(
+                ((int(_debt_map.get(r, 1)), r) for r in _blocked_revs),
+                reverse=True)[:5]
+            _logger.warn(
+                "[BEST-GUARD] 全部历史快照都在欠账台账内（%d 份，判据指纹未变）"
+                "——本轮**不选历史稿**，让新稿直接进提交门检验；"
+                "欠账最重的几份：%s（正式产物仍受保护）"
+                % (len(_blocked_names),
+                   "、".join(f"{r[:12]}×{n}" for n, r in _owed)))
+            meta["reason"] = "all_snapshots_owed"
+            meta["blocked_snapshots"] = _blocked_names
+            return None, meta
         candidates = candidates[-scan_n:]
 
         best_path = None
@@ -8259,7 +8909,6 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
         best_quality = None
         best_rank = None
         best_script = None
-        best_debt = None
         _prefilter_rejected: list[str] = []
         for sp, old in candidates:
             try:
@@ -8272,6 +8921,22 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
             # 否则第一名被拒后，同一窗口内的次优合格快照永远得不到机会。
             _new_risk = new_quality.get("blocking_risk_count")
             _old_risk = q.get("blocking_risk_count")
+            # v6.149（复核根因 3）：候选资格初筛**用与提交点同源的确定性判据**。
+            # 此前初筛只看质量门的风险计数，而**跨字段**检查是另一个来源——实测
+            # 2026-09-29：快照 `script_result_20260929_053150.json`（它本身就是同一天
+            # 早先被判死的输出）以「风险1」入选，一进提交点就带 `result_action_support`
+            # 被判 blocking，于是反复被选中、反复 BLOCK（59 份欠账重评也没拦住它）。
+            # 全部快照都不合格时 BEST-GUARD 返回 None → 按既有路径改选新稿进提交门。
+            _cf_blocking = _snapshot_cross_field_blocking(old)
+            if _cf_blocking is None:
+                _prefilter_rejected.append(f"{sp.name}（跨字段校验器异常，未能校验）")
+                continue
+            if _cf_blocking:
+                _prefilter_rejected.append(
+                    "%s（跨字段 blocking %d 条，例：%s）"
+                    % (sp.name, len(_cf_blocking),
+                       str(getattr(_cf_blocking[0], "code", "?"))))
+                continue
             if (q.get("quality_checked") is not True
                     or rank[0] > 0 or rank[1] > 0
                     or (_new_risk is not None and _old_risk is not None
@@ -8282,15 +8947,13 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
                 continue
             # v6.73: compare integrity -> blocking risks -> total, not only
             # the raw story score.  A clean 90 must not lose to a corrupted 100.
-            # v6.142（P1-4）：欠账放开态下 `_snap_debt` 有值，欠账轮次排在分数/风险
-            # **之前**——否则「按欠账最少选」只是句空话。
-            _debt = int(_snap_debt.get(str(sp), 0))
-            _key = (_debt, rank)
-            if best_rank is None or _key < (best_debt, best_rank):
+            # 2026-09-27（用户裁决 4）：欠账轮次不再参与排序——候选池里已经没有
+            # 欠账稿（它们不再被放回），那道次键恒为 0，留着只会误导读者。
+            _key = rank
+            if best_rank is None or _key < best_rank:
                 best_score = sc
                 best_quality = q
                 best_rank = rank
-                best_debt = _debt
                 best_path = sp
                 best_script = old
 
@@ -9324,7 +9987,18 @@ def main() -> None:
             "blocking_categories": _quality.get("blocking_categories", []),
             "rule_version": _quality.get("rule_version"),
         })
-        if _quality.get("blocking"):
+        if not _quality or _quality.get("status") is None:
+            # 2026-09-27（复核三轮）：提交提前中止时（本轮实测：最终审计调用
+            # `request_failed: Connection error`）**根本没有产出质量报告**——
+            # `_commit_summary` 里没有 `quality` 键，于是下面那个 `else` 会打出
+            # 「PASS: 无 HARD / VisualRisk 阻塞项」。那是**没检出**被说成**没问题**
+            # （工作准则 7），而且同一个 run 的 manifest 里还列着 10 条 blocking。
+            # 「没有可用的质量判定」必须显式说出来。
+            _logger.warn(
+                "[QUALITY-GATE] 未产出质量报告（提交提前中止 / 审计未完成）——"
+                "本次没有可用的质量判定，不得据此认为无阻塞项"
+            )
+        elif _quality.get("blocking"):
             _logger.warn(
                 f"[QUALITY-GATE] BLOCK: hard={_quality.get("hard_count", 0)}, "
                 f"visual={_quality.get("visual_risk_count", 0)}; "

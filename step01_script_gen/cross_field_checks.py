@@ -125,15 +125,52 @@ def _norm_name(value) -> str:
 # ---------------------------------------------------------------------------
 # 离场/缺席标记。刻意**不含**「远处」「可见」「田埂」这类在场证据词——
 # 反例「老农仍在远处田埂可见」不得被误判为已离场。
-_EXIT_MARKERS = (
+#
+# 2026-09-27（用户裁决 2）：把「**正在**离开画面」与「**已经**离开画面」分开。
+#
+# 判别样本是冻结稿 shot 12：FF「庄仆们转身退下，张十三站在船头，目送他们」、
+# kf0「张十三站在船头，目送庄仆们退下，庄仆们边走边哄笑」——人物**此刻仍在画面
+# 里**（边走边哄笑）；LF 才写「庄仆们消失在夜色中」。旧判据把裸词「退下」当已
+# 离场，于是审计（`OFFSCREEN_ACTIVE_STATE@12`）要求把 FF/kf0 的 `on_screen`
+# 改成 true 时，本检查立刻判出新阻塞 → `shot_12` 整组回退 → 该镜两轮都修不掉。
+#
+# 现在：只有**完成态**才算已离开画面——
+#   · 绝对形式（`_EXIT_DONE`）：已离开/不见踪影/沉入水底 …；
+#   · 完成标记形式（`_EXIT_DONE_RE`）：`已|已经 + 动词`、`动词 + 了/完毕`、
+#     `消失在/于 …`。
+# 裸动词（`_EXIT_IN_PROGRESS`）只说明「正在离开」，**不算**离场，也就不再与
+# `on_screen=true` 冲突。
+_EXIT_DONE = (
     "已走远", "已经走远", "走远了", "已远去", "已离去", "已离开", "离开了",
-    "已退场", "退场", "已离场", "离场", "已消失", "不见踪影",
+    "已退场", "已离场", "已消失", "不见踪影", "已散去",
     # v6.115（审核）：「已倒下 / 倒地不起」**不是离场**——倒地的人仍在画面里，
     # 把它当离场词会把「尚在画面的倒地人物」误判成缺席（与 `frame_presence_consistency`
     # 的语义正好相反）。离场 = 离开画面，不是失去行动能力。
     "已没入", "已沉入", "沉入水底", "沉入水中",
-    "已死", "已跑远", "已散去", "散去", "退下",
+    "已死", "已跑远",
 )
+
+#: 进行中的离场动作词（**单一来源**：下面的完成态正则由它拼出）。单用它们只说明
+#: **正在**离开画面（人还在画面里），必须与完成标记同现才算「已离开画面」。
+_EXIT_IN_PROGRESS = ("走远", "远去", "离去", "离开", "退下", "退场", "离场",
+                     "散去", "消失")
+
+_EXIT_DONE_RE = re.compile(
+    r"(?:已|已经)\s*(?:" + "|".join(_EXIT_IN_PROGRESS) + r")"
+    r"|(?:" + "|".join(_EXIT_IN_PROGRESS) + r")\s*(?:了|完毕|干净)"
+    r"|消失\s*(?:在|于)"
+)
+
+
+def _exit_is_completed(clause: str) -> bool:
+    """该分句是否陈述「**已经**离开画面」（完成态）.
+
+    裸的「正在离开」动词（`_EXIT_IN_PROGRESS`）不算——判别样本 shot 12：
+    FF/kf0「转身退下，边走边哄笑」人物仍在画面里；LF「消失在夜色中」才是已离开。
+    """
+    if any(m in clause for m in _EXIT_DONE):
+        return True
+    return bool(_EXIT_DONE_RE.search(clause))
 
 
 def _presence_issues(shot: dict, shot_id) -> list[Issue]:
@@ -155,7 +192,10 @@ def _presence_issues(shot: dict, shot_id) -> list[Issue]:
                      if e.get("name")]
         candidates = list(dict.fromkeys(raw_names + list(CHARACTER_ALIASES)))
         for clause in _clauses(text):
-            if not any(m in clause for m in _EXIT_MARKERS):
+            # 只有**完成态**（已离开画面）才算离场；「正在退下」的人物仍在画面里，
+            # 与 `on_screen=true` 不矛盾（2026-09-27 用户裁决 2，判别样本见
+            # `_EXIT_DONE` 上方注释）。
+            if not _exit_is_completed(clause):
                 continue
             for raw in candidates:
                 if raw not in clause:
@@ -346,6 +386,42 @@ def _result_action_issues(shot: dict, shot_id) -> list[Issue]:
         field_path="motion_desc",
         evidence=" | ".join(missing), repairable=True,
     )]
+
+
+def result_action_evidence_groups(clause: str) -> tuple:
+    """证据分句命中的**结果动作组**（每组 = 可互相替代的若干表述）.
+
+    单源 `_RESULT_ACTIONS`——不另建词表，也不引入新阈值。
+
+    为什么要有这一层：`result_action_support` 的 evidence 是**含结果动词的整个
+    分句**（见 `_result_action_issues` 里的 `clause`），逐字要求它留存等于禁止
+    任何改写。2026-09-29 实测（第一章第 3 轮）：审计自己的 `minimal_fix` 明令把
+    「寒光短刃刺中杨旭心口」改写为「短刃已刺入心口，刺客推臂后踞蹲持刃」，照办的
+    修复被逐字闸门判成「删证据」→ 按目标回退 → 下一轮再报同一条，三轮空转在
+    同一个镜头上。
+
+    判据取向：`result_action_support` 的触发条件是「LF 里出现某组某表述」——
+    要让检测器闭嘴就**必须**把这组表述从 LF 里清掉。所以「该组一个表述都不剩」
+    正好等价于「让检测器闭嘴」，而「还留着一个同义表述」就是合法改写。
+
+    **必须逐组判定**（2026-09-29 复核反例）：`_clauses` 只在 `，。；！？` 切分，
+    所以同一分句可以带两个动作（「刺中杨旭心口、踹倒听香」）。把命中的组**合并**
+    成一次 `any()` 会让「踹倒整段被删掉」蒙混过关——合并是错的，调用方必须对
+    返回的**每一组**分别要求「还剩至少一个表述」。
+
+    **未覆盖（同一复核指出，本函数不声称覆盖）**：**当事角色/受事对象的替换**。
+    「刺中杨旭心口」改成「刺中听香心口」在本口径下**通过**——动作组词汇都在。
+    确定性层没有「同一事件的对象身份」可核验依据；而语义侧（审计）自己会明令
+    改写当事表述（实测第 3/4 轮要求把「神秘人」统一称「刺客」、把受事名略去），
+    一刀切要求人名留存会把审计的正解重新判死。要拦「换人」须另行定义可核验的
+    依据（原文/计划的当事角色），**不在本闸门范围内**——缺口见
+    `tests/step01_script_gen/test_cross_field_checks.py` 的 xfail 反例。
+
+    返回 `()` = 该分句里没有可识别的结果动作 → 调用方**必须**退回逐字口径
+    （不能因为「认不出」就放行）。
+    """
+    return tuple(group for group in _RESULT_ACTIONS
+                 if any(w in clause for w in group))
 
 
 # ---------------------------------------------------------------------------

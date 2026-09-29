@@ -18,68 +18,29 @@ same times.
 from __future__ import annotations
 
 import copy
-import difflib
 import re
 
 from shared.alias_map import CHARACTER_ALIASES
 from shared.kf_time import get_kf_t_sec, set_kf_t_sec
 
-from shared import motion_segments as _ms
+# 关键帧 ↔ 时段的**唯一判据**（2026-09-27 用户裁决后抽出，见该模块文档）。
+# `_segments` / `_match_score` 保持原名可导入：`quality_issues` 既有 import 依赖它们。
+from step01_script_gen.kf_coverage import (
+    analyze as _analyze_kf_coverage,
+    clean as _clean,
+    closeness as _closeness,
+    event_overlap as _event_overlap,
+    event_text as _event_text,
+    in_window as _in_window,
+    match_score as _match_score,
+    segments as _segments,
+)
+
 from .base import Constraint
 from .types import RepairRecord, Severity, Violation
 
 
 _MIN_GAP = 0.08
-
-
-def _segments(motion: str, total: float) -> list[tuple[float, float, str]]:
-    """解析 motion 为 [(start, end, body), ...]（v6.76 起走统一解析器）.
-
-    与全仓同一套正则（分隔符并集、支持小数）；body 由 strip_time_label 剥离，
-    与解析出的区间同源——不再有「解析认小数、剥标签不认」的错配。
-    """
-    out: list[tuple[float, float, str]] = []
-    for atom in _ms.atoms(motion or ""):
-        rng = _ms.atom_range(atom, total)
-        if rng is None:
-            continue
-        a, b = rng
-        body = _ms.strip_time_label(atom) or atom
-        out.append((max(0.0, a),
-                    min(max(0.0, b), total) if total > 0 else b,
-                    body))
-    return out
-
-def _event_text(desc: str) -> str:
-    text = str(desc or "")
-    text = text.split("【角色锚定】", 1)[0]
-    text = re.sub(r"（本帧[^）]*）", "", text)
-    return text.strip()
-
-
-def _clean(s: str) -> str:
-    text = re.sub(r"[（(][^）)]*[）)]", "", str(s or ""))
-    return re.sub(r"[，。；！？、：:（）()【】\s]", "", text)
-
-
-def _event_overlap(desc: str, body: str) -> float:
-    desc = _clean(_event_text(desc))
-    body = _clean(body)
-    if not desc or not body:
-        return 0.0
-    ngrams = {body[i:i + 2] for i in range(max(0, len(body) - 1))}
-    if not ngrams:
-        return 0.0
-    return sum(1 for ng in ngrams if ng in desc) / len(ngrams)
-
-
-def _match_score(desc: str, body: str) -> float:
-    return max(
-        difflib.SequenceMatcher(
-            None, _clean(_event_text(desc)), _clean(body)
-        ).ratio(),
-        _event_overlap(desc, body),
-    )
 
 
 def _strip_scene_prefix(desc: str, scene_prefix: str) -> str:
@@ -352,15 +313,11 @@ def _stage_for(seg_i: int, n_segments: int) -> str:
     ]
 
 
-def _in_window(t: float | None, a: float, b: float) -> bool:
-    return t is not None and a - 0.01 <= t <= b + 0.01
-
-
-def _closeness(t: float | None, a: float, b: float) -> float:
-    if t is None:
+def _best_score(slot) -> float:
+    """该帧对所有时段的最高文案相似度（无评分 → 0.0）."""
+    if slot.best is None or not slot.scores:
         return 0.0
-    length = max(b - a, 0.1)
-    return max(0.0, 1.0 - abs(t - (a + b) / 2.0) / length)
+    return slot.scores[slot.best]
 
 
 class KfEventOrderConstraint(Constraint):
@@ -385,20 +342,26 @@ class KfEventOrderConstraint(Constraint):
                 total = float(shot.get("duration_sec") or shot.get("duration") or 0)
             except (TypeError, ValueError):
                 total = 0.0
-            segments = _segments(motion, total)
+            _cov = _analyze_kf_coverage(shot)
+            segments = _cov.segments
             if not segments:
                 continue
+            # 2026-09-27（用户裁决）：帧数口径是 **≥ 时段数**，不是「恰好相等」。
+            # 额外帧只要有叙事价值就允许（CLAUDE.md v6.33 的源头规则；
+            # `validation._check_temporal_plan` 的 docstring 也早已写明这一条）。
+            # 只有**少于**段数才是缺陷。
 
             shot_index = None if is_hook else shot.get("index", idx)
-            if len(kfs) != len(segments):
+            if _cov.shortfall:
                 ctx.record_violation(Violation(
                     constraint_name=self.name,
                     severity=Severity.HARD,
                     shot_index=shot_index,
                     field="keyframes",
                     message=(
-                        f"motion 明确分为 {len(segments)} 段，但 keyframes 有 "
-                        f"{len(kfs)} 帧；仅报告冲突，不由 motion 删除/补建关键帧"
+                        f"motion 有 {len(_cov.required)} 个时段需要独立关键帧，但 "
+                        f"keyframes 只有 {len(kfs)} 帧（帧数须 ≥ 段数；额外叙事帧允许）；"
+                        "仅报告冲突，不由 motion 删除/补建关键帧"
                     ),
                     evidence=motion[:240],
                     repaired=False,
@@ -419,82 +382,88 @@ class KfEventOrderConstraint(Constraint):
                     repaired=False,
                 ))
 
-            assigned: dict[int, int] = {}
-            for kf_i, kf in enumerate(kfs):
-                if not isinstance(kf, dict):
-                    continue
-                desc = str(kf.get("desc") or "")
-                t_sec = get_kf_t_sec(kf, shot)
-                best_seg = 0
-                best_score = -1.0
-                best_match = 0.0
-                best_in_window = False
-                for seg_i, (a, b, segment_body) in enumerate(segments):
-                    match = _match_score(desc, segment_body)
-                    in_window = _in_window(t_sec, a, b)
-                    score = match + (0.35 if in_window else 0.0)
-                    if score > best_score:
-                        best_seg = seg_i
-                        best_score = score
-                        best_match = match
-                        best_in_window = in_window
-
-                if t_sec is not None and not best_in_window:
+            # 一帧只归属一个明确事件（边界帧不得同时充当相邻两段的证据）：
+            # 归属、重复、越窗、内容错位、缺段全部由 `kf_coverage.analyze` 判定。
+            for slot in _cov.slots:
+                _t = slot.t_sec
+                if slot.out_of_window:
                     ctx.record_violation(Violation(
                         constraint_name=self.name,
                         severity=Severity.HARD,
                         shot_index=shot_index,
-                        field=f"keyframes[{kf_i}].t_sec",
+                        field=f"keyframes[{slot.index}].t_sec",
                         message=(
-                            f"关键帧时间 {t_sec:g}s 不在任何 motion 时段内；"
+                            f"关键帧时间 {_t:g}s 不在任何 motion 时段内；"
                             "保留原时间并交 LLM regen，禁止自动挪动"
                         ),
-                        evidence=desc[:180],
+                        evidence=slot.desc[:180],
                         repaired=False,
                     ))
-                elif best_match < 0.12:
+                elif _best_score(slot) < 0.12:
                     ctx.record_violation(Violation(
                         constraint_name=self.name,
                         severity=Severity.HARD,
                         shot_index=shot_index,
-                        field=f"keyframes[{kf_i}].desc",
+                        field=f"keyframes[{slot.index}].desc",
                         message=(
                             "关键帧描述与 motion 时段缺少明确对应证据；"
                             "保留原帧并交 LLM regen，禁止用 motion 重写 desc"
                         ),
-                        evidence=desc[:180],
+                        evidence=slot.desc[:180],
+                        repaired=False,
+                    ))
+                elif slot.mismatched:
+                    # **时间**与**内容**分开报：旧实现把「最佳匹配段不在窗口内」
+                    # 报成「时间不在任何 motion 时段内」——文案说的是时间问题，
+                    # 实际是内容写错段（冻结稿 shot 8 kf@2.5：写的是 1-2s 的
+                    # 「反手一掌」，t 却落在 2-4s）。判据阈值与质量门的
+                    # `kf_event_window_mismatch` 逐字相同，不在这里顺带改严重度。
+                    _own, _bst = slot.own, slot.best
+                    ctx.record_violation(Violation(
+                        constraint_name=self.name,
+                        severity=Severity.HARD,
+                        shot_index=shot_index,
+                        field=f"keyframes[{slot.index}].desc",
+                        message=(
+                            f"关键帧描述更像 {_cov.segments[_bst][0]:g}-"
+                            f"{_cov.segments[_bst][1]:g}s 的事件"
+                            f"「{str(_cov.segments[_bst][2])[:24]}」，但它位于 "
+                            f"{_cov.segments[_own][0]:g}-{_cov.segments[_own][1]:g}s"
+                            f"（「{str(_cov.segments[_own][2])[:24]}」）；"
+                            "保留原帧并交 LLM regen，禁止用 motion 重写 desc"
+                        ),
+                        evidence=slot.desc[:180],
                         repaired=False,
                     ))
 
-                if best_in_window or best_match >= 0.12:
-                    if best_seg in assigned:
-                        ctx.record_violation(Violation(
-                            constraint_name=self.name,
-                            severity=Severity.HARD,
-                            shot_index=shot_index,
-                            field="keyframes",
-                            message=(
-                                f"关键帧 {assigned[best_seg]} 与 {kf_i} 都指向 motion "
-                                f"时段 {best_seg}；仅报告重复/塌缩，不自动删除"
-                            ),
-                            repaired=False,
-                        ))
-                    else:
-                        assigned[best_seg] = kf_i
-
-            for seg_i, (a, b, segment_body) in enumerate(segments):
-                if seg_i not in assigned:
+                if (slot.duplicate_of is not None
+                        and (slot.best == slot.own
+                             or _best_score(slot) >= 0.12)):
                     ctx.record_violation(Violation(
                         constraint_name=self.name,
                         severity=Severity.HARD,
                         shot_index=shot_index,
                         field="keyframes",
                         message=(
-                            f"motion 时段 {a:g}-{b:g}s「{segment_body[:50]}」"
-                            "缺少可证明对应的关键帧；不得由 motion 自动补建，交 regen"
+                            f"关键帧 {slot.duplicate_of} 与 {slot.index} 都指向 motion "
+                            f"时段 {slot.own}；仅报告重复/塌缩，不自动删除"
                         ),
                         repaired=False,
                     ))
+
+            for seg_i in _cov.missing:
+                a, b, segment_body = _cov.segments[seg_i]
+                ctx.record_violation(Violation(
+                    constraint_name=self.name,
+                    severity=Severity.HARD,
+                    shot_index=shot_index,
+                    field="keyframes",
+                    message=(
+                        f"motion 时段 {a:g}-{b:g}s「{str(segment_body)[:50]}」"
+                        "缺少可证明对应的关键帧；不得由 motion 自动补建，交 regen"
+                    ),
+                    repaired=False,
+                ))
 
         return []
 

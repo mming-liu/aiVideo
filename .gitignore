@@ -124,3 +124,10 @@ tests/step01_script_gen/*
 !docs/step01-plan-boundary-closure-2026-09-25.md
 !docs/step01-plan-reselection-and-cross-model-anchor-2026-09-25.md
 !docs/step01-contract-positioning-and-replan-semantics-2026-09-25.md
+# 09-28：**跑批记录**是交付物（十次跑问题报告 + P1–P6 复测报告），逐份放行；
+# `docs/archive/` 是历史留档目录——放行目录本身即可（`/docs/*` 只匹配直接子项，
+# 目录一旦放行，其内文件不再被它匹配），否则归档在 git 眼里等于删除
+# （2026-09-28 复核指出：普通 `git add docs/archive` 会被忽略规则挡下）。
+!/docs/archive/
+!docs/step01-ten-run-problem-report-2026-09-27.md
+!docs/step01-ten-run-report-2026-09-28-p1p6-retest.md

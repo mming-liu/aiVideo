@@ -440,6 +440,39 @@ def sha1_file(path: Path) -> str:
     return _sha1_file(Path(path))
 
 
+def _cap_blocking_for_manifest(blocking: list, *, cap: int = 20) -> list:
+    """BLOCK manifest 的 blocking 清单：截断但**每个 code 至少留一条**（v6.143 P6）.
+
+    此前是裸 `[:20]`：`blocking_count` 是真值，而清单只留**顺序前 20 条**，于是
+    「这一轮到底有哪些类缺陷」从清单读不出来——2026-09-27 十次连跑里 36 条的 run
+    只留 20 条，问题报告只能按清单统计出**下限**（kf 族被漏掉一部分）。
+
+    现在：先按出现顺序保证每个 `code` 至少一条，再用原顺序补齐到 `cap`。
+    形状不变（仍是原来的 record 列表，只是选法变了），计数仍是 `blocking_count`。
+    是否发生截断由 `blocking_truncated` 显式声明——读者不必数。
+    """
+    items = list(blocking or [])
+    if len(items) <= cap:
+        return items
+    picked: list = []
+    seen_codes: set = set()
+    for rec in items:
+        code = str((rec or {}).get("code") or "")
+        if code in seen_codes:
+            continue
+        seen_codes.add(code)
+        picked.append(rec)
+        if len(picked) >= cap:
+            return picked
+    for rec in items:
+        if rec in picked:
+            continue
+        picked.append(rec)
+        if len(picked) >= cap:
+            break
+    return picked
+
+
 def build_step01_commit_manifest(*, run_id: str, created_at: str, revision: str,
                                  rule_source_fingerprint: str, rule_version: str,
                                  audit_scope: str, chapter_dir: Path,
@@ -465,7 +498,10 @@ def build_step01_commit_manifest(*, run_id: str, created_at: str, revision: str,
         "prompt_source_fingerprint": prompt_source_fingerprint,
         "audit_scope": audit_scope,
         "blocking_count": len(blocking or []),
-        "blocking": list(blocking or [])[:20],
+        # v6.143（P6）：清单截断与否**显式声明**——此前读者只能靠「正好 20 条」
+        # 猜是否被截断（36 条的 run 也只看到 20 条）。
+        "blocking_truncated": len(blocking or []) > 20,
+        "blocking": _cap_blocking_for_manifest(blocking),
         "detail": detail,
         "artifacts": {},
     }

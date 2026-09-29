@@ -28,7 +28,9 @@ AGENT_PLAN_VIDEO_SUBMIT_RETRIES = 4  # range(1, 1 + N)
 VOLCENGINE_VIDEO_SUBMIT_RETRIES = 4
 
 # ---- 文本 provider ----
-AGENT_PLAN_TEXT_ATTEMPTS = 2  # range(1, 1 + N)
+# 提交重试次数已迁入**单一来源** `_text_gen/retry_policy.submit_attempts()`
+# （N6，2026-09-28：判定/次数/退避/时间预算同处，避免各 provider 各写一套）；
+# 环境变量 `TEXT_TRANSPORT_RETRIES`（默认 1 = 初次 + 1 次重试）。
 
 # ---- 图片 ----
 HALLUCINATION_DETECT_RETRIES = 3  # 视觉幻觉检测失败重试

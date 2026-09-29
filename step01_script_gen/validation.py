@@ -27,6 +27,9 @@ from shared.paths import step01_log_file
 from shared.constants import DEFAULT_VIDEO_DURATION_FALLBACK
 from step01_script_gen.climax_words import CLIMAX_WORDS_ARC
 from step01_script_gen.gap_analysis import normalize_core_keywords
+from step01_script_gen.kf_coverage import (
+    analyze as _analyze_kf_coverage,   # v6.143：kf↔时段覆盖的唯一判据
+)
 from step01_script_gen.prompt_semantic.registry import COLLECTIVE_NAMES
 from shared.tee_logger import get_logger
 from shared import motion_segments as _ms
@@ -655,6 +658,85 @@ def _check_audio_instruction(shots: list[dict]) -> None:
 
 # 模块级变量 _novel_text_for_validation 已在文件顶部（line 29）定义，此处不再重复
 # （code-audit 07-31 #5：原 :254 与 :29 重复定义同一模块级变量）
+
+
+def normalize_for_grounding(text: str) -> str:
+    """NFKC + 去空白/标点——「同一句话还在不在」的归一（单源）.
+
+    与 `_check_grounding` 原有局部 `_norm_text` 同一口径，抽到模块级是为了让
+    KF 结构闸门的**动作纠错出处判据**（v6.146）复用同一份归一，不另立一套。
+    """
+    import re as _re_n
+    import unicodedata as _ud_n
+    return "".join(
+        ch for ch in _ud_n.normalize("NFKC", str(text or ""))
+        if not ch.isspace() and not _re_n.match(r"[^\w]", ch)
+    )
+
+
+def _source_window_span(shot: dict, novel_norm: str) -> tuple | None:
+    """本镜台词在**归一后**原文里的窗口 `(start, end)`；定位不到 → None.
+
+    v6.83（二次审核发现 5）：范围收到「本镜 narration_segment 在原文里出现的
+    位置 ± 300 字」——出处必须是**本镜这段剧情**的文字，引用同章别处的真句子
+    不算。
+    """
+    import re as _re_s
+    for fld in ("narration_segment", "subtitle"):
+        raw = str(shot.get(fld) or "").strip()
+        if not raw:
+            continue
+        # 剥「说话人：」前缀——前缀是分镜格式，原文里没有
+        body = _re_s.sub(r"^[^：:]{1,12}[：:]\s*", "", raw)
+        b = normalize_for_grounding(body)
+        if len(b) < 4:
+            continue
+        pos = novel_norm.find(b)
+        if pos < 0:
+            continue
+        return (max(0, pos - 300), min(len(novel_norm), pos + len(b) + 300))
+    return None
+
+
+def shot_source_window_raw(shot: dict, novel_text: str) -> tuple:
+    """本镜的**原文原样窗口**（保留标点） → `(窗口文本, 是否本镜窗口)`.
+
+    与 `shot_source_window_text` 的区别只有一个：**不归一**。凡是需要**切分从句**的
+    判据（动作与施事/受事的**关系**校验）必须用这一份——归一化会剥掉全部标点，
+    从句切分器随即失效（整窗退化成一句，换受事这类改写就会被误判成有出处）。
+
+    定位不到本镜台词时同样回落整章（保持与 `_check_grounding` 的 `strict=False` 同口径）。
+    """
+    raw = str(novel_text or "")
+    if not raw:
+        return "", False
+    import re as _re_r
+    for fld in ("narration_segment", "subtitle"):
+        body = str(shot.get(fld) or "").strip()
+        if not body:
+            continue
+        body = _re_r.sub(r"^[^：:]{1,12}[：:]\s*", "", body)
+        if len(body) < 4:
+            continue
+        pos = raw.find(body)
+        if pos < 0:
+            continue
+        return raw[max(0, pos - 300): min(len(raw), pos + len(body) + 300)], True
+    return raw, False
+
+
+def shot_source_window_text(shot: dict, novel_text: str) -> tuple:
+    """本镜的**原文出处窗口** → `(窗口文本, 是否本镜窗口)`.
+
+    定位不到本镜台词时**回落整章**——与 `_check_grounding` 的 `strict=False`
+    分支同口径（「定位不到」不等于「原文没有」：台词本身也是模型生成的）。
+    第二项标识这是**弱出处**，调用方可据此从严。
+    """
+    novel_norm = normalize_for_grounding(novel_text)
+    span = _source_window_span(shot, novel_norm)
+    if span is None:
+        return novel_norm, False
+    return novel_norm[span[0]:span[1]], True
 
 
 def _check_grounding(shot: dict, novel_text: str) -> bool:
@@ -3744,6 +3826,50 @@ def scene_anchors_list_for(location: str) -> tuple:
     return scene_anchors_for(location)
 
 
+#: 「方位事实」取值：四个画向。`frame_layouts` 每条目必填 `gaze_target`（6 字段之一），
+#: 所以现代稿里方位事实几乎总在——它就是 `char_layout.facing` 的上游。
+_DIRECTION_FACTS = ("画左", "画右", "画上", "画下")
+
+
+def _has_layout_direction_fact(shot: dict, name: str) -> bool:
+    """该角色在本镜 `frame_layouts` 里是否已有**方位事实**（`gaze_target` ∈ 四个画向）.
+
+    v6.143（2026-09-27 P5，十次连跑根因）：`char_layout` 是**从 frame_layouts 派生的
+    遗留字段**——`identity_unification` 把 ff 名单的 `pose` 抄进 `facing`。于是
+    「姿态文本里没写朝向词」（如 `怒极，右手垂于身侧`）会被判成「朝向缺失」并进
+    blocking，而**方位事实一直在**现代单一事实源的 `frame_layouts[*].gaze_target` 里
+    （schema 6 字段之一，必填）。
+
+    实测：10 次跑 `multi_person_staging` 20 条（清单截断后的下限），主形态正是
+    `镜头9: 张十三 朝向「怒极，右手垂于身侧」缺朝向词`——而该镜
+    `kfs[0][0].gaze_target = "画右"`。这条 lint 此前读的是**有损派生副本**。
+
+    实现口径：**只认本镜 `frame_layouts` 里同名条目的 `gaze_target`**，不看文本
+    推断、不猜朝向。方向事实不存在时（如昏迷/闭眼角色 `gaze_target="无"`）照常报——
+    那才是真的缺朝向。
+    """
+    layouts = shot.get("frame_layouts")
+    if not isinstance(layouts, dict):
+        return False
+    buckets: list = []
+    for _key in ("ff", "lf"):
+        if isinstance(layouts.get(_key), list):
+            buckets.append(layouts[_key])
+    if isinstance(layouts.get("kfs"), list):
+        buckets.extend(_f for _f in layouts["kfs"] if isinstance(_f, list))
+    _name = str(name or "").strip()
+    for _bucket in buckets:
+        for _entry in _bucket:
+            if not isinstance(_entry, dict):
+                continue
+            if str(_entry.get("name") or "").strip() != _name:
+                continue
+            _gaze = str(_entry.get("gaze_target") or "")
+            if any(_d in _gaze for _d in _DIRECTION_FACTS):
+                return True
+    return False
+
+
 def _check_multi_person_staging(shots: list[dict], hook: dict = None,
                                 characters: list | None = None) -> dict:
     """多人站位蓝图检查（站位台吸收 v6.35，规则51，warning-only）.
@@ -3846,7 +3972,10 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
                     f"{label}: {name} 站位「{pos}」缺空间词{hint}")
             if (facing and not is_valid_facing(facing)
                     and not any(w in facing for w in _static_staging)
-                    and name not in set(COLLECTIVE_NAMES)):
+                    and name not in set(COLLECTIVE_NAMES)
+                    # v6.143（P5）：方位事实在 frame_layouts.gaze_target 里 → 不算缺朝向。
+                    # 只读权威字段，不做文本推断（详见 `_has_layout_direction_fact`）。
+                    and not _has_layout_direction_fact(shot, name)):
                 warnings.append(
                     f"{label}: {name} 朝向「{facing}」缺朝向词"
                     f"（面向/背对/侧身/正对），规则51")
@@ -4345,7 +4474,16 @@ def _run_prompt_checklist(script: dict) -> dict:
     results["kf_temporal_consistency"] = _check_kf_temporal_consistency(shots, script.get("hook"))
 
     # v6.33 新增：关键帧物理时刻 = motion_desc 时段对齐（08-18 钩子坑：kfs 全堆 post 段、缺 pre 帧）
-    results["kf_time_window_alignment"] = _check_kf_time_window_alignment(shots, script.get("hook"))
+    # 2026-09-27（用户裁决）：本类别只保留**越窗 / 顺序**两类检测；检测 1（缺段）
+    # 移入非阻塞诊断类别 `kf_segment_coverage_diag`——缺段的**唯一阻塞**是
+    # `quality_issues.kf_segment_missing`（同判据），两条一起报等于同一缺陷计两次
+    # 风险，并让修复 prompt 同一缺段写两遍。
+    _kfwin = _check_kf_time_window_alignment(shots, script.get("hook"))
+    results["kf_time_window_alignment"] = _kfwin
+    results["kf_segment_coverage_diag"] = {
+        "pass": True, "issues": [],
+        "warnings": _kfwin.pop("coverage_warnings", []),
+    }
 
     # v6.77 新增：结构化事件不变式（事件身份 + 事件边界 + 覆盖/重复采样）
     results["temporal_plan"] = _check_temporal_plan(shots, script.get("hook"))
@@ -4409,6 +4547,7 @@ _REGEN_FEEDBACK_LABELS = {
     "keyframes_quality": "关键帧质量",
     "kf_temporal_consistency": "kf时序一致性",
     "kf_time_window_alignment": "kf物理时刻=时段铁律(v6.33)",
+    "kf_segment_coverage_diag": "kf缺段(诊断；阻塞由 kf_segment_missing 单独上报)",
     "opening_hook": "开篇冲突",
     "punch_density": "爆点密度",
     "dialogue_length": "对白长度",
@@ -6344,10 +6483,21 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
                 "刚出水面", "半身探出", "破水而出", "窜出", "浮出", "半身破水"
             )
             # 通用化（v6.62）：从 poses dict 找"被打者"——任何角色躺下都算
-            victim_name = _find_char_with_pose(m["poses"], _DOWN_POSES)
-            victim_posture = m["poses"].get(victim_name, "") if victim_name else ""
+            # ⚠️ `m["poses"]` 是**类别键**映射（reclining / sitting / upright，见
+            # `_SUBJECT_POSE_WORDS`）：它能回答「这一帧有没有人躺下」，**答不出是谁**
+            # ——拿它的键当角色名会打出「reclining已「倒地」」，拿角色名来索引它会
+            # KeyError（N1，2026-09-28 run 10 打死整次运行）。
+            # 触发条件照旧用类别映射（行为不变），面向人的文案一律取**角色名键**映射
+            # `_extract_named_poses`（同子句限定）；名册里取不到名字时用通用称谓 + 类别
+            # 映射里的姿态词（那是真姿态词，不是类别键）。
+            victim_pose_word = next(
+                (w for w in m["poses"].values() if w in _DOWN_POSES), "")
+            victim_laying_down = bool(victim_pose_word)
+            _victim_named = _extract_named_poses(desc, s)
+            victim_name = _find_char_with_pose(_victim_named, _DOWN_POSES)
+            victim_posture = (_victim_named.get(victim_name, "") if victim_name
+                              else victim_pose_word)
             # 真矛盾条件：刺客刚出 + 受害者已躺下/仰倒 + 有血
-            victim_laying_down = bool(victim_posture)
             if threat_just_out and victim_laying_down and m["has_blood"]:
                 _victim = victim_name or "被打者"
                 warnings.append(
@@ -6384,7 +6534,10 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
                 )
 
         # 3. FF→kf[0] 状态连续性：FF 受害者盘坐 + kf[0] 受害者直接仰卧 = 跳变
-        # 通用化（v6.62）：从 ff_m["poses"] 找"被打者"——任意角色坐姿→躺姿跳变都触发
+        # 通用化（v6.62）：从**角色名键**映射 `_extract_named_poses` 找"被打者"——
+        # 任意角色坐姿→躺姿跳变都触发。姿态文本也只能取自该映射：`kf_markers` 是
+        # `_extract_state_markers` 的结果，它的 `poses` 是类别键（N1：拿角色名索引
+        # 它 = KeyError，2026-09-28 run 10 打死整次运行）。
         ff_named = _extract_named_poses(ff_text, s)
         ff_victim = _find_char_with_pose(ff_named, _SITTING_POSES)
         if ff_victim:
@@ -6394,8 +6547,8 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
             if kf0_victim and kf0_victim == ff_victim:
                 tr0 = mid_kfs[0][0]
                 warnings.append(
-                    f"镜头{label} FF→kf[0] {ff_victim}状态跳变：FF「{ff_m['poses'][ff_victim]}」"
-                    f"→ kf[0] t={tr0:.1f}「{kf0_m['poses'][kf0_victim]}」缺过渡（盘坐→仰卧应至少 1 镜过渡："
+                    f"镜头{label} FF→kf[0] {ff_victim}状态跳变：FF「{ff_named[ff_victim]}」"
+                    f"→ kf[0] t={tr0:.1f}「{kf0_named[kf0_victim]}」缺过渡（盘坐→仰卧应至少 1 镜过渡："
                     f"「仍坐/察觉」或「被刺瞬间往后倒」）。"
                 )
             # FF 无血 + kf[0] 有血 = 跳变（除非 kf[0] 写「刚被刺」明示时序）
@@ -6547,16 +6700,30 @@ def _parse_motion_time_segments(motion_desc: str, total_sec: float) -> list[tupl
     return parse_segments(motion_desc, total_sec, implicit_tail=True, clamp=True)
 
 def _check_kf_time_window_alignment(shots: list[dict], hook: dict = None) -> dict:
-    """v6.33 关键帧物理时刻 = motion_desc 时段铁律检查（warning-only）.
+    """v6.33 关键帧物理时刻 = motion_desc 时段铁律检查（本类别只报**越窗/顺序**）.
 
-    3 类检测（任一命中即 WARN）：
-      1. 时段覆盖率：motion_desc 显式分 N 段，kfs 个数 < N → 缺帧
+    本类别保留的检测（任一命中即 WARN → visual_risk）：
       2. 时段归属：某 kf 物理时刻 t×duration_sec 不在任一时段内
       3. 时段单调性：kfs 的物理时刻不按时段顺序排列（如 kf0 落在 4-6 秒、kf1 落在 0-2 秒）
+
+    **检测 1（时段覆盖率 / 缺段）已移出本类别**（2026-09-27 用户裁决）：
+
+    旧检测 1「motion_desc 分 N 段而 kfs 数 < N → 缺帧」与新接入质量门的
+    `kf_segment_missing`（`quality_issues._kf_segment_missing_issues`，判据同为
+    `kf_coverage.analyze`）报的是**同一条缺陷**；两者都在
+    `_QUALITY_BLOCKING_CATEGORIES` 里 → **一条缺陷计两次风险**（实测新稿 11 镜里
+    8 镜 2 帧/3 段：24 条风险中 8 条是这个重复），且修复 prompt 的 per-shot 告警
+    来自 `is_blocking` 过滤 → 同一缺段被写进 prompt 两遍。
+    现在缺段**只由 `kf_segment_missing` 一条阻塞**上报；本函数把那段文本收进
+    `coverage_warnings`，由调用方登记到**非阻塞**类别 `kf_segment_coverage_diag`
+    （保留逐镜日志与报告可追溯性，不再进风险数与 per-shot 告警）。
 
     仅对 motion_desc 显式分时段的镜头生效；未分段时返回全 pass（不影响非动作镜）。
     """
     issues, warnings = [], []
+    # 检测 1 的文本（缺段 / 无帧）：**不**进 `warnings`——那条通道在本类别里等于
+    # visual_risk，会与 `kf_segment_missing` 重复计量。见 docstring。
+    coverage_warnings: list = []
     targets = list(shots) + ([hook] if hook else [])
 
     for s in targets:
@@ -6601,30 +6768,24 @@ def _check_kf_time_window_alignment(shots: list[dict], hook: dict = None) -> dic
             mid_kfs.append((tr, (kf.get("desc") or "").strip(), t))
         mid_kfs.sort(key=lambda x: x[0])
         if not mid_kfs:
-            warnings.append(
+            coverage_warnings.append(
                 f"镜头{label} motion_desc 显式分 {len(segs)} 段但无任何 kf（缺帧，"
                 f"会渲染出'动作凭空出现/消失'）。建议每段至少 1 帧定格关键瞬间。"
             )
             continue
 
-        # 检测 1：时段覆盖率。允许段边界帧同时覆盖相邻两段，避免
-        # t_sec=1.0 这种合法边界被误报成“缺段”。
-        covered_segments = set()
-        for _tr, _desc, t_sec in mid_kfs:
-            for _i, (a, b) in enumerate(segs):
-                if a - 0.01 <= t_sec <= b + 0.01:
-                    covered_segments.add(_i)
-        # implicit 空尾段不需要生成“无事件关键帧”。
-        try:
-            _seg_texts = _split_motion_to_seg_texts(motion, segs, float(dur))
-            _required_segments = {
-                i for i, text in enumerate(_seg_texts) if str(text or "").strip()
-            } or set(range(len(segs)))
-        except Exception:
-            _required_segments = set(range(len(segs)))
-        missing_seg_indices = [
-            i for i in sorted(_required_segments) if i not in covered_segments
-        ]
+        # 检测 1：时段覆盖率——**一帧只归属一个明确事件**（2026-09-27 用户裁决）。
+        #
+        # 旧实现让「段边界帧同时覆盖相邻两段」（见下），于是同一个边界帧能把相邻
+        # 两段都算成已覆盖；而约束侧 `kf_event_order` 按一帧一段归属 → 同一稿
+        # 「一个说缺段、一个说已覆盖」（冻结稿 shot 6/7 的 2-4s 段就是这一例）。
+        # 现在两边共用 `kf_coverage.analyze`，口径只有一份：归属取窗口内离段中点
+        # 最近的段，边界帧不重复计入。
+        _cov = _analyze_kf_coverage(s)
+        covered_segments = set(_cov.assigned)
+        # implicit 空尾段不需要生成“无事件关键帧”（`required` 已按剥标签正文判过）
+        _required_segments = set(_cov.required) or set(range(len(segs)))
+        missing_seg_indices = list(_cov.missing)
         if missing_seg_indices:
             seg_summary = "、".join(f"{a:g}-{b:g}秒" for a, b in segs)
             # v6.104.1（2026-09-24 第二十四次重跑实测）：原标题只写「建议：每段生成
@@ -6653,7 +6814,7 @@ def _check_kf_time_window_alignment(shots: list[dict], hook: dict = None) -> dic
                     _seg_txts.append(f"[{_i}] {_t[:30]}")
             _seg_txt_hint = ("（缺段内容：" + "；".join(_seg_txts) +
                              "——新增帧的 desc 必须描写**该段动作**）") if _seg_txts else ""
-            warnings.append(
+            coverage_warnings.append(
                 f"镜头{label} motion_desc 分 {len(segs)} 段（{seg_summary}）"
                 f"但缺段索引 {missing_seg_indices}，只有 {len(mid_kfs)} 个 kf。"
                 f"**必须动作**：在 keyframes 列表**新增 {len(missing_seg_indices)} 帧**"
@@ -6661,8 +6822,8 @@ def _check_kf_time_window_alignment(shots: list[dict], hook: dict = None) -> dic
                 f"{_seg_txt_hint}，"
                 f"并在帧布局的 kfs 列表**按同序号追加等长条目**"
                 f"（两表长度必须始终相等）。"
-                f"**禁止**改写、删除或合并 motion_desc 来消除本告警——"
-                f"那只会让告警消失，动作证据并没有增加。"
+                f"**禁止**改写、删除或合并 motion_desc 来消除本条——"
+                f"那只会让诊断消失，动作证据并没有增加。"
             )
 
         # 检测 2：每个 kf 物理时刻是否落在任一时段内
@@ -6705,7 +6866,12 @@ def _check_kf_time_window_alignment(shots: list[dict], hook: dict = None) -> dic
 
     for w in warnings:
         _get_logger().warn(f"kf时间窗对齐: {w}")
-    return {"pass": True, "issues": issues, "warnings": warnings}
+    # 检测 1（缺段）走**非阻塞诊断**通道：判据与 `kf_segment_missing` 同源，
+    # 这里只留逐镜可读的日志行——不进风险数，也不进 per-shot 修复告警。
+    for w in coverage_warnings:
+        _get_logger().warn(f"kf缺段(诊断；阻塞由 kf_segment_missing 单独上报): {w}")
+    return {"pass": True, "issues": issues, "warnings": warnings,
+            "coverage_warnings": coverage_warnings}
 
 
 # ============================================================================
@@ -6761,41 +6927,14 @@ def _check_temporal_plan(shots: list[dict], hook: dict = None) -> dict:
     # （t=[1.0, 1.02, 3.0] 相邻间隔 0.02/1.98，只有跨度能一次抓住）。
     _RESAMPLE_EPS = 0.05
 
-    def _norm_text(x: str) -> str:
-        import re as _re_g
-        import unicodedata as _ud
-        return "".join(
-            ch for ch in _ud.normalize("NFKC", str(x or ""))
-            if not ch.isspace() and not _re_g.match(r"[^\w]", ch)
-        )
+    _norm_text = normalize_for_grounding
 
     def _shot_source_window(shot: dict) -> tuple | None:
-        """本镜台词在**原文中的窗口** `(start, end)`；无法定位 → None.
-
-        v6.83（二次审核发现 5）：`source_quote` 此前只要求「出现在整章任意位置」，
-        于是**引用同章另一场景的真实句子**也能给本镜的虚构事件盖上 grounded 章。
-        这里把范围收到「本镜 narration_segment 在原文里出现的位置 ± 300 字」——
-        事件表的出处必须是**本镜这段剧情**的文字。
-        """
+        """本镜台词在归一后原文里的窗口（薄封装，实现见 `_source_window_span`）."""
         novel = globals().get("_novel_text_for_validation") or ""
         if not novel:
             return None
-        import re as _re_w
-        n = _norm_text(novel)
-        for fld in ("narration_segment", "subtitle"):
-            raw = str(shot.get(fld) or "").strip()
-            if not raw:
-                continue
-            # 剥「说话人：」前缀——前缀是分镜格式，原文里没有
-            body = _re_w.sub(r"^[^：:]{1,12}[：:]\s*", "", raw)
-            b = _norm_text(body)
-            if len(b) < 4:
-                continue
-            pos = n.find(b)
-            if pos < 0:
-                continue
-            return (max(0, pos - 300), min(len(n), pos + len(b) + 300))
-        return None
+        return _source_window_span(shot, _norm_text(novel))
 
     def _quote_grounded(quote: str, shot: dict) -> tuple:
         """`source_quote` 是否能在**本镜原文窗口**内定位 → `(ok, scoped)`.
