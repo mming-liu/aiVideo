@@ -134,6 +134,10 @@ LAST_FRAME_FILENAME = "last_frame.png"
 KEYFRAME_FILENAME_FMT = "keyframe_{}.png"
 CLIP_FILENAME_FMT = "clip_{}.mp4"
 SHOT_AUDIO_FILENAME_FMT = "shot_{}.mp3"
+#: 图外旁白音轨：一条旁白一个文件（序号 = 计划里 `narration_lines` 的 N 编号）。
+#: 2026-09-30 复核第 7 轮：旁白走**独立 TTS 音轨**（合并时叠在原声之上），
+#: 不能混进 `shot_<idx>.mp3`（那是角色对白轨，音色由说话人决定）。
+NARRATION_AUDIO_FILENAME_FMT = "narration_{:02d}.mp3"
 
 
 def stretched_dir(chapter: int | None = None) -> Path:
@@ -216,6 +220,11 @@ def clip_file(idx: int, chapter: int | None = None) -> Path:
 def audio_file(idx: int, chapter: int | None = None) -> Path:
     """单镜 TTS 音频: audio/shot_<idx>.mp3."""
     return audio_dir(chapter) / SHOT_AUDIO_FILENAME_FMT.format(idx)
+
+
+def narration_audio_file(index: int, chapter: int | None = None) -> Path:
+    """图外旁白 TTS 音轨: audio/narration_<NN>.mp3（N 编号，与计划一致）."""
+    return audio_dir(chapter) / NARRATION_AUDIO_FILENAME_FMT.format(int(index))
 
 
 def final_file(chapter: int | None = None) -> Path:

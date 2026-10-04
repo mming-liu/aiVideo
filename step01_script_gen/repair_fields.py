@@ -818,3 +818,149 @@ def check_replacement_authorized(before: dict, after: dict, allowed) -> str:
     if not bad:
         return ""
     return "越权改动（本轮只授权 %s）：%s" % (sorted(allowed) or ["（无）"], bad[:6])
+
+
+# ---------------------------------------------------------------------------
+# v6.154（2026-10-03 复核之二十 P1）：**帧子列表被点名时，只允许纯增删条目**
+#
+# 真实缺陷（第 20 轮 ch2，run 20261003T084713-d32152-002-736d86）：审计建议
+# 「删除 kfs[0][1] 的『小厮』条目」，但 `repair_targets` 写的是条目**叶子**
+# `frame_layouts.kfs[0][1].name`。叶子授权改不了列表长度（见 `_walk`：长度变化且
+# 列表本身未授权 → 按基线回填），于是模型**照建议删对了**，删除又被合并层原样恢复，
+# 两轮修复都白做，还被记成"模型没修好"。
+#
+# **能力其实早就在**：帧子列表路径本身（`frame_layouts.ff` / `frame_layouts.lf` /
+# `frame_layouts.kfs[N]`）是合法目标，授权它 = 允许**该帧**的人物列表增删条目，
+# 而相邻帧不受影响（`path_allowed` 认具体下标）。此前缺的是两件事：
+#   ① 提示词从没告诉生产者这个形状（`audit.py` 只列叶子，还把 `frame_layouts.kfs`
+#      当反例）——所以模型只能退到最深的叶子；
+#   ② 授权之后没有任何判据约束那条子列表被改成什么样。
+# 本函数补 ②。
+#
+# 判据（**只对被逐字点名的帧**生效，整张 `frame_layouts.kfs` 的既有授权行为不变）：
+#   · 只允许**增/删条目**；保留下来的条目必须**逐字不变**、**相对顺序不变**；
+#   · 同名条目"既删又加"= 改名/改写，不是增删；
+#   · 同一镜里被点名的帧之外，其余帧必须逐字不变（"只限被点名帧"）。
+# 不放开整张布局、不按关键词猜删除目标。
+# ---------------------------------------------------------------------------
+
+_LAYOUT_FRAME_LIST_KEYS: tuple = ("ff", "lf")
+
+
+def _canon_entry(e) -> str:
+    import json as _json
+    return _json.dumps(e, ensure_ascii=False, sort_keys=True)
+
+
+def _entry_name(e) -> str:
+    return str(e.get("name") or "").strip() if isinstance(e, dict) else ""
+
+
+def shot_by_target(script, tid: str):
+    """`shot_<id>` / `hook` → 镜头对象（与 `main` 内同名口径一致）."""
+    if not isinstance(script, dict):
+        return None
+    if str(tid) == "hook":
+        return script.get("hook") if isinstance(script.get("hook"), dict) else None
+    sid = str(tid)[5:] if str(tid).startswith("shot_") else str(tid)
+    for s in script.get("shots") or []:
+        if isinstance(s, dict) and str(s.get("index")) == sid:
+            return s
+    return None
+
+
+def _layout_frame_lists(shot) -> dict:
+    """`{帧路径: 人物条目列表}`；`ff`/`lf` 不带下标，`kfs` 带关键帧下标."""
+    out: dict = {}
+    fl = shot.get("frame_layouts") if isinstance(shot, dict) else None
+    if not isinstance(fl, dict):
+        return out
+    for _k in _LAYOUT_FRAME_LIST_KEYS:
+        if isinstance(fl.get(_k), list):
+            out["frame_layouts.%s" % _k] = fl[_k]
+    for _i, _fr in enumerate(fl.get("kfs") or []):
+        if isinstance(_fr, list):
+            out["frame_layouts.kfs[%d]" % _i] = _fr
+    return out
+
+
+def _frame_target_spelled(path: str, allowed) -> bool:
+    """`path` 是否被**逐字点名**成「该帧的子列表」（而不是叶子、也不是整张列表）.
+
+    ⚠️ 必须比**保留下标**的规范形：`_norm` 会把 `[0]` 抹成 `*`，拿它比会让
+    `frame_layouts.kfs[0]` 与 `frame_layouts.kfs.0` 判成不同（实测踩过——
+    判据永远不生效，而"违例为空"与"判据没跑"在断言里长得一模一样）。
+    整张 `frame_layouts.kfs`（无下标）授权的是**所有帧**，属既有结构码的能力，
+    不在本判据范围内——那种情况下本函数返回 False，行为与之前逐字一致。
+    叶子（`frame_layouts.kfs[0][1].name`）保留下标后与帧路径不等，同样返回 False。
+    """
+    _p_keep = _norm_keep_index(path)
+    for a_raw in allowed or ():
+        _a = str(a_raw or "").strip()
+        if not _a or "*" in _a:       # 通配/空条目不是「逐字点名某一帧」
+            continue
+        if _norm_keep_index(_a) == _p_keep:
+            return True
+    return False
+
+
+def _pure_entry_edits(path: str, before: list, after: list) -> list:
+    """只允许**增/删条目**：保留下来的条目逐字不变、相对顺序不变.
+
+    ⚠️ 按**名字**匹配，所以「改名」在判据里表现为「删一条 + 加一条」，本函数
+    **不**报它（也报不出来：`before-after` 与 `after-before` 按定义不相交）。
+    改名后的新名不在名册里，由后续判据负责。这条边界是明写的，不是漏掉。
+    """
+    out: list = []
+    _bn = [_entry_name(e) for e in before]
+    _an = [_entry_name(e) for e in after]
+    _both = set(_bn) & set(_an)
+    for _nm in sorted(_both):
+        _be = [e for e in before if _entry_name(e) == _nm]
+        _ae = [e for e in after if _entry_name(e) == _nm]
+        if len(_be) != len(_ae):
+            out.append("%s「%s」条目数由 %d 变成 %d（同名条目只能整体增删）"
+                       % (path, _nm, len(_be), len(_ae)))
+            continue
+        for _x, _y in zip(_be, _ae):
+            if _canon_entry(_x) != _canon_entry(_y):
+                out.append("%s「%s」的字段被改写（本帧只授权增删条目；改字段要写"
+                           "该条目字段的叶子路径）：%s -> %s"
+                           % (path, _nm, _canon_entry(_x)[:70], _canon_entry(_y)[:70]))
+    _keep_b = [n for n in _bn if n in _both]
+    _keep_a = [n for n in _an if n in _both]
+    if _keep_b != _keep_a:
+        out.append("%s 保留条目的相对顺序被改变：%s -> %s" % (path, _keep_b, _keep_a))
+    return out
+
+
+def frame_layout_structural_violations(before_script: dict, after_script: dict,
+                                       allowed_by_target: dict | None,
+                                       picked) -> list:
+    """被点名的帧子列表**只允许纯增删条目**；返回 `<目标名>: <违例>`（同 `_kf_structural_violations` 形状）."""
+    out: list = []
+    for tid in picked or ():
+        allowed = {str(a) for a in ((allowed_by_target or {}).get(tid) or ())}
+        if not allowed:
+            continue
+        _before = shot_by_target(before_script, tid)
+        _after = shot_by_target(after_script, tid)
+        if not isinstance(_before, dict) or not isinstance(_after, dict):
+            continue
+        _bl = _layout_frame_lists(_before)
+        _al = _layout_frame_lists(_after)
+        _named = [p for p in _bl if _frame_target_spelled(p, allowed)]
+        if not _named:
+            continue                      # 没点名任何帧子列表 → 不适用（行为不变）
+        for _path, _entries in _bl.items():
+            _new = _al.get(_path)
+            if _path not in _named:
+                if _new != _entries:      # 只限被点名的帧
+                    out.append("%s: %s 未被点名却被改动" % (tid, _path))
+                continue
+            if _new is None:
+                out.append("%s: %s 整帧被删除（授权的是增删**条目**，不是删帧）"
+                           % (tid, _path))
+                continue
+            out.extend("%s: %s" % (tid, m) for m in _pure_entry_edits(_path, _entries, _new))
+    return out

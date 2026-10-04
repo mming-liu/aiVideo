@@ -13,6 +13,7 @@
 """
 
 from .config import config
+from .deadline import TransportGate
 from .models import TextGenerationRequest, TextGenerationResult, truncated_result
 from .service import TextGenerationService
 
@@ -113,10 +114,20 @@ class DeepSeekTextService(TextGenerationService):
         # 完全没实现它——全文 `timeout` 零命中，而 OpenAI client 只用 api_key/base_url
         # 构造，于是请求吃 SDK 默认 `read=600s`：审计传的 `AUDIT_TIMEOUT_SEC=180` 在原生
         # 通道**静默失效**（2026-09-25 探针实测）。None = 不传 = 保持 SDK 默认（零行为变化）。
-        if req.timeout_sec:
-            params["timeout"] = float(req.timeout_sec)
-
-        response = client.responses.create(**params)
+        # 工作包 §4 B：真上限 = min(请求偏好, 整次规划余量)；余量耗尽 ⇒ **不发请求**。
+        # 本通道原本不传超时就吃 SDK 默认（read=600s），故 `default_timeout=None`：
+        # **没带截止时刻的旧请求行为不变**（仍旧不传 timeout）。
+        _gate = TransportGate(req, default_timeout=None, where="deepseek")
+        _limit, _deny = _gate.limit()
+        if _deny:
+            return TextGenerationResult(success=False, error=_deny)
+        # 上限交给**发送当刻**：`_t` 是工作线程重算后的余量（复核第 45 轮 P1-③：
+        # 提前写进 params 的旧 timeout 会在线程延迟调度时继续被消费）
+        response, _timed_out, _why = _gate.request(
+            lambda _t: client.responses.create(**params) if _t is None
+            else client.responses.create(**{**params, "timeout": float(_t)}))
+        if _why:
+            return TextGenerationResult(success=False, error=_why)
 
         # 失败诊断（截断诊断挪到正文提取之后——allow_truncated=True 时要把已生成的
         # 前缀交出去，v6.62.6）
@@ -149,6 +160,7 @@ class DeepSeekTextService(TextGenerationService):
                     text=text,
                     usage=usage,
                     allow_truncated=req.allow_truncated,
+                    finish_reason=str(reason or "max_output_tokens"),
                     error=(
                         f"{err}——输出 JSON 不完整，已整份丢弃。"
                         f"如为全脚本生成请调高 DEEPSEEK_MAX_TOKENS"
@@ -169,7 +181,9 @@ class DeepSeekTextService(TextGenerationService):
                 ),
                 usage=usage,
             )
-        return TextGenerationResult(success=True, text=text, usage=usage)
+        # Responses API 没有 `finish_reason`：用 `status`（completed 等）当留档口径
+        return TextGenerationResult(success=True, text=text, usage=usage,
+                                    finish_reason=str(getattr(response, "status", "") or ""))
 
     # ------------------------------------------------------------------
     # Chat Completions（reasoner 老模型回退）
@@ -205,12 +219,19 @@ class DeepSeekTextService(TextGenerationService):
             api_params["reasoning_effort"] = effort
 
         # v6.117：同上——chat 回退路径同样必须执行请求级超时契约
-        if req.timeout_sec:
-            api_params["timeout"] = float(req.timeout_sec)
-
+        # 工作包 §4 B：同 Responses 路径，真上限 = min(偏好, 余量)，耗尽则不发
+        _gate = TransportGate(req, default_timeout=None, where="deepseek")
+        _limit, _deny = _gate.limit()
+        if _deny:
+            return TextGenerationResult(success=False, error=_deny)
         print(f"[INFO] 正在调用 DeepSeek ({model}) 生成分镜脚本...")
 
-        response = client.chat.completions.create(**api_params)
+        # 同上：chat 回退路径也用**发送当刻**算出的上限
+        response, _timed_out, _why = _gate.request(
+            lambda _t: client.chat.completions.create(**api_params) if _t is None
+            else client.chat.completions.create(**{**api_params, "timeout": float(_t)}))
+        if _why:
+            return TextGenerationResult(success=False, error=_why)
         if not getattr(response, "choices", None):
             # #17 修复 2026-08-14：choices 为空时越界保护（用 usage/错误信息定位）
             return TextGenerationResult(
@@ -260,12 +281,15 @@ class DeepSeekTextService(TextGenerationService):
                 text=text,
                 usage=usage,
                 allow_truncated=req.allow_truncated,
+                finish_reason=str(getattr(response.choices[0], "finish_reason", "") or "length"),
                 error=(
                     f"DeepSeek 输出被截断（finish_reason=length, model={model}, "
                     f"max_tokens={req.max_tokens}）——输出 JSON 不完整，已整份丢弃。"
                 ),
             )
-        return TextGenerationResult(success=True, text=text, usage=usage)
+        return TextGenerationResult(
+            success=True, text=text, usage=usage,
+            finish_reason=str(getattr(response.choices[0], "finish_reason", "") or ""))
 
 
 def _usage_dict(response) -> dict | None:

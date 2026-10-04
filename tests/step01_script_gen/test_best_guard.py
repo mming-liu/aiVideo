@@ -66,6 +66,15 @@ def _write_snapshot(snap_dir: Path, ts: str, script: dict) -> Path:
     return p
 
 
+def _owed(m) -> set:
+    """台账里的欠账身份（**不分版本**拍平）——只用于「某条欠账在不在」这类断言.
+
+    版本作用域本身由 `test_recorded_entry_matches_only_its_own_version` 等用例钉住
+    （2026-09-30 复核第 5 轮 P1-2：各版本身份不能混成一个等价关系）。
+    """
+    return set().union(*m._load_blocked_revisions().values())         if m._load_blocked_revisions() else set()
+
+
 def _setup(tmp_path, monkeypatch):
     import step01_script_gen.main as m
     out = tmp_path / "script_result.json"
@@ -108,10 +117,13 @@ def test_ledger_saturation_selects_no_snapshot(tmp_path, monkeypatch):
     assert m._score_script(_script_with_dialogue(4), "")["total"] > \
         m._score_script(_script_with_dialogue(2), "")["total"], "夹具必须有分差"
 
+    from shared.quality_gate import SCRIPT_REVISION_VERSION as _RV
+    _r4, _r2 = _rev(_script_with_dialogue(4)), _rev(_script_with_dialogue(2))
     (snap_dir / "_blocked_revisions.json").write_text(_json.dumps({
-        "revisions": [_rev(_script_with_dialogue(4)), _rev(_script_with_dialogue(2))],
-        "debt": {_rev(_script_with_dialogue(4)): 5,
-                 _rev(_script_with_dialogue(2)): 1},
+        "revisions": [_r4, _r2],
+        "debt": {_r4: 5, _r2: 1},
+        # 登记版本：现行条目必须带它，否则按 v1 解释（见 `_load_blocked_revisions`）
+        "entry_versions": {_r4: _RV, _r2: _RV},
     }, ensure_ascii=False), encoding="utf-8")
 
     selected, meta = m._cross_run_best_guard(_script_with_dialogue(0), "")
@@ -135,12 +147,14 @@ def test_criteria_change_re_admits_a_blocked_snapshot(tmp_path, monkeypatch):
     m, out, snap_dir = _setup(tmp_path, monkeypatch)
     _hot = _write_snapshot(snap_dir, "20260924_231100", _script_with_dialogue(4))
     rev = _rev(_script_with_dialogue(4))
+    from shared.quality_gate import SCRIPT_REVISION_VERSION as _RV
     (snap_dir / "_blocked_revisions.json").write_text(_json.dumps({
         "revisions": [rev],
+        "entry_versions": {rev: _RV},
         "criteria": {rev: {"rules": "OLD-RULES", "prompts": "OLD-PROMPTS"}},
     }, ensure_ascii=False), encoding="utf-8")
 
-    assert m._load_blocked_revisions() == set(), (
+    assert _owed(m) == set(), (
         "指纹不符的条目不得再当欠账——否则判据修好也换不回重评")
     _sel, meta = m._cross_run_best_guard(_script_with_dialogue(0), "")
     assert meta["best_path"] == str(_hot), meta
@@ -157,8 +171,10 @@ def test_ledger_without_criteria_stays_blocked(tmp_path, monkeypatch):
 
     m, out, snap_dir = _setup(tmp_path, monkeypatch)
     _write_snapshot(snap_dir, "20260924_231100", _script_with_dialogue(4))
+    from shared.quality_gate import SCRIPT_REVISION_VERSION as _RV
+    _r = _rev(_script_with_dialogue(4))
     (snap_dir / "_blocked_revisions.json").write_text(
-        _json.dumps({"revisions": [_rev(_script_with_dialogue(4))]}),
+        _json.dumps({"revisions": [_r], "entry_versions": {_r: _RV}}),
         encoding="utf-8")
 
     _sel, meta = m._cross_run_best_guard(_script_with_dialogue(0), "")
@@ -171,7 +187,7 @@ def test_recorded_criteria_match_the_current_fingerprints(tmp_path, monkeypatch)
     m._record_blocked_revision("rev_abc")
     data = json.loads((snap_dir / "_blocked_revisions.json").read_text(encoding="utf-8"))
     assert data["criteria"]["rev_abc"] == m._current_criteria()
-    assert m._load_blocked_revisions() == {"rev_abc"}
+    assert _owed(m) == {"rev_abc"}
 
 
 def test_ledger_without_debt_counts_reads_as_one_episode(tmp_path, monkeypatch):
@@ -182,11 +198,13 @@ def test_ledger_without_debt_counts_reads_as_one_episode(tmp_path, monkeypatch):
 
     m, out, snap_dir = _setup(tmp_path, monkeypatch)
     _write_snapshot(snap_dir, "20260924_231100", _script_with_dialogue(4))
+    from shared.quality_gate import SCRIPT_REVISION_VERSION as _RV
+    _r = _rev(_script_with_dialogue(4))
     (snap_dir / "_blocked_revisions.json").write_text(
-        _json.dumps({"revisions": [_rev(_script_with_dialogue(4))]}),
+        _json.dumps({"revisions": [_r], "entry_versions": {_r: _RV}}),
         encoding="utf-8")
 
-    assert m._load_blocked_debt() == {_rev(_script_with_dialogue(4)): 1}
+    assert m._load_blocked_debt() == {_r: 1}
 
 
 def test_ledger_survives_a_corrupt_debt_entry(tmp_path, monkeypatch):
@@ -202,7 +220,7 @@ def test_ledger_survives_a_corrupt_debt_entry(tmp_path, monkeypatch):
     _debt = m._load_blocked_debt()
     assert _debt["rev_b"] == 4
     assert _debt["rev_a"] == 1, "脏值按最老台账口径记 1 轮，不牵连同表"
-    assert m._load_blocked_revisions() == {"rev_a", "rev_b"}, "台账整体仍可读"
+    assert _owed(m) == {"rev_a", "rev_b"}, "台账整体仍可读"
 
     m._record_blocked_revision("rev_a")   # 写入不得因脏值整体失败
     assert m._load_blocked_debt()["rev_a"] == 2
@@ -215,7 +233,7 @@ def test_record_blocked_revision_counts_episodes(tmp_path, monkeypatch):
     for _ in range(3):
         m._record_blocked_revision(rev)
     assert m._load_blocked_debt()[rev] == 3
-    assert m._load_blocked_revisions() == {rev}
+    assert _owed(m) == {rev}
 
 
 def test_new_script_winning_is_logged(tmp_path, monkeypatch):
@@ -441,8 +459,9 @@ def test_non_script_snapshot_never_enters_selection(tmp_path, monkeypatch):
     # 唯一真稿在欠账台账里 → 本轮没有任何合格候选
     _blocked = _write_snapshot(snap_dir, "20260924_231100", _script_with_dialogue(8))
     from shared.quality_gate import compute_script_revision as _rev
+    from shared.quality_gate import SCRIPT_REVISION_VERSION as _RV
     monkeypatch.setattr(m, "_load_blocked_revisions",
-                        lambda: {_rev(_script_with_dialogue(8))})
+                        lambda: {_RV: {_rev(_script_with_dialogue(8))}})
     _selected, meta = m._cross_run_best_guard(_script_with_dialogue(1), "")
     assert _selected is None and meta["reason"] == "all_snapshots_owed", meta
     assert not (meta.get("best_path") or "").endswith("audit.r1.json"), meta
@@ -499,8 +518,10 @@ def test_blocked_revision_snapshot_is_skipped_in_selection(tmp_path, monkeypatch
     _calm = _write_snapshot(snap_dir, "20260924_215530", _script_with_dialogue(2))
 
     # ① 台账里记着高分那份的 revision → 它不参与，选另一份
+    from shared.quality_gate import SCRIPT_REVISION_VERSION as _RV
+    _r4 = _rev(_script_with_dialogue(4))
     (snap_dir / "_blocked_revisions.json").write_text(
-        _json.dumps({"revisions": [_rev(_script_with_dialogue(4))]}),
+        _json.dumps({"revisions": [_r4], "entry_versions": {_r4: _RV}}),
         encoding="utf-8")
     _sel, meta = m._cross_run_best_guard(_script_with_dialogue(0), "")
     assert meta["best_path"] == str(_calm), meta
@@ -567,15 +588,15 @@ def test_unrelated_prompt_change_does_not_wash_audit_debt(tmp_path, monkeypatch)
     monkeypatch.setattr(m, "PROMPT_SOURCE_FINGERPRINT", "P1")
     m._record_blocked_revision("rev_x", issues=m._debt_issue_records(
         [{"code": "model_audit_X", "shot_id": "8", "field_path": "lf_desc"}]))
-    assert m._load_blocked_revisions() == {"rev_x"}
+    assert _owed(m) == {"rev_x"}
 
     # 提示源指纹变了（与审计提示无关的改动）→ 旧口径会整批放行；新口径仍排除
     monkeypatch.setattr(m, "PROMPT_SOURCE_FINGERPRINT", "P2")
-    assert m._load_blocked_revisions() == {"rev_x"}
+    assert _owed(m) == {"rev_x"}
 
     # 审计提示本身变了 → 该条欠账作废，恢复候选资格
     monkeypatch.setattr(au, "audit_prompt_version", lambda: "APV-2")
-    assert m._load_blocked_revisions() == set()
+    assert _owed(m) == set()
 
 
 def test_partially_stale_debt_still_excluded(tmp_path, monkeypatch):
@@ -592,10 +613,10 @@ def test_partially_stale_debt_still_excluded(tmp_path, monkeypatch):
     ]))
 
     monkeypatch.setattr(au, "audit_prompt_version", lambda: "APV-2")   # 审计那条作废
-    assert m._load_blocked_revisions() == {"rev_y"}                    # 规则那条仍在
+    assert _owed(m) == {"rev_y"}                    # 规则那条仍在
 
     monkeypatch.setattr(m, "RULE_SOURCE_FINGERPRINT", "R2")            # 规则那条也作废
-    assert m._load_blocked_revisions() == set()
+    assert _owed(m) == set()
 
 
 def test_snapshot_cross_field_blocking_is_the_commit_point_criterion(monkeypatch):
@@ -629,17 +650,17 @@ def test_reblock_under_new_criteria_overwrites_the_stale_record(tmp_path, monkey
     monkeypatch.setattr(au, "audit_prompt_version", lambda: "APV-1")
     _issue = [{"code": "model_audit_X", "shot_id": "8", "field_path": "lf_desc"}]
     m._record_blocked_revision("rev_z", issues=m._debt_issue_records(_issue))
-    assert m._load_blocked_revisions() == {"rev_z"}
+    assert _owed(m) == {"rev_z"}
 
     # 判据变了 → 该条作废，恢复候选资格
     monkeypatch.setattr(au, "audit_prompt_version", lambda: "APV-2")
-    assert m._load_blocked_revisions() == set()
+    assert _owed(m) == set()
 
     # 新判据下**同一问题再次 BLOCK** → 记录必须被现行判据覆盖 → 重新排除
     m._record_blocked_revision("rev_z", issues=m._debt_issue_records(_issue))
     rows = (m._load_blocked_ledger().get("issues") or {}).get("rev_z") or []
     assert [r["crit_fp"] for r in rows] == ["APV-2"], rows
-    assert m._load_blocked_revisions() == {"rev_z"}
+    assert _owed(m) == {"rev_z"}
 
 
 def test_cross_field_validator_exception_means_unverified(monkeypatch):
@@ -652,3 +673,174 @@ def test_cross_field_validator_exception_means_unverified(monkeypatch):
 
     monkeypatch.setattr(cfc, "cross_field_issues", _boom)
     assert m._snapshot_cross_field_blocking({"shots": []}) is None
+
+
+# ---------------------------------------------------------------------------
+# v6.152（C5）：初筛被拒清单**打全**（不再截断到 6 条）
+# ---------------------------------------------------------------------------
+
+
+def test_prefilter_rejection_keeps_every_name(tmp_path, monkeypatch, capsys):
+    """被初筛拒的快照清单必须**全部**可见（日志 + meta）.
+
+    现场（2026-09-29 run 01）：日志按 `[:6]` 截断，`meta` 又不落任何产物，
+    于是「081241 到底在不在那 8 份被拒快照里」事后答不出来。
+    """
+    m, _out, snap_dir = _setup(tmp_path, monkeypatch)
+    bad = {"shots": [{"index": 8, "duration_sec": 5.0,
+                      "lf_desc": "寒光短刃刺中杨旭心口，白袍洇出暗红",
+                      "motion_desc": "前2秒：那人右手一扬；2-4秒：寒光剑光掠过杨旭心口；"
+                                     "4-5秒：那人推臂一送，白袍洇出暗红"}]}
+    names = []
+    for i in range(7):
+        ts = "2026091%d_000000" % i
+        _write_snapshot(snap_dir, ts, bad)
+        names.append("script_result_%s.json" % ts)
+
+    selected, meta = m._cross_run_best_guard(_script_with_dialogue(8), "")
+
+    assert selected is None
+    assert meta["reason"] == "snapshot_failed_prefilter", meta
+    assert len(meta["prefilter_rejected_snapshots"]) == 7, meta
+    out = capsys.readouterr().out
+    for n in names:
+        assert n in out, "被拒清单必须打全（旧实现只打前 6 条）：%s" % n
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-30 复核第 4 轮 P1：换 revision 算法不能吞掉未解决的欠账
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_algorithm_debt_still_excludes_the_snapshot(tmp_path, monkeypatch):
+    """**离线回放**：旧算法（v1）登记的欠账 → 新算法选稿必须仍然命中它.
+
+    现场（复核复现）：同一份完全未改的历史稿，新旧算法产生不同 revision；
+    台账仍以旧 revision 为键，BEST-GUARD 按新 revision 查询 ⇒「旧审计欠账仍有效，
+    但选稿查询命不中它」——重新打开「反复选中已 BLOCK 稿」的入口。
+    """
+    import hashlib
+
+    from shared.quality_gate import SCRIPT_REVISION_VERSION, semantic_payload_json
+    from shared.quality_gate import compute_script_revision as _rev
+
+    m, out, snap_dir = _setup(tmp_path, monkeypatch)
+    _hot = _write_snapshot(snap_dir, "20260924_231100", _script_with_dialogue(4))
+    _calm = _write_snapshot(snap_dir, "20260924_215530", _script_with_dialogue(2))
+    _legacy = hashlib.sha256(
+        semantic_payload_json(_script_with_dialogue(4)).encode("utf-8")).hexdigest()
+    assert _legacy != _rev(_script_with_dialogue(4)), (
+        "夹具必须体现「算法换了值」，否则这条回放没有判别性")
+
+    # ① 台账里是**旧算法**的值（旧条目就是这样落盘的：无版本记录 ⇒ 算 v1）
+    (snap_dir / "_blocked_revisions.json").write_text(
+        json.dumps({"revisions": [_legacy]}), encoding="utf-8")
+    assert m._load_blocked_revisions() == {1: {_legacy}}, "无版本记录的旧条目算 v1"
+    _sel, meta = m._cross_run_best_guard(_script_with_dialogue(0), "")
+    assert meta["best_path"] == str(_calm), meta
+
+    # ② 判别性：换成**现行版本**的值 + 登记版本标记，同样排除它
+    (snap_dir / "_blocked_revisions.json").write_text(json.dumps({
+        "revisions": [_rev(_script_with_dialogue(4))],
+        "entry_versions": {_rev(_script_with_dialogue(4)): SCRIPT_REVISION_VERSION},
+    }), encoding="utf-8")
+    _sel2, meta2 = m._cross_run_best_guard(_script_with_dialogue(0), "")
+    assert meta2["best_path"] == str(_calm), meta2
+
+
+def test_recorded_entry_matches_only_its_own_version(tmp_path, monkeypatch):
+    """复核第 5 轮 P1-2：**不同版本的身份不是等价关系**（同一段文字、契约不同）.
+
+    两份稿件文字相同、契约不同：v2 身份不同、v1 身份相同。若拿「任一版本命中」
+    当欠账匹配，「引用修好、契约检查通过」的好稿就会被「同一段文字、契约破损」的
+    旧欠账连坐——这里离线钉住：v2 登记的那条**不**因 v1 相同而命中。
+    """
+    from shared.quality_gate import (SCRIPT_REVISION_VERSION,
+                                      script_revision_aliases)
+    from shared.quality_gate import compute_script_revision as _rev
+
+    m, out, snap_dir = _setup(tmp_path, monkeypatch)
+    _bad = _script_with_dialogue(4)
+    _good = _script_with_dialogue(4)                 # 同一段文字（v1 相同）
+    # 契约不同（`plan_refs` 是契约身份的一部分，但不在语义 payload 白名单里）
+    _good["shots"][0]["plan_refs"] = {"beats": [1], "lines": []}
+    _bad_al = script_revision_aliases(_bad)
+    _good_al = script_revision_aliases(_good)
+    assert _bad_al[1] == _good_al[1], "夹具前提：v1 身份相同"
+    assert _bad_al[SCRIPT_REVISION_VERSION] != _good_al[SCRIPT_REVISION_VERSION]
+
+    m._record_blocked_revision(_rev(_bad),
+                               issues=[{"code": "x", "shot": "1", "field": "p"}])
+    data = json.loads((snap_dir / "_blocked_revisions.json").read_text(encoding="utf-8"))
+    assert data["revisions"] == [_rev(_bad)]
+    assert data["entry_versions"][_rev(_bad)] == SCRIPT_REVISION_VERSION
+    assert m._load_blocked_revisions() == {SCRIPT_REVISION_VERSION: {_rev(_bad)}}
+    assert "alias" not in data, "不再登记「其他版本身份」——那正是跨版本连坐的来源"
+    assert m._load_blocked_debt() == {_rev(_bad): 1}, "版本标记不是一次新的欠账"
+
+    # 判别性：好稿的 v1 与坏稿相同，但**不得**被判为欠账
+    _good_al[1] in (_ for _s in m._load_blocked_revisions().values() for _ in _s)         and pytest.fail("跨版本命中：v1 相同被当成了等价")
+    # 坏稿本身仍然命中
+    assert (_bad_al[SCRIPT_REVISION_VERSION]
+            in m._load_blocked_revisions()[SCRIPT_REVISION_VERSION])
+
+
+def test_stale_entry_is_dropped_with_its_version(tmp_path, monkeypatch):
+    """判据变了 → 该条欠账（连同它的版本记录）一起失效，不能靠版本记录绕过重评."""
+    from shared.quality_gate import SCRIPT_REVISION_VERSION
+    from shared.quality_gate import compute_script_revision as _rev
+
+    m, out, snap_dir = _setup(tmp_path, monkeypatch)
+    _hot = _write_snapshot(snap_dir, "20260924_231100", _script_with_dialogue(4))
+    _cur = _rev(_script_with_dialogue(4))
+    (snap_dir / "_blocked_revisions.json").write_text(json.dumps({
+        "revisions": [_cur],
+        "entry_versions": {_cur: SCRIPT_REVISION_VERSION},
+        "criteria": {_cur: {"rules": "OLD-RULES", "prompts": "OLD-PROMPTS"}},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    assert _owed(m) == set(), "旧判据下的欠账不再作数（含它的版本记录）"
+    _sel, meta = m._cross_run_best_guard(_script_with_dialogue(0), "")
+    assert meta["best_path"] == str(_hot), meta
+
+
+def test_ledger_from_the_previous_format_still_matches(tmp_path, monkeypatch):
+    """复核第 6 轮：**上一版台账格式**里的 v2 欠账必须仍然命中.
+
+    现场：上一版代码已经会写顶层 `"revision_version": 2`（主 key 是 v2 算法算的），
+    但**没有**逐条 `entry_versions`。若把「没有逐条版本 ⇒ 算 v1」当默认，同一份稿件的
+    旧 v2 欠账就再也查不到——离线已复现。
+    """
+    import hashlib
+
+    from shared.quality_gate import semantic_payload_json
+    from shared.quality_gate import compute_script_revision as _rev
+
+    m, out, snap_dir = _setup(tmp_path, monkeypatch)
+    _hot = _write_snapshot(snap_dir, "20260924_231100", _script_with_dialogue(4))
+    _calm = _write_snapshot(snap_dir, "20260924_215530", _script_with_dialogue(2))
+    _r4 = _rev(_script_with_dialogue(4))
+    _legacy = hashlib.sha256(
+        semantic_payload_json(_script_with_dialogue(4)).encode("utf-8")).hexdigest()
+
+    # ① 上一版台账形态：有 revision_version 与 alias，没有 entry_versions
+    (snap_dir / "_blocked_revisions.json").write_text(json.dumps({
+        "revisions": [_r4], "alias": {_r4: [_legacy]}, "revision_version": 2,
+    }, ensure_ascii=False), encoding="utf-8")
+    assert _r4 in m._load_blocked_revisions().get(2, set()), (
+        "上一版台账里的 v2 欠账必须按 v2 解释（否则查不到、旧稿会被反复选中）")
+    _sel, meta = m._cross_run_best_guard(_script_with_dialogue(0), "")
+    assert meta["best_path"] == str(_calm), meta
+
+    # ② 判别性：更早的形态（顶层有版本、无 alias 也无逐条映射）同样不得丢失
+    (snap_dir / "_blocked_revisions.json").write_text(json.dumps({
+        "revisions": [_r4], "revision_version": 2,
+    }, ensure_ascii=False), encoding="utf-8")
+    _sel2, meta2 = m._cross_run_best_guard(_script_with_dialogue(0), "")
+    assert meta2["best_path"] == str(_calm), meta2
+
+    # ③ 真·旧台账（完全没有版本信息）仍按 v1 解释——那是「明确属于旧版本」的那一批
+    (snap_dir / "_blocked_revisions.json").write_text(json.dumps({
+        "revisions": [_legacy],
+    }, ensure_ascii=False), encoding="utf-8")
+    assert m._load_blocked_revisions() == {1: {_legacy}}

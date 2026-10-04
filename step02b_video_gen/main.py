@@ -183,13 +183,19 @@ async def _process_one_shot_skip_frames(
 
 def main():
     import argparse
+    from shared.run_scope import (add_scope_arguments, apply_scope, scope_log_line,
+                                  step01_hint as _step01_hint)
 
     parser = argparse.ArgumentParser(description="step02b 视频生成")
     parser.add_argument("--shots", "-s", default=None,
                         help="只生成指定镜头（逗号分隔，支持区间），如 3,5-7,9；默认全部")
     parser.add_argument("--force", "-f", action="store_true",
                         help="忽略缓存强制重生成")
+    add_scope_arguments(parser)
     args = parser.parse_args()
+
+    # 运行范围必须在 script_file()/chapter_dir() 之前生效（本入口的章级路径全部惰性解析）
+    scope = apply_scope(args.chapter, args.book, args.book_name)
 
     only_indices = parse_shot_selector(args.shots)
 
@@ -197,10 +203,15 @@ def main():
     work_dir = vimax_working_dir()
 
     logger = get_logger(chapter_dir() / "step02b.log", console_level="INFO")
+    logger.info(f"[INFO] {scope_log_line(scope)}")
 
     if not script_path.exists():
-        logger.error(f"[ERROR] script not found: {script_path}")
-        return
+        # 缺 step01 产物时点明是哪一章缺、该跑什么命令（原来是 error 后 return 0，
+        # 脚本调用方看不出失败；空值/失败就报失败，见 CLAUDE.md 准则 7）
+        logger.error(
+            f"[ERROR] {script_path} 不存在：chapter_{scope['chapter']:03d} 还没有 step01 产物。"
+            f"先跑：{_step01_hint(scope)}")
+        raise SystemExit(2)
 
     REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
     shots_dir = vimax_shots_dir()
@@ -214,7 +225,8 @@ def main():
     require_gate(chapter_dir() / "step01_quality.json", script, stage="step01",
                  required_report_type="quality_gate")
     # v6.103：三份 step01 产物必须属于同一个提交批次（见 shared/quality_gate）
-    verify_step01_commit_manifest(chapter_dir(), script, stage="step01")
+    verify_step01_commit_manifest(chapter_dir(), script, stage="step01",
+                                  expected_chapter=scope["chapter"])
     if REFERENCE_MODE == "image":
         require_gate(chapter_dir() / "step02a_quality.json", script, stage="step02a",
                      required_report_type="product_acceptance", verify_outputs=True)

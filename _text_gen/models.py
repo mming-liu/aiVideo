@@ -55,7 +55,14 @@ class TextGenerationRequest:
     # provider 默认（agent_plan 走 AGENT_PLAN_TEXT_TIMEOUT_SEC=600）。按调用点
     # 语义分级：候选生成 300 / 定向修复+hook 180——09-14 实测 600s 单值让
     # 「一个慢请求拖死整轮」（候选 3 耗 12 分钟，修复轮超时保留原版烧穿整镜）。
+    #
+    # **它是偏好，不是上限**（工作包 B）：真正的上限 = `min(timeout_sec, 余量)`，
+    # 由 `deadline_monotonic` 决定；余量耗尽时**不发请求**。
     timeout_sec: Optional[int] = None
+    # 工作包 §4 B（2026-10-01）：**整次规划的绝对截止时刻**（`time.monotonic()` 基准）。
+    # 排队、退避、每次 POST、Retry-After 等待都按它重算余量；没带的旧请求行为不变。
+    # 只认 monotonic——墙上时钟会被系统时间调整污染，而这个值只用来算"还剩多久"。
+    deadline_monotonic: Optional[float] = None
 
 
 @dataclass
@@ -75,6 +82,13 @@ class TextGenerationResult:
     # 问题的共同点）。allow_truncated=False 时截断直接 success=False（此时
     # truncated 仍为 True，供调用方区分「截断」与「其它失败」）。
     truncated: bool = False
+    #: provider 侧的 `finish_reason`（`stop` / `length` / 其它）；拿不到就是空串。
+    #: 2026-10-02 复核之七：留档要判"是截断还是模型自己停的"，这个字段必须在**失败与
+    #: 截断**的结果上也带着（旧写法只在 DEBUG 行里打，落盘证据里没有）。
+    finish_reason: str = ""
+    #: 这一次调用的**唯一标识**（由 `_text_gen.service` 的工厂代理在调用前置入）。
+    #: 只用于留档与追溯（完整正文按它归档、修订轮按它关联），**不参与生成语义**。
+    call_id: str = ""
 
 
 def truncated_result(
@@ -83,6 +97,7 @@ def truncated_result(
     usage: Optional[dict],
     allow_truncated: bool,
     error: str,
+    finish_reason: str = "length",
 ) -> "TextGenerationResult":
     """截断响应的**统一**处置（v6.62.6，09-09）.
 
@@ -100,8 +115,13 @@ def truncated_result(
     """
     if allow_truncated and text.strip():
         return TextGenerationResult(
-            success=True, text=text, usage=usage, truncated=True
+            success=True, text=text, usage=usage, truncated=True,
+            finish_reason=str(finish_reason or ""),
         )
+    # **失败也要带原文**（2026-10-02 复核之七）：`success=False` 的语义是"调用方整份
+    # 丢弃"，不是"没收到东西"——被截断的半个 JSON 正是留档要判"截在哪、模型想写什么"
+    # 的证据，丢掉它就只能靠日志前缀猜。调用方照旧只看 `success`。
     return TextGenerationResult(
-        success=False, usage=usage, truncated=True, error=error
+        success=False, text=text, usage=usage, truncated=True, error=error,
+        finish_reason=str(finish_reason or ""),
     )

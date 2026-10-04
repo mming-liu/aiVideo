@@ -2,6 +2,14 @@
 
 将中文小说文本转换为约 60 秒的抖音竖屏视频（古风权谋卧底风格）。
 
+> ⚠️ **时效声明（2026-10-01 核实）**：本文正文是 **2026-08-16** 的快照。流水线在 08-16 之后
+> 有多次架构与契约变更（step02 拆为 2a/2b、`--chapter/--book/--book-name` 运行范围、
+> 计划层契约、BEST-GUARD 选稿、审计/修复双通道）。**"默认值"一栏是代码默认，不等于当前生效配置**——
+> 判断现场行为一律以 `.env.content` 为准（或用 `git diff .env.content` 对账）；
+> 架构与判据的当前权威是 [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md)，
+> 问题史与现状见 [problems.md](problems.md) 与 [docs/](docs)。
+> 已知与现状不符处：供应商清单、`chapter_reader` 调用方式、`MERGE_*` 与 `VIDEO_*` 的部分说明。
+
 ## 目录
 
 - [快速开始](#快速开始)
@@ -88,19 +96,23 @@ python step04_merge/main.py
 | 变量 | 说明 | 示例 |
 |-----|------|------|
 | `NOVEL_NAME` | 小说名（用于输出目录） | `锦衣夜行` |
-| `NOVEL_CHAPTER` | 章节序号 | `1` |
-| `BOOK_INDEX` | 部序号（小说内第几部） | `1` |
-| `BOOK_NAME` | 部名（拼入目录名） | `杀青州` |
+| `NOVEL_CHAPTER` | 章节序号（命令行 `--chapter` 可覆盖） | `1` |
+| `BOOK_INDEX` | 部序号（小说内第几部，命令行 `--book` 可覆盖） | `1` |
+| `BOOK_NAME` | 部名（拼入目录名，命令行 `--book-name` 可覆盖） | `杀青州` |
 | `OUTPUT_BASE` | 输出根目录 | `./output/video` |
 
 ### 供应商选择
 
 | 变量 | 说明 | 可选值 |
 |-----|------|-------|
-| `TEXT_PROVIDER` | 文本生成 | `deepseek`, `dashscope`, `agnes` |
-| `VIDEO_PROVIDER` | 视频生成 | `agnes`, `dashscope`, `bailian` |
-| `IMAGE_PROVIDER` | 图片生成 | `agnes`, `bailian` |
-| `TTS_PROVIDER` | 语音合成 | `dashscope_sdk`, `dashscope_http`, `openai` |
+| `TEXT_PROVIDER` | 文本生成 | `deepseek`（代码默认）, `dashscope`, `agnes`, `agent_plan` |
+| `VIDEO_PROVIDER` | 视频生成 | `agnes`, `dashscope`, `dashscope_http`, `bailian`, `volcengine`, `minimax`, `agent_plan` |
+| `IMAGE_PROVIDER` | 图片生成 | `agnes`（代码默认）, `bailian`, `volcengine`, `minimax`, `agent_plan` |
+| `TTS_PROVIDER` | 语音合成 | `dashscope_sdk`, `dashscope_http`, `openai`, `openai_compat`, `dashscope_qwen3`, `voice_design` |
+
+> 上表是**已注册**的 provider（`register()` 调用为准）。当前 `.env.content` 生效值是
+> `TEXT_PROVIDER=agent_plan` / `IMAGE_PROVIDER=agent_plan` / `VIDEO_PROVIDER=volcengine`；
+> step01 另有**审计与修复分通道**：`AUDIT_TEXT_PROVIDER` / `REPAIR_TEXT_PROVIDER` 可各自指定。
 
 **DeepSeek（TEXT_PROVIDER=deepseek）走 Responses API：**
 - 模型 `deepseek-v4-flash` → `POST https://api.deepseek.com/responses`（结构化输出）
@@ -259,6 +271,22 @@ python step02a_frame_gen/main.py --shots 3 --frames lf
 python step02a_frame_gen/main.py --shots 3 --frames ff,kf0
 ```
 
+### Q: 如何指定跑哪一章 / 哪一部？（2026-09-30 起，不必改配置文件）
+
+```bash
+# 五个阶段都支持（step01 / step02a / step02b / step03 / step04）
+python step02a_frame_gen/main.py --chapter 2                       # 第 2 章 → chapter_002
+python step01_script_gen/main.py --chapter 2 --book 1 --book-name 杀青州
+
+# 不传这三个参数 = 沿用 .env.content 的 NOVEL_CHAPTER / BOOK_INDEX / BOOK_NAME
+```
+
+- 优先级：**命令行 > shell 环境变量 > `.env.content`**；每次覆盖都会在日志里打印 `[SCOPE]` 一行说明覆盖了什么。
+- `--chapter` / `--book` 必须 ≥ 1，非法值直接报错，不会静默回落。
+- 章号是全书连续的（第001~1865章），**部目录仍由 `--book`/`--book-name` 决定**（不会从章号自动推导）；
+  跑跨部的章时必须一起给，否则产物会落到错误的部目录。
+- 目录名 / 请求的章号 / `script_result.json` 里的 `chapter_index` 三方不一致时，下游阶段会直接拒绝启动。
+
 ### Q: 如何跳过帧图片直接文生视频？
 
 在 `.env.content` 中设置：
@@ -290,8 +318,10 @@ CINEMATIC_STYLE=王家卫  # 或 kubrick, villeneuve, fincher 等
 ### Q: 如何调试章节提取？
 
 ```bash
-python chapter_reader.py 锦衣夜行_77119小说.txt
+python -m shared.chapter_reader 锦衣夜行_77119小说.txt
 ```
+
+> 顶层 `chapter_reader.py` 兼容层已于 2026-09-06 删除，必须走 `shared.chapter_reader` 模块入口。
 
 ### Q: step01 报「DeepSeek 返回文本为空」/ LLM 生成失败？
 
@@ -313,4 +343,4 @@ python chapter_reader.py 锦衣夜行_77119小说.txt
 
 ---
 
-*最后更新：2026-08-16*
+*最后更新：2026-08-16（正文快照）；2026-10-01 补时效声明、provider 清单与章节提取命令*

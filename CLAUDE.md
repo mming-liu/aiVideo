@@ -1,347 +1,80 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## 职责与项目
 
-## 项目概述
+aiVideo 将小说文本转换为视频，包含文本规划、图像/视频生成、语音和合并环节。本文件规定 **Claude 的实施、测试、运行与交付准则**；[AGENTS.md](AGENTS.md) 规定 Codex 的审核、规格、优先级、验收范围与独立复核职责。
 
-aiVideo 是一个 AI 驱动的短视频生成流水线，将中文小说文本转换为约 60 秒的抖音竖屏视频（古风权谋卧底风格）。整个流水线分为 4 个阶段，按顺序执行。
+- **Claude 对实施完整性与执行证据负责。** 在用户已授权的阶段内自行完成必要修改、同源入口修复和验证；常规实现选择不逐步请示。Codex 的技术建议不自动构成授权。
+- 用户当前指令与已确认决策决定目标、权限和验收约束；实际行为查当前代码、最终生效配置与对应产物。实现与契约冲突时带证据反馈，不把现实现当正确性标准。
+- 本文件维护长期执行规则与查阅入口；参数表、现场配置、版本史和逐轮取证另行留档，历史描述不触发自动改配置或运行。
 
-**⚠️ 编码规范：所有项目文件统一使用 UTF-8 编码，禁止使用 GBK 或其他编码。编辑文件时确保保存为 UTF-8。**
+## 授权与费用
 
-## Claude 定位与工作边界
+审核、诊断、方案请求默认只读；用户明确要求修改或运行后，才在该范围内执行。已授权的修改包含必要的可回退编辑与测试产物，已授权的 Step 01 运行包含该流程预期的调用、诊断及正式产物写入；若用户另有限制，遵守其指定边界。目标、计划或测试通过本身不授予运行权限。
 
-`CLAUDE.md` 规定 Claude 的**实施、测试与运行准则**；`AGENTS.md` 单独规定 Codex 的审核、方案与技术方向建议职责，两份文件不再互为权威。阶段目标内的跨模块同源缺陷由 Claude 自行查证并修复；需要改变已定判据、容量、生产语义，或既有方案反复失效而必须重新定方向时，带证据交 Codex 独立复核，重大取舍仍由用户批准。不要自行堆叠局部补丁。
+- **Step 01（文本/分镜）**：已获运行授权后预算可忽略，必要的生成、审计与小范围复测不逐次报价或请示。
+- **Step 02a（图片/关键帧）**：先估算数量、模型和影响范围；已授权的小范围诊断可执行，批量生成、明显扩量或切换更贵模型前须确认。
+- **Step 02b（视频）**：每次会产生视频生成费用的调用前，列明镜头/片段数、模型、时长与预计消耗，等待用户明确人工确认；代码实施及 Step 01/02a 授权不沿用。
 
-- 用户只要求审核、诊断或方案时默认只读；明确要求修改或运行时，在已授权范围内实施，并遵守下列工作准则。
-- 实施前核对根因、影响面与验收；对同类缺陷检查其他入口和回退路径，优先修复共同契约，不用新增特例、阈值或修复轮数替代根因治理。
-- 测试使用冻结输入和判别性反例；Step 01 分开报告新稿、实际选稿、审计/修复/提交及正式产物副作用。保护脏工作树和并行接入中的改动（包括 awesome-seedance）。
+改变已定判据、容量、生产语义或技术方向时，带证据与选项交 Codex 独立复核，重大取舍由用户决定；已明确授权的变更不重复确认。超出授权的外部写入、覆盖、破坏性删除、仓库提交或发布须先说明影响并获确认。不自行使用 `--force` 扩量，不触碰无关用户改动。
 
-## 工作准则（按改动风险适用）
+## 工作准则
 
-**1. 行为缺陷先查根因，再动手。**
-修复 bug 或改变生产行为前，先复现并追踪触发链、影响面与失效的不变量，优先在共同契约处修复，
-禁止「看到现象就改一处」的试错式补丁。根因尚未定位时写明已知证据与未排除的假设，
-不得把猜测当结论。纯文案、注释和格式调整无需制造一份根因调查。
+授权、数据保护和证据要求适用于所有任务；实施与验收流程按风险缩减，跨模块工作不能覆盖这些边界。
 
-**2. 验证与风险相称。**
-行为修复、契约或判据变化须补/更新能区分修复前后的回归，并跑受影响测试；
-纯文档、注释、文案与不改行为的整理做相应检查，不强制新建测试。
-报告实际运行的检查与结果；未覆盖或未实跑的部分明确说明，不把测试通过说成生产效果已验证。
+1. **先确认根因。** 行为修复先复现触发链、核对数据流与首个失效不变量，再改共同机制；沿相关生成、解析、变换、缓存、候选、修复、回退与最终消费入口主动查同类遗漏。真实运行先读该 run 的日志、逐轮记录和最终结果，同时检查整条轨迹中的其他异常。纯文案、注释和格式整理做相应检查，无需制造根因调查。
+2. **完整且克制地实施。** 授权阶段内完成同一根因涉及的路径，不仅修当前报错；共用判据与事实源，同步维护 schema、提示、引用、身份及必要的版本迁移。耦合修改按事务完成，保留非目标行为，不顺手重构或用特例、阈值、轮次代替根因修复。
+3. **落实通用性。** 作品、人名、地点、情节措辞与固定章/镜编号是输入或复现夹具，不能成为通用分支的生效条件；差异从本次输入、结构化契约或显式配置获取。更换人物/作品、合法编号或表达后同类裁决应不变，改变关键关系仍能检出。确定性修复与规范化须幂等。
+4. **显式报告失败。** 空值、缺失、截断、调用失败与未完成分别处理，不伪造旁白或出处，不把失败当成功下发，不静默吞错或以替代结果冒充本次结果。没有检出问题只说明该检查范围内未检出。
+5. **保护原始状态。** 编辑前检查脏工作树和并行改动（包括 awesome-seedance）；备份按完整相对路径区分文件，检查操作返回值。变异、故障注入或判别性回退使用隔离目录/独立副本，施加前断言目标在隔离范围内；还原后核对摘要。恢复完整性查事故前独立副本、修改历史等证据，不用自建副本或重编译产物自证。
+6. **按工作包留档。** 普通改动用测试与交付记录；架构、生产契约、重大判据变化或跨轮取证更新同一份专题记录，不为每个小修新建文档。参数和当前状态不追加到职责文件中。
 
-**3. 阶段内自行完成，越界才请示。**
-已确认的阶段目标、验收标准和红线构成授权边界。边界内必要、可回退的代码、schema、提示词、
-测试及同族入口调整自行完成，不把「是否继续下一小步」作为默认收尾；完成后报告依据、改动和验证。
-对实现细节有多种合理做法时，选最小、可验证、可回退的一种，并在汇报中说明假设，不因普通技术
-选择暂停。只有超出阶段目标、改变已定判据或容量（如修复轮数、联动组上限、功能是否启用）、
-引入新的产品/生产语义、超出已授权成本，或需要第 5 条所列的额外权限时，才带证据与选项请示。
-命名、报错措辞、注释、测试夹具、明显笔误及等价整理可直接处理；不得借小调整扩大行为范围。
+## 工作包执行与阶段交付
 
-**留档按工作包而非按文件。** 日常改动在测试和最终汇报中记录即可，不要求每次新建 `docs/` 文件。
-架构、生产契约或重大判据变化，以及需要跨轮追踪的取证，写一份可复核的专题留档；
-同一工作包的补充更新原留档，不为每个小修另建一份。
+接收跨模块、契约或状态机制计划时，先核对 [AGENTS.md 的计划要求](AGENTS.md#交给执行者的计划与阶段复盘)，再执行下列步骤；简单局部修改按风险缩减。已获授权且工作包已明确分支裁决时，按依赖顺序持续实施与验证，阶段间用进度消息报告并自行推进。调用清单、协议留档、计划复述是准备产物；完成后进入下一实施动作，以工作包的阶段退出条件判断完成。
 
-**4. 费用确认按阶段分级，运行授权仍须明确。**
+| 步骤 | 执行与完成条件 |
+|---|---|
+| 接收与核对 | 固定产品目标、基线、非目标、用户授权范围、分支裁决、依赖顺序与退出条件，沿用计划冻结的交付范围、关键路径及验收终点；把接口适配、兼容转发、夹具更新等常规细节从代码与产物补齐后实施。实施前及出现新证据时，主动检验计划的可满足性、接口表达能力、依赖顺序、成本与主线收益；计划本身不是正确性证明。发现关键判据缺失、规则矛盾、合法修法无法表达、范围失控或存在更简单的等价方案时，及时向 Codex 反馈「问题条款 → 代码或反例证据 → 对目标与交付的影响 → 推荐替代方案」，不等失败实跑后再提出。保留已确认目标、契约与授权的常规实现调整自行完成并留档；改变已定语义、授权或关键验收条件的方案先交复核及必要裁决，仅暂停受影响步骤，继续独立工作。已裁决的问题沿用决定；新证据推翻其前提时说明变化并重新反馈。外部证据不可读时，在本地隔离复现并核验能够独立确认的行为；仅阻断确实依赖缺失资料的步骤。 |
+| 路径与契约维护 | 将责任图落实到全部相关入口；按工作包的修订能力表，用合法响应核对表达、应用、生成与终检兼容；发现要求的修改在接口中无法表达时，明确缺失能力并按已定替代路径处理，缺关键裁决才升级，继续不受影响的工作。已确定的编号与引用映射由代码维护，需要内容判断的关系交模型。迁移判据或诊断协议前，枚举原有失败出口、提前返回与停止原因，逐项对应生产者、消费者及迁移后的记录和动作；未经授权改变的阻塞语义必须保留。记录身份、字段路径与具体原因由生产者在遍历时给出，覆盖拒收项、重复项、整表及缺字段分支；报告层只组合透传，不从文案或汇总 verdict 猜身份、恢复原因或筛掉失败。新同类反例补入路径清单与共同修法，不能只追加当前案例的补丁。 |
+| 状态与恢复实施 | 先有合法状态/迁移、可信来源、顺序依据、确认点、故障切点与恢复预期，再映射到实现；核对准备、目录创建、写入、替换与确认的失败均进入约定出口；区分请求与结果声明、执行与验收、历史与投影、证据完整与结果有效；**写入、读取与恢复共用完整协议判据，包含单条记录及记录之间的约束**；待写入结果须满足读取与恢复要求，不能只以局部自洽证明可读。净化、剔除与引用重映射在候选副本中执行，完整重验通过后才采纳；拒收或异常时保留基线，不能用「就地修改后检查」代替可回滚事务。规格缺口反馈给 Codex。 |
+| 矩阵与入口验收 | 按下节「自测与反例验收」执行冻结输入、合法对照、边界、故障与相关交互组合，验证受影响入口及必要贯通链路，记录预期与实际覆盖。旧测试冲突先查契约：已明确被获授权的新契约替代的预期自行同步，保留合法对照与兼容覆盖；仍有效的预期失败则修实现。需调整多条测试、跨多个文件或增加兼容接口，本身不构成再次请示理由。纯文档或等价整理不强制新增测试。 |
+| 计量口径 | 为受影响读数明确单位、统计对象、所属轴及分项/合计关系，核对生产者与消费者；合计只计每个分项一次，不把已含分项的总量再次相加。用单轴失败和相关组合故障核验分类，不能因一个轴失败而捏造另一轴的失败。 |
+| 主线与反馈闭环 | 按计划把错误送回负责生产该输入的环节并验证合法修正。新发现先按交付影响分流：阻断目标、违反当前验收承诺，或涉及身份失真、误采纳、数据丢失及越界覆盖的缺陷，在授权范围内修复并补验收；外围改进登记待办，不自行扩大工作包。反复停在同一门时带冻结输入、诊断与预期反馈计划缺口；辅助工具只完成当前目标必需部分，不自行扩建通用存储系统。连续三轮以上同一子系统出现同类发现且无下降趋势时，停止逐例补丁，转为规格与矩阵整体收口；可更早复盘。连续多轮只改工具且主线无新读数时，检查依赖与授权后优先推进主线。 |
+| 运行验证与扩批 | 离线回放、矩阵和入口验收后，按运行授权做能走到改动路径的小范围实跑，满足计划条件再扩批。运行前记录本次要验证的问题、目标路径与预期观测；重复采样说明统计或复现目的。相同条件反复停在同一门且没有新信息时，暂停盲跑，先查生产、协议表达与反馈链，用离线合法响应验证成功出口后再按授权复测。核对请求范围与产物身份；不能用上游停机证明下游已实跑。样本来源、配置或判据变化分账比较。 |
+| 上下文交接与续做 | 需要压缩或切换上下文时，在同一工作包记录已完成接口及文件、当前改动与验证状态、未完成项、下一条可执行动作、证据位置和真正的阻塞。恢复后先核对相关文件是否有并行变化，再从该动作继续；沿用已完成的调查与裁决，仅在实现或证据变化时补查。上下文交接是续做检查点，交接记录不计阶段完成；环境支持继续时持续推进，确需结束本轮时明确标为中间交接，恢复后无需用户重新授权同一范围内的工作。 |
+| 阶段收口 | 以阶段退出条件决定交付单位；调用清单、单项修改或定向测试通过记为中间进度，随后执行工作包已明确的下一动作。范围内发现自行修复并补验收，除计划明确的复核关口或真实阻塞外，继续已授权工作，不等待新的用户指令或逐项复核。交付前逐项对照工作包的实施项和退出条件，列明责任入口、已落地实现及本次执行证据；范围内仍有未完成项、接线缺口或已确认失败时，只能报告阶段进行中，不能称「闭合」或「全部完成」。测试全绿或把范围内回归标成 xfail 不代替退出条件；开头完成结论须与后文剩余项一致。范围内阻塞解决且退出条件全部满足即交付，不以「全项目不再发现问题」作为完成条件；把已验收基线与后续维护分开，外围新发现不阻断交付，新证据破坏验收承诺时反馈受影响范围并按授权补救。随后继续已有授权的下一阶段。遇到真实阻塞时指出哪个退出条件未满足、已尝试什么及所需决定，仅暂停受影响步骤；上下文交接按上一行续做。同类持续出现时反馈原规格缺口与共同修法，不无限推迟主线。 |
 
-- **Step 01**：用户已授权该阶段运行后，预算可忽略；范围内必要的生成、审计与小范围复测不逐次报价或请示。
-- **Step 02a**：先估算图片数量、模型与影响范围；已授权的小范围诊断可执行，批量生成、明显扩量或升档前须确认。
-- **Step 02b**：每次付费视频生成前列明镜头/片段数量、模型、时长与预计消耗，等待用户明确人工确认；此前授权不沿用。
-不自行用 `--force` 扩大运行范围。修改代码的授权不等于运行流水线的授权；目标或规模变化时重新核对边界。
+## 自测与反例验收
 
-**5. 仅额外的高影响动作需再确认。**
-授权运行 Step 01 已包含该流程预期的模型调用、诊断快照及正式产物写入，不逐次请示；
-授权的文件修改也包含必要的可回退编辑和测试产物。超出授权范围的外部写入或覆盖、
-破坏性删除、仓库提交与发布仍须先说明具体影响并取得确认；不触碰无关用户改动。
+行为、契约或状态机制修改按以下顺序自测；具体场景与证据放在工作包中。范围按改动风险确定，自测用于发现遗漏，不替代 Codex 的独立复核。
 
-**6. 只做被要求的范围，改动外科手术式。**
-不顺手重构、不扩大范围；以一个可验收的工作包为单位修复同一根因涉及的入口，保持改动可回退；
-除任务要求的行为变化外保留既有行为，尤其注意并发编辑中的用户改动。
+1. **先定预期，再验实现。** 从已定契约和原有失败出口建立「输入/状态 → 具体记录 → 停止或采纳 → 副作用」对照，核对实现与用例覆盖。预期不能由当前返回值倒推；与已定契约冲突的测试先查原因，不能为全绿改成接受错误行为。
+2. **逐项断言，兼测合法对照。** 单类失败独立触发，组合故障逐条断言对应 code、轴、编号、路径及原因仍保留；仅断言问题列表非空，证明不了其中某类未被吞掉。合法输入、合法边界和正常恢复同时验证，防止错误记录或一律拒收。编号变换覆盖原/新编号、前项被删但后项保留、重复文本与相关各轴；按工作包验证新增并绑定、删除并重绑、拆分并重映射、收窄取材及带基线问题的局部修改，分别断言操作索引和结果引用所属版本；计量用独立可算的分项验证「计量口径」行规定的合计关系。
+3. **验收到最终决策。** 对修订路径先构造符合协议的合法响应，通过真实请求构造、响应解析、应用、完整重验，到达可执行及必要缓存/提交出口；每类有合法修法的错误须有成功对照，不能仅证明错误进了请求或响应被正确拒收。合法响应仍走不通时先查产品机制，走通后再按授权实跑评价模型。按影响范围真跑「生产者记录 → 验收报告 → 控制器/采纳入口 → 缓存或提交」，分别断言返回状态、停止原因、基线前后内容和实际副作用。事务用例须包含先修改候选再抛异常、重验返回问题及成功采纳；失败时核对基线完整保留、候选未被写入或下发。不能只证明诊断产生、辅助函数正确或源码含某次调用。
+4. **先证明探针与注入有效。** 导入或执行入口前固定隔离输出、缓存、诊断与日志路径，机械断言均在隔离目录；离线探针在模型调用和实际传输边界阻断外部请求，防止未注入分支走真实通道。确认桩替换的是实际消费的模块对象，用参数、命中记录及可观测变化证明触发了目标故障；编号相关桩须对不同编号返回不同结果，不能用恒定返回值遮住错引用。对照组撤掉注入后恢复正常。
+5. **让反例真正判别。** 在隔离副本撤掉关键判据，确认对应行为断言转红；接口/记录形态不兼容导致的全挂不算判别性。若未转红，查清故障未触发、断言过弱或其他守卫已覆盖，修正用例或说明实际覆盖关系。每次还原检查返回值与摘要，再继续下一项；不在共享脏工作树上做回退实验。
+6. **按证据核覆盖后收口。** 对照退出条件检查测试确实被收集执行、参数化数量与声明一致、真实记录形态和受影响消费者均有覆盖；不能以检查夹具自身代替执行被测入口。记录本轮命令、结果、入口及证据位置，分别说明离线、桩子与真实运行。通过数只作佐证；未满足条件时按「阶段收口」继续修复与验证。
 
-**7. 宁可显式失败，不可静默伪造或静默降级。**
-空值就报空值、失败就报失败：禁止用占位/伪造内容填空（如伪造旁白），
-禁止把失败或截断当成功下发，禁止把「没检出」当「没问题」。
+## 交付证据
 
-**8. 汇报量化且如实。**
-给实跑数字（通过/失败数、阻塞数、耗时、消耗），不粉饰、不幸灾乐祸；
-未经实跑验证的结论必须标注「尚未实跑验证」。
+- 固定报告三个结果：**目标物是否更可用、流程实际推进到哪一层、剩余已确认风险属于哪条不变量**；同时说明下一步能验证什么新信息。测试数与修复条数作佐证，不代替产品进展。
+- 提供实际检查结果、必要的通过/失败数、阻塞数、耗时与消耗；区分离线回放、桩子进程和真实运行。历史测试读数注明来源轮次；只有本轮已执行的检查才作为本轮证据。未重跑时说明验证状态沿用历史，不据此宣称当前工作树已验证全绿。Step 01 分开报告新稿、BEST-GUARD 实际选稿、审计/修复/提交，以及对应 `run_id`、revision 和正式产物变化。
+- 核对本次终局与证据归属；失败后仍在的旧正式产物不能充当本轮结果。未走到或未验证路径只说明证据范围，不推定已存在缺陷。
+- 最终事实、缺陷、归因和完成结论须已核实。未确认候选继续调查；确有证据缺口时说明缺少资料，不把「尚未确认」写成「无法确认」，不推定缺陷存在或恢复完整。`no_change` 只报告候选未变；归因须附修法可表达性、请求信息、原始响应、应用结果与残余问题的证据，不能直接推断模型意图或故事不可满足。
 
-**9. 通用化与幂等。**
-约束/修复逻辑对任何同类镜头都适用，不写死具体小说、角色名、场景名；硬修复必须幂等（反复跑不累积插入）。
+## 编码与查阅入口
 
-## 常用命令
+使用 Python 3.10+、四空格缩进、`snake_case` 函数/变量及 `PascalCase` 类名。项目文件使用 UTF-8，保留原有 BOM/行尾及无关内容；不使用 GBK 保存文件或硬编码/暴露 API key。
 
-### 安装依赖
-```bash
-pip install -r requirements.txt
-# 系统还需安装 ffmpeg 并加入 PATH
-```
+| 任务 | 当前实现或参考入口 |
+|---|---|
+| 生效配置与运行范围 | 命令行、进程环境、配置文件及各包 `config.py`；范围由 `shared/run_scope.py` 维护，输出路径由 `shared/paths.py` 计算，不自行拼目录层级 |
+| 模型能力与 provider | `shared/model_caps.py`、`shared/ref_compose.py` 与相应 provider；核官方依据并维护注册表，不把能力上限复制到配置或职责文件，修复栈优先 provider-neutral |
+| 计划、审计、修复与提交 | `step01_script_gen/`；确定性约束查 `constraints/engine.py` 及注册表，运行身份/提交核验查 `shared/quality_gate.py`，不恢复旧的并行修复栈 |
+| 音频与视频消费 | `shared/audio_policy.py`、`shared/audio_identity.py`、`step03_tts_audio/`、`step04_merge/`；以代码核对模式和实际消费路径，不照旧说明假定「唯一模式」 |
+| 其他模块与阶段入口 | [AGENTS.md 的查阅入口](AGENTS.md#按任务查阅)、[README.md](README.md)；命令与参数以当前入口核对，文档中的命令不构成运行授权 |
+| 历史实现、参数与决策 | [原 CLAUDE 项目参考记录](references/claude-project-reference.md)、[原 AGENTS 项目参考记录](references/agents-project-reference.md)；涉及旧决策时核对适用条件与后续授权，迁出不等于撤销 |
+| 问题史、待办与证据 | [problems.md](problems.md)、[TODOLIST.md](TODOLIST.md)、`docs/` 与 `docs/archive/`；分析真实问题优先查对应运行的日志和冻结产物 |
 
-### 运行流水线（按顺序）
-```bash
-python step01_script_gen/main.py  # 阶段1: 小说文本 → 分镜 JSON
-python step02a_frame_gen/main.py  # 阶段2a: 分镜 → 首帧/尾帧/关键帧图片
-python step02b_video_gen/main.py  # 阶段2b: 图片 → 视频片段
-python step03_tts_audio/main.py   # 阶段3: 旁白文本 → 语音音频
-python step04_merge/main.py       # 阶段4: 片段 + 音频 + 字幕 → 最终 MP4
-```
-
-- 阶段2拆分为2a和2b，方便调试：可以先运行2a检查图片质量，确认OK后再运行2b生成视频
-- 阶段2a 调试指定分镜：`--shots 3 --all-frames` 一次生成 shot 3 全部图片（首帧+尾帧+全部关键帧，覆盖 idx>=2 的 Mode B 跳过，会浪费额度）；`--frames ff,lf,kf0` 逐图选择（ff/lf/kf/kfN，默认 Mode A/B 行为）
-- 每个阶段脚本都有交互式确认提示。
-- 当 `VIDEO_REFERENCE_MODE=text` 时跳过分帧环节，直接文生视频；r2v 模式使用参考图（最多5个）保持角色/道具一致性
-
-每个阶段脚本都有交互式确认提示。
-
-### step01 脚本生成与硬修复层（v6.42 Constraint 框架；2026-09-12 删除旧 _hard_fix_* 路径）
-- LLM 生成 → `_coerce_schema_types` → `_fill_missing_new_fields` → narration 兜底 → **`post_fix_shot_prompts`（追加式确定性清洗）** → **`run_hard_fix`（constraints/ Constraint 框架，70+ 约束）** → 注入全局配置 → `_validate_script`
-- `post_fix_shot_prompts`：只追加不删除——声音指令/说话人入画/光位量化/抽象词剥离/远景禁五官/ff/lf normalize/kf 过渡态/combat 打击反馈/motion 分段归一/prompt 截断残片
-- **硬修复层 = `constraints/` Constraint 框架**（`engine.run_hard_fix` 唯一入口，`ALL_CONSTRAINTS` 统一注册，按 `rules_index.py` 版本索引）
-- **设计原则**：约束对任何古风/权谋/刺杀/追逐镜头都适用，不写死"小舟/杨旭"，换小说代码不用动；幂等是硬要求
-- **旧 `_hard_fix_*` 家族（2973 行）与 `HARD_FIX_USE_OLD` 开关已于 2026-09-12 删除**：新约束只在 Constraint 框架，旧路径回退即降级；开关残留仅告警不生效。`_split_motion_to_seg_texts` / `_extract_scene_prefix` / 16 个约束共享常量从原区间迁出保留（被 constraints/ 与 post_fix 引用）
-- **锚点校验器 3 处 bug**（`_check_grounding`）：①省略号折叠顺序——先折 `§` 再删标点再还原 `…`（旧顺序先删 `…` → 折叠失效）；②原文同步折叠 `…{1,}`（LLM `…` vs 原文 `……`）；③合规自动替换容忍——narration 里 `出人命` 还原为 `杀人` 再匹配原文（不破坏 narration 字段本身）
-- **设计原则**：硬修复层**对任何古风/权谋/刺杀/追逐镜头都适用**，不写死"小舟/杨旭"，换小说（主角变林平之、场景变镖局）代码不用动；幂等是硬要求（避免反复跑累积插入「目光紧盯」+「目光紧盯」…）
-- **位置**：`step01_script_gen/validation.py` → `hard_fix_shot_prompts()` → 由 `parse_response` 在 `post_fix_shot_prompts` 之后调用
-
-### step01 doubao 路径（v6.60，2026-09-05）
-- 目标：把 doubao-seed-2-1-turbo 分镜生成从综合分 78.7 → 92+，5+1 类 hard_fix 全填 + doubao_system.md 重写 + 3 处 prompt 路径一致性修复
-- 启用方法：`TEXT_PROVIDER=agent_plan`（与 deepseek 路径二选一，**默认仍为 deepseek**）
-- doubao 专用逻辑单开文件：
-  - ⚠️ **这 3 个文件已于 54e4bfa（2026-09-06）删除，逻辑迁入 `step01_script_gen/constraints/`**——
-    删除是**有意的**（去掉与主 Constraint 框架并行的第二套注册路径），
-    别再判成误删去恢复：曾有一次误判为「误删」而重新注册，造成重复注册回归。
-  - ~~`step01_script_gen/doubao_pipeline.py`~~ → 修复轮/GAP 重生已并回 `main.py`（`_regen_over_limit` / `_repair_shot_warnings` 统一走一条路径）
-  - ~~`step01_script_gen/doubao_hardfix.py`~~ → 7 个 Constraint 迁入 `constraints/`，随 `ALL_CONSTRAINTS` 一起注册，无需 `register_doubao_hardfixes()`
-  - ~~`step01_script_gen/doubao_repair_prompts.py`~~ → 修复 prompt 并入 `prompts.py`
-  - 现存 doubao 专属文件只剩 `step01_script_gen/prompts/doubao_system.md`（system prompt）
-- 5+1 类 hard_fix（**下列编号是历史命名，现对应 `constraints/` 下的同名约束**）：
-  - **B.1** → `constraints/narration_subtitle_consistency.py`。
-    ⚠️ v6.62.7（09-09）**已删除**「双向空 → 兜底 `某：……` 占位」这一兜底动作，改为纯告警：
-    旧实现拿 `ff_desc[-20:]`（画面描述后 20 字）当旁白，会同时写进 narration_segment +
-    subtitle + `script["narration"]`，一路烧进 SRT 和视频模型对白 prompt
-    （实测落盘「香站在中舱，手持油纸伞，嘴唇微闭，某」——从中间切断，「听香」少了「听」）。
-    **空旁白只是「这镜没台词」，伪造旁白是错内容进成片。**
-  - **B.2** GAP 关键词强注入：core_keywords 命中率低 → ff_desc 末尾追加 anchor 短句
-  - **B.3.1** 角色锚点注入：主角无 `[name: features]` → prompt 头部追加 ≤30 字特征
-  - **B.3.2** 开篇空镜插入：前 3 镜无空镜/特写 → index=1 插环境空镜 + 末镜 -2s 联动保 60-90s 总和
-  - **B.3.3** 高潮回灌：后半无高潮句 → 中点镜 prompt 追加"冲突到达顶点"短句
-  - **B.4** 过肩机位断裂修复：3 镜同景同 cam 同对白 → 中间镜改"过肩镜头"
-  - **B.5** frame_layouts 兜底：缺 pose / on_screen / kfs 长度不齐 → 字段补齐（on_screen 矛盾保守不动打 WARN）
-- 全部走 Constraint 框架（与 `validation.py` 36 类 hard_fix 同构），register 一次性 append
-- 全部幂等：每个 Constraint 自带 `repair_marker`，已修字段自动跳过
-- 温度参数：保留 `models.py` dataclass 默认 0.05（保 deepseek 路径零修改），doubao 路径在 `main.py` GAP/修复调用点显式传 `temperature=0.2` 覆盖
-- main.py 最小侵入：顶部按 TEXT_PROVIDER 选 prompt builder（`auto_select_prompt_builder`），不再有 doubao 专用 if/else 分支
-- 退出 doubao 模式：unset TEXT_PROVIDER 即可回 deepseek（约束层两条路径共用，无需 revert）
-- 仍保持 "doubao 2 次不切 deepseek" 决策（v6.59.1 user decision）— GAP fallback 走 doubao 自身修复轮，不升级 deepseek 兜底
-- 单测：已随文件迁移并入 `tests/step01_script_gen/`（`tests/step01_script_gen/doubao_hardfix/` 目录已不存在）
-- A/B：tools/bench_text_provider_ab.py 跑红果 + 锦衣各 1 章，total_pass_rate ≥92% / narration 非空率 ≥80% / camera 种数 ≥3 / core_keywords 命中率 ≥60%
-
-### step01 kf 物理时刻 = motion_desc 时段铁律（v6.33，2026-08-18）
-- **触发问题**：08-18 钩子实测，motion_desc 明确分「前2秒：破水+下刺 / 2-4秒：闷哼+推臂」两段，但 LLM 只生成 2 个 kf **都堆在 post 段**（杨旭已仰卧+血）——**根本没生成"破水+下刺"pre 帧**。08-16 v6.31 校验只检"单 frame pre+post 矛盾"，**不检"完全没有 pre 帧"这一类结构性塌缩**——校验覆盖盲区
-- **解决（双层）**：
-  1. **校验层新增** `_check_kf_time_window_alignment`（`step01_script_gen/validation.py`，warning-only，3 类检测）：①时段覆盖率（motion_desc 分 N 段 → kfs 个数 < N 报缺段）②时段归属（每 kf 物理时刻 t×duration_sec 不在任一时段内报错窗）③时段单调性（kfs 的 time_ratio 对应时段序号不单调报倒装）。辅助 `_parse_motion_time_segments` 解析「前N秒」「M-N秒」+ 全角 `～` `－`，显式段未覆盖到 duration 末尾时**自动补 implicit 段**（last_end, duration_sec）
-  2. **源头规则 16.4**（`step01_script_gen/prompts.py`）：**「关键帧物理时刻 = motion_desc 时间窗铁律」**——kf 物理时刻 `time_ratio × duration_sec` 必须落 motion_desc 显式时段内；kf 个数 ≥ 时段数；写 kf 前先**列 motion_desc 时段表**，按表逐段生成 1 帧定格，`time_ratio = 时段中点 / duration_sec`
-- **不做的修复**：**不派生 kf desc 硬修复**——超出确定性兜底范围（需语义理解从 motion_desc 切出 kf desc），应触发 LLM regen 而非代码层硬填
-- **设计原则**：**「时序矛盾」（v6.31）和「时序塌缩」（v6.33）是两类缺陷**——前者单 frame 内部矛盾，后者整段缺失；必须分别有检查，不能合并
-- **位置**：`step01_script_gen/validation.py` → `_check_kf_time_window_alignment()` → 由 `_validate_script` 注册到 `results["kf_time_window_alignment"]`
-
-### 章节提取调试
-```bash
-python -m shared.chapter_reader 锦衣夜行_77119小说.txt
-```
-- 实现在 `shared/chapter_reader.py`（顶层无兼容层，2026-09-06 已删除历史 stub）
-- `PROMPT_MAX_CHARS` 控制传递给 LLM 的原文上限（默认 50000，改 .env.content 生效）
-
-### 环境变量配置（.env.content / .env.keys）
-- `NOVEL_CHAPTER`: 章节序号（默认1）
-- `NOVEL_NAME`: 小说名（小说级目录，全书共享库所在层）
-- `BOOK_INDEX`: 部序号（小说内第几部，默认1）
-- `BOOK_NAME`: 部名（拼入目录名，如 part_01_杀青州）
-- `PROMPT_MAX_CHARS`: 传给 LLM 的原文上限（默认50000，传递完整章节）
-- `SHOT_COUNT_MIN/MAX`: 分镜数范围（默认8-20，v4.1 起仅作 validation 软护栏，不进入 prompt）
-- `VIDEO_PROVIDER`: 视频生成供应商（默认bailian）
-- `IMAGE_PROVIDER`: 图片生成供应商（默认agnes）
-- `TEXT_PROVIDER`: 文本生成供应商（默认deepseek）
-- `TTS_PROVIDER`: TTS供应商（默认dashscope_sdk；step02 已不调用 TTS，对话由视频模型生成）
-- `VIDEO_MODEL_VOICE`: 视频模型自带语音（默认1，对话/背景音交给视频模型；0=旧行为由 step03 TTS 提供）
-- `HOOK_ENABLED`: 是否生成钩子分镜（默认1，开启）
-- `COMPLIANCE_AUTO_FIX`: 是否自动修复敏感词（默认1，开启）
-- `VIDEO_REFERENCE_MODE`: 视频参考图模式（默认text，可选image/r2v）— text=文生视频（跳过帧图片），image=图生视频（需先运行step02a生成帧图片），r2v=参考图生视频（最多5个参考图，角色肖像+场景/道具资产图）
-  - ⚠️ **恢复提醒（2026-08-16）**：当前为 `image`（适配火山免费 Seedance 1.0——无 `reference_image` 能力，image 模式只发首尾帧）。**待火山免费 Seedance 1.0 额度消耗完后，必须恢复 `r2v`**（古风权谋角色一致性最关键）；切回 bailian/minimax 生产时同样改回 r2v，否则角色/道具一致性会弱化。
-- `SCENE_ASSET_EXTRACTION_ENABLED`: 是否提取场景资产（大场景/近景描述，默认1）
-- `PROP_ASSET_EXTRACTION_ENABLED`: 是否提取道具资产（核心道具+外观描述，默认1）
-- `ASSET_GEN_ENABLED`: 是否生成场景/道具资产图（step02a 帧生成前，默认1）
-- `SCENE_NEAR_SHOT_ENABLED`: 是否生成近景功能场景图（从大场景派生，默认1）
-
-### 参考图上限（随模型走，不写死）
-参考图数量上限**按当前供应商主模型从 `shared/ref_compose.py` 注册表解析**（子串匹配），
-不硬编码在配置文件：
-- `IMAGE_MULTI_REF`：用户偏好（省钱软上限），实际硬上限 = `min(IMAGE_MULTI_REF, 模型能力)`
-- `IMAGE_MAX_REFS`：仅作「未注册模型」的回退值（默认 3）
-- 注册表示例：qwen-image=3｜wan2.7-image=9｜Seedream 5.0 pro=10 / 4.5/4.0=14｜MiniMax image-01=1｜MiniMax-H3=9｜Seedance 2.5=30 / 2.0=12｜wan2.7-r2v=5
-- 视频 r2v 参考图上限在 `step02_video_gen/prompt_builder.py` 按 `VIDEO_PROVIDER` 选实际提交 r2v 的模型解析（bailian→R2V 模型 / volcengine→I2V 模型 / minimax→H3）
-
-> 新增模型遵守规则：
-> - 只需在 `MODEL_REF_LIMITS` 加一行 `(模型名子串, 上限)`，子串匹配、大小写不敏感、具体在前泛化在后；模型 ID 是破折号，模式写 `seedance-2-5` 而非 `seedance-2.5`。
-> - 上层（bridge 组装 / adapter 兜底 / provider 提交 / r2v prompt）都会经 `get_ref_limit(model)` / `active_image_ref_limit()` 自动跟随，配置文件无需改动。
-> - 图片/视频模型的能力（Seedream：档位+像素区间+参考图数；Seedance：时长+分辨率+reference_image+有声）在 `shared/model_caps.py`，与 `MODEL_REF_LIMITS` 保持一致。
-
-### 模型限制约定（新增模型必读）
-**模型参数限制属于模型特点，必须按官方文档进注册表跟着模型走，禁止写死到配置文件**
-（`.env.content` / `shared/config.py` / provider）：
-- **时长上限** → `shared/model_caps.py`：Seedance 用 `SEEDANCE_CAPS`（能力表）；wan2.7/happyhorse=15s、agnes=18s 用 `_VIDEO_DURATION_CAPS`；step01 经 `active_video_duration_cap()` 自动夹取，provider 兜底
-- **参考图上限** → `shared/ref_compose.py` `MODEL_REF_LIMITS`
-- **prompt 长度上限** → `shared/model_caps.py` `_PROMPT_LENGTH_CAPS`：wan2.7/happyhorse=5000、MiniMax H3=7000、Hailuo=2000；provider 经 `_model_prompt_cap()` 截断（bailian/minimax 已接）
-- **运镜格式**（如 Hailuo 方括号指令）→ provider 内映射
-- **负面词/seed 支持、有声(generate_audio)、参考图(reference_image) 能力** → `shared/model_caps.py` 能力表
-- 配置文件只放：**模型 ID、用户偏好**（省钱/目标分辨率/并发）、**操作参数**（轮询间隔/重试）
-- 新增模型时若发现"限制写死在配置里"，应迁入注册表而非继续堆配置
-
-### 火山引擎方舟（Volcengine Ark）配置
-- `VOLCENGINE_API_KEY`: 火山方舟 API Key（.env.keys；兼容 `ARK_API_KEY` 写法）
-- `VOLCENGINE_BASE_URL`: 方舟端点（默认 `https://ark.cn-beijing.volces.com/api/v3`）
-- `VOLCENGINE_T2I_MODEL`: Seedream 文生图模型（默认 `doubao-seedream-4-5-251128`）
-- `VOLCENGINE_T2I_FALLBACK_MODELS`: 图片 403 回退列表（默认 `doubao-seedream-4-0-250828`）
-- `VOLCENGINE_T2V_MODEL` / `VOLCENGINE_I2V_MODEL`: Seedance 文生/图生视频模型（默认均 `doubao-seedance-1-5-pro-251215`）+ 各自 `_FALLBACK_MODELS` 回退列表
-- `VOLCENGINE_IMAGE_SIZE`: 图片 size 强制 override（档位 1K/2K/4K 或像素 WxH，默认空=按分镜推导）
-- `VOLCENGINE_VIDEO_RESOLUTION`: 视频分辨率 override（480p/720p/1080p/4k，默认空=按 req.size 推导）
-- `VOLCENGINE_VIDEO_RATIO`: 视频比例 override（16:9/9:16/1:1，默认空=按 req.size 推导；2.5 首尾帧强制 adaptive 不可覆盖）
-- `VOLCENGINE_VIDEO_DURATION`: 视频时长 override（秒，默认 0=按分镜 duration_sec）
-- `VOLCENGINE_VIDEO_POLL_INTERVAL` / `VOLCENGINE_VIDEO_MAX_POLL_ATTEMPTS`: 视频任务轮询参数
-
-### 火山方舟 Agent Plan 文本通道（2026-09-03 新增，doubao-seed-2-1-turbo 分解模型）
-
-`TEXT_PROVIDER=agent_plan` 走 `/api/plan/v3/chat/completions`（OpenAI 兼容），作为 step01 分镜分解的备选/对照模型（默认仍 `deepseek`，不切默认）。
-
-- 鉴权复用 `AGENT_PLAN_API_KEY`（与图片/视频同专属 key，**与 `VOLCENGINE_API_KEY` 不通用**——普通 ARK key 报 401）
-- 模型默认 `doubao-seed-2-1-turbo`（按 `AGENT_PLAN_TEXT_MODEL` 覆盖）
-- 支持 `response_format json_schema`（与 deepseek 路径同款 strict 结构化输出），用于 step01 分镜 JSON 强约束
-- 并发限速走 `AGENT_PLAN_TEXT_RPM`（默认 10 RPM，cooldown=6s）
-- 思考模式 `AGENT_PLAN_TEXT_REASONING_EFFORT`（none/minimal/low/medium/high/xhigh/max，默认 `none` 关闭）
-- 单次输出 token 上限 `AGENT_PLAN_TEXT_MAX_TOKENS`（0/空=不传 → provider fallback 32768）
-  - **v6.62.5（09-08）**：16384 太低——全脚本 JSON 实测 ≈66k 字符 ≈**26k tokens**，4 个输出全脚本的站点（初始分镜/GAP 重生/定向修复/超限收敛）必然 `finish_reason=length`。已抬到 **32768**（26k + 25% 余量）
-  - 截断行为：provider 判 `success=False` 并整份丢弃（**不做**自动升档重试）；旧实现把截断当 `success=True` 静默下发，是「多次 JSON 解析失败」的根因
-  - 长尾若复现（v6.59 的 3-5 分钟问题），降级手段是**给小提取调用显式传小 `max_tokens`**，不要压低这个全局值（会重现截断）
-- 错误码映射：401→鉴权失败（提示申请专属 key）、403→套餐/燃料耗尽、5xx→4 次指数退避、429→按 `retry-after` 等待
-- Key 缺失时构造直接 `ValueError`（含「AGENT_PLAN_API_KEY」+「专属 key」文案，与 image/video provider 对齐）
-
-**Seedream/Seedance 模型能力矩阵**（值来自官方文档 2026-08 核对，实现见 `shared/model_caps.py`，provider 按模型子串查表收敛参数）：
-
-| 模型 | 时长(秒) | 分辨率 | 参考图(reference_image) | 有声(generate_audio) | 备注 |
-|---|---|---|---|---|---|
-| Seedream 5.0 pro | — | 档位 1K/1.5K/2K；像素 [921600, 4624220] | ≤10 | — | 图片不支持 negative_prompt/seed |
-| Seedream 5.0 lite | — | 档位 2K/3K/4K；像素 [3686400, 16777216] | ≤14 | — | 同上 |
-| Seedream 4.5 | — | 档位 2K/4K；像素 [3686400, 16777216] | ≤14 | — | 同上 |
-| Seedream 4.0 | — | 档位 1K/2K/4K；像素 [921600, 16777216] | ≤14 | — | 同上 |
-| Seedance 2.5 | 4–30 | 480p/720p | ✓ | ✓ | 首帧/首尾帧 ratio 仅 adaptive |
-| Seedance 2.0（含 fast/mini） | 4–15 | 480p–4k（fast/mini 仅 480p/720p） | ✓ | ✓ | |
-| Seedance 1.5 pro | 4–12 | 480p/720p/1080p | ✗ | ✓ | |
-| Seedance 1.0 系列 | 2–12 | 480p/720p/1080p | ✗ | ✗ | |
-
-> 关键约束：`reference_image`（参考生视频/r2v）仅 2.5/2.0 支持；`generate_audio` 仅 2.5/2.0/1.5 pro。首帧/首尾帧、参考生视频、参考视频/音频三种场景互斥，provider 已按模型能力分配 role 并 fail-fast。
-> **调试省钱配置**：`VOLCENGINE_T2I_MODEL=doubao-seedream-4-0-250828`（4.0 像素下限低，1024x1792 直接透传）+ `VOLCENGINE_I2V_MODEL=doubao-seedance-2-0-260128`（r2v 且便宜）；纯文生视频省钱可 `doubao-seedance-1-0-lite-t2v-250408`（无声、无参考图）。生产再切回 4.5 / 1.5 pro。
-
-### MiniMax 配置（国际站 api.minimax.io）
-- `MINIMAX_API_KEY`: MiniMax API Key（.env.keys）
-- `MINIMAX_BASE_URL`: 默认 `https://api.minimax.io`
-- 图片：`MINIMAX_T2I_MODEL=image-01`（subject_reference 单张）+ `MINIMAX_T2I_FALLBACK_MODELS=image-01-live`
-- 视频 v1（Hailuo 旧模型，省钱）：`MINIMAX_T2V_MODEL=MiniMax-Hailuo-02` / `MINIMAX_I2V_MODEL=MiniMax-Hailuo-2.3-Fast` + 各自回退队列（仅 MiniMax 系列）
-- 视频 v2（H3 新模型，贵）：`MINIMAX_H3_MODEL=MiniMax-H3`（尾帧/多关键帧/参考图/参考音频用）
-- ⚠️ **首尾帧模式 + MiniMax = 自动升 H3（贵，2026-08-29 确认）**：`VIDEO_REFERENCE_MODE=image` 的请求带尾帧，而 v1 Hailuo I2V 只支持首帧——provider 检测到尾帧/参考图即自动路由到 H3，**不会回落便宜档**。供应商选型约定（2026-08-29 用户决策：只用火山 + MiniMax，不做 A/B）：
-  - **日常跑量**：留火山免费 Seedance 1.0 pro（首尾帧模式，无参考图/无声）
-  - **关键镜头/验收**：切 MiniMax H3 或火山付费档（Seedance 2.0 起）
-  - **恢复 r2v 角色一致性**：火山 Seedance 2.0+ / MiniMax H3 都支持，管线已适配（`_collect_r2v_references` 按 provider 自动收参考图）
-  - 以上全部是 `.env` 配置切换，零代码改动——模型能力差异集中在 `shared/model_caps.py`（时长/分辨率/参考图/有声/prompt 上限）+ `shared/ref_compose.py`（参考图数）+ provider 内格式映射，新增/切换模型不改编码
-- `MINIMAX_VIDEO_RESOLUTION`（默认 768P）/ 轮询参数（`MINIMAX_VIDEO_DURATION` 死配置已删——时长规则见 shared/model_caps.MINIMAX_V1_*）
-- **prompt 适配（2026-08，按官方指南）**：
-  - H3（r2v 路径）：provider 自动把 step02 扁平 prompt 重组为官方**时间线三段结构**（`integrated_multimodal_description: [Shot 1] ...` + `overall_soundscape` + `non_diegetic_music`）；「（背景音效：X）」→ 音景；「（用中文普通话说，音色）"台词"」→ `(S1) says: <d>[Chinese] 台词</d>`；有首帧图时前置官方 I2V 对齐指令。见 `_video_gen/minimax_provider.py _h3_render`
-  - Hailuo v1（text/image 路径）：中文运镜词自动映射为官方**方括号指令**前缀（`[Push in]`/`[Tracking shot]`/`[Static shot]` 等 15 种，按出现顺序 ≤3 组合）。见 `_hailuo_camera_prefix`
-  - 两处均为 provider 内自动转换，其他供应商（bailian/agnes/volcengine）不受影响
-
-## 架构设计
-
-### 四阶段流水线
-```
-小说文本 (.txt)
-    → step01_script_gen/main.py → script_result.json（分镜 + 旁白 + 角色 + 摄像机分组）
-    → step02a_frame_gen/main.py  → 首帧/尾帧/关键帧图片（图生视频前导）
-    → step02b_video_gen/main.py  → vimax_working/shots/<idx>/video.mp4
-    → step03_tts_audio/main.py  → audio/narration.mp3
-    → step04_merge/main.py      → final.mp4
-```
-
-- 阶段2拆分为2a（帧图片）和2b（视频生成），方便调试：可以先运行2a检查图片质量，确认OK后再运行2b
-- 每个阶段脚本都有交互式确认提示
-- `VIDEO_REFERENCE_MODE=text` 时跳过分帧环节，直接文生视频；r2v 模式使用参考图（最多5个）保持角色/道具一致性
-
-### 输出目录结构（统一由 shared/paths.py 计算，禁止自行拼接）
-层级对应小说自身结构「小说 → 部 → 章」：
-```
-{OUTPUT_BASE}/                              # 默认 ./output/video
-└── 锦衣夜行/                                # {NOVEL_NAME} 小说级
-    ├── global/                             # 全书共享（角色形象/风格跨部统一）
-    │   ├── characters_bank/                # 角色注册表 + 肖像
-    │   ├── style_bank/                     # 风格锚点（Ch1 锁定）
-    │   ├── scenes_bank/                    # 场景资产（大场景图 + 近景功能场景图）
-    │   ├── props_bank/                     # 道具资产（白底道具资产图）
-    │   └── chapter_cache/                  # 章节文本解析缓存
-    └── part_01_杀青州/                      # part_{BOOK_INDEX:02d}_{BOOK_NAME} 部级
-        └── chapter_002/                    # chapter_{NOVEL_CHAPTER:03d} 章级
-            ├── script_result.json / final.mp4 / subtitles.srt
-            └── audio/ clips/ images/ vimax_working/ stretched/
-```
-- 2026-08 架构变更：合并改为唯一 native 模式（直接拼接保留视频原声），只输出 `final.mp4`，删除 final-A/final-B 双版本；对话/背景音由视频模型生成（wan2.7 系列有声视频），视频时长由分镜 `duration_sec` 字段驱动（step01 timecode 权威计算），step02 不再调用 TTS。
-- 2026-08 v6.24：分镜生成规则新增 35-40（物体可分性/同场景合并/词序量化/手部锁定/远景省略/画面无字幕），见 `.aiVideo/skills/absorption-log/SKILL.md` §1 源→落地映射；`VIDEO_REFERENCE_MODE=r2v` 为默认（spark-video 70/25/5 逐镜混合未采纳，全局单模）。
-
-### 场景/道具资产（v7 新增）
-四步资产生成方法论（`references/ai-scene-prop-asset-guide.md`）：
-1. **大场景**：step01 提取场景的 `wide_desc`（大场景建立镜头描述）+ 地点/时间段/天气/色调
-2. **近景功能场景**：同一场景的 `near_desc`（从大场景派生，保持季节/光线/年代一致）
-3. **道具提取**：step01 提取核心道具的 `appearance`（材质/颜色/结构/尺寸/新旧痕迹）
-4. **道具资产图**：step02a 生成白底道具资产图
-
-数据流：
-```
-step01 asset_extractor.py（LLM 提取，schema: SCENE_ASSETS_SCHEMA / PROPS_SCHEMA）
-    → shared/assets_bank.py（SceneAssetsBank / PropAssetsBank，global/scenes_bank/ props_bank/）
-    → step02a asset_gen.py（横屏 1600x900 适配器，生成 wide.png/near.png/prop.png）
-    → step02b prompt_builder._collect_r2v_references（场景资产图+角色肖像+道具资产图，≤5张）
-```
-- 资产图是**横屏 16:9 参考图**（不做竖屏约束），专用适配器 `size="1600x900"` + `skip_prefix` + `skip_sanitize`（与角色肖像一致）
-- 大场景/近景图**禁止人物**（prompt 硬约束）；资产图跨章复用，bank 中已有图直接跳过
-- r2v 参考图收集顺序：场景资产图（环境锚定）→ 出镜角色肖像 → 出镜道具资产图；空镜只收场景资产图
-
-### Provider 抽象模式
-`_video_gen/` 和 `tts/` 两个包采用相同架构（`_image_gen/` 同构）：
-- **ABC 接口 + 工厂注册表**：通过 `.env.content` 中的 PROVIDER 切换
-- **Config 单例**：各包的 `config.py` 从 `.env.content`（内容参数）+ `.env.keys`（API Key）加载
-- **Dataclass 模型**：请求和结果用 dataclass 定义
-
-**Provider 清单**（`_auto_register()` 注册）：
-- `_image_gen/`：`agnes`（OpenAI 兼容）、`bailian`（百炼 qwen-image）、`volcengine`（Seedream）、`minimax`（image-01）、`agent_plan`（火山方舟 Plan 通道 Seedream）
-- `_video_gen/`：`dashscope`（通义万相）、`dashscope_http`（KF2V 首尾帧）、`agnes`、`bailian`（wan2.7/happyhorse）、`volcengine`（Seedance）、`minimax`（Hailuo v1 + H3 v2）、`agent_plan`（火山方舟 Plan 通道 Seedance）
-- `_text_gen/`：`deepseek`（默认，OpenAI 兼容 Responses API）、`dashscope`（百炼 Qwen）、`agnes`（OpenAI 兼容）、`agent_plan`（火山方舟 Plan 通道 doubao-seed-2-1-turbo，2026-09-03 接入）
-- `_text_gen/`：DashScope Qwen、DeepSeek、Agnes
-- `tts/`：DashScope SDK、DashScope HTTP、OpenAI
-
-**Key Conventions**：
-1. 视频模式 = 异步轮询：Submit task → poll task_id → download video_url
-2. 图片 = 视频首帧：vimax_bridge 生成 first_frame.png per shot
-3. 403 回退：provider 用 `_model_queue` 自动切下一个模型
-4. 限速：VIDEO_MAX_REQUESTS_PER_MINUTE、IMAGE_GEN_INTERVAL、KeyScheduler
-5. 视频生成 provider 统一存 `vimax_working/shots/<idx>/video.mp4`
-
-### DeepSeek 文本生成（`_text_gen/`）
-- **Responses API**（默认 `deepseek-flash`）：`POST /responses`，`reasoning.effort=none` 关闭思考 + strict `json_schema` 结构化输出
-- **JSON Schema** 定义在 `_text_gen/deepseek_schema.py`（SCRIPT/HOOK/CHARACTERS/SCENE_ANALYSIS 四个）
-- 请求结构：`text.format = {type: "json_schema", name, schema}`（漏 `type` 报 400）
-- 正文从响应 `output[]` 的 `message.output_text` 提取；`status=incomplete` → `incomplete_details.reason` 诊断截断
-- 非 v4-flash 模型回退 `chat.completions`
-
-### 章节提取
-- 小说文件：`锦衣夜行_77119小说.txt`（UTF-8编码；`.bak` 为 GBK 原件）
-- 标题行格式：`第一部 杀青州 第001章 章节标题`（部名/章名由 `get_chapter_meta()` 解析并写入 script_result.json）
-- 使用 `shared.chapter_reader` 提取完整章节
-
-## 关键参考文件
-- `skill_spy.txt` — Prompt 工程参考
-- `shared/style_prefix.py` — 风格前缀/改写函数（v6.60.1 自根目录迁入；根目录留 deprecated shim）
-- `step01_script_gen/prompts.py` — 包含详细的分镜生成 prompt
+维护时将同一规则集中在责任章节；新要求优先合并既有条款，避免并存重复规则或用局部优先级覆盖授权限制。

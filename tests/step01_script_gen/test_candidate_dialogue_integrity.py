@@ -4,7 +4,7 @@
 覆盖三条断言面（审核约束⑤预算语义 + 决策点 1/2）：
   1. 候选层：破损候选不进池（消耗尝试名额、不补取不扩预算）；
      全部候选破损 → `DialogueIncompleteError`（带 broken 明细）+ 诊断落
-     `step01_plan_infeasible.json`（`conclusion=dialogue_incomplete`，独立于
+     `step01_dialogue_incomplete.json`（`stop_layer=candidate`，**独立于计划层诊断**——
      `replan_incomplete`，消费者不得触发计划重选）。
   2. 提交层：选中稿破损 → BLOCK `repair_outcome=dialogue_truncated`（与
      `locked_changed`/零改善区分），**零审计/修复调用**（修复按锁定契约不可修）。
@@ -107,7 +107,7 @@ def test_candidate_pool_all_broken_fails_with_broken_details(tmp_path, monkeypat
     first = ei.value.broken_batches[0][0]
     assert first["reason"] == "cross_shot_split" and "且慢" in first["line"]
 
-    diag = json.loads((tmp_path / "step01_plan_infeasible.json").read_text(encoding="utf-8"))
+    diag = json.loads((tmp_path / "step01_dialogue_incomplete.json").read_text(encoding="utf-8"))
     assert diag["conclusion"] == "dialogue_incomplete"
     assert diag["conclusion"] != "replan_incomplete", "不得触发计划重选语义"
     assert diag["total_lines"] == 1
@@ -298,7 +298,7 @@ def test_mixed_failures_counted_separately(tmp_path, monkeypatch):
 
     assert "1 次生成/解析失败" in str(ei.value), "混合失败必须分开计数"
     assert len(ei.value.broken_batches) == 1
-    diag = json.loads((tmp_path / "step01_plan_infeasible.json").read_text(encoding="utf-8"))
+    diag = json.loads((tmp_path / "step01_dialogue_incomplete.json").read_text(encoding="utf-8"))
     assert diag["conclusion"] == "dialogue_incomplete", \
         "五审：混合失败含真实破损 → 生成稿完整性结论，门异常计数留在 attempt_stats"
     assert diag["attempt_stats"] == {"total": 2, "dialogue_broken": 1,
@@ -385,7 +385,7 @@ def test_candidate_gate_error_counted_separately(tmp_path, monkeypatch):
     assert isinstance(ei.value, pf.DialogueIncompleteError), \
         "子类必须保持父类可捕获（既有 except DialogueIncompleteError 不受影响）"
     assert "台词门异常" in str(ei.value)
-    diag = json.loads((tmp_path / "step01_plan_infeasible.json").read_text(encoding="utf-8"))
+    diag = json.loads((tmp_path / "step01_dialogue_incomplete.json").read_text(encoding="utf-8"))
     assert diag["conclusion"] == "dialogue_gate_error", \
         "五审：纯门故障的诊断结论不得写成 dialogue_incomplete"
     assert diag["attempt_stats"] == {"total": 1, "dialogue_broken": 0,
@@ -438,7 +438,7 @@ def test_dump_conclusion_follows_failure_type(tmp_path):
 
     def _read():
         return json.loads(
-            (tmp_path / "step01_plan_infeasible.json").read_text(encoding="utf-8"))
+            (tmp_path / "step01_dialogue_incomplete.json").read_text(encoding="utf-8"))
 
     # 纯门故障
     pf.dump_dialogue_incomplete(tmp_path, [[{"line": "", "reason": "gate_error: 净化器故障"}]],
@@ -515,3 +515,71 @@ def test_best_guard_excludes_snapshot_declared_against_another_plan(tmp_path, mo
     assert "script_result_20260101_000001.json" in _stale_log[0]
     assert "另一版计划" in _stale_log[0]
     assert selected is not None and len(selected["shots"]) == 2, "无身份的老快照胜出"
+
+
+def test_the_candidate_diagnostic_declares_its_own_layer_and_identity(tmp_path, monkeypatch):
+    """**候选层的诊断要自证是候选层**（2026-10-01 复核 P2）.
+
+    旧实现把候选层的台词结论写进**计划层**的文件名 `step01_plan_infeasible.json`：既没有
+    身份字段，又会覆盖真正的预算层诊断——读取方按文件名归层，于是把候选层失败记成计划层。
+    现在它写自己的文件，并带 `run_id` / `written_at` / `stop_layer` / 契约版本。
+    """
+    import step01_script_gen.plan_feasibility as pf
+    _p = tmp_path / "step01_dialogue_incomplete.json"
+    pf.dump_dialogue_incomplete(tmp_path, [[{"line": "x", "reason": "not_found"}]],
+                                total_lines=3)
+    diag = json.loads(_p.read_text(encoding="utf-8"))
+    assert diag["stop_layer"] == pf.STOP_LAYER_CANDIDATE, diag
+    for _k in ("run_id", "written_at", "plan_contract_version"):
+        assert _k in diag, (sorted(diag), _k)
+    assert not (tmp_path / "step01_plan_infeasible.json").exists(), \
+        "候选层诊断不得占用计划层的文件名"
+
+
+def test_the_plan_diagnostics_declare_the_plan_layer(tmp_path):
+    """两份**计划层**诊断都带 `stop_layer=plan`（读取方按它归层，不按文件名猜）."""
+    import step01_script_gen.plan_feasibility as pf
+    plan = {"plan_contract_version": 4,
+            "required_facts": ['甲｜原文证据：“甲”｜承载：B1/画面'],
+            "shot_beats": ["节拍：甲｜本镜信息目的：x｜原文依据：“甲”｜载体：画面"],
+            "dialogue_lines": [], "narration_lines": []}
+    pf.dump_plan_contract_invalid(tmp_path, plan, ["F1 声明……"])
+    c = json.loads((tmp_path / "step01_plan_contract_invalid.json").read_text(encoding="utf-8"))
+    assert c["stop_layer"] == pf.STOP_LAYER_PLAN and c["plan_contract_version"] == 4, c
+    pf._dump(tmp_path, {"verdict": "infeasible", "reasons": [], "suggestions": [],
+                        "dialogue_lines": 0, "dialogue_sec": 0.0,
+                        "dialogue_rejected": [], "beats_floor_sec": 0.0,
+                        "lower_bound_sec": 0.0, "budget": {"min": 60, "max": 90},
+                        "note": ""}, plan)
+    i = json.loads((tmp_path / "step01_plan_infeasible.json").read_text(encoding="utf-8"))
+    assert i["stop_layer"] == pf.STOP_LAYER_PLAN and i["plan_contract_version"] == 4, i
+
+
+def test_stop_layer_comes_from_the_diagnostic_not_the_filename():
+    """**归层单源**：优先取产物体内的 `stop_layer`；旧产物才按文件名回退；判不出就显式未知.
+
+    （2026-10-01 复核：按文件名归层会把候选层的台词失败记成计划层失败。）
+    """
+    import step01_script_gen.plan_feasibility as pf
+    # ① 新产物：以产物体内的 stop_layer 为准（文件名与层不一致时也不能被带偏）
+    assert pf.diagnostic_stop_layer({"stop_layer": "candidate"},
+                                    "step01_plan_infeasible.json") == "candidate"
+    assert pf.diagnostic_stop_layer({"stop_layer": "plan"},
+                                    "step01_dialogue_incomplete.json") == "plan"
+    # ② 旧产物：按文件名回退
+    assert pf.diagnostic_stop_layer({}, "step01_plan_infeasible.json") == "plan"
+    assert pf.diagnostic_stop_layer({}, "step01_dialogue_incomplete.json") == "candidate"
+    # ③ 判不出 ⇒ 显式未知（不猜成某一层）
+    assert pf.diagnostic_stop_layer({}, "step01_unknown.json") == ""
+    assert pf.diagnostic_stop_layer(None, "") == ""
+
+
+def test_the_final_layer_diagnostic_declares_final(tmp_path):
+    """同一条门在**终稿层**跑时，诊断要写 `stop_layer=final`（不是 candidate）."""
+    import step01_script_gen.plan_feasibility as pf
+    pf.dump_dialogue_incomplete(tmp_path, [[{"line": "x", "reason": "not_found"}]],
+                                total_lines=3, layer="终稿层")
+    diag = json.loads((tmp_path / "step01_dialogue_incomplete.json")
+                      .read_text(encoding="utf-8"))
+    assert diag["stop_layer"] == pf.STOP_LAYER_FINAL, diag
+    assert diag["layer"] == "终稿层", diag

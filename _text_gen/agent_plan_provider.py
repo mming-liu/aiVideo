@@ -29,15 +29,19 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import time
+import uuid
 from functools import partial
 from typing import Optional
 
 import requests
 
 from . import retry_policy
+from .deadline import TransportGate
 from .config import config
 from .models import TextGenerationRequest, TextGenerationResult, truncated_result
 from .service import TextGenerationService
@@ -50,6 +54,63 @@ _verbose_write = partial(verbose_write, log_file="step01.log")
 # 实测可超 300s，旧默认值会让 GAP 重试 100% 超时失败（2026-09-11 实机复盘）。
 # 可用 env AGENT_PLAN_TEXT_TIMEOUT_SEC 覆盖；模型能力项不进配置文件，仅操作参数进 env。
 AGENT_PLAN_TEXT_TIMEOUT_SEC = int(os.getenv("AGENT_PLAN_TEXT_TIMEOUT_SEC", "600"))
+#: 排队（Key 冷却）等待上限（#23 修复：全 key 长冷却时不许无限占线程池）；
+#: 有截止时刻时再与余量取 min（工作包 §4 B）
+AGENT_PLAN_QUEUE_CAP_SEC = 180.0
+
+#: 未显式配置 `AGENT_PLAN_SESSION_ID` 时发出去的**进程内稳定**会话 id
+#: （opencode go 网关要求 `x-opencode-session`；文档不限格式，只要求"每次会话稳定"）。
+_AUTO_SESSION_ID = "aivideo-%s" % uuid.uuid4().hex[:12]
+
+
+#: 文本通道的**请求方言**——由**解析后的端点**决定。切换通道时必须同时改这里：
+#: 端点即契约，方舟的 Doubao 字段名（`thinking.type`）在 OpenAI 兼容网关上没有意义。
+#:
+#: - `openai`：OpenAI 兼容网关（`AGENT_PLAN_TEXT_BASE_URL`；2026-10-02 起指向 OpenCode Go）。
+#:   思考强度走 `reasoning_effort`——官方模型目录登记
+#:   `[[reasoning_options]] type = "effort" / values = ["low", "high", "max"]`
+#:   （2026-10-03 核对 https://raw.githubusercontent.com/anomalyco/models.dev/dev/providers/opencode-go/models/deepseek-v4.1-flash.toml）。
+#: - `doubao`：火山方舟 plan v3（`AGENT_PLAN_BASE_URL`）。强度只有开关（`thinking.type`），
+#:   没有档位；沿用既有映射（`none`→disabled，其余→enabled）。
+#:
+#: **背景（复核 2026-10-03）**：通道切到 OpenCode Go 后请求语义没有跟着适配，`low`/`high`/`max`
+#: 三个档位被映射成同一份 `thinking.type=enabled` ⇒ **档位配置实际没生效**（离线实测三者
+#: 请求体 SHA-256 相同）。审计的 299s 墙钟超时是否由此引起**尚未证明**，本改动只负责让
+#: "要求发出去的强度"与"实际发出去的强度"一致。
+_OPENAI_DIALECT_HOSTS = ("opencode.ai",)
+#: OpenCode Go 目录登记的档位（发别的一律不发该字段，见 `_openai_effort_tier`）
+_OPENAI_EFFORT_TIERS = ("low", "high", "max")
+#: 未登记档位的**降档**映射（`minimal` 是 deepseek 侧的名字，该端点没有）
+_OPENAI_EFFORT_ALIASES = {"minimal": "low"}
+
+
+def _api_dialect(base_url: str) -> str:
+    """按**端点**取请求方言（唯一判定处）."""
+    _u = str(base_url or "").lower()
+    return "openai" if any(_h in _u for _h in _OPENAI_DIALECT_HOSTS) else "doubao"
+
+
+def _resolve_effort(req) -> str:
+    """请求级 `reasoning_effort` → 通道级默认（**单一事实源**，`_build_payload` 与
+    `generate` 的阶段轨迹共用同一份解析，不各写一遍）."""
+    _e = getattr(req, "reasoning_effort", None)
+    return _e if _e is not None else config.AGENT_PLAN_TEXT_REASONING_EFFORT
+
+
+def _openai_effort_tier(effort) -> str:
+    """内部 effort 字符串 → 该端点的档位；返回 "" = **不发**该字段（走网关默认）.
+
+    - `none`/空：OpenCode Go 目录只登记 low/high/max，**没有"关闭"档**；发一个目录里
+      不存在的值有被网关拒收的风险，宁可不发（不发的语义就是网关默认，与今天一致）。
+    - 未登记的档位（如 `minimal`）：取同侧最低档 `low`——静默发一个非法值比降一档风险大。
+    - 其余未知值：不发，并由调用方**显式告警**（不静默吞掉）。
+    """
+    _e = str(effort or "").strip().lower()
+    if not _e or _e == "none":
+        return ""
+    if _e in _OPENAI_EFFORT_TIERS:
+        return _e
+    return _OPENAI_EFFORT_ALIASES.get(_e, "")
 
 
 class AgentPlanTextService(TextGenerationService):
@@ -70,7 +131,11 @@ class AgentPlanTextService(TextGenerationService):
                 "与 VOLCENGINE_API_KEY 不通用）"
             )
         self._model = config.AGENT_PLAN_TEXT_MODEL
-        self._base_url = config.AGENT_PLAN_BASE_URL.rstrip("/")
+        # **文本专用**端点（留空 ⇒ 回落共享的 `AGENT_PLAN_BASE_URL`）：图片通道与文本通道
+        # 可以各自指向不同网关（2026-10-02 起方舟 / opencode go 并存）。回落**在读的时候**
+        # 再判一次——"留空 = 用共享端点"这条语义在哪儿读都成立。
+        self._base_url = (config.AGENT_PLAN_TEXT_BASE_URL
+                          or config.AGENT_PLAN_BASE_URL).rstrip("/")
         # 单 key 限速：cooldown = 60 / RPM；默认 10 RPM = 6s
         rpm = max(int(config.AGENT_PLAN_TEXT_RPM), 1)
         self._key_scheduler = KeyScheduler(
@@ -79,10 +144,19 @@ class AgentPlanTextService(TextGenerationService):
 
     @property
     def _headers(self) -> dict:
-        return {
+        headers = {
             "Authorization": f"Bearer {config.AGENT_PLAN_API_KEY}",
             "Content-Type": "application/json",
         }
+        # 网关路由头 `x-opencode-session`：opencode go 网关**要求**它（缺失直接
+        # `400 MissingSessionID`，2026-10-02 实测），火山方舟不需要。
+        # 取值优先级：`AGENT_PLAN_SESSION_ID`（显式配置）→ **进程内稳定 id**。
+        # 官方文档只说"每次会话一个稳定 id"、不限格式（2026-10-02 查证），所以未配置时
+        # 自动生成一个**进程内不变**的值——不把"必须有一个会话 id"变成"必须往配置里
+        # 塞一个静态串"（静态串会把每次运行并成同一个会话，路由/缓存都吃不到新会话）。
+        _sid = str(getattr(config, "AGENT_PLAN_SESSION_ID", "") or "").strip() or _AUTO_SESSION_ID
+        headers["x-opencode-session"] = _sid
+        return headers
 
     def _build_messages(self, req: TextGenerationRequest) -> list[dict]:
         """组装 OpenAI 兼容 messages 数组."""
@@ -105,12 +179,16 @@ class AgentPlanTextService(TextGenerationService):
         model = req.model or self._model
         # thinking.type 映射：req.reasoning_effort / config 都用 none→disabled / 其他→enabled
         # （保持与 deepseek 路径的 reasoning_effort 字符串契约，转换在 provider 内做）
-        effort = (
-            req.reasoning_effort
-            if req.reasoning_effort is not None
-            else config.AGENT_PLAN_TEXT_REASONING_EFFORT
-        )
+        effort = _resolve_effort(req)
         thinking_type = "disabled" if (not effort or effort == "none") else "enabled"
+        # 端点方言：OpenCode Go 用 `reasoning_effort`（有档位），方舟用 `thinking.type`（只有开关）
+        _dialect = _api_dialect(self._base_url)
+        _effort_tier = _openai_effort_tier(effort) if _dialect == "openai" else ""
+        if _dialect == "openai" and str(effort or "").strip().lower() not in (
+                "", "none", *_OPENAI_EFFORT_TIERS, *_OPENAI_EFFORT_ALIASES):
+            _verbose_write(
+                "[WARN] 思考档位 %r 在 %s 上没有对应值——本次**不发**强度字段（走网关默认）"
+                % (effort, _dialect))
         # max_completion_tokens 单一事实源：**只在 .env.content 配**
         # （AGENT_PLAN_TEXT_MAX_TOKENS，当前 32768）。req.max_tokens 可按调用点覆盖。
         #
@@ -136,15 +214,129 @@ class AgentPlanTextService(TextGenerationService):
             "seed": req.seed,
             # 火山方舟 Doubao 专用：输出 token 上限（不是 OpenAI 的 max_tokens）
             "max_completion_tokens": max_completion_tokens,
-            # 火山方舟 Doubao 专用：思考模式开关（不是 OpenAI 的 reasoning_effort）
-            "thinking": {"type": thinking_type},
         }
+        # `thinking` **一律照旧发出**（两个端点都发）——复核 2026-10-03 P2：该字段在
+        # OpenAI 兼容网关上是否被采纳**未经证实**，把它撤掉是**另一件事**（会连"关闭思考"
+        # 这条既有契约一起改掉，而生成侧配置正是 `none`）。这里的改动**只做加法**：
+        # 在 OpenAI 兼容端点上**多带一个**档位字段，其余请求逐字不变。
+        payload["thinking"] = {"type": thinking_type}
+        if _dialect == "openai" and _effort_tier:
+            # 该端点目录登记的是**档位**（low/high/max），不是开关；
+            # `none`（项目契约 = 关闭思考）在该端点**没有对应档位** ⇒ 不发这个字段，
+            # 请求与改动前**逐字相同**——"关闭"在这条通道上是否真的生效仍未证实，
+            # 与"默认档"和"不支持"三者必须分开说（见模块顶部 `_api_dialect` 的说明）。
+            payload["reasoning_effort"] = _effort_tier
         # 结构化输出：方舟 Doubao 稳定支持 json_object；json_schema strict 视模型而定，
         # 当前 doubao-seed-2-1-turbo 走 json_object 强约束 + 解析端 schema 二次校验
         if req.json_schema or req.user_prompt:
             # 默认开启 json_object（生成分镜 JSON 强约束），解析端 _validate_script 兜底
             payload["response_format"] = {"type": "json_object"}
         return payload
+
+    # -- 传输阶段的证据 ---------------------------------------------------
+    @staticmethod
+    def _request_fingerprint(payload: dict) -> str:
+        """请求体指纹（**脱敏**：只留哈希，正文不进日志）."""
+        try:
+            _b = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            return hashlib.sha256(_b).hexdigest()[:16]
+        except Exception:
+            return ""
+
+    def _send_once(self, url: str, payload: dict, timeout, trace: dict):
+        """一次 POST，并把**分阶段时刻**记进 `trace`（复核 2026-10-03 要求）.
+
+        为什么要 `stream=True`：非流式调用要等**整个响应体**到齐才返回，于是墙钟被
+        切断时调用方手上没有任何中间信息——复核用 loopback 桩证明过：**持续发送正文**
+        与**完全不返回正文**落到上层是同一条超时记录。
+
+        **能给的**：响应头到没到、正文总共回了多少字节、什么时候收完。
+        **不能给的**：区分"网关排队"与"远端在算"——该端点**算完才一次性交回**
+        （2026-10-03 实测：响应头与正文同一时刻到达），只有"一个字节都没回来"这一条事实。
+
+        ⚠️ 追踪**不许影响调用本身**：不改变读取方式（见下），任何异常都吞掉
+        （测试桩、不支持的响应对象）。
+        """
+        _t0 = time.monotonic()
+        resp = requests.post(url, json=payload, headers=self._headers,
+                             timeout=timeout, stream=True)
+        trace["headers_at"] = round(time.monotonic() - _t0, 3)
+        trace["status"] = getattr(resp, "status_code", None)
+        try:
+            _h = getattr(resp, "headers", None) or {}
+            for _k in ("x-request-id", "openai-request-id", "x-oneapi-request-id",
+                       "cf-ray", "x-opencode-request-id"):
+                _v = _h.get(_k)
+                if _v:
+                    trace["request_id"] = str(_v)
+                    break
+        except Exception:
+            pass
+        _n = 0
+        _buf: list = []
+        #: ⚠️ 这里**只观测、不改变**读取方式（见下）；失败时 `bytes/done_at` 仍如实记录
+        try:
+            # **读取路径与改动前逐字相同**（一趟 `iter_content(65536)`，全程不放弃生成器）。
+            #
+            # 为什么**不**去测"首字节"（复核 2026-10-03 P2 的收尾结论）：要测准必须换读取方式，
+            # 而换法都把真实响应弄坏过——① 「先读 1 字节再放弃、另开一趟读余下」在**分块传输
+            # 编码**下把正文**截断成 1 字节**（离线实测：服务端实发 150041 字节、读回 1 字节、
+            # 服务端侧连接被中止）；② `chunk_size=None` 在 urllib3 下是"读到 EOF"；③ 单趟
+            # 逐字节读在 150KB 上 3 分钟跑不完。仪表**不许**改变被观测对象 ⇒ 只保留能如实
+            # 观测的量：**响应头时刻 / 正文总字节数 / 收完时刻**（该端点算完才交回，
+            # 于是"有没有东西回来"就是这里能给出的全部阶段信息）。
+            for _chunk in resp.iter_content(chunk_size=65536):
+                if _chunk:
+                    _n += len(_chunk)
+                    _buf.append(_chunk)
+            trace["bytes"] = _n
+        except requests.exceptions.RequestException:
+            # **传输异常照旧抛给调用方**——读正文期间的失败与"没读到"不是一回事，
+            # 吞掉会把半截正文当成功下发（显式报告失败）。
+            trace["done_at"] = round(time.monotonic() - _t0, 3)
+            raise
+        except Exception:
+            pass                      # 追踪本身失败（测试桩/不支持的响应对象）不影响调用
+        trace["done_at"] = round(time.monotonic() - _t0, 3)
+        # **必须回填正文**：`iter_content` 会把响应标成 `_content_consumed`，此后
+        # `.text` / `.json()` 会抛 RuntimeError("content ... already consumed")。
+        # 这里把读到的字节放回 `_content`，下游消费方式与**非流式**路径逐字一致。
+        # ⚠️ **空正文也要回填**（复核 2026-10-03 P1）：只在 `_buf` 非空时回填，会让
+        # 「401 + 空正文」这类响应在真实入口抛 `RuntimeError: content already consumed`，
+        # 把鉴权失败**遮蔽**成解析崩溃（`_error_from_response` 读 `resp.text`）。
+        try:
+            resp._content = b"".join(_buf)
+        except Exception:
+            pass
+        return resp
+
+    @staticmethod
+    def _trace_note(trace: dict, payload: dict, effort, sent: bool = True) -> str:
+        """一行**脱敏**轨迹：请求指纹 / 实际强度 / 关联 ID / 各阶段时刻.
+
+        `sent=False` = **发送前**就没发（余量耗尽）；`sent=True` 但 `headers_at` 缺失
+        ⇒ **一个字节都没有回来**。⚠️ 该端点**算完才一次性交回**（2026-10-03 实测：响应头
+        到达即正文到达），所以这**不能**区分"网关排队"与"远端在算"——只报事实，不猜阶段。
+
+        这里**不报"首字节时刻"**：要测准必须改读取方式，而改法都会改变被观测对象
+        （见 `_send_once` 里的三条实测记录）。
+        """
+        if not sent:
+            return "（未发出：发送前余量已耗尽）"
+        _thinking = (payload.get("thinking") or {}).get("type")
+        _strength = (payload.get("reasoning_effort")
+                     or ("thinking=%s" % _thinking if _thinking else "")
+                     or "（未发强度字段）")
+        _head = ("指纹=%s｜强度=%s（要求 %r）｜关联ID=%s｜"
+                 % (AgentPlanTextService._request_fingerprint(payload), _strength,
+                    effort, trace.get("request_id") or "（无）"))
+        if trace.get("headers_at") is None:
+            # 措辞**不许**断言是网关排队（2026-10-03 实测：该端点算完才交回 ⇒ 排队与在算
+            # 在此**不可分**）。
+            return _head + "**无任何响应头/字节**（已发出；该端点算完才交回，排队与在算不可分）"
+        return (_head + "响应头 %ss｜正文 %s 字节｜收完 %s"
+                % (trace.get("headers_at"), trace.get("bytes", 0),
+                   trace.get("done_at", "未收完")))
 
     def generate(self, req: TextGenerationRequest) -> TextGenerationResult:
         """提交一次文本生成请求（同步阻塞）.
@@ -155,7 +347,23 @@ class AgentPlanTextService(TextGenerationService):
           - 5xx/网络异常：1 次退避（防瞬时抖）；用尽后报错。
           - 401/403/400：不重试直接报错（鉴权/参数问题重试无意义）。
         """
-        self._key_scheduler.acquire(timeout=180)
+        # 工作包 §4 B：整次规划一个**绝对截止时刻**。排队（Key 冷却）、退避、
+        # Retry-After 等待、每次 POST 都按它重算余量；耗尽 ⇒ 一个请求都不发。
+        _gate = TransportGate(req, default_timeout=AGENT_PLAN_TEXT_TIMEOUT_SEC,
+                              where="agent_plan")
+        _wait_left = _gate.wait_budget()
+        if _wait_left is not None and _wait_left <= 0:
+            return TextGenerationResult(success=False, error=_gate.expiry_reason())
+        try:
+            # 排队等待：**base 上限仍是 180s**（#23：全 key 长冷却时不许无限占线程），
+            # 有截止时刻时再与余量取最小值——排队同样不许睡过截止点。
+            self._key_scheduler.acquire(
+                timeout=AGENT_PLAN_QUEUE_CAP_SEC if _wait_left is None
+                else max(0.0, min(AGENT_PLAN_QUEUE_CAP_SEC, _wait_left)))
+        except TimeoutError as _e:
+            return TextGenerationResult(
+                success=False,
+                error="%s（排队未取得可用 Key：%s）" % (_gate.expiry_reason(), _e))
 
         payload = self._build_payload(req)
         model = payload.get("model", self._model)
@@ -178,16 +386,41 @@ class AgentPlanTextService(TextGenerationService):
         # provider 不再自带常量与 `except` 分支里的判定——否则「哪些错可重试」会随
         # provider 漂移，上层也无从判断该不该再叠一层重试。
         # 语义要点：**读超时不重试**（旧请求仍在模型侧跑，重发 = 双份长任务）。
-        # v6.70.3（09-14）：超时随请求走（req.timeout_sec 分级），None 回退全局
-        _timeout = int(req.timeout_sec) if req.timeout_sec else AGENT_PLAN_TEXT_TIMEOUT_SEC
-        _attempts = retry_policy.submit_attempts()
-        _t0 = time.time()
+        # v6.70.3（09-14）：超时随请求走（req.timeout_sec 分级），None 回退全局。
+        # 工作包 §4 B：**真上限 = min(偏好, 余量)**——每次尝试前重算（`_gate.limit()`），
+        # 且不取整（取整会把 0.4s 变成 0，再被当成"没配置"回退到 600s 默认）。
+        # v6.152（2026-09-29 五次跑实测）：循环上限取**各类别里最宽的一次数**
+        # （`TRANSPORT_CONNECT` = 共 3 次），每个分支再用**该类别自己的**次数与预算收口。
+        # 此前上限写死为无类别的 `submit_attempts()`（= 2），于是「连接类共 3 次」这条
+        # 判据永远够不到第 3 次：第 2 次失败时 `should_retry` 仍判「可重试」→ 退避一次
+        # → `for` 已尽 → 落到尾部报「未知原因」，把已分类的 `transport_connect` 与
+        # 底层异常一起丢掉（run 02 实测：16.1s 内两次连接重置后报「未知原因」）。
+        _attempts = max(retry_policy.submit_attempts(_fc)
+                        for _fc in retry_policy.FailureClass)
+        # 尾部兜底要带上真因：异常分支与 5xx 分支都会写它
+        last_error = ""
+        _effort = _resolve_effort(req)          # 阶段轨迹里记"要求 vs 实发"
+        _t0 = time.monotonic()
         for attempt in range(1, 1 + _attempts):
+            _timeout, _deny = _gate.limit()
+            if _deny:
+                # 余量耗尽：**不发请求**（也不回退默认 600s 超时）
+                return TextGenerationResult(success=False, error=_deny)
+            _trace: dict = {}
             try:
-                resp = requests.post(
-                    url, json=payload, headers=self._headers,
-                    timeout=_timeout,
-                )
+                resp, _timed_out, _why = _gate.request(
+                    lambda _t: self._send_once(url, payload, _t, _trace))
+                if _why:
+                    # 墙钟没等到 / 余量耗尽：**不重发**（旧请求可能仍在模型侧跑）
+                    # 复核 2026-10-03：超时文案只说"没等到"，**必须**同时给出走到了哪一段
+                    # ——否则"远端排队 / 远端在算 / 传输停顿"三者事后无从区分。
+                    _note = self._trace_note(_trace, payload, _effort,
+                                             sent=bool(_timed_out))
+                    if _note:
+                        _verbose_write("[TRACE] agent_plan_text 阶段轨迹（失败）：" + _note)
+                        return TextGenerationResult(
+                            success=False, error="%s｜阶段轨迹：%s" % (_why, _note))
+                    return TextGenerationResult(success=False, error=_why)
             except requests.exceptions.RequestException as e:
                 _fc = retry_policy.classify_exception(e)
                 if _fc is retry_policy.FailureClass.TRANSPORT_TIMEOUT:
@@ -204,27 +437,26 @@ class AgentPlanTextService(TextGenerationService):
                             f"（model={model}，可用 AGENT_PLAN_TEXT_TIMEOUT_SEC 调整或请求级 timeout_sec）"
                         ),
                     )
-                _elapsed = time.time() - _t0
+                _elapsed = time.monotonic() - _t0
                 # 类别可重试 **且** 次数与时间预算都有余量 → 由本层退避重发；
                 # 否则把分类带回上层（上层**不得**再对传输类叠加重试）。
+                last_error = (
+                    f"Agent Plan 提交失败[{_fc.value}]: {e}"
+                    f"（尝试 {attempt}/{retry_policy.submit_attempts(_fc)}，"
+                    f"已用 {_elapsed:.1f}s；"
+                    f"重试预算 {retry_policy.submit_budget_sec():g}s）"
+                )
                 if not retry_policy.should_retry(_fc, attempts_used=attempt,
                                                  elapsed_sec=_elapsed):
-                    return TextGenerationResult(
-                        success=False,
-                        error=(
-                            f"Agent Plan 提交失败[{_fc.value}]: {e}"
-                            f"（尝试 {attempt}/{retry_policy.submit_attempts(_fc)}，"
-                            f"已用 {_elapsed:.1f}s；"
-                            f"重试预算 {retry_policy.submit_budget_sec():g}s）"
-                        ),
-                    )
+                    return TextGenerationResult(success=False, error=last_error)
                 _wait = retry_policy.submit_backoff_sec(attempt)
                 _verbose_write(
                     f"[!] 提交失败[{_fc.value}]: {e}，"
                     f"{_wait:g}s 后重试 (尝试 {attempt}/"
                     f"{retry_policy.submit_attempts(_fc)})"
                 )
-                time.sleep(_wait)
+                if not _gate.wait(_wait):
+                    return TextGenerationResult(success=False, error=_gate.expiry_reason())
                 continue
 
             _verbose_write(
@@ -232,32 +464,41 @@ class AgentPlanTextService(TextGenerationService):
                 f"body={resp.text[:500]}"
             )
 
+            _verbose_write("[TRACE] agent_plan_text 阶段轨迹："
+                           + self._trace_note(_trace, payload, _effort))
             if resp.status_code == 200:
                 return self._parse_response(
                     resp, model, payload.get("max_completion_tokens"),
-                    allow_truncated=req.allow_truncated,
+                    allow_truncated=req.allow_truncated, trace=_trace,
                 )
 
             if resp.status_code == 429:
-                # 限流：1 次退避后重试
-                if attempt == 2:
-                    return self._error_from_response(resp, "")
+                # 限流：1 次退避后重试。次数仍按**该类自己的**上限收口
+                # （`RATE_LIMIT` 未进 `RETRYABLE`，等待语义由本层处理，故这里
+                # 显式读它的 `submit_attempts` = 2，保持既有行为不变）。
+                if attempt >= retry_policy.submit_attempts(
+                        retry_policy.FailureClass.RATE_LIMIT):
+                    return self._error_from_response(resp, last_error)
                 wait = 30.0
                 m = re.search(r"retry[-_]after[\"':=\s]+(\d+)", resp.text, re.IGNORECASE)
                 if m:
                     wait = float(m.group(1))
                 _verbose_write(f"[!] 429 限速，等待 {wait:.0f}s 后重试 (尝试 {attempt}/2)")
-                time.sleep(wait)
+                # Retry-After 同样受截止时刻约束：睡不过截止点
+                if not _gate.wait(wait):
+                    return TextGenerationResult(success=False, error=_gate.expiry_reason())
                 continue
 
             if 500 <= resp.status_code < 600:
-                if attempt == 2:
-                    return self._error_from_response(resp, "")
+                if attempt >= retry_policy.submit_attempts(
+                        retry_policy.FailureClass.SERVER_ERROR):
+                    return self._error_from_response(resp, last_error)
                 last_error = f"服务端 {resp.status_code}: {resp.text[:200]}"
                 _verbose_write(
                     f"[!] 服务端 {resp.status_code}，2s 后重试 1 次 (尝试 {attempt}/2)"
                 )
-                time.sleep(2.0)
+                if not _gate.wait(2.0):
+                    return TextGenerationResult(success=False, error=_gate.expiry_reason())
                 continue
 
             # 客户端错误（401/403/400/404）不重试
@@ -265,9 +506,10 @@ class AgentPlanTextService(TextGenerationService):
 
         # 走到这里说明重试用尽 / 客户端错误
         if "resp" in locals():
-            return self._error_from_response(resp, "")
+            return self._error_from_response(resp, last_error)
         return TextGenerationResult(
-            success=False, error="Agent Plan 提交失败: 未知原因"
+            success=False,
+            error=last_error or "Agent Plan 提交失败: 未知原因（未取得响应，也未捕获到异常）",
         )
 
     # ------------------------------------------------------------------
@@ -275,7 +517,7 @@ class AgentPlanTextService(TextGenerationService):
     # ------------------------------------------------------------------
     def _parse_response(
         self, resp: requests.Response, model: str, cap: Optional[int] = None,
-        allow_truncated: bool = False,
+        allow_truncated: bool = False, trace: Optional[dict] = None,
     ) -> TextGenerationResult:
         """从 200 响应中提取文本 + usage.
 
@@ -289,6 +531,19 @@ class AgentPlanTextService(TextGenerationService):
                 success=False, error=f"响应 JSON 解析失败: {e} ({resp.text[:200]})"
             )
 
+        # 阶段轨迹的第二段：**响应体里自报的思考用量**——它回答"这次到底有没有在思考"，
+        # 也是判断"不发强度字段时网关给的是哪一档"的唯一现场证据（不靠猜）。
+        if trace is not None:
+            try:
+                _u = data.get("usage") or {}
+                _det = _u.get("completion_tokens_details") or {}
+                _rsn = _u.get("reasoning_tokens") or _det.get("reasoning_tokens")
+                trace["reasoning_tokens"] = _rsn
+                _verbose_write(
+                    "[TRACE] agent_plan_text 用量：思维链=%s｜输出=%s"
+                    % ("未知" if _rsn is None else _rsn, _u.get("completion_tokens")))
+            except Exception:
+                pass          # 轨迹失败不影响解析（真正的解析错误在下面各自返回）
         choices = data.get("choices") or []
         if not choices:
             return TextGenerationResult(
@@ -323,6 +578,7 @@ class AgentPlanTextService(TextGenerationService):
                     text="",
                     usage=usage,
                     allow_truncated=allow_truncated,
+                    finish_reason=str(finish or "length"),
                     error=(
                         f"Agent Plan 输出被截断且正文为空（finish_reason=length, "
                         f"model={model}, max_completion_tokens={cap}）"
@@ -357,6 +613,7 @@ class AgentPlanTextService(TextGenerationService):
                 text=text,
                 usage=usage,
                 allow_truncated=allow_truncated,
+                finish_reason=str(finish or "length"),
                 error=(
                     f"Agent Plan 输出被截断（finish_reason=length, model={model}, "
                     f"max_completion_tokens={cap}, completion_tokens={_completion}）"
@@ -366,7 +623,8 @@ class AgentPlanTextService(TextGenerationService):
                 ),
             )
 
-        return TextGenerationResult(success=True, text=text, usage=usage)
+        return TextGenerationResult(success=True, text=text, usage=usage,
+                                    finish_reason=str(finish or ""))
 
     def _error_from_response(
         self, resp: requests.Response, last_error: str

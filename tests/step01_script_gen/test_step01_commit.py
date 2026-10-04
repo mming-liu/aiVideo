@@ -113,8 +113,10 @@ def _fake_audit(monkeypatch, payload_factory):
         def __init__(self, payload):
             self._p = payload
 
+    # v6.152：提交点会传 `deadline_ts`（整次审计的截止时刻）——桩要跟上签名，
+    # 否则 29 条提交时序用例全部 TypeError。
     def fake(script_arg_novel, plan, script, *, model=None, timeout_sec=180,
-             audit_focus=None, metadata=None):
+             audit_focus=None, metadata=None, **kwargs):
         calls["n"] += 1
         payload = payload_factory(script, calls["n"])
         result = audit_mod.AuditResult(str(payload.get("status") or "ok"), [],
@@ -1174,3 +1176,157 @@ def test_selection_ledger_covers_the_snapshot_identity_boundary(chapter, monkeyp
     assert _meta2.get("selected_revision") != _old_rev, (
         "已知欠账的旧稿又被选中了：%s" % _meta2.get("selected_path"))
     assert _meta2.get("selected_revision") == compute_script_revision(_second)
+
+# ---------------------------------------------------------------------------
+# v6.152（C1/C2）：审计**调用失败**的终局记账
+# ---------------------------------------------------------------------------
+def test_terminal_blocking_drops_stale_list_on_audit_call_failure():
+    """口径：调用失败 ⇒ 只记本次失败一条；审计 ok / 本 run 未调用审计 ⇒ 原样返回."""
+    from step01_script_gen.main import _terminal_blocking_records as f
+
+    stale = [{"code": "A", "shot_id": "1"}, {"code": "B", "shot_id": "2"}]
+
+    recs, status, failed = f({"status": "ok"}, list(stale))
+    assert recs == stale and status == "ok" and failed is False
+
+    # 台词完整性门直接判定（本 run 根本没调用审计）：不得被当成「审计失败」
+    recs, status, failed = f(None, list(stale))
+    assert recs == stale and failed is False
+
+    recs, status, failed = f({"status": "request_failed"}, list(stale))
+    assert failed is True and status == "request_failed"
+    assert [r["code"] for r in recs] == ["audit_call_failed"]
+    assert recs[0]["transient"] is True
+
+    # 首轮就失败：旧行为是 blocking=[]（manifest 报 0 条，读者以为「没有阻塞」）
+    recs, _s, failed = f({"status": "truncated"}, [])
+    assert failed is True and len(recs) == 1
+    assert recs[0]["code"] == "audit_call_failed"
+
+
+def test_audit_call_failure_is_recorded_and_registers_no_debt(chapter, monkeypatch):
+    """集成：失败 ⇒ manifest/sidecar/逐轮台账都留痕；陈旧清单不进 manifest；
+    **不登记欠账**（临时故障 ≠ 稿件语义欠账，否则污染 BEST-GUARD 台账）."""
+    import step01_script_gen.main as m
+    from step01_script_gen.quality_issues import RULE_SOURCE_FINGERPRINT
+
+    _fake_audit(monkeypatch, lambda s, n: _audit_payload(
+        s, status="request_failed", scope=m.STEP01_AUDIT_SCOPE,
+        fingerprint=RULE_SOURCE_FINGERPRINT))
+
+    _out, summary = m._commit_step01_outputs(_script(), "")
+
+    assert summary["status"] == "BLOCK"
+    manifest = json.loads((chapter / "step01_commit.json").read_text(encoding="utf-8"))
+    # ① manifest：读取方据此区分「正式旧报告」与「本次失败」
+    assert manifest["audit_status"] == "request_failed"
+    assert [b["code"] for b in manifest["blocking"]] == ["audit_call_failed"]
+    assert manifest["blocking_count"] == 1
+    # ② blocked sidecar：失败也被留痕（正式三件套不动）
+    side = json.loads((chapter / "step01_audit.blocked.json").read_text(encoding="utf-8"))
+    assert side["status"] == "request_failed"
+    assert not (chapter / "step01_audit.json").exists(), "BLOCK 不得替换正式产物"
+    # ③ 逐轮台账
+    rounds = json.loads((chapter / "step01_audit_rounds.json").read_text(encoding="utf-8"))
+    _rows = rounds if isinstance(rounds, list) else (rounds.get("rounds") or [])
+    assert any(str(r.get("status") or "") == "request_failed" for r in _rows),         "逐轮台账里必须能看到这次失败"
+    # ④ 不登记欠账
+    assert m._load_blocked_revisions() == {}
+    assert not (chapter / "snapshots" / "_blocked_revisions.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-30 复核第 4 轮 P1-1：提交层的契约门**执行级**复核（不是搜源码字符串）
+# ---------------------------------------------------------------------------
+_LINE = "张十三道：住嘴！"
+
+
+def _plan_with_contract():
+    """带**承载契约**的计划：B1 由台词1 承载 → 提交层的 `require_declaration` 生效."""
+    return {"shot_beats": ["B1 甲把话说了｜载体：台词1", "B2 乙喝茶｜载体：画面",
+                           "B3 丙离席｜载体：画面"],
+            "dialogue_lines": [_LINE]}
+
+
+def _script_with_contract(plan, *, declarations: bool = True):
+    """与计划**身份相符**的稿件；`declarations=False` 时整稿丢掉 `plan_refs`."""
+    from step01_script_gen.plan_feasibility import plan_identity
+    script = _script()
+    script["plan_id"] = plan_identity(plan)
+    script["shots"][0]["narration_segment"] = _LINE
+    script["shots"][0]["subtitle"] = _LINE
+    if declarations:
+        script["shots"][0]["plan_refs"] = {"beats": [1], "lines": [1]}
+        script["shots"][1]["plan_refs"] = {"beats": [2], "lines": []}
+        script["shots"][2]["plan_refs"] = {"beats": [3], "lines": []}
+    return script
+
+
+def test_commit_entry_blocks_a_script_that_dropped_its_declarations(chapter, monkeypatch):
+    """**真跑提交入口**：整稿丢掉 `plan_refs` → 提交点显式 BLOCK，且**一次审计都没发**.
+
+    判据顺序是这条用例的重点：契约门位于审计/修复轮**之前**（旧口径是搜源码字符串，
+    证明不了顺序，也证明不了它真的会拦）。夹具的判别性是两段式的——带声明时稿件
+    正常走完审计并提交，去掉声明后同一份稿立刻停在门前、审计调用数不变。
+    """
+    import step01_script_gen.main as m
+    from step01_script_gen.quality_issues import RULE_SOURCE_FINGERPRINT
+
+    plan = _plan_with_contract()
+    calls = _fake_audit(monkeypatch, lambda s, n: _audit_payload(
+        s, scope=m.STEP01_AUDIT_SCOPE, fingerprint=RULE_SOURCE_FINGERPRINT))
+
+    # ① 带声明 → 过门、进审计、提交（证明这条路径本身不是「怎么都 BLOCK」）
+    _s, summary = m._commit_step01_outputs(
+        _script_with_contract(plan), "", plan=plan)
+    assert summary["status"] == "COMMITTED", summary
+    assert calls["n"] == 1
+
+    # ② 同一份稿，只去掉声明 → 停在契约门；审计调用数**不变**
+    _s2, summary2 = m._commit_step01_outputs(
+        _script_with_contract(plan, declarations=False), "", plan=plan)
+    assert summary2["status"] == "BLOCK", summary2
+    assert summary2["repair_outcome"] == "event_contract_broken", summary2
+    assert [b["code"] for b in summary2["blocking"]] == ["event_contract_broken"]
+    assert calls["n"] == 1, "契约门必须在审计之前拦下（不得先烧一次审计）"
+
+
+def test_repair_that_breaks_the_contract_is_not_adopted(chapter, monkeypatch):
+    """P1-1：修复稿破坏契约 → **不采纳**（保留基线），本轮到此为止.
+
+    提交层的契约门在修复循环**之前**；修复轮整份替换稿件，「改之前是对的」不等于
+    「改之后还是对的」。这里让修复稿把承载台词改掉（声明仍在）——修复前过门、修复后
+    破损，提交点必须拒收这份修复稿并保留基线。
+    """
+    import copy
+
+    import step01_script_gen.main as m
+    from step01_script_gen.quality_issues import RULE_SOURCE_FINGERPRINT
+
+    plan = _plan_with_contract()
+    rounds = {"n": 0}
+
+    def fake_repair(script, novel_text, **kw):
+        rounds["n"] += 1
+        cand = copy.deepcopy(script)
+        # 台词没了、声明还在 → `plan_refs_line_not_in_shot`
+        cand["shots"][0]["narration_segment"] = "张十三道：走开！"
+        cand["shots"][0]["subtitle"] = "张十三道：走开！"
+        return cand
+
+    monkeypatch.setattr(m, "_repair_shot_warnings", fake_repair)
+    calls = _fake_audit(monkeypatch, lambda s, n: _audit_payload(
+        s, issues=[{"code": "model_audit_x", "shot_id": "1",
+                    "severity": "visual_risk", "message": "m",
+                    "field_path": "prompt",
+                    "repair_targets": [{"shot_id": "1", "field_path": "prompt"}]}],
+        scope=m.STEP01_AUDIT_SCOPE, fingerprint=RULE_SOURCE_FINGERPRINT))
+
+    script, summary = m._commit_step01_outputs(
+        _script_with_contract(plan), "", plan=plan)
+
+    assert summary["status"] == "BLOCK", summary
+    assert summary["repair_outcome"] == "contract_broken", summary
+    assert "不采纳" in summary["detail"] and "plan_refs_line_not_in_shot" in summary["detail"]
+    assert script["shots"][0]["narration_segment"] == _LINE, "基线必须保留（未被修复稿替换）"
+    assert rounds["n"] == 1 and calls["n"] == 1, "拒收后不得再发一轮审计/修复"

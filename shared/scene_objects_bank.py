@@ -12,6 +12,7 @@
     objects_bank.json     ← 物体注册表（含尺寸/容量/结构/统一称呼）
 """
 
+import copy
 import json
 import re
 from pathlib import Path
@@ -23,10 +24,39 @@ def _book_global_dir() -> Path:
     return global_dir()
 
 
+def _current_run_id() -> str:
+    """本进程当前 run 身份（`save(run_id="")` 时的兜底来源）.
+
+    2026-10-02 复核：写库必须能自证"是谁写的"。让 `save()` **默认**取进程身份，
+    而不是要求每个调用点都记得传——新加一个写库入口时不会漏（各写一遍必然漏一处）。
+    """
+    try:
+        from shared.run_identity import current_run_id
+        return current_run_id()
+    except Exception:
+        return ""
+
+
 _EMPTY_BANK: dict = {
     "objects": {},
     "meta": {"last_updated_chapter": 0, "total_objects": 0},
 }
+
+
+#: 条目上保留的**来源调用**引用条数上限（最近 N 次，去重）：bank 的字段只表达
+#: "首次创建与最近更新来源"，**不是**完整字段修改史（复核 2026-10-02 之七）。
+CALL_IDS_KEEP = 10
+
+
+def _source_call_ids(call_ids, prev=None) -> list:
+    """把本轮的 call_id 并进条目的来源窗口（去重、保序、只留最近 N 条）."""
+    _old = [str(c) for c in (prev or []) if str(c or "").strip()]
+    _merged = list(_old)
+    for _c in (call_ids or []):            # **本批内也要去重**（同一次更新可能传重复项）
+        _c = str(_c or "").strip()
+        if _c and _c not in _merged:
+            _merged.append(_c)
+    return _merged[-CALL_IDS_KEEP:]
 
 
 class SceneObjectsBank:
@@ -39,7 +69,17 @@ class SceneObjectsBank:
             from shared.paths import objects_bank_dir
             self._bank_dir = objects_bank_dir()
         self._bank_path = self._bank_dir / "objects_bank.json"
-        self._data: dict = dict(_EMPTY_BANK)
+    # **空模板必须深复制**（复核之七）：`dict(_EMPTY_BANK)` 只复制了外层——`characters`
+    # 与内层 `meta` 仍是**模块级同一个对象**，于是新建空库会把上一个实例写的条目带进来
+    # （实测：同一进程里先建 A 库再建 B 库，B 一开库就带着 A 的角色；跨运行还可能把别的
+    # 章节的实体当成已存在）。空库是**每个实例一份**状态。
+        self._data: dict = copy.deepcopy(_EMPTY_BANK)
+        #: 本次进程**登记/更新过**的物体名（save 时盖来源 run_id；整库覆盖会让
+        #: "来源"退化成"最后一次写库的人"）
+        self._touched: set = set()
+        #: 本次**新建**的条目（只有它们能盖 `first_run_id`；把 first 盖给老条目
+        #: 等于伪造来源——它明明不是本轮首次登记的）
+        self._created: set = set()
 
     # -- 读写 ----------------------------------------------------------------
 
@@ -54,26 +94,79 @@ class SceneObjectsBank:
                 self._data = loaded
             except (json.JSONDecodeError, OSError) as e:
                 print(f"[bank] 场景物体库读取失败，使用空库: {e}")
-                self._data = dict(_EMPTY_BANK)
+                self._data = copy.deepcopy(_EMPTY_BANK)
         else:
-            self._data = dict(_EMPTY_BANK)
+            self._data = copy.deepcopy(_EMPTY_BANK)
         self._bank_dir.mkdir(parents=True, exist_ok=True)
         return self._data
 
-    def save(self) -> None:
-        """原子写入：先写 .tmp 再 rename，防止写入中断损坏 bank."""
-        self._consolidate_aliases()
-        self._data["meta"]["total_objects"] = len(self._data.get("objects", {}))
-        self._bank_dir.mkdir(parents=True, exist_ok=True)
-        tmp = self._bank_path.with_suffix(".json.tmp")
-        try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, ensure_ascii=False, indent=2)
-            tmp.replace(self._bank_path)
-        except OSError as e:
-            print(f"[bank] 保存场景物体库失败: {e}")
+    def save(self, run_id: str = "", call_ids=None) -> bool:
+        """原子写入：**在候选副本上**盖来源，写盘成功后才确认内存状态、消费本次变更.
 
-    def _consolidate_aliases(self) -> None:
+        `run_id`（2026-10-02 复核）：记下**这一轮的来源身份**——`meta.last_run_id` /
+        `meta.last_written_at`，以及本次新增/更新条目的 `first_run_id` / `last_run_id`。
+        旧库没有这些字段是历史（重构后未重跑），读取方按"缺字段 = 来源未知"处理，
+        这里**不回溯伪造**。
+
+        `call_ids`（复核之七）：这一轮**确实发生**的调用（由台账给出）。条目上记
+        `last_call_ids` 与 `last_source`（`call` / `mechanical`）——**不编造模型调用**。
+
+        **保存边界**（复核之七）：盖来源与写盘都在**副本**上做，成功才换成内存状态并
+        **清空本次变更集合** ⇒ 连续保存不重盖首次来源、未更新条目不被重标；写盘失败时
+        基线一个字节不改、变更集合留着，**后续重试能正确保存**。
+
+        Returns: `True` = 真的写进了盘（调用方据此才可以说"已保存"）。
+        """
+        _rid = str(run_id or "").strip() or _current_run_id()
+        # **副本先建，save 期的三件事全部只在副本上做**（复核 2026-10-02 之八 P1）：
+        # 合并（`_consolidate_aliases`）、统计、来源盖章。旧写法在复制**之前**改内存——
+        # 别名合并已经把两条并成一条时写盘失败：盘上一个字节没变，内存却少了一条，
+        # 调用方接着按内存跑（读到的"事实"与盘上不一致，重试也补不回来）。
+        _cand = copy.deepcopy(self._data)
+        self._consolidate_aliases(_cand)
+        _cand["meta"]["total_objects"] = len(_cand.get("objects", {}))
+        if _rid:
+            self._stamp_run_id(_cand, _rid, call_ids)
+        # **统一失败出口**（复核 2026-10-02 之九 P2）：目录创建、临时写入、替换三步里，
+        # 原来只有后两步在异常边界内——注入目录创建失败（父路径被文件占住 / 只读）时
+        # 直接抛 `OSError`，调用方拿到的是异常而不是 `False`，"失败保留基线、可重试"
+        # 这条约定在**第一步**就断了。现在三步同一边界，且写盘统一走
+        # `shared.json_io.atomic_dump_json`（它正是"写临时文件 + 替换 + 失败清理"的共享
+        # 实现；临时文件名 `<path>.tmp` 与本模块原来拼的逐字相同）。
+        try:
+            self._bank_dir.mkdir(parents=True, exist_ok=True)
+            from shared.json_io import atomic_dump_json
+            atomic_dump_json(self._bank_path, _cand, ensure_ascii=False, indent=2)
+        except (OSError, ValueError, TypeError) as e:
+            print(f"[bank] 保存场景物体库失败（**盘上文件原样保留**，本次变更待重试）: {e}")
+            return False
+        self._data = _cand
+        self._touched.clear()
+        self._created.clear()
+        return True
+
+    def _stamp_run_id(self, data: dict, run_id: str, call_ids=None) -> dict:
+        """把来源记到**副本** `data` 的 meta 与本次登记过的条目上（不改 `self._data`）."""
+        data.setdefault("meta", {})["last_run_id"] = run_id
+        try:
+            from datetime import datetime
+            data["meta"]["last_written_at"] = datetime.now().isoformat(timespec="seconds")
+        except Exception:
+            pass
+        _cids = [str(c) for c in (call_ids or []) if str(c or "").strip()]
+        for _k in self._touched:
+            _o = data.get("objects", {}).get(_k)
+            if not isinstance(_o, dict):
+                continue
+            # 既有首次来源不得覆盖（复核之七）
+            if _k in self._created and not str(_o.get("first_run_id") or "").strip():
+                _o["first_run_id"] = run_id
+            _o["last_run_id"] = run_id
+            _o["last_call_ids"] = _source_call_ids(_cids, _o.get("last_call_ids"))
+            _o["last_source"] = "call" if _cids else "mechanical"
+        return data
+
+    def _consolidate_aliases(self, data: dict | None = None) -> list:
         """同物异名合并（2026-09-12 根因修复）：≤2 字泛名是某长名的子串 → 折叠.
 
         LLM 抽取会把同一实体注册两条并给出互相矛盾的尺寸（实测：「舟」长5.5米
@@ -81,8 +174,17 @@ class SceneObjectsBank:
         帧描述出现两套打架的船体规格。折叠规则：泛名降级为长名条目的
         consistent_term；尺寸取「长宽齐全」的一侧（更完整推导优先），缺项互补；
         章节取 min/max。幂等，每次 save 归一。
+
+        `data`（复核 2026-10-02 之八 P1）：**在传入的那份上合并**（save 传的是候选
+        副本）；缺省仍是 `self._data`（兼容既有调用）。被合并到的目标条目**内容被改过**
+        ⇒ 逐个记进本次变更集合（`_touched`），来源才会盖在它身上——旧写法只标记了
+        调用方登记过的名字，合并出来的目标漏标。
+
+        Returns: 本次被合并到的目标条目名（保序、去重）。
         """
-        objects = self._data.get("objects", {})
+        _target = self._data if data is None else data
+        objects = _target.get("objects", {})
+        _merged: list = []
         folded = True
         while folded:
             folded = False
@@ -112,8 +214,13 @@ class SceneObjectsBank:
                     _l.get("first_chapter", 9999), _s.get("first_chapter", 9999))
                 _l["last_chapter"] = max(
                     _l.get("last_chapter", 0), _s.get("last_chapter", 0))
+                # 目标条目**内容变了** ⇒ 变更标记（来源盖章按它走）
+                self._touched.add(target)
+                if target not in _merged:
+                    _merged.append(target)
                 folded = True
                 break
+        return _merged
 
     # -- 查询 ----------------------------------------------------------------
 
@@ -157,12 +264,15 @@ class SceneObjectsBank:
             terms.update(obj.get("consistent_terms", []) or [])
             existing["consistent_terms"] = sorted(terms)
             existing["last_chapter"] = max(existing.get("last_chapter", 0), chapter_num)
+            self._touched.add(ident)
         else:
             entry = dict(obj)
             entry.setdefault("first_chapter", chapter_num)
             entry["last_chapter"] = chapter_num
             entry["consistent_terms"] = list(entry.get("consistent_terms", []) or [])
             self._data["objects"][ident] = entry
+            self._touched.add(ident)
+            self._created.add(ident)
 
         self._data["meta"]["last_updated_chapter"] = max(
             self._data["meta"]["last_updated_chapter"], chapter_num

@@ -38,6 +38,8 @@
 """
 from __future__ import annotations
 
+import copy
+import json
 import re
 
 from step01_script_gen.timecode import (MIN_SHOT_DURATION, _estimate_duration,
@@ -126,10 +128,500 @@ def dialogue_seconds(lines) -> float:
     return round(sum(_estimate_duration(s) for s in lines), 2)
 
 
-def beats_floor_seconds(plan: dict | None) -> float:
-    """节拍的画面下界：每个节拍至少要占 `MIN_SHOT_DURATION` 秒."""
-    n = len([b for b in ((plan or {}).get("shot_beats") or []) if str(b or "").strip()])
-    return round(n * float(MIN_SHOT_DURATION), 2)
+#: 计划里的**编号旁白条目**字段（2026-09-30 复核第 6 轮裁决：旁白是第三种承载方式）.
+#: 条目形如 `{"text": 原文叙述原句, "source": 同一句（出处）, "fact_refs": [F序号…]}`，
+#: 序号即 `N1..Nn`；承载写成 `B2/旁白1`。**不把叙述伪装成人物对白**：旁白条目单独成表，
+#: 与 `dialogue_lines`（人物说出口的话）互不混用。
+NARRATION_LINES_FIELD = "narration_lines"
+
+
+def plan_narration_entries(plan) -> list:
+    """计划里的编号旁白条目（非对象/空文本一律丢弃，不做补全）.
+
+    与 `plan_dialogue_lines` 同口径：异常输出当"没有可用旁白"处理，缺什么由判定层
+    fail-closed 停止，不在这里补内容。
+    """
+    values = (plan or {}).get(NARRATION_LINES_FIELD)
+    if not isinstance(values, list):
+        return []
+    out: list = []
+    for x in values:
+        if not isinstance(x, dict):
+            continue
+        _t = str(x.get("text") or "").strip()
+        if not _t:
+            continue
+        out.append({"text": _t,
+                    "source": str(x.get("source") or "").strip(),
+                    "fact_refs": _strict_fact_refs(x.get("fact_refs"))})
+    return out
+
+
+def narration_seconds(entries) -> float:
+    """旁白的发声总时长——与对白**共用**同一估算器（复核第 6 轮第 2 项）.
+
+    旁白与画面**同时发生**（不额外加镜头），但它的发声时间必须进预算：否则模型写的
+    旁白在成片里会被视频时长截掉。
+    """
+    _items = entries if isinstance(entries, list) else plan_narration_entries(entries)
+    return round(sum(_estimate_duration(str(e.get("text") or "")) for e in _items), 2)
+
+
+#: 声音条目的两种来源（计划里**要被人念出来**的内容）：人物台词 Dk 与图外旁白 Nk。
+#:
+#: 2026-09-30 复核第 7 轮：「先统一『声音条目 → 镜头或连续片段』的表示，让计划、
+#: 编号变换、预算、生成验收和音轨消费共用」。此前每层各留一套假设——预算按两张表
+#: 各算各的、生成验收一层按 `plan_refs.lines` 核台词、另一层按节拍载体核旁白、
+#: 音轨消费只认 `shots[].narration_segment`——同一条声音在不同层有不同身份，
+#: 于是出现「计划判可行（可拆两段）、终检却要求整条落在某一个镜头里」。
+VOICE_KIND_DIALOGUE = "dialogue"
+VOICE_KIND_NARRATION = "narration"
+
+
+def _strict_fact_refs(raw) -> list:
+    """旁白 `fact_refs` 的**严格**读数：只认真正的整数（`bool`/浮点/字符串一律不收）.
+
+    2026-09-30 复核第 7 轮 P2：「浮点数和布尔值还会被转成整数引用」——`int(True)==1`、
+    `int(2.0)==2`、`int("2")==2` 会把**写错类型**静默变成「引用了另一条事实」。
+    类型非法由 `_narration_field_problems` 显式报错；这里只保证**不伪造引用**。
+    """
+    if not isinstance(raw, list):
+        return []
+    return [int(x) for x in raw
+            if isinstance(x, int) and not isinstance(x, bool)]
+
+
+def plan_voice_entries(plan) -> list:
+    """计划里的**声音条目**（对白 Dk + 图外旁白 Nk）——**统一表示，单源**.
+
+    返回 `[{kind, index, id, text, source, fact_refs, beats}]`（对白在前，各按编号升序）：
+
+    - `kind`：`"dialogue"` / `"narration"`；`index` 从 1 起（`id` = `D1` / `N1`）；
+    - `text`：**逐字原文**（对白是人说出口的话，旁白是原文叙述句）；
+    - `source` / `fact_refs`：只有旁白有（对白恒为 `""` / `[]`）；
+    - `beats`：**承载它的节拍号**（升序；空表 = 无人承载，由承载关系门报）。
+
+    承载关系是「节拍 → 声音条目」这一条边的**唯一读数**：`载体：台词k` 指向 Dk、
+    `载体：旁白k` 指向 Nk。一条节拍**只能**有一个载体，所以一条声音可以由**多条
+    连续节拍**接力（旁白跨镜连续播放），也可以只落在一条节拍上（由该节拍展开的
+    多个镜头连续讲完）——两种写法在本表示里是同一件事：`beats` 列表。
+    """
+    if not isinstance(plan, dict):
+        return []
+    entries: list = []
+    for _i, _t in enumerate(plan_dialogue_lines(plan), 1):
+        entries.append({"kind": VOICE_KIND_DIALOGUE, "index": _i, "id": "D%d" % _i,
+                        "text": _t, "source": "", "fact_refs": [], "beats": []})
+    for _i, _e in enumerate(plan_narration_entries(plan), 1):
+        entries.append({"kind": VOICE_KIND_NARRATION, "index": _i, "id": "N%d" % _i,
+                        "text": _e["text"], "source": _e["source"],
+                        "fact_refs": list(_e.get("fact_refs") or ()), "beats": []})
+    _index = {(e["kind"], e["index"]): e for e in entries}
+    for _b, _bt in enumerate((plan.get("shot_beats") or []), 1):
+        _kind, _k = BeatRecord.parse(str(_bt)).carrier()
+        _ent = _index.get((_kind, _k)) if _k else None
+        if _ent is not None:
+            _ent["beats"].append(_b)
+    return entries
+
+
+def voice_seconds(entries, kind=None) -> float:
+    """声音条目的发声时长合计（对白与旁白**共用同一估算器**，可按种类分账）."""
+    _items = entries if isinstance(entries, list) else plan_voice_entries(entries)
+    return round(sum(_estimate_duration(str(e.get("text") or ""))
+                     for e in _items
+                     if kind is None or e.get("kind") == kind), 2)
+
+
+def voice_units(plan, shots) -> list:
+    """声音条目 → **镜头或连续片段**（成片里的实际落点）——生成验收与音轨消费共用.
+
+    每条返回 `{kind, index, id, text, source, fact_refs, start_shot, end_shot,
+    shot_indexes, n_shots}`：
+
+    - **起点** = 声明承载它的镜头里**第一个有文本的**那一镜（对白还可由
+      `plan_refs.lines` 直接声明，与节拍承载取并集）；前导空镜（建立镜）合法——
+      与台词侧「锚在真的说这句的那一镜」同口径 ⇒ 它是 `start_shot` 而不是
+      `declared_shot`（后者是**完整镜头坐标**里最早声明承载节拍的那一镜，可能为空镜）；
+    - `shot_indexes` = 从起点起**连续**消费完这条声音文本的镜头序号序列（判据与
+      `_line_span_in_units` 同源：单镜整句包含，或起点对齐 + 跨镜连续分解），
+      **且这些镜头在完整镜头列表里也必须连续**——中间夹一个没有文本的镜头即
+      「空镜中断承载」，落点作废（复核第 8 轮：只在单元序列里连续会放过
+      「第 2、4 镜」这种被切断的形态）；
+      一条旁白因此可以**跨镜连续播放**，一条台词也可以按句末切分跨镜讲完——
+      这正是复核第 7 轮 P1 的缺口：以前旁白在这一层要求「整条落在某一个镜头里」，
+      而计划层的可表示性判据允许按句末切分，两份假设不一致；
+    - 拼不出连续片段时 `shot_indexes` 为空表（调用方各自按自己的判据报错：
+      生成验收报 `plan_refs_*`，音轨消费按「缺音轨必须失败」处理）。
+    """
+    entries = plan_voice_entries(plan)
+    if not entries:
+        return []
+    _shots = [s for s in (shots or []) if isinstance(s, dict)]
+    # **两套坐标并存，不许混用**（复核第 8 轮 P1）：
+    #   镜头坐标 `_shot_pos`：镜头序号 → 在完整镜头列表里的位置（判「连续片段」用）；
+    #   单元坐标 `_unit_pos`：镜头序号 → 在**文本单元序列**里的下标（喂匹配器用）。
+    # 旧实现把镜头坐标直接当单元坐标喂给匹配器：前面有空镜时起点整体偏后 ⇒ 整条旁白
+    # 被误报缺失；中间有空镜时「2、4 镜」在单元序列里相邻 ⇒ 被判成连续。
+    _shot_pos = {str(s.get("index")): i for i, s in enumerate(_shots)}
+    units_raw: list = []
+    _unit_shot: list = []
+    _unit_pos: dict = {}
+    for _s in _shots:
+        _n = str(_s.get("narration_segment") or "").strip()
+        if _n:
+            _unit_pos[str(_s.get("index"))] = len(units_raw)
+            _unit_shot.append(str(_s.get("index")))
+            units_raw.append(_n)
+    _beats = [str(b) for b in ((plan or {}).get("shot_beats") or [])]
+    _decl: dict = {}
+    for s in _shots:
+        sid = str(s.get("index"))
+        r = s.get("plan_refs") if isinstance(s.get("plan_refs"), dict) else {}
+
+        def _mark(_kind, _k):
+            _lst = _decl.setdefault((_kind, _k), [])
+            if sid not in _lst:
+                _lst.append(sid)
+
+        for _raw in (r.get("beats") or []):
+            _b = coerce_ref_index(_raw, "B")
+            if not _b or not 1 <= _b <= len(_beats):
+                continue
+            _kind, _k = BeatRecord.parse(_beats[_b - 1]).carrier()
+            if _k:
+                _mark(_kind, _k)
+        for _raw in (r.get("lines") or []):
+            _d = coerce_ref_index(_raw, "D")
+            if _d:
+                _mark(VOICE_KIND_DIALOGUE, _d)
+    out: list = []
+    for e in entries:
+        _sids = _decl.get((e["kind"], e["index"])) or []
+        _first = _sids[0] if _sids else None
+        _span: list = []
+        # 起点：承载镜头里**第一个有文本的**那一个（前导空镜是合法的「建立镜」，
+        # 与台词侧「锚在真的说出这句的那一镜」同口径）——坐标在这里从镜头坐标
+        # 换成单元坐标。
+        _u0 = next((_unit_pos[_s] for _s in _sids if _s in _unit_pos), None)
+        if _u0 is not None:
+            _hit, _join, _units = _line_span_in_units(e["text"], units_raw, _u0)
+            if _hit:
+                _cand = [_unit_shot[_u] for _u in _units
+                         if 0 <= _u < len(_unit_shot)]
+                # **连续片段按镜头坐标连续**：中间夹一个没有文本的镜头 = 声音被切断
+                # （空镜中断承载）。只在单元序列里连续是不够的——那正是反例 2 的假绿。
+                if _cand and all(_shot_pos[_cand[_i + 1]] == _shot_pos[_cand[_i]] + 1
+                                 for _i in range(len(_cand) - 1)):
+                    _span = _cand
+        out.append({"kind": e["kind"], "index": e["index"], "id": e["id"],
+                    "text": e["text"], "source": e["source"],
+                    "fact_refs": list(e["fact_refs"]),
+                    # 最早声明承载它的那条节拍的镜头（None = 没有任何镜头声明：
+                    # 「无人承载」由覆盖门单独报，与「声明了但文本拼不出来」是两种结论）
+                    "declared_shot": _first,
+                    "start_shot": _span[0] if _span else None,
+                    "end_shot": _span[-1] if _span else None,
+                    "shot_indexes": _span, "n_shots": len(_span),
+                    "est_sec": round(_estimate_duration(e["text"]), 2)})
+    return out
+
+
+#: 省略号折叠（`_source_norm` 与切片映射必须**同一条**正则）
+_ELLIPSIS_RE = re.compile(r"\.{2,}|…{1,}")
+
+#: 分片后要剥掉的**边缘排版符号**（引号/括号/空白）——它们不该进合成文本；
+#: 句末标点（。！？…）**保留**：那是台词的一部分。
+_EDGE_QUOTES = "“”‘’\"'「」『』（）()《》〈〉 	　"
+
+
+def _norm_index_map(text) -> tuple:
+    """`(归一化文本, [归一化下标] → 原文字符下标)`——按归一化位置切原文用.
+
+    与 `_source_norm` **同一套变换、同一顺序**（先折省略号、再删标点与空白），
+    否则切片会与核验口径错位。`_source_norm` 只删字不改序，所以每个归一化字符都能
+    对回一个原文字符（省略号折叠取整段的首字符）。
+    """
+    s = str(text or "")
+    out: list = []
+    idx: list = []
+    i, n = 0, len(s)
+    while i < n:
+        m = _ELLIPSIS_RE.match(s, i)
+        if m:
+            out.append("…")
+            idx.append(i)
+            i = m.end()
+            continue
+        ch = s[i]
+        if ch not in _PUNCT_CHARS and ch not in (" ", "　", "\n"):
+            out.append(ch)
+            idx.append(i)
+        i += 1
+    return "".join(out), idx
+
+
+def shot_voice_entries(shot, plan) -> list:
+    """该镜**声明承载**的声音条目（对白在前、各自按序号升序）——分流的唯一依据.
+
+    对白：该镜 `plan_refs.lines` 直接声明的 ∪ 它声明的节拍所承载的；
+    旁白：由节拍承载（旁白没有 `plan_refs.lines` 一类的直接声明）。
+    """
+    if not isinstance(shot, dict):
+        return []
+    entries = plan_voice_entries(plan)
+    if not entries:
+        return []
+    _index = {(e["kind"], e["index"]): e for e in entries}
+    _beats = [str(b) for b in ((plan or {}).get("shot_beats") or [])]
+    r = shot.get("plan_refs") if isinstance(shot.get("plan_refs"), dict) else {}
+    picked: list = []
+    _seen: set = set()
+
+    def _take(_kind, _k):
+        _e = _index.get((_kind, _k))
+        if _e is not None and (_kind, _k) not in _seen:
+            _seen.add((_kind, _k))
+            picked.append(_e)
+
+    for _raw in (r.get("lines") or []):
+        _d = coerce_ref_index(_raw, "D")
+        if _d:
+            _take(VOICE_KIND_DIALOGUE, _d)
+    for _raw in (r.get("beats") or []):
+        _b = coerce_ref_index(_raw, "B")
+        if not _b or not 1 <= _b <= len(_beats):
+            continue
+        _kind, _k = BeatRecord.parse(_beats[_b - 1]).carrier()
+        if _k:
+            _take(_kind, _k)
+    _order = {VOICE_KIND_DIALOGUE: 0, VOICE_KIND_NARRATION: 1}
+    return sorted(picked, key=lambda e: (_order.get(e["kind"], 9), e["index"]))
+
+
+def shot_voice_parts(shot, plan) -> dict:
+    """单镜的**声音分流**：把 `narration_segment` 按结构化声音条目分成对白/旁白.
+
+    复核第 8 轮 P1：「串行、异步 TTS 与视频提示消费同一份对白／旁白分流结果，
+    不能再把整段 `narration_segment` 当对白文本」。三种消费方（step02 视频提示、
+    step03 串行/异步 TTS）都从这里取，判据只有一份。
+
+    返回 `{"dialogue", "narration", "prefix", "entries", "split_ok"}`：
+
+    - `prefix` = 说话人前缀（音色识别要用，**不进**合成文本）；
+    - 该镜的每个条目在正文里按**归一化位置**定位并切片（长台词跨镜拆分时只取本镜
+      实际消费的那一段，不是整条）；
+    - 定位不成序（净化替换 / 跨镜形态异常）⇒ `split_ok=False` 且**不丢内容**
+      （整段归给它承载的第一类），交调用方告警；这种形态上游生成验收本来就会拒收。
+
+    计划**没有声音条目**（旧稿/无契约）时两个正文都是空串、`entries` 为空，
+    调用方回退历史口径——不静默改变无契约稿的行为。
+    """
+    out = {"dialogue": "", "narration": "", "prefix": "", "entries": [],
+           "split_ok": True}
+    seg = str((shot or {}).get("narration_segment") or "").strip()
+    if not seg:
+        return out
+    entries = shot_voice_entries(shot, plan)
+    if not entries:
+        return out
+    _pfx, body = _split_speaker_prefix(seg)
+    out["prefix"], out["entries"] = _pfx, entries
+    norm_body, idx = _norm_index_map(body)
+    found: list = []          # [(起始归一化下标, 结束, 条目)]
+    missing: list = []
+    for e in entries:
+        _ne = _source_norm(str(e.get("text") or ""))
+        _p = norm_body.find(_ne) if _ne else -1
+        if _p >= 0:
+            found.append((_p, _p + len(_ne), e))
+        else:
+            missing.append(e)
+
+    def _raw(_a, _b):
+        """按归一化区间切原文（切到**原始边界**，句末标点不丢；两端排版符号剥掉）."""
+        _s = idx[_a] if _a < len(idx) else len(body)
+        _t = idx[_b] if _b < len(idx) else len(body)
+        return body[_s:_t].strip(_EDGE_QUOTES), _t
+
+    if not missing:
+        # **按正文里的实际位置**排序与核验——**不预设「对白在前、旁白在后」**：顺序
+        # 假设只属于排版，不属于切片。旧实现按 kind 排序后要求位置非降，旁白句写在
+        # 对白句之前（合法写法）就会判 `split_ok=False`，随后整段归给对白 ⇒ 同一条
+        # 旁白被对白轨与旁白轨各合成一次、合并时叠着播（复核第 8 轮确认的真缺陷）。
+        found.sort(key=lambda x: x[0])
+        _cnorm = 0                    # 游标在**归一化坐标**里走（`_a`/`_b` 都是归一化下标）
+        _ok = True
+        for _a, _b, e in found:
+            if _a < _cnorm:           # 重叠（例如旁白正文包含对白句）：分不干净，走降级
+                _ok = False
+                break
+            _piece, _ = _raw(_a, _b)
+            out[e["kind"]] += _piece
+            _cnorm = _b
+        if _ok:
+            return out
+        found = []
+        missing = list(entries)
+
+    if found and len({e["kind"] for e in missing}) == 1:
+        # 有定位不到的条目：用**已知切片之间的空缺**回填给那一类——绝不把整段丢给对白
+        # （那正是「旁白被对白轨念一遍、旁白轨再念一遍」的来源）。
+        _mk = missing[0]["kind"]
+        _known = sorted(found, key=lambda x: x[0])
+        _cnorm = 0                    # 同上：归一化坐标
+        _ok = True
+        for _a, _b, e in _known:
+            if _a < _cnorm:
+                _ok = False
+                break
+            if _a > _cnorm:
+                _gap, _ = _raw(_cnorm, _a)
+                out[_mk] += _gap
+            _piece, _ = _raw(_a, _b)
+            out[e["kind"]] += _piece
+            _cnorm = _b
+        if _ok:
+            if _cnorm < len(idx):
+                _tail, _ = _raw(_cnorm, len(idx))
+                out[_mk] += _tail
+            return out
+
+    # 两道都失败（条目文本在本镜文本里一个都定位不到 / 互相重叠）：降级 + 显式标记。
+    # 调用方必须看得见——`gen_narration_tts` 会**拒绝**这种镜头的旁白，宁可不生成，
+    # 也不产出一条会被对白轨重复念的音轨。
+    out["split_ok"] = False
+    if any(e["kind"] == VOICE_KIND_DIALOGUE for e in entries):
+        out["dialogue"] = body
+    else:
+        out["narration"] = body
+    return out
+
+
+def shot_needs_dialogue_track(shot, plan) -> bool:
+    """该镜**应该**有一条对白 TTS 轨吗——与生成器（`gen_shot_tts`）**同一判据**.
+
+    复核第 8 轮视角扫描实测：收尾核对与缺轨检查若仍用标点启发式 `has_dialogue`，那么
+    「纯旁白镜、正文里带引号」会让两道检查都判「缺对白轨」而整章失败——而生成器按
+    结构化分流根本不会为它产出音轨。判据必须只有一份。
+    """
+    parts = shot_voice_parts(shot, plan)
+    if parts["entries"]:
+        return bool(parts["dialogue"].strip())
+    from shared.dialogue import has_dialogue
+    return has_dialogue(str((shot or {}).get("narration_segment", "")).strip())
+
+
+def layout_voice_entries(units, windows_by_shot, durations=None,
+                         occupied=None) -> tuple:
+    """声音条目 → **最终时间轴上的播放区间**（顺序、重叠、可用时长一并核）.
+
+    复核第 8 轮 P1：「两条顺序旁白在音轨落点表中都得到 start=5.0，随后会同时播放」
+    ——「在哪些镜头」解决不了「镜内何时开始、按什么顺序」。排版规则（确定性、单源）：
+
+    - **顺序** = 对白在前、各自按序号升序（D1..Dn，N1..Nn）；同一镜内的多条声音按此
+      顺序**依次**播放，前一条把**它覆盖的每个镜头**的可用起点都往后推 ⇒ 不重叠；
+    - 每条的可用时长 = 从它的起点到**承载片段末镜**的窗口终点；排不进 ⇒ 报
+      「可用时长不足」，**不截句**、不静默重叠。
+
+    `windows_by_shot` = `{镜头序号: (start, end)}`：step04 用真实 `clip_windows`；
+    step03 用计划 `duration_sec` 累加出的窗口——两处**同一份排版规则**。
+    `durations` = `{声音 id: 秒}`：**手上已有真实音轨时（step04）必须传它**——用
+    `_estimate_duration(text)` 的估时（±20%）排出来的时间轴，同镜两条旁白仍可能小幅重叠。
+    `occupied` = `{声音 id: [(start, end), …]}`：**已经由调用方确定的播放区间**（对白轨
+    从每个承载镜的窗口起点开始播）——直接登记为已占、不由排版决定其起点。这样「排版用的
+    占用区间」与「实际播放的音轨」**逐条对应**：一条对白跨 N 镜就有 N 条物理音轨，
+    每条计一次（2026-10-01 复核：只算第一条会让旁白提前进入后面的对白区间）。
+    返回 `(tracks, problems)`；`tracks` 每项含 `start/end/dur/order_in_shot`。
+    """
+    tracks: list = []
+    problems: list = []
+    # **全局已占区间**（不是「按镜头记游标」）：前一条可能**跨镜**播放，序号更小、
+    # 起点更早的后一条若只看自己起点那个镜头的游标，就会排进已被占用的时间段——
+    # 同镜与跨镜必须一视同仁（视角扫描实测：N2 跨 1-2 镜时 N1 仍排在区间内，重叠
+    # 1.00s 而 problems 为空）。
+    _busy: list = []
+    _order = {VOICE_KIND_DIALOGUE: 0, VOICE_KIND_NARRATION: 1}
+    _units = sorted(units or [],
+                    key=lambda x: (_order.get(x.get("kind"), 9), x.get("index") or 0))
+    for u in _units:
+        # ① 已确定的播放区间（对白轨）先全部登记为已占——排版顺序保证对白在前
+        _fixed = list((occupied or {}).get(u.get("id")) or [])
+        if _fixed:
+            for _iv in _fixed:
+                _busy.append((float(_iv[0]), float(_iv[1])))
+            _busy.sort()
+            continue
+        run = list(u.get("shot_indexes") or [])
+        if not run:
+            continue
+        w0 = windows_by_shot.get(run[0])
+        w1 = windows_by_shot.get(run[-1]) or w0
+        if not w0:
+            continue
+        # 时长必须先算：推起点要用**本条**的时长判断区间是否重叠（用上一轮的残留值
+        # 会让「从 0 开始的 3 秒旁白」压进已被占的 [2.0,3.2] 而不报错）。
+        dur = float(((durations or {}).get(u.get("id"))) or u.get("est_sec") or 0)
+        start = float(w0[0])
+        _pushed = True
+        while _pushed:                 # 推到不与任何已排布区间重叠为止
+            _pushed = False
+            for _s0, _e0 in _busy:
+                # **区间重叠**（不是「起点落进区间」）：跨镜旁白占着 [2.0,3.2] 时，
+                # 另一条从 0 开始的 3 秒旁白同样与它重叠——只看起点会漏掉这种形态。
+                if start < _e0 and start + dur > _s0:
+                    start = _e0
+                    _pushed = True
+        # 该条之前有几条**从同一镜开始**（排版顺序的可读读数）
+        _order_in_shot = sum(1 for t in tracks if t["shot_indexes"][0] == run[0])
+        avail = float(w1[1]) - start
+        if dur and avail + 1e-6 < dur:
+            problems.append(
+                "%s「%s…」排不进承载片段：起点 %.2fs、可用 %.2fs < 需要 %.2fs"
+                "（同一镜内排在它前面的声音占掉了时间）——请减少内容或调整镜头，不截句"
+                % (u.get("id"), str(u.get("text"))[:16], start, avail, dur))
+        tracks.append({"kind": u.get("kind"), "index": u.get("index"), "id": u.get("id"),
+                       "text": u.get("text"), "source": u.get("source"),
+                       "shot_indexes": run, "order_in_shot": _order_in_shot,
+                       "start": round(start, 3), "end": round(start + dur, 3),
+                       "dur": dur})
+        _busy.append((start, start + dur))
+        _busy.sort()
+    return tracks, problems
+
+
+def beats_floor_basis(plan: dict | None) -> dict:
+    """节拍的**内容读数**（按承载方式分账）——⚠️ **不构成时间下界**（第 16 轮复核）.
+
+    分账口径（与事件顺序判据同一份承载语义）：
+      - `voice`：`载体：台词k／旁白k` 的节拍，与那段声音**同时发生**，时间已计入
+        发声预算（`dialogue_sec` / `narration_sec`）；
+      - `visual`：`载体：画面` 的节拍；
+      - `unlabeled`：没标 / 非法载体的节拍。
+
+    **为什么不乘 `MIN_SHOT_DURATION` 当画面下界**（2026-10-01 复核第 16 轮，反例：
+    9 镜 × 10 秒、每镜 4 个画面节拍 + 1 个对白节拍的稿事件契约通过，却被判"至少
+    108 秒"）：生成契约明写「**节拍数 ≠ 镜头数**：每个节拍通常展开为 2-4 个镜头……
+    **镜数由时长预算决定，不由节拍数决定**」（`prompts.render_execution_contract`），
+    `timecode` 的镜头时长也由**文本与 motion_desc** 推出（`_duration_for_text`）——
+    全链路没有一处按"节拍"分配时间。所以"节拍数 × 3 秒"既不是下界也不是上界，它是把
+    **表达方式**（模型写了几个节拍）当成了"独占几个时间段"。一条节拍到底独占多少时间，
+    只能看它**实际被哪些镜承载**（在生成稿里），计划层无从判断——所以计划层的下界只
+    取**发声预算**那一条有真实估算器的量。
+    """
+    visual = voice = unlabeled = 0
+    for _b in ((plan or {}).get("shot_beats") or []):
+        if not str(_b or "").strip():
+            continue
+        _kind, _k = BeatRecord.parse(str(_b)).carrier()
+        if _kind in ("dialogue", "narration"):
+            voice += 1
+        elif _kind == "visual":
+            visual += 1
+        else:
+            unlabeled += 1
+    return {"visual": visual, "voice": voice, "unlabeled": unlabeled,
+            "beats": visual + voice + unlabeled}
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +634,7 @@ def _source_norm(text) -> str:
     再删标点，最后把 `§` 还原成单字符省略号。反过来的话 `…` 会在删标点阶段就没了
     （与 `validation._check_grounding` 08-17 修掉的那个 bug 同源，这里按同一顺序）。
     """
-    s = re.sub(r"\.{2,}|…{1,}", "§", str(text or ""))
+    s = _ELLIPSIS_RE.sub("§", str(text or ""))
     for p in _PUNCT_CHARS:
         s = s.replace(p, "")
     return s.replace("§", "…").replace(" ", "").replace("　", "").replace("\n", "")
@@ -154,8 +646,13 @@ def source_contains(novel_text: str, line: str) -> bool:
     return bool(n) and n in _source_norm(novel_text)
 
 
-def verify_dialogue_lines(lines, novel_text: str) -> tuple:
-    """逐句核验选用台词；返回 `(kept, rejected)`，`rejected` 每项带原因.
+def verify_dialogue_lines_indexed(lines, novel_text: str) -> tuple:
+    """逐句核验选用台词并**保留原序号**；返回 `(kept, rejected)`.
+
+    工作包 §2.2：D/N 身份由**生产者在遍历时**给出——`kept` 每项 `{"index": k,
+    "line": s}`，`k` 是传入序列里 1 起的**原序号**（重复句子各占各的序号，
+    不用 set / 首次文本匹配决定保留哪条）。`rejected` 与旧接口同形。
+    以下为原判据说明：
 
     与 `validation._check_grounding` 的差别是**判据强度**：那边是"5 字滑窗命中"（旁白是
     改写过的叙述，不能要求整句逐字），这边是"整句包含"——选用台词按契约就是**逐字摘录**，
@@ -169,7 +666,7 @@ def verify_dialogue_lines(lines, novel_text: str) -> tuple:
     """
     novel_norm = _source_norm(novel_text)
     kept, rejected = [], []
-    for s in lines:
+    for _i, s in enumerate(lines, 1):
         _forms = [s]
         # v6.138（九审 P1-3）：只有**真正的说话人前缀**（短且无子句标点）才容忍
         # 非逐字——"且慢，我告诉你：你先走。"的冒号前段是台词正文，不得丢掉再核
@@ -177,12 +674,20 @@ def verify_dialogue_lines(lines, novel_text: str) -> tuple:
         if _body.strip() and _body != s:
             _forms.append(_body)
         if any(_source_norm(f) and _source_norm(f) in novel_norm for f in _forms):
-            kept.append(s)
+            kept.append({"index": _i, "line": s})
         else:
-            rejected.append({"line": s,
+            # 复核第 40 轮：**拒收条目也要有身份**——此前只有通过条目带原序号，
+            # 下游只能靠文本回找位置（重复句子必然指错）。
+            rejected.append({"index": _i, "line": s,
                              "reason": "原文中未逐字找到"
                              if _source_norm(s) else "归一化后为空（只有标点/空白）"})
     return kept, rejected
+
+
+def verify_dialogue_lines(lines, novel_text: str) -> tuple:
+    """兼容转发：`(kept, rejected)`，`kept` 是字符串清单（由带序号的版本渲染）."""
+    _kept, rejected = verify_dialogue_lines_indexed(lines, novel_text)
+    return [x["line"] for x in _kept], rejected
 
 
 # ---------------------------------------------------------------------------
@@ -593,40 +1098,49 @@ def _line_forms(line: str) -> list:
     return out
 
 
-def _line_hit_in_units(line: str, units_raw: list, start: int | None = None) -> tuple:
-    """台词是否逐字落在镜头旁白序列里 → `(hit, joinable)`.
+def _line_span_in_units(line: str, units_raw: list, start: int | None = None) -> tuple:
+    """台词/旁白在镜头旁白序列上的**落点** → `(hit, joinable, span)`.
 
-    **单一实现**：整稿台词门（`start=None`，任一起点）与事件履约契约的按镜核验
-    （`start=k`，只许从声明那一镜起算）共用本函数。抽出来是因为 2026-09-27 复核指出的
-    假绿——「shot 1 声明 D1、shot 2 才说 D1」两门都能过：整稿门只证明 D1 **在某处**，
-    而契约门当时只核编号范围/顺序。修它必须让两门**同一个判据**，复制一份必然漂移。
+    **单一实现**：整稿台词门（`start=None`，任一起点）、事件履约契约的按镜核验
+    （`start=k`，只许从声明那一镜起算）、以及「声音条目 → 镜头或连续片段」的落点计算
+    （`voice_units`，音轨排版与时长核算用它）共用本函数。抽出来是因为 2026-09-27 复核
+    指出的假绿——「shot 1 声明 D1、shot 2 才说 D1」两门都能过：整稿门只证明 D1 **在
+    某处**，而契约门当时只核编号范围/顺序。修它必须让两门**同一个判据**，复制一份
+    必然漂移；2026-09-30 复核第 7 轮又因为「旁白落点」各写一份，出现「计划判可行、
+    终检要求整条在一个镜头里」。
 
     判据（与 v6.135 硬门逐字一致，未放宽也未收紧）：
-    - `hit①`：某形态**整句包含**在某个镜头的旁白形态里；
+    - `hit①`：某形态**整句包含**在某个镜头的旁白形态里 → `span` 只有那一镜；
     - `hit②`：跨镜**连续**分解——起点镜旁白从头对齐且句末完整 → 中间镜整镜消费且句末
-      完整 → 末镜可只消费前缀。
-    `joinable` 只用于失败分类（`cross_shot_split` vs `not_found`），不参与命中判定。
+      完整 → 末镜可只消费前缀 → `span` 是这一段**连续**镜头下标。
+    `joinable` 只用于失败分类（`cross_shot_split` vs `not_found`），不参与命中判定；
+    未命中时 `span` 为空表。
     """
     unit_forms_full = [_match_forms(u) for u in units_raw]
     unit_forms_body = [_match_forms(_speaker_body(u)) for u in units_raw]
-    flat_unit_forms = [f for pair in (unit_forms_full + unit_forms_body) for f in pair]
-    body_plain = [p[-1] for p in unit_forms_body]
-    body_sanitized = [p[0] for p in unit_forms_body]
+    # 防空：只有标点/空白的镜头旁白归一化后为空 → `_match_forms` 返回空表。
+    # 调用方（`voice_units` / 台词门）本来就不该把空镜头塞进来，但门自身不能炸
+    # （准则 7：显式失败可以，静默崩不行）。
+    body_plain = [(p[-1] if p else "") for p in unit_forms_body]
+    body_sanitized = [(p[0] if p else "") for p in unit_forms_body]
     n = len(units_raw)
-    _starts = list(range(n)) if start is None else [int(start)]
+    _s0 = None if start is None else int(start)
+    _starts = list(range(n)) if _s0 is None else [_s0]
     hit = False
     joinable = False
+    span: list = []
     # `start` 给定时，命中必须**锚在该镜**：hit① 只看该镜的旁白形态（不能扫全稿——
     # 那正是「shot 1 声明 D1、shot 2 才说 D1」能溜过的路径），hit② 的起点也钉在该镜。
-    _hit1_forms = (flat_unit_forms if start is None
-                   else ([f for f in (unit_forms_full[start] + unit_forms_body[start])
-                          if f] if 0 <= start < n else []))
+    _hit1_units = (list(range(n)) if _s0 is None
+                   else ([_s0] if 0 <= _s0 < n else []))
     for nf in _line_forms(line):
         if hit:
             break
         # ① 单镜包含
-        if any(nf in u for u in _hit1_forms):
-            return True, False
+        for _u in _hit1_units:
+            _forms = unit_forms_full[_u] + unit_forms_body[_u]
+            if any(_f and nf in _f for _f in _forms):
+                return True, False, [_u]
         # ② 跨镜整段拼接（`start` 限定起点镜）；净化/原样两套连贯形态都试
         for bodies in (body_sanitized, body_plain):
             if hit:
@@ -647,6 +1161,7 @@ def _line_hit_in_units(line: str, units_raw: list, start: int | None = None) -> 
                     cand = acc + bodies[j]
                     if cand == nf:
                         hit = True
+                        span = list(range(i, j + 1))
                         break
                     if nf.startswith(cand):
                         if not _ends_sentence(_speaker_body(units_raw[j])):
@@ -656,13 +1171,48 @@ def _line_hit_in_units(line: str, units_raw: list, start: int | None = None) -> 
                         continue
                     if cand.startswith(nf):
                         hit = True  # 台词在末镜前缀内结束（末镜句首对齐）
+                        span = list(range(i, j + 1))
                         break
                     break
                 if hit:
                     break
             if hit:
                 break
-    return hit, joinable
+    return hit, joinable, span
+
+
+def _line_hit_in_units(line: str, units_raw: list, start: int | None = None) -> tuple:
+    """`_line_span_in_units` 的命中读数（薄包装：既有调用点不改口径）."""
+    _hit, _joinable, _span = _line_span_in_units(line, units_raw, start)
+    return _hit, _joinable
+
+
+def _line_offset_in_units(line: str, units_raw: list, start: int) -> tuple:
+    """台词**落点读数** → `(hit, 该镜内的起点偏移)`；存在性与顺序**共用同一次匹配**.
+
+    为什么必须共用（第 17 轮复核 P1-①）：存在性走 `_line_hit_in_units`（容忍标点、
+    说话人前缀、合规净化对齐），顺序却用生 `str.find` ——**换标点或换说话前缀**，一个门
+    说"在"、另一个说"找不到"，于是正文里 D2 先说、D1 后说的**逆序被静默放过**
+    （复核实测：原样文字能拦，换标点/前缀则两个门全过）。
+
+    偏移只用于**同一镜内**的相对先后比较（多形态取最小，各形态间的整体位移是同一常数，
+    不改相对序）。
+    """
+    _hit, _ = _line_hit_in_units(line, units_raw, start=start)
+    if not _hit:
+        return False, -1
+    _i0 = int(start)
+    if not 0 <= _i0 < len(units_raw):
+        return True, -1
+    _seg = str(units_raw[_i0])
+    _forms = list(_match_forms(_speaker_body(_seg))) + list(_match_forms(_seg))
+    _best = -1
+    for _lf in _line_forms(line):
+        for _u in _forms:
+            _p = _u.find(_lf)
+            if _p >= 0 and (_best < 0 or _p < _best):
+                _best = _p
+    return True, _best
 
 
 def check_script_dialogue_integrity(script: dict, plan: dict | None) -> tuple:
@@ -775,6 +1325,50 @@ _BEAT_CARRIER_TAG = BEAT_SEG_CARRIER
 _BEAT_CARRIER_DIALOGUE_PREFIX = "台词"
 
 
+#: 编号里允许的数字：**ASCII `0-9`**。模型写全角/上标数字都不是编号——那属于"写法非法"，
+#: 要在**解析边界**返回结构化结果，而不是让 `int()` 的异常一路送出计划层。
+_DIGITS = "0123456789"
+
+
+def safe_decl_int(text):
+    """ASCII 数字串 → `int`；空串 / 含非 ASCII 数字 / 超长 ⇒ `None`（**绝不抛异常**）.
+
+    单源（2026-10-01 复核第 30 轮）：承载声明、节拍载体、区间上下界、`plan_refs` 引用编号、
+    操作编号**共用它**。旧实现各写各的——`str.isdigit()` 对 `²` 也为真（随后 `int()` 抛
+    `ValueError`），4300 位以上的数字串又超出 CPython 的 int 转换上限：两种都会把异常
+    送到调用方，连契约诊断都留不下。
+    """
+    _s = "" if text is None else str(text)
+    if not _s or any(_c not in _DIGITS for _c in _s):
+        return None
+    try:
+        return int(_s)
+    except ValueError:                         # 超长数字串（CPython 的转换上限）
+        return None
+
+
+def parse_beat_carrier(value) -> tuple:
+    """**节拍载体值** → `("visual", None)` / `("dialogue", k)` / `("narration", k)` /
+    `("invalid", None)`；**绝不抛异常**.
+
+    单源（2026-10-01 复核第 30 轮）：`BeatRecord.carrier()` 与操作应用器
+    （`outline._norm_beat_carrier`）共用它。两处各写一份必然漂移——实测操作侧按"数字前缀"
+    截取，模型写的 `new_carrier="台词1-2"` 被**静默**改成 `台词1`，载体关系还被判通过。
+
+    文法（**完整匹配**）：去掉全部空白后恰好是 `画面` / `台词<十进制k>` / `旁白<十进制k>`；
+    其余（`台词1-2`、`台词1、台词2`、`歌词1`、`台词²`、超长数字）一律 `invalid`——载体是
+    **唯一记录**，含糊值等于没声明。`k` 原样返回（是否越界由各调用方按自己的轴判）。
+    """
+    _v = "".join(str(value or "").split())
+    if _v == "画面":
+        return "visual", None
+    for _kind, _tag in (("dialogue", "台词"), ("narration", "旁白")):
+        if _v.startswith(_tag):
+            _k = safe_decl_int(_v[len(_tag):])
+            return (_kind, _k) if _k is not None else ("invalid", None)
+    return "invalid", None
+
+
 class BeatRecord:
     """`shot_beats` 单条节拍的**结构化内部记录**（`parse` ⇄ `render` **逐字往返**）.
 
@@ -878,22 +1472,24 @@ class BeatRecord:
         """
         if not self.has(BEAT_SEG_CARRIER):
             return None, None
-        val = self.get(BEAT_SEG_CARRIER).strip()
-        if val.startswith(_BEAT_CARRIER_DIALOGUE_PREFIX):
-            digits = ""
-            for ch in val[len(_BEAT_CARRIER_DIALOGUE_PREFIX):]:
-                if ch.isdigit():
-                    digits += ch
-                else:
-                    break
-            if digits:
-                return "dialogue", int(digits)
-        return "visual", None
+        # 2026-09-30 复核 P2-1：「取前导数字、其余一律按画面」会**静默改意**——`台词1、台词2`
+        # 被读成只有台词1、`台词X` 被读成画面。现在只认完整匹配的三种写法，其余
+        # `("invalid", None)` 由调用方**显式报错**；「没有登记」仍是 `(None, None)`
+        # （无可核 ≠ 被破坏，口径不变）。
+        # 2026-10-01 复核第 30 轮：文法与数字转换**单源**在 `parse_beat_carrier`
+        # ——它与操作应用器共用（两处各写一份时，操作侧的"数字前缀"截取把
+        # `台词1-2` 静默改成了 `台词1`）。
+        return parse_beat_carrier(self.get(BEAT_SEG_CARRIER))
 
     def set_carrier(self, kind, index=None) -> None:
-        """按 `carrier()` 的取值口径写回载体段（`kind="dialogue"` 需给 `index`）."""
-        self.set(BEAT_SEG_CARRIER,
-                 ("台词%d" % int(index)) if (kind == "dialogue" and index) else "画面")
+        """按 `carrier()` 的取值口径写回载体段（`dialogue`/`narration` 需给 `index`）."""
+        if kind == "dialogue" and index:
+            _txt = "台词%d" % int(index)
+        elif kind == "narration" and index:
+            _txt = "旁白%d" % int(index)
+        else:
+            _txt = "画面"
+        self.set(BEAT_SEG_CARRIER, _txt)
 
     def facts(self) -> list:
         """「事实：F1、F3」→ `[1, 3]`（无该段 → `[]`，旧计划即此形态）.
@@ -954,8 +1550,12 @@ def replan_criteria_version() -> str:
     return _h.hexdigest()[:12]
 
 
-def carrier_relation_problems(beats, n_lines: int) -> tuple:
-    """承载关系验收（**双向闭合**）：返回 `(duplicate, orphan, unlabeled)` 三张清单.
+def carrier_relation_records(beats, n_lines: int, n_narration: int = 0) -> list:
+    """承载关系验收（**双向闭合**）：返回**结构化记录**（工作包 §2.2）.
+
+    `kind` / `index` / `path` 在遍历节拍与声音条目时**当场给出**——报告层不再从
+    `"B3"` / `"D2"` 这类标签串里认编号（旧写法按标签取序号，标签与轴要另判一次）。
+    以下为原判据说明：
 
     2026-09-27 复核：规划层原先只有**单向**检查——「节拍指向已不存在的台词」
     （`beat_carrier_dangling`）。缺的两面是：
@@ -977,7 +1577,7 @@ def carrier_relation_problems(beats, n_lines: int) -> tuple:
     # 重复载体：同一节拍写了**多个**「｜载体：…」段（承载关系不是唯一记录，
     # `carrier()` 只读第一段、后面的被静默忽略）。按**段**判定——不再数字符串里
     # 出现了几次标签（引文里提到「载体：」不算标注）。
-    duplicate = ["B%d" % i for i, r in enumerate(_recs, 1)
+    duplicate = [i for i, r in enumerate(_recs, 1)
                  if r.count(BEAT_SEG_CARRIER) > 1]
     orphan: list = []
     unlabeled: list = []
@@ -985,16 +1585,1491 @@ def carrier_relation_problems(beats, n_lines: int) -> tuple:
         # 计划**带了**标注 ⇒ 承载关系是**唯一且完整**的记录：每条节拍**恰有一个**
         # 载体（2026-09-27 复核：只查「所有台词被别人覆盖」不够——允许部分节拍没有
         # 标注，等于同一份计划里两种口径混用，承载关系不再可判定）。
-        unlabeled = ["B%d" % i for i, r in enumerate(_recs, 1)
-                     if not r.has(BEAT_SEG_CARRIER)]
+        # 「非法载体」（`台词1、台词2` / `台词X` / 未知值）与「没标」一样不可核：
+        # 两者都必须显式失败，而不是被解析器悄悄改意后放行。
+        # 旁白（`载体：旁白k`）是**合法**载体（复核第 6 轮）——它的内容核验在
+        # `plan_contract_problems` / `evaluate_plan`（原文逐字 + 条目存在 + 与事实配对）。
+        unlabeled = [i for i, r in enumerate(_recs, 1)
+                     if r.carrier()[0] not in ("dialogue", "visual", "narration")]
         carried = set()
+        carried_n = set()
         for r in _recs:
             kind, k = r.carrier()
             if kind == "dialogue" and k:
                 carried.add(k)
-        orphan = ["D%d" % i for i in range(1, int(n_lines or 0) + 1)
+            elif kind == "narration" and k:
+                carried_n.add(k)
+        orphan = [("dialogue", i) for i in range(1, int(n_lines or 0) + 1)
                   if i not in carried]
-    return duplicate, orphan, unlabeled
+        # 2026-09-30 复核第 6 轮：旁白是**第二个**可被选中的内容序列，同样必须双向
+        # 闭合——选中了旁白却没任何节拍承载它，成片里没人念，而计划层此前全绿。
+        orphan += [("narration", i) for i in range(1, int(n_narration or 0) + 1)
+                   if i not in carried_n]
+    return _carrier_relation_records(duplicate, unlabeled, orphan)
+
+
+def _carrier_relation_records(duplicate, unlabeled, orphan) -> list:
+    """把承载关系判据的**原始序号**收成六字段记录（判据本身在上一函数里）."""
+    _b = "承载关系：节拍 ↔ 声音条目**双向闭合**（重复载体/孤儿/未标注）"
+    _out = []
+    for _i in duplicate:
+        _out.append(_problem_record(
+            "carrier_duplicate", "beat", _i, "shot_beats[%d].载体" % (_i - 1),
+            "B%d 写了多个「载体：」段——承载关系必须是唯一记录" % _i, _b))
+    for _i in unlabeled:
+        _out.append(_problem_record(
+            "carrier_unlabeled", "beat", _i, "shot_beats[%d].载体" % (_i - 1),
+            "B%d 的载体标注非法或缺席（计划带了承载契约，就必须每条都有）" % _i, _b))
+    for _kind, _i in orphan:
+        _axis = "narration_lines" if _kind == "narration" else "dialogue_lines"
+        _lab = ("N%d" if _kind == "narration" else "D%d") % _i
+        _out.append(_problem_record(
+            "orphan_uncarried", _kind, _i, "%s[%d]" % (_axis, _i - 1),
+            "%s 被选中却没有任何节拍承载它（成片里没人念）" % _lab, _b))
+    return _out
+
+
+def carrier_relation_problems(beats, n_lines: int, n_narration: int = 0) -> tuple:
+    """兼容转发：旧的 `(duplicate, orphan, unlabeled)` 标签清单，由记录渲染."""
+    _recs = carrier_relation_records(beats, n_lines, n_narration)
+
+    def _labels(code):
+        return [("N%d" if r["kind"] == "narration"
+                 else ("D%d" if r["kind"] == "dialogue" else "B%d")) % r["index"]
+                for r in _recs if r["code"] == code]
+    return _labels("carrier_duplicate"), _labels("orphan_uncarried"), \
+        _labels("carrier_unlabeled")
+
+
+# ---------------------------------------------------------------------------
+# 计划契约：必保留事实与钩子的**承载**（2026-09-30 复核裁决）
+#
+# 复核原话：「另做**不依赖 ops 的计划验收函数**，供首版、重选版和缓存版共用。
+# 核对实际节拍正文／信息目的及选用台词，不能靠"原文依据"互抄判事实已表达；
+# `画面`声明也须与节拍实际载体一致。」「在生成前统一入口拒绝缺失或无效的承载，
+# 单独报告 `plan_contract_invalid`；不要把它送进预算重选，也不要报告"需拆集"。」
+#
+# 为什么不塞进 `evaluate_plan` 的 `infeasible`：那条路会触发**预算重选**（换掉次要
+# 内容再试一轮），而缺承载声明是**计划契约未完成**——取舍还没做完，换内容解决不了；
+# 误报「需拆集」更是把「登记信息缺失」说成「故事装不下」。
+# ---------------------------------------------------------------------------
+
+#: 计划契约版本。缓存里的计划**必须**带同一版本才会被复用：旧计划没有承载字段，
+#: 缺的是**登记信息**、不是内容——备份旧缓存后**重新产出首版计划**，
+#: 不能误报「故事不可行」。
+#:
+#: v3（2026-09-30 复核第 4 轮 P2）：新增 `hook_spoken`——「钩子里哪几句必须由角色
+#: 说出口」从**自由文本的猜测**（关键词 + 窗口）改成**显式声明**。旧计划没有这个
+#: 字段 ⇒ 按既有机制备份并重新产出首版计划（不是「故事不可行」）。
+#:
+#: v4（2026-09-30 复核第 6 轮裁决）：新增第三种承载方式**图外旁白**——计划带编号
+#: 旁白条目 `narration_lines`（`N1..Nn`，逐字原文叙述 + 出处 + 承载的事实），承载写作
+#: `Bn/旁白k`；旁白与对白共用发声时长与预算。旧计划没有这个字段 ⇒ 同样备份重生成。
+PLAN_CONTRACT_VERSION = 4
+
+#: 载体**区间**写法（模型自创）：`旁白1-5` / `台词1-2`——含义唯一，是"这一条节拍承载
+#: 旁白1 到 旁白5"的简写。按工作包边界，这属于**表达**：保守规范化把它展开成逐条承载的
+#: 多条节拍，并**同步重映射**所有节拍引用；语义错配（声明了承载、节拍其实不承载）留给规划器。
+_RANGE_CARRIER_RE = re.compile("^(旁白|台词)([0-9]+)-([0-9]+)$")
+
+#: 承载声明的**唯一文法**：`B 2 / 画面`、`B2/台词1`、`B` 与数字之间换行/夹 Unicode 空白
+#: 都算数——容差就是 `str.isspace()` 那一套，与验收解析器过去用的 `decl.split()` **完全同一
+#: 集合**。旧实现另列了一份空白名单（空格+制表符+全角空格），于是 `B 2/画面` 验收接受、
+#: 重映射漏认：**合法**引用 0 问题 → 1 问题，越界的 `B 3/画面` 反过来被展开洗成 0 问题
+#: （第 28 轮复核实测）。名单必然漂移 ⇒ 只留一份扫描器，两边都消费它的结果。
+#: 承载声明的**唯一文法**——与旧的验收解析器**逐字相同**：先按原契约去掉**全部空白**
+#: （`str.split()` 那一套：空格/制表/换行/全角空格/NBSP…），再按
+#: `B<ASCII 数字>/<画面|台词k|旁白k>` 匹配。数字只认 ASCII `0-9`：`B²/画面` 这类一律
+#: **不匹配**（第 29 轮复核：上一版扫描器用 `isdigit()` 放它进来，随后 `int()` 抛
+#: `ValueError` 一路穿过生成前门，连契约诊断都没留下）。验收、旧域核验、重映射
+#: 都消费这里的结果——判据只有一份，位置映射让重映射仍能只改数字那一段。
+_DECL_REF_RE = re.compile("B([0-9]+)/(画面|台词([0-9]+)|旁白([0-9]+))")
+
+
+def _flat_decl_text(text: str) -> tuple:
+    """去掉全部空白 + **位置映射**：`(flat, pos)`，`pos[i]` 是 `flat[i]` 在**原文**里的下标."""
+    _flat, _pos = [], []
+    for _i, _c in enumerate(text):
+        if _c.isspace():
+            continue
+        _flat.append(_c)
+        _pos.append(_i)
+    return "".join(_flat), _pos
+
+
+#: **操作协议支持的键**（工作包 §4 C；**只此一处**，与
+#: `_text_gen/deepseek_schema.REPLAN_OPS_SCHEMA` 的 properties 一致——有测试钉住漂移）。
+#: 语义（每个键"缺席 / 空值 / 非空"三态都要能表达）：
+#:
+#: | 键 | 缺席 | `null` | 空值（`[]`/`""`） | 非空 |
+#: |---|---|---|---|---|
+#: | `dialogue_ops` | 不改 | **非法**（必填键） | `[]` = 不改 | 逐条替换台词 |
+#: | `beat_ops` | 不改 | **非法**（必填键） | `[]` = 不改 | replace / insert_after / split |
+#: | `fact_carriers` | 不改 | **非法**（必填键） | `[]` = 不改（"不改"只能这样表达；<br>整表清空不是合法终态：每条必保留事实都必须有承载） | 逐条声明承载（改台词/节拍时要求**逐项给全**） |
+#: | `hook_carrier` | 不改（可省略） | 不改 | `""` = **清除**承载声明 | 设置（`B2/台词1`，多句用「；」） |
+#: | `hook_spoken` | 不改（可省略） | 不改 | `[]` = **清除**"必须说出口" | 逐句设置（逐字原文） |
+#: | `narration_lines` | 不改（可省略） | 不改 | `[]` = **清空**旁白表 | 整表设置（text/source/fact_refs） |
+#:
+#: `null` 的合法性**由 `required` 决定**：必填键给 `null` 不是"缺席"而是**违反 schema**
+#: （`replan_ops_response_problems` 记 `illegal_response`——复核 2026-10-02 之三 P1）；
+#: 可省略的声明键给 `null` 才是"这一项没有"。**缺席**一律读作「不改」（安全默认）。
+#: **嵌套字段（条目里）另有一条硬规则**（复核 2026-10-02 之四 C）：那里的 `null` **不是**
+#: "不改"、也不许被当默认值读——要"不改"就**省略那个键**；`beat_ops` 的
+#: `op`/`new_text`/`new_carrier`/`parts`、旁白条目的 `text`/`source`/`fact_refs`、
+#: 对象形态 `hook_carrier` 的 `beat`/`mode` 给 `null` 一律 `illegal_response`。
+#: 许可范围由 `REPLAN_NULL_OK_KEYS` + schema 自己声明的 `null` 类型决定（提示同源渲染）。
+DECL_OP_KEYS = ("fact_carriers", "hook_carrier", "hook_spoken", "narration_lines")
+BASE_OP_KEYS = ("dialogue_ops", "beat_ops")
+REPLAN_OP_KEYS = BASE_OP_KEYS + DECL_OP_KEYS
+
+
+#: 声明键的**三态语义（唯一源）**：`键 → (空值是否算"要改", 空值的**模型面说法**)`。
+#: `True` = 出现即"要改"（空值 = **显式清除**）；`False` = 空值只是"没什么可说"（= 不改）。
+#:
+#: 那句**模型面说法**由判据侧**渲染进提示**（`decl_semantics_clause()`），并且必须
+#: **逐字**出现在请求 schema 的对应描述里——两个方向都由守卫用例逐键核对
+#: （复核 2026-10-02 P2：提示把四个键的空值统称"清除"，而 `fact_carriers: []` 的裁决
+#: 是"不改"：**提示与裁决自相矛盾**，模型照着提示写就会写错）。
+#:
+#: **不变量（复核 2026-10-02 P1）**：请求 schema 里 `required` 的键，其空值只能是 `False`
+#: ——模型"没有话可说"时按 schema 填的缺省填充值必须是**安全**的。`hook_carrier` 曾经
+#: 既必填、空串又等于清除：一份**零问题**的计划收到符合当时 schema 形态的"只修事实"
+#: 响应，合法钩子承载被静默清掉，新增 `carrier_hook_unlabeled`。要么把键改成可省略
+#: （省略 = 不改），要么给"清除"一个**非缺省**的显式记号——不能拿缺省值当清除用。
+#: 由守卫用例 `test_plan_phase_c_declaration_ops.py::test_c06_*` / `test_c09_*` 钉住。
+DECL_OP_SEMANTICS = {
+    "fact_carriers": (False, "空数组 = 本批不改承载"),
+    "hook_carrier": (True, "空串 = 清除这个声明"),
+    "hook_spoken": (True, "空数组 = 清除这个声明"),
+    "narration_lines": (True, "空数组 = 清空本集旁白表"),
+}
+
+#: 兼容视图：`{键: 空值是否算"要改"}`（`effective_decl_ops` 直接消费它）。
+DECL_OP_EMPTY_MEANS_CHANGE = {k: v[0] for k, v in DECL_OP_SEMANTICS.items()}
+
+
+def decl_semantics_clause() -> str:
+    """声明键的空值语义渲染成**一句话**——提示里那段"三种写法"由它生成（不手抄）."""
+    return "；".join("`%s` %s" % (_k, DECL_OP_SEMANTICS[_k][1]) for _k in DECL_OP_KEYS)
+
+
+def effective_decl_ops(ops) -> list:
+    """本批**确实要求改动**的声明键（工作包 §4 C：区分"缺席""没什么可说"与"显式清除"）.
+
+    复核第 45 轮实测的缺口：`apply_replan_ops` 只读台词/节拍两类键，只给声明时直接落
+    `no_change`——把"接口表达不了"记成"模型认为无需改动"。这个函数是**判定入口**：
+    只要它非空（或有台词/节拍操作），本轮就必须真正走到应用器。
+
+    - `fact_carriers: []` = 没什么可说（本键必填，"不改"只能这样表达）；
+    - `hook_carrier: ""` / `hook_spoken: []` / `narration_lines: []` = **显式清除**，算要改；
+    - **`null` = 缺席**（不改）：`null` 是模型用来表示"这一项没有"的填充值，与"清除"同形
+      却意思相反——**可省略的**声明键一律按"不改"读（同类静默破坏：`{"narration_lines":
+      null}` 旧实现会清空整张旁白表）。要清除就写**空串/空数组**。
+      必填键（`fact_carriers`）不适用这条：它的 `null` 由 `replan_ops_response_problems`
+      在更早一步判成 `illegal_response`（复核 2026-10-02 之三 P1）。
+    """
+    if not isinstance(ops, dict):
+        return []
+    _out = []
+    for _k in DECL_OP_KEYS:
+        if _k not in ops or ops.get(_k) is None:
+            continue
+        if DECL_OP_EMPTY_MEANS_CHANGE[_k]:
+            _out.append(_k)                  # 出现（哪怕空值）就是要改
+        elif isinstance(ops.get(_k), list) and ops.get(_k):
+            _out.append(_k)                  # 空值 = 没什么可说（不改）
+    return _out
+
+
+#: 操作响应的**请求侧 schema**（唯一源）：本地响应校验按它核对形态，提示里"必填键"那句
+#: 也由它渲染——请求 schema / 提示 / 应用器**三处同源**（工作包 §4 C 的裁决）。
+from _text_gen.deepseek_schema import REPLAN_OPS_SCHEMA as _REPLAN_OPS_SCHEMA
+
+REPLAN_RESPONSE_SCHEMA = _REPLAN_OPS_SCHEMA["schema"]
+
+#: 必填键（顺序同 schema）：**不能给 `null`**——没有要改的就给类型空值。缺席（整个键不出现）
+#: 仍按三态语义读作「不改」：那是**安全**的默认（等价于空数组，不丢任何模型说过的话）。
+#: 复核 2026-10-02 之三 P1：应用器此前把必填键的 `null` 也当**缺席**读，违反严格 schema 的
+#: 响应（`{"dialogue_ops": null}`）被静默"修好"——单独出现报 `no_change`、与别的操作同批
+#: 还能应用。`null` 只允许落在**可省略的声明键**上（= 不改）。
+REPLAN_REQUIRED_KEYS = tuple(REPLAN_RESPONSE_SCHEMA.get("required") or ())
+
+#: **唯一允许 `null` 的顶层键**：可省略的声明键（三态语义里 `null` = 不改）。必填键、
+#: 以及**任何嵌套字段**的 `null` 都不是合法取值（复核 2026-10-02 之四 C：字段**缺席**
+#: 才是「不改」，`null` 是模型确实写了一个空值——嵌套上的 `null` 曾被当默认值/忽略照常应用）。
+REPLAN_NULL_OK_KEYS = tuple(k for k in REPLAN_OP_KEYS if k not in REPLAN_REQUIRED_KEYS)
+
+#: `hook_carrier` 的**历史对象形态**（`{"beat": 3, "mode": "台词2"}`）：请求 schema 的契约
+#: 形态是字符串，对象形态只作兼容；键集合、类型与 `null` 规则跟其它嵌套字段**同一套**
+#: （此前只核键集合，`mode: null` 会被归一成空载体，"模型写了个空值"没人报）。
+HOOK_CARRIER_OBJ_SPEC = {"type": "object", "additionalProperties": False,
+                         "properties": {"beat": {"type": "integer"},
+                                        "mode": {"type": "string"}}}
+
+#: 类型 → 中文说法（诊断**指认类型错**，不替模型圆场）。
+_TYPE_SAY = {"array": "不是数组", "string": "必须是字符串", "object": "必须是对象",
+             "integer": "非整数", "boolean": "必须是布尔值", "number": "不是数字"}
+
+#: 本地响应校验**整块跳过**的字段路径（值由应用器的**安全归一**单源处理）：
+#: 编号写法 `2` / `"2"` / `"B2"` 由 `coerce_ref_index` → `_coerce_op_index` 解析，
+#: 轴不对 / 不是编号 / 越界各有结构化原因。**不能在形状层先判死**——那是**生产要求**：
+#: agent_plan 通道把 json_schema 降级成 `json_object`，模型照着上下文里 `B2` 的写法回话
+#: （2026-09-27 复核的现场：`int("B2")` 抛 ValueError ⇒ 整轮修订被记成拒收）。
+#: 这些字段里**没有**归一能力的取值（字典/数组）同样由那条通道给出了原因。
+SHAPE_SKIP_PATHS = ("beat_ops.[].index", "dialogue_ops.[].index",
+                    "fact_carriers.[].index", "fact_carriers.[].beat")
+
+
+def _type_say(spec) -> str:
+    _t = spec.get("type")
+    return " / ".join(_TYPE_SAY.get(x, "类型应为 %s" % x)
+                      for x in (_t if isinstance(_t, list) else [_t]) if x)
+
+
+def _type_ok(value, spec) -> bool:
+    def _one(x):
+        return {"array": lambda: isinstance(value, list),
+                "string": lambda: isinstance(value, str),
+                "object": lambda: isinstance(value, dict),
+                "integer": lambda: isinstance(value, int) and not isinstance(value, bool),
+                "boolean": lambda: isinstance(value, bool),
+                "number": lambda: isinstance(value, (int, float))
+                and not isinstance(value, bool)}.get(x, lambda: True)()
+    _t = spec.get("type")
+    _ts = [x for x in (_t if isinstance(_t, list) else [_t]) if x]
+    return (not _ts) or any(_one(x) for x in _ts)
+
+
+def _empty_value_say(spec) -> str:
+    """该键"没有要改"时的类型空值写法（提示与诊断共用同一句话）."""
+    return {"array": "`[]`", "string": "空串", "object": "`{}`"}.get(
+        spec.get("type"), "类型空值")
+
+
+def _null_declared(spec) -> bool:
+    """schema **自己**声明了 `null` 才算合法取值（`"type": ["string", "null"]`）.
+
+    当前请求 schema 里没有任何字段声明 `null`；除**显式约定的可选顶层声明键**
+    （`REPLAN_NULL_OK_KEYS`）外，`null` 一律不是合法取值。
+    """
+    _t = spec.get("type")
+    return "null" in (_t if isinstance(_t, list) else [_t])
+
+
+def _shape_problems(value, spec: dict, path: str, *, null_ok: bool = False,
+                    trail: tuple = ()) -> list:
+    """递归核对一个值是否满足 schema 片段 → 问题清单（`path` 给人看、`trail` 给判据认）.
+
+    判：类型、`enum`、**没定义过的键**（含嵌套条目里的）、**`null` 的位置**。
+    **不判"条目内必填键缺失"**：那条留给应用器的**域内**判据——`beat_ops` 的 `op` 有
+    既定默认（不写 = `replace`）、`parts` 只在 `split` 时有意义，应用器的报错也更具体
+    （"第 N 条节拍：…"）。本地校验的职责是"模型说的话**没有被曲解**"，不是替应用器
+    重新定义条目语义。
+    **`null` ≠ 缺席**（复核 2026-10-02 之四 C）：字段**缺席**才是「不改」；`null` 是模型
+    确实写了一个空值。嵌套字段一律非法（`beat_ops` 的 `op: null` 曾被当默认 `replace`
+    照常应用）；`null_ok=True` 只由**已约定的可选顶层声明键**（三态语义）传入，或由
+    schema 自己声明 `null` 类型。
+    `SHAPE_SKIP_PATHS` 里的字段整块跳过（见那里的说明：它们的取值由**安全归一**单源处理）。
+    """
+    if ".".join(trail) in SHAPE_SKIP_PATHS:
+        return []
+    _out: list = []
+    if value is None:
+        if null_ok or _null_declared(spec):
+            return []
+        return ["%s 为 null——schema 里它是 %s，`null` 不是合法取值"
+                "（要「不改」就**省略这个键**）" % (path, spec.get("type"))]
+    if not _type_ok(value, spec):
+        _out.append("%s %s（schema 要求 %s；现在是 %s）"
+                    % (path, _type_say(spec), spec.get("type"), type(value).__name__))
+        return _out                                  # 类型都不对，不再往下认结构
+    _enum = spec.get("enum")
+    if _enum and value not in _enum:
+        _out.append("%s 只能是 %s（现在是 %r）"
+                    % (path, " / ".join(str(x) for x in _enum), value))
+    if isinstance(value, list) and isinstance(spec.get("items"), dict):
+        for _i, _x in enumerate(value, 1):
+            _out += _shape_problems(_x, spec["items"], "%s 第 %d 项" % (path, _i),
+                                    null_ok=False, trail=trail + ("[]",))
+    if isinstance(value, dict) and spec.get("properties"):
+        _props = spec["properties"]
+        if spec.get("additionalProperties") is False:
+            _unk = sorted(k for k in value if k not in _props)
+            if _unk:
+                # **未知键不许丢**（复核 2026-10-02 之三 P1：旁白条目里的未知键此前被
+                # 静默丢掉，模型写的东西没进计划、也没人知道）
+                _out.append("%s 里有未定义的键 %s（schema 只允许 %s）"
+                            % (path, "、".join(_unk), "、".join(_props)))
+        for _k, _v in value.items():
+            if _k in _props:
+                _out += _shape_problems(_v, _props[_k], "%s 的 `%s`" % (path, _k),
+                                        trail=trail + (_k,))
+    return _out
+
+
+def replan_ops_response_problems(ops) -> list:
+    """**本地响应校验**（工作包 §4 C）：按请求 schema 核对模型回的操作 → 问题清单.
+
+    判**形态**——有没有没定义过的键（含嵌套条目）、类型对不对、`null` 是不是落在了
+    **可省略的声明键**上。语义（编号范围、载体是否合法、内容有没有变）仍由
+    `apply_replan_ops` 判；两处职责分开，诊断才指得准。
+
+    **不许替模型圆场**（复核 2026-10-02 之三 P1）：旁白 `text: 123` 旧实现被 `str()`
+    成 `"123"`、旁白条目里的未知键被丢掉，整批照样"应用成功"（`stop_reason=ok`）；
+    必填键的 `null` 又被当"缺席"读。三种都记问题，由应用器返回 `illegal_response`。
+
+    **缺席 ≠ `null`**：整个键不出现仍按三态语义读作「不改」（安全默认，等价空数组），
+    schema 里 `required` 的键只是**不许给 `null`**。**`null` 只允许落在可省略的声明键上**
+    （`REPLAN_NULL_OK_KEYS`）——**嵌套字段**（`beat_ops[].op` / `.parts` / `.new_carrier`、
+    旁白条目的 `text/source/fact_refs`、对象形态 `hook_carrier` 的 `beat/mode`）给 `null`
+    一律记问题（复核 2026-10-02 之四 C：`op: null` 曾被当默认 `replace` 照常应用）。
+    """
+    if not isinstance(ops, dict):
+        return ["响应不是 JSON 对象（现在是 %s）" % type(ops).__name__]
+    _props = REPLAN_RESPONSE_SCHEMA.get("properties") or {}
+    _out: list = []
+    _unk = sorted(k for k in ops if k not in _props)
+    if _unk:
+        _out.append("未知操作键 %s（只支持 %s）" % ("、".join(_unk), "、".join(REPLAN_OP_KEYS)))
+    for _k, _v in ops.items():
+        if _k not in _props:
+            continue
+        if _v is None and _k in REPLAN_REQUIRED_KEYS:
+            _out.append("必填键 `%s` 是 null——schema 里它是 %s，`null` 不是合法取值"
+                        "（要「不改」就给 %s，或整个键省略）"
+                        % (_k, _props[_k].get("type"), _empty_value_say(_props[_k])))
+            continue
+        if _k == "hook_carrier" and isinstance(_v, dict):
+            # 历史兼容形态（对象）：键集合 / 类型 / `null` 与其它嵌套字段同一处判；
+            # 取值合法性（编号越界、载体名）仍归声明解析器判。
+            _out += _shape_problems(_v, HOOK_CARRIER_OBJ_SPEC, "`hook_carrier`",
+                                    trail=(_k, "obj"))
+            continue
+        # 可省略的声明键的 `null`（= 不改）也走这里判：`null_ok` 是**活的**——
+        # 上面不为它们开早退分支，否则"许可范围"就成了两处各判一次的空话。
+        _out += _shape_problems(_v, _props[_k], "`%s`" % _k,
+                                null_ok=(_k in REPLAN_NULL_OK_KEYS), trail=(_k,))
+    return _out
+
+
+def replan_response_shape_clause() -> str:
+    """提示里"响应形态"那句——**由请求 schema 渲染**（不手抄键名与空值写法）.
+
+    `null` 的许可范围与**本地响应校验**同一源（`REPLAN_NULL_OK_KEYS`）：提示教什么，
+    校验就按什么判；嵌套字段的 `null` 两边都不许（复核 2026-10-02 之四 C）。
+    """
+    _req = "、".join("`%s`" % k for k in REPLAN_REQUIRED_KEYS)
+    _defs = "、".join("%s→%s" % (k, _empty_value_say(REPLAN_RESPONSE_SCHEMA["properties"][k]))
+                     for k in REPLAN_REQUIRED_KEYS)
+    _opt = "、".join("`%s`" % k for k in REPLAN_NULL_OK_KEYS)
+    return ("**`null` 只允许出现在可省略的声明键上**（%s）：必填键（%s）**不能给 `null`**"
+            "（没有要改的就给 %s，或整个键省略 = 不改）；**条目里（含嵌套字段）的 `null` "
+            "一律非法**——那些字段要「不改」就**省略那个键**，不要给 `null`。"
+            "**没定义过的键一个都不许出现**（含条目里），类型也必须与 schema 一致"
+            % (_opt, _req, _defs))
+
+
+#: 承载表达方式的**种类（唯一源）**：`(解析用的种类名, 提示/schema 里的写法)`。
+#: `画面` 无编号；`台词k` / `旁白k` 的 k 必须在范围内（`carrier_mode_problem` 判）。
+#: 提示与 schema 描述里"可以写哪些载体"那句**由它渲染**——手抄一份的后果是模型只知道
+#: "画面/台词k"，`旁白k` 这条**合法通道**永远用不上（复核 2026-10-02 之二 P2：
+#: 应用器支持 `旁白k`，请求侧却没教；桩直传正确操作能过，真实请求不能）。
+#: 解析出来的**种类名**（`parse_beat_carrier` 返回 `visual`/`dialogue`/`narration`）
+#: → `(中文写法, 提示写法)`。判据、提示渲染与**应用器的载体规范化**都取这一份——
+#: 各处手写"画面 / 台词 / 旁白"三件套，加第四种载体时必然漏改一处。
+CARRIER_KIND_FORMS = {"visual": ("画面", "画面"),
+                      "dialogue": ("台词", "台词k"),
+                      "narration": ("旁白", "旁白k")}
+
+#: 提示里"可以写哪些载体"的顺序与写法（由 `CARRIER_KIND_FORMS` 派生，不另抄一份）。
+CARRIER_MODE_KINDS = tuple((CARRIER_KIND_FORMS[_k][0], CARRIER_KIND_FORMS[_k][1])
+                           for _k in ("visual", "dialogue", "narration"))
+
+
+def carrier_mode_hint() -> str:
+    """提示 / 错误信息里"允许写哪些载体"的一句话（渲染自 `CARRIER_MODE_KINDS`）."""
+    return "、".join("`%s`" % _hint for _kind, _hint in CARRIER_MODE_KINDS)
+
+
+def carrier_mode_problem(mode, n_lines: int, n_narration: int) -> str:
+    """承载表达方式的**结构**校验：`画面` / `台词k` / `旁白k`（k 在范围内）；"" = 通过.
+
+    只判结构（种类与编号范围）："这条承载是否真演出了事实""画面与声音是否一致"这类
+    **语义**判据归统一契约门（`plan_contract_problems`），不在这里造第二份。
+    """
+    _m = str(mode or "").strip()
+    for _kind, _hint in CARRIER_MODE_KINDS:
+        if _kind == "画面":
+            continue
+        if _m.startswith(_kind):
+            _n = n_lines if _kind == "台词" else n_narration
+            _k = _m[len(_kind):].strip()
+            if not _k.isdigit() or int(_k) < 1:
+                return "`%s` 里的编号不是正整数（应为 %s1..%s%d）" % (_m, _hint, _kind, _n)
+            if int(_k) > _n:
+                return "`%s` 越界（本批只有 %d 条%s）" % (_m, _n, _kind)
+            return ""
+    if _m == "画面":
+        return ""
+    return "`%s` 不是合法载体（只能是 %s）" % (_m, carrier_mode_hint())
+
+
+def iter_decl_refs(text: str) -> list:
+    """一段声明文本里的**全部**节拍引用，带**原始跨度**（单源文法）.
+
+    每项是 7 元组 `(start, end, num_start, num_end, beat, kind, idx)`：
+
+      · `start` / `end`：这条引用在**原文**里的跨度；
+      · `num_start` / `num_end`：**节拍号数字**在原文里的跨度——重映射只替换这一段，
+        `B`、`/` 与模型自己写的空白（含数字内部的空白，如 `B1 2/画面`）原样保留；
+      · `beat` / `kind` / `idx`：结构化读数——旧域核验与新域映射**消费同一份**。
+
+    判据 = `_DECL_REF_RE` 匹配**去掉空白后**的文本（与旧验收解析器同一份文法：`B1 2/画面`
+    就是 `B12/画面`，`B12/画 面` 就是 `B12/画面`）；位置映射把 flat 里的跨度换回原文下标。
+    非法字符（非 ASCII 数字、未知种类、长得不像节拍号的数字串）**不匹配** ⇒ 由调用方报
+    "格式非法"，而不是让转换异常逃出去。
+    """
+    _flat, _pos = _flat_decl_text(text)
+    _out = []
+    for _m in _DECL_REF_RE.finditer(_flat):
+        _beat = safe_decl_int(_m.group(1))
+        _raw_idx = _m.group(3) or _m.group(4)
+        _idx = safe_decl_int(_raw_idx) if _raw_idx else None
+        if _beat is None or (_raw_idx and _idx is None):
+            continue                           # 数字不像节拍号 ⇒ 当它没有写
+        _kind = ("画面" if _m.group(2) == "画面"
+                 else ("旁白" if _m.group(4) else "台词"))
+        _a, _b = _m.span(1)
+        _out.append((_pos[_m.start()], _pos[_m.end() - 1] + 1,
+                     _pos[_a], _pos[_b - 1] + 1, _beat, _kind, _idx))
+    return _out
+
+
+def _decl_ref_problem(beat, n_beats) -> str:
+    """一个节拍引用在**旧编号域**里的范围核验（`""` = 在范围内）.
+
+    只核**节拍号**：展开会把后面的节拍整体后移，一个越界的节拍号可能**碰巧落进**合法
+    范围（复核第 27 轮实测：2 条节拍 + `B3/画面`，展开后契约从报错变成通过）。台词/旁白
+    序号不核——展开不改序号，越界的就是越界，契约门照样报得出来。
+    """
+    if not 1 <= int(beat) <= int(n_beats):
+        return "节拍号 %s 越界（旧计划共 %d 条节拍）" % (beat, n_beats)
+    return ""
+
+
+def normalize_plan_ranges(plan):
+    """**保守规范化（只做表达转换）**：载体区间展开 + 声明字段里的节拍引用重映射.
+
+    返回 `(plan, changes)`；`changes` 为空表示**一个字节都不该改**（没有区间写法，
+    或任一引用越界 ⇒ 整条计划原样返回）。
+
+    这是一次**引用转换事务**（2026-10-01 复核第 27 轮 P1）：三件事要么一起成立、
+    要么一个字都不改——
+
+      ① **只改声明字段**：节拍引用只可能出现在「｜承载：…」段与 `hook_carrier` 里。
+         事实的正文与「原文证据」是**事实本体与出处**，逐字保留。旧实现拿整条事实文本
+         做替换：正文里字面的 `B3/画面` 会被一起改成 `B4/画面`（复核实测）。
+      ② **先在旧编号域核验**：引用节拍号越界 ⇒ 整条计划不动，契约门照旧报它。
+         旧实现把越界引用原样留着，展开把编号推高之后它**碰巧落进合法范围**，契约
+         从报错变成**通过**（复核实测：2 条节拍 + `B3/画面`，问题 1 → 0）。非法引用
+         不得因扩号变合法。区间上界超过条目数（`旁白1-9` 而只有 5 条旁白）同样不动
+         ——那一步会替模型造出指向不存在条目的节拍。
+      ③ **再映射到新编号域**，**只改数字**、保留模型自己写的空白（旧实现只认紧贴的
+         `B2/画面`，含空格的**合法**声明漏改，于是规范化把一份本来通过的计划改成了
+         不通过——复核实测）。
+
+    展开规则（含义唯一才动）：
+      · `载体：旁白1-5` ⇒ 5 条节拍，各自 `载体：旁白1`…`载体：旁白5`，
+        `节拍／本镜信息目的／原文依据` **逐字复制**（只有载体段不同）；
+      · 事实的 `承载：Bn/旁白k` 与 `hook_carrier` 里的 `Bn/…` 随编号平移；若原来那条节拍
+        被拆开、而声明里的声音条目正在区间内 ⇒ 指向**真正承载它的那一条**；
+      · `载体：旁白3-3`（退化区间）也只改写载体段，不拆；
+      · **没有区间写法就原样返回**——"展开"不许凭空补出承载（例如 ch2 根本没有区间表达）；
+      · 语义错配（`B1/旁白1` 但 B1 标的是 `画面`）**不动**，交规划器。
+
+    幂等：展开后不再有区间写法 ⇒ 再调用一次 `changes` 为空、计划逐字不变。
+    """
+    if not isinstance(plan, dict):
+        return plan, []
+    _beats = plan.get("shot_beats")
+    if not isinstance(_beats, list) or not _beats:
+        return plan, []
+    _records = []
+    for _b in _beats:
+        try:
+            _records.append(BeatRecord.parse(_b))
+        except Exception:                      # noqa: BLE001
+            return plan, []                    # 解析不了就整体不动（宁可不改）
+    # 声音条目的条数：区间上界不许超过它，否则这一步会替模型造出指向不存在条目的节拍
+    _counts = {"台词": len(plan_dialogue_lines(plan)),
+               "旁白": len(plan_narration_entries(plan))}
+    _changes, _new_beats, _start = [], [], {}
+    for _i, _rec in enumerate(_records):
+        _val = "".join(str(_rec.get(BEAT_SEG_CARRIER) or "").split())
+        _m = _RANGE_CARRIER_RE.match(_val)
+        _start[_i + 1] = len(_new_beats) + 1
+        if not _m:
+            _new_beats.append(_rec)
+            continue
+        _kind = _m.group(1)
+        _a, _b = safe_decl_int(_m.group(2)), safe_decl_int(_m.group(3))
+        if _a is None or _b is None:
+            # 数字长得不像编号（超长串）：含义不唯一 ⇒ 不动，交契约门报"标注非法"
+            _new_beats.append(_rec)
+            continue
+        if _b < _a or _a < 1 or _b > _counts.get(_kind, 0):
+            _new_beats.append(_rec)            # 倒区间 / 上界越界：含义不唯一 ⇒ 不动，交规划器
+            continue
+        _parts = []
+        for _k in range(_a, _b + 1):
+            _part = BeatRecord.parse(_rec.render())   # 逐字复制，只改载体段
+            _part.set_carrier("dialogue" if _kind == "台词" else "narration", _k)
+            _parts.append(_part)
+            _new_beats.append(_part)
+        _changes.append({"beat": _i + 1, "range": _val,
+                         "parts": list(range(_start[_i + 1], _start[_i + 1] + len(_parts)))})
+    if not _changes:
+        return plan, []
+
+    # ---- ① 声明站点：节拍引用**只**允许出现在这两个字段里 ----
+    _facts = plan.get("required_facts")
+    _facts = _facts if isinstance(_facts, list) else []
+    _sites = []                                # (事实下标, 段下标, 段文本)
+    for _i, _f in enumerate(_facts):
+        if not isinstance(_f, str):
+            continue
+        for _si, _seg in enumerate(_f.split("｜")):
+            if _seg.strip().startswith(FACT_CARRIER_SEG):
+                _sites.append((_i, _si, _seg))
+    _hook = str(plan.get("hook_carrier") or "")
+
+    # ---- ② 旧编号域核验：任何一处节拍号越界 ⇒ **整条计划不动** ----
+    for _txt in [_seg for _, _, _seg in _sites] + ([_hook] if _hook else []):
+        for _ref in iter_decl_refs(_txt):
+            if _decl_ref_problem(_ref[4], len(_records)):
+                return plan, []
+
+    def _target(_b: int, _kindw, _idx) -> int:
+        """一个 `Bn/…` 引用在展开后应当指向的节拍号（调用前已核验 `_b` 在旧域内）."""
+        _s = _start.get(_b)
+        if _s is None:
+            return _b                          # 兜底：核验之后不该走到这里
+        _ch = next((c for c in _changes if c["beat"] == _b), None)
+        if _ch is None:
+            _shift = sum(len(c["parts"]) - 1 for c in _changes if c["beat"] < _b)
+            return _b + _shift                 # 前面的节拍被拆开 ⇒ 编号整体平移
+        if _kindw in ("台词", "旁白") and _idx is not None:
+            _first = int(_ch["range"].split("-")[0][len(_kindw):])
+            _last = int(_ch["range"].split("-")[1])
+            if _kindw == _ch["range"][:len(_kindw)] and _first <= _idx <= _last:
+                return _ch["parts"][_idx - _first]   # 指向**真正承载它**的那一条
+        return _s                              # 画面/不匹配 ⇒ 落在拆开后的第一条，交契约门判
+
+    def _remap(_txt: str) -> str:
+        """声明文本里的节拍号 → 新编号域；**只换数字那一段**，其余字符（含空白）原样.
+
+        与旧域核验消费的是**同一份** `iter_decl_refs` 结果——不再是"另一套正则碰巧很像"。
+        """
+        _refs = iter_decl_refs(_txt)
+        if not _refs:
+            return _txt
+        _buf, _pos = [], 0
+        for _s_, _e_, _ns, _ne, _b, _kindw, _idx in _refs:
+            _buf.append(_txt[_pos:_ns])
+            _buf.append(str(_target(_b, _kindw, _idx)))
+            _pos = _ne
+        _buf.append(_txt[_pos:])
+        return "".join(_buf)
+
+    # ---- ③ 应用：新节拍表 + 声明字段重映射（其余字段一个字节不动） ----
+    _out = dict(plan)
+    _out["shot_beats"] = [r.render() for r in _new_beats]
+    if _sites:
+        _new_facts = list(_facts)
+        for _i, _si, _seg in _sites:
+            _segs = str(_new_facts[_i]).split("｜")
+            _segs[_si] = _remap(_seg)
+            _new_facts[_i] = "｜".join(_segs)
+        _out["required_facts"] = _new_facts
+    if _hook:
+        _out["hook_carrier"] = _remap(_hook)
+    return _out, _changes
+
+
+#: 事实条目里的承载段（`｜承载：B2/台词1`）。**写进计划本体**而不是只留在 ops 里，
+#: 否则 `render_execution_contract` 传不给生成器（2026-09-30 复核必要条件 2）。
+FACT_CARRIER_SEG = "承载："
+
+#: 钩子「必须说出口」的**显式契约字段**（2026-09-30 复核第 4 轮 P2）.
+#: 值为**逐字台词**数组，必须是 `dialogue_lines` 的子集；没有必须说出口的台词
+#: （纯画面钩子 / 引文只是被提到）→ 空数组。代码不再从 `end_hook` 的自由文本里猜。
+HOOK_SPOKEN_FIELD = "hook_spoken"
+
+
+class PlanContractInvalidError(Exception):
+    """**计划契约未完成**：必保留事实/钩子缺承载、或承载无效.
+
+    与 `PlanInfeasibleError` 的分工（2026-09-30 复核）：`infeasible` = 「故事装不下」
+    ⇒ 触发预算重选；契约未完成 = 「取舍还没做完」⇒ **不**送预算重选、**不**报
+    「需拆集」，停在计划层由用户裁决。刻意不继承 `RuntimeError`（同
+    `PlanInfeasibleError`）：候选循环的 `except RuntimeError` 是"生成失败→重试"
+    语义，契约问题是确定性的，重试没有意义。
+    """
+
+
+#: 诊断产物的**停止层**——写进产物本体，读取方按它归层，**不按文件名猜**
+#: （2026-10-01 复核 P2：按文件名归层会把候选层的台词失败记成计划层失败）。
+STOP_LAYER_PLAN = "plan"
+STOP_LAYER_CANDIDATE = "candidate"
+#: 终稿层（候选层之后的 finalize 阶段）——同一条硬门在两个层各跑一次，
+#: 停止层要跟着**实际那一层**走（复核 2026-10-01：「候选／终稿诊断……被误归层」）
+STOP_LAYER_FINAL = "final"
+
+
+#: 旧产物（无 `stop_layer` 字段）按文件名的回退映射——**只服务于历史留档**，
+#: 新产物一律以产物体内的 `stop_layer` 为准
+_LEGACY_LAYER_BY_FILE = {
+    "step01_plan_contract_invalid.json": STOP_LAYER_PLAN,
+    "step01_plan_infeasible.json": STOP_LAYER_PLAN,
+    "step01_dialogue_incomplete.json": STOP_LAYER_CANDIDATE,
+    "step01_plan_transform_rejected.json": STOP_LAYER_PLAN,
+}
+
+
+def diagnostic_stop_layer(diag, filename: str = "") -> str:
+    """诊断产物 → **真实停止层**（读取方单源）.
+
+    优先取产物体内的 `stop_layer`（新产物都写）；旧产物没有该字段时按**文件名**回退，
+    回退表只覆盖已知的三份诊断。两者都判不出 ⇒ 返回 ""（**显式未知**，不猜成某一层
+    ——2026-10-01 复核：按文件名猜会把候选层的台词失败记成计划层失败）。
+    """
+    if isinstance(diag, dict):
+        _s = str(diag.get("stop_layer") or "").strip()
+        if _s:
+            return _s
+    return _LEGACY_LAYER_BY_FILE.get(str(filename or "").rsplit("/", 1)[-1], "")
+
+
+#: 三份诊断的文件名——**统一登记**（跑批工具按它清场，见 `select_diagnostic`）.
+#: 2026-10-01 复核第 11 轮：清场只删了前两份，台词诊断的旧文件仍能被当成"本轮结果"，
+#: 于是把上一轮的终稿层失败报成本轮结论。
+DIAGNOSTIC_FILES = (
+    "step01_plan_contract_invalid.json",
+    "step01_plan_infeasible.json",
+    "step01_dialogue_incomplete.json",
+)
+
+#: **附属取证**（工作包 §3：拒收候选的取证包）——它不是"本轮的结论"，是**证据**。
+#: 角色分工（复核第 43 轮 P3）：主诊断说结论（问题清单／预算读数），取证包给候选与基线
+#: 两份计划、各自指纹与实际跑到的验收输入；但两者走**同一套**认领／归档／清场流程
+#: （跑批工具消费 `DIAGNOSTIC_ARTIFACT_FILES`）——否则它不被归档、清场清不掉，
+#: 后来的同名写入还会把它覆盖（实测：清场后仍留在章节目录）。
+DIAGNOSTIC_EVIDENCE_FILES = (
+    "step01_plan_transform_rejected.json",
+)
+#: 诊断类产物的**全集**（结论 + 取证）：认领／归档／清场用它；
+#: 「本轮停在哪个文件」只从 `DIAGNOSTIC_FILES` 里选（主诊断才有结论角色）
+DIAGNOSTIC_ARTIFACT_FILES = DIAGNOSTIC_FILES + DIAGNOSTIC_EVIDENCE_FILES
+
+#: `written_at` 的两种已知写法（`_step01_now()` 是 `%Y-%m-%dT%H:%M:%S`，本地时区、秒级）
+_DIAG_TIME_FMTS = ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S")
+
+
+def _now_epoch(written_at):
+    """诊断自报的 `written_at` → epoch 秒（判不出 → `None`，**不猜**）.
+
+    秒级精度意味着"恰好落在运行起始同一秒之前"的旧产物仍可能通过时间判据，所以
+    调用方**必须**先清场——跑批工具在启动前归档并删除 `DIAGNOSTIC_FILES`。
+    """
+    import time as _time
+    _s = str(written_at or "").strip()
+    if not _s:
+        return None
+    for _fmt in _DIAG_TIME_FMTS:
+        try:
+            return _time.mktime(_time.strptime(_s, _fmt))
+        except ValueError:
+            continue
+    return None
+
+
+def select_diagnostic(diags, *, since: float = 0.0, expect_run_id: str = "") -> dict:
+    """从候选诊断里挑出**本轮**那一份，并把它的身份与停止层一起给出（读取方单源）.
+
+    `diags` 是 `{文件名: 已读到的 dict}` 或 `((文件名, dict), …)`，按**给出顺序**取优先；
+    `since` 是本轮运行的起始时刻（epoch 秒；`0` = 不知道运行边界，只按"存在"取）；
+    `expect_run_id` 是本轮**请求身份**（跑批驱动先固定，见 `main._step01_run_id`）。
+
+    返回 `{"file", "diag", "stop_layer", "run_id", "written_at", "plan_contract_version",
+            "stale_files", "foreign_files", "time_conflicts", "mixed_run_ids", "reason"}`。
+
+    **归属判据**（2026-10-01 复核第 12 轮）：
+    - 给了 `expect_run_id` ⇒ **身份优先**：`run_id` 对不上的进 `foreign_files`（不采用）；
+      时间**不参与取舍**，只把"身份对得上但时间看着不对"的列进 `time_conflicts` 作辅助检查；
+    - 没给身份 ⇒ 退回时间判据（旧行为），判不出的进 `stale_files`。
+
+    2026-10-01 复核第 11 轮的两处修正：
+    ① **身份与停止层取自同一份**——旧实现停止层取自台词诊断、身份取自计划层诊断，
+       只有台词诊断时汇总就写出"停止层=final、run_id 空、契约版本=None"；
+    ② **本轮判据用产物自报的 `written_at`**，不是文件 mtime 的秒级余量——旧实现留
+       2 秒余量，启动前 0.5 秒写下的上一轮诊断照样被当成本轮结果。
+    `written_at` 取不到/判不出的产物**不算本轮**（身份 fail-closed，显式未知不猜）。
+    """
+    _items = list(diags.items()) if isinstance(diags, dict) else list(diags or ())
+    _present = [(_n, _d) for _n, _d in _items if isinstance(_d, dict) and _d]
+    _fresh, _stale, _foreign, _conflict = [], [], [], []
+    _floor = float(int(since)) if since else 0.0
+    _want = str(expect_run_id or "").strip()
+    for _n, _d in _present:
+        _ep = _now_epoch(_d.get("written_at"))
+        if _want:
+            # 身份优先：对不上就是别的轮写的（批内跨轮复用也走这条）
+            if str(_d.get("run_id") or "") != _want:
+                _foreign.append(_n)
+                continue
+            # 时间只做辅助检查：身份说"是本轮"，时间却早于本轮起点，值得显式指出
+            if since and _ep is not None and _ep < _floor:
+                _conflict.append(_n)
+            _fresh.append((_n, _d))
+            continue
+        if since and (_ep is None or _ep < _floor):
+            _stale.append(_n)
+            continue
+        _fresh.append((_n, _d))
+    if not _fresh:
+        _why = []
+        if _foreign:
+            _why.append("身份不是本轮：%s" % "、".join(sorted(_foreign)))
+        if _stale:
+            _why.append("陈旧：%s" % "、".join(sorted(_stale)))
+        return {"file": "", "diag": {}, "stop_layer": "", "run_id": "",
+                "written_at": "", "plan_contract_version": None,
+                "stale_files": sorted(_stale), "foreign_files": sorted(_foreign),
+                "time_conflicts": [], "mixed_run_ids": [],
+                "reason": ("没有本轮诊断（%s）" % "；".join(_why) if _why
+                           else "没有任何诊断产物")}
+    _file, _diag = _fresh[0]
+    _run_id = str(_diag.get("run_id") or "")
+    _mixed = sorted(_n for _n, _d in _fresh
+                    if str(_d.get("run_id") or "") and str(_d.get("run_id")) != _run_id)
+    _pcv = _diag.get("plan_contract_version")
+    if _pcv is None and isinstance(_diag.get("plan"), dict):
+        _pcv = _diag["plan"].get("plan_contract_version")
+    return {"file": _file, "diag": _diag,
+            "stop_layer": diagnostic_stop_layer(_diag, _file),
+            "run_id": _run_id, "written_at": str(_diag.get("written_at") or ""),
+            "plan_contract_version": _pcv,
+            "stale_files": sorted(_stale), "foreign_files": sorted(_foreign),
+            "time_conflicts": sorted(_conflict), "mixed_run_ids": _mixed,
+            "reason": ("本轮停在 %s" % _file if not _mixed
+                       else "同一轮混有不同 run_id 的诊断：%s" % "、".join(_mixed))}
+
+
+def _dump_diagnostic_json(path, payload, *, what: str) -> bool:
+    """诊断落盘的**唯一出口**（准则 7：失败必须看得见）.
+
+    三份诊断共用：写盘异常一律**告警**，不让任何一处再退回静默的 `except: pass`
+    （2026-10-01 复核第 11 轮：台词诊断的写盘失败仍是静默的；契约诊断一度因此
+    "一个字都没写出来"而没人发现）。返回是否写入成功。
+    """
+    try:
+        from pathlib import Path
+        from shared.json_io import atomic_dump_json
+        atomic_dump_json(Path(path), payload, ensure_ascii=False, indent=2)
+        return True
+    except Exception as exc:                      # noqa: BLE001
+        try:
+            _log().warn("[PLAN] %s 落盘失败（%s: %s）——本次判定没有留档"
+                        % (what, type(exc).__name__, exc))
+        except Exception:
+            pass
+        return False
+
+
+def _diag_identity(stop_layer: str, plan=None) -> dict:
+    """诊断产物的公共身份四件套：跑批身份 + 契约版本 + **真实停止层**.
+
+    `run_id` 取不到时留空串（显式空值，不伪造）；读取方可据此判断「这份诊断属于本轮哪一层」。
+    """
+    _run_id, _now = "", ""
+    try:
+        from step01_script_gen.main import _step01_now, _step01_run_id
+        _run_id = str(_step01_run_id() or "")
+        _now = str(_step01_now() or "")
+    except Exception as exc:                      # noqa: BLE001
+        # 取不到就显式说出来：读取方把"没有 written_at"当作**不属于本轮**，静默留空
+        # 会让本轮诊断被悄悄丢弃（准则 7）。
+        try:
+            _log().warn("[PLAN] 诊断身份取不到（%s: %s）——该诊断没有 run_id/written_at，"
+                        "读取方会判它不属于本轮" % (type(exc).__name__, exc))
+        except Exception:
+            pass
+    return {"run_id": _run_id, "written_at": _now, "stop_layer": stop_layer,
+            "plan_contract_version": _plan_contract_version(plan)}
+
+
+def strip_fact_carrier(fact) -> str:
+    """去掉事实条目里的承载段（不变量比对用：加承载 ≠ 改了事实本体）."""
+    parts = str(fact or "").split("｜")
+    return "｜".join(p for p in parts if not p.strip().startswith(FACT_CARRIER_SEG))
+
+
+def fact_carrier(fact) -> str:
+    """取事实条目的承载声明正文（无 → ""）."""
+    for p in str(fact or "").split("｜"):
+        if p.strip().startswith(FACT_CARRIER_SEG):
+            return p.strip()[len(FACT_CARRIER_SEG):].strip()
+    return ""
+
+
+def parse_carrier_decl(decl):
+    """`B2/台词1` → `(2, "台词", 1)`；`B3/画面` → `(3, "画面", 0)`；
+    `B2/旁白1` → `(2, "旁白", 1)`；非法 → None.
+
+    **与重映射器同一文法**（第 28 轮复核）：整条声明去掉空白后必须**恰好是一个**引用，
+    且首尾没有别的内容。判据来自 `iter_decl_refs`——这里不再有第二套正则，两边不可能
+    再各说各话（旧实现自带的 `^B(数字)/(...)$` 与重映射器的空白名单漂移：`B 2/画面`
+    验收接受、重映射漏认，一份合法计划被改坏）。
+    """
+    _txt = str(decl or "")
+    _refs = iter_decl_refs(_txt)
+    if len(_refs) != 1:
+        return None
+    _a, _b_, _ns, _ne, _beat, _kind, _idx = _refs[0]
+    if _txt[:_a].strip() or _txt[_b_:].strip():
+        return None
+    return _beat, _kind, (0 if _kind == "画面" else _idx)
+
+
+def norm_carrier_text(s) -> str:
+    """承载比对用归一：只留字（去空白与常见中英标点）."""
+    _drop = " " + chr(9) + chr(13) + chr(10) + "，。！？、；：“”‘’「」…,.!?;:"
+    return "".join(ch for ch in str(s or "") if ch not in _drop)
+
+
+def shares_run(a, b, n: int = 6) -> bool:
+    """两段文本是否有 **≥n 字的连续公共子串**——**两侧都是原文原句**时用（事实↔台词）.
+
+    用于「这条事实与**选中的那句台词**是不是同一件事」：台词是逐字摘的原文，事实的
+    「原文证据」也是逐字引文，故连续命中是有意义的判据。
+
+    ⚠️ 2026-09-30 复核：**不许有「包含即通过」的捷径**。旧实现先判 `a in b or b in a`
+    就返回 True，于是两字台词「杨旭」——它当然是事实文本的子串——能绕过 6 字要求。
+    现在统一按「存在长度 ≥ n 的连续公共子串」判，短于 n 的一侧必然不通过。
+    """
+    _a, _b = norm_carrier_text(a), norm_carrier_text(b)
+    if len(_a) < n or len(_b) < n:
+        return False
+    return any(_a[i:i + n] in _b for i in range(len(_a) - n + 1))
+
+
+def carrier_terms(text, n: int = 2) -> set:
+    """承载比对用的「要素」：**字序列上的 n 字片段**（默认 2 字）."""
+    _t = norm_carrier_text(text)
+    return {_t[i:i + n] for i in range(len(_t) - n + 1)}
+
+
+def shares_terms(a, b, need: int = 2) -> bool:
+    """两段文本是否共享 **≥need 个不同的二字要素**——**转述 vs 引文**时用（事实↔画面节拍）.
+
+    为什么不用「连续公共子串」：节拍正文是**转述**（"黄昏水湾，杨旭吹箫、听香撑伞立于
+    船头"），与原文引文的连续交集实测只有 2-3 字（2026-09-30 归档计划实测：ch1
+    3/6 条事实的最长交集 ≤3 字），拿 ≥6 字判会把**合法承载**一起拒收。二字要素
+    则稳定：上例共享「杨旭／听香／水湾」三个要素。
+
+    复核反例（必须拒收）仍被拦住：F2「四年前四人奉命离开应天府潜入青州」↔ 只写
+    「四人围桌喝茶」的画面节拍，只共享「四人」**一个**要素。
+    """
+    _a, _b = carrier_terms(a), carrier_terms(b)
+    if not _a or not _b:
+        return False
+    return len(_a & _b) >= int(need)
+
+
+#: 「原文依据/原文证据/end_hook」里的引文。**提示词**固定要求全角 “ ”，但**模型实际会**
+#: 用 ‘ ’、" "、「 」甚至只给一个开引号（2026-09-29 章 2 实测：引文 12 字在原文里
+#: 逐字存在（idx 2551），却因为写成 ‘吃的灯草灰，放的轻巧屁！ 被 `findall` 一个都
+#: 没抓到 → 判「逐字核不过」→ **整批重选操作丢弃**（含能修好超时的台词替换）→
+#: 计划永远不可行）。这里把常见引号风格都认下来，并允许**未闭合**的开引号（截到
+#: 「｜」/「|」或行尾）。**证据标准不变**：仍是 ≥8 字连续逐字命中。
+_EVIDENCE_QUOTE = re.compile(
+    '[“"‘「『]'
+    '([^”"’」』]{4,})'
+    '[”"’」』]'
+    '|'
+    '[“"‘「『]'
+    '([^”"’」』｜|]{4,})'
+)
+
+
+def evidence_quotes(text) -> list:
+    """取出「原文依据/原文证据/end_hook」里的引文正文（成对引号或未闭合开引号）."""
+    out: list = []
+    for _m in _EVIDENCE_QUOTE.finditer(str(text or "")):
+        _q = _m.group(1) or _m.group(2) or ""      # 第1组=成对引号；第2组=未闭合
+        if _q:
+            out.append(_q)
+    return out
+
+
+def hook_spoken_lines(plan) -> list:
+    """`hook_spoken` 字段的规范化读数（非法/空条目一律丢弃，保序去重）.
+
+    字段缺失 → `[]`（钩子没有必须说出口的台词）。字段**存在但形态非法**由
+    `plan_contract_problems` 显式报错，这里只做读数（读数不许抛异常）。
+    """
+    _v = (plan or {}).get(HOOK_SPOKEN_FIELD) if isinstance(plan, dict) else None
+    if isinstance(_v, str):          # 单句写成裸字符串：按一句读（schema 要求数组）
+        _v = [_v] if _v.strip() else []
+    if not isinstance(_v, list):
+        return []
+    out: list = []
+    for _x in _v:
+        if isinstance(_x, str) and _x.strip() and _x.strip() not in out:
+            out.append(_x.strip())
+    return out
+
+
+def hook_spoken_quotes(plan) -> list:
+    """钩子**要求说出口**的台词 = 计划契约字段 `hook_spoken`（2026-09-30 复核第 4 轮）.
+
+    旧实现靠「说话标记关键词 + 引文前 8 字窗口」从 `end_hook` 的自由文本里**猜**哪句
+    必须说出口。复核给了三个当场可复现的反例（引导语落在窗口外 / 引文里自带「问」字 /
+    两句共用一句引导语），结论是这类判据换多少启发式都还是猜。通用做法是把这件事
+    **写成契约字段**：规划层显式声明，代码只核验——
+      · 原文：`hook_spoken` 必须是 `dialogue_lines` 的子集，而后者已过逐字核验；
+      · 选用台词：整句在 `dialogue_lines` 里（`hook_carried_line`）；
+      · 承载关系：`hook_carrier` 必须为它声明承载节拍，且与该节拍自己的载体标注一致。
+    """
+    return hook_spoken_lines(plan)
+
+
+def hook_carried_line(plan, quote=None) -> int:
+    """`hook_spoken` 里这一句在 `dialogue_lines` 里的编号（**整句相等**）；不在 → 0.
+
+    2026-09-30 复核第 5 轮 P2-3：旧实现用**子串包含**（`_q in _l`），于是声明
+    「拿主意」能匹配完整台词「拿主意？拿什么主意？」——与「逐字台词、必须是
+    `dialogue_lines` 的子集」这条契约不一致（等于又给了「只说开头几个字」一条生路）。
+    现在按**完整台词**比对（只做空白/标点归一）。
+
+    不给 `quote` 时按第一条要求说出口的台词（历史调用点的语义）。
+    """
+    _q = norm_carrier_text(quote if quote is not None else
+                           (hook_spoken_quotes(plan) or [""])[0])
+    if not _q:
+        return 0
+    for _i, _line in enumerate(plan_dialogue_lines(plan), 1):
+        if norm_carrier_text(_line) == _q:
+            return _i
+    return 0
+
+
+def hook_spoken_quote(plan) -> str:
+    """（历史入口）`end_hook` 要求说出口的**第一条**引文；未要求 → ""."""
+    _qs = hook_spoken_quotes(plan)
+    return _qs[0] if _qs else ""
+
+
+#: 从这一版起，`hook_spoken` 必须**存在且为字符串数组**（兼容只依据明确版本）
+HOOK_SPOKEN_MIN_VERSION = 3
+
+
+def _plan_contract_version(plan) -> int:
+    """计划自带的契约版本（缺失/非法 → 0 = 早于该字段的旧计划）."""
+    try:
+        return int((plan or {}).get("plan_contract_version") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _hook_spoken_field_records(plan) -> list:
+    """`hook_spoken` 字段**自身**的形态核验——**按明确版本**决定口径.
+
+    2026-09-30 复核第 5 轮 P2-3：消费入口不能因为「字段缺失」就退回旧口径。v3 及
+    之后的计划必须显式给出该字段（没有必须说出口的台词就给空数组）；裸字符串只对
+    **标注了旧版本**的计划兼容。规则演进期的老计划带版本标注（缓存按版本迁移），
+    所以「缺字段」在新稿上就是**计划不合格**，而不是「等价于没有钩子要求」。
+    """
+    _B = "钩子：`hook_spoken` / `hook_carrier` 的声明自身先无条件核验，再核验覆盖"
+    if not isinstance(plan, dict):
+        return []
+    _ver = _plan_contract_version(plan)
+    _strict = _ver >= HOOK_SPOKEN_MIN_VERSION
+    if HOOK_SPOKEN_FIELD not in plan:
+        if _strict:
+            return [_problem_record("carrier_hook_spoken_missing", "hook", None, "hook_spoken", "`hook_spoken` 缺失：v%d 计划必须显式声明钩子要求**说出口**的台词"
+                        "（没有就填空数组 `[]`），不能靠「没写」表示没有要求" % _ver, _B)]
+        return []
+    _v = plan.get(HOOK_SPOKEN_FIELD)
+    if isinstance(_v, str):
+        if _strict:
+            return [_problem_record("carrier_hook_spoken_type", "hook", None, "hook_spoken", "`hook_spoken` 必须是字符串数组（v%d 计划不接受裸字符串）：%s"
+                        % (_ver, _v[:20]), _B)]
+        return []                      # 旧版本标注的计划：兼容读法
+    if not isinstance(_v, list):
+        return [_problem_record("carrier_hook_spoken_type", "hook", None, "hook_spoken",
+                                "`hook_spoken` 必须是字符串数组（现在是 %s）——逐条给钩子要求"
+                                "**说出口**的台词原文" % type(_v).__name__, _B)]
+    _bad = [x for x in _v if not isinstance(x, str) or not x.strip()]
+    if _bad:
+        return [_problem_record("carrier_hook_spoken_item", "hook", None, "hook_spoken", "`hook_spoken` 里有空/非法条目（%r）——必须是原文逐字台词"
+                        % (str(_bad[0])[:20],), _B)]
+    return []
+
+
+
+
+def _problem_record(code, kind, index, path, reason, basis="", fix="") -> dict:
+    """**问题记录**：`code / kind / index / path / reason / basis` + **修法能力** `fix`.
+
+    身份（`kind` 与 `index`）与路径由**生产者**在遍历当前计划时给出——报告层只组合，
+    不再从文案里认编号（复核第 33/34 轮：那是"从正文猜编号"）。`detail` 作为兼容别名
+    与 `reason` 同值。
+
+    `fix`（复核 2026-10-02 之九 P1）：**这条问题需要哪种修法**——`""` = 操作协议
+    （只改已有条目的内容/编号/承载声明）就能表达；`"reselect_dialogue"` = 必须**新增
+    或删除台词条目**，操作协议**表达不了**（`dialogue_ops` 只能替换已有编号）。修订
+    分流按它决定走操作式还是**受约束的完整计划修订**。没有这个字段，分流只能按 code
+    前缀猜（旧写法按"是不是预算问题"分，于是"空台词表"这种内容缺失被送进只能替换的接口）。
+    """
+    return {"code": code, "kind": kind, "index": index, "path": path,
+            "reason": reason, "detail": reason, "basis": basis, "fix": fix}
+
+
+def _legacy_problems(records) -> list:
+    """兼容转发（工作包 §2.2）：旧接口仍返回**字符串清单**，由结构化记录**渲染**得到；
+    反向（把旧字符串解析回记录）不做。
+    """
+    return [str(r.get("reason") or "") for r in (records or [])]
+
+
+def _narration_field_records(plan) -> list:
+    """`narration_lines` **字段形态**核验（无条件）.
+
+    2026-09-30 复核第 6 轮：旁白可选（空数组 = 本集无旁白），但**形态非法**必须显式
+    报错——schema 降级通道（json_schema → json_object）下，模型可能把它写成字符串/
+    标量，而读数函数会当"没有旁白"静默放过，等于旁白链在计划层凭空消失。
+    """
+    if not isinstance(plan, dict) or NARRATION_LINES_FIELD not in plan:
+        return []
+    _v = plan.get(NARRATION_LINES_FIELD)
+    if not isinstance(_v, list):
+        return [_problem_record("carrier_narration_field", "plan", None, "narration_lines", "`%s` 必须是对象数组（每项 {text, source, fact_refs}），现在是 %s"
+                % (NARRATION_LINES_FIELD, type(_v).__name__), "旁白：`narration_lines` 必须显式给出、形态合规（画外音链不许在计划层凭空消失）")]
+    problems: list = []
+    _basis = "旁白：`narration_lines` 必须显式给出、形态合规（画外音链不许在计划层凭空消失）"
+    def _add(code, kind, index, path, reason):
+        problems.append(_problem_record(code, kind, index, path,
+                                        reason, _basis))
+    for _i, _e in enumerate(_v, 1):
+        if not isinstance(_e, dict):
+            _add("carrier_narration_item", "narration", _i, "narration_lines[%d]" % (_i - 1), "`%s` 第 %d 项不是对象（%r）——旁白必须写清正文与出处"
+                            % (NARRATION_LINES_FIELD, _i, str(_e)[:20]))
+            continue
+        if not str(_e.get("text") or "").strip():
+            _add("carrier_narration_item", "narration", _i, "narration_lines[%d]" % (_i - 1), "`%s` 第 %d 项缺 `text`（旁白正文）" % (NARRATION_LINES_FIELD, _i))
+        if not str(_e.get("source") or "").strip():
+            _add("carrier_narration_item", "narration", _i, "narration_lines[%d]" % (_i - 1), "`%s` 第 %d 项缺 `source`（出处原文）" % (NARRATION_LINES_FIELD, _i))
+        # 2026-09-30 复核第 7 轮 P2：「`fact_refs=[]`、`null`、非法字符串元素都通过；
+        # 浮点数和布尔值还会被转成整数引用」。字段形态是契约的一部分——**无条件**核：
+        # 必须是数组，元素必须是**真正的整数**（`True`/`2.0`/`"2"` 一律不算）。
+        if "fact_refs" not in _e:
+            _add("carrier_narration_fact_refs", "narration", _i, "narration_lines[%d].fact_refs" % (_i - 1), "`%s` 第 %d 项缺 `fact_refs`（这条旁白讲出的必保留事实"
+                            "序号；没有就写空数组 `[]`）" % (NARRATION_LINES_FIELD, _i))
+            continue
+        _refs = _e.get("fact_refs")
+        if not isinstance(_refs, list):
+            _add("carrier_narration_fact_refs", "narration", _i, "narration_lines[%d].fact_refs" % (_i - 1), "`%s` 第 %d 项的 `fact_refs` 必须是**整数数组**（现在是 %s）"
+                            "——写 `[]` 表示这条旁白不承载任何事实"
+                            % (NARRATION_LINES_FIELD, _i, type(_refs).__name__))
+            continue
+        _bad = [x for x in _refs if isinstance(x, bool) or not isinstance(x, int)]
+        if _bad:
+            _add("carrier_narration_fact_refs", "narration", _i, "narration_lines[%d].fact_refs" % (_i - 1), "`%s` 第 %d 项的 `fact_refs` 里有非整数项（%r）——必须写"
+                            "整数序号（`2`，不是 `\"2\"`/`2.0`/`true`）"
+                            % (NARRATION_LINES_FIELD, _i, str(_bad[0])[:12]))
+    return problems
+
+
+def narration_source_records(entries, novel_text: str) -> list:
+    """旁白**出处**核验——`source` 不是「必填文字」（复核第 7 轮 P2）.
+
+    复核的反例：把 `source` 改成"不存在的出处"，契约门仍通过，正文仍被列为已核验旁白。
+    两条确定性判据（零模型调用）：
+
+      ① `source` 必须能在原文里**逐字**找到（与台词/旁白正文同一个 `_source_norm` 口径）；
+      ② 正文必须**出自该出处**（归一化后 `text ⊆ source`）——只抄另一句原文当出处，
+         证明不了这条旁白有依据。
+
+    ⚠️ 判据边界（有意）：这里核的是「出处真实且覆盖正文」，**不是**「出处选得恰当」
+    ——同一句原文里哪一段最该当旁白，仍归内容核验（准则 7：不把"没检出"当"没问题"，
+    但也不把可判定的部分推给语义层）。
+    """
+    problems: list = []
+    _basis = "旁白条目：`source` 必须逐字来自原文且覆盖正文"
+    def _add(code, kind, index, path, reason):
+        problems.append(_problem_record(code, kind, index, path,
+                                        reason, _basis))
+    novel_norm = _source_norm(novel_text)
+    if not novel_norm:
+        return problems
+    for _i, _e in enumerate(entries or [], 1):
+        _src = str(_e.get("source") or "").strip()
+        if not _src:
+            continue                      # 缺出处由形状门报，这里不重复计
+        _sn = _source_norm(_src)
+        _tn = _source_norm(str(_e.get("text") or ""))
+        # 正文本身就不在原文里 ⇒ 归 `evaluate_plan` 的**逐字核验**（`narration_rejected`
+        # → `_drop_unverified` 剔除并重映射引用）。契约门在剔除**之前**跑，若在这里
+        # 也报一条，就会把「可剔除项」升级成「计划契约未完成」而整章停下——判据越界。
+        if _tn and _tn not in novel_norm:
+            continue
+        if not _sn or _sn not in novel_norm:
+            _add("source_narration_not_in_novel", "narration", _i, "narration_lines[%d]" % (_i - 1), "旁白 N%d 的 `source`（出处）在原文里**找不到**——出处必须"
+                            "逐字来自原文，不能是任意文字：「%s」" % (_i, _src[:24]))
+            continue
+        if _tn and _tn not in _sn:
+            _add("source_narration_not_in_source", "narration", _i, "narration_lines[%d]" % (_i - 1), "旁白 N%d 的正文**不在这条出处里**（出处另抄了别的原文）："
+                            "正文「%s…」/ 出处「%s…」"
+                            % (_i, str(_e.get("text"))[:16], _src[:16]))
+    return problems
+
+
+def _hook_carrier_decls(plan, beats, lines) -> tuple:
+    """`hook_carrier` 解析 + **无条件**核验（格式/范围/重复/与节拍载体配对）.
+
+    返回 `(decls, problems)`；`decls` 是合法声明 `(节拍号, 方式, 台词号)` 列表，
+    供覆盖核验复用（解析与核验同一处，避免两套口径）。
+    """
+    _raw = [x.strip() for x in
+            re.split("[;；,、]", str((plan or {}).get("hook_carrier") or "")) if x.strip()]
+    problems: list = []
+    _basis = "钩子：`hook_spoken` / `hook_carrier` 的声明自身先无条件核验，再核验覆盖"
+    def _add(code, kind, index, path, reason):
+        problems.append(_problem_record(code, kind, index, path,
+                                        reason, _basis))
+    decls: list = []
+    seen: set = set()
+    for _x in _raw:
+        _d = parse_carrier_decl(_x)
+        if _d is None:
+            _add("carrier_hook_decl_invalid", "hook", None, "hook_carrier", "`hook_carrier` 里的「%s」不是合法声明（只能写 "
+                            "`B{n}/台词k` 或 `B{n}/画面`）" % _x[:24])
+            continue
+        _b, _kind, _k = _d
+        if (_b, _kind, _k) in seen:
+            _add("carrier_hook_decl_duplicate", "hook", None, "hook_carrier", "`hook_carrier` 里「%s」重复声明" % _x[:24])
+            continue
+        seen.add((_b, _kind, _k))
+        if not 1 <= _b <= len(beats):
+            _add("carrier_hook_beat_missing", "beat", _b, "shot_beats[%d].载体" % (_b - 1), "`hook_carrier` 指向不存在的节拍 B%d（共 %d 条）"
+                            % (_b, len(beats)))
+            continue
+        if _kind == "旁白":
+            # 复核第 7 轮补口：旁白是**画外音**，承载不了「角色说出口」——
+            # 旧实现把它归到「非台词 ⇒ 画面」那一支，报出的消息与实际声明不符。
+            _add("carrier_hook_narration_not_spoken", "hook", None, "hook_carrier", 
+                "`hook_carrier` 不能声明由**旁白**承载（「%s」）——`hook_spoken` 是"
+                "「钩子里必须由**角色说出口**的台词」（必须是 `dialogue_lines` 的子集），"
+                "旁白是画外音，不算说出口；请改成承载它的那条 `B{n}/台词k`，或把该句"
+                "从 `hook_spoken` 里去掉" % _x[:24])
+            continue
+        if _kind == "台词" and not 1 <= _k <= len(lines):
+            _add("carrier_hook_line_missing", "dialogue", _k, "dialogue_lines[%d]" % (_k - 1), "`hook_carrier` 指向不存在的台词 D%d（选用台词共 %d 句）"
+                            % (_k, len(lines)))
+            continue
+        # 配对：声明必须与**该节拍自己标的载体**一致（声明与标注打架 = 计划自相矛盾）
+        _own = BeatRecord.parse(beats[_b - 1]).carrier()
+        _want = ("dialogue", _k) if _kind == "台词" else ("visual", None)
+        if _own != _want:
+            _own_txt = ("没标载体" if _own[0] is None
+                        else ("标注非法" if _own[0] == "invalid"
+                              else ("台词%d" % _own[1] if _own[0] == "dialogue"
+                                    else ("旁白%d" % _own[1] if _own[0] == "narration"
+                                          else "画面"))))
+            _want_txt = "画面" if _kind == "画面" else "台词%d" % _k
+            _add("carrier_hook_carrier_mismatch", "beat", _b, "shot_beats[%d].载体" % (_b - 1), 
+                "`hook_carrier` 声明由 B%d 的「%s」承载，而该节拍自己标的是「%s」"
+                "——两处必须一致" % (_b, _want_txt, _own_txt))
+            continue
+        decls.append(_d)
+    return decls, problems
+
+
+def narration_source_problems(entries, novel_text: str) -> list:
+    """兼容转发：旧接口的字符串清单（由 `narration_source_records` 渲染）."""
+    return _legacy_problems(narration_source_records(entries, novel_text))
+
+
+def _narration_field_problems(plan) -> list:
+    """兼容转发（旧名）：字符串清单."""
+    return _legacy_problems(_narration_field_records(plan))
+
+
+def _hook_spoken_field_problems(plan) -> list:
+    """兼容转发（旧名）：字符串清单."""
+    return _legacy_problems(_hook_spoken_field_records(plan))
+
+
+def plan_contract_problems(plan, *, novel_text: str = "") -> list:
+    """兼容转发：旧接口的**问题文案清单**（由 `plan_contract_records` 渲染）.
+
+    新链（`outline.plan_acceptance_problems`）直接消费 `plan_contract_records`
+    的结构化记录；这里保留旧形态给既有调用方与日志。
+    """
+    return _legacy_problems(plan_contract_records(plan, novel_text=novel_text))
+
+
+def plan_contract_records(plan, *, novel_text: str = "") -> list:
+    """**计划契约**验收：必保留事实与钩子是否有**有效承载**；返回问题清单（空=通过）.
+
+    2026-09-30 复核裁决：承载关系必须是**计划的一部分**，在生成前的统一入口核对——
+    首版、重选版、缓存版走**同一道门**（不接受"只有重选受约束"）。
+
+    核对什么（复核原话：核对实际节拍正文／信息目的及选用台词）：
+
+    - **台词承载**：事实与**选中的那句台词**必须有实质交集，且承载节拍标的载体就是它；
+    - **画面承载**：事实与承载节拍的**正文或信息目的**必须有实质交集，且该节拍标
+      「载体：画面」（一条节拍同时要承载画面与台词时先 `split`）；
+    - **不比对节拍的「原文依据」**——把事实引文抄进一个拍别的东西的节拍，正是复核
+      给的反例：引文相同只证明"引的是同一句原文"，证明不了观众能从画面得知这条事实。
+      「信息目的」是**声明**，单独成立不算画面演出，故与正文**同权**参与比对
+      （审计仍是第二道防线）。
+    - **钩子**：`end_hook` 明确要求说出口时，那句必须**整句**在 `dialogue_lines` 里，
+      并有节拍承载（`hook_carrier`）。
+    """
+    if not isinstance(plan, dict) or not plan:
+        return []            # 计划缺失/字段缺失由 `evaluate_plan` 的 fail-closed 判
+    facts = [str(f) for f in (plan.get("required_facts") or [])]
+    if not facts:
+        return []            # 必保留事实清单本身为空 = 计划不合格，归 `_validate_outline`
+    beats = [str(b) for b in (plan.get("shot_beats") or [])]
+    lines = plan_dialogue_lines(plan)
+    problems: list = []
+    _basis = "计划契约：每条必保留事实与钩子都必须有**有效承载**（事实的「承载：Bn/…」与节拍上的「载体：…」必须互指）"
+    def _add(code, kind, index, path, reason, fix=""):
+        problems.append(_problem_record(code, kind, index, path,
+                                        reason, _basis, fix=fix))
+    for i, fact in enumerate(facts, 1):
+        _decl = fact_carrier(fact)
+        if not _decl:
+            _add("carrier_fact_missing", "fact", i, "required_facts[%d].承载" % (i - 1), 
+                "必保留事实 F%d 未声明承载（每条事实都要给「｜承载：B{n}/台词k」"
+                "「｜承载：B{n}/画面」或「｜承载：B{n}/旁白k」——哪条节拍真的把它"
+                "演出来／说出来／讲出来）" % i)
+            continue
+        _p = parse_carrier_decl(_decl)
+        if _p is None:
+            _add("carrier_fact_decl_invalid", "fact", i, "required_facts[%d].承载" % (i - 1), "F%d 的承载声明格式非法（须 `B{n}/台词k`、`B{n}/画面` "
+                            "或 `B{n}/旁白k`）：%s" % (i, _decl[:24]))
+            continue
+        _b, _mode, _k = _p
+        if not 1 <= _b <= len(beats):
+            _add("carrier_fact_beat_missing", "fact", i, "required_facts[%d].承载" % (i - 1), "F%d 声明的承载节拍 B%d 不存在（共 %d 条节拍）"
+                            % (i, _b, len(beats)))
+            continue
+        _rec = BeatRecord.parse(beats[_b - 1])
+        _kind, _tag_k = _rec.carrier()
+        _claim = strip_fact_carrier(fact)
+        if _mode == "台词":
+            if not 1 <= _k <= len(lines):
+                _add("carrier_fact_line_missing", "fact", i, "required_facts[%d].承载" % (i - 1), "F%d 声明的承载台词 D%d 不存在（共 %d 句）"
+                                % (i, _k, len(lines)),
+                     # **改动"必须有台词"这一条**：表为空时改承载指向也救不了（计划不能
+                     # 一句台词都不选），只能补选内容 ⇒ 操作协议表达不了。表非空时改指到
+                     # 已有台词/画面就能闭合 ⇒ 操作式可表达。
+                     fix=("reselect_dialogue" if not lines else ""))
+                continue
+            if (_kind, _tag_k) != ("dialogue", _k):
+                if _kind == "invalid":
+                    _add("carrier_beat_label_invalid", "beat", _b, "shot_beats[%d].载体" % (_b - 1), 
+                        "F%d 声明的承载节拍 B%d 的载体标注**非法**（%s）——只能写 `画面`、"
+                        "`台词k` 或 `旁白k`"
+                        % (i, _b, _rec.get(BEAT_SEG_CARRIER).strip()[:20]))
+                else:
+                    _add("carrier_fact_line_mismatch", "fact", i, "required_facts[%d].承载" % (i - 1), "F%d 声明由 B%d 承载「台词%d」，但该节拍的载体标注不是它"
+                                    % (i, _b, _k))
+                continue
+            if not shares_run(_claim, lines[_k - 1]):
+                _add("carrier_fact_line_unrelated", "fact", i, "required_facts[%d].承载" % (i - 1), 
+                    "F%d 声明的承载台词 D%d 与这条事实**没有交集**（讲的是另一件事）："
+                    "「%s」" % (i, _k, str(lines[_k - 1])[:24]))
+        elif _mode == "旁白":
+            # 2026-09-30 复核第 6 轮：事实可以由图外旁白讲出来（`｜承载：Bn/旁白k`），
+            # 但**旁白必须是计划里编号的条目**（`narration_lines` 第 k 条），且与该节拍
+            # 自己的载体标注一致——「编号有效」不等于「事实被表达」，后者交内容核验。
+            _narr = plan_narration_entries(plan)
+            if not 1 <= _k <= len(_narr):
+                _add("carrier_fact_narration_missing", "fact", i, "required_facts[%d].承载" % (i - 1), "F%d 声明的承载旁白 N%d 不存在（计划共 %d 条旁白）——"
+                                "旁白必须先写进 `narration_lines` 才能被承载"
+                                % (i, _k, len(_narr)))
+                continue
+            if (_kind, _tag_k) != ("narration", _k):
+                if _kind == "invalid":
+                    _add("carrier_beat_label_invalid", "beat", _b, "shot_beats[%d].载体" % (_b - 1), 
+                        "F%d 声明的承载节拍 B%d 的载体标注**非法**（%s）——只能写 `画面`、"
+                        "`台词k` 或 `旁白k`"
+                        % (i, _b, _rec.get(BEAT_SEG_CARRIER).strip()[:20]))
+                else:
+                    _add("carrier_fact_narration_mismatch", "fact", i, "required_facts[%d].承载" % (i - 1), "F%d 声明由 B%d 承载「旁白%d」，但该节拍的载体标注不是它"
+                                    % (i, _b, _k))
+                continue
+            # 2026-09-30 复核第 7 轮 P2：「互相登记」此前**单向可绕**——事实侧声明
+            # `承载：B1/旁白1`，而 N1 的 `fact_refs` 写成 `[]`／`null`／非法项就整条
+            # 免检（旧实现在这里带 `if _refs and`）。两处登记必须**无条件**互指
+            # （与 `hook_spoken` ↔ `hook_carrier` 同口径）。
+            _refs = _narr[_k - 1].get("fact_refs") or []
+            if i not in _refs:
+                _add("carrier_narration_fact_unregistered", "narration", _k, "narration_lines[%d].fact_refs" % (_k - 1), 
+                    "F%d 声明由旁白 N%d 承载，但该旁白条目的 `fact_refs` 里没有 F%d"
+                    "——事实侧与旁白侧必须互相登记（这条旁白要把 F%d 写进自己的 "
+                    "`fact_refs`）" % (i, _k, i, i))
+        else:
+            if _kind != "visual":
+                _tag = ("该节拍没有标载体" if _kind is None
+                        else ("该节拍的载体标注**非法**（%s）——只能写 `画面`、`台词k` "
+                              "或 `旁白k`"
+                              % _rec.get(BEAT_SEG_CARRIER).strip()[:20]
+                              if _kind == "invalid"
+                              else "该节拍标的是「载体：%s%s」"
+                                   % ("台词" if _kind == "dialogue" else "旁白", _tag_k)))
+                # 复核之十二 P2：**生产者只说“要求”，不说“用哪个操作”**——
+                # 原文案写着「请把它**拆成两条**」，而完整计划轮的核心守卫**禁止**
+                # 改 `shot_beats`（条数与正文逐项比对）⇒ 实测：模型照建议拆了节拍（先后 3 轮）、
+                # 每轮都被 `core_field_changed: shot_beats` 拒收。能做什么操作由**接口层**说
+                # （操作式轮的 `beat_ops` 支持拆分；完整计划轮的规则块写明条数封死）。
+                _add("carrier_fact_visual_mismatch", "fact", i, "required_facts[%d].承载" % (i - 1),
+                    "F%d 声明由 B%d 的**画面**承载，但%s——一条节拍只能有**一个**"
+                    "载体，画面与台词/旁白必须分属**不同节拍**"
+                    % (i, _b, _tag))
+                continue
+            # 画面承载只认**正文**（镜头真的拍什么）：2026-09-30 复核给的漏口是
+            # 「只在『本镜信息目的』里抄一遍事实」——那是**声明**，不是演出。
+            _body = _rec.body
+            if not shares_terms(_claim, _body, 2):
+                _add("carrier_fact_visual_unrelated", "fact", i, "required_facts[%d].承载" % (i - 1), 
+                    "F%d 声明的承载节拍 B%d 的正文／信息目的与这条事实**没有交集**"
+                    "（共享要素不足：该节拍讲的是另一件事）：「%s」"
+                    % (i, _b, _rec.body[:28]))
+    # ---- 旁白条目的镜像自洽：`fact_refs` 指向的事实必须回头声明由它承载 ----
+    # 两处登记必须一致（与 `hook_spoken`↔`hook_carrier` 同一口径）：只有一侧写，
+    # 另一侧就会在变换/重选后各说各话。
+    _narr_all = plan_narration_entries(plan)
+    problems.extend(narration_source_records(_narr_all, novel_text))
+    for _ni, _ne in enumerate(_narr_all, 1):
+        if not _ne.get("source"):
+            _add("carrier_narration_source_missing", "narration", _ni, "narration_lines[%d]" % (_ni - 1), "旁白 N%d 缺少 `source`（出处原文）——旁白必须注明它出自"
+                            "原文哪一句，不能只写正文" % _ni)
+        for _fi in (_ne.get("fact_refs") or []):
+            if not 1 <= _fi <= len(facts):
+                _add("carrier_narration_fact_missing", "narration", _ni, "narration_lines[%d].fact_refs" % (_ni - 1), "旁白 N%d 的 `fact_refs` 指向不存在的必保留事实 F%d"
+                                "（共 %d 条）" % (_ni, _fi, len(facts)))
+                continue
+            _p2 = parse_carrier_decl(fact_carrier(facts[_fi - 1]))
+            if not (_p2 and _p2[1] == "旁白" and _p2[2] == _ni):
+                _add("carrier_narration_fact_mismatch", "narration", _ni, "narration_lines[%d]" % (_ni - 1), "旁白 N%d 声明它承载 F%d，但 F%d 的承载声明不是 "
+                                "`B…/旁白%d`——事实侧与旁白侧必须互相登记"
+                                % (_ni, _fi, _fi, _ni))
+    # ---- 钩子：**无条件**核验声明自身，再核验它覆盖了全部要求 ----
+    # 2026-09-30 复核第 4 轮 P2：旧实现只在「检出说出口要求」时才看这个字段，且只看
+    # 覆盖——`B2/台词2；B3/台词99`（台词越界）、多余但对不上的声明、以及**没有说出口
+    # 要求时**的非法写法全都照过。声明自身的格式/范围/重复/配对先无条件核验。
+    _hqs = hook_spoken_quotes(plan)
+    problems.extend(_hook_spoken_field_records(plan))
+    problems.extend(_narration_field_records(plan))
+    _decls, _hc_problems = _hook_carrier_decls(plan, beats, lines)
+    problems.extend(_hc_problems)
+    if _hqs:
+        _named = {d[2] for d in _decls if d[1] == "台词"}
+        for _q in _hqs:
+            _hk = hook_carried_line(plan, _q)
+            if not _hk:
+                _add("carrier_hook_line_missing", "hook", None, "hook_spoken", 
+                    "钩子要求说出口的「%s」不在选用台词里——必须先**整句**进入 "
+                    "dialogue_lines（只说开头不算）" % str(_q)[:24],
+                    # 修法就是"把那句整句选进台词表" = **新增条目** ⇒ 操作协议表达不了
+                    fix="reselect_dialogue")
+                continue
+            if _hk not in _named:
+                _add("carrier_hook_unlabeled", "dialogue", _hk, "dialogue_lines[%d]" % (_hk - 1), "钩子那句（D%d）没有承载节拍——`hook_carrier` 里没有"
+                                "它的声明（形如 `B{n}/台词%d`）" % (_hk, _hk))
+                continue
+            _d = [x for x in _decls if x[1] == "台词" and x[2] == _hk][0]
+            if not 1 <= _d[0] <= len(beats):
+                _add("carrier_hook_beat_missing", "hook", None, "hook_carrier", "钩子声明的承载节拍 B%d 不存在（共 %d 条节拍）"
+                                % (_d[0], len(beats)))
+            elif BeatRecord.parse(beats[_d[0] - 1]).carrier() != ("dialogue", _hk):
+                _add("carrier_hook_carrier_mismatch", "beat", _d[0], "shot_beats[%d].载体" % (_d[0] - 1), "钩子声明由 B%d 承载 D%d，但该节拍的载体标注不是它"
+                                % (_d[0], _hk))
+    # 多声明（**无条件**）：`hook_carrier` 里出现的每一句台词都必须在 `hook_spoken` 里。
+    # 复核第 4 轮点名：没有说出口要求时，声明 `B1/台词1` 这种「多余但对得上」的条目
+    # 此前完全不核（`_hqs` 为空就整段跳过）——声明与要求必须一一对应。
+    _required = {hook_carried_line(plan, _q) for _q in _hqs}
+    _extra = sorted(d[2] for d in _decls if d[1] == "台词" and d[2] not in _required)
+    if _extra:
+        _add("carrier_hook_extra_decl", "hook", None, "hook_carrier", 
+            "`hook_carrier` 多声明了 D%s——`hook_spoken` 只要求说出口 %s；"
+            "钩子没要求说出口的那句不要写进承载声明（纯画面钩子请给空串）"
+            % (_extra, sorted(_required) or "（无）"))
+    return problems
+
+
+def _copy_or_raw(value):
+    """逐字段副本的**类型安全**取法：列表复制一份；非列表**原样返回**（如实写出来）.
+
+    非列表时 `list(value)` 会抛 `TypeError`（实测 `required_facts=7`）——留档出口不许
+    成为异常源，否则"结构不合格"这件事在落盘这一步就丢了（复核第 43 轮 P1）。
+    """
+    return list(value) if isinstance(value, list) else value
+
+
+def dump_plan_contract_invalid(chapter_dir, plan, problems, *, stop_reasons=None) -> None:
+    """把契约问题落成**诊断产物** `step01_plan_contract_invalid.json`（准则 7：失败看得见）.
+
+    `problems` 必须是**唯一完整验收报告**（`outline.plan_acceptance_problems`）的清单——
+    落盘的 `plan` 重喂它必得同一批（回放契约；复核第 44 轮 P2：首次契约门一度只落
+    `plan_contract_problems` 的**局部**清单，落盘 1 条而回放 2~11 条）。
+    `stop_reasons` 记**触发本次停在计划层**的那几条（契约族的真子集）——
+    "为什么停"与"完整清单"分成两个字段，读者不必从完整清单里猜。
+
+    与 `step01_plan_infeasible.json` **分开写**：那份是「装不下」的读数，这份是
+    「取舍没做完」的清单——混在一起会把登记问题读成内容结论。
+
+    2026-09-30 复核第 5 轮 P2-4：诊断必须能**逐字回放**——旧实现只挑了几个字段落盘
+    （漏了 `hook_spoken`），把冻结产物交回同一个函数会得到**不一样的问题清单**
+    （实测第二章冻结产物记 5 项、回放得 6 项：多的正是钩子声明那条）。现在落盘
+    **整份计划**（`plan`）+ 契约版本 + 运行身份，回放与现场判定必然一致；上面的
+    逐字段副本保留，供人工速读与既有消费者。
+    """
+    if chapter_dir is None:
+        return
+    import copy
+    from pathlib import Path
+    # 身份四件套（run_id / written_at / stop_layer / 计划本体的契约版本）由
+    # `_diag_identity` 统一提供；落盘走公共出口（准则 7：写盘失败必告警）。
+    _dump_diagnostic_json(
+        Path(chapter_dir) / "step01_plan_contract_invalid.json",
+        dict(_diag_identity(STOP_LAYER_PLAN, plan), **{
+            "verdict": "plan_contract_invalid",
+            "conclusion": "plan_incomplete",
+            "contract_version": PLAN_CONTRACT_VERSION,
+            #: **完整验收**的问题清单（回放契约：`plan` 重喂 `plan_acceptance_problems` 必得同一批）
+            "problems": list(problems),
+            #: 触发"停在计划层"的原因（契约族）——`problems` 的**真子集**
+            "stopped_by": (list(stop_reasons) if stop_reasons is not None
+                           else list(problems)),
+            #: **完整验收输入**（离线回放用；判据函数直接吃它）
+            "plan": copy.deepcopy(plan) if isinstance(plan, dict) else plan,
+            # 逐字段副本仅供人工速读：**列表原样复制，非列表原样留**——结构不合格时
+            # 旧写法 `list(7)` 会在这里抛 `TypeError`，留档出口自己成了异常源
+            # （复核第 43 轮 P1 同类：入口/守卫/留档的前置操作都要在统一协议内）
+            "required_facts": _copy_or_raw((plan or {}).get("required_facts")),
+            "shot_beats": _copy_or_raw((plan or {}).get("shot_beats")),
+            "dialogue_lines": list(plan_dialogue_lines(plan)),
+            "hook_spoken": list(hook_spoken_lines(plan)),
+            "hook_carrier": (plan or {}).get("hook_carrier"),
+            "end_hook": (plan or {}).get("end_hook")}),
+        what="契约诊断")
 
 
 def plan_identity(plan) -> str:
@@ -1014,6 +3089,11 @@ def plan_identity(plan) -> str:
         _h.update(("\x00" + _key + "\x00").encode("utf-8"))
         for _x in ((plan or {}).get(_key) or []):
             _h.update((str(_x or "") + "\n").encode("utf-8"))
+    # 2026-09-30 复核第 6 轮：旁白条目也按**序号**被引用（`旁白k`），它的增删/改写
+    # 同样改变编号含义 ⇒ 必须进计划身份（否则旧稿的 `旁白k` 声明会被当成本轮有效）。
+    _h.update("\x00narration_lines\x00".encode("utf-8"))
+    for _e in plan_narration_entries(plan):
+        _h.update((str(_e.get("text") or "") + "\n").encode("utf-8"))
     return _h.hexdigest()[:12]
 
 
@@ -1078,7 +3158,28 @@ def coerce_ref_index(value, tag: str):
         return None
     if _t[:1].upper() == str(tag or "").upper():
         _t = _t[1:].strip(" -_:#")
-    return int(_t) if _t.isdigit() else None
+    # 2026-10-01 复核第 30 轮：`str.isdigit()` 对 `²` 也为真 ⇒ `int("²")` 抛 `ValueError`
+    # 穿过计划层。数字判据与转换**单源**在 `safe_decl_int`（只认 ASCII `0-9`、超长返回 None）。
+    return safe_decl_int(_t)
+
+
+def plan_has_carrier_contract(plan) -> bool:
+    """计划是否带**承载契约**（节拍标了「载体：…」或事实声明了「｜承载：…」）.
+
+    2026-09-30 复核：`require_declaration` 的强制力**挂在契约上**。带承载契约的计划
+    （v2：首版提示必产、缓存版本强制）必须逐镜声明 `plan_refs`，否则「先绑 plan_id、
+    再整稿不填 refs」就能绕过覆盖/顺序核验还被当成已核验；而没有承载契约的历史计划
+    （旧缓存/夹具）沿用「无可核 ≠ 被破坏」的容忍口径——两处同源，不新造第三套语义。
+    """
+    if not isinstance(plan, dict):
+        return False
+    for b in (plan.get("shot_beats") or []):
+        if BeatRecord.parse(str(b)).has(BEAT_SEG_CARRIER):
+            return True
+    for f in (plan.get("required_facts") or []):
+        if fact_carrier(f):
+            return True
+    return bool(str(plan.get("hook_carrier") or "").strip())
 
 
 def check_event_contract(script: dict, plan: dict | None, *,
@@ -1118,8 +3219,9 @@ def check_event_contract(script: dict, plan: dict | None, *,
     if _stale:
         return False, [{"code": "plan_refs_stale_plan", "shot": "",
                         "detail": _stale}], True
+    _contract_plan = plan_has_carrier_contract(plan)
     if not str((script or {}).get("plan_id") or "").strip():
-        if require_declaration and shots:
+        if require_declaration and shots and _contract_plan:
             return False, [{"code": "plan_refs_missing", "shot": "", "detail":
                             "整稿没有任何 plan_refs 声明（新生成稿必须逐镜声明"
                             "事件履约契约）"}], False
@@ -1135,7 +3237,16 @@ def check_event_contract(script: dict, plan: dict | None, *,
             refs_list.append(None)
         else:
             refs_list.append(r)
-    if not shots or len(missing) == len(shots):
+    if not shots:
+        return True, [], False
+    if len(missing) == len(shots):
+        # 整稿**一条** plan_refs 都没有。历史快照（跨 run 复用）无声明 = 无契约可核；
+        # 但**新生成稿**必须逐镜声明——否则「先绑 plan_id、再整稿不填 refs」就能绕过
+        # 覆盖/顺序核验，还会被当成已核验（2026-09-30 复核复现的漏放）。
+        if require_declaration and _contract_plan:
+            return False, [{"code": "plan_refs_missing", "shot": "",
+                            "detail": "整稿没有任何镜头声明 plan_refs（新生成稿必须逐镜"
+                                      "声明事件履约契约）"}], False
         return True, [], False
     violations: list = []
     for sid in missing:
@@ -1180,25 +3291,21 @@ def check_event_contract(script: dict, plan: dict | None, *,
                     "detail": "D%d 不存在（选用台词共 %d 句）" % (d, n_lines)})
                 continue
             line_seq.append((sid, d))
-    for seq, code, tag in ((beat_seq, "beats_order_violation", "B"),
-                           (line_seq, "lines_order_violation", "D")):
-        for (sid0, v0), (sid1, v1) in zip(seq, seq[1:]):
-            if v1 < v0:
-                violations.append({
-                    "code": code, "shot": str(sid1),
-                    "detail": "%s%d 在 %s%d 之后声明（事件/台词顺序不得回退）"
-                              % (tag, v1, tag, v0)})
-                break  # 每类报第一处即够定位
-    for i, beat in enumerate(beats, 1):
-        if i not in covered:
-            violations.append({
-                "code": "beats_not_carried", "shot": "",
-                "detail": "B%d（%s…）没有被任何镜头声明承载" % (i, beat[:36])})
-    # ② **Dk 必须锚在声明它的那一镜**（2026-09-27 复核）
-    # 契约块要求「台词 Dk 必须**逐字**落在声明它的那个镜头的 narration_segment 里」，
-    # 但本门此前只核编号范围/顺序，整稿台词门只证明 Dk **在某处**——两门各自都过、
-    # 合起来是**假绿**：shot 1 声明 D1、shot 2 才说 D1 能一路通过。判据与整稿门同源
-    # （`_line_hit_in_units`，只把起点钉在声明那一镜），不新造第二套匹配口径。
+    # 事件/台词顺序 —— **同时承载 vs 串行**在这里定死（第 15 轮复核；与预算侧
+    # `beats_floor_basis` 同一份时间语义）：
+    #   · **同时承载**：同一镜内声明多条；或同一条（声音）节拍被**连续多镜共同承载**
+    #     （`[1,2] → [1,2]`：B1、B2 都由这两个镜头组成的片段承载）——它们是**同时
+    #     发生**的，任何顺序都不构成回退；
+    #   · **串行**：某条只在**更晚**的镜里首次出现，说明它被排到了前面 ⇒ 才是回退。
+    # 旧实现把"每镜的声明"展开成一长串逐对比较，于是 `[1,2] → [1,2]` 被读成
+    # 「B2 之后又出现 B1」→ 误报回退（实测：连续两镜共同承载 = 必然误报）。
+    # 台词**实际落点**（第 16 轮复核）：声明数组是**有序集合**，光看它看不出"先说了谁"——
+    # 正文里先说 D2、再说 D1，只要声明写成 `[1,2]`，旧口径与台词完整性门都会放行。
+    # 所以镜内顺序按**台词在旁白文本里的位置**判，不看声明顺序。
+    _line_text = [str(x) for x in plan_dialogue_lines(plan)]
+    _seg_by_sid = {str(s.get("index")): str(s.get("narration_segment") or "") for s in shots}
+    # 旁白序列与镜位映射：**存在性判据（②）与顺序判据（①③）共用这一份**——
+    # 各建一份就会出现"一个门用宽容匹配、另一个用生字符串"的口径分叉（第 17 轮复核）。
     _units_raw: list = []
     _unit_pos: dict = {}          # 镜头序号 → 在 `_units_raw` 里的位置（无旁白则不登记）
     for _sh in shots:
@@ -1206,6 +3313,181 @@ def check_event_contract(script: dict, plan: dict | None, *,
         if _n:
             _unit_pos[str(_sh.get("index"))] = len(_units_raw)
             _units_raw.append(_n)
+    # 镜位（`shots` 里的序）：承载区间是否连续**按镜位判**，不能按"声明展开后的下标"——
+    # `[1,2] → [1,2]` 在下标上会看成 B1 断在 0 与 2 之间，其实它被**连续两镜**承载。
+    _shot_ord = {str(s.get("index")): i for i, s in enumerate(shots)}
+
+    def _actual_seq(seq):
+        """D 的**实际序列**：按镜序、镜内按台词落点（与存在性**同一次匹配**）.
+
+        两条纪律（第 17 轮复核 P1-①）：
+          · 落点用 `_line_offset_in_units`（容忍标点/说话前缀/合规净化），**不是**生
+            `str.find`——否则"换标点就两个门全过"；
+          · **逐句**定位：某一句定位不到（存在性另有 `plan_refs_line_not_in_shot` 报它）
+            不牵连同镜其它已确认的位置——旧实现一句失败就整镜退回声明序，
+            连已经看出来的 D2→D1 逆序都被丢掉。
+        """
+        _by_shot: dict = {}
+        for _sid, _v in seq:
+            _by_shot.setdefault(_sid, []).append(_v)
+        out = []
+        for _sid, _vs in _by_shot.items():
+            _pos = _unit_pos.get(_sid)
+            _at, _miss = [], []
+            for _v in _vs:
+                _txt = _line_text[_v - 1] if 1 <= _v <= len(_line_text) else ""
+                _hit, _off = (False, -1) if (_pos is None or not _txt) else \
+                    _line_offset_in_units(_txt, _units_raw, _pos)
+                (_at if _hit else _miss).append((_off, _v))
+            out.extend((_sid, _v) for _off, _v in sorted(_at, key=lambda x: x[0]))
+            out.extend((_sid, _v) for _off, _v in _miss)     # 定位不到的按声明序排在后面
+        return out
+
+    for seq, code, tag in ((beat_seq, "beats_order_violation", "B"),
+                           (_actual_seq(line_seq), "lines_order_violation", "D")):
+        _reported = False
+        # ① 同一镜内：B 按声明顺序；D 的序列本身已是**实际落点序**（见 `_actual_seq`）
+        for (sid0, v0), (sid1, v1) in zip(seq, seq[1:]):
+            if sid0 != sid1 or v1 >= v0:
+                continue
+            if tag == "D":
+                violations.append({
+                    "code": code, "shot": str(sid1),
+                    "detail": "镜头 %s 的旁白里 %s%d 出现在 %s%d 之前（台词呈现顺序"
+                              "不得回退；判据看**正文实际落点**，不看 plan_refs 的声明顺序）"
+                              % (sid1, tag, v1, tag, v0)})
+            else:
+                violations.append({
+                    "code": code, "shot": str(sid1),
+                    "detail": "同一镜内 %s%d 声明在 %s%d 之后（事件/台词顺序不得回退）"
+                              % (tag, v1, tag, v0)})
+            _reported = True
+            break
+        if _reported:
+            continue
+        # ② 跨镜：只按**首次声明**取序——共同承载造成的复现不参与排序
+        _first: dict = {}
+        for _i, (_sd, _v) in enumerate(seq):
+            _first.setdefault(_v, (_i, _sd))
+        _ordered = [(v[1], k) for k, v in sorted(_first.items(), key=lambda kv: kv[1][0])]
+        for (sid0, v0), (sid1, v1) in zip(_ordered, _ordered[1:]):
+            if v1 < v0:
+                violations.append({
+                    "code": code, "shot": str(sid1),
+                    "detail": "%s%d 在 %s%d 之后首次出现（事件/台词顺序不得回退；"
+                              "同一镜内或连续多镜**共同承载**不算回退）"
+                              % (tag, v1, tag, v0)})
+                _reported = True
+                break  # 每类报第一处即够定位
+        if _reported:
+            continue
+        # ③ **承载区间必须连续**（第 16 轮复核）：首次声明序只看"第一次"，`[1]→[2]→[1]→[3]`
+        #    的首次序是 0,1,3（非降）会被放行——而 B1 在 B2 之后**再次进入**，叙事回到了
+        #    已经结束的节拍。共同承载 = 一段**连续**的镜；隔镜复现 = 回退。
+        _where: dict = {}
+        for _sd, _v in seq:
+            _where.setdefault(_v, []).append(_shot_ord.get(_sd, -1))
+        for _v in sorted(_where):
+            _ps = sorted(set(_where[_v]))
+            if _ps and _ps[-1] - _ps[0] + 1 != len(_ps):
+                violations.append({
+                    "code": code, "shot": "",
+                    "detail": "%s%d 在镜头 %d 与镜头 %d 之间**断开后再次出现**"
+                              "（承载片段必须连续：隔镜复现 = 回到已经结束的节拍）"
+                              % (tag, _v, _ps[0] + 1, _ps[-1] + 1)})
+                _reported = True
+                break
+    for i, beat in enumerate(beats, 1):
+        if i not in covered:
+            violations.append({
+                "code": "beats_not_carried", "shot": "",
+                "detail": "B%d（%s…）没有被任何镜头声明承载" % (i, beat[:36])})
+    # ③ **B↔D 配对**（2026-09-30 复核）：同一镜里「声明的节拍承载哪句台词」与
+    #    「这一镜声明说哪句台词」必须是同一句。两门各自都能过、合起来仍是假绿：
+    #    shot1 声明 B1（承载 D1）却不说话，shot2 声明 B2 却说了 D1 —— 覆盖门与
+    #    台词锚定门都不报。
+    # 容忍口径与 `carrier_relation_problems` 同源：**计划根本没标载体**时没有 B→D
+    # 契约可核（旧计划/历史快照）⇒ 不判配对，避免把「无契约」当成「契约被破坏」。
+    _has_carrier_contract = any(
+        BeatRecord.parse(b).has(BEAT_SEG_CARRIER) for b in beats)
+    _beat_decl_shot: dict = {}      # B 编号 → 按镜序**最早**声明它的镜头序号
+    for _sh, _r in (zip(shots, refs_list) if _has_carrier_contract else ()):
+        for _raw in _r["beats"]:
+            _b = coerce_ref_index(_raw, "B")
+            if _b is None or not 1 <= _b <= len(beats):
+                continue            # 非编号/越界已在上方报过
+            _beat_decl_shot.setdefault(_b, str(_sh.get("index")))
+    _shot_beats: dict = {}
+    _shot_lines: dict = {}
+    for s, r in (zip(shots, refs_list) if _has_carrier_contract else ()):
+        sid = str(s.get("index"))
+        _shot_beats[sid] = {b for b in (coerce_ref_index(x, "B") for x in r["beats"])
+                            if b and 1 <= b <= len(beats)}
+        _shot_lines[sid] = {d for d in (coerce_ref_index(x, "D") for x in r["lines"])
+                            if d and 1 <= d <= n_lines}
+    if _has_carrier_contract:
+        # (i) 这一镜**说** Dk ⇒ 本镜声明的节拍里必须有一条承载 Dk（否则说的是别人节拍的台词）
+        for sid, _ds in _shot_lines.items():
+            _carried = set()
+            for b in sorted(_shot_beats.get(sid) or ()):
+                _kind, _k = BeatRecord.parse(beats[b - 1]).carrier()
+                if _kind == "dialogue" and _k:
+                    _carried.add(_k)
+            for d in sorted(_ds):
+                if d not in _carried:
+                    violations.append({
+                        "code": "plan_refs_pairing_broken", "shot": sid,
+                        "detail": "这一镜声明说 D%d，但本镜声明的节拍里没有一条承载它"
+                                  "（承载它的节拍被声明在别的镜头）" % d})
+        # (ii) B 承载 Dk ⇒ 声明 B 的**那些镜头里至少有一镜**声明说 Dk。
+        #      2026-09-30 复核 P1-2：**一个节拍可以展开 2-4 镜**（建立镜 + 对白镜 +
+        #      反应镜），旧实现只认「最早声明 B 的那一镜」，把「第一镜建立场景、
+        #      第二镜仍属 B1 并说 D1」判成错配——这是把合法展开误拒。
+        _carrier_of: dict = {}
+        for b in range(1, len(beats) + 1):
+            _kind, _k = BeatRecord.parse(beats[b - 1]).carrier()
+            if _kind == "dialogue" and _k:
+                _carrier_of[b] = _k
+        for b, k in sorted(_carrier_of.items()):
+            _holders = [sid for sid, _bs in _shot_beats.items() if b in _bs]
+            if not _holders:
+                continue          # 未被任何镜头声明：由覆盖门单独报
+            if not any(k in (_shot_lines.get(sid) or set()) for sid in _holders):
+                violations.append({
+                    "code": "plan_refs_pairing_broken", "shot": _holders[0],
+                    "detail": "承载 D%d 的 B%d 被 %d 个镜头声明，但这些镜头都没有声明说 "
+                              "D%d（一个节拍可展开多镜，但至少有一镜要说这句）"
+                              % (k, b, len(_holders), k)})
+
+        # (iii) 声音条目里的**旁白**必须在承载它的**连续镜头片段**里逐字出现。
+        #       复核第 6 轮：`旁白k` 只是编号，编号有效不等于旁白在成片里真被念出来；
+        #       复核第 7 轮 P1：判据必须与台词侧**同一份**——旧实现要求「整条落在
+        #       某一个镜头里」，而计划层的可表示性判据本来就允许按句末切分成 ≤4 段
+        #       （`check_dialogue_representable`），两份假设不一致 ⇒ 计划判可行、
+        #       终检却报 `plan_refs_narration_missing`。现在与台词共用
+        #       `_line_span_in_units`：单镜整句包含，或起点对齐 + 跨镜连续分解。
+        if _has_carrier_contract:
+            for _v in voice_units(plan, shots):
+                if _v["kind"] != VOICE_KIND_NARRATION:
+                    continue
+                if _v.get("declared_shot") is None:
+                    continue          # 没有任何镜头声明承载它的节拍：由覆盖门单独报
+                if _v["shot_indexes"]:
+                    continue
+                violations.append({
+                    "code": "plan_refs_narration_missing",
+                    "shot": _v["declared_shot"],
+                    "detail": "承载旁白 N%d 的节拍由镜头 %s 起声明，但从该镜起**连续**的"
+                              "镜头旁白里拼不出这条旁白（判据与台词同源：单镜整句包含，"
+                              "或起点对齐 + 按句末跨镜连续分解——**不截句**）："
+                              "「%s…」" % (_v["index"], _v["declared_shot"],
+                                           str(_v["text"])[:24])})
+
+    # ② **Dk 必须锚在声明它的那一镜**（2026-09-27 复核）
+    # 契约块要求「台词 Dk 必须**逐字**落在声明它的那个镜头的 narration_segment 里」，
+    # 但本门此前只核编号范围/顺序，整稿台词门只证明 Dk **在某处**——两门各自都过、
+    # 合起来是**假绿**：shot 1 声明 D1、shot 2 才说 D1 能一路通过。判据与整稿门同源
+    # （`_line_hit_in_units`，只把起点钉在声明那一镜），不新造第二套匹配口径。
     _decl_shots: dict = {}        # D 编号 → 按镜序**最早**声明它的镜头序号
     for _sh, _r in zip(shots, refs_list):
         for _raw in _r["lines"]:
@@ -1235,7 +3517,8 @@ def check_event_contract(script: dict, plan: dict | None, *,
 def dump_dialogue_incomplete(chapter_dir, broken_batches, *, total_lines: int = 0,
                              attempt_stats: dict | None = None,
                              conclusion: str | None = None,
-                             layer: str = "候选层") -> None:
+                             layer: str = "候选层",
+                             plan=None) -> None:
     """台词完整性门失败的**显式诊断**（决策点 2；五审：结论随实际失败类型区分）.
 
     `conclusion` 缺省按批次**自动归类**（五审 2026-09-26）：
@@ -1262,19 +3545,25 @@ def dump_dialogue_incomplete(chapter_dir, broken_batches, *, total_lines: int = 
     else:
         _note = (f"{layer}台词完整性硬门：破损稿不进入 BEST-GUARD／提交门；"
                  "这不是计划可行性结论，不触发计划重选")
-    try:
-        from pathlib import Path
-        from shared.json_io import atomic_dump_json
-        atomic_dump_json(Path(chapter_dir) / "step01_plan_infeasible.json",
-                         {"verdict": _conclusion,
-                          "conclusion": _conclusion,
-                          "note": _note,
-                          "total_lines": total_lines,
-                          "attempt_stats": dict(attempt_stats or {}),
-                          "broken_batches": list(broken_batches or [])},
-                         ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    # **自己的文件**（2026-10-01 复核 P2）：候选层的台词结论原先写进
+    # `step01_plan_infeasible.json` —— 既没有身份，又会**覆盖**真正的预算层诊断，
+    # 读取方按文件名归层 ⇒ 候选层失败被记成计划层。
+    from pathlib import Path
+    _stop_layer = (STOP_LAYER_FINAL if "终稿" in str(layer or "")
+                   else STOP_LAYER_CANDIDATE)
+    # `plan=` 不能省（复核第 11 轮 P2-①）：缺计划时契约版本落成 0，读取方会以为
+    # "这轮不是 v4 计划"；落盘走公共出口（准则 7：写盘失败必告警，不再静默 pass）。
+    _dump_diagnostic_json(
+        Path(chapter_dir) / "step01_dialogue_incomplete.json",
+        dict(_diag_identity(_stop_layer, plan),
+             **{"verdict": _conclusion,
+                "conclusion": _conclusion,
+                "layer": layer,
+                "note": _note,
+                "total_lines": total_lines,
+                "attempt_stats": dict(attempt_stats or {}),
+                "broken_batches": list(broken_batches or [])}),
+        what="台词诊断")
 
 
 # ---------------------------------------------------------------------------
@@ -1290,7 +3579,8 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
 
     Returns `{"verdict": "feasible"|"infeasible"|"unevaluable", "feasible",
     "evaluable", "missing", "dialogue_lines", "dialogue_sec", "dialogue_verified",
-    "dialogue_rejected", "beats", "beats_floor_sec", "lower_bound_sec",
+    "dialogue_rejected", "beats_floor_basis", "lower_bound_basis",
+    "lower_bound_sec",
     "additive_sum_sec", "budget", "reasons", "suggestions", "note"}`。
     其中 `dialogue_lines`/`dialogue_sec` 口径是**核验通过**的那一组。
     """
@@ -1298,15 +3588,23 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
     bmin = float(budget_min if budget_min is not None else _bmin)
     bmax = float(budget_max if budget_max is not None else _bmax)
 
-    def _stop(reasons, suggestions, *, missing=None, rejected=None) -> dict:
+    def _stop(reasons, suggestions, *, missing=None, rejected=None,
+              problems=None) -> dict:
         return {"verdict": "unevaluable", "feasible": False, "evaluable": False,
                 "missing": list(missing or []), "dialogue_lines": 0,
                 "dialogue_sec": 0.0, "dialogue_verified": [],
                 "dialogue_rejected": list(rejected or []),
+                "narration_verified": [], "narration_rejected": [],
                 "dialogue_unrepresentable": [],
                 "beat_carrier_dangling": [],
-                "beats": 0, "beats_floor_sec": 0.0, "lower_bound_sec": None,
+                "beats_floor_basis": None, "lower_bound_basis": "voice",
+                "lower_bound_sec": None,
                 "additive_sum_sec": None, "budget": {"min": bmin, "max": bmax},
+                # **停止分支也要产具体记录**（复核 2026-10-02 之八 P1）：旧写法只填
+                # `reasons`（一串没有身份的字符串），报告层却去读不存在的单数 `reason`
+                # ⇒ 反馈给模型的只有「验收未完成：」四个字，模型拿不到"哪个字段、
+                # 为什么、怎么改"。记录带 `path` / `reason` / **修正要求**（`basis`）。
+                "problems": list(problems or []),
                 "reasons": reasons, "suggestions": suggestions, "note": ""}
 
     # ① 计划缺失（大纲提取失败 / OUTLINE_ENABLED=0）——生成前无从验算，必须显式停止
@@ -1314,7 +3612,13 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
         return _stop(
             ["本集计划缺失（大纲提取失败或 OUTLINE_ENABLED=0）——生成前无法核验内容取舍与预算"],
             ["重跑规划（或打开 OUTLINE_ENABLED=1）后再生成；计划是内容取舍与预算的权威"],
-            missing=list(_REQUIRED_PLAN_FIELDS))
+            missing=list(_REQUIRED_PLAN_FIELDS),
+            problems=[_problem_record(
+                "plan_missing", "plan", None, "plan",
+                "本集计划缺失（大纲提取失败或 OUTLINE_ENABLED=0）——生成前无法核验"
+                "内容取舍与预算",
+                "修正要求：先让规划阶段产出计划（重跑规划 / 打开 OUTLINE_ENABLED=1）"
+                "再生成；计划是内容取舍与预算的权威")])
 
     # ② 字段缺失
     missing = [f for f in _REQUIRED_PLAN_FIELDS if f not in plan]
@@ -1326,16 +3630,26 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
         return _stop(
             ["计划缺少可核算字段 %s——无法在生成前验算（fail-closed）" % missing],
             ["让规划阶段补齐这些字段后重跑；不要带着未验算的计划生成完整稿"],
-            missing=missing)
+            missing=missing,
+            problems=[_problem_record(
+                "plan_fields_missing", "plan", None,
+                "、".join(str(x) for x in missing) or "dialogue_lines/shot_beats",
+                "计划缺少可核算字段 %s——无法在生成前验算（fail-closed）" % missing,
+                "修正要求：让规划阶段补齐这些字段后重跑；不要带着未验算的计划生成完整稿")])
 
     # ③ 没有原文就无法核验台词依据（原文是事实与台词的依据）
     if not str(novel_text or "").strip():
         return _stop(["缺少原文文本，无法核验选用台词是否逐字来自原文（fail-closed）"],
-                     ["带原文重跑；不要带着未核验的台词生成完整稿"])
+                     ["带原文重跑；不要带着未核验的台词生成完整稿"],
+                     problems=[_problem_record(
+                         "source_text_missing", "plan", None, "novel_text",
+                         "缺少原文文本，无法核验选用台词是否逐字来自原文（fail-closed）",
+                         "修正要求：带上原文重跑；不要带着未核验的台词生成完整稿")])
 
     # ④ 原文核验：逐字找不到的台词不是"本集选用的内容"
     lines = plan_dialogue_lines(plan)
-    kept, rejected = verify_dialogue_lines(lines, novel_text)
+    _kept_ix, rejected = verify_dialogue_lines_indexed(lines, novel_text)
+    kept = [x["line"] for x in _kept_ix]
     if not kept:
         if lines:
             reasons = ["计划选用的 %d 句台词**全部**未在原文中逐字找到——"
@@ -1343,13 +3657,52 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
         else:
             reasons = ["计划未选用任何逐字台词（`dialogue_lines` 为空）——"
                        "生成阶段会自行决定台词，计划就不是内容取舍的权威"]
+        # **逐句给出身份、原因与修正要求**（复核之八 P1）：被拒的是哪一句、在计划的
+        # 第几个位置、为什么不在原文里——模型才能改；只给一句"验收未完成"它无从下手。
+        _fix = ("修正要求：回到规划层，按原文**逐字**摘出台词（宁少勿滥）；"
+                "改写/自造的句子不算本集选用的内容")
+        _probs = []
+        for _r in (rejected or []):
+            _ix = _r.get("index")
+            _probs.append(_problem_record(
+                "dialogue_line_not_in_novel", "dialogue", _ix,
+                ("dialogue_lines[%d]" % (int(_ix) - 1)) if _ix else "dialogue_lines",
+                "D%s 未在原文里逐字找到（%s）：%s"
+                % (_ix if _ix else "?", str(_r.get("reason") or ""),
+                   str(_r.get("line") or "")[:40]),
+                _fix))
+        if not _probs:
+            _probs.append(_problem_record(
+                "plan_no_dialogue_lines", "plan", None, "dialogue_lines",
+                "计划未选用任何逐字台词（`dialogue_lines` 为空）——生成阶段会自行"
+                "决定台词，计划就不是内容取舍的权威", _fix,
+                fix="reselect_dialogue"))
         return _stop(reasons,
                      ["回到规划层按原文**逐字**摘出台词（宁少勿滥）后重跑"],
-                     rejected=rejected)
+                     rejected=rejected, problems=_probs)
 
-    _dlg = dialogue_seconds(kept)
-    _floor = beats_floor_seconds(plan)
-    lower = round(max(_dlg, _floor), 2)
+    # ④b 旁白（2026-09-30 复核第 6 轮）：与对白同一套核验与预算——
+    #     ① 首版采用原文叙述的**完整句子**，故同样要求逐字来自原文；
+    #     ② 与对白**共用**发声时长估算，计入整篇下界（画面与旁白同时发生，不额外加镜头）。
+    _narr_all = plan_narration_entries(plan)
+    _narr_kept: list = []
+    _narr_kept_ix: list = []          # 原序号（1 起）——记录身份，报告层不猜
+    _narr_rejected: list = []
+    if _narr_all:
+        _v_kept, _v_rej = verify_dialogue_lines([e["text"] for e in _narr_all], novel_text)
+        _pool = list(_v_kept)
+        for _ni, _e in enumerate(_narr_all, 1):
+            if _e["text"] in _pool:
+                _pool.remove(_e["text"])
+                _narr_kept.append(_e)
+                _narr_kept_ix.append(_ni)
+            else:
+                _narr_rejected.append(_e["text"])
+    _dlg = round(dialogue_seconds(kept) + narration_seconds(_narr_kept), 2)
+    # 下界 = **发声预算**（对白 + 旁白，逐句估时器算出来的真实量）。节拍**不算时间**：
+    # 见 `beats_floor_basis` 的说明（第 16 轮复核：9 镜 × 10 秒 36 节拍的稿被判 108 秒）。
+    _basis = beats_floor_basis(plan)
+    lower = round(_dlg, 2)
     # ⑤ 单镜**可表示性**（v6.136 A 判据，2026-09-26 用户决策）：逐句检查"整条装进
     # 单镜，或存在句末合法切分"。这是**计划层**的检查——不可表示的台词进入生成后
     # 必然"拆分成功、终稿门失败"（09-26 三次实跑复现），必须前移到规划层。
@@ -1357,14 +3710,27 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
     # 事件顺序）→ 重选后仍不可行才显式停止交内容取舍。
     _cap = active_shot_cap()
     _unrep = []
-    for _ln in kept:
-        _chk = check_dialogue_representable(_ln, _cap)
+    for _x in _kept_ix:
+        _chk = check_dialogue_representable(_x["line"], _cap)
         if not _chk["representable"]:
-            _unrep.append({"line": _ln, "est_sec": _chk["est_sec"],
+            _unrep.append({"kind": "dialogue", "index": _x["index"],
+                           "line": _x["line"], "est_sec": _chk["est_sec"],
                            "reason": _chk["reason"]})
+    # 旁白同样不能截句：一条旁白必须能整条讲完在一个镜头里（与台词同判据）
+    for _e, _ni in zip(_narr_kept, _narr_kept_ix):
+        _chk = check_dialogue_representable(_e["text"], _cap)
+        if not _chk["representable"]:
+            _unrep.append({"kind": "narration", "index": _ni,
+                           "line": _e["text"], "est_sec": _chk["est_sec"],
+                           "reason": "旁白：" + str(_chk["reason"])})
     reasons, suggestions = [], []
     if rejected:
         reasons.append("选用台词 %d 句未在原文中逐字找到，已从计划中剔除" % len(rejected))
+    if _narr_rejected:
+        reasons.append("旁白 %d 条未在原文中逐字找到（旁白必须是原文叙述的完整句子，"
+                       "不得自造/改写）：%s"
+                       % (len(_narr_rejected),
+                          "；".join("「%s…」" % str(x)[:20] for x in _narr_rejected[:3])))
     if _unrep:
         reasons.append(
             "%d 句选用台词超出单镜上限 %.0fs 且**无句末合法切分**（判据：整条装进单镜，"
@@ -1395,11 +3761,24 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
     _beats_list = [str(x).strip() for x in ((plan or {}).get("shot_beats") or [])
                    if str(x).strip()]
     _dangling = []
+    _dangling_ix: list = []          # 与 `_dangling` 同步的 (节拍号, 渲染好的原因)，供记录用
     for _i, _bt in enumerate(_beats_list, 1):
         _kind, _k = _beat_carrier(_bt)
-        if _kind == "dialogue" and not (1 <= (_k or 0) <= len(kept)):
-            _dangling.append("B%d 载体「台词%s」不在当前选用台词中（共 %d 句）"
-                             % (_i, _k, len(kept)))
+        # 同上：`台词k` 是**计划编号**，与"核验通过条数"无关
+        if _kind == "dialogue" and not (1 <= (_k or 0) <= len(lines)):
+            _msg = ("B%d 载体「台词%s」不在当前选用台词中（共 %d 句）"
+                    % (_i, _k, len(lines)))
+            _dangling.append(_msg)
+            _dangling_ix.append((_i, _msg))
+        # 2026-10-02 之二：**旁白**是第三条合法载体，⑦ 的镜像必须一并核（v4 加了旁白，
+        # 悬空检查却没跟着扩）：节拍声明「载体：旁白k」而旁白表里没有第 k 条——典型形态是
+        # 同批把 N2 删了、承载它的那条节拍没跟着改。**结果不完整要当场报出来**：否则这份
+        # 计划会带着"宣称承载一个不存在的声音"一路走到生成契约。
+        elif _kind == "narration" and not (1 <= (_k or 0) <= len(_narr_kept)):
+            _msg = ("B%d 载体「旁白%s」不在当前旁白表中（共 %d 条）"
+                    % (_i, _k, len(_narr_kept)))
+            _dangling.append(_msg)
+            _dangling_ix.append((_i, _msg))
     # ⑧ 载体标注**重复**（v6.143，2026-09-27 复核）：同一个节拍声明了多个载体段
     # ⇒ 承载关系不是**唯一记录**，而 `_beat_carrier` 只读第一段、后面的段被静默忽略。
     # 实测形态：重选应用器把模型自带的旧标注又追加了一遍 →「｜载体：画面｜载体：画面」。
@@ -1409,7 +3788,12 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
     # 判决（每句必须逐字出现）整稿拒收，等于把问题从计划层挪到了候选层。
     # 承载关系必须**双向**闭合。与 ⑦ 同口径：旧缓存计划**根本没有**载体标注时不判
     # （无可核 ≠ 被破坏）。
-    _dup_carrier, _orphan, _unlabeled = carrier_relation_problems(_beats_list, len(kept))
+    # **编号域是计划自己的 D/N 编号**（复核第 41 轮 P2）：这里必须传 `lines` / `_narr_all`
+    # 的条数，不能传"核验通过的条数"——`kept` 已经剔掉了原文里没有的台词，用它去解释
+    # 节拍里的 `台词k` 会把合法承载判成悬空（D1 非法、D2 合法、B2 承载 D2 时曾误报）。
+    # 剔除与重映射之后编号域会变，那时由 `apply_plan_transforms` **重新出报告**。
+    _dup_carrier, _orphan, _unlabeled = carrier_relation_problems(
+        _beats_list, len(lines), len(_narr_all))
     _no_carrier = "载体缺失：无合适承载" in str((plan or {}).get("time_budget") or "")
     if _unlabeled:
         reasons.append(
@@ -1444,8 +3828,10 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
             "用户决策后修订计划（删除该标记并调整节拍/选材）再重跑")
     if lower > bmax:
         reasons.append(
-            "必保留内容的估算下界 %.2fs 已超预算上限 %.0fs（对白 %.2fs / %d 句；节拍下限 %.2fs）"
-            % (lower, bmax, _dlg, len(kept), _floor))
+            "必保留内容的估算下界 %.2fs 已超预算上限 %.0fs（发声：对白 %.2fs / %d 句 + "
+            "旁白 %.2fs / %d 条；画面节拍 %d 个**不构成时间下界**——镜数由时长预算决定）"
+            % (lower, bmax, dialogue_seconds(kept), len(kept),
+               narration_seconds(_narr_kept), len(_narr_kept), _basis["beats"]))
         reasons.append("下界已超上限 ⇒ 无论怎么排都装不下（不是靠排布/剪辑能救的）")
         suggestions.append("在规划层**重选**：按 `omittable` 换掉次要内容后重新规划")
         suggestions.append("或报告**本集需拆集**（本章内容超出单集预算）")
@@ -1460,6 +3846,50 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
         suggestions.append(
             "按生成稿的**实际正片时长**判断：若确实低于下限，再回规划层补内容"
             "（反应/环境/过场）或合并章节")
+    # ---- 本函数**自己**产出的问题记录（工作包 §2.2：生产者自带身份与分类）----
+    # 复核第 40 轮 P1：`verdict` 是**多轴合并**的汇总结论；报告层若从它挑原因，
+    # 「无合适替代」「载体缺失（time_budget 标记）」「载体悬空」这几类就没有记录，
+    # 计划在验收链上表现为**全绿**，控制器直接 ok。这里逐类产记录。
+    _bp = "预算：发声下界（对白+旁白，合计）必须装进 `time_budget` 带宽"
+    _eval_problems: list = []
+    if lower > bmax:
+        _eval_problems.append(_problem_record(
+            "budget_infeasible", "plan", None, "",
+            "发声下界（对白 %.2fs / %d 句 + 旁白 %.2fs / %d 条 = **合计 %.2fs**）"
+            "已超预算上限 %.0fs（画面节拍 %d 个**不构成时间下界**）"
+            % (dialogue_seconds(kept), len(kept), narration_seconds(_narr_kept),
+               len(_narr_kept), lower, bmax, _basis["beats"]),
+            # **总量超限只有内容取舍能解**（逐句替换解决不了总量）：这是"必须删/换选
+            # 条目"的修法，操作协议表达不了（它只能替换已有编号）
+            fix="reselect_dialogue"))
+    for _u in _unrep:
+        _ui = _u.get("index")
+        _uk = "narration" if str(_u.get("kind")) == "narration" else "dialogue"
+        _ul = (("N%d" if _uk == "narration" else "D%d") % _ui) if _ui else \
+            ("旁白" if _uk == "narration" else "台词")
+        _eval_problems.append(_problem_record(
+            "budget_unrepresentable", _uk, _ui,
+            ("%s_lines[%d]" % (_uk, _ui - 1)) if _ui else ("%s_lines" % _uk),
+            "%s 不可单镜表示（估时 %.2fs）：%s" % (_ul, float(_u.get("est_sec") or 0.0),
+                                                    str(_u.get("reason") or "")),
+            "预算：每句台词/旁白必须能在一镜里讲完"))
+    if _no_alt:
+        _eval_problems.append(_problem_record(
+            "budget_no_alternative", "plan", None, "time_budget",
+            "规划层明确报告：不可表示台词**无合适替代**（`time_budget` 标记）"
+            "——须内容取舍（删情节/换场次/拆集），代码不代决", _bp,
+            fix="reselect_dialogue"))
+    if _no_carrier:
+        _eval_problems.append(_problem_record(
+            "carrier_missing_annotation", "plan", None, "time_budget",
+            "规划层明确报告：节拍**载体缺失、无合适承载**（`time_budget` 标记）"
+            "——须内容取舍，代码不代决",
+            "承载关系：节拍必须标出它承载的画面/台词/旁白"))
+    # 记录与 `_dangling` 用**同一句渲染**（旧实现两处各拼一份，条数口径还不一样）。
+    for _i, _msg in _dangling_ix:
+        _eval_problems.append(_problem_record(
+            "carrier_dangling", "beat", _i, "shot_beats[%d].载体" % (_i - 1),
+            _msg, "承载关系：节拍指向的声音条目必须存在"))
     return {"verdict": "infeasible" if (lower > bmax or _unrep or _no_alt
                                         or _dangling or _no_carrier
                                         or _dup_carrier or _orphan
@@ -1470,19 +3900,32 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
                          and not _unlabeled),
             "evaluable": True, "missing": [],
             "dialogue_lines": len(kept), "dialogue_sec": _dlg,
+            # 旁白分账（复核第 7 轮）：发声预算 = 对白 + 旁白，重选反馈要看得见两项，
+            # 否则「取材」只能砍台词、砍不掉占了大头的旁白。
+            "narration_lines": len(_narr_kept),
+            "narration_sec": narration_seconds(_narr_kept),
+            "narration_orphan": [x for x in _orphan if str(x).startswith("N")],
             "dialogue_verified": kept, "dialogue_rejected": rejected,
+            # 旁白（复核第 6 轮）：与对白同样逐字核验；`_drop_unverified` 据这两个
+            # 字段把计划里的 `narration_lines` 同步收窄并重映射引用。
+            "narration_verified": [e["text"] for e in _narr_kept],
+            "narration_rejected": list(_narr_rejected),
             "dialogue_unrepresentable": _unrep,
             "beat_carrier_dangling": _dangling,
             "beat_carrier_duplicate": _dup_carrier,
             "dialogue_orphan": _orphan,
             "beat_carrier_unlabeled": _unlabeled,
-            "beats": int(round(_floor / float(MIN_SHOT_DURATION))), "beats_floor_sec": _floor,
+            # 节拍的**内容读数**（不是时间下界，见 `beats_floor_basis`）；
+            # 下界只取发声预算 ⇒ 用 `lower_bound_basis` 显式声明这条口径
+            "beats_floor_basis": dict(_basis),
+            "lower_bound_basis": "voice",
             "lower_bound_sec": lower,
-            # 只作诊断：两者可同时发生，**不得**用来判可行性（用户 2026-09-25）
-            "additive_sum_sec": round(_dlg + _floor, 2),
             "budget": {"min": bmin, "max": bmax},
+            # 生产者记录的停止原因（六字段，工作包 §2.1）——报告层只组合
+            "problems": _eval_problems,
             "reasons": reasons, "suggestions": suggestions,
-            "note": "判据取 max(对白, 节拍下限)，对白与同时发生的画面动作不重复相加"}
+            "note": "下界 = 发声预算（对白 + 旁白）；画面节拍不构成时间下界"
+                    "（镜数由时长预算决定，不由节拍数决定）"}
 
 
 def _replan_note(plan) -> tuple:
@@ -1527,12 +3970,143 @@ def _log():
         return logging.getLogger("step01.plan")
 
 
+def _remap_dialogue_refs(plan, old_lines, kept_lines) -> list:
+    """台词收窄后**重映射全部引用**（节拍载体 / 事实承载 / 钩子承载）；返回作废说明.
+
+    2026-09-30 复核第 3 组：剔除未核验台词会**压缩 D 编号**，而引用仍按旧编号写——
+    `｜载体：台词k`、`｜承载：Bn/台词k`、`hook_carrier` 于是静默指到**另一句**台词上
+    （新旧编号都「在范围内」，没有任何判据会报）。这里按位置映射（保留的原序子序列）
+    重写编号；承载的那句本身被剔除时，**去掉**该处的承载登记并如实记一条说明——
+    由调用方重新过契约门（缺承载会被显式判为契约未完成，不静默留半份引用）。
+    """
+    if not isinstance(plan, dict):
+        return []
+    _kept = list(kept_lines or [])
+    _map: dict = {}
+    _j = 0
+    for _i, _line in enumerate(old_lines or [], 1):
+        if _j < len(_kept) and _kept[_j] == _line:
+            _j += 1
+            _map[_i] = _j
+    notes: list = []
+    _beats = []
+    for _i, _b in enumerate(plan.get("shot_beats") or [], 1):
+        _rec = BeatRecord.parse(str(_b))
+        _kind, _k = _rec.carrier()
+        if _kind == "dialogue" and _k:
+            _nk = _map.get(_k)
+            if _nk:
+                _rec.set_carrier("dialogue", _nk)
+            else:
+                _rec.drop(BEAT_SEG_CARRIER)
+                notes.append("B%d 的承载台词（原 D%d）未在原文逐字找到、已剔除 ⇒ 该节拍"
+                             "现在没有载体" % (_i, _k))
+        _beats.append(_rec.render())
+    if _beats:
+        plan["shot_beats"] = _beats
+    _facts = []
+    for _i, _f in enumerate(plan.get("required_facts") or [], 1):
+        _p = parse_carrier_decl(fact_carrier(_f))
+        if _p and _p[1] == "台词":
+            _nk = _map.get(_p[2])
+            if _nk:
+                _facts.append("%s｜%sB%d/台词%d" % (strip_fact_carrier(_f),
+                                                   FACT_CARRIER_SEG, _p[0], _nk))
+            else:
+                _facts.append(strip_fact_carrier(_f))
+                notes.append("F%d 的承载台词（原 D%d）未在原文逐字找到、已剔除 ⇒ 该事实"
+                             "现在没有承载" % (_i, _p[2]))
+        else:
+            _facts.append(str(_f))
+    if _facts:
+        plan["required_facts"] = _facts
+    _hc_out: list = []
+    _hc_lost = False
+    for _x in re.split("[;；,、]", str(plan.get("hook_carrier") or "")):
+        _p = parse_carrier_decl(_x)
+        if _p is None:
+            if _x.strip():
+                _hc_out.append(_x.strip())
+            continue
+        if _p[1] != "台词":
+            _hc_out.append("B%d/画面" % _p[0])
+            continue
+        _nk = _map.get(_p[2])
+        if _nk:
+            _hc_out.append("B%d/台词%d" % (_p[0], _nk))
+        else:
+            _hc_lost = True
+    if _hc_lost:
+        plan.pop("hook_carrier", None)
+        notes.append("钩子承载的台词未在原文逐字找到、已剔除 ⇒ hook_carrier 一并作废")
+    elif _hc_out:
+        plan["hook_carrier"] = "；".join(_hc_out)
+    return notes
+
+
+def _remap_narration_refs(plan, old_entries, kept_entries) -> list:
+    """旁白条目收窄后**重映射全部旁白引用**（节拍载体 `旁白k` / 事实承载 `Bn/旁白k`）.
+
+    2026-09-30 复核第 6 轮：旁白与台词一样按**序号**被引用，删掉一条就会让后面的编号
+    整体前移——不重映射就是「同一份计划里两个地方各指一条旁白」。被剔除的那条旁白
+    仍被引用时，**去掉该处的旁白登记**并如实记一条说明，由调用方重过契约门（缺承载
+    显式失败，不静默留半份引用）。
+    """
+    if not isinstance(plan, dict):
+        return []
+    _kept_texts = [str(e.get("text") or "") for e in (kept_entries or [])]
+    _map: dict = {}
+    _j = 0
+    for _i, _e in enumerate(old_entries or [], 1):
+        _t = str(_e.get("text") or "")
+        if _j < len(_kept_texts) and _kept_texts[_j] == _t:
+            _j += 1
+            _map[_i] = _j
+    notes: list = []
+    _beats = []
+    for _i, _b in enumerate(plan.get("shot_beats") or [], 1):
+        _rec = BeatRecord.parse(str(_b))
+        _kind, _k = _rec.carrier()
+        if _kind == "narration" and _k:
+            _nk = _map.get(_k)
+            if _nk:
+                _rec.set_carrier("narration", _nk)
+            else:
+                _rec.drop(BEAT_SEG_CARRIER)
+                notes.append("B%d 的承载旁白（原 N%d）未在原文逐字找到、已剔除 ⇒ 该节拍"
+                             "现在没有载体" % (_i, _k))
+        _beats.append(_rec.render())
+    if _beats:
+        plan["shot_beats"] = _beats
+    _facts = []
+    for _i, _f in enumerate(plan.get("required_facts") or [], 1):
+        _p = parse_carrier_decl(fact_carrier(_f))
+        if _p and _p[1] == "旁白":
+            _nk = _map.get(_p[2])
+            if _nk:
+                _facts.append("%s｜%sB%d/旁白%d" % (strip_fact_carrier(_f),
+                                                   FACT_CARRIER_SEG, _p[0], _nk))
+            else:
+                _facts.append(strip_fact_carrier(_f))
+                notes.append("F%d 的承载旁白（原 N%d）未在原文逐字找到、已剔除 ⇒ 该事实"
+                             "现在没有承载" % (_i, _p[2]))
+        else:
+            _facts.append(str(_f))
+    if _facts:
+        plan["required_facts"] = _facts
+    return notes
+
+
 def _drop_unverified(plan, rep: dict) -> list:
     """把计划里的 `dialogue_lines` 就地收窄为**核验通过**的那一组.
 
     这是本模块**唯一**改计划的地方，且只删"原文里根本没有的台词"；预算不够走
     `infeasible` 分支、**不动计划**。收窄后生成侧（`outline_to_anchor` 等）只能看到
     核验过的台词——"计划是本集内容取舍的权威"靠这一步落地。
+
+    v6.156（2026-09-30 复核第 3 组）：收窄会压缩 D 编号，故**同步重映射全部引用**
+    （见 `_remap_dialogue_refs`），返回"作废的引用"说明；调用方据此**重新过契约门**，
+    缺承载显式失败，不留半份引用给下游。
     """
     if not isinstance(plan, dict):
         return []
@@ -1540,21 +4114,403 @@ def _drop_unverified(plan, rep: dict) -> list:
     if not isinstance(raw, list):
         return []
     kept = list(rep.get("dialogue_verified") or [])
-    if raw == kept:
-        return []
-    plan["dialogue_lines"] = kept
-    return list(rep.get("dialogue_rejected") or [])
+    _notes: list = []
+    if raw != kept:
+        plan["dialogue_lines"] = kept
+        _notes = _remap_dialogue_refs(plan, raw, kept)
+    # 旁白同样只保留**原文里逐字找到**的那些（复核第 6 轮）
+    _narr_raw = plan_narration_entries(plan)
+    _narr_str = [str(x.get("text") or "") for x in (plan.get("narration_lines") or [])
+                 if isinstance(x, dict)]
+    _narr_kept = [e for e in _narr_raw
+                  if e["text"] in set(rep.get("narration_verified") or [])]
+    if len(_narr_kept) != len(_narr_str):
+        _notes += _remap_narration_refs(plan, _narr_raw, _narr_kept)
+        plan["narration_lines"] = _narr_kept
+        _nrej = [str(x)[:24] for x in (rep.get("narration_rejected") or [])]
+        if _nrej:
+            _notes.append("剔除的旁白：%s" % "、".join(_nrej[:3]))
+    _rej = [str(d.get("line"))[:24] for d in (rep.get("dialogue_rejected") or [])]
+    return (_notes + ["剔除的台词：%s" % "、".join(_rej[:3])]) if _rej else _notes
+
+
+def _core_snapshot(plan) -> dict:
+    """变换**不许动**的核心字段快照（事实本体与出处、核心事件与顺序）.
+
+    「只许改载体段/引用，不许改事实本体、原文证据、事件与因果链」是既定契约
+    （见 `_remap_dialogue_refs` / `apply_replan_ops` 的同一口径），候选副本采纳前照此核对。
+
+    **类型安全**（复核第 43 轮 P1）：候选可能被变换改成非数组（实测把 `required_facts`
+    写成 `7`），旧写法 `for f in 7` 抛 `TypeError`、冲出事务边界——守卫自己成了异常源，
+    统一返回协议被绕过。快照只需要**可比**：非数组原样入快照，于是"把数组改成数字"照样
+    判成动了核心字段（fail-closed），而不再抛异常。
+    """
+    _p = plan if isinstance(plan, dict) else {}
+    _raw = _p.get("required_facts")
+    _facts = ([strip_fact_carrier(str(f)) for f in _raw] if isinstance(_raw, list) else _raw)
+
+    def _d(_v):
+        # `default=repr`：任何类型都能落成稳定的可比串（不因不可序列化再抛异常）
+        return json.dumps(_v, ensure_ascii=False, sort_keys=True, default=repr)
+
+    return {"main_events": _d(_p.get("main_events")), "climax": _d(_p.get("climax")),
+            "causal_chain": _d(_p.get("causal_chain")), "facts": _d(_facts)}
+
+
+def _classify_problem_class(problems) -> str:
+    """候选问题的**类别**（决定入口用哪种停止语义）：`contract` / `budget` / `none`."""
+    _codes = [str((x or {}).get("code") or "") for x in (problems or [])]
+    if not _codes:
+        return "none"
+    if any(c.startswith(("carrier", "orphan", "structure", "source", "acceptance")) for c in _codes):
+        return "contract"
+    return "budget"
+
+
+def _tx_operation_error(tx: dict) -> dict:
+    """变换事务里的**操作错误**（不是"验收发现的内容问题"；复核第 43 轮 P2）.
+
+    返回 `{"reason": ..., "type": ..., "message": ...}`：`type`/`message` 只在真的捕获到异常时
+    才有（`exception` / `reverify_failed`）；守卫拒收（`core_moved` / `axis_mismatch`）没有异常，
+    只记拒收理由。
+    """
+    _err = str(tx.get("error") or "")
+    if not _err:
+        return {"reason": str(tx.get("reason") or ""), "type": "", "message": ""}
+    _t, _, _m = _err.partition(": ")
+    return {"reason": str(tx.get("reason") or ""), "type": _t, "message": _m}
+
+
+def dump_plan_transform_evidence(chapter_dir, tx: dict) -> None:
+    """**拒收候选的取证包** `step01_plan_transform_rejected.json`（复核第 42/43 轮）.
+
+    角色与**主诊断**（`DIAGNOSTIC_FILES` = 本轮结论）**分开**：
+
+    - 主诊断说的是**结论**：`step01_plan_contract_invalid.json` 装"已完成验收的问题清单"
+      （可逐字回放）、`step01_plan_infeasible.json` 装预算/操作层结论；
+    - 本文件是**证据**：候选与基线两份计划 + 各自指纹 + 变换注记 + 操作错误 +
+      **实际跑到的**验收问题清单（`acceptance_ran` 为真时才有）。
+      它**不参与"本轮停在哪个文件"的选择**，但走**同一套**认领／归档／清场流程
+      （`DIAGNOSTIC_ARTIFACT_FILES`），按自带 `run_id` 认领——否则它既不被归档，
+      清场也清不掉，后来的同名写入还会把它覆盖（复核第 43 轮 P3 实测）。
+
+    **所有被拒候选统一留证据**：内容拒收、操作失败、只剩预算类的未采纳，都落这一份。
+    """
+    if chapter_dir is None or not isinstance(tx, dict):
+        return
+    from pathlib import Path
+    from step01_script_gen.plan_revision import revision_fingerprint
+    _ran = bool(tx.get("acceptance_ran"))
+    _dump_diagnostic_json(
+        Path(chapter_dir) / "step01_plan_transform_rejected.json",
+        dict(_diag_identity(STOP_LAYER_PLAN, tx.get("candidate")), **{
+            "role": "candidate_forensics",
+            "verdict": "plan_transform_rejected",
+            "conclusion": "candidate_not_accepted",
+            "reason": tx.get("reason"),
+            "problem_class": _classify_problem_class(tx.get("problems")),
+            "notes": list(tx.get("notes") or []),
+            "operation_error": _tx_operation_error(tx),
+            # **只有真跑完验收**才有问题清单（复核第 43 轮 P2：旧写法把异常文案塞进
+            # `problems`，回放必然对不上——那不是验收的结论）
+            "acceptance_ran": _ran,
+            "problems": list(tx.get("problems") or []) if _ran else [],
+            "new_problems": [x.get("code") for x in (tx.get("new_problems") or [])] if _ran else [],
+            "candidate_plan": tx.get("candidate"),
+            "candidate_fingerprint": revision_fingerprint(tx.get("candidate")),
+            "baseline_plan": tx.get("baseline"),
+            "baseline_fingerprint": revision_fingerprint(tx.get("baseline")),
+            "budget": (tx.get("report") or {}).get("budget")}),
+        what="计划变换否决取证")
+
+
+def dump_plan_transform_failed(chapter_dir, tx: dict, rep: dict) -> None:
+    """**操作层**失败（变换/守卫/重验）的结论：`step01_plan_infeasible.json`.
+
+    与**内容结论分开记录**（复核第 43 轮 P2）：`step01_plan_contract_invalid.json` 只承载
+    「**已完成验收**的问题清单」，异常文案不属于那里。
+
+    `verdict` 取既有的 `unevaluable`——它的语义正是「**判不了**，fail-closed」，据此**不**下
+    "故事装不下／需拆集"的结论；`conclusion` 写 `transform_failed`，`operation_error` 给出
+    异常类型与消息。基线读数（对白/预算）照旧落盘：那是**手上这份计划**的真实读数，
+    不是候选的结论。
+    """
+    if chapter_dir is None or not isinstance(rep, dict):
+        return
+    from step01_script_gen.plan_revision import revision_fingerprint
+    _rep = dict(rep)
+    _rep["verdict"] = "unevaluable"
+    _rep["reasons"] = ["计划变换未采纳（%s）——候选无法在生成前验算：%s"
+                       % (tx.get("reason"), "；".join(str(x) for x in (tx.get("notes") or [])[:2]))]
+    _rep["suggestions"] = ["修正计划或重跑规划层后重试；不要带着未验算的候选生成完整稿"
+                           "（基线计划未被改动、未被下发）"]
+    _dump(chapter_dir, _rep, tx.get("baseline"), conclusion="transform_failed",
+          extra={"reason": tx.get("reason"),
+                 "operation_error": _tx_operation_error(tx),
+                 "acceptance_ran": bool(tx.get("acceptance_ran")),
+                 "notes": list(tx.get("notes") or []),
+                 "candidate_plan": tx.get("candidate"),
+                 "candidate_fingerprint": revision_fingerprint(tx.get("candidate")),
+                 "baseline_fingerprint": revision_fingerprint(tx.get("baseline"))})
+
+
+def _unevaluable_rep(reason: str, suggestion: str) -> dict:
+    """`verdict=unevaluable` 的最小报告（"判不了"的公共读数：**没有**对白/预算结论）."""
+    return {"verdict": "unevaluable", "reasons": [reason], "suggestions": [suggestion],
+            "dialogue_lines": 0, "dialogue_sec": 0.0, "dialogue_rejected": [],
+            "lower_bound_sec": None, "budget": {"min": 0.0, "max": 0.0}, "note": ""}
+
+
+def dump_plan_deadline_exhausted(chapter_dir, plan=None, *,
+                                 deadline_monotonic=None, detail: str = "") -> None:
+    """**时间门**的结论：`step01_plan_infeasible.json`（工作包 §4 D）.
+
+    与"故事不可行"**分账**：截止已到时，计划的内容**根本没有被判定**（`verdict` 记
+    `unevaluable`——语义正是"判不了，fail-closed"），`conclusion` 记 `deadline_exhausted`。
+    下游据此知道该做的是"重跑／给时间"，而不是"拆集／换内容"。
+
+    内容判据**故意不在这里跑**：它们要花的时间正是这道门要保护的东西；计划未被改动、
+    未被缓存，下一次运行会从头重新判定（不会把"没判过"当成"判过了"）。
+    """
+    if chapter_dir is None:
+        return
+    from step01_script_gen.plan_revision import revision_fingerprint
+    _dump(chapter_dir,
+          _unevaluable_rep(detail or "规划截止时刻已到，候选扇出前停止",
+                           "重跑本节（预算/截止放宽）或缩小本次规划范围；"
+                           "**不要**按「故事装不下」处置——这条结论没有下过"),
+          plan, conclusion="deadline_exhausted",
+          extra={"deadline_monotonic": deadline_monotonic,
+                 "plan_fingerprint": revision_fingerprint(plan)})
+
+
+def _record_text(rec) -> str:
+    """（兼容名）问题记录 → 一行可读文本；实现归一到 `plan_revision.record_text` 一处."""
+    from step01_script_gen.plan_revision import record_text
+    return record_text(rec)
+
+
+def dump_plan_unavailable(chapter_dir, *, code: str, detail: str = "", plan=None,
+                          baseline_problems=None, failure_problems=None,
+                          replan_rejections=None) -> None:
+    """**计划没产出**的结论：`step01_plan_infeasible.json`（工作包 §4 D / §7.6）.
+
+    用于"首版都没拿到"的三种情形（`call_failed` / `illegal_response` / `outline_invalid`）
+    ——它们都是**"这一轮没跑成"**：`verdict=unevaluable`（判不了）、`conclusion=<失败码>`。
+    与"故事不可行"分账：下游据此该看通道/重跑，而不是拆集换内容。
+
+    **这些失败就是主终局**（复核 2026-10-02 之三 P1）：即使手上还留着一份**基线计划**，
+    也不能拿基线的内容结论去顶替它——旧写法把调用失败交给生成前内容门，终局变成
+    `plan_contract_invalid`（`PlanContractInvalidError`），真实的调用失败只剩在修订历史里，
+    归因反了。基线的内容问题用 `baseline_problems` **单独记录**（`extra` 里另存一栏），
+    它与"本轮为什么没跑成"是两件事。
+
+    `baseline_problems` **类型稳定**（复核 2026-10-02 之四 D-1）：收列表 / 单条 / 字符串，
+    逐条经 `record_text` 归一成字符串——旧写法逐项 `.get()`，兜底项是字符串时抛
+    `AttributeError`，整份诊断一次也没写成。
+
+    `failure_problems`（复核 2026-10-02 之五）：**本轮响应为什么被拒**的**具体记录**
+    （哪条规则、哪个字段、实际值是什么），由生产者给（`outline_structure_problems` /
+    本地响应校验），这里原样落盘——终局诊断只有一句"关键字段缺失/类型错误"时，
+    既指不出规则也**回灌不了**（下一次重跑/下一轮请求没有可操作信息）。
+
+    `replan_rejections`（复核 2026-10-02 之五）：修订控制器**逐轮**的拒收记录
+    （第几轮、什么类型、具体字段与原因）。`detail` 只留**最后一条**——留档要宽：
+    三轮各自为什么被拒收是收敛分析的输入，只留最后一条等于把轨迹丢掉。
+    """
+    if chapter_dir is None:
+        return
+    from step01_script_gen.plan_revision import problem_records, record_text, revision_fingerprint
+    _out = {"failure_code": str(code), "detail": detail,
+            "plan_fingerprint": revision_fingerprint(plan)}
+    if baseline_problems is not None:
+        _out["baseline_problems"] = [record_text(x)
+                                     for x in problem_records(baseline_problems)]
+    if failure_problems:
+        _out["failure_problems"] = [x for x in problem_records(failure_problems)]
+    if replan_rejections:
+        _out["replan_rejections"] = [dict(x) if isinstance(x, dict) else {"detail": str(x)}
+                                     for x in problem_records(replan_rejections)]
+    _dump(chapter_dir,
+          _unevaluable_rep("%s：%s" % (code, detail or "计划未产出"),
+                           "这是**这一轮没跑成**（不是故事不可行）：核对文本通道/响应后重跑；"
+                           "计划未被改动、未被缓存"),
+          plan, conclusion=str(code), extra=_out)
+
+
+#: **调用类**失败码（"这一轮没跑成"，§7.2 三类分账之一）：有基线计划时也**不许**被
+#: 生成前内容门的结论顶替——终局就是它，基线的内容问题另列（复核 2026-10-02 之三 P1）。
+OUTLINE_CALL_FAILURE_CODES = ("call_failed", "illegal_response", "outline_invalid")
+
+
+def apply_plan_transforms(plan, rep: dict, *, novel_text: str = "") -> dict:
+    """**候选副本上的变换事务**（工作包 §3 / A 步 5）：剔除未核验声音 + 引用重映射.
+
+    流程：深复制候选 → 确定性剔除并**按原序号**重映射全部 D/N/B/F/hook 引用 → 核对候选
+    **没有动核心字段**（事实本体与出处、核心事件与顺序）→ **D/N 两轴**收窄结果必须等于
+    核验通过集合 → **在候选上跑完整验收** → 通过才**就地把候选写回传入的计划**。
+
+    **可执行资格**（复核第 42 轮纠正）：采纳条件是**完整验收通过**，不是"没有新增问题"。
+    结构不合格是**原计划**的问题，但它同样不能被采纳、不能被下发。新旧问题差分
+    （`new_problems`）**只用于解释变化**。
+
+    **结果形态（所有分支一致）**：`{plan, adopted, reason, notes, baseline, candidate,
+    problems, report, new_problems, acceptance_ran, error}`——异常/守卫/重验异常分支也带全键
+    （复核第 42 轮 P1：旧写法异常分支缺 `report`，真实入口直接 `KeyError`；第 43 轮 P1：
+    守卫自己抛异常时**整份结果都没有**）。
+
+    - `plan`：调用方该用的计划（采纳=候选；未采纳=**基线**，逐字未改）
+    - `reason`：`ok` / `exception` / `core_moved` / `axis_mismatch` / `reverify_failed` / `not_acceptable`
+    - `problems`：**候选**的完整验收记录；`acceptance_ran`：**验收是否真的跑完**（没跑完就没有
+      问题清单——复核第 43 轮 P2 说的"内容结论与操作错误分开"）
+    - `report`：候选的 `evaluate_plan` 报告（候选没通过验收 ⇒ `None`）
+    - `error`：捕获到的异常（`类型: 消息`），没有异常时为空串
+    """
+    _baseline = copy.deepcopy(plan)
+    _cand = copy.deepcopy(plan)
+    _res = {"plan": plan, "adopted": False, "reason": "exception", "notes": [],
+            "baseline": _baseline, "candidate": _cand,
+            "problems": [], "report": None, "new_problems": [],
+            "acceptance_ran": False, "error": ""}
+    try:
+        _notes = _drop_unverified(_cand, rep)
+    except Exception as _e:                       # noqa: BLE001 —— 变换异常不采纳
+        _res["notes"] = ["变换异常，已保留基线计划：%r" % _e]
+        _res["error"] = "%s: %s" % (type(_e).__name__, _e)
+        return _res
+    _res["notes"] = list(_notes or [])
+    _res["candidate"] = _cand
+
+    try:
+        # 守卫自己不许成为异常源（复核第 43 轮 P1：候选被改成非数组时旧写法抛 `TypeError`，
+        # 既没有诊断，也绕过了统一返回协议）
+        if _core_snapshot(_cand) != _core_snapshot(_baseline):
+            _res["reason"] = "core_moved"
+            _res["notes"] = _res["notes"] + [
+                "候选改动了核心字段（事实本体/原文证据/事件顺序）⇒ 拒绝候选，保留基线"]
+            return _res
+
+        # **D/N 两轴**核对收窄结果（复核第 41 轮 P2：此前只核对白）
+        _want_d = [str(x) for x in (rep.get("dialogue_verified") or [])]
+        _want_n = [str(x) for x in (rep.get("narration_verified") or [])]
+        _got_d = [str(x) for x in (_cand.get("dialogue_lines") or [])]
+        _got_n = [str(e.get("text") or "") for e in plan_narration_entries(_cand)]
+        if _got_d != _want_d or _got_n != _want_n:
+            _res["reason"] = "axis_mismatch"
+            _res["notes"] = _res["notes"] + [
+                "候选收窄结果与核验通过集合不一致（D/N 两轴；不许多剔也不许改序）⇒ 拒绝候选，保留基线"]
+            return _res
+    except Exception as _e:                       # noqa: BLE001 —— 守卫异常同样不采纳
+        _res["reason"] = "exception"
+        _res["notes"] = _res["notes"] + ["候选核对异常，已保留基线计划：%r" % _e]
+        _res["error"] = "%s: %s" % (type(_e).__name__, _e)
+        return _res
+
+    def _key(_r):
+        return (str(_r.get("code")), str(_r.get("kind")), _r.get("index"), str(_r.get("path")))
+
+    try:
+        from step01_script_gen.outline import plan_acceptance_problems
+        # 基线报告只用来**解释变化**（哪些问题是这次变换新引入的），不决定采纳。
+        _base_keys = {_key(_r) for _r in (plan_acceptance_problems(_baseline, novel_text) or [])}
+        _problems = list(plan_acceptance_problems(_cand, novel_text) or [])
+        # 验收没通过时**不再**去跑 `evaluate_plan`：候选结构已不合法，那只会再抛一次异常；
+        # 而"候选不合格"已经有可回放的问题清单（复核第 43 轮 P1：入口与守卫的前置操作
+        # 也要落在事务边界内）。
+        _cand_rep = None if _problems else evaluate_plan(_cand, novel_text=novel_text)
+    except Exception as _e:                       # noqa: BLE001 —— 重验异常同样不采纳
+        _res["reason"] = "reverify_failed"
+        _res["notes"] = _res["notes"] + ["候选重新验收异常，已保留基线计划：%r" % _e]
+        _res["error"] = "%s: %s" % (type(_e).__name__, _e)
+        return _res
+    _res["acceptance_ran"] = True
+    _res["problems"] = _problems
+    _res["report"] = _cand_rep
+    _res["new_problems"] = [_r for _r in _problems if _key(_r) not in _base_keys]
+
+    if _problems:
+        # **完整验收没通过 ⇒ 不采纳**（复核第 42 轮 P1：结构不合格不许被"没有新问题"放行）
+        _res["reason"] = "not_acceptable"
+        _res["notes"] = _res["notes"] + [
+            "候选未通过**完整验收**（%s）⇒ 不采纳，保留基线"
+            % "、".join(sorted({str(x.get("code")) for x in _problems})[:4])]
+        return _res
+
+    plan.clear()
+    plan.update(_cand)                            # **采纳**（就地把候选写回）
+    _res.update({"plan": plan, "adopted": True, "reason": "ok",
+                 "candidate": copy.deepcopy(plan)})
+    return _res
 
 
 def check_plan_before_generation(plan: dict | None, *, chapter_dir=None,
-                                 novel_text: str = "") -> dict:
-    """**生成前唯一入口**（挂于候选扇出之前）：原文核验 + 预算核算，只验算一次.
+                                 novel_text: str = "", deadline_monotonic=None) -> dict:
+    """**生成前唯一入口**（挂于候选扇出之前）：计划契约 + 原文核验 + 预算核算，只验算一次.
 
     可行 → 把 `dialogue_lines` 收窄为核验通过的集合，返回报告（调用方据此记录同一组数：
     对白估时、下界、预算）。不可行/不可评估/缺计划 → 写诊断 `step01_plan_infeasible.json`
     并抛 `PlanInfeasibleError`（**不生成完整稿**）。
+
+    2026-09-30 复核裁决：**契约门在预算门之前**。必保留事实/钩子缺承载是「取舍还没
+    做完」，不是「故事装不下」——顺序颠倒会把「登记信息缺失」送进预算重选（换内容
+    解决不了），并误报「需拆集」。契约未完成 → 写
+    `step01_plan_contract_invalid.json` 并抛 `PlanContractInvalidError`。
     """
+    # **时间门在最前**（工作包 §4 D / §7.4）：截止已到就停在计划层——这是**时间**用尽，
+    # 与"故事装不下／需拆集"是两种结论（诊断按 `deadline_exhausted` 写，错误文本分开）。
+    # 放在最前是因为"生成完整稿"这一步本身要花时间：内容判据再准也没有意义；
+    # 计划未被改动、未被缓存，下一次运行会重新判定。
+    if deadline_monotonic is not None:
+        import time as _t
+        if _t.monotonic() >= float(deadline_monotonic):
+            dump_plan_deadline_exhausted(chapter_dir, plan,
+                                         deadline_monotonic=deadline_monotonic,
+                     detail="候选扇出前已过规划截止时刻（生成完整稿的时间已不足）")
+            _log().warn("[PLAN] 规划截止时刻已到（deadline_exhausted）⇒ 停在计划层："
+                        "这是**时间**用尽，不是「故事装不下／需拆集」")
+            raise PlanInfeasibleError(
+                "规划截止时刻已到（deadline_exhausted）⇒ 不生成完整稿——"
+                "这是**时间**用尽，不是「故事装不下／需拆集」")
+    # ⓪ **结构判据先跑**（复核第 43 轮 P1）：计划结构不合格时下游（承载/预算/变换）无法
+    #    安全遍历——实测 `shot_beats=7` / `required_facts=7` 会抛裸 `TypeError`，既没有
+    #    诊断留档，也绕过了统一返回协议。判定与验收链**同一份**纯诊断
+    #    （`outline.outline_structure_problems`），结论与记录形态一致。
+    #    "计划缺失／空计划"不走这条（那是"无法验算"，见 `evaluate_plan` 的 `unevaluable`）。
+    if isinstance(plan, dict) and plan:
+        from step01_script_gen.outline import outline_structure_problems
+        _struct = outline_structure_problems(plan)
+        if _struct:
+            _rs = [str(x.get("reason") or x.get("code")) for x in _struct]
+            _paths = "；".join(sorted({str(x.get("path") or "（整表）") for x in _struct})[:4])
+            dump_plan_contract_invalid(chapter_dir, plan, _rs)
+            _log().warn(
+                "[PLAN] 计划结构不合格（%s）——**不是**「故事装不下／需拆集」，"
+                "也不进预算重选：%s" % (_paths, "；".join(_rs[:3])))
+            raise PlanContractInvalidError(
+                "计划结构不合格（%s）⇒ 停在计划层，不生成完整稿：%s"
+                % (_paths, "；".join(_rs[:6])))
     rep = evaluate_plan(plan, novel_text=novel_text)
+    # 契约门在**预算门之前**（先判"取舍做完了没有"，再判"装不装得下"），但在
+    # **缺字段判据之后**：缺 `dialogue_lines` 这类是「无法验算」（`unevaluable`），
+    # 与「契约未完成」是两种结论、两份诊断，不能互相顶替（2026-09-30 复核）。
+    _contract = ([] if rep["verdict"] == "unevaluable"
+                 else plan_contract_problems(plan, novel_text=novel_text))
+    if _contract:
+        # **诊断取自唯一完整验收报告**（复核第 44 轮 P2）：触发条件仍是契约族（**停止顺序
+        # 不变**：契约优先于预算、`unevaluable` 不在此停），但落盘的是完整清单——旧写法落
+        # `plan_contract_problems` 的局部清单，回放走完整链，两处对不上（实测落盘 1 条、
+        # 回放 2~11 条）。验收链必含契约记录（结构短路已在 ⓪ 步排除），故 `_contract` 是其子集。
+        from step01_script_gen.outline import plan_acceptance_problems
+        _accept = [str(x.get("reason") or x.get("code"))
+                   for x in (plan_acceptance_problems(plan, novel_text=novel_text) or [])]
+        dump_plan_contract_invalid(chapter_dir, plan, _accept or _contract,
+                                   stop_reasons=_contract)
+        _log().warn(
+            "[PLAN] 计划契约未完成（plan_contract_invalid）——**不是**「故事装不下／"
+            "需拆集」，也不进预算重选：%s" % "；".join(_contract[:4]))
+        raise PlanContractInvalidError(
+            "计划契约未完成（必保留事实/钩子的承载缺失或无效）⇒ 停在计划层，"
+            "不生成完整稿：%s" % "；".join(_contract[:6]))
     # 重选记录（若有）——把"重选没跑成"与"重选后仍超预算"分开写进诊断与报错（用户 2026-09-25）
     _note, _extra_sug, _no_verdict = _replan_note(plan)
     if _note:
@@ -1565,10 +4521,13 @@ def check_plan_before_generation(plan: dict | None, *, chapter_dir=None,
         rep["suggestions"] = list(rep["suggestions"]) + [_extra_sug]
     _log().info(
         "[PLAN] 对白 %d 句/估时 %.2fs（逐字核验剔除 %d 句；单镜不可表示 %d 句）；"
-        "节拍 %d 个/下限 %.2fs；下界 %.2fs；预算 %.0f–%.0fs（%s）"
+        "节拍 %d 个（画面 %d／声音 %d，**均不构成时间下界**：镜数由时长预算决定）；"
+        "下界 %.2fs（发声预算）；预算 %.0f–%.0fs（%s）"
         % (rep["dialogue_lines"], rep["dialogue_sec"], len(rep["dialogue_rejected"]),
            len(rep.get("dialogue_unrepresentable") or []),
-           rep["beats"], rep["beats_floor_sec"],
+           int((rep.get("beats_floor_basis") or {}).get("beats") or 0),
+           int((rep.get("beats_floor_basis") or {}).get("visual") or 0),
+           int((rep.get("beats_floor_basis") or {}).get("voice") or 0),
            rep["lower_bound_sec"] if rep["lower_bound_sec"] is not None else -1.0,
            rep["budget"]["min"], rep["budget"]["max"], rep["note"]))
     if rep["verdict"] == "feasible" and rep["reasons"]:
@@ -1589,8 +4548,66 @@ def check_plan_before_generation(plan: dict | None, *, chapter_dir=None,
                     + "；".join("「%s…」（%s）" % (str(u.get("line"))[:40],
                                                    u.get("reason"))
                                 for u in rep["dialogue_unrepresentable"]))
+    _unadopted = False
     if rep["evaluable"]:
-        _drop_unverified(plan, rep)
+        # A 步 5：候选副本上做剔除与重映射，**完整验收通过**才采纳；否则基线原样保留
+        # 并按其问题类别停在计划层（见 `apply_plan_transforms` 的结果协议）。
+        _tx = apply_plan_transforms(plan, rep, novel_text=novel_text)
+        _notes = _tx["notes"]
+        if _tx["adopted"]:
+            # 编号域已变 ⇒ 后续判定用**变换后**的报告；重选注记是本次运行的记账，一并并回
+            rep = _tx["report"]
+            if _note:
+                rep["reasons"] = list(rep["reasons"]) + [_note]
+            if _no_verdict:
+                rep["suggestions"] = [x for x in rep["suggestions"] if "拆集" not in x]
+            if _extra_sug:
+                rep["suggestions"] = list(rep["suggestions"]) + [_extra_sug]
+        else:
+            # **未采纳**：基线逐字保留，诊断绑定**候选**。按候选问题的类别分派停止语义：
+            #   · 契约/结构/原文类 ⇒ 计划不合格，停在计划层（PlanContractInvalidError）
+            #   · 异常 / 守卫拒收 / 重验异常 ⇒ 候选与基线都不可执行，直接停
+            #   · 只剩预算类 ⇒ 退回既有 verdict/重选路径（基线报告未变，重选注记仍在）
+            _cls = _classify_problem_class(_tx["problems"])
+            _log().warn("[PLAN] 计划变换未采纳（reason=%s；%s）⇒ 基线未改"
+                        % (_tx["reason"], "；".join(_notes[:2])))
+            # **所有拒收候选统一留证据**（复核第 43 轮 P3）：内容拒收、操作失败、只剩预算类
+            # 的未采纳都落这一份；它与主诊断同走认领/归档/清场，但**不冒充结论**
+            dump_plan_transform_evidence(chapter_dir, _tx)
+            _why = "；".join(str(x.get("reason") or x.get("code"))
+                             for x in (_tx["problems"] or [])[:3]) or "；".join(_notes[:3])
+            if _cls == "contract":
+                # **内容结论**：候选**已完成验收**，问题清单可逐字回放（绑候选，不绑基线）
+                dump_plan_contract_invalid(
+                    chapter_dir, _tx["candidate"],
+                    [str(x.get("reason") or x.get("code")) for x in (_tx["problems"] or [])],
+                    stop_reasons=[str(x.get("reason") or x.get("code"))
+                                  for x in (_tx["problems"] or [])
+                                  if _classify_problem_class([x]) == "contract"])
+                raise PlanContractInvalidError(
+                    "变换后计划未通过完整验收（候选未采纳，基线未改）⇒ 不生成完整稿：%s" % _why)
+            if _tx["reason"] in ("exception", "core_moved", "axis_mismatch", "reverify_failed"):
+                # **操作错误**（不是验收发现的内容问题）：写"判不了"的结论，不伪造问题清单
+                dump_plan_transform_failed(chapter_dir, _tx, rep)
+                raise PlanInfeasibleError(
+                    "计划变换未采纳（%s，基线未改）⇒ 不生成完整稿：%s" % (_tx["reason"], _why))
+            # 预算类：不采纳、也不在这里停——交给下面的 verdict 分支（含重选注记）
+            _unadopted = True
+        if _notes:
+            _after = plan_contract_problems(plan, novel_text=novel_text)
+            if _after:
+                # 同上：**触发**用契约族（语义不变），**落盘**用完整验收报告（回放一致）
+                from step01_script_gen.outline import plan_acceptance_problems
+                _accept_after = [str(x.get("reason") or x.get("code"))
+                                 for x in (plan_acceptance_problems(plan, novel_text=novel_text) or [])]
+                dump_plan_contract_invalid(chapter_dir, plan, _accept_after or _after,
+                                           stop_reasons=_after)
+                _log().warn(
+                    "[PLAN] 剔除未核验台词后承载关系断开（%s）⇒ 停在计划层：%s"
+                    % ("；".join(_notes[:2]), "；".join(_after[:3])))
+                raise PlanContractInvalidError(
+                    "剔除未核验台词后承载关系断开（承载的那句原文里没有，剔除后引用作废）"
+                    "⇒ 不生成完整稿：%s" % "；".join(_after[:4]))
     if rep["verdict"] == "infeasible":
         _dump(chapter_dir, rep, plan, no_verdict=_no_verdict)
         # 用户 2026-09-25：**异常开头也必须分开**。`replan_failed`（调用/解析失败）没有判定
@@ -1606,39 +4623,58 @@ def check_plan_before_generation(plan: dict | None, *, chapter_dir=None,
         raise PlanInfeasibleError(
             "计划无法在生成前验算：%s ⇒ 不生成完整稿（%s）"
             % ("；".join(rep["reasons"]), "；".join(rep["suggestions"])))
+    if _unadopted:
+        # 变换没被采纳（候选只剩预算类问题），而基线自己判了 `feasible` —— 说明**未核验的
+        # 声音仍在计划里**：不许拿它下发（复核第 42 轮：未通过候选不得交给生成）。
+        # 结论照旧落盘（"判不了"），取证包已在未采纳分支写过。
+        _dump(chapter_dir, dict(rep, verdict="unevaluable", reasons=list(rep["reasons"])),
+              plan, conclusion="candidate_not_accepted")
+        raise PlanInfeasibleError(
+            "计划变换未采纳且基线不可下发（候选未通过完整验收）⇒ 不生成完整稿：%s"
+            % "；".join(rep["reasons"])[:200])
     return rep
 
 
-def _dump(chapter_dir, rep: dict, plan=None, *, no_verdict: bool = False) -> None:
+def _dump(chapter_dir, rep: dict, plan=None, *, no_verdict: bool = False,
+          conclusion: str = "", extra: dict | None = None) -> None:
     """把判定落成**诊断产物**（正式三件套不动）——准则 7：失败必须看得见.
 
     `verdict` 记的是**计划本身的读数**（事实：超预算 / 无法验算），`conclusion` 记的是
     **可以据此下的结论**：`teardown`（确认装不下）/ `replan_incomplete`（重选没跑成，
     尚无结论，用户 2026-09-25）。
+
+    `conclusion` 参数可**显式给定**（`dump_plan_transform_failed` 用它写 `transform_failed`：
+    操作层失败——判不了，`verdict=unevaluable`）；`extra` 追加该场景特有的字段
+    （拒收原因、异常、候选指纹……），不覆盖上面的公共读数。
     """
     if chapter_dir is None:
         return
     plan_replan = (plan or {}).get("plan_replan") if isinstance(plan, dict) else None
-    try:
-        from pathlib import Path
-        from shared.json_io import atomic_dump_json
-        atomic_dump_json(Path(chapter_dir) / "step01_plan_infeasible.json",
-                         {"verdict": rep["verdict"],
-                          "conclusion": ("replan_incomplete" if no_verdict
-                                         else ("teardown" if rep["verdict"] == "infeasible"
-                                               else "")),
-                          "reasons": rep["reasons"],
-                          "suggestions": rep["suggestions"],
-                          "dialogue_lines": rep["dialogue_lines"],
-                          "dialogue_sec": rep["dialogue_sec"],
-                          "dialogue_rejected": rep["dialogue_rejected"],
-                          "dialogue_unrepresentable": rep.get("dialogue_unrepresentable") or [],
-                          "beats_floor_sec": rep["beats_floor_sec"],
-                          "lower_bound_sec": rep["lower_bound_sec"],
-                          # v6.132：规划层是否已经重选过一轮、重选前后各是多少——
-                          # 「重选后仍超限」与「压根没重选」是两种不同的处置依据
-                          "replan": (plan_replan if isinstance(plan_replan, dict) else None),
-                          "budget": rep["budget"], "note": rep["note"]},
-                         ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    # 身份字段与契约诊断同款：**停止在这一层时，这一层的诊断要能自证是哪一轮、
+    # 哪一版契约、哪一层**（复核 2026-10-01「诊断产物身份」）。
+    from pathlib import Path
+    _payload = dict(_diag_identity(STOP_LAYER_PLAN, plan), **{
+            "verdict": rep["verdict"],
+            "conclusion": (conclusion or ("replan_incomplete" if no_verdict
+                                          else ("teardown" if rep["verdict"] == "infeasible" else ""))),
+            "reasons": rep["reasons"],
+            "suggestions": rep["suggestions"],
+            "dialogue_lines": rep["dialogue_lines"],
+            "dialogue_sec": rep["dialogue_sec"],
+            # 旁白分账（与契约诊断对齐：发声预算 = 对白 + 旁白）
+            "narration_lines": rep.get("narration_lines"),
+            "narration_sec": rep.get("narration_sec"),
+            "dialogue_rejected": rep["dialogue_rejected"],
+            "dialogue_unrepresentable": rep.get("dialogue_unrepresentable") or [],
+            "beats_floor_basis": rep.get("beats_floor_basis"),
+            "lower_bound_basis": rep.get("lower_bound_basis"),
+            "lower_bound_sec": rep["lower_bound_sec"],
+            # v6.132：规划层是否已经重选过一轮、重选前后各是多少——
+            # 「重选后仍超限」与「压根没重选」是两种不同的处置依据
+            "replan": (plan_replan if isinstance(plan_replan, dict) else None),
+            "budget": rep["budget"], "note": rep["note"]})
+    if extra:
+        # 该场景特有的字段（操作层失败的原因/异常/候选指纹）——公共读数不被覆盖
+        _payload.update(extra)
+    _dump_diagnostic_json(Path(chapter_dir) / "step01_plan_infeasible.json", _payload,
+                          what="预算诊断")

@@ -54,17 +54,73 @@ _LINES = _failed_draft_lines()
 _SOURCE = "\n".join(_LINES)          # 只用于让"原文核验"通过；核验本身另有用例
 
 
+#: 计划契约（2026-09-30）：每条必保留事实要声明承载、每句选用台词要有承载节拍——
+#: 夹具因此不再是「节拍1/节拍2」这种只有标题的条目（那已是一份**契约未完成**的计划，
+#: 会在生成前的统一入口被 `plan_contract_invalid` 停下）。
+_FACT = "她被杀｜原文证据：“一道寒光刺进了心口”｜承载：B1/画面"
+_VISUAL_BEAT = ("节拍：镜头给到一道寒光刺进她的心口｜本镜信息目的：交代凶案结果"
+                "｜原文依据：“一道寒光刺进了心口”｜载体：画面")
+
+
+def _dialogue_beat(text, k, body=None) -> str:
+    return ("节拍：%s｜本镜信息目的：推进｜原文依据：“%s”｜载体：台词%d"
+            % (body or (str(text)[:14] or "过场"), text, k))
+
+
+#: 补足用节拍（结构判据：`shot_beats` 必须覆盖全部主要事件——夹具的 `main_events` 有 3 条，
+#: 台词少的夹具必须补到 3 条节拍，否则计划**结构不合格**，生成前门会拒收）
+_PAD_BEAT = ("节拍：雨还在下｜本镜信息目的：过场｜原文依据：“雨还在下”｜载体：画面")
+
+
+def _beats_for(lines) -> list:
+    """契约完整的节拍：B1 由**画面**承载 F1，其后每句选用台词一条承载节拍，补足到 3 条."""
+    _bs = [_VISUAL_BEAT] + [_dialogue_beat(_ln, _i)
+                            for _i, _ln in enumerate(lines or [], 1)]
+    while len(_bs) < 3:
+        _bs.append(_PAD_BEAT)
+    return _bs
+
+
+def _retag(beats, n_lines: int) -> list:
+    """把既有节拍**只改载体标注**后贴到新的选用台词数上（正文一字不改）.
+
+    重选的硬边界是「节拍本体不许动、载体标注必须随台词增删同步更新」——节拍**条数**
+    也保持不变，多出来的那些改标「画面」（`_plan_core_preserved` 逐字比对正文）。
+    """
+    from step01_script_gen.plan_feasibility import BeatRecord
+    out = []
+    for _i, _b in enumerate(beats or [], 1):
+        _rec = BeatRecord.parse(_b)
+        if _i > 1 and (_i - 1) <= int(n_lines or 0):
+            _rec.set_carrier("dialogue", _i - 1)
+        else:
+            _rec.set_carrier("visual")
+        out.append(_rec.render())
+    return out
+
+
 def _plan(lines=None, beats=None, **extra) -> dict:
     # main_events 3-6 条 / climax / causal_chain 是 `outline._validate_outline` 的硬要求
     # （缺任一项则锚点渲染为空串，提示里就看不到计划了）
+    _lines = _LINES if lines is None else lines
     base = {"main_events": ["事件1", "事件2", "事件3"],
             "climax": "船头对峙",
-            "required_facts": ["她被杀｜原文证据：一道寒光刺进了心口"],
+            "required_facts": [_FACT],
             "causal_chain": ["起因→行动→结果→悬念"],
-            "shot_beats": beats if beats is not None else ["节拍1", "节拍2", "节拍3"],
-            "dialogue_lines": _LINES if lines is None else lines,
+            "shot_beats": beats if beats is not None else _beats_for(_lines),
+            "dialogue_lines": _lines,
             "omittable": ["闲笔段落"],
-            "time_budget": "对白约30秒；动作约40秒；反应约30秒"}
+            # v3 起 `hook_spoken` 必须**显式给出**（本夹具没有钩子要求说出口的台词）
+            "hook_spoken": [],
+            "time_budget": "对白约30秒；动作约40秒；反应约30秒",
+            # 复核之十二：**完整计划**的必需顶层键（`OUTLINE_SCHEMA.required`）一个都不能少
+            # ——"回一整份计划"的入口（`revise_plan_full` / 预算重选的整份重写分支）会先查
+            # 完整性，缺键要**如实报出来**（不做静默补齐：补齐会把"少回一半"变成
+            # `core_field_changed`，模型据此改不动）。首版是 strict schema，实跑响应里
+            # 这些键一定都在，夹具按同一形状补齐。
+            "characters": ["甲", "乙"], "emotional_arc": "平→紧",
+            "key_scenes": ["甲板"], "character_motives": ["甲：推进"],
+            "end_hook": "风起帆响", "hook_carrier": "", "narration_lines": []}
     base.update(extra)
     return base
 
@@ -92,21 +148,28 @@ def test_duration_is_computed_by_code_not_taken_from_the_plan():
 # ---------------------------------------------------------------------------
 # 2) 对白与画面动作不重复相加：判据取 max，不是求和
 # ---------------------------------------------------------------------------
-def test_lower_bound_takes_max_and_never_the_sum():
-    """对白 57s + 节拍下限 60s：判据取 max=60s（可行）；若取和 117s 会误判不可行."""
+def test_lower_bound_is_the_voice_budget_only():
+    """下界**只取发声预算**：节拍不进下界（2026-10-01 复核第 16 轮改判）.
+
+    旧口径是 `max(对白, 节拍数 × 3 秒)`——"节拍 × 3 秒"没有产品依据：生成契约写的是
+    「**镜数由时长预算决定，不由节拍数决定**」，`timecode` 的镜头时长也由文本与 motion_desc
+    推出。复核反例：9 镜 × 10 秒、每镜 4 画面节拍 + 1 对白节拍的稿被判"至少 108 秒"。
+    新口径：下界 = 发声预算；节拍只作**内容读数**（`beats_floor_basis`）。
+    判别性：把"节拍 × 3 秒"加回下界 ⇒ 旧形态（max=60s）会重现。
+    """
     line = "她抬头看着他"
     rep = pf.evaluate_plan(
         _plan(lines=[line] * 19, beats=["节拍"] * 20),      # 19×3.0s = 57s
         novel_text="他把伞递过去，" + line + "，雨还在下。")
-    assert rep["beats_floor_sec"] == pytest.approx(60.0)     # 20 × MIN_SHOT_DURATION
-    assert rep["dialogue_sec"] < rep["beats_floor_sec"]
-    assert rep["lower_bound_sec"] == rep["beats_floor_sec"], rep
-    assert rep["additive_sum_sec"] == pytest.approx(
-        rep["dialogue_sec"] + rep["beats_floor_sec"])
-    assert rep["additive_sum_sec"] > rep["lower_bound_sec"], (
-        "两者本可同时发生，加法值只作诊断")
+    assert "beats_floor_sec" not in rep, "节拍不再构成时间读数"
+    assert rep["lower_bound_basis"] == "voice", rep
+    assert rep["lower_bound_sec"] == rep["dialogue_sec"], rep
+    # 夹具的节拍没标载体 ⇒ 全部计入 `unlabeled`（读数照实，不猜）
+    assert rep["beats_floor_basis"] == {"visual": 0, "voice": 0, "unlabeled": 20,
+                                        "beats": 20}, rep["beats_floor_basis"]
+    assert rep["lower_bound_sec"] < 20 * pf.MIN_SHOT_DURATION
     assert rep["verdict"] == "feasible" and rep["feasible"] is True, rep
-    assert "不重复相加" in rep["note"], rep["note"]
+    assert "不由节拍数决定" in rep["note"], rep["note"]
 
 
 def test_below_min_is_logged_on_the_pass_path():
@@ -127,7 +190,7 @@ def test_below_min_is_logged_on_the_pass_path():
     import unittest.mock as _mock
     with _mock.patch.object(_pf, "_log", lambda: _log):
         _pf.check_plan_before_generation(
-            _plan(lines=["嗯"], beats=["节拍1"]), novel_text="他嗯了一声。")
+            _plan(lines=["嗯"]), novel_text="他嗯了一声。")
     _log.removeHandler(_h)
     assert any("低于下限" in m and "尚不能据下界判断" in m for m in _seen), _seen
 
@@ -240,7 +303,9 @@ def test_evaluation_never_modifies_the_plan_or_trims_it():
 
 def test_boundary_narrows_the_plan_to_verified_lines_only(tmp_path):
     """边界的改写**只有一处**：把未核验台词从计划里剔除（预算不够时一个字都不动）."""
-    plan = _plan(lines=["这船今日不出港", "杜撰的一句"], beats=["节拍1", "节拍2"])
+    # 承载关系必须双向闭合：只有**核验通过**的那句需要承载节拍，故这里只给 B2
+    plan = _plan(lines=["这船今日不出港", "杜撰的一句"],
+                 beats=[_VISUAL_BEAT, _dialogue_beat("这船今日不出港", 1), _PAD_BEAT])
     rep = pf.check_plan_before_generation(
         plan, chapter_dir=tmp_path, novel_text="老陈说：这船今日不出港。")
     assert plan["dialogue_lines"] == ["这船今日不出港"], plan["dialogue_lines"]
@@ -471,11 +536,20 @@ def test_every_full_draft_entry_renders_the_anchor_with_the_plan():
 def _plan_response(lines, **overrides) -> str:
     """一份合法的大纲响应 JSON（核心字段与 `_plan()` 一致）."""
     base = {"main_events": ["事件1", "事件2", "事件3"], "climax": "船头对峙",
-            "required_facts": ["她被杀｜原文证据：一道寒光刺进了心口"],
+            "required_facts": [_FACT],
             "causal_chain": ["起因→行动→结果→悬念"],
-            "shot_beats": ["节拍1", "节拍2", "节拍3"],
+            # 正文与首版**逐字一致**，只按新的选用台词数重贴载体：
+            # 非操作式重选的硬边界是「节拍本体不许动、载体必须跟着台词改」
+            "shot_beats": _retag(_beats_for(_LINES), len(lines)),
             "dialogue_lines": list(lines), "omittable": ["闲笔段落"],
-            "time_budget": "对白约30秒；动作约40秒；反应约30秒"}
+            # v3 起计划必须显式给出 `hook_spoken`（本夹具无钩子要求说出口的台词）
+            "hook_spoken": [],
+            "time_budget": "对白约30秒；动作约40秒；反应约30秒",
+            # 与 `_plan()` **同值**的 7 个必需顶层键（复核之十二）：响应缺键会被完整性门
+            # 如实拒收；而"补默认值"会让它与基线在这几个字段上不等 ⇒ 误报核心字段被改
+            "characters": ["甲", "乙"], "emotional_arc": "平→紧",
+            "key_scenes": ["甲板"], "character_motives": ["甲：推进"],
+            "end_hook": "风起帆响", "hook_carrier": "", "narration_lines": []}
     base.update(overrides)
     return json.dumps(base, ensure_ascii=False)
 
@@ -679,24 +753,38 @@ def test_cached_plan_is_still_checked_and_replan_is_written_back(tmp_path, monke
     assert box.get("prompts", []) == [], "缓存命中且计划可行时不该再调模型"
 
 
-def test_cached_infeasible_plan_is_not_replanned_again(tmp_path, monkeypatch):
-    """用户 2026-09-25 定的口径："只重选一次"= **同一计划版本一次**（不是每次调用一次）.
+def test_a_failed_plan_is_never_reused_from_the_cache(tmp_path, monkeypatch):
+    """工作包 §4 C：**可执行缓存不包含失败版本**，历史失败元数据不能替代本轮验收.
 
-    缓存里那份"重选后仍超限"的计划下一轮不得再烧一次模型——记录已尝试的结果，直接沿用结论。
+    旧口径"缓存里那份仍超限的计划下一轮不再重选"把**失败版本**留在了可执行缓存里；
+    C 阶段裁决：失败版本不写缓存（下一轮从首版重新规划）。"只重选一次"仍对**同一份
+    在内存里的计划版本**成立（本用例后半段）。
     """
     import step01_script_gen.outline as o
 
     _cache = tmp_path / "chapter_outline.cache.json"
     box1 = _patch_outline_service(monkeypatch, [_plan_response(_LINES), _plan_response(_LINES)])
-    p1 = o.generate_outline(_SOURCE, cache_path=_cache)
-    assert len(box1["prompts"]) == 2, "首轮：首版 + 一次重选"
-    assert p1["plan_replan"]["result"] == "infeasible"
-    # 第二轮命中缓存 → **不再重选**（0 次模型调用），并把"已尝试过"如实标出来
-    box2 = _patch_outline_service(monkeypatch, [])
-    p2 = o.generate_outline(_SOURCE, cache_path=_cache)
-    assert box2.get("prompts", []) == [], "同一计划版本不得重复重选"
-    assert p2["plan_replan"]["result"] == "infeasible"
-    assert p2["plan_replan"].get("skipped") == "already_attempted", p2["plan_replan"]
+    # 2026-10-02（工作包 §4 D）：结论从**结构化结果**读——`generate_outline` 只转发
+    # `executable=True` 的计划，超预算的计划不再被当成"计划"返回。
+    _r1 = o.generate_outline_result(_SOURCE, cache_path=_cache)
+    assert len(box1["prompts"]) == 2, "首轮：首版 + 一次重选（重选后内容没变 ⇒ no_change 收口）"
+    assert _r1["executable"] is False and _r1["source"] == "initial"
+    assert _r1["revision"]["stop_reason"] == "no_change", _r1["revision"]
+    assert "budget_infeasible" in _r1["acceptance"]["codes"], _r1["acceptance"]["codes"]
+    assert not _cache.exists(), "未通过统一验收的版本**不许**写进可执行缓存"
+    # 第二轮：缓存里没有失败版本 ⇒ **从首版重新规划**（不是"沿用失败结论、0 次调用"）
+    box2 = _patch_outline_service(monkeypatch, [_plan_response(_LINES), _plan_response(_LINES)])
+    _r2 = o.generate_outline_result(_SOURCE, cache_path=_cache)
+    assert box2.get("prompts"), "缓存里没有失败版本 ⇒ 本轮必须重新规划"
+    assert _r2["cache"]["hit"] is False, _r2["cache"]
+    assert not _cache.exists(), "仍然不可行 ⇒ 仍然不写缓存"
+    # 同一份**在内存里**的计划版本，"只重选一次"仍对**流水线直调**成立（控制器驱动时
+    # 额度归控制器管，见 C 阶段用例）；这里显式带上重选元数据，走的正是直调口径。
+    _in_mem = dict(_r1["plan"])
+    _in_mem["plan_replan"] = {"result": "infeasible",
+                              "criteria_version": pf.replan_criteria_version()}
+    _p2, _info2 = o.enforce_budget_by_replanning(_in_mem, _SOURCE)
+    assert _info2.get("skipped") == "already_attempted", _info2
 
 
 # ---------------------------------------------------------------------------
@@ -1251,10 +1339,20 @@ def test_replan_resolves_unrepresentable_dialogue(monkeypatch):
     """A 判据贯通：计划含不可表示台词 → 重选反馈 → 换成合法原文台词后采纳."""
     import step01_script_gen.outline as o
 
-    plan = _plan(lines=[_X84])
+    plan = _plan(lines=[_X84], beats=[
+        '节拍：旁人惊呼｜本镜信息目的：推进｜原文依据：“一道寒光刺进了心口”｜载体：台词1',
+        # 画面承载必须落在**正文真的演出这条事实**的节拍上：事实与承载处的比对读的是
+        # 节拍**正文/信息目的**，不再读节拍的「原文依据」（2026-09-30 复核反例：
+        # 把事实引文抄进一个拍别的东西的节拍不算演出）
+        _VISUAL_BEAT,
+        '节拍：收尾｜本镜信息目的：推进｜原文依据：“一道寒光刺进了心口”｜载体：画面',
+    ])
     # v6.143：可表示性触发走**操作式**——模型回操作，代码在旧计划上应用
     box = _patch_outline_service(monkeypatch, [json.dumps(
-        {"dialogue_ops": [{"index": 1, "replace_with": "住嘴！"}], "beat_ops": []},
+        {"dialogue_ops": [{"index": 1, "replace_with": "住嘴！"}], "beat_ops": [],
+         # 动了台词就必须逐项声明事实承载，且承载节拍要与事实的原文证据**有交集**
+         # （声明为 台词k 时还会要求该节拍标注同款载体）
+         "fact_carriers": [{"index": 1, "beat": 2, "mode": "画面"}]},
         ensure_ascii=False)])
     new_plan, info = o.enforce_budget_by_replanning(
         plan, _SRC_AB, model=None, base_prompt="BASE", system_prompt="SYS")

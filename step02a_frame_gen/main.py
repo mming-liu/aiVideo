@@ -193,6 +193,8 @@ def main():
     import argparse
     import json
     from shared.paths import script_file, vimax_working_dir as wd
+    from shared.run_scope import (add_scope_arguments, apply_scope, scope_log_line,
+                                  step01_hint as _step01_hint)
 
     parser = argparse.ArgumentParser(description="step02a 帧图片生成")
     parser.add_argument("--shots", "-s", default=None,
@@ -209,7 +211,11 @@ def main():
     parser.add_argument("--concurrency", "-c", type=int, default=None,
                         help="镜头级并发数（默认读 STEP02A_CONCURRENCY env，缺省 3；"
                              "1=串行旧行为）。图片供应商限速由 KeyScheduler 独立保证")
+    add_scope_arguments(parser)
     args = parser.parse_args()
+
+    # 运行范围必须在 script_file()/chapter_dir() 之前生效（本入口的章级路径全部惰性解析）
+    scope = apply_scope(args.chapter, args.book, args.book_name)
 
     only_indices = parse_shot_selector(args.shots)
 
@@ -225,6 +231,14 @@ def main():
     work_dir = wd()
 
     logger = get_logger(chapter_dir() / "step02a.log", console_level="INFO")
+    logger.info(f"[INFO] {scope_log_line(scope)}")
+    # 缺 step01 产物时说清楚是**哪一章**缺、该跑什么命令：裸 FileNotFoundError 会被
+    # 当成"路径写错"，与真正的原因——该章还没跑出 COMMITTED 的 script_result.json——无关。
+    if not script_path.exists():
+        logger.error(
+            f"[ERROR] {script_path} 不存在：chapter_{scope['chapter']:03d} 还没有 step01 产物。"
+            f"先跑：{_step01_hint(scope)}")
+        raise SystemExit(2)
     # Step02a owns image-prompt validation. Seedream/Qwen image constraints
     # are checked against the image fields before any frame generation.
     try:
@@ -244,16 +258,13 @@ def main():
         # 「它们是同一次提交写出来的」。manifest 缺失 / 状态非 COMMITTED /
         # 任一摘要不符，一律 fail-closed（step01 BLOCK 时不写新产物，只写
         # BLOCK manifest，下游因此不会带着未解决的 blocking 继续生图）。
-        verify_step01_commit_manifest(chapter_dir(), _script_for_qa, stage="step01")
+        verify_step01_commit_manifest(chapter_dir(), _script_for_qa, stage="step01",
+                                      expected_chapter=scope["chapter"])
         _iq = collect_image_prompt_quality(_script_for_qa)
         logger.info(f"[IMAGE-QA] warnings: {_iq.get('warning_count', 0)}")
     except Exception as e:
         logger.error(f"[IMAGE-QA] upstream quality gate failed: {e}")
         raise
-
-    if not script_path.exists():
-        logger.error(f"[ERROR] script not found: {script_path}")
-        return
 
     logger.info(f"[INFO] step02a_frame_gen start")
     logger.info(f"  script: {script_path}")

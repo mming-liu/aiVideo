@@ -942,17 +942,23 @@ def _compute_timecodes(script: dict, *, allow_split: bool = False) -> None:
         # v6.6: 优先从 motion_desc 解析时间分段
         motion_duration = _extract_motion_duration(motion_desc) if motion_desc else None
 
-        # 对话镜头时长必须以「能念完台词」为下限：取 motion 分段与字数估时的较大值，
-        # 避免视频太短、TTS 长台词被截断（音画同步关键）。
-        speech_duration = _estimate_duration(text) if _has_dialogue(text) else 0.0
+        # 发声镜头时长必须以「能念完这段字」为下限：取 motion 分段与字数估时的较大值，
+        # 避免视频太短、长台词/长旁白被截断（音画同步关键）。
+        #
+        # 2026-09-30 复核第 6 轮：**对白与旁白共用同一套估时**。旧实现只给「有对话」的
+        # 镜头算字数时长，纯旁白镜一律吃 `NARRATION_FIXED_DURATION`（4s）——实测一段
+        # 预计 9.85 秒的旁白只被分配 4 秒，成片必然说不完。旁白与画面**同时发生**
+        # （不为它额外加镜头），但它的发声时间同样要进单镜/整篇预算。
+        _voiced = bool(str(text or "").strip())
+        speech_duration = _estimate_duration(text) if _voiced else 0.0
 
         if motion_duration and motion_duration > 0:
             base_duration = max(motion_duration, speech_duration) if speech_duration > 0 else motion_duration
-        elif _has_dialogue(text):
-            # 有对话但无 motion 分段：按对话字数估算时长
+        elif speech_duration > 0:
+            # 有对白或无对白的旁白：都按字数估时（不再对旁白走固定 4 秒）
             base_duration = speech_duration
         else:
-            # 纯旁白：固定短时长
+            # 既无台词也无旁白：固定短时长
             base_duration = NARRATION_FIXED_DURATION
 
         # #29 修复 2026-08-14：先兜底 MIN_SHOT_DURATION、再按 fps 对齐整数帧。

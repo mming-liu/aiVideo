@@ -113,4 +113,8 @@ D 方案实施后，**low 类断言（详见 qc-reliability-calibration.md）首
 3. **hook prompt 矛盾**：v6.43 Constraint 给刺杀前 hook 误注入伤锚
 4. **视线/朝向盲区**：`_CLAIM_KEY_WORDS` 缺视线词 + `_GROUNDING_PROMPT` desc 无 gaze direction
 
-详见 `~/.claude/memory/qc-retry-diversity-abc-fix.md` + `hook-prompt-stage-conflict-ff-lf.md` + `step02a-qcresult-dump-fix.md`。
+详见 `~/.claude/projects/C--myFloders-git-aiVideo/memory/qc-retry-diversity-abc-fix.md` + `hook-prompt-stage-conflict-ff-lf.md` + `step02a-qcresult-dump-fix.md`。
+
+> ✅ **引用路径更正（2026-10-01 复核第 15 轮）**：上面三份留档**都在**，只是路径写错了——
+> 记忆在 **Claude 项目级目录** `~/.claude/projects/C--myFloders-git-aiVideo/memory/`，不是用户级 `~/.claude/memory/`（该目录确实不存在）。
+> 本节四条结论的出处可核。

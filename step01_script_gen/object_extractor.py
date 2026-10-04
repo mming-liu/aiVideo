@@ -84,7 +84,7 @@ OBJECT_EXTRACTION_PROMPT = """
 # 场景物体提取函数
 # ========================================================================
 
-def extract_scene_objects(novel_text: str, bank: SceneObjectsBank) -> list[dict]:
+def extract_scene_objects(novel_text: str, bank: SceneObjectsBank) -> "list[dict] | None":
     """从小说原文提取场景物体及其尺寸推导.
 
     Args:
@@ -92,7 +92,9 @@ def extract_scene_objects(novel_text: str, bank: SceneObjectsBank) -> list[dict]
         bank: SceneObjectsBank 实例，用于提供已知物体（已有尺寸）做修正/确认
 
     Returns:
-        list[dict]: 提取到的场景物体列表；失败返回 []（不阻断主流程）
+        `list[dict]`：提取成功（**空数组 = 真的没有物体**）；
+        `None`：**这次没产出**（调用失败 / 解析失败）——调用方据此**不写库**
+        （2026-10-02 日志复核：鉴权失败那轮把 0 条写进库并报"已保存"）。
     """
     known_ids = bank.get_all_identifiers()
     known_text = "（暂无已知物体）"
@@ -146,8 +148,8 @@ def extract_scene_objects(novel_text: str, bank: SceneObjectsBank) -> list[dict]
     )
     result = service.generate(req)
     if not result.success:
-        print(f"[WARN] 场景物体提取失败: {result.error}")
-        return []
+        print(f"[WARN] 场景物体提取失败（**未产出**，不写库）: {result.error}")
+        return None
     if result.truncated:
         # 截断已放行，但必须显式告知：下面「提取到 N 个」会少报，静默少报正是
         # 09-08 那串问题的共同点
@@ -161,8 +163,8 @@ def extract_scene_objects(novel_text: str, bank: SceneObjectsBank) -> list[dict]
     try:
         data = safe_parse_json_object(result.text)
     except (ValueError, json.JSONDecodeError) as e:
-        print(f"[WARN] 场景物体提取 JSON 解析失败（含截断恢复后仍失败）: {e}")
-        return []
+        print(f"[WARN] 场景物体提取 JSON 解析失败（含截断恢复后仍失败；**未产出**，不写库）: {e}")
+        return None
 
     objs = data.get("scene_objects", [])
     # 截断残渣过滤（v6.62.6，09-09）：json_repair 抢救截断输出时，尾部那个没写完

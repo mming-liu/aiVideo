@@ -974,11 +974,30 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     # 2026-08 架构变更：对话/背景音交给视频模型（wan2.7 系列有声视频）。
     # 每个镜头都注入场景背景音（audio_cue），对话镜头额外注入台词+说话人+音色描述。
     # 台词文本本身写进 prompt，让模型念出来并与口型同步。
-    dialogue_text = shot.get("narration_segment", "").strip()
-    is_dialogue = (
-        ":" in dialogue_text or "：" in dialogue_text
-        or '"' in dialogue_text or "“" in dialogue_text or "‘" in dialogue_text
-    )
+    # 2026-09-30 复核第 8 轮：改走**结构化声音条目分流**（与 step03 串行/异步 TTS
+    # 同一份判据）——只把**对白那一份**交给模型念；纯旁白镜不再因为文本里带冒号
+    # 就被当成台词，混合镜也不会把旁白当对白念出来。计划没有声音条目（旧稿/无契约）
+    # 时回退历史口径（标点启发式），行为不变。
+    from step01_script_gen.plan_feasibility import shot_voice_parts as _svp
+    _plan = script.get("chapter_outline") if isinstance(script, dict) else None
+    _parts = _svp(shot, _plan if isinstance(_plan, dict) else None)
+    if _parts["entries"]:
+        dialogue_text = _parts["dialogue"].strip()
+        is_dialogue = bool(dialogue_text)
+        if not _parts["split_ok"] and is_dialogue:
+            # 分流不成序（条目文本没能在本镜文本里按序定位）：与 step03 同口径——
+            # `shot_voice_parts` 已把整段归给对白，这里**照旧**按整段交给模型，
+            # 只是把降级显式打出来。不选「干脆不念」：那会丢掉角色台词（native 模式下
+            # 没人补），比多念了一句旁白更不可恢复。
+            # 纯旁白镜（分流后没有对白那一份）不走这里——那时根本没交给模型念，
+            # 打「按整段对白处理」与事实不符（复核指出）。
+            print("[WARN] shot %s: 声音分流未成序，按整段对白处理" % shot.get("index", 0))
+    else:
+        dialogue_text = shot.get("narration_segment", "").strip()
+        is_dialogue = (
+            ":" in dialogue_text or "：" in dialogue_text
+            or '"' in dialogue_text or "“" in dialogue_text or "‘" in dialogue_text
+        )
 
     # 6.0 场景背景音（所有镜头）：audio_cue 由 step01 生成，如「蝉鸣声渐起、水波轻拍」。
     # 贴合当前场景即可——对话镜头同样保留背景音（人声在前、环境音垫底）。

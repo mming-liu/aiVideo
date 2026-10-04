@@ -177,8 +177,20 @@ def test_evidence_gate_requires_source():
 # ③ apply_replan_ops：模型回**操作**，代码在旧计划上应用（v6.143 用户决定）
 # ---------------------------------------------------------------------------
 
-def _ops(dlg=(), beat=()):
-    return {"dialogue_ops": list(dlg), "beat_ops": list(beat)}
+def _ops(dlg=(), beat=(), facts=None):
+    """ops 载荷；**动了 dialogue_ops 就必须逐项声明事实承载**（v6.153 契约）.
+
+    默认按 `_old_plan()` 声明 F1「丙失手」由 **B3** 以画面承载：B3 的载体标注是
+    「画面」，且它的**正文**（"丙失手"）真的在讲这条事实。声明必须落在**演出这条
+    事实**的节拍上——2026-09-30 复核：只把事实引文抄进某条节拍的「原文依据」不算
+    演出，判据读的是节拍**正文/信息目的**或**选中的那句台词**。
+    """
+    return {
+        "dialogue_ops": list(dlg),
+        "beat_ops": list(beat),
+        "fact_carriers": (list(facts) if facts is not None
+                          else [{"index": 1, "beat": 3, "mode": "画面"}]),
+    }
 
 
 def test_apply_ops_replaces_dialogue_with_a_verified_candidate():
@@ -240,9 +252,13 @@ def test_apply_ops_rewrites_beat_and_keeps_invariants():
                     "new_carrier": "台词1"}]), _SRC)
     assert new is not None, why
     assert new["shot_beats"][0].endswith("｜载体：台词1")
-    # 操作**结构上**改不到事实与事件（只在旧计划上打补丁）
+    # 操作**结构上**改不到事实与事件（只在旧计划上打补丁）：事实比对按本体（剥离
+    # 2026-09-30 起追加的「｜承载：…」登记段），并确认登记段确实写进了计划
+    from step01_script_gen.plan_feasibility import strip_fact_carrier
     assert new["main_events"] == _old_plan()["main_events"]
-    assert new["required_facts"] == _old_plan()["required_facts"]
+    assert ([strip_fact_carrier(f) for f in new["required_facts"]]
+            == [strip_fact_carrier(f) for f in _old_plan()["required_facts"]])
+    assert "承载：" in new["required_facts"][0], new["required_facts"]
 
 
 def test_apply_ops_does_not_duplicate_carrier_tag():
@@ -308,14 +324,20 @@ def test_ops_mode_parse_failure_is_not_no_change(monkeypatch):
             return _R()
 
     monkeypatch.setattr(o, "create_service", lambda *a, **k: _Svc())
-    plan, why = o.replan_dialogue_within_budget(_old_plan(), _REP_UNREP, _SRC)
+    plan, why, _cid = o.replan_dialogue_within_budget(_old_plan(), _REP_UNREP, _SRC)
     assert plan is None and why.startswith("invalid_result"), why
 
 
 def test_apply_ops_empty_is_no_change():
-    """模型显式回空操作 → `no_change`（**不算**一次有效重选，不再有「回抄旧稿」的退路）."""
+    """模型显式回空操作 → `no_change`（**不算**一次有效重选，不再有「回抄旧稿」的退路）.
+
+    C 阶段起声明类操作也是**真操作**，"空"必须逐键表达：`fact_carriers: []` = 不改承载、
+    `hook_carrier: ""` 在这份**本来就没有承载声明**的计划上等于没改（应用后内容不变 ⇒
+    no_change）。默认夹具会**声明** F1 的承载，那是真改动（计划原本没这条声明），不再算空。
+    """
     from step01_script_gen.outline import apply_replan_ops
-    new, why = apply_replan_ops(_old_plan(), _ops(), _SRC)
+    _empty = {"dialogue_ops": [], "beat_ops": [], "fact_carriers": [], "hook_carrier": ""}
+    new, why = apply_replan_ops(_old_plan(), _empty, _SRC)
     assert new is None and why == "no_change"
 
 
@@ -355,6 +377,12 @@ def _replannable_payload(beats):
         "shot_beats": list(beats),
         "dialogue_lines": [_Q_WITH_END],
         "time_budget": "对白约50%",
+        # 与 `_old_plan()` **同值**的必需顶层键（复核之十二）：完整性门按 schema 的
+        # `required` 查，缺键就不是"一整份计划"；补齐后守卫才比得到真正的内容差异
+        "characters": ["甲", "乙"], "emotional_arc": "平→紧",
+        "key_scenes": ["甲板"], "character_motives": ["甲：推进"],
+        "end_hook": "船仍向前", "hook_spoken": [], "hook_carrier": "",
+        "narration_lines": [], "omittable": [],
     }
 
 
@@ -370,18 +398,29 @@ def _old_plan():
                        '节拍：收尾｜原文依据："%s"｜载体：画面' % _SHORT_CITE],
         "dialogue_lines": [_Q_NO_END],
         "time_budget": "对白约50%",
+        # 复核之十二：**完整计划**的必需顶层键（`OUTLINE_SCHEMA.required`）一个都不能少
+        # ——回一整份计划的入口先查完整性（只回部分字段要如实报出来，不做静默补齐）
+        "characters": ["甲", "乙"], "emotional_arc": "平→紧",
+        "key_scenes": ["甲板"], "character_motives": ["甲：推进"],
+        "end_hook": "船仍向前", "hook_spoken": [], "hook_carrier": "",
+        "narration_lines": [], "omittable": [],
     }
 
 
+#: 「可表示性触发」的读数：**含生产者记录**（复核之十二起接口裁决读 `rep["problems"]`，
+#: 手写夹具缺它就会被当成"没有记录" ⇒ fail-closed 走完整计划接口）
 _REP_UNREP = {"dialogue_unrepresentable": [
-    {"line": _Q_NO_END, "est_sec": 19.8, "reason": "句内无句末边界"}]}
+    {"line": _Q_NO_END, "est_sec": 19.8, "reason": "句内无句末边界"}],
+    "problems": [{"code": "budget_unrepresentable", "kind": "dialogue", "index": 1,
+                  "path": "dialogue_lines[0]"}]}
 
 
 def _run(monkeypatch, payload, rep, plan=None):
     import step01_script_gen.outline as o
     svc = _Svc(payload)
     monkeypatch.setattr(o, "create_service", lambda *a, **k: svc)
-    return o.replan_dialogue_within_budget(plan or _old_plan(), rep, _SRC), svc
+    _p, _w, _c = o.replan_dialogue_within_budget(plan or _old_plan(), rep, _SRC)
+    return (_p, _w), svc
 
 
 def test_ops_mode_uses_the_ops_schema_and_applies_operations(monkeypatch):
@@ -401,7 +440,7 @@ def test_ops_mode_uses_the_ops_schema_and_applies_operations(monkeypatch):
 
 
 def test_ops_mode_reports_no_change(monkeypatch):
-    (plan, why), _svc = _run(monkeypatch, _ops(), _REP_UNREP)
+    (plan, why), _svc = _run(monkeypatch, _ops(facts=[]), _REP_UNREP)
     assert plan is None and why == "no_change", why
 
 

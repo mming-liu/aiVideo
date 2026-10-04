@@ -548,16 +548,16 @@ def test_commit_defers_failed_group_and_keeps_repairing_others(tmp_path, monkeyp
             })
         return {"status": "ok", "issues": issues}
 
-    _audit_seq = [_audit_payload(True), _audit_payload(True), _audit_payload(False)]
+    def _audit_wrapper(script, novel_text, plan, **k):
+        """审计结论**按输入定**，不按「第几次调用」定.
 
-    def _fake_audit(script, novel_text, plan, **k):
-        return _audit_seq[min(len(_audit_seq) - 1, _fake_audit.n)]
-    _fake_audit.n = 0
-
-    def _audit_wrapper(*a, **k):
-        out = _fake_audit(*a, **k)
-        _fake_audit.n += 1
-        return out
+        v6.153（2026-10-03 复核之十九 P1）起，提交循环会**复用**同一请求身份的
+        已成功结论（同稿回退 + 反馈重试不再重新 POST）⇒ 调用次数 ≠ 轮次。
+        计数式桩会因此把上一轮的结论错配给新稿件，本用例的分组语义就测不准了。
+        """
+        _solo = any("SOLO_MARK" in str(s.get("prompt") or "")
+                    for s in script.get("shots", []))
+        return _audit_payload(_solo)
 
     class _Seq:
         """第 1 轮只改组内三镜（证据保留 → 零解决）；第 2 轮修 shot 2（证据消除）."""

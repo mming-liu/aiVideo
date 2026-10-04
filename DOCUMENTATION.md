@@ -3,6 +3,22 @@
 > 生成日期: 2026-07-15
 > 项目路径: C:\myFloders\git\aiVideo
 
+> ⚠️ **历史文档（2026-07-15 快照，未随架构更新）——不要据此改代码。**
+> 以下已知与当前实现不符（2026-10-01 核实）：
+>
+> - 「步骤二：视频生成（`step02_video_gen/`）」：现在**入口是 `step02b_video_gen/main.py`**；
+>   [`step02_video_gen/`](step02_video_gen) 是无 `main.py` 的**实现库**（prompt_builder / submit_poll /
+>   video_qc / audio_pregen / continuity）。且 step02 在 2026-08 已拆为 **2a（帧图）/ 2b（视频）**。
+> - 输出路径 `{OUTPUT_BASE}/book_N/chapter_N/`：现为 `{NOVEL_NAME}/global/` +
+>   `{NOVEL_NAME}/part_{BOOK:02d}_{部名}/chapter_{NNN}/`，且**统一由 [`shared/paths.py`](shared/paths.py) 计算**（禁止自行拼接）。
+> - 供应商清单（第五节）只列 dashscope / deepseek / agnes：实际另有 **bailian / volcengine / minimax / agent_plan**
+>   （文本 4 家、图片 5 家、视频 7 家、TTS 6 家）。
+> - 第七节「缓存机制」与第八节配置项：键名与语义已多次变更，以 `.env.content` 与各包 `config.py` 为准。
+> - 第九节「已修复缺陷（共 6 个）」是当时快照，**不代表当前缺陷面**。
+>
+> 当前权威：[CLAUDE.md](CLAUDE.md)（实施准则）/ [AGENTS.md](AGENTS.md)（审核准则）；
+> 问题史与现状：[problems.md](problems.md) 与 [docs/](docs)。
+
 ---
 
 ## 一、项目概览

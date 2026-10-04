@@ -12,6 +12,11 @@ import re
 from dataclasses import dataclass, field
 
 from _text_gen import TextGenerationRequest, create_service
+
+#: 一次审计调用**最小可用时长**（v6.152 / A1 边界，2026-09-29 复核）：实测成功的单次
+#: 审计耗时 74–144s（约 20 次调用样本），明显低于此值的请求基本注定超时，发出去只会
+#: 挤占提交收尾余量。可用 `AUDIT_MIN_USEFUL_SEC` 覆盖。
+AUDIT_MIN_USEFUL_SEC_DEFAULT = 60
 from step01_script_gen.quality_issues import Issue
 
 
@@ -66,11 +71,15 @@ AUDIT_SCHEMA = {
                                     "field_path": {
                                         "type": "string",
                                         "description": (
-                                            "要修改的字段叶子。布局路径按两种形状写、"
+                                            "要修改的字段叶子。布局路径按下列形状写、"
                                             "下标一层都不能省：ff/lf 是人物列表一层"
                                             "（frame_layouts.ff[0].pose）；kfs 是"
                                             "关键帧→人物两层，两个下标都要写"
                                             "（frame_layouts.kfs[2][0].props）。"
+                                            "**要增删人物条目时改为写「帧的人物列表」"
+                                            "本身**：frame_layouts.ff / frame_layouts.lf / "
+                                            "frame_layouts.kfs[关键帧下标]（写条目叶子如 "
+                                            "…[0].name 只授权改名字，删除会被回填）。"
                                             "写 frame_layouts.kfs[2].props 这类漏人物"
                                             "下标的形状会让该条目标被剔除（问题本身仍保留为 blocking，但这一轮拿不到修复授权）。"),
                                     },
@@ -216,6 +225,7 @@ _AUDIT_RULES_TEMPLATE = """# 审查规则
 **布局路径的两种形状（下标一层都不能省）**：
 - `ff` / `lf` 是**人物列表**（一层）：`frame_layouts.ff[人物下标].<叶子>`，如 `frame_layouts.ff[0].pose`。
 - `kfs` 是**关键帧列表 → 人物列表（两层）**：`frame_layouts.kfs[关键帧下标][人物下标].<叶子>`，如 `frame_layouts.kfs[2][0].props`。**两个下标都要写**。
+- **要增删条目（不是改条目字段）时写第三形状——「帧的人物列表」本身**：`frame_layouts.ff` / `frame_layouts.lf`（该帧一层），或 `frame_layouts.kfs[关键帧下标]`（那一个关键帧一层）。**这一形状只用于增删条目**；改条目的字段仍按上面两种形状写叶子。
 - 反例（**无效**，会被判「不是该镜头的真实字段路径」→ 该条目标被剔除）：`frame_layouts.kfs[2].props`（漏人物下标——一个关键帧里可能有多个出镜人物，系统**不会**替你猜是谁）、`frame_layouts.ff.props`（漏人物下标）、`frame_layouts.kfs`（只写列表名）。
 
 ## repair_targets（**唯一被用于授权的字段**）
@@ -226,6 +236,14 @@ _AUDIT_RULES_TEMPLATE = """# 审查规则
 - 一条问题需要跨镜联动才能修好时（例如同一事实在 5 号镜的 ff_desc 与 7、8、9 号镜的 ff_desc 里互相矛盾），**每一镜各写一条**。系统把它们当成**一个事务**：整组修、整组验收、整组回退——写漏一镜会让整组被回退。
 - **单条问题的 repair_targets 最多覆盖 6 个镜头**（联动组容量上限）。systemic 缺陷（例如某字段取值全篇非法）**按镜拆成多条问题**，每条只覆盖它自己的那几镜。**跨 7 镜以上的单条声明修复侧整组做不完，会整轮停在门口**（不调修复、不再发审计）——拆成多条才能逐镜修掉。
 - 只改一个字段就写一条（**不要多写**没必要的字段：多列的条目同样要一起改完才算通过）。确实无法确定要改哪个字段时写空数组 `[]`，该问题本轮不进入定向修复。
+- **要增删某个出镜人物条目，目标必须是那一「帧的人物列表」本身，不是条目里的叶子**：
+  `frame_layouts.ff` / `frame_layouts.lf`（该帧这一层），或 `frame_layouts.kfs[N]`（第 N 个关键帧这一层）。
+  授权它 = 允许**这一帧**的列表增删条目；别的帧、别的字段一律回填。
+  ⚠️ **写错形状的代价（实测踩过）**：建议「删除 `kfs[0][1]` 的『小厮』条目」却把目标写成
+  `frame_layouts.kfs[0][1].name`（叶子）时，系统只被授权改**这个名字**——删除造成的列表长度变化
+  会被**原样回填**，删除白做，还会被记成"没修好"。**凡建议删除/新增条目，目标就写列表本身。**
+  仍然**不要**写整张 `frame_layouts.kfs`（那是**所有**关键帧，会一并放开）。
+- **列了列表本身之后，那一帧里只允许纯增删**：保留下来的条目会被**逐字核对**（字段、相对顺序都不许变）。同轮想顺带改写某个保留条目的字段，会让整轮被拒——一条问题只做一件事。
 - `shot_id` / `field_path` 仍要填，用来**定位问题出现在哪里**（可与 repair_targets 不同：问题出现在这镜，要改的是别的镜）。
 严重级别：blocking=确定影响剧情/可执行性；warning=可能影响；info=优化建议。
 """
@@ -445,6 +463,57 @@ def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
     return _n
 
 
+def _audit_request_params(*, model: "str | None") -> dict:
+    """**进请求**、且参与「是不是同一份请求」判定的那部分参数（**唯一源**）.
+
+    2026-10-03 复核之十九 P1：提交循环里同一份稿会被反复审计，所以必须能**离线**
+    说出"这一次要发的请求与上一次是不是同一条"。请求参数集中在这里，由调用点与
+    `final_audit_request_identity` 共用——两边各写一份迟早分叉。
+
+    ⚠️ **不含** `timeout_sec`：它是**本次调用**的本地余量（总预算越跑越少），
+    既不是被审对象也不是判据。算进去的话，"同一份稿 + 同一份提示 + 同一档位"会因为
+    剩余预算不同而被判成两条不同请求——那正是要修掉的"同稿重复抽样"。反过来，
+    `AUDIT_MAX_OUTPUT_TOKENS` / `AUDIT_REASONING_EFFORT` 这类**改变请求语义**的
+    参数必须在里面。
+    """
+    _channel_provider, _channel_model = resolve_audit_channel()
+    return {
+        "system_prompt": _AUDIT_SYSTEM,
+        "schema": AUDIT_SCHEMA,
+        "temperature": AUDIT_TEMPERATURE,
+        "max_tokens": _env_int("AUDIT_MAX_OUTPUT_TOKENS", 16000, minimum=1),
+        "reasoning_effort": (os.getenv("AUDIT_REASONING_EFFORT") or "").strip() or None,
+        "channel_provider": _channel_provider or "",
+        "channel_model": _channel_model or "",
+        # 专用通道下**必须**用该通道的模型 ID 覆盖调用方传来的值（那是 plan 通道的名字）
+        "model": _channel_model or model or "",
+    }
+
+
+def final_audit_request_identity(novel_text: str, plan: dict | None, script: dict, *,
+                                 audit_focus: list[str] | None = None,
+                                 metadata: dict | None = None,
+                                 model: str | None = None) -> str:
+    """这次审计**将会发出的那一条请求**的身份（纯函数：不发请求、不读盘、不写盘）.
+
+    既定规则（总计划 §1.3）禁止「同一 revision 反复调用 full audit 博一次偶然 PASS」。
+    同一次提交循环里修复被**整轮回退**时，稿件与请求都没变——再 POST 一次就是那条
+    被禁止的抽样（2026-10-03 实测：同一次运行内同指纹两次调用，换来 2 条 / 5 条
+    两份不同的问题清单，其中一次白花 133.5 秒）。身份必须覆盖进请求的**每一个
+    字节**，否则"复用"会变成"拿旧结论给新请求盖章"。
+    """
+    import hashlib as _hashlib
+    import json as _json
+    _blob = {
+        "params": _audit_request_params(model=model),
+        "user_prompt": build_audit_prompt(novel_text, plan, script,
+                                          audit_focus=audit_focus, metadata=metadata),
+    }
+    return _hashlib.sha256(
+        _json.dumps(_blob, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
 def run_same_model_audit_with_status(
     novel_text: str,
     plan: dict | None,
@@ -454,13 +523,26 @@ def run_same_model_audit_with_status(
     timeout_sec: int = 180,
     audit_focus: list[str] | None = None,
     metadata: dict | None = None,
+    deadline_ts: float | None = None,
+    min_useful_sec: float | None = None,
 ) -> AuditResult:
-    """Run audit while preserving failure state for logs and repair acceptance."""
+    """Run audit while preserving failure state for logs and repair acceptance.
+
+    v6.152（A1 边界，2026-09-29 复核）：`deadline_ts` 是**整次审计**（含截断/解析
+    重采样）的截止时刻。此前超时只在进入审计前算一次、重采样沿用同一个值——首调
+    耗掉时间后，重采样仍能拿到完整上限，「给提交收尾留 60s」形同虚设。现在：
+    ①每次**实际发起前**重算可用时间，单次超时取 `min(timeout_sec, 剩余)`；
+    ②剩余低于 `min_useful_sec` 时**不发请求**，直接返回 `budget_exhausted`
+    （如实失败，而不是发一个注定挤占收尾的短请求）。`deadline_ts=None` = 不设
+    截止（无总预算约束的调用方/单测，行为与旧版一致）。"""
     # 审计专用通道（方案 A）：未配置 → provider=None，`create_service()` 仍按
     # 全局 TEXT_PROVIDER 建服务、`req.model` 仍用调用方传来的模型名（零行为变化）。
-    channel_provider, channel_model = resolve_audit_channel()
-    _chan = {"channel_provider": channel_provider or "",
-             "channel_model": channel_model or ""}
+    # 请求参数**唯一源**在 `_audit_request_params`（与请求身份共用同一份）。
+    _params = _audit_request_params(model=model)
+    channel_provider = _params["channel_provider"] or None
+    channel_model = _params["channel_model"] or None
+    _chan = {"channel_provider": _params["channel_provider"],
+             "channel_model": _params["channel_model"]}
     # v6.134.1（审核）：工厂初始化（含 config.validate / provider 注册）此前在
     # 结果处理之外——异常会直接冒出，既不是 request_failed、也不进审计台账，
     # 整轮崩在提交链上。收进来按调用失败处置（提交点 BLOCK 语义不变，台账有据）。
@@ -469,23 +551,17 @@ def run_same_model_audit_with_status(
     except Exception as exc:
         return AuditResult("request_failed", [], f"audit service init failed: {exc}",
                            attempts=1, **_chan)
-    import os as _os
     import time as _time
-    _audit_max_tokens = _env_int("AUDIT_MAX_OUTPUT_TOKENS", 16000, minimum=1)
-    # v6.124（验证计划 (c)）：**审计专用**思考档位，便于「固定输入 × 不同 effort ×
-    # 重复运行」的稳定性/召回实验。未设置 → 不传 → 沿用 provider 全局
-    # `DEEPSEEK_REASONING_EFFORT`（零行为变化）。
-    _audit_effort = (_os.getenv("AUDIT_REASONING_EFFORT") or "").strip() or None
+    _audit_max_tokens = _params["max_tokens"]
     req = TextGenerationRequest(
-        system_prompt=_AUDIT_SYSTEM,
+        system_prompt=_params["system_prompt"],
         user_prompt=build_audit_prompt(novel_text, plan, script, audit_focus=audit_focus, metadata=metadata),
         max_tokens=_audit_max_tokens,
-        temperature=AUDIT_TEMPERATURE,
-        json_schema=AUDIT_SCHEMA,
-        # 专用通道下**必须**用该通道的模型 ID 覆盖调用方传来的值（那是 plan 通道的名字）
-        model=channel_model or model,
+        temperature=_params["temperature"],
+        json_schema=_params["schema"],
+        model=_params["model"],
         timeout_sec=timeout_sec,
-        reasoning_effort=_audit_effort,
+        reasoning_effort=_params["reasoning_effort"],
     )
     # v6.134（2026-09-26 实跑 BLOCK 根因）：`parse_failed` 是**采样噪声**，不是内容结论。
     #   - DeepSeek Responses 的 `text.format` 官方只有 type/name/schema 三字段、没有
@@ -505,7 +581,32 @@ def run_same_model_audit_with_status(
     _parse_retries = _env_int("AUDIT_PARSE_RETRIES", 1, minimum=0)
     _failed_attempts: list = []
     _attempts = 0
+    import dataclasses as _dc
+    _min_useful = float(min_useful_sec if min_useful_sec is not None
+                        else _env_int("AUDIT_MIN_USEFUL_SEC",
+                                      AUDIT_MIN_USEFUL_SEC_DEFAULT, minimum=1))
     while True:
+        # v6.152（A1 边界）：**每次实际发起前**重算可用时间——截止时刻覆盖整次审计，
+        # 而不是只算一次「进审计前的超时」。剩余不足以发起一次有意义的调用时，不发
+        # 请求、如实记 `budget_exhausted`（提交点照旧 BLOCK，且不挤占收尾余量）。
+        _left = None
+        _req = req
+        if deadline_ts is not None:
+            _left = float(deadline_ts) - _time.time()
+            if _left < _min_useful:
+                _failed_attempts.append({
+                    "attempt": _attempts + 1,
+                    "failure": "budget_exhausted",
+                    "available_sec": round(_left, 1),
+                    "min_useful_sec": _min_useful,
+                })
+                return AuditResult(
+                    "budget_exhausted", [],
+                    "总预算不足：本次审计剩余可用 %.1fs < 最小可用 %.0fs —— "
+                    "未发出请求（发出也只会挤占提交收尾余量）"
+                    % (_left, _min_useful),
+                    attempts=_attempts, failed_attempts=_failed_attempts, **_chan)
+            _req = _dc.replace(req, timeout_sec=int(min(timeout_sec, _left)))
         _attempts += 1
         # v6.134：审计调用自报家门——provider 里是所有调用共用的一句硬编码
         # "生成分镜脚本" 日志，排查时无法从日志区分调用点（2026-09-26 实录）。
@@ -517,7 +618,7 @@ def run_same_model_audit_with_status(
         # 没有这一行就只能靠猜（今天三次截断都是事后从 DEBUG 行反推的）。
         _t_call = _time.time()
         try:
-            result = service.generate(req)
+            result = service.generate(_req)
         except Exception as exc:
             # v6.134.1（审核）：provider 大多自行捕获异常，但漏网异常同样不得
             # 崩出提交链——按调用失败处置（不重试：异常多为结构性，重试不收敛）。
@@ -528,6 +629,20 @@ def run_same_model_audit_with_status(
         # 重试后记的是**最后一次**调用的用量；前面各次的用量进 failed_attempts，
         # 合计 = failed_attempts 各次 + 顶层 usage。
         _usage = getattr(result, "usage", None)
+        # v6.152（D1）：计量行**成功也要打**——此前它写在 `if not result.success:` 里，
+        # 成功的审计一声不响，只能靠 submit/response 两个时间戳反推耗时（run 01 的 144s
+        # 就是这么反推的）。失败时它同时是重采样判据的输入，位置不变、只上移。
+        _dur = _time.time() - _t_call
+        _u = _usage or {}
+        _out = _u.get("output_tokens") or _u.get("completion_tokens")
+        _rsn = _u.get("reasoning_tokens")
+        print(f"[AUDIT] 第 {_attempts} 次返回：耗时 {_dur:.1f}s，"
+              f"max_completion_tokens={_req.max_tokens or '全局'}，"
+              f"timeout={_req.timeout_sec}s（本次可用 "
+              + ("不限" if _left is None else "%.1fs" % _left) + "），"
+              f"output={_out}（思维链 {_rsn}），"
+              f"truncated={bool(getattr(result, 'truncated', False))}，"
+              f"success={bool(getattr(result, 'success', False))}")
         if not result.success:
             # v6.144（2026-09-28 跑批实测）：**截断**与「传输/超时失败」是两类，处置不同。
             #   - 截断（`truncated=True`，含「思维链吃光配额、正文为空」）：同请求**换一次
@@ -536,15 +651,6 @@ def run_same_model_audit_with_status(
             #     不新开一层、不叠加传输类重试。
             #   - 传输/超时（`truncated=False`）：provider 层已尽力（见 retry_policy），
             #     这里**一次都不重试**，直接按 request_failed 终局。
-            _dur = _time.time() - _t_call
-            _u = getattr(result, "usage", None) or {}
-            _out = _u.get("output_tokens") or _u.get("completion_tokens")
-            _rsn = _u.get("reasoning_tokens")
-            print(f"[AUDIT] 第 {_attempts} 次返回：耗时 {_dur:.1f}s，"
-                  f"max_completion_tokens={req.max_tokens or '全局'}，"
-                  f"output={_out}（思维链 {_rsn}），"
-                  f"truncated={bool(getattr(result, 'truncated', False))}，"
-                  f"success={bool(getattr(result, 'success', False))}")
             _truncated = bool(getattr(result, "truncated", False))
             if _truncated and _attempts <= _parse_retries:
                 _failed_attempts.append({
@@ -569,6 +675,11 @@ def run_same_model_audit_with_status(
                 # 故改成**给重采样更多输出余量**：`req.max_tokens` 确实进 payload
                 # （provider: `max_completion_tokens = req.max_tokens or 全局值`）。
                 # 只加在**重采样**上——首跑上限不动，避免把每次审计都拉长撞超时。
+                # v6.153（2026-10-03 复核）：**上述「档位改不动 payload」已只对方舟成立**
+                # ——provider 现在按**端点**取请求方言，OpenCode Go 端点会真的发出
+                # `reasoning_effort`（目录登记 low/high/max），三档不再塌成同一份请求。
+                # 但本调用的档位来自 `AUDIT_REASONING_EFFORT=low`，已是该端点**最低登记档**，
+                # 「换更省的档位」仍无处可降 ⇒ 截断重采样继续走 `max_tokens`。
                 import dataclasses as _dc
                 # 默认 **0 = 不抬**：首跑上限已按实测放到 64000（.env
                 # `AUDIT_MAX_OUTPUT_TOKENS`），重采样就是「同请求再采一次」。
@@ -652,4 +763,5 @@ def run_same_model_audit(novel_text: str, plan: dict | None, script: dict,
 __all__ = [
     "AUDIT_SCHEMA", "AuditResult", "build_audit_prompt", "resolve_audit_channel",
     "run_same_model_audit", "run_same_model_audit_with_status", "audit_prompt_version",
+    "final_audit_request_identity",
 ]

@@ -89,15 +89,28 @@ class TextGenCfg:
 
     # ---- 火山方舟 Agent Plan（doubao-seed-2-1-turbo 文本通道，2026-09-03 接入）----
     # 鉴权复用 .env.keys 中 AGENT_PLAN_API_KEY（与图片/视频同专属 key，不通用）
-    # 端点：POST {AGENT_PLAN_BASE_URL}/chat/completions（OpenAI 兼容）
+    # 端点：POST {AGENT_PLAN_TEXT_BASE_URL}/chat/completions（OpenAI 兼容）
     AGENT_PLAN_API_KEY: str = os.getenv("AGENT_PLAN_API_KEY", "")
     AGENT_PLAN_BASE_URL: str = os.getenv(
         "AGENT_PLAN_BASE_URL", "https://ark.cn-beijing.volces.com/api/plan/v3"
+    )
+    #: **文本通道专用**端点：留空 ⇒ 回落到共享的 `AGENT_PLAN_BASE_URL`。
+    #: 2026-10-02（用户决定）：方舟 Agent Plan 订阅到期，真实 step01 跑批改用
+    #: opencode go 网关（`https://opencode.ai/zen/go/v1`）；而**图片通道仍是方舟**
+    #: （`IMAGE_PROVIDER=agent_plan`，见 `shared/config.py` 的同名端点）——两者共用
+    #: 一个 `AGENT_PLAN_BASE_URL` 会把图片也一起换掉，所以文本侧单开一个名字。
+    AGENT_PLAN_TEXT_BASE_URL: str = (
+        os.getenv("AGENT_PLAN_TEXT_BASE_URL", "").strip() or AGENT_PLAN_BASE_URL
     )
     AGENT_PLAN_TEXT_MODEL: str = os.getenv(
         "AGENT_PLAN_TEXT_MODEL", "doubao-seed-2-1-turbo"
     )
     AGENT_PLAN_TEXT_RPM: int = int(os.getenv("AGENT_PLAN_TEXT_RPM", "10"))
+    # 网关路由头（`x-opencode-session`）。opencode go 网关**要求**它（缺失直接
+    # 400 MissingSessionID，2026-10-02 实测）；火山方舟不需要，但多一个未知头无影响。
+    # 留空 ⇒ provider 自动生成**进程内稳定**的会话 id（文档只要求"每次会话稳定"，
+    # 不限格式）——见 `agent_plan_provider._AUTO_SESSION_ID`。
+    AGENT_PLAN_SESSION_ID: str = os.getenv("AGENT_PLAN_SESSION_ID", "")
     AGENT_PLAN_TEXT_REASONING_EFFORT: str = os.getenv(
         "AGENT_PLAN_TEXT_REASONING_EFFORT", "none"
     )

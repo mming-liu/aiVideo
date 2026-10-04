@@ -17,6 +17,7 @@
 全局（跨章节）数据在小说级 global/ 下，与部级 part_XX/ 及章级 chapter_NNN/ 平级。
 """
 
+import copy
 import json
 import os
 import shutil
@@ -29,6 +30,19 @@ def _book_global_dir() -> Path:
     """本书跨章节共享目录（统一路径来源: shared/paths.py）."""
     from shared.paths import global_dir
     return global_dir()
+
+
+def _current_run_id() -> str:
+    """本进程当前 run 身份（`save(run_id="")` 时的兜底来源）.
+
+    2026-10-02 复核：写库必须能自证"是谁写的"。让 `save()` **默认**取进程身份，
+    而不是要求每个调用点都记得传——新加一个写库入口时不会漏（各写一遍必然漏一处）。
+    """
+    try:
+        from shared.run_identity import current_run_id
+        return current_run_id()
+    except Exception:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +76,22 @@ def normalize_identifier(name: str) -> str:
 # CharacterBank
 # ---------------------------------------------------------------------------
 
+#: 条目上保留的**来源调用**引用条数上限（最近 N 次，去重）：bank 的字段只表达
+#: "首次创建与最近更新来源"，**不是**完整字段修改史（复核 2026-10-02 之七）。
+CALL_IDS_KEEP = 10
+
+
+def _source_call_ids(call_ids, prev=None) -> list:
+    """把本轮的 call_id 并进条目的来源窗口（去重、保序、只留最近 N 条）."""
+    _old = [str(c) for c in (prev or []) if str(c or "").strip()]
+    _merged = list(_old)
+    for _c in (call_ids or []):            # **本批内也要去重**（同一次更新可能传重复项）
+        _c = str(_c or "").strip()
+        if _c and _c not in _merged:
+            _merged.append(_c)
+    return _merged[-CALL_IDS_KEEP:]
+
+
 _EMPTY_BANK: dict = {"characters": {}, "meta": {"last_updated_chapter": 0, "total_characters": 0}}
 
 
@@ -75,7 +105,18 @@ class CharacterBank:
             from shared.paths import characters_bank_dir
             self._bank_dir = characters_bank_dir()
         self._bank_path = self._bank_dir / "characters_bank.json"
-        self._data: dict = dict(_EMPTY_BANK)
+    # **空模板必须深复制**（复核之七）：`dict(_EMPTY_BANK)` 只复制了外层——`characters`
+    # 与内层 `meta` 仍是**模块级同一个对象**，于是新建空库会把上一个实例写的条目带进来
+    # （实测：同一进程里先建 A 库再建 B 库，B 一开库就带着 A 的角色；跨运行还可能把别的
+    # 章节的实体当成已存在）。空库是**每个实例一份**状态。
+        self._data: dict = copy.deepcopy(_EMPTY_BANK)
+        #: 本次进程**登记/更新过**的角色名（save 时给它们盖 `last_run_id`）——
+        #: 只标被这一轮碰过的条目：整库覆盖会让"来源"退化成"最后一次写库的人"。
+        self._touched: set = set()
+        #: 本次**新建**的条目（只有它们能盖 `first_run_id`）。
+        #: 把 `first_run_id` 也盖给"本轮之前就存在"的条目 = 伪造来源：
+        #: 它明明不是本轮首次登记的（实测 10-02 一轮里，老角色被盖成本轮 first_run_id）。
+        self._created: set = set()
 
     # -- 读写 ----------------------------------------------------------------
 
@@ -91,23 +132,78 @@ class CharacterBank:
                 self._data = loaded
             except (json.JSONDecodeError, OSError) as e:
                 print(f"[bank] 角色库读取失败，使用空库: {e}")
-                self._data = dict(_EMPTY_BANK)
+                self._data = copy.deepcopy(_EMPTY_BANK)
         else:
-            self._data = dict(_EMPTY_BANK)
+            self._data = copy.deepcopy(_EMPTY_BANK)
         self._bank_dir.mkdir(parents=True, exist_ok=True)
         return self._data
 
-    def save(self) -> None:
-        """原子写入：先写 .tmp 再 rename，防止写入中断损坏 bank."""
-        self._data["meta"]["total_characters"] = len(self._data.get("characters", {}))
-        self._bank_dir.mkdir(parents=True, exist_ok=True)
-        tmp = self._bank_path.with_suffix(".json.tmp")
+    def save(self, run_id: str = "", call_ids=None) -> bool:
+        """原子写入：**在候选副本上**盖来源，写盘成功后才确认内存状态、消费本次变更.
+
+        `run_id`（2026-10-02 复核）：写盘时记下**这一轮的来源身份**——
+        `meta.last_run_id` / `meta.last_written_at`，以及每个**本次新增/更新**条目的
+        `first_run_id` / `last_run_id`。旧库没有这些字段是**历史**（重构后未重跑），
+        读取方按"缺字段 = 来源未知"处理；这里**不回溯伪造**上一轮的 id。
+
+        `call_ids`（复核 2026-10-02 之七）：这一轮**确实发生**的调用（由台账给出）。
+        条目上记 `last_call_ids`（最近若干次引用）+ `last_source`（`call` = 有调用证据；
+        `mechanical` = 本轮没有对应调用：机械更新/缓存复用/旧资料）——**不编造模型调用**，
+        也不拿 `run_id` 冒充"已知模型与规则版本"（那要顺着 call_id 去台账查）。
+
+        **保存边界**（复核之七）：盖来源与写盘都发生在**副本**上，写成功才把副本换成
+        内存状态并**清空本次变更集合**。于是——连续保存不会重盖首次来源、不会把未更新的
+        条目再标一遍；写盘失败时内存与盘上都不动、变更集合留着，**后续重试能正确保存**。
+
+        Returns: `True` = 真的写进了盘（调用方据此才可以说"已保存"）。
+        """
+        _rid = str(run_id or "").strip() or _current_run_id()
+        # **候选副本**：失败 ⇒ 基线（内存与盘上）一个字节不改
+        _cand = copy.deepcopy(self._data)
+        # 统计也在**副本**上（复核 2026-10-02 之八 P1：save 期的改动一律不落在内存上，
+        # 写盘失败时内存与盘上都不动）
+        _cand["meta"]["total_characters"] = len(_cand.get("characters", {}))
+        if _rid:
+            self._stamp_run_id(_cand, _rid, call_ids)
+        # **统一失败出口**（复核 2026-10-02 之九 P2）：目录创建、临时写入、替换三步里，
+        # 原来只有后两步在异常边界内——注入目录创建失败（父路径被文件占住 / 只读）时
+        # 直接抛 `OSError`，调用方拿到的是异常而不是 `False`，"失败保留基线、可重试"
+        # 这条约定在**第一步**就断了。现在三步同一边界，且写盘统一走
+        # `shared.json_io.atomic_dump_json`（它正是"写临时文件 + 替换 + 失败清理"的共享
+        # 实现；临时文件名 `<path>.tmp` 与本模块原来拼的逐字相同）。
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, ensure_ascii=False, indent=2)
-            tmp.replace(self._bank_path)
-        except OSError as e:
-            print(f"[bank] 保存角色库失败: {e}")
+            self._bank_dir.mkdir(parents=True, exist_ok=True)
+            from shared.json_io import atomic_dump_json
+            atomic_dump_json(self._bank_path, _cand, ensure_ascii=False, indent=2)
+        except (OSError, ValueError, TypeError) as e:
+            print(f"[bank] 保存角色库失败（**盘上文件原样保留**，本次变更待重试）: {e}")
+            return False
+        # 成功才确认：内存换成写进盘的那份，并**消费**本次变更集合
+        self._data = _cand
+        self._touched.clear()
+        self._created.clear()
+        return True
+
+    def _stamp_run_id(self, data: dict, run_id: str, call_ids=None) -> dict:
+        """把来源记到**副本** `data` 的 meta 与本次登记过的条目上（不改 `self._data`）."""
+        data.setdefault("meta", {})["last_run_id"] = run_id
+        try:
+            data["meta"]["last_written_at"] = datetime.now().isoformat(timespec="seconds")
+        except Exception:
+            pass
+        _cids = [str(c) for c in (call_ids or []) if str(c or "").strip()]
+        for _k in getattr(self, "_touched", ()) or ():
+            _c = data.get("characters", {}).get(_k)
+            if not isinstance(_c, dict):
+                continue
+            # **既有首次来源不得覆盖**（复核之七）：已经在盘上记过第一次的条目，
+            # 即便本轮又更新了，它的"首次"也不是本轮——盖上去就是伪造来源。
+            if _k in getattr(self, "_created", ()) and not str(_c.get("first_run_id") or "").strip():
+                _c["first_run_id"] = run_id
+            _c["last_run_id"] = run_id
+            _c["last_call_ids"] = _source_call_ids(_cids, _c.get("last_call_ids"))
+            _c["last_source"] = "call" if _cids else "mechanical"
+        return data
 
     # -- 查询 ----------------------------------------------------------------
 
@@ -194,6 +290,7 @@ class CharacterBank:
                         existing[field] = (str(cur) + "，" + newv).strip("，")
                 self._data["characters"][identifier] = existing
                 self._data["characters"][identifier]["identifier"] = identifier
+                self._touched.add(identifier)
                 return
         # v6.23：角色编号（C01/C02... 按注册顺序自动分配）
         max_n = 0
@@ -204,6 +301,11 @@ class CharacterBank:
                     max_n = max(max_n, int(aid[1:]))
                 except ValueError:
                     pass
+        # **既有条目不是"本轮新建"**（复核之七）：同一个 key 已经在库里时再登记一次
+        # （抽取把它当成新角色、或换了一章重跑），既不能算新建，也不能覆盖它的
+        # **首次来源**——`first_run_id` 必须从旧条目上带过来，否则"首次"被重写成本轮。
+        _old = self._data["characters"].get(identifier)
+        _existed = isinstance(_old, dict)
         self._data["characters"][identifier] = {
             "identifier": identifier,
             "asset_id": f"C{max_n + 1:02d}",
@@ -213,18 +315,25 @@ class CharacterBank:
             "last_chapter": chapter_num,
             "portraits": {},
         }
+        if _existed and str(_old.get("first_run_id") or "").strip():
+            self._data["characters"][identifier]["first_run_id"] = _old["first_run_id"]
+        self._touched.add(identifier)
+        if not _existed:
+            self._created.add(identifier)
 
     def update_character_chapter(self, identifier: str, chapter_num: int) -> None:
         """更新角色最后出场章节."""
         char = self.get_character(identifier)
         if char:
             char["last_chapter"] = max(char.get("last_chapter", 0), chapter_num)
+            self._touched.add(str(char.get("identifier") or identifier))
 
     def update_dynamic_features(self, identifier: str, dynamic_features: str) -> None:
         """更新角色可变特征（服装等），不变量 static_features 首次锁定不变."""
         char = self.get_character(identifier)
         if char and dynamic_features:
             char["dynamic_features"] = dynamic_features
+            self._touched.add(str(char.get("identifier") or identifier))
 
     def set_portraits(self, identifier: str, portraits: dict) -> None:
         """设置角色肖像数据.
@@ -234,6 +343,7 @@ class CharacterBank:
         char = self.get_character(identifier)
         if char:
             char["portraits"] = portraits
+            self._touched.add(str(char.get("identifier") or identifier))
 
     def get_meta(self) -> dict:
         """返回 bank 元数据."""
@@ -275,7 +385,7 @@ class StyleBank:
             from shared.paths import style_bank_dir
             self._dir = style_bank_dir()
         self._json_path = self._dir / "style_bank.json"
-        self._data: dict = dict(_EMPTY_STYLE)
+        self._data: dict = copy.deepcopy(_EMPTY_STYLE)
 
     # -- 读写 ----------------------------------------------------------------
 
@@ -290,22 +400,25 @@ class StyleBank:
                 self._data = loaded
             except (json.JSONDecodeError, OSError) as e:
                 print(f"[bank] 风格库读取失败，使用空库: {e}")
-                self._data = dict(_EMPTY_STYLE)
+                self._data = copy.deepcopy(_EMPTY_STYLE)
         else:
-            self._data = dict(_EMPTY_STYLE)
+            self._data = copy.deepcopy(_EMPTY_STYLE)
         self._dir.mkdir(parents=True, exist_ok=True)
         return self._data
 
     def save(self) -> None:
-        """原子写入."""
-        self._dir.mkdir(parents=True, exist_ok=True)
-        tmp = self._json_path.with_suffix(".json.tmp")
+        """原子写入（**统一失败出口**：目录创建、临时写入、替换同一边界）.
+
+        复核之九 P2 的同一责任范围：旧写法把 `mkdir` 留在 try 之外——目录建不出来
+        （父路径被文件占住 / 只读）时抛 `OSError` 而不是"保存失败"；写盘统一走共享的
+        `shared.json_io.atomic_dump_json`（写临时文件 + 替换 + 失败清理）。
+        """
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, ensure_ascii=False, indent=2)
-            tmp.replace(self._json_path)
-        except OSError as e:
-            print(f"[bank] 保存风格库失败: {e}")
+            self._dir.mkdir(parents=True, exist_ok=True)
+            from shared.json_io import atomic_dump_json
+            atomic_dump_json(self._json_path, self._data, ensure_ascii=False, indent=2)
+        except (OSError, ValueError, TypeError) as e:
+            print(f"[bank] 保存风格库失败（**盘上文件原样保留**）: {e}")
 
     # -- 查询 ----------------------------------------------------------------
 

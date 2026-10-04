@@ -126,8 +126,15 @@ def _dedup_characters(chars: list[dict]) -> list[dict]:
 # 角色提取函数
 # ========================================================================
 
-def extract_characters(novel_text: str, bank: CharacterBank) -> list[dict]:
-    """从小说原文提取角色， 已知角色只确认出场，新角色描述外貌."""
+def extract_characters(novel_text: str, bank: CharacterBank) -> "list[dict] | None":
+    """从小说原文提取角色， 已知角色只确认出场，新角色描述外貌.
+
+    Returns:
+        `list[dict]`：提取成功（**空数组 = 真的没有角色**）；
+        `None`：**这次没产出**（调用失败 / 解析失败）——调用方据此**不写库**，
+        也不许把"没跑成"记成"预提取到 0 个已保存"（2026-10-02 日志复核：
+        鉴权失败那轮就是这么把 0 条写进库并报成功的）。
+    """
     known_ids = bank.get_all_identifiers()
     known_text = "（暂无已知角色）"
     if known_ids:
@@ -160,8 +167,8 @@ def extract_characters(novel_text: str, bank: CharacterBank) -> list[dict]:
     )
     result = service.generate(req)
     if not result.success:
-        print(f"[WARN] 角色提取失败: {result.error}")
-        return []
+        print(f"[WARN] 角色提取失败（**未产出**，不写库）: {result.error}")
+        return None
 
     # 解析
     raw = result.text.strip()
@@ -181,11 +188,11 @@ def extract_characters(novel_text: str, bank: CharacterBank) -> list[dict]:
             try:
                 data = json.loads(raw[start:end + 1])
             except json.JSONDecodeError:
-                print(f"[WARN] 角色提取 JSON 解析失败（截断或结构损坏）")
-                return []
+                print(f"[WARN] 角色提取 JSON 解析失败（截断或结构损坏；**未产出**，不写库）")
+                return None
         else:
-            print(f"[WARN] 角色提取 JSON 解析失败")
-            return []
+            print(f"[WARN] 角色提取 JSON 解析失败（**未产出**，不写库）")
+            return None
 
     chars = data.get("characters", [])
     # B2 修复（08-11）：角色名规范化 + 去重（strip/剥尾部标点/全角归一/相似合并）。

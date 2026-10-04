@@ -151,14 +151,14 @@ class SceneAssetsBank:
     def save(self) -> None:
         """原子写入：先写 .tmp 再 rename，防止写入中断损坏 bank."""
         self._data["meta"]["total_scenes"] = len(self._data.get("scenes", {}))
-        self._bank_dir.mkdir(parents=True, exist_ok=True)
-        tmp = self._bank_path.with_suffix(".json.tmp")
+        # **统一失败出口**（复核之九 P2 的同一责任范围）：目录创建、临时写入、替换三步
+        # 一起进异常边界，写盘走共享的 `atomic_dump_json`。旧写法把 `mkdir` 留在 try 之外。
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, ensure_ascii=False, indent=2)
-            tmp.replace(self._bank_path)
-        except OSError as e:
-            print(f"[bank] 保存场景资产库失败: {e}")
+            self._bank_dir.mkdir(parents=True, exist_ok=True)
+            from shared.json_io import atomic_dump_json
+            atomic_dump_json(self._bank_path, self._data, ensure_ascii=False, indent=2)
+        except (OSError, ValueError, TypeError) as e:
+            print(f"[bank] 保存场景资产库失败（**盘上文件原样保留**）: {e}")
 
     # -- 查询 ----------------------------------------------------------------
 
@@ -341,14 +341,15 @@ class PropAssetsBank:
     def save(self) -> None:
         """原子写入：先写 .tmp 再 rename，防止写入中断损坏 bank."""
         self._data["meta"]["total_props"] = len(self._data.get("props", {}))
-        self._bank_dir.mkdir(parents=True, exist_ok=True)
-        tmp = self._bank_path.with_suffix(".json.tmp")
+        # **统一失败出口**（复核之九 P2 的同一责任范围）：目录创建、临时写入、替换三步
+        # 一起进异常边界，写盘走共享的 `atomic_dump_json`（= 写临时文件 + 替换 + 失败清理）。
+        # 旧写法把 `mkdir` 留在 try 之外 ⇒ 目录建不出来时抛 `OSError` 而不是"保存失败"。
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, ensure_ascii=False, indent=2)
-            tmp.replace(self._bank_path)
-        except OSError as e:
-            print(f"[bank] 保存道具资产库失败: {e}")
+            self._bank_dir.mkdir(parents=True, exist_ok=True)
+            from shared.json_io import atomic_dump_json
+            atomic_dump_json(self._bank_path, self._data, ensure_ascii=False, indent=2)
+        except (OSError, ValueError, TypeError) as e:
+            print(f"[bank] 保存道具资产库失败（**盘上文件原样保留**）: {e}")
 
     # -- 查询 ----------------------------------------------------------------
 

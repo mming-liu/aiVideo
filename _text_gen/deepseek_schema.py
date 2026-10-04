@@ -662,6 +662,19 @@ OUTLINE_SCHEMA = {
                 "type": "string",
                 "description": "结尾钩子（吸引观众看下一集）",
             },
+            "hook_spoken": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "钩子里**必须由角色说出口**的台词，逐字抄自原文，"
+                               "必须是 dialogue_lines 的子集（整句，不许只留开头）；"
+                               "只是被提到的引文、旁白、纯画面钩子都给空数组",
+            },
+            "hook_carrier": {
+                "type": "string",
+                "description": "`hook_spoken` 里每一句的承载节拍，形如 B9/台词4，"
+                               "多句用「；」分隔（声明的节拍必须自己标着同一个载体）；"
+                               "没有 hook_spoken（纯画面钩子）时留空串",
+            },
             "key_scenes": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -670,7 +683,10 @@ OUTLINE_SCHEMA = {
             "required_facts": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "必须保留的剧情事实，每条包含事实和原文证据",
+                "description": "必须保留的剧情事实，每条包含：事实｜原文证据：“原文原句”｜"
+                               "承载：B节拍号/台词k（由第 k 句选用台词说出口）、"
+                               "B节拍号/画面（由该节拍的画面演出）或 "
+                               "B节拍号/旁白k（由第 k 条图外旁白讲出来）",
             },
             "causal_chain": {
                 "type": "array",
@@ -695,6 +711,33 @@ OUTLINE_SCHEMA = {
                 "items": {"type": "string"},
                 "description": "本集选用的逐字台词/独白，从原文逐字摘出（不改写、不自造）",
             },
+            "narration_lines": {
+                "type": "array",
+                "description": "本集**图外旁白**（逐条编号 N1..Nn）：原文叙述里必须讲给"
+                               "观众听、又拍不出来的内容。每条是**原文叙述的完整句子**，"
+                               "不得改写、不得自造、不得伪装成人物台词；没有就给空数组",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "旁白正文（原文叙述原句，逐字）",
+                        },
+                        "source": {
+                            "type": "string",
+                            "description": "出处：这句旁白来自原文哪一句（同一句原文）",
+                        },
+                        "fact_refs": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": "这条旁白讲出了哪几条必保留事实（F 序号）；"
+                                           "没有就填空数组",
+                        },
+                    },
+                    "required": ["text", "source", "fact_refs"],
+                    "additionalProperties": False,
+                },
+            },
             "omittable": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -705,9 +748,10 @@ OUTLINE_SCHEMA = {
                 "description": "对白、动作、反应的大致分配倾向（不必报精确秒数，时长由代码估算）",
             },
         },
-        "required": ["main_events", "characters", "emotional_arc", "climax", "end_hook", "key_scenes",
+        "required": ["main_events", "characters", "emotional_arc", "climax", "end_hook",
+                     "hook_spoken", "hook_carrier", "key_scenes",
                      "required_facts", "causal_chain", "character_motives", "shot_beats",
-                     "dialogue_lines", "omittable", "time_budget"],
+                     "dialogue_lines", "narration_lines", "omittable", "time_budget"],
         "additionalProperties": False,
     },
 }
@@ -862,7 +906,8 @@ REPLAN_OPS_SCHEMA = {
         "properties": {
             "dialogue_ops": {
                 "type": "array",
-                "description": "台词替换操作；没有要换的就给空数组",
+                "description": "台词替换操作；没有要换的就给空数组（**本键必填**："
+                               "不要给 null）",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -879,9 +924,72 @@ REPLAN_OPS_SCHEMA = {
                     "additionalProperties": False,
                 },
             },
+            # 2026-09-30 复核（请求与消费契约矛盾）：消费端 `apply_replan_ops` 要求
+            # `fact_carriers`（动了台词/节拍就必须逐项声明承载），而本 schema 只允许
+            # `dialogue_ops`/`beat_ops` 且 `additionalProperties: False` —— 严格 schema
+            # 通道下**无法同时满足两边**。这里把消费端要读的字段一并声明（给空数组/空串）。
+            "fact_carriers": {
+                "type": "array",
+                "description": "必保留事实的承载声明：{index, beat, mode}。**改台词/节拍时"
+                               "逐项给全**（编号会顺延）；只改声明时可以只给要改的那几条。"
+                               "**空数组 = 本批不改承载**（本键必填，缺省值就是「不改」）",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {
+                            "type": "integer",
+                            "description": "第几条必保留事实（1-based，只填数字如 1，不要带 F 前缀）",
+                        },
+                        "beat": {
+                            "type": "integer",
+                            "description": "承载它的节拍编号（用**改之后**的编号，只填数字如 2）",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "description": "表达方式：画面、台词k（k 为台词编号）或 "
+                                           "旁白k（k 为旁白编号）；必须与节拍自带的载体标注一致",
+                        },
+                    },
+                    "required": ["index", "beat", "mode"],
+                    "additionalProperties": False,
+                },
+            },
+            "hook_carrier": {
+                "type": "string",
+                "description": "钩子那句的承载声明，形如 B3/台词2（钩子要求多句时用「；」分隔）。"
+                               "**本批不涉及钩子承载就省略这个键**（省略 = 不改，旧声明原样保留）；"
+                               "**只有确实要取消旧声明时才显式给空字符串**（空串 = 清除这个声明，"
+                               "不是「不改」）",
+            },
+            "hook_spoken": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "钩子**必须说出口**的台词（逐字原文，必须是 dialogue_lines 的"
+                               "子集）。**省略该键 = 不改**；**显式给空数组 = 清除这个声明**"
+                               "（不再要求钩子说出口时用空数组，旧声明不会因为「空」被忽略）",
+            },
+            "narration_lines": {
+                "type": "array",
+                "description": "本集图外旁白的**完整**声明（逐条给 text/source/fact_refs）。"
+                               "旁白编号 N1..Nn 会被 `旁白k` 引用，所以要改就**整表给全**；"
+                               "**省略该键 = 不改**；**显式给空数组 = 清空本集旁白表**",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string",
+                                 "description": "旁白正文（原文叙述原句，逐字）"},
+                        "source": {"type": "string", "description": "出处原文句"},
+                        "fact_refs": {"type": "array", "items": {"type": "integer"},
+                                      "description": "这条旁白承载的必保留事实序号"},
+                    },
+                    "required": ["text", "source", "fact_refs"],
+                    "additionalProperties": False,
+                },
+            },
             "beat_ops": {
                 "type": "array",
-                "description": "节拍操作；没有要改的就给空数组",
+                "description": "节拍操作；没有要改的就给空数组（**本键必填**："
+                               "不要给 null）",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -896,11 +1004,15 @@ REPLAN_OPS_SCHEMA = {
                         },
                         "new_text": {
                             "type": "string",
-                            "description": "该节拍的新正文（不含｜载体：段），必须自带 ｜原文依据：“…”；op=split 时给空字符串",
+                            "description": "该节拍的新正文：写 `节拍：<正文>｜…` 或**只给正文**都行（落计划时统一成 `节拍：…`）；**不含**｜载体：段，必须自带 ｜原文依据：“…”；op=split 时给空字符串",
                         },
                         "new_carrier": {
                             "type": "string",
-                            "description": "载体标注：画面，或 台词k（k 为台词编号）；留空=沿用原载体；op=split 时给空字符串",
+                            "description": "载体标注：画面、台词k（k 为台词编号）或 "
+                                           "旁白k（k 为旁白编号；旁白条目要在 `fact_refs` 里"
+                                           "登记同一个事实序号）；沿用原载体就给**空字符串** "
+                                           "（`\"\"`，不要给 null）；"
+                                           "op=split 时给空字符串",
                         },
                         "parts": {
                             "type": "array",
@@ -910,11 +1022,11 @@ REPLAN_OPS_SCHEMA = {
                                 "properties": {
                                     "new_text": {
                                         "type": "string",
-                                        "description": "该段正文（不含｜载体：段），必须自带 ｜原文依据：“…”",
+                                        "description": "该段正文：写 `节拍：<正文>｜…` 或**只给正文**都行（落计划时统一成 `节拍：…`）；**不含**｜载体：段，必须自带 ｜原文依据：“…”",
                                     },
                                     "new_carrier": {
                                         "type": "string",
-                                        "description": "该段载体：画面，或 台词k",
+                                        "description": "该段载体：画面、台词k 或 旁白k",
                                     },
                                 },
                                 "required": ["new_text", "new_carrier"],
@@ -927,7 +1039,12 @@ REPLAN_OPS_SCHEMA = {
                 },
             },
         },
-        "required": ["dialogue_ops", "beat_ops"],
+        # 2026-10-02 复核 P1（**必填键的缺省填充值必须安全**）：`hook_carrier` **不能**
+        # 必填——空串在消费侧是「清除」，模型"没有关于钩子的话可说"时按 schema 填的 `""`
+        # 会静默清掉合法声明（离线回放：零问题计划 → 新增 `carrier_hook_unlabeled`）。
+        # 该键仍在下文 `properties` 里声明（消费端要读），只是允许**省略**（= 不改）。
+        # 同类键（`hook_spoken` / `narration_lines`）同理保持可省略。
+        "required": ["dialogue_ops", "beat_ops", "fact_carriers"],
         "additionalProperties": False,
     },
 }

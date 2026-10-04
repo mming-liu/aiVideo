@@ -26,9 +26,13 @@ from shared.dialogue import strip_speaker_prefix
 
 
 def _tts_cache_sig(text: str, voice_config: dict) -> str:
-    """TTS cache identity: voice + exact spoken text (not only voice id)."""
-    digest = hashlib.sha256(str(text or "").strip().encode("utf-8")).hexdigest()[:16]
-    return f"{voice_config.get('id', '')}|{digest}"
+    """TTS cache identity: voice + exact spoken text (not only voice id).
+
+    2026-09-30 复核第 8 轮：实现搬到 `shared/audio_identity`——**消费侧（step04）
+    合并前要用同一份签名核对**（缓存检查 ≠ 消费检查），两处各写一份必然漂移。
+    """
+    from shared.audio_identity import speech_signature
+    return speech_signature(text, voice_config)
 
 
 
@@ -228,9 +232,40 @@ async def _gen_single_tts_async(text: str, output_path: Path, provider,
         raise RuntimeError(f"TTS failed after {MAX_RETRIES} retries: {last_error}")
 
 
+def _dialogue_speech(shot: dict, plan: dict | None, characters=None) -> tuple:
+    """该镜**该由对白轨合成**的文本 → `(raw_for_speaker, text)`；不该合成时返回 `(None, None)`.
+
+    复核第 8 轮 P1：「纯旁白和『对白＋旁白混合文本』都需要按结构化声音条目分流，
+    不能再把整段 `narration_segment` 当对白文本」——串行与异步共用本函数，判据只有一份。
+
+    - 计划**有**声音条目 ⇒ 按 `shot_voice_parts` 分流：只取对白那一份；空 ⇒ 本镜没有
+      对白轨（纯旁白由独立旁白音轨负责）。**这一支不再二次 `strip_speaker_prefix`**：
+      分片结果就是最终文本，必须与消费侧（step04 `shot_voice_parts(...)["dialogue"]`）
+      **逐字一致**，否则签名核对会把正确的音轨判成「与当前文本不符」；
+    - 计划**没有**声音条目（旧稿/无契约）⇒ 回退历史口径（标点启发式 + 前缀剥离）。
+    """
+    from step01_script_gen.plan_feasibility import shot_voice_parts
+    raw_text = str(shot.get("narration_segment", "") or "").strip()
+    if not raw_text:
+        return None, None
+    parts = shot_voice_parts(shot, plan)
+    if not parts["entries"]:
+        if not _has_dialogue(raw_text):
+            return None, None
+        _t = strip_speaker_prefix(raw_text, characters)
+        return raw_text, _t
+    if not parts["dialogue"].strip():
+        return None, None
+    if not parts["split_ok"]:
+        print("  [WARN] Shot %s: 声音分流未成序（条目文本没能在本镜文本里按序定位），"
+              "按整段对白处理" % shot.get("index", 0))
+    return (parts["prefix"] or "") + parts["dialogue"].strip(), parts["dialogue"].strip()
+
+
 def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
-                 voice_registry=None, characters: List[dict] = None) -> Optional[str]:
-    """为单个分镜生成 TTS 音频.
+                 voice_registry=None, characters: List[dict] = None,
+                 plan: dict | None = None) -> Optional[str]:
+    """为单个分镜生成 TTS 音频（**只合成对白那一份**）.
 
     Args:
         shot: 分镜数据，包含 index, narration_segment, main_subject 等字段
@@ -238,6 +273,7 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
         provider: TTS 提供商实例
         voice_registry: 音色注册表实例，None 时自动创建
         characters: 角色列表，优先用于检测说话人
+        plan: 章节计划（`chapter_outline`）——有声音条目时按结构化条目分流
 
     Returns:
         生成的音频文件路径，失败返回 None
@@ -248,14 +284,15 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
         print(f"  [SKIP] Shot {idx}: no narration_segment")
         return None
 
-    # v6.6: 只有对话才生成 TTS，旁白（纯描述）不生成
-    if not _has_dialogue(raw_text):
+    # 只有**对白**才进对白轨（v6.6 的判据 + 复核第 8 轮的结构化分流）
+    narration_text, _dlg_text = _dialogue_speech(shot, plan, characters)
+    if narration_text is None:
         print(f"  [SKIP] Shot {idx}: narration only (no dialogue), no TTS")
         return None
 
     # 1. 识别说话人角色（优先从对话中检测）
-    narration_text = raw_text
-    text = strip_speaker_prefix(raw_text, characters)
+    # `_dlg_text` 已是最终文本（结构化分支不二次剥前缀）——签名必须与消费侧逐字一致
+    text = _dlg_text if _dlg_text else strip_speaker_prefix(narration_text, characters)
 
     # 优先从对话中检测说话人
     detected_speaker = None
@@ -320,13 +357,21 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
 
 
 async def _gen_shot_tts_async(shot: dict, output_dir: Path, provider,
-                              voice_registry, characters: List[dict]) -> Optional[str]:
+                              voice_registry, characters: List[dict],
+                              plan: dict | None = None) -> Optional[str]:
     """异步版本的单分镜 TTS 生成."""
     idx = shot.get("index", 0)
     raw_text = shot.get("narration_segment", "").strip()
     if not raw_text:
         return None
-    text = strip_speaker_prefix(raw_text, characters)
+    # 只有**对白**才进对白轨（与串行版本**同一判据**：结构化声音条目分流）。
+    # 旧异步版本**没有**对白筛选：纯旁白镜会用角色音色发起合成，随后独立旁白轨
+    # 再合成一次，tts_mix 还会消费那个逐镜文件（复核第 8 轮 P1）。
+    _speech, _dlg_text = _dialogue_speech(shot, plan, characters)
+    if _speech is None:
+        return None
+    raw_text = _speech
+    text = _dlg_text if _dlg_text else strip_speaker_prefix(raw_text, characters)
     if not text:
         return None
 
@@ -401,6 +446,8 @@ def gen_all_shot_tts(script: dict, output_dir: Path,
     shots = script.get("shots", [])
     hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
     units = ([hook] if hook else []) + list(shots)
+    _plan = script.get("chapter_outline")
+    _plan = _plan if isinstance(_plan, dict) else None
     if not units:
         print("[WARN] No shots data")
         return []
@@ -424,7 +471,8 @@ def gen_all_shot_tts(script: dict, output_dir: Path,
         # 异步并发模式：利用限流信号量控制并发
         async def run_async():
             tasks = [
-                _gen_shot_tts_async(unit, output_dir, provider, voice_registry, characters)
+                _gen_shot_tts_async(unit, output_dir, provider, voice_registry,
+                                    characters, plan=_plan)
                 for unit in units
             ]
             return await asyncio.gather(*tasks)
@@ -434,9 +482,156 @@ def gen_all_shot_tts(script: dict, output_dir: Path,
     else:
         # 原有串行模式（保持向后兼容）
         for unit in units:
-            path = gen_shot_tts(unit, output_dir, provider, voice_registry, characters)
+            path = gen_shot_tts(unit, output_dir, provider, voice_registry, characters,
+                                plan=_plan)
             if path:
                 results.append(path)
 
     print(f"\n[INFO] TTS done: {len(results)}/{len(units)} success")
     return results
+
+
+def _check_narration_duration(output_path: Path, avail: float, index: int,
+                              run: list) -> float:
+    """旁白音轨时长核验：不超过**承载它的连续镜头片段**的总时长（禁止截句）.
+
+    与 `_validate_tts_duration`（单镜对白）的差别只在「上限怎么算」：对白的上限是
+    它所在那一镜的时长；旁白可以**跨镜连续播放**，上限是那一段连续镜头的总时长。
+    """
+    from step04_merge.stretch import get_media_duration
+    actual = float(get_media_duration(output_path) or 0)
+    if actual <= 0.2:
+        raise RuntimeError("旁白 N%d 音频无效或时长探测失败: %s" % (index, output_path))
+    if avail > 0:
+        tolerance = max(0.05, avail * 0.02)
+        if actual > avail + tolerance:
+            raise RuntimeError(
+                "旁白 N%d 超出承载它的镜头片段时长: actual=%.2fs 可用=%.2fs"
+                "（镜头 %s）——请减少旁白内容或调整镜头，**禁止截句**"
+                % (index, actual, avail, run))
+    return actual
+
+
+def gen_narration_tts(script: dict, output_dir: Path, provider=None) -> List[str]:
+    """为**图外旁白**生成独立 TTS 音轨（2026-09-30 复核第 7 轮第 3 项）.
+
+    与 `gen_shot_tts` 的三点不同（都是**有意**的）：
+
+      ① **固定旁白音色** `NARRATOR_VOICE`：旁白不是角色说的话——不做说话人识别、
+         不查 `voice_registry`（把旁白文本喂进角色音色库会污染后续章节的音色分配）；
+      ② **一条旁白一个文件**（`audio/narration_<NN>.mp3`，N 编号）——旁白跨镜连续播放，
+         按「每镜一个文件」写会把一条旁白切碎；
+      ③ 时长上限是**承载它的连续镜头片段**总长，不是单镜时长。
+
+    落点（哪几镜、起止时间）不在这里算：由 `step01.plan_feasibility.voice_units`
+    统一给出（与生成验收同一判据），本函数只做「够不够时间讲完」的核验。
+    `gen_shot_tts` 跳过的「纯叙述镜」不再等于「没人念」——这条音轨就是念它的地方。
+    """
+    from shared.paths import NARRATION_AUDIO_FILENAME_FMT
+    from step01_script_gen.plan_feasibility import (layout_voice_entries,
+                                                    plan_narration_entries,
+                                                    voice_units)
+    plan = script.get("chapter_outline")
+    plan = plan if isinstance(plan, dict) else {}
+    entries = plan_narration_entries(plan)
+    if not entries:
+        return []
+    shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+    _by_index = {str(s.get("index")): s for s in shots}
+    _units = {u["index"]: u for u in voice_units(plan, shots)
+              if u["kind"] == "narration"}
+    # 计划时长窗口（与 step04 用真实 clip_windows 的那份排版**同一规则**）：
+    # 同镜多条声音按序、不重叠；排不进就是计划层该重选的事，这里先显式失败。
+    _win: dict = {}
+    _acc = 0.0
+    for _s in shots:
+        _d = float(_s.get("duration_sec") or 0)
+        _win[str(_s.get("index"))] = (_acc, _acc + _d)
+        _acc += _d
+    # ① 逐条**结构**检查（不进 TTS 就能判、且能指出真因的）——先跑，
+    #    免得"旁白超长"被后面的排版检查报成"排不进承载片段"。
+    for _i, _e in enumerate(entries, 1):
+        _t = str(_e.get("text") or "").strip()
+        if not _t:
+            continue
+        if len(_t) > MAX_TEXT_LENGTH:
+            # 准则 7：`gen_single_tts` 对超长文本会**按标点截断**——旁白截断就不再是
+            # 原文那句话了。宁可显式失败，交回规划层换更短的原文句。
+            raise RuntimeError(
+                "旁白 N%d 长 %d 字，超过单段 TTS 上限 %d 字——旁白必须是原文的完整"
+                "句子，不许截断讲：%s" % (_i, len(_t), MAX_TEXT_LENGTH, _t[:24]))
+        if not list((_units.get(_i) or {}).get("shot_indexes") or []):
+            raise RuntimeError(
+                "旁白 N%d 在成稿里**没有连续落点**（承载它的节拍没有被镜头声明，或"
+                "这些镜头的旁白拼不出这条旁白）——旁白必须有地方讲：%s"
+                % (_i, _t[:24]))
+        # **防重复发声**（复核第 8 轮确认的形态）：分流不成序时对白轨拿到的是整段文本，
+        # 若旁白正文落在这一段里，它会被对白轨念一遍、旁白轨再念一遍 ⇒ 宁可显式失败。
+        from step01_script_gen.plan_feasibility import (_source_norm, shot_voice_parts)
+        for _sid in (_units.get(_i) or {}).get("shot_indexes") or []:
+            _sh = _by_index.get(str(_sid))
+            if not _sh:
+                continue
+            _p = shot_voice_parts(_sh, plan)
+            if (_p["entries"] and not _p["split_ok"] and _p["dialogue"].strip()
+                    and _source_norm(_t) in _source_norm(_p["dialogue"])):
+                raise RuntimeError(
+                    "旁白 N%d 的正文落在了镜头 %s 的**对白轨**文本里（该镜的声音分流未成序，"
+                    "整段被当作对白）——合成会与独立旁白轨**重复发声**。请修正该镜的旁白"
+                    "文本（让对白与旁白各自能按序定位）后重跑：%s"
+                    % (_i, _sid, _t[:24]))
+    # ② **排版**：同镜多条声音按序、不重叠、核可用时长（与 step04 同一规则）
+    # 排版喂**全部**声音条目（对白 + 旁白）：只喂旁白会让「对白在前」这条规则失效，
+    # 同镜里旁白仍从镜头起点开始、与对白轨叠加（视角扫描实测）。
+    _tracks, _layout_problems = layout_voice_entries(voice_units(plan, shots), _win)
+    _layout_problems = [p for p in _layout_problems if p.startswith("N")]
+    if _layout_problems:
+        raise RuntimeError("图外旁白排不进承载片段（不截句）：" + "；".join(_layout_problems[:3]))
+    _track_by_id = {t["id"]: t for t in _tracks if t["kind"] == "narration"}
+    if provider is None:
+        provider = create_provider()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out: List[str] = []
+    for _i, _e in enumerate(entries, 1):
+        text = str(_e.get("text") or "").strip()
+        if not text:
+            continue
+        run = list((_units.get(_i) or {}).get("shot_indexes") or [])
+        _tr = _track_by_id.get("N%d" % _i) or {}
+        _end = _win.get(run[-1], (0.0, 0.0))[1]
+        avail = max(0.0, float(_end) - float(_tr.get("start") or 0.0))
+        output_path = Path(output_dir) / NARRATION_AUDIO_FILENAME_FMT.format(_i)
+        voice_meta = output_path.with_suffix(".voice")
+        _sig = _tts_cache_sig(text, NARRATOR_VOICE)
+        if output_path.exists() and output_path.stat().st_size > 10240:
+            _cached = (voice_meta.read_text(encoding="utf-8").strip()
+                       if voice_meta.exists() else "")
+            if _cached == _sig:
+                try:
+                    _check_narration_duration(output_path, avail, _i, run)
+                    print("  [CACHE] Narration N%d: cached" % _i)
+                    out.append(str(output_path))
+                    continue
+                except Exception as _cache_err:
+                    print("  [CACHE] Narration N%d: cached audio invalid, regenerating: %s"
+                          % (_i, _cache_err))
+                    output_path.unlink(missing_ok=True)
+                    voice_meta.unlink(missing_ok=True)
+            print("  [CACHE] Narration N%d: text/voice changed, regenerating" % _i)
+        try:
+            print("  [TTS] Narration N%d <- %s（%d 镜连续，可用 %.2fs）"
+                  % (_i, NARRATOR_VOICE.get("id", ""), len(run), avail))
+            gen_single_tts(text, output_path, provider, NARRATOR_VOICE)
+            _check_narration_duration(output_path, avail, _i, run)
+            voice_meta.write_text(_sig, encoding="utf-8")
+            out.append(str(output_path))
+        except Exception as exc:
+            # 旁白缺音轨 = 成片里没人念（准则 7：不静默降级为"没有旁白"）
+            print("  [FAIL] Narration N%d: %s" % (_i, exc))
+            try:
+                output_path.unlink(missing_ok=True)
+                voice_meta.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+    return out

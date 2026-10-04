@@ -72,6 +72,12 @@ PLAN = {"shot_beats": ["B1 黄昏泛舟", "B2 刺杀", "B3 尖叫验尸",
                        "B4 恐吓隐瞒", "B5 赶车离开"],
         "dialogue_lines": ["张十三道：住嘴！", "听香道：杀人啦……"]}
 
+#: 同一份计划 + **承载契约**（节拍标载体）。2026-09-30 起「新稿必须逐镜声明」的
+#: 强制力挂在承载契约上：带契约的计划缺声明 = 显式失败；没有契约的历史计划沿用
+#: 「无可核 ≠ 被破坏」（与 `carrier_relation_problems` 同口径）。
+PLAN_V2 = {"shot_beats": [b + "｜载体：画面" for b in PLAN["shot_beats"]],
+           "dialogue_lines": list(PLAN["dialogue_lines"])}
+
 def test_event_contract_refs_from_another_plan_version_are_refused():
     """**同号误认**反例（2026-09-27 复核点名）：旧快照的 B2 编号仍合法，但指的不是同一条节拍.
 
@@ -507,10 +513,13 @@ def test_undeclared_new_candidate_is_rejected_when_declaration_required():
     # 默认（兼容口径）：不据「不可核」判违规
     ok, violations, declared = check_event_contract(script, PLAN)
     assert ok and violations == [] and declared is False
-    # 候选门口径：必须声明过 → 直接判未声明
-    ok2, v2, declared2 = check_event_contract(script, PLAN, require_declaration=True)
+    # 带承载契约的计划 + 候选门口径：必须声明过 → 直接判未声明
+    ok2, v2, declared2 = check_event_contract(script, PLAN_V2, require_declaration=True)
     assert not ok2 and declared2 is False
     assert [v["code"] for v in v2] == ["plan_refs_missing"], v2
+    # 没有承载契约的历史计划：沿用容忍口径（不改旧语义）
+    ok3, v3, declared3 = check_event_contract(script, PLAN, require_declaration=True)
+    assert ok3 and v3 == [] and declared3 is False
 
 
 def test_binding_then_requiring_declaration_still_validates_coverage():

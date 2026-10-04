@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -169,8 +170,127 @@ def payload_diff(before: dict, after: dict, *, max_items: int = 12) -> list[str]
     return out
 
 
+#: revision 算法版本（2026-09-30 复核 P1：「换哈希算法会让旧欠账失去匹配」）.
+#: v1 = 只 hash 语义 payload；v2 = 语义 payload + 契约身份指纹。
+#: 版本升级时**未解决的欠账不能因换哈希消失**——台账读写两侧一律用
+#: `script_revision_aliases()` 的全部版本做匹配（见 `main._load_blocked_revisions`
+#: 与 BEST-GUARD 候选筛选）。
+SCRIPT_REVISION_VERSION = 2
+
+#: 「字段不存在」的显式标记。**不能**用 `None` 代替——`null` 与缺失在事件契约里
+#: 判据不同（`null`/标量 = 声明形态非法 → `plan_refs_missing`；缺失 = 没声明）。
+_MISSING_FIELD = {"_absent": True}
+
+
+def _typed(obj):
+    """把任意值转成**保留存在性、原始类型与值**的可哈希结构.
+
+    2026-09-30 复核第 4 轮 P1：契约身份此前用 `list(x or [])` / `list(x)` 取值，把
+    `[]` 与 `null`、`["1"]` 与 `"1"` 折成同一个哈希，而事件契约对这两组的判据
+    **不同** ⇒「同 revision、不同契约结论」；`beats=1` 更会让哈希函数直接抛
+    `TypeError`（连结论都出不来）。未经校验的数据一律**不做隐式转换**。
+    """
+    if isinstance(obj, dict):
+        return {"t": "dict",
+                "v": [[_typed(k), _typed(v)] for k, v in
+                      sorted(obj.items(),
+                             key=lambda kv: (type(kv[0]).__name__, str(kv[0])))]}
+    if isinstance(obj, (list, tuple)):
+        return {"t": "list", "v": [_typed(x) for x in obj]}
+    if isinstance(obj, bool):
+        return {"t": "bool", "v": obj}
+    if isinstance(obj, int):
+        return {"t": "int", "v": obj}
+    if isinstance(obj, float):
+        return {"t": "float", "v": obj}
+    if isinstance(obj, str):
+        return {"t": "str", "v": obj}
+    if obj is None:
+        return {"t": "null", "v": None}
+    return {"t": type(obj).__name__, "v": str(obj)}
+
+
+def shot_contract_identity(shot) -> dict:
+    """单镜**契约身份**：`index` + `plan_refs`——**全稿指纹与逐镜守卫共用这一处表示**.
+
+    2026-09-30 复核第 4 轮 P2：契约声明此前有两套表示——全稿指纹自带一套，逐镜摘要
+    (`shot_semantic_digest`) 完全看不见 ⇒ 改某一镜的 `plan_refs` 会换掉全稿 revision，
+    却换不掉 `per_shot_revisions`，修复轮「未点名镜头不得变化」的守卫因此漏拦
+    （`main.py` 的 `_non_target` 判定）。
+    """
+    if not isinstance(shot, dict):
+        # 非 dict 镜头（含 `None`/标量）**原样留痕**，不静默丢弃：丢弃会把
+        # 「第 3 个元素不是对象」与「只有 2 个元素」折成同一个哈希。
+        return _typed(shot)
+    return {k: (_typed(shot[k]) if k in shot else _MISSING_FIELD)
+            for k in ("index", "plan_refs")}
+
+
+def contract_identity(script: dict) -> dict:
+    """全稿**契约身份**：`plan_id` + 逐镜（含 hook）契约身份——保留字段存在性."""
+    if not isinstance(script, dict):
+        return _typed(script)
+    out = {"plan_id": (_typed(script["plan_id"]) if "plan_id" in script
+                       else _MISSING_FIELD)}
+    for _key, _single in (("shots", False), ("hook", True)):
+        if _key not in script:
+            out[_key] = _MISSING_FIELD
+        elif _single or not isinstance(script[_key], list):
+            # hook 是单对象；`shots` 不是列表（含 `None`）时原样留痕，不按空表处理。
+            out[_key] = shot_contract_identity(script[_key])
+        else:
+            out[_key] = [shot_contract_identity(x) for x in script[_key]]
+    return out
+
+
+def contract_fingerprint(script: dict) -> str:
+    """**事件履约契约**指纹：`plan_id` + 每镜（含 hook）的 `plan_refs`.
+
+    2026-09-30 复核 P1：改 `plan_id` 或 `plan_refs` 会让事件检查从通过变成失败，但
+    `compute_script_revision` **完全不变** ⇒ 「同一 revision」可以带着**不同的承载契约**
+    复用审计/质检结论。契约是本集内容取舍的声明，必须与稿件语义一起进身份判定。
+    """
+    return _hash_json(contract_identity(script))
+
+
+#: 各版 revision 算法的**已知版本号**（新增版本时往后追加；逐版一起算）
+KNOWN_REVISION_VERSIONS = (1, 2)
+
+
+def script_revision_for_version(script: dict, version: int) -> str:
+    """按**指定版本**的算法算身份.
+
+    版本 1 = 只 hash 语义 payload（历史算法，值逐字保持不变）；
+    版本 2 = 语义 payload + 契约指纹（带 `v2|` 标签，避免与将来版本串号）。
+    """
+    _payload = semantic_payload_json(script)
+    if int(version) <= 1:
+        return hashlib.sha256(_payload.encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        ("v%d|%s|%s" % (int(version), _payload,
+                        contract_fingerprint(script))).encode("utf-8")).hexdigest()
+
+
+def script_revision_aliases(script: dict) -> dict:
+    """`{版本号: revision}`：同一份稿件在**各版算法**下的身份.
+
+    2026-09-30 复核第 4 轮 P1：换哈希算法后，同一份**完全未改**的历史稿在新算法下
+    拿到另一个 revision，而欠账台账里存的还是旧值 ⇒「旧审计欠账仍有效，但选稿查询
+    命不中它」——所以各版身份要一起算出来。
+
+    2026-09-30 复核第 5 轮 P1-2：**必须按版本比对，不能把各版本混成一个等价关系**。
+    两份稿件文字相同、契约不同时，v2 身份不同而 v1 身份相同；若拿「任一版本命中」
+    当判同/欠账匹配，「引用修好、契约已通过」的好稿就会被「同一段文字、契约破损」
+    的旧欠账连坐（离线反例已确认）。调用方（台账读写、选稿判同）一律逐版比对：
+    现行版本用完整身份，旧版本身份**只用于匹配明确属于那个版本的旧记录**。
+    """
+    return {int(v): script_revision_for_version(script, int(v))
+            for v in KNOWN_REVISION_VERSIONS}
+
+
 def compute_script_revision(script: dict) -> str:
-    return hashlib.sha256(semantic_payload_json(script).encode("utf-8")).hexdigest()
+    """稿件 revision = **现行版本**的完整身份（语义 payload + 契约指纹）."""
+    return script_revision_for_version(script, SCRIPT_REVISION_VERSION)
 
 
 def ensure_script_revision(script: dict, *, force: bool = False) -> str:
@@ -188,8 +308,16 @@ def ensure_script_revision(script: dict, *, force: bool = False) -> str:
 
 
 def shot_semantic_digest(shot) -> str:
-    """单镜语义摘要哈希（`_SEMANTIC_SHOT_FIELDS` 白名单内的字段）."""
-    return _hash_json(_semantic_shot(shot))
+    """单镜摘要哈希：语义白名单字段 **+ 契约身份**（`plan_refs`/`index`）.
+
+    2026-09-30 复核第 4 轮 P2：`plan_refs` 是**消费品**（事件履约契约、B↔D 配对、
+    承载关系都读它），却不在 `_SEMANTIC_SHOT_FIELDS` 里 ⇒ 逐镜 revision 看不见
+    它的变化，而全稿 revision 看得见（契约指纹）。修 v6.79 给 `temporal_plan`
+    补白名单时是同一条道理：**消费方读的字段必须在逐镜身份里**。
+    契约身份用 `shot_contract_identity()`——与全稿指纹共用同一处表示。
+    """
+    return _hash_json({"semantic": _semantic_shot(shot),
+                       "contract": shot_contract_identity(shot)})
 
 
 def semantic_payload_digest(script: dict) -> dict:
@@ -291,10 +419,14 @@ def per_shot_revisions(script: dict) -> dict:
     out: dict = {}
     for i, s in enumerate(script.get("shots") or []):
         key = s.get("index") if isinstance(s, dict) and "index" in s else i
-        out[key] = _hash_json(_semantic_shot(s))
+        # 2026-09-30 复核第 4 轮 P2：这里必须走 `shot_semantic_digest`（= 语义 +
+        # **契约身份**）。旧实现直接调 `_semantic_shot`，于是同一次改动的两个摘要
+        # 各说各话——`semantic_payload_digest` 看得见 `plan_refs` 变化，逐镜
+        # revision 看不见，修复轮「未点名镜头不得变化」的守卫正好漏在这半边。
+        out[key] = shot_semantic_digest(s)
     hook = script.get("hook")
     if isinstance(hook, dict):
-        out["hook"] = _hash_json(_semantic_shot(hook))
+        out["hook"] = shot_semantic_digest(hook)
     return out
 
 
@@ -479,7 +611,8 @@ def build_step01_commit_manifest(*, run_id: str, created_at: str, revision: str,
                                  status: str = "COMMITTED",
                                  blocking: list | None = None,
                                  detail: str = "",
-                                 prompt_source_fingerprint: str = "") -> dict:
+                                 prompt_source_fingerprint: str = "",
+                                 audit_status: str = "") -> dict:
     """构造 commit manifest；`status=COMMITTED` 时才带三份产物的摘要.
 
     `prompt_source_fingerprint`（v6.112）是**诊断字段**：记录本批产物出自哪一版
@@ -502,6 +635,11 @@ def build_step01_commit_manifest(*, run_id: str, created_at: str, revision: str,
         # 猜是否被截断（36 条的 run 也只看到 20 条）。
         "blocking_truncated": len(blocking or []) > 20,
         "blocking": _cap_blocking_for_manifest(blocking),
+        # v6.152（C2）：本次终局审计的**状态**（ok / request_failed / truncated /
+        # parse_failed …）。BLOCK 时正式产物 `step01_audit.json` 刻意保持旧 revision
+        # 不动，读者只凭它无从知道「本次到底审没审出来」——这个字段就是那条区分：
+        # 空串 = 本次 BLOCK 与审计无关（确定性门 / 台词门 / 结构门）。
+        "audit_status": audit_status,
         "detail": detail,
         "artifacts": {},
     }
@@ -525,13 +663,72 @@ def write_step01_commit_manifest(chapter_dir: Path, manifest: dict) -> Path:
     return path
 
 
+_CHAPTER_DIR_RE = re.compile(r"^chapter_(\d+)$")
+
+
+def _chapter_from_dir(chapter_dir: Path) -> "int | None":
+    """从章目录名解析章号（`chapter_002` -> 2）；不是章目录（如测试用的裸 tmp_path）返回 None。"""
+    m = _CHAPTER_DIR_RE.match(Path(chapter_dir).name)
+    return int(m.group(1)) if m else None
+
+
+def _verify_chapter_identity(chapter_dir: Path, script: dict, stage: str,
+                             expected_chapter: "int | None") -> None:
+    """章号三方一致性：请求的章（`expected_chapter`）/ 目录名 / 脚本内 `chapter_index`.
+
+    为什么要有这道门：章号此前**没有任何跨产物校验**。用错章跑起来后果是静默的——
+    `global/` 下的角色/场景/道具 bank 按章号记 `last_chapter`（跨章共享，写错就永久污染），
+    窗口判据 `NOVEL_CHAPTER - 1` 依然成立，`source_hash` 里含章号只会让缓存持续 miss。
+    目录名与脚本章号不一致 = 这个目录里的产物不是这一章的，读下去等于拿错章的内容生图。
+
+    降噪（不误伤，也不静默）：目录名不含 `chapter_NNN`、或脚本缺 `chapter_index`
+    字段时无法判定——打印 WARN 后继续，不 fail（测试用裸 tmp_path；
+    `chapter_index` 由 `get_chapter_meta` 单点写入，历史产物可能没有）。
+    """
+    dir_chapter = _chapter_from_dir(chapter_dir)
+    raw = script.get("chapter_index")
+    try:
+        script_chapter = int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        script_chapter = None
+
+    if expected_chapter is not None:
+        want = int(expected_chapter)
+        if dir_chapter is not None and dir_chapter != want:
+            raise QualityGateError(
+                f"{stage} chapter mismatch: 请求第 {want} 章，但目录是 {Path(chapter_dir).name}"
+                f"（{chapter_dir}）——章/部参数与目标目录不一致，拒绝在错章产物上继续。"
+                "检查 --chapter/--book/--book-name 与 .env.content 的 NOVEL_CHAPTER/BOOK_*。"
+            )
+        if script_chapter is not None and script_chapter != want:
+            raise QualityGateError(
+                f"{stage} chapter mismatch: 请求第 {want} 章，但 script_result.json 里是"
+                f" chapter_index={script_chapter}（{chapter_dir}）。"
+            )
+    if dir_chapter is not None and script_chapter is not None and dir_chapter != script_chapter:
+        raise QualityGateError(
+            f"{stage} chapter mismatch: 目录 {Path(chapter_dir).name} 与 script_result.json 的"
+            f" chapter_index={script_chapter} 不是同一章（{chapter_dir}）；产物放错目录，拒绝继续。"
+        )
+    if dir_chapter is None or script_chapter is None:
+        missing = (f"目录名 {Path(chapter_dir).name!r} 不含 chapter_NNN"
+                   if dir_chapter is None else "script_result.json 缺 chapter_index 字段")
+        print(f"[WARN] {stage} 章号一致性未校验（{missing}）：{chapter_dir}")
+
+
 def verify_step01_commit_manifest(chapter_dir: Path, script: dict,
-                                  *, stage: str = "step01") -> dict:
+                                  *, stage: str = "step01",
+                                  expected_chapter: "int | None" = None) -> dict:
     """核对三份正式产物与 `step01_commit.json` 的 revision 与摘要.
 
     失败一律抛 `QualityGateError`（fail-closed）：manifest 缺失、状态不是
-    COMMITTED、revision 与当前 script 不符、任一产物缺失或摘要不符。
+    COMMITTED、revision 与当前 script 不符、任一产物缺失或摘要不符；
+    另加章号一致性（见 `_verify_chapter_identity`）——`expected_chapter` 由
+    **请求方**显式传入（阶段入口传本次生效的章号），不在此处读 env：
+    工具（如联系表 / prompt 基线）允许按 `--chapter` 检查任意章目录，
+    用 env 比对会把它们的合法调用判成错章。
     """
+    _verify_chapter_identity(Path(chapter_dir), script, stage, expected_chapter)
     path = Path(chapter_dir) / STEP01_COMMIT_FILENAME
     if not path.exists():
         raise QualityGateError(
@@ -573,7 +770,8 @@ def verify_step01_commit_manifest(chapter_dir: Path, script: dict,
 
 
 def require_step01_upstream(chapter_dir: Path, script: "dict | None" = None,
-                           *, stage: str = "step01") -> dict:
+                           *, stage: str = "step01",
+                           expected_chapter: "int | None" = None) -> dict:
     """**step01 上游准入的唯一入口**：语义门 + commit manifest 两道都要过（v6.111）.
 
     为什么要有这个函数：此前四个消费点各写各的——`video_ab_experiment` 调两道，
@@ -600,7 +798,8 @@ def require_step01_upstream(chapter_dir: Path, script: "dict | None" = None,
             raise QualityGateError(f"{stage} 上游 script_result.json 读取失败: {exc}")
     require_semantic_gate(ch / "step01_quality.json", ch / "step01_audit.json",
                           script, stage=stage)
-    return verify_step01_commit_manifest(ch, script, stage=stage)
+    return verify_step01_commit_manifest(ch, script, stage=stage,
+                                         expected_chapter=expected_chapter)
 
 
 def require_gate(report_path: Path, script: dict, *, stage: str,
@@ -664,6 +863,13 @@ __all__ = [
     "per_shot_revisions",
     "changed_shot_keys",
     "QualityGateError",
+    "SCRIPT_REVISION_VERSION",
+    "KNOWN_REVISION_VERSIONS",
+    "script_revision_for_version",
+    "contract_identity",
+    "contract_fingerprint",
+    "shot_contract_identity",
+    "script_revision_aliases",
     "compute_script_revision",
     "ensure_script_revision",
     "attach_gate_metadata",

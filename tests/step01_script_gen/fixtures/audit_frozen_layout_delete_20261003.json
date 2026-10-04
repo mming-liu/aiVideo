@@ -1,0 +1,1194 @@
+{
+ "_provenance": {
+  "run_id": "20261003T084713-d32152-002-736d86",
+  "note": "第 20 轮 ch2：这两份**原始修复响应**里，shot9/10 的 frame_layouts 已把多余的「小厮」条目删掉；基线稿取自同轮的终局快照（删除被回填，所以它仍带多余条目）。夹具逐字取自运行产物，未加工。",
+  "response_files": [
+   "step01_call_bodies/c4ce7445cdb6d4d98.txt",
+   "step01_call_bodies/c7e983ad0039e4306.txt"
+  ],
+  "baseline_file": "snapshots/script_result_20261003_090042.json"
+ },
+ "baseline_shots": {
+  "9": {
+   "index": 9,
+   "plan_refs": {
+    "beats": [
+     8
+    ],
+    "lines": [
+     2
+    ]
+   },
+   "narration_segment": "张十三道：退一步说，如果我们真的暴露了身份，谁会对我们不利呢？",
+   "subtitle": "张十三道：退一步说，如果我们真的暴露了身份，谁会对我们不利呢？",
+   "scene": "青州府外南阳河畔小酒家",
+   "location": "青州府外南阳河畔小酒家",
+   "main_subject": "张十三",
+   "prompt": "[张十三: 眉清目秀，唇薄眼细，脸色阴沉的白中透青，十七八岁少年] 古风真人影视剧，9:16竖屏，电影质感，暗调低饱和。近景正面平视，张十三（十七八岁少年，眉清目秀，唇薄眼细，脸色白中透青，穿一身青衣小厮家仆打扮）坐于画中偏右，上身微微前倾，右手抬至胸前比划，眼神锐利扫向画左。背景昏暗酒家内景，木质桌案与粗陶酒碗置于画左桌角，门缝光柱斜切画面右侧，暖金与焦褐色调，浅景深",
+   "motion_desc": "前2秒：张十三上身微微前倾，右手抬至胸前比划，眉峰压低；2-5秒：他嘴唇开合说话，右手食指在空中点动两下，眼神锐利扫向画左；5-7秒：手指收回半握，唇角微动，呼吸略重，目光仍锁画左",
+   "ff_desc": "张十三坐于画中偏右，上身微微前倾，右手抬至胸前比划，眼神锐利扫向画左，青衣小厮打扮，门缝光柱斜切画面右侧",
+   "lf_desc": "张十三右手收回半握于胸前，唇角微动，呼吸略重，目光仍锁画左，门缝光柱中尘埃浮动，粗陶酒碗静置画左桌角",
+   "context_bridge": "承接上一镜张十三的冷笑，继续其分析。",
+   "audio_cue": "人声=张十三，冷厉刻薄，语速快，音色清亮偏尖，北方口音；音效=衣料摩擦声；背景音乐=低音鼓点持续",
+   "fx_effect": "无",
+   "color_tone": "暖金焦褐",
+   "cam_idx": 2,
+   "clip_transition": "硬切，时长0.2s",
+   "duration_sec": 7.88,
+   "variation_type": "small",
+   "frame_layouts": {
+    "kfs": [
+     [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画中偏右",
+       "pose": "上身前倾右手比划",
+       "gaze_target": "画左",
+       "props": []
+      },
+      {
+       "name": "小厮",
+       "on_screen": true,
+       "position": "",
+       "pose": "",
+       "gaze_target": "无",
+       "props": []
+      }
+     ],
+     [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画中偏右",
+       "pose": "食指空中点动",
+       "gaze_target": "画左",
+       "props": []
+      },
+      {
+       "name": "小厮",
+       "on_screen": true,
+       "position": "",
+       "pose": "",
+       "gaze_target": "无",
+       "props": []
+      }
+     ],
+     [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画中偏右",
+       "pose": "右手收回半握",
+       "gaze_target": "画左",
+       "props": []
+      }
+     ]
+    ]
+   },
+   "keyframes": [
+    {
+     "desc": "张十三坐于画中偏右，上身微微前倾，右手抬至胸前比划，眉峰压低，眼神锐利扫向画左，青衣小厮打扮，门缝光柱斜切画面右侧",
+     "stage": "pre",
+     "t_sec": 1.0
+    },
+    {
+     "desc": "张十三嘴唇开合说话，右手食指在空中点动，眼神锐利扫向画左，青衣小厮打扮，门缝光柱中尘埃浮动",
+     "stage": "climax",
+     "t_sec": 3.5
+    },
+    {
+     "desc": "张十三手指收回半握于胸前，唇角微动，呼吸略重，目光仍锁画左，粗陶酒碗静置画左桌角",
+     "stage": "after",
+     "t_sec": 6.0
+    }
+   ],
+   "content": "",
+   "camera_movement": "固定机位",
+   "framing": "",
+   "lighting_color": "",
+   "duration": 7.88,
+   "negative_prompt": "",
+   "hook": "",
+   "time_stamp": "",
+   "subject_direction": "",
+   "char_layout": [],
+   "timecode": {
+    "start": 38.62,
+    "end": 46.5
+   },
+   "core_keywords": [
+    "张十三",
+    "张十三坐",
+    "于画中偏",
+    "上身微微",
+    "前倾"
+   ],
+   "keyframe_sample_count": 1,
+   "movement_speed_multiplier": 1.0,
+   "blank_hold_duration": 1.5
+  },
+  "10": {
+   "index": 10,
+   "plan_refs": {
+    "beats": [
+     8
+    ],
+    "lines": [
+     2
+    ]
+   },
+   "narration_segment": "张十三道：唯有齐王，可若是齐王下的手，他需要用行刺的手段？他会只杀杨旭？",
+   "subtitle": "张十三道：唯有齐王，可若是齐王下的手，他需要用行刺的手段？他会只杀杨旭？",
+   "scene": "青州府外南阳河畔小酒家",
+   "location": "青州府外南阳河畔小酒家",
+   "main_subject": "张十三",
+   "prompt": "[张十三: 眉清目秀，唇薄眼细，脸色阴沉的白中透青，十七八岁少年] 古风真人影视剧，9:16竖屏，电影质感，暗调低饱和。中景侧后过肩机位，张十三（十七八岁少年，眉清目秀，唇薄眼细，脸色白中透青，穿一身青衣小厮家仆打扮）坐于画中偏左，背对镜头露出右侧脸颊，右手抬起在身前虚点，头微偏向画右。背景昏暗酒家内景，门缝光柱斜切画面左侧，暖金与焦褐色调，浅景深",
+   "motion_desc": "前2秒：张十三侧后过肩，右手抬起在身前虚点，头微偏向画右；2-6秒：他嘴唇开合说话，右手食指与中指并拢向前一送，肩线随语气轻晃；6-9秒：手指收回按在桌沿，下颌微抬，眼神轻蔑扫向画右，门缝光柱中尘埃浮动",
+   "ff_desc": "张十三侧后过肩坐于画中偏左，背对镜头露出右侧脸颊，右手抬起在身前虚点，头微偏向画右，青衣小厮打扮",
+   "lf_desc": "张十三右手收回按在桌沿，下颌微抬，眼神轻蔑扫向画右，侧后过肩机位下门缝光柱斜切画面左侧，尘埃浮动",
+   "context_bridge": "承接上一镜张十三的追问，继续其推理。",
+   "audio_cue": "人声=张十三，冷厉刻薄，语速快，音色清亮偏尖，北方口音；音效=手指叩桌轻响；背景音乐=低音鼓点持续",
+   "fx_effect": "无",
+   "color_tone": "暖金焦褐",
+   "cam_idx": 3,
+   "clip_transition": "硬切，时长0.2s",
+   "duration_sec": 9.38,
+   "variation_type": "medium",
+   "frame_layouts": {
+    "kfs": [
+     [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画中偏左",
+       "pose": "侧后过肩右手虚点",
+       "gaze_target": "画右",
+       "props": []
+      },
+      {
+       "name": "小厮",
+       "on_screen": true,
+       "position": "",
+       "pose": "",
+       "gaze_target": "无",
+       "props": []
+      }
+     ],
+     [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画中偏左",
+       "pose": "二指并拢向前一送",
+       "gaze_target": "画右",
+       "props": []
+      }
+     ],
+     [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画中偏左",
+       "pose": "右手按桌沿下颌微抬",
+       "gaze_target": "画右",
+       "props": []
+      }
+     ]
+    ]
+   },
+   "keyframes": [
+    {
+     "desc": "张十三侧后过肩坐于画中偏左，背对镜头露出右侧脸颊，右手抬起在身前虚点，头微偏向画右，青衣小厮打扮",
+     "stage": "pre",
+     "t_sec": 1.0
+    },
+    {
+     "desc": "张十三嘴唇开合说话，右手食指与中指并拢向前一送，肩线随语气轻晃，侧后过肩机位下背对镜头露出右侧脸颊",
+     "stage": "climax",
+     "t_sec": 4.0
+    },
+    {
+     "desc": "张十三手指收回按在桌沿，下颌微抬，眼神轻蔑扫向画右，门缝光柱中尘埃浮动",
+     "stage": "after",
+     "t_sec": 7.5
+    }
+   ],
+   "content": "",
+   "camera_movement": "固定机位",
+   "framing": "",
+   "lighting_color": "",
+   "duration": 9.38,
+   "negative_prompt": "",
+   "hook": "",
+   "time_stamp": "",
+   "subject_direction": "",
+   "char_layout": [],
+   "timecode": {
+    "start": 46.5,
+    "end": 55.88
+   },
+   "core_keywords": [
+    "张十三",
+    "张十三侧",
+    "后过肩坐",
+    "于画中偏",
+    "背对镜头"
+   ],
+   "keyframe_sample_count": 2,
+   "movement_speed_multiplier": 0.5,
+   "blank_hold_duration": 1.5
+  }
+ },
+ "responses": {
+  "c4ce7445cdb6d4d98": {
+   "shot_replacements": [
+    {
+     "shot_id": "1",
+     "shot": {
+      "index": 1,
+      "plan_refs": {
+       "beats": [
+        1
+       ],
+       "lines": []
+      },
+      "narration_segment": "",
+      "subtitle": "",
+      "scene": "青州府外南阳河畔小酒家",
+      "location": "青州府外南阳河畔小酒家",
+      "main_subject": "酒家内景与围桌四人",
+      "prompt": "[特写]古风真人影视剧，9:16竖屏，电影质感，暗调低饱和。青州府外南阳河畔小酒家内景，前堂门板只留两块缝隙通风，一线天光从门缝斜切入室，照出浮尘。长6米宽5米高3米的临河小酒肆，正中一张方桌，四人围桌而坐：背门而坐的青衣少年张十三（十七八岁，眉清目秀，唇薄眼细，脸色白中透青，穿一身青衣小厮家仆打扮），左手边魁梧皂衣大汉冯西辉（国字脸，浓眉阔口，颌下粗髯如钢针，年约三旬，穿圆领皂衣），右手边圆脸胖子安立桐（四十多岁，大腹便便，圆脸肥腮，眉毛很淡，天生笑眼，穿团花交领员外衫，头戴折角纱巾，手持洁白手帕），对面坐着的店主刘旭（国字脸，老实憨厚，嘴唇紧抿，穿青粗布直掇，襟角掖在腰带里，袖子挽着）。桌上茶壶茶杯，四人均阴沉脸色，一言不发。室内光线昏暗，门缝光柱中尘埃浮动，暖金与焦褐色调。危机一触即发，暗流涌动，惊觉对峙",
+      "motion_desc": "前2秒：门缝光柱中尘埃缓慢浮动，四人静坐不动；2-4秒：安立桐抬手用手帕擦额头汗水，手帕在额角移动；4秒后：冯西辉手指在桌沿轻叩一下，茶杯水面微颤",
+      "ff_desc": "昏暗酒家内，四人围桌静坐，门缝光柱斜切，尘埃浮动，安立桐端坐、洁白手帕攥在手中未及额角",
+      "lf_desc": "冯西辉手指停在桌沿，茶杯水面余颤未平，四人依旧沉默，门缝光柱中尘埃继续浮动。张十三位于画中背门、端坐。刘旭位于画中前景、端坐",
+      "context_bridge": "开场建立镜，从酒家外景推入室内，交代密会场景与压抑气氛。",
+      "audio_cue": "人声=无；音效=夏日蝉鸣聒噪、门缝微风轻响、茶杯水面微颤声；背景音乐=低沉压抑的古筝单音，缓慢重复",
+      "fx_effect": "尘埃光束",
+      "color_tone": "暖金焦褐",
+      "cam_idx": 1,
+      "clip_transition": "淡入转场，时长0.3s；镜头推近，节奏缓慢，模糊转场，转场时长0.3s",
+      "duration_sec": 4.0,
+      "variation_type": "medium",
+      "frame_layouts": {
+       "ff": [
+        {
+         "name": "张十三",
+         "on_screen": true,
+         "position": "画中背门",
+         "pose": "端坐",
+         "gaze_target": "画下桌面",
+         "props": []
+        },
+        {
+         "name": "冯西辉",
+         "on_screen": true,
+         "position": "画左",
+         "pose": "端坐",
+         "gaze_target": "画右",
+         "props": []
+        },
+        {
+         "name": "安立桐",
+         "on_screen": true,
+         "position": "画右",
+         "pose": "端坐",
+         "gaze_target": "画左",
+         "props": [
+          "洁白手帕"
+         ]
+        },
+        {
+         "name": "刘旭",
+         "on_screen": true,
+         "position": "画中前景",
+         "pose": "端坐",
+         "gaze_target": "画上",
+         "props": []
+        }
+       ],
+       "lf": [
+        {
+         "name": "张十三",
+         "on_screen": true,
+         "position": "画中背门",
+         "pose": "端坐",
+         "gaze_target": "画下桌面",
+         "props": []
+        },
+        {
+         "name": "冯西辉",
+         "on_screen": true,
+         "position": "画左",
+         "pose": "端坐",
+         "gaze_target": "画右",
+         "props": []
+        },
+        {
+         "name": "安立桐",
+         "on_screen": true,
+         "position": "画右",
+         "pose": "端坐",
+         "gaze_target": "画左",
+         "props": [
+          "洁白手帕"
+         ]
+        },
+        {
+         "name": "刘旭",
+         "on_screen": true,
+         "position": "画中前景",
+         "pose": "端坐",
+         "gaze_target": "画上",
+         "props": []
+        }
+       ],
+       "kfs": [
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中背门",
+          "pose": "端坐",
+          "gaze_target": "画下桌面",
+          "props": []
+         },
+         {
+          "name": "冯西辉",
+          "on_screen": true,
+          "position": "画左",
+          "pose": "端坐",
+          "gaze_target": "画右",
+          "props": []
+         },
+         {
+          "name": "安立桐",
+          "on_screen": true,
+          "position": "画右",
+          "pose": "端坐",
+          "gaze_target": "画左",
+          "props": [
+           "洁白手帕"
+          ]
+         },
+         {
+          "name": "刘旭",
+          "on_screen": true,
+          "position": "画中前景",
+          "pose": "端坐",
+          "gaze_target": "画上",
+          "props": []
+         }
+        ],
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中背门",
+          "pose": "端坐",
+          "gaze_target": "画下桌面",
+          "props": []
+         },
+         {
+          "name": "冯西辉",
+          "on_screen": true,
+          "position": "画左",
+          "pose": "端坐",
+          "gaze_target": "画右",
+          "props": []
+         },
+         {
+          "name": "安立桐",
+          "on_screen": true,
+          "position": "画右",
+          "pose": "抬手擦汗",
+          "gaze_target": "画左",
+          "props": [
+           "洁白手帕"
+          ]
+         },
+         {
+          "name": "刘旭",
+          "on_screen": true,
+          "position": "画中前景",
+          "pose": "端坐",
+          "gaze_target": "画上",
+          "props": []
+         }
+        ],
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中背门",
+          "pose": "端坐",
+          "gaze_target": "画下桌面",
+          "props": []
+         },
+         {
+          "name": "冯西辉",
+          "on_screen": true,
+          "position": "画左",
+          "pose": "手指叩桌",
+          "gaze_target": "画右",
+          "props": []
+         },
+         {
+          "name": "安立桐",
+          "on_screen": true,
+          "position": "画右",
+          "pose": "端坐",
+          "gaze_target": "画左",
+          "props": [
+           "洁白手帕"
+          ]
+         },
+         {
+          "name": "刘旭",
+          "on_screen": true,
+          "position": "画中前景",
+          "pose": "端坐",
+          "gaze_target": "画上",
+          "props": []
+         }
+        ]
+       ]
+      },
+      "keyframes": [
+       {
+        "desc": "昏暗酒家内，张十三背门端坐画中，冯西辉端坐画左，安立桐端坐画右手持洁白手帕，刘旭端坐画中前景，四人阴沉脸色，门缝光柱斜切，尘埃浮动",
+        "stage": "pre",
+        "t_sec": 1.0
+       },
+       {
+        "desc": "安立桐抬手用手帕擦额头汗水，手帕停在额角，其余三人静坐不动，门缝光柱中尘埃继续浮动",
+        "stage": "approach",
+        "t_sec": 3.0
+       },
+       {
+        "desc": "冯西辉手指叩在桌沿，茶杯水面微颤，安立桐手帕停在额角，张十三与刘旭依旧端坐，室内光线昏暗",
+        "stage": "climax",
+        "t_sec": 3.8
+       }
+      ],
+      "content": "",
+      "camera_movement": "固定机位",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 4.0,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [
+       {
+        "name": "张十三",
+        "position": "画中背门",
+        "facing": "端坐",
+        "role": "主",
+        "surface": ""
+       },
+       {
+        "name": "冯西辉",
+        "position": "画左",
+        "facing": "端坐",
+        "role": "次",
+        "surface": ""
+       },
+       {
+        "name": "安立桐",
+        "position": "画右",
+        "facing": "端坐",
+        "role": "次",
+        "surface": ""
+       },
+       {
+        "name": "刘旭",
+        "position": "画中前景",
+        "facing": "端坐",
+        "role": "次",
+        "surface": ""
+       }
+      ],
+      "timecode": {
+       "start": 0.0,
+       "end": 4.0
+      },
+      "platform_label": "AI生成",
+      "core_keywords": [
+       "酒家内景与围桌四人",
+       "昏暗酒家",
+       "四人围桌",
+       "静坐",
+       "门缝光柱"
+      ],
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+     }
+    },
+    {
+     "shot_id": "9",
+     "shot": {
+      "index": 9,
+      "plan_refs": {
+       "beats": [
+        8
+       ],
+       "lines": [
+        2
+       ]
+      },
+      "narration_segment": "张十三道：退一步说，如果我们真的暴露了身份，谁会对我们不利呢？",
+      "subtitle": "张十三道：退一步说，如果我们真的暴露了身份，谁会对我们不利呢？",
+      "scene": "青州府外南阳河畔小酒家",
+      "location": "青州府外南阳河畔小酒家",
+      "main_subject": "张十三",
+      "prompt": "[张十三: 眉清目秀，唇薄眼细，脸色阴沉的白中透青，十七八岁少年] 古风真人影视剧，9:16竖屏，电影质感，暗调低饱和。近景正面平视，张十三（十七八岁少年，眉清目秀，唇薄眼细，脸色白中透青，穿一身青衣小厮家仆打扮）坐于画中偏右，上身微微前倾，右手抬至胸前比划，眼神锐利扫向画左。背景昏暗酒家内景，木质桌案与粗陶酒碗置于画左桌角，门缝光柱斜切画面右侧，暖金与焦褐色调，浅景深",
+      "motion_desc": "前2秒：张十三上身微微前倾，右手抬至胸前比划，眉峰压低；2-5秒：他嘴唇开合说话，右手食指在空中点动两下，眼神锐利扫向画左；5-7秒：手指收回半握，唇角微动，呼吸略重，目光仍锁画左",
+      "ff_desc": "张十三坐于画中偏右，上身微微前倾，右手抬至胸前比划，眼神锐利扫向画左，青衣小厮打扮，门缝光柱斜切画面右侧",
+      "lf_desc": "张十三右手收回半握于胸前，唇角微动，呼吸略重，目光仍锁画左，门缝光柱中尘埃浮动，粗陶酒碗静置画左桌角",
+      "context_bridge": "承接上一镜张十三的冷笑，继续其分析。",
+      "audio_cue": "人声=张十三，冷厉刻薄，语速快，音色清亮偏尖，北方口音；音效=衣料摩擦声；背景音乐=低音鼓点持续",
+      "fx_effect": "无",
+      "color_tone": "暖金焦褐",
+      "cam_idx": 2,
+      "clip_transition": "硬切，时长0.2s",
+      "duration_sec": 7.88,
+      "variation_type": "small",
+      "frame_layouts": {
+       "kfs": [
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中偏右",
+          "pose": "上身前倾右手比划",
+          "gaze_target": "画左",
+          "props": []
+         }
+        ],
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中偏右",
+          "pose": "食指空中点动",
+          "gaze_target": "画左",
+          "props": []
+         }
+        ],
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中偏右",
+          "pose": "右手收回半握",
+          "gaze_target": "画左",
+          "props": []
+         }
+        ]
+       ]
+      },
+      "keyframes": [
+       {
+        "desc": "张十三坐于画中偏右，上身微微前倾，右手抬至胸前比划，眉峰压低，眼神锐利扫向画左，青衣小厮打扮，门缝光柱斜切画面右侧",
+        "stage": "pre",
+        "t_sec": 1.0
+       },
+       {
+        "desc": "张十三嘴唇开合说话，右手食指在空中点动，眼神锐利扫向画左，青衣小厮打扮，门缝光柱中尘埃浮动",
+        "stage": "climax",
+        "t_sec": 3.5
+       },
+       {
+        "desc": "张十三手指收回半握于胸前，唇角微动，呼吸略重，目光仍锁画左，粗陶酒碗静置画左桌角",
+        "stage": "after",
+        "t_sec": 6.0
+       }
+      ],
+      "content": "",
+      "camera_movement": "固定机位",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 7.88,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [],
+      "timecode": {
+       "start": 38.62,
+       "end": 46.5
+      },
+      "core_keywords": [
+       "张十三",
+       "张十三坐",
+       "于画中偏",
+       "上身微微",
+       "前倾"
+      ],
+      "keyframe_sample_count": 1,
+      "movement_speed_multiplier": 1.0,
+      "blank_hold_duration": 1.5
+     }
+    },
+    {
+     "shot_id": "10",
+     "shot": {
+      "index": 10,
+      "plan_refs": {
+       "beats": [
+        8
+       ],
+       "lines": [
+        2
+       ]
+      },
+      "narration_segment": "张十三道：唯有齐王，可若是齐王下的手，他需要用行刺的手段？他会只杀杨旭？",
+      "subtitle": "张十三道：唯有齐王，可若是齐王下的手，他需要用行刺的手段？他会只杀杨旭？",
+      "scene": "青州府外南阳河畔小酒家",
+      "location": "青州府外南阳河畔小酒家",
+      "main_subject": "张十三",
+      "prompt": "[张十三: 眉清目秀，唇薄眼细，脸色阴沉的白中透青，十七八岁少年] 古风真人影视剧，9:16竖屏，电影质感，暗调低饱和。中景侧后过肩机位，张十三（十七八岁少年，眉清目秀，唇薄眼细，脸色白中透青，穿一身青衣小厮家仆打扮）坐于画中偏左，背对镜头露出右侧脸颊，右手抬起在身前虚点，头微偏向画右。背景昏暗酒家内景，门缝光柱斜切画面左侧，暖金与焦褐色调，浅景深",
+      "motion_desc": "前2秒：张十三侧后过肩，右手抬起在身前虚点，头微偏向画右；2-6秒：他嘴唇开合说话，右手食指与中指并拢向前一送，肩线随语气轻晃；6-9秒：手指收回按在桌沿，下颌微抬，眼神轻蔑扫向画右，门缝光柱中尘埃浮动",
+      "ff_desc": "张十三侧后过肩坐于画中偏左，背对镜头露出右侧脸颊，右手抬起在身前虚点，头微偏向画右，青衣小厮打扮",
+      "lf_desc": "张十三右手收回按在桌沿，下颌微抬，眼神轻蔑扫向画右，侧后过肩机位下门缝光柱斜切画面左侧，尘埃浮动",
+      "context_bridge": "承接上一镜张十三的追问，继续其推理。",
+      "audio_cue": "人声=张十三，冷厉刻薄，语速快，音色清亮偏尖，北方口音；音效=手指叩桌轻响；背景音乐=低音鼓点持续",
+      "fx_effect": "无",
+      "color_tone": "暖金焦褐",
+      "cam_idx": 3,
+      "clip_transition": "硬切，时长0.2s",
+      "duration_sec": 9.38,
+      "variation_type": "medium",
+      "frame_layouts": {
+       "kfs": [
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中偏左",
+          "pose": "侧后过肩右手虚点",
+          "gaze_target": "画右",
+          "props": []
+         }
+        ],
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中偏左",
+          "pose": "二指并拢向前一送",
+          "gaze_target": "画右",
+          "props": []
+         }
+        ],
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中偏左",
+          "pose": "右手按桌沿下颌微抬",
+          "gaze_target": "画右",
+          "props": []
+         }
+        ]
+       ]
+      },
+      "keyframes": [
+       {
+        "desc": "张十三侧后过肩坐于画中偏左，背对镜头露出右侧脸颊，右手抬起在身前虚点，头微偏向画右，青衣小厮打扮",
+        "stage": "pre",
+        "t_sec": 1.0
+       },
+       {
+        "desc": "张十三嘴唇开合说话，右手食指与中指并拢向前一送，肩线随语气轻晃，侧后过肩机位下背对镜头露出右侧脸颊",
+        "stage": "climax",
+        "t_sec": 4.0
+       },
+       {
+        "desc": "张十三手指收回按在桌沿，下颌微抬，眼神轻蔑扫向画右，门缝光柱中尘埃浮动",
+        "stage": "after",
+        "t_sec": 7.5
+       }
+      ],
+      "content": "",
+      "camera_movement": "固定机位",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 9.38,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [],
+      "timecode": {
+       "start": 46.5,
+       "end": 55.88
+      },
+      "core_keywords": [
+       "张十三",
+       "张十三侧",
+       "后过肩坐",
+       "于画中偏",
+       "背对镜头"
+      ],
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+     }
+    }
+   ]
+  },
+  "c7e983ad0039e4306": {
+   "shot_replacements": [
+    {
+     "shot_id": "9",
+     "shot": {
+      "index": 9,
+      "plan_refs": {
+       "beats": [
+        8
+       ],
+       "lines": [
+        2
+       ]
+      },
+      "narration_segment": "张十三道：退一步说，如果我们真的暴露了身份，谁会对我们不利呢？",
+      "subtitle": "张十三道：退一步说，如果我们真的暴露了身份，谁会对我们不利呢？",
+      "scene": "青州府外南阳河畔小酒家",
+      "location": "青州府外南阳河畔小酒家",
+      "main_subject": "张十三",
+      "prompt": "[张十三: 眉清目秀，唇薄眼细，脸色阴沉的白中透青，十七八岁少年] 古风真人影视剧，9:16竖屏，电影质感，暗调低饱和。近景正面平视，张十三（十七八岁少年，眉清目秀，唇薄眼细，脸色白中透青，穿一身青衣小厮家仆打扮）坐于画中偏右，上身微微前倾，右手抬至胸前比划，眼神锐利扫向画左。背景昏暗酒家内景，木质桌案与粗陶酒碗置于画左桌角，门缝光柱斜切画面右侧，暖金与焦褐色调，浅景深",
+      "motion_desc": "前2秒：张十三上身微微前倾，右手抬至胸前比划，眉峰压低；2-5秒：他嘴唇开合说话，右手食指在空中点动两下，眼神锐利扫向画左；5-7秒：手指收回半握，唇角微动，呼吸略重，目光仍锁画左",
+      "ff_desc": "张十三坐于画中偏右，上身微微前倾，右手抬至胸前比划，眼神锐利扫向画左，青衣小厮打扮，门缝光柱斜切画面右侧",
+      "lf_desc": "张十三右手收回半握于胸前，唇角微动，呼吸略重，目光仍锁画左，门缝光柱中尘埃浮动，粗陶酒碗静置画左桌角",
+      "context_bridge": "承接上一镜张十三的冷笑，继续其分析。",
+      "audio_cue": "人声=张十三，冷厉刻薄，语速快，音色清亮偏尖，北方口音；音效=衣料摩擦声；背景音乐=低音鼓点持续",
+      "fx_effect": "无",
+      "color_tone": "暖金焦褐",
+      "cam_idx": 2,
+      "clip_transition": "硬切，时长0.2s",
+      "duration_sec": 7.88,
+      "variation_type": "small",
+      "frame_layouts": {
+       "ff": [
+        {
+         "name": "张十三",
+         "on_screen": true,
+         "position": "画中偏右",
+         "pose": "上身前倾右手比划",
+         "gaze_target": "画左",
+         "props": []
+        }
+       ],
+       "lf": [
+        {
+         "name": "张十三",
+         "on_screen": true,
+         "position": "画中偏右",
+         "pose": "右手收回半握",
+         "gaze_target": "画左",
+         "props": []
+        }
+       ],
+       "kfs": [
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中偏右",
+          "pose": "上身前倾右手比划",
+          "gaze_target": "画左",
+          "props": []
+         }
+        ],
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中偏右",
+          "pose": "食指空中点动",
+          "gaze_target": "画左",
+          "props": []
+         }
+        ],
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中偏右",
+          "pose": "右手收回半握",
+          "gaze_target": "画左",
+          "props": []
+         }
+        ]
+       ]
+      },
+      "keyframes": [
+       {
+        "desc": "张十三坐于画中偏右，上身微微前倾，右手抬至胸前比划，眉峰压低，眼神锐利扫向画左，青衣小厮打扮，门缝光柱斜切画面右侧",
+        "stage": "pre",
+        "t_sec": 1.0
+       },
+       {
+        "desc": "张十三嘴唇开合说话，右手食指在空中点动，眼神锐利扫向画左，青衣小厮打扮，门缝光柱中尘埃浮动",
+        "stage": "climax",
+        "t_sec": 3.5
+       },
+       {
+        "desc": "张十三手指收回半握于胸前，唇角微动，呼吸略重，目光仍锁画左，粗陶酒碗静置画左桌角",
+        "stage": "after",
+        "t_sec": 6.0
+       }
+      ],
+      "content": "",
+      "camera_movement": "固定机位",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 7.88,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [],
+      "timecode": {
+       "start": 38.62,
+       "end": 46.5
+      },
+      "core_keywords": [
+       "张十三",
+       "张十三坐",
+       "于画中偏",
+       "上身微微",
+       "前倾"
+      ],
+      "keyframe_sample_count": 1,
+      "movement_speed_multiplier": 1.0,
+      "blank_hold_duration": 1.5
+     }
+    },
+    {
+     "shot_id": "10",
+     "shot": {
+      "index": 10,
+      "plan_refs": {
+       "beats": [
+        8
+       ],
+       "lines": [
+        2
+       ]
+      },
+      "narration_segment": "张十三道：唯有齐王，可若是齐王下的手，他需要用行刺的手段？他会只杀杨旭？",
+      "subtitle": "张十三道：唯有齐王，可若是齐王下的手，他需要用行刺的手段？他会只杀杨旭？",
+      "scene": "青州府外南阳河畔小酒家",
+      "location": "青州府外南阳河畔小酒家",
+      "main_subject": "张十三",
+      "prompt": "[张十三: 眉清目秀，唇薄眼细，脸色阴沉的白中透青，十七八岁少年] 古风真人影视剧，9:16竖屏，电影质感，暗调低饱和。中景侧后过肩机位，张十三（十七八岁少年，眉清目秀，唇薄眼细，脸色白中透青，穿一身青衣小厮家仆打扮）坐于画中偏左，背对镜头露出右侧脸颊，右手抬起在身前虚点，头微偏向画右。背景昏暗酒家内景，门缝光柱斜切画面左侧，暖金与焦褐色调，浅景深",
+      "motion_desc": "前2秒：张十三侧后过肩，右手抬起在身前虚点，头微偏向画右；2-6秒：他嘴唇开合说话，右手食指与中指并拢向前一送，肩线随语气轻晃；6-9秒：手指收回按在桌沿，下颌微抬，眼神轻蔑扫向画右，门缝光柱中尘埃浮动",
+      "ff_desc": "张十三侧后过肩坐于画中偏左，背对镜头露出右侧脸颊，右手抬起在身前虚点，头微偏向画右，青衣小厮打扮",
+      "lf_desc": "张十三右手收回按在桌沿，下颌微抬，眼神轻蔑扫向画右，侧后过肩机位下门缝光柱斜切画面左侧，尘埃浮动",
+      "context_bridge": "承接上一镜张十三的追问，继续其推理。",
+      "audio_cue": "人声=张十三，冷厉刻薄，语速快，音色清亮偏尖，北方口音；音效=手指叩桌轻响；背景音乐=低音鼓点持续",
+      "fx_effect": "无",
+      "color_tone": "暖金焦褐",
+      "cam_idx": 3,
+      "clip_transition": "硬切，时长0.2s",
+      "duration_sec": 9.38,
+      "variation_type": "medium",
+      "frame_layouts": {
+       "ff": [
+        {
+         "name": "张十三",
+         "on_screen": true,
+         "position": "画中偏左",
+         "pose": "侧后过肩右手虚点",
+         "gaze_target": "画右",
+         "props": []
+        }
+       ],
+       "lf": [
+        {
+         "name": "张十三",
+         "on_screen": true,
+         "position": "画中偏左",
+         "pose": "右手按桌沿下颌微抬",
+         "gaze_target": "画右",
+         "props": []
+        }
+       ],
+       "kfs": [
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中偏左",
+          "pose": "侧后过肩右手虚点",
+          "gaze_target": "画右",
+          "props": []
+         }
+        ],
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中偏左",
+          "pose": "二指并拢向前一送",
+          "gaze_target": "画右",
+          "props": []
+         }
+        ],
+        [
+         {
+          "name": "张十三",
+          "on_screen": true,
+          "position": "画中偏左",
+          "pose": "右手按桌沿下颌微抬",
+          "gaze_target": "画右",
+          "props": []
+         }
+        ]
+       ]
+      },
+      "keyframes": [
+       {
+        "desc": "张十三侧后过肩坐于画中偏左，背对镜头露出右侧脸颊，右手抬起在身前虚点，头微偏向画右，青衣小厮打扮",
+        "stage": "pre",
+        "t_sec": 1.0
+       },
+       {
+        "desc": "张十三嘴唇开合说话，右手食指与中指并拢向前一送，肩线随语气轻晃，侧后过肩机位下背对镜头露出右侧脸颊",
+        "stage": "climax",
+        "t_sec": 4.0
+       },
+       {
+        "desc": "张十三手指收回按在桌沿，下颌微抬，眼神轻蔑扫向画右，门缝光柱中尘埃浮动",
+        "stage": "after",
+        "t_sec": 7.5
+       }
+      ],
+      "content": "",
+      "camera_movement": "固定机位",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 9.38,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [],
+      "timecode": {
+       "start": 46.5,
+       "end": 55.88
+      },
+      "core_keywords": [
+       "张十三",
+       "张十三侧",
+       "后过肩坐",
+       "于画中偏",
+       "背对镜头"
+      ],
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+     }
+    },
+    {
+     "shot_id": "14",
+     "shot": {
+      "index": 14,
+      "plan_refs": {
+       "beats": [
+        10
+       ],
+       "lines": []
+      },
+      "narration_segment": "",
+      "subtitle": "",
+      "scene": "青州府外南阳河畔小酒家",
+      "location": "青州府外南阳河畔小酒家",
+      "main_subject": "冯西辉与刘旭",
+      "prompt": "[冯西辉: 魁梧大汉，国字脸，浓眉阔口，颌下粗髯根根如钢针，年约三旬，穿] 古风真人影视剧，9:16竖屏，电影质感，暗调低饱和。中景，冯西辉（魁梧大汉，国字脸，浓眉阔口，颌下粗髯如钢针，穿圆领皂衣）坐于画左，沉声吩咐，右手抬起指向画右门口方向。刘旭（国字脸，老实憨厚，嘴唇紧抿，穿青粗布直掇，襟角掖在腰带里，袖子挽着）坐于画右，点头起身。桌上绣春刀横放。背景昏暗酒家内景，门缝光柱斜切，暖金与焦褐色调，浅景深",
+      "motion_desc": "前2秒：冯西辉右手抬起指向画右门口，沉声吩咐；2-4秒：刘旭点头起身，双手撑桌；4-5秒：刘旭转身向画右店门方向迈步，闪身出店门",
+      "ff_desc": "冯西辉坐于画左，右手抬起指向画右门口，刘旭坐于画右，双手撑桌半起身",
+      "lf_desc": "刘旭转身向画右店门方向迈步，冯西辉手仍指向画右门口，桌上绣春刀横放。",
+      "context_bridge": "从安立桐中近景硬切至冯西辉与刘旭中景，承接下令跟踪，紧接着延续前镜动作与构图，自然过渡到本镜。",
+      "audio_cue": "人声=无；音效=椅子挪动声、脚步迈出声；背景音乐=低音鼓点渐强",
+      "fx_effect": "无",
+      "color_tone": "暖金焦褐",
+      "cam_idx": 1,
+      "clip_transition": "硬切，时长0.2s",
+      "duration_sec": 5.0,
+      "variation_type": "medium",
+      "frame_layouts": {
+       "ff": [
+        {
+         "name": "冯西辉",
+         "on_screen": true,
+         "position": "画左",
+         "pose": "抬手指门",
+         "gaze_target": "画右",
+         "props": [
+          "绣春刀"
+         ]
+        },
+        {
+         "name": "刘旭",
+         "on_screen": true,
+         "position": "画右",
+         "pose": "撑桌欲起",
+         "gaze_target": "画左",
+         "props": []
+        }
+       ],
+       "lf": [
+        {
+         "name": "冯西辉",
+         "on_screen": true,
+         "position": "画左",
+         "pose": "抬手指门",
+         "gaze_target": "画右",
+         "props": [
+          "绣春刀"
+         ]
+        },
+        {
+         "name": "刘旭",
+         "on_screen": true,
+         "position": "画右",
+         "pose": "转身迈步向店门",
+         "gaze_target": "画右",
+         "props": []
+        }
+       ],
+       "kfs": [
+        [
+         {
+          "name": "冯西辉",
+          "on_screen": true,
+          "position": "画左",
+          "pose": "抬手指门",
+          "gaze_target": "画右",
+          "props": [
+           "绣春刀"
+          ]
+         },
+         {
+          "name": "刘旭",
+          "on_screen": true,
+          "position": "画右",
+          "pose": "撑桌欲起",
+          "gaze_target": "画左",
+          "props": []
+         }
+        ],
+        [
+         {
+          "name": "冯西辉",
+          "on_screen": true,
+          "position": "画左",
+          "pose": "抬手指门",
+          "gaze_target": "画右",
+          "props": [
+           "绣春刀"
+          ]
+         },
+         {
+          "name": "刘旭",
+          "on_screen": true,
+          "position": "画右",
+          "pose": "点头起身",
+          "gaze_target": "画左",
+          "props": []
+         }
+        ],
+        [
+         {
+          "name": "冯西辉",
+          "on_screen": true,
+          "position": "画左",
+          "pose": "抬手指门",
+          "gaze_target": "画右",
+          "props": [
+           "绣春刀"
+          ]
+         },
+         {
+          "name": "刘旭",
+          "on_screen": true,
+          "position": "画右",
+          "pose": "转身迈步向店门",
+          "gaze_target": "画右",
+          "props": []
+         }
+        ]
+       ]
+      },
+      "keyframes": [
+       {
+        "desc": "冯西辉坐于画左，右手抬起指向画右门口，刘旭坐于画右，双手撑桌欲起，桌上绣春刀横放",
+        "stage": "pre",
+        "t_sec": 1.0
+       },
+       {
+        "desc": "刘旭点头起身，双手撑桌，冯西辉手仍指向画右门口，门缝光柱中尘埃浮动",
+        "stage": "approach",
+        "t_sec": 2.8
+       },
+       {
+        "desc": "刘旭转身向画右店门方向迈步，冯西辉手仍指向画右门口，背景昏暗酒家内景",
+        "stage": "climax",
+        "t_sec": 4.0
+       }
+      ],
+      "content": "",
+      "camera_movement": "固定机位",
+      "framing": "",
+      "lighting_color": "",
+      "duration": 5.0,
+      "negative_prompt": "",
+      "hook": "",
+      "time_stamp": "",
+      "subject_direction": "",
+      "char_layout": [
+       {
+        "name": "冯西辉",
+        "position": "画左",
+        "facing": "抬手指门",
+        "role": "主",
+        "surface": ""
+       },
+       {
+        "name": "刘旭",
+        "position": "画右",
+        "facing": "撑桌欲起",
+        "role": "次",
+        "surface": ""
+       }
+      ],
+      "timecode": {
+       "start": 74.0,
+       "end": 79.0
+      },
+      "_merge_candidate": true,
+      "_run_metadata": {
+       "climax_priority": "非高潮背景/过渡镜（无台词+无核心事件）——候选合并/删除，信息应由 narration 一句带过（v6.35 规则 3.7）"
+      },
+      "core_keywords": [
+       "冯西辉与刘旭",
+       "冯西辉坐",
+       "于画左",
+       "右手抬起",
+       "指向画右"
+      ],
+      "keyframe_sample_count": 2,
+      "movement_speed_multiplier": 0.5,
+      "blank_hold_duration": 1.5
+     }
+    }
+   ]
+  }
+ }
+}

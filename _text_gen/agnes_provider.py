@@ -19,6 +19,11 @@ from .config import config
 from .models import TextGenerationRequest, TextGenerationResult, truncated_result
 from .service import TextGenerationService
 from shared.error_fmt import parse_retry_after
+from .deadline import TransportGate
+
+
+#: 本通道的单次上限（偏好缺省时用）；工作包 §4 B：真上限 = min(它, 整次规划余量)
+AGNES_TEXT_TIMEOUT_SEC = 300.0
 
 
 class AgnesTextService(TextGenerationService):
@@ -81,6 +86,8 @@ class AgnesTextService(TextGenerationService):
         # 的 Key 切换状态跨调用永久残留（否则后续请求永远跳过主 Key）。
         self._current_key_index = 0
 
+        # 工作包 §4 B：整次规划一个**绝对截止时刻**——排队、退避、每次 POST 都按它重算
+        _gate = TransportGate(req, default_timeout=AGNES_TEXT_TIMEOUT_SEC, where="agnes")
         while idx < len(self._model_queue):
             model = self._model_queue[idx]
             headers = {
@@ -113,7 +120,13 @@ class AgnesTextService(TextGenerationService):
             try:
                 while True:
                     try:
-                        res = requests.post(url, json=payload, headers=headers, timeout=300)
+                        res, _timed_out, _deny = _gate.request(
+                            lambda _t: requests.post(url, json=payload, headers=headers,
+                                                     timeout=_t))
+                        if _deny:
+                            # 余量耗尽（或墙钟没等到）：**不再重发**——重发只是再花一份时间
+                            last_error = _deny
+                            break
                         break
                     except Exception as e:
                         _submit_retry += 1
@@ -121,7 +134,9 @@ class AgnesTextService(TextGenerationService):
                             print(f"  [!] 提交异常: {e}，"
                                   f"{config.AGNES_TEXT_SUBMIT_RETRY_DELAY}s 后重试 "
                                   f"({_submit_retry}/{config.AGNES_TEXT_SUBMIT_RETRIES})")
-                            time.sleep(config.AGNES_TEXT_SUBMIT_RETRY_DELAY)
+                            if not _gate.wait(config.AGNES_TEXT_SUBMIT_RETRY_DELAY):
+                                last_error = _gate.expiry_reason()
+                                break
                         else:
                             last_error = f"Agnes 异常（重试{_submit_retry}次）: {e}"
                             break
@@ -152,7 +167,9 @@ class AgnesTextService(TextGenerationService):
                         print(f"  [!] 临时错误 {res.status_code}，"
                               f"{config.AGNES_TEXT_SUBMIT_RETRY_DELAY}s 后重试 "
                               f"({_submit_retry}/{config.AGNES_TEXT_SUBMIT_RETRIES})")
-                        time.sleep(config.AGNES_TEXT_SUBMIT_RETRY_DELAY)
+                        if not _gate.wait(config.AGNES_TEXT_SUBMIT_RETRY_DELAY):
+                            last_error = _gate.expiry_reason()
+                            break
                         continue
                     last_error = f"Agnes 失败 [{res.status_code}] (重试{_submit_retry}次): {res.text[:300]}"
                     idx = len(self._model_queue)
@@ -165,7 +182,9 @@ class AgnesTextService(TextGenerationService):
                         print(f"  [!] 服务端 {res.status_code}，"
                               f"{config.AGNES_TEXT_SUBMIT_RETRY_DELAY}s 后重试 "
                               f"({_submit_retry}/{config.AGNES_TEXT_SUBMIT_RETRIES})")
-                        time.sleep(config.AGNES_TEXT_SUBMIT_RETRY_DELAY)
+                        if not _gate.wait(config.AGNES_TEXT_SUBMIT_RETRY_DELAY):
+                            last_error = _gate.expiry_reason()
+                            break
                         continue
                     last_error = f"Agnes 失败 [{res.status_code}] (重试{_submit_retry}次): {res.text[:300]}"
                     idx = len(self._model_queue)
@@ -193,12 +212,15 @@ class AgnesTextService(TextGenerationService):
                             text=text,
                             usage=None,
                             allow_truncated=req.allow_truncated,
+                            finish_reason=str(choices[0].get("finish_reason") or "length"),
                             error=(
                                 f"Agnes 输出被截断（finish_reason=length, model={model}, "
                                 f"max_tokens={req.max_tokens}）——输出 JSON 不完整，已整份丢弃。"
                             ),
                         )
-                    return TextGenerationResult(success=True, text=text)
+                    return TextGenerationResult(
+                        success=True, text=text,
+                        finish_reason=str(choices[0].get("finish_reason") or ""))
 
                 # ---- 429: 速率限制，优先切换 API Key（不同 key 限速独立），再用新 key 重试 ----
                 if res.status_code == 429:
@@ -215,7 +237,10 @@ class AgnesTextService(TextGenerationService):
                         print(f"  [!] 所有 API Key 均限速 429，"
                               f"{delay:.1f}s 后重试 "
                               f"({_submit_retry}/{config.AGNES_TEXT_SUBMIT_RETRIES})")
-                        time.sleep(delay)
+                        # Retry-After 也受同一截止时刻约束：睡不过截止点
+                        if not _gate.wait(delay):
+                            last_error = _gate.expiry_reason()
+                            break
                         continue
                     last_error = (f"Agnes 文本速率限制 [429] (重试{_submit_retry}次): "
                                   f"{res.text[:300]}")

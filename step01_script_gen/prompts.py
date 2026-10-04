@@ -765,15 +765,17 @@ def render_execution_contract(plan) -> str:
 
     只传递计划已定的内容，不含新判据：生成只能展开，不得重新选材。
     """
-    from step01_script_gen.plan_feasibility import plan_dialogue_lines
+    from step01_script_gen.plan_feasibility import (plan_dialogue_lines,
+                                                    plan_narration_entries)
     _lines = plan_dialogue_lines(plan)
+    _narr = plan_narration_entries(plan)
     _facts = [str(x).strip() for x in ((plan or {}).get("required_facts") or [])
               if str(x).strip()]
     _events = [str(x).strip() for x in ((plan or {}).get("main_events") or [])
                if str(x).strip()]
     _beats = [str(x).strip() for x in ((plan or {}).get("shot_beats") or [])
               if str(x).strip()]
-    if not (_lines or _facts or _events or _beats):
+    if not (_lines or _facts or _events or _beats or _narr):
         return ""
     parts = [CONTRACT_BLOCK_HEADER]
     if _lines:
@@ -783,6 +785,28 @@ def render_execution_contract(plan) -> str:
     if _facts:
         parts.append("二、必保留事实（**一条都不许省**，原文证据随附）：")
         parts += ["%d. %s" % (i, x) for i, x in enumerate(_facts, 1)]
+    if _narr:
+        # 2026-09-30 复核第 6 轮：图外旁白是**计划里编号的条目**（N1..Nn），与人物
+        # 台词分开登记。生成时**逐字保留**这条旁白（写在它承载的那个镜头的旁白里），
+        # 不得改写、不得自造、不得把它改标成人物台词。
+        parts.append("二之二、本集**图外旁白**（共 %d 条，逐字，不得改写或自造；"
+                     "每条必须原样出现在它**所承载节拍**的那些镜头的旁白里）："
+                     % len(_narr))
+        for _i, _e in enumerate(_narr, 1):
+            _refs = "、".join("F%d" % _x for _x in (_e.get("fact_refs") or []))
+            parts.append("N%d. %s%s" % (_i, _e.get("text"),
+                                        ("（承载事实：%s）" % _refs) if _refs else ""))
+        # 2026-09-30 复核第 7 轮：旁白是**声音条目**，落点是「镜头或连续片段」——
+        # 三件事必须写明，否则生成层只能用「一镜一条」的旧假设去凑：
+        #   ① 画面与旁白**同时发生**，不为它加镜头；
+        #   ② 一条旁白可以**跨镜连续播放**（承载它的节拍展开成多镜，按句末分句讲完，
+        #      不截句）；
+        #   ③ 同一镜可以同时有台词与旁白（该镜声明两条节拍）。
+        parts.append("旁白落点规则：旁白是**画外音**，与画面**同时发生**——"
+                     "**不要**为了旁白额外加镜头；比一个镜头长时，把承载它的节拍"
+                     "展开成 2-4 个镜头、按**句末**把这条旁白分句讲完（每镜都收在"
+                     "句末，**不得截句**）；同一镜可以同时有台词与旁白——"
+                     "该镜同时声明承载台词的那条节拍与承载旁白的这条节拍。")
     if _events:
         parts.append("三、事件顺序（**不得调换**）：")
         parts += ["%d. %s" % (i, x) for i, x in enumerate(_events, 1)]
