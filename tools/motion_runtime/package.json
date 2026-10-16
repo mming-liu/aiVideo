@@ -1,0 +1,17 @@
+{
+  "name": "aivideo-motion-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "aiVideo 动效渲染的隔离 Node 工作目录：Playwright 定时 seek 截图（计划 §A1/§15 依赖与运行目录）",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright": "1.56.0"
+  },
+  "scripts": {
+    "install-browsers": "playwright install chromium"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "package": "video",
+  "request_key": "real-key",
+  "scope": {
+    "chapter": 1
+  },
+  "script_revision": "real-rev",
+  "source": "fixture",
+  "status": "rejected",
+  "artifacts": [
+    {
+      "path": "C:\\myFloders\\git\\aiVideo\\review-f-isolated-1791091478082234600\\accepted\\attempts\\a1\\video.mp4",
+      "sha256": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+      "bytes": 7,
+      "role": null,
+      "media": null
+    }
+  ],
+  "checks": [
+    {
+      "name": "decode",
+      "status": "pass"
+    }
+  ],
+  "schema_version": "enhancement_attempt_manifest.v1",
+  "attempt_id": "a1"
+}

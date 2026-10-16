@@ -1,0 +1,291 @@
+{
+ "schema": "plan_delta_experiment_rescore.v1",
+ "source_fixture": "plan_delta_experiment_responses_v1.json",
+ "note": "**只追加评价**：原请求（`base_view` 逐字取自当时的 prompt 载荷）、原响应、旧评分（`old_layers` / `old_end_reason`）原样保留在源夹具里。七层各自独立记账：HTTP → JSON → 协议 → 应用 → 完整残余 → 内容核验 → 可执行。`residuals_source` 说明那一列是**候选的**残余还是**重算的基线**残余。",
+ "corrections_vs_old": [
+  "P1 两条：旧评分记 `applied=False / 残余归零=False`。两处都错——（a）复制任务的完成判据是**\"没改动\"**（`no_change` = 照做，`meets_task=True`）；（b）`no_change` 上应用器**根本不收集残余**，旧读数那个 0 是\"没算\"，不是\"算出来是零\"。对**保留的基线**重算完整残余 = **9 条** ⇒ 正确结论是「**复制任务成功；计划仍不可执行**」。",
+  "P2/P3 四条：旧评分记 `残余归零=True`，同样是**没传完整验收回调**的读数（`residuals` 恒为空表）。统一重算后残余 9 条（全是基带问题 `presentation_beat_evidence_not_in_novel`）；「改动本身做对了没有」单列 `meets_task`，**4/4 True**。",
+  "P4 两条：真实问题任务**必须查完整残余**。`P4_real_problem_0` 残余只剩 `verify_record_missing`（结构上已经干净）；`P4_real_problem_1` 把节拍依据改成了非逐字文本 ⇒ 结构不合格。两条都**没有**达到零残余。",
+  "C 两条：HTTP 400 ⇒ **请求被拒收**，单列一类；不能计作超时或\"传输失败\"。",
+  "内容核验一列对这两批**全部为 False**：它们的候选都没有补齐展示内容（`P4_real_problem_0` 没有卡片，其余连节拍依据都不是逐字）⇒ 不可执行。⚠️ 口径提醒：这一列的判据是**当前**夹具的 `_FACT_DISPLAY`，而归档响应是对**当时**的基线发出的；两者不同处会体现为\"结构带缺陷\"，不是\"模型没干活\"。**夹具核验（本文件）与真实模型核验是两回事**——本列只说明\"按当前夹具判定\"的结果。"
+ ],
+ "calls": [
+  {
+   "tag": "P1_copy_object_0",
+   "http_status": 200,
+   "old_layers": {
+    "传输完成": true,
+    "JSON可解析": true,
+    "协议合法": true,
+    "applied": false,
+    "残余归零": false
+   },
+   "old_end_reason": "degenerate",
+   "http": true,
+   "json": true,
+   "protocol": true,
+   "kind": "no_change",
+   "meets_task": true,
+   "residuals_source": "baseline_recomputed",
+   "residuals": 9,
+   "residual_codes": [
+    "presentation_beat_evidence_not_in_novel",
+    "verify_record_missing"
+   ],
+   "reject_codes": [],
+   "cards": null,
+   "verified": false,
+   "executable": false
+  },
+  {
+   "tag": "P1_copy_object_1",
+   "http_status": 200,
+   "old_layers": {
+    "传输完成": true,
+    "JSON可解析": true,
+    "协议合法": true,
+    "applied": false,
+    "残余归零": false
+   },
+   "old_end_reason": "degenerate",
+   "http": true,
+   "json": true,
+   "protocol": true,
+   "kind": "no_change",
+   "meets_task": true,
+   "residuals_source": "baseline_recomputed",
+   "residuals": 9,
+   "residual_codes": [
+    "presentation_beat_evidence_not_in_novel",
+    "verify_record_missing"
+   ],
+   "reject_codes": [],
+   "cards": null,
+   "verified": false,
+   "executable": false
+  },
+  {
+   "tag": "P2_one_field_0",
+   "http_status": 200,
+   "old_layers": {
+    "传输完成": true,
+    "JSON可解析": true,
+    "协议合法": true,
+    "applied": true,
+    "残余归零": true
+   },
+   "old_end_reason": "ok",
+   "http": true,
+   "json": true,
+   "protocol": true,
+   "kind": "applied",
+   "residuals_source": "candidate",
+   "residuals": 9,
+   "residual_codes": [
+    "presentation_beat_evidence_not_in_novel",
+    "verify_record_missing"
+   ],
+   "cards": 0,
+   "verified": false,
+   "verdicts": [
+    "partial",
+    "supported"
+   ],
+   "executable": false,
+   "meets_task": true
+  },
+  {
+   "tag": "P2_one_field_1",
+   "http_status": 200,
+   "old_layers": {
+    "传输完成": true,
+    "JSON可解析": true,
+    "协议合法": true,
+    "applied": true,
+    "残余归零": true
+   },
+   "old_end_reason": "ok",
+   "http": true,
+   "json": true,
+   "protocol": true,
+   "kind": "applied",
+   "residuals_source": "candidate",
+   "residuals": 9,
+   "residual_codes": [
+    "presentation_beat_evidence_not_in_novel",
+    "verify_record_missing"
+   ],
+   "cards": 0,
+   "verified": false,
+   "verdicts": [
+    "partial",
+    "supported"
+   ],
+   "executable": false,
+   "meets_task": true
+  },
+  {
+   "tag": "P3_one_relation_0",
+   "http_status": 200,
+   "old_layers": {
+    "传输完成": true,
+    "JSON可解析": true,
+    "协议合法": true,
+    "applied": true,
+    "残余归零": true
+   },
+   "old_end_reason": "ok",
+   "http": true,
+   "json": true,
+   "protocol": true,
+   "kind": "applied",
+   "residuals_source": "candidate",
+   "residuals": 9,
+   "residual_codes": [
+    "presentation_beat_evidence_not_in_novel",
+    "verify_record_missing"
+   ],
+   "cards": 0,
+   "verified": false,
+   "verdicts": [
+    "partial",
+    "supported"
+   ],
+   "executable": false,
+   "meets_task": true
+  },
+  {
+   "tag": "P3_one_relation_1",
+   "http_status": 200,
+   "old_layers": {
+    "传输完成": true,
+    "JSON可解析": true,
+    "协议合法": true,
+    "applied": true,
+    "残余归零": true
+   },
+   "old_end_reason": "ok",
+   "http": true,
+   "json": true,
+   "protocol": true,
+   "kind": "applied",
+   "residuals_source": "candidate",
+   "residuals": 9,
+   "residual_codes": [
+    "presentation_beat_evidence_not_in_novel",
+    "verify_record_missing"
+   ],
+   "cards": 0,
+   "verified": false,
+   "verdicts": [
+    "partial",
+    "supported"
+   ],
+   "executable": false,
+   "meets_task": true
+  },
+  {
+   "tag": "P4_real_problem_0",
+   "http_status": 200,
+   "old_layers": {
+    "传输完成": true,
+    "JSON可解析": true,
+    "协议合法": true,
+    "applied": true,
+    "残余归零": true
+   },
+   "old_end_reason": "ok",
+   "http": true,
+   "json": true,
+   "protocol": true,
+   "kind": "applied",
+   "residuals_source": "candidate",
+   "residuals": 1,
+   "residual_codes": [
+    "verify_record_missing"
+   ],
+   "cards": 0,
+   "verified": false,
+   "verdicts": [
+    "partial",
+    "supported"
+   ],
+   "executable": false,
+   "meets_task": null
+  },
+  {
+   "tag": "P4_real_problem_1",
+   "http_status": 200,
+   "old_layers": {
+    "传输完成": true,
+    "JSON可解析": true,
+    "协议合法": true,
+    "applied": true,
+    "残余归零": true
+   },
+   "old_end_reason": "ok",
+   "http": true,
+   "json": true,
+   "protocol": true,
+   "kind": "applied",
+   "residuals_source": "candidate",
+   "residuals": 8,
+   "residual_codes": [
+    "presentation_beat_evidence_not_in_novel",
+    "verify_record_missing"
+   ],
+   "cards": 0,
+   "verified": false,
+   "verdicts": [
+    "partial",
+    "supported"
+   ],
+   "executable": false,
+   "meets_task": null
+  },
+  {
+   "tag": "C_schema_0",
+   "http_status": 400,
+   "old_layers": {
+    "传输完成": false,
+    "JSON可解析": false,
+    "协议合法": false,
+    "applied": false,
+    "残余归零": false
+   },
+   "old_end_reason": "timeout",
+   "http": false,
+   "json": false,
+   "request_rejected": true,
+   "protocol": false,
+   "kind": "request_rejected",
+   "residuals": null,
+   "cards": null,
+   "verified": false,
+   "executable": false,
+   "meets_task": null
+  },
+  {
+   "tag": "C_schema_1",
+   "http_status": 400,
+   "old_layers": {
+    "传输完成": false,
+    "JSON可解析": false,
+    "协议合法": false,
+    "applied": false,
+    "残余归零": false
+   },
+   "old_end_reason": "timeout",
+   "http": false,
+   "json": false,
+   "request_rejected": true,
+   "protocol": false,
+   "kind": "request_rejected",
+   "residuals": null,
+   "cards": null,
+   "verified": false,
+   "executable": false,
+   "meets_task": null
+  }
+ ]
+}

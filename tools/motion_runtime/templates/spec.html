@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aiVideo motion spec</title>
+<!--
+  固定动效模板骨架（原创，本仓库自有）。
+  设计约束（计划 §A1）：
+    * 所有动画只由 motion.js 的 seek(t_sec) 纯时间函数决定；
+    * 页面自身不播放、不计时、不联网、不加载外部资源（字体由 shooter 路由本地冻结文件）；
+    * 画布全画幅透明，截图用 omitBackground 取 RGBA。
+  __MOTION_MODEL__ / __MOTION_ENGINE__ 由 shared/motion_render/render.py 在构建时替换。
+-->
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  #stage {
+    position: relative;
+    width: __CANVAS_W__px;
+    height: __CANVAS_H__px;
+    overflow: hidden;
+    background: transparent;
+    text-rendering: geometricPrecision;
+  }
+  #stage .text-line {
+    position: absolute;
+    white-space: pre;
+    line-height: 1;
+    -webkit-font-smoothing: antialiased;
+  }
+  #stage svg { position: absolute; left: 0; top: 0; overflow: visible; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script type="application/json" id="motion-model">__MOTION_MODEL__</script>
+<script>__MOTION_ENGINE__</script>
+</body>
+</html>
