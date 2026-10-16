@@ -1,167 +1,62 @@
-"""step04_merge.srt_gen - SRT subtitle generation module"""
+"""step04_merge.srt_gen - SRT 字幕生成（cue 唯一源在 shared.subtitle_contract）.
+
+2026-10-03（S 包）：本模块不再自己切句/算时窗——原分句与逐镜时窗逻辑迁进
+``shared.subtitle_contract``，这里只做两件事：
+
+1. :func:`build_srt_plan` 把（旧口径或合法对齐的）字幕转成 :class:`SubtitlePlan`；
+2. :func:`generate_srt` 把同一个计划的 SRT 文本落盘。
+
+FFmpeg ``subtitles`` 滤镜侧由调用方用**同一份** plan 构造
+（``shared.subtitle_contract.ffmpeg_subtitle_filter`` 会按字节核对盘上文件）。
+旧签名（位置参数与前 5 个参数）与默认行为保持不变，新增**可选** ``validated_timings``。
+"""
 import sys
 from pathlib import Path
-import os
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_PROJECT_ROOT))
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
-from typing import List
+from typing import List, Optional
+
+from shared.subtitle_contract import (  # noqa: F401  (向后兼容的重导出)
+    MAX_CHARS_PER_LINE,
+    SRT_ENCODING,
+    SubtitleCue,
+    SubtitlePlan,
+    build_subtitle_plan,
+    seconds_to_srt_time,
+    split_subtitle_by_punctuation,
+    write_srt,
+)
 
 
-def seconds_to_srt_time(seconds: float) -> str:
-    """Convert seconds to SRT time format HH:MM:SS,mmm."""
-    total_ms = int(round(seconds * 1000))
-    hours, rem = divmod(total_ms, 3_600_000)
-    minutes, rem = divmod(rem, 60_000)
-    secs, millis = divmod(rem, 1000)
-    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
-
-
-def split_subtitle_by_punctuation(text: str, max_chars: int = 30) -> List[str]:
-    """Split long subtitle into shorter parts by punctuation marks.
-
-    Splits on Chinese periods (。), commas (，), question marks (？),
-    exclamation marks (！), and English equivalents.
-
-    Args:
-        text: Original subtitle text
-        max_chars: Maximum characters per subtitle segment
-
-    Returns:
-        List of subtitle segments
-    """
-    if not text or len(text) <= max_chars:
-        return [text] if text else []
-
-    # Define punctuation marks for splitting (prioritized)
-    # Chinese and English punctuation that naturally divides sentences
-    punctuation = ['。', '；', '！', '？', '，', '.', ';', '!', '?','、', ',']
-
-    parts = []
-    current = ""
-
-    for char in text:
-        current += char
-        if char in punctuation and len(current) > 5:  # At least 5 chars before split
-            parts.append(current.strip())
-            current = ""
-
-    # Add remaining text
-    if current.strip():
-        parts.append(current.strip())
-
-    # If splitting by punctuation still results in too long segments,
-    # force split by character count
-    result = []
-    for part in parts:
-        if len(part) > max_chars:
-            # Split this part into smaller chunks
-            for i in range(0, len(part), max_chars):
-                chunk = part[i:i + max_chars]
-                if chunk:
-                    result.append(chunk)
-        else:
-            result.append(part)
-
-    return result if result else [text[:max_chars]]
+def build_srt_plan(shots: List[dict], durations: List[float],
+                   clip_windows: Optional[List[tuple]] = None,
+                   speech_durations: Optional[List[Optional[float]]] = None,
+                   validated_timings: Optional[dict] = None,
+                   *, script_revision: Optional[str] = None,
+                   shot_audio_sha256: Optional[dict] = None,
+                   warn=None) -> SubtitlePlan:
+    """字幕事实源：旧口径或（逐镜降级的）对齐候选 → :class:`SubtitlePlan`。"""
+    return build_subtitle_plan(
+        shots, durations, clip_windows=clip_windows, speech_durations=speech_durations,
+        validated_timings=validated_timings, script_revision=script_revision,
+        shot_audio_sha256=shot_audio_sha256, warn=warn or print)
 
 
 def generate_srt(shots: List[dict], durations: List[float], output: Path,
-                 clip_windows: List[tuple[float, float]] | None = None,
-                 speech_durations: List[float | None] | None = None) -> None:
+                 clip_windows: Optional[List[tuple]] = None,
+                 speech_durations: Optional[List[Optional[float]]] = None,
+                 validated_timings: Optional[dict] = None) -> None:
     """Generate SRT subtitle file based on per-shot target durations.
 
-    v5.2 优化: 长字幕按标点符号智能拆分，而非简单截断
+    v5.2：长字幕按标点智能拆分（逻辑已迁至 shared.subtitle_contract）。
+    S 包：``validated_timings`` 为 C 包校验后的合法对齐结果（可选，位置参数不变）。
     """
-    # 字幕最大显示时长（秒）- 作为拆分依据，不是截断
-    max_display_time = 8.0
-    max_chars_per_line = 30  # 每行最大字符数（视觉舒适度）
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-
-    current_time = 0.0
-    srt_lines = []
-    subtitle_count = 0
-
-    for i, (shot, dur) in enumerate(zip(shots, durations), 1):
-        if clip_windows and i - 1 < len(clip_windows):
-            start, end = clip_windows[i - 1]
-            dur = max(0.0, end - start)
-        else:
-            start = current_time
-            end = current_time + dur
-        # 只对有对话的镜头生成字幕
-        # 对话判断标准：文本包含引号（"「」""）或说话动词（说/道/问/答/喊/叫/喝）
-        subtitle = shot.get("subtitle", "").strip()
-        narration_segment = shot.get("narration_segment", "").strip()
-
-        if not subtitle:
-            current_time = end
-            continue
-
-        # 检查是否是对话（判定单源 shared/dialogue.py，08-01 code-audit #2）
-        # 历史问题：此处内联判定——引号列表漏全角冒号「：」+ 说话动词表要求
-        # 「说/道/问…后跟标点」→「肖管事：抱歉的很，…」这类冒号台词整段不上屏
-        # （09-06 chapter_001 实测 3 条台词字幕全丢）。改调 has_dialogue 统一口径。
-        from shared.dialogue import has_dialogue
-        is_dialogue = has_dialogue(subtitle)
-
-        if not is_dialogue:
-            # 没有对话，跳过字幕
-            current_time = end
-            continue
-
-        # TTS 模式优先跟随实际发声长度；缺失时才铺满整个镜头。
-        subtitle_duration = dur
-        if speech_durations and i - 1 < len(speech_durations):
-            _sp = speech_durations[i - 1]
-            if _sp and _sp > 0:
-                subtitle_duration = max(0.1, min(dur, float(_sp)))
-
-        # 优化: 智能拆分长字幕，而非简单截断
-        # 规则：
-        # 1. 按标点拆分（如有多个句子）
-        # 2. 每段字幕不超过 max_chars_per_line 字符
-        # 3. 总时长按文字比例分配
-        subtitle_parts = split_subtitle_by_punctuation(subtitle, max_chars_per_line)
-
-        if len(subtitle_parts) == 1:
-            # 单段字幕，直接使用
-            if subtitle_duration > max_display_time:
-                print(f"  [WARN] Shot {i} subtitle duration {subtitle_duration:.1f}s > {max_display_time}s (consider splitting in script)")
-
-            subtitle_count += 1
-            subtitle_end = start + subtitle_duration
-            srt_lines.append(str(subtitle_count))
-            srt_lines.append(f"{seconds_to_srt_time(start)} --> {seconds_to_srt_time(subtitle_end)}")
-            srt_lines.append(subtitle)
-            srt_lines.append("")
-        else:
-            # 多段字幕：按文字比例分配时间
-            total_chars = sum(len(p) for p in subtitle_parts)
-            temp_start = start
-            for j, part_text in enumerate(subtitle_parts, 1):
-                # 按字符比例分配时间
-                part_ratio = len(part_text) / total_chars if total_chars > 0 else 1.0 / len(subtitle_parts)
-                part_duration = subtitle_duration * part_ratio
-
-                part_start = temp_start
-                part_end = temp_start + part_duration
-
-                subtitle_count += 1
-                srt_lines.append(str(subtitle_count))
-                srt_lines.append(f"{seconds_to_srt_time(part_start)} --> {seconds_to_srt_time(part_end)}")
-                srt_lines.append(part_text)
-                srt_lines.append("")
-
-                temp_start = part_end
-
-            # 更新 end time to last part
-            end = part_end
-
-        current_time = end
-
-    # utf-8-sig（带 BOM）：部分 Windows 播放器/ffmpeg 按 ANSI 误读无 BOM 的 UTF-8 中文
-    output.write_text("\n".join(srt_lines), encoding="utf-8-sig")
-    print(f"[OK] SRT generated: {output} ({subtitle_count} subtitles, total {current_time:.1f}s)")
+    plan = build_srt_plan(shots, durations, clip_windows=clip_windows,
+                          speech_durations=speech_durations,
+                          validated_timings=validated_timings)
+    write_srt(plan, output)
+    total = plan.cues[-1].end_sec if plan.cues else 0.0
+    print(f"[OK] SRT generated: {output} ({len(plan.cues)} subtitles, total {total:.1f}s)")

@@ -32,10 +32,7 @@ from .types import RepairRecord, Severity
 
 _F2G_GAZE_MARKERS = ("目光", "凝望", "仰望", "俯视", "凝视")
 
-# 名字池已删：facing_to_gaze 实际从 shot.char_layout 抽角色名（_is_person_target 内
-# 1-4 字符中文短串判定已足够识别"人名"，无需要兜底写死 13 个名字）。如未来有
-# 真正需要"known name"集合（如过滤别名），从 prompt_semantic 或 character_bank
-# 动态取，不用再写硬编码 NAME_POOL。
+# 角色身份来自当前 shot.char_layout；短词形态不证明其为人名。
 
 
 def _build_direction_words() -> tuple[str, ...]:
@@ -116,7 +113,7 @@ def _is_action_object(text: str, pos: int) -> bool:
 # → _is_person_target 拒绝（>4 字或含非汉字）。剥离画X/前方/上方/水面 等前缀后留"杨旭"。
 _FACING_PREFIX_RE = re.compile(
     r"^(?:画[左右中上下](?:的|之)?|前方的?|后方?|上方的?|下方的?|"
-    r"左方的?|右方的?|岸上|水面|水下)([一-鿿]{2,4})$"
+    r"左方的?|右方的?|岸上|水面|水下)(.+)$"
 )
 
 
@@ -184,6 +181,11 @@ class FacingToGazeConstraint(Constraint):
             cl = shot.get("char_layout") or []
             if not isinstance(cl, list):
                 continue
+            # A short Chinese string is not an identity: pose phrases can have
+            # exactly the same shape as names. Only the structural actor table
+            # can authorize a deterministic relation rewrite.
+            known_names = {str(item.get("name") or "").strip()
+                           for item in cl if isinstance(item, dict)} - {""}
             # 收集本镜所有「角色X → 面向Y（Y 是人名）」对
             facing_pairs: list[tuple[str, str]] = []
             for item in cl:
@@ -198,7 +200,7 @@ class FacingToGazeConstraint(Constraint):
                     continue
                 target = m.group(1).strip()
                 target = _extract_person_target(target)  # 剥离"画右的"等复合前缀
-                if _is_person_target(target):
+                if target in known_names and target != str(x_name).strip():
                     facing_pairs.append((str(x_name), target))
             if not facing_pairs:
                 continue

@@ -61,14 +61,13 @@ def build_regen_feedback(script: dict, novel_text: str = "",
         label = _REGEN_FEEDBACK_LABELS.get(key, key)
         # 08-20（v6.37）：改为每类全量例举（之前只首例，信息不足）。
         # 提取每条 warning 的镜头号前缀，列出所有命中镜头号；再附首例完整文本（截断）。
-        import re as _re_b
+        from step01_script_gen.quality_issues import parse_shot_ref
         shot_ids = set()
         for w in warns:
-            for m in _re_b.finditer(r"镜头(\d+)(?:→(\d+))?|钩子", w):
-                for g in m.groups():
-                    if g:
-                        shot_ids.add(f"镜头{g}" if g.isdigit() else "钩子")
-        shot_str = ",".join(sorted(shot_ids, key=lambda s: int(s.replace("镜头", "")) if s.startswith("镜头") and s[2:].isdigit() else -1)) or "全局"
+            sid, related = parse_shot_ref(w)
+            for value in ([sid] if sid is not None else []) + related:
+                shot_ids.add("钩子" if str(value) in ("0", "hook") else f"镜头{value}")
+        shot_str = ",".join(sorted(shot_ids)) or "全局"
         first = warns[0].strip()
         if len(first) > per_line_chars:
             first = first[:per_line_chars] + "…"

@@ -312,12 +312,16 @@ def _analyze_chapter_scenes(novel_path: str, chapter: int, full_text: str) -> di
 """
 
     try:
+        from _text_gen.config import config as text_config
+        output_limit = text_config.TEXT_SCENE_ANALYSIS_MAX_TOKENS
+        if type(output_limit) is not int or output_limit <= 0:
+            raise ValueError("TEXT_SCENE_ANALYSIS_MAX_TOKENS must be a positive integer")
         service = create_service()
         from _text_gen.deepseek_schema import SCENE_ANALYSIS_SCHEMA
         req = TextGenerationRequest(
             system_prompt="你是一个小说编辑，擅长分析剧情结构和场景",
             user_prompt=prompt,
-            max_tokens=4000,
+            max_tokens=output_limit,
             temperature=0.3,
             json_schema=SCENE_ANALYSIS_SCHEMA,
         )

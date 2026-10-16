@@ -2,7 +2,7 @@
 
 所有 schema 与 step01_script_gen/prompts.py 的 PROMPT_TEMPLATE / HOOK_PROMPT_TEMPLATE /
 character_extractor.py 的 CHARACTER_EXTRACTION_PROMPT 输出结构保持一致。
-用 strict json_schema 后，LLM 输出天然合法，validation 只做语义校验。
+schema 定义逻辑输出契约；JSON 模式下同时作为显式指令，validation 仍须严格校验响应。
 """
 
 # ========================================================================
@@ -1048,3 +1048,58 @@ REPLAN_OPS_SCHEMA = {
         "additionalProperties": False,
     },
 }
+
+# ---------------------------------------------------------------------------
+# `screen_hybrid` 模式的首版 schema（主专题 §2/§3.1）
+# ---------------------------------------------------------------------------
+def _build_screen_hybrid_outline_schema() -> dict:
+    """旧 schema + `screen_cards`（新模式用**文字卡**替代图外旁白）.
+
+    刻意**另立一份**：旧模式的首版提示面与 schema 逐字不变，换模式不会动到旧稿的缓存身份。
+    `narration_lines` 保留在 `required` 里——新模式要求模型**显式给空数组**，而不是靠
+    "没写"表示没有旁白（与 `hook_spoken` 同一条口径：缺字段 ≠ 没有要求）。
+    """
+    import copy
+    s = copy.deepcopy(OUTLINE_SCHEMA)
+    s["name"] = "chapter_outline_screen_hybrid"
+    s["schema"]["properties"]["screen_cards"] = {
+        "type": "array",
+        "description": "本集**画面文字卡**（逐条编号 C1..Cn）：姓名/字/年龄/身份/时间/地点/"
+                       "背景等**镜头演不出来**的信息，用文字卡写清楚。每条卡挂在承载它的"
+                       "那条节拍上，`text` 必须是**原文里逐字照抄的片段**（不许改写、"
+                       "概括或自造）。新模式**不使用图外旁白**，`narration_lines` 给空数组。",
+        "items": {
+            "type": "object",
+            "properties": {
+                "beat": {"type": "integer",
+                         "description": "承载这张卡的节拍序号（B 编号，1 起）"},
+                "template": {"type": "string",
+                             "enum": ["character", "time_place", "background"],
+                             "description": "character=人物介绍；time_place=时空说明；"
+                                            "background=背景信息"},
+                "text": {"type": "string",
+                         "description": "卡片正文：原文里**逐字**的一句或一段（可在原文"
+                                        "一字不差地找到）"},
+                "placement": {"type": "string",
+                              "enum": ["info_panel", "info_panel_lower"],
+                              "description": "卡位（同镜并显时两张卡必须占不同卡位）；"
+                                             "不确定就给 info_panel"},
+            },
+            "required": ["beat", "template", "text"],
+            "additionalProperties": False,
+        },
+    }
+    s["schema"]["properties"]["beat_events"] = {
+        "type": "array",
+        "description": "**逐节拍的事件归属**：与 `shot_beats` **等长**，第 i 项是第 i 条节拍"
+                       "承接的 `main_events` 序号数组（1 起）。每个主要事件至少要被一条节拍"
+                       "承接，且事件在节拍里出现的先后**不得回退**。缺归属就留空数组，"
+                       "不要按顺序猜。",
+        "items": {"type": "array", "items": {"type": "integer"}},
+    }
+    s["schema"]["required"] = list(s["schema"]["required"]) + ["screen_cards", "beat_events"]
+    return s
+
+
+SCREEN_HYBRID_OUTLINE_SCHEMA = _build_screen_hybrid_outline_schema()
+

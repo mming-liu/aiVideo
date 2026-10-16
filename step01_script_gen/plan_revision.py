@@ -18,6 +18,7 @@ import time
 #: 停止原因（**过程**口径）：为什么停下来。这些原因**都不单独证明**故事不可满足。
 STOP_OK = "ok"
 STOP_CALL_FAILED = "call_failed"            # 传输/通道失败
+STOP_VERIFICATION_FAILED = "verification_failed"
 STOP_ILLEGAL = "illegal_response"           # 回的东西不合法（不是 JSON / 不是操作 / 应用被拒）
 STOP_NO_CHANGE = "no_change"                # 规划器明确没有可改之处
 STOP_LOOP = "loop"                          # 改回一个已经出现过的状态
@@ -25,6 +26,11 @@ STOP_CALLS = "calls_exhausted"              # 额度用尽
 STOP_DEADLINE = "deadline_exhausted"        # 截止时刻到
 STOP_CONTRACT = "contract_unclosed"         # 契约仍未闭合
 STOP_BUDGET = "budget_infeasible"           # 预算仍不满足
+#: **目标身份失效**（复核 2026-10-08 P2 第 5 条）：本次诊断指向的修改实体不存在 /
+#: 身份写错 ⇒ **一次模型调用都没发**、保留基线，把责任送回**记录生产者**。
+#: 它不是"这份计划不行"的结论（那张记录坏在身份上，不在故事上），所以**不进**
+#: `PLAN_LEVEL_STOPS`；这一轮也**不占额度**（见 `RevisionBudget.refund`）。
+STOP_INVALID_TARGET = "invalid_target"
 
 #: **只有这些**停止原因才落在「计划层已有结论」这一侧（仍不等于"故事不可满足"，
 #: 后者要人看诊断）：调用失败/非法响应**不算**——那只是这一轮没跑成。
@@ -32,7 +38,8 @@ PLAN_LEVEL_STOPS = (STOP_NO_CHANGE, STOP_LOOP, STOP_CALLS, STOP_DEADLINE)
 
 #: 停止原因里**由某一轮修订直接说出来**的：真实原因（传输/模型/应用拒绝）就在那一轮的
 #: 详情里，必须当**主原因**用。额度与截止不是"某一轮说了什么"，不在此列。
-ROUND_DETAIL_STOPS = (STOP_CALL_FAILED, STOP_ILLEGAL, STOP_NO_CHANGE, STOP_LOOP)
+ROUND_DETAIL_STOPS = (STOP_CALL_FAILED, STOP_ILLEGAL, STOP_NO_CHANGE, STOP_LOOP,
+                      STOP_INVALID_TARGET)
 
 #: 残余问题的类别（与停止原因**分账**）：停止原因说"为什么停"，它说"还剩什么"。
 RESIDUAL_NONE = "none"
@@ -46,11 +53,21 @@ DEFAULT_MAX_CALLS = 3
 
 #: 循环指纹覆盖的字段 = **完整修订状态**里可编辑的那些（复核第 31 轮第 4 条）：
 #: 节拍 / 对白 / 旁白条目 / 必保留事实（本体 + 承载声明）/ 钩子（承载 + 说出口）/
-#: 已定核心事件。**排除**：plan_id、时间戳、诊断元数据（plan_replan / plan_revision）
-#: ——否则"只修了承载声明"的合法修订会被误判成"无变化"。
+#: 已定核心事件 / **呈现关系块**（`presentation`：文字卡、事实绑定、事件归属、uid 表）。
+#: **排除**：plan_id、时间戳、诊断元数据（plan_replan / plan_revision）——
+#: 否则"只修了承载声明"的合法修订会被误判成"无变化"。
+#:
+#: ⚠️ `presentation` **必须**在内（2026-10-04）：新模式（`screen_hybrid`）的承载关系、
+#: 卡片与事件归属**只存在于这一块**。缺了它，「只改了一张卡」会算出与基线相同的指纹，
+#: 控制器把一次**有效修订**记成 `no_change`——与 R1 修掉的 `view_digest` 那个
+#: 「只补出处被判没改」是同一类缺陷，只是发生在控制器这一层。
+#:
+#: `plan_verification` 同样排除：它是**核验记录**，不是计划内容；它的变化是核验结果变了，
+#: 不是规划改了。核验记录自己的身份由 `content_verification.plan_digest_of` 管（它也排除
+#: 这三个键）。
 _FP_FIELDS = ("shot_beats", "dialogue_lines", "narration_lines",
               "required_facts", "hook_carrier", "hook_spoken", "main_events",
-              "climax", "causal_chain")
+              "climax", "causal_chain", "presentation")
 
 
 def revision_fingerprint(plan) -> str:
@@ -118,6 +135,16 @@ class RevisionBudget:
     def spend(self) -> None:
         self.calls_used += 1
 
+    def refund(self) -> None:
+        """**没有发起模型调用**的那一轮把额度退回来（复核 2026-10-08 P2 第 5 条）.
+
+        `spend()` 在调用**之前**扣（额度管的是"花掉的规划机会"），但"目标身份失效"
+        （`STOP_INVALID_TARGET`）在分派前就返回、**一次 POST 都没发**——把它算成花掉的
+        机会，等于"上游记录写错了实体身份"要花模型的额度。所以那一轮退回来；
+        退不会低于 0（重复退不会把额度退成负数）。
+        """
+        self.calls_used = max(0, self.calls_used - 1)
+
     def as_dict(self) -> dict:
         return {"max_calls": self.max_calls, "calls_used": self.calls_used,
                 "deadline_sec": self.deadline_sec, "deadline_at": self.deadline_at,
@@ -158,8 +185,28 @@ def _rec_code(rec) -> str:
     return str(rec.get("code") or "") if isinstance(rec, dict) else ""
 
 
-#: 拒收记录里 `detail` 的长度上限（进提示的是**原因**，不是整份响应）
-REJECTION_DETAIL_MAX = 400
+#: 拒收原因在**日志/诊断展示**时的长度上限。
+#:
+#: ⚠️ 它**不约束存储**，也不约束进模型反馈的内容。复核 2026-10-04 P1-1：旧写法在
+#: `rejection_record` 这一步就 `[:400]`，渲染层再宽也拿不到后面的问题——章 1 第 3 轮
+#: 的 6 条问题（533 字）实测被截成 400 且**没有省略标记**，于是"整条进入下一轮请求"
+#: 的结论不成立（当时的新增测试直接调渲染器，绕过了控制器这一跳）。
+#: 现在的分工：**存储完整** → 展示有界且**显式标注省略量** → 回灌模型读完整原因。
+REJECTION_DISPLAY_MAX = 400
+
+
+def rejection_display(rec_or_text, limit: int = REJECTION_DISPLAY_MAX) -> str:
+    """拒收原因的**展示形态**（有界 + 显式标注省略量）——日志与诊断用，不回灌模型.
+
+    回灌模型走 `outline._rejection_feedback_block`（它读**完整** `detail`，越界才标注）。
+    这里只服务人看的行：截了就写清还剩多少字，不静默省略。
+    """
+    _t = (rec_or_text.get("detail") if isinstance(rec_or_text, dict)
+          else rec_or_text) or ""
+    _t = str(_t).strip()
+    if len(_t) <= max(1, int(limit)):
+        return _t
+    return "%s……（另有 %d 字未显示）" % (_t[:int(limit)], len(_t) - int(limit))
 
 
 def rejection_record(round_no, kind, detail) -> dict:
@@ -170,10 +217,11 @@ def rejection_record(round_no, kind, detail) -> dict:
     `residual_class` 按 `problems` 判类别，把拒收项混进去会让"响应违约"被读成"计划层结论"。
 
     拒收原因**由生产者给**（`apply_replan_ops` 的 `why`，内含具体字段路径与判据），
-    这里只做长度归一；消费方（提示渲染、诊断）不重新解释它。
+    这里**原样保存**（不截断）；消费方不重新解释它。展示要有界时用
+    `rejection_display()`——那条路会**显式标注**省略了多少字。
     """
     return {"round": int(round_no), "kind": str(kind or ""),
-            "detail": str(detail or "").strip()[:REJECTION_DETAIL_MAX]}
+            "detail": str(detail or "").strip()}
 
 
 def failure_detail(res, problems=None) -> str:
@@ -306,9 +354,14 @@ class RevisionController:
         _last = hist[-1] if hist and isinstance(hist[-1], dict) else {}
         if (stop == STOP_CALLS and rejections
                 and str(_last.get("kind") or "") == "illegal"):
+            # 复核 2026-10-04：这里原来直接 `[:160]` 硬切，再把 `）——额度已耗尽…`
+            # 接在**切了一半的句子**后面 ⇒ 事故现场读起来像"一条节拍）——额度已耗尽"
+            # 是那条问题本身，真正的规则整句丢失（章 1 run 20261004T052835-7596）。
+            # 走同一个展示出口：截了就写清还剩多少字，不静默省略、不制造假边界。
             _note = ("连续 %d 次响应被拒收（最后一次：%s）——额度已耗尽；"
                      "这是**响应违约**（模型没按契约回答），不是「故事不可行」"
-                     % (len(rejections), str(_last.get("detail") or "")[:160]))
+                     % (len(rejections),
+                        rejection_display(_last.get("detail"), limit=160)))
             if hist:
                 hist[-1] = dict(_last, detail=_note, quota_exhausted=True)
             self.log("[REVISION] " + _note)
@@ -369,6 +422,27 @@ class RevisionController:
                 self.log("[REVISION] 修订返回时已过截止时刻 ⇒ 丢弃本轮结果（原类型 %s）" % _kind)
                 self._emit(_hist[-1], plan_in=_plan_in, problems_in=_probs_in)
                 return self._result(plan, STOP_DEADLINE, _problems, _hist, _rej)
+            if _kind == STOP_VERIFICATION_FAILED:
+                self.budget.refund()
+                _hist[-1]["no_model_call"] = True
+                self.log("[REVISION] 核验未完成 ⇒ 零规划调用、保留候选，责任在核验记录生产者")
+                self._emit(_hist[-1], plan_in=_plan_in, problems_in=_probs_in)
+                return self._result(plan, STOP_VERIFICATION_FAILED, _problems, _hist, _rej)
+            if _kind == STOP_INVALID_TARGET:
+                # **上游记录契约失效**：本次诊断指向的修改实体不存在/身份写错。
+                # `revise_plan_once` 在**分派之前**就返回了，所以这一轮
+                # **一次 create_service / 一次 generate 都没发生** ⇒ 额度退回去
+                # （`spend()` 在调用前扣过），并**立即收口**：问题清单一个字没变，
+                # 再问一轮只会得到同一条记录。
+                self.budget.refund()
+                _hist[-1]["no_model_call"] = True
+                _hist[-1]["detail"] = ("目标身份失效（上游记录契约，零调用）：%s"
+                                       % _hist[-1]["detail"])
+                self.log("[REVISION] 第 %d 轮：%s——零模型调用、保留基线，"
+                         "责任在记录生产者（额度已退回）"
+                         % (len(_hist), _hist[-1]["detail"]))
+                self._emit(_hist[-1], plan_in=_plan_in, problems_in=_probs_in)
+                return self._result(plan, STOP_INVALID_TARGET, _problems, _hist, _rej)
             if _kind == "call_failed":
                 # 传输/通道失败**维持现有独立归因**：它不是"响应违约"，重发也修不好
                 # （复核 2026-10-02 之五）。
@@ -384,7 +458,8 @@ class RevisionController:
                 self._emit(_hist[-1], plan_in=_plan_in, problems_in=_probs_in,
                            rejection=_rej[-1])
                 self.log("[REVISION] 第 %d 轮响应被拒收（%s）——计划未改动、未写缓存，"
-                         "把原因反馈给下一轮" % (len(_hist), _hist[-1]["detail"][:100]))
+                         "把原因反馈给下一轮"
+                         % (len(_hist), rejection_display(_hist[-1], limit=100)))
                 continue
             if _kind == "no_change":
                 self._emit(_hist[-1], plan_in=_plan_in, problems_in=_probs_in)

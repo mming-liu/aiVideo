@@ -20,6 +20,15 @@ class TextGenerationService(ABC):
     各供应商实现此接口，业务代码只调用 generate().
     """
 
+    async def generate_async(self, req: TextGenerationRequest) -> TextGenerationResult:
+        """Await one local worker without blocking the event loop.
+
+        Uses the same generate/ledger/deadline path. Cancellation stops awaiting,
+        not the remote request; callers must not automatically resubmit it.
+        """
+        import asyncio
+        return await asyncio.to_thread(self.generate, req)
+
     @abstractmethod
     def generate(self, req: TextGenerationRequest) -> TextGenerationResult:
         """生成文本，返回结果."""

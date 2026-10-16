@@ -101,6 +101,11 @@ step0*_relay*.log
 # 09-13 调试草稿/ pytest 临时目录（不入库，另一会话收尾后可删）
 .tmp*/
 
+# 2026-10-03：动效运行底座（隔离 Node 工作目录）——npm 依赖与 Chromium 缓存
+# 属于运行时资源，既不打包也不入库（计划 §15「依赖与运行目录」）。
+tools/motion_runtime/node_modules/
+tools/motion_runtime/.browsers/
+
 # 09-13 用户决策：tests/ 测试套件不入库（保留本地，pytest 照常）
 tests/
 # 09-25 用户决策（补正交付边界）：**基线回归与其夹具随仓库交付**，否则 "2290 passed"

@@ -89,6 +89,33 @@ def script_file(chapter: int | None = None) -> Path:
     return chapter_dir(chapter) / "script_result.json"
 
 
+# ---- step01 正式产物与提交清单（**文件名单源**：`shared.quality_gate` 从这里取）------
+#: 三份正式产物（提交时按 audit → quality → script 顺序替换）。
+STEP01_ARTIFACT_FILES = ("script_result.json", "step01_quality.json", "step01_audit.json")
+#: 提交清单：三份正式产物替换完成后写的 manifest，是"提交完成"的唯一标志。
+STEP01_COMMIT_FILENAME = "step01_commit.json"
+
+
+def step01_quality_file(chapter: int | None = None) -> Path:
+    """本章质量门报告（step01 正式产物之一）."""
+    return chapter_dir(chapter) / "step01_quality.json"
+
+
+def step01_audit_file(chapter: int | None = None) -> Path:
+    """本章语义审计报告（step01 正式产物之一）."""
+    return chapter_dir(chapter) / "step01_audit.json"
+
+
+def step01_commit_file(chapter: int | None = None) -> Path:
+    """本章**提交清单**（manifest）：缺失/非 COMMITTED/摘要不符一律 fail-closed."""
+    return chapter_dir(chapter) / STEP01_COMMIT_FILENAME
+
+
+def step02b_quality_file(chapter: int | None = None) -> Path:
+    """本章 step02b 质量门（下游阶段写的，同属"正式产物"保护范围）."""
+    return chapter_dir(chapter) / "step02b_quality.json"
+
+
 def step01_log_file(chapter: int | None = None) -> Path:
     """step01 日志文件路径（全库唯一来源，禁止各处自行拼 `chapter_dir()/step01.log`）.
 
@@ -235,6 +262,140 @@ def final_file(chapter: int | None = None) -> Path:
 def subtitles_file(chapter: int | None = None) -> Path:
     """字幕文件: chapter/subtitles.srt."""
     return chapter_dir(chapter) / "subtitles.srt"
+
+
+# ---- 增强实验根与执行日志单源（2026-10-03 计划 §F1/§F4/§15） ----------------
+#
+# 约定：实验产物一律落在**本实验自己的**子树 <chapter>/_enhancement/<experiment_id>/
+# 下，与正式产物（script/final/srt/clips/audio/vimax_working/stretched）物理分离；
+# 候选路径由 shared.enhancement_io 的守卫核验（绝对、同卷、非输入/正式路径、无 .. 逃逸）。
+# 正式产物布局（上面的 chapter_dir/final_file/... 一族）保持原单源不在此改动。
+
+ENHANCEMENT_DIRNAME = "_enhancement"
+
+#: F2 约定的包 root（每包各自 attempts/<attempt_id>/）。
+ENHANCEMENT_PACKAGES = ("video", "tts", "merge", "motion", "inspect", "alignment", "integration")
+
+_EXPERIMENT_ID_ALLOWED = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+
+
+def validate_experiment_id(experiment_id: str) -> str:
+    """实验 id 字符校验（计划 §F1）：``[A-Za-z0-9][A-Za-z0-9_-]{0,63}``。"""
+    eid = str(experiment_id or "")
+    if not (1 <= len(eid) <= 64):
+        raise ValueError(f"experiment_id 长度非法（1..64）: {experiment_id!r}")
+    if eid[0] not in _EXPERIMENT_ID_ALLOWED or eid[0] in "-_":
+        raise ValueError(f"experiment_id 首字符必须是字母或数字: {experiment_id!r}")
+    if any(ch not in _EXPERIMENT_ID_ALLOWED for ch in eid):
+        raise ValueError(f"experiment_id 含非法字符（仅 [A-Za-z0-9_-]）: {experiment_id!r}")
+    return eid
+
+
+#: 增强交付与阶段快照的根：``<OUTPUT_BASE>/_enhancement/<名字>``。
+#: ⚠️ 这两处此前是**测试与脚本各自手拼**的（`REPO/"output"/"video"/"_enhancement"/…`），
+#: 而 CLAUDE.md 的「编码与查阅入口」写明"输出路径由 `shared/paths.py` 计算，不自行拼目录
+#: 层级"。放在这里是为了让"交付留档放哪""阶段快照放哪"只有一处定义。
+ENHANCEMENT_DELIVERY_DIRNAME = "_delivery"
+ENHANCEMENT_BASELINE_DIRNAME = "_baseline"
+
+
+def default_output_base() -> Path:
+    """**不读 env** 的默认输出根：``<项目根>/output/video``.
+
+    用于"核对正式产物"这类**必须锚在仓库上**的场景——`OUTPUT_BASE` 是测试隔离手段，
+    隔离之后那里没有正式产物，拿隔离根去核"产物有没有被改动"只会一路跳过。
+    """
+    return _PROJECT_ROOT / "output" / "video"
+
+
+def enhancement_root(base: Path | None = None) -> Path:
+    """``<base>/_enhancement``（交付留档与阶段快照共同的父目录）.
+
+    `base=None` ⇒ 生效的 `OUTPUT_BASE`；要锚在仓库上就传 `default_output_base()`。
+    """
+    return (Path(base) if base is not None else _output_base()) / ENHANCEMENT_DIRNAME
+
+
+def enhancement_delivery_root(base: Path | None = None) -> Path:
+    """交付留档根：``<base>/_enhancement/_delivery``（每次实跑的 `pre/` `post/` 放这）."""
+    return enhancement_root(base) / ENHANCEMENT_DELIVERY_DIRNAME
+
+
+def enhancement_baseline_root(base: Path | None = None) -> Path:
+    """阶段快照根：``<base>/_enhancement/_baseline``（每阶段一份，旧的一律保留）."""
+    return enhancement_root(base) / ENHANCEMENT_BASELINE_DIRNAME
+
+
+def enhancement_experiment_dir(experiment_id: str, chapter: int | None = None) -> Path:
+    """实验根单源: ``<chapter_dir>/_enhancement/<experiment_id>``（全包唯一来源）。"""
+    return chapter_dir(chapter) / ENHANCEMENT_DIRNAME / validate_experiment_id(experiment_id)
+
+
+def enhancement_package_dir(package: str, experiment_id: str, chapter: int | None = None) -> Path:
+    """包 root: ``<实验根>/<package>``；包名必须在 ``ENHANCEMENT_PACKAGES`` 内。"""
+    if package not in ENHANCEMENT_PACKAGES:
+        raise ValueError(f"未知包名 {package!r}（合法: {ENHANCEMENT_PACKAGES}）")
+    return enhancement_experiment_dir(experiment_id, chapter) / package
+
+
+def video_attempts_dir(experiment_id: str, chapter: int | None = None) -> Path:
+    """视频包 attempts 目录：**仅委托**实验根（不得自行拼另一套路径）。"""
+    return enhancement_package_dir("video", experiment_id, chapter) / "attempts"
+
+
+def screen_card_asset_dir(attempt_dir: "os.PathLike | str | None" = None,
+                          experiment_id: str | None = None,
+                          chapter: int | None = None) -> Path:
+    """文字卡资产的**路径单源**（主专题 §6.3：卡片资产路径单源）.
+
+    - 给了 `attempt_dir`（Step04 的候选执行上下文）⇒ 落在该 attempt 的 `work/cards/`；
+      资产**必须**在当前 merge attempt 内——增强执行的临时文件、图片与成片都在 attempt 内，
+      跨 attempt 复用会让"这次用的资产是不是这次画的"变成查不到的事实。
+    - 没给 ⇒ `<实验根>/merge/cards/`（离线预检/资产生成器用）。
+
+    两条路径都**不碰正式产物目录**。
+    """
+    _root = Path(attempt_dir) if attempt_dir else \
+        enhancement_package_dir("merge", experiment_id, chapter)
+    return _root / "work" / "cards" if attempt_dir else _root / "cards"
+
+
+def screen_card_plan_file(attempt_dir: "os.PathLike | str | None" = None,
+                          experiment_id: str | None = None,
+                          chapter: int | None = None) -> Path:
+    """`screen_card_plan.v1` 清单的路径单源（与 `screen_card_asset_dir` 同根）."""
+    _root = Path(attempt_dir) if attempt_dir else \
+        enhancement_package_dir("merge", experiment_id, chapter)
+    return _root / "work" / "screen_card_plan.json" if attempt_dir \
+        else _root / "screen_card_plan.json"
+
+
+def flat_clip_file(idx: int, explicit_root: "os.PathLike | str | None" = None,
+                   chapter: int | None = None) -> Path:
+    """非 vimax 通道的扁平片段: ``<VIDEO_OUTPUT_DIR 或 clips/>/clip_<idx>.mp4``.
+
+    hook 与正文镜头同规则（``idx=0`` 就是 hook），不再走历史特殊路径。
+    """
+    root = Path(explicit_root) if explicit_root else clips_dir(chapter)
+    return root / CLIP_FILENAME_FMT.format(int(idx))
+
+
+def execution_log_file(stage: str, context=None, chapter: int | None = None) -> Path:
+    """执行日志单源：有实验上下文 → attempt 日志；无上下文 → 原生产日志合同。
+
+    ``context`` 需要提供 ``log_dir``（优先）或 ``attempt_dir``；两者都没有即视为
+    调用错误（**不**静默回退到生产日志——那正是 09-26 事故的形态）。
+    生产分支保持与各 main 既有 ``<chapter>/<stage>.log`` 完全一致。
+    """
+    if context is not None:
+        log_dir = getattr(context, "log_dir", None) or getattr(context, "attempt_dir", None)
+        if log_dir is None:
+            raise ValueError(
+                "execution_log_file: 传入的 context 既无 log_dir 也无 attempt_dir，"
+                "拒绝回退到生产日志路径"
+            )
+        return Path(log_dir) / f"{stage}.log"
+    return chapter_dir(chapter) / f"{stage}.log"
 
 
 def objects_bank_dir() -> Path:

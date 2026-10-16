@@ -1,5 +1,7 @@
 """ViMax ↔ aiVideo 适配器.
 
+from shared import log_utils as _log_utils
+
 实现 ViMax 的 ImageGenerator / VideoGenerator Protocol（vimax.tools.protocols），
 把 ViMax 的图像/视频生成调用经 aiVideo 现有的 _image_gen / _video_gen provider
 （DashScope / Agnes）完成，强制竖屏 9:16，复用 style_prefix 的前缀与合规化。
@@ -269,6 +271,56 @@ class VideoGeneratorAiVideoAdapter:
         """返回当前使用的 key 索引."""
         return self._svc.get_key_index()
 
+    @property
+    def service(self):
+        """底层 provider 服务对象（公开访问口：控制器不再读私有 ``_svc``）。
+
+        计划 §V1/§V2 要求候选模式的 prepared 入口可被发现；这里只做**转发**，
+        不改变 provider 的任何语义。
+        """
+        return self._svc
+
+    def prepare_request(self, req, context=None):
+        """转发 provider 的 ``prepare_request``（**无提交**）；provider 未实现 ⇒ unsupported."""
+        from _video_gen.models import PreparedVideoRequest
+        fn = getattr(self._svc, "prepare_request", None)
+        if not callable(fn):
+            return PreparedVideoRequest.unsupported(
+                type(self._svc).__name__, "provider 未实现 prepare_request（prepared 入口不可用）")
+        return fn(req, context)
+
+    def create_prepared_task(self, prepared, context=None) -> str:
+        """转发 provider 的 ``create_prepared_task``（**至多一个**生成 POST）."""
+        fn = getattr(self._svc, "create_prepared_task", None)
+        if not callable(fn):
+            from _video_gen.models import VideoCapabilityError
+            raise VideoCapabilityError(
+                "unsupported",
+                f"{type(self._svc).__name__} 未实现 create_prepared_task，拒绝提交（fail-closed）")
+        return fn(prepared, context)
+
+    def query_observation(self, task_id: str):
+        """转发规范化的任务观察（状态与结果引用，不把日志当返回协议）."""
+        from _video_gen.models import TaskObservation
+        fn = getattr(self._svc, "query_observation", None)
+        if not callable(fn):
+            return TaskObservation(task_id=str(task_id), error="provider 未实现 query_observation")
+        return fn(task_id)
+
+    def get_task_binding(self, task_id: str) -> dict:
+        """转发 provider 的公开任务绑定（计划 §V2）；provider 未实现则 binding_unavailable."""
+        fn = getattr(self._svc, "get_task_binding", None)
+        if not callable(fn):
+            return {"status": "binding_unavailable", "key_slot": None,
+                    "credential_profile_ref": None, "binding_version": 0}
+        return fn(task_id)
+
+    def restore_task_binding(self, task_id: str, binding: dict) -> bool:
+        fn = getattr(self._svc, "restore_task_binding", None)
+        if not callable(fn):
+            return False
+        return bool(fn(task_id, binding))
+
     _VIDEO_SUBMIT_TIMEOUT = int(os.getenv("AGNES_VIDEO_SUBMIT_TIMEOUT", "180"))
     _VIDEO_FETCH_TIMEOUT = int(os.getenv("AGNES_VIDEO_FETCH_TIMEOUT", "1200"))
     # asyncio.wait_for 无法取消底层线程（to_thread 的线程会继续跑）：外层 wait_for
@@ -288,7 +340,7 @@ class VideoGeneratorAiVideoAdapter:
             # 但 task_id 已拿不到——上层若重试会产生重复任务（烧额度），必须显式告警
             from shared.tee_logger import get_logger
             from shared.paths import chapter_dir
-            get_logger(chapter_dir() / "step02.log", console_level="INFO").warn(
+            get_logger(_log_utils.resolve_log_file("step02.log"), console_level="INFO").warn(
                 f"  [WARN] 视频提交 {self._VIDEO_SUBMIT_TIMEOUT}s 外层超时；底层请求"
                 f"可能仍在进行，重试可能产生重复任务（建议检查网络/供应商状态后重跑）"
             )
@@ -328,8 +380,19 @@ class VideoGeneratorAiVideoAdapter:
         self,
         prompt: str,
         reference_image_paths: List[str],
+        execution_context=None,
         **kwargs,
     ) -> VideoOutput:
+        """ViMax 直连入口：**默认行为不变**；给了执行上下文就走候选事实。
+
+        ``execution_context`` 非空（§V1/§V2「候选入口必须传，provider 不支持就返回
+        unsupported，不降级写正式文件」）时：
+
+        * 先在 ``prepare_request`` 里冻结实际生效的文本/参数/参考（**无提交**），
+          再走 ``create_prepared_task``（**一次**生成 POST）；
+        * 结果落 ``candidate_path``（由上下文/守卫核验的绝对路径），**绝不**写正式
+          ``shots/``、``clips/``；缺候选落点时显式失败，不降级。
+        """
         # 拼前缀 + 合规化（对齐 style_prefix.py）
         full_prompt = sanitize_prompt(ensure_prefix(prompt, self.prefix))
         # 首帧图：image-to-video；缺省降级为 text-to-video
@@ -349,6 +412,15 @@ class VideoGeneratorAiVideoAdapter:
             image_path=image_path,
         )
 
+        ctx = _normalize_execution_context(
+            execution_context, kwargs.get("candidate_path"))
+        if ctx is not None:
+            if not ctx.candidate_path:
+                raise RuntimeError(
+                    "候选执行上下文缺少 candidate_path：拒绝降级写正式产物")
+            req.candidate_path = str(ctx.assert_candidate(ctx.candidate_path))
+            req.execution_context = ctx
+
         # 全局并发信号量：自动根据当前供应商调整并发数（按事件循环缓存）
         if VideoGeneratorAiVideoAdapter._MAX_CONCURRENT > 0:
             concurrency = VideoGeneratorAiVideoAdapter._MAX_CONCURRENT
@@ -361,7 +433,10 @@ class VideoGeneratorAiVideoAdapter:
 
         # 提交阶段：Semaphore 控制并发（等有空位再提交）
         async with _sem:
-            task_id = await self.submit_task(req)
+            if ctx is None:
+                task_id = await self.submit_task(req)
+            else:
+                task_id = await self._submit_prepared(req, ctx)
         print(f"  [ViMax适配器] task_id={task_id}")
 
         # 轮询阶段：提交后释放 Semaphore，允许下一个任务提交，当前任务异步等待
@@ -371,3 +446,39 @@ class VideoGeneratorAiVideoAdapter:
         with open(result.save_path, "rb") as f:
             data = f.read()
         return VideoOutput(fmt="bytes", ext="mp4", data=data)
+
+    async def _submit_prepared(self, req, ctx) -> str:
+        """候选模式的提交：prepare（无提交）→ **一次** POST（超时语义同 ``submit_task``）."""
+        prepared = self.prepare_request(req, ctx)
+        if not getattr(prepared, "is_ready", lambda: False)():
+            raise RuntimeError(
+                f"prepared 请求不可提交（fail-closed）: "
+                f"{getattr(prepared, 'unsupported_reason', '') or prepared}")
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self.create_prepared_task, prepared, ctx),
+                timeout=self._VIDEO_SUBMIT_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            from shared.tee_logger import get_logger
+            from shared.paths import chapter_dir
+            get_logger(_log_utils.resolve_log_file("step02.log"), console_level="INFO").warn(
+                f"  [WARN] 候选提交 {self._VIDEO_SUBMIT_TIMEOUT}s 外层超时；底层请求可能仍在"
+                f"进行，晚到 task_id 由提交侧落盘（**不**自行重发）")
+            raise
+
+
+def _normalize_execution_context(ctx, candidate_path=None):
+    """把候选上下文统一成 ``_video_gen.models.ExecutionContext``（鸭子类型适配）."""
+    if ctx is None:
+        return None
+    from _video_gen.models import ExecutionContext
+
+    if isinstance(ctx, ExecutionContext):
+        if candidate_path and str(ctx.candidate_path or "") != str(candidate_path):
+            return ExecutionContext(
+                experiment_root=ctx.experiment_root, attempt_id=ctx.attempt_id,
+                candidate_path=str(candidate_path), scope=dict(ctx.scope or {}),
+                package=ctx.package, chapter=ctx.chapter)
+        return ctx
+    return ExecutionContext.from_candidate_context(ctx, candidate_path=candidate_path)

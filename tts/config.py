@@ -67,6 +67,33 @@ class TTSCfg:
         "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/customization",
     )
 
+    # ---- 2026-10-03 §T1/T2a：身份与候选隔离（全部非敏感；不写死任何 key） ----
+    #: 音色映射版本（进 SpeechUnit 身份与 v2 侧车；换映射口径时**递增**，
+    #: 使旧音轨的 request_key 自动失配 ⇒ 新 attempt，而不是静默复用）
+    MAPPING_VERSION: str = os.getenv("TTS_MAPPING_VERSION", "v1")
+    #: 模型修订号（provider 不返回修订号时的显式声明；空 = 未声明）
+    MODEL_REVISION: str = os.getenv("TTS_MODEL_REVISION", "")
+    #: 候选运行使用的音色注册表路径（不设 = 生产注册表；候选入口必须设它，
+    #: 否则 get_registry() 会把实验分配写进生产 `global/voice_registry.json`）
+    VOICE_REGISTRY_PATH: str = os.getenv("TTS_VOICE_REGISTRY_PATH", "")
+    #: 消费格式（step04 现有消费者合同决定；provider 写什么格式由它自己决定）
+    CONSUMER_FORMAT: str = os.getenv("TTS_CONSUMER_FORMAT", "mp3")
+    CONSUMER_SAMPLE_RATE: int = int(os.getenv("TTS_CONSUMER_SAMPLE_RATE", "0")) or 0
+    #: 时长窗口容差（与 shot_tts._validate_tts_duration 同一口径）
+    WINDOW_TOLERANCE_MIN_SEC: float = float(os.getenv("TTS_WINDOW_TOLERANCE_MIN", "0.05"))
+    WINDOW_TOLERANCE_RATIO: float = float(os.getenv("TTS_WINDOW_TOLERANCE_RATIO", "0.02"))
+
+    # ---- Qwen3-TTS-12Hz-1.7B-CustomVoice 本地隔离客户端（§T1/§T3） ----
+    #: 本地权重目录（**不自动下载**；不存在 ⇒ 工具报 not_run，不当成成功）
+    QWEN3_LOCAL_MODEL_DIR: str = os.getenv("QWEN3_LOCAL_MODEL_DIR", "")
+    #: 本地服务地址（独立进程/服务；主项目不装 CUDA/PyTorch 栈）
+    QWEN3_LOCAL_SERVICE_URL: str = os.getenv("QWEN3_LOCAL_SERVICE_URL",
+                                             "http://127.0.0.1:8848")
+    #: 真实调用总开关：**默认 0**（零真实调用）；=1 且权重要在且已有运行授权才放行
+    QWEN3_LOCAL_ENABLE: str = os.getenv("QWEN3_LOCAL_ENABLE", "0")
+    #: 本地客户端请求超时（秒）
+    QWEN3_LOCAL_TIMEOUT_SEC: float = float(os.getenv("QWEN3_LOCAL_TIMEOUT_SEC", "600"))
+
     @classmethod
     def validate(cls) -> None:
         if cls.PROVIDER == "dashscope_sdk" and not cls.API_KEY:

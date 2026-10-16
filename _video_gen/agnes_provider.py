@@ -30,6 +30,12 @@ from shared.model_caps import AGNES_VIDEO_MAX_NUM_FRAMES, AGNES_VIDEO_NUM_FRAMES
 _SYNC_PREFIX = "__sync__"
 
 
+def _resolve_provider_log():
+    """provider 自己的日志落点：候选上下文优先（P2-10），否则章目录."""
+    from shared.log_utils import resolve_log_file
+    return resolve_log_file("step02.log")
+
+
 class AgnesVideoService(VideoGenerationService):
     """agnes ai 视频生成实现 (agnes-video-v2.0)."""
 
@@ -67,6 +73,46 @@ class AgnesVideoService(VideoGenerationService):
     def get_key_index(self) -> int:
         """返回当前使用的 key 索引."""
         return self._current_key_index
+
+    # ------------------------------------------------------------------
+    # 公开任务绑定接口（计划 §V2「公开任务绑定接口」）
+    #
+    # 控制器**不得**再读 adapter/provider 的私有字段（旧写法读
+    # ``video_adapter._task_keys`` 被 try/except 吞掉后恒回退 key-1，多 key 通道
+    # 用错 key 查不到任务）。binding 由 provider 显式给出：
+    #   provider / credential_profile_ref / key_slot / binding_version
+    # credential_profile_ref 是**非敏感**的配置侧稳定 ID + revision（不截取、不散列密钥）。
+    # ------------------------------------------------------------------
+    def _credential_profile_ref(self) -> str | None:
+        profile_id = os.getenv("VIDEO_CREDENTIAL_PROFILE_ID", "").strip()
+        revision = os.getenv("VIDEO_CREDENTIAL_REVISION", "").strip()
+        if not profile_id:
+            return None          # 无显式配置 ⇒ binding_unavailable，不假造身份
+        return f"{profile_id}@{revision or 'r0'}"
+
+    def get_task_binding(self, task_id: str) -> dict:
+        """该 task 提交时所用的凭据绑定；不可解析时返回 ``binding_unavailable``。"""
+        key_slot = self._task_keys.get(task_id)
+        ref = self._credential_profile_ref()
+        if key_slot is None or ref is None:
+            return {"status": "binding_unavailable", "provider": "agnes",
+                    "key_slot": key_slot, "credential_profile_ref": ref,
+                    "binding_version": 1}
+        return {"status": "ok", "provider": "agnes", "key_slot": int(key_slot),
+                "credential_profile_ref": ref, "binding_version": 1}
+
+    def restore_task_binding(self, task_id: str, binding: dict) -> bool:
+        """恢复前校验配置引用；通过则把查询切回原 key 槽位（返回 False ⇒ 不得用当前 key 猜）。"""
+        if not isinstance(binding, dict) or binding.get("status") != "ok":
+            return False
+        ref = self._credential_profile_ref()
+        if ref is None or binding.get("credential_profile_ref") != ref:
+            return False                      # 配置变更/凭据已移除 ⇒ credential_binding_unavailable
+        slot = binding.get("key_slot")
+        if slot is None or not (0 <= int(slot) < len(self._api_keys)):
+            return False
+        self._current_key_index = int(slot)
+        return True
 
     # ------------------------------------------------------------------
     # 模型回退
@@ -200,7 +246,7 @@ class AgnesVideoService(VideoGenerationService):
         # 日志：从 tee_logger 输出到 step02.log，与 _image_gen 保持一致
         from shared.tee_logger import get_logger
         from shared.paths import chapter_dir
-        _vlog = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+        _vlog = get_logger(_resolve_provider_log(), console_level="INFO")
 
         image_data_url = self._encode_image(req.image_path)
         if req.image_path and not image_data_url:
@@ -481,7 +527,7 @@ class AgnesVideoService(VideoGenerationService):
         url = self._query_url(task_id)
         from shared.tee_logger import get_logger
         from shared.paths import chapter_dir
-        _vlog = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+        _vlog = get_logger(_resolve_provider_log(), console_level="INFO")
         _vlog.verbose(f"[DEBUG] query_task: GET {url}")
         # 2026-09-13 安全修复：日志只留 key 后 4 位——此前打印前 30/40 位，
         # key 前缀足以泄露大部分密钥（step02.log 会随章节目录流转）
@@ -511,7 +557,7 @@ class AgnesVideoService(VideoGenerationService):
         # 日志：从 tee_logger 输出到 step02.log，与 create_task 保持一致
         from shared.tee_logger import get_logger
         from shared.paths import chapter_dir
-        _vlog = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+        _vlog = get_logger(_resolve_provider_log(), console_level="INFO")
 
         # sync 模式: task_id 实际是 video_url
         if task_id.startswith(_SYNC_PREFIX):
@@ -600,7 +646,7 @@ class AgnesVideoService(VideoGenerationService):
     def _download(self, req: VideoGenerationRequest, video_url: str) -> VideoGenerationResult:
         from shared.tee_logger import get_logger
         from shared.paths import chapter_dir
-        _vlog = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+        _vlog = get_logger(_resolve_provider_log(), console_level="INFO")
         try:
             os.makedirs(config.OUTPUT_DIR, exist_ok=True)
             save_path = os.path.join(config.OUTPUT_DIR, f"clip_{req.clip_index}.mp4")

@@ -4,7 +4,7 @@
   - deepseek-v4-flash / deepseek-v4-pro 均支持（2026-08-12 V4-Pro-0813 起）
   - reasoning.effort 控制思考模式开关与强度（none 关闭；low/medium/high/max 递增；
     不传默认开启=high），effort 由请求 reasoning_effort 或 config.DEEPSEEK_REASONING_EFFORT 决定
-  - text.format.json_schema 结构化输出（strict），分镜 JSON 天然合法
+  - text.format.json_object 约束 JSON 语法；原 schema 显式指导输出，响应仍经本地严格准入
   - 输出独立 message item，思维链是独立的 reasoning item，不在正文里
   - 注意：思考模式下 temperature/top_p 不生效（API 静默忽略，不报错）；
     max_output_tokens 包含思维链 token，思考强度越高越容易截断（incomplete/max_output_tokens）
@@ -18,6 +18,7 @@ from .models import TextGenerationRequest, TextGenerationResult, truncated_resul
 from .service import TextGenerationService
 
 import re
+import json
 
 
 # v6.118（2026-09-25）：客户端重试次数**显式钉 0**。
@@ -76,7 +77,7 @@ class DeepSeekTextService(TextGenerationService):
     # Responses API（deepseek-v4-flash / deepseek-v4-pro）
     # ------------------------------------------------------------------
     def _generate_responses(self, client, req: TextGenerationRequest) -> TextGenerationResult:
-        """走 Responses API：思考模式 + json_schema 结构化输出."""
+        """走 Responses API：思考模式 + JSON 输出，schema 约束写入指令."""
         model = req.model or self._model
         effort = req.reasoning_effort or config.DEEPSEEK_REASONING_EFFORT
         print(f"[INFO] 正在调用 DeepSeek Responses ({model}, effort={effort}) 生成分镜脚本...")
@@ -100,15 +101,14 @@ class DeepSeekTextService(TextGenerationService):
         if _effective_max_tokens:
             params["max_output_tokens"] = _effective_max_tokens
         if req.json_schema:
-            # strict json_schema 结构化输出：模型输出必合法 JSON。
-            # text.format 需显式 type=json_schema + name + schema 三层结构。
-            params["text"] = {
-                "format": {
-                    "type": "json_schema",
-                    "name": req.json_schema["name"],
-                    "schema": req.json_schema["schema"],
-                }
-            }
+            # 用户裁定采用官方 JSON 模式：语法与结构分账，不信任 API 的格式声明。
+            # 原 schema 完整交给模型；现有本地解析、字段授权和终检继续严格执行。
+            params["text"] = {"format": {"type": "json_object"}}
+            params["instructions"] += (
+                "\n\n只输出一个严格合法 JSON 对象；字段及值类型必须遵守以下原请求 schema，"
+                "未授权字段和内容守卫保持不变：\n"
+                + json.dumps(req.json_schema, ensure_ascii=False)
+            )
 
         # v6.117：`timeout_sec` 是**供应商无关契约**（见 models.py），本 provider 此前
         # 完全没实现它——全文 `timeout` 零命中，而 OpenAI client 只用 api_key/base_url
@@ -123,9 +123,30 @@ class DeepSeekTextService(TextGenerationService):
             return TextGenerationResult(success=False, error=_deny)
         # 上限交给**发送当刻**：`_t` 是工作线程重算后的余量（复核第 45 轮 P1-③：
         # 提前写进 params 的旧 timeout 会在线程延迟调度时继续被消费）
-        response, _timed_out, _why = _gate.request(
-            lambda _t: client.responses.create(**params) if _t is None
-            else client.responses.create(**{**params, "timeout": float(_t)}))
+        def send(timeout):
+            actual = dict(params)
+            if timeout is not None:
+                actual["timeout"] = float(timeout)
+            if not config.DEEPSEEK_STREAM:
+                return client.responses.create(**actual)
+            actual["stream"] = True
+            stream = client.responses.create(**actual)
+            try:
+                for event in stream:
+                    if _gate.deadline.expired():
+                        raise TimeoutError(_gate.expiry_reason())
+                    event_type = getattr(event, "type", "")
+                    if event_type in ("response.completed", "response.incomplete", "response.failed"):
+                        final = getattr(event, "response", None)
+                        expected = event_type.split(".", 1)[1]
+                        if final is None or getattr(final, "status", None) != expected:
+                            raise RuntimeError("DeepSeek stream terminal event/status mismatch")
+                        return final
+                raise RuntimeError("DeepSeek stream ended without a terminal response; partial output rejected")
+            finally:
+                stream.close()
+
+        response, _timed_out, _why = _gate.request(send)
         if _why:
             return TextGenerationResult(success=False, error=_why)
 
@@ -171,7 +192,7 @@ class DeepSeekTextService(TextGenerationService):
             return TextGenerationResult(success=False, error=err, usage=usage)
 
         if not text:
-            # json_schema 偶发空输出（官方已知），带诊断信息返回以便重试
+            # 格式请求仍可能空输出；保留诊断并交调用方决定后续动作
             return TextGenerationResult(
                 success=False,
                 error=(

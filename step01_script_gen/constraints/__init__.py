@@ -117,18 +117,10 @@ from .weapon_state_consistency import WeaponStateConsistencyConstraint
 #      字节级相同」，并把它写成对四个实例的等价证明。那个证明只覆盖该 fixture
 #      的状态，**不构成交换律证明**；中段 `_KfBloodMonotonicFinal` 有确定反例：
 #
-#        `KfBloodMonotonicConstraint` 不只在 kf.desc 补血锚，还会把伤情锚追加到
-#        `lf_desc`；而 `V643PromptEnforcementConstraint._head_fix_context_ok()`
-#        读 `lf_desc` 里的「伤处/暗红/洇痕」决定是否补「仰面朝上双目紧闭，
-#        头颈僵直不侧转」这类**结果态**。两者**不满足交换律**：
-#
-#          旧顺序 blood → v6_43：lf_desc 同时出现伤情锚 + 闭眼/僵直
-#          新顺序 v6_43 → blood：lf_desc 只有伤情锚，没有闭眼/僵直
-#
-#        也就是说，删掉中段 blood 实例**有意**移除了「后加的伤情锚触发 v6_43
-#        补造死亡姿态」这条路径。最终对象明确不相等——这是**有意的语义变更**
-#        （更符合「不要凭伤情虚构死亡姿态」的方向），不是 no-op。
-#        回归见 `tests/step01_script_gen/constraints/test_constraint_order_dependency.py`。
+#        历史反例：blood 后加伤情锚曾触发 v6_43 补造闭眼/僵直。
+#        r18 已从 v6_43 移除该语义推断；两个顺序在该夹具上均保留伤情，
+#        不补眼态。这是有限夹具结论，不构成全输入或整链交换律证明。
+#        回归见 tests/step01_script_gen/constraints/test_constraint_order_dependency.py。
 #
 #      其余三个实例仍按原 fixture 判定为链尾重复，但同样只在该 fixture 状态上
 #      成立；若要证明「基类之后的写入者重新制造缺陷」，需要各自构造触发 fixture。

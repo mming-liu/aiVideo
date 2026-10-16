@@ -18,6 +18,10 @@ import re
 from pathlib import Path
 from typing import Any
 
+# 正式产物的**文件名与清单单源在 `shared/paths.py`**（复核 2026-10-07 四轮 P1）：
+# 保护集合、提交、核对都按同一份名字取路径，不允许各处自行拼字面量。
+from shared.paths import STEP01_ARTIFACT_FILES, STEP01_COMMIT_FILENAME
+
 
 QUALITY_RULE_VERSION = "2026-09-23.4"
 
@@ -563,8 +567,7 @@ def require_semantic_gate(quality_path: Path, audit_path: Path, script: dict,
 #
 # 这样即使进程在替换中途崩溃（正式路径出现新旧混合），manifest 也对不上，
 # 混合版本不会被误用。
-STEP01_COMMIT_FILENAME = "step01_commit.json"
-STEP01_ARTIFACT_FILES = ("script_result.json", "step01_quality.json", "step01_audit.json")
+# `STEP01_COMMIT_FILENAME` / `STEP01_ARTIFACT_FILES` 由 `shared.paths` 提供（见文件头 import）
 STEP01_MANIFEST_VERSION = 1
 
 

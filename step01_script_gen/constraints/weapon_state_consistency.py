@@ -7,12 +7,13 @@ from shared.alias_map import CHARACTER_ALIASES
 from shared.content_safety import WEAPON_WORDS
 from shared.kf_time import get_kf_t_sec
 from shared import motion_segments as _ms
+from step01_script_gen.weapon_states import explicit_weapon_conflicts, RELEASE_MARKERS, asserted_marker, prop_state_owner
 from .base import Constraint
 from .types import RepairRecord, Severity, Violation
 
 
 _HOLD = ("握着", "手持", "持刀", "持匕首", "紧握", "右手持", "左手持", "扬起寒光")
-_RELEASE = ("已脱手", "脱手", "滑落", "掉落", "坠入", "没入", "沉入")
+_RELEASE = RELEASE_MARKERS
 
 
 def _name_variants(name: str) -> set[str]:
@@ -68,7 +69,7 @@ def _weapon_in(clause: str) -> str:
 def _state_in(clause: str) -> str | None:
     if any(w in clause for w in _HOLD):
         return "hold"
-    if any(w in clause for w in _RELEASE):
+    if asserted_marker(clause, _RELEASE):
         return "release"
     return None
 
@@ -85,21 +86,8 @@ def _identity_match(a: str, b: str) -> bool:
 
 
 def _release_owner(text: str, prop: str, names: list[str], owners: list[str]) -> str:
-    last_subject = ""
-    for clause, _delimiter in _split_clauses(text):
-        named_subject = _subject_in(clause, names)
-        if named_subject:
-            last_subject = named_subject
-        if not any(ch in clause for ch in str(prop or "")):
-            continue
-        if _state_in(clause) != "release":
-            continue
-        if named_subject:
-            return named_subject
-        if last_subject:
-            return last_subject
-        return owners[0] if len(owners) == 1 else ""
-    return ""
+    return prop_state_owner(text, prop, names, owners, _RELEASE)
+
 
 
 def _motion_segments(motion: str) -> list[tuple[float, float, str]]:
@@ -160,37 +148,8 @@ def _motion_state_at(motion: str, subject: str, weapon: str, names: list[str],
 
 def _repair_text(text: str, motion: str, names: list[str], *, time_sec: float | None,
                  label: str):
-    clauses = _split_clauses(text)
-    if not clauses:
-        return text, []
-
-    entries: list[dict] = []
-    for i, (clause, _delimiter) in enumerate(clauses):
-        weapon = _weapon_in(clause)
-        if not weapon:
-            continue
-        named_subject = _subject_in(clause, names)
-        state = _state_in(clause)
-        if state and named_subject:
-            entries.append({
-                "i": i,
-                "weapon": weapon,
-                "subject": named_subject,
-                "state": state,
-            })
-
-    conflicts: dict[tuple[str, str], dict[str, list[int]]] = {}
-    for entry in entries:
-        if entry["subject"]:
-            conflicts.setdefault((entry["subject"], entry["weapon"]), {}).setdefault(
-                entry["state"], []
-            ).append(entry["i"])
-
-    violations: list[tuple[str, str, str]] = []
-    for (subject, weapon), states in conflicts.items():
-        if "hold" in states and "release" in states:
-            violations.append((subject, weapon, label))
-    return text, violations
+    return text, [(subject, weapon, label)
+                  for subject, weapon in explicit_weapon_conflicts(text, names)]
 
 
 class WeaponStateConsistencyConstraint(Constraint):

@@ -40,11 +40,9 @@ class KfBloodMonotonicConstraint(Constraint):
     后续帧与尾帧不得把血写没。它**不是死亡姿态证据**：往 `lf_desc` 追加的伤情锚
     只说明伤处仍在，不得据此推断角色已死。
 
-    这一点在链序上有实际后果：`V643PromptEnforcementConstraint` 会读 `lf_desc`
-    里的伤处词，决定是否补「仰面朝上双目紧闭，头颈僵直不侧转」这类**结果态**。
-    两个约束不满足交换律，而当前链序是 `v6_43` 在前、本约束在后——即**有意**
-    不让本约束后加的伤情锚触发那份结果态补造。回归见
-    `tests/step01_script_gen/constraints/test_constraint_order_dependency.py`。
+    伤情锚也不能证明闭眼或头颈僵直。v6_43 不再补造这些状态，
+    无论本约束先后执行，都只保留已经明确的伤情与原有姿态。
+    两种顺序的有限夹具回归见 test_constraint_order_dependency.py。
     """
 
     name = "kf_blood_monotonic"

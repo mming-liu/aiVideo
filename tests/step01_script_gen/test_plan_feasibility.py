@@ -736,9 +736,49 @@ def test_replan_conclusion_records_criteria_version(monkeypatch):
     assert info.get("criteria_version"), info
 
 
+def _patch_budget_verification(monkeypatch):
+    """预算/缓存测试固定语义轴通过；语义本身由入口反例另测。"""
+    from step01_script_gen import content_verify
+    from shared.content_verification import display_carriers, frozen_obligations
+
+    def verify(view, digest, **kwargs):
+        facts = []
+        for fact in view['frozen_facts']:
+            uid = fact['uid']
+            carriers = display_carriers(view, uid)
+            facts.append({'fact_uid': uid, 'verdict': 'supported',
+                          'support_spans': [c['text'] for c in carriers],
+                          'missing': '', 'suggested_carriers': [],
+                          'obligations': [dict(o, verdict='supported', missing='', reason='',
+                                              evidence=[{'carrier_uid': c['uid'],
+                                                         'exhibitor_span': c['text']} for c in carriers])
+                                          for o in frozen_obligations(view)[uid]]})
+        raw = {'coherence': {'beat_uids': [b['uid'] for b in view['beats']],
+                            'dependencies': [{'beat_uid':b['uid'],'requires_before':[],
+                                              'reason':'预算测试显式夹具'} for b in view['beats']],
+                            'verdict': 'supported', 'conflict_beats': [],
+                            'evidence_spans': [_LINES[0]], 'reason': '预算测试显式固定整体一致性通过'},
+               'source_support': [{'fact_uid': f['uid'], 'verdict': 'supported',
+                                   'evidence_spans': [_LINES[0]], 'reason': ''}
+                                  for f in view['frozen_facts']],
+               'facts': facts,
+               'voice_units': [{'unit_uid': u['uid'], 'verdict': 'supported',
+                                'source_kind': 'novel_speech', 'speaker': '测试说话人',
+                                'echo_text': u['text'], 'reason': ''}
+                               for u in view['dialogue_units']]}
+        record, bad = content_verify.parse_verification_response(json.dumps(raw, ensure_ascii=False))
+        assert not bad
+        record.update(plan_digest=digest, novel_digest=kwargs['novel_digest'])
+        return record
+
+    monkeypatch.setattr(content_verify, 'verify_view_with_service', verify)
+
+
 def test_cached_plan_is_still_checked_and_replan_is_written_back(tmp_path, monkeypatch):
     """缓存命中的计划也要过预算关；重选结果回写缓存，下次不再烧模型."""
     import step01_script_gen.outline as o
+
+    _patch_budget_verification(monkeypatch)
 
     _cache = tmp_path / "chapter_outline.cache.json"
     # 第一轮：首版超预算 → 重选 → 回写缓存
@@ -761,6 +801,8 @@ def test_a_failed_plan_is_never_reused_from_the_cache(tmp_path, monkeypatch):
     在内存里的计划版本**成立（本用例后半段）。
     """
     import step01_script_gen.outline as o
+
+    _patch_budget_verification(monkeypatch)
 
     _cache = tmp_path / "chapter_outline.cache.json"
     box1 = _patch_outline_service(monkeypatch, [_plan_response(_LINES), _plan_response(_LINES)])

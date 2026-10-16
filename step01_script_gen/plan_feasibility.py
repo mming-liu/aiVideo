@@ -49,7 +49,11 @@ from step01_script_gen.timecode import (MIN_SHOT_DURATION, _estimate_duration,
 _REQUIRED_PLAN_FIELDS = ("dialogue_lines", "shot_beats")
 
 # 原文核验的标点归一化集合（与 `validation._check_grounding` 同族，另含直角引号/书名号）
-_PUNCT_CHARS = '，。！？；：、—,!?:;“”"\'（）()「」『』《》〈〉'
+# ⚠️ **成对收录**（2026-10-10 真实闭环实测）：原先只收 `“”` 与 ASCII `'`，**漏了中文单引号
+# `‘’`** ⇒ 模型把原文的 `"噗"` 回成 `'噗'` 时，来源轴逐字门判"非逐字"（其余 51 字逐字相同），
+# 真实修订闭环因此卡在来源轴。归一化集是**共用判据**（来源轴 span 门 + 展示侧落点定位），
+# 引号风格差异不应改变"逐字"结论。
+_PUNCT_CHARS = '，。！？；：、—,!?:;“”"\'‘’（）()「」『』《》〈〉'
 
 
 def budget_band() -> tuple:
@@ -646,6 +650,23 @@ def source_contains(novel_text: str, line: str) -> bool:
     return bool(n) and n in _source_norm(novel_text)
 
 
+def source_norm_note() -> str:
+    """**原文核验归一化**的一句话说明——**从判据本身渲染**，不手写第二份口径.
+
+    2026-10-11 复核 r12 的教训：修订请求里手写的那句写成"省略号不计"，而 `_source_norm`
+    把省略号**折叠成一个 `…` 之后保留**下来、**照样参与比对**——提示承诺了判据不做的事。
+    反方向同样危险（说"不计"而实际会拒，模型就去踩一个它以为不存在的坑）。
+
+    这类"提示里再抄一份判据口径"与复核之十二那条"抄一份等价表达式"同源，改法也同一个：
+    **口径由判据渲染**。标点集从 `_PUNCT_CHARS` 现取，省略号的处理照 `_source_norm`
+    的实际顺序说——判据改了，这句话自己跟着变。
+    """
+    return ("按本地 `source_contains` 归一化比对：省略号先折叠成一个 `…`"
+            "（`…` / `……` / `..` 都算同一个，**折叠后仍参与比对，不可自行增删**），"
+            "再删去这些标点：`%s`，最后删去空格、全角空格与换行；其余字符逐字比对。"
+            % "".join(_PUNCT_CHARS))
+
+
 def verify_dialogue_lines_indexed(lines, novel_text: str) -> tuple:
     """逐句核验选用台词并**保留原序号**；返回 `(kept, rejected)`.
 
@@ -907,7 +928,7 @@ def check_dialogue_representable(line: str, cap: float | None = None, *,
                  if ch in _SENT_END_CHARS and 0 < i + 1 < len(line)])
     if n_end == 0:
         reason = ("估时 %.1fs 超单镜上限 %.0fs，句内**无句末边界**（只有逗号/顿号）"
-                  "——无法合法切分，须从原文重选" % (est, cap))
+                  "——无法合法切分，须从原文**重选一句**：要有句末标点、一镜说得完" % (est, cap))
     else:
         reason = ("估时 %.1fs 超单镜上限 %.0fs，有 %d 个句末边界但切不出"
                   "每段 ≤ 上限的合法解" % (est, cap, n_end))
@@ -1248,16 +1269,27 @@ def check_script_dialogue_integrity(script: dict, plan: dict | None) -> tuple:
     if not lines:
         return False, [{"line": "", "reason": "dialogue_lines 为空（不可评估，fail-closed）"}]
     units_raw: list = []
+    unit_shots: list = []
     for s in (script or {}).get("shots") or []:
         if isinstance(s, dict):
             _n = str(s.get("narration_segment") or "").strip()
             if _n:
                 units_raw.append(_n)
+                unit_shots.append(str(s.get("index")))
     # 镜头侧形态：全文/去说话人前缀 × 未还原/已还原（`_match_forms` 每文本给两形态）
     # 排他性检查（下方 extra_dialogue）要按镜取形态；命中判定本身在 `_line_hit_in_units`
     # 内部自算（判据单一实现，避免两处形态口径分叉）
     unit_forms_full = [_match_forms(u) for u in units_raw]
     unit_forms_body = [_match_forms(_speaker_body(u)) for u in units_raw]
+    # A declared, fully realized narration span is a separate planned voice,
+    # even when the renderer adds a short label before its text. Reuse the
+    # same span resolution as event validation and downstream audio consumption.
+    narration_forms_by_shot: dict = {}
+    for entry in voice_units(plan, (script or {}).get("shots") or []):
+        if entry["kind"] != VOICE_KIND_NARRATION:
+            continue
+        for sid in entry["shot_indexes"]:
+            narration_forms_by_shot.setdefault(str(sid), []).extend(_line_forms(entry["text"]))
 
     broken: list = []
     all_line_forms: list = []
@@ -1278,6 +1310,10 @@ def check_script_dialogue_integrity(script: dict, plan: dict | None) -> tuple:
             continue
         _u_forms = [f for f in (unit_forms_full[_ui] + unit_forms_body[_ui]) if f]
         if not _u_forms:
+            continue
+        _narration_forms = narration_forms_by_shot.get(unit_shots[_ui], [])
+        if any(_body and _body in _narration
+               for _body in unit_forms_body[_ui] for _narration in _narration_forms):
             continue
         _consumed = False
         for _uf in _u_forms:
@@ -1625,7 +1661,11 @@ def _carrier_relation_records(duplicate, unlabeled, orphan) -> list:
         _lab = ("N%d" if _kind == "narration" else "D%d") % _i
         _out.append(_problem_record(
             "orphan_uncarried", _kind, _i, "%s[%d]" % (_axis, _i - 1),
-            "%s 被选中却没有任何节拍承载它（成片里没人念）" % _lab, _b))
+            "%s 被选中却没有任何节拍承载它（成片里没人念）。保留它时须分散到不同的节拍上，各自分配承载节拍；"
+            "预算不足或不再选用时可删除该声音条目，并同步撤销/重绑所有引用与钩子，"
+            "仍须完整保留冻结事实与事件。一条节拍只能标**一个**声音载体；"
+            "保留 k 条声音条目时须有 k 条承载节拍，不要求保留全部候选台词。"
+            % _lab, _b))
     return _out
 
 
@@ -1665,7 +1705,11 @@ def carrier_relation_problems(beats, n_lines: int, n_narration: int = 0) -> tupl
 #: v4（2026-09-30 复核第 6 轮裁决）：新增第三种承载方式**图外旁白**——计划带编号
 #: 旁白条目 `narration_lines`（`N1..Nn`，逐字原文叙述 + 出处 + 承载的事实），承载写作
 #: `Bn/旁白k`；旁白与对白共用发声时长与预算。旧计划没有这个字段 ⇒ 同样备份重生成。
-PLAN_CONTRACT_VERSION = 4
+PLAN_CONTRACT_VERSION = 5
+
+#: 从这一版起，计划走**结构化呈现协议**（`presentation_contract.v1`）——
+#: 承载关系读 `presentation.fact_bindings`，不再解析 `｜承载：…` 文案。
+PRESENTATION_MIN_VERSION = 6
 
 #: 载体**区间**写法（模型自创）：`旁白1-5` / `台词1-2`——含义唯一，是"这一条节拍承载
 #: 旁白1 到 旁白5"的简写。按工作包边界，这属于**表达**：保守规范化把它展开成逐条承载的
@@ -2447,6 +2491,74 @@ def norm_carrier_text(s) -> str:
     return "".join(ch for ch in str(s or "") if ch not in _drop)
 
 
+#: 承载「表达」判定的两个**既有**窗口——与 `shares_run` / `shares_terms` 的调用处同值，
+#: 抽成具名常量只为在「逐分句覆盖」里复用同一个数：**不是新阈值**。
+CARRIER_RUN = 6
+CARRIER_TERMS = 2
+
+#: 事实「原文证据」按**原文自己的标点**切分（判据的最小单位是分句）。
+_FACT_CLAUSE_SPLIT = re.compile("[，。；：、！？,.;:!?]+")
+
+
+def fact_evidence_text(fact) -> str:
+    """事实的「原文证据」引文正文（无 → ""）——这条事实的**原文出处**."""
+    from shared.fact_metadata import split_claim_evidence
+    return split_claim_evidence(fact)[1]
+
+
+def fact_evidence_clauses(fact) -> list:
+    """「原文证据」切成**分句**（归一后保序去重）——判据逐分句过，不看整条的"有没有重合"."""
+    _out: list = []
+    for _c in _FACT_CLAUSE_SPLIT.split(fact_evidence_text(fact)):
+        _n = norm_carrier_text(_c)
+        if _n and _n not in _out:
+            _out.append(_n)
+    return _out
+
+
+def uncovered_fact_clauses(fact, carrier_text, *, verbatim: bool) -> tuple:
+    """载体**没有表达**的「原文证据」分句 → `(缺失分句, 被判分句数)`.
+
+    「表达」用**各载体既有那条关系**，不新造阈值：
+      - 逐字类（台词 / 旁白：正文按契约逐字来自原文）⇒ `shares_run`（≥`CARRIER_RUN` 字连续）；
+      - 转述类（画面节拍正文）⇒ `shares_terms`（≥`CARRIER_TERMS` 个不同二字要素）。
+
+    比该关系**自身窗口**还短的分句**不判**（逐字类 < `CARRIER_RUN` 字、转述类 < 3 字）：
+    它们本来就无法被这条关系判定——跳过是"判不了"，不是"判为没表达"；跳过量由调用方可见。
+    """
+    _ct = norm_carrier_text(carrier_text)
+    _missing: list = []
+    _judged = 0
+    _floor = CARRIER_RUN if verbatim else 3
+    for _c in fact_evidence_clauses(fact):
+        if len(_c) < _floor:
+            continue
+        _judged += 1
+        _hit = (shares_run(_c, _ct, CARRIER_RUN) if verbatim
+                else shares_terms(_c, _ct, CARRIER_TERMS))
+        if not _hit:
+            _missing.append(_c)
+    return _missing, _judged
+
+
+def _incomplete_reason(i, what, carrier_text, missing):
+    """部分缺失的**统一文案**（三种载体共用，只有「什么载体」不同）.
+
+    ⚠️ **建议的修法必须与接口能力一致**（R3）：原型文案写的是「表达不了就把它**拆成两条
+    事实**」，而**没有任何一轮接口能改事实正文**——`ops` 没有事实正文编辑能力，
+    `plan_revision.v2` 把 `frozen_facts[].claim` 显式冻结。给出做不到的建议，模型照做就
+    必然被拒收（实测：模型按建议拆了事实，下一轮被「核心字段被改动」打回，白费一轮）。
+    正确的建议是**拆载体、保留同一 fact_uid**：让另一个载体（另一条台词、旁白，或新模式
+    下的画面/卡片）去承接剩下的主张。
+    """
+    return ("F%d 声明的承载%s只表达了这条事实的**一部分**——它的「原文证据」里这几处"
+            "没有任何正文表达：%s（该载体正文：「%s」）——修法是**换/加一个载体去承接"
+            "剩下的主张**（另一个台词/旁白，或新模式下的画面/文字卡），"
+            "并把 F%d 的承载改指向它；**不要拆事实**（正文主张是冻结的，"
+            "本轮接口没有任何一条能改它）" % (i, what, "；".join(missing),
+                                              str(carrier_text)[:24], i))
+
+
 def shares_run(a, b, n: int = 6) -> bool:
     """两段文本是否有 **≥n 字的连续公共子串**——**两侧都是原文原句**时用（事实↔台词）.
 
@@ -2484,6 +2596,7 @@ def shares_terms(a, b, need: int = 2) -> bool:
     if not _a or not _b:
         return False
     return len(_a & _b) >= int(need)
+
 
 
 #: 「原文依据/原文证据/end_hook」里的引文。**提示词**固定要求全角 “ ”，但**模型实际会**
@@ -2619,7 +2732,8 @@ def _hook_spoken_field_records(plan) -> list:
 
 
 
-def _problem_record(code, kind, index, path, reason, basis="", fix="") -> dict:
+def _problem_record(code, kind, index, path, reason, basis="", fix="",
+                    fact_uid="") -> dict:
     """**问题记录**：`code / kind / index / path / reason / basis` + **修法能力** `fix`.
 
     身份（`kind` 与 `index`）与路径由**生产者**在遍历当前计划时给出——报告层只组合，
@@ -2632,8 +2746,15 @@ def _problem_record(code, kind, index, path, reason, basis="", fix="") -> dict:
     分流按它决定走操作式还是**受约束的完整计划修订**。没有这个字段，分流只能按 code
     前缀猜（旧写法按"是不是预算问题"分，于是"空台词表"这种内容缺失被送进只能替换的接口）。
     """
-    return {"code": code, "kind": kind, "index": index, "path": path,
+    _rec = {"code": code, "kind": kind, "index": index, "path": path,
             "reason": reason, "detail": reason, "basis": basis, "fix": fix}
+    # **被修改实体 vs 受影响事实**（复核 2026-10-08 P1）：`kind`/`uid` 说的是**该改谁**
+    # （卡片就是卡片、声音单位就是单位），`fact_uid` 另记"这条事实受影响"。
+    # 旧写法把空卡片告警写成 `kind=fact, uid=f01`——消费者按 `uid` 找卡片就找错实体
+    # （实测：槽位 `slot:card:f01` → 合法回答被判 `repair_slot_target_missing`）。
+    if fact_uid:
+        _rec["fact_uid"] = str(fact_uid)
+    return _rec
 
 
 def _legacy_problems(records) -> list:
@@ -2840,6 +2961,17 @@ def plan_contract_records(plan, *, novel_text: str = "") -> list:
     """
     if not isinstance(plan, dict) or not plan:
         return []            # 计划缺失/字段缺失由 `evaluate_plan` 的 fail-closed 判
+    # **按模式分派**（主专题 §2）：v6 的 `screen_hybrid` 读**结构化关系**
+    # （`presentation.fact_bindings`），不再解析 `｜承载：…` 文案——旧文案在新模式里
+    # 只是显示，不另作权威判据。v5 走下面的旧路径，一个字都不改。
+    if _plan_contract_version(plan) >= PRESENTATION_MIN_VERSION:
+        return presentation_records(plan, novel_text=novel_text,
+                                    verification=(plan or {}).get("plan_verification"))
+    from shared.fact_metadata import LEGACY_ACCEPTANCE_FIELD, LEGACY_ACCEPTANCE_VERSION
+    _semantic = LEGACY_ACCEPTANCE_FIELD in plan
+    if _semantic and plan[LEGACY_ACCEPTANCE_FIELD] != LEGACY_ACCEPTANCE_VERSION:
+        return [_problem_record("planning_acceptance_version_invalid", "plan", None,
+                                LEGACY_ACCEPTANCE_FIELD, "未知的计划验收版本") ]
     facts = [str(f) for f in (plan.get("required_facts") or [])]
     if not facts:
         return []            # 必保留事实清单本身为空 = 计划不合格，归 `_validate_outline`
@@ -2887,13 +3019,24 @@ def plan_contract_records(plan, *, novel_text: str = "") -> list:
                         "`台词k` 或 `旁白k`"
                         % (i, _b, _rec.get(BEAT_SEG_CARRIER).strip()[:20]))
                 else:
-                    _add("carrier_fact_line_mismatch", "fact", i, "required_facts[%d].承载" % (i - 1), "F%d 声明由 B%d 承载「台词%d」，但该节拍的载体标注不是它"
-                                    % (i, _b, _k))
+                    _add("carrier_fact_line_mismatch", "fact", i, "required_facts[%d].承载" % (i - 1),
+                        "F%d 声明由 B%d 承载「台词%d」，但该节拍的载体标注不是它"
+                        "——一条节拍只能标**一个**载体：k 句台词要各配一条标着"
+                        "「载体：台词k」的节拍，把它们**分散开**"
+                        % (i, _b, _k))
                 continue
-            if not shares_run(_claim, lines[_k - 1]):
-                _add("carrier_fact_line_unrelated", "fact", i, "required_facts[%d].承载" % (i - 1), 
-                    "F%d 声明的承载台词 D%d 与这条事实**没有交集**（讲的是另一件事）："
-                    "「%s」" % (i, _k, str(lines[_k - 1])[:24]))
+            _missing, _judged = uncovered_fact_clauses(
+                fact, str(lines[_k - 1]), verbatim=True)
+            if not _semantic and _missing:
+                if len(_missing) == _judged:
+                    _add("carrier_fact_line_unrelated", "fact", i,
+                         "required_facts[%d].承载" % (i - 1),
+                         "F%d 声明的承载台词 D%d 与这条事实**没有交集**（讲的是另一件事）："
+                         "「%s」" % (i, _k, str(lines[_k - 1])[:24]))
+                else:
+                    _add("carrier_fact_line_incomplete", "fact", i,
+                         "required_facts[%d].承载" % (i - 1),
+                         _incomplete_reason(i, "台词 D%d" % _k, lines[_k - 1], _missing))
         elif _mode == "旁白":
             # 2026-09-30 复核第 6 轮：事实可以由图外旁白讲出来（`｜承载：Bn/旁白k`），
             # 但**旁白必须是计划里编号的条目**（`narration_lines` 第 k 条），且与该节拍
@@ -2911,8 +3054,11 @@ def plan_contract_records(plan, *, novel_text: str = "") -> list:
                         "`台词k` 或 `旁白k`"
                         % (i, _b, _rec.get(BEAT_SEG_CARRIER).strip()[:20]))
                 else:
-                    _add("carrier_fact_narration_mismatch", "fact", i, "required_facts[%d].承载" % (i - 1), "F%d 声明由 B%d 承载「旁白%d」，但该节拍的载体标注不是它"
-                                    % (i, _b, _k))
+                    _add("carrier_fact_narration_mismatch", "fact", i, "required_facts[%d].承载" % (i - 1),
+                        "F%d 声明由 B%d 承载「旁白%d」，但该节拍的载体标注不是它"
+                        "——一条节拍只能标**一个**载体：k 条旁白要各配一条标着"
+                        "「载体：旁白k」的节拍，把它们**分散开**，不要都挂在同一条上"
+                        % (i, _b, _k))
                 continue
             # 2026-09-30 复核第 7 轮 P2：「互相登记」此前**单向可绕**——事实侧声明
             # `承载：B1/旁白1`，而 N1 的 `fact_refs` 写成 `[]`／`null`／非法项就整条
@@ -2924,6 +3070,38 @@ def plan_contract_records(plan, *, novel_text: str = "") -> list:
                     "F%d 声明由旁白 N%d 承载，但该旁白条目的 `fact_refs` 里没有 F%d"
                     "——事实侧与旁白侧必须互相登记（这条旁白要把 F%d 写进自己的 "
                     "`fact_refs`）" % (i, _k, i, i))
+            # 复核 2026-10-04 第四轮 P1：**旁白正文也必须真的表达这条事实**。
+            # 台词（`shares_run`）与画面（`shares_terms`）都有内容核验，旁白此前只有
+            # 「编号有效 + 两处互指」——实测漏口：第三轮真实响应把四条旁白缩成一条
+            # 「杨家的主人姓杨名旭，字文轩，今年刚及弱冠。」并登记 `fact_refs=[1,2,3,4]`，
+            # 两处引用改对之后**统一验收返回零问题**，而「四年前丧父、十六岁接手家业」
+            # 「三年孝期刚过便考中诸生」「听香是前几日买来的青楼女子」三条事实**没有
+            # 任何正文表达**（下游要求旁白逐字保留，生成侧补不回来）。
+            #
+            # 判据沿用**台词那条**关系（`shares_run`）：旁白正文按契约必须逐字来自原文
+            # （`text ⊆ source ⊆ 原文`，见 `narration_source_records`），与「选中的台词」
+            # 同类；画面节拍是**转述**，才用更松的 `shares_terms`。不新造阈值、不看人物名
+            # 重合、不做关键词匹配——与既有两条同一套口径。
+            _ntext = str(_narr[_k - 1].get("text") or "")
+            # **同一条判据边界**（`narration_source_records` 已有裁决）：正文本身
+            # 不在原文 ⇒ 它本来就该由 `evaluate_plan` 的逐字核验剔除并重映射引用；
+            # 这里再报一条，可剔除项会被升级成「契约未完成」而在剔除**之前**停下整章。
+            _nn = _source_norm(_ntext)
+            _novel_norm = _source_norm(novel_text)
+            _droppable = bool(_nn) and bool(_novel_norm) and _nn not in _novel_norm
+            _missing, _judged = uncovered_fact_clauses(fact, _ntext, verbatim=True)
+            if not _semantic and not _droppable and _missing:
+                # 身份按**事实侧**给（与同族 `carrier_fact_narration_mismatch` 同形）：
+                # 要改的是「F_i 声明由谁承载」，路径落在该事实的承载字段上。
+                if len(_missing) == _judged:
+                    _add("carrier_fact_narration_unrelated", "fact", i,
+                         "required_facts[%d].承载" % (i - 1),
+                         "F%d 声明的承载旁白 N%d 的正文与这条事实**没有交集**"
+                         "（讲的是另一件事）：「%s」" % (i, _k, _ntext[:24]))
+                else:
+                    _add("carrier_fact_narration_incomplete", "fact", i,
+                         "required_facts[%d].承载" % (i - 1),
+                         _incomplete_reason(i, "旁白 N%d" % _k, _ntext, _missing))
         else:
             if _kind != "visual":
                 _tag = ("该节拍没有标载体" if _kind is None
@@ -2946,8 +3124,12 @@ def plan_contract_records(plan, *, novel_text: str = "") -> list:
             # 画面承载只认**正文**（镜头真的拍什么）：2026-09-30 复核给的漏口是
             # 「只在『本镜信息目的』里抄一遍事实」——那是**声明**，不是演出。
             _body = _rec.body
-            if not shares_terms(_claim, _body, 2):
-                _add("carrier_fact_visual_unrelated", "fact", i, "required_facts[%d].承载" % (i - 1), 
+            # ⚠️ 画面是**转述**载体：合法形态是"用画面演出"，不是"逐字复述证据"
+            # （实测 `F5 …「那个昨夜死掉」/载体「后院马车中躺着杨旭发臭的尸体」` 就是
+            # 合法演出）。所以这里保持既有的"筛错指"关系，**不做**逐分句覆盖——
+            # 完整承载交内容核验（审计），与 `test_agent_patient_swap_...` 同一条边界。
+            if (not _body.strip() if _semantic else not shares_terms(_claim, _body, 2)):
+                _add("carrier_fact_visual_unrelated", "fact", i, "required_facts[%d].承载" % (i - 1),
                     "F%d 声明的承载节拍 B%d 的正文／信息目的与这条事实**没有交集**"
                     "（共享要素不足：该节拍讲的是另一件事）：「%s」"
                     % (i, _b, _rec.body[:28]))
@@ -3011,7 +3193,26 @@ def plan_contract_records(plan, *, novel_text: str = "") -> list:
             "`hook_carrier` 多声明了 D%s——`hook_spoken` 只要求说出口 %s；"
             "钩子没要求说出口的那句不要写进承载声明（纯画面钩子请给空串）"
             % (_extra, sorted(_required) or "（无）"))
+    if _semantic:
+        problems.extend(_semantic_verification_records(plan, novel_text))
     return problems
+
+
+def _semantic_verification_records(plan, novel_text):
+    """Both presentation modes share the independent semantic record contract."""
+    from shared.presentation_contract import view_from_plan
+    from shared.content_verification import verification_problems, verification_context_of
+    from step01_script_gen.content_verify import novel_identity
+    view, bad = view_from_plan(plan)
+    if view is None:
+        return bad
+    bad, table = verification_context_of(plan, view)
+    if bad:
+        return bad
+    return verification_problems(plan.get("plan_verification"), view, plan=plan,
+                                 decomposition=table, novel_text=novel_text,
+                                 novel_digest=novel_identity(novel_text)["digest"]
+                                 if novel_text else None)
 
 
 def _copy_or_raw(value):
@@ -3651,35 +3852,48 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
     _kept_ix, rejected = verify_dialogue_lines_indexed(lines, novel_text)
     kept = [x["line"] for x in _kept_ix]
     if not kept:
-        if lines:
-            reasons = ["计划选用的 %d 句台词**全部**未在原文中逐字找到——"
-                       "生成阶段会自行决定台词，计划就不是内容取舍的权威" % len(lines)]
+        # **三个互斥分支，各自完整返回**（复核 2026-10-05 P1：旧写法让 hybrid 分支
+        # 落进 legacy 的收尾，于是①合法 hybrid 零对白抛 `UnboundLocalError`
+        # （`reasons` 在该分支从未赋值）、②legacy 全部对白不在原文时被判 feasible
+        # （`reasons` 只在 `else` 里赋值，混合分支拿到的是别的分支的值）。
+        # 一处控制流负责两个语义错误，必须写成互斥的早返回。
+        _hybrid = (_plan_contract_version(plan) >= PRESENTATION_MIN_VERSION
+                   and isinstance(plan.get("presentation"), dict))
+        # ---- 分支 ①：新模式 + 没有任何台词（也没被剔除的台词）⇒ 合法，继续 ----
+        if _hybrid and not lines and not rejected:
+            kept = []
+        # ---- 分支 ②：有台词但**全部**不在原文（新旧模式都拒，逐条反馈）----
+        elif rejected:
+            _reasons = ["计划选用的 %d 句台词**全部**未在原文中逐字找到%s"
+                        % (len(lines),
+                           "（新模式仍要求：若有对白，必须逐字来自原文）" if _hybrid
+                           else "——生成阶段会自行决定台词，计划就不是内容取舍的权威")]
+            _probs = []
+            for _r in (rejected or []):
+                _ix = _r.get("index")
+                _probs.append(_problem_record(
+                    "dialogue_line_not_in_novel", "dialogue", _ix,
+                    ("dialogue_lines[%d]" % (int(_ix) - 1)) if _ix else "dialogue_lines",
+                    "D%s 未在原文里逐字找到（%s）：%s"
+                    % (_ix if _ix else "?", str(_r.get("reason") or ""),
+                       str(_r.get("line") or "")[:40]),
+                    "修正要求：换一句**原文逐字**的台词，或删掉它改由画面/文字卡承载"))
+            return _stop(_reasons,
+                         ["改用原文逐字台词，或移除后由画面/文字卡承载"],
+                         rejected=rejected, problems=_probs)
+        # ---- 分支 ③：旧模式没有任何台词 ⇒ 仍拒收（旧模式不放宽）----
         else:
-            reasons = ["计划未选用任何逐字台词（`dialogue_lines` 为空）——"
-                       "生成阶段会自行决定台词，计划就不是内容取舍的权威"]
-        # **逐句给出身份、原因与修正要求**（复核之八 P1）：被拒的是哪一句、在计划的
-        # 第几个位置、为什么不在原文里——模型才能改；只给一句"验收未完成"它无从下手。
-        _fix = ("修正要求：回到规划层，按原文**逐字**摘出台词（宁少勿滥）；"
-                "改写/自造的句子不算本集选用的内容")
-        _probs = []
-        for _r in (rejected or []):
-            _ix = _r.get("index")
-            _probs.append(_problem_record(
-                "dialogue_line_not_in_novel", "dialogue", _ix,
-                ("dialogue_lines[%d]" % (int(_ix) - 1)) if _ix else "dialogue_lines",
-                "D%s 未在原文里逐字找到（%s）：%s"
-                % (_ix if _ix else "?", str(_r.get("reason") or ""),
-                   str(_r.get("line") or "")[:40]),
-                _fix))
-        if not _probs:
-            _probs.append(_problem_record(
-                "plan_no_dialogue_lines", "plan", None, "dialogue_lines",
-                "计划未选用任何逐字台词（`dialogue_lines` 为空）——生成阶段会自行"
-                "决定台词，计划就不是内容取舍的权威", _fix,
-                fix="reselect_dialogue"))
-        return _stop(reasons,
-                     ["回到规划层按原文**逐字**摘出台词（宁少勿滥）后重跑"],
-                     rejected=rejected, problems=_probs)
+            return _stop(["计划未选用任何逐字台词（`dialogue_lines` 为空）——"
+                          "生成阶段会自行决定台词，计划就不是内容取舍的权威"],
+                         ["回到规划层按原文**逐字**摘出台词（宁少勿滥）后重跑"],
+                         rejected=rejected,
+                         problems=[_problem_record(
+                             "plan_no_dialogue_lines", "plan", None, "dialogue_lines",
+                             "计划未选用任何逐字台词（`dialogue_lines` 为空）——生成阶段"
+                             "会自行决定台词，计划就不是内容取舍的权威",
+                             "修正要求：回到规划层，按原文**逐字**摘出台词（宁少勿滥）；"
+                             "改写/自造的句子不算本集选用的内容",
+                             fix="reselect_dialogue")])
 
     # ④b 旁白（2026-09-30 复核第 6 轮）：与对白同一套核验与预算——
     #     ① 首版采用原文叙述的**完整句子**，故同样要求逐字来自原文；
@@ -4340,7 +4554,13 @@ def dump_plan_unavailable(chapter_dir, *, code: str, detail: str = "", plan=None
 
 #: **调用类**失败码（"这一轮没跑成"，§7.2 三类分账之一）：有基线计划时也**不许**被
 #: 生成前内容门的结论顶替——终局就是它，基线的内容问题另列（复核 2026-10-02 之三 P1）。
-OUTLINE_CALL_FAILURE_CODES = ("call_failed", "illegal_response", "outline_invalid")
+#:
+#: `invalid_target`（复核 2026-10-08 P2 第 5 条）同属这一类：本次诊断**指向的修改实体
+#: 不存在/身份写错**是**上游记录契约失效**（生产者写错了身份），不是"这份计划不行"。
+#: 不登记在这里的话，它会掉进"拿基线过生成前门"那一支，被 `plan_contract_invalid` 顶替
+#: ——终局归因反了（真实的身份失效只剩在修订历史里），与 §7.2 的分账口径相违。
+OUTLINE_CALL_FAILURE_CODES = ("call_failed", "illegal_response", "outline_invalid",
+                              "invalid_target")
 
 
 def apply_plan_transforms(plan, rep: dict, *, novel_text: str = "") -> dict:
@@ -4678,3 +4898,305 @@ def _dump(chapter_dir, rep: dict, plan=None, *, no_verdict: bool = False,
         _payload.update(extra)
     _dump_diagnostic_json(Path(chapter_dir) / "step01_plan_infeasible.json", _payload,
                           what="预算诊断")
+
+
+# ---------------------------------------------------------------------------
+# 版本 6（`screen_hybrid`）：读**结构化关系**的计划契约验收（主专题 §2/§3.3）
+# ---------------------------------------------------------------------------
+def presentation_records(plan, *, novel_text: str = "", verification=None) -> list:
+    """v6 计划契约验收：**只核形状、引用、出处、时长与证据完整性**.
+
+    语义（"这段正文是否完整表达了这条事实"）**不在这里判**——那是 `shared.content_verification`
+    的独立核验（R4 / 主专题 §3.3）。旧模式的逐分句文字重合门是**对"用文字复述"这一形态
+    的近似**；新模式允许"画面演出 + 卡片补足"的联合承载，那个近似既会误收（只重合 6 字）
+    也会误拒（合法演出不复述引文）。所以这里不叠加它。
+
+    核什么：
+
+    1. `presentation` 块存在、schema/mode 正确；`narration_lines` 必须显式为空（模式合同）；
+    2. `beat_uids` 与节拍**一一对应**（数量与稳定性）；
+    3. 每条冻结事实**恰好一项** `fact_bindings`，载体非空且引用可解析（悬空即拒收，
+       不按相似度猜）；
+    4. 每个载体的**实际正文**：声音/卡片必须**逐字来自原文**；画面节拍必须有正文；
+    5. 卡片**阅读预算**（"放得进去"不等于"读得完"，两张预算分别判）；
+    6. 钩子绑定与 `hook_spoken`/`hook_carrier` 一致；
+    7. 该计划摘要**必须有内容核验记录且结论全是 `supported`**（R4：缺记录不得判通过）。
+    """
+    from shared.presentation_contract import (KIND_CARD, KIND_DIALOGUE, KIND_NARRATION,
+                                              KIND_VISUAL, PRESENTATION_SCHEMA,
+                                              MODE_HYBRID, parse_view, ref_uid,
+                                              view_from_plan, view_problems)
+    problems: list = []
+    _basis = ("新模式契约：`presentation` 结构化关系是唯一承载事实源；画面/卡片/声音必须"
+              "有实际正文，来源逐字可核，卡片阅读预算可满足，且必须有内容核验记录")
+    _pres = plan.get("presentation")
+
+    def _add(code, kind, index, path, reason, fix="", uid="", fact_uid=""):
+        _record = _problem_record(code, kind, index, path, reason, _basis, fix=fix,
+                                  fact_uid=fact_uid)
+        if uid:
+            _record["uid"] = uid
+        problems.append(_record)
+
+    if not isinstance(_pres, dict):
+        _add("presentation_block_missing", "plan", None, "presentation",
+             "v6 计划必须带 `presentation` 块（schema=%s）——新模式的结构化关系是唯一"
+             "承载事实源，不能退回解析 `｜承载：` 文案" % PRESENTATION_SCHEMA)
+        return problems
+    if str(_pres.get("schema") or "") != PRESENTATION_SCHEMA:
+        _add("presentation_schema_unknown", "plan", None, "presentation.schema",
+             "`presentation.schema` 必须是 %s（现在是 %r）"
+             % (PRESENTATION_SCHEMA, _pres.get("schema")))
+        return problems
+    if str(_pres.get("mode") or "") != MODE_HYBRID:
+        _add("presentation_mode_invalid", "plan", None, "presentation.mode",
+             "`presentation.mode` 必须是 %s（现在是 %r）" % (MODE_HYBRID, _pres.get("mode")))
+        return problems
+    if plan.get("narration_lines"):
+        _add("presentation_narration_forbidden", "plan", None, "narration_lines",
+             "新模式必须显式 `narration_lines=[]`——图外旁白不再生成独立音轨，必要的"
+             "信息要重新分配给画面或文字卡；**不自动清空**、也不静默降级")
+
+    # 解析成视图（引用闭合、uid 唯一、模式合同都在这一处）
+    _view, _vp = view_from_plan(plan)
+    if _view is None:
+        for _x in _vp:                      # 逐条透传，不压成一条"读不成"
+            _add(str(_x.get("code") or "presentation_unreadable"),
+                 str(_x.get("kind") or "plan"), None,
+                 str(_x.get("path") or ""), str(_x.get("reason") or ""),
+                 fix=str(_x.get("fix") or ""), uid=str(_x.get("ref") or ""))
+        return problems
+    # ⚠️ 读取准入现在是**二值**的（`view is None` ⇔ `problems` 非空），所以这里没有
+    # "视图读得出来、但读盘同时报了问题"这一档——旧写法考虑过这一档（"模式合同/类型
+    # 已被拒"），那是按码名白名单判可读性时的残留。模式合同（新模式带旁白）改由下面的
+    # `parse_view` 报 `view_hybrid_narration_forbidden`，一条不漏。
+    _pv, _vpp = parse_view(_view, expected_mode=MODE_HYBRID)
+    if _pv is None:
+        for _x in _vpp:
+            _add(str(_x.get("code") or "presentation_relation_invalid"),
+                 str(_x.get("kind") or "plan"), None,
+                 str(_x.get("path") or ""), str(_x.get("reason") or ""),
+                 fix=str(_x.get("fix") or ""), uid=str(_x.get("ref") or ""))
+        return problems
+    for _x in view_problems(_view):
+        _add(str(_x.get("code") or "presentation_relation_invalid"),
+             str(_x.get("kind") or "plan"), None,
+             str(_x.get("path") or ""), str(_x.get("reason") or ""),
+             fix=str(_x.get("fix") or ""), uid=str(_x.get("ref") or ""))
+
+    # `beat_uids` 与节拍一一对应（数量与稳定性）
+    _uids = [str(x) for x in (_pres.get("beat_uids") or [])]
+    _beats = list(plan.get("shot_beats") or [])
+    if len(_uids) != len(_beats):
+        _add("presentation_beat_uids_mismatch", "plan", None, "presentation.beat_uids",
+             "`beat_uids` 有 %d 项而节拍有 %d 条——节拍 uid 必须与节拍一一对应"
+             % (len(_uids), len(_beats)))
+    elif len(set(_uids)) != len(_uids):
+        _add("presentation_beat_uids_duplicate", "plan", None, "presentation.beat_uids",
+             "`beat_uids` 里有重复 uid：%s" % _uids)
+
+    _novel = _source_norm(novel_text)
+    _beat_by_uid = {str(b.get("uid")): b for b in _view["beats"]}
+    _card_by_uid = {ref_uid(c): c for c in _view["screen_cards"]}
+    _unit_by_uid = {}
+    for _u in _view["dialogue_units"]:
+        _unit_by_uid[str(_u["uid"])] = ("dialogue", _u)
+    for _u in _view["narration_units"]:
+        _unit_by_uid[str(_u["uid"])] = ("narration", _u)
+
+    _reading_sec = 0.0
+    #: **按卡片去重后**累计阅读时间（工作包 3 第 3 条）：一张卡被 N 条事实引用时，
+    #: 观众**只读一遍**。原先在绑定循环里累加，于是"一条卡承载三条事实"被计三次，
+    #: 预算凭空翻三倍——合法计划被误判成超预算。阅读时间按**实际卡片/分页**算一次。
+    _read_cards: set = set()
+    _fact_indexes = {f["uid"]: i for i, f in enumerate(_view["frozen_facts"], 1)}
+    for _binding_i, _b in enumerate(_pres.get("fact_bindings") or [], 1):
+        _fu = _b["fact_uid"]
+        _i = _fact_indexes[_fu]
+        for _ci, _c in enumerate((_b or {}).get("carriers") or []):
+            _kind = str((_c or {}).get("kind") or "")
+            _path = "presentation.fact_bindings[%d].carriers[%d]" % (_binding_i - 1, _ci)
+            _uid = ref_uid(_c)
+            if _kind == KIND_VISUAL:
+                _bt = _beat_by_uid.get(_uid)
+                if _bt is None:
+                    _add("presentation_carrier_dangling", "fact", _i, _path,
+                         "%s 指向不存在的节拍 %r" % (_fu, _uid), uid=_fu)
+                    continue
+                if not str(_bt.get("text") or "").strip():
+                    _add("presentation_visual_body_missing", "fact", _i, _path,
+                         "%s 声明由节拍 %s 的**画面**承载，但该节拍没有正文（画面里"
+                         "什么都没有）" % (_fu, _uid), uid=_fu)
+                _ev = str(_bt.get("evidence") or "")
+                if not _ev.strip():
+                    _add("presentation_beat_evidence_missing", "beat", None,
+                         "shot_beats[%s].原文依据" % _uid,
+                         "节拍 %s 没有「原文依据」——画面承载必须有原文出处" % _uid, uid=_uid)
+                elif _novel and _source_norm(_ev) not in _novel:
+                    _add("presentation_beat_evidence_not_in_novel", "beat", None,
+                         "shot_beats[%s].原文依据" % _uid,
+                         "节拍 %s 的「原文依据」不在原文里（逐字核验未通过）" % _uid, uid=_uid)
+            elif _kind == KIND_CARD:
+                _card = _card_by_uid.get(_uid)
+                if _card is None:
+                    _add("presentation_carrier_dangling", "fact", _i, _path,
+                         "%s 指向不存在的卡片 %r" % (_fu, _uid), uid=_fu)
+                    continue
+                _t = str(_card.get("text") or "").strip()
+                if not _t:
+                    # **实体是卡片**（`uid` = 卡片身份），受影响事实另记（复核 P1）
+                    _add("presentation_card_text_empty", "card", None,
+                         "presentation.screen_cards[%s].text" % _uid,
+                         "卡片 %s 没有正文（它承载事实 %s）" % (_uid, _fu),
+                         uid=_uid, fact_uid=_fu)
+                elif _novel and _source_norm(_t) not in _novel:
+                    _add("presentation_card_not_in_novel", "card", None,
+                         "presentation.screen_cards[%s].text" % _uid,
+                         "卡片 %s 的正文不是原文逐字片段——卡片正文必须取自原文"
+                         % _uid, uid=_uid)
+                _reading_sec += card_reading_seconds(_t) if _uid not in _read_cards else 0.0
+                _read_cards.add(_uid)
+            elif _kind in (KIND_DIALOGUE, KIND_NARRATION):
+                _u = _unit_by_uid.get(_uid)
+                if _u is None:
+                    _add("presentation_carrier_dangling", "fact", _i, _path,
+                         "%s 指向不存在的%s单位 %r"
+                         % (_fu, "对白" if _kind == KIND_DIALOGUE else "旁白", _uid), uid=_fu)
+                    continue
+                _t = str(_u[1].get("text") or "").strip()
+                if not _t:
+                    # 同一条口径：实体是**声音单位**，受影响事实另记
+                    _add("presentation_voice_text_empty", _u[0], None,
+                         "%s_units[%s]" % ("dialogue" if _kind == KIND_DIALOGUE
+                                           else "narration", _uid),
+                         "%s 的声音单位 %s 没有正文" % (_fu, _uid),
+                         uid=_uid, fact_uid=_fu)
+                elif _novel and _source_norm(_t) not in _novel:
+                    _add("presentation_voice_not_in_novel", _u[0], None,
+                         "%s_units[%s]" % ("dialogue" if _kind == KIND_DIALOGUE
+                                           else "narration", _uid),
+                         "%s 的正文不在原文里（逐字核验未通过）" % _uid, uid=_uid)
+            else:
+                _add("presentation_carrier_kind_invalid", "fact", _i, _path,
+                     "载体 kind 非法：%r（合法：画面/卡片/对白/旁白）" % _kind, uid=_fu)
+
+    # 声音单位必须由**某条节拍**标着（否则它是孤儿：计划里有、镜头里没有）
+    _voiced = {ref_uid(b.get("voice_ref")) for b in _view["beats"]
+               if isinstance(b.get("voice_ref"), dict)}
+    for _uid, (_k, _u) in _unit_by_uid.items():
+        if _uid not in _voiced:
+            _add("presentation_voice_orphan", _k, None, "%s_units[%s]" % (_k, _uid),
+                 "%s 没有任何节拍标着它（`voice_ref` 指向它）——计划里有这条声音、"
+                 "镜头里没人说它" % _uid, uid=_uid)
+
+    # 阅读预算（展示预算，独立于 TTS 估时与模型能力常量）
+    _budget = _reading_budget_sec()
+    if _reading_sec > _budget:
+        _add("presentation_reading_budget_exceeded", "plan", None, "presentation.screen_cards",
+             "文字卡合计阅读需求 %.2fs 超过展示预算 %.2fs——保留完整主张，将可演出的信息转交画面/对白，或重选完整表达主张的更短原文片段；单纯拆页不会减少总阅读需求，"
+             "**不自动加时/慢放/截字/减少核心事实**" % (_reading_sec, _budget))
+
+    # 钩子：绑定与声明一致
+    _hb = _pres.get("hook_bindings") or {}
+    _spoken = [str(x) for x in (_hb.get("spoken_uids") or [])]
+    _cra = _hb.get("carriers")
+    if _cra is None and _hb.get("carrier") is not None:
+        _cra = [_hb.get("carrier")]
+    if _spoken or _cra:
+        _d_texts = [str(u.get("text") or "") for u in _view["dialogue_units"]]
+        for _u in _spoken:
+            if _u not in [str(x["uid"]) for x in _view["dialogue_units"]]:
+                _add("presentation_hook_spoken_dangling", "hook", None,
+                     "presentation.hook_bindings.spoken_uids",
+                     "钩子要求说出口的对白单位不存在：%r" % _u)
+        if plan.get("hook_spoken") and not _d_texts:
+            _add("presentation_hook_spoken_lost", "hook", None, "hook_spoken",
+                 "`hook_spoken` 有内容但计划里没有对白——钩子要求说出口的台词不能失去")
+
+    # 内容核验记录（R4）：缺记录不得判通过
+    if verification is None:
+        _add("verify_record_missing", "verification", None, "plan_verification",
+             "新模式计划的**内容核验记录**缺失——确定性判据只核形状/引用/出处/时长，"
+             "完整支持关系必须由独立核验给出（缺记录不得判通过）")
+    else:
+        from shared.content_verification import verification_problems
+        # `view` 与 `plan` 是**同一份候选**的两个投影（工作包 1 第 1 条）：身份按
+        # `plan` 算、支持片段按 `view` 里的实际载体正文核。
+        # ⚠️ 复核 2026-10-07 三轮 ②：**本次原文身份也要传**——旧写法只传 `novel_text`，
+        # 于是"核验记录绑的是别份原文"在统一验收里**根本没人核**（`novel_digest` 默认
+        # None ⇒ 那条检查整条跳过）。原文为空时没有可核身份，按未提供处理。
+        _novel_dig = None
+        if str(novel_text or ""):
+            from step01_script_gen.content_verify import novel_identity
+            _novel_dig = novel_identity(novel_text)["digest"]
+        # ⚠️ **最终验收与缓存/控制器用同一份上下文**（复核 r6 §4.2 第四处入口）：
+        # 旧写法不传分解表 ⇒ 统一验收按**根义务**核，分量模式下的记录在缓存侧被
+        # 按分量拒、在这一步却被放行（同源判据分叉）。上下文有但坏 ⇒ 结构化拒收，
+        # **不许**退回根义务模式（那会把"分量没核"读成"核过了"）。
+        from shared.content_verification import verification_context_of
+        _ctx_bad, _tbl = verification_context_of(plan, _view)
+        problems.extend(_ctx_bad)
+        if not _ctx_bad:
+            # 上下文坏 ⇒ **只报上下文问题**（fail-closed）。不要顺手按根义务再判一遍：
+            # 那会给一份分量记录报出一串"自造条目"，把真正的原因（上下文不合法）盖住。
+            problems.extend(verification_problems(verification, _view, plan=plan,
+                                                   decomposition=_tbl,
+                                                   novel_text=novel_text,
+                                                   novel_digest=_novel_dig))
+    return problems
+
+
+def _reading_budget_sec() -> float:
+    """展示预算（秒）：从**显示 profile** 取生效值，不假装已验."""
+    from shared.screen_cards import profile as _profile
+    return float(_profile.active_profile().reading_budget_sec)
+
+
+def planning_resource_context(view=None) -> dict:
+    """给规划者的预算事实：参数与逐条估时直接使用验收侧的事实源。
+
+    这是一份请求信息，不是候选自报预算。原文/主张取舍仍由生产者负责；
+    不自动截字、删除条目或改变验收上限。初版无 view 时只提供有效参数。
+    """
+    from shared.screen_cards import profile
+    from shared.media_contract import MERGE_FPS
+    from shared.presentation_contract import view_admission_problems, PresentationContractError
+    if view is not None:
+        problems = view_admission_problems(view)
+        if problems:
+            raise PresentationContractError(problems, where="规划资源请求")
+    effective = profile.active_profile()
+    minimum, maximum = budget_band()
+    cards = [{"uid": card.get("card_id") or card.get("uid"),
+              "characters": profile.countable_chars(card["text"]),
+              "seconds": card_reading_seconds(card["text"])}
+             for card in (view or {}).get("screen_cards", [])]
+    voices = []
+    for kind, field in (("dialogue", "dialogue_units"), ("narration", "narration_units")):
+        for unit in (view or {}).get(field, []):
+            voices.append({"uid": unit["uid"], "kind": kind,
+                           "seconds": dialogue_seconds([unit["text"]])})
+    return {"duration_band_sec": {"min": minimum, "max": maximum},
+            "single_shot_cap_sec": active_shot_cap(),
+            "card_reading": {"profile_version": effective.version,
+                             "budget_sec": effective.reading_budget_sec,
+                             "reading_chars_per_sec": effective.reading_chars_per_sec,
+                             "settle_sec": effective.settle_sec,
+                             "fps": MERGE_FPS,
+                             "count_rule": "非空白 Unicode 字符，标点计入",
+                             "formula": "ceil((characters/reading_chars_per_sec+settle_sec)*fps)/fps"},
+            "card_costs": cards, "voice_costs": voices}
+
+
+def card_reading_seconds(text) -> float:
+    """一张卡的**阅读帧数**换算出的秒数（主专题 §6.1 的固定公式）.
+
+    `ceil((非空白 Unicode 码点数 / reading_chars_per_sec + settle_sec) * MERGE_FPS)`；
+    **标点计数、换行不计数**。这是展示假设，必须随清单记录。
+    """
+    from shared.screen_cards import profile as _profile
+    _p = _profile.active_profile()
+    _n = _profile.countable_chars(text)
+    _frames = _profile.reading_frames(_n, _p)
+    from shared.media_contract import MERGE_FPS
+    return _frames / float(MERGE_FPS)

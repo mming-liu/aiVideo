@@ -655,6 +655,18 @@ def _mask_subjects(text: str, names: set) -> str:
     return masked
 
 
+def _ff_existing_state(clause: str, names: set) -> bool:
+    """状态/否定限定紧贴动作词时，不把当前事实倒推成尚未发生。"""
+    verbs = "|".join(re.escape(v) for v in sorted(FF_MOTION_VERBS, key=len, reverse=True))
+    return bool(re.search(r"(?:已经|早已|依旧|始终|一直|尚未|并未|没有|不曾|仍|尚|已|未|不)(?:" + verbs + r")",
+                          _mask_subjects(clause, names)))
+
+
+def _ff_actor_motion(clause: str, names: set) -> bool:
+    """只能给明确领句的人物动作生成人体前态；名词宾语不能继承人体姿态。"""
+    return any(clause.strip().startswith(n) for n in names if n) and not _ff_existing_state(clause, names)
+
+
 def _collect_ff_action_moments(text: str, characters=None) -> list[dict]:
     """分句，收集含 进行态/过渡态/持续动作 的分句（= 独立"动作时刻"）.
 
@@ -673,6 +685,8 @@ def _collect_ff_action_moments(text: str, characters=None) -> list[dict]:
             continue
         if "即将" in clause:
             continue  # 逼近瞬间的定格：可画，保留
+        if _ff_existing_state(clause, names):
+            continue
         masked = _mask_subjects(clause, names)
         if any(v in masked for v in FF_MOTION_VERBS):
             kind = "motion"
@@ -741,6 +755,9 @@ def _drop_followup_motion(clauses: list[str], characters=None) -> list[str]:
     out: list[str] = []
     for c in clauses:
         if "即将" in c:
+            out.append(c)
+            continue
+        if _ff_existing_state(c, names):
             out.append(c)
             continue
         masked = _mask_subjects(c, names)
@@ -828,7 +845,7 @@ def _detect_preaction_anchor(clauses: list[str], characters=None,
         if "即将" in c:
             continue
         masked = _mask_subjects(c, names)
-        if any(v in masked for v in FF_MOTION_VERBS):
+        if any(v in masked for v in FF_MOTION_VERBS) and _ff_actor_motion(c, names):
             return _motion_archetype(c, masked, watery)
         if any(w in masked for w in FF_TRANSITION_MARKERS):
             return "transition"
@@ -871,10 +888,7 @@ def _preactionize_strike(clause: str, names: set) -> str:
 
 def _preactionize_ff_motion(clause: str, names: set) -> str:
     """进行态动作分句 → 前一刻（长词短语替换优先，刺/劈/砍/挥走目标保留正则）."""
-    # Inanimate movement subjects must not be rewritten into a human pose.
-    # 审核实测：马车疾驰 → 马车身体前倾，蓄势待发（语义完全错误）。
-    _subject_head = clause[:14]
-    if any(w in _subject_head for w in ("马车", "车辆", "船", "舟", "轿", "辇")):
+    if not _ff_actor_motion(clause, names):
         return clause
     if any(v in _mask_subjects(clause, names) for v in ("刺", "劈", "砍", "斩", "挥", "砸下")):
         return _preactionize_strike(clause, names)
@@ -1056,6 +1070,9 @@ def normalize_ff_desc(ff_desc: str, shot: dict | None = None,
         is_transition = any(w in masked for w in FF_TRANSITION_MARKERS)
         is_sustained = any(w in masked for w in FF_SUSTAINED_TO_POSE)
 
+        if _ff_existing_state(c, names) or (is_motion and not _ff_actor_motion(c, names)):
+            out.append(c)
+            continue
         if is_motion:
             if not preaction_done:
                 out.append(_preactionize_ff_motion(c, names))

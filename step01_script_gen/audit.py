@@ -94,7 +94,48 @@ AUDIT_SCHEMA = {
                                  "repair_targets"],
                     "additionalProperties": False,
                 },
-            }
+            },
+            # §14 P2（2026-10-03）**窄协议：身份关系声明**。
+            #
+            # 为什么必须加：`LAYOUT_SPURIOUS_ENTITY` 这类问题说「某称谓与某已在场人物
+            # 是重复实体，删掉」，但契约里**没有任何字段**能表达那条关系——代码只剩
+            # 「照做」或「猜」两条路。实测（批次 20261003T182636-d26992-001-564d9b
+            # ch2）：模型照做删对了，`group_actor_continuity` 又按文本加了回来，
+            # 整轮被记成「模型没修好」（`no_target_resolved`）→ BLOCK。
+            #
+            # 语义（**只管一件事**）：声明「这个称谓指的是那个已在场人物」。
+            #   · 不是角色名册，不是新人物，不参与人物数/肖像/参考图任何统计；
+            #   · `identifier` 必须**已经**在本稿 `characters` 里；
+            #   · 不声明 ⇒ 身份关系**未知**（既不能据此删条目，也不能据此判「是另一
+            #     个人」）；**默认空表**，旧响应缺这个键一律按「未声明」读。
+            # 不放进顶层 `required`：旧响应缺它必须仍然合法（兼容读法在
+            # `_normalize_character_aliases`）。
+            "characters": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "identifier": {
+                            "type": "string",
+                            "description": ("本稿 `characters` 里**已存在**的角色 "
+                                            "identifier（逐字照抄，不要新造）"),
+                        },
+                        "aliases": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": ("指向该同一实体的**表层称谓**（如布局条目里"
+                                            "写的「小厮」）。只写你**有证据**的那些；"
+                                            "给不出证据就不要写这条。"),
+                        },
+                        "evidence": {
+                            "type": "string",
+                            "description": "原文或帧内证据（为什么这两个写法是同一实体）",
+                        },
+                    },
+                    "required": ["identifier", "aliases"],
+                    "additionalProperties": False,
+                },
+            },
         },
         "required": ["issues"],
         "additionalProperties": False,
@@ -106,6 +147,7 @@ _AUDIT_SYSTEM = """你是独立分镜审查员。不要证明脚本优秀，只�
 **只输出 JSON**（严格遵守给定 schema：不要 markdown 报告、不要标题、不要项目符号列表、不要在 JSON 之外写任何说明）。
 先逐镜扫描全章，再统一输出问题，避免修复一处后才发现下一处。优先报告所有确定影响剧情或可执行性的 blocking，再报告 warning/info；总数最多 20 条，数量不足时舍弃 warning/info。每条 evidence/impact/minimal_fix 尽量控制在 80 字以内。每个问题必须给出镜头、字段、证据和最小修复建议。程序检查是最终权威。
 逐镜检查明显错词、连续重复词句、截断文本和跨字段状态矛盾；相同缺陷出现在多个镜头时逐镜给出字段与证据。
+证据字段契约：文本问题的 evidence 必须是 field_path 所指字段中逐字连续出现的缺陷片段（保持原始文字和标点，不加引号外壳、字段名前缀或解释；不要用省略号拼接）。解释、正确对照与原因放进 impact，修法放进 minimal_fix。程序用该片段在修前/修后字段中的存在性区分是否真的修掉问题；把“prompt 写着……因此有问题”整句当 evidence 会使这条证据无法用于验收。跨字段矛盾引用被点名待修字段里的问题片段，在 impact 说明另一侧依据。缺失项或非文本关系没有可引用片段时，如实说明缺失，不伪造逐字证据。
 
 帧职责边界（必须遵守）：
 - frame_id=ff：只审「动作开始前的准备态」。不得要求 ff 已经完成 motion_desc 中的过程动作或 lf_desc 中的结果动作。
@@ -243,10 +285,56 @@ _AUDIT_RULES_TEMPLATE = """# 审查规则
   `frame_layouts.kfs[0][1].name`（叶子）时，系统只被授权改**这个名字**——删除造成的列表长度变化
   会被**原样回填**，删除白做，还会被记成"没修好"。**凡建议删除/新增条目，目标就写列表本身。**
   仍然**不要**写整张 `frame_layouts.kfs`（那是**所有**关键帧，会一并放开）。
+- **某一帧的人物列表整块缺失时**（本镜有 `ff_desc` / `lf_desc`，`frame_layouts` 里却没有 `ff` / `lf` 这一项），
+  要**新建**它就把目标写成 `frame_layouts.ff` / `frame_layouts.lf` 本身：授权它会新写这一帧的人物列表
+  （一帧一个非空列表，每项含 `name` / `on_screen` / `position` / `pose` / `gaze_target` / `props`）。
+  这是**唯一**允许指向"此刻还不存在的字段"的情形——其余路径一律必须是本稿里**真实存在**的叶子。
 - **列了列表本身之后，那一帧里只允许纯增删**：保留下来的条目会被**逐字核对**（字段、相对顺序都不许变）。同轮想顺带改写某个保留条目的字段，会让整轮被拒——一条问题只做一件事。
 - `shot_id` / `field_path` 仍要填，用来**定位问题出现在哪里**（可与 repair_targets 不同：问题出现在这镜，要改的是别的镜）。
 严重级别：blocking=确定影响剧情/可执行性；warning=可能影响；info=优化建议。
+
+## characters[].aliases（**身份关系声明**，与上面的问题清单并列的根级字段）
+
+你建议「某个称谓与某个已在场人物是**同一实体**，删掉多余条目」时，**必须**在根级
+`characters` 里把这条关系显式写出来，否则修复端拿不到裁决依据：
+
+```json
+"characters": [
+  {{"identifier": "张十三", "aliases": ["小厮"], "evidence": "原文此段只有张十三在场，小厮是他随从的泛称，不是第二个角色"}}
+]
+```
+⚠️ 上面这段是 JSON 示例（`{{`/`}}` 是模板转义，实际输出写单个花括号）。
+
+- `identifier` 必须**逐字照抄**本稿 `characters` 里已有的 identifier，**不要新造角色**。
+- `aliases` 写指向**同一实体**的表层称谓（就是布局条目 `name` 里那个写法）。
+- **这不是角色名册**：只写你声明了身份关系的那些；没有关系要声明就写 `[]`（或省略）。
+- **给不出同一实体的证据就不要写**——写了会被当作「同一实体」用于裁决（决定那条
+  删除是否保留）；反过来，**不写**等于「身份未知」，系统**不会**替你猜，那条删除
+  会停在 `repair_capability_missing` 上、整轮拿不到结论。
+- 只说明**类别**的称谓（「小厮」「家丁」「船夫」这类泛称）**本身不构成**同一实体的
+  证据，也不构成「是另一个人」的证据——两个方向都必须由你按原文给出关系。
 """
+
+
+#: 审计上下文里原文的字符上限（主审计与补全**共用**同一条，不各写一份）
+AUDIT_NOVEL_MAX_CHARS = 12000
+
+
+def _audit_context_block(novel_text: str, plan: dict | None, script: dict) -> str:
+    """审计上下文：**原文 / 故事规划 / 当前分镜**——主审计与补全请求共用同一份渲染.
+
+    复核 2026-10-04 第三轮 P1：补全请求此前**不带任何上下文**，生产者只看到几条问题
+    的摘要，连"改哪一镜的哪个字段"都要靠猜；两条只有后半段修复关系不同的问题会发出
+    **完全相同**的请求。上下文块抽出来共用，两处看到的是同一份冻结稿与同一份原文。
+    """
+    return (f"""# 原文
+{(novel_text or '')[:AUDIT_NOVEL_MAX_CHARS]}
+
+# 故事规划
+{json.dumps(plan or {}, ensure_ascii=False)}
+
+# 当前分镜（本节编号即问题清单里 `issue_index` 所依据的版本）
+{json.dumps(_compact_script(script), ensure_ascii=False)}""")
 
 
 def build_audit_prompt(novel_text: str, plan: dict | None, script: dict,
@@ -261,21 +349,19 @@ def build_audit_prompt(novel_text: str, plan: dict | None, script: dict,
 # 定向审查项
 {focus_lines}
 
-# 原文
-{(novel_text or '')[:12000]}
-
-# 故事规划
-{json.dumps(plan or {}, ensure_ascii=False)}
-
-# 当前分镜
-{json.dumps(_compact_script(script), ensure_ascii=False)}
+{_audit_context_block(novel_text, plan, script)}
 
 {_AUDIT_RULES_TEMPLATE.format(hook_rule=hook_rule)}
 """
 
 
-def _parse_issues_with_status(text: str) -> tuple[list[dict], str]:
-    """Parse audit output and distinguish empty from malformed JSON."""
+def _audit_root(text: str) -> "dict | None":
+    """审计响应 → **根对象**（dict）；不可解析 / 根不是对象一律返回 `None`.
+
+    抽出来是因为「issues」与「characters[].aliases」（§14 P2 窄协议）两个消费方
+    必须看**同一份**根对象——各自再解一遍 JSON 就会出现「一个说 parse_failed、
+    另一个说 ok」的分叉。
+    """
     raw = (text or "").strip()
     raw = re.sub(r"^```json\s*", "", raw, flags=re.MULTILINE)
     raw = re.sub(r"^```\s*", "", raw, flags=re.MULTILINE)
@@ -285,23 +371,64 @@ def _parse_issues_with_status(text: str) -> tuple[list[dict], str]:
     except Exception:
         start, end = raw.find("{"), raw.rfind("}")
         if start < 0 or end < 0:
-            return [], "parse_failed"
+            return None
         try:
             data = json.loads(raw[start:end + 1])
         except Exception:
-            return [], "parse_failed"
-    if isinstance(data, dict):
-        issues = data.get("issues")
-    else:
-        # v6.134.1（审核，2026-09-26）：**只接受根对象里的 `issues` 数组**。
-        # AUDIT_SCHEMA 要求根对象必含 `issues`；顶层 JSON 数组不符合契约，此前
-        # 却被整份当作 issues——顶层 `[]` 尤其危险：合法 JSON、解析 ok、零条问题，
-        # 等于把「响应无效」当成「审计通过」（比 BLOCK 更危险的静默假绿）。
-        # 服务端 schema 执行不能当作保障（台账实测 19 轮 1 轮输出不合预期），
-        # 根形状必须在本地 fail-closed。
-        issues = None
+            return None
+    return data if isinstance(data, dict) else None
+
+
+def _normalize_character_aliases(root: "dict | None") -> list[dict]:
+    """`characters[].aliases`（§14 P2 窄协议）的**宽容读**.
+
+    协议（生产者侧声明「某称谓与某已在场人物是**同一实体**」）：
+
+        "characters": [{"identifier": "张十三", "aliases": ["小厮"],
+                        "evidence": "<原文/帧内证据>"}]
+
+    **宽容读**（本函数只做形状归一，不猜语义）：
+      · 缺 `characters`（旧响应的兼容读法）⇒ **空表** = 「未声明任何身份关系」，
+        不是「声明了没有关系」。消费者据此判 `ambiguous`，**不得**当成「另一实体」；
+      · `identifier` 或 `aliases` 缺失/类型不对 ⇒ **整条丢弃**（不猜它的意图）；
+      · `aliases` 里非字符串 / 空串 ⇒ 逐项丢弃；
+      · 同一条里重复的写法去重，保持出现顺序。
+    """
+    if not isinstance(root, dict):
+        return []
+    raw = root.get("characters")
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        ident = str(item.get("identifier") or "").strip()
+        aliases = item.get("aliases")
+        if not ident or not isinstance(aliases, list):
+            continue
+        seen: list[str] = []
+        for a in aliases:
+            if not isinstance(a, str):
+                continue
+            name = a.strip()
+            if name and name != ident and name not in seen:
+                seen.append(name)
+        if not seen:
+            continue
+        out.append({"identifier": ident, "aliases": seen,
+                    "evidence": str(item.get("evidence") or "")})
+    return out
+
+
+def _parse_audit_payload(text: str) -> "tuple[list[dict], str, list[dict]]":
+    """审计响应 → `(issues, status, character_aliases)`——**一次**解析，三方同源."""
+    root = _audit_root(text)
+    if root is None:
+        return [], "parse_failed", []
+    issues = root.get("issues")
     if not isinstance(issues, list):
-        return [], "parse_failed"
+        return [], "parse_failed", []
     # v6.114（审核）：**只检查 `issues` 是列表**会放行形状错误的 JSON——
     # 实测 `{"issues":[1,2]}` 与 `{"issues":[{"foo":1}]}` 都被判 `ok` + 零问题，
     # 于是「审计没跑对」被当成「审计通过」（比 BLOCK 更危险：静默假绿）。
@@ -317,13 +444,28 @@ def _parse_issues_with_status(text: str) -> tuple[list[dict], str]:
     #   层本来就能吃下它；大小写不改变语义，不属于放水。
     for item in issues:
         if not isinstance(item, dict):
-            return [], "parse_failed"
+            return [], "parse_failed", []
         if str(item.get("severity") or "").strip().lower() not in ("blocking", "warning", "info"):
-            return [], "parse_failed"
+            return [], "parse_failed", []
         if not any(str(item.get(k) or "").strip()
                    for k in ("evidence", "impact", "minimal_fix", "message")):
-            return [], "parse_failed"
-    return list(issues), "ok"
+            return [], "parse_failed", []
+    return list(issues), "ok", _normalize_character_aliases(root)
+
+
+def _parse_issues_with_status(text: str) -> tuple[list[dict], str]:
+    """Parse audit output and distinguish empty from malformed JSON.
+
+    ⚠️ 返回值**形状不变**（历史调用方与单测按二元组断言）。身份关系声明走
+    `_parse_audit_payload` / `parse_audit_payload`。
+    """
+    issues, status, _characters = _parse_audit_payload(text)
+    return issues, status
+
+
+def parse_audit_payload(text: str) -> "tuple[list[dict], str, list[dict]]":
+    """公开入口：`(issues, status, character_aliases)`（§14 P2 窄协议）."""
+    return _parse_audit_payload(text)
 
 
 def _parse_issues(text: str) -> list[dict]:
@@ -339,20 +481,29 @@ def _normalize_repair_targets(item: dict) -> "list | None":
     把两者都归一成 `[]`，会让「模型明确说不修」被当成「旧条目没提供」而回退到定位
     字段推导——正是这次要修掉的那类静默降级。
 
-    只做**形状**归一（丢空值/非对象条目）；**路径是否真实存在**由授权层按当前镜头
-    逐项校验（`repair_fields.validate_repair_targets`）——解析层拿不到镜头对象。
+    只做**形状**归一；**路径是否真实存在**由授权层按当前镜头逐项校验
+    （`repair_fields.validate_repair_targets`）——解析层拿不到镜头对象。
+
+    ⚠️ **坏成员不得被过滤成半组**（复核 2026-10-04 第三轮）。既有边界是「一条问题的
+    成对目标**任一成员无效 ⇒ 整条拒绝**」（v6.119：半组修出来的东西自相矛盾）。
+    旧实现在这里把非对象/缺字段的成员**丢掉**，剩下的组成"半组"继续往下走——
+    授权层拿到的已经是过滤后的列表，看不到被丢的那一半，
+    「任一成员无效则整条零授权」这条边界因此**可绕**。
+    现在：**先整组看一遍，有一个坏成员就整条返回 `[]`**（显式零授权；三态不变）。
     """
     if "repair_targets" not in (item or {}):
         return None
     raw = (item or {}).get("repair_targets")
+    if not isinstance(raw, list):
+        return []
     out: list = []
-    for _entry in (raw if isinstance(raw, list) else []):
+    for _entry in raw:
         if not isinstance(_entry, dict):
-            continue
+            return []
         _sid = str(_entry.get("shot_id") or "").strip()
         _fp = str(_entry.get("field_path") or "").strip()
         if not _sid or not _fp:
-            continue
+            return []
         out.append({"shot_id": _sid, "field_path": _fp})
     return out
 
@@ -376,6 +527,17 @@ def _schema_deviations(issues: list) -> list:
         return []
     total = len(issues)
     out: list = []
+    _bad_group = 0
+    for _i in issues:
+        _raw = _i.get("repair_targets") if isinstance(_i, dict) else None
+        if isinstance(_raw, list) and any(
+                (not isinstance(_e, dict)
+                 or not str(_e.get("shot_id") or "").strip()
+                 or not str(_e.get("field_path") or "").strip()) for _e in _raw):
+            _bad_group += 1
+    if _bad_group:
+        out.append(f"{_bad_group}/{total} 条 `repair_targets` 含无效成员"
+                   f"——按「任一成员无效则整条零授权」处置")
     _missing_code = sum(1 for i in issues if not str(i.get("code") or "").strip())
     if _missing_code:
         out.append(f"{_missing_code}/{total} 条缺 `code`（schema required）"
@@ -436,6 +598,20 @@ class AuditResult:
     # 的用量都不进产物，事后无法还原（总用量 = 本字段各次 + 顶层 usage）。
     # 只记**被重试覆盖**的尝试；最后一次失败已由顶层 raw_text/usage 覆盖，不重复。
     failed_attempts: list = field(default_factory=list)
+    # A3（复核 2026-10-04 第三轮）：**授权元数据补全**那一次调用的完整记录
+    # （`call_id` / 成败 / 响应头与长度 / 用量 / 请求与补上的条数），或 `{"skipped": 原因}`。
+    # 补全也是**真实发出的一次调用**——计入 `attempts`，用量在这里单列
+    # （审计总量 = 顶层 `usage` + 本字段的 `usage`），不再出现"实际发了 2 次、只报 1 次"。
+    completion: dict | None = None
+    # §14 P2（2026-10-03）：**身份关系声明**（`characters[].aliases` 窄协议）.
+    # 形状 `[{"identifier": str, "aliases": [str], "evidence": str}]`，已归一。
+    # **空表 = 未声明任何身份关系**（旧响应缺该键的兼容读法），不是「声明了没关系」。
+    character_aliases: list = field(default_factory=list)
+
+
+#: A3 补全的单次上限与输出上限（有界：不为补一个字段把请求撑大）
+AUDIT_TARGET_COMPLETION_MAX = 8
+AUDIT_TARGET_COMPLETION_MAX_TOKENS = 2000
 
 
 def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
@@ -512,6 +688,246 @@ def final_audit_request_identity(novel_text: str, plan: dict | None, script: dic
     return _hashlib.sha256(
         _json.dumps(_blob, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# A3：**有界补全授权元数据**（复核 2026-10-04 决定采用）
+# ---------------------------------------------------------------------------
+#: `repair_targets` 规则段在审计规则模板里的标题（切段用，**不手抄规则**）
+AUDIT_REPAIR_TARGETS_HEADING = "## repair_targets"
+
+
+def _repair_targets_subschema() -> dict:
+    """`repair_targets` 的子 schema——**从 `AUDIT_SCHEMA` 取**，不另抄一份."""
+    import copy as _copy
+    return _copy.deepcopy(
+        AUDIT_SCHEMA["schema"]["properties"]["issues"]["items"]["properties"]["repair_targets"])
+
+
+def _repair_targets_rule_block() -> str:
+    """`repair_targets` 的规则段——**从 `_AUDIT_RULES_TEMPLATE` 里切出来**（单一来源）.
+
+    另抄一份规则的代价这个仓库已经付过（复核之十二：「提示手抄一份、应用器另一份，
+    改一处漏一处」）。这里按标题切段，模板改了这里跟着变；`audit_prompt_version()`
+    本来就把整份模板算进哈希，旧审计结论照旧自动失效。
+    """
+    _t = _AUDIT_RULES_TEMPLATE
+    _i = _t.find(AUDIT_REPAIR_TARGETS_HEADING)
+    if _i < 0:
+        return ""
+    _j = _t.find(chr(10) + "## ", _i + len(AUDIT_REPAIR_TARGETS_HEADING))
+    return _t[_i:_j if _j > 0 else len(_t)].rstrip()
+
+
+def _target_completion_schema() -> dict:
+    return {
+        "name": "audit_repair_targets",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "targets": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "issue_index": {
+                                "type": "integer",
+                                "description": "要补的那条问题的**序号**（见上文列表里的 issue_index）"},
+                            "repair_targets": _repair_targets_subschema(),
+                        },
+                        "required": ["issue_index", "repair_targets"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["targets"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _target_completion_prompt(items: list, *, novel_text: str, plan: dict | None,
+                              script: dict) -> str:
+    """补全请求：**带上冻结稿与原文**，只问 `repair_targets`.
+
+    复核 2026-10-04 第三轮 P1：此前不带上下文、且把 `evidence` / `minimal_fix` 截到
+    200 字 —— 两条**只有后半段修复关系不同**的问题会发出完全相同的请求，生产者无从
+    区分该改哪组目标（`minimal_fix` 里"要一起改的另外几处"恰恰长在句尾）。
+    现在：完整上下文（与主审计同一份渲染）＋**逐字**问题记录，不截断。
+    """
+    _lines = [
+        "下面是从你上一轮的审计结论里摘出的条目：**问题本身已经确认，不许改写、不许删除、"
+        "不许改判严重级别**——它们缺的只是 `repair_targets`（修复侧唯一的授权依据）。",
+        "请**只**为每一条补上 `repair_targets`：「要修好这条问题，必须**一起**修改的全部镜头与字段」。",
+        "",
+        _audit_context_block(novel_text, plan, script),
+        "",
+        _repair_targets_rule_block(),
+        "",
+        "## 要补的条目（`issue_index` 是**上面那份「当前分镜」**对应的清单编号）",
+    ]
+    for _n, _it in enumerate(items, 1):
+        _lines.append(
+            "%d) issue_index=%d｜code=%s｜shot_id=%s｜frame_id=%s｜field_path=%s"
+            % (_n, _it["idx"], _it["code"], _it["shot_id"], _it["frame_id"], _it["field_path"]))
+        if _it["evidence"]:
+            _lines.append("   evidence：%s" % _it["evidence"])
+        if _it["minimal_fix"]:
+            _lines.append("   minimal_fix：%s" % _it["minimal_fix"])
+        if _it["impact"]:
+            _lines.append("   impact：%s" % _it["impact"])
+    _lines += [
+        "",
+        "## 输出格式",
+        '{"type": "json_object", "targets": [{"issue_index": %d, "repair_targets": '
+        '[{"shot_id": "5", "field_path": "ff_desc"}]}]}' % items[0]["idx"],
+        "上文每一条都要出现一次。确实无法确定要改哪个字段时给空数组 `[]`"
+        "（那表示这一条本轮不进入定向修复）——**不要**用编造的路径充数，"
+        "路径必须落在本稿该镜的真实字段上。",
+    ]
+    return chr(10).join(_lines)
+
+
+def _complete_missing_repair_targets(parsed: list, out: list, *, service, model,
+                                     timeout_sec: int, deadline_ts, min_useful_sec,
+                                     remaining_calls: int, novel_text: str,
+                                     plan: dict | None, script: dict) -> tuple:
+    """给**缺 `repair_targets` 的 blocking 条目**补一次授权元数据；返回说明行（进偏离记录）.
+
+    边界（复核 2026-10-04 决定）：
+
+    - **只补该字段**：命中的 `Issue` 只改 `repair_targets`，`message` / `severity` /
+      `code` / `evidence` 一律不动；响应里多出来的东西（新条目、改判）**全部忽略**。
+    - **合法 `[]` 保持零授权**：只处理**键缺失或为 `null`** 的条目——模型明确写 `[]`
+      是"这条没有明确修复目标"，那是它的结论，不去覆盖。
+    - **有界**：一次最多 `AUDIT_TARGET_COMPLETION_MAX` 条；超出部分留给下一轮，
+      不为补字段把请求撑大。
+    - **共用既有预算与截止**：与审计重采样同一套（`timeout_sec` / `deadline_ts` /
+      `min_useful_sec`），**并消耗剩余重试预算**——`remaining_calls <= 0` 就**不发**。
+      复核 2026-10-04 第三轮实测：旧写法不看预算，`AUDIT_PARSE_RETRIES=0` 时实际发了
+      2 次调用而只报 1 次；补全把"重试预算"这张牌**暗中改大了**。
+    - **调用要入账**：返回 `(说明行, 记录 | None)`；记录含序号 / `call_id` / 成败 /
+      响应头部与长度 / 用量 / 请求条数与实际补上条数，调用方据此计入 `attempts` 与产物。
+      复核 2026-10-04 第四轮：`called` **只在真的发出调用时**为真——请求准备失败记
+      `request_failed` 且 `called=False`（**不占预算、不算 attempt**），调用异常记
+      `exception` 且 `called=True`；两类都保留原 blocking，绝不虚记一次调用。
+    - **失败保留原问题**：调用失败、解析失败、序号越界、形状非法，一律按"没补上"处理，
+      原 blocking 原样保留（零授权 ⇒ 与补全之前完全一致），其余合法目标照常修。
+    """
+    _idx: list = []
+    for _i, _rec in enumerate(parsed or []):
+        if not isinstance(_rec, dict):
+            continue
+        if _i >= len(out or []):
+            break
+        if not str(getattr(out[_i], "severity", "")) == "visual_risk":
+            continue                       # 只补 blocking（advisory 不参与提交门）
+        if "repair_targets" in _rec and _rec.get("repair_targets") is not None:
+            continue                       # 有值（含合法 `[]`）⇒ 是结论，不覆盖
+        _idx.append(_i)
+    if not _idx:
+        return [], None
+    _cap = _env_int("AUDIT_TARGET_COMPLETION_MAX", AUDIT_TARGET_COMPLETION_MAX, minimum=0)
+    if _cap <= 0:
+        return [], None
+    if int(remaining_calls or 0) <= 0:
+        return (["%d 条 blocking 缺 `repair_targets`，补全**未发起**（重试预算已用尽）"
+                 "——这些条目保持零授权" % len(_idx)],
+                {"called": False, "skipped": "budget_exhausted",
+                 "requested": len(_idx), "filled": 0})
+    _skipped = max(0, len(_idx) - _cap)
+    _idx = _idx[:_cap]
+    _items = [{
+        "idx": _n,
+        "code": str(parsed[_i].get("code") or ""),
+        "shot_id": str(parsed[_i].get("shot_id") or ""),
+        "frame_id": str(parsed[_i].get("frame_id") or ""),
+        "field_path": str(parsed[_i].get("field_path") or ""),
+        "evidence": str(parsed[_i].get("evidence") or ""),
+        "minimal_fix": str(parsed[_i].get("minimal_fix") or ""),
+        "impact": str(parsed[_i].get("impact") or ""),
+    } for _n, _i in enumerate(_idx, 1)]
+
+    import time as _time
+    _left = None
+    if deadline_ts is not None:
+        _left = float(deadline_ts) - _time.time()
+        _min_useful = float(min_useful_sec if min_useful_sec is not None
+                            else _env_int("AUDIT_MIN_USEFUL_SEC",
+                                          AUDIT_MIN_USEFUL_SEC_DEFAULT, minimum=1))
+        if _left < _min_useful:
+            return (["%d 条 blocking 缺 `repair_targets`，补全未发起（剩余 %.1fs < %.1fs）"
+                     "——这些条目保持零授权" % (len(_idx), _left, _min_useful)],
+                    {"called": False, "skipped": "deadline",
+                     "requested": len(_idx), "filled": 0})
+    # 复核 2026-10-04 第四轮 P2：请求**准备**（构造 `TextGenerationRequest`）与**实际调用**
+    # 原先挤在同一个 `except` 里，异常一律记 `called=True`——内存故障注入实测：真的只发出
+    # 1 次调用，台账报 2 次。`called` 是"这张牌打出去了没有"的唯一凭据（调用方据此
+    # `_attempts += 1`、并写进审计台账），必须**紧邻实际调用**置位，两类失败分开记名。
+    _base = {"called": False, "requested": len(_idx), "filled": 0}
+    try:
+        _req = TextGenerationRequest(
+            system_prompt=_AUDIT_SYSTEM,
+            user_prompt=_target_completion_prompt(_items, novel_text=novel_text,
+                                                  plan=plan, script=script),
+            max_tokens=AUDIT_TARGET_COMPLETION_MAX_TOKENS,
+            temperature=0.0,
+            json_schema=_target_completion_schema(),
+            model=model,
+            timeout_sec=int(min(timeout_sec, _left)) if _left is not None else timeout_sec,
+        )
+    except Exception as exc:                                     # noqa: BLE001
+        return (["%d 条 blocking 缺 `repair_targets`，补全请求准备失败（%s: %s）"
+                 "——这些条目保持零授权" % (len(_idx), type(exc).__name__, exc)],
+                dict(_base, skipped="request_failed",
+                     error="%s: %s" % (type(exc).__name__, exc)))
+    _base["called"] = True                    # 紧邻 `service.generate`：只有真的发出才算打出去
+    try:
+        _res = service.generate(_req)
+    except Exception as exc:                                     # noqa: BLE001
+        return (["%d 条 blocking 缺 `repair_targets`，补全调用异常（%s: %s）"
+                 "——这些条目保持零授权" % (len(_idx), type(exc).__name__, exc)],
+                dict(_base, skipped="exception",
+                     error="%s: %s" % (type(exc).__name__, exc)))
+    _rec = {"called": True, "requested": len(_idx), "filled": 0,
+            "call_id": str(getattr(_res, "call_id", "") or ""),
+            "ok": bool(getattr(_res, "success", False)),
+            "error": str(getattr(_res, "error", "") or "")[:300],
+            "truncated": bool(getattr(_res, "truncated", False)),
+            "usage": getattr(_res, "usage", None),
+            "_text": str(getattr(_res, "text", "") or "")}
+    if not _rec["ok"]:
+        return (["%d 条 blocking 缺 `repair_targets`，补全调用失败（%s）"
+                 "——这些条目保持零授权" % (len(_idx), _rec["error"][:120])], _rec)
+    _root = _audit_root(_rec["_text"])
+    _rows = (_root or {}).get("targets") if isinstance(_root, dict) else None
+    if not isinstance(_rows, list):
+        return (["%d 条 blocking 缺 `repair_targets`，补全响应不可解析"
+                 "——这些条目保持零授权" % len(_idx)], _rec)
+    _filled = 0
+    for _row in _rows:
+        if not isinstance(_row, dict):
+            continue
+        _n = _row.get("issue_index")
+        if not isinstance(_n, int) or isinstance(_n, bool) or not 1 <= _n <= len(_idx):
+            continue                       # 序号越界/非法 ⇒ 忽略这一行
+        _rt = _normalize_repair_targets({"repair_targets": _row.get("repair_targets")})
+        if not _rt:
+            continue                       # 形状非法或空 ⇒ 不写（保持零授权）
+        _target = out[_idx[_n - 1]]
+        if getattr(_target, "repair_targets", None):
+            continue                       # 已有授权的不覆盖（并发/重复行）
+        _target.repair_targets = _rt
+        _filled += 1
+    _note = ("%d 条 blocking 缺 `repair_targets`——已按 A3 补全 %d 条"
+             "（只补该字段，原问题未改写）" % (len(_idx), _filled))
+    if _filled < len(_idx):
+        _note += "；其余 %d 条保持零授权" % (len(_idx) - _filled)
+    if _skipped:
+        _note += "；另有 %d 条超出单次上限（%d）未补，原样保留" % (_skipped, _cap)
+    _rec["filled"] = _filled
+    return [_note], _rec
 
 
 def run_same_model_audit_with_status(
@@ -701,7 +1117,9 @@ def run_same_model_audit_with_status(
                                str(getattr(result, "text", "") or ""), usage=_usage,
                                attempts=_attempts, failed_attempts=_failed_attempts,
                                **_chan)
-        parsed, status = _parse_issues_with_status(result.text)
+        # §14 P2：issues 与身份关系声明**同一次解析**（`_parse_audit_payload`）——
+        # 各自再解一遍会出现「一个说 parse_failed、另一个说 ok」的分叉。
+        parsed, status, _character_aliases = _parse_audit_payload(result.text)
         if status == "ok":
             break
         if _attempts > _parse_retries:
@@ -747,8 +1165,29 @@ def run_same_model_audit_with_status(
             repair_targets=_rt,
             repairable=True,
         ))
+    # A3（复核 2026-10-04）：blocking 条目缺 `repair_targets` 时，向**同一个审计者**
+    # 追一次**只补这一个字段**的请求——否则整份可用审计会因缺一个字段被判成
+    # 「零授权 ⇒ 必然 BLOCK」（章 2 实测：13/13 条缺，其中 5 条 blocking 全零授权，
+    # 模型按审计建议做的修改被逐条回填）。
+    # 补全与重采样**共用同一份剩余预算**（`_parse_retries + 1` 是本次审计的调用总量）
+    _comp_notes, _comp_rec = _complete_missing_repair_targets(
+        parsed, out, service=service, model=_params["model"], timeout_sec=timeout_sec,
+        deadline_ts=deadline_ts, min_useful_sec=min_useful_sec,
+        remaining_calls=max(0, _parse_retries + 1 - _attempts),
+        novel_text=novel_text, plan=plan, script=script)
+    _deviations.extend(_comp_notes)
+    if _comp_rec is not None and _comp_rec.get("called"):
+        # **只有真发出去的调用**才计入 attempts（跳过/未发起不算；否则又变成账实不符）
+        _attempts += 1
+        _comp_rec["attempt"] = _attempts
+        if "_text" in _comp_rec:
+            _txt = _comp_rec.pop("_text")
+            _comp_rec["response_head"] = _txt[:2000]
+            _comp_rec["response_len"] = len(_txt)
     return AuditResult("ok", out, schema_deviations=_deviations, usage=_usage,
-                       attempts=_attempts, failed_attempts=_failed_attempts, **_chan)
+                       attempts=_attempts, failed_attempts=_failed_attempts,
+                       completion=_comp_rec,
+                       character_aliases=_character_aliases, **_chan)
 
 
 def run_same_model_audit(novel_text: str, plan: dict | None, script: dict,
@@ -763,5 +1202,5 @@ def run_same_model_audit(novel_text: str, plan: dict | None, script: dict,
 __all__ = [
     "AUDIT_SCHEMA", "AuditResult", "build_audit_prompt", "resolve_audit_channel",
     "run_same_model_audit", "run_same_model_audit_with_status", "audit_prompt_version",
-    "final_audit_request_identity",
+    "final_audit_request_identity", "parse_audit_payload",
 ]

@@ -90,6 +90,21 @@ def _api_dialect(base_url: str) -> str:
     return "openai" if any(_h in _u for _h in _OPENAI_DIALECT_HOSTS) else "doubao"
 
 
+def sent_structured_output(payload: dict) -> str:
+    """**实发的**结构化输出格式（脱敏：只报类型与 schema 名）.
+
+    D（复核 2026-10-06 第八轮）：「请求被接受 / schema 被遵守 / 候选通过验收」必须
+    **分别记账**。这条给出中间那一项的事实依据——本通道恒发 `json_object`，
+    调用方给的 `json_schema` **不下发**，所以**不得**据此声称响应受 strict 约束。
+    """
+    _rf = (payload or {}).get("response_format") or {}
+    _t = str(_rf.get("type") or "（未发）")
+    if _t == "json_schema":
+        _n = str((_rf.get("json_schema") or {}).get("name") or "")
+        return "json_schema:%s" % _n
+    return _t
+
+
 def _resolve_effort(req) -> str:
     """请求级 `reasoning_effort` → 通道级默认（**单一事实源**，`_build_payload` 与
     `generate` 的阶段轨迹共用同一份解析，不各写一遍）."""
@@ -229,7 +244,9 @@ class AgentPlanTextService(TextGenerationService):
         # 结构化输出：方舟 Doubao 稳定支持 json_object；json_schema strict 视模型而定，
         # 当前 doubao-seed-2-1-turbo 走 json_object 强约束 + 解析端 schema 二次校验
         if req.json_schema or req.user_prompt:
-            # 默认开启 json_object（生成分镜 JSON 强约束），解析端 _validate_script 兜底
+            # 保留该端点可用的 JSON 模式。OpenCode Go 的 strict 请求在同日对照中
+            # 先接受、后连最小 schema 也返回 400；不能把一次成功当成稳定能力。
+            # 业务调用方须把内部契约交给模型并在本地验收；不在 400 后隐式重发。
             payload["response_format"] = {"type": "json_object"}
         return payload
 
@@ -379,7 +396,16 @@ class AgentPlanTextService(TextGenerationService):
             f"messages={len(payload['messages'])}, "
             f"temperature={payload['temperature']}, top_p={payload['top_p']}, "
             f"seed={payload.get('seed')}, "
-            f"response_format={payload.get('response_format')}"
+            f"response_format={payload.get('response_format')}, "
+            f"指纹={AgentPlanTextService._request_fingerprint(payload)}, "
+            f"实发结构化输出={sent_structured_output(payload)}"
+            # **静默降级不许再声称受约束**（D）：调用方要 schema、本通道不下发时，
+            # 把这件事写进日志——否则读日志的人会以为响应受 strict 约束。
+            + (("｜⚠️ 调用方要的是 json_schema:%s，**本通道不下发**（形状由解析端"
+                "结构化拒收兜底）" % str((req.json_schema or {}).get("name") or ""))
+               if (req.json_schema or {}).get("name")
+               and sent_structured_output(payload)
+               != "json_schema:%s" % str((req.json_schema or {}).get("name")) else "")
         )
 
         # 重试判定/次数/退避/时间预算统一走 `_text_gen.retry_policy`（N6，2026-09-28）：

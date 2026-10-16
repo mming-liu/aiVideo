@@ -53,6 +53,7 @@ def _compute_rule_source_fingerprint() -> str:
         root / "cross_field_checks.py",
         root / "kf_structural_guard.py",
         root / "subject_attribution.py",
+        root / "weapon_states.py",
         # v6.112：约束框架的版本索引——决定「哪些约束在跑、跑的是哪一版」，
         # 与下面的 constraints/ 目录同为判定实现。
         root / "rules_index.py",
@@ -163,12 +164,12 @@ def parse_shot_ref(message: str):
     but legacy checklist text must still never collapse 13.5 into 13.
     """
     text = str(message or "")
-    if "钩子镜头" in text or "镜头hook" in text or "钩子" in text:
+    if "钩子镜头" in text or "镜头hook" in text or "钩子" in text or re.match(r"^hook(?:\s|:|：)", text, re.IGNORECASE):
         return 0, []
-    m = re.search(r"镜头\s*(\d+(?:\.\d+)?)\s*(?:→|->)\s*(\d+(?:\.\d+)?)", text)
+    m = re.search(r"(?:镜头|\bshot)\s*(\d+(?:\.\d+)?)\s*(?:→|->)\s*(?:镜头|shot)?\s*(\d+(?:\.\d+)?)", text, re.IGNORECASE)
     if m:
         return m.group(1), [m.group(2)]
-    m = re.search(r"镜头\s*(\d+(?:\.\d+)?)", text)
+    m = re.search(r"(?:镜头|\bshot)\s*(\d+(?:\.\d+)?)", text, re.IGNORECASE)
     if m:
         return m.group(1), []
     return None, []
@@ -177,10 +178,9 @@ def parse_shot_ref(message: str):
 def _frame_texts(shot: dict) -> list[tuple[str, str]]:
     out = [("ff", str(shot.get("ff_desc") or ""))]
     kfs = shot.get("keyframes") or []
-    kfs = [k for k in kfs if isinstance(k, dict)]
-    kfs.sort(key=lambda k: float(k.get("t_sec") or k.get("time_ratio") or 0))
     for i, kf in enumerate(kfs):
-        out.append((f"kf{i}", str(kf.get("desc") or "")))
+        if isinstance(kf, dict):
+            out.append((f"kf{i}", str(kf.get("desc") or "")))
     out.append(("lf", str(shot.get("lf_desc") or "")))
     return out
 
@@ -369,8 +369,6 @@ def _onscreen_prop_issues(shot: dict, shot_id) -> list[Issue]:
         return []
     issues: list[Issue] = []
     from shared.content_safety import WEAPON_WORDS as _WEAPON_WORDS
-    _HOLD = ("握着", "手持", "持刀", "持匕首", "紧握", "右手持", "左手持")
-    _RELEASE = ("已脱手", "脱手", "滑落", "掉落", "坠入", "没入", "沉入")
     frame_map = dict(_frame_texts(shot))
     for frame_id, text in frame_map.items():
         frames = layouts.get(frame_id)
@@ -392,14 +390,14 @@ def _onscreen_prop_issues(shot: dict, shot_id) -> list[Issue]:
                         field_path=f"frame_layouts.{frame_id}.on_screen", evidence=clause,
                         repairable=True,
                     ))
-        # Same-frame weapon state contradiction: explicit release + explicit hold.
-        _weapon_hit = next((w for w in _WEAPON_WORDS if w in text), "")
-        if _weapon_hit and any(w in text for w in _HOLD) and any(w in text for w in _RELEASE):
+        # Only explicit same-owner/same-weapon claims prove a contradiction.
+        from step01_script_gen.weapon_states import explicit_weapon_conflicts
+        for owner, weapon in explicit_weapon_conflicts(text, _char_names(shot)):
             issues.append(Issue(
                 code="weapon_state_conflict", severity="visual_risk",
-                message=f"同帧武器「{_weapon_hit}」既标记脱手/没入又标记持握，武器状态矛盾",
-                shot_id=shot_id, frame_id=frame_id, entity_id="",
-                field_path="prompt/ff_desc/lf_desc", evidence=text[-180:],
+                message=f"{owner} 的武器「{weapon}」同帧既明确脱手又明确持握，武器状态矛盾",
+                shot_id=shot_id, frame_id=frame_id, entity_id=owner,
+                field_path="ff_desc/lf_desc", evidence=text[-180:],
                 repairable=True,
             ))
         # Holder evidence can appear in another clause of the same frame.
@@ -444,6 +442,7 @@ def _pose_categories(text: str) -> set[str]:
 
 def _prop_release_owner_issues(shot: dict, shot_id) -> list[Issue]:
     from shared.content_safety import WEAPON_WORDS
+    from step01_script_gen.weapon_states import asserted_marker
 
     layouts = shot.get("frame_layouts")
     if not isinstance(layouts, dict):
@@ -459,7 +458,7 @@ def _prop_release_owner_issues(shot: dict, shot_id) -> list[Issue]:
             except Exception:
                 frames = []
         for clause in _clauses(text):
-            if not any(w in clause for w in release_words):
+            if not asserted_marker(clause, release_words):
                 continue
             weapon = next((w for w in WEAPON_WORDS if w in clause), "")
             if not weapon:
@@ -1434,7 +1433,10 @@ def collect_structured_issues(script: dict, blocking_categories: set[str],
         for category, result in results.items():
             if not isinstance(result, dict):
                 continue
-            for msg in list(result.get("issues") or []):
+            structured = result.get("structured_issues")
+            if isinstance(structured, list):
+                issues.extend(Issue(**record) for record in structured)
+            for msg in ([] if isinstance(structured, list) else list(result.get("issues") or [])):
                 sid, related = parse_shot_ref(str(msg))
                 issues.append(Issue(category, "hard", str(msg), sid,
                                     related_shot_ids=related, field_path=category,

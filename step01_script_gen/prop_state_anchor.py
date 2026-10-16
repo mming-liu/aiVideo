@@ -99,9 +99,11 @@ def _clause_releases_prop(clause: str, tokens) -> bool:
     """该分句是否**点名**某道具并表达释放（释放词 或 通用位移式）."""
     if not any(t in clause for t in tokens):
         return False
-    if any(m in clause for m in _ALL_RELEASE_MARKERS):
+    from step01_script_gen.weapon_states import asserted_marker
+    if asserted_marker(clause, _ALL_RELEASE_MARKERS):
         return True
-    return bool(_MOTION_AWAY_RE.search(clause))
+    return any(asserted_marker(clause, (match.group(0),))
+               for match in _MOTION_AWAY_RE.finditer(clause))
 
 
 def _prop_tokens_of(prop: str, prop_assets: dict | None) -> set:
@@ -1278,7 +1280,7 @@ def _holding_clause(text: str, tokens) -> str:
     for c in _clauses(text):
         if not any(t in c for t in tokens):
             continue
-        if any(m in c for m in _ALL_RELEASE_MARKERS) or _MOTION_AWAY_RE.search(c):
+        if _clause_releases_prop(c, tokens):
             continue
         if any(m in c for m in _PICKUP_MARKERS) or any(m in c
                                                       for m in _TRANSFER_MARKERS):

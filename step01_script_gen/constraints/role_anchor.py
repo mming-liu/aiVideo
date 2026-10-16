@@ -48,7 +48,8 @@ class RoleAnchorConstraint(Constraint):
                 )
             features = str(features or "").strip()
             if features:
-                anchors[str(name)] = features[:30]
+                # Identity descriptions must retain complete source phrases.
+                anchors[str(name)] = features
         return anchors
 
     def apply(self, ctx) -> list[RepairRecord]:

@@ -2,7 +2,7 @@
 
 L1 prompt 规则失声时（长 prompt 后段不被 LLM 关注）的确定性兜底：
 1. 「小舟/木舟/船/一叶舟」 → 「一叶无篷舴艋舟（宽1.4米，可容3人）」
-2. 「仰卧」无头部固定 → 在仰卧主语所在子句后追加「仰面朝上双目紧闭，头颈僵直不侧转」
+2. 姿态缺少头部/眼态证据 → 保留原文并报告，不从伤情补造尸体态
 3. kf pre 与 ff_desc 文本重叠 >70% → 强制改写为构图级细节
 4. char_layout 抽象位置（身旁/旁边/其侧）+ 该镜 location 场景具象词 → 改具象
 5. threat_source 角色 facing 含「背对镜头」→ 改「侧身朝目标」（规则 41）
@@ -28,7 +28,6 @@ from step01_script_gen.prompt_semantic import (
     THREAT_KEYWORDS as _THREAT_KEYWORDS,
     ATTACK_KEYWORDS as _ATTACK_KW,
     HANDLE_PROPS as _HANDLE_PROPS,
-    VAGUE_DIRECTION_KW as _VAGUE_DIRECTION_KW,
     ABSTRACT_POSITION_WORDS as _GENERIC_ABSTRACT_WORDS,
     POSE_REGISTRY as _POSE_REGISTRY,
     LYING_NO_HEAD_FIX as _LYING_NO_HEAD_FIX,
@@ -180,59 +179,7 @@ _UPRIGHT_CONFLICT_WORDS = (
 
 
 def _append_head_fix(text: str) -> str:
-    """在「仰卧」主语所在子句后追加头部固定（不追加到整段末尾）.
-
-    v6.50 修复：旧版把后缀接到整段末尾，多角色句中会修饰到错误主语
-    （实测「听香……张嘴欲呼，仰面朝上双目紧闭」「无篷舴艋舟……仰面朝上
-    双目紧闭」——头部固定被接到了呼喊者/小舟上）。改为：定位「仰卧」
-    匹配处，找其后的第一个子句边界——逗号后插入（延续同一主语），
-    句末标点前插入（保持同句），全文无边界才回落到末尾追加。
-
-    v6.50（08-29）shot13.5 变体守卫：遍历所有匹配，逐一过否定前缀 +
-    直立冲突两道守卫，全部被守卫拦下则不追加（留给修复轮/LLM 裁决）。
-    """
-    suffix = "仰面朝上双目紧闭，头颈僵直不侧转"
-    # 不重复追加（幂等）
-    if "仰面朝上双目紧闭" in text:
-        return text
-    for m in _LYING_NO_HEAD_FIX.finditer(text):
-        # 守卫 1：否定前缀（并未昏迷/不曾熟睡）
-        prefix = text[max(0, m.start() - 1): m.start()]
-        if prefix and prefix in _NEGATION_PREFIX:
-            continue
-        # 守卫 2：匹配**所在句**（回扫到句首——子句级会漏掉同句前位主语的
-        # 直立描述，shot13.5「听香捂着脸含泪俯首，吓得几乎昏迷」实测）含
-        # 直立/起身词 → 追加「仰面朝上」直接矛盾。回扫到句首宁可漏加
-        # （安全侧），不误拼。
-        clause_start = m.start()
-        while clause_start > 0 and text[clause_start - 1] not in "。；！？":
-            clause_start -= 1
-        # v6.62.9（09-10）前向扫到**句末**，不再是 m.end()+12 的定长窗。
-        # 定长窗只能看见紧邻的十来个字，睁眼态写在同句靠后位置就漏判——
-        # run5 实测 lf_desc「杨旭仍仰卧船头，…，酒壶垂在身侧，壶口朝下，
-        # 酒液洒在船板上，双眼半阖，望向画上方夜空」里「双眼半阖」距匹配点
-        # 20+ 字，守卫 3 看不到，于是「双目紧闭」被追加进同一句，
-        # 落盘成「双目紧闭…双眼半阖」自相矛盾。
-        # 与守卫 2「回扫到句首」同口径：整句可见，宁可漏加（安全侧）不误拼。
-        clause_end = m.end()
-        while clause_end < len(text) and text[clause_end] not in "。；！？":
-            clause_end += 1
-        clause = text[clause_start: clause_end]
-        if any(w in clause for w in _UPRIGHT_CONFLICT_WORDS):
-            continue
-        # 守卫 3：仰卧主语子句已含睁眼态 → 不追加（「双目紧闭」紧邻「双眼圆睁」）
-        if any(w in clause for w in _EYE_OPEN_WORDS):
-            continue
-        # 两道守卫都通过 → 在该匹配的子句后追加
-        i = m.end()
-        while i < len(text) and text[i] not in "，。；！？、":
-            i += 1
-        if i >= len(text):
-            return text.rstrip("。,，. ") + "，" + suffix
-        if text[i] in "，、":
-            return text[: i + 1] + suffix + "，" + text[i + 1:]
-        return text[:i] + "，" + suffix + text[i:]
-    # 所有匹配都被守卫拦下 → 不追加
+    """兼容入口：仰卧、受伤或昏迷不能证明闭眼与头颈僵直，保留原文交审计。"""
     return text
 
 
@@ -500,65 +447,22 @@ def _fix_vague_anchor(shot: dict) -> int:
 
 # === 规则 9：模糊方位词替换（治"回首"→朝天看） ===
 
-# _VAGUE_DIRECTION_KW 已在顶部 import 自 prompt_semantic.registry
+# 语义方位由检查与模型修订负责，不作猜测性替换。
 
 
 def _fix_vague_direction(shot: dict) -> int:
-    """Rule 9：模糊方位词替换为显式视线+空间方位.
+    """方向、视线目标和睁闭眼属于语义关系，不能从布局次序猜测。
 
-    例：
-      "回首" → "侧头凝望画X的[角色名]"（具体角色名从 char_layout 推断）
+    保留原文，由既有方向检查及语义审计反馈给模型修订。
     """
-    fixed = 0
-    # 从 char_layout 抽"被看"角色（凝视目标）
-    layout = shot.get("char_layout") or []
-    target_name = ""
-    for item in layout:
-        if not isinstance(item, dict):
-            continue
-        # 优先 role=主（非刺客），且位置和听香不同（"被看"对象）
-        n = str(item.get("name", "")).strip()
-        role = str(item.get("role", "")).strip()
-        if n and role == "主" and "刺客" not in n and "神秘人" not in n and "黑影" not in n:
-            target_name = n
-            break
-    if not target_name and layout:
-        # 兜底：第一个非刺客名字
-        for item in layout:
-            if not isinstance(item, dict):
-                continue
-            n = str(item.get("name", "")).strip()
-            if n and "刺客" not in n and "神秘人" not in n:
-                target_name = n
-                break
-    for field in ("ff_desc", "prompt"):
-        text = shot.get(field, "")
-        if not text or not isinstance(text, str):
-            continue
-        new_text = text
-        for vague, repl_tpl in _VAGUE_DIRECTION_KW.items():
-            if vague in new_text:
-                if "[角色名]" in repl_tpl and target_name:
-                    repl = repl_tpl.replace("[角色名]", target_name)
-                elif "[目标]" in repl_tpl and target_name:
-                    repl = repl_tpl.replace("[目标]", target_name)
-                else:
-                    repl = repl_tpl
-                # "画X" 占位（保留，由 prompt 后续补全）
-                if "画X" in repl:
-                    repl = repl.replace("画X", "画左")
-                new_text = new_text.replace(vague, repl, 1)
-                fixed += 1
-        if new_text != text:
-            shot[field] = new_text
-    return fixed
+    return 0
 
 
 class V643PromptEnforcementConstraint(Constraint):
     """v6.43 prompt 强化规则的硬修复层.
 
     触发场景：LLM 收到新规则但仍写老模板（"一叶小舟" / "仰卧不动" / kf 复述）。
-    修法：确定性字符串替换 + 文本重叠检测强制改写 + 模糊方位具象化。
+    修法：确定性字符串替换 + 文本重叠检测强制改写；方位语义保持原文。
     幂等：二次运行结果稳定。
     """
 
@@ -591,6 +495,14 @@ class V643PromptEnforcementConstraint(Constraint):
                 text = shot.get(field, "")
                 if not text or not isinstance(text, str):
                     continue
+                if (_rule_enabled("HEAD_FIX") and _needs_head_fix(text)
+                        and _head_fix_context_ok(shot, text)):
+                    warnings.append(RepairRecord(
+                        constraint_name=self.name,
+                        shot_index=None if is_hook else shot.get("index", idx),
+                        action="warn", target=field, before=text[:120], after=text[:120],
+                        detail="姿态/眼态需要原文或状态链证据，保留原文交 audit，不自动补闭眼或僵直。",
+                    ))
                 new_text = self._enforce_all(
                     text, shot, field, char_names, anchors, char_positions,
                     boat_repl=boat_repl,

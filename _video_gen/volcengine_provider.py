@@ -27,12 +27,22 @@ from typing import Optional
 
 import requests
 
-from .models import VideoGenerationRequest, VideoGenerationResult
+from .models import (
+    OBS_EXPIRED,
+    OBS_FAILED,
+    MaterialRef,
+    PreparedVideoRequest,
+    TaskObservation,
+    VideoCapabilityError,
+    VideoGenerationRequest,
+    VideoGenerationResult,
+)
 from .service import VideoGenerationService
 from .config import config
 from shared.model_caps import (
     _model_prompt_cap,
     clamp_duration,
+    get_seedance_cap,
     resolve_resolution,
 )
 from shared.config import (
@@ -48,16 +58,31 @@ from shared.config import (
     VOLCENGINE_VIDEO_RATIO,
     VOLCENGINE_VIDEO_DURATION,
 )
-from shared.constants import VOLCENGINE_VIDEO_SUBMIT_RETRIES
 from shared.log_utils import verbose_write
 
 _verbose_write = partial(verbose_write, log_file="step02b.log")
 
-def _append_audio(req: VideoGenerationRequest, content: list[dict], model: str) -> None:
-    """追加参考音频（role=reference_audio）到 content.
 
-    按模型能力门控：Seedance 1.0/1.5 不支持参考音频，传入可能 400。
-    仅 2.0+/2.5 系列支持（参考 model_caps.supports_reference_audio）。
+def _capability_revision(model: str) -> str:
+    """能力注册表条目的指纹（进 prepared/content key；能力变化 ⇒ 请求失效）。"""
+    import dataclasses
+    import hashlib
+    import json
+    cap = get_seedance_cap(model)
+    facts = {
+        "model": model,
+        "cap": dataclasses.asdict(cap) if dataclasses.is_dataclass(cap) else vars(cap),
+        "prompt_cap": _model_prompt_cap(model),
+    }
+    blob = json.dumps(facts, ensure_ascii=False, sort_keys=True, default=str)
+    return "caps-" + hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _append_audio(req: VideoGenerationRequest, content: list[dict], model: str) -> None:
+    """追加参考音频（role=reference_audio）到 content —— **旧接口，保留兼容**。
+
+    新路径（``_plan_content`` + ``_materialize_content``）在计划阶段决定是否携带
+    参考音频（含能力门控与显式 modification 记录），本函数只为外部/历史调用保留。
     """
     if not req.reference_audio:
         return
@@ -191,13 +216,13 @@ def _seedance_compress_prompt(full_prompt: str, max_chars: int,
     return body
 
 
-_STATUS_SUCCEEDED = ("succeeded", "success", "done", "completed")
-# 官方 status 可选值：queued/running/cancelled/succeeded/failed/expired。
-# expired=任务超时被服务端自动终止，也是终态失败（此前漏判，会傻轮询到超时）
-_STATUS_FAILED = ("failed", "cancelled", "error", "expired")
-# _submit 内部重试上限（429 限速/5xx 抖动/网络异常），与 403 回退机制正交。
-# 403 由 _create_t2v_task/_create_i2v_task 切下一个回退模型，不消耗本计数器。
-_SUBMIT_MAX_RETRIES = VOLCENGINE_VIDEO_SUBMIT_RETRIES  # 单源 shared/constants.py
+# 任务状态归一化单源：``_video_gen.models.TaskObservation``（官方 status 可选值
+# queued/running/cancelled/succeeded/failed/expired；expired=服务端自动终止，
+# 也是终态失败）。两个 Seedance provider 共用同一份判据，不再各自维护元组。
+# 2026-10-03（§V2 改动 6）：**提交**路径的自动重试已移除——prepared 入口每次至多
+# 一个生成 POST，网络断开/5xx 返回 submission_unknown 交上层记录待恢复；
+# 403 换模型由 _submit_over_queue 产生**新的 prepared 候选**（新 content_key）。
+# 旧配置 VOLCENGINE_VIDEO_SUBMIT_RETRIES 仍可解析，但不再驱动自动重发。
 # 轮询查询的瞬态错误容忍次数（查询接口 5xx/网络异常连续发生 N 次才判失败，
 # 不再每次计入 attempts；与 VOLCENGINE_VIDEO_MAX_POLL_ATTEMPTS 配合使用）
 _POLL_TRANSIENT_TOLERANCE = 5
@@ -279,277 +304,399 @@ class VolcengineVideoService(VideoGenerationService):
         }
 
     # =======================================================================
-    # 创建任务
+    # V 包（计划 §V1/§V2）：prepare（**无提交**）+ prepared 提交（**一次** POST）
+    #
+    # 旧 ``create_task`` 保留兼容，但它只是"prepare → create_prepared_task"的包装：
+    # 同一份正文/参数/参考事实只组装一次（避免不同入口不同正文），且**每次**
+    # prepared 入口至多一个生成 POST——网络断开/5xx 不再自行重发。
     # =======================================================================
-    def create_task(self, req: VideoGenerationRequest) -> str:
-        # 判断模式：有参考图/首尾帧走 I2V 队列，否则 T2V 队列
+    def _resolve_prepare_model(self, req: VideoGenerationRequest) -> str:
+        """prepare 默认模型：有参考图/帧走 I2V 队列头，否则 T2V 队列头。"""
         has_refs = bool(req.reference_paths or req.extra_keyframe_paths)
         has_frames = bool(req.image_path or req.last_frame_image_path)
-        if has_refs or has_frames:
-            return self._create_i2v_task(req)
-        return self._create_t2v_task(req)
+        queue = self._i2v_model_queue if (has_refs or has_frames) else self._t2v_model_queue
+        return queue[0]
 
-    def _build_content(self, req: VideoGenerationRequest, model: str) -> list[dict]:
-        """构建 Seedance content 数组（text 在前，媒体在后，按场景语义分配 role）.
+    def prepare_request(self, req, context=None) -> PreparedVideoRequest:
+        """组装 provider **实际生效**的请求事实：不提交、不上传、不写正式产物。
+
+        压缩/合规改写在这里产生**派生版本**并记入 ``modifications``（不能等到 submit
+        之后才知道文本变了）；参考容量/关键帧降级同样写显式修改记录，不静默丢弃。
+        """
+        return self._prepare_for_model(req, self._resolve_prepare_model(req), context)
+
+    def _mode_of(self, req: VideoGenerationRequest) -> str:
+        if req.reference_paths:
+            return "r2v"
+        if req.image_path or req.last_frame_image_path or req.extra_keyframe_paths:
+            return "image"
+        return "text"
+
+    def _prepare_for_model(self, req: VideoGenerationRequest, model: str,
+                           context=None) -> PreparedVideoRequest:
+        from .models import MaterialRef, PreparedVideoRequest, new_request_id
+        from shared.enhancement_io import sha256_file
+
+        prompt, modifications = self._effective_prompt(req, model)
+        items, content_mods = self._plan_content(req, model)
+        # 文本项**始终**是 content 的第一项（官方协议：text 在前、媒体在后）
+        items.insert(0, {"type": "text", "text": prompt})
+        modifications.extend(content_mods)
+        parameters = self._build_parameters(req, model)
+
+        materials: list[MaterialRef] = []
+        for item in items:
+            if item.get("type") == "text":
+                continue
+            paths = ([item["source_path"]] if item.get("source_path")
+                     else list(item.get("compose") or []))
+            for src in paths:
+                p = Path(src)
+                if not p.is_file():
+                    raise VideoCapabilityError(
+                        "material_missing", f"素材不存在，禁止提交: {p}",
+                        field_path=f"content[{item.get('role')}]")
+                materials.append(MaterialRef(
+                    role=str(item.get("role") or ""),
+                    kind=str(item.get("kind") or "image"),
+                    source_path=str(p), sha256=sha256_file(p),
+                    bytes=p.stat().st_size, ref_id=f"r{len(materials) + 1}"))
+
+        prepared = PreparedVideoRequest(
+            request_id=new_request_id("volc"),
+            provider="volcengine", model_id=model, mode=self._mode_of(req),
+            prompt=prompt, parameters=parameters, materials=materials,
+            modifications=modifications,
+            credential_profile_ref=self._credential_profile_ref(),
+            key_slot=0, binding_version=1,
+            capability_revision=_capability_revision(model))
+        prepared.content_plan = items
+        prepared.source = {"shot_index": req.clip_index}
+        prepared.compute_content_key()
+        return prepared
+
+    def _effective_prompt(self, req: VideoGenerationRequest, model: str,
+                          context=None) -> tuple:
+        """实际会发出去的文本 + 派生版本记录（Seedance 中文有效上限 ≈500 字符）。"""
+        cap_len = _model_prompt_cap(model)
+        text = str(req.prompt or "")
+        modifications: list[dict] = []
+        if cap_len and len(text) > cap_len - 40:
+            ref_tags = re.findall(r"@\S+", text)
+            ref_len = sum(len(t) + 1 for t in ref_tags)
+            target_body = max(200, cap_len - ref_len - 20)
+            compressed = _seedance_compress_prompt(text, max_chars=target_body,
+                                                   ref_tags=ref_tags)
+            if len(compressed) < len(text):
+                modifications.append({
+                    "kind": "prompt_compress", "from_chars": len(text),
+                    "to_chars": len(compressed), "ref_tags": len(ref_tags),
+                    "target_body": target_body, "model_cap": cap_len})
+                text = compressed
+        if cap_len and len(text) > cap_len:
+            modifications.append({"kind": "prompt_hard_truncate", "from_chars": len(text),
+                                  "to_chars": cap_len, "model_cap": cap_len})
+            text = text[:cap_len]
+        if req.camera_movement and "运镜：" not in text[:20]:
+            text = f"运镜：{req.camera_movement}\n{text}"
+            modifications.append({"kind": "camera_prefix",
+                                  "camera_movement": req.camera_movement})
+        return text, modifications
+
+    def _plan_content(self, req: VideoGenerationRequest, model: str) -> tuple:
+        """有序素材计划（**不**编码、**不**上传）+ 显式修改记录。
 
         官方文档规定 3 种场景互斥、不可混用（创建视频生成任务 API）：
         - 全模态参考生视频：role=reference_image（仅 Seedance 2.5 / 2.0 系列支持）
-        - 图生视频-多关键帧：能力支持时全部 reference_image（prompt 用「图N」
-          指代时序，实现 A→B→C→D）；不支持时退化为首尾两帧
+        - 图生视频-多关键帧：能力支持时全部 reference_image，否则退化为首尾两帧
         - 图生视频-首帧/首尾帧：role=first_frame / last_frame（所有 Seedance 支持）
         """
         from shared.model_caps import get_seedance_cap
         cap = get_seedance_cap(model)
-        # v6.58 (Phase C-1): 结构化 camera_movement 字段提到 prompt 最前，提升权重。
-        # 精简路径（_build_seedance_concise_prompt）已带"运镜：XXX"段，自动跳过；
-        # 完整 prompt 路径才会真正注入。
-        text = req.prompt
-        if req.camera_movement and "运镜：" not in text[:20]:
-            text = f"运镜：{req.camera_movement}\n{text}"
-        content: list[dict] = [{"type": "text", "text": text}]
+        items: list[dict] = []
+        modifications: list[dict] = []
 
-        def _append_image(path, role):
-            url = _encode_media(path)
-            if url:
-                content.append({"type": "image_url", "image_url": {"url": url}, "role": role})
+        def _image(path, role):
+            items.append({"type": "image", "kind": "image", "role": role,
+                          "source_path": str(path)})
+
+        def _audio_item():
+            if not req.reference_audio:
+                return
+            if not getattr(cap, "supports_reference_audio", False):
+                modifications.append({"kind": "param_dropped", "field": "reference_audio",
+                                      "reason": f"{model} 不支持 reference_audio"})
+                _verbose_write(f"  [镜头{req.clip_index}] [WARN] {model} 不支持 reference_audio，"
+                               f"已忽略参考音频参数")
+                return
+            items.append({"type": "audio", "kind": "audio", "role": "reference_audio",
+                          "source_path": str(req.reference_audio)})
 
         # ---- 全模态参考生视频（r2v）：reference_paths → reference_image ----
         if req.reference_paths:
             if not cap.supports_reference_image:
-                raise RuntimeError(
+                raise VideoCapabilityError(
+                    "role_unsupported",
                     f"{model} 不支持参考生视频（role=reference_image，仅 Seedance 2.5/2.0 系列）。"
-                    f"r2v 模式请将 VOLCENGINE_I2V_MODEL 设为 2.0/2.5 模型"
-                )
-            from shared.ref_compose import get_ref_limit, fit_flat
+                    f"r2v 模式请将 VOLCENGINE_I2V_MODEL 设为 2.0/2.5 模型",
+                    field_path="references[role=reference]")
+            from shared.ref_compose import get_ref_limit
             ref_limit = get_ref_limit(model)
-            ref_paths = [p for p in (req.reference_paths or []) if p and Path(p).exists()]
+            ref_paths = [p for p in (req.reference_paths or []) if p]
+            missing = [p for p in ref_paths if not Path(p).is_file()]
+            if missing:
+                raise VideoCapabilityError(
+                    "material_missing", f"参考素材不存在: {missing}",
+                    field_path="references")
             if len(ref_paths) > ref_limit:
-                from shared.paths import shot_work_dir
-                sheet_dir = shot_work_dir(req.clip_index)
-                ref_paths = fit_flat(ref_paths, ref_limit, sheet_dir, f"r2v{req.clip_index}")
-                _verbose_write(f"  [镜头{req.clip_index}] 参考图 {len(req.reference_paths)} 张超上限 "
-                      f"{ref_limit}，无损压缩为 {len(ref_paths)} 张")
-            for ref_path in ref_paths:
-                _append_image(ref_path, "reference_image")
-            _append_audio(req, content, model)
-            return content
+                modifications.append({
+                    "kind": "reference_compose", "reason": "reference_capacity",
+                    "from": len(ref_paths), "to": ref_limit, "model": model,
+                    "sources": [Path(p).name for p in ref_paths]})
+                items.append({"type": "image", "kind": "image", "role": "reference_image",
+                              "compose": ref_paths, "limit": ref_limit,
+                              "tag": f"r2v{req.clip_index}"})
+                _verbose_write(f"  [镜头{req.clip_index}] 参考图 {len(ref_paths)} 张超上限 "
+                               f"{ref_limit}，无损压缩为 {ref_limit} 张")
+            else:
+                for ref_path in ref_paths:
+                    _image(ref_path, "reference_image")
+            _audio_item()
+            return items, modifications
 
         # ---- 多关键帧：能力支持→全部 reference_image（全模态）；否则退化为首尾帧 ----
-        kfs = [p for p in (req.extra_keyframe_paths or []) if p and Path(p).exists()]
+        kfs = [p for p in (req.extra_keyframe_paths or []) if p and Path(p).is_file()]
         if kfs:
             if cap.supports_reference_image:
                 for p in kfs:
-                    _append_image(p, "reference_image")
-                _append_audio(req, content, model)
-                return content
+                    _image(p, "reference_image")
+                _audio_item()
+                return items, modifications
             if len(kfs) > 2:
+                dropped = len(kfs) - 2
+                modifications.append({"kind": "keyframe_degrade", "reason": "model_unsupported",
+                                      "dropped": dropped, "kept": 2, "model": model})
                 _verbose_write(f"  [镜头{req.clip_index}] {model} 不支持参考生视频，"
-                      f"多关键帧退化为首尾帧（丢弃中间 {len(kfs) - 2} 张）")
+                               f"多关键帧退化为首尾帧（丢弃中间 {dropped} 张）")
                 kfs = [kfs[0], kfs[-1]]
 
         # ---- 首帧/首尾帧（所有 Seedance 模型支持）----
         if kfs:
-            _append_image(kfs[0], "first_frame")
+            _image(kfs[0], "first_frame")
             if len(kfs) > 1:
-                _append_image(kfs[-1], "last_frame")
+                _image(kfs[-1], "last_frame")
         else:
-            _append_image(req.image_path, "first_frame")
-            _append_image(req.last_frame_image_path, "last_frame")
-        _append_audio(req, content, model)
-        return content
+            if req.image_path:
+                _image(req.image_path, "first_frame")
+            if req.last_frame_image_path:
+                _image(req.last_frame_image_path, "last_frame")
+        _audio_item()
+        return items, modifications
 
-    def _submit(self, req: VideoGenerationRequest, model: str) -> str:
-        """提交单个任务，返回 task_id；失败抛异常."""
+    def _build_parameters(self, req: VideoGenerationRequest, model: str) -> dict:
+        """实际下发的模型参数（进内容 key；不含 URL/凭据/输出路径）。"""
         from shared.model_caps import get_seedance_cap
         cap = get_seedance_cap(model)
-        # Seedance prompt 智能压缩（2026-08）：硬约束中文有效 prompt ≤500 字符，
-        # 超长静默截断不报错。粗暴 [:cap_len] 尾部截断会砍掉末尾关键约束
-        # （动作连贯性/风格收束/视觉衔接/r2v 参考图清单），导致角色漂移、
-        # 抽卡暴涨等诡异 bug。改为按权重剥离 @图引用 + 删中段低权重句子。
-        # 压缩触发阈值由注册表 cap 现算：cap - 20字@图预留 - 20字安全余量
-        # （cap=500 时即历史硬编码的 460；cap 变化时阈值自动跟随）
-        cap_len = _model_prompt_cap(model)
-        if cap_len and len(req.prompt) > cap_len - 40:
-            ref_tags = re.findall(r"@\S+", req.prompt)
-            # 正文目标 = cap - ref_tags 长度 - 20 余量
-            ref_len = sum(len(t) + 1 for t in ref_tags)
-            target_body = max(200, cap_len - ref_len - 20)
-            compressed = _seedance_compress_prompt(
-                req.prompt, max_chars=target_body, ref_tags=ref_tags
-            )
-            if len(compressed) < len(req.prompt):
-                _verbose_write(
-                    f"  [镜头{req.clip_index}] [INFO] Seedance 智能压缩 prompt "
-                    f"{len(req.prompt)}→{len(compressed)} 字符 "
-                    f"（@图引用 {len(ref_tags)} 个，正文目标 {target_body}）"
-                )
-            req.prompt = compressed
-        # 兜底：万一压缩后还超模型 cap（极端情况），再硬截断
-        if cap_len and len(req.prompt) > cap_len:
-            _verbose_write(
-                f"  [镜头{req.clip_index}] [WARN] {model} 压缩后仍超 cap {cap_len}，"
-                f"硬截断兜底"
-            )
-            req.prompt = req.prompt[:cap_len]
-        # 首帧/首尾帧场景（图生视频-首帧/首尾帧，非全模态参考）：用于 2.5 ratio adaptive 判定
         is_first_last_frames = bool(req.image_path or req.last_frame_image_path) \
             and not req.reference_paths and not req.extra_keyframe_paths
-        payload: dict = {
-            "model": model,
-            "content": self._build_content(req, model),
+        parameters: dict = {
             "resolution": resolve_resolution(req.size, cap, VOLCENGINE_VIDEO_RESOLUTION),
             "ratio": _resolve_ratio(req, cap, is_first_last_frames),
             "duration": clamp_duration(VOLCENGINE_VIDEO_DURATION or req.duration, cap),
             "watermark": False,
         }
-        # 有声视频：按 VIDEO_MODEL_VOICE 决定是否下发 generate_audio。
-        # VIDEO_MODEL_VOICE=1（默认）→ 对话/背景音交给视频模型，开；
-        # =0 → 语音走 step03 TTS，prompt_builder 已写「禁止任何人声」，必须关掉
-        # 模型发声，否则人声 + step03 TTS 双重语音（与 prompt_builder _MODEL_VOICE 一致）。
-        # 不支持的模型（1.0 系列）不传该字段（避免参数报错）。
         if cap.supports_generate_audio:
-            voice_enabled = os.getenv("VIDEO_MODEL_VOICE", "1").strip() == "1"
-            payload["generate_audio"] = voice_enabled
+            parameters["generate_audio"] = os.getenv("VIDEO_MODEL_VOICE", "1").strip() == "1"
         if req.seed is not None and getattr(cap, "supports_seed", False):
-            payload["seed"] = req.seed
+            parameters["seed"] = req.seed
+        return parameters
 
-        _verbose_write(f"  [镜头{req.clip_index}] [Seedance] 正在提交任务 [{model}]...")
-        _verbose_write(f"[DEBUG] video_submit: model={model}, "
-              f"resolution={payload['resolution']}, ratio={payload['ratio']}, "
-              f"duration={payload['duration']}, seed={req.seed}")
-        _verbose_write(f"[DEBUG] video_submit: prompt全文={req.prompt}")
-        for i, item in enumerate(payload["content"]):
+    def _compose_dir(self, prepared, context) -> Path:
+        """参考表落盘目录：候选上下文 ⇒ attempt 内（**绝不**写正式 shots/）。"""
+        attempt = getattr(context, "attempt_dir", None) or getattr(context, "experiment_root", None)
+        if attempt:
+            d = Path(attempt) / "assets" / "ref_sheets"
+        else:
+            from shared.paths import shot_work_dir
+            d = shot_work_dir(int((prepared.source or {}).get("shot_index") or 0))
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _materialize_content(self, prepared: PreparedVideoRequest, context=None) -> list:
+        """把冻结事实变成请求体内容：**校验素材摘要**后再编码（变了 ⇒ 拒收、零 POST）。"""
+        from shared.enhancement_io import sha256_file
+        from shared.ref_compose import fit_flat
+
+        for m in prepared.materials:
+            if not m.source_path:
+                continue
+            p = Path(m.source_path)
+            if not p.is_file():
+                raise VideoCapabilityError("material_missing",
+                                           f"素材已不存在: {p}", field_path="materials")
+            if m.sha256 and sha256_file(p) != m.sha256:
+                raise VideoCapabilityError(
+                    "material_changed",
+                    f"素材字节在 prepare 之后发生变化，拒绝提交（同一 request_key 不得换素材）: {p}",
+                    field_path="materials")
+
+        content: list = []
+        for item in (prepared.content_plan or []):
+            if item.get("type") == "text":
+                content.append({"type": "text", "text": item.get("text", "")})
+                continue
+            if item.get("compose"):
+                sheet_dir = self._compose_dir(prepared, context)
+                composed = fit_flat(list(item["compose"]), int(item["limit"]), sheet_dir,
+                                    str(item.get("tag") or "r2v"))
+                for path in composed:
+                    url = _encode_media(path)
+                    if not url:
+                        raise VideoCapabilityError("material_unreadable",
+                                                   f"参考表编码失败: {path}")
+                    content.append({"type": "image_url", "image_url": {"url": url},
+                                    "role": item.get("role")})
+                continue
+            url = _encode_media(item.get("source_path"))
+            if not url:
+                raise VideoCapabilityError("material_unreadable",
+                                           f"素材编码失败: {item.get('source_path')}")
+            if item.get("type") == "audio":
+                content.append({"type": "audio_url", "audio_url": {"url": url},
+                                "role": item.get("role")})
+            else:
+                content.append({"type": "image_url", "image_url": {"url": url},
+                                "role": item.get("role")})
+        return content
+
+    def create_prepared_task(self, prepared: PreparedVideoRequest, context=None) -> str:
+        """materialize + **一次** POST（网络断开/5xx 返回 unknown，不自行重发）。"""
+        from .models import SUBMIT_UNKNOWN, VideoSubmissionError
+        from .service import classify_post_response
+
+        if not prepared.is_ready():
+            raise VideoCapabilityError(
+                "unsupported", prepared.unsupported_reason or "prepared 请求不可提交")
+
+        payload: dict = {"model": prepared.model_id,
+                         "content": self._materialize_content(prepared, context)}
+        payload.update(prepared.parameters or {})
+        self._log_submit(prepared, payload)
+
+        try:
+            resp = requests.post(
+                f"{self._base_url}/contents/generations/tasks",
+                json=payload,
+                headers=self._headers,
+                timeout=180,
+            )
+        except requests.exceptions.RequestException as e:
+            raise VideoSubmissionError(
+                SUBMIT_UNKNOWN,
+                f"提交网络异常（不知是否已建任务，禁止自行重发）: {e}") from e
+
+        _verbose_write(f"[DEBUG] video_submit response: status={resp.status_code}, "
+                       f"body={resp.text[:500]}")
+        task_id = classify_post_response(resp, provider="volcengine")
+        _verbose_write(f"  [镜头{prepared.parameters.get('clip_index', '')}] "
+                       f"任务已创建 [Seedance] -> task_id: {task_id}")
+        return task_id
+
+    def _log_submit(self, prepared: PreparedVideoRequest, payload: dict) -> None:
+        """脱敏语义 payload 与内容摘要（不打印 body 敏感字段）。"""
+        idx = prepared.parameters.get("clip_index", "")
+        _verbose_write(f"  [镜头{idx}] [Seedance] 正在提交任务 [{prepared.model_id}]...")
+        _verbose_write(f"[DEBUG] video_submit: model={prepared.model_id}, "
+                       f"resolution={payload.get('resolution')}, ratio={payload.get('ratio')}, "
+                       f"duration={payload.get('duration')}, seed={payload.get('seed')}, "
+                       f"content_key={prepared.content_key[:16]}")
+        for i, item in enumerate(payload.get("content") or []):
             if item["type"] == "text":
-                _verbose_write(f"[DEBUG] video_submit: content[{i}] text")
+                _verbose_write(f"[DEBUG] video_submit: content[{i}] text len={len(item['text'])}")
             else:
                 u = item.get("image_url") or item.get("audio_url") or {}
                 raw = str(u.get("url", ""))
                 _verbose_write(f"[DEBUG] video_submit: content[{i}] {item['type']} "
-                      f"role={item.get('role')}, len={len(raw)}")
+                               f"role={item.get('role')}, len={len(raw)}")
 
-        # 提交重试：429 限速按服务端 retry-after 等待；5xx/网络异常按指数退避。
-        # 重试耗尽抛 RuntimeError，由调用方（_create_t2v_task/_create_i2v_task）
-        # 决定是否切下一个回退模型。403/400/404 不重试（403 由外层回退处理）。
-        from shared.rate_limit import compute_429_wait
-        last_error = ""
-        backoff = 2.0
-        for attempt in range(1, _SUBMIT_MAX_RETRIES + 1):
-            try:
-                resp = requests.post(
-                    f"{self._base_url}/contents/generations/tasks",
-                    json=payload,
-                    headers=self._headers,
-                    timeout=180,
-                )
-            except requests.exceptions.RequestException as e:
-                last_error = f"提交网络异常: {e}"
-                _verbose_write(f"  [镜头{req.clip_index}] [!] {last_error}，"
-                      f"{backoff:.0f}s 后重试 (尝试 {attempt}/{_SUBMIT_MAX_RETRIES})")
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
-                continue
-
-            _verbose_write(f"[DEBUG] video_submit response: status={resp.status_code}, "
-                  f"body={resp.text[:500]}")
-
-            # ---- 200: 成功 ----
-            if resp.status_code == 200:
-                try:
-                    data = resp.json()
-                except Exception as e:
-                    raise RuntimeError(f"Seedance 响应 JSON 解析失败: {e} ({resp.text[:200]})")
-                task_id = data.get("id") or data.get("task_id")
-                if not task_id:
-                    raise RuntimeError(f"Seedance 未返回 task_id: {resp.text[:300]}")
-                _verbose_write(f"  [镜头{req.clip_index}] 任务已创建 [Seedance] -> task_id: {task_id}")
-                return str(task_id)
-
-            # ---- 429: 限速，按服务端 retry-after 等待 ----
-            if resp.status_code == 429:
-                wait = compute_429_wait(resp.text, fallback_seconds=60.0, backoff_seconds=2.0)
-                _verbose_write(f"  [镜头{req.clip_index}] [!] 429 限速，等待 {wait:.0f}s 后重试 "
-                      f"(尝试 {attempt}/{_SUBMIT_MAX_RETRIES})")
-                time.sleep(wait)
-                continue
-
-            # ---- 5xx: 服务端故障，指数退避 ----
-            if 500 <= resp.status_code < 600:
-                _verbose_write(f"  [镜头{req.clip_index}] [!] 服务端 {resp.status_code}，"
-                      f"{backoff:.0f}s 后重试 (尝试 {attempt}/{_SUBMIT_MAX_RETRIES})")
-                last_error = f"服务端 {resp.status_code}: {resp.text[:200]}"
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
-                continue
-
-            # ---- 400/403/404 等：客户端问题，不重试（403 由外层回退处理）----
-            break
-
-        # 所有重试耗尽或命中客户端错误码
-        status = resp.status_code if 'resp' in locals() else '?'
-        body = resp.text[:500] if 'resp' in locals() else last_error
-        raise RuntimeError(f"Seedance API 错误 [{status}]: {body}")
-
-    def _create_t2v_task(self, req: VideoGenerationRequest) -> str:
-        last_error = ""
-        for model in self._t2v_model_queue:
-            try:
-                return self._submit(req, model)
-            except RuntimeError as e:
-                err = str(e)
-                if "403" in err:
-                    _verbose_write(f"  [镜头{req.clip_index}] [!] T2V 模型 {model} 返回 403，"
-                          f"尝试下一个")
-                    last_error = err
-                    continue
-                raise
-        raise RuntimeError(f"T2V 任务创建失败: 所有模型均失败 ({last_error})")
-
-    def _create_i2v_task(self, req: VideoGenerationRequest) -> str:
+    def _submit_over_queue(self, req: VideoGenerationRequest, queue: list,
+                           *, allow_r2v: bool) -> str:
+        """旧生产路径：模型队列 + 403 回退。**每个模型都是一个新的 prepared 候选**
+        （新 content_key），且每个 prepared 入口至多一个 POST（§V2 改动 6）。"""
         from shared.model_caps import get_seedance_cap
+        from .models import VideoSubmissionError
+
         last_error = ""
-        # 每次从头遍历：不再用 self._current_i2v_index 跨镜头共享状态
-        # （修复并发竞态 + 与 T2V 行为对称）
-        for model in self._i2v_model_queue:
-            # r2v（reference_paths）能力前置过滤：1.0/1.5 系列不支持参考生视频，
-            # 直接跳过，避免 _build_content 抛错中断整个队列
-            if req.reference_paths and not get_seedance_cap(model).supports_reference_image:
+        for model in queue:
+            if allow_r2v and not get_seedance_cap(model).supports_reference_image:
                 last_error = f"{model} 不支持参考生视频（仅 Seedance 2.5/2.0 系列）"
                 _verbose_write(f"  [镜头{req.clip_index}] [!] {model} 不支持 r2v 参考图，尝试下一个")
                 continue
+            prepared = self._prepare_for_model(req, model)
             try:
-                return self._submit(req, model)
-            except RuntimeError as e:
-                err = str(e)
-                if "403" in err:
-                    _verbose_write(f"  [镜头{req.clip_index}] [!] I2V 模型 {model} 返回 403，"
-                          f"尝试下一个")
-                    last_error = err
+                return self.create_prepared_task(prepared)
+            except VideoSubmissionError as exc:
+                if exc.http_status == 403:
+                    _verbose_write(f"  [镜头{req.clip_index}] [!] 模型 {model} 返回 403，尝试下一个")
+                    last_error = str(exc)
                     continue
                 raise
-        # 所有回退模型都不支持 r2v 时 → 自动降级为纯文生视频
-        if req.reference_paths and not any(
-            get_seedance_cap(m).supports_reference_image for m in self._i2v_model_queue
-        ):
+        if allow_r2v and not any(get_seedance_cap(m).supports_reference_image
+                                 for m in queue):
             _verbose_write(
                 f"  [镜头{req.clip_index}] [!] 所有 I2V 模型均不支持 r2v 参考生视频，"
-                f"自动降级为 text-to-video（丢弃 reference_paths）"
-            )
-            # 构造纯 text 请求：清空 reference_paths 走 T2V 队列
+                f"自动降级为 text-to-video（丢弃 reference_paths）")
             req_text = VideoGenerationRequest(
-                prompt=req.prompt,
-                clip_index=req.clip_index,
-                duration=req.duration,
-                negative_prompt=req.negative_prompt,
-                size=req.size,
-                image_path=None,
-                last_frame_image_path=None,
-                extra_keyframe_paths=[],
-                reference_paths=[],
-                reference_audio=None,
+                prompt=req.prompt, clip_index=req.clip_index, duration=req.duration,
+                negative_prompt=req.negative_prompt, size=req.size,
+                image_path=None, last_frame_image_path=None,
+                extra_keyframe_paths=[], reference_paths=[], reference_audio=None,
                 seed=req.seed,
             )
-            return self._create_t2v_task(req_text)
-        raise RuntimeError(f"I2V 任务创建失败: 所有模型均失败 ({last_error})")
+            return self._submit_over_queue(req_text, self._t2v_model_queue, allow_r2v=False)
+        raise RuntimeError(f"任务创建失败: 所有模型均失败 ({last_error})")
+
+    def _credential_profile_ref(self) -> Optional[str]:
+        """配置侧**非敏感**凭据身份（不截取/不散列密钥）。无配置 ⇒ None。"""
+        profile_id = os.getenv("VIDEO_CREDENTIAL_PROFILE_ID", "").strip()
+        revision = os.getenv("VIDEO_CREDENTIAL_REVISION", "").strip()
+        if not profile_id:
+            return None
+        return f"{profile_id}@{revision or 'r0'}"
+
+    def get_task_binding(self, task_id: str) -> dict:
+        """单 key 通道同样返回**显式 profile**；无显式配置 ⇒ binding_unavailable。"""
+        ref = self._credential_profile_ref()
+        if ref is None:
+            return {"status": "binding_unavailable", "provider": "volcengine",
+                    "key_slot": None, "credential_profile_ref": None, "binding_version": 1}
+        return {"status": "ok", "provider": "volcengine", "key_slot": 0,
+                "credential_profile_ref": ref, "binding_version": 1}
+
+    def restore_task_binding(self, task_id: str, binding: dict) -> bool:
+        """恢复前校验配置引用：profile 不符/已移除 ⇒ False（credential_binding_unavailable）。"""
+        if not isinstance(binding, dict) or binding.get("status") != "ok":
+            return False
+        ref = self._credential_profile_ref()
+        if ref is None or binding.get("credential_profile_ref") != ref:
+            return False
+        return True
+
+    # =======================================================================
+    # 创建任务（旧接口：委托同一 prepare + 一次 POST；候选上下文下无回退链）
+    # =======================================================================
+    def create_task(self, req: VideoGenerationRequest) -> str:
+        from .models import execution_context_from_request
+        if execution_context_from_request(req) is not None:
+            # 候选模式：一次人工确认 = 至多一个生成 POST；换模型须走新的 prepared 候选
+            prepared = self.prepare_request(req)
+            return self.create_prepared_task(prepared)
+        has_refs = bool(req.reference_paths or req.extra_keyframe_paths)
+        has_frames = bool(req.image_path or req.last_frame_image_path)
+        if has_refs or has_frames:
+            return self._submit_over_queue(req, self._i2v_model_queue,
+                                           allow_r2v=bool(req.reference_paths))
+        return self._submit_over_queue(req, self._t2v_model_queue, allow_r2v=False)
 
     # =======================================================================
     # 查询任务
@@ -610,30 +757,30 @@ class VolcengineVideoService(VideoGenerationService):
             _verbose_write(f"  [镜头{req.clip_index}] 任务状态: {status} "
                   f"(已等待 {int(time.time() - start_time)}s)")
 
-            if status in _STATUS_SUCCEEDED:
-                content = output.get("content") or {}
-                video_url = content.get("video_url")
+            # 状态与结果引用走**同一份规范化**（§V1：不把日志/文本当返回协议）
+            obs = TaskObservation.from_raw(task_id, output)
+
+            if obs.is_success():
+                video_url = (obs.result or {}).get("video_url")
                 if not video_url:
                     return VideoGenerationResult(
                         clip_index=req.clip_index,
                         success=False,
                         error=f"任务成功但未找到 video_url: {str(output)[:300]}",
                     )
-                if output.get("usage"):
-                    _verbose_write(f"  [镜头{req.clip_index}] 计费信息: {output['usage']}")
+                if obs.usage:
+                    _verbose_write(f"  [镜头{req.clip_index}] 计费信息: {obs.usage}")
                 return self._download(req, video_url)
 
-            if status in _STATUS_FAILED:
-                err = output.get("error") or {}
-                code = err.get("code") if isinstance(err, dict) else ""
-                msg = err.get("message") if isinstance(err, dict) else str(err)
-                _verbose_write(f"  [镜头{req.clip_index}] 任务失败: {code} - {msg}")
+            if obs.status in (OBS_FAILED, OBS_EXPIRED):
+                msg = obs.error or obs.raw_status
+                _verbose_write(f"  [镜头{req.clip_index}] 任务失败: {obs.raw_status} - {msg}")
                 # 2026-09-12 用户要求：失败时日志打印完整报错（不截断，便于排障）
                 _verbose_write(f"[DEBUG] [镜头{req.clip_index}] 任务失败完整响应: {output}")
                 return VideoGenerationResult(
                     clip_index=req.clip_index,
                     success=False,
-                    error=f"生成失败: {code} - {msg}",
+                    error=f"生成失败: {msg}",
                 )
 
             # queued / running：按配置间隔继续轮询
@@ -649,38 +796,15 @@ class VolcengineVideoService(VideoGenerationService):
     # 下载
     # =======================================================================
     def _download(self, req: VideoGenerationRequest, video_url: str) -> VideoGenerationResult:
-        import shutil
-        import tempfile
+        """下载结果：候选上下文 ⇒ attempt 内；否则正式 ``shots/<idx>/video.mp4``。"""
         from shared.paths import shot_video_file
 
-        save_path = shot_video_file(req.clip_index)
-        save_path.parent.mkdir(parents=True, exist_ok=True)
+        from .service import http_download_video, resolve_download_target
 
-        _verbose_write(f"  [镜头{req.clip_index}] 下载视频: {video_url}")
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-                tmp_path = tmp.name
-            resp = requests.get(video_url, timeout=180)
-            resp.raise_for_status()
-            video_bin = resp.content
-            if len(video_bin) < 20 * 1024:
-                raise RuntimeError(f"下载内容过小 ({len(video_bin)} bytes)，可能是错误页面")
-            with open(tmp_path, "wb") as f:
-                f.write(video_bin)
-            shutil.copy2(tmp_path, str(save_path))
-            try:
-                Path(tmp_path).unlink()
-            except OSError:
-                pass
-            _verbose_write(f"  [镜头{req.clip_index}] 视频已保存 -> {save_path}")
-            return VideoGenerationResult(
-                clip_index=req.clip_index,
-                success=True,
-                save_path=str(save_path),
-            )
-        except Exception as e:
-            return VideoGenerationResult(
-                clip_index=req.clip_index,
-                success=False,
-                error=f"下载失败: {e}",
-            )
+        target = resolve_download_target(req, shot_video_file(req.clip_index))
+        _verbose_write(f"  [镜头{req.clip_index}] 下载视频: {video_url} -> {target}")
+        result = http_download_video(video_url, target, clip_index=req.clip_index,
+                                     provider="volcengine")
+        if result.success:
+            _verbose_write(f"  [镜头{req.clip_index}] 视频已保存 -> {result.save_path}")
+        return result

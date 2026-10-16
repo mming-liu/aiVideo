@@ -42,6 +42,7 @@ import re
 
 from shared.alias_map import CHARACTER_ALIASES, apply_char_alias
 from step01_script_gen.quality_issues import Issue
+from step01_script_gen.weapon_states import asserted_marker, prop_state_owner
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +70,7 @@ def frame_text(shot: dict, frame_id: str) -> str:
         return str(shot.get("lf_desc") or "")
     if frame_id.startswith("kf"):
         try:
-            return str(_sorted_kfs(shot)[int(frame_id[2:])].get("desc") or "")
+            return str((shot.get("keyframes") or [])[int(frame_id[2:])].get("desc") or "")
         except (IndexError, ValueError):
             return ""
     return ""
@@ -147,7 +148,7 @@ _EXIT_DONE = (
     # 把它当离场词会把「尚在画面的倒地人物」误判成缺席（与 `frame_presence_consistency`
     # 的语义正好相反）。离场 = 离开画面，不是失去行动能力。
     "已没入", "已沉入", "沉入水底", "沉入水中",
-    "已死", "已跑远",
+    "已跑远",
 )
 
 #: 进行中的离场动作词（**单一来源**：下面的完成态正则由它拼出）。单用它们只说明
@@ -171,6 +172,19 @@ def _exit_is_completed(clause: str) -> bool:
     if any(m in clause for m in _EXIT_DONE):
         return True
     return bool(_EXIT_DONE_RE.search(clause))
+
+
+def _completed_exit_subjects(clause: str, candidates: list[str]) -> set[str]:
+    """只绑定紧邻完成态谓词的显式主体，不把宾语、观察者或衣物归为离场人。"""
+    names = sorted((n for n in candidates if n), key=len, reverse=True)
+    if not names:
+        return set()
+    name_pattern = "(?:" + "|".join(re.escape(n) for n in names) + ")"
+    subjects = name_pattern + r"们?(?:\s*(?:和|与|及|、)\s*" + name_pattern + r"们?)*"
+    predicate = "(?:" + "|".join(re.escape(m) for m in _EXIT_DONE) + "|" + _EXIT_DONE_RE.pattern + ")"
+    pattern = re.compile(r"(?P<subjects>" + subjects + r")(?:的?身影)?\s*(?:均|都)?\s*" + predicate)
+    return {name for match in pattern.finditer(clause)
+            for name in re.findall(name_pattern, match.group("subjects"))}
 
 
 def _presence_issues(shot: dict, shot_id) -> list[Issue]:
@@ -197,9 +211,7 @@ def _presence_issues(shot: dict, shot_id) -> list[Issue]:
             # `_EXIT_DONE` 上方注释）。
             if not _exit_is_completed(clause):
                 continue
-            for raw in candidates:
-                if raw not in clause:
-                    continue
+            for raw in _completed_exit_subjects(clause, candidates):
                 hit = _norm_name(raw)
                 if hit not in names:
                     continue
@@ -238,7 +250,7 @@ def _possession_issues(shot: dict, shot_id) -> list[Issue]:
         if not text:
             continue
         release_clauses = [c for c in _clauses(text)
-                           if any(m in c for m in _RELEASE_MARKERS)]
+                           if asserted_marker(c, _RELEASE_MARKERS)]
         if not release_clauses:
             continue
         for entry in entries:
@@ -248,7 +260,14 @@ def _possession_issues(shot: dict, shot_id) -> list[Issue]:
                 continue
             # 释放句里必须**点名**该道具——「他放下手里的东西」不含道具名时不判，
             # 那属于开放语义，交 final audit。
-            bad = [p for p in props if any(p in c for c in release_clauses)]
+            names = list({_norm_name(e.get("name")) for e in entries}
+                         | {_norm_name(e.get("name")) for e in shot.get("char_layout") or []
+                            if isinstance(e, dict)})
+            bad = [p for p in props if any(p in c for c in release_clauses)
+                   and prop_state_owner(text, p, names,
+                       [_norm_name(e.get("name")) for e in entries
+                        if p in (e.get("props") or [])], _RELEASE_MARKERS)
+                   == _norm_name(entry.get("name"))]
             if not bad:
                 continue
             clause = next(c for c in release_clauses if any(p in c for p in bad))

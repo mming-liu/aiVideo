@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import re
+from step01_script_gen.weapon_states import prop_state_owner, prop_mentioned
 
 from shared.alias_map import CHARACTER_ALIASES
 from shared.kf_time import get_kf_t_sec, set_kf_t_sec
@@ -94,32 +95,14 @@ def _owners_for_prop(prop: str, seed_props: dict[str, list]) -> list[str]:
         return []
     return [
         name for name, props in seed_props.items()
-        if any(any(ch in str(p) for ch in prop) for p in props)
+        if any(prop_mentioned(str(p), prop) for p in props)
     ]
 
 
 def _state_owner(desc: str, prop: str, item_names: list[str],
                  owners_with_prop: list[str], state_words: tuple[str, ...]) -> str | None:
-    prop = str(prop or "")
-    if not prop or not state_words:
-        return None
-    last_subject = ""
-    for clause, _delimiter in _split_clauses_for_state(desc):
-        clause_subject, _pos = _clause_subject(clause, item_names)
-        if clause_subject:
-            last_subject = clause_subject
-        if not any(ch in clause for ch in prop):
-            continue
-        if not any(w in clause for w in state_words):
-            continue
-        if clause_subject:
-            return clause_subject
-        if last_subject:
-            return last_subject
-        if len(owners_with_prop) == 1:
-            return owners_with_prop[0]
-        return None
-    return None
+    return prop_state_owner(desc, prop, item_names, owners_with_prop, state_words) or None
+
 
 
 def _prop_released_for(desc: str, prop: str, subject: str,
@@ -133,7 +116,7 @@ def _prop_held_for(desc: str, prop: str, subject: str,
 
 
 def _prop_mentioned(desc: str, prop: str) -> bool:
-    return any(ch in desc for ch in str(prop or ""))
+    return prop_mentioned(desc, prop)
 
 
 def _pose_assignments(desc: str, item_names: list[str], default_subject: str = "") -> dict[str, list[str]]:

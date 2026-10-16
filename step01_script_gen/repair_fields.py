@@ -151,6 +151,7 @@ _REPAIR_CODE_FIELDS: dict = {
     "frame_layouts_required": ("frame_layouts",),
     "gaze_state_conflict": ("frame_layouts",),
     "weapon_holder": ("prompt", "ff_desc", "lf_desc"),
+    "temporal_plan": ("temporal_plan",),
     "person_boat_position": ("prompt", "ff_desc", "lf_desc", "frame_layouts"),
     "multi_person_staging": ("prompt", "ff_desc", "lf_desc", "frame_layouts"),
     "shot_duration": ("duration",),
@@ -232,6 +233,18 @@ _KF_STRUCTURAL_CODES: tuple = (
 
 # 结构级路径：**列表本身**（不是叶子）。授权它们 = 允许改变列表长度。
 _KF_STRUCTURAL_PATHS: tuple = ("keyframes", "frame_layouts.kfs")
+
+#: **可新建的缺失帧键**：父容器存在、该帧键**整块缺失**时，允许审计把它写进
+#: `repair_targets` 申请「新建这一帧」。
+#:
+#: 章 2 实测（2026-10-04，台账 §19.2）：`model_audit_MISSING_FRAME_LAYOUT` 要求补写
+#: `frame_layouts.ff` / `lf`，而这两条路径**当时不存在** ⇒ `_is_real_leaf` 判 False
+#: ⇒ **任何** `repair_targets` 都授权不出东西 ⇒ 这类问题**结构性修不掉**：修复轮零授权、
+#: 模型按审计建议新建的帧被全部回填、`字段触达=0` ⇒ `no_target_resolved` ⇒ BLOCK。
+#: 收窄边界：**只认这两个帧键**、只认「父容器存在而该键缺失」的情形；授权面就是这个键
+#: 本身（含它的整棵子树），不连带放开任何别的字段。新建值另过形状验收
+#: （`frame_layout_structural_violations`）。
+_CREATABLE_FRAME_KEYS: tuple = ("frame_layouts.ff", "frame_layouts.lf")
 
 # 文案回退（结构化 code 缺失时才走）里的「缺帧」信号。刻意收窄——宽泛关键词会
 # 把「增删 KF」的权限发给无关镜头，而本模块的口径是「宁可拒绝一次合法修复」。
@@ -371,6 +384,22 @@ def _is_model_audit_code(code) -> bool:
     不可复用）。确定性质量门的 issue 没有这个契约，仍走原有推导路径。
     """
     return str(code or "").startswith("model_audit_")
+
+
+#: `main` 把 blocking 的模型审计问题渲染进**本轮回修告警**时用的前缀（**单一来源**）.
+#:
+#: 为什么需要一个标记（2026-10-04 第四轮实测缺陷）：那行渲染里带着
+#: `field=<field_path>`，而 `allowed_repair_fields` 对告警条目**无条件**做文案关键词
+#: 解析 ⇒ 「模型审计缺 `repair_targets` ⇒ 不授权」（v6.119 用户口径，结构化路径上
+#: 已经 `continue` 掉）会从文案这条路**原样绕回来**，且拿到的是**最粗的容器面**：
+#:
+#:     ① 结构化路径（无成对目标）: []
+#:     ② 同一条经渲染告警文本回来  : ['frame_layouts']   ← 覆盖全部帧、全部叶子
+#:     ③ 确定性告警（对照）        : ['keyframes.*.desc']
+#:
+#: 文案回退本身是**确定性告警**的合法出口（它们没有成对目标契约），必须保留；
+#: 所以这里只按前缀排除模型审计那一类，确定性告警的行为一字未动。
+MODEL_AUDIT_WARNING_PREFIX = "[model_audit]"
 
 
 def _is_structural_code(code) -> bool:
@@ -528,6 +557,22 @@ def _is_real_leaf(path: str, shot: dict, *, structural: bool = False) -> bool:
     return _path_exists_in_shot(_p_exact, shot)
 
 
+def _is_creatable_frame_key(path: str, shot: dict) -> bool:
+    """`path` 是不是**父容器存在、该帧键整块缺失**的可新建帧键（见 `_CREATABLE_FRAME_KEYS`）.
+
+    与 `_is_real_leaf` 的分工：后者要求路径**已经存在**（死路径进授权集没有意义）；
+    本函数只管"这一帧还没写、现在要新建它"——授权面仍然是**审计点名的那一个键**，
+    没有退回"从定位字段推导授权"，也没有放开其它字段。
+    """
+    _p = _norm_keep_index(str(path or "").strip())
+    if _p not in _CREATABLE_FRAME_KEYS:
+        return False
+    if _path_exists_in_shot(_p, shot):
+        return False                      # 已经存在 ⇒ 按普通叶子路径授权
+    _parent = _p.rpartition(".")[0]
+    return bool(_parent) and _path_exists_in_shot(_parent, shot)
+
+
 def validate_repair_targets(pairs, shots_by_id: dict, *, structural: bool = False) -> tuple:
     """逐项校验 `repair_targets`：**镜头存在** + `field_path` 是该镜头的**真实字段路径**.
 
@@ -556,8 +601,9 @@ def validate_repair_targets(pairs, shots_by_id: dict, *, structural: bool = Fals
             rejected.append(f"{tid}/{fp or '<空>'}（该镜头不存在于本稿）")
         elif not fp:
             rejected.append(f"{tid}/<空>（缺 field_path）")
-        elif not _is_real_leaf(fp, shot, structural=structural):
-            rejected.append(f"{tid}/{fp}（不是该镜头的真实字段路径）")
+        elif not (_is_real_leaf(fp, shot, structural=structural)
+                  or _is_creatable_frame_key(fp, shot)):
+            rejected.append(f"{tid}/{fp}（不是该镜头的真实字段路径，也不是可新建的缺失帧键）")
         else:
             valid.append({"shot_id": sid, "field_path": fp})
     return valid, rejected
@@ -663,6 +709,13 @@ def allowed_repair_fields(warnings, audit_issues=None, *,
         allowed.update(_fields_from_text(str(getattr(issue, "message", "") or "")))
     for w in warnings or []:
         text = str(w)
+        # v6.119 fail-closed（2026-10-04 第四轮堵口）：模型审计问题的授权**只**认
+        # 成对目标。它被渲染成告警只是为了让模型看得见问题（`main` 那一处），
+        # 不能因此从文案回退里拿回一个**更宽**的授权面——实测缺成对目标时这里会
+        # 给出 `frame_layouts`（覆盖全部帧、全部叶子），把「不授权」变成「全放行」。
+        # 确定性告警没有这个契约，照走文案回退（下面两行不动）。
+        if text.lstrip().startswith(MODEL_AUDIT_WARNING_PREFIX):
+            continue
         if any(_text_hits(text, kw) for kw in _KF_STRUCTURAL_KEYWORDS):
             structural = True
         allowed.update(_fields_from_text(text))
@@ -782,8 +835,21 @@ def merge_authorized(target: dict, new: dict, allowed) -> tuple:
                 else:
                     out[k] = _walk(tv, n[k], cp, echoed)
             for k in n:                      # new 多出的键 = 未授权新增 → 丢弃
-                if k not in t:
-                    _note(echoed, f"{prefix}.{k}" if prefix else str(k), True)
+                if k in t:
+                    continue
+                cp = f"{prefix}.{k}" if prefix else str(k)
+                if path_allowed(cp, allowed):
+                    # **授权路径上的新增键要留住**（台账 §19.2/§19.3 A2）：`frame_layouts.ff`
+                    # 整块缺失时，审计点名它 = 授权**新建**它。旧写法无条件丢弃，
+                    # 于是"授权新建"这条能力永远写不进去——模型照审计建议补的帧
+                    # 在合并层就被吃掉，日志还写成"未授权路径已回填"（实测章 2）。
+                    # 安全性不变：留住它的前提是 `path_allowed`，而 `_walk` 的其余分支
+                    # 本来就按同一条判据取 `new` 的值；`check_replacement_authorized`
+                    # 仍是事后纵深防御（新增键的展开路径 `frame_layouts.ff.*.name`
+                    # 同样落在 `frame_layouts.ff` 之下）。
+                    out[k] = _c.deepcopy(n[k])
+                else:
+                    _note(echoed, cp, True)
             return out
         if isinstance(t, list):
             if not isinstance(n, list):
@@ -934,6 +1000,84 @@ def _pure_entry_edits(path: str, before: list, after: list) -> list:
     return out
 
 
+def _new_frame_entry_problems(path: str, entries) -> list:
+    """**新建**的帧只许是「一帧的人物列表」（形状验收）——授权新建不等于放开结构.
+
+    授权点名 `frame_layouts.ff` 时，整个子树都从模型的产出里取；没有形状判据就等于
+    把这一帧的结构交给模型任意发挥。这里只核**最少够用**的三条：非空列表、每项是对象、
+    每项有 `name`（下游按名字做条目匹配与在场判定）。
+    """
+    if not isinstance(entries, list) or not entries:
+        return ["%s 新建后不是非空列表（一帧的人物列表：每项含 name/on_screen/position/pose）"
+                % path]
+    out: list = []
+    for _i, _e in enumerate(entries):
+        if not isinstance(_e, dict):
+            out.append("%s 第 %d 项不是对象" % (path, _i + 1))
+            continue
+        if not _entry_name(_e):
+            out.append("%s 第 %d 项缺 name（人物条目必须有名字）" % (path, _i + 1))
+    return out
+
+
+def _unauthorized_frame_edits(path: str, before: list, after: list, allowed) -> list:
+    """这一帧里**没有被授权路径解释**的改动（空 = 改动全部落在授权面内）.
+
+    复核 2026-10-04 P1-2 的反例：同一镜同时授权「补建 `frame_layouts.ff`」与「改
+    `frame_layouts.kfs[0][0].pose`」。旧写法只看「这一帧列表有没有被**逐字点名**」，
+    没点名就报"未被点名却被改动"——于是**同轮的另一项合法修复被自己的守卫拒掉**，
+    单目标场景整轮回退、多目标场景回退肇事镜头与联动组。
+
+    责任要分开：**整帧列表被点名** ⇒ 只许纯增删（`_pure_entry_edits`）；
+    **帧里的某个叶子被点名** ⇒ 那个叶子的改动是合法的，不算"未被点名"。
+    """
+    out: list = []
+    if not isinstance(before, list) or not isinstance(after, list):
+        return ["%s 未被点名却被改动：形状变化（授权的是帧内改动，不是换掉整帧结构）"
+                % path]
+    if len(before) != len(after):
+        # 措辞与既有判据一致（`test_frame_layout_entry_delete` 按它断言）
+        return ["%s 未被点名却被改动：条目数由 %d 变成 %d（未点名整帧列表 ⇒ 不许改长度）"
+                % (path, len(before), len(after))]
+    for _i, (_b, _a) in enumerate(zip(before, after)):
+        out.extend(_unauthorized_value_edits("%s[%d]" % (path, _i), _b, _a, allowed))
+    return out
+
+
+def _unauthorized_value_edits(path: str, before, after, allowed) -> list:
+    """逐层比对，**保留下标**地把**真正改变的叶子**交给 `path_allowed` 判.
+
+    复核 2026-10-04 第三轮：改前是按**条目的一级键**整份比（`props` 列表一变就报
+    `…[0].props 未被点名却被改动`），于是「授权 `frame_layouts.kfs[0][0].props[0]`
+    + 同轮新建 `ff`」这种**两处都合法**的修复会被自己的守卫拒掉。标量 `pose` 碰巧能过
+    （一级键就是叶子），**容器内部的叶子**一律误判。
+
+    规则（不新增任何字段特判，也不扩大成整份容器授权）：
+      - 路径本身在授权面内 ⇒ 整棵子树放行（`path_allowed` 的前缀语义）；
+      - dict/list 继续往下走（列表**保留下标**，容器形状与长度变化单独报）；
+      - 真正的标量叶子不在授权面内 ⇒ 报"未被点名却被改动"。
+    """
+    if before == after:
+        return []
+    if path_allowed(path, allowed):
+        return []
+    if isinstance(before, dict) and isinstance(after, dict):
+        out: list = []
+        for _k in sorted(set(before) | set(after)):
+            out.extend(_unauthorized_value_edits("%s.%s" % (path, _k),
+                                                 before.get(_k), after.get(_k), allowed))
+        return out
+    if isinstance(before, list) and isinstance(after, list):
+        if len(before) != len(after):
+            return ["%s 未被点名却被改动：条目数由 %d 变成 %d（未点名该列表 ⇒ 不许改长度）"
+                    % (path, len(before), len(after))]
+        out = []
+        for _i, (_b, _a) in enumerate(zip(before, after)):
+            out.extend(_unauthorized_value_edits("%s[%d]" % (path, _i), _b, _a, allowed))
+        return out
+    return ["%s 未被点名却被改动（授权面：%s）" % (path, sorted(allowed)[:4])]
+
+
 def frame_layout_structural_violations(before_script: dict, after_script: dict,
                                        allowed_by_target: dict | None,
                                        picked) -> list:
@@ -950,13 +1094,43 @@ def frame_layout_structural_violations(before_script: dict, after_script: dict,
         _bl = _layout_frame_lists(_before)
         _al = _layout_frame_lists(_after)
         _named = [p for p in _bl if _frame_target_spelled(p, allowed)]
-        if not _named:
+        # **新建**的帧也要点名、也要过形状验收（章 2 实测：`frame_layouts.ff`/`lf`
+        # 整块缺失时审计被授权新建它）。`_before` 里没有这条路径，上面那圈枚举不到，
+        # 于是"授权新建"会变成**唯一一条没有判据的授权面**——补上。
+        _created: dict = {}
+        for _p in _al:
+            if _p not in _bl and _frame_target_spelled(_p, allowed):
+                _created[_p] = _al[_p]
+        # ⚠️ 形状非法的"新建"（写成 dict / 标量而不是列表）**不会进 `_al`**
+        # （`_layout_frame_lists` 只收 list）——不单独扫一遍原始键，它就绕过全部判据。
+        _fl_after = _after.get("frame_layouts")
+        if isinstance(_fl_after, dict):
+            for _k in _LAYOUT_FRAME_LIST_KEYS:
+                _p = "frame_layouts.%s" % _k
+                if _k not in _fl_after or _p in _bl or _p in _created:
+                    continue
+                if _frame_target_spelled(_p, allowed):
+                    _created[_p] = _fl_after[_k]
+                elif not path_allowed(_p, allowed):
+                    # 纵深防御：**没被授权的新帧**照样报出来。生产路径上
+                    # `merge_authorized` 已经把它丢掉了，但守卫不能靠"上游丢过了"活着
+                    # ——它是这条授权面的最后一道判据。
+                    out.append("%s: %s 未被点名却被新增（授权面：%s）"
+                               % (tid, _p, sorted(allowed)[:4]))
+        for _cp, _cv in _created.items():
+            out.extend("%s: %s" % (tid, m)
+                       for m in _new_frame_entry_problems(_cp, _cv))
+        if not _named and not _created:
             continue                      # 没点名任何帧子列表 → 不适用（行为不变）
         for _path, _entries in _bl.items():
             _new = _al.get(_path)
             if _path not in _named:
                 if _new != _entries:      # 只限被点名的帧
-                    out.append("%s: %s 未被点名却被改动" % (tid, _path))
+                    # ⚠️ 但要**先问一句**：这些改动有没有被别处的授权叶子解释？
+                    # 没问就会把「同轮另一项合法修复」当成越权（复核 P1-2 反例）。
+                    out.extend("%s: %s" % (tid, m)
+                               for m in _unauthorized_frame_edits(_path, _entries, _new,
+                                                                  allowed))
                 continue
             if _new is None:
                 out.append("%s: %s 整帧被删除（授权的是增删**条目**，不是删帧）"

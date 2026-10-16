@@ -4984,11 +4984,24 @@ def _extract_scene_prefix(ff_text: str) -> str:
 
 
 def _fix_emotion_visualization(prompt: str) -> str:
-    """将抽象情绪词替换为可视化动作描述。"""
-    for emotion, action in _EMOTION_ACTION_MAP.items():
-        if emotion in prompt:
-            prompt = prompt.replace(emotion, action)
-    return prompt
+    """只转换明确的情绪值；自由正文交由语义修订，不能按子串改写。
+
+    已生成的动作短语作为整体保留。一次扫描原文，避免动作里仍含
+    情绪词时，在当前扫描或后续 hard-fix 中递归展开。
+    """
+    actions = sorted(set(_EMOTION_ACTION_MAP.values()), key=len, reverse=True)
+    emotions = sorted(_EMOTION_ACTION_MAP, key=len, reverse=True)
+    pattern = re.compile(
+        r"(?P<action>" + "|".join(re.escape(value) for value in actions) + r")"
+        r"|(?P<label>(?:表情|神情|神色|眼神)[：:]\s*)"
+        r"(?P<emotion>" + "|".join(re.escape(value) for value in emotions) + r")"
+        r"(?=$|[，。；、！？,.!?;\s])"
+    )
+    def replace(match):
+        if match.group("action") is not None:
+            return match.group(0)
+        return match.group("label") + _EMOTION_ACTION_MAP[match.group("emotion")]
+    return pattern.sub(replace, prompt)
 
 
 # 8种光位可直接复制描述（与 portrait-lighting SKILL.md 一致，供自动修复拼接）。
@@ -5412,7 +5425,7 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
     # 于是真实产物镜头 16 的 kf1「张十三挥鞭」被判成「无持握主体」HARD。
     # 这些动词与武器词绑定很紧（动宾之间几乎不插字），因此**只在武器词±3 字内**
     # 认账——放宽到整句窗口会让「挥手示意，腰间的刀…」这类无关动词误豁免。
-    _WIELD_VERBS = ("挥", "舞", "抡", "举", "擎", "横", "抄")
+    _WIELD_VERBS = ("挥", "舞", "抡", "举", "擎", "横", "抄", "扬")
     # 比喻/借代用法不是可被握持的武器实体：「目光如刀」实测被判成悬浮武器 HARD。
     # 只在武器词**紧邻**位置认比喻（前 1-2 字或后 1-2 字），避免把正常叙述误豁免。
     _SIMILE_BEFORE = ("如", "似", "若", "像", "宛如", "仿佛", "好似", "犹如")
@@ -5451,6 +5464,7 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
     _FLOATING_MARKS = ("悬在半空", "悬浮", "悬于", "悬在", "漂浮", "浮在半空",
                        "浮在", "飘在", "凭空", "停在半空", "无主")
     issues, warnings = [], []
+    structured = []
     checks = [(s, f"镜头{s.get('index')}") for s in shots]
     if hook:
         checks.insert(0, (hook, "钩子"))
@@ -5529,7 +5543,15 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
                     f"{label} {flabel}: 武器词「{hit}」无持握主体/落点锚（frame_layouts "
                     f"props 空 + 本句±相邻句无握持/落点动词）——图片模型只能画悬浮武器；"
                     f"补 holder（如「画外伸入一只握刀的手」）或删除该句")
-    return {"pass": True, "issues": issues, "warnings": warnings}
+                field = (f"keyframes[{int(flabel[2:])}].desc"
+                         if flabel.startswith("kf") else f"{flabel}_desc")
+                sid = "hook" if hook is shot else shot.get("index")
+                structured.append({"code": "weapon_holder", "severity": "hard",
+                    "message": issues[-1], "shot_id": sid, "frame_id": flabel,
+                    "field_path": field, "evidence": seg, "repairable": True,
+                    "repair_targets": [{"shot_id": sid, "field_path": field}]})
+    return {"pass": True, "issues": issues, "warnings": warnings,
+            "structured_issues": structured}
 
 
 def _check_gaze_state_conflict(shots: list[dict], hook: dict | None = None,

@@ -61,17 +61,30 @@ def new_call_id() -> str:
 
 
 def _describe(req) -> dict:
-    """从请求里取**可对账**的少量字段（不落整份 prompt：体积与敏感度都不合适）."""
+    """从请求里取**可对账**的少量字段（不落整份 prompt：体积与敏感度都不合适）.
+
+    ⚠️ **但要有摘要**（2026-10-11 逐笔诊断的缺口）：只留 `schema/参数` 时，"这次请求的提示
+    到底写没写清输出形状"**无法用本次运行的产物自证**——只能读当时的源码。实测一条修订拒收
+    （`delta_delete_and_upsert_same_uid`）用归档响应**复现不出**，正是因为请求正文没留、无从
+    判断当时发的是什么。这里补 `prompt_sha256`（**摘要，不是正文**）：不增体积、不含内容，
+    但可以用"按当前源码 + 同样输入重建的提示"算出同一个值来**证明提示逐字未变**。
+    """
     _schema = ""
     try:
         _schema = str((getattr(req, "json_schema", None) or {}).get("name") or "")
     except Exception:
         _schema = ""
+    _sys = str(getattr(req, "system_prompt", "") or "")
+    _user = str(getattr(req, "user_prompt", "") or "")
+    _payload = ("system:" + _sys + "\nuser:" + _user).encode("utf-8")
     return {
         "max_tokens": getattr(req, "max_tokens", None),
         "temperature": getattr(req, "temperature", None),
         "schema": _schema,
         "purpose": str(getattr(req, "purpose", "") or ""),
+        #: 提示的**逐字摘要**（`system` + `user`）——用于事后核对"发出去的提示没变"。
+        "prompt_sha256": hashlib.sha256(_payload).hexdigest(),
+        "prompt_chars": len(_sys) + len(_user),
     }
 
 

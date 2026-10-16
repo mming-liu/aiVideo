@@ -5,6 +5,9 @@
 """
 from __future__ import annotations
 
+from shared.fact_metadata import (FACT_METADATA_VERSION, LEGACY_ACCEPTANCE_FIELD,
+                                  LEGACY_ACCEPTANCE_VERSION)
+
 import copy
 import json
 import hashlib
@@ -19,11 +22,30 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from _text_gen import create_service, TextGenerationRequest
 from _text_gen.deepseek_schema import OUTLINE_SCHEMA, REPLAN_OPS_SCHEMA
+#: 呈现协议的常量与 codec（**单一事实源**在 `shared/presentation_contract.py`）——
+#: 这里只 import 名字，不复制取值。
+from shared.presentation_contract import (MODE_HYBRID, MODE_LEGACY, PLAN_CONTRACT_VERSION_BY_MODE,
+                                          DELTA_SCHEMA, PRESENTATION_SCHEMA, REVISION_SCHEMA,
+                                          PresentationContractError,
+                                          apply_delta_view, apply_editable_view,
+                                          delta_request, plan_basis, plan_from_view,
+                                          plan_mode, ref_uid, revision_request, view_from_plan,
+                                          view_digest, view_problems)
 from step01_script_gen.plan_feasibility import (PLAN_CONTRACT_VERSION,
                                                 normalize_plan_ranges,
-                                                plan_contract_problems)
+                                                plan_contract_problems,
+                                                source_norm_note)
 from step01_script_gen.plan_revision import DEFAULT_MAX_CALLS as _REVISION_MAX_CALLS
 from step01_script_gen.plan_revision import failure_detail, residual_class
+
+
+def _outline_max_tokens() -> int:
+    """One configured operation limit for outline requests and cache identity."""
+    from _text_gen.config import config
+    value = config.TEXT_OUTLINE_MAX_TOKENS
+    if type(value) is not int or value <= 0:
+        raise ValueError("TEXT_OUTLINE_MAX_TOKENS 必须是正整数")
+    return value
 
 
 OUTLINE_PROMPT = """
@@ -64,7 +86,9 @@ OUTLINE_PROMPT = """
   部分，没有任何机制能证明它被承载）
   **每条还要声明承载**（写在条目末尾）：`｜承载：B节拍号/台词k` = 由第 k 句选用台词说出口，
   `｜承载：B节拍号/画面` = 由该节拍的**画面**演出。承载必须是**真的演出这条事实**的那条节拍：
-  代码会拿这条事实（含原文证据）与承载节拍的**正文**（镜头真的拍什么）或**选用台词**比对
+  代码会拿这条事实（含原文证据）与承载节拍的**正文**（镜头真的拍什么）或**选用台词**比对；
+  **承载必须能完整表达这条事实的「原文证据」**——逐句都要表达得到。表达不了（原文那句太长、
+  一镜说不完，或画面拍不出来）就**各自另立一条事实**，别硬挂一条只说得出一半的载体。
   ——① 只把事实引文抄进节拍的「原文依据」**不算**演出；② 只在「本镜信息目的」里写上这条
   事实、**正文里没有人名/地点/动作等要素**，也**不算**演出（声明不能自证），会被拒收。
   画面承载的节拍必须标「载体：画面」，台词承载的节拍必须标「载体：台词k」。
@@ -86,6 +110,13 @@ OUTLINE_PROMPT = """
   也不得自造旁白——旁白必须逐字来自原文叙述。
   **旁白不是"什么都能装"的兜底**：年龄、字号、家世、功名这些仍要按故事需要**取舍**
   （该省就省），不能先把它们都转成旁白、再靠加时长容纳。
+  **每条声音条目要有自己的承载节拍**（2026-10-04 第四次实跑根因）：一条节拍只能标
+  **一个**载体，所以 k 条旁白至少要落在 **k 条不同**的节拍上（各标 `载体：旁白1`、
+  `载体：旁白2`…），台词同理。把多条旁白/台词都挂在同一条节拍上会被拒收
+  （结果是那几条**成片里没人念**）。需要 k 条声音条目，就准备 k 条承载节拍。
+  **旁白要选「一镜说得完」的原文句**（同一次实跑的 ③④ 类）：句内有句末标点、估时不超过
+  单镜上限。**句内只有逗号/顿号的长句无法合法切分**（会被 `budget_unrepresentable` 拒收，
+  须重选），别硬选。发声总时长也要与预算相称——先算「对白＋旁白」的下界，再决定选几条。
   **先定表达方式，再登记事实**（2026-09-30 复核第 5 轮：实跑的计划反复把身份/年龄/来历
   登记成必保留事实，却没有任何画面或台词真的表达它，于是每次都在计划层被打回）——
   按这个顺序做，不要反过来：
@@ -170,6 +201,21 @@ _BEAT_EDIT_RULE = {
 #: 应用器**都消费这一个值**（复核之十二 P1）。
 ROUTE_OPS = "ops"
 ROUTE_FULL_PLAN = "full_plan"
+#: **`plan_revision.v2` 完整可编辑视图替换**（R1/R2）：模型回一整份视图、代码派生编号
+#: 与承载关系。它取代新请求里的 ops / 受限 full_plan 二选一；那两个协议保留为
+#: **冻结响应回放/兼容适配器**（不猜形状、不作隐藏失败重试）。
+#:
+#: 2026-10-11 起它也是 **hybrid 链路的生产形态**（`_replan_route`：mode 决定 v2 的形态）。
+ROUTE_VIEW = "view"
+#: **`plan_revision.delta.v1` 按 UID 的增量修订**（B 包）：**legacy 链路的生产形态**。
+#: 模型只回**改动**（按稳定 id 增减改条目、显式删除、完整顺序、绑定与出处），冻结主张 /
+#: 事件 / `plan_basis` 由本地基线保留、**不要求重抄**。
+#:
+#: ⚠️ 2026-10-11 隔离对照实验后，**hybrid 不再走它**（改 `ROUTE_VIEW`，见 `_replan_route`）：
+#: 同一模型对增量协议 5/5 违约、对完整视图 0 拒收。它仍保留完整实现（legacy 在用，
+#: 且历史 delta 归档仍按原协议回放）。协议按这个常量选，**不按响应形状猜**
+#: （复核 2026-10-06 第八轮）。
+ROUTE_VIEW_DELTA = "view_delta"
 
 #: 重选**允许**改动的字段；其余字段必须原样返回（必保留事实与事件顺序不得变）
 #: 契约**元数据**（版本戳）：不是内容、不参与「核心字段被改动」的比对——
@@ -206,6 +252,42 @@ def replan_protected_fields() -> tuple:
     """
     _editable = _replan_editable_keys()
     return tuple(sorted(_f for _f in _plan_required_fields() if _f not in _editable))
+
+
+def render_view_protected_rule() -> str:
+    """**v2 视图**的「不许改什么」（v2 词汇，与 `view_problems` **同一份口径**）.
+
+    ⚠️ 为什么必须单独一份（实跑 2026-10-06 根因）：v2 修订的 prompt 此前拼的是
+    `render_protected_fields_rule()`，而那份说的是 **v5 词汇**——`required_facts`、
+    `shot_beats`、`｜承载：`、`｜载体：`。而 `_PLAN_VIEW_INSTRUCTION` 与请求里的视图
+    本体说的是 **v2 词汇**——`beats`、`fact_bindings`、`voice_ref`。
+    同一份 prompt 里**两套互相冲突的形状规格**，模型于是自己发明了第三种：
+    实测三次响应分别回成 `"beats": [0,1,2,...]`（下标占位）、
+    `"frozen_facts": [0,...]`，以及 v2 信封 + v5 计划体（`required_facts` /
+    `narration_lines` / `screen_cards`）的**混合体**，三轮全部被拒收、额度耗尽。
+
+    规则只有一份来源：`view_problems` 判什么，这里就说什么。
+    """
+    return chr(10).join([
+        "**不许改什么**（v2 视图口径，与代码判据同源）：",
+        "- `frozen_facts[].claim`（**正文主张**）与 `frozen_events`（事件集合与**顺序**）"
+        "——冻结；只允许用 `evidence_updates` 更正**来源片段**；",
+        "- 已有实体的 `uid`（`beats` / `dialogue_units` / `narration_units` / "
+        "`screen_cards`）必须**原样保留**——改 uid 等于让所有引用悬空；",
+        "- `plan_basis` 里的 `climax` / `causal_chain` / `time_budget` / `characters` / "
+        "`emotional_arc` / `end_hook` / `key_scenes` / `character_motives` / `omittable`"
+        "——**关系之外**的字段，一字不许改；",
+        "- 不许自报通过、不许放宽预算、不许输出 `passed` / `executable` / `budget` "
+        "之类结论字段；",
+        # ⚠️ 判据是「**所有节拍共同**覆盖全部冻结事件 + 事件先后不得回退」
+        # （`presentation_contract.view_problems` 的 `view_event_uncovered` /
+        # `view_event_order_reversed`）。旧文案写的是"**每条** `event_uids` 必须覆盖全部
+        # 冻结事件"——照它改，一份原本零问题的合法视图会立刻触发 `view_event_order_reversed`
+        # （每条都覆盖全部事件 ⇒ 每条都要按同一顺序排全部事件 ⇒ 后一条必然相对前一条回退）。
+        # 复核 2026-10-06（第十一轮）P2 实测确认。**改文案，不改判据。**
+        "- 事件归属若已声明（`event_binding=declared`）：**所有节拍共同**覆盖全部冻结事件"
+        "（不要求每条都覆盖），且事件在节拍里出现的先后**不得回退**。",
+    ])
 
 
 def render_protected_fields_rule() -> str:
@@ -342,6 +424,46 @@ _INTERFACE_ADVICE = {
                      "把内容取舍交还用户，而不是硬拆。",
         "plan_fields_note": "顺带更新 `omittable`（可省略内容）与 `time_budget`"
                             "（倾向性文字，不必报精确秒数）。",
+    },
+    # **`plan_revision.v2` 完整视图替换**（R1/R2）。旧两个协议保留为**冻结响应回放/
+    # 兼容适配器**；新请求**一律**走 v2（工作包 1 第 3 条：旧 ops/full 不再是新请求的
+    # 选项，只是回放入口）。
+    #
+    # ⚠️ 这一项**必须存在**（复核 2026-10-05 P1）：`_budget_feedback_block` 按
+    # `_INTERFACE_ADVICE[_route]` 取文案，而预算分支**先于**接口分派执行——于是
+    # 一个纯预算问题的 hybrid 计划，`_route` 已是 `ROUTE_VIEW`，却先走进预算分支去查
+    # 这张表 ⇒ `KeyError: 'view'`。这不是"缺一条文案"，是**预算问题绕过了接口分派**；
+    # 两处都要改（见 `revise_plan_once` 的 `_budget_ctx and _route == ROUTE_VIEW`）。
+    ROUTE_VIEW_DELTA: {
+        "reorder_rule": "改**关系**：每条事实由谁承载（`fact_bindings`）、每条节拍由谁发声"
+                        "（`voice_ref`）、卡片挂在哪、事件归属——派生编号由代码算；",
+        "beat_edit_rule": "**节拍正文、条数、载体都可以改**；节拍的「原文依据」仍须"
+                          "**逐字复制原文**；改集合（增/删）时**必须**给出最终的完整 id 顺序；",
+        "carrier_escape": "把该事实的 `carriers` 改指向另一个载体（另一条台词/旁白，"
+                          "或新模式下的画面/文字卡），并让被删掉的载体解绑",
+        "baseline_note": "请求里带了**当前可编辑视图本体**，你只回**改动**（增量）；"
+                         "两个基线摘要原样回带。",
+        "cannot_do": "若确实没有要改的地方，**什么都不给**（或所有改动块都空）——"
+                     "代码会记 `no_change`（同样不采纳）。",
+        "plan_fields_note": "`plan_basis` 里的 `climax` / `causal_chain` / `time_budget` / "
+                            "`characters` 等字段由本地基线保留，**不用回抄、也不许改**；",
+    },
+    ROUTE_VIEW: {
+        "reorder_rule": "改**关系**：每条事实由谁承载（`fact_bindings`）、每条节拍由谁发声"
+                        "（`voice_ref`）、卡片挂在哪、事件归属——派生编号由代码算；",
+        "beat_edit_rule": "**节拍正文、条数、载体都可以改**（v2 不锁 `shot_beats`）；"
+                          "节拍的「原文依据」仍须**逐字复制原文**；",
+        "carrier_escape": "把该事实的 `carriers` 改指向另一个载体（另一条台词/旁白，"
+                          "或新模式下的画面/文字卡），并让被删掉的载体解绑",
+        "baseline_note": "请求里带了**当前可编辑视图本体**，你要改的就是这一份；"
+                         "两个基线摘要原样回带。",
+        "cannot_do": "若确实没有任何合法修法，**原样回带同一份视图**——代码会比摘要，"
+                     "一字不差会记成 `no_change`（同样不采纳）。**不要**自报通过、"
+                     "不要放宽预算、不要输出 `passed`/`executable` 之类结论字段。",
+        "plan_fields_note": "`frozen_facts[].claim`（正文主张）与 `frozen_events`（事件集合"
+                            "与顺序）冻结；已有实体的 uid 必须保留；"
+                            "`plan_basis` 里的 `climax`/`causal_chain`/`time_budget` 等"
+                            "**关系之外**的字段也不许改。",
     },
 }
 
@@ -582,6 +704,24 @@ def _budget_feedback_block(rep: dict, plan: dict, novel_text: str = "",
     return block
 
 
+def _preserve_acceptance_policy(baseline, candidate):
+    """Local acceptance policy follows every full-plan revision, never model input."""
+    from shared.fact_metadata import LEGACY_ACCEPTANCE_FIELD
+    from step01_script_gen.plan_coherence import FIELD as COHERENCE_FIELD
+    from step01_script_gen.source_revision import FIELD as SOURCE_FIELD
+    if isinstance(candidate, dict):
+        candidate.pop("plan_verification", None)
+        candidate.pop(LEGACY_ACCEPTANCE_FIELD, None)
+        if LEGACY_ACCEPTANCE_FIELD in baseline:
+            candidate[LEGACY_ACCEPTANCE_FIELD] = baseline[LEGACY_ACCEPTANCE_FIELD]
+        candidate.pop(COHERENCE_FIELD, None)
+        if COHERENCE_FIELD in baseline:
+            candidate[COHERENCE_FIELD] = baseline[COHERENCE_FIELD]
+        candidate.pop(SOURCE_FIELD, None)
+        if SOURCE_FIELD in baseline:
+            candidate[SOURCE_FIELD] = copy.deepcopy(baseline[SOURCE_FIELD])
+
+
 def _plan_core_preserved(old: dict, new: dict) -> str:
     """重选后核心字段是否原样保留；返回第一个被改动/丢失的字段名（空串=通过）.
 
@@ -599,7 +739,7 @@ def _plan_core_preserved(old: dict, new: dict) -> str:
     """
     _editable = _replan_editable_keys()
     for key in sorted(set(old or {}) | set(new or {})):
-        if key in _editable or key.startswith("prop_state"):
+        if key in _editable or key == "plan_verification" or key.startswith("prop_state"):
             continue
         if (old or {}).get(key) == (new or {}).get(key):
             continue
@@ -658,7 +798,7 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
         service = create_service()
         result = service.generate(TextGenerationRequest(
             system_prompt=system_prompt or _OUTLINE_SYSTEM_PROMPT,
-            user_prompt=_prompt, max_tokens=4000, temperature=0.3,
+            user_prompt=_prompt, max_tokens=_outline_max_tokens(), temperature=0.3,
             json_schema=REPLAN_OPS_SCHEMA if _ops_mode else OUTLINE_SCHEMA,
             model=model,
             # 第 31 轮：**通道内重试也受同一剩余时间约束**——修订控制器给的额度里
@@ -712,6 +852,7 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
         print("[WARN] 规划重选结果不合法（保留首版计划）：%s" % _pre)
         return None, _pre, _call_id
     new_plan = _validate_outline(data, novel_text)
+    _preserve_acceptance_policy(plan, new_plan)
     if not new_plan:
         print("[WARN] 规划重选结果不合法（保留首版计划）")
         return None, "invalid_result: 净化事务拒收", _call_id
@@ -878,12 +1019,33 @@ def enforce_budget_by_replanning(plan, novel_text, *, model=None,
 DEFAULT_REVISION_MAX_CALLS = _REVISION_MAX_CALLS
 DEFAULT_REVISION_DEADLINE_SEC = 600.0
 
+def default_revision_transport(mode: str) -> str:
+    """当前**生产默认**的修订传输协议（进缓存身份）.
+
+    **直接问路由器**（`_replan_route`），不抄一份等价表达式——抄出来的那份会在下一次
+    改路由时忘了跟着改，缓存身份就与实际发出的协议脱钩（复核之十二的同一教训：
+    「盘点表判得对，不等于请求消费了它」）。
+    """
+    return _replan_route(None, mode=mode)
+
+
 def _with_protocol_fields(records) -> list:
-    """把问题记录收成**六字段协议**（工作包 §2.1）：`code / kind / index / path / reason / basis`.
+    """把问题记录收成**协议字段**：`code / kind / index / uid / path / reason / basis /
+    fix / capability / limits`.
 
     生产者各写各的时容易漏字段；这里只做**归一与缺省**，**不从文本里恢复任何身份**
     （缺编号就是 `None`，不用 0 或猜出来的数字占位）。`detail` 作为兼容别名一并保留
     （旧消费者/日志还在读它），内容是同一份 `reason`。
+
+    R3（`docs/aiVideo-step01-planning-closure-2026-10-04.md`）要求记录**自带身份与修法
+    能力**，报告层不得从文案再猜：
+
+    - `uid`：实体的**稳定身份**（`b03`/`d01`/`n02`/`f04`/`c01`…）。`index` 是**当前
+      版本的展示编号**，两者不是一回事——只在文案里写 `B3` 时，版本一变就再也对不上。
+    - `capability`：这条问题**需要哪种修改能力**（`ops` / `content` / `plan_field`），
+      由盘点表按 `code` 正面查；未登记留空并由 `_fix_capability` 判 `undeclared`
+      （fail-closed）。**在这里补写而不是在反馈层查**：请求、日志、诊断读的是同一份。
+    - `limits`：适用限制（例如预算实际值）——有就带，没有就是 `{}`，不编造。
     """
     _out = []
     for _r in records or []:
@@ -899,6 +1061,15 @@ def _with_protocol_fields(records) -> list:
         #: 由生产者给；修订分流按它决定走操作式还是受约束的完整计划修订
         _x.setdefault("fix", "")
         _x.setdefault("code", "unspecified")
+        #: **实体稳定身份**：生产者给了就用；没给时**不猜**（留空），
+        #: 由 `_index_to_uid()` 在**编号域明确**的调用点补（见 `plan_acceptance_problems`）
+        _x.setdefault("uid", "")
+        _x.setdefault("limits", {})
+        if not _x.get("capability"):
+            _cap = PLAN_FIX_CAPABILITY.get(str(_x.get("code") or ""))
+            if _x.get("fix"):
+                _cap = _FIX_MARK_TO_CAPABILITY.get(str(_x["fix"]), _cap)
+            _x["capability"] = (_cap[0] if _cap else "")
         _out.append(_x)
     return _out
 
@@ -934,6 +1105,13 @@ def outline_structure_problems(plan) -> list:
                      "reason": reason, "basis": _st})
 
     _events = plan.get("main_events")
+    # **有事件序号引用时，"空白事件"不许按可净化项放过**（复核 2026-10-07 P1）：
+    # `beat_events` 按**序号**引用 `main_events`。净化先删掉一个空项 ⇒ 后面每一条引用
+    # 整体前移、静默指向**另一个事件**，而形状/覆盖/顺序检查看的是**净化后**的表，
+    # 照样报零问题。判据是"键在不在"（表自己写坏了也仍是"打算按序号引用"）：
+    # 给了 `beat_events` ⇒ 空事件是**结构错**，由首版入口反馈重新生成完整计划；
+    # 没有序号引用的旧模式保留原净化行为。
+    _indexed = "beat_events" in plan
     _n_events = 0
     if not isinstance(_events, list):
         _rec("structure_events_type", "plan", None, "main_events",
@@ -944,10 +1122,19 @@ def outline_structure_problems(plan) -> list:
                 _rec("structure_events_item_type", "plan", None,
                      "main_events[%d]" % (_i - 1),
                      "`main_events` 第 %d 条不是字符串（%s）" % (_i, type(_e).__name__))
+            elif _indexed and not _e.strip():
+                _rec("structure_events_item_empty", "plan", _i,
+                     "main_events[%d]" % (_i - 1),
+                     "`main_events` 第 %d 条是空的——它**占着一个事件序号**"
+                     "（`beat_events` 按序号引用事件），删掉它或拿空串占位都会让后面的"
+                     "引用整体指错；请把这一条的正文补齐，**重新给出完整计划**" % _i)
         # **可净化项**（旧契约：空白项过滤掉再判数量）——这里只数**有效**条目，
         # 不把"留了个空串"报成结构错误（那是净化事务的事，工作包 §3 三个责任分清）。
+        # 有事件序号引用时空白项已经是结构错，计数按**原始条数**算，免得再报一条
+        # "条数不对"把真正的原因盖住。
         # 这个条数同时给覆盖检查用（复核第 39 轮：两处口径必须一致）。
-        _n_events = len([_e for _e in _events if isinstance(_e, str) and _e.strip()])
+        _n_events = len([_e for _e in _events
+                         if isinstance(_e, str) and (_indexed or _e.strip())])
         _bad_item = any(x["code"] == "structure_events_item_type" for x in _out)
         if _n_events and not 3 <= _n_events <= 6:
             _rec("structure_events_count", "plan", None, "main_events",
@@ -1005,6 +1192,8 @@ def outline_structure_problems(plan) -> list:
     # 覆盖检查与数量检查**同一口径**（复核第 39 轮：追加空白事件时数量按有效条数算、
     # 覆盖却按原始数组长度算 ⇒ 合法输入被误拒）
     _beats = plan.get("shot_beats")
+    from shared.presentation_contract import plan_beat_body_problems
+    _out.extend(plan_beat_body_problems(plan))
     if isinstance(_beats, list) and _n_events and len(_beats) < _n_events:
         _rec("structure_beats_cover_events", "plan", None, "shot_beats",
              "`shot_beats` 未覆盖全部主要事件（%d 条节拍 < %d 条事件）"
@@ -1071,6 +1260,27 @@ def plan_acceptance_problems(plan, novel_text: str = "") -> list:
         len(plan_narration_entries(plan))))
     _out = _with_protocol_fields(_out)
     _rep = evaluate_plan(plan, novel_text=novel_text)
+    # ---- R3：给每条记录补上**实体稳定身份**（编号域明确时才补，不猜）----
+    #
+    # `index` 是**当前版本的展示编号**（B3/D2…），`uid` 是**稳定身份**——两者不是一回事：
+    # 只在文案里写 `B3`，计划一改（拆一条节拍）编号就全变，问题记录再也对不上是哪一条。
+    # 这里能补是因为**编号域明确**（`presentation` 块里存着 uid 表）；没有 uid 表的旧计划
+    # 走 `presentation_contract` 的 `plan_basis`/事件未声明路径，`uid` 留空——**留空而不是
+    # 编一个**，编出来的身份比没有身份更坏。
+    _uid_tables = _uid_tables_of(plan)
+    for _rec in _out:
+        if _rec.get("uid"):
+            continue
+        _u = _uid_for(_rec, _uid_tables)
+        if _u:
+            _rec["uid"] = _u
+        # 预算类记录带上**实际值与适用限制**（R3：替代片段与预算读数必须给数字，
+        # 不能只给"超预算"三个字）
+        _rec.setdefault("limits", {})
+        if str(_rec.get("code") or "").startswith("budget") and not _rec["limits"]:
+            _rec["limits"] = {"budget": dict(_rep.get("budget") or {}),
+                              "lower_bound_sec": _rep.get("lower_bound_sec")}
+    _out = _with_protocol_fields(_out)
     # 原文核验按**逐条枚举**调用（工作包 §2.2：D/N 身份由调用处枚举提供）——
     # `verify_dialogue_lines` 的 `rejected` 只带句子与原因、不带序号，从它恢复序号就是
     # 复核第 33 轮 P1 说的"从正文猜编号"（`2024` 那句曾被报成 `dialogue_lines[2023]`）。
@@ -1115,6 +1325,32 @@ def plan_acceptance_problems(plan, novel_text: str = "") -> list:
     # 「无合适替代」「载体缺失」「载体悬空」三类），报告层只组合。
     _out.extend(_rep.get("problems") or [])
     return _with_protocol_fields(_out)
+
+
+def _uid_tables_of(plan) -> dict:
+    """计划的**稳定身份表**（`kind → [uid, …]`）；没有 `presentation` 块 ⇒ 空表."""
+    _pres = (plan or {}).get("presentation")
+    if not isinstance(_pres, dict):
+        return {}
+    return {"beat": [str(x) for x in (_pres.get("beat_uids") or [])],
+            "dialogue": [str(x) for x in (_pres.get("dialogue_uids") or [])],
+            "narration": [str(x) for x in (_pres.get("narration_uids") or [])],
+            "fact": [str(x) for x in (_pres.get("fact_uids") or [])],
+            "card": [str(x.get("card_id") or x.get("uid") or "")
+                     for x in (_pres.get("screen_cards") or [])
+                     if isinstance(x, dict)]}
+
+
+def _uid_for(rec, tables) -> str:
+    """一条问题记录 → **实体稳定身份**（`kind` + `index` 给出；域不明确时留空）."""
+    _k = str(rec.get("kind") or "")
+    _i = rec.get("index")
+    if not isinstance(_i, int) or _i < 1:
+        return ""
+    _t = (tables or {}).get(_k) or []
+    if len(_t) < _i or not _t[_i - 1]:
+        return ""
+    return _t[_i - 1]
 
 
 def _render_plan_for_revision(plan) -> str:
@@ -1185,19 +1421,27 @@ def _revision_feedback_block(problems, plan) -> str:
     空值什么意思"这类**协议语义**。
 
     2026-10-02 复核之六 P2：**总数与未展开项的身份必须给**（旧写法 `[:12]` 静默省略）。
+
+    R3（复核 2026-10-04 P1-3）：**回灌模型的原因不许被截断**。原型这里是
+    `detail[:160] basis[:80]`——章 1 第 4 轮 22 项问题里后 10 项的完整原因根本没进请求，
+    合成一条 180 字详情的反例时结尾**无省略提示地消失**。现在展开项**给完整原因**；
+    仍受 `FEEDBACK_DETAIL_LIMIT` 限制的只是"展开几条"，超出部分走 `_unexpanded_block`
+    （总数 + 按类别计数 + 每条身份），**身份不丢、内容有界**。
     """
     _recs = [x for x in (problems or []) if isinstance(x, dict)]
     _n = len(_recs)
     if _n > FEEDBACK_DETAIL_LIMIT:
-        _head = "未通过的项目（**共 %d 项**；下列前 %d 项给出字段路径与判据依据）：" % (
+        _head = "未通过的项目（**共 %d 项**；下列前 %d 项给出完整原因与判据依据）：" % (
             _n, FEEDBACK_DETAIL_LIMIT)
     else:
         _head = "未通过的项目（共 %d 项）：" % _n
     _lines = ["【本轮修订要求】上一版计划未通过统一验收。", "", _head]
     for _p in _recs[:FEEDBACK_DETAIL_LIMIT]:
-        _lines.append("- %s｜%s｜%s" % (_p.get("path") or "（未定位到字段）",
-                                       str(_p.get("detail") or "")[:160],
-                                       str(_p.get("basis") or "")[:80]))
+        _lines.append("- %s（能力：%s）｜%s｜%s"
+                      % (_p.get("path") or "（未定位到字段）",
+                         _p.get("capability") or "未登记",
+                         str(_p.get("reason") or _p.get("detail") or ""),
+                         str(_p.get("basis") or "")))
     if _n > FEEDBACK_DETAIL_LIMIT:
         _lines += _unexpanded_block(_recs[FEEDBACK_DETAIL_LIMIT:])
         _lines.append("本轮**能改的键**见上面的操作说明；改不动或没改完的项会在下一轮继续反馈。")
@@ -1221,7 +1465,15 @@ def _rejection_feedback_block(rejections) -> str:
     _lines = ["", "【上一轮你的回复被本地校验拒收：**计划一个字节都没有改**】",
               "被拒收的具体位置与原因（照原样引用）："]
     for _x in _items[-3:]:
-        _lines.append("- 第 %s 轮：%s" % (_x.get("round"), str(_x.get("detail") or "")[:300]))
+        # **原样给全，不再截断**（复核 2026-10-04 P1-1）。
+        # 旧写法是 `[:300]`：章 1 第 3 轮的拒收原因实测 533 字（6 条问题），截到 300 就把
+        # 后 3 条（`F6`/`F8`/`F9`）**无声丢掉**；随后我改成"上限 1200 + 显式标注"——
+        # 那仍然是在**限制模型能看到的反馈**，而复核的要求是"下一轮请求读取**完整**问题，
+        # 不继续靠抬高字符上限解决"。所以这里去掉上限：控制器存完整、展示走
+        # `plan_revision.rejection_display()`（有界且标注）、**回灌模型读完整**。
+        # 代价是请求体随拒收文本增长；真遇到预算问题要动的是**预算感知的渲染**，
+        # 不是在这里悄悄砍掉模型需要的信息。
+        _lines.append("- 第 %s 轮：%s" % (_x.get("round"), str(_x.get("detail") or "")))
     _lines.append("请按上面的原因改正后，重新给出本轮要求的**完整**回复——"
                   "不要再出现被拒收的写法，也不要因为上次被拒就什么都不改"
                   "（空操作会被记成 `no_change`，同样不采纳）。")
@@ -1237,6 +1489,12 @@ def _rejection_feedback_block(rejections) -> str:
 #:                     `hook_spoken` / `narration_lines`）；
 #: - `"content"`    —— 必须**新增/删除内容条目**（操作协议只能替换已有编号）⇒ 完整计划修订；
 #: - `"plan_field"` —— 必须改操作协议**碰不到**的计划字段（例如 `time_budget`）⇒ 完整计划修订。
+#:
+#: 另有第四种 `"view"`：**`plan_revision.v2` 完整可编辑视图替换**能表达——关系层的任何
+#: 改动（新增/删除/重绑载体、拆分节拍、卡片增删、声明事件归属、只更正出处）。v2 把
+#: 承载关系收成**一份**（`fact_bindings`），模型只改视图，编号与登记由**代码派生**，
+#: 所以"这个修法表达不了吗"在 v2 下几乎不再是问题——R §2.1 那类"操作按修改前编号、
+#: 声明按修改后编号"的错位在 v2 下结构上不可能发生。
 #:
 #: 复核之十一 P1：分流**只看这张表**——"没有 `reselect_dialogue` 标记"这种**否定式**推断
 #: 已被实测证伪：一条只在 `time_budget` 带「载体缺失：无合适承载」的合法计划被判
@@ -1258,6 +1516,9 @@ PLAN_FIX_CAPABILITY = {
     "structure_empty": ("plan_field", "plan"),
     "structure_events_type": ("plan_field", "main_events"),
     "structure_events_item_type": ("plan_field", "main_events"),
+    # 空白事件**在有事件序号引用时**是结构错（`beat_events` 按序号引用事件）：
+    # 修法是补齐那一条正文并重给完整计划——`plan_field` 那一档。
+    "structure_events_item_empty": ("plan_field", "main_events"),
     "structure_events_count": ("plan_field", "main_events"),
     "structure_missing_climax": ("plan_field", "climax"),
     "structure_field_type": ("plan_field", "path 指定的字段"),
@@ -1306,6 +1567,16 @@ PLAN_FIX_CAPABILITY = {
     "carrier_fact_line_unrelated": ("ops", "required_facts"),
     "carrier_fact_narration_missing": ("ops", "required_facts"),
     "carrier_fact_narration_mismatch": ("ops", "required_facts"),
+    # 复核 2026-10-04 第四轮 P1：旁白正文**没有表达**这条事实。修法两轴都在操作
+    # 协议能力内——改声明（`fact_carriers` 换承载）或换旁白正文（`narration_lines`
+    # 整表），与 `budget_unrepresentable` 同形，故两轴都认（只写一轴会在另一侧漏判）。
+    "carrier_fact_narration_unrelated": ("ops", ("required_facts", "narration_lines")),
+    # 路线 3（用户 2026-10-04）：**逐字类载体**（台词/旁白）的正文必须表达事实的
+    # **全部原文证据**——只表达一半时新增的两个 code。修法都在操作协议能力内：改声明
+    # （`fact_carriers`）或换载体正文（台词整条换 `dialogue_ops`；旁白整表 `narration_lines`）。
+    # 画面是**转述**载体，不做逐分句覆盖（合法形态就是"用画面演出"），故无对应 code。
+    "carrier_fact_line_incomplete": ("ops", ("required_facts", "dialogue_lines")),
+    "carrier_fact_narration_incomplete": ("ops", ("required_facts", "narration_lines")),
     "carrier_fact_visual_mismatch": ("ops", "required_facts"),
     "carrier_fact_visual_unrelated": ("ops", "required_facts"),
     "carrier_narration_field": ("ops", "narration_lines"),
@@ -1325,6 +1596,85 @@ PLAN_FIX_CAPABILITY = {
     "carrier_hook_extra_decl": ("ops", "hook_carrier"),
     "carrier_hook_carrier_mismatch": ("ops", "shot_beats"),
     "carrier_hook_unlabeled": ("ops", "shot_beats"),
+    # ---- 版本 6（`screen_hybrid`）呈现协议：全部走 `plan_revision.v2` 视图替换 ----
+    # 理由（R1/R2）：这些 code 核的是**结构化关系**（`presentation.fact_bindings` /
+    # `beat_uids` / `beat_events` / `screen_cards`）。旧 ops 协议只认 `｜承载：` 文案与
+    # 数字编号，**表达不了**这些关系——按位置造一份数字声明只会把"结构化关系"降级回
+    # 旧形状（也就是新模式要根治的那个漏口）。所以它们一律标 `view`：由 v2 请求回整份
+    # 视图、代码派生编号与应用器做引用转换。**不标 `plan_field`**——那会让 `_replan_route`
+    # 把它们送去 `revise_plan_full`，而完整计划轮的核心守卫锁着 `shot_beats` 条数与正文，
+    # 恰恰改不了这些关系（复核之十二的教训：能做什么操作由**接口层**说，不由文案说）。
+    "presentation_block_missing": ("view", "presentation"),
+    "presentation_schema_unknown": ("view", "presentation.schema"),
+    "presentation_mode_invalid": ("view", "presentation.mode"),
+    "presentation_narration_forbidden": ("view", "narration_lines"),
+    "presentation_unreadable": ("view", "presentation"),
+    "presentation_relation_invalid": ("view", "presentation"),
+    "presentation_beat_uids_mismatch": ("view", "presentation.beat_uids"),
+    "presentation_beat_uids_duplicate": ("view", "presentation.beat_uids"),
+    "presentation_carrier_dangling": ("view", "presentation.fact_bindings"),
+    "presentation_carrier_kind_invalid": ("view", "presentation.fact_bindings"),
+    "presentation_visual_body_missing": ("view", "shot_beats"),
+    "presentation_beat_evidence_missing": ("view", "shot_beats"),
+    "presentation_beat_evidence_not_in_novel": ("view", "shot_beats"),
+    "presentation_card_text_empty": ("view", "presentation.screen_cards"),
+    "presentation_card_not_in_novel": ("view", "presentation.screen_cards"),
+    "presentation_voice_text_empty": ("view", "presentation.fact_bindings"),
+    "presentation_voice_not_in_novel": ("view", "presentation.fact_bindings"),
+    "presentation_voice_orphan": ("view", "presentation.fact_bindings"),
+    "presentation_reading_budget_exceeded": ("content", "presentation.screen_cards"),
+    "presentation_hook_spoken_dangling": ("view", "presentation.hook_bindings"),
+    "presentation_hook_spoken_lost": ("view", "hook_spoken"),
+    "presentation_card_beat_missing": ("view", "screen_cards"),
+    "presentation_card_item_invalid": ("view", "screen_cards"),
+    # 卡片**容器**不是数组 / 字段（`text` / `template` / `placement` / `anchor`）类型不对 /
+    # 可选出处 `source_spans` 的容器或成员类型不对：修法都是"按 schema 给出正确类型"，
+    # 视图层表达得了（`upsert.screen_cards`）。
+    "presentation_cards_type": ("view", "screen_cards"),
+    "presentation_card_field_type": ("view", "screen_cards"),
+    "presentation_card_source_spans_type": ("view", "screen_cards"),
+    "presentation_card_source_spans_item": ("view", "screen_cards"),
+    # 卡片节拍的**类型**违约（`1.9` / `true` / 字符串）：修法同"节拍号不对"——换一个
+    # 合法整数节拍号，视图层表达得了。
+    "presentation_card_beat_type": ("view", "screen_cards"),
+    # 事件归属表的形状/行/序号违约：修法是把 `beat_events` 写成与节拍等长的数组的数组、
+    # 每项用 1..N 的整数序号——视图层（`upsert.beats[].event_uids`）表达得了。
+    "presentation_beat_events_shape": ("view", "presentation.beat_events"),
+    "presentation_beat_events_item": ("view", "presentation.beat_events"),
+    "presentation_beat_events_index": ("view", "presentation.beat_events"),
+    # 内容核验（R4）：**不是**视图能改的——它要的是"核验记录"，由独立核验给出。
+    # 标 `content` 是为了让它走能力更强的接口并在反馈里显式说明；真正的修法在
+    # `shared/content_verification.py`（补证据 / 换载体 / 缩窄主张由生产者决定）。
+    "verify_record_missing": ("content", "plan_verification"),
+    # 「原文是否支持主张」这一轴（工作包 2 第 2 条）。它与载体轴**分账**：
+    # 载体轴的修法是换载体/补正文，本轴的修法是**补齐出处或由故事侧改主张**——
+    # 两者都不是视图能表达的，所以都标 `content` 并在反馈里说清是哪一轴。
+    "verify_source_support_missing": ("content", "plan_verification"),
+    "verify_source_verdict_invalid": ("content", "plan_verification"),
+    "fact_basis_invalid": ("content", "required_facts"),
+    "source_preservation_failed": ("content", "required_facts"),
+    "verify_source_revision_context": ("content", "plan_verification"),
+    "verify_source_preservation_record": ("content", "plan_verification"),
+    "verify_source_preservation_identity": ("content", "plan_verification"),
+    "verify_source_preservation_evidence": ("content", "plan_verification"),
+    # **载体支座**（观众从实际展示正文里能不能得到这条主张）：修法是**换/加载体**，
+    # 而载体与绑定正是视图层能改的（`upsert.screen_cards` + `fact_bindings`）——
+    # 所以标 `view`，不标 `content`（后者会让这条记录看起来"接口表达不了"）。
+    "verify_plan_coherence": ("view", "shot_beats"),
+    "verify_coherence_record": ("content", "plan_verification"),
+    "verify_coherence_identity": ("content", "plan_verification"),
+    "verify_coherence_evidence": ("content", "plan_verification"),
+    "verify_fact_unsupported": ("view", "presentation.fact_bindings"),
+    "verify_fact_unknown": ("view", "presentation.fact_bindings"),
+    "verify_support_span_missing": ("view", "presentation.fact_bindings"),
+    "verify_support_span_not_exhibited": ("view", "presentation.fact_bindings"),
+    # 送进核验的视图自己没过准入：修法是**把关系修好**（视图能表达）。
+    "verify_input_rejected": ("view", "presentation"),
+    # 这三类是**运行级**状态：修法是"再取一份核验记录"，不是改计划——
+    # 与 `verify_record_missing` 同一档（由独立核验给出，不由视图层表达）。
+    "verify_call_failed": ("content", "plan_verification"),
+    "verify_bad_response": ("content", "plan_verification"),
+    "verify_deadline_exhausted": ("content", "plan_verification"),
 }
 
 #: 记录级 `fix` 标记 → 能力（生产者对**这一例**的覆盖声明；表里没有的标记一律 fail-closed）
@@ -1383,29 +1733,142 @@ def _fix_capability(problems) -> dict:
             if _cap is None:                       # 未登记 ⇒ fail-closed
                 _undecl.append(_code or "无code")
                 continue
-        if _cap[0] != "ops":
+        if _cap[0] not in ("ops", "view"):
             _inexpr.append(_code or _mark)
     return {"expressible": not _inexpr and not _undecl,
             "inexpressible": sorted(set(_inexpr)),
-            "undeclared": sorted(set(_undecl))}
+            "undeclared": sorted(set(_undecl)),
+            "needs_view": any(str((_p or {}).get("capability") or "") == "view"
+                              for _p in (problems or []) if isinstance(_p, dict))}
 
 
-def _replan_route(problems) -> str:
-    """**唯一的接口裁决**：这一轮回什么（`"ops"` = 只回操作；`"full_plan"` = 回一整份计划）.
+def _replan_route(problems, *, mode=None) -> str:
+    """**唯一的接口裁决**：这一轮回什么.
 
-    判据只有一个——`_fix_capability`（盘点表的**正面**声明）。`schema`、反馈块、
-    应用器**都消费这个返回值**：复核之十二 P1 的教训正是"盘点表判得对，不等于请求
-    消费了它"——预算分支**优先于**能力裁决，内部又按"有没有不可表示条目"**另判一次**
-    接口，于是 `expressible=False` 的计划照样发出**操作协议**请求，而该协议删不掉条目：
-    同一份 31→1、同步重绑、核心不变的响应，走完整计划接口能验收归零，走操作协议
-    连门都进不去（未知操作键）——模型即使完全照办也完不成这个合法修法。
+    当前实现分两层：
 
-    `problems` 为 `None`（没有生产者记录）时按 fail-closed 处理：**无从证明"表达得了"**
-    ⇒ 走能力更强的完整计划接口。
+    **一层：显式回放开关**（`legacy_request_protocol`）。默认 `None` = 走生产分支。
+    设成 `ROUTE_OPS`/`ROUTE_FULL_PLAN` 就固定那一条；设成 `ROUTE_AUTO` 则回到**旧路由器**
+    （按能力盘点表推接口）。只有回放入口（`replay_frozen_response`）会设它。
+
+    **二层：生产分支**——**新请求一律 v2**（工作包 1 第 3 条 / 复核 2026-10-05 P1；
+    旧 ops / 受限 full_plan 只是**回放/兼容适配器**），v2 的**形态**按 `mode` 取：
+
+    1. `mode == "screen_hybrid"` ⇒ `ROUTE_VIEW`（完整视图替换）。
+       2026-10-11 的隔离生产链对照实验（见交付记录「对照实验：传输协议才是卡点」）：
+       同一模型走增量 **5/5 被拒**、走完整视图 **0 拒收**——判据是**协议**而不是模型能力。
+    2. 其余（legacy）⇒ `ROUTE_VIEW_DELTA`（按 UID 增量）。legacy 没有同条件的对照读数，
+       按"没有证据就不动生产默认"保持不变。
+
+    `schema`、反馈块、应用器**都消费这个返回值**：复核之十二 P1 的教训正是"盘点表判得对，
+    不等于请求消费了它"——预算分支**优先于**能力裁决，内部又按"有没有不可表示条目"
+    **另判一次**接口，于是 `expressible=False` 的计划照样发出**操作协议**请求。
+    """
+    # `legacy_request_protocol` 是**显式开关**（默认 None = 走生产分支）：只有把它设成
+    # `ROUTE_OPS`/`ROUTE_FULL_PLAN`/`ROUTE_AUTO`，或由**回放入口**
+    # （`replay_frozen_response`）显式指定时，才走旧协议。生产链路上没有任何地方设它。
+    _legacy = legacy_request_protocol
+    if _legacy is not None:
+        # `ROUTE_AUTO` = 旧路由器（按能力盘点表推接口）；显式给 ops/full 则固定那一条。
+        # **只有**回放开关打开时才走这里，生产链路恒为 v2。
+        if _legacy != ROUTE_AUTO:
+            return _legacy
+        return _legacy_route(problems)
+    # ---- 生产链路（`mode` 决定用哪条 v2 形态）----
+    #
+    # **hybrid ⇒ 完整视图替换**（2026-10-11 隔离生产链对照实验，见交付记录的
+    # 「对照实验：传输协议才是卡点」一节）：同一条生产链、同一模型，只换协议——
+    #   · `ROUTE_VIEW_DELTA`（增量）两轮 + 三轮共 **5/5 被拒**（`illegal_response`：
+    #     类型占位 → 自相矛盾 → 合并后悬空），停在 `illegal_response`；
+    #   · `ROUTE_VIEW`（完整视图）三轮**全部被接受**（0 拒收，台账 `finish=stop`、
+    #     `ctok` 4291/4152/4300），停在 `calls_exhausted`。
+    # 判据是"同一模型对增量的嵌套实体对象几乎必然违约、对完整视图可靠合规"⇒ 这是
+    # **协议选择**问题，不是模型能力问题。**准入与验收判据一个字没改**（两条路共用
+    # 同一份编排与验收链，差别只在请求/响应的形状）。
+    #
+    # ⚠️ 这**只换 hybrid**：legacy 没有同条件的对照读数，按"没有证据就不动生产默认"
+    # 保持增量。两条协议都保留（`ROUTE_VIEW` 不再只是回放入口）。
+    if str(mode or "") == MODE_HYBRID:
+        return ROUTE_VIEW
+    # legacy 链路：仍是**增量协议**（`plan_revision.delta.v1`）。
+    return ROUTE_VIEW_DELTA
+
+
+#: 回放开关的"按旧能力表选路"取值（**旧路由器**，仅回放时可达）。
+ROUTE_AUTO = "auto"
+
+
+def _legacy_route(problems) -> str:
+    """**旧路由器**（2026-10-05 之前的口径）：按能力盘点表推接口.
+
+    只在 `with_legacy_request_protocol(ROUTE_AUTO)` 下可达——那些测试断言的是**旧协议
+    自身**的行为（守卫 / 分流依据 / 反馈文案），它们不再是生产路由。
     """
     if problems is None:
         return ROUTE_FULL_PLAN
     return ROUTE_OPS if _fix_capability(problems)["expressible"] else ROUTE_FULL_PLAN
+
+
+#: **旧协议出口开关**（默认 `None` = 新请求一律 v2）。
+#:
+#: 它的**唯一**用途是**冻结响应回放**：拿一份历史 `replan_ops` / 完整计划的原始响应
+#: 重放真实应用器、验证它会被怎样处置（复核 2026-10-05 P1：`KeyError: 'view'` 正是
+#: "按内容猜接口"造成的——回放入口必须**自己说**走哪条路，不能由问题清单推）。
+#:
+#: ⚠️ 它**不是**"隐藏失败重试"的口子：回放入口不接受模型响应，也不写缓存。
+legacy_request_protocol = None
+
+
+def with_legacy_request_protocol(route: str | None):
+    """上下文管理器：在**冻结响应回放**期间把接口固定为旧协议."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _cm():
+        global legacy_request_protocol
+        _prev = legacy_request_protocol
+        legacy_request_protocol = route
+        try:
+            yield
+        finally:
+            legacy_request_protocol = _prev
+    return _cm()
+
+
+#: 旧协议**只**用于回放的显式标记（调用点必须写这个，不写就不许走旧路）
+ROUTE_REPLAY_OPS = ROUTE_OPS
+ROUTE_REPLAY_FULL_PLAN = ROUTE_FULL_PLAN
+
+
+def replay_frozen_response(route: str, plan, problems, budget, *, response,
+                           novel_text: str = ""):
+    """**冻结响应回放入口**（工作包 1 第 3 条 / 工作包 4 第 1 条）→ 控制器结果.
+
+    拿一份**历史的** `replan_ops` / 完整计划原始响应，重放真实应用器、验证它会被怎样
+    处置。它与生产请求的差别只有一处，而且是**显式**的：
+
+    - 生产：`revise_plan_once` → `_replan_route` ⇒ 新请求一律 v2；
+    - 回放：本入口**自己说**走哪条路（`route` 必填），并在 `with_legacy_request_protocol`
+      里临时固定——**不由问题清单推接口**（"推"正是 `KeyError: 'view'` 的成因）。
+
+    ⚠️ 它**不是**隐藏失败重试的口子：这里**不发任何模型调用**，只把 `response` 交给
+    对应的真实应用器；`budget` 传 `None` 时不消耗额度。
+    """
+    if route not in (ROUTE_OPS, ROUTE_FULL_PLAN):
+        raise ValueError("回放只支持旧协议（ops / full_plan），收到：%r" % (route,))
+    with with_legacy_request_protocol(route):
+        from step01_script_gen.plan_revision import RevisionBudget
+        _bg = budget if budget is not None else RevisionBudget(max_calls=0)
+        _probs = list(problems or [])
+        if route == ROUTE_OPS:
+            _new, _why = _replan_by_ops(plan, _probs, novel_text, response=response)
+        else:
+            _new, _why = revise_plan_full(plan, _probs, novel_text, response=response)
+    if _new is None:
+        return {"kind": "illegal", "detail": str(_why or ""), "plan": None,
+                "applied": False}
+    return {"kind": "applied", "plan": _new, "detail": str(_why or ""),
+            "applied": True}
 
 
 def _request_feedback(problems) -> dict:
@@ -1422,6 +1885,926 @@ def _request_feedback(problems) -> dict:
 def _plan_required_fields() -> list:
     """完整计划的**必需顶层键**（单源：首版那份 schema 的 `required`）."""
     return [str(k) for k in ((OUTLINE_SCHEMA.get("schema") or {}).get("required") or [])]
+
+
+# ---------------------------------------------------------------------------
+# `plan_revision.v2`：完整可编辑视图替换（R1 请求/响应装配 · R2 应用器接线）
+# ---------------------------------------------------------------------------
+#: v2 修订的**规则版本**（进请求与缓存身份；规则变了旧缓存不能复用）。
+PLAN_VIEW_RULE_VERSION = "plan_revision.v2.1"
+
+#: 内容核验的规则版本（与 `shared.content_verification.DEFAULT_RULE_VERSION` 同一份
+#: 取值口径；进缓存键，改了就得重新核验）。
+from step01_script_gen.content_verify import VERIFY_RULE_VERSION
+
+#: 增量修订的**规则版本**（进请求与缓存身份；规则变了旧缓存不能复用）。
+PLAN_DELTA_RULE_VERSION = "plan_revision.delta.v1"
+
+#: 增量的**输出 schema**：信封 + 三个改动块 + 关系块。**不含** `view`。
+#:
+#: 该表同时生成请求内的类型规则与 TextGenerationRequest.json_schema。
+#: 当前 agent_plan 传输仍为 json_object；模型在 prompt 中看到按本次身份编译的契约，
+#: 本地 presentation_contract 独立准入。prompt 中有 schema 不证明远端受约束解码。
+REPLAN_DELTA_SCHEMA = {
+    "name": "plan_revision_delta_v1",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "schema": {"type": "string", "const": "plan_revision.delta.v1"},
+            "rule_version": {"type": "string"},
+            "base_plan_hash": {"type": "string",
+                               "description": "原样回带请求里的 base_plan_hash"},
+            "fact_basis_hash": {"type": "string",
+                                "description": "原样回带请求里的 fact_basis_hash"},
+            # ⚠️ **内部类型与必填关系也要写出来**（D：不能只约束信封）。四类实体的
+            # 字段契约单源在 `shared.presentation_contract.ENTITY_CONTRACT`（本地准入
+            # 按它判），这里逐条对应——两处不一致就等于服务端与本地各说一套。
+            "upsert": {
+                "type": "object",
+                "description": "新增或**整体替换**的条目，键限 beats / dialogue_units / "
+                               "narration_units / screen_cards",
+                "additionalProperties": False,
+                "properties": {
+                    "beats": {"type": "array", "items": {
+                        "type": "object",
+                        "properties": {"uid": {"type": "string"},
+                                       "event_uids": {"type": "array",
+                                                      "items": {"type": "string"}},
+                                       "text": {"type": "string"},
+                                       "purpose": {"type": "string"},
+                                       "evidence": {"type": "string"},
+                                       "source": {"type": "object"},
+                                       "voice_ref": {"type": ["object", "null"]}},
+                        "required": ["uid", "event_uids", "text", "purpose",
+                                     "evidence", "source", "voice_ref"]}},
+                    "dialogue_units": {"type": "array", "items": {
+                        "type": "object",
+                        "properties": {"uid": {"type": "string"},
+                                       "text": {"type": "string"},
+                                       "source": {"type": "object"}},
+                        "required": ["uid", "text", "source"]}},
+                    "narration_units": {"type": "array", "items": {
+                        "type": "object",
+                        "properties": {"uid": {"type": "string"},
+                                       "text": {"type": "string"},
+                                       "source": {"type": "object"}},
+                        "required": ["uid", "text", "source"]}},
+                    "screen_cards": {"type": "array", "items": {
+                        "type": "object",
+                        "properties": {"card_id": {"type": "string"},
+                                       "beat_uid": {"type": "string"},
+                                       "template": {"type": "string"},
+                                       "text": {"type": "string"},
+                                       "placement": {"type": "string"}},
+                        "required": ["card_id", "beat_uid", "template", "text",
+                                     "placement"]}},
+                }},
+            "delete": {"type": "object",
+                       "description": "显式删除的稳定 id（卡片用 card_id）",
+                       "additionalProperties": False,
+                       "properties": {k: {"type": "array", "items": {"type": "string"}}
+                                      for k in ("beats", "dialogue_units",
+                                                "narration_units", "screen_cards")}},
+            "order": {"type": "object",
+                      "description": "集合有增删时的**最终完整 id 顺序**",
+                      "additionalProperties": False,
+                      "properties": {k: {"type": "array", "items": {"type": "string"}}
+                                     for k in ("beats", "dialogue_units",
+                                               "narration_units", "screen_cards")}},
+            "fact_bindings": {"type": "array", "items": {
+                "type": "object",
+                "properties": {"fact_uid": {"type": "string"},
+                               "carriers": {"type": "array", "items": {
+                                   "type": "object",
+                                   "properties": {"kind": {"type": "string",
+                                                           "enum": ["visual", "screen_card",
+                                                                    "dialogue", "narration"]},
+                                                  "uid": {"type": "string"},
+                                                  "beat_uid": {"type": "string"},
+                                                  "card_id": {"type": "string"}},
+                                   "required": ["kind"]}}},
+                "required": ["fact_uid", "carriers"]}},
+            "hook_bindings": {"type": "object",
+                              "description": "给了就整块替换；`{}` 不是清空、`null` 拒收",
+                              "properties": {"spoken_uids": {"type": "array",
+                                                             "items": {"type": "string"}},
+                                             "carriers": {"type": "array"}},
+                              "required": ["spoken_uids", "carriers"]},
+            "evidence_updates": {"type": "array", "items": {
+                "type": "object",
+                "properties": {"fact_uid": {"type": "string"},
+                               "evidence": {"type": "string"}},
+                "required": ["fact_uid", "evidence"]}},
+            "evidence_delete": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["schema", "rule_version", "base_plan_hash", "fact_basis_hash"],
+        "additionalProperties": False,
+    },
+}
+
+def replan_delta_schema_for_request(request: dict) -> dict:
+    """Compile request identities into the existing delta shape contract.
+
+    The local merge remains authoritative for cross-field relations. Wire enums
+    prevent unknown formal IDs before generation; new IDs retain the existing
+    explicit ``new:`` contract. No baseline data or semantic rule is changed.
+    """
+    from shared.presentation_contract import DELTA_ID_KEY
+    schema = copy.deepcopy(REPLAN_DELTA_SCHEMA)
+    props = schema["schema"]["properties"]
+    for key in ("rule_version", "base_plan_hash", "fact_basis_hash"):
+        props[key]["const"] = request[key]
+    view = request["view"]
+    for collection, identity_key in DELTA_ID_KEY.items():
+        known = [item[identity_key] for item in view.get(collection, [])]
+        new_id = {"type": "string", "pattern": "^new:.+$"}
+        valid_id = {"anyOf": [{"type": "string", "enum": known}, new_id]} if known else new_id
+        entity_props = props["upsert"]["properties"][collection]["items"]["properties"]
+        entity_props[identity_key] = copy.deepcopy(valid_id)
+        props["order"]["properties"][collection]["items"] = copy.deepcopy(valid_id)
+        deleted = props["delete"]["properties"][collection]
+        if known:
+            deleted["items"] = {"type": "string", "enum": known}
+        else:
+            deleted["maxItems"] = 0
+    facts = [fact["uid"] for fact in view["frozen_facts"]]
+    if view["mode"] == MODE_LEGACY:
+        props["fact_bindings"]["items"]["properties"]["carriers"]["maxItems"] = 1
+    for key in ("fact_bindings", "evidence_updates"):
+        if facts:
+            props[key]["items"]["properties"]["fact_uid"] = {"type": "string", "enum": facts}
+        else:
+            props[key]["maxItems"] = 0
+    return schema
+
+
+#: **正文与出处必须逐字来自原文**——两条 v2 修订协议**共用这一份**（在
+#: `_replan_by_view` 里拼进请求正文）。
+#:
+#: 为什么必须写在请求里（2026-10-11 的**离线回放**诊断，见交付记录「完整视图三轮轨迹回放」）：
+#: 统一验收链按 `presentation_card_not_in_novel` / `presentation_voice_not_in_novel` /
+#: `presentation_beat_evidence_not_in_novel` **逐条核**"正文是不是原文片段"，而修订请求
+#: 此前**一个字都没提**这条规则——只有**首版**提示（`HYBRID_PROMPT_BLOCK`）里有。
+#: 实测（run4 第 3 轮）：模型为补齐 `verify_fact_unsupported[f06]`（反馈原文是
+#: "未展示听香是杨旭花两百贯宝钞买来的美人"）新建了一张卡，正文**直接照抄了反馈里那句
+#: 描述**——那句是判据在说"哪里不够"，不是原文；新增卡片于是被判
+#: `presentation_card_not_in_novel`。那一轮输入只有 2 条问题，回来却变成 5 条。
+#:
+#: 这就是"**请求不许省略守卫会拒收的规则**"，与复核之十二那条"反馈不许承诺守卫禁止的
+#: 事"是同一枚硬币的两面。规则文字与 `plan_feasibility.source_contains` 同源：
+#: 归一化后按**子串**命中；省略号统一形式后仍参与比对。
+#: 规则正文的模板：归一化那句**不留手写副本**，由 `{norm_note}` 从判据渲染
+#: （见 `plan_feasibility.source_norm_note`）。
+_SOURCE_VERBATIM_RULE_TEMPLATE = """
+**正文与出处必须逐字来自原文**（本地判据逐条核，违反整份候选不予采纳）：
+- 卡片 `screen_cards[].text`、对白 `dialogue_units[].text`、旁白 `narration_units[].text`、
+  节拍的「原文依据」`beats[].evidence`——**必须能在原文里一字不差地找到**：
+  不许改写、不许概括、不许自造。（{norm_note}）
+- ⚠️ **不许把「本轮未通过的项目」里那句说明抄成正文**：那是判据在说"哪里不够"，
+  **不是原文**，照抄它一定核不过。要新增或改写正文时，请**回到上面的原文**里找出
+  能表达该主张的那一句（或那段连续文字），**原样**抄进 `text`。
+- 要给某条事实补载体、而原文里找不到能表达它的句子时：**改挂到一条已有逐字正文的
+  载体上**（或另选一段逐字原文），**不要自己造句**。
+"""
+
+
+def source_verbatim_rule() -> str:
+    """**逐字规则的请求正文**（hybrid / legacy 两条 v2 修订协议共用这一份）.
+
+    ⚠️ 归一化那句**每次现渲染**（`source_norm_note()`），不在模块加载时冻结——
+    判据的标点集一变，发出去的提示随即跟着变，不存在"改了判据、提示还是老口径"的窗口。
+    """
+    return _SOURCE_VERBATIM_RULE_TEMPLATE.replace("{norm_note}", source_norm_note())
+
+
+_PLAN_DELTA_INSTRUCTION = """
+【本轮修订协议：`plan_revision.delta.v1` 按 UID 的**增量**修订】
+你**不要**回整份视图。只回**改动**——没提到的条目由本地按基线保留，冻结事实主张、
+事件与 `plan_basis` **一个字都不用它重抄**。
+
+**顶层键**（白名单，多一个未知键整份拒收）：
+`schema`（固定 `"plan_revision.delta.v1"`）、`rule_version`（固定 `"plan_revision.delta.v1"`）、
+`base_plan_hash`、`fact_basis_hash`（都原样回带请求里那两个），
+再加下面按需出现的块。**不许**出现 `view` / `frozen_facts` / `frozen_events` /
+`plan_basis` / `mode` / `event_binding` / `passed` / `executable` / `budget`。
+
+- `upsert`：要**新增或整体替换**的条目，按集合分组（`beats` / `dialogue_units` /
+  `narration_units` / `screen_cards`）。每一项必须是**带全部字段的完整对象**
+  （整体替换、不做叶子合并）：节拍/对白/旁白用 `uid`，**卡片用 `card_id`**。
+  已有条目写**原 id**；新增条目写以 `new:` 开头的**临时 id**（全响应内唯一）。
+  ⚠️ 写一个不存在的正式 id **不会被当成新增**，会被拒收。
+- `delete`：要删的**已有**稳定 id，按集合分组。
+- `order`：`upsert` 或 `delete` **改动了集合**时**必须**给出该集合**最终完整的 id 顺序**
+  （含新增的临时 id）；只改正文、不动集合时可以省略。
+- `fact_bindings`：只列**改动过**的事实，每项 `{"fact_uid": …, "carriers": […]}`；
+  一条事实只能出现一次；`carriers` 里的每一项是 `{"kind": …, "uid"/"beat_uid"/"card_id": …}`。
+  legacy_audio 每条事实最多一个载体，且这个载体必须完整表达主张；需要联合内容时，
+  新增一个完整演出的独立画面节拍并重绑，不把多项关系塞进旧模式单值承载位。
+  若绑定 visual，所指节拍的 voice_ref 也必须是 visual；保留的声音条目另设节拍承载。
+- `hook_bindings`：要改就**整块**给，必须同时有 `spoken_uids` 与 `carriers`；
+  只写一个 `{}` **不是清空**（清空要显式给完整的空关系），写 `null` 会被拒收。
+- `evidence_updates`：只更正**来源片段**，按 `fact_uid` 增改，未提到的修正保留；
+  正文主张一个字都不许动。
+- `evidence_delete`：显式**撤销**某条事实已有的出处修正（只能删已有修正记录，
+  不能删主张、也不能删基线出处）。
+
+**改什么关系**：谁承载哪条事实（`fact_bindings`）、每条节拍由谁发声/演出
+（`voice_ref`，`null` = 不发声）、卡片挂在哪条节拍、事件归属、来源片段。
+**事件归属**（`event_binding=declared` 时）：**所有节拍共同**覆盖全部冻结事件
+（不要求每条 `event_uids` 都覆盖全部事件），且事件在节拍里出现的先后**不得回退**。
+**不许改**：事实主张、事件集合与顺序、`plan_basis` 里的字段、已有实体的 id。
+
+**空修改**：什么都不给（或所有块都空）⇒ 记为 `no_change`，同样不采纳。
+"""
+
+#: v2 的**输出 schema**：一个信封（三个基线摘要 + 完整视图）。
+#:
+#: 完整视图保留为显式回放入口。类型规则也进入请求正文；agent_plan 的传输仍为
+#: json_object，远端 strict schema 支持未经稳定验证。最终裁决由本地完整事务完成，
+#: 不依据请求被接受或示例形状宣称解码约束已生效。
+REPLAN_VIEW_SCHEMA = {
+    "name": "plan_revision_v2",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "schema": {"type": "string", "const": REVISION_SCHEMA},
+            "rule_version": {"type": "string"},
+            "base_plan_hash": {"type": "string",
+                               "description": "原样回带请求里的 base_plan_hash"},
+            "fact_basis_hash": {"type": "string",
+                                "description": "原样回带请求里的 fact_basis_hash"},
+            "view": {"type": "object",
+                     "description": "改完之后**整份**可编辑视图（不是补丁）"},
+        },
+        "required": ["schema", "rule_version", "base_plan_hash", "fact_basis_hash", "view"],
+        "additionalProperties": False,
+    },
+}
+
+def replan_view_schema_for_request(request: dict) -> dict:
+    """Render full-view field types from the shared entity contract.
+
+    This describes the requested canonical output; local admission remains the
+    authority for aliases, identities, content and cross-field relations.
+    """
+    from shared.presentation_contract import ENTITY_CONTRACT
+
+    def field_schema(spec):
+        if spec.endswith("|null"):
+            return {"anyOf": [field_schema(spec[:-5]), {"type": "null"}]}
+        if spec == "list[str]":
+            return {"type": "array", "items": {"type": "string"}}
+        return {"type": {"str": "string", "obj": "object", "list": "array",
+                         "int": "integer"}[spec]}
+
+    schema = copy.deepcopy(REPLAN_VIEW_SCHEMA)
+    props = schema["schema"]["properties"]
+    for key in ("rule_version", "base_plan_hash", "fact_basis_hash"):
+        props[key]["const"] = request[key]
+    view = request["view"]
+    delta_props = replan_delta_schema_for_request(request)["schema"]["properties"]
+    fields = {"schema": {"type": "string", "const": PRESENTATION_SCHEMA},
+              "mode": {"type": "string", "const": view["mode"]},
+              "event_binding": {"type": "string", "enum": ["declared", "unknown"]}}
+    for key in ("frozen_facts", "frozen_events"):
+        fields[key] = {"type": "array", "const": copy.deepcopy(view[key])}
+    for key, (identity_key, contract) in ENTITY_CONTRACT.items():
+        entity = {identity_key: {"type": "string"}}
+        entity.update({name: field_schema(spec) for name, spec in contract.items()})
+        fields[key] = {"type": "array", "items": {"type": "object",
+                       "properties": entity, "required": list(entity)}}
+    for key in ("fact_bindings", "hook_bindings", "evidence_updates"):
+        fields[key] = copy.deepcopy(delta_props[key])
+    fields["hook_bindings"]["properties"]["carriers"]["items"] = copy.deepcopy(
+        fields["fact_bindings"]["items"]["properties"]["carriers"]["items"])
+    fields["plan_basis"] = {"type": "object", "const": copy.deepcopy(view.get("plan_basis") or {})}
+    if view["mode"] == MODE_HYBRID:
+        fields["narration_units"]["maxItems"] = 0
+        fields["event_binding"]["const"] = "declared"
+    else:
+        fields["screen_cards"]["maxItems"] = 0
+    props["view"] = {"type": "object", "properties": fields,
+                     "required": list(fields)}
+    return schema
+
+
+#: v2 的**操作说明**：改什么、不许改什么、按什么判。前者是「可编辑范围」（R2 的表），
+#: 后者是「冻结边界」——两份都在这里，**与代码判据同源**（`view_problems` 判的那几条
+#: 就是这里写死的那几条；写成两套必然漂移，而漂移的恰好是协议语义）。
+_PLAN_VIEW_INSTRUCTION = """
+【本轮修订协议：`plan_revision.v2` 完整可编辑视图替换】
+你要回的是**改完之后整份**可编辑视图，不是补丁、不是操作列表。
+
+★★ **最重要的一条：数组里每一项都要逐条写全，不许用序号或省略代替** ★★
+
+- **对象数组**（`beats` / `dialogue_units` / `narration_units` / `screen_cards` /
+  `fact_bindings`）：每一项都必须是**带全部字段的完整对象**；
+- **字符串数组**（`frozen_events`，以及 `plan_basis` 下的 `characters` / `key_scenes` /
+  `causal_chain` / `character_motives` / `omittable`）：每一项都必须是**原样的完整字符串**；
+- 两类数组里都**不允许出现数字**（`1`、`2`、`3` 这类序号不是内容）。
+**没有改动**的条目也要**逐字重抄一份完整的**：视图的体积不是问题，**完整性**才是判据。
+
+列举式地说明四种**不可接受**的写法（**这里刻意不给示例**——上一次把错误示例写进
+提示词，小模型把示例本身当成了模板照抄，三轮全被拒收）：
+1. 用元素序号顶替内容；
+2. 用「同上」「不变」「参见原视图」「...」之类省略；
+3. 只列改动过的条目、其余留空；
+4. 自造键名（把本协议的键名换成别的形状的字段名）。
+
+代码会逐个字段核：数组里出现非对象、缺字段、键名对不上，整份候选**直接拒收**。
+
+**响应骨架**（键名与层级**逐字照抄**，只把值换成改动后的内容）：
+
+```json
+{
+  "schema": "plan_revision.v2",
+  "rule_version": "plan_revision.v2.1",
+  "base_plan_hash": "<原样回带请求里那个>",
+  "fact_basis_hash": "<原样回带请求里那个>",
+  "view": {
+    "schema": "presentation_contract.v1",
+    "mode": "legacy_audio 或 screen_hybrid（照抄）",
+    "event_binding": "declared 或 unknown（照抄）",
+    "frozen_facts": [{"uid": "f01", "claim": "…", "evidence": "…"}],
+    "frozen_events": ["事件1", "事件2"],
+    "beats": [{"uid": "b01", "event_uids": ["事件1"], "text": "…",
+               "purpose": "…", "evidence": "…", "source": {},
+               "voice_ref": {"kind": "visual", "uid": "b01"}}],
+    "dialogue_units": [{"uid": "d01", "text": "…", "source": {}}],
+    "narration_units": [],
+    "screen_cards": [],
+    "fact_bindings": [{"fact_uid": "f01",
+                       "carriers": [{"kind": "visual", "uid": "b01"}]}],
+    "hook_bindings": {"spoken_uids": [], "carriers": []},
+    "evidence_updates": [],
+    "plan_basis": {"climax": "…", "causal_chain": ["…"], "time_budget": "…",
+                   "characters": ["…"], "emotional_arc": "…", "end_hook": "…",
+                   "key_scenes": ["…"], "character_motives": ["…"],
+                   "omittable": []}
+  }
+}
+```
+
+`carriers[].kind` 只能是 `visual` / `screen_card` / `dialogue` / `narration`；
+前两种分别配 `beat_uid` / `card_id`，后两种配 `uid`。
+
+**能改什么**（改这些的关系：谁承载哪条事实、每条节拍由谁发声/演出、卡片挂在哪、
+事件归属、来源片段）：
+- `beats`：条数、正文、信息目的、原文依据、每条节拍的 `voice_ref`（`null` = 不发声，
+  或指向一条对白/旁白/卡片单位）；
+- `dialogue_units` / `narration_units`：增删改；新条目用**本次响应内唯一**的临时 uid；
+- `screen_cards`：增删改（`card_id` 新旧都要唯一）；
+- `fact_bindings`：每条冻结事实**恰好一项**，它的 `carriers` 是这张事实的载体列表
+  （可以多个 = 联合承载）；
+- `hook_bindings`：需要说出口的钩子台词与它们的承载；
+- `evidence_updates`：每项形状为 `{"fact_uid": "<冻结事实 uid>", "evidence": "<原文片段>"}`，
+  身份键必须是 `fact_uid`；**只**更正原文出处，正文主张一个字都不许动。
+- `screen_hybrid` 必须 `narration_units=[]`、`event_binding="declared"`；
+  `legacy_audio` 必须 `screen_cards=[]`，旁白条目按当前视图的完整对象形状填写。
+
+**不许改什么**：
+- `frozen_facts[].claim`（**正文主张**冻结）、`frozen_events`（事件集合与顺序冻结）；
+- **所有节拍共同**覆盖全部冻结事件（不要求每条 `event_uids` 都覆盖全部事件），
+  且事件在节拍里出现的先后**不得回退**；
+- 已有实体的 `uid` 必须原样保留（改 uid = 让所有引用悬空）；
+- 不许自报通过、不许放宽预算、不许输出 `passed` / `executable` 之类结论字段。
+
+**按什么判对错**：
+- 表达不完整 → `partial`（缺什么写进 `missing`）；说的与主张相反 → `contradicted`；
+  信息不足判不了 → `unknown`（**不要**猜成通过）；
+- 新增/删除/改挂之后，**所有** `fact_bindings` / `hook_bindings` / `voice_ref`
+  都必须跟着改到闭合状态，代码会逐条核；留下悬空引用整份候选会被拒收。
+- **只补出处**（`evidence_updates`）也是**有效改动**，不算"没改"；
+  但如果确实没有要改的地方，就**原样回带同一份视图**——代码会比摘要，
+  一字不差会被记成 `no_change`（同样不采纳）。
+"""
+
+
+#: v5 问题记录里的**字段路径前缀 → v2 视图字段**（R3：报告层不许让模型看见
+#: 它**改不动**的字段名）。键是 v5 记录里的路径前缀，值是视图里的对应位置。
+_V5_PATH_TO_VIEW = {
+    "required_facts[": "fact_bindings[",
+    "shot_beats[": "beats[",
+    "narration_lines[": "narration_units[",
+    "dialogue_lines[": "dialogue_units[",
+    "presentation.screen_cards[": "screen_cards[",
+}
+
+# Legacy inline labels are diagnostics, not fields in an editable view.
+_V5_VIEW_FIELD_TAILS = {
+    "shot_beats[": {".载体": ".voice_ref", ".原文依据": ".evidence",
+                    ".本镜信息目的": ".purpose"},
+    "required_facts[": {".承载": ".carriers"},
+}
+
+
+def _view_identity(rec, view) -> str:
+    """问题记录 → **视图里的稳定身份**（R3：记录自带 uid，不从文案猜）.
+
+    验收链仍按 v5 编号域产记录（`kind` + 1 起的 `index`），而 v2 视图用 uid。
+    这里做**一次**映射：`(kind, index)` → 该实体的 uid。
+    映射不出来就**明说**未定位，不编一个 uid 出来。
+    """
+    _given_uid = (rec or {}).get("uid")
+    if isinstance(_given_uid, str) and _given_uid:
+        return _given_uid
+    _kind = str((rec or {}).get("kind") or "")
+    _idx = (rec or {}).get("index")
+    if not isinstance(_idx, int) or _idx < 1:
+        return ""
+    _pool = {"fact": view.get("frozen_facts"), "beat": view.get("beats"),
+             "dialogue": view.get("dialogue_units"),
+             "narration": view.get("narration_units"),
+             "card": view.get("screen_cards")}.get(_kind) or []
+    if _idx > len(_pool):
+        return ""
+    return ref_uid(_pool[_idx - 1])
+
+
+def _view_path(rec, view) -> str:
+    """问题记录的字段路径 → **v2 视图路径**（v5 前缀换掉；换不掉的如实标注）."""
+    _raw = str((rec or {}).get("path") or "")
+    if not _raw:
+        _u = _view_identity(rec, view)
+        return ("uid=%s" % _u) if _u else "（未定位到字段）"
+    for _v5, _v2 in _V5_PATH_TO_VIEW.items():
+        if not _raw.startswith(_v5):
+            continue
+        _tail = _raw[_raw.index("]") + 1:] if "]" in _raw else ""
+        _u = _view_identity(rec, view)
+        _tail = _V5_VIEW_FIELD_TAILS.get(_v5, {}).get(_tail, _tail)
+        if "]" in _raw:
+            try:
+                _u = _view_identity(
+                    dict(rec, index=int(_raw[len(_v5):_raw.index("]")]) + 1), view)
+            except (TypeError, ValueError):
+                pass  # Stable producer uid survives a non-numeric path bracket.
+        return "%s%s]%s" % (_v2, ("uid=%s" % _u) if _u else "?",
+                            _tail or "")
+    # 换不掉的（`hook_carrier` / `time_budget` 之类）——**如实说它在视图里的位置**
+    _map = {"hook_carrier": "hook_bindings",
+            "hook_spoken": "hook_bindings.spoken_uids",
+            "time_budget": "plan_basis.time_budget",
+            "omittable": "plan_basis.omittable",
+            "presentation.screen_cards": "screen_cards"}
+    return _map.get(_raw, _raw)
+
+
+def _view_feedback_block(problems, view) -> str:
+    """v2 请求的**问题清单**：逐项给**视图身份**、完整原因、所需能力与预算值（R3）.
+
+    ⚠️ **必须用 v2 词汇**（实跑 2026-10-06 根因）：旧写法把验收记录**原样**倒进 prompt，
+    而那些记录是 **v5 编号域**的——`required_facts[4].承载`、`F5`、`B4`、`narration_lines[1]`。
+    这些字段在 v2 视图里**根本不存在**，而问题清单又恰好落在 prompt 的**末尾**
+    （模型最后读到的位置）。实测三次响应全部回成下标占位
+    （`"beats": [0,1,2,...]`）或 v2 信封 + v5 计划体的混合体。
+
+    这里把每条记录的**字段路径与实体身份翻译到视图**（uid + 视图字段），
+    但**原因原文照给**——原因里说的「该怎么修」是生产者写的，不改写。
+    """
+    _recs = [x for x in (problems or []) if isinstance(x, dict)]
+    if not _recs:
+        return ""
+    _lines = ["", "【本轮未通过的项目（共 %d 条，下面**逐条完整**给出）】" % len(_recs),
+              "**下列路径都是「可编辑视图」里的位置**——视图里没有 "
+              "`required_facts` / `shot_beats` / `narration_lines` 这些字段名，"
+              "它们已被翻译成 `fact_bindings` / `beats` / `narration_units`。"]
+    for _p in _recs:
+        _u = _view_identity(_p, view)
+        _lines.append(
+            "- %s｜视图路径：%s%s｜所需修改能力：%s｜预算/限制：%s"
+            % (_p.get("code") or "无code",
+               _view_path(_p, view),
+               ("（实体 uid=%s）" % _u) if _u else "",
+               _p.get("capability") or "（未登记）",
+               json.dumps(_p.get("limits") or {}, ensure_ascii=False)
+               if _p.get("limits") else "（无）"))
+        _lines.append("  原因：%s" % str(_p.get("reason") or ""))
+        if _p.get("basis"):
+            _lines.append("  判据：%s" % _p["basis"])
+        if _p.get("fix"):
+            _lines.append("  修正出口：%s" % _p["fix"])
+    _lines += ["",
+               "**注意**：上面说的是「这份视图哪里不合格」，"
+               "要改的字段只有这些：`beats` / `dialogue_units` / `narration_units` / "
+               "`screen_cards` / `fact_bindings` / `hook_bindings` / `evidence_updates`。"]
+    return chr(10).join(_lines)
+
+
+def complete_candidate(view, novel_text, verification=None, *, context=None,
+                       verify_axes=None):
+    """**唯一的候选完成出口** → `(candidate, problems)`.
+
+    顺序固定：**关系投影 → 挂上下文 → 确定候选身份 → 附加核验记录 → 完整验收**。
+
+    ⚠️ 复核 2026-10-05 P1 的根因就在这里：此前「挂记录」发生在 `accept` 回调里，而
+    **回调返回的只是问题**——被验收的对象是一个临时副本，控制器返回的候选是**另一个**
+    对象（没有 `plan_verification`）。于是：控制器判 ok → 返回候选没记录 → 最终真实验收
+    报 `verify_record_missing`。**验收通过但交付的东西没被验收过**，这是最坏的一类。
+
+    所以：这里返回的 `candidate` 就是**被验收、被采纳、被保存、被下发的那一个对象**。
+    `accept` 回调只负责调它，不再自己造副本。
+
+    ⚠️ **投影准入不过 ⇒ `(None, problems)`**（复核 2026-10-06 第十二轮 ① 的"投影/候选
+    完成"边界）：结构化拒收，**不交付部分投影**。调用方（`_replan_by_view`）据此把这一轮
+    判成拒绝，不是"应用了但结果不可用"。
+
+    `context`（复核 r6 §4.2）是**本地生成**的核验上下文：给了就在**算候选身份之前**挂上
+    ——上下文进 `plan_digest_of`，所以"挂完再算"与"算完再补"是两份不同的身份。不给时
+    仍按计划自带的那一份（投影时经 `plan_basis` 保真透传）走：老稿没有它就是合法的
+    根策略。**上下文绝不能等到验收之后再补。**
+    """
+    try:
+        _plan = plan_from_view(view)
+    except PresentationContractError as _e:
+        return None, list(_e.problems)
+    if context is not None:
+        # **挂上下文紧跟在投影之后**（r6 §4.2 的固定次序）：它进内容身份，不许后补。
+        _plan = dict(_plan)
+        from shared.content_verification import VERIFICATION_CONTEXT_KEY
+        _plan[VERIFICATION_CONTEXT_KEY] = context
+    if verification is not None:
+        from step01_script_gen.content_verify import attach_verification
+        from shared.carrier_entailment import PROTOCOL, protocol_of
+        from shared.quantified_verification import PROTOCOL as QUANTIFIED
+        if verify_axes is None and protocol_of(_plan) in (PROTOCOL, QUANTIFIED):
+            from step01_script_gen.content_verify import verify_view_axes_with_service
+            def verify_axes(_view, _digest, **kwargs):
+                return verify_view_axes_with_service(_view, _digest,
+                    novel_text=novel_text, novel_digest=verification.novel_digest,
+                    remaining=verification.max_verifications, display_max_tokens=8000, **kwargs)
+        # `verify_axes` 显式给了才走两轴控制器路径（复核 r7 §4.2，生产默认不启用）。
+        _plan = attach_verification(_plan, verification, verify_axes=verify_axes)
+    return _plan, plan_acceptance_problems(_plan, novel_text)
+
+
+def _accept_view_candidate(view, novel_text, verification, *, verify_axes=None):
+    """视图候选的**问题清单**（`complete_candidate` 的薄包装）."""
+    return complete_candidate(view, novel_text, verification, verify_axes=verify_axes)[1]
+
+
+def _content_slots_applicable(plan, problems, *, mode=None) -> tuple:
+    """本轮问题**能不能被内容槽位全部表达**（§5.6 第 4 条：能表达才接入）.
+
+    `returns (ok, why, ctx)`：`ok=False` 时调用方**整轮落回既有 delta**——判据只有
+    `plan_content_repair.content_slots` 一份（它按稳定 UID 归并，表达不了的 code 原样列出）。
+    `ctx` 带上已经读出来的视图与槽位，`_replan_by_slots` 直接复用，不重算一遍。
+
+    ⚠️ **`ctx["state"]` 是分派依据，`why` 只是给人看的文案**（复核 2026-10-08 P2 第 5 条）：
+    旧写法只有"适用 / 不适用"两态，于是**上游记录把目标身份写错**（卡片 `cZZ` 不在基线里）
+    与**这个修法槽位表达不了**走同一条出口——前者本该**零调用**，实测却照落回 delta 发了
+    一次 POST。现在两种出口分别是 `STATE_UNKNOWN_TARGET`（`invalid_target`，零调用）与
+    `STATE_UNSUPPORTED`（保留备用路，一次额度）。
+    """
+    from step01_script_gen import plan_content_repair as _pcr
+    if not problems:
+        return False, "没有生产者记录（无从证明表达得了）", \
+            {"state": _pcr.STATE_NO_SLOTS, "view": None, "found": None,
+             "mode": None, "blocked": []}
+    _mode = str(mode or plan_mode(plan) or MODE_LEGACY)
+    _base_view, _vp = view_from_plan(plan, mode=_mode)
+    if _base_view is None:
+        return False, "基线读不成可编辑视图：%s" % _detail_vp(_vp), \
+            {"state": _pcr.STATE_UNREADABLE, "view": None, "found": None,
+             "mode": _mode, "blocked": []}
+    _found = _pcr.content_slots(_base_view, problems)
+    _ctx = {"view": _base_view, "found": _found, "mode": _mode,
+            "blocked": list(_found.get("blocked") or [])}
+    # **身份失效优先**：目标实体都不存在时，先修记录（生产者），不是先改内容
+    if _ctx["blocked"]:
+        return False, "本轮问题里的**目标身份失效**（%s）——这些实体不在基线视图里，" \
+            "内容槽位无从下手" % "、".join(str(_x.get("reason") or _x.get("uid") or "")
+                                          for _x in _ctx["blocked"]), \
+            dict(_ctx, state=_pcr.STATE_UNKNOWN_TARGET)
+    if _found["unexpressible"]:
+        return False, "这些修法内容槽位表达不了（%s）" % "、".join(_found["unexpressible"]), \
+            dict(_ctx, state=_pcr.STATE_UNSUPPORTED)
+    if not _found["slots"]:
+        return False, "本轮没有问题能落成内容槽位", \
+            dict(_ctx, state=_pcr.STATE_NO_SLOTS)
+    return True, "", dict(_ctx, state=_pcr.STATE_OK)
+
+
+def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, model=None,
+                     system_prompt=None, evidence=None, verification=None,
+                     ctx=None, verify_axes=None) -> tuple:
+    """**内容槽位一轮修订**：模型只选内容与关系 → 代码装配既有 delta → 同一条验收链.
+
+    与 `_replan_by_view` **同一份返回形状**（`(new_plan|None, why, call_id, evidence)`），
+    所以 `revise_plan_once` 的三态分派不分叉。差别只在**响应契约**：这里要的是"逐槽的
+    内容与关系选择"，编号 / `order` / 哈希 / 实体表全由代码装配——实测里模型在增量协议上
+    反复写下的**数字占位**（`"beat_events": [1, 1, 1, …]`、`upsert.beats[0]` 是 `int`）
+    正是"要求它重抄实体表"造成的。
+
+    一次槽位调用 = **一次额度**（`budget` 由控制器在轮首扣过，这里**不重发**：坏回答原样
+    拒收并回灌下一轮，不用"槽位失败 + delta 重发"冒充一次）。
+    """
+    from shared.config import PROMPT_MAX_CHARS
+    from step01_script_gen import plan_content_repair as _pcr
+    _ctx = ctx or {}
+    _base_view = _ctx.get("view")
+    _found = _ctx.get("found")
+    _mode = str(_ctx.get("mode") or plan_mode(plan) or MODE_LEGACY)
+    if _base_view is None or not _found:
+        _ok, _why, _ctx2 = _content_slots_applicable(plan, problems, mode=_mode)
+        if not _ok:
+            return None, "内容槽位不适用：%s" % _why, "", (evidence or {})
+        _base_view, _found, _mode = _ctx2["view"], _ctx2["found"], _ctx2["mode"]
+    _slots = _found["slots"]
+    if evidence is not None:
+        evidence["route"] = "content_slots"
+        evidence["slots"] = [{"slot_id": _s["slot_id"], "kind": _s["kind"],
+                              "actions": list(_s["allowed_actions"]),
+                              "targets": len(_s["target_uids"])} for _s in _slots]
+        evidence["unexpressible"] = list(_found["unexpressible"])
+    _limits = {"mode": _mode, "rule_version": _pcr.REPAIR_RULE_VERSION,
+               "max_calls": getattr(budget, "max_calls", None),
+               "calls_left": getattr(budget, "calls_left", None),
+               "deadline_at": getattr(budget, "deadline_at", None)}
+    _req = _pcr.slot_request(_base_view, _slots, limits=_limits,
+                             remaining_calls=getattr(budget, "calls_left", None),
+                             remaining_sec=budget.remaining_sec() if budget is not None
+                             else None)
+    _prompt = chr(10).join([
+        _REVISION_NOVEL_PROMPT.format(novel_text=novel_text[:PROMPT_MAX_CHARS]),
+        _view_feedback_block(problems, _base_view),
+        _rejection_feedback_block(rejections or []),
+        # **形状规格最后说**（槽位表 + 选择规则）——请求里已经带了允许集合
+        _pcr.slot_prompt(_req),
+        "请现在逐槽给出选择；不要返回示例或空回答。",
+    ])
+    _sys = system_prompt or _OUTLINE_SYSTEM_PROMPT
+    _timeout = budget.remaining_sec() if budget is not None else None
+    # ⚠️ 不写死 `max_tokens`（同 `_replan_by_view`）：它按项目约定归 `.env`
+    _res = create_service().generate(TextGenerationRequest(
+        system_prompt=_sys, user_prompt=_prompt, temperature=0.3,
+        json_schema=_pcr.answer_json_schema(_slots), model=model,
+        deadline_monotonic=getattr(budget, "deadline_at", None), timeout_sec=_timeout))
+    _cid = str(getattr(_res, "call_id", "") or "")
+    if not _res.success:
+        return None, "call_failed: %s" % _res.error, _cid, (evidence or {})
+    _data = _parse_outline_json(_res.text)
+    if not isinstance(_data, dict):
+        return None, "槽位回答不是可解析的 JSON 对象", _cid, (evidence or {})
+    if evidence is not None:
+        _ans = _data.get("answers")
+        evidence["response"] = {
+            "shape": "slots" if str(_data.get("schema") or "") == _pcr.SLOT_ANSWER_SCHEMA
+                     else "unknown",
+            "declared_schema": str(_data.get("schema") or ""),
+            "expected": _pcr.SLOT_ANSWER_SCHEMA, "keys": sorted(_data),
+            "answers": (len(_ans) if isinstance(_ans, list) else 1)}
+    _pb = _pcr.answer_problems(_data, _slots, where="槽位回答")
+    if _pb:
+        if evidence is not None:
+            evidence["slots_answer_problems"] = [str((x or {}).get("code")) for x in _pb]
+        return None, _detail_vp(_pb), _cid, (evidence or {})
+    # 新建画面的「原文依据」由代码从**已准入的核验记录**里取（逐字出自原文），
+    # 不让模型抄原文：冻结事实自带的 `evidence` 不保证逐字（源轴允许引用别的片段）。
+    _ev_by_fact = {}
+    _recs = getattr(verification, "records", None)
+    if isinstance(_recs, dict):
+        from shared.content_verification import plan_digest_of
+        _ev_by_fact = _pcr.source_spans_by_fact(_recs.get(plan_digest_of(_base_view)) or {})
+    _delta, _cp = _pcr.compile_delta(_base_view, _slots, _data, novel_text=novel_text,
+                                     evidence_by_fact=_ev_by_fact)
+    if _delta is None:
+        if evidence is not None:
+            evidence["slots_compile_problems"] = [str((x or {}).get("code")) for x in _cp]
+        return None, _detail_vp(_cp), _cid, (evidence or {})
+    if evidence is not None:
+        evidence["compiled_delta"] = {
+            "upsert": {_k: len(_v) for _k, _v in (_delta.get("upsert") or {}).items()},
+            "order": len((_delta.get("order") or {}).get("beats") or []),
+            "fact_bindings": len(_delta.get("fact_bindings") or [])}
+    _accept = lambda _v: _accept_view_candidate(_v, novel_text, verification, verify_axes=verify_axes)
+    _cand_view, _probs, _res_k = apply_delta_view(_base_view, _delta, mode=_mode,
+                                                  accept=_accept)
+    _kind = _res_k["kind"]
+    if _kind == "no_change":
+        return None, "no_change", _cid, evidence
+    if _kind == "illegal":
+        return None, _detail_vp(_probs) or "编译出的增量被拒收（形状/基线/引用/保护边界）",             _cid, evidence
+    _new, _final_problems = complete_candidate(_cand_view, novel_text, verification, verify_axes=verify_axes)
+    if _new is None:
+        return None, "候选无法投影成计划：%s" % _detail_vp(_final_problems), _cid,             (evidence or {})
+    _new["plan_revision"] = {
+        "schema": _pcr.SLOT_REQUEST_SCHEMA, "transport_protocol": _pcr.SLOT_REQUEST_SCHEMA,
+        "rule_version": _pcr.REPAIR_RULE_VERSION,
+        "view_schema": REVISION_SCHEMA, "view_rule_version": PLAN_VIEW_RULE_VERSION,
+        "mapping": _res_k["mapping"], "residuals": list(_final_problems), "call_id": _cid,
+        "slots": [str(_s["slot_id"]) for _s in _slots]}
+    if evidence is not None:
+        evidence["applied"] = True
+        evidence["residuals"] = len(_final_problems)
+        evidence["mapping"] = _res_k["mapping"]
+    return _new, "slots_applied: %d 条残余" % len(_final_problems), _cid, evidence
+
+
+def _replan_by_view(plan, problems, novel_text, budget, rejections=None, *,
+                    model=None, system_prompt=None, evidence=None,
+                    mode=None, verification=None, protocol=None, verify_axes=None) -> tuple:
+    """**视图协议一轮修订**：装配请求 → 调模型 → 严格解析 → 完整关系事务应用.
+
+    `returns (new_plan|None, why, call_id, evidence)`——与 `_replan_by_ops` /
+    `revise_plan_full` **同一份返回形状**，`revise_plan_once` 的三态分派因此不用分叉。
+
+    与旧两路的差别只在**协议**：`protocol` 由调用方按路由显式给出（hybrid ⇒ `ROUTE_VIEW`
+    完整视图；legacy ⇒ `ROUTE_VIEW_DELTA` 增量，见 `_replan_route`）；代码派生编号并做
+    引用转换。旧两路保留为**冻结响应回放/兼容适配器**，这里不做形状猜测、不作隐藏失败重试。
+    """
+    from shared.config import PROMPT_MAX_CHARS
+    _mode = str(mode or plan_mode(plan) or MODE_LEGACY)
+    _base_view, _vp = view_from_plan(plan, mode=_mode)
+    # **读取准入只判一次**（复核 2026-10-06 第十二轮 ①）：旧写法在这里另挑一个
+    # `view_ref_identity_conflict` 当停止条件——那是在共同准入之外**又维护一张放行
+    # 名单**：读盘说"读不成"、这里说"还能走"的时候，两份判断就分叉了（uid 表失配、
+    # 载体容器类型违约都是这么漏过去的）。现在只依据读取结果本身停或走，完整诊断
+    # 原样进证据。
+    if evidence is not None and _vp:
+        evidence["baseline_read_problems"] = [str((_p or {}).get("code") or "")
+                                              for _p in _vp]
+    if _base_view is None:
+        return None, "基线读不成可编辑视图：%s" % _detail_vp(_vp), "",             (evidence or {})
+    # 关系判据先跑一遍：基线自己就非法时，**先把它报给模型**（问题清单就是它），
+    # 但视图仍要发下去——模型得看得见当前形态才改得动。
+    # **协议由调用方按路由显式给出**（不按响应形状猜）：hybrid 走 `ROUTE_VIEW` 完整视图
+    # 替换，legacy 走 `ROUTE_VIEW_DELTA` 增量。两者共用**同一份**编排与验收链。
+    #
+    # ⚠️ **先定协议、再装配请求**（复核第十轮 ② 的同一类根因）：`_limits` 是请求对象的一部分，
+    # 它的 `rule_version` 此前**写死 v2**，于是增量请求的 `limits` 与 `rule_version` 两处
+    # 自相矛盾——离线矩阵/回放按请求对象读规则版本时会读到另一套。
+    _proto = str(protocol or ROUTE_VIEW)
+    _is_delta = _proto == ROUTE_VIEW_DELTA
+    _rule = PLAN_DELTA_RULE_VERSION if _is_delta else PLAN_VIEW_RULE_VERSION
+    _limits = {"mode": _mode,
+               "rule_version": _rule,
+               "max_calls": getattr(budget, "max_calls", None),
+               "calls_left": getattr(budget, "calls_left", None),
+               "deadline_at": getattr(budget, "deadline_at", None)}
+    _req = (delta_request if _is_delta else revision_request)(
+        _base_view, problems=problems, rejections=rejections,
+        rule_version=_rule,
+        remaining_calls=getattr(budget, "calls_left", None),
+        remaining_sec=budget.remaining_sec() if budget is not None else None,
+        limits=_limits)
+    # 请求**必须带着视图本体**：协议说"回一份改完的整份视图"，而模型连当前视图都没见过
+    # 时就只能凭空编一份——那不是修订，是重写。`revision_request` 是这份请求的**结构化
+    # 形态**（R1 的请求必备字段，也是离线矩阵的断言对象）；模型面这一路用等价的**文本块**
+    # 渲染同一份内容，两者不许各自演化（下面每个字段都从 `_req` 取，不重新拼）。
+    from step01_script_gen.plan_feasibility import planning_resource_context
+    _response_contract = (replan_delta_schema_for_request(_req)
+                          if _is_delta else replan_view_schema_for_request(_req))
+    _payload = json.dumps({"base_plan_hash": _req["base_plan_hash"],
+                           "fact_basis_hash": _req["fact_basis_hash"],
+                           "frozen_facts": _req["frozen_facts"],
+                           "frozen_events": _req["frozen_events"],
+                           "view": _req["view"],
+                           "budget": _req["budget"],
+                           "limits": _req["limits"],
+                           "resources": planning_resource_context(_base_view),
+                           "response_contract": _response_contract["schema"]},
+                          ensure_ascii=False, indent=1)
+    _prompt = chr(10).join([
+        _REVISION_NOVEL_PROMPT.format(novel_text=novel_text[:PROMPT_MAX_CHARS]),
+        _PLAN_DELTA_INSTRUCTION if _is_delta else _PLAN_VIEW_INSTRUCTION,
+        # **两条协议都拼**（2026-10-11 离线回放诊断）：统一验收链核"正文是不是原文片段"，
+        # 请求就必须说出来——只在首版提示里有，等于让修订轮去踩一个没人告诉它的坑。
+        source_verbatim_rule(),
+        # ⚠️ **必须用 v2 词汇那一份**：拼 v5 的 `render_protected_fields_rule()`
+        # 会让同一份 prompt 里出现两套互相冲突的形状规格（实跑 2026-10-06 根因）
+        render_view_protected_rule(),
+        "",
+        "# 当前可编辑视图（**你要改的就是这一份**；两个基线摘要必须原样回带）",
+        _payload,
+        "response_contract 是输出类型规则（不是待抄的内容）；已有实体 id 只可取 enum，"
+        "新增只可用 new: 前缀。" +
+        ("请按该契约生成实际正文、删除表和完整顺序。" if _is_delta else
+         "请按本次 mode 的字段契约回带整份 view；不输出 delete/order 增量块。"),
+        _view_feedback_block(problems, _base_view),
+        _rejection_feedback_block(rejections or []),
+        "请现在实际修复上面的计划问题，并提交完成的 %s 改动；不要返回示例或空修改。"
+        % (DELTA_SCHEMA if _is_delta else REVISION_SCHEMA),
+    ])
+    _sys = system_prompt or _OUTLINE_SYSTEM_PROMPT
+    if evidence is not None:
+        from shared.revision_request_evidence import revision_request_evidence
+        evidence["request"] = revision_request_evidence(
+            _sys, _prompt, _payload, _response_contract)
+    _timeout = budget.remaining_sec() if budget is not None else None
+    # ⚠️ **不传 `max_tokens`**（实测 2026-10-06，探针 4 条独立样本）：v2 响应要回带**整份**
+    # 可编辑视图，实测 8.5k~23.4k 字符，而这里原先硬写死 `max_tokens=8000` —— 模型真去
+    # 干活的那几次全部 `finish_reason=length` 被**截断**，接回来就是非法 JSON，必须重问。
+    # 该值本质是「延迟 vs 输出长度」的权衡参数，按项目约定归 `.env`
+    # （`AGENT_PLAN_TEXT_MAX_TOKENS`，`agent_plan_provider` 已明确删过同类的硬编码兜底）；
+    # 这里再写一个数字等于把那条约定又推翻一次。缺省交给配置，`None` ⇒ 不覆盖。
+    try:
+        _res = create_service().generate(TextGenerationRequest(
+            system_prompt=_sys, user_prompt=_prompt,
+            temperature=0.3,
+            json_schema=_response_contract,
+            model=model,
+            deadline_monotonic=getattr(budget, "deadline_at", None),
+            timeout_sec=_timeout))
+    except Exception as exc:                                               # noqa: BLE001
+        return None, "call_failed: %s: %s" % (type(exc).__name__, exc), "", (evidence or {})
+    _cid = str(getattr(_res, "call_id", "") or "")
+    if not _res.success:
+        return None, "call_failed: %s" % _res.error, _cid, (evidence or {})
+    _data = _parse_outline_json(_res.text)
+    if not isinstance(_data, dict):
+        return None, "响应不是可解析的 JSON 对象", _cid, (evidence or {})
+    if evidence is not None:
+        evidence["response"] = _view_response_shape(_data, _proto)
+    # **期望规则版本由分派者传**（复核 2026-10-06 第十一轮 P2）：完整视图入口此前从不核
+    # `rule_version`（缺失或 `unknown.v999` 都 `applied`）。两条入口共用同一条验收链，
+    # 版本判据也不能只有增量那条有——这里把**本轮实际按哪套规则问的**传下去。
+    _accept = lambda _v: _accept_view_candidate(_v, novel_text, verification, verify_axes=verify_axes)
+    if _is_delta:
+        _cand_view, _probs, _res_k = apply_delta_view(_base_view, _data, mode=_mode,
+                                                      accept=_accept)
+    else:
+        _cand_view, _probs, _res_k = apply_editable_view(
+            _base_view, _data, mode=_mode, accept=_accept,
+            expected_rule_version=_rule)
+    _kind = _res_k["kind"]
+    if _kind == "no_change":
+        return None, "no_change", _cid, evidence
+    if _kind == "illegal":
+        return None, _detail_vp(_probs) or "候选被拒收（形状/基线/引用/保护边界）", \
+            _cid, evidence
+    # ⚠️ **必须复用 `complete_candidate` 交回来的那个对象**（工作包 1 第 1 条）。
+    # 旧写法在这里 `plan_from_view(_cand_view)` **再投影一次**：那份副本没有核验记录，
+    # 于是「控制器验收通过 → 返回候选没记录 → 最终真实验收判 `verify_record_missing`」。
+    # 投影两次在"只补出处/同摘要"的边缘还会产生两份**内容一致但对象不同**的候选，
+    # 控制器拿一份判、下发另一份。
+    _new, _final_problems = complete_candidate(_cand_view, novel_text, verification, verify_axes=verify_axes)
+    if _new is None:
+        # **投影准入不过**：结构化拒收（`complete_candidate` 交回的是生产者记录）。
+        # 这一轮**没有**可下发的候选——不能带着 `None` 往下走，也不能把"应用成功了"
+        # 写进记录而实际交不出东西。
+        return None, "候选无法投影成计划：%s" % _detail_vp(_final_problems), _cid, (evidence or {})
+    # ⚠️ **传输协议与候选视图格式是两件事**（复核 2026-10-06 第十轮 P2）：增量轮发的是
+    # `plan_revision.delta.v1`，但合并出来的候选**仍是一份完整视图**（`REVISION_SCHEMA`）。
+    # 旧写法把三项全写死成 v2，于是增量轮的记录**冒充 v2**——按记录选协议回放、
+    # 按记录统计协议分布、按记录归因都会读错。三项各自取**实际分派**的那一份。
+    _new["plan_revision"] = {
+        # 本轮**实际发出/实际分派**的传输协议（回放按它选入口）
+        "schema": _proto,
+        "transport_protocol": _proto,
+        # 请求的规则版本（进缓存身份的那一个）
+        "rule_version": _rule,
+        # 候选**产物的格式**：合并/应用之后交给 `complete_candidate` 的就是这个
+        "view_schema": REVISION_SCHEMA,
+        "view_rule_version": PLAN_VIEW_RULE_VERSION,
+        "mapping": _res_k["mapping"],
+        "residuals": list(_final_problems),
+        "call_id": _cid}
+    if evidence is not None:
+        evidence["applied"] = True
+        evidence["residuals"] = len(_final_problems)
+        evidence["mapping"] = _res_k["mapping"]
+    return _new, "view_applied: %d 条残余" % len(_final_problems), _cid, evidence
+
+
+def _detail_vp(problems) -> str:
+    """视图/响应问题记录 → 一行行带字段路径与原因的原话（不归纳、不截断）."""
+    _out = []
+    for _p in (problems or []):
+        _path = str((_p or {}).get("path") or "").strip()
+        _out.append("%s%s｜%s" % ("%s " % _path if _path else "",
+                                  str((_p or {}).get("code") or ""),
+                                  str((_p or {}).get("reason") or "")))
+    return chr(10).join(_out)
+
+
+def _view_response_shape(data, protocol: str) -> dict:
+    """视图两协议这一轮**原始响应**的实际形状（归因第三项）.
+
+    `expected` 由**实际分派**的协议给（它知道这一轮要的是什么）；`shape` 按响应里
+    **实际出现的键**判——**不许**从期望值倒填。复核 2026-10-06（第十轮）P2：旧写法两栏
+    都硬写成 `"view"`，走增量的六份记录全部冒充 v2。
+    """
+    _expect = DELTA_SCHEMA if str(protocol) == ROUTE_VIEW_DELTA else REVISION_SCHEMA
+    if not isinstance(data, dict):
+        return {"shape": "unparsed", "expected": _expect}
+    # 形状取**响应自报的 `schema`**（它自己声明走哪套协议），不按"有没有改动块"猜——
+    # 只补出处的增量响应一个改动块都没有，按键猜会把它记成 `view`。
+    _decl = str(data.get("schema") or "")
+    _shape = ("delta" if _decl == DELTA_SCHEMA
+              else "view" if _decl == REVISION_SCHEMA else "unknown")
+    _out = {"shape": _shape, "declared_schema": _decl,
+            "expected": _expect, "keys": sorted(data)}
+    if _shape == "delta":
+        _out["changes"] = {k: (len(data[k]) if isinstance(data[k], list) else 1)
+                           for k in ("upsert", "delete", "order", "fact_bindings",
+                                     "hook_bindings", "evidence_updates",
+                                     "evidence_delete") if k in data}
+    _v = data.get("view")
+    _out["view_digest"] = view_digest(_v) if isinstance(_v, dict) else ""
+    return _out
 
 
 def _response_summary(data, plan, expect: str = "ops") -> dict:
@@ -1458,14 +2841,31 @@ def _response_summary(data, plan, expect: str = "ops") -> dict:
 def _replan_by_ops(plan, problems, novel_text, *, model=None, base_prompt=None,
                    system_prompt=None, timeout_sec=None,
                    deadline_monotonic=None, rejections=None,
-                   evidence: dict | None = None) -> tuple:
+                   evidence: dict | None = None,
+                   response=None) -> tuple:
     """契约/承载类问题：操作式反馈（模型只回操作，代码在旧计划上应用）.
 
     `evidence`（复核之九 交付证据要求）：**可选出参**——把这一轮的归因证据
     （请求信息 / 原始响应形状 / 应用结果）原样填进去，供轮次档留档。不改返回元数，
     免得所有调用点跟着改。
+
+    `response`：**冻结响应回放**用——给了它就**不调模型**，直接把这个历史响应交给
+    应用器（`apply_replan_ops`）。生产链路上永远为 `None`；那是"旧协议仅兼容回放"的
+    具体落点。
     """
     from shared.config import PROMPT_MAX_CHARS
+    # ---- **冻结响应回放**：给了 `response` 就**不调模型**，直接交给应用器 ----
+    if response is not None:
+        _data = response if isinstance(response, dict) else _parse_outline_json(response)
+        if not isinstance(_data, dict):
+            return None, "invalid_result: 回放响应不是可解析的 JSON 对象", ""
+        if evidence is not None:
+            evidence["response"] = dict(_response_summary(_data, plan, expect="ops"),
+                                        replayed=True)
+        _new, _why = apply_replan_ops(plan, _data, novel_text)
+        if evidence is not None:
+            evidence["applied"] = _new is not None
+        return _new, _why, ""
     # 复核 2026-10-02 P1：操作式请求里**不能**带「输出整份大纲」的 `OUTLINE_PROMPT`
     # （它的「# 输出格式」列着整份 JSON 字段表），否则与"只回操作"自相矛盾——模型按
     # "整份大纲"的理解把 schema 必填的声明键填成空值，就会静默清掉合法声明。
@@ -1478,7 +2878,7 @@ def _replan_by_ops(plan, problems, novel_text, *, model=None, base_prompt=None,
         service = create_service()
         result = service.generate(TextGenerationRequest(
             system_prompt=system_prompt or _OUTLINE_SYSTEM_PROMPT,
-            user_prompt=_prompt, max_tokens=4000, temperature=0.3,
+            user_prompt=_prompt, max_tokens=_outline_max_tokens(), temperature=0.3,
             json_schema=REPLAN_OPS_SCHEMA, model=model, timeout_sec=timeout_sec,
             deadline_monotonic=deadline_monotonic))
     except Exception as exc:                       # noqa: BLE001
@@ -1576,7 +2976,8 @@ def _full_plan_response_problem(raw) -> str:
 
 def revise_plan_full(plan, problems, novel_text, *, model=None, base_prompt=None,
                      system_prompt=None, timeout_sec=None, deadline_monotonic=None,
-                     rejections=None, evidence: dict | None = None) -> tuple:
+                     rejections=None, evidence: dict | None = None,
+                     response=None) -> tuple:
     """**受约束的完整计划修订**（复核 2026-10-02 之九 P1）：操作协议表达不了的修法走这条.
 
     什么时候用（复核之十一 P1 起由 `_fix_capability` 按**修法能力表**判定）：问题记录声明
@@ -1595,6 +2996,30 @@ def revise_plan_full(plan, problems, novel_text, *, model=None, base_prompt=None
     （`call_failed` / `invalid_result` / `core_field_changed: <字段>`）。
     """
     from shared.config import PROMPT_MAX_CHARS
+    # ---- **冻结响应回放**：给了 `response` 就**不调模型**（旧协议的兼容入口）----
+    if response is not None:
+        data = response if isinstance(response, dict) else _parse_outline_json(response)
+        if not isinstance(data, dict):
+            return None, "invalid_result: 回放响应不是可解析的 JSON 对象", ""
+        if evidence is not None:
+            evidence["response"] = dict(
+                _response_summary(data, plan, expect="full_plan"), replayed=True)
+            evidence["applied"] = False
+        # 与**生产那条路**逐项同序（回放要回答的是"这份历史响应会被怎样处置"，
+        # 少一步就不是同一个答案）：响应形状 → 净化事务 → 核心守卫。
+        _pre = _full_plan_response_problem(data)
+        if _pre:
+            return None, _pre, ""
+        new_plan = _validate_outline(data, novel_text)
+        _preserve_acceptance_policy(plan, new_plan)
+        if not new_plan:
+            return None, "invalid_result: 净化事务拒收", ""
+        _broken = _plan_core_preserved(plan, new_plan)
+        if _broken:
+            return None, "core_field_changed: %s" % _broken, ""
+        if evidence is not None:
+            evidence["applied"] = True
+        return new_plan, "", ""
     # 基底提示：与首版**同一个** JSON 契约（`# 输出格式` 一段照用，不另写一份字段表），
     # 但"节拍能不能动"这一句按轮次渲染——修订轮的节拍由上一版冻结（复核之十二 P2）
     _base = base_prompt or OUTLINE_PROMPT.format(
@@ -1612,7 +3037,7 @@ def revise_plan_full(plan, problems, novel_text, *, model=None, base_prompt=None
         service = create_service()
         result = service.generate(TextGenerationRequest(
             system_prompt=system_prompt or _OUTLINE_SYSTEM_PROMPT,
-            user_prompt=_prompt, max_tokens=4000, temperature=0.3,
+            user_prompt=_prompt, max_tokens=_outline_max_tokens(), temperature=0.3,
             json_schema=OUTLINE_SCHEMA, model=model, timeout_sec=timeout_sec,
             deadline_monotonic=deadline_monotonic))
     except Exception as exc:                                   # noqa: BLE001
@@ -1638,6 +3063,7 @@ def revise_plan_full(plan, problems, novel_text, *, model=None, base_prompt=None
     if _pre:
         return None, _pre, _call_id
     new_plan = _validate_outline(data, novel_text)
+    _preserve_acceptance_policy(plan, new_plan)
     if not new_plan:
         return None, "invalid_result: 净化事务拒收", _call_id
     _broken = _plan_core_preserved(plan, new_plan)
@@ -1657,7 +3083,7 @@ def revise_plan_full(plan, problems, novel_text, *, model=None, base_prompt=None
 
 
 def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str, model=None,
-                     base_prompt=None, system_prompt=None) -> dict:
+                     base_prompt=None, system_prompt=None, verification=None, verify_axes=None) -> dict:
     """**一轮**修订（注入给控制器）：契约/承载问题走操作式反馈，预算不可行走原预算反馈.
 
     **接口只裁决一次**（复核之十二 P1）：`_replan_route(problems)` 的返回值同时决定
@@ -1677,10 +3103,28 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
     不合法"；只给前者，模型会重复同一个错误。
     """
     from step01_script_gen.plan_feasibility import evaluate_plan
+    from step01_script_gen.plan_coherence import FIELD as _CF, VERSION as _CV
+    if (plan.get(LEGACY_ACCEPTANCE_FIELD) == LEGACY_ACCEPTANCE_VERSION
+            or plan.get(_CF) == _CV):
+        record = plan.get("plan_verification")
+        if isinstance(record, dict) and record.get("status") != "ok":
+            return {"kind": "verification_failed", "call_id": "",
+                    "detail": "核验记录纠正未完成，候选保持不变：%s" % record.get("error", ""),
+                    "evidence": {"applied": False, "no_model_call": True}}
     _timeout = budget.remaining_sec()
     # 工作包 §4 B：控制器只开**一次**表（`budget.deadline_at`），通道里的排队/退避/
     # 每次 POST 都按它重算余量——不再各自拿一个"剩余秒数"重新解释
     _deadline_at = getattr(budget, "deadline_at", None)
+    from step01_script_gen import source_revision as _source_revision
+    if any(p.get('code') in ('fact_basis_invalid', 'source_preservation_failed') for p in (problems or [])):
+        if not _source_revision.eligible_targets(plan):
+            return {'kind':'verification_failed','call_id':'',
+                    'detail':'来源修正缺少当前有效的独立负面核验，先纠正核验记录，候选保持不变',
+                    'evidence':{'applied':False,'no_model_call':True,'route':'source_basis_revision'}}
+        return _source_revision.revise_with_service(
+            plan, problems, novel_text=novel_text, service=create_service(),
+            model=model, timeout_sec=_timeout, deadline_monotonic=_deadline_at,
+            verification=verification)
     _budget_ctx = bool(problems) and all(
         str((p or {}).get("code") or "").startswith("budget") for p in problems)
     # **按修法能力分流**（复核 2026-10-02 之九 P1）：问题记录自带 `fix`（生产者给）——
@@ -1707,7 +3151,7 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
     # `_replan_route(None)` 判完整计划、而 `revise_plan_once(..., problems=None, ...)`
     # 照样发操作协议（隔离复现）。判据只有一份，入口就得**调它**，不许抄它的表达式。
     # （`_cap` 仍是给证据用的那一份；同一个纯函数算两次，值必然相同。）
-    _route = _replan_route(problems)
+    _route = _replan_route(problems, mode=plan_mode(plan))
     # **归因证据束**（交付证据要求）：`no_change` 只说明"候选没变"，不能据此推断模型
     # 意图。这里把五项一次备齐——① 修法可表达性 ② 请求给了多少信息 ③ 原始响应的形状
     # 与改动 ④ 应用结果 ⑤ 残余问题（由控制器的轮次档一并留档）。①②在分流前后即可得，
@@ -1721,7 +3165,13 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
            # 不是接口——单独记一栏，免得把"走了预算反馈"读成"回了操作"
            "budget_context": _budget_ctx,
            "response": {}, "applied": None}
-    if _budget_ctx:
+    # **预算只是反馈的 flavor，不是接口**（工作包 1 第 3 条）。旧写法 `if _budget_ctx:`
+    # 把预算问题**先于**接口分派短路进 `enforce_budget_by_replanning`——那条路自己
+    # 再按 `_INTERFACE_ADVICE[_route]` 取文案，于是 hybrid 的纯预算问题（`_route`
+    # 已经是 `ROUTE_VIEW`）先撞上 `KeyError: 'view'`（复核 2026-10-05 P1）。
+    # 现在：**接口分派在前**，`_route == ROUTE_VIEW` 永远走 v2；只有 legacy 的纯预算
+    # 轮才保留旧的重选路径（它是**预算反馈**的既有语义，不是另一套响应协议）。
+    if _budget_ctx and _route not in (ROUTE_VIEW, ROUTE_VIEW_DELTA):
         # 预算分支沿用**既有的一次重选语义**（"同一计划版本只重选一次"的去重标记、
         # 判据版本、回写 `plan_replan`），但这一轮仍然走控制器给的额度与剩余时间：
         # 额度管的是"花掉的规划机会"，去重标记管的是"这一版别再试"。
@@ -1747,9 +3197,62 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
                     "detail": _d, "call_id": _call_id, "evidence": _ev}
         _plan = dict(_new or plan)
         _plan["plan_replan"] = _info
+        if verification is not None:
+            from step01_script_gen.content_verify import attach_verification
+            _plan = attach_verification(_plan, verification)
         return {"kind": "applied", "plan": _plan,
                 "detail": "budget_reselect:%s" % _info.get("result"),
                 "call_id": _call_id, "evidence": _ev}
+    elif _route in (ROUTE_VIEW, ROUTE_VIEW_DELTA):
+        from step01_script_gen import plan_content_repair as _pcr_state
+        # **`plan_revision.v2` 完整视图替换**（R1/R2）：模型回一整份视图、代码派生编号与
+        # 引用映射。走这条路的原因是**接口级**的：本次计划的关系在
+        # `presentation.fact_bindings` 里（或问题里有 `view` 能力的 code），旧 ops 协议
+        # 只认 `｜承载：` 文案与数字编号，**表达不了**那些关系。
+        # **内容槽位优先**（规划收口计划 §5.6 第 4 条）：本轮问题**全部**能被"内容与
+        # 关系选择"表达时，让模型只做选择、由代码装配增量——真实修订里反复出现的**数字
+        # 占位**（`upsert.beats[0]` 是 int）正是"要求它重抄实体表 / order / 哈希"造成的。
+        # 表达不了（`_content_slots_applicable` 按稳定 UID 判）⇒ 落回既有 delta。
+        _slot_ok, _slot_why, _slot_ctx = _content_slots_applicable(plan, problems)
+        _ev["content_slots"] = {"applicable": bool(_slot_ok), "why": str(_slot_why),
+                                "state": str((_slot_ctx or {}).get("state") or ""),
+                                "blocked": list((_slot_ctx or {}).get("blocked") or [])}
+        if not _slot_ok and str((_slot_ctx or {}).get("state") or "") \
+                == _pcr_state.STATE_UNKNOWN_TARGET:
+            # **零调用**：本次诊断指向的实体不存在/身份写错 ⇒ 上游记录契约失效。
+            # 一次 `create_service` / `generate` 都不发（`len(calls)==0` 由测试钉住），
+            # 基线计划原样保留，把责任送回**记录生产者**（问题记录随返回带回）。
+            print("[PLAN] ⇒ **目标身份失效**：本次诊断指向的实体不在基线视图里 ⇒ "
+                  "零调用、保留基线；责任在**问题记录的生产者**（不是模型）")
+            return {"kind": "invalid_target", "detail": _slot_why, "call_id": "",
+                    "evidence": _ev}
+        if _slot_ok:
+            _ev["content_slots"]["slots"] = [str(_s["slot_id"])
+                                             for _s in _slot_ctx["found"]["slots"]]
+            print("[PLAN] ⇒ 走**内容槽位**修订（模型只选内容与关系、代码装配增量；%d 个槽：%s）"
+                  % (len(_slot_ctx["found"]["slots"]),
+                     "、".join(str(_s["slot_id"]) for _s in _slot_ctx["found"]["slots"])))
+            _new, _why, _call_id, _ev = _replan_by_slots(
+                plan, problems, novel_text, budget, rejections,
+                model=model, system_prompt=system_prompt, evidence=_ev,
+                verification=verification, ctx=_slot_ctx, verify_axes=verify_axes)
+        else:
+            # **打印实际生效的那一条**（复核 2026-10-11：旧文案硬编码，看不出走的是哪条）：
+            # 协议名照实打，括号里的**原因**也照实说——hybrid 是**计划模式**定的，
+            # legacy 才是"问题里有只能改关系的修法"。
+            _protocol_label = ("plan_revision.delta.v1 增量修订" if _route == ROUTE_VIEW_DELTA
+                               else "plan_revision.v2 完整视图替换")
+            _why_label = ("本计划为 %s ⇒ 完整视图协议" % (plan_mode(plan) or MODE_LEGACY)
+                          if _route == ROUTE_VIEW
+                          else ("本轮问题里有只能改**关系**的修法：%s"
+                                % ("、".join(_inops) or str(plan_mode(plan) or MODE_LEGACY))))
+            print("[PLAN] ⇒ 走 %s（%s；内容槽位不适用：%s）"
+                  % (_protocol_label, _why_label, _slot_why))
+            _new, _why, _call_id, _ev = _replan_by_view(
+                plan, problems, novel_text, budget, rejections,
+                model=model, system_prompt=system_prompt, evidence=_ev,
+                mode=plan_mode(plan) or MODE_LEGACY, verification=verification,
+                protocol=_route, verify_axes=verify_axes)
     elif _route == ROUTE_FULL_PLAN:
         # `problems` 为空/缺记录时不是"有表达不了的修法"，而是**无从证明表达得了**（fail-closed）
         print("[PLAN] %s ⇒ 走受约束的完整计划修订"
@@ -1776,7 +3279,11 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
         return {"kind": "illegal", "detail": _why, "call_id": _call_id, "evidence": _ev}
     # **候选统一入口**（复核第 32 轮第 2 条）：候选也要先规范化，再验收、再算指纹——
     # 否则"规范化就能修的候选"会被当成没修（同一份计划两套判据）。
-    return {"kind": "applied", "plan": normalize_plan_ranges(_new)[0],
+    _candidate = normalize_plan_ranges(_new)[0]
+    if verification is not None:
+        from step01_script_gen.content_verify import attach_verification
+        _candidate = attach_verification(_candidate, verification)
+    return {"kind": "applied", "plan": _candidate,
             "detail": str(_why or ""), "call_id": _call_id, "evidence": _ev}
 
 
@@ -1807,7 +3314,8 @@ def round_archive_writer(path=None):
 def run_plan_revision(plan, novel_text: str, *, model=None, base_prompt=None,
                       system_prompt=None, max_calls: int = DEFAULT_REVISION_MAX_CALLS,
                       deadline_sec=DEFAULT_REVISION_DEADLINE_SEC,
-                      run_deadline_at=None, budget=None, on_round=None) -> dict:
+                      run_deadline_at=None, budget=None, on_round=None,
+                      verification=None) -> dict:
     """把计划交给**修订控制器**跑一遍（所有来源共用同一条验收链、同一份额度与截止时刻）.
 
     `run_deadline_at` 是**整次 Step 01 的绝对截止时刻**（monotonic，工作包 §4 B）：
@@ -1823,17 +3331,32 @@ def run_plan_revision(plan, novel_text: str, *, model=None, base_prompt=None,
     # **统一候选入口**（复核第 32 轮第 2 条）：首版、缓存版、每次修订候选都先规范化，
     # 再验收、再算指纹。"只需规范化即可通过"的计划因此**零调用**通过。
     _plan0 = normalize_plan_ranges(plan)[0]
+    if verification is not None and isinstance(_plan0, dict):
+        from step01_script_gen.content_verify import attach_verification
+        _plan0 = attach_verification(_plan0, verification)
     if budget is None:
         budget = RevisionBudget(max_calls=max_calls, deadline_sec=deadline_sec,
                                 run_deadline_at=run_deadline_at)
     # 逐轮证据的落点（复核之七）：生产入口默认写到台账旁边；测试/调用方可以覆盖
     if on_round is None:
         on_round = round_archive_writer()
+    def _accept(_p, _nt=""):
+        """**唯一的验收链**；新模式把内容核验记录挂上再判（R4：缺记录不得判通过）.
+
+        核验**每份新摘要最多一次**（控制器内部按摘要复用），结构非法的候选根本不进这里
+        （它在上游就被拒收），所以"结构非法候选不调核验"是自然成立的。
+        """
+        _pp = normalize_plan_ranges(_p)[0]
+        if verification is not None and isinstance(_pp, dict):
+            from step01_script_gen.content_verify import attach_verification
+            _pp = attach_verification(_pp, verification)
+        return plan_acceptance_problems(_pp, _nt)
+
     _ctl = RevisionController(
-        accept=lambda _p, _nt="": plan_acceptance_problems(normalize_plan_ranges(_p)[0], _nt),
+        accept=_accept,
         revise=lambda _p, _pr, _bg, _rj: revise_plan_once(
             _p, _pr, _bg, _rj, novel_text=novel_text, model=model, base_prompt=base_prompt,
-            system_prompt=system_prompt),
+            system_prompt=system_prompt, verification=verification),
         budget=budget, on_round=on_round,
         # **控制器的逐轮记录必须落到日志**（复核 2026-10-02 之五）：`log` 这个口子一直
         # 在，但生产入口从没接——"第 N 轮为什么被拒收/为什么停"只在返回对象里，
@@ -2035,9 +3558,17 @@ def generate_outline_result(novel_text: str, model: str | None = None,
     if not novel_text:
         return _fail(res, "outline_invalid", "原文为空（无法规划）")
 
+    from step01_script_gen.plan_coherence import FIELD as COHERENCE_FIELD, VERSION as COHERENCE_VERSION
     from shared.config import PROMPT_MAX_CHARS
-    prompt = OUTLINE_PROMPT.format(novel_text=novel_text[:PROMPT_MAX_CHARS],
-                                   beat_edit_rule=_BEAT_EDIT_RULE["first_version"])
+    # **按模式给提示与 schema**（主专题 §6.3）：旧模式**逐字不变**（同一个
+    # `OUTLINE_PROMPT` / `OUTLINE_SCHEMA`），新模式多一段规则块与 `screen_cards`/
+    # `beat_events` 两个字段。模式由 `presentation_mode()` 早读（Step01 早期 CLI 或
+    # `STEP01_PRESENTATION_MODE`），进缓存键 ⇒ 换模式必然重新规划。
+    _mode = presentation_mode()
+    _expect_contract = PLAN_CONTRACT_VERSION_BY_MODE[_mode]
+    prompt = outline_prompt_for_mode(
+        _mode, novel_text=novel_text[:PROMPT_MAX_CHARS],
+        beat_edit_rule=_BEAT_EDIT_RULE["first_version"])
     system_prompt = _OUTLINE_SYSTEM_PROMPT
     # v6.125.2（用户 2026-09-25 决定）：道具状态**候选锚点**随大纲一起携带。
     # 它由**确定性扫描**从原文得出（不经 LLM），只取 `motion_away` / `marker_after`
@@ -2070,11 +3601,27 @@ def generate_outline_result(novel_text: str, model: str | None = None,
             "novel_text": novel_text,
             "prompt": prompt,
             "system_prompt": system_prompt,
-            "schema": OUTLINE_SCHEMA,
+            "schema": outline_schema_for_mode(_mode),
+            "presentation_mode": _mode,
+            # 修订规则版本进缓存键（工作包 1 第 6 条）：规则变了，**同一份原文**下
+            # 缓存里的修订结果不再可用。此前键里没有它，于是改完规则后仍命中旧缓存，
+            # 表现为"代码改了、跑出来还是老样子"。
+            "revision_rule_version": (PLAN_VIEW_RULE_VERSION if _mode == MODE_HYBRID
+                                      else "legacy_ops.v1"),
+            # **传输协议也进身份**（复核 2026-10-06 第十轮 P2 的同一类根因）：同一份原文、
+            # 同一套规则，走增量与走完整视图替换**问模型的是两件事**，产出的候选可以不同。
+            # 键里没有它 = 换协议后仍命中旧缓存，表现为「协议换了、跑出来还是老样子」；
+            # 这与上面 `revision_rule_version` 记的那条是同一个道理，只是维度不同。
+            "revision_transport": default_revision_transport(_mode),
+            # 新模式还要锁**核验身份**：核验规则或原文身份变了，旧核验记录不可复用。
+            "verify_rule_version": VERIFY_RULE_VERSION,
+            "fact_metadata_version": FACT_METADATA_VERSION,
+            LEGACY_ACCEPTANCE_FIELD: LEGACY_ACCEPTANCE_VERSION if _mode == MODE_LEGACY else "",
+            COHERENCE_FIELD: COHERENCE_VERSION,
             "provider": TextGenCfg.PROVIDER,
             "model": model or TextGenCfg.default_text_model(),
             "temperature": 0.3,
-            "max_tokens": 4000,
+            "max_tokens": _outline_max_tokens(),
             # v6.125.2：候选锚点进缓存键——**提取规则变化**（同一段原文得出不同
             # 候选）必须让缓存失效，否则旧锚点会被当成新规则的结果复用。
             "prop_anchors": _prop_anchors,
@@ -2090,27 +3637,103 @@ def generate_outline_result(novel_text: str, model: str | None = None,
             # 处置：备份旧缓存 + 按**首版计划**重新产出（不套用 `STEP01_FORCE_REPLAN`
             # 那轮预算重选——它对一份已判时长可行的缓存本就不适用）。
             _cv_got = cached.get("plan_contract_version") if isinstance(cached, dict) else None
+            _cached_plan = cached.get("outline") if isinstance(cached, dict) else None
+            # ---- **核验记录**：命中时按身份复用，不匹配则拒用（工作包 1 缓存生命周期）----
+            #
+            # 读数（复核 2026-10-05）：只修版本后 `cache_hit=True` 但**核验仍调了一次**——
+            # 缓存里的核验记录没有被认出来。原因：缓存里存了 `plan_verification`，读回时
+            # 没有与**本次**的候选/原文/模式/规则四项身份核一遍，于是要么被丢弃（重核）
+            # 要么被照单全收（拿旧记录当新的）。这里做**逐项身份核对**：
+            # 候选摘要 + 原文摘要 + 规则版本 + 记录状态，四项全对才复用。
+            _cached_ver_rec = (cached.get("verification") if isinstance(cached, dict)
+                               else None)
+            if not isinstance(_cached_ver_rec, dict):
+                _cached_ver_rec = (_cached_plan.get("plan_verification")
+                                   if isinstance(_cached_plan, dict) else None)
+            _ver_reusable = False
+            if (isinstance(_cached_ver_rec, dict) and _mode in (MODE_HYBRID, MODE_LEGACY)
+                    and isinstance(_cached_plan, dict)):
+                from shared.content_verification import (plan_digest_of,
+                                                        record_basis_matches, record_shape_problems)
+                from step01_script_gen.content_verify import novel_identity
+                _want = plan_digest_of(_cached_plan)
+                _nv = novel_identity(novel_text)
+                # **形状判据与解析 / 控制器装载 / 统一验收同源**（复核 2026-10-07
+                # 三轮 ②）：旧写法在这里手写三条 `isinstance(..., list)`，与别处各写
+                # 一份——"被缓存拒了、又被别处收下"正是这么来的。
+                _ver_shape = record_shape_problems(_cached_ver_rec,
+                                                   where="缓存中的核验记录")
+                _ver_reusable = (
+                    not _ver_shape
+                    and str(_cached_ver_rec.get("status") or "") == "ok"
+                    and str(_cached_ver_rec.get("plan_digest") or "") == _want
+                    and str(_cached_ver_rec.get("novel_digest") or "") == _nv["digest"]
+                    and str(_cached_ver_rec.get("rule_version") or "") == VERIFY_RULE_VERSION
+                    # **义务支座**（复核 2026-10-09 P1）：待核集合是从**冻结主张**派生的，
+                    # 支座变了（主张改过 / 换了派生口径）旧记录就不许复用。这里与统一验收共用
+                    # 同一份判据函数（`record_basis_matches`）；读不出视图 ⇒ False（fail-closed）。
+                    and record_basis_matches(_cached_ver_rec, _cached_plan))
+                if not _ver_reusable:
+                    res["cache"]["verification_rejected"] = {
+                        "status": _cached_ver_rec.get("status"),
+                        "plan_digest": str(_cached_ver_rec.get("plan_digest") or "")[:12],
+                        "want_digest": _want[:12],
+                        "novel_digest": str(_cached_ver_rec.get("novel_digest") or "")[:12],
+                        "want_novel": _nv["digest"][:12],
+                        "rule_version": _cached_ver_rec.get("rule_version"),
+                        "codes": [str(x.get("code")) for x in _ver_shape]}
+            elif _cached_ver_rec is not None:
+                res["cache"]["verification_rejected"] = {"reason": "非新模式不需要核验记录"}
+            # ⚠️ **被拒/不适用 的记录不许随计划继续流通**（复核 2026-10-07 三轮 ②）：
+            # 它还挂在计划本体里，统一验收若只看"有没有记录"，就会拿一份**明确被拒**的
+            # 记录当作"已核验"，于是 `verification_rejected` 与 `executable=True`
+            # 同时出现（实测形态）。摘掉之后，这一份候选的验收会如实报"缺核验记录"。
+            if isinstance(_cached_plan, dict) and not _ver_reusable:
+                _cached_plan = dict(_cached_plan)
+                _cached_plan.pop("plan_verification", None)
+            if _ver_reusable and isinstance(_cached_plan, dict):
+                # **复原**到内容上：候选身份一致（同一份计划），记录可以安全沿用
+                _cached_plan = dict(_cached_plan)
+                _cached_plan["plan_verification"] = _cached_ver_rec
             # 工作包 §4 C：可执行缓存**只放通过统一验收的版本**——历史失败元数据
             # （`plan_replan` 里的 result/detail）不能当成本轮验收的替代品。
-            _cached_plan = cached.get("outline") if isinstance(cached, dict) else None
             _cached_problems = ([]
                                 if not isinstance(_cached_plan, dict)
                                 else (plan_acceptance_problems(_cached_plan, novel_text) or []))
             _cached_ok = (isinstance(_cached_plan, dict) and not _cached_problems)
+            # **内容与外层必须一致**（工作包 1 第 5 条）：外层键说 hybrid、内容却是
+            # legacy（或反过来）时命中缓存，等于拿一份**没经过新协议**的计划当新模式的
+            # 计划下发——而且验收链已经按新规则判过"通过"了，问题更隐蔽。
+            _content_mode = plan_mode(_cached_plan) if isinstance(_cached_plan, dict) else ""
+            _mode_consistent = (_content_mode == _mode and isinstance(_cached_plan, dict)
+                                and _cached_plan.get(COHERENCE_FIELD) == COHERENCE_VERSION)
+            if _mode == MODE_LEGACY:
+                _mode_consistent = (_mode_consistent and isinstance(_cached_plan, dict)
+                                    and _cached_plan.get(LEGACY_ACCEPTANCE_FIELD) == LEGACY_ACCEPTANCE_VERSION)
+            if isinstance(_cached_plan, dict) and not _mode_consistent:
+                res["cache"]["mode_mismatch"] = {
+                    "expected": _mode, "got": _content_mode,
+                    "plan_contract_version": _cv_got}
             if (isinstance(cached, dict) and cached.get("source_hash") == cache_key
-                    and _cv_got == PLAN_CONTRACT_VERSION and _cached_ok
+                    and _cv_got == _expect_contract and _cached_ok
+                    and _mode_consistent
                     and _validate_outline(cached.get("outline"), novel_text)):
                 print(f"[CACHE] 复用章节大纲: {cache_path}")
-                outline = cached["outline"]
+                # ⚠️ 用**复原过核验记录的那一份**，不是 `cached["outline"]` 原始对象
+                # （复核 2026-10-05 P2：复原写在 `_cached_plan` 上，这里却读原始对象，
+                # 于是记录没进 `outline`，控制器自然又核了一遍）。
+                outline = _cached_plan if isinstance(_cached_plan, dict) \
+                    else cached["outline"]
                 _from_cache = True
                 res["cache"]["hit"] = True
                 res["source"] = "cache"
+                res["cache"]["verification_reused"] = bool(_ver_reusable)
                 # 缓存里若缺该字段（旧缓存但键相同——理论上不会，键已含锚点），
                 # 用本次算出的补上，避免调用方拿到 None 而丢掉独立短提示
                 if isinstance(outline, dict):
                     outline.setdefault("prop_state_candidates", _prop_anchors)
             elif (isinstance(cached, dict) and cached.get("source_hash") == cache_key
-                    and _cv_got != PLAN_CONTRACT_VERSION):
+                    and _cv_got != _expect_contract):
                 # `cache.backup` 记**盘上真实文件名**（helper 返回值）——两处各拼一次
                 # 文件名必然漂移（`.bak-contractN` 的 N 是**新版**契约号，不是旧缓存那版）。
                 # 留档失败 ⇒ `(None, 原因)`：**不许**覆盖旧缓存（复核 2026-10-02 之三 P2）
@@ -2169,9 +3792,9 @@ def generate_outline_result(novel_text: str, model: str | None = None,
                 system_prompt=system_prompt,
                 user_prompt=(prompt if not _attempts
                              else prompt + _structure_feedback_block(_attempts[-1]["problems"])),
-                max_tokens=4000,
+                max_tokens=_outline_max_tokens(),
                 temperature=0.3,
-                json_schema=OUTLINE_SCHEMA,
+                json_schema=outline_schema_for_mode(_mode),
                 model=model,
                 deadline_monotonic=_plan_deadline,
             )
@@ -2214,9 +3837,16 @@ def generate_outline_result(novel_text: str, model: str | None = None,
                 # 空大纲静默注入分镜 prompt（大纲锚点是一堆空标签，LLM 拿不到任何约束）。
                 # 结构判据只有一份（`outline_structure_problems`，纯诊断），具体到
                 # 字段与项号；净化与版本戳留在 `_validate_outline` 里作为独立事务。
+                if _mode == MODE_LEGACY:
+                    data[LEGACY_ACCEPTANCE_FIELD] = LEGACY_ACCEPTANCE_VERSION
                 _bad = outline_structure_problems(data)
                 if not _bad:
                     outline = _validate_outline(data, novel_text)
+                    # **按模式规范化**（新模式：内容 + 卡片 → 版本 6 的结构化关系）。
+                    # 规范化是**生产者侧**的动作，不改变正文/证据/条数/事件；它失败与结构
+                    # 不合格同级——不进验收链。
+                    if _mode == MODE_HYBRID and isinstance(outline, dict):
+                        outline, _bad = normalize_hybrid_plan(outline)
                 if not _bad and not outline:
                     # 结构诊断说没问题、净化事务却拒收：两处判据不一致 ⇒ fail-closed 拒收，
                     # 并把"不一致"本身记成问题（不静默当成"首版结构校验未通过"）
@@ -2273,6 +3903,10 @@ def generate_outline_result(novel_text: str, model: str | None = None,
     # v6.156（2026-10-01 工作包）：**保守规范化在验收之前**——只做表达转换（载体区间展开
     # + 全部节拍引用重映射），语义错配（声明了承载、节拍其实不承载）仍交规划器。
     # 首版、缓存版**都从这里过**，是同一条链；没有区间写法时一个字节都不改。
+    if _mode == MODE_LEGACY and isinstance(outline, dict):
+        outline = dict(outline, **{LEGACY_ACCEPTANCE_FIELD: LEGACY_ACCEPTANCE_VERSION})
+    from step01_script_gen.plan_coherence import mark_plan
+    outline = mark_plan(outline)
     _plan0, _norm = normalize_plan_ranges(outline)
     if _norm:
         print("[PLAN] 规范化：展开载体区间 %d 处（%s）——语义错配仍交规划器"
@@ -2283,10 +3917,82 @@ def generate_outline_result(novel_text: str, model: str | None = None,
     # （`_REVISION_NOVEL_PROMPT`），不能把"输出整份大纲"的 `OUTLINE_PROMPT` 当基底
     # （2026-10-02 复核 P1 的形态：请求协议自相矛盾会把 schema 必填键填成破坏性缺省值）。
     # 这两个参数只留给测试/调用方**覆盖**，默认值即正确契约。
+    _verify_ctl = None
+    if _mode in (MODE_HYBRID, MODE_LEGACY):
+        # **内容核验控制器**（R4 / 工作包 2）：新模式的完整支持关系由独立核验给出，
+        # 确定性判据只核形状/引用/出处/时长。按候选摘要复用有效结果；新候选核验与
+        # 记录协议纠正共用最多 4 次发送，与修订调用分账、共用同一张截止表。
+        from shared.content_verification import VerificationController
+        from step01_script_gen.content_verify import (novel_identity,
+                                                      verify_view_with_service)
+        _novel_id = novel_identity(novel_text)
+
+        def _verify(view, digest):
+            # 核验请求**带原文上下文与原文身份**（工作包 2 第 1 条）：没有原文就无从
+            # 判断"原文是否支持主张"，只能靠引文——而引文正是可能写错的那一份。
+            return verify_view_with_service(
+                view, digest, model=model, deadline_monotonic=_plan_deadline,
+                novel_text=novel_text, novel_digest=_novel_id["digest"],
+                novel_version=_novel_id["version"],source_references=True)
+
+        def _protocol_problems(record, view, digest):
+            from shared.content_verification import record_protocol_problems
+            return record_protocol_problems(record, view, plan_digest=digest,
+                                             novel_text=novel_text, novel_digest=_novel_id["digest"])
+
+        def _repair_verification(view, digest, failure, previous):
+            return verify_view_with_service(
+                view, digest, model=model, deadline_monotonic=_plan_deadline,
+                novel_text=novel_text, novel_digest=_novel_id["digest"],
+                novel_version=_novel_id["version"],
+                source_references=True,
+                correction={"problems": failure.get("problems", []),
+                            "error": failure.get("error", ""), "previous_response": previous})
+
+        _verify_ctl = VerificationController(verify=_verify,
+                                             require_coherence=True,
+                                             validate_record=_protocol_problems,
+                                             repair=_repair_verification,
+                                             deadline_at=_plan_deadline,
+                                             rule_version=VERIFY_RULE_VERSION,
+                                             log=print,
+                                             # 原文身份由控制器盖章（复核 2026-10-07
+                                             # 三轮 ②）：记录必须绑**本次**原文。
+                                             novel_digest=_novel_id["digest"])
+        # ---- **把已验证的缓存记录交给控制器复用**（复核 2026-10-05 P2）----
+        #
+        # 读数：命中缓存后 `cache_hit=True`、生成 0 次、**核验仍 1 次**。原因就在这里：
+        # 控制器是**新建**的，`records` 是空的，于是 `record_for()` 看不到任何已核验的
+        # 候选，又调了一次模型。缓存里那份记录的身份在**读缓存时**已经核过（候选摘要 /
+        # 原文摘要 / 规则版本 / 状态 + 三组结果），这里只需要把它**装进控制器**，
+        # 后面的验收就会走"同摘要复用"那条路 ⇒ **生成 0 次、核验 0 次**。
+        #
+        # 只装**当前这份候选**对应的记录：别的候选的记录装进来也会被摘要挡住，
+        # 但没必要——装一个就够，且装错的风险（拿别份候选的记录）由摘要判据兜住。
+        if _from_cache and isinstance(outline, dict):
+            _rec = outline.get("plan_verification")
+            if isinstance(_rec, dict):
+                from shared.content_verification import plan_digest_of
+                _dig = plan_digest_of(outline)
+                # **装载只有 `seed` 这一个入口**（复核 2026-10-07 三轮 ②）：它跑的是
+                # 与解析/缓存读回/统一验收**同一份**记录契约——"缓存那边拒了、这边
+                # 直接塞进 `records`"这条路关掉。
+                # **把当前候选计划一起交进去**（复核 2026-10-09-r2 P2）：装载入口要能
+                # 独立核对**义务支座**——只信记录自报的摘要，等于把「待核集合对不对」
+                # 交给被检查的一方。给了计划就走共用判据，读不出视图 ⇒ 不装载。
+                if _verify_ctl.seed(_dig, _rec, plan=outline):
+                    print("[PLAN] 复用缓存中已验证的核验记录（候选 %s…）——本次不再核验"
+                          % _dig[:12])
+                else:
+                    print("[PLAN] 缓存里的核验记录不合格（摘要不符 / 形状非法 / 规则版本"
+                          " / 义务支座不符）⇒ 不复用，按没有记录处理")
+        print("[PLAN] 内容核验已开启（候选核验和记录纠正共用最多 %d 次调用；"
+              "原文 %s…）" % (_verify_ctl.max_verifications, _novel_id["digest"][:12]))
     _rev = run_plan_revision(_plan0, novel_text, model=model,
                              max_calls=max_revision_calls,
                              deadline_sec=revision_deadline_sec,
-                             run_deadline_at=run_deadline_at, budget=_budget)
+                             run_deadline_at=run_deadline_at, budget=_budget,
+                             verification=_verify_ctl)
     _plan = _rev.get("plan")
     _final, _ = normalize_plan_ranges(_plan) if isinstance(_plan, dict) else (_plan, [])
     _probs = (plan_acceptance_problems(_final, novel_text)
@@ -2311,6 +4017,11 @@ def generate_outline_result(novel_text: str, model: str | None = None,
     }
     # `executable` 的判据只有这一条（§7.2）：**完整验收为空**且**未过截止**。
     res["executable"] = bool(not _probs and not _past)
+    if _verify_ctl is not None:
+        # **核验台账单列**（§3.3「单列调用台账，不构成运行授权」）
+        res["verification"] = dict(_verify_ctl.as_dict(),
+                                   corrections=list(_verify_ctl.corrections),
+                                   records=len(_verify_ctl.records))
     if not res["executable"]:
         if _past:
             _code = "deadline_exhausted"
@@ -2379,8 +4090,18 @@ def generate_outline_result(novel_text: str, model: str | None = None,
             # 旧缓存却已经被换掉了（**既发布了、又没下发**：终局检查只挡住下发）。
             _tmp_json = prepare_json_swap(
                 cache_path,
+                # ⚠️ 外层版本取**模式对应值**（复核 2026-10-05 P1：此前无条件写
+                # `PLAN_CONTRACT_VERSION`＝5，而内容是 hybrid 的版本 6 ⇒ 第二次读取
+                # 按 `_expect_contract`＝6 比对不上，**缓存永远命中不了**，表现为
+                # "每次都重新规划+重新核验"。外层与内容必须一致。
                 {"source_hash": cache_key,
-                 "plan_contract_version": PLAN_CONTRACT_VERSION,
+                 "plan_contract_version": _expect_contract,
+                 "presentation_mode": _mode,
+                 # 核验身份随缓存走：命中时据此**复用**已合法确认的核验记录，
+                 # 不必为同一份候选再调一次模型（工作包 1「缓存生命周期」）。
+                 "verification": (dict(_final.get("plan_verification"))
+                                  if isinstance(_final.get("plan_verification"), dict)
+                                  else None),
                  "outline": _final},
                 ensure_ascii=False, indent=2)
             if _deadline_hit():
@@ -2793,6 +4514,26 @@ def _brief_ids(items, cap: int = _ID_BRIEF_CAP) -> str:
     return "%s 等 **共 %d 条**" % ("，".join(_it[:cap]), len(_it))
 
 
+def _join_replan_problems(lines: list) -> str:
+    """把**逐轴收集**到的验收问题一次给全（不再只回第一条、也不再 `[:2]` 截断）.
+
+    复核之六已确立的口径（「反馈保留完整问题身份：总数 / 类别计数 / code｜路径」）
+    在操作式修订这条路上此前没落地：`apply_replan_ops` 每个轴各自 `return`，
+    第一道不过后面的判据**一次都不跑**；声明门结尾又 `[:2]` 截断。实测章 1 三轮
+    （2026-10-04）的反馈量分别是 1 / 1 / 2 条，而响应里实际残留 1 / ≥3 / 6 条
+    ——模型每轮只看到问题集的一角，额度耗尽时终局记成 `illegal_response`，
+    看起来像「模型违约」，实际是反馈没有把话说完（交付台账 §19.1）。
+    """
+    _items = [str(x).strip() for x in (lines or []) if str(x).strip()]
+    if not _items:
+        return ""
+    if len(_items) == 1:
+        return _items[0]
+    return ("本轮响应仍有 **%d 条**问题（**逐条列全**，此前只回第一条）：\n%s"
+            % (len(_items),
+               "\n".join("%d) %s" % (_i, _t) for _i, _t in enumerate(_items, 1))))
+
+
 def apply_replan_ops(plan: dict, ops, novel_text: str) -> tuple:
     """把模型给的**操作**应用到旧计划上（**代码执行**，模型不重写整份 JSON）.
 
@@ -3016,15 +4757,21 @@ def apply_replan_ops(plan: dict, ops, novel_text: str) -> tuple:
     # （离线实测：同一响应去掉基线孤儿后正常应用）。基线缺陷该由**验收链**报告、由控制器
     # 反馈下一轮，不该在这一批头上记一笔。改台词/节拍的闭合要求**继续保留，不放宽**。
     _touches_carriers = bool(_dlg or _bat)
+    # **应用后验收：逐轴收集、一次把全部问题交回**（2026-10-04 实测根因，台账 §19.1）。
+    # 旧写法每个轴各自 `return`，第一道不过后面的判据**一次都不跑**——章 1 第 2 轮只回了
+    # 「D2 无任何节拍承载」1 条，而声明门里另 2 条（F7/F9）**从未被计算**（探针记录到该轮
+    # `plan_contract_problems` 调用次数为 0）；第 3 轮契约门实检 6 条、被 `[:2]` 截成 2 条。
+    # **责任范围不变**：仍然只有本批改过台词/节拍才跑这三轴。
+    _post: list = []
     if _touches_carriers:
         if _dup:
-            return None, "节拍载体标注重复：%s（每条节拍只许一个载体）" % _brief_ids(_dup)
+            _post.append("节拍载体标注重复：%s（每条节拍只许一个载体）" % _brief_ids(_dup))
         if _unlabeled:
-            return None, ("节拍缺载体标注：%s（计划带了标注就必须每条恰有一个载体）"
-                          % _brief_ids(_unlabeled))
+            _post.append("节拍缺载体标注：%s（计划带了标注就必须每条恰有一个载体）"
+                         % _brief_ids(_unlabeled))
         if _orphan_d:
-            return None, ("替换后 %s 无任何节拍承载（承载关系必须双向闭合）"
-                          % _brief_ids("D%d" % r["index"] for r in _orphan_d))
+            _post.append("替换后 %s 无任何节拍承载（承载关系必须双向闭合）"
+                         % _brief_ids("D%d" % r["index"] for r in _orphan_d))
     # 只核**被改写的**条目：未改动的条目是既有状态（早就过了流水线），把整份计划
     # 一起核会把「原本就抄得不精确的旧条目」也算到本轮头上而误拒——操作式的语义
     # 是「代码在旧计划上打补丁」，责任范围就是补丁本身。
@@ -3032,14 +4779,17 @@ def apply_replan_ops(plan: dict, ops, novel_text: str) -> tuple:
         _why = _plan_evidence_intact({"shot_beats": _changed, "required_facts": []},
                                      novel_text)
         if _why:
-            return None, _why
+            _post.append(_why)
     # 替换台词后：事实/钩子的承载必须**逐项声明**（2026-09-30 复核裁决）——
     # 计划必须自洽，否则「生成按 dialogue_lines 写、审计按事实/钩子判」两边各自
     # 自洽，任何修复轮都改不动。不过就拒收本轮（见函数注释的完整理由）。
     _cd = _plan_carrier_declarations_intact(new, ops, len(plan_dialogue_lines(new)),
-                                            n_narration=_n_narration)
+                                            n_narration=_n_narration,
+                                            problems=_post)
     if _cd:
-        return None, _cd
+        _post.append(_cd)
+    if _post:
+        return None, _join_replan_problems(_post)
     # **应用后内容确实没变 ⇒ no_change**（工作包 §4 C）：例如把 `hook_carrier` 显式清成
     # 它本来就是的空值、或把某条台词换成它自己——"显式操作"不等于"内容变了"。
     if json.dumps(plan, ensure_ascii=False, sort_keys=True, default=str) ==             json.dumps(new, ensure_ascii=False, sort_keys=True, default=str):
@@ -3153,7 +4903,7 @@ def _strip_fact_carrier(fact) -> str:
 
 
 def _plan_carrier_declarations_intact(new: dict, ops: dict, n_lines: int, *,
-                                      n_narration=None) -> str:
+                                      n_narration=None, problems=None) -> str:
     """重选**替换了选用台词**时，必须逐项声明事实与钩子的承载；返回 "" = 通过.
 
     2026-09-30 复核裁决（第二章「计划选 5 句、审计却报漏句」的实质）：
@@ -3166,6 +4916,9 @@ def _plan_carrier_declarations_intact(new: dict, ops: dict, n_lines: int, *,
       审计侧按事实/钩子判，两边各自自洽，修复轮永远改不动；
     - 因此：替换台词时，重选结果必须**逐项**声明每条必保留事实的承载节拍与表达方式；
       **不过就拒收本轮**（不接受带警告放行，也不自动加重选轮次）。
+
+    `problems` 给了就**逐条并入**那份收集箱、本函数返回 `""`（由调用方一次性渲染成
+    反馈）——实检几条就回几条，不再 `[:2]` 截断。
 
     ⚠️ 本函数只做两件事：**把 ops 声明落进计划**（持久字段，随执行契约传给生成器）
     + 调 `plan_feasibility.plan_contract_problems`（**首版/重选版/缓存版共用的那道门**）。
@@ -3303,7 +5056,13 @@ def _plan_carrier_declarations_intact(new: dict, ops: dict, n_lines: int, *,
         # 交**同一条**验收链判断——拒收/继续由控制器按统一停止原因收口（工作包 §4 C）。
         return ""
     # 校验交给共用契约门（编号/范围/语义交集/画面一致/钩子整句）
-    return "；".join(plan_contract_problems(new)[:2])
+    _probs = list(plan_contract_problems(new))
+    if problems is not None:
+        # 逐条并入调用方的收集箱（**不截断**）：旧写法 `[:2]` 让实检 6 条只回 2 条
+        # （章 1 第 3 轮的实测形态），与「反馈保留完整问题身份」的口径相反。
+        problems.extend(_probs)
+        return ""
+    return "；".join(_probs[:2])
 
 
 
@@ -3441,8 +5200,15 @@ def _validate_outline(outline: dict | None, novel_text: str = "") -> dict | None
               % (str(_bad[0].get("reason") or _bad[0].get("code"))[:80]))
         return None
     events = outline.get("main_events") or []
+    # **有事件序号引用时不做压缩**（复核 2026-10-07 P1）：`beat_events` 按序号引用
+    # `main_events`，先删掉一个空项会让后面每一条引用整体前移，而形状/覆盖/顺序检查
+    # 看的是**净化后**的表、照样全过——关系静默指错。所以：给了 `beat_events` 的只做
+    # **不改变位置的空白清理**（空项在结构判据那一层已被拒收，走不到这里）；没有序号
+    # 引用的旧模式**保留原净化行为**（去空 + strip）。
+    _indexed = "beat_events" in outline
     if isinstance(events, list):
-        cleaned_events = [str(e).strip() for e in events if str(e).strip()]
+        cleaned_events = [str(e).strip() for e in events
+                          if _indexed or str(e).strip()]
         outline["main_events"] = cleaned_events
     else:
         cleaned_events = []
@@ -3499,8 +5265,23 @@ def _validate_outline(outline: dict | None, novel_text: str = "") -> dict | None
     # 钩子字段口径）据此区分「v3 的新稿」与「标注了旧版本的老计划」——兼容必须
     # 依据明确版本，不能依据"字段缺失"（否则新稿漏写字段会被当成"没有要求"放过）。
     # 首版、缓存复用、重选结果都经本函数，故一处即覆盖三条入口。
+    #
+    # ⚠️ 版本由**模式单源**给（工作包 1 第 5 条），不是无条件写死 5：复核 2026-10-05 P1
+    # 实测 hybrid 计划过了净化后被盖成版本 5，于是「缓存读的时候按模式期待版本 6、
+    # 盘上却是 5」——写读不一致，缓存永远命中不了，且**内容还是对的**（更坏：
+    # 它会让人以为内容错了）。
+    from shared.presentation_contract import MODE_HYBRID, PLAN_CONTRACT_VERSION_BY_MODE
     from step01_script_gen.plan_feasibility import PLAN_CONTRACT_VERSION
-    outline["plan_contract_version"] = PLAN_CONTRACT_VERSION
+    _mode = plan_mode(outline)
+    if _mode == MODE_HYBRID or (isinstance(outline.get("presentation"), dict)
+                                and str((outline.get("presentation") or {}).get("mode")
+                                        or "") == MODE_HYBRID):
+        _mode = MODE_HYBRID
+    outline["plan_contract_version"] = PLAN_CONTRACT_VERSION_BY_MODE.get(
+        _mode, PLAN_CONTRACT_VERSION)
+    if _mode == MODE_HYBRID:
+        # `presentation.mode` 也要与版本一致（两者是**同一件事的两种表述**）
+        outline["presentation"]["mode"] = MODE_HYBRID
     _baseline.clear()                     # **采纳**：把净化后的候选写回原对象
     _baseline.update(outline)
     return _baseline
@@ -3587,3 +5368,319 @@ def outline_to_anchor(outline: dict | None, novel_text: str = "") -> str:
     if _budget:
         parts.append(f"【时间预算】{_budget}")
     return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# 呈现模式：旧模式（图外旁白） / 新模式（画面文字卡）
+# ---------------------------------------------------------------------------
+PRESENTATION_MODE_ENV = "STEP01_PRESENTATION_MODE"
+
+
+def presentation_mode(explicit: str | None = None) -> str:
+    """本次运行的呈现模式（`legacy_audio` / `screen_hybrid`）——**缺省仍是旧模式**。
+
+    模式进计划身份（`presentation.mode` + `plan_contract_version`），下游从**经提交验证
+    的稿件**读它，不在 Step03/04 另传开关改稿（主专题 §6.3）。
+    """
+    from shared.presentation_contract import MODE_HYBRID, MODE_LEGACY, MODES
+    _v = str(explicit or os.getenv(PRESENTATION_MODE_ENV) or "").strip()
+    if not _v:
+        return MODE_LEGACY
+    if _v not in MODES:
+        raise ValueError("非法呈现模式 %r（合法：%s）" % (_v, list(MODES)))
+    return _v
+
+
+#: 新模式追加到规划提示的规则块（**只在新模式下拼接**，不改旧模式的提示面）。
+HYBRID_PROMPT_BLOCK = """
+# 本集为**画面文字卡模式**（`screen_hybrid`）
+- 本集**不使用图外旁白**：`narration_lines` 必须给**空数组** `[]`。原文叙述里必须让观众
+  知道、画面又拍不出来的内容，改用**文字卡**表达。
+- 文字卡写在 `screen_cards` 里，每条：
+  `{{"beat": B节拍号, "template": "character|time_place|background",
+     "text": "**原文里逐字照抄的片段**"}}`
+  `beat` 是**承载它的那条节拍**（那条节拍的正文要演出这段信息对应的动作，
+  卡片只是把观众看不出来的东西写清楚）。
+- `text` 必须是原文的**逐字片段**（能在原文里一字不差地找到），不许改写、不许概括、
+  不许自造。卡片只是把原文写出来，不新增内容。
+  （**修订轮**同一口径见 `source_verbatim_rule()`——那条同时覆盖卡片/对白/旁白/原文依据，
+  且点名了"别把反馈里的描述抄成正文"这个实测踩过的坑；两处口径相同，改一处要同步另一处。）
+- 三类模板：`character` 人物介绍（姓名/字/年龄/身份）、`time_place` 时空说明、
+  `background` 背景信息。**模板标题是样式**，不用你写。
+- 卡片**有阅读时间预算**：一条卡的字数越多，需要的展示时间越长；预算不够会被拒收
+  （须选完整且更短的逐字片段，或把可演的信息转移给画面/合法对白；不删核心事实）。
+  分页不会降低总阅读时间，多张卡还各有静置成本。**不要**把整段原文都搬进卡片。
+- 人物对白照旧：`dialogue_lines` 与「载体：台词k」的规则不变。
+- **事件归属要显式写**：`beat_events` 与 `shot_beats` **等长**，第 i 项写第 i 条节拍承接的
+  `main_events` 序号（1 起，可以是多个）。每个主要事件至少被一条节拍承接，事件先后不得
+  回退。**代码不会替你按顺序猜**——不写就会被判「事件归属未声明」。
+- 卡片挂在画面节拍上时，这条事实就是**画面与卡片联合承载**：画面演出动作，卡片把镜头里
+  看不出的姓名/时间/身份写清楚。两边合起来才算完整表达。
+- **卡片承载的事实这样声明**：`｜承载：B节拍号/卡片k`——`k` 是 `screen_cards` 里的
+  **第 k 条**（1 起，全局序号），节拍号写**这张卡挂在哪条节拍上**。写 `文字卡k` 一样认。
+  词表是 `{carrier_words}`；**写不出来、序号越界、卡片不在声明的节拍上，都会被拒收并
+  原样回给你**（不替你猜、不按位置补、不静默清成「没有载体」）。
+"""
+
+
+def outline_prompt_for_mode(mode: str, **fmt) -> str:
+    """按模式给出规划提示（新模式追加规则块；旧模式**逐字不变**）."""
+    from shared.presentation_contract import MODE_HYBRID
+    _t = OUTLINE_PROMPT.format(**fmt)
+    if str(mode) == MODE_HYBRID:
+        # 词表**从单一事实源渲染**（不手写第二遍）：提示里教的写法与解析器认的写法
+        # 必须是同一份，否则首版会写出解析器不认的声明（2026-10-06 实跑就是这么栽的）。
+        from shared.presentation_contract import carrier_words_text
+        from step01_script_gen.plan_feasibility import planning_resource_context
+        _t = _t + HYBRID_PROMPT_BLOCK.replace("{carrier_words}", carrier_words_text())
+        _t += "\n# 本次有效资源约束（与本地验收同源，不能自报上限）\n"
+        _t += json.dumps(planning_resource_context(), ensure_ascii=False)
+        _t += "\n# 首版输出类型规则（规则不是示例正文；数组成员须按类型实际填写）\n"
+        _t += json.dumps(outline_schema_for_mode(mode)["schema"], ensure_ascii=False)
+    return _t
+
+
+def outline_schema_for_mode(mode: str):
+    """按模式给出输出 schema（新模式多一个 `screen_cards`）."""
+    from shared.presentation_contract import MODE_HYBRID
+    from _text_gen.deepseek_schema import SCREEN_HYBRID_OUTLINE_SCHEMA
+    return SCREEN_HYBRID_OUTLINE_SCHEMA if str(mode) == MODE_HYBRID else OUTLINE_SCHEMA
+
+
+def normalize_hybrid_plan(plan):
+    """旧形状的计划 + `screen_cards` → **版本 6** 的新模式计划（`returns (plan, problems)`）.
+
+    这是**生产者侧的规范化**，不是语义判断：它只把"事实由谁承载"从 `｜承载：…` 文案搬到
+    `presentation.fact_bindings` 这一份权威关系上，并按 `screen_cards[].beat` 把卡片接进
+    承载集合（**画面与卡片联合承载**——卡片说的是镜头里看不出的那部分）。
+
+    规范化**不改**正文、证据、条数、事件与台词；`narration_lines` **不清空**（新模式用了
+    旁白就该被模式合同拒收，不能悄悄丢掉模型给的内容）。
+
+    **稳定身份随块保存**（`fact_uids` / `beat_uids` / `dialogue_uids` / `narration_uids`）：
+    不保存的话，投影读回时身份会被按数组位置重新编号——"只在内存里稳定"等于不稳定。
+
+    **事件归属只搬不编**：`beat_events` 取自模型显式给出的 `beat_events`（`main_events`
+    序号，逐节拍一个数组）。没给就标 `event_binding=unknown`，由验收链按"未声明"报出来
+    ——**不按位置一对一编一份**，那会把"仓库外景"登记成"周明辞职"而检查照样通过。
+    """
+    from shared.presentation_contract import (KIND_CARD, KIND_VISUAL, MODE_HYBRID,
+                                              PLAN_CONTRACT_VERSION_HYBRID,
+                                              PRESENTATION_SCHEMA, _carrier_decl, _ref_out,
+                                              _split_decls, card_declaration_problems,
+                                              carrier_ref_from_decl, ref_uid, view_from_plan)
+    if not isinstance(plan, dict) or not plan:
+        return None, [{"code": "plan_missing", "kind": "plan", "index": None, "path": "plan",
+                       "reason": "计划缺失或不是对象", "detail": "计划缺失或不是对象"}]
+    # **结构判据与首版入口同源**（复核 2026-10-07：「首版入口与直接规范化入口共用判据」）：
+    # 本函数按**位置**读 `shot_beats` / `dialogue_lines` / `main_events` / `required_facts`
+    # ——旧写法 `[str(b) for b in (... or [])]` 在这些字段不是数组（`=5`）时抛
+    # `TypeError`、是字符串时又逐字符遍历，还是"转换把违约吃掉"（与卡片同一根因）。
+    # 先跑那一份**纯诊断**结构判据，不为空就原样吐出记录（调用方按结构化拒收处理）。
+    _struct = outline_structure_problems(plan)
+    if _struct:
+        return None, _struct
+    _out = json.loads(json.dumps(plan, ensure_ascii=False, default=str))
+    _beats = [str(b) for b in (_out.get("shot_beats") or [])]
+    _lines = [str(x) for x in (_out.get("dialogue_lines") or [])]
+    _events = [str(e) for e in (_out.get("main_events") or [])]
+    _beat_uids = ["b%02d" % _i for _i in range(1, len(_beats) + 1)]
+    _dial_uids = ["d%02d" % _i for _i in range(1, len(_lines) + 1)]
+    _problems: list = []
+
+    # ---- 卡片：**先过准入，再做编号与形状转换** ----
+    # 复核 2026-10-07 P1：旧写法 `enumerate(_out.get("screen_cards") or [], 1)` 在
+    # `screen_cards=1` 时抛 `TypeError`（首版入口**崩在半路**，不是"拒收"）、
+    # `str(...)` 把 `text=123` 洗成合法字符串、列表推导把坏 `source_spans` 成员筛掉
+    # ——三种都是"转换把违约吃掉了"。顺序固定为：**容器 → 成员与字段类型 → 编号范围
+    # → 转换**；非法一律带**原字段路径 + 原值**记问题（字段判据在
+    # `card_declaration_problems`，与视图实体合同同一份口径）。首版入口与直接规范化
+    # 入口调的是**同一个函数**，判据只有这一份。
+    _cards_raw = _out.get("screen_cards")
+    if _cards_raw is not None and not isinstance(_cards_raw, list):
+        _problems.append({"code": "presentation_cards_type", "kind": "card",
+                          "index": None, "path": "screen_cards", "value": _cards_raw,
+                          "reason": "`screen_cards` 必须是**数组**（当前是 %s）"
+                                    "——不按空表兜底、不按字符/键遍历"
+                                    % type(_cards_raw).__name__,
+                          "detail": "卡片容器不是数组"})
+        _cards_raw = []
+    _cards: list = []
+    _by_beat: dict = {}
+    for _i, _c in enumerate(_cards_raw or [], 1):
+        _where = "screen_cards[%d]" % (_i - 1)
+        _cp = card_declaration_problems(_c, _where, _i)
+        if _cp:
+            _problems.extend(_cp)
+            continue
+        # ⚠️ **转换前校验原始类型与范围**（复核 2026-10-06 二轮 P1）：旧写法 `int(_b)`
+        # 会把 `1.9` **截成 1**、把 `True` 当成 1、把 `"2"` 也收下——静默改掉的是
+        # "这张卡挂在哪条节拍上"。只接受**整数**（`bool` 是 `int` 的子类，要单独挡掉）。
+        _b = _c.get("beat")
+        if _b is None:
+            _problems.append({"code": "presentation_card_beat_missing", "kind": "card",
+                              "index": _i, "path": "%s.beat" % _where, "value": _b,
+                              "reason": "卡片没有给承载节拍 `beat`——必须显式写它挂在哪条"
+                                        "节拍上（不按位置补、不按卡片顺序猜）",
+                              "detail": "卡片的承载节拍缺失"})
+            continue
+        if not 1 <= _b <= len(_beats):
+            _problems.append({"code": "presentation_card_beat_missing", "kind": "card",
+                              "index": _i, "path": "%s.beat" % _where, "value": _b,
+                              "reason": "卡片的承载节拍 B%d 不存在（计划共 %d 条节拍）"
+                                        % (_b, len(_beats)),
+                              "detail": "卡片的承载节拍不合法"})
+            continue
+        _cid = "c%02d" % _i
+        # **类型已在准入里核过**，这里**不再 `str(...)`**：`text=123` 不该被洗成
+        # 字符串，`template={"a":1}` 更不该变成一段对象字面量。
+        _item = {"card_id": _cid, "beat_uid": _beat_uids[_b - 1],
+                 "template": _c.get("template") or "background",
+                 "text": _c.get("text") or "",
+                 "placement": _c.get("placement") or "info_panel",
+                 "anchor": _c.get("anchor") or "beat_start"}
+        _spans = _c.get("source_spans")
+        if _spans:
+            _item["source_spans"] = [dict(x) for x in _spans]
+        _cards.append(_item)
+        _by_beat.setdefault(_beat_uids[_b - 1], []).append(_cid)
+    if _problems:
+        return None, _problems
+
+    # ---- 承载关系：读**旧形状的权威**（`｜承载：Bn/…`），再挂上该节拍的卡片 ----
+    _view, _vp = view_from_plan(_out, mode="legacy_audio")
+    if _view is None:
+        return None, [dict(x, path=x.get("path") or "required_facts") for x in _vp]
+    # ⚠️ **用共用词表 + 实际卡片表解析**（复核 2026-10-06 二轮 P1）：旧写法读的是
+    # `view_from_plan(mode="legacy_audio")` 的结果，而**旧模式没有卡片表**——首版写的
+    # `｜承载：B1/文字卡1` 在那里解析不出，四条事实因此**零载体**（核验只好报"没有载体"）。
+    # 现在按 hybrid 自己的卡片表解析，解析不出就**保留 `raw` + 原因**（不丢原貌）。
+    _bindings: list = []
+    _frozen = _view.get("frozen_facts") or []
+    # 共用解析器要的是**带 uid 的实体表**（与视图里的形状一致）
+    _beats_v = [{"uid": _u} for _u in _beat_uids]
+    _units_d = [{"uid": _u} for _u in _dial_uids]
+    _facts_txt = [str(f) for f in (_out.get("required_facts") or [])]
+    for _fi, _f in enumerate(_frozen, 1):
+        _decl = _carrier_decl(_facts_txt[_fi - 1]) if _fi - 1 < len(_facts_txt) else ""
+        _r = carrier_ref_from_decl(_decl, beats=_beats_v, dialogue=_units_d,
+                                   narration=(), cards=_cards)
+        _car = []
+        if _r:
+            _car.append(_ref_out({k: v for k, v in _r.items() if k != "reason"}))
+            _k, _u = str(_r.get("kind")), str(_r.get("uid") or "")
+            if _k == KIND_VISUAL:
+                # **联合承载**：该节拍上的卡片一起承载这条事实（卡片写的是镜头里看不出的
+                # 那部分）。同一节拍绑多张卡时全部登记——多张卡各自表达不同侧面是正当的。
+                for _cid in _by_beat.get(_u, []):
+                    _car.append(_ref_out({"kind": "screen_card", "uid": _cid}))
+            elif _k == KIND_CARD:
+                # 反向同一条契约（提示块原话：「卡片挂在画面节拍上时，这条事实就是
+                # **画面与卡片联合承载**」）：卡片自己带节拍，把那条节拍的画面一并登记。
+                _beat_of = next((c["beat_uid"] for c in _cards
+                                 if str(c["card_id"]) == _u), "")
+                if _beat_of:
+                    _car.append(_ref_out({"kind": "visual", "uid": _beat_of}))
+        _bindings.append({"fact_uid": str(_f.get("uid")), "carriers": _car})
+
+    # ---- 事件归属：**只搬模型显式给的那份**，且**转换前先校验原始类型与范围** ----
+    # ⚠️ 复核 2026-10-06 二轮 P1：旧写法 `_idx = _row if isinstance(_row, list) else []`
+    # 把 `beat_events=[1,1,1,2,3,4]`（**扁平表**，不是数组的数组）**无告警**转成六个空数组；
+    # `isinstance(True, int)` 让布尔编号当整数；浮点编号被 `isinstance(x, int)` 静默过滤。
+    # 三种都是"转换把违约吃掉了"。现在的规矩：**先检查原值，合法才转换**；不合法就带
+    # **原字段路径 + 原值**报出来，由调用方按结构化拒收处理。
+    _be_raw = _out.get("beat_events")
+    _beat_events = []
+    _declared = False
+    if _be_raw is not None:
+        if not isinstance(_be_raw, list) or len(_be_raw) != len(_beats):
+            _problems.append({
+                "code": "presentation_beat_events_shape", "kind": "plan", "index": None,
+                "path": "beat_events", "value": _be_raw,
+                "reason": "`beat_events` 必须是**与节拍等长**的数组的数组"
+                          "（现在是 %s / 节拍 %d 条）——不补空、不按位置猜"
+                          % ("非数组" if not isinstance(_be_raw, list)
+                             else "%d 项" % len(_be_raw), len(_beats)),
+                "detail": "事件归属表形状不合法"})
+        else:
+            _be_ok = True
+            for _i, _row in enumerate(_be_raw, 1):
+                if not isinstance(_row, list):
+                    _problems.append({
+                        "code": "presentation_beat_events_item", "kind": "beat",
+                        "index": _i, "path": "beat_events[%d]" % (_i - 1), "value": _row,
+                        "reason": "`beat_events[%d]` 必须是**数组**（现在是 %r：%s）"
+                                  "——扁平表不等于「每条节拍各一个数组」"
+                                  % (_i - 1, _row, type(_row).__name__),
+                        "detail": "事件归属行不是数组"})
+                    _be_ok = False
+                    continue
+                for _x in _row:
+                    _bad_x = (isinstance(_x, bool) or not isinstance(_x, int)
+                              or not 1 <= _x <= len(_events))
+                    if _bad_x:
+                        _problems.append({
+                            "code": "presentation_beat_events_index", "kind": "beat",
+                            "index": _i, "path": "beat_events[%d]" % (_i - 1),
+                            "value": _x,
+                            "reason": "`beat_events[%d]` 里的 %r 不是合法的事件序号"
+                                      "（要 1..%d 的**整数**；布尔、浮点、字符串都"
+                                      "不转换）" % (_i - 1, _x, len(_events)),
+                            "detail": "事件归属序号不合法"})
+                        _be_ok = False
+            if _be_ok:
+                _declared = True
+                _beat_events = [[_events[_x - 1] for _x in _row] for _row in _be_raw]
+
+    # 事件归属的形状/序号违约 ⇒ **整份规范化不产出**（结构化拒收，不交半成品）
+    if _problems:
+        return None, _problems
+
+    _hb = _view.get("hook_bindings") or {}
+    # ⚠️ `hook_carrier` 的**转换前类型判据不在这里**（复核 2026-10-07 三轮 ②）：
+    # 上面的 `view_from_plan(_out, mode="legacy_audio")` 已经按**读盘共用判据**核过
+    # （`view_hook_carrier_type`，带原值）——`=5` 那种计划根本走不到这里。
+    # 判据只有一处，这里不再手写第二份。
+    _hc_raw = _out.get("hook_carrier")
+    # 钩子承载声明**也用同一份词表 + 实际卡片表**重解析（旧模式那条路上同样没有卡片表）
+    _hook_carriers = []
+    for _hd in _split_decls(str(_hc_raw or "")):
+        _hr = carrier_ref_from_decl(_hd, beats=_beats_v, dialogue=_units_d,
+                                    narration=(), cards=_cards)
+        if _hr:
+            _hook_carriers.append(_ref_out({k: v for k, v in _hr.items()
+                                            if k != "reason"}))
+    _pres_block = {
+        "schema": PRESENTATION_SCHEMA, "mode": MODE_HYBRID,
+        "fact_uids": [str(f.get("uid")) for f in (_view.get("frozen_facts") or [])],
+        "beat_uids": _beat_uids,
+        "dialogue_uids": _dial_uids,
+        "narration_uids": [],
+        "screen_cards": _cards,
+        "fact_bindings": _bindings,
+        "hook_bindings": {
+            "spoken_uids": [str(x) for x in (_hb.get("spoken_uids") or [])],
+            "carriers": _hook_carriers},
+    }
+    # ⚠️ **没声明就整块不写**（复核 2026-10-06 第十二轮 ①）：旧写法无条件写
+    # `"beat_events": []`，源计划**没有**这个字段时写出来的是一个**长度不符的空表**
+    # ——「没有声明过」被悄悄改成了「给了一张不合法的表」。读盘按新口径把后者**拒读**
+    # （"表已给出却失配"不重新编号、不按未知兜底），于是两份计划本来只差一个"没写"，
+    # 却一份读得出来、一份读不出来。两种状态必须分开：
+    #   缺席 ⇒ `event_binding="unknown"`（既有语义，由验收链按"未声明"报出来）；
+    #   给了但长度不符 ⇒ 读取准入拒收。
+    if _declared:
+        _pres_block["beat_events"] = _beat_events
+    _out["presentation"] = _pres_block
+    _out["plan_contract_version"] = PLAN_CONTRACT_VERSION_HYBRID
+    _out.pop("screen_cards", None)          # 内容搬进 presentation（不再留第二份）
+    _out.pop("beat_events", None)
+    return _out, []
+
+
+def normalize_plan_for_mode(plan, mode=None):
+    """按模式规范化计划（旧模式**原样返回**；新模式走 `normalize_hybrid_plan`）."""
+    from shared.presentation_contract import MODE_HYBRID
+    if str(mode or presentation_mode()) != MODE_HYBRID:
+        return plan, []
+    return normalize_hybrid_plan(plan)

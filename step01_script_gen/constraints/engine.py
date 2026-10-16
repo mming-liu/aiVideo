@@ -114,6 +114,7 @@ def run_hard_fix(
     return_report: bool = False,
     novel_text: str = "",
     on_constraint_done: Optional[Callable[[str, Any], None]] = None,
+    repair_effects: Any = None,
 ) -> Any:
     """main.py 用的便捷入口：跑硬修复层.
 
@@ -122,6 +123,10 @@ def run_hard_fix(
         is_in_repair_loop: True=main.py:1055 调用（repair round 末尾）
         is_final_pass: True=main.py:1664 调用（_compute_timecodes 后）
         novel_text: 小说原文（用于 grounding 类约束，如 dialogue_grounding / dialogue_density 注入）
+        on_constraint_done: 每个约束执行后的回调（阶段屏障 / 效果账本的 writer 节点）
+        repair_effects: **只读**的「已授权效果」视图（`constraints.types.RepairEffectView`）.
+            有它时约束才能知道「本轮已被授权删掉的布局条目」；没有时（缺省）约束
+            行为**逐字不变**。这里只负责把它挂到 context 上，不做任何判断。
 
     Returns:
         修改后的 script（直接返回 script）；
@@ -159,6 +164,10 @@ def run_hard_fix(
             is_final_pass=is_final_pass,
             novel_text=novel_text,
         )
+        # §14 P1：把**只读**效果视图挂到 context 上（缺省 None = 逐字不变）。
+        # 走 context 而不是给 34 个约束各加一个构造参数；视图是冻结的，约束只读。
+        if repair_effects is not None:
+            ctx.repair_effects = repair_effects
         # v6.80：仅在真的传了钩子时才带参调用——保持默认调用形状不变，
         # 避免破坏 `apply_constraints = lambda ctx: report` 这类 monkeypatch
         # （带关键字参数会 TypeError，并被下方宽 except 静默吞掉）。

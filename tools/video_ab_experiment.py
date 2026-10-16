@@ -22,6 +22,19 @@
 实验视频写进 `{chapter_dir}/experiments/<experiment_id>/`，
 **绝不覆盖** `vimax_working/shots/<idx>/video.mp4`（那是生产缓存与 step04 的输入）。
 
+## 候选事务改造：**明确拒绝**（2026-10-03，计划 §15「绕过入口」行）
+
+本工具的 `run`（真实生成）仍走**旧提交路径**：不冻结请求、不保证"一次确认一次
+POST"，且 `_poll_video` 的生产分支会把结果副本写进正式 `clips/`——与"实验不碰正式
+素材"直接冲突。改造它需要接入候选事务，成本高且超出本包范围，因此这里**显式拒绝**
+真实生成（零 POST、零正式写入）并给出替代入口：
+
+* 候选生成：`python -m step02b_video_gen.main --chapter N --shots … --candidate-root ROOT/video`
+  （prepared 冻结 + 一次 POST + attempt 隔离 + accepted 事务）；
+* 离线规划/回放：`python tools/video_reroll.py plan|replay|report`。
+
+`plan` / `score` 两个离线子命令不受影响。
+
 用法：
     python tools/video_ab_experiment.py plan  --experiment-id ab-2026-09-23
     python tools/video_ab_experiment.py score --experiment-id ab-2026-09-23 \
@@ -58,6 +71,17 @@ TARGET_METRICS = ("reference_pollution", "character_identity", "prop_consistency
 # §6.5 通过门槛
 MIN_TOTAL_GAIN = 0.15          # B 组平均总分至少比 A 高 15%
 MIN_IMPROVED_SHOTS = 4         # 至少 4/6 镜在目标指标上提高
+
+#: 真实生成被明确拒绝的出口码（计划 §15「绕过入口」行；不提供绕过开关）
+ENHANCEMENT_REFUSAL_CODE = "enhancement_path_not_wired"
+
+ENHANCEMENT_REFUSAL_MESSAGE = (
+    "本工具的 run（真实生成）尚未接入候选事务，已明确拒绝：旧提交路径不冻结请求、"
+    "不保证「一次确认一次 POST」，且会把结果副本写进正式 clips/。"
+    "请改用候选入口 `python -m step02b_video_gen.main --chapter N --shots … "
+    "--candidate-root ROOT/video`（prepared 冻结 + 一次 POST + attempt 隔离 + accepted 事务），"
+    "或离线入口 `python tools/video_reroll.py plan|replay|report`。plan/score 不受影响。"
+)
 SAMPLE_SIZE = 6                # 首轮 6 镜 × A/B = 12 条视频
 
 # 目录 12 的四条上游矛盾：修复并重新审计前不进样本池（§6.2）
@@ -138,89 +162,27 @@ def _generation_api():
 
 
 def _generate_isolated(experiment_id: str, manifest: dict) -> dict:
-    """按 A/B 两组在**实验目录内**真实生成样本视频（v6.111，审核 P1-4）.
+    """**拒绝**真实生成：本工具的生成路径尚未接入候选事务（计划 §15「绕过入口」行）.
 
-    隔离机制：`_process_one_shot_skip_frames` 的产物路径由 `shots_dir` 参数决定
-    （`<shots_dir>/<idx>/video.mp4`），把 shots_dir 指到实验目录即可——**不经过**
-    `shared/paths` 的生产路径，因此 `vimax_working/shots/<idx>/video.mp4`（生产
-    缓存 + step04 输入）不会被写到。运行前后各记一次生产帧文件的 mtime，作为
-    「没有污染生产」的可核对证据。
+    原因（可复核）：本函数经 ``_process_one_shot_skip_frames(..., candidate_context=None)``
+    走旧提交路径——不冻结请求、不保证"一次确认一次 POST"，且生产分支会把结果副本写进
+    正式 ``clips/``。为避免**重复提交**与**覆盖正式素材**，这里在任何提交之前返回明示
+    拒绝（``api_generated_videos=0``、零 PUT/POST、零正式写入），并指向替代入口。
 
-    真实生成需要预算，由 `--approve-generation` 把关（本函数不做二次确认）。
+    契约：返回 ``generated=False`` + ``code=ENHANCEMENT_REFUSAL_CODE``；绝不提交。
     """
-    import asyncio
-    from shared.config import VIDEO_CONCURRENCY
-
     groups = VARIANT_GROUPS.get(str(manifest.get("variant") or ""), {})
-    out = {"generated": False, "groups": groups, "videos": [], "failures": [],
-           "production_untouched": None, "api_generated_videos": 0}
+    failures = []
     if not groups:
-        out["failures"].append(
+        # 未知变体是**独立于**下面那条拒绝的输入错误：这个输入在改造前也一样被拒，
+        # 因此单独报出（保留原失败出口），不与「生成路径未接通」混为一谈。
+        failures.append(
             f"未知变体 {manifest.get('variant')!r}：未定义 A/B 分组，拒绝生成")
-        return out
-
-    ch = chapter_path()
-    exp_dir = ch / "experiments" / experiment_id
-    script_path = ch / "script_result.json"
-    script = json.loads(script_path.read_text(encoding="utf-8"))
-    by_idx = {str(x.get("index")): x for x in (script.get("shots") or [])
-              if isinstance(x, dict)}
-    script_mtime = script_path.stat().st_mtime
-
-    prod_dir = ch / "vimax_working" / "shots"
-    before = {p.parent.name: p.stat().st_mtime
-              for p in prod_dir.glob("*/video.mp4")} if prod_dir.exists() else {}
-
-    gen_one, make_adapter = _generation_api()
-
-    async def _generate_all():
-        adapter = make_adapter()
-        for label in sorted(groups):
-            # 策略**逐组**设置：同组内所有镜头用同一策略，避免交错时环境变量漂移
-            os.environ["R2V_REF_POLICY"] = groups[label]
-            shots_dir = exp_dir / "shots" / label
-            samples = list(manifest.get("samples") or [])
-            sem = asyncio.Semaphore(max(1, min(len(samples) or 1, VIDEO_CONCURRENCY)))
-            polls = []
-            for sample in samples:
-                sid = str(sample.get("shot_id"))
-                shot = by_idx.get(sid)
-                if not isinstance(shot, dict):
-                    out["failures"].append(f"{label}/{sid}: 分镜不在当前脚本里")
-                    continue
-                task = await gen_one(shot, shots_dir, adapter, script_mtime, script,
-                                     poll_semaphore=sem, force=True)
-                out["api_generated_videos"] += 1
-                if task is not None:
-                    polls.append((label, sid, task))
-                out["videos"].append({
-                    "group": label, "policy": groups[label], "shot_id": sid,
-                    "path": str(shots_dir / sid / "video.mp4"),
-                })
-            for label2, sid2, task in polls:
-                try:
-                    await task
-                except Exception as exc:
-                    out["failures"].append(f"{label2}/{sid2}: {type(exc).__name__}: {exc}")
-
-    asyncio.run(_generate_all())
-
-    for rec in out["videos"]:
-        pth = Path(rec["path"])
-        rec["exists"] = pth.exists() and pth.stat().st_size > 20 * 1024
-    missing = [f"{r['group']}/{r['shot_id']}" for r in out["videos"] if not r["exists"]]
-    if missing:
-        out["failures"].append("产出缺失: " + ", ".join(missing))
-
-    after = {p.parent.name: p.stat().st_mtime
-             for p in prod_dir.glob("*/video.mp4")} if prod_dir.exists() else {}
-    out["production_untouched"] = (before == after)
-    if not out["production_untouched"]:
-        out["failures"].append("生产 vimax_working 被写入——隔离失败")
-
-    out["generated"] = bool(out["videos"]) and not missing
-    out["output_dir"] = str(exp_dir)
-    return out
+    failures.append(ENHANCEMENT_REFUSAL_MESSAGE)
+    return {"generated": False, "groups": groups, "videos": [], "failures": failures,
+            "production_untouched": None, "api_generated_videos": 0,
+            "code": ENHANCEMENT_REFUSAL_CODE,
+            "output_dir": str(chapter_path() / "experiments" / experiment_id)}
 
 
 def _sample_shots(script: dict) -> tuple:
@@ -380,19 +342,22 @@ def run(experiment_id: str, *, approve: bool = False, dry_run: bool = False) -> 
         out["status"] = "dry_run"
         out["plan"] = build_manifest(experiment_id)
         return out
-    # v6.111（审核 P1-4）：**真的生成**。此前这里只返回 ready 并让用户手工跑
-    # step02b——而手工跑的产物落在生产 `vimax_working`，与本工具的隔离承诺矛盾。
-    # 现在按 A/B 两组、在实验目录内调用 step02b 的逐镜生成入口（`shots_dir`
-    # 参数化即隔离），并记录产出、计数与「生产未被写入」的证据。
+    # v6.111（审核 P1-4）曾让这里"真的生成"：按 A/B 两组在实验目录内调用 step02b
+    # 的逐镜入口。但该路径是**旧提交路径**——不冻结请求、不保证"一次确认一次 POST"，
+    # 且生产分支会把结果副本写进正式 `clips/`。2026-10-03（计划 §15「绕过入口」行）
+    # 起 `_generate_isolated` 改为**明确拒绝**：零 POST、零正式写入。这里保留调用点，
+    # 使拒绝成为 run 的唯一出口，而不是悄悄退回 ready。
     manifest_path = chapter_path() / "experiments" / experiment_id / "manifest.json"
     manifest = (json.loads(manifest_path.read_text(encoding="utf-8"))
                 if manifest_path.exists() else build_manifest(experiment_id))
     result = _generate_isolated(experiment_id, manifest)
     out.update(result)
-    out["generation_started"] = True
+    out["generation_started"] = bool(result.get("api_generated_videos"))
     out["manifest"] = str(manifest_path)
     if not result["generated"]:
-        out["status"] = "blocked"
+        out["status"] = result.get("code") or "blocked"
+        if result.get("code") == ENHANCEMENT_REFUSAL_CODE:
+            out["next"] = ENHANCEMENT_REFUSAL_MESSAGE
         return out
     manifest["cost"] = dict(manifest.get("cost") or {},
                             api_generated_videos=result["api_generated_videos"])
@@ -423,8 +388,21 @@ def main(argv=None) -> int:
         if name == "run":
             p.add_argument("--dry-run", action="store_true")
             p.add_argument("--approve-generation", action="store_true")
+            # 候选/增强参数在这里**只用于识别并拒绝**（计划 §15「绕过入口」行）：
+            # 该工具未接入候选事务，绝不能借这些参数产生提交或写入正式素材。
+            p.add_argument("--candidate-root", default=None)
+            p.add_argument("--plan-only", action="store_true")
+            p.add_argument("--resume", default=None)
     args = ap.parse_args(argv)
     exp_dir = experiment_dir(args.experiment_id)
+
+    if args.cmd == "run" and (args.candidate_root or args.plan_only or args.resume):
+        print(json.dumps({"status": ENHANCEMENT_REFUSAL_CODE,
+                          "code": ENHANCEMENT_REFUSAL_CODE,
+                          "message": ENHANCEMENT_REFUSAL_MESSAGE,
+                          "generation_started": False,
+                          "api_generated_videos": 0}, ensure_ascii=False))
+        return 2
 
     if args.cmd == "plan":
         manifest = build_manifest(args.experiment_id)

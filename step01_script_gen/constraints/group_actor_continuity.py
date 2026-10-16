@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import re
 
-from shared.alias_map import CHARACTER_ALIASES
 from shared.frame_spec import is_on_screen
 from .base import Constraint
-from .types import RepairRecord, Severity
+from .types import RepairRecord, Severity, get_repair_effects
+# §14（2026-10-03）：群体别名口径与「已授权删除」判据都收在 `repair_effects` 单一来源。
+# 此前本模块自带一份 `_group_aliases()`——与效果账本各写一份别名表，正是
+# 「同一事实两处实现」的形状（改一处漏一处）。
+from ..repair_effects import group_alias_names, is_group_name
 
 
 # 明确的退场姿态词。**只用于「写 False」这一个方向**（v6.106，2026-09-24）.
@@ -37,9 +40,52 @@ def _apply_presence(existing: dict, pose: str) -> bool:
 
 
 def _group_aliases() -> set[str]:
-    out = {"群演", "佃仆"}
-    out.update(alias for alias, canonical in CHARACTER_ALIASES.items() if canonical == "群演")
-    return out
+    return group_alias_names()
+
+
+# ---------------------------------------------------------------------------
+# §14 P3 第 1/6 行：**本轮已授权删除的条目不得按类别别名重建**
+#
+# 缺陷（批次 `20261003T182636-d26992-001-564d9b` ch2）：审计说「小厮 是张十三的
+# 重复实体」→ 模型在 `frame_layouts.kfs[0]/[1]` 上删对了（授权与合并都通过）→ 本
+# 约束按「文本提到群体」把它加回来 → 验收看到与基线相同 ⇒ `no_target_resolved`
+# ⇒ 整轮回退 ⇒ BLOCK。**没有一步是模型没改**。
+#
+# 判据（只按帧、按条目生效，缺省 None 时行为**逐字不变**）：
+#   · 该帧上有本轮的效果记录；
+#   · 那条效果**删掉的条目**与已在场人物的关系**明确是同一实体**
+#     （生产者给了证据 locator，见 `repair_effects.resolve_frame_actor_binding`）；
+#   · 正要重建的条目名正是它。
+# 三者同时成立 ⇒ **本次不再重建**。类别别名只说明类别，不能单独证明「这是另一个
+# 人」——关系没给出来（或明确是另一实体）时本判据不生效，行为与之前逐字一致，
+# 由驱动层按 `actor_binding_ambiguous` / `actor_presence_conflict` 反馈原生产者。
+# **不全局停用本约束**（第 6 行：非目标帧、无效果记录的帧、合法群体补齐全部照旧）。
+# ---------------------------------------------------------------------------
+
+def _target_name(shot: dict, is_hook: bool, idx) -> str:
+    if is_hook:
+        return "hook"
+    return "shot_%s" % shot.get("index", idx)
+
+
+def _must_not_rebuild(ctx, shot: dict, is_hook: bool, idx, locator: str,
+                      entry_name: str) -> bool:
+    """该条目是否因「本轮已授权删除且**关系明确是同一实体**」而不得重建."""
+    view = get_repair_effects(ctx)
+    if view is None:
+        return False
+    target = _target_name(shot, is_hook, idx)
+    from ..repair_effects import entity_surface_names, frame_entry_names
+
+    script = getattr(ctx, "script", None) or {}
+    honored = view.honored_removals(
+        target, locator,
+        remaining=frame_entry_names(shot, locator),
+        entity_names=lambda entity: entity_surface_names(
+            entity, script.get("characters"), script.get("chapter_outline")))
+    if not honored:
+        return False
+    return str(entry_name or "") in honored
 
 
 def _find_group_label(shot: dict) -> str:
@@ -64,7 +110,9 @@ def _find_group_label(shot: dict) -> str:
 
 
 def _same_group(name: str, aliases: set[str]) -> bool:
-    return str(name or "") in aliases or CHARACTER_ALIASES.get(str(name or "")) == "群演"
+    # 唯一实现：别名口径收在 `repair_effects.is_group_name`（与效果账本同源）。
+    # `aliases` 参数保留只为调用点形状不变。
+    return is_group_name(name)
 
 
 def _restore_label(text: str, label: str) -> str:
@@ -173,8 +221,12 @@ class GroupActorContinuityConstraint(Constraint):
                 pose = _pose_for(text)
                 on_screen = pose not in _EXIT_POSES
                 if existing is None:
+                    _new_name = source.get("name", label)
+                    if _must_not_rebuild(ctx, shot, is_hook, idx,
+                                         f"frame_layouts.{frame_key}", _new_name):
+                        continue
                     existing = {
-                        "name": source.get("name", label),
+                        "name": _new_name,
                         "on_screen": on_screen,
                         "position": source.get("position", ""),
                         "pose": pose or source.get("pose", ""),
@@ -223,8 +275,12 @@ class GroupActorContinuityConstraint(Constraint):
                 pose = _pose_for(text)
                 on_screen = pose not in _EXIT_POSES
                 if existing is None:
+                    _new_name = source.get("name", label)
+                    if _must_not_rebuild(ctx, shot, is_hook, idx,
+                                         f"frame_layouts.kfs[{i}]", _new_name):
+                        continue
                     existing = {
-                        "name": source.get("name", label),
+                        "name": _new_name,
                         "on_screen": on_screen,
                         "position": source.get("position", ""),
                         "pose": pose,

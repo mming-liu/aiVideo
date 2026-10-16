@@ -69,4 +69,54 @@ def resolve_audio_policy(*, actual_audio_present: bool | None = None,
                        model, supports, narration)
 
 
-__all__ = ["AudioPolicy", "resolve_audio_policy"]
+# ---------------------------------------------------------------------------
+# 呈现模式（`screen_hybrid`）：新模式的**声音合同**（主专题 §5）
+# ---------------------------------------------------------------------------
+class ModeAudioConflict(ValueError):
+    """新模式出现图外旁白 ⇒ **合同冲突**，交回规划者；不静默降级、不伪造."""
+
+
+def narration_contract(plan, *, mode: str | None = None) -> dict:
+    """按**计划自称的模式**给出声音合同 → `{mode, narration_present, allowed, reason}`.
+
+    §5 的五条行为收在这里，Step03/Step04 **共用这一份**：
+
+    | 输入 | 行为 |
+    |---|---|
+    | 旧模式有旁白 | 保持独立旁白 TTS 要求 |
+    | 旧模式无旁白 | 保持现状 |
+    | 新模式合法且无旁白 | 卡片不创建 SpeechUnit、不调旁白 TTS |
+    | 新模式出现旁白 | **拒收合同冲突**，返回规划者 |
+    | 新模式有人物对白 | 按现有 native/tts 策略处理 |
+
+    「卡片与对白文字相同」**依结构身份分流**，不按文字相同合并——这里不给任何按文本
+    去重的口子（主专题 §5 明文）。
+    """
+    from shared.presentation_contract import MODE_HYBRID, MODE_LEGACY, plan_mode
+    _mode = str(mode or plan_mode(plan) or MODE_LEGACY)
+    _lines = (plan or {}).get("narration_lines") or []
+    _present = bool(_lines)
+    if _mode == MODE_HYBRID:
+        if _present:
+            return {"mode": _mode, "narration_present": True, "allowed": False,
+                    "reason": "screen_hybrid 模式不允许图外旁白（narration_lines 有 %d 条）"
+                              "——必要信息要重新分配给画面或文字卡；不静默清空、不伪造"
+                              % len(_lines)}
+        return {"mode": _mode, "narration_present": False, "allowed": True,
+                "reason": "screen_hybrid 合法且无旁白：文字卡不创建 SpeechUnit、"
+                          "不调旁白 TTS"}
+    return {"mode": _mode, "narration_present": _present, "allowed": True,
+            "reason": "legacy_audio：旁白按现有独立 TTS 要求" if _present
+                      else "legacy_audio：无旁白，保持现状"}
+
+
+def require_narration_contract(plan, *, mode: str | None = None) -> dict:
+    """`narration_contract` + 冲突时抛 `ModeAudioConflict`（Step03/04 的入口判据）."""
+    _c = narration_contract(plan, mode=mode)
+    if not _c["allowed"]:
+        raise ModeAudioConflict(_c["reason"])
+    return _c
+
+
+__all__ = ["AudioPolicy", "resolve_audio_policy", "narration_contract",
+           "require_narration_contract", "ModeAudioConflict"]

@@ -29,6 +29,9 @@ import os
 from typing import Any, Optional
 
 # 只有这些键属于"运行范围"，其余配置项不在此覆盖
+#: 呈现模式的环境变量名（**与 `step01_script_gen.outline.PRESENTATION_MODE_ENV` 同值**
+#: ——这里不 import 它，避免包依赖倒挂；`test_run_scope` 里核两处一致）。
+PRESENTATION_MODE_ENV = "STEP01_PRESENTATION_MODE"
 ENV_CHAPTER = "NOVEL_CHAPTER"
 ENV_BOOK_INDEX = "BOOK_INDEX"
 ENV_BOOK_NAME = "BOOK_NAME"
@@ -36,8 +39,14 @@ ENV_BOOK_NAME = "BOOK_NAME"
 _LOG_PREFIX = "[SCOPE]"
 
 
-def add_scope_arguments(parser: Any) -> None:
-    """给已有 ArgumentParser 挂上运行范围参数（step02a / step02b 用）。"""
+def add_scope_arguments(parser: Any, *, presentation_mode: bool = False) -> None:
+    """给已有 ArgumentParser 挂上运行范围参数（step02a / step02b 用）。
+
+    `presentation_mode=True` 时额外登记 `--presentation-mode`——**只有 step01 需要**。
+    登记在**同一个严格 parser** 上，是为了让"未知参数拒收"这条约束原样保留：旧写法把这个
+    开关留给 `main()` 自己扫 `sys.argv`，于是走命令行时报 `unrecognized arguments` 退出 2，
+    只有环境变量能生效（2026-10-06 实跑就是这么绕过去的）。
+    """
     parser.add_argument(
         "--chapter", "-C", type=int, default=None, metavar="N",
         help="指定章节序号，覆盖 .env.content 的 NOVEL_CHAPTER（如 --chapter 2 -> chapter_002）",
@@ -50,6 +59,13 @@ def add_scope_arguments(parser: Any) -> None:
         "--book-name", default=None, metavar="NAME",
         help="指定部名，覆盖 BOOK_NAME（如 --book-name 杀青州 -> part_01_杀青州）",
     )
+    if presentation_mode:
+        parser.add_argument(
+            "--presentation-mode", default=None, metavar="MODE",
+            choices=["legacy_audio", "screen_hybrid"],
+            help="呈现模式：legacy_audio（默认，图外旁白）| screen_hybrid（画面文字卡）。"
+                 "在拿锁、建目录、算缓存键之前生效。",
+        )
 
 
 def _file_values() -> dict:
@@ -160,6 +176,32 @@ def apply_scope(chapter: Any = None,
     return resolved
 
 
+#: scope 的**身份**字段（其余是诊断/回显，不参与身份比较）
+SCOPE_IDENTITY_KEYS = ("chapter", "book_index", "book_name")
+
+
+def scope_identity(scope: Any) -> dict:
+    """取 scope 的身份子集.
+
+    判"是不是同一章/同一部"只认这三个键：``apply_scope`` 的返回值还带
+    ``source/overrides/summary`` 等诊断字段，而 ``current_scope`` 只给身份三元组，
+    直接比整份 dict 会把合法路径判成不符（2026-10-03 复核 P1-7 自查发现）。
+    """
+    src = dict(scope or {}) if isinstance(scope, dict) else {}
+    return {k: src.get(k) for k in SCOPE_IDENTITY_KEYS if k in src}
+
+
+def current_scope_identity() -> dict:
+    """**当前运行**的 scope 身份（消费侧用它声明"我要的是哪一章/哪一部"）.
+
+    与 ``step03_tts_audio.shot_tts.current_scope`` 同一口径：身份三元组取自
+    ``shared.paths`` 的生效配置，不自己拼目录层级。
+    """
+    from shared.paths import book_index, book_name, chapter_index
+    return {"chapter": int(chapter_index()), "book_index": book_index(),
+            "book_name": book_name()}
+
+
 def _summary(resolved: dict) -> str:
     part = f"part_{resolved['book_index']:02d}"
     if resolved["book_name"]:
@@ -190,7 +232,8 @@ def step01_hint(resolved: dict) -> str:
     return "python step01_script_gen/main.py " + " ".join(parts)
 
 
-def bootstrap(description: str = "", argv: Optional[list] = None) -> dict:
+def bootstrap(description: str = "", argv: Optional[list] = None, *,
+              presentation_mode: bool = False) -> dict:
     """给没有 argparse 的入口（step01 / step03 / step04）在模块顶部用。
 
     **调用处必须带 ``if __name__ == "__main__":`` 守卫**——测试与工具会 import 这些
@@ -205,6 +248,12 @@ def bootstrap(description: str = "", argv: Optional[list] = None) -> dict:
         description=description or None,
         epilog="未给运行范围参数时，章/部沿用 .env.content 的设置。",
     )
-    add_scope_arguments(parser)
+    add_scope_arguments(parser, presentation_mode=presentation_mode)
     args = parser.parse_args(argv)
+    if presentation_mode:
+        _mode = getattr(args, "presentation_mode", None)
+        if _mode:
+            # 与章/部同一个时机生效：**配置与日志初始化之前**就写进环境，
+            # 后面 `presentation_mode()` 读到的就是它（`main()` 再写回一次，两处一致）。
+            os.environ[PRESENTATION_MODE_ENV] = str(_mode)
     return apply_scope(args.chapter, args.book, args.book_name)

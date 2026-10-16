@@ -37,6 +37,8 @@ class TextGenCfg:
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
     DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
+    # Stateless official API supports SSE, not background/retrieve jobs.
+    DEEPSEEK_STREAM: bool = os.getenv("DEEPSEEK_STREAM", "false").lower() in ("1", "true", "yes")
     # 思考模式强度 (reasoning.effort): none/minimal/low/medium/high/xhigh/max
     # （none 关闭思考；minimal/low=低强度；medium/high/xhigh=高强度；max=最强）。
     # 同时作用于 Responses API（v4-flash/v4-pro）与 reasoner 老模型 chat 回退路径。
@@ -63,6 +65,16 @@ class TextGenCfg:
     # 但**可调**——章节人物/场景/道具特别多导致正常输出逼近上限时，
     # 在 .env.content 调高 TEXT_EXTRACT_MAX_TOKENS 即可，不必改代码。
     TEXT_EXTRACT_MAX_TOKENS: int = int(os.getenv("TEXT_EXTRACT_MAX_TOKENS") or "6000")
+
+    # 章节场景分析同样按操作配置上限，包含推理和正文。
+    TEXT_SCENE_ANALYSIS_MAX_TOKENS: int = int(os.getenv("TEXT_SCENE_ANALYSIS_MAX_TOKENS") or "4000")
+
+    # 三轴内容核验的操作上限；推理通道此上限包含思考 token。
+    # 保持旧缺省，允许有效配置给较大的计划保留完整结果空间。
+    CONTENT_VERIFY_MAX_TOKENS: int = int(os.getenv("CONTENT_VERIFY_MAX_TOKENS") or "4000")
+
+    # 大纲生成/旧修订的操作上限，不覆盖供应商模型能力。
+    TEXT_OUTLINE_MAX_TOKENS: int = int(os.getenv("TEXT_OUTLINE_MAX_TOKENS") or "4000")
 
     # ---- agnes (OpenAI 兼容) ----
     AGNES_API_KEY: str = os.getenv("AGNES_API_KEY", "")
