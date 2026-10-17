@@ -23,6 +23,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import shutil
 import sys
 import time
@@ -242,7 +243,19 @@ def _freeze_assets(job: MotionJob, bundle: Mapping[str, Any], asset_root: Path,
             continue
         dst = frozen_root / "assets" / str(aid)
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src, dst)
+        # 2026-10 复核 P0-3（磁盘）：每次 attempt 冻结都整份复制素材——24 MB 字体 ×
+        # 每 attempt 一份，是 `.pytest_tmp` 上百 GB 的主要来源。同盘符改用硬链接
+        # （0 字节占用、无需管理员），跨盘 / 不支持硬链接时回退复制。
+        # ⚠️ 语义代价（须知）：硬链接让冻结副本与来源**共享同一份数据**，来源若在冻结后
+        # 被改写，冻结副本会随之变化、不再"冻结"。此处可接受的前提是 `asset_root` 下的
+        # 素材由夹具一次性生成、之后只读；且下面的 `sha256_file(dst)` 与声明值比对仍有效
+        # （源被篡改时 digest 同样变，会报 asset_digest_mismatch）。
+        try:
+            if dst.exists():
+                dst.unlink()
+            os.link(src, dst)
+        except OSError:
+            shutil.copyfile(src, dst)
         digest = eio.sha256_file(dst)
         if digest != str(asset.get("sha256")):
             problems.append(_problem("asset_digest_mismatch", "assets", f"/assets/{aid}/sha256",

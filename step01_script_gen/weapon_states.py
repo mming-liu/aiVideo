@@ -17,7 +17,7 @@ def asserted_marker(text: str, markers: tuple[str, ...]) -> bool:
     for marker in markers:
         for match in re.finditer(re.escape(marker), text):
             prefix = text[:match.start()]
-            if not re.search(r"(?:不|未|没|没有|不曾|并未|尚未)(?:曾经|已经|已|曾)?$", prefix):
+            if not re.search(r"(?:不|未|没|没有|不曾|并未|尚未|险些|差点(?:儿)?|差一点|差一些|几乎|正要|试图)(?:就|要|曾经|已经|已|曾)?$", prefix):
                 return True
     return False
 

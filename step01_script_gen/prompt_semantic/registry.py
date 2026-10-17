@@ -165,6 +165,28 @@ THREAT_VISIBILITY_KEYWORDS: Tuple[str, ...] = (
     "神秘人", "刺客", "杀手", "黑衣人", "蒙面人", "黑影",
 )
 
+# 2026-10 裁决：威胁词表按**语义职责**分三层单源，不再让各入口各持一份字面量。
+# 此前 5 处字面量成员不一致，同一个「蒙面人」在 shared/style_prefix 算威胁源、
+# 在 constraints/identity_unification 不算——同一事实两套裁决。
+
+# 层 1：核心泛化身份词——只用于**角色 ID 精确前缀匹配**（拼装外貌后缀）。
+# 口径刻意最窄，避免把普通神秘角色当杀手。消费方：shared/vimax_bridge._THREAT_IDS。
+# 与层 2 的差别是**匹配方式**（identifier 前缀 vs 文本子串），不是词多词少。
+THREAT_CORE_IDENTIFIERS: Tuple[str, ...] = ("刺客", "杀手", "黑衣人")
+
+# 层 2b：身份**归一/别称折叠**用——层 2 的超集，额外含「蒙面黑影」（原归一逻辑专有）。
+# 刻意不并入层 2：层 2 还驱动可见性门控与 QC 人数估算（且有不变量「⊂ THREAT_KEYWORDS、
+# 恰好 6 词」），扩词会改变准入结果；归一化只影响「同一角色是否被折叠成一个名字」。
+# 消费方：constraints/identity_unification._THREAT_ALIASES。
+THREAT_ALIASES: Tuple[str, ...] = THREAT_VISIBILITY_KEYWORDS + ("蒙面黑影",)
+
+# 层 3：持械**动作**词。与 WEAPON_KEYWORDS（武器名）、WEAPON_HANDLE_WORDS（武器部位）
+# 三者正交。消费方：step01_script_gen/quality_issues 的「威胁主体持械」判据——
+# 须与 THREAT_VISIBILITY_KEYWORDS（主体）**分表**判断，不得混写进同一个元组。
+WEAPON_HOLDER_VERBS: Tuple[str, ...] = (
+    "握着", "手持", "持刀", "挥刀", "举刀", "横刀",
+)
+
 WEAPON_KEYWORDS: Tuple[str, ...] = (
     "刀尖", "匕首", "短刃", "寒光", "刀", "剑", "利刃",
 )

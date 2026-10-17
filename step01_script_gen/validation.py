@@ -2005,8 +2005,18 @@ def _check_emotion_visualization(shots: list[dict], hook: dict = None) -> dict:
     for warn in warnings:
         _get_logger().warn(f"情绪可视化: {warn}")
 
-    # 宽松模式：仅警告， 不阻断（因为 LLM 可能用其他方式表达情绪）
-    return {"pass": len(issues) == 0, "issues": issues, "warnings": warnings}
+    from step01_script_gen.quality_issues import parse_shot_ref
+
+    # A lexical template miss cannot prove absent visual performance (it also
+    # matches appearances such as hairstyles). Preserve these as explicit
+    # semantic-review candidates rather than manufacturing deterministic HARDs.
+    return {"pass": True, "issues": [], "warnings": [],
+            "structured_issues": [
+                {"code": "emotion_visualization", "severity": "advisory",
+                 "message": msg, "shot_id": parse_shot_ref(msg)[0],
+                 "field_path": "prompt", "repairable": False}
+                for msg in issues], "semantic_review_required": bool(issues)}
+
 
 
 # v6.7 新增：首尾帧描述完整性检查
@@ -3832,21 +3842,11 @@ _DIRECTION_FACTS = ("画左", "画右", "画上", "画下")
 
 
 def _has_layout_direction_fact(shot: dict, name: str) -> bool:
-    """该角色在本镜 `frame_layouts` 里是否已有**方位事实**（`gaze_target` ∈ 四个画向）.
+    """Whether the modern frame record explicitly declares this actor's gaze.
 
-    v6.143（2026-09-27 P5，十次连跑根因）：`char_layout` 是**从 frame_layouts 派生的
-    遗留字段**——`identity_unification` 把 ff 名单的 `pose` 抄进 `facing`。于是
-    「姿态文本里没写朝向词」（如 `怒极，右手垂于身侧`）会被判成「朝向缺失」并进
-    blocking，而**方位事实一直在**现代单一事实源的 `frame_layouts[*].gaze_target` 里
-    （schema 6 字段之一，必填）。
-
-    实测：10 次跑 `multi_person_staging` 20 条（清单截断后的下限），主形态正是
-    `镜头9: 张十三 朝向「怒极，右手垂于身侧」缺朝向词`——而该镜
-    `kfs[0][0].gaze_target = "画右"`。这条 lint 此前读的是**有损派生副本**。
-
-    实现口径：**只认本镜 `frame_layouts` 里同名条目的 `gaze_target`**，不看文本
-    推断、不猜朝向。方向事实不存在时（如昏迷/闭眼角色 `gaze_target="无"`）照常报——
-    那才是真的缺朝向。
+    Named targets and the legal value 无 are valid declarations too. A legacy
+    pose copied into facing cannot impose a second, narrower gaze vocabulary.
+    Missing, non-string and blank declarations remain absent.
     """
     layouts = shot.get("frame_layouts")
     if not isinstance(layouts, dict):
@@ -3864,8 +3864,8 @@ def _has_layout_direction_fact(shot: dict, name: str) -> bool:
                 continue
             if str(_entry.get("name") or "").strip() != _name:
                 continue
-            _gaze = str(_entry.get("gaze_target") or "")
-            if any(_d in _gaze for _d in _DIRECTION_FACTS):
+            _gaze = _entry.get("gaze_target")
+            if isinstance(_gaze, str) and _gaze.strip():
                 return True
     return False
 
@@ -4085,13 +4085,6 @@ def _check_prompt_anchor_ambiguity(shots: list[dict], hook: dict = None) -> dict
             text = shot.get(field, "")
             if not text or not isinstance(text, str):
                 continue
-            if any(kw in text for kw in _RECLINING_KW):
-                m_handle = re.search(r"([左右])手[^，。、\n]{0,4}(钓杆|酒壶|竹箫|油纸伞|步摇|灯盏|灯笼|炭炉|刀|剑|匕首)", text)
-                if m_handle:
-                    warnings.append(
-                        f"{label} {field} 角色躺卧 + 「{m_handle.group(0)}」="
-                        "道具主谓歧义——模型会把「X手+道具」理解为「握」"
-                        "（system 50a，需改写为「道具已脱手+位置」）")
             m_anchor = _VAGUE_ANCHOR_RE.search(text)
             if m_anchor and "独立物体" not in text:
                 warnings.append(
@@ -5237,6 +5230,10 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
     try:
         _hfix(script, is_in_repair_loop=False, is_final_pass=False, novel_text=novel_text)
     except Exception as _hfe:
+        # 环境故障（依赖缺失等）→ 约束链没跑完，必须上抛，不得降级成一条 WARN
+        from step01_script_gen.constraints.engine import ENV_FAULT_TYPES
+        if isinstance(_hfe, ENV_FAULT_TYPES):
+            raise
         _get_logger().warn(f"[WARN] parse_response 末尾 hard_fix 失败: {_hfe}")
 
     # P0-5 修复（08-12）：全局渲染参数（resolution/ratio/fps/render_style）此前在
@@ -5344,7 +5341,10 @@ def _check_frame_weapon_legality(shots: list[dict], hook: dict | None = None,
     checks = [(s, f"镜头{s.get('index')}") for s in shots]
     if hook:
         checks.insert(0, (hook, "钩子"))
-    _THREAT_NAMES = ("刺客", "杀手", "黑衣人", "蒙面人", "神秘人")
+    # 2026-10 裁决：威胁主体名单**单源** prompt_semantic.registry.THREAT_VISIBILITY_KEYWORDS
+    # （此前本处自持 5 词字面量，与 style_prefix / identity_unification 成员不一致）
+    from step01_script_gen.prompt_semantic.registry import THREAT_VISIBILITY_KEYWORDS
+    _THREAT_NAMES = THREAT_VISIBILITY_KEYWORDS
     for shot, label in checks:
         text = " ".join([shot.get("ff_desc", ""), shot.get("lf_desc", ""),
                          shot.get("prompt", "") or shot.get("motion_desc", "")])

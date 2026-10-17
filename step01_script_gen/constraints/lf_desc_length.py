@@ -1,10 +1,4 @@
-"""M. lf_desc 字数下限约束（v6.42 迁移自 _hard_fix_lf_desc_length）.
-
-shot lf_desc < 40 字（hook < 60）→ 拼接 char_layout 第一个角色的布局
-信息作为收尾。
-
-幂等：append 后字符变长，允许 5 字符内差额；空镜豁免。
-"""
+"""Report short result descriptions without fabricating content or copying ff state."""
 from __future__ import annotations
 
 import sys
@@ -15,7 +9,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from .base import Constraint
-from .types import RepairRecord, Severity
+from .types import RepairRecord, Severity, Violation
 
 
 _EMPTY_SUBJECTS = (
@@ -25,11 +19,7 @@ _EMPTY_SUBJECTS = (
 
 
 class LfDescLengthConstraint(Constraint):
-    """M. lf_desc 字数下限：< 40 (shot) / 60 (hook) → 拼接布局.
-
-    severity=WARN: 字数不足可由后续 repair round 修.
-    repair_marker="位于"（拼接布局的开头）.
-    """
+    """Report short result prose; never pad it with another frame's state."""
 
     name = "lf_desc_length"
     severity = Severity.WARN
@@ -52,41 +42,14 @@ class LfDescLengthConstraint(Constraint):
                 ms = str(shot.get("main_subject", "") or "").strip()
                 if any(es in ms for es in _EMPTY_SUBJECTS):
                     continue
-            layout = shot.get("char_layout") or []
-            role_layout = ""
-            if isinstance(layout, list) and layout:
-                # v6.47（08-27）：追加**全部**角色站位（原只取第一个 break），
-                # 否则超短 lf_desc 补 1 个角色仍 <40 字（镜3/5/10 实测）
-                parts = []
-                for item in layout[:4]:
-                    if not isinstance(item, dict):
-                        continue
-                    nm = str(item.get("name", "") or "").strip()
-                    pos = str(item.get("position", "") or "").strip()
-                    facing = str(item.get("facing", "") or "").strip()
-                    if nm and pos:
-                        seg = f"{nm}位于{pos}"
-                        if facing:
-                            seg += f"、{facing}"
-                        parts.append(seg + "。")
-                if parts:
-                    role_layout = "".join(parts)
-            if not role_layout:
-                role_layout = "画面完整，所有角色定锚。"
-            before = lf
-            new_lf = lf.rstrip("。") + f"。{role_layout}"
-            # 仍不足阈值（base 太短 + 角色少）→ 补一句占位兜底，保证达标
-            if len(new_lf) < threshold and role_layout != "画面完整，所有角色定锚。":
-                new_lf += "画面完整，所有角色定锚。"
-            shot["lf_desc"] = new_lf
-            repairs.append(
-                RepairRecord(
-                    constraint_name=self.name,
-                    shot_index=idx,
-                    action="append",
-                    target="lf_desc",
-                    before=before,
-                    after=shot["lf_desc"],
-                )
-            )
+            # Length alone cannot establish missing content or a later pose.
+            # In particular char_layout is an ff-derived legacy projection.
+            # Preserve the authored result state and let existing completeness
+            # feedback request a content revision when necessary.
+            ctx.record_violation(Violation(
+                constraint_name=self.name, severity=Severity.WARN,
+                shot_index=idx, field="lf_desc", repaired=False,
+                message="尾帧描述较短；保留结果态，由内容修订补充必要信息，禁止复制其它帧姿态凑字数。",
+                evidence=lf,
+            ))
         return repairs

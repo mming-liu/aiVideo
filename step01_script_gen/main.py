@@ -2544,6 +2544,16 @@ def _final_audit_focus(script: dict, quality: "dict | None") -> list:
     blocking 里动态取出的「重点镜头」。
     """
     focus = list(_AUDIT_FOCUS_TEMPLATES)
+    performance = [str(rec.get("shot_id"))
+                   for rec in (quality or {}).get("advisory") or []
+                   if rec.get("code") == "emotion_visualization"]
+    if performance:
+        focus.append(
+            "表演语义复核（镜头 %s）：词表未命中示例动作仅是候选，不能据此判错。"
+            "区分外貌/发式修饰与当前表演；按人物及对应帧核对是否已有具体可见的"
+            "表情或动作，不要求固定措辞。确实只有抽象表演而无可执行画面时，"
+            "按实际影响报告问题、原字段证据及成对修复目标。"
+            % "、".join(dict.fromkeys(performance)))
     ids: list = []
     for rec in (quality or {}).get("visual_risk") or []:
         sid = rec.get("shot_id")
@@ -4987,6 +4997,13 @@ def finalize_step01_script(script: dict, *, novel_text: str = "",
                              on_constraint_done=tracker.observe,
                              repair_effects=repair_effects)
     except Exception as _hfe:
+        # 环境故障（依赖缺失 / 语法不兼容 / 名字未定义）意味着**约束链根本没跑完**。
+        # 既不能降级成「保留原版」，更不能让后续提交照常写正式产物——2026-10 复核 P0：
+        # `engine.apply_constraints` 上抛后若在此吞掉，排在该约束后面的全部约束都被
+        # 连带跳过，而流程照旧打出 `[COMMIT] OK 三份产物已提交`。必须 fail-closed。
+        from step01_script_gen.constraints.engine import ENV_FAULT_TYPES
+        if isinstance(_hfe, ENV_FAULT_TYPES):
+            raise
         _logger.warn(f"[WARN] {label} hard_fix 失败（保留原版）: {_hfe}")
     _record_time_field_write_audit(script, tracker, label=label)
     # v6.98（审核 P0-3）：时间字段之外，审计段的**语义/结构**写入同样要收口。
@@ -7595,13 +7612,23 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                            on_constraint_done=_effect_ledger.observe_writer,
                            repair_effects=_effect_view)
         except Exception as _hfx:
+            # 同上：环境故障不降级（否则约束链没跑完仍继续往下走）
+            from step01_script_gen.constraints.engine import ENV_FAULT_TYPES
+            if isinstance(_hfx, ENV_FAULT_TYPES):
+                raise
             _logger.warn(f"[WARN] 修复后 hard_fix 兜底失败（保留原版）: {_hfx}")
         _effect_ledger.observe_writer(WRITER_HARD_FIX, script)
         # 08-19：hard_fix_injury_continuity 按 location 精确匹配 + victim 提取不准，
-        # 会漏补"杨旭在船上仰卧但镜头 location 写岸边"这类情况。再加一道轻量兜底：
-        # 扫所有镜头，**刺杀发生后**（build_idx 之后）的镜头里，ff_desc/lf_desc/prompt
-        # 有"杨旭仰卧/倒下/躺"但没 anchor 词 → prompt 末尾追加伤处锚。
-        # 只在修复轮后调用，范围小。用 build_idx 作分界避免把"夜宴仰卧喝酒"也补成带伤。
+        # 会漏判"仰卧但 location 写岸边"这类情况。此处保留**识别**，但不再补写正文
+        # （2026-10 复核）。原实现在这里把「。伤处白袍暗红洇痕持续可见」直接拼进 prompt，
+        # 三个问题：
+        #   ① 它**造出模型没写过的状态**——"白袍"是硬编码服装，与真实人物着装无关，
+        #      正是"血迹所属人物 / 伤处"混淆的污染源之一；
+        #   ② 它与 `prompt_semantic.registry.INJURY_ANCHOR_TAIL`（"伤处白袍心口一片
+        #      暗红血迹洇开…"）是**两个不同字符串**，两套幂等判据互相看不见，会与约束
+        #      侧叠加到同一镜头；
+        #   ③ 它用 `if "杨旭" not in _text` 把规则绑死在本作主角上——人名不得当通用判据。
+        # 现行口径与约束侧一致：**只报告候选**，由终审判断是否真的缺伤处描述。
         _injury_lay_words = ("仰卧", "倒下", "仰倒", "躺于", "躺倒", "倒地", "瘫倒")
         # v6.50（08-29）：build 判定改用 STRONG 词表——"白袍"等服装词会让
         # 刺杀前镜头（开篇白袍吹箫）被当致命伤建立点
@@ -7613,24 +7640,25 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             if any(w in _txt for w in _anchor_words):
                 _build_idx = _i
                 break
-        _inj_fixed = 0
+        _inj_candidates = []
         if _build_idx is not None:
             for _i, _s in enumerate(script.get("shots", [])):
                 if _i <= _build_idx:
-                    continue  # 刺杀发生前的镜头不补（夜宴仰卧喝酒不算伤）
+                    continue  # 致命伤建立点之前不判（夜宴仰卧喝酒不算伤）
                 _text = _s.get("prompt", "") + _s.get("ff_desc", "") + _s.get("lf_desc", "")
                 if not any(w in _text for w in _injury_lay_words):
-                    continue  # 杨旭没倒下，不用补
+                    continue  # 本镜没人卧倒/倒地
                 if any(w in _text for w in _anchor_words):
-                    continue  # 已有伤处锚，幂等跳过
-                if "杨旭" not in _text:
-                    continue  # 倒下的不是杨旭，不补
-                _s["prompt"] = (_s.get("prompt", "") or "").rstrip("。") + "。伤处白袍暗红洇痕持续可见"
-                _inj_fixed += 1
-        if _inj_fixed:
-            _logger.info(f"[REPAIR] 致命伤兜底补锚: {_inj_fixed} 镜（C 模式修复轮后丢失的伤处锚）")
-        # §14 P1 节点③之三：伤处兜底**直写** `shot["prompt"]`，也是后处理 writer。
+                    continue  # 已有伤处锚，无需提示
+                _inj_candidates.append(_s.get("index", _i))
+        if _inj_candidates:
+            _logger.warn(
+                "[REPAIR] 致命伤后疑似缺伤处描述（不自动补写，交终审判定）: 镜 %s"
+                % _inj_candidates)
+        # §14 P1 节点③之三：原先此处**直写** `shot["prompt"]`，是后处理 writer。
+        # 现不再写入，但仍给 ledger 留一个观测点，避免阶段屏障漏记该节点的状态快照。
         _effect_ledger.observe_writer(WRITER_INJURY_ANCHOR, script)
+
 
         # v6.84：还原未点名镜头（`_frozen` 快照）——后处理不得改动事务外的镜头。
         _restored_n = _restore_untargeted(script, _frozen)

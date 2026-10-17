@@ -1,4 +1,4 @@
-﻿"""script_result.json → ViMax working_dir 翻译器.
+"""script_result.json → ViMax working_dir 翻译器.
 
 把 aiVideo 01_script_gen 产出的分镜（narration + shots + characters）翻译成 ViMax 的
 working_dir 缓存产物，让 Script2VideoPipeline 命中缓存、跳过全部 LLM 规划步骤
@@ -1886,6 +1886,7 @@ from step01_script_gen.prompt_semantic import (
     THREAT_WORDS_ENLARGED as _THREAT_WORDS_ENLARGED,
     THREAT_STAB_VERBS as _THREAT_STAB_VERBS,
     THREAT_VISIBILITY_KEYWORDS as _THREAT_VISIBILITY_KEYWORDS,
+    THREAT_CORE_IDENTIFIERS as _THREAT_CORE_IDENTIFIERS,
 )
 
 
@@ -1915,7 +1916,7 @@ def _char_aliases(char_id: str, characters: list | None = None) -> list[str]:
 # 与 registry.THREAT_KEYWORDS / WEAPON_KEYWORDS 的关系：相关、互补——
 # _THREAT_IDS 是身份词的**精确前缀匹配**（identifier 命中），与词表的**文本
 # 子串匹配**（字级 vs 词级）语义不同源，勿互相替代或宣称对齐。
-_THREAT_IDS = ("刺客", "杀手", "黑衣人")  # 保留精确匹配；通用检测走 THREAT_KEYWORDS
+_THREAT_IDS = _THREAT_CORE_IDENTIFIERS  # 单源 registry.THREAT_CORE_IDENTIFIERS（2026-10 裁决）
 
 # v6.56：威胁源可见性门控用的扩展词表——覆盖合规替换称谓（神秘人/蒙面人/黑影）。
 # 词表单源 prompt_semantic.registry.THREAT_VISIBILITY_KEYWORDS（v6.60.1 收敛：

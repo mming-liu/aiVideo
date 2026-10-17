@@ -113,10 +113,36 @@ tests/
 # tests/ 其余仍不入库。
 !tests/
 tests/*
+# 2026-10 复核：`tests/conftest.py` 是**测试可运行性的基础设施**（日志隔离、
+# 外部传输护栏、会话级磁盘治理都在里面），必须入库才能在新机器复现；
+# 此前被 `tests/*` 一并挡掉。仅放行这一个文件，其余仍不入库。
+!tests/conftest.py
 !tests/step01_script_gen/
 tests/step01_script_gen/*
 !tests/step01_script_gen/fixtures/
 !tests/step01_script_gen/fixtures/**
+# 2026-10 复核：以下放行**必须写在 `tests/step01_script_gen/*` 之后**——git 的忽略
+# 规则「后写者优先」，写在它之前会被它重新忽略（本轮真踩过：规则加对了、位置在上面
+# 那一行之前，`git check-ignore` 仍判 IGNORED）。
+# 这些是「干净 clone 可运行」的必要件：conftest 挂 autouse 的旧协议回放夹具，
+# 提交/回滚/容量用例是契约判据；缺了会让本地与干净检出行为不一致
+# （典型：test_plan_feasibility 本地 70 passed / 干净检出 3 failed）。
+!tests/step01_script_gen/conftest.py
+!tests/step01_script_gen/test_repair_targets.py
+!tests/step01_script_gen/test_linked_group_capacity.py
+!tests/step01_script_gen/test_repair_target_rollback.py
+!tests/step01_script_gen/test_step01_commit.py
+!tests/step01_script_gen/test_p0_fault_injection.py
+!tests/step01_script_gen/test_plan_revision_v2_wiring.py
+!tests/step01_script_gen/constraints/
+tests/step01_script_gen/constraints/*
+!tests/step01_script_gen/constraints/test_facing_to_gaze.py
+!tests/step01_script_gen/constraints/test_ff_lf_temporal.py
+!tests/enhancements/
+tests/enhancements/*
+!tests/enhancements/test_subtitle_contract.py
+!tests/test_disk_governance.py
+!tests/test_py311_source_grammar.py
 !tests/step01_script_gen/test_plan_to_commit_baseline.py
 # 09-25 收口：第二步（计划边界）的判别测试随仓库交付，理由同上
 !tests/step01_script_gen/test_plan_feasibility.py
@@ -136,3 +162,11 @@ tests/step01_script_gen/*
 !/docs/archive/
 !docs/step01-ten-run-problem-report-2026-09-27.md
 !docs/step01-ten-run-report-2026-09-28-p1p6-retest.md
+
+# 2026-10：根目录「代理/复核隔离」调试产物曾被误入库
+# （`review-f-isolated-*` / `review-candidate-isolated-*` / `review-f-round2-*` / `unused.wav`）。
+# 已在库内的需另行 `git rm --cached` 取消跟踪（不会删除工作区文件）。
+/review-*/
+/review_tmp*/
+# 只忽略**仓库根目录**的 wav，避免误伤 assets/ 下的音频素材
+/*.wav

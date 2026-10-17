@@ -1,20 +1,4 @@
-"""F2. kf 血状态单调性约束（v6.49 新增，08-28 跑批实测）.
-
-08-28 chapter_001 跑批实测 6 处血状态回退（镜头 1/2/6/7/8）：
-  - 镜1 kf t=1.50 血 → kf t=2.90 无血
-  - 镜2 kf t=2.20 有血 → 后续 kf 无血
-  - 镜6/7/8 类似
-
-物理逻辑：致命伤建立后，血只增不减（不消失）。LLM 中段 kf 把血丢了
-→ 图片渲染时序错位（血忽有忽无）。
-
-修法：扫单镜 kf 序列，按 t_sec 升序遍历，若 prev 含血词而 cur 不含
-→ 视为回退，把 INJURY_ANCHOR_TAIL 追加到 cur.desc 末尾（幂等：
-已含 INJURY_ANCHOR_WORDS 任一词即跳过）。
-
-severity=WARN（不阻断 regen；与 kf_pre_post_conflict 同级）
-fields=()（不扫 DEFAULT_FIELDS，扫 keyframes[N].desc）
-"""
+"""Report blood continuity candidates; blood words do not identify a fatal wound."""
 from __future__ import annotations
 
 import sys
@@ -30,7 +14,7 @@ from step01_script_gen.prompt_semantic.registry import (
     INJURY_ANCHOR_TAIL,
 )
 from .base import Constraint
-from .types import RepairRecord, Severity
+from .types import RepairRecord, Severity, Violation
 
 
 class KfBloodMonotonicConstraint(Constraint):
@@ -96,13 +80,17 @@ class KfBloodMonotonicConstraint(Constraint):
                     # 幂等检查：本帧已含 INJURY_ANCHOR_TAIL 视为已修
                     if INJURY_ANCHOR_TAIL in desc:
                         continue
-                    new_desc = desc.rstrip("。.，,;；") + "。" + INJURY_ANCHOR_TAIL
-                    kf["desc"] = new_desc
+                    new_desc = desc
+                    ctx.record_violation(Violation(
+                        constraint_name=self.name, severity=Severity.WARN,
+                        shot_index=shot.get("index"), field=f"keyframes[{kf_j}].desc",
+                        message="血迹连续性候选；需核所属人物、伤处及本帧可见范围，保留原文。",
+                        evidence=desc, repaired=False))
                     repairs.append(
                         RepairRecord(
                             constraint_name=self.name,
                             shot_index=shot.get("index") if not is_hook else None,
-                            action="append",
+                            action="detect",
                             target=f"keyframes[{kf_j}].desc",
                             before=desc[:80] + ("..." if len(desc) > 80 else ""),
                             after=new_desc[:80] + ("..." if len(new_desc) > 80 else ""),
@@ -116,13 +104,17 @@ class KfBloodMonotonicConstraint(Constraint):
                 if isinstance(lf_desc, str) and lf_desc and not any(
                     w in lf_desc for w in BLOOD_STATE_WORDS
                 ):
-                    new_lf = lf_desc.rstrip("。.，,;；") + "。" + INJURY_ANCHOR_TAIL
-                    shot["lf_desc"] = new_lf
+                    new_lf = lf_desc
+                    ctx.record_violation(Violation(
+                        constraint_name=self.name, severity=Severity.WARN,
+                        shot_index=shot.get("index"), field="lf_desc",
+                        message="尾帧血迹连续性候选；不据其它帧的血词推定本帧伤处。",
+                        evidence=lf_desc, repaired=False))
                     repairs.append(
                         RepairRecord(
                             constraint_name=self.name,
                             shot_index=shot.get("index") if not is_hook else None,
-                            action="append",
+                            action="detect",
                             target="lf_desc",
                             before=lf_desc[:80] + ("..." if len(lf_desc) > 80 else ""),
                             after=new_lf[:80] + ("..." if len(new_lf) > 80 else ""),

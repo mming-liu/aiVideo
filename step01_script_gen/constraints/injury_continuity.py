@@ -1,14 +1,4 @@
-"""A. 致命伤持续约束（v6.42 迁移自 _hard_fix_injury_continuity）.
-
-扫所有 shot，找第一个含 anchor 词的 shot 作为 build_idx；
-之后同 location shot 若含 victim 但缺 anchor → 同步追加到 prompt + lf_desc.
-
-幂等：anchor 词在 prompt/lf_desc 已含 → 跳过（_already_repaired 检测
-_INJURY_ANCHOR_TAIL 标记）.
-
-数据驱动（v6.42+）：可从 ElementMarkers.injuries[victim].continuity_phrase 派生；
-当前实现仍用 validation._INJURY_ANCHOR_TAIL 作为兜底（Phase 5 升级）.
-"""
+"""Report possible injury continuity gaps without inventing a wound or costume."""
 from __future__ import annotations
 
 import re
@@ -30,7 +20,7 @@ from step01_script_gen.prompt_semantic import (
     POST_STATE_KEYWORDS as _POST_STATE_KEYWORDS,
 )
 from .base import Constraint
-from .types import RepairRecord, Severity
+from .types import RepairRecord, Severity, Violation
 
 
 def _is_victim_candidate(nm: str) -> bool:
@@ -169,12 +159,16 @@ class InjuryContinuityConstraint(Constraint):
 
             if not prompt_has_anchor:
                 before = prompt
-                s["prompt"] = prompt.rstrip("。") + f"。{_INJURY_ANCHOR_TAIL}"
+                ctx.record_violation(Violation(
+                    constraint_name=self.name, severity=Severity.WARN,
+                    shot_index=s.get("index", i), field="prompt", repaired=False,
+                    message="可能缺少伤情连续性；须复核同一人物及本帧可见范围，不注入默认衣服/伤处。",
+                    evidence=before))
                 repairs.append(
                     RepairRecord(
                         constraint_name=self.name,
                         shot_index=s.get("index", i),
-                        action="append",
+                        action="detect",
                         target="prompt",
                         before=before,
                         after=s["prompt"],
@@ -182,12 +176,16 @@ class InjuryContinuityConstraint(Constraint):
                 )
             if lf and not lf_has_anchor:
                 before = lf
-                s["lf_desc"] = lf.rstrip("。") + f"。{_INJURY_ANCHOR_TAIL}"
+                ctx.record_violation(Violation(
+                    constraint_name=self.name, severity=Severity.WARN,
+                    shot_index=s.get("index", i), field="lf_desc", repaired=False,
+                    message="可能缺少伤情连续性；须复核同一人物及本帧可见范围，不注入默认衣服/伤处。",
+                    evidence=before))
                 repairs.append(
                     RepairRecord(
                         constraint_name=self.name,
                         shot_index=s.get("index", i),
-                        action="append",
+                        action="detect",
                         target="lf_desc",
                         before=before,
                         after=s["lf_desc"],
@@ -197,12 +195,16 @@ class InjuryContinuityConstraint(Constraint):
             # 无伤受害者（16:34 run shot6/7 实测）。受害者出现在 ff 才补。
             if ff and not ff_has_anchor and victim in ff:
                 before = ff
-                s["ff_desc"] = ff.rstrip("。") + f"。{_INJURY_ANCHOR_TAIL}"
+                ctx.record_violation(Violation(
+                    constraint_name=self.name, severity=Severity.WARN,
+                    shot_index=s.get("index", i), field="ff_desc", repaired=False,
+                    message="可能缺少伤情连续性；须复核同一人物及本帧可见范围，不注入默认衣服/伤处。",
+                    evidence=before))
                 repairs.append(
                     RepairRecord(
                         constraint_name=self.name,
                         shot_index=s.get("index", i),
-                        action="append",
+                        action="detect",
                         target="ff_desc",
                         before=before,
                         after=s["ff_desc"],
@@ -241,12 +243,16 @@ class InjuryContinuityConstraint(Constraint):
                 hl_has = bool(hl) and any(w in hl for w in _BLOOD_STATE_WORDS)
                 if not hp_has and hp:
                     before = hp
-                    hook["prompt"] = hp.rstrip("。") + f"。{_INJURY_ANCHOR_TAIL}"
+                    ctx.record_violation(Violation(
+                        constraint_name=self.name, severity=Severity.WARN,
+                        shot_index="hook", field="prompt", repaired=False,
+                        message="可能缺少伤情连续性；须复核同一人物及本帧可见范围，不注入默认衣服/伤处。",
+                        evidence=before))
                     repairs.append(
                         RepairRecord(
                             constraint_name=self.name,
                             shot_index="hook",
-                            action="append",
+                            action="detect",
                             target="prompt",
                             before=before,
                             after=hook["prompt"],
@@ -254,12 +260,16 @@ class InjuryContinuityConstraint(Constraint):
                     )
                 if hl and not hl_has:
                     before = hl
-                    hook["lf_desc"] = hl.rstrip("。") + f"。{_INJURY_ANCHOR_TAIL}"
+                    ctx.record_violation(Violation(
+                        constraint_name=self.name, severity=Severity.WARN,
+                        shot_index="hook", field="lf_desc", repaired=False,
+                        message="可能缺少伤情连续性；须复核同一人物及本帧可见范围，不注入默认衣服/伤处。",
+                        evidence=before))
                     repairs.append(
                         RepairRecord(
                             constraint_name=self.name,
                             shot_index="hook",
-                            action="append",
+                            action="detect",
                             target="lf_desc",
                             before=before,
                             after=hook["lf_desc"],

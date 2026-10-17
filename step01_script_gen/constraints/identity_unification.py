@@ -14,7 +14,17 @@ from .base import Constraint
 from .types import RepairRecord, Severity, Violation
 
 
-_THREAT_ALIASES = ("神秘人", "黑衣人", "杀手", "蒙面人", "蒙面黑影", "黑影")
+from step01_script_gen.prompt_semantic.registry import (
+    THREAT_ALIASES as _REGISTRY_THREAT_ALIASES,
+)
+
+# 2026-10 裁决：威胁别称词表**单源** registry.THREAT_ALIASES
+# （= THREAT_VISIBILITY_KEYWORDS + "蒙面黑影"）。此前本处自持 6 词字面量、而
+# shared/style_prefix 与 validation 各持 5 词字面量，成员不一致——同一个「蒙面人」
+# 在那边算威胁源、在这里不算，属同一事实两套裁决。
+_THREAT_ALIASES = _REGISTRY_THREAT_ALIASES
+# 归一时的**规范名优选顺序**（裁决指定；命中即折叠成靠前的那个）。
+_CANONICAL_THREAT_ORDER = ("刺客", "神秘人", "杀手", "黑衣人", "蒙面人")
 _COLLECTIVES = ("群演", "众佃仆", "佃仆", "庄仆", "村民", "路人")
 
 
@@ -27,13 +37,13 @@ def _canonical(name: str, identifiers: set[str]) -> str:
     threat_idents = {
         ident for ident in identifiers
         if any(ident == a or ident.startswith(a) for a in _THREAT_ALIASES)
-        or ident in ("刺客", "神秘人", "杀手", "黑衣人")
+        or ident in _CANONICAL_THREAT_ORDER
     }
     # Ambiguous threat rosters must not be collapsed by generic aliases.
     if len(threat_idents) > 1:
         return name
     if name in _THREAT_ALIASES:
-        for candidate in ("刺客", "神秘人", "杀手", "黑衣人"):
+        for candidate in _CANONICAL_THREAT_ORDER:
             if candidate in identifiers:
                 return candidate
     return name

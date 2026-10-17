@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 import re
+import math
 from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -375,39 +376,8 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
             differentiate_split_visuals(shot, shot_b, part_i=1)
         except Exception:
             pass
-        # v6.50（08-29）后半镜致命伤锚延续：拆分发生在约束层 injury_continuity
-        # 之后，新 halves 没人再补锚（15:12 run shot12.5/14.5/15.5 ff/lf 无伤锚
-        # 实测——刺杀后画面会画出无伤的杨旭）。原镜带真伤锚 + 非威胁角色在
-        # 后半镜画面 → ff/lf 补锚。
-        try:
-            from step01_script_gen.prompt_semantic.registry import (
-                INJURY_ANCHOR_TAIL as _IAT,
-                STRONG_INJURY_ANCHORS as _SIA,
-                BLOOD_STATE_WORDS as _BSW,
-                COLLECTIVE_NAMES as _COLL,
-            )
-            _orig_txt = (shot.get("prompt") or "") + (shot.get("lf_desc") or "") + (shot.get("ff_desc") or "")
-            if any(w in _orig_txt for w in _SIA):
-                _victim = ""
-                for _it in (shot_b.get("char_layout") or []):
-                    _nm = str((_it or {}).get("name", "")).strip()
-                    if (_nm and not any(t in _nm for t in ("刺客", "神秘人", "黑衣人", "杀手"))
-                            and not any(w in _nm for w in _COLL)):
-                        _victim = _nm
-                        break
-                _b_txt = (shot_b.get("ff_desc") or "") + (shot_b.get("lf_desc") or "")
-                if _victim and _victim in _b_txt:
-                    for _fld in ("ff_desc", "lf_desc"):
-                        _t = shot_b.get(_fld) or ""
-                        # v6.51：已锚判定用 BLOOD_STATE_WORDS（含 暗红/洇开/血迹 等
-                        # 可见血状态词）。原用 STRONG（洇痕/血痕…）——变体锚
-                        # 「暗红痕迹洇开，清晰可见」漏判 → 重复追加完整 _IAT →
-                        # 下游复读去重把重复片段抠掉，残留「。暗红血迹洇开，血痕」
-                        # 截断碎片（16:34 run shot8.0 实测）。
-                        if _t and not any(w in _t for w in _BSW):
-                            shot_b[_fld] = _t.rstrip("。") + f"。{_IAT}"
-        except Exception:
-            pass
+        # A split cannot establish a new wound, costume or visible subject.
+        # Preserve the child content; continuity belongs to content review.
         # v6.77：删除重复的差异化调用——此前同一函数内被调了两次
         # （2026-09-12 追加时漏看上方已有），纯重复执行。
         # 2026-09-12 根因修复：拆分后验证——后镜必须提供**新增视觉信息**，否则
@@ -545,6 +515,40 @@ def _align_frame_duration(raw: float, fps: float) -> float:
     return frames / fps
 
 
+def _shot_content_duration(shot: dict, fps: float, shot_cap: float) -> float:
+    """Derive a container without shortening authored timing or its contents.
+
+    An open-ended motion label supplies a start, not the end of the shot.
+    The declared duration and existing keyframes therefore remain lower bounds,
+    alongside speech and closed motion ranges. Projection and execution share
+    this calculation; over-cap content still belongs to the structural gate.
+    """
+    text = str(shot.get("narration_segment") or "")
+    motion = _extract_motion_duration(str(shot.get("motion_desc") or "")) or 0.0
+    speech = _estimate_duration(text) if text.strip() else 0.0
+    declared = shot.get("duration_sec")
+    if declared is None:
+        declared = shot.get("duration")
+    try:
+        declared = float(declared)
+    except (TypeError, ValueError):
+        declared = 0.0
+    if not math.isfinite(declared) or declared < 0:
+        declared = 0.0
+    required = max(motion, speech, declared, max_kf_t_sec(shot))
+    raw = max(required or NARRATION_FIXED_DURATION, MIN_SHOT_DURATION)
+    duration = _align_frame_duration(raw, fps)
+    # Nearest-frame rounding must not squeeze an authored event out of its
+    # container. Three frame increments cover the aligner's three-frame grid.
+    for step in range(1, 4):
+        if duration >= raw - 1e-9:
+            break
+        duration = _align_frame_duration(raw + step / fps, fps)
+    if duration > shot_cap:
+        duration = _align_frame_duration(shot_cap, fps)
+    return duration
+
+
 def project_post_split_metrics(shots: list, *, fps=None, shot_cap=None) -> dict:
     """预估 timecode 拆镜后的有效镜数/时长，不修改输入、不写日志.
 
@@ -603,7 +607,7 @@ def project_post_split_metrics(shots: list, *, fps=None, shot_cap=None) -> dict:
                 projected_shots += 2
                 split_count += 1
                 continue
-        projected_duration += _duration_for_text(text, motion_duration)
+        projected_duration += _shot_content_duration(shot, _fps, shot_cap)
         projected_shots += 1
 
     return {
@@ -935,39 +939,9 @@ def _compute_timecodes(script: dict, *, allow_split: bool = False) -> None:
     current_time = hook_duration
     timeline = []
     for shot in shots:
-        text = shot.get("narration_segment", "")
-        motion_desc = shot.get("motion_desc", "")
         var_type = shot.get("variation_type", "small")
-
-        # v6.6: 优先从 motion_desc 解析时间分段
-        motion_duration = _extract_motion_duration(motion_desc) if motion_desc else None
-
-        # 发声镜头时长必须以「能念完这段字」为下限：取 motion 分段与字数估时的较大值，
-        # 避免视频太短、长台词/长旁白被截断（音画同步关键）。
-        #
-        # 2026-09-30 复核第 6 轮：**对白与旁白共用同一套估时**。旧实现只给「有对话」的
-        # 镜头算字数时长，纯旁白镜一律吃 `NARRATION_FIXED_DURATION`（4s）——实测一段
-        # 预计 9.85 秒的旁白只被分配 4 秒，成片必然说不完。旁白与画面**同时发生**
-        # （不为它额外加镜头），但它的发声时间同样要进单镜/整篇预算。
-        _voiced = bool(str(text or "").strip())
-        speech_duration = _estimate_duration(text) if _voiced else 0.0
-
-        if motion_duration and motion_duration > 0:
-            base_duration = max(motion_duration, speech_duration) if speech_duration > 0 else motion_duration
-        elif speech_duration > 0:
-            # 有对白或无对白的旁白：都按字数估时（不再对旁白走固定 4 秒）
-            base_duration = speech_duration
-        else:
-            # 既无台词也无旁白：固定短时长
-            base_duration = NARRATION_FIXED_DURATION
-
-        # #29 修复 2026-08-14：先兜底 MIN_SHOT_DURATION、再按 fps 对齐整数帧。
-        # 旧顺序「先对齐后 max」在分数 fps（如 23.976）下会被 max 兜出
-        # 3.0s 非整帧时长，破坏对齐保证（step01.log 反复报 duration 与 fps 不对齐）。
-        raw = max(base_duration, MIN_SHOT_DURATION)
-        # 08-23：_align_frame_duration 兼顾「整数帧对齐」+「输出 ≤3 位小数」
-        # （fps=24 时长不再出现 5.583333333333333 长小数）
-        duration = _align_frame_duration(raw, fps)
+        # Preserve authored timing and content bounds, as candidate projection does.
+        duration = _shot_content_duration(shot, fps, float("inf"))
         # 按单镜上限夹取（模型 cap / 8s 硬限取严；先夹后对齐，保证整帧）。
         # 超过模型上限会被 provider 截断内容；8s 是 08-23 用户规则（钩子另算）。
         if duration > shot_cap:

@@ -401,8 +401,15 @@ def _onscreen_prop_issues(shot: dict, shot_id) -> list[Issue]:
                 repairable=True,
             ))
         # Holder evidence can appear in another clause of the same frame.
-        if "刀尖" in text and not any(
-            w in text for w in ("握着", "手持", "持刀", "神秘人", "刺客")
+        # 2026-10 裁决：持械**动作**与威胁**主体**拆两张表单判（单源 registry）。
+        # 原先混写成一个元组，且身份词只有「神秘人/刺客」——「黑衣人/杀手/蒙面人」
+        # 持刀的场景会被误判成「同帧没有明确持刀者」。
+        from step01_script_gen.prompt_semantic.registry import (
+            THREAT_VISIBILITY_KEYWORDS, WEAPON_HOLDER_VERBS,
+        )
+        if "刀尖" in text and not (
+            any(v in text for v in WEAPON_HOLDER_VERBS)
+            or any(t in text for t in THREAT_VISIBILITY_KEYWORDS)
         ):
             issues.append(Issue(
                 code="weapon_holder_missing", severity="visual_risk",

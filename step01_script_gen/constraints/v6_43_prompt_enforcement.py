@@ -348,61 +348,24 @@ _PROP_STATE_TEXT_FIELDS = ("narration_segment", "subtitle", "motion_desc", "lf_d
 
 
 def _prop_described_elsewhere(shot: dict, prop: str, current_field: str) -> bool:
-    """该道具是否在本镜**其它文本字段**里也被描述（v6.111）.
-
-    Rule 7 的启发式只适用于「本镜对这件道具的唯一交代，就是那句歧义的『X手+道具』」
-    ——此时改写成「道具已脱手」是为了避免图像模型把躺姿误读成「握着」。
-
-    但只要本镜在别处也交代了这件道具，就说明道具状态有更完整的叙述，
-    一律改写成「已脱手」会**与那些交代矛盾**，而 §1.2 的优先级里那些字段
-    不低于（motion_desc 更是高于）ff_desc：
-
-      实测 shot 2（第二十六次真实重跑 BLOCK 的直接成因）：
-        motion_desc：前2秒：杨旭仰卧**饮酒**…4-6秒：**丢了酒壶**，酒水洒向甲板
-        lf_desc    ：右手已空，酒壶倒在甲板上，**左手仍握钓杆**
-        Rule 7 却把 ff_desc 改成「钓杆已脱手垂湖面，酒壶已脱手」
-      → 审计据此判「ff_desc 与 motion_desc 矛盾 / 与原文不符」（**判得对**），
-        而修复轮每改一次 Rule 7 就改回一次 → 该 blocking **永远修不掉** → BLOCK。
-    """
+    """Historical textual-mention helper; no longer authorizes state rewrites."""
     for fld in _PROP_STATE_TEXT_FIELDS:
         if fld == current_field:
             continue
         val = shot.get(fld)
         if isinstance(val, str) and val and prop in val:
             return True
-    # 刻意**不**看 `prompt` 与关键帧描述：它们与 `ff_desc` 同级、且常常是同一句话的
-    # 近重复（`prompt` 由结构字段拼成），把它们算作「别处交代过」会让本规则在常见
-    # 情况下永不触发——那就不是收窄而是关掉了。收窄的边界只取**叙述层**
-    # （旁白/字幕/motion/尾帧），即「本镜对道具状态另有独立交代」的那些字段。
     return False
 
 
 def _fix_handle_ambiguity(shot: dict) -> int:
-    """Rule 7：角色躺/卧姿态下"X手+道具"被误读为握 → 改写为"道具已脱手+位置"."""
-    fixed = 0
-    for field in ("ff_desc", "prompt"):
-        text = shot.get(field, "")
-        if not text or not isinstance(text, str):
-            continue
-        if not _is_lying_or_sleeping(text):
-            continue
-        # 检测 "左手X" / "右手X" 模式（X 在 _HANDLE_PROPS 中）
-        new_text = text
-        for prop in _HANDLE_PROPS:
-            # v6.111：本镜别处已交代该道具 → 不做启发式改写（见上）
-            if _prop_described_elsewhere(shot, prop, field):
-                continue
-            for hand in ("左手", "右手"):
-                # 模式：左手X / 右手X（中间可能有 1-3 字动词）
-                pat = re.compile(re.escape(hand) + r"[^，。、\n]{0,4}" + re.escape(prop))
-                if pat.search(new_text):
-                    # 改为「X 已脱手（杨旭手空着）+ 道具位置」
-                    repl = f"{prop}已脱手"
-                    new_text = pat.sub(repl, new_text)
-                    fixed += 1
-        if new_text != text:
-            shot[field] = new_text
-    return fixed
+    """Compatibility hook: posture never establishes a prop release.
+
+    A reclining person can hold a prop. Neither silence in other fields nor
+    duplicated prose proves otherwise; changing this relationship requires
+    source-backed content revision, not deterministic normalization.
+    """
+    return 0
 
 
 # === 规则 8：锚点位置约束（"一点X"/"一截X" 模糊数量词追加空间方位） ===

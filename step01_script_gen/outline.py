@@ -590,7 +590,12 @@ def _budget_feedback_block(rep: dict, plan: dict, novel_text: str = "",
     """
     _b = rep.get("budget") or {}
     # 本轮的接口（**只裁决一次**）：调用方给就用它，没给就从同一批判据现算
-    _route = route if route is not None else _replan_route(rep.get("problems"))
+    # 2026-10 裁决 (a)：本函数只实现旧版预算重规划的两条协议（ROUTE_OPS /
+    # ROUTE_FULL_PLAN）。生产 v2 路由对 legacy 计划给的是 ROUTE_VIEW_DELTA，而
+    # `_INTERFACE_ADVICE` 里 view_delta 的文案是「只回增量、不用回抄」——拿它去拼
+    # 全量 OUTLINE_SCHEMA 请求就是**协议错位**（模型按增量回、验收按全量查）。
+    # 未显式给合法 route 时按旧路由器裁决，本函数只接受它支持的两条协议。
+    _route = route if route in (ROUTE_OPS, ROUTE_FULL_PLAN) else _legacy_route(rep.get("problems"))
     _advice = _INTERFACE_ADVICE[_route]
     block = ""
     _lower = rep.get("lower_bound_sec")
@@ -784,7 +789,10 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
     # ——与 `_budget_feedback_block` 里同一个表达式的第二份拷贝，且两份都不看能力裁决。
     # 混合问题（总量超限 × 单镜不可表示）因此发出的请求与**应用器**在同一个值上分叉：
     # 表判"操作协议表达不了"，请求却按操作协议发（该协议删不掉条目）。
-    _route = route if route is not None else _replan_route(rep.get("problems"))
+    # 2026-10 裁决 (a)：同 `_budget_feedback_block`——本函数只支持 ROUTE_OPS /
+    # ROUTE_FULL_PLAN 两条协议；若拿到 v2 的 ROUTE_VIEW_DELTA，`_ops_mode` 会变成
+    # False，于是把「单镜不可表示」的 ops 请求当成全量 OUTLINE_SCHEMA 发出。
+    _route = route if route in (ROUTE_OPS, ROUTE_FULL_PLAN) else _legacy_route(rep.get("problems"))
     _ops_mode = (_route == ROUTE_OPS)
     # 操作式分支**不带**"输出整份大纲"的格式要求（复核 2026-10-02 P1，与 `_replan_by_ops`
     # 同一根因）；非操作式分支（整份重选台词）仍然需要它。
@@ -3183,7 +3191,12 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
     # 已经是 `ROUTE_VIEW`）先撞上 `KeyError: 'view'`（复核 2026-10-05 P1）。
     # 现在：**接口分派在前**，`_route == ROUTE_VIEW` 永远走 v2；只有 legacy 的纯预算
     # 轮才保留旧的重选路径（它是**预算反馈**的既有语义，不是另一套响应协议）。
-    if _budget_ctx and _route not in (ROUTE_VIEW, ROUTE_VIEW_DELTA):
+    # 2026-10 裁决 (a)：legacy 生产路由恒为 ROUTE_VIEW_DELTA，原条件
+    # `_route not in (ROUTE_VIEW, ROUTE_VIEW_DELTA)` 因此**永远为 False**——
+    # 纯预算超限的 legacy 计划再也进不来（拿不到数值验算表、不写 `plan_replan`）。
+    # 改为按「非完整视图替换」判定，并把本函数支持的旧协议显式传下去。
+    if _budget_ctx and _route != ROUTE_VIEW and plan_mode(plan) != MODE_HYBRID:
+        _budget_route = _legacy_route(problems)
         # 预算分支沿用**既有的一次重选语义**（"同一计划版本只重选一次"的去重标记、
         # 判据版本、回写 `plan_replan`），但这一轮仍然走控制器给的额度与剩余时间：
         # 额度管的是"花掉的规划机会"，去重标记管的是"这一版别再试"。
@@ -3192,7 +3205,7 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
             plan, novel_text, model=model, base_prompt=base_prompt,
             system_prompt=system_prompt, timeout_sec=_timeout,
             deadline_monotonic=_deadline_at, ignore_prev=True,
-            rejections=rejections, evidence=_ev, route=_route)
+            rejections=rejections, evidence=_ev, route=_budget_route)
         _call_id = str(_info.get("call_id") or "")
         if not _info:
             return {"kind": "no_change", "detail": "预算已可行（无需重选）",
@@ -3707,6 +3720,14 @@ def generate_outline_result(novel_text: str, model: str | None = None,
                 # **复原**到内容上：候选身份一致（同一份计划），记录可以安全沿用
                 _cached_plan = dict(_cached_plan)
                 _cached_plan["plan_verification"] = _cached_ver_rec
+            # 2026-10 裁决 P1-1：**先规范化，再统一验收**。
+            # `normalize_plan_ranges` 原本要到下面（`_plan0, _norm = normalize_plan_ranges(outline)`）
+            # 才执行，于是这里的 `plan_acceptance_problems` 判的是**未规范化的编号**：
+            # 一份「规范化之后才合法」的缓存计划会被误判为不合格（缓存命中不了、白跑一次
+            # 规划），反之靠旧编号侥幸通过的会被错收。验收对象必须与实际要下发的对象同形态。
+            # 传副本：避免就地规范化的实现顺带改写 `cached["outline"]` 原始对象。
+            if isinstance(_cached_plan, dict):
+                _cached_plan = normalize_plan_ranges(dict(_cached_plan))[0]
             # 工作包 §4 C：可执行缓存**只放通过统一验收的版本**——历史失败元数据
             # （`plan_replan` 里的 result/detail）不能当成本轮验收的替代品。
             _cached_problems = ([]

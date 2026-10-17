@@ -638,7 +638,10 @@ def _subject_names(characters) -> set:
         if ident:
             names.add(ident)
     # 兜底常见称谓（非注册角色名也可能出现在 ff_desc）
-    for fallback in ("刺客", "杀手", "黑衣人", "蒙面人", "神秘人"):
+    # 2026-10 裁决：单源 prompt_semantic.registry.THREAT_VISIBILITY_KEYWORDS。
+    # 函数内导入，避免 shared ↔ step01_script_gen 的模块级循环依赖。
+    from step01_script_gen.prompt_semantic.registry import THREAT_VISIBILITY_KEYWORDS
+    for fallback in THREAT_VISIBILITY_KEYWORDS:
         names.add(fallback)
     return names
 
