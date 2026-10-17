@@ -1,2 +1,0 @@
-{"schema_version": "enhancement_event.v1", "seq": 1, "kind": "opened", "at": "2026-10-03T22:24:38", "before": null, "after": {"state": "draft"}}
-{"seq":2,"kind":{"schema_version": "enhancement_event.v1", "seq": 2, "kind": "submitted", "at": "2026-10-03T22:24:38", "before": null, "after": {"state": "submitted"}, "task_id": "t1"}

@@ -1,2 +1,0 @@
-{"schema_version": "enhancement_event.v1", "seq": 1, "kind": "opened", "at": "2026-10-03T22:24:38", "before": null, "after": {"state": "draft"}}
-{"seq": 9, "kind": "state:accepted", "before": {"state": "ready"}, "after": {"state": "accepted"}}
