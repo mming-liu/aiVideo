@@ -49,6 +49,22 @@ REVISION_SCHEMA = "plan_revision.v2"
 MODE_LEGACY = "legacy_audio"
 MODE_HYBRID = "screen_hybrid"
 MODES = (MODE_LEGACY, MODE_HYBRID)
+
+
+def fact_binding_policy(view):
+    """Binding selection follows the representation's actual round-trip capacity."""
+    single = str((view or {}).get('mode') or '') == MODE_LEGACY
+    return {'max_carriers':1 if single else None,
+            'selection':'replace' if single else 'extend',
+            'visual_requires_visual_beat':single}
+
+
+def selectable_visual_beat_uids(view):
+    strict=fact_binding_policy(view)['visual_requires_visual_beat']
+    return [str(beat.get('uid') or '') for beat in (view or {}).get('beats',[])
+            if isinstance(beat,dict) and (not strict or
+                (isinstance(beat.get('voice_ref'),dict) and beat['voice_ref'].get('kind')==KIND_VISUAL))]
+
 #: 计划契约版本的**模式映射**（主专题 §2：「新模式使用计划契约版本6，旧模式继续使用版本5；
 #: 按模式选择期望版本，**不直接提升全局常量**使全部旧缓存失效」）。
 PLAN_CONTRACT_VERSION_LEGACY = 5
@@ -1767,13 +1783,24 @@ def view_problems(view: dict, *, base_view: dict | None = None) -> list:
     # 第一条** —— 画面+旁白、旁白+旁白、画面+画面**全部**丢第二条。静默丢数据比拒收更
     # 糟（R2「不允许静默丢失」），所以在这里**明说拒收**；多载体是 `screen_hybrid`
     # （契约版本 6）的能力，不是旧模式的。
-    if str(view.get("mode") or "") == MODE_LEGACY:
+    _carrier_limit = fact_binding_policy(view)['max_carriers']
+    if _carrier_limit is not None:
+        _visual_targets=set(selectable_visual_beat_uids(view))
+        _beat_ids={str(beat.get('uid') or '') for beat in view.get('beats',[])}
+        def _incompatible_visual(ref):
+            return (isinstance(ref,dict) and ref.get('kind')==KIND_VISUAL
+                    and ref_uid(ref) in _beat_ids and ref_uid(ref) not in _visual_targets)
         for _b in (view.get("fact_bindings") or []):
             if not isinstance(_b, dict):
                 continue
             _n = len([_c for _c in ref_items(_b.get("carriers"),
                                              "fact_bindings.carriers") if _c])
-            if _n > 1:
+            for _c in ref_items(_b.get('carriers'),'fact_bindings.carriers'):
+                if _incompatible_visual(_c):
+                    _p.append(_rec('view_binding_legacy_visual_mismatch','fact',str(_b.get('fact_uid') or ''),
+                        '旧模式的画面事实只能绑定纯画面节拍；不得把带声音的节拍同时声明为画面载体',
+                        'fact_bindings[%s].carriers' % _b.get('fact_uid')))
+            if _n > _carrier_limit:
                 _fu = str(_b.get("fact_uid") or "")
                 _p.append(_rec(
                     "view_binding_multi_carrier_legacy", "fact", _fu,
@@ -1782,6 +1809,21 @@ def view_problems(view: dict, *, base_view: dict | None = None) -> list:
                     "（实测：写入 %d 条、回读 1 条）。多载体要用 `screen_hybrid`"
                     "（契约版本 6）" % (MODE_LEGACY, _n, _n),
                     "fact_bindings[%s].carriers" % _fu))
+        for _c in ref_items((view.get('hook_bindings') or {}).get('carriers'),'hook_bindings.carriers'):
+            if _incompatible_visual(_c):
+                _p.append(_rec('view_binding_legacy_visual_mismatch','hook','',
+                    '旧模式的画面钩子只能绑定纯画面节拍；不得与节拍的声音载体声明冲突',
+                    'hook_bindings.carriers'))
+        _placed={(str(ref.get('kind') or ''),ref_uid(ref))
+                 for beat in view.get('beats',[]) for ref in [beat.get('voice_ref')]
+                 if isinstance(ref,dict)}
+        if _placed:  # Preserve the historical all-unlabelled legacy adapter.
+            for _kind,_collection in ((KIND_DIALOGUE,'dialogue_units'),(KIND_NARRATION,'narration_units')):
+                for _unit in view.get(_collection,[]):
+                    if (_kind,ref_uid(_unit)) not in _placed:
+                        _p.append(_rec('view_voice_unit_unplaced',_kind,ref_uid(_unit),
+                            '旧模式选中的声音条目必须有对应发声节拍，不能投影成 B0 或静默丢失',
+                            '%s[%s]' % (_collection,ref_uid(_unit))))
     return _p
 
 # ---------------------------------------------------------------------------

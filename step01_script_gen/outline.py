@@ -69,7 +69,7 @@ OUTLINE_PROMPT = """
                      "事实B｜原文证据：“原文原句”｜承载：B7/画面"],
   "causal_chain": ["起因→行动→结果→悬念"],
   "character_motives": ["角色：想做什么；为什么；原文证据：..."],
-  "shot_beats": ["节拍：...｜本镜信息目的：...｜原文依据：...｜载体：台词k 或 画面"],
+  "shot_beats": ["节拍：...｜本镜信息目的：...｜原文依据：...｜载体：台词k 或 旁白k 或 画面"],
   "dialogue_lines": ["逐字台词1（原文原话）", "逐字台词2"],
   "narration_lines": [{{"text": "<原文里的叙述原句，逐字照抄>",
                       "source": "<这句旁白出自的那一句原文，逐字照抄，且包含上面的正文>",
@@ -1661,6 +1661,8 @@ PLAN_FIX_CAPABILITY = {
     # 而载体与绑定正是视图层能改的（`upsert.screen_cards` + `fact_bindings`）——
     # 所以标 `view`，不标 `content`（后者会让这条记录看起来"接口表达不了"）。
     "verify_plan_coherence": ("view", "shot_beats"),
+    "view_binding_legacy_visual_mismatch": ("view", "presentation.fact_bindings"),
+    "view_voice_unit_unplaced": ("view", "shot_beats"),
     "verify_coherence_record": ("content", "plan_verification"),
     "verify_coherence_identity": ("content", "plan_verification"),
     "verify_coherence_evidence": ("content", "plan_verification"),
@@ -2010,7 +2012,7 @@ def replan_delta_schema_for_request(request: dict) -> dict:
     prevent unknown formal IDs before generation; new IDs retain the existing
     explicit ``new:`` contract. No baseline data or semantic rule is changed.
     """
-    from shared.presentation_contract import DELTA_ID_KEY
+    from shared.presentation_contract import DELTA_ID_KEY, fact_binding_policy
     schema = copy.deepcopy(REPLAN_DELTA_SCHEMA)
     props = schema["schema"]["properties"]
     for key in ("rule_version", "base_plan_hash", "fact_basis_hash"):
@@ -2029,8 +2031,9 @@ def replan_delta_schema_for_request(request: dict) -> dict:
         else:
             deleted["maxItems"] = 0
     facts = [fact["uid"] for fact in view["frozen_facts"]]
-    if view["mode"] == MODE_LEGACY:
-        props["fact_bindings"]["items"]["properties"]["carriers"]["maxItems"] = 1
+    carrier_limit=fact_binding_policy(view)['max_carriers']
+    if carrier_limit is not None:
+        props["fact_bindings"]["items"]["properties"]["carriers"]["maxItems"] = carrier_limit
     for key in ("fact_bindings", "evidence_updates"):
         if facts:
             props[key]["items"]["properties"]["fact_uid"] = {"type": "string", "enum": facts}
@@ -2547,8 +2550,11 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
         return None, "call_failed: %s" % _res.error, _cid, (evidence or {})
     _data = _parse_outline_json(_res.text)
     if not isinstance(_data, dict):
+        if evidence is not None:
+            evidence['failure_stage']='answer_parsing'
         return None, "槽位回答不是可解析的 JSON 对象", _cid, (evidence or {})
     if evidence is not None:
+        evidence['applied']=False
         _ans = _data.get("answers")
         evidence["response"] = {
             "shape": "slots" if str(_data.get("schema") or "") == _pcr.SLOT_ANSWER_SCHEMA
@@ -2559,6 +2565,7 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
     _pb = _pcr.answer_problems(_data, _slots, where="槽位回答")
     if _pb:
         if evidence is not None:
+            evidence['failure_stage']='answer_contract'
             evidence["slots_answer_problems"] = [str((x or {}).get("code")) for x in _pb]
         return None, _detail_vp(_pb), _cid, (evidence or {})
     # 新建画面的「原文依据」由代码从**已准入的核验记录**里取（逐字出自原文），
@@ -2572,6 +2579,7 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
                                      evidence_by_fact=_ev_by_fact)
     if _delta is None:
         if evidence is not None:
+            evidence['failure_stage']='slot_compilation'
             evidence["slots_compile_problems"] = [str((x or {}).get("code")) for x in _cp]
         return None, _detail_vp(_cp), _cid, (evidence or {})
     if evidence is not None:
@@ -2586,9 +2594,13 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
     if _kind == "no_change":
         return None, "no_change", _cid, evidence
     if _kind == "illegal":
+        if evidence is not None:
+            evidence['failure_stage']='delta_application'
         return None, _detail_vp(_probs) or "编译出的增量被拒收（形状/基线/引用/保护边界）",             _cid, evidence
     _new, _final_problems = complete_candidate(_cand_view, novel_text, verification, verify_axes=verify_axes)
     if _new is None:
+        if evidence is not None:
+            evidence['failure_stage']='candidate_projection'
         return None, "候选无法投影成计划：%s" % _detail_vp(_final_problems), _cid,             (evidence or {})
     _new["plan_revision"] = {
         "schema": _pcr.SLOT_REQUEST_SCHEMA, "transport_protocol": _pcr.SLOT_REQUEST_SCHEMA,

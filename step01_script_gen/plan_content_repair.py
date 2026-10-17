@@ -31,7 +31,7 @@ import re
 #: 请求 / 响应的**显式版本**（调用方按它选路，不按响应形状猜）
 SLOT_REQUEST_SCHEMA = "plan_content_repair.request.v1"
 SLOT_ANSWER_SCHEMA = "plan_content_repair.answer.v1"
-REPAIR_RULE_VERSION = "plan_content_repair.v1"
+REPAIR_RULE_VERSION = "plan_content_repair.v2.binding_policy"
 
 #: 首批覆盖的四类动作（§5.6 第 1 条）
 ACT_REWRITE = "rewrite_visual"
@@ -240,6 +240,8 @@ def content_slots(view, problems) -> dict:
     _blocked: list = []
     _covered: list = []
     _beats = _beat_uids(view)
+    from shared.presentation_contract import selectable_visual_beat_uids
+    _visual_targets=selectable_visual_beat_uids(view)
     _events = [str(_e) for _e in (view or {}).get("frozen_events") or []]
     for _p in (problems or []):
         _code = str((_p or {}).get("code") or "")
@@ -301,9 +303,9 @@ def content_slots(view, problems) -> dict:
             "problem_codes": _codes,
             "claim": str(_f.get("claim") or ""),
             "evidence": str(_f.get("evidence") or ""),
-            "allowed_actions": [ACT_CREATE, ACT_BIND, ACT_REWRITE],
+            "allowed_actions": [ACT_CREATE]+([ACT_BIND, ACT_REWRITE] if _visual_targets else []),
             # 补绑/重写都只能在**现有画面**里选；补建只能插在现有节拍之后（"" = 末尾）
-            "target_uids": list(_beats), "insert_positions": [""] + list(_beats),
+            "target_uids": list(_visual_targets), "insert_positions": [""] + list(_beats),
             "current_carriers": list(_cur),
             "facts": [_fact_brief(view, _uid)],
             "event_uids": list(_events), "sources": [str(_f.get("evidence") or "")],
@@ -468,9 +470,25 @@ def slot_request(view, slots, *, limits=None, remaining_calls=None,
     联合承载时模型要同时看到画面、卡片、对白/旁白的**真实正文**，才能决定"缩短哪一部分
     仍然保得住这条主张"（复核 2026-10-08 P1）。
     """
-    from shared.presentation_contract import fact_basis_digest, view_digest
+    from shared.presentation_contract import fact_basis_digest, view_digest, fact_binding_policy
     from step01_script_gen.plan_feasibility import planning_resource_context
-    _ent, _blocked = _request_entities(view, slots)
+    from shared.presentation_contract import ref_uid
+    targets={("screen_card" if slot.get('kind')=='card_text' else "visual",str(uid))
+             for slot in (slots or []) for uid in slot.get('target_uids',[])}
+    requested={fact['uid'] for fact in _request_facts(slots)}
+    protected=[]
+    for binding in (view or {}).get('fact_bindings',[]):
+        uid=str(binding.get('fact_uid') or '')
+        if uid not in requested and any((ref.get('kind'),ref_uid(ref)) in targets
+                                       for ref in binding.get('carriers',[]) if isinstance(ref,dict)):
+            protected.append(_fact_brief(view,uid))
+    hook=(view or {}).get('hook_bindings') or {}
+    protected_hook=hook if any((ref.get('kind'),ref_uid(ref)) in targets
+                              for ref in hook.get('carriers',[]) if isinstance(ref,dict)) else {}
+    context_slots=list(slots or [])+[{'facts':protected}]
+    if protected_hook:
+        context_slots.append({'facts':[{'uid':'hook','carriers':hook.get('carriers',[])}]})
+    _ent, _blocked = _request_entities(view, context_slots)
     _bindings: list = []
     _seen_facts: set = set()
     for _s in slots or []:
@@ -488,6 +506,10 @@ def slot_request(view, slots, *, limits=None, remaining_calls=None,
         "resources": planning_resource_context(view),
         "frozen_facts": _request_facts(slots),
         "current_bindings": _bindings,
+        "binding_policy": fact_binding_policy(view),
+        "protected_facts":protected,
+        "protected_hook":({'claim':(view.get('plan_basis') or {}).get('end_hook'),
+                           'bindings':protected_hook} if protected_hook else {}),
         "frozen_events": [str(_e) for _e in (view or {}).get("frozen_events") or []],
         "existing_beats": [_beat_brief(view, _u) for _u in _ent["beats"]],
         "existing_cards": [_card_brief(view, _u) for _u in _ent["cards"]],
@@ -558,8 +580,14 @@ def slot_prompt(request, novel_text: str = "") -> str:
     """请求 → 实际发出的提示（正文块 + 选择规则 + 槽位表）."""
     _body = json.dumps(request, ensure_ascii=False, indent=1)
     _head = ("# 原文（冻结，不许改）\n%s\n" % novel_text) if novel_text else ""
-    return ("%s\n# 槽位请求（只在这些集合里选）\n%s\n%s"
-            % (_head, _body, _SLOT_RULE))
+    policy=request.get('binding_policy') or {}
+    rule=('本次每项事实只允许一个载体。所选画面将替换该事实原有绑定，'
+          '因此画面正文须完整表达整条主张，不能依赖被替换的声音载体补足。'
+          if policy.get('selection')=='replace' else
+          '所选画面加入该事实原有载体，按联合承载保留其他绑定。')
+    rule+=' protected_facts 和 protected_hook 是可选目标还承载的其他内容；改写目标必须保留其完整主张和核心关系。'
+    return ("%s\n# 槽位请求（只在这些集合里选）\n%s\n%s\n%s"
+            % (_head, _body, _SLOT_RULE,rule))
 
 
 def _is_str(value) -> bool:
@@ -789,7 +817,7 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
     """
     from shared.presentation_contract import (DELTA_RULE_VERSION, DELTA_SCHEMA,
                                               KIND_VISUAL, fact_basis_digest,
-                                              view_digest)
+                                              view_digest, fact_binding_policy)
     _p: list = []
     _by_id = {str(_s.get("slot_id")): _s for _s in (slots or [])}
     _items = {str(_i.get("slot_id")): _i
@@ -897,6 +925,9 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
         if _beat is None or not _fu:
             continue
         _b = _binding(_fu)
+        if fact_binding_policy(view)['selection']=='replace':
+            _b['carriers']=[{'kind':KIND_VISUAL,'beat_uid':str(_beat.get('uid') or '')}]
+            continue
         _exists = any(isinstance(_c, dict) and str(_c.get("kind") or "") == KIND_VISUAL
                       and str(_c.get("beat_uid") or _c.get("uid") or "")
                       == str(_beat.get("uid") or "")

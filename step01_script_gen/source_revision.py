@@ -114,7 +114,7 @@ def prompt(view):
         '在额外顶层 source_preservation 回答，严格使用以下 schema：'
         +json.dumps(PRESERVATION_SCHEMA,ensure_ascii=False)+'\n基线及授权：'
         +json.dumps(ctx,ensure_ascii=False)+'\n当前核心摘要：'+json.dumps(current,ensure_ascii=False)
-        +'\n当前完整事实：'+json.dumps(view.get('frozen_facts'),ensure_ascii=False))
+        +'\n当前事实采用前面逐项给出的完整冻结主张。')
 
 
 def eligible_targets(plan):

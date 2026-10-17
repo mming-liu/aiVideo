@@ -116,6 +116,18 @@ def step02b_quality_file(chapter: int | None = None) -> Path:
     return chapter_dir(chapter) / "step02b_quality.json"
 
 
+#: step02b 生成期**派生指标**（每镜实际时长 / 与期望时长的偏差）的 sidecar 文件名。
+#:
+#: 为什么不写回 `script_result.json`：它是 step01 的**已提交正式产物**，
+#: `step01_commit.json` 锁着它的 SHA1，下游每个阶段入口都核
+#: （`shared.quality_gate.verify_step01_commit_manifest`）。运行期派生数据一旦回写，
+#: 摘要即失配 ⇒ step02b 跑成功之后 step03/step04 与任何重跑都被判
+#: `artifact changed after commit` 拒收（跨阶段硬阻断）。派生数据落 sidecar，
+#: 正式产物保持字节级只读。sidecar 与它描述的产物**同目录**（由 `script_file()`
+#: 定目录 + 本常量定文件名），不另拼目录层级。
+STEP02_VIDEO_METRICS_FILENAME = "step02_video_metrics.json"
+
+
 def step01_log_file(chapter: int | None = None) -> Path:
     """step01 日志文件路径（全库唯一来源，禁止各处自行拼 `chapter_dir()/step01.log`）.
 

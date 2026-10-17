@@ -3727,8 +3727,9 @@ from step01_script_gen.gap_analysis import _locate_narration_in_novel  # noqa: F
 def _strip_runtime_fields(obj):
     """递归剥掉 dict 下划线开头的 key（运行时数据，不入盘）.
 
-    与 step02a_frame_gen.main._strip_runtime_fields 同约定：下划线开头键 =
-    「不入盘」信号（_run_metadata/_merge_candidate/_qc_last 等只留在内存）。
+    下划线开头键 = 「不入盘」信号（_run_metadata/_merge_candidate/_qc_last 等
+    只留在内存）。本函数现为**单源实现**：step02a 的同名副本已随它唯一服务的
+    那段「回写 script_result.json」一并移除（2026-10 复核 P0，已提交产物只读）。
     v6.63.1：step01 落盘时统一剥——此前只有 step02a 回写时才剥，
     _run_metadata 会泄进 script_result.json。
     """
@@ -11351,9 +11352,9 @@ def main() -> None:
             )
         elif _quality.get("blocking"):
             _logger.warn(
-                f"[QUALITY-GATE] BLOCK: hard={_quality.get("hard_count", 0)}, "
-                f"visual={_quality.get("visual_risk_count", 0)}; "
-                f"categories={_quality.get("blocking_categories", [])}"
+                f"[QUALITY-GATE] BLOCK: hard={_quality.get('hard_count', 0)}, "
+                f"visual={_quality.get('visual_risk_count', 0)}; "
+                f"categories={_quality.get('blocking_categories', [])}"
             )
             _console("  [QUALITY-GATE] BLOCK: 仍有生图阻塞告警，见 step01_quality.json")
         else:

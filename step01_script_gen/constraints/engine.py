@@ -24,6 +24,32 @@ from .context import ConstraintContext
 from .base import Constraint
 
 
+# 环境故障类型：约束**根本没跑**，而不是「跑了但内容不合规」。
+# 这类异常以前被宽 `except Exception` 吞掉、只留一行 warn，调用方拿到的 report
+# 看起来完全正常——**约束静默消失且无人知道**。实测形态（2026-10 复核）：
+# `constraints/frame_anchor_rebuild.py` → `shared.vimax_bridge`
+# → `vimax.interfaces.{camera,character,...}` → `from pydantic import field_validator`；
+# 环境缺 `pydantic>=2` 时该约束整轮不执行，画面锚定块不再重建，落盘稿却打 PASS。
+# 失败要显式：与质量门/台词门同口径 fail-closed，禁止靠默认关闭或 warn 证明门禁闭环。
+ENV_FAULT_TYPES = (ImportError, SyntaxError, NameError)
+
+
+def _raise_env_fault(where: str, exc: BaseException) -> None:
+    """环境故障显式上报（先留可定位的一行 ERROR，再原样抛出保留原始 traceback）."""
+    try:
+        from shared.tee_logger import get_logger
+        _log = get_logger()
+        if _log is not None:
+            _log.error(
+                f"[CONSTRAINT] {where} 无法执行：环境故障 {type(exc).__name__}: {exc}"
+                f"——该约束本轮**没有生效**，禁止带着缺失的修复继续（fail-closed）"
+            )
+    except Exception:
+        # 日志不可用时也必须抛；这里只保证「先留痕」尽力而为，不改变失败语义
+        pass
+    raise exc
+
+
 # ============================================================================
 # 全局注册表（Phase 2+ 逐个填入 29 个 Constraint 子类）
 # ============================================================================
@@ -70,6 +96,10 @@ def apply_constraints(
             if on_constraint_done is not None:
                 on_constraint_done(c.name, ctx.script)
         except Exception as e:
+            # 环境故障 = 约束没跑 ⇒ 显式失败；约束自身的逻辑异常仍按原语义
+            # 「保留原版 + warn」继续（那是内容/实现问题，不该让整章崩掉）。
+            if isinstance(e, ENV_FAULT_TYPES):
+                _raise_env_fault(f"约束 {c.name}", e)
             try:
                 from shared.tee_logger import get_logger
                 get_logger().warn(f"[CONSTRAINT] {c.name} 异常: {e}")
@@ -246,6 +276,10 @@ def run_hard_fix(
         # 消费，`regen_trigger` 的 LLM 能力保留给显式调用方与测试。
         return (script, report) if return_report else script
     except Exception as e:
+        # 环境故障一路向上抛（见 ENV_FAULT_TYPES）：硬修复层整体没跑却返回
+        # 「原版 + 空 report」，等于把「什么都没修」伪装成「无需修复」。
+        if isinstance(e, ENV_FAULT_TYPES):
+            _raise_env_fault("硬修复层（run_hard_fix）", e)
         try:
             from shared.tee_logger import get_logger
             get_logger().warn(f"[CONSTRAINT] 新框架失败: {e}，保留原版")

@@ -4,7 +4,9 @@
 - _find_ffprobe(): 查找 ffprobe
 - _measure_media_duration(): 测量媒体时长
 - _measure_actual_duration(): 测量视频实际时长
-- _update_script_with_actual_durations(): 回填实际时长到 JSON
+- collect_actual_durations(): 汇总实际时长派生指标（只读 script，不落盘）
+- write_actual_durations_metrics(): 派生指标落 step02_video_metrics.json sidecar
+  （**不写回 script_result.json**——那是 step01 已提交产物，见 shared/paths.py）
 
 ⚠️ 2026-08 架构变更：step02 已不再调用本模块的 TTS 预生成（对话交给视频模型，
 视频时长由 shot["duration_sec"] 驱动）。原 _gen_shot_audio_duration（TTS 音频时长）
@@ -82,42 +84,74 @@ def _measure_actual_duration(video_path: Path) -> float:
     return 0.0
 
 
-def _update_script_with_actual_durations(working_dir: Path, script_path: Path) -> None:
-    """测量所有已生成视频的实际时长，回填到 script_Result.json."""
+def collect_actual_durations(working_dir: Path, script: dict) -> dict:
+    """测量所有已生成视频的实际时长 → 派生指标（**只读 script，不落盘**）.
+
+    返回 ``{"shots": {"<idx>": {...}}, "updated_count": n, "total_actual_duration": t}``。
+    期望时长基准是 `duration_sec`（step01 timecode 权威计算），缺字段时按 `duration`
+    回退，两者都缺则**不记偏差**——旧实现缺字段静默退回 5 秒，时长偏差基准全错
+    （2026-09-13 审计）。缺 shots 目录或视频时返回空指标，不抛。
+    """
     from shared.paths import SHOT_VIDEO_FILENAME
+    metrics: dict = {"shots": {}, "updated_count": 0, "total_actual_duration": 0.0}
     shots_dir = working_dir / "shots"
     if not shots_dir.exists():
-        print("[WARN] shots 目录不存在，跳过时长回填")
-        return
+        print("[WARN] shots 目录不存在，跳过时长测量")
+        return metrics
 
-    # 读取现有脚本
-    script = load_script(script_path)
-    shots = script.get("shots", [])
-    updated_count = 0
-
-    for shot in shots:
+    total = 0.0
+    for shot in script.get("shots", []) or []:
         idx = shot.get("index", 0)
         video_path = shots_dir / str(idx) / SHOT_VIDEO_FILENAME
-        if video_path.exists():
-            actual_duration = _measure_actual_duration(video_path)
-            if actual_duration > 0:
-                shot["actual_duration"] = round(actual_duration, 2)
-                # 2026-09-13 审计修复：期望时长用权威字段 duration_sec（step01
-                # timecode 权威计算）；此前用 shot.get("duration", 5)，字段名不对
-                # 且缺字段静默退回 5 秒，时长偏差统计基准全错。缺失时跳过偏差统计。
-                audio_ref = shot.get("actual_audio_duration", 0)
-                expected = audio_ref if audio_ref > 0 else (
-                    shot.get("duration_sec") or shot.get("duration") or 0
-                )
-                if expected > 0:
-                    deviation = abs(actual_duration - expected) / expected * 100
-                    shot["duration_deviation_pct"] = round(deviation, 1)
-                else:
-                    shot.pop("duration_deviation_pct", None)
-                updated_count += 1
+        if not video_path.exists():
+            continue
+        actual_duration = _measure_actual_duration(video_path)
+        if actual_duration <= 0:
+            continue
+        entry = {"actual_duration": round(actual_duration, 2)}
+        audio_ref = shot.get("actual_audio_duration", 0)
+        expected = audio_ref if audio_ref > 0 else (
+            shot.get("duration_sec") or shot.get("duration") or 0
+        )
+        if expected > 0:
+            entry["expected_duration"] = round(float(expected), 3)
+            entry["duration_deviation_pct"] = round(
+                abs(actual_duration - expected) / expected * 100, 1)
+        metrics["shots"][str(idx)] = entry
+        metrics["updated_count"] += 1
+        total += actual_duration
+    metrics["total_actual_duration"] = round(total, 2)
+    return metrics
 
-    if updated_count > 0:
-        # 原子写：防半截 JSON（2026-09-13 审计修复，收敛 shared.json_io）
-        from shared.json_io import atomic_dump_json
-        atomic_dump_json(script_path, script, ensure_ascii=False, indent=2)
-        print(f"[INFO] 已回填 {updated_count} 个镜头实际时长")
+
+def write_actual_durations_metrics(working_dir: Path, script_path: Path) -> Path | None:
+    """把实际时长派生指标落到 ``step02_video_metrics.json`` sidecar.
+
+    **不写回 `script_result.json`**（2026-10 复核 P0）：那是 step01 的已提交正式产物，
+    `step01_commit.json` 锁着它的 SHA1，下游每个阶段入口都核
+    （`shared.quality_gate.verify_step01_commit_manifest`）。旧实现把
+    `actual_duration` / `duration_deviation_pct` 直接写回该文件，于是 step02b 一旦
+    生成过视频，step03/step04 与任何重跑都会被判 `artifact changed after commit`。
+
+    sidecar 与产物同目录、与产物身份同批（记 `script_revision`），因此核摘要时
+    正式产物仍逐字节不变。无可用测量结果时不写文件，返回 None。
+    """
+    from shared.paths import STEP02_VIDEO_METRICS_FILENAME
+    from shared.json_io import atomic_dump_json
+
+    script = load_script(script_path)
+    metrics = collect_actual_durations(working_dir, script)
+    if metrics["updated_count"] <= 0:
+        print("[WARN] 无可用实际时长，未写 step02 视频指标 sidecar")
+        return None
+
+    payload = {
+        "schema_version": 1,
+        "script_revision": script.get("script_revision"),
+        "chapter_index": script.get("chapter_index"),
+        **metrics,
+    }
+    out = Path(script_path).parent / STEP02_VIDEO_METRICS_FILENAME
+    atomic_dump_json(out, payload, ensure_ascii=False, indent=2)
+    print(f"[INFO] 已记录 {metrics['updated_count']} 个镜头的实际时长 → {out.name}")
+    return out

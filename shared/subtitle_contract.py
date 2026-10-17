@@ -201,7 +201,14 @@ def _legacy_cues_for_shot(index: int, shot, dur: float, clip_windows, speech_dur
             start_sec=part_start, end_sec=part_end,
             shot_index=shot_index, source="legacy", part_index=j))
         temp_start = part_end
-    return cues, part_end
+    # v2026-10 复核：时间轴推进必须用本镜**真实结束**（`end`），不能用最后一段字幕的
+    # 结束（`part_end`）。`part_end` 只累加 `subtitle_duration = min(dur, speech_duration)`，
+    # 一旦说话短于镜头（`speech_duration < dur`），后续所有镜头的 cue 起点会被整体前移，
+    # 形成累积漂移。同函数的单段分支（`:189`）与无字幕分支（`:170`）本来就返回 `end`——
+    # 只有多段分支偏离，属实现不一致而非设计差异（旧 `srt_gen.py:161` 的
+    # `end = part_end; current_time = end` 在重构时被原样搬到这里）。
+    # 注意：**cue 自身的时窗仍按 `part_end`**（上一条 append 不变），只改时间轴推进。
+    return cues, end
 
 
 def cues_from_shots(shots, durations, clip_windows=None, speech_durations=None,

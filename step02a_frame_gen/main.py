@@ -128,53 +128,40 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
             f"[ERROR] 本轮 {len(failed)} 个镜头帧生成失败（部分失败，非全量成功）: "
             f"{sorted(failed)}——下游 step02b 对缺帧镜头自行按其帧计划处理")
 
-    # v6.18：gen_shot_frames 内归一化会回写 shot["ff_desc"]（多动作→静态瞬间），
-    # 落盘让 script_result.json 反映真实用于生图的文本，也保证 step02b 读到
-    # 归一化后的 ff_desc（【视频起点】一致）。只在有归一化发生时落盘。
+    # v6.18 归一化发生在 gen_shot_frames 内（多动作/进行态 → 单一静态瞬间），但
+    # **不得回写 `script_result.json`**（2026-10 复核 P0）：它是 step01 的已提交正式
+    # 产物，`step01_commit.json` 锁着它的 SHA1，下游每个阶段入口都核
+    # （`shared.quality_gate.verify_step01_commit_manifest`）。运行期回写 ⇒ 摘要失配
+    # ⇒ step02a 之后 step02b/step03/step04 与任何重跑都被判
+    # `artifact changed after commit` 拒收（跨阶段硬阻断）。
+    #
+    # 一致性**不依赖落盘**：归一化是确定性的（`shared.style_prefix.normalize_ff_desc`，
+    # 幂等），每个消费点都在使用时各跑一次（生图与 step02b 组装视频提示同走
+    # `step02_video_gen/prompt_builder`），所以磁盘上保留 step01 的字节即可。
+    # 这里只比对并留痕，不写盘。
     with open(script_path, "r", encoding="utf-8") as f:
         on_disk = json.load(f)
-    changed = False
+    _normalized_in_memory = []
     disk_shots = {s.get("index"): s.get("ff_desc") for s in on_disk.get("shots", [])}
     for s in script.get("shots", []):
         if s.get("ff_desc") != disk_shots.get(s.get("index")):
-            changed = True
-            break
-    disk_hook = (on_disk.get("hook") or {}).get("ff_desc")
-    if (script.get("hook") or {}).get("ff_desc") != disk_hook:
-        changed = True
-    if changed:
-        # v6.x.x fix：shot["_qc_last"] 等下划线开头字段是运行时数据（QcResult dataclass），
-        # 不可 JSON 序列化；sidecar 已单独落 *_hallucination.json + _qc_log.json，
-        # 此处只持久化业务字段。下划线开头键 = 约定俗成的"不入盘"信号。
-        # v6.x.x.x 二次修：atomic write 避免 dump 中途抛错污染原文件（08-30 实抽
-        # 暴露：上次崩在 _qc_last 写入中，文件被截断到 L1326 损坏）。
-        _atomic_dump_json(
-            script_path,
-            _strip_runtime_fields(script),
-            default=lambda o: o.__dict__ if hasattr(o, "__dict__") else str(o),
+            _normalized_in_memory.append(s.get("index"))
+    if (script.get("hook") or {}).get("ff_desc") != (on_disk.get("hook") or {}).get("ff_desc"):
+        _normalized_in_memory.append(0)
+    if _normalized_in_memory:
+        logger.info(
+            "[INFO] ff_desc 归一化仅作用于内存（镜头 %s）：script_result.json 是 step01 "
+            "已提交产物，保持只读；各消费点在使用时自行归一化"
+            % sorted(k for k in _normalized_in_memory if k is not None)
         )
-        logger.info("[INFO] ff_desc 归一化已回写 script_result.json")
 
     return results
 
 
-def _strip_runtime_fields(obj):
-    """递归剥掉 dict 下划线开头的 key（运行时数据，不入盘）.
-
-    list 内元素递归处理；非 dict/list 叶子直接返回。
-    """
-    if isinstance(obj, dict):
-        return {k: _strip_runtime_fields(v) for k, v in obj.items()
-                if not (isinstance(k, str) and k.startswith("_"))}
-    if isinstance(obj, list):
-        return [_strip_runtime_fields(v) for v in obj]
-    return obj
-
-
-def _atomic_dump_json(path, obj, **kwargs):
-    """原子写 JSON（2026-09-13 收敛到 shared.json_io，保留本地别名兼容调用点）."""
-    from shared.json_io import atomic_dump_json
-    atomic_dump_json(path, obj, **kwargs)
+# 2026-10 复核 P0：本模块原有的 `_strip_runtime_fields` 与 `_atomic_dump_json` 只服务于
+# 上面那段「把归一化结果回写 script_result.json」。回写已按「已提交产物字节级只读」
+# 契约移除，两个本地帮助函数随之删除——留着等于给「再写一次已提交产物」留好路。
+# step01 的 `_strip_runtime_fields` 仍在：它写的是自己的正式产物，且提交前要自验摘要。
 
 
 def _log_shot_frames(idx: int, result: dict, logger):

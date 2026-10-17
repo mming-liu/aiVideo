@@ -5,6 +5,19 @@ pysrt>=1.1.2
 ffmpeg-python>=0.2.0
 Pillow>=12.3.0            # _video_gen/agnes_provider.py 图片压缩编码（裸 base64 前处理）
 
-# TTS 语音合成
+# 模型接口 / 结构化校验
+# pydantic：**硬依赖，非可选**。vimax/interfaces/*.py 模块级 `from pydantic import
+# field_validator`（v2 API），而 shared/vimax_bridge.py 在模块级导入 vimax.interfaces。
+# 缺 v2 时该导入链失败，进而让只用到纯字符串函数的约束（frame_anchor_rebuild）静默
+# 失效——修复栈少跑一条却不报错。engine.py 现已对这类环境故障 fail-closed。
+pydantic>=2.0.0
+PyYAML>=6.0                # 约束 DSL 注册表（step01_script_gen/constraints/dsl/loader.py）
+tenacity>=8.2.0            # vimax/utils/retry.py 模块级导入（重试策略）
+
+# 供应商 SDK（按启用通道取用）
 dashscope>=1.26.0          # dashscope_sdk / dashscope_http 供应商必需
-# openai                 # openai / openai_compat 供应商可选
+openai>=1.0.0              # openai / openai_compat 供应商（_text_gen/deepseek_provider.py）
+
+# 可选媒体能力（代码内 try-import 降级；启用对应功能时必需）
+opencv-python>=4.8.0       # vimax/utils/image.py、vimax/interfaces/image_output.py
+moviepy>=1.0.3             # vimax/utils/video.py 视频拼接

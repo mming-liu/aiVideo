@@ -121,7 +121,7 @@ def prompt(view):
     units={u['uid']:u['text'] for key in ('dialogue_units','narration_units') for u in view.get(key,[])}
     rows=[]
     for beat in view['beats']:
-        rows.append(dict(beat))
+        rows.append({key:beat.get(key) for key in ('uid','text','voice_ref')})
     return ('\n\n# 必答：整份计划的前后依赖（coherence）\n'
         '下面是完整有序节拍及声音正文。信息目的等声明不能代替实际动作与台词。独立核对时间、因果、主体在场和问答前提；'
         '逐条事实正确不代表整份计划可执行。缺少必要前提或先后颠倒须判负；'

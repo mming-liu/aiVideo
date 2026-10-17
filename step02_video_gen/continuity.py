@@ -124,7 +124,11 @@ class ContinuityTracker:
       shot < MODE_B_START_INDEX (0/1) -> Mode A（并行，无依赖）
       shot >= MODE_B_START_INDEX (2+) -> Mode B（串行，等上一个视频尾帧）
 
-    单章级生命周期：在 generate_alls() 开始时创建，结束时销毁。
+    单章级生命周期：在 `generate_alls()` 开始时创建，结束时销毁。
+
+    ⚠️ 2026-10 复核：`generate_alls()`（旧的 Mode A/B 双模调度入口）已作为死代码删除，
+    现行 `step02b_video_gen.gen_all_videos` **不做双模调度、不提取尾帧**，故本类
+    目前**不再被实例化**；`load_meta` 等只读接口保留供旧产物诊断使用。
     """
 
     def __init__(self, working_dir: Path | str):

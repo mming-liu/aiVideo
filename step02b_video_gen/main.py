@@ -82,8 +82,10 @@ async def gen_all_videos(script: dict, working_dir: Path, script_file_path: Path
     log_dir = chapter_dir()
     logger = get_logger((log_path or (log_dir / "step02b.log")), console_level="INFO")
 
-    # 2026-09-13 审计修复：入口清空失败记录——旧入口 generate_alls() 会清，
-    # 本入口不清，同进程复用/测试/工具调用会累计上一轮旧失败
+    # 2026-09-13 审计修复：入口清空失败记录——旧的 `generate_alls()` 入口会清，
+    # 本入口当初不清，同进程复用/测试/工具调用会累计上一轮旧失败。
+    # （`generate_alls()` 已于 2026-10 复核作为死代码删除；本行保留，因为它解决的是
+    #  「同进程复用会累计旧失败」这个问题本身，与新入口是否是唯一入口无关。）
     _failed_videos.clear()
 
     shots = script.get("shots", [])
@@ -661,17 +663,20 @@ def main(options=None):
         logger.error(f"[VIDEO-PRODUCT] product acceptance failed: {_pq_err}")
         raise
 
-    # 将可能回填的字段写回 script（原子写，防半截 JSON；2026-09-13 审计修复）
-    from shared.json_io import atomic_dump_json
-    atomic_dump_json(script_path, script, ensure_ascii=False, indent=2)
-
-    # 2026-09-13 审计修复：回填实际视频时长（actual_duration / duration_deviation_pct）
-    # ——此前注释承诺但从未调用，元数据契约缺失
+    # `script_result.json` 是 step01 的**已提交正式产物**，`step01_commit.json` 锁着它的
+    # SHA1，下游每个阶段入口都核（`shared.quality_gate.verify_step01_commit_manifest`）。
+    # 此处原为**无条件**原子回写，且写的是带运行时字段的 `script`（未剥下划线键）——
+    # 一旦回写，摘要即失配：step02b 跑成功之后 step03/step04 与任何重跑都被判
+    # `artifact changed after commit` 拒收。生成期派生数据一律落 sidecar，
+    # 正式产物保持字节级只读（2026-10 复核 P0）。
+    #
+    # 2026-09-13 审计要求的「实际视频时长」元数据保留，但改记到
+    # `step02_video_metrics.json`。
     try:
-        from step02_video_gen.audio_pregen import _update_script_with_actual_durations
-        _update_script_with_actual_durations(work_dir, script_path)
+        from step02_video_gen.audio_pregen import write_actual_durations_metrics
+        write_actual_durations_metrics(work_dir, script_path)
     except Exception as e:
-        logger.warn(f"[WARN] 实际时长回填失败（不影响已生成视频）: {e}")
+        logger.warn(f"[WARN] 实际时长指标落盘失败（不影响已生成视频）: {e}")
 
     logger.info(f"\n[INFO] step02b_video_gen done! Failed: {failed}")
 
