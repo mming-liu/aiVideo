@@ -2932,16 +2932,20 @@ def _hook_spoken_field_problems(plan) -> list:
     return _legacy_problems(_hook_spoken_field_records(plan))
 
 
-def plan_contract_problems(plan, *, novel_text: str = "") -> list:
+def plan_contract_problems(plan, *, novel_text: str = "",
+                          require_verification: bool = True) -> list:
     """兼容转发：旧接口的**问题文案清单**（由 `plan_contract_records` 渲染）.
 
     新链（`outline.plan_acceptance_problems`）直接消费 `plan_contract_records`
     的结构化记录；这里保留旧形态给既有调用方与日志。
     """
-    return _legacy_problems(plan_contract_records(plan, novel_text=novel_text))
+    return _legacy_problems(plan_contract_records(
+        plan, novel_text=novel_text,
+        require_verification=require_verification))
 
 
-def plan_contract_records(plan, *, novel_text: str = "") -> list:
+def plan_contract_records(plan, *, novel_text: str = "",
+                        require_verification: bool = True) -> list:
     """**计划契约**验收：必保留事实与钩子是否有**有效承载**；返回问题清单（空=通过）.
 
     2026-09-30 复核裁决：承载关系必须是**计划的一部分**，在生成前的统一入口核对——
@@ -2966,7 +2970,8 @@ def plan_contract_records(plan, *, novel_text: str = "") -> list:
     # 只是显示，不另作权威判据。v5 走下面的旧路径，一个字都不改。
     if _plan_contract_version(plan) >= PRESENTATION_MIN_VERSION:
         return presentation_records(plan, novel_text=novel_text,
-                                    verification=(plan or {}).get("plan_verification"))
+                                verification=(plan or {}).get("plan_verification"),
+                                require_verification=require_verification)
     from shared.fact_metadata import LEGACY_ACCEPTANCE_FIELD, LEGACY_ACCEPTANCE_VERSION
     _semantic = LEGACY_ACCEPTANCE_FIELD in plan
     if _semantic and plan[LEGACY_ACCEPTANCE_FIELD] != LEGACY_ACCEPTANCE_VERSION:
@@ -3194,11 +3199,13 @@ def plan_contract_records(plan, *, novel_text: str = "") -> list:
             "钩子没要求说出口的那句不要写进承载声明（纯画面钩子请给空串）"
             % (_extra, sorted(_required) or "（无）"))
     if _semantic:
-        problems.extend(_semantic_verification_records(plan, novel_text))
+            problems.extend(_semantic_verification_records(
+                plan, novel_text, require_verification=require_verification))
     return problems
 
 
-def _semantic_verification_records(plan, novel_text):
+def _semantic_verification_records(plan, novel_text,
+                                require_verification: bool = True):
     """Both presentation modes share the independent semantic record contract."""
     from shared.presentation_contract import view_from_plan
     from shared.content_verification import verification_problems, verification_context_of
@@ -3209,6 +3216,11 @@ def _semantic_verification_records(plan, novel_text):
     bad, table = verification_context_of(plan, view)
     if bad:
         return bad
+    if not require_verification:
+        # 应用阶段：**核验上下文**准入已由上面的 `verification_context_of`
+        # 判过，这里只跳过"必须已有记录"这一步——记录由统一候选出口在候选
+        # 定稿后绑定。完整验收（默认 True）行为不变，仍严格要求记录。
+        return []
     return verification_problems(plan.get("plan_verification"), view, plan=plan,
                                  decomposition=table, novel_text=novel_text,
                                  novel_digest=novel_identity(novel_text)["digest"]
@@ -4903,7 +4915,8 @@ def _dump(chapter_dir, rep: dict, plan=None, *, no_verdict: bool = False,
 # ---------------------------------------------------------------------------
 # 版本 6（`screen_hybrid`）：读**结构化关系**的计划契约验收（主专题 §2/§3.3）
 # ---------------------------------------------------------------------------
-def presentation_records(plan, *, novel_text: str = "", verification=None) -> list:
+def presentation_records(plan, *, novel_text: str = "", verification=None,
+                         require_verification: bool = True) -> list:
     """v6 计划契约验收：**只核形状、引用、出处、时长与证据完整性**.
 
     语义（"这段正文是否完整表达了这条事实"）**不在这里判**——那是 `shared.content_verification`
@@ -5113,7 +5126,39 @@ def presentation_records(plan, *, novel_text: str = "", verification=None) -> li
             _add("presentation_hook_spoken_lost", "hook", None, "hook_spoken",
                  "`hook_spoken` 有内容但计划里没有对白——钩子要求说出口的台词不能失去")
 
-    # 内容核验记录（R4）：缺记录不得判通过
+    # 内容核验：拆成**确定性上下文准入**与**记录准入**两步（工作包②职责拆分）。
+    #
+    # - 上下文准入（`verification_context_of`）**两模式都跑**，与有没有记录无关：
+    #   它判的是"这份候选声明的核验上下文本身是否合法"，属确定性判据。
+    # - 记录准入由 `require_verification` 决定：
+    #   · True（完整验收，**默认**）：无记录 ⇒ 拒收；**带旧摘要记录** ⇒ 仍走记录检查
+    #     （摘要/身份不符照样拒）；
+    #   · False（应用阶段）：只跳过"必须已有记录"这一步，不跳过上下文与确定性契约。
+    from shared.content_verification import verification_context_of, verification_problems
+    _ctx_bad, _tbl = verification_context_of(plan, _view)
+    problems.extend(_ctx_bad)
+    if not require_verification:
+        # 应用阶段：上下文准入已判完，**记录准入整段跳过**——无记录与**旧摘要记录**
+        # 一视同仁（旧记录也不能让应用阶段执行最终核验检查）。统一候选出口会在候选
+        # 定稿后绑定记录，届时按完整验收再判。
+        return problems
+    if verification is None:
+        _add("verify_record_missing", "verification", None, "plan_verification",
+             "新模式计划的**内容核验记录**缺失——确定性判据只核形状/引用/出处/时长，"
+             "完整支持关系必须由独立核验给出（缺记录不得判通过）")
+    elif not _ctx_bad:
+        # 上下文坏 ⇒ **只报上下文问题**（fail-closed）。不要顺手按根义务再判一遍：
+        # 那会给一份分量记录报出一串"自造条目"，把真正的原因（上下文不合法）盖住。
+        # ⚠️ **最终验收与缓存/控制器用同一份上下文**（复核 r6 §4.2 第四处入口）。
+        _novel_dig = None
+        if str(novel_text or ""):
+            from step01_script_gen.content_verify import novel_identity
+            _novel_dig = novel_identity(novel_text)["digest"]
+        problems.extend(verification_problems(verification, _view, plan=plan,
+                                              decomposition=_tbl,
+                                              novel_text=novel_text,
+                                              novel_digest=_novel_dig))
+    return problems
     if verification is None:
         _add("verify_record_missing", "verification", None, "plan_verification",
              "新模式计划的**内容核验记录**缺失——确定性判据只核形状/引用/出处/时长，"

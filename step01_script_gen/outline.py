@@ -1549,6 +1549,9 @@ PLAN_FIX_CAPABILITY = {
     "dialogue_line_not_in_novel": ("ops", "dialogue_lines"),
     # ---- 内容取舍：只有增删条目能解 ----
     "plan_no_dialogue_lines": ("content", "dialogue_lines"),
+    # 计划级：声明的验收版本无法识别（版本刷由**入口自己盖**，
+    # 模型改不了这个字段）⇒ 操作协议表达不了，走整份重写。
+    "planning_acceptance_version_invalid": ("content", "planning_acceptance_version"),
     # 总量超限的修法是**取舍发声条目**：对白只能整条换（操作协议表达不了增减），
     # 旁白是**整表声明**、可以少给——两轴都认（只写对白轴会在旁白侧漏判）
     "budget_infeasible": ("content", ("dialogue_lines", "narration_lines")),
@@ -1670,6 +1673,8 @@ PLAN_FIX_CAPABILITY = {
     # 所以标 `view`，不标 `content`（后者会让这条记录看起来"接口表达不了"）。
     "verify_plan_coherence": ("view", "shot_beats"),
     "view_binding_legacy_visual_mismatch": ("view", "presentation.fact_bindings"),
+    "view_binding_dangling": ("view", "presentation.fact_bindings"),
+    "view_binding_empty": ("view", "presentation.fact_bindings"),
     "view_voice_unit_unplaced": ("view", "shot_beats"),
     "verify_coherence_record": ("content", "plan_verification"),
     "verify_coherence_identity": ("content", "plan_verification"),
@@ -1710,6 +1715,33 @@ _FIX_CAPABILITY_OUT_OF_SCOPE = {
     "deadline_exhausted": "运行级：规划截止耗尽",
     "structure_inconsistent": "生成前门的事务一致性码（不是计划验收问题）",
 }
+
+
+#: 结构阶段**预期**为缺的核验记录：`structurally_valid` 为假时核验根本不发起。
+_EXPECTED_WHEN_UNVERIFIABLE = ("verify_record_missing",)
+
+
+def _route_problems(plan, problems) -> list:
+    """路由只看**要求改什么**：结构不合格时缺核验记录是**预期状态**，从路由输入剔除.
+
+    核验只对结构合格的候选发起（`structurally_valid`）。结构不合格时计划上必然没有
+    `plan_verification`，验收因此报 `verify_record_missing`；该 code 登记为 `content`，
+    `_fix_capability` 于是判"操作协议表达不了" ⇒ 强制整份重写——而这一轮真正要修的是
+    **结构问题**，它恰恰操作协议表达得了。结果是模型被迫回整份计划。
+
+    修法：把"结构阶段预期的缺记录"从**路由输入**剔除；**验收仍严格要求记录**
+    （完整报告由验收层保留）。结构一旦合格，本函数原样返回。
+    """
+    if not problems:
+        return problems
+    try:
+        from step01_script_gen.content_verify import structurally_valid
+        if structurally_valid(plan):
+            return problems
+    except Exception:                                        # noqa: BLE001
+        return problems                     # 判不了就不动路由输入（fail-closed）
+    _drop = set(_EXPECTED_WHEN_UNVERIFIABLE)
+    return [x for x in problems if str((x or {}).get("code") or "") not in _drop]
 
 
 def _fix_capability(problems) -> dict:
@@ -3157,7 +3189,7 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
     # 完整计划修订（同一份额度/截止/验收/守卫）。旧写法只问"有没有 `reselect_dialogue`
     # 标记"，一条只在 `time_budget` 带「载体缺失」的合法计划因此被送进**拒收该字段**的
     # 操作式接口（实测：`未知操作键 time_budget`）。
-    _cap = _fix_capability(problems)
+    _cap = _fix_capability(_route_problems(plan, problems))
     _inops = sorted(set(_cap["inexpressible"]) | set(_cap["undeclared"]))
     # **接口只裁决一次**（复核之十二 P1）：这个值同时决定 ① 走哪条调用路径
     # ② 请求的 schema ③ 反馈块里"这一轮能改什么"的措辞 ④ 用哪个应用器。
@@ -3171,7 +3203,7 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
     # `_replan_route(None)` 判完整计划、而 `revise_plan_once(..., problems=None, ...)`
     # 照样发操作协议（隔离复现）。判据只有一份，入口就得**调它**，不许抄它的表达式。
     # （`_cap` 仍是给证据用的那一份；同一个纯函数算两次，值必然相同。）
-    _route = _replan_route(problems, mode=plan_mode(plan))
+    _route = _replan_route(_route_problems(plan, problems), mode=plan_mode(plan))
     # **归因证据束**（交付证据要求）：`no_change` 只说明"候选没变"，不能据此推断模型
     # 意图。这里把五项一次备齐——① 修法可表达性 ② 请求给了多少信息 ③ 原始响应的形状
     # 与改动 ④ 应用结果 ⑤ 残余问题（由控制器的轮次档一并留档）。①②在分流前后即可得，
@@ -5100,7 +5132,7 @@ def _plan_carrier_declarations_intact(new: dict, ops: dict, n_lines: int, *,
         # 交**同一条**验收链判断——拒收/继续由控制器按统一停止原因收口（工作包 §4 C）。
         return ""
     # 校验交给共用契约门（编号/范围/语义交集/画面一致/钩子整句）
-    _probs = list(plan_contract_problems(new))
+    _probs = list(plan_contract_problems(new, require_verification=False))
     if problems is not None:
         # 逐条并入调用方的收集箱（**不截断**）：旧写法 `[:2]` 让实检 6 条只回 2 条
         # （章 1 第 3 轮的实测形态），与「反馈保留完整问题身份」的口径相反。
