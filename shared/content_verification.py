@@ -995,10 +995,20 @@ def decomposition_problems(view, table) -> list:
     """
     if table is None:
         return []                                   # 明确表示"没有启用分量"，合法
-    if not isinstance(table, dict) or not table:
+    # 2026-10（裁决 B：统一"空表"口径）：`build_verification_context` 那处把 `None` 与
+    # `{}` 都当缺席，却把 `[]` 当"声明了分量"——同一个"空表"在两处结论相反。实测后果：
+    # 计划没有分量区间时 `view_from_plan` 返回 `[]`，于是**任何核验记录都通不过**
+    # （`verify_decomposition_container`），核验恒被判"记录违约"，最终
+    # "核验未完成 ⇒ 零规划调用、保留候选"——核验功能对这类计划等于不可用。
+    # 现统一为：**空容器 = 未启用分量**（合法）；只有「**非空**且非 dict」才是形状违约。
+    # 实质约束不变："声明了分量就必须给完整表"——那种情况拿到的是**非空** dict，
+    # 仍要走下面的逐事实/逐成员契约与文字覆盖。
+    if hasattr(table, "__len__") and len(table) == 0:
+        return []
+    if not isinstance(table, dict):
         return [_rec("verify_decomposition_container", "verification", "",
                      "显式传入的分量表必须是**非空对象**（当前是 %s）——"
-                     "空表 / 非对象不能当成「没有分量」退回根义务模式"
+                     "非空却不是对象，不能当成「没有分量」退回根义务模式"
                      % type(table).__name__, "decomposition")]
     _want = {str(_f.get("uid") or ""): str(_f.get("claim") or "")
              for _f in (view.get("frozen_facts") or []) if isinstance(_f, dict)}

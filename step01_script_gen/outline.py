@@ -3561,7 +3561,8 @@ def generate_outline_result(novel_text: str, model: str | None = None,
                             deadline_monotonic: float | None = None,
                             run_deadline_at: float | None = None,
                             max_revision_calls: int = DEFAULT_REVISION_MAX_CALLS,
-                            revision_deadline_sec: float = DEFAULT_REVISION_DEADLINE_SEC) -> dict:
+                            revision_deadline_sec: float = DEFAULT_REVISION_DEADLINE_SEC,
+                            verify=None) -> dict:
     """**结构化大纲结果**（工作包 §4 D / §7.2）：生产链路的唯一结果声明.
 
     链路：缓存判据 → 首版（必要时）→ **完整验收** → 必要时进 `run_plan_revision`
@@ -3961,6 +3962,13 @@ def generate_outline_result(novel_text: str, model: str | None = None,
         _novel_id = novel_identity(novel_text)
 
         def _verify(view, digest):
+            # 2026-10：`verify` 是**测试/调用方覆盖**（默认 None ⇒ 走生产核验）。
+            # 与上面的 `base_prompt`/`system_prompt` 同类：只提供覆盖缝，默认值即正确契约。
+            # 存在的理由：核验协议（记录形状、义务支座）演化后，老用例若只能靠
+            # `create_service` 的顺序回放来"回答"核验，就会把规划用的响应预算耗光
+            # （实测 31 条用例因此误红）；有了这个缝，用例可注入自己的固定核验。
+            if verify is not None:
+                return verify(view, digest)
             # 核验请求**带原文上下文与原文身份**（工作包 2 第 1 条）：没有原文就无从
             # 判断"原文是否支持主张"，只能靠引文——而引文正是可能写错的那一份。
             return verify_view_with_service(
@@ -3974,6 +3982,9 @@ def generate_outline_result(novel_text: str, model: str | None = None,
                                              novel_text=novel_text, novel_digest=_novel_id["digest"])
 
         def _repair_verification(view, digest, failure, previous):
+            # 同上：覆盖缝对"核验记录纠正"这条路同样生效（固定核验不需要按纠正重发）。
+            if verify is not None:
+                return verify(view, digest)
             return verify_view_with_service(
                 view, digest, model=model, deadline_monotonic=_plan_deadline,
                 novel_text=novel_text, novel_digest=_novel_id["digest"],
