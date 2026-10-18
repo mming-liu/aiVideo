@@ -1574,6 +1574,70 @@ baseline_r1 台账含飞行前冒烟（同条件）的 1 次调用；逐镜时�
   已**回退**该未使用改动（A 窄版不需要）。②"两个缓存版本用例是既有失败"——**错**，
   它们由我删除 `_incompatible_visual` 后 hook 分支残留引用（NameError）引起，删除引用后**已通过**。
 
+### 7.28 四份候选真实核验工作包：§2–§4 已完成（2026-10-18）
+
+**工作包目标**：放开声画共镜后，已生成的四份候选能否通过真实内容核验，同时保留声音与非目标事实。
+**授权边界**：核验已有候选；**不重新生成/修订稿件、不跑整章、不采纳正式产物**。
+
+#### 7.28.1 §2.1 旧提示与错误文案同步（已核实际发送正文）
+
+- `outline._BEAT_EDIT_RULE` 两处措辞统一为"事实画面承载与声音归属**可以落在同一节拍**"；
+- `plan_feasibility` 的 `carrier_fact_visual_mismatch` 文案改为"该节拍需要**合法载体登记**"，
+  删去"画面与台词/旁白必须分属**不同节拍**"；
+- **编辑权限未被扩大**（修订轮仍为"不许增删/拆分/合并节拍…只能挂到已有节拍"）；
+- **离线用请求构造器核对实际正文**（`tools/prompt_sync_check.py`）：首版捕获正文 10,091 字，
+  新措辞命中 2、**旧断言 0**；修订完整计划路由 18,065 字，权限串保留 → **PASS**。
+
+#### 7.28.2 §2.2 hook 契约收口（只查受影响路径）
+
+发现并修正**一处真实不一致**：视图层已放开，但**计划层**仍报
+"`hook_carrier` 声明由 B1 的「画面」承载，而该节拍自己标的是「台词1」——两处必须一致"
+⇒ 在 `plan_feasibility` 的 hook 配对检查里放开"画面 hook 落在承声节拍"，其余（`台词k` 必须由该
+台词承载、无/非法标签）不变。四类离线对照（`tools/hook_contract_check.py`）：①画面 hook 在承声
+节拍**允许**、②绑合法对白**允许**、③悬空**拒收**、④旁白冒充发言**拒收** ⇒ **PASS**。
+
+#### 7.28.3 §2.3 失败集合对照（独立副本，按 ID 比对）
+
+- 独立副本：`%TEMP%\ab_repo_before`（整份复制，排除 .git/output/.tmp/docs），
+  副本内把 `presentation_contract.py`/`plan_feasibility.py`/`outline.py` 恢复为 HEAD，
+  **测试文件与当前树相同**；两边跑同一集合 `tests/step01_script_gen tests/shared`。
+- 结果：**before 31 failed / after 16 failed**；**本次新增 0**、**消失 15**、**共同 16**。
+- **本次新增（已处理）**：`test_plan_phase_l_interface_decision::test_l11…`（断言旧文案"必须拆成两条"）
+  与 `test_plan_normalize_ranges::test_the_real_ch1_plan_loses_only_the_notation_error`
+  （预期 9→8，实为 9→**7**：画面落在承声节拍不再算错配）⇒ 均按新契约同步预期，保留拒收覆盖。
+- **共同 16 条**全部在 `tests/shared`（缓存交接、核验记录表、delta 端到端、呈现事务、关系准入矩阵）
+  ⇒ **登记为边界**，不在本包内清零。
+
+#### 7.28.4 §3 冻结四份候选（未重新生成）
+
+候选来源：各 trial 隔离根的 `step01_replan_rounds.jsonl` **末轮 `plan_out`**
+（`d6_batch/candidates/<trial>/{plan.json,provenance.json}`；按 `call_id` 与摘要定位，
+**未**按 mtime/最后一行/同名汇总选稿）。台账/请求/响应归档均在：
+`iso/d3/revision_ab/<trial>/{calls.jsonl,payloads/,step01_call_bodies/}`。
+
+| trial | 轮/类型 | call_id | 节拍 | 声音集合一致 | 文本改动 | 视图守卫 | 中性核验 |
+|---|---|---|---|---|---|---|---|
+| baseline_r1 | 1/applied | `c7697818c7…` | 15 | ✓ | 8 处 | 无 | 有（已剥离）|
+| baseline_r2 | 1/applied | `c9bdac7f72…` | 15 | ✓ | 8 处 | 无 | 有（已剥离）|
+| improved_r1 | 1/applied | `c3e193f98a…` | 15 | ✓ | 8 处 | 无 | 有（已剥离）|
+| improved_r2 | 1/applied | `c23d1b68d8…` | 15 | ✓ | 8 处 | 无 | 有（已剥离）|
+
+原文身份：`d6_batch/manifest.json` 记 `novel_sha`/`novel_len`；逐份 `plan_digest`/`plan_sha` 见
+`results/<trial>/precheck.json`。
+
+#### 7.28.5 交接：§5–§6 尚未执行（**本批 4 次调用额度未使用**）
+
+**下一可执行动作**（不需新授权，属本包范围）：
+1. 写 §5 运行器：每 trial 独立子进程；**导入前**设定输出/台账/payload/归档路径，内部仅校验隔离；
+   调用生产入口 `content_verify.verify_view_with_service` + `VerificationController` +
+   `attach_verification` + `outline.plan_acceptance_problems`（**不用** `legal_record_for`）；
+   参数固定 `agent_plan` / `deepseek-v4.1-flash` / 思考显式关闭并核对实际 payload /
+   `max_tokens=16000` / `temperature=0.0` / `source_references=True` / 沿用生产一致性要求；
+   每份 300 s 截止，最多 4 次发送，无冒烟、无协议纠正重问、不自动修订。
+2. **先在传输边界证明"一次服务调用只发一次"**（隐藏重试限额）后再运行付费批次。
+3. §6 逐份记录并交给同一生产控制器校验身份与协议，对同一候选调用完整计划验收；本包不写正式产物。
+
+
 
 
 
