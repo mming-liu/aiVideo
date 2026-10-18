@@ -229,7 +229,11 @@ def revise_with_service(plan, issues, *, novel_text, service, model=None,
         '不抄写或改写原文，不编造编号。不得增删事实或改变其他事实。'
         'core_updates 仅在核心摘要含同一无来源推断时纠正，对象可含 '
         +', '.join(CORE_FIELDS)+'，保持原字段类型，其余不返回。'
-        '只输出 JSON 对象 {"fact_updates": [...], "core_updates": {}}。'
+        # ⚠️ 2026-10：实测模型只回 {"fact_updates": [...]}、把 `core_updates` 整个漏掉
+        # （提供方没强制 schema 的 `required`），于是被整份拒收。这里写成不可漏的硬要求。
+        '`core_updates` **必须出现**：没有核心修法就写空对象 `{}`；'
+        '漏掉这个键会被判响应违约、整份拒收。'
+        '只输出 JSON 对象 {"fact_updates": [...], "core_updates": {}}，不要输出别的顶层键。'
         '\n授权身份：'+json.dumps(targets,ensure_ascii=False)
         +'\n本轮核验与问题：'+json.dumps({'record':plan.get('plan_verification'),'issues':issues},ensure_ascii=False)
         +'\n完整基线计划：'+json.dumps(plan,ensure_ascii=False)+'\n完整原文（编号用于引用）：'+render(source_catalog))

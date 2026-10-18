@@ -10,15 +10,20 @@ PROTOCOL_CODES = {'verify_coherence_record', 'verify_coherence_identity',
 SCHEMA = {
     'type': 'object',
     'properties': {
-        'beat_uids': {'type': 'array', 'items': {'type': 'string'}},
+        # ⚠️ 2026-10：契约（`shape_problems`）要求这些字符串**非空白**，schema 却只写
+        # `type: string` ⇒ 模型按 schema 合法输出空串，却被契约判 `verify_coherence_record`
+        # 而整份核验失败（实测：真实运行 3 次纠正都没救回来）。
+        # 把要求抬进 schema 本身，模型才有据可依。
+        'beat_uids': {'type': 'array', 'items': {'type': 'string', 'minLength': 1}},
         'verdict': {'type': 'string', 'enum': ['supported','partial','contradicted','unknown']},
-        'conflict_beats': {'type': 'array', 'items': {'type': 'string'}},
-        'evidence_spans': {'type': 'array', 'items': {'type': 'string'}},
-        'reason': {'type': 'string'},
+        'conflict_beats': {'type': 'array', 'items': {'type': 'string', 'minLength': 1}},
+        'evidence_spans': {'type': 'array', 'items': {'type': 'string', 'minLength': 1}},
+        'reason': {'type': 'string', 'minLength': 1},
         'dependencies': {'type': 'array', 'items': {'type': 'object',
-            'properties': {'beat_uid': {'type': 'string'},
-                'requires_before': {'type': 'array', 'items': {'type': 'string'}},
-                'reason': {'type': 'string'}},
+            'properties': {'beat_uid': {'type': 'string', 'minLength': 1},
+                'requires_before': {'type': 'array',
+                                    'items': {'type': 'string', 'minLength': 1}},
+                'reason': {'type': 'string', 'minLength': 1}},
             'required': ['beat_uid','requires_before','reason'],
             'additionalProperties': False}},
     },
@@ -59,13 +64,34 @@ def shape_problems(value):
         return [_problem('verify_coherence_record','coherence.verdict 非法或 reason 为空白')]
     if not isinstance(value['dependencies'],list):
         return [_problem('verify_coherence_record','dependencies 必须逐节拍提供')]
-    for row in value['dependencies']:
+    for _i, row in enumerate(value['dependencies']):
         if (not isinstance(row,dict) or set(row)!={'beat_uid','requires_before','reason'}
                 or not isinstance(row['beat_uid'],str) or not row['beat_uid'].strip()
                 or not isinstance(row['reason'],str) or not row['reason'].strip()
                 or not isinstance(row['requires_before'],list)
                 or any(not isinstance(s,str) or not s.strip() for s in row['requires_before'])):
-            return [_problem('verify_coherence_record','dependencies 条目必须有节拍身份、先行身份数组与非空原因')]
+            # ⚠️ 2026-10：拒收必须**点名是哪一条、哪个字段**。旧文案只说"dependencies 条目
+            # 必须…非空原因"，模型在真实运行里连续纠正都定位不到（7 份记录里 2 份带着空
+            # `reason` 反复被拒、最后额度耗尽）。这里带上索引、节拍身份与具体字段。
+            _uid = str(row.get('beat_uid') or '') if isinstance(row, dict) else ''
+            if not isinstance(row, dict):
+                _what = '条目不是对象'
+            elif set(row) != {'beat_uid','requires_before','reason'}:
+                _what = '字段集必须恰好是 beat_uid/requires_before/reason，实际是 %s' % (
+                    sorted(row),)
+            elif not str(row.get('beat_uid') or '').strip():
+                _what = 'beat_uid 为空白'
+            elif not str(row.get('reason') or '').strip():
+                _what = 'reason 为空白（必须写清主体在场/状态承接/因果前提）'
+            elif (not isinstance(row.get('requires_before'), list)
+                    or any(not isinstance(s, str) or not s.strip()
+                           for s in row.get('requires_before') or [])):
+                _what = 'requires_before 必须是**非空白字符串**数组（没有先行关系就给空数组）'
+            else:
+                _what = '条目不合法'
+            return [_problem('verify_coherence_record',
+                             'dependencies[%d]（节拍 %s）不合格：%s'
+                             % (_i, _uid or '?', _what), _uid)]
     return []
 
 
@@ -135,6 +161,8 @@ def prompt(view):
         '非 supported 必须指出冲突身份、原文逐字 evidence_spans 与具体关系原因。'
         'dependencies 必须按实际顺序逐节拍列全；每条独立判断该节拍成立所必需、'
         '且本计划已有明确呈现的先行节拍，填 requires_before，并解释主体、状态或因果关系。'
+        '⚠️ 每条的 `reason` 必须是**非空白**的具体关系说明（写清是主体在场、状态承接还是因果前提），'
+        '**不能是空串**——空串会被判为记录不合格，整份核验作废。'
         '不能因为前提被排在后面就省略这条依赖；顺序比较由代码完成，整体 supported 不能覆盖依赖冲突。'
         '没有这种必要先行关系填空数组；普通过渡动作不制造依赖，合法倒叙以观众能理解的叙事前提为准。'
         '\n完整节拍：'+json.dumps(rows,ensure_ascii=False)+'\n声音正文：'

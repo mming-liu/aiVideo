@@ -686,7 +686,8 @@ def test_the_delta_schema_inner_types_match_the_local_entity_contract():
     assert _props["fact_bindings"]["items"]["required"] == ["fact_uid", "carriers"]
     assert _props["hook_bindings"]["required"] == ["spoken_uids", "carriers"]
     assert set(_props["delete"]["properties"]) == set(pc.DELTA_ENTITY_KEYS)
-    assert set(_props["delta"]["properties"]) == set(pc.DELTA_ENTITY_KEYS)
+    # delta.v1 使用顶层 upsert/delete/order 信封；不再嵌套旧版 delta 对象。
+    assert "delta" not in _props, _props
     assert set(_props["order"]["properties"]) == set(pc.DELTA_ENTITY_KEYS)
 
 
