@@ -181,17 +181,21 @@ _OUTLINE_SYSTEM_PROMPT = "你是短视频编剧，擅长从小说章节提炼叙
 #: **口径（用户 2026-09-25 补充）**："一次"指**同一计划版本一次**，不是每次调用一次：
 #: 已尝试过的结论记在 `plan_replan` 并随缓存持久化，计划/规则没变就直接沿用。
 _REPLAN_MAX_ROUNDS = 1
-#: 首版提示里"一条节拍同时要承载画面与台词时怎么办"这一句的**按轮次取值**
-#: （复核之十二 P2 的实跑根因）：首版是**从零设计**，拆成两条是正解；而**修订轮**
-#: （完整计划 / 预算整份重写）的 `shot_beats` 由上一版**冻结**（条数与正文逐项比对），
-#: 照首版那句"必须拆成两条"做 ⇒ 每轮都被 `core_field_changed: shot_beats` 拒收
-#: （实测：章 2 连续 3 轮）。
+#: 首版提示里"一条节拍同时要承载画面与事实时怎么办"这一句的**按轮次取值**。
+#: 历史（复核之十二 P2 的实跑根因）：首版写"必须拆成两条"，而**修订轮**的 `shot_beats`
+#: 由上一版**冻结**（条数与正文逐项比对）⇒ 照首版那句做每轮都被
+#: `core_field_changed: shot_beats` 拒收（实测：章 2 连续 3 轮）。
+#: **2026-10-18（A 窄版，用户裁决"允许同镜声画共存"）**：不再要求拆成两条——
+#: 事实的画面承载与声音归属分别建模（事实侧 `承载：Bn/画面`、节拍侧 `载体：台词k/旁白k`），
+#: 两者可以落在**同一节拍**；两个措辞都按此统一，且**不扩大**任何编辑权限。
 _BEAT_EDIT_RULE = {
-    "first_version": ("必须**拆成两条**（画面一条、台词一条）——承载登记要求「这条节拍是"
-                      "画面还是台词」唯一。"),
-    "revision": ("**本轮不许增删/拆分/合并节拍**——画面与台词/旁白必须分属**不同节拍**，"
-                 "只能把内容挂到**已有**节拍上（改末尾的「｜载体：…」登记）；确实只有改"
-                 "节拍才能成立时，本轮无法完成，如实回报。"),
+    "first_version": ("**不必为同一处内容拆成两条**——事实**画面承载**与**声音归属**可以落在"
+                      "**同一节拍**：该节拍照常标 `载体：台词k`／`载体：旁白k`，事实那条写"
+                      "`｜承载：Bn/画面` 即可；**画面正文仍须表达所绑定的事实**。"
+                      "一条节拍只能标**一个**声音载体（k 条台词/旁白至少要落在 k 条不同节拍上）。"),
+    "revision": ("**本轮不许增删/拆分/合并节拍**——事实画面承载与声音归属**可以落在同一节拍**，"
+                 "只需**保留有效声音引用**；只能把内容挂到**已有**节拍上（改末尾的"
+                 "「｜载体：…」登记）；确实只有改节拍才能成立时，本轮无法完成，如实回报。"),
 }
 
 
@@ -2144,6 +2148,21 @@ _PLAN_DELTA_INSTRUCTION = """
     ——两边用的是**不同**的 id。
 - `order`：`upsert` 或 `delete` **改动了集合**时**必须**给出该集合**最终完整的 id 顺序**
   （含新增的临时 id）；只改正文、不动集合时可以省略。
+
+**提交前自检（这几条一旦违反，整份响应被拒收、不进入应用）**：
+1. `delete` 里的每个 id 是否**也**出现在 `upsert` 里？—— 必须是空交集。
+2. 改动了集合（含 `new:` 新增 / 删条目）时，`order` 里是否给了该集合**最终完整**顺序？
+3. `upsert` 的每一项是否都是**完整对象**（不是 id 字符串、不是数字）？
+4. 事实的 `承载：Bn/…` 与节拍的 `载体：…` 是否**互相登记**？k 条旁白要各有一条标着
+   `载体：旁白k` 的节拍；一条节拍只能标一个载体。
+5. 每个 `voice_ref.uid` 是否**确实存在**？——只能引用**当前计划里已有的**声音条目，或本次
+   `upsert.dialogue_units` / `upsert.narration_units` 里用 `new:` 声明的条目；引用一个
+   不存在的 id 会被拒收（`view_voice_ref_dangling`，实测第 2 轮就栽在这里）。
+6. 只改**顺序**时不要把条目全塞进 `upsert`：给 `order` 的完整顺序即可。
+7. **每条声音条目都必须仍有节拍承载**：改完之后，`dialogue_units` / `narration_units` 里的
+   **每一个** uid 都要能在某条节拍的 `voice_ref` 上找到；删节拍、改 `voice_ref` 或替换
+   声音条目时，别把某条声音弄成"没有任何节拍念它"（`view_voice_unit_unplaced`，
+   实测第 16/17 次都栽在这里）。
 - `fact_bindings`：只列**改动过**的事实，每项 `{"fact_uid": …, "carriers": […]}`；
   一条事实只能出现一次；`carriers` 里的每一项是 `{"kind": …, "uid"/"beat_uid"/"card_id": …}`。
   legacy_audio 每条事实最多一个载体，且这个载体必须完整表达主张；需要联合内容时，
@@ -4015,7 +4034,8 @@ def generate_outline_result(novel_text: str, model: str | None = None,
         def _protocol_problems(record, view, digest):
             from shared.content_verification import record_protocol_problems
             return record_protocol_problems(record, view, plan_digest=digest,
-                                             novel_text=novel_text, novel_digest=_novel_id["digest"])
+                                            novel_text=novel_text,
+                                            novel_digest=_novel_id["digest"])
 
         def _repair_verification(view, digest, failure, previous):
             # 同上：覆盖缝对"核验记录纠正"这条路同样生效（固定核验不需要按纠正重发）。

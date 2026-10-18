@@ -127,6 +127,9 @@ class DeepSeekTextService(TextGenerationService):
             actual = dict(params)
             if timeout is not None:
                 actual["timeout"] = float(timeout)
+            # A/B 对照取证（§7.3）：发送边界的真实 payload（默认惰性）
+            from _text_gen.payload_capture import maybe_capture as _cap
+            _cap("deepseek", actual, where="responses.create")
             if not config.DEEPSEEK_STREAM:
                 return client.responses.create(**actual)
             actual["stream"] = True

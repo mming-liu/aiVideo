@@ -166,4 +166,20 @@ def prompt(view):
         '不能因为前提被排在后面就省略这条依赖；顺序比较由代码完成，整体 supported 不能覆盖依赖冲突。'
         '没有这种必要先行关系填空数组；普通过渡动作不制造依赖，合法倒叙以观众能理解的叙事前提为准。'
         '\n完整节拍：'+json.dumps(rows,ensure_ascii=False)+'\n声音正文：'
-        +json.dumps(units,ensure_ascii=False))
+        +json.dumps(units,ensure_ascii=False)
+        # 2026-10：少样本。真实运行里模型反复交空 `reason`，被契约判记录不合格后
+        # 整份核验作废、额度耗尽。给一份**填好的**样例，比再加一条禁令有效。
+        +'\n\n合格样例（照这个形状，reason 一律写实、不得空）：\n'
+        +json.dumps({'beat_uids': ['b01','b02','b03'],
+                     'verdict': 'supported',
+                     'conflict_beats': [],
+                     'evidence_spans': [],
+                     'reason': '三条节拍按相遇→表明身份→交代去向推进，主体在场与因果前提完整',
+                     'dependencies': [
+                         {'beat_uid': 'b01','requires_before': [],
+                          'reason': '开场镜头，无先行依赖'},
+                         {'beat_uid': 'b02','requires_before': ['b01'],
+                          'reason': '承接 b01 的相遇，人物在场后才有这句话'},
+                         {'beat_uid': 'b03','requires_before': ['b02'],
+                          'reason': '以 b02 交代的身份为前提下达去向'}]},
+                    ensure_ascii=False))

@@ -2899,10 +2899,13 @@ def _hook_carrier_decls(plan, beats, lines) -> tuple:
             _add("carrier_hook_line_missing", "dialogue", _k, "dialogue_lines[%d]" % (_k - 1), "`hook_carrier` 指向不存在的台词 D%d（选用台词共 %d 句）"
                             % (_k, len(lines)))
             continue
-        # 配对：声明必须与**该节拍自己标的载体**一致（声明与标注打架 = 计划自相矛盾）
+        # 配对：声明必须与**该节拍自己标的载体**一致（声明与标注打架 = 计划自相矛盾）。
+        # **2026-10-18（A 窄版）**：`hook_carrier = B{n}/画面` 允许落在**承声节拍**上——
+        # 画面承载与声音归属可以同镜；`台词k` 仍必须由标着「台词k」的那条节拍承载。
         _own = BeatRecord.parse(beats[_b - 1]).carrier()
         _want = ("dialogue", _k) if _kind == "台词" else ("visual", None)
-        if _own != _want:
+        _visual_ok = (_kind == "画面" and _own[0] in ("visual", "dialogue", "narration"))
+        if _own != _want and not _visual_ok:
             _own_txt = ("没标载体" if _own[0] is None
                         else ("标注非法" if _own[0] == "invalid"
                               else ("台词%d" % _own[1] if _own[0] == "dialogue"
@@ -3108,7 +3111,12 @@ def plan_contract_records(plan, *, novel_text: str = "",
                          "required_facts[%d].承载" % (i - 1),
                          _incomplete_reason(i, "旁白 N%d" % _k, _ntext, _missing))
         else:
-            if _kind != "visual":
+            # **声画共镜（A 窄版，2026-10-18 用户裁决"允许"）**：
+            # 事实按 `B<uid>/画面` 声明画面承载，而该节拍自身的标签是 `旁白k`/`台词k` 时，
+            # **不再拒绝**——声音归属记在节拍的载体标签上，事实承载记在事实的 `承载` 字段上，
+            # 两者是不同字段、往返不丢（已离线验证）。仍拒绝：无标签、非法标签、
+            # 标了旁白/台词但编号对不上（那属于声音契约问题，由后面的语音检查处理）。
+            if _kind not in ("visual", "narration", "dialogue"):
                 _tag = ("该节拍没有标载体" if _kind is None
                         else ("该节拍的载体标注**非法**（%s）——只能写 `画面`、`台词k` "
                               "或 `旁白k`"
@@ -3117,13 +3125,15 @@ def plan_contract_records(plan, *, novel_text: str = "",
                               else "该节拍标的是「载体：%s%s」"
                                    % ("台词" if _kind == "dialogue" else "旁白", _tag_k)))
                 # 复核之十二 P2：**生产者只说“要求”，不说“用哪个操作”**——
-                # 原文案写着「请把它**拆成两条**」，而完整计划轮的核心守卫**禁止**
-                # 改 `shot_beats`（条数与正文逐项比对）⇒ 实测：模型照建议拆了节拍（先后 3 轮）、
-                # 每轮都被 `core_field_changed: shot_beats` 拒收。能做什么操作由**接口层**说
-                # （操作式轮的 `beat_ops` 支持拆分；完整计划轮的规则块写明条数封死）。
+                # 历史文案曾写「请把它**拆成两条**」，而完整计划轮的核心守卫**禁止**改
+                # `shot_beats`（条数与正文逐项比对）⇒ 实测：模型照建议拆了节拍（先后 3 轮）、
+                # 每轮都被 `core_field_changed: shot_beats` 拒收。能做什么操作由**接口层**说。
+                # **2026-10-18（A 窄版）**：不再需要拆分——画面承载与声音归属可落在同一节拍，
+                # 本条只报"该节拍缺少合法载体登记"。
                 _add("carrier_fact_visual_mismatch", "fact", i, "required_facts[%d].承载" % (i - 1),
-                    "F%d 声明由 B%d 的**画面**承载，但%s——一条节拍只能有**一个**"
-                    "载体，画面与台词/旁白必须分属**不同节拍**"
+                    "F%d 声明由 B%d 的**画面**承载，但%s——该节拍需要一个**合法载体登记**"
+                    "（`画面`、`台词k` 或 `旁白k`）；无登记或登记非法时，无法确认这条节拍"
+                    "到底演/说了什么。画面承载与声音归属**可以落在同一节拍**。"
                     % (i, _b, _tag))
                 continue
             # 画面承载只认**正文**（镜头真的拍什么）：2026-09-30 复核给的漏口是

@@ -287,6 +287,13 @@ def build_verification_prompt(view, *, novel_text="", novel_digest="",
         _lines.append("## 事实 %s" % _fu)
         _lines.append("主张（**冻结**，你不能改写它）：%s" % str(_f.get("claim") or ""))
         _lines.append("当前有效证据：%s" % str(_f.get("evidence") or ""))
+        # 2026-10-18（实测根因）：主张被**授权修正**之后，核验员仍照抄上一轮的判负措辞——
+        # 原句是"…未限定为三年内"，而这一刻的主张与证据里**都没有**"三年内"。
+        # 结果生产者已无事可做，循环只能以 no_change 终止、整集落不了盘。
+        _lines.append("⚠️ 判负必须**引用上面这条主张或这段证据里真实存在的文字**；"
+                      "**不得**引用此刻已不存在的限定（时间/条件/因果/否定）。"
+                      "主张若已被授权修正过，就按**这一次**给出的文本独立重判，"
+                      "不要沿用上一轮的结论或措辞。")
         # **待核义务由代码给定**（复核 2026-10-09 P1）：核验方只负责逐条回答，
         # 不许增删 id、不许改写 text——否则"删掉没被满足的义务"就能把整项做成
         # supported（"完整主张被结果子集替代"）。集合来自冻结主张，与候选展示无关。
@@ -339,8 +346,9 @@ def build_verification_prompt(view, *, novel_text="", novel_digest="",
         "- `support_spans` **必须逐字出自「实际展示正文」**：画面正文/卡片正文/对白正文。",
         "  「声明」栏、信息目的、承载声明、事实引用、较长出处**都不能冒充**。",
         "- `supported` 要求时间、否定、动作、身份、因果都不丢；",
-        "  只表达一部分 ⇒ `partial` 并在 `missing` 写清缺什么；说的相反 ⇒ `contradicted`；",
-        "  给定信息不足以判断 ⇒ `unknown`（**不要**猜成 supported）。",
+        "  只表达一部分 ⇒ `partial` 并在 `missing` 写清缺什么；说的相反 ⇒ `contradicted`",
+        "  并在 `missing` 写明**相反的主体/动作/关系**（展示出来的是什么）；",
+        "  给定信息不足以判断 ⇒ `unknown` 并在 `missing` 写明**缺什么信息**（**不要**猜成 supported）。",
         "- 证据里**不属于这条主张**的附带信息没被展示，**不算缺**。",
         "- 联合承载（多个载体各表达一部分）**按并集**判断。",
         "- 画面节拍按演出的动作、状态和先后关系判断，不要求画面描述与主张使用相同措辞。",
@@ -362,8 +370,11 @@ def build_verification_prompt(view, *, novel_text="", novel_digest="",
         "- 判 `supported` **至少给一项真实证据**（没有证据会被拒收：`verify_obligation_evidence_missing`）；",
         "  载体必须是**这条事实的载体**、片段必须**逐字出自那个载体的实际正文**——坏身份与",
         "  「引文冒充已展示内容」都会被拒收。",
-        "- 判 `partial`/`unknown` 时 `evidence` 可以留空，但 **`missing` 必须写清缺的是哪一部分**",
-        "  （空白会被拒收：`verify_obligation_missing_blank`）。",
+        "- 其余三档（`partial`/`unknown`/`contradicted`）`evidence` 可以留空，但",
+        "  **任何非 `supported` 的结论都必须写明 `missing`**（**包括 `contradicted`**），",
+        "  而且要写**可被核对的差异**、不是通用套话：`contradicted` 要指出**相反的主体、动作或",
+        "  关系**（展示出来的到底是什么），`partial` 要指出**哪一部分没被覆盖**，`unknown` 要指出",
+        "  **缺什么信息**；空白会被拒收（`verify_obligation_missing_blank`）。",
         "- **事实裁决由逐条结果决定**（代码会核两者一致）：全部义务 `supported` ⇒ 该事实才能",
         "  填 `supported`；只要有一条不是，就填最坏的那一档（`contradicted` > `partial` >",
         "  `unknown` > `supported`），并把缺的那部分写进 `missing`。代码会拒收不一致的记录",
@@ -1132,7 +1143,8 @@ def parse_verification_response(text, *, source_catalog=None):
 def verify_view_with_service(view, plan_digest, *, model=None, deadline_monotonic=None,
                              novel_text="", novel_digest="", novel_version="",
                              archive_path=None, call_context=None, max_tokens=None,
-                             correction=None, source_references=False):
+                             correction=None, source_references=False,
+                             reasoning_effort=None):
     """真的去核验一次（**只有新模式、且显式开启时才会走到这里**）.
 
     ⚠️ **准入先跑，再建服务**：输入不合法时**一次调用都不发**（复核第十二轮 ① 的
@@ -1149,7 +1161,10 @@ def verify_view_with_service(view, plan_digest, *, model=None, deadline_monotoni
     if type(_max_tokens) is not int or _max_tokens <= 0:
         raise ValueError("CONTENT_VERIFY_MAX_TOKENS / max_tokens 必须是正整数")
     _params = {"max_tokens": _max_tokens, "temperature": 0.0, "model": model,
-               "json_schema_name": (VERIFY_SCHEMA or {}).get("name")}
+               "json_schema_name": (VERIFY_SCHEMA or {}).get("name"),
+               # A/B 对照需要**按请求**对齐思考强度：通道默认值不同（A 关闭 / B low），
+               # 只靠环境变量会被 .env.content 覆盖（2026-10-18 实测），故显式透传。
+               "reasoning_effort": reasoning_effort}
     from step01_script_gen.source_references import catalog_for
     _source_catalog=catalog_for(novel_text) if source_references else None
     _prompt = build_verification_prompt(
@@ -1168,6 +1183,7 @@ def verify_view_with_service(view, plan_digest, *, model=None, deadline_monotoni
         system_prompt=SYSTEM_PROMPT, user_prompt=_prompt,
         max_tokens=_max_tokens, temperature=0.0,
         json_schema=VERIFY_SCHEMA, model=model,
+        reasoning_effort=reasoning_effort,
         deadline_monotonic=deadline_monotonic)
     _res, _ev = _send_verification(_req, _prompt, _params,
                                   archive_path=archive_path, call_context=call_context)

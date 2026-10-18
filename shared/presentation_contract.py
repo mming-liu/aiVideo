@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """shared.presentation_contract —— 计划**呈现协议**：单一事实源与稳定身份.
 
 规格来源：
@@ -52,11 +52,19 @@ MODES = (MODE_LEGACY, MODE_HYBRID)
 
 
 def fact_binding_policy(view):
-    """Binding selection follows the representation's actual round-trip capacity."""
+    """Binding selection follows the representation's actual round-trip capacity.
+
+    2026-10-18（A 窄版，用户裁决"允许同镜声画共存"）：`visual_requires_visual_beat` 不再按模式
+    置 True。事实的**画面承载**记在事实的 `承载：B<uid>/画面` 上，节拍自己的**声音归属**记在
+    节拍的 `载体：旁白k/台词k` 上——两者是不同字段，投影/回读不丢（已离线验证：
+    `plan_from_view` → `view_from_plan` 同时保留 voice_ref 与该事实的 visual 承载）。
+    因此带声音的节拍**可以**同时作为某条事实的画面承载。
+    `max_carriers`（旧模式 1 条）与 `selection`（replace）保持不变：本改动不放开多载体。
+    """
     single = str((view or {}).get('mode') or '') == MODE_LEGACY
-    return {'max_carriers':1 if single else None,
-            'selection':'replace' if single else 'extend',
-            'visual_requires_visual_beat':single}
+    return {'max_carriers': 1 if single else None,
+            'selection': 'replace' if single else 'extend',
+            'visual_requires_visual_beat': False}
 
 
 def selectable_visual_beat_uids(view):
@@ -1783,23 +1791,18 @@ def view_problems(view: dict, *, base_view: dict | None = None) -> list:
     # 第一条** —— 画面+旁白、旁白+旁白、画面+画面**全部**丢第二条。静默丢数据比拒收更
     # 糟（R2「不允许静默丢失」），所以在这里**明说拒收**；多载体是 `screen_hybrid`
     # （契约版本 6）的能力，不是旧模式的。
+    #
+    # 2026-10-18（A 窄版）：上述限制针对**一条事实的多个载体**（`max_carriers`），继续保留。
+    # 但"**带声音的节拍**同时作为某条事实的画面承载"不是多载体：声音记在节拍载体标签、
+    # 事实承载记在事实 `承载` 字段，往返不丢 ⇒ 不再拒绝该情形
+    # （原先的 `view_binding_legacy_visual_mismatch` 已按用户裁决移除）。
     _carrier_limit = fact_binding_policy(view)['max_carriers']
     if _carrier_limit is not None:
-        _visual_targets=set(selectable_visual_beat_uids(view))
-        _beat_ids={str(beat.get('uid') or '') for beat in view.get('beats',[])}
-        def _incompatible_visual(ref):
-            return (isinstance(ref,dict) and ref.get('kind')==KIND_VISUAL
-                    and ref_uid(ref) in _beat_ids and ref_uid(ref) not in _visual_targets)
         for _b in (view.get("fact_bindings") or []):
             if not isinstance(_b, dict):
                 continue
             _n = len([_c for _c in ref_items(_b.get("carriers"),
                                              "fact_bindings.carriers") if _c])
-            for _c in ref_items(_b.get('carriers'),'fact_bindings.carriers'):
-                if _incompatible_visual(_c):
-                    _p.append(_rec('view_binding_legacy_visual_mismatch','fact',str(_b.get('fact_uid') or ''),
-                        '旧模式的画面事实只能绑定纯画面节拍；不得把带声音的节拍同时声明为画面载体',
-                        'fact_bindings[%s].carriers' % _b.get('fact_uid')))
             if _n > _carrier_limit:
                 _fu = str(_b.get("fact_uid") or "")
                 _p.append(_rec(
@@ -1809,11 +1812,8 @@ def view_problems(view: dict, *, base_view: dict | None = None) -> list:
                     "（实测：写入 %d 条、回读 1 条）。多载体要用 `screen_hybrid`"
                     "（契约版本 6）" % (MODE_LEGACY, _n, _n),
                     "fact_bindings[%s].carriers" % _fu))
-        for _c in ref_items((view.get('hook_bindings') or {}).get('carriers'),'hook_bindings.carriers'):
-            if _incompatible_visual(_c):
-                _p.append(_rec('view_binding_legacy_visual_mismatch','hook','',
-                    '旧模式的画面钩子只能绑定纯画面节拍；不得与节拍的声音载体声明冲突',
-                    'hook_bindings.carriers'))
+        # hook 的画面载体同样不再要求"纯画面节拍"（与 fact 同一契约：声画可共镜）。
+        # 其余 hook 约束（身份、数量、悬空引用）不变。
         _placed={(str(ref.get('kind') or ''),ref_uid(ref))
                  for beat in view.get('beats',[]) for ref in [beat.get('voice_ref')]
                  if isinstance(ref,dict)}

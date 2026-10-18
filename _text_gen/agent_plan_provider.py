@@ -1,4 +1,4 @@
-﻿"""火山方舟 Agent Plan (/api/plan/v3) 文本生成 — doubao-seed-2-1-turbo 默认.
+"""火山方舟 Agent Plan (/api/plan/v3) 文本生成 — doubao-seed-2-1-turbo 默认.
 
 与标准方舟（/api/v3）的区别：
   - 端点：POST {base}/chat/completions（OpenAI 兼容 messages 数组）
@@ -275,6 +275,9 @@ class AgentPlanTextService(TextGenerationService):
         （测试桩、不支持的响应对象）。
         """
         _t0 = time.monotonic()
+        # A/B 对照取证（§7.3）：把**真正发出去的** payload 落盘（默认惰性，见 payload_capture）
+        from _text_gen.payload_capture import maybe_capture as _cap
+        _cap("agent_plan", payload, where="requests.post")
         resp = requests.post(url, json=payload, headers=self._headers,
                              timeout=timeout, stream=True)
         trace["headers_at"] = round(time.monotonic() - _t0, 3)

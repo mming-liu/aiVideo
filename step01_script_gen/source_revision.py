@@ -234,6 +234,12 @@ def revise_with_service(plan, issues, *, novel_text, service, model=None,
         '`core_updates` **必须出现**：没有核心修法就写空对象 `{}`；'
         '漏掉这个键会被判响应违约、整份拒收。'
         '只输出 JSON 对象 {"fact_updates": [...], "core_updates": {}}，不要输出别的顶层键。'
+        # 2026-10：少样本。真实运行里模型漏 `core_updates` 整份被拒；给一份骨架样例，
+        # 比再加一条禁令有效（编号用占位符，**不要**照抄示例里的假编号）。
+        '\n合格样例（形状照抄；evidence 填上面真实存在的 src_ 编号，**不要**写示例里的占位符）：'
+        '\n{"fact_updates": [{"fact_uid": "F1", "claim": "修正后的完整主张",'
+        ' "evidence": ["src_<原文摘要>_<偏移>"]}], "core_updates": {}}'
+        '\n注意：fact_updates 必须**按授权身份同序**覆盖全部授权事实；core_updates 即使不改也**必须写 {}**。'
         '\n授权身份：'+json.dumps(targets,ensure_ascii=False)
         +'\n本轮核验与问题：'+json.dumps({'record':plan.get('plan_verification'),'issues':issues},ensure_ascii=False)
         +'\n完整基线计划：'+json.dumps(plan,ensure_ascii=False)+'\n完整原文（编号用于引用）：'+render(source_catalog))
