@@ -1,6 +1,10 @@
 # API 密钥（包含敏感信息，绝对不能提交）
 .env
 .env.keys
+# 密钥文件的所有备份变体（如 .env.keys.bak.20261018-104737），防止再次误提交
+.env.keys*
+*.bak
+*.bak.*
 # MCP 配置文件（带 API key 的本地配置）
 .mcp.json
 .mcp.local.json
