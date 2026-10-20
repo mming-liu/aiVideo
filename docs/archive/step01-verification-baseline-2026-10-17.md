@@ -1637,6 +1637,107 @@ baseline_r1 台账含飞行前冒烟（同条件）的 1 次调用；逐镜时�
 2. **先在传输边界证明"一次服务调用只发一次"**（隐藏重试限额）后再运行付费批次。
 3. §6 逐份记录并交给同一生产控制器校验身份与协议，对同一候选调用完整计划验收；本包不写正式产物。
 
+### 7.29 四份候选真实核验：§5–§6 完成（2026-10-18）
+
+**§5a 发送上限离线验证（零真实请求）**：`tools/sendlimit_check.py` 把 `requests.post` 换成假传输、
+`retry_policy.submit_attempts→1`，三种情形各跑一次真实核验入口 ⇒ **正常/超时/连接异常各只发 1 次**
+（超时记录为"尝试 1/1"），核验层与服务层均无重发 ⇒ **PASS**（`d5/sendlimit.json`）。
+
+**§5b 真实核验**：沿用已定参数（`agent_plan` / `deepseek-v4.1-flash` / `thinking={'type':'disabled'}` /
+`max_completion_tokens=16000` / `temperature=0.0` / `source_references=True`），
+发送时**逐项核对实际 payload** ✓（见 `results/<trial>/verify.json`）。
+每份独立子进程、300 s 截止，**全批 4 次实际发送**，无冒烟、无重问、无自动修订。
+
+| trial | 发送 | call_id | 耗时 | usage(in/out/reasoning) | 截断 | 记录 | 事实支持 | 完整验收 | 声音 |
+|---|---|---|---|---|---|---|---|---|---|
+| baseline_r1 | 1 | `c03925ffd4…` | 16.4 s | 8669/1732/0 | 否 | ok | **8/8 supported** | **0**（经离线回放重跑） | ✓ |
+| baseline_r2 | 1 | `c918f11282…` | 17.1 s | 8713/1760/0 | 否 | ok | **8/8 supported** | **0** | ✓ |
+| improved_r1 | 1 | `c634263653…` | 14.1 s | 8755/1788/None | 否 | ok | **8/8 supported** | **0** | ✓ |
+| improved_r2 | 1 | `c215108ff2…` | 17.5 s | 8697/1682/0 | 否 | ok | **8/8 supported** | **0** | ✓ |
+
+- 本批 usage 合计：input 34,834 / output 6,962（4 次调用）；无重试产生的额外发送。
+- **执行者传参错误（非候选缺陷）**：首轮把 `novel_digest` 传成 12 位截断值 ⇒ 唯一一次
+  `verify_novel_digest_mismatch`；用**归档响应离线回放**（零网络、`tools/replay_verify.py`）、
+  改传完整 sha256 后，同一候选验收为 **0** 问题 ⇒ 不计作候选缺陷，也未因此多发一次。
+
+**§6 消费端与保护核验**：
+- 四份候选**均未新增节拍**（15→15），**声音集合与冻结基线完全一致**（4/4 ✓）；
+- **声画共镜真实发生**：四份各有 **5 条事实的画面承载落在承声节拍上** ⇒ 修订在承声节拍上改写画面
+  即完成承载，**无需新增重复镜头**；
+- 完整计划验收 **4/4 通过**（`plan_acceptance_problems` 为 0）；**未写正式产物、未提交**。
+
+**§8 结论分流（按工作包预设）**：属"**核验通过且内容保留**"⇒ 确认本样本的修订收益；
+**下一步**：在既有授权内做一次**有限整章验证**，确认"承声节拍承载事实"在整章生成中仍成立，
+不再追加提示或新协议。**证据边界**：单章单样本、四份候选；节奏/时长（计划无逐镜时长）、
+成片可看性与跨小说通用性**未验证**；`tests/shared` 16 条既有失败仍登记为边界。
+
+### 7.30 更正口径与一致性接线整改（2026-10-18，**本节取代 §7.29 中与下表冲突的表述**）
+
+**§2 更正表（保留原记录与费用，不覆盖原响应、不把离线回放当真实调用）**
+
+| 项目 | 最终口径 |
+|---|---|
+| 四份候选来源、承载表达和声音核验 | **已取得真实结果**（4 次真实发送，记录 `ok`，8/8 supported） |
+| 不新增节拍、声画共镜 | **已验证本样本成立**（15→15，各 5 处事实画面承载落在承声节拍） |
+| 整体一致性 | **原批未启用、未验证** |
+| "完整生产验收 4/4 通过" | **撤回**；改为"在**当时实际启用的判据**下通过（未含一致性轴）" |
+| 已花费用 | **保留**（本批 4 次调用、input 34,834 / output 6,962 tokens），不因结论更正删账 |
+
+**§3 接线整改（责任入口：`tools/verify_one.py`、`replay_verify.py`）**
+
+对照生产初始化（`outline.py:4052`）修正：
+控制器改为 `VerificationController(verify=..., require_coherence=True, rule_version=VERIFY_RULE_VERSION,
+novel_digest=novel_identity(novel)['digest'])`；一致性标记由 `attach_verification` 内的
+`mark_plan` 完成；摘要按**标记后**的候选计算；请求仍由 `build_verification_prompt` 构造；
+未使用 `legal_record_for`、未补造 `coherence`。
+
+**整改有效性的直接证据（离线回放归档响应，零网络）**：用 `replay_verify.py` 重跑
+`baseline_r1` 的**归档原始响应** ⇒ 记录 `ok`、原文摘要匹配，但验收报
+**`verify_coherence_record`**（1 条）⇒ ①证明新接线**同时控制请求与消费**；
+②证明原批"通过"确属**未含一致性轴**的判据。
+
+**§4 四场景离线验收（`tools/coherence_wiring_check.py`，假服务、零真实传输）**
+
+| 场景 | 结果 |
+|---|---|
+| ① 请求构造 | 标记生效、提示 6,630 字**含整体一致性任务与完整依赖要求** ⇒ **通过** |
+| ② 归档缺 `coherence` | 由**归档实发记录回放**证明：验收报 `verify_coherence_record`、候选**不通过** ⇒ 通过（合成构造器形状与控制器盖章记录不同，不以合成例替代该证据） |
+| ③ 合法通过记录 | 摘要匹配、各轴合法 ⇒ **验收 0 问题** |
+| ④ 合法判负记录 | 一致性冲突进入验收（`verify_plan_coherence`），**未被来源/表达的 supported 抵消** |
+
+**状态保护**：错原文/错候选摘要仍拒收（§7.29 的摘要不符即此例）；核验只增记录，
+候选正文、声音、事实基础与绑定不变（`candidate_sha_before/after` 一致）。
+
+### 7.31 整章运行第一次尝试：因**运行器缺陷**在计划层停止（2026-10-18，4 次发送）
+
+**运行根**：`output/step01_ab/20261018T135622/d7_chapter_run/`（`manifest/effective_config/`
+`protection_before/after.json`、`calls/`、`payloads/`、`output/`）。
+
+**结果（停在计划层，未生成完整稿）**：`rc=None`，耗时 **1.5 s**，发送 **4 次**，
+`PlanInfeasibleError: 大纲未产出可执行计划（call_failed）⇒ 停在计划层`，
+原始异常 `AttributeError: 'dict' object has no attribute 'dumps'`。
+
+| 发送 | t | model | thinking | 额度 |
+|---|---|---|---|---|
+| 1 | 1.5 s | `deepseek-v4.1-flash` | `{'type':'disabled'}` | 16000 |
+| 2 | 1.5 s | `deepseek-v4.1-flash` | 同上 | 6000 |
+| 3 | 1.5 s | `deepseek-v4.1-flash` | 同上 | 6000 |
+| 4 | 1.5 s | **`deepseek-flash`** ✗ | 同上 | 50000 |
+
+**两处运行器缺陷（均为执行者侧，非候选/模型质量问题）**：
+1. **发送守护遮蔽了 json 模块**：`_guard_post(url, json=None, ...)` 内部调用 `json.dumps(...)`
+   ⇒ 对 dict 调 `.dumps` 抛 `AttributeError` ⇒ 规划 `call_failed`。**已修**（内部改用 `_json`）。
+2. **模型名未随角色切换**：第 4 次发送 model=`deepseek-flash`（dotenv 把 `.env.content` 的
+   `DEEPSEEK_MODEL=deepseek-flash` 覆盖回进程环境）⇒ 正是包内要求"发送前阻断"的情形。
+   **已修**：导入后直接钉住 `_text_gen.config` 的模型属性，并在守护里加**模型白名单**——
+   非 `deepseek-v4.1-flash` 的发送在**发送前阻断**。
+
+**保护核验**：`script_result.json`、`chapter_outline.cache.json`、`.bak`、`step01_commit.json`、
+`step01.log`、`step01_quality.json`、`step01_audit.json` **摘要全部未变**（`protected_changed=无`）✓；
+未写任何正式产物。
+
+**停止处置（按包内分支）**：已发送 ⇒ **保留证据、停止该次运行、不偷偷重启**。
+本批 24 次上限中已用 4 次；**修正后的整章运行需新的运行授权**。
 
 
 
@@ -1646,3 +1747,35 @@ baseline_r1 台账含飞行前冒烟（同条件）的 1 次调用；逐镜时�
 
 
 
+
+
+
+
+
+### 7.32 同类机制缺陷（json 遮蔽）的共同修复与防复发（2026-10-20）
+
+**复发事实**：`_guard(url, json=None, …)` 的参数名遮蔽 `json` 模块，在
+`chapter_run_d7.py` 与 `d10_run.py` **两次**出现；第二次导致"阻断分支写日志时 `AttributeError`"，
+把真实不符项（`max_completion_tokens=32768`）掩盖成 `call_failed`。
+按 CLAUDE.md「同类机制缺陷第二次出现 ⇒ 暂停受影响实跑、先做共同修复与离线防复发验证」执行。
+
+**共同机制与共同修法**
+- 缺陷类别：**函数签名用 `json` 作参数名 ⇒ 模块被遮蔽**；任何在该函数体内调用
+  `json.dumps/loads` 的代码都会崩。
+- 共同修法：①序列化统一用 `jsonlib` 别名；②守护函数签名**不出现** `json`，
+  改为 `def _guard(url, **kw)` + `kw.get('json')` 取 payload。
+- 落点：新增 `tools/guard_core.py`（唯一的守护实现，含 cap/截止/模型/思考/额度/超时与
+  阻断原因落盘）；活路径 `tools/d10_run2.py` 已改成 `**kw` 形式（静态复核：违规函数 = 无）。
+
+**离线防复发验证（零网络）**
+- `guard_core.py` 自检 6/6 PASS：合法修订（32768）与合法核验（16000）**均到达传输层**；
+  模型不符／思考未关／额度不符三类**各留具体原因且零传输**；第 2 次触上限被阻断。
+- 静态扫描（AST）作为门：工具目录内签名含 `json` 参数的函数会被列出；活路径已清零。
+  历史脚本（d7/d8/d10_run/verify_one/replay_verify/sendlimit_check）**登记为退役**，
+  不再用于新运行；新运行一律走 `guard_core`。
+
+**未恢复的部分**：真实批次仍未恢复——核验分项 4/4 已用尽，`list` 见 §7.31 与本批报告。
+恢复条件：用户就"补 1 次核验额度"或"只跑修订不宣称核验通过"作出取舍。
+
+**另一项新规则落实情况**：「复用记录在产生时落盘」尚未实现——当前运行器未保存
+控制器盖章后的接受对象，故 `seed` 无法复用；已作为恢复实跑前的必做项登记。
