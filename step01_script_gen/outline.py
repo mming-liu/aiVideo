@@ -720,6 +720,8 @@ def _preserve_acceptance_policy(baseline, candidate):
     from step01_script_gen.source_revision import FIELD as SOURCE_FIELD
     if isinstance(candidate, dict):
         candidate.pop("plan_verification", None)
+        # 失败核验记录只作诊断，不随新计划继续流通（下一次核验会重新给记录）。
+        candidate.pop("verification_rejected", None)
         candidate.pop(LEGACY_ACCEPTANCE_FIELD, None)
         if LEGACY_ACCEPTANCE_FIELD in baseline:
             candidate[LEGACY_ACCEPTANCE_FIELD] = baseline[LEGACY_ACCEPTANCE_FIELD]
@@ -748,7 +750,9 @@ def _plan_core_preserved(old: dict, new: dict) -> str:
     """
     _editable = _replan_editable_keys()
     for key in sorted(set(old or {}) | set(new or {})):
-        if key in _editable or key == "plan_verification" or key.startswith("prop_state"):
+        if (key in _editable
+                or key in ("plan_verification", "verification_rejected")
+                or key.startswith("prop_state")):
             continue
         if (old or {}).get(key) == (new or {}).get(key):
             continue
@@ -1286,12 +1290,8 @@ def plan_acceptance_problems(plan, novel_text: str = "") -> list:
         _u = _uid_for(_rec, _uid_tables)
         if _u:
             _rec["uid"] = _u
-        # 预算类记录带上**实际值与适用限制**（R3：替代片段与预算读数必须给数字，
-        # 不能只给"超预算"三个字）
-        _rec.setdefault("limits", {})
-        if str(_rec.get("code") or "").startswith("budget") and not _rec["limits"]:
-            _rec["limits"] = {"budget": dict(_rep.get("budget") or {}),
-                              "lower_bound_sec": _rep.get("lower_bound_sec")}
+        # 预算类记录的 `limits` **单源**在 `_budget_limits()`：预算记录是在本函数末尾由
+        # `_rep["problems"]` 追加的，这里补不到它们（2026-10-21 实测：请求里一直是「（无）」）。
     _out = _with_protocol_fields(_out)
     # 原文核验按**逐条枚举**调用（工作包 §2.2：D/N 身份由调用处枚举提供）——
     # `verify_dialogue_lines` 的 `rejected` 只带句子与原因、不带序号，从它恢复序号就是
@@ -1336,7 +1336,149 @@ def plan_acceptance_problems(plan, novel_text: str = "") -> list:
     # `problems`；复核第 40 轮 P1：从 `verdict` 汇总结论里挑原因会丢掉
     # 「无合适替代」「载体缺失」「载体悬空」三类），报告层只组合。
     _out.extend(_rep.get("problems") or [])
+    # 2026-10-21：预算记录**在这之后**才进 `_out`，上面那个补 `limits` 的循环永远补不到它们
+    # ⇒ 请求里一直写「预算/限制：（无）」。补在这里，且只补预算类。
+    for _rec in _out:
+        if not str(_rec.get("code") or "").startswith("budget"):
+            continue
+        if not (_rec.get("limits") or {}):
+            _rec["limits"] = _budget_limits(plan, _rep, _rec, novel_text=novel_text)
+    # T2：失败核验记录**不挂** `plan_verification`（它不是合法记录），但也不能因此
+    # 把失败原因吞成 `verify_record_missing`——候选上另存 `verification_rejected`，
+    # 验收继续按它的 code fail-closed（调用方据此停在 verification_failed，不重规划）。
+    _rejected_ver = plan.get("verification_rejected")
+    _valid_ver = plan.get("plan_verification")
+    if (isinstance(_rejected_ver, dict)
+            and str(_rejected_ver.get("code") or "").strip()
+            and not (isinstance(_valid_ver, dict)
+                     and str(_valid_ver.get("status") or "") == "ok")):
+        _out = [_r for _r in _out if _r.get("code") != "verify_record_missing"]
+        _why = str(_rejected_ver.get("error") or "").strip()
+        _out.append({
+            "code": str(_rejected_ver.get("code")),
+            "kind": "verification", "index": None, "path": "plan_verification",
+            "reason": "核验未成功完成（status=%s）：%s"
+                      % (_rejected_ver.get("status") or "?", _why[:240] or "（无说明）"),
+            "detail": _why,
+            "basis": "核验失败记录不当作内容可接受；失败记录只作诊断，不挂成合法核验记录",
+        })
     return _with_protocol_fields(_out)
+
+
+_SENTENCE_RE = None
+
+
+def _sentence_alternatives(text, novel_text, *, cap_sec=12.0, limit=3) -> list:
+    """给不可单镜表示的句子找**原文里更短的合法替代**（只列证据，不做内容判断）.
+
+    条件：逐字来自原文、估时 ≤ 单镜上限（留 0.1s 余量）、与原句有 ≥6 字的最长公共子串
+    （没有重叠的句子不是"替代"，是换内容）。按重叠长度排序取前 `limit` 条。
+    找不到就是找不到——由调用方标 `must_delete`，不编造候选。
+    """
+    import re as _re
+    from step01_script_gen.plan_feasibility import _estimate_duration
+    global _SENTENCE_RE
+    if _SENTENCE_RE is None:
+        _SENTENCE_RE = _re.compile(r"[^。！？!?…]+[。！？!?…]+|[^。！？!?…]+$")
+    target = str(text or "").strip()
+    if not target or not novel_text:
+        return []
+
+    def _lcs(a, b) -> int:
+        best, prev = 0, [0] * (len(b) + 1)
+        for ch in a:
+            cur = [0] * (len(b) + 1)
+            for j, ch2 in enumerate(b, 1):
+                if ch == ch2:
+                    cur[j] = prev[j - 1] + 1
+                    if cur[j] > best:
+                        best = cur[j]
+            prev = cur
+        return best
+
+    out = []
+    for m in _SENTENCE_RE.finditer(novel_text):
+        cand = m.group(0).strip()
+        if not cand or cand == target or len(cand) > len(target) * 2:
+            continue
+        sec = float(_estimate_duration(cand))
+        if sec > cap_sec - 0.1:
+            continue
+        ov = _lcs(cand, target)
+        if ov < 6:
+            continue
+        out.append({"text": cand, "sec": round(sec, 2), "overlap": ov})
+    out.sort(key=lambda x: (-x["overlap"], -x["sec"]))
+    return out[:limit]
+
+
+def _budget_limits(plan, rep, rec=None, *, novel_text="") -> dict:
+    """预算类记录的**实际值 + 逐条成本**（R3：必须给数字，不能只说"超预算"）.
+
+    2026-10-21 实测缺口：修订请求里的 `budget_infeasible` 只有合计（98.69s / 上限 90s），
+    没有**逐条估时**，模型算不出"删哪一条、删多少"；它只能靠新增或整体重写猜。
+    这里按**验收同一套估算器**给出每条声音的成本与所需净减量，uid 用视图编号域
+    （与问题清单里 `narration_units[uid=…]` 同一身份）。
+    """
+    out = {"budget": dict((rep or {}).get("budget") or {}),
+           "lower_bound_sec": (rep or {}).get("lower_bound_sec")}
+    try:
+        _max = float((out["budget"] or {}).get("max") or 0.0)
+        _low = float(out["lower_bound_sec"] or 0.0)
+    except (TypeError, ValueError):
+        _max = _low = 0.0
+    if _max and _low:
+        out["need_cut_sec"] = round(_low - _max, 2)
+    if str((rec or {}).get("code") or "") == "budget_infeasible":
+        from step01_script_gen.plan_feasibility import _estimate_duration
+        # 身份域必须与问题清单**同一套**（`narration_units[uid=n02]`）：先取视图 uid，
+        # 取不到再退到 `presentation` 表，最后才是展示编号 N2/D3——不让模型自己配对。
+        _tables = _uid_tables_of(plan)
+        _view_uids: dict = {}
+        try:
+            from shared import presentation_contract as _pc
+            _v, _ = _pc.view_from_plan(plan)
+            _view_uids = {"dialogue": [str(u.get("uid") or "")
+                                       for u in (_v.get("dialogue_units") or [])],
+                          "narration": [str(u.get("uid") or "")
+                                        for u in (_v.get("narration_units") or [])]}
+        except Exception:
+            _view_uids = {}
+        _units = []
+        for _kind, _field, _label in (("dialogue", "dialogue_lines", "D"),
+                                      ("narration", "narration_lines", "N")):
+            _uids = _view_uids.get(_kind) or _tables.get(_kind) or []
+            for _i, _line in enumerate((plan or {}).get(_field) or [], 1):
+                _text = _line.get("text") if isinstance(_line, dict) else _line
+                _uid = _uids[_i - 1] if len(_uids) >= _i else ""
+                _units.append({"kind": _kind,
+                               "uid": _uid or ("%s%d" % (_label, _i)),
+                               "sec": round(float(_estimate_duration(str(_text or ""))), 2)})
+        _units.sort(key=lambda x: (-x["sec"], x["uid"]))
+        out["voice_units"] = _units
+    if str((rec or {}).get("code") or "") == "budget_unrepresentable":
+        # 只给"重选一句"不够：3 次真实修订都保留了同一句 12.65s 旁白。这里给**验算过的**
+        # 原文替代（逐字、≤12s、与原句有重叠）；没有替代就明确要求删除，不编候选。
+        from step01_script_gen.plan_feasibility import _estimate_duration
+        _kind = str((rec or {}).get("kind") or "")
+        _field = "narration_lines" if _kind == "narration" else "dialogue_lines"
+        _idx = (rec or {}).get("index")
+        _lines = (plan or {}).get(_field) or []
+        _text = ""
+        if isinstance(_idx, int) and 1 <= _idx <= len(_lines):
+            _e = _lines[_idx - 1]
+            _text = str(_e.get("text") if isinstance(_e, dict) else _e or "")
+        if _text:
+            out["source_text"] = _text
+            out["est_sec"] = round(float(_estimate_duration(_text)), 2)
+            _alts = _sentence_alternatives(_text, novel_text)
+            if _alts:
+                out["alternatives"] = _alts
+            else:
+                out["must_delete"] = True
+                out["hint"] = ("原文没有更短且相关的合法句 ⇒ 删掉这条声音，"
+                               "并把它所在节拍改成画面载体（不要让节拍失去载体）")
+    return out
 
 
 def _uid_tables_of(plan) -> dict:
@@ -2158,11 +2300,17 @@ _PLAN_DELTA_INSTRUCTION = """
 5. 每个 `voice_ref.uid` 是否**确实存在**？——只能引用**当前计划里已有的**声音条目，或本次
    `upsert.dialogue_units` / `upsert.narration_units` 里用 `new:` 声明的条目；引用一个
    不存在的 id 会被拒收（`view_voice_ref_dangling`，实测第 2 轮就栽在这里）。
+   **引用本次新增的声音时，`voice_ref.uid` 必须原样带 `new:` 前缀**（写 `new:n09`，
+   不能写成 `n09`）——声明、`order`、`voice_ref` 三处前缀必须一致。
 6. 只改**顺序**时不要把条目全塞进 `upsert`：给 `order` 的完整顺序即可。
 7. **每条声音条目都必须仍有节拍承载**：改完之后，`dialogue_units` / `narration_units` 里的
    **每一个** uid 都要能在某条节拍的 `voice_ref` 上找到；删节拍、改 `voice_ref` 或替换
    声音条目时，别把某条声音弄成"没有任何节拍念它"（`view_voice_unit_unplaced`，
    实测第 16/17 次都栽在这里）。
+8. **预算**：`budget` 里的总发声下界上限（90 s）与单镜上限（12 s）是**硬约束**。超了要靠
+   **移出非必需声音**（并同步关系与 `order`）或**换用更短的原句**把下界压下来；
+   **不要靠新增旁白或新增节拍**——新增内容只会把下界推得更高。同理，一条事实用画面
+   承载时优先复用**已有**节拍，不要为它再造一个带声音的新节拍。
 - `fact_bindings`：只列**改动过**的事实，每项 `{"fact_uid": …, "carriers": […]}`；
   一条事实只能出现一次；`carriers` 里的每一项是 `{"kind": …, "uid"/"beat_uid"/"card_id": …}`。
   legacy_audio 每条事实最多一个载体，该载体须完整表达主张。**画面事实可以绑定承载
@@ -3179,14 +3327,17 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
     不合法"；只给前者，模型会重复同一个错误。
     """
     from step01_script_gen.plan_feasibility import evaluate_plan
-    from step01_script_gen.plan_coherence import FIELD as _CF, VERSION as _CV
-    if (plan.get(LEGACY_ACCEPTANCE_FIELD) == LEGACY_ACCEPTANCE_VERSION
-            or plan.get(_CF) == _CV):
-        record = plan.get("plan_verification")
-        if isinstance(record, dict) and record.get("status") != "ok":
-            return {"kind": "verification_failed", "call_id": "",
-                    "detail": "核验记录纠正未完成，候选保持不变：%s" % record.get("error", ""),
-                    "evidence": {"applied": False, "no_model_call": True}}
+    record = plan.get("plan_verification")
+    _rejected = plan.get("verification_rejected")
+    _failed = (_rejected if isinstance(_rejected, dict)
+               and str(_rejected.get("status") or "") != "ok" else None)
+    if ((isinstance(record, dict) and record.get("status") != "ok")
+            or _failed is not None):
+        _why = (record if isinstance(record, dict) else _failed) or {}
+        return {"kind": "verification_failed", "call_id": "",
+                "detail": "核验记录纠正未完成，候选保持不变：%s"
+                          % _why.get("error", ""),
+                "evidence": {"applied": False, "no_model_call": True}}
     _timeout = budget.remaining_sec()
     # 工作包 §4 B：控制器只开**一次**表（`budget.deadline_at`），通道里的排队/退避/
     # 每次 POST 都按它重算余量——不再各自拿一个"剩余秒数"重新解释
@@ -3770,6 +3921,10 @@ def generate_outline_result(novel_text: str, model: str | None = None,
             # 它还挂在计划本体里，统一验收若只看"有没有记录"，就会拿一份**明确被拒**的
             # 记录当作"已核验"，于是 `verification_rejected` 与 `executable=True`
             # 同时出现（实测形态）。摘掉之后，这一份候选的验收会如实报"缺核验记录"。
+            # T2：失败核验记录只作诊断，**不随缓存计划流通**（它不是合法记录）。
+            if isinstance(_cached_plan, dict):
+                _cached_plan = dict(_cached_plan)
+                _cached_plan.pop("verification_rejected", None)
             if isinstance(_cached_plan, dict) and not _ver_reusable:
                 _cached_plan = dict(_cached_plan)
                 _cached_plan.pop("plan_verification", None)

@@ -97,8 +97,8 @@ def _plan_digest_of_script(script) -> str:
     if not isinstance(_plan, dict) or not _plan:
         return ""
     _body = {k: v for k, v in _plan.items()
-             if k not in ("plan_revision", "plan_verification", "plan_replan",
-                          "plan_contract_version", "prop_state_candidates")}
+             if k not in ("plan_revision", "plan_verification", "verification_rejected",
+                          "plan_replan", "plan_contract_version", "prop_state_candidates")}
     _t = json.dumps(_body, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
                     default=str)
     return _hl.sha256(_t.encode("utf-8")).hexdigest()

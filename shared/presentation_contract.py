@@ -296,7 +296,7 @@ _RELATION_KEYS = ("shot_beats", "dialogue_lines", "narration_lines",
 #: `main_events`（= `frozen_events`，由冻结表给）、`presentation`（重新生成）。
 _BASIS_SKIP = set(_RELATION_KEYS) | {
     "presentation", "plan_contract_version", "plan_verification",
-    "plan_revision", "main_events"}
+    "verification_rejected", "plan_revision", "main_events"}
 
 #: `presentation` 块里的**并行 uid 表**：稳定身份必须随块保存，否则投影读回时会被
 #: 按数组位置**重新编号**（"稳定 ID 只在内存里稳定"等于不稳定）。旧块缺这些键时按
@@ -2771,8 +2771,100 @@ def merge_delta(base_view: dict, delta: dict) -> tuple:
     return _v, []
 
 
+def scope_violations(base_view: dict, candidate_view: dict, scope) -> list:
+    """**本轮编辑范围**的实际差异检查（声明之外的改动一律违规）.
+
+    `scope` 只声明**允许改**的面：`{"fact_bindings": [uid…], "beat_text": [uid…]}`。
+    其余面**固定受保护**：声音单元的集合/正文、节拍的 `voice_ref`（声音归属）、
+    节拍的集合与顺序、未列出的 `fact_bindings`。
+
+    与 `view_voice_ref_dangling` / `view_voice_unit_unplaced` 的区别：那两条是**结构**判据——
+    改声音只要仍闭合就能过。本函数按**授权**判：结构合法但改了声明的保护面，同样拒收。
+    返回记录（`code/path/reason`），空表才算在范围内。**只读**，不改候选。
+    """
+    import json as _json
+
+    def _norm(t):
+        return "".join(str(t or "").split())
+
+    _scope = scope if isinstance(scope, dict) else {}
+    _allow_fact = {str(x) for x in (_scope.get("fact_bindings") or [])}
+    _allow_text = {str(x) for x in (_scope.get("beat_text") or [])}
+    out: list = []
+
+    def _add(code, path, reason):
+        out.append({"code": code, "kind": "scope", "index": None, "path": path,
+                    "reason": reason, "detail": reason, "basis": "本轮编辑范围", "fix": ""})
+
+    # ---- 声音单元：集合与正文都受保护（类型也算，因为类型由所属集合决定）----
+    def _units(view):
+        d = {}
+        for kind, key in (("narration", "narration_units"), ("dialogue", "dialogue_units")):
+            for u in (view or {}).get(key) or []:
+                if isinstance(u, dict):
+                    d[str(u.get("uid") or "")] = (kind, _norm(u.get("text")))
+        return d
+
+    _b, _c = _units(base_view), _units(candidate_view)
+    for _uid in sorted(set(_b) | set(_c)):
+        _bi, _ci = _b.get(_uid), _c.get(_uid)
+        if _bi == _ci:
+            continue
+        if _bi is None:
+            _add("scope_voice_added", "%s_units[%s]" % (_ci[0], _uid),
+                 "本轮不允许新增声音单元：%s（%s）" % (_uid, _ci[0]))
+        elif _ci is None:
+            _add("scope_voice_removed", "%s_units[%s]" % (_bi[0], _uid),
+                 "本轮不允许删除声音单元：%s（%s）" % (_uid, _bi[0]))
+        elif _bi[0] != _ci[0]:
+            _add("scope_voice_retyped", "%s_units[%s] → %s_units[%s]"
+                 % (_bi[0], _uid, _ci[0], _uid),
+                 "本轮不允许改变声音类型：%s 由 %s 变为 %s" % (_uid, _bi[0], _ci[0]))
+        else:
+            _add("scope_voice_text_changed", "%s_units[%s].text" % (_bi[0], _uid),
+                 "本轮不允许改声音正文：%s 的正文被改写" % _uid)
+
+    # ---- 节拍：集合/顺序、voice_ref、正文----
+    _bb = [str(x.get("uid") or "") for x in (base_view or {}).get("beats") or [] if isinstance(x, dict)]
+    _cb = [str(x.get("uid") or "") for x in (candidate_view or {}).get("beats") or [] if isinstance(x, dict)]
+    if _bb != _cb:
+        _add("scope_beat_set_or_order", "beats",
+             "本轮不允许增删或重排节拍：基线 %d 条、候选 %d 条（或顺序不同）" % (len(_bb), len(_cb)))
+    _bmap = {str(x.get("uid") or ""): x for x in (base_view or {}).get("beats") or [] if isinstance(x, dict)}
+    _cmap = {str(x.get("uid") or ""): x for x in (candidate_view or {}).get("beats") or [] if isinstance(x, dict)}
+    for _uid in _bb:
+        _x, _y = _bmap.get(_uid), _cmap.get(_uid)
+        if not _x or not _y:
+            continue
+        if _json.dumps(_x.get("voice_ref"), sort_keys=True) != _json.dumps(_y.get("voice_ref"),
+                                                                           sort_keys=True):
+            _add("scope_voice_ownership", "beats[%s].voice_ref" % _uid,
+                 "本轮不允许改声音归属：节拍 %s 的 voice_ref 变了（%r → %r）"
+                 % (_uid, _x.get("voice_ref"), _y.get("voice_ref")))
+        if _norm(_x.get("text")) != _norm(_y.get("text")) and _uid not in _allow_text:
+            _add("scope_beat_text_changed", "beats[%s].text" % _uid,
+                 "本轮只允许改这些节拍正文：%s；%s 不在其中" % (sorted(_allow_text), _uid))
+
+    # ---- 事实绑定：只有声明的条目可改 ----
+    def _carriers(view):
+        d = {}
+        for b in (view or {}).get("fact_bindings") or []:
+            if isinstance(b, dict):
+                d[str(b.get("fact_uid") or "")] = _json.dumps(b.get("carriers"), sort_keys=True)
+        return d
+
+    _fb, _fc = _carriers(base_view), _carriers(candidate_view)
+    for _fu in sorted(set(_fb) | set(_fc)):
+        if _fb.get(_fu) == _fc.get(_fu):
+            continue
+        if _fu not in _allow_fact:
+            _add("scope_fact_binding_changed", "fact_bindings[%s].carriers" % _fu,
+                 "本轮只允许改这些事实的承载：%s；%s 不在其中" % (sorted(_allow_fact), _fu))
+    return out
+
+
 def apply_delta_view(base_view: dict, response, *, mode: str | None = None,
-                     accept=None) -> tuple:
+                     accept=None, scope=None) -> tuple:
     """`plan_revision.delta.v1` 一轮应用：**严格解析 → 内存合并 → 同一条完整验收**.
 
     `returns (candidate_view|None, problems, result)`——与 `apply_editable_view`
@@ -2795,6 +2887,12 @@ def apply_delta_view(base_view: dict, response, *, mode: str | None = None,
         return None, _mp, {"kind": "illegal", "stage": "apply", "mapping": {},
                            "residuals": [], "detail": _detail_of(_mp),
                            "protocol": DELTA_SCHEMA}
+    # **确定性关系收尾**（无语义判断、可审计）：模型改 `voice_ref`/`fact_bindings`
+    # 常漏掉"收掉被替换的旧单元"，导致整份响应被原子拒收。这里只做有唯一解的三件事
+    # （临时 id 前缀、正文被已承载单元覆盖的孤儿、随之跟随的载体），
+    # 无覆盖关系或无唯一解时**不动**，让原判据继续拒收。
+    from .delta_reconcile import reconcile as _reconcile
+    _merged, _notes = _reconcile(_merged, base_view=base_view, delta=_delta)
     # 合并出来的就是一份完整视图 ⇒ 交**同一条**验收链（R2「统一验收」不许有第二条）
     # **原样透传响应声明的版本**（不 `or` 一个默认值来"制造一致"）：增量响应缺版本、
     # 或与期望不符，`parse_delta_response` 已经拒收过；这里只是把它交给**同一条**验收链
@@ -2806,5 +2904,5 @@ def apply_delta_view(base_view: dict, response, *, mode: str | None = None,
          "base_plan_hash": _delta.get("base_plan_hash"),
          "fact_basis_hash": _delta.get("fact_basis_hash"), "view": _merged},
         mode=mode, accept=accept, expected_rule_version=DELTA_RULE_VERSION)
-    _rk = dict(_rk, protocol=DELTA_SCHEMA)
+    _rk = dict(_rk, protocol=DELTA_SCHEMA, reconciled=_notes)
     return _view, _vp, _rk

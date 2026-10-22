@@ -1247,15 +1247,71 @@ def structurally_valid(plan) -> bool:
         return False
 
 
+def verification_record_delivery(rec):
+    """核验记录的交付判定：**只有 `status == "ok"` 才可当作合法核验记录**.
+
+    失败记录（`bad_response` / `call_failed` / `input_admission_failed` /
+    `deadline_exhausted`）说明“这次没验成”，不能挂到候选计划上被下一个消费者读成
+    “已经核过”。判定与持久化分开：本函数纯判定，`deliver_verification_record`
+    负责落盘与 `run_log` 记录。
+    """
+    if not isinstance(rec, dict):
+        return {"accepted": False, "rejected_status": "<missing>",
+                "rejected_code": ""}
+    status = str(rec.get("status") or "")
+    if status == "ok":
+        return {"accepted": True, "rejected_status": None, "rejected_code": None}
+    return {"accepted": False, "rejected_status": status or "<missing>",
+            "rejected_code": str(rec.get("code") or "")}
+
+
+def deliver_verification_record(rec, *, run_dir, log=None, transmitted=0):
+    """按 `status` 落盘核验记录，并把失败状态写进 `run_log['verify']`.
+
+    - `status == "ok"` ⇒ `verification_record.json`（规范记录）；
+    - 其余（含 `status` 缺失）⇒ `verification_record.rejected.json`，
+      并在 `log['verify']` 写 `rejected_status` / `rejected_code`；
+    - 两种情况都清掉另一种文件，**不留下上一轮的规范记录冒充本轮结果**。
+
+    返回 `verification_record_delivery(rec)` 的判定结果。
+    """
+    import pathlib
+
+    outcome = verification_record_delivery(rec)
+    root = pathlib.Path(run_dir)
+    canonical = root / "verification_record.json"
+    rejected = root / "verification_record.rejected.json"
+    if outcome["accepted"]:
+        canonical.write_text(json.dumps(rec, ensure_ascii=False, indent=1),
+                             encoding="utf-8")
+        rejected.unlink(missing_ok=True)
+    else:
+        if isinstance(rec, dict):
+            rejected.write_text(json.dumps(rec, ensure_ascii=False, indent=1),
+                                encoding="utf-8")
+        canonical.unlink(missing_ok=True)
+    if isinstance(log, dict):
+        entry = log.setdefault("verify", {})
+        entry["transmitted"] = int(transmitted or 0)
+        entry["status"] = rec.get("status") if isinstance(rec, dict) else None
+        if not outcome["accepted"]:
+            entry["rejected_status"] = outcome["rejected_status"]
+            entry["rejected_code"] = outcome["rejected_code"]
+    return outcome
+
+
 def attach_verification(plan, controller, *, verify=None, verify_axes=None):
-    """取该候选的核验记录并挂到计划上（**不改计划内容**，只加 `plan_verification`）.
+    """取该候选的核验记录并挂到计划上（**不改计划内容**，只加诊断/核验键）.
 
     摘要由代码算（`plan_digest_of`，排除核验记录自身与诊断元数据）——核验方自报的摘要
     不作数（`VerificationController.record_for` 会盖章）。**生产与消费共用这一个函数**
     （复核 2026-10-05 P1：此前生产者按计划算、消费者按视图算，正常记录被判摘要不符）。
 
     结构不合格的候选**不发起核验**（`structurally_valid`）：那种情况下挂一条
-    `failed` 记录，比挂一条看起来"核过了但没结论"的记录更诚实。
+    `failed` 记录，比挂一条看起来“核过了但没结论”的记录更诚实。但**失败记录不挂**
+    （T2）：只有 `status == "ok"` 才写入 `plan_verification`；否则候选不带合法记录，
+    失败 code 另存 `verification_rejected`，统一验收按它 fail-closed，运行器按它写
+    `run_log['verify'].rejected_status` 与 `.rejected.json`。
     """
     from shared.content_verification import plan_digest_of
     from shared.presentation_contract import view_from_plan
@@ -1277,7 +1333,15 @@ def attach_verification(plan, controller, *, verify=None, verify_axes=None):
     else:
         _rec = controller.record_for(_view, _dig, verify=verify)
     _out = dict(plan)
-    _out["plan_verification"] = _rec
+    _out.pop("verification_rejected", None)
+    if verification_record_delivery(_rec)["accepted"]:
+        _out["plan_verification"] = _rec
+    else:
+        # 失败记录另挂诊断键：它不是合法核验记录，验收不得把它当 `plan_verification`
+        # 读；但失败 code 要保留下来（否则调用方会把“核验没做成”误读成“缺记录”）。
+        _out.pop("plan_verification", None)
+        if isinstance(_rec, dict):
+            _out["verification_rejected"] = _rec
     return _out
 
 
@@ -1296,5 +1360,6 @@ def novel_identity(novel_text) -> dict:
 
 __all__ = ["SYSTEM_PROMPT", "VERIFY_SCHEMA", "build_verification_prompt",
            "parse_verification_response", "verify_view_with_service",
-           "attach_verification", "structurally_valid", "novel_identity",
+           "attach_verification", "verification_record_delivery",
+           "deliver_verification_record", "structurally_valid", "novel_identity",
            "VERDICT_SUPPORTED"]

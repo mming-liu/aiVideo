@@ -132,7 +132,8 @@ def plan_digest_of(plan) -> str:
 
 #: **不参与内容身份**的键：核验记录自身（否则记录一挂上身份就变，下一次核验永远对不上）
 #: 与诊断元数据（它们的变化是"过程变了"，不是"内容变了"）。
-_NON_CONTENT_KEYS = frozenset({"plan_verification", "plan_revision", "plan_replan",
+_NON_CONTENT_KEYS = frozenset({"plan_verification", "verification_rejected",
+                               "plan_revision", "plan_replan",
                                "plan_contract_version"})
 
 

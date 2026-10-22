@@ -1779,3 +1779,14 @@ novel_digest=novel_identity(novel)['digest'])`；一致性标记由 `attach_veri
 
 **另一项新规则落实情况**：「复用记录在产生时落盘」尚未实现——当前运行器未保存
 控制器盖章后的接受对象，故 `seed` 无法复用；已作为恢复实跑前的必做项登记。
+
+**2026-10-21 决定（用户）**：不执行本节的官方 API 对照；现用网关（opencode.ai/zen/go/v1、deepseek-v4.1-flash）继续使用。该工作包关闭，未产生任何 pi.deepseek.com 调用或产物。
+
+
+### 第一包双通道历史对照（2026-10-21，零调用）
+
+**更正**：此前"官方 API 从未执行""全部调用均走 agent_plan""对照只写计划"三条表述**作废**。
+实际存在 `provider=deepseek` 的调用台账与响应（去重 `call_id` 46），与 `agent_plan`（68）并存；
+但 payload **不记录请求 URL**，故只能表述为「deepseek 适配器部署观察」，
+不能证明每次请求的最终主机；§7 的 official-endpoint 对照本身确无执行。
+完整报告：`output/step01_ab/20261018T135622/hist_compare/report.md`。

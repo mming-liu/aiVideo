@@ -1490,3 +1490,25 @@ def test_evaluate_plan_no_alternative_marker_stops_plan():
     # 预算与可表示性都不是原因——原因只有标记本身
     assert rep["lower_bound_sec"] <= rep["budget"]["max"]
     assert rep["dialogue_unrepresentable"] == []
+
+
+def test_plan_feasibility_has_no_top_level_statements_after_return():
+    """T1：函数体在顶层 `return` 之后不得再有语句（死代码永不执行）。
+
+    2026-10-22：`presentation_records` 在 `return problems` 之后还留着一段旧版
+    重复实现（同一段 `if verification is None: ... else: ...`）。它既不会被走到，
+    又会让后来的人以为第二段才是生效分支。删除后本用例应转绿。
+    """
+    import ast
+
+    source = Path(pf.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for index, statement in enumerate(node.body):
+            if isinstance(statement, ast.Return) and index != len(node.body) - 1:
+                offenders.append((node.name, statement.lineno,
+                                  node.body[index + 1].lineno))
+    assert not offenders, "函数体在 return 之后仍有语句（死代码）：%r" % (offenders,)

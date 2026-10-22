@@ -3953,8 +3953,11 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
                            "line": _x["line"], "est_sec": _chk["est_sec"],
                            "reason": _chk["reason"]})
     # 旁白同样不能截句：一条旁白必须能整条讲完在一个镜头里（与台词同判据）
+    # ⚠️ 2026-10-22：旁白**不加说话人前缀余量**。旧写法复用 `check_dialogue_representable`
+    # 的默认 5 字余量，把 11.40s 的旁白算成 12.65s 判"不可表示"，而预算下界用不加余量的
+    # 估时（11.40s）——同一句话两个读数，模型无论怎么改都过不了。
     for _e, _ni in zip(_narr_kept, _narr_kept_ix):
-        _chk = check_dialogue_representable(_e["text"], _cap)
+        _chk = check_dialogue_representable(_e["text"], _cap, prefix_allowance_chars=0)
         if not _chk["representable"]:
             _unrep.append({"kind": "narration", "index": _ni,
                            "line": _e["text"], "est_sec": _chk["est_sec"],
@@ -5168,36 +5171,6 @@ def presentation_records(plan, *, novel_text: str = "", verification=None,
                                               decomposition=_tbl,
                                               novel_text=novel_text,
                                               novel_digest=_novel_dig))
-    return problems
-    if verification is None:
-        _add("verify_record_missing", "verification", None, "plan_verification",
-             "新模式计划的**内容核验记录**缺失——确定性判据只核形状/引用/出处/时长，"
-             "完整支持关系必须由独立核验给出（缺记录不得判通过）")
-    else:
-        from shared.content_verification import verification_problems
-        # `view` 与 `plan` 是**同一份候选**的两个投影（工作包 1 第 1 条）：身份按
-        # `plan` 算、支持片段按 `view` 里的实际载体正文核。
-        # ⚠️ 复核 2026-10-07 三轮 ②：**本次原文身份也要传**——旧写法只传 `novel_text`，
-        # 于是"核验记录绑的是别份原文"在统一验收里**根本没人核**（`novel_digest` 默认
-        # None ⇒ 那条检查整条跳过）。原文为空时没有可核身份，按未提供处理。
-        _novel_dig = None
-        if str(novel_text or ""):
-            from step01_script_gen.content_verify import novel_identity
-            _novel_dig = novel_identity(novel_text)["digest"]
-        # ⚠️ **最终验收与缓存/控制器用同一份上下文**（复核 r6 §4.2 第四处入口）：
-        # 旧写法不传分解表 ⇒ 统一验收按**根义务**核，分量模式下的记录在缓存侧被
-        # 按分量拒、在这一步却被放行（同源判据分叉）。上下文有但坏 ⇒ 结构化拒收，
-        # **不许**退回根义务模式（那会把"分量没核"读成"核过了"）。
-        from shared.content_verification import verification_context_of
-        _ctx_bad, _tbl = verification_context_of(plan, _view)
-        problems.extend(_ctx_bad)
-        if not _ctx_bad:
-            # 上下文坏 ⇒ **只报上下文问题**（fail-closed）。不要顺手按根义务再判一遍：
-            # 那会给一份分量记录报出一串"自造条目"，把真正的原因（上下文不合法）盖住。
-            problems.extend(verification_problems(verification, _view, plan=plan,
-                                                   decomposition=_tbl,
-                                                   novel_text=novel_text,
-                                                   novel_digest=_novel_dig))
     return problems
 
 

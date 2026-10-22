@@ -7,6 +7,10 @@ import re
 
 FIELD = 'source_revision_context'
 VERSION = 'source_revision.v1'
+#: v2：只放开 **targets 域内** 的事实拆分（父 uid → ≥2 个 `父uid.后缀` 子 uid）。
+#: 子 uid 继承父授权；非 targets 事实的 uid 与主张仍必须原样保留。v1 行为不变。
+VERSION_V2 = 'source_revision.v2'
+SUPPORTED_VERSIONS = (VERSION, VERSION_V2)
 PROTOCOL_CODES = {'verify_source_revision_context', 'verify_source_preservation_record',
                   'verify_source_preservation_identity', 'verify_source_preservation_evidence'}
 CORE_FIELDS = ('main_events', 'climax', 'causal_chain', 'end_hook', 'character_motives')
@@ -23,6 +27,52 @@ def problem(code, reason, uid=''):
             'path':'required_facts','reason':reason,'fix':''}
 
 
+def _split_child_parent(uid, targets):
+    """`uid` 所属的授权 target 父 uid（按最长前缀；无命中返回 None）."""
+    hits=[t for t in targets if uid.startswith(t+'.')]
+    return max(hits,key=len) if hits else None
+
+
+def _v2_identity_reason(baseline, current, targets):
+    """v2 身份判据：返回第一处违规原因；`None` 表示合法.
+
+    允许的唯一增删是 **targets 内** 的一条事实被替换成 ≥2 个
+    `父uid.后缀` 子 uid。授权事实本身可以保留并改主张（不拆分时与 v1 相同）；
+    非 targets 事实的 uid 与主张必须逐一原样保留——来源修正授权仍然有效。
+    """
+    if not set(targets).issubset(baseline):
+        return '来源修正 targets 必须来自基线事实'
+    children={}
+    for uid in current:
+        if uid in baseline:
+            continue
+        parent=_split_child_parent(uid,targets)
+        if parent is None:
+            return '新增事实 %r 不在任何授权事实的拆分域内' % uid
+        suffix=uid[len(parent)+1:]
+        if not suffix or not re.fullmatch(r'[A-Za-z0-9_]+',suffix):
+            return ('子 uid %r 必须写成 `父uid.后缀`（后缀限字母、数字、下划线），'
+                    '且不得再嵌套点号' % uid)
+        if len([t for t in targets if uid.startswith(t+'.')])>1:
+            return '子 uid %r 同时落在多个授权父之下，拆分归属有歧义' % uid
+        children.setdefault(parent,[]).append(uid)
+    for uid,claim in baseline.items():
+        if uid in targets:
+            if uid in current:
+                if children.get(uid):
+                    return '授权事实 %r 不能既保留又拆分成子 uid' % uid
+            elif len(children.get(uid) or [])<2:
+                return '授权事实 %r 被删除或没有拆成 ≥2 个子 uid' % uid
+        else:
+            if uid not in current:
+                return '未授权事实 %r 被删除' % uid
+            if children.get(uid):
+                return '未授权事实 %r 不得拆分' % uid
+            if current[uid]!=claim:
+                return '未授权事实 %r 的主张被改写' % uid
+    return None
+
+
 def context(view):
     return (view.get('plan_basis') or {}).get(FIELD)
 
@@ -33,7 +83,7 @@ def admission_problems(view):
     ctx=context(view)
     if (not isinstance(ctx,dict) or set(ctx)!={'version','novel_digest','base_digest',
                                              'targets','baseline_facts','baseline_core'}
-            or ctx.get('version')!=VERSION
+            or ctx.get('version') not in SUPPORTED_VERSIONS
             or any(not isinstance(ctx.get(k),str) or not re.fullmatch(r'[0-9a-f]{64}',ctx[k])
                    for k in ('novel_digest','base_digest'))
             or not isinstance(ctx.get('targets'),list) or not ctx['targets']
@@ -53,7 +103,14 @@ def admission_problems(view):
         return [problem('verify_source_revision_context','来源修正基线事实必须完整保留身份与正文')]
     baseline={f['uid']:f['claim'] for f in old}
     current={f['uid']:f['claim'] for f in view.get('frozen_facts',[])}
-    if (len(baseline)!=len(old) or set(baseline)!=set(current)
+    if len(baseline)!=len(old):
+        return [problem('verify_source_revision_context','来源修正不得增删事实、改身份或改写未授权的已成立主张')]
+    if ctx['version']==VERSION_V2:
+        reason=_v2_identity_reason(baseline,current,ctx['targets'])
+        if reason:
+            return [problem('verify_source_revision_context',reason)]
+        return []
+    if (set(baseline)!=set(current)
             or not set(ctx['targets']).issubset(baseline)
             or any(current[u]!=claim for u,claim in baseline.items() if u not in ctx['targets'])):
         return [problem('verify_source_revision_context','来源修正不得增删事实、改身份或改写未授权的已成立主张')]
@@ -190,7 +247,7 @@ def apply_response(plan, response, *, novel_text, novel_digest):
         'targets':targets,'baseline_facts':[{'uid':f['uid'],'claim':f['claim']} for f in view['frozen_facts']],
         'baseline_core':{k:copy.deepcopy(plan.get(k,[] if k in ('main_events','causal_chain','character_motives') else '')) for k in CORE_FIELDS}}
     candidate[FIELD]['targets']=targets
-    for key in ('plan_verification','verification_context'):
+    for key in ('plan_verification','verification_rejected','verification_context'):
         candidate.pop(key,None)
     candidate_view,bad=view_from_plan(candidate)
     bad=bad or admission_problems(candidate_view)
