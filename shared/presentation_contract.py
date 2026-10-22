@@ -2905,4 +2905,13 @@ def apply_delta_view(base_view: dict, response, *, mode: str | None = None,
          "fact_basis_hash": _delta.get("fact_basis_hash"), "view": _merged},
         mode=mode, accept=accept, expected_rule_version=DELTA_RULE_VERSION)
     _rk = dict(_rk, protocol=DELTA_SCHEMA, reconciled=_notes)
+    # **本轮编辑范围**（采纳边界上的最后一道）：结构合法但改了受保护面（声音正文/归属、
+    # 节拍集合与顺序、未授权的事实绑定）同样拒收，并给出具体字段路径。
+    # 2026-10-22 实测缺口：`view_voice_ref_dangling` 只证明引用闭合，证明不了"声音不在授权内"。
+    if scope is not None and _view is not None:
+        _sv = scope_violations(base_view, _view, scope)
+        if _sv:
+            return None, _sv, {"kind": "illegal", "stage": "scope", "mapping": {},
+                               "residuals": [], "detail": _detail_of(_sv),
+                               "protocol": DELTA_SCHEMA, "reconciled": _notes}
     return _view, _vp, _rk

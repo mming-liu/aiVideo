@@ -50,17 +50,20 @@
 已确认的只有：`real_rev4` 里 `f08→{visual,b09}` 是**合法声明**；把同一意图**只写成一条绑定 +
 一处节拍正文**（不动声音），delta 入口 `applied`、76.50 s 不变、`n07` 仍由 `b09` 播放。
 **未确认**：模型"已完成合法表达"（`b09` 冻结正文缺"听香答应"）、"只剩机械收尾"（删 `n07` 后
-只剩 `verify_record_missing`，说明内容核验还没做）。样本：`failure_analysis/legal_sample_f08_delta.json`；
-越权对照：`failure_analysis/negative_control_voice_tamper.json`（删被引用单元 ⇒ `view_voice_ref_dangling`）。
+只剩 `verify_record_missing`，说明内容核验还没做）。
 
-**入口实测（同一完整目标）**：受限 delta = **2 个实体**；`fact_carriers + beat_ops` = **18 个实体**
-（beat_ops 触发全量 `fact_carriers` 9 条 + 整表 `narration_lines` 8 条），且带入旧核验记录
-⇒ `verify_digest_mismatch`。**结论：保留 delta，不换 ops；暂不拆两个请求。**
+**范围保护已接线**（`scope_violations` + `apply_delta_view(scope=)` + 运行器 `D11_SCOPE`）：
+结构合法但改声音正文/归属的响应被 `scope_*` 拒收并指出字段；合法样本照常采纳。
+对照：`failure_analysis/scope_legal_request.json`、`scope_tamper_voice_ownership.json`、
+`scope_definition.json`（另见更早的 `negative_control_voice_tamper.json`，它只证引用守卫）。
 
-下一步（1 次修订 + 条件满足时 1 次核验）：在 delta 请求里只允许"声明 + 指定节拍正文"，
-节拍 `voice_ref` 必须原样保留；越权改声音直接拒收并给原因。判据：
-`final_acceptance.codes == []`、下界 ≤90 s、无不可表示、其余事实/既有声音/事件顺序不变。
-若限制修改面后仍出现孤儿/悬空，才考虑编译层最小改动（节拍部分 upsert，未给字段=保留），当前不实施。
+**本包成功条件不是"六条清零"**：声音本轮冻结，d03/n07 两条声音问题必然仍在。分项判据：
+目标事实 f08 的 `verify_fact_unsupported` 消失、范围检查为空、无新增问题、既有声音问题如实保留；
+整体仍标未通过。
+
+**进入真实验证前还差一步**：请求侧必须声明同一份范围（`run_plan_revision → revise_plan_once`
+渲染"本轮编辑范围"），否则模型不知道边界，付费运行里的拒收是意外的、实验也不成立。
+补完后：1 次修订 + 条件满足时 1 次核验，不追加采样。节拍部分 upsert 暂不实施。
 
 ## 5. 开工即用的执行纪律（本会话未做到的部分）
 
