@@ -2660,7 +2660,8 @@ def _accept_view_candidate(view, novel_text, verification, *, verify_axes=None):
     return complete_candidate(view, novel_text, verification, verify_axes=verify_axes)[1]
 
 
-def _content_slots_applicable(plan, problems, *, mode=None) -> tuple:
+def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
+                              target_fact_uids=None) -> tuple:
     """本轮问题**能不能被内容槽位全部表达**（§5.6 第 4 条：能表达才接入）.
 
     `returns (ok, why, ctx)`：`ok=False` 时调用方**整轮落回既有 delta**——判据只有
@@ -2684,9 +2685,11 @@ def _content_slots_applicable(plan, problems, *, mode=None) -> tuple:
         return False, "基线读不成可编辑视图：%s" % _detail_vp(_vp), \
             {"state": _pcr.STATE_UNREADABLE, "view": None, "found": None,
              "mode": _mode, "blocked": []}
-    _found = _pcr.content_slots(_base_view, problems)
+    _found = _pcr.content_slots(_base_view, problems, allow_create=allow_create,
+                                target_fact_uids=target_fact_uids)
     _ctx = {"view": _base_view, "found": _found, "mode": _mode,
-            "blocked": list(_found.get("blocked") or [])}
+            "blocked": list(_found.get("blocked") or []),
+            "deferred": list(_found.get("deferred") or [])}
     # **身份失效优先**：目标实体都不存在时，先修记录（生产者），不是先改内容
     if _ctx["blocked"]:
         return False, "本轮问题里的**目标身份失效**（%s）——这些实体不在基线视图里，" \
@@ -2694,17 +2697,96 @@ def _content_slots_applicable(plan, problems, *, mode=None) -> tuple:
                                           for _x in _ctx["blocked"]), \
             dict(_ctx, state=_pcr.STATE_UNKNOWN_TARGET)
     if _found["unexpressible"]:
-        return False, "这些修法内容槽位表达不了（%s）" % "、".join(_found["unexpressible"]), \
-            dict(_ctx, state=_pcr.STATE_UNSUPPORTED)
+        # 2026-10-23（v5 第一包）：**声音类残余不挡窄槽位**。本包只覆盖事实绑定与画面改写，
+        # 声音修复明确留到后续；若因为"有一条声音问题"就整轮退回完整计划修订，事实目标
+        # 反而拿不到最小编辑面。声音问题留在 `problems` 里，由最终验收继续报告。
+        _deferred = {"verify_voice_not_speech", "verify_voice_speaker_missing"}
+        _blocking = [c for c in _found["unexpressible"] if str(c) not in _deferred]
+        if _blocking:
+            return False, "这些修法内容槽位表达不了（%s）" % "、".join(_blocking), \
+                dict(_ctx, state=_pcr.STATE_UNSUPPORTED)
+        if not _found["slots"]:
+            return False, "本轮只剩声音类残余（内容槽位不适用：%s）" \
+                % "、".join(_found["unexpressible"]), \
+                dict(_ctx, state=_pcr.STATE_NO_SLOTS)
+        return True, "", dict(_ctx, state=_pcr.STATE_OK,
+                              deferred=sorted(set(_ctx.get("deferred") or [])
+                                              | set(_found["unexpressible"])))
     if not _found["slots"]:
         return False, "本轮没有问题能落成内容槽位", \
             dict(_ctx, state=_pcr.STATE_NO_SLOTS)
     return True, "", dict(_ctx, state=_pcr.STATE_OK)
 
 
+def _slots_revision_outcome(problems, *, target_fact_uids=None, co_carried=False,
+                            protocol_ok=True, protection_structural=True,
+                            candidate=None,
+                            source="complete_candidate + 控制器完整验收（含一致性轴）") -> dict:
+    """槽位修订的四维记账（三态 true/false/null，按**目标身份**与**有效证据**判定）.
+
+    - `content_repaired`：只看**目标事实**相关的核验残余；非目标（例如声音）残余不参与。
+      没有有效核验记录 ⇒ `null`（不是 true，也不是 false）。
+    - `protection_intact`：结构面由范围守卫保证（`protection_structural`）；同载事实/hook
+      的**语义**保护需要核验证据，缺证据时整体为 `null`，并单列结构结论。
+    - `final_accepted`：完整验收（含一致性轴）残余为空。
+    """
+    import hashlib as _hl
+    import json as _json
+    probs = [p for p in (problems or []) if isinstance(p, dict)]
+    codes = [str(p.get("code") or "") for p in probs]
+    _targets = {str(x) for x in (target_fact_uids or [])}
+    _no_ev = {"verify_record_missing", "verify_bad_response", "verify_call_failed",
+              "verify_deadline_exhausted"}
+
+    def _hit(p) -> bool:
+        if not _targets:
+            return True
+        return str(p.get("uid") or p.get("ref") or p.get("fact_uid") or "") in _targets
+
+    _no_evidence = any(c in _no_ev for c in codes)
+    _content_bad = any(c.startswith("verify_") and c not in _no_ev and _hit(p)
+                       for c, p in zip(codes, probs))
+    _content = None if (_no_evidence and not _content_bad) else (not _content_bad)
+    if not protection_structural:
+        _protect = False
+    elif co_carried and _no_evidence:
+        _protect = None          # 同载语义未评估
+    elif co_carried and _content_bad:
+        _protect = False         # 有核验且目标侧已出现退化
+    else:
+        _protect = True
+    _digest = None
+    if isinstance(candidate, dict):
+        _body = {k: v for k, v in candidate.items() if k != "plan_verification"}
+        _digest = _hl.sha256(_json.dumps(_body, ensure_ascii=False,
+                                         sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    _detail = lambda reason: {"reason": reason, "stage": "slot_round",
+                              "candidate_digest": _digest, "source": source}
+    return {
+        "protocol_ok": bool(protocol_ok),
+        "content_repaired": _content,
+        "protection_intact": _protect,
+        "protection_structural": bool(protection_structural),
+        "final_accepted": (not probs),
+        "candidate_digest": _digest,
+        "details": {
+            "protocol_ok": _detail("回答解析、准入与编译成功"),
+            "content_repaired": _detail(
+                "无目标相关核验证据 ⇒ null" if _content is None
+                else ("目标事实仍有核验残余" if _content is False else "目标事实无核验残余")),
+            "protection_intact": _detail(
+                "结构保护成立" if _protect is None else
+                ("范围守卫在 accept 之前通过" if _protect else "范围/同载保护判负")),
+            "final_accepted": _detail("完整验收残余：%s" % (codes or "无")),
+        },
+        "source": source,
+    }
+
+
 def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, model=None,
                      system_prompt=None, evidence=None, verification=None,
-                     ctx=None, verify_axes=None) -> tuple:
+                     ctx=None, verify_axes=None, target_fact_uids=None,
+                     allow_create=True) -> tuple:
     """**内容槽位一轮修订**：模型只选内容与关系 → 代码装配既有 delta → 同一条验收链.
 
     与 `_replan_by_view` **同一份返回形状**（`(new_plan|None, why, call_id, evidence)`），
@@ -2723,7 +2805,9 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
     _found = _ctx.get("found")
     _mode = str(_ctx.get("mode") or plan_mode(plan) or MODE_LEGACY)
     if _base_view is None or not _found:
-        _ok, _why, _ctx2 = _content_slots_applicable(plan, problems, mode=_mode)
+        _ok, _why, _ctx2 = _content_slots_applicable(
+            plan, problems, mode=_mode, allow_create=allow_create,
+            target_fact_uids=target_fact_uids)
         if not _ok:
             return None, "内容槽位不适用：%s" % _why, "", (evidence or {})
         _base_view, _found, _mode = _ctx2["view"], _ctx2["found"], _ctx2["mode"]
@@ -2787,6 +2871,19 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
     if isinstance(_recs, dict):
         from shared.content_verification import plan_digest_of
         _ev_by_fact = _pcr.source_spans_by_fact(_recs.get(plan_digest_of(_base_view)) or {})
+    # **动作有效权限**：请求权限 ∩ 回答动作授权（`bind_visual` 不改正文；
+    # `rewrite_visual` 只改所选 target 的正文）。与请求里那份 `editable_scope` 同源。
+    _scope_eff = _pcr.build_editable_scope(_base_view, _slots, answer=_data)
+    if evidence is not None:
+        evidence["editable_scope"] = {
+            "phase": _scope_eff["phase"],
+            "facts": _scope_eff["allowed_fact_uids"],
+            "rewrite": _scope_eff["allowed_rewrite_beat_uids"],
+            "bind": _scope_eff["allowed_bind_beat_uids"]}
+        evidence["revision_outcome"] = {
+            "protocol_ok": None, "content_repaired": None,
+            "protection_intact": None, "final_accepted": None,
+            "source": "slots 编译与统一验收（未核验前 content/final 不填 true）"}
     _delta, _cp = _pcr.compile_delta(_base_view, _slots, _data, novel_text=novel_text,
                                      evidence_by_fact=_ev_by_fact)
     if _delta is None:
@@ -2801,18 +2898,34 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
             "fact_bindings": len(_delta.get("fact_bindings") or [])}
     _accept = lambda _v: _accept_view_candidate(_v, novel_text, verification, verify_axes=verify_axes)
     _cand_view, _probs, _res_k = apply_delta_view(_base_view, _delta, mode=_mode,
-                                                  accept=_accept)
+                                                  accept=_accept,
+                                                  editable_scope=_scope_eff)
     _kind = _res_k["kind"]
     if _kind == "no_change":
         return None, "no_change", _cid, evidence
     if _kind == "illegal":
         if evidence is not None:
-            evidence['failure_stage']='delta_application'
+            _stage = str(_res_k.get("stage") or "")
+            evidence['failure_stage'] = ('scope_guard' if _stage == 'scope'
+                                          else 'delta_application')
+            evidence["revision_outcome"] = {
+                "protocol_ok": True,
+                "content_repaired": None,
+                "protection_intact": (False if _stage == "scope" else None),
+                "protection_structural": (False if _stage == "scope" else None),
+                "final_accepted": False,
+                "candidate_digest": None,
+                "source": ("范围守卫（accept 之前）" if _stage == "scope"
+                           else "delta 应用/统一验收")}
         return None, _detail_vp(_probs) or "编译出的增量被拒收（形状/基线/引用/保护边界）",             _cid, evidence
     _new, _final_problems = complete_candidate(_cand_view, novel_text, verification, verify_axes=verify_axes)
     if _new is None:
         if evidence is not None:
             evidence['failure_stage']='candidate_projection'
+            evidence["revision_outcome"] = {
+                "protocol_ok": True, "content_repaired": None,
+                "protection_intact": True, "final_accepted": False,
+                "source": "候选投影失败（字段守卫已通过）"}
         return None, "候选无法投影成计划：%s" % _detail_vp(_final_problems), _cid,             (evidence or {})
     _new["plan_revision"] = {
         "schema": _pcr.SLOT_REQUEST_SCHEMA, "transport_protocol": _pcr.SLOT_REQUEST_SCHEMA,
@@ -2821,9 +2934,17 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
         "mapping": _res_k["mapping"], "residuals": list(_final_problems), "call_id": _cid,
         "slots": [str(_s["slot_id"]) for _s in _slots]}
     if evidence is not None:
+        _codes = [str((x or {}).get("code") or "") for x in (_final_problems or [])]
+        _targets = sorted({str(_s.get("fact_uid")) for _s in _slots
+                           if _s.get("kind") != "card_text" and str(_s.get("fact_uid"))})
+        _co_affected = bool(_scope_eff.get("co_carried_facts_by_target")) \
+            or bool(_scope_eff.get("protected_hook"))
         evidence["applied"] = True
         evidence["residuals"] = len(_final_problems)
         evidence["mapping"] = _res_k["mapping"]
+        evidence["revision_outcome"] = _slots_revision_outcome(
+            _final_problems, target_fact_uids=_targets, co_carried=_co_affected,
+            candidate=_new)
     return _new, "slots_applied: %d 条残余" % len(_final_problems), _cid, evidence
 
 
@@ -3307,7 +3428,8 @@ def revise_plan_full(plan, problems, novel_text, *, model=None, base_prompt=None
 
 
 def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str, model=None,
-                     base_prompt=None, system_prompt=None, verification=None, verify_axes=None) -> dict:
+                     base_prompt=None, system_prompt=None, verification=None, verify_axes=None,
+                     target_fact_uids=None) -> dict:
     """**一轮**修订（注入给控制器）：契约/承载问题走操作式反馈，预算不可行走原预算反馈.
 
     **接口只裁决一次**（复核之十二 P1）：`_replan_route(problems)` 的返回值同时决定
@@ -3445,7 +3567,9 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
         # 关系选择"表达时，让模型只做选择、由代码装配增量——真实修订里反复出现的**数字
         # 占位**（`upsert.beats[0]` 是 int）正是"要求它重抄实体表 / order / 哈希"造成的。
         # 表达不了（`_content_slots_applicable` 按稳定 UID 判）⇒ 落回既有 delta。
-        _slot_ok, _slot_why, _slot_ctx = _content_slots_applicable(plan, problems)
+        _slot_ok, _slot_why, _slot_ctx = _content_slots_applicable(
+            plan, problems, allow_create=(target_fact_uids is None),
+            target_fact_uids=target_fact_uids)
         _ev["content_slots"] = {"applicable": bool(_slot_ok), "why": str(_slot_why),
                                 "state": str((_slot_ctx or {}).get("state") or ""),
                                 "blocked": list((_slot_ctx or {}).get("blocked") or [])}
@@ -3467,7 +3591,9 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
             _new, _why, _call_id, _ev = _replan_by_slots(
                 plan, problems, novel_text, budget, rejections,
                 model=model, system_prompt=system_prompt, evidence=_ev,
-                verification=verification, ctx=_slot_ctx, verify_axes=verify_axes)
+                verification=verification, ctx=_slot_ctx, verify_axes=verify_axes,
+                target_fact_uids=target_fact_uids,
+                allow_create=(target_fact_uids is None))
         else:
             # **打印实际生效的那一条**（复核 2026-10-11：旧文案硬编码，看不出走的是哪条）：
             # 协议名照实打，括号里的**原因**也照实说——hybrid 是**计划模式**定的，
@@ -3486,15 +3612,42 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
                 mode=plan_mode(plan) or MODE_LEGACY, verification=verification,
                 protocol=_route, verify_axes=verify_axes)
     elif _route == ROUTE_FULL_PLAN:
-        # `problems` 为空/缺记录时不是"有表达不了的修法"，而是**无从证明表达得了**（fail-closed）
-        print("[PLAN] %s ⇒ 走受约束的完整计划修订"
-              % ("本轮问题里有操作协议**表达不了**的修法（%s）" % "、".join(_inops)
-                 if _inops else "没有生产者记录（无从证明操作协议表达得了）"))
-        _new, _why, _call_id = revise_plan_full(
-            plan, problems, novel_text, model=model, base_prompt=base_prompt,
-            system_prompt=system_prompt, timeout_sec=_timeout,
-            deadline_monotonic=_deadline_at, rejections=rejections,
-            evidence=_ev)
+        from step01_script_gen import plan_content_repair as _pcr_state
+        # 2026-10-23（v5 第一包）：事实目标与声音残余同轮时，**仍走窄槽位**修可表达的那部分；
+        # 声音残余留在 `problems`，由最终完整验收继续报告。只有"没有可表达槽位"才退回整份修订。
+        _slot_ok, _slot_why, _slot_ctx = _content_slots_applicable(
+            plan, problems, allow_create=(target_fact_uids is None),
+            target_fact_uids=target_fact_uids)
+        _ev["content_slots"] = {"applicable": bool(_slot_ok), "why": str(_slot_why),
+                                "state": str((_slot_ctx or {}).get("state") or ""),
+                                "blocked": list((_slot_ctx or {}).get("blocked") or [])}
+        if not _slot_ok and str((_slot_ctx or {}).get("state") or "") == _pcr_state.STATE_UNKNOWN_TARGET:
+            print("[PLAN] ⇒ **目标身份失效**：本次诊断指向的实体不在基线视图里 ⇒ "
+                  "零调用、保留基线；责任在**问题记录的生产者**（不是模型）")
+            return {"kind": "invalid_target", "detail": _slot_why, "call_id": "",
+                    "evidence": _ev}
+        if _slot_ok:
+            _ev["content_slots"]["slots"] = [str(_s["slot_id"])
+                                             for _s in _slot_ctx["found"]["slots"]]
+            _ev["content_slots"]["deferred"] = list((_slot_ctx or {}).get("deferred") or [])
+            print("[PLAN] ⇒ 走**内容槽位**修订（只修可表达的事实/画面；声音残余留给完整验收：%s）"
+                  % ("、".join(_ev["content_slots"]["deferred"]) or "无"))
+            _new, _why, _call_id, _ev = _replan_by_slots(
+                plan, problems, novel_text, budget, rejections,
+                model=model, system_prompt=system_prompt, evidence=_ev,
+                verification=verification, ctx=_slot_ctx, verify_axes=verify_axes,
+                target_fact_uids=target_fact_uids,
+                allow_create=(target_fact_uids is None))
+        else:
+            # `problems` 为空/缺记录时不是"有表达不了的修法"，而是**无从证明表达得了**（fail-closed）
+            print("[PLAN] %s ⇒ 走受约束的完整计划修订"
+                  % ("本轮问题里有操作协议**表达不了**的修法（%s）" % "、".join(_inops)
+                     if _inops else "没有生产者记录（无从证明操作协议表达得了）"))
+            _new, _why, _call_id = revise_plan_full(
+                plan, problems, novel_text, model=model, base_prompt=base_prompt,
+                system_prompt=system_prompt, timeout_sec=_timeout,
+                deadline_monotonic=_deadline_at, rejections=rejections,
+                evidence=_ev)
     else:
         _new, _why, _call_id = _replan_by_ops(
             plan, problems, novel_text, model=model, base_prompt=base_prompt,

@@ -212,7 +212,7 @@ def _card_of(view, card_id) -> dict:
     return {}
 
 
-def content_slots(view, problems) -> dict:
+def content_slots(view, problems, *, allow_create=True, target_fact_uids=None) -> dict:
     """问题清单 → 内容槽位；**表达不了的 code 原样列出**（调用方据此整轮改走既有路径）.
 
     `returns {"slots": [...], "unexpressible": [...], "blocked": [...],
@@ -239,6 +239,7 @@ def content_slots(view, problems) -> dict:
     _bad: list = []
     _blocked: list = []
     _covered: list = []
+    _deferred: list = []
     _beats = _beat_uids(view)
     from shared.presentation_contract import selectable_visual_beat_uids
     _visual_targets=selectable_visual_beat_uids(view)
@@ -288,6 +289,12 @@ def content_slots(view, problems) -> dict:
                 "问题 %s 指向的事实 %r **不在基线视图里**——上游记录的身份写错了"
                 "（消费者拿不到这个实体，不能替它猜）" % (_code, _uid), _uid))
             continue
+        # 2026-10-23（v5 第一包）：**显式单事实目标**。给了 `target_fact_uids` 时，
+        # 非目标事实的问题不出槽位（记为 `deferred`，由完整验收继续报告），
+        # 于是本轮只可能改到被选中的那一条事实。
+        if target_fact_uids is not None and str(_uid) not in {str(_x) for _x in target_fact_uids}:
+            _deferred.append(_code)
+            continue
         if _uid not in _facts_seen:
             _facts_seen.append(_uid)
     for _uid in _facts_seen:
@@ -303,7 +310,9 @@ def content_slots(view, problems) -> dict:
             "problem_codes": _codes,
             "claim": str(_f.get("claim") or ""),
             "evidence": str(_f.get("evidence") or ""),
-            "allowed_actions": [ACT_CREATE]+([ACT_BIND, ACT_REWRITE] if _visual_targets else []),
+            # 2026-10-23（v5 第一包）：受限模式只开**绑定与改写**；插入由调用方显式关闭。
+            "allowed_actions": (([ACT_CREATE] if allow_create else [])
+                                + ([ACT_BIND, ACT_REWRITE] if _visual_targets else [])),
             # 补绑/重写都只能在**现有画面**里选；补建只能插在现有节拍之后（"" = 末尾）
             "target_uids": list(_visual_targets), "insert_positions": [""] + list(_beats),
             "current_carriers": list(_cur),
@@ -337,7 +346,7 @@ def content_slots(view, problems) -> dict:
                         if str(_x.get("evidence") or "")],
         })
     return {"slots": _slots, "unexpressible": sorted(set(_bad)),
-            "blocked": _blocked,
+            "blocked": _blocked, "deferred": sorted(set(_deferred)),
             "covered_codes": sorted(set(_covered))}
 
 
@@ -459,6 +468,107 @@ def _request_entities(view, slots) -> tuple:
     return _ent, _blocked
 
 
+def build_editable_scope(view, slots, *, answer=None) -> dict:
+    """本轮**允许改什么**的单一事实源（请求与执行器共用同一份）.
+
+    `answer=None`（请求阶段）：列出本轮**可能**发生的全部合法编辑——允许改绑定的
+    `allowed_fact_uids`、允许改写正文的 `allowed_rewrite_beat_uids`、只绑不改的
+    `allowed_bind_beat_uids`、允许插入的位置、允许改写的卡片、受保护字段与冻结集合、
+    以及"目标节拍上还载着哪些**非目标**事实"（`co_carried_facts_by_target`）。
+
+    给了 `answer`（执行阶段）：收敛成**该动作实际授权**的面——
+    `bind_visual` 不给正文权限；`rewrite_visual` 只给所选 `target_uid` 的正文权限；
+    两者都只给该槽事实的绑定权限。有效权限 = 请求权限 ∩ 回答动作授权。
+
+    纯函数：不读文件、不调模型、不改入参。
+    """
+    from shared.presentation_contract import ref_uid
+    _slots = [_s for _s in (slots or []) if isinstance(_s, dict)]
+    _by_sid = {str(_s.get("slot_id")): _s for _s in _slots}
+    _facts: set = set()
+    _rewrite: set = set()
+    _bind: set = set()
+    _insert: set = set()
+    _cards: set = set()
+    _target_beats: set = set()
+    for _s in _slots:
+        _acts = {str(_a) for _a in (_s.get("allowed_actions") or [])}
+        if _s.get("kind") == "card_text":
+            _cid = str(_s.get("card_id") or "")
+            if _cid:
+                _cards.add(_cid)
+            continue
+        _fu = str(_s.get("fact_uid") or "")
+        if _fu:
+            _facts.add(_fu)
+        if ACT_CREATE in _acts:
+            # 新建画面本轮**不在收紧范围**（插入是后续包）：用 `"*"` 表示"允许插入"，
+            # 只保留"不许删除/重排既有节拍"这一条。
+            _insert.add("*")
+        for _t in _s.get("target_uids") or []:
+            _t = str(_t)
+            if ACT_REWRITE in _acts:
+                _rewrite.add(_t)
+                _target_beats.add(_t)
+            if ACT_BIND in _acts:
+                _bind.add(_t)
+                _target_beats.add(_t)
+    # 同载保护：绑在**目标节拍**上的其他事实（不是本轮的目标）
+    _co: dict = {}
+    for _b in (view or {}).get("fact_bindings") or []:
+        if not isinstance(_b, dict):
+            continue
+        _fu = str(_b.get("fact_uid") or "")
+        if _fu in _facts:
+            continue
+        for _c in _b.get("carriers") or []:
+            _t = str(ref_uid(_c))
+            if _t in _target_beats:
+                _co.setdefault(_t, []).append(_fu)
+    _hk = (view or {}).get("hook_bindings") or {}
+    _hook = _hk if any(str(ref_uid(_c)) in _target_beats
+                       for _c in (_hk.get("carriers") or [])) else {}
+    if isinstance(answer, dict):
+        _ef, _er, _eb, _ei, _ec = set(), set(), set(), set(), set()
+        for _it in answer.get("answers") or []:
+            if not isinstance(_it, dict):
+                continue
+            _s = _by_sid.get(str(_it.get("slot_id") or ""))
+            if _s is None:
+                continue
+            _act = str(_it.get("action") or "")
+            if _s.get("kind") == "card_text":
+                if _act == ACT_NARROW_CARD and str(_s.get("card_id") or "") in _cards:
+                    _ec.add(str(_s.get("card_id")))
+                continue
+            _tgt = str(_it.get("target_uid") or "")
+            if _act == ACT_REWRITE and _tgt in _rewrite:
+                _er.add(_tgt)
+                _ef.add(str(_s.get("fact_uid") or ""))
+            elif _act == ACT_BIND and _tgt in _bind:
+                _eb.add(_tgt)
+                _ef.add(str(_s.get("fact_uid") or ""))
+            elif _act == ACT_CREATE and ACT_CREATE in {str(_a) for _a in
+                                                       (_s.get("allowed_actions") or [])}:
+                _ei.add("*")
+                _ef.add(str(_s.get("fact_uid") or ""))
+        _facts, _rewrite, _bind, _insert, _cards = _ef, _er, _eb, _ei, _ec
+    return {
+        "phase": "effective" if isinstance(answer, dict) else "request",
+        "allowed_fact_uids": sorted(x for x in _facts if x),
+        "allowed_rewrite_beat_uids": sorted(_rewrite),
+        "allowed_bind_beat_uids": sorted(_bind),
+        "allowed_insert_after_uids": sorted(_insert),
+        "allowed_card_ids": sorted(_cards),
+        "beat_protected_fields": ["uid", "event_uids", "purpose", "evidence", "source",
+                                  "voice_ref"],
+        "frozen_collections": ["frozen_facts", "frozen_events", "dialogue_units",
+                               "narration_units"],
+        "co_carried_facts_by_target": {k: sorted(set(v)) for k, v in _co.items()},
+        "protected_hook": _hook,
+    }
+
+
 def slot_request(view, slots, *, limits=None, remaining_calls=None,
                  remaining_sec=None) -> dict:
     """装配槽位请求（**显式版本**；与 delta 请求同源的两个基线摘要）.
@@ -473,21 +583,15 @@ def slot_request(view, slots, *, limits=None, remaining_calls=None,
     from shared.presentation_contract import fact_basis_digest, view_digest, fact_binding_policy
     from step01_script_gen.plan_feasibility import planning_resource_context
     from shared.presentation_contract import ref_uid
-    targets={("screen_card" if slot.get('kind')=='card_text' else "visual",str(uid))
-             for slot in (slots or []) for uid in slot.get('target_uids',[])}
-    requested={fact['uid'] for fact in _request_facts(slots)}
-    protected=[]
-    for binding in (view or {}).get('fact_bindings',[]):
-        uid=str(binding.get('fact_uid') or '')
-        if uid not in requested and any((ref.get('kind'),ref_uid(ref)) in targets
-                                       for ref in binding.get('carriers',[]) if isinstance(ref,dict)):
-            protected.append(_fact_brief(view,uid))
-    hook=(view or {}).get('hook_bindings') or {}
-    protected_hook=hook if any((ref.get('kind'),ref_uid(ref)) in targets
-                              for ref in hook.get('carriers',[]) if isinstance(ref,dict)) else {}
-    context_slots=list(slots or [])+[{'facts':protected}]
+    # **同一份可编辑范围**：请求里带出去的就是执行器要核的那份（不再各自临时算）。
+    _scope = build_editable_scope(view, slots)
+    _co = _scope.get("co_carried_facts_by_target") or {}
+    protected = [_fact_brief(view, _fu) for _fu in
+                 sorted({_f for _v in _co.values() for _f in _v}) if _fact_of(view, _fu)]
+    protected_hook = _scope.get("protected_hook") or {}
+    context_slots = list(slots or []) + [{'facts': protected}]
     if protected_hook:
-        context_slots.append({'facts':[{'uid':'hook','carriers':hook.get('carriers',[])}]})
+        context_slots.append({'facts':[{'uid':'hook','carriers':protected_hook.get('carriers',[])}]})
     _ent, _blocked = _request_entities(view, context_slots)
     _bindings: list = []
     _seen_facts: set = set()
@@ -510,6 +614,8 @@ def slot_request(view, slots, *, limits=None, remaining_calls=None,
         "protected_facts":protected,
         "protected_hook":({'claim':(view.get('plan_basis') or {}).get('end_hook'),
                            'bindings':protected_hook} if protected_hook else {}),
+        #: 本轮**可编辑范围**（与执行器同源；`answer` 收敛后的有效范围由 `build_editable_scope(view, slots, answer=…)` 得出）
+        "editable_scope": _scope,
         "frozen_events": [str(_e) for _e in (view or {}).get("frozen_events") or []],
         "existing_beats": [_beat_brief(view, _u) for _u in _ent["beats"]],
         "existing_cards": [_card_brief(view, _u) for _u in _ent["cards"]],
