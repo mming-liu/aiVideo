@@ -1,0 +1,40 @@
+{
+ "stage": "verify",
+ "case": "verify_3",
+ "cap": 1,
+ "target": "deepseek-v4.1-flash",
+ "plan_path": "d12_work\\candidate_content_v15.json",
+ "plan_sha16": "10c04b6add4e1e6e",
+ "novel_sha": "aba1adc22826c2834754af529b6235e3bd4a5428b59a45c10353f5483ce854c3",
+ "plan_digest": "5f8659bb407c0f2498a7d245f7fbfcb6937f2a98e4d089055121001e5f8a93b4",
+ "deterministic": {
+  "codes": [
+   "verify_record_missing"
+  ],
+  "gate": [],
+  "voice_lower_bound": 87.2,
+  "beats": 16
+ },
+ "verify": {
+  "transmitted": 1,
+  "attempts": 1,
+  "blocked": 0,
+  "status": "ok"
+ },
+ "final_acceptance": {
+  "codes": [],
+  "details": []
+ },
+ "totals": {
+  "attempts": 1,
+  "transmitted": 1,
+  "blocked": 0
+ },
+ "self_check": {
+  "ok": true,
+  "problems": [],
+  "archived": [
+   "send_01.json"
+  ]
+ }
+}

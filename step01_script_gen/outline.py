@@ -3700,7 +3700,7 @@ def run_plan_revision(plan, novel_text: str, *, model=None, base_prompt=None,
                       system_prompt=None, max_calls: int = DEFAULT_REVISION_MAX_CALLS,
                       deadline_sec=DEFAULT_REVISION_DEADLINE_SEC,
                       run_deadline_at=None, budget=None, on_round=None,
-                      verification=None) -> dict:
+                      verification=None, target_fact_uids=None) -> dict:
     """把计划交给**修订控制器**跑一遍（所有来源共用同一条验收链、同一份额度与截止时刻）.
 
     `run_deadline_at` 是**整次 Step 01 的绝对截止时刻**（monotonic，工作包 §4 B）：
@@ -3741,7 +3741,8 @@ def run_plan_revision(plan, novel_text: str, *, model=None, base_prompt=None,
         accept=_accept,
         revise=lambda _p, _pr, _bg, _rj: revise_plan_once(
             _p, _pr, _bg, _rj, novel_text=novel_text, model=model, base_prompt=base_prompt,
-            system_prompt=system_prompt, verification=verification),
+            system_prompt=system_prompt, verification=verification,
+            target_fact_uids=target_fact_uids),
         budget=budget, on_round=on_round,
         # **控制器的逐轮记录必须落到日志**（复核 2026-10-02 之五）：`log` 这个口子一直
         # 在，但生产入口从没接——"第 N 轮为什么被拒收/为什么停"只在返回对象里，

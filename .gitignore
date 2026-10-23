@@ -138,6 +138,8 @@ tests/step01_script_gen/*
 !tests/step01_script_gen/test_step01_commit.py
 !tests/step01_script_gen/test_p0_fault_injection.py
 !tests/step01_script_gen/test_plan_revision_v2_wiring.py
+# 2026-10-23：单事实范围与四维分账的离线回归（与 09-25「基线与契约判别测试随仓库交付」同一标准）
+!tests/step01_script_gen/test_scoped_content_repair.py
 !tests/step01_script_gen/constraints/
 tests/step01_script_gen/constraints/*
 !tests/step01_script_gen/constraints/test_facing_to_gaze.py
