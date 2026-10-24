@@ -216,6 +216,27 @@ def test_transaction_r_probe_residual_blocks_commit():
     assert out["problems"][0]["code"] == "r_child_unsupported"
 
 
+def test_transaction_r_child_not_supported_blocks_commit():
+    def _r(c):
+        rec = _record_for(pc.plan_from_view(c), fact_uid="f01",
+                          verdict="supported")
+        for _f in rec["facts"]:
+            if _f.get("fact_uid") == "f02.1":
+                _f["verdict"] = "partial"
+                _f["support_spans"] = []
+                _f["missing"] = "未展示"
+                for _o in _f.get("obligations") or []:
+                    _o["verdict"] = "partial"
+                    _o["evidence"] = []
+                    _o["missing"] = "未展示"
+        return rec
+
+    out = _tx(verify_candidate=_r)
+    assert out["ok"] is False and out["stage"] == "r_state", out
+    assert out["candidate"] is not None
+    assert out["problems"][0]["code"] == "split_pending"
+
+
 def test_split_acceptance_marks_pending_and_invalid():
     cand, _, _ = _apply()
     entry = (fs.context(cand).get("splits") or [])[0]
