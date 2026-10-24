@@ -163,6 +163,8 @@ tests/enhancements/*
 !tests/step01_script_gen/test_create_voice.py
 !tests/step01_script_gen/test_verify_frozen_candidate.py
 !tests/step01_script_gen/test_p3_split_wiring.py
+# 2026-10-24：P3-PreE 完整计划真实验收入口 + P3-E 运行器计费端点守卫（随仓库交付）
+!tests/step01_script_gen/test_p3_pre_e.py
 !tests/step01_script_gen/test_real_run_budget.py
 # 187 条回归还含 source_revision 与 presentation_contract 两个受影响的既有套件；
 # 不放行它们，干净检出只能复现部分读数。source_revision 的夹具来自 legacy_semantic。
