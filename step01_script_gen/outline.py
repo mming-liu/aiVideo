@@ -2677,7 +2677,8 @@ def _verification_record_for(verification, plan):
 
 def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
                               target_fact_uids=None, verification=None,
-                              novel_text: str = "") -> tuple:
+                              novel_text: str = "",
+                              allowed_repair_actions=None) -> tuple:
     """本轮问题**能不能被内容槽位全部表达**（§5.6 第 4 条：能表达才接入）.
 
     `returns (ok, why, ctx)`：`ok=False` 时调用方**整轮落回既有 delta**——判据只有
@@ -2701,11 +2702,35 @@ def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
         return False, "基线读不成可编辑视图：%s" % _detail_vp(_vp), \
             {"state": _pcr.STATE_UNREADABLE, "view": None, "found": None,
              "mode": _mode, "blocked": []}
+    _rec = _verification_record_for(verification, plan)
+    _admitted = False
+    if isinstance(_rec, dict):
+        from shared.content_verification import (plan_digest_of,
+                                                record_protocol_problems)
+        _rule = record_protocol_problems(
+            _rec, _base_view, plan_digest=plan_digest_of(plan),
+            novel_text=novel_text,
+            novel_digest=str(getattr(verification, "novel_digest", "") or ""))
+        _admitted = not _rule
     _found = _pcr.content_slots(
         _base_view, problems, allow_create=allow_create,
         target_fact_uids=target_fact_uids,
-        verification_record=_verification_record_for(verification, plan),
-        novel_text=novel_text)
+        verification_record=_rec,
+        novel_text=novel_text, record_admitted=_admitted)
+    if allowed_repair_actions is not None:
+        _allow_actions = {str(_a) for _a in allowed_repair_actions}
+        for _slot in _found.get("slots") or []:
+            _slot["allowed_actions"] = [
+                str(_a) for _a in (_slot.get("allowed_actions") or [])
+                if str(_a) in _allow_actions]
+        if not _found.get("slots") or any(
+                not _s.get("allowed_actions") for _s in _found["slots"]):
+            return False, "限定动作与原本合法动作交集为空：%s" % sorted(
+                _allow_actions), {
+                "state": _pcr.STATE_ACTION_CONVERGENCE_EMPTY,
+                "view": _base_view, "found": _found, "mode": _mode,
+                "blocked": list(_found.get("blocked") or []),
+                "deferred": list(_found.get("deferred") or [])}
     _ctx = {"view": _base_view, "found": _found, "mode": _mode,
             "verification_record": _verification_record_for(verification, plan),
             "blocked": list(_found.get("blocked") or []),
@@ -2873,7 +2898,7 @@ def _slots_revision_outcome(problems, *, target_fact_uids=None, target_voice_uid
 def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, model=None,
                      system_prompt=None, evidence=None, verification=None,
                      ctx=None, verify_axes=None, target_fact_uids=None,
-                     allow_create=True) -> tuple:
+                     allow_create=True, allowed_repair_actions=None) -> tuple:
     """**内容槽位一轮修订**：模型只选内容与关系 → 代码装配既有 delta → 同一条验收链.
 
     与 `_replan_by_view` **同一份返回形状**（`(new_plan|None, why, call_id, evidence)`），
@@ -2895,7 +2920,8 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
         _ok, _why, _ctx2 = _content_slots_applicable(
             plan, problems, mode=_mode, allow_create=allow_create,
             target_fact_uids=target_fact_uids, verification=verification,
-            novel_text=novel_text)
+            novel_text=novel_text,
+            allowed_repair_actions=allowed_repair_actions)
         if not _ok:
             return None, "内容槽位不适用：%s" % _why, "", (evidence or {})
         _base_view, _found, _mode = _ctx2["view"], _ctx2["found"], _ctx2["mode"]
@@ -3531,7 +3557,7 @@ def revise_plan_full(plan, problems, novel_text, *, model=None, base_prompt=None
 
 def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str, model=None,
                      base_prompt=None, system_prompt=None, verification=None, verify_axes=None,
-                     target_fact_uids=None) -> dict:
+                     target_fact_uids=None, allowed_repair_actions=None) -> dict:
     """**一轮**修订（注入给控制器）：契约/承载问题走操作式反馈，预算不可行走原预算反馈.
 
     **接口只裁决一次**（复核之十二 P1）：`_replan_route(problems)` 的返回值同时决定
@@ -3672,7 +3698,8 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
         _slot_ok, _slot_why, _slot_ctx = _content_slots_applicable(
             plan, problems, allow_create=(target_fact_uids is None),
             target_fact_uids=target_fact_uids, verification=verification,
-            novel_text=novel_text)
+            novel_text=novel_text,
+            allowed_repair_actions=allowed_repair_actions)
         _ev["content_slots"] = {"applicable": bool(_slot_ok), "why": str(_slot_why),
                                 "state": str((_slot_ctx or {}).get("state") or ""),
                                 "blocked": list((_slot_ctx or {}).get("blocked") or [])}
@@ -3683,6 +3710,11 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
             # 基线计划原样保留，把责任送回**记录生产者**（问题记录随返回带回）。
             print("[PLAN] ⇒ **目标身份失效**：本次诊断指向的实体不在基线视图里 ⇒ "
                   "零调用、保留基线；责任在**问题记录的生产者**（不是模型）")
+            return {"kind": "invalid_target", "detail": _slot_why, "call_id": "",
+                    "evidence": _ev}
+        if not _slot_ok and str((_slot_ctx or {}).get("state") or "") \
+                == _pcr_state.STATE_ACTION_CONVERGENCE_EMPTY:
+            print("[PLAN] ⇒ 限定动作与合法动作交集为空 ⇒ 零调用、保留基线")
             return {"kind": "invalid_target", "detail": _slot_why, "call_id": "",
                     "evidence": _ev}
         if _slot_ok:
@@ -3721,13 +3753,19 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
         _slot_ok, _slot_why, _slot_ctx = _content_slots_applicable(
             plan, problems, allow_create=(target_fact_uids is None),
             target_fact_uids=target_fact_uids, verification=verification,
-            novel_text=novel_text)
+            novel_text=novel_text,
+            allowed_repair_actions=allowed_repair_actions)
         _ev["content_slots"] = {"applicable": bool(_slot_ok), "why": str(_slot_why),
                                 "state": str((_slot_ctx or {}).get("state") or ""),
                                 "blocked": list((_slot_ctx or {}).get("blocked") or [])}
         if not _slot_ok and str((_slot_ctx or {}).get("state") or "") == _pcr_state.STATE_UNKNOWN_TARGET:
             print("[PLAN] ⇒ **目标身份失效**：本次诊断指向的实体不在基线视图里 ⇒ "
                   "零调用、保留基线；责任在**问题记录的生产者**（不是模型）")
+            return {"kind": "invalid_target", "detail": _slot_why, "call_id": "",
+                    "evidence": _ev}
+        if not _slot_ok and str((_slot_ctx or {}).get("state") or "") \
+                == _pcr_state.STATE_ACTION_CONVERGENCE_EMPTY:
+            print("[PLAN] ⇒ 限定动作与合法动作交集为空 ⇒ 零调用、保留基线")
             return {"kind": "invalid_target", "detail": _slot_why, "call_id": "",
                     "evidence": _ev}
         if _slot_ok:

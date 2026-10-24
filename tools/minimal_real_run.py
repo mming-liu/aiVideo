@@ -291,7 +291,7 @@ def _run_p2(sample: dict, run_dir: Path):
     _ctl.records[_digest] = _base
     _out = o.revise_plan_once(_plan, _actual, RevisionBudget(
         max_calls=3, deadline_sec=300.0), None, novel_text=_novel,
-        verification=_ctl)
+        verification=_ctl, allowed_repair_actions={"create_voice"})
     _write(run_dir / "outcome.json", _out)
     _cand = _out.get("plan") if isinstance(_out.get("plan"), dict) else {}
     _write(run_dir / "candidate_plan.json", _cand)

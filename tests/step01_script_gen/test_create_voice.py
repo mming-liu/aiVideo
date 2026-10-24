@@ -51,7 +51,8 @@ def _slot(view, record=None):
     _found = pcr.content_slots(
         view, [{"code": "verify_fact_unsupported", "uid": "f01",
                 "kind": "verification", "path": "facts"}],
-        verification_record=record or _record(view), novel_text=NOVEL)
+        verification_record=record or _record(view), novel_text=NOVEL,
+        record_admitted=True)
     assert _found["slots"], _found
     return _found["slots"][0]
 
@@ -181,6 +182,93 @@ def test_create_voice_target_resolves_temp_mapping():
     assert _out["content_repaired"] is False, _out
 
 
+def test_direct_slot_without_admitted_record_has_no_create_voice():
+    v = _view_for(existing=True)
+    _found = pcr.content_slots(
+        v, [{"code": "verify_fact_unsupported", "uid": "f01"}],
+        verification_record=_record(v), novel_text=NOVEL)   # 不传 record_admitted
+    _slot0 = _found["slots"][0]
+    assert pcr.ACT_CREATE_VOICE not in _slot0["allowed_actions"]
+    assert _slot0["voice_source_spans"] == []
+
+
+def test_production_entry_without_admitted_record_has_no_create_voice():
+    v = _view_for(existing=True)
+    plan = pc.plan_from_view(v)
+    _ok, _why, _ctx = o._content_slots_applicable(
+        plan, [{"code": "verify_fact_unsupported", "uid": "f01"}],
+        verification=None, novel_text=NOVEL)
+    _slots = (_ctx or {}).get("found", {}).get("slots") or []
+    assert _slots
+    assert pcr.ACT_CREATE_VOICE not in _slots[0]["allowed_actions"]
+
+
+def test_beat_text_match_is_not_a_landing_when_evidence_is_unrelated():
+    v = _view_for(existing=True)
+    v["beats"][1]["text"] = "甲留在门外"
+    v["beats"][1]["evidence"] = "无关画面"
+    slot = _slot(v)
+    assert slot["voice_existing_beat_uids"] == []
+    assert slot["voice_new_allowed"] is True
+
+
+def test_duplicate_source_text_keeps_all_positions():
+    v = _view_for(existing=True)
+    _novel = "甲留在门外。乙走进屋。甲留在门外。"
+    _rec = _record(v)
+    _found = pcr.content_slots(
+        v, [{"code": "verify_fact_unsupported", "uid": "f01"}],
+        verification_record=_rec, novel_text=_novel, record_admitted=True)
+    _land = _found["slots"][0]["voice_landings"][0]
+    assert _land["text"] == "甲留在门外。"
+    assert len(_land["positions"]) == 2
+    assert _land["beat_uids"] == ["b02"]
+
+
+@pytest.mark.v2_request
+def test_action_convergence_narrows_actions_and_empty_intersection_makes_zero_calls(
+        monkeypatch):
+    from tests.step01_script_gen.test_plan_content_slots import _Budget, _stub
+
+    v = _view_for(existing=True)
+    plan = pc.plan_from_view(v)
+    base = _record(v)
+    digest = cv.plan_digest_of(plan)
+    monkeypatch.setattr(cv, "record_protocol_problems", lambda *a, **k: [])
+
+    class _Ctl:
+        novel_digest = base["novel_digest"]
+        max_verifications = 3
+        require_coherence = False
+
+        def __init__(self):
+            self.records = {digest: base}
+
+        def record_for(self, view, plan_digest=None, **kw):
+            return self.records.get(str(plan_digest or ""), base)
+
+    _ok, _why, _ctx = o._content_slots_applicable(
+        plan, [{"code": "verify_fact_unsupported", "uid": "f01"}],
+        verification=_Ctl(), novel_text=NOVEL,
+        allowed_repair_actions={"create_voice"})
+    assert _ok, _why
+    _slot0 = _ctx["found"]["slots"][0]
+    assert _slot0["allowed_actions"] == [pcr.ACT_CREATE_VOICE]
+
+    _calls = _stub(monkeypatch, {
+        "schema": pcr.SLOT_ANSWER_SCHEMA,
+        "answers": [{"slot_id": _slot0["slot_id"],
+                     "action": pcr.ACT_CREATE_VOICE,
+                     "text": "甲留在门外。", "voice_kind": "narration",
+                     "placement": "existing", "beat_uid": "b02"}]})
+    _out_bad = o.revise_plan_once(
+        plan, [{"code": "verify_fact_unsupported", "uid": "f01"}], _Budget(),
+        None, novel_text=NOVEL, verification=_Ctl(),
+        allowed_repair_actions={"reclassify_voice"})
+    assert _out_bad["kind"] == "invalid_target", _out_bad
+    assert _calls == [], len(_calls)
+
+
 @pytest.mark.v2_request
 def test_create_voice_reaches_the_revision_entry(monkeypatch):
     """生产入口：槽位 → create_voice → delta → 应用/重验 → 候选投影."""
@@ -221,6 +309,7 @@ def test_create_voice_reaches_the_revision_entry(monkeypatch):
 
     _ctl = _Ctl()
     _ctl.base = base
+    monkeypatch.setattr(cv, "record_protocol_problems", lambda *a, **k: [])
     _calls = _stub(monkeypatch, {
         "schema": pcr.SLOT_ANSWER_SCHEMA,
         "answers": [{"slot_id": "slot:fact:f01",

@@ -112,6 +112,7 @@ STATE_OK = "ok"
 STATE_UNKNOWN_TARGET = "unknown_target"
 STATE_UNSUPPORTED = "unsupported"
 STATE_NO_SLOTS = "no_slots"
+STATE_ACTION_CONVERGENCE_EMPTY = "action_convergence_empty"
 STATE_UNREADABLE = "unreadable"
 #: 字段类型（`int` **不含 `bool`**——`event_index=True` 是违约，不是 1）
 _FIELD_TYPE = {"slot_id": "str", "action": "str", "text": "str", "target_uid": "str",
@@ -245,7 +246,8 @@ def _card_of(view, card_id) -> dict:
 
 
 def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
-                  verification_record=None, novel_text: str = "") -> dict:
+                  verification_record=None, novel_text: str = "",
+                  record_admitted: bool = False) -> dict:
     """问题清单 → 内容槽位；**表达不了的 code 原样列出**（调用方据此整轮改走既有路径）.
 
     `returns {"slots": [...], "unexpressible": [...], "blocked": [...],
@@ -425,8 +427,10 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
         _cur = _visual_carriers(view, _uid)
         _vt = _voice_targets(view, _uid)
         _acts = ([ACT_CREATE] if allow_create else [])
-        _vspans = _voice_source_spans(view, _uid, _rec_in, novel_text)
-        _existing = _voice_existing_beats(view, _uid, _vspans)
+        _vspans = _voice_source_spans(view, _uid, _rec_in, novel_text,
+                                      admitted=bool(record_admitted))
+        _landings = _voice_landings(view, novel_text, _vspans)
+        _existing = _voice_existing_beats(_landings)
         _cars = []
         from shared.presentation_contract import ref_uid
         for _b in (view or {}).get("fact_bindings") or []:
@@ -458,6 +462,7 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
             "target_uids": list(_visual_targets), "insert_positions": [""] + list(_beats),
             "voice_target_uids": [x["uid"] for x in _vt],
             "voice_source_spans": _vspans,
+            "voice_landings": _landings,
             "voice_existing_beat_uids": _existing,
             "voice_new_allowed": not _existing,
             "current_carriers": list(_cur),
@@ -648,8 +653,36 @@ def _hook_bound(view, kind, uid) -> bool:
                for _c in (_hk.get("carriers") or []))
 
 
-def _voice_source_spans(view, fact_uid, record, novel_text) -> list:
-    """创建声音可用的逐字来源：已准入记录 spans + 事实证据，且必须落在原文."""
+def _occurrences(text, hay) -> list:
+    """逐字子串在原文中的**全部**位置（重复文本不猜首次出现）."""
+    _t, _h = str(text or ""), str(hay or "")
+    if not _t or not _h:
+        return []
+    _out, _i = [], _h.find(_t)
+    while _i >= 0:
+        _out.append((_i, _i + len(_t)))
+        _i = _h.find(_t, _i + 1)
+    return _out
+
+
+def _overlaps(a, b) -> bool:
+    return any(not (x1 <= y0 or y1 <= x0) for x0, x1 in a for y0, y1 in b)
+
+
+def _beat_evidence_positions(beat, novel_text) -> list:
+    """节拍 evidence 的原文位置；**正文不参与**落点证明."""
+    return _occurrences(str((beat or {}).get("evidence") or ""), novel_text)
+
+
+def _voice_source_spans(view, fact_uid, record, novel_text, *,
+                        admitted=False) -> list:
+    """创建声音可用的逐字来源：**已准入**记录的 spans + 事实证据，且落在原文.
+
+    事实 evidence 只能作为逐字内容来源，不能替代记录准入；`admitted=False` 时
+    即使 evidence 在原文里也不返回任何来源。
+    """
+    if not admitted or not isinstance(record, dict):
+        return []
     _spans = list((source_spans_by_fact(record) or {}).get(str(fact_uid)) or [])
     _f = _fact_of(view, fact_uid)
     if str(_f.get("evidence") or "").strip():
@@ -657,16 +690,58 @@ def _voice_source_spans(view, fact_uid, record, novel_text) -> list:
     _out = []
     for _s in _spans:
         _s = str(_s or "").strip()
-        if _s and _s not in _out and _s in str(novel_text or ""):
+        if _s and _s not in _out and _occurrences(_s, novel_text):
             _out.append(_s)
     return _out
 
 
-def _voice_existing_beats(view, fact_uid, spans) -> list:
-    """可承载新声音的现有节拍：voice_ref 为 visual/空、非 hook、与事实证据重叠."""
+def _voice_landings(view, novel_text, spans) -> list:
+    """逐来源片段 → 原文位置集合 + 与之区间重叠的已有节拍（逐片段对应）."""
     from shared.presentation_contract import ref_uid
-    _keys = [_norm_key(_s) for _s in (spans or []) if _norm_key(_s)]
-    if not _keys:
+    _out = []
+    for _span in spans or []:
+        _pos = _occurrences(_span, novel_text)
+        if not _pos:
+            continue
+        _beats = []
+        for _b in (view or {}).get("beats") or []:
+            if not isinstance(_b, dict):
+                continue
+            _uid = str(_b.get("uid") or "")
+            _vr = _b.get("voice_ref") or {}
+            if str(_vr.get("kind") or "") not in ("", "visual"):
+                continue
+            if _hook_bound(view, "visual", _uid):
+                continue
+            _bp = _beat_evidence_positions(_b, novel_text)
+            if _bp and _overlaps(_pos, _bp):
+                _beats.append(_uid)
+        _out.append({"text": str(_span), "positions": [list(x) for x in _pos],
+                     "beat_uids": _beats})
+    return _out
+
+
+def _voice_existing_beats(landings) -> list:
+    _out = []
+    for _x in landings or []:
+        for _u in _x.get("beat_uids") or []:
+            if _u not in _out:
+                _out.append(str(_u))
+    return _out
+
+
+def _voice_landing_of(slot, text) -> dict:
+    for _x in (slot or {}).get("voice_landings") or []:
+        if isinstance(_x, dict) and str(_x.get("text") or "") == str(text or ""):
+            return _x
+    return {}
+
+
+def _voice_landing_for_text(view, novel_text, text) -> list:
+    """回答选中的声音片段 → 与之原文区间重叠的已有节拍（选中片段单独判定）."""
+    from shared.presentation_contract import ref_uid
+    _pos = _occurrences(text, novel_text)
+    if not _pos:
         return []
     _out = []
     for _b in (view or {}).get("beats") or []:
@@ -674,15 +749,11 @@ def _voice_existing_beats(view, fact_uid, spans) -> list:
             continue
         _uid = str(_b.get("uid") or "")
         _vr = _b.get("voice_ref") or {}
-        _vk = str(_vr.get("kind") or "")
-        if _vk not in ("", "visual"):
+        if str(_vr.get("kind") or "") not in ("", "visual"):
             continue
         if _hook_bound(view, "visual", _uid):
             continue
-        _bt = _norm_key("%s\n%s" % (_b.get("text") or "", _b.get("evidence") or ""))
-        if not _bt:
-            continue
-        if any(_k in _bt or (_bt and _bt in _k) for _k in _keys):
+        if _overlaps(_pos, _beat_evidence_positions(_b, novel_text)):
             _out.append(_uid)
     return _out
 
@@ -1369,19 +1440,20 @@ def answer_problems(answer, slots, *, where: str = "槽位回答") -> list:
                 continue
             _spans = [str(_x) for _x in (_slot.get("voice_source_spans") or [])
                       if str(_x)]
-            if not any(_txt and _txt in _x for _x in _spans):
+            _landing = _voice_landing_of(_slot, _txt)
+            if not _txt or _txt not in _spans or not _landing:
                 _p.append(_rec("repair_create_voice_not_in_source", _sid,
-                               "create_voice 的正文必须逐字取自 `voice_source_spans`"
-                               "（当前 %r）" % _txt, _txt))
+                               "create_voice 的正文必须是 `voice_source_spans` 中的"
+                               "一个完整逐字片段（当前 %r）" % _txt, _txt))
                 continue
-            _eligible = [str(_x) for _x in
-                         (_slot.get("voice_existing_beat_uids") or [])]
+            _eligible = [str(_x) for _x in (_landing.get("beat_uids") or [])]
             if _place == "existing":
                 _bid = str(_it.get("beat_uid") or "")
                 if _bid not in _eligible:
                     _p.append(_rec("repair_answer_target_not_allowed", _sid,
-                                   "槽位 %s 的已有落点 %s 不在允许集合里（要 %s）"
-                                   % (_sid, _brief(_bid), _eligible), _bid))
+                                   "槽位 %s 的已有落点 %s 不是所选片段 %r 的合法落点"
+                                   "（该片段可用：%s）"
+                                   % (_sid, _brief(_bid), _txt, _eligible), _bid))
                     continue
                 for _f in ("insert_after_uid", "event_index", "beat_text"):
                     if _f in _it:
@@ -1391,7 +1463,8 @@ def answer_problems(answer, slots, *, where: str = "槽位回答") -> list:
             # placement == new
             if _eligible:
                 _p.append(_rec("repair_create_voice_existing_available", _sid,
-                               "已有合法落点 %s，不允许再新建节拍" % _eligible))
+                               "所选片段 %r 已有合法落点 %s，不允许再新建节拍"
+                               % (_txt, _eligible)))
                 continue
             if "beat_uid" in _it:
                 _p.append(_rec("repair_answer_field_not_applicable", _sid,
@@ -1721,12 +1794,23 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
                 _p.append(_rec("repair_create_voice_kind", _sid,
                                "声音类型必须是 dialogue/narration", _kind))
                 continue
+            _landing = _voice_landing_of(_slot, _txt)
+            if not _landing:
+                _p.append(_rec("repair_create_voice_not_in_source", _sid,
+                               "所选声音片段不是已授权的逐字来源", _txt))
+                continue
+            _land_beats = [str(_x) for _x in (_landing.get("beat_uids") or [])]
             if _claim_write("声音", _vuid, _sid, _txt) == "conflict":
                 continue
             _units_up[_kind][_vuid] = {"uid": _vuid, "text": _txt, "source": _src}
             _voice_order_changed = True
             if _place == "existing":
                 _bid = str(_it.get("beat_uid") or "")
+                if _bid not in _land_beats:
+                    _p.append(_rec("repair_create_voice_landing_mismatch", _sid,
+                                   "节拍 %s 与所选片段 %r 的原文区间不重叠（可用 %s）"
+                                   % (_bid, _txt, _land_beats), _bid))
+                    continue
                 _beat0 = next((_b for _b in _base_beats
                                if str(_b.get("uid") or "") == _bid), None)
                 if _beat0 is None:
@@ -1746,10 +1830,10 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
                 _beat["voice_ref"] = {"kind": _kind, "uid": _vuid}
                 _beats_up[_bid] = _beat
             elif _place == "new":
-                if _slot.get("voice_existing_beat_uids"):
+                if _land_beats:
                     _p.append(_rec("repair_create_voice_existing_available", _sid,
-                                   "已有合法落点 %s，不允许新建节拍"
-                                   % list(_slot.get("voice_existing_beat_uids") or [])))
+                                   "所选片段已有合法落点 %s，不允许新建节拍"
+                                   % _land_beats))
                     continue
                 _anchor = str(_it.get("insert_after_uid") or "")
                 _buid = _create_voice_beat_uid(_slot)
