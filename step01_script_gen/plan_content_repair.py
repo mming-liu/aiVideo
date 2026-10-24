@@ -67,6 +67,7 @@ SLOT_CODE_KIND = {
     # P1b：声音正文超出已准入文本/不在原文 ⇒ 收窄到逐字子串（不是迁移）
     "verify_voice_text_mismatch": "voice_text",
     "presentation_voice_not_in_novel": "voice_text",
+    "source_narration_not_in_novel": "voice_text",
 }
 
 #: **动作字段契约**（单源）：`required` 必填、`forbidden` 该动作**不许出现**。
@@ -275,6 +276,13 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
             _bad.append(_code or "无code")
             continue
         _uid = record_uid(_p)
+        if not _uid and _kind == "voice_text":
+            # 旧计划的生产者按 `narration_lines[索引]` 报来源缺陷但不带 uid；
+            # 视图里的 narration_units 与计划同序，索引是显式身份，不是从正文猜编号。
+            _idx = (_p or {}).get("index")
+            _units = (view or {}).get("narration_units") or []
+            if isinstance(_idx, int) and 1 <= _idx <= len(_units):
+                _uid = str((_units[_idx - 1] or {}).get("uid") or "")
         if not _uid:
             # **"没有身份可给"与"身份写错"分开**（2026-10-11 真实生产链路实测）：
             # 计划级**聚合**问题（`path` 是裸集合、没有实体索引，如"文字卡合计阅读需求
@@ -321,6 +329,8 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
             if _uid not in _voices_seen:
                 _voices_seen.append(_uid)
                 _text = str(_vu.get("text") or "")
+                _manifest = _manifest_for_carrier(view, _vkind, _uid)
+                _affected = [str(_m.get("fact_uid") or "") for _m in _manifest]
                 _slots.append({
                     "slot_id": "voice_kind:%s" % _uid, "kind": "voice_kind",
                     "fact_uid": "", "card_id": "",
@@ -329,6 +339,8 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
                     "unit_uid": _uid, "unit_kind": _vkind, "unit_text": _text,
                     "reclassify": {"uid": _uid, "from": _vkind, "to": _to,
                                    "to_temp_uid": _voice_temp_uid(_uid)},
+                    "affected_facts": _affected,
+                    "required_content_manifest": _manifest,
                     "allowed_actions": [ACT_RECLASSIFY],
                     "target_uids": [], "voice_target_uids": [],
                     "insert_positions": [], "current_carriers": [],

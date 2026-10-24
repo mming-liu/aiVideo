@@ -1,0 +1,30 @@
+{
+ "schema": "step01.sample.v1",
+ "scenario": "p1a_double_dialogue",
+ "novel": "甲留在门外。乙说：“我进屋了。”",
+ "plan": {
+  "main_events": ["甲留在门外", "乙进屋", "甲继续等待"],
+  "climax": "甲继续等待",
+  "required_facts": ["甲留在门外。｜原文证据：“甲留在门外。”｜承载：B1/台词1"],
+  "causal_chain": ["甲留在门外等待乙"],
+  "shot_beats": ["节拍：甲留在门外｜载体：台词1",
+                 "节拍：乙说：我进屋了｜载体：台词2",
+                 "节拍：甲继续等待｜载体：画面"],
+  "dialogue_lines": ["甲留在门外。", "我进屋了。"],
+  "omittable": [],
+  "hook_spoken": [],
+  "time_budget": "动作约15秒",
+  "characters": ["甲", "乙"],
+  "emotional_arc": "平静",
+  "key_scenes": ["门外", "屋内"],
+  "character_motives": ["甲：等待", "乙：进屋"],
+  "end_hook": "",
+  "hook_carrier": "",
+  "narration_lines": [],
+  "planning_acceptance_version": "legacy_semantic.v3"
+ },
+ "expected": {
+  "problem_codes": ["verify_voice_not_speech"],
+  "final_accepted": true
+ }
+}

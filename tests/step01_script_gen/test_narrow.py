@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 """P1b narrow：逐字净缩短、独立载体证据、范围守卫与重验入口（离线）."""
 import copy
+import json
+from pathlib import Path
 
 import pytest
 
 from shared import content_verification as cv
 from shared import presentation_contract as pc
+from step01_script_gen import outline as o
 from step01_script_gen import plan_content_repair as pcr
 from tests.shared.test_fact_split import _view
 
@@ -205,3 +208,34 @@ def test_narrow_voice_answer_requires_text_and_forbids_target_uid():
     _schema = pcr.answer_json_schema([slot])["schema"]
     _props = _schema["properties"]["answers"]["items"]["anyOf"][0]["properties"]
     assert pcr.ACT_NARROW_VOICE in _props["action"]["enum"]
+
+
+def test_actual_source_problem_without_uid_resolves_to_narration_slot():
+    """生产入口的真实问题不带 uid，但带显式 `narration_lines[索引]`；槽位按索引解析."""
+    _s = json.loads((Path(__file__).resolve().parents[2] / "tools" / "samples"
+                     / "p1b_source_defect.json").read_text(encoding="utf-8"))
+    _plan, _novel = _s["plan"], _s["novel"]
+    _v, _err = pc.view_from_plan(_plan)
+    assert _v is not None and not _err, _err
+    _probs = o.plan_acceptance_problems(_plan, _novel)
+    _target = [p for p in _probs
+               if p.get("code") == "source_narration_not_in_novel"]
+    assert _target and not _target[0].get("uid"), _target
+    _found = pcr.content_slots(_v, _target)
+    assert _found["slots"], _found
+    _slot = _found["slots"][0]
+    assert _slot["unit_uid"] == "n01"
+    assert _slot["affected_facts"] == ["f01"]
+    _scope = pcr.build_editable_scope(_v, [_slot])
+    _ans = {"schema": pcr.SLOT_ANSWER_SCHEMA, "answers": [
+        {"slot_id": _slot["slot_id"], "action": pcr.ACT_NARROW_VOICE,
+         "text": _s["expected"]["answer_text"]}]}
+    _d, _dp = pcr.compile_delta(_v, [_slot], _ans, novel_text=_novel)
+    assert _d is not None and not _dp, _dp
+    _cand, _cp, _rk = pc.apply_delta_view(
+        _v, _d, editable_scope=_scope, accept=lambda _v: [])
+    assert _rk["kind"] == "applied" and not _cp, (_rk, _cp)
+    _cand_plan = pc.plan_from_view(_cand)
+    assert _cand_plan["narration_lines"][0]["text"] == _s["expected"]["answer_text"]
+    assert [p.get("code") for p in o.plan_acceptance_problems(_cand_plan, _novel)] \
+        == ["verify_record_missing"]

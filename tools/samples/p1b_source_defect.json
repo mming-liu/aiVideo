@@ -1,0 +1,34 @@
+{
+ "schema": "step01.sample.v1",
+ "scenario": "p1b_source_defect",
+ "novel": "甲留在门外。直到天黑。乙说：“我进屋了。”",
+ "plan": {
+  "main_events": ["甲留在门外", "直到天黑", "乙进屋"],
+  "climax": "甲留在门外",
+  "required_facts": ["甲留在门外直到天黑。｜原文证据：“甲留在门外。直到天黑。”｜承载：B1/旁白1"],
+  "causal_chain": ["甲留在门外直到天黑"],
+  "shot_beats": ["节拍：甲留在门外｜载体：旁白1",
+                 "节拍：直到天黑｜载体：画面",
+                 "节拍：乙说：我进屋了｜载体：台词1"],
+  "dialogue_lines": ["我进屋了。"],
+  "omittable": [],
+  "hook_spoken": [],
+  "time_budget": "动作约15秒",
+  "characters": ["甲", "乙"],
+  "emotional_arc": "平静",
+  "key_scenes": ["门外", "屋内"],
+  "character_motives": ["甲：等待", "乙：进屋"],
+  "end_hook": "",
+  "hook_carrier": "",
+  "narration_lines": [
+   {"text": "甲留在门外。直到天黑。甲转身离开。",
+    "source": "甲留在门外。直到天黑。"}
+  ],
+  "planning_acceptance_version": "legacy_semantic.v3"
+ },
+ "expected": {
+  "problem_codes": ["source_narration_not_in_novel"],
+  "answer_text": "甲留在门外。直到天黑。",
+  "final_accepted": true
+ }
+}

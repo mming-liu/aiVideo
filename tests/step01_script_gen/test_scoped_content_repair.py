@@ -173,6 +173,35 @@ def test_co_carried_semantic_protection_is_null_without_verification_evidence():
     assert _o["protection_structural"] is True         # 结构保护已成立，单列
 
 
+def test_target_voice_failure_makes_target_repair_false():
+    """复核反例：目标声音 n01 失败，不能因为事实 f01 通过就报 content_repaired=True."""
+    _o = _outcome([{"code": "verify_voice_unsupported", "uid": "n01"}],
+                  target_voice_uids=["n01"])
+    assert _o["content_repaired"] is False, _o
+    assert _o["final_accepted"] is False, _o
+
+    _mixed = _outcome([{"code": "verify_voice_unsupported", "uid": "n01"}],
+                      target_fact_uids=["f01"], target_voice_uids=["n01"])
+    assert _mixed["content_repaired"] is False, _mixed
+
+    _missing = _outcome([{"code": "verify_record_missing"}],
+                        target_voice_uids=["n01"])
+    assert _missing["content_repaired"] is None, _missing
+
+
+def test_affected_fact_failure_makes_narrow_target_repair_false():
+    _o = _outcome([{"code": "verify_fact_unsupported", "uid": "f01"}],
+                  affected_fact_uids=["f01"])
+    assert _o["content_repaired"] is False, _o
+    assert _o["final_accepted"] is False, _o
+
+
+def test_none_uid_is_not_treated_as_a_target():
+    _o = _outcome([{"code": "verify_fact_unsupported", "uid": "None"}],
+                  target_fact_uids=["None"], target_voice_uids=["None"])
+    assert _o["content_repaired"] is True, _o
+
+
 def test_the_request_scope_reports_a_hook_bound_to_a_target_beat():
     """P1 复核：同载 hook 时 `slot_request` 曾因引用已删局部变量而崩溃."""
     _v = _view()

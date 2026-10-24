@@ -2736,40 +2736,65 @@ def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
     return True, "", dict(_ctx, state=_pcr.STATE_OK)
 
 
-def _slots_revision_outcome(problems, *, target_fact_uids=None, co_carried=False,
+def _slots_revision_outcome(problems, *, target_fact_uids=None, target_voice_uids=None,
+                            affected_fact_uids=None, co_carried=False,
                             protocol_ok=True, protection_structural=True,
                             candidate=None,
                             source="complete_candidate + 控制器完整验收（含一致性轴）") -> dict:
     """槽位修订的四维记账（三态 true/false/null，按**目标身份**与**有效证据**判定）.
 
-    - `content_repaired`：只看**目标事实**相关的核验残余；非目标（例如声音）残余不参与。
-      没有有效核验记录 ⇒ `null`（不是 true，也不是 false）。
-    - `protection_intact`：结构面由范围守卫保证（`protection_structural`）；同载事实/hook
-      的**语义**保护需要核验证据，缺证据时整体为 `null`，并单列结构结论。
-    - `final_accepted`：完整验收（含一致性轴）残余为空。
+    - `content_repaired`：目标事实 + 受影响事实 + 目标声音的**目标修复**；
+      目标声音的核验失败必须使其为 false。缺少有效核验记录 ⇒ null。
+    - `protection_intact`：结构面由范围守卫保证；同载事实/hook 的语义保护需要核验
+      证据，缺证据时 null。
+    - `final_accepted`：完整验收残余为空（非目标残余也会让它 false）。
     """
     import hashlib as _hl
     import json as _json
     probs = [p for p in (problems or []) if isinstance(p, dict)]
     codes = [str(p.get("code") or "") for p in probs]
-    _targets = {str(x) for x in (target_fact_uids or [])}
+    _facts = {str(x) for x in (target_fact_uids or [])
+              if str(x) not in ("", "None")}
+    _affected = {str(x) for x in (affected_fact_uids or [])
+                 if str(x) not in ("", "None")}
+    _voices = {str(x) for x in (target_voice_uids or [])
+               if str(x) not in ("", "None")}
     _no_ev = {"verify_record_missing", "verify_bad_response", "verify_call_failed",
               "verify_deadline_exhausted"}
 
-    def _hit(p) -> bool:
-        if not _targets:
-            return True
-        return str(p.get("uid") or p.get("ref") or p.get("fact_uid") or "") in _targets
+    def _hit(p, ids) -> bool:
+        if not ids:
+            return False
+        _u = str(p.get("uid") or p.get("ref") or p.get("unit_uid")
+                 or p.get("fact_uid") or "")
+        return _u in ids
 
     _no_evidence = any(c in _no_ev for c in codes)
-    _content_bad = any(c.startswith("verify_") and c not in _no_ev and _hit(p)
-                       for c, p in zip(codes, probs))
-    _content = None if (_no_evidence and not _content_bad) else (not _content_bad)
+    _fact_bad = any(c.startswith("verify_") and c not in _no_ev
+                    and not c.startswith("verify_voice_")
+                    and _hit(p, _facts | _affected)
+                    for c, p in zip(codes, probs))
+    _voice_bad = any(c.startswith("verify_voice_") and c not in _no_ev
+                     and _hit(p, _voices)
+                     for c, p in zip(codes, probs))
+    _axes = []
+    if _facts or _affected:
+        _axes.append(False if _fact_bad else (None if _no_evidence else True))
+    if _voices:
+        _axes.append(False if _voice_bad else (None if _no_evidence else True))
+    if not _axes:
+        _content = None if _no_evidence else True
+    elif False in _axes:
+        _content = False
+    elif None in _axes:
+        _content = None
+    else:
+        _content = True
     if not protection_structural:
         _protect = False
     elif co_carried and _no_evidence:
         _protect = None          # 同载语义未评估
-    elif co_carried and _content_bad:
+    elif co_carried and (_fact_bad or _voice_bad):
         _protect = False         # 有核验且目标侧已出现退化
     else:
         _protect = True
@@ -2791,7 +2816,8 @@ def _slots_revision_outcome(problems, *, target_fact_uids=None, co_carried=False
             "protocol_ok": _detail("回答解析、准入与编译成功"),
             "content_repaired": _detail(
                 "无目标相关核验证据 ⇒ null" if _content is None
-                else ("目标事实仍有核验残余" if _content is False else "目标事实无核验残余")),
+                else ("目标事实或目标声音仍有核验残余" if _content is False
+                      else "目标事实/声音无核验残余")),
             "protection_intact": _detail(
                 "结构保护成立" if _protect is None else
                 ("范围守卫在 accept 之前通过" if _protect else "范围/同载保护判负")),
@@ -2951,18 +2977,29 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
         "slots": [str(_s["slot_id"]) for _s in _slots]}
     if evidence is not None:
         _codes = [str((x or {}).get("code") or "") for x in (_final_problems or [])]
-        _targets = sorted(
-            {str(_s.get("fact_uid")) for _s in _slots
-             if _s.get("kind") != "card_text" and str(_s.get("fact_uid"))}
-            | {str(_f) for _s in _slots
-               for _f in (_s.get("affected_facts") or []) if str(_f)})
+        _fact_targets = {
+            str(_s.get("fact_uid")) for _s in _slots
+            if _s.get("kind") not in ("card_text", "voice_kind", "voice_text")
+            and str(_s.get("fact_uid")) not in ("", "None")}
+        _affected = {
+            str(_f) for _s in _slots
+            for _f in (_s.get("affected_facts") or [])
+            if str(_f) not in ("", "None")}
+        _voice_targets = {
+            str(_s.get("unit_uid")) for _s in _slots
+            if _s.get("kind") in ("voice_kind", "voice_text")
+            and str(_s.get("unit_uid")) not in ("", "None")}
+        _mapping = _res_k.get("mapping") or {}
+        _voice_targets |= {str(_mapping.get(_v, _v)) for _v in list(_voice_targets)}
         _co_affected = bool(_scope_eff.get("co_carried_facts_by_target")) \
             or bool(_scope_eff.get("protected_hook"))
         evidence["applied"] = True
         evidence["residuals"] = len(_final_problems)
         evidence["mapping"] = _res_k["mapping"]
         evidence["revision_outcome"] = _slots_revision_outcome(
-            _final_problems, target_fact_uids=_targets, co_carried=_co_affected,
+            _final_problems, target_fact_uids=_fact_targets,
+            target_voice_uids=_voice_targets,
+            affected_fact_uids=_affected, co_carried=_co_affected,
             candidate=_new)
     return _new, "slots_applied: %d 条残余" % len(_final_problems), _cid, evidence
 
