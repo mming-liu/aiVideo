@@ -2676,7 +2676,8 @@ def _verification_record_for(verification, plan):
 
 
 def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
-                              target_fact_uids=None, verification=None) -> tuple:
+                              target_fact_uids=None, verification=None,
+                              novel_text: str = "") -> tuple:
     """本轮问题**能不能被内容槽位全部表达**（§5.6 第 4 条：能表达才接入）.
 
     `returns (ok, why, ctx)`：`ok=False` 时调用方**整轮落回既有 delta**——判据只有
@@ -2703,7 +2704,8 @@ def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
     _found = _pcr.content_slots(
         _base_view, problems, allow_create=allow_create,
         target_fact_uids=target_fact_uids,
-        verification_record=_verification_record_for(verification, plan))
+        verification_record=_verification_record_for(verification, plan),
+        novel_text=novel_text)
     _ctx = {"view": _base_view, "found": _found, "mode": _mode,
             "verification_record": _verification_record_for(verification, plan),
             "blocked": list(_found.get("blocked") or []),
@@ -2754,14 +2756,23 @@ def _voice_targets_from_slots(slots, mapping) -> tuple:
             if _uid:
                 _targets.add(_uid)
             continue
-        if _kind != "voice_kind":
+        if _kind == "voice_kind":
+            _tmp = str((_s.get("reclassify") or {}).get("to_temp_uid") or "")
+            _final = str((mapping or {}).get(_tmp) or "") if _tmp else ""
+            if _final:
+                _targets.add(_final)
+            else:
+                _unresolved = True
             continue
-        _tmp = str((_s.get("reclassify") or {}).get("to_temp_uid") or "")
-        _final = str((mapping or {}).get(_tmp) or "") if _tmp else ""
-        if _final:
-            _targets.add(_final)
-        else:
-            _unresolved = True
+        if _kind == "fact_visual" and "create_voice" in (
+                _s.get("allowed_actions") or []):
+            from step01_script_gen import plan_content_repair as _pcr
+            _tmp = _pcr._create_voice_temp_uid(_s)
+            _final = str((mapping or {}).get(_tmp) or "")
+            if _final:
+                _targets.add(_final)
+            # 未选择 create_voice 时 mapping 本来就没有该键；不能据此判未解析。
+            continue
     return _targets, _unresolved
 
 
@@ -2883,7 +2894,8 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
     if _base_view is None or not _found:
         _ok, _why, _ctx2 = _content_slots_applicable(
             plan, problems, mode=_mode, allow_create=allow_create,
-            target_fact_uids=target_fact_uids, verification=verification)
+            target_fact_uids=target_fact_uids, verification=verification,
+            novel_text=novel_text)
         if not _ok:
             return None, "内容槽位不适用：%s" % _why, "", (evidence or {})
         _base_view, _found, _mode = _ctx2["view"], _ctx2["found"], _ctx2["mode"]
@@ -3659,7 +3671,8 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
         # 表达不了（`_content_slots_applicable` 按稳定 UID 判）⇒ 落回既有 delta。
         _slot_ok, _slot_why, _slot_ctx = _content_slots_applicable(
             plan, problems, allow_create=(target_fact_uids is None),
-            target_fact_uids=target_fact_uids, verification=verification)
+            target_fact_uids=target_fact_uids, verification=verification,
+            novel_text=novel_text)
         _ev["content_slots"] = {"applicable": bool(_slot_ok), "why": str(_slot_why),
                                 "state": str((_slot_ctx or {}).get("state") or ""),
                                 "blocked": list((_slot_ctx or {}).get("blocked") or [])}
@@ -3707,7 +3720,8 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
         # 声音残余留在 `problems`，由最终完整验收继续报告。只有"没有可表达槽位"才退回整份修订。
         _slot_ok, _slot_why, _slot_ctx = _content_slots_applicable(
             plan, problems, allow_create=(target_fact_uids is None),
-            target_fact_uids=target_fact_uids, verification=verification)
+            target_fact_uids=target_fact_uids, verification=verification,
+            novel_text=novel_text)
         _ev["content_slots"] = {"applicable": bool(_slot_ok), "why": str(_slot_why),
                                 "state": str((_slot_ctx or {}).get("state") or ""),
                                 "blocked": list((_slot_ctx or {}).get("blocked") or [])}

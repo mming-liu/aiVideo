@@ -1,0 +1,32 @@
+{
+ "schema": "step01.sample.v1",
+ "scenario": "p2_create_voice",
+ "novel": "甲留在门外。乙说：“我进屋了。”",
+ "plan": {
+  "main_events": ["甲留在门外", "乙进屋", "甲等待"],
+  "climax": "甲等待",
+  "required_facts": ["甲留在门外。｜原文证据：“甲留在门外。”｜承载：B1/画面"],
+  "causal_chain": ["甲等待"],
+  "shot_beats": ["节拍：门外空镜｜载体：画面",
+                 "节拍：甲留在门外｜载体：画面",
+                 "节拍：乙说：我进屋了｜载体：台词1"],
+  "dialogue_lines": ["我进屋了。"],
+  "omittable": [],
+  "hook_spoken": [],
+  "time_budget": "动作约15秒",
+  "characters": ["甲", "乙"],
+  "emotional_arc": "平静",
+  "key_scenes": ["门外"],
+  "character_motives": ["甲：等待"],
+  "end_hook": "",
+  "hook_carrier": "",
+  "narration_lines": [],
+  "planning_acceptance_version": "legacy_semantic.v3"
+ },
+ "expected": {
+  "problem_codes": ["verify_fact_unsupported", "verify_fact_unknown",
+                    "verify_support_span_missing",
+                    "verify_support_span_not_exhibited"],
+  "final_accepted": true
+ }
+}

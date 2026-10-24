@@ -36,6 +36,7 @@ REPAIR_RULE_VERSION = "plan_content_repair.v2.binding_policy"
 #: 首批覆盖的四类动作（§5.6 第 1 条）
 ACT_REWRITE = "rewrite_visual"
 ACT_CREATE = "create_visual"
+ACT_CREATE_VOICE = "create_voice"
 ACT_BIND = "bind_visual"
 ACT_NARROW_CARD = "narrow_card"
 ACT_NARROW_VOICE = "narrow_voice"
@@ -43,7 +44,7 @@ ACT_NARROW_VOICE = "narrow_voice"
 #: 事实绑定到现有声音（目标只来自独立的 `voice_target_uids`）。
 ACT_RECLASSIFY = "reclassify_voice"
 ACT_BIND_VOICE = "bind_voice"
-ACTIONS = (ACT_CREATE, ACT_BIND, ACT_REWRITE, ACT_NARROW_CARD,
+ACTIONS = (ACT_CREATE, ACT_CREATE_VOICE, ACT_BIND, ACT_REWRITE, ACT_NARROW_CARD,
            ACT_NARROW_VOICE, ACT_RECLASSIFY, ACT_BIND_VOICE)
 
 #: 问题 code → 槽位种类（**只覆盖"内容/关系选择"能表达的那几类**）：
@@ -74,20 +75,30 @@ SLOT_CODE_KIND = {
 #: `answer_json_schema` 与 `answer_problems` 都从它生成/判定——一份契约两处消费。
 ACTION_FIELDS = {
     ACT_CREATE: {"required": ("text", "insert_after_uid", "event_index"),
-                 "forbidden": ("target_uid",)},
+                 "forbidden": ("target_uid", "voice_kind", "placement",
+                               "beat_uid", "beat_text")},
+    ACT_CREATE_VOICE: {"required": ("text", "voice_kind", "placement"),
+                       "forbidden": ("target_uid",)},
     ACT_BIND: {"required": ("target_uid",), "forbidden": ("insert_after_uid",
-                                                          "event_index")},
+                                                          "event_index",
+                                                          "voice_kind", "placement",
+                                                          "beat_uid", "beat_text")},
     ACT_REWRITE: {"required": ("text", "target_uid"),
-                  "forbidden": ("insert_after_uid", "event_index")},
+                  "forbidden": ("insert_after_uid", "event_index",
+                                "voice_kind", "placement", "beat_uid", "beat_text")},
     ACT_NARROW_CARD: {"required": ("text",),
-                      "forbidden": ("target_uid", "insert_after_uid", "event_index")},
+                      "forbidden": ("target_uid", "insert_after_uid", "event_index",
+                                    "voice_kind", "placement", "beat_uid", "beat_text")},
     ACT_NARROW_VOICE: {"required": ("text",),
-                       "forbidden": ("target_uid", "insert_after_uid", "event_index")},
+                       "forbidden": ("target_uid", "insert_after_uid", "event_index",
+                                     "voice_kind", "placement", "beat_uid", "beat_text")},
     ACT_RECLASSIFY: {"required": (),
                      "forbidden": ("text", "target_uid", "insert_after_uid",
-                                   "event_index")},
+                                   "event_index", "voice_kind", "placement",
+                                   "beat_uid", "beat_text")},
     ACT_BIND_VOICE: {"required": ("target_uid",),
-                     "forbidden": ("insert_after_uid", "event_index")},
+                     "forbidden": ("insert_after_uid", "event_index",
+                                   "voice_kind", "placement", "beat_uid", "beat_text")},
 }
 
 #: **分派状态**（调用方按它选路，**不按 `why` 的文案猜**）。两种"不走槽位"必须分开
@@ -104,7 +115,9 @@ STATE_NO_SLOTS = "no_slots"
 STATE_UNREADABLE = "unreadable"
 #: 字段类型（`int` **不含 `bool`**——`event_index=True` 是违约，不是 1）
 _FIELD_TYPE = {"slot_id": "str", "action": "str", "text": "str", "target_uid": "str",
-               "insert_after_uid": "str", "event_index": "int"}
+               "insert_after_uid": "str", "event_index": "int",
+               "voice_kind": "str", "placement": "str", "beat_uid": "str",
+               "beat_text": "str"}
 
 
 def _type_ok(value, spec) -> bool:
@@ -117,7 +130,7 @@ def _type_ok(value, spec) -> bool:
 
 #: 回答里**允许出现**的键（白名单：拼错的键静默忽略 = 选择被悄悄丢掉）
 ANSWER_KEYS = ("slot_id", "action", "text", "target_uid", "insert_after_uid",
-               "event_index")
+               "event_index", "voice_kind", "placement", "beat_uid", "beat_text")
 
 
 def _brief(value, limit: int = 60) -> str:
@@ -232,7 +245,7 @@ def _card_of(view, card_id) -> dict:
 
 
 def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
-                  verification_record=None) -> dict:
+                  verification_record=None, novel_text: str = "") -> dict:
     """问题清单 → 内容槽位；**表达不了的 code 原样列出**（调用方据此整轮改走既有路径）.
 
     `returns {"slots": [...], "unexpressible": [...], "blocked": [...],
@@ -412,6 +425,19 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
         _cur = _visual_carriers(view, _uid)
         _vt = _voice_targets(view, _uid)
         _acts = ([ACT_CREATE] if allow_create else [])
+        _vspans = _voice_source_spans(view, _uid, _rec_in, novel_text)
+        _existing = _voice_existing_beats(view, _uid, _vspans)
+        _cars = []
+        from shared.presentation_contract import ref_uid
+        for _b in (view or {}).get("fact_bindings") or []:
+            if isinstance(_b, dict) and str(_b.get("fact_uid") or "") == _uid:
+                _cars = [c for c in (_b.get("carriers") or []) if isinstance(c, dict)]
+                break
+        _fact_hook = any(_hook_bound(view, str(_c.get("kind") or ""),
+                                     str(ref_uid(_c) or ""))
+                         for _c in _cars)
+        if allow_create and _vspans and not _fact_hook:
+            _acts.append(ACT_CREATE_VOICE)
         if _visual_targets:
             _acts += [ACT_BIND, ACT_REWRITE]
         if _vt:
@@ -431,6 +457,9 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
             # 补绑/重写都只能在**现有画面**里选；补建只能插在现有节拍之后（"" = 末尾）
             "target_uids": list(_visual_targets), "insert_positions": [""] + list(_beats),
             "voice_target_uids": [x["uid"] for x in _vt],
+            "voice_source_spans": _vspans,
+            "voice_existing_beat_uids": _existing,
+            "voice_new_allowed": not _existing,
             "current_carriers": list(_cur),
             "facts": [_fact_brief(view, _uid)],
             "event_uids": list(_events), "sources": [str(_f.get("evidence") or "")],
@@ -562,6 +591,16 @@ def _voice_temp_uid(uid) -> str:
     return "new:voice:%s" % _slug(uid)
 
 
+def _create_voice_temp_uid(slot) -> str:
+    _sid = str((slot or {}).get("slot_id") or (slot or {}).get("fact_uid") or "voice")
+    return "new:voice:%s" % _slug(_sid)
+
+
+def _create_voice_beat_uid(slot) -> str:
+    _sid = str((slot or {}).get("slot_id") or (slot or {}).get("fact_uid") or "voice")
+    return "new:voice_beat:%s" % _slug(_sid)
+
+
 def _novel_span(text, novel_text) -> str:
     """正文在原文中的**逐字连续子串**；取不到返回空串（调用方拒收，不相似匹配）."""
     _t = str(text or "")
@@ -607,6 +646,45 @@ def _hook_bound(view, kind, uid) -> bool:
     return any(isinstance(_c, dict) and str(_c.get("kind") or "") == str(kind)
                and ref_uid(_c) == str(uid)
                for _c in (_hk.get("carriers") or []))
+
+
+def _voice_source_spans(view, fact_uid, record, novel_text) -> list:
+    """创建声音可用的逐字来源：已准入记录 spans + 事实证据，且必须落在原文."""
+    _spans = list((source_spans_by_fact(record) or {}).get(str(fact_uid)) or [])
+    _f = _fact_of(view, fact_uid)
+    if str(_f.get("evidence") or "").strip():
+        _spans.append(str(_f.get("evidence")))
+    _out = []
+    for _s in _spans:
+        _s = str(_s or "").strip()
+        if _s and _s not in _out and _s in str(novel_text or ""):
+            _out.append(_s)
+    return _out
+
+
+def _voice_existing_beats(view, fact_uid, spans) -> list:
+    """可承载新声音的现有节拍：voice_ref 为 visual/空、非 hook、与事实证据重叠."""
+    from shared.presentation_contract import ref_uid
+    _keys = [_norm_key(_s) for _s in (spans or []) if _norm_key(_s)]
+    if not _keys:
+        return []
+    _out = []
+    for _b in (view or {}).get("beats") or []:
+        if not isinstance(_b, dict):
+            continue
+        _uid = str(_b.get("uid") or "")
+        _vr = _b.get("voice_ref") or {}
+        _vk = str(_vr.get("kind") or "")
+        if _vk not in ("", "visual"):
+            continue
+        if _hook_bound(view, "visual", _uid):
+            continue
+        _bt = _norm_key("%s\n%s" % (_b.get("text") or "", _b.get("evidence") or ""))
+        if not _bt:
+            continue
+        if any(_k in _bt or (_bt and _bt in _k) for _k in _keys):
+            _out.append(_uid)
+    return _out
 
 
 def _narrow_seconds(kind, text) -> float:
@@ -836,6 +914,9 @@ def build_editable_scope(view, slots, *, answer=None) -> dict:
     _bind_voice: set = set()
     _narrow_cards: list = []
     _narrow_voices: list = []
+    _create_units: list = []
+    _create_refs: list = []
+    _create_insert: set = set()
 
     def _reclass_closure(entries):
         """迁移条目 → 需要同步的节拍 `voice_ref` 与事实绑定（只做同内容身份替换）."""
@@ -890,6 +971,10 @@ def build_editable_scope(view, slots, *, answer=None) -> dict:
             # 新建画面本轮**不在收紧范围**（插入是后续包）：用 `"*"` 表示"允许插入"，
             # 只保留"不许删除/重排既有节拍"这一条。
             _insert.add("*")
+        if ACT_CREATE_VOICE in _acts:
+            _target_beats |= {str(x) for x in (_s.get("voice_existing_beat_uids") or [])}
+            if _s.get("voice_new_allowed"):
+                _create_insert |= {str(x) for x in (_s.get("insert_positions") or [])}
         for _t in _s.get("target_uids") or []:
             _t = str(_t)
             if ACT_REWRITE in _acts:
@@ -917,6 +1002,7 @@ def build_editable_scope(view, slots, *, answer=None) -> dict:
         _ef, _er, _eb, _ei, _ec = set(), set(), set(), set(), set()
         _ar, _abv = [], set()
         _anc, _anv = [], []
+        _acu, _acr, _aci = [], [], set()
         for _it in answer.get("answers") or []:
             if not isinstance(_it, dict):
                 continue
@@ -941,6 +1027,22 @@ def build_editable_scope(view, slots, *, answer=None) -> dict:
                                  "kind": str(_s.get("unit_kind") or ""),
                                  "original_text": str(_s.get("original_text") or "")})
                 continue
+            if _act == ACT_CREATE_VOICE:
+                _kind = str(_it.get("voice_kind") or "")
+                _uid = _create_voice_temp_uid(_s)
+                _vtxt = str(_it.get("text") or "")
+                _acu.append({
+                    "uid": _uid, "kind": _kind, "text": _vtxt,
+                    "source": ({"text": _vtxt} if _kind == "narration" else {})})
+                if str(_it.get("placement") or "") == "existing":
+                    _acr.append({"beat_uid": str(_it.get("beat_uid") or ""),
+                                 "kind": _kind, "to_temp_uid": _uid})
+                elif str(_it.get("placement") or "") == "new":
+                    _anchor = str(_it.get("insert_after_uid") or "")
+                    _aci.add(_anchor)
+                    _ei.add(_anchor)
+                _ef.add(str(_s.get("fact_uid") or ""))
+                continue
             _tgt = str(_it.get("target_uid") or "")
             if _act == ACT_REWRITE and _tgt in _rewrite:
                 _er.add(_tgt)
@@ -959,7 +1061,10 @@ def build_editable_scope(view, slots, *, answer=None) -> dict:
         _facts, _rewrite, _bind, _insert, _cards = _ef, _er, _eb, _ei, _ec
         _reclass, _bind_voice = _ar, _abv
         _narrow_cards, _narrow_voices = _anc, _anv
+        _create_units, _create_refs, _create_insert = _acu, _acr, _aci
     _voice_beats, _rebind_facts = _reclass_closure(_reclass)
+    _voice_beats |= {str(_r.get("beat_uid") or "") for _r in _create_refs
+                     if str(_r.get("beat_uid") or "")}
     return {
         "phase": "effective" if isinstance(answer, dict) else "request",
         "allowed_fact_uids": sorted(x for x in _facts if x),
@@ -978,6 +1083,9 @@ def build_editable_scope(view, slots, *, answer=None) -> dict:
         "allowed_voice_ref_beat_uids": sorted(_voice_beats),
         "allowed_narrow_cards": _narrow_cards,
         "allowed_narrow_voices": _narrow_voices,
+        "allowed_create_voice_units": _create_units,
+        "allowed_create_voice_refs": _create_refs,
+        "allowed_voice_insert_after_uids": sorted(_create_insert),
         "co_carried_facts_by_target": {k: sorted(set(v)) for k, v in _co.items()},
         "protected_hook": _hook,
     }
@@ -1071,6 +1179,10 @@ _ACT_RULE = {
                  "`insert_after_uid` = 插在哪个现有画面之后（`insert_positions` 里选，"
                  "空串 = 排在最后）；`event_index` = 这条画面归属的冻结事件序号"
                  "（1..N，**0 = 不归属任何冻结事件**，回忆/背景画面通常为 0）"),
+    ACT_CREATE_VOICE: ("`text` = 逐字取自 `voice_source_spans` 的连续片段；`voice_kind` ="
+                       " dialogue / narration；`placement` = existing（`beat_uid` 从"
+                       " `voice_existing_beat_uids` 选）或 new（`insert_after_uid` /"
+                       " `event_index` / `beat_text` 从允许集合选）。已有合法落点时不得 new。"),
     ACT_BIND: ("`target_uid` = **已经演出**该事实的现有画面（`target_uids` 里选）；"
                "`text` 只能给**空串**"),
     ACT_REWRITE: ("`target_uid` = 要改写的现有承载画面（`target_uids` 里选）；"
@@ -1241,6 +1353,67 @@ def answer_problems(answer, slots, *, where: str = "槽位回答") -> list:
             _p.append(_rec("repair_answer_text_unexpected", _sid,
                            "槽位 %s 的动作 %s 只替换声音绑定、不改正文（`text` 只能给空串）"
                            % (_sid, _act), _txt))
+            continue
+        if _act == ACT_CREATE_VOICE:
+            _kind = str(_it.get("voice_kind") or "")
+            _place = str(_it.get("placement") or "")
+            if _kind not in ("dialogue", "narration"):
+                _p.append(_rec("repair_create_voice_kind", _sid,
+                               "create_voice 的 `voice_kind` 必须是 dialogue/narration"
+                               "（当前是 %s）" % _brief(_kind), _kind))
+                continue
+            if _place not in ("existing", "new"):
+                _p.append(_rec("repair_create_voice_placement", _sid,
+                               "create_voice 的 `placement` 必须是 existing/new（当前是 %s）"
+                               % _brief(_place), _place))
+                continue
+            _spans = [str(_x) for _x in (_slot.get("voice_source_spans") or [])
+                      if str(_x)]
+            if not any(_txt and _txt in _x for _x in _spans):
+                _p.append(_rec("repair_create_voice_not_in_source", _sid,
+                               "create_voice 的正文必须逐字取自 `voice_source_spans`"
+                               "（当前 %r）" % _txt, _txt))
+                continue
+            _eligible = [str(_x) for _x in
+                         (_slot.get("voice_existing_beat_uids") or [])]
+            if _place == "existing":
+                _bid = str(_it.get("beat_uid") or "")
+                if _bid not in _eligible:
+                    _p.append(_rec("repair_answer_target_not_allowed", _sid,
+                                   "槽位 %s 的已有落点 %s 不在允许集合里（要 %s）"
+                                   % (_sid, _brief(_bid), _eligible), _bid))
+                    continue
+                for _f in ("insert_after_uid", "event_index", "beat_text"):
+                    if _f in _it:
+                        _p.append(_rec("repair_answer_field_not_applicable", _sid,
+                                       "existing 落点不使用 `%s`" % _f, _it.get(_f)))
+                continue
+            # placement == new
+            if _eligible:
+                _p.append(_rec("repair_create_voice_existing_available", _sid,
+                               "已有合法落点 %s，不允许再新建节拍" % _eligible))
+                continue
+            if "beat_uid" in _it:
+                _p.append(_rec("repair_answer_field_not_applicable", _sid,
+                               "new 落点不使用 `beat_uid`", _it.get("beat_uid")))
+                continue
+            _pos = _it.get("insert_after_uid", "")
+            if _pos not in (_slot.get("insert_positions") or []):
+                _p.append(_rec("repair_answer_position_not_allowed", _sid,
+                               "new 落点的插入位置 %s 不在允许集合里（要 %s）"
+                               % (_brief(_pos), list(_slot.get("insert_positions") or [])),
+                               _pos))
+                continue
+            _ei = _it.get("event_index")
+            if not _is_int(_ei) or _ei < 0 or _ei > len(_slot.get("event_uids") or []):
+                _p.append(_rec("repair_answer_event_index_invalid", _sid,
+                               "new 落点的 `event_index` 必须是 0..%d 的整数"
+                               % len(_slot.get("event_uids") or []), _ei))
+                continue
+            if not str(_it.get("beat_text") or "").strip():
+                _p.append(_rec("repair_create_voice_beat_text_empty", _sid,
+                               "new 落点必须给出非空 `beat_text`"))
+                continue
             continue
         if _act in (ACT_BIND, ACT_REWRITE):
             _tgt = _it.get("target_uid", "")
@@ -1539,6 +1712,79 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
             _binding(_fu)["carriers"] = [{"kind": _vk, "uid": _tgt}]
             continue
         _beat = None
+        if _act == ACT_CREATE_VOICE:
+            _kind = str(_it.get("voice_kind") or "")
+            _place = str(_it.get("placement") or "")
+            _vuid = _create_voice_temp_uid(_slot)
+            _src = {"text": _txt} if _kind == "narration" else {}
+            if _kind not in ("dialogue", "narration"):
+                _p.append(_rec("repair_create_voice_kind", _sid,
+                               "声音类型必须是 dialogue/narration", _kind))
+                continue
+            if _claim_write("声音", _vuid, _sid, _txt) == "conflict":
+                continue
+            _units_up[_kind][_vuid] = {"uid": _vuid, "text": _txt, "source": _src}
+            _voice_order_changed = True
+            if _place == "existing":
+                _bid = str(_it.get("beat_uid") or "")
+                _beat0 = next((_b for _b in _base_beats
+                               if str(_b.get("uid") or "") == _bid), None)
+                if _beat0 is None:
+                    _p.append(_rec("repair_slot_target_missing", _sid,
+                                   "槽位选择的已有节拍 %r 不在基线视图里" % _bid, _bid))
+                    continue
+                _vr = _beat0.get("voice_ref") or {}
+                if str(_vr.get("kind") or "") not in ("", "visual"):
+                    _p.append(_rec("repair_create_voice_beat_occupied", _sid,
+                                   "节拍 %s 已有声音引用，不能覆盖" % _bid, _bid))
+                    continue
+                if _hook_bound(view, "visual", _bid):
+                    _p.append(_rec("repair_create_voice_hook_bound", _sid,
+                                   "节拍 %s 属于 hook 保护范围" % _bid, _bid))
+                    continue
+                _beat = copy.deepcopy(_beat0)
+                _beat["voice_ref"] = {"kind": _kind, "uid": _vuid}
+                _beats_up[_bid] = _beat
+            elif _place == "new":
+                if _slot.get("voice_existing_beat_uids"):
+                    _p.append(_rec("repair_create_voice_existing_available", _sid,
+                                   "已有合法落点 %s，不允许新建节拍"
+                                   % list(_slot.get("voice_existing_beat_uids") or [])))
+                    continue
+                _anchor = str(_it.get("insert_after_uid") or "")
+                _buid = _create_voice_beat_uid(_slot)
+                _ei = int(_it.get("event_index") or 0)
+                _ev = [_events[_ei - 1]] if 1 <= _ei <= len(_events) else []
+                _beat = copy.deepcopy(_template)
+                _beat.update({
+                    "uid": _buid, "text": str(_it.get("beat_text") or ""),
+                    "purpose": str(_slot.get("claim") or ""),
+                    "evidence": _pick_evidence(
+                        _slot, (evidence_by_fact or {}).get(_fu), novel_text,
+                        view=view, fact_uid=_fu),
+                    "event_uids": _ev, "source": {},
+                    "voice_ref": {"kind": _kind, "uid": _vuid}})
+                _claim_write("画面", _buid, _sid, _beat["text"])
+                _beats_up[_buid] = _beat
+                _new_at.setdefault(_anchor, []).append(_buid)
+                _order_changed = True
+            else:
+                _p.append(_rec("repair_create_voice_placement", _sid,
+                               "落点必须是 existing/new", _place))
+                continue
+            if _fu:
+                _b = _binding(_fu)
+                _car = {"kind": _kind, "uid": _vuid}
+                _pol = fact_binding_policy(view)
+                if str(_pol.get("selection") or "") == "replace" \
+                        or int(_pol.get("max_carriers") or 0) <= 1:
+                    _b["carriers"] = [_car]
+                elif not any(isinstance(_c, dict)
+                             and str(_c.get("kind") or "") == _kind
+                             and str(_c.get("uid") or "") == _vuid
+                             for _c in (_b.get("carriers") or [])):
+                    _b.setdefault("carriers", []).append(_car)
+            continue
         if _act == ACT_CREATE:
             _uid = "new:visual:%s" % _slug(_sid or _fu)
             _ei = int(_it.get("event_index") or 0)
@@ -1680,6 +1926,10 @@ def _field_schema(field: str, action: str) -> dict:
     """
     if field == "text" and action in (ACT_BIND, ACT_BIND_VOICE):
         return {"type": "string", "enum": [""]}
+    if field == "voice_kind" and action == ACT_CREATE_VOICE:
+        return {"type": "string", "enum": ["dialogue", "narration"]}
+    if field == "placement" and action == ACT_CREATE_VOICE:
+        return {"type": "string", "enum": ["existing", "new"]}
     return {"type": _SCHEMA_TYPE.get(_FIELD_TYPE.get(field, "str"), "string")}
 
 

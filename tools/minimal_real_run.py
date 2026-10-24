@@ -27,6 +27,7 @@ from step01_script_gen.plan_revision import RevisionBudget
 DEFAULT_SAMPLES = {
     "p1a": ROOT / "tools" / "samples" / "p1a_double_dialogue.json",
     "p1b": ROOT / "tools" / "samples" / "p1b_source_defect.json",
+    "p2": ROOT / "tools" / "samples" / "p2_create_voice.json",
 }
 
 
@@ -260,9 +261,53 @@ def _run_p1b(sample: dict, run_dir: Path):
             "problem_codes": [p.get("code") for p in _actual]}
 
 
+def _run_p2(sample: dict, run_dir: Path):
+    """create_voice：初始化核验 → 实际事实问题 → 修订 → 候选重验（上限 3 次）."""
+    _plan = sample["plan"]
+    _novel = sample["novel"]
+    _view, _err = pc.view_from_plan(_plan)
+    if not _view or _err:
+        raise SystemExit("P2 样本不可读：%r" % (_err,))
+    _digest = cv.plan_digest_of(_plan)
+    _nd = hashlib.sha256(_novel.encode()).hexdigest()
+    # 发送 #1：真实初始化核验
+    _base = verify_view_with_service(_view, _digest, novel_text=_novel,
+                                     novel_digest=_nd)
+    _write(run_dir / "base_record.json", _base)
+    if not isinstance(_base, dict) or _base.get("status") != "ok":
+        raise SystemExit("初始化核验未成功：%r" % (_base,))
+    _plan_rec = dict(_plan)
+    _plan_rec["plan_verification"] = _base
+    _all = o.plan_acceptance_problems(_plan_rec, _novel)
+    _want = {str(x) for x in (sample.get("expected") or {}).get("problem_codes")
+             or []}
+    _actual = [p for p in _all if str(p.get("code") or "") in _want]
+    _write(run_dir / "actual_problems.json", _all)
+    if not _actual:
+        raise SystemExit("目标问题未出现：0 次后续发送；实际=%r"
+                         % [p.get("code") for p in _all])
+    _write(run_dir / "selected_problems.json", _actual)
+    _ctl = _controller(_novel, _nd)
+    _ctl.records[_digest] = _base
+    _out = o.revise_plan_once(_plan, _actual, RevisionBudget(
+        max_calls=3, deadline_sec=300.0), None, novel_text=_novel,
+        verification=_ctl)
+    _write(run_dir / "outcome.json", _out)
+    _cand = _out.get("plan") if isinstance(_out.get("plan"), dict) else {}
+    _write(run_dir / "candidate_plan.json", _cand)
+    return {"scenario": "p2", "kind": _out.get("kind"),
+            "detail": _out.get("detail"), "sends": SENDS["attempts"],
+            "dialogue_lines": _cand.get("dialogue_lines"),
+            "narration_lines": _cand.get("narration_lines"),
+            "problem_codes": [p.get("code") for p in _actual],
+            "base_fact_verdicts": {
+                str(x.get("fact_uid")): x.get("verdict")
+                for x in (_base.get("facts") or []) if isinstance(x, dict)}}
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--scenario", choices=("p1a", "p1b"), default="p1b")
+    ap.add_argument("--scenario", choices=("p1a", "p1b", "p2"), default="p1b")
     ap.add_argument("--sample", default="", help="显式样本包 JSON；缺省用 tools/samples/")
     ap.add_argument("--dry", action="store_true")
     args = ap.parse_args()
@@ -289,6 +334,8 @@ def main():
     _cap_service(_run)
     if args.scenario == "p1a":
         _res = _run_p1a(_sample, _run)
+    elif args.scenario == "p2":
+        _res = _run_p2(_sample, _run)
     else:
         _res = _run_p1b(_sample, _run)
     _write(_run / "result.json", _res)

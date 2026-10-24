@@ -2854,6 +2854,13 @@ def scope_violations(base_view: dict, candidate_view: dict, scope) -> list:
     _allow_narrow_voices = {str(x.get("uid")): x
                             for x in (_scope.get("allowed_narrow_voices") or [])
                             if isinstance(x, dict) and str(x.get("uid") or "")}
+    _allow_create_voice_units = {
+        str(x.get("uid")): x for x in (_scope.get("allowed_create_voice_units") or [])
+        if isinstance(x, dict) and str(x.get("uid") or "")}
+    _allow_create_voice_refs = {
+        str(x.get("beat_uid")): x
+        for x in (_scope.get("allowed_create_voice_refs") or [])
+        if isinstance(x, dict) and str(x.get("beat_uid") or "")}
     _protected = tuple(_scope.get("beat_protected_fields") or
                        ("uid", "event_uids", "purpose", "evidence", "source", "voice_ref"))
     out: list = []
@@ -2875,6 +2882,28 @@ def scope_violations(base_view: dict, candidate_view: dict, scope) -> list:
     _old_text = {u: str(v[1].get("text") or "") for u, v in _b.items()}
     for _uid in sorted(set(_b) | set(_c)):
         _bi, _ci = _b.get(_uid), _c.get(_uid)
+        # 授权的 create_voice：新增单元必须与回答授权的 kind/text/source 逐字一致。
+        if _uid in _allow_create_voice_units:
+            _cv = _allow_create_voice_units[_uid]
+            if _bi is not None:
+                _add("scope_voice_unit_modified", "%s_units[%s]" % (_bi[0], _uid),
+                     "create_voice 只允许新增声音 %s，不能覆盖已有单元" % _uid)
+                continue
+            if _ci is None:
+                _add("scope_voice_unit_modified", "voice_units[%s]" % _uid,
+                     "授权新增的声音 %s 未出现在候选里" % _uid)
+                continue
+            _want = {"kind": str(_cv.get("kind") or ""),
+                     "text": str(_cv.get("text") or ""),
+                     "source": _cv.get("source") or {}}
+            if (_ci[0] == "dialogue" and _want["kind"] == "dialogue"
+                    or _ci[0] == "narration" and _want["kind"] == "narration") \
+                    and str(_ci[1].get("text") or "") == _want["text"] \
+                    and _ci[1].get("source") == _want["source"]:
+                continue
+            _add("scope_voice_unit_modified", "%s_units[%s]" % (_ci[0], _uid),
+                 "create_voice 新增声音的 kind/text/source 与授权回答不一致")
+            continue
         # 授权的 narrow：只允许该声音的 `text` 变短；source/uid/其他字段逐字冻结。
         if _uid in _allow_narrow_voices:
             _nv = _allow_narrow_voices[_uid]
@@ -2948,7 +2977,9 @@ def scope_violations(base_view: dict, candidate_view: dict, scope) -> list:
             _added = [u for u in _cb if u not in set(_bb)]
             _wild = "*" in _allow_insert
             _ok_insert = bool(_allow_insert) and all(
-                _wild or (_cb.index(u) > 0 and _cb[_cb.index(u) - 1] in _allow_insert)
+                _wild
+                or (_cb.index(u) > 0 and _cb[_cb.index(u) - 1] in _allow_insert)
+                or ("" in _allow_insert and _cb.index(u) >= len(_bb))
                 for u in _added)
             if not _ok_insert:
                 _add("scope_uneditable_beat_modified", "beats",
@@ -2975,6 +3006,13 @@ def scope_violations(base_view: dict, candidate_view: dict, scope) -> list:
                                 and str(_bv.get("kind") or "") == str(_rc.get("from"))
                                 and ref_uid(_cv) == str(_rc.get("to_temp_uid"))
                                 and str(_cv.get("kind") or "") == str(_rc.get("to"))):
+                            _ok = True
+                            break
+                    for _cr in _allow_create_voice_refs.values():
+                        if (str(_cr.get("beat_uid") or "") == _uid
+                                and str(_bv.get("kind") or "") in ("", "visual")
+                                and str(_cv.get("kind") or "") == str(_cr.get("kind"))
+                                and ref_uid(_cv) == str(_cr.get("to_temp_uid"))):
                             _ok = True
                             break
                 if not _ok:
