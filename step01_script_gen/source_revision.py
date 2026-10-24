@@ -12,7 +12,8 @@ VERSION = 'source_revision.v1'
 VERSION_V2 = 'source_revision.v2'
 SUPPORTED_VERSIONS = (VERSION, VERSION_V2)
 PROTOCOL_CODES = {'verify_source_revision_context', 'verify_source_preservation_record',
-                  'verify_source_preservation_identity', 'verify_source_preservation_evidence'}
+                  'verify_source_preservation_identity', 'verify_source_preservation_evidence',
+                  'verify_fact_split_context'}
 CORE_FIELDS = ('main_events', 'climax', 'causal_chain', 'end_hook', 'character_motives')
 PRESERVATION_SCHEMA = {'type':'object', 'properties':{
     'target_uids': {'type':'array','items':{'type':'string'}},
@@ -102,7 +103,25 @@ def admission_problems(view):
            or any(not isinstance(f[k],str) or not f[k].strip() for k in ('uid','claim')) for f in old):
         return [problem('verify_source_revision_context','来源修正基线事实必须完整保留身份与正文')]
     baseline={f['uid']:f['claim'] for f in old}
-    current={f['uid']:f['claim'] for f in view.get('frozen_facts',[])}
+    # **拆分账本准入扩展**：先按已校验的父子映射把子事实折回父义务，再跑既有 v1/v2。
+    # 折叠只改读法，不改 baseline_facts / targets / source_preservation。
+    from shared import fact_split
+    collapsed, split_problems = fact_split.collapse(view)
+    if split_problems or collapsed is None:
+        _why='；'.join(str((p or {}).get('reason') or '') for p in (split_problems or [])[:2])
+        return [problem('verify_fact_split_context',
+                        '来源修正准入需要可读的拆分账本：%s' % (_why or '账本不可读'))]
+    current=collapsed
+    split_ctx=fact_split.context(view)
+    for _entry in (split_ctx or {}).get('splits') or []:
+        if not isinstance(_entry,dict) or _entry.get('baseline_claim') is None:
+            continue
+        _parent=str(_entry.get('parent_uid') or '')
+        if (_parent not in ctx['targets']
+                and str(_entry.get('parent_claim') or '')!=str(_entry.get('baseline_claim') or '')):
+            return [problem('verify_fact_split_context',
+                            '非目标事实 %r 的父主张与基线不一致——拆分不授权改父主张' % _parent,
+                            _parent)]
     if len(baseline)!=len(old):
         return [problem('verify_source_revision_context','来源修正不得增删事实、改身份或改写未授权的已成立主张')]
     if ctx['version']==VERSION_V2:

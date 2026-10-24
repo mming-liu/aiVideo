@@ -6,7 +6,7 @@ Claude 负责 aiVideo 的实施、测试、运行与交付；[AGENTS.md](AGENTS.
 
 ## 授权与费用
 
-执行前遵守 [AGENTS.md「授权与费用」](AGENTS.md#授权与费用)，该节统一维护各阶段费用、运行范围和正式产物边界；本文件不另设授权口径。沿用用户已经确认的授权与限制，常规实现和必要验证不重复请示。
+执行前遵守 [AGENTS.md「授权与费用」](AGENTS.md#授权与费用)，该节统一维护各阶段费用、运行范围和正式产物边界；本文件不另设授权口径。用户指定 Step 01 使用 **OpenCode Go 套餐**时，按该节规则直接执行范围内必要调用，无需另行申请运行权限；后续步骤继续遵守各自原有限制。沿用用户已经确认的授权与限制，常规实现和必要验证不重复请示。
 
 ## 自主推进与升级
 
@@ -61,5 +61,7 @@ Claude 负责 aiVideo 的实施、测试、运行与交付；[AGENTS.md](AGENTS.
 ## 编码与查阅入口
 
 编码、路径、模型能力与配置遵守 [AGENTS.md「编码与架构约定」](AGENTS.md#编码与架构约定)；源码导航统一见 [AGENTS.md「按任务查阅」](AGENTS.md#按任务查阅)。涉及 Step03/04、视频抽卡或开源增强时，按该表读取对应完整执行计划。历史实施资料见 [原 CLAUDE 项目参考记录](references/claude-project-reference.md)，引用前核对当前实现与授权。
+
+开始本项目的实施或核查前，先读项目记忆索引 `C:\Users\ee54\.claude\projects\C--myFloders-git-aiVideo\memory\MEMORY.md`（Claude Code 项目记忆，机器本地路径，不存在则跳过；`~/.claude/projects/C--myFloders-git-aiVideo/memory/` 同指）：先按 `_baseline-2026-10-23.md` 核对生效配置与「已被代码推翻」的说法，再按索引取费用硬规则、本机陷阱和恢复路径；`.archive/` 只供历史检索，不用于判断现状。记忆只作线索，与当前代码、生效配置、[AGENTS.md](AGENTS.md) 或本文件冲突时以代码与配置为准。
 
 维护时将同一规则集中在责任章节；新要求优先合并既有条款，避免并存重复规则或用局部优先级覆盖授权限制。

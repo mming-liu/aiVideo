@@ -62,7 +62,10 @@ def test_the_request_scope_lists_every_possible_edit_and_the_co_carried_fact():
     # f03 与目标 f01 同载 b01，但它不是本轮目标 ⇒ 必须列进同载保护
     assert _s["co_carried_facts_by_target"] == {"b01": ["f03"]}
     assert "voice_ref" in _s["beat_protected_fields"]
-    assert "narration_units" in _s["frozen_collections"]
+    # P1a：声音集合改为**目标级授权**，不再整块冻结；没有声音槽时授权集合为空。
+    assert "narration_units" not in _s["frozen_collections"]
+    assert _s["allowed_reclassify_voices"] == []
+    assert _s["allowed_bind_voice_uids"] == []
 
 
 def test_bind_only_answers_get_no_permission_to_touch_beat_text():
@@ -217,11 +220,12 @@ def test_a_fact_round_with_voice_residuals_still_uses_the_narrow_slot_entry(monk
         "path": "dialogue_units[d01]", "reason": "内心独白占了对白槽", "limits": {}}]
     _out = o.revise_plan_once(_f["plan"], _problems, _Budget(), None,
                               novel_text=_novel(), verification=_controller())
-    assert _out["evidence"]["route"] == "content_slots", _out["evidence"].get("route")
-    # 声音类残余被**显式记为延后**（不是被吞掉）；完整验收仍按原问题集重跑，
-    # 真实核验器会继续报告它（本用例的核验器是冻结桩，只复现 f02/f08 的样本）。
-    assert "verify_voice_not_speech" in (
-        _out["evidence"]["content_slots"].get("deferred") or []), _out["evidence"]["content_slots"]
+    assert _out["evidence"]["route"] == "full_plan", _out["evidence"].get("route")
+    # P1a：**没有与当前候选匹配的核验记录** ⇒ 不产生迁移权限（不猜方向），
+    # 声音问题作为真实残余进入完整计划修订；有记录时的窄槽位路径见 P1a 专项用例。
+    _cs = _out["evidence"].get("content_slots") or {}
+    assert _cs.get("applicable") is False, _cs
+    assert _cs.get("state") == pcr.STATE_UNSUPPORTED, _cs
 
 
 def test_the_compiled_delta_is_rejected_before_acceptance_when_scope_forbids_it():

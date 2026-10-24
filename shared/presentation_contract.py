@@ -829,6 +829,31 @@ def plan_beat_body_problems(plan) -> list:
     return problems
 
 
+def _legacy_fact_uids(plan, n: int, problems: list):
+    """legacy 计划的**稳定事实 uid 表**：缺席按位置回退，表给出但失配即拒读.
+
+    与 `presentation.fact_uids` 同一判据（`_uids`）：表已给出就不按位置重编号；
+    子事实用 `父uid.n` 形式，因此表是拆分后身份稳定的唯一来源。
+    """
+    # **缺席**按位置回退；**给了但为 null/非法**一律拒读——两者不是同一状态。
+    if not isinstance(plan, dict) or "fact_uids" not in plan:
+        return ["f%02d" % _i for _i in range(1, n + 1)]
+    _table = plan.get("fact_uids")
+    if (not isinstance(_table, list) or len(_table) != n
+            or any(not isinstance(x, str) or not x.strip() for x in _table)
+            or len(set(_table)) != len(_table)):
+        problems.append(_rec(
+            "view_fact_uids_mismatch", "plan", "",
+            "`fact_uids` 必须是与 `required_facts` 等长的非空、唯一字符串数组"
+            "（现在 %s / 目标 %d 项）——表已经给出就不按位置重编号；"
+            "缺席才能走位置回退，null 不是缺席"
+            % ("null" if _table is None else
+               "非数组" if not isinstance(_table, list) else "%d 项" % len(_table), n),
+            "fact_uids"))
+        return None
+    return [str(x) for x in _table]
+
+
 def _view_from_legacy_plan(plan: dict, *, mode: str = MODE_LEGACY) -> tuple:
     """版本 5 的**旧形状**计划 → 可编辑视图（关系读 `｜载体：` / `｜承载：` 文案）."""
     _probs: list = plan_beat_body_problems(plan)
@@ -859,10 +884,14 @@ def _view_from_legacy_plan(plan: dict, *, mode: str = MODE_LEGACY) -> tuple:
         return None, _probs
 
     # 冻结事实：主张与证据从事实条目拆出来（主张不可编辑，证据可经 evidence_updates 更正）
+    # 稳定身份：有 `fact_uids` 表就用表（长度/唯一性不符即拒读），没有才按位置回退。
+    _fact_uids = _legacy_fact_uids(plan, len(_facts), _probs)
+    if _fact_uids is None:
+        return None, _probs
     _frozen = []
     for _i, _f in enumerate(_facts, 1):
         _claim, _ev = _split_claim_evidence(_f)
-        _frozen.append({"uid": "f%02d" % _i, "claim": _claim, "evidence": _ev})
+        _frozen.append({"uid": _fact_uids[_i - 1], "claim": _claim, "evidence": _ev})
 
     _units_d = [_unit("d%02d" % _i, _t) for _i, _t in enumerate(_lines, 1)]
     _units_n = [_unit("n%02d" % _i, _e.get("text"), _src_span(_e.get("source")))
@@ -900,7 +929,7 @@ def _view_from_legacy_plan(plan: dict, *, mode: str = MODE_LEGACY) -> tuple:
             # `view_carrier_decl_invalid` 诊断**一次都没发过**：一条解析不出的声明被
             # **静默**读成"这条事实没有载体"。
             _ref = [{"kind": KIND_INVALID, "uid": "", "raw": _decl}]
-        _bind.append({"fact_uid": "f%02d" % _i, "carriers": _ref})
+        _bind.append({"fact_uid": _fact_uids[_i - 1], "carriers": _ref})
 
     _hook_decls = [x for x in _split_decls(_hc_raw or "") if str(x).strip()]
     _hook_carriers: list = []
@@ -1475,6 +1504,12 @@ def plan_from_view(view: dict) -> dict:
         "plan_contract_version": PLAN_CONTRACT_VERSION_BY_MODE.get(
             _mode, PLAN_CONTRACT_VERSION_LEGACY),
     })
+    # legacy 也持久化稳定事实身份：并行表，长度/顺序与 `required_facts` 一致。
+    # 新模式的表在 `presentation.fact_uids` 里，不在顶层重复。
+    if _mode == MODE_LEGACY:
+        _out["fact_uids"] = list(_fact_order)
+    else:
+        _out.pop("fact_uids", None)
     if _mode == MODE_HYBRID or _cards:
         # 新模式的**结构化关系是唯一承载事实源**。`｜承载：…` 文案仍投影出来（供人读、
         # 供旧消费者显示），但**不另作权威判据**——消费者读这一块。
@@ -2800,6 +2835,18 @@ def scope_violations(base_view: dict, candidate_view: dict, scope) -> list:
         _allow_text = {str(x) for x in (_scope.get("allowed_rewrite_beat_uids") or [])}
         _allow_cards = {str(x) for x in (_scope.get("allowed_card_ids") or [])}
         _allow_insert = {str(x) for x in (_scope.get("allowed_insert_after_uids") or [])}
+    # P1a：声音迁移的目标级授权（未授权单位仍逐字段冻结）。
+    _allow_reclass: dict = {}
+    for _x in (_scope.get("allowed_reclassify_voices") or []):
+        if isinstance(_x, dict) and str(_x.get("uid") or ""):
+            _allow_reclass[str(_x.get("uid"))] = _x
+    _allow_new_voice = {str(_x.get("to_temp_uid")): _x
+                        for _x in _allow_reclass.values()
+                        if str(_x.get("to_temp_uid") or "")}
+    _allow_rebind_facts = {str(x) for x in
+                           (_scope.get("allowed_rebind_fact_uids") or [])}
+    _allow_voice_ref_beats = {str(x) for x in
+                              (_scope.get("allowed_voice_ref_beat_uids") or [])}
     _protected = tuple(_scope.get("beat_protected_fields") or
                        ("uid", "event_uids", "purpose", "evidence", "source", "voice_ref"))
     out: list = []
@@ -2818,18 +2865,36 @@ def scope_violations(base_view: dict, candidate_view: dict, scope) -> list:
         return d
 
     _b, _c = _units(base_view), _units(candidate_view)
+    _old_text = {u: str(v[1].get("text") or "") for u, v in _b.items()}
     for _uid in sorted(set(_b) | set(_c)):
         _bi, _ci = _b.get(_uid), _c.get(_uid)
+        # 授权的迁移：旧单位必须从原集合删除；新单位必须正文逐字不变地新增。
+        if _uid in _allow_reclass:
+            _rc = _allow_reclass[_uid]
+            if _ci is not None:
+                _add("scope_voice_unit_modified", "%s_units[%s]" % (_bi[0], _uid),
+                     "迁移声音 %s 必须从原集合删除旧单位（候选仍保留）" % _uid)
+            continue
+        if _uid in _allow_new_voice and _bi is None:
+            _rc = _allow_new_voice[_uid]
+            _want_text = _old_text.get(str(_rc.get("uid") or ""), None)
+            _want_src = ({"text": _want_text}
+                         if str(_rc.get("to") or "") == "narration" and _want_text
+                         else {})
+            if (_ci is not None and _ci[0] == str(_rc.get("to") or "")
+                    and str(_ci[1].get("text") or "") == _want_text
+                    and _ci[1].get("source") == _want_src):
+                continue
         if _bi is None:
             _add("scope_voice_unit_modified", "%s_units[%s]" % (_ci[0], _uid),
-                 "本轮不覆盖声音修复：不允许新增声音单元 %s（%s）" % (_uid, _ci[0]))
+                 "本轮不允许新增未授权声音单元 %s（%s）" % (_uid, _ci[0]))
         elif _ci is None:
             _add("scope_voice_unit_modified", "%s_units[%s]" % (_bi[0], _uid),
-                 "本轮不覆盖声音修复：不允许删除声音单元 %s（%s）" % (_uid, _bi[0]))
+                 "本轮不允许删除未授权声音单元 %s（%s）" % (_uid, _bi[0]))
         elif _bi[0] != _ci[0]:
             _add("scope_voice_unit_modified", "%s_units[%s] → %s_units[%s]"
                  % (_bi[0], _uid, _ci[0], _uid),
-                 "本轮不覆盖声音修复：不允许改变声音类型（%s 由 %s 变为 %s）"
+                 "本轮不允许改变声音类型（%s 由 %s 变为 %s）"
                  % (_uid, _bi[0], _ci[0]))
         else:
             # 2026-10-23 复核 P1：只比"类型+正文"会漏掉 `source`（说话人）等字段——
@@ -2842,7 +2907,7 @@ def scope_violations(base_view: dict, candidate_view: dict, scope) -> list:
             if _changed:
                 _add("scope_voice_unit_modified",
                      "%s_units[%s].%s" % (_bi[0], _uid, _changed[0]),
-                     "本轮不覆盖声音修复：声音单元 %s 的字段被改（%s）"
+                     "本轮不允许改声音单元 %s 的字段（%s）"
                      % (_uid, "、".join(_changed)))
 
     # ---- 节拍：集合/顺序、voice_ref、保护字段、正文（仅授权改写的那几条可改 text）----
@@ -2875,9 +2940,22 @@ def scope_violations(base_view: dict, candidate_view: dict, scope) -> list:
             if _json.dumps(_x.get(_f), sort_keys=True) == _json.dumps(_y.get(_f), sort_keys=True):
                 continue
             if _f == "voice_ref":
-                _add("scope_beat_voice_ref_modified", "beats[%s].voice_ref" % _uid,
-                     "本轮不允许改声音归属：节拍 %s 的 voice_ref 变了（%r → %r）"
-                     % (_uid, _x.get("voice_ref"), _y.get("voice_ref")))
+                _ok = False
+                if _uid in _allow_voice_ref_beats:
+                    _bv = _x.get("voice_ref") or {}
+                    _cv = _y.get("voice_ref") or {}
+                    for _rc in _allow_reclass.values():
+                        if (ref_uid(_bv) == str(_rc.get("uid"))
+                                and str(_bv.get("kind") or "") == str(_rc.get("from"))
+                                and ref_uid(_cv) == str(_rc.get("to_temp_uid"))
+                                and str(_cv.get("kind") or "") == str(_rc.get("to"))):
+                            _ok = True
+                            break
+                if not _ok:
+                    _add("scope_beat_voice_ref_modified", "beats[%s].voice_ref" % _uid,
+                         "本轮只允许把授权迁移的声音引用从旧 uid 改到新 uid："
+                         "节拍 %s 的 voice_ref 变了（%r → %r）"
+                         % (_uid, _x.get("voice_ref"), _y.get("voice_ref")))
             else:
                 _add("scope_beat_protected_field_modified", "beats[%s].%s" % (_uid, _f),
                      "节拍 %s 的受保护字段 `%s` 被改（本轮只允许改授权节拍的 text）" % (_uid, _f))
@@ -2899,21 +2977,44 @@ def scope_violations(base_view: dict, candidate_view: dict, scope) -> list:
             _add("scope_card_modified", "screen_cards[%s]" % _cid,
                  "本轮只允许改这些卡片：%s；%s 不在其中" % (sorted(_allow_cards), _cid))
 
-    # ---- 事实绑定：只有声明的条目可改 ----
+    # ---- 事实绑定：只有声明的条目可改；迁移只允许"旧声音→新声音"同内容身份替换 ----
     def _carriers(view):
         d = {}
         for b in (view or {}).get("fact_bindings") or []:
             if isinstance(b, dict):
-                d[str(b.get("fact_uid") or "")] = _json.dumps(b.get("carriers"), sort_keys=True)
+                d[str(b.get("fact_uid") or "")] = list(b.get("carriers") or [])
         return d
+
+    def _same_cars(_x, _y):
+        return _json.dumps(_x, sort_keys=True) == _json.dumps(_y, sort_keys=True)
+
+    def _identity_swap(_x, _y, _rc):
+        if not isinstance(_x, list) or not isinstance(_y, list) or len(_x) != len(_y):
+            return False
+        for _cx, _cy in zip(_x, _y):
+            if not isinstance(_cx, dict) or not isinstance(_cy, dict):
+                return False
+            if (ref_uid(_cx) == str(_rc.get("uid"))
+                    and str(_cx.get("kind") or "") == str(_rc.get("from"))):
+                if not (ref_uid(_cy) == str(_rc.get("to_temp_uid"))
+                        and str(_cy.get("kind") or "") == str(_rc.get("to"))):
+                    return False
+            elif not _same_cars(_cx, _cy):
+                return False
+        return True
 
     _fb, _fc = _carriers(base_view), _carriers(candidate_view)
     for _fu in sorted(set(_fb) | set(_fc)):
-        if _fb.get(_fu) == _fc.get(_fu):
+        if _same_cars(_fb.get(_fu), _fc.get(_fu)):
             continue
-        if _fu not in _allow_fact:
-            _add("scope_uneditable_binding_modified", "fact_bindings[%s].carriers" % _fu,
-                 "本轮只允许改这些事实的承载：%s；%s 不在其中" % (sorted(_allow_fact), _fu))
+        if _fu in _allow_fact:
+            continue
+        if _fu in _allow_rebind_facts and any(
+                _identity_swap(_fb.get(_fu), _fc.get(_fu), _rc)
+                for _rc in _allow_reclass.values()):
+            continue
+        _add("scope_uneditable_binding_modified", "fact_bindings[%s].carriers" % _fu,
+             "本轮只允许改这些事实的承载：%s；%s 不在其中" % (sorted(_allow_fact), _fu))
     # ---- 钩子：本轮不覆盖（整块受保护）----
     _hb = _json.dumps((base_view or {}).get("hook_bindings"), sort_keys=True)
     _hc = _json.dumps((candidate_view or {}).get("hook_bindings"), sort_keys=True)

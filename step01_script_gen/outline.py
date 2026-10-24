@@ -1482,10 +1482,16 @@ def _budget_limits(plan, rep, rec=None, *, novel_text="") -> dict:
 
 
 def _uid_tables_of(plan) -> dict:
-    """计划的**稳定身份表**（`kind → [uid, …]`）；没有 `presentation` 块 ⇒ 空表."""
+    """计划的**稳定身份表**（`kind → [uid, …]`）.
+
+    `presentation` 块存在时以它为准（hybrid）；legacy 的稳定事实表在**计划顶层**
+    `fact_uids`（拆分后子 uid 也在这里）。两者都没有 ⇒ 空表（旧计划按位置编号）。
+    """
     _pres = (plan or {}).get("presentation")
+    _fact = (plan or {}).get("fact_uids")
     if not isinstance(_pres, dict):
-        return {}
+        return ({"fact": [str(x) for x in _fact]}
+                if isinstance(_fact, list) and _fact else {})
     return {"beat": [str(x) for x in (_pres.get("beat_uids") or [])],
             "dialogue": [str(x) for x in (_pres.get("dialogue_uids") or [])],
             "narration": [str(x) for x in (_pres.get("narration_uids") or [])],
@@ -2660,8 +2666,17 @@ def _accept_view_candidate(view, novel_text, verification, *, verify_axes=None):
     return complete_candidate(view, novel_text, verification, verify_axes=verify_axes)[1]
 
 
+def _verification_record_for(verification, plan):
+    """当前计划对应的核验记录（**按计划摘要**取，不按视图摘要）."""
+    _recs = getattr(verification, "records", None)
+    if not isinstance(_recs, dict):
+        return None
+    from shared.content_verification import plan_digest_of
+    return _recs.get(plan_digest_of(plan)) or None
+
+
 def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
-                              target_fact_uids=None) -> tuple:
+                              target_fact_uids=None, verification=None) -> tuple:
     """本轮问题**能不能被内容槽位全部表达**（§5.6 第 4 条：能表达才接入）.
 
     `returns (ok, why, ctx)`：`ok=False` 时调用方**整轮落回既有 delta**——判据只有
@@ -2685,9 +2700,12 @@ def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
         return False, "基线读不成可编辑视图：%s" % _detail_vp(_vp), \
             {"state": _pcr.STATE_UNREADABLE, "view": None, "found": None,
              "mode": _mode, "blocked": []}
-    _found = _pcr.content_slots(_base_view, problems, allow_create=allow_create,
-                                target_fact_uids=target_fact_uids)
+    _found = _pcr.content_slots(
+        _base_view, problems, allow_create=allow_create,
+        target_fact_uids=target_fact_uids,
+        verification_record=_verification_record_for(verification, plan))
     _ctx = {"view": _base_view, "found": _found, "mode": _mode,
+            "verification_record": _verification_record_for(verification, plan),
             "blocked": list(_found.get("blocked") or []),
             "deferred": list(_found.get("deferred") or [])}
     # **身份失效优先**：目标实体都不存在时，先修记录（生产者），不是先改内容
@@ -2700,7 +2718,7 @@ def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
         # 2026-10-23（v5 第一包）：**声音类残余不挡窄槽位**。本包只覆盖事实绑定与画面改写，
         # 声音修复明确留到后续；若因为"有一条声音问题"就整轮退回完整计划修订，事实目标
         # 反而拿不到最小编辑面。声音问题留在 `problems` 里，由最终验收继续报告。
-        _deferred = {"verify_voice_not_speech", "verify_voice_speaker_missing"}
+        _deferred = {"verify_voice_speaker_missing"}
         _blocking = [c for c in _found["unexpressible"] if str(c) not in _deferred]
         if _blocking:
             return False, "这些修法内容槽位表达不了（%s）" % "、".join(_blocking), \
@@ -2807,7 +2825,7 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
     if _base_view is None or not _found:
         _ok, _why, _ctx2 = _content_slots_applicable(
             plan, problems, mode=_mode, allow_create=allow_create,
-            target_fact_uids=target_fact_uids)
+            target_fact_uids=target_fact_uids, verification=verification)
         if not _ok:
             return None, "内容槽位不适用：%s" % _why, "", (evidence or {})
         _base_view, _found, _mode = _ctx2["view"], _ctx2["found"], _ctx2["mode"]
@@ -2866,11 +2884,9 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
         return None, _detail_vp(_pb), _cid, (evidence or {})
     # 新建画面的「原文依据」由代码从**已准入的核验记录**里取（逐字出自原文），
     # 不让模型抄原文：冻结事实自带的 `evidence` 不保证逐字（源轴允许引用别的片段）。
-    _ev_by_fact = {}
-    _recs = getattr(verification, "records", None)
-    if isinstance(_recs, dict):
-        from shared.content_verification import plan_digest_of
-        _ev_by_fact = _pcr.source_spans_by_fact(_recs.get(plan_digest_of(_base_view)) or {})
+    _ev_by_fact = _pcr.source_spans_by_fact(
+        _ctx.get("verification_record")
+        or _verification_record_for(verification, plan) or {})
     # **动作有效权限**：请求权限 ∩ 回答动作授权（`bind_visual` 不改正文；
     # `rewrite_visual` 只改所选 target 的正文）。与请求里那份 `editable_scope` 同源。
     _scope_eff = _pcr.build_editable_scope(_base_view, _slots, answer=_data)
@@ -3569,7 +3585,7 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
         # 表达不了（`_content_slots_applicable` 按稳定 UID 判）⇒ 落回既有 delta。
         _slot_ok, _slot_why, _slot_ctx = _content_slots_applicable(
             plan, problems, allow_create=(target_fact_uids is None),
-            target_fact_uids=target_fact_uids)
+            target_fact_uids=target_fact_uids, verification=verification)
         _ev["content_slots"] = {"applicable": bool(_slot_ok), "why": str(_slot_why),
                                 "state": str((_slot_ctx or {}).get("state") or ""),
                                 "blocked": list((_slot_ctx or {}).get("blocked") or [])}
@@ -3617,7 +3633,7 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
         # 声音残余留在 `problems`，由最终完整验收继续报告。只有"没有可表达槽位"才退回整份修订。
         _slot_ok, _slot_why, _slot_ctx = _content_slots_applicable(
             plan, problems, allow_create=(target_fact_uids is None),
-            target_fact_uids=target_fact_uids)
+            target_fact_uids=target_fact_uids, verification=verification)
         _ev["content_slots"] = {"applicable": bool(_slot_ok), "why": str(_slot_why),
                                 "state": str((_slot_ctx or {}).get("state") or ""),
                                 "blocked": list((_slot_ctx or {}).get("blocked") or [])}
