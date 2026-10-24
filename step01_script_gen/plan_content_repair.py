@@ -38,12 +38,13 @@ ACT_REWRITE = "rewrite_visual"
 ACT_CREATE = "create_visual"
 ACT_BIND = "bind_visual"
 ACT_NARROW_CARD = "narrow_card"
+ACT_NARROW_VOICE = "narrow_voice"
 #: P1a：声音迁移（对白↔旁白，方向由**已准入核验记录**的 `source_kind` 派生）与
 #: 事实绑定到现有声音（目标只来自独立的 `voice_target_uids`）。
 ACT_RECLASSIFY = "reclassify_voice"
 ACT_BIND_VOICE = "bind_voice"
 ACTIONS = (ACT_CREATE, ACT_BIND, ACT_REWRITE, ACT_NARROW_CARD,
-           ACT_RECLASSIFY, ACT_BIND_VOICE)
+           ACT_NARROW_VOICE, ACT_RECLASSIFY, ACT_BIND_VOICE)
 
 #: 问题 code → 槽位种类（**只覆盖"内容/关系选择"能表达的那几类**）：
 #: 别的 code（类型违约、事件重排、声音选材、来源不支持主张……）本适配器**不接**，
@@ -63,6 +64,9 @@ SLOT_CODE_KIND = {
     "presentation_reading_budget_exceeded": "card_text",
     # P1a：声音单位的来源类型与所在集合不符 ⇒ 迁到另一个声音集合（方向由记录派生）
     "verify_voice_not_speech": "voice_kind",
+    # P1b：声音正文超出已准入文本/不在原文 ⇒ 收窄到逐字子串（不是迁移）
+    "verify_voice_text_mismatch": "voice_text",
+    "presentation_voice_not_in_novel": "voice_text",
 }
 
 #: **动作字段契约**（单源）：`required` 必填、`forbidden` 该动作**不许出现**。
@@ -76,6 +80,8 @@ ACTION_FIELDS = {
                   "forbidden": ("insert_after_uid", "event_index")},
     ACT_NARROW_CARD: {"required": ("text",),
                       "forbidden": ("target_uid", "insert_after_uid", "event_index")},
+    ACT_NARROW_VOICE: {"required": ("text",),
+                       "forbidden": ("target_uid", "insert_after_uid", "event_index")},
     ACT_RECLASSIFY: {"required": (),
                      "forbidden": ("text", "target_uid", "insert_after_uid",
                                    "event_index")},
@@ -329,6 +335,38 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
                     "facts": [], "event_uids": [], "sources": [_text],
                 })
             continue
+        if _kind == "voice_text":
+            _vkind, _vu = _voice_unit_of(view, _uid)
+            if _vkind is None:
+                _bad.append("%s（目标声音 %r 不在基线视图里）" % (_code, _uid))
+                _blocked.append(_rec(
+                    "repair_slot_target_unknown", _uid,
+                    "问题 %s 指向的声音 %r **不在基线视图里**" % (_code, _uid), _uid))
+                continue
+            if _uid not in _voices_seen:
+                _voices_seen.append(_uid)
+                _text = str(_vu.get("text") or "")
+                _manifest = _manifest_for_carrier(view, _vkind, _uid)
+                _affected = [str(_m.get("fact_uid") or "") for _m in _manifest]
+                _slots.append({
+                    "slot_id": "voice_text:%s" % _uid, "kind": "voice_text",
+                    "fact_uid": "", "card_id": "",
+                    "problem_codes": [_code],
+                    "claim": "", "evidence": "",
+                    "unit_uid": _uid, "unit_kind": _vkind,
+                    "original_text": _text,
+                    "source": copy.deepcopy(_vu.get("source") or {}),
+                    "affected_facts": _affected,
+                    "affects_hook": _hook_bound(view, _vkind, _uid),
+                    "required_content_manifest": _manifest,
+                    "allowed_actions": [ACT_NARROW_VOICE],
+                    "target_uids": [], "voice_target_uids": [],
+                    "insert_positions": [], "current_carriers": [],
+                    "facts": [_fact_brief(view, _f) for _f in _affected
+                              if _fact_of(view, _f)],
+                    "event_uids": [], "sources": [_text],
+                })
+            continue
         if _kind == "card_text":
             # **先核实体真的存在**（复核 2026-10-08 P1）：身份写错时不许生成槽位、
             # 更不许发 POST——"目标不存在"要在调用**之前**判，不能花掉一次额度。
@@ -387,6 +425,9 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
         })
     for _cid in _cards_seen:
         _c = _card_of(view, _cid)
+        from shared.presentation_contract import KIND_CARD
+        _card_manifest = _manifest_for_carrier(view, KIND_CARD, _cid)
+        _card_facts = [str(_m.get("fact_uid") or "") for _m in _card_manifest]
         # **卡片槽必须带上它要保留的冻结主张**（复核 P1）：从绑定反查全部受影响事实
         _cfacts = [_fact_brief(view, _f) for _f in _facts_of_card(view, _cid)
                    if _fact_of(view, _f)]
@@ -407,6 +448,10 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
             "allowed_actions": [ACT_NARROW_CARD],
             "target_uids": [_cid], "insert_positions": [],
             "current_carriers": [], "current_text": str(_c.get("text") or ""),
+            "original_text": str(_c.get("text") or ""),
+            "affected_facts": _card_facts,
+            "affects_hook": _hook_bound(view, KIND_CARD, _cid),
+            "required_content_manifest": _card_manifest,
             "event_uids": [],
             "sources": [str(_x.get("evidence") or "") for _x in _cfacts
                         if str(_x.get("evidence") or "")],
@@ -509,6 +554,167 @@ def _novel_span(text, novel_text) -> str:
     """正文在原文中的**逐字连续子串**；取不到返回空串（调用方拒收，不相似匹配）."""
     _t = str(text or "")
     return _t if _t and _t in str(novel_text or "") else ""
+
+
+def _manifest_for_carrier(view, kind, uid) -> list:
+    """载体 → 受影响事实的 `required_content_manifest`（每个独立载体单独成项）."""
+    from shared.content_verification import carrier_texts, frozen_obligations
+    from shared.presentation_contract import ref_uid
+    _kind, _uid = str(kind or ""), str(uid or "")
+    _out: list = []
+    _obs = frozen_obligations(view or {}) or {}
+    for _b in (view or {}).get("fact_bindings") or []:
+        if not isinstance(_b, dict):
+            continue
+        _cars = [c for c in (_b.get("carriers") or []) if isinstance(c, dict)]
+        if not any(str(c.get("kind") or "") == _kind and ref_uid(c) == _uid
+                   for c in _cars):
+            continue
+        _fu = str(_b.get("fact_uid") or "")
+        _f = _fact_of(view, _fu)
+        _others = []
+        for _c in _cars:
+            if str(_c.get("kind") or "") == _kind and ref_uid(_c) == _uid:
+                continue
+            _others.append({
+                "kind": str(_c.get("kind") or ""), "uid": ref_uid(_c),
+                "text": "\n".join(str(t) for t in carrier_texts(view, _c) if str(t))})
+        _out.append({
+            "fact_uid": _fu, "claim": str(_f.get("claim") or ""),
+            "evidence": str(_f.get("evidence") or ""),
+            "obligations": copy.deepcopy(_obs.get(_fu) or []),
+            "other_carriers": _others})
+    return _out
+
+
+def _hook_bound(view, kind, uid) -> bool:
+    from shared.presentation_contract import ref_uid
+    _hk = (view or {}).get("hook_bindings") or {}
+    if str(uid) in {str(x) for x in (_hk.get("spoken_uids") or [])}:
+        return True
+    return any(isinstance(_c, dict) and str(_c.get("kind") or "") == str(kind)
+               and ref_uid(_c) == str(uid)
+               for _c in (_hk.get("carriers") or []))
+
+
+def _narrow_seconds(kind, text) -> float:
+    from step01_script_gen.plan_feasibility import card_reading_seconds, voice_seconds
+    if str(kind) == "card":
+        return float(card_reading_seconds(text))
+    return float(voice_seconds([str(text or "")], str(kind)))
+
+
+def _narrow_boundary_ok(new, original) -> bool:
+    """保留段必须落在原句的合法切分边界上（句末/分句标点或首尾）."""
+    _new, _old = str(new or ""), str(original or "")
+    if not _new or _new not in _old:
+        return False
+    _i = _old.index(_new)
+    _j = _i + len(_new)
+
+    def _bound(ch):
+        return ch in "。！？!?；;，,、：: \n\t"
+
+    if _i > 0 and not _bound(_old[_i - 1]):
+        return False
+    if _j < len(_old) and not (_bound(_old[_j]) or _bound(_new[-1])):
+        return False
+    return True
+
+
+def _narrow_evidence_problems(manifest, new_text, slot_id="", target_uid="") -> list:
+    """显式分量证据：每个分量必须落在**某一个**已绑定载体上，不跨载体拼接.
+
+    只检查**带显式分量**的义务。仅有 `claim` 的旧义务没有字面跨度，代码不靠词面
+    拼装放行；它的语义是否仍成立由收窄后的完整重验判（见 P1b §16.5）。
+    """
+    _p: list = []
+    _new = _norm_key(new_text)
+    for _fact in manifest or []:
+        if not isinstance(_fact, dict):
+            continue
+        _fu = str(_fact.get("fact_uid") or "")
+        for _ob in _fact.get("obligations") or []:
+            if not isinstance(_ob, dict):
+                continue
+            _comps = [c for c in (_ob.get("components") or []) if isinstance(c, dict)]
+            if not _comps:
+                continue
+            for _c in _comps:
+                _t = str(_c.get("text") or _c.get("exhibitor_span")
+                         or _c.get("span") or "")
+                _k = _norm_key(_t)
+                if not _k:
+                    continue
+                _cu = str(_c.get("carrier_uid") or _c.get("uid") or "")
+                if _cu and _cu == str(target_uid):
+                    if _k in _new:
+                        continue
+                elif _cu:
+                    # 指名的其他载体必须**单独**包含该分量。
+                    if any(str(_x.get("uid") or "") == _cu
+                           and _k in _norm_key(_x.get("text"))
+                           for _x in (_fact.get("other_carriers") or [])
+                           if isinstance(_x, dict)):
+                        continue
+                else:
+                    if _k in _new:
+                        continue
+                    if any(_k in _norm_key(_x.get("text"))
+                           for _x in (_fact.get("other_carriers") or [])
+                           if isinstance(_x, dict)):
+                        continue
+                _p.append(_rec(
+                    "repair_narrow_unpreserved", slot_id,
+                    "事实 %s 的显式分量 %r 在收窄后的目标正文与所指派的已绑定独立载体中"
+                    "都不成立——未绑定载体的文字不能补足，跨载体拼接也不作证据"
+                    % (_fu, _t), _t))
+                break
+    return _p
+
+
+def _narrow_problems(slot, new_text, *, original="", kind="", novel_text="",
+                     source_texts=None) -> list:
+    """P1b narrow 的确定性准入：逐字/净缩短/边界/来源/独立载体证据."""
+    _p: list = []
+    _sid = str((slot or {}).get("slot_id") or "")
+    _new, _old = str(new_text or ""), str(original or "")
+    if not _new.strip() or not _old:
+        _p.append(_rec("repair_narrow_invalid", _sid,
+                       "收窄正文为空或基线原文缺失", _new))
+        return _p
+    if _new == _old or len(_norm_key(_new)) >= len(_norm_key(_old)):
+        _p.append(_rec("repair_narrow_not_shortened", _sid,
+                       "收窄后的正文没有严格变短（字符数未减少）", _new))
+        return _p
+    if _new not in _old or not _narrow_boundary_ok(_new, _old):
+        _p.append(_rec("repair_narrow_invalid", _sid,
+                       "收窄后的正文不是原句的逐字连续子串，或切分点不在合法边界", _new))
+        return _p
+    try:
+        _sec_new = _narrow_seconds(kind, _new)
+        _sec_old = _narrow_seconds(kind, _old)
+    except Exception:                                        # noqa: BLE001
+        _sec_new = float(len(_norm_key(_new)))
+        _sec_old = float(len(_norm_key(_old)))
+    if _sec_new >= _sec_old:
+        _p.append(_rec("repair_narrow_not_shortened", _sid,
+                       "收窄后的估算秒数没有严格变小（%.2f ≥ %.2f）"
+                       % (_sec_new, _sec_old), _new))
+        return _p
+    if novel_text and _new not in str(novel_text) and not any(
+            _new in str(s) for s in (source_texts or []) if str(s)):
+        _p.append(_rec("repair_narrow_invalid", _sid,
+                       "收窄后的正文既不在本次原文，也不在原 source 片段里", _new))
+        return _p
+    if (slot or {}).get("affects_hook"):
+        _p.append(_rec("repair_narrow_hook_bound", _sid,
+                       "目标载体被 hook 引用，narrow 禁止触碰 hook 承载"))
+        return _p
+    _p.extend(_narrow_evidence_problems(
+        (slot or {}).get("required_content_manifest") or [], _new, _sid,
+        str((slot or {}).get("unit_uid") or (slot or {}).get("card_id") or "")))
+    return _p
 
 
 #: 载体 kind → 请求里的实体块（**按 kind 查真实实体**；卡片身份绝不冒充画面 UID）.
@@ -616,6 +822,8 @@ def build_editable_scope(view, slots, *, answer=None) -> dict:
     _target_beats: set = set()
     _reclass: list = []
     _bind_voice: set = set()
+    _narrow_cards: list = []
+    _narrow_voices: list = []
 
     def _reclass_closure(entries):
         """迁移条目 → 需要同步的节拍 `voice_ref` 与事实绑定（只做同内容身份替换）."""
@@ -650,6 +858,16 @@ def build_editable_scope(view, slots, *, answer=None) -> dict:
             _cid = str(_s.get("card_id") or "")
             if _cid:
                 _cards.add(_cid)
+                _narrow_cards.append({
+                    "card_id": _cid,
+                    "original_text": str(_s.get("original_text") or "")})
+            continue
+        if _s.get("kind") == "voice_text":
+            _vu = str(_s.get("unit_uid") or "")
+            if _vu:
+                _narrow_voices.append({
+                    "uid": _vu, "kind": str(_s.get("unit_kind") or ""),
+                    "original_text": str(_s.get("original_text") or "")})
             continue
         _fu = str(_s.get("fact_uid") or "")
         if _fu:
@@ -686,6 +904,7 @@ def build_editable_scope(view, slots, *, answer=None) -> dict:
     if isinstance(answer, dict):
         _ef, _er, _eb, _ei, _ec = set(), set(), set(), set(), set()
         _ar, _abv = [], set()
+        _anc, _anv = [], []
         for _it in answer.get("answers") or []:
             if not isinstance(_it, dict):
                 continue
@@ -701,6 +920,14 @@ def build_editable_scope(view, slots, *, answer=None) -> dict:
             if _s.get("kind") == "card_text":
                 if _act == ACT_NARROW_CARD and str(_s.get("card_id") or "") in _cards:
                     _ec.add(str(_s.get("card_id")))
+                    _anc.append({"card_id": str(_s.get("card_id") or ""),
+                                 "original_text": str(_s.get("original_text") or "")})
+                continue
+            if _s.get("kind") == "voice_text":
+                if _act == ACT_NARROW_VOICE:
+                    _anv.append({"uid": str(_s.get("unit_uid") or ""),
+                                 "kind": str(_s.get("unit_kind") or ""),
+                                 "original_text": str(_s.get("original_text") or "")})
                 continue
             _tgt = str(_it.get("target_uid") or "")
             if _act == ACT_REWRITE and _tgt in _rewrite:
@@ -719,6 +946,7 @@ def build_editable_scope(view, slots, *, answer=None) -> dict:
                 _ef.add(str(_s.get("fact_uid") or ""))
         _facts, _rewrite, _bind, _insert, _cards = _ef, _er, _eb, _ei, _ec
         _reclass, _bind_voice = _ar, _abv
+        _narrow_cards, _narrow_voices = _anc, _anv
     _voice_beats, _rebind_facts = _reclass_closure(_reclass)
     return {
         "phase": "effective" if isinstance(answer, dict) else "request",
@@ -736,6 +964,8 @@ def build_editable_scope(view, slots, *, answer=None) -> dict:
         "allowed_bind_voice_uids": sorted(_bind_voice),
         "allowed_rebind_fact_uids": sorted(_rebind_facts),
         "allowed_voice_ref_beat_uids": sorted(_voice_beats),
+        "allowed_narrow_cards": _narrow_cards,
+        "allowed_narrow_voices": _narrow_voices,
         "co_carried_facts_by_target": {k: sorted(set(v)) for k, v in _co.items()},
         "protected_hook": _hook,
     }
@@ -834,6 +1064,8 @@ _ACT_RULE = {
     ACT_REWRITE: ("`target_uid` = 要改写的现有承载画面（`target_uids` 里选）；"
                   "`text` = 改写后的画面正文"),
     ACT_NARROW_CARD: "`text` = 从原文截取的**更短且逐字一致**的片段（改后不得超出阅读预算）",
+    ACT_NARROW_VOICE: "`text` = 从该声音原文/来源截取的**更短且逐字一致**的片段；"
+                      "保留段的义务必须仍由目标或其他已绑定独立载体单独承担",
     ACT_RECLASSIFY: "只回带 `slot_id` 与动作；迁移方向、目标集合与临时身份由代码从当前"
                     "已准入核验记录派生，**不要**填正文、目标或任何哈希",
     ACT_BIND_VOICE: "`target_uid` = 现有声音单位（`voice_target_uids` 里选）；`text` 只能给"
@@ -980,7 +1212,8 @@ def answer_problems(answer, slots, *, where: str = "槽位回答") -> list:
         if _bad_field:
             continue
         _txt = str(_it.get("text") or "")
-        if _act in (ACT_CREATE, ACT_REWRITE, ACT_NARROW_CARD) and not _txt.strip():
+        if _act in (ACT_CREATE, ACT_REWRITE, ACT_NARROW_CARD,
+                    ACT_NARROW_VOICE) and not _txt.strip():
             _p.append(_rec("repair_answer_text_empty", _sid,
                            "槽位 %s 的动作 %s 必须给出**非空白**正文" % (_sid, _act), _txt))
             continue
@@ -1236,12 +1469,42 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
                     for _c in (_b.get("carriers") or [])]
             _voice_order_changed = True
             continue
+        if _slot.get("kind") == "voice_text":
+            _uid = str(_slot.get("unit_uid") or "")
+            _vk, _vu = _voice_unit_of(view, _uid)
+            if _vk is None:
+                _p.append(_rec("repair_slot_target_missing", _sid,
+                               "槽位指向的声音 %r 不在基线视图里" % _uid, _uid))
+                continue
+            _orig = str(_vu.get("text") or "")
+            _src = str((_vu.get("source") or {}).get("text") or "")
+            _np = _narrow_problems(
+                _slot, _txt, original=_orig, kind=_vk, novel_text=novel_text,
+                source_texts=[_src] if _src else [])
+            if _np:
+                _p.extend(_np)
+                continue
+            if _claim_write("声音收窄", _uid, _sid, _txt) == "conflict":
+                continue
+            _new = copy.deepcopy(_vu)
+            _new["text"] = _txt
+            _units_up[_vk][_uid] = _new
+            continue
         if _slot.get("kind") == "card_text":
             _cid = str(_slot.get("card_id") or "")
             _card = _cards.get(_cid)
             if _card is None:
                 _p.append(_rec("repair_slot_target_missing", _sid,
                                "槽位指向的卡片 %r 不在基线视图里" % _cid, _cid))
+                continue
+            _orig = str(_card.get("text") or "")
+            _srcs = [_orig] + [str(_sp.get("text") or "")
+                               for _sp in (_card.get("source_spans") or [])
+                               if isinstance(_sp, dict)]
+            _np = _narrow_problems(_slot, _txt, original=_orig, kind="card",
+                                   novel_text=novel_text, source_texts=_srcs)
+            if _np:
+                _p.extend(_np)
                 continue
             if _claim_write("卡片", _cid, _sid, _txt) == "conflict":
                 continue
@@ -1385,7 +1648,7 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
 
 
 __all__ = ["ACTIONS", "ACT_BIND", "ACT_BIND_VOICE", "ACT_CREATE", "ACT_NARROW_CARD",
-           "ACT_RECLASSIFY", "ACT_REWRITE",
+           "ACT_NARROW_VOICE", "ACT_RECLASSIFY", "ACT_REWRITE",
            "ANSWER_KEYS", "REPAIR_RULE_VERSION", "SLOT_ANSWER_SCHEMA",
            "SLOT_CODE_KIND", "SLOT_REQUEST_SCHEMA", "answer_problems", "compile_delta",
            "answer_json_schema", "content_slots", "record_uid", "slot_prompt",

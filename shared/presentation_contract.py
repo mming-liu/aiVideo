@@ -2847,6 +2847,13 @@ def scope_violations(base_view: dict, candidate_view: dict, scope) -> list:
                            (_scope.get("allowed_rebind_fact_uids") or [])}
     _allow_voice_ref_beats = {str(x) for x in
                               (_scope.get("allowed_voice_ref_beat_uids") or [])}
+    # P1b：narrow 目标级授权——只允许目标正文变短，其余字段逐字冻结。
+    _allow_narrow_cards = {str(x.get("card_id")): x
+                           for x in (_scope.get("allowed_narrow_cards") or [])
+                           if isinstance(x, dict) and str(x.get("card_id") or "")}
+    _allow_narrow_voices = {str(x.get("uid")): x
+                            for x in (_scope.get("allowed_narrow_voices") or [])
+                            if isinstance(x, dict) and str(x.get("uid") or "")}
     _protected = tuple(_scope.get("beat_protected_fields") or
                        ("uid", "event_uids", "purpose", "evidence", "source", "voice_ref"))
     out: list = []
@@ -2868,6 +2875,25 @@ def scope_violations(base_view: dict, candidate_view: dict, scope) -> list:
     _old_text = {u: str(v[1].get("text") or "") for u, v in _b.items()}
     for _uid in sorted(set(_b) | set(_c)):
         _bi, _ci = _b.get(_uid), _c.get(_uid)
+        # 授权的 narrow：只允许该声音的 `text` 变短；source/uid/其他字段逐字冻结。
+        if _uid in _allow_narrow_voices:
+            _nv = _allow_narrow_voices[_uid]
+            if (_bi is None or _ci is None or _bi[0] != _ci[0]
+                    or _bi[0] != str(_nv.get("kind") or "")):
+                _add("scope_voice_unit_modified", "%s_units[%s]" % (
+                    (_ci or _bi or ("?", {}))[0], _uid),
+                    "narrow 只允许改目标声音 %s 的正文（集合/身份不得变）" % _uid)
+                continue
+            _changed = [f for f in sorted(set(_bi[1]) | set(_ci[1]))
+                        if f != "text"
+                        and _json.dumps(_bi[1].get(f), sort_keys=True)
+                        != _json.dumps(_ci[1].get(f), sort_keys=True)]
+            if _changed:
+                _add("scope_voice_unit_modified",
+                     "%s_units[%s].%s" % (_bi[0], _uid, _changed[0]),
+                     "narrow 只允许改正文；%s 的其余字段被改（%s）"
+                     % (_uid, "、".join(_changed)))
+            continue
         # 授权的迁移：旧单位必须从原集合删除；新单位必须正文逐字不变地新增。
         if _uid in _allow_reclass:
             _rc = _allow_reclass[_uid]
@@ -2968,12 +2994,26 @@ def scope_violations(base_view: dict, candidate_view: dict, scope) -> list:
         d = {}
         for c in (view or {}).get("screen_cards") or []:
             if isinstance(c, dict):
-                d[str(c.get("card_id") or c.get("uid") or "")] = _json.dumps(c, sort_keys=True)
+                d[str(c.get("card_id") or c.get("uid") or "")] = c
         return d
 
     _kb, _kc = _cards(base_view), _cards(candidate_view)
     for _cid in sorted(set(_kb) | set(_kc)):
-        if _kb.get(_cid) != _kc.get(_cid) and _cid not in _allow_cards:
+        _x, _y = _kb.get(_cid), _kc.get(_cid)
+        if _json.dumps(_x, sort_keys=True) == _json.dumps(_y, sort_keys=True):
+            continue
+        if _cid in _allow_narrow_cards:
+            _changed = [f for f in sorted(set(_x or {}) | set(_y or {}))
+                        if f != "text"
+                        and _json.dumps((_x or {}).get(f), sort_keys=True)
+                        != _json.dumps((_y or {}).get(f), sort_keys=True)]
+            if _changed:
+                _add("scope_card_field_modified",
+                     "screen_cards[%s].%s" % (_cid, _changed[0]),
+                     "narrow 只允许改卡片 %s 的正文；其余字段被改（%s）"
+                     % (_cid, "、".join(_changed)))
+            continue
+        if _cid not in _allow_cards:
             _add("scope_card_modified", "screen_cards[%s]" % _cid,
                  "本轮只允许改这些卡片：%s；%s 不在其中" % (sorted(_allow_cards), _cid))
 

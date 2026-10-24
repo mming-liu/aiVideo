@@ -2951,8 +2951,11 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
         "slots": [str(_s["slot_id"]) for _s in _slots]}
     if evidence is not None:
         _codes = [str((x or {}).get("code") or "") for x in (_final_problems or [])]
-        _targets = sorted({str(_s.get("fact_uid")) for _s in _slots
-                           if _s.get("kind") != "card_text" and str(_s.get("fact_uid"))})
+        _targets = sorted(
+            {str(_s.get("fact_uid")) for _s in _slots
+             if _s.get("kind") != "card_text" and str(_s.get("fact_uid"))}
+            | {str(_f) for _s in _slots
+               for _f in (_s.get("affected_facts") or []) if str(_f)})
         _co_affected = bool(_scope_eff.get("co_carried_facts_by_target")) \
             or bool(_scope_eff.get("protected_hook"))
         evidence["applied"] = True
