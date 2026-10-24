@@ -1238,6 +1238,20 @@ def outline_structure_problems(plan) -> list:
     return _with_protocol_fields(_out)
 
 
+def _split_acceptance_records(plan) -> list:
+    """计划上的拆分状态转正式验收残余（无拆分上下文返回空）."""
+    from shared import fact_split as _fs
+    from shared import presentation_contract as _pc
+    try:
+        _view, _err = _pc.view_from_plan(plan)
+    except Exception:                                                  # noqa: BLE001
+        return []
+    if not isinstance(_view, dict) or _err:
+        return []
+    _rec = plan.get("plan_verification") if isinstance(plan, dict) else None
+    return _fs.split_acceptance_problems(_view, _rec)
+
+
 def plan_acceptance_problems(plan, novel_text: str = "") -> list:
     """**唯一的计划验收入口**（复核第 31 轮第 2 条）：结构 / 原文 / 承载 / 预算.
 
@@ -1268,6 +1282,7 @@ def plan_acceptance_problems(plan, novel_text: str = "") -> list:
     _struct = outline_structure_problems(plan)
     if _struct:
         return _with_protocol_fields(_struct)
+    _out.extend(_with_protocol_fields(_split_acceptance_records(plan)))
     # 身份与路径由生产者给出（工作包 §2.2）：这里只**组合**记录，
     # 不再用正则从问题文案里认编号（复核第 33 轮 P1 的"从正文猜编号"）。
     _out.extend(plan_contract_records(plan, novel_text=novel_text))
@@ -4253,7 +4268,9 @@ def generate_outline_result(novel_text: str, model: str | None = None,
                     # **义务支座**（复核 2026-10-09 P1）：待核集合是从**冻结主张**派生的，
                     # 支座变了（主张改过 / 换了派生口径）旧记录就不许复用。这里与统一验收共用
                     # 同一份判据函数（`record_basis_matches`）；读不出视图 ⇒ False（fail-closed）。
-                    and record_basis_matches(_cached_ver_rec, _cached_plan))
+                    and record_basis_matches(_cached_ver_rec, _cached_plan)
+                    # 缓存装载同样消费拆分状态：pending/invalid 不得因缓存命中被采纳。
+                    and not _split_acceptance_records(_cached_plan))
                 if not _ver_reusable:
                     res["cache"]["verification_rejected"] = {
                         "status": _cached_ver_rec.get("status"),

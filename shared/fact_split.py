@@ -245,12 +245,42 @@ def _entry_problems(view, entry, *, index=0) -> list:
                 _p.append(_rec("verify_fact_split_context", "split", _parent,
                                "judgment.inputs_digest 与父/子主张不一致（判定已失效）",
                                _path + ".judgment.inputs_digest"))
+            _p.extend(judgment_problems(entry))
     _nv = entry.get("narrowed_voices")
     if _nv is None:
         _nv = []
     if not isinstance(_nv, list) or any(not isinstance(x, dict) for x in _nv):
         _p.append(_rec("verify_fact_split_context", "split", _parent,
                        "`narrowed_voices` 必须是对象数组", _path + ".narrowed_voices"))
+    return _p
+
+
+def judgment_problems(entry, *, require_supported=False) -> list:
+    """M 调用证据/代码盖章检查；自报 supported 不能代替真实 M 执行."""
+    _j = (entry or {}).get("judgment") if isinstance(entry, dict) else None
+    if not isinstance(_j, dict):
+        return [_rec("split_m_judgment_missing", "split",
+                     str((entry or {}).get("parent_uid") or ""),
+                     "拆分账本缺 M judgment")]
+    _p: list = []
+    if str(_j.get("mode") or "") != "model":
+        _p.append(_rec("split_m_mode_invalid", "split",
+                       str((entry or {}).get("parent_uid") or ""),
+                       "M judgment.mode 必须是 model"))
+    if not str(_j.get("call_id") or "").strip():
+        _p.append(_rec("split_m_call_missing", "split",
+                       str((entry or {}).get("parent_uid") or ""),
+                       "M judgment 缺 call_id"))
+    for _k in ("prompt_digest", "response_digest"):
+        _v = str(_j.get(_k) or "")
+        if len(_v) != 64 or any(ch not in "0123456789abcdef" for ch in _v):
+            _p.append(_rec("split_m_digest_invalid", "split",
+                           str((entry or {}).get("parent_uid") or ""),
+                           "M judgment.%s 不是 sha256" % _k))
+    if require_supported and str(_j.get("verdict") or "") != "supported":
+        _p.append(_rec("split_m_not_supported", "split",
+                       str((entry or {}).get("parent_uid") or ""),
+                       "M 判定不是 supported"))
     return _p
 
 
@@ -411,6 +441,26 @@ def split_state(view, entry, *, record=None, plan_digest="") -> str:
     return "effective"
 
 
+def split_acceptance_problems(view, record) -> list:
+    """把拆分状态接到**统一验收**：`pending/invalid` 都是正式残余."""
+    _ctx = context(view)
+    if not isinstance(_ctx, dict):
+        return []
+    _out: list = []
+    for _entry in _ctx.get("splits") or []:
+        if not isinstance(_entry, dict):
+            continue
+        _state = split_state(view, _entry, record=record)
+        _parent = str(_entry.get("parent_uid") or "")
+        if _state == "invalid":
+            _out.append(_rec("split_invalid", "split", _parent,
+                             "拆分账本/来源/候选状态无效，不能采纳"))
+        elif _state == "pending":
+            _out.append(_rec("split_pending", "split", _parent,
+                             "拆分尚未得到候选完整核验，不能采纳"))
+    return _out
+
+
 def d_problems(parent, children, admitted_spans) -> list:
     """确定性 D 层：只查证据来源、uid 形状、子数与载体，不判主张完整性."""
     _p: list = []
@@ -490,7 +540,9 @@ def _scope_problems(scope) -> list:
     return _p
 
 
-def _authority_problems(base_digest, ledger, entries, record) -> list:
+def _authority_problems(base_digest, ledger, entries, record, *,
+                        authority_digest=None, view=None, plan=None,
+                        novel_text="") -> list:
     """把账本绑定到**实际基线**与**已准入记录**（不是只比账本内部字段）.
 
     - `record.plan_digest` 必须等于实际基线摘要；
@@ -524,12 +576,28 @@ def _authority_problems(base_digest, ledger, entries, record) -> list:
     if str(record.get("status") or "") != "ok":
         # 失败记录没有可信的内容结论；同样不再遍历其字段（可能缺失或类型非法）。
         return _p
-    if str(record.get("plan_digest") or "") != str(base_digest):
+    _auth_digest = str(authority_digest or base_digest)
+    if str(record.get("plan_digest") or "") != _auth_digest:
         _p.append(_rec("split_authority_record_mismatch", "view", "",
-                       "核验记录的 plan_digest 与实际基线不一致", "plan_digest"))
+                       "核验记录的 plan_digest 与授权基线不一致", "plan_digest"))
     if str(record.get("novel_digest") or "") != str(ledger.get("novel_digest") or ""):
         _p.append(_rec("split_authority_record_mismatch", "view", "",
                        "账本 novel_digest 与核验记录不一致", "novel_digest"))
+    if isinstance(view, dict) and isinstance(plan, dict):
+        from .content_verification import (record_basis_matches,
+                                            record_protocol_problems)
+        if not record_basis_matches(record, plan):
+            _p.append(_rec("split_authority_record_basis_mismatch", "view", "",
+                           "记录义务支座与冻结授权基线不一致", "obligation_basis"))
+        _protocol = record_protocol_problems(
+            record, view, plan_digest=_auth_digest, novel_text=novel_text,
+            novel_digest=str(ledger.get("novel_digest") or ""))
+        if _protocol:
+            _p.append(_rec(
+                "split_authority_record_protocol", "view", "",
+                "核验记录未通过协议准入：%s"
+                % "、".join(str((x or {}).get("code") or "") for x in _protocol[:6]),
+                "protocol"))
     _src = {str(r.get("fact_uid") or ""): r for r in (record.get("source_support") or [])
             if isinstance(r, dict)}
     _facts = {str(r.get("fact_uid") or ""): r for r in (record.get("facts") or [])
@@ -539,9 +607,9 @@ def _authority_problems(base_digest, ledger, entries, record) -> list:
             continue
         _parent = str(_entry.get("parent_uid") or "")
         _auth = _entry.get("authority") if isinstance(_entry.get("authority"), dict) else {}
-        if str(_auth.get("plan_digest") or "") != str(base_digest):
+        if str(_auth.get("plan_digest") or "") != _auth_digest:
             _p.append(_rec("split_authority_record_mismatch", "split", _parent,
-                           "新条目的 authority.plan_digest 必须等于实际基线摘要",
+                           "新条目的 authority.plan_digest 必须等于授权基线摘要",
                            "authority.plan_digest"))
         if str(_auth.get("rule_version") or "") != str(record.get("rule_version") or ""):
             _p.append(_rec("split_authority_record_mismatch", "split", _parent,
@@ -557,6 +625,12 @@ def _authority_problems(base_digest, ledger, entries, record) -> list:
             _p.append(_rec("split_authority_record_mismatch", "split", _parent,
                            "核验记录缺父事实的 source_support，无法核对证据准入",
                            "source_support"))
+            continue
+        if str(_s.get("verdict") or "") != "supported":
+            _p.append(_rec("split_authority_record_mismatch", "split", _parent,
+                           "父事实来源轴不是 supported，不能作为拆分授权"
+                           "（原文不支持的主张不得靠拆分洗白）",
+                           "source_support.verdict"))
             continue
         _spans = [str(x) for x in (_s.get("evidence_spans") or [])
                   if isinstance(x, str) and x]
@@ -613,8 +687,20 @@ def _merge_ledger(base_view, ledger, op_parents, base_digest) -> tuple:
     return _final, _p
 
 
+def authority_problems(base_view, base_plan, ledger, entries, record, *,
+                       authority_digest=None, novel_text="") -> list:
+    """P3-A 授权预检的公开入口（与 apply 内部使用同一份判据）."""
+    from .content_verification import plan_digest_of
+    return _authority_problems(
+        plan_digest_of(base_plan), ledger, entries, record,
+        authority_digest=authority_digest, view=base_view, plan=base_plan,
+        novel_text=novel_text)
+
+
 def apply_split_view(base_view, split_ops, *, scope=None, ledger=None,
-                     record=None, accept=None) -> tuple:
+                     record=None, accept=None, authority_digest=None,
+                     novel_text="", authorization_view=None,
+                     authorization_plan=None) -> tuple:
     """**唯一**允许改事实表的应用器；`returns (candidate_view, problems, result)`.
 
     只接受 legacy；要求基线有稳定 `fact_uids`；账本必须与 ops/基线一致；非目标事实
@@ -693,7 +779,13 @@ def apply_split_view(base_view, split_ops, *, scope=None, ledger=None,
     if _hist_p:
         return None, _hist_p, {"kind": "illegal", "mapping": {},
                                "detail": _hist_p[0].get("reason", "")}
-    _auth_p = _authority_problems(_base_digest, ledger, _new_entries, record)
+    _auth_p = _authority_problems(
+        _base_digest, ledger, _new_entries, record,
+        authority_digest=authority_digest,
+        view=authorization_view if isinstance(authorization_view, dict) else base_view,
+        plan=authorization_plan if isinstance(authorization_plan, dict) else _base_plan,
+        novel_text=str(novel_text or (ledger.get("novel_text")
+                                      if isinstance(ledger, dict) else "") or ""))
     if _auth_p:
         return None, _auth_p, {"kind": "illegal", "mapping": {},
                                "detail": _auth_p[0].get("reason", "")}
@@ -728,13 +820,16 @@ def apply_split_view(base_view, split_ops, *, scope=None, ledger=None,
                            "账本 parent_evidence 与基线事实不一致"))
         _auth = _entry.get("authority") if isinstance(_entry, dict) else None
         if not isinstance(_auth, dict) \
-                or str(_auth.get("plan_digest") or "") != str(ledger.get("base_digest") or ""):
+                or str(_auth.get("plan_digest") or "") != str(
+                    authority_digest or ledger.get("base_digest") or ""):
             _p.append(_rec("verify_fact_split_context", "split", _parent,
-                           "新条目的 authority.plan_digest 必须等于本次账本 base_digest"))
+                           "新条目的 authority.plan_digest 必须等于授权基线摘要"))
         _judge = _entry.get("judgment") if isinstance(_entry, dict) else None
         if not isinstance(_judge, dict) or str(_judge.get("verdict") or "") != "supported":
             _p.append(_rec("split_judgment_not_supported", "split", _parent,
                            "M 判定不是 supported（影子期不得自动采纳）"))
+        else:
+            _p.extend(judgment_problems(_entry, require_supported=True))
         if _entry.get("narrowed_voices"):
             _p.append(_rec("split_operation_unsupported", "split", _parent,
                            "P0 不支持 narrow（留到 P1）"))

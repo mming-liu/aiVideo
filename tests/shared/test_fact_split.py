@@ -16,6 +16,7 @@ from shared import presentation_contract as pc
 from step01_script_gen import source_revision as sr
 
 NOVEL_DIGEST = "a" * 64
+NOVEL = "甲进屋。甲说会走。甲离开。乙留下。"
 BASE_DIGEST = "b" * 64
 CLAIMS = {"f01": "甲进屋", "f02": "甲说话并离开", "f03": "乙留下"}
 EVIDENCE = {"f01": "甲进屋。", "f02": "甲说会走。甲离开。", "f03": "乙留下。"}
@@ -86,30 +87,60 @@ def _base_digest() -> str:
 
 def _record_for(plan=None, *, fact_uid="f02", verdict="partial", spans=None) -> dict:
     _plan = plan or _base_plan()
+    _view, _vp = pc.view_from_plan(_plan)
     _spans = [EVIDENCE[fact_uid]] if spans is None else list(spans)
     _uids = [str(x) for x in (_plan.get("fact_uids") or ["f01", "f02", "f03"])]
-    _fact = lambda _u, _v: {"fact_uid": _u, "verdict": _v, "support_spans": [],
-                            "missing": "", "suggested_carriers": [], "obligations": []}
-    _src = lambda _u, _s: {"fact_uid": _u, "verdict": "supported",
-                           "evidence_spans": list(_s), "reason": ""}
-    _facts = [_fact(_u, verdict if _u == fact_uid else "supported") for _u in _uids]
+    _carriers = {}
+    for _b in (_view or {}).get("fact_bindings") or []:
+        _c = (_b.get("carriers") or [{}])[0]
+        _carriers[str(_b.get("fact_uid"))] = (_c.get("uid"), _c.get("kind"))
+    _carrier_text = {}
+    for _b in (_view or {}).get("beats") or []:
+        _carrier_text[str(_b.get("uid"))] = str(_b.get("text") or "")
+    for _u in (_view or {}).get("narration_units") or []:
+        _carrier_text[str(_u.get("uid"))] = str(_u.get("text") or "")
+    for _u in (_view or {}).get("dialogue_units") or []:
+        _carrier_text[str(_u.get("uid"))] = str(_u.get("text") or "")
+    _facts = []
     _sources = []
     for _u in _uids:
-        if _u == fact_uid:
-            _s = _spans
-        else:
-            _s = [EVIDENCE.get(_u) or EVIDENCE.get(_u.split(".")[0]) or ""]
-        _sources.append(_src(_u, _s))
+        _is_parent = _u == fact_uid
+        _v = verdict if _is_parent else "supported"
+        _cuid = (_carriers.get(_u) or (None, None))[0]
+        _ctext = _carrier_text.get(str(_cuid), "")
+        _obel = []
+        if _ctext:
+            _obel = [{"carrier_uid": str(_cuid), "exhibitor_span": _ctext}]
+        _facts.append({
+            "fact_uid": _u, "verdict": _v,
+            "support_spans": ([] if _is_parent else [_ctext]) if _ctext else [],
+            "missing": ("部分主张未展示" if _v != "supported" else ""),
+            "suggested_carriers": [],
+            "obligations": [{
+                "obligation_id": "claim",
+                "text": str(next((f.get("claim") for f in (_view or {}).get(
+                    "frozen_facts") or [] if f.get("uid") == _u), "")),
+                "verdict": _v,
+                "evidence": ([] if _is_parent else _obel),
+                "missing": ("部分未展示" if _v != "supported" else ""),
+                "reason": ""}]})
+        _s = _spans if _is_parent else [EVIDENCE.get(_u)
+                                         or EVIDENCE.get(_u.split(".")[0]) or ""]
+        _sources.append({"fact_uid": _u, "verdict": "supported",
+                         "evidence_spans": list(_s), "reason": ""})
+    _voices = []
+    for _k, _kind in (("dialogue_units", "novel_speech"),
+                      ("narration_units", "novel_narration")):
+        for _u in (_view or {}).get(_k) or []:
+            _voices.append({"unit_uid": str(_u.get("uid")), "verdict": "supported",
+                            "source_kind": _kind, "speaker": ("甲" if _kind == "novel_speech" else ""),
+                            "echo_text": str(_u.get("text") or ""), "reason": ""})
     return {"schema": cv.SCHEMA_VERIFICATION, "status": "ok",
             "plan_digest": cv.plan_digest_of(_plan), "novel_digest": NOVEL_DIGEST,
             "rule_version": cv.DEFAULT_RULE_VERSION,
             "facts": _facts, "source_support": _sources,
-            "voice_units": [
-                {"unit_uid": "d01", "verdict": "supported", "source_kind": "dialogue",
-                 "speaker": "甲", "echo_text": "甲说会走。", "reason": ""},
-                {"unit_uid": "n01", "verdict": "supported", "source_kind": "narration",
-                 "speaker": "", "echo_text": "甲说会走。", "reason": ""},
-            ]}
+            "voice_units": _voices,
+            "obligation_basis": cv.obligation_basis_digest(_view)}
 
 
 def _ledger(base_digest=None, *, parent_claim=CLAIMS["f02"], children=None,
@@ -123,6 +154,7 @@ def _ledger(base_digest=None, *, parent_claim=CLAIMS["f02"], children=None,
     return {
         "version": fs.VERSION,
         "novel_digest": NOVEL_DIGEST,
+        "novel_text": NOVEL,
         "base_digest": _digest,
         "splits": [{
             "parent_uid": "f02",
@@ -135,9 +167,10 @@ def _ledger(base_digest=None, *, parent_claim=CLAIMS["f02"], children=None,
                           "verdict": "partial"},
             "children": _kids,
             "narrowed_voices": [],
-            "judgment": {"mode": "shadow", "verdict": verdict, "missing": "",
+            "judgment": {"mode": "model", "verdict": verdict, "missing": "",
                          "reason": "", "inputs_digest": fs.inputs_digest(parent_claim, _kids),
-                         "call_id": "", "prompt_digest": "", "response_digest": ""},
+                         "call_id": "test-m", "prompt_digest": "c" * 64,
+                         "response_digest": "d" * 64},
         }],
     }
 
@@ -233,10 +266,12 @@ def test_a_second_split_keeps_the_first_ledger_entry_and_stable_uids():
                    parent_evidence="乙留下。", parent_evidence_spans=["乙留下。"],
                    children=_kids,
                    authority=dict(_first["authority"], fact_uid="f03", plan_digest=_digest),
-                   judgment={"mode": "shadow", "verdict": "supported", "missing": "",
+                   judgment={"mode": "model", "verdict": "supported", "missing": "",
                              "reason": "", "inputs_digest": fs.inputs_digest("乙留下", _kids),
-                             "call_id": "", "prompt_digest": "", "response_digest": ""})
+                             "call_id": "test-m2", "prompt_digest": "c" * 64,
+                             "response_digest": "d" * 64})
     _ledger2 = {"version": fs.VERSION, "novel_digest": NOVEL_DIGEST,
+                "novel_text": NOVEL,
                 "base_digest": _digest,
                 "splits": [copy.deepcopy(_first), _second]}
     _ops2 = {"parent_uid": "f03", "children": _kids}
@@ -599,9 +634,10 @@ def _second_setup():
                    children=_kids,
                    authority=dict(_first["authority"], fact_uid="f03",
                                   plan_digest=_digest),
-                   judgment={"mode": "shadow", "verdict": "supported", "missing": "",
+                   judgment={"mode": "model", "verdict": "supported", "missing": "",
                              "reason": "", "inputs_digest": fs.inputs_digest("乙留下", _kids),
-                             "call_id": "", "prompt_digest": "", "response_digest": ""})
+                             "call_id": "test-m2", "prompt_digest": "c" * 64,
+                             "response_digest": "d" * 64})
     return _cand, _plan, _digest, _first, _second, _kids
 
 
@@ -612,6 +648,7 @@ def test_a_second_split_cannot_rewrite_a_historical_entry():
     _bad_first["judgment"]["inputs_digest"] = fs.inputs_digest(
         "甲说话并走开", _bad_first["children"])
     _ledger2 = {"version": fs.VERSION, "novel_digest": NOVEL_DIGEST,
+                "novel_text": NOVEL,
                 "base_digest": _digest, "splits": [_bad_first, _second]}
     _cand2, _p, _res = fs.apply_split_view(
         _cand, {"parent_uid": "f03", "children": _kids},
@@ -628,6 +665,7 @@ def test_a_ledger_entry_outside_history_and_ops_is_rejected():
     _extra = copy.deepcopy(_second)
     _extra["parent_uid"] = "f01"
     _ledger2 = {"version": fs.VERSION, "novel_digest": NOVEL_DIGEST,
+                "novel_text": NOVEL,
                 "base_digest": _digest, "splits": [_first, _second, _extra]}
     _cand2, _p, _res = fs.apply_split_view(
         _cand, {"parent_uid": "f03", "children": _kids},
@@ -642,6 +680,7 @@ def test_a_ledger_entry_outside_history_and_ops_is_rejected():
 def test_two_consecutive_legal_splits_still_succeed():
     _cand, _plan, _digest, _first, _second, _kids = _second_setup()
     _ledger2 = {"version": fs.VERSION, "novel_digest": NOVEL_DIGEST,
+                "novel_text": NOVEL,
                 "base_digest": _digest, "splits": [_first, _second]}
     _cand2, _p, _res = fs.apply_split_view(
         _cand, {"parent_uid": "f03", "children": _kids},
