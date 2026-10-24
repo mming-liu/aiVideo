@@ -1195,6 +1195,15 @@ def slot_request(view, slots, *, limits=None, remaining_calls=None,
                 _seen_facts.add(_u)
                 _bindings.append({"fact_uid": _u,
                                   "carriers": _x.get("carriers") or []})
+    _out_slots = []
+    for _s in slots or []:
+        _d = dict(_s)
+        if {str(a) for a in (_d.get("allowed_actions") or [])} == {ACT_CREATE_VOICE}:
+            # create_voice 专用槽不携带视觉/声音绑定动作的候选字段；新节拍所需的
+            # insert_positions / event_uids / voice_landings 保留。
+            for _k in ("target_uids", "voice_target_uids", "current_carriers"):
+                _d.pop(_k, None)
+        _out_slots.append(_d)
     return {
         "schema": SLOT_REQUEST_SCHEMA, "rule_version": REPAIR_RULE_VERSION,
         "base_plan_hash": view_digest(view), "fact_basis_hash": fact_basis_digest(view),
@@ -1215,7 +1224,7 @@ def slot_request(view, slots, *, limits=None, remaining_calls=None,
         "existing_voices": [_voice_brief(view, _k, _u) for _k, _u in _ent["voice"]],
         #: 引用查不到 / 种类写错时的**带路径记录**（不净化、不静默丢）
         "context_problems": _blocked,
-        "slots": [dict(_s) for _s in slots],
+        "slots": _out_slots,
     }
 
 
@@ -1268,10 +1277,13 @@ _ACT_RULE = {
 }
 
 
-def _render_slot_rule() -> str:
-    """选择规则正文——**动作分支的必填/禁用逐条从 `ACTION_FIELDS` 渲染**."""
+def _render_slot_rule(actions=None, slots=None) -> str:
+    """选择规则正文——**只渲染本轮槽位实际允许的动作**（逐槽约束）."""
+    _allowed = set(actions) if actions is not None else set(ACTIONS)
     _lines = []
     for _act in ACTIONS:
+        if _act not in _allowed:
+            continue
         _spec = ACTION_FIELDS.get(_act) or {}
         _req = "、".join("`%s`" % _f for _f in (_spec.get("required") or ())) or "（无）"
         _ban = "、".join("`%s`" % _f for _f in (_spec.get("forbidden") or ()))
@@ -1279,24 +1291,35 @@ def _render_slot_rule() -> str:
                       % (_act, _req,
                          ("**不许出现** %s；" % _ban) if _ban else "",
                          _ACT_RULE.get(_act, "")))
-    return _SLOT_RULE_HEAD + chr(10).join(_lines) + "\n\n" + _SLOT_RULE_TAIL
-
-
-_SLOT_RULE = _render_slot_rule()
+    _per = []
+    for _s in slots or []:
+        if not isinstance(_s, dict):
+            continue
+        _acts = [str(_a) for _a in (_s.get("allowed_actions") or [])]
+        _parts = []
+        if ACT_CREATE_VOICE in _acts:
+            _parts.append("新增声音由**声音本身**承载完整事实；不要用画面正文替代，"
+                          "也不要把视觉改写指导套到此槽")
+        if any(_a in (ACT_CREATE, ACT_BIND, ACT_REWRITE) for _a in _acts):
+            _parts.append("视觉动作按所选画面正文承载完整事实")
+        _per.append("- `%s` 只允许 `%s`%s"
+                    % (_s.get("slot_id"), "、".join(_acts),
+                       ("：" + "；".join(_parts)) if _parts else ""))
+    _out = _SLOT_RULE_HEAD + chr(10).join(_lines)
+    if _per:
+        _out += "\n\n# 每个槽位只消费自己的权限\n" + chr(10).join(_per)
+    return _out + "\n\n" + _SLOT_RULE_TAIL
 
 
 def slot_prompt(request, novel_text: str = "") -> str:
-    """请求 → 实际发出的提示（正文块 + 选择规则 + 槽位表）."""
+    """请求 → 实际发出的提示（正文块 + 本轮有效动作规则 + 槽位表）."""
     _body = json.dumps(request, ensure_ascii=False, indent=1)
     _head = ("# 原文（冻结，不许改）\n%s\n" % novel_text) if novel_text else ""
-    policy=request.get('binding_policy') or {}
-    rule=('本次每项事实只允许一个载体。所选画面将替换该事实原有绑定，'
-          '因此画面正文须完整表达整条主张，不能依赖被替换的声音载体补足。'
-          if policy.get('selection')=='replace' else
-          '所选画面加入该事实原有载体，按联合承载保留其他绑定。')
-    rule+=' protected_facts 和 protected_hook 是可选目标还承载的其他内容；改写目标必须保留其完整主张和核心关系。'
-    return ("%s\n# 槽位请求（只在这些集合里选）\n%s\n%s\n%s"
-            % (_head, _body, _SLOT_RULE,rule))
+    _slots = [s for s in (request.get("slots") or []) if isinstance(s, dict)]
+    _acts = {str(a) for s in _slots for a in (s.get("allowed_actions") or [])}
+    _rule = _render_slot_rule(_acts, _slots)
+    return ("%s\n# 槽位请求（只在这些集合里选）\n%s\n%s"
+            % (_head, _body, _rule))
 
 
 def _is_str(value) -> bool:

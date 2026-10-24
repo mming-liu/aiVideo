@@ -17,7 +17,7 @@ NOVEL = "甲留在门外。乙走进屋。"
 def _view_for(existing=True):
     v = copy.deepcopy(_view())
     v["narration_units"] = []
-    v["frozen_events"] = ["e01", "e02", "e03"]
+    v["frozen_events"] = ["e01", "e02"]
     v["frozen_facts"] = [{"uid": "f01", "claim": "甲留在门外",
                           "evidence": "甲留在门外。"}]
     v["fact_bindings"] = [{"fact_uid": "f01", "carriers": []}]
@@ -225,6 +225,35 @@ def test_duplicate_source_text_keeps_all_positions():
     assert _land["beat_uids"] == ["b02"]
 
 
+def test_prompt_renders_only_the_converged_create_voice_action():
+    v = _view_for(existing=True)
+    slot = copy.deepcopy(_slot(v))
+    slot["allowed_actions"] = [pcr.ACT_CREATE_VOICE]
+    req = pcr.slot_request(v, [slot])
+    prompt = pcr.slot_prompt(req, novel_text=NOVEL)
+    assert "create_voice" in prompt
+    assert "rewrite_visual" not in prompt
+    assert "画面正文须完整表达" not in prompt
+    assert "每个槽位只消费自己的权限" in prompt
+    assert "slot:fact:f01" in prompt
+    assert "target_uids" not in req["slots"][0]
+
+
+@pytest.mark.v2_request
+def test_limited_action_cannot_fall_back_when_slots_are_unexpressible(monkeypatch):
+    from tests.step01_script_gen.test_plan_content_slots import _Budget, _stub
+
+    v = _view_for(existing=True)
+    plan = pc.plan_from_view(v)
+    _calls = _stub(monkeypatch, {"schema": pcr.SLOT_ANSWER_SCHEMA, "answers": []})
+    _out = o.revise_plan_once(
+        plan, [{"code": "verify_voice_speaker_missing", "uid": "f01"}],
+        _Budget(), None, novel_text=NOVEL,
+        allowed_repair_actions={"create_voice"})
+    assert _out["kind"] == "invalid_target", _out
+    assert _calls == [], len(_calls)
+
+
 @pytest.mark.v2_request
 def test_action_convergence_narrows_actions_and_empty_intersection_makes_zero_calls(
         monkeypatch):
@@ -276,7 +305,14 @@ def test_create_voice_reaches_the_revision_entry(monkeypatch):
     from step01_script_gen import outline as o
 
     v = _view_for(existing=True)
+    v["frozen_events"] = ["e01", "e02", "e03"]
+    v["beats"].append({
+        "uid": "b03", "event_uids": ["e03"], "text": "乙走进屋",
+        "purpose": "", "evidence": "乙走进屋", "source": {},
+        "voice_ref": {"kind": "dialogue", "uid": "d01"}})
+    v["dialogue_units"] = [{"uid": "d01", "text": "乙走进屋。", "source": {}}]
     plan0 = pc.plan_from_view(v)
+    plan0["main_events"] = ["甲留在门外", "乙进屋", "甲继续等待"]
     base = _record(v)
     digest = cv.plan_digest_of(plan0)
 
@@ -326,4 +362,7 @@ def test_create_voice_reaches_the_revision_entry(monkeypatch):
     _narr = _cand.get("narration_lines") or []
     assert _narr and _narr[0].get("text") == "甲留在门外。"
     assert len(_cand.get("shot_beats") or []) == len(plan0.get("shot_beats") or [])
+    _rv = _out["evidence"]["revision_outcome"]
+    assert _rv["final_accepted"] is True, (
+        _rv, (_cand.get("plan_revision") or {}).get("residuals"))
 

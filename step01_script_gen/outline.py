@@ -3629,6 +3629,9 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
     # 照样发操作协议（隔离复现）。判据只有一份，入口就得**调它**，不许抄它的表达式。
     # （`_cap` 仍是给证据用的那一份；同一个纯函数算两次，值必然相同。）
     _route = _replan_route(_route_problems(plan, problems), mode=plan_mode(plan))
+    # 显式动作收敛只能走消费该限制的槽位路径；不得落入 ops/完整计划/预算重选。
+    if allowed_repair_actions is not None:
+        _route = ROUTE_VIEW_DELTA
     # **归因证据束**（交付证据要求）：`no_change` 只说明"候选没变"，不能据此推断模型
     # 意图。这里把五项一次备齐——① 修法可表达性 ② 请求给了多少信息 ③ 原始响应的形状
     # 与改动 ④ 应用结果 ⑤ 残余问题（由控制器的轮次档一并留档）。①②在分流前后即可得，
@@ -3652,7 +3655,8 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
     # `_route not in (ROUTE_VIEW, ROUTE_VIEW_DELTA)` 因此**永远为 False**——
     # 纯预算超限的 legacy 计划再也进不来（拿不到数值验算表、不写 `plan_replan`）。
     # 改为按「非完整视图替换」判定，并把本函数支持的旧协议显式传下去。
-    if _budget_ctx and _route != ROUTE_VIEW and plan_mode(plan) != MODE_HYBRID:
+    if _budget_ctx and allowed_repair_actions is None \
+            and _route != ROUTE_VIEW and plan_mode(plan) != MODE_HYBRID:
         _budget_route = _legacy_route(problems)
         # 预算分支沿用**既有的一次重选语义**（"同一计划版本只重选一次"的去重标记、
         # 判据版本、回写 `plan_replan`），但这一轮仍然走控制器给的额度与剩余时间：
@@ -3717,6 +3721,11 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
             print("[PLAN] ⇒ 限定动作与合法动作交集为空 ⇒ 零调用、保留基线")
             return {"kind": "invalid_target", "detail": _slot_why, "call_id": "",
                     "evidence": _ev}
+        if not _slot_ok and allowed_repair_actions is not None:
+            print("[PLAN] ⇒ 限定动作不可由槽位路径执行 ⇒ 零调用、保留基线；"
+                  "不落回完整计划/delta/预算重选")
+            return {"kind": "invalid_target", "detail": _slot_why, "call_id": "",
+                    "evidence": _ev}
         if _slot_ok:
             _ev["content_slots"]["slots"] = [str(_s["slot_id"])
                                              for _s in _slot_ctx["found"]["slots"]]
@@ -3766,6 +3775,11 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
         if not _slot_ok and str((_slot_ctx or {}).get("state") or "") \
                 == _pcr_state.STATE_ACTION_CONVERGENCE_EMPTY:
             print("[PLAN] ⇒ 限定动作与合法动作交集为空 ⇒ 零调用、保留基线")
+            return {"kind": "invalid_target", "detail": _slot_why, "call_id": "",
+                    "evidence": _ev}
+        if not _slot_ok and allowed_repair_actions is not None:
+            print("[PLAN] ⇒ 限定动作不可由槽位路径执行 ⇒ 零调用、保留基线；"
+                  "不落回完整计划/delta/预算重选")
             return {"kind": "invalid_target", "detail": _slot_why, "call_id": "",
                     "evidence": _ev}
         if _slot_ok:
