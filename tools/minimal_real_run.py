@@ -102,13 +102,28 @@ def _install_send_budget(run_dir: Path):
         try:
             _resp = _orig(self, url, payload, timeout, trace)
         except Exception as exc:                                  # noqa: BLE001
+            _evidence_exc = None
             try:
                 _write(run_dir / "sends" / ("send_%02d_error.json" % SENDS["attempts"]),
                        {"attempt": SENDS["attempts"], "elapsed_sec":
                         round(time.time() - _t0, 3), "error":
                         "%s: %s" % (type(exc).__name__, exc)})
-            except Exception:                                     # noqa: BLE001
-                pass
+            except Exception as _ev_exc:                          # noqa: BLE001
+                _evidence_exc = _ev_exc
+                SENDS["abort"] = True
+                try:
+                    (run_dir / "capture_errors.log").open("a", encoding="utf-8").write(
+                        "send %d error evidence: original=%s: %s; evidence=%s: %s\n"
+                        % (SENDS["attempts"], type(exc).__name__, exc,
+                           type(_ev_exc).__name__, _ev_exc))
+                except Exception:                                 # noqa: BLE001
+                    pass
+            if _evidence_exc is not None:
+                # 原发送异常与证据异常都要保留；以 RuntimeError 阻止 provider 重试。
+                raise RuntimeError(
+                    "发送异常且错误证据落盘失败：original=%s: %s；evidence=%s: %s"
+                    % (type(exc).__name__, exc, type(_evidence_exc).__name__,
+                       _evidence_exc)) from exc
             raise
         try:
             _write(run_dir / "sends" / ("send_%02d_response.json" % SENDS["attempts"]),

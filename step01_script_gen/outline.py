@@ -2736,8 +2736,38 @@ def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
     return True, "", dict(_ctx, state=_pcr.STATE_OK)
 
 
+def _voice_targets_from_slots(slots, mapping) -> tuple:
+    """从有效槽位派生**候选里**的目标声音身份。
+
+    reclassify 的旧 uid 不能直接查 `mapping[旧 uid]`：实际映射是
+    `旧 uid → to_temp_uid → 最终 uid`。缺映射时不回退旧 uid，返回 unresolved，
+    让记账记为证据不完整，而不是把旧编号误当目标。
+    """
+    _targets: set = set()
+    _unresolved = False
+    for _s in slots or []:
+        if not isinstance(_s, dict):
+            continue
+        _kind = str(_s.get("kind") or "")
+        if _kind == "voice_text":
+            _uid = str(_s.get("unit_uid") or "")
+            if _uid:
+                _targets.add(_uid)
+            continue
+        if _kind != "voice_kind":
+            continue
+        _tmp = str((_s.get("reclassify") or {}).get("to_temp_uid") or "")
+        _final = str((mapping or {}).get(_tmp) or "") if _tmp else ""
+        if _final:
+            _targets.add(_final)
+        else:
+            _unresolved = True
+    return _targets, _unresolved
+
+
 def _slots_revision_outcome(problems, *, target_fact_uids=None, target_voice_uids=None,
                             affected_fact_uids=None, co_carried=False,
+                            voice_identity_unresolved=False,
                             protocol_ok=True, protection_structural=True,
                             candidate=None,
                             source="complete_candidate + 控制器完整验收（含一致性轴）") -> dict:
@@ -2782,6 +2812,8 @@ def _slots_revision_outcome(problems, *, target_fact_uids=None, target_voice_uid
         _axes.append(False if _fact_bad else (None if _no_evidence else True))
     if _voices:
         _axes.append(False if _voice_bad else (None if _no_evidence else True))
+    if voice_identity_unresolved:
+        _axes.append(None)
     if not _axes:
         _content = None if _no_evidence else True
     elif False in _axes:
@@ -2990,7 +3022,8 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
             if _s.get("kind") in ("voice_kind", "voice_text")
             and str(_s.get("unit_uid")) not in ("", "None")}
         _mapping = _res_k.get("mapping") or {}
-        _voice_targets |= {str(_mapping.get(_v, _v)) for _v in list(_voice_targets)}
+        _voice_targets, _voice_unresolved = _voice_targets_from_slots(
+            _slots, _mapping)
         _co_affected = bool(_scope_eff.get("co_carried_facts_by_target")) \
             or bool(_scope_eff.get("protected_hook"))
         evidence["applied"] = True
@@ -3000,6 +3033,7 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
             _final_problems, target_fact_uids=_fact_targets,
             target_voice_uids=_voice_targets,
             affected_fact_uids=_affected, co_carried=_co_affected,
+            voice_identity_unresolved=_voice_unresolved,
             candidate=_new)
     return _new, "slots_applied: %d 条残余" % len(_final_problems), _cid, evidence
 

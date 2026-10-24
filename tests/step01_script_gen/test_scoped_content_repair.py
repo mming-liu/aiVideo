@@ -202,6 +202,35 @@ def test_none_uid_is_not_treated_as_a_target():
     assert _o["content_repaired"] is True, _o
 
 
+def test_reclass_target_resolves_temp_uid_mapping_not_old_uid():
+    """迁移映射是 旧 uid → to_temp_uid → 最终 uid；旧 uid 不能直接当目标."""
+    _slots = [{"kind": "voice_kind", "unit_uid": "d01",
+               "reclassify": {"uid": "d01", "to_temp_uid": "new:voice:d01"}}]
+    _targets, _unresolved = o._voice_targets_from_slots(
+        _slots, {"d01": "d01", "new:voice:d01": "n01"})
+    assert _targets == {"n01"}, _targets
+    assert _unresolved is False
+
+    _new_bad = _outcome([{"code": "verify_voice_unsupported", "uid": "n01"}],
+                        target_voice_uids=_targets)
+    assert _new_bad["content_repaired"] is False, _new_bad
+    # 旧编号被其他声音复用：d01 的残余不得误判为迁移目标 n01 的失败。
+    _old_other = _outcome([{"code": "verify_voice_unsupported", "uid": "d01"}],
+                          target_voice_uids=_targets)
+    assert _old_other["content_repaired"] is True, _old_other
+    assert _old_other["final_accepted"] is False, _old_other
+
+
+def test_missing_reclass_mapping_is_incomplete_evidence_not_old_uid_success():
+    _slots = [{"kind": "voice_kind", "unit_uid": "d01",
+               "reclassify": {"uid": "d01", "to_temp_uid": "new:voice:d01"}}]
+    _targets, _unresolved = o._voice_targets_from_slots(_slots, {})
+    assert _targets == set() and _unresolved is True
+    _o = _outcome([], target_voice_uids=_targets,
+                  voice_identity_unresolved=_unresolved)
+    assert _o["content_repaired"] is None, _o
+
+
 def test_the_request_scope_reports_a_hook_bound_to_a_target_beat():
     """P1 复核：同载 hook 时 `slot_request` 曾因引用已删局部变量而崩溃."""
     _v = _view()

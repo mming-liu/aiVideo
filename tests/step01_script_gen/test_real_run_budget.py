@@ -59,3 +59,37 @@ def test_presend_evidence_write_failure_sends_nothing(monkeypatch, tmp_path):
     assert _calls == []
     assert m.SENDS["attempts"] == 1      # 预算已扣，但没有发出
     assert m.SENDS["abort"] is True
+
+
+def test_error_evidence_write_failure_aborts_and_preserves_original(monkeypatch, tmp_path):
+    _reset()
+    _calls = []
+
+    def _fake(self, url, payload, timeout, trace):
+        _calls.append(payload)
+        raise ConnectionError("boom")
+
+    _orig_send = AgentPlanTextService._send_once
+    _orig_write = m._write
+
+    def _write_fail_error(path, *a, **k):
+        if str(path).endswith("_error.json"):
+            raise PermissionError("evidence denied")
+        return _orig_write(path, *a, **k)
+
+    monkeypatch.setattr(AgentPlanTextService, "_send_once", _fake)
+    monkeypatch.setattr(m, "_write", _write_fail_error)
+    m._install_send_budget(tmp_path)
+    try:
+        with pytest.raises(RuntimeError) as _ei:
+            AgentPlanTextService._send_once(None, "u", {"i": 1}, 1, {})
+        assert "boom" in str(_ei.value)
+        assert "evidence denied" in str(_ei.value)
+        assert m.SENDS["abort"] is True
+        assert m.SENDS["attempts"] == 1
+        # 下一次底层发送必须在进入原 `_send_once` 前被拒绝。
+        with pytest.raises(RuntimeError):
+            AgentPlanTextService._send_once(None, "u", {"i": 2}, 1, {})
+    finally:
+        monkeypatch.setattr(AgentPlanTextService, "_send_once", _orig_send)
+    assert len(_calls) == 1

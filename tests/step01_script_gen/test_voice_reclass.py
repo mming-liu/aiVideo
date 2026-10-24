@@ -5,6 +5,8 @@
 期望只由样本与契约给出，不依赖某一章的具体人物/编号。
 """
 import copy
+import json
+from pathlib import Path
 
 import pytest
 
@@ -553,3 +555,49 @@ def test_the_revision_entry_routes_a_voice_kind_problem_to_the_voice_slot(monkey
     assert "voice_kind:d01" in (_ev.get("content_slots", {}).get("slots") or []), _ev
     assert len(_calls) == 1, len(_calls)
     assert _out["kind"] in ("applied", "illegal"), _out["kind"]
+
+
+def test_the_revision_entry_marks_target_voice_failure_after_reclass(monkeypatch):
+    """迁移后的目标身份是映射出的 n01；n01 判负必须让 content_repaired=False."""
+    _s = json.loads((Path(__file__).resolve().parents[2] / "tools" / "samples"
+                     / "p1a_double_dialogue.json").read_text(encoding="utf-8"))
+    _plan0, _novel = _s["plan"], _s["novel"]
+    _base = _record("d01", "novel_narration", "甲留在门外。")
+    _base["plan_digest"] = cv.plan_digest_of(_plan0)
+    _base["voice_units"].append({
+        "unit_uid": "d02", "verdict": "supported",
+        "source_kind": "novel_speech", "speaker": "乙",
+        "echo_text": "我进屋了。", "reason": ""})
+
+    class _BadCandidate(_FakeVerification):
+        def record_for(self, view, plan_digest=None, **kw):
+            if str(plan_digest or "") == self.base["plan_digest"]:
+                return self.base
+            _r = copy.deepcopy(self.base)
+            _r["plan_digest"] = str(plan_digest or "")
+            _r["voice_units"] = [{
+                "unit_uid": "n01", "verdict": "contradicted",
+                "source_kind": "novel_narration", "speaker": "",
+                "echo_text": "甲留在门外。", "reason": "迁移后的目标判负"},
+                {"unit_uid": "d02", "verdict": "supported",
+                 "source_kind": "novel_speech", "speaker": "乙",
+                 "echo_text": "我进屋了。", "reason": ""}]
+            return _r
+
+    _ver = _BadCandidate(_base)
+    from tests.step01_script_gen.test_plan_content_slots import _Budget, _stub
+    _calls = _stub(monkeypatch, {
+        "schema": pcr.SLOT_ANSWER_SCHEMA,
+        "answers": [{"slot_id": "voice_kind:d01",
+                     "action": pcr.ACT_RECLASSIFY}]})
+    _out = o.revise_plan_once(_plan0, [_voice_problem("d01")], _Budget(), None,
+                              novel_text=_novel, verification=_ver)
+    _rv = _out["evidence"]["revision_outcome"]
+    assert _out["evidence"]["route"] == "content_slots", _out["evidence"]
+    assert _out["evidence"]["mapping"] == {
+        "b01": "b01", "b02": "b02", "b03": "b03",
+        "d02": "d02", "new:voice:d01": "n01"}
+    assert len(_calls) == 1, len(_calls)
+    assert _rv["content_repaired"] is False, (
+        _rv, (_out.get("plan") or {}).get("plan_revision"))
+    assert _rv["final_accepted"] is False, _rv
