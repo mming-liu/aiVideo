@@ -104,6 +104,10 @@ step0*_relay*.log
 
 # 09-13 调试草稿/ pytest 临时目录（不入库，另一会话收尾后可删）
 .tmp*/
+# 2026-10-24：P1a 受控运行器的隔离证据根（DSH_EXP_ROOT 默认落在这里；不入库）
+.p1a_exp/
+# 干净检出的临时副本（git checkout-index 自检用；不入库）
+.clean_p1a/
 
 # 2026-10-03：动效运行底座（隔离 Node 工作目录）——npm 依赖与 Chromium 缓存
 # 属于运行时资源，既不打包也不入库（计划 §15「依赖与运行目录」）。
@@ -152,6 +156,19 @@ tests/enhancements/*
 !tests/step01_script_gen/test_plan_to_commit_baseline.py
 # 09-25 收口：第二步（计划边界）的判别测试随仓库交付，理由同上
 !tests/step01_script_gen/test_plan_feasibility.py
+# 2026-10-24：P0/P1a 治理契约回归随仓库交付（同一「干净检出可运行」标准）
+!tests/step01_script_gen/test_voice_reclass.py
+!tests/step01_script_gen/test_plan_content_slots.py
+# 187 条回归还含 source_revision 与 presentation_contract 两个受影响的既有套件；
+# 不放行它们，干净检出只能复现部分读数。source_revision 的夹具来自 legacy_semantic。
+!tests/step01_script_gen/test_source_revision.py
+!tests/step01_script_gen/test_legacy_semantic.py
+# P0 拆分账本测试在 tests/shared/：先放行父目录，再精确放行该文件；
+# 其余 tests/shared/ 仍保持本地（不入库）。
+!tests/shared/
+tests/shared/*
+!tests/shared/test_fact_split.py
+!tests/shared/test_presentation_contract.py
 /docs/
 # 09-25 用户决定：**只精确放行**「计划边界」这条线的四份留档，不放开整个 docs/。
 # git 不会进入被排除的目录，所以要逐级放行父目录（与上面 tests/ 同构）。
