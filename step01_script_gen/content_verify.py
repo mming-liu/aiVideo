@@ -390,21 +390,42 @@ def build_verification_prompt(view, *, novel_text="", novel_digest="",
         "每个 fact_uid 在 `source_support` 与 `facts` 里**各恰好一条**；",
         "每个声音单位**恰好一条**。",
         "",
-        "只输出纯JSON（uid 原样回带）：",
-        '{"source_support": [{"fact_uid": "f01", "verdict": "supported",',
-        '                     "evidence_spans": ["<逐字出自原文>"], "reason": ""}],',
-        ' "facts": [{"fact_uid": "f01", "verdict": "supported",',
-        '            "support_spans": ["<逐字出自实际展示正文>"],',
-        '            "missing": "", "suggested_carriers": [],',
-        '            "obligations": [{"obligation_id": "%s",' % _CLAIM_ID,
-        '                             "text": "<上面给的那条义务的文字，原样照抄>",',
-        '                             "verdict": "supported",',
-        '                             "evidence": [{"carrier_uid": "<展示它的载体 uid>",',
-        '                                           "exhibitor_span": "<逐字出自该载体实际正文>"}],',
-        '                             "missing": "", "reason": ""}]}],',
-        ' "voice_units": [{"unit_uid": "d01", "verdict": "supported",',
-        '                   "source_kind": "novel_speech", "speaker": "<谁>",',
-        '                   "echo_text": "<原样回带这条的正文>", "reason": ""}]}',
+        "只输出纯JSON（uid 原样回带；下面是**本次输入的身份集合**，"
+        "每个事实/声音单位都恰好一条，不能少、不能自造）：",
+    ]
+    _fact_ids = [str(_f.get("uid")) for _f in (view.get("frozen_facts") or [])
+                 if str(_f.get("uid") or "")]
+    _voice_ids = [str(_u.get("uid")) for _k in ("dialogue_units", "narration_units")
+                  for _u in (view.get(_k) or []) if str(_u.get("uid") or "")]
+    _example = {
+        "source_support": [
+            {"fact_uid": _fid, "verdict": "<按原文判定>",
+             "evidence_spans": ["<逐字出自原文>"], "reason": ""}
+            for _fid in _fact_ids],
+        "facts": [
+            {"fact_uid": _fid, "verdict": "<按展示判定>",
+             "support_spans": ["<逐字出自实际展示正文>"],
+             "missing": "", "suggested_carriers": [],
+             "obligations": [{
+                 "obligation_id": "<本事实下面列出的 id，原样照抄>",
+                 "text": "<本事实下面列出的 text，原样照抄>",
+                 "verdict": "<按展示判定>",
+                 "evidence": [{"carrier_uid": "<展示它的载体 uid>",
+                               "exhibitor_span": "<逐字出自该载体实际正文>"}],
+                 "missing": "", "reason": ""}]}
+            for _fid in _fact_ids],
+        "voice_units": [
+            {"unit_uid": _uid, "verdict": "<按原文判定>",
+             "source_kind": "<novel_speech 或 novel_narration，按原文判断>",
+             "speaker": "<原文中的说话人；旁白可空>",
+             "echo_text": "<原样回带这条的正文>", "reason": ""}
+            for _uid in _voice_ids],
+    }
+    _lines.append(json.dumps(_example, ensure_ascii=False, indent=1))
+    _lines += [
+        "本次事实身份：%s；本次声音身份：%s。"
+        % (_fact_ids or "（无）", _voice_ids or "（无）"),
+        "声音数组为空时输出 `[]`，不得凭事实 supported 或旁白类型补造声音结论。",
     ]
     from step01_script_gen.plan_coherence import prompt as coherence_prompt
     from step01_script_gen.source_revision import prompt as preservation_prompt

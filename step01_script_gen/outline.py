@@ -2804,6 +2804,7 @@ def _voice_targets_from_slots(slots, mapping) -> tuple:
 def _slots_revision_outcome(problems, *, target_fact_uids=None, target_voice_uids=None,
                             affected_fact_uids=None, co_carried=False,
                             voice_identity_unresolved=False,
+                            verification_evidence_ok=None,
                             protocol_ok=True, protection_structural=True,
                             candidate=None,
                             source="complete_candidate + 控制器完整验收（含一致性轴）") -> dict:
@@ -2858,12 +2859,18 @@ def _slots_revision_outcome(problems, *, target_fact_uids=None, target_voice_uid
         _content = None
     else:
         _content = True
+    if verification_evidence_ok is False and _content is not False:
+        # 记录缺项/重复/悬空/身份不匹配时，没有有效语义证据；不得因"没有带目标 uid
+        # 的负面问题"推出修好。已出现的**目标判负**仍保留 false。
+        _content = None
     if not protection_structural:
         _protect = False
     elif co_carried and _no_evidence:
         _protect = None          # 同载语义未评估
     elif co_carried and (_fact_bad or _voice_bad):
         _protect = False         # 有核验且目标侧已出现退化
+    elif verification_evidence_ok is False:
+        _protect = None          # 语义保护没有有效记录
     else:
         _protect = True
     _digest = None
@@ -2883,9 +2890,10 @@ def _slots_revision_outcome(problems, *, target_fact_uids=None, target_voice_uid
         "details": {
             "protocol_ok": _detail("回答解析、准入与编译成功"),
             "content_repaired": _detail(
-                "无目标相关核验证据 ⇒ null" if _content is None
-                else ("目标事实或目标声音仍有核验残余" if _content is False
-                      else "目标事实/声音无核验残余")),
+                "无有效语义记录 ⇒ null" if verification_evidence_ok is False
+                else ("无目标相关核验证据 ⇒ null" if _content is None
+                      else ("目标事实或目标声音仍有核验残余" if _content is False
+                            else "目标事实/声音无核验残余"))),
             "protection_intact": _detail(
                 "结构保护成立" if _protect is None else
                 ("范围守卫在 accept 之前通过" if _protect else "范围/同载保护判负")),
@@ -3077,14 +3085,31 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
             _slots, _mapping)
         _co_affected = bool(_scope_eff.get("co_carried_facts_by_target")) \
             or bool(_scope_eff.get("protected_hook"))
+        _sem_ok = None
+        _rec_for_sem = None
+        if verification is not None:
+            _rec_for_sem = _new.get("plan_verification")
+            if isinstance(_rec_for_sem, dict):
+                from shared.content_verification import (plan_digest_of,
+                                                        record_protocol_problems)
+                _sem_probs = record_protocol_problems(
+                    _rec_for_sem, _cand_view,
+                    plan_digest=plan_digest_of(_new), novel_text=novel_text,
+                    novel_digest=str(getattr(verification, "novel_digest", "") or ""))
+                _sem_ok = not _sem_probs
+            else:
+                _sem_ok = False
         evidence["applied"] = True
         evidence["residuals"] = len(_final_problems)
         evidence["mapping"] = _res_k["mapping"]
+        evidence["semantic_evidence_ok"] = _sem_ok
+        evidence["verification_record"] = _rec_for_sem
         evidence["revision_outcome"] = _slots_revision_outcome(
             _final_problems, target_fact_uids=_fact_targets,
             target_voice_uids=_voice_targets,
             affected_fact_uids=_affected, co_carried=_co_affected,
             voice_identity_unresolved=_voice_unresolved,
+            verification_evidence_ok=_sem_ok,
             candidate=_new)
     return _new, "slots_applied: %d 条残余" % len(_final_problems), _cid, evidence
 

@@ -298,6 +298,32 @@ def test_action_convergence_narrows_actions_and_empty_intersection_makes_zero_ca
     assert _calls == [], len(_calls)
 
 
+def test_missing_new_voice_record_makes_target_repair_null():
+    _o = o._slots_revision_outcome(
+        [{"code": "verify_voice_units_mismatch"}],
+        target_voice_uids={"n01"}, verification_evidence_ok=False)
+    assert _o["content_repaired"] is None, _o
+    assert _o["protection_intact"] is None, _o
+    assert _o["final_accepted"] is False, _o
+
+
+def test_verification_prompt_uses_current_voice_identities():
+    from step01_script_gen.content_verify import build_verification_prompt
+    v = _view_for(existing=True)
+    v["dialogue_units"] = [{"uid": "d01", "text": "我进屋了。", "source": {}}]
+    v["narration_units"] = [{"uid": "n01", "text": "甲留在门外。",
+                             "source": {"text": "甲留在门外。"}}]
+    p = build_verification_prompt(v, novel_text=NOVEL)
+    assert "d01" in p and "n01" in p
+    assert "unit_uid\": \"d01\"" in p
+    v0 = _view_for(existing=True)
+    v0["dialogue_units"] = []
+    v0["narration_units"] = []
+    p0 = build_verification_prompt(v0, novel_text=NOVEL)
+    assert "d01" not in p0
+    assert '"voice_units": []' in p0
+
+
 def test_normalize_flat_answer_is_noop_and_idempotent():
     v = _view_for(existing=True)
     slot = _slot(v)
