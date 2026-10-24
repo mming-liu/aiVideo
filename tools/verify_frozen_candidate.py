@@ -107,9 +107,53 @@ def preflight(manifest_path: Path) -> dict:
             "revision_run": _run, "view": view}
 
 
-def run(manifest_path: Path, *, root=None, dry=False) -> dict:
+def _previous_text(path: Path) -> str:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and isinstance(data.get("raw_response_text"), str):
+        return data["raw_response_text"]
+    if isinstance(data, str):
+        return data
+    raise InputIdentityError("previous_response 不是带 raw_response_text 的 JSON 或文本")
+
+
+def _load_correction(path: Path, info: dict, previous_path: Path) -> dict:
+    rec = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(rec, dict):
+        raise InputIdentityError("纠正记录不是 JSON 对象")
+    if str(rec.get("plan_digest") or "") != info["plan_digest"]:
+        raise InputIdentityError("纠正记录的 plan_digest 与冻结候选不一致")
+    _rec_novel = str(rec.get("novel_digest") or "")
+    if _rec_novel:
+        if _rec_novel != info["novel_digest"]:
+            raise InputIdentityError("纠正记录的 novel_digest 与冻结原文不一致")
+    else:
+        # 失败记录可能没有盖原文摘要；从同一运行的 input_identity 核对来源身份。
+        _ident = Path(path).parent / "input_identity.json"
+        if not _ident.is_file():
+            raise InputIdentityError("纠正记录缺 novel_digest，且无同源 input_identity")
+        _id = json.loads(_ident.read_text(encoding="utf-8"))
+        if str(_id.get("novel_digest") or "") != info["novel_digest"]:
+            raise InputIdentityError("纠正记录所在运行的原文身份与冻结原文不一致")
+    if str(rec.get("status") or "") == "ok":
+        raise InputIdentityError("纠正记录 status=ok，不是失败记录")
+    problems = rec.get("problems")
+    if not isinstance(problems, list) or not problems:
+        raise InputIdentityError("纠正记录没有具体协议问题")
+    return {"record": rec, "previous_response": _previous_text(Path(previous_path)),
+            "problems": problems, "error": str(rec.get("error") or "")}
+
+
+def run(manifest_path: Path, *, root=None, dry=False,
+        correction_record=None, previous_response=None,
+        service_verify=None) -> dict:
     """先 preflight（零发送），再创建运行目录、落盘冻结输入、核验一次."""
     info = preflight(Path(manifest_path))
+    _corr = None
+    if correction_record:
+        if not previous_response:
+            raise InputIdentityError("纠正模式必须同时提供 previous_response")
+        _corr = _load_correction(Path(correction_record), info,
+                                 Path(previous_response))
     if root is None:
         raw_root = os.environ.get("DSH_EXP_ROOT", "").strip()
         if not raw_root:
@@ -131,10 +175,16 @@ def run(manifest_path: Path, *, root=None, dry=False) -> dict:
         "novel_digest": info["novel_digest"],
         "revision_run": str(info["revision_run"]),
     })
+    if _corr:
+        m._write(run_dir / "correction_input.json", {
+            "record": _corr["record"], "problems": _corr["problems"],
+            "error": _corr["error"],
+            "previous_response": _corr["previous_response"]})
     if dry:
         return {"dry": True, "run_dir": str(run_dir), "sends": 0,
                 "candidate_digest": info["plan_digest"],
-                "novel_digest": info["novel_digest"]}
+                "novel_digest": info["novel_digest"],
+                "correction": bool(_corr)}
     m.SENDS.update({"cap": 1, "logical": 0, "attempts": 0,
                     "abort": False, "calls": [], "sends": []})
     m._install_send_budget(run_dir)
@@ -143,13 +193,34 @@ def run(manifest_path: Path, *, root=None, dry=False) -> dict:
     if config.PROVIDER != "agent_plan":
         raise InputIdentityError("有效通道不是 OpenCode Go：0 次发送，停止")
     os.environ["DSH_CAPTURE_PAYLOAD"] = str(run_dir / "payloads")
+    _send = service_verify or verify_view_with_service
+
+    def _normal(_v, _d):
+        return _send(_v, _d, novel_text=info["novel_text"],
+                     novel_digest=info["novel_digest"])
+
+    def _repair(_v, _d, failure, previous):
+        return _send(_v, _d, novel_text=info["novel_text"],
+                     novel_digest=info["novel_digest"],
+                     correction={"problems": failure.get("problems", []),
+                                 "error": failure.get("error", ""),
+                                 "previous_response": previous})
+
+    def _validate(rec, _v, _d):
+        return cv.record_protocol_problems(
+            rec, _v, plan_digest=_d, novel_text=info["novel_text"],
+            novel_digest=info["novel_digest"])
+
     _ctl = cv.VerificationController(
-        verify=lambda _v, _d: verify_view_with_service(
-            _v, _d, novel_text=info["novel_text"],
-            novel_digest=info["novel_digest"]),
+        verify=_normal, repair=_repair, validate_record=_validate,
         max_verifications=1, novel_digest=info["novel_digest"],
         rule_version=cv.DEFAULT_RULE_VERSION)
-    rec = _ctl.record_for(info["view"], info["plan_digest"])
+    if _corr:
+        rec = _ctl._correct_record(
+            info["view"], info["plan_digest"], _corr["record"],
+            previous_response=_corr["previous_response"])
+    else:
+        rec = _ctl.record_for(info["view"], info["plan_digest"])
     m._write(run_dir / "record.json", rec)
     attached = dict(info["plan"])
     attached["plan_verification"] = rec
@@ -162,6 +233,8 @@ def run(manifest_path: Path, *, root=None, dry=False) -> dict:
         "novel_format": info["novel_format"],
         "sends": m.SENDS["attempts"],
         "record_status": (rec.get("status") if isinstance(rec, dict) else None),
+        "correction": bool(_corr),
+        "corrections": len(getattr(_ctl, "corrections", []) or []),
         "voice_units": ([str(x.get("unit_uid")) for x in
                          (rec.get("voice_units") or []) if isinstance(x, dict)]
                         if isinstance(rec, dict) else []),
@@ -178,9 +251,15 @@ def main():
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--dry", action="store_true",
                     help="只校验输入身份并落盘，不创建 service/不发送")
+    ap.add_argument("--correction-record", default="",
+                    help="指定失败核验记录；进入纠正模式")
+    ap.add_argument("--previous-response", default="",
+                    help="失败记录对应的原始响应文件（含 raw_response_text）")
     args = ap.parse_args()
     try:
-        run(Path(args.manifest), dry=args.dry)
+        run(Path(args.manifest), dry=args.dry,
+            correction_record=(args.correction_record or None),
+            previous_response=(args.previous_response or None))
     except InputIdentityError as exc:
         raise SystemExit("输入身份失败：0 次发送；%s" % exc)
 
