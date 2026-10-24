@@ -1308,6 +1308,18 @@ def _render_slot_rule(actions=None, slots=None) -> str:
     _out = _SLOT_RULE_HEAD + chr(10).join(_lines)
     if _per:
         _out += "\n\n# 每个槽位只消费自己的权限\n" + chr(10).join(_per)
+    if ACT_CREATE_VOICE in _allowed:
+        _out += (
+            "\n\n# create_voice 的扁平形状（只示例键，不是内容答案）\n"
+            "existing："
+            '{"slot_id":"<槽位>","action":"create_voice","text":"<逐字片段>",'
+            '"voice_kind":"narration","placement":"existing","beat_uid":"<现有节拍>"}\n'
+            "new："
+            '{"slot_id":"<槽位>","action":"create_voice","text":"<逐字片段>",'
+            '"voice_kind":"narration","placement":"new","insert_after_uid":"<锚点>",'
+            '"event_index":0,"beat_text":"<可演画面正文>"}\n'
+            "`placement` 是字符串（existing/new）；落点字段与它**同级**，"
+            "不要嵌套在 `placement` 里。")
     return _out + "\n\n" + _SLOT_RULE_TAIL
 
 
@@ -1320,6 +1332,76 @@ def slot_prompt(request, novel_text: str = "") -> str:
     _rule = _render_slot_rule(_acts, _slots)
     return ("%s\n# 槽位请求（只在这些集合里选）\n%s\n%s"
             % (_head, _body, _rule))
+
+
+NORMALIZATION_VERSION = "slot_answer_shape.v1"
+
+_CREATE_VOICE_FLAT_KEYS = ("beat_uid", "insert_after_uid", "event_index", "beat_text")
+
+
+def normalize_slot_answer(answer, slots) -> tuple:
+    """受限传输形状适配：**只**把已知的 create_voice 嵌套落点转成扁平契约.
+
+    返回 `(normalized_answer, normalization_records, problems)`。不修改入参、不补字段、
+    不改正文、不推断声音类型/事件/落点、不做数字与字符串互转。未知/歧义/缺字段直接
+    结构化拒收；非 create_voice 动作原样通过。
+    """
+    if not isinstance(answer, dict):
+        return answer, [], []
+    _out = copy.deepcopy(answer)
+    _items = _out.get("answers")
+    if not isinstance(_items, list):
+        return _out, [], []
+    _by_id = {str(_s.get("slot_id")): _s for _s in (slots or []) if isinstance(_s, dict)}
+    _records: list = []
+    _problems: list = []
+    for _i, _it in enumerate(_items):
+        if not isinstance(_it, dict):
+            continue
+        _sid = str(_it.get("slot_id") or "")
+        _slot = _by_id.get(_sid)
+        if _slot is None or str(_it.get("action") or "") != ACT_CREATE_VOICE:
+            continue
+        _place = _it.get("placement")
+        if not isinstance(_place, dict):
+            continue
+        _at = "answers[%d].placement" % _i
+        _kind = _place.get("kind")
+        if _kind not in ("existing", "new"):
+            _problems.append(_rec("repair_normalize_shape", _sid,
+                                  "create_voice 的嵌套 `placement.kind` 必须是"
+                                  " existing/new（当前 %r）" % _kind, _kind))
+            continue
+        _allowed = ({"kind", "beat_uid"} if _kind == "existing"
+                    else {"kind", "insert_after_uid", "event_index", "beat_text"})
+        _unknown = sorted(set(_place) - _allowed)
+        if _unknown:
+            _problems.append(_rec("repair_normalize_unknown_key", _sid,
+                                  "`placement` 只允许 %s；未知键 %s"
+                                  % (sorted(_allowed), _unknown), _unknown))
+            continue
+        _conflict = [k for k in _CREATE_VOICE_FLAT_KEYS if k in _it]
+        if _conflict:
+            _problems.append(_rec("repair_normalize_ambiguous_placement", _sid,
+                                  "顶层与 `placement` 同时给了落点字段 %s；"
+                                  "不猜优先级（即使值相同也拒收）" % _conflict))
+            continue
+        _need = (("beat_uid",) if _kind == "existing"
+                 else ("insert_after_uid", "event_index", "beat_text"))
+        _missing = [k for k in _need if k not in _place]
+        if _missing:
+            _problems.append(_rec("repair_normalize_missing_field", _sid,
+                                  "`placement.%s` 缺少必需字段 %s"
+                                  % (_kind, _missing), _missing))
+            continue
+        _it["placement"] = _kind
+        for _k in _need:
+            _it[_k] = _place[_k]
+        _records.append({
+            "slot_id": _sid, "from": "placement_object", "to": "flat",
+            "kind": _kind, "moved": list(_need),
+            "version": NORMALIZATION_VERSION})
+    return _out, _records, _problems
 
 
 def _is_str(value) -> bool:
@@ -2012,11 +2094,14 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
     return _delta, []
 
 
-__all__ = ["ACTIONS", "ACT_BIND", "ACT_BIND_VOICE", "ACT_CREATE", "ACT_NARROW_CARD",
+__all__ = ["ACTIONS", "ACT_BIND", "ACT_BIND_VOICE", "ACT_CREATE",
+           "ACT_CREATE_VOICE", "ACT_NARROW_CARD",
            "ACT_NARROW_VOICE", "ACT_RECLASSIFY", "ACT_REWRITE",
-           "ANSWER_KEYS", "REPAIR_RULE_VERSION", "SLOT_ANSWER_SCHEMA",
+           "ANSWER_KEYS", "NORMALIZATION_VERSION", "REPAIR_RULE_VERSION",
+           "SLOT_ANSWER_SCHEMA",
            "SLOT_CODE_KIND", "SLOT_REQUEST_SCHEMA", "answer_problems", "compile_delta",
-           "answer_json_schema", "content_slots", "record_uid", "slot_prompt",
+           "answer_json_schema", "content_slots", "normalize_slot_answer",
+           "record_uid", "slot_prompt",
            "slot_request"]
 
 

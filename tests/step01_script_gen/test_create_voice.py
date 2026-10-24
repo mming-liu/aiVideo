@@ -298,9 +298,74 @@ def test_action_convergence_narrows_actions_and_empty_intersection_makes_zero_ca
     assert _calls == [], len(_calls)
 
 
+def test_normalize_flat_answer_is_noop_and_idempotent():
+    v = _view_for(existing=True)
+    slot = _slot(v)
+    ans = _answer(slot, placement="existing", beat_uid="b02")
+    before = copy.deepcopy(ans)
+    out, rec, probs = pcr.normalize_slot_answer(ans, [slot])
+    assert out == ans and rec == [] and probs == []
+    assert ans == before
+    out2, rec2, probs2 = pcr.normalize_slot_answer(out, [slot])
+    assert out2 == out and rec2 == [] and probs2 == []
+
+
+def test_normalize_nested_existing_and_new_record_moves_without_mutation():
+    v = _view_for(existing=True)
+    slot = _slot(v)
+    existing = {"schema": pcr.SLOT_ANSWER_SCHEMA, "answers": [{
+        "slot_id": slot["slot_id"], "action": pcr.ACT_CREATE_VOICE,
+        "text": "甲留在门外。", "voice_kind": "narration",
+        "placement": {"kind": "existing", "beat_uid": "b02"}}]}
+    before = copy.deepcopy(existing)
+    out, rec, probs = pcr.normalize_slot_answer(existing, [slot])
+    assert probs == [] and existing == before
+    assert out["answers"][0]["placement"] == "existing"
+    assert out["answers"][0]["beat_uid"] == "b02"
+    assert rec[0]["moved"] == ["beat_uid"] and rec[0]["kind"] == "existing"
+    out2, rec2, _ = pcr.normalize_slot_answer(out, [slot])
+    assert out2 == out and rec2 == []
+
+    new = {"schema": pcr.SLOT_ANSWER_SCHEMA, "answers": [{
+        "slot_id": slot["slot_id"], "action": pcr.ACT_CREATE_VOICE,
+        "text": "甲留在门外。", "voice_kind": "narration",
+        "placement": {"kind": "new", "insert_after_uid": "b01",
+                      "event_index": 0, "beat_text": "甲留在门外"}}]}
+    out, rec, probs = pcr.normalize_slot_answer(new, [slot])
+    assert probs == []
+    assert out["answers"][0]["placement"] == "new"
+    assert out["answers"][0]["insert_after_uid"] == "b01"
+    assert out["answers"][0]["event_index"] == 0
+    assert out["answers"][0]["beat_text"] == "甲留在门外"
+    assert rec[0]["moved"] == ["insert_after_uid", "event_index", "beat_text"]
+
+
+def test_normalize_rejects_ambiguous_unknown_and_missing_shapes():
+    v = _view_for(existing=True)
+    slot = _slot(v)
+    _base = {"slot_id": slot["slot_id"], "action": pcr.ACT_CREATE_VOICE,
+             "text": "甲留在门外。", "voice_kind": "narration"}
+    _amb = dict(_base, beat_uid="b02",
+                placement={"kind": "existing", "beat_uid": "b02"})
+    _u, _r, _p = pcr.normalize_slot_answer(
+        {"schema": pcr.SLOT_ANSWER_SCHEMA, "answers": [_amb]}, [slot])
+    assert [x["code"] for x in _p] == ["repair_normalize_ambiguous_placement"]
+    _unk = dict(_base, placement={"kind": "existing", "beat_uid": "b02",
+                                  "extra": 1})
+    _u, _r, _p = pcr.normalize_slot_answer(
+        {"schema": pcr.SLOT_ANSWER_SCHEMA, "answers": [_unk]}, [slot])
+    assert [x["code"] for x in _p] == ["repair_normalize_unknown_key"]
+    _miss = dict(_base, placement={"kind": "new", "insert_after_uid": "b01",
+                                   "event_index": 0})
+    _u, _r, _p = pcr.normalize_slot_answer(
+        {"schema": pcr.SLOT_ANSWER_SCHEMA, "answers": [_miss]}, [slot])
+    assert [x["code"] for x in _p] == ["repair_normalize_missing_field"]
+
+
 @pytest.mark.v2_request
-def test_create_voice_reaches_the_revision_entry(monkeypatch):
-    """生产入口：槽位 → create_voice → delta → 应用/重验 → 候选投影."""
+@pytest.mark.parametrize("nested", [False, True])
+def test_create_voice_reaches_the_revision_entry(monkeypatch, nested):
+    """生产入口：扁平或已知嵌套落点都经同一规范化链到达候选重验."""
     from tests.step01_script_gen.test_plan_content_slots import _Budget, _stub
     from step01_script_gen import outline as o
 
@@ -346,18 +411,24 @@ def test_create_voice_reaches_the_revision_entry(monkeypatch):
     _ctl = _Ctl()
     _ctl.base = base
     monkeypatch.setattr(cv, "record_protocol_problems", lambda *a, **k: [])
+    _answer_item = {"slot_id": "slot:fact:f01",
+                    "action": pcr.ACT_CREATE_VOICE,
+                    "text": "甲留在门外。", "voice_kind": "narration",
+                    "placement": "existing", "beat_uid": "b02"}
+    if nested:
+        _answer_item.pop("placement")
+        _answer_item.pop("beat_uid")
+        _answer_item["placement"] = {"kind": "existing", "beat_uid": "b02"}
     _calls = _stub(monkeypatch, {
-        "schema": pcr.SLOT_ANSWER_SCHEMA,
-        "answers": [{"slot_id": "slot:fact:f01",
-                     "action": pcr.ACT_CREATE_VOICE,
-                     "text": "甲留在门外。", "voice_kind": "narration",
-                     "placement": "existing", "beat_uid": "b02"}]})
+        "schema": pcr.SLOT_ANSWER_SCHEMA, "answers": [_answer_item]})
     _out = o.revise_plan_once(
         plan0, [{"code": "verify_fact_unsupported", "uid": "f01",
                  "kind": "verification", "path": "facts"}],
         _Budget(), None, novel_text=NOVEL, verification=_ctl)
     assert _out["evidence"]["route"] == "content_slots", _out["evidence"]
     assert len(_calls) == 1, len(_calls)
+    assert len(_out["evidence"].get("normalization_records") or []) == (
+        1 if nested else 0)
     _cand = _out.get("plan") or {}
     _narr = _cand.get("narration_lines") or []
     assert _narr and _narr[0].get("text") == "甲留在门外。"

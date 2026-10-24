@@ -2963,7 +2963,14 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
         if evidence is not None:
             evidence['failure_stage']='answer_parsing'
         return None, "槽位回答不是可解析的 JSON 对象", _cid, (evidence or {})
+    _data_raw = _data
+    _data, _normalization, _nprob = _pcr.normalize_slot_answer(_data, _slots)
     if evidence is not None:
+        evidence["raw_response_text"] = str(getattr(_res, "text", "") or "")
+        evidence["slot_answer_raw"] = _data_raw
+        evidence["slot_answer_normalized"] = _data
+        evidence["normalization_records"] = _normalization
+        evidence["normalization_version"] = _pcr.NORMALIZATION_VERSION
         evidence['applied']=False
         _ans = _data.get("answers")
         evidence["response"] = {
@@ -2972,6 +2979,12 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
             "declared_schema": str(_data.get("schema") or ""),
             "expected": _pcr.SLOT_ANSWER_SCHEMA, "keys": sorted(_data),
             "answers": (len(_ans) if isinstance(_ans, list) else 1)}
+    if _nprob:
+        if evidence is not None:
+            evidence['failure_stage']='answer_normalization'
+            evidence["slots_normalization_problems"] = [
+                str((x or {}).get("code")) for x in _nprob]
+        return None, _detail_vp(_nprob), _cid, (evidence or {})
     _pb = _pcr.answer_problems(_data, _slots, where="槽位回答")
     if _pb:
         if evidence is not None:
