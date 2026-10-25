@@ -1284,6 +1284,10 @@ def plan_acceptance_problems(plan, novel_text: str = "") -> list:
     _struct = outline_structure_problems(plan)
     if _struct:
         return _with_protocol_fields(_struct)
+    from shared import voice_adaptation as _va
+    _adapt_problems = _va.adaptation_problems(plan, novel_text)
+    if _adapt_problems:
+        return _with_protocol_fields(_adapt_problems)
     _out.extend(_with_protocol_fields(_split_acceptance_records(plan)))
     # 身份与路径由生产者给出（工作包 §2.2）：这里只**组合**记录，
     # 不再用正则从问题文案里认编号（复核第 33 轮 P1 的"从正文猜编号"）。
@@ -4152,25 +4156,31 @@ def _early_revision_result(plan, stop, problems, detail="", *, seed=None) -> dic
 
     `seed` 记录 seed 分账（v2.2 §1.2）：未到 seed 步骤 ⇒ `{"attempted": False}`；
     seed 自身失败 ⇒ `{"attempted": True, "ok": False, "code": ..., "error": ...}`。
+    顶层 `seed` 与首轮 `history[0].evidence.seed` 同一份（供调用方一次读到）。
     """
     _probs = list(problems or [])
     _seed = dict(seed) if isinstance(seed, dict) else {"attempted": False}
     return {"plan": plan, "stop_reason": str(stop), "problems": _probs,
             "residual_class": residual_class(_probs), "calls": 0, "rounds": 0,
+            "seed": _seed,
             "history": [{"round": 0, "kind": str(stop),
                          "detail": str(detail)[:400], "call_id": "",
                          "problems_before": len(_probs), "no_model_call": True,
                          "evidence": {"initialization": "split_preflight",
-                                      "seed": _seed}}],
+                                      "seed": dict(_seed)}}],
             "deadline_exhausted": False, "plan_level_conclusion": False,
             "rejections": [], "quota_exhausted": False}
 
 
-def _split_init_block(plan, novel_text, verification, target_fact_uids):
+def _split_init_block(plan, novel_text, verification, target_fact_uids, *,
+                      seed_meta=None):
     """拆分模式的**付费预检**：在 `attach_verification` 之前跑.
 
     返回 `None` = 预检通过（R0 已 seed）；返回 dict = 立即收口（0 次发送）。
     缺失/无效 R0 **不补建**，也不先调 `attach_verification`。
+
+    `seed_meta`（可选出参）在 seed **成功**时写入 `{"attempted": True, "ok": True}`；
+    seed 前的检查失败不写（seed 未被调用），seed 自身失败由收口结果携带。
     """
     from shared import fact_split as fs
     from shared.content_verification import plan_digest_of
@@ -4233,6 +4243,8 @@ def _split_init_block(plan, novel_text, verification, target_fact_uids):
             "split_r0_seed_failed",
             seed={"attempted": True, "ok": False,
                   "code": "split_r0_seed_failed", "error": _seed_err})
+    if isinstance(seed_meta, dict):
+        seed_meta.update({"attempted": True, "ok": True})
     return None
 
 
@@ -4266,11 +4278,12 @@ def run_plan_revision(plan, novel_text: str, *, model=None, base_prompt=None,
               "reason": "split_fact 只能独占 allowed_repair_actions（当前 %s）"
                         % sorted(_split_actions)}], "split_actions_not_exclusive")
     _split_mode = _split_actions == {"split_fact"}
+    _seed_meta: dict = {}
     if _split_mode:
         # **预检先于 attach_verification**：缓存缺该摘要时，attach 可能付费核验；
         # 拆分模式只复用已有 R0，seed 失败即停，不补建。
         _early = _split_init_block(_plan0, novel_text, verification,
-                                   target_fact_uids)
+                                   target_fact_uids, seed_meta=_seed_meta)
         if _early is not None:
             return _early
     elif verification is not None and isinstance(_plan0, dict):
@@ -4306,7 +4319,17 @@ def run_plan_revision(plan, novel_text: str, *, model=None, base_prompt=None,
         # 在，但生产入口从没接——"第 N 轮为什么被拒收/为什么停"只在返回对象里，
         # 真实运行（诊断只留最后一条）时整轮轨迹看不见。
         log=print)
-    return _ctl.run(_plan0, novel_text)
+    _out = _ctl.run(_plan0, novel_text)
+    if _seed_meta.get("attempted"):
+        # **成功 seed 也要有结构化证据**（v2.2 矩阵 #1）：顶层 `seed` 与首轮
+        # `evidence.seed` 同一份；失败分支由 `_early_revision_result` 携带。
+        _out["seed"] = dict(_seed_meta)
+        _hist = _out.get("history") or []
+        if _hist and isinstance(_hist[0], dict):
+            _ev0 = _hist[0].setdefault("evidence", {})
+            if isinstance(_ev0, dict):
+                _ev0.setdefault("seed", dict(_seed_meta))
+    return _out
 
 
 class CacheBackupFailed(OSError):

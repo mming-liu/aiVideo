@@ -158,13 +158,19 @@ tests/enhancements/*
 !tests/step01_script_gen/test_plan_feasibility.py
 # 2026-10-24：P0/P1a 治理契约回归随仓库交付（同一「干净检出可运行」标准）
 !tests/step01_script_gen/test_voice_reclass.py
+# 2026-10-25：改编层离线贯通包（匿名样本、零模型）随仓库交付
+!tests/step01_script_gen/test_voice_adaptation.py
 !tests/step01_script_gen/test_plan_content_slots.py
 !tests/step01_script_gen/test_narrow.py
 !tests/step01_script_gen/test_create_voice.py
 !tests/step01_script_gen/test_verify_frozen_candidate.py
+# 2026-10-25：核验提示把 obligation_id 与 text 分列（P4 提示澄清回归）
+!tests/step01_script_gen/test_verify_prompt_fields.py
 !tests/step01_script_gen/test_p3_split_wiring.py
 # 2026-10-24：P3-PreE 完整计划真实验收入口 + P3-E 运行器计费端点守卫（随仓库交付）
 !tests/step01_script_gen/test_p3_pre_e.py
+!tests/step01_script_gen/test_p0_optimizations_and_scoped_patch.py
+!tests/step01_script_gen/test_repair_answer_example.py
 !tests/step01_script_gen/test_real_run_budget.py
 # 2026-10-24：P3 拆分进入真实修订入口的离线矩阵 + 匿名样本夹具（随仓库交付）
 !tests/step01_script_gen/test_p3_split_entry.py

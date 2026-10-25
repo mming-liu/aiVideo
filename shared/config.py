@@ -53,6 +53,9 @@ SCENE_OBJECT_EXTRACTION_ENABLED = os.getenv("SCENE_OBJECT_EXTRACTION_ENABLED", "
 SCENE_ASSET_EXTRACTION_ENABLED = os.getenv("SCENE_ASSET_EXTRACTION_ENABLED", "1").strip() == "1"
 # v7: 道具资产提取（剧本核心道具 + 外观描述，供道具资产图生成与 r2v 参考）
 PROP_ASSET_EXTRACTION_ENABLED = os.getenv("PROP_ASSET_EXTRACTION_ENABLED", "1").strip() == "1"
+# 改编层总开关（默认关；见 shared/voice_adaptation.py 与 adaptation_offline_spec.md）
+VOICE_ADAPTATION_ENABLED = os.getenv("VOICE_ADAPTATION_ENABLED", "0").strip().lower() in (
+    "1", "true", "yes", "on")
 # v7: 场景/道具资产图生成开关（step02a 帧生成前）
 ASSET_GEN_ENABLED = os.getenv("ASSET_GEN_ENABLED", "1").strip() == "1"
 # v7: 近景功能场景图（从大场景派生）开关，关闭时只生成大场景图

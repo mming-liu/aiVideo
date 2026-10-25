@@ -435,6 +435,42 @@ def _truncate_to_last_element(text: str) -> str:
     return head + ''.join(reversed(open_stack))
 
 
+def _strip_structural_trailing_commas(text: str) -> str:
+    """移除 JSON 结构位置的尾随逗号（`,}` / `,]`），绝不改动字符串字面量内部的内容。"""
+    out: list[str] = []
+    in_str = False
+    esc = False
+    n = len(text)
+    i = 0
+    while i < n:
+        ch = text[i]
+        if esc:
+            out.append(ch)
+            esc = False
+            i += 1
+            continue
+        if ch == "\\":
+            out.append(ch)
+            esc = True
+            i += 1
+            continue
+        if ch == '"':
+            in_str = not in_str
+            out.append(ch)
+            i += 1
+            continue
+        if not in_str and ch == ",":
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j < n and text[j] in "}]":
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def safe_parse_json(text: str) -> Any:
     cleaned = strip_markdown_fence(text.strip())
 
@@ -455,9 +491,8 @@ def safe_parse_json(text: str) -> Any:
     except json.JSONDecodeError:
         pass
 
-    # 修复尾部逗号
-    no_trailing = re.sub(r",\s*}", "}", extracted)
-    no_trailing = re.sub(r",\s*]", "]", no_trailing)
+    # 修复尾部逗号（状态机：仅移除结构位置尾逗号，不触碰字符串内部如 "台词,}"）
+    no_trailing = _strip_structural_trailing_commas(extracted)
     if no_trailing != extracted:
         try:
             return json.loads(no_trailing)

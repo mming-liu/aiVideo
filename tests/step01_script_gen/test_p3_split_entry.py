@@ -49,6 +49,15 @@ def _base(sample, *, partial_extra=()):
     return fx.baseline(sample, partial_extra=partial_extra)
 
 
+def _prod_validate(base):
+    """生产同源准入装配（同 `outline.py` 里 `_protocol_problems` 的调用）. """
+    def _validate(rec, view, digest):
+        return cv.record_protocol_problems(
+            rec, view, plan_digest=digest, novel_text=base["novel"],
+            novel_digest=base["record"]["novel_digest"])
+    return _validate
+
+
 # ---------------------------------------------------------------------------
 # 成功：正常入口 + 两份不同样本
 # ---------------------------------------------------------------------------
@@ -62,6 +71,9 @@ def test_empty_verification_cache_seeds_r0_without_extra_r_call():
     out, svc, ctl = fx.run_entry(base, answer=fx.split_answer(A), ctl=ctl)
     assert out["stop_reason"] == "ok"
     assert len(seeds) == 1, "初始化只 seed 一次已有的 R0"
+    assert out["seed"] == {"attempted": True, "ok": True}, \
+        "成功 seed 也要有结构化证据（矩阵 #1）"
+    assert fx.evidence_of(out)["seed"]["attempted"] is True
     assert ctl.used == 1, "R0 只由 seed 装载；R2 才是一次真实核验"
     assert svc.calls == ["plan_content_repair_answer", "fact_split_m.v1"]
 
@@ -142,6 +154,7 @@ def test_seed_precondition_failure_never_calls_seed():
     assert out["stop_reason"] in ("invalid_target", "verification_failed")
     assert out["calls"] == 0 and svc.calls == [] and ctl.used == 0
     assert calls == [], "seed 前的检查失败不得调用 seed"
+    assert out["seed"] == {"attempted": False}
     ev = out["history"][0]["evidence"]
     assert ev["seed"] == {"attempted": False}
 
@@ -161,6 +174,7 @@ def test_seed_itself_failing_is_recorded_and_zero_call(mode):
     assert out["stop_reason"] == "verification_failed"
     assert out["calls"] == 0 and svc.calls == [] and ctl.used == 0
     assert "split_r0_seed_failed" in _codes(out["problems"])
+    assert out["seed"]["attempted"] is True and out["seed"]["ok"] is False
     ev = out["history"][0]["evidence"]
     assert ev["seed"]["attempted"] is True and ev["seed"]["ok"] is False
     assert ev["seed"]["code"] == "split_r0_seed_failed"
@@ -543,14 +557,25 @@ def test_protected_fact_axes_are_independent():
 
 
 def test_candidate_r2_identity_and_three_leg_metering():
-    """R0 只服务基线；候选取得一次 R2；三类调用分开计量."""
+    """R0 只服务基线；候选取得一次 R2；三类调用分开计量.
+
+    控制器按**生产同源装配**注入 `validate_record`（同 `outline.py` 的
+    `_protocol_problems`），正例因此同时证明完整准入链可通过。
+    """
     base = _base(A)
-    ctl = fx.controller(base)
+    _validated = []
+    _check = _prod_validate(base)
+
+    def _validate(rec, view, digest):
+        _validated.append(1)
+        return _check(rec, view, digest)
+    ctl = fx.controller(base, validate_record=_validate)
     seeds = []
     _seed = ctl.seed
     ctl.seed = lambda *a, **k: seeds.append(1) or _seed(*a, **k)
     out, svc, ctl = fx.run_entry(base, answer=fx.split_answer(A), ctl=ctl)
     assert out["stop_reason"] == "ok"
+    assert _validated, "候选 R2 必须经既有准入校验（不是空装配）"
     assert len(seeds) == 1 and ctl.used == 1
     assert svc.calls.count("plan_content_repair_answer") == 1
     assert svc.calls.count("fact_split_m.v1") == 1
@@ -564,13 +589,8 @@ def test_candidate_r2_identity_and_three_leg_metering():
 def test_r0_cannot_stand_in_for_candidate_record():
     """R0 冒充候选记录：由既有完整准入链拒收，不只靠摘要比较."""
     base = _base(A)
-
-    def _validate(rec, view, digest):
-        return cv.record_protocol_problems(
-            rec, view, plan_digest=digest, novel_text=base["novel"],
-            novel_digest=base["record"]["novel_digest"])
     ctl = fx.controller(base, verify=lambda view, d: base["record"],
-                        validate_record=_validate)
+                        validate_record=_prod_validate(base))
     out, svc, ctl = fx.run_entry(base, answer=fx.split_answer(A), ctl=ctl)
     assert out["stop_reason"] == "split_failed"
     assert out["plan"]["fact_uids"] == ["f01", "f02", "f03", "f04"]

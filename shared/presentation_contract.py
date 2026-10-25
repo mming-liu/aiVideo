@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import copy
 import re
 
 # ---------------------------------------------------------------------------
@@ -296,7 +297,8 @@ _RELATION_KEYS = ("shot_beats", "dialogue_lines", "narration_lines",
 #: `main_events`（= `frozen_events`，由冻结表给）、`presentation`（重新生成）。
 _BASIS_SKIP = set(_RELATION_KEYS) | {
     "presentation", "plan_contract_version", "plan_verification",
-    "verification_rejected", "plan_revision", "main_events"}
+    "verification_rejected", "plan_revision", "main_events",
+    "voice_adaptations"}
 
 #: `presentation` 块里的**并行 uid 表**：稳定身份必须随块保存，否则投影读回时会被
 #: 按数组位置**重新编号**（"稳定 ID 只在内存里稳定"等于不稳定）。旧块缺这些键时按
@@ -405,6 +407,11 @@ def view_from_plan(plan: dict, *, mode: str | None = None) -> tuple:
         _v, _p = _view_from_hybrid_plan(plan)
     else:
         _v, _p = _view_from_legacy_plan(plan, mode=mode)
+    if not _p:
+        from shared import voice_adaptation as _va
+        _ap = _va.decorate_view(_v, plan)
+        if _ap:
+            return None, _ap
     if _p:
         # **读取准入未通过 ⇒ 不交出视图**。这里返回的 `_v` 内部一定是用兜底值拼出来的
         # （位置编号、空表、跳过的项）——交出去就是把"损坏的关系"换成一串看起来正常的
@@ -1488,22 +1495,40 @@ def plan_from_view(view: dict) -> dict:
         for _c in (_hc or []) if isinstance(_c, dict))
 
     _mode = str(view.get("mode") or MODE_LEGACY)
+    from shared import voice_adaptation as _va
+    _vp = _va.view_text_mismatch(view)
+    if _vp:
+        raise PresentationContractError(_vp, where="投影 plan_from_view")
+
+    def _base_text(_u) -> str:
+        if _u.get("adapted"):
+            _b = str(_u.get("base_text") or "")
+            if not _b:
+                raise PresentationContractError(
+                    [_rec("adaptation_base_text_missing", "view", "",
+                          "改编 unit 缺少 base_text", "voice_adaptations")],
+                    where="投影 plan_from_view")
+            return _b
+        return str(_u.get("text") or "")
+
     _out = dict(view.get("plan_basis") or {})          # **其余计划字段原样写回**
     _out.update({
         "main_events": list(view.get("frozen_events") or []),
         "required_facts": _facts_txt,
         "shot_beats": _beats_txt,
-        "dialogue_lines": [str(u.get("text") or "") for u in _d],
-        "narration_lines": [{"text": str(u.get("text") or ""),
+        "dialogue_lines": [_base_text(u) for u in _d],
+        "narration_lines": [{"text": _base_text(u),
                              "source": _span_text(u.get("source")),
                              "fact_refs": sorted(_nrefs.get(ref_uid(u)) or [])}
                             for u in _n],
-        "hook_spoken": [str(u.get("text") or "") for u in _d
+        "hook_spoken": [_base_text(u) for u in _d
                         if ref_uid(u) in (_hb.get("spoken_uids") or [])],
         "hook_carrier": _hook_carrier,
         "plan_contract_version": PLAN_CONTRACT_VERSION_BY_MODE.get(
             _mode, PLAN_CONTRACT_VERSION_LEGACY),
     })
+    if view.get("voice_adaptations"):
+        _out["voice_adaptations"] = copy.deepcopy(view["voice_adaptations"])
     # legacy 也持久化稳定事实身份：并行表，长度/顺序与 `required_facts` 一致。
     # 新模式的表在 `presentation.fact_uids` 里，不在顶层重复。
     if _mode == MODE_LEGACY:
@@ -1536,7 +1561,7 @@ def plan_from_view(view: dict) -> dict:
                              if isinstance(c, dict)]},
         }
         _out["narration_lines"] = [
-            {"text": str(u.get("text") or ""), "source": _span_text(u.get("source")),
+            {"text": _base_text(u), "source": _span_text(u.get("source")),
              "fact_refs": sorted(_nrefs.get(ref_uid(u)) or [])} for u in _n]
     return _out
 

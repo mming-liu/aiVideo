@@ -44,6 +44,7 @@ import re
 
 from step01_script_gen.timecode import (MIN_SHOT_DURATION, _estimate_duration,
                                         active_shot_cap)
+from shared import voice_adaptation as _va
 
 # 计划里"可核算"所必需的字段（缺任意一个 → 不可评估 → fail-closed）
 _REQUIRED_PLAN_FIELDS = ("dialogue_lines", "shot_beats")
@@ -195,30 +196,39 @@ def _strict_fact_refs(raw) -> list:
             if isinstance(x, int) and not isinstance(x, bool)]
 
 
-def plan_voice_entries(plan) -> list:
+def plan_voice_entries(plan, *, novel_text: str = "") -> list:
     """计划里的**声音条目**（对白 Dk + 图外旁白 Nk）——**统一表示，单源**.
 
     返回 `[{kind, index, id, text, source, fact_refs, beats}]`（对白在前，各按编号升序）：
 
     - `kind`：`"dialogue"` / `"narration"`；`index` 从 1 起（`id` = `D1` / `N1`）；
-    - `text`：**逐字原文**（对白是人说出口的话，旁白是原文叙述句）；
+    - `text`：**实际播出文本**——无改编时是逐字原文；有 `voice_adaptations` 时是
+      已批准改编句（基底仍保存在计划数组里，只用于出处检查）；
     - `source` / `fact_refs`：只有旁白有（对白恒为 `""` / `[]`）；
     - `beats`：**承载它的节拍号**（升序；空表 = 无人承载，由承载关系门报）。
 
-    承载关系是「节拍 → 声音条目」这一条边的**唯一读数**：`载体：台词k` 指向 Dk、
-    `载体：旁白k` 指向 Nk。一条节拍**只能**有一个载体，所以一条声音可以由**多条
-    连续节拍**接力（旁白跨镜连续播放），也可以只落在一条节拍上（由该节拍展开的
-    多个镜头连续讲完）——两种写法在本表示里是同一件事：`beats` 列表。
+    改编块存在但未开启/批准失效/条目不一致时抛 `AdaptationInvalidError`，不静默退回基底。
     """
     if not isinstance(plan, dict):
         return []
+    if not plan.get("voice_adaptations"):
+        # 无改编：完全沿用原有读取/规范化行为（空白、类型、fact_refs 不动）。
+        _dlg = plan_dialogue_lines(plan)
+        _narr_base = plan_narration_entries(plan)
+        _narr_bc = _narr_base
+    else:
+        _dlg = _va.broadcast_dialogue_lines(plan, novel_text)
+        _narr_base = plan_narration_entries(plan)
+        _narr_bc = _va.broadcast_narration_entries(plan, novel_text)
     entries: list = []
-    for _i, _t in enumerate(plan_dialogue_lines(plan), 1):
+    for _i, _t in enumerate(_dlg, 1):
         entries.append({"kind": VOICE_KIND_DIALOGUE, "index": _i, "id": "D%d" % _i,
                         "text": _t, "source": "", "fact_refs": [], "beats": []})
-    for _i, _e in enumerate(plan_narration_entries(plan), 1):
+    for _i, _e in enumerate(_narr_base, 1):
+        _bc = _narr_bc[_i - 1] if _i <= len(_narr_bc) else _e
         entries.append({"kind": VOICE_KIND_NARRATION, "index": _i, "id": "N%d" % _i,
-                        "text": _e["text"], "source": _e["source"],
+                        "text": str(_bc.get("text") or _e["text"]),
+                        "source": _e["source"],
                         "fact_refs": list(_e.get("fact_refs") or ()), "beats": []})
     _index = {(e["kind"], e["index"]): e for e in entries}
     for _b, _bt in enumerate((plan.get("shot_beats") or []), 1):
@@ -227,6 +237,20 @@ def plan_voice_entries(plan) -> list:
         if _ent is not None:
             _ent["beats"].append(_b)
     return entries
+
+
+def broadcast_narration_entries(plan, novel_text: str = "") -> list:
+    """旁白**播出文本**；无改编时直接返回原有规范化结果."""
+    if not isinstance(plan, dict) or not plan.get("voice_adaptations"):
+        return plan_narration_entries(plan)
+    return _va.broadcast_narration_entries(plan, novel_text)
+
+
+def broadcast_dialogue_lines(plan, novel_text: str = "") -> list:
+    """对白**播出文本**；无改编时直接返回原有规范化结果."""
+    if not isinstance(plan, dict) or not plan.get("voice_adaptations"):
+        return plan_dialogue_lines(plan)
+    return _va.broadcast_dialogue_lines(plan, novel_text)
 
 
 def voice_seconds(entries, kind=None) -> float:
@@ -1265,7 +1289,12 @@ def check_script_dialogue_integrity(script: dict, plan: dict | None) -> tuple:
         （审计必然报 truncated_text → 提交门死锁的形态）。`extra_dialogue`（v6.138，
         九审 P2-4）= 带说话人前缀的旁白不含任何计划句（稿件另编了计划外对白）。
     """
-    lines = plan_dialogue_lines(plan)
+    try:
+        lines = [e["text"] for e in plan_voice_entries(plan)
+                 if e["kind"] == VOICE_KIND_DIALOGUE]
+    except Exception as exc:
+        # 改编块不可消费时不得退回基底：完整性门直接 fail-closed。
+        return False, [{"line": "", "reason": "adaptation_gate_error: %s" % exc}]
     if not lines:
         return False, [{"line": "", "reason": "dialogue_lines 为空（不可评估，fail-closed）"}]
     units_raw: list = []
@@ -3317,6 +3346,11 @@ def plan_identity(plan) -> str:
     _h.update("\x00narration_lines\x00".encode("utf-8"))
     for _e in plan_narration_entries(plan):
         _h.update((str(_e.get("text") or "") + "\n").encode("utf-8"))
+    # 改编块也是编号含义的一部分：同一基底换一套播出文本，旧 plan_refs 不得复用。
+    _block = (plan or {}).get("voice_adaptations")
+    if _block:
+        _entries = _block.get("entries") if isinstance(_block, dict) else _block
+        _h.update(("\x00voice_adaptations\x00" + _va.entries_digest(_entries)).encode("utf-8"))
     return _h.hexdigest()[:12]
 
 
@@ -3432,7 +3466,12 @@ def check_event_contract(script: dict, plan: dict | None, *,
     """
     beats = [str(x).strip() for x in ((plan or {}).get("shot_beats") or [])
              if str(x).strip()]
-    n_lines = len(plan_dialogue_lines(plan))
+    try:
+        _voice_entries = plan_voice_entries(plan)
+    except Exception as exc:
+        return False, [{"code": "adaptation_gate_error", "shot": "",
+                        "detail": "改编块不可消费：%s" % exc}], True
+    n_lines = len([e for e in _voice_entries if e["kind"] == VOICE_KIND_DIALOGUE])
     shots = [s for s in (script or {}).get("shots") or [] if isinstance(s, dict)]
     # ① 身份（2026-09-27 复核 P0/P0-2）：声明是**对着哪一版计划**作的？
     #    - 可证过期（带身份且不符）→ 拒收；
@@ -3525,7 +3564,8 @@ def check_event_contract(script: dict, plan: dict | None, *,
     # 台词**实际落点**（第 16 轮复核）：声明数组是**有序集合**，光看它看不出"先说了谁"——
     # 正文里先说 D2、再说 D1，只要声明写成 `[1,2]`，旧口径与台词完整性门都会放行。
     # 所以镜内顺序按**台词在旁白文本里的位置**判，不看声明顺序。
-    _line_text = [str(x) for x in plan_dialogue_lines(plan)]
+    _line_text = [str(e["text"]) for e in _voice_entries
+                  if e["kind"] == VOICE_KIND_DIALOGUE]
     _seg_by_sid = {str(s.get("index")): str(s.get("narration_segment") or "") for s in shots}
     # 旁白序列与镜位映射：**存在性判据（②）与顺序判据（①③）共用这一份**——
     # 各建一份就会出现"一个门用宽容匹配、另一个用生字符串"的口径分叉（第 17 轮复核）。
@@ -3718,7 +3758,7 @@ def check_event_contract(script: dict, plan: dict | None, *,
             if _d is None or not 1 <= _d <= n_lines:
                 continue          # 非编号/越界已在上方报过，不重复计
             _decl_shots.setdefault(_d, str(_sh.get("index")))
-    _plan_lines = plan_dialogue_lines(plan)
+    _plan_lines = _line_text
     for _d, _sid in sorted(_decl_shots.items()):
         _pos = _unit_pos.get(_sid)
         if _pos is None:
@@ -3869,7 +3909,12 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
                          "缺少原文文本，无法核验选用台词是否逐字来自原文（fail-closed）",
                          "修正要求：带上原文重跑；不要带着未核验的台词生成完整稿")])
 
-    # ④ 原文核验：逐字找不到的台词不是"本集选用的内容"
+    # ③b 改编块前置校验：不可消费时不得退回基底做预算/生成（fail-closed）。
+    _adapt = _va.adaptation_problems(plan, novel_text)
+    if _adapt:
+        return _stop(["改编层不可消费：%s" % str(_adapt[0].get("reason") or _adapt[0].get("code"))],
+                     ["修复改编批准/条目/出处，或关闭改编后重跑；不得静默使用基底文本"],
+                     problems=_adapt)
     lines = plan_dialogue_lines(plan)
     _kept_ix, rejected = verify_dialogue_lines_indexed(lines, novel_text)
     kept = [x["line"] for x in _kept_ix]
@@ -3934,7 +3979,13 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
                 _narr_kept_ix.append(_ni)
             else:
                 _narr_rejected.append(_e["text"])
-    _dlg = round(dialogue_seconds(kept) + narration_seconds(_narr_kept), 2)
+    _voice_bc = plan_voice_entries(plan, novel_text=novel_text)
+    _bc_dlg = [e for e in _voice_bc if e["kind"] == VOICE_KIND_DIALOGUE]
+    _bc_narr = [e for e in _voice_bc if e["kind"] == VOICE_KIND_NARRATION]
+    _dlg = round(
+        dialogue_seconds([_bc_dlg[x["index"] - 1]["text"] for x in _kept_ix])
+        + sum(_estimate_duration(_bc_narr[ni - 1]["text"])
+              for ni in _narr_kept_ix), 2)
     # 下界 = **发声预算**（对白 + 旁白，逐句估时器算出来的真实量）。节拍**不算时间**：
     # 见 `beats_floor_basis` 的说明（第 16 轮复核：9 镜 × 10 秒 36 节拍的稿被判 108 秒）。
     _basis = beats_floor_basis(plan)
@@ -3947,20 +3998,24 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
     _cap = active_shot_cap()
     _unrep = []
     for _x in _kept_ix:
-        _chk = check_dialogue_representable(_x["line"], _cap)
+        _line_bc = (_bc_dlg[_x["index"] - 1]["text"]
+                    if 0 < _x["index"] <= len(_bc_dlg) else _x["line"])
+        _chk = check_dialogue_representable(_line_bc, _cap)
         if not _chk["representable"]:
             _unrep.append({"kind": "dialogue", "index": _x["index"],
-                           "line": _x["line"], "est_sec": _chk["est_sec"],
+                           "line": _line_bc, "est_sec": _chk["est_sec"],
                            "reason": _chk["reason"]})
     # 旁白同样不能截句：一条旁白必须能整条讲完在一个镜头里（与台词同判据）
     # ⚠️ 2026-10-22：旁白**不加说话人前缀余量**。旧写法复用 `check_dialogue_representable`
     # 的默认 5 字余量，把 11.40s 的旁白算成 12.65s 判"不可表示"，而预算下界用不加余量的
     # 估时（11.40s）——同一句话两个读数，模型无论怎么改都过不了。
     for _e, _ni in zip(_narr_kept, _narr_kept_ix):
-        _chk = check_dialogue_representable(_e["text"], _cap, prefix_allowance_chars=0)
+        _line_bc = (_bc_narr[_ni - 1]["text"]
+                    if 0 < _ni <= len(_bc_narr) else _e["text"])
+        _chk = check_dialogue_representable(_line_bc, _cap, prefix_allowance_chars=0)
         if not _chk["representable"]:
             _unrep.append({"kind": "narration", "index": _ni,
-                           "line": _e["text"], "est_sec": _chk["est_sec"],
+                           "line": _line_bc, "est_sec": _chk["est_sec"],
                            "reason": "旁白：" + str(_chk["reason"])})
     reasons, suggestions = [], []
     if rejected:
@@ -4734,6 +4789,11 @@ def check_plan_before_generation(plan: dict | None, *, chapter_dir=None,
             raise PlanContractInvalidError(
                 "计划结构不合格（%s）⇒ 停在计划层，不生成完整稿：%s"
                 % (_paths, "；".join(_rs[:6])))
+    _adapt = _va.adaptation_problems(plan, novel_text)
+    if _adapt:
+        raise PlanContractInvalidError(
+            "改编层不可消费（%s）⇒ 停在计划层：%s"
+            % (_adapt[0].get("code"), _adapt[0].get("reason")))
     rep = evaluate_plan(plan, novel_text=novel_text)
     # 契约门在**预算门之前**（先判"取舍做完了没有"，再判"装不装得下"），但在
     # **缺字段判据之后**：缺 `dialogue_lines` 这类是「无法验算」（`unevaluable`），

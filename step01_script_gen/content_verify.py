@@ -246,6 +246,20 @@ def _request_admission(view) -> list:
     return _p
 
 
+def _obligation_basis_lines(obligations) -> list:
+    """把代码给定的待核义务渲染成**字段明确**的两键对象（两个提示入口共用）.
+
+    旧写法 `1. [claim] <text>` 把 id 与正文挤在同一行：模型无法判断该回 `claim`
+    还是 `[claim] <text>`。2026-10-25 的 P4 三次真实核验分别回了 `"[claim] <text>"`
+    与 `"1"`，三份记录全部因义务身份被拒。这里只改**呈现**——JSON schema、义务集合、
+    id 取值、解析与准入判据都不变；旧记录也不因提示变化而失效（记录不绑提示摘要）。
+    """
+    return ["  %d. %s" % (_i, json.dumps(
+        {"obligation_id": str(_o.get("obligation_id") or ""),
+         "text": str(_o.get("text") or "")}, ensure_ascii=False))
+        for _i, _o in enumerate(obligations or [], 1)]
+
+
 def build_verification_prompt(view, *, novel_text="", novel_digest="",
                               novel_version="", source_catalog=None) -> str:
     """核验请求的**正文块**（工作包 2 第 1 条：上下文必须**足够**核原文支持）.
@@ -299,9 +313,9 @@ def build_verification_prompt(view, *, novel_text="", novel_digest="",
         # supported（"完整主张被结果子集替代"）。集合来自冻结主张，与候选展示无关。
         _obls = _want_obligations.get(_fu) or []
         _lines.append("**待核义务（冻结，由代码给定）**——下面每条都要在 `obligations[]`"
-                      "里**恰好回带一行**，`obligation_id` 与 `text` **原样照抄**：")
-        for _i, _o in enumerate(_obls, 1):
-            _lines.append("  %d. [%s] %s" % (_i, _o["obligation_id"], _o["text"]))
+                      "里**恰好回带一行**：`obligation_id` 取对象里的 `obligation_id`，"
+                      "`text` 取对象里的 `text`；两者都**原样照抄**（不要带括号或序号）：")
+        _lines += _obligation_basis_lines(_obls)
         _car = _carrier_block(view, _fu)
         _lines.append("实际展示正文（**只有这些**是观众能看到的）：")
         for _c in _car:
@@ -313,15 +327,19 @@ def build_verification_prompt(view, *, novel_text="", novel_digest="",
             _lines.append("  （以下是**声明**，观众看不到，**不能**当证据：%s）"
                           % "；".join("%s=%s" % (c["uid"], c["purpose"]) for c in _decl))
         _lines.append("")
-    _units = [(str(u.get("uid")), str(u.get("text") or ""), "对白")
-              for u in (view.get("dialogue_units") or [])]
-    _units += [(str(u.get("uid")), str(u.get("text") or ""), "旁白")
-               for u in (view.get("narration_units") or [])]
+    _units = [(str(u.get("uid")), str(u.get("text") or ""), "对白",
+               bool(u.get("adapted"))) for u in (view.get("dialogue_units") or [])]
+    _units += [(str(u.get("uid")), str(u.get("text") or ""), "旁白",
+                bool(u.get("adapted"))) for u in (view.get("narration_units") or [])]
+    _any_adapted = any(_a for _u, _t, _k, _a in _units)
     if _units:
+        _echo_hint = ("`echo_text` 填这条的**播出文本**（已批准改编；与上面一字不差）"
+                      if _any_adapted else
+                      "`echo_text` 填这条的**原文正文**，一字不差")
         _lines += ["# 声音单位（uid **原样回带**；核对：是不是原文里**人物说的话**，"
-                   "说话人是谁。`echo_text` 填这条的**原文正文**，一字不差）"]
-        for _u, _t, _k in _units:
-            _lines.append("- %s [%s] %s" % (_u, _k, _t))
+                   "说话人是谁。%s）" % _echo_hint]
+        for _u, _t, _k, _a in _units:
+            _lines.append("- %s [%s]%s %s" % (_u, _k, "（已批准改编）" if _a else "", _t))
         _lines.append("")
     _lines += [
         "# 判定规则（**三问分开答，不许用一个 supported 代替**）",
@@ -407,8 +425,8 @@ def build_verification_prompt(view, *, novel_text="", novel_digest="",
              "support_spans": ["<逐字出自实际展示正文>"],
              "missing": "", "suggested_carriers": [],
              "obligations": [{
-                 "obligation_id": "<本事实下面列出的 id，原样照抄>",
-                 "text": "<本事实下面列出的 text，原样照抄>",
+                 "obligation_id": "<上面对象里的 obligation_id，原样照抄>",
+                 "text": "<上面对象里的 text，原样照抄>",
                  "verdict": "<按展示判定>",
                  "evidence": [{"carrier_uid": "<展示它的载体 uid>",
                                "exhibitor_span": "<逐字出自该载体实际正文>"}],
@@ -493,9 +511,9 @@ def build_display_prompt(view, decomposition=None) -> str:
         _lines.append("## 事实 %s" % _u["fact_uid"])
         _lines.append("主张（**冻结**，你不能改写它）：%s" % _u["claim"])
         _lines.append("**待核义务（冻结，由代码给定）**——每条在 `obligations[]` 里"
-                      "**恰好回带一行**，`obligation_id` 与 `text` **原样照抄**：")
-        for _i, _o in enumerate(_u["obligations"], 1):
-            _lines.append("  %d. [%s] %s" % (_i, _o["obligation_id"], _o["text"]))
+                      "**恰好回带一行**：`obligation_id`/`text` 从下面对象里**原样照抄**"
+                      "（id 不含括号/序号）：")
+        _lines += _obligation_basis_lines(_u["obligations"])
         _lines.append("实际展示正文（**只有这些**是观众能得到的东西）：")
         if _u["carriers"]:
             for _c in _u["carriers"]:
@@ -520,8 +538,8 @@ _DISPLAY_RULES = [
     "- `support_spans` **逐字出自实际展示正文**；联合承载按**并集**判断。",
     "- `carrier_uid` 填上面列出的**那个 uid**（`uid=` 后面那串，**不要带类别、不要改写**）；",
     "  `exhibitor_span` 逐字取自**同一个载体**的正文。",
-    "- 每条义务一行：`obligation_id`/`text` **原样照抄**给定的那两条；`verdict`；",
-    "  `evidence[]`（**联合承载**：每个展示了一部分的载体各一项，含 `carrier_uid` 与",
+    "- 每条义务一行：`obligation_id`/`text` 从上面对象里**原样照抄**（id 不含括号/序号）；",
+    "  `verdict`；`evidence[]`（**联合承载**：每个展示了一部分的载体各一项，含 `carrier_uid` 与",
     "  **逐字出自该载体正文**的 `exhibitor_span`）；`missing`；`reason`。",
     "- 判 `supported` **至少一项真实证据**；判 `partial`/`unknown` 时证据可空，",
     "  但 `missing` **必须写清缺的是哪一部分**。",

@@ -765,10 +765,17 @@ def render_execution_contract(plan) -> str:
 
     只传递计划已定的内容，不含新判据：生成只能展开，不得重新选材。
     """
-    from step01_script_gen.plan_feasibility import (plan_dialogue_lines,
-                                                    plan_narration_entries)
-    _lines = plan_dialogue_lines(plan)
-    _narr = plan_narration_entries(plan)
+    from step01_script_gen.plan_feasibility import plan_voice_entries
+    _voice = plan_voice_entries(plan)
+    _lines = [e["text"] for e in _voice if e.get("kind") == "dialogue"]
+    _narr = [{"text": e["text"], "fact_refs": list(e.get("fact_refs") or ())}
+             for e in _voice if e.get("kind") == "narration"]
+    _adapted = bool((plan or {}).get("voice_adaptations"))
+    _adapted_texts = set()
+    if _adapted:
+        for _e in (((plan or {}).get("voice_adaptations") or {}).get("entries") or []):
+            if isinstance(_e, dict) and str(_e.get("text") or ""):
+                _adapted_texts.add(str(_e.get("text")))
     _facts = [str(x).strip() for x in ((plan or {}).get("required_facts") or [])
               if str(x).strip()]
     _events = [str(x).strip() for x in ((plan or {}).get("main_events") or [])
@@ -779,9 +786,12 @@ def render_execution_contract(plan) -> str:
         return ""
     parts = [CONTRACT_BLOCK_HEADER]
     if _lines:
-        parts.append("一、本集选用的全部台词（共 %d 句，**逐字**，不得替换、不得另编；"
-                     "确需增减须回规划层按「可省略内容」重选）：" % len(_lines))
-        parts += ["%d. %s" % (i, x) for i, x in enumerate(_lines, 1)]
+        parts.append("一、本集选用的全部台词（共 %d 句，%s，不得替换、不得另编；"
+                     "确需增减须回规划层按「可省略内容」重选）："
+                     % (len(_lines),
+                        "按已批准播出文本，基底已核验" if _adapted else "**逐字**"))
+        parts += ["%d. %s%s" % (i, x, "（已批准改编）" if x in _adapted_texts else "")
+                  for i, x in enumerate(_lines, 1)]
     if _facts:
         parts.append("二、必保留事实（**一条都不许省**，原文证据随附）：")
         parts += ["%d. %s" % (i, x) for i, x in enumerate(_facts, 1)]
@@ -789,13 +799,15 @@ def render_execution_contract(plan) -> str:
         # 2026-09-30 复核第 6 轮：图外旁白是**计划里编号的条目**（N1..Nn），与人物
         # 台词分开登记。生成时**逐字保留**这条旁白（写在它承载的那个镜头的旁白里），
         # 不得改写、不得自造、不得把它改标成人物台词。
-        parts.append("二之二、本集**图外旁白**（共 %d 条，逐字，不得改写或自造；"
+        parts.append("二之二、本集**图外旁白**（共 %d 条，%s；"
                      "每条必须原样出现在它**所承载节拍**的那些镜头的旁白里）："
-                     % len(_narr))
+                     % (len(_narr),
+                        "按已批准播出文本，基底已核验" if _adapted else "逐字，不得改写或自造"))
         for _i, _e in enumerate(_narr, 1):
             _refs = "、".join("F%d" % _x for _x in (_e.get("fact_refs") or []))
             parts.append("N%d. %s%s" % (_i, _e.get("text"),
-                                        ("（承载事实：%s）" % _refs) if _refs else ""))
+                                        ("（已批准改编）" if _e.get("text") in _adapted_texts else "")
+                                        + (("（承载事实：%s）" % _refs) if _refs else "")))
         # 2026-09-30 复核第 7 轮：旁白是**声音条目**，落点是「镜头或连续片段」——
         # 三件事必须写明，否则生成层只能用「一镜一条」的旧假设去凑：
         #   ① 画面与旁白**同时发生**，不为它加镜头；

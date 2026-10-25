@@ -864,6 +864,36 @@ REPAIR_SHOT_REPLACEMENT_SCHEMA = {
     },
 }
 
+# 补丁值可以是任意 JSON 子树，无法用固定 Shot 的 strict schema 表达。
+# 本请求声明可选形态；本地字段授权、路径、单镜结构检查是最终准入边界。
+_REPAIR_UPDATES = {"anyOf": [
+    {"type": "object", "minProperties": 1, "additionalProperties": {}},
+    {"type": "array", "minItems": 1, "items": {
+        "type": "object", "properties": {"field_path": {"type": "string", "minLength": 1},
+                                            "value": {}},
+        "required": ["field_path", "value"], "additionalProperties": False}},
+]}
+for _replacement_key in ("shot_replacements", "hook_replacement"):
+    _container = REPAIR_SHOT_REPLACEMENT_SCHEMA["schema"]["properties"][_replacement_key]
+    _original = _container["items"] if _replacement_key == "shot_replacements" else dict(_container)
+    _branches = [_original, {
+        "type": "object", "properties": {"shot_id": {"type": "string"}, "updates": _REPAIR_UPDATES},
+        "required": ["shot_id", "updates"], "additionalProperties": False}]
+    if _replacement_key == "shot_replacements":
+        _branches.append({"type": "object", "properties": {
+            "shot_id": {"type": "string"}, "keyframe_additions": {
+                "type": "array", "minItems": 1, "items": {
+                    "type": "object", "properties": {"frame": {"type": "object"},
+                                                         "layout": {"type": "array", "items": {"type": "object"}}},
+                    "required": ["frame", "layout"], "additionalProperties": False}}},
+            "required": ["shot_id", "keyframe_additions"], "additionalProperties": False})
+        _container["items"] = {"oneOf": _branches}
+        _container["description"] = "仅点名目标；优先 updates 窄补丁，兼容完整 shot 和 keyframe_additions，每目标只选一种。"
+    else:
+        REPAIR_SHOT_REPLACEMENT_SCHEMA["schema"]["properties"][_replacement_key] = {"oneOf": _branches}
+REPAIR_SHOT_REPLACEMENT_SCHEMA["strict"] = False
+
+
 REPAIR_PATCH_SCHEMA = {
     "name": "repair_patches",
     "strict": True,

@@ -290,8 +290,8 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
 
     只做**规划**：不实例化 provider、不调用模型（能力用登记表读数）。
     """
-    from step01_script_gen.plan_feasibility import (layout_voice_entries,
-                                                    plan_narration_entries, voice_units)
+    from step01_script_gen.plan_feasibility import (broadcast_narration_entries,
+                                                    layout_voice_entries, voice_units)
     plan = script.get("chapter_outline")
     plan = plan if isinstance(plan, dict) else {}
     shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
@@ -316,7 +316,7 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
         out.append(dialogue_speech_unit(shot, scope=scope, script_revision=revision,
                                         voice=voice, provider_name=name, text=text))
 
-    entries = plan_narration_entries(plan)
+    entries = broadcast_narration_entries(plan)
     if entries:
         _win: dict = {}
         _acc = 0.0
@@ -714,12 +714,12 @@ def gen_narration_tts(script: dict, output_dir: Path, provider=None, *,
     且**保留基线**（不写盘、不删旧音轨）。
     """
     from shared.paths import NARRATION_AUDIO_FILENAME_FMT
-    from step01_script_gen.plan_feasibility import (layout_voice_entries,
-                                                    plan_narration_entries,
+    from step01_script_gen.plan_feasibility import (broadcast_narration_entries,
+                                                    layout_voice_entries,
                                                     voice_units)
     plan = script.get("chapter_outline")
     plan = plan if isinstance(plan, dict) else {}
-    entries = plan_narration_entries(plan)
+    entries = broadcast_narration_entries(plan)
     if not entries:
         return []
     shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]

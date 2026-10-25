@@ -1138,3 +1138,132 @@ def frame_layout_structural_violations(before_script: dict, after_script: dict,
                 continue
             out.extend("%s: %s" % (tid, m) for m in _pure_entry_edits(_path, _entries, _new))
     return out
+
+
+def apply_scoped_field_updates(
+    target: dict,
+    updates,
+    *,
+    allowed=None,
+) -> tuple[dict | None, str]:
+    """将「窄字段补丁（Scoped Field Patch）」确定性装配到原镜头副本 → `(new_shot, 拒绝原因)`.
+
+    解决问题：
+      旧修复协议要求 LLM 返回整个 Shot 的完整 JSON（20+ 个字段、600~1200 字），
+      再由 `merge_authorized` 把未授权字段回填。这既浪费输出 Token（限制单轮只能修 4~6 镜），
+      又容易因为模型漏抄 `narration_segment` 等长锁定字段误触 `locked_changed`。
+
+    窄补丁协议支持两种输入形态：
+      1. 字典形态：`{"keyframes[2].desc": "...", "keyframes[2].stage": "approach", "frame_layouts.kfs.2.0.props": []}`
+      2. 列表形态：`[{"field_path": "keyframes[2].desc", "value": "..."}, ...]`
+
+    安全契约（Fail-Closed）：
+      - 任何路径若不在 `allowed` 集合内，立即整条拒收（不静默忽略，防止半套补丁落盘）；
+      - 中间容器必须已存在、列表下标不许越界（仅 `_CREATABLE_FRAME_KEYS` 即 `frame_layouts.ff/lf`
+        允许在 `frame_layouts` 字典上新建）；
+      - 若补丁修改了 `duration` 且未显式提供 `duration_sec`，自动同步 `duration_sec = duration`，
+        保证与 `_validate_replacement_shot` 的单一时长口径一致。
+    """
+    import copy as _c
+
+    if not isinstance(target, dict):
+        return None, "目标镜头不是对象"
+
+    if allowed is None:
+        return None, "窄字段补丁必须提供显式授权集合"
+
+    pairs: list[tuple[str, object]] = []
+    if isinstance(updates, dict):
+        if not updates:
+            return None, "updates 字典不能为空"
+        for k, v in updates.items():
+            pairs.append((str(k if k is not None else "").strip(), v))
+    elif isinstance(updates, list):
+        if not updates:
+            return None, "updates 列表不能为空"
+        for i, item in enumerate(updates):
+            if not isinstance(item, dict):
+                return None, f"updates[{i}] 不是对象"
+            if set(item) != {"field_path", "value"}:
+                return None, f"updates[{i}] 只允许 field_path 与 value"
+            fp = str(item.get("field_path") or "").strip()
+            if not fp or "value" not in item:
+                return None, f"updates[{i}] 必须同时包含非空 field_path 与 value"
+            pairs.append((fp, item.get("value")))
+    else:
+        return None, "updates 必须是非空字典或非空列表"
+
+    def compatible(original, value):
+        if original is None:
+            return True
+        if type(original) in (int, float):
+            return type(value) in (int, float)
+        return isinstance(value, type(original))
+
+    out = _c.deepcopy(target)
+    seen_paths = set()
+    touched_duration = False
+    touched_duration_sec = False
+
+    for raw_path, val in pairs:
+        if not raw_path:
+            return None, "updates 含空字段路径"
+        norm_keep = _norm_keep_index(raw_path)
+        if not norm_keep or norm_keep.startswith(".") or norm_keep.endswith(".") or "*" in norm_keep:
+            return None, f"非法字段补丁路径: {raw_path!r}（必须为具体路径，不含通配符）"
+        if allowed is not None and not path_allowed(norm_keep, allowed):
+            return None, (
+                f"越权字段补丁：{raw_path!r} 不在本轮授权集合 "
+                f"{sorted(str(x) for x in allowed)} 内"
+            )
+
+        if norm_keep in seen_paths or any(
+                norm_keep.startswith(p + ".") or p.startswith(norm_keep + ".")
+                for p in seen_paths):
+            return None, f"重复或重叠字段补丁路径: {raw_path!r}"
+        seen_paths.add(norm_keep)
+        segs = norm_keep.split(".")
+        cur = out
+        for depth, seg in enumerate(segs[:-1]):
+            if isinstance(cur, dict):
+                if seg not in cur:
+                    return None, f"路径 {raw_path!r} 的中间键 {seg!r} 不存在"
+                cur = cur[seg]
+            elif isinstance(cur, list):
+                if not seg.isdigit():
+                    return None, f"路径 {raw_path!r} 在列表处需要整数下标，得到 {seg!r}"
+                idx = int(seg)
+                if idx < 0 or idx >= len(cur):
+                    return None, f"路径 {raw_path!r} 列表下标 {idx} 越界（长度 {len(cur)}）"
+                cur = cur[idx]
+            else:
+                return None, f"路径 {raw_path!r} 的中间节点 {'.'.join(segs[:depth+1])!r} 不是容器"
+
+        last = segs[-1]
+        if isinstance(cur, dict):
+            if last not in cur and norm_keep not in _CREATABLE_FRAME_KEYS:
+                return None, f"路径 {raw_path!r} 的目标键 {last!r} 不存在"
+            if last in cur and not compatible(cur[last], val):
+                return None, f"字段 {raw_path!r} 的值类型不匹配"
+            cur[last] = _c.deepcopy(val)
+        elif isinstance(cur, list):
+            if not last.isdigit():
+                return None, f"路径 {raw_path!r} 在列表处需要整数下标，得到 {last!r}"
+            idx = int(last)
+            if idx < 0 or idx >= len(cur):
+                return None, f"路径 {raw_path!r} 列表下标 {idx} 越界（长度 {len(cur)}）"
+            if not compatible(cur[idx], val):
+                return None, f"字段 {raw_path!r} 的值类型不匹配"
+            cur[idx] = _c.deepcopy(val)
+        else:
+            return None, f"路径 {raw_path!r} 的父节点不是容器"
+
+        if norm_keep == "duration":
+            touched_duration = True
+        elif norm_keep == "duration_sec":
+            touched_duration_sec = True
+
+    if touched_duration and not touched_duration_sec and "duration_sec" in out:
+        out["duration_sec"] = out["duration"]
+
+    return out, ""

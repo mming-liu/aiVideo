@@ -4530,6 +4530,7 @@ def _norm_target_id(raw) -> str:
 
 
 from step01_script_gen.repair_fields import (merge_authorized as _merge_authorized,
+                                          apply_scoped_field_updates as _apply_scoped_field_updates,
                                           canonical_path_diff,
                                           frame_layout_structural_violations,
                                           MODEL_AUDIT_WARNING_PREFIX)
@@ -4597,7 +4598,7 @@ def _assemble_keyframe_additions(target: dict, additions) -> tuple:
     return out, ""
 
 
-def _repair_answer_example(shots_by_id: dict, picked) -> str:
+def _repair_answer_example(shots_by_id: dict, picked, allowed_by_target=None) -> str:
     """Render a valid answer envelope from the actual authorized objects."""
     import json
     answer = {"shot_replacements": []}
@@ -4605,6 +4606,22 @@ def _repair_answer_example(shots_by_id: dict, picked) -> str:
         if target_id not in shots_by_id:
             continue
         replacement = {"shot_id": str(target_id).removeprefix("shot_"), "shot": shots_by_id[target_id]}
+        if allowed_by_target is not None:
+            from step01_script_gen.repair_fields import path_allowed
+            updates = []
+            allowed = allowed_by_target.get(target_id, set())
+            def visit(value, path):
+                if path and path_allowed(path, allowed):
+                    updates.append({"field_path": path, "value": value})
+                elif isinstance(value, dict):
+                    for key, child in value.items():
+                        visit(child, f"{path}.{key}" if path else key)
+                elif isinstance(value, list):
+                    for index, child in enumerate(value):
+                        visit(child, f"{path}.{index}")
+            visit(shots_by_id[target_id], "")
+            if updates:
+                replacement = {"shot_id": replacement["shot_id"], "updates": updates}
         if target_id == "hook":
             answer["hook_replacement"] = replacement
         else:
@@ -4659,6 +4676,17 @@ def _apply_shot_replacements(script: dict, replacements: list,
             return
         sid = _norm_target_id(item.get("shot_id"))
         new_shot = item.get("shot")
+        forms = [key for key in ("shot", "updates", "field_patches", "keyframe_additions")
+                 if key in item]
+        if len(forms) != 1 or item.get(forms[0]) is None:
+            rejected.append("同一目标只能提供一种替换形态")
+            return
+        if forms[0] == "shot" and not isinstance(new_shot, dict):
+            rejected.append("shot 必须是对象")
+            return
+        if forms and forms[0] in ("updates", "field_patches") and set(item) != {"shot_id", forms[0]}:
+            rejected.append("窄字段补丁条目含未知字段")
+            return
         if not sid:
             rejected.append("shot_id 为空")
             return
@@ -4698,6 +4726,15 @@ def _apply_shot_replacements(script: dict, replacements: list,
                 rejected.append(f"shot {sid}: 本轮未授权任何字段（问题未点名字段路径）")
                 return
             allowed = allowed or set()
+        # 窄字段补丁（Scoped Field Patch）：当模型返回 `updates`（或 `field_patches`）
+        # 而非完整 `shot` 对象时，先校验每个补丁路径在 `allowed` 内并装配到原镜副本，
+        # 彻底消除模型漏抄未修改锁定字段引发的 `locked_changed` 误伤与 Token 浪费。
+        _raw_updates = item.get("updates") if item.get("updates") is not None else item.get("field_patches")
+        if new_shot is None and _raw_updates is not None:
+            new_shot, _why = _apply_scoped_field_updates(target, _raw_updates, allowed=allowed)
+            if _why:
+                rejected.append(f"shot {sid}: {_why}")
+                return
         # v6.91（用户决定，2026-09-22）：提交前把**未授权路径从原镜强制回填**。
         #
         # 原实现直接判越权 → 整条拒绝。实测 07:39 3/3 目标因此被拒：模型必须回填
@@ -4729,6 +4766,9 @@ def _apply_shot_replacements(script: dict, replacements: list,
                     f"[REPAIR] shot {sid}: 授权字段实际改动 {len(_changed)} 处 "
                     f"（keyframes {_kf_delta[0]}->{_kf_delta[1]}）: {_changed[:8]}"
                 )
+        # duration_sec 是派生值：授权合并后再同步，避免被回填成旧时长。
+        if _raw_updates is not None and isinstance(new_shot, dict) and new_shot.get("duration") != target.get("duration"):
+            new_shot["duration_sec"] = new_shot["duration"]
         reason = _validate_replacement_shot(target, new_shot, is_hook=force_hook,
                                             allowed=allowed)
         if reason:
@@ -7101,9 +7141,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "请**逐条**修复下方列出的问题；每条问题只改**解决它所需的已授权字段**——"
             "**需要联动时一次改全**（例如 kf 时序矛盾牵涉 kf 的 desc / stage /"
             "对应布局条目，就一起改；审计已把这些字段都列为授权目标）。\n"
-            "输出**被点名镜头的完整替换版本**（不是字段补丁）。格式："
-            f"{_repair_answer_example(shots_by_id, picked)}\n"
-            "上面是用本次原镜序列化的合法 JSON 外壳；仅按授权修正内容，保持闭合层级。\n"
+            "优先只返回被点名镜头的窄字段补丁 `updates`（路径和值），无需重抄未改字段。格式："
+            f"{_repair_answer_example(shots_by_id, picked, _allowed_by_target)}\n"
+            "上面是本次授权字段与当前值的 JSON 示例；只提交需要修改的授权路径。`updates` 可为路径到值的字典，或 field_path/value 列表；未提交的字段由代码保留。完整 shot 替换和 keyframe_additions 仍兼容，同一目标只选一种形态。\n"
             "**hook 必须放在 `hook_replacement` 里**（它与普通镜头字段不同，无 scene/location），"
             "普通镜头放 `shot_replacements`；两个键都可为空数组/省略。\n"
             # 2026-09-27（用户决定）：缺帧这类**联动**修复改「成对数据」形状——
@@ -7150,7 +7190,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "且该帧文案描写的是它自己那段。**\n\n"
             "**手术刀原则（最高优先级）**：\n"
             "1. 一条 warn 只改**它授权范围内的字段值**；镜头内其余字段**逐字保留**——"
-            "输出完整镜头不等于重写整镜。"
+            "优先输出 updates 窄补丁；兼容完整镜头时也不得重写未授权字段。"
             # v6.116（审核）：**例外**——同镜多个关联问题必须一次改到自洽，
             # 否则「一条 warn 只改一处」会让 motion/KF/尾帧三处互相矛盾。
             # v6.120（用户决定）：例外**不再局限于「同镜多个问题」**——一条问题
@@ -7167,7 +7207,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "「motion_desc 缺少跃船过程」的正解就是补上该动作，不得因为「禁止新增」而回避；"
             "**视线方位（画左/画右/画上方/目光/凝望/仰望/俯视）** 是规则 22.5a 硬性要求——"
             "禁止砍/省略，但**禁止写成「望着她」「看杨旭」这类无空间方位词**\n"
-            "3. 禁止改景别/时长/台词/剧情/narration_segment 文本\n"
+            "3. 禁止未经授权改景别/时长；台词/剧情/narration_segment 文本保持原样\n"
             "4. 禁止增删镜头、改 shot.index\n"
             "5. 只输出 shot_replacements，不输出整本脚本；未列问题的镜头绝不进入；"
             "替换镜头内**未被 warn 点到的字段逐字保留**（可照抄原镜文本）\n"
@@ -7258,9 +7298,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "\n\n# 定向修复\n"
             "以下是分镜问题清单。请**逐条**修复；每条问题只改**解决它所需的已授权字段**——"
             "**需要联动时一次改全**（如 kf 时序矛盾牵涉 kf 的 desc / stage / 布局条目）。"
-            "输出**被点名镜头的完整替换版本**。格式："
-            f"{_repair_answer_example(shots_by_id, picked)}\n"
-            "上面是用本次原镜序列化的合法 JSON 外壳；仅按授权修正内容，保持闭合层级。\n"
+            "优先返回被点名镜头的窄字段补丁 `updates`（路径和值）。格式："
+            f"{_repair_answer_example(shots_by_id, picked, _allowed_by_target)}\n"
+            "上面是本次授权字段与当前值的 JSON 示例；只提交需要修改的授权路径。`updates` 可为路径到值的字典，或 field_path/value 列表；未提交的字段由代码保留。完整 shot 替换和 keyframe_additions 仍兼容，同一目标只选一种形态。\n"
             "hook 放 hook_replacement，普通镜头放 shot_replacements，两者都可为空；"
             "shot_id 用裸镜号（\"10\"，不是 \"shot_10\"）；"
             "每个被点名镜头恰好出现一次（重复/遗漏/多出则整批回滚）。"
@@ -7275,7 +7315,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "同镜多个关联问题要一次性让 motion_desc/KF/尾帧自洽，"
             "**视线方位（画左/画右/画上方/目光/凝望/仰望/俯视）** 是规则 22.5a 硬性要求——"
             "禁止砍/省略，但禁止写成无空间方位词；"
-            "禁止改景别/时长/台词/剧情/narration_segment 文本；禁止增删镜头、改 shot.index；"
+            "禁止未经授权改景别/时长；台词/剧情/narration_segment 文本保持原样；禁止增删镜头、改 shot.index；"
             "**lf_desc 至少 40 字**，含本镜所有出镜角色完整静态布局——过短会产生内部矛盾。\n"
             "**关键字段保留白名单（最高优先级）**：致命伤 anchor（心口/洇痕/暗红/中刀/中剑/伤口/血痕 等）"
             "+ 服装色（每个出镜角色，取自角色库）+ 角色当前状态（坐/站/仰卧/跪坐/持物 等）"

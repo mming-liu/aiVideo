@@ -861,7 +861,7 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
         from shared.style_prefix import normalize_lf_desc
         _norm_lf = normalize_lf_desc(lf_desc, shot, characters)
         if _norm_lf != lf_desc:
-            shot["lf_desc"] = lf_desc = _norm_lf
+            lf_desc = _norm_lf
     motion_desc = shot.get("motion_desc", "").strip()
     if not motion_desc:
         motion_desc = shot.get("prompt", "")
@@ -1091,7 +1091,7 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     return prompt
 
 
-def _build_seedance_concise_prompt(shot: dict) -> str:
+def _build_seedance_concise_prompt(shot: dict, characters: list | None = None) -> str:
     """Seedance 专用精简 prompt（2026-08-20，方案 2 上游精简）.
 
     Seedance 硬约束中文 ≤500 字符（@图引用不计），完整 _build_prompt 注入
@@ -1114,8 +1114,19 @@ def _build_seedance_concise_prompt(shot: dict) -> str:
     camera_movement = (shot.get("camera_movement") or "").strip()
     if camera_movement:
         parts.append(f"运镜：{camera_movement}")
+    _chars = characters if isinstance(characters, list) else []
     ff_desc = shot.get("ff_desc", "").strip()
+    if ff_desc:
+        from shared.style_prefix import normalize_ff_desc
+        _norm_ff = normalize_ff_desc(ff_desc, shot, _chars)
+        if _norm_ff != ff_desc:
+            ff_desc = _norm_ff
     lf_desc = shot.get("lf_desc", "").strip()
+    if lf_desc:
+        from shared.style_prefix import normalize_lf_desc
+        _norm_lf = normalize_lf_desc(lf_desc, shot, _chars)
+        if _norm_lf != lf_desc:
+            lf_desc = _norm_lf
     motion_desc = shot.get("motion_desc", "").strip() or shot.get("prompt", "")
     if ff_desc:
         parts.append(f"【视频起点】{ff_desc}")
@@ -1137,9 +1148,24 @@ def _build_seedance_concise_prompt(shot: dict) -> str:
     return "\n".join(parts)
 
 
+def derive_attempt_seed(base_seed: int | None, retry_attempt: int = 0) -> int | None:
+    """按重试轮次派生确定性 Seed：首轮（attempt=0）保持基准 seed，QC 失败重抽（attempt>=1）确定性偏移。
+
+    使已确认重抽使用不同 seed，同时保持序列可复现；不保证视频质量改善。
+    """
+    if base_seed is None:
+        return None
+    base = int(base_seed) & 0x7FFFFFFF
+    attempt = max(0, int(retry_attempt or 0))
+    if attempt <= 0:
+        return base
+    return (base + attempt * 10007) & 0x7FFFFFFF
+
+
 def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
                   characters: list | None = None,
-                  continuity_ref_image: str | None = None, mode: str = "A"):
+                  continuity_ref_image: str | None = None, mode: str = "A",
+                  retry_attempt: int = 0):
     """构建 VideoGenerationRequest.
 
     frame_paths: [首帧路径, 尾帧路径(可选), 中间关键帧...]
@@ -1164,7 +1190,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     if active_video_is_seedance():
         # 跳过 cinematic_prefix + STYLE_PREFIX：Seedance 自身有风格倾向，
         # 长风格前缀是噪声（与"drop 风格收束"对称）
-        full_prompt = _build_seedance_concise_prompt(shot)
+        full_prompt = _build_seedance_concise_prompt(shot, characters=characters)
     else:
         # 完整 prompt 路径（其他 provider 不动）
         full_prompt = sanitize_prompt(
@@ -1310,7 +1336,9 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     try:
         import hashlib as _hl
         _seed_src = f"{shot.get('index', 0)}|{shot.get('ff_desc', '')}|{shot.get('lf_desc', '')}|{prompt}"
-        _seed = int(_hl.md5(_seed_src.encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
+        _base_seed = int(_hl.md5(_seed_src.encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
+        _eff_attempt = int(retry_attempt or 0)
+        _seed = derive_attempt_seed(_base_seed, _eff_attempt)
     except Exception:
         _seed = None
 

@@ -18,8 +18,12 @@ load_dotenv(_PROJECT_ROOT / ".env.content")
 load_dotenv(_PROJECT_ROOT / ".env.keys")
 
 
-from shared.vimax_bridge import build_working_dir, gen_shot_frames
-from shared.vimax_adapters import ImageGeneratorAiVideoAdapter, VideoGeneratorAiVideoAdapter
+async def gen_shot_frames(*args, **kwargs):
+    # 只在实际生成帧时加载重依赖；加载失败照常抛出，不以 None 冒充能力。
+    from shared.vimax_bridge import gen_shot_frames as generate
+    return await generate(*args, **kwargs)
+
+
 from shared.error_fmt import fmt_err as _fmt_err, parse_retry_after
 from step02_video_gen.continuity import ContinuityTracker, MODE_B_START_INDEX  # noqa: F401
 # 上面这行现为**纯历史保留**：旧的 `generate_alls()` 双模调度（Mode A/B + 尾帧接续）
@@ -39,12 +43,12 @@ from _video_gen.models import (
     VideoSubmissionError,
 )
 
-# Smart polling config: exponential backoff + jitter
-POLL_BASE_INTERVAL = int(os.getenv("POLL_BASE_INTERVAL", "180"))   # Initial poll interval (seconds) - 3 minutes
-POLL_MAX_INTERVAL = int(os.getenv("POLL_MAX_INTERVAL", "180"))      # Max poll interval (seconds)
+# Smart polling config: adaptive progressive backoff + jitter (default 30s initial delay, 20s->60s interval)
+POLL_BASE_INTERVAL = int(os.getenv("POLL_BASE_INTERVAL", "20"))    # Initial poll interval (seconds)
+POLL_MAX_INTERVAL = int(os.getenv("POLL_MAX_INTERVAL", "60"))      # Max poll interval (seconds)
 POLL_EXPONENTIAL_FACTOR = float(os.getenv("POLL_EXPONENTIAL_FACTOR", "1.5"))  # Backoff multiplier
-POLL_JITTER = int(os.getenv("POLL_JITTER", "10"))                    # Jitter range +/- seconds
-INITIAL_POLL_DELAY = int(os.getenv("INITIAL_POLL_DELAY", "180"))     # Wait after submit before first poll (3 minutes)
+POLL_JITTER = int(os.getenv("POLL_JITTER", "5"))                   # Jitter range +/- seconds
+INITIAL_POLL_DELAY = int(os.getenv("INITIAL_POLL_DELAY", "30"))    # Wait after submit before first poll (30s)
 
 # 视频提交并发：在 _submit_video 入口处用 Semaphore 控制，与 _video_gen provider
 # 的 KeyScheduler（每 Key 独立冷却）配合实现 Nx 吞吐。空闲 Key 越多，并发越多。
@@ -234,7 +238,8 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
     from shared.model_caps import active_video_is_seedance
     if active_video_is_seedance():
         from step02_video_gen.prompt_builder import _build_seedance_concise_prompt
-        _prompt_for_hash = _build_seedance_concise_prompt(shot)
+        _chars = script.get("characters", []) if isinstance(script, dict) else []
+        _prompt_for_hash = _build_seedance_concise_prompt(shot, characters=_chars)
     else:
         _prompt_for_hash = _build_prompt(shot, script)
 
@@ -278,7 +283,8 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
         for kf in kfs:
             if isinstance(kf, dict):
                 key_parts.append(_normalize(kf.get("desc", "")))
-                key_parts.append(str(kf.get("time_ratio", "")))
+                _kf_time = kf.get("t_sec") if kf.get("t_sec") is not None else kf.get("time_ratio", "")
+                key_parts.append(str(_kf_time))
 
     # v6.73: actual image bytes are part of the request in image/r2v modes.
     # Text-only hashes reused stale videos when a frame was regenerated with
@@ -321,6 +327,32 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
             pass
     key = "|".join(key_parts)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+def _read_qc_retry_state(shot_dir: Path) -> dict:
+    """旧整数文件仍可读；损坏、空白及不可读状态必须显式失败。"""
+    path = Path(shot_dir) / "qc_fail_count.txt"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"count": 0, "task_id": ""}
+    if type(value) is int:
+        value = {"count": value, "task_id": ""}
+    if (not isinstance(value, dict) or set(value) != {"count", "task_id"}
+            or type(value["count"]) is not int or value["count"] < 0
+            or not isinstance(value["task_id"], str)):
+        raise ValueError(f"QC 重抽状态不合法: {path}")
+    return value
+
+
+def _record_qc_failure(shot_dir: Path, task_id: str) -> None:
+    """同一失败任务恢复幂等；先原子保存下一次 attempt，再允许清理坏片。"""
+    from shared.json_io import atomic_dump_json
+    state = _read_qc_retry_state(shot_dir)
+    if task_id and state["task_id"] == str(task_id):
+        return
+    atomic_dump_json(Path(shot_dir) / "qc_fail_count.txt",
+                     {"count": state["count"] + 1, "task_id": str(task_id)})
 
 
 def _is_recoverable(err: str) -> bool:
@@ -416,7 +448,8 @@ def build_frozen_for_shot(*, shot, script, video_adapter, frame_paths, mode,
         prompt = _build_prompt(shot, script, mode=mode)
     req = _make_request(video_adapter, prompt, frame_paths, shot,
                         characters=script.get("characters", []),
-                        continuity_ref_image=continuity_ref_image, mode=mode)
+                        continuity_ref_image=continuity_ref_image, mode=mode,
+                        retry_attempt=_read_qc_retry_state(shot_dir)["count"] if shot_dir is not None else 0)
     frozen = rp.build_frozen_request(
         req, shot=shot,
         scope=scope if scope is not None else {"chapter": _chapter_index_safe()},
@@ -1057,15 +1090,19 @@ async def _poll_video(
                                 logger.warn(f"  [Shot {shot_idx}] 候选 QC 裁决记录失败: {_exc}")
                             # 候选模式的坏片**保留**（rejected 保留供修订），只删生产哈希
                             return False
-                        # 删坏视频 + 旧哈希，触发下次（经确认的）重生成
-                        try:
-                            video_path.unlink(missing_ok=True)
-                        except Exception:
-                            pass
+                        # 先持久化 attempt；失败保留坏片与错误，不静默回到旧 seed。
                         try:
                             (shot_dir / "prompt_hash.txt").unlink(missing_ok=True)
-                        except Exception:
-                            pass
+                            _record_qc_failure(shot_dir, str(task_id))
+                        except (OSError, ValueError) as exc:
+                            logger.warn(f"  [Shot {shot_idx}] QC 重抽状态保存失败，保留视频: {exc}")
+                            _failed_videos[shot_idx].append({"attempt": -1, "task_id": task_id,
+                                                            "error": f"qc_retry_state: {exc}"})
+                            return False
+                        try:
+                            video_path.unlink(missing_ok=True)
+                        except OSError as exc:
+                            logger.warn(f"  [Shot {shot_idx}] 坏片清理失败: {exc}")
                         return False
 
                     if candidate_context is not None:
@@ -1082,6 +1119,7 @@ async def _poll_video(
                     # 候选模式：shot_dir 已在 attempt 内，绝不写生产 shot 目录。
                     if shot_hash:
                         (shot_dir / "prompt_hash.txt").write_text(shot_hash, encoding="utf-8")
+                    # 保留已通过 attempt 的 seed 序号，缓存重建与恢复仍使用同一请求身份。
                     if frozen_request is not None:
                         try:
                             write_frozen_snapshot(shot_dir, frozen_request)
@@ -1499,11 +1537,19 @@ async def _submit_video(
             candidate_context=candidate_context, logger=logger,
             make_request=_make_request)
 
+    try:
+        _qc_retry_attempt = _read_qc_retry_state(shot_dir)["count"] if shot_dir is not None else 0
+    except (OSError, ValueError) as exc:
+        logger.warn(f"  [镜头{idx}] QC 重抽状态不可读，零提交: {exc}")
+        _failed_videos[idx].append({"attempt": 0, "error": f"qc_retry_state: {exc}"})
+        return None
+
     for attempt in range(1, 1 + VIDEO_SUBMIT_RETRIES):
         try:
             req = _make_request(video_adapter, prompt, frame_paths, shot,
                                 characters=characters,
-                                continuity_ref_image=continuity_ref_image, mode=mode)
+                                continuity_ref_image=continuity_ref_image, mode=mode,
+                                retry_attempt=_qc_retry_attempt)
             frozen = None
             try:
                 from step02_video_gen import request_plan as _rp
@@ -1568,7 +1614,8 @@ async def _submit_video(
                     try:
                         req = _make_request(video_adapter, fixed_prompt, frame_paths, shot,
                                             characters=characters,
-                                            continuity_ref_image=continuity_ref_image, mode=mode)
+                                            continuity_ref_image=continuity_ref_image, mode=mode,
+                                            retry_attempt=_qc_retry_attempt)
                         task_id = await video_adapter.submit_task(req)
                         task = asyncio.create_task(
                             _poll_video(video_adapter, poll_semaphore, req, task_id, idx,
