@@ -36,7 +36,9 @@ from step01_script_gen.plan_feasibility import (PLAN_CONTRACT_VERSION,
                                                 plan_contract_problems,
                                                 source_norm_note)
 from step01_script_gen.plan_revision import DEFAULT_MAX_CALLS as _REVISION_MAX_CALLS
-from step01_script_gen.plan_revision import failure_detail, residual_class
+from step01_script_gen.plan_revision import (failure_detail, residual_class,
+                                             STOP_INVALID_TARGET,
+                                             STOP_VERIFICATION_FAILED)
 
 
 def _outline_max_tokens() -> int:
@@ -2693,7 +2695,8 @@ def _verification_record_for(verification, plan):
 def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
                               target_fact_uids=None, verification=None,
                               novel_text: str = "",
-                              allowed_repair_actions=None) -> tuple:
+                              allowed_repair_actions=None,
+                              allow_split=False, split_target_uids=None) -> tuple:
     """本轮问题**能不能被内容槽位全部表达**（§5.6 第 4 条：能表达才接入）.
 
     `returns (ok, why, ctx)`：`ok=False` 时调用方**整轮落回既有 delta**——判据只有
@@ -2727,11 +2730,32 @@ def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
             novel_text=novel_text,
             novel_digest=str(getattr(verification, "novel_digest", "") or ""))
         _admitted = not _rule
+    if allow_split:
+        from shared import fact_split as _fs
+        _targets = [str(x) for x in (split_target_uids or []) if str(x)]
+        if len(_targets) != 1:
+            return False, "拆分必须显式给出恰好一个 target_fact_uids（当前 %r）" \
+                % (_targets,), {"state": _pcr.STATE_UNKNOWN_TARGET,
+                                "view": _base_view, "found": None,
+                                "mode": _mode, "blocked": []}
+        if verification is None or verification.capacity() <= 0:
+            return False, "拆分需要仍有容量的核验控制器（R0/R2 都走它）" \
+                , {"state": _pcr.STATE_UNKNOWN_TARGET, "view": _base_view,
+                   "found": None, "mode": _mode, "blocked": []}
+        _pre = _fs.split_preflight_problems(
+            _base_view, plan, _rec, _targets[0], novel_text=novel_text)
+        if _pre:
+            return False, "拆分预检未通过（零调用）：%s" % "、".join(
+                str(x.get("code") or "") for x in _pre), \
+                {"state": _pcr.STATE_UNKNOWN_TARGET, "view": _base_view,
+                 "found": None, "mode": _mode, "blocked": list(_pre)}
     _found = _pcr.content_slots(
         _base_view, problems, allow_create=allow_create,
         target_fact_uids=target_fact_uids,
         verification_record=_rec,
-        novel_text=novel_text, record_admitted=_admitted)
+        novel_text=novel_text, record_admitted=_admitted,
+        allow_split=bool(allow_split),
+        split_target_uids=(split_target_uids if allow_split else None))
     if allowed_repair_actions is not None:
         _allow_actions = {str(_a) for _a in allowed_repair_actions}
         for _slot in _found.get("slots") or []:
@@ -3127,6 +3151,193 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
             verification_evidence_ok=_sem_ok,
             candidate=_new)
     return _new, "slots_applied: %d 条残余" % len(_final_problems), _cid, evidence
+
+
+def _split_terminal(stop_reason, *, applied=False, no_model_call=False,
+                    detail="", evidence=None) -> dict:
+    """拆分轮的统一 terminal 标记（控制器只信它来停，不跳过既有守卫）."""
+    return {"stop_reason": str(stop_reason), "applied": bool(applied),
+            "no_model_call": bool(no_model_call), "detail": str(detail),
+            "evidence": dict(evidence or {})}
+
+
+def _replan_by_split(plan, problems, novel_text, budget, rejections=None, *,
+                     model=None, system_prompt=None, evidence=None,
+                     verification=None, ctx=None, target_fact_uids=None) -> dict:
+    """**拆分独占轮**：回答 → compile_split → run_split_transaction → terminal.
+
+    只做一件事：把模型选出的子主张/证据/既有载体编译成事务输入。uid、scope、
+    authority、账本由代码生成；M 在事务内一次，R 用控制器一次且不纠正。
+    """
+    from shared.config import PROMPT_MAX_CHARS
+    from shared.content_verification import plan_digest_of
+    from step01_script_gen import plan_content_repair as _pcr
+    from step01_script_gen import split_adoption, split_judge as _sj
+    from step01_script_gen import split_transaction as _st
+    _ev = evidence if isinstance(evidence, dict) else {}
+    _ctx = ctx if isinstance(ctx, dict) else {}
+    _base_view = _ctx.get("view")
+    _found = _ctx.get("found") or {}
+    _targets = [str(x) for x in (target_fact_uids or []) if str(x)]
+    _slots = [s for s in (_found.get("slots") or []) if isinstance(s, dict)
+              and str(s.get("kind") or "") == "split_fact"]
+    _deferred = sorted(set([str(x) for x in (_ctx.get("deferred") or [])]
+                           + [str(x) for x in (_found.get("deferred") or [])]))
+    _ev.update({"route": "split_transaction",
+                "slots": [str(s.get("slot_id") or "") for s in _slots],
+                "deferred": _deferred})
+    if (len(_slots) != 1 or len(_targets) != 1
+            or not isinstance(_base_view, dict)
+            or verification is None):
+        return {"kind": "invalid_target", "detail": "拆分槽/目标/R 控制器不唯一或不完整",
+                "call_id": "", "evidence": _ev}
+    _slot = _slots[0]
+    _record = plan.get("plan_verification") if isinstance(plan, dict) else None
+    if not isinstance(_record, dict):
+        return {"kind": "invalid_target", "detail": "拆分缺少已准入 R0",
+                "call_id": "", "evidence": _ev}
+    _limits = {"mode": str(_ctx.get("mode") or ""),
+               "rule_version": _pcr.REPAIR_RULE_VERSION,
+               "max_calls": getattr(budget, "max_calls", None),
+               "calls_left": getattr(budget, "calls_left", None),
+               "deadline_at": getattr(budget, "deadline_at", None)}
+    _req = _pcr.slot_request(
+        _base_view, _slots, limits=_limits,
+        remaining_calls=getattr(budget, "calls_left", None),
+        remaining_sec=budget.remaining_sec() if budget is not None else None)
+    _prompt = chr(10).join([
+        _REVISION_NOVEL_PROMPT.format(novel_text=novel_text[:PROMPT_MAX_CHARS]),
+        "# 本轮只做事实拆分（其他问题已 deferred，不要处理）",
+        _pcr.slot_prompt(_req, novel_text=novel_text),
+        "请现在给出拆分回答；不要返回其他动作。",
+    ])
+    _timeout = budget.remaining_sec() if budget is not None else None
+    try:
+        _res = create_service().generate(TextGenerationRequest(
+            system_prompt=system_prompt or _OUTLINE_SYSTEM_PROMPT,
+            user_prompt=_prompt, temperature=0.3,
+            json_schema=_pcr.answer_json_schema(_slots), model=model,
+            deadline_monotonic=getattr(budget, "deadline_at", None),
+            timeout_sec=_timeout))
+    except Exception as exc:                                         # noqa: BLE001
+        _ev["failure_stage"] = "split_answer_call"
+        _ev["error"] = "%s: %s" % (type(exc).__name__, exc)
+        return {"kind": "call_failed",
+                "detail": "拆分回答调用异常：%s: %s" % (type(exc).__name__, exc),
+                "call_id": "", "evidence": _ev,
+                "terminal": _split_terminal("split_failed", detail="拆分回答调用异常",
+                                            evidence=_ev)}
+    _cid = str(getattr(_res, "call_id", "") or "")
+    _ev["answer_call_id"] = _cid
+    if not _res.success:
+        _ev["failure_stage"] = "split_answer_call"
+        return {"kind": "call_failed",
+                "detail": "拆分回答调用失败：%s" % str(getattr(_res, "error", "") or ""),
+                "call_id": _cid, "evidence": _ev,
+                "terminal": _split_terminal("split_failed", detail="拆分回答调用失败",
+                                            evidence=_ev)}
+    _data = _parse_outline_json(_res.text)
+    if not isinstance(_data, dict):
+        _ev["failure_stage"] = "split_answer_parsing"
+        _ev["response"] = {"kind": type(_data).__name__}
+        return {"kind": "illegal", "detail": "拆分回答不是 JSON 对象",
+                "call_id": _cid, "evidence": _ev,
+                "terminal": _split_terminal("split_failed", detail="拆分回答不是 JSON 对象",
+                                            evidence=_ev)}
+    _normalized, _norm_recs, _norm_problems = _pcr.normalize_slot_answer(_data, _slots)
+    _ans_problems = list(_norm_problems) + list(
+        _pcr.answer_problems(_normalized, _slots))
+    _ev["response"] = {"kind": type(_data).__name__,
+                       "normalization": _norm_recs,
+                       "answers": _normalized.get("answers") if isinstance(
+                           _normalized, dict) else None}
+    _ev["answer_problems"] = list(_ans_problems)
+    if _ans_problems:
+        return {"kind": "illegal", "detail": "拆分回答不合法：%s"
+                % "、".join(str(x.get("code") or "") for x in _ans_problems),
+                "call_id": _cid, "evidence": _ev,
+                "terminal": _split_terminal("split_failed",
+                                            detail="拆分回答不合法", evidence=_ev)}
+    _ops, _ledger, _scope, _compile_problems = _pcr.compile_split(
+        _base_view, plan, _slot, _normalized, record=_record, novel_text=novel_text)
+    _ev["split_ops"] = _ops
+    _ev["split_ledger"] = _ledger
+    _ev["split_scope"] = _scope
+    _ev["compile_problems"] = list(_compile_problems or [])
+    if _compile_problems:
+        return {"kind": "illegal", "detail": "拆分编译失败：%s"
+                % "、".join(str(x.get("code") or "") for x in _compile_problems),
+                "call_id": _cid, "evidence": _ev,
+                "terminal": _split_terminal("split_failed",
+                                            detail="拆分编译失败", evidence=_ev)}
+    _baseline_problems = list(plan_acceptance_problems(plan, novel_text) or [])
+    _ev["baseline_problems"] = _baseline_problems
+    _m_log: list = []
+
+    def _m_call(prompt):
+        _raw, _m_cid = _sj.call_split_m(
+            prompt, model=model,
+            deadline_monotonic=getattr(budget, "deadline_at", None),
+            timeout_sec=_timeout)
+        _m_log.append({"prompt": prompt, "raw": _raw, "call_id": _m_cid})
+        return _raw, _m_cid
+
+    def _acceptance(cand_plan, nt):
+        _cand_problems = list(plan_acceptance_problems(cand_plan, nt) or [])
+        _ev["candidate_problems"] = _cand_problems
+        _cand_view, _vp = view_from_plan(cand_plan)
+        if _cand_view is None or _vp:
+            return list(_vp) or [{"code": "split_adoption_view_invalid",
+                                  "reason": "候选投影不可读"}]
+        return split_adoption.adoption_problems(
+            base_view=_base_view, candidate_view=_cand_view,
+            base_plan=plan, candidate_plan=cand_plan, base_record=_record,
+            candidate_record=cand_plan.get("plan_verification"),
+            parent_uid=str(_slot.get("fact_uid") or ""),
+            child_uids=[str(c.get("uid")) for c in (_ops.get("children") or [])],
+            baseline_problems=_baseline_problems,
+            candidate_problems=_cand_problems)
+
+    _tx = _st.run_split_transaction(
+        _base_view, plan, _record, _ops, scope=_scope, ledger=_ledger,
+        novel_text=novel_text, m_call=_m_call, m_call_id="",
+        verify_candidate=lambda cand: verification.record_for(
+            cand, plan_digest_of(plan_from_view(cand)),
+            allow_correction=False),
+        acceptance=_acceptance)
+    _ev["m_calls"] = _m_log
+    _ev["transaction"] = {k: _tx.get(k) for k in
+                          ("ok", "stage", "state", "m_calls", "problems",
+                           "status", "judgment", "error")}
+    _ev["split_candidate"] = _tx.get("plan")
+    if _tx.get("ok"):
+        _final = list(plan_acceptance_problems(_tx.get("plan"), novel_text) or [])
+        _ev["final_residuals"] = _final
+        _ev["split_state"] = _tx.get("state")
+        return {"kind": "applied", "plan": _tx.get("plan"),
+                "detail": "split_transaction:committed",
+                "call_id": _cid, "evidence": _ev,
+                "terminal": _split_terminal(
+                    "split_applied_with_deferred", applied=True,
+                    detail="拆分已提交；未过截止且完整验收已算", evidence=_ev)}
+    _stage = str(_tx.get("stage") or "")
+    _problems = list(_tx.get("problems") or [])
+    _codes = {str(x.get("code") or "") for x in _problems}
+    # **确定失败优先于 pending**（v2.2 §4.1）：不得用"任一 pending 码在场"的布尔或——
+    # 那会让同轮的 `split_adoption_degraded` 被 `split_adoption_unconfirmed` 掩盖。
+    # 待裁决只有两个来源：M 未判 supported / M 调用失败；以及候选验收问题码**集合
+    # 相等**于 {unconfirmed}（空集不落入 pending）。
+    _pending = bool(
+        (_stage == "m" and _tx.get("status") == "pending_adjudication")
+        or (_stage == "acceptance"
+            and _codes == {"split_adoption_unconfirmed"}))
+    _stop = "split_pending_adjudication" if _pending else "split_failed"
+    return {"kind": ("pending_adjudication" if _pending else "illegal"),
+            "detail": "split_transaction:%s:%s" % (
+                _stage, "、".join(sorted(_codes)) or "无问题码"),
+            "call_id": _cid, "evidence": _ev,
+            "terminal": _split_terminal(_stop, detail="split_transaction:%s" % _stage,
+                                        evidence=_ev)}
 
 
 def _replan_by_view(plan, problems, novel_text, budget, rejections=None, *,
@@ -3645,6 +3856,37 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
     # 工作包 §4 B：控制器只开**一次**表（`budget.deadline_at`），通道里的排队/退避/
     # 每次 POST 都按它重算余量——不再各自拿一个"剩余秒数"重新解释
     _deadline_at = getattr(budget, "deadline_at", None)
+    # **拆分独占轮在来源修正/动作收敛之前短路**：只走 split 槽与事务；来源问题只
+    # deferred，绝不进入 `source_revision.revise_with_service`（那会抢先发另一种修法）。
+    _split_actions = ({str(x) for x in allowed_repair_actions}
+                      if allowed_repair_actions is not None else set())
+    if "split_fact" in _split_actions and _split_actions != {"split_fact"}:
+        return {"kind": "invalid_target", "call_id": "",
+                "detail": "split_fact 只能独占 allowed_repair_actions（当前 %s）"
+                          % sorted(_split_actions),
+                "evidence": {"route": "split_transaction",
+                             "blocked": [{"code": "split_actions_not_exclusive"}]}}
+    _split_mode = _split_actions == {"split_fact"}
+    if _split_mode:
+        from step01_script_gen import plan_content_repair as _pcr_split
+        _slot_ok, _slot_why, _slot_ctx = _content_slots_applicable(
+            plan, problems, allow_create=False, target_fact_uids=target_fact_uids,
+            verification=verification, novel_text=novel_text,
+            allowed_repair_actions=allowed_repair_actions,
+            allow_split=True, split_target_uids=target_fact_uids)
+        _ev = {"route": "split_transaction",
+               "content_slots": {"applicable": bool(_slot_ok),
+                                 "why": str(_slot_why),
+                                 "state": str((_slot_ctx or {}).get("state") or ""),
+                                 "blocked": list((_slot_ctx or {}).get("blocked") or []),
+                                 "deferred": list((_slot_ctx or {}).get("deferred") or [])}}
+        if not _slot_ok:
+            return {"kind": "invalid_target", "detail": _slot_why, "call_id": "",
+                    "evidence": _ev}
+        return _replan_by_split(
+            plan, problems, novel_text, budget, rejections, model=model,
+            system_prompt=system_prompt, evidence=_ev, verification=verification,
+            ctx=_slot_ctx, target_fact_uids=target_fact_uids)
     from step01_script_gen import source_revision as _source_revision
     if any(p.get('code') in ('fact_basis_invalid', 'source_preservation_failed') for p in (problems or [])):
         if not _source_revision.eligible_targets(plan):
@@ -3905,11 +4147,101 @@ def round_archive_writer(path=None):
     return _write
 
 
+def _early_revision_result(plan, stop, problems, detail="", *, seed=None) -> dict:
+    """拆分初始化在控制器之前收口（**零模型调用**）的统一返回形状.
+
+    `seed` 记录 seed 分账（v2.2 §1.2）：未到 seed 步骤 ⇒ `{"attempted": False}`；
+    seed 自身失败 ⇒ `{"attempted": True, "ok": False, "code": ..., "error": ...}`。
+    """
+    _probs = list(problems or [])
+    _seed = dict(seed) if isinstance(seed, dict) else {"attempted": False}
+    return {"plan": plan, "stop_reason": str(stop), "problems": _probs,
+            "residual_class": residual_class(_probs), "calls": 0, "rounds": 0,
+            "history": [{"round": 0, "kind": str(stop),
+                         "detail": str(detail)[:400], "call_id": "",
+                         "problems_before": len(_probs), "no_model_call": True,
+                         "evidence": {"initialization": "split_preflight",
+                                      "seed": _seed}}],
+            "deadline_exhausted": False, "plan_level_conclusion": False,
+            "rejections": [], "quota_exhausted": False}
+
+
+def _split_init_block(plan, novel_text, verification, target_fact_uids):
+    """拆分模式的**付费预检**：在 `attach_verification` 之前跑.
+
+    返回 `None` = 预检通过（R0 已 seed）；返回 dict = 立即收口（0 次发送）。
+    缺失/无效 R0 **不补建**，也不先调 `attach_verification`。
+    """
+    from shared import fact_split as fs
+    from shared.content_verification import plan_digest_of
+    _targets = [str(x) for x in (target_fact_uids or []) if str(x)]
+    if len(_targets) != 1:
+        return _early_revision_result(
+            plan, STOP_INVALID_TARGET,
+            [{"code": "split_target_required",
+              "reason": "拆分必须显式给出恰好一个 target_fact_uids（当前 %r）"
+                        % (_targets,)}], "split_target_required")
+    if verification is None:
+        return _early_revision_result(
+            plan, STOP_VERIFICATION_FAILED,
+            [{"code": "verification_unavailable",
+              "reason": "拆分需要核验控制器（R0 复用与 R2），当前未提供"}],
+            "verification_unavailable")
+    try:
+        _capacity = verification.capacity()
+    except AttributeError:
+        _capacity = 0
+    if _capacity <= 0:
+        return _early_revision_result(
+            plan, STOP_VERIFICATION_FAILED,
+            [{"code": "verification_capacity_exhausted",
+              "reason": "核验控制器没有可用容量（R2 无法执行）"}],
+            "verification_capacity_exhausted")
+    _view, _vp = view_from_plan(plan)
+    if _view is None or _vp:
+        return _early_revision_result(
+            plan, STOP_VERIFICATION_FAILED, list(_vp) or [
+                {"code": "split_view_unreadable", "reason": "拆分基线视图不可读"}],
+            "split_view_unreadable")
+    _record = plan.get("plan_verification") if isinstance(plan, dict) else None
+    if not isinstance(_record, dict):
+        return _early_revision_result(
+            plan, STOP_VERIFICATION_FAILED,
+            [{"code": "verify_record_missing",
+              "reason": "拆分需要当前计划已有的 R0；不付费补建"}],
+            "split_r0_missing")
+    _pre = fs.split_preflight_problems(
+        _view, plan, _record, _targets[0], novel_text=novel_text)
+    if _pre:
+        return _early_revision_result(plan, STOP_INVALID_TARGET, _pre,
+                                      "split_preflight")
+    # **seed 分账**（v2.2 §1.2）：上面的检查失败 ⇒ seed 未被调用（attempted=false）；
+    # seed 自身返回失败或抛异常 ⇒ 记"已尝试"、零模型调用退出，异常不逃逸。
+    try:
+        _seeded = bool(verification.seed(plan_digest_of(plan), _record,
+                                         plan=plan))
+        _seed_err = ""
+    except Exception as exc:                                         # noqa: BLE001
+        _seeded = False
+        _seed_err = "%s: %s" % (type(exc).__name__, exc)
+    if not _seeded:
+        return _early_revision_result(
+            plan, STOP_VERIFICATION_FAILED,
+            [{"code": "split_r0_seed_failed",
+              "reason": "R0 无法装入核验缓存（身份/原文/规则/义务支座不符）%s"
+                        % ("：" + _seed_err if _seed_err else "")}],
+            "split_r0_seed_failed",
+            seed={"attempted": True, "ok": False,
+                  "code": "split_r0_seed_failed", "error": _seed_err})
+    return None
+
+
 def run_plan_revision(plan, novel_text: str, *, model=None, base_prompt=None,
                       system_prompt=None, max_calls: int = DEFAULT_REVISION_MAX_CALLS,
                       deadline_sec=DEFAULT_REVISION_DEADLINE_SEC,
                       run_deadline_at=None, budget=None, on_round=None,
-                      verification=None, target_fact_uids=None) -> dict:
+                      verification=None, target_fact_uids=None,
+                      allowed_repair_actions=None) -> dict:
     """把计划交给**修订控制器**跑一遍（所有来源共用同一条验收链、同一份额度与截止时刻）.
 
     `run_deadline_at` 是**整次 Step 01 的绝对截止时刻**（monotonic，工作包 §4 B）：
@@ -3925,7 +4257,23 @@ def run_plan_revision(plan, novel_text: str, *, model=None, base_prompt=None,
     # **统一候选入口**（复核第 32 轮第 2 条）：首版、缓存版、每次修订候选都先规范化，
     # 再验收、再算指纹。"只需规范化即可通过"的计划因此**零调用**通过。
     _plan0 = normalize_plan_ranges(plan)[0]
-    if verification is not None and isinstance(_plan0, dict):
+    _split_actions = ({str(x) for x in allowed_repair_actions}
+                      if allowed_repair_actions is not None else set())
+    if "split_fact" in _split_actions and _split_actions != {"split_fact"}:
+        return _early_revision_result(
+            _plan0, STOP_INVALID_TARGET,
+            [{"code": "split_actions_not_exclusive",
+              "reason": "split_fact 只能独占 allowed_repair_actions（当前 %s）"
+                        % sorted(_split_actions)}], "split_actions_not_exclusive")
+    _split_mode = _split_actions == {"split_fact"}
+    if _split_mode:
+        # **预检先于 attach_verification**：缓存缺该摘要时，attach 可能付费核验；
+        # 拆分模式只复用已有 R0，seed 失败即停，不补建。
+        _early = _split_init_block(_plan0, novel_text, verification,
+                                   target_fact_uids)
+        if _early is not None:
+            return _early
+    elif verification is not None and isinstance(_plan0, dict):
         from step01_script_gen.content_verify import attach_verification
         _plan0 = attach_verification(_plan0, verification)
     if budget is None:
@@ -3951,7 +4299,8 @@ def run_plan_revision(plan, novel_text: str, *, model=None, base_prompt=None,
         revise=lambda _p, _pr, _bg, _rj: revise_plan_once(
             _p, _pr, _bg, _rj, novel_text=novel_text, model=model, base_prompt=base_prompt,
             system_prompt=system_prompt, verification=verification,
-            target_fact_uids=target_fact_uids),
+            target_fact_uids=target_fact_uids,
+            allowed_repair_actions=allowed_repair_actions),
         budget=budget, on_round=on_round,
         # **控制器的逐轮记录必须落到日志**（复核 2026-10-02 之五）：`log` 这个口子一直
         # 在，但生产入口从没接——"第 N 轮为什么被拒收/为什么停"只在返回对象里，

@@ -44,8 +44,13 @@ ACT_NARROW_VOICE = "narrow_voice"
 #: 事实绑定到现有声音（目标只来自独立的 `voice_target_uids`）。
 ACT_RECLASSIFY = "reclassify_voice"
 ACT_BIND_VOICE = "bind_voice"
+#: 拆分事实到**已有载体**（P3 首包）：模型只给子主张/证据/载体选择，uid、scope、
+#: authority、账本由代码生成；不新建载体、不改画面/声音正文。
+ACT_SPLIT = "split_fact"
 ACTIONS = (ACT_CREATE, ACT_CREATE_VOICE, ACT_BIND, ACT_REWRITE, ACT_NARROW_CARD,
-           ACT_NARROW_VOICE, ACT_RECLASSIFY, ACT_BIND_VOICE)
+           ACT_NARROW_VOICE, ACT_RECLASSIFY, ACT_BIND_VOICE, ACT_SPLIT)
+#: 拆分回答的 child 键（白名单；uid/parent_uid/authority/ledger 不允许出现）
+SPLIT_CHILD_KEYS = ("claim", "evidence", "carrier_uid")
 
 #: 问题 code → 槽位种类（**只覆盖"内容/关系选择"能表达的那几类**）：
 #: 别的 code（类型违约、事件重排、声音选材、来源不支持主张……）本适配器**不接**，
@@ -245,9 +250,101 @@ def _card_of(view, card_id) -> dict:
     return {}
 
 
+def _carrier_kind_map(view) -> dict:
+    """既有载体 uid → kind（节拍=visual，对白/旁白按集合）."""
+    from shared.presentation_contract import ref_uid
+    _out: dict = {}
+    for _b in (view or {}).get("beats") or []:
+        if isinstance(_b, dict) and str(_b.get("uid") or ""):
+            _out[str(_b.get("uid"))] = "visual"
+    for _key, _kind in (("dialogue_units", "dialogue"),
+                        ("narration_units", "narration")):
+        for _u in (view or {}).get(_key) or []:
+            if isinstance(_u, dict) and ref_uid(_u):
+                _out.setdefault(str(ref_uid(_u)), _kind)
+    return _out
+
+
+def _split_carrier_choices(view) -> list:
+    """拆分可复用的**既有载体**：不新建，不带 hook 绑定.
+
+    只列真实存在的节拍/对白/旁白；同一 uid 只出现一次（uid 有歧义时宁可不给）。
+    """
+    from shared.presentation_contract import ref_uid
+    _kinds = _carrier_kind_map(view)
+    _seen: set = set()
+    _out: list = []
+    for _b in (view or {}).get("beats") or []:
+        if not isinstance(_b, dict):
+            continue
+        _uid = str(_b.get("uid") or "")
+        if not _uid or _uid in _seen or _hook_bound(view, "visual", _uid):
+            continue
+        _seen.add(_uid)
+        _out.append({"kind": "visual", "uid": _uid,
+                     "text": str(_b.get("text") or "")})
+    for _key, _kind in (("dialogue_units", "dialogue"),
+                        ("narration_units", "narration")):
+        for _u in (view or {}).get(_key) or []:
+            if not isinstance(_u, dict):
+                continue
+            _uid = ref_uid(_u)
+            if not _uid or _uid in _seen or _hook_bound(view, _kind, _uid):
+                continue
+            _seen.add(_uid)
+            _out.append({"kind": _kind, "uid": str(_uid),
+                         "text": str(_u.get("text") or "")})
+    return _out
+
+
+def _split_authority(view, fact_uid, record) -> tuple:
+    """父事实的拆分授权（展示轴 partial/unknown + 来源轴 supported + 已准入 spans）.
+
+    与 `fact_split._authority_problems` 同一组字段；这里只做槽位前的可读性检查，
+    真正的准入仍由事务重跑（不另造一套判据）。
+    """
+    _f = _fact_of(view, fact_uid)
+    if not _f:
+        return None, [_rec("repair_split_parent_missing", "split:fact:%s" % fact_uid,
+                           "父事实 %r 不在基线视图里" % fact_uid)]
+    if not isinstance(record, dict) or str(record.get("status") or "") != "ok":
+        return None, [_rec("repair_split_authority_missing",
+                           "split:fact:%s" % fact_uid,
+                           "拆分需要本轮已准入的核验记录（status=ok）")]
+    _facts = {str(x.get("fact_uid") or ""): x for x in (record.get("facts") or [])
+              if isinstance(x, dict)}
+    _src = {str(x.get("fact_uid") or ""): x for x in (record.get("source_support") or [])
+            if isinstance(x, dict)}
+    _fv = str((_facts.get(str(fact_uid)) or {}).get("verdict") or "")
+    _sv = str((_src.get(str(fact_uid)) or {}).get("verdict") or "")
+    _spans = [str(x) for x in ((_src.get(str(fact_uid)) or {}).get("evidence_spans") or [])
+              if str(x).strip()]
+    _p: list = []
+    if _fv not in ("partial", "unknown"):
+        _p.append(_rec("repair_split_parent_display",
+                       "split:fact:%s" % fact_uid,
+                       "父事实展示轴必须是 partial/unknown（当前 %r）" % _fv))
+    if _sv != "supported":
+        _p.append(_rec("repair_split_source_unsupported",
+                       "split:fact:%s" % fact_uid,
+                       "父事实来源轴必须是 supported（当前 %r）" % _sv))
+    if not _spans:
+        _p.append(_rec("repair_split_spans_missing",
+                       "split:fact:%s" % fact_uid,
+                       "父事实没有已准入的 evidence_spans，子证据无法派生"))
+    if _p:
+        return None, _p
+    return {"claim": str(_f.get("claim") or ""),
+            "evidence": str(_f.get("evidence") or ""),
+            "spans": _spans,
+            "display": _fv,
+            "source": _sv}, []
+
+
 def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
                   verification_record=None, novel_text: str = "",
-                  record_admitted: bool = False) -> dict:
+                  record_admitted: bool = False, allow_split=False,
+                  split_target_uids=None) -> dict:
     """问题清单 → 内容槽位；**表达不了的 code 原样列出**（调用方据此整轮改走既有路径）.
 
     `returns {"slots": [...], "unexpressible": [...], "blocked": [...],
@@ -271,6 +368,9 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
     _facts_seen: list = []
     _cards_seen: list = []
     _voices_seen: list = []
+    _split_seen: list = []
+    _split_mode = bool(allow_split)
+    _split_targets = {str(x) for x in (split_target_uids or []) if str(x)}
     # 只用**已准入**（status=ok）的记录派生迁移方向；失败/未完成记录不授权。
     _rec_in = (verification_record
                if isinstance(verification_record, dict)
@@ -286,6 +386,62 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
     _events = [str(_e) for _e in (view or {}).get("frozen_events") or []]
     for _p in (problems or []):
         _code = str((_p or {}).get("code") or "")
+        if _split_mode:
+            # 拆分独占轮：只消费目标父的 `verify_fact_unsupported`；其他问题一律
+            # deferred（由拆分后的完整验收按新身份重新报告），不生成其他修法槽。
+            _uid = record_uid(_p)
+            if _code != "verify_fact_unsupported":
+                _deferred.append(_code or "无code")
+                continue
+            if not _uid:
+                if path_names_an_entity(_p):
+                    _blocked.append(_rec(
+                        "repair_slot_target_unknown", "",
+                        "拆分问题缺少稳定 UID（`uid`/`ref` 都为空）——生产者必须给出父事实身份"))
+                else:
+                    _deferred.append(_code)
+                continue
+            if not _split_targets:
+                _blocked.append(_rec(
+                    "repair_split_target_required", "",
+                    "拆分必须显式给出 target_fact_uids（不猜要拆哪一条事实）"))
+                continue
+            if _uid not in _split_targets:
+                _deferred.append(_code)
+                continue
+            if _uid in _split_seen:
+                continue
+            _authority, _ap = _split_authority(view, _uid, _rec_in)
+            if _ap:
+                _blocked.extend(_ap)
+                continue
+            _cars = _split_carrier_choices(view)
+            if not _cars:
+                _blocked.append(_rec(
+                    "repair_split_no_carrier", "split:fact:%s" % _uid,
+                    "基线视图里没有可复用的既有载体——首包不允许新建载体"))
+                continue
+            _split_seen.append(_uid)
+            _covered.append(_code)
+            _slots.append({
+                "slot_id": "split:fact:%s" % _uid, "kind": "split_fact",
+                "fact_uid": _uid, "card_id": "",
+                "problem_codes": [_code],
+                "claim": _authority["claim"], "evidence": _authority["evidence"],
+                "parent_evidence_spans": list(_authority["spans"]),
+                "parent_display": _authority["display"],
+                "parent_source": _authority["source"],
+                "current_carriers": _carriers_of(view, _uid),
+                "allowed_carrier_uids": _cars,
+                "allowed_actions": [ACT_SPLIT],
+                "target_uids": [], "voice_target_uids": [],
+                "insert_positions": [], "current_text": "",
+                "min_children": 2, "max_children": 4,
+                "facts": [_fact_brief(view, _uid)],
+                "event_uids": list(_events),
+                "sources": [str(_authority["evidence"] or "")],
+            })
+            continue
         _kind = SLOT_CODE_KIND.get(_code)
         if _kind is None:
             _bad.append(_code or "无code")
@@ -1274,6 +1430,10 @@ _ACT_RULE = {
                     "已准入核验记录派生，**不要**填正文、目标或任何哈希",
     ACT_BIND_VOICE: "`target_uid` = 现有声音单位（`voice_target_uids` 里选）；`text` 只能给"
                     "空串；只替换该事实的单载体绑定，不改声音正文",
+    ACT_SPLIT: ("`children` = 2–4 个 `{claim, evidence, carrier_uid}`；claim/evidence 非空，"
+                "evidence 必须是父已准入 span 的逐字子串；carrier_uid 只能从"
+                " `allowed_carrier_uids` 里选（既有载体，不新建）。不要给 uid/parent_uid/"
+                "authority/ledger——这些由代码生成；子载体可以共用，不要求互异。"),
 }
 
 
@@ -1283,6 +1443,10 @@ def _render_slot_rule(actions=None, slots=None) -> str:
     _lines = []
     for _act in ACTIONS:
         if _act not in _allowed:
+            continue
+        if _act == ACT_SPLIT:
+            _lines.append("- `%s`：必填 `children`（2–4 个）；%s"
+                          % (_act, _ACT_RULE.get(_act, "")))
             continue
         _spec = ACTION_FIELDS.get(_act) or {}
         _req = "、".join("`%s`" % _f for _f in (_spec.get("required") or ())) or "（无）"
@@ -1302,6 +1466,8 @@ def _render_slot_rule(actions=None, slots=None) -> str:
                           "也不要把视觉改写指导套到此槽")
         if any(_a in (ACT_CREATE, ACT_BIND, ACT_REWRITE) for _a in _acts):
             _parts.append("视觉动作按所选画面正文承载完整事实")
+        if ACT_SPLIT in _acts:
+            _parts.append("拆分只选既有载体，不新建；子载体可共用")
         _per.append("- `%s` 只允许 `%s`%s"
                     % (_s.get("slot_id"), "、".join(_acts),
                        ("：" + "；".join(_parts)) if _parts else ""))
@@ -1320,6 +1486,15 @@ def _render_slot_rule(actions=None, slots=None) -> str:
             '"event_index":0,"beat_text":"<可演画面正文>"}\n'
             "`placement` 是字符串（existing/new）；落点字段与它**同级**，"
             "不要嵌套在 `placement` 里。")
+    if ACT_SPLIT in _allowed:
+        _out += (
+            "\n\n# split_fact 的形状（只示例键，不是内容答案）\n"
+            '{"slot_id":"<槽位>","action":"split_fact","children":['
+            '{"claim":"<子主张>","evidence":"<父 span 的逐字子串>",'
+            '"carrier_uid":"<allowed_carrier_uids 里的既有载体>"},'
+            '{"claim":"...","evidence":"...","carrier_uid":"..."}]}\n'
+            "children 2–4 个；不要给 uid、parent_uid、authority、ledger；"
+            "子载体可以共用。")
     return _out + "\n\n" + _SLOT_RULE_TAIL
 
 
@@ -1412,6 +1587,67 @@ def _is_int(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _split_answer_problems(item, slot, at, sid, problems) -> None:
+    """`split_fact` 回答的严格准入（children 2–4；只允许三键）.
+
+    子载体**允许重复**（D 只要求每个子事实有一个载体，不要求互异）；是否真的表达
+    各子主张由 R 与既有内容检查判，这里不新增“必须不同”规则。
+    """
+    _allowed_keys = {"slot_id", "action", "children"}
+    for _k in sorted(set(item) - _allowed_keys):
+        problems.append(_rec("repair_answer_unknown_key", at,
+                             "%s 有未知键 `%s`（split_fact 只允许 %s）"
+                             % (at, _k, sorted(_allowed_keys)), _k))
+    _kids = item.get("children")
+    if not isinstance(_kids, list):
+        problems.append(_rec("repair_split_children_not_list", sid,
+                             "split_fact 的 `children` 必须是数组（当前是 %s）"
+                             % type(_kids).__name__, _kids))
+        return
+    _min = int((slot or {}).get("min_children") or 2)
+    _max = int((slot or {}).get("max_children") or 4)
+    if not _min <= len(_kids) <= _max:
+        problems.append(_rec("repair_split_children_out_of_range", sid,
+                             "split_fact 只接受 %d–%d 个子事实（当前 %d 条）"
+                             % (_min, _max, len(_kids))))
+    _allowed_cars = {str((_c or {}).get("uid") or "")
+                     for _c in ((slot or {}).get("allowed_carrier_uids") or [])
+                     if isinstance(_c, dict)}
+    _spans = [str(_s) for _s in ((slot or {}).get("parent_evidence_spans") or [])
+              if str(_s)]
+    for _i, _kid in enumerate(_kids):
+        _atk = "%s.children[%d]" % (at, _i)
+        if not isinstance(_kid, dict):
+            problems.append(_rec("repair_split_child_invalid", sid,
+                                 "%s 必须是对象（当前是 %s）"
+                                 % (_atk, type(_kid).__name__), _kid))
+            continue
+        for _k in sorted(set(_kid) - set(SPLIT_CHILD_KEYS)):
+            problems.append(_rec("repair_split_child_unknown_field", sid,
+                                 "%s 有未知键 `%s`（只允许 claim/evidence/carrier_uid）"
+                                 % (_atk, _k), _k))
+        _claim = _kid.get("claim")
+        _ev = _kid.get("evidence")
+        _car = _kid.get("carrier_uid")
+        if not _is_str(_claim) or not _claim.strip():
+            problems.append(_rec("repair_split_child_invalid", sid,
+                                 "%s 的 `claim` 必须是非空字符串" % _atk, _claim))
+        if not _is_str(_ev) or not _ev.strip():
+            problems.append(_rec("repair_split_child_invalid", sid,
+                                 "%s 的 `evidence` 必须是非空字符串" % _atk, _ev))
+        elif _spans and not any(_ev in _s for _s in _spans):
+            problems.append(_rec("repair_split_evidence_not_derived", sid,
+                                 "%s 的 evidence 不是父已准入 span 的逐字子串：%r"
+                                 % (_atk, _ev), _ev))
+        if not _is_str(_car) or not _car.strip():
+            problems.append(_rec("repair_split_child_invalid", sid,
+                                 "%s 的 `carrier_uid` 必须是非空字符串" % _atk, _car))
+        elif _car not in _allowed_cars:
+            problems.append(_rec("repair_split_carrier_unknown", sid,
+                                 "%s 的载体 %r 不在允许的既有载体里（可选 %s）"
+                                 % (_atk, _car, sorted(_allowed_cars)), _car))
+
+
 def answer_problems(answer, slots, *, where: str = "槽位回答") -> list:
     """槽位回答的**严格准入**：版本 / 白名单键 / 类型 / 槽位一一对应 / 动作与目标越界.
 
@@ -1444,10 +1680,13 @@ def answer_problems(answer, slots, *, where: str = "槽位回答") -> list:
             _p.append(_rec("repair_answer_item_not_object", _at,
                            "%s 必须是对象（当前是 %s）" % (_at, type(_it).__name__), _it))
             continue
-        for _k in sorted(set(_it) - set(ANSWER_KEYS)):
+        _act0 = str(_it.get("action") or "")
+        _allowed_keys = set(ANSWER_KEYS) | (
+            {"children"} if _act0 == ACT_SPLIT else set())
+        for _k in sorted(set(_it) - _allowed_keys):
             _p.append(_rec("repair_answer_unknown_key", _at,
-                           "%s 有未知键 `%s`（合法键：%s）" % (_at, _k, list(ANSWER_KEYS)),
-                           _k))
+                           "%s 有未知键 `%s`（合法键：%s）"
+                           % (_at, _k, sorted(_allowed_keys)), _k))
         _sid = _it.get("slot_id")
         if not _is_str(_sid) or not _sid.strip():
             _p.append(_rec("repair_answer_field_type", _at,
@@ -1475,6 +1714,11 @@ def answer_problems(answer, slots, *, where: str = "槽位回答") -> list:
             _p.append(_rec("repair_answer_action_not_allowed", _sid,
                            "槽位 %s 的动作 %r 不在允许集合 %s 里"
                            % (_sid, _act, list(_slot.get("allowed_actions") or [])), _act))
+            continue
+        if _act == ACT_SPLIT:
+            # 拆分回答是**嵌套 children**，与扁平动作字段不同源；单独校验后跳过
+            # 下面的扁平字段循环（避免把 `children` 当未知键/缺 text 反复报）。
+            _split_answer_problems(_it, _slot, _at, _sid, _p)
             continue
         # ---- ① **先核所有已提供字段**（类型 + 适用性），再核必填与取值 ----
         # 复核 2026-10-08 P2：旧写法只在**对应动作分支**里核 `target_uid` /
@@ -2094,14 +2338,170 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
     return _delta, []
 
 
+def compile_split(view, base_plan, slot, answer, *, record, novel_text="") -> tuple:
+    """把拆分槽回答编译成事务输入：`(split_ops, ledger, scope, problems)`.
+
+    - 子 uid、载体 kind、scope、authority、账本全由代码生成；
+    - `base_digest` 必须按**投影后的计划**算（`plan_digest_of(plan_from_view(view))`），
+      并与 `base_plan`、R0 `plan_digest` 三方一致；
+    - 子载体可以共用（D 只要求每个子事实有一个载体）；
+    - 父证据 span 只从 R0 的 `source_support` 取，不接受调用方另给一份。
+    """
+    from shared import content_verification as _cv
+    from shared import fact_split as _fs
+    from shared import presentation_contract as _pc
+    from step01_script_gen import source_revision as _sr
+
+    _p: list = []
+    _slot = slot if isinstance(slot, dict) else {}
+    _sid = str(_slot.get("slot_id") or "")
+    _parent = str(_slot.get("fact_uid") or "")
+    if str(_slot.get("kind") or "") != "split_fact":
+        return None, None, None, [_rec("repair_split_slot_kind", _sid,
+                                       "compile_split 只接受 kind=split_fact 的槽")]
+    if not isinstance(answer, dict):
+        return None, None, None, [_rec("repair_answer_not_object", _sid,
+                                       "拆分回答必须是对象")]
+    _items = [x for x in (answer.get("answers") or [])
+              if isinstance(x, dict) and str(x.get("slot_id") or "") == _sid]
+    if len(_items) != 1:
+        return None, None, None, [_rec("repair_answer_slot_unanswered", _sid,
+                                       "拆分槽必须恰好回答一次（当前 %d 次）" % len(_items))]
+    _item = _items[0]
+    if str(_item.get("action") or "") != ACT_SPLIT:
+        return None, None, None, [_rec("repair_answer_action_not_allowed", _sid,
+                                       "拆分槽只接受 action=split_fact")]
+    try:
+        _base_view_plan = _pc.plan_from_view(view)
+    except _pc.PresentationContractError as _exc:
+        return None, None, None, list(_exc.problems)
+    _base_digest = _cv.plan_digest_of(_base_view_plan)
+    if isinstance(base_plan, dict) and _cv.plan_digest_of(base_plan) != _base_digest:
+        return None, None, None, [_rec(
+            "split_base_digest_mismatch", _sid,
+            "base_plan 摘要与当前视图投影后的计划摘要不一致——拒绝跨基线拆分")]
+    if not isinstance(record, dict) or str(record.get("status") or "") != "ok":
+        return None, None, None, [_rec("repair_split_authority_missing", _sid,
+                                       "拆分需要 status=ok 的已准入 R0 记录")]
+    if str(record.get("plan_digest") or "") != _base_digest:
+        return None, None, None, [_rec(
+            "split_base_digest_mismatch", _sid,
+            "R0 plan_digest 与当前计划摘要不一致（不能拿旧记录授权新基线）")]
+    _novel_digest = str(record.get("novel_digest") or "")
+    if len(_novel_digest) != 64 or any(ch not in "0123456789abcdef"
+                                       for ch in _novel_digest):
+        return None, None, None, [_rec("repair_split_authority_missing", _sid,
+                                       "R0 缺合法 novel_digest")]
+    _facts = {str(x.get("fact_uid") or ""): x for x in (record.get("facts") or [])
+              if isinstance(x, dict)}
+    _src = {str(x.get("fact_uid") or ""): x
+            for x in (record.get("source_support") or []) if isinstance(x, dict)}
+    _fv = str((_facts.get(_parent) or {}).get("verdict") or "")
+    _sv = str((_src.get(_parent) or {}).get("verdict") or "")
+    _spans = [str(x) for x in ((_src.get(_parent) or {}).get("evidence_spans") or [])
+              if str(x).strip()]
+    if _fv not in ("partial", "unknown"):
+        _p.append(_rec("repair_split_parent_display", _sid,
+                       "父事实展示轴必须是 partial/unknown（当前 %r）" % _fv))
+    if _sv != "supported":
+        _p.append(_rec("repair_split_source_unsupported", _sid,
+                       "父事实来源轴必须是 supported（当前 %r）" % _sv))
+    if not _spans:
+        _p.append(_rec("repair_split_spans_missing", _sid,
+                       "父事实没有已准入 evidence_spans"))
+    _parent_fact = _fact_of(view, _parent)
+    if not _parent_fact:
+        _p.append(_rec("repair_split_parent_missing", _sid,
+                       "父事实 %r 不在视图里" % _parent))
+    if _p:
+        return None, None, None, _p
+    _kids = _item.get("children")
+    if not isinstance(_kids, list):
+        return None, None, None, [_rec("repair_split_children_not_list", _sid,
+                                       "children 必须是数组")]
+    _min = int(_slot.get("min_children") or 2)
+    _max = int(_slot.get("max_children") or 4)
+    if not _min <= len(_kids) <= _max:
+        return None, None, None, [_rec(
+            "repair_split_children_out_of_range", _sid,
+            "拆分只接受 %d–%d 个子事实（当前 %d）" % (_min, _max, len(_kids)))]
+    _kind_map = _carrier_kind_map(view)
+    _allowed_cars = {str((_c or {}).get("uid") or "")
+                     for _c in (_slot.get("allowed_carrier_uids") or [])
+                     if isinstance(_c, dict)}
+    _children: list = []
+    for _i, _kid in enumerate(_kids, 1):
+        if not isinstance(_kid, dict):
+            _p.append(_rec("repair_split_child_invalid", _sid,
+                           "children[%d] 必须是对象" % (_i - 1)))
+            continue
+        _extra = sorted(set(_kid) - set(SPLIT_CHILD_KEYS))
+        if _extra:
+            _p.append(_rec("repair_split_child_unknown_field", _sid,
+                           "children[%d] 有未知键 %s" % (_i - 1, _extra), _extra))
+            continue
+        _claim = str(_kid.get("claim") or "")
+        _ev = str(_kid.get("evidence") or "")
+        _car = str(_kid.get("carrier_uid") or "")
+        if not _claim.strip() or not _ev.strip():
+            _p.append(_rec("repair_split_child_invalid", _sid,
+                           "children[%d] 的 claim/evidence 不能为空" % (_i - 1)))
+            continue
+        if not any(_ev in _s for _s in _spans):
+            _p.append(_rec("repair_split_evidence_not_derived", _sid,
+                           "children[%d] 的 evidence 不是父已准入 span 的逐字子串"
+                           % (_i - 1), _ev))
+            continue
+        if _car not in _kind_map:
+            _p.append(_rec("repair_split_carrier_unknown", _sid,
+                           "children[%d] 的载体 %r 不在当前视图" % (_i - 1, _car), _car))
+            continue
+        if _allowed_cars and _car not in _allowed_cars:
+            _p.append(_rec("repair_split_carrier_unknown", _sid,
+                           "children[%d] 的载体 %r 不在槽位允许集合" % (_i - 1, _car), _car))
+            continue
+        _children.append({"uid": "%s.%d" % (_parent, _i), "claim": _claim,
+                          "evidence": _ev,
+                          "carrier": {"kind": _kind_map[_car], "uid": _car}})
+    if _p:
+        return None, None, None, _p
+    _baseline_claim = None
+    _ctx = _sr.context(view)
+    if isinstance(_ctx, dict):
+        for _row in (_ctx.get("baseline_facts") or []):
+            if isinstance(_row, dict) and str(_row.get("uid") or "") == _parent:
+                _baseline_claim = str(_row.get("claim") or "")
+                break
+    _authority = {
+        "rule_version": str(record.get("rule_version") or _cv.DEFAULT_RULE_VERSION),
+        "plan_digest": _base_digest, "fact_uid": _parent,
+        "code": "verify_fact_unsupported", "verdict": _fv}
+    _entry = {
+        "parent_uid": _parent, "parent_claim": str(_parent_fact.get("claim") or ""),
+        "parent_evidence": str(_parent_fact.get("evidence") or ""),
+        "parent_evidence_spans": list(_spans),
+        "baseline_claim": _baseline_claim, "authority": _authority,
+        "children": _children, "narrowed_voices": []}
+    _ledger = {
+        "version": _fs.VERSION,
+        "novel_digest": str(record.get("novel_digest") or ""),
+        "novel_text": str(novel_text or ""),
+        "base_digest": _base_digest, "splits": [_entry]}
+    _scope = {"allowed_split_fact_uids": [_parent],
+              "allowed_split_carrier_uids": [c["carrier"]["uid"]
+                                             for c in _children]}
+    return ({"parent_uid": _parent, "children": copy.deepcopy(_children)},
+            _ledger, _scope, [])
+
+
 __all__ = ["ACTIONS", "ACT_BIND", "ACT_BIND_VOICE", "ACT_CREATE",
            "ACT_CREATE_VOICE", "ACT_NARROW_CARD",
-           "ACT_NARROW_VOICE", "ACT_RECLASSIFY", "ACT_REWRITE",
+           "ACT_NARROW_VOICE", "ACT_RECLASSIFY", "ACT_REWRITE", "ACT_SPLIT",
            "ANSWER_KEYS", "NORMALIZATION_VERSION", "REPAIR_RULE_VERSION",
-           "SLOT_ANSWER_SCHEMA",
+           "SLOT_ANSWER_SCHEMA", "SPLIT_CHILD_KEYS",
            "SLOT_CODE_KIND", "SLOT_REQUEST_SCHEMA", "answer_problems", "compile_delta",
-           "answer_json_schema", "content_slots", "normalize_slot_answer",
-           "record_uid", "slot_prompt",
+           "compile_split", "answer_json_schema", "content_slots",
+           "normalize_slot_answer", "record_uid", "slot_prompt",
            "slot_request"]
 
 
@@ -2152,6 +2552,22 @@ def answer_json_schema(slots) -> dict:
         _ids = [str(_s.get("slot_id")) for _s in (slots or [])
                 if _act in (_s.get("allowed_actions") or [])]
         if not _ids:
+            continue
+        if _act == ACT_SPLIT:
+            _child = {"type": "object",
+                      "properties": {k: {"type": "string"}
+                                     for k in SPLIT_CHILD_KEYS},
+                      "required": list(SPLIT_CHILD_KEYS),
+                      "additionalProperties": False}
+            _branches.append({
+                "type": "object",
+                "properties": {
+                    "slot_id": {"type": "string", "enum": _ids},
+                    "action": {"type": "string", "enum": [_act]},
+                    "children": {"type": "array", "items": _child,
+                                 "minItems": 2, "maxItems": 4}},
+                "required": ["slot_id", "action", "children"],
+                "additionalProperties": False})
             continue
         _spec = ACTION_FIELDS.get(_act) or {}
         _props = {"slot_id": {"type": "string", "enum": _ids},

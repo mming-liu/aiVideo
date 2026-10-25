@@ -1,0 +1,111 @@
+{
+ "schema": "p3_split.sample.v2",
+ "note": "匿名样本 B（P3 entry）：2 子，父载体旁白，不同原文/载体分布。",
+ "novel": "乙把钥匙放在桌上。乙说：“我明天再来。”说完他关灯离开。甲一直没出声。门随后合上。",
+ "plan": {
+  "fact_uids": [
+   "f01",
+   "f02",
+   "f03",
+   "f04"
+  ],
+  "climax": "门合上",
+  "causal_chain": [
+   "乙放下钥匙→乙说明天再来→乙关灯离开→门合上"
+  ],
+  "content_note": "匿名最小样本 B",
+  "characters": [
+   "乙",
+   "甲"
+  ],
+  "emotional_arc": "平→冷",
+  "key_scenes": [
+   "屋内"
+  ],
+  "character_motives": [
+   "乙：交代再来",
+   "甲：保持沉默"
+  ],
+  "end_hook": "门合上",
+  "omittable": [],
+  "time_budget": "对白约3秒，画面约9秒",
+  "plan_coherence_version": "plan_coherence.v3",
+  "main_events": [
+   "乙放下钥匙",
+   "乙说明天再来",
+   "乙关灯离开",
+   "甲没出声",
+   "门合上"
+  ],
+  "required_facts": [
+   "乙把钥匙放在桌上｜原文证据：“乙把钥匙放在桌上。”｜承载：B1/画面",
+   "乙说明天再来、关灯并离开｜原文证据：“说完他关灯离开。”｜承载：B3/旁白1",
+   "甲一直没出声｜原文证据：“甲一直没出声。”｜承载：B4/画面",
+   "门随后合上｜原文证据：“门随后合上。”｜承载：B5/画面"
+  ],
+  "shot_beats": [
+   "节拍：乙把钥匙放在桌上。｜本镜信息目的：交代钥匙｜原文依据：乙把钥匙放在桌上。｜载体：画面",
+   "节拍：乙开口说明天再来。｜本镜信息目的：交代承诺｜原文依据：我明天再来。｜载体：台词1",
+   "节拍：他关灯离开。｜本镜信息目的：交代离开｜原文依据：说完他关灯离开。｜载体：旁白1",
+   "节拍：甲一直没出声。｜本镜信息目的：交代沉默｜原文依据：甲一直没出声。｜载体：画面",
+   "节拍：门随后合上。｜本镜信息目的：交代收束｜原文依据：门随后合上。｜载体：画面"
+  ],
+  "dialogue_lines": [
+   "我明天再来。"
+  ],
+  "narration_lines": [
+   {
+    "text": "说完他关灯离开。",
+    "source": "说完他关灯离开。",
+    "fact_refs": [
+     2
+    ]
+   }
+  ],
+  "hook_spoken": [],
+  "hook_carrier": "",
+  "plan_contract_version": 5,
+  "planning_acceptance_version": "legacy_semantic.v3"
+ },
+ "split": {
+  "parent_uid": "f02",
+  "children": [
+   {
+    "uid": "f02.1",
+    "claim": "乙说明天再来",
+    "evidence": "我明天再来。",
+    "carrier": {
+     "kind": "dialogue",
+     "uid": "d01"
+    }
+   },
+   {
+    "uid": "f02.2",
+    "claim": "乙关灯离开",
+    "evidence": "说完他关灯离开。",
+    "carrier": {
+     "kind": "visual",
+     "uid": "b03"
+    }
+   }
+  ],
+  "scope": {
+   "allowed_split_fact_uids": [
+    "f02"
+   ],
+   "allowed_split_carrier_uids": [
+    "d01",
+    "b03"
+   ]
+  },
+  "parent_evidence_spans": [
+   "我明天再来。",
+   "说完他关灯离开。"
+  ],
+  "expected_baseline_code": "verify_fact_unsupported",
+  "expected_child_uids": [
+   "f02.1",
+   "f02.2"
+  ]
+ }
+}

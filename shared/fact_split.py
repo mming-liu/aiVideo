@@ -697,6 +697,77 @@ def authority_problems(base_view, base_plan, ledger, entries, record, *,
         novel_text=novel_text)
 
 
+def split_preflight_problems(view, plan, record, parent_uid, *,
+                             novel_text="") -> list:
+    """槽位请求**之前**的拆分预检（零模型调用）.
+
+    复用 `_authority_problems`（不是第二套授权规则）与 apply 的 mode/稳定 uid/父/账本
+    判据；子级 D 依赖 kids，只能在回答后判，这里只判父级前置。
+    """
+    from .content_verification import plan_digest_of
+    _parent = str(parent_uid or "")
+    _p: list = []
+    if str((view or {}).get("mode") or "") != pc.MODE_LEGACY:
+        _p.append(_rec("split_mode_unsupported", "view", "",
+                       "拆分事务只覆盖 legacy_audio（现在 %r）"
+                       % (view or {}).get("mode")))
+    _table = ((view or {}).get("plan_basis") or {}).get("fact_uids")
+    _fact_rows = _facts(view)
+    if (not isinstance(_table, list) or len(_table) != len(_fact_rows)
+            or len(set(map(str, _table))) != len(_table)):
+        _p.append(_rec("split_requires_stable_fact_uids", "view", "",
+                       "基线缺少与事实表等长同序的 `fact_uids`"))
+    _parent_fact = next((f for f in _fact_rows if str(f.get("uid")) == _parent),
+                        None)
+    if not isinstance(_parent_fact, dict):
+        _p.append(_rec("split_parent_missing", "split", _parent,
+                       "父事实 %r 不在当前事实表里" % _parent))
+        return _p
+    for _e in ((context(view) or {}).get("splits") or []):
+        if isinstance(_e, dict) and str(_e.get("parent_uid")) == _parent:
+            _p.append(_rec("split_already_recorded", "split", _parent,
+                           "父事实 %r 已有账本条目——不重复拆分" % _parent))
+            break
+    if not isinstance(plan, dict):
+        _p.append(_rec("split_authority_record_missing", "view", "",
+                       "拆分必须带当前基线计划"))
+        return _p
+    try:
+        _base_digest = plan_digest_of(plan)
+    except Exception:                                                # noqa: BLE001
+        _base_digest = ""
+    _src = {str(r.get("fact_uid") or ""): r
+            for r in ((record or {}).get("source_support") or [])
+            if isinstance(r, dict)} if isinstance(record, dict) else {}
+    _facts_rec = {str(r.get("fact_uid") or ""): r
+                  for r in ((record or {}).get("facts") or [])
+                  if isinstance(r, dict)} if isinstance(record, dict) else {}
+    _spans = [str(x) for x in ((_src.get(_parent) or {}).get("evidence_spans") or [])
+              if str(x)]
+    _fv = str((_facts_rec.get(_parent) or {}).get("verdict") or "partial")
+    _entry = {
+        "parent_uid": _parent,
+        "parent_claim": str(_parent_fact.get("claim") or ""),
+        "parent_evidence": str(_parent_fact.get("evidence") or ""),
+        "parent_evidence_spans": _spans,
+        "baseline_claim": None,
+        "authority": {
+            "rule_version": str((record or {}).get("rule_version") or "")
+            if isinstance(record, dict) else "",
+            "plan_digest": _base_digest, "fact_uid": _parent,
+            "code": "verify_fact_unsupported", "verdict": _fv},
+        "children": []}
+    _ledger = {"version": VERSION,
+               "novel_digest": str((record or {}).get("novel_digest") or "")
+               if isinstance(record, dict) else "",
+               "base_digest": _base_digest, "splits": [_entry]}
+    _p.extend(_authority_problems(
+        _base_digest, _ledger, [_entry], record,
+        authority_digest=_base_digest, view=view, plan=plan,
+        novel_text=str(novel_text or "")))
+    return _p
+
+
 def apply_split_view(base_view, split_ops, *, scope=None, ledger=None,
                      record=None, accept=None, authority_digest=None,
                      novel_text="", authorization_view=None,

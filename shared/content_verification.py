@@ -2015,8 +2015,13 @@ class VerificationController:
         return self.record_for(view, digest, verify=lambda current, identity:
                               self._repair(current, identity, failed, previous_response))
 
-    def record_for(self, view, plan_digest=None, *, verify=None):
-        """取该摘要的核验记录（有就复用；没有就核验一次；额度/截止不够就记失败）."""
+    def record_for(self, view, plan_digest=None, *, verify=None,
+                   allow_correction: bool = True):
+        """取该摘要的核验记录（有就复用；没有就核验一次；额度/截止不够就记失败）.
+
+        `allow_correction=False` 用于**拆分 R**：协议违约只落一条 failed record，
+        不再向核验员重问（一次拆分事务最多一次 R 调用）。默认行为不变。
+        """
         _dig = plan_digest or plan_digest_of(view)
         if _dig in self.records:
             return self.records[_dig]
@@ -2057,8 +2062,11 @@ class VerificationController:
                 _r = self._failed(_dig, "核验响应不满足记录契约：%s" % exc,
                                   status=FAIL_BAD_RESPONSE)
                 _r["problems"] = list(exc.problems)
-                _corrected = self._correct_record(view, _dig, _r,
-                                                  previous_response=str(getattr(getattr(exc, "result", None), "text", "") or ""))
+                _corrected = (self._correct_record(
+                    view, _dig, _r,
+                    previous_response=str(getattr(getattr(exc, "result", None),
+                                                 "text", "") or ""))
+                    if allow_correction else None)
                 if _corrected is not None:
                     return _corrected
                 self.records[_dig] = _r
@@ -2077,7 +2085,8 @@ class VerificationController:
                 self._emit(_r)
                 return _r
             _r = self._failed(_dig, "%s: %s" % (type(exc).__name__, exc), status=FAIL_CALL)
-            if bool(getattr(getattr(exc, "result", None), "truncated", False)):
+            if allow_correction and bool(getattr(getattr(exc, "result", None),
+                                                 "truncated", False)):
                 _corrected = self._correct_record(view, _dig, _r,
                                                   previous_response=str(getattr(exc.result, "text", "") or ""))
                 if _corrected is not None:
@@ -2097,7 +2106,8 @@ class VerificationController:
                                           for x in _bad_shape[:4]),
                               status=FAIL_BAD_RESPONSE)
             _r["problems"] = _bad_shape
-            _corrected = self._correct_record(view, _dig, _r)
+            _corrected = (self._correct_record(view, _dig, _r)
+                          if allow_correction else None)
             if _corrected is not None:
                 return _corrected
             self.records[_dig] = _r
@@ -2126,8 +2136,10 @@ class VerificationController:
             if _protocol_bad:
                 _r = self._failed(_dig, "核验记录无法复核", status=FAIL_BAD_RESPONSE)
                 _r["problems"] = list(_protocol_bad)
-                _corrected = self._correct_record(view, _dig, _r,
-                                                  previous_response=json.dumps(_rec, ensure_ascii=False))
+                _corrected = (self._correct_record(
+                    view, _dig, _r,
+                    previous_response=json.dumps(_rec, ensure_ascii=False))
+                    if allow_correction else None)
                 if _corrected is not None:
                     return _corrected
                 self.records[_dig] = _r

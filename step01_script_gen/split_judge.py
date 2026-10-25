@@ -24,6 +24,27 @@ M_SCHEMA = {
     },
 }
 
+M_SYSTEM_PROMPT = ("你是严格的事实拆分完整性判定器。只判断子主张合起来是否完整保留"
+                   "父主张的主体、受事、否定、条件、时间、因果与限定语。"
+                   "只输出约定的 JSON，不要解释。")
+
+
+def call_split_m(prompt, *, model=None, deadline_monotonic=None,
+                 timeout_sec=None) -> tuple:
+    """生产 M 调用：一次 `generate`，返回 `(raw_text, provider_call_id)`；不重试."""
+    from _text_gen.config import config
+    from _text_gen.models import TextGenerationRequest
+    from step01_script_gen.outline import create_service
+    _req = TextGenerationRequest(
+        system_prompt=M_SYSTEM_PROMPT, user_prompt=prompt,
+        max_tokens=config.SPLIT_M_MAX_TOKENS, temperature=0.0,
+        json_schema=M_SCHEMA, model=model,
+        deadline_monotonic=deadline_monotonic, timeout_sec=timeout_sec)
+    _res = create_service().generate(_req)
+    if not _res.success:
+        raise RuntimeError("M 调用失败：%s" % str(getattr(_res, "error", "") or ""))
+    return str(getattr(_res, "text", "") or ""), str(getattr(_res, "call_id", "") or "")
+
 
 def build_m_prompt(parent_claim, children, source_context=None) -> str:
     _kids = [{"uid": str(c.get("uid") or ""), "claim": str(c.get("claim") or "")}
@@ -84,9 +105,16 @@ def _digest(value) -> str:
 
 
 def judge_split(parent_claim, children, *, call, call_id="", model=None) -> dict:
-    """调用注入的 `call(prompt)`，解析并由代码盖章；不在此处写账本."""
+    """调用注入的 `call(prompt)`，解析并由代码盖章；不在此处写账本.
+
+    `call` 可以返回原始响应字符串，也可以返回 `(raw, provider_call_id)`；后者且
+    `call_id` 为空时，用 provider id 作为账本盖章的 `call_id`。
+    """
     _prompt = build_m_prompt(parent_claim, children)
     _raw = call(_prompt)
+    _provider_cid = ""
+    if isinstance(_raw, tuple) and len(_raw) == 2:
+        _raw, _provider_cid = _raw
     _data, _problems = parse_m_response(_raw)
     if _data is None:
         return {"ok": False, "problems": _problems, "judgment": None}
@@ -96,7 +124,7 @@ def judge_split(parent_claim, children, *, call, call_id="", model=None) -> dict
         "missing": _data["missing"],
         "reason": _data["reason"],
         "inputs_digest": fs.inputs_digest(parent_claim, children),
-        "call_id": str(call_id or ""),
+        "call_id": str(call_id or _provider_cid or ""),
         "prompt_digest": _digest(_prompt),
         "response_digest": _digest(_raw),
     }
@@ -131,5 +159,5 @@ def m_judgment_problems(entry) -> list:
     return _p
 
 
-__all__ = ["M_SCHEMA", "build_m_prompt", "judge_split", "m_judgment_problems",
-           "parse_m_response"]
+__all__ = ["M_SCHEMA", "M_SYSTEM_PROMPT", "build_m_prompt", "call_split_m",
+           "judge_split", "m_judgment_problems", "parse_m_response"]

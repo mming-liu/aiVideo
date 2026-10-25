@@ -73,6 +73,9 @@ class TextGenCfg:
     # 保持旧缺省，允许有效配置给较大的计划保留完整结果空间。
     CONTENT_VERIFY_MAX_TOKENS: int = int(os.getenv("CONTENT_VERIFY_MAX_TOKENS") or "4000")
 
+    # 拆分 M 判定（只输出 verdict/missing/reason）的操作上限。
+    SPLIT_M_MAX_TOKENS: int = int(os.getenv("SPLIT_M_MAX_TOKENS") or "512")
+
     # 大纲生成/旧修订的操作上限，不覆盖供应商模型能力。
     TEXT_OUTLINE_MAX_TOKENS: int = int(os.getenv("TEXT_OUTLINE_MAX_TOKENS") or "4000")
 

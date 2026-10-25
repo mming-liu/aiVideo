@@ -31,10 +31,17 @@ STOP_BUDGET = "budget_infeasible"           # 预算仍不满足
 #: 它不是"这份计划不行"的结论（那张记录坏在身份上，不在故事上），所以**不进**
 #: `PLAN_LEVEL_STOPS`；这一轮也**不占额度**（见 `RevisionBudget.refund`）。
 STOP_INVALID_TARGET = "invalid_target"
+#: 拆分独占轮的三个终局（由 `revise` 的 `terminal` 显式给出；不再靠 `illegal` 继续下一轮）
+STOP_SPLIT_FAILED = "split_failed"
+STOP_SPLIT_PENDING = "split_pending_adjudication"
+STOP_SPLIT_DEFERRED = "split_applied_with_deferred"
 
 #: **只有这些**停止原因才落在「计划层已有结论」这一侧（仍不等于"故事不可满足"，
 #: 后者要人看诊断）：调用失败/非法响应**不算**——那只是这一轮没跑成。
-PLAN_LEVEL_STOPS = (STOP_NO_CHANGE, STOP_LOOP, STOP_CALLS, STOP_DEADLINE)
+#: `split_applied_with_deferred` 已有已验候选与完整残余，属计划层结论；
+#: `split_failed`/`split_pending_adjudication` 是过程/待裁决，不进。
+PLAN_LEVEL_STOPS = (STOP_NO_CHANGE, STOP_LOOP, STOP_CALLS, STOP_DEADLINE,
+                    STOP_SPLIT_DEFERRED)
 
 #: 停止原因里**由某一轮修订直接说出来**的：真实原因（传输/模型/应用拒绝）就在那一轮的
 #: 详情里，必须当**主原因**用。额度与截止不是"某一轮说了什么"，不在此列。
@@ -434,6 +441,20 @@ class RevisionController:
                 self.log("[REVISION] 修订返回时已过截止时刻 ⇒ 丢弃本轮结果（原类型 %s）" % _kind)
                 self._emit(_hist[-1], plan_in=_plan_in, problems_in=_probs_in)
                 return self._result(plan, STOP_DEADLINE, _problems, _hist, _rej)
+            # **拆分 terminal**：只控制“是否继续”，不绕过上面的截止检查；是否真的
+            # applied 仍由 `_kind` 与下面的计划/指纹/完整验收守卫判。
+            _term = (_out.get("terminal") if isinstance(_out.get("terminal"), dict)
+                     else {})
+            _term_stop = str(_term.get("stop_reason") or "")
+            _term_applied = bool(_term.get("applied"))
+            if _term_stop and not _term_applied:
+                if bool(_term.get("no_model_call")):
+                    self.budget.refund()
+                    _hist[-1]["no_model_call"] = True
+                _hist[-1]["terminal"] = dict(_term)
+                self.log("[REVISION] 拆分终局：%s（计划未改动）" % _term_stop)
+                self._emit(_hist[-1], plan_in=_plan_in, problems_in=_probs_in)
+                return self._result(plan, _term_stop, _problems, _hist, _rej)
             if _kind == STOP_VERIFICATION_FAILED:
                 self.budget.refund()
                 _hist[-1]["no_model_call"] = True
@@ -515,6 +536,16 @@ class RevisionController:
                 self._emit(_hist[-1], plan_in=_plan_in, problems_in=_probs_in,
                            plan_out=_new, problems_out=_problems)
                 return self._result(plan, STOP_DEADLINE, _prev_problems, _hist, _rej)
+            if _term_stop and _term_applied and _kind == "applied":
+                # 成功终局：仍返回**同一份**已投影、已完整验收的候选；`ok` 只在
+                # 完整验收为空时成立；有合法 deferred 则返回候选 + 完整残余。
+                _stop = STOP_OK if not _problems else _term_stop
+                _hist[-1]["terminal"] = dict(_term)
+                self._emit(_hist[-1], plan_in=_plan_in, problems_in=_probs_in,
+                           plan_out=_new, problems_out=_problems)
+                self.log("[REVISION] 拆分终局：%s（候选已完整验收，残余 %d 项）"
+                         % (_stop, len(_problems)))
+                return self._result(_new, _stop, _problems, _hist, _rej)
             _plan_out, _probs_out = _new, list(_problems)
             plan = _new
             _emit_rec = _hist[-1]

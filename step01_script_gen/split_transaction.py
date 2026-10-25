@@ -67,25 +67,43 @@ def run_split_transaction(base_view, base_plan, base_record, split_ops, *,
     if m_call is None:
         return _fail("m", [{"code": "split_m_call_missing",
                             "reason": "未提供 M 调用"}])
-    _m = sj.judge_split(_parent_fact.get("claim"), _children,
-                        call=m_call, call_id=m_call_id)
+    try:
+        _m = sj.judge_split(_parent_fact.get("claim"), _children,
+                            call=m_call, call_id=m_call_id)
+    except Exception as exc:                                         # noqa: BLE001
+        # M 调用异常按 §7.5 归 pending_adjudication（不是“判负”，也不重试）。
+        return _fail("m", [{"code": "split_m_call_failed",
+                            "reason": "%s: %s" % (type(exc).__name__, exc)}],
+                     m_calls=1, extra={"status": "pending_adjudication",
+                                       "error": str(exc),
+                                       "judgment": None})
     if not _m.get("ok") or not _m.get("judgment"):
         return _fail("m", _m.get("problems") or [
-            {"code": "split_m_failed", "reason": "M 未产出 judgment"}], m_calls=1)
+            {"code": "split_m_failed", "reason": "M 未产出 judgment"}],
+            m_calls=1, extra={"status": "pending_adjudication",
+                              "judgment": None,
+                              "m_problems": list(_m.get("problems") or [])})
     if str(_m["judgment"].get("verdict") or "") != "supported":
         return _fail("m", [{"code": "split_m_not_supported",
-                            "reason": "M 判定不是 supported"}], m_calls=1)
+                            "reason": "M 判定不是 supported"}], m_calls=1,
+                     extra={"status": "pending_adjudication",
+                            "judgment": _m["judgment"]})
     _ledger = copy.deepcopy(ledger)
     _new_entry = _entry_for(_ledger, _parent)
     if not isinstance(_new_entry, dict):
         return _fail("m", [{"code": "split_ledger_missing",
                             "reason": "账本缺父条目"}], m_calls=1)
     _new_entry["judgment"] = _m["judgment"]
-    _cand, _cp, _res = fs.apply_split_view(
-        base_view, split_ops, scope=scope, ledger=_ledger, record=base_record,
-        accept=lambda _v: [], authority_digest=_auth_digest,
-        novel_text=novel_text, authorization_view=authorization_view,
-        authorization_plan=authorization_plan)
+    try:
+        _cand, _cp, _res = fs.apply_split_view(
+            base_view, split_ops, scope=scope, ledger=_ledger, record=base_record,
+            accept=lambda _v: [], authority_digest=_auth_digest,
+            novel_text=novel_text, authorization_view=authorization_view,
+            authorization_plan=authorization_plan)
+    except Exception as exc:                                         # noqa: BLE001
+        return _fail("apply", [{"code": "split_apply_failed",
+                                "reason": "%s: %s" % (type(exc).__name__, exc)}],
+                     m_calls=1)
     if _cand is None or _res.get("kind") != "applied":
         return _fail("apply", _cp or [{"code": "split_apply_failed",
                                        "reason": str(_res.get("detail") or "")}],
@@ -95,7 +113,13 @@ def run_split_transaction(base_view, base_plan, base_record, split_ops, *,
     except pc.PresentationContractError as _exc:
         return _fail("projection", list(_exc.problems), candidate=_cand,
                      m_calls=1)
-    _rec = verify_candidate(_cand)
+    try:
+        _rec = verify_candidate(_cand)
+    except Exception as exc:                                         # noqa: BLE001
+        return _fail("r", [{"code": "split_r_call_failed",
+                            "reason": "%s: %s" % (type(exc).__name__, exc)}],
+                     candidate=_cand, plan=_cand_plan, m_calls=1,
+                     extra={"error": str(exc)})
     if not isinstance(_rec, dict):
         return _fail("r", [{"code": "split_r_record_missing",
                             "reason": "R 未返回记录"}], candidate=_cand,
@@ -106,13 +130,24 @@ def run_split_transaction(base_view, base_plan, base_record, split_ops, *,
         return _fail("r_state", [{"code": "split_" + _state,
                                   "reason": "拆分状态不是 effective：%s" % _state}],
                      candidate=_cand, plan=_cand_plan, record=_rec, m_calls=1)
-    _acceptance = (acceptance(_cand_plan, novel_text)
-                   if acceptance is not None
-                   else o.plan_acceptance_problems(_cand_plan, novel_text))
+    try:
+        _acceptance = (acceptance(_cand_plan, novel_text)
+                       if acceptance is not None
+                       else o.plan_acceptance_problems(_cand_plan, novel_text))
+    except Exception as exc:                                         # noqa: BLE001
+        return _fail("acceptance", [{"code": "split_acceptance_failed",
+                                     "reason": "%s: %s"
+                                     % (type(exc).__name__, exc)}],
+                     candidate=_cand, plan=_cand_plan, record=_rec, m_calls=1)
     if _acceptance:
         return _fail("acceptance", _acceptance, candidate=_cand,
                      plan=_cand_plan, record=_rec, m_calls=1)
-    _probe = list(accept(_cand) or []) if accept is not None else []
+    try:
+        _probe = list(accept(_cand) or []) if accept is not None else []
+    except Exception as exc:                                         # noqa: BLE001
+        return _fail("probe", [{"code": "split_probe_failed",
+                                "reason": "%s: %s" % (type(exc).__name__, exc)}],
+                     candidate=_cand, plan=_cand_plan, record=_rec, m_calls=1)
     if _probe:
         return _fail("probe", _probe, candidate=_cand, plan=_cand_plan,
                      record=_rec, m_calls=1)

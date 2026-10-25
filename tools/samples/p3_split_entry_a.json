@@ -1,0 +1,100 @@
+{
+ "schema": "p3_split.sample.v2",
+ "note": "匿名样本 A（P3 entry）：dialogue+visual 两子，父载体台词。",
+ "novel": "甲推门进屋。乙抬头看他。甲说：“我会在天黑前回来。”说完他转身离开。乙没有送他。",
+ "plan": {
+  "fact_uids": [
+   "f01",
+   "f02",
+   "f03",
+   "f04"
+  ],
+  "climax": "乙没有送他",
+  "causal_chain": [
+   "甲进屋→甲许诺后离开→乙没有送他"
+  ],
+  "content_note": "匿名最小样本",
+  "characters": [
+   "甲",
+   "乙"
+  ],
+  "emotional_arc": "平→紧→冷",
+  "key_scenes": [
+   "屋内"
+  ],
+  "character_motives": [
+   "甲：交代归期",
+   "乙：保持距离"
+  ],
+  "end_hook": "乙没有送他",
+  "omittable": [],
+  "time_budget": "对白约3秒，画面约8秒",
+  "plan_coherence_version": "plan_coherence.v3",
+  "main_events": [
+   "甲进屋",
+   "甲许诺后离开",
+   "乙没有送他"
+  ],
+  "required_facts": [
+   "甲推门进屋｜原文证据：“甲推门进屋。”｜承载：B1/画面",
+   "甲说会在天黑前回来，然后转身离开｜原文证据：“我会在天黑前回来。”｜承载：B2/台词1",
+   "乙抬头看他｜原文证据：“乙抬头看他。”｜承载：B3/画面",
+   "乙没有送他｜原文证据：“乙没有送他。”｜承载：B4/画面"
+  ],
+  "shot_beats": [
+   "节拍：甲推门进屋。｜本镜信息目的：交代入场｜原文依据：甲推门进屋。｜载体：画面",
+   "节拍：甲说完转身离开。｜本镜信息目的：交代离开｜原文依据：我会在天黑前回来。｜载体：台词1",
+   "节拍：乙抬头看他。｜本镜信息目的：交代旁观｜原文依据：乙抬头看他。｜载体：画面",
+   "节拍：乙没有送他。｜本镜信息目的：交代收束｜原文依据：乙没有送他。｜载体：画面"
+  ],
+  "dialogue_lines": [
+   "我会在天黑前回来。"
+  ],
+  "narration_lines": [],
+  "hook_spoken": [],
+  "hook_carrier": "",
+  "plan_contract_version": 5,
+  "planning_acceptance_version": "legacy_semantic.v3"
+ },
+ "split": {
+  "parent_uid": "f02",
+  "children": [
+   {
+    "uid": "f02.1",
+    "claim": "甲说会在天黑前回来",
+    "evidence": "我会在天黑前回来。",
+    "carrier": {
+     "kind": "dialogue",
+     "uid": "d01"
+    }
+   },
+   {
+    "uid": "f02.2",
+    "claim": "甲转身离开",
+    "evidence": "说完他转身离开。",
+    "carrier": {
+     "kind": "visual",
+     "uid": "b02"
+    }
+   }
+  ],
+  "scope": {
+   "allowed_split_fact_uids": [
+    "f02"
+   ],
+   "allowed_split_carrier_uids": [
+    "d01",
+    "b02"
+   ]
+  },
+  "parent_evidence_spans": [
+   "我会在天黑前回来。",
+   "说完他转身离开。"
+  ],
+  "expected_baseline_code": "verify_fact_unsupported",
+  "expected_child_uids": [
+   "f02.1",
+   "f02.2"
+  ]
+ }
+}
