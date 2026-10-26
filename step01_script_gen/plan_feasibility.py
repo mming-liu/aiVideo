@@ -3275,7 +3275,8 @@ def _copy_or_raw(value):
     return list(value) if isinstance(value, list) else value
 
 
-def dump_plan_contract_invalid(chapter_dir, plan, problems, *, stop_reasons=None) -> None:
+def dump_plan_contract_invalid(chapter_dir, plan, problems, *, stop_reasons=None,
+                               problem_records=None) -> None:
     """把契约问题落成**诊断产物** `step01_plan_contract_invalid.json`（准则 7：失败看得见）.
 
     `problems` 必须是**唯一完整验收报告**（`outline.plan_acceptance_problems`）的清单——
@@ -3297,12 +3298,15 @@ def dump_plan_contract_invalid(chapter_dir, plan, problems, *, stop_reasons=None
         return
     import copy
     from pathlib import Path
+    from shared.config import duration_band
     # 身份四件套（run_id / written_at / stop_layer / 计划本体的契约版本）由
     # `_diag_identity` 统一提供；落盘走公共出口（准则 7：写盘失败必告警）。
     _dump_diagnostic_json(
         Path(chapter_dir) / "step01_plan_contract_invalid.json",
         dict(_diag_identity(STOP_LAYER_PLAN, plan), **{
             "verdict": "plan_contract_invalid",
+            "duration_band": duration_band(),
+            "problem_records": copy.deepcopy(problem_records),
             "conclusion": "plan_incomplete",
             "contract_version": PLAN_CONTRACT_VERSION,
             #: **完整验收**的问题清单（回放契约：`plan` 重喂 `plan_acceptance_problems` 必得同一批）
@@ -4806,10 +4810,10 @@ def check_plan_before_generation(plan: dict | None, *, chapter_dir=None,
         # `plan_contract_problems` 的局部清单，回放走完整链，两处对不上（实测落盘 1 条、
         # 回放 2~11 条）。验收链必含契约记录（结构短路已在 ⓪ 步排除），故 `_contract` 是其子集。
         from step01_script_gen.outline import plan_acceptance_problems
-        _accept = [str(x.get("reason") or x.get("code"))
-                   for x in (plan_acceptance_problems(plan, novel_text=novel_text) or [])]
+        _accept_records = plan_acceptance_problems(plan, novel_text=novel_text) or []
+        _accept = [str(x.get("reason") or x.get("code")) for x in _accept_records]
         dump_plan_contract_invalid(chapter_dir, plan, _accept or _contract,
-                                   stop_reasons=_contract)
+                                   stop_reasons=_contract, problem_records=_accept_records)
         _log().warn(
             "[PLAN] 计划契约未完成（plan_contract_invalid）——**不是**「故事装不下／"
             "需拆集」，也不进预算重选：%s" % "；".join(_contract[:4]))

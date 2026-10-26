@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import sys
 from pathlib import Path
@@ -18,6 +19,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 import storyboard_refs
+from shared.config import (DURATION_MIN_SEC, DURATION_MAX_SEC,
+                           DURATION_TARGET_MIN_SEC, DURATION_TARGET_MAX_SEC)
 # 从 .md 文件加载 prompt 模板（v6.39 拆分，2026-08-22）
 # 改 prompt 内容只改 .md，不再动 .py——避免 SyntaxError / git checkout 反复回滚
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
@@ -52,9 +55,25 @@ def render_prompt_template(text: str) -> str:
     from step01_script_gen.timecode import active_shot_cap
 
     cap = active_shot_cap()
+    # 一刀切示例（RULE-9）：单镜示例时长夹到生效上限，镜数按规划目标反推后 +1，
+    # 总量与合法上限比较决定措辞——默认带必须仍得 16 × 5.5 = 88。
+    _uniform_dur = min(5.5, float(cap))
+    _uniform_shots = int(math.ceil(DURATION_TARGET_MAX_SEC / _uniform_dur)) + 1
+    _uniform_total = _uniform_shots * _uniform_dur
     table = {
+        "DURATION_MIN": f"{DURATION_MIN_SEC:g}",
+        "DURATION_MAX": f"{DURATION_MAX_SEC:g}",
+        "TARGET_MIN": f"{DURATION_TARGET_MIN_SEC:g}",
+        "TARGET_MAX": f"{DURATION_TARGET_MAX_SEC:g}",
+        "TARGET_MID": f"{(DURATION_TARGET_MIN_SEC + DURATION_TARGET_MAX_SEC) / 2:g}",
+        "TARGET_EXAMPLE_MEAN": f"{(DURATION_TARGET_MIN_SEC + DURATION_TARGET_MAX_SEC) / 30:.1f}",
         "SHOT_CAP": "%.0f" % cap,
         "SHOT_CAP_DEC": "%.1f" % cap,
+        "UNIFORM_SHOTS": str(_uniform_shots),
+        "UNIFORM_DUR": "%g" % _uniform_dur,
+        "UNIFORM_TOTAL": "%g" % _uniform_total,
+        "UNIFORM_NOTE": ("超过合法上限及规划目标" if _uniform_total > DURATION_MAX_SEC
+                         else "超规划目标"),
         "NARR_MAX_CHARS": str(int(cap * 4) - 4),
         "DIALOGUE_TARGET": _cap_range(6, 12, cap),
         "DUR_RANGES": "对话镜 %s / 动作·打斗·空镜 %s / 过渡 %s" % (
@@ -332,19 +351,25 @@ def _build_total_duration_constraint(shot_count_min: int, shot_count_max: int) -
     unlimited = shot_count_min <= 0 or shot_count_max <= 0
     if unlimited:
         plan_line = (
-            f"**镜头数不限**，按动作密度自然拆分：总时长目标 70-80s ÷ 每镜平均 "
-            f"4.5-{target_per_shot:.1f}s ≈ 14-17 镜"
+            f"**镜头数不限**，按动作密度自然拆分：总时长目标 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s ÷ 每镜平均 "
+            f"4.5-{target_per_shot:.1f}s ≈ {int(DURATION_TARGET_MIN_SEC / target_per_shot)}-{int(DURATION_TARGET_MAX_SEC / 4.5)} 镜"
             f"（单镜 ≤ {max_per_shot:.0f}s 硬上限，超 {max_per_shot:.0f}s 必拆镜）。\n"
         )
     else:
         plan_line = (
             f"按 {shot_count_min}-{shot_count_max} 镜规划：每镜平均 {min_per_shot:.1f}-{target_per_shot:.1f}s"
-            f"（以总时长 70-80s ÷ 实际镜数反推每镜时长为准，勿逐镜顶格）。\n"
+            f"（以总时长 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s ÷ 实际镜数反推每镜时长为准，勿逐镜顶格）。\n"
         )
 
+    if DURATION_MAX_SEC == 90:
+        uniform_example = "15 镜 × 6s = 90s 顶格贴线、毫无快慢节奏"
+    else:
+        _flat_n = max(int(DURATION_MAX_SEC // 6), 1)
+        uniform_example = ("%d 镜 × 6s = %gs 接近上限但缺少节奏变化"
+                           % (_flat_n, _flat_n * 6))
     return (
-        f"\n\n### ⏰ 总时长硬约束（合法区间 60-90s，规划目标 70-80s，最高优先级）\n"
-        f"本章是抖音 60-90s 竖屏短剧，**正片分镜（不含钩子，钩子时长另算）duration_sec 之和必须落在 60-90s 合法区间内，规划目标 70-80s（按 ~75s 分配每镜时长）**。\n"
+        f"\n\n### ⏰ 总时长硬约束（合法区间 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s，规划目标 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s，最高优先级）\n"
+        f"本章是抖音 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s 竖屏短剧，**正片分镜（不含钩子，钩子时长另算）duration_sec 之和必须落在 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s 合法区间内，规划目标 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s（按 ~{(DURATION_TARGET_MIN_SEC + DURATION_TARGET_MAX_SEC) / 2:g}s 分配每镜时长）**。\n"
         f"{plan_line}"
         f"\n"
         f"**规划方式**（按镜头类型拉开时长差，禁止一刀切）：\n"
@@ -355,19 +380,19 @@ def _build_total_duration_constraint(shot_count_min: int, shot_count_max: int) -
         f"- 末镜/留白镜：4-5s（情绪渲染时间）\n"
         f"\n"
         f"**硬约束**：\n"
-        f"- 正片分镜 SUM(duration_sec) ≥ 60s（差 1s 都会被打回；钩子不计入，钩子时长另算）\n"
-        f"- 正片分镜 SUM(duration_sec) ≤ 90s（超时会被强制截断）；规划目标 70-80s，超 80s 说明每镜时长分多了\n"
+        f"- 正片分镜 SUM(duration_sec) ≥ {DURATION_MIN_SEC:g}s（差 1s 都会被打回；钩子不计入，钩子时长另算）\n"
+        f"- 正片分镜 SUM(duration_sec) ≤ {DURATION_MAX_SEC:g}s（超时会被强制截断）；规划目标 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s，超 {DURATION_TARGET_MAX_SEC:g}s 说明每镜时长分多了\n"
         f"- 末镜 duration_sec ≥ 4s（红果末镜情绪渲染下限）\n"
         f"- 单镜 ≤ {max_per_shot:.0f}s（硬上限，超过必被打回夹取）\n"
         f"\n"
         f"**禁止**：\n"
         f"- 单镜 2-3s 短镜堆叠（15 镜 × 3s = 45s，差 15s 必返工）\n"
-        f"- 全章一刀切默认 6s（15 镜 × 6s = 90s 顶格贴线、毫无快慢节奏，按规划失败处理）\n"
+        f"- 全章一刀切默认 6s（{uniform_example}，按规划失败处理）\n"
         f"- 单镜 > {max_per_shot:.0f}s 长镜头（动作链必须拆多镜，每镜 ≤ {max_per_shot:.0f}s）\n"
         f"\n"
         f"**自检**：写完每个 shot 后，累计正片分镜 SUM(duration_sec)（不含钩子），"
-        f"未到 70s 可把对话镜/末镜 +1s（仍 ≤ {max_per_shot:.0f}s）让场景充分展开；"
-        f"超过 80s 就把无对白的过渡镜/空镜 -1s 或合并同场景过渡镜。\n"
+        f"未到 {DURATION_TARGET_MIN_SEC:g}s 可把对话镜/末镜 +1s（仍 ≤ {max_per_shot:.0f}s）让场景充分展开；"
+        f"超过 {DURATION_TARGET_MAX_SEC:g}s 就把无对白的过渡镜/空镜 -1s 或合并同场景过渡镜。\n"
     )
 
 
@@ -633,10 +658,10 @@ def _build_regen_iron_rules() -> str:
     _cap = active_shot_cap()
     return (
         "\n\n# ★ 重生成铁律（最高优先级，违反本轮拒收）\n"
-        "1. **正片分镜 SUM(duration_sec) 必须在 [60s, 90s]，规划目标 70-80s**（不含钩子），"
+        f"1. **正片分镜 SUM(duration_sec) 必须在 [{DURATION_MIN_SEC:g}s, {DURATION_MAX_SEC:g}s]，规划目标 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s**（不含钩子），"
         f"每镜 ≥3.5s 且 ≤ {_cap:.0f}s 上限（对话镜 {_dur_range(6, 15, _cap)} / 动作镜 {_dur_range(3.5, 8, _cap)} / 空镜 {_dur_range(3.5, 6, _cap)}）；"
         "禁止 1-2s 短镜堆叠凑镜头数，也禁止全章一刀切默认 6s——写时长时先算 SUM，"
-        "不足 60s 就加长对话镜/加反应镜，超 80s 就压缩无对白过渡镜。\n"
+        f"不足 {DURATION_MIN_SEC:g}s 就加长对话镜/加反应镜，超 {DURATION_TARGET_MAX_SEC:g}s 就压缩无对白过渡镜。\n"
         "2. **台词（narration_segment/subtitle）必须逐字来自原文**——禁止编造原文没有的"
         "对白（如『凶手是谁？如何击杀了公子』这类原文不存在的台词）。\n"
         "3. **合规**：禁止「击杀/杀人/尸体」等敏感词，用「出人命/倒地/倒下」替换。\n"
@@ -840,7 +865,7 @@ def render_execution_contract(plan) -> str:
         # 这里显式切断「节拍→镜头」映射，并把镜数来源重申回时长预算（RULE-8 口径）。
         parts.append("**节拍数 ≠ 镜头数**：B1..B%d 是剧情节拍，每个通常展开为 2-4 个"
                      "镜头（建立/动作/反应/细节），**不是逐条拍一镜的清单**；镜头数由"
-                     "**总时长目标反推**（正片 60-90s、规划 70-80s ÷ 每镜平均时长），"
+                     f"**总时长目标反推**（正片 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s、规划 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s ÷ 每镜平均时长），"
                      "不由节拍数决定。" % len(_beats))
     parts.append("五、事件履约声明（**每镜必填 plan_refs 字段**）：")
     parts += [

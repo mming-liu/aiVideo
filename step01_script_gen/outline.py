@@ -5,6 +5,9 @@
 """
 from __future__ import annotations
 
+from shared.config import (DURATION_MIN_SEC, DURATION_MAX_SEC,
+                           DURATION_TARGET_MIN_SEC, DURATION_TARGET_MAX_SEC)
+
 from shared.fact_metadata import (FACT_METADATA_VERSION, LEGACY_ACCEPTANCE_FIELD,
                                   LEGACY_ACCEPTANCE_VERSION)
 
@@ -134,7 +137,7 @@ OUTLINE_PROMPT = """
   充数（旁白由镜头自己的旁白承担，见下条）；只收真正要拍的句子，宁少勿滥——每一句都占用
   时长，而时长由代码逐句估算（自报秒数不参与判定）
 - omittable: 本集**可省略的内容**（不拍也不影响主线的原文段落），供预算不够时重选
-- 时长预算（**先算再选，v6.132**）：本集正片**合法 60-90 秒**、**规划目标 70-80 秒**。
+- 时长预算（**先算再选，v6.132**）：本集正片**合法 {{DURATION_MIN}}-{{DURATION_MAX}} 秒**、**规划目标 {{TARGET_MIN}}-{{TARGET_MAX}} 秒**。
   对白是时长的最大一项，**必须给画面动作/反应/过场留出时间**——每场只留最关键的一两句，
   不要把整段对话都列进来。**选多了本集就装不下**：会被预算门打回重选（反馈会带上代码
   算出的秒数），白费一轮；更严重的是会把整集挤爆。
@@ -171,6 +174,9 @@ OUTLINE_PROMPT = """
   这一条不再靠「像不像说话」去猜：写进这个字段的，就是**必须拍出来说出口**的
 - key_scenes: 需要重点刻画的关键场景（动作/情感高潮）
 """
+from step01_script_gen.prompts import render_prompt_template as _render_duration_template
+OUTLINE_PROMPT = _render_duration_template(OUTLINE_PROMPT)
+
 
 
 _OUTLINE_SYSTEM_PROMPT = "你是短视频编剧，擅长从小说章节提炼叙事大纲，供分镜参考。只输出纯JSON。"
@@ -355,7 +361,7 @@ _PLAN_BUDGET_FEEDBACK = """
 代码按**逐句时长估算器**核算了你上一版计划选用的台词（**不采信自报秒数**）：
 - 已过原文逐字核验的台词：{lines} 句，估时 **{dialogue_sec:.2f} 秒**
 - 已过原文逐字核验的**图外旁白**：{narr_lines} 条，估时 **{narration_sec:.2f} 秒**
-- 本集正片**合法 {bmin:.0f}-{bmax:.0f} 秒**，**规划目标 {tmin}-{tmax} 秒**（画面动作、反应、
+- 本集正片**合法 {bmin:g}-{bmax:g} 秒**，**规划目标 {tmin:g}-{tmax:g} 秒**（画面动作、反应、
   过场都要占时间）
 - 节拍 {beats} 个（画面/台词/旁白各有归属）——**节拍不是时间下界**：生成契约里
   「镜数由时长预算决定，不由节拍数决定」，节拍多不等于装不下、节拍少也不等于装得下；
@@ -365,7 +371,7 @@ _PLAN_BUDGET_FEEDBACK = """
 请重新取材（复核第 7 轮：对白与旁白**共用同一份发声时长预算**，砍不掉旁白就装不下）：
 
 1. **只从原文逐字摘**真正必须拍的对白——不改写、不润色、不自造、不拿旁白当台词；
-2. 按**规划目标**把发声估时压到 **{tmax} 秒以内**：
+2. 按**规划目标**把发声估时压到 **{tmax:g} 秒以内**：
    - 对白可以少选，每场只留最关键的一两句；
    - **旁白也可以少讲、甚至不讲**——旁白不是"什么都能装"的兜底，年龄、字号、家世、
      功名这些仍按**故事需要取舍**（该省就省），不能靠加时长容纳。
@@ -2334,7 +2340,7 @@ _PLAN_DELTA_INSTRUCTION = """
    **每一个** uid 都要能在某条节拍的 `voice_ref` 上找到；删节拍、改 `voice_ref` 或替换
    声音条目时，别把某条声音弄成"没有任何节拍念它"（`view_voice_unit_unplaced`，
    实测第 16/17 次都栽在这里）。
-8. **预算**：`budget` 里的总发声下界上限（90 s）与单镜上限（12 s）是**硬约束**。超了要靠
+8. **预算**：`budget` 里的总发声下界上限（{{DURATION_MAX}} s）与单镜上限（{{SHOT_CAP}} s）是**硬约束**。超了要靠
    **移出非必需声音**（并同步关系与 `order`）或**换用更短的原句**把下界压下来；
    **不要靠新增旁白或新增节拍**——新增内容只会把下界推得更高。同理，一条事实用画面
    承载时优先复用**已有**节拍，不要为它再造一个带声音的新节拍。
@@ -3410,7 +3416,8 @@ def _replan_by_view(plan, problems, novel_text, budget, rejections=None, *,
                           ensure_ascii=False, indent=1)
     _prompt = chr(10).join([
         _REVISION_NOVEL_PROMPT.format(novel_text=novel_text[:PROMPT_MAX_CHARS]),
-        _PLAN_DELTA_INSTRUCTION if _is_delta else _PLAN_VIEW_INSTRUCTION,
+        (_render_duration_template(_PLAN_DELTA_INSTRUCTION)
+         if _is_delta else _PLAN_VIEW_INSTRUCTION),
         # **两条协议都拼**（2026-10-11 离线回放诊断）：统一验收链核"正文是不是原文片段"，
         # 请求就必须说出来——只在首版提示里有，等于让修订轮去踩一个没人告诉它的坑。
         source_verbatim_rule(),
@@ -6281,8 +6288,8 @@ def _validate_outline(outline: dict | None, novel_text: str = "") -> dict | None
 
 
 # 与 prompts.py「总时长硬约束」同源的规划目标（合法区间 60-90s，规划目标 70-80s）
-_TARGET_MIN_SEC = 70
-_TARGET_MAX_SEC = 80
+_TARGET_MIN_SEC = DURATION_TARGET_MIN_SEC
+_TARGET_MAX_SEC = DURATION_TARGET_MAX_SEC
 # 匹配「30s」「30秒」「30 s」
 _BUDGET_NUM_RE = __import__("re").compile(r"(\d+(?:\.\d+)?)(\s*[sS秒])")
 
@@ -6313,7 +6320,7 @@ def _calibrate_time_budget(budget: str) -> str:
         return ("%g" % v) + m.group(2)
 
     return _BUDGET_NUM_RE.sub(_rep, text) + (
-        "（已按目标 %d-%d 秒校准）" % (_TARGET_MIN_SEC, _TARGET_MAX_SEC))
+        "（已按目标 %g-%g 秒校准）" % (_TARGET_MIN_SEC, _TARGET_MAX_SEC))
 
 
 def outline_to_anchor(outline: dict | None, novel_text: str = "") -> str:

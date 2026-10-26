@@ -5,6 +5,8 @@ re-checked even when the script revision is unchanged.
 """
 from __future__ import annotations
 
+from shared.config import DURATION_MIN_SEC, DURATION_MAX_SEC
+
 import contextlib
 import io
 import re
@@ -1228,13 +1230,13 @@ def _duration_budget_issues(script: dict) -> list[Issue]:
         except (TypeError, ValueError):
             return []
     total = sum(durations)
-    if 60.0 - 0.01 <= total <= 90.0 + 0.01:
+    if DURATION_MIN_SEC - 0.01 <= total <= DURATION_MAX_SEC + 0.01:
         return []
-    if total > 90.0:
-        msg = (f"正片总时长 {total:.1f}s > 90s，违反 60-90s 验收区间；"
+    if total > DURATION_MAX_SEC:
+        msg = (f"正片总时长 {total:.1f}s > {DURATION_MAX_SEC:g}s，违反 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s 验收区间；"
                "需精简剧情/动作或合并镜头，不能静默截断台词或动作")
     else:
-        msg = (f"正片总时长 {total:.1f}s < 60s，低于 60-90s 验收区间；"
+        msg = (f"正片总时长 {total:.1f}s < {DURATION_MIN_SEC:g}s，低于 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s 验收区间；"
                "需补充有效镜头或重新分配时长")
     return [Issue("duration_budget", "visual_risk", msg,
                   field_path="total_duration", repairable=False)]

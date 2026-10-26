@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+from shared.config import DURATION_MIN_SEC, DURATION_MAX_SEC
+
 import math
 import sys
 from pathlib import Path
@@ -8014,8 +8016,8 @@ def _check_fatal_wound_continuity(shots: list[dict]) -> dict:
 # =====================================================================
 
 # v6.43 红果标准（08-23 用户规则）：镜头数不限 + 单镜 ≤ 8s + 正片总时长 60-90s（不含钩子，下限 60s 保留）
-_REDGUO_DURATION_MIN = 60.0  # 保留 60s 下限（08-23 用户规则）
-_REDGUO_DURATION_MAX = 90.0
+_REDGUO_DURATION_MIN = DURATION_MIN_SEC  # 保留 60s 下限（08-23 用户规则）
+_REDGUO_DURATION_MAX = DURATION_MAX_SEC
 _REDGUO_SHOT_MIN = 0         # 取消镜数下限
 _REDGUO_SHOT_MAX = 0         # 取消镜数上限
 _REDGUO_SCENE_MAX = 3        # 保留：≤ 3 场景（与时长/镜数解耦的业务硬约束）
@@ -8124,14 +8126,14 @@ def _check_redguo_standard(shots, characters=None):
         if total_dur > _REDGUO_DURATION_MAX:
             over = total_dur - _REDGUO_DURATION_MAX
             warnings.append(
-                f"红果总时长 {total_dur:.1f}s > 90s（超 {over:.1f}s，不含钩子）。"
-                f"v6.43 红果标准正片 60-90s——必须砍次要冲突/次要人物/铺垫段。"
+                f"红果总时长 {total_dur:.1f}s > {DURATION_MAX_SEC:g}s（超 {over:.1f}s，不含钩子）。"
+                f"v6.43 红果标准正片 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s——必须砍次要冲突/次要人物/铺垫段。"
             )
         elif total_dur < _REDGUO_DURATION_MIN:
             under = _REDGUO_DURATION_MIN - total_dur
             warnings.append(
-                f"红果总时长 {total_dur:.1f}s < 60s（差 {under:.1f}s，不含钩子）。"
-                f"v6.43 红果标准正片 60-90s——可增加镜头数或拉长对话/反应镜头 duration"
+                f"红果总时长 {total_dur:.1f}s < {DURATION_MIN_SEC:g}s（差 {under:.1f}s，不含钩子）。"
+                f"v6.43 红果标准正片 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s——可增加镜头数或拉长对话/反应镜头 duration"
                 f"（单镜 ≤ {_redguo_shot_duration_max():.0f}s）。"
             )
 

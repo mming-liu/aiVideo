@@ -25,11 +25,13 @@ standard as advisory.
 """
 from __future__ import annotations
 
+from shared.config import DURATION_MIN_SEC, DURATION_MAX_SEC
+
 from .base import Constraint
 from .types import RepairRecord, Severity, Violation
 
-_MIN_TOTAL = 60.0
-_MAX_TOTAL = 90.0
+_MIN_TOTAL = DURATION_MIN_SEC
+_MAX_TOTAL = DURATION_MAX_SEC
 # v6.97：删除写死的 `_SHOT_CAP = 8.0`——它让本约束按 8s 报 `Severity.HARD`
 # 「必须拆镜」，把当前上限（模型 12s）下**合法**的 8-12s 镜头判成超载。改走唯一源。
 
@@ -165,7 +167,7 @@ class DurationBudgetConstraint(Constraint):
                 target="duration_sec",
                 before=str(durations[i]),
                 after="(HARD, 未改写；候选压缩镜)",
-                detail="总时长超 90s：只报告候选，交完整镜头事务重写",
+                detail=f"总时长超 {DURATION_MAX_SEC:g}s：只报告候选，交完整镜头事务重写",
             )
             for i, _h in candidates[:5]
         ]

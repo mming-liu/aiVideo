@@ -12,6 +12,8 @@ identity token for the story/visual plan, not a hash of transient file paths.
 """
 from __future__ import annotations
 
+from shared.config import duration_band, duration_band_matches
+
 import hashlib
 import json
 import re
@@ -447,6 +449,8 @@ def _hash_json(obj) -> str:
 
 def attach_gate_metadata(payload: dict, script: dict, *, stage: str) -> dict:
     revision = ensure_script_revision(script)
+    if stage.startswith("step01"):
+        payload["duration_band"] = duration_band()
     payload.setdefault("source", stage)
     payload.setdefault("report_type", "quality_gate")
     payload.setdefault("rule_version", QUALITY_RULE_VERSION)
@@ -506,13 +510,22 @@ def verify_report_outputs(report: dict) -> list[str]:
 
 
 
+def _require_duration_band(record: dict, stage: str) -> None:
+    if not duration_band_matches(record):
+        raise QualityGateError(
+            f"{stage} duration_band mismatch: report={record.get('duration_band')!r} "
+            f"expected={duration_band()!r}; re-run the upstream stage")
+
+
 def require_semantic_gate(quality_path: Path, audit_path: Path, script: dict,
                           *, stage: str = "step01") -> dict:
     """Require both structural PASS and a non-blocking final audit."""
     quality = require_gate(
         quality_path, script, stage=stage, required_report_type="quality_gate"
     )
+    _require_duration_band(quality, stage)
     audit = load_gate(audit_path)
+    _require_duration_band(audit, stage)
     revision = ensure_script_revision(script)
     if str(audit.get("status") or "").strip().lower() != "ok":
         raise QualityGateError(
@@ -625,6 +638,7 @@ def build_step01_commit_manifest(*, run_id: str, created_at: str, revision: str,
     """
     payload = {
         "manifest_version": STEP01_MANIFEST_VERSION,
+        "duration_band": duration_band(),
         "status": status,
         "run_id": run_id,
         "created_at": created_at,
@@ -739,6 +753,7 @@ def verify_step01_commit_manifest(chapter_dir: Path, script: dict,
             "step01 must finish its atomic commit before step02 consumes the outputs."
         )
     manifest = load_gate(path)
+    _require_duration_band(manifest, stage)
     status = str(manifest.get("status") or "").strip().upper()
     if status != "COMMITTED":
         raise QualityGateError(
@@ -810,6 +825,9 @@ def require_gate(report_path: Path, script: dict, *, stage: str,
                  required_report_type: str | None = None,
                  verify_outputs: bool = False) -> dict:
     report = load_gate(report_path)
+    if (stage.startswith("step01") or str(report.get("source") or "").startswith("step01")
+            or Path(report_path).name == "step01_quality.json"):
+        _require_duration_band(report, stage)
     revision = ensure_script_revision(script)
     report_revision = str(report.get("script_revision") or "").strip()
     if not report_revision or report_revision != revision:

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import math
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -35,6 +36,49 @@ BOOK_NAME = os.getenv("BOOK_NAME", "杀青州")
 # 用于兜住 LLM 抽风输出 2 镜或 50 镜这类废结果。
 SHOT_COUNT_MIN = int(os.getenv("SHOT_COUNT_MIN", "4"))
 SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "40"))
+
+
+def _duration_setting(name: str, default: float) -> float:
+    raw = os.getenv(name, str(default))
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name}={raw!r}: must be a finite positive number") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name}={raw!r}: must be a finite positive number")
+    return value
+
+
+# The lower bound is fixed: timecode/runtime_extend still implement the 60s floor.
+DURATION_MIN_SEC = _duration_setting("DURATION_MIN_SEC", 60)
+if DURATION_MIN_SEC != 60:
+    raise ValueError("DURATION_MIN_SEC must equal 60; configurable lower bounds are not supported")
+DURATION_MAX_SEC = _duration_setting("DURATION_MAX_SEC", 90)
+DURATION_TARGET_MIN_SEC = _duration_setting("DURATION_TARGET_MIN_SEC", 70)
+DURATION_TARGET_MAX_SEC = _duration_setting("DURATION_TARGET_MAX_SEC", 80)
+if not (DURATION_MIN_SEC <= DURATION_TARGET_MIN_SEC <= DURATION_TARGET_MAX_SEC <= DURATION_MAX_SEC):
+    raise ValueError(
+        "duration constraint requires DURATION_MIN_SEC <= DURATION_TARGET_MIN_SEC "
+        "<= DURATION_TARGET_MAX_SEC <= DURATION_MAX_SEC; got "
+        f"{DURATION_MIN_SEC:g}, {DURATION_TARGET_MIN_SEC:g}, "
+        f"{DURATION_TARGET_MAX_SEC:g}, {DURATION_MAX_SEC:g}")
+
+
+def duration_band() -> dict:
+    """Effective acceptance and planning identity; return a fresh record."""
+    return {"min": DURATION_MIN_SEC, "max": DURATION_MAX_SEC,
+            "target_min": DURATION_TARGET_MIN_SEC, "target_max": DURATION_TARGET_MAX_SEC}
+
+
+def duration_band_matches(record: dict) -> bool:
+    """Legacy missing identity means the historical default band only."""
+    expected = duration_band()
+    if "duration_band" not in record:
+        return expected == {"min": 60, "max": 90, "target_min": 70, "target_max": 80}
+    actual = record["duration_band"]
+    return (isinstance(actual, dict) and actual.keys() == expected.keys()
+            and all(isinstance(actual[k], (int, float)) and not isinstance(actual[k], bool)
+                    and actual[k] == v for k, v in expected.items()))
 
 
 def _TEXT_PROVIDER_DEFAULT_GAP_ATTEMPTS() -> str:

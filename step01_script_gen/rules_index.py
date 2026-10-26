@@ -1115,7 +1115,7 @@ RULES_INDEX: dict[str, RuleEntry] = {
     # v6.74 — 60-90s 硬时长门 + 修复契约 + hook 结构前置（2026-09-19）
     # ========================================================================
     "v6.74": {
-        "name": "正片 60-90s 硬时长门 + patch-only 修复接受条件 + hook 质检前结构补齐",
+        "name": "正片生效时长带硬门（默认60-90s，下限固定60s）+ patch-only 修复接受条件 + hook 质检前结构补齐",
         "date": "2026-09-19",
         "constraints": [
             "duration_budget",
@@ -1137,9 +1137,10 @@ RULES_INDEX: dict[str, RuleEntry] = {
         ],
         "timecode_changes": [
             "motion_desc 范围缺少“秒”时仍按区间终点计算",
-            "正片 duration_sec 之和纳入 60-90s 验收区间",
+            "正片 duration_sec 之和按 shared.config 生效带验收（默认60-90s）；上限与目标可配置，报告/审计/commit核验duration_band",
         ],
         "tests": [
+            "tests/step01_script_gen/test_duration_band.py",
             "tests/step01_script_gen/constraints/test_duration_budget.py",
             "tests/step01_script_gen/constraints/test_new_quality_guards.py",
             "tests/step01_script_gen/test_repair_acceptance.py",
@@ -1400,7 +1401,7 @@ RULES_INDEX: dict[str, RuleEntry] = {
     # v6.49 — 红果 60-90s 标准 + 8 项硬修复（F3-F10）
     # ========================================================================
     "v6.49": {
-        "name": "红果标准（60-90s/3-8镜/≤3场景/≤4人物）+ F3-F10 硬修复",
+        "name": "红果标准（总时长按生效带，默认60-90s，下限固定60s/3-8镜/≤3场景/≤4人物）+ F3-F10 硬修复",
         "date": "2026-08-28",
         "prompt_sections": [
             "prompts/main.md:v6.49 红果场景/人物硬约束",

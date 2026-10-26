@@ -34,6 +34,9 @@ if __name__ == "__main__":
     _bootstrap_scope("step01 分镜脚本生成", presentation_mode=True)
 
 # 统一配置（从 shared.config 读取 .env）
+from shared.config import (DURATION_MIN_SEC, DURATION_MAX_SEC,
+                           DURATION_TARGET_MIN_SEC, DURATION_TARGET_MAX_SEC,
+                           duration_band, duration_band_matches)
 from shared.config import (
     NOVEL_CHAPTER, BOOK_INDEX,
     CHARACTER_EXTRACTION_ENABLED,
@@ -931,7 +934,7 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
     # 投影 < 90 而实际 > 90 时**该收敛的不触发**；投影 ≫ 实际时反复重生成，且要求
     # 模型压的是投影而不是门禁量的那个数。投影口径保留给候选打分。
     shots_total = _actual_shots_total(script)
-    duration_over = shots_total > 90.0 + 0.01
+    duration_over = shots_total > DURATION_MAX_SEC + 0.01
     over_max = SHOT_COUNT_MAX > 0 and len(shots) > SHOT_COUNT_MAX
 
     # 镜头数不限时仍需保留时长硬约束：一次显式压缩重生成优于让 100s
@@ -952,10 +955,10 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
             _console(f"  [收敛] 镜头数 {current} 超上限 {SHOT_COUNT_MAX}，重新生成精简版（{attempt}/{max_attempts}）...")
         if duration_over:
             _logger.warn(
-                f"[DURATION] 正片 {shots_total:.1f}s > 90s，"
-                f"反馈 LLM 精简/合并到 70-80s（尝试 {attempt}/{max_attempts}）..."
+                f"[DURATION] 正片 {shots_total:.1f}s > {DURATION_MAX_SEC:g}s，"
+                f"反馈 LLM 精简/合并到 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s（尝试 {attempt}/{max_attempts}）..."
             )
-            _console(f"  [时长] 正片 {shots_total:.1f}s 超 90s，重新规划为 70-80s（{attempt}/{max_attempts}）...")
+            _console(f"  [时长] 正片 {shots_total:.1f}s 超 {DURATION_MAX_SEC:g}s，重新规划为 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s（{attempt}/{max_attempts}）...")
 
         feedback = ""
         if over_max:
@@ -971,13 +974,13 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
                 f"4. 删减冗余过渡镜头与重复表达的空镜\n"
                 f"5. 保留全部关键剧情节点（开篇冲突 / 刺杀 / 高潮 / 收尾），不删剧情只合并冗余\n"
                 f"6. **不要把多镜拆成单镜的细碎画面**——一镜只承载 1 个核心动作/情绪转折\n\n"
-                f"v6.38 红果硬约束：正片总时长 60-90s（钩子另算）、单镜 3.5-{_shot_cap():.0f}s（不得超过 {_shot_cap():.0f}s）。\n"
+                f"v6.38 红果硬约束：正片总时长 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s（钩子另算）、单镜 3.5-{_shot_cap():.0f}s（不得超过 {_shot_cap():.0f}s）。\n"
             )
         if duration_over:
             feedback += (
                 f"\n\n# ★ 正片时长硬约束（本轮拒收，最高优先级）\n"
-                f"当前正片分镜合计 {shots_total:.1f}s，超过 90s 上限。\n"
-                f"**本轮必须把正片分镜 duration_sec 之和压到 70-80s，最多 90s**。\n"
+                f"当前正片分镜合计 {shots_total:.1f}s，超过 {DURATION_MAX_SEC:g}s 上限。\n"
+                f"**本轮必须把正片分镜 duration_sec 之和压到 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s，最多 {DURATION_MAX_SEC:g}s**。\n"
                 f"禁止删掉关键剧情（开篇冲突/刺杀/高潮/收尾）、致命伤、武器归属或台词原文依据。\n"
                 f"允许的压缩方式：\n"
                 f"1. 合并同地点、同主体、连续动作或重复信息镜头；\n"
@@ -1075,7 +1078,7 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         _compute_timecodes(script)
         total_duration = float(script.get("total_duration", 0) or 0)
         shots_total = _new_total
-        duration_over = shots_total > 90.0 + 0.01
+        duration_over = shots_total > DURATION_MAX_SEC + 0.01
         if over_max:
             if len(new_shots) <= SHOT_COUNT_MAX:
                 _logger.info(
@@ -1085,7 +1088,7 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
             over_max = len(new_shots) > SHOT_COUNT_MAX
         if not duration_over:
             _logger.info(
-                f"[DURATION] 时长收敛成功: 正片 {shots_total:.1f}s（目标 70-80s）"
+                f"[DURATION] 时长收敛成功: 正片 {shots_total:.1f}s（目标 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s）"
             )
 
     if over_max:
@@ -1148,7 +1151,7 @@ def _structural_feedback(issues: list) -> str:
         f"   每个子镜的台词估时都必须 ≤ {_shot_cap():.0f}s（留余量，目标 4-7s）。\n"
         "2. **时长低于下限**：把该镜合并进相邻的同地点连续剧情，或补足动作/台词——\n"
         "   禁止靠事后加秒数凑时长。\n"
-        f"3. 单镜 duration_sec 必须落在 3.5-{_shot_cap():.0f}s；正片合计 60-90s（钩子另算）。\n"
+        f"3. 单镜 duration_sec 必须落在 3.5-{_shot_cap():.0f}s；正片合计 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s（钩子另算）。\n"
         "4. 禁止复制字段制造 ff==lf 的空壳子镜；每个子镜都要有独立的事件与画面。\n"
         "5. **开篇空镜过多**：抖音黄金 3 秒必须有主体入场——把多余的开篇空镜"
         "**合并或替换成带主体的建立镜**（人物入画、手持道具、明确动作），"
@@ -1878,6 +1881,7 @@ def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
         "checker_failed": checker_failed,
         "rule_version": rule_version,
         "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
+        "duration_band": duration_band(),
         "issues": [i.to_dict() for i in issues],
     }
 
@@ -2066,6 +2070,7 @@ def _candidate_quality_summary(script: dict, novel_text: str = "") -> dict:
         "integrity_issues": [i.message for i in integrity_issues],
         "rule_version": rule_version,
         "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
+        "duration_band": duration_band(),
         "checker_failed": checker_failed,
         "structured_issues": [i.to_dict() for i in issues if is_blocking(i)],
     }
@@ -2160,6 +2165,7 @@ def _build_step01_quality_gate(script: dict, novel_text: str) -> dict:
         "checker_failed": checker_failed,
         "rule_version": rule_version,
         "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
+        "duration_band": duration_band(),
         "status": "BLOCK" if (hard or visual or checker_failed) else "PASS",
     }
     attach_gate_metadata(payload, script, stage="step01.quality_gate")
@@ -2584,6 +2590,7 @@ def _final_audit_metadata(script: dict, *, run_id: str = "") -> dict:
         "input_revision": compute_script_revision(script),
         "rule_version": RULE_VERSION,
         "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
+        "duration_band": duration_band(),
         # v6.112：生成/修复提示词版本——**诊断字段**，不参与复用判定
         # （改提示词改变的是稿件内容，内容变化已由 revision 覆盖）。
         "prompt_source_fingerprint": PROMPT_SOURCE_FINGERPRINT,
@@ -2619,6 +2626,8 @@ def _memoizable_final_audit(audit: "dict | None") -> "dict | None":
     if not isinstance(audit, dict):
         return None
     if str(audit.get("status") or "").strip().lower() != "ok":
+        return None
+    if not duration_band_matches(audit):
         return None
     return audit
 
@@ -2758,6 +2767,7 @@ def _record_audit_diag(audit: "dict | None", *, phase: str, round_index: int,
         "input_revision": _payload.get("input_revision"),
         "rule_source_fingerprint": (_payload.get("rule_source_fingerprint")
                                     or RULE_SOURCE_FINGERPRINT),
+        "duration_band": _payload.get("duration_band"),
         "prompt_source_fingerprint": PROMPT_SOURCE_FINGERPRINT,
         "audit_scope": _payload.get("audit_scope"),
         "audit_prompt_version": _payload.get("audit_prompt_version"),
@@ -2872,6 +2882,8 @@ def _reusable_final_audit(script: dict) -> "dict | None":
         if str(audit.get("input_revision") or "").strip() != revision:
             continue
         if str(audit.get("rule_source_fingerprint") or "").strip() != RULE_SOURCE_FINGERPRINT:
+            continue
+        if not duration_band_matches(audit):
             continue
         if str(audit.get("audit_scope") or "").strip() != STEP01_AUDIT_SCOPE:
             continue
@@ -3944,9 +3956,9 @@ def _score_script(script: dict, novel_text: str) -> dict:
     eff_dur = float(_projected.get("duration_sec", dur) or dur)
     eff_n = int(_projected.get("shot_count", n) or n)
     _split_n = int(_projected.get("split_count", 0) or 0)
-    if 60 <= eff_dur <= 90:
+    if DURATION_MIN_SEC <= eff_dur <= DURATION_MAX_SEC:
         score += 10
-    elif 50 <= eff_dur < 60 or 90 < eff_dur <= 120:
+    elif DURATION_MIN_SEC - 10 <= eff_dur < DURATION_MIN_SEC or DURATION_MAX_SEC < eff_dur <= DURATION_MAX_SEC + 30:
         score += 7
     else:
         score += 3
@@ -4026,10 +4038,10 @@ def _retry_degrade_reason(prev: dict, new: dict, novel_text: str,
     # 镜数多 3+ → 判退化回退。救援态不豁免（救援补高潮不靠膨胀镜头数达成）。
     _prev_n = len(prev.get("shots", []) or [])
     _new_n = len(new.get("shots", []) or [])
-    if (prev_dur >= 60 and new_dur > 90) or (_new_n - _prev_n >= 3):
+    if (prev_dur >= DURATION_MIN_SEC and new_dur > DURATION_MAX_SEC) or (_new_n - _prev_n >= 3):
         return (f"镜数/时长膨胀（新版 {_new_n} 镜 {new_dur:.0f}s，上一版 {_prev_n} 镜 "
-                f"{prev_dur:.0f}s）——重生版把镜头预算炸出合法带（60-90s），"
-                f"越修越多的镜头会把 60s 短剧拖成 2 分钟流水账")
+                f"{prev_dur:.0f}s）——重生版把镜头预算炸出合法带（{DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s），"
+                f"越修越多的镜头会让总时长超出本轮合法上限（{DURATION_MAX_SEC:g}s）")
     # 1.5) 高潮塌缩（v6.62.8，09-09）——与「零高潮救援」对称的反向护栏。
     # 09-10 run3 实测：retry1 把高潮镜从 0 补到 1（救援采纳），retry2 又打回 0，
     # 而三条判据都不看高潮，于是 retry2 被静默接受，终稿高潮镜 0、台词镜 0。
@@ -9033,7 +9045,7 @@ def _candidate_is_early_stop(score: dict, script: dict) -> bool:
     if _max_shots and len(shots) > _max_shots:
         return False
     duration = sum(float(shot.get("duration_sec", 0) or 0) for shot in shots)
-    if not 60.0 <= duration <= 90.0:
+    if not DURATION_MIN_SEC <= duration <= DURATION_MAX_SEC:
         return False
     if not script.get("hook"):
         return False
@@ -11391,11 +11403,12 @@ def main() -> None:
         _shot_total = sum(float(s.get("duration_sec") or 0) for s in script.get("shots", []))
         _hook_total = float((script.get("hook") or {}).get("duration_sec") or 0)
         _metrics_update("duration", {
+            "duration_band": duration_band(),
             "shots_total_sec": round(_shot_total, 3),
             "hook_sec": round(_hook_total, 3),
             "total_sec": round(_shot_total + _hook_total, 3),
             "budget_status": (
-                "PASS" if 60.0 - 0.01 <= _shot_total <= 90.0 + 0.01 else "BLOCK"
+                "PASS" if DURATION_MIN_SEC - 0.01 <= _shot_total <= DURATION_MAX_SEC + 0.01 else "BLOCK"
             ),
         })
         _metrics_update("quality", {
