@@ -1,0 +1,64 @@
+{
+  "schema": "step01.audit_package/1",
+  "created_at": "2026-10-30",
+  "status": "fixture_self_contained",
+  "object": {
+    "candidate": "tests/step01_script_gen/fixtures/step01_audit_min/candidate.json",
+    "candidate_sha256": "bdb5fd4c2411d1667e7c543d56e7e411f4acf5db04b4e555152421a35156d3ab",
+    "novel": "tests/step01_script_gen/fixtures/step01_audit_min/novel.txt",
+    "novel_sha256": "8eb67a040379ac2e73130a696f1b01de22d32ad4a6b895575aeea565625340f1",
+    "quality_report": "tests/step01_script_gen/fixtures/step01_audit_min/quality.json",
+    "quality_sha256": "319185260c07cfff6cc8788d90682d7221db66d2fc31361d6bf648ab7a6acd5e",
+    "quality_status": "PASS",
+    "revision": "fb4650896e1532668b096d1c9867061a335ba65f35021ad5f588ed5962a9388d",
+    "shot_count": 12
+  },
+  "effective_config": {
+    "HOOK_ENABLED": "1",
+    "DURATION_MIN_SEC": "60",
+    "DURATION_MAX_SEC": "120",
+    "DURATION_TARGET_MIN_SEC": "105",
+    "DURATION_TARGET_MAX_SEC": "115",
+    "VOICE_ADAPTATION_ENABLED": "1"
+  },
+  "single_send_controls": {
+    "TEXT_TRANSPORT_RETRIES": "0",
+    "TEXT_TRANSPORT_CONNECT_RETRIES": "0",
+    "AUDIT_PARSE_RETRIES": "0",
+    "REPAIR_ROUNDS_ENABLED": "0",
+    "STEP01_AUDIT_ONLY": "1"
+  },
+  "audit_channel": {
+    "provider": "agent_plan",
+    "model": "deepseek-v4.1-flash",
+    "status": "fixture"
+  },
+  "audit_contract": {
+    "rule_source_fingerprint": "fe260ed333647ca7",
+    "audit_prompt_version": "e58119e5f0f0",
+    "duration_band": {
+      "min": 60,
+      "max": 120,
+      "target_min": 105,
+      "target_max": 115
+    }
+  },
+  "scope": {
+    "novel": "fixture_novel",
+    "book_index": 1,
+    "book_name": "fixture_book",
+    "chapter": 1
+  },
+  "budget": {
+    "authorized_total": 1,
+    "used": 0,
+    "remaining": 1,
+    "new_authorization": {
+      "authorization_id": "",
+      "granted_by": "",
+      "granted_at": "",
+      "max_sends": 0,
+      "binding_digest": ""
+    }
+  }
+}

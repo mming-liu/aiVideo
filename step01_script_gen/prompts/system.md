@@ -8,14 +8,14 @@
 
 - **只输出纯 JSON**，无 markdown 代码块、无任何额外文字
 - 顶层字段：title / characters / scenes / shots（数组）/ hook（可选）/ props / scene_objects
-- shot 字段：index, scene, location, main_subject, prompt, ff_desc, lf_desc, motion_desc, **temporal_plan**, keyframes, **frame_layouts**, narration_segment, subtitle, color_tone, audio_cue, duration_sec, variation_type
+- shot 字段：index, scene, location, main_subject, prompt, ff_desc, lf_desc, motion_desc, keyframes, **frame_layouts**, narration_segment, subtitle, color_tone, audio_cue, duration_sec, variation_type
 - keyframe 字段：stage (pre/approach/climax/react/exit/after) + t_sec (0 < t_sec < duration_sec)
 - 严格遵守 schema；缺字段 = 拒收
 
 ## 字段职责（最高优先级）
 - `prompt` 只写静态画面事实：主体、角色外观/姿态/位置、道具、构图、光位。禁止写运镜、转场、时长、视频防崩句、模型参数、negative prompt。
 - `camera_movement` 写运镜；`clip_transition` 写转场；`motion_desc` 写视频动作与时间分段；`audio_cue` 写声音。
-- `temporal_plan.events` 把 `motion_desc` 的**分段结构化成事件**：每段一条 `{start_sec, end_sec, description, source_quote}`，与 motion_desc 分段**一一对应**（段数/起止秒数一致）；`description` 即该段正文；`source_quote` 填该事件在原文的出处短句（无则空串）。窗口须落在 (0, duration_sec] 内、按时间升序、首尾相接不重叠。`event_id` 由管线分配，**不要自己产出**。
+- 时间分段以 `motion_desc` 为唯一生成输入，不要求重复输出 `temporal_plan`。管线按需派生事件边界与身份。兼容已有事件表时仍须逐段一致；不得伪造原文出处。
 - Seedream/Qwen 图片参数只在 Step02a 使用；Seedance/Wan 视频参数只在 Step02b 使用。
 
 ## 1. ★ 硬约束（10 条，违反 = 全章拒收重生成）

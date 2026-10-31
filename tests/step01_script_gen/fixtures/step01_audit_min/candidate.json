@@ -1,0 +1,1294 @@
+{
+  "title": "测试章",
+  "characters": [
+    {
+      "name": "甲",
+      "desc": "中年男子，青布长衫"
+    },
+    {
+      "name": "乙",
+      "desc": "青年，灰布短打"
+    }
+  ],
+  "shots": [
+    {
+      "index": 1,
+      "prompt": "[甲: 布衣角色] 中景，甲立河边，举灯照水，冷蓝夜色，背景芦苇",
+      "motion_desc": "前1.5秒：甲举灯照水起势；1.5-3秒：甲举灯照水推进；3-5秒：甲举灯照水收势",
+      "ff_desc": "甲立于岸边，举灯照水尚未起势",
+      "lf_desc": "甲举灯照水收势，灯火微晃",
+      "scene": "河边",
+      "location": "河边",
+      "main_subject": "甲",
+      "core_keywords": [
+        "夜",
+        "灯"
+      ],
+      "narration_segment": "",
+      "subtitle": "",
+      "audio_cue": "人声：无；音效：风声；背景音乐：无",
+      "fx_effect": "无",
+      "color_tone": "冷蓝",
+      "camera_movement": "固定机位",
+      "framing": "中景",
+      "lighting_color": "冷蓝",
+      "duration_sec": 5.0,
+      "clip_transition": "硬切，时长0.2s",
+      "keyframes": [
+        {
+          "desc": "0-1.5秒：甲举灯照水起势，灯火未动",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "1.5-3秒：甲举灯照水推进，衣角轻摆",
+          "stage": "approach",
+          "t_sec": 2.5
+        },
+        {
+          "desc": "3-5秒：甲举灯照水收势，灯火微晃",
+          "stage": "after",
+          "t_sec": 4.0
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "甲",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "举灯照水未起",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "甲",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "举灯照水已收",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "举灯照水未起",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "举灯照水进行",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "举灯照水已收",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "index": 2,
+      "prompt": "[乙: 布衣角色] 中景，乙立河边，抬手指向芦苇，冷蓝夜色，背景芦苇",
+      "motion_desc": "前1.5秒：乙抬手指向芦苇起势；1.5-3秒：乙抬手指向芦苇推进；3-5秒：乙抬手指向芦苇收势",
+      "ff_desc": "乙立于岸边，抬手指向芦苇尚未起势",
+      "lf_desc": "乙抬手指向芦苇收势，灯火微晃",
+      "scene": "河边",
+      "location": "河边",
+      "main_subject": "乙",
+      "core_keywords": [
+        "夜",
+        "灯"
+      ],
+      "narration_segment": "",
+      "subtitle": "",
+      "audio_cue": "人声：无；音效：风声；背景音乐：无",
+      "fx_effect": "无",
+      "color_tone": "冷蓝",
+      "camera_movement": "固定机位",
+      "framing": "中景",
+      "lighting_color": "冷蓝",
+      "duration_sec": 5.0,
+      "clip_transition": "硬切，时长0.2s",
+      "keyframes": [
+        {
+          "desc": "0-1.5秒：乙抬手指向芦苇起势，灯火未动",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "1.5-3秒：乙抬手指向芦苇推进，衣角轻摆",
+          "stage": "approach",
+          "t_sec": 2.5
+        },
+        {
+          "desc": "3-5秒：乙抬手指向芦苇收势，灯火微晃",
+          "stage": "after",
+          "t_sec": 4.0
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "乙",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "抬手指向芦苇未起",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "乙",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "抬手指向芦苇已收",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "抬手指向芦苇未起",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "抬手指向芦苇进行",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "抬手指向芦苇已收",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "index": 3,
+      "prompt": "[甲: 布衣角色] 中景，甲立河边，俯身拾起竹篓，冷蓝夜色，背景芦苇",
+      "motion_desc": "前1.5秒：甲俯身拾起竹篓起势；1.5-3秒：甲俯身拾起竹篓推进；3-5秒：甲俯身拾起竹篓收势",
+      "ff_desc": "甲立于岸边，俯身拾起竹篓尚未起势",
+      "lf_desc": "甲俯身拾起竹篓收势，灯火微晃",
+      "scene": "河边",
+      "location": "河边",
+      "main_subject": "甲",
+      "core_keywords": [
+        "夜",
+        "灯"
+      ],
+      "narration_segment": "",
+      "subtitle": "",
+      "audio_cue": "人声：无；音效：风声；背景音乐：无",
+      "fx_effect": "无",
+      "color_tone": "冷蓝",
+      "camera_movement": "固定机位",
+      "framing": "中景",
+      "lighting_color": "冷蓝",
+      "duration_sec": 5.0,
+      "clip_transition": "硬切，时长0.2s",
+      "keyframes": [
+        {
+          "desc": "0-1.5秒：甲俯身拾起竹篓起势，灯火未动",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "1.5-3秒：甲俯身拾起竹篓推进，衣角轻摆",
+          "stage": "approach",
+          "t_sec": 2.5
+        },
+        {
+          "desc": "3-5秒：甲俯身拾起竹篓收势，灯火微晃",
+          "stage": "after",
+          "t_sec": 4.0
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "甲",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "俯身拾起竹篓未起",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "甲",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "俯身拾起竹篓已收",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "俯身拾起竹篓未起",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "俯身拾起竹篓进行",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "俯身拾起竹篓已收",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "index": 4,
+      "prompt": "[乙: 布衣角色] 中景，乙立河边，转身看向堤岸，冷蓝夜色，背景芦苇",
+      "motion_desc": "前1.5秒：乙转身看向堤岸起势；1.5-3秒：乙转身看向堤岸推进；3-5秒：乙转身看向堤岸收势",
+      "ff_desc": "乙立于岸边，转身看向堤岸尚未起势",
+      "lf_desc": "乙转身看向堤岸收势，灯火微晃",
+      "scene": "河边",
+      "location": "河边",
+      "main_subject": "乙",
+      "core_keywords": [
+        "夜",
+        "灯"
+      ],
+      "narration_segment": "",
+      "subtitle": "",
+      "audio_cue": "人声：无；音效：风声；背景音乐：无",
+      "fx_effect": "无",
+      "color_tone": "冷蓝",
+      "camera_movement": "固定机位",
+      "framing": "中景",
+      "lighting_color": "冷蓝",
+      "duration_sec": 5.0,
+      "clip_transition": "硬切，时长0.2s",
+      "keyframes": [
+        {
+          "desc": "0-1.5秒：乙转身看向堤岸起势，灯火未动",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "1.5-3秒：乙转身看向堤岸推进，衣角轻摆",
+          "stage": "approach",
+          "t_sec": 2.5
+        },
+        {
+          "desc": "3-5秒：乙转身看向堤岸收势，灯火微晃",
+          "stage": "after",
+          "t_sec": 4.0
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "乙",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "转身看向堤岸未起",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "乙",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "转身看向堤岸已收",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "转身看向堤岸未起",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "转身看向堤岸进行",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "转身看向堤岸已收",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "index": 5,
+      "prompt": "[甲: 布衣角色] 中景，甲立河边，蹲下系紧鞋带，冷蓝夜色，背景芦苇",
+      "motion_desc": "前1.5秒：甲蹲下系紧鞋带起势；1.5-3秒：甲蹲下系紧鞋带推进；3-5秒：甲蹲下系紧鞋带收势",
+      "ff_desc": "甲立于岸边，蹲下系紧鞋带尚未起势",
+      "lf_desc": "甲蹲下系紧鞋带收势，灯火微晃",
+      "scene": "河边",
+      "location": "河边",
+      "main_subject": "甲",
+      "core_keywords": [
+        "夜",
+        "灯"
+      ],
+      "narration_segment": "",
+      "subtitle": "",
+      "audio_cue": "人声：无；音效：风声；背景音乐：无",
+      "fx_effect": "无",
+      "color_tone": "冷蓝",
+      "camera_movement": "固定机位",
+      "framing": "中景",
+      "lighting_color": "冷蓝",
+      "duration_sec": 5.0,
+      "clip_transition": "硬切，时长0.2s",
+      "keyframes": [
+        {
+          "desc": "0-1.5秒：甲蹲下系紧鞋带起势，灯火未动",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "1.5-3秒：甲蹲下系紧鞋带推进，衣角轻摆",
+          "stage": "approach",
+          "t_sec": 2.5
+        },
+        {
+          "desc": "3-5秒：甲蹲下系紧鞋带收势，灯火微晃",
+          "stage": "after",
+          "t_sec": 4.0
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "甲",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "蹲下系紧鞋带未起",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "甲",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "蹲下系紧鞋带已收",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "蹲下系紧鞋带未起",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "蹲下系紧鞋带进行",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "蹲下系紧鞋带已收",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "index": 6,
+      "prompt": "[乙: 布衣角色] 中景，乙立河边，抬手拂去肩头落叶，冷蓝夜色，背景芦苇",
+      "motion_desc": "前1.5秒：乙抬手拂去肩头落叶起势；1.5-3秒：乙抬手拂去肩头落叶推进；3-5秒：乙抬手拂去肩头落叶收势",
+      "ff_desc": "乙立于岸边，抬手拂去肩头落叶尚未起势",
+      "lf_desc": "乙抬手拂去肩头落叶收势，灯火微晃",
+      "scene": "河边",
+      "location": "河边",
+      "main_subject": "乙",
+      "core_keywords": [
+        "夜",
+        "灯"
+      ],
+      "narration_segment": "",
+      "subtitle": "",
+      "audio_cue": "人声：无；音效：风声；背景音乐：无",
+      "fx_effect": "无",
+      "color_tone": "冷蓝",
+      "camera_movement": "固定机位",
+      "framing": "中景",
+      "lighting_color": "冷蓝",
+      "duration_sec": 5.0,
+      "clip_transition": "硬切，时长0.2s",
+      "keyframes": [
+        {
+          "desc": "0-1.5秒：乙抬手拂去肩头落叶起势，灯火未动",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "1.5-3秒：乙抬手拂去肩头落叶推进，衣角轻摆",
+          "stage": "approach",
+          "t_sec": 2.5
+        },
+        {
+          "desc": "3-5秒：乙抬手拂去肩头落叶收势，灯火微晃",
+          "stage": "after",
+          "t_sec": 4.0
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "乙",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "抬手拂去肩头落叶未起",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "乙",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "抬手拂去肩头落叶已收",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "抬手拂去肩头落叶未起",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "抬手拂去肩头落叶进行",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "抬手拂去肩头落叶已收",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "index": 7,
+      "prompt": "[甲: 布衣角色] 中景，甲立河边，侧身让出小径，冷蓝夜色，背景芦苇",
+      "motion_desc": "前1.5秒：甲侧身让出小径起势；1.5-3秒：甲侧身让出小径推进；3-5秒：甲侧身让出小径收势",
+      "ff_desc": "甲立于岸边，侧身让出小径尚未起势",
+      "lf_desc": "甲侧身让出小径收势，灯火微晃",
+      "scene": "河边",
+      "location": "河边",
+      "main_subject": "甲",
+      "core_keywords": [
+        "夜",
+        "灯"
+      ],
+      "narration_segment": "",
+      "subtitle": "",
+      "audio_cue": "人声：无；音效：风声；背景音乐：无",
+      "fx_effect": "无",
+      "color_tone": "冷蓝",
+      "camera_movement": "固定机位",
+      "framing": "中景",
+      "lighting_color": "冷蓝",
+      "duration_sec": 5.0,
+      "clip_transition": "硬切，时长0.2s",
+      "keyframes": [
+        {
+          "desc": "0-1.5秒：甲侧身让出小径起势，灯火未动",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "1.5-3秒：甲侧身让出小径推进，衣角轻摆",
+          "stage": "approach",
+          "t_sec": 2.5
+        },
+        {
+          "desc": "3-5秒：甲侧身让出小径收势，灯火微晃",
+          "stage": "after",
+          "t_sec": 4.0
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "甲",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "侧身让出小径未起",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "甲",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "侧身让出小径已收",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "侧身让出小径未起",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "侧身让出小径进行",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "侧身让出小径已收",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "index": 8,
+      "prompt": "[乙: 布衣角色] 中景，乙立河边，举灯照亮石阶，冷蓝夜色，背景芦苇",
+      "motion_desc": "前1.5秒：乙举灯照亮石阶起势；1.5-3秒：乙举灯照亮石阶推进；3-5秒：乙举灯照亮石阶收势",
+      "ff_desc": "乙立于岸边，举灯照亮石阶尚未起势",
+      "lf_desc": "乙举灯照亮石阶收势，灯火微晃",
+      "scene": "河边",
+      "location": "河边",
+      "main_subject": "乙",
+      "core_keywords": [
+        "夜",
+        "灯"
+      ],
+      "narration_segment": "",
+      "subtitle": "",
+      "audio_cue": "人声：无；音效：风声；背景音乐：无",
+      "fx_effect": "无",
+      "color_tone": "冷蓝",
+      "camera_movement": "固定机位",
+      "framing": "中景",
+      "lighting_color": "冷蓝",
+      "duration_sec": 5.0,
+      "clip_transition": "硬切，时长0.2s",
+      "keyframes": [
+        {
+          "desc": "0-1.5秒：乙举灯照亮石阶起势，灯火未动",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "1.5-3秒：乙举灯照亮石阶推进，衣角轻摆",
+          "stage": "approach",
+          "t_sec": 2.5
+        },
+        {
+          "desc": "3-5秒：乙举灯照亮石阶收势，灯火微晃",
+          "stage": "after",
+          "t_sec": 4.0
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "乙",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "举灯照亮石阶未起",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "乙",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "举灯照亮石阶已收",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "举灯照亮石阶未起",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "举灯照亮石阶进行",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "举灯照亮石阶已收",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "index": 9,
+      "prompt": "[甲: 布衣角色] 中景，甲立河边，低头查看水面，冷蓝夜色，背景芦苇",
+      "motion_desc": "前1.5秒：甲低头查看水面起势；1.5-3秒：甲低头查看水面推进；3-5秒：甲低头查看水面收势",
+      "ff_desc": "甲立于岸边，低头查看水面尚未起势",
+      "lf_desc": "甲低头查看水面收势，灯火微晃",
+      "scene": "河边",
+      "location": "河边",
+      "main_subject": "甲",
+      "core_keywords": [
+        "夜",
+        "灯"
+      ],
+      "narration_segment": "",
+      "subtitle": "",
+      "audio_cue": "人声：无；音效：风声；背景音乐：无",
+      "fx_effect": "无",
+      "color_tone": "冷蓝",
+      "camera_movement": "固定机位",
+      "framing": "中景",
+      "lighting_color": "冷蓝",
+      "duration_sec": 5.0,
+      "clip_transition": "硬切，时长0.2s",
+      "keyframes": [
+        {
+          "desc": "0-1.5秒：甲低头查看水面起势，灯火未动",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "1.5-3秒：甲低头查看水面推进，衣角轻摆",
+          "stage": "approach",
+          "t_sec": 2.5
+        },
+        {
+          "desc": "3-5秒：甲低头查看水面收势，灯火微晃",
+          "stage": "after",
+          "t_sec": 4.0
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "甲",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "低头查看水面未起",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "甲",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "低头查看水面已收",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "低头查看水面未起",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "低头查看水面进行",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "低头查看水面已收",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "index": 10,
+      "prompt": "[乙: 布衣角色] 中景，乙立河边，抬脚跨过浅沟，冷蓝夜色，背景芦苇",
+      "motion_desc": "前1.5秒：乙抬脚跨过浅沟起势；1.5-3秒：乙抬脚跨过浅沟推进；3-5秒：乙抬脚跨过浅沟收势",
+      "ff_desc": "乙立于岸边，抬脚跨过浅沟尚未起势",
+      "lf_desc": "乙抬脚跨过浅沟收势，灯火微晃",
+      "scene": "河边",
+      "location": "河边",
+      "main_subject": "乙",
+      "core_keywords": [
+        "夜",
+        "灯"
+      ],
+      "narration_segment": "",
+      "subtitle": "",
+      "audio_cue": "人声：无；音效：风声；背景音乐：无",
+      "fx_effect": "无",
+      "color_tone": "冷蓝",
+      "camera_movement": "固定机位",
+      "framing": "中景",
+      "lighting_color": "冷蓝",
+      "duration_sec": 5.0,
+      "clip_transition": "硬切，时长0.2s",
+      "keyframes": [
+        {
+          "desc": "0-1.5秒：乙抬脚跨过浅沟起势，灯火未动",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "1.5-3秒：乙抬脚跨过浅沟推进，衣角轻摆",
+          "stage": "approach",
+          "t_sec": 2.5
+        },
+        {
+          "desc": "3-5秒：乙抬脚跨过浅沟收势，灯火微晃",
+          "stage": "after",
+          "t_sec": 4.0
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "乙",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "抬脚跨过浅沟未起",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "乙",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "抬脚跨过浅沟已收",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "抬脚跨过浅沟未起",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "抬脚跨过浅沟进行",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "抬脚跨过浅沟已收",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "index": 11,
+      "prompt": "[甲: 布衣角色] 中景，甲立河边，回身招手示意，冷蓝夜色，背景芦苇",
+      "motion_desc": "前1.5秒：甲回身招手示意起势；1.5-3秒：甲回身招手示意推进；3-5秒：甲回身招手示意收势",
+      "ff_desc": "甲立于岸边，回身招手示意尚未起势",
+      "lf_desc": "甲回身招手示意收势，灯火微晃",
+      "scene": "河边",
+      "location": "河边",
+      "main_subject": "甲",
+      "core_keywords": [
+        "夜",
+        "灯"
+      ],
+      "narration_segment": "",
+      "subtitle": "",
+      "audio_cue": "人声：无；音效：风声；背景音乐：无",
+      "fx_effect": "无",
+      "color_tone": "冷蓝",
+      "camera_movement": "固定机位",
+      "framing": "中景",
+      "lighting_color": "冷蓝",
+      "duration_sec": 5.0,
+      "clip_transition": "硬切，时长0.2s",
+      "keyframes": [
+        {
+          "desc": "0-1.5秒：甲回身招手示意起势，灯火未动",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "1.5-3秒：甲回身招手示意推进，衣角轻摆",
+          "stage": "approach",
+          "t_sec": 2.5
+        },
+        {
+          "desc": "3-5秒：甲回身招手示意收势，灯火微晃",
+          "stage": "after",
+          "t_sec": 4.0
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "甲",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "回身招手示意未起",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "甲",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "回身招手示意已收",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "回身招手示意未起",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "回身招手示意进行",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "回身招手示意已收",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "index": 12,
+      "prompt": "[乙: 布衣角色] 中景，乙立河边，停步望向远处，冷蓝夜色，背景芦苇",
+      "motion_desc": "前1.5秒：乙停步望向远处起势；1.5-3秒：乙停步望向远处推进；3-5秒：乙停步望向远处收势",
+      "ff_desc": "乙立于岸边，停步望向远处尚未起势",
+      "lf_desc": "乙停步望向远处收势，灯火微晃",
+      "scene": "河边",
+      "location": "河边",
+      "main_subject": "乙",
+      "core_keywords": [
+        "夜",
+        "灯"
+      ],
+      "narration_segment": "",
+      "subtitle": "",
+      "audio_cue": "人声：无；音效：风声；背景音乐：无",
+      "fx_effect": "无",
+      "color_tone": "冷蓝",
+      "camera_movement": "固定机位",
+      "framing": "中景",
+      "lighting_color": "冷蓝",
+      "duration_sec": 5.0,
+      "clip_transition": "硬切，时长0.2s",
+      "keyframes": [
+        {
+          "desc": "0-1.5秒：乙停步望向远处起势，灯火未动",
+          "stage": "pre",
+          "t_sec": 1.0
+        },
+        {
+          "desc": "1.5-3秒：乙停步望向远处推进，衣角轻摆",
+          "stage": "approach",
+          "t_sec": 2.5
+        },
+        {
+          "desc": "3-5秒：乙停步望向远处收势，灯火微晃",
+          "stage": "after",
+          "t_sec": 4.0
+        }
+      ],
+      "frame_layouts": {
+        "ff": [
+          {
+            "name": "乙",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "停步望向远处未起",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "lf": [
+          {
+            "name": "乙",
+            "on_screen": true,
+            "position": "前景",
+            "pose": "停步望向远处已收",
+            "gaze_target": "画左",
+            "props": [
+              "灯笼"
+            ]
+          }
+        ],
+        "kfs": [
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "停步望向远处未起",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "停步望向远处进行",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ],
+          [
+            {
+              "name": "乙",
+              "on_screen": true,
+              "position": "前景",
+              "pose": "停步望向远处已收",
+              "gaze_target": "画左",
+              "props": [
+                "灯笼"
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  ],
+  "total_duration": 60.0,
+  "style": "写实",
+  "narration": "",
+  "resolution": "1080x1920",
+  "ratio": "9:16",
+  "fps": 24,
+  "global_lighting": "夜色",
+  "global_camera_base": "固定",
+  "global_weather": "晴",
+  "global_atmosphere": "静谧",
+  "negative_prompt": "",
+  "shot_count": 12,
+  "plan_id": "fixture-plan",
+  "timeline": [],
+  "chapter_outline": {
+    "title": "测试章",
+    "beats": [],
+    "dialogue_lines": []
+  }
+}

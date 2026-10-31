@@ -29,6 +29,38 @@ import json
 DEEPSEEK_MAX_RETRIES = 0
 
 
+def _read_stream(stream, gate):
+    """把**流式响应**读到终态（必须在 TransportGate 的发送闭包内执行，P2）.
+
+    为什么不能在外面迭代：`for event in stream` 的阻塞发生在取下一条事件时，
+    闸门的墙钟等待只覆盖到 `create()` 返回——首事件迟迟不到时，调用方已经按超时
+    返回，工作线程却还在阻塞，超时语义与真实的传输等待脱节。放在闭包内之后，
+    TransportGate 的 join 上界重新覆盖"等流"这段，迟到的流不会被采纳。
+    """
+    final_response = None
+    try:
+        for event in stream:
+            if gate.deadline.expired():
+                raise TimeoutError(gate.expiry_reason())
+            event_type = getattr(event, "type", "")
+            if event_type in ("response.completed", "response.incomplete", "response.failed"):
+                final = getattr(event, "response", None)
+                expected = event_type.split(".", 1)[1]
+                if final is None or getattr(final, "status", None) != expected:
+                    raise RuntimeError("DeepSeek stream terminal event/status mismatch")
+                final_response = final
+                break
+    finally:
+        try:
+            stream.close()
+        except Exception:                                         # noqa: BLE001
+            pass
+    if final_response is None:
+        raise RuntimeError(
+            "DeepSeek stream ended without a terminal response; partial output rejected")
+    return final_response
+
+
 class DeepSeekTextService(TextGenerationService):
     """DeepSeek (Responses API) 文本生成实现.
 
@@ -127,27 +159,40 @@ class DeepSeekTextService(TextGenerationService):
             actual = dict(params)
             if timeout is not None:
                 actual["timeout"] = float(timeout)
+            if config.DEEPSEEK_STREAM:
+                actual["stream"] = True
+            # ---- 发送守卫（M07，2026-10-29）--------------------------------
+            # 位置是**约定**：参数构造与必要校验都在上面做完，这里刚好是进入
+            # `client.responses.create()` 之前的最后一步。守卫缺失 = 普通入口，
+            # 不拦截（旧行为逐字不变）；守卫报错 ⇒ 异常抛给调用方，**SDK 调用不
+            # 发生**（一次性授权已被占用/不可写时绝不静默发送）。
+            # 流式与非流式**共用这一个出口**，不存在漏过守卫的分支。
+            _guard = getattr(req, "send_guard", None)
+            _attempt_id = ""
+            if _guard is not None:
+                _attempt_id = _guard.before_send(
+                    provider="deepseek", model=model, endpoint="responses.create")
             # A/B 对照取证（§7.3）：发送边界的真实 payload（默认惰性）
             from _text_gen.payload_capture import maybe_capture as _cap
             _cap("deepseek", actual, where="responses.create")
-            if not config.DEEPSEEK_STREAM:
-                return client.responses.create(**actual)
-            actual["stream"] = True
-            stream = client.responses.create(**actual)
             try:
-                for event in stream:
-                    if _gate.deadline.expired():
-                        raise TimeoutError(_gate.expiry_reason())
-                    event_type = getattr(event, "type", "")
-                    if event_type in ("response.completed", "response.incomplete", "response.failed"):
-                        final = getattr(event, "response", None)
-                        expected = event_type.split(".", 1)[1]
-                        if final is None or getattr(final, "status", None) != expected:
-                            raise RuntimeError("DeepSeek stream terminal event/status mismatch")
-                        return final
-                raise RuntimeError("DeepSeek stream ended without a terminal response; partial output rejected")
-            finally:
-                stream.close()
+                response = client.responses.create(**actual)
+            except BaseException as _exc:
+                if _guard is not None:
+                    _guard.record_send_outcome(
+                        _attempt_id, "failed",
+                        {"error": "%s: %s" % (type(_exc).__name__, str(_exc)[:300])})
+                raise
+            if _guard is not None:
+                _guard.record_send_outcome(
+                    _attempt_id, "returned", {"stream": bool(config.DEEPSEEK_STREAM)})
+            if not config.DEEPSEEK_STREAM:
+                return response
+            # 流式（P2，2026-10-29）：`create()` 只拿到流对象，真正的等待发生在**迭代**
+            # 里。若把迭代留在闸门之外，socket 阻塞时主线程已按超时返回、这里还在等下一
+            # 个事件（实测：0.05s 预算 / 首事件延迟 0.25s ⇒ 0.251s 才报 TimeoutError）。
+            # 因此**在受保护的 send 闭包内**读到终态；`create()` 前的一次性守卫不变。
+            return _read_stream(response, _gate)
 
         response, _timed_out, _why = _gate.request(send)
         if _why:
@@ -251,9 +296,30 @@ class DeepSeekTextService(TextGenerationService):
         print(f"[INFO] 正在调用 DeepSeek ({model}) 生成分镜脚本...")
 
         # 同上：chat 回退路径也用**发送当刻**算出的上限
-        response, _timed_out, _why = _gate.request(
-            lambda _t: client.chat.completions.create(**api_params) if _t is None
-            else client.chat.completions.create(**{**api_params, "timeout": float(_t)}))
+        def _send_chat(_t):
+            """chat 回退路径的发送守卫（位置同 Responses：参数构造之后、SDK 之前）."""
+            _guard = getattr(req, "send_guard", None)
+            _attempt_id = ""
+            if _guard is not None:
+                _attempt_id = _guard.before_send(
+                    provider="deepseek", model=model, endpoint="chat.completions.create")
+            try:
+                if _t is None:
+                    _response = client.chat.completions.create(**api_params)
+                else:
+                    _response = client.chat.completions.create(
+                        **{**api_params, "timeout": float(_t)})
+            except BaseException as _exc:
+                if _guard is not None:
+                    _guard.record_send_outcome(
+                        _attempt_id, "failed",
+                        {"error": "%s: %s" % (type(_exc).__name__, str(_exc)[:300])})
+                raise
+            if _guard is not None:
+                _guard.record_send_outcome(_attempt_id, "returned", {"stream": False})
+            return _response
+
+        response, _timed_out, _why = _gate.request(_send_chat)
         if _why:
             return TextGenerationResult(success=False, error=_why)
         if not getattr(response, "choices", None):

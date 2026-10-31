@@ -1330,3 +1330,123 @@ def test_repair_that_breaks_the_contract_is_not_adopted(chapter, monkeypatch):
     assert "不采纳" in summary["detail"] and "plan_refs_line_not_in_shot" in summary["detail"]
     assert script["shots"][0]["narration_segment"] == _LINE, "基线必须保留（未被修复稿替换）"
     assert rounds["n"] == 1 and calls["n"] == 1, "拒收后不得再发一轮审计/修复"
+
+# ---------------------------------------------------------------------------
+# 2026-10-28：提交入口对 finalize 失败的处理（新分支）
+# ---------------------------------------------------------------------------
+def test_initial_finalize_error_blocks_before_any_audit(chapter, monkeypatch):
+    """finalize 返回错误 ⇒ BLOCK/finalize_failed，**零审计调用**，不写三份产物.
+
+    同时核「不污染基线」：`finalize_step01_script` 是就地写，失败时调用方拿到的稿件
+    必须仍是进入时的内容（`_finalize` 在副本上跑）。
+    """
+    import copy
+
+    import step01_script_gen.main as m
+    from step01_script_gen.quality_issues import RULE_SOURCE_FINGERPRINT
+
+    calls = _fake_audit(monkeypatch, lambda s, n: _audit_payload(
+        s, scope=m.STEP01_AUDIT_SCOPE, fingerprint=RULE_SOURCE_FINGERPRINT))
+
+    def bad_finalize(script, **kwargs):
+        return script, ["timeline broken: 末段 end=5 ≠ duration 5.7"]
+
+    monkeypatch.setattr(m, "finalize_step01_script", bad_finalize)
+    source = _script()
+    before = copy.deepcopy(source)
+
+    out, summary = m._commit_step01_outputs(source, "")
+
+    assert summary["status"] == "BLOCK", summary
+    assert summary["repair_outcome"] == "finalize_failed"
+    assert [b["code"] for b in summary["blocking"]] == ["finalize_failed"]
+    assert "timeline broken" in summary["detail"]
+    assert calls["n"] == 0, "finalize 未通过时不得发起审计"
+    # 调用方传进来的对象必须原样（提交入口在入口处复制）。禁用状态的 `hook` 归一
+    # 现在只发生在**投影**里（成功路径），失败路径原样交回入口副本、不落盘。
+    assert source == before, "失败路径不得改写调用方的稿件（基线保留）"
+    assert out["shots"] == before["shots"]
+    assert out.get("chapter_outline") == before.get("chapter_outline")
+    manifest = json.loads((chapter / "step01_commit.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "BLOCK"
+    assert [b["code"] for b in manifest["blocking"]] == ["finalize_failed"]
+    for name in ("script_result.json", "step01_quality.json", "step01_audit.json"):
+        assert not (chapter / name).exists(), name
+    assert not (chapter / "_staged").exists(), "不得留下看起来像权威副本的 staged"
+
+
+def test_finalize_crash_is_not_reported_as_finalize_failed(chapter, monkeypatch):
+    """finalize **自身抛异常** ⇒ 向上抛（明确失败），不得折算成内容结论."
+
+    判别点：旧写法 `except ValueError` 会把任何 ValueError（包括 finalize 内部/被调
+    代码的取值错误）都记成 `finalize_failed`，并写一份 BLOCK manifest。这里要求
+    异常原样抛出、且不产生任何提交尝试的痕迹。
+    """
+    import pytest as _pytest
+
+    import step01_script_gen.main as m
+    from step01_script_gen.quality_issues import RULE_SOURCE_FINGERPRINT
+
+    _fake_audit(monkeypatch, lambda s, n: _audit_payload(
+        s, scope=m.STEP01_AUDIT_SCOPE, fingerprint=RULE_SOURCE_FINGERPRINT))
+
+    def boom(script, **kwargs):
+        raise ValueError("window math exploded")
+
+    monkeypatch.setattr(m, "finalize_step01_script", boom)
+
+    with _pytest.raises(ValueError, match="window math exploded"):
+        m._commit_step01_outputs(_script(), "")
+
+    assert not (chapter / "step01_commit.json").exists(), "崩溃不是 BLOCK 结论"
+    assert not (chapter / "script_result.json").exists()
+
+
+def test_repair_finalize_error_keeps_baseline(chapter, monkeypatch):
+    """修复稿 finalize 失败 ⇒ 不采纳修复稿，保留基线，且不再多发调用."""
+    import copy
+
+    import step01_script_gen.main as m
+    from step01_script_gen.quality_issues import RULE_SOURCE_FINGERPRINT
+
+    plan = _plan_with_contract()
+    real_finalize = m.finalize_step01_script
+    # 基线是**第一趟 finalize 之后**的稿子（finalize 会按规则改写景别前缀等），
+    # 不是夹具原样；先算一遍，才能在修复稿被拒后核「保留的是哪一份」。
+    _baseline, _errs = real_finalize(copy.deepcopy(_script_with_contract(plan)),
+                                     novel_text="")
+    assert not _errs
+    baseline_prompt = _baseline["shots"][1]["prompt"]
+    fin = {"n": 0}
+
+    def flaky_finalize(script, **kwargs):
+        fin["n"] += 1
+        if fin["n"] == 1:
+            return real_finalize(script, **kwargs)
+        return script, ["repair pass broke the timeline"]
+
+    monkeypatch.setattr(m, "finalize_step01_script", flaky_finalize)
+    rounds = {"n": 0}
+
+    def fake_repair(script, novel_text, **kwargs):
+        rounds["n"] += 1
+        cand = copy.deepcopy(script)
+        cand["shots"][1]["prompt"] = cand["shots"][1]["prompt"] + " 补一句"
+        return cand
+
+    monkeypatch.setattr(m, "_repair_shot_warnings", fake_repair)
+    calls = _fake_audit(monkeypatch, lambda s, n: _audit_payload(
+        s, issues=[{"code": "model_audit_x", "shot_id": "2",
+                    "severity": "visual_risk", "message": "m",
+                    "field_path": "prompt",
+                    "repair_targets": [{"shot_id": "2", "field_path": "prompt"}]}],
+        scope=m.STEP01_AUDIT_SCOPE, fingerprint=RULE_SOURCE_FINGERPRINT))
+
+    script, summary = m._commit_step01_outputs(
+        _script_with_contract(plan), "", plan=plan)
+
+    assert summary["status"] == "BLOCK", summary
+    assert summary["repair_outcome"] == "repair_finalize_failed", summary
+    assert "repair pass broke the timeline" in summary["detail"]
+    assert rounds["n"] == 1 and calls["n"] == 1, "拒收后不得再发修复/审计调用"
+    assert script["shots"][1]["prompt"] == baseline_prompt, "修复前的基线必须保留"

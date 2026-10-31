@@ -789,7 +789,8 @@ def _build_character_layout_block(shot: dict, characters: list) -> str:
 
 
 def _build_reference_list(image_path, last_frame_image_path, extra_keyframe_paths,
-                          mode: str = "A", ref_kind: str = "image") -> str:
+                          mode: str = "A", ref_kind: str = "image",
+                          media_items=None) -> str:
     """构建「参考图清单」声明（豆包模板吸收 #1）.
 
     让视频模型明确每张传入参考图的语义：首帧起点 / 尾帧终点 / 关键帧 /
@@ -799,6 +800,15 @@ def _build_reference_list(image_path, last_frame_image_path, extra_keyframe_path
     ref_kind: "image"（图生视频，帧图有明确时间语义）或 "r2v"（参考生视频，
       参考图只作角色/道具/场景一致性锚定，无时间语义）。
     """
+    if media_items is not None and ref_kind != "r2v":
+        # 与请求**同一份**最终素材清单（shared.video_media_plan）：
+        # 提示词只声明真正会下发的图，不再出现"写了 5 张、只发 2 张"。
+        from shared.video_media_plan import reference_labels
+        refs = reference_labels(media_items)
+        if not refs:
+            return ""
+        head = "【参考图清单】本次生成使用以下参考图，严格按其所示内容生成，禁止与参考图冲突："
+        return head + "；".join(refs)
     n = 1
     refs = []
     if ref_kind == "r2v":
@@ -1296,6 +1306,29 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     shot["planned_duration_sec"] = round(planned_duration, 3)
     shot["submitted_duration_sec"] = duration
 
+    # 最终素材计划：**先按模型能力定素材与 role，再据此写提示词**（与 provider 同一函数）。
+    # 目前只接 volcengine（Seedance）这条链；其他 provider 保留各自显式能力分支。
+    _media_items = None
+    _media_selection = None
+    if _REFERENCE_MODE == "image" and os.getenv("VIDEO_PROVIDER", "").strip().lower() == "volcengine":
+        from shared.video_media_plan import plan_image_media
+        from shared.model_caps import active_video_model, get_seedance_cap
+        _cap = get_seedance_cap(active_video_model())
+        _plan = plan_image_media(
+            supports_reference_image=bool(getattr(_cap, "supports_reference_image", False)),
+            image_path=image_path, last_frame_path=last_frame_image_path,
+            keyframe_paths=list(extra_keyframe_paths))
+        image_path = _plan["first_frame"]
+        last_frame_image_path = _plan["last_frame"]
+        extra_keyframe_paths = list(_plan["reference_images"])
+        _media_items = _plan["items"]
+        _media_selection = {
+            "mode": _plan["mode"],
+            "items": [{"path": i["path"], "role": i["role"]} for i in _media_items],
+            "dropped": list(_plan["dropped"]),
+            "modifications": list(_plan["modifications"]),
+        }
+
     # 多关键帧优先：3+ 帧时使用多关键帧模式，2帧时使用首尾双锚定
     if extra_keyframe_paths:
         pass  # 使用多关键帧
@@ -1324,7 +1357,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     else:
         ref_list = _build_reference_list(
             image_path, last_frame_image_path, extra_keyframe_paths,
-            mode=mode, ref_kind=_REFERENCE_MODE,
+            mode=mode, ref_kind=_REFERENCE_MODE, media_items=_media_items,
         )
         if ref_list:
             full_prompt = full_prompt + "\n\n" + ref_list
@@ -1362,6 +1395,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         reference_paths=reference_paths,
         seed=_seed,
         camera_movement=camera_movement,
+        media_selection=_media_selection,
     )
 
 

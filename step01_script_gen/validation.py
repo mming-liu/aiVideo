@@ -4467,6 +4467,14 @@ def _run_prompt_checklist(script: dict) -> dict:
 
     # v6.31 新增：关键帧时序一致性检查（钩子 kf 修复：pre-state+post-state 冲突）
     results["kf_temporal_consistency"] = _check_kf_temporal_consistency(shots, script.get("hook"))
+    # 2026-10-28（M05）：在场判据的「证据不足」（帧时间缺失/越界/乱序、过渡位置不确定）
+    # 单列成**非阻塞诊断类别**：进入报告、可评阅，但不与可判定矛盾共用阻塞类别。
+    results["presence_insufficient_diag"] = {
+        "pass": True,
+        "issues": [],
+        "warnings": [_presence_insufficient_line(item)
+                     for item in (results["kf_temporal_consistency"].get("presence_insufficient") or [])],
+    }
 
     # v6.33 新增：关键帧物理时刻 = motion_desc 时段对齐（08-18 钩子坑：kfs 全堆 post 段、缺 pre 帧）
     # 2026-09-27（用户裁决）：本类别只保留**越窗 / 顺序**两类检测；检测 1（缺段）
@@ -4712,6 +4720,10 @@ def post_fix_shot_prompts(script: dict) -> dict:
     # 原生发声供应商（volcengine/minimax/agent_plan）不补「（用中文说）」；
     # 旧供应商保留历史行为。用 active_video_uses_native_voice() 统一判断。
     native_voice = active_video_uses_native_voice()
+    from step01_script_gen.plan_feasibility import (
+        approved_voice_fragments, is_approved_voice_fragment)
+    fragments = approved_voice_fragments(script.get("chapter_outline"))
+    characters = script.get("characters") or []
     shots = script.get("shots", [])
     for i, shot in enumerate(shots):
         # v6.69（2026-09-12 回写陷阱重构）：本循环读写统一 shot 直读直写——旧实现
@@ -4782,18 +4794,21 @@ def post_fix_shot_prompts(script: dict) -> dict:
         #    的单句在语义停顿点插入「，」，只改标点不改文字（规则31 兼容）。
         #    narration_segment 与 subtitle 同步修复（subtitle == narration_segment，
         #    字幕与语音严格对齐；修复后仍逐字一致）。
-        _fixed_narr = _fix_dialogue_length(narration)
+        _fixed_narr = (narration if is_approved_voice_fragment(narration, fragments, characters)
+                       else _fix_dialogue_length(narration))
         if _fixed_narr != narration:
             shot["narration_segment"] = _fixed_narr
             narration = _fixed_narr
-        _fixed_sub = _fix_dialogue_length(subtitle)
+        _fixed_sub = (subtitle if is_approved_voice_fragment(subtitle, fragments, characters)
+                      else _fix_dialogue_length(subtitle))
         if _fixed_sub != subtitle:
             shot["subtitle"] = _fixed_sub
             subtitle = _fixed_sub
         # 08-15（P18）：台词破折号裸收尾补「！」（「救命啊——」→「救命啊——！」），
         # 校验项 _check_voice_punctuation 裸收尾分支依赖。narration 与 subtitle 严格
         # 同步（subtitle == narration_segment），修复后仍逐字一致。
-        _fixed_dash = _fix_trailing_dash_punct(narration)
+        _fixed_dash = (narration if is_approved_voice_fragment(narration, fragments, characters)
+                       else _fix_trailing_dash_punct(narration))
         if _fixed_dash != narration:
             shot["narration_segment"] = _fixed_dash
             shot["subtitle"] = _fix_trailing_dash_punct(subtitle)
@@ -4815,9 +4830,11 @@ def post_fix_shot_prompts(script: dict) -> dict:
         if _hook_wide:
             pass
         # 08-15（P18）：hook 台词破折号裸收尾补「！」（_check_voice_punctuation 覆盖 hook）
-        if hook.get("narration_segment"):
+        if hook.get("narration_segment") and not is_approved_voice_fragment(
+                hook["narration_segment"], fragments, characters):
             hook["narration_segment"] = _fix_trailing_dash_punct(hook["narration_segment"])
-        if hook.get("subtitle"):
+        if hook.get("subtitle") and not is_approved_voice_fragment(
+                hook["subtitle"], fragments, characters):
             hook["subtitle"] = _fix_trailing_dash_punct(hook["subtitle"])
 
     return script
@@ -6395,13 +6412,20 @@ _SUBJECT_POSE_WORDS = {
 
 def _extract_state_markers(text: str) -> dict:
     """从 kf/ff/lf desc 文本里提取状态标记."""
-    markers = {"has_blood": False, "threat_water_state": None, "poses": {}}
+    markers = {"has_blood": None, "threat_water_state": None, "poses": {}}
     if not text:
         return markers
-    for w in _BLOOD_WORDS:
-        if w in text:
-            markers["has_blood"] = True
-            break
+    # Three states: omitted/occluded is unknown, not evidence of disappearance.
+    # F8（2026-10-30）：否定必须作用在**血迹/血污/血痕**上。旧写法把词缀也省掉，
+    # 于是「毫无血色」（脸色）被误判成"没有血迹"，同句里的「胸口血迹扩大」才是真状态。
+    # 2026-10-30（复核 R07）：消失分支此前只认「已」，于是「血迹**已经**消失」不命中否定、
+    # 反而落到下面的有血词表被记成 has_blood=True——同一处否定范围问题，补上「已经」。
+    if re.search(r"(?:无|没有)血(?:迹|污|痕)|血(?:迹|污|痕)(?:已经|已)?(?:消失|不见)", text):
+        markers["has_blood"] = False
+    elif re.search(r"(?:血迹|血污|血痕).{0,6}(?:遮住|遮挡|画外)", text):
+        markers["has_blood"] = None
+    elif any(w in text for w in _BLOOD_WORDS):
+        markers["has_blood"] = True
     for w in _THREAT_WATER_WORDS:
         if w in text:
             markers["threat_water_state"] = w
@@ -6455,6 +6479,18 @@ def _extract_named_poses(text: str, shot: dict) -> dict[str, str]:
     return out
 
 
+def _presence_insufficient_line(item: dict) -> str:
+    """把一条结构性「证据不足」渲染成可评阅的一行（角色 + 帧 + 区间 + 代码）."""
+    actor = item.get("actor") or "（未定主体）"
+    window = item.get("window")
+    span = ("%g–%gs" % tuple(window)) if window else "时间未知"
+    frames = item.get("frames")
+    frame_text = "帧" + "-".join(str(f) for f in frames) if frames else ""
+    state = item.get("state") or "帧时间/过渡位置"
+    return (f"镜头{item.get('shot')} {actor} {span} {frame_text} {item.get('code')}"
+            f"（{state}未确定，不作离场/入场结论）")
+
+
 def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict:
     """v6.31 关键帧时序一致性检查（warning-only）.
 
@@ -6462,7 +6498,7 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
     2. kf[0..N] 状态单调性（血不能回退、出水不能回退）
     3. FF→kf[0] 状态连续性（不能跳变太大）
     """
-    issues, warnings = [], []
+    issues, warnings, insufficient = [], [], []
     targets = list(shots) + ([hook] if hook else [])
 
     for s in targets:
@@ -6470,6 +6506,15 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
         ff_text = (s.get("ff_desc") or "").strip()
         lf_text = (s.get("lf_desc") or "").strip()
         kfs = s.get("keyframes") or []
+
+        # 在场判据**先跑**：它与状态词分析相互独立，且 kf 时间不可用正是「证据不足」
+        # 的主要来源——原实现把它放在 `if not mid_kfs: continue` 之后，导致「帧时间
+        # 缺失」的镜头恰好被整镜跳过，诊断永远到不了报告（2026-10-28 复核实测）。
+        from step01_script_gen.frame_presence import presence_assessment
+        _assessment = presence_assessment(s)
+        warnings.extend(f"镜头{label} {message}" for message in _assessment["warnings"])
+        for _item in _assessment["insufficient"]:
+            insufficient.append({"shot": label, **_item})
 
         # 取中间帧（v6.34 字段迁移：t_sec 走 helper，time_ratio fallback）
         try:
@@ -6537,7 +6582,7 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
         for i in range(1, len(kf_markers)):
             prev, cur = kf_markers[i - 1], kf_markers[i]
             # 血单调：上一镜有血、下一镜无血 → 回退
-            if prev["has_blood"] and not cur["has_blood"]:
+            if prev["has_blood"] is True and cur["has_blood"] is False:
                 tr_p = mid_kfs[i - 1][0]
                 tr_c = mid_kfs[i][0]
                 warnings.append(
@@ -6576,7 +6621,7 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
                     f"「仍坐/察觉」或「被刺瞬间往后倒」）。"
                 )
             # FF 无血 + kf[0] 有血 = 跳变（除非 kf[0] 写「刚被刺」明示时序）
-            if not ff_m["has_blood"] and kf0_m["has_blood"]:
+            if ff_m["has_blood"] is False and kf0_m["has_blood"] is True:
                 tr0 = mid_kfs[0][0]
                 kf0_text = mid_kfs[0][1]
                 # 允许 kf[0] 写「刚被刺/刺入瞬间」明示时序
@@ -6592,11 +6637,11 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
             last_tr, last_text = mid_kfs[-1]
             last_m = kf_markers[-1]
             # 血倒退：kf 末尾有血 + LF 无血
-            if last_m["has_blood"] and not lf_m["has_blood"]:
+            if last_m["has_blood"] is True and lf_m["has_blood"] is False:
                 warnings.append(
                     f"镜头{label} 血状态回退：kf 末尾 t={last_tr:.1f} 有血 → LF 无血，"
                     f"违反致命伤持续规则（一旦出血 LF 必须保持）。"
-                    f"建议 LF 重写为「杨旭仰倒+心口洇痕+刺客已没入水中」。"
+                    f"请核对同一角色的伤痕与终态；擦拭、遮挡或时间跳跃须有明确依据。"
                 )
             # 刺客从有回到潜伏：kf 末尾刺客已出水/刺入 + LF 刺客「潜伏」「水下」无具体动作
             kf_threat_visible = last_m["threat_water_state"] in (
@@ -6629,70 +6674,12 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
                     )
                     break
 
-        # 5. v6.32 角色出现/消失时序合理性
-        #    FF + KFs + LF 必须含连贯的角色链——刺客不能凭空出现/消失
-        if mid_kfs:
-            from shared.frame_spec import is_on_screen
-            threat_words = ("刺客", "神秘人", "黑衣人", "杀手", "蒙面人", "蒙面黑影", "黑影")
-            threat_names = ("刺客", "神秘人", "黑衣人", "杀手", "蒙面人")
-
-            def _spec_has_visible_threat(entries) -> bool:
-                return any(
-                    isinstance(e, dict)
-                    and str(e.get("name") or "").strip() in threat_names
-                    and is_on_screen(e)
-                    for e in (entries or [])
-                )
-
-            layouts = s.get("frame_layouts") if isinstance(s.get("frame_layouts"), dict) else {}
-            kfs_spec_has_threat = any(
-                _spec_has_visible_threat(spec)
-                for spec in (layouts.get("kfs") or [])
-                if isinstance(spec, list)
-            )
-            ff_has_threat = (
-                any(w in ff_text for w in threat_words)
-                or _spec_has_visible_threat(layouts.get("ff"))
-            )
-            lf_has_threat = (
-                any(w in lf_text for w in threat_words)
-                or _spec_has_visible_threat(layouts.get("lf"))
-            )
-            kfs_have_threat = (
-                kfs_spec_has_threat
-                or any(any(w in d for w in threat_words) for _, d in mid_kfs)
-            )
-            # 合理链：
-            #   FF ✓ KFs ✓ LF ✓  → 刺客全程在场（合理）
-            #   FF ✓ KFs ✓ LF ✗  → 刺客动作链收尾（合理）
-            #   FF ✗ KFs ✓ LF ✓  → 刺客入场（合理）
-            #   FF ✗ KFs ✓ LF ✗  → 刺客入场-出场（合理）
-            # 不合理链：
-            #   FF ✓ KFs ✗ LF ✓  → 刺客在 KFs 消失又重现
-            #   FF ✓ KFs ✗ LF ✗  → 刺客在 KFs 完全消失（无收尾）
-            #   FF ✗ KFs ✗ LF ✓  → 刺客凭空出现
-            #   FF ✗ KFs ✗ LF ✗  → 刺客全程不在（KFs 中途出现又消失不合理）
-            if ff_has_threat and not kfs_have_threat and lf_has_threat:
-                warnings.append(
-                    f"镜头{label} 刺客在 KFs 段消失又重现：FF 刺客在场，"
-                    f"KFs 无刺客，LF 刺客再次在场。刺客应在 KFs 持续呈现动作链"
-                    f"（潜伏→出水→刺入→入水），不应消失再重现。"
-                )
-            elif ff_has_threat and not kfs_have_threat and not lf_has_threat:
-                warnings.append(
-                    f"镜头{label} 刺客在 KFs+LF 消失：FF「{ff_text[:30]}…」刺客在场，"
-                    f"但所有 KFs 和 LF 均无刺客。刺客动作链应在 KFs 完整呈现"
-                    f"（潜伏→出水→刺入→入水消失）。"
-                )
-            elif not ff_has_threat and not kfs_have_threat and lf_has_threat:
-                warnings.append(
-                    f"镜头{label} 刺客凭空出现：FF/KFs 均无刺客，LF 刺客突然在场（无入场动作）。"
-                    f"建议 FF 加刺客潜伏伏笔，或前置一个刺客入场镜头。"
-                )
+        # 在场判据已在循环开头执行（见上）：这里不再重复调用。
 
     for w in warnings:
         _get_logger().warn(f"kf时序一致性: {w}")
-    return {"pass": True, "issues": issues, "warnings": warnings}
+    return {"pass": True, "issues": issues, "warnings": warnings,
+            "presence_insufficient": insufficient}
 
 
 # ========================================================================
@@ -7546,31 +7533,19 @@ def _break_one_long_clause(clause: str) -> list[str]:
 
 
 def _positional_break_clause(clause: str) -> list[str]:
-    """无虚词断点时的位置兜底：切成 ≤15 字段（不删字，幂等）.
+    """保真优先：没有标点/语义断点时**保留原句**，不按位置硬切.
 
-    优先两段式（首段 ≥10 字、余段 ≤15 字，最小干预）；两段放不下（超长无标点）
-    则贪心按 15 字切。首段若仍 >15 字则放弃原样返回（避免把超长句切碎成渣）。
-    幂等：产物每段 ≤15 字，二次调用早退。
+    2026-10-26（D5 事故）：旧实现按第 10–15 字硬切再补“，”，把
+    “公子爷”切成“公，子爷”——这是对白文本损坏，不是合法切分。
+    批准播出文本的保真边界高于“每句 ≤15 字”的软规则：没有合法切分点就
+    保留原句并报告不可切分，由排期/内容修订处理；不得用“只改标点”绕过。
     """
-    max_len = _DIALOGUE_SENTENCE_MAX
-    _count = lambda s: len(re.sub(r"[^一-鿿A-Za-z0-9]", "", s))
-    if _count(clause) <= max_len:
-        return [clause]
-    # 两段式：首段长度 = 使余段 ≤15 的最小可行值，夹在 [10, 15]
-    head_len = max(10, _count(clause) - max_len)
-    if head_len < _count(clause) and head_len <= max_len:
-        head, tail = clause[:head_len], clause[head_len:]
-        if _count(tail) <= max_len:
-            return [head, tail]
-    # 两段放不下：贪心按 max_len 切，末段收敛
-    pieces: list[str] = []
-    rest = clause
-    while _count(rest) > max_len:
-        pieces.append(rest[:max_len])
-        rest = rest[max_len:]
-    if rest:
-        pieces.append(rest)
-    return pieces
+    try:
+        _get_logger().warn(
+            "[DIALOGUE] 无合法切分点（无标点/语义虚词），保留原句不硬切：%r" % clause[:40])
+    except Exception:
+        pass  # 记录失败不得改变文本
+    return [clause]
 
 
 def _check_dwell_time(shots: list[dict], hook: dict = None) -> dict:

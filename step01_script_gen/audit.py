@@ -174,8 +174,20 @@ def _compact_script(script: dict) -> dict:
         if not isinstance(s, dict):
             continue
         shots.append({_f: s.get(_f) for _f in _COMPACT_SHOT_FIELDS})
+    def _num(value):
+        try:
+            return round(float(value or 0), 2)
+        except (TypeError, ValueError):
+            return 0.0
+
+    body = round(sum(_num(s.get("duration_sec") or s.get("duration")) for s in shots), 2)
+    hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
+    hook_duration = _num(hook.get("duration_sec") or hook.get("duration")) if hook else 0.0
     return {"hook": script.get("hook"), "shots": shots,
-            "total_duration": script.get("total_duration")}
+            # total = 正片 + 钩子（时间轴事实）；上限只作用于 body_duration。
+            "total_duration": script.get("total_duration"),
+            "body_duration": body,
+            "hook_duration": hook_duration}
 
 
 # 审计调用的固定参数（总计划 §1.3：模型、温度与 prompt 版本都要写进 audit 元数据）
@@ -232,7 +244,13 @@ def audit_prompt_version() -> str:
         {"system": _AUDIT_SYSTEM, "schema": AUDIT_SCHEMA,
          # v6.114（审核）：四条来源都要覆盖，否则「只改其中一条」时旧审计仍被复用：
          #   system prompt / 输出 schema / build_audit_prompt 的审查规则 / 送审字段范围
-         "rules": _AUDIT_RULES_TEMPLATE, "compact_fields": list(_COMPACT_SHOT_FIELDS)},
+         "rules": _AUDIT_RULES_TEMPLATE, "compact_fields": list(_COMPACT_SHOT_FIELDS),
+         # 送审顶层键也是审查对象的一部分（2026-10-28：新增 body_duration /
+         # hook_duration——时长口径变了，旧结论不得复用）。
+         "payload_keys": ["hook", "shots", "total_duration", "body_duration", "hook_duration"],
+         # 2026-10-28（M05）：规则里的时长数字来自生效配置；换一组时长带
+         # ⇒ 送审规则变了 ⇒ 旧结论必须失效（不能只改 build_audit_prompt 的渲染）。
+         "duration_rule_values": _audit_duration_rule_values()},
         ensure_ascii=False, sort_keys=True)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
 
@@ -246,6 +264,10 @@ _AUDIT_RULES_TEMPLATE = """# 审查规则
 2. 是否省略理解剧情必需的信息；
 3. 首帧→动作→关键帧→尾帧是否成立；
 4. 哪些镜头重复表达同一信息；
+5. **时长上限（{duration_min}–{duration_max} 秒，取自本轮生效配置）只作用于正片 `body_duration`**（各镜 `duration_sec` 之和）；
+   正片超过 {duration_max} 秒即判 blocking，不得因钩子另算而豁免；
+   `hook_duration` 单独计时、**不计入**；`total_duration` = 正片 + 钩子，**不得**因为 `total_duration` 超过上限而判 blocking（用户裁决 2026-10-28）。
+   无钩子时 `total_duration` 就等于 `body_duration`；本规则中的数字来自生效配置（`shared.config.duration_band()`），不是固定常量。
 {hook_rule}
 
 合规替换（不算缺陷）：
@@ -257,6 +279,7 @@ _AUDIT_RULES_TEMPLATE = """# 审查规则
 - kf 只检查对应中间过程；
 - lf 只检查结果态；
 - 后续动作缺失必须指向 motion_desc/对应 kf/lf，禁止要求 ff 提前完成过程或结果动作。
+- **上一镜终态可以合法成为下一镜起态**。是否泄漏，要看本镜尚未发生的动作是否已在首帧完成，而不是比较两段描述是否相同；首帧与上一镜尾帧文字相同本身不构成结果泄漏，两段文字不同也不能证明修复正确。
 
 每个问题必须给 code、shot_id、frame_id、entity_id、field_path、evidence、impact、minimal_fix。
 - `code`：该缺陷的**族名**，大写蛇形（如 `STATE_CHAIN_CONFLICT`、`PROP_CONTINUITY`、`FF_RESULT_LEAK`、`KF_STAGE_MISMATCH`）。**同类缺陷在不同镜头必须用同一个 `code`**——下游按它归族统计与判优先级；不得留空，也不得写 `ISSUE`/`UNKNOWN`/`PROBLEM` 这类无信息名。
@@ -337,11 +360,28 @@ def _audit_context_block(novel_text: str, plan: dict | None, script: dict) -> st
 {json.dumps(_compact_script(script), ensure_ascii=False)}""")
 
 
+def _audit_duration_rule_values() -> dict:
+    """生效时长带 → 送审规则里的数字（唯一事实源：`shared.config.duration_band()`）.
+
+    **不新增时长常量**：审计规则只消费配置事实源；换一组时长带，渲染出的规则
+    同步变化，且 `audit_prompt_version()` 一并变（旧结论自动失效）。
+    """
+    from shared.config import duration_band
+    band = duration_band()
+    return {"duration_min": f"{band['min']:g}", "duration_max": f"{band['max']:g}"}
+
+
+def render_audit_rules(*, hook_present: bool) -> str:
+    """渲染审查规则段（时长数字取当前生效配置）."""
+    hook_rule = "5. 钩子和结尾是否真的来自当前故事。" if hook_present else "5. 结尾是否真的来自当前故事。"
+    return _AUDIT_RULES_TEMPLATE.format(
+        hook_rule=hook_rule, **_audit_duration_rule_values())
+
+
 def build_audit_prompt(novel_text: str, plan: dict | None, script: dict,
                        audit_focus: list[str] | None = None,
                        metadata: dict | None = None) -> str:
     focus_lines = "\n".join(f"- {item}" for item in (audit_focus or [])) or "- 无额外定向项"
-    hook_rule = "5. 钩子和结尾是否真的来自当前故事。" if script.get("hook") else "5. 结尾是否真的来自当前故事。"
     metadata_text = json.dumps(metadata or {}, ensure_ascii=False, indent=2)
     return f"""# 审查元数据
 {metadata_text}
@@ -351,7 +391,7 @@ def build_audit_prompt(novel_text: str, plan: dict | None, script: dict,
 
 {_audit_context_block(novel_text, plan, script)}
 
-{_AUDIT_RULES_TEMPLATE.format(hook_rule=hook_rule)}
+{render_audit_rules(hook_present=isinstance(script.get("hook"), dict))}
 """
 
 

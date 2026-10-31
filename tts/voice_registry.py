@@ -40,65 +40,27 @@ AVAILABLE_VOICES = [
 # 旁白专用音色
 NARRATOR_VOICE = {"id": "sambert-zhihao-003", "gender": "male", "age_range": "middle", "style": "旁白,沉稳", "rate": "0.85", "volume": "55"}
 
+#: 角色可选音色池 = 全池 **去掉旁白专用音色**。
+#: 旁白可以用旁白音色（那是它的默认身份），但角色不能被分配到同一个 id——
+#: 否则"换了个角色"听起来还是同一个人在念旁白。
+CHARACTER_VOICES = [v for v in AVAILABLE_VOICES if v["id"] != NARRATOR_VOICE["id"]]
 
-class VoiceRegistry:
-    """角色音色注册表."""
 
-    def __init__(self, registry_path: Optional[Path] = None):
-        if registry_path is None:
-            # 走 shared/paths.py 的全书共享目录，保证音色跨章/跨部持久一致
-            # （code-audit 07-29：原硬编码 output/voice_registry.json 绕过 paths.py）
-            from shared.paths import global_dir
-            registry_path = global_dir() / "voice_registry.json"
-        self.registry_path = registry_path
-        self.mapping: dict[str, dict] = {}  # { "角色名": {id, rate, volume, ...} }
-        self.used_voice_ids: set[str] = set()
-        # #19 修复 2026-08-14：get_voice 的 mapping 写入 + 落盘与并发读竞态加锁
-        self._lock = threading.RLock()
-        self.load()
+class _LegacyVoicePool:
+    """Sambert 旧音色池的分配算法（**只作为混入**，不是第二个注册表）.
 
-    def load(self) -> None:
-        """从 JSON 文件加载注册表.
+    2026-10-31 复核：本文件曾先后定义两个同名 `VoiceRegistry`，后者覆盖前者且没有
+    `get_voice`，于是 `shot_tts.resolve_voice` 的 `hasattr(registry, "get_voice")`
+    判 False，Sambert 通道**静默**退回旁白音色（听香也用男声中音）。现在把旧池的
+    分配能力收进这个混入，`VoiceRegistry` 仍是唯一的注册表类：唯一实例类型、唯一
+    持久化、唯一锁。
 
-        #19 修复 2026-08-14：加载失败不再只 WARN 后留空注册表（会导致音色
-        全部重分配、跨章节声音漂移）——保留内存中已加载的 mapping，并把损坏
-        文件备份为 .corrupt-<时间戳>，避免反复读坏文件；下次生成用备份恢复。
-        """
-        if not self.registry_path.exists():
-            return
-        try:
-            with open(self.registry_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if not isinstance(data, dict):
-                    raise ValueError(f"注册表根节点类型错误: {type(data).__name__}")
-                self.mapping = data.get("mapping", {}) or {}
-                self.used_voice_ids = set(data.get("used_voice_ids", []) or [])
-        except Exception as e:
-            if self.mapping:
-                # 已有内存态（重载场景）：保留现役分配，不整体漂移
-                print(f"[ERROR] 加载音色注册表失败，保留当前内存分配: {e}")
-                return
-            backup = self.registry_path.with_name(
-                self.registry_path.name + f".corrupt-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-            )
-            try:
-                os.replace(self.registry_path, backup)
-                print(f"[ERROR] 音色注册表损坏（{e}），已备份到 {backup}，将重建新注册表")
-            except OSError:
-                print(f"[ERROR] 音色注册表损坏且备份失败（{e}），将重建新注册表")
-            self.mapping = {}
-            self.used_voice_ids = set()
+    它只依赖 `self.mapping` / `self.used_voice_ids` / `self.save()`——由
+    `VoiceRegistry` 提供；单独实例化本混入没有意义。
+    """
 
-    def save(self) -> None:
-        """保存注册表到 JSON 文件（#19 修复：先写临时文件再原子替换）."""
-        self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self.registry_path.with_name(self.registry_path.name + ".tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "mapping": self.mapping,
-                "used_voice_ids": list(self.used_voice_ids)
-            }, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, self.registry_path)
+    # 生命周期（__init__/load/save）由 VoiceRegistry 提供——混入里再写一份等于
+    # 又留一条"哪份在生效"的路，那正是本次修复要消掉的东西。
 
     def get_voice(self, character_name: str, gender: str = None, age_range: str = None) -> dict:
         """获取角色音色，根据性别和年龄段智能匹配。
@@ -135,7 +97,7 @@ class VoiceRegistry:
         # 音色池耗尽：按角色名哈希确定性分配，优先匹配性别
         # 优先尝试性别匹配
         if gender:
-            candidates = [v for v in AVAILABLE_VOICES if v.get("gender") == gender.lower() and v["id"] not in self.used_voice_ids]
+            candidates = [v for v in CHARACTER_VOICES if v.get("gender") == gender.lower() and v["id"] not in self.used_voice_ids]
             if candidates:
                 idx = int(hashlib.md5(character_name.encode("utf-8")).hexdigest(), 16) % len(candidates)
                 fallback = candidates[idx].copy()
@@ -143,8 +105,8 @@ class VoiceRegistry:
                 return fallback
 
         # 兜底：按名哈希全池分配
-        idx = int(hashlib.md5(character_name.encode("utf-8")).hexdigest(), 16) % len(AVAILABLE_VOICES)
-        fallback = AVAILABLE_VOICES[idx].copy()
+        idx = int(hashlib.md5(character_name.encode("utf-8")).hexdigest(), 16) % len(CHARACTER_VOICES)
+        fallback = CHARACTER_VOICES[idx].copy()
         print(f"[WARN] 音色池耗尽，角色 '{character_name}' 回退到 {fallback['id']}（按名哈希分配）")
         return fallback
 
@@ -158,18 +120,18 @@ class VoiceRegistry:
         """
         # 尝试精确匹配 gender + age_range
         if gender and age_range:
-            for voice in AVAILABLE_VOICES:
+            for voice in CHARACTER_VOICES:
                 if voice.get("gender") == gender.lower() and voice.get("age_range") == age_range.lower() and voice["id"] not in self.used_voice_ids:
                     return voice.copy()
 
         # 尝试仅匹配 gender
         if gender:
-            candidates = [v for v in AVAILABLE_VOICES if v.get("gender") == gender.lower() and v["id"] not in self.used_voice_ids]
+            candidates = [v for v in CHARACTER_VOICES if v.get("gender") == gender.lower() and v["id"] not in self.used_voice_ids]
             if candidates:
                 return candidates[0].copy()
 
         # 兜底：返回第一个未使用的音色（向后兼容）
-        for voice in AVAILABLE_VOICES:
+        for voice in CHARACTER_VOICES:
             if voice["id"] not in self.used_voice_ids:
                 return voice.copy()
         return None
@@ -232,8 +194,8 @@ def _as_profiles(raw) -> dict:
     return out
 
 
-class VoiceRegistry:
-    """角色音色注册表."""
+class VoiceRegistry(_LegacyVoicePool):
+    """角色音色注册表（旧 Sambert 池 + 新 profile，两种 provider 契约并存）."""
 
     def __init__(self, registry_path: Optional[Path] = None, *, work_id: str = ""):
         if registry_path is None:

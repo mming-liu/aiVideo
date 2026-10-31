@@ -470,6 +470,60 @@ def _value_brief(value, limit: int = 40) -> str:
     return _s if len(_s) <= limit else _s[:limit] + "…"
 
 
+from shared.narration_voice import narration_role, role_fields
+
+
+def narration_voice_roles(view: dict) -> dict:
+    """每个旁白单元的**有效声源**（字段缺席 ⇒ narrator），按 uid 索引.
+
+    R06（2026-10-30）：冻结判据必须看**有效声源**，不能看"有没有写这个字段"。
+    旧写法按「voice_role in unit」筛选，于是**缺省旁白**（字段缺席，语义上是
+    narrator）根本不进冻结集合——模型把一条旁白改成角色发声，守卫直接放行。
+
+    非法值报错时带上**单元身份与字段路径**（narration_units[n01].voice_role），
+    调用方不需要再从错误文案里猜是哪一条。
+    """
+    _out: dict = {}
+    for _u in (view or {}).get("narration_units") or []:
+        if not isinstance(_u, dict):
+            continue
+        _uid = ref_uid(_u)
+        try:
+            _out[_uid] = narration_role(_u)
+        except ValueError as exc:
+            raise ValueError("narration_units[%s].voice_role: %s" % (_uid, exc)) from exc
+    return _out
+
+
+def _voice_handoff_target(base_view: dict, view: dict, uid: str, role: str):
+    """删除旁白单元的**可证明**合法去向：同文本、同有效声源的**新增对白**单元.
+
+    R06：删除即换声源，唯一例外是既有的「旁白→对白」重分类——正文**逐字相同**、
+    有效声源相同，代码因此能证明是同一声音换了承载，而不是换了说话人。
+    不做文本相似度匹配（那会把"看起来像"当成"就是同一条"）：必须是字符串相等。
+    """
+    _lost = [u for u in (base_view.get("narration_units") or []) if ref_uid(u) == uid]
+    if not _lost:
+        return None
+    _text = str(_lost[0].get("text") or "")
+    if not _text:
+        return None
+    _known = {ref_uid(u) for u in (base_view.get("dialogue_units") or [])}
+    _cands = []
+    for _u in view.get("dialogue_units") or []:
+        if ref_uid(_u) in _known:
+            continue
+        if str(_u.get("text") or "") != _text:
+            continue
+        try:
+            if narration_role(_u) != role:
+                continue
+        except ValueError:
+            continue
+        _cands.append(_u)
+    return ref_uid(_cands[0]) if len(_cands) == 1 else None
+
+
 def _narration_entries(value, probs, *, field="narration_lines") -> list:
     """`narration_lines` 的**成员与字段准入**（新模式与旧模式**共用这一份**）.
 
@@ -500,6 +554,11 @@ def _narration_entries(value, probs, *, field="narration_lines") -> list:
                                   "%s.%s" % (_at, _f)))
                 _bad = True
         if _bad:
+            continue
+        try:
+            role_fields(_e)
+        except ValueError as exc:
+            probs.append(_rec("view_narration_voice_role", "plan", "", str(exc), _at + ".voice_role"))
             continue
         _out.append(_e)
     return _out
@@ -609,7 +668,7 @@ def _view_from_hybrid_plan(plan: dict) -> tuple:
         _claim, _ev = _split_claim_evidence(_f)
         _frozen.append({"uid": _u, "claim": _claim, "evidence": _ev})
     _units_d = [_unit(_u, _t) for _u, _t in zip(_dial_uids, _lines)]
-    _units_n = [_unit(_u, _e.get("text"), _src_span(_e.get("source")))
+    _units_n = [_unit(_u, _e.get("text"), _src_span(_e.get("source")), **role_fields(_e))
                 for _u, _e in zip(_narr_uids, _narr_objs)]
 
     # ---- 节拍：事件归属**按块里声明的那份读**（没有就标「未确定」，不按位置编）----
@@ -901,7 +960,7 @@ def _view_from_legacy_plan(plan: dict, *, mode: str = MODE_LEGACY) -> tuple:
         _frozen.append({"uid": _fact_uids[_i - 1], "claim": _claim, "evidence": _ev})
 
     _units_d = [_unit("d%02d" % _i, _t) for _i, _t in enumerate(_lines, 1)]
-    _units_n = [_unit("n%02d" % _i, _e.get("text"), _src_span(_e.get("source")))
+    _units_n = [_unit("n%02d" % _i, _e.get("text"), _src_span(_e.get("source")), **role_fields(_e))
                 for _i, _e in enumerate(_narr, 1)]
 
     _events = [str(e) for e in (plan.get("main_events") or [])]
@@ -1519,7 +1578,7 @@ def plan_from_view(view: dict) -> dict:
         "dialogue_lines": [_base_text(u) for u in _d],
         "narration_lines": [{"text": _base_text(u),
                              "source": _span_text(u.get("source")),
-                             "fact_refs": sorted(_nrefs.get(ref_uid(u)) or [])}
+                             "fact_refs": sorted(_nrefs.get(ref_uid(u)) or []), **role_fields(u)}
                             for u in _n],
         "hook_spoken": [_base_text(u) for u in _d
                         if ref_uid(u) in (_hb.get("spoken_uids") or [])],
@@ -1562,7 +1621,7 @@ def plan_from_view(view: dict) -> dict:
         }
         _out["narration_lines"] = [
             {"text": _base_text(u), "source": _span_text(u.get("source")),
-             "fact_refs": sorted(_nrefs.get(ref_uid(u)) or [])} for u in _n]
+             "fact_refs": sorted(_nrefs.get(ref_uid(u)) or []), **role_fields(u)} for u in _n]
     return _out
 
 
@@ -1913,6 +1972,10 @@ def revision_request(base_view: dict, *, problems=None, rejections=None,
         "frozen_facts": [dict(f) for f in (base_view.get("frozen_facts") or [])],
         "frozen_events": list(base_view.get("frozen_events") or []),
         "view": base_view,
+        # R06（2026-10-30）：冻结的是**有效声源**（缺席 ⇒ narrator），不是"写了字段的那些"。
+        # 旧写法按 `"voice_role" in u` 筛选，缺省旁白于是不进冻结集合；集合本身也是
+        # 模型可见的请求内容（见 outline 的 payload），口径必须与守卫同一份。
+        "frozen_voice_roles": narration_voice_roles(base_view),
         "problems": list(problems or []),
         "rejections": list(rejections or []),
         "budget": {"remaining_calls": remaining_calls, "remaining_sec": remaining_sec},
@@ -2172,6 +2235,36 @@ def apply_editable_view(base_view: dict, response, *, mode: str | None = None,
     if _p:
         return None, _p, {"kind": "illegal", "mapping": {}, "residuals": [],
                           "detail": _detail_of(_p)}
+    # R06（2026-10-30）：**有效声源**冻结，且按"有效值"比较而不是按"字段存不存在"。
+    #   · 旧写法只核显式 `voice_role` 的单元 ⇒ 缺省旁白（语义 narrator）可被悄悄改成
+    #     角色发声，守卫放行；
+    #   · 旧写法又按**原值**比较 ⇒ 显式 `narrator` 与省略字段这两种等价表示会互相误报
+    #     `view_voice_role_changed`（等价改写被拒，属于假拒收）。
+    # 删除后重建同样是换声源：uid 不见了就按"删除即换声源"拒收，不给新 uid 绕过的机会。
+    # 非法值（null/空串/空白/未知角色）由读取准入与 `narration_voice_roles` 报错，
+    # 错误里带单元身份与字段路径。
+    _base_roles = narration_voice_roles(base_view)
+    _cand_roles = narration_voice_roles(_view)
+    _n_by_uid = {ref_uid(u): u for u in _view.get("narration_units") or []}
+    for _uid, _role in _base_roles.items():
+        if _uid not in _n_by_uid:
+            # 删除即换声源；唯一例外是代码能**证明**的「旁白→对白」重分类。
+            if _voice_handoff_target(base_view, _view, _uid, _role):
+                continue
+            _p.append(_rec("view_voice_role_changed", "voice", _uid,
+                           "基线旁白单元被删除（有效声源 %r）：删除后重建等于换声源，"
+                           "须显式迁移基线" % (_role,),
+                           "narration_units[%s]" % _uid))
+            continue
+        _cand = _cand_roles.get(_uid)
+        if _cand != _role:
+            _p.append(_rec("view_voice_role_changed", "voice", _uid,
+                           "有效声源被改写（基线 %r → 候选 %r）；声源变更须显式迁移基线"
+                           % (_role, _cand),
+                           "narration_units[%s].voice_role" % _uid))
+    if _p:
+        return None, _p, {"kind": "illegal", "mapping": {}, "residuals": [],
+                          "detail": _detail_of(_p)}
     # ② 分配正式 uid 并统一改写引用
     _view, _mapping, _mp = _assign_formal_uids(_view, base_view)
     if _view is None:
@@ -2331,6 +2424,12 @@ def entity_contract_problems(entity, key: str, where: str, *,
     if not isinstance(entity, dict):
         return [_rec("entity_not_object", "view", "",
                      "%s 必须是对象（当前是 %s）" % (where, type(entity).__name__), where)]
+    if key == "narration_units":
+        try:
+            role_fields(entity)
+        except ValueError as exc:
+            _p.append(_rec("view_narration_voice_role", "view", str(entity.get("uid") or ""),
+                           str(exc), where + ".voice_role"))
     _idk, _fields = ENTITY_CONTRACT[key]
     _alias = ENTITY_ID_ALIAS[key]
     _std, _alt = entity.get(_idk), entity.get(_alias)

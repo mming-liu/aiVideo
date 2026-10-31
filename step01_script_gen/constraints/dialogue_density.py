@@ -1,4 +1,4 @@
-﻿"""dialogue_density — 对白镜占比通用兜底（≥ 30%）+ P4.1 自动注入原文台词.
+"""dialogue_density — 对白镜占比通用兜底（≥ 30%）+ P4.1 自动注入原文台词.
 
 v6.63 (P4.1) 升级：从纯 WARN 升级为 WARN + hard-fix 自动注入原文对白。
 对白不足时，在张力最高的无对白镜头中，从原文对应段落提取台词注入。
@@ -281,8 +281,44 @@ def _find_speaker_before_quote(
     for name in candidates:
         if name in known_names:
             return name
-    candidates.sort(key=len)
-    return candidates[0] if candidates else ""
+    # 2026-10-26：候选必须命中剧本已知角色名才回填。旧实现「取最短候选」会把
+    # 「张十三心中暗道」截成「中暗」、「只看一眼他就知道」截成「他就知」，
+    # 再拼成「中暗道：」「他就知道：」写进播出文本——凡是靠猜的说话人，
+    # 宁可不回填（交 audit），也不得凭空造出未批准文字。
+    return ""
+
+
+def _approved_voice_keys(ctx) -> frozenset:
+    """本轮计划批准播出的声音文本键（旁白 + 对白，含改编）——用于冻结合同文本.
+
+    没有计划 / 计划不可消费时返回空集：此时没有「批准文本」可冻结，按旧的
+    启发式行为处理，不伪造批准身份。
+    """
+    script = getattr(ctx, "script", None)
+    plan = script.get("chapter_outline") if isinstance(script, dict) else None
+    if not isinstance(plan, dict):
+        return frozenset()
+    from step01_script_gen.plan_feasibility import approved_voice_fragments, voice_text_key
+    texts = approved_voice_fragments(plan, novel_text=getattr(ctx, "novel_text", "") or "")
+    return frozenset(voice_text_key(t) for t in texts if t)
+
+
+
+def _is_approved_narration(narr: str, approved_keys: frozenset, characters) -> bool:
+    """这段旁白（去掉说话人前缀后）是否是计划批准文本.
+
+    批准文本是播出合同，不参与「延续句说话人回填」——它本来就不是被拆开的
+    延续片段。2026-10-26 实测：N6/N7 被回填成「他就知道：…」「中暗道：…」，
+    凭空多出未批准文字；该判据只依赖计划与正文，**不依赖任何运行时下划线
+    标记**，因此落盘剥离运行时字段后再跑一次 finalize 仍然成立。
+    """
+    if not approved_keys or not narr:
+        return False
+    from step01_script_gen.plan_feasibility import voice_text_key
+    from shared.dialogue import strip_speaker_prefix
+    body = strip_speaker_prefix(narr, characters)
+    return (voice_text_key(body) in approved_keys
+            or voice_text_key(narr) in approved_keys)
 
 
 class DialogueDensityConstraint(Constraint):
@@ -308,7 +344,9 @@ class DialogueDensityConstraint(Constraint):
 
         # P4.1.2：延续对白说话人回填（正确性修复，任何对白比例下都执行）
         repairs.extend(self._backfill_continuation_speakers(
-            shots, novel_text, self._collect_known_names(ctx)
+            shots, novel_text, self._collect_known_names(ctx),
+            approved_keys=_approved_voice_keys(ctx),
+            characters=(ctx.script or {}).get("characters") or [],
         ))
 
         n = len(shots)
@@ -359,6 +397,7 @@ class DialogueDensityConstraint(Constraint):
     def _backfill_continuation_speakers(
         self, shots: list, novel_text: str,
         known_names: frozenset = frozenset(),
+        *, approved_keys: frozenset = frozenset(), characters=None,
     ) -> list[RepairRecord]:
         """P4.1.2：延续对白说话人回填.
 
@@ -389,6 +428,13 @@ class DialogueDensityConstraint(Constraint):
             meta = shot.get("_run_metadata") or {}
             if meta.get("dialogue_continuation_fixed"):
                 continue  # 幂等
+            # 2026-10-26：已由计划声音单元/装配声明承载的台词，不再做“延续说话人
+            # 回填”——回填会把批准文本前面拼上从原文截出的碎片（如“他就知道：”）。
+            if shot.get("_voice_approved") or (shot.get("plan_refs") or {}).get("lines"):
+                continue
+            # 持久判据（不依赖落盘会剥掉的下划线标记）：批准文本本身不参与回填。
+            if _is_approved_narration(narr, approved_keys, characters):
+                continue
 
             pos = _find_narration_pos_in_original(narr, novel_text)
             if pos < 0:

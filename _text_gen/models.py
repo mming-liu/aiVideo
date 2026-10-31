@@ -1,6 +1,6 @@
 """文本生成数据模型 — 供应商无关."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -63,6 +63,13 @@ class TextGenerationRequest:
     # 排队、退避、每次 POST、Retry-After 等待都按它重算余量；没带的旧请求行为不变。
     # 只认 monotonic——墙上时钟会被系统时间调整污染，而这个值只用来算"还剩多久"。
     deadline_monotonic: Optional[float] = None
+    # 2026-10-29（M07）：**本地运行控制**——一次性审计授权的发送守卫。
+    # 由 `_LedgeredService.generate()` 在当前线程取到（`_text_gen.send_guard`）后连同
+    # `call_id` 显式绑到请求上，provider 在**真正进入 SDK 之前**调用 `before_send()`，
+    # 返回后再 `record_send_outcome()`。它**不是**发给模型的 prompt/API 参数：
+    # provider 构造 payload 时不会读取它（也不允许读取）。
+    # 默认 `None` = 不拦截，普通生成入口行为与改造前逐字一致。
+    send_guard: Optional[object] = field(default=None, repr=False, compare=False)
 
 
 @dataclass

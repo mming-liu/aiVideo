@@ -1,4 +1,4 @@
-﻿"""约束引擎入口.
+"""约束引擎入口.
 
 apply_constraints(ctx) 是整个框架的唯一对外入口：
   1. 遍历 ALL_CONSTRAINTS 注册表
@@ -32,6 +32,32 @@ from .base import Constraint
 # 环境缺 `pydantic>=2` 时该约束整轮不执行，画面锚定块不再重建，落盘稿却打 PASS。
 # 失败要显式：与质量门/台词门同口径 fail-closed，禁止靠默认关闭或 warn 证明门禁闭环。
 ENV_FAULT_TYPES = (ImportError, SyntaxError, NameError)
+
+
+def fail_closed_types() -> tuple:
+    """必须**上抛**的异常类型：约束没跑完，调用方不得拿到一份「看起来正常」的报告.
+
+    2026-10-28（M07）：除环境故障外，**合同不可消费**也要 fail-closed。实测形态：
+    `voice_adaptation` 判改编块不可消费（`AdaptationInvalidError`），它从
+    `narration_subtitle_consistency` / `dialogue_density` 里抛出，被本模块的宽
+    `except Exception` 记一行 warn 后继续——结果 `finalize` 返回**空错误**，
+    同一条输入因为「带不带 novel 文本」产出两个不同的持久化对象
+    （`narration` 155 字 vs 400 字），提交入口与离线工具因此各写一份。
+    合同读不出来 = 约束没有生效，必须显式失败。
+    """
+    types = list(ENV_FAULT_TYPES)
+    try:
+        from shared.voice_adaptation import (AdaptationConfigError,
+                                             AdaptationInvalidError)
+        types.extend([AdaptationInvalidError, AdaptationConfigError])
+    except Exception:
+        pass
+    try:
+        from shared.presentation_contract import PresentationContractError
+        types.append(PresentationContractError)
+    except Exception:
+        pass
+    return tuple(types)
 
 
 def _raise_env_fault(where: str, exc: BaseException) -> None:
@@ -98,7 +124,7 @@ def apply_constraints(
         except Exception as e:
             # 环境故障 = 约束没跑 ⇒ 显式失败；约束自身的逻辑异常仍按原语义
             # 「保留原版 + warn」继续（那是内容/实现问题，不该让整章崩掉）。
-            if isinstance(e, ENV_FAULT_TYPES):
+            if isinstance(e, fail_closed_types()):
                 _raise_env_fault(f"约束 {c.name}", e)
             try:
                 from shared.tee_logger import get_logger
@@ -278,7 +304,7 @@ def run_hard_fix(
     except Exception as e:
         # 环境故障一路向上抛（见 ENV_FAULT_TYPES）：硬修复层整体没跑却返回
         # 「原版 + 空 report」，等于把「什么都没修」伪装成「无需修复」。
-        if isinstance(e, ENV_FAULT_TYPES):
+        if isinstance(e, fail_closed_types()):
             _raise_env_fault("硬修复层（run_hard_fix）", e)
         try:
             from shared.tee_logger import get_logger

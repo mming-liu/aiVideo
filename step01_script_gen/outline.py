@@ -286,6 +286,12 @@ def render_view_protected_rule() -> str:
         "——冻结；只允许用 `evidence_updates` 更正**来源片段**；",
         "- 已有实体的 `uid`（`beats` / `dialogue_units` / `narration_units` / "
         "`screen_cards`）必须**原样保留**——改 uid 等于让所有引用悬空；",
+        # R06（2026-10-30）：声源冻结必须**说出来**。守卫按有效声源比对（缺席 ⇒ narrator），
+        # 而此前请求与规则块都没提过这件事——模型按一条没被告知的规则被反复拒收，
+        # 属于"请求省略守卫会拒收的规则"。这里补一个 `frozen_voice_roles` 集合 + 一行规则。
+        "- `narration_units[].voice_role`（**有效声源**）随 `uid` 冻结：`frozen_voice_roles` "
+        "给出每条旁白当前的有效声源（**没有该字段 = narrator**）；不许把旁白改成角色发声，",
+        "- 不许给已有旁白补 `voice_role` 去换人，也不许靠删除后重建（新 uid）绕过；",
         "- `plan_basis` 里的 `climax` / `causal_chain` / `time_budget` / `characters` / "
         "`emotional_arc` / `end_hook` / `key_scenes` / `character_motives` / `omittable`"
         "——**关系之外**的字段，一字不许改；",
@@ -3408,6 +3414,8 @@ def _replan_by_view(plan, problems, novel_text, budget, rejections=None, *,
                            "fact_basis_hash": _req["fact_basis_hash"],
                            "frozen_facts": _req["frozen_facts"],
                            "frozen_events": _req["frozen_events"],
+                           # R06：与守卫同一份口径的有效声源集合（缺席 ⇒ narrator）。
+                           "frozen_voice_roles": _req["frozen_voice_roles"],
                            "view": _req["view"],
                            "budget": _req["budget"],
                            "limits": _req["limits"],

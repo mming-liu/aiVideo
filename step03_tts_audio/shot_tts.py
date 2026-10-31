@@ -40,6 +40,7 @@ from tts.service import provider_capabilities
 from shared.paths import SHOT_AUDIO_FILENAME_FMT  # 单镜音频文件名单源: shared/paths.py
 from shared.constants import TTS_MAX_RETRIES  # 重试次数单源: shared/constants.py
 from shared.dialogue import strip_speaker_prefix
+from shared.narration_voice import narration_role
 from shared.audio_identity import (dialogue_speech_text, identity_path, read_identity,
                                    read_signature, sha256_text, speech_signature,
                                    verify_identity)
@@ -149,25 +150,79 @@ def _detect_speaker_attributes(character_name: str, characters: List[dict]) -> t
     return None, None
 
 
-def _detect_speaker_from_narration(narration: str, characters: List[dict]) -> Optional[str]:
-    """从叙述文本中检测说话人角色名（判据单源：`shared.dialogue.detect_speaker`）.
+def resolve_shot_speaker(shot: dict, raw_for_speaker: str, characters: List[dict],
+                         plan: dict | None = None) -> dict:
+    """单镜对白片段的说话人解析（**唯一入口**，规划与真实合成共用）.
 
-    2026-10-03：本函数曾是 `shared.dialogue.detect_speaker` 的**第三份**副本；
-    现在只保留「没有角色库就不猜说话人」这一层（step03 的历史口径），其余委托单源实现。
+    三种情形必须分开（2026-10-31 复核 P1）："多条对白条目 ⇒ `shot_dialogue_entry`
+    返回 None" **不等于**"不会被整体套声线"——旧实现随后还会探测文本前缀，只要整段
+    开头有一个能识别的名字，多条对白照样会被归给同一个人。
+
+    规则：
+
+    - **多个对白条目** ⇒ `speaker_ambiguous` 拒收（本包不做多人对白拆分）；
+    - **唯一有效条目** ⇒ 用条目的 `speaker`，并做成员校验（角色表为空 ⇒
+      `characters_missing`；名字不在表里 ⇒ `speaker_unknown`；与显式前缀不一致 ⇒
+      `speaker_conflict`）；
+    - **唯一条目但没有 speaker** ⇒ 允许显式前缀（旧稿兼容）；
+    - **没有结构化条目** ⇒ 允许显式前缀（旧稿兼容）；
+    - 前缀也没有 ⇒ `speaker_unresolved`，不静默变成旁白。
+
+    Returns: `{"role": 角色名, "source": "entry"|"prefix"}`
     """
-    if not narration or not characters:
-        return None
-    from shared.dialogue import detect_speaker
-    return detect_speaker(narration, characters)
-
-
-def _speaker_of(shot: dict, raw_for_speaker: str, characters: List[dict]) -> Optional[str]:
-    """该镜的说话人：先用 `raw_for_speaker`（§15：说话人识别用 raw）再退回 main_subject."""
-    detected = _detect_speaker_from_narration(raw_for_speaker, characters)
+    if not characters:
+        # 没有角色表就没有可比对的身份：既不猜前缀，也不接受结构化名字
+        raise SynthesisError(
+            "characters_missing",
+            "本次输入没有角色表——无法校验说话人身份（空表不接受任何前缀）",
+            field_path="characters")
+    entries = []
+    if plan is not None:
+        from step01_script_gen.plan_feasibility import shot_dialogue_entries
+        entries = shot_dialogue_entries(shot, plan)
+    if len(entries) > 1:
+        raise SynthesisError(
+            "speaker_ambiguous",
+            "镜头 %s 声明了 %d 条对白条目（%s）——单声音单元不能归给其中任一人，"
+            "拒绝整体套一个声线" % (shot.get("index"), len(entries),
+                                    "、".join("D%s" % e.get("index") for e in entries)),
+            field_path="plan_refs")
+    # 只认**明确前缀**（X道：/X说：…）：`detect_speaker` 会把"以角色名开头的普通叙述"
+    # 也当成发言，那既会误判旧稿，也会跟结构化 speaker 造出假的 speaker_conflict。
+    from shared.dialogue import speaker_prefix
+    detected = speaker_prefix(raw_for_speaker, characters)
+    if entries:
+        name = str(entries[0].get("speaker") or "").strip()
+        if name:
+            known = {str(c.get("identifier") or "") for c in (characters or [])}
+            if not known:
+                raise SynthesisError(
+                    "characters_missing",
+                    "对白条目声明说话人 %r，但本次输入没有角色表——身份无法校验，"
+                    "拒绝直接采信" % name, field_path="characters")
+            if name not in known:
+                raise SynthesisError(
+                    "speaker_unknown",
+                    "对白条目声明的说话人 %r 不在本片角色表（%s）——拒绝按内容猜"
+                    % (name, "、".join(sorted(known))), field_path="speaker")
+            if detected and detected != name:
+                raise SynthesisError(
+                    "speaker_conflict",
+                    "结构化说话人 %r 与文本前缀解析出的 %r 不一致——拒绝二选一"
+                    % (name, detected), field_path="speaker")
+            return {"role": name, "source": "entry"}
+        if detected:
+            return {"role": detected, "source": "prefix"}
+        raise SynthesisError(
+            "speaker_unresolved",
+            "镜头 %s 的对白条目没有 speaker，文本也没有可识别的说话人前缀"
+            % shot.get("index"), field_path="speaker")
     if detected:
-        return detected
-    main_subject = str((shot or {}).get("main_subject", "") or "").strip()
-    return main_subject if main_subject and len(main_subject) <= 4 else None
+        return {"role": detected, "source": "prefix"}
+    raise SynthesisError(
+        "speaker_unresolved",
+        "镜头 %s 的对白既没有结构化说话人，也没有可识别的说话人前缀"
+        % shot.get("index"), field_path="speaker")
 
 
 # ---------------------------------------------------------------- 文本提取（单源）
@@ -202,10 +257,25 @@ def resolve_voice(registry, *, role_id: str, provider_name: str, caps,
     """
     mapping_version = str(getattr(tts_config, "MAPPING_VERSION", "v1") or "v1")
     if not bool(getattr(caps, "supports_speaker", False)):
-        voice = (registry.get_voice(role_id, gender, age_range)
-                 if registry is not None and hasattr(registry, "get_voice")
-                 else dict(NARRATOR_VOICE))
-        voice = dict(voice or {})
+        # 旧音色池通道（Sambert：模型 ID 就是音色 ID）。注册表能力缺失必须**显式失败**：
+        # 2026-10-31 复核——此前这里 `else dict(NARRATOR_VOICE)`，而生效的注册表类恰好
+        # 没有 get_voice，于是听香/张十三/杨旭全部落到旁白男声，且没有任何告警。
+        if registry is None or not hasattr(registry, "get_voice"):
+            raise SynthesisError(
+                "voice_registry_unsupported",
+                "provider %r 使用旧音色池（模型 ID 即音色 ID），但传入的注册表没有 "
+                "get_voice——拒绝静默回退旁白音色" % provider_name,
+                field_path="voice_registry")
+        if str(role_id or "") == NARRATOR_ROLE:
+            # 旁白身份：显式取旁白音色（它本来就该是这一个），不占用角色音色池
+            voice = dict(NARRATOR_VOICE)
+        else:
+            voice = dict(registry.get_voice(role_id, gender, age_range) or {})
+            if not voice.get("id"):
+                raise SynthesisError(
+                    "voice_unresolved",
+                    "角色 %r 在旧音色池里没有可用音色（池空或全被占用），拒绝回退旁白"
+                    % role_id, field_path="voice")
         voice_id = str(voice.get("id") or "")
         return {"model_id": voice_id, "speaker": "", "legacy_voice": voice,
                 "voice_profile_id": "legacy-%s" % (voice_id or "default"),
@@ -261,14 +331,15 @@ def dialogue_speech_unit(shot: dict, *, scope: dict, script_revision: str,
 
 def narration_speech_unit(entry_index: int, *, text: str, scope: dict,
                           script_revision: str, voice: dict, provider_name: str,
-                          window: Optional[tuple], strict: bool = True) -> SpeechUnit:
+                          window: Optional[tuple], strict: bool = True,
+                          voice_role: str = "") -> SpeechUnit:
     """一条图外旁白 → `SpeechUnit`（一个 N 编号一个音频；跨镜连续播放由窗口给足）."""
     legacy = voice.get("legacy_voice")
     return SpeechUnit(
         unit_id="narration-N%d" % int(entry_index), kind="narration", text=text,
         scope=dict(scope), script_revision=str(script_revision),
         source_locator="narration_lines[%d]" % int(entry_index),
-        source_index=int(entry_index), planned_window=window,
+        source_index=int(entry_index), planned_window=window, voice_role=voice_role,
         voice_profile_id=str(voice.get("voice_profile_id") or ""),
         provider=str(provider_name), model_id=str(voice.get("model_id") or ""),
         model_revision=str(getattr(tts_config, "MODEL_REVISION", "") or ""),
@@ -302,6 +373,8 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
     revision = str(script_revision or script_revision_of(script))
     name = str(provider_name or tts_config.PROVIDER)
     caps = provider_capabilities(name)
+    entries = broadcast_narration_entries(plan)
+    roles = [narration_role(e, characters) for e in entries]
     registry = registry if registry is not None else get_registry()
 
     out: list = []
@@ -309,7 +382,7 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
         raw_for_speaker, text = _dialogue_speech(shot, plan, characters)
         if raw_for_speaker is None or not text:
             continue
-        role = _speaker_of(shot, raw_for_speaker, characters) or NARRATOR_ROLE
+        role = resolve_shot_speaker(shot, raw_for_speaker, characters, plan)["role"]
         gender, age = _detect_speaker_attributes(role, characters)
         voice = resolve_voice(registry, role_id=role, provider_name=name, caps=caps,
                               gender=gender, age_range=age)
@@ -326,8 +399,11 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
             _acc += _d
         tracks, _problems = layout_voice_entries(voice_units(plan, shots), _win)
         _track_by_id = {t["id"]: t for t in tracks if t.get("kind") == "narration"}
-        voice = resolve_voice(registry, role_id=NARRATOR_ROLE, provider_name=name, caps=caps)
         for i, entry in enumerate(entries, 1):
+            role = roles[i - 1]
+            gender, age = _detect_speaker_attributes(role, characters)
+            voice = resolve_voice(registry, role_id=NARRATOR_ROLE if role == "narrator" else role,
+                                  provider_name=name, caps=caps, gender=gender, age_range=age)
             text = str(entry.get("text") or "").strip()
             if not text:
                 continue
@@ -339,7 +415,8 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
             start = float(tr.get("start") or 0.0)
             window = (start, float(end)) if run and float(end) > start else None
             out.append(narration_speech_unit(i, text=text, scope=scope, script_revision=revision,
-                                             voice=voice, provider_name=name, window=window))
+                                             voice=voice, provider_name=name, window=window,
+                                             voice_role=role if "voice_role" in entry else ""))
     return out
 
 
@@ -358,6 +435,8 @@ def _cache_hit(output_path: Path, unit: SpeechUnit, request_key: str) -> bool:
     if read_identity(p) is not None:
         return verify_identity(p, {"request_key": request_key}) == ""
     legacy = unit.legacy_voice_signature
+    if unit.voice_role:
+        return False  # legacy signatures cannot prove explicit ownership
     if legacy is not None:
         return read_signature(p) == _tts_cache_sig(unit.text, legacy)
     return False
@@ -468,7 +547,7 @@ def _prepare_shot_unit(shot: dict, *, output_dir: Path, voice_registry, characte
     raw_for_speaker, text = _dialogue_speech(shot, plan, characters)
     if raw_for_speaker is None or not text:
         return None, None, None
-    role = _speaker_of(shot, raw_for_speaker, characters) or NARRATOR_ROLE
+    role = resolve_shot_speaker(shot, raw_for_speaker, characters, plan)["role"]
     gender, age = _detect_speaker_attributes(role, characters)
     configured = str(tts_config.PROVIDER)
     caps = provider_capabilities(provider if provider is not None else configured,
@@ -703,8 +782,7 @@ def gen_narration_tts(script: dict, output_dir: Path, provider=None, *,
 
     与 `gen_shot_tts` 的三点不同（都是**有意**的）：
 
-      ① **固定旁白音色**：旁白不是角色说的话——不做说话人识别、不查角色音色
-         （把旁白文本喂进角色音色库会污染后续章节的音色分配）；
+      ① 音色来自条目 voice_role；缺席沿用叙述者，不从正文猜人物；
       ② **一条旁白一个文件**（`audio/narration_<NN>.mp3`，N 编号）——旁白跨镜连续播放，
          按「每镜一个文件」写会把一条旁白切碎；
       ③ 时长上限是**承载它的连续镜头片段**总长，不是单镜时长。
@@ -723,6 +801,7 @@ def gen_narration_tts(script: dict, output_dir: Path, provider=None, *,
     if not entries:
         return []
     shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+    roles = [narration_role(e, script.get("characters") or []) for e in entries]
     _by_index = {str(s.get("index")): s for s in shots}
     _units = {u["index"]: u for u in voice_units(plan, shots)
               if u["kind"] == "narration"}
@@ -781,10 +860,13 @@ def gen_narration_tts(script: dict, output_dir: Path, provider=None, *,
                                  name=configured)
     name = str(caps.provider or configured)
     registry = voice_registry if voice_registry is not None else get_registry()
-    voice = resolve_voice(registry, role_id=NARRATOR_ROLE, provider_name=name, caps=caps)
 
     out: List[str] = []
     for _i, _e in enumerate(entries, 1):
+        role = roles[_i - 1]
+        gender, age = _detect_speaker_attributes(role, script.get("characters") or [])
+        voice = resolve_voice(registry, role_id=NARRATOR_ROLE if role == "narrator" else role,
+                              provider_name=name, caps=caps, gender=gender, age_range=age)
         text = str(_e.get("text") or "").strip()
         if not text:
             continue
@@ -796,7 +878,8 @@ def gen_narration_tts(script: dict, output_dir: Path, provider=None, *,
         unit = narration_speech_unit(_i, text=text, scope=scope, script_revision=revision,
                                      voice=voice, provider_name=name,
                                      window=(start, float(_end)) if run else None,
-                                     strict=candidate_context is not None)
+                                     strict=candidate_context is not None,
+                                     voice_role=role if "voice_role" in _e else "")
         if candidate_context is not None:
             output_path = candidate_context.for_unit(unit.unit_id, unit.format)
         else:

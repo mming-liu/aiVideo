@@ -142,6 +142,21 @@ tests/step01_script_gen/*
 !tests/step01_script_gen/test_step01_commit.py
 !tests/step01_script_gen/test_p0_fault_injection.py
 !tests/step01_script_gen/test_plan_revision_v2_wiring.py
+# 2026-10-30（R01）：Step01 审计收口的最小回归集——仅这 4 个文件 + SSE 桩 + 夹具。
+# 其余 tests/ 仍不入库；放行必须写在 tests/* 与 tests/step01_script_gen/* 之后。
+!tests/step01_script_gen/test_audit_entry_subprocess.py
+!tests/step01_script_gen/test_audit_launch_script.py
+!tests/step01_script_gen/test_audit_agent_plan_sse.py
+!tests/step01_script_gen/test_audit_unlimited_scope.py
+# 2026-10-30（R06/R03/F4/F5/F6）：本包新增的定向回归——逐条放行，不放开整个目录。
+!tests/step01_script_gen/test_narration_voice_freeze.py
+!tests/step01_script_gen/test_audit_write_failures.py
+!tests/step01_script_gen/test_audit_consumption_gate.py
+!tests/step01_script_gen/test_blood_state_markers.py
+!tests/_text_gen/
+tests/_text_gen/*
+!tests/_text_gen/_sse_stub_sitecustomize.py
+!tests/_text_gen/test_audit_timeout_lifecycle.py
 # 2026-10-23：单事实范围与四维分账的离线回归（与 09-25「基线与契约判别测试随仓库交付」同一标准）
 !tests/step01_script_gen/test_scoped_content_repair.py
 # 2026-10-25：预算带配置与身份核验的回归用例（rules_index v6.74 引用该文件）
@@ -187,6 +202,8 @@ tests/enhancements/*
 tests/shared/*
 !tests/shared/test_fact_split.py
 !tests/shared/test_presentation_contract.py
+# 2026-10-30（R05/F5）：授权链身份关联的判别测试。
+!tests/shared/test_audit_authorization_chain.py
 /docs/
 # 09-25 用户决定：**只精确放行**「计划边界」这条线的四份留档，不放开整个 docs/。
 # git 不会进入被排除的目录，所以要逐级放行父目录（与上面 tests/ 同构）。
@@ -203,6 +220,8 @@ tests/shared/*
 !/docs/archive/
 !docs/step01-ten-run-problem-report-2026-09-27.md
 !docs/step01-ten-run-report-2026-09-28-p1p6-retest.md
+# 2026-10-30（R06/R03/R05/R08）：本包交付记录。
+!docs/step01-r06-r03-r05-r08-closeout-2026-10-30.md
 
 # 2026-10：根目录「代理/复核隔离」调试产物曾被误入库
 # （`review-f-isolated-*` / `review-candidate-isolated-*` / `review-f-round2-*` / `unused.wav`）。
@@ -211,3 +230,12 @@ tests/shared/*
 /review_tmp*/
 # 只忽略**仓库根目录**的 wav，避免误伤 assets/ 下的音频素材
 /*.wav
+# 2026-10-31：本轮新增的契约用例精确放行（只让工作区文件可见，不提交）。
+# tests/* 把整个目录排除了，重新包含目录后必须再排除其内容，否则会顺带放出无关文件。
+!tests/tts/
+tests/tts/*
+!tests/tts/__init__.py
+!tests/tts/test_voice_registry_contract.py
+!tests/shared/
+tests/shared/*
+!tests/shared/test_video_media_plan.py

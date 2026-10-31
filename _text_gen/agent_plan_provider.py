@@ -29,8 +29,10 @@
 """
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
+import threading
 import os
 import re
 import time
@@ -54,6 +56,108 @@ _verbose_write = partial(verbose_write, log_file="step01.log")
 # 实测可超 300s，旧默认值会让 GAP 重试 100% 超时失败（2026-09-11 实机复盘）。
 # 可用 env AGENT_PLAN_TEXT_TIMEOUT_SEC 覆盖；模型能力项不进配置文件，仅操作参数进 env。
 AGENT_PLAN_TEXT_TIMEOUT_SEC = int(os.getenv("AGENT_PLAN_TEXT_TIMEOUT_SEC", "600"))
+
+#: SSE 传输开关（**默认关**：非流式路径逐字不变，便于同请求对照）。
+#: 打开后 payload 显式发 `stream:true` + `stream_options.include_usage`，按事件流增量解析。
+#: 注意：`requests.post(stream=True)` 只是客户端读取方式，不等于请求了协议流式。
+AGENT_PLAN_TEXT_STREAM = str(os.getenv("AGENT_PLAN_TEXT_STREAM", "")).strip().lower() in (
+    "1", "true", "yes", "on")
+
+
+def normalize_endpoint(base_url: str) -> str:
+    """规范化 base URL 并**拒绝歧义路径**（复核 F3，2026-10-30）.
+
+    https://opencode.ai/zen/go/../../zen/v1 这种写法在做字符串包含检查时能通过
+    「是 zen/go」，但 requests 真正发出去的是 /zen/v1/...。核验与发送必须
+    消费**同一个**规范化结果，否则套餐豁免可以靠 .. 绕过。
+    """
+    from urllib.parse import unquote, urlsplit, urlunsplit
+    import posixpath
+
+    parts = urlsplit(str(base_url or "").strip())
+    # 复核 2026-10-30（F3 补充）：带 query/fragment 的 base URL 直接拼 /chat/completions
+    # 会把后缀拼进查询或片段，而不是请求路径——必须拒绝。
+    if parts.query or parts.fragment:
+        raise ValueError("endpoint 不应带 query/fragment: %s" % base_url)
+    if (parts.scheme or "").lower() not in ("http", "https"):
+        raise ValueError("endpoint scheme 必须是 http(s): %s" % base_url)
+    path = parts.path or ""
+    # 复核 2026-10-30（F3 二轮）：**必须解码到稳定**。%252e%252e 解一次只得 %2e%2e，
+    # 而 requests 之后还会再解一次 —— 一次性解码会让核验与发送看到不同路径。
+    decoded = path
+    for _ in range(4):
+        nxt = unquote(decoded)
+        if nxt == decoded:
+            break
+        decoded = nxt
+    else:
+        raise ValueError("endpoint 编码层数过多，拒绝使用: %s" % base_url)
+    if "%" in decoded:
+        raise ValueError("endpoint 解码后仍含百分号转义，拒绝使用: %s" % base_url)
+    if ".." in decoded.split("/"):
+        raise ValueError("endpoint 含 .. 路径片段（含编码形式），拒绝使用: %s" % base_url)
+    norm = posixpath.normpath(decoded) if decoded else ""
+    if norm == ".":
+        norm = ""
+    return urlunsplit((parts.scheme, parts.netloc, norm, parts.query, parts.fragment))
+
+
+#: 订阅制（OpenCode Go）只认**精确**的 chat 端点；不用前缀判断，
+#: 也不靠逐个补编码反例（复核 F3：前缀检查已被 %252e 绕过）。
+SUBSCRIPTION_HOST = "opencode.ai"
+SUBSCRIPTION_CHAT_PATH = "/zen/go/v1/chat/completions"
+
+
+def chat_completions_url(base_url: str) -> str:
+    """本次请求真正会打到的 URL（规范化 base + 固定后缀）."""
+    return normalize_endpoint(base_url).rstrip("/") + "/chat/completions"
+
+
+def is_subscription_endpoint(base_url: str) -> bool:
+    """只有**最终 URL** 的 host 与 path 精确等于订阅端点时才返回 True."""
+    from urllib.parse import urlsplit
+    try:
+        url = chat_completions_url(base_url)
+    except Exception:                                          # noqa: BLE001
+        return False
+    parts = urlsplit(url)
+    # 复核 2026-10-30（F3 四轮）：只比 host+path 不够——http:// 与 :8443 也会被豁免。
+    # 套餐端点 = HTTPS + 443 + 无用户名/密码 + 精确路径；其余按通用 provider 处理。
+    if (parts.scheme or "").lower() != "https":
+        return False
+    # 复核 2026-10-30（F3 五轮）：空 userinfo（https://@host、https://:@host）
+    # 的 username/password 是空串而不是 None，真假判断会漏；必须判 is not None。
+    if parts.username is not None or parts.password is not None:
+        return False
+    try:
+        port = parts.port
+    except ValueError:
+        return False
+    if port not in (None, 443):
+        return False
+    return (parts.hostname or "").lower() == SUBSCRIPTION_HOST and \
+        (parts.path or "") == SUBSCRIPTION_CHAT_PATH
+
+
+class _SseIncomplete(RuntimeError):
+    """事件流在终态前结束 / 缺终态 / 错误事件 —— **不得**当成完整结果."""
+
+
+class _SseAborted(RuntimeError):
+    """调用方已结束等待（超时/取消）：读取中止，迟到数据不采纳."""
+
+
+class _SyntheticCompletion:
+    """把增量拼装的结果包装成「非流式响应」形状，复用 `_parse_response` 的唯一判定."""
+
+    def __init__(self, data: dict, *, status_code: int = 200, raw: str = "") -> None:
+        self._data = dict(data or {})
+        self.status_code = int(status_code)
+        self.headers: dict = {}
+        self.text = raw or json.dumps(self._data, ensure_ascii=False)
+
+    def json(self) -> dict:
+        return self._data
 #: 排队（Key 冷却）等待上限（#23 修复：全 key 长冷却时不许无限占线程池）；
 #: 有截止时刻时再与余量取 min（工作包 §4 B）
 AGENT_PLAN_QUEUE_CAP_SEC = 180.0
@@ -248,6 +352,10 @@ class AgentPlanTextService(TextGenerationService):
             # 先接受、后连最小 schema 也返回 400；不能把一次成功当成稳定能力。
             # 业务调用方须把内部契约交给模型并在本地验收；不在 400 后隐式重发。
             payload["response_format"] = {"type": "json_object"}
+        if AGENT_PLAN_TEXT_STREAM:
+            # 协议层流式（不是客户端读取方式）：只在显式开关下发，便于同请求对照。
+            payload["stream"] = True
+            payload["stream_options"] = {"include_usage": True}
         return payload
 
     # -- 传输阶段的证据 ---------------------------------------------------
@@ -278,8 +386,10 @@ class AgentPlanTextService(TextGenerationService):
         # A/B 对照取证（§7.3）：把**真正发出去的** payload 落盘（默认惰性，见 payload_capture）
         from _text_gen.payload_capture import maybe_capture as _cap
         _cap("agent_plan", payload, where="requests.post")
+        # 复核 2026-10-30（F3 补充）：受控通道**不跟随重定向**——跨 host 的 302 会让
+        # 套餐核验看到的端点与实际落点不一致。3xx 按非 200 处理（零采纳）。
         resp = requests.post(url, json=payload, headers=self._headers,
-                             timeout=timeout, stream=True)
+                             timeout=timeout, stream=True, allow_redirects=False)
         trace["headers_at"] = round(time.monotonic() - _t0, 3)
         trace["status"] = getattr(resp, "status_code", None)
         try:
@@ -331,6 +441,214 @@ class AgentPlanTextService(TextGenerationService):
         return resp
 
     @staticmethod
+    def _split_event(buf: str):
+        """切出**第一个**完整事件：返回 (事件文本, 剩余缓冲)；未遇到边界返回 (None, buf)."""
+        best = None
+        for sep in ("\r\n\r\n", "\n\n", "\r\r"):
+            idx = buf.find(sep)
+            if idx != -1 and (best is None or idx < best[0]):
+                best = (idx, sep)
+        if best is None:
+            return None, buf
+        idx, sep = best
+        return buf[:idx], buf[idx + len(sep):]
+
+    def _read_sse(self, resp, *, gate, trace: dict, t0: float = None,
+                  stop=None) -> dict:
+        """按 SSE **事件边界**增量读取，聚合成 chat.completion 形状；缺终态即失败.
+
+        复核（2026-10-29）后的合同：
+          · 空行为事件边界（LF / CRLF / CR 都认），同一事件的多行 `data:` 合并；
+          · 字节 / 完整事件 / 心跳 / 首个字节 / 首个事件**分别计数**——
+            「没观测到」不等于 0，也不把接收层指标说成网卡字节；
+          · 心跳（注释行或无 data 行）只计心跳、不进正文，也不延展预算；
+          · 多 choice、非对象事件、非 dict delta ⇒ 明确失败，不静默拼接；
+          · 终态 = **业务终态 finish_reason** + 流结束标记 `[DONE]`：只有 `[DONE]`
+            不补造终态，只有 finish_reason 而没有 `[DONE]` 也判不完整。
+        """
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        buf = ""
+        content: list = []
+        reasoning: list = []
+        usage: dict = {}
+        finish = None
+        saw_done = False
+        indexes = set()
+        counters = {"events": 0, "heartbeats": 0}
+        first_byte_at = None
+        first_event_at = None
+        # 从读取开始就记 0：0 是**测量值**（读到了流尾却没有字节），不是缺失
+        trace["bytes"] = int(trace.get("bytes") or 0)
+        # 统一时间起点（复核 2026-10-30）：首字节/首事件与响应头用**同一个**单调时钟原点，
+        # 否则「响应头 8.3s」与「首事件 0.0s」不可比。
+        t0 = t0 if t0 is not None else time.monotonic()
+
+        def _dispatch(block: str) -> None:
+            nonlocal finish, usage, saw_done, first_event_at
+            data_lines = []
+            for line in block.splitlines():
+                if line.startswith(":"):
+                    continue                      # 注释 / 心跳
+                if line.startswith("data:"):
+                    data_lines.append(line[5:].lstrip(" "))
+                # event: / id: / retry: 属于协议元数据，不进正文
+            if not data_lines:
+                counters["heartbeats"] += 1
+                return
+            body = "\n".join(data_lines).strip()
+            if body == "[DONE]":
+                saw_done = True
+                return
+            try:
+                obj = json.loads(body)
+            except Exception as exc:                             # noqa: BLE001
+                raise _SseIncomplete("SSE 事件不是合法 JSON: %s" % exc) from exc
+            if not isinstance(obj, dict):
+                raise _SseIncomplete("SSE 事件不是对象: %r" % (obj,))
+            if obj.get("error"):
+                raise _SseIncomplete("SSE 错误事件: %s" % str(obj.get("error"))[:200])
+            counters["events"] += 1
+            if first_event_at is None:
+                first_event_at = round(time.monotonic() - t0, 3)
+            for choice in (obj.get("choices") or []):
+                if not isinstance(choice, dict):
+                    raise _SseIncomplete("choices 元素不是对象: %r" % (choice,))
+                idx = choice.get("index")
+                if isinstance(idx, int):
+                    indexes.add(idx)
+                delta = choice.get("delta")
+                if delta is None:
+                    delta = {}
+                if not isinstance(delta, dict):
+                    raise _SseIncomplete("delta 不是对象: %r" % (delta,))
+                if delta.get("content"):
+                    content.append(str(delta["content"]))
+                if delta.get("reasoning_content"):
+                    reasoning.append(str(delta["reasoning_content"]))
+                if choice.get("finish_reason"):
+                    finish = str(choice["finish_reason"])
+            if isinstance(obj.get("usage"), dict):
+                usage = dict(obj["usage"])
+
+        _iter = resp.iter_content(chunk_size=64)
+        try:
+            while True:
+                # F2（2026-10-30 复核）：调用方超时后必须**停止消费**，不能让后台线程
+                # 继续拼正文/写轨迹。取消标志由发送方在等待结束时置位。
+                if stop is not None and stop.is_set():
+                    raise _SseAborted("调用方已结束等待（超时/取消），读取中止；迟到数据不采纳")
+                if gate is not None and gate.deadline.expired():
+                    trace.update({"events": counters["events"],
+                                  "heartbeats": counters["heartbeats"],
+                                  "first_byte_at": first_byte_at,
+                                  "first_event_at": first_event_at})
+                    raise TimeoutError(gate.expiry_reason())
+                try:
+                    chunk = next(_iter)
+                except StopIteration:
+                    break
+                # F2（复核 2026-10-30）：数据**返回之后、解析之前**必须再查一次取消与截止，
+                # 否则"读取期间置位"仍会消费这一块并改轨迹。
+                if stop is not None and stop.is_set():
+                    trace["aborted_after_chunk"] = True
+                    raise _SseAborted("调用方已结束等待（超时/取消），读取中止；迟到数据不采纳")
+                if gate is not None and gate.deadline.expired():
+                    trace.update({"events": counters["events"],
+                                  "heartbeats": counters["heartbeats"],
+                                  "first_byte_at": first_byte_at,
+                                  "first_event_at": first_event_at})
+                    raise TimeoutError(gate.expiry_reason())
+                if chunk:
+                    trace["bytes"] = int(trace.get("bytes") or 0) + len(chunk)
+                    if first_byte_at is None:
+                        first_byte_at = round(time.monotonic() - t0, 3)
+                    buf += decoder.decode(chunk)
+                while True:
+                    block, rest = self._split_event(buf)
+                    if block is None:
+                        break
+                    buf = rest
+                    _dispatch(block)
+                    trace["events"] = counters["events"]
+                    trace["heartbeats"] = counters["heartbeats"]
+                    # F1（复核 2026-10-30）：**同一块内**收到 [DONE] 后立即停止分发，
+                    # 不再把后续事件拼进正文（旧实现要等整块处理完才看 saw_done）。
+                    if saw_done:
+                        break
+                if saw_done:
+                    trace["done_early"] = True
+                    break
+        finally:
+            try:
+                _iter.close()
+            except Exception:
+                pass
+
+        trace["first_byte_at"] = first_byte_at
+        trace["first_event_at"] = first_event_at
+        trace["events"] = counters["events"]
+        trace["heartbeats"] = counters["heartbeats"]
+        trace["sse_reasoning_chars"] = sum(len(x) for x in reasoning)
+        if buf.strip() and not saw_done:
+            raise _SseIncomplete("流结束时仍有未完成事件（剩余 %d 字符、不在事件边界）" % len(buf))
+        if not saw_done:
+            raise _SseIncomplete("缺少流结束标记 [DONE]（已收 %d 个事件）" % counters["events"])
+        if finish is None:
+            raise _SseIncomplete("[DONE] 之前没有业务终态 finish_reason（不补造终态）")
+        if len(indexes) > 1:
+            raise _SseIncomplete("单输出合同下收到多个 choice: %s" % sorted(indexes))
+        return {"choices": [{"index": 0,
+                             "message": {"role": "assistant", "content": "".join(content)},
+                             "finish_reason": finish}],
+                "usage": usage}
+
+    def _send_sse(self, url: str, payload: dict, timeout, *, gate, trace: dict,
+                  stop=None):
+        """一次 SSE POST；**读取也在发送闭包内**，因此闸门的墙钟覆盖到等流。"""
+        from _text_gen.payload_capture import maybe_capture as _cap
+        _cap("agent_plan", payload, where="requests.post(sse)")
+        _t0 = time.monotonic()
+        # 复核 2026-10-30（F3 补充）：受控通道**不跟随重定向**——跨 host 的 302 会让
+        # 套餐核验看到的端点与实际落点不一致。3xx 按非 200 处理（零采纳）。
+        resp = requests.post(url, json=payload, headers=self._headers,
+                             timeout=timeout, stream=True, allow_redirects=False)
+        trace["headers_at"] = round(time.monotonic() - _t0, 3)
+        trace["status"] = getattr(resp, "status_code", None)
+        try:
+            _h = getattr(resp, "headers", None) or {}
+            for _k in ("x-request-id", "openai-request-id", "cf-ray", "x-opencode-request-id"):
+                _v = _h.get(_k)
+                if _v:
+                    trace["request_id"] = str(_v)
+                    break
+        except Exception:
+            pass
+        # 复核（2026-10-30）：**所有**出口（200 正常、非 200、解析异常、超时）都必须关闭响应；
+        # 上一版非 200 分支提前 return，跳过了 close。
+        try:
+            if getattr(resp, "status_code", None) != 200:
+                body = b""
+                try:
+                    body = b"".join(resp.iter_content(65536)) or b""
+                except Exception:
+                    pass
+                trace["bytes"] = len(body)
+                text = body.decode("utf-8", "replace")
+                try:
+                    data = json.loads(text)
+                except Exception:
+                    data = {}
+                return _SyntheticCompletion(data, status_code=int(resp.status_code), raw=text)
+            data = self._read_sse(resp, gate=gate, trace=trace, t0=_t0, stop=stop)
+            trace["done_at"] = round(time.monotonic() - _t0, 3)
+            return _SyntheticCompletion(data)
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+
+    @staticmethod
     def _trace_note(trace: dict, payload: dict, effort, sent: bool = True) -> str:
         """一行**脱敏**轨迹：请求指纹 / 实际强度 / 关联 ID / 各阶段时刻.
 
@@ -354,6 +672,10 @@ class AgentPlanTextService(TextGenerationService):
             # 措辞**不许**断言是网关排队（2026-10-03 实测：该端点算完才交回 ⇒ 排队与在算
             # 在此**不可分**）。
             return _head + "**无任何响应头/字节**（已发出；该端点算完才交回，排队与在算不可分）"
+        if "events" in trace:
+            return (_head + "响应头 %ss｜SSE 首事件 %ss｜事件 %s｜终态收完 %s"
+                    % (trace.get("headers_at"), trace.get("first_event_at"),
+                       trace.get("events"), trace.get("done_at", "未收完")))
         return (_head + "响应头 %ss｜正文 %s 字节｜收完 %s"
                 % (trace.get("headers_at"), trace.get("bytes", 0),
                    trace.get("done_at", "未收完")))
@@ -387,7 +709,8 @@ class AgentPlanTextService(TextGenerationService):
 
         payload = self._build_payload(req)
         model = payload.get("model", self._model)
-        url = f"{self._base_url}/chat/completions"
+        # 与套餐核验共享同一个规范化端点（F3）：含 .. / 双重编码直接抛错，不发送。
+        url = chat_completions_url(self._base_url)
 
         _verbose_write(
             f"[INFO] 正在调用 Agent Plan ({model}) 生成分镜脚本... "
@@ -430,28 +753,79 @@ class AgentPlanTextService(TextGenerationService):
         last_error = ""
         _effort = _resolve_effort(req)          # 阶段轨迹里记"要求 vs 实发"
         _t0 = time.monotonic()
+        # 发送守卫（2026-10-29）：与 DeepSeek 通道同一契约——在**真正进入 HTTP** 之前
+        # 占用一次性授权并落 attempt；守卫报错即上抛，requests.post 不会发生（零发送）。
+        # 受控审计只允许一次发送，因此重试在第 2 次 attempt 前被拒绝（不静默补发）。
+        _guard = getattr(req, "send_guard", None)
         for attempt in range(1, 1 + _attempts):
             _timeout, _deny = _gate.limit()
             if _deny:
                 # 余量耗尽：**不发请求**（也不回退默认 600s 超时）
                 return TextGenerationResult(success=False, error=_deny)
+            if _guard is not None and attempt > 1:
+                return TextGenerationResult(
+                    success=False,
+                    error=("受控审计只允许一次发送：第 %d 次重试被守卫拒绝（未发送；"
+                           "旧请求可能仍在模型侧跑）" % attempt))
             _trace: dict = {}
+            # P2（2026-10-29 复核）：守卫必须在**闸门真正调用发送闭包那一刻**才执行。
+            # 闸门可能因截止时刻已到、余量耗尽而根本不调用闭包——那种情况**零 HTTP**，
+            # 因此也必须是**零 attempt、零 claim**；放在 request() 之外会先消费授权。
+            _attempt = {"id": "", "made": False}
+            # F2：调用方等待结束（超时/取消）时置位，读取器在下一块数据处中止，
+            # 迟到的正文既不拼装也不写轨迹。
+            _stop = threading.Event()
+
+            def _guarded(_t, _trace=_trace, _attempt=_attempt, _stop=_stop):
+                if _guard is not None:
+                    _attempt["id"] = _guard.before_send(
+                        provider="agent_plan", model=model, endpoint="chat.completions")
+                    _attempt["made"] = True
+                if AGENT_PLAN_TEXT_STREAM:
+                    return self._send_sse(url, payload, _t, gate=_gate, trace=_trace,
+                                          stop=_stop)
+                return self._send_once(url, payload, _t, _trace)
+
             try:
-                resp, _timed_out, _why = _gate.request(
-                    lambda _t: self._send_once(url, payload, _t, _trace))
+                resp, _timed_out, _why = _gate.request(_guarded)
                 if _why:
-                    # 墙钟没等到 / 余量耗尽：**不重发**（旧请求可能仍在模型侧跑）
-                    # 复核 2026-10-03：超时文案只说"没等到"，**必须**同时给出走到了哪一段
-                    # ——否则"远端排队 / 远端在算 / 传输停顿"三者事后无从区分。
-                    _note = self._trace_note(_trace, payload, _effort,
-                                             sent=bool(_timed_out))
-                    if _note:
-                        _verbose_write("[TRACE] agent_plan_text 阶段轨迹（失败）：" + _note)
-                        return TextGenerationResult(
-                            success=False, error="%s｜阶段轨迹：%s" % (_why, _note))
-                    return TextGenerationResult(success=False, error=_why)
+                    _stop.set()          # 墙钟已到：通知读取器停止消费
+            except _SseAborted as exc:
+                if _guard is not None and _attempt["made"]:
+                    _guard.record_send_outcome(
+                        _attempt["id"], "unknown",
+                        {"sse": "aborted", "error": str(exc)[:200]})
+                return TextGenerationResult(
+                    success=False, error="SSE 读取已中止（不重发）: %s" % exc)
+            except _SseIncomplete as exc:
+                # 缺终态/错误事件：请求已发出但结果不可用 ⇒ unknown（**不重发**）
+                if _guard is not None and _attempt["made"]:
+                    _guard.record_send_outcome(
+                        _attempt["id"], "unknown",
+                        {"sse": "incomplete", "error": str(exc)[:200]})
+                return TextGenerationResult(
+                    success=False,
+                    error="SSE 流不完整（不重发）: %s" % exc)
+            except TimeoutError as exc:
+                # 流内墙钟到期：已收到部分事件，结果不可当成完整
+                if _guard is not None and _attempt["made"]:
+                    _guard.record_send_outcome(
+                        _attempt["id"], "unknown",
+                        {"sse": "timeout", "error": str(exc)[:200]})
+                return TextGenerationResult(
+                    success=False,
+                    error="SSE 流内超时（不重发）: %s｜阶段轨迹：%s"
+                          % (exc, self._trace_note(_trace, payload, _effort)))
             except requests.exceptions.RequestException as e:
                 _fc = retry_policy.classify_exception(e)
+                if _guard is not None and _attempt["made"]:
+                    # 读超时 ≠ 远端已取消：请求已发出、只是本地没等到 ⇒ unknown（不是 failed，
+                    # 更不能当成"没发送"）。其余传输异常（连接重置等）仍记 failed。
+                    _guard.record_send_outcome(
+                        _attempt["id"],
+                        "unknown" if _fc is retry_policy.FailureClass.TRANSPORT_TIMEOUT
+                        else "failed",
+                        {"error": "%s: %s" % (type(e).__name__, str(e)[:200])})
                 if _fc is retry_policy.FailureClass.TRANSPORT_TIMEOUT:
                     _verbose_write(
                         f"[!] 客户端 {_timeout}s 超时（长任务），"
@@ -487,6 +861,25 @@ class AgentPlanTextService(TextGenerationService):
                 if not _gate.wait(_wait):
                     return TextGenerationResult(success=False, error=_gate.expiry_reason())
                 continue
+
+            if _guard is not None and _attempt["made"]:
+                # 已经发出：有响应对象 ⇒ returned；等不到响应 ⇒ unknown
+                #（**不能**把"没等到"写成 0 次发送）
+                _guard.record_send_outcome(
+                    _attempt["id"], "unknown" if _why else "returned",
+                    {"status": getattr(resp, "status_code", None)}
+                    if resp is not None else {})
+            if _why:
+                # 墙钟没等到 / 余量耗尽：**不重发**（旧请求可能仍在模型侧跑）
+                # 复核 2026-10-03：超时文案只说"没等到"，**必须**同时给出走到了哪一段
+                # ——否则"远端排队 / 远端在算 / 传输停顿"三者事后无从区分。
+                _note = self._trace_note(_trace, payload, _effort,
+                                         sent=bool(_timed_out))
+                if _note:
+                    _verbose_write("[TRACE] agent_plan_text 阶段轨迹（失败）：" + _note)
+                    return TextGenerationResult(
+                        success=False, error="%s｜阶段轨迹：%s" % (_why, _note))
+                return TextGenerationResult(success=False, error=_why)
 
             _verbose_write(
                 f"[DEBUG] agent_plan_text_submit response: status={resp.status_code}, "

@@ -925,6 +925,34 @@ def resume_candidate_attempt(attempt: Path, *, service=None, adapter=None,
             "submit_posts": va.submit_post_count(package_root)}
 
 
+def _trace_video_event(attempt, kind, **fields):
+    if attempt is None:
+        return
+    from shared import enhancement_io as eio
+    with eio.AttemptLock(Path(attempt) / eio.LOCK_DIRNAME, purpose=kind):
+        eio.append_event(Path(attempt), kind, **fields)
+
+
+async def _poll_video_production(*args, trace_attempt, **kwargs):
+    from shared import video_attempts as va
+    task_id, idx = args[3], args[4]
+    before = len(_failed_videos.get(idx, []))
+    va.transition(trace_attempt, va.STATE_RUNNING, task_id=task_id)
+    try:
+        ok = await _poll_video(*args, trace_attempt=trace_attempt, **kwargs)
+        _trace_video_event(trace_attempt, "production_completed", task_id=task_id,
+                           success=ok, failures=_failed_videos.get(idx, [])[before:])
+        if not ok and va.current_state(trace_attempt) == va.STATE_RUNNING:
+            va.transition(trace_attempt, va.STATE_IO_FAILED, kind="fetch_incomplete",
+                          task_id=task_id, remote_status="unverified")
+        return ok
+    except BaseException as exc:
+        _failed_videos[idx].append({"task_id": task_id, "code": "poll_interrupted",
+                                    "error": str(exc), "attempt": str(trace_attempt)})
+        _trace_video_event(trace_attempt, "poll_interrupted", task_id=task_id, error=str(exc))
+        raise
+
+
 async def _poll_video(
     video_adapter, semaphore: asyncio.Semaphore,
     req, task_id: str, shot_idx: int,
@@ -935,6 +963,7 @@ async def _poll_video(
     characters: list | None = None,
     candidate_context=None,
     frozen_request=None,
+    trace_attempt=None,
 ) -> bool:
     """Background poll with exponential backoff + jitter - reduces API queries.
 
@@ -987,6 +1016,8 @@ async def _poll_video(
             except Exception:
                 pass
 
+        _trace_video_event(trace_attempt, "task_binding", task_id=task_id, binding=_binding)
+
         # Wait INITIAL_POLL_DELAY seconds after submit before first query (respect 1 RPM limit)
         logger.verbose(f"  [Shot {shot_idx}] [{key_display}] Task submitted, waiting {INITIAL_POLL_DELAY}s before polling...")
         await asyncio.sleep(INITIAL_POLL_DELAY)
@@ -1016,7 +1047,11 @@ async def _poll_video(
                     await asyncio.sleep(actual_interval)
 
                 # 不再按旧文件短路：本任务结果必须经 fetch_result 拿到，成功后覆盖旧 video.mp4
+                _trace_video_event(trace_attempt, "fetch_started", task_id=task_id)
                 result = await video_adapter.fetch_result(req, task_id)
+                _trace_video_event(trace_attempt, "fetch_result", task_id=task_id,
+                                   success=result.success, save_path=str(result.save_path or ""),
+                                   error=getattr(result, "error", None))
                 if result.success and result.save_path:
                     shot_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1049,6 +1084,11 @@ async def _poll_video(
                         _failed_videos[shot_idx].append({"attempt": -1, "error": "文件被占用，copy 失败", "task_id": task_id})
                         return False
 
+                    if trace_attempt is not None:
+                        from shared import video_attempts as va
+                        va.transition(trace_attempt, va.STATE_DOWNLOADED, task_id=task_id,
+                                      path=str(video_path), bytes=video_path.stat().st_size)
+
                     # A6 修复（08-11）：视频产物接 QC——此前成功判定=文件>20KB，
                     # 时长/内容零校验，坏视频直接进 step04。现做两级 QC：
                     #   1. 时长校验（ffprobe，always-on）：实际 vs 期望 duration 偏差
@@ -1064,6 +1104,13 @@ async def _poll_video(
                         video_path, shot_idx, _expected_dur, shot=shot, characters=characters,
                         log_path=(execution_log_file("step02", context=candidate_context)
                                   if candidate_context is not None else None))
+                    if trace_attempt is not None:
+                        va.transition(trace_attempt, va.STATE_CHECKED, kind="video_check",
+                                      task_id=task_id, qc=_qc.to_dict())
+                        if _qc.status == "failed":
+                            va.transition(trace_attempt, va.STATE_REJECTED, reason=_qc.reason)
+                        elif _qc.status == "soft_allowed":
+                            va.transition(trace_attempt, va.STATE_UNVERIFIED, reason=_qc.reason)
                     if _qc.status == "failed":
                         # 计划 §V2 改动 3：**删除内容 QC 自动重交动作**。
                         # 重生成属新的付费调用，必须走人工费用确认（候选模式下由
@@ -1099,6 +1146,12 @@ async def _poll_video(
                             _failed_videos[shot_idx].append({"attempt": -1, "task_id": task_id,
                                                             "error": f"qc_retry_state: {exc}"})
                             return False
+                        if trace_attempt is not None:
+                            from shared import enhancement_io as eio
+                            rejected = Path(trace_attempt) / "rejected.mp4"
+                            shutil.copy2(video_path, rejected)
+                            _trace_video_event(trace_attempt, "rejected_artifact",
+                                               artifact=eio.artifact_record(rejected, role="rejected_video"))
                         try:
                             video_path.unlink(missing_ok=True)
                         except OSError as exc:
@@ -1254,7 +1307,7 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
                                   frame_paths: list, shot_hash: str, video_adapter,
                                   poll_semaphore, script: dict, idx: int, prompt: str,
                                   characters: list, continuity_ref_image, mode: str,
-                                  candidate_context, logger, make_request):
+                                  candidate_context, logger, make_request, production_output=False):
     """候选模式提交：**一次尝试 = 至多一个生成 POST**（计划 §V1/§V2 改动 1/2/6）。
 
     与旧路的区别（本函数是候选模式的**唯一**提交入口）：
@@ -1293,11 +1346,14 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
                          code="attempt_identity_conflict")
 
     req = make_request(video_adapter, prompt, frame_paths, shot, characters=characters,
-                       continuity_ref_image=continuity_ref_image, mode=mode)
+                       continuity_ref_image=continuity_ref_image, mode=mode,
+                       **({"retry_attempt": _read_qc_retry_state(shot_dir)["count"]}
+                          if production_output else {}))
     # 候选落盘路径 + 执行上下文（适配器原样透传请求对象；provider 据此下载进 attempt）
-    req.candidate_path = str(video_path)
-    req.execution_context = ExecutionContext.from_candidate_context(
-        candidate_context, candidate_path=video_path)
+    if not production_output:
+        req.candidate_path = str(video_path)
+        req.execution_context = ExecutionContext.from_candidate_context(
+            candidate_context, candidate_path=video_path)
 
     svc = _video_service_for(video_adapter)
     if svc is None or not callable(getattr(svc, "prepare_request", None)) \
@@ -1354,7 +1410,9 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
     eio.freeze_inputs(attempt, {**(eio.read_inputs(attempt) or {}),
                                 "frozen_request": frozen.to_dict(),
                                 "prepared": prepared.to_dict(),
-                                "shot_index": idx})
+                                "shot_index": idx,
+                                "execution_mode": "production" if production_output else "candidate",
+                                "requested_seed": getattr(req, "seed", None)})
     va.transition(attempt, va.STATE_READY)
     eio.append_event(attempt, "prepared", content_key=prepared.content_key,
                      request_key=frozen.request_key,
@@ -1376,25 +1434,33 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
                  if exc.classification == SUBMIT_UNKNOWN else va.STATE_PROVIDER_FAILED)
         va.transition(attempt, state, kind="submit_post", task_id=None,
                       generation_id=gen_id, classification=exc.classification,
-                      http_status=exc.http_status)
+                      http_status=exc.http_status, error=str(exc))
         if exc.classification == SUBMIT_RATE_LIMITED:
             eio.append_event(attempt, "submit_rate_limited", retry_after=exc.retry_after)
-        if exc.http_status in (400, 422) or "content_policy" in str(exc).lower():
+        if not production_output and (exc.http_status in (400, 422) or "content_policy" in str(exc).lower()):
             _record_content_policy_revision(attempt, prompt, str(exc), eio)
         # 结构化分类**必须落到失败记录上**：不带 code 会被批处理记成默认
         # `candidate_submit_failed`，CLI 于是返回 3 而不是约定的 7（复核 P2-8）。
         _cls_code = submit_failure_code(exc.classification)
         return _fail(f"submit({exc.classification}): {exc}", code=_cls_code)
 
+    except Exception as exc:
+        va.transition(attempt, va.STATE_SUBMISSION_UNKNOWN, kind="submit_post",
+                      task_id=None, generation_id=gen_id, classification=SUBMIT_UNKNOWN,
+                      error=str(exc))
+        return _fail(f"submission_unknown: {exc}", code="submission_unknown")
+
     task_id = str(task_id)
     va.transition(attempt, va.STATE_SUBMITTED, kind="submit_post", task_id=task_id,
                   generation_id=gen_id,
                   credential_profile_ref=prepared.credential_profile_ref)
+    poll = _poll_video_production if production_output else _poll_video
     task = asyncio.create_task(
-        _poll_video(video_adapter, poll_semaphore, req, task_id, idx,
-                    shot_dir, video_path, VIDEO_MAX_RETRIES, shot_hash,
-                    qc_resubmit_limit=0, shot=shot, characters=characters,
-                    candidate_context=candidate_context, frozen_request=frozen)
+        poll(video_adapter, poll_semaphore, req, task_id, idx,
+             shot_dir, video_path, VIDEO_MAX_RETRIES, shot_hash,
+             qc_resubmit_limit=0, shot=shot, characters=characters,
+             candidate_context=None if production_output else candidate_context,
+             frozen_request=frozen, **({"trace_attempt": attempt} if production_output else {}))
     )
     return task
 
@@ -1537,103 +1603,26 @@ async def _submit_video(
             candidate_context=candidate_context, logger=logger,
             make_request=_make_request)
 
+    from types import SimpleNamespace
+    from shared.paths import production_video_attempts_root
+    from shared import video_attempts as va
+    root = production_video_attempts_root(shot_dir)
+    ctx = SimpleNamespace(
+        package_root=root, attempt_dir=root / "attempts" / va.new_attempt_id("production"),
+        scope={"chapter": _chapter_index_safe()}, script_revision=_script_revision(script))
     try:
-        _qc_retry_attempt = _read_qc_retry_state(shot_dir)["count"] if shot_dir is not None else 0
-    except (OSError, ValueError) as exc:
-        logger.warn(f"  [镜头{idx}] QC 重抽状态不可读，零提交: {exc}")
-        _failed_videos[idx].append({"attempt": 0, "error": f"qc_retry_state: {exc}"})
+        return await _submit_video_candidate(
+            shot=shot, shot_dir=shot_dir, video_path=video_path, frame_paths=frame_paths,
+            shot_hash=shot_hash, video_adapter=video_adapter, poll_semaphore=poll_semaphore,
+            script=script, idx=idx, prompt=prompt, characters=characters,
+            continuity_ref_image=continuity_ref_image, mode=mode, candidate_context=ctx,
+            logger=logger, make_request=_make_request, production_output=True)
+    except Exception as exc:
+        # Includes post-submit persistence failure: never turn it into another POST.
+        _failed_videos[idx].append({"attempt": str(ctx.attempt_dir),
+                                    "code": "execution_record_failed", "error": str(exc)})
+        logger.warn(f"  [镜头{idx}] 执行记录失败，不重交: {exc}; attempt={ctx.attempt_dir}")
         return None
-
-    for attempt in range(1, 1 + VIDEO_SUBMIT_RETRIES):
-        try:
-            req = _make_request(video_adapter, prompt, frame_paths, shot,
-                                characters=characters,
-                                continuity_ref_image=continuity_ref_image, mode=mode,
-                                retry_attempt=_qc_retry_attempt)
-            frozen = None
-            try:
-                from step02_video_gen import request_plan as _rp
-                from shared.model_caps import active_video_model as _active_model
-                frozen = _rp.build_frozen_request(
-                    req, shot=shot,
-                    scope={"chapter": _chapter_index_safe()},
-                    script_revision=_script_revision(script),
-                    provider=str(os.getenv("VIDEO_PROVIDER", "")),
-                    model_id=str(_active_model() or ""),
-                    requirements=generation_requirements())
-            except Exception as _exc:  # noqa: BLE001 - 冻结快照是加固项，失败照样提交但如实告警
-                logger.warn(f"  [镜头{idx}] 冻结请求组装失败（提交继续，本次无快照）: {_exc}")
-            task_id = await video_adapter.submit_task(req)
-            # 2026-09-13 审计修复：轮询连续失败上限走 VIDEO_MAX_RETRIES 配置
-            # （此前正常路径硬编码 99、content-policy 路径硬编码 3，配置被架空）
-            task = asyncio.create_task(
-                _poll_video(video_adapter, poll_semaphore, req, task_id, idx,
-                           shot_dir, video_path, VIDEO_MAX_RETRIES, shot_hash,
-                           qc_resubmit_limit=VIDEO_QC_RESUBMIT,
-                           shot=shot, characters=characters, frozen_request=frozen)
-            )
-            return task
-        except Exception as e:
-            err_str = str(e)
-            # §V2 故障表「提交超时/连接断开，不知是否建任务」⇒ submission_unknown：
-            # **禁止**再次 submit（重发会产生第二个远端任务/重复计费）。
-            unknown = (isinstance(e, VideoSubmissionError) and e.classification == SUBMIT_UNKNOWN) \
-                or isinstance(e, asyncio.TimeoutError)
-            if unknown:
-                _failed_videos[idx].append({
-                    "attempt": -attempt,
-                    "error": f"submission_unknown: {_fmt_err(err_str)}（不重发，需人工确认后按原任务恢复）",
-                    "classification": SUBMIT_UNKNOWN,
-                })
-                logger.warn(
-                    f"  [镜头{idx}] 提交结果未知（不知是否已建任务）：不再重发；"
-                    f"如需恢复请按已有 task_id 查询/恢复")
-                return None
-            # provider 已**分类**的拒绝/限流：交上层记录（重发须是新的 prepared 候选 +
-            # 新的费用确认），不在这一层再 POST（§V2 改动 1：分类，不靠字符串猜）
-            if isinstance(e, VideoSubmissionError) and e.classification in (
-                    SUBMIT_REJECTED, SUBMIT_RATE_LIMITED):
-                _failed_videos[idx].append({
-                    "attempt": -attempt,
-                    "error": f"{e.classification}: {_fmt_err(err_str)}（不再重发）",
-                    "classification": e.classification,
-                    "http_status": e.http_status,
-                })
-                return None
-            # 429 限流（**未分类**的旧式异常）：读服务端 retry-after，等待后重试
-            if "429" in err_str or "rate limit" in err_str.lower() or "too many requests" in err_str.lower():
-                from shared.rate_limit import compute_429_wait
-                wait = compute_429_wait(err_str, fallback_seconds=61.0)
-                logger.verbose(f"  [镜头{idx}] 视频提交限流 429，等待 {wait:.0f}s 后重试 ({attempt}/3): {_fmt_err(err_str)}")
-                await asyncio.sleep(wait)
-                continue
-            if "400" in err_str or "422" in err_str or "content_policy" in err_str.lower() or "5185bb98fdd" in err_str:
-                from shared.content_policy_fix import auto_fix_prompt
-                fixed_prompt = auto_fix_prompt(prompt, str(e), verbose=False)
-                if fixed_prompt and fixed_prompt != prompt:
-                    try:
-                        req = _make_request(video_adapter, fixed_prompt, frame_paths, shot,
-                                            characters=characters,
-                                            continuity_ref_image=continuity_ref_image, mode=mode,
-                                            retry_attempt=_qc_retry_attempt)
-                        task_id = await video_adapter.submit_task(req)
-                        task = asyncio.create_task(
-                            _poll_video(video_adapter, poll_semaphore, req, task_id, idx,
-                                       shot_dir, video_path, VIDEO_MAX_RETRIES, shot_hash,
-                                       qc_resubmit_limit=VIDEO_QC_RESUBMIT,
-                                       shot=shot, characters=characters)
-                        )
-                        return task
-                    except Exception:
-                        pass
-                _failed_videos[idx].append({"attempt": -attempt, "error": f"content_policy: {e}"})
-                return None
-            _failed_videos[idx].append({"attempt": -attempt, "error": f"submit: {e}"})
-            if attempt < 3:
-                await asyncio.sleep(5)
-
-    _failed_videos[idx].append({"attempt": -3, "error": "FATAL: submit failed"})
-    return None
 
 
 async def _process_one_shot(

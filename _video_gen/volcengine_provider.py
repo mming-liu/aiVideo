@@ -342,6 +342,12 @@ class VolcengineVideoService(VideoGenerationService):
         # 文本项**始终**是 content 的第一项（官方协议：text 在前、媒体在后）
         items.insert(0, {"type": "text", "text": prompt})
         modifications.extend(content_mods)
+        # 上游（prompt 组装）按能力做过的裁剪也要出现在 prepared.modifications 里：
+        # prompt builder 已经提前把关键帧去掉，provider 这里再看 req 已经看不到它们，
+        # 只能沿 req.media_selection 透传（解释性记录，不参与 content_key）。
+        for _m in ((getattr(req, "media_selection", None) or {}).get("modifications") or []):
+            if _m not in modifications:
+                modifications.append(dict(_m))
         parameters = self._build_parameters(req, model)
 
         materials: list[MaterialRef] = []
@@ -464,32 +470,24 @@ class VolcengineVideoService(VideoGenerationService):
             _audio_item()
             return items, modifications
 
-        # ---- 多关键帧：能力支持→全部 reference_image（全模态）；否则退化为首尾帧 ----
+        # ---- 最终素材计划：与提示词共用 `shared.video_media_plan` ----
+        # 旧实现在这里二次裁剪：kf 存在时用 kf[0]/kf[-1] 顶替首尾帧、丢掉 ff/lf，
+        # 而提示词仍按"ff 首帧 + lf 尾帧 + 3 过程帧"声明——两边对不上。
+        # 现在只认一份计划：有真正的 ff/lf 就用它们，关键帧显式丢弃并记账。
+        from shared.video_media_plan import plan_image_media
         kfs = [p for p in (req.extra_keyframe_paths or []) if p and Path(p).is_file()]
-        if kfs:
-            if cap.supports_reference_image:
-                for p in kfs:
-                    _image(p, "reference_image")
-                _audio_item()
-                return items, modifications
-            if len(kfs) > 2:
-                dropped = len(kfs) - 2
-                modifications.append({"kind": "keyframe_degrade", "reason": "model_unsupported",
-                                      "dropped": dropped, "kept": 2, "model": model})
-                _verbose_write(f"  [镜头{req.clip_index}] {model} 不支持参考生视频，"
-                               f"多关键帧退化为首尾帧（丢弃中间 {dropped} 张）")
-                kfs = [kfs[0], kfs[-1]]
-
-        # ---- 首帧/首尾帧（所有 Seedance 模型支持）----
-        if kfs:
-            _image(kfs[0], "first_frame")
-            if len(kfs) > 1:
-                _image(kfs[-1], "last_frame")
-        else:
-            if req.image_path:
-                _image(req.image_path, "first_frame")
-            if req.last_frame_image_path:
-                _image(req.last_frame_image_path, "last_frame")
+        ff = req.image_path if req.image_path and Path(req.image_path).is_file() else None
+        lf = (req.last_frame_image_path
+              if req.last_frame_image_path and Path(req.last_frame_image_path).is_file() else None)
+        plan = plan_image_media(
+            supports_reference_image=bool(getattr(cap, "supports_reference_image", False)),
+            image_path=ff, last_frame_path=lf, keyframe_paths=kfs)
+        for item in plan["items"]:
+            _image(item["path"], item["role"])
+        modifications.extend(plan["modifications"])
+        if plan["dropped"]:
+            _verbose_write(f"  [镜头{req.clip_index}] {model} 素材裁剪: "
+                           f"mode={plan['mode']} 丢弃 {len(plan['dropped'])} 张")
         _audio_item()
         return items, modifications
 

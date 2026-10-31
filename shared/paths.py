@@ -17,6 +17,7 @@
 - NOVEL_NAME 为空时退化为无小说层；BOOK_NAME 为空时目录为 part_01
 - 各模块一律 from shared.paths import ...，禁止自行拼接路径
 """
+import hashlib
 import os
 from pathlib import Path
 
@@ -192,6 +193,11 @@ def vimax_shots_dir(chapter: int | None = None) -> Path:
 def shot_work_dir(idx: int, chapter: int | None = None) -> Path:
     """单镜工作目录: <vimax_working_dir>/shots/<idx>/（帧/视频/哈希文件落此）."""
     return vimax_shots_dir(chapter) / str(idx)
+
+
+def production_video_attempts_root(shot_dir: Path) -> Path:
+    """Per-shot execution journal; separate from accepted media and candidate packages."""
+    return Path(shot_dir) / "video_attempts"
 
 
 def shot_video_file(idx: int, chapter: int | None = None) -> Path:
@@ -435,3 +441,52 @@ def props_bank_dir() -> Path:
 
 def chapter_cache_dir() -> Path:
     return global_dir() / "chapter_cache"
+
+
+# ---------------------------------------------------------------------------
+# 一次性审计授权（M09，2026-10-29）
+# ---------------------------------------------------------------------------
+# 审计授权是**费用上限**，不是普通缓存：同一份授权无论重复启动、换运行根还是并发
+# 启动，累计只能进入一次外部发送。因此它的消费状态必须落在一个**与运行根无关**的
+# 固定位置（不能跟着 OUTPUT_BASE / --out-root / 时间戳目录 / 审计包文件名漂移），
+# 否则换一个运行根就等于凭空多出一次额度。
+
+AUDIT_AUTHORIZATION_STATE_DIRNAME = "audit_authorizations"
+#: 只在**测试**里重定向登记根（每个用例独立临时目录）。生产启动脚本不得设置它——
+#: 真实 CLI 没有「换登记根」参数，避免用改名/换根绕过已消费记录。
+#: 授权登记根的**唯一事实源**。生产解析不读任何环境变量：能改环境变量就能把
+#: 同一授权指到另一个空登记目录，从而绕过"已消费"记录（2026-10-29 复核 P1）。
+#: 测试要隔离时，在自己进程里替换本模块常量（sitecustomize / monkeypatch），
+#: 而不是在运行期给生产代码留开关。
+AUDIT_AUTHORIZATION_ROOT = _PROJECT_ROOT / ".p1a_exp" / "step01_delivery_20261028"
+
+#: 授权 id 的字符集与长度：只允许 `[A-Za-z0-9_-]`，8..64 字符，首字符字母或数字。
+#: 它会被拼进目录名（且另做 sha256 截断），必须先在这里挡住路径片段注入。
+_AUTH_ID_ALLOWED = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+
+
+def validate_authorization_id(authorization_id: str) -> str:
+    """严格校验一次性授权 id；不合法直接 `ValueError`（不猜、不修、不替换）."""
+    aid = str(authorization_id or "")
+    if not (8 <= len(aid) <= 64):
+        raise ValueError(f"authorization_id 长度非法（8..64）: {authorization_id!r}")
+    if aid[0] not in _AUTH_ID_ALLOWED or aid[0] in "-_":
+        raise ValueError(f"authorization_id 首字符必须是字母或数字: {authorization_id!r}")
+    if any(ch not in _AUTH_ID_ALLOWED for ch in aid) or aid in (".", ".."):
+        raise ValueError(f"authorization_id 含非法字符（仅 [A-Za-z0-9_-]）: {authorization_id!r}")
+    return aid
+
+
+def step01_audit_authorization_dir(authorization_id: str) -> Path:
+    """一份一次性审计授权的**固定**状态目录（同一 id 在任何运行根下都解析到这里）.
+
+    目录键只由 `authorization_id` 决定（sha256 截断，避免长名/奇怪字符），**不掺**
+    候选摘要、规则版本、通道或运行根：这些绑定的东西变了但 id 不变时，必须落到同一
+    个目录并被拒绝，而不是悄悄生成第二个「还可以发一次」的目录。绑定比对在 claim 里做。
+    """
+    aid = validate_authorization_id(authorization_id)
+    # **不读环境变量**（P1）：登记根只由模块常量决定。任何"换个目录再发一次"的
+    # 运行期开关都会让已消费记录失效，因此只在测试进程内替换常量。
+    base = Path(AUDIT_AUTHORIZATION_ROOT) / AUDIT_AUTHORIZATION_STATE_DIRNAME
+    key = "auth_" + hashlib.sha256(aid.encode("utf-8")).hexdigest()[:32]
+    return base / key

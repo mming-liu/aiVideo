@@ -51,7 +51,8 @@ def _normalize(text: str) -> str:
     if not text:
         return text
     text = re.sub(r"\.{2,}", "…", text)
-    text = re.sub(r"…+", "…", text)
+    # 2026-10-26（D5 事故）：不再把“……”折叠成“…”——批准播出文本的省略号
+    # 是原文标点，折叠会改变逐字文本，也会让跨镜句末匹配失配。
     text = re.sub(r"\s+", "", text)
     return text
 
@@ -68,6 +69,12 @@ class NarrationSubtitleConsistencyConstraint(Constraint):
 
     def apply(self, ctx) -> list[RepairRecord]:
         repairs: list[RepairRecord] = []
+        from step01_script_gen.plan_feasibility import (
+            approved_voice_fragments, is_approved_voice_fragment)
+        script = ctx.script if isinstance(ctx.script, dict) else {}
+        fragments = approved_voice_fragments(
+            script.get("chapter_outline"), novel_text=ctx.novel_text or "")
+        characters = script.get("characters") or []
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
             narr = shot.get("narration_segment")
             sub = shot.get("subtitle")
@@ -106,8 +113,10 @@ class NarrationSubtitleConsistencyConstraint(Constraint):
             if not isinstance(sub, str):
                 sub = ""
 
-            new_narr = _normalize(narr)
-            new_sub = _normalize(sub)
+            new_narr = (narr if is_approved_voice_fragment(narr, fragments, characters)
+                        else _normalize(narr))
+            new_sub = (sub if is_approved_voice_fragment(sub, fragments, characters)
+                       else _normalize(sub))
             # 强制以 narration_segment 为准
             if new_narr:
                 new_sub = new_narr

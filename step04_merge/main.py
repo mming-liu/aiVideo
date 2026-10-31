@@ -304,6 +304,8 @@ def _collect_narration_tracks(script, valid_shots, clip_windows, resolve=None,
     plan = script.get("chapter_outline")
     plan = plan if isinstance(plan, dict) else {}
     entries = plan_narration_entries(plan)
+    from shared.narration_voice import narration_role
+    _roles = [narration_role(e, script.get("characters") or []) for e in entries]
     if not entries:
         return []
     _pos = {str(s.get("index")): i for i, s in enumerate(valid_shots)}
@@ -413,6 +415,12 @@ def _collect_narration_tracks(script, valid_shots, clip_windows, resolve=None,
         # 的同一记录**为准（占用/播放/核验三者消费同一份）；只有生产轨道才回退旧
         # `.voice` signature——否则合法的新 profile 旁白会被旧口径无条件拒收。
         _ident = dict((identities or {}).get(_k) or {})
+        if "voice_role" in entries[_k - 1]:
+            from shared.audio_identity import read_identity as _read_ident
+            if not _ident:
+                _ident = _read_ident(_p) or {}
+            if _ident.get("voice_role") != _roles[_k - 1]:
+                raise RuntimeError("旁白 N%d voice_role 身份不符或缺失，必须重新生成音轨" % _k)
         if _ident:
             from shared.audio_identity import sha256_text as _sha_text
             from shared.audio_identity import verify_identity as _verify_ident

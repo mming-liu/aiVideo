@@ -73,6 +73,8 @@ class FrozenVideoRequest:
     requirements: dict = field(default_factory=dict)   # start/end state、events、audio_policy、required_checks
     source: dict = field(default_factory=dict)         # scope/shot_id/shot_index/script_revision/source_spans
     capability_revision: str | None = None
+    #: 上游素材选择记录（解释性事实：**不进** request_key，但随冻结/准备/保存/恢复透传）
+    media_selection: dict = field(default_factory=dict)
     request_key: str = ""
     schema_version: str = SCHEMA_FROZEN_REQUEST
 
@@ -205,16 +207,22 @@ def build_frozen_request(req, *, shot: dict, scope: dict | None, script_revision
     prompt = str(req.prompt or "")
     mode = classify_mode(req)
     if prepared is not None:
-        # 实际下发的参数覆盖同名项；请求侧独有的键保留（不静默丢事实）
-        actual = dict(getattr(prepared, "parameters", None) or {})
-        for k, v in params.items():
-            actual.setdefault(k, v)
-        params = actual
+        # prepared 是下发事实源；未下发的 seed/negative_prompt 不得补回。
+        params = dict(getattr(prepared, "parameters", None) or {})
         materials = list(getattr(prepared, "materials", None) or [])
         if materials:
             references = _references_from_materials(materials)
         prompt = str(getattr(prepared, "prompt", None) or prompt)
         mode = str(getattr(prepared, "mode", None) or mode) or mode
+    media_selection = dict(getattr(req, "media_selection", None) or {})
+    if prepared is not None:
+        _mods = list(getattr(prepared, "modifications", None) or [])
+        if _mods:
+            _merged = list(media_selection.get("modifications") or [])
+            for _m in _mods:
+                if _m not in _merged:
+                    _merged.append(dict(_m))
+            media_selection["modifications"] = _merged
     frozen = FrozenVideoRequest(
         request_id=new_request_id(),
         provider=provider,
@@ -232,6 +240,7 @@ def build_frozen_request(req, *, shot: dict, scope: dict | None, script_revision
             "source_spans": shot.get("source_spans") or [],
         },
         capability_revision=capability_revision,
+        media_selection=media_selection,
     )
     frozen.compute_key()
     return frozen

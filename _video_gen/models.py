@@ -49,6 +49,10 @@ class VideoGenerationRequest:
     execution_context: Optional["ExecutionContext"] = None
     # 候选产物落盘路径（由 ExecutionContext.assert_candidate 校验后写入）。
     candidate_path: Optional[str] = None
+    #: 上游（prompt 组装阶段）按模型能力做出的**素材选择记录**：
+    #: {"mode", "items":[{path,role}], "dropped":[...], "modifications":[...]}。
+    #: 只作解释性事实，不参与 request_key；provider 会把它并进 PreparedVideoRequest.modifications。
+    media_selection: Optional[dict] = None
 
     def __post_init__(self):
         if self.extra_keyframe_paths is None:

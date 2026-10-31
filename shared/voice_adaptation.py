@@ -65,11 +65,28 @@ def entries_digest(entries) -> str:
 
 
 def base_plan_digest(plan) -> str:
-    """去掉改编块与核验元数据后的计划摘要（批准时固定）."""
+    """去掉改编块与核验元数据后的计划摘要（批准时固定）.
+
+    2026-10-27（M04）：**旁白声源（`voice_role`）不计入这份摘要**。批准锁定的是
+    「哪段文本可以替代基底文本播出」——声源归属不改变任何被批准的文本，也不改变
+    `base_uid`（按 kind+text 计算）。把它算进来会把「给 N6/N7 指定角色声源」判成
+    `adaptation_approval_stale`，而那是一条**文本没变**的假过期。
+
+    声源归属另有两条独立守卫，不依赖这份摘要：
+      ① `plan_feasibility.plan_identity` 含 `voice_role`（改角色 ⇒ 旧 `plan_refs`、
+         旧审计作废）；② `shared.narration_voice` 要求显式角色属于输入角色表，
+         空白/null/未知一律拒收。基底**文本**变动仍照旧令批准失效。
+    """
     if not isinstance(plan, dict):
         return ""
     body = {k: v for k, v in plan.items()
             if k != "voice_adaptations" and k not in NON_CONTENT_KEYS}
+    _narr = body.get("narration_lines")
+    if isinstance(_narr, list):
+        body["narration_lines"] = [
+            {k: v for k, v in e.items() if k != "voice_role"}
+            if isinstance(e, dict) and "voice_role" in e else e
+            for e in _narr]
     return hashlib.sha256(_canon(body).encode("utf-8")).hexdigest()
 
 
@@ -259,6 +276,7 @@ def broadcast_dialogue_lines(plan, novel_text: str = "") -> list:
 
 def broadcast_narration_entries(plan, novel_text: str = "") -> list:
     _assert_consumable(plan, novel_text)
+    from shared.narration_voice import role_fields
     base_entries = [x for x in ((plan or {}).get("narration_lines") or [])
                     if isinstance(x, dict) and str(x.get("text") or "").strip()]
     by_uid = _entry_by_uid(plan)
@@ -268,7 +286,7 @@ def broadcast_narration_entries(plan, novel_text: str = "") -> list:
         entry = by_uid.get(unit["base_uid"])
         out.append({"text": str(entry.get("text")) if entry else base["text"],
                     "source": str(entry.get("source")) if entry else str(base.get("source") or ""),
-                    "fact_refs": list(base.get("fact_refs") or [])})
+                    "fact_refs": list(base.get("fact_refs") or []), **role_fields(base)})
     return out
 
 

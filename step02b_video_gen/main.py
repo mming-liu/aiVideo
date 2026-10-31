@@ -585,7 +585,12 @@ def main(options=None):
     # v6.103：三份 step01 产物必须属于同一个提交批次（见 shared/quality_gate）
     verify_step01_commit_manifest(chapter_dir(), script, stage="step01",
                                   expected_chapter=scope["chapter"])
-    if REFERENCE_MODE == "image":
+    # 2026-10-28（M10）：`--plan-only` 是**零网络结构预检**，它的输出本身就是
+    # 「哪些镜头缺帧/缺参考」（`frames_missing` 等 blocked 条目）。此前它排在
+    # step02a 成品验收门**之后**，没有帧的章节走不到预检就先被门拦住，
+    # 「没有图片不妨碍执行视频 plan-only」在入口上不成立。预检不生成、不提交、
+    # 只写候选实验根，故跳过的是 step02a 门；step01 的质量与提交绑定仍然必查。
+    if REFERENCE_MODE == "image" and not options.plan_only:
         require_gate(chapter_dir() / "step02a_quality.json", script, stage="step02a",
                      required_report_type="product_acceptance", verify_outputs=True)
 

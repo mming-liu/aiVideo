@@ -89,55 +89,6 @@ def _split_clauses(text: str) -> list[tuple[str, str]]:
     return out
 
 
-def _state_signature(text: str, names: list[str]) -> set[str]:
-    sig = {name for name in names if name in text}
-    for token in (
-        "站立", "站在", "立于", "位于", "站", "立", "踞蹲", "跪坐", "盘坐", "仰卧", "躺", "俯身", "逼近",
-        "举灯", "提壶", "斟酒", "捂嘴", "环住", "落在", "跃起", "没入", "灯", "盏",
-    ):
-        if token in text:
-            sig.add(token)
-    if any(w in text for w in ("半身探水", "半身探出水面", "探出水面", "探水", "探出")):
-        sig.add("半身探水")
-    return sig
-
-
-def _drop_stale_tail(text: str, names: list[str], ff_text: str, motion_text: str) -> str:
-    sentences = [s for s in re.findall(r"[^。；]+[。；]?", text) if s.strip()]
-    if len(sentences) <= 1 or not ff_text or not motion_text:
-        return text
-    ff_sig = _state_signature(ff_text, names)
-    motion_parts = [x.strip() for x in re.split(r"[；;]", motion_text) if x.strip()]
-    if len(motion_parts) == 1:
-        clauses = [x.strip() for x in re.split(r"[，,。；;]", motion_parts[0]) if x.strip()]
-        motion_end = clauses[-1] if clauses else motion_parts[0]
-    else:
-        motion_end = motion_parts[-1] if motion_parts else motion_text
-    motion_sig = _state_signature(motion_end, names)
-    first_sig = _state_signature(sentences[0], names)
-    first_names = first_sig & set(names)
-    if not first_names:
-        return text
-    kept = [sentences[0]]
-    for sentence in sentences[1:]:
-        sig = _state_signature(sentence, names)
-        shared_states = (sig & ff_sig) - set(names)
-        if shared_states and not (shared_states & motion_sig):
-            if "画面落定" in sentence:
-                kept[-1] = kept[-1].rstrip("。；") + "。画面落定一拍。"
-            continue
-        # A trailing clause that gives the same character a different state
-        # from the already-written LF sentence is redundant/stale, even when
-        # it does not match FF verbatim.
-        tail_states = sig - set(names)
-        if (sig & first_names) and tail_states and not (tail_states & motion_sig) and not (tail_states <= first_sig):
-            if "画面落定" in sentence:
-                kept[-1] = kept[-1].rstrip("。；") + "。画面落定一拍。"
-            continue
-        kept.append(sentence)
-    return "".join(kept)
-
-
 def _strip_cross_time_reference(text: str) -> str:
     text = str(text or "")
     text = text.replace("（本帧各角色姿态位置见首帧静态定格）", "")
@@ -205,8 +156,9 @@ def _clean_text(text: str, layout: dict[str, dict], names: list[str],
     out = re.sub(r"[。]{2,}", "。", out)
     out = out.replace("，。", "。")
     out = out.replace("，画面落定一拍", "").replace("。画面落定一拍。", "。").replace("画面落定一拍", "")
-    if is_lf:
-        out = _drop_stale_tail(out, names, ff_text, motion_text)
+    # Absence from the last motion clause is not a contradiction: other
+    # actors and persistent props remain visible. Only the explicit same-actor
+    # layout/pose contradictions above authorize removal.
     return out
 
 

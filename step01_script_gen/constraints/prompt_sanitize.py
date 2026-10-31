@@ -29,10 +29,11 @@ _SANITIZE_FIELDS = (
     "ff_desc",
     "lf_desc",
     "motion_desc",
-    "narration_segment",
-    "subtitle",
     "audio_cue",
 )
+# 2026-10-26（D5 事故）：narration_segment / subtitle 是**播出文本**，不是 prompt。
+# strip_spatial_anchors/strip_debug_markers 会顺带去掉句末“。”，使跨镜台词在句末
+# 无法分解、契约误判。声音文本的标点保真优先，禁止走 prompt 消毒。
 
 
 class PromptSanitizeConstraint(Constraint):

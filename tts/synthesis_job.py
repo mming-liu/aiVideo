@@ -280,6 +280,8 @@ def request_key_for(unit: SpeechUnit, *, applied: dict | None = None,
         "sample_rate": int(unit.sample_rate or 0),
         "mapping_version": str(unit.mapping_version),
     }
+    if unit.voice_role:
+        payload["voice_role"] = unit.voice_role
     return sha256_text(_canonical(payload))
 
 
@@ -857,7 +859,8 @@ def synthesize_unit(unit: SpeechUnit | dict, candidate_context: TtsCandidateCont
             artifact_path=target, artifact_hash=digest,
             artifact_bytes=target.stat().st_size, request_key=request_key,
             kind=unit.kind, segments=segs,
-            extra={"locator": unit.source_locator,
+            extra={**({"voice_role": unit.voice_role} if unit.voice_role else {}),
+                   "locator": unit.source_locator,
                    "shot_id": (unit.source_locator or None),
                    "source_span": list(unit.source_span) if unit.source_span else None,
                    "planned_window": list(unit.planned_window) if unit.planned_window else None,

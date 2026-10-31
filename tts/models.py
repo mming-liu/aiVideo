@@ -134,6 +134,7 @@ class SpeechUnit:
     #: 计划里的编号（对白=镜头序号、hook=0；旁白=N 编号）——manifest 的
     #: `shot_index`/`narration_index` 由它给出（消费侧不按数组位置猜身份）。
     source_index: Optional[int] = None
+    voice_role: str = ""  # explicit offscreen ownership; absent on legacy units
 
     def as_request(self, *, text: str, output: str | None = None) -> TTSRequest:
         """按本单元的身份构造请求（**逐段**调用：text 是该段的正文）."""

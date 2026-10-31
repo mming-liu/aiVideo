@@ -35,11 +35,7 @@
 2. **LF 留接口**：lf_desc 是动作结束态，必须能被下一镜 ff_desc 直接承接（邻镜角色姿态/位置不跳变）
 3. **motion 分段写**：motion_desc 按 `前X秒：…；X-Y秒：…；Y秒后：…` 三段式写，每段含「动作动词+主体+方向」
 3b. **★ 每段一帧（帧数铁律，v6.33；2026-09-27 写回生成面）**：`motion_desc` **显式分了时段**时，**每个正文非空的时段至少有一帧** `keyframes` 落在它自己的时间窗内（`t_sec` 取**该段中点**最稳），该帧 `desc` 描写**这一段自己的动作**，`frame_layouts.kfs` **按同序号**给出等长条目（**两表长度必须始终相等**）。**允许**为叙事额外加帧；**不允许**某个动作时段一帧都没有——那等于那段动作没有画面证据，下游按 blocking 处理。`motion_desc` **未分时段**的单动作镜不受此约束（0 帧或按需给帧都可以）。
-4. **temporal_plan 与 motion_desc 同源**：每个 shot 还要输出 `temporal_plan.events`，把 motion_desc 的分段结构化成事件表 `[{{start_sec, end_sec, description, source_quote}}, ...]`。
-   - 段数与起止秒数必须与 motion_desc 的 `前X秒/X-Y秒` **逐段一致**；`description` 即该段正文（不含时间标签）
-   - `start_sec`/`end_sec` 落在 `(0, duration_sec]` 内，按时间升序、首尾相接、不重叠
-   - `source_quote` 填该事件在**原文**中的出处短句；原文没有对应句时填空字符串（禁止编造）
-   - `event_id` 由管线分配，**不要自己产出**
+4. **时间信息单处维护**：本次不要求输出重复的 `temporal_plan.events`。完整时间段与动作只写在 `motion_desc`；代码按需派生事件编号、窗口和描述。已有事件表的兼容读取仍执行一致性检查，不允许用派生掩盖动作越界。
 
 ## 角色与场景物体库
 ### 角色库 (Character Bank)

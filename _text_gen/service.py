@@ -100,10 +100,15 @@ class _LedgeredService(TextGenerationService):
         # 归档、修订轮按它关联"这一轮用的是哪份响应"，同一轮多次/并发调用各自定位。
         from shared.call_ledger import new_call_id
         _cid = new_call_id()
+        # 2026-10-29（M07）：**发送守卫在这里捕获**，不靠 ContextVar 跨线程传播。
+        # 当前线程绑定的一次性授权守卫与本次 `call_id` 一起显式写进请求的本地运行字段，
+        # provider 在真正的 SDK 调用前消费它；没有守卫时请求原样返回（旧行为不变）。
+        from .send_guard import bind_request
+        _req = bind_request(req, _cid)
         _t0 = _t.monotonic()
         _res = None
         try:
-            _res = self._inner.generate(req)
+            _res = self._inner.generate(_req)
             return _res
         except BaseException as _exc:
             # provider 抛异常时，**调用身份不能丢**（复核之十一 P2）：异常路径上的调用方

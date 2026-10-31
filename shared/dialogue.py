@@ -119,4 +119,37 @@ def detect_speaker(narration: str, characters: Optional[List[dict]] = None) -> O
 
     return None
 
-__all__ = ["has_dialogue", "detect_speaker", "strip_speaker_prefix"]
+#: 名字之后的言语标记：可选修饰/声 + 言语动词（可带"道/说"尾）+ 冒号。
+#: 例："张十三道："、"张十三低声道："、"张十三说道："、"张十三问道："。
+_SPEECH_TAIL = (r"(?:[低轻冷沉颤扬怒笑急缓朗慢]*声?)?"
+                r"(?:道|说|问|答|喊|叫|叹|喝|骂|曰)(?:道|说)?[：:]")
+
+
+def speaker_prefix(text: str, characters: Optional[List[dict]] = None) -> Optional[str]:
+    """只有**明确的说话人前缀**才算数（TTS 身份入口专用）.
+
+    2026-10-31 复核 P2：
+
+    - 必须出现 **言语动词 + 冒号**（"甲站在门边…"不是发言）；
+    - 名字必须与角色表里的**完整身份**逐字相等——不做后缀/包含匹配。
+      旧写法 `name.endswith(cid) or cid.endswith(name)` 会把"老王"和"王"、
+      "张十三"和"十三"合并成同一个人；别名只能来自显式映射，不能靠字符串猜；
+    - **没有角色表就返回 None**（不猜名字），由 TTS 身份入口报 `characters_missing`。
+
+    不修改 detect_speaker：它还有别的消费者（timecode、校验），全局收紧会改变
+    那些路径的判定。
+    """
+    s = (text or "").strip()
+    if not s:
+        return None
+    names = {str(c.get("identifier") or "").strip()
+             for c in (characters or []) if str(c.get("identifier") or "").strip()}
+    if not names:
+        return None
+    for cid in sorted(names, key=len, reverse=True):
+        if re.match("^" + re.escape(cid) + _SPEECH_TAIL, s):
+            return cid
+    return None
+
+
+__all__ = ["has_dialogue", "detect_speaker", "strip_speaker_prefix", "speaker_prefix"]

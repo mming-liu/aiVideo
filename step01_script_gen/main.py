@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sys
 import os
+import copy
 from pathlib import Path
 import json
 import re
@@ -2944,6 +2945,18 @@ def _write_blocked_audit_sidecar(audit: "dict | None") -> None:
         _logger.warn(f"[COMMIT] BLOCK 审计 sidecar 写入失败（不影响结论）: {exc}")
 
 
+class FinalizeError(RuntimeError):
+    """`finalize_step01_script` 返回了**非空错误**（时间轴不自洽 / 声音身份不成立）.
+
+    为什么要一个专门的类型（2026-10-28）：提交入口原来把 `_finalize` 的失败写成
+    `raise ValueError(...)`，再在调用点 `except ValueError` 转成 `finalize_failed`。
+    于是 finalize **内部**或它调用的任何代码抛出的 `ValueError`（例如时间轴/窗口
+    计算的普通取值错误）都会被记成「finalize 失败」，掩盖真实原因。
+    只有这个类型代表「finalize 正常返回、但报告了错误」；其它异常一律向上抛，
+    由调用方按崩溃处理，**不**折算成内容结论。
+    """
+
+
 def _write_blocked_manifest(revision: str, *, run_id: str, detail: str,
                             blocking: list, audit_status: str = "") -> None:
     """BLOCK 时只写**带 run id 的诊断 manifest**，不写三份产物.
@@ -2965,6 +2978,33 @@ def _write_blocked_manifest(revision: str, *, run_id: str, detail: str,
         write_step01_commit_manifest(CHAPTER_DIR, manifest)
     except Exception as exc:
         _logger.warn(f"[COMMIT] BLOCK manifest 写入失败（不影响结论）: {exc}")
+
+
+def project_for_commit(script: dict, novel_text: str = "", *, label: str = "落盘前",
+                       repair_effects=None) -> tuple[dict, list[str]]:
+    """提交点**实际会审计并落盘**的投影——唯一实现.
+
+    2026-10-28（M07）：离线交付工具与提交入口此前各跑一遍 finalize，于是同一个候选
+    出现两个 revision（离线 `73726ff…` / 提交 `8c7ab915…`），而审计只对后者有效；
+    「离线通过」与「审计通过的同一 revision」因此对不上。现在两边都调这一个函数：
+
+      ① hook 归一（`HOOK_ENABLED` 关闭时丢弃钩子——缓存稿/历史快照可能仍带旧钩子）；
+      ② `finalize_step01_script`（就地写，所以先复制）；
+      ③ 剥运行字段（`_strip_runtime_fields`）并绑定 revision。
+
+    Returns `(projected, errors)`；`errors` 非空表示 finalize **报告了错误**，调用方
+    必须拒收（提交入口据此 BLOCK/finalize_failed）。异常不被折算成错误字符串。
+    """
+    _s = copy.deepcopy(script)
+    if not HOOK_ENABLED:
+        _s.pop("hook", None)
+    _s, _errs = finalize_step01_script(_s, novel_text=novel_text, label=label,
+                                       repair_effects=repair_effects)
+    if _errs:
+        return _s, [str(e) for e in _errs]
+    _s = _strip_runtime_fields(_s)
+    ensure_script_revision(_s)
+    return _s, []
 
 
 def _commit_step01_outputs(script: dict, novel_text: str, *,
@@ -2992,6 +3032,12 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                                      require_semantic_gate,
                                      verify_step01_commit_manifest,
                                      write_step01_commit_manifest)
+
+    # 入口即复制（2026-10-28）：本函数会就地规范化稿件（例如按开关 pop 掉 hook），
+    # 而失败路径要求**调用方手里的基线一字不变**——原实现直接把调用方的 dict 改掉，
+    # 一次 finalize 失败就会把被保护基线换成「改了一半」的版本。返回值是副本，
+    # 调用方必须使用返回值（三条入口本来就只看返回值）。
+    script = copy.deepcopy(script)
 
     run_id = _step01_run_id()
     summary: dict = {"status": "BLOCK", "run_id": run_id, "audit_repair_rounds": 0,
@@ -3025,12 +3071,11 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         _logger.warn(f"[COMMIT] 进入提交点的 revision 计算失败（欠账台账少记一条）: {_e}")
     summary["entry_revision"] = _entry_revision
 
-    # 统一收口：缓存稿和 BEST-GUARD 历史快照可能仍含旧钩子。
-    if not HOOK_ENABLED:
-        script.pop("hook", None)
+    # 统一收口：缓存稿和 BEST-GUARD 历史快照可能仍含旧钩子——归一在
+    # `project_for_commit` 里做（唯一实现）；这里只保证禁用时不跑钩子质量门。
 
     # ---- 1. hook QC / 必要的 hook regen（允许语义写入的最后阶段之前）----
-    if hook_ctx is not None and isinstance(script.get("hook"), dict):
+    if (HOOK_ENABLED and hook_ctx is not None and isinstance(script.get("hook"), dict)):
         try:
             _ensure_hook_quality(script, novel_text=novel_text, **hook_ctx)
         except Exception as exc:
@@ -3058,17 +3103,29 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                 _logger.warn(f"[COMMIT] 布局效果视图构建失败（finalize 按无效果处理）:"
                              f" {_eff_view_err}")
                 _view = None
-        _s, _errs = finalize_step01_script(_s, novel_text=novel_text, label=label,
-                                           repair_effects=_view)
+        # 投影算法只此一份（离线交付工具调同一个函数）：复制、hook 归一、finalize、
+        # 剥运行字段、绑 revision。返回错误 ⇒ 由调用方决定 BLOCK。
+        _out, _errs = project_for_commit(_s, novel_text, label=label,
+                                         repair_effects=_view)
         if _errs:
-            _logger.warn(f"[COMMIT] {label} 最终时间轴归一告警: {'; '.join(_errs[:3])}")
-        # 身份与审计必须覆盖实际落盘的投影；序列化之后不能再改变语义 payload。
-        # 原始运行证据由独立台账保存，既有下划线字段不入盘约定保持不变。
-        _s = _strip_runtime_fields(_s)
-        ensure_script_revision(_s)
-        return _s
+            raise FinalizeError("; ".join(_errs))
+        return _out
 
-    script = _finalize(script)
+    try:
+        script = _finalize(script)
+    except FinalizeError as exc:
+        # finalize **正常返回但报告了错误**：不审计、不建 staged、不写三份产物，
+        # 只写 BLOCK manifest 让下游知道这一版没有通过。`script` 仍是进入时的基线
+        # （`_finalize` 在副本上跑），下一次尝试拿到的不是被改了一半的稿子。
+        summary["repair_outcome"] = "finalize_failed"
+        summary["detail"] = str(exc)
+        summary["blocking"] = [{"code": "finalize_failed", "severity": "blocking",
+                                "message": str(exc)}]
+        _clear_staged_dir()
+        _write_blocked_manifest(_entry_revision, run_id=run_id, detail=str(exc),
+                                blocking=summary["blocking"])
+        _console(f"  [COMMIT] finalize 未通过：{str(exc)[:160]}")
+        return script, summary
 
     audit = None
     quality = None
@@ -3255,6 +3312,17 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                len(_q_blocking),
                [(b.get("shot_id"), b.get("code")) for b in blocking[:5]])
         )
+        # 2026-10-28（M08）：审计包可以显式声明「只审计、不修复」。关闭传输重试
+        # **不等于**关闭修复轮：修复轮会再发一次模型调用，还可能在下一轮触发
+        # **第二次审计**。`STEP01_AUDIT_ONLY=1` 时本轮审计即终局——保留 blocking、
+        # 不调用修复、不再发审计。默认关闭，未设该变量时行为逐字不变。
+        if str(os.getenv("STEP01_AUDIT_ONLY", "0")).strip() == "1":
+            summary["repair_outcome"] = "audit_only"
+            summary["detail"] = (
+                "STEP01_AUDIT_ONLY=1：保留 %d 条 blocking，未进入修复轮（不再发调用/审计）"
+                % len(blocking))
+            _logger.warn(f"[COMMIT] {summary['detail']}")
+            break
         # v6.139（修复 2）：审计问题**跨轮身份比对**——按 (shot, family) 归并措辞
         # 漂移（同一问题四轮四名是实测常态），跨轮追踪「具体哪些事件矛盾还在」，
         # 不以审计条数判断收敛。
@@ -3441,7 +3509,15 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                 _logger.warn(f"[COMMIT] {summary['detail']}")
             script = repaired
             break
-        _cand = _finalize(repaired)
+        try:
+            _cand = _finalize(repaired)
+        except FinalizeError as exc:
+            # 修复稿 finalize 失败 ⇒ **不采纳**：`script` 保持修复前基线（它自己的
+            # finalize 已通过），本轮审计 blocking 与诊断原样保留；不再继续消耗调用。
+            summary["repair_outcome"] = "repair_finalize_failed"
+            summary["detail"] = str(exc)
+            summary["repair_finalize_error"] = str(exc)
+            break
         _ct_why = _contract_reject_reason(_cand)
         if _ct_why:
             # 契约破损的修复稿**不采纳**：`script` 保持在基线（本轮的审计 blocking 与
@@ -5025,6 +5101,17 @@ def finalize_step01_script(script: dict, *, novel_text: str = "",
         (script, errors)：errors 为空表示时间轴自洽；非空由调用方决定是告警
         （正常 / 缓存路径）还是放弃（BEST-GUARD 恢复）。
     """
+    from shared.narration_voice import narration_role
+    _voice_errors = []
+    for _ni, _entry in enumerate((script.get("chapter_outline") or {}).get("narration_lines") or [], 1):
+        if isinstance(_entry, dict):
+            try:
+                narration_role(_entry, script.get("characters") or [])
+            except ValueError as exc:
+                _voice_errors.append("N%d: %s" % (_ni, exc))
+    if _voice_errors:
+        return script, _voice_errors
+
     # v6.115：早段清理兜底（时间派生之前；幂等，已清理过的稿子零改动）
     # §14 P3：`repair_effects` 是提交路径带过来的**只读**效果视图（修复轮通过验收
     # 的布局增删）。它让「本轮已授权删除的条目不得按类别别名重建」这条规则在这一趟
@@ -5053,9 +5140,16 @@ def finalize_step01_script(script: dict, *, novel_text: str = "",
         # 既不能降级成「保留原版」，更不能让后续提交照常写正式产物——2026-10 复核 P0：
         # `engine.apply_constraints` 上抛后若在此吞掉，排在该约束后面的全部约束都被
         # 连带跳过，而流程照旧打出 `[COMMIT] OK 三份产物已提交`。必须 fail-closed。
-        from step01_script_gen.constraints.engine import ENV_FAULT_TYPES
+        from step01_script_gen.constraints.engine import (ENV_FAULT_TYPES,
+                                                          fail_closed_types)
         if isinstance(_hfe, ENV_FAULT_TYPES):
             raise
+        if isinstance(_hfe, fail_closed_types()):
+            # 合同不可消费（改编块/呈现契约）同样等于「约束链没跑完」：返回错误让调用方
+            # 拒收，不把「一半约束没跑」的稿子当成通过（2026-10-28 M07 实测的 155/400
+            # 两份对象就是从这里来的）。
+            _logger.error(f"[WARN] {label} hard_fix 因合同不可消费而中止: {_hfe}")
+            return script, ["constraint_failed: %s: %s" % (type(_hfe).__name__, _hfe)]
         _logger.warn(f"[WARN] {label} hard_fix 失败（保留原版）: {_hfe}")
     _record_time_field_write_audit(script, tracker, label=label)
     # v6.98（审核 P0-3）：时间字段之外，审计段的**语义/结构**写入同样要收口。

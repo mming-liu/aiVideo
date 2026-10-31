@@ -146,6 +146,7 @@ def plan_narration_entries(plan) -> list:
     与 `plan_dialogue_lines` 同口径：异常输出当"没有可用旁白"处理，缺什么由判定层
     fail-closed 停止，不在这里补内容。
     """
+    from shared.narration_voice import role_fields
     values = (plan or {}).get(NARRATION_LINES_FIELD)
     if not isinstance(values, list):
         return []
@@ -158,7 +159,7 @@ def plan_narration_entries(plan) -> list:
             continue
         out.append({"text": _t,
                     "source": str(x.get("source") or "").strip(),
-                    "fact_refs": _strict_fact_refs(x.get("fact_refs"))})
+                    "fact_refs": _strict_fact_refs(x.get("fact_refs")), **role_fields(x)})
     return out
 
 
@@ -199,7 +200,8 @@ def _strict_fact_refs(raw) -> list:
 def plan_voice_entries(plan, *, novel_text: str = "") -> list:
     """计划里的**声音条目**（对白 Dk + 图外旁白 Nk）——**统一表示，单源**.
 
-    返回 `[{kind, index, id, text, source, fact_refs, beats}]`（对白在前，各按编号升序）：
+    返回 `[{kind, index, id, text, source, fact_refs, beats, speaker?}]`
+    （对白在前，各按编号升序）：
 
     - `kind`：`"dialogue"` / `"narration"`；`index` 从 1 起（`id` = `D1` / `N1`）；
     - `text`：**实际播出文本**——无改编时是逐字原文；有 `voice_adaptations` 时是
@@ -220,16 +222,30 @@ def plan_voice_entries(plan, *, novel_text: str = "") -> list:
         _dlg = _va.broadcast_dialogue_lines(plan, novel_text)
         _narr_base = plan_narration_entries(plan)
         _narr_bc = _va.broadcast_narration_entries(plan, novel_text)
+    # 对白条目的**说话人**来自已批准改编（`voice_adaptations.entries[].speaker`）。
+    # 2026-10-31 复核：条目此前不带 speaker，于是消费侧只能靠文本前缀或 main_subject
+    # 猜——而改编句拆镜后前缀会丢。这里只搬运**已批准条目**里的 speaker（上面
+    # broadcast_dialogue_lines 已经校验过改编块，未批准/失效会先抛错）。
+    _spk: dict = {}
+    if isinstance(plan, dict) and plan.get("voice_adaptations"):
+        for _e in (plan["voice_adaptations"].get("entries") or []):
+            if str(_e.get("kind") or "") != VOICE_KIND_DIALOGUE:
+                continue
+            _idx, _name = _e.get("index"), str(_e.get("speaker") or "").strip()
+            if isinstance(_idx, int) and _name:
+                _spk[_idx] = _name
     entries: list = []
     for _i, _t in enumerate(_dlg, 1):
         entries.append({"kind": VOICE_KIND_DIALOGUE, "index": _i, "id": "D%d" % _i,
-                        "text": _t, "source": "", "fact_refs": [], "beats": []})
+                        "text": _t, "source": "", "fact_refs": [], "beats": [],
+                        **({"speaker": _spk[_i]} if _i in _spk else {})})
     for _i, _e in enumerate(_narr_base, 1):
         _bc = _narr_bc[_i - 1] if _i <= len(_narr_bc) else _e
         entries.append({"kind": VOICE_KIND_NARRATION, "index": _i, "id": "N%d" % _i,
                         "text": str(_bc.get("text") or _e["text"]),
                         "source": _e["source"],
-                        "fact_refs": list(_e.get("fact_refs") or ()), "beats": []})
+                        "fact_refs": list(_e.get("fact_refs") or ()), "beats": [],
+                        **({"voice_role": _e["voice_role"]} if "voice_role" in _e else {})})
     _index = {(e["kind"], e["index"]): e for e in entries}
     for _b, _bt in enumerate((plan.get("shot_beats") or []), 1):
         _kind, _k = BeatRecord.parse(str(_bt)).carrier()
@@ -251,6 +267,64 @@ def broadcast_dialogue_lines(plan, novel_text: str = "") -> list:
     if not isinstance(plan, dict) or not plan.get("voice_adaptations"):
         return plan_dialogue_lines(plan)
     return _va.broadcast_dialogue_lines(plan, novel_text)
+
+
+def approved_voice_texts(plan, *, novel_text: str = "") -> list:
+    """计划**批准播出**的全部声音文本（旁白 Nk + 对白 Dk，含已批准改编）.
+
+    用途：后处理（finalize 的确定性约束）必须能区分「模型自写文本」与「计划批准
+    文本」——后者是播出合同，不得被省略号归一、说话人回填等启发式改写。
+    缺席计划返回空表；不可消费的计划向外报告错误，不静默降级。
+    """
+    if not isinstance(plan, dict):
+        return []
+    entries = plan_voice_entries(plan, novel_text=novel_text)
+    out: list = []
+    for e in entries:
+        t = str(e.get("text") or "").strip()
+        if t:
+            out.append(t)
+    return out
+
+
+
+def approved_voice_fragments(plan, *, novel_text: str = "") -> tuple[str, ...]:
+    """Full approved entries and contiguous sentence spans; never rewrite text.
+
+    This is a preservation guard, not proof of coverage, speaker identity or timing.
+    Failure to read an adaptation propagates to the caller instead of enabling
+    heuristic rewriting on an unreadable plan.
+    """
+    result = set()
+    for text in approved_voice_texts(plan, novel_text=novel_text):
+        boundaries = [0] + [i + 1 for i, ch in enumerate(text)
+                            if ch in _SENT_END_CHARS
+                            and (i + 1 == len(text) or text[i + 1] not in _SENT_END_CHARS)]
+        if boundaries[-1] != len(text):
+            boundaries.append(len(text))
+        for n, start in enumerate(boundaries[:-1]):
+            for end in boundaries[n + 1:]:
+                fragment = text[start:end].strip()
+                if fragment:
+                    result.add(fragment)
+    return tuple(sorted(result))
+
+
+def is_approved_voice_fragment(text, fragments, characters=None) -> bool:
+    """Exact match, optionally removing a recognized speaker prefix."""
+    from shared.dialogue import strip_speaker_prefix
+    if not isinstance(text, str) or not text:
+        return False
+    return text in fragments or strip_speaker_prefix(text, characters) in fragments
+
+
+def voice_text_key(text) -> str:
+    """声音文本的**保真比对键**：省略号折叠 + 删标点/空白，其余逐字保留.
+
+    只用于判断「这段是不是某条批准文本」；返回键相等不代表可以改写原文本——
+    冻结的是原字符串，本函数不产生播出文本。
+    """
+    return _source_norm(text)
 
 
 def voice_seconds(entries, kind=None) -> float:
@@ -345,6 +419,7 @@ def voice_units(plan, shots) -> list:
         out.append({"kind": e["kind"], "index": e["index"], "id": e["id"],
                     "text": e["text"], "source": e["source"],
                     "fact_refs": list(e["fact_refs"]),
+                    **({"voice_role": e["voice_role"]} if "voice_role" in e else {}),
                     # 最早声明承载它的那条节拍的镜头（None = 没有任何镜头声明：
                     # 「无人承载」由覆盖门单独报，与「声明了但文本拼不出来」是两种结论）
                     "declared_shot": _first,
@@ -425,6 +500,29 @@ def shot_voice_entries(shot, plan) -> list:
             _take(_kind, _k)
     _order = {VOICE_KIND_DIALOGUE: 0, VOICE_KIND_NARRATION: 1}
     return sorted(picked, key=lambda e: (_order.get(e["kind"], 9), e["index"]))
+
+
+def shot_dialogue_entry(shot, plan):
+    """该镜**对白片段**的结构化承载条目（唯一一条才返回，否则 None）.
+
+    判据与 `shot_voice_parts` 同源（`shot_voice_entries`），所以不会"在
+    `voice_adaptations` 里碰巧找到一个 speaker"——条目必须是**本镜声明**的。
+    多于一条对白条目时返回 None：多人对白不能被整体套成一个声线。
+
+    2026-10-31 复核：说话人解析要用这个，而不是 `main_subject` 的长度启发式。
+    """
+    entries = shot_dialogue_entries(shot, plan)
+    return entries[0] if len(entries) == 1 else None
+
+
+def shot_dialogue_entries(shot, plan) -> list:
+    """该镜声明的**全部**对白条目（顺序同 `shot_voice_entries`）.
+
+    判定"是否只有一个人说话"要用这张表，而不是 `shot_dialogue_entry` 的 None：
+    None 既可能表示"没有对白"，也可能表示"有多条"，两者的处置完全不同。
+    """
+    return [e for e in shot_voice_entries(shot, plan)
+            if str(e.get("kind") or "") == VOICE_KIND_DIALOGUE]
 
 
 def shot_voice_parts(shot, plan) -> dict:
@@ -665,7 +763,12 @@ def _source_norm(text) -> str:
     s = _ELLIPSIS_RE.sub("§", str(text or ""))
     for p in _PUNCT_CHARS:
         s = s.replace(p, "")
-    return s.replace("§", "…").replace(" ", "").replace("　", "").replace("\n", "")
+    # 2026-10-28（M07）：换行也必须归一。原文按字节读进来是 CRLF，而计划里的
+    # adaptation.source 是 LF（或反之）——只删 `\n` 会把 `\r` 留下，同一句原文
+    # 于是"逐字可查"变成"查不到"，改编块被判不可消费（实测：同一份 novel 用
+    # `read_text()` 与 `decode("utf-8-sig")` 读入，两个 finalize 结果差 245 字）。
+    return (s.replace("§", "…").replace(" ", "").replace("　", "")
+            .replace("\r", "").replace("\n", ""))
 
 
 def source_contains(novel_text: str, line: str) -> bool:
@@ -3350,6 +3453,8 @@ def plan_identity(plan) -> str:
     _h.update("\x00narration_lines\x00".encode("utf-8"))
     for _e in plan_narration_entries(plan):
         _h.update((str(_e.get("text") or "") + "\n").encode("utf-8"))
+        if "voice_role" in _e:
+            _h.update(("\x00voice_role\x00" + _e["voice_role"] + "\x00").encode("utf-8"))
     # 改编块也是编号含义的一部分：同一基底换一套播出文本，旧 plan_refs 不得复用。
     _block = (plan or {}).get("voice_adaptations")
     if _block:
