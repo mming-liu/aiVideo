@@ -933,6 +933,47 @@ def _trace_video_event(attempt, kind, **fields):
         eio.append_event(Path(attempt), kind, **fields)
 
 
+#: 远端明确失败（没有产出视频）的报错前缀：provider 在 failed/expired 与轮询超时时
+#: 分别写「生成失败: …」/「轮询超时 …」（_video_gen/volcengine_provider.py），
+#: 下载阶段失败则写「下载失败: …」（_video_gen/service.py）。
+_PROVIDER_FAILURE_MARKERS = ("生成失败", "轮询超时", "未找到 video_url")
+
+
+def _classify_poll_failure(err: str) -> tuple[str, str]:
+    """把轮询终局失败分类成 (attempt 状态, remote_status)。
+
+    远端明确失败 ⇒ provider_failed（模型端没产出，重抽是**新费用**）；
+    下载失败 ⇒ io_failed + remote_status=succeeded（远端其实成功了，只是没取回）；
+    其余未知 ⇒ io_failed + remote_status=unverified（保持原行为，不猜）。
+    """
+    from shared import video_attempts as _va
+
+    text = str(err or "")
+    if any(marker in text for marker in _PROVIDER_FAILURE_MARKERS):
+        return _va.STATE_PROVIDER_FAILED, "failed"
+    if "下载失败" in text:
+        return _va.STATE_IO_FAILED, "succeeded"
+    return _va.STATE_IO_FAILED, "unverified"
+
+
+def repair_missing_clip(shot_dir: Path, video_path: Path, clip_path: Path) -> bool:
+    """仅 clips/clip_<idx>.mp4 缺失时，从已通过校验的 shots/<idx>/video.mp4 本地补拷。
+
+    前置由 cache_decision 保证：视频存在且 >20KB、prompt_hash 与本次输入一致。
+    因此这里只做本地 IO，**不发任何远端请求**——避免「缺个副本就重烧一次生成」。
+    """
+    try:
+        video_path = Path(video_path)
+        clip_path = Path(clip_path)
+        if not (video_path.exists() and video_path.stat().st_size > 20 * 1024):
+            return False
+        clip_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(video_path), str(clip_path))
+        return clip_path.exists() and clip_path.stat().st_size > 20 * 1024
+    except OSError:
+        return False
+
+
 async def _poll_video_production(*args, trace_attempt, **kwargs):
     from shared import video_attempts as va
     task_id, idx = args[3], args[4]
@@ -1197,6 +1238,12 @@ async def _poll_video(
                             logger.warn(
                                 f"  [Shot {shot_idx}] clips/ 同步失败（不再静默忽略）: {_exc}")
                             return False
+                        # 生产 attempt 的成功终态必须闭合（R2）：此前只在候选分支
+                        # 迁 ACCEPTED，生产分支停在 checked——不在 TERMINAL_STATES 里，
+                        # 事后统计无法区分"成功"与"仍在跑"。
+                        if trace_attempt is not None:
+                            va.transition(trace_attempt, va.STATE_ACCEPTED, kind="accepted",
+                                          task_id=task_id, clip_path=str(_clip_dst))
                     else:
                         # 候选模式：副本进 attempt（生产 clips/ 一个字节都不动），
                         # 随后走**不可变 manifest → accepted 读回**的采纳事务。
@@ -1273,6 +1320,13 @@ async def _poll_video(
                             poll_interval = min(poll_interval * POLL_EXPONENTIAL_FACTOR, POLL_MAX_INTERVAL)
                             logger.verbose(f"  [Shot {shot_idx}] [{key_display}] Processing (interval {poll_interval:.0f}s, failures {consecutive_failures})")
                         continue
+                    # R1：远端明确失败（failed/expired）与下载失败必须分开记账，
+                    # 否则 lifecycle 里全是 io_failed + unverified，无法归因。
+                    if trace_attempt is not None:
+                        _fail_state, _remote_status = _classify_poll_failure(err)
+                        va.transition(trace_attempt, _fail_state, kind="poll_failed",
+                                      task_id=task_id, remote_status=_remote_status,
+                                      error=str(err)[:500])
                     _failed_videos[shot_idx].append({"attempt": -1, "error": err, "task_id": task_id})
                     # 2026-09-12 用户要求：终态失败打印完整报错（不走 fmt_err 截断）
                     logger.verbose(f"  [Shot {shot_idx}] [{key_display}] 最终失败完整报错: {err}")
@@ -1662,7 +1716,13 @@ async def _process_one_shot(
         logger.verbose(f"  [Shot {idx}] Cache hit({_cache['relation']}), skip: {_cache['reason']}")
         return None
     if _cache["reason"] == "clip 产物缺失" and video_path.exists():
-        logger.verbose(f"  [Shot {idx}] Clip missing, re-generate video only (skip frames)")
+        # R3：只有副本缺失、视频本体与 prompt_hash 都完好 ⇒ 本地补拷，零远端 POST。
+        # 旧行为在这里重新提交一次生成（付费），把「拷个文件」变成「重烧一条视频」。
+        if _clip_dst is not None and repair_missing_clip(shot_dir, video_path, _clip_dst):
+            logger.verbose(
+                f"  [Shot {idx}] Clip 缺失但视频完好，本地补拷 clips/（0 次远端提交）")
+            return None
+        logger.warn(f"  [Shot {idx}] Clip 缺失且本地补拷失败，回退为重新生成")
         ff = shot_dir / FIRST_FRAME_FILENAME
         lf = shot_dir / LAST_FRAME_FILENAME
         frame_paths = [str(p) for p in [ff, lf] if p.exists()]

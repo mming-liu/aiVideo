@@ -48,7 +48,7 @@ from shared.paths import (
 from shared.tee_logger import get_logger
 from step02_video_gen.submit_poll import (
     _submit_video, _get_shot_hash, _failed_videos, cache_decision,
-    build_frozen_for_shot, resume_candidate_attempt,
+    build_frozen_for_shot, resume_candidate_attempt, repair_missing_clip,
 )
 from shared.vimax_adapters import VideoGeneratorAiVideoAdapter
 from shared.shot_selector import parse_shot_selector
@@ -201,6 +201,12 @@ async def _process_one_shot_skip_frames(
     if _cache["hit"]:
         logger.info(f"  [Shot {idx}] Cache hit({_cache['relation']}), skip: {_cache['reason']}")
         return None
+    if _cache["reason"] == "clip 产物缺失" and _clip_dst is not None:
+        # R3：视频本体与 prompt_hash 完好、只有 clips/ 副本缺失 ⇒ 本地补拷，零远端 POST。
+        if repair_missing_clip(shot_dir, video_path, _clip_dst):
+            logger.info(f"  [Shot {idx}] Clip 缺失但视频完好，本地补拷 clips/（0 次远端提交）")
+            return None
+        logger.warn(f"  [Shot {idx}] Clip 缺失且本地补拷失败，回退为重新生成")
 
     # 按模式收集参考图（r2v/text 不需要帧图片；image 复用 step02a 帧）
     REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
