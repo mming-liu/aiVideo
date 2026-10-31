@@ -108,14 +108,20 @@ SEEDANCE_CAPS: list[tuple[str, SeedanceCap]] = [
     #            i2v_frames_ratio_adaptive)
     # 2.5/2.0 系列支持参考音频（按官方文档全模态参考生视频场景）
     # draft/flex 仅 1.5 pro 支持（官方 seedance skill 模型矩阵，2026-09-12）
-    ("seedance-2-5", SeedanceCap((4, 30), ("480p", "720p"), True, True, True, True, True)),
-    ("seedance-2-0-fast", SeedanceCap((4, 15), ("480p", "720p"), True, True, False, True, False)),
-    ("seedance-2-0-mini", SeedanceCap((4, 15), ("480p", "720p"), True, True, False, True, False)),
-    ("seedance-2-0", SeedanceCap((4, 15), ("480p", "720p", "1080p", "4k"), True, True, False, True, False)),
+    # 2026-10-31 校正 seed 位（官方 create-video-generation-task-api 参数说明）：
+    # 「seed ... 模型支持：Seedance 1.0 pro / Seedance 1.0 pro fast」——只有 1.0 系列列了
+    # seed，2.0/2.5/1.5 均未列。此前本表恰好相反（2.x=True、1.0=False），等于在主力模型上
+    # 从未真正下发 seed，同时又在不支持 seed 的型号上声称可复现。
+    # 注意官方同句限定：相同请求 + 相同 seed 只产生**类似**结果，不保证完全一致；
+    # 因此 seed 可用于"固定变量做对照"，不能当作"同 seed 必然复现"的依据。
+    ("seedance-2-5", SeedanceCap((4, 30), ("480p", "720p"), True, True, True, False, True)),
+    ("seedance-2-0-fast", SeedanceCap((4, 15), ("480p", "720p"), True, True, False, False, False)),
+    ("seedance-2-0-mini", SeedanceCap((4, 15), ("480p", "720p"), True, True, False, False, False)),
+    ("seedance-2-0", SeedanceCap((4, 15), ("480p", "720p", "1080p", "4k"), True, True, False, False, False)),
     ("seedance-1-5-pro", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, True, False, False, False,
                                      supports_draft=True, supports_flex_tier=True)),
     ("seedance-1-5", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, False, False, False, False)),
-    ("seedance-1-0", SeedanceCap((2, 12), ("480p", "720p", "1080p"), False, False, False, False, False)),
+    ("seedance-1-0", SeedanceCap((2, 12), ("480p", "720p", "1080p"), False, False, False, True, False)),
 ]
 
 # 未命中注册表时的兜底：按能力最弱档位，小尺寸/低版本请求不被误杀
