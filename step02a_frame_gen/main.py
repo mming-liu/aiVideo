@@ -293,7 +293,8 @@ def main():
         from step02a_frame_gen.image_prompt_quality import write_image_product_quality
         with open(script_path, "r", encoding="utf-8") as _sf_final:
             _script_final = json.load(_sf_final)
-        _pq = write_image_product_quality(_script_final, work_dir)
+        _pq = write_image_product_quality(_script_final, work_dir,
+                                          only_indices=only_indices)
         logger.info(f"[IMAGE-PRODUCT] status={_pq.get('status')} missing={len(_pq.get('missing') or [])}")
     except Exception as _pq_err:
         logger.error(f"[IMAGE-PRODUCT] product acceptance failed: {_pq_err}")

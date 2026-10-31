@@ -224,6 +224,12 @@ def get_style_prefix(name: str = None) -> str:
     return get_style_preset(name)["prefix"]
 
 
+def asset_style_prefix(ratio: str = "16:9") -> str:
+    """Use the selected visual style while the asset owns its canvas ratio."""
+    prefix = re.sub(r"\b\d+:\d+(?:竖屏|横屏)?", "", get_style_prefix())
+    return f"{prefix}；{ratio}画幅"
+
+
 def get_style_negative(name: str = None) -> str:
     """获取风格负向提示词."""
     return get_style_preset(name)["negative"]

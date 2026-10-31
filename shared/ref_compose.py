@@ -240,6 +240,30 @@ def _stitch(paths: list[str], output_path: str) -> str:
     return stitch_portraits(paths, output_path)
 
 
+def _atomic_reference_sheet(paths, output):
+    """Content-addressed destination plus private temporary file for concurrent callers."""
+    import hashlib
+    import uuid
+    from shared.portrait_stitch import stitch_portraits
+    h = hashlib.sha256()
+    for item in paths:
+        p = Path(item)
+        h.update(str(p).encode("utf-8"))
+        h.update(hashlib.sha256(p.read_bytes()).digest())
+    out = Path(output)
+    out = out.with_name(out.stem + "_" + h.hexdigest()[:20] + out.suffix)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name("." + out.stem + "." + uuid.uuid4().hex + ".png")
+    try:
+        result = stitch_portraits(paths, str(tmp))
+        if not result:
+            return ""
+        os.replace(tmp, out)
+        return str(out)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def fit_refs(
     buckets: list[tuple[str, list[str]]],
     limit: int,
@@ -292,7 +316,7 @@ def fit_refs(
             if names:
                 suffix = "_" + "+".join(names)
         out = str(sheet_dir / f"ref_sheet_{sheet_tag}_{name}{suffix}.png")
-        stitched = _stitch(paths, out)
+        stitched = _atomic_reference_sheet(paths, out)
         return stitched if stitched else ""
 
     # 单张上限：全部拼成一张大参考表
@@ -360,7 +384,7 @@ def fit_flat(
         sheet_dir.mkdir(parents=True, exist_ok=True)
         out = str(sheet_dir / f"ref_sheet_{sheet_tag}_extra.png")
         from shared.portrait_stitch import stitch_portraits
-        stitched = stitch_portraits(valid[keep:], out)
+        stitched = _atomic_reference_sheet(valid[keep:], out)
         if stitched:
             return valid[:keep] + [stitched]
     except Exception:

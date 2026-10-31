@@ -1,3 +1,4 @@
+from shared.style_prefix import asset_style_prefix
 from vimax.interfaces import CharacterInScene, ImageOutput
 
 """
@@ -17,72 +18,26 @@ AI漫剧角色资产创建 - 基础图优先策略
 # v6.23：人物资产硬约束（seedance-storyboard 吸收）——含鞋子防半身、表情中性、
 # 不手持物件、真实成人比例，保证肖像图稳定可作 r2v 参考。
 PROMPT_BASE = (
-    "Photorealistic {style} portrait of {identity}. "
-    "{physical_features}. {clothing}. "
-    "Lighting: main light 45{deg} front-right, fill light from left, "
-    "rim light from back-top, color temperature 5500K, unified shadow direction. "
-    "Texture: realistic skin texture, subtle pores, fabric folds, "
-    "natural fiber wrinkles, slight cuff wear, natural shoe dust. "
-    "Quality: subtle film grain, micro-contrast, natural vignette, "
-    "8K HD resolution, film-grade texture, photorealistic. "
-    "Full body from head to toe, MUST include shoes, centered composition, "
-    "white background, 16:9 landscape canvas. "
-    "Neutral expression, face relaxed, eyes open looking at camera. "
-    "Hands relaxed at sides, holding nothing, no props. "
-    "Realistic adult proportions, no child-like features. "
-    "Not anime, not cartoon, not illustration, not 3D render."
+    "{style}. Character portrait of {identity}. {physical_features}. {clothing}. "
+    "Full body from head to toe, including shoes, centered on a white background. "
+    "Neutral expression, eyes open, hands relaxed at sides, holding nothing. "
+    "Clear face, hairstyle, clothing and body proportions consistent with the character description."
 )
-
-# -- 侧面全身照 Prompt（基于基础图，强制一致性约束） --
 PROMPT_SIDE = (
-    "Photorealistic full-body side-view portrait of {identifier}, "
-    "referencing the provided base image. "
-    "MUST match base image: face shape, hairstyle, clothing, body proportions, "
-    "ALL light source direction, color temperature 5500K completely consistent. "
-    "Facing left. Standing, arms relaxed, natural expression. "
-    "Lighting: main light 45{deg} front-right, fill light left, rim light back-top. "
-    "Texture: realistic skin texture, fabric folds, natural material. "
-    "Quality: photorealistic, film-grade texture. White background, 16:9 landscape. "
-    "Not anime, not cartoon, not illustration, not 3D render."
+    "{style}. Full-body side-view portrait of {identifier}, facing left. "
+    "Reference the base image for face shape, hairstyle, clothing and proportions. "
+    "Keep its visual style and lighting. White background, entire figure including shoes."
 )
-
-# -- 背面全身照 Prompt（基于基础图，强制一致性约束） --
 PROMPT_BACK = (
-    "Photorealistic full-body back-view portrait of {identifier}, "
-    "referencing the provided base image. "
-    "MUST match base image: hairstyle, clothing, body proportions, "
-    "ALL light source direction, color temperature 5500K completely consistent. "
-    "No facial features visible. Standing, natural posture. "
-    "Lighting: main light 45{deg} front-right, rim light back-top. "
-    "Texture: realistic fabric detail, hair texture, material folds. "
-    "Quality: photorealistic, film-grade texture. White background, 16:9 landscape. "
-    "Not anime, not cartoon, not illustration, not 3D render."
+    "{style}. Full-body back-view portrait of {identifier}. "
+    "Reference the base image for hairstyle, clothing and proportions; no facial features visible. "
+    "Keep its visual style and lighting. White background, entire figure including shoes."
 )
-
-# -- 面部特写 Prompt（基于基础图，独立高清锁脸，组合参考图法核心） --
-# 来源：抖音@赛博子 组合参考图法——三视图 + 单独高清面部特写同时输入，
-# 模型优先锁定面部特征，再匹配全身造型，大幅降低变脸。面部特写是"变脸"
-# 重灾区，独立一张高清正面脸部图作为 r2v 面部锁定锚点。
-# v1.1（2026-08-08）：注入 {physical_features}（脸型词随 static_features 进面部
-# 特写图锁脸）+ 完整去塑料 Texture 段（毛孔/红润/明暗/颗粒，专治塑料脸——
-# 面部特写是塑料感重灾区，去塑料段仅此处注入，普通肖像保留基础毛孔）。
 PROMPT_FACE_CLOSEUP = (
-    "Photorealistic close-up face portrait of {identifier}, {physical_features}. "
-    "referencing the provided base image. "
-    "MUST match base image: face shape, eyes, nose, mouth, eyebrow arch, "
-    "skin tone, hairstyle and hairline, ALL light source direction, "
-    "color temperature 5500K completely consistent. "
-    "Head-and-shoulders composition, face filling the frame, "
-    "looking straight at camera, neutral expression. "
-    "Texture: visible pores and fine lines, natural flush, "
-    "facial chiaroscuro variation, not uniformly lit, light grain and dust noise, "
-    "realistic skin texture, subtle oily sheen, fine vellus hair, small moles, "
-    "natural lip lines, side lighting, soft gradient transitions, "
-    "natural cheekbone undulation, cheek shadow layering, "
-    "natural nose-to-cheek transition, not over-smoothed, not perfectly symmetrical. "
-    "Quality: photorealistic, film-grade texture, sharp facial detail, "
-    "8K HD resolution. White background, 16:9 landscape. "
-    "Not anime, not cartoon, not illustration, not 3D render."
+    "{style}. Close-up face portrait of {identifier}, {physical_features}. "
+    "Reference the base image for face shape, eyes, nose, mouth, skin tone and hairline. "
+    "Head-and-shoulders composition, face filling the frame, neutral expression. "
+    "Keep the base image visual style and lighting. White background, clear facial detail."
 )
 
 DEGREE = "°"  # °
@@ -121,12 +76,13 @@ class CharacterPortraitsGenerator:
             identity=identity,
             physical_features=static,
             clothing=dynamic,
-            style=style,
+            style=style or asset_style_prefix("9:16"),
             deg=DEGREE,
         )
 
         image_output = await self.image_generator.generate_single_image(
             prompt=prompt,
+            ratio="9:16",
             save_path=save_path,
         )
         return image_output
@@ -140,10 +96,12 @@ class CharacterPortraitsGenerator:
         """基于基础图生成侧面全身照 — 强制一致性约束"""
         prompt = PROMPT_SIDE.format(
             identifier=character.identifier_in_scene,
+            style=asset_style_prefix("9:16"),
             deg=DEGREE,
         )
         image_output = await self.image_generator.generate_single_image(
             prompt=prompt,
+            ratio="9:16",
             reference_image_paths=[base_image_path],
             save_path=save_path,
         )
@@ -158,10 +116,12 @@ class CharacterPortraitsGenerator:
         """基于基础图生成背面全身照 — 强制一致性约束"""
         prompt = PROMPT_BACK.format(
             identifier=character.identifier_in_scene,
+            style=asset_style_prefix("9:16"),
             deg=DEGREE,
         )
         image_output = await self.image_generator.generate_single_image(
             prompt=prompt,
+            ratio="9:16",
             reference_image_paths=[base_image_path],
             save_path=save_path,
         )
@@ -184,11 +144,13 @@ class CharacterPortraitsGenerator:
         """
         prompt = PROMPT_FACE_CLOSEUP.format(
             identifier=character.identifier_in_scene,
+            style=asset_style_prefix("9:16"),
             physical_features=(character.static_features or "").strip(),
             deg=DEGREE,
         )
         image_output = await self.image_generator.generate_single_image(
             prompt=prompt,
+            ratio="9:16",
             reference_image_paths=[base_image_path],
             save_path=save_path,
         )

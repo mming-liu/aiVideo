@@ -128,7 +128,7 @@ class ImageGeneratorAiVideoAdapter:
         sheet_dir = shot_work_dir(shot_index)
         if ref_paths and not getattr(self._svc, "supports_multi_ref", True):
             try:
-                merged = fit_refs([("all", ref_paths)], 1, sheet_dir, f"shot{shot_index}")
+                merged = fit_refs([("all", ref_paths)], 1, sheet_dir, f"shot{shot_index}_{frame_desc or 'frame'}")
                 if merged:
                     ref = merged[0]
                     ref_paths = []
@@ -139,7 +139,7 @@ class ImageGeneratorAiVideoAdapter:
         elif len(ref_paths) > max_refs:
             try:
                 from shared.log_utils import verbose_write
-                composed = fit_flat(ref_paths, max_refs, sheet_dir, f"shot{shot_index}")
+                composed = fit_flat(ref_paths, max_refs, sheet_dir, f"shot{shot_index}_{frame_desc or 'frame'}")
                 verbose_write(
                     f"  [镜头{shot_index}] 参考图 {len(ref_paths)} 张超过上限 {max_refs}，"
                     f"无损压缩为 {len(composed)} 张（原图 + 尾部参考表）",

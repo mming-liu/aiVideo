@@ -9,10 +9,11 @@
 （英文 prompt 为主，避免中文合规替换破坏英文词汇）。
 """
 from __future__ import annotations
+from shared.style_prefix import asset_style_prefix
 
 # 道具资产图：纯白背景、无人物、完整入镜、材质/颜色/结构/磨损一致
 PROMPT_PROP = (
-    "Photorealistic prop asset image, 16:9 landscape canvas, "
+    "{style}. prop asset image, 16:9 landscape canvas, "
     "pure white seamless background, "
     "the scene contains ONLY the same {category} {identifier}, "
     "no people, no hands, no other props. "
@@ -21,7 +22,7 @@ PROMPT_PROP = (
     "real {category} texture, real handmade crafting detail, "
     "complete prop in frame, not cropped at top/bottom. "
     "High resolution, clean, standard, suitable as a film prop asset reference. "
-    "Not anime, not cartoon, not illustration, not 3D render."
+    "Keep the selected visual style."
 )
 
 
@@ -51,11 +52,13 @@ class PropAssetsGenerator:
             raise ValueError(f"道具 {identifier} 缺少 appearance，无法生成资产图")
         prompt = PROMPT_PROP.format(
             category=category,
+            style=asset_style_prefix("16:9"),
             identifier=identifier,
             appearance=appearance,
         )
         return await self.image_generator.generate_single_image(
             prompt=prompt,
+            ratio="16:9",
             save_path=save_path,
         )
 

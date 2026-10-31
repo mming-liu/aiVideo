@@ -549,7 +549,7 @@ async def _generate_missing_portraits(
     # 肖像专用适配器：16:9 横屏、不加风格前缀、不替换敏感词（英文 prompt）
     # 2026-08-22 升级 2560x1440（= 3,686,400 像素）满足 Seedream 4.5 像素下限 3686400
     portrait_adapter = ImageGeneratorAiVideoAdapter(
-        size="2560x1440",
+        size="1440x2560",
         skip_prefix=True,
         skip_sanitize=True,
     )
@@ -597,7 +597,7 @@ async def _generate_missing_portraits(
             try:
                 img_out = await portrait_gen.generate_base_portrait(
                     char_in_scene,
-                    style="photorealistic Chinese ancient costume character portrait, full-body, white background, 16:9 landscape canvas, realistic skin texture, natural lighting, film photography",
+                    style="",
                     save_path=str(base_path),
                 )
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
@@ -1032,7 +1032,7 @@ def _del_frame_and_hash(frame_path, hash_path, label, idx, logger):
 def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
                             reference_paths: list | None = None,
                             lock_kind: str = "layout",
-                            extra_fields: dict | None = None) -> str:
+                            extra_fields: dict | None = None, characters: list | None = None) -> str:
     """计算首帧/尾帧的稳定哈希值 v4.
 
     v4: 新增 _prompt_sig() 对实际图片 prompt (ff_desc/lf_desc) 做规范化哈希，
@@ -1098,7 +1098,13 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
 
     # 参考图路径语义纳入哈希（审计 S4：此前不入哈希，参考图变了但哈希不变）
     for ref in (reference_paths or []):
-        key_parts.append(f"ref={_normalize(str(ref))}")
+        p = Path(ref)
+        key_parts.append(f"ref={_normalize(str(ref))}:sha256={hashlib.sha256(p.read_bytes()).hexdigest()}")
+    key_parts.append(json.dumps([
+        {k: c.get(k) for k in ("identifier", "static_features", "dynamic_features")}
+        for c in (characters or []) if isinstance(c, dict)
+    ], ensure_ascii=False, sort_keys=True))
+    key_parts.append("doodle=" + os.getenv("DOODLE_REFINE_ENABLED", "0"))
 
     key = "|".join(key_parts)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
@@ -1381,7 +1387,7 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
     empty_scene = is_empty_scene(shot, characters or [])
     # 动作镜头首帧：不注入场景资产图
     is_action_ff = (for_frame == "首帧") and _is_action_shot(shot, characters) and not empty_scene
-    scene_refs = [] if is_action_ff else _collect_scene_asset_refs(shot)
+    scene_refs = _collect_scene_asset_refs(shot)
     # 09-13 特写帧场景门控：spec 含「特写」的帧是局部构图，广角场景资产图会
     # 把构图拉回全景（shot_4 lf 手部特写 3 次 QC 未中根因）——跳过场景参考。
     if scene_refs and for_frame in ("首帧", "尾帧"):
@@ -1499,6 +1505,9 @@ def _head_portrait_path(src: str) -> str:
     放在收集层而非拼图层，fit_refs 的「≤limit 原图直传」单图路径与拼图
     路径拿到的是同一份已裁图。失败返回原路径（graceful degradation）。
     """
+    face = Path(src).parent / "face.png"
+    if Path(src).stem in ("base", "front", "front_no_weapon") and face.is_file():
+        return str(face)
     try:
         from shared.portrait_stitch import crop_head_portrait
         sp = Path(src)
@@ -3149,6 +3158,9 @@ def _detect_spatial_fallback(ff_desc_full: str, shot: dict) -> dict | None:
 
     Returns dict {phrase, bbox_ratio, refined_prompt} 或 None.
     """
+    if os.getenv("DOODLE_REFINE_ENABLED", "0").strip() != "1":
+        return None
+
     override = shot.get("doodle_refine")
     if override:
         return {
@@ -3217,6 +3229,46 @@ async def _doodle_refine_first_frame(
         return None
 
 
+async def _accept_doodle_refinement(refined, target, shot, frame_kind, characters,
+                                    empty_scene, prompt, kf_index=None):
+    """QC the candidate before replacement; unknown/skipped QC preserves the original."""
+    if not refined or not _validate_frame(refined):
+        return False
+    from shared.image_qc import sidecar_path, write_sidecar
+    from uuid import uuid4
+    import shutil
+    target = Path(target)
+    candidate = Path(refined)
+    sidecar_path(candidate).unlink(missing_ok=True)
+    probe = dict(shot)
+    probe.pop("_qc_last", None)
+    critical = await _maybe_qc_frame(
+        probe, str(candidate), frame_kind, characters, empty_scene,
+        prompt=prompt + "；不得保留红框、标注线或编辑标记", kf_index=kf_index)
+    result = probe.get("_qc_last")
+    if critical or not getattr(result, "ok", False) or getattr(result, "error", "") == "skipped":
+        return False
+    if any(getattr(i, "severity", "") == "critical" for i in getattr(result, "issues", [])):
+        return False
+    backup = target.with_name("." + target.name + "." + uuid4().hex + ".bak")
+    sidecar = sidecar_path(target)
+    old_sidecar = sidecar.read_bytes() if sidecar.exists() else None
+    shutil.copy2(target, backup)
+    try:
+        candidate.replace(target)
+        write_sidecar(target, result)
+    except Exception:
+        backup.replace(target)
+        if old_sidecar is None:
+            sidecar.unlink(missing_ok=True)
+        else:
+            sidecar.write_bytes(old_sidecar)
+        raise
+    finally:
+        backup.unlink(missing_ok=True)
+    return True
+
+
 async def _gen_first_frame_async(
     image_adapter, shots_dir: Path, shot: dict, force: bool,
     script_mtime: float | None = None,
@@ -3269,6 +3321,7 @@ async def _gen_first_frame_async(
     current_hash = _get_frame_content_hash(
         shot, empty_scene, reference_paths,
         lock_kind="no_layout" if _is_action_shot(shot, characters) else "layout",
+        characters=characters,
     )
 
     # v1.1：挂实际生成最终 prompt 到 shot（QC 语义核对用）。缓存命中/生成两条
@@ -3427,8 +3480,8 @@ async def _gen_first_frame_async(
                     doodle_cfg["bbox_ratio"], doodle_cfg["refined_prompt"],
                     str(doodle_tmp), idx,
                 )
-                if refined and _validate_frame(refined):
-                    Path(refined).replace(ff_path)
+                if await _accept_doodle_refinement(refined, ff_path, shot, "first_frame",
+                                                  characters, empty_scene, ff_desc_full):
                     _bridge_log(f"  [DOODLE] shot{idx} 区域编辑成功覆盖首帧 (phrase={doodle_cfg['phrase']})")
                 else:
                     _bridge_log(f"  [DOODLE] shot{idx} 区域编辑失败，保留原图")
@@ -3504,7 +3557,7 @@ async def _gen_last_frame_async(
     # 计算当前哈希值（核心意图 + 空镜约束 + 参考图 + 锁类型）
     # 尾帧用 NO_LAYOUT 锁图（构图随动作演变），锁类型纳入哈希键（审计 S4）。
     current_hash = _get_frame_content_hash(
-        shot, empty_scene, reference_paths, lock_kind="no_layout")
+        shot, empty_scene, reference_paths, lock_kind="no_layout", characters=characters)
 
     # v1.1：挂实际生成最终 prompt（QC 语义核对用），与首帧同理
     try:
@@ -3878,7 +3931,7 @@ async def _gen_keyframes_async(
         # 能触发该帧重出（原复用 shot 哈希，所有中间帧同值且改 desc 缓存不失效）。
         current_hash = _get_frame_content_hash(
             shot, empty_scene, reference_paths, lock_kind="no_layout",
-            extra_fields={"kf_desc": kf_desc, "kf_t": time_ratio})
+            extra_fields={"kf_desc": kf_desc, "kf_t": time_ratio}, characters=characters)
         
         for attempt in range(max_retries + 1):
             if kf_path.exists() and not force and attempt == 0:
@@ -4085,8 +4138,8 @@ async def _gen_keyframes_async(
                         kf_doodle_cfg["bbox_ratio"], kf_doodle_cfg["refined_prompt"],
                         str(doodle_tmp), idx,
                     )
-                    if refined and _validate_frame(refined):
-                        Path(refined).replace(kf_path)
+                    if await _accept_doodle_refinement(refined, kf_path, shot, "keyframe",
+                                                      characters, empty_scene, kf_desc_full, i):
                         _kf_logger.verbose(f"  [DOODLE] shot{idx} keyframe_{i} 区域编辑成功覆盖 (phrase={kf_doodle_cfg['phrase']})")
                     else:
                         _kf_logger.verbose(f"  [DOODLE] shot{idx} keyframe_{i} 区域编辑失败，保留原图")
@@ -4187,7 +4240,11 @@ async def gen_shot_frames(
         # 尾帧几乎复刻首帧（刺客同位置、听香位置错乱、两帧雷同），
         # 动作演变只能靠 lf_desc 文字描述驱动。首帧只通过 frame_refs_full 的
         # 场景资产图隐式锚定环境/光线，不用整图锁死尾帧构图。
-        lf_refs = frame_refs_lf or None
+        if not ff_path.is_file() or (want_ff and not ff_path_str):
+            raise FileNotFoundError(f"shot {idx}: last frame requires a valid first frame")
+        from shared.ref_compose import fit_flat, active_image_ref_limit
+        lf_refs = fit_flat([str(ff_path)] + [p for p in frame_refs_lf if p != str(ff_path)],
+                           active_image_ref_limit(), shot_dir, f"shot{idx}_lf")
         lf_path_str = await _gen_last_frame_async(
             image_adapter, shots_dir, shot,
             force=force, script_mtime=script_mtime,

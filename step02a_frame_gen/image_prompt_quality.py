@@ -81,8 +81,30 @@ def _file_digest(path: Path) -> str:
     return h.hexdigest()
 
 
-def write_image_product_quality(script: dict, work_dir: Path) -> dict:
-    """Validate actual Step02a frame products and write acceptance report."""
+def _keyframes_consumed_by_video() -> bool:
+    """当前激活的视频模型是否真的消费 keyframe 文件。
+
+    1.0-pro 这类 supports_reference_image=False 的模型，shared.video_media_plan
+    会把 keyframe_*.png 全部丢弃（reason=model_unsupported_reference_image）。
+    这种情况下，子集运行（--shots N）不该为它要求关键帧。
+    不确定时返回 True —— 保持旧的严格行为。
+    """
+    try:
+        from shared.model_caps import active_video_model, get_seedance_cap
+        cap = get_seedance_cap(active_video_model())
+        return bool(getattr(cap, "supports_reference_image", False))
+    except Exception:
+        return True
+
+
+def write_image_product_quality(script: dict, work_dir: Path, *,
+                                  only_indices=None, require_keyframes=None) -> dict:
+    """Validate actual Step02a frame products and write acceptance report.
+
+    only_indices: 只核验这些镜头（--shots 子集运行）；None=全章。
+    require_keyframes: None ⇒ 全章运行按旧行为要求关键帧；子集运行按当前视频
+        模型是否消费 keyframe 决定（1.0-pro 不消费则不要求）。
+    """
     from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
     from step01_script_gen.quality_issues import RULE_VERSION
 
@@ -90,6 +112,11 @@ def write_image_product_quality(script: dict, work_dir: Path) -> dict:
     if isinstance(script.get("hook"), dict):
         units.append(script["hook"])
     units.extend([s for s in (script.get("shots") or []) if isinstance(s, dict)])
+    if only_indices is not None:
+        _want = {int(i) for i in only_indices}
+        units = [u for u in units if int(u.get("index", 0)) in _want]
+    if require_keyframes is None:
+        require_keyframes = True if only_indices is None else _keyframes_consumed_by_video()
     missing = []
     outputs = {}
     for shot in units:
@@ -116,7 +143,7 @@ def write_image_product_quality(script: dict, work_dir: Path) -> dict:
             missing.append(f"shot {idx}: missing/undecodable {lf.name}")
         _miss_kf = [i for i in range(expected_kfs)
                     if not (shot_dir / ("keyframe_%d.png" % i)).exists()]
-        if _miss_kf:
+        if _miss_kf and require_keyframes:
             missing.append(
                 f"shot {idx}: 缺关键帧文件 {_miss_kf}（应有 {expected_kfs} 帧，"
                 f"实有核心帧 {len(kfs)} 个）")
@@ -136,6 +163,8 @@ def write_image_product_quality(script: dict, work_dir: Path) -> dict:
         "blocking": bool(missing),
         "missing": missing,
         "outputs": outputs,
+        "scope": {"shots": sorted(int(u.get("index", 0)) for u in units),
+                  "keyframes_required": bool(require_keyframes)},
     }
     attach_gate_metadata(payload, script, stage="step02a.product_acceptance")
     atomic_dump_json(chapter_dir() / "step02a_quality.json", payload, ensure_ascii=False, indent=2)

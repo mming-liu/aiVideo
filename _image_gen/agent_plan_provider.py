@@ -182,10 +182,8 @@ class AgentPlanImageService(ImageGenerationService):
         # 刺向→指向——09-05 hook kf_2 两次 400 实证，触发词是持械逼临
         # 组合，全表 sanitize 对已清洗 prompt 无效，必须二次降级）。
         if resp.status_code == 400 and "InputTextSensitiveContentDetected" in resp.text:
-            from shared.content_safety import sanitize as _safety_sanitize, soften_input_text as _soften
-            sanitized = _safety_sanitize(req.prompt)
-            if sanitized == req.prompt:
-                sanitized = _soften(req.prompt)
+            from shared.content_safety import input_sensitive_retry_prompt
+            sanitized = input_sensitive_retry_prompt(req.prompt)
             if sanitized and sanitized != req.prompt:
                 _verbose_write(
                     f"  [镜头{req.shot_index}] [!] InputTextSensitiveContentDetected，"

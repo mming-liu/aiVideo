@@ -404,3 +404,8 @@ def check_chain_safety() -> list[tuple[str, str, str]]:
 # B10 链式自检真实执行点（08-11）：位于 check_chain_safety 定义之后，import 时
 # 自动扫描一次替换表。此前该函数定义后无人调用（todolist C 档死代码）。
 _validate_chain_safety_on_import()
+
+def input_sensitive_retry_prompt(prompt: str) -> str:
+    """Shared, bounded input-rejection fallback; caller allows at most one retry."""
+    cleaned = sanitize(prompt)
+    return cleaned if cleaned != prompt else soften_input_text(prompt)

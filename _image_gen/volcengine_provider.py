@@ -159,8 +159,9 @@ class VolcengineImageService(ImageGenerationService):
             ref_limit = cap.max_refs
             ref_paths = list(original_refs)
             if len(ref_paths) > ref_limit:
-                sheet_dir = os.path.join(config.OUTPUT_DIR, "ref_sheets")
-                ref_paths = fit_flat(ref_paths, ref_limit, sheet_dir, f"shot{req.shot_index}")
+                from shared.paths import shot_work_dir
+                sheet_dir = shot_work_dir(req.shot_index)
+                ref_paths = fit_flat(ref_paths, ref_limit, sheet_dir, f"shot{req.shot_index}_{req.frame_desc or 'frame'}")
                 _verbose_write(f"  [镜头{req.shot_index}] 模型 {model} 参考图上限 {ref_limit}，"
                       f"原 {len(original_refs)} 张无损压缩为 {len(ref_paths)} 张")
             # base64 编码也按当前模型的最终 ref_paths 重新生成
@@ -210,6 +211,22 @@ class VolcengineImageService(ImageGenerationService):
 
             _verbose_write(f"[DEBUG] image_submit response: status={resp.status_code}, "
                   f"body={resp.text[:500]}")
+
+            if resp.status_code == 400 and "InputTextSensitiveContentDetected" in resp.text:
+                from shared.content_safety import input_sensitive_retry_prompt
+                sanitized = input_sensitive_retry_prompt(req.prompt)
+                if sanitized and sanitized != req.prompt:
+                    _verbose_write(f"[IMAGE-RETRY] input_sensitive: original={req.prompt}; revised={sanitized}")
+                    payload["prompt"] = sanitized
+                    try:
+                        resp = requests.post(f"{self._base_url}/images/generations",
+                                             json=payload, headers=self._headers, timeout=180)
+                    except Exception as exc:
+                        last_error = f"input-sensitive retry failed: {exc}"
+                        break
+                    if resp.status_code != 200:
+                        last_error = f"input-sensitive retry rejected [{resp.status_code}]: {resp.text}"
+                        break
 
             # ---- 200: 解析并下载 ----
             if resp.status_code == 200:

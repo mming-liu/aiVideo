@@ -513,6 +513,31 @@ def _run_candidate(options, script: dict, work_dir: Path, script_path: Path,
     return 0
 
 
+def _assert_step02a_scope(report: dict, only_indices, script: dict) -> None:
+    """子集运行的门禁范围核对：报告覆盖的镜头必须包含本次要跑的镜头。
+
+    step02a 的成品验收报告现在带 scope.shots（--shots 子集运行时只覆盖子集）。
+    没有 scope 的旧报告视为全章覆盖（保持旧行为）。不能让「shot 1 的 PASS」
+    给整章放行。
+    """
+    from shared.quality_gate import QualityGateError
+
+    scope = (report or {}).get("scope") or {}
+    scoped = {int(i) for i in (scope.get("shots") or [])}
+    if not scoped:
+        return
+    wanted = set(only_indices) if only_indices is not None else None
+    if wanted is None:
+        wanted = {int(s.get("index", 0)) for s in script.get("shots", [])}
+        if script.get("hook"):
+            wanted.add(0)
+    missing = sorted(wanted - scoped)
+    if missing:
+        raise QualityGateError(
+            "step02a 验收范围不含本次请求的镜头: %s（报告覆盖 %s）"
+            % (missing, sorted(scoped)))
+
+
 def main(options=None):
     from step02b_video_gen import cli
 
@@ -597,8 +622,11 @@ def main(options=None):
     # 「没有图片不妨碍执行视频 plan-only」在入口上不成立。预检不生成、不提交、
     # 只写候选实验根，故跳过的是 step02a 门；step01 的质量与提交绑定仍然必查。
     if REFERENCE_MODE == "image" and not options.plan_only:
-        require_gate(chapter_dir() / "step02a_quality.json", script, stage="step02a",
-                     required_report_type="product_acceptance", verify_outputs=True)
+        _qa_report = require_gate(chapter_dir() / "step02a_quality.json", script,
+                                  stage="step02a",
+                                  required_report_type="product_acceptance",
+                                  verify_outputs=True)
+        _assert_step02a_scope(_qa_report, only_indices, script)
 
     # ---- 候选模式分支（plan-only / resume / 候选生成）----
     if options.resume:
