@@ -121,7 +121,9 @@ def _extract_props_from_text(text: str) -> list[Prop]:
         return []
     # 按 spec_key 聚合（一个 spec 只产一个 Prop，即使有多个别名）
     spec_hits: dict[str, tuple[str, int]] = {}  # spec_key → (matched_name, pos)
-    for prop_name in _PROP_NAME_SET:
+    # S16-1（M09 根因 C）：set 遍历顺序受 PYTHONHASHSEED 影响，同 spec 多别名
+    # 并存时首次命中会漂移；排序后同一输入必得同一别名。
+    for prop_name in sorted(_PROP_NAME_SET):
         for m in _WORD_RE.finditer(text):
             pass
         # 整词匹配：prop_name 出现时，左右是 non-word 字符或文本边界

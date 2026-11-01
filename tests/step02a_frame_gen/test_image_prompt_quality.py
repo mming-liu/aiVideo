@@ -1,0 +1,53 @@
+from __future__ import annotations
+import sys
+from pathlib import Path
+_ROOT=Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path: sys.path.insert(0,str(_ROOT))
+
+def test_image_quality_reports_video_leak(monkeypatch,tmp_path):
+    from step02a_frame_gen.image_prompt_quality import collect_image_prompt_quality
+    monkeypatch.setattr('shared.paths.chapter_dir', lambda: tmp_path)
+    script={'shots':[{'index':1,'ff_desc':'中景，镜头缓慢推近，杨旭站立','lf_desc':'杨旭转身','keyframes':[]}]}
+    r=collect_image_prompt_quality(script)
+    assert r['warning_count']==1
+    assert r['warnings'][0]['category']=='image_video_directive_leak'
+
+def test_image_quality_clean(monkeypatch,tmp_path):
+    from step02a_frame_gen.image_prompt_quality import collect_image_prompt_quality
+    monkeypatch.setattr('shared.paths.chapter_dir', lambda: tmp_path)
+    script={'shots':[{'index':1,'ff_desc':'中景，杨旭站立','lf_desc':'杨旭转身','keyframes':[]}]}
+    assert collect_image_prompt_quality(script)['warning_count']==0
+
+def test_image_product_acceptance_uses_root_keyframe_paths(monkeypatch, tmp_path):
+    import step02a_frame_gen.image_prompt_quality as q
+    work = tmp_path / "working"
+    shot_dir = work / "shots" / "1"
+    shot_dir.mkdir(parents=True)
+    from PIL import Image
+    Image.new("RGB", (8, 8), "white").save(shot_dir / "first_frame.png")
+    Image.new("RGB", (8, 8), "white").save(shot_dir / "last_frame.png")
+    Image.new("RGB", (8, 8), "white").save(shot_dir / "keyframe_0.png")
+    monkeypatch.setattr(q, "chapter_dir", lambda: tmp_path)
+    # 固定「当前视频模型消费关键帧」，避免断言随 .env 的 VIDEO_PROVIDER/型号漂移
+    monkeypatch.setattr(q, "_keyframes_consumed_by_video", lambda: True)
+    r = q.write_image_product_quality(
+        {"shots": [{"index": 1, "keyframes": [{"desc": "k"}]}]}, work)
+    assert r["status"] == "PASS"
+    assert "keyframe_0.png" in r["outputs"]["1"]["keyframes"]
+
+
+def test_image_product_acceptance_blocks_missing_required_keyframe(monkeypatch, tmp_path):
+    import step02a_frame_gen.image_prompt_quality as q
+    from PIL import Image
+    work = tmp_path / "working"
+    shot_dir = work / "shots" / "1"
+    shot_dir.mkdir(parents=True)
+    Image.new("RGB", (8, 8), "white").save(shot_dir / "first_frame.png")
+    Image.new("RGB", (8, 8), "white").save(shot_dir / "last_frame.png")
+    monkeypatch.setattr(q, "chapter_dir", lambda: tmp_path)
+    monkeypatch.setattr(q, "_keyframes_consumed_by_video", lambda: True)
+    r = q.write_image_product_quality(
+        {"shots": [{"index": 1, "keyframes": [{"desc": "k"}]}]}, work)
+    assert r["status"] == "BLOCK"
+    # v6.110：判据从「核心帧数量」改为「按序号逐一核对」，文案随之变化
+    assert any("关键帧" in m and "[0]" in m for m in r["missing"])

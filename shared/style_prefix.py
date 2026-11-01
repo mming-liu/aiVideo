@@ -82,9 +82,10 @@ def video_negative_prompt() -> str:
 
 def image_negative_prompt() -> str:
     """图片负向词：英文 token 仅 Agnes 使用；中文模型用纯中文版."""
+    negative = get_style_negative()
     if os.getenv("IMAGE_PROVIDER", "bailian") == "agnes":
-        return NEGATIVE_PROMPT
-    return NEGATIVE_PROMPT_CN
+        return negative
+    return negative.replace("English text, watermark, logo, English speech", "")
 
 
 def image_lock_prompt(layout_lock: bool = True) -> str:
@@ -224,10 +225,42 @@ def get_style_prefix(name: str = None) -> str:
     return get_style_preset(name)["prefix"]
 
 
-def asset_style_prefix(ratio: str = "16:9") -> str:
-    """Use the selected visual style while the asset owns its canvas ratio."""
-    prefix = re.sub(r"\b\d+:\d+(?:竖屏|横屏)?", "", get_style_prefix())
+_RATIO_TOKEN_RE = re.compile(r"\b\d+:\d+(?:电影宽幅|短视频画幅|竖屏|横屏|画幅)?")
+
+
+def style_prefix_for_canvas(ratio: str = "16:9") -> str:
+    """当前生效风格 + 调用方画幅（预设里写死的比例由画幅拥有者改写）.
+
+    风格预设（STYLE_PRESETS[*].prefix）各自写死了 16:9/9:16，但资产图与分镜帧
+    的画幅由调用方决定：把预设前缀原样拼进 9:16 帧 prompt，文字说 16:9、请求
+    参数说 9:16，模型会按文字画成横幅/留黑边（ink_painting 预设正是
+    「16:9电影宽幅」）。这里剥掉预设里的比例词，再按调用方画幅追加。
+    """
+    prefix = _RATIO_TOKEN_RE.sub("", get_style_prefix())
+    prefix = re.sub(r"[，,]\s*[，,]", "，", prefix).strip("，, ")
     return f"{prefix}；{ratio}画幅"
+
+
+def asset_style_prefix(ratio: str = "16:9") -> str:
+    """兼容旧名：资产图（场景/道具/肖像）按自身画幅取风格前缀."""
+    return style_prefix_for_canvas(ratio)
+
+
+def style_lock_prompt() -> str:
+    """视频提示词的风格收束句：跟随当前 VIDEO_STYLE，禁止中途画风漂移.
+
+    旧实现把「写实古风真人 / 禁止动漫」写死在完整 prompt 路径（_build_prompt）
+    的风格收束段，与 VIDEO_STYLE=ink_painting 冲突（水墨帧 + 「禁止非写实风格」
+    文字）。Seedance 精简路径本就不注入风格段，画风由首帧图承载；这里只修
+    非 Seedance 供应商仍会走到的完整路径。收束句由当前风格前缀首句与该风格
+    负向词前三条派生。
+    """
+    head = get_style_prefix().split("，")[0].strip()
+    terms = [t.strip() for t in get_style_negative().replace("，", "、").split("、")
+             if t.strip()]
+    banned = "、".join(terms[:3]) or "其他画风"
+    return (f"整段视频每一帧都保持{head}风格，首尾画风完全一致，"
+            f"禁止中途转为{banned}或任何非本片画风的画面。")
 
 
 def get_style_negative(name: str = None) -> str:

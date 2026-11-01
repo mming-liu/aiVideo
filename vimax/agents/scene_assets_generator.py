@@ -108,7 +108,7 @@ class SceneAssetsGenerator:
         if not wide_desc:
             return None
         side_desc = (scene.get("side_desc") or wide_desc).strip()
-        prompt = PROMPT_SIDE.format(style=style)
+        prompt = PROMPT_SIDE.format(style=style or asset_style_prefix("16:9"), side_desc=side_desc)
         return await self.image_generator.generate_single_image(
             prompt=prompt,
             ratio="16:9",

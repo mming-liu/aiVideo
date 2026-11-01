@@ -354,6 +354,79 @@ def narration_speech_unit(entry_index: int, *, text: str, scope: dict,
     )
 
 
+def _transition_hint(raw) -> tuple[str, float]:
+    """把 clip_transition 文本折成 (kind, duration)；只用于窗口扣除重叠.
+
+    step04 的权威解析在 `step04_merge/main._parse_transition`；step03 只需要
+    「这个边界重叠多少秒」。非 cut 一律按 fade 计（kind 只影响 step04 的
+    xfade 类型，不影响窗口算术），时长缺省 0.5s、夹在 [0.1, 1.5]。
+    """
+    text = str(raw or "").strip()
+    if not text or "硬切" in text or text.lower() in ("cut", "none", "无"):
+        return "cut", 0.0
+    import re as _re
+    match = _re.search(r"([0-9]+(?:\.[0-9]+)?)\s*(?:s|秒)", text)
+    duration = float(match.group(1)) if match else 0.5
+    return "fade", max(0.1, min(duration, 1.5))
+
+
+def _compute_voice_windows(script: dict, shots: list[dict]) -> tuple[dict, float]:
+    """每镜在**最终成片时间轴**上的 (start, end)：hook 偏移 + 转场重叠 + 实测时长.
+
+    S18-1：旧实现用裸累加 `duration_sec`，既没有 hook 偏移、也没扣 xfade 重叠。
+    step03 据此放行的旁白，到 step04 按真实 clip_windows 验收时会抛
+    「旁白比承载片段还长」而整章合并失败。这里与 step04 共用
+    `windows_from_legacy`；时长优先取已生成视频的实测值（没有视频时回退
+    `duration_sec`，离线单测照常可跑）；时间线非法时回退「累加-前序转场」。
+    """
+    from shared.paths import SHOT_VIDEO_FILENAME, vimax_working_dir
+
+    hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
+    units = ([hook] if hook else []) + [s for s in shots if isinstance(s, dict)]
+    if not units:
+        return {}, 0.0
+
+    work_dir = None
+    try:
+        work_dir = vimax_working_dir()
+    except Exception:
+        work_dir = None
+
+    durations: list[float] = []
+    for unit in units:
+        idx = int(unit.get("index", 0))
+        actual = 0.0
+        if work_dir is not None:
+            try:
+                path = Path(work_dir) / "shots" / str(idx) / SHOT_VIDEO_FILENAME
+                if path.exists():
+                    from step04_merge.stretch import get_media_duration
+                    actual = float(get_media_duration(path) or 0)
+            except Exception:
+                actual = 0.0
+        durations.append(actual if actual > 0 else float(unit.get("duration_sec") or 0))
+
+    transitions = [_transition_hint(s.get("clip_transition")) for s in shots]
+    try:
+        from step04_merge.timeline import windows_from_legacy
+        windows, total = windows_from_legacy(durations, transitions)
+    except Exception:
+        windows = []
+        acc = 0.0
+        for i, duration in enumerate(durations):
+            overlap = float(transitions[i - 1][1]) if (i > 0 and transitions) else 0.0
+            start = max(0.0, acc - overlap) if i > 0 else 0.0
+            end = start + duration
+            windows.append((start, end))
+            acc = end
+        total = acc
+
+    out: dict = {}
+    for unit, (start, end) in zip(units, windows):
+        out[str(unit.get("index", 0))] = (float(start), float(end))
+    return out, float(total)
+
+
 def build_speech_units(script: dict, *, scope: dict | None = None,
                        script_revision: str = "", registry=None,
                        provider_name: str = "") -> list:
@@ -391,12 +464,7 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
 
     entries = broadcast_narration_entries(plan)
     if entries:
-        _win: dict = {}
-        _acc = 0.0
-        for _s in shots:
-            _d = float(_s.get("duration_sec") or 0)
-            _win[str(_s.get("index"))] = (_acc, _acc + _d)
-            _acc += _d
+        _win, _ = _compute_voice_windows(script, shots)
         tracks, _problems = layout_voice_entries(voice_units(plan, shots), _win)
         _track_by_id = {t["id"]: t for t in tracks if t.get("kind") == "narration"}
         for i, entry in enumerate(entries, 1):
@@ -807,12 +875,7 @@ def gen_narration_tts(script: dict, output_dir: Path, provider=None, *,
               if u["kind"] == "narration"}
     # 计划时长窗口（与 step04 用真实 clip_windows 的那份排版**同一规则**）：
     # 同镜多条声音按序、不重叠；排不进就是计划层该重选的事，这里先显式失败。
-    _win: dict = {}
-    _acc = 0.0
-    for _s in shots:
-        _d = float(_s.get("duration_sec") or 0)
-        _win[str(_s.get("index"))] = (_acc, _acc + _d)
-        _acc += _d
+    _win, _ = _compute_voice_windows(script, shots)
     # ① 逐条**结构**检查（不进 TTS 就能判、且能指出真因的）——先跑。
     #    长度不再在这里判：超长由 provider 能力分段解决，讲不完由 duration 守卫判。
     for _i, _e in enumerate(entries, 1):

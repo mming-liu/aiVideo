@@ -102,7 +102,8 @@ def _asset_concurrency() -> int:
 
 
 async def gen_scene_assets(image_adapter, force: bool = False, hallucinated_ids: set | None = None,
-                           concurrency: int | None = None) -> int:
+                           concurrency: int | None = None,
+                           only_identifiers: "set | None" = None) -> int:
     """为场景资产库中缺图的场景生成大场景图 + 近景功能场景图.
 
     Args:
@@ -137,7 +138,11 @@ async def gen_scene_assets(image_adapter, force: bool = False, hallucinated_ids:
 
     total = 0
     pending: list[str] = []
-    for ident in bank.get_all_identifiers():
+    identifiers = bank.get_all_identifiers()
+    if only_identifiers is not None:
+        # S13B：--shots 子集只生成目标镜头引用的场景，不连带全章
+        identifiers = [i for i in identifiers if i in only_identifiers]
+    for ident in identifiers:
         # v6.40 08-22：audit 识别的幻觉 scene 直接跳过（不调 4.5 重生成）
         if ident in hallucinated_ids:
             logger.info(f"[ASSET] 场景 {ident}: 幻觉条目，跳过不补生成")
@@ -240,7 +245,8 @@ async def gen_scene_assets(image_adapter, force: bool = False, hallucinated_ids:
 
 
 async def gen_prop_assets(image_adapter, force: bool = False, hallucinated_ids: set | None = None,
-                          concurrency: int | None = None) -> int:
+                          concurrency: int | None = None,
+                          only_identifiers: "set | None" = None) -> int:
     """为道具资产库中缺图的道具生成白底资产图.
 
     Args:
@@ -274,7 +280,10 @@ async def gen_prop_assets(image_adapter, force: bool = False, hallucinated_ids: 
 
     total = 0
     pending: list[str] = []
-    for ident in bank.get_all_identifiers():
+    identifiers = bank.get_all_identifiers()
+    if only_identifiers is not None:
+        identifiers = [i for i in identifiers if i in only_identifiers]
+    for ident in identifiers:
         # v6.40 08-22：audit 识别的幻觉 prop 直接跳过（不调 4.5 重生成）
         if ident in hallucinated_ids:
             logger.info(f"[ASSET] 道具 {ident}: 幻觉条目，跳过不补生成")
@@ -348,7 +357,8 @@ async def gen_prop_assets(image_adapter, force: bool = False, hallucinated_ids: 
     return total
 
 
-async def gen_all_assets(force: bool = False, concurrency: int | None = None) -> dict:
+async def gen_all_assets(force: bool = False, concurrency: int | None = None,
+                         only_identifiers: "dict | None" = None) -> dict:
     """step02a 入口：生成全部场景/道具资产图.
 
     使用专用横屏适配器（资产图是横屏参考，不加风格前缀，不做合规清洗——
@@ -408,12 +418,16 @@ async def gen_all_assets(force: bool = False, concurrency: int | None = None) ->
         enable_hallucination_lock=False,
     )
 
+    _scenes = (only_identifiers or {}).get("scenes") if only_identifiers is not None else None
+    _props = (only_identifiers or {}).get("props") if only_identifiers is not None else None
     n_scenes = await gen_scene_assets(asset_adapter, force=force,
                                       hallucinated_ids=_hallucinated,
-                                      concurrency=concurrency)
+                                      concurrency=concurrency,
+                                      only_identifiers=_scenes)
     n_props = await gen_prop_assets(asset_adapter, force=force,
                                     hallucinated_ids=_hallucinated,
-                                    concurrency=concurrency)
+                                    concurrency=concurrency,
+                                    only_identifiers=_props)
 
     from shared.paths import chapter_dir
     from shared.tee_logger import get_logger

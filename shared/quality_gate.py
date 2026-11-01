@@ -689,6 +689,35 @@ def _chapter_from_dir(chapter_dir: Path) -> "int | None":
     return int(m.group(1)) if m else None
 
 
+def _chapter_from_artifacts(chapter_dir: Path) -> "int | None":
+    """脚本缺 chapter_index 时，从提交清单/采纳收据回退取章号（S16-2）.
+
+    `finalize_step01_script` 的规范化只对**新生成**的稿子写入 chapter_index；
+    已采纳的历史产物没有该键。此前这种情况只打 WARN、章号一致性形同虚设。
+    回退读取 `step01_commit.json` / `step01_adoption.json` 记录的章号，
+    让「目录名 vs 收据章号」仍能被核对。
+    """
+    import json as _json
+
+    for name in ("step01_commit.json", "step01_adoption.json"):
+        path = Path(chapter_dir) / name
+        if not path.exists():
+            continue
+        try:
+            record = _json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, _json.JSONDecodeError):
+            continue
+        raw = record.get("chapter_index")
+        if raw is None:
+            raw = (record.get("scope") or {}).get("chapter")
+        try:
+            if raw is not None:
+                return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _verify_chapter_identity(chapter_dir: Path, script: dict, stage: str,
                              expected_chapter: "int | None") -> None:
     """章号三方一致性：请求的章（`expected_chapter`）/ 目录名 / 脚本内 `chapter_index`.
@@ -708,6 +737,9 @@ def _verify_chapter_identity(chapter_dir: Path, script: dict, stage: str,
         script_chapter = int(raw) if raw is not None else None
     except (TypeError, ValueError):
         script_chapter = None
+    if script_chapter is None:
+        # S16-2：历史产物没有 chapter_index，回退到提交清单/采纳收据的章号。
+        script_chapter = _chapter_from_artifacts(chapter_dir)
 
     if expected_chapter is not None:
         want = int(expected_chapter)
@@ -823,8 +855,36 @@ def require_step01_upstream(chapter_dir: Path, script: "dict | None" = None,
 def require_gate(report_path: Path, script: dict, *, stage: str,
                  allow_blocking: bool = False,
                  required_report_type: str | None = None,
-                 verify_outputs: bool = False) -> dict:
+                 verify_outputs: bool = False,
+                 output_indices: set[int] | None = None) -> dict:
     report = load_gate(report_path)
+    if output_indices is not None:
+        # 2026-11-01 S19-3：step02b 与 step02a 同为 product_acceptance，
+        # 产物键都是 str(shot index)；按子集投影后同样要逐项核 SHA1。
+        if stage not in ("step02a", "step02b") or \
+                report.get("report_type") != "product_acceptance":
+            raise QualityGateError("output subset is only supported for product acceptance")
+        wanted = {str(int(i)) for i in output_indices}
+        outputs = report.get("outputs") or {}
+        if not wanted or not wanted.issubset(outputs):
+            raise QualityGateError("step02a report does not cover requested shots")
+        # A structured per-shot issue map permits projecting a new report with unrelated failures.
+        # A legacy BLOCK without this evidence must remain blocked.
+        report = dict(report)
+        issues = report.get("issues_by_shot")
+        if isinstance(issues, dict) and wanted.issubset(issues):
+            if any(not isinstance(issues[i], list) for i in wanted):
+                raise QualityGateError("invalid step02a per-shot issues")
+            selected_issues = [item for i in wanted for item in issues[i]]
+            report["blocking"] = bool(selected_issues)
+            report["status"] = "BLOCK" if selected_issues else "PASS"
+            report["missing"] = selected_issues
+        report["outputs"] = {i: outputs[i] for i in wanted}
+        _evidence_key = "ff" if stage == "step02a" else "video"
+        if any(not isinstance(outputs[i], dict) or not outputs[i].get(_evidence_key)
+               for i in wanted):
+            raise QualityGateError(
+                f"{stage} subset lacks {_evidence_key} evidence")
     if (stage.startswith("step01") or str(report.get("source") or "").startswith("step01")
             or Path(report_path).name == "step01_quality.json"):
         _require_duration_band(report, stage)

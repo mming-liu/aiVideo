@@ -132,8 +132,14 @@ def _file_digest(path: Path) -> str:
     return h.hexdigest()
 
 
-def write_video_product_quality(script: dict, work_dir: Path) -> dict:
-    """Validate actual Step02b video products and write acceptance report."""
+def write_video_product_quality(script: dict, work_dir: Path, *,
+                                 only_indices=None) -> dict:
+    """Validate actual Step02b video products and write acceptance report.
+
+    only_indices: 只验收这些镜头（--shots 子集试跑）；None=全章。
+    子集报告带 `scope.shots` 与 `issues_by_shot`，与 step02a 的
+    `write_image_product_quality` 同构，step04 的子集门禁据此投影。
+    """
     from pathlib import Path as _Path
     from shared.paths import SHOT_VIDEO_FILENAME
     from shared.audio_policy import resolve_audio_policy
@@ -146,19 +152,29 @@ def write_video_product_quality(script: dict, work_dir: Path) -> dict:
     if isinstance(script.get("hook"), dict):
         units.append(script["hook"])
     units.extend([s for s in (script.get("shots") or []) if isinstance(s, dict)])
+    if only_indices is not None:
+        wanted = {int(i) for i in only_indices}
+        available = {int(u.get("index", 0)) for u in units}
+        if not wanted or wanted - available:
+            raise ValueError(f"invalid shot subset: {sorted(wanted - available)}")
+        units = [u for u in units if int(u.get("index", 0)) in wanted]
     missing = []
     outputs = {}
+    issues_by_shot: dict = {}
     for shot in units:
         idx = shot.get("index", 0)
+        issue_start = len(missing)
         video = _Path(work_dir) / "shots" / str(idx) / SHOT_VIDEO_FILENAME
         if not video.exists() or video.stat().st_size <= 20 * 1024:
             missing.append(f"shot {idx}: missing/too small {video.name}")
+            issues_by_shot[str(idx)] = missing[issue_start:]
             continue
         duration = get_media_duration(video)
         if duration <= 0:
             missing.append(f"shot {idx}: duration probe failed")
         if require_audio and not has_audio_stream(video):
             missing.append(f"shot {idx}: missing audio stream")
+        issues_by_shot[str(idx)] = missing[issue_start:]
         outputs[str(idx)] = {
             "video": {"path": str(video), "sha1": _file_digest(video)},
             "duration_sec": round(float(duration or 0), 3),
@@ -172,6 +188,8 @@ def write_video_product_quality(script: dict, work_dir: Path) -> dict:
         "blocking": bool(missing),
         "missing": missing,
         "outputs": outputs,
+        "issues_by_shot": issues_by_shot,
+        "scope": {"shots": sorted(int(u.get("index", 0)) for u in units)},
     }
     # v6.103（工作包 E）：产品验收报告同样带上实验上下文与上游状态。
     # ⚠️ **不**在这里把 status 降级成 upstream_blocked：本报告是 step02b/step04 的

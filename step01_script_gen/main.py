@@ -2980,6 +2980,20 @@ def _write_blocked_manifest(revision: str, *, run_id: str, detail: str,
         _logger.warn(f"[COMMIT] BLOCK manifest 写入失败（不影响结论）: {exc}")
 
 
+def _is_hook_enabled() -> bool:
+    """运行期读取 HOOK_ENABLED（S16-1 根因 B）.
+
+    `HOOK_ENABLED` 是 import 期常量；同一进程里先 import main、再改
+    `os.environ["HOOK_ENABLED"]` 时，提交投影仍按旧值决定 hook 去留，与新进程
+    对同一份输入的结果不同（M09 跨进程 revision 分叉）。提交点改为动态读取：
+    env 存在时以 env 为准，缺失时回退 import 期常量。
+    """
+    raw = os.environ.get("HOOK_ENABLED")
+    if raw is None:
+        return bool(HOOK_ENABLED)
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
 def project_for_commit(script: dict, novel_text: str = "", *, label: str = "落盘前",
                        repair_effects=None) -> tuple[dict, list[str]]:
     """提交点**实际会审计并落盘**的投影——唯一实现.
@@ -2996,7 +3010,7 @@ def project_for_commit(script: dict, novel_text: str = "", *, label: str = "落�
     必须拒收（提交入口据此 BLOCK/finalize_failed）。异常不被折算成错误字符串。
     """
     _s = copy.deepcopy(script)
-    if not HOOK_ENABLED:
+    if not _is_hook_enabled():
         _s.pop("hook", None)
     _s, _errs = finalize_step01_script(_s, novel_text=novel_text, label=label,
                                        repair_effects=repair_effects)
@@ -3075,7 +3089,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
     # `project_for_commit` 里做（唯一实现）；这里只保证禁用时不跑钩子质量门。
 
     # ---- 1. hook QC / 必要的 hook regen（允许语义写入的最后阶段之前）----
-    if (HOOK_ENABLED and hook_ctx is not None and isinstance(script.get("hook"), dict)):
+    if (_is_hook_enabled() and hook_ctx is not None and isinstance(script.get("hook"), dict)):
         try:
             _ensure_hook_quality(script, novel_text=novel_text, **hook_ctx)
         except Exception as exc:

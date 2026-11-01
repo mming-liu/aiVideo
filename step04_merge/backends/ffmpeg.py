@@ -357,7 +357,9 @@ def compile_graph(timeline: MergeTimeline, settings: EncodeSettings, *,
                 f"atrim=duration={duration:.6f},asetpts=PTS-STARTPTS,"
                 f"aformat=sample_fmts=fltp:channel_layouts=stereo"
             )
-        if settings.loudnorm and not settings.audio_volume:
+        # S19-1：静音片段（anullsrc）不需要 loudnorm——对静音跑响度归一既无意义，
+        # 又会在与 TTS 混音后改变人声响度。只对真有原声的片段做响度归一。
+        if settings.loudnorm and not settings.audio_volume and clip.has_audio:
             audio_chain += ",loudnorm=I=-16:TP=-1.5:LRA=11"
         elif settings.audio_volume:
             audio_chain += f",volume={settings.audio_volume}"
@@ -369,8 +371,11 @@ def compile_graph(timeline: MergeTimeline, settings: EncodeSettings, *,
                 f"aresample={AUDIO_SAMPLE_RATE},atrim=duration={duration:.6f},"
                 f"asetpts=PTS-STARTPTS,apad=whole_dur={duration:.6f}[tts{position}]"
             )
+            # S19-1：amix 默认 normalize=1，会把对白按输入数/权重和再除一次；
+            # 与旁白混音（normalize=0）叠加后角色对白只剩 ~0.375（-8.5 dB）。
+            # 逐镜 TTS 混音必须显式 normalize=0，权重才是真正的增益。
             audio_chain += (
-                f",[tts{position}]amix=inputs=2:duration=first:"
+                f",[tts{position}]amix=inputs=2:duration=first:normalize=0:"
                 f"weights={settings.tts_base_gain} 1[na{position}]"
             )
         else:

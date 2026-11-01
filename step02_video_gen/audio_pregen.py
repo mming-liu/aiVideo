@@ -100,7 +100,11 @@ def collect_actual_durations(working_dir: Path, script: dict) -> dict:
         return metrics
 
     total = 0.0
-    for shot in script.get("shots", []) or []:
+    # S17-4：hook（index=0）也有 shots/0/video.mp4，漏统计会让
+    # step02_video_metrics.json 的总时长与实际成片对不上。
+    units = ([script["hook"]] if isinstance(script.get("hook"), dict) else []) \
+        + list(script.get("shots", []) or [])
+    for shot in units:
         idx = shot.get("index", 0)
         video_path = shots_dir / str(idx) / SHOT_VIDEO_FILENAME
         if not video_path.exists():

@@ -434,6 +434,25 @@ class FrameSpecConsistencyConstraint(Constraint):
                 return pattern
         return ""
 
+    @staticmethod
+    def _exit_word_near(desc: str, name: str) -> "str | None":
+        """角色名后 30 字内是否出现退场词（与检查 5 同一词表/同一窗口）."""
+        for m in re.finditer(re.escape(name), desc):
+            tail = desc[m.end(): m.end() + 30]
+            hit = next((w for w in _EXIT_WORDS if w in tail), None)
+            if hit:
+                return hit
+        return None
+
+    @staticmethod
+    def _negated_mention(desc: str, name: str) -> bool:
+        """角色名前 6 字内是否有否定前缀（已无/不见/再无…）."""
+        for m in re.finditer(re.escape(name), desc):
+            head = desc[max(0, m.start() - 6): m.start()]
+            if any(prefix in head for prefix in _NEGATION_PREFIX):
+                return True
+        return False
+
     def _check_roster_coverage(
         self,
         ctx,
@@ -489,6 +508,14 @@ class FrameSpecConsistencyConstraint(Constraint):
                      and not is_on_screen(e)),
                     None,
                 )
+                # 2026-11-01 S16-3：显式 on_screen=False + desc 写的是「已没入/
+                # 不见踪影/已无…」→ 名字出现属于离场叙事，不是"漏标在场"。
+                # 旧实现让 Check 5（on_screen=true 却退场）与 Check 7（on_screen=false
+                # 却提名字）互相死锁，同一帧标 true 或 false 都报 HARD。
+                if offscreen is not None and (
+                        self._exit_word_near(desc, name)
+                        or self._negated_mention(desc, name)):
+                    continue
                 state = "on_screen=false" if offscreen is not None else "无条目"
                 ctx.record_violation(
                     Violation(

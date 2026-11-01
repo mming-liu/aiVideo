@@ -104,7 +104,9 @@ _ATTEMPT_VARIATIONS = (
 )
 
 # 首帧/尾帧生成需要风格前缀（与视频生成保持一致）
-from shared.style_prefix import STYLE_PREFIX, sanitize_prompt, ensure_prefix, is_empty_scene, add_image_strict_constraints, preprocess_prompt_for_image
+from shared.style_prefix import (style_prefix_for_canvas, sanitize_prompt,
+                                 ensure_prefix, is_empty_scene, add_image_strict_constraints,
+                                 preprocess_prompt_for_image)
 from shared.style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT, image_lock_prompt
 
 
@@ -173,6 +175,7 @@ async def build_working_dir(
     image_adapter,
     force_first_frame: bool = False,
     skip_frames: bool = False,
+    only_indices: "set | None" = None,
 ):
     """读 script_result.json，写 ViMax working_dir 缓存产物 + 预生成 first_frame.
 
@@ -201,11 +204,18 @@ async def build_working_dir(
     chapter_idx = int(os.getenv("NOVEL_CHAPTER", "1"))
 
     # ---- 角色肖像：生成缺失的 ----
+    # 2026-10-31 S13B：--shots 子集运行时只补**目标镜头实际出场**角色的肖像，
+    # 避免单镜试跑连带为全章未出场角色生成 4 视图（实测 3 角色 × 4 = 12 张）。
     registry = {}
     if characters_data:
-        registry = await _generate_missing_portraits(
-            characters_data, bank, image_adapter, chapter_idx,
-        )
+        portrait_characters = characters_data
+        if only_indices is not None:
+            units = _units_for_indices(script, only_indices)
+            portrait_characters = _characters_in_units(characters_data, units)
+        if portrait_characters:
+            registry = await _generate_missing_portraits(
+                portrait_characters, bank, image_adapter, chapter_idx,
+            )
 
     # ---- 1. characters.json ----
     chars_path = working_dir / "characters.json"
@@ -529,6 +539,57 @@ def _build_reference_list(
 # 角色肖像生成
 # ---------------------------------------------------------------------------
 
+def _units_for_indices(script: dict, only_indices) -> list[dict]:
+    """按 --shots 选出目标单元（hook 的 index=0 + 指定 shot）."""
+    wanted = {int(i) for i in only_indices}
+    units: list[dict] = []
+    hook = script.get("hook")
+    if isinstance(hook, dict) and 0 in wanted:
+        units.append(hook)
+    for shot in script.get("shots") or []:
+        try:
+            if int(shot.get("index", -1)) in wanted:
+                units.append(shot)
+        except (TypeError, ValueError):
+            continue
+    return units
+
+
+def _characters_in_units(characters: list[dict], units: list[dict]) -> list[dict]:
+    """目标单元里实际出场的角色（spec 出镜名单优先，退回全文匹配）.
+
+    spec 名单走 `_frame_spec_roster`（per-frame 事实源）；没有 spec 时用角色名
+    是否出现在单元文本里兜底。宁可少生成（后续全量跑会补齐），不连带全章。
+    """
+    if not units:
+        return []
+    names: set = set()
+    for unit in units:
+        for frame_kind in ("ff", "lf"):
+            try:
+                names |= set(_frame_spec_roster(unit, frame_kind) or ())
+            except Exception:
+                pass
+        kfs = (unit.get("frame_layouts") or {}).get("kfs") or []
+        for i in range(len(kfs)):
+            try:
+                names |= set(_frame_spec_roster(unit, "keyframe", i) or ())
+            except Exception:
+                pass
+        for entry in unit.get("char_layout") or []:
+            if isinstance(entry, dict):
+                for key in ("name", "identifier"):
+                    if entry.get(key):
+                        names.add(str(entry[key]))
+    text = json.dumps(units, ensure_ascii=False)
+    out = []
+    for char in characters:
+        ident = str(char.get("identifier") or "")
+        if ident and (ident in names or ident in text):
+            out.append(char)
+    return out
+
+
 async def _generate_missing_portraits(
     characters: list[dict],
     bank: CharacterBank,
@@ -546,8 +607,9 @@ async def _generate_missing_portraits(
     from vimax.agents.character_portraits_generator import CharacterPortraitsGenerator
     from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
 
-    # 肖像专用适配器：16:9 横屏、不加风格前缀、不替换敏感词（英文 prompt）
-    # 2026-08-22 升级 2560x1440（= 3,686,400 像素）满足 Seedream 4.5 像素下限 3686400
+    # 肖像专用适配器：9:16 竖屏全身（与分镜帧同画幅，脸占画面高度更大）、
+    # 不加风格前缀（风格由生成器按 VIDEO_STYLE 注入）、不替换敏感词（英文 prompt）。
+    # 2026-08-22 升级 1440x2560（= 3,686,400 像素）满足 Seedream 4.5 像素下限 3686400
     portrait_adapter = ImageGeneratorAiVideoAdapter(
         size="1440x2560",
         skip_prefix=True,
@@ -999,21 +1061,14 @@ async def _try_qc_repair(image_adapter, shot: dict, frame_path: str, frame_kind:
     if not edited or not _validate_frame(edited):
         _bridge_log("  [REPAIR] 编辑失败/输出无效，回落重抽")
         return False
-    Path(edited).replace(frame_path)
-    # v6.x.x bug fix：_maybe_qc_frame 返回 bool，完整 QcResult 在 shot["_qc_last"]
-    # （旧代码用 `qc2.has_hallucination` 触发 AttributeError，触发条件：_try_qc_repair
-    # 实际被调用时——之前所有单测都 mock 掉 _try_qc_repair 返 True/False，从未走到
-    # 内部 i2i+复检路径，所以 bug 一直藏到真实跑批才暴露）。
-    qc2_critical = await _maybe_qc_frame(shot, frame_path, frame_kind, characters, empty_scene, kf_index=kf_index)
-    # v6.x.x：runtime type assertion 防回归——_maybe_qc_frame 必须返 bool，
-    # 任何返回类型漂移都会立刻定位到本行（静态检查 / 单测都覆盖不到这种类型契约）。
-    assert isinstance(qc2_critical, bool), \
-        f"_maybe_qc_frame 应返 bool，实测 {type(qc2_critical)}（_qc_last={shot.get('_qc_last')!r}）"
-    if qc2_critical:
-        _bridge_log("  [REPAIR] 修复后复检仍 critical，回落重抽")
-        return False
-    _bridge_log("  [REPAIR] 修复后复检通过")
-    return True
+    # P0-6：任何二修覆盖原图前都必须复检（含「不得保留红框」断言）；
+    # 免检/跳过 QC 不算通过。旧实现先 replace 再复检，且把 error=skipped 当通过。
+    if await _accept_doodle_refinement(edited, frame_path, shot, frame_kind, characters,
+                                       empty_scene, prompt=None, kf_index=kf_index):
+        _bridge_log("  [REPAIR] 修复后复检通过")
+        return True
+    _bridge_log("  [REPAIR] 修复后复检未通过/未执行，回落重抽")
+    return False
 
 
 def _del_frame_and_hash(frame_path, hash_path, label, idx, logger):
@@ -1049,8 +1104,7 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
     审计 S4）。
 
     reference_paths: 参考图路径。语义变化（增删/换图）应触发重新生成——
-    但路径本身是文件引用，哈希路径的规范性已由调用方保证（内容不变则路径语义
-    不变）。实际参考图的 mtime/size 变化由上层文件系统缓存处理。
+    路径及文件字节摘要同时入键，角色静态/动态外观也入键，原位替换不能复用旧帧。
     """
     def _normalize(text: str) -> str:
         """规范化文本：strip + 统一空白字符，消除 LLM 格式噪音。"""
@@ -1076,7 +1130,7 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
     stable_fields.append(keywords_str)
 
     key_parts = [
-        STYLE_PREFIX,                      # 风格前缀变化时首帧也应重新生成
+        style_prefix_for_canvas("9:16"),          # 风格前缀（含本帧画幅）变化时首帧也应重新生成
         f"lock={lock_kind}",               # 锁类型是 prompt 语义的一部分
     ]
     key_parts.extend(stable_fields)
@@ -1096,10 +1150,16 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
     if empty_scene:
         key_parts.append("empty_scene")    # 空镜判定翻转时帧应重做
 
-    # 参考图路径语义纳入哈希（审计 S4：此前不入哈希，参考图变了但哈希不变）
+    # 参考图路径语义纳入哈希（审计 S4：此前不入哈希，参考图变了但哈希不变）。
+    # 2026-10-31 P1-7：只哈希路径会漏掉「同路径原位替换」（重做 base.png/wide.png
+    # 后路径不变、图像已变）→ 旧帧被误判缓存命中继续复用。改为路径 + 文件字节摘要。
     for ref in (reference_paths or []):
         p = Path(ref)
-        key_parts.append(f"ref={_normalize(str(ref))}:sha256={hashlib.sha256(p.read_bytes()).hexdigest()}")
+        try:
+            digest = hashlib.sha256(p.read_bytes()).hexdigest()
+        except OSError:
+            digest = "unreadable"   # 读不到就按不可读入键，绝不静默复用旧帧
+        key_parts.append(f"ref={_normalize(str(ref))}:sha256={digest}")
     key_parts.append(json.dumps([
         {k: c.get(k) for k in ("identifier", "static_features", "dynamic_features")}
         for c in (characters or []) if isinstance(c, dict)
@@ -1358,7 +1418,7 @@ def _compose_frame_refs_by_category(
         ("props", list(prop_refs)),
     ]
     n_total = len({p for _, items in buckets for p in (items or []) if p and Path(p).exists()})
-    frame_tag = "ff" if for_frame == "首帧" else "lf"
+    frame_tag = {"首帧": "ff", "尾帧": "lf"}.get(for_frame, "kf")
     shot_dir = shot_work_dir(shot.get("index", 0))
     composed = fit_refs(buckets, max_refs, shot_dir, frame_tag)
     if n_total > max_refs:
@@ -1380,13 +1440,13 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
     顺序：场景资产图（环境锚定）→ 出镜角色肖像（人物形象）→ 出镜道具资产图。
     空镜只注入场景资产图（禁止角色/道具参考，防人物渗入）。
 
-    for_frame: "首帧"/"尾帧"。动作镜头首帧跳过场景资产图（场景图被硬约束
-    "禁止人物"，与多角色参考图矛盾时场景图占上风、人物被压制——钩子首帧
-    几乎无人）。尾帧/关键帧保留场景参考图（环境锚定，NO_LAYOUT 锁下无碍）。
+    for_frame: "首帧"/"尾帧"/"关键帧"。三种帧共用同一套场景资产图策略——
+    同一镜头的首帧与尾帧必须环境同源（P0-5：旧实现让动作镜头首帧跳过场景图、
+    尾帧却注入，ff/lf 背景/船型/水面光线各画一套，I2V 只能靠变形硬接）。
+    场景图带「禁止人物」硬约束，与角色参考同框时用 NO_LAYOUT 锁与 spec 名单
+    约束人数，不再靠"首帧不给场景图"回避。
     """
     empty_scene = is_empty_scene(shot, characters or [])
-    # 动作镜头首帧：不注入场景资产图
-    is_action_ff = (for_frame == "首帧") and _is_action_shot(shot, characters) and not empty_scene
     scene_refs = _collect_scene_asset_refs(shot)
     # 09-13 特写帧场景门控：spec 含「特写」的帧是局部构图，广角场景资产图会
     # 把构图拉回全景（shot_4 lf 手部特写 3 次 QC 未中根因）——跳过场景参考。
@@ -3110,7 +3170,7 @@ def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
                     " Strictly no swimming pool, no indoor pool, no ceramic tile, "
                     "no white tile surface, no bathtub, no modern architecture."
                 )
-        text = sanitize_prompt(ensure_prefix(text, STYLE_PREFIX), verbose=False)
+        text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas("9:16")), verbose=False)
         text = add_image_strict_constraints(text, "首帧" if frame_kind == "first_frame" else "尾帧", shot=shot, characters=characters)
         # v6.50：多模板拼接点的双句号归一化（防御性兜底，矛盾门此前会拦）
         while "。。" in text:
@@ -3230,10 +3290,26 @@ async def _doodle_refine_first_frame(
 
 
 async def _accept_doodle_refinement(refined, target, shot, frame_kind, characters,
-                                    empty_scene, prompt, kf_index=None):
-    """QC the candidate before replacement; unknown/skipped QC preserves the original."""
+                                    empty_scene, prompt=None, kf_index=None):
+    """二修候选的准入：QC 通过才覆盖原图，未知/跳过 QC 一律保留原图.
+
+    P0-6：旧路径把带 8px 红框的候选直接 replace 覆盖已过 QC 的原图，既不复检
+    红框残留、也不留退路。现在：
+      1) 候选先过 _maybe_qc_frame（prompt 追加「不得保留红框」断言）；
+      2) ok=False 或 error=skipped（免检/未真正检过）→ 拒绝覆盖；
+      3) 覆盖前备份原图与 sidecar，替换/写 sidecar 失败时回滚。
+    prompt=None 时按 _maybe_qc_frame 的同一规则从 shot 的 *_desc_final 取。
+    """
     if not refined or not _validate_frame(refined):
         return False
+    if prompt is None:
+        if frame_kind == "last_frame":
+            prompt = shot.get("lf_desc_final") or shot.get("ff_desc_final") or ""
+        elif frame_kind == "keyframe":
+            prompt = (shot.get("kf_0_desc_final") or shot.get("kf_desc_final")
+                      or shot.get("ff_desc_final") or shot.get("lf_desc_final") or "")
+        else:
+            prompt = shot.get("ff_desc_final") or shot.get("lf_desc_final") or ""
     from shared.image_qc import sidecar_path, write_sidecar
     from uuid import uuid4
     import shutil
@@ -3377,7 +3453,7 @@ async def _gen_first_frame_async(
                                     role_scan_text=shot.get("ff_desc", ""))
     if _ff_prop:
         _ff_pre = f"{_ff_pre}。{_ff_prop}"
-    ff_desc_full = sanitize_prompt(ensure_prefix(_ff_pre, STYLE_PREFIX), verbose=False)
+    ff_desc_full = sanitize_prompt(ensure_prefix(_ff_pre, style_prefix_for_canvas("9:16")), verbose=False)
     ff_desc_full = add_image_strict_constraints(ff_desc_full, "首帧", shot=shot, characters=characters)
     # ---- prompt 组装结束 ----
     gen_kwargs = dict(
@@ -3470,8 +3546,8 @@ async def _gen_first_frame_async(
                     return str(ff_path)
             # v6.30：doodle 区域编辑 fallback — 精确空间约束 prompt 调不到位时
             # 走 i2i + 红框二修；QC critical 之后才做（不在已知坏帧上浪费 i2i）。
-            # 失败保留原图（graceful degradation）。哈希键不变（基于 prompt，
-            # 不是 image），同 prompt 重跑会再调一次 doodle（2x 成本但可控）。
+            # 失败保留原图（graceful degradation）。哈希在二修前已落盘，重跑命中
+            # 缓存直接复用当前图（成功=修好的图，失败=原图），不重复扣费。
             doodle_cfg = _detect_spatial_fallback(ff_desc_full, shot)
             if doodle_cfg:
                 doodle_tmp = ff_path.parent / f"{ff_path.stem}_doodle_tmp.png"
@@ -3630,7 +3706,7 @@ async def _gen_last_frame_async(
         f"，构图需按尾帧描述重新布局，"
         f"可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。"
     )
-    lf_desc_full = sanitize_prompt(ensure_prefix(lf_desc_full, STYLE_PREFIX), verbose=False)
+    lf_desc_full = sanitize_prompt(ensure_prefix(lf_desc_full, style_prefix_for_canvas("9:16")), verbose=False)
     lf_desc_full = add_image_strict_constraints(lf_desc_full, "尾帧", shot=shot, characters=characters)
     # ---- lf prompt 组装结束 ----
 
@@ -4042,7 +4118,7 @@ async def _gen_keyframes_async(
                 f"水面荷叶分布不变（仅环境连续性约束，人物站位/动作以本帧描述为准），"
                 f"表现动作过程中的瞬间状态。"
             )
-            kf_desc_full = sanitize_prompt(ensure_prefix(kf_desc_full, STYLE_PREFIX), verbose=False)
+            kf_desc_full = sanitize_prompt(ensure_prefix(kf_desc_full, style_prefix_for_canvas("9:16")), verbose=False)
             kf_desc_full = add_image_strict_constraints(kf_desc_full, "关键帧", shot=shot, characters=characters)
             refs = reference_paths if reference_paths else []
             # 09-13：逐帧重配参考图（ff 整图锚条件化 + 道具/肖像参图 per-frame）。
@@ -4129,7 +4205,7 @@ async def _gen_keyframes_async(
                     break
                 # v6.30：doodle 区域编辑 fallback（关键帧同首帧——精确空间约束
                 # prompt 调不到位时走 i2i+红框二修）。失败保留原图（graceful degradation）。
-                # 哈希键不变（基于 prompt，不是 image），同 prompt 重跑会再调一次 doodle。
+                # 哈希在二修前已落盘：重跑命中缓存复用当前图，不重复扣费。
                 kf_doodle_cfg = _detect_spatial_fallback(kf_desc_full, shot)
                 if kf_doodle_cfg:
                     doodle_tmp = kf_path.parent / f"{kf_path.stem}_doodle_tmp.png"
@@ -4194,9 +4270,10 @@ async def gen_shot_frames(
     # 被图片模型简化成单人，首帧人物/构图全错，且场景/道具与资产库不一致。
     # 空镜只注入场景资产图（禁止角色/道具肖像，防人物渗入）。
     #
-    # 修改2（2026-08-07）：动作镜头首帧不注入场景资产图——场景图被硬约束"禁止
-    # 人物"，与多角色参考图矛盾时场景图占上风、人物被压制（钩子首帧几乎无人）。
-    # 尾帧/关键帧仍保留场景参考图（环境锚定，NO_LAYOUT 锁下无碍）。
+    # 2026-10-31 P0-5：首帧与尾帧共用同一套场景资产图（同镜环境必须同源）。
+    # 旧实现让动作镜头首帧跳过场景图、尾帧注入，同一镜头 ff/lf 背景/船型/水面
+    # 光线分裂，I2V 只能靠画面变形硬接。人数由 spec 名单 + NO_LAYOUT 锁约束，
+    # 不再靠"首帧不给场景图"回避。
     # 08-16：尾帧与关键帧拆开收集——尾帧传 lf_desc（威胁源没入水中时不注入刺客
     # 肖像），关键帧传合并全文（动作中间态，威胁源以动作可见→保留肖像供
     # kf0「刺客半身探出举匕首」使用）。
@@ -4235,11 +4312,11 @@ async def gen_shot_frames(
     if want_lf:
         # 尾帧 generation（全镜头覆盖：首尾双关键帧钳制风格漂移，
         # 不再按 variation_type 过滤——LLM 常输出空值导致全部镜头无尾帧）
-        # 尾帧参考图：场景/角色/道具资产（锚定人物形象与环境一致）。
-        # 不再把首帧整图作为尾帧参考图——首帧是动作起点，直接抄首帧构图会让
-        # 尾帧几乎复刻首帧（刺客同位置、听香位置错乱、两帧雷同），
-        # 动作演变只能靠 lf_desc 文字描述驱动。首帧只通过 frame_refs_full 的
-        # 场景资产图隐式锚定环境/光线，不用整图锁死尾帧构图。
+        # 尾帧参考图 = 本镜首帧整图（基底）+ 场景/角色/道具资产。
+        # 2026-10-31 P0-5：旧实现完全不参考本镜刚生成的首帧，ff/lf 各画一套
+        # 环境。现在首帧整图排第一张作人物/服装/环境基底，构图漂移由 NO_LAYOUT
+        # 锁 + prompt 里的「按尾帧描述重新布局」指令约束，不再用"不给首帧"回避
+        # 构图雷同。首帧文件缺失时直接失败（禁止尾帧脱离首帧单独成图）。
         if not ff_path.is_file() or (want_ff and not ff_path_str):
             raise FileNotFoundError(f"shot {idx}: last frame requires a valid first frame")
         from shared.ref_compose import fit_flat, active_image_ref_limit

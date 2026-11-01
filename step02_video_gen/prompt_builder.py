@@ -18,7 +18,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 from shared import style_prefix
 from shared.style_prefix import (
     STYLE_PREFIX, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt,
-    is_empty_scene, video_negative_prompt,
+    is_empty_scene, video_negative_prompt, style_lock_prompt,
 )
 from shared.style_cinematic import get_cinematic_prefix, get_director_negative
 from shared.config import CINEMATIC_STYLE
@@ -51,6 +51,36 @@ except Exception:
 # 参考图模式: "image" = 图生视频（需帧图片），"text" = 纯文生视频（默认）
 _REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
 _USE_TEXT_TO_VIDEO = _REFERENCE_MODE == "text"
+# 记录 import 期值：调用方/测试若显式改写模块常量（如 pb._MODEL_VOICE = True），
+# 视为强制覆盖，动态判定让位于它；否则按运行期 env + 模型能力重算。
+_MODEL_VOICE_DEFAULT = _MODEL_VOICE
+
+
+def _model_voice_enabled() -> bool:
+    """运行期判定「视频模型自带语音」（S17-2）.
+
+    `_MODEL_VOICE` 是 import 期常量：同一进程里改 `VIDEO_MODEL_VOICE` 或切换
+    `VIDEO_PROVIDER`（有声/无声模型）后，旧值会继续决定是否注入对白/音效。
+    这里按调用时 env + 当前模型能力重算；常量保留供旧引用/测试使用。
+    """
+    if _MODEL_VOICE != _MODEL_VOICE_DEFAULT:
+        return bool(_MODEL_VOICE)
+    if os.getenv("VIDEO_MODEL_VOICE", "1").strip() != "1":
+        return False
+    try:
+        from shared.model_caps import active_video_supports_audio
+        return bool(active_video_supports_audio())
+    except Exception:
+        return True
+
+
+def _reference_mode() -> str:
+    """运行期读取 VIDEO_REFERENCE_MODE（S17-2）."""
+    return os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
+
+
+def _text_to_video() -> bool:
+    return _reference_mode() == "text"
 
 
 def _extract_characters_from_desc(desc: str, characters: list) -> list:
@@ -1012,7 +1042,7 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     # 6.0 场景背景音（所有镜头）：audio_cue 由 step01 生成，如「蝉鸣声渐起、水波轻拍」。
     # 贴合当前场景即可——对话镜头同样保留背景音（人声在前、环境音垫底）。
     audio_cue = shot.get("audio_cue", "").strip()
-    if _MODEL_VOICE:
+    if _model_voice_enabled():
         if audio_cue:
             parts.append(f"（背景音效：{audio_cue}）")
         elif not is_character_shot:
@@ -1049,10 +1079,9 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
         )
 
     # ========== 8. 风格收束 ==========
-    parts.append(
-        "整段视频每一帧都保持写实古风真人风格，首尾画风完全一致，"
-        "禁止中途转为动漫、动画、2D渲染、卡通脸或任何非写实风格。"
-    )
+    # 跟随当前 VIDEO_STYLE（ink_painting 等），不再写死「写实古风真人」——
+    # 写死会与水墨首帧正面冲突（P0-1 同根因的视频侧入口）。
+    parts.append(style_lock_prompt())
 
     # ========== 8b. 色彩氛围锚点（spark-video mood_anchor 吸收）==========
     tone = (shot.get("color_tone") or "").strip()
@@ -1151,9 +1180,12 @@ def _build_seedance_concise_prompt(shot: dict, characters: list | None = None) -
         seg_text = format_motion_segments(motion_segs, style="en_s")  # Seedance 2.0 推荐英文 's'
         if seg_text and len(seg_text) <= 80:
             parts.append(f"【时间分段】{seg_text}")
-    # 背景音效（audio_cue 单行）——对话/音色留给视频模型自己理解
+    # 背景音效（audio_cue 单行）——对话/音色留给视频模型自己理解。
+    # S17-1：无声模型（Seedance 1.0 pro）注入音效指令只会白占 500 字上限，
+    # 且模型根本不会生成声音；按 active_video_supports_audio() 门控。
+    from shared.model_caps import active_video_supports_audio
     audio_cue = shot.get("audio_cue", "").strip()
-    if audio_cue:
+    if audio_cue and active_video_supports_audio():
         parts.append(f"（背景音效：{audio_cue}）")
     return "\n".join(parts)
 
@@ -1213,7 +1245,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     # 英文 token 仅 Agnes 使用，中文模型用纯中文版（video_negative_prompt 按 VIDEO_PROVIDER 判定）
     negative = (
         video_negative_prompt()
-        if _MODEL_VOICE
+        if _model_voice_enabled()
         else video_negative_prompt() + "、人声、旁白配音、对话语音、歌声"
     )
     # 物理逻辑约束：防止违反常识的场景（车马上船、水上行走等）
@@ -1235,11 +1267,11 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     last_frame_image_path = None
     extra_keyframe_paths = []
 
-    if _USE_TEXT_TO_VIDEO:
+    if _text_to_video():
         # 文生视频模式：完全不使用任何参考图（强制 T2V）
         reference_paths = []
         pass
-    elif _REFERENCE_MODE == "r2v":
+    elif _reference_mode() == "r2v":
         # R2V 模式：所有参考图都进 reference_paths（参考生视频，角色/道具/场景一致性锚定），
         # 不传首帧/尾帧/关键帧。此前 r2v 参考图被按位置塞进 image_path/last_frame/
         # extra_keyframes（首帧/尾帧时间语义），而 bailian R2V 只看 reference_paths——
@@ -1310,7 +1342,10 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     # 目前只接 volcengine（Seedance）这条链；其他 provider 保留各自显式能力分支。
     _media_items = None
     _media_selection = None
-    if _REFERENCE_MODE == "image" and os.getenv("VIDEO_PROVIDER", "").strip().lower() == "volcengine":
+    # S17-2：触发条件按**能力**而非硬编码 provider 名——Seedance 系（volcengine /
+    # agent_plan）统一走同一份素材计划；其他 provider 仍保留各自分支。
+    from shared.model_caps import active_video_is_seedance
+    if _reference_mode() == "image" and active_video_is_seedance():
         from shared.video_media_plan import plan_image_media
         from shared.model_caps import active_video_model, get_seedance_cap
         _cap = get_seedance_cap(active_video_model())
@@ -1340,7 +1375,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     # 参考图清单声明（豆包模板吸收 #1）：在路径解析完成后再注入，
     # 让视频模型明确每张参考图的语义（首帧起点/尾帧终点/关键帧/r2v 一致性参考）。
     # text 模式无参考图返回空串，不改变现有 text 模式 prompt 形态。
-    if _REFERENCE_MODE == "r2v":
+    if _reference_mode() == "r2v":
         # r2v：给每张参考图标注具体用途（人物形象/场景/一致性），
         # 实现 seedance2-skill 的「@图片N 作为XX」逐图语义声明。
         # v6.103：把本镜的**剩余字符预算**传下去——模型 cap 减去已组装的
@@ -1357,7 +1392,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     else:
         ref_list = _build_reference_list(
             image_path, last_frame_image_path, extra_keyframe_paths,
-            mode=mode, ref_kind=_REFERENCE_MODE, media_items=_media_items,
+            mode=mode, ref_kind=_reference_mode(), media_items=_media_items,
         )
         if ref_list:
             full_prompt = full_prompt + "\n\n" + ref_list
@@ -1377,7 +1412,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
 
     # 把 r2v 模式实际提交的参考图列表缓存到 shot，让 submit_poll._get_shot_hash
     # 把 r2v 参考图变化纳入哈希（换角色肖像/场景资产图应触发重生成）
-    if _REFERENCE_MODE == "r2v":
+    if _reference_mode() == "r2v":
         shot["_r2v_refs_cache"] = list(reference_paths or [])
 
     # 运镜指令：step01 端的 camera_movement 结构化字段（中文运镜词）

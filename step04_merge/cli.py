@@ -46,6 +46,8 @@ class BootstrapOptions:
     subtitle_timings: Path | None = None
     video_candidates: Path | None = None
     audio_candidates: Path | None = None
+    #: --shots 子集试合并（不放进 ENHANCEMENT_FLAGS：无候选根也能直接单跑）
+    shots: str | None = None
     argv: tuple = ()
 
     @property
@@ -71,6 +73,9 @@ def build_parser(description: str = "") -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         description=description or "step04 视频合成",
+        # 严格解析（S19-3）：新增 --shots 后，argparse 默认前缀缩写会把
+        # 拼错的 --shot 当成 --shots 接受。
+        allow_abbrev=False,
         epilog="未给运行范围参数时，章/部沿用 .env.content 的设置。")
     add_scope_arguments(parser)
     parser.add_argument("--motion-plan", type=Path, default=None, metavar="FILE",
@@ -91,6 +96,9 @@ def build_parser(description: str = "") -> argparse.ArgumentParser:
                         help="video_candidates.v1 清单（按稳定身份取片，不按镜号猜路径）")
     parser.add_argument("--audio-candidates", type=Path, default=None, metavar="FILE",
                         help="audio_candidates.v1 清单（含 audio_identity.v2 富身份）")
+    parser.add_argument("--shots", default=None, metavar="SPEC",
+                        help="只试合并指定镜头（逗号分隔/区间，如 1,3-5）。输出写 "
+                             "final_shots_<tag>.mp4，不覆盖正式 final.mp4；不给则整章合并")
     return parser
 
 
@@ -106,6 +114,14 @@ def parse_bootstrap(argv=None) -> BootstrapOptions:
             "增强参数 "
             + "、".join(f"--{name.replace('_', '-')}" for name in requested)
             + " 必须与 --candidate-root DIR 一起给出（候选隔离；无增强参数才走旧合法路径）")
+
+    if getattr(args, "shots", None):
+        from shared.shot_selector import parse_shot_selector
+        try:
+            if not parse_shot_selector(args.shots):
+                parser.error("--shots 不能为空（示例：--shots 1 或 --shots 1,3-5）")
+        except ValueError as exc:
+            parser.error("--shots 格式非法：%s" % exc)
 
     from shared.run_scope import apply_scope
     resolved = apply_scope(args.chapter, args.book, args.book_name)
@@ -125,6 +141,7 @@ def parse_bootstrap(argv=None) -> BootstrapOptions:
         subtitle_timings=args.subtitle_timings,
         video_candidates=args.video_candidates,
         audio_candidates=args.audio_candidates,
+        shots=getattr(args, "shots", None),
         argv=tuple(sys.argv[1:] if argv is None else argv),
     )
 

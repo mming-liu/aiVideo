@@ -56,6 +56,20 @@ class FramingDiversityV2Constraint(Constraint):
         if not isinstance(ctx.shots, list) or len(ctx.shots) < 3:
             return repairs
 
+        # 2026-11-01 S16-1（M09 根因 A）：**一趟内跑到不动点**。
+        # 旧实现每段只改一个中点：12 镜全同景别时第 1 趟改 mid=5，左右两侧
+        # [0..4]（5 镜）与 [6..11]（6 镜）仍 >=3；第 2 趟又改 mid=2/8，末尾
+        # [9..11] 仍 >=3；第 3 趟再改 mid=10。于是同进程多次 finalize 每次
+        # revision 都变（fb465089 → 2d9aa118 → 9a02374d）。
+        # 有界循环保证一次 apply 即达不动点，且不改任何调用方契约。
+        for _ in range(len(ctx.shots)):
+            if not self._apply_once(ctx, repairs):
+                break
+        return repairs
+
+    def _apply_once(self, ctx, repairs: list[RepairRecord]) -> bool:
+        """扫一遍连续同景别段并各改一个中点；返回本轮是否发生替换."""
+        changed = False
         # 第一步：扫连续同景别段
         sequences: list[tuple[int, int, str | None]] = []
         cur_start = 0
@@ -104,4 +118,5 @@ class FramingDiversityV2Constraint(Constraint):
                     after=new_prompt,
                 )
             )
-        return repairs
+            changed = True
+        return changed

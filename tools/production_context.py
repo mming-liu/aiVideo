@@ -337,6 +337,205 @@ def load_record(path) -> "dict | None":
         return None
 
 
+
+
+# ---------------------------------------------------------------------------
+# 5) 门禁离线重签（S10R：零模型调用）
+# ---------------------------------------------------------------------------
+REFRESH_SCHEMA = "step01.gate_refresh/1"
+REFRESH_ARTIFACTS = ("step01_quality.json", "step01_audit.json",
+                     "step01_commit.json", "step01_adoption.json")
+
+
+def _staging_root() -> Path:
+    """可写的暂存根：优先用调用方给的（沙箱里由上层预建），否则临时目录."""
+    env = os.environ.get("PRODUCTION_CONTEXT_STAGING")
+    if env:
+        root = Path(env)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+    import tempfile
+    return Path(tempfile.mkdtemp(prefix="pc_stage_"))
+
+
+def _chapter_rel(chapter_dir: Path) -> Path:
+    """章目录相对 output 根的路径（暂存时保持同构，便于逐文件核对）."""
+    parts = list(Path(chapter_dir).parts)
+    try:
+        i = parts.index("output")
+    except ValueError:
+        return Path(Path(chapter_dir).name)
+    return Path(*parts[i + 1:])
+
+
+def _read_novel_text(chapter: int, novel_file: "str | None") -> str:
+    """读本章原文；**禁用场景分析**（该分析会真实调用文本模型，违反 model_sends=0）.
+
+    `shared.chapter_reader._analyzing_scenes` 是既有的防递归守卫：置 True 时
+    `_get_chapter_scenes` 直接返回空分析、不调用模型、不写缓存；而
+    `filter_section_by_chapter` 当前只记录分析结果、不过滤正文（见其 docstring），
+    因此原文与有缓存时一致。
+    """
+    import shared.chapter_reader as chapter_reader
+    import step01_script_gen.main as step01_main
+
+    previous = chapter_reader._analyzing_scenes
+    chapter_reader._analyzing_scenes = True
+    try:
+        if novel_file:
+            return step01_main.read_chapter(novel_file, chapter=chapter)
+        return step01_main.read_chapter(chapter=chapter)
+    finally:
+        chapter_reader._analyzing_scenes = previous
+
+
+def build_refreshed_gate(receipt: dict, *, novel_file: "str | None" = None) -> dict:
+    """在暂存目录重建四份门禁产物（不触碰正式目录、零模型调用）.
+
+    返回 `{name: 文本}`；调用方按 quality → audit → commit → adoption 顺序落盘
+    （manifest 最后写，崩溃时摘要对不上即拒用）。
+    """
+    import json as _json
+
+    apply_context(receipt)
+    ch = Path(receipt["formal_chapter"])
+    script_path = ch / "script_result.json"
+    script = _json.loads(script_path.read_text(encoding="utf-8"))
+
+    root = _staging_root()
+    staging = root / _chapter_rel(ch)
+    staging.mkdir(parents=True, exist_ok=True)
+    (staging / "script_result.json").write_bytes(script_path.read_bytes())
+
+    # 导入 step01.main 会按 OUTPUT_BASE 建日志；确定性检查器运行时也会写日志。
+    # 暂存根可写、正式根在沙箱里不可写，因此整段构建期都把 OUTPUT_BASE 指向暂存根
+    # （构建只依赖 script 字典与原文，不依赖正式目录里的其它产物）。
+    previous_base = os.environ.get("OUTPUT_BASE")
+    os.environ["OUTPUT_BASE"] = str(root)
+    try:
+        import step01_script_gen.main as step01_main
+        novel_text = _read_novel_text(
+            int((receipt.get("scope") or {}).get("chapter") or 1), novel_file)
+        quality = step01_main._build_step01_quality_gate(script, novel_text)
+    finally:
+        if previous_base is None:
+            os.environ.pop("OUTPUT_BASE", None)
+        else:
+            os.environ["OUTPUT_BASE"] = previous_base
+
+    from shared.quality_gate import (QualityGateError, build_step01_commit_manifest,
+                                     ensure_script_revision, sha1_file)
+    revision = ensure_script_revision(script)
+    if quality.get("status") != "PASS" or quality.get("blocking"):
+        raise ContextError(
+            "refresh_gate_blocked",
+            "确定性质量门未通过（status=%s blocking=%s hard=%s visual=%s）："
+            "不得用重签掩盖真实 blocking" % (
+                quality.get("status"), quality.get("blocking"),
+                quality.get("hard_count"), quality.get("visual_risk_count")),
+            categories=quality.get("blocking_categories") or [])
+    if str(quality.get("script_revision") or "") != revision or \
+            revision != str(receipt.get("script_revision") or ""):
+        raise ContextError("refresh_revision_mismatch",
+                           "重算质量门的 revision 与采纳凭据不一致",
+                           expected=str(receipt.get("script_revision") or ""),
+                           actual=str(quality.get("script_revision") or ""))
+
+    audit = _json.loads((ch / "step01_audit.json").read_text(encoding="utf-8"))
+    if str(audit.get("status") or "").strip().lower() != "ok":
+        raise ContextError("refresh_audit_not_ok",
+                           "原审计结论不是 ok，不能离线重签：status=%r" % audit.get("status"))
+    if str(audit.get("input_revision") or "") != revision:
+        raise ContextError("refresh_audit_revision_mismatch",
+                           "原审计 input_revision 与当前 revision 不一致",
+                           audit=str(audit.get("input_revision") or ""), current=revision)
+    blocking_sev = {"hard", "visual_risk", "blocking"}
+    blocking = [i for i in (audit.get("issues") or [])
+                if str((i or {}).get("severity") or "").strip() in blocking_sev]
+    if blocking:
+        raise ContextError("refresh_audit_blocking",
+                           "原审计仍含 blocking 条目，不能离线重签",
+                           blocking=len(blocking))
+    if not str(audit.get("audit_scope") or "").strip():
+        raise ContextError("refresh_audit_scope_missing", "原审计缺 audit_scope")
+
+    previous_fp = str(quality.get("rule_source_fingerprint") or "")
+    old_audit_fp = str(audit.get("rule_source_fingerprint") or "")
+    audit["rule_source_fingerprint"] = previous_fp
+    audit["duration_band"] = quality.get("duration_band")
+    audit["reverified_from_fingerprint"] = old_audit_fp
+    audit["reverified_at"] = _now()
+    audit["reverified_by"] = REFRESH_SCHEMA
+
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(staging / "step01_quality.json", quality, ensure_ascii=False, indent=2)
+    atomic_dump_json(staging / "step01_audit.json", audit, ensure_ascii=False, indent=2)
+
+    previous_manifest = {}
+    try:
+        previous_manifest = _json.loads((ch / "step01_commit.json").read_text(encoding="utf-8"))
+    except (OSError, _json.JSONDecodeError):
+        previous_manifest = {}
+    manifest = build_step01_commit_manifest(
+        run_id=str(previous_manifest.get("run_id") or ""),
+        created_at=str(previous_manifest.get("created_at") or _now()),
+        revision=revision,
+        rule_source_fingerprint=previous_fp,
+        rule_version=str(quality.get("rule_version") or ""),
+        audit_scope=str(audit.get("audit_scope") or ""),
+        chapter_dir=staging,
+        status="COMMITTED",
+        blocking=[],
+        detail="gate refreshed offline (rule-source decoupled); script bytes unchanged",
+        prompt_source_fingerprint=str(previous_manifest.get("prompt_source_fingerprint") or ""),
+        audit_status=str(audit.get("status") or ""),
+    )
+    manifest["gate_refresh"] = {
+        "schema": REFRESH_SCHEMA,
+        "at": _now(),
+        "from_fingerprint": old_audit_fp,
+        "to_fingerprint": previous_fp,
+        "script_sha1": sha1_file(staging / "script_result.json"),
+        "model_sends": 0,
+    }
+    atomic_dump_json(staging / "step01_commit.json", manifest, ensure_ascii=False, indent=2)
+
+    adoption = _json.loads((ch / "step01_adoption.json").read_text(encoding="utf-8"))
+    formal = dict(adoption.get("formal_sha256") or {})
+    for name in ("script_result.json", "step01_quality.json", "step01_audit.json",
+                 "step01_commit.json"):
+        # adoption 的 formal_sha256 全部是 SHA-256（与 verify() 的 _sha256_file 对齐）；
+        # commit manifest 的 artifacts 才是 SHA-1。两者不能混用。
+        formal[name] = _sha256_file(staging / name)
+    adoption["formal_sha256"] = formal
+    adoption["gate_refresh"] = {
+        "schema": REFRESH_SCHEMA,
+        "at": _now(),
+        "from_fingerprint": old_audit_fp,
+        "to_fingerprint": previous_fp,
+        "script_sha256": _sha256_file(staging / "script_result.json"),
+        "script_revision": revision,
+        "duration_band": quality.get("duration_band"),
+        "model_sends": 0,
+    }
+    atomic_dump_json(staging / "step01_adoption.json", adoption, ensure_ascii=False, indent=2)
+
+    return {name: (staging / name).read_text(encoding="utf-8")
+            for name in REFRESH_ARTIFACTS}
+
+
+def apply_refreshed_gate(receipt: dict, files: dict) -> list:
+    """按 quality → audit → commit → adoption 顺序原子替换正式产物."""
+    from shared.json_io import atomic_dump_json
+    ch = Path(receipt["formal_chapter"])
+    written = []
+    for name in REFRESH_ARTIFACTS:
+        payload = json.loads(files[name])
+        atomic_dump_json(ch / name, payload, ensure_ascii=False, indent=2)
+        written.append(name)
+    return written
+
+
 def parse_phase_updates(items) -> dict:
     out = {}
     for item in items or ():
@@ -371,6 +570,12 @@ def main(argv=None) -> int:
     ap.add_argument("--print-record", action="store_true",
                     help="只把运行记录 JSON 打到 stdout（沙箱不允许子进程写 output/ 时，"
                          "交由上层用文件 API 落盘；内容与 --write-record 同一构造函数）")
+    ap.add_argument("--refresh-gate", action="store_true",
+                    help="零模型调用重签 step01 门禁（重建 quality/audit/commit/adoption）")
+    ap.add_argument("--print-refresh", action="store_true",
+                    help="配合 --refresh-gate：只把四份产物 JSON 打到 stdout，由上层落盘")
+    ap.add_argument("--novel-file", default=None,
+                    help="重签时读取的原文文件（默认沿用 step01 入口的默认小说路径）")
     ap.add_argument("--run", action="store_true",
                     help="核验通过后用同一套 env 启动子进程：--run -- python step02a_frame_gen/main.py ...")
     # `--run -- <cmd>` 必须在 argparse 之前手工切开：argparse 会把 `--` 当成"选项结束"，
@@ -394,6 +599,15 @@ def main(argv=None) -> int:
             if got != args.expect_chapter:
                 raise ContextError("chapter_request_mismatch",
                                    "请求第 %d 章，凭据是第 %d 章" % (args.expect_chapter, got))
+        refreshed = None
+        if args.refresh_gate:
+            files = build_refreshed_gate(receipt, novel_file=args.novel_file)
+            if args.print_refresh:
+                _print_json({"schema": "production.gate_refresh/1", "ok": True,
+                             "formal_chapter": receipt["formal_chapter"],
+                             "files": files})
+                return 0
+            refreshed = apply_refreshed_gate(receipt, files)
         verified = verify(receipt)
     except ContextError as exc:
         _print_json({"schema": "production.run_context.failure/1", **exc.payload()})
@@ -404,6 +618,9 @@ def main(argv=None) -> int:
               "context_env": env_plan, "verified": verified}
     if unknown:
         result["ignored_config_keys"] = unknown
+    if refreshed:
+        result["gate_refresh"] = {"schema": "production.gate_refresh/1",
+                                  "written": refreshed, "model_sends": 0}
 
     if args.run:
         cmd = list(run_cmd)

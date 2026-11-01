@@ -244,7 +244,6 @@ def _atomic_reference_sheet(paths, output):
     """Content-addressed destination plus private temporary file for concurrent callers."""
     import hashlib
     import uuid
-    from shared.portrait_stitch import stitch_portraits
     h = hashlib.sha256()
     for item in paths:
         p = Path(item)
@@ -255,7 +254,7 @@ def _atomic_reference_sheet(paths, output):
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name("." + out.stem + "." + uuid.uuid4().hex + ".png")
     try:
-        result = stitch_portraits(paths, str(tmp))
+        result = _stitch(paths, str(tmp))
         if not result:
             return ""
         os.replace(tmp, out)

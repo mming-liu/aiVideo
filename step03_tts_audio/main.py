@@ -150,6 +150,55 @@ def _run_candidate(*, candidate_root, attempt_id, experiment_id, scope, revision
         return artifacts
 
 
+def _write_step03_quality(script: dict, required: list, narr_entries: list) -> dict:
+    """写出 step03 成品验收报告（S18-2：与 step02a/02b 的 product_acceptance 同构）.
+
+    只核**必须有音轨**的单元：有台词的镜头（对白轨）+ 计划里的每条图外旁白。
+    没有台词的纯画面镜头不产出对白音轨，不能据此判 BLOCK。
+    """
+    import hashlib
+    from shared.json_io import atomic_dump_json
+    from shared.quality_gate import attach_gate_metadata
+    from step01_script_gen.quality_issues import RULE_VERSION
+
+    def _sha1(path: Path) -> str:
+        h = hashlib.sha1()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    outputs: dict = {}
+    missing: list = []
+    for shot in required:
+        idx = int(shot.get("index", 0))
+        path = audio_file(idx)
+        if path.exists() and path.stat().st_size > 10240:
+            outputs[str(idx)] = {"path": str(path), "sha1": _sha1(path)}
+        else:
+            missing.append(f"shot {idx}: missing dialogue audio")
+    for entry in narr_entries:
+        index = int(entry.get("index", 0))
+        path = narration_audio_file(index)
+        if path.exists() and path.stat().st_size > 10240:
+            outputs["N%d" % index] = {"path": str(path), "sha1": _sha1(path)}
+        else:
+            missing.append(f"narration N{index}: missing audio")
+    payload = {
+        "source": "step03.product_acceptance",
+        "report_type": "product_acceptance",
+        "rule_version": RULE_VERSION,
+        "status": "BLOCK" if missing else "PASS",
+        "blocking": bool(missing),
+        "missing": missing,
+        "outputs": outputs,
+        "scope": {"shots": sorted(int(s.get("index", 0)) for s in required)},
+    }
+    attach_gate_metadata(payload, script, stage="step03.product_acceptance")
+    atomic_dump_json(CHAPTER_DIR / "step03_quality.json", payload, ensure_ascii=False, indent=2)
+    return payload
+
+
 def main(options=None):
     opts = options if options is not None else (_options or StageOptions())
     _logger.separator()
@@ -184,6 +233,19 @@ def main(options=None):
                                   expected_chapter=CHAPTER_INDEX)
     shots = script.get("shots", [])
     hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
+    # S18-2：--shots 子集合成。script 本身保持完整（revision/门禁都按整稿核），
+    # 只把**生成用**的镜头表换成子集。
+    only_indices = None
+    if getattr(opts, "shots", None):
+        from shared.shot_selector import parse_shot_selector
+        only_indices = parse_shot_selector(opts.shots)
+    gen_script = script
+    if only_indices is not None:
+        gen_script = dict(script)
+        gen_script["shots"] = [s for s in shots
+                               if int(s.get("index", -1)) in only_indices]
+        shots = gen_script["shots"]
+        hook = hook if 0 in only_indices else None
 
     scope = current_scope(CHAPTER_INDEX)
     clips_ctx = None
@@ -303,7 +365,17 @@ def main(options=None):
     # ---- 只规划：产出 SpeechUnits，不调用任何 provider（§T4） ----
     if plan_only:
         from tts.synthesis_job import write_speech_unit_plan
-        units = build_speech_units(script, scope=scope, script_revision=revision)
+        units = build_speech_units(gen_script, scope=scope, script_revision=revision)
+        # S18-3：plan-only 打印扣除转场后的真实可用窗口（与 step04 同一时间线）。
+        from step03_tts_audio.shot_tts import _compute_voice_windows
+        _win, _total = _compute_voice_windows(script, shots)
+        _logger.info("[PLAN] 成片时间轴总长 %.2fs（含 hook 偏移、已扣转场重叠）" % _total)
+        for _idx, (_start, _end) in sorted(_win.items(), key=lambda kv: int(kv[0])):
+            _logger.info("[PLAN]   shot %s: %.2f–%.2fs（可用 %.2fs）"
+                         % (_idx, _start, _end, max(0.0, _end - _start)))
+        for _u in units:
+            _logger.info("[PLAN]   %s: %d 字（预计时长按语速另算）"
+                         % (_u.unit_id, len(str(getattr(_u, "text", "") or ""))))
         target = write_speech_unit_plan(Path(candidate_root) / "plan", units,
                                         scope=scope, script_revision=revision,
                                         provider=tts_config.PROVIDER, source="plan")
@@ -319,9 +391,9 @@ def main(options=None):
             artifacts = _run_candidate(
                 candidate_root=candidate_root, attempt_id=attempt_id,
                 experiment_id=opts.experiment_id or "", scope=scope, revision=revision,
-                source=source, clips_ctx=clips_ctx, script=script)
+                source=source, clips_ctx=clips_ctx, script=gen_script)
             produced = {a.unit_id for a in artifacts}
-            units = build_speech_units(script, scope=scope, script_revision=revision)
+            units = build_speech_units(gen_script, scope=scope, script_revision=revision)
             missing_d = [u.unit_id for u in units
                          if u.kind == "dialogue" and u.unit_id not in produced]
             missing_n = [u.unit_id for u in units
@@ -339,12 +411,12 @@ def main(options=None):
         if policy.tts_required or forced:
             _logger.info("\n=== Generate per-shot TTS (dynamic voice) ===")
             # 初始化音色注册表（跨章节保持角色声音一致）
-            gen_all_shot_tts(script, AUDIO_OUTPUT_DIR, voice_registry, use_async=True,
+            gen_all_shot_tts(gen_script, AUDIO_OUTPUT_DIR, voice_registry, use_async=True,
                              scope=scope, script_revision=revision)
         if policy.narration_tts_required:
             # 图外旁白：独立音轨（固定旁白音色，一条旁白一个文件）
             _logger.info("\n=== Generate off-screen narration TTS ===")
-            gen_narration_tts(script, AUDIO_OUTPUT_DIR, scope=scope,
+            gen_narration_tts(gen_script, AUDIO_OUTPUT_DIR, scope=scope,
                               script_revision=revision, voice_registry=voice_registry)
     except Exception as e:
         _logger.error(f"[ERROR] {e}")
@@ -385,6 +457,12 @@ def main(options=None):
         sys.exit(1)
     _logger.info(
         f"[OK] TTS 完成：对白轨 {len(required)} 镜、旁白轨 {len(_narr_entries)} 条音频齐全")
+    try:
+        _pq = _write_step03_quality(script, required, _narr_entries)
+        _logger.info(f"[STEP03-QUALITY] status={_pq.get('status')} "
+                     f"missing={len(_pq.get('missing') or [])}")
+    except Exception as exc:
+        _logger.warn(f"[WARN] step03_quality.json 写入失败（不阻断已生成的音轨）: {exc}")
 
 
 if __name__ == "__main__":

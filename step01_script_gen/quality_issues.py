@@ -43,8 +43,6 @@ def _compute_rule_source_fingerprint() -> str:
         root / "validation.py",
         root / "timecode.py",
         root / "split_visuals.py",
-        project / "shared" / "style_prefix.py",
-        project / "shared" / "vimax_bridge.py",
         # v6.83（二次审核发现 6）：这三份 shared 实现 + 文本 schema 直接决定
         # 「什么算 blocking / 事件表怎么校验 / 时间字段谁能写」，却不在指纹里
         # ——只改它们而不动 step01 目录，旧报告会被错误地当成仍然有效。
@@ -79,7 +77,84 @@ def _compute_rule_source_fingerprint() -> str:
             digest.update(path.read_bytes())
         except OSError:
             continue
+    # 2026-10-31 S10R：**跨阶段解耦**。`shared/style_prefix.py` 与
+    # `shared/vimax_bridge.py` 同时承载 Step 02a/02b 逻辑（后者 4000+ 行几乎全是
+    # 生图/二修），整文件哈希会让任何下游修复都把已采纳的 Step 01 报告判失效。
+    # 只纳入 Step 01 **实际调用**的判定函数及其模块级依赖闭包（AST 提取）。
+    for module_path, names in (
+        (project / "shared" / "style_prefix.py", _STEP01_STYLE_PREFIX_SYMBOLS),
+        (project / "shared" / "vimax_bridge.py", _STEP01_VIMAX_BRIDGE_SYMBOLS),
+    ):
+        digest.update(_module_symbol_digest(module_path, names))
     return digest.hexdigest()[:16]
+
+
+# Step 01 实际消费的符号（grep step01_script_gen 的 import/属性访问得出）。
+# 新增 Step 01 侧调用时必须同步这里，否则改动不会让旧报告失效。
+_STEP01_STYLE_PREFIX_SYMBOLS = (
+    "inject_global_config_into_script",
+    "sanitize_script_shots",
+    "validate_sensitive_words",
+    "sanitize_prompt",
+    "detect_lf_midstate",
+    "detect_ff_multi_action",
+    "normalize_ff_desc",
+    "validate_fps_consistency",
+    "is_empty_scene",
+)
+_STEP01_VIMAX_BRIDGE_SYMBOLS = (
+    "_extract_char_layout",
+    "_LF_GAZE_TYPO",
+)
+
+
+def _module_symbol_digest(module_path, names) -> bytes:
+    """按**符号闭包**摘要一个模块：只哈希指定顶层定义/赋值及其引用到的同模块符号.
+
+    用 AST 而非 import：导入 `shared/vimax_bridge.py` 会拉起整条生图依赖链，
+    且其模块级副作用与"算指纹"无关。闭包沿 `ast.Name` 引用扩展到同模块的
+    函数/类/赋值；找不到的名字写入 `missing:` 标记（删除即变更）。
+    """
+    import ast
+    import hashlib
+    from pathlib import Path
+
+    try:
+        source = Path(module_path).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+    except (OSError, SyntaxError):
+        return b"<unreadable:" + str(module_path).encode("utf-8") + b">"
+
+    defs: dict = {}
+    for node in tree.body:
+        name = getattr(node, "name", None)
+        if isinstance(name, str):
+            defs.setdefault(name, node)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    defs.setdefault(target.id, node)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            defs.setdefault(node.target.id, node)
+
+    selected: set = set()
+    stack = [name for name in names if name in defs]
+    while stack:
+        name = stack.pop()
+        if name in selected:
+            continue
+        selected.add(name)
+        for sub in ast.walk(defs[name]):
+            if isinstance(sub, ast.Name) and sub.id in defs and sub.id not in selected:
+                stack.append(sub.id)
+
+    out = hashlib.sha256()
+    for name in sorted(selected):
+        out.update(name.encode("utf-8"))
+        out.update((ast.get_source_segment(source, defs[name]) or "").encode("utf-8"))
+    for name in sorted(set(names) - selected):
+        out.update(("missing:" + name).encode("utf-8"))
+    return out.digest()
 
 
 def _compute_prompt_source_fingerprint() -> str:

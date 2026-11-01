@@ -23,7 +23,7 @@ import _image_gen
 import _video_gen
 from _image_gen import ImageGenerationRequest
 from _video_gen import VideoGenerationRequest
-from shared.style_prefix import STYLE_PREFIX, STYLE_PREFIX_SHORT, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt
+from shared.style_prefix import get_style_prefix, STYLE_PREFIX_SHORT, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt
 from shared.style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT, IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT, IMAGE_HALLUCINATION_EXTRA_NEGATIVE
 from shared.style_prefix import image_negative_prompt, video_negative_prompt, image_lock_prompt
 
@@ -158,7 +158,7 @@ class ImageGeneratorAiVideoAdapter:
 
         full_prompt = prompt
         if not skip_prefix:
-            full_prompt = sanitize_prompt(ensure_prefix(prompt)) if not skip_sanitize else ensure_prefix(prompt)
+            full_prompt = sanitize_prompt(ensure_prefix(prompt, get_style_prefix())) if not skip_sanitize else ensure_prefix(prompt, get_style_prefix())
         elif not skip_sanitize:
             full_prompt = sanitize_prompt(prompt)
         else:

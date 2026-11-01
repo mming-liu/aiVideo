@@ -289,7 +289,7 @@ def _collect_shot_tts_paths(valid_shots, clips, script, resolve=None):
 
 
 def _collect_narration_tracks(script, valid_shots, clip_windows, resolve=None,
-                              identities=None):
+                              identities=None, only_indices=None):
     """图外旁白 → 合并落点表 `[{path, index, start, end, dur, n_shots}]`.
 
     **落点单源**：`voice_units`（与候选层/终稿层/提交层的生成验收同一判据——
@@ -314,6 +314,28 @@ def _collect_narration_tracks(script, valid_shots, clip_windows, resolve=None,
     # 全部声音条目（排版要算上对白的占用）；`_units` 只是旁白那一份（逐条核验用）
     _all_units = voice_units(plan, valid_shots)
     _units = [u for u in _all_units if u["kind"] == "narration"]
+    if only_indices is not None:
+        # S19-3：按**全章**承载集合裁剪旁白——子集外/跨子集的旁白直接跳过，
+        # 否则下面的「没有完整落点」守卫会在 --shots 1 时必炸。
+        _full_shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+        _full_units = {int(u["index"]): u for u in voice_units(plan, _full_shots)
+                       if u["kind"] == "narration"}
+        _keep: set = set()
+        for _u in _units:
+            _k = int(_u["index"])
+            _full_run = ((_full_units.get(_k) or {}).get("shot_indexes")
+                         or _u.get("shot_indexes") or [])
+            _decision = _narration_subset_decision(_full_run, only_indices)
+            if _decision == "keep":
+                _keep.add(_k)
+            elif _decision == "skip_cross":
+                _logger.warn("[WARN] 旁白 N%d 跨出本次 --shots 子集（承载 %s），"
+                             "跳过（不截句）" % (_k, sorted(int(i) for i in _full_run)))
+            else:
+                _logger.info("[INFO] 旁白 N%d 不在本次 --shots 子集内，跳过" % _k)
+        _all_units = [u for u in _all_units
+                      if u["kind"] != "narration" or int(u["index"]) in _keep]
+        _units = [u for u in _units if int(u["index"]) in _keep]
     # 先探测**真实**时长（存在性与时长核验本来就要做），再排版——用估计值排出来的
     # 时间轴，同镜两条旁白在真实时间轴上仍可能重叠。
     #
@@ -692,14 +714,67 @@ def _resolve_hook_clip(hook, candidates=None):
                 "候选清单缺少 hook 单元（稳定身份 hook/index=0）——不回退磁盘定位；"
                 "请补全候选清单或去掉 hook。")
         return hit
-    from shared.paths import clip_file
-    p = clip_file(0)
-    if p.exists() and p.stat().st_size > 20000:
-        return p
+    # S19-2：hook 与正文镜头必须按同一 CLIP_SOURCE 取片。旧实现硬编码
+    # clips/clip_0.mp4，CLIP_SOURCE=vimax（当前默认）时 hook 实际在
+    # shots/0/video.mp4，会误报"hook 视频缺失"。
+    from shared.paths import clip_file, shot_video_file
+    candidates = []
+    if CLIP_SOURCE == "vimax":
+        candidates.append(shot_video_file(0))
+    candidates.append(clip_file(0))
+    for p in candidates:
+        if p.exists() and p.stat().st_size > 20000:
+            return p
     raise FileNotFoundError(
-        f"脚本包含 hook，但 hook 视频缺失或损坏: {p}。\n"
+        f"脚本包含 hook，但 hook 视频缺失或损坏: {[str(p) for p in candidates]}。\n"
         "禁止静默跳过；请先完成 step02b 的 hook 生成。"
     )
+
+
+def _assert_step02b_scope(report: dict, only_indices, script: dict) -> None:
+  """step02b 成品报告的范围核对（与 step02b 的 _assert_step02a_scope 对称）.
+
+  S19-3 防穿透：`step02b --shots 1` 会写出只覆盖 shot 1 的 PASS 报告；若全章
+  step04 合并直接采信，盘上残留的旧片段会被当成整章通过。无 scope 的旧报告
+  按全章处理（保持旧行为）。
+  """
+  from shared.quality_gate import QualityGateError
+
+  scope = (report or {}).get("scope") or {}
+  scoped = {int(i) for i in (scope.get("shots") or [])}
+  if not scoped:
+    return
+  if only_indices is None:
+    wanted = {int(s.get("index", 0)) for s in (script.get("shots") or [])
+              if isinstance(s, dict)}
+    if script.get("hook"):
+      wanted.add(0)
+  else:
+    wanted = {int(i) for i in only_indices}
+  missing = sorted(wanted - scoped)
+  if missing:
+    raise QualityGateError(
+        "step02b 验收范围不含本次请求的镜头: %s（报告覆盖 %s）——请重跑 step02b"
+        % (missing, sorted(scoped)))
+
+
+def _narration_subset_decision(full_run, only_indices) -> str:
+  """旁白在 --shots 子集下的处置：keep / skip_other / skip_cross.
+
+  full_run 是旁白在**全章**的完整承载集合。子集合并时：
+    - 与子集无交集 → 属于其他镜头，跳过；
+    - 部分相交但未完全包含 → 跨镜旁白，跳过（禁止截句）；
+    - 完全落在子集内 → 正常排版混音。
+  """
+  if only_indices is None:
+    return "keep"
+  wanted = {int(i) for i in only_indices}
+  run = {int(i) for i in (full_run or [])}
+  if not run or not (run & wanted):
+    return "skip_other"
+  if not run <= wanted:
+    return "skip_cross"
+  return "keep"
 
 
 def _run_identity(script) -> tuple:
@@ -986,9 +1061,19 @@ def main(options=None):
 
 
 def _run_merge(options, attempt):
+  global FINAL_OUT, SRT_OUT
   _logger.separator("=", 60)
   _logger.info(" Step 4: Video Merge (Stretch + Concat + Subtitle + Color)")
-  _logger.info(" Output: final.mp4 (native, 语音/背景音由视频模型生成)")
+  # S19-3：--shots 子集试合并。子集输出走独立文件名，绝不覆盖正式 final.mp4。
+  only_indices = None
+  if options is not None and getattr(options, "shots", None):
+    from shared.shot_selector import parse_shot_selector
+    only_indices = parse_shot_selector(options.shots)
+  if attempt is None and only_indices is not None:
+    _tag = "-".join(str(i) for i in sorted(only_indices))
+    FINAL_OUT = CHAPTER_DIR / ("final_shots_%s.mp4" % _tag)
+    SRT_OUT = CHAPTER_DIR / ("subtitles_shots_%s.srt" % _tag)
+  _logger.info(" Output: %s (native, 语音/背景音由视频模型生成)" % FINAL_OUT.name)
   if attempt is not None:
     _logger.info(f"[CANDIDATE] 实验={attempt.experiment_id} attempt={attempt.attempt_id}")
     _logger.info(f"[CANDIDATE] 候选输出={attempt.candidate_out}")
@@ -1034,12 +1119,21 @@ def _run_merge(options, attempt):
   # v6.103：三份 step01 产物必须属于同一个提交批次（见 shared/quality_gate）
   verify_step01_commit_manifest(CHAPTER_DIR, script, stage="step01",
                                 expected_chapter=CHAPTER_INDEX)
-  require_gate(CHAPTER_DIR / "step02b_quality.json", script, stage="step02b",
-               required_report_type="product_acceptance", verify_outputs=True)
+  _vb_report = require_gate(
+      CHAPTER_DIR / "step02b_quality.json", script, stage="step02b",
+      required_report_type="product_acceptance", verify_outputs=True,
+      output_indices=only_indices)
+  # S19-3 防穿透：全章合并拒收只覆盖子集的 step02b_quality.json；
+  # 子集合并核对 only_indices ⊆ scope.shots。
+  _assert_step02b_scope(_vb_report, only_indices, script)
 
   shots = script.get("shots", [])
   if not shots:
     raise ValueError("No shots in script")
+  if only_indices is not None:
+    shots = [s for s in shots if int(s.get("index", -1)) in only_indices]
+    if not shots:
+      raise ValueError("--shots 没有匹配到任何镜头：%s" % sorted(only_indices))
 
   _logger.info(f"[INFO] Loaded {len(shots)} shots")
 
@@ -1079,6 +1173,9 @@ def _run_merge(options, attempt):
   # 1.5. Check for hook video
   # Hook视频位置: clips/clip_0.mp4（候选模式下由 --video-candidates 给稳定身份）
   hook = script.get("hook")
+  if only_indices is not None and 0 not in only_indices:
+    # 子集不含 hook：不解析、不要求 hook 视频（否则单镜试合并会被 hook 缺失拦住）
+    hook = None
   hook_clip = _resolve_hook_clip(hook, candidates=video_map)
   if hook_clip:
     _logger.info(f"[INFO] Hook video found: {hook_clip}")
@@ -1225,7 +1322,8 @@ def _run_merge(options, attempt):
   # 图外旁白：独立 TTS 轨叠在最终音轨之上（落点由 voice_units 单源给出）
   narration_tracks = _collect_narration_tracks(
       script, valid_shots, clip_windows, resolve=audio_resolve,
-      identities=(candidates.narration_identity if candidates is not None else None))
+      identities=(candidates.narration_identity if candidates is not None else None),
+      only_indices=only_indices)
   narration_identities = {}
   if narration_tracks and candidates is not None:
     narration_identities = {str(t["index"]): dict(
@@ -1335,13 +1433,62 @@ def _run_merge(options, attempt):
                  f"manifest={Path(accepted['manifest_path']).name} input_key={accepted['input_key'][:12]}")
 
   # 9. Report
+  _audio_label = {
+      "native": "Original video audio (native mode, 语音由视频模型生成)",
+      "tts_mix": "Original video audio (tts_mix mode, 对白/旁白由 step03 TTS 提供)",
+  }.get(str(_AUDIO_MODE), "Audio mode=%s" % _AUDIO_MODE)
   _logger.info("[INFO] Merge Report:")
-  _logger.info(f" Audio:       Original video audio (native mode, 语音由视频模型生成)"
+  _logger.info(f" Audio:       {_audio_label}"
                + (f" + {len(narration_tracks)} 条图外旁白独立音轨（原声保留）"
                   if narration_tracks else ""))
+  _logger.info(f" Audio policy: effective={_AUDIO_MODE} reason={_policy.reason}")
   _logger.info(f" Final duration: {duration:.2f}s")
   _logger.info(f" Total video duration: {audio_duration:.2f}s")
 
+  # S19-4：生产模式写出成片验收报告（候选模式不写正式章目录）。
+  if attempt is None:
+    try:
+      import hashlib as _hashlib
+      from shared.json_io import atomic_dump_json as _dump
+      from shared.quality_gate import attach_gate_metadata as _attach
+      from step01_script_gen.quality_issues import RULE_VERSION as _RULE_VERSION
+      _h = _hashlib.sha256()
+      with open(FINAL_OUT, "rb") as _fh:
+        for _chunk in iter(lambda: _fh.read(1 << 20), b""):
+          _h.update(_chunk)
+      _ok = float(duration) > 0
+      _payload = {
+          "source": "step04.product_acceptance",
+          "report_type": "product_acceptance",
+          "rule_version": _RULE_VERSION,
+          "status": "PASS" if _ok else "BLOCK",
+          "blocking": not _ok,
+          "missing": [] if _ok else ["final video duration probe failed"],
+          "outputs": {"final": {
+              "path": str(FINAL_OUT), "sha256": _h.hexdigest(),
+              "duration_sec": round(float(duration), 3),
+              "width": result.width, "height": result.height,
+              "has_audio": bool(result.has_audio)}},
+          "scope": {
+              "shots": (sorted(int(i) for i in only_indices)
+                        if only_indices is not None else
+                        sorted(int(s.get("index", 0))
+                               for s in (script.get("shots") or [])
+                               if isinstance(s, dict))),
+              "subset": only_indices is not None,
+          },
+          "audio_mode": str(_AUDIO_MODE),
+      }
+      _attach(_payload, script, stage="step04.product_acceptance")
+      if only_indices is not None:
+        _tag = "-".join(str(i) for i in sorted(only_indices))
+        _quality_name = "step04_shots_%s_quality.json" % _tag
+      else:
+        _quality_name = "step04_quality.json"
+      _dump(CHAPTER_DIR / _quality_name, _payload, ensure_ascii=False, indent=2)
+      _logger.info(f"[STEP04-QUALITY] status={_payload['status']}")
+    except Exception as _qe:
+      _logger.warn(f"[WARN] step04_quality.json 写入失败（不阻断已生成的成片）: {_qe}")
 
 if __name__ == "__main__":
   try:

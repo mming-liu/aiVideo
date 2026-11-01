@@ -51,6 +51,7 @@ class StageOptions:
     video_candidates: Optional[str] = None
     audio_candidates: Optional[str] = None
     plan_only: bool = False
+    shots: Optional[str] = None
     attempt_id: Optional[str] = None
     experiment_id: Optional[str] = None
     raw_argv: list = field(default_factory=list)
@@ -70,6 +71,7 @@ class StageOptions:
                 "video_candidates": self.video_candidates,
                 "audio_candidates": self.audio_candidates,
                 "plan_only": bool(self.plan_only),
+                "shots": self.shots,
                 "attempt_id": self.attempt_id,
                 "experiment_id": self.experiment_id}
 
@@ -94,6 +96,10 @@ def add_candidate_arguments(parser) -> None:
         help="只生产 SpeechUnit 计划并落候选 manifest，不调用任何 provider",
     )
     parser.add_argument(
+        "--shots", default=None, metavar="SPEC",
+        help="只合成指定镜头的声音（逗号分隔，支持区间），如 1,3-5；默认全部",
+    )
+    parser.add_argument(
         "--attempt-id", default=None, metavar="ID",
         help="指定候选 attempt 目录名（默认按时间生成；已存在的 attempt 拒绝覆盖）",
     )
@@ -107,6 +113,9 @@ def build_parser(description: str = ""):
     import argparse
     parser = argparse.ArgumentParser(
         description=description or None,
+        # 严格解析（S18-2）：新增 --shots 后，argparse 默认的**前缀缩写**会把
+        # 拼错的 --shot 当成 --shots 接受。未知/拼错参数必须立刻报错。
+        allow_abbrev=False,
         epilog="未给运行范围参数时，章/部沿用 .env.content 的设置；"
                "不给 --candidate-root 时按原生产路径运行。",
     )
@@ -126,6 +135,7 @@ def parse_argv(argv=None, *, description: str = "") -> StageOptions:
         video_candidates=args.video_candidates,
         audio_candidates=args.audio_candidates,
         plan_only=bool(args.plan_only),
+        shots=args.shots,
         attempt_id=args.attempt_id,
         experiment_id=args.experiment_id,
         raw_argv=list(argv) if argv is not None else [],

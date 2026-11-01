@@ -230,7 +230,7 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
         return t
 
     from step02_video_gen.prompt_builder import _build_prompt
-    from shared.style_prefix import STYLE_PREFIX, NEGATIVE_PROMPT
+    from shared.style_prefix import get_style_prefix, NEGATIVE_PROMPT
 
     # Seedance 系（volcengine / agent_plan）走精简路径，缓存哈希必须跟随
     # （否则旧完整 prompt 生成的视频会被错误复用，refit 错乱）
@@ -269,7 +269,7 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
         f"merge_audio={os.getenv('MERGE_AUDIO_MODE', 'native')}",
         f"duration={shot.get('duration_sec') or shot.get('duration') or ''}",
         f"resolution={_resolution}",
-        STYLE_PREFIX,
+        get_style_prefix(),
         NEGATIVE_PROMPT,
         _prompt_for_hash,
         shot.get("narration_segment", ""),

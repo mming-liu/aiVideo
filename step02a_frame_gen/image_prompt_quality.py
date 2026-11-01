@@ -89,12 +89,8 @@ def _keyframes_consumed_by_video() -> bool:
     这种情况下，子集运行（--shots N）不该为它要求关键帧。
     不确定时返回 True —— 保持旧的严格行为。
     """
-    try:
-        from shared.model_caps import active_video_model, get_seedance_cap
-        cap = get_seedance_cap(active_video_model())
-        return bool(getattr(cap, "supports_reference_image", False))
-    except Exception:
-        return True
+    from shared.video_media_plan import video_consumes_intermediate_frames
+    return video_consumes_intermediate_frames()
 
 
 def write_image_product_quality(script: dict, work_dir: Path, *,
@@ -114,13 +110,18 @@ def write_image_product_quality(script: dict, work_dir: Path, *,
     units.extend([s for s in (script.get("shots") or []) if isinstance(s, dict)])
     if only_indices is not None:
         _want = {int(i) for i in only_indices}
+        available = {int(u.get("index", 0)) for u in units}
+        if not _want or _want - available:
+            raise ValueError(f"invalid shot subset: {sorted(_want - available)}")
         units = [u for u in units if int(u.get("index", 0)) in _want]
     if require_keyframes is None:
-        require_keyframes = True if only_indices is None else _keyframes_consumed_by_video()
+        require_keyframes = _keyframes_consumed_by_video()
     missing = []
     outputs = {}
+    issues_by_shot = {}
     for shot in units:
         idx = shot.get("index", 0)
+        issue_start = len(missing)
         shot_dir = Path(work_dir) / "shots" / str(idx)
         ff = shot_dir / FIRST_FRAME_FILENAME
         lf = shot_dir / LAST_FRAME_FILENAME
@@ -147,9 +148,12 @@ def write_image_product_quality(script: dict, work_dir: Path, *,
             missing.append(
                 f"shot {idx}: 缺关键帧文件 {_miss_kf}（应有 {expected_kfs} 帧，"
                 f"实有核心帧 {len(kfs)} 个）")
+        if not require_keyframes:
+            kfs = []
         for kf in kfs:
             if not _image_decodable(kf):
                 missing.append(f"shot {idx}: undecodable {kf.name}")
+        issues_by_shot[str(idx)] = missing[issue_start:]
         outputs[str(idx)] = {
             "ff": {"path": str(ff), "sha1": _file_digest(ff)} if ff.exists() else None,
             "lf": {"path": str(lf), "sha1": _file_digest(lf)} if lf.exists() else None,
@@ -163,6 +167,7 @@ def write_image_product_quality(script: dict, work_dir: Path, *,
         "blocking": bool(missing),
         "missing": missing,
         "outputs": outputs,
+        "issues_by_shot": issues_by_shot,
         "scope": {"shots": sorted(int(u.get("index", 0)) for u in units),
                   "keyframes_required": bool(require_keyframes)},
     }

@@ -69,6 +69,8 @@ reference_skills/
 # 每跑一次测试就变一次，不入库。原先跟踪的 4 个 step0X.log 已 git rm --cached，
 # 同目录的手写调试脚本 replay_agent_plan.py 已迁到 tools/。
 .pytest_tmp/
+# 沙箱内探测残留的临时目录（S16-4）：不承载任何产物，不入库。
+ptwork/
 .pytest*/
 .review_tmp*/
 review_tmp*/
@@ -239,3 +241,16 @@ tests/tts/*
 !tests/shared/
 tests/shared/*
 !tests/shared/test_video_media_plan.py
+# 2026-11-01：本轮离线修复的契约用例**入库**（与上面"只可见不提交"不同）。
+# 仍需逐级放行父目录，再排除目录内容，最后精确放行文件。
+!tests/step02a_frame_gen/
+tests/step02a_frame_gen/*
+!tests/step02a_frame_gen/test_step02a_offline_fixups.py
+!tests/step02a_frame_gen/test_subset_gate.py
+!tests/step02a_frame_gen/test_image_prompt_quality.py
+!tests/step02a_frame_gen/test_keyframe_acceptance.py
+!tests/step04_merge/
+tests/step04_merge/*
+!tests/step04_merge/test_step04_shots_subset.py
+!tests/shared/test_vimax_bridge_v6321.py
+!tests/shared/test_hook_shot0_v661.py

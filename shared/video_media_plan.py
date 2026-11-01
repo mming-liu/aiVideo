@@ -100,3 +100,28 @@ def reference_labels(items) -> list:
             label = "参考素材"
         out.append("参考图%d：%s" % (i, label))
     return out
+
+
+def video_consumes_intermediate_frames() -> bool:
+    """当前激活的视频模型是否真的消费中间关键帧（决定 step02a 要不要生成）.
+
+    只有**注册表里明确**支持 reference_image 的 Seedance 型号才消费关键帧；
+    supports_reference_image=False 的型号（1.0 pro / 1.5 pro）由本模块的
+    plan_image_media 全部丢弃。未注册的 Seedance 型号按「会消费」处理——
+    省图费不能以静默丢帧为代价（与 _keyframes_consumed_by_video 的旧注释一致）。
+    非 Seedance 供应商走各自参考图路径，一律按会消费处理。
+    """
+    from shared.model_caps import (SEEDANCE_CAPS, active_video_is_seedance,
+                                   active_video_model, get_seedance_cap,
+                                   normalize_model_name)
+    if not active_video_is_seedance():
+        return True
+    model = active_video_model()
+    normalized = normalize_model_name(model or "")
+    if not any(pat in normalized for pat, _ in SEEDANCE_CAPS):
+        return True     # 未注册型号：保守按会消费处理
+    return bool(get_seedance_cap(model).supports_reference_image)
+
+
+def default_frame_selection() -> set[str]:
+    return {"ff", "lf", "kf"} if video_consumes_intermediate_frames() else {"ff", "lf"}

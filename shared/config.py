@@ -1,4 +1,4 @@
-﻿"""统一配置管理 — 所有模块从这里读取 .env.content / .env.keys 配置。
+"""统一配置管理 — 所有模块从这里读取 .env.content / .env.keys 配置。
 
 使用方式：
     from shared.config import CHAPTER_INDEX, SHOT_COUNT_MIN, AGNES_API_KEY, ...
@@ -38,6 +38,36 @@ SHOT_COUNT_MIN = int(os.getenv("SHOT_COUNT_MIN", "4"))
 SHOT_COUNT_MAX = int(os.getenv("SHOT_COUNT_MAX", "40"))
 
 
+def _inherit_adoption_duration_band() -> None:
+    """未显式指定 `DURATION_*` 时，从本章 `step01_adoption.json` 继承采纳时的时长带.
+
+    S10R：`DURATION_*` 是 import 期常量，而采纳收据记录的是**产出该稿时**的时长
+    合同。下游（step02a/02b/03/04）不带 `production_context --run` 直接跑时，
+    `_require_duration_band` 会拿默认 60–90/70–80 去核 60–120/105–115 的产物，
+    报"重跑上游"——而上游其实没问题。显式环境变量（含 .env）优先，不覆盖。
+
+    只读操作；章节目录不存在/收据不可读时静默跳过（测试与其它小说不受影响）。
+    """
+    keys = ("DURATION_MIN_SEC", "DURATION_MAX_SEC",
+            "DURATION_TARGET_MIN_SEC", "DURATION_TARGET_MAX_SEC")
+    if any(os.getenv(key) for key in keys):
+        return
+    try:
+        from shared.paths import chapter_dir
+        receipt = chapter_dir() / "step01_adoption.json"
+        if not receipt.is_file():
+            return
+        import json
+        config = (json.loads(receipt.read_text(encoding="utf-8")) or {}).get("effective_config")
+        if not isinstance(config, dict):
+            return
+        for key in keys:
+            if config.get(key) is not None:
+                os.environ.setdefault(key, str(config[key]))
+    except Exception:
+        return
+
+
 def _duration_setting(name: str, default: float) -> float:
     raw = os.getenv(name, str(default))
     try:
@@ -48,6 +78,9 @@ def _duration_setting(name: str, default: float) -> float:
         raise ValueError(f"{name}={raw!r}: must be a finite positive number")
     return value
 
+
+# S10R：先尝试从采纳收据继承时长带（显式 env 优先）。
+_inherit_adoption_duration_band()
 
 # The lower bound is fixed: timecode/runtime_extend still implement the 60s floor.
 DURATION_MIN_SEC = _duration_setting("DURATION_MIN_SEC", 60)

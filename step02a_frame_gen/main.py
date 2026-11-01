@@ -53,6 +53,9 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
     from shared.vimax_bridge import gen_shot_frames
     from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
 
+    if frames is None:
+        from shared.video_media_plan import default_frame_selection
+        frames = default_frame_selection()
     log_dir = chapter_dir()
     logger = get_logger(log_dir / "step02a.log", console_level="INFO")
 
@@ -176,6 +179,162 @@ def _log_shot_frames(idx: int, result: dict, logger):
     logger.info(f"    - Keyframes:    {[Path(k).name for k in kfs] if kfs else 'NONE'}")
 
 
+def _keyframes_unused_by_video() -> bool:
+    """当前视频模型是否会把关键帧全部丢弃（不消费 reference_image）。
+
+    seedance-1.0-pro 的 supports_reference_image=False，shared.video_media_plan
+    会把 keyframe_*.png 全部丢掉——为它生成关键帧纯属多花约 60% 图费。
+    STEP02A_FORCE_KEYFRAMES=1 可强制保留旧行为。
+    """
+    if os.getenv("STEP02A_FORCE_KEYFRAMES", "0").strip() == "1":
+        return False
+    try:
+        from step02a_frame_gen.image_prompt_quality import _keyframes_consumed_by_video
+        return not _keyframes_consumed_by_video()
+    except Exception:
+        return False
+
+
+def _default_frames(frames, all_frames: bool):
+    """未显式指定帧类型时，按视频模型能力决定默认集合。
+
+    None 且模型不消费关键帧 ⇒ 只生成 ff/lf；显式 --all-frames / --frames 不动。
+    """
+    if frames is not None or all_frames:
+        return frames
+    if _keyframes_unused_by_video():
+        return {"ff", "lf"}
+    return frames
+
+
+def _scoped_asset_identifiers(script: dict, units: list[dict]) -> dict:
+    """目标镜头实际引用的场景/道具资产 id（S13B：子集运行不连带全章）."""
+    import json
+    from shared.assets_bank import PropAssetsBank, SceneAssetsBank
+
+    scene_ids: set = set()
+    sbank = SceneAssetsBank()
+    sbank.load()
+    for sid in sbank.get_all_identifiers():
+        for unit in units:
+            loc = str(unit.get("location") or unit.get("scene") or "")
+            if loc and (sid in loc or loc in sid):
+                scene_ids.add(sid)
+                break
+    prop_ids: set = set()
+    pbank = PropAssetsBank()
+    pbank.load()
+    text = json.dumps(units, ensure_ascii=False)
+    for pid in pbank.get_all_identifiers():
+        if pid and pid in text:
+            prop_ids.add(pid)
+    return {"scenes": scene_ids, "props": prop_ids}
+
+
+def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dict:
+    """零网络账单预检：列出本次会生成多少张肖像/场景/道具/分镜帧.
+
+    计数口径：按**文件是否存在**判断缓存（与生成器的缓存判据一致）；分镜帧的
+    内容哈希未在此重算——哈希不匹配的旧帧会在实跑时重生成，报告里单列说明。
+    """
+    import json
+    from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
+    from shared.assets_bank import PropAssetsBank, SceneAssetsBank
+    from shared.character_bank import CharacterBank
+    from shared.config import SCENE_NEAR_SHOT_ENABLED
+    from shared.vimax_bridge import _characters_in_units, _units_for_indices
+
+    if only_indices is not None:
+        units = _units_for_indices(script, only_indices)
+    else:
+        units = ([script["hook"]] if isinstance(script.get("hook"), dict) else []) + \
+                [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+
+    characters = _characters_in_units(script.get("characters") or [], units) \
+        if only_indices is not None else list(script.get("characters") or [])
+    bank = CharacterBank()
+    bank.load()
+    portraits = []
+    for char in characters:
+        ident = str(char.get("identifier") or "")
+        if not ident:
+            continue
+        entry = bank.get_character(ident) if bank.has_character(ident) else None
+        have = set()
+        for view in ("base", "side", "back", "face"):
+            path = str(((entry or {}).get("portraits") or {}).get(view, {}).get("path") or "")
+            if path and Path(path).is_file():
+                have.add(view)
+        portraits.append({"character": ident,
+                          "cached": sorted(have),
+                          "to_generate": [v for v in ("base", "side", "back", "face")
+                                          if v not in have]})
+
+    scoped = _scoped_asset_identifiers(script, units)
+    sbank = SceneAssetsBank()
+    sbank.load()
+    scene_plan = []
+    for sid in sorted(scoped["scenes"]):
+        scene_dir = sbank.get_asset_dir(sid)
+        views = ["wide"] + (["near", "side"] if SCENE_NEAR_SHOT_ENABLED else [])
+        scene_plan.append({"scene": sid,
+                           "to_generate": [v for v in views
+                                           if not (scene_dir / (v + ".png")).is_file()]})
+    pbank = PropAssetsBank()
+    pbank.load()
+    prop_plan = []
+    for pid in sorted(scoped["props"]):
+        exists = (pbank.get_asset_dir(pid) / "prop.png").is_file()
+        prop_plan.append({"prop": pid, "to_generate": 0 if exists else 1})
+
+    frame_plan = []
+    for unit in units:
+        idx = int(unit.get("index", 0))
+        shot_dir = Path(work_dir) / "shots" / str(idx)
+        row = {"shot": idx}
+        want_ff = frames is None or "ff" in frames
+        want_lf = frames is None or "lf" in frames
+        want_kf = frames is None or any(str(f).startswith("kf") for f in frames)
+        if want_ff:
+            row["ff"] = "cached" if (shot_dir / FIRST_FRAME_FILENAME).is_file() else "generate"
+        if want_lf:
+            row["lf"] = "cached" if (shot_dir / LAST_FRAME_FILENAME).is_file() else "generate"
+        if want_kf:
+            expected = sum(1 for k in (unit.get("keyframes") or [])
+                           if isinstance(k, dict) and str(k.get("desc") or "").strip())
+            cached = len(list(shot_dir.glob("keyframe_*.png")))
+            row["kf"] = {"expected": expected, "cached": cached}
+        frame_plan.append(row)
+
+    frames_to_gen = sum(1 for row in frame_plan for key in ("ff", "lf")
+                        if row.get(key) == "generate")
+    kf_to_gen = sum(max(0, (row.get("kf") or {}).get("expected", 0) - (row.get("kf") or {}).get("cached", 0))
+                    for row in frame_plan)
+    total = (sum(len(p["to_generate"]) for p in portraits)
+             + sum(len(s["to_generate"]) for s in scene_plan)
+             + sum(p["to_generate"] for p in prop_plan)
+             + frames_to_gen + kf_to_gen)
+    return {
+        "schema": "step02a.plan/1",
+        "model_sends": 0,
+        "shots": sorted(int(u.get("index", 0)) for u in units),
+        "frames_requested": sorted(frames) if frames is not None else "default",
+        "portraits": portraits,
+        "scene_assets": scene_plan,
+        "prop_assets": prop_plan,
+        "shot_frames": frame_plan,
+        "totals": {
+            "portraits": sum(len(p["to_generate"]) for p in portraits),
+            "scene_assets": sum(len(s["to_generate"]) for s in scene_plan),
+            "prop_assets": sum(p["to_generate"] for p in prop_plan),
+            "shot_frames": frames_to_gen,
+            "keyframes": kf_to_gen,
+            "images_total": total,
+        },
+        "note": "分镜帧按文件存在性计数；内容哈希不匹配的旧帧会在实跑时重生成",
+    }
+
+
 def main():
     import argparse
     import json
@@ -198,6 +357,9 @@ def main():
     parser.add_argument("--concurrency", "-c", type=int, default=None,
                         help="镜头级并发数（默认读 STEP02A_CONCURRENCY env，缺省 3；"
                              "1=串行旧行为）。图片供应商限速由 KeyScheduler 独立保证")
+    parser.add_argument("--plan-only", action="store_true",
+                        help="零网络账单预检：只打印本次将生成的肖像/场景/道具/帧张数，"
+                             "不发任何生成请求")
     add_scope_arguments(parser)
     args = parser.parse_args()
 
@@ -214,6 +376,9 @@ def main():
     else:
         frames = None
 
+    # 未显式指定帧类型时，按当前视频模型是否消费关键帧决定默认集合
+    # （gen_all_frames 对 None 也会用 default_frame_selection 兜底）
+    frames = _default_frames(frames, args.all_frames)
     script_path = script_file()
     work_dir = wd()
 
@@ -253,6 +418,14 @@ def main():
         logger.error(f"[IMAGE-QA] upstream quality gate failed: {e}")
         raise
 
+    if args.plan_only:
+        with open(script_path, "r", encoding="utf-8") as _sf_plan:
+            _script_plan = json.load(_sf_plan)
+        print(json.dumps(
+            _plan_only_report(_script_plan, work_dir, only_indices, frames),
+            ensure_ascii=False, indent=2))
+        return
+
     logger.info(f"[INFO] step02a_frame_gen start")
     logger.info(f"  script: {script_path}")
     logger.info(f"  output: {work_dir / 'shots'}")
@@ -269,14 +442,23 @@ def main():
         ImageGeneratorAiVideoAdapter(),
         force_first_frame=False,
         skip_frames=True,  # 只设置目录结构，不生成帧
+        only_indices=only_indices,   # S13B：子集运行只补目标镜头的角色肖像
     ))
 
     # v7: 场景/道具资产图生成（大场景/近景/道具白底图，供 r2v 一致性参考）
     # 资产图是横屏参考，独立于竖屏帧；在帧生成前跑，保证 r2v 参考图就绪
     try:
         from step02a_frame_gen.asset_gen import gen_all_assets
+        from shared.vimax_bridge import _units_for_indices
+        _scoped_assets = None
+        if only_indices is not None:
+            with open(script_path, "r", encoding="utf-8") as _sf_assets:
+                _script_assets = json.load(_sf_assets)
+            _scoped_assets = _scoped_asset_identifiers(
+                _script_assets, _units_for_indices(_script_assets, only_indices))
         asset_result = asyncio.run(gen_all_assets(force=args.force,
-                                                  concurrency=args.concurrency))
+                                                  concurrency=args.concurrency,
+                                                  only_identifiers=_scoped_assets))
         logger.info(f"[ASSET] 资产图: 场景{asset_result.get('scenes', 0)} / 道具{asset_result.get('props', 0)}")
     except Exception as e:
         logger.warn(f"[ASSET] 资产图生成失败（不阻断帧生成）: {e}")
@@ -293,8 +475,10 @@ def main():
         from step02a_frame_gen.image_prompt_quality import write_image_product_quality
         with open(script_path, "r", encoding="utf-8") as _sf_final:
             _script_final = json.load(_sf_final)
-        _pq = write_image_product_quality(_script_final, work_dir,
-                                          only_indices=only_indices)
+        _effective_frames = frames if frames is not None else {"ff", "lf", "kf"}
+        _pq = write_image_product_quality(
+            _script_final, work_dir, only_indices=only_indices,
+            require_keyframes=any(f.startswith("kf") for f in _effective_frames))
         logger.info(f"[IMAGE-PRODUCT] status={_pq.get('status')} missing={len(_pq.get('missing') or [])}")
     except Exception as _pq_err:
         logger.error(f"[IMAGE-PRODUCT] product acceptance failed: {_pq_err}")

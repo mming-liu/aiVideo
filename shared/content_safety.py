@@ -406,6 +406,13 @@ def check_chain_safety() -> list[tuple[str, str, str]]:
 _validate_chain_safety_on_import()
 
 def input_sensitive_retry_prompt(prompt: str) -> str:
-    """Shared, bounded input-rejection fallback; caller allows at most one retry."""
+    """输入侧 400 的两级降级（调用方只允许重试 1 次）.
+
+    第 1 级全表 sanitize（常态已在组装期跑过 → 多半无变化）；第 2 级
+    soften_input_text（输入侧专用降级：匕首柄抵近→悬停、刺向→指向）。
+    两级必须都跑：只跑 sanitize 时，若它改动了别处而真正触发 400 的持械
+    逼临词没降级，重试会再次 400 直接失败。返回空串 = 两级都没有可改动。
+    """
     cleaned = sanitize(prompt)
-    return cleaned if cleaned != prompt else soften_input_text(prompt)
+    softened = soften_input_text(cleaned)
+    return softened if softened != prompt else ""

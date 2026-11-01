@@ -625,7 +625,7 @@ def main(options=None):
         _qa_report = require_gate(chapter_dir() / "step02a_quality.json", script,
                                   stage="step02a",
                                   required_report_type="product_acceptance",
-                                  verify_outputs=True)
+                                  verify_outputs=True, output_indices=only_indices)
         _assert_step02a_scope(_qa_report, only_indices, script)
 
     # ---- 候选模式分支（plan-only / resume / 候选生成）----
@@ -696,7 +696,7 @@ def main(options=None):
     # Separate product acceptance from the pre-generation prompt report.
     try:
         from step02_video_gen.video_prompt_quality import write_video_product_quality
-        _pq = write_video_product_quality(script, work_dir)
+        _pq = write_video_product_quality(script, work_dir, only_indices=only_indices)
         logger.info(f"[VIDEO-PRODUCT] status={_pq.get('status')} missing={len(_pq.get('missing') or [])}")
     except Exception as _pq_err:
         logger.error(f"[VIDEO-PRODUCT] product acceptance failed: {_pq_err}")
