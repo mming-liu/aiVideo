@@ -9,9 +9,17 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
+# 干净检出时 `tests/` 可能被放进 sys.path（`tests/tts` 会被当成 `tts`），
+# 导致 `from tts.models import ...` 解析到测试包。仓库根必须优先于它。
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) in sys.path:
+    sys.path.remove(str(_ROOT))
+sys.path.insert(0, str(_ROOT))
 
 from tts.models import ProviderCapabilities, TTSFailureResult, TTSSuccessResult  # noqa: E402
 
