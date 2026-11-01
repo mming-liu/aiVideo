@@ -17,6 +17,8 @@ NOVEL = "甲说：走。乙离开。"
 def _flag(monkeypatch, on: bool) -> None:
     import shared.config as cfg
     monkeypatch.setattr(cfg, "VOICE_ADAPTATION_ENABLED", bool(on))
+    # S22-1：enabled() 运行期 env 优先；夹具必须同时钉 env，否则会被外部/继承值覆盖。
+    monkeypatch.setenv("VOICE_ADAPTATION_ENABLED", "1" if on else "0")
 
 
 def _base_plan():
