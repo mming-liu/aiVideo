@@ -80,6 +80,9 @@ class SeedanceCap:
     # draft 样片档 + flex 服务档（省钱调试）；2.0/2.5 系列官方矩阵均 false
     supports_draft: bool = False
     supports_flex_tier: bool = False
+    # 2026-11-01：官方能力表明确 Seedance 1.0 Pro Fast 只支持首帧图生视频，
+    # 不支持首尾帧；请求层据此丢弃 last_frame，避免发不兼容素材。
+    supports_last_frame: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +124,9 @@ SEEDANCE_CAPS: list[tuple[str, SeedanceCap]] = [
     ("seedance-1-5-pro", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, True, False, False, False,
                                      supports_draft=True, supports_flex_tier=True)),
     ("seedance-1-5", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, False, False, False, False)),
+    # 官方：Seedance 1.0 Pro Fast 支持首帧图生视频，不支持首尾帧（1.0 Pro 支持）。
+    ("seedance-1-0-pro-fast", SeedanceCap((2, 12), ("480p", "720p", "1080p"), False, False, False, True, False,
+                                         supports_last_frame=False)),
     ("seedance-1-0", SeedanceCap((2, 12), ("480p", "720p", "1080p"), False, False, False, True, False)),
 ]
 

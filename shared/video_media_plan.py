@@ -14,7 +14,8 @@ from __future__ import annotations
 
 
 def plan_image_media(*, supports_reference_image: bool, image_path=None,
-                     last_frame_path=None, keyframe_paths=()) -> dict:
+                     last_frame_path=None, keyframe_paths=(),
+                     supports_last_frame: bool = True) -> dict:
     """图生视频的最终素材计划.
 
     分支（与 provider 的官方场景一一对应）：
@@ -36,6 +37,14 @@ def plan_image_media(*, supports_reference_image: bool, image_path=None,
     items: list = []
     dropped: list = []
     modifications: list = []
+    # Fast 等只支持首帧的型号不得携带 last_frame；显式丢弃并记账，
+    # 避免把不兼容素材发给 provider，或让提示词声明一张实际没发的图。
+    if lf and not supports_last_frame:
+        dropped.append({"path": lf, "reason": "model_unsupported_last_frame"})
+        modifications.append({"kind": "last_frame_unsupported",
+                              "reason": "model_unsupported_last_frame",
+                              "dropped": lf})
+        lf = None
 
     if kfs and supports_reference_image:
         items = [{"path": p, "role": "reference_image"} for p in kfs]
@@ -63,7 +72,8 @@ def plan_image_media(*, supports_reference_image: bool, image_path=None,
                                   "first_last_source": "ff/lf"})
         return {"items": items, "first_frame": ff, "last_frame": lf,
                 "reference_images": [], "dropped": dropped,
-                "modifications": modifications, "mode": "first_last"}
+                "modifications": modifications,
+                "mode": "first_last" if (ff and lf) else "first"}
 
     if kfs:
         first, last = kfs[0], kfs[-1]

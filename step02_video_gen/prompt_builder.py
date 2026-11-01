@@ -1360,7 +1360,8 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         _plan = plan_image_media(
             supports_reference_image=bool(getattr(_cap, "supports_reference_image", False)),
             image_path=image_path, last_frame_path=last_frame_image_path,
-            keyframe_paths=list(extra_keyframe_paths))
+            keyframe_paths=list(extra_keyframe_paths),
+            supports_last_frame=bool(getattr(_cap, "supports_last_frame", True)))
         image_path = _plan["first_frame"]
         last_frame_image_path = _plan["last_frame"]
         extra_keyframe_paths = list(_plan["reference_images"])

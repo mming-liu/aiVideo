@@ -490,7 +490,8 @@ class VolcengineVideoService(VideoGenerationService):
               if req.last_frame_image_path and Path(req.last_frame_image_path).is_file() else None)
         plan = plan_image_media(
             supports_reference_image=bool(getattr(cap, "supports_reference_image", False)),
-            image_path=ff, last_frame_path=lf, keyframe_paths=kfs)
+            image_path=ff, last_frame_path=lf, keyframe_paths=kfs,
+            supports_last_frame=bool(getattr(cap, "supports_last_frame", True)))
         for item in plan["items"]:
             _image(item["path"], item["role"])
         modifications.extend(plan["modifications"])

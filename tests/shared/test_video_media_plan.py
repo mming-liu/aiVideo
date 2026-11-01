@@ -44,6 +44,23 @@ def test_real_first_last_frames_win_over_keyframes(tmp_path):
     assert plan["modifications"][0]["kind"] == "keyframe_degrade"
 
 
+def test_fast_model_drops_unsupported_last_frame(tmp_path):
+    """Seedance 1.0 Pro Fast 官方不支持首尾帧：尾帧必须显式丢弃并记账."""
+    from shared.model_caps import get_seedance_cap
+
+    cap = get_seedance_cap("doubao-seedance-1-0-pro-fast-251015")
+    assert cap.supports_last_frame is False
+    ff, lf = _files(tmp_path, "ff.png", "lf.png")
+    plan = plan_image_media(supports_reference_image=False, image_path=ff,
+                            last_frame_path=lf, supports_last_frame=False)
+    assert plan["mode"] == "first"
+    assert [i["role"] for i in plan["items"]] == ["first_frame"]
+    assert [i["path"] for i in plan["items"]] == [ff]
+    assert plan["last_frame"] is None
+    assert any(d["reason"] == "model_unsupported_last_frame" for d in plan["dropped"])
+    assert any(m["kind"] == "last_frame_unsupported" for m in plan["modifications"])
+
+
 def test_reference_capable_model_uses_keyframes(tmp_path):
     ff, lf, k0, k1 = _files(tmp_path, "ff.png", "lf.png", "kf0.png", "kf1.png")
     plan = plan_image_media(supports_reference_image=True, image_path=ff,
