@@ -203,3 +203,105 @@ def test_portrait_batch_fail_fast_stops_after_first_failure(tmp_path, monkeypatc
         raise AssertionError("fail-fast 没有中止批次")
 
     assert len(calls) == 1, "首个视角失败后仍请求了后续视角：%d 次" % len(calls)
+
+def test_output_sensitive_soft_skip_also_aborts(monkeypatch):
+    """输出敏感软跳过（soft_skip）同样算失败：后续 generate 0 次追加 POST."""
+    vp = _service(monkeypatch)
+    from _image_gen.models import ImageGenerationRequest
+
+    posts: list = []
+
+    class _Sensitive:
+        status_code = 400
+        text = '{"error":{"code":"OutputImageSensitiveContentDetected"}}'
+
+    def _post(*a, **k):
+        posts.append(1)
+        return _Sensitive()
+
+    monkeypatch.setattr(vp.requests, "post", _post)
+    monkeypatch.setattr(vp, "_POSTS_USED", [0])
+    monkeypatch.setattr(vp, "_ABORT", [None])
+    monkeypatch.setenv("VOLCENGINE_IMAGE_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("VOLCENGINE_IMAGE_FAIL_FAST", "1")
+
+    svc = vp.VolcengineImageService()
+    first = svc.generate(ImageGenerationRequest(prompt="p", shot_index=1, size="1024x1024"))
+    second = svc.generate(ImageGenerationRequest(prompt="p", shot_index=2, size="1024x1024"))
+
+    assert first.success is False and first.soft_skip is True
+    assert len(posts) == 1, "软跳过后仍继续发送：%d 次" % len(posts)
+    assert "本批已中止" in (second.error or "")
+
+
+def test_download_failure_also_aborts(monkeypatch):
+    """HTTP 200 但下载失败：同样设置中止标记，后续 generate 0 次追加 POST."""
+    vp = _service(monkeypatch)
+    from _image_gen.models import ImageGenerationRequest
+
+    posts: list = []
+
+    class _Ok:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"data": [{"url": "http://x/y.png"}]}
+
+    def _post(*a, **k):
+        posts.append(1)
+        return _Ok()
+
+    monkeypatch.setattr(vp.requests, "post", _post)
+    monkeypatch.setattr(vp, "_POSTS_USED", [0])
+    monkeypatch.setattr(vp, "_ABORT", [None])
+    monkeypatch.setenv("VOLCENGINE_IMAGE_FAIL_FAST", "1")
+
+    svc = vp.VolcengineImageService()
+    monkeypatch.setattr(svc, "_download", lambda req, url, idx: vp.ImageGenerationResult(
+        success=False, error="download failed"))
+
+    first = svc.generate(ImageGenerationRequest(prompt="p", shot_index=1, size="1024x1024"))
+    second = svc.generate(ImageGenerationRequest(prompt="p", shot_index=2, size="1024x1024"))
+
+    assert first.success is False
+    assert len(posts) == 1, "下载失败后仍继续发送：%d 次" % len(posts)
+    assert "本批已中止" in (second.error or "")
+
+
+def test_soft_skip_aborts_the_portrait_batch(tmp_path, monkeypatch):
+    """实际批次入口：首视角软跳过（适配器抛 SOFT-SKIP）即中止，不再请求后续视角."""
+    import asyncio
+
+    from shared import vimax_bridge as vb
+
+    calls: list = []
+
+    class _Adapter:
+        async def generate_single_image(self, **kwargs):
+            calls.append(kwargs)
+            raise RuntimeError("[SOFT-SKIP] 图像因内容安全策略跳过")
+
+    class _Bank:
+        def has_character(self, _ident):
+            return False
+
+        def get_portrait_dir(self, ident):
+            return tmp_path / ident
+
+        def save(self):
+            pass
+
+    monkeypatch.setenv("STEP02A_FAIL_FAST", "1")
+    monkeypatch.setattr("shared.vimax_adapters.ImageGeneratorAiVideoAdapter",
+                        lambda **_k: _Adapter())
+
+    try:
+        asyncio.run(vb._generate_missing_portraits(
+            [{"identifier": "甲"}], _Bank(), object(), 1))
+    except RuntimeError as exc:
+        assert "SOFT-SKIP" in str(exc)
+    else:
+        raise AssertionError("软跳过没有中止批次")
+
+    assert len(calls) == 1, "软跳过后仍请求了后续视角：%d 次" % len(calls)

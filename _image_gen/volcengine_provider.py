@@ -165,7 +165,15 @@ class VolcengineImageService(ImageGenerationService):
         #   VOLCENGINE_IMAGE_MAX_POSTS    —— 整批（进程级）POST 预算，跨资产/帧。
         _max_attempts = _env_int("VOLCENGINE_IMAGE_MAX_ATTEMPTS")
         _max_posts = _env_int("VOLCENGINE_IMAGE_MAX_POSTS")
+        _fail_fast = os.getenv("VOLCENGINE_IMAGE_FAIL_FAST", "0").strip() == "1"
         _attempts = 0
+
+        def _finish(result):
+            # 统一出口：**任何**失败结果（含输出敏感软跳过、下载失败）都记中止标记，
+            # 后续 generate 由 _send 在发送前拒绝；关闭开关时保持原行为。
+            if _fail_fast and not result.success:
+                _ABORT[0] = result.error or "生成失败"
+            return result
 
         def _send(payload: dict):
             nonlocal _attempts
@@ -283,7 +291,7 @@ class VolcengineImageService(ImageGenerationService):
                 if not img_url:
                     last_error = f"响应中未找到图片 URL: {resp.text[:300]}"
                     break
-                return self._download(req, img_url, model_idx)
+                return _finish(self._download(req, img_url, model_idx))
 
             # ---- 429: 限速，等待后重试 ----
             if resp.status_code == 429:
@@ -339,13 +347,10 @@ class VolcengineImageService(ImageGenerationService):
             last_error = f"API 错误 [{resp.status_code}]: {resp.text[:300]}"
             break
 
-        if os.getenv("VOLCENGINE_IMAGE_FAIL_FAST", "0").strip() == "1" and not sensitive_skip:
-            # 本批一次失败即封口：后续 generate 在发送前被 _send 拦下（S14 费用边界）。
-            _ABORT[0] = last_error or "生成失败"
-        return ImageGenerationResult(
+        return _finish(ImageGenerationResult(
             success=False, error=last_error,
             soft_skip=sensitive_skip,  # 2026-08-29：仅 OutputImageSensitiveContentDetected 全失败时为 True
-        )
+        ))
 
     def _download(self, req: ImageGenerationRequest, img_url: str, model_idx: int) -> ImageGenerationResult:
         """下载图片到本地，区分首帧/尾帧/关键帧文件名."""
