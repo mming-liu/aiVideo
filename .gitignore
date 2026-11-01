@@ -229,6 +229,7 @@ tests/shared/*
 !docs/step01-ten-run-report-2026-09-28-p1p6-retest.md
 # 2026-10-30（R06/R03/R05/R08）：本包交付记录。
 !docs/step01-r06-r03-r05-r08-closeout-2026-10-30.md
+!docs/s14-run-order-2026-11-01.md
 
 # 2026-10：根目录「代理/复核隔离」调试产物曾被误入库
 # （`review-f-isolated-*` / `review-candidate-isolated-*` / `review-f-round2-*` / `unused.wav`）。
