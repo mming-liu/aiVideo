@@ -1138,7 +1138,8 @@ def _del_frame_and_hash(frame_path, hash_path, label, idx, logger):
 def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
                             reference_paths: list | None = None,
                             lock_kind: str = "layout",
-                            extra_fields: dict | None = None, characters: list | None = None) -> str:
+                            extra_fields: dict | None = None, characters: list | None = None,
+                            *, frame_kind: str | None = None) -> str:
     """计算首帧/尾帧的稳定哈希值 v4.
 
     v4: 新增 _prompt_sig() 对实际图片 prompt (ff_desc/lf_desc) 做规范化哈希，
@@ -1216,6 +1217,14 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
         for c in (characters or []) if isinstance(c, dict)
     ], ensure_ascii=False, sort_keys=True))
     key_parts.append("doodle=" + os.getenv("DOODLE_REFINE_ENABLED", "0"))
+
+    # S23-3：固定机位尾帧的系统文案（只约束相机、放开人物/道具/环境）是
+    # prompt 语义的一部分。旧实现未把它纳入哈希，导致 71f6baa 改了尾帧文案后
+    # 旧 last_frame.png 仍命中缓存。只在尾帧加入策略标识；首帧/关键帧哈希不变。
+    if frame_kind == "last_frame":
+        from shared.shot_motion_checks import is_fixed_camera
+        if is_fixed_camera(str(shot.get("camera_movement") or "")):
+            key_parts.append("lf_camera=fixed_camera_only_v1")
 
     key = "|".join(key_parts)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
@@ -2332,6 +2341,7 @@ def _extract_char_layout(
                 ]
             except Exception:
                 _spec_items = None
+        _spec_extra_items: list[dict] = []
         if _spec_items is not None:
             # spec 模式：spec 里的名字经 alias 折叠映射回 characters
             _spec_names = {str(s.get("name", "")).strip() for s in _spec_items
@@ -2343,6 +2353,18 @@ def _extract_char_layout(
                 # spec 名（可能是合规替换后的"神秘人"）↔ identifier（"刺客"）
                 return any(nm in _spec_names for nm in _char_aliases(ident, characters))
             onstage = [c for c in characters if _char_in_stage(c)]
+            # S23-4：spec 里 on_screen=True 但不在 characters 的非注册角色
+            # （远景农人/群演）也要进【角色锚定】，否则正文有、锚定块漏。
+            _registered_aliases: set[str] = set()
+            for _c in characters:
+                _cid = str(_c.get("identifier", "")).strip()
+                if _cid:
+                    _registered_aliases.update(_char_aliases(_cid, characters))
+            _spec_extra_items = [
+                _si for _si in _spec_items
+                if str(_si.get("name", "")).strip()
+                and str(_si.get("name", "")).strip() not in _registered_aliases
+            ]
         else:
             # 旧章降级：合并 scan 启发式 + 威胁源可见性门控（原逻辑）
             def _char_in_stage(c):
@@ -2355,7 +2377,7 @@ def _extract_char_layout(
                     return False
                 return True
             onstage = [c for c in characters if _char_in_stage(c)]
-        if not onstage:
+        if not onstage and not _spec_extra_items:
             return ""
 
         # 结构化站位（规则51/站位台吸收 v6.35）优先：shot.char_layout 直接给
@@ -2406,11 +2428,12 @@ def _extract_char_layout(
                 seg += pose
             if layout_item:
                 pos = str(layout_item.get("position", "")).strip()
-                # v6.61：spec 项无 facing 字段——映射 pose（"单膝跪舷"）+
-                # gaze_target（"画中下方杨旭"）到朝向（与 derive_char_layout
-                # 的 pose→facing 映射同源）；char_layout 老结构仍读 facing。
+                # v6.61：spec 项无 facing 字段——gaze_target（"画中下方杨旭"）
+                # 映射到朝向；char_layout 老结构仍读 facing，缺省才回退 pose。
+                # S23-4：spec 模式 pose 已在 seg 前部拼过一次，不能再把 pose
+                # 当 facing 回退，否则括号内会重复整段姿态。
                 facing = str(layout_item.get("facing", "")).strip()
-                if not facing:
+                if not facing and _spec_item is None:
                     facing = str(layout_item.get("pose", "")).strip()
                 _gaze = str(layout_item.get("gaze_target", "")).strip()
                 if _gaze and _gaze not in ("无", "无视线", ""):
@@ -2431,13 +2454,13 @@ def _extract_char_layout(
                 if surface and f"在{surface}" not in seg:
                     seg += f"（在{surface}上）"
                 if pos:
-                    seg += pos
+                    seg += (f"，位于{pos}" if pose else pos)
                 if facing:
                     seg += f"（{facing}）"
             else:
                 pos = _extract_kf_position(scan, ident)
                 if pos:
-                    seg += pos
+                    seg += (f"，位于{pos}" if pose else pos)
                 # 朝向：extract_orientation 有(主体,目标) → 面向{目标}
                 try:
                     from shared.style_prefix import extract_orientation
@@ -2457,6 +2480,25 @@ def _extract_char_layout(
                     any(w in scan for w in _FG_DYNAMIC_WORDS) or ident in _THREAT_IDS):
                 seg += "（体型与画面其他人物相当，透视正常，非巨人）"
             parts.append(seg)
+
+        # S23-4：非注册但本帧 on_screen 的 spec 条目（远景农人/群演）补进
+        # 【角色锚定】，否则正文有、锚定块漏。只拼该条目自己的 pose/position/
+        # gaze，不套 char_layout 的 surface 逻辑。
+        for _si in _spec_extra_items:
+            _name = str(_si.get("name", "")).strip()
+            if not _name:
+                continue
+            _pose = str(_si.get("pose", "") or "").strip()
+            _pos = str(_si.get("position", "") or "").strip()
+            _gaze = str(_si.get("gaze_target", "") or "").strip()
+            _seg = _name
+            if _pose:
+                _seg += _pose
+            if _pos:
+                _seg += (f"，位于{_pos}" if _pose else _pos)
+            if _gaze and _gaze not in ("无", "无视线", ""):
+                _seg += f"（目光看向{_gaze}）"
+            parts.append(_seg)
 
         if not parts:
             return ""
@@ -3092,6 +3134,15 @@ def _inject_frame_spec(
             return desc
         char_by_ident = {c.get("identifier", ""): c for c in characters
                          if isinstance(c, dict)}
+        # S23-2：非凶案/无威胁源帧的首尾帧统一剥离“全章 dynamic_features”里的
+        # 受惊/动作结果词（如“遇血案则六神无主、牙齿打颤”）。凶案帧（威胁源
+        # 出现或本帧已有武器/惰性状态）仍保留动作结果，避免把尾帧的血污/倒地
+        # 状态误删。
+        _non_violent_frame = (
+            _threat_visible_in(desc, characters) is None
+            and not any(w in desc for w in WEAPON_WORDS)
+            and not any(w in desc for w in _INERT_STATE_WORDS)
+        )
         additions = []
         for item in on_screen_items:
             ident = str(item.get("name", "")).strip()
@@ -3108,12 +3159,10 @@ def _inject_frame_spec(
             # bank description.  Stable facial features still come from static.
             if dynamic and _current_frame_has_costume(desc, ident, characters):
                 dynamic = ""
-            # 首帧过滤动作结果/武器词；非首帧（lf / kf）做惰性态剥离
-            if frame_kind == "first_frame":
-                dynamic = _strip_frame_action_result(dynamic)
-                if not dynamic and not static:
-                    continue
-            elif _char_inert_in_shot(ident, desc, characters):
+            # 首帧过滤动作结果/武器词；非凶案镜的尾帧/关键帧同样过滤，
+            # 凶案帧仅在角色呈惰性/失能状态时做剥离。
+            if frame_kind == "first_frame" or _non_violent_frame \
+                    or _char_inert_in_shot(ident, desc, characters):
                 dynamic = _strip_frame_action_result(dynamic)
                 if not dynamic and not static:
                     continue
@@ -3142,7 +3191,11 @@ def _inject_frame_spec_and_closeup(desc: str, shot: dict, characters: list | Non
 
 # 首帧禁注入的动作结果/武器词：收敛到 shared/content_safety（审计 S2），
 # 与 step02_video_gen/prompt_builder 视频起点过滤共用单一词表，不再各持一份。
-from shared.content_safety import ACTION_RESULT_WORDS, strip_action_result as _safety_strip_action_result
+from shared.content_safety import (
+    ACTION_RESULT_WORDS,
+    WEAPON_WORDS,
+    strip_action_result as _safety_strip_action_result,
+)
 
 
 def _strip_frame_action_result(dynamic: str) -> str:
@@ -3510,7 +3563,7 @@ async def _gen_first_frame_async(
     current_hash = _get_frame_content_hash(
         shot, empty_scene, reference_paths,
         lock_kind="no_layout" if _is_action_shot(shot, characters) else "layout",
-        characters=characters,
+        characters=characters, frame_kind="first_frame",
     )
 
     # v1.1：挂实际生成最终 prompt 到 shot（QC 语义核对用）。缓存命中/生成两条
@@ -3725,7 +3778,8 @@ async def _gen_last_frame_async(
     # 计算当前哈希值（核心意图 + 空镜约束 + 参考图 + 锁类型）
     # 尾帧用 NO_LAYOUT 锁图（构图随动作演变），锁类型纳入哈希键（审计 S4）。
     current_hash = _get_frame_content_hash(
-        shot, empty_scene, reference_paths, lock_kind="no_layout", characters=characters)
+        shot, empty_scene, reference_paths, lock_kind="no_layout",
+        characters=characters, frame_kind="last_frame")
 
     # v1.1：挂实际生成最终 prompt（QC 语义核对用），与首帧同理
     try:
@@ -4063,7 +4117,8 @@ async def _gen_keyframes_async(
         # 能触发该帧重出（原复用 shot 哈希，所有中间帧同值且改 desc 缓存不失效）。
         current_hash = _get_frame_content_hash(
             shot, empty_scene, reference_paths, lock_kind="no_layout",
-            extra_fields={"kf_desc": kf_desc, "kf_t": time_ratio}, characters=characters)
+            extra_fields={"kf_desc": kf_desc, "kf_t": time_ratio},
+            characters=characters, frame_kind="keyframe")
         
         for attempt in range(max_retries + 1):
             if kf_path.exists() and not force and attempt == 0:

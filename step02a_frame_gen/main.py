@@ -247,11 +247,58 @@ class _ConsoleLogger:
         print(msg)
 
 
+def _plan_frame_state(unit: dict, shot_dir: Path, characters: list,
+                      frame_kind: str) -> str:
+    """plan-only 帧缓存判据：文件存在 + 内容哈希匹配（只读，不创建参考表）.
+
+    旧实现只看文件是否存在，导致“改了 prompt 组装但哈希未命中”的旧帧在预检里
+    仍显示 cached。这里复用生成链的哈希入口；参考图超上限时不落盘参考表，
+    保守退回文件存在性判断。
+    """
+    from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
+    from shared.vimax_bridge import (
+        _collect_frame_refs_for_shot, _get_frame_content_hash,
+        _is_action_shot, is_empty_scene,
+    )
+    from shared.ref_compose import active_image_ref_limit, fit_flat
+
+    idx = int(unit.get("index", 0))
+    is_ff = frame_kind == "first_frame"
+    path = shot_dir / (FIRST_FRAME_FILENAME if is_ff else LAST_FRAME_FILENAME)
+    hash_path = shot_dir / ("frame_hash.txt" if is_ff else "last_frame_hash.txt")
+    if not path.is_file() or not hash_path.is_file():
+        return "generate"
+    try:
+        refs = _collect_frame_refs_for_shot(
+            unit, characters, limit=5, for_frame="首帧" if is_ff else "尾帧")
+        if not is_ff:
+            ff = shot_dir / FIRST_FRAME_FILENAME
+            if not ff.is_file():
+                return "generate"
+            refs = [str(ff)] + [p for p in refs if p != str(ff)]
+        limit = active_image_ref_limit()
+        valid = [p for p in refs if p and Path(p).exists()]
+        if len(valid) > limit:
+            # fit_flat 会落盘内容寻址参考表；plan-only 不写盘，保守按文件存在计。
+            return "cached"
+        refs = fit_flat(refs, limit, shot_dir, f"shot{idx}_{'ff' if is_ff else 'lf'}")
+        lock = "no_layout" if (not is_ff or _is_action_shot(unit, characters)) else "layout"
+        current = _get_frame_content_hash(
+            unit, is_empty_scene(unit, characters), refs,
+            lock_kind=lock, characters=characters, frame_kind=frame_kind)
+        saved = hash_path.read_text(encoding="utf-8").strip()
+        return "cached" if current == saved else "generate"
+    except Exception:
+        # 哈希不可计算时不宣称缓存命中，避免预检低估本次生成量。
+        return "generate"
+
+
 def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dict:
     """零网络账单预检：列出本次会生成多少张肖像/场景/道具/分镜帧.
 
-    计数口径：按**文件是否存在**判断缓存（与生成器的缓存判据一致）；分镜帧的
-    内容哈希未在此重算——哈希不匹配的旧帧会在实跑时重生成，报告里单列说明。
+    计数口径：肖像/场景/道具按文件存在性；分镜帧按“文件存在 + 内容哈希匹配”
+    判断（与生成器缓存判据一致），哈希不匹配的旧帧计为 generate。参考图超
+    模型上限时不落盘参考表，保守退回文件存在性判断。
     """
     import json
     from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
@@ -304,6 +351,9 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dic
         prop_plan.append({"prop": pid, "to_generate": 0 if exists else 1})
 
     frame_plan = []
+    # 哈希必须用与生成链相同的完整角色表；characters 变量按 --shots 过滤过，
+    # 只用于肖像计划，不能拿来做帧哈希。
+    _hash_characters = list(script.get("characters") or [])
     for unit in units:
         idx = int(unit.get("index", 0))
         shot_dir = Path(work_dir) / "shots" / str(idx)
@@ -312,9 +362,9 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dic
         want_lf = frames is None or "lf" in frames
         want_kf = frames is None or any(str(f).startswith("kf") for f in frames)
         if want_ff:
-            row["ff"] = "cached" if (shot_dir / FIRST_FRAME_FILENAME).is_file() else "generate"
+            row["ff"] = _plan_frame_state(unit, shot_dir, _hash_characters, "first_frame")
         if want_lf:
-            row["lf"] = "cached" if (shot_dir / LAST_FRAME_FILENAME).is_file() else "generate"
+            row["lf"] = _plan_frame_state(unit, shot_dir, _hash_characters, "last_frame")
         if want_kf:
             expected = sum(1 for k in (unit.get("keyframes") or [])
                            if isinstance(k, dict) and str(k.get("desc") or "").strip())
@@ -397,7 +447,7 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dic
         "prompt_stage": "assembled_pre_adapter",
         "prompt_preflight": {"status": "blocked" if prompt_problems else "ok",
                              "problems": prompt_problems},
-        "note": "分镜帧按文件存在性计数；内容哈希不匹配的旧帧会在实跑时重生成",
+        "note": "分镜帧按文件存在 + 内容哈希判断；哈希不匹配的旧帧计为 generate",
     }
 
 

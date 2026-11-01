@@ -1447,6 +1447,40 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
             if ident and ident in shot_text:
                 present_chars.append(c)
 
+        # S23-1：frame_layouts 的 on_screen 名单是“当帧出镜”事实源。非注册角色
+        # （远景农人/群演等）不在 script.characters 里，但正文可能明确写了他们；
+        # 只按注册角色生成“只允许 N 人”会与正文直接打架（正文有农人，末尾却
+        # 禁止任何其他人物）。把当帧 on_screen 的非注册名并入允许名单，并在
+        # 存在此类角色时改用“描述明确提到的人物”口径，不硬编码具体人名。
+        _frame_kind = {"首帧": "first_frame", "尾帧": "last_frame"}.get(frame_type)
+        _spec_on_screen: list[str] = []
+        if _frame_kind:
+            try:
+                from shared.frame_spec import get_frame_spec, is_on_screen
+                _spec_on_screen = [
+                    str(s.get("name", "")).strip()
+                    for s in get_frame_spec(shot, _frame_kind)
+                    if is_on_screen(s) and str(s.get("name", "")).strip()
+                ]
+            except Exception:
+                _spec_on_screen = []
+        _known_names: set[str] = set()
+        try:
+            from shared.vimax_bridge import _char_aliases
+        except Exception:
+            _char_aliases = None
+        for c in (characters or []):
+            ident = str(c.get("identifier") or "").strip()
+            if not ident:
+                continue
+            if _char_aliases is not None:
+                _known_names.update(_char_aliases(ident, characters))
+            else:
+                _known_names.add(ident)
+        _extra_on_screen = [
+            n for n in dict.fromkeys(_spec_on_screen) if n not in _known_names
+        ]
+
         if has_threat:
             # 武器归属：武器只能由威胁源持有；其余出场角色不得持武器/蒙面。
             # 08-16：威胁源自己持有武器，不应被列入"无武器"——否则同段既写
@@ -1499,6 +1533,10 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
         char_names = list(dict.fromkeys(c["identifier"] for c in _count_chars))
         if has_threat and _threat_onscreen and "刺客" not in char_names:
             char_names.append("刺客")
+        # S23-1：非注册但本帧 on_screen 的角色（远景农人/群演）并入允许名单。
+        for _n in _extra_on_screen:
+            if _n not in char_names:
+                char_names.append(_n)
 
         if char_names:
             # 威胁源以水下黑影/刀尖呈现时，黑影是剧情要素，不在禁用之列——
@@ -1522,6 +1560,23 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                     f"禁止复制/复用画面已列角色作为新人物（如把同一角色画两次、"
                     f"给蒙面人画第二个分身），每个角色在画面中只出现一次。"
                 )
+                strict_constraints += (
+                    f"【人物数量限制】画面中只允许出现以下角色：{'、'.join(char_names)}。"
+                    f"总共{len(char_names)}人，{_banned_tail}"
+                )
+            elif _extra_on_screen:
+                # S23-1：非注册但本帧 on_screen 的角色（远景农人/群演）已在正文
+                # 出现；不再输出“总共 N 人/禁止任何其他人物”的封闭硬门，改用
+                # “描述明确提到的人物”口径，允许伴随群演（如牛背小童）按正文保留。
+                _shadow_in_frame = "黑影" in _threat_desc
+                _extra_ban = "" if _shadow_in_frame else "、黑影"
+                strict_constraints += (
+                    f"【人物数量限制】本帧主要角色：{'、'.join(char_names)}。"
+                    "画面中只允许出现描述中明确提到的人物（包括随行、远景等伴随人物）；"
+                    f"禁止添加描述未提及的人物{_extra_ban}、人影。"
+                    "禁止复制/复用画面已列角色作为新人物（如把同一角色画两次、"
+                    "给蒙面人画第二个分身），每个角色在画面中只出现一次。"
+                )
             else:
                 # v6.69：帧描述自身把黑影当剧情要素（水下黑影伏笔等，如 shot4
                 # lf「水面下黑影更清晰」）时，默认禁令不得含「黑影」——否则与
@@ -1535,10 +1590,10 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                     "禁止复制/复用画面已列角色作为新人物（如把同一角色画两次、"
                     "给蒙面人画第二个分身），每个角色在画面中只出现一次。"
                 )
-            strict_constraints += (
-                f"【人物数量限制】画面中只允许出现以下角色：{'、'.join(char_names)}。"
-                f"总共{len(char_names)}人，{_banned_tail}"
-            )
+                strict_constraints += (
+                    f"【人物数量限制】画面中只允许出现以下角色：{'、'.join(char_names)}。"
+                    f"总共{len(char_names)}人，{_banned_tail}"
+                )
 
         # v6.52 防线2：char_layout 结构化直推人数硬锚——present_chars 靠文本
         # 匹配推导，威胁源别名（刺客→神秘人）漏配时名单缺人、人数锚失真
