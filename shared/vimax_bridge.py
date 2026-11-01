@@ -3396,26 +3396,6 @@ async def _accept_doodle_refinement(refined, target, shot, frame_kind, character
     return True
 
 
-_FIXED_RELAYOUT_MARKERS = ("可与首帧", "人物位置不同", "重新布局")
-
-
-def frame_prompt_problems(prompt: str, shot: dict, frame_kind: str) -> list[dict]:
-    """固定机位尾帧不得出现“可重布局/可换人物位置”的指令（预检硬门）."""
-    camera = str(shot.get("camera_movement") or "")
-    fixed = ("固定机位" in camera or camera.strip().lower() in ("static", "fixed", "locked")) \
-        and "非固定" not in camera and "不固定" not in camera
-    if frame_kind != "last_frame" or not fixed:
-        return []
-    hits = [m for m in _FIXED_RELAYOUT_MARKERS if m in str(prompt or "")]
-    if not hits:
-        return []
-    return [{
-        "code": "fixed_camera_relayout_conflict",
-        "message": "固定机位尾帧 prompt 含可重布局/可换人物位置指令：%r" % hits,
-        "markers": hits,
-    }]
-
-
 def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
                          *, desc: str | None = None) -> str:
     """帧 prompt 唯一组装入口：生成链与 --plan-only 预检共用同一份逻辑.
@@ -3459,21 +3439,19 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
         location = shot.get("location", "") or ""
         ctx = f"（场景：{location or scene}）" if (location or scene) else ""
         camera = str(shot.get("camera_movement") or "")
-        fixed = ("固定机位" in camera or camera.strip().lower() in ("static", "fixed", "locked")) \
-            and "非固定" not in camera and "不固定" not in camera
-        if fixed:
-            # 固定机位：尾帧必须沿用首帧机位与人物相对位置，只让动作/环境演进；
-            # 旧文案“可与首帧人物位置不同”会直接诱导 I2I 把人物挪位。
+        from shared.shot_motion_checks import is_fixed_camera
+        if is_fixed_camera(camera):
+            # 固定机位只约束相机：沿用首帧机位/景别、相机不移动；人物、道具与
+            # 环境的位置按本镜尾帧描述演进。不得由“固定机位”推导人物位置锁定，
+            # 也不得注入无依据的换机位指令——固定机位允许人物走动、交换位置、
+            # 入画出画，以及载具/镜头内运动造成的屏幕位移。
             text = (f"{text}{ctx}"
-                    f"，构图与首帧保持一致：同一机位、同一景别，人物在画面中的相对位置不变；"
-                    f"仅动作与环境按尾帧描述演进。")
+                    f"，机位固定：沿用首帧的同一机位与景别，相机不移动；"
+                    f"人物、道具与环境的位置按尾帧描述的动作终态演进。")
         else:
             text = (f"{text}{ctx}"
                     f"，构图需按尾帧描述重新布局，"
                     f"可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。")
-        problems = frame_prompt_problems(text, shot, "last_frame")
-        if problems:
-            raise ValueError("%s: %s" % (problems[0]["code"], problems[0]["message"]))
         text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas("9:16")), verbose=False)
         return add_image_strict_constraints(text, "尾帧", shot=shot, characters=chars)
 

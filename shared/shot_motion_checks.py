@@ -38,11 +38,16 @@ _GENERIC_TERMS = ("横移", "推近", "推镜", "拉远", "拉镜", "跟拍", "�
                   "环绕", "摇镜", "摇摄", "升降", "俯冲", "拉升")
 
 
-def _is_fixed(camera: str) -> bool:
-    low = camera.strip().lower()
+def is_fixed_camera(camera: str) -> bool:
+    """camera_movement 是否表示固定机位（“非固定/不固定”优先，其余按词表命中）."""
+    low = str(camera or "").strip().lower()
     if "非固定" in low or "不固定" in low:
         return False
     return any(v in low for v in FIXED_CAMERA_VALUES)
+
+
+def _is_fixed(camera: str) -> bool:
+    return is_fixed_camera(camera)
 
 
 def _camera_subject_ok(motion: str, start: int) -> bool:
