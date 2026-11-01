@@ -43,6 +43,16 @@ from shared.log_utils import verbose_write
 _verbose_write = partial(verbose_write, log_file="step02a.log")
 
 
+class _PostLimit(RuntimeError):
+    """达到请求上限：**发送前**拦截，绝不先发后判。"""
+
+
+# 进程级 POST 计数（VOLCENGINE_IMAGE_MAX_POSTS）：跨资产/帧的整批预算。
+_POSTS_USED = [0]
+# 进程级"本批已失败"标记（VOLCENGINE_IMAGE_FAIL_FAST）：一次失败后拒绝任何后续 POST。
+_ABORT = [None]
+
+
 def _encode_image(path: Optional[str]) -> Optional[str]:
     """读取本地图片，返回 base64 data URL（Seedream 接受 data URI）."""
     if not path:
@@ -143,13 +153,34 @@ class VolcengineImageService(ImageGenerationService):
 
         model_idx = 0
         last_error = ""
-        # 单次调用允许的最大 POST 次数（0/未设 = 沿用历史"不限"）。按量试跑用它把
-        # 请求数钉死：失败即停，不自动重抽（S14 运行单设 1）。
-        try:
-            _max_attempts = int(os.getenv("VOLCENGINE_IMAGE_MAX_ATTEMPTS", "0") or "0")
-        except ValueError:
-            _max_attempts = 0
+
+        def _env_int(name: str) -> int:
+            try:
+                return int(os.getenv(name, "0") or "0")
+            except ValueError:
+                return 0
+
+        # 两个上限都在 **requests.post 之前**判断（0/未设 = 沿用历史"不限"）：
+        #   VOLCENGINE_IMAGE_MAX_ATTEMPTS —— 单次 generate 的尝试次数；
+        #   VOLCENGINE_IMAGE_MAX_POSTS    —— 整批（进程级）POST 预算，跨资产/帧。
+        _max_attempts = _env_int("VOLCENGINE_IMAGE_MAX_ATTEMPTS")
+        _max_posts = _env_int("VOLCENGINE_IMAGE_MAX_POSTS")
         _attempts = 0
+
+        def _send(payload: dict):
+            nonlocal _attempts
+            if _ABORT[0]:
+                raise _PostLimit("本批已中止（%s），拒绝后续请求" % _ABORT[0])
+            if _max_attempts and _attempts >= _max_attempts:
+                raise _PostLimit("达到尝试上限 %d（VOLCENGINE_IMAGE_MAX_ATTEMPTS）"
+                                 % _max_attempts)
+            if _max_posts and _POSTS_USED[0] >= _max_posts:
+                raise _PostLimit("达到批次 POST 上限 %d（VOLCENGINE_IMAGE_MAX_POSTS）"
+                                 % _max_posts)
+            _attempts += 1
+            _POSTS_USED[0] += 1
+            return requests.post(f"{self._base_url}/images/generations",
+                                 json=payload, headers=self._headers, timeout=180)
         # 2026-08-29：OutputImageSensitiveContentDetected 专用旗。
         # 当主模型 + 所有 fallback 都因输出安全过滤失败时，标记为软跳过：
         # 不阻塞整批生成（避免 1 张刺杀/流血图把整条 shot 链路 kill），
@@ -158,12 +189,6 @@ class VolcengineImageService(ImageGenerationService):
         sensitive_skip = False
 
         while model_idx < len(self._model_queue):
-            if _max_attempts and _attempts >= _max_attempts:
-                last_error = last_error or (
-                    "达到尝试上限 %d（VOLCENGINE_IMAGE_MAX_ATTEMPTS）" % _max_attempts)
-                _verbose_write(f"  [镜头{req.shot_index}] [STOP] {last_error}")
-                break
-            _attempts += 1
             model = self._model_queue[model_idx]
             cap = get_seedream_cap(model)
             # 关键修复：按当前模型能力重算 ref_limit（每个模型上限可能不同：
@@ -212,12 +237,11 @@ class VolcengineImageService(ImageGenerationService):
                 _verbose_write(f"[DEBUG] image_submit: ref[{i}] 源路径={src}")
 
             try:
-                resp = requests.post(
-                    f"{self._base_url}/images/generations",
-                    json=payload,
-                    headers=self._headers,
-                    timeout=180,
-                )
+                resp = _send(payload)
+            except _PostLimit as exc:
+                last_error = str(exc)
+                _verbose_write(f"  [镜头{req.shot_index}] [STOP] {last_error}")
+                break
             except Exception as e:
                 last_error = f"提交异常: {e}"
                 break
@@ -232,8 +256,11 @@ class VolcengineImageService(ImageGenerationService):
                     _verbose_write(f"[IMAGE-RETRY] input_sensitive: original={req.prompt}; revised={sanitized}")
                     payload["prompt"] = sanitized
                     try:
-                        resp = requests.post(f"{self._base_url}/images/generations",
-                                             json=payload, headers=self._headers, timeout=180)
+                        resp = _send(payload)
+                    except _PostLimit as exc:
+                        last_error = str(exc)
+                        _verbose_write(f"  [镜头{req.shot_index}] [STOP] {last_error}")
+                        break
                     except Exception as exc:
                         last_error = f"input-sensitive retry failed: {exc}"
                         break
@@ -312,6 +339,9 @@ class VolcengineImageService(ImageGenerationService):
             last_error = f"API 错误 [{resp.status_code}]: {resp.text[:300]}"
             break
 
+        if os.getenv("VOLCENGINE_IMAGE_FAIL_FAST", "0").strip() == "1" and not sensitive_skip:
+            # 本批一次失败即封口：后续 generate 在发送前被 _send 拦下（S14 费用边界）。
+            _ABORT[0] = last_error or "生成失败"
         return ImageGenerationResult(
             success=False, error=last_error,
             soft_skip=sensitive_skip,  # 2026-08-29：仅 OutputImageSensitiveContentDetected 全失败时为 True

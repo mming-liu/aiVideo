@@ -616,6 +616,8 @@ async def _generate_missing_portraits(
         skip_sanitize=True,
     )
     portrait_gen = CharacterPortraitsGenerator(image_generator=portrait_adapter)
+    # 按量试跑：一次失败即中止整批（默认关闭，保持历史"逐视角继续"行为）。
+    _fail_fast = os.getenv("STEP02A_FAIL_FAST", "0").strip() == "1"
     registry = {}  # 注掉的代码保持不变
 
     for char in characters:
@@ -672,6 +674,8 @@ async def _generate_missing_portraits(
                 _bridge_log(f"  [bank] {identifier} 基础全景图 -> {base_path}")
             except Exception as e:
                 _bridge_log(f"  [bank] {identifier} 基础全景图生成失败: {e}")
+                if _fail_fast:
+                    raise
                 continue
 
         # Step 2: 基于基础图生成侧面照
@@ -690,6 +694,8 @@ async def _generate_missing_portraits(
                 _bridge_log(f"  [bank] {identifier} 侧面肖像 -> {side_path}")
             except Exception as e:
                 _bridge_log(f"  [bank] {identifier} 侧面肖像生成失败: {e}")
+                if _fail_fast:
+                    raise
 
         # Step 3: 基于基础图生成背面照
         back_path = portrait_dir / "back.png"
@@ -707,6 +713,8 @@ async def _generate_missing_portraits(
                 _bridge_log(f"  [bank] {identifier} 背面肖像 -> {back_path}")
             except Exception as e:
                 _bridge_log(f"  [bank] {identifier} 背面肖像生成失败: {e}")
+                if _fail_fast:
+                    raise
 
         # Step 4: 基于基础图生成独立高清面部特写（组合参考图法，锁脸防变脸）
         # 面部是"变脸"重灾区——三视图 + 单独面部特写同时输入，模型优先锁面部特征。
@@ -725,6 +733,8 @@ async def _generate_missing_portraits(
                 _bridge_log(f"  [bank] {identifier} 面部特写肖像 -> {face_path}")
             except Exception as e:
                 _bridge_log(f"  [bank] {identifier} 面部特写肖像生成失败: {e}")
+                if _fail_fast:
+                    raise
 
         # 构建 portraits dict（兼容旧 front 字段名）
         portraits = {}
