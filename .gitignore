@@ -266,6 +266,7 @@ tests/step03_tts_audio/*
 !tests/step03_tts_audio/test_narration_tts.py
 !tests/step03_tts_audio/test_tts_units_and_cli.py
 !tests/step03_tts_audio/_tts_stub.py
+!tests/step03_tts_audio/test_subset_narration.py
 !tests/step02_video_gen/
 tests/step02_video_gen/*
 !tests/step02_video_gen/test_video_prepared_providers.py
