@@ -328,11 +328,17 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
             entries.append(entry)
             continue
         problems = rp.validate_frozen_request(frozen)
+        # S22-D：运镜一致性告警；默认不阻断，SHOT_MOTION_STRICT=1 时升级为 blocked。
+        from shared.shot_motion_checks import motion_warnings
+        warnings = motion_warnings(shot)
+        if os.getenv("SHOT_MOTION_STRICT", "0").strip() == "1" and warnings:
+            problems = list(problems) + warnings
         entry.update({
             "verdict": "blocked" if problems else "ready",
             "request_key": frozen.request_key,
             "request": frozen.to_dict(),
             "problems": problems,
+            "warnings": warnings,
             "semantic_preflight": "unverified",
             "generations": 0 if problems else 1,
         })

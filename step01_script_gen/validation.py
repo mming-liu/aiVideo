@@ -424,6 +424,9 @@ def _validate_script(script: dict) -> None:
     # v6.1: Agnes AI 音频指令校验
     _check_audio_instruction(shots)
 
+    # --- 运镜一致性（S22-D）：固定机位 + 文本运镜 / 首尾帧无可观察位移 ---
+    _check_motion_consistency(shots)
+
     # --- 单镜头校验 ---
     for i, shot in enumerate(shots, 1):
         seg = shot.get("narration_segment", "").strip()
@@ -470,6 +473,17 @@ def _validate_script(script: dict) -> None:
     # WARN 中单独高亮，便于在批量生成后一眼定位需人工审核的镜头。
     # （此前这些 项与大量噪声混在一起，真实问题容易被淹没）
     _print_content_issue_summary(script, shots)
+
+
+def _check_motion_consistency(shots: list[dict]) -> None:
+    """camera_movement 与 motion_desc 矛盾、首尾帧缺位移时告警（不阻断）."""
+    from shared.shot_motion_checks import motion_warnings
+    for shot in shots:
+        if not isinstance(shot, dict):
+            continue
+        for w in motion_warnings(shot):
+            _get_logger().warn(
+                "镜头%s: [%s] %s" % (shot.get("index"), w["code"], w["message"]))
 
 
 def _print_content_issue_summary(script: dict, shots: list[dict]) -> None:
