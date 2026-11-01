@@ -5,16 +5,20 @@ _ROOT=Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path: sys.path.insert(0,str(_ROOT))
 
 def test_image_quality_reports_video_leak(monkeypatch,tmp_path):
-    from step02a_frame_gen.image_prompt_quality import collect_image_prompt_quality
-    monkeypatch.setattr('shared.paths.chapter_dir', lambda: tmp_path)
+    import step02a_frame_gen.image_prompt_quality as _q
+    collect_image_prompt_quality = _q.collect_image_prompt_quality
+    # 模块内是 `from shared.paths import chapter_dir`，必须钉模块属性，
+    # 否则干净检出里会写到不存在的生产章目录（本机靠历史目录才“碰巧通过”）。
+    monkeypatch.setattr(_q, 'chapter_dir', lambda: tmp_path)
     script={'shots':[{'index':1,'ff_desc':'中景，镜头缓慢推近，杨旭站立','lf_desc':'杨旭转身','keyframes':[]}]}
     r=collect_image_prompt_quality(script)
     assert r['warning_count']==1
     assert r['warnings'][0]['category']=='image_video_directive_leak'
 
 def test_image_quality_clean(monkeypatch,tmp_path):
-    from step02a_frame_gen.image_prompt_quality import collect_image_prompt_quality
-    monkeypatch.setattr('shared.paths.chapter_dir', lambda: tmp_path)
+    import step02a_frame_gen.image_prompt_quality as _q
+    collect_image_prompt_quality = _q.collect_image_prompt_quality
+    monkeypatch.setattr(_q, 'chapter_dir', lambda: tmp_path)
     script={'shots':[{'index':1,'ff_desc':'中景，杨旭站立','lf_desc':'杨旭转身','keyframes':[]}]}
     assert collect_image_prompt_quality(script)['warning_count']==0
 
