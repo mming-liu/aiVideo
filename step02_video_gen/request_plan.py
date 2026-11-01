@@ -246,6 +246,59 @@ def build_frozen_request(req, *, shot: dict, scope: dict | None, script_revision
     return frozen
 
 
+def _norm_fact(value) -> str:
+    import json as _json
+    return _json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def verify_prepared_frozen(prepared, frozen: FrozenVideoRequest) -> list[dict]:
+    """prepared（实际下发）与 frozen（冻结记录）的一致性核对。
+
+    prompt 逐字一致；其余字段按规范化结构比较（模型/参数/素材角色+顺序+摘要），
+    不因 JSON 键顺序或传输编码差异误判。
+    """
+    problems: list[dict] = []
+
+    def _p(code: str, field_path: str, message: str):
+        problems.append({"code": code, "field_path": field_path, "message": message})
+
+    if str(getattr(prepared, "prompt", "") or "") != str(frozen.prompt or ""):
+        _p("prepared_prompt_mismatch", "prompt", "prepared 与 frozen 的 prompt 不是逐字一致")
+    for field in ("provider", "model_id", "mode"):
+        a = str(getattr(prepared, field, "") or "")
+        b = str(getattr(frozen, field, "") or "")
+        if a != b:
+            _p("prepared_%s_mismatch" % field, field,
+               "prepared=%r frozen=%r" % (a, b))
+
+    p_params = dict(getattr(prepared, "parameters", None) or {})
+    f_params = dict(getattr(frozen, "parameters", None) or {})
+    for key in sorted(set(p_params) | set(f_params)):
+        if _norm_fact(p_params.get(key)) != _norm_fact(f_params.get(key)):
+            _p("prepared_parameter_mismatch", "parameters.%s" % key,
+               "prepared=%r frozen=%r" % (p_params.get(key), f_params.get(key)))
+
+    p_mats = list(getattr(prepared, "materials", None) or [])
+    f_refs = list(getattr(frozen, "references", None) or [])
+    if len(p_mats) != len(f_refs):
+        _p("prepared_material_count_mismatch", "references",
+           "prepared=%d frozen=%d" % (len(p_mats), len(f_refs)))
+    else:
+        for i, (mat, ref) in enumerate(zip(p_mats, f_refs)):
+            for field in ("role", "sha256"):
+                a = getattr(mat, field, None)
+                b = getattr(ref, field, None)
+                if _norm_fact(a) != _norm_fact(b):
+                    _p("prepared_material_%s_mismatch" % field, "references[%d].%s" % (i, field),
+                       "prepared=%r frozen=%r" % (a, b))
+            a_path = getattr(mat, "source_path", None)
+            b_path = getattr(ref, "path", None)
+            if a_path and b_path and _norm_fact(a_path) != _norm_fact(b_path):
+                _p("prepared_material_path_mismatch", "references[%d].path" % i,
+                   "prepared=%r frozen=%r" % (a_path, b_path))
+    return problems
+
+
 def validate_frozen_request(frozen: FrozenVideoRequest, *,
                             supported_roles: set[str] | None = None,
                             max_references: int | None = None) -> list[dict]:

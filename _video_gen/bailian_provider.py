@@ -73,13 +73,20 @@ def _clip_prompt(req, model: str) -> str:
     智能改写 (prompt_extend=True) 会优先看到运镜指令，权重更高。
     幂等：已含"运镜："段则跳过（避免重复）。
     """
+    from shared.video_prompt_system import SystemCameraError, apply_system_camera
+
     prompt = req.prompt
-    if req.camera_movement and "运镜：" not in prompt[:20]:
-        prompt = f"运镜：{req.camera_movement}\n{prompt}"
+    camera = str(req.camera_movement or "").strip()
+    reserve = len(f"运镜：{camera}\n") if camera else 0
     cap = _model_prompt_cap(model)
-    if cap and cap > 0:
-        return prompt[:cap]
-    return prompt
+    if cap and cap > 0 and len(prompt) > cap - reserve:
+        prompt = prompt[:max(0, cap - reserve)]
+    result = apply_system_camera(prompt, camera,
+                                 max_chars=cap if cap and cap > 0 else None)
+    if result["problems"]:
+        problem = result["problems"][0]
+        raise SystemCameraError(problem["code"], problem["message"], provider="bailian")
+    return result["prompt"]
 
 
 def _append_image_refs(prompt: str, n: int) -> str:

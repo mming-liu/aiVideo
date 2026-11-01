@@ -278,6 +278,7 @@ tests/step03_tts_audio/*
 !tests/step02_video_gen/
 tests/step02_video_gen/*
 !tests/step02_video_gen/test_video_prepared_providers.py
+!tests/step02_video_gen/test_prepared_frozen.py
 !tests/shared/test_cache_and_card_handoff.py
 !tests/shared/test_plan_revision_delta_end_to_end.py
 !tests/shared/test_content_verification.py

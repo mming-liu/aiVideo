@@ -3396,6 +3396,57 @@ async def _accept_doodle_refinement(refined, target, shot, frame_kind, character
     return True
 
 
+def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
+                         *, desc: str | None = None) -> str:
+    """帧 prompt 唯一组装入口：生成链与 --plan-only 预检共用同一份逻辑.
+
+    S04：预检不得另拼一份 prompt，否则“看到的”和“发出去的”会漂移。
+    """
+    chars = characters or []
+    if frame_kind == "first_frame":
+        base = desc if desc is not None else (shot.get("ff_desc") or shot.get("prompt") or "")
+        text = preprocess_prompt_for_image(base)
+        text = _inject_frame_spec_and_closeup(text, shot, chars, frame_kind="first_frame")
+        text = _inject_object_size_anchor(shot, text)
+        text = _inject_tone_anchor(shot, text)
+        anchor = _extract_char_layout(shot, chars,
+                                      role_scan_text=shot.get("ff_desc", ""),
+                                      water_state=False, frame_kind="first_frame")
+        if anchor:
+            text = f"{text}。{anchor}"
+        prop = _extract_prop_layout(shot, chars, role_scan_text=shot.get("ff_desc", ""))
+        if prop:
+            text = f"{text}。{prop}"
+        text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas("9:16")), verbose=False)
+        return add_image_strict_constraints(text, "首帧", shot=shot, characters=chars)
+
+    if frame_kind == "last_frame":
+        base = desc if desc is not None else (shot.get("lf_desc") or shot.get("prompt") or "")
+        text = preprocess_prompt_for_image(base)
+        text = _inject_frame_spec_and_closeup(text, shot, chars, frame_kind="last_frame")
+        text = fix_lf_desc_gaze(text, shot, chars)
+        text = _inject_object_size_anchor(shot, text)
+        text = _inject_tone_anchor(shot, text)
+        anchor = _extract_char_layout(shot, chars,
+                                      role_scan_text=shot.get("lf_desc", ""),
+                                      water_state=True, frame_kind="last_frame")
+        if anchor:
+            text = f"{text}。{anchor}"
+        prop = _extract_prop_layout(shot, chars, role_scan_text=shot.get("lf_desc", ""))
+        if prop:
+            text = f"{text}。{prop}"
+        scene = shot.get("scene", "") or ""
+        location = shot.get("location", "") or ""
+        ctx = f"（场景：{location or scene}）" if (location or scene) else ""
+        text = (f"{text}{ctx}"
+                f"，构图需按尾帧描述重新布局，"
+                f"可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。")
+        text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas("9:16")), verbose=False)
+        return add_image_strict_constraints(text, "尾帧", shot=shot, characters=chars)
+
+    raise ValueError("frame_kind 必须是 first_frame / last_frame")
+
+
 async def _gen_first_frame_async(
     image_adapter, shots_dir: Path, shot: dict, force: bool,
     script_mtime: float | None = None,
@@ -3483,29 +3534,8 @@ async def _gen_first_frame_async(
     # 注意不能传 None——适配器 kwargs.get("lock_prompt", DEFAULT) 会把 "None，" 拼进 prompt。
     action_lock = IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT if is_action else None
     # ---- prompt 组装（只算一次，重试复用） ----
-    _ff_pre = preprocess_prompt_for_image(ff_desc)
-    _ff_pre = _inject_frame_spec_and_closeup(_ff_pre, shot, characters, frame_kind="first_frame")
-    # 场景物体尺寸锚定注入（船/车等物体比例防漂移，code-audit 08-06 钩子船太小）
-    _ff_pre = _inject_object_size_anchor(shot, _ff_pre)
-    # 场景色调锚定注入（color_tone：夜景冷蓝/暖金烛光等，防模型自造色调漂色）
-    _ff_pre = _inject_tone_anchor(shot, _ff_pre)
-    # 角色姿态/位置/朝向锚定块（代码级兜底——首帧若 LLM 漏写刺客朝向/角色姿态，
-    # 从 shot 全文提取补上；water_state=False 首帧是动作前一刻，不补船/水面状态）
-    # v6.61：frame_kind="first_frame" → spec 驱动出镜表（ff 威胁源潜伏水下
-    # on_screen 判定，不再走合并 scan 的 _threat_visible_in）
-    _ff_anchor = _extract_char_layout(shot, characters,
-                                      role_scan_text=shot.get("ff_desc", ""),
-                                      water_state=False,
-                                      frame_kind="first_frame")
-    if _ff_anchor:
-        _ff_pre = f"{_ff_pre}。{_ff_anchor}"
-    # A3 修复：道具空间方位锚定块（提取同框手持道具的落点，防自由摆放重叠）
-    _ff_prop = _extract_prop_layout(shot, characters,
-                                    role_scan_text=shot.get("ff_desc", ""))
-    if _ff_prop:
-        _ff_pre = f"{_ff_pre}。{_ff_prop}"
-    ff_desc_full = sanitize_prompt(ensure_prefix(_ff_pre, style_prefix_for_canvas("9:16")), verbose=False)
-    ff_desc_full = add_image_strict_constraints(ff_desc_full, "首帧", shot=shot, characters=characters)
+    # S04：生成与 --plan-only 预检共用同一组装入口。
+    ff_desc_full = compose_frame_prompt(shot, characters, "first_frame", desc=ff_desc)
     # ---- prompt 组装结束 ----
     gen_kwargs = dict(
         prompt=ff_desc_full,
@@ -3721,44 +3751,8 @@ async def _gen_last_frame_async(
 
     refs = reference_paths if reference_paths else []
     # ---- lf prompt 组装（只算一次，重试复用） ----
-    _lf_pre = preprocess_prompt_for_image(lf_desc)
-    # v1.1：注入出镜角色服装特征（与首帧一致）
-    _lf_pre = _inject_frame_spec_and_closeup(_lf_pre, shot, characters, frame_kind="last_frame")
-    # v1.1：尾帧目光修复（错别字 + 看向动作结果对象——听香看被刺倒的杨旭）
-    _lf_pre = fix_lf_desc_gaze(_lf_pre, shot, characters)
-    # 场景物体尺寸锚定注入（船/车等物体比例防漂移）
-    _lf_pre = _inject_object_size_anchor(shot, _lf_pre)
-    # 场景色调锚定注入（color_tone：夜景冷蓝/暖金烛光等，防模型自造色调漂色）
-    _lf_pre = _inject_tone_anchor(shot, _lf_pre)
-    # 角色姿态/位置/朝向锚定块（代码级兜底——lf_desc 是动作结果态，从 shot
-    # 全文提取出镜角色的终态姿态/位置，防"浪花消失/角色站位漂移"；
-    # water_state=True 尾帧也补船完整+水面状态）
-    # v6.61：frame_kind="last_frame" → spec 驱动出镜表（lf 刺客 on_screen=false
-    # → 不再进锚定块，治 09-05 hook lf 站立刺客根因）
-    _lf_anchor = _extract_char_layout(shot, characters,
-                                      role_scan_text=shot.get("lf_desc", ""),
-                                      water_state=True,
-                                      frame_kind="last_frame")
-    if _lf_anchor:
-        _lf_pre = f"{_lf_pre}。{_lf_anchor}"
-    # A3 修复：道具空间方位锚定块（尾帧同框道具落点，防自由摆放重叠）
-    _lf_prop = _extract_prop_layout(shot, characters,
-                                    role_scan_text=shot.get("lf_desc", ""))
-    if _lf_prop:
-        _lf_pre = f"{_lf_pre}。{_lf_prop}"
-    # 尾帧注入场景上下文 + 显式"重构图"指令：
-    # 参考图（首帧）只作人物/风格锚定，构图必须按 lf_desc 重新布局，
-    # 否则参考图会把动作结果帧也锁死在首帧构图上，三帧雷同、动作无法推进。
-    scene = shot.get("scene", "") or ""
-    location = shot.get("location", "") or ""
-    ctx = f"（场景：{location or scene}）" if (location or scene) else ""
-    lf_desc_full = (
-        f"{_lf_pre}{ctx}"
-        f"，构图需按尾帧描述重新布局，"
-        f"可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。"
-    )
-    lf_desc_full = sanitize_prompt(ensure_prefix(lf_desc_full, style_prefix_for_canvas("9:16")), verbose=False)
-    lf_desc_full = add_image_strict_constraints(lf_desc_full, "尾帧", shot=shot, characters=characters)
+    # S04：生成与 --plan-only 预检共用同一组装入口。
+    lf_desc_full = compose_frame_prompt(shot, characters, "last_frame", desc=lf_desc)
     # ---- lf prompt 组装结束 ----
 
     for attempt in range(max_retries + 1):

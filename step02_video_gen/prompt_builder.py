@@ -1159,10 +1159,8 @@ def _build_seedance_concise_prompt(shot: dict, characters: list | None = None) -
     仍超 500 字符的极端 case 由它按权重删低权重段。
     """
     parts = ["画面无任何字幕、文字、水印、logo、图标；禁止在画面中叠加文字。"]
-    # v6.58 (Phase C-1): 运镜指令提到最前，提升模型注意力权重
-    camera_movement = (shot.get("camera_movement") or "").strip()
-    if camera_movement:
-        parts.append(f"运镜：{camera_movement}")
+    # S02：系统运镜段由 provider 统一组装（shared.video_prompt_system），
+    # 这里不再注入，避免“文本一处 + provider 一处”的重复。
     _chars = characters if isinstance(characters, list) else []
     ff_desc = shot.get("ff_desc", "").strip()
     if ff_desc:

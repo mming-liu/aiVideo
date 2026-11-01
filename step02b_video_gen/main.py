@@ -316,11 +316,25 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
             frame_paths = [str(ff), str(lf)] + [str(p) for p in keyframe_files(idx)]
         else:
             frame_paths = []
+        _prepared_status = "not_prepared"
         try:
             frozen, _req = build_frozen_for_shot(
                 shot=shot, script=script, video_adapter=None, frame_paths=frame_paths,
                 mode="A", scope={"chapter": chapter}, provider=provider,
                 model_id=resolved_model)
+            # S04：预检走与实发相同的 prepare 链路（纯离线，不提交）。
+            try:
+                from _video_gen import create_service
+                _svc = create_service(provider)
+                if _svc is not None and callable(getattr(_svc, "prepare_request", None)):
+                    _prepared = _svc.prepare_request(_req)
+                    frozen, _req = build_frozen_for_shot(
+                        shot=shot, script=script, video_adapter=None, frame_paths=frame_paths,
+                        mode="A", scope={"chapter": chapter}, provider=provider,
+                        model_id=resolved_model, prepared=_prepared)
+                    _prepared_status = "prepared"
+            except Exception as _prep_exc:  # noqa: BLE001 - 预检失败要显式标注
+                _prepared_status = "pending_verification: %s" % str(_prep_exc)[:200]
         except Exception as exc:  # noqa: BLE001 - 组装失败作为 blocked 证据，不抛栈
             entry.update({"verdict": "blocked", "code": "request_assembly_failed",
                           "message": str(exc)[:500],
@@ -339,6 +353,7 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
             "request": frozen.to_dict(),
             "problems": problems,
             "warnings": warnings,
+            "prepared_status": _prepared_status,
             "semantic_preflight": "unverified",
             "generations": 0 if problems else 1,
         })

@@ -384,13 +384,18 @@ class VolcengineVideoService(VideoGenerationService):
     def _effective_prompt(self, req: VideoGenerationRequest, model: str,
                           context=None) -> tuple:
         """实际会发出去的文本 + 派生版本记录（Seedance 中文有效上限 ≈500 字符）。"""
+        from shared.video_prompt_system import SystemCameraError, apply_system_camera
+
         cap_len = _model_prompt_cap(model)
         text = str(req.prompt or "")
         modifications: list[dict] = []
-        if cap_len and len(text) > cap_len - 40:
+        camera = str(req.camera_movement or "").strip()
+        # S02：压缩/截断前给系统段预留预算，组装后再核总长度。
+        reserve = len(f"运镜：{camera}\n") if camera else 0
+        if cap_len and len(text) > cap_len - 40 - reserve:
             ref_tags = re.findall(r"@\S+", text)
             ref_len = sum(len(t) + 1 for t in ref_tags)
-            target_body = max(200, cap_len - ref_len - 20)
+            target_body = max(200, cap_len - ref_len - 20 - reserve)
             compressed = _seedance_compress_prompt(text, max_chars=target_body,
                                                    ref_tags=ref_tags)
             if len(compressed) < len(text):
@@ -399,14 +404,18 @@ class VolcengineVideoService(VideoGenerationService):
                     "to_chars": len(compressed), "ref_tags": len(ref_tags),
                     "target_body": target_body, "model_cap": cap_len})
                 text = compressed
-        if cap_len and len(text) > cap_len:
+        if cap_len and len(text) > cap_len - reserve:
+            limit = max(0, cap_len - reserve)
             modifications.append({"kind": "prompt_hard_truncate", "from_chars": len(text),
-                                  "to_chars": cap_len, "model_cap": cap_len})
-            text = text[:cap_len]
-        if req.camera_movement and "运镜：" not in text[:20]:
-            text = f"运镜：{req.camera_movement}\n{text}"
-            modifications.append({"kind": "camera_prefix",
-                                  "camera_movement": req.camera_movement})
+                                  "to_chars": limit, "model_cap": cap_len})
+            text = text[:limit]
+        result = apply_system_camera(text, camera, max_chars=cap_len)
+        if result["problems"]:
+            problem = result["problems"][0]
+            raise SystemCameraError(problem["code"], problem["message"],
+                                    camera_movement=camera, provider="volcengine")
+        text = result["prompt"]
+        modifications.extend(result["modifications"])
         return text, modifications
 
     def _plan_content(self, req: VideoGenerationRequest, model: str) -> tuple:

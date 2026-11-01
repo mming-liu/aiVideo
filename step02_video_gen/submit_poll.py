@@ -33,6 +33,7 @@ from step02_video_gen.continuity import ContinuityTracker, MODE_B_START_INDEX  #
 from shared.config import VIDEO_CONCURRENCY, VIDEO_MAX_RETRIES  # 并发/重试单源: shared/config.py
 from shared.paths import SHOT_VIDEO_FILENAME, FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
 from shared.constants import VIDEO_SUBMIT_RETRIES, FRAME_COPY_RETRIES
+from shared.video_prompt_system import SystemCameraError
 # V 包（计划 §V1/§V2）：prepared 提交的事实与分类单源
 from _video_gen.models import (
     SUBMIT_RATE_LIMITED,
@@ -438,7 +439,7 @@ def _script_revision(script) -> str:
 def build_frozen_for_shot(*, shot, script, video_adapter, frame_paths, mode,
                           continuity_ref_image=None, shot_dir=None, script_revision=None,
                           scope=None, provider=None, model_id=None, prompt=None,
-                          requirements=None):
+                          requirements=None, prepared=None):
     """按**当前输入**组装冻结请求（提交冻结与缓存关系核对共用同一份组装）。"""
     from step02_video_gen import request_plan as rp
     from step02_video_gen.prompt_builder import _build_prompt, _make_request
@@ -457,7 +458,8 @@ def build_frozen_for_shot(*, shot, script, video_adapter, frame_paths, mode,
                          else _script_revision(script)),
         provider=provider or str(os.getenv("VIDEO_PROVIDER", "")),
         model_id=model_id or str(active_video_model() or ""),
-        requirements=requirements if requirements is not None else generation_requirements())
+        requirements=requirements if requirements is not None else generation_requirements(),
+        prepared=prepared)
     return frozen, req
 
 
@@ -1431,6 +1433,13 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
         eio.append_event(attempt, "preflight_blocked", code=exc.code,
                          message=exc.message, field_path=exc.fields.get("field_path"))
         return _fail(f"preflight_blocked({exc.code}): {exc.message}", code=exc.code)
+    except SystemCameraError as exc:
+        va.open_attempt(package_root, attempt_id, request_key="", scope=scope,
+                        script_revision=script_revision,
+                        provider=str(os.getenv("VIDEO_PROVIDER", "")), model_id="")
+        eio.append_event(attempt, "preflight_blocked", code=exc.code,
+                         message=exc.message)
+        return _fail(f"preflight_blocked({exc.code}): {exc.message}", code=exc.code)
     if not prepared.is_ready():
         eio.append_event(attempt, "preflight_blocked", code="prepared_unsupported",
                          message=prepared.unsupported_reason)
@@ -1446,6 +1455,12 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
         capability_revision=prepared.capability_revision,
         requirements=generation_requirements(), prepared=prepared)
     prepared.request_key = frozen.request_key
+    # S02：prepared 是下发事实源；冻结记录必须与它一致（prompt 逐字、其余规范化）。
+    _mismatch = rp.verify_prepared_frozen(prepared, frozen)
+    if _mismatch:
+        eio.append_event(attempt, "prepared_frozen_mismatch", problems=_mismatch)
+        return _fail(f"prepared_frozen_mismatch: {_mismatch[:2]}",
+                     code="prepared_frozen_mismatch")
     problems = rp.validate_frozen_request(frozen)
     if problems:
         va.open_attempt(package_root, attempt_id, request_key=frozen.request_key, scope=scope,
