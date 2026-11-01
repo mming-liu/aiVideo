@@ -867,14 +867,14 @@ def require_gate(report_path: Path, script: dict, *, stage: str,
         wanted = {str(int(i)) for i in output_indices}
         outputs = report.get("outputs") or {}
         if not wanted or not wanted.issubset(outputs):
-            raise QualityGateError("step02a report does not cover requested shots")
+            raise QualityGateError(f"{stage} report does not cover requested shots")
         # A structured per-shot issue map permits projecting a new report with unrelated failures.
         # A legacy BLOCK without this evidence must remain blocked.
         report = dict(report)
         issues = report.get("issues_by_shot")
         if isinstance(issues, dict) and wanted.issubset(issues):
             if any(not isinstance(issues[i], list) for i in wanted):
-                raise QualityGateError("invalid step02a per-shot issues")
+                raise QualityGateError(f"invalid {stage} per-shot issues")
             selected_issues = [item for i in wanted for item in issues[i]]
             report["blocking"] = bool(selected_issues)
             report["status"] = "BLOCK" if selected_issues else "PASS"

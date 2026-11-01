@@ -252,5 +252,15 @@ tests/step02a_frame_gen/*
 !tests/step04_merge/
 tests/step04_merge/*
 !tests/step04_merge/test_step04_shots_subset.py
+!tests/step04_merge/test_step04_shots_subset_e2e.py
+!tests/step03_tts_audio/
+tests/step03_tts_audio/*
+!tests/step03_tts_audio/test_narration_tts.py
+!tests/step03_tts_audio/test_tts_units_and_cli.py
+!tests/step02_video_gen/
+tests/step02_video_gen/*
+!tests/step02_video_gen/test_video_prepared_providers.py
+!tests/shared/test_cache_and_card_handoff.py
+
 !tests/shared/test_vimax_bridge_v6321.py
 !tests/shared/test_hook_shot0_v661.py

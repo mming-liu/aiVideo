@@ -626,7 +626,9 @@ def test_cache_hit_bad_qc_uses_variation1(monkeypatch, tmp_path):
         "narration_segment": "", "main_subject": "杨旭",
     }
     characters = [{"identifier": "杨旭"}, {"identifier": "听香"}]
-    current_hash = _get_frame_content_hash(shot, False, None, lock_kind="layout")
+    # 2026-11 起帧内容哈希纳入角色外观（P1-7），测试须用同一口径计算
+    current_hash = _get_frame_content_hash(shot, False, None, lock_kind="layout",
+                                           characters=characters)
     (shot_dir / "frame_hash.txt").write_text(current_hash, encoding="utf-8")
 
     from shared import vimax_bridge as vb
@@ -653,8 +655,11 @@ def test_cache_hit_bad_qc_uses_variation1(monkeypatch, tmp_path):
     # 第一次 generate_single_image 应该是 attempt=1 的 prompt
     assert len(captured_prompts) >= 1
     first_prompt = captured_prompts[0]
-    assert first_prompt.endswith(_ATTEMPT_VARIATIONS[1]), \
-        f"P1 修：缓存命中 bad QC 后第一次生成应带 variation[1]={_ATTEMPT_VARIATIONS[1]!r}，实测末尾 {first_prompt[-30:]!r}"
+    # 适配器会在 prompt 尾部再追加严格约束，variation 不再一定位于末尾；
+    # 断言它确实被带上（且只带一次）即可，不绑定后缀位置。
+    assert _ATTEMPT_VARIATIONS[1] in first_prompt, \
+        f"P1 修：缓存命中 bad QC 后第一次生成应带 variation[1]={_ATTEMPT_VARIATIONS[1]!r}"
+    assert first_prompt.count(_ATTEMPT_VARIATIONS[1]) == 1
 
 
 # ── v6.x.x P5 修：kf 接 _try_qc_repair（v6.54.2 落地） ──
