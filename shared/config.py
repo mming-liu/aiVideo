@@ -49,8 +49,12 @@ def _inherit_adoption_duration_band() -> None:
     只读操作；章节目录不存在/收据不可读时静默跳过（测试与其它小说不受影响）。
     """
     keys = ("DURATION_MIN_SEC", "DURATION_MAX_SEC",
-            "DURATION_TARGET_MIN_SEC", "DURATION_TARGET_MAX_SEC")
-    if any(os.getenv(key) for key in keys):
+            "DURATION_TARGET_MIN_SEC", "DURATION_TARGET_MAX_SEC",
+            # 2026-11：声音改编与 hook 开关同样是"产出该稿时"的合同；下游不带
+            # production_context 直接跑时不能退回默认 0（否则 step03 报
+            # adaptation_disabled，或 hook 被静默丢弃）。
+            "VOICE_ADAPTATION_ENABLED", "HOOK_ENABLED")
+    if all(os.getenv(key) for key in keys):
         return
     try:
         from shared.paths import chapter_dir
@@ -62,6 +66,8 @@ def _inherit_adoption_duration_band() -> None:
         if not isinstance(config, dict):
             return
         for key in keys:
+            if os.getenv(key):
+                continue
             if config.get(key) is not None:
                 os.environ.setdefault(key, str(config[key]))
     except Exception:

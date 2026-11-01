@@ -175,6 +175,7 @@ tests/step01_script_gen/constraints/*
 !tests/enhancements/
 tests/enhancements/*
 !tests/enhancements/test_subtitle_contract.py
+!tests/enhancements/video_stub_provider.py
 !tests/test_disk_governance.py
 !tests/test_py311_source_grammar.py
 !tests/step01_script_gen/test_plan_to_commit_baseline.py
@@ -264,6 +265,7 @@ tests/step04_merge/*
 tests/step03_tts_audio/*
 !tests/step03_tts_audio/test_narration_tts.py
 !tests/step03_tts_audio/test_tts_units_and_cli.py
+!tests/step03_tts_audio/_tts_stub.py
 !tests/step02_video_gen/
 tests/step02_video_gen/*
 !tests/step02_video_gen/test_video_prepared_providers.py

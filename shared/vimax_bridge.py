@@ -1046,6 +1046,15 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
         return False
 
 
+def _no_auto_repair() -> bool:
+    """STEP02A_NO_REPAIR=1：禁止任何自动修图（QC i2i 修复 / doodle 二修）.
+
+    S14 的费用边界是"只生成指定六张"：修图是额外 i2i 请求，会挤占图片 POST
+    预算，必须在**发送前**禁止，而不是靠预算耗尽。默认关闭，保持历史行为。
+    """
+    return os.getenv("STEP02A_NO_REPAIR", "0").strip() == "1"
+
+
 async def _try_qc_repair(image_adapter, shot: dict, frame_path: str, frame_kind: str,
                          characters: list | None, empty_scene: bool, idx, kf_index: int | None = None) -> bool:
     """QC critical 后先试局部修复（v6.54.1 先修后抽）.
@@ -1055,6 +1064,9 @@ async def _try_qc_repair(image_adapter, shot: dict, frame_path: str, frame_kind:
     （帧已替换，哈希不删——下次缓存命中的就是修好的图）。全局失败/编辑失败/
     复检仍 critical → False（调用方走原删帧重抽路径）。
     """
+    if _no_auto_repair():
+        _bridge_log(f"  [REPAIR] shot_{idx} {frame_kind} 已禁用自动修图（STEP02A_NO_REPAIR=1）")
+        return False
     from shared.image_qc import build_repair_plan
     qc_result = shot.get("_qc_last")
     if not qc_result:
@@ -3558,7 +3570,7 @@ async def _gen_first_frame_async(
             # 走 i2i + 红框二修；QC critical 之后才做（不在已知坏帧上浪费 i2i）。
             # 失败保留原图（graceful degradation）。哈希在二修前已落盘，重跑命中
             # 缓存直接复用当前图（成功=修好的图，失败=原图），不重复扣费。
-            doodle_cfg = _detect_spatial_fallback(ff_desc_full, shot)
+            doodle_cfg = None if _no_auto_repair() else _detect_spatial_fallback(ff_desc_full, shot)
             if doodle_cfg:
                 doodle_tmp = ff_path.parent / f"{ff_path.stem}_doodle_tmp.png"
                 refined = await _doodle_refine_first_frame(
@@ -4216,7 +4228,7 @@ async def _gen_keyframes_async(
                 # v6.30：doodle 区域编辑 fallback（关键帧同首帧——精确空间约束
                 # prompt 调不到位时走 i2i+红框二修）。失败保留原图（graceful degradation）。
                 # 哈希在二修前已落盘：重跑命中缓存复用当前图，不重复扣费。
-                kf_doodle_cfg = _detect_spatial_fallback(kf_desc_full, shot)
+                kf_doodle_cfg = None if _no_auto_repair() else _detect_spatial_fallback(kf_desc_full, shot)
                 if kf_doodle_cfg:
                     doodle_tmp = kf_path.parent / f"{kf_path.stem}_doodle_tmp.png"
                     refined = await _doodle_refine_first_frame(

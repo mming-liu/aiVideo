@@ -427,9 +427,33 @@ def _compute_voice_windows(script: dict, shots: list[dict]) -> tuple[dict, float
     return out, float(total)
 
 
+def narration_subset_entries(plan: dict, shots: list, only_indices=None) -> list:
+    """旁白在子集下的**可生成**条目：返回 [(原编号 N, entry), ...].
+
+    编号保持全章 N 序号（不重排、不换身份），只裁剪：
+      - 与子集无交集 → 跳过（属于其他镜头）；
+      - 部分相交但未完全包含 → 跳过（跨镜旁白不截断）；
+      - 完全落在子集内 → 保留。
+    """
+    from step01_script_gen.plan_feasibility import (broadcast_narration_entries,
+                                                    voice_units)
+    entries = broadcast_narration_entries(plan)
+    if only_indices is None:
+        return list(enumerate(entries, 1))
+    want = {int(i) for i in only_indices}
+    units = {u["index"]: u for u in voice_units(plan, shots) if u["kind"] == "narration"}
+    keep = []
+    for i, entry in enumerate(entries, 1):
+        run = {int(x) for x in ((units.get(i) or {}).get("shot_indexes") or [])}
+        if run and run <= want:
+            keep.append((i, entry))
+    return keep
+
+
 def build_speech_units(script: dict, *, scope: dict | None = None,
                        script_revision: str = "", registry=None,
-                       provider_name: str = "") -> list:
+                       provider_name: str = "", only_indices=None,
+                       full_shots: list | None = None) -> list:
     """整章 → `SpeechUnit` 列表（对白 + 旁白）——`plan` / `--plan-only` 与生成共用.
 
     只做**规划**：不实例化 provider、不调用模型（能力用登记表读数）。
@@ -448,6 +472,8 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
     caps = provider_capabilities(name)
     entries = broadcast_narration_entries(plan)
     roles = [narration_role(e, characters) for e in entries]
+    _subset_shots = full_shots if full_shots is not None else shots
+    _kept_narr = {i for i, _e in narration_subset_entries(plan, _subset_shots, only_indices)}
     registry = registry if registry is not None else get_registry()
 
     out: list = []
@@ -462,12 +488,13 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
         out.append(dialogue_speech_unit(shot, scope=scope, script_revision=revision,
                                         voice=voice, provider_name=name, text=text))
 
-    entries = broadcast_narration_entries(plan)
     if entries:
         _win, _ = _compute_voice_windows(script, shots)
         tracks, _problems = layout_voice_entries(voice_units(plan, shots), _win)
         _track_by_id = {t["id"]: t for t in tracks if t.get("kind") == "narration"}
         for i, entry in enumerate(entries, 1):
+            if i not in _kept_narr:
+                continue
             role = roles[i - 1]
             gender, age = _detect_speaker_attributes(role, characters)
             voice = resolve_voice(registry, role_id=NARRATOR_ROLE if role == "narrator" else role,
@@ -845,7 +872,8 @@ def gen_narration_tts(script: dict, output_dir: Path, provider=None, *,
                       scope: dict | None = None, script_revision: str = "",
                       voice_registry=None,
                       candidate_context: Optional[TtsCandidateContext] = None,
-                      collected: Optional[list] = None) -> List[str]:
+                      collected: Optional[list] = None,
+                      only_indices=None, full_shots: list | None = None) -> List[str]:
     """为**图外旁白**生成独立 TTS 音轨（2026-09-30 复核第 7 轮第 3 项）.
 
     与 `gen_shot_tts` 的三点不同（都是**有意**的）：
@@ -873,12 +901,17 @@ def gen_narration_tts(script: dict, output_dir: Path, provider=None, *,
     _by_index = {str(s.get("index")): s for s in shots}
     _units = {u["index"]: u for u in voice_units(plan, shots)
               if u["kind"] == "narration"}
+    # 子集：只生成**完全落在本次镜头内**的旁白（他镜跳过、跨镜跳过、编号不变）。
+    _subset_shots = full_shots if full_shots is not None else shots
+    _kept = {i for i, _e in narration_subset_entries(plan, _subset_shots, only_indices)}
     # 计划时长窗口（与 step04 用真实 clip_windows 的那份排版**同一规则**）：
     # 同镜多条声音按序、不重叠；排不进就是计划层该重选的事，这里先显式失败。
     _win, _ = _compute_voice_windows(script, shots)
     # ① 逐条**结构**检查（不进 TTS 就能判、且能指出真因的）——先跑。
     #    长度不再在这里判：超长由 provider 能力分段解决，讲不完由 duration 守卫判。
     for _i, _e in enumerate(entries, 1):
+        if _i not in _kept:
+            continue
         _t = str(_e.get("text") or "").strip()
         if not _t:
             continue
@@ -904,7 +937,9 @@ def gen_narration_tts(script: dict, output_dir: Path, provider=None, *,
                     % (_i, _sid, _t[:24]))
     # ② **排版**：同镜多条声音按序、不重叠、核可用时长（与 step04 同一规则）
     _tracks, _layout_problems = layout_voice_entries(voice_units(plan, shots), _win)
-    _layout_problems = [p for p in _layout_problems if p.startswith("N")]
+    import re as _re
+    _layout_problems = [p for p in _layout_problems if p.startswith("N")
+                        and int(_re.match(r"N(\d+)", p).group(1)) in _kept]
     if _layout_problems:
         # 「窗口不足」在旁白侧**统一**报 `duration_rejected`（§T2a）：估时排不进与实测
         # 超窗是同一件事的两种读数，不该给消费方两种错误码。

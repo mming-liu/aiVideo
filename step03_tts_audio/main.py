@@ -245,7 +245,13 @@ def main(options=None):
         gen_script["shots"] = [s for s in shots
                                if int(s.get("index", -1)) in only_indices]
         shots = gen_script["shots"]
-        hook = hook if 0 in only_indices else None
+        if 0 in only_indices:
+            hook = hook
+        else:
+            # 子集不含 hook：必须从**生成用**脚本里同步移除，否则 build_speech_units
+            # 仍按全章 hook 产声音单元（S18-2 缺口）。
+            hook = None
+            gen_script.pop("hook", None)
 
     scope = current_scope(CHAPTER_INDEX)
     clips_ctx = None
@@ -307,7 +313,10 @@ def main(options=None):
     # **按计划自称的模式**核声音合同（主专题 §5）：新模式出现图外旁白 ⇒ **合同冲突**，
     # 退回规划者，不静默清空、也不"给它合成一条旁白轨"冒充合法无旁白。
     _narr_contract = require_narration_contract(plan)
-    _narr_entries = plan_narration_entries(plan)
+    from step03_tts_audio.shot_tts import narration_subset_entries
+    _narr_entries = [{"index": _i, **e}
+                     for _i, e in narration_subset_entries(
+                         plan, script.get("shots") or [], only_indices)]
     policy = resolve_audio_policy(actual_audio_present=actual_audio_present,
                                   narration_present=bool(_narr_entries))
     forced = (os.getenv("STEP03_FORCE", "0").strip() == "1" or candidate_root is not None
@@ -365,10 +374,14 @@ def main(options=None):
     # ---- 只规划：产出 SpeechUnits，不调用任何 provider（§T4） ----
     if plan_only:
         from tts.synthesis_job import write_speech_unit_plan
-        units = build_speech_units(gen_script, scope=scope, script_revision=revision)
+        units = build_speech_units(gen_script, scope=scope, script_revision=revision,
+                                   only_indices=only_indices,
+                                   full_shots=script.get("shots"))
         # S18-3：plan-only 打印扣除转场后的真实可用窗口（与 step04 同一时间线）。
         from step03_tts_audio.shot_tts import _compute_voice_windows
-        _win, _total = _compute_voice_windows(script, shots)
+        # 子集：用**生成用脚本**（hook 已按子集移除）算窗口，否则计划打印会带上
+        # 不属于本次成片的 hook 偏移。
+        _win, _total = _compute_voice_windows(gen_script, shots)
         _logger.info("[PLAN] 成片时间轴总长 %.2fs（含 hook 偏移、已扣转场重叠）" % _total)
         for _idx, (_start, _end) in sorted(_win.items(), key=lambda kv: int(kv[0])):
             _logger.info("[PLAN]   shot %s: %.2f–%.2fs（可用 %.2fs）"
@@ -393,7 +406,9 @@ def main(options=None):
                 experiment_id=opts.experiment_id or "", scope=scope, revision=revision,
                 source=source, clips_ctx=clips_ctx, script=gen_script)
             produced = {a.unit_id for a in artifacts}
-            units = build_speech_units(gen_script, scope=scope, script_revision=revision)
+            units = build_speech_units(gen_script, scope=scope, script_revision=revision,
+                                       only_indices=only_indices,
+                                       full_shots=script.get("shots"))
             missing_d = [u.unit_id for u in units
                          if u.kind == "dialogue" and u.unit_id not in produced]
             missing_n = [u.unit_id for u in units
@@ -417,7 +432,9 @@ def main(options=None):
             # 图外旁白：独立音轨（固定旁白音色，一条旁白一个文件）
             _logger.info("\n=== Generate off-screen narration TTS ===")
             gen_narration_tts(gen_script, AUDIO_OUTPUT_DIR, scope=scope,
-                              script_revision=revision, voice_registry=voice_registry)
+                              script_revision=revision, voice_registry=voice_registry,
+                              only_indices=only_indices,
+                              full_shots=script.get("shots"))
     except Exception as e:
         _logger.error(f"[ERROR] {e}")
         sys.exit(1)

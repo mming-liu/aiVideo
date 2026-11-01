@@ -305,3 +305,18 @@ def test_soft_skip_aborts_the_portrait_batch(tmp_path, monkeypatch):
         raise AssertionError("软跳过没有中止批次")
 
     assert len(calls) == 1, "软跳过后仍请求了后续视角：%d 次" % len(calls)
+
+def test_no_auto_repair_short_circuits(monkeypatch):
+    """STEP02A_NO_REPAIR=1：QC critical 也不发修图请求（发送前禁止）."""
+    import asyncio
+
+    from shared import vimax_bridge as vb
+
+    class _Adapter:
+        async def generate_single_image(self, **kwargs):
+            raise AssertionError("禁用修图后仍发起了 i2i 请求")
+
+    monkeypatch.setenv("STEP02A_NO_REPAIR", "1")
+    out = asyncio.run(vb._try_qc_repair(_Adapter(), {}, "frame.png", "first_frame",
+                                       [], False, 1))
+    assert out is False
