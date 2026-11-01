@@ -143,6 +143,13 @@ class VolcengineImageService(ImageGenerationService):
 
         model_idx = 0
         last_error = ""
+        # 单次调用允许的最大 POST 次数（0/未设 = 沿用历史"不限"）。按量试跑用它把
+        # 请求数钉死：失败即停，不自动重抽（S14 运行单设 1）。
+        try:
+            _max_attempts = int(os.getenv("VOLCENGINE_IMAGE_MAX_ATTEMPTS", "0") or "0")
+        except ValueError:
+            _max_attempts = 0
+        _attempts = 0
         # 2026-08-29：OutputImageSensitiveContentDetected 专用旗。
         # 当主模型 + 所有 fallback 都因输出安全过滤失败时，标记为软跳过：
         # 不阻塞整批生成（避免 1 张刺杀/流血图把整条 shot 链路 kill），
@@ -151,6 +158,12 @@ class VolcengineImageService(ImageGenerationService):
         sensitive_skip = False
 
         while model_idx < len(self._model_queue):
+            if _max_attempts and _attempts >= _max_attempts:
+                last_error = last_error or (
+                    "达到尝试上限 %d（VOLCENGINE_IMAGE_MAX_ATTEMPTS）" % _max_attempts)
+                _verbose_write(f"  [镜头{req.shot_index}] [STOP] {last_error}")
+                break
+            _attempts += 1
             model = self._model_queue[model_idx]
             cap = get_seedream_cap(model)
             # 关键修复：按当前模型能力重算 ref_limit（每个模型上限可能不同：

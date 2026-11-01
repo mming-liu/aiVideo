@@ -254,6 +254,7 @@ tests/step02a_frame_gen/*
 !tests/step02a_frame_gen/test_subset_gate.py
 !tests/step02a_frame_gen/test_image_prompt_quality.py
 !tests/step02a_frame_gen/test_keyframe_acceptance.py
+!tests/step02a_frame_gen/test_image_retry_cap.py
 !tests/step04_merge/
 tests/step04_merge/*
 !tests/step04_merge/test_step04_shots_subset.py
