@@ -52,6 +52,10 @@ from shared.config import (
     SCRIPT_CANDIDATE_TOPK,
 )
 
+# import 期 HOOK_ENABLED 快照：调用方/测试显式改写模块常量时视为强制覆盖，
+# 运行期判定让位于它；否则按调用时 env 重算（S16-1 根因 B）。
+_HOOK_ENABLED_DEFAULT = HOOK_ENABLED
+
 # v6.23：大纲两阶段开关（ShortVideoDirector director-outline 吸收，默认开启）
 OUTLINE_ENABLED = os.getenv("OUTLINE_ENABLED", "1").strip() == "1"
 
@@ -2988,6 +2992,8 @@ def _is_hook_enabled() -> bool:
     对同一份输入的结果不同（M09 跨进程 revision 分叉）。提交点改为动态读取：
     env 存在时以 env 为准，缺失时回退 import 期常量。
     """
+    if HOOK_ENABLED != _HOOK_ENABLED_DEFAULT:
+        return bool(HOOK_ENABLED)
     raw = os.environ.get("HOOK_ENABLED")
     if raw is None:
         return bool(HOOK_ENABLED)
