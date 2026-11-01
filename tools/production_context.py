@@ -524,6 +524,108 @@ def build_refreshed_gate(receipt: dict, *, novel_file: "str | None" = None) -> d
             for name in REFRESH_ARTIFACTS}
 
 
+def build_shot_patch_gate(receipt: dict, new_script: dict, *, patch_meta: dict,
+                          novel_file: "str | None" = None) -> tuple:
+    """单镜画面字段补丁：离线重建 quality/audit/commit/adoption（零模型调用）.
+
+    只允许改非锁定画面字段；调用方必须先做逐镜/锁定契约/质量门校验。
+    返回 (files, new_adoption, revision)。
+    """
+    import json as _json
+
+    apply_context(receipt)
+    ch = Path(receipt["formal_chapter"])
+    root = _staging_root()
+    staging = root / _chapter_rel(ch)
+    staging.mkdir(parents=True, exist_ok=True)
+
+    previous_base = os.environ.get("OUTPUT_BASE")
+    os.environ["OUTPUT_BASE"] = str(root)
+    try:
+        import step01_script_gen.main as step01_main
+        novel_text = _read_novel_text(
+            int((receipt.get("scope") or {}).get("chapter") or 1), novel_file)
+        quality = step01_main._build_step01_quality_gate(new_script, novel_text)
+    finally:
+        if previous_base is None:
+            os.environ.pop("OUTPUT_BASE", None)
+        else:
+            os.environ["OUTPUT_BASE"] = previous_base
+
+    from shared.quality_gate import build_step01_commit_manifest, ensure_script_revision
+    revision = ensure_script_revision(new_script, force=True)
+    if quality.get("status") != "PASS" or quality.get("blocking"):
+        raise ContextError(
+            "shot_patch_gate_blocked",
+            "补丁后质量门未通过（status=%s blocking=%s hard=%s visual=%s）"
+            % (quality.get("status"), quality.get("blocking"),
+               quality.get("hard_count"), quality.get("visual_risk_count")),
+            categories=quality.get("blocking_categories") or [])
+    if str(quality.get("script_revision") or "") != revision:
+        raise ContextError("shot_patch_revision_mismatch",
+                           "质量门 revision 与重算结果不一致",
+                           gate=str(quality.get("script_revision") or ""), actual=revision)
+
+    from shared.json_io import atomic_dump_json
+    # 先算 revision/质量门（会写回 script_revision），再落暂存脚本；
+    # 否则暂存脚本缺新 revision，adoption 的 sha 与实际文件对不上。
+    atomic_dump_json(staging / "script_result.json", new_script,
+                     ensure_ascii=False, indent=2)
+
+    audit = _json.loads((ch / "step01_audit.json").read_text(encoding="utf-8"))
+    if str(audit.get("status") or "").strip().lower() != "ok":
+        raise ContextError("shot_patch_audit_not_ok",
+                           "原审计不是 ok，不能离线重签：%r" % audit.get("status"))
+    old_audit_fp = str(audit.get("rule_source_fingerprint") or "")
+    audit["input_revision"] = revision
+    audit["rule_source_fingerprint"] = str(quality.get("rule_source_fingerprint") or "")
+    audit["duration_band"] = quality.get("duration_band")
+    audit["reverified_from_fingerprint"] = old_audit_fp
+    audit["reverified_at"] = _now()
+    audit["reverified_by"] = "shot_patch.v1"
+    audit["shot_patch"] = dict(patch_meta)
+
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(staging / "step01_quality.json", quality, ensure_ascii=False, indent=2)
+    atomic_dump_json(staging / "step01_audit.json", audit, ensure_ascii=False, indent=2)
+
+    previous_manifest = {}
+    try:
+        previous_manifest = _json.loads((ch / "step01_commit.json").read_text(encoding="utf-8"))
+    except (OSError, _json.JSONDecodeError):
+        previous_manifest = {}
+    manifest = build_step01_commit_manifest(
+        run_id=str(previous_manifest.get("run_id") or ""),
+        created_at=_now(),
+        revision=revision,
+        rule_source_fingerprint=str(quality.get("rule_source_fingerprint") or ""),
+        rule_version=str(quality.get("rule_version") or ""),
+        audit_scope=str(audit.get("audit_scope") or ""),
+        chapter_dir=staging,
+        status="COMMITTED",
+        blocking=[],
+        detail="single-shot visual patch (zero model sends)",
+        prompt_source_fingerprint=str(previous_manifest.get("prompt_source_fingerprint") or ""),
+        audit_status=str(audit.get("status") or ""),
+    )
+    manifest["shot_patch"] = dict(patch_meta)
+    atomic_dump_json(staging / "step01_commit.json", manifest, ensure_ascii=False, indent=2)
+
+    adoption = _json.loads((ch / "step01_adoption.json").read_text(encoding="utf-8"))
+    formal = dict(adoption.get("formal_sha256") or {})
+    for name in ("script_result.json", "step01_quality.json", "step01_audit.json",
+                 "step01_commit.json"):
+        formal[name] = _sha256_file(staging / name)
+    adoption["formal_sha256"] = formal
+    adoption["script_revision"] = revision
+    adoption["shot_patch"] = dict(patch_meta)
+    atomic_dump_json(staging / "step01_adoption.json", adoption, ensure_ascii=False, indent=2)
+
+    files = {name: (staging / name).read_text(encoding="utf-8")
+             for name in REFRESH_ARTIFACTS}
+    return files, adoption, revision
+
+
 def apply_refreshed_gate(receipt: dict, files: dict) -> list:
     """按 quality → audit → commit → adoption 顺序原子替换正式产物."""
     from shared.json_io import atomic_dump_json
@@ -559,6 +661,57 @@ def _print_json(value) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
+SHOT_PATCH_ALLOWED_FIELDS = frozenset({
+    "prompt", "ff_desc", "lf_desc", "motion_desc", "camera_movement",
+    "frame_layouts", "keyframes",
+})
+
+
+def apply_shot_patch(script: dict, patch: dict, shot_index: int) -> tuple:
+    """把单镜画面字段补丁应用到脚本副本，并校验逐镜/锁定契约不变量."""
+    import copy
+    import step01_script_gen.main as step01_main
+    from shared.quality_gate import changed_shot_keys, per_shot_revisions
+
+    if not isinstance(patch, dict):
+        raise ContextError("shot_patch_invalid", "补丁必须是 JSON 对象")
+    if int(patch.get("shot_index") or 0) != int(shot_index):
+        raise ContextError("shot_patch_index_mismatch",
+                           "补丁 shot_index=%r 与 --shot=%r 不一致"
+                           % (patch.get("shot_index"), shot_index))
+    changes = patch.get("set") or {}
+    if not isinstance(changes, dict) or not changes:
+        raise ContextError("shot_patch_empty", "补丁 set 不能为空")
+    bad = sorted(set(changes) - SHOT_PATCH_ALLOWED_FIELDS)
+    if bad:
+        raise ContextError("shot_patch_field_not_allowed",
+                           "不允许通过补丁修改字段：%r" % bad, fields=bad)
+
+    before = copy.deepcopy(script)
+    after = copy.deepcopy(script)
+    target = next((s for s in (after.get("shots") or [])
+                   if isinstance(s, dict) and int(s.get("index", -1)) == int(shot_index)), None)
+    if target is None:
+        raise ContextError("shot_patch_shot_missing", "脚本里没有 shot %r" % shot_index)
+    for key, value in changes.items():
+        target[key] = copy.deepcopy(value)
+
+    changed = changed_shot_keys(per_shot_revisions(before), per_shot_revisions(after))
+    if changed != [int(shot_index)]:
+        raise ContextError("shot_patch_changed_other_shots",
+                           "补丁影响了目标之外的镜头：%r" % changed, changed=changed)
+    if step01_main._locked_repair_signature(before) != step01_main._locked_repair_signature(after):
+        raise ContextError("shot_patch_locked_field_changed",
+                           "补丁改动了锁定合同字段（duration/subtitle/narration/plan_refs 等）")
+
+    from shared.prompt_contradiction import assert_no_contradictions
+    for field in ("ff_desc", "lf_desc"):
+        if field in changes:
+            assert_no_contradictions(str(target.get(field) or ""),
+                                     "shot%d %s" % (int(shot_index), field))
+    return after, {"shot_index": int(shot_index), "changed_fields": sorted(changes)}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="从 step01 采纳凭据建立后续运行上下文")
     ap.add_argument("--receipt", required=True, help="step01_adoption.json 路径")
@@ -576,6 +729,10 @@ def main(argv=None) -> int:
                     help="配合 --refresh-gate：只把四份产物 JSON 打到 stdout，由上层落盘")
     ap.add_argument("--novel-file", default=None,
                     help="重签时读取的原文文件（默认沿用 step01 入口的默认小说路径）")
+    ap.add_argument("--apply-shot-patch", default=None, metavar="PATCH",
+                    help="应用单镜画面字段补丁（JSON；零模型调用，默认 dry-run）")
+    ap.add_argument("--shot", type=int, default=None, help="配合 --apply-shot-patch 的镜头号")
+    ap.add_argument("--write", action="store_true", help="配合 --apply-shot-patch：落盘脚本与四份门禁")
     ap.add_argument("--run", action="store_true",
                     help="核验通过后用同一套 env 启动子进程：--run -- python step02a_frame_gen/main.py ...")
     # `--run -- <cmd>` 必须在 argparse 之前手工切开：argparse 会把 `--` 当成"选项结束"，
@@ -599,6 +756,42 @@ def main(argv=None) -> int:
             if got != args.expect_chapter:
                 raise ContextError("chapter_request_mismatch",
                                    "请求第 %d 章，凭据是第 %d 章" % (args.expect_chapter, got))
+        if args.apply_shot_patch:
+            if args.shot is None:
+                raise ContextError("shot_patch_shot_missing", "--apply-shot-patch 需要 --shot")
+            patch_path = Path(args.apply_shot_patch)
+            try:
+                patch = json.loads(patch_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ContextError("shot_patch_unreadable", "补丁不可读：%s" % exc) from exc
+            ch = Path(receipt["formal_chapter"])
+            script_path = ch / "script_result.json"
+            script = json.loads(script_path.read_text(encoding="utf-8"))
+            new_script, patch_meta = apply_shot_patch(script, patch, args.shot)
+            files, adoption, revision = build_shot_patch_gate(
+                receipt, new_script, patch_meta=patch_meta, novel_file=args.novel_file)
+            if not args.write:
+                _print_json({"schema": "production.shot_patch/1", "ok": True,
+                             "dry_run": True, "revision": revision,
+                             "before_revision": receipt.get("script_revision"),
+                             "meta": patch_meta})
+                return 0
+            written = apply_refreshed_gate(receipt, files)
+            from shared.json_io import atomic_dump_json
+            atomic_dump_json(script_path, new_script, ensure_ascii=False, indent=2)
+            record_dir = ch / "_production" / "shot_patches"
+            record_dir.mkdir(parents=True, exist_ok=True)
+            stamp = _now().replace(":", "").replace("+", "_")
+            atomic_dump_json(record_dir / ("shot_patch_%s.json" % stamp), {
+                "schema": "production.shot_patch_record/1", "at": _now(),
+                "meta": patch_meta, "before_revision": receipt.get("script_revision"),
+                "after_revision": revision, "patch": patch}, ensure_ascii=False, indent=2)
+            receipt.update({"script_revision": revision,
+                            "formal_sha256": adoption.get("formal_sha256") or {}})
+            print(json.dumps({"schema": "production.shot_patch/1", "ok": True,
+                              "written": written, "revision": revision,
+                              "meta": patch_meta, "model_sends": 0}, ensure_ascii=False))
+
         refreshed = None
         if args.refresh_gate:
             files = build_refreshed_gate(receipt, novel_file=args.novel_file)
