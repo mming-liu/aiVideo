@@ -54,13 +54,14 @@ def _record_for(plan, *, novel_digest, rule_version=cv.DEFAULT_RULE_VERSION,
                 status="ok", novel_text=_NOVEL):
     """给一份**身份正确**的记录（用于"应当复用"的正例）."""
     _view, _ = pc.view_from_plan(plan)
-    # 2026-10 起核验响应走**原文引用传输格式**：evidence_spans 只填本次原文目录里的
-    # src_ 编号，由生产侧 expand 展开为逐字原文。夹具必须按同一协议回带编号。
+    # 本夹具的核验响应以 **JSON 文本**回放（_Res.text），生产侧会走
+    # parse_verification_response(..., source_catalog=...) 的 expand()：
+    # evidence_spans 必须填本次原文目录里的 src_ 编号（填原文会被
+    # verify_source_reference_invalid 拒收）。
     from step01_script_gen import source_references as _sref
     _catalog = _sref.catalog_for(novel_text) if novel_text else {}
 
     def _ref(span: str) -> str:
-        # 目录按**行**切分；夹具引文可能是行内的一句，取包含它的那一行编号。
         for _key, _value in _catalog.items():
             if span and span in _value:
                 return _key
@@ -110,6 +111,17 @@ def _record_for(plan, *, novel_digest, rule_version=cv.DEFAULT_RULE_VERSION,
             "unit_uid": pc.ref_uid(_u), "verdict": cv.VERDICT_SUPPORTED,
             "source_kind": "novel_speech", "speaker": "杨旭",
             "echo_text": str(_u.get("text") or ""), "reason": ""})
+    # require_coherence=True（plan_coherence.v3）时记录必须带合法 coherence 块；
+    # 形状照 tests/step01_script_gen/p3_entry_fixtures.py:88-95。
+    _beats = [str(b.get("uid")) for b in ((_view or {}).get("beats") or [])]
+    _rec["coherence"] = {
+        "beat_uids": _beats, "verdict": "supported",
+        "conflict_beats": [], "evidence_spans": [],
+        "reason": "按计划给定的先后顺序承接",
+        "dependencies": [
+            {"beat_uid": _uid, "requires_before": _beats[:_i],
+             "reason": "按计划给定的先后顺序承接"}
+            for _i, _uid in enumerate(_beats)]}
     return _rec
 
 

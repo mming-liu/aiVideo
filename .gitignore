@@ -261,6 +261,11 @@ tests/step03_tts_audio/*
 tests/step02_video_gen/*
 !tests/step02_video_gen/test_video_prepared_providers.py
 !tests/shared/test_cache_and_card_handoff.py
+!tests/shared/test_content_verification.py
+!tests/shared/test_presentation_transaction.py
+!tests/shared/test_relation_admission_matrix.py
+!tests/shared/test_plan_revision_delta_equivalence.py
+
 
 !tests/shared/test_vimax_bridge_v6321.py
 !tests/shared/test_hook_shot0_v661.py

@@ -54,6 +54,8 @@ _USE_TEXT_TO_VIDEO = _REFERENCE_MODE == "text"
 # 记录 import 期值：调用方/测试若显式改写模块常量（如 pb._MODEL_VOICE = True），
 # 视为强制覆盖，动态判定让位于它；否则按运行期 env + 模型能力重算。
 _MODEL_VOICE_DEFAULT = _MODEL_VOICE
+_REFERENCE_MODE_DEFAULT = _REFERENCE_MODE
+_USE_TEXT_TO_VIDEO_DEFAULT = _USE_TEXT_TO_VIDEO
 
 
 def _model_voice_enabled() -> bool:
@@ -75,11 +77,19 @@ def _model_voice_enabled() -> bool:
 
 
 def _reference_mode() -> str:
-    """运行期读取 VIDEO_REFERENCE_MODE（S17-2）."""
+    """运行期读取 VIDEO_REFERENCE_MODE（S17-2）.
+
+    与 _model_voice_enabled 同一口径：模块常量被显式改写（测试/调试）时以它为准，
+    否则按调用时 env 重算，避免 import 期快照锁死整进程。
+    """
+    if _REFERENCE_MODE != _REFERENCE_MODE_DEFAULT:
+        return str(_REFERENCE_MODE).strip().lower()
     return os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
 
 
 def _text_to_video() -> bool:
+    if _USE_TEXT_TO_VIDEO != _USE_TEXT_TO_VIDEO_DEFAULT:
+        return bool(_USE_TEXT_TO_VIDEO)
     return _reference_mode() == "text"
 
 
