@@ -317,6 +317,7 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
         else:
             frame_paths = []
         _prepared_status = "not_prepared"
+        _prep_block = None
         try:
             frozen, _req = build_frozen_for_shot(
                 shot=shot, script=script, video_adapter=None, frame_paths=frame_paths,
@@ -325,20 +326,44 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
             # S04：预检走与实发相同的 prepare 链路（纯离线，不提交）。
             try:
                 from _video_gen import create_service
+                from _video_gen.models import VideoCapabilityError
+                from shared.video_prompt_system import SystemCameraError
                 _svc = create_service(provider)
-                if _svc is not None and callable(getattr(_svc, "prepare_request", None)):
+                if _svc is None or not callable(getattr(_svc, "prepare_request", None)):
+                    _prepared_status = "pending_verification: provider 未实现 prepare_request"
+                else:
                     _prepared = _svc.prepare_request(_req)
                     frozen, _req = build_frozen_for_shot(
                         shot=shot, script=script, video_adapter=None, frame_paths=frame_paths,
                         mode="A", scope={"chapter": chapter}, provider=provider,
                         model_id=resolved_model, prepared=_prepared)
                     _prepared_status = "prepared"
-            except Exception as _prep_exc:  # noqa: BLE001 - 预检失败要显式标注
+            except (SystemCameraError, VideoCapabilityError) as _prep_exc:
+                # 确定阻断：系统段冲突/超长、provider 能力不足
+                _prep_block = {"code": str(getattr(_prep_exc, "code", "preflight_blocked")),
+                               "message": str(getattr(_prep_exc, "message", str(_prep_exc)))[:500]}
+            except Exception as _prep_exc:  # noqa: BLE001 - 无法离线准备：待验证，不 ready
                 _prepared_status = "pending_verification: %s" % str(_prep_exc)[:200]
         except Exception as exc:  # noqa: BLE001 - 组装失败作为 blocked 证据，不抛栈
             entry.update({"verdict": "blocked", "code": "request_assembly_failed",
                           "message": str(exc)[:500],
                           "needed_change": "补齐参考图/注册表后重跑 plan"})
+            entries.append(entry)
+            continue
+        if _prep_block:
+            entry.update({"verdict": "blocked", "code": _prep_block["code"],
+                          "message": _prep_block["message"],
+                          "prepared_status": "blocked",
+                          "problems": [{"code": _prep_block["code"],
+                                        "message": _prep_block["message"]}],
+                          "generations": 0})
+            entries.append(entry)
+            continue
+        if str(_prepared_status).startswith("pending_verification"):
+            entry.update({"verdict": "pending", "code": "prepared_pending_verification",
+                          "message": _prepared_status,
+                          "prepared_status": _prepared_status,
+                          "generations": 0})
             entries.append(entry)
             continue
         problems = rp.validate_frozen_request(frozen)
@@ -359,9 +384,12 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
         })
         entries.append(entry)
     ready = [e for e in entries if e.get("verdict") == "ready"]
+    blocked = [e for e in entries if e.get("verdict") == "blocked"]
+    pending = [e for e in entries if e.get("verdict") == "pending"]
     return {"schema_version": "video_reroll_plan.v1", "chapter": chapter, "provider": provider,
             "model_id": resolved_model,
-            "shots": entries, "ready": len(ready), "blocked": len(entries) - len(ready),
+            "shots": entries, "ready": len(ready), "blocked": len(blocked),
+            "pending": len(pending),
             "estimated_generations": sum(int(e.get("generations") or 0) for e in entries),
             "network_calls": 0}
 

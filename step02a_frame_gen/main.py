@@ -352,8 +352,9 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dic
                     str(_chapter_dir() / "step02a_quality.json"),
                     str(_chapter_dir() / "step02a_prompt_quality.json"),
                     str(_chapter_dir() / "step02a.log")])
-    # S04：预检输出最终图片 prompt（与生成共用 compose_frame_prompt）。
-    final_prompts: dict = {}
+    # S04：预检输出**组装阶段**文本（与生成共用 compose_frame_prompt）；
+    # 适配器之后还会追加参考图说明/锁图指令，不能宣称这是最终发送文本。
+    assembled_prompts: dict = {}
     try:
         from shared.vimax_bridge import compose_frame_prompt
         for _u in units:
@@ -364,9 +365,9 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dic
             if _u.get("lf_desc"):
                 _entry["lf"] = compose_frame_prompt(_u, characters, "last_frame")
             if _entry:
-                final_prompts[str(_idx)] = _entry
+                assembled_prompts[str(_idx)] = _entry
     except Exception as _exc:  # noqa: BLE001 - 预检失败要显式报出，不静默
-        final_prompts = {"error": str(_exc)}
+        assembled_prompts = {"error": str(_exc)}
     return {
         "schema": "step02a.plan/1",
         "model_sends": 0,
@@ -385,7 +386,8 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dic
             "images_total": total,
         },
         "writes": _writes,
-        "final_prompts": final_prompts,
+        "assembled_prompts": assembled_prompts,
+        "prompt_stage": "assembled_pre_adapter",
         "note": "分镜帧按文件存在性计数；内容哈希不匹配的旧帧会在实跑时重生成",
     }
 

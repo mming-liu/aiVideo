@@ -409,7 +409,7 @@ class VolcengineVideoService(VideoGenerationService):
             modifications.append({"kind": "prompt_hard_truncate", "from_chars": len(text),
                                   "to_chars": limit, "model_cap": cap_len})
             text = text[:limit]
-        result = apply_system_camera(text, camera, max_chars=cap_len)
+        result = apply_system_camera(text, camera, max_chars=cap_len, existing=[])
         if result["problems"]:
             problem = result["problems"][0]
             raise SystemCameraError(problem["code"], problem["message"],

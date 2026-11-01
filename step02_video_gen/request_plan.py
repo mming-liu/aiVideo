@@ -279,12 +279,14 @@ def verify_prepared_frozen(prepared, frozen: FrozenVideoRequest) -> list[dict]:
                "prepared=%r frozen=%r" % (p_params.get(key), f_params.get(key)))
 
     p_mats = list(getattr(prepared, "materials", None) or [])
+    # 与冻结同源：只有能落成 reference 的素材才参与比较（无 path 的素材不进入引用）
+    expected_refs = _references_from_materials(p_mats)
     f_refs = list(getattr(frozen, "references", None) or [])
-    if len(p_mats) != len(f_refs):
+    if len(expected_refs) != len(f_refs):
         _p("prepared_material_count_mismatch", "references",
-           "prepared=%d frozen=%d" % (len(p_mats), len(f_refs)))
+           "prepared=%d frozen=%d" % (len(expected_refs), len(f_refs)))
     else:
-        for i, (mat, ref) in enumerate(zip(p_mats, f_refs)):
+        for i, (mat, ref) in enumerate(zip(expected_refs, f_refs)):
             for field in ("role", "sha256"):
                 a = getattr(mat, field, None)
                 b = getattr(ref, field, None)

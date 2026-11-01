@@ -11,10 +11,29 @@ if str(_ROOT) not in sys.path:
 def test_fixed_camera_with_affirmative_pan_is_definite():
     from shared.shot_motion_checks import motion_outcome, motion_report
     shot = {"camera_movement": "固定机位",
-            "motion_desc": "前2秒船滑出；后1秒镜头掠过荷丛",
+            "motion_desc": "镜头掠过荷丛",
             "ff_desc": "船在荷丛中", "lf_desc": "船滑出荷丛，停在开阔水面"}
     assert motion_outcome(shot) == "definite"
     assert any(r["class"] == "definite" for r in motion_report(shot))
+
+
+def test_plain_verb_follow_is_not_a_camera_instruction():
+    """固定机位 + “小孩跟随母亲走进院子”：跟随是人物动作，不是运镜."""
+    from shared.shot_motion_checks import motion_outcome
+    shot = {"camera_movement": "固定机位",
+            "motion_desc": "小孩跟随母亲走进院子",
+            "ff_desc": "院门口", "lf_desc": "院子里"}
+    assert motion_outcome(shot) == "no_conflict"
+
+
+def test_segmented_camera_is_suspected_not_definite():
+    """前两秒固定机位、随后横移：分段运镜，不能按整镜固定机位判 definite."""
+    from shared.shot_motion_checks import motion_outcome, motion_report
+    shot = {"camera_movement": "固定机位",
+            "motion_desc": "前两秒固定机位，随后横移",
+            "ff_desc": "院门口", "lf_desc": "院子里"}
+    assert motion_outcome(shot) == "suspected"
+    assert any(r["time_relation"] == "unknown" for r in motion_report(shot))
 
 
 def test_negated_pan_is_suspected_not_definite():
@@ -50,7 +69,6 @@ def test_moving_camera_is_no_conflict():
 
 
 def test_different_time_state_is_no_conflict():
-    """prompt 写中段吹奏、ff 写起始未吹：时段不同，S01 不判冲突（交组装层 S03）."""
     from shared.shot_motion_checks import motion_outcome
     shot = {"camera_movement": "固定机位",
             "motion_desc": "杨旭吹箫",

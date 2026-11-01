@@ -81,7 +81,7 @@ def _clip_prompt(req, model: str) -> str:
     cap = _model_prompt_cap(model)
     if cap and cap > 0 and len(prompt) > cap - reserve:
         prompt = prompt[:max(0, cap - reserve)]
-    result = apply_system_camera(prompt, camera,
+    result = apply_system_camera(prompt, camera, existing=[],
                                  max_chars=cap if cap and cap > 0 else None)
     if result["problems"]:
         problem = result["problems"][0]

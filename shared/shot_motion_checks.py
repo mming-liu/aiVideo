@@ -30,6 +30,12 @@ DISPLACE_TERMS = (
 _QUOTE_PAIRS = (("“", "”"), ("「", "」"), ('"', '"'))
 _NEGATION = re.compile(r"(?:不|别|勿|禁止|避免|不要)[^，。；]{0,6}")
 _CONDITIONAL = re.compile(r"(?:若|如果|要是|倘若)[^，。；]{0,10}")
+#: 分段运镜：前N秒/随后/然后/接着/之后/先…再…
+_SEGMENT = re.compile(r"(?:前\s*\d+(?:\.\d+)?\s*秒|随后|然后|接着|之后|先[^，。；]{0,6}再)")
+#: 通用运镜词需要“镜头/机位/画面”作主语，避免把“小孩跟随母亲”当成运镜
+_CAMERA_CONTEXT = ("镜头", "机位", "画面")
+_GENERIC_TERMS = ("横移", "推近", "推镜", "拉远", "拉镜", "跟拍", "跟随",
+                  "环绕", "摇镜", "摇摄", "升降", "俯冲", "拉升")
 
 
 def _is_fixed(camera: str) -> bool:
@@ -46,16 +52,22 @@ def _quoted(text: str, start: int, end: int) -> bool:
     return False
 
 
-def _classify_phrase(motion: str, term: str, start: int, end: int) -> tuple[str, str]:
-    """返回 (class, reason)；只对"固定机位 + 明确运镜词"使用."""
+def _classify_phrase(motion: str, term: str, start: int, end: int):
+    """返回 (class, reason, time_relation)；无法确认是相机指令时返回 None."""
+    if term in _GENERIC_TERMS:
+        prefix = motion[max(0, start - 10):start]
+        if not any(ctx in prefix for ctx in _CAMERA_CONTEXT):
+            return None  # “小孩跟随母亲”这类普通动词，不是运镜
     if _quoted(motion, start, end):
-        return "suspected", "运镜词位于引号内（引用/转述），不能确认是镜头指令"
+        return "suspected", "运镜词位于引号内（引用/转述），不能确认是镜头指令", "unknown"
     prefix = motion[max(0, start - 12):start]
     if _NEGATION.search(prefix):
-        return "suspected", "运镜词前有否定（不要/禁止等），是否定指令而非肯定运镜"
+        return "suspected", "运镜词前有否定（不要/禁止等），是否定指令而非肯定运镜", "unknown"
     if _CONDITIONAL.search(prefix):
-        return "suspected", "运镜词处于条件句（若/如果），不是无条件指令"
-    return "definite", "同一镜头、同一主体（相机）、肯定且互斥的运镜指令"
+        return "suspected", "运镜词处于条件句（若/如果），不是无条件指令", "unknown"
+    if _SEGMENT.search(prefix):
+        return "suspected", "运镜词处于分段运镜（前N秒/随后/然后），不能按整镜固定机位判定", "unknown"
+    return "definite", "同一镜头、同一主体（相机）、肯定且互斥的运镜指令", "same"
 
 
 def motion_report(shot: dict) -> list[dict]:
@@ -71,14 +83,17 @@ def motion_report(shot: dict) -> list[dict]:
             start = motion.find(term)
             if start == -1:
                 continue
-            cls, reason = _classify_phrase(motion, term, start, start + len(term))
+            classified = _classify_phrase(motion, term, start, start + len(term))
+            if classified is None:
+                continue
+            cls, reason, time_relation = classified
             records.append({
                 "code": "camera_motion_conflict",
                 "class": cls,
                 "field_paths": ["camera_movement", "motion_desc"],
                 "subject": "camera",
                 "subject_relation": "same",
-                "time_relation": "same",
+                "time_relation": time_relation,
                 "time_scope": "shot",
                 "snippet": motion[max(0, start - 10):start + len(term) + 10],
                 "evidence": {"camera_movement": camera, "term": term},
