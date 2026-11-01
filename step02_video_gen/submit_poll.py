@@ -255,6 +255,8 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
             return f"{fp.name}:unreadable"
 
     from shared.model_caps import active_video_model
+    from shared.video_media_plan import active_media_policy
+    _policy = active_media_policy()
     _resolution = (
         shot.get("resolution")
         or os.getenv("VOLCENGINE_VIDEO_RESOLUTION", "")
@@ -278,6 +280,10 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
         _normalize(shot.get("ff_desc", "")),
         _normalize(shot.get("lf_desc", "")),
     ]
+    # S01：策略只在非 auto 时进入 hash——auto 保持旧 hash（避免全量重生成），
+    # 切换策略必然换 hash，旧视频不会因"素材文件没变"被复用。
+    if _policy != "auto":
+        key_parts.append(f"media_policy={_policy}")
     # keyframes 数据也纳入哈希（添加/移除/修改关键帧都会触发重做）
     kfs = shot.get("keyframes") or shot.get("intermediate_keyframes") or []
     if kfs:
@@ -463,8 +469,40 @@ def build_frozen_for_shot(*, shot, script, video_adapter, frame_paths, mode,
     return frozen, req
 
 
+def record_submitted_duration(shot: dict, prepared) -> None:
+    """S08：把**实际提交**时长回填到 shot；计划装不下时阻断，不静默缩短故事时长."""
+    from _video_gen.models import VideoCapabilityError
+
+    params = getattr(prepared, "parameters", None) or {}
+    actual = params.get("duration")
+    if actual is None:
+        return
+    try:
+        actual_i = int(actual)
+    except (TypeError, ValueError):
+        return
+    planned = shot.get("planned_duration_sec")
+    if planned is None:
+        planned = shot.get("duration_sec") or shot.get("duration")
+    try:
+        import math as _math
+        planned_i = int(_math.ceil(float(planned)))
+    except (TypeError, ValueError):
+        planned_i = 0
+    if planned_i and actual_i < planned_i:
+        raise VideoCapabilityError(
+            "duration_insufficient",
+            f"实际提交时长 {actual_i}s 小于计划 {planned_i}s（模型区间/环境覆盖夹取），"
+            "禁止静默缩短故事时长",
+            field_path="parameters.duration")
+    shot["submitted_duration_sec"] = actual_i
+    if planned_i and actual_i > planned_i:
+        shot.setdefault("_duration_modifications", []).append(
+            {"kind": "duration_extended", "planned": planned_i, "submitted": actual_i})
+
+
 def cache_decision(shot, script, shot_dir, video_path, *, clip_path=None, force=False,
-                   frozen_request=None, shot_hash=None) -> dict:
+                   frozen_request=None, shot_hash=None, require_exact=False) -> dict:
     """缓存命中判据：prompt_hash + 产物检查 + **冻结请求关系**（§V2 改动 4）。
 
     返回 ``{"hit": bool, "reason": str, "relation": "exact"|"legacy"|"mismatch"|"absent"}``：
@@ -493,6 +531,10 @@ def cache_decision(shot, script, shot_dir, video_path, *, clip_path=None, force=
         if not (clip_path.exists() and clip_path.stat().st_size > 20 * 1024):
             return {"hit": False, "reason": "clip 产物缺失", "relation": "absent"}
     snapshot = read_frozen_snapshot(shot_dir)
+    # S01：非 auto 策略必须证明"旧产物对应当前实际素材模式"，legacy 不算命中。
+    if require_exact and (snapshot is None or frozen_request is None):
+        return {"hit": False, "reason": "策略要求精确冻结关系（无快照/未组装请求）",
+                "relation": "legacy"}
     if snapshot is None:
         return {"hit": True, "reason": "hash+产物命中（无冻结快照：legacy 证据）",
                 "relation": "legacy"}
@@ -1426,6 +1468,8 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
     # ---- prepare（无提交）：实际生效文本/参数/参考 ----
     try:
         prepared = svc.prepare_request(req, candidate_context)
+        # S08：实际时长以 prepared 为准回填；装不下计划即阻断（不静默改故事时长）。
+        record_submitted_duration(shot, prepared)
     except VideoCapabilityError as exc:
         va.open_attempt(package_root, attempt_id, request_key="", scope=scope,
                         script_revision=script_revision,

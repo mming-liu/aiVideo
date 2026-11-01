@@ -43,7 +43,7 @@ import os
 from shared.paths import (
     script_file, vimax_working_dir, chapter_dir,
     vimax_shots_dir, SHOT_VIDEO_FILENAME, FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME,
-    keyframe_files, clip_file,
+    is_core_keyframe_file, clip_file,
 )
 from shared.tee_logger import get_logger
 from step02_video_gen.submit_poll import (
@@ -56,6 +56,47 @@ from shared.shot_selector import parse_shot_selector
 
 def _exit(code: int) -> int:
     return int(code)
+
+
+def _core_keyframes_in(frames_dir: Path) -> list[Path]:
+    """本镜核心关键帧，按**数字序**（keyframe_2 在 keyframe_10 前，S09）."""
+    return sorted(
+        (p for p in Path(frames_dir).glob("keyframe_*.png") if is_core_keyframe_file(p)),
+        key=lambda p: int(p.stem.split("_")[1]))
+
+
+def _collect_frame_paths(idx: int, frames_dir: Path, policy: str) -> list[str]:
+    """按显式策略收集本镜帧文件；必需项缺失即 fail-closed（S02）.
+
+    `reference` 策略按"实际选中集合"判定：ff/lf/kf 任一存在即可，不强制首尾帧。
+    """
+    from shared.video_media_plan import required_frames
+
+    ff = frames_dir / FIRST_FRAME_FILENAME
+    lf = frames_dir / LAST_FRAME_FILENAME
+    kfs = [p for p in _core_keyframes_in(frames_dir) if p.exists()]
+    need = required_frames(policy)
+    missing: list[str] = []
+    if "ff" in need and not ff.exists():
+        missing.append("ff")
+    if "lf" in need and not lf.exists():
+        missing.append("lf")
+    if policy == "reference" and not (ff.exists() or lf.exists() or kfs):
+        missing.append("ff/lf/kf(任一)")
+    if missing:
+        if policy == "auto":
+            # 保留旧文案（既有入口/测试契约），显式策略用更精确的素材名。
+            raise FileNotFoundError(
+                f"[Shot {idx}] image 模式缺少首/尾帧: ff={ff.exists()} lf={lf.exists()}")
+        raise FileNotFoundError(
+            f"[Shot {idx}] 策略 {policy} 缺少素材: {', '.join(missing)}")
+    paths: list[str] = []
+    if ff.exists():
+        paths.append(str(ff))
+    if lf.exists():
+        paths.append(str(lf))
+    paths.extend(str(p) for p in kfs)
+    return paths
 
 
 async def gen_all_videos(script: dict, working_dir: Path, script_file_path: Path,
@@ -194,10 +235,36 @@ async def _process_one_shot_skip_frames(
         logger = get_logger(chapter_dir() / "step02b.log", console_level="INFO")
         _clip_dst = clip_file(idx)
 
+    # S02：按策略先定素材（必需项缺失即失败），再判缓存。非 auto 策略在命中缓存前
+    # 必须证明旧产物对应当前实际素材模式（S01 缓存门：require_exact）。
+    from shared.video_media_plan import active_media_policy
+    policy = active_media_policy()
+    REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
+    if REFERENCE_MODE == "r2v" or REFERENCE_MODE == "text":
+        # r2v：参考图由 prompt_builder._make_request 权威收集（角色肖像），
+        # 此处不传任何路径，避免传递不存在的 keyframes/ 子目录（旧逻辑断链）。
+        # text：纯文生视频，不使用任何帧图片。
+        frame_paths = []
+        logger.info(f"  [Shot {idx}] Mode: {REFERENCE_MODE.upper()} (no frame files)")
+    else:
+        frame_paths = _collect_frame_paths(idx, frames_dir, policy)
+        logger.info(f"  [Shot {idx}] Mode: IMAGE policy={policy} "
+                    f"frames={[Path(p).name for p in frame_paths]}")
+
     # Cache check（§V2 改动 4）：prompt_hash + 产物检查 + 冻结请求关系
     shot_hash = _get_shot_hash(shot, script, shot_dir=frames_dir)
+    _frozen_for_cache = None
+    if policy != "auto" and REFERENCE_MODE == "image":
+        from shared.model_caps import active_video_model
+        _frozen_for_cache, _ = build_frozen_for_shot(
+            shot=shot, script=script, video_adapter=video_adapter,
+            frame_paths=frame_paths, mode="A",
+            provider=os.getenv("VIDEO_PROVIDER", ""),
+            model_id=active_video_model())
     _cache = cache_decision(shot, script, shot_dir, video_path, clip_path=_clip_dst,
-                            force=force, shot_hash=shot_hash)
+                            force=force, shot_hash=shot_hash,
+                            frozen_request=_frozen_for_cache,
+                            require_exact=(policy != "auto"))
     if _cache["hit"]:
         logger.info(f"  [Shot {idx}] Cache hit({_cache['relation']}), skip: {_cache['reason']}")
         return None
@@ -207,27 +274,6 @@ async def _process_one_shot_skip_frames(
             logger.info(f"  [Shot {idx}] Clip 缺失但视频完好，本地补拷 clips/（0 次远端提交）")
             return None
         logger.warn(f"  [Shot {idx}] Clip 缺失且本地补拷失败，回退为重新生成")
-
-    # 按模式收集参考图（r2v/text 不需要帧图片；image 复用 step02a 帧）
-    REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
-    if REFERENCE_MODE == "r2v" or REFERENCE_MODE == "text":
-        # r2v：参考图由 prompt_builder._make_request 权威收集（角色肖像），
-        # 此处不传任何路径，避免传递不存在的 keyframes/ 子目录（旧逻辑断链）。
-        # text：纯文生视频，不使用任何帧图片。
-        frame_paths = []
-        logger.info(f"  [Shot {idx}] Mode: {REFERENCE_MODE.upper()} (no frame files)")
-    else:
-        # image 模式：使用首帧/尾帧/关键帧；首帧缺失必须失败，禁止尾帧顶上。
-        ff = frames_dir / FIRST_FRAME_FILENAME
-        lf = frames_dir / LAST_FRAME_FILENAME
-        if not ff.exists() or not lf.exists():
-            raise FileNotFoundError(
-                f"[Shot {idx}] image 模式缺少首/尾帧: ff={ff.exists()} lf={lf.exists()}"
-            )
-        kf_paths = [str(p) for p in keyframe_files(idx)]
-        frame_paths = [str(ff), str(lf)]
-        frame_paths.extend(kf_paths)
-        logger.info(f"  [Shot {idx}] Mode: IMAGE (reuse step02a frames)")
 
     return await _submit_video(
         shot, shot_dir, video_path, frame_paths, shot_hash,
@@ -290,8 +336,10 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
     "组装完成、尚未 provider 化"的事实，``semantic_preflight=unverified``。
     """
     from shared.model_caps import active_video_model
+    from shared.video_media_plan import active_media_policy
     from step02_video_gen import request_plan as rp
 
+    _policy = active_media_policy()
     resolved_model = model_id if model_id is not None else str(active_video_model() or "")
     entries: list[dict] = []
     shots = list(script.get("shots") or [])
@@ -305,15 +353,15 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
         entry = {"shot_index": idx, "mode": mode, "generations": 0}
         if mode == "image":
             dd = shots_dir / str(idx)
-            ff, lf = dd / FIRST_FRAME_FILENAME, dd / LAST_FRAME_FILENAME
-            if not (ff.exists() and lf.exists()):
+            try:
+                frame_paths = _collect_frame_paths(idx, dd, _policy)
+            except FileNotFoundError as exc:
                 entry.update({"verdict": "blocked", "code": "frames_missing",
                               "field_path": f"shots[{idx}].frames",
-                              "message": f"image 模式缺少首/尾帧: ff={ff.exists()} lf={lf.exists()}",
-                              "needed_change": "先跑 step02a_frame_gen 补齐首尾帧"})
+                              "message": str(exc),
+                              "needed_change": "先跑 step02a_frame_gen 补齐所需帧"})
                 entries.append(entry)
                 continue
-            frame_paths = [str(ff), str(lf)] + [str(p) for p in keyframe_files(idx)]
         else:
             frame_paths = []
         _prepared_status = "not_prepared"
@@ -575,7 +623,21 @@ def _assert_step02a_scope(report: dict, only_indices, script: dict) -> None:
     """
     from shared.quality_gate import QualityGateError
 
+    from shared.video_media_plan import active_media_policy
+
     scope = (report or {}).get("scope") or {}
+    # S02：成品报告必须与当前素材策略同一口径；旧报告（无 media_policy）只在 auto 下沿用。
+    _current_policy = active_media_policy()
+    _report_policy = scope.get("media_policy")
+    if _report_policy is None:
+        if _current_policy != "auto":
+            raise QualityGateError(
+                "step02a 成品报告缺少 media_policy（旧报告），当前策略 %s 需重跑 step02a"
+                % _current_policy)
+    elif str(_report_policy) != _current_policy:
+        raise QualityGateError(
+            "step02a 成品报告策略 %s 与当前策略 %s 不一致，需重跑 step02a"
+            % (_report_policy, _current_policy))
     scoped = {int(i) for i in (scope.get("shots") or [])}
     if not scoped:
         return
@@ -656,6 +718,20 @@ def main(options=None):
         logger.info(f"[INFO] {scope_log_line(scope)}")
 
     REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
+    # S01：显式策略与运行上下文冲突时启动即阻断（不进入任何提交）。
+    from shared.video_media_plan import (active_media_policy,
+                                         validate_media_policy_context)
+    try:
+        _policy = active_media_policy()
+    except ValueError as _policy_exc:
+        print(f"[ERROR] {_policy_exc}", flush=True)
+        raise SystemExit(2) from None
+    _policy_conflict = validate_media_policy_context(
+        policy=_policy, provider=os.getenv("VIDEO_PROVIDER", ""),
+        reference_mode=REFERENCE_MODE)
+    if _policy_conflict:
+        print(f"[ERROR] {_policy_conflict['message']}", flush=True)
+        raise SystemExit(2)
     shots_dir = vimax_shots_dir()
 
     # Load script before frame validation: downstream must key off explicit shot ids,
@@ -706,13 +782,24 @@ def main(options=None):
             idx = shot.get("index", 0)
             if only_indices is None or idx in only_indices:
                 expected.append(idx)
+        from shared.video_media_plan import required_frames
+        _need = required_frames(_policy)
         missing_frames = []
         for idx in expected:
             d = shots_dir / str(idx)
             ff = d / FIRST_FRAME_FILENAME
             lf = d / LAST_FRAME_FILENAME
-            if not ff.exists() or not lf.exists():
-                missing_frames.append((idx, "ff+lf"))
+            _miss = []
+            if "ff" in _need and not ff.exists():
+                _miss.append("ff")
+            if "lf" in _need and not lf.exists():
+                _miss.append("lf")
+            if _policy == "reference":
+                _kfs = [p for p in _core_keyframes_in(d) if p.exists()]
+                if not (ff.exists() or lf.exists() or _kfs):
+                    _miss.append("ff/lf/kf")
+            if _miss:
+                missing_frames.append((idx, "+".join(_miss)))
         if missing_frames:
             detail = ", ".join(f"shot {idx}: missing {need}" for idx, need in missing_frames)
             raise FileNotFoundError(

@@ -254,6 +254,8 @@ tests/tts/*
 !tests/shared/
 tests/shared/*
 !tests/shared/test_video_media_plan.py
+# 2026-11-02：素材策略（参考图 vs 首尾帧）契约用例入库。
+!tests/shared/test_media_policy.py
 !tests/shared/test_shot_motion_checks.py
 !tests/shared/test_video_prompt_system.py
 !tests/shared/test_frame_prompt_camera.py

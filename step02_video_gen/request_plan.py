@@ -66,8 +66,11 @@ class FrozenVideoRequest:
     request_id: str
     provider: str
     model_id: str
-    mode: str                                  # image | r2v | text（实际提交形态）
+    mode: str                                  # image | r2v | text（路由分类）
     prompt: str
+    #: S03：由最终素材 role 派生的素材模式（first_last/first/reference/...）。
+    #: 不进入 request_key（references 的 role 已足以区分），但随冻结记录持久化。
+    media_mode: str = ""
     parameters: dict = field(default_factory=dict)     # duration/size/seed/...
     references: list[ReferenceBinding] = field(default_factory=list)
     requirements: dict = field(default_factory=dict)   # start/end state、events、audio_policy、required_checks
@@ -223,11 +226,17 @@ def build_frozen_request(req, *, shot: dict, scope: dict | None, script_revision
                 if _m not in _merged:
                     _merged.append(dict(_m))
             media_selection["modifications"] = _merged
+    # S03：媒体模式优先取 prepared（实际下发）的派生值，否则按最终 references 派生。
+    from shared.video_media_plan import derive_media_mode
+    _media_mode = str(getattr(prepared, "media_mode", "") or "")
+    if not _media_mode:
+        _media_mode = derive_media_mode([r.role for r in references])
     frozen = FrozenVideoRequest(
         request_id=new_request_id(),
         provider=provider,
         model_id=model_id,
         mode=mode,
+        media_mode=_media_mode,
         prompt=prompt,
         parameters=params,
         references=references,
@@ -298,6 +307,25 @@ def verify_prepared_frozen(prepared, frozen: FrozenVideoRequest) -> list[dict]:
             if a_path and b_path and _norm_fact(a_path) != _norm_fact(b_path):
                 _p("prepared_material_path_mismatch", "references[%d].path" % i,
                    "prepared=%r frozen=%r" % (a_path, b_path))
+
+    # S03：media_mode 必须与**最终 role** 一致；两边同时标错也要检出。
+    # 旧记录/手工夹具没有该字段时，用 role 派生值参与比较（而不是直接判不等）。
+    from shared.video_media_plan import derive_media_mode
+    p_media = str(getattr(prepared, "media_mode", "") or "")
+    f_media = str(getattr(frozen, "media_mode", "") or "")
+    p_derived = derive_media_mode([getattr(m, "role", "") for m in p_mats])
+    f_derived = derive_media_mode([getattr(r, "role", "") for r in f_refs])
+    p_eff = p_media or p_derived
+    f_eff = f_media or f_derived
+    if p_eff != f_eff:
+        _p("prepared_media_mode_mismatch", "media_mode",
+           "prepared=%r(%r) frozen=%r(%r)" % (p_media, p_eff, f_media, f_eff))
+    if p_media and p_derived != p_media:
+        _p("prepared_media_mode_role_mismatch", "media_mode",
+           "标签=%r 但素材 role 派生=%r" % (p_media, p_derived))
+    if f_media and f_derived != f_media:
+        _p("frozen_media_mode_role_mismatch", "media_mode",
+           "标签=%r 但引用 role 派生=%r" % (f_media, f_derived))
     return problems
 
 

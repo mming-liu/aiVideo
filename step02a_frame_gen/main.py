@@ -54,8 +54,9 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
     from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
 
     if frames is None:
-        from shared.video_media_plan import default_frame_selection
-        frames = default_frame_selection()
+        from shared.video_media_plan import active_media_policy, default_frame_selection
+        # S02：显式素材策略优先（first_last→ff/lf；first_only→ff；reference→ff/lf/kf）
+        frames = default_frame_selection(active_media_policy())
     log_dir = chapter_dir()
     logger = get_logger(log_dir / "step02a.log", console_level="INFO")
 
@@ -593,10 +594,13 @@ def main():
         from step02a_frame_gen.image_prompt_quality import write_image_product_quality
         with open(script_path, "r", encoding="utf-8") as _sf_final:
             _script_final = json.load(_sf_final)
-        _effective_frames = frames if frames is not None else {"ff", "lf", "kf"}
+        from shared.video_media_plan import active_media_policy, default_frame_selection
+        _policy = active_media_policy()
+        _effective_frames = frames if frames is not None else default_frame_selection(_policy)
         _pq = write_image_product_quality(
             _script_final, work_dir, only_indices=only_indices,
-            require_keyframes=any(f.startswith("kf") for f in _effective_frames))
+            require_keyframes=any(f.startswith("kf") for f in _effective_frames),
+            media_policy=_policy)
         logger.info(f"[IMAGE-PRODUCT] status={_pq.get('status')} missing={len(_pq.get('missing') or [])}")
         if _pq.get("status") != "PASS":
             # S22-4：缺帧/不可解码默认非零退出，不能"报告 BLOCK 但 exit 0"。

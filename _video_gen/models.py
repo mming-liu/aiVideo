@@ -200,6 +200,9 @@ class PreparedVideoRequest:
     model_id: str
     mode: str
     prompt: str
+    #: S03：由最终素材 role 派生的素材模式（first_last/first/reference/none/...）。
+    #: 与 `mode`（image/r2v/text 路由分类）分开，避免"参考图请求被记成 image"。
+    media_mode: str = ""
     parameters: dict = field(default_factory=dict)
     materials: list = field(default_factory=list)          # list[MaterialRef]
     modifications: list = field(default_factory=list)      # 派生版本记录
@@ -249,7 +252,8 @@ class PreparedVideoRequest:
             "schema_version": self.schema_version, "status": self.status,
             "unsupported_reason": self.unsupported_reason,
             "request_id": self.request_id, "provider": self.provider,
-            "model_id": self.model_id, "mode": self.mode, "prompt": self.prompt,
+            "model_id": self.model_id, "mode": self.mode,
+            "media_mode": self.media_mode, "prompt": self.prompt,
             "parameters": dict(self.parameters or {}),
             "materials": [m.to_dict() for m in self.materials],
             "modifications": list(self.modifications or []),
@@ -273,6 +277,7 @@ class PreparedVideoRequest:
         return PreparedVideoRequest(
             request_id=d.get("request_id", ""), provider=d.get("provider", ""),
             model_id=d.get("model_id", ""), mode=d.get("mode", ""),
+            media_mode=d.get("media_mode", ""),
             prompt=d.get("prompt", ""), parameters=dict(d.get("parameters") or {}),
             materials=[MaterialRef.from_dict(m) for m in (d.get("materials") or [])],
             modifications=list(d.get("modifications") or []),

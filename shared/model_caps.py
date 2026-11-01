@@ -118,9 +118,11 @@ SEEDANCE_CAPS: list[tuple[str, SeedanceCap]] = [
     # 注意官方同句限定：相同请求 + 相同 seed 只产生**类似**结果，不保证完全一致；
     # 因此 seed 可用于"固定变量做对照"，不能当作"同 seed 必然复现"的依据。
     ("seedance-2-5", SeedanceCap((4, 30), ("480p", "720p"), True, True, True, False, True)),
-    ("seedance-2-0-fast", SeedanceCap((4, 15), ("480p", "720p"), True, True, False, False, False)),
-    ("seedance-2-0-mini", SeedanceCap((4, 15), ("480p", "720p"), True, True, False, False, False)),
-    ("seedance-2-0", SeedanceCap((4, 15), ("480p", "720p", "1080p", "4k"), True, True, False, False, False)),
+    # 2026-11-01（S07）：2.0 系列参考音频能力位按官方矩阵改为 True；实际发送仍受
+    # provider 场景守卫限制（reference_audio 只进 r2v 分支），i2v 会显式丢弃并记账。
+    ("seedance-2-0-fast", SeedanceCap((4, 15), ("480p", "720p"), True, True, True, False, False)),
+    ("seedance-2-0-mini", SeedanceCap((4, 15), ("480p", "720p"), True, True, True, False, False)),
+    ("seedance-2-0", SeedanceCap((4, 15), ("480p", "720p", "1080p", "4k"), True, True, True, False, False)),
     ("seedance-1-5-pro", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, True, False, False, False,
                                      supports_draft=True, supports_flex_tier=True)),
     ("seedance-1-5", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, False, False, False, False)),

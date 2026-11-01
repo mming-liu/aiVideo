@@ -135,6 +135,16 @@ def _classify_sentence_weight(sent: str) -> int:
     return _SENT_WEIGHT_MID
 
 
+def _req_mode(req) -> str:
+    """请求的实际形态（image/r2v/text）；provider 与离线测试共用，不依赖实例."""
+    if getattr(req, "reference_paths", None):
+        return "r2v"
+    if (getattr(req, "image_path", None) or getattr(req, "last_frame_image_path", None)
+            or getattr(req, "extra_keyframe_paths", None)):
+        return "image"
+    return "text"
+
+
 def _seedance_compress_prompt(full_prompt: str, max_chars: int,
                               ref_tags: list[str] | None = None) -> str:
     """Seedance prompt 智能压缩（避免静默截断丢关键约束）.
@@ -326,11 +336,7 @@ class VolcengineVideoService(VideoGenerationService):
         return self._prepare_for_model(req, self._resolve_prepare_model(req), context)
 
     def _mode_of(self, req: VideoGenerationRequest) -> str:
-        if req.reference_paths:
-            return "r2v"
-        if req.image_path or req.last_frame_image_path or req.extra_keyframe_paths:
-            return "image"
-        return "text"
+        return _req_mode(req)
 
     def _prepare_for_model(self, req: VideoGenerationRequest, model: str,
                            context=None) -> PreparedVideoRequest:
@@ -368,9 +374,13 @@ class VolcengineVideoService(VideoGenerationService):
                     source_path=str(p), sha256=sha256_file(p),
                     bytes=p.stat().st_size, ref_id=f"r{len(materials) + 1}"))
 
+        # S03：媒体模式由**最终 role** 派生，与路由 mode 分开记录。
+        from shared.video_media_plan import derive_media_mode
+        media_mode = derive_media_mode([m.role for m in materials])
         prepared = PreparedVideoRequest(
             request_id=new_request_id("volc"),
             provider="volcengine", model_id=model, mode=self._mode_of(req),
+            media_mode=media_mode,
             prompt=prompt, parameters=parameters, materials=materials,
             modifications=modifications,
             credential_profile_ref=self._credential_profile_ref(),
@@ -384,7 +394,8 @@ class VolcengineVideoService(VideoGenerationService):
     def _effective_prompt(self, req: VideoGenerationRequest, model: str,
                           context=None) -> tuple:
         """实际会发出去的文本 + 派生版本记录（Seedance 中文有效上限 ≈500 字符）。"""
-        from shared.video_prompt_system import SystemCameraError, apply_system_camera
+        from shared.video_prompt_system import (SystemCameraError, apply_system_camera,
+                                                split_reference_block)
 
         cap_len = _model_prompt_cap(model)
         text = str(req.prompt or "")
@@ -392,23 +403,36 @@ class VolcengineVideoService(VideoGenerationService):
         camera = str(req.camera_movement or "").strip()
         # S02：压缩/截断前给系统段预留预算，组装后再核总长度。
         reserve = len(f"运镜：{camera}\n") if camera else 0
-        if cap_len and len(text) > cap_len - 40 - reserve:
-            ref_tags = re.findall(r"@\S+", text)
+        if cap_len:
+            # S06：参考图清单块整块保留，不参与句级压缩；预算不足时明确阻断，
+            # 不再让"图号被权重丢弃"成为静默结果。
+            body, ref_block = split_reference_block(text)
+            budget = cap_len - reserve - len(ref_block) - 20
+            if budget < 80:
+                raise VideoCapabilityError(
+                    "prompt_ref_block_over_budget",
+                    f"参考图清单块占 {len(ref_block)} 字符，正文可用预算仅 {budget}"
+                    f"（模型上限 {cap_len}）；禁止丢图号或截断后发送",
+                    field_path="prompt")
+            ref_tags = re.findall(r"@\S+", body)
             ref_len = sum(len(t) + 1 for t in ref_tags)
-            target_body = max(200, cap_len - ref_len - 20 - reserve)
-            compressed = _seedance_compress_prompt(text, max_chars=target_body,
-                                                   ref_tags=ref_tags)
-            if len(compressed) < len(text):
-                modifications.append({
-                    "kind": "prompt_compress", "from_chars": len(text),
-                    "to_chars": len(compressed), "ref_tags": len(ref_tags),
-                    "target_body": target_body, "model_cap": cap_len})
-                text = compressed
-        if cap_len and len(text) > cap_len - reserve:
-            limit = max(0, cap_len - reserve)
-            modifications.append({"kind": "prompt_hard_truncate", "from_chars": len(text),
-                                  "to_chars": limit, "model_cap": cap_len})
-            text = text[:limit]
+            target_body = max(50, budget - ref_len)
+            if len(body) > target_body:
+                compressed = _seedance_compress_prompt(body, max_chars=target_body,
+                                                       ref_tags=ref_tags)
+                if len(compressed) < len(body):
+                    modifications.append({
+                        "kind": "prompt_compress", "from_chars": len(body),
+                        "to_chars": len(compressed), "ref_tags": len(ref_tags),
+                        "target_body": target_body, "model_cap": cap_len,
+                        "ref_block_chars": len(ref_block)})
+                    body = compressed
+            if len(body) > target_body:
+                modifications.append({"kind": "prompt_hard_truncate",
+                                      "from_chars": len(body), "to_chars": target_body,
+                                      "model_cap": cap_len})
+                body = body[:target_body]
+            text = body + ref_block
         result = apply_system_camera(text, camera, max_chars=cap_len, existing=[])
         if result["problems"]:
             problem = result["problems"][0]
@@ -427,7 +451,17 @@ class VolcengineVideoService(VideoGenerationService):
         - 图生视频-首帧/首尾帧：role=first_frame / last_frame（所有 Seedance 支持）
         """
         from shared.model_caps import get_seedance_cap
+        from shared.video_media_plan import (active_media_policy, plan_image_media,
+                                             validate_media_policy_context)
         cap = get_seedance_cap(model)
+        # S01：显式素材策略的冲突检查（直接调用 provider 也必须 fail-closed）。
+        policy = active_media_policy()
+        _conflict = validate_media_policy_context(
+            policy=policy, provider="volcengine", reference_mode=_req_mode(req))
+        if _conflict:
+            raise VideoCapabilityError(
+                _conflict["code"], _conflict["message"],
+                field_path=_conflict["field_path"])
         items: list[dict] = []
         modifications: list[dict] = []
 
@@ -491,14 +525,23 @@ class VolcengineVideoService(VideoGenerationService):
         plan = plan_image_media(
             supports_reference_image=bool(getattr(cap, "supports_reference_image", False)),
             image_path=ff, last_frame_path=lf, keyframe_paths=kfs,
-            supports_last_frame=bool(getattr(cap, "supports_last_frame", True)))
+            supports_last_frame=bool(getattr(cap, "supports_last_frame", True)),
+            policy=policy)
+        if plan["blocked"]:
+            _b = plan["blocked"]
+            raise VideoCapabilityError(_b["code"], _b["message"],
+                                       field_path=_b["field_path"])
         for item in plan["items"]:
             _image(item["path"], item["role"])
         modifications.extend(plan["modifications"])
         if plan["dropped"]:
             _verbose_write(f"  [镜头{req.clip_index}] {model} 素材裁剪: "
                            f"mode={plan['mode']} 丢弃 {len(plan['dropped'])} 张")
-        _audio_item()
+        # S07：参考音频只属于 r2v 场景；首尾帧分支不得携带 reference_audio，
+        # 即使模型能力位允许也要显式丢弃并记账（不静默混用）。
+        if req.reference_audio:
+            modifications.append({"kind": "param_dropped", "field": "reference_audio",
+                                  "reason": "reference_audio_requires_r2v"})
         return items, modifications
 
     def _build_parameters(self, req: VideoGenerationRequest, model: str) -> dict:

@@ -1226,6 +1226,22 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
       模式B时跳过 frame_paths 首帧解析，直接用 continuity_ref_image 作 image_path。
     """
     from _video_gen import VideoGenerationRequest
+    from shared.video_media_plan import (active_media_policy, derive_media_mode,
+                                         plan_image_media,
+                                         validate_media_policy_context)
+
+    # S01：显式素材策略（auto/first_last/first_only/reference）。
+    # 非 auto 只支持 Seedance 的 image 路径；冲突在请求构造期 fail-closed。
+    policy = active_media_policy()
+    _conflict = validate_media_policy_context(
+        policy=policy,
+        provider=os.getenv("VIDEO_PROVIDER", ""),
+        reference_mode=_reference_mode(),
+    )
+    if _conflict:
+        from _video_gen.models import VideoCapabilityError
+        raise VideoCapabilityError(_conflict["code"], _conflict["message"],
+                                   field_path=_conflict["field_path"])
 
     # 注入导演风格前缀（如果有配置）
     cinematic_prefix = (
@@ -1274,6 +1290,8 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     image_path = None
     last_frame_image_path = None
     extra_keyframe_paths = []
+    # S01/S04：本次最终素材选择记录（r2v 与 image 分支各自填充）
+    _media_selection = None
 
     if _text_to_video():
         # 文生视频模式：完全不使用任何参考图（强制 T2V）
@@ -1299,6 +1317,19 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
                 f"[Shot {shot.get('index', '?')}] r2v 模式未收集到任何参考图，"
                 "拒绝静默降级 text-to-video；请先补齐角色肖像/场景/道具资产。"
             )
+        # S04：r2v 的首帧只作 reference_image 构图锚点，**不是** first_frame role。
+        # 在记录里显式声明 role claim，避免报告把语言引导写成已发首帧角色。
+        _ff_path = str(first_frame_file(shot.get("index", 0)))
+        _ff_in_refs = any(str(p) == _ff_path for p in reference_paths)
+        _media_selection = {
+            "mode": "r2v",
+            "policy": policy,
+            "media_mode": "reference",
+            "items": [{"path": str(p), "role": "reference_image"} for p in reference_paths],
+            "dropped": [],
+            "modifications": [],
+            "role_claims": ({"first_frame": "reference"} if _ff_in_refs else {}),
+        }
     else:
         # 图生视频模式：使用帧图片作为参考
         reference_paths = []
@@ -1344,30 +1375,38 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     import math as _math
     duration = max(1, int(_math.ceil(planned_duration)))
     shot["planned_duration_sec"] = round(planned_duration, 3)
-    shot["submitted_duration_sec"] = duration
+    # S08：实际提交时长由 provider 按模型能力夹取后回填（_record_submitted_duration），
+    # 这里只记**计划**值，避免"记录 2s、实际提交 4s"的对账偏差。
 
     # 最终素材计划：**先按模型能力定素材与 role，再据此写提示词**（与 provider 同一函数）。
     # 目前只接 volcengine（Seedance）这条链；其他 provider 保留各自显式能力分支。
     _media_items = None
-    _media_selection = None
     # S17-2：触发条件按**能力**而非硬编码 provider 名——Seedance 系（volcengine /
     # agent_plan）统一走同一份素材计划；其他 provider 仍保留各自分支。
     from shared.model_caps import active_video_is_seedance
     if _reference_mode() == "image" and active_video_is_seedance():
-        from shared.video_media_plan import plan_image_media
         from shared.model_caps import active_video_model, get_seedance_cap
         _cap = get_seedance_cap(active_video_model())
         _plan = plan_image_media(
             supports_reference_image=bool(getattr(_cap, "supports_reference_image", False)),
             image_path=image_path, last_frame_path=last_frame_image_path,
             keyframe_paths=list(extra_keyframe_paths),
-            supports_last_frame=bool(getattr(_cap, "supports_last_frame", True)))
+            supports_last_frame=bool(getattr(_cap, "supports_last_frame", True)),
+            policy=policy)
+        if _plan["blocked"]:
+            from _video_gen.models import VideoCapabilityError
+            _b = _plan["blocked"]
+            raise VideoCapabilityError(_b["code"], _b["message"],
+                                       field_path=_b["field_path"])
         image_path = _plan["first_frame"]
         last_frame_image_path = _plan["last_frame"]
         extra_keyframe_paths = list(_plan["reference_images"])
         _media_items = _plan["items"]
         _media_selection = {
             "mode": _plan["mode"],
+            "policy": _plan["policy"],
+            # S03：由最终 role 派生，不信任自报标签
+            "media_mode": derive_media_mode([i["role"] for i in _media_items]),
             "items": [{"path": i["path"], "role": i["role"]} for i in _media_items],
             "dropped": list(_plan["dropped"]),
             "modifications": list(_plan["modifications"]),

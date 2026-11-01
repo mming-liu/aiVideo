@@ -175,7 +175,9 @@ def describe_ref(path: str) -> str:
         return label
     # 文件名分类匹配（非路径构建）；文件名契约单源 shared/paths.py 的 *_FILENAME 常量
     if name == FIRST_FRAME_FILENAME:
-        return "视频起点画面（首帧，构图与人物站位基准）"
+        # S04：r2v 里它只是 reference_image 的构图锚点，不是 first_frame role；
+        # 文案不得让报告/读者误以为"已发首帧角色"。
+        return "构图基准（参考图角色，不是首帧 role；动作起点与人物站位以它为准）"
     if name == LAST_FRAME_FILENAME:
         return "视频终点画面（尾帧）"
     if "/scenes_bank/" in p:

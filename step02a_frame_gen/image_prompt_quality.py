@@ -96,7 +96,8 @@ def _keyframes_consumed_by_video() -> bool:
 
 
 def write_image_product_quality(script: dict, work_dir: Path, *,
-                                  only_indices=None, require_keyframes=None) -> dict:
+                                  only_indices=None, require_keyframes=None,
+                                  media_policy=None) -> dict:
     """Validate actual Step02a frame products and write acceptance report.
 
     only_indices: 只核验这些镜头（--shots 子集运行）；None=全章。
@@ -118,6 +119,10 @@ def write_image_product_quality(script: dict, work_dir: Path, *,
         units = [u for u in units if int(u.get("index", 0)) in _want]
     if require_keyframes is None:
         require_keyframes = _keyframes_consumed_by_video()
+    # S02：成品验收与生成选择、Step02b 准入共用同一份素材需求。
+    from shared.video_media_plan import active_media_policy, required_frames
+    policy = media_policy or active_media_policy()
+    need = required_frames(policy)
     missing = []
     outputs = {}
     issues_by_shot = {}
@@ -140,10 +145,14 @@ def write_image_product_quality(script: dict, work_dir: Path, *,
         kfs = sorted([p for p in shot_dir.glob("keyframe_*.png")
                       if is_core_keyframe_file(p)],
                      key=lambda p: int(p.stem.split("_")[1]))
-        if not ff.exists() or ff.stat().st_size <= 0 or not _image_decodable(ff):
+        if "ff" in need and (
+                not ff.exists() or ff.stat().st_size <= 0 or not _image_decodable(ff)):
             missing.append(f"shot {idx}: missing/undecodable {ff.name}")
-        if not lf.exists() or lf.stat().st_size <= 0 or not _image_decodable(lf):
+        if "lf" in need and (
+                not lf.exists() or lf.stat().st_size <= 0 or not _image_decodable(lf)):
             missing.append(f"shot {idx}: missing/undecodable {lf.name}")
+        if policy == "reference" and not (ff.exists() or lf.exists() or kfs):
+            missing.append(f"shot {idx}: reference 策略需要 ff/lf/kf 任一素材")
         _miss_kf = [i for i in range(expected_kfs)
                     if not (shot_dir / ("keyframe_%d.png" % i)).exists()]
         if _miss_kf and require_keyframes:
@@ -171,7 +180,10 @@ def write_image_product_quality(script: dict, work_dir: Path, *,
         "outputs": outputs,
         "issues_by_shot": issues_by_shot,
         "scope": {"shots": sorted(int(u.get("index", 0)) for u in units),
-                  "keyframes_required": bool(require_keyframes)},
+                  "keyframes_required": bool(require_keyframes),
+                  "media_policy": policy,
+                  "requirements": {"frames": list(need),
+                                   "keyframes": bool(require_keyframes)}},
     }
     attach_gate_metadata(payload, script, stage="step02a.product_acceptance")
     atomic_dump_json(chapter_dir() / "step02a_quality.json", payload, ensure_ascii=False, indent=2)

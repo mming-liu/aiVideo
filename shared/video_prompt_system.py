@@ -13,6 +13,30 @@ from __future__ import annotations
 SYSTEM_ORIGIN = "system_camera"
 CAMERA_PREFIX = "运镜："
 
+#: 参考图清单块的标题（与 prompt_builder 的注入文案同源）。
+REFERENCE_BLOCK_HEADS = ("【参考图清单】", "【参考图用途】")
+
+
+def split_reference_block(prompt: str) -> tuple[str, str]:
+    """把**末尾**的参考图清单块切出，返回 (正文, 块).
+
+    参考块必须整块保留：句级压缩按权重丢句时可能整行丢掉"参考图N"，导致模型
+    看到清单头却不知道哪张图对应哪个 role（S06）。块为空时原样返回。
+    """
+    text = str(prompt or "")
+    cut = -1
+    for head in REFERENCE_BLOCK_HEADS:
+        idx = text.rfind("\n" + head)
+        if idx < 0 and text.startswith(head):
+            idx = 0
+        if idx > cut:
+            cut = idx
+    if cut < 0:
+        return text, ""
+    if cut == 0:
+        return "", text
+    return text[:cut], text[cut:]
+
 
 class SystemCameraError(RuntimeError):
     """系统运镜段不可安全组装（禁止发送）."""
