@@ -3438,9 +3438,19 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
         scene = shot.get("scene", "") or ""
         location = shot.get("location", "") or ""
         ctx = f"（场景：{location or scene}）" if (location or scene) else ""
-        text = (f"{text}{ctx}"
-                f"，构图需按尾帧描述重新布局，"
-                f"可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。")
+        camera = str(shot.get("camera_movement") or "")
+        fixed = ("固定机位" in camera or camera.strip().lower() in ("static", "fixed", "locked")) \
+            and "非固定" not in camera and "不固定" not in camera
+        if fixed:
+            # 固定机位：尾帧必须沿用首帧机位与人物相对位置，只让动作/环境演进；
+            # 旧文案“可与首帧人物位置不同”会直接诱导 I2I 把人物挪位。
+            text = (f"{text}{ctx}"
+                    f"，构图与首帧保持一致：同一机位、同一景别，人物在画面中的相对位置不变；"
+                    f"仅动作与环境按尾帧描述演进。")
+        else:
+            text = (f"{text}{ctx}"
+                    f"，构图需按尾帧描述重新布局，"
+                    f"可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。")
         text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas("9:16")), verbose=False)
         return add_image_strict_constraints(text, "尾帧", shot=shot, characters=chars)
 

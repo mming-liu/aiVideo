@@ -8,27 +8,39 @@
   - `changed_shot_keys` 仅 `[1]`；
   - `_locked_repair_signature` 前后一致（duration/subtitle/narration/plan_refs 等未动）；
   - `_build_step01_quality_gate`：`status=PASS, blocking=False`。
-- 新 revision：`f9b06acecb11`；`script_result.json` SHA-256 与 `step01_adoption.json` 一致。
+- 新 revision：`b5ec17f69c7e`；`script_result.json` SHA-256 与 `step01_adoption.json` 一致。
 
-## 2. 关键帧口径修正
+## 2. 首轮效果问题与修正
 
-2 段 `motion_desc` 触发 `kf_segment_missing`（visual_risk，blocking）。
-按门禁要求补 2 个关键帧（t=1.25 / 4.1）及等长 `frame_layouts.kfs`，不再置空；
-`keyframes_required=false` 时 step02a 默认仍只生成 ff/lf（本次 Keyframes: NONE）。
+首轮两张图：杨旭侧坐船舷、双脚在水面；首尾帧人物位置变化明显。
 
-## 3. S14 实跑（shot 1）
+修正：
+1. 画面字段显式约束“船头铺平直船板，杨旭盘膝坐于船板中央，双脚收在船板内、不搭船舷、不垂向水面”；听香“立于船板上”；二人与船体相对位置固定。
+2. 根因（代码）：`shared/vimax_bridge.py` 的尾帧 prompt 无条件追加
+   “构图需按尾帧描述重新布局，可与首帧/参考图的景别、机位、人物位置不同”。
+   固定机位下这会直接诱导 I2I 挪动人物。已改为：
+   “构图与首帧保持一致：同一机位、同一景别，人物在画面中的相对位置不变；仅动作与环境按尾帧描述演进。”
+   非固定机位仍保留原重布局文案。
 
-- 命令：`production_context --run -- python step02a_frame_gen/main.py --shots 1`
-- 结果：`exit 0`，`[IMAGE-PRODUCT] status=PASS missing=0`
-- 实际图片提交 **2 次**（首帧 19:51:13、尾帧 19:52:19，均 HTTP 200）；
-- 角色/场景/道具命中缓存，未新增资产图；
-- 产物：
-  - `vimax_working/shots/1/first_frame.png`
-  - `vimax_working/shots/1/last_frame.png`
-- 未生成关键帧图片；未调用视频模型。
+## 3. S14 实跑
 
-## 4. 边界
+- `--shots 1`：重生成 ff/lf，2 次图片提交（均 200）；
+- 代码修正后 `--shots 1 --frames lf`：仅重生成尾帧，1 次图片提交；
+- 角色/场景/道具命中缓存，无新增资产图；
+- 关键帧：NONE（未生成图片）。
 
-- 这是按定稿字段重新生成的 shot 1 首尾帧，不等于画面验收通过；
-- 需人工查看船位移、听香侧身面朝、老农在远景是否成立；
+产物：
+- `vimax_working/shots/1/first_frame.png`
+- `vimax_working/shots/1/last_frame.png`
+
+## 4. 视觉复核（OpenCode Go）
+
+- 两图均为盘坐船板/船舱内，非船舷；
+- 双脚被衣袍遮盖、未接触水面、未垂在船外；
+- 两图人物在船上的相对位置一致，无明显位置变化。
+
+## 5. 边界
+
+- 视觉复核只回答可观察事实，不等于画面验收通过；
+- 需人工查看船位移、听香侧身面朝、老农远景；
 - 视频（step02b）未重跑，需另行授权与报价。
