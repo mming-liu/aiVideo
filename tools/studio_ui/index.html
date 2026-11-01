@@ -226,6 +226,10 @@
         h("span", { class: "sub", text: (shot.duration ? shot.duration + "s" : "") }),
         h("span", { class: "sub", text: "rev " + shortHash(shot.revision) }),
         shot.keep ? h("span", { class: "badge ok", text: "已锁定" }) : null,
+        shot.media_policy ? h("span", {
+          class: "badge",
+          text: (shot.media_policy.policy || "?") + " · " + (shot.media_policy.mode || "?")
+        }) : null,
         h("div", { class: "spacer" }),
         h("button", {
           type: "button", class: "ghost",
@@ -352,6 +356,13 @@
         grid.appendChild(box);
       });
       card.appendChild(grid);
+      card.appendChild(h("div", { class: "row", style: "margin-top:8px" }, [
+        h("button", {
+          type: "button", class: "ghost", text: "合成单镜（视频+音轨）",
+          disabled: !shot.frames.ff.image_exists,
+          onclick: function () { mergeShot(shot.index); }
+        })
+      ]));
       view.appendChild(card);
     });
   }
@@ -445,6 +456,59 @@
     }
   }
 
+  function renderStep03(ov) {
+    var view = document.getElementById("view");
+    view.textContent = "";
+    api("/api/step03").then(function (res) {
+      view.appendChild(h("div", { class: "card" }, [
+        h("h3", { text: "Step03 声音执行单元" }),
+        h("div", { class: "sub", text: (res.unit_count || 0) + " 个单元 · " +
+          (res.files || []).length + " 条音轨" + (res.note ? "；" + res.note : "") })
+      ]));
+      if ((res.warnings || []).length) {
+        view.appendChild(h("div", { class: "card" }, [
+          h("h3", { text: "紧余量预警" }),
+          h("div", { class: "list" }, res.warnings.map(function (w) {
+            return h("div", { class: "item" }, [
+              h("span", { class: "n", text: w.unit || "?" }),
+              h("span", { class: "p", text: w.kind + " gap=" + w.gap })
+            ]);
+          }))
+        ]));
+      }
+      if ((res.units || []).length) {
+        view.appendChild(h("div", { class: "card" }, [
+          h("h3", { text: "单元列表" }),
+          h("div", { class: "list" }, res.units.map(function (u) {
+            return h("div", { class: "item" }, [
+              h("span", { class: "n", text: u.id || "?" }),
+              h("span", { class: "p", text: (u.text || "").slice(0, 80) })
+            ]);
+          }))
+        ]));
+      }
+      (res.files || []).forEach(function (f) {
+        view.appendChild(h("div", { class: "card" }, [
+          h("div", { class: "card-head" }, [
+            h("b", { text: f.name }),
+            h("span", { class: "sub", text: Math.round(f.size / 1024) + " KB" })
+          ]),
+          h("audio", { src: f.url, controls: true, preload: "none", style: "width:100%" })
+        ]));
+      });
+    }).catch(function (err) {
+      view.textContent = "";
+      view.appendChild(emptyBox("Step03 加载失败：" + err.message));
+    });
+  }
+
+  function mergeShot(idx) {
+    api("/api/shot/merge", { shot: idx }).then(function (res) {
+      toast("已合成：" + (res.output || "").split("\\").pop());
+      return refresh();
+    }).catch(function (err) { toast(err.message, true); });
+  }
+
   function emptyBox(text) {
     return h("div", { class: "empty", text: text });
   }
@@ -469,7 +533,7 @@
     if (state.tab === "step01") renderStep01(ov);
     else if (state.tab === "step02a") renderStep02a(ov);
     else if (state.tab === "step02b") renderMedia(ov, "step02b");
-    else if (state.tab === "step03") renderMedia(ov, "step03");
+    else if (state.tab === "step03") renderStep03(ov);
     else renderMedia(ov, "step04");
   }
 

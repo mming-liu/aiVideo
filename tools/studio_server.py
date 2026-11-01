@@ -275,6 +275,7 @@ class Studio:
                 "narration": unit.get("narration_segment") or "",
                 "frames": frames,
                 "prompts": self._assembled_prompts(unit),
+                "media_policy": self.media_policy(unit),
             })
         return {
             "schema": OVERVIEW_SCHEMA,
@@ -382,6 +383,149 @@ class Studio:
             {"id": "step04", "title": "字幕与成片", "available": bool(media["finals"]),
              "detail": "%d 个成片" % len(media["finals"])},
         ]
+
+    # ------------------------------------------------------- 素材策略（S01）
+    def media_policy(self, unit: dict) -> dict:
+        """当前生效的素材策略与最终 role（与 shared.video_media_plan 同源）."""
+        from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME, is_core_keyframe_file
+        from shared.model_caps import active_video_model, get_seedance_cap
+        from shared.video_media_plan import (active_media_policy, plan_image_media,
+                                             required_frames)
+
+        try:
+            policy = active_media_policy()
+        except ValueError as exc:
+            return {"policy": None, "error": str(exc)}
+        idx = int(unit.get("index", 0))
+        d = self.shot_dir(idx)
+        ff = d / FIRST_FRAME_FILENAME
+        lf = d / LAST_FRAME_FILENAME
+        kfs = sorted(
+            (p for p in d.glob("keyframe_*.png") if is_core_keyframe_file(p)),
+            key=lambda p: int(p.stem.split("_")[1]))
+        cap = get_seedance_cap(active_video_model())
+        plan = plan_image_media(
+            supports_reference_image=bool(getattr(cap, "supports_reference_image", False)),
+            image_path=str(ff) if ff.is_file() else None,
+            last_frame_path=str(lf) if lf.is_file() else None,
+            keyframe_paths=[str(p) for p in kfs],
+            supports_last_frame=bool(getattr(cap, "supports_last_frame", True)),
+            policy=policy)
+        return {
+            "policy": policy,
+            "model": active_video_model(),
+            "required": list(required_frames(policy)),
+            "mode": plan["mode"],
+            "blocked": plan["blocked"],
+            "items": [{"role": i["role"], "name": Path(i["path"]).name}
+                      for i in plan["items"]],
+            "dropped": len(plan["dropped"]),
+            "available": {"ff": ff.is_file(), "lf": lf.is_file(), "kf": len(kfs)},
+        }
+
+    # --------------------------------------------------------- 单镜审校视图
+    def review(self, shot: int) -> dict:
+        from shared.quality_gate import per_shot_revisions
+
+        unit = self.unit(shot)
+        idx = int(unit.get("index", 0))
+        frames = {kind: self.frame_state(unit, kind) for kind in FRAME_KINDS}
+        media = {}
+        for kind, info in frames.items():
+            media[kind] = (("/media?path=" + str(Path(info["image"])))
+                           if info["image_exists"] else None)
+        video = self.shot_dir(idx) / "video.mp4"
+        audio = self.chapter / "audio" / ("shot_%s.mp3" % idx)
+        merged = self.production / "ui_merge" / ("final_shots_%s.mp4" % idx)
+        media["video"] = ("/media?path=" + str(video)) if video.is_file() else None
+        media["audio"] = ("/media?path=" + str(audio)) if audio.is_file() else None
+        media["merged"] = ("/media?path=" + str(merged)) if merged.is_file() else None
+        return {
+            "shot": unit,
+            "frames": frames,
+            "media": media,
+            "prompts": self._assembled_prompts(unit),
+            "media_policy": self.media_policy(unit),
+            "keep": self.is_kept("step01", shot),
+            "revision": per_shot_revisions(self.script()).get(idx),
+            "editable": list(STEP01_EDITABLE),
+            "model_sends": 0,
+        }
+
+    # ----------------------------------------------------- 单镜 FFmpeg 合成
+    def merge_shot(self, shot: int) -> dict:
+        unit = self.unit(shot)
+        idx = int(unit.get("index", 0))
+        video = self.shot_dir(idx) / "video.mp4"
+        if not video.is_file():
+            raise StudioError("video_missing", "shot %s 还没有 video.mp4" % idx, 404)
+        audio = self.chapter / "audio" / ("shot_%s.mp3" % idx)
+        out_dir = self.production / "ui_merge"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / ("final_shots_%s.mp4" % idx)
+        ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+        cmd = [ffmpeg, "-y", "-i", str(video)]
+        if audio.is_file():
+            cmd += ["-i", str(audio), "-c:v", "copy", "-c:a", "aac", "-shortest"]
+        else:
+            cmd += ["-c", "copy"]
+        cmd += [str(out)]
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=600)
+        if proc.returncode != 0 or not out.is_file():
+            raise StudioError("merge_failed",
+                              ((proc.stderr or "") + (proc.stdout or ""))[-800:], 500)
+        return {"ok": True, "shot": idx, "output": str(out),
+                "url": "/media?path=" + str(out), "model_sends": 0}
+
+    # ----------------------------------------------------------- Step03 声音
+    def step03(self) -> dict:
+        units = []
+        note = ""
+        script = self.script()
+        shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+        try:
+            from step01_script_gen.plan_feasibility import voice_seconds, voice_units
+            narration = script.get("narration")
+            if isinstance(narration, list) and narration:
+                units = voice_units({"narration": narration}, shots)
+            if not units:
+                # 无计划载体时按逐镜旁白建展示单元（与成片落点同源字段）。
+                pseudo = []
+                for s in shots:
+                    text = str(s.get("narration_segment") or "").strip()
+                    if not text:
+                        continue
+                    idx = int(s.get("index", 0))
+                    pseudo.append({
+                        "kind": "narration", "index": len(pseudo) + 1,
+                        "id": "N%d" % (len(pseudo) + 1), "text": text,
+                        "source": "", "fact_refs": [],
+                        "shot_indexes": [idx], "start_shot": idx, "end_shot": idx,
+                        "n_shots": 1,
+                        "est_sec": voice_seconds([{"text": text}]),
+                    })
+                units = pseudo
+                if pseudo:
+                    note = "按逐镜 narration_segment 展示；紧余量需 Step03 布局结果"
+        except Exception as exc:                       # 展示降级，不影响其他页
+            note = "%s: %s" % (type(exc).__name__, exc)
+        files = []
+        audio_dir = self.chapter / "audio"
+        if audio_dir.is_dir():
+            for p in sorted(audio_dir.glob("*.mp3")):
+                files.append({"name": p.name, "size": p.stat().st_size,
+                              "url": "/media?path=" + str(p)})
+        warnings = []
+        for u in units:
+            start, end = u.get("start_sec"), u.get("end_sec")
+            if isinstance(start, (int, float)) and isinstance(end, (int, float)):
+                if end - start < 0.3:
+                    warnings.append({"unit": u.get("id"), "kind": "tight",
+                                     "gap": round(end - start, 3)})
+        return {"ok": True, "units": units, "unit_count": len(units),
+                "files": files, "warnings": warnings, "note": note,
+                "model_sends": 0}
 
     # ------------------------------------------------------------- 锁定动作
     def set_keep(self, stage: str, key: str, keep: bool) -> dict:
@@ -592,6 +736,12 @@ class StudioHandler(BaseHTTPRequestHandler):
                 return self._static(unquote(parsed.path[len("/assets/"):]))
             if parsed.path == "/api/overview":
                 return self._json(200, {"ok": True, **self.studio.overview()})
+            if parsed.path == "/api/review":
+                qs = parse_qs(parsed.query)
+                shot = int((qs.get("shot") or ["1"])[0])
+                return self._json(200, {"ok": True, **self.studio.review(shot)})
+            if parsed.path == "/api/step03":
+                return self._json(200, self.studio.step03())
             if parsed.path == "/media":
                 return self._media(parse_qs(parsed.query))
             if parsed.path == "/favicon.ico":
@@ -615,12 +765,21 @@ class StudioHandler(BaseHTTPRequestHandler):
                 return self._json(200, self.studio.patch_shot(
                     int(payload.get("shot") or 0), changes,
                     apply=bool(payload.get("apply"))))
-            if parsed.path == "/api/frame/keep":
+            if parsed.path == "/api/shot/save":
+                changes = (payload.get("fields") if isinstance(payload.get("fields"), dict)
+                           else payload.get("set") if isinstance(payload.get("set"), dict)
+                           else {})
+                return self._json(200, self.studio.patch_shot(
+                    int(payload.get("shot") or 0), changes, apply=True))
+            if parsed.path in ("/api/frame/keep", "/api/frame/sync_hash"):
                 return self._json(200, self.studio.frame_keep(
                     int(payload.get("shot") or 0), str(payload.get("kind") or "")))
-            if parsed.path == "/api/frame/regen":
+            if parsed.path in ("/api/frame/regen", "/api/frame/invalidate_hash"):
                 return self._json(200, self.studio.frame_regen(
                     int(payload.get("shot") or 0), str(payload.get("kind") or "")))
+            if parsed.path == "/api/shot/merge":
+                return self._json(200, self.studio.merge_shot(
+                    int(payload.get("shot") or 0)))
             if parsed.path == "/api/plan":
                 shots = payload.get("shots")
                 shots = [int(s) for s in shots] if isinstance(shots, list) and shots else None

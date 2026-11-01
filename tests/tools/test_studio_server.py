@@ -293,3 +293,94 @@ def test_http_keep_endpoint(http_server):
         body = json.loads(res.read().decode("utf-8"))
     assert body["ok"] is True and body["keep"] is True
     assert studio.is_kept("step01", "1")
+
+# ---------------------------------------------------------------------------
+# 7) 素材策略 / 单镜审校 / 别名端点 / 单镜合成
+# ---------------------------------------------------------------------------
+def test_overview_media_policy_and_review(studio, monkeypatch):
+    monkeypatch.delenv("VIDEO_MEDIA_POLICY", raising=False)
+    ov = studio.overview()
+    mp = ov["shots"][0]["media_policy"]
+    assert mp["policy"] == "auto"
+    assert mp["required"] == ["ff", "lf"]
+    _write_frame(studio, "ff")
+    rv = studio.review(1)
+    assert rv["frames"]["ff"]["state"] == "cached"
+    assert rv["media_policy"]["mode"]
+    assert rv["prompts"]
+    assert rv["model_sends"] == 0
+
+
+def test_step03_units_and_files(studio):
+    info = studio.step03()
+    assert info["ok"] is True
+    assert isinstance(info["units"], list)
+    assert isinstance(info["files"], list)
+    assert info["model_sends"] == 0
+
+
+def test_http_review_and_alias_sync_hash(http_server):
+    base, studio = http_server
+    _write_frame(studio, "ff")
+    with _get(base + "/api/review?shot=1") as res:
+        payload = json.loads(res.read().decode("utf-8"))
+    assert payload["ok"] is True
+    assert payload["frames"]["ff"]["state"] == "cached"
+
+    body = json.dumps({"shot": 1, "kind": "ff"}).encode("utf-8")
+    request = urllib.request.Request(
+        base + "/api/frame/sync_hash", data=body,
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=10) as res:
+        out = json.loads(res.read().decode("utf-8"))
+    assert out["ok"] is True and out["hash"]
+    assert studio.frame_state(studio.unit(1), "ff")["state"] == "cached"
+
+
+def test_http_alias_save_uses_stub_gate(http_server, monkeypatch):
+    base, studio = http_server
+
+    def fake_gate(receipt, new_script, *, patch_meta, novel_file=None):
+        ch = Path(receipt["formal_chapter"])
+        files = {name: (ch / name).read_text(encoding="utf-8")
+                 for name in ("step01_quality.json", "step01_audit.json",
+                              "step01_commit.json", "step01_adoption.json")}
+        return files, {"formal_sha256": {}}, "rev-alias"
+
+    monkeypatch.setattr(studio.pc, "build_shot_patch_gate", fake_gate)
+    body = json.dumps({"shot": 1, "fields": {"prompt": "alias prompt"}}).encode("utf-8")
+    request = urllib.request.Request(
+        base + "/api/shot/save", data=body,
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=10) as res:
+        out = json.loads(res.read().decode("utf-8"))
+    assert out["ok"] and out["revision"] == "rev-alias"
+    script = json.loads((studio.chapter / "script_result.json").read_text(encoding="utf-8"))
+    assert script["shots"][0]["prompt"] == "alias prompt"
+
+
+def test_http_merge_shot_with_stub_ffmpeg(http_server, monkeypatch):
+    from types import SimpleNamespace
+
+    base, studio = http_server
+    shot_dir = studio.shot_dir(1)
+    shot_dir.mkdir(parents=True, exist_ok=True)
+    (shot_dir / "video.mp4").write_bytes(b"video")
+
+    def fake_run(cmd, **kwargs):
+        out = Path(cmd[-1])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"merged")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ss.subprocess, "run", fake_run)
+    body = json.dumps({"shot": 1}).encode("utf-8")
+    request = urllib.request.Request(
+        base + "/api/shot/merge", data=body,
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=10) as res:
+        out = json.loads(res.read().decode("utf-8"))
+    assert out["ok"] is True
+    assert Path(out["output"]).is_file()
+    assert out["model_sends"] == 0
+
