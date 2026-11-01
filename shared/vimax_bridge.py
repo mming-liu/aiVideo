@@ -246,12 +246,25 @@ async def build_working_dir(
     registry_path = working_dir / "character_portraits_registry.json"
     if registry:
         from shared.json_io import atomic_dump_json as _adj
-        _adj(registry_path, registry, ensure_ascii=False, indent=2)
-        _bridge_log(f"  [bridge] character_portraits_registry.json: {len(registry)} 个角色")
+        _payload = registry
+        if only_indices is not None and registry_path.is_file():
+            # 子集运行只补目标角色；**不得**用子集 registry 覆盖全章注册表
+            # （否则未出场角色会从 registry 里消失）。合并写回。
+            try:
+                _old = json.loads(registry_path.read_text(encoding="utf-8"))
+                if isinstance(_old, dict):
+                    _old.update(registry)
+                    _payload = _old
+            except Exception:
+                _payload = registry
+        _adj(registry_path, _payload, ensure_ascii=False, indent=2)
+        _bridge_log(f"  [bridge] character_portraits_registry.json: {len(_payload)} 个角色")
 
     # ---- 3. storyboard.json（cam_idx 从 script 读取）----
+    # 子集运行**不重写**全章分镜表/摄像机树：它们描述整章结构，用子集覆盖会
+    # 让未参与本次运行的镜头从缓存里消失。
     storyboard_path = working_dir / "storyboard.json"
-    storyboard = [
+    storyboard = [] if only_indices is not None else [
         ShotBriefDescription(
             idx=shot["index"],
             is_last=(i == n),
@@ -261,12 +274,18 @@ async def build_working_dir(
         )
         for i, shot in enumerate(shots, 1)
     ]
-    _dump_json(storyboard_path, storyboard)
+    if only_indices is None:
+        _dump_json(storyboard_path, storyboard)
+    else:
+        _bridge_log("  [bridge] 子集运行：保留全章 storyboard.json 不重写")
 
     # ---- 4. camera_tree.json（算法构建多摄像机树）----
     camera_tree_path = working_dir / "camera_tree.json"
-    camera_tree = _build_camera_tree(shots)
-    _dump_json(camera_tree_path, camera_tree)
+    if only_indices is None:
+        camera_tree = _build_camera_tree(shots)
+        _dump_json(camera_tree_path, camera_tree)
+    else:
+        _bridge_log("  [bridge] 子集运行：保留全章 camera_tree.json 不重写")
 
     # ---- 5. shot_description.json（所有字段从 script 读取）----
     def _find_visible_char_idxs(desc: str, chars: list[dict]) -> list[int]:
@@ -283,6 +302,8 @@ async def build_working_dir(
     last_idx = shots[-1]["index"]
     for shot in shots:
         idx = shot["index"]
+        if only_indices is not None and int(idx) not in only_indices:
+            continue
         prompt = shot.get("prompt", "")
         # ---- 所有字段从 script 读取，缺失时回退 ----
         ff_desc = shot.get("ff_desc", "").strip() or prompt
