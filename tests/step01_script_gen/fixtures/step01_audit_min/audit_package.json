@@ -10,7 +10,7 @@
     "quality_report": "tests/step01_script_gen/fixtures/step01_audit_min/quality.json",
     "quality_sha256": "319185260c07cfff6cc8788d90682d7221db66d2fc31361d6bf648ab7a6acd5e",
     "quality_status": "PASS",
-    "revision": "fb4650896e1532668b096d1c9867061a335ba65f35021ad5f588ed5962a9388d",
+    "revision": "9a02374ddea3f4ff4cc85ab46081f911f0030190d7dfd0c90de796df19d2aca2",
     "shot_count": 12
   },
   "effective_config": {

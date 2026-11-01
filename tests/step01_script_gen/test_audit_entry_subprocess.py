@@ -286,6 +286,10 @@ def _run(tmp_path, package_obj, mode="ok", *, authorized=True, mutate=None,
     reqlog = tmp_path / ("reqs_%s.jsonl" % tag)
     out = Path(out_root) if out_root else (tmp_path / ("run_%s" % tag))
     env = dict(os.environ)
+    # 生产 output 树不得渗进子进程：shared.config 会从 chapter_dir() 的
+    # step01_adoption.json 继承时长档位（S10R），子进程若仍指向本机 output/，
+    # 同一夹具在不同机器/现场状态下会得到不同带宽。隔离到 tmp。
+    env["OUTPUT_BASE"] = str(tmp_path / "output")
     env["PYTHONPATH"] = "%s%s%s" % (stub, os.pathsep, ROOT)
     env["STEP01_STUB_MODE"] = mode
     env["STEP01_STUB_LOG"] = str(log)
