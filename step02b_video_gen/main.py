@@ -333,11 +333,15 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
                     _prepared_status = "pending_verification: provider 未实现 prepare_request"
                 else:
                     _prepared = _svc.prepare_request(_req)
-                    frozen, _req = build_frozen_for_shot(
-                        shot=shot, script=script, video_adapter=None, frame_paths=frame_paths,
-                        mode="A", scope={"chapter": chapter}, provider=provider,
-                        model_id=resolved_model, prepared=_prepared)
-                    _prepared_status = "prepared"
+                    if not _prepared.is_ready():
+                        _prepared_status = ("pending_verification: %s"
+                                            % (_prepared.unsupported_reason or "prepared_not_ready"))
+                    else:
+                        frozen, _req = build_frozen_for_shot(
+                            shot=shot, script=script, video_adapter=None, frame_paths=frame_paths,
+                            mode="A", scope={"chapter": chapter}, provider=provider,
+                            model_id=resolved_model, prepared=_prepared)
+                        _prepared_status = "prepared"
             except (SystemCameraError, VideoCapabilityError) as _prep_exc:
                 # 确定阻断：系统段冲突/超长、provider 能力不足
                 _prep_block = {"code": str(getattr(_prep_exc, "code", "preflight_blocked")),

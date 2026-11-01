@@ -31,7 +31,7 @@ _QUOTE_PAIRS = (("“", "”"), ("「", "」"), ('"', '"'))
 _NEGATION = re.compile(r"(?:不|别|勿|禁止|避免|不要)[^，。；]{0,6}")
 _CONDITIONAL = re.compile(r"(?:若|如果|要是|倘若)[^，。；]{0,10}")
 #: 分段运镜：前N秒/随后/然后/接着/之后/先…再…
-_SEGMENT = re.compile(r"(?:前\s*\d+(?:\.\d+)?\s*秒|随后|然后|接着|之后|先[^，。；]{0,6}再)")
+_SEGMENT = re.compile(r"(?:前\s*\d+(?:\.\d+)?\s*秒|后\s*\d+(?:\.\d+)?\s*秒|第\s*\d+(?:\.\d+)?\s*秒|随后|然后|接着|之后|先[^，。；]{0,6}再)")
 #: 通用运镜词需要“镜头/机位/画面”作主语，避免把“小孩跟随母亲”当成运镜
 _CAMERA_CONTEXT = ("镜头", "机位", "画面")
 _GENERIC_TERMS = ("横移", "推近", "推镜", "拉远", "拉镜", "跟拍", "跟随",
@@ -40,7 +40,17 @@ _GENERIC_TERMS = ("横移", "推近", "推镜", "拉远", "拉镜", "跟拍", "�
 
 def _is_fixed(camera: str) -> bool:
     low = camera.strip().lower()
+    if "非固定" in low or "不固定" in low:
+        return False
     return any(v in low for v in FIXED_CAMERA_VALUES)
+
+
+def _camera_subject_ok(motion: str, start: int) -> bool:
+    """通用运镜词前的主语必须是相机（允许少量副词填充），不能只是邻近出现“画面”."""
+    prefix = motion[max(0, start - 12):start]
+    return bool(re.search(
+        r"(?:镜头|机位|画面)[，,、]?(?:缓缓|慢慢|开始|继续|向前|向后|向左|向右|快速|缓慢|平稳|随即|然后|随后|地){0,3}$",
+        prefix))
 
 
 def _quoted(text: str, start: int, end: int) -> bool:
@@ -54,10 +64,8 @@ def _quoted(text: str, start: int, end: int) -> bool:
 
 def _classify_phrase(motion: str, term: str, start: int, end: int):
     """返回 (class, reason, time_relation)；无法确认是相机指令时返回 None."""
-    if term in _GENERIC_TERMS:
-        prefix = motion[max(0, start - 10):start]
-        if not any(ctx in prefix for ctx in _CAMERA_CONTEXT):
-            return None  # “小孩跟随母亲”这类普通动词，不是运镜
+    if term in _GENERIC_TERMS and not _camera_subject_ok(motion, start):
+        return None  # “画面中小孩跟随母亲”这类普通动词，不是运镜
     if _quoted(motion, start, end):
         return "suspected", "运镜词位于引号内（引用/转述），不能确认是镜头指令", "unknown"
     prefix = motion[max(0, start - 12):start]
@@ -65,8 +73,8 @@ def _classify_phrase(motion: str, term: str, start: int, end: int):
         return "suspected", "运镜词前有否定（不要/禁止等），是否定指令而非肯定运镜", "unknown"
     if _CONDITIONAL.search(prefix):
         return "suspected", "运镜词处于条件句（若/如果），不是无条件指令", "unknown"
-    if _SEGMENT.search(prefix):
-        return "suspected", "运镜词处于分段运镜（前N秒/随后/然后），不能按整镜固定机位判定", "unknown"
+    if _SEGMENT.search(prefix) or _SEGMENT.search(motion[:start]):
+        return "suspected", "运镜词处于分段运镜（前/后N秒、随后、然后），不能按整镜固定机位判定", "unknown"
     return "definite", "同一镜头、同一主体（相机）、肯定且互斥的运镜指令", "same"
 
 

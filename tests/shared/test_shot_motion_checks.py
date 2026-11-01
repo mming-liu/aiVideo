@@ -26,6 +26,31 @@ def test_plain_verb_follow_is_not_a_camera_instruction():
     assert motion_outcome(shot) == "no_conflict"
 
 
+def test_person_follow_with_camera_word_nearby_is_no_conflict():
+    """“画面中小孩跟随母亲”：移动主体是小孩，不能因邻近“画面”判成相机."""
+    from shared.shot_motion_checks import motion_outcome
+    shot = {"camera_movement": "固定机位",
+            "motion_desc": "画面中小孩跟随母亲走进院子",
+            "ff_desc": "院门口", "lf_desc": "院子里"}
+    assert motion_outcome(shot) == "no_conflict"
+
+
+def test_non_fixed_camera_is_no_conflict():
+    from shared.shot_motion_checks import motion_outcome
+    shot = {"camera_movement": "非固定机位",
+            "motion_desc": "镜头横移",
+            "ff_desc": "院门口", "lf_desc": "院子里"}
+    assert motion_outcome(shot) == "no_conflict"
+
+
+def test_time_segmented_camera_is_suspected():
+    from shared.shot_motion_checks import motion_outcome
+    shot = {"camera_movement": "固定机位",
+            "motion_desc": "后1秒镜头掠过院子",
+            "ff_desc": "院门口", "lf_desc": "院子里"}
+    assert motion_outcome(shot) == "suspected"
+
+
 def test_segmented_camera_is_suspected_not_definite():
     """前两秒固定机位、随后横移：分段运镜，不能按整镜固定机位判 definite."""
     from shared.shot_motion_checks import motion_outcome, motion_report

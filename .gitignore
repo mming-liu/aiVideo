@@ -147,6 +147,7 @@ tests/step01_script_gen/*
 !tests/step02b_video_gen/
 tests/step02b_video_gen/*
 !tests/step02b_video_gen/test_frame_contract.py
+!tests/step02b_video_gen/test_plan_prepared_status.py
 !tests/step01_script_gen/test_p0_fault_injection.py
 !tests/step01_script_gen/test_plan_revision_v2_wiring.py
 # 2026-10-30（R01）：Step01 审计收口的最小回归集——仅这 4 个文件 + SSE 桩 + 夹具。
