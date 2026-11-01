@@ -3396,6 +3396,26 @@ async def _accept_doodle_refinement(refined, target, shot, frame_kind, character
     return True
 
 
+_FIXED_RELAYOUT_MARKERS = ("可与首帧", "人物位置不同", "重新布局")
+
+
+def frame_prompt_problems(prompt: str, shot: dict, frame_kind: str) -> list[dict]:
+    """固定机位尾帧不得出现“可重布局/可换人物位置”的指令（预检硬门）."""
+    camera = str(shot.get("camera_movement") or "")
+    fixed = ("固定机位" in camera or camera.strip().lower() in ("static", "fixed", "locked")) \
+        and "非固定" not in camera and "不固定" not in camera
+    if frame_kind != "last_frame" or not fixed:
+        return []
+    hits = [m for m in _FIXED_RELAYOUT_MARKERS if m in str(prompt or "")]
+    if not hits:
+        return []
+    return [{
+        "code": "fixed_camera_relayout_conflict",
+        "message": "固定机位尾帧 prompt 含可重布局/可换人物位置指令：%r" % hits,
+        "markers": hits,
+    }]
+
+
 def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
                          *, desc: str | None = None) -> str:
     """帧 prompt 唯一组装入口：生成链与 --plan-only 预检共用同一份逻辑.
@@ -3451,6 +3471,9 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
             text = (f"{text}{ctx}"
                     f"，构图需按尾帧描述重新布局，"
                     f"可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。")
+        problems = frame_prompt_problems(text, shot, "last_frame")
+        if problems:
+            raise ValueError("%s: %s" % (problems[0]["code"], problems[0]["message"]))
         text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas("9:16")), verbose=False)
         return add_image_strict_constraints(text, "尾帧", shot=shot, characters=chars)
 

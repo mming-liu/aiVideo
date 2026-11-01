@@ -44,3 +44,12 @@
 - 视觉复核只回答可观察事实，不等于画面验收通过；
 - 需人工查看船位移、听香侧身面朝、老农远景；
 - 视频（step02b）未重跑，需另行授权与报价。
+
+## 6. 防回归守卫（2026-11-01 追加）
+
+- `shared/vimax_bridge.py` 新增 `frame_prompt_problems()`：固定机位尾帧若出现
+  “可与首帧 / 人物位置不同 / 重新布局”，返回 `fixed_camera_relayout_conflict`；
+- `compose_frame_prompt()` 在尾帧组装末尾调用该守卫，命中即抛错（fail-closed）；
+- `step02a --plan-only` 把每帧组装异常收集到 `prompt_preflight`；
+  状态为 `blocked` 时退出码 2；
+- 测试：`tests/shared/test_frame_prompt_camera.py`（4 passed）。

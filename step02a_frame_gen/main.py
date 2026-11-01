@@ -355,19 +355,26 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dic
     # S04：预检输出**组装阶段**文本（与生成共用 compose_frame_prompt）；
     # 适配器之后还会追加参考图说明/锁图指令，不能宣称这是最终发送文本。
     assembled_prompts: dict = {}
+    prompt_problems: list = []
     try:
         from shared.vimax_bridge import compose_frame_prompt
         for _u in units:
             _idx = int(_u.get("index", 0))
             _entry: dict = {}
-            if _u.get("ff_desc"):
-                _entry["ff"] = compose_frame_prompt(_u, characters, "first_frame")
-            if _u.get("lf_desc"):
-                _entry["lf"] = compose_frame_prompt(_u, characters, "last_frame")
+            for _kind, _field in (("first_frame", "ff"), ("last_frame", "lf")):
+                if not _u.get("lf_desc" if _kind == "last_frame" else "ff_desc"):
+                    continue
+                try:
+                    _entry[_field] = compose_frame_prompt(_u, characters, _kind)
+                except Exception as _exc:  # noqa: BLE001 - 单帧失败不拖垮整份预检
+                    _entry[_field + "_error"] = str(_exc)[:500]
+                    prompt_problems.append({"shot": _idx, "frame": _field,
+                                            "message": str(_exc)[:500]})
             if _entry:
                 assembled_prompts[str(_idx)] = _entry
     except Exception as _exc:  # noqa: BLE001 - 预检失败要显式报出，不静默
         assembled_prompts = {"error": str(_exc)}
+        prompt_problems.append({"shot": None, "frame": None, "message": str(_exc)[:500]})
     return {
         "schema": "step02a.plan/1",
         "model_sends": 0,
@@ -388,6 +395,8 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dic
         "writes": _writes,
         "assembled_prompts": assembled_prompts,
         "prompt_stage": "assembled_pre_adapter",
+        "prompt_preflight": {"status": "blocked" if prompt_problems else "ok",
+                             "problems": prompt_problems},
         "note": "分镜帧按文件存在性计数；内容哈希不匹配的旧帧会在实跑时重生成",
     }
 
@@ -479,9 +488,10 @@ def main():
     if args.plan_only:
         with open(script_path, "r", encoding="utf-8") as _sf_plan:
             _script_plan = json.load(_sf_plan)
-        print(json.dumps(
-            _plan_only_report(_script_plan, work_dir, only_indices, frames),
-            ensure_ascii=False, indent=2))
+        _report = _plan_only_report(_script_plan, work_dir, only_indices, frames)
+        print(json.dumps(_report, ensure_ascii=False, indent=2))
+        if (_report.get("prompt_preflight") or {}).get("status") == "blocked":
+            raise SystemExit(2)
         return
 
     logger.info(f"[INFO] step02a_frame_gen start")
