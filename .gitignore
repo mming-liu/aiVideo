@@ -251,6 +251,9 @@ tests/shared/*
 !tests/shared/test_shot_motion_checks.py
 # 2026-11-01：本轮离线修复的契约用例**入库**（与上面"只可见不提交"不同）。
 # 仍需逐级放行父目录，再排除目录内容，最后精确放行文件。
+!tests/tools/
+tests/tools/*
+!tests/tools/test_vision_check.py
 !tests/step02a_frame_gen/
 tests/step02a_frame_gen/*
 !tests/step02a_frame_gen/test_step02a_offline_fixups.py
