@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aiVideo Studio · 审校工作台</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#151b24; --panel-2:#1b232e; --line:#26303d;
+    --text:#e6edf3; --muted:#8b98a8; --accent:#4f9cf9; --ok:#3fb950;
+    --warn:#d29922; --bad:#f85149; --radius:12px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",Roboto,sans-serif}
+  a{color:var(--accent)}
+  button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--line);
+    background:var(--panel-2);color:var(--text);padding:6px 12px;transition:.15s}
+  button:hover{border-color:var(--accent)}
+  button:active{transform:translateY(1px)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#08111f;font-weight:600}
+  button.ghost{background:transparent}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  header.top{position:sticky;top:0;z-index:10;display:flex;gap:16px;align-items:center;
+    padding:12px 20px;background:rgba(13,17,23,.92);backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .brand{font-weight:700;letter-spacing:.3px;display:flex;align-items:center;gap:8px}
+  .pill{font-size:11px;font-weight:500;color:var(--ok);border:1px solid rgba(63,185,80,.4);
+    background:rgba(63,185,80,.08);border-radius:999px;padding:1px 8px}
+  .meta{color:var(--muted);font-size:12px;flex:1;min-width:200px}
+  .meta b{color:var(--text);font-weight:600}
+  .badge{display:inline-block;font-size:11px;padding:1px 8px;border-radius:999px;
+    border:1px solid var(--line);margin-left:6px}
+  .badge.ok{color:var(--ok);border-color:rgba(63,185,80,.45);background:rgba(63,185,80,.08)}
+  .badge.warn{color:var(--warn);border-color:rgba(210,153,34,.45);background:rgba(210,153,34,.08)}
+  .badge.bad{color:var(--bad);border-color:rgba(248,81,73,.45);background:rgba(248,81,73,.08)}
+  nav.tabs{display:flex;gap:6px;padding:10px 20px 0;flex-wrap:wrap}
+  nav.tabs button{border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;color:var(--muted)}
+  nav.tabs button[aria-selected="true"]{background:var(--panel);color:var(--text);border-color:var(--line);border-bottom-color:var(--panel)}
+  nav.tabs button .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);margin-right:6px}
+  nav.tabs button .dot.off{background:var(--line)}
+  main{padding:16px 20px 80px;max-width:1180px;margin:0 auto}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:14px 16px;margin-bottom:12px}
+  .card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+  .card-head h3{margin:0;font-size:15px}
+  .idx{font-family:ui-monospace,Consolas,monospace;color:var(--accent);font-weight:700}
+  .sub{color:var(--muted);font-size:12px}
+  .spacer{flex:1}
+  .field{margin:8px 0}
+  .field .k{color:var(--muted);font-size:11px;letter-spacing:.6px;text-transform:uppercase;margin-bottom:2px}
+  .field .v{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel-2);
+    border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px}
+  .field .v.empty{color:var(--muted);font-style:italic}
+  textarea{width:100%;min-height:76px;background:var(--panel-2);color:var(--text);
+    border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:13px/1.55 inherit;resize:vertical}
+  textarea:focus{border-color:var(--accent);outline:none}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .frames{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media (max-width:820px){.frames{grid-template-columns:1fr}}
+  .frame{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:10px}
+  .frame img{width:100%;height:auto;border-radius:8px;background:#000;display:block;cursor:zoom-in}
+  .frame .ph{height:150px;display:flex;align-items:center;justify-content:center;color:var(--muted);
+    border:1px dashed var(--line);border-radius:8px;font-size:12px}
+  .hash{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+  details{margin-top:8px}
+  summary{cursor:pointer;color:var(--muted);font-size:12px}
+  pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0a0e14;border:1px solid var(--line);
+    border-radius:8px;padding:10px;font-size:12px;max-height:340px;overflow:auto}
+  .empty{padding:36px 16px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:var(--radius)}
+  .toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,14px);background:#e6edf3;color:#0d1117;
+    padding:9px 16px;border-radius:999px;font-size:13px;opacity:0;pointer-events:none;transition:.2s;z-index:99;max-width:80vw}
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+  .toast.err{background:var(--bad);color:#fff}
+  .list{display:grid;gap:8px}
+  .list .item{display:flex;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--line);
+    border-radius:8px;background:var(--panel-2);font-size:13px}
+  .list .item .n{font-family:ui-monospace,Consolas,monospace;color:var(--accent);min-width:64px}
+  .list .item .p{flex:1;overflow-wrap:anywhere;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">aiVideo Studio <span class="pill">model_sends = 0</span></div>
+  <div class="meta" id="meta">加载中…</div>
+  <div class="actions"><button id="refresh" class="ghost" type="button">刷新</button></div>
+</header>
+<nav class="tabs" id="tabs"></nav>
+<main id="view"><div class="empty">加载中…</div></main>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script>
+(function () {
+  "use strict";
+
+  var state = { overview: null, tab: "step01", editing: {}, busy: false };
+  var TABS = [
+    { id: "step01", label: "01 分镜" },
+    { id: "step02a", label: "02a 首尾帧" },
+    { id: "step02b", label: "02b 视频" },
+    { id: "step03", label: "03 语音" },
+    { id: "step04", label: "04 成片" }
+  ];
+
+  function h(tag, props, kids) {
+    var el = document.createElement(tag);
+    if (props) Object.keys(props).forEach(function (k) {
+      var v = props[k];
+      if (v === null || v === undefined || v === false) return;
+      if (k === "class") el.className = v;
+      else if (k === "text") el.textContent = v;
+      else if (k === "html") el.innerHTML = v;
+      else if (k.slice(0, 2) === "on" && typeof v === "function") el.addEventListener(k.slice(2), v);
+      else if (k === "dataset") Object.keys(v).forEach(function (d) { el.dataset[d] = v[d]; });
+      else el.setAttribute(k, v === true ? "" : v);
+    });
+    (kids || []).forEach(function (kid) {
+      if (kid === null || kid === undefined || kid === false) return;
+      el.appendChild(typeof kid === "string" || typeof kid === "number"
+        ? document.createTextNode(String(kid)) : kid);
+    });
+    return el;
+  }
+
+  function toast(msg, isErr) {
+    var el = document.getElementById("toast");
+    el.textContent = msg;
+    el.className = "toast show" + (isErr ? " err" : "");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { el.className = "toast"; }, 2600);
+  }
+
+  function api(path, body) {
+    var opts = { headers: {} };
+    if (body !== undefined) {
+      opts.method = "POST";
+      opts.headers["Content-Type"] = "application/json";
+      opts.body = JSON.stringify(body);
+    }
+    return fetch(path, opts).then(function (res) {
+      return res.json().catch(function () { return { ok: false, message: "响应不是 JSON" }; })
+        .then(function (data) {
+          if (!res.ok || data.ok === false) {
+            var err = new Error(data.message || ("HTTP " + res.status));
+            err.code = data.code;
+            err.data = data;
+            throw err;
+          }
+          return data;
+        });
+    });
+  }
+
+  function mediaUrl(path) { return "/media?path=" + encodeURIComponent(path); }
+
+  function shortHash(v) { return v ? String(v).slice(0, 12) : "—"; }
+
+  function fieldView(label, value) {
+    var text = value === null || value === undefined || value === "" ? "（空）" : value;
+    if (typeof value === "object") text = JSON.stringify(value, null, 2);
+    return h("div", { class: "field" }, [
+      h("div", { class: "k", text: label }),
+      h("div", { class: "v" + (text === "（空）" ? " empty" : ""), text: text })
+    ]);
+  }
+
+  // ---------------------------------------------------------------- 顶部
+  function renderMeta(ov) {
+    var ch = ov.chapter, gate = ov.gate, c = ov.counts;
+    var meta = document.getElementById("meta");
+    meta.textContent = "";
+    meta.appendChild(h("span", {}, [
+      h("b", { text: ch.novel || "?" }),
+      " · 第 " + (ch.book_index || "?") + " 部《" + (ch.book_name || "?") + "》",
+      " · 第 " + (ch.chapter || "?") + " 章"
+    ]));
+    var badge = h("span", {
+      class: "badge " + (gate.verified ? "ok" : (gate.status === "COMMITTED" ? "warn" : "bad")),
+      text: "门禁 " + (gate.status || "?") + (gate.verified ? " · 已验证" : " · 未验证")
+    });
+    meta.appendChild(badge);
+    meta.appendChild(h("span", { class: "badge", text: "镜头 " + c.shots + " · 锁定 " + c.kept }));
+    meta.appendChild(h("span", { class: "badge ok", text: "帧命中 " + c.frames_cached }));
+    if (c.frames_stale) meta.appendChild(h("span", { class: "badge warn", text: "待更新 " + c.frames_stale }));
+    if (c.frames_missing) meta.appendChild(h("span", { class: "badge", text: "缺帧 " + c.frames_missing }));
+  }
+
+  function renderTabs(ov) {
+    var nav = document.getElementById("tabs");
+    nav.textContent = "";
+    var byId = {};
+    (ov.steps || []).forEach(function (s) { byId[s.id] = s; });
+    TABS.forEach(function (t) {
+      var step = byId[t.id] || {};
+      var btn = h("button", {
+        type: "button",
+        "aria-selected": String(state.tab === t.id),
+        title: step.detail || "",
+        onclick: function () { state.tab = t.id; render(); }
+      }, [
+        h("span", { class: "dot" + (step.available ? "" : " off") }),
+        t.label
+      ]);
+      nav.appendChild(btn);
+    });
+  }
+
+  // ---------------------------------------------------------------- 01
+  function renderStep01(ov) {
+    var view = document.getElementById("view");
+    view.textContent = "";
+    var intro = h("div", { class: "card" }, [
+      h("div", { class: "row" }, [
+        h("div", { class: "sub", text: "只读展示 + 单镜画面字段离线修改。保存会重建 quality/audit/commit/adoption 四份门禁（model_sends = 0），失败不覆盖基线。" }),
+        h("div", { class: "spacer" }),
+        h("button", { type: "button", class: "ghost", text: "重算 02a 预检", onclick: runPlan })
+      ])
+    ]);
+    view.appendChild(intro);
+
+    (ov.shots || []).forEach(function (shot) {
+      var editing = state.editing[shot.index];
+      var card = h("div", { class: "card" });
+      card.appendChild(h("div", { class: "card-head" }, [
+        h("span", { class: "idx", text: "#" + shot.index }),
+        h("span", { class: "sub", text: (shot.duration ? shot.duration + "s" : "") }),
+        h("span", { class: "sub", text: "rev " + shortHash(shot.revision) }),
+        shot.keep ? h("span", { class: "badge ok", text: "已锁定" }) : null,
+        h("div", { class: "spacer" }),
+        h("button", {
+          type: "button", class: "ghost",
+          text: shot.keep ? "🔓 解锁" : "🔒 保持",
+          onclick: function () { toggleKeep(shot); }
+        }),
+        h("button", {
+          type: "button",
+          text: editing ? "取消编辑" : "✏️ 修改",
+          onclick: function () {
+            if (editing) delete state.editing[shot.index]; else state.editing[shot.index] = true;
+            render();
+          }
+        })
+      ]));
+
+      if (!editing) {
+        Object.keys(shot.fields).forEach(function (key) {
+          card.appendChild(fieldView(key, shot.fields[key]));
+        });
+      } else {
+        var drafts = editing === true ? {} : editing;
+        Object.keys(shot.fields).forEach(function (key) {
+          var value = shot.fields[key];
+          var isText = typeof value === "string" || value === null || value === undefined;
+          var box;
+          if (isText) {
+            box = h("textarea", { rows: key === "prompt" ? 5 : 3 });
+            box.value = value || "";
+            box.addEventListener("input", function () { drafts[key] = box.value; });
+          } else {
+            box = h("textarea", { rows: 6 });
+            box.value = JSON.stringify(value, null, 2);
+            box.addEventListener("input", function () {
+              try { drafts[key] = JSON.parse(box.value); box.style.borderColor = ""; }
+              catch (e) { box.style.borderColor = "var(--bad)"; }
+            });
+          }
+          card.appendChild(h("div", { class: "field" }, [
+            h("div", { class: "k", text: key }),
+            box
+          ]));
+        });
+        state.editing[shot.index] = drafts;
+        card.appendChild(h("div", { class: "row" }, [
+          h("button", {
+            type: "button", class: "primary", text: "预检（dry-run）",
+            onclick: function () { patchShot(shot, drafts, false); }
+          }),
+          h("button", {
+            type: "button", text: "保存并重签门禁",
+            onclick: function () { patchShot(shot, drafts, true); }
+          }),
+          h("span", { class: "sub", text: "只改画面字段；锁定合同字段（时长/字幕/旁白/plan_refs）不接受修改。" })
+        ]));
+      }
+      view.appendChild(card);
+    });
+  }
+
+  // ---------------------------------------------------------------- 02a
+  function renderStep02a(ov) {
+    var view = document.getElementById("view");
+    view.textContent = "";
+    view.appendChild(h("div", { class: "card" }, [
+      h("div", { class: "row" }, [
+        h("div", { class: "sub", text: "「保持此图」把当前内容哈希写回 *_hash.txt（0 成本消除待更新）；「标记重抽」先备份再移除旧图与哈希，预检随即判 generate。" }),
+        h("div", { class: "spacer" }),
+        h("button", { type: "button", class: "ghost", text: "重算预检", onclick: runPlan })
+      ])
+    ]));
+
+    (ov.shots || []).forEach(function (shot) {
+      var card = h("div", { class: "card" });
+      card.appendChild(h("div", { class: "card-head" }, [
+        h("span", { class: "idx", text: "#" + shot.index }),
+        h("span", { class: "sub", text: (shot.subtitle || "").slice(0, 60) }),
+        h("div", { class: "spacer" }),
+        shot.keep ? h("span", { class: "badge ok", text: "已锁定" }) : null
+      ]));
+      var grid = h("div", { class: "frames" });
+      ["ff", "lf"].forEach(function (kind) {
+        var frame = shot.frames[kind] || {};
+        var label = kind === "ff" ? "首帧" : "尾帧";
+        var stateText = frame.state === "cached" ? "🟢 命中" : (frame.state === "stale" ? "🟡 待更新" : "⚪ 缺失");
+        var badgeCls = frame.state === "cached" ? "ok" : (frame.state === "stale" ? "warn" : "");
+        var box = h("div", { class: "frame" }, [
+          h("div", { class: "row" }, [
+            h("b", { text: label }),
+            h("span", { class: "badge " + badgeCls, text: stateText }),
+            h("div", { class: "spacer" }),
+            h("span", { class: "hash", text: "cur " + shortHash(frame.current_hash) })
+          ])
+        ]);
+        if (frame.image_exists) {
+          var img = h("img", { src: mediaUrl(frame.image), alt: label, loading: "lazy" });
+          img.addEventListener("click", function () { window.open(mediaUrl(frame.image), "_blank"); });
+          box.appendChild(img);
+        } else {
+          box.appendChild(h("div", { class: "ph", text: "尚无" + label }));
+        }
+        box.appendChild(h("div", { class: "hash", text: "saved " + shortHash(frame.saved_hash) }));
+        box.appendChild(h("div", { class: "row", style: "margin-top:8px" }, [
+          h("button", {
+            type: "button", text: "保持此图（同步哈希）",
+            disabled: !frame.image_exists || !frame.current_hash,
+            onclick: function () { frameAction("/api/frame/keep", shot.index, kind, "已同步哈希，0 成本命中"); }
+          }),
+          h("button", {
+            type: "button", class: "ghost", text: "标记重抽",
+            disabled: !frame.image_exists,
+            onclick: function () {
+              if (!window.confirm("将备份并移除 shot " + shot.index + " 的" + label + "，下次预检判为 generate。继续？")) return;
+              frameAction("/api/frame/regen", shot.index, kind, "已标记重抽（旧图已备份）");
+            }
+          })
+        ]));
+        if (shot.prompts && shot.prompts[kind]) {
+          box.appendChild(h("details", {}, [
+            h("summary", { text: "组装后的 Prompt" }),
+            h("pre", { text: shot.prompts[kind] })
+          ]));
+        }
+        grid.appendChild(box);
+      });
+      card.appendChild(grid);
+      view.appendChild(card);
+    });
+  }
+
+  // ---------------------------------------------------------------- 02b/03/04
+  function renderMedia(ov, kind) {
+    var view = document.getElementById("view");
+    view.textContent = "";
+    var media = ov.media || {};
+    if (kind === "step02b") {
+      if (!media.videos.length) return view.appendChild(emptyBox("还没有分镜视频。跑完 step02b 后这里会出现逐镜 <video>（支持拖拽进度条）。"));
+      media.videos.forEach(function (v) {
+        view.appendChild(h("div", { class: "card" }, [
+          h("div", { class: "card-head" }, [
+            h("span", { class: "idx", text: "#" + v.shot }),
+            h("span", { class: "sub", text: v.name + " · " + Math.round(v.size / 1024) + " KB" }),
+            h("div", { class: "spacer" }),
+            h("button", {
+              type: "button", class: "ghost", text: "保持",
+              onclick: function () { keep("step02b", String(v.shot), true); }
+            })
+          ]),
+          h("video", { src: mediaUrl(v.path), controls: true, preload: "metadata", style: "width:100%;border-radius:8px;background:#000" })
+        ]));
+      });
+      return;
+    }
+    if (kind === "step03") {
+      if (!media.audios.length) return view.appendChild(emptyBox("还没有 TTS 音轨。跑完 step03 后这里会出现逐镜 <audio> 试听。"));
+      media.audios.forEach(function (a) {
+        view.appendChild(h("div", { class: "card" }, [
+          h("div", { class: "card-head" }, [
+            h("span", { class: "idx", text: "#" + a.shot }),
+            h("span", { class: "sub", text: a.name }),
+            h("div", { class: "spacer" }),
+            h("button", {
+              type: "button", class: "ghost", text: "锁定音轨",
+              onclick: function () { keep("step03", String(a.shot), true); }
+            })
+          ]),
+          h("audio", { src: mediaUrl(a.path), controls: true, preload: "metadata", style: "width:100%" })
+        ]));
+      });
+      return;
+    }
+    // step04
+    var compose = h("div", { class: "card" }, [
+      h("div", { class: "card-head" }, [h("h3", { text: "本地合成子集（FFmpeg · 0 费用）" })]),
+      h("div", { class: "row" }, [
+        h("input", {
+          id: "shots-input", type: "text", placeholder: "镜头范围，如 1 或 1,3-5",
+          style: "flex:1;min-width:180px;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 10px"
+        }),
+        h("button", { type: "button", class: "primary", text: "🎬 合成", onclick: runCompose })
+      ]),
+      h("div", { class: "sub", style: "margin-top:8px", text: "调用 step04_merge/main.py --shots <范围>，输出 final_shots_<tag>.mp4，不覆盖正式 final.mp4。" })
+    ]);
+    view.appendChild(compose);
+    var log = h("pre", { id: "compose-log", text: "（合成日志会显示在这里）" });
+    view.appendChild(h("div", { class: "card" }, [log]));
+
+    if (!media.finals.length) {
+      view.appendChild(emptyBox("还没有成片。合成成功后这里会出现可播放的 mp4 与字幕。"));
+    } else {
+      media.finals.forEach(function (f) {
+        view.appendChild(h("div", { class: "card" }, [
+          h("div", { class: "card-head" }, [
+            h("b", { text: f.name }),
+            h("span", { class: "sub", text: Math.round(f.size / 1024) + " KB" }),
+            h("div", { class: "spacer" }),
+            h("button", {
+              type: "button", class: "ghost", text: "封存",
+              onclick: function () { keep("step04", f.name, true); }
+            })
+          ]),
+          h("video", { src: mediaUrl(f.path), controls: true, preload: "metadata", style: "width:100%;border-radius:8px;background:#000" })
+        ]));
+      });
+    }
+    if (media.subtitles.length) {
+      view.appendChild(h("div", { class: "card" }, [
+        h("h3", { text: "字幕" }),
+        h("div", { class: "list" }, media.subtitles.map(function (s) {
+          return h("div", { class: "item" }, [
+            h("span", { class: "n", text: "SRT" }),
+            h("span", { class: "p", text: s.name }),
+            h("a", { href: mediaUrl(s.path), target: "_blank", text: "查看" })
+          ]);
+        }))
+      ]));
+    }
+  }
+
+  function emptyBox(text) {
+    return h("div", { class: "empty", text: text });
+  }
+
+  // ---------------------------------------------------------------- 动作
+  function refresh() {
+    return api("/api/overview").then(function (ov) {
+      state.overview = ov;
+      renderMeta(ov);
+      renderTabs(ov);
+      render();
+    }).catch(function (err) {
+      document.getElementById("view").textContent = "";
+      document.getElementById("view").appendChild(emptyBox("加载失败：" + err.message));
+      toast(err.message, true);
+    });
+  }
+
+  function render() {
+    var ov = state.overview;
+    if (!ov) return;
+    if (state.tab === "step01") renderStep01(ov);
+    else if (state.tab === "step02a") renderStep02a(ov);
+    else if (state.tab === "step02b") renderMedia(ov, "step02b");
+    else if (state.tab === "step03") renderMedia(ov, "step03");
+    else renderMedia(ov, "step04");
+  }
+
+  function toggleKeep(shot) {
+    keep("step01", String(shot.index), !shot.keep);
+  }
+
+  function keep(stage, key, value) {
+    api("/api/keep", { stage: stage, key: key, keep: value })
+      .then(function () {
+        toast(value ? "已锁定" : "已解锁");
+        return refresh();
+      })
+      .catch(function (err) { toast(err.message, true); });
+  }
+
+  function frameAction(path, shot, kind, okText) {
+    api(path, { shot: shot, kind: kind })
+      .then(function (res) {
+        toast(okText + (res.backup ? "（备份：" + res.backup.split("\\").pop() + "）" : ""));
+        return refresh();
+      })
+      .catch(function (err) { toast(err.message, true); });
+  }
+
+  function patchShot(shot, drafts, apply) {
+    var changes = {};
+    Object.keys(drafts || {}).forEach(function (k) { changes[k] = drafts[k]; });
+    if (!Object.keys(changes).length) { toast("没有改动", true); return; }
+    api("/api/shot/patch", { shot: shot.index, set: changes, apply: apply })
+      .then(function (res) {
+        if (!apply) {
+          toast("预检通过：revision " + shortHash(res.before_revision) + " → " + shortHash(res.revision));
+          return;
+        }
+        delete state.editing[shot.index];
+        toast("已保存并重签门禁（revision " + shortHash(res.revision) + "）");
+        return refresh();
+      })
+      .catch(function (err) {
+        toast(err.message + (err.data && err.data.categories ? "：" + err.data.categories.join("、") : ""), true);
+      });
+  }
+
+  function runPlan() {
+    api("/api/plan", {}).then(function (res) {
+      var rep = res.report || {};
+      var totals = rep.totals || {};
+      var pending = totals.images_total;
+      toast("预检：本次预计生成 " + (pending === undefined ? "?" : pending) + " 张图（0 费用）");
+      var view = document.getElementById("view");
+      var box = h("div", { class: "card" }, [
+        h("h3", { text: "02a 预检（零模型调用）" }),
+        h("pre", { text: JSON.stringify(rep, null, 2) })
+      ]);
+      view.insertBefore(box, view.firstChild ? view.firstChild.nextSibling : null);
+    }).catch(function (err) { toast(err.message, true); });
+  }
+
+  function runCompose() {
+    var input = document.getElementById("shots-input");
+    var shots = input ? input.value.trim() : "";
+    var log = document.getElementById("compose-log");
+    if (log) log.textContent = "合成中…（本地 FFmpeg，无模型调用）";
+    api("/api/compose", { shots: shots }).then(function (res) {
+      if (log) log.textContent = res.log || "（无输出）";
+      toast(res.ok ? "合成完成" : "合成失败（退出码 " + res.returncode + "）", !res.ok);
+      return refresh();
+    }).catch(function (err) {
+      if (log) log.textContent = "失败：" + err.message;
+      toast(err.message, true);
+    });
+  }
+
+  document.getElementById("refresh").addEventListener("click", function () {
+    refresh().then(function () { toast("已刷新"); });
+  });
+
+  refresh();
+})();
+</script>
+</body>
+</html>

@@ -264,6 +264,8 @@ tests/shared/*
 !tests/tools/
 tests/tools/*
 !tests/tools/test_vision_check.py
+# 2026-11-02：Studio 工作台（tools/studio_server.py）离线用例入库。
+!tests/tools/test_studio_server.py
 !tests/step02a_frame_gen/
 tests/step02a_frame_gen/*
 !tests/step02a_frame_gen/test_step02a_offline_fixups.py
