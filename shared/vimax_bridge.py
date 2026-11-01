@@ -1068,12 +1068,20 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
 
 
 def _no_auto_repair() -> bool:
-    """STEP02A_NO_REPAIR=1：禁止任何自动修图（QC i2i 修复 / doodle 二修）.
+    """是否禁止自动修图（QC i2i 修复 / doodle 二修）.
 
-    S14 的费用边界是"只生成指定六张"：修图是额外 i2i 请求，会挤占图片 POST
-    预算，必须在**发送前**禁止，而不是靠预算耗尽。默认关闭，保持历史行为。
+    S22-3：修图是额外 i2i 请求，会挤占图片 POST 预算，必须在**发送前**禁止，
+    而不是靠预算耗尽。默认**关闭修图**；只有显式 `IMAGE_QC_REPAIR_ENABLED=1`
+    且 QC 允许重抽（`QC_MAX_ATTEMPTS > 1`）时才开启。
     """
-    return os.getenv("STEP02A_NO_REPAIR", "0").strip() == "1"
+    if os.getenv("STEP02A_NO_REPAIR", "0").strip() == "1":
+        return True
+    if os.getenv("IMAGE_QC_REPAIR_ENABLED", "0").strip() != "1":
+        return True
+    try:
+        return int(os.getenv("QC_MAX_ATTEMPTS", "2") or "2") <= 1
+    except ValueError:
+        return True
 
 
 async def _try_qc_repair(image_adapter, shot: dict, frame_path: str, frame_kind: str,

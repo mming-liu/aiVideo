@@ -231,6 +231,22 @@ def _scoped_asset_identifiers(script: dict, units: list[dict]) -> dict:
     return {"scenes": scene_ids, "props": prop_ids}
 
 
+class _ConsoleLogger:
+    """--plan-only 专用：只打印、不落盘（对 chapter 目录 0 文件改动）."""
+
+    def info(self, msg, *a, **k):
+        print(msg)
+
+    def warn(self, msg, *a, **k):
+        print(msg)
+
+    def warning(self, msg, *a, **k):
+        print(msg)
+
+    def error(self, msg, *a, **k):
+        print(msg)
+
+
 def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dict:
     """零网络账单预检：列出本次会生成多少张肖像/场景/道具/分镜帧.
 
@@ -314,6 +330,28 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dic
              + sum(len(s["to_generate"]) for s in scene_plan)
              + sum(p["to_generate"] for p in prop_plan)
              + frames_to_gen + kf_to_gen)
+    # S22-4：--plan-only 必须把"实跑会写哪些文件"完整列出（含共享注册表），
+    # 便于在授权前核对写入范围。
+    from shared.paths import chapter_dir as _chapter_dir
+    from shared.paths import global_dir as _global_dir
+    _writes: list = []
+    for _p in portraits:
+        for _view in _p["to_generate"]:
+            _writes.append(str(bank.get_portrait_dir(_p["character"]) / ("%s.png" % _view)))
+    _writes.append(str(_global_dir() / "characters_bank" / "characters_bank.json"))
+    for _row in frame_plan:
+        _sd = work_dir / "shots" / str(_row["shot"])
+        if _row.get("ff") == "generate":
+            _writes.append(str(_sd / FIRST_FRAME_FILENAME))
+        if _row.get("lf") == "generate":
+            _writes.append(str(_sd / LAST_FRAME_FILENAME))
+        _writes.extend([str(_sd / "frame_hash.txt"), str(_sd / "last_frame_hash.txt"),
+                        str(_sd / "shot_description.json")])
+    _writes.extend([str(work_dir / "character_portraits_registry.json"),
+                    str(work_dir / "characters.json"),
+                    str(_chapter_dir() / "step02a_quality.json"),
+                    str(_chapter_dir() / "step02a_prompt_quality.json"),
+                    str(_chapter_dir() / "step02a.log")])
     return {
         "schema": "step02a.plan/1",
         "model_sends": 0,
@@ -331,6 +369,7 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dic
             "keyframes": kf_to_gen,
             "images_total": total,
         },
+        "writes": _writes,
         "note": "分镜帧按文件存在性计数；内容哈希不匹配的旧帧会在实跑时重生成",
     }
 
@@ -382,7 +421,8 @@ def main():
     script_path = script_file()
     work_dir = wd()
 
-    logger = get_logger(chapter_dir() / "step02a.log", console_level="INFO")
+    logger = (_ConsoleLogger() if args.plan_only
+              else get_logger(chapter_dir() / "step02a.log", console_level="INFO"))
     logger.info(f"[INFO] {scope_log_line(scope)}")
     # 缺 step01 产物时说清楚是**哪一章**缺、该跑什么命令：裸 FileNotFoundError 会被
     # 当成"路径写错"，与真正的原因——该章还没跑出 COMMITTED 的 script_result.json——无关。
@@ -412,7 +452,7 @@ def main():
         # BLOCK manifest，下游因此不会带着未解决的 blocking 继续生图）。
         verify_step01_commit_manifest(chapter_dir(), _script_for_qa, stage="step01",
                                       expected_chapter=scope["chapter"])
-        _iq = collect_image_prompt_quality(_script_for_qa)
+        _iq = collect_image_prompt_quality(_script_for_qa, write=not args.plan_only)
         logger.info(f"[IMAGE-QA] warnings: {_iq.get('warning_count', 0)}")
     except Exception as e:
         logger.error(f"[IMAGE-QA] upstream quality gate failed: {e}")
@@ -480,6 +520,10 @@ def main():
             _script_final, work_dir, only_indices=only_indices,
             require_keyframes=any(f.startswith("kf") for f in _effective_frames))
         logger.info(f"[IMAGE-PRODUCT] status={_pq.get('status')} missing={len(_pq.get('missing') or [])}")
+        if _pq.get("status") != "PASS":
+            # S22-4：缺帧/不可解码默认非零退出，不能"报告 BLOCK 但 exit 0"。
+            logger.error("[IMAGE-PRODUCT] BLOCK：缺帧或不可解码，按失败退出")
+            raise SystemExit(1)
     except Exception as _pq_err:
         logger.error(f"[IMAGE-PRODUCT] product acceptance failed: {_pq_err}")
         raise

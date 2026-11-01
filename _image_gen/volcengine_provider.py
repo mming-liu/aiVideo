@@ -18,6 +18,7 @@ import base64
 import mimetypes
 import os
 import re
+import threading
 import time
 from functools import partial
 from typing import Optional
@@ -51,6 +52,8 @@ class _PostLimit(RuntimeError):
 _POSTS_USED = [0]
 # 进程级"本批已失败"标记（VOLCENGINE_IMAGE_FAIL_FAST）：一次失败后拒绝任何后续 POST。
 _ABORT = [None]
+# provider 在 asyncio.to_thread 中并发执行；检查+自增必须原子（S22-3）。
+_POST_LOCK = threading.Lock()
 
 
 def _encode_image(path: Optional[str]) -> Optional[str]:
@@ -172,21 +175,23 @@ class VolcengineImageService(ImageGenerationService):
             # 统一出口：**任何**失败结果（含输出敏感软跳过、下载失败）都记中止标记，
             # 后续 generate 由 _send 在发送前拒绝；关闭开关时保持原行为。
             if _fail_fast and not result.success:
-                _ABORT[0] = result.error or "生成失败"
+                with _POST_LOCK:
+                    _ABORT[0] = result.error or "生成失败"
             return result
 
         def _send(payload: dict):
             nonlocal _attempts
-            if _ABORT[0]:
-                raise _PostLimit("本批已中止（%s），拒绝后续请求" % _ABORT[0])
-            if _max_attempts and _attempts >= _max_attempts:
-                raise _PostLimit("达到尝试上限 %d（VOLCENGINE_IMAGE_MAX_ATTEMPTS）"
-                                 % _max_attempts)
-            if _max_posts and _POSTS_USED[0] >= _max_posts:
-                raise _PostLimit("达到批次 POST 上限 %d（VOLCENGINE_IMAGE_MAX_POSTS）"
-                                 % _max_posts)
-            _attempts += 1
-            _POSTS_USED[0] += 1
+            with _POST_LOCK:
+                if _ABORT[0]:
+                    raise _PostLimit("本批已中止（%s），拒绝后续请求" % _ABORT[0])
+                if _max_attempts and _attempts >= _max_attempts:
+                    raise _PostLimit("达到尝试上限 %d（VOLCENGINE_IMAGE_MAX_ATTEMPTS）"
+                                     % _max_attempts)
+                if _max_posts and _POSTS_USED[0] >= _max_posts:
+                    raise _PostLimit("达到批次 POST 上限 %d（VOLCENGINE_IMAGE_MAX_POSTS）"
+                                     % _max_posts)
+                _attempts += 1
+                _POSTS_USED[0] += 1
             return requests.post(f"{self._base_url}/images/generations",
                                  json=payload, headers=self._headers, timeout=180)
         # 2026-08-29：OutputImageSensitiveContentDetected 专用旗。

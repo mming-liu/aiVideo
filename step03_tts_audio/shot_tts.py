@@ -445,8 +445,13 @@ def narration_subset_entries(plan: dict, shots: list, only_indices=None) -> list
     keep = []
     for i, entry in enumerate(entries, 1):
         run = {int(x) for x in ((units.get(i) or {}).get("shot_indexes") or [])}
-        if run and run <= want:
-            keep.append((i, entry))
+        if not run or not (run & want):
+            continue  # 属于其他镜头：静默跳过
+        if not run <= want:
+            print("[WARN] 旁白 N%d 跨出本次 --shots 子集（承载 %s），跳过（不截断）"
+                  % (i, sorted(run)))
+            continue
+        keep.append((i, entry))
     return keep
 
 

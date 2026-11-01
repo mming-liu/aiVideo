@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import copy
+import os
 from datetime import datetime
 
 SCHEMA = "voice_adaptation.v1"
@@ -43,7 +44,14 @@ class AdaptationConfigError(RuntimeError):
 
 
 def enabled() -> bool:
-    """唯一来源：`shared.config.VOICE_ADAPTATION_ENABLED`（由现有 env 加载一次）."""
+    """运行期 env 优先，回退 `shared.config.VOICE_ADAPTATION_ENABLED`（import 期快照）.
+
+    S22-1：下游进程可能在 import 之后才从采纳收据注入开关（或测试 monkeypatch
+    env），只读常量会把"已确认的声音配置"判成关闭。
+    """
+    raw = os.getenv("VOICE_ADAPTATION_ENABLED")
+    if raw is not None:
+        return str(raw).strip().lower() in ("1", "true", "yes", "on")
     try:
         from shared import config as _config
         _flag = getattr(_config, "VOICE_ADAPTATION_ENABLED", None)

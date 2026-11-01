@@ -21,7 +21,7 @@ from shared.quality_gate import attach_gate_metadata
 _VIDEO_ONLY_TERMS = ("运镜", "推镜", "推近", "拉镜", "拉远", "跟拍", "环绕镜", "转场", "时长")
 
 
-def collect_image_prompt_quality(script: dict) -> dict:
+def collect_image_prompt_quality(script: dict, *, write: bool = True) -> dict:
     warnings: list[dict] = []
     targets = ([script.get("hook")] if isinstance(script.get("hook"), dict) else []) + list(script.get("shots") or [])
     for shot in targets:
@@ -57,7 +57,9 @@ def collect_image_prompt_quality(script: dict) -> dict:
         "skill_contract": ["byted-ark-seedream-skill", "qianwen-image-generation"],
     }
     attach_gate_metadata(payload, script, stage="step02a.image_prompt_quality")
-    atomic_dump_json(chapter_dir() / "step02a_prompt_quality.json", payload, ensure_ascii=False, indent=2)
+    if write:
+        atomic_dump_json(chapter_dir() / "step02a_prompt_quality.json", payload,
+                         ensure_ascii=False, indent=2)
     return payload
 
 

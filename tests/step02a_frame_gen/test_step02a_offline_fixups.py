@@ -167,6 +167,9 @@ def test_qc_repair_routes_through_strict_acceptance(monkeypatch, tmp_path):
         calls["accept"] += 1
         return False
 
+    # S22-3：修图默认关闭；本用例测的是"修图路由到严格验收"，需显式开启。
+    monkeypatch.setenv("IMAGE_QC_REPAIR_ENABLED", "1")
+    monkeypatch.setenv("QC_MAX_ATTEMPTS", "2")
     monkeypatch.setattr(bridge, "_doodle_refine_first_frame", fake_doodle)
     monkeypatch.setattr(bridge, "_accept_doodle_refinement", fake_accept)
     # 16x16 假图 < _validate_frame 的 5KB 下限，这里只验证路由

@@ -297,13 +297,15 @@ def _collect_narration_tracks(script, valid_shots, clip_windows, resolve=None,
     ① 换算成最终时间轴上的秒数；② 核验音轨存在、且**讲得完**。
     """
     from shared.audio_identity import verify_signature
-    from step01_script_gen.plan_feasibility import (layout_voice_entries,
-                                                    plan_narration_entries,
+    from step01_script_gen.plan_feasibility import (broadcast_narration_entries,
+                                                    layout_voice_entries,
                                                     voice_units)
     from tts.voice_registry import NARRATOR_VOICE
     plan = script.get("chapter_outline")
     plan = plan if isinstance(plan, dict) else {}
-    entries = plan_narration_entries(plan)
+    # S22-5：与 step03 同源——开启声音改编时，step04 的旁白文本/签名必须读改编层，
+    # 否则 step03 签的是改编文本、step04 拿原文核对，必然判"与当前计划不符"。
+    entries = broadcast_narration_entries(plan)
     from shared.narration_voice import narration_role
     _roles = [narration_role(e, script.get("characters") or []) for e in entries]
     if not entries:
