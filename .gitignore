@@ -233,6 +233,7 @@ tests/shared/*
 !docs/s14-run-order-2026-11-01.md
 !docs/s14-s15-run-record-2026-11-01.md
 !docs/shot01-motion-revision-candidate-2026-11-01.md
+!docs/step01-motion-governance-plan-2026-11-01.md
 
 # 2026-10：根目录「代理/复核隔离」调试产物曾被误入库
 # （`review-f-isolated-*` / `review-candidate-isolated-*` / `review-f-round2-*` / `unused.wav`）。
