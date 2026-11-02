@@ -54,6 +54,19 @@
   .field .v{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel-2);
     border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px}
   .field .v.empty{color:var(--muted);font-style:italic}
+  .table-wrap{overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+  table.shots{border-collapse:collapse;width:100%;font-size:12.5px}
+  table.shots th{position:sticky;top:0;z-index:1;background:var(--panel-2);color:var(--muted);
+    text-align:left;font-weight:600;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  table.shots td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top;max-width:300px}
+  table.shots tbody tr:hover td{background:rgba(255,255,255,.025)}
+  .cell{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;
+    white-space:pre-wrap;overflow-wrap:anywhere;cursor:default}
+  .cell.muted{color:var(--muted)}
+  .cell[title]{cursor:zoom-in}
+  .cell.open{-webkit-line-clamp:unset;display:block;cursor:zoom-out}
+  tr.edit-row td{background:var(--panel-2)}
+  .edit-head{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px}
   textarea{width:100%;min-height:76px;background:var(--panel-2);color:var(--text);
     border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:13px/1.55 inherit;resize:vertical}
   textarea:focus{border-color:var(--accent);outline:none}
@@ -212,88 +225,150 @@
   }
 
   // ---------------------------------------------------------------- 01
+  // 单元格：长文本折叠，点击展开/收起（避免整页被 JSON/长句撑爆）
+  function cellText(value, muted) {
+    var text = (value === null || value === undefined || value === "") ? "—" : String(value);
+    var div = h("div", { class: "cell" + (muted ? " muted" : ""), text: text });
+    if (text.length > 36) {
+      div.title = "点击展开 / 收起";
+      div.addEventListener("click", function () {
+        div.classList.toggle("open");
+      });
+    }
+    return div;
+  }
+
+  // 角色布局：把结构化数据翻成人话，视图里不出现 JSON
+  function layoutText(layout) {
+    if (!layout || typeof layout !== "object") return "—";
+    var parts = [];
+    ["ff", "lf"].forEach(function (k) {
+      var list = layout[k];
+      if (!Array.isArray(list) || !list.length) return;
+      var names = list.filter(function (p) { return p && p.on_screen !== false; })
+        .map(function (p) {
+          var bits = [p.name || "?"];
+          if (p.position) bits.push("·" + p.position);
+          if (p.pose) bits.push("·" + p.pose);
+          return bits.join("");
+        });
+      if (names.length) parts.push((k === "ff" ? "首" : "尾") + "：" + names.join("，"));
+    });
+    if (Array.isArray(layout.kfs) && layout.kfs.length) parts.push("关键帧 " + layout.kfs.length + " 组");
+    return parts.length ? parts.join("；") : "—";
+  }
+
+  // ---------------------------------------------------------------- 01
   function renderStep01(ov) {
     var view = document.getElementById("view");
     view.textContent = "";
-    var intro = h("div", { class: "card" }, [
+    view.appendChild(h("div", { class: "card" }, [
       h("div", { class: "row" }, [
-        h("div", { class: "sub", text: "只读展示 + 单镜画面字段离线修改。保存会重建 quality/audit/commit/adoption 四份门禁（model_sends = 0），失败不覆盖基线。" }),
+        h("div", { class: "sub", text: "表格逐镜对照：台词/旁白只读，画面字段可改；保存会重建四份门禁（model_sends = 0），失败不覆盖基线。长文本点一下展开。" }),
         h("div", { class: "spacer" }),
         h("button", { type: "button", class: "ghost", text: "重算 02a 预检", onclick: runPlan })
       ])
-    ]);
-    view.appendChild(intro);
+    ]));
+
+    var table = h("table", { class: "shots" });
+    table.appendChild(h("thead", {}, [h("tr", {}, [
+      h("th", { text: "镜号" }), h("th", { text: "时长" }), h("th", { text: "台词 / 旁白" }),
+      h("th", { text: "运镜" }), h("th", { text: "首帧" }), h("th", { text: "尾帧" }),
+      h("th", { text: "动作差分" }), h("th", { text: "角色布局" }), h("th", { text: "状态" }),
+      h("th", { text: "操作" })
+    ])]));
+    var tbody = h("tbody", {});
 
     (ov.shots || []).forEach(function (shot) {
       var editing = state.editing[shot.index];
-      var card = h("div", { class: "card" });
-      card.appendChild(h("div", { class: "card-head" }, [
-        h("span", { class: "idx", text: "#" + shot.index }),
-        h("span", { class: "sub", text: (shot.duration ? shot.duration + "s" : "") }),
-        h("span", { class: "sub", text: "rev " + shortHash(shot.revision) }),
-        shot.keep ? h("span", { class: "badge ok", text: "已锁定" }) : null,
-        shot.media_policy ? h("span", {
-          class: "badge",
-          text: (shot.media_policy.policy || "?") + " · " + (shot.media_policy.mode || "?")
-        }) : null,
-        h("div", { class: "spacer" }),
-        h("button", {
-          type: "button", class: "ghost",
-          text: shot.keep ? "🔓 解锁" : "🔒 保持",
-          onclick: function () { toggleKeep(shot); }
-        }),
-        h("button", {
-          type: "button",
-          text: editing ? "取消编辑" : "✏️ 修改",
-          onclick: function () {
-            if (editing) delete state.editing[shot.index]; else state.editing[shot.index] = true;
-            render();
-          }
-        })
+      var tr = h("tr", {});
+      tr.appendChild(h("td", {}, [h("b", { class: "idx", text: "#" + shot.index })]));
+      tr.appendChild(h("td", { text: shot.duration ? shot.duration + "s" : "—" }));
+      tr.appendChild(h("td", {}, [
+        shot.subtitle ? cellText(shot.subtitle) : h("div", { class: "cell muted", text: "—" }),
+        shot.narration ? h("div", { class: "cell muted", style: "margin-top:4px", text: "旁白：" + shot.narration }) : null
       ]));
+      tr.appendChild(h("td", {}, [cellText(shot.fields.camera_movement)]));
+      tr.appendChild(h("td", {}, [cellText(shot.fields.ff_desc)]));
+      tr.appendChild(h("td", {}, [cellText(shot.fields.lf_desc)]));
+      tr.appendChild(h("td", {}, [cellText(shot.fields.motion_desc)]));
+      tr.appendChild(h("td", {}, [cellText(layoutText(shot.fields.frame_layouts))]));
+      tr.appendChild(h("td", {}, [
+        shot.keep ? h("span", { class: "badge ok", text: "🔒 锁定" })
+                  : h("span", { class: "badge", text: "可改" }),
+        h("div", { class: "hash", text: shortHash(shot.revision) }),
+        shot.media_policy ? h("div", { class: "hash", text: shot.media_policy.mode || "" }) : null
+      ]));
+      tr.appendChild(h("td", {}, [
+        h("div", { class: "row", style: "gap:6px" }, [
+          h("button", {
+            type: "button", class: "ghost",
+            text: shot.keep ? "解锁" : "锁定",
+            onclick: function () { toggleKeep(shot); }
+          }),
+          h("button", {
+            type: "button", text: editing ? "收起" : "修改",
+            onclick: function () {
+              if (editing) delete state.editing[shot.index];
+              else state.editing[shot.index] = true;
+              render();
+            }
+          })
+        ])
+      ]));
+      tbody.appendChild(tr);
 
-      if (!editing) {
-        Object.keys(shot.fields).forEach(function (key) {
-          card.appendChild(fieldView(key, shot.fields[key]));
-        });
-      } else {
+      if (editing) {
         var drafts = editing === true ? {} : editing;
-        Object.keys(shot.fields).forEach(function (key) {
-          var value = shot.fields[key];
-          var isText = typeof value === "string" || value === null || value === undefined;
-          var box;
-          if (isText) {
-            box = h("textarea", { rows: key === "prompt" ? 5 : 3 });
-            box.value = value || "";
-            box.addEventListener("input", function () { drafts[key] = box.value; });
-          } else {
-            box = h("textarea", { rows: 6 });
-            box.value = JSON.stringify(value, null, 2);
-            box.addEventListener("input", function () {
-              try { drafts[key] = JSON.parse(box.value); box.style.borderColor = ""; }
-              catch (e) { box.style.borderColor = "var(--bad)"; }
-            });
-          }
-          card.appendChild(h("div", { class: "field" }, [
-            h("div", { class: "k", text: key }),
-            box
-          ]));
-        });
         state.editing[shot.index] = drafts;
-        card.appendChild(h("div", { class: "row" }, [
-          h("button", {
-            type: "button", class: "primary", text: "预检（dry-run）",
-            onclick: function () { patchShot(shot, drafts, false); }
-          }),
-          h("button", {
-            type: "button", text: "保存并重签门禁",
-            onclick: function () { patchShot(shot, drafts, true); }
-          }),
-          h("span", { class: "sub", text: "只改画面字段；锁定合同字段（时长/字幕/旁白/plan_refs）不接受修改。" })
-        ]));
+        tbody.appendChild(editorRow(shot, drafts));
       }
-      view.appendChild(card);
     });
+
+    table.appendChild(tbody);
+    view.appendChild(h("div", { class: "table-wrap" }, [table]));
+  }
+
+  function editorRow(shot, drafts) {
+    var tr = h("tr", { class: "edit-row" });
+    var td = h("td", { colspan: 10 });
+    td.appendChild(h("div", { class: "edit-head" }, [
+      h("b", { text: "编辑 shot #" + shot.index }),
+      h("span", { class: "sub", text: "只改画面字段；时长 / 字幕 / 旁白 / plan_refs 等锁定合同字段不接受修改。" })
+    ]));
+    ["prompt", "ff_desc", "lf_desc", "motion_desc", "camera_movement"].forEach(function (key) {
+      var box = h("textarea", { rows: key === "prompt" ? 4 : 3 });
+      box.value = shot.fields[key] || "";
+      box.addEventListener("input", function () { drafts[key] = box.value; });
+      td.appendChild(h("div", { class: "field" }, [
+        h("div", { class: "k", text: key }),
+        box
+      ]));
+    });
+    var wrap = h("div", {});
+    ["frame_layouts", "keyframes"].forEach(function (key) {
+      var box = h("textarea", { rows: 6 });
+      box.value = JSON.stringify(shot.fields[key] || (key === "keyframes" ? [] : {}), null, 2);
+      box.addEventListener("input", function () {
+        try { drafts[key] = JSON.parse(box.value); box.style.borderColor = ""; }
+        catch (e) { box.style.borderColor = "var(--bad)"; }
+      });
+      wrap.appendChild(h("div", { class: "field" }, [
+        h("div", { class: "k", text: key }),
+        box
+      ]));
+    });
+    td.appendChild(h("details", {}, [
+      h("summary", { text: "结构化字段（frame_layouts / keyframes，仅编辑时按 JSON 提交）" }),
+      wrap
+    ]));
+    td.appendChild(h("div", { class: "row", style: "margin-top:10px" }, [
+      h("button", { type: "button", class: "primary", text: "预检（dry-run）", onclick: function () { patchShot(shot, drafts, false); } }),
+      h("button", { type: "button", text: "保存并重签门禁", onclick: function () { patchShot(shot, drafts, true); } }),
+      h("button", { type: "button", class: "ghost", text: "取消", onclick: function () { delete state.editing[shot.index]; render(); } })
+    ]));
+    tr.appendChild(td);
+    return tr;
   }
 
   // ---------------------------------------------------------------- 02a
