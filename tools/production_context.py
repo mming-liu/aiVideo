@@ -61,15 +61,12 @@ CONTEXT_ENV_KEYS = (
     "DURATION_MIN_SEC", "DURATION_MAX_SEC",
     "DURATION_TARGET_MIN_SEC", "DURATION_TARGET_MAX_SEC",
     "VOICE_ADAPTATION_ENABLED",
-    # 画风决定前缀/负向词/图片与视频内容哈希；必须在采纳时锁定，
-    # 不能让同一章因后续 .env.content 改动而静默换画风。
-    "VIDEO_STYLE",
 )
 
 #: 凭据里 `effective_config` 允许携带的键（其余忽略并记入 ignored_keys）。
 CONFIG_KEYS = ("HOOK_ENABLED", "DURATION_MIN_SEC", "DURATION_MAX_SEC",
                "DURATION_TARGET_MIN_SEC", "DURATION_TARGET_MAX_SEC",
-               "VOICE_ADAPTATION_ENABLED", "VIDEO_STYLE")
+               "VOICE_ADAPTATION_ENABLED")
 
 
 #: ~shared.config.duration_band()~ 的键名与 env 键名不同，比较时按这张表换算

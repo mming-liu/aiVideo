@@ -128,7 +128,6 @@ tests/*
 # 此前被 `tests/*` 一并挡掉。仅放行这一个文件，其余仍不入库。
 !tests/conftest.py
 !tests/verification_helpers.py
-!tests/test_production_context_video_style.py
 !tests/step01_script_gen/
 tests/step01_script_gen/*
 !tests/step01_script_gen/fixtures/
