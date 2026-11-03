@@ -53,6 +53,63 @@ def test_asset_prefix_keeps_landscape_ratio(monkeypatch):
     assert "电影宽幅" not in asset
 
 
+def test_canvas_ratio_reduces_square_and_landscape():
+    from shared.vimax_adapters import _canvas_ratio
+
+    assert _canvas_ratio("1440x2560") == "9:16"
+    assert _canvas_ratio("2560x1440") == "16:9"
+    assert _canvas_ratio("1024x1024") == "1:1"
+    assert _canvas_ratio("1600x1200") == "4:3"
+    assert _canvas_ratio("1080*1920") == "9:16"
+    with pytest.raises(ValueError):
+        _canvas_ratio("2K")
+    with pytest.raises(ValueError):
+        _canvas_ratio("0x2560")
+
+
+def test_style_profile_uses_requested_canvas():
+    from shared.style_prefix import style_profile
+
+    anime = style_profile("anime", ratio="1:1")
+    assert anime.prefix.endswith("1:1画幅")
+    assert "真人写实照片" in anime.negative
+
+    ink = style_profile("ink_painting", ratio="16:9")
+    assert ink.prefix.endswith("16:9画幅")
+    assert ink.negative != anime.negative
+
+
+def test_video_request_prefix_and_negative_follow_style(monkeypatch):
+    from step02_video_gen.prompt_builder import _make_request
+
+    monkeypatch.setenv("VIDEO_PROVIDER", "bailian")
+    monkeypatch.setenv("VIDEO_REFERENCE_MODE", "text")
+    monkeypatch.setenv("VIDEO_MEDIA_POLICY", "auto")
+    shot = {"index": 1, "duration_sec": 5, "prompt": "甲坐船",
+            "ff_desc": "甲坐船", "lf_desc": "甲坐船", "keyframes": []}
+
+    monkeypatch.setenv("VIDEO_STYLE", "anime")
+    anime = _make_request(None, "甲坐船", [], shot, characters=[])
+    monkeypatch.setenv("VIDEO_STYLE", "ink_painting")
+    ink = _make_request(None, "甲坐船", [], shot, characters=[])
+
+    assert "高清国漫二次元漫剧画风" in anime.prompt
+    assert "东方写意水墨动画" in ink.prompt
+    assert anime.negative_prompt != ink.negative_prompt
+
+
+def test_frame_hash_changes_when_style_changes(monkeypatch):
+    import shared.vimax_bridge as bridge
+
+    shot = {"index": 1, "main_subject": "甲", "location": "船",
+            "core_keywords": ["舟"], "ff_desc": "甲坐船"}
+    first = bridge._get_frame_content_hash(shot, False, [], lock_kind="layout", characters=[])
+    monkeypatch.setattr(bridge, "style_prefix_for_canvas",
+                        lambda *a, **k: "另一种画风；9:16画幅")
+    second = bridge._get_frame_content_hash(shot, False, [], lock_kind="layout", characters=[])
+    assert first != second
+
+
 # ---------------------------------------------------------------------------
 # S12：参考图按文件字节入哈希；ff/lf 场景参考同源
 # ---------------------------------------------------------------------------
@@ -183,6 +240,65 @@ def test_qc_repair_routes_through_strict_acceptance(monkeypatch, tmp_path):
     assert ok is False
     assert calls["accept"] == 1
     assert target.read_bytes() == before
+
+
+# ---------------------------------------------------------------------------
+# S02：OpenCode QC 失败不得被报告为“已通过”
+# ---------------------------------------------------------------------------
+
+def _empty_verdict() -> str:
+    return '{"has_hallucination": false, "issues": []}'
+
+
+def test_opencode_qc_success_without_questions(monkeypatch, tmp_path):
+    import shared.image_qc as image_qc
+
+    monkeypatch.setenv("QC_PROVIDER", "opencode")
+    monkeypatch.setattr(image_qc, "_opencode_vision_chat",
+                        lambda path, prompt: _empty_verdict())
+    monkeypatch.setattr(image_qc, "_detect_entities", lambda path: [])
+    monkeypatch.setattr(image_qc, "build_targeted_questions", lambda *a, **k: [])
+
+    res = image_qc.maybe_qc_sync(
+        _png(tmp_path / "ff.png"), {"index": 1, "ff_desc": "甲坐船"},
+        "first_frame", [], False, None, None)
+    assert res.ok is True
+    assert res.error == ""
+
+
+@pytest.mark.parametrize("message", ["timeout", "empty response"])
+def test_opencode_qc_general_failure_is_not_ok(monkeypatch, tmp_path, message):
+    import shared.image_qc as image_qc
+
+    monkeypatch.setenv("QC_PROVIDER", "opencode")
+
+    def boom(path, prompt):
+        raise RuntimeError(f"opencode {message}")
+
+    monkeypatch.setattr(image_qc, "_opencode_vision_chat", boom)
+    res = image_qc.maybe_qc_sync(
+        _png(tmp_path / "ff.png"), {"index": 1, "ff_desc": "甲坐船"},
+        "first_frame", [], False, None, None)
+    assert res.ok is False
+    assert res.has_hallucination is False
+
+
+def test_opencode_qc_detection_failure_is_not_ok(monkeypatch, tmp_path):
+    import shared.image_qc as image_qc
+
+    monkeypatch.setenv("QC_PROVIDER", "opencode")
+    monkeypatch.setattr(image_qc, "_opencode_vision_chat",
+                        lambda path, prompt: _empty_verdict())
+
+    def boom(path):
+        raise RuntimeError("grounding failed")
+
+    monkeypatch.setattr(image_qc, "_detect_entities", boom)
+    monkeypatch.setattr(image_qc, "build_targeted_questions", lambda *a, **k: [])
+    res = image_qc.maybe_qc_sync(
+        _png(tmp_path / "ff.png"), {"index": 1, "ff_desc": "甲坐船"},
+        "first_frame", [], False, None, None)
+    assert res.ok is False
 
 
 # ---------------------------------------------------------------------------

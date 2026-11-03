@@ -14,6 +14,7 @@ aiVideo 的 provider 是同步的（create_task → wait_for_completion → 下�
 import asyncio
 import os
 import re
+from math import gcd
 from pathlib import Path
 from typing import List, Optional
 from weakref import WeakKeyDictionary
@@ -244,11 +245,20 @@ class ImageGeneratorAiVideoAdapter:
 
 
 def _canvas_ratio(size: str) -> str:
-    """从适配器尺寸串（如 1440x2560 / 2560*1440）推断画幅，未知按 9:16."""
-    m = re.match(r"\s*(\d+)\s*[x*]\s*(\d+)", str(size or ""))
-    if m and int(m.group(1)) > int(m.group(2)):
-        return "16:9"
-    return "9:16"
+    """从适配器尺寸串（如 1440x2560 / 2560*1440）推断最简画幅.
+
+    旧实现把所有横图写成 16:9、其余写成 9:16，方图（1:1）和 4:3 等比例
+    会拿到错误的前缀画幅提示。这里按最大公约数还原真实比例；无法解析或
+    非正尺寸直接抛 ValueError，避免静默用错画幅。
+    """
+    m = re.match(r"\s*(\d+)\s*[x*]\s*(\d+)\s*$", str(size or ""))
+    if not m:
+        raise ValueError(f"无法解析画幅尺寸: {size!r}（期望 WxH，如 1440x2560）")
+    w, h = int(m.group(1)), int(m.group(2))
+    if w <= 0 or h <= 0:
+        raise ValueError(f"画幅尺寸必须为正: {size!r}")
+    g = gcd(w, h)
+    return f"{w // g}:{h // g}"
 
 
 class VideoGeneratorAiVideoAdapter:
