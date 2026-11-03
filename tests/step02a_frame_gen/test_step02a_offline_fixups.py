@@ -110,6 +110,68 @@ def test_frame_hash_changes_when_style_changes(monkeypatch):
     assert first != second
 
 
+def test_protected_composite_preserves_outside():
+    from PIL import Image
+    from shared.image_edit import compose_protected_edit
+
+    original = Image.new("RGB", (100, 100), (0, 0, 0))
+    edited = Image.new("RGB", (100, 100), (255, 255, 255))
+    out = compose_protected_edit(original, edited, (0.3, 0.3, 0.7, 0.7), feather=0)
+    assert out.getpixel((10, 10)) == (0, 0, 0)
+    assert out.getpixel((50, 50)) == (255, 255, 255)
+    with pytest.raises(ValueError):
+        compose_protected_edit(original, edited, (0.7, 0.3, 0.3, 0.7), feather=0)
+
+
+def test_image_adapter_prefix_uses_exact_canvas(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from PIL import Image
+    import _image_gen
+    import shared.vimax_adapters as va
+
+    posts = []
+
+    class FakeSvc:
+        supports_multi_ref = True
+
+        def generate(self, req):
+            posts.append(req)
+            out = tmp_path / "out.png"
+            Image.new("RGB", (8, 8), "red").save(out)
+            return SimpleNamespace(success=True, save_path=str(out), error="", soft_skip=False)
+
+    monkeypatch.setattr(_image_gen, "create_service", lambda *a, **k: FakeSvc())
+    monkeypatch.setenv("VIDEO_STYLE", "anime")
+    adapter = va.ImageGeneratorAiVideoAdapter(size="1024x1024")
+    result = asyncio.run(adapter.generate_single_image("甲坐船", shot_index=1))
+
+    assert len(posts) == 1
+    assert "1:1画幅" in posts[0].prompt
+    assert "高清国漫" in posts[0].prompt
+    assert result.data.size == (8, 8)
+
+
+def test_image_adapter_provider_failure_no_retry(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    import _image_gen
+    import shared.vimax_adapters as va
+
+    posts = []
+
+    class FailSvc:
+        supports_multi_ref = True
+
+        def generate(self, req):
+            posts.append(req)
+            return SimpleNamespace(success=False, save_path=None, error="boom", soft_skip=False)
+
+    monkeypatch.setattr(_image_gen, "create_service", lambda *a, **k: FailSvc())
+    adapter = va.ImageGeneratorAiVideoAdapter(size="1440x2560")
+    with pytest.raises(RuntimeError):
+        asyncio.run(adapter.generate_single_image("甲坐船", shot_index=1))
+    assert len(posts) == 1
+
+
 # ---------------------------------------------------------------------------
 # S12：参考图按文件字节入哈希；ff/lf 场景参考同源
 # ---------------------------------------------------------------------------
@@ -139,6 +201,19 @@ def test_frame_hash_changes_when_character_appearance_changes(tmp_path):
         shot, reference_paths=[str(ref)],
         characters=[{"identifier": "甲", "static_features": "矮胖", "dynamic_features": "白衣"}])
     assert a != b
+
+
+def test_last_frame_hash_changes_when_first_frame_bytes_change(tmp_path):
+    from shared.vimax_bridge import _get_frame_content_hash
+
+    ff = Path(_png(tmp_path / "ff.png"))
+    shot = {"index": 1, "main_subject": "甲", "ff_desc": "甲坐船", "lf_desc": "甲抬头"}
+    first = _get_frame_content_hash(shot, False, [str(ff)], lock_kind="no_layout",
+                                    characters=[], frame_kind="last_frame")
+    _png(ff, (255, 255, 255))
+    second = _get_frame_content_hash(shot, False, [str(ff)], lock_kind="no_layout",
+                                     characters=[], frame_kind="last_frame")
+    assert first != second
 
 
 def test_first_and_last_frame_share_scene_reference(monkeypatch, tmp_path):
