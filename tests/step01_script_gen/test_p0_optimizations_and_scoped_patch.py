@@ -374,23 +374,34 @@ def test_submission_and_frozen_request_use_persisted_retry_seed(tmp_path, monkey
     shot = _make_shot()
     script = {"characters": [], "shots": [shot]}
     monkeypatch.setattr(pb, "_build_prompt", lambda *a, **k: "prompt")
-    submitted = []
+    from tests.enhancements.video_stub_provider import StubVideoService
+
+    class CapturingService(StubVideoService):
+        def __init__(self):
+            super().__init__()
+            self.requests = []
+
+        def prepare_request(self, req, context=None):
+            self.requests.append(req)
+            return super().prepare_request(req, context)
+
     class Adapter:
-        async def submit_task(self, request):
-            submitted.append(request)
-            return "new-task"
+        def __init__(self):
+            self.service = CapturingService()
+
+    adapter = Adapter()
     async def poll(*a, **k):
         return True
     monkeypatch.setattr(sp, "_poll_video", poll)
     async def run():
         task = await sp._submit_video(shot, tmp_path, tmp_path / "video.mp4", [], "hash",
-                                     Adapter(), asyncio.Semaphore(1), script, 5)
+                                     adapter, asyncio.Semaphore(1), script, 5)
         assert await task is True
     asyncio.run(run())
     frozen, request = sp.build_frozen_for_shot(shot=shot, script=script, video_adapter=None,
         frame_paths=[], mode="A", shot_dir=tmp_path, prompt="prompt")
     base_request = pb._make_request(None, "prompt", [], shot)
-    assert submitted[0].seed == request.seed != base_request.seed
+    assert adapter.service.requests[0].seed == request.seed != base_request.seed
     assert sp._read_qc_retry_state(tmp_path)["count"] == 1
 
 
