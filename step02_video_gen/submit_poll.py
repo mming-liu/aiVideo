@@ -231,7 +231,9 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
         return t
 
     from step02_video_gen.prompt_builder import _build_prompt
-    from shared.style_prefix import get_style_prefix, NEGATIVE_PROMPT
+    from shared.style_prefix import style_profile
+
+    _style = style_profile(ratio="9:16")
 
     # Seedance 系（volcengine / agent_plan）走精简路径，缓存哈希必须跟随
     # （否则旧完整 prompt 生成的视频会被错误复用，refit 错乱）
@@ -272,8 +274,9 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
         f"merge_audio={os.getenv('MERGE_AUDIO_MODE', 'native')}",
         f"duration={shot.get('duration_sec') or shot.get('duration') or ''}",
         f"resolution={_resolution}",
-        get_style_prefix(),
-        NEGATIVE_PROMPT,
+        # 与 _make_request 实际发送内容同源：画风前缀（含 9:16 画幅）+ 当前画风负向词
+        _style.prefix,
+        _style.video_negative,
         _prompt_for_hash,
         shot.get("narration_segment", ""),
         # v4: 图片 prompt 变了帧就变了，I2V 参考图变了视频也应重做

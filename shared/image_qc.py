@@ -34,6 +34,8 @@ from shared.config import (
     AGNES_BASE_URL,
     QC_ARK_MODEL,
     QC_DASHSCOPE_BASE_URL,
+    QC_OPENCODE_MODEL,
+    QC_OPENCODE_TIMEOUT_SEC,
     VOLCENGINE_BASE_URL,
 )
 
@@ -43,6 +45,11 @@ QC_TIMEOUT_SEC = int(os.getenv("IMAGE_QC_TIMEOUT_SEC", "300"))
 # 2026-09-13 审计修复：默认值与 shared/config.py 对齐为 "1"（此前这里默认 "0"、
 # config.py 默认 "1"，删显式配置后行为随导入位置漂移）
 QC_WRITE_CRITICAL = os.getenv("IMAGE_QC_WRITE_CRITICAL", "1").strip() == "1"
+
+# OpenCode Go 视觉质检渠道（QC_PROVIDER=opencode 时唯一渠道）
+# 网关要求 x-opencode-session；同一进程内稳定即可（每次运行一个新会话）。
+_QC_SESSION_ID = (os.getenv("AGENT_PLAN_SESSION_ID", "").strip()
+                  or f"aivideo-qc-{os.getpid()}")
 
 # ds-vision-skill router 相对项目根的位置
 _ROUTER_REL = Path(".agents") / "skills" / "ds-vision-skill" / "scripts" / "vision-router.ps1"
@@ -180,6 +187,15 @@ def _shot_characters(shot: dict, characters: list | None) -> str:
     return "、".join(out) if out else "未知"
 
 
+def _active_style_head() -> str:
+    """当前生效画风的首句（QC prompt 说明"这是什么画风"，随 VIDEO_STYLE 变化）."""
+    try:
+        from shared.style_prefix import style_profile
+        return style_profile().head
+    except Exception:
+        return "当前画风"
+
+
 def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
                     empty_scene: bool = False) -> str:
     """构建质检 prompt（中文，要求视觉模型只返回严格 JSON）.
@@ -230,7 +246,7 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
         lines.append(
             "6. prompt_semantics 画面是否符合以上「画面描述」（重点核对："
             "人物发色/服装颜色、面部朝向（画左/画右/面向谁）、手持物品/姿势、"
-            "场景要素、人物数量——与描述明显不符才算问题；古风水墨风格笔触不算）"
+            "场景要素、人物数量——与描述明显不符才算问题；画风笔触不算）"
         )
     # v6.52 防线1：人数断言——给视觉模型一个具体数字去清点（模糊的「人物数量」
     # 检查项会被跳过；hook ff 画了 4 人 QC 判 0 问题实测）。容忍 +1（威胁源
@@ -291,8 +307,8 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
             f"画面实体人数多于 {allowed} → critical"
         )
     lines.extend([
-        "- 轻微瑕疵（背景小物、风格笔触、留白、水墨晕染）→ 不算问题，不得误判",
-        "- 该作品是古风水墨风格，水墨、留白、笔触、墨晕均属正常艺术风格",
+        "- 轻微瑕疵（背景小物、风格笔触、材质肌理）→ 不算问题，不得误判",
+        f"- 该作品画风为「{_active_style_head()}」，该画风的线条、上色、笔触与材质肌理均属正常艺术风格",
         "",
         "",
         "⚠️ 这是【已生成图片的质检任务】，不是生成任务：",
@@ -626,8 +642,54 @@ _GROUNDING_PROMPT = (
 )
 
 
+def _opencode_vision_chat(frame_path: str | Path, prompt: str) -> str:
+    """OpenCode Go 视觉通道（QC_PROVIDER=opencode 时唯一渠道）.
+
+    deepseek-v4.1-flash 在 opencode go /models 声明支持 image/png|jpeg|webp 输入，
+    因此图片 QC 不再绕 ds-vision-skill router（其 agnes 单次超时 300s，是 QC 慢的
+    主因），直接复用文本通道的 key / base_url / 会话头。
+    """
+    base = (os.getenv("AGENT_PLAN_TEXT_BASE_URL")
+            or os.getenv("AGENT_PLAN_BASE_URL") or "").rstrip("/")
+    key = os.getenv("AGENT_PLAN_API_KEY") or ""
+    if not base or not key:
+        raise RuntimeError(
+            "opencode 视觉质检未配置：需要 AGENT_PLAN_TEXT_BASE_URL + AGENT_PLAN_API_KEY")
+    data_url = _ark_image_data_url(frame_path)
+    resp = requests.post(
+        f"{base}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "x-opencode-session": _QC_SESSION_ID,
+        },
+        json={
+            "model": QC_OPENCODE_MODEL,
+            "messages": [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": data_url}},
+                {"type": "text", "text": prompt},
+            ]}],
+            "temperature": 0,
+            "max_tokens": _ARK_MAX_TOKENS,
+            "reasoning_effort": "none",
+        },
+        timeout=QC_OPENCODE_TIMEOUT_SEC,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"opencode {resp.status_code}: {resp.text[:200]}")
+    data = resp.json()
+    content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+    if not content:
+        raise RuntimeError("opencode 返回空内容")
+    return content
+
+
 def _vision_chat(frame_path: str | Path, prompt: str) -> str:
     """检测/问答共用的视觉对话传输层，按可用性链式回落，全失败抛异常.
+
+    2026-11-02（用户决定）：QC_PROVIDER=opencode 时**只走** OpenCode Go，
+    不回落 agnes/dashscope/ark（"不要用其他模型"）。
+    其余 provider 仍按旧链 agnes→dashscope→ark。
 
     实测（2026-08-29）：
     - ARK doubao-seed 视觉模型全部 404（该账号仅开通图片/视频生成，未开通
@@ -637,6 +699,9 @@ def _vision_chat(frame_path: str | Path, prompt: str) -> str:
     - dashscope qwen-vl-max 同样可用（输出偶发 JSON 畸形，_parse_entity_array
       已做容错修复）。
     """
+    if os.getenv("QC_PROVIDER", "auto").strip().lower() == "opencode":
+        return _opencode_vision_chat(frame_path, prompt)
+
     attempts = []
     agnes_key = os.getenv("AGNES_API_KEY") or ""
     agnes_base = (AGNES_BASE_URL or "").rstrip("/")
@@ -1714,10 +1779,21 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
         return QcResult(has_hallucination=False, issues=[], ok=True, raw_result="",
                         error="QC_PROVIDER=off")
 
-    router_result = qc_image(frame_path, prompt=prompt, shot=shot, frame_kind=frame_kind,
-                             characters=characters, empty_scene=empty_scene)
+    if provider == "opencode":
+        # 2026-11-02（用户决定）：图片 QC 只走 OpenCode Go，不再调
+        # ds-vision-skill router（agnes 单次 300s 超时 → QC 比生图还慢）。
+        # 通用语义 QC 这一层也由 deepseek-v4.1-flash 直接看图判定。
+        try:
+            _qc_prompt = build_qc_prompt(shot, frame_kind, characters, empty_scene)
+            router_result = parse_verdict(_opencode_vision_chat(frame_path, _qc_prompt))
+        except Exception as e:
+            return QcResult(has_hallucination=False, issues=[], ok=False,
+                            raw_result="", error=f"opencode QC 调用失败: {e}")
+    else:
+        router_result = qc_image(frame_path, prompt=prompt, shot=shot, frame_kind=frame_kind,
+                                 characters=characters, empty_scene=empty_scene)
 
-    if provider not in ("ark", "auto"):
+    if provider not in ("ark", "auto", "opencode"):
         return router_result
 
     all_issues: list[QcIssue] = []
@@ -1726,6 +1802,9 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
     entities: list[dict] | None = None
     ark_ok = True
     ark_error = ""
+    # 2026-11-02 修复：原定义在 if questions 内，无问题时第 3 层读它会
+    # UnboundLocalError，导致整次 QC 被丢弃（11-01/11-02 多次实证）。
+    unstable_flips: list[dict] = []
     try:
         # ── 第 1 层：grounding 出框 + 代码计数/查重 ──
         entries = _detect_entities(frame_path)
@@ -1773,7 +1852,6 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
             # 窄化 B 留痕：high 类跨 attempt 答案翻转（理论上矛盾率 <10%，
             # 出现意味着模型状态异常）→ 记 unstable_flips，仅审计不改 severity
             prev_answers = shot.get("_qc_prev_answers") or {}
-            unstable_flips: list[dict] = []
             for item in questions:
                 got = (answers or {}).get(item["q"], "unclear")
                 sev, new_streak = _claim_severity(item, got, streak)
@@ -1798,10 +1876,15 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
             # 更新 _qc_prev_answers 供下次 attempt 比对
             if answers:
                 shot["_qc_prev_answers"] = dict(answers)
-    except Exception as e:  # ARK 不可用 → 回落
+    except Exception as e:  # 检测层不可用
         ark_ok = False
-        ark_error = f"ARK 质检失败回落 router: {e}"
+        ark_error = f"视觉检测层失败: {e}"
 
+    if not ark_ok and provider == "opencode":
+        # 只走 OpenCode Go：检测层失败即本次 QC 失败（不拿其他模型兜底，
+        # 也不把"没查成"写成 clean sidecar）。
+        return QcResult(has_hallucination=False, issues=[], ok=False, raw_result="",
+                        error=ark_error)
     if not ark_ok and provider == "ark":
         # ARK 全挂：router 结果全权（legacy），否则本帧完全无闸
         out = router_result
@@ -1812,10 +1895,11 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
             out.error = (out.error + "；" + ark_error).strip("；")
         return out
 
-    # 第 3 层：router 整体质检强制降级为 warning（无放行权）
+    # 第 3 层：通用语义 QC 强制降级为 warning（无放行权）
+    _source = "opencode" if provider == "opencode" else "router"
     for issue in router_result.issues:
         all_issues.append(QcIssue(category=issue.category,
-                                  description=f"[router] {issue.description}",
+                                  description=f"[{_source}] {issue.description}",
                                   severity="warning"))
 
     has_critical = any(i.severity == "critical" for i in all_issues)

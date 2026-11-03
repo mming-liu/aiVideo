@@ -13,6 +13,7 @@ aiVideo 的 provider 是同步的（create_task → wait_for_completion → 下�
 
 import asyncio
 import os
+import re
 from pathlib import Path
 from typing import List, Optional
 from weakref import WeakKeyDictionary
@@ -23,7 +24,7 @@ import _image_gen
 import _video_gen
 from _image_gen import ImageGenerationRequest
 from _video_gen import VideoGenerationRequest
-from shared.style_prefix import get_style_prefix, STYLE_PREFIX_SHORT, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt
+from shared.style_prefix import style_profile, ensure_prefix, sanitize_prompt
 from shared.style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT, IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT, IMAGE_HALLUCINATION_EXTRA_NEGATIVE
 from shared.style_prefix import image_negative_prompt, video_negative_prompt, image_lock_prompt
 
@@ -158,7 +159,10 @@ class ImageGeneratorAiVideoAdapter:
 
         full_prompt = prompt
         if not skip_prefix:
-            full_prompt = sanitize_prompt(ensure_prefix(prompt, get_style_prefix())) if not skip_sanitize else ensure_prefix(prompt, get_style_prefix())
+            # 前缀跟随当前 VIDEO_STYLE，并按本适配器的实际画幅改写预设里写死的比例
+            # （anime 预设是「16:9短视频画幅」，直接拼进 9:16 竖图会画成横幅）。
+            _prefix = style_profile(ratio=_canvas_ratio(self.size)).prefix
+            full_prompt = sanitize_prompt(ensure_prefix(prompt, _prefix)) if not skip_sanitize else ensure_prefix(prompt, _prefix)
         elif not skip_sanitize:
             full_prompt = sanitize_prompt(prompt)
         else:
@@ -239,6 +243,14 @@ class ImageGeneratorAiVideoAdapter:
         return ImageOutput(fmt="pil", ext="png", data=img)
 
 
+def _canvas_ratio(size: str) -> str:
+    """从适配器尺寸串（如 1440x2560 / 2560*1440）推断画幅，未知按 9:16."""
+    m = re.match(r"\s*(\d+)\s*[x*]\s*(\d+)", str(size or ""))
+    if m and int(m.group(1)) > int(m.group(2)):
+        return "16:9"
+    return "9:16"
+
+
 class VideoGeneratorAiVideoAdapter:
     """把 ViMax 视频生成调用接到 aiVideo 的 _video_gen provider。
 
@@ -257,14 +269,17 @@ class VideoGeneratorAiVideoAdapter:
         size: str = "960x1792",  # 9:16 竖屏（⚠️ 与 _video_gen/models.py 默认 720x1280 不同，二者并存勿混用）
         duration: int = 5,
         negative_prompt: str | None = None,  # None=按 VIDEO_PROVIDER 自动（英文 token 仅 Agnes）
-        prefix: str = STYLE_PREFIX_SHORT,
+        prefix: str | None = None,  # None=当前 VIDEO_STYLE 的风格短前缀
         **_,
     ):
         self.size = size
         self.duration = duration
+        _profile = style_profile()
         # 英文负向词 token 仅 Agnes 使用，中文模型用纯中文版
-        self.negative_prompt = negative_prompt if negative_prompt is not None else video_negative_prompt()
-        self.prefix = prefix
+        self.negative_prompt = (negative_prompt if negative_prompt is not None
+                                else _profile.video_negative)
+        # 短前缀跟随当前画风（旧默认写死「古风真人」，切 anime 后会与首帧冲突）
+        self.prefix = prefix or _profile.head
         self._svc = _video_gen.create_service(_video_gen.config.PROVIDER)
 
     def get_key_index(self) -> int:

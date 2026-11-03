@@ -17,8 +17,8 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from shared import style_prefix
 from shared.style_prefix import (
-    STYLE_PREFIX, NEGATIVE_PROMPT, ensure_prefix, sanitize_prompt,
-    is_empty_scene, video_negative_prompt, style_lock_prompt,
+    style_profile, ensure_prefix, sanitize_prompt,
+    is_empty_scene, style_lock_prompt,
 )
 from shared.style_cinematic import get_cinematic_prefix, get_director_negative
 from shared.config import CINEMATIC_STYLE
@@ -1089,8 +1089,8 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
         )
 
     # ========== 8. 风格收束 ==========
-    # 跟随当前 VIDEO_STYLE（ink_painting 等），不再写死「写实古风真人」——
-    # 写死会与水墨首帧正面冲突（P0-1 同根因的视频侧入口）。
+    # 跟随当前 VIDEO_STYLE（anime / ink_painting / gufeng …），不再写死
+    # 「写实古风真人」——写死会与开启画风的首帧正面冲突。
     parts.append(style_lock_prompt())
 
     # ========== 8b. 色彩氛围锚点（spark-video mood_anchor 吸收）==========
@@ -1247,6 +1247,9 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     cinematic_prefix = (
         get_cinematic_prefix(CINEMATIC_STYLE) if CINEMATIC_STYLE else ""
     )
+    # 画风口径一次取齐：前缀（含 9:16 画幅）+ 视频负向词同一预设、同一时刻。
+    profile = style_profile(ratio="9:16")
+
     # Seedance 专用精简路径（2026-08-20 方案 2 上游精简）：从源头减少注入量，
     # 让 prompt 自然 ≤500 字符，provider 侧 compress 沦为兜底。
     # 其他 provider（bailian/agnes/minimax）继续用完整 _build_prompt，
@@ -1254,23 +1257,24 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     # volcengine / agent_plan 等 Seedance 系 provider 自动跟随，避免硬编码名单。
     from shared.model_caps import active_video_is_seedance
     if active_video_is_seedance():
-        # 跳过 cinematic_prefix + STYLE_PREFIX：Seedance 自身有风格倾向，
+        # 跳过 cinematic_prefix + 风格前缀：Seedance 自身有风格倾向，
         # 长风格前缀是噪声（与"drop 风格收束"对称）
         full_prompt = _build_seedance_concise_prompt(shot, characters=characters)
     else:
-        # 完整 prompt 路径（其他 provider 不动）
+        # 完整 prompt 路径：前缀跟随当前画风，画幅用调用方画幅
+        # （预设里写死的 16:9 会与 9:16 请求打架）。
         full_prompt = sanitize_prompt(
-            ensure_prefix(prompt, STYLE_PREFIX), verbose=False
+            ensure_prefix(prompt, profile.prefix), verbose=False
         )
         if cinematic_prefix:
             full_prompt = cinematic_prefix + full_prompt
 
     # _MODEL_VOICE=0 时（旧行为），负面提示词追加人声类条目（双保险）。
-    # 英文 token 仅 Agnes 使用，中文模型用纯中文版（video_negative_prompt 按 VIDEO_PROVIDER 判定）
+    # 英文 token 仅 Agnes 使用，中文模型用纯中文版（profile 按 VIDEO_PROVIDER 判定）
     negative = (
-        video_negative_prompt()
+        profile.video_negative
         if _model_voice_enabled()
-        else video_negative_prompt() + "、人声、旁白配音、对话语音、歌声"
+        else profile.video_negative + "、人声、旁白配音、对话语音、歌声"
     )
     # 物理逻辑约束：防止违反常识的场景（车马上船、水上行走等）
     negative += (

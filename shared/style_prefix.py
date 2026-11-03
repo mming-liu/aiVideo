@@ -1,10 +1,11 @@
-"""古风视觉风格前缀与全局渲染配置 — aiVideo 单一来源.
+"""视觉风格前缀与全局渲染配置 — aiVideo 单一来源.
 
-固定前缀在四处出现，必须逐字一致：
-  - step01_script_gen/prompts.py 的 PROMPT_TEMPLATE（LLM 生成 shot.prompt 时被要求以此开头）
-  - 本模块 STYLE_PREFIX（02b_vimax_gen.py / vimax_adapters.py 运行时复用）
-  - skill_spy.txt Skill1（参考文档）
-改动任一处须同步其余三处。
+画风由 `VIDEO_STYLE` 选择（STYLE_PRESETS）。**下游唯一入口是 `style_profile()`**：
+一次取齐前缀（含画幅）/图片负向词/视频负向词/标签，不再直接读 STYLE_PRESETS 或
+任何「某画风专用」常量。切换 `VIDEO_STYLE` 即整体生效。
+
+切换画风会改变实际发送的 prompt 与负向词：图片/视频的内容哈希随之失效，重新
+生成产生的是新请求身份，不是同一次请求的缓存复用。
 """
 
 from __future__ import annotations
@@ -14,21 +15,24 @@ import json
 import os
 import re
 from dataclasses import dataclass, field, asdict
+from pathlib import Path
 from typing import Optional
 
+# 画风来自 .env.content 的 VIDEO_STYLE。这里显式加载一次（幂等、shell 优先），
+# 避免「先 import style_prefix、后 import config」时静默退回 gufeng——那会让
+# 同一份配置因导入顺序不同而生效值不同。
+from dotenv import load_dotenv as _load_dotenv
+_load_dotenv(Path(__file__).resolve().parent.parent / ".env.content")
+
 # ===========================================================================
-# 一、固定前缀（四源一致）
+# 一、风格入口
 # ===========================================================================
-
-STYLE_PREFIX = (
-    "古风真人影视剧，9:16竖屏，电影质感，暗调低饱和，"
-    "光影随场景自然变化，浅景深缓慢推镜，写实古风风格，高清1080P，"
-    "轻微电影胶片颗粒，真实镜头微反差，轻微自然暗角"
-)
-
-# 精简版前缀（用于减少 token 占用）
-STYLE_PREFIX_SHORT = "古风真人"
-
+# 画风由 VIDEO_STYLE 选择，运行时统一走 style_profile() / style_prefix_for_canvas()
+# / video_negative_prompt()。不要再新增「某画风专用」的前缀/负向词常量——
+# 那正是切画风时四处漏改的来源。
+#
+# NEGATIVE_PROMPT 只保留为 script 顶层 negative_prompt 的历史元数据（gufeng 口径），
+# 生成请求不使用它；请求口径见 video_negative_prompt() / image_negative_prompt()。
 NEGATIVE_PROMPT = "动漫风格、动画、2D渲染、卡通脸、卡通人物、三头身、Q版、动漫脸、画风突变、畸形五官、异形船只、四叶草、现代服装、现代建筑、现代楼房、水泥建筑、玻璃幕墙、电线杆、汽车、摩托车、现代设施、3D渲染、塑料质感、English text, watermark, logo, English speech、画面字幕、中文文字、水印"
 
 # ===============================================================================
@@ -73,19 +77,57 @@ IMAGE_HALLUCINATION_LOCK_PROMPT_CN = "面部锁定，统一五官，固定服装
 IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT_CN = "面部锁定，统一五官，固定服装，无多余杂物"
 
 
-def video_negative_prompt() -> str:
-    """视频负向词：英文 token 仅 Agnes 使用；中文模型用纯中文版."""
+# 与画风无关的通用负向词（现代物件 / 文字水印）：所有画风共用。
+# 刻意不并进 STYLE_PRESETS——它们不是画风特征，切换画风时仍须保留。
+STYLE_NEUTRAL_NEGATIVE = (
+    "现代服装、现代建筑、现代楼房、水泥建筑、玻璃幕墙、电线杆、汽车、摩托车、"
+    "现代设施、画面字幕、中文文字、水印"
+)
+
+# 英文文字水印负向词：仅英文向 provider（Agnes）需要
+_EN_TEXT_NEGATIVE = "English text, watermark, logo, English speech"
+
+
+def _negative_terms(text: str) -> list[str]:
+    """拆分负向词（兼容「、」「，」「,」混排）."""
+    return [t.strip() for t in re.split(r"[、,，]", text or "") if t.strip()]
+
+
+def _merge_negative(*parts: str) -> str:
+    """按出现顺序合并负向词并去重."""
+    merged: list[str] = []
+    for part in parts:
+        for term in _negative_terms(part):
+            if term not in merged:
+                merged.append(term)
+    return "、".join(merged)
+
+
+def video_negative_prompt(style: str | None = None) -> str:
+    """视频负向词：当前画风负向词 + 与画风无关的通用词.
+
+    2026-11-02：旧实现无条件返回 NEGATIVE_PROMPT（含「动漫风格、动画、2D渲染、
+    卡通脸…」），而那是古风真人（gufeng）的负向词——切到 anime 后，一边让首帧
+    画二次元、一边在反向提示里禁二次元，画风被自己的负向词压掉。现在按当前
+    VIDEO_STYLE 取预设负向词再并通用词；gufeng 的合并结果与旧 NEGATIVE_PROMPT
+    同集合（顺序略异），默认画风行为不变。
+
+    英文 token 仅 Agnes 使用；中文模型用纯中文版。
+    """
+    negative = _merge_negative(get_style_negative(style), STYLE_NEUTRAL_NEGATIVE)
     if os.getenv("VIDEO_PROVIDER", "bailian") == "agnes":
-        return NEGATIVE_PROMPT
-    return NEGATIVE_PROMPT_CN
+        return _merge_negative(negative, _EN_TEXT_NEGATIVE)
+    english = set(_negative_terms(_EN_TEXT_NEGATIVE))
+    return "、".join(t for t in _negative_terms(negative) if t not in english)
 
 
-def image_negative_prompt() -> str:
-    """图片负向词：英文 token 仅 Agnes 使用；中文模型用纯中文版."""
-    negative = get_style_negative()
+def image_negative_prompt(style: str | None = None) -> str:
+    """图片负向词：当前画风预设负向词；英文 token 仅 Agnes 使用."""
+    negative = get_style_negative(style)
     if os.getenv("IMAGE_PROVIDER", "bailian") == "agnes":
         return negative
-    return negative.replace("English text, watermark, logo, English speech", "")
+    english = set(_negative_terms(_EN_TEXT_NEGATIVE))
+    return "、".join(t for t in _negative_terms(negative) if t not in english)
 
 
 def image_lock_prompt(layout_lock: bool = True) -> str:
@@ -228,17 +270,22 @@ def get_style_prefix(name: str = None) -> str:
 _RATIO_TOKEN_RE = re.compile(r"\b\d+:\d+(?:电影宽幅|短视频画幅|竖屏|横屏|画幅)?")
 
 
-def style_prefix_for_canvas(ratio: str = "16:9") -> str:
+def _canvas_prefix(prefix: str, ratio: str) -> str:
+    """剥掉预设里写死的比例词，再按调用方画幅追加."""
+    cleaned = _RATIO_TOKEN_RE.sub("", prefix)
+    cleaned = re.sub(r"[，,]\s*[，,]", "，", cleaned).strip("，, ")
+    return f"{cleaned}；{ratio}画幅"
+
+
+def style_prefix_for_canvas(ratio: str = "16:9", style: str | None = None) -> str:
     """当前生效风格 + 调用方画幅（预设里写死的比例由画幅拥有者改写）.
 
     风格预设（STYLE_PRESETS[*].prefix）各自写死了 16:9/9:16，但资产图与分镜帧
     的画幅由调用方决定：把预设前缀原样拼进 9:16 帧 prompt，文字说 16:9、请求
-    参数说 9:16，模型会按文字画成横幅/留黑边（ink_painting 预设正是
-    「16:9电影宽幅」）。这里剥掉预设里的比例词，再按调用方画幅追加。
+    参数说 9:16，模型会按文字画成横幅/留黑边（anime 预设正是「16:9短视频画幅」）。
+    style 缺省取当前 VIDEO_STYLE；显式传入供预检/测试遍历预设。
     """
-    prefix = _RATIO_TOKEN_RE.sub("", get_style_prefix())
-    prefix = re.sub(r"[，,]\s*[，,]", "，", prefix).strip("，, ")
-    return f"{prefix}；{ratio}画幅"
+    return _canvas_prefix(get_style_prefix(style), ratio)
 
 
 def asset_style_prefix(ratio: str = "16:9") -> str:
@@ -255,10 +302,11 @@ def style_lock_prompt() -> str:
     非 Seedance 供应商仍会走到的完整路径。收束句由当前风格前缀首句与该风格
     负向词前三条派生。
     """
-    head = get_style_prefix().split("，")[0].strip()
-    terms = [t.strip() for t in get_style_negative().replace("，", "、").split("、")
-             if t.strip()]
-    banned = "、".join(terms[:3]) or "其他画风"
+    profile = style_profile()
+    # 预设首句可能自带「画风/风格」后缀（anime 是「…漫剧画风」），
+    # 直接再加「风格」会拼成「画风风格」。
+    head = re.sub(r"(风格|画风)$", "", profile.head) or profile.head
+    banned = "、".join(_negative_terms(profile.negative)[:3]) or "其他画风"
     return (f"整段视频每一帧都保持{head}风格，首尾画风完全一致，"
             f"禁止中途转为{banned}或任何非本片画风的画面。")
 
@@ -268,21 +316,56 @@ def get_style_negative(name: str = None) -> str:
     return get_style_preset(name)["negative"]
 
 
+def style_head(name: str = None) -> str:
+    """画风前缀首句（预设的自我描述，如「高清国漫二次元漫剧画风」）."""
+    return get_style_prefix(name).split("，")[0].strip()
+
+
+def style_label(name: str = None) -> str:
+    """画风短名（去掉末尾「影视剧/动画/画风/风格」），供展示与质检文案."""
+    head = style_head(name)
+    return re.sub(r"(影视剧|动画|画风|风格)$", "", head).strip() or head
+
+
+@dataclass(frozen=True)
+class StyleProfile:
+    """当前画风的完整运行时口径（下游唯一入口）.
+
+    prefix 已按 ratio 改写写死的比例；negative 为图片口径，video_negative 为
+    视频口径（含与画风无关的通用词）。所有字段在同一时刻取自同一预设。
+    """
+    name: str
+    label: str
+    head: str
+    prefix: str
+    ratio: str
+    negative: str
+    video_negative: str
+
+
+def style_profile(name: str | None = None, ratio: str = "9:16") -> StyleProfile:
+    """取当前（或指定）画风的完整口径.
+
+    下游不要再直接读 STYLE_PRESETS / NEGATIVE_PROMPT：前缀、负向词、画幅、
+    标签一次取齐，切换 VIDEO_STYLE 即整体生效。name 缺省取环境变量。
+    """
+    resolved = (name or os.environ.get("VIDEO_STYLE", "gufeng")).strip() or "gufeng"
+    if resolved not in STYLE_PRESETS:
+        resolved = "gufeng"
+    return StyleProfile(
+        name=resolved,
+        label=style_label(resolved),
+        head=style_head(resolved),
+        prefix=style_prefix_for_canvas(ratio, resolved),
+        ratio=ratio,
+        negative=image_negative_prompt(resolved),
+        video_negative=video_negative_prompt(resolved),
+    )
+
+
 # ===========================================================================
 # 五、全局渲染配置（兼容旧代码）
 # ===========================================================================
-
-# 分层负面词（从紧到松，可根据平台审核阈值切换）
-NEGATIVE_LAYERS = {
-    "strict": (
-        "动漫风格、动画、2D渲染、卡通脸、卡通人物、三头身、Q版、"
-        "塑料质感、过曝、赛博荧光、西式建筑、机械齿轮、"
-        "现代字体、logo水印、AI伪影、重复纹理、不合理手指、扭曲边缘"
-    ),
-    "normal": NEGATIVE_PROMPT,
-    "relaxed": "动漫风格、动画、2D渲染、现代服装",
-}
-
 
 def get_global_render_config() -> dict:
     """获取当前全局渲染配置（可从 .env.content 覆盖）.
@@ -390,8 +473,14 @@ def sanitize_script_shots(script: dict, verbose: bool = True) -> dict:
     return script
 
 
-def ensure_prefix(prompt: str, prefix: str = STYLE_PREFIX) -> str:
-    """若 prompt 未以 prefix 开头则拼接，已含则原样返回."""
+def ensure_prefix(prompt: str, prefix: str | None = None) -> str:
+    """若 prompt 未以 prefix 开头则拼接，已含则原样返回.
+
+    prefix 缺省取当前画风的 9:16 前缀——画风由 VIDEO_STYLE 决定，
+    不再默认拼古风真人（gufeng）常量。
+    """
+    if prefix is None:
+        prefix = style_prefix_for_canvas("9:16")
     if prefix and prefix.split("，")[0] not in prompt.split("，")[0]:
         return f"{prefix}，{prompt}"
     return prompt

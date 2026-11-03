@@ -145,15 +145,19 @@ vimax_bridge.py 将 step01 产出的 script_result.json 翻译为 ViMax 工作�
 - Prompt 哈希缓存：每镜记录 prompt hash，只有 prompt 变化时才重新生成帧
 
 适配器：
-- ImageGeneratorAiVideoAdapter：强制竖屏 9:16，复用风格前缀 + 合规化清洗
-- VideoGeneratorAiVideoAdapter：拼前缀 + 合规化 + 首帧/尾帧参考图
+- ImageGeneratorAiVideoAdapter：按适配器画幅取当前 `VIDEO_STYLE` 风格前缀 + 合规化清洗
+- VideoGeneratorAiVideoAdapter：拼当前画风短前缀 + 合规化 + 首帧/尾帧参考图
+
+画风由 `VIDEO_STYLE` 选择（`STYLE_PRESETS`）。下游统一走 `style_profile()`：一次取齐
+前缀（含画幅）/图片负向词/视频负向词/标签；前缀、负向词与风格收束句不再各自写死。
+切换画风会改变实际请求文本与内容哈希。
 
 ---
 
 ## 六、内容合规与敏感词
 
 style_prefix.py：
-- 定义固定 STYLE_PREFIX
+- 画风预设 STYLE_PRESETS；运行时唯一入口 `style_profile()`（`NEGATIVE_PROMPT` 仅为 script 顶层历史元数据）
 - sanitize_prompt()：替换敏感词（暴力/色情/恐怖）
 - validate_sensitive_words()：残留敏感词校验
 - inject_global_config_into_script()：注入全局渲染参数
