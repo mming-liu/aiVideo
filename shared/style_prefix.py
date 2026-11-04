@@ -87,9 +87,8 @@ STYLE_NEUTRAL_NEGATIVE = (
 # 英文文字水印负向词：仅英文向 provider（Agnes）需要
 _EN_TEXT_NEGATIVE = "English text, watermark, logo, English speech"
 
-# S24：船篷类具象物的负向词。正向 prompt 已把「无篷…」改写为敞口结构，
-# 这里再压低扩散模型对乌篷/竹编篷的名词激活。
-_NEGATED_OBJECT_NEGATIVE = "乌篷、竹编船篷、船顶棚、遮阳棚"
+# S25：船篷类负向词不再进全局画风负向词——其他输入可能本来就有篷船/
+# 遮阳棚。只在具体船戏的正向结构里描述“敞口”，不做全局压制。
 
 
 def _negative_terms(text: str) -> list[str]:
@@ -118,8 +117,7 @@ def video_negative_prompt(style: str | None = None) -> str:
 
     英文 token 仅 Agnes 使用；中文模型用纯中文版。
     """
-    negative = _merge_negative(get_style_negative(style), STYLE_NEUTRAL_NEGATIVE,
-                               _NEGATED_OBJECT_NEGATIVE)
+    negative = _merge_negative(get_style_negative(style), STYLE_NEUTRAL_NEGATIVE)
     if os.getenv("VIDEO_PROVIDER", "bailian") == "agnes":
         return _merge_negative(negative, _EN_TEXT_NEGATIVE)
     english = set(_negative_terms(_EN_TEXT_NEGATIVE))
@@ -128,7 +126,7 @@ def video_negative_prompt(style: str | None = None) -> str:
 
 def image_negative_prompt(style: str | None = None) -> str:
     """图片负向词：当前画风预设负向词；英文 token 仅 Agnes 使用."""
-    negative = _merge_negative(get_style_negative(style), _NEGATED_OBJECT_NEGATIVE)
+    negative = get_style_negative(style)
     if os.getenv("IMAGE_PROVIDER", "bailian") == "agnes":
         return negative
     english = set(_negative_terms(_EN_TEXT_NEGATIVE))
@@ -503,8 +501,10 @@ _NEGATED_OBJECT_REWRITES = (
     ("无篷木船", "敞口平甲板木船"),
     ("无篷小船", "敞口平甲板小船"),
     ("无篷船", "敞口平甲板船"),
-    ("无船篷", "敞口无遮挡甲板"),
-    ("无顶棚", "敞口无遮挡甲板"),
+    ("无船篷", "敞口无遮挡船"),
+    # 只改写带船/舟的“无顶棚”，裸“无顶棚院落/车辆”保持原样。
+    ("无顶棚船", "敞口无遮挡船"),
+    ("无顶棚舟", "敞口无遮挡舟"),
 )
 
 

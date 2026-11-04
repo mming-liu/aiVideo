@@ -95,6 +95,7 @@ def build_protection_alpha(
     snap_borders: bool = False,
     snap_threshold: float = 0.05,
     exclude_bboxes=(),
+    protect_masks=(),
     protect_bright_garment: bool = False,
     protect_skin: bool = False,
     protect_foreground_foliage: bool = False,
@@ -125,6 +126,12 @@ def build_protection_alpha(
     protected = np.zeros((h, w), dtype=bool)
     for b in exclude_bboxes or ():
         protected |= _bbox_binary((w, h), b)
+    for m in protect_masks or ():
+        # 通用合同：调用方给出显式保护 mask；颜色阈值只是可选辅助。
+        ma = np.asarray(m)
+        if ma.shape != (h, w):
+            raise ValueError(f"protect mask 尺寸不一致: {ma.shape} vs {(h, w)}")
+        protected |= ma.astype(bool)
 
     arr = np.asarray(original.convert("RGB"))
     hh, ss, vv = _rgb_hsv(arr)
@@ -172,6 +179,7 @@ def compose_protected_edit(
     snap_borders: bool = False,
     snap_threshold: float = 0.05,
     exclude_bboxes=(),
+    protect_masks=(),
     protect_bright_garment: bool = False,
     protect_skin: bool = False,
     protect_foreground_foliage: bool = False,
@@ -186,6 +194,7 @@ def compose_protected_edit(
     alpha = build_protection_alpha(
         original, bbox_ratio, feather=feather, snap_borders=snap_borders,
         snap_threshold=snap_threshold, exclude_bboxes=exclude_bboxes,
+        protect_masks=protect_masks,
         protect_bright_garment=protect_bright_garment,
         protect_skin=protect_skin,
         protect_foreground_foliage=protect_foreground_foliage,

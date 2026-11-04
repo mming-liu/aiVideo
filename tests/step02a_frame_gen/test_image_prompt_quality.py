@@ -28,6 +28,26 @@ def test_final_prompt_lint_flags_s25_markers():
     assert "image_final_prompt_length" in cats
 
 
+def test_final_prompt_offscreen_entity_warning(monkeypatch, tmp_path):
+    import step02a_frame_gen.image_prompt_quality as _q
+    monkeypatch.setattr(_q, "chapter_dir", lambda: tmp_path)
+    script = {
+        "characters": [{"identifier": "甲"}, {"identifier": "乙"}],
+        "shots": [{
+            "index": 1, "location": "湖湾",
+            "ff_desc": "甲站在船板上，乙在远处岸上。",
+            "lf_desc": "甲站在船板上。",
+            "frame_layouts": {
+                "ff": [{"name": "甲", "on_screen": True, "position": "船板", "pose": "站在船板上"}],
+                "lf": [{"name": "甲", "on_screen": True, "position": "船板", "pose": "站在船板上"}],
+            },
+        }],
+    }
+    r = _q.collect_image_prompt_quality(script, write=False)
+    cats = [w["category"] for w in r["warnings"]]
+    assert "image_final_prompt_offscreen_entity" in cats
+
+
 def test_image_quality_clean(monkeypatch,tmp_path):
     import step02a_frame_gen.image_prompt_quality as _q
     collect_image_prompt_quality = _q.collect_image_prompt_quality

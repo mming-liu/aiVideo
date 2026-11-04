@@ -91,6 +91,18 @@ def collect_image_prompt_quality(script: dict, *, write: bool = True) -> dict:
                 for w in _lint_final_prompt(final, shot, kind):
                     w.update({"shot": idx, "field": f"{field}_full", "frame": kind})
                     warnings.append(w)
+                # G01/G02：用事实投影检查未出镜实体是否被写进最终 Prompt。
+                try:
+                    from shared.prompt_facts import (
+                        project_frame_facts, audit_prompt_against_projection)
+                    proj = project_frame_facts(shot, kind, chars)
+                    if proj.get("entities"):
+                        for p in audit_prompt_against_projection(final, proj, chars):
+                            p.update({"category": "image_final_prompt_offscreen_entity",
+                                      "shot": idx, "field": f"{field}_full", "frame": kind})
+                            warnings.append(p)
+                except Exception:
+                    pass
         except Exception:
             pass
     payload = {

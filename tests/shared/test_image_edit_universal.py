@@ -99,6 +99,15 @@ def test_repair_plan_outputs_snapped_defect_and_protect_bboxes():
     assert plan["protect_bboxes"] == [(0.1, 0.2, 0.3, 0.8)]
 
 
+def test_explicit_protect_mask_is_strict_zero():
+    original = _original()
+    mask = np.zeros((300, 300), dtype=bool)
+    mask[110:150, 70:110] = True
+    alpha = build_protection_alpha(original, CORE, feather=0, protect_masks=[mask])
+    assert int(alpha[120, 80]) == 0
+    assert int(alpha[120, 150]) > 0
+
+
 def test_exclude_bboxes_are_strict_zero():
     original = _original()
     alpha = build_protection_alpha(

@@ -2489,7 +2489,7 @@ def _extract_char_layout(
             _boat_probe = f"{pose} {pos}"
             if (any(w in _boat_probe for w in _BOAT_SURFACE_WORDS)
                     and not any(w in _boat_probe for w in _BOAT_WATER_WORDS)):
-                _boat_bound.append({"pose": pose, "position": pos})
+                _boat_bound.append({"name": ident, "pose": pose, "position": pos})
 
         # S23-4：非注册但本帧 on_screen 的 spec 条目（远景农人/群演）补进
         # 【角色锚定】，否则正文有、锚定块漏。只拼该条目自己的 pose/position/
@@ -2512,34 +2512,23 @@ def _extract_char_layout(
             _extra_probe = f"{_pose} {_pos}"
             if (any(w in _extra_probe for w in _BOAT_SURFACE_WORDS)
                     and not any(w in _extra_probe for w in _BOAT_WATER_WORDS)):
-                _boat_bound.append({"pose": _pose, "position": _pos})
+                _boat_bound.append({"name": _name, "pose": _pose, "position": _pos})
 
         if not parts:
             return ""
         block = "【角色锚定】" + "，".join(parts)
 
-        # v6.63 通用船上容量/落脚锚：只由本帧 spec/站位里的船板事实驱动，
-        # 不用作品名、角色名或 location 是否含「船」。同船 ≥2 人时给出
-        # 相对人体宽度的船板下限，并要求每人双脚在船板内侧。
-        if len(_boat_bound) >= 2 and "船板宽度至少" not in block:
-            _n_boat = len(_boat_bound)
-            _poses_boat = " ".join(str(x.get("pose") or "") for x in _boat_bound)
-            _has_seat = any(w in _poses_boat for w in ("坐", "盘膝", "跪坐"))
-            _has_stand = any(w in _poses_boat for w in ("立", "站"))
-            _capacity = f"。⚠️ 本镜同船{_n_boat}人：船板宽度至少可并排容纳{_n_boat}人"
-            if _n_boat == 2 and _has_seat:
-                _capacity += "（不小于坐者肩宽的2.5倍）"
-            elif _n_boat == 2:
-                _capacity += "（不小于人物肩宽的2.5倍）"
-            else:
-                _capacity += f"（按{_n_boat}人肩宽合计再留出半个肩宽）"
-            _capacity += ("；全员双脚与裙摆底端均落在木船舱内同一甲板平面，"
-                          "船舷木帮完整包裹全员下肢外侧，"
-                          "严禁人物站在船舷外侧水面或荷叶中")
-            if _has_seat and _has_stand:
-                _capacity += "；坐者与站者并排后，站者脚下仍有船板空档"
-            _capacity += "；船体保持完整，不因人物拥挤截断船头船尾"
-            block += _capacity
+        # S25：船上约束只绑定本帧 spec 明确在船上的角色，不再用“所有角色/
+        # 其余角色”概括；容量也不从人数直接推“并排”或“同一甲板平面”。
+        _boat_names = [str(x.get("name") or "").strip()
+                       for x in _boat_bound if str(x.get("name") or "").strip()]
+        _boat_names = list(dict.fromkeys(_boat_names))
+        if _boat_names and "各自所在船" not in block:
+            # 不按人数推“同船/并排”：多船、前后排列、不同甲板都合法。
+            block += (f"。⚠️ 船上角色{'、'.join(_boat_names)}各自所在船的船板宽度"
+                      "至少为单人居坐宽度的2.5倍；不同船分别计算，不合并；"
+                      "按前后/并排实际站位留出落脚空档，不要求并排，"
+                      "也不强制同一甲板平面；各自鞋底/裙摆在本船船板内侧")
 
         # 威胁源朝向兜底：有威胁源而 scan 无朝向表达 → 追加描述句
         # v6.61：spec 模式下「威胁源在 onstage」= spec 判定该帧可见，scan 含
@@ -2563,9 +2552,9 @@ def _extract_char_layout(
             # 改写为描述性短句「身体朝攻击目标方向，目光与攻击对象同侧」。
             block += "，身体朝攻击目标方向，目光与攻击对象同侧"
 
-        # v6.53.1：收集「水面角色」（surface/pose 表明身体在水里）——船体锚的
-        # 「所有角色必须严格在船上」与 desc「神秘人半身探出水面」直接矛盾，
-        # 模型随机调和（hook ff 画成推船随行实测）。分句后矛盾消除。
+        # v6.53.1：收集「水面角色」（surface/pose 表明身体在水里）。S25 已
+        # 去掉“所有角色必须在船上”，改为船上/岸上/水中分句，避免与
+        # desc「神秘人半身探出水面」或岸上老农直接矛盾。
         _WATER_MARKS = ("水面", "水中", "水下", "半身", "潜")
         _water_names: list[str] = []
         for c in onstage:
@@ -2588,80 +2577,69 @@ def _extract_char_layout(
             if any(w in _water_probe for w in _WATER_MARKS):
                 _water_names.append(ident_c)
 
-        # 船体完整性锚（首/尾/关键帧共用）：场景含船且画面有角色 → 补"完整小舟、
-        # 船头船尾齐全"。08-23 从 water_state 条件拆出——首帧（water_state=False）
-        # 原先不补，图片模型照 ff_desc 的"延伸出画外"裁掉船尾；船体完整是基础
-        # 构图约束不是动作状态，不应随首帧省略。
-        try:
-            import json as _json
-            from shared.paths import script_file
-            script_path = script_file()
-            if script_path.exists():
-                script = _json.load(open(script_path, encoding="utf-8"))
-                objs = script.get("scene_objects", {}) or {}
-                boat = next((o for o in objs.values()
-                             if isinstance(o, dict) and o.get("category") == "船"), None)
-                # 2026-09-12 根因修复：船体完整性条款加「本镜在船上」门控——原实现
-                # 只要 bank 有船条目就对本章所有镜头全局开火，把岸上镜头的角色也硬
-                # 扳到船上（镜8 张十三在湾堤上，连续 3 次被画成在船上/水中）。
-                # 仅当本镜 location/scene 表明是船上场景（船/舟/舱/甲板）才注入。
-                _boat_scan = " ".join(filter(None, [
-                    str(shot.get("location", "") or ""), str(shot.get("scene", "") or ""),
-                    str(shot.get("main_subject", "") or ""),
-                    str(shot.get("ff_desc", "") or ""), str(shot.get("lf_desc", "") or ""),
-                    str(shot.get("motion_desc", "") or shot.get("prompt", "") or ""),
-                ]))
-                _on_boat_scene = any(w in _boat_scan for w in ("船", "舟", "舱", "甲板"))
-                # S25：不再要求 scene_objects 里已有船条目；本帧 spec 有船上角色
-                # （_boat_bound）同样证明这是船戏，必须补“全员在船上”硬锚。
-                if (_on_boat_scene and (boat or _boat_bound)
-                        and "完整小舟" not in block and "整船" not in block):
-                    # v6.45（08-26）⚠️ 强调前缀——image model 对末尾约束遵守率低，
-                    # 加 ⚠️ 符号提升视觉权重（与"画面稳定·不闪烁"等约束同款模式）。
-                    if _water_names:
-                        # v6.61：spec 模式用各角色自己的 spec pose 描述水面状态——
-                        # 旧模板硬编码「半身浸在船侧水中、呈袭击/威胁姿态」，
-                        # 对 ff「潜伏水下仅暗影」过于激进（把模型推向画完整
-                        # 袭击者，09-05 hook ff 4 次 critical 链一环）。
-                        _pose_by_name = {
-                            str(((_spec_by_ident.get(c.get("identifier", "")) or {}).get("pose", "")) or "").strip()
-                            for c in onstage if c.get("identifier", "") in _water_names
-                        }
-                        _pose_by_name.discard("")
-                        if _spec_items is not None and _pose_by_name:
-                            _wnames = "、".join(_water_names)
-                            _poses = "、".join(sorted(_pose_by_name))
-                            block += (f"。⚠️ 完整小舟在画中、船头船尾齐全不缺失。"
-                                      f"{_wnames}处于水面/水中（{_poses}），"
-                                      f"身体朝向船上目标（禁止推船、撑船、扶船随行）；"
-                                      f"其余角色必须严格在船上，禁止出现在船外水面")
-                        else:
-                            # 有水面角色：船上/水中分句，并点名袭击姿态（防「推船随行」）
-                            _wnames = "、".join(_water_names)
-                            block += (f"。⚠️ 完整小舟在画中、船头船尾齐全不缺失。"
-                                      f"{_wnames}半身浸在船侧水中、身体静止面向船上目标，"
-                                      f"呈袭击/威胁姿态（禁止推船、撑船、扶船随行）；"
-                                      f"其余角色必须严格在船上，禁止出现在船外水面")
-                    else:
-                        block += "。⚠️ 完整小舟在画中、船头船尾齐全不缺失，**所有角色必须严格在船上**，禁止任何角色出现在船外水面/船头船尾缺失"
-        except Exception:
-            pass
-        # S25：script_result.json 缺失/无 scene_objects 时，上面的 boat 分支
-        # 整体跳过；只要本帧 spec 有船上角色，仍必须补“全员在船上”硬锚。
-        if "完整小舟" not in block and "整船" not in block and _boat_bound:
-            _fb_scan = " ".join(filter(None, [
-                str(shot.get("location", "") or ""), str(shot.get("scene", "") or ""),
-                str(shot.get("main_subject", "") or ""),
-                str(shot.get("ff_desc", "") or ""), str(shot.get("lf_desc", "") or ""),
-                str(shot.get("motion_desc", "") or shot.get("prompt", "") or ""),
-            ]))
-            if any(w in _fb_scan for w in ("船", "舟", "舱", "甲板")):
-                if _water_names:
-                    block += ("。⚠️ 完整小舟在画中、船头船尾齐全不缺失，"
-                              "其余角色必须严格在船上，禁止出现在船外水面")
-                else:
-                    block += ("。⚠️ 完整小舟在画中、船头船尾齐全不缺失，"
-                              "**所有角色必须严格在船上**，禁止任何角色出现在船外水面/船头船尾缺失")
+        # S25：船上/岸上/水中角色分句，绑定具体角色，不写“所有/其余”。
+        _all_stage_names = [str(c.get("identifier", "")).strip() for c in onstage]
+        _all_stage_names += [str(_si.get("name", "")).strip() for _si in _spec_extra_items]
+        _all_stage_names = [n for n in dict.fromkeys(_all_stage_names) if n]
+        _shore_names = [n for n in _all_stage_names
+                        if n not in _boat_names and n not in _water_names]
+
+        def _boat_scope_clause() -> str:
+            parts = []
+            if _boat_names:
+                parts.append(
+                    "船上角色" + "、".join(_boat_names)
+                    + "各自落在本船船板/甲板内侧，鞋底与裙摆不越出船体轮廓，"
+                      "禁止站在船外水面或荷叶中")
+            if _shore_names:
+                parts.append(
+                    "岸上/远景角色" + "、".join(_shore_names)
+                    + "保持原位，不得被拉上船或改到水面")
+            if _water_names:
+                parts.append(
+                    "水中角色" + "、".join(_water_names)
+                    + "保持水中/原有承载面，不得改成站在船上")
+            if not parts:
+                return ""
+            return "。⚠️ 各船船头船尾齐全不缺失；" + "；".join(parts)
+
+        # S25：船体完整性只补“完整小舟”；角色约束由 _boat_scope_clause
+        # 按本帧船上/岸上/水中名单分别绑定，不再写“所有角色/其余角色”。
+        _boat_scan = " ".join(filter(None, [
+            str(shot.get("location", "") or ""), str(shot.get("scene", "") or ""),
+            str(shot.get("main_subject", "") or ""),
+            str(shot.get("ff_desc", "") or ""), str(shot.get("lf_desc", "") or ""),
+            str(shot.get("motion_desc", "") or shot.get("prompt", "") or ""),
+        ]))
+        _on_boat_scene = any(w in _boat_scan for w in ("船", "舟", "舱", "甲板"))
+        if (_on_boat_scene and (_boat_bound or _water_names)
+                and "各船船头船尾" not in block):
+            block += _boat_scope_clause()
+
+        # S25 通用实体—承载面合同：由 spec 显式 support 字段驱动，不限于船。
+        # 不按人数推并排/宽度/共面；只陈述“谁在哪个承载实体的哪个面”。
+        _support_rows = []
+        for _si in (_spec_items or []):
+            _sup = _si.get("support")
+            if isinstance(_sup, dict):
+                _sid = str(_sup.get("id", "") or "").strip()
+                _skind = str(_sup.get("kind", "") or "").strip()
+                _ssurf = str(_sup.get("surface", "") or "").strip()
+            else:
+                _sid = str(_si.get("support_id", "") or "").strip()
+                _skind = str(_si.get("support_kind", "") or "").strip()
+                _ssurf = str(_si.get("support_surface", "") or "").strip()
+            _sname = str(_si.get("name", "") or "").strip()
+            if _sname and (_sid or _skind or _ssurf):
+                _support_rows.append((_sname, _sid, _skind, _ssurf))
+        if _support_rows and "承载关系" not in block:
+            _support_parts = []
+            for _sname, _sid, _skind, _ssurf in _support_rows:
+                _label = _skind or "承载面"
+                _ref = f"{_label}{(' ' + _sid) if _sid else ''}"
+                _support_parts.append(
+                    f"{_sname}位于{_ref}{('的' + _ssurf) if _ssurf else ''}")
+            block += "。⚠️ 承载关系：" + "；".join(_support_parts)
         # 关键帧补水面浪花（动作状态锚定，仅关键帧）
         if water_state:
             if ("破水" in scan or "刺" in scan or "浪花" in scan or "出水" in scan) \
@@ -3202,31 +3180,64 @@ def _closeup_directive(shot: dict, frame_kind: str, kf_index: int | None = None)
     return ""
 
 
-_LATER_STATE_WORDS = ("落水", "散发", "凌乱", "湿透", "受伤", "昏迷", "倒地", "血")
+_LATER_STATE_WORDS = ("落水", "散发", "凌乱", "湿透", "受伤", "昏迷", "倒地",
+                     "血迹", "血污")
 
 
-def _strip_later_timeline_clauses(dynamic: str, frame_desc: str) -> str:
-    """剥离全章 dynamic_features 里的“后续镜头”状态尾巴.
+def _state_present_for_char(text: str, state: str) -> bool:
+    """当前角色文本里是否**肯定**出现该状态（排除“未/无/没有/不”否定）."""
+    import re as _re
+    for m in _re.finditer(re.escape(state), str(text or "")):
+        pre = str(text)[max(0, m.start() - 3):m.start()]
+        if not any(neg in pre for neg in ("未", "无", "没有", "不", "非")):
+            return True
+    return False
 
-    例：听香 dynamic 含“，后步摇落水，披头散发”，本帧只是平静抚箫；
-    若本帧描述没有这些后续状态词，从“，后/随后/之后…”起截断，避免后续
-    遇袭状态提前污染当前帧。当前帧确实写了这些状态时保持原样。
+
+def _select_states_by_contract(dynamic: str, allowed_states) -> str:
+    """显式状态合同：只保留 allowed_states 里的状态分句。
+
+    这是通用入口；调用方必须给出本帧该角色有效状态（可含继承状态）。
+    不在 allowed 里的状态分句被丢弃；静态服装/头饰分句保留。
     """
     text = str(dynamic or "")
-    desc = str(frame_desc or "")
+    allowed = {str(s).strip() for s in (allowed_states or []) if str(s).strip()}
     if not text:
         return text
-    if any(w in desc for w in _LATER_STATE_WORDS):
+    import re as _re
+    kept = []
+    for clause in (c.strip() for c in _re.split(r"[，、,；;]", text) if c.strip()):
+        states = [w for w in _LATER_STATE_WORDS if w in clause]
+        if (not states or any(w in allowed for w in states)
+                or any(a in clause for a in allowed)):
+            kept.append(clause)
+    return "，".join(kept)
+
+
+def _strip_later_timeline_clauses(dynamic: str, frame_desc: str,
+                                  current_text: str | None = None) -> str:
+    """按本帧角色文本过滤 dynamic_features 中的状态分句.
+
+    旧实现用“本帧提到任意状态词”做全局开关，且“，后”后整段截断；这里改为
+    逐分句、逐角色：只保留本帧该角色文本里**肯定出现**的状态分句；静态服装/
+    头饰分句始终保留。当前文本写“未受伤/没有散发”不视为状态成立。
+    """
+    text = str(dynamic or "")
+    current = str(current_text if current_text is not None else frame_desc or "")
+    if not text:
         return text
     import re as _re
-    m = _re.search(
-        r"[，、,]\s*(?:随后|之后|后来|事后|继而|后)"
-        r"(?=[^，。；]{0,40}(?:落水|散发|凌乱|湿透|受伤|昏迷|倒地|血))",
-        text,
-    )
-    if m:
-        return text[:m.start()].rstrip("，、, ")
-    return text
+    clauses = [c.strip() for c in _re.split(r"[，、,；;]", text) if c.strip()]
+    kept = []
+    for clause in clauses:
+        states = [w for w in _LATER_STATE_WORDS if w in clause]
+        if not states:
+            kept.append(clause)          # 服装/头饰/静态特征
+            continue
+        if any(_state_present_for_char(current, w) for w in states):
+            kept.append(clause)          # 本帧该角色确实处于此状态
+        # 否则只丢这个状态分句，不按“后”字砍掉后续所有静态信息
+    return "，".join(kept)
 
 
 def _inject_frame_spec(
@@ -3291,7 +3302,18 @@ def _inject_frame_spec(
             dynamic = (c.get("dynamic_features") or "").strip()
             if not static and not dynamic:
                 continue
-            dynamic = _strip_later_timeline_clauses(dynamic, desc)
+            # 只用本角色 spec 的 pose/position/props 判当前状态；
+            # 不把整段 desc（含其他角色）拼进来，避免“乙受伤”给甲放行。
+            _current_state_text = " ".join(filter(None, [
+                str(item.get("pose", "") or ""),
+                str(item.get("position", "") or ""),
+                " ".join(str(p) for p in (item.get("props") or [])),
+            ])) or desc
+            if isinstance(item.get("states"), list):
+                dynamic = _select_states_by_contract(dynamic, item.get("states"))
+            else:
+                # 旧章无 states 字段时保留兼容启发式；新数据应显式给 states。
+                dynamic = _strip_later_timeline_clauses(dynamic, desc, _current_state_text)
             # Current-frame explicit costume/state wins over the cross-chapter
             # bank description.  Stable facial features still come from static.
             if dynamic and _current_frame_has_costume(desc, ident, characters):
@@ -3586,21 +3608,33 @@ async def _accept_doodle_refinement(refined, target, shot, frame_kind, character
     return True
 
 
-_LONGITUDINAL_MOTION_WORDS = (
-    "驶入", "驶向", "驶去", "驶远", "驶至", "行至", "行向", "远去", "深处",
-    "前行", "渐行渐远", "向远方",
+_EXPLICIT_VEHICLE_MOTION = (
+    (r"(?:船|舟|车|轿|载具)[^，。；]{0,20}(?:向|朝|沿)画面(?:上方|上)", "up"),
+    (r"(?:船|舟|车|轿|载具)[^，。；]{0,20}(?:向|朝|沿)画面(?:下方|下)", "down"),
+    (r"(?:船|舟|车|轿|载具)[^，。；]{0,20}(?:向画面左|向画面右|横向)", "horizontal"),
+    (r"(?:船|舟|车|轿|载具)[^，。；]{0,20}(?:迎面|向镜头|驶近|靠近镜头)", "approach"),
 )
 
 
 def _fixed_camera_shift_anchor(desc: str) -> str:
-    """固定机位下的载具纵向位移提示（防 I2I 只擦背景假装移动）."""
+    """只消费输入明确写出的载具屏幕方向；不凭“深处/前行”猜 Y 轴位移."""
+    import re as _re
     text = str(desc or "")
-    if not any(w in text for w in _LONGITUDINAL_MOTION_WORDS):
+    if "纵向" in text or "近大远小" in text or "横向移动" in text:
         return ""
-    if "纵向" in text or "近大远小" in text:
-        return ""
-    return ("；船体与人物整体沿画面纵向（Y轴）向上移动并随距离略微缩小（近大远小），"
-            "船尾水面留下连续尾迹；不得用擦除中景荷叶或替换背景代替位移")
+    for pat, direction in _EXPLICIT_VEHICLE_MOTION:
+        if not _re.search(pat, text):
+            continue
+        if direction == "up":
+            return ("；该载具与乘员沿画面纵向向上移动并随距离略微缩小（近大远小），"
+                    "不得用擦除背景代替位移")
+        if direction == "down":
+            return ("；该载具与乘员沿画面纵向向下移动并略微放大（近大远小），"
+                    "不得用擦除背景代替位移")
+        if direction == "horizontal":
+            return "；该载具与乘员沿画面横向移动，不改变船体尺度，不得用擦除背景代替位移"
+        return "；该载具与乘员向镜头靠近并略微放大，不得用擦除背景代替位移"
+    return ""
 
 
 def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
