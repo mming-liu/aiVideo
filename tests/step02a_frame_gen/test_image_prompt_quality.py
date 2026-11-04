@@ -15,6 +15,19 @@ def test_image_quality_reports_video_leak(monkeypatch,tmp_path):
     assert r['warning_count']==1
     assert r['warnings'][0]['category']=='image_video_directive_leak'
 
+def test_final_prompt_lint_flags_s25_markers():
+    import step02a_frame_gen.image_prompt_quality as q
+    text = ("无篷舴艋舟，young男子，披头散发，"
+            + "船板中央" * 3 + "x" * 900)
+    cats = {w["category"] for w in q._lint_final_prompt(
+        text, {"ff_desc": "平静湖面"}, "first_frame")}
+    assert "image_final_prompt_negated_object" in cats
+    assert "image_final_prompt_untranslated_age" in cats
+    assert "image_final_prompt_stale_state" in cats
+    assert "image_final_prompt_repeated_phrase" in cats
+    assert "image_final_prompt_length" in cats
+
+
 def test_image_quality_clean(monkeypatch,tmp_path):
     import step02a_frame_gen.image_prompt_quality as _q
     collect_image_prompt_quality = _q.collect_image_prompt_quality

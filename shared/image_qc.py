@@ -1258,6 +1258,11 @@ def build_repair_plan(shot: dict, frame_kind: str, result) -> dict:
                 "matched_patterns": matched}
 
     region = _union_bboxes(all_boxes)
+    bbox_ratio = tuple(round(c / 1000.0, 4) for c in region)  # 0-1000 → 0-1
+    # S24：贴边吸附，避免 x=0.00..0.05 这类边缘残留；面积按吸附后重算。
+    from shared.image_edit import snap_bbox_to_borders
+    bbox_ratio = snap_bbox_to_borders(bbox_ratio)
+    region = tuple(c * 1000.0 for c in bbox_ratio)
     area = _bbox_area_pct(region)
     # v6.x.x：按模式分阈值——knife_contact 是真正"局部"修复（接触带小区域），
     # 保留 70%；其他模式（glowing/eyes_closed/costume_color/holding_wrong/
@@ -1277,10 +1282,16 @@ def build_repair_plan(shot: dict, frame_kind: str, result) -> dict:
                 "reason": f"修复区域占画幅 {area:.0f}%，超过 {threshold}% 阈值",
                 "matched_patterns": matched}
 
-    bbox_ratio = tuple(round(c / 1000.0, 4) for c in region)  # 0-1000 → 0-1
+    protect_bboxes = []
+    for p in persons:
+        pb = p.get("bbox")
+        if _bbox_valid(pb):
+            protect_bboxes.append(tuple(round(float(c) / 1000.0, 4) for c in pb))
     return {
         "action": "edit",
         "bbox_ratio": bbox_ratio,
+        "defect_bbox": bbox_ratio,
+        "protect_bboxes": protect_bboxes,
         "edit_prompt": (f"修改图中红框区域：{'；'.join(instructions)}。"
                         "红框外的画面内容严格保持原样，不得改动构图、人物与其他元素。"),
         "matched_patterns": matched,

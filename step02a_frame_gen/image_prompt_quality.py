@@ -21,6 +21,38 @@ from shared.quality_gate import attach_gate_metadata
 _VIDEO_ONLY_TERMS = ("运镜", "推镜", "推近", "拉镜", "拉远", "跟拍", "环绕镜", "转场", "时长")
 
 
+def _lint_final_prompt(prompt: str, shot: dict, frame_kind: str) -> list[dict]:
+    """S25：对“最终组装 Prompt”做离线体检（不是只查 ff_desc 字段）."""
+    import re
+    from collections import Counter
+
+    out: list[dict] = []
+    text = str(prompt or "")
+    if not text:
+        return out
+    if "无篷" in text or "无船篷" in text:
+        out.append({"category": "image_final_prompt_negated_object",
+                    "message": "final prompt still contains 无篷/无船篷"})
+    if re.search(r"young\s*(男子|女子)", text):
+        out.append({"category": "image_final_prompt_untranslated_age",
+                    "message": "final prompt contains untranslated young男子/女子"})
+    desc = " ".join(str(shot.get(k) or "") for k in ("ff_desc", "lf_desc", "main_subject"))
+    if ("披头散发" in text or "后步摇落水" in text) and not any(
+            w in desc for w in ("披头散发", "落水", "散发", "凌乱")):
+        out.append({"category": "image_final_prompt_stale_state",
+                    "message": "final prompt contains later-scene disheveled state"})
+    han = re.sub(r"[^\u4e00-\u9fff]", "", text)
+    grams = Counter(han[i:i + 4] for i in range(max(0, len(han) - 3)))
+    repeated = [g for g, n in grams.most_common(5) if n >= 3]
+    if repeated:
+        out.append({"category": "image_final_prompt_repeated_phrase",
+                    "message": f"repeated 4-char phrases: {repeated[:3]}"})
+    if len(text) > 800:
+        out.append({"category": "image_final_prompt_length",
+                    "message": f"final prompt {len(text)} > 800 chars"})
+    return out
+
+
 def collect_image_prompt_quality(script: dict, *, write: bool = True) -> dict:
     warnings: list[dict] = []
     targets = ([script.get("hook")] if isinstance(script.get("hook"), dict) else []) + list(script.get("shots") or [])
@@ -48,6 +80,19 @@ def collect_image_prompt_quality(script: dict, *, write: bool = True) -> dict:
         if len(lf) > 120:
             warnings.append({"category": "image_lf_desc_length", "shot": idx,
                              "message": f"lf_desc {len(lf)} > 120"})
+        # S25：最终组装 Prompt 体检（复用生产组装入口，避免“只查原始字段”）
+        try:
+            from shared.vimax_bridge import compose_frame_prompt
+            chars = script.get("characters") or []
+            for kind, field in (("first_frame", "ff_desc"), ("last_frame", "lf_desc")):
+                if not str(shot.get(field) or ""):
+                    continue
+                final = compose_frame_prompt(shot, chars, kind)
+                for w in _lint_final_prompt(final, shot, kind):
+                    w.update({"shot": idx, "field": f"{field}_full", "frame": kind})
+                    warnings.append(w)
+        except Exception:
+            pass
     payload = {
         "warning_count": len(warnings),
         "warnings": warnings,

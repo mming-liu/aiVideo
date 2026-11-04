@@ -53,6 +53,26 @@ def test_asset_prefix_keeps_landscape_ratio(monkeypatch):
     assert "电影宽幅" not in asset
 
 
+def test_negated_boat_rewrites_remove_canopy_words():
+    from shared.style_prefix import preprocess_prompt_for_image, image_negative_prompt
+
+    out = preprocess_prompt_for_image("无篷舴艋舟，无顶棚")
+    assert "无篷" not in out
+    assert "无顶棚" not in out
+    assert "敞口平甲板木质舴艋小舟" in out
+    assert "乌篷" in image_negative_prompt("anime")
+
+
+def test_fixed_camera_longitudinal_shift_anchor():
+    from shared.vimax_bridge import _fixed_camera_shift_anchor
+
+    text = "无篷小舟缓缓驶入荷塘深处"
+    assert "纵向" in _fixed_camera_shift_anchor(text)
+    assert "近大远小" in _fixed_camera_shift_anchor(text)
+    assert "纵向" in _fixed_camera_shift_anchor("无篷小舟已行至开阔水面")
+    assert _fixed_camera_shift_anchor("船停在原处，人物对坐") == ""
+
+
 def test_canvas_ratio_reduces_square_and_landscape():
     from shared.vimax_adapters import _canvas_ratio
 
@@ -108,6 +128,185 @@ def test_frame_hash_changes_when_style_changes(monkeypatch):
                         lambda *a, **k: "另一种画风；9:16画幅")
     second = bridge._get_frame_content_hash(shot, False, [], lock_kind="layout", characters=[])
     assert first != second
+
+
+def _boat_shot(positions, poses):
+    ff = [{"name": name, "on_screen": True, "position": pos, "pose": pose}
+          for name, pos, pose in zip(("甲", "乙", "丙"), positions, poses)]
+    return {
+        "index": 1, "location": "湖湾", "scene": "湖湾",
+        "ff_desc": "甲坐在船板上，乙站在船板上。",
+        "lf_desc": "甲坐在船板上，乙站在船板上。",
+        "frame_layouts": {"ff": ff, "lf": ff},
+    }
+
+
+def _boat_chars():
+    return [{"identifier": "甲"}, {"identifier": "乙"}, {"identifier": "丙"}]
+
+
+def test_boat_capacity_anchor_uses_spec_not_location():
+    import shared.vimax_bridge as bridge
+
+    shot = _boat_shot(
+        ("船板中央", "船板右侧", "远处岸上"),
+        ("盘膝坐在船板中央", "站在船板上撑伞", "牵牛缓行"),
+    )
+    block = bridge._extract_char_layout(shot, _boat_chars(), frame_kind="first_frame")
+
+    # location 是「湖湾」，不含「船」字；锚必须由 spec 站位触发。
+    assert "同船2人" in block
+    assert "船板宽度至少可并排容纳2人" in block
+    assert "不小于坐者肩宽" in block
+    assert "站者脚下仍有船板空档" in block
+    assert "同一甲板平面" in block
+    assert "船舷木帮完整包裹" in block
+    assert "所有角色必须严格在船上" in block
+
+
+def test_boat_capacity_anchor_counts_three_boat_bound():
+    import shared.vimax_bridge as bridge
+
+    shot = _boat_shot(
+        ("船板中央", "船板右侧", "船尾船板"),
+        ("盘膝坐在船板中央", "站在船板上撑伞", "跪坐在船尾船板上"),
+    )
+    block = bridge._extract_char_layout(shot, _boat_chars(), frame_kind="first_frame")
+    assert "同船3人" in block
+    assert "船板宽度至少可并排容纳3人" in block
+    assert "按3人肩宽合计再留出半个肩宽" in block
+
+
+def test_boat_capacity_counts_unregistered_extra():
+    import shared.vimax_bridge as bridge
+
+    ff = [
+        {"name": "甲", "on_screen": True, "position": "船板中央", "pose": "盘膝坐在船板中央"},
+        {"name": "乙", "on_screen": True, "position": "船板右侧", "pose": "站在船板上"},
+        {"name": "丁", "on_screen": True, "position": "船尾船板", "pose": "站在船尾船板上"},
+    ]
+    shot = {
+        "index": 1, "location": "湖湾", "scene": "湖湾",
+        "ff_desc": "甲坐在船板上，乙和丁站在船板上。",
+        "lf_desc": "甲坐在船板上，乙和丁站在船板上。",
+        "frame_layouts": {"ff": ff, "lf": ff},
+    }
+    block = bridge._extract_char_layout(
+        shot, [{"identifier": "甲"}, {"identifier": "乙"}], frame_kind="first_frame")
+    assert "同船3人" in block
+    assert "船板宽度至少可并排容纳3人" in block
+
+
+def test_boat_capacity_anchor_excludes_water_and_non_boat():
+    import shared.vimax_bridge as bridge
+
+    water = _boat_shot(
+        ("船板中央", "船侧水面", "远处岸上"),
+        ("盘膝坐在船板中央", "半身浸在水中", "牵牛缓行"),
+    )
+    block = bridge._extract_char_layout(water, _boat_chars(), frame_kind="first_frame")
+    assert "同船2人" not in block
+
+    shore = _boat_shot(
+        ("岸上", "田埂", "远处岸上"),
+        ("坐在岸上", "站在田埂", "牵牛缓行"),
+    )
+    block = bridge._extract_char_layout(shore, _boat_chars(), frame_kind="first_frame")
+    assert "船板宽度至少" not in block
+
+
+def test_later_timeline_clause_stripped_for_calm_frame():
+    from shared.vimax_bridge import _strip_later_timeline_clauses
+
+    dynamic = "春衫，头戴步摇，后步摇落水，披头散发"
+    assert _strip_later_timeline_clauses(dynamic, "听香立于船板抚箫") == "春衫，头戴步摇"
+    assert "披头散发" in _strip_later_timeline_clauses(dynamic, "听香披头散发立于船板")
+
+
+def test_prop_layout_prefers_spec_and_does_not_cross_comma(monkeypatch, tmp_path):
+    import json
+    import shared.paths as paths
+    import shared.vimax_bridge as bridge
+
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps({"prop_assets": {
+        "钓杆": {"consistent_terms": [], "category": "道具"},
+        "酒壶": {"consistent_terms": [], "category": "道具"},
+    }}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(paths, "script_file", lambda: script)
+
+    shot = {
+        "index": 1, "location": "湖湾", "scene": "湖湾", "main_subject": "甲",
+        "ff_desc": "甲左手持钓杆，右手提酒壶。", "lf_desc": "甲左手持钓杆，右手提酒壶。",
+    }
+    block = bridge._extract_prop_layout(shot, [{"identifier": "甲"}])
+    assert "钓杆在左手" in block
+    assert "酒壶在右手" in block
+    assert "钓杆在右手" not in block
+
+    shot["frame_layouts"] = {"ff": [{"name": "甲", "on_screen": True,
+                                     "position": "船板", "pose": "坐在船板上",
+                                     "props": ["钓杆", "酒壶"]}]}
+    spec_block = bridge._extract_prop_layout(shot, [{"identifier": "甲"}], frame_kind="first_frame")
+    assert "钓杆在甲左手" in spec_block
+    assert "酒壶在甲右手" in spec_block
+    assert "钓杆在甲右手" not in spec_block
+
+
+def test_char_layout_does_not_copy_pose_into_facing():
+    import shared.vimax_bridge as bridge
+
+    shot = _boat_shot(
+        ("船板中央", "船板右侧", "远处岸上"),
+        ("盘坐持箫", "站立撑伞", "牵牛缓行"),
+    )
+    for item in shot["frame_layouts"]["ff"]:
+        item.pop("gaze_target", None)
+    block = bridge._extract_char_layout(shot, _boat_chars(), frame_kind="first_frame")
+    assert block.count("盘坐持箫") == 1
+    assert "（盘坐持箫）" not in block
+    assert "，位于船板中央" in block
+
+
+def test_age_label_and_negative_enum_removed():
+    from shared.style_prefix import add_image_strict_constraints
+
+    shot = {"location": "湖湾", "scene": "湖湾", "ff_desc": "甲站在湖边",
+            "lf_desc": "甲站在湖边", "main_subject": "甲"}
+    out = add_image_strict_constraints(
+        "甲站在湖边", "首帧", shot,
+        [{"identifier": "甲", "gender": "male", "age_range": "young"}])
+    assert "年轻男子" in out
+    assert "young男子" not in out
+    assert "河流" not in out
+    assert "没有刀" not in out
+    assert "请在心中" not in out
+
+
+def test_first_frame_threat_onscreen_does_not_say_not_emerged():
+    from shared.style_prefix import add_image_strict_constraints
+
+    shot = {"location": "湖湾", "scene": "湖湾",
+            "ff_desc": "神秘人半身探出水面，右手高举匕首。",
+            "lf_desc": "水面恢复平静。", "main_subject": "神秘人"}
+    out = add_image_strict_constraints(
+        "神秘人半身探出水面，右手高举匕首。", "首帧", shot,
+        [{"identifier": "神秘人", "gender": "male", "age_range": "young"}])
+    assert "尚未出水" not in out
+    assert "已入画" in out
+
+
+def test_threat_alias_not_double_counted():
+    from shared.style_prefix import add_image_strict_constraints
+
+    shot = {"location": "湖湾", "scene": "湖湾",
+            "ff_desc": "神秘人右手握持短匕潜伏。", "lf_desc": "水面恢复平静。",
+            "main_subject": "神秘人"}
+    out = add_image_strict_constraints(
+        "神秘人右手握持短匕潜伏。", "首帧", shot,
+        [{"identifier": "神秘人", "gender": "male", "age_range": "young"}])
+    assert "神秘人、刺客" not in out
+    assert "总共1人" in out
 
 
 def test_protected_composite_preserves_outside():

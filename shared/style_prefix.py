@@ -87,6 +87,10 @@ STYLE_NEUTRAL_NEGATIVE = (
 # 英文文字水印负向词：仅英文向 provider（Agnes）需要
 _EN_TEXT_NEGATIVE = "English text, watermark, logo, English speech"
 
+# S24：船篷类具象物的负向词。正向 prompt 已把「无篷…」改写为敞口结构，
+# 这里再压低扩散模型对乌篷/竹编篷的名词激活。
+_NEGATED_OBJECT_NEGATIVE = "乌篷、竹编船篷、船顶棚、遮阳棚"
+
 
 def _negative_terms(text: str) -> list[str]:
     """拆分负向词（兼容「、」「，」「,」混排）."""
@@ -114,7 +118,8 @@ def video_negative_prompt(style: str | None = None) -> str:
 
     英文 token 仅 Agnes 使用；中文模型用纯中文版。
     """
-    negative = _merge_negative(get_style_negative(style), STYLE_NEUTRAL_NEGATIVE)
+    negative = _merge_negative(get_style_negative(style), STYLE_NEUTRAL_NEGATIVE,
+                               _NEGATED_OBJECT_NEGATIVE)
     if os.getenv("VIDEO_PROVIDER", "bailian") == "agnes":
         return _merge_negative(negative, _EN_TEXT_NEGATIVE)
     english = set(_negative_terms(_EN_TEXT_NEGATIVE))
@@ -123,7 +128,7 @@ def video_negative_prompt(style: str | None = None) -> str:
 
 def image_negative_prompt(style: str | None = None) -> str:
     """图片负向词：当前画风预设负向词；英文 token 仅 Agnes 使用."""
-    negative = get_style_negative(style)
+    negative = _merge_negative(get_style_negative(style), _NEGATED_OBJECT_NEGATIVE)
     if os.getenv("IMAGE_PROVIDER", "bailian") == "agnes":
         return negative
     english = set(_negative_terms(_EN_TEXT_NEGATIVE))
@@ -490,6 +495,19 @@ def ensure_prefix(prompt: str, prefix: str | None = None) -> str:
 # 图片生成严格约束（防止 AI 幻觉，2026-07-26）
 # ============================================================================
 
+# S24：否定具象物的正向改写——扩散模型对「篷/舟」名词强激活，常忽略「无」。
+# 正向 prompt 不出现「无篷」组合，直接描述敞口甲板结构；长词优先。
+_NEGATED_OBJECT_REWRITES = (
+    ("无篷舴艋舟", "敞口平甲板木质舴艋小舟"),
+    ("无篷小舟", "敞口平甲板小舟"),
+    ("无篷木船", "敞口平甲板木船"),
+    ("无篷小船", "敞口平甲板小船"),
+    ("无篷船", "敞口平甲板船"),
+    ("无船篷", "敞口无遮挡甲板"),
+    ("无顶棚", "敞口无遮挡甲板"),
+)
+
+
 def preprocess_prompt_for_image(prompt: str) -> str:
     """图片生成前预处理：替换 AI 可能误解的词汇.
 
@@ -529,6 +547,8 @@ def preprocess_prompt_for_image(prompt: str) -> str:
             result = _PINGDING_RE.sub(_lock_black, result)
         else:
             result = result.replace(old, new)
+    for old, new in _NEGATED_OBJECT_REWRITES:
+        result = result.replace(old, new)
     return result
 
 
@@ -1451,6 +1471,20 @@ def extract_orientation(desc: str, characters=None) -> list[tuple[str, str]]:
     return result
 
 
+_AGE_LABEL_ZH = {
+    "young": "年轻", "youth": "年轻", "teen": "少年", "teenager": "少年",
+    "middle": "中年", "middle_aged": "中年", "middle-aged": "中年",
+    "old": "老年", "elderly": "老年", "child": "孩童", "kid": "孩童",
+}
+
+
+def _age_label(value) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "年轻"
+    return _AGE_LABEL_ZH.get(raw.lower(), raw)
+
+
 def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                                  shot: dict | None = None,
                                  characters: list | None = None) -> str:
@@ -1465,9 +1499,8 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
           出场名单取镜头文本中实际出现的角色名。
     """
     strict_constraints = (
-        "【强制】你必须严格参照以下描述的具体细节来生成画面。"
-        "禁止AI自由发挥。"
-        "画面中只允许出现描述中明确提到的角色，禁止凭空添加任何额外人物。"
+        "【强制】严格按以下画面描述生成。"
+        "画面中只允许出现描述明确提到的角色，不添加额外人物。"
         # v6.50（08-29）参考图样式污染防护：15:42 钩子首帧实测——白底道具参考图
         # 的版式混入主画面（下 1/3 变成白底产品图）。参考图只借"内容"不借"版式"。
         "画面必须是完整连贯的单幅场景环境，"
@@ -1495,7 +1528,7 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
         if location:
             strict_constraints += (
                 f"【场景地点】本画面发生地点必须是{location}。"
-                f"严格遵守该地点特征，禁止画成其他场景（如河流/江面/室内/街道）。"
+                "严格遵守该地点特征，禁止偏移到其他地点。"
             )
 
     # 根据镜头实际内容动态生成角色约束（不再硬编码刺客/第一章角色名）
@@ -1576,7 +1609,7 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
             # "武器只能由刺客持有"又写"刺客手中没有武器"自相矛盾。
             others = [c["identifier"] for c in present_chars
                       if c["identifier"] not in _THREAT_NAMES]
-            _no_weapon = "".join(f"{n}手中没有武器，没有刀，没有剑，没有短刃。" for n in others)
+            _no_weapon = "".join(f"{n}双手不持武器。" for n in others)
             _not_threat = "".join(f"{n}不能蒙面，{n}不是刺客。" for n in others)
             strict_constraints += (
                 "【武器归属】武器（短刃、刀、剑）只能由刺客持有。"
@@ -1601,13 +1634,13 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
             ident = c["identifier"]
             gender = (c.get("gender") or "").strip().lower()
             if gender in ("female", "女", "女子"):
-                age_note = (c.get("age_range") or "").strip() or "年轻"
+                age_note = _age_label(c.get("age_range"))
                 strict_constraints += (
                     f"【性别】{ident}是{age_note}女子，面容符合设定；"
                     "必须画成女性，禁止男性化/中性化。"
                 )
             elif gender in ("male", "男", "男子"):
-                age_note = (c.get("age_range") or "").strip() or "青年"
+                age_note = _age_label(c.get("age_range") or "青年")
                 strict_constraints += (
                     f"【性别】{ident}是{age_note}男子；必须画成男性。"
                 )
@@ -1620,8 +1653,12 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
         _count_chars = [c for c in present_chars
                         if c["identifier"] not in _THREAT_NAMES or _threat_onscreen]
         char_names = list(dict.fromkeys(c["identifier"] for c in _count_chars))
-        if has_threat and _threat_onscreen and "刺客" not in char_names:
-            char_names.append("刺客")
+        if has_threat and _threat_onscreen and not any(
+                n in _THREAT_NAMES for n in char_names):
+            # S25：不要把“刺客”硬追加到已经是“神秘人/蒙面人”的名单上，
+            # 否则同一人会被写成“神秘人、刺客，总共2人”。
+            _threat_label = next((n for n in _THREAT_NAMES if n in shot_text), "刺客")
+            char_names.append(_threat_label)
         # S23-1：非注册但本帧 on_screen 的角色（远景农人/群演）并入允许名单。
         for _n in _extra_on_screen:
             if _n not in char_names:
@@ -1694,7 +1731,7 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
         if len(_cl_items) >= 3 and char_names:
             strict_constraints += (
                 f"【画面人数硬锚】本画面共 {len(char_names)} 个角色：{'、'.join(char_names)}。"
-                "请在心中逐个清点画面人物，多于上述名单即错误。"
+                "画面中不得多画名单之外的角色。"
             )
 
         # v6.20：帧朝向强化——参考图三视图是伪三视图（side/back 0.95+ 相似度，
@@ -1727,8 +1764,12 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
         # 「前一刻」（破水前/未刺中），画面必须干净无血。血污/伤口只允许出现在尾帧。
         if frame_type == "首帧" and has_threat:
             _victim_note = "。".join(f"{c['identifier']}胸口、身上必须干净无伤" for c in present_chars)
+            # S25：威胁源已在本帧可见（半身探出/举刀）时不得再写“尚未出水”，
+            # 否则前段“破水探出”与后段“尚未出水”直接矛盾。
+            _threat_note = ("刺客尚未出水、未刺中任何人。" if not _threat_onscreen
+                            else "刺客已入画，但尚未刺中任何人。")
             strict_constraints += (
-                "【首帧禁血】这是动作开始前的画面，刺客尚未出水、未刺中任何人。"
+                f"【首帧禁血】这是动作开始前的画面，{_threat_note}"
                 "所有人物身上禁止血迹、血污、血点、洇痕；眼睛禁止充血/泛红/血丝。"
                 f"{_victim_note}。"
             )
