@@ -2747,11 +2747,29 @@ _EVIDENCE_QUOTE = re.compile(
 )
 
 
+#: 一个引号都没有时的回退：取「原文依据/原文证据」标签后的整段（截到 ｜ / 行尾）。
+#: 2026-11-06 实跑：r6 把整条节拍串粘进依据且**没打引号**，`findall` 一个都没抓到 ⇒
+#: 判「原文依据逐字核不过」⇒ 整轮重选被丢弃，额度耗尽。这里**只放宽"有没有引号"**；
+#: 取出的文本仍要过调用方 `_hit` 的 ≥8 字连续逐字闸，"证据是否逐字"不放宽。
+_UNTAGGED_EVIDENCE = re.compile(r"(?:原文依据|原文证据)[：:]\s*([^｜|\n]{4,})")
+
+
 def evidence_quotes(text) -> list:
-    """取出「原文依据/原文证据/end_hook」里的引文正文（成对引号或未闭合开引号）."""
+    """取出「原文依据/原文证据/end_hook」里的引文正文（成对引号或未闭合开引号）.
+
+    没有任何引号时回退到**标签后的整段**（截到 `｜` / 行尾）。
+    """
+    _src = str(text or "")
     out: list = []
-    for _m in _EVIDENCE_QUOTE.finditer(str(text or "")):
+    for _m in _EVIDENCE_QUOTE.finditer(_src):
         _q = _m.group(1) or _m.group(2) or ""      # 第1组=成对引号；第2组=未闭合
+        if _q:
+            out.append(_q)
+    if out:
+        return out
+    _fb = _UNTAGGED_EVIDENCE.search(_src)
+    if _fb:
+        _q = _fb.group(1).strip().strip("“”\"'‘’「」『』")
         if _q:
             out.append(_q)
     return out

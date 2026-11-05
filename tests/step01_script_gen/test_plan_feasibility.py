@@ -148,6 +148,21 @@ def test_duration_is_computed_by_code_not_taken_from_the_plan():
 # ---------------------------------------------------------------------------
 # 2) 对白与画面动作不重复相加：判据取 max，不是求和
 # ---------------------------------------------------------------------------
+def test_unquoted_evidence_is_recovered_but_still_must_be_verbatim():
+    """没有引号的「原文依据」回退取标签后整段；有引号时不回退（2026-11-06 实跑）.
+
+    r6 把整条节拍串粘进依据且没打引号，findall 一个都没抓到 ⇒ 判「逐字核不过」。
+    回退只放宽书写格式，逐字与否仍由 ≥8 字连续命中判。
+    """
+    from step01_script_gen.plan_feasibility import evidence_quotes
+    _beat = "节拍：听香做饭｜本镜信息目的：展示晚餐｜原文依据：那美人儿就在舱中忙碌起来，生起炭炉｜载体：画面"
+    assert evidence_quotes(_beat) == ["那美人儿就在舱中忙碌起来，生起炭炉"]
+    assert evidence_quotes("原文依据：“甲留在门外。”") == ["甲留在门外。"]
+    # 有引号时只取引号内，不把整条节拍串也带出来
+    assert evidence_quotes("节拍：甲｜原文依据：“甲留在门外。”｜载体：画面") == ["甲留在门外。"]
+    # 两段式事实：原文证据同样适用
+    assert evidence_quotes("甲留在门外｜原文证据：甲留在门外。｜承载：B1/画面") == ["甲留在门外。"]
+
 def test_lower_bound_is_the_voice_budget_only():
     """下界**只取发声预算**：节拍不进下界（2026-10-01 复核第 16 轮改判）.
 

@@ -2373,6 +2373,9 @@ _PLAN_DELTA_INSTRUCTION = """
      带句末标点、一镜说得完的那一句；
    · **整条撤下**：`delete` 它的 uid，把它原先承载的事实改挂到**画面**载体，并给出该集合
      的完整 `order`。**撤下一条旁白是允许的**（反馈里的 `must_delete` 就是此意）。
+   ⚠️ **不可单镜表示的整条**（超单镜上限、句内又没有句末标点，例如 88 字 / 20s 的长旁白）：
+   **必须**撤下它，或换成原文里**带句末标点且 ≤35 字**的短句；**不许原样保留**——
+   留着它计划永远过不了预算门（实测反馈说了两轮仍被保留）。
    **唯一不许**的是"同一句换人念"：把基线旁白的正文原样改挂到角色发声的单元上、或删掉后
    用 `new:` 换人重建——都判 `view_voice_role_changed` 拒收（`frozen_voice_roles` 是
    每条旁白的有效声源，随 uid 冻结）。
@@ -3655,7 +3658,14 @@ def _replan_by_ops(plan, problems, novel_text, *, model=None, base_prompt=None,
     # "整份大纲"的理解把 schema 必填的声明键填成空值，就会静默清掉合法声明。
     # 操作说明**单源**在 `_PLAN_OPS_INSTRUCTION`（与预算重选的操作分支共用同一份）。
     _base = base_prompt or _REVISION_NOVEL_PROMPT.format(novel_text=novel_text[:PROMPT_MAX_CHARS])
-    _prompt = chr(10).join([_base, _PLAN_OPS_INSTRUCTION,
+    # **本集编号上限必须随请求说清**（2026-11-06 实跑：模型写了「旁白4」，而本集只有
+    # 3 条旁白 ⇒ 整轮拒收，两轮重选额度直接耗尽）。编号是**本轮的**计划，不是固定值。
+    _n_d = len([x for x in (plan or {}).get("dialogue_lines") or [] if x])
+    _n_n = len([x for x in (plan or {}).get("narration_lines") or [] if x])
+    _bounds = ("**本集编号上限**（载体只能引用这些编号，越界整批拒收）："
+               "台词 1~%d（共 %d 条）、旁白 1~%d（共 %d 条）。"
+               % (_n_d, _n_d, _n_n, _n_n))
+    _prompt = chr(10).join([_base, _PLAN_OPS_INSTRUCTION, _bounds,
                             _revision_feedback_block(problems, plan),
                             _rejection_feedback_block(rejections)])
     try:
@@ -5279,7 +5289,8 @@ _PLAN_OPS_INSTRUCTION = """
      每段各自带原文依据与载体）。**一条节拍同时要承载画面和台词时，用 `split`**。
   （以上 `index` 一律只填**数字**，如 `2`；不要写 `B2`/`"B2"`。
   `new_text` 写 `节拍：<正文>｜…` 或**只给正文**都行——落计划时统一补上 `节拍：`；
-  两种写法都**必须自带** `｜原文依据：“…”`，缺正文或缺依据整批拒收。）
+  两种写法都**必须自带** `｜原文依据：“…”`——**引号不能省**，也不要把整条节拍串粘进依据；
+   缺正文、缺依据或依据没有引号，整批拒收。）
 
 **索引一律指「改之前」的节拍编号**（你在上面看到的那份计划）：`split`/`insert_after`
 会让编号顺延，所以同一批操作里**不要**引用还没出现的新编号。__SLOT_RULE__

@@ -387,7 +387,7 @@ def test_removal_still_requires_the_structure_to_close():
 def test_delta_instruction_and_protected_rule_agree_with_the_guard():
     """提示与守卫**同一口径**：撤下合法、同句换人非法（2026-11-05 根因的防回归）.
 
-    旧 \`_PLAN_DELTA_INSTRUCTION\` 第 8 条写"移出非必需声音"，而守卫把任何删除都判成
+    旧 _PLAN_DELTA_INSTRUCTION 第 8 条写"移出非必需声音"，而守卫把任何删除都判成
     换声源；同一份请求里两条规则互相拆台，模型照做的每一轮都被拒收。
     """
     ins = o._render_duration_template(o._PLAN_DELTA_INSTRUCTION)
