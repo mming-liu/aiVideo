@@ -1344,7 +1344,9 @@ def _assert_action_consistency(persons: list[dict], prompt_text: str) -> list[Qc
 
 
 def _assert_duplicate_chars(persons: list[dict], expected: int | None,
-                            characters: list | None) -> list[QcIssue]:
+                            characters: list | None, shot: dict | None = None,
+                            frame_kind: str | None = None,
+                            kf_index: int | None = None) -> list[QcIssue]:
     """属性指纹查重：同色实体对数 > 名单同色对数 → critical（「杨旭重复」形态）.
 
     颜色指纹取属性行的主服装色。名单侧颜色从 characters 的
@@ -1358,9 +1360,21 @@ def _assert_duplicate_chars(persons: list[dict], expected: int | None,
         c = _color_of(str(p.get("desc", "")))
         if c:
             observed[c] = observed.get(c, 0) + 1
+    _active_chars = characters or []
+    if shot is not None and frame_kind:
+        try:
+            from shared.prompt_facts import project_frame_facts
+            _proj = project_frame_facts(shot, frame_kind, characters, kf_index)
+            _names = {str(e.get("name") or "").strip()
+                      for e in (_proj.get("entities") or [])}
+            if _names:
+                _active_chars = [c for c in (characters or [])
+                                 if str((c or {}).get("identifier") or "").strip() in _names]
+        except Exception:
+            pass
     roster_text = " ".join(
         str((c or {}).get("static_features", "")) + str((c or {}).get("dynamic_features", ""))
-        for c in (characters or []))
+        for c in _active_chars)
     if not roster_text.strip():
         return []
     issues: list[QcIssue] = []
@@ -1655,6 +1669,25 @@ def build_claim_checks_spec(shot: dict, frame_kind: str, kf_index: int | None = 
                 "q": f"画面是否表现：{name}位于{position}？",
                 "expect": "yes", "key": True,
             })
+    # 2b) 显式承载面合同：support 存在时必须问“在承载面内、未落到外侧”。
+    try:
+        from shared.prompt_facts import _support
+    except Exception:
+        _support = None
+    for s in on_screen_items:
+        name = str(s.get("name", "")).strip()
+        if not name or _support is None:
+            continue
+        sup = _support(s) or {}
+        kind = str(sup.get("kind") or "").strip()
+        surface = str(sup.get("surface") or "").strip()
+        if not (kind or surface):
+            continue
+        where = kind + (f"的{surface}" if surface else "")
+        qs.append({
+            "q": f"画面是否表现：{name}位于{where}上（未落在该承载面外侧）？",
+            "expect": "yes", "key": True, "reliability": "high",
+        })
     # P1-B: off_screen 缺席断言（spec on_screen=false → 画面中是否已无）；
     # 判定走 is_on_screen（缺省 True）——只有显式 false 才出缺席断言
     off_items = [s for s in spec
@@ -1853,7 +1886,9 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
                     description=f"图中实体人数 {person_count} vs 名单 {expected}（容差 {tol}）",
                     severity="critical",
                 ))
-        all_issues.extend(_assert_duplicate_chars(persons, expected, characters))
+        all_issues.extend(_assert_duplicate_chars(
+            persons, expected, characters, shot=shot, frame_kind=frame_kind,
+            kf_index=kf_index))
         # v6.54 象限 B：图中动作/持物 vs prompt 允许集（推船类失败通用拦截）
         # v6.56：改走 frame_narrative_desc 统一入口——之前 * 优先 final 字段，
         # _assert_action_consistency 会拿到「蒙面/湿衣/持刃」服装锚块，误判

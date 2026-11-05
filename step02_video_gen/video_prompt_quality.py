@@ -63,6 +63,18 @@ def collect_video_prompt_quality(script: dict) -> dict:
             warnings.append({"category": "video_prompt_build", "shot": idx,
                              "message": str(exc)})
             continue
+        try:
+            from shared.prompt_facts import (
+                project_video_facts, audit_prompt_against_projection)
+            _proj = project_video_facts(shot, work.get("characters"))
+            if _proj.get("spec_present"):
+                for p in audit_prompt_against_projection(
+                        prompt, _proj, work.get("characters")):
+                    p.update({"category": "video_final_prompt_offscreen_entity",
+                              "shot": idx})
+                    warnings.append(p)
+        except Exception:
+            pass
         if prompt_cap and len(prompt) > prompt_cap:
             warnings.append({
                 "category": "video_prompt_length",

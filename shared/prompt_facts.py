@@ -108,6 +108,42 @@ def project_frame_facts(shot: dict, frame_kind: str,
             "explicit": all(e["current"]["states"] is not None for e in entities) if entities else True,
             "note": "states 缺失时不得用关键词猜时间范围；由上游补合同或显式报告缺口。",
         },
+        "support_contract": {
+            "explicit": all(bool(e["current"]["support"]) for e in entities) if entities else True,
+            "note": "support 缺失时不得从 position/人数推断承载关系。",
+        },
+    }
+
+
+def project_video_facts(shot: dict, characters: list[dict] | None = None) -> dict:
+    """Aggregate ff/kfs/lf on-screen entities and whole-shot omissions."""
+    frames = [("first_frame", None), ("last_frame", None)]
+    for i in range(len(shot.get("keyframes") or [])):
+        frames.append(("keyframe", i))
+    merged: dict[str, dict] = {}
+    omitted: dict[str, dict] = {}
+    any_spec = False
+    for kind, kf in frames:
+        p = project_frame_facts(shot, kind, characters, kf)
+        if not p.get("spec_present"):
+            continue
+        any_spec = True
+        for e in p.get("entities") or []:
+            if e["name"] not in merged:
+                merged[e["name"]] = e
+        for o in p.get("omitted") or []:
+            omitted.setdefault(o["name"], o)
+    for name in merged:
+        omitted.pop(name, None)
+    return {
+        "stage": "video_shot",
+        "entities": list(merged.values()),
+        "spec_present": any_spec,
+        "omitted": list(omitted.values()),
+        "support_contract": {
+            "explicit": all(bool(e["current"]["support"]) for e in merged.values()) if merged else True,
+            "note": "视频聚合 ff/kfs/lf；任一帧 support 缺失即视为不完整。",
+        },
     }
 
 

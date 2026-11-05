@@ -2518,12 +2518,28 @@ def _extract_char_layout(
             return ""
         block = "【角色锚定】" + "，".join(parts)
 
+        # S25：先读显式 support 合同；它非空时，下面的 boat 兼容分支必须让位。
+        _support_rows = []
+        for _si in (_spec_items or []):
+            _sup = _si.get("support")
+            if isinstance(_sup, dict):
+                _sid = str(_sup.get("id", "") or "").strip()
+                _skind = str(_sup.get("kind", "") or "").strip()
+                _ssurf = str(_sup.get("surface", "") or "").strip()
+            else:
+                _sid = str(_si.get("support_id", "") or "").strip()
+                _skind = str(_si.get("support_kind", "") or "").strip()
+                _ssurf = str(_si.get("support_surface", "") or "").strip()
+            _sname = str(_si.get("name", "") or "").strip()
+            if _sname and (_sid or _skind or _ssurf):
+                _support_rows.append((_sname, _sid, _skind, _ssurf))
+
         # S25：船上约束只绑定本帧 spec 明确在船上的角色，不再用“所有角色/
         # 其余角色”概括；容量也不从人数直接推“并排”或“同一甲板平面”。
         _boat_names = [str(x.get("name") or "").strip()
                        for x in _boat_bound if str(x.get("name") or "").strip()]
         _boat_names = list(dict.fromkeys(_boat_names))
-        if _boat_names and "各自所在船" not in block:
+        if not _support_rows and _boat_names and "各自所在船" not in block:
             # 不按人数推“同船/并排”：多船、前后排列、不同甲板都合法。
             block += (f"。⚠️ 船上角色{'、'.join(_boat_names)}各自所在船的船板宽度"
                       "至少为单人居坐宽度的2.5倍；不同船分别计算，不合并；"
@@ -2612,26 +2628,13 @@ def _extract_char_layout(
             str(shot.get("motion_desc", "") or shot.get("prompt", "") or ""),
         ]))
         _on_boat_scene = any(w in _boat_scan for w in ("船", "舟", "舱", "甲板"))
-        if (_on_boat_scene and (_boat_bound or _water_names)
+        if (not _support_rows and _on_boat_scene
+                and (_boat_bound or _water_names)
                 and "各船船头船尾" not in block):
             block += _boat_scope_clause()
 
         # S25 通用实体—承载面合同：由 spec 显式 support 字段驱动，不限于船。
         # 不按人数推并排/宽度/共面；只陈述“谁在哪个承载实体的哪个面”。
-        _support_rows = []
-        for _si in (_spec_items or []):
-            _sup = _si.get("support")
-            if isinstance(_sup, dict):
-                _sid = str(_sup.get("id", "") or "").strip()
-                _skind = str(_sup.get("kind", "") or "").strip()
-                _ssurf = str(_sup.get("surface", "") or "").strip()
-            else:
-                _sid = str(_si.get("support_id", "") or "").strip()
-                _skind = str(_si.get("support_kind", "") or "").strip()
-                _ssurf = str(_si.get("support_surface", "") or "").strip()
-            _sname = str(_si.get("name", "") or "").strip()
-            if _sname and (_sid or _skind or _ssurf):
-                _support_rows.append((_sname, _sid, _skind, _ssurf))
         if _support_rows and "承载关系" not in block:
             _support_parts = []
             for _sname, _sid, _skind, _ssurf in _support_rows:

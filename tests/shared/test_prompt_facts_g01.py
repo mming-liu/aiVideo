@@ -10,8 +10,7 @@ def _shot():
          "props": ["短杖"], "states": ["平静"],
          "support": {"id": "cart_1", "kind": "马车", "surface": "车板"}},
         {"name": "乙", "on_screen": True, "position": "台面右侧", "pose": "站在平台上",
-         "props": ["伞"], "support_kind": "平台",
-         "support_id": "platform_2", "support_surface": "台面"},
+         "props": ["伞"]},
     ]
     return {"index": 1, "location": "湖湾", "ff_desc": "甲坐在车板上，乙站在平台上。",
             "lf_desc": "甲坐在车板上，乙站在平台上。",
@@ -78,6 +77,15 @@ def test_qc_expected_characters_use_projection_not_chapter_bank():
     assert "乙" not in line
 
 
+def test_qc_claim_checks_include_explicit_support_surface():
+    from shared.image_qc import build_claim_checks_spec
+
+    qs = build_claim_checks_spec(_shot(), "first_frame")
+    questions = [q["q"] for q in qs]
+    assert any("甲位于马车的车板上" in q for q in questions)
+    assert all(q.get("key") for q in qs if "位于马车的车板上" in q["q"])
+
+
 def test_qc_all_offscreen_spec_is_empty_not_chapter_bank():
     from shared.image_qc import build_qc_prompt
 
@@ -91,6 +99,19 @@ def test_qc_all_offscreen_spec_is_empty_not_chapter_bank():
     prompt = build_qc_prompt(shot, "first_frame", _chars())
     line = next(x for x in prompt.splitlines() if x.startswith("应出现人物："))
     assert line.strip() == "应出现人物：无"
+
+
+def test_video_projection_aggregates_frames_and_omits_never_seen():
+    from shared.prompt_facts import project_video_facts
+
+    shot = _shot()
+    shot["frame_layouts"]["lf"] = [
+        {"name": "甲", "on_screen": True, "position": "车板", "pose": "坐着"},
+    ]
+    p = project_video_facts(shot, _chars())
+    assert {e["name"] for e in p["entities"]} == {"甲", "乙"}
+    assert p["omitted"] == [{"name": "丙", "reason": "off_screen"}]
+    assert p["support_contract"]["explicit"] is False
 
 
 def test_projection_without_spec_is_explicit_gap_not_guess():
