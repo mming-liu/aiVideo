@@ -1,0 +1,33 @@
+{
+  "run_id": "20261106T001748-18964",
+  "written_at": "2026-11-06T00:17:49",
+  "stop_layer": "plan",
+  "plan_contract_version": 0,
+  "verdict": "unevaluable",
+  "conclusion": "call_failed",
+  "reasons": [
+    "call_failed：参数错误 [400]: {\"error\":{\"param\":null,\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\",\"message\":\"Upstream request failed: [invalid_request_error] this feature is not yet supported by atlas (request_id: gw-1ab377dd20b0-768ca)\"}}"
+  ],
+  "suggestions": [
+    "这是**这一轮没跑成**（不是故事不可行）：核对文本通道/响应后重跑；计划未被改动、未被缓存"
+  ],
+  "dialogue_lines": 0,
+  "dialogue_sec": 0.0,
+  "narration_lines": null,
+  "narration_sec": null,
+  "dialogue_rejected": [],
+  "dialogue_unrepresentable": [],
+  "beats_floor_basis": null,
+  "lower_bound_basis": null,
+  "lower_bound_sec": null,
+  "replan": null,
+  "budget": {
+    "min": 0.0,
+    "max": 0.0
+  },
+  "note": "",
+  "failure_code": "call_failed",
+  "detail": "参数错误 [400]: {\"error\":{\"param\":null,\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\",\"message\":\"Upstream request failed: [invalid_request_error] this feature is not yet supported by atlas (request_id: gw-1ab377dd20b0-768ca)\"}}",
+  "plan_fingerprint": "",
+  "baseline_problems": []
+}

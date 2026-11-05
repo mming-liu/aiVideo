@@ -321,3 +321,95 @@ def test_handoff_that_changes_the_speaker_is_refused():
     view, probs, result = _apply(base, cand)
     assert view is None and result["kind"] == "illegal", result
     assert "view_voice_role_changed" in _codes(probs), _codes(probs)
+
+# ---------------------------------------------------------------------------
+# ⑥ 撤下一条旁白是合法修法（2026-11-05，run 20261105T224857-15972 的根因）
+# ---------------------------------------------------------------------------
+def _remove_narration(base: dict, uid: str, *, rebind_to_visual: bool = True) -> dict:
+    """删掉一条旁白；同时把它的节拍与事实承载改成画面（或故意不闭合）."""
+    cand = copy.deepcopy(base)
+    cand["narration_units"] = [u for u in cand["narration_units"] if u.get("uid") != uid]
+    for beat in cand["beats"]:
+        if (beat.get("voice_ref") or {}).get("uid") == uid:
+            beat["voice_ref"] = None
+            if rebind_to_visual:
+                for binding in cand["fact_bindings"]:
+                    if any(c.get("uid") == uid and c.get("kind") == pc.KIND_NARRATION
+                           for c in (binding.get("carriers") or [])):
+                        binding["carriers"] = [{"kind": pc.KIND_VISUAL, "uid": beat["uid"]}]
+    return cand
+
+
+@pytest.mark.parametrize("name", ["A", "B"])
+def test_removing_a_narration_and_rebinding_its_fact_to_visual_is_applied(name):
+    """预算反馈里的 `must_delete` 是**既有合法修法**：撤下声音 + 事实改挂画面.
+
+    旧口径把"uid 不见了"直接判成换声源，于是反馈自己给出的修法在第一毫秒被拒收
+    （run 20261105T224857-15972：第 2/3 轮都死在这一条）。
+    """
+    base = _base(_SAMPLES[name])
+    uid = base["narration_units"][0]["uid"]
+    view, probs, result = _apply(base, _remove_narration(base, uid))
+    assert result["kind"] == "applied", (result, _codes(probs))
+    assert uid not in [u["uid"] for u in view["narration_units"]]
+    assert pc.view_problems(view) == []
+
+
+def test_delta_entry_allows_removing_a_narration_too():
+    """两条入口同一条守卫：增量里 `delete.narration_units` 同样是合法修法."""
+    base = _base(_SAMPLE_A)
+    uid = base["narration_units"][0]["uid"]
+    cand = _remove_narration(base, uid)
+    beat = [b for b in cand["beats"] if b["uid"] == "b01"][0]
+    delta = {"schema": pc.DELTA_SCHEMA,
+             "rule_version": pc.DELTA_RULE_VERSION,
+             "base_plan_hash": pc.view_digest(base),
+             "fact_basis_hash": pc.fact_basis_digest(base),
+             "upsert": {"beats": [copy.deepcopy(beat)]},
+             "delete": {"narration_units": [uid]},
+             "order": {"narration_units": [u["uid"] for u in cand["narration_units"]]},
+             "fact_bindings": [{"fact_uid": "f01",
+                                "carriers": [{"kind": pc.KIND_VISUAL, "uid": "b01"}]}]}
+    view, probs, result = pc.apply_delta_view(base, delta)
+    assert result["kind"] == "applied", (result, _codes(probs))
+    assert uid not in [u["uid"] for u in view["narration_units"]]
+
+
+def test_removal_still_requires_the_structure_to_close():
+    """撤下不等于放行：承载/引用不闭合照样拒收（不是"删了就没事"）."""
+    base = _base(_SAMPLE_A)
+    uid = base["narration_units"][0]["uid"]
+    view, probs, result = _apply(base, _remove_narration(base, uid, rebind_to_visual=False))
+    assert view is None and result["kind"] == "illegal", result
+    assert "view_binding_dangling" in _codes(probs), _codes(probs)
+
+
+def test_delta_instruction_and_protected_rule_agree_with_the_guard():
+    """提示与守卫**同一口径**：撤下合法、同句换人非法（2026-11-05 根因的防回归）.
+
+    旧 \`_PLAN_DELTA_INSTRUCTION\` 第 8 条写"移出非必需声音"，而守卫把任何删除都判成
+    换声源；同一份请求里两条规则互相拆台，模型照做的每一轮都被拒收。
+    """
+    ins = o._render_duration_template(o._PLAN_DELTA_INSTRUCTION)
+    assert "移出非必需声音" not in ins, "旧的、与守卫冲突的措辞又回来了"
+    assert "撤下一条旁白是允许的" in ins, ins
+    assert "同一句换人念" in ins, ins
+    rule = o.render_view_protected_rule()
+    assert "整条撤下" in rule and "是允许的" in rule, rule
+    assert "同一句正文不许换人念" in rule, rule
+
+def test_removal_cannot_move_the_same_sentence_onto_another_voice():
+    """把基线旁白的正文原样挪到**已有**的角色单元上，仍是换声源——不是"撤下"."""
+    base = _base(_SAMPLE_A)
+    uid = base["narration_units"][0]["uid"]
+    lost_text = _unit(base, uid)["text"]
+    cand = _remove_narration(base, uid)
+    other = cand["narration_units"][0]          # 样本 A 的另一条：显式角色「阿禾」
+    assert narration_role(other) == "阿禾"
+    other["text"] = lost_text                   # 同一句正文，换成角色发声
+    view, probs, result = _apply(base, cand)
+    assert view is None and result["kind"] == "illegal", result
+    rec = [p for p in probs if p["code"] == "view_voice_role_changed"]
+    assert rec and rec[0]["ref"] == uid, probs
+    assert rec[0]["path"] == "narration_units[%s]" % uid, rec[0]
+    assert "阿禾" in rec[0]["reason"], rec[0]

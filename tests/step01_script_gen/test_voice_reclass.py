@@ -81,6 +81,37 @@ def _apply(view, slot, action, scope, *, extra=None, novel=NOVEL, accept=None):
 
 # ---- 对白→旁白 ----
 
+def test_bind_and_reclassify_in_the_same_round_do_not_dangle():
+    """同一轮"迁移 d01 + 把事实绑到 d01"：绑定必须跟到新身份（2026-11-06 实跑）.
+
+    旧行为：绑定按迁移前的 dialogue 身份写进 delta，应用器判
+    `view_binding_dangling｜事实 f03 引用了不存在的 dialogue: 'd01'`；模型照同一份
+    答案重试 3 次全被拒，额度耗尽。
+    """
+    _text = "甲留在门外。"
+    _plan0 = _plan(
+        shot_beats=["节拍：甲留在门外｜载体：台词1"],
+        required_facts=[_text + "｜原文证据：“" + _text + "”｜承载：B1/台词1"],
+        dialogue_lines=[_text])
+    _v = _view(_plan0)
+    _found = pcr.content_slots(_v, [_voice_problem("d01")],
+                               verification_record=_record("d01", "novel_narration", _text))
+    _move = _found["slots"][0]
+    _bind = {"slot_id": "slot:fact:f01", "kind": "fact_visual", "fact_uid": "f01",
+             "allowed_actions": [pcr.ACT_BIND_VOICE], "voice_target_uids": ["d01"]}
+    _ans = {"schema": pcr.SLOT_ANSWER_SCHEMA, "answers": [
+        {"slot_id": _move["slot_id"], "action": pcr.ACT_RECLASSIFY},
+        {"slot_id": "slot:fact:f01", "action": pcr.ACT_BIND_VOICE,
+         "target_uid": "d01"}]}
+    _delta, _dp = pcr.compile_delta(_v, [_move, _bind], _ans, novel_text=NOVEL)
+    assert _delta is not None, _dp
+    _to_uid = pcr._voice_temp_uid("d01")
+    _cars = next(b for b in _delta["fact_bindings"]
+                 if str(b["fact_uid"]) == "f01")["carriers"]
+    assert _cars == [{"kind": "narration", "uid": _to_uid}], _cars
+    _cand, _p, _rk = pc.apply_delta_view(_v, _delta, accept=lambda _v: [])
+    assert _rk["kind"] == "applied", (_rk, _p)
+
 def test_dialogue_to_narration_keeps_text_derives_source_and_updates_refs():
     _text = "甲留在门外。"
     _plan0 = _plan(

@@ -1,0 +1,22 @@
+{
+  "run_started": 1793895465.398843,
+  "calls": {},
+  "repair": {},
+  "audit": {},
+  "hook": {},
+  "duration": {},
+  "quality": {},
+  "run_id": "20261106T001748-18964",
+  "status": "failed",
+  "outcome_code": "PlanInfeasibleError",
+  "phases": [
+    {
+      "phase": "_total",
+      "status": "failed",
+      "phase_duration_sec": 4.6,
+      "elapsed_since_start_sec": 4.6,
+      "elapsed_sec": 4.6
+    }
+  ],
+  "total_elapsed_sec": 4.6
+}
