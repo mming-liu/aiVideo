@@ -636,7 +636,9 @@ class V643PromptEnforcementConstraint(Constraint):
                     # plain _has_boat_spec(out) check would still duplicate
                     # when two generic 小舟 exist in the same pass.
                     if _seen_boat_spec:
-                        return "敞口木舟"
+                        # 已有替换结果：保留本次匹配原文，不再把“木舟”二次替换成
+                        # “敞口木舟”（否则会叠成“敞口敞口木舟”，破坏幂等）。
+                        return m.group(0)
                     _seen_boat_spec = True
                     return _repl
                 out = pat.sub(_sub_guard, out)
