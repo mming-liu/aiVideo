@@ -3424,6 +3424,7 @@ def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
             add_image_strict_constraints,
         )
         text = preprocess_prompt_for_image(desc)
+        text = _inject_boat_composition_anchor(text, shot, frame_kind)
         # v1.1：注入出镜角色服装特征（与 _gen_first_frame_async 生成链一致）
         # 首帧过滤动作结果/武器词，保证 QC 与图片模型看到的 prompt 一致
         text = _inject_frame_spec_and_closeup(text, shot, characters, frame_kind=frame_kind)
@@ -3649,6 +3650,76 @@ def _fixed_camera_shift_anchor(desc: str) -> str:
     return ""
 
 
+def _inject_boat_composition_anchor(text: str, shot: dict,
+                                    frame_kind: str) -> str:
+    """多人同船：在画面描述开头注入微俯视斜侧构图与船体相对站位.
+
+    只消费显式 support 合同：同一 support.id 上 >=2 个 on_screen 角色，且
+    kind 明确为船/舟/艇。没有显式 support 时不猜，避免把普通镜头误改成船景。
+    """
+    if not text or "【画面构图】" in text:
+        return text
+    try:
+        from shared.frame_spec import get_frame_spec, is_on_screen
+        spec = [s for s in get_frame_spec(shot, frame_kind)
+                if isinstance(s, dict) and is_on_screen(s)]
+    except Exception:
+        return text
+    groups: dict[str, list[dict]] = {}
+    for item in spec:
+        sup = item.get("support")
+        if isinstance(sup, dict):
+            sid = str(sup.get("id") or "").strip()
+            kind = str(sup.get("kind") or "").strip()
+        else:
+            sid = str(item.get("support_id") or "").strip()
+            kind = str(item.get("support_kind") or "").strip()
+        if not sid or not any(w in kind for w in ("船", "舟", "艇")):
+            continue
+        groups.setdefault(sid, []).append(item)
+    group = next((v for v in groups.values() if len(v) >= 2), None)
+    if not group:
+        return text
+
+    def _surface(item):
+        sup = item.get("support")
+        if isinstance(sup, dict):
+            return str(sup.get("surface") or "").strip() or "甲板"
+        return str(item.get("support_surface") or "").strip() or "甲板"
+
+    def _pose_parts(item):
+        raw = str(item.get("pose") or "").strip() or "站立"
+        # 姿态里常含“于船板中央”等绝对落点；这里只取动作本身，避免
+        # “盘膝坐于船板中央……于该船甲板左侧”这种双“于”病句。
+        import re as _re
+        head = _re.split(r"[，,]|于", raw)[0].strip("，, ") or "站立"
+        props = [str(p).strip() for p in (item.get("props") or []) if str(p).strip()]
+        prop_txt = ""
+        if props and "持" in raw and not any(p in raw for p in props):
+            prop_txt = "，持" + "、".join(props)
+        return head, prop_txt
+
+    # 前舱者放左、其余放右；没有“前”标记时按 spec 顺序。
+    group = sorted(group, key=lambda x: 0 if "前" in _surface(x) else 1)
+    left, right = group[0], group[1]
+    left_name = str(left.get("name") or "").strip()
+    right_name = str(right.get("name") or "").strip()
+    left_head, left_prop = _pose_parts(left)
+    right_head, right_prop = _pose_parts(right)
+    people = "两人" if len(group) == 2 else f"{len(group)}人"
+    anchor = (
+        "【画面构图】微俯视斜侧视角，单艘宽体敞口木船斜向横贯画面中下部"
+        "（船身由画左下向画右延伸，船体横向占画面宽度80%以上）。"
+        f"前舱与中舱木甲板平整宽阔，{people}同在船体内。"
+        f"【船内站位】{left_name}{left_head}于该船{_surface(left)}左侧{left_prop}；"
+        f"{right_name}{right_head}于该船{_surface(right)}右侧{right_prop}。"
+        f"{right_name}双脚及裙摆完全踩在木甲板内侧，"
+        f"木船右侧木船舷清晰包裹在{right_name}身体右外侧，"
+        f"严禁{right_name}踩在船外荷叶或水面中。"
+    )
+    return anchor + text
+
+
 def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
                          *, desc: str | None = None) -> str:
     """帧 prompt 唯一组装入口：生成链与 --plan-only 预检共用同一份逻辑.
@@ -3659,6 +3730,7 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
     if frame_kind == "first_frame":
         base = desc if desc is not None else (shot.get("ff_desc") or shot.get("prompt") or "")
         text = preprocess_prompt_for_image(base)
+        text = _inject_boat_composition_anchor(text, shot, "first_frame")
         text = _inject_frame_spec_and_closeup(text, shot, chars, frame_kind="first_frame")
         text = _inject_object_size_anchor(shot, text)
         text = _inject_tone_anchor(shot, text)
@@ -3677,6 +3749,7 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
     if frame_kind == "last_frame":
         base = desc if desc is not None else (shot.get("lf_desc") or shot.get("prompt") or "")
         text = preprocess_prompt_for_image(base)
+        text = _inject_boat_composition_anchor(text, shot, "last_frame")
         text = _inject_frame_spec_and_closeup(text, shot, chars, frame_kind="last_frame")
         text = fix_lf_desc_gaze(text, shot, chars)
         text = _inject_object_size_anchor(shot, text)

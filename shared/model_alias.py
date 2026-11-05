@@ -54,6 +54,21 @@ def normalize_model_name(model: str) -> str:
     return m.strip("-")
 
 
+# Seedream 图片模型：简写必须落到明确的 lite 端点，不能落到不带 lite 的正式端点。
+_IMAGE_MODEL_CANONICAL = {
+    "doubao-seedream-5-0-lite": "doubao-seedream-5-0-lite-260128",
+}
+
+
+def canonical_image_model_id(model: str) -> str:
+    """把图片模型简写规范成请求体里的明确端点；未知模型原样返回."""
+    if not model:
+        return ""
+    raw = str(model).strip()
+    norm = normalize_model_name(raw)
+    return _IMAGE_MODEL_CANONICAL.get(norm, raw)
+
+
 # ---------------------------------------------------------------------------
 # 2. 家族识别
 # ---------------------------------------------------------------------------

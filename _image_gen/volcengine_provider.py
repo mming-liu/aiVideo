@@ -37,6 +37,7 @@ from shared.config import (
     VOLCENGINE_IMAGE_RPM,
 )
 from shared.key_scheduler import KeyScheduler
+from shared.model_alias import canonical_image_model_id
 from shared.image_size_fit import fit_pixel_size
 from shared.rate_limit import compute_429_wait
 from shared.log_utils import verbose_write
@@ -131,7 +132,11 @@ class VolcengineImageService(ImageGenerationService):
             raise ValueError(
                 "没有配置 VOLCENGINE_API_KEY（.env.keys 中设置，兼容 ARK_API_KEY）"
             )
-        self._model_queue: list[str] = [VOLCENGINE_T2I_MODEL] + VOLCENGINE_T2I_FALLBACK_MODELS
+        # 简写必须落到明确端点；尤其 doubao-seedream-5-0-lite 不得被当成
+        # 不带 lite 的正式端点发送。
+        self._model_queue: list[str] = [
+            canonical_image_model_id(VOLCENGINE_T2I_MODEL)
+        ] + [canonical_image_model_id(m) for m in VOLCENGINE_T2I_FALLBACK_MODELS]
         self._base_url = VOLCENGINE_BASE_URL.rstrip("/")
         # 单 key 限速（RPM 单源 shared/config.py）
         rpm = max(VOLCENGINE_IMAGE_RPM, 1)
