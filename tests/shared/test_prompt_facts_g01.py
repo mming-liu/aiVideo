@@ -46,6 +46,53 @@ def test_projection_audit_catches_offscreen_name_only():
     assert audit_prompt_against_projection("甲坐在车板上，乙站在平台上。", p, _chars()) == []
 
 
+def test_video_layout_uses_projection_not_ff_desc_names():
+    from step02_video_gen.prompt_builder import _build_character_layout_block
+
+    shot = {
+        "index": 1, "ff_desc": "甲坐在车板上，乙在远处岸边。", "main_subject": "甲",
+        "frame_layouts": {"ff": [
+            {"name": "甲", "on_screen": True, "position": "车板中央", "pose": "坐在车板上",
+             "support": {"id": "cart_1", "kind": "马车", "surface": "车板"}},
+        ]},
+    }
+    block = _build_character_layout_block(shot, _chars())
+    assert "甲" in block
+    assert "乙" not in block
+    assert "马车 cart_1 车板" in block
+
+
+def test_qc_expected_characters_use_projection_not_chapter_bank():
+    from shared.image_qc import build_qc_prompt
+
+    shot = {
+        "index": 1, "location": "湖湾", "scene": "湖湾",
+        "main_subject": "甲", "ff_desc": "甲站在车板上。",
+        "frame_layouts": {"ff": [
+            {"name": "甲", "on_screen": True, "position": "车板", "pose": "站在车板上"},
+        ]},
+    }
+    prompt = build_qc_prompt(shot, "first_frame", _chars())
+    line = next(x for x in prompt.splitlines() if x.startswith("应出现人物："))
+    assert "甲" in line
+    assert "乙" not in line
+
+
+def test_qc_all_offscreen_spec_is_empty_not_chapter_bank():
+    from shared.image_qc import build_qc_prompt
+
+    shot = {
+        "index": 1, "location": "湖湾", "scene": "湖湾",
+        "main_subject": "甲", "ff_desc": "湖面空镜。",
+        "frame_layouts": {"ff": [
+            {"name": "甲", "on_screen": False, "position": "岸上", "pose": "站着"},
+        ]},
+    }
+    prompt = build_qc_prompt(shot, "first_frame", _chars())
+    line = next(x for x in prompt.splitlines() if x.startswith("应出现人物："))
+    assert line.strip() == "应出现人物：无"
+
+
 def test_projection_without_spec_is_explicit_gap_not_guess():
     p = project_frame_facts({"index": 2, "ff_desc": "甲站在岸边"}, "first_frame", _chars())
     assert p["entities"] == []

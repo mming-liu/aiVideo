@@ -761,6 +761,34 @@ def _build_character_layout_block(shot: dict, characters: list) -> str:
     抽象情绪词（遵守 SYSTEM_PROMPT 规则 17.2，不倒退到豆包式的「悲伤/愤怒」）。
     空镜无角色，返回空串。
     """
+    # G02：优先用事实投影的 on_screen 实体；不再用 ff_desc 里出现名字的
+    # 文本探测把离屏/回忆角色塞进开场清单。
+    try:
+        from shared.prompt_facts import project_frame_facts
+        _proj = project_frame_facts(shot, "first_frame", characters)
+        if _proj.get("entities"):
+            _lines = []
+            for _e in _proj["entities"]:
+                _cur = _e.get("current") or {}
+                _bits = [str(_cur.get("position") or "").strip(),
+                         str(_cur.get("pose") or "").strip()]
+                _bits = [b for b in _bits if b]
+                _sup = _cur.get("support") or {}
+                if _sup:
+                    _bits.append("承载：" + " ".join(
+                        str(_sup.get(k) or "") for k in ("kind", "id", "surface")
+                        if str(_sup.get(k) or "").strip()))
+                _lines.append(f"- {_e['name']}：{'，'.join(_bits) if _bits else '位置/朝向/动作以视频起点描述为准'}")
+            return (
+                "【人物站位清单】本镜头开场画面包含以下角色，必须在开场画面中正确出现，"
+                "不得缺失、错位或替换为他人，位置/朝向/动作与视频起点描述一致，"
+                "角色间视线方向相互吻合；各角色情绪用具体面部与肢体动作表现"
+                "（瞪眼/垂眸/攥拳/肩背起伏等），禁止抽象情绪词。\n"
+                + "\n".join(_lines)
+            )
+    except Exception:
+        pass
+
     probe = " ".join([shot.get("ff_desc", ""), shot.get("main_subject", "")])
     # 结构化站位（规则51/站位台吸收 v6.35）优先：shot.char_layout 已由 LLM 显式给出
     # 每出镜角色的 position/facing/role，直接读入清单；文本探测（ff_desc+main_subject）

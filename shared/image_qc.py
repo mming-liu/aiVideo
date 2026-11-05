@@ -163,8 +163,19 @@ def _truncate(text: str, limit: int = 220) -> str:
     return text[:limit] + "..." if len(text) > limit else text
 
 
-def _shot_characters(shot: dict, characters: list | None) -> str:
-    """提取本镜应出现的人物（镜头内角色 + 全局角色名匹配）."""
+def _shot_characters(shot: dict, characters: list | None,
+                     frame_kind: str | None = None) -> str:
+    """提取本镜应出现的人物：优先本帧 on_screen spec，老章回退文本。"""
+    if frame_kind:
+        try:
+            from shared.prompt_facts import project_frame_facts
+            proj = project_frame_facts(shot, frame_kind, characters)
+            names = [str(e.get("name") or "").strip()
+                     for e in (proj.get("entities") or []) if str(e.get("name") or "").strip()]
+            if proj.get("spec_present"):
+                return "、".join(dict.fromkeys(names)) if names else "无"
+        except Exception:
+            pass
     names: list[str] = []
     for key in ("main_subject", "characters", "character"):
         v = shot.get(key)
@@ -223,7 +234,7 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
     core_keywords = shot.get("core_keywords") or []
     if isinstance(core_keywords, list):
         core_keywords = "、".join(str(k) for k in core_keywords)
-    chars = _shot_characters(shot, characters)
+    chars = _shot_characters(shot, characters, frame_kind=frame_kind)
 
     lines = [
         "你是专业图片质检员，检查这张古风分镜图的视觉问题。",

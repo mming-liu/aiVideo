@@ -18,11 +18,20 @@ def _alias_names(character: dict, characters: list[dict]) -> list[str]:
     return aliases
 
 
+def _raw_spec_items(shot: dict, frame_kind: str, kf_index: int | None = None):
+    try:
+        from shared.frame_spec import get_frame_spec
+        return [s for s in get_frame_spec(shot, frame_kind, kf_index)
+                if isinstance(s, dict)]
+    except Exception:
+        return []
+
+
 def _spec_items(shot: dict, frame_kind: str, kf_index: int | None = None):
     try:
-        from shared.frame_spec import get_frame_spec, is_on_screen
-        return [s for s in get_frame_spec(shot, frame_kind, kf_index)
-                if isinstance(s, dict) and is_on_screen(s)]
+        from shared.frame_spec import is_on_screen
+        return [s for s in _raw_spec_items(shot, frame_kind, kf_index)
+                if is_on_screen(s)]
     except Exception:
         return []
 
@@ -57,6 +66,7 @@ def project_frame_facts(shot: dict, frame_kind: str,
     this function does not guess time scope from words.
     """
     chars = _character_map(characters)
+    raw_items = _raw_spec_items(shot, frame_kind, kf_index)
     items = _spec_items(shot, frame_kind, kf_index)
     entities = []
     used: set[str] = set()
@@ -92,6 +102,7 @@ def project_frame_facts(shot: dict, frame_kind: str,
         "stage": "image_frame",
         "frame_kind": frame_kind,
         "entities": entities,
+        "spec_present": bool(raw_items),
         "omitted": omitted,
         "state_contract": {
             "explicit": all(e["current"]["states"] is not None for e in entities) if entities else True,
