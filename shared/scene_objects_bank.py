@@ -370,15 +370,24 @@ def boat_width_text(shot: dict, scene_objects: dict) -> str:
     return f"宽{BOAT_FALLBACK_WIDTH_M:g}米"
 
 
+def _boat_display_name(spec: dict | None) -> str:
+    """只有本章显式提取出“舴艋”时才保留该形制，否则用中性“敞口木舟”。"""
+    raw = ""
+    if isinstance(spec, dict):
+        raw = str(spec.get("subtype") or spec.get("identifier") or "")
+    return "舴艋舟" if "舴艋" in raw else "敞口木舟"
+
+
 def build_boat_replacement(shot: dict, scene_objects: dict) -> str:
-    """v6_43 规则1 的替换文本：小舟 → 无篷舴艋舟（长X米宽Y米[，可容N人]）.
+    """v6_43 规则1 的替换文本：小舟 → 敞口木舟/舴艋舟（长X米宽Y米[，可容N人]）.
 
     尺寸优先 scene_objects（含 B5 比例后验）；未命中任何船规格时回退
-    历史硬编码文本「无篷舴艋舟（宽1.4米，可容3人）」（行为保持）。
+    中性文本「敞口木舟（宽1.4米，可容3人）」——不再把舴艋舟强加给其他小说。
     """
     spec = resolve_boat_spec(shot, scene_objects)
+    boat_name = _boat_display_name(spec)
     if not spec:
-        return f"无篷舴艋舟（宽{BOAT_FALLBACK_WIDTH_M:g}米，可容3人）"
+        return f"{boat_name}（宽{BOAT_FALLBACK_WIDTH_M:g}米，可容3人）"
     length, width = spec.get("length_m"), spec.get("width_m")
     if width and not _ratio_trusts_width(spec):
         width = None  # 比例离谱：宽度不可信，不写
@@ -391,7 +400,7 @@ def build_boat_replacement(shot: dict, scene_objects: dict) -> str:
     except (TypeError, ValueError):
         pass
     if not frags:
-        return "无篷舴艋舟"
+        return boat_name
     cap_txt = ""
     capacity = spec.get("capacity")
     if capacity:
@@ -410,4 +419,4 @@ def build_boat_replacement(shot: dict, scene_objects: dict) -> str:
             cap = ""
         if cap:
             cap_txt = f"，可容{cap}人"
-    return f"无篷舴艋舟（{''.join(frags)}{cap_txt}）"
+    return f"{boat_name}（{''.join(frags)}{cap_txt}）"

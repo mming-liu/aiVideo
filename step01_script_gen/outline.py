@@ -1899,6 +1899,13 @@ _FIX_CAPABILITY_OUT_OF_SCOPE = {
     "outline_invalid": "首版尝试结果码（不是计划验收问题）",
     "deadline_exhausted": "运行级：规划截止耗尽",
     "structure_inconsistent": "生成前门的事务一致性码（不是计划验收问题）",
+    "adaptation_gate_error": "适配门运行错误（不是计划验收问题）",
+    "split_actions_not_exclusive": "拆分动作互斥校验（候选层结构问题）",
+    "split_adoption_view_invalid": "拆分采纳视图非法（候选层结构问题）",
+    "split_target_required": "拆分目标缺失（候选层结构问题）",
+    "split_view_unreadable": "拆分视图不可读（候选层结构问题）",
+    "verification_capacity_exhausted": "核验容量耗尽（运行级，不是计划验收问题）",
+    "verification_unavailable": "核验不可用（运行级，不是计划验收问题）",
 }
 
 

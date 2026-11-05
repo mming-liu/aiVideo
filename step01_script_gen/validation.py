@@ -289,7 +289,7 @@ def _shot_tag(label: str, idx) -> str:
 # 「刺客出水」含「水」被误判为空镜的根因。
 EMPTY_SCENE_SUBJECTS = frozenset({
     "空镜", "荷塘", "池塘", "日落", "日出", "田野", "田埂", "村庄",
-    "天空", "大地", "庭院", "回廊", "楼阁", "屋檐", "照月湾", "山峦",
+    "天空", "大地", "庭院", "回廊", "楼阁", "屋檐", "山峦",
     "水面", "湖面", "荷塘黄昏全景", "夕阳", "薄雾",
 })
 
@@ -759,9 +759,9 @@ def _check_grounding(shot: dict, novel_text: str) -> bool:
     """简单的原文锚点检查：检查 narration 是否在原文中有对应内容。
 
     先剥掉「说话人道：」前缀再校验台词体——LLM 按规则0给原文台词补说话人前缀
-    （「住嘴！张十三怒极」→「张十三怒道：住嘴！」），前缀（说话人+道/怒道）是
+    （「住嘴！角色C怒极」→「角色C怒道：住嘴！」），前缀（说话人+道/怒道）是
     生成层补充、不一定逐字来自原文，但台词体本身逐字引用原文。若整段切 5 字
-    子串校验，前缀变了就误报"原文未找到"（08-09 镜头17「张十三怒道：住嘴！」）。
+    子串校验，前缀变了就误报"原文未找到"（08-09 镜头17「角色C怒道：住嘴！」）。
 
     08-17（v6.32）：归一化双重省略号「……/…/..」后再校验——原文是双省略号（6 字
     `……`），LLM 经常折叠成单省略号（3 字 `…`），原校验做标点归一化时把 `…`
@@ -960,7 +960,7 @@ def _check_character_consistency(script: dict) -> dict:
 
     # --- 4. 空镜中出现人物（main_subject 不匹配） ---
     # 单字场景词（水/湖/船/灯/门等）作为子串会误伤人物/道具动作主体
-    # （如「步摇落水」「张十三跃上船」「张十三举灯」）→ 用双保险：
+    # （如「步摇落水」「角色C跃上船」「角色C举灯」）→ 用双保险：
     # 主体含已知角色名、或含道具名词时一律视为动作镜，不做空镜判定。
     non_character_subjects = EMPTY_SCENE_SUBJECTS
     prop_hints = {
@@ -1131,7 +1131,7 @@ def _check_negative_prompt(shots: list[dict], characters: list | None = None) ->
     校验 prompt 是否含禁止人物标记（空镜出人是唯一能在脚本层拦下的缺陷）。
 
     P0-3 修复（08-12）：空镜判定加「动作镜排除」——main_subject 含已知角色名
-    （刺客跃出水面/听香指水面）、动作动词、道具名词时是动作镜而非空镜。B4 修了
+    （刺客跃出水面/角色B指水面）、动作动词、道具名词时是动作镜而非空镜。B4 修了
     is_empty_scene 但漏了本检查（只查 EMPTY_SCENE_SUBJECTS 子串，未排角色名）。
     """
     warnings = []
@@ -1416,7 +1416,7 @@ def _check_gaze_direction(shots, hook: dict = None, characters: list | None = No
     v6.9: 误报过滤——「向」后紧跟纯方位词（向上/向后/向一侧）是运动/动作
     用法而非视线，不再提示；正则终止于分号/括号，避免跨句截断.
     v6.7: 触发词聚焦真正的视线动词。「向/朝」多为运动/站位/说话对象介词
-    （朝杨旭站立、向船梢、向听香张嘴质问），被当成视线造成大量误报，
+    （朝角色A站立、向船梢、向角色B张嘴质问），被当成视线造成大量误报，
     移出触发集，只保留 看/盯/望/视/瞧/瞄 等视线动词.
     P1-7 修复（08-12）：泛化「视线建议用画左/画右」只对**视线锚定有构图价值的
     镜头**报——同镜 ≥2 角色、或含威胁源（视线汇聚焦点）。单人叙事视角
@@ -1449,11 +1449,11 @@ def _check_gaze_direction(shots, hook: dict = None, characters: list | None = No
         prompt = shot.get('prompt', '')
         ff_desc = shot.get('ff_desc', '')
         lf_desc = shot.get('lf_desc', '')
-        # v1.1：拼入 lf_desc——尾帧角色视线此前零校验（"听香目光盯着画右水面刺客
+        # v1.1：拼入 lf_desc——尾帧角色视线此前零校验（"角色B目光盯着画右水面刺客
         # 消失之处"被画右锚点放行且错别字无检测）
         text = f"{prompt} {ff_desc} {lf_desc}"
 
-        # v1.1：尾帧角色看向"消失对象"检测——场景含受伤结果对象（杨旭倒下）时，
+        # v1.1：尾帧角色看向"消失对象"检测——场景含受伤结果对象（角色A倒下）时，
         # 角色应看向被刺倒的同伴，而非已消失的刺客/水面
         _victim_hints = ("倒下", "仰面倒", "仰面躺", "中刀", "被刺", "心口", "洇开", "倒地")
         _lost_objects = ("消失之处", "消失处", "水面刺客", "刺客消失", "没入之处", "水中刺客")
@@ -1467,8 +1467,8 @@ def _check_gaze_direction(shots, hook: dict = None, characters: list | None = No
                 if any(l in _seg for l in _lost_objects):
                     warnings.append(
                         f"{_shot_tag(label, idx)}: 尾帧角色目光看向「{_seg[:20]}」——已消失的刺客/水面，"
-                        f"不是动作结果对象。场景含受伤结果（杨旭倒下），角色应看向被刺倒的"
-                        f"同伴杨旭（自动修复见 vimax_bridge.fix_lf_desc_gaze）。"
+                        f"不是动作结果对象。场景含受伤结果（角色A倒下），角色应看向被刺倒的"
+                        f"同伴角色A（自动修复见 vimax_bridge.fix_lf_desc_gaze）。"
                     )
 
         # 先剔除机位/前缀术语/视类词，避免其内部「视」被误当视线
@@ -1540,8 +1540,8 @@ def _check_gaze_direction(shots, hook: dict = None, characters: list | None = No
 # ============================================================================
 
 # 视线锚定正则：角色名 + 视线词 + 视线动词 + 画左/画右/画上方/画下方。
-# 注意：不跨逗号（逗号分隔的多个角色各自成锚点，跨逗号会误把"杨旭"当
-# 「听香目光盯向…」的宾语）；名字非贪婪且不含视线词（防止"听香目光"被
+# 注意：不跨逗号（逗号分隔的多个角色各自成锚点，跨逗号会误把"角色A"当
+# 「角色B目光盯向…」的宾语）；名字非贪婪且不含视线词（防止"角色B目光"被
 # 当名字捕获）。
 _GAZE_ANCHOR_RE = re.compile(
     r'([一-鿿]{2,4}?)(?:目光|双眼|眼睛|眼神|视线)[^，。；！？\n]{0,6}?'
@@ -1588,7 +1588,7 @@ def _check_gaze_convergence(shots: list[dict], hook: dict = None) -> dict:
             f"{_shot_tag(label, idx)}: 多人同框视线散焦——{left_subs} 看画左、{right_subs} 看画右，"
             f"各看各的方向。规则22.7/13.5 要求所有视线汇聚到同一威胁焦点形成视线三角"
             f"（威胁→目标、发现者→威胁），多人各看一方会让观众读不出冲突焦点。"
-            f"应让非威胁侧角色的视线落向威胁源（如'听香看向画右水中的刺客'）。"
+            f"应让非威胁侧角色的视线落向威胁源（如'角色B看向画右水中的刺客'）。"
         )
 
     for shot in shots:
@@ -1808,7 +1808,7 @@ def _check_narrative_arc_distribution(shots: list[dict], script: dict) -> dict:
 def _check_person_boat_position(shots: list[dict]) -> dict:
     """检查船只/水面场景中人物位置约束是否明确（防幻觉核心检查）。
 
-    问题场景：prompt 说"小舟穿过荷叶，杨旭坐船头吹箫"，但 AI 可能理解为
+    问题场景：prompt 说"小舟穿过荷叶，角色A坐船头吹箫"，但 AI 可能理解为
     "人站在水面上跳"——因为缺少"端坐于"、"稳坐于"等强制位置约束词。
 
     检查逻辑：
@@ -2140,7 +2140,7 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
             if len(lf_desc) < 60:
                 warnings.append(
                     f"钩子镜头(index=0): lf_desc 仅 {len(lf_desc)} 字 < 60 字下限——"
-                    f"钩子常含多角色（刺客+杨旭+听香）状态，过短会丢布局"
+                    f"钩子常含多角色（刺客+角色A+角色B）状态，过短会丢布局"
                 )
             import re
             ff_normalized = re.sub(r'[\s　，。！？、：；""''（）【】《》]', '', ff_desc)
@@ -2169,7 +2169,7 @@ def _check_ff_lf_desc_completeness(shots: list[dict], hook: dict = None) -> dict
             )
         elif len(hook_location) < 3:  # 太短
             warnings.append(
-                f"钩子镜头(index=0): location=\"{hook_location}\" 可能过于模糊，建议填写更具体的地点如\"照月湾湖面小舟\""
+                f"钩子镜头(index=0): location=\"{hook_location}\" 可能过于模糊，建议填写更具体的地点如\"具体子地点湖面小舟\""
             )
 
     if issues:
@@ -2415,8 +2415,8 @@ _FF_COMPLETED_VERBS = (
 def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
     """检查 ff_desc 与 motion_desc 的时间线一致性（防视频模型脑补假动作）.
 
-    背景（code-audit 08-05 钩子视频）：hook ff_desc 写成「刀尖已刺中杨旭心口，
-    杨旭仰面后倒」（动作结果时刻），而 motion_desc 写「前2秒：刺客破水而出、
+    背景（code-audit 08-05 钩子视频）：hook ff_desc 写成「刀尖已刺中角色A心口，
+    角色A仰面后倒」（动作结果时刻），而 motion_desc 写「前2秒：刺客破水而出、
     寒光刺中」（动作进行时）。t=0 已经刺中，0-2秒又要"破水而出、刺中"——
     动作刺了两遍，视频模型无法调和起点与动作，只能脑补一套假动作
     （站在水里→假跳→下刺→落回水里）。
@@ -2455,8 +2455,8 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
         # 溅血→尖叫"的递进，只能靠参考图兜底导致两帧雷同。
         # 触发条件：motion 有时间分段（动作确实在推进）且 ff 与 motion 都含
         # 同一结果状态词 → 该状态属于动作结果，不属于首帧定格。
-        # 例：ff「听香仰头张嘴尖叫，脸上溅着暗红红珠」+ motion「2-4秒听香脸上
-        # 溅红；4-6秒听香发出凄厉尖叫」→ 尖叫与溅血都是动作结果，被提前到 t=0。
+        # 例：ff「角色B仰头张嘴尖叫，脸上溅着暗红红珠」+ motion「2-4秒角色B脸上
+        # 溅红；4-6秒角色B发出凄厉尖叫」→ 尖叫与溅血都是动作结果，被提前到 t=0。
         _RESULT_STATE_WORDS = (
             "尖叫", "溅血", "溅红", "血珠", "血迹", "溅着", "暗红",
             "瘫坐", "倒地", "倒下", "晕厥", "昏迷", "捂住脸", "捂脸",
@@ -2477,7 +2477,7 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
                 warnings.append(
                     f"{label}: ff_desc 把动作结果状态「{'、'.join(polluted)}」写进首帧定格，"
                     f"但 motion_desc 该状态发生在动作推进中（{motion[:50]}...）。"
-                    f"首帧只能画动作开始前（前一刻）的状态（如刺客潜伏水下、听香张嘴欲呼、脸上无血），"
+                    f"首帧只能画动作开始前（前一刻）的状态（如刺客潜伏水下、角色B张嘴欲呼、脸上无血），"
                     f"禁止把血溅到脸上/尖叫/倒地等动作结果提前到 t=0——否则图片模型画不出一串动作，"
                     f"只能照首帧参考图兜底导致首尾帧雷同。"
                 )
@@ -2532,7 +2532,7 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
                     f"{label}: ff_desc 定格在动作进行中（{pre[0].get('clause', '')[:30]}），"
                     f"而 motion_desc 首段动作相同（{motion[:40]}...）——视频起点与中段动作重叠，"
                     f"模型会把动作做两遍。建议改定格在动作「前一刻」"
-                    f"（如'刺客潜伏水下、水面微澜'/'刀尖抵近杨旭心口、即将触及'/'听香张嘴欲呼'）。"
+                    f"（如'刺客潜伏水下、水面微澜'/'刀尖抵近角色A心口、即将触及'/'角色B张嘴欲呼'）。"
                 )
             return
         # 进行中定格豁免：「半身已冲出水面 + 武器高举未落下」是动作进行中的
@@ -2582,7 +2582,7 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
             f"{label}: ff_desc 含完成态动词「{'、'.join(completed)}」（首帧定格在动作结果时刻），"
             f"而 motion_desc 又描述同一动作推进（{motion[:40]}...）。"
             f"t=0 已发生，motion 却又在发生 → 视频模型无法调和，会脑补假动作。"
-            f"建议 ff_desc 定格在动作「前一刻」（如'刺客潜伏水下、水面微澜'/'刀尖抵近杨旭心口、即将触及'）。"
+            f"建议 ff_desc 定格在动作「前一刻」（如'刺客潜伏水下、水面微澜'/'刀尖抵近角色A心口、即将触及'）。"
         )
 
     for shot in shots:
@@ -2641,7 +2641,7 @@ def _check_ff_multi_action(shots: list[dict], hook: dict = None,
             f"{label}: ff_desc 含 {('、'.join(parts))}——静态首帧不应定格在动作进行中。"
             f"应改写为 motion 第一个动作的「前一刻」："
             f"破水而出→潜伏水下、水面微澜；刺向→刀尖抵近、即将触及；尖叫→张嘴欲呼"
-            f"（如「刺客潜伏水下、水面微澜；杨旭静坐未察；听香仰头张嘴欲呼」）。"
+            f"（如「刺客潜伏水下、水面微澜；角色A静坐未察；角色B仰头张嘴欲呼」）。"
         )
 
     for shot in shots:
@@ -2716,7 +2716,7 @@ def _check_script_novel_alignment(script: dict) -> dict:
     # v4.1 起 narration_segment 只放人物对白（「说话人道：台词」），单镜的 narration
     # 只含本镜说话人，不含同镜出场的其他角色。若仍按"逐镜 narration 必须提及 prompt 里
     # 每个角色"校验，几乎所有有群众角色的镜头都会误报"幻觉编造"（本镜叙事镜头 1-9 的
-    # 杨旭/听香/刺客全部命中）。
+    # 角色A/角色B/刺客全部命中）。
     #
     # 正确逻辑：`known_chars` 来自 `script["characters"]`（由 extract_characters 从小说
     # 原文提取），这些角色是**已确立的**，prompt 中出现它们不算幻觉。只有 prompt 里出现
@@ -4364,7 +4364,7 @@ def _run_prompt_checklist(script: dict) -> dict:
     # GAP/regen 反馈文本仍会带上）
     results["weapon_holder"] = _check_weapon_holder(shots, hook, script.get("characters", []))
 
-    # 09-13 新增：gaze_target 与无视线状态互斥（hook ff 杨旭双目紧闭 vs 视线锚
+    # 09-13 新增：gaze_target 与无视线状态互斥（hook ff 角色A双目紧闭 vs 视线锚
     # QC 三连耗尽根因——schema 必填 gaze_target 逼 LLM 给昏迷角色编视线）
     results["gaze_state_conflict"] = _check_gaze_state_conflict(shots, hook, script.get("characters", []))
 
@@ -4429,8 +4429,8 @@ def _run_prompt_checklist(script: dict) -> dict:
     results["over_shoulder_lock"] = _check_over_shoulder_lock(shots, script.get("hook"))
 
     # v6.29 新增：keyframes 简略检查（08-10 hook 关键帧质量——keyframe desc 只写
-    # 动作动词、缺角色姿态/位置/朝向锚定，导致图片模型画错（杨旭站立/刺客消失/
-    # 听香撑伞/船断）。warning-only，提示 LLM 重写规范 keyframes；step02a 代码层
+    # 动作动词、缺角色姿态/位置/朝向锚定，导致图片模型画错（角色A站立/刺客消失/
+    # 角色B撑伞/船断）。warning-only，提示 LLM 重写规范 keyframes；step02a 代码层
     # _extract_char_layout 作为最终兜底。）
     results["keyframes_quality"] = _check_keyframes_quality(
         shots, script.get("hook"), script.get("characters", []))
@@ -4466,7 +4466,7 @@ def _run_prompt_checklist(script: dict) -> dict:
 
     # v6.45 char_layout.surface 必填检查（warning-only）——LLM 漏填 surface
     # （角色承重面：船尾/甲板/岸边/亭内/...）→ bridge 注入锚定块缺承重信息 →
-    # LLM 自由发挥成船外水面（08-26 hook 0 听香站水里实测）。只告警不修，
+    # LLM 自由发挥成船外水面（08-26 hook 0 角色B站水里实测）。只告警不修，
     # 修法交回 prompt schema 必填 + LLM regen。
     results["char_layout_surface"] = _check_char_layout_surface(
         shots, script.get("hook"))
@@ -4770,7 +4770,7 @@ def post_fix_shot_prompts(script: dict) -> dict:
             pass
         # 3.2（2026-09-12 P1 修正）：prompt 末尾截断残片——只针对**已知残片形态**
         # 精确剔除。此前的「最后一个句读后 ≤30 字一律截除」会误删合法短句
-        # （实测误删：「张十三站在船头。他看向远方」「张三拔刀。刀光一闪」）。
+        # （实测误删：「角色C站在船头。他看向远方」「张三拔刀。刀光一闪」）。
         # 已知形态清单随实跑沉淀：
         #   - 「氛围手指」：氛围词+身体词的 LLM 字段尾幻觉（hook 实测）
         #   - 「淡入淡出转场时长0」：截断参数数字收尾（shot4 实测）
@@ -4860,7 +4860,7 @@ def post_fix_shot_prompts(script: dict) -> dict:
 # post_fix_shot_prompts 只追加/归一化，对 LLM 反复写错的 4 类「确定性缺陷」无能为力：
 #   1. 致命伤建立后，同场景后续镜头的伤处锚点消失（shot8 建立后 shot12/14/17/18/20
 #      /21/23 共 7 镜全丢，伤处洇痕是剧情连续性核心）
-#   2. 视线方向用「看/望/盯+人名」而不是「画左/画右」（shot4 望星斗、shot15 看杨旭）
+#   2. 视线方向用「看/望/盯+人名」而不是「画左/画右」（shot4 望星斗、shot15 看角色A）
 #   3. 道具空间方位缺失（shot3 炭炉/shot4 酒壶/shot6 步摇/shot12 灯盏/shot24-26 灯笼马车
 #      等 8 处），模型会自由摆放重叠
 #   4. shot_count 持续超 SHOT_COUNT_MAX（27 vs 25）— LLM 反馈循环不肯合并
@@ -4880,9 +4880,9 @@ from step01_script_gen.prompt_semantic import (
 
 # 视线方向兜底：发现「看/望/盯+人名/对象」但没带空间方位词时，按目标所在位置改写
 # 简易版：只处理「望满天星斗/望星斗」一类易识别模板，复杂场景留给校验 WARN。
-# 复杂「看杨旭/看他」等需要按杨旭在 ff/lf 的实际位置推：ff 若杨旭在画右，look
-# 应写「目光画左望向杨旭」（看的人在画左、杨旭在画右、对视轴合理）。v6.32 简化
-# 处理：直接替换为「目光望向杨旭（画X）」，让模型自己推断（不写死画左/画右）。
+# 复杂「看角色A/看他」等需要按角色A在 ff/lf 的实际位置推：ff 若角色A在画右，look
+# 应写「目光画左望向角色A」（看的人在画左、角色A在画右、对视轴合理）。v6.32 简化
+# 处理：直接替换为「目光望向角色A（画X）」，让模型自己推断（不写死画左/画右）。
 # v6.43 重构：角色名 regex 改为从 char_layout 动态生成（不再写死 11 个名字）。
 # 通用兜底名（"她/他/女子/男子/公子/姑娘"等）保留硬编码。
 _GAZE_FALLBACK_RULES = [
@@ -4911,16 +4911,16 @@ def _build_char_gaze_pattern(char_names: tuple[str, ...]) -> re.Pattern:
     if not char_names:
         from step01_script_gen.prompt_semantic import COMMON_PERSON_NAMES
         char_names = COMMON_PERSON_NAMES
-    # 按名字长度降序排列（避免"听香"被"香"先匹配）
+    # 按名字长度降序排列（避免"角色B"被"香"先匹配）
     sorted_names = sorted(char_names, key=len, reverse=True)
     alt = "|".join(re.escape(n) for n in sorted_names)
     # Do not rewrite 「查看/观看/探看/检查」: the gaze verb is part of a
-    # compound verb, not a direction expression (审核实测：查看杨旭→查目光紧盯杨旭).
+    # compound verb, not a direction expression (审核实测：查看角色A→查目光紧盯角色A).
     return re.compile(r"(?<![查观探检考参])(?:看|盯|望)向?(" + alt + r")")
 
 
 def _build_char_gaze_loose_pattern(char_names: tuple[str, ...]) -> re.Pattern:
-    """宽松版：处理"望着杨旭"（不要求"向"）."""
+    """宽松版：处理"望着角色A"（不要求"向"）."""
     if not char_names:
         from step01_script_gen.prompt_semantic import COMMON_PERSON_NAMES
         char_names = COMMON_PERSON_NAMES
@@ -4930,7 +4930,7 @@ def _build_char_gaze_loose_pattern(char_names: tuple[str, ...]) -> re.Pattern:
 
 
 # 道具兜底方位（按镜头场景/位置优先级匹配，找不到就放「画中」）
-# v6.43（08-23 审计）：原版「酒杯 → 画中杨旭手边」「油纸伞 → 画中听香手边」
+# v6.43（08-23 审计）：原版「酒杯 → 画中角色A手边」「油纸伞 → 画中角色B手边」
 # 等写死本小说角色——切到其他小说（主角变林平之、场景变镖局）会失效或
 # 误植。规则：
 #   - 道具自然落点（炭炉/酒壶/灯盏/灯笼/钓杆/舴艋舟 等）→ 保留场景相关方位
@@ -5433,7 +5433,7 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
                          characters: list | None = None) -> dict:
     """武器名词必须有持握主体或落点锚（09-13 hook 悬空匕首根因）.
 
-    hook ff_desc「一支短刃自画外斜入画面，刀尖抵近张十三身侧」——
+    hook ff_desc「一支短刃自画外斜入画面，刀尖抵近角色C身侧」——
     frame_layouts.ff 两人 props 全空、同句无 holder 动词，图片模型画不出
     「画外手」，只能画一把悬浮刀（实测 ff/kf0 两图均现悬空匕首，kf0 经
     ff 整图参考 i2i 传播）。
@@ -5455,7 +5455,7 @@ def _check_weapon_holder(shots: list[dict], hook: dict | None = None,
     _HOLDER_VERBS = ("握", "持", "拔", "抽", "执", "攥", "拎", "提", "按", "掷", "甩", "接")
     # v6.84 续（2026-09-21 实测误报）：`挥鞭` / `舞剑` / `举刀` / `横刀` 这类
     # **动宾复合**写法本身就是持握证据，但「挥/舞/抡/举/擎/横」不在上面的表里，
-    # 于是真实产物镜头 16 的 kf1「张十三挥鞭」被判成「无持握主体」HARD。
+    # 于是真实产物镜头 16 的 kf1「角色C挥鞭」被判成「无持握主体」HARD。
     # 这些动词与武器词绑定很紧（动宾之间几乎不插字），因此**只在武器词±3 字内**
     # 认账——放宽到整句窗口会让「挥手示意，腰间的刀…」这类无关动词误豁免。
     _WIELD_VERBS = ("挥", "舞", "抡", "举", "擎", "横", "抄", "扬")
@@ -5593,7 +5593,7 @@ def _check_gaze_state_conflict(shots: list[dict], hook: dict | None = None,
 
     schema 强制 spec 每角色必填 gaze_target，LLM 对「双目紧闭/昏迷」角色也
     只能编一个视线目标——QC 拿编出来的锚点问 VLM 必判 no，删帧重抽 3 次
-    耗尽（hook ff 杨旭双目紧闭 vs「视线看向画右刺客」实测，kf spec 复制把
+    耗尽（hook ff 角色A双目紧闭 vs「视线看向画右刺客」实测，kf spec 复制把
     矛盾灌进每个 kf）。
 
     逐帧（ff/lf/kf spec 条目）：gaze_target 为真实目标（≠无/无视线）且该角色
@@ -5652,7 +5652,7 @@ def _check_shot_size_jump(shots: list[dict]) -> dict:
             continue
         # v6.36（08-15）：场景切换豁免——切到新场景用远景建立镜头（establishing
         # shot）是标准手法，前镜对白中近景→新场景远景不是割裂（镜头2→3 实测：
-        # 照月湾小舟上中近景 → 远处田埂上远景）。与 _check_axis_crossing 同口径
+        # 具体子地点小舟上中近景 → 远处田埂上远景）。与 _check_axis_crossing 同口径
         # （location 不同 = 新场景，允许重新建立朝向/景别）。
         _loc1 = shots[i].get("location", "") or shots[i].get("scene", "")
         _loc2 = shots[i + 1].get("location", "") or shots[i + 1].get("scene", "")
@@ -5849,8 +5849,8 @@ def _check_threat_gaze_coupling(shots: list[dict], hook: dict = None) -> dict:
     """v6.25 新增：威胁源-视线耦合检查（规则41）.
 
     从 hook 调试学到的教训：威胁源（刺客）的站位必须与「发现者」的视线方向
-    逻辑自洽。v6 构图里把刺客移到画左（船尾侧），结果中舱的听香朝画右看
-    根本看不到——反而是画右船头的杨旭先发现，逻辑崩坏。
+    逻辑自洽。v6 构图里把刺客移到画左（船尾侧），结果中舱的角色B朝画右看
+    根本看不到——反而是画右船头的角色A先发现，逻辑崩坏。
 
     本检查聚焦两类问题（warning-only）：
     1. **威胁源朝向不明/背对目标**：威胁源（刺客）描述里没写它朝向目标方向
@@ -5886,7 +5886,7 @@ def _check_threat_gaze_coupling(shots: list[dict], hook: dict = None) -> dict:
 
         if has_threat or layout_threat:
             # 威胁源是否有「面向目标」的朝向表达：朝画X/紧盯画X/侧身/望向X
-            # （char_layout 的 facing 指向目标也算——如「面向画左的杨旭」）
+            # （char_layout 的 facing 指向目标也算——如「面向画左的角色A」）
             threat_has_target = any(
                 k in text for k in (
                     "朝画", "紧盯画", "盯向画", "望画", "侧身", "朝向", "面向",
@@ -5917,8 +5917,8 @@ def _check_threat_gaze_coupling(shots: list[dict], hook: dict = None) -> dict:
         # 2. 发现者视线方向 vs 威胁方位矛盾：
         #    「视线锁定画右的刺客」→ 威胁源（刺客）应摆在画右；若威胁源的
         #    方位描述（画左/画右）与视线方向相反，发现者看的不是威胁
-        #    （hook 实测：听香「视线锁定画右水下刺客」，但刺客被排到画左，
-        #     逻辑崩坏——中舱听香朝画右看，画右是船头杨旭，画左才是刺客）。
+        #    （hook 实测：角色B「视线锁定画右水下刺客」，但刺客被排到画左，
+        #     逻辑崩坏——中舱角色B朝画右看，画右是船头角色A，画左才是刺客）。
         gaze_match = _THREAT_GAZE_RE.search(text)
         if gaze_match:
             seg = gaze_match.group()
@@ -5972,8 +5972,8 @@ _FF_DESC_SIZE_RE = re.compile(r"\d+(?:\.\d+)?\s*米")
 def _extract_dress_tokens(dynamic_features: str) -> tuple[list[str], list[str]]:
     """从角色衣着描述提取「服装色词 / 衣词」，供 ff_desc 重述检查（规则13.7）.
 
-    例：杨旭「素白色轻袍…」→ (["素白"], ["轻袍", "袍"])；
-        听香「一袭春衫…」→ ([], ["衫"])；刺客「浑身湿透…」→ ([], []) 跳过。
+    例：角色A「素白色轻袍…」→ (["素白"], ["轻袍", "袍"])；
+        角色B「一袭春衫…」→ ([], ["衫"])；刺客「浑身湿透…」→ ([], []) 跳过。
     """
     dyn = dynamic_features or ""
     colors = [c for c in _FF_DESC_COLOR_WORDS if c in dyn]
@@ -6037,7 +6037,7 @@ def _inject_dress_anchor(frame: str, characters) -> str:
             anchor = colors[0] + "衣"
         else:
             # 单衣词（衫/袍）→ 从 dynamic 里取含该衣词的完整词（春衫/长衫），
-            # 避免注入「听香（衫）」这种单字锚
+            # 避免注入「角色B（衫）」这种单字锚
             import re as _re
             _m = _re.search(r"[一-鿿]{0,2}" + garments[0], dyn)
             anchor = _m.group() if _m else garments[0]
@@ -6048,7 +6048,7 @@ def _inject_dress_anchor(frame: str, characters) -> str:
 def _inject_threat_facing(frame: str, shot: dict) -> str:
     """08-15 B2：威胁源在 ff/lf 缺朝向锚时注入朝向（规则41 防背对目标）.
 
-    优先级：① char_layout 威胁的 facing（真实站位意图，如「面向画右的杨旭」）
+    优先级：① char_layout 威胁的 facing（真实站位意图，如「面向画右的角色A」）
     ② 画面方向反推（威胁在画右 → 侧身朝画左）③ 默认侧身朝画左。
     潜伏（_RULE48_LURKING）与已没入/消失（_THREAT_GONE_WORDS）不注入——前者
     无需朝向、后者给「已没入」硬加朝向是语义错误。
@@ -6246,8 +6246,8 @@ def _check_ff_desc_anchors(shots: list[dict], hook: dict = None,
 # ========================================================================
 # v6.29 新增：keyframes 简略检查（08-10 hook 关键帧质量）
 #
-# 背景：hook 关键帧「刺客破水而出」被图片模型画成无刺客/听香站水面（船断）/
-# 杨旭站立后倒——根因是 keyframes desc 只写动作动词，缺角色姿态/位置/朝向锚定。
+# 背景：hook 关键帧「刺客破水而出」被图片模型画成无刺客/角色B站水面（船断）/
+# 角色A站立后倒——根因是 keyframes desc 只写动作动词，缺角色姿态/位置/朝向锚定。
 # 本检查对每个含中间关键帧（0<time_ratio<1）的镜头，检查 keyframes[].desc 是否
 # 含角色姿态词/位置词/威胁源朝向；简略则 WARN 提示 LLM 重写规范描述。
 # warning-only 不阻断（step02a 代码层 _extract_char_layout 是最终兜底）。
@@ -6267,7 +6267,7 @@ _KF_VALIDATION_THREAT_WORDS = (
     "刺客", "杀手", "黑衣人", "黑影", "神秘人", "蒙面人", "潜伏", "埋伏", "伏击",
 )
 # 威胁源朝向表达（Plan A 2026-08-14：补「正对/对准/刀尖朝/刺向」——武器指向目标
-# 也是朝向锚，如「刀尖朝下正对杨旭心口」，此前漏检误报）
+# 也是朝向锚，如「刀尖朝下正对角色A心口」，此前漏检误报）
 _KF_VALIDATION_ORIENT_WORDS = (
     "面向", "朝向", "侧身", "紧盯", "盯向", "望向", "朝画", "逼近",
     "正对", "对准", "刀尖朝", "刺向", "直刺", "劈落",
@@ -6347,7 +6347,7 @@ def _check_keyframes_quality(shots: list[dict], hook: dict = None,
             f"{len(missing_anchor)} 个中间关键帧 desc 缺角色姿态/位置锚定"
             f"（首例：镜头{_first[0]} t={_first[1]:.1f}「{_first[2]}…」）——"
             f"应写清该瞬间每个角色的姿态（仰卧/跪坐/站）与位置（船头/船尾/画左/画右），"
-            f"如「杨旭仰卧船头，听香跪坐船尾，刺客半身探出画右水面」（08-10 关键帧质量）。"
+            f"如「角色A仰卧船头，角色B跪坐船尾，刺客半身探出画右水面」（08-10 关键帧质量）。"
         )
     if missing_orient:
         # P1-2 修复（08-13）：label 混合 int/int 与 str "hook"，sorted 须 key=str 防 TypeError
@@ -6364,7 +6364,7 @@ def _check_keyframes_quality(shots: list[dict], hook: dict = None,
 # ========================================================================
 # v6.31 新增：关键帧时序一致性检查（08-16 钩子 kf 修复）
 #
-# 背景：钩子 kf0.4 prompt 同时写「刺客半身探出（刚出水面）」+「杨旭仰卧+心口
+# 背景：钩子 kf0.4 prompt 同时写「刺客半身探出（刚出水面）」+「角色A仰卧+心口
 # 暗红洇痕（已躺下+已流血）」——pre-state 与 post-state 混在同一 frame，
 # 渲染后图片模型左右为难（刺客方向错/刀位置错/红血时机错/与 FF 不一致）。
 #
@@ -6372,16 +6372,16 @@ def _check_keyframes_quality(shots: list[dict], hook: dict = None,
 # 1. **状态单调性**（kf[0]→kf[1]→kf[2]）：每个出镜角色的关键状态
 #    （血/出水/仰卧）只能单调递进，不能回退（如 kf0 有血、kf1 又没血）。
 # 2. **单 frame 时序一致性**：单 kf 内不能同时含 pre-state 与 post-state
-#    （「刚出水面」+「已躺下有血」是典型冲突——刺客刚出来、杨旭就已经躺下
+#    （「刚出水面」+「已躺下有血」是典型冲突——刺客刚出来、角色A就已经躺下
 #    有血，意味着刺杀瞬间过去 + 刺客又出来一次，时序荒谬）。
-# 3. **FF→kf0→LF 状态连续性**：FF 杨旭盘坐 + kf0 杨旭躺下 + LF 杨旭躺下
+# 3. **FF→kf0→LF 状态连续性**：FF 角色A盘坐 + kf0 角色A躺下 + LF 角色A躺下
 #    缺过渡——kf0 必须是「仍坐/未察觉」或「刚察觉」，不能跳到「已躺下」。
 #
 # 状态词表（关键词匹配）：
 #   - 血相关：暗红/洇痕/血/红污/血染/红点/血迹/红痕
 #   - 刺客状态：刚出水面/半身探出/破水/出水/没入水中/已没入/倒纵入水
-#   - 杨旭姿态：盘坐/坐/仰卧/躺/倒/仰倒
-#   - 听香状态：惊叫/尖叫/捂嘴/张嘴欲呼/披头散发
+#   - 角色A姿态：盘坐/坐/仰卧/躺/倒/仰倒
+#   - 角色B状态：惊叫/尖叫/捂嘴/张嘴欲呼/披头散发
 # ========================================================================
 _BLOOD_WORDS = ("暗红", "洇痕", "血污", "血染", "血痕", "血迹", "红痕", "红点", "红污", "流血", "血")
 # v6.43 重构：基础词从 prompt_semantic.registry 引入，validation 扩展"没入/已没入"等
@@ -6390,7 +6390,7 @@ _THREAT_WATER_WORDS = (
     *_PS_THREAT_WATER,
     "没入水中", "已没入", "已彻底没入", "倒纵入水", "潜回水中", "潜伏",
 )
-# 通用化（v6.62）：从原"杨旭/听香"硬编码改为按姿态类别聚合——任何角色名只要
+# 通用化（v6.62）：从原"角色A/角色B"硬编码改为按姿态类别聚合——任何角色名只要
 # 出现在 _extract_state_markers 的 poses dict 中即可被下列规则命中。键名只是语义标签。
 _RECLINING_POSES = ("盘坐", "盘膝", "端坐", "坐", "跪坐", "半躺", "倚靠", "仰卧", "躺", "仰倒", "倒下", "倒地", "倒卧", "已躺下")
 _DOWN_POSES = ("仰卧", "躺", "仰倒", "倒下", "倒地", "倒卧", "已躺下")
@@ -6400,7 +6400,7 @@ _UPRIGHT_POSES = ("撑伞", "立", "站", "捂嘴", "惊叫", "尖叫", "披头�
 
 def _find_char_with_pose(poses: dict, pose_set: tuple) -> str:
     """通用化（v6.62）：从 poses dict 找出第一个姿势在 pose_set 集合内的角色名.
-    原实现用 m["poses"].get("杨旭") 硬编码查询——换小说直接 None 静默失败。
+    原实现用 m["poses"].get("角色A") 硬编码查询——换小说直接 None 静默失败。
     """
     if not poses:
         return ""
@@ -6456,7 +6456,7 @@ def _extract_named_poses(text: str, shot: dict) -> dict[str, str]:
     """Extract pose words only when they occur in the same clause as a known role.
 
     The legacy generic ``poses["sitting"]/["reclining"]`` markers merge all
-    characters in a shot.  A perfectly valid frame such as "杨旭仰卧，听香跪坐"
+    characters in a shot.  A perfectly valid frame such as "角色A仰卧，角色B跪坐"
     was therefore reported as the same character falling back to sitting.
     """
     if not text or not isinstance(shot, dict):
@@ -6508,7 +6508,7 @@ def _presence_insufficient_line(item: dict) -> str:
 def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict:
     """v6.31 关键帧时序一致性检查（warning-only）.
 
-    1. 单 frame pre/post 冲突（"刺客刚出水面" + "杨旭仰卧血痕"）
+    1. 单 frame pre/post 冲突（"刺客刚出水面" + "角色A仰卧血痕"）
     2. kf[0..N] 状态单调性（血不能回退、出水不能回退）
     3. FF→kf[0] 状态连续性（不能跳变太大）
     """
@@ -6558,8 +6558,8 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
         lf_m = _extract_state_markers(lf_text)
 
         # 1. 单 frame pre/post 冲突
-        # 真矛盾 = 刺客 pre-state（刚出/刚探出）+ 杨旭 post-state（仰卧+血/洇痕）
-        # 允许的 stab 瞬间 = 刺客 pre-state + 杨旭 仍坐 + 血初现
+        # 真矛盾 = 刺客 pre-state（刚出/刚探出）+ 角色A post-state（仰卧+血/洇痕）
+        # 允许的 stab 瞬间 = 刺客 pre-state + 角色A 仍坐 + 血初现
         for tr, desc in mid_kfs:
             m = _extract_state_markers(desc)
             threat_just_out = m["threat_water_state"] in (
@@ -6646,7 +6646,7 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
                     )
 
         # 4. v6.32 镜内时序链：kf[last] → LF 倒退
-        #    血从有回到无 / 刺客从有回到潜伏 / 杨旭从躺回坐 = 时序倒退
+        #    血从有回到无 / 刺客从有回到潜伏 / 角色A从躺回坐 = 时序倒退
         if mid_kfs:
             last_tr, last_text = mid_kfs[-1]
             last_m = kf_markers[-1]
@@ -6701,7 +6701,7 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
 #
 # 背景：08-17 之前的校验只查"kf 内容是否矛盾"（pre+post 冲突 / 单调性 / 连续性），
 # 但 hook motion_desc 明确写「前2秒：刺客破水+下刺 / 2-4秒：闷哼+推臂 / 4-6秒：
-# 刺客没入」，LLM 只生成了 2 帧 kf 都堆到 post 段（杨旭已仰卧+血+听香跪坐）——
+# 刺客没入」，LLM 只生成了 2 帧 kf 都堆到 post 段（角色A已仰卧+血+角色B跪坐）——
 # 校验器只报"单 frame pre/post 冲突"或不报，没有"kfs 全堆后段、缺失前段 pre 帧"
 # 这一类结构性塌缩检测。修法：解析 motion_desc 时间窗（中文"前N秒" / "M-N秒"），
 # 对每 kf 计算物理时刻 t×duration_sec，判定其是否落在某时段内；并对时段数与 kf
@@ -7341,7 +7341,7 @@ def _check_char_layout_surface(shots: list[dict], hook: dict | None = None) -> d
 
     根因：char_layout schema 当前 4 字段（name/position/facing/role）—— LLM 输出
     时不写"角色所在的承重面"（船尾/甲板/岸边/亭内/...）→ vimax_bridge 拼锚定块
-    只有"画右（面向杨旭）" → LLM 自由发挥成船外水面（08-26 hook 0 听香站水里）。
+    只有"画右（面向角色A）" → LLM 自由发挥成船外水面（08-26 hook 0 角色B站水里）。
 
     修法：
       - prompt schema（main.md/hook.md/system.md）扩 surface 字段，LLM 必填
@@ -7749,7 +7749,7 @@ def _extract_pose_for_char(text: str, char_id: str) -> str | None:
             # 角色名后 6 字内出现姿势词，或姿势词紧邻角色名
             if re.search(rf"{char_re}[^。！？；\n]{{0,6}}{pose}", text):
                 return pose
-    # 兜底：句子以「角色 姿势」形式出现（如「杨旭站」「听香坐」）
+    # 兜底：句子以「角色 姿势」形式出现（如「角色A站」「角色B坐」）
     for pose in _POSE_STATES:
         if pose == "立":
             if re.search(rf"{char_re}\s*立(?!刻|即|场|功|足)", text):
@@ -7987,7 +7987,7 @@ def _check_fatal_wound_continuity(shots: list[dict]) -> dict:
                 f"镜头{wound_start_idx}→{idx}: 镜头{wound_start_idx}建立致命伤，"
                 f"但镜头{idx}（同场景继续）未提及任何伤处锚定词（心口/伤处/洇痕/"
                 f"暗红/中刀/倒地）——伤口洇痕消失、剧情连续性断裂。"
-                f"被刺后的镜头即使主体是刺客逃跑/听香反应，也必须持续锚定伤处"
+                f"被刺后的镜头即使主体是刺客逃跑/角色B反应，也必须持续锚定伤处"
                 f"（如'心口处白袍暗红洇痕'），不能完全消失（规则8）。"
             )
     for w in warnings:
@@ -8225,7 +8225,7 @@ def _check_redguo_standard(shots, characters=None):
     # ⑦ 空镜时长硬约束（v6.38.4 规则 60.4）：纯空镜 > 4s 必报
     # 红果空镜 2-4s，> 5s 绝对禁；开篇 0-10s 禁空镜
     # 08-23 v6.41 修复误报：原 `any(h in ms for h in _EMPTY_SHOT_HINTS)` substring
-    # 匹配会误判"杨旭与听香在荷塘小舟上"为空镜（"荷塘" substring 命中）。改为：
+    # 匹配会误判"角色A与角色B在荷塘小舟上"为空镜（"荷塘" substring 命中）。改为：
     # 1) char_layout 有 ≥1 个角色 → 必不是空镜（哪怕 main_subject 含场景词）
     # 2) main_subject 短句（≤6 字）且整个 main_subject 就在 _EMPTY_SHOT_HINTS
     #    → 才是纯空镜
@@ -8256,7 +8256,7 @@ def _check_redguo_standard(shots, characters=None):
         elif any(c in ms for c in _PERSON_CONNECTORS):
             continue
         # 4) main_subject 长句 + substring 命中场景词 → 也按人物镜头处理
-        #    （"杨旭与听香在荷塘小舟上" 长 13 字，明显是人物 + 场景描述，
+        #    （"角色A与角色B在荷塘小舟上" 长 13 字，明显是人物 + 场景描述，
         #     不是纯空镜）
         elif len(ms) > 6:
             continue

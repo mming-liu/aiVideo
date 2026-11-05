@@ -639,12 +639,14 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Script-Novel Gap Analysis")
     parser.add_argument("--script", "-s", required=True, help="script_result.json path")
-    parser.add_argument("--novel", "-n", default="锦衣夜行_77119小说.txt", help="Novel file path")
+    parser.add_argument("--novel", "-n", default=None, help="Novel file path (defaults to NOVEL_FILE)")
     parser.add_argument("--chapter", "-c", type=int, default=1, help="Chapter number")
     parser.add_argument("--output", "-o", help="Output report path (JSON)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
 
     args = parser.parse_args()
+    from shared.config import resolve_novel_file as _resolve_novel_file
+    args.novel = _resolve_novel_file(args.novel)
 
     # Generate report
     report = generate_gap_report(args.script, args.novel, args.chapter)

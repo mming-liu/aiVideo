@@ -25,7 +25,7 @@
 6. 事件履约声明（v6.138）：prompt 末尾「生成执行契约」把镜头节拍编号为 B1..Bn、选用台词编号为 D1..Dm；每镜必须输出 `"plan_refs": {{"beats": [B…], "lines": [D…]}}`（本镜承载哪些节拍/台词，编号按契约块）；**每个节拍都必须被至少一镜承载**，声明顺序不得回退（后位节拍/台词不得在前位完成前呈现——供述未完不得提前出现尖叫/掌掴等后果画面）；纯过渡镜写空数组
 
 ### ⚠️ v6.49 红果场景/人物硬约束（v6.53 起由代码层强制执行）
-- **scene 字段合并为 2-3 个**：所有「同一物理地点」必须用同一个 scene 字符串（例：荷塘-小舟-岸边=「照月湾」；别庄大门-别庄内-庄仆=「杨府别庄」）。禁止把同地点细分（禁「小舟」「岸边」拆开）。
+- **scene 字段合并为 2-3 个**：所有「同一物理地点」必须用同一个 scene 字符串（例：河湾-小舟-岸边=「古渡口」；宅院大门-前院-厅堂=「城南宅院」）。禁止把同地点细分（禁「小舟」「岸边」拆开）。
 - **人物合并为 2-4 人**：所有非核心配角（老汉/庄仆/船夫/家丁）统一 alias 为「群演」（main_subject 与 frame_layouts.*.name 都用「群演」名）。主角 + 主要对手 + 1-2 配角，禁止超过 4 个独立角色。
 - **威胁源统一写「神秘人」**：main_subject 与 frame_layouts 的 name 字段写「神秘人」（代码层会把「刺客/杀手/黑衣人/蒙面人」折叠为「神秘人」，与 ff_desc 合规形态一致）。
 - **代码层会自动改写**：main_subject + frame_layouts.*.name 命中 alias 表（船夫→群演、刺客→神秘人）会被直接替换，ff_desc 不动。
@@ -109,9 +109,9 @@
       "duration_sec": 6.0,
       "variation_type": "small|medium|large",
       "frame_layouts": {{
-        "ff":  [{{"name": "杨旭", "on_screen": true, "position": "画中", "pose": "盘坐", "gaze_target": "无", "props": ["酒壶"]}}],
-        "lf":  [{{"name": "杨旭", "on_screen": true, "position": "画中", "pose": "仰卧", "gaze_target": "无", "props": []}}],
-        "kfs": [[{{"name": "杨旭", "on_screen": true, "position": "画中", "pose": "盘坐", "gaze_target": "无", "props": []}}]]
+        "ff":  [{{"name": "角色甲", "on_screen": true, "position": "画中", "pose": "盘坐", "gaze_target": "无", "props": ["酒壶"], "support": {{"id": "boat_demo_1", "kind": "敞口木船", "surface": "前舱木甲板内侧"}}, "states": ["盘坐", "衣衫整洁"]}}],
+        "lf":  [{{"name": "角色甲", "on_screen": true, "position": "画中", "pose": "仰卧", "gaze_target": "无", "props": [], "support": {{"id": "boat_demo_1", "kind": "敞口木船", "surface": "前舱木甲板内侧"}}, "states": ["仰卧"]}}],
+        "kfs": [[{{"name": "角色甲", "on_screen": true, "position": "画中", "pose": "盘坐", "gaze_target": "无", "props": [], "support": {{"id": "boat_demo_1", "kind": "敞口木船", "surface": "前舱木甲板内侧"}}, "states": ["盘坐"]}}]]
       }},
       "keyframes": [
         {{"desc": "静态构图定格，**自描述本帧完整画面**（含本镜全部角色姿态 + 关键武器/道具位置 + 伤处状态；独立生图，模型看不到 ff/lf，禁写「不重复本镜 ff_desc」「前一刻画面定格」等占位措辞）", "stage": "pre|approach|climax|react|exit|after", "t_sec": 1.5}}

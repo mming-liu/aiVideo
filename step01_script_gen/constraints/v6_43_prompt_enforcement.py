@@ -619,7 +619,7 @@ class V643PromptEnforcementConstraint(Constraint):
             # （prompt 半截截断），比不替换更糟。不平衡 → 剥掉括号段用裸词替换。
             _repl = boat_repl
             if _repl.count("（") != _repl.count("）") or _repl.count("(") != _repl.count(")"):
-                _repl = _repl.split("（")[0].split("(")[0].rstrip("，, ") or "无篷舴艋舟"
+                _repl = _repl.split("（")[0].split("(")[0].rstrip("，, ") or "敞口木舟"
             _seen_boat_spec = _has_boat_spec(out)
             for pat in _BOAT_PATTERNS:
                 # v6.62（09-06）防叠：替换点紧邻前缀已是「舴艋/无篷/窄身」形制词时
@@ -636,7 +636,7 @@ class V643PromptEnforcementConstraint(Constraint):
                     # plain _has_boat_spec(out) check would still duplicate
                     # when two generic 小舟 exist in the same pass.
                     if _seen_boat_spec:
-                        return "无篷舴艋舟"
+                        return "敞口木舟"
                     _seen_boat_spec = True
                     return _repl
                 out = pat.sub(_sub_guard, out)

@@ -24,8 +24,19 @@ load_dotenv(_PROJECT_ROOT / ".env.keys")
 # ============================================================================
 NOVEL_CHAPTER = int(os.getenv("NOVEL_CHAPTER", "1"))
 BOOK_INDEX = int(os.getenv("BOOK_INDEX", "1"))
-NOVEL_NAME = os.getenv("NOVEL_NAME", "锦衣夜行")
-BOOK_NAME = os.getenv("BOOK_NAME", "杀青州")
+NOVEL_NAME = os.getenv("NOVEL_NAME", "").strip()
+BOOK_NAME = os.getenv("BOOK_NAME", "").strip()
+NOVEL_FILE = os.getenv("NOVEL_FILE", "").strip()
+
+
+def resolve_novel_file(path: str | None = None) -> str:
+    """显式路径优先；否则读 NOVEL_FILE；两者都空则报错，不回退到某部小说。"""
+    if path and str(path).strip():
+        return str(path).strip()
+    configured = os.getenv("NOVEL_FILE", NOVEL_FILE).strip()
+    if configured:
+        return configured
+    raise ValueError("未配置小说文件：请设置 NOVEL_FILE 或传入显式 path")
 
 
 # ============================================================================

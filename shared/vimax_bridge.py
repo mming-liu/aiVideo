@@ -2636,13 +2636,22 @@ def _extract_char_layout(
         # S25 通用实体—承载面合同：由 spec 显式 support 字段驱动，不限于船。
         # 不按人数推并排/宽度/共面；只陈述“谁在哪个承载实体的哪个面”。
         if _support_rows and "承载关系" not in block:
+            from collections import Counter as _Counter
+            _sid_counts = _Counter(_sid for _, _sid, _, _ in _support_rows if _sid)
             _support_parts = []
             for _sname, _sid, _skind, _ssurf in _support_rows:
                 _label = _skind or "承载面"
-                _ref = f"{_label}{(' ' + _sid) if _sid else ''}"
+                # 不把内部 ASCII id 拼进生图 Prompt：同一承载实体 ≥2 人时
+                # 用“同一{_label}”表达共享关系；单人只写承载面类别。
+                if _sid and _sid_counts[_sid] >= 2:
+                    _ref = f"同一{_label}"
+                else:
+                    _ref = _label
                 _support_parts.append(
                     f"{_sname}位于{_ref}{('的' + _ssurf) if _ssurf else ''}")
-            block += "。⚠️ 承载关系：" + "；".join(_support_parts)
+            block += ("。⚠️ 承载关系：" + "；".join(_support_parts)
+                      + "（各自双脚/坐姿与衣摆底端均处于对应承载面边界内侧，"
+                        "不落入承载面外侧）")
         # 关键帧补水面浪花（动作状态锚定，仅关键帧）
         if water_state:
             if ("破水" in scan or "刺" in scan or "浪花" in scan or "出水" in scan) \
@@ -2891,7 +2900,7 @@ def _extract_prop_layout(
                         f"护手/刀把/刀身完全没入水下不可见，水面外只露约指甲盖大小的"
                         f"极小一截{_tip}且刀身与水面垂直竖立；"
                         f"禁止匕首与水面平行、禁止匕首悬浮空中、禁止匕首横躺、"
-                        f"禁止护手/刀把/刀身露出水面；{_tip}必须正对画左杨旭胸口方向")
+                        f"禁止护手/刀把/刀身露出水面；{_tip}必须正对画左目标角色方向")
                 else:
                     parts.append(f"{pid}在{pos_word}")
                 continue

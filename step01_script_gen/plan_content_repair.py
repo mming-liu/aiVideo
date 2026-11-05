@@ -1505,6 +1505,10 @@ def slot_prompt(request, novel_text: str = "") -> str:
     _slots = [s for s in (request.get("slots") or []) if isinstance(s, dict)]
     _acts = {str(a) for s in _slots for a in (s.get("allowed_actions") or [])}
     _rule = _render_slot_rule(_acts, _slots)
+    if (request.get("binding_policy") or {}).get("selection") == "replace":
+        _rule += ("\n\n# 旧表示的单载体语义\n"
+                  "本模式最多保留 1 条画面载体：替换该事实原有绑定，"
+                  "不得扩展为多条并列载体。")
     return ("%s\n# 槽位请求（只在这些集合里选）\n%s\n%s"
             % (_head, _body, _rule))
 

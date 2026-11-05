@@ -13,14 +13,14 @@
 RULE-1  **忠于原文铁律**：分镜剧情必须严格来自小说原文，禁止编造。
    - 台词（narration_segment）必须是原文中出现过的句子，**禁止编造原文没有的对白**
    - 反例：「神秘人：受死吧」（原文无此台词，编造台词 = 拒收）
-   - 正例：从原文台词池中挑选，角色名+台词均有出处（如「张十三：凶手是谁，如何刺杀了公子，快说！」）
+   - 正例：从原文台词池中挑选，角色名+台词均有出处（如「角色丙：凶手是谁，如何刺杀了公子，快说！」）
    - 角色名必须是原文出现过的名字，禁止「某男子/黑衣人」等无出处指代；例外：main 规则要求威胁源统一写「神秘人」，这是后处理约定的角色别名
    - 关键剧情（刺杀/对峙/反转）必须按原文顺序拍，不能改结局、不能加原文没有的事件
 
 RULE-2  **高潮完整性铁律**：高潮动作必须拍完，禁止停在"威胁态"。
    - 刺杀场景必须拍到：武器接触身体 + 受害者反应 + 伤害可视化（3 选 2 才算合格）
-   - 反例：lf_desc=刺客举刃逼近（只有威胁，没拍到刺中 = 拒收）
-   - 正例：lf_desc=匕首刺入胸口，杨旭闷哼后仰，白袍暗红洇开（动作完成+结果）
+   - 反例：lf_desc=袭击者举刃逼近（只有威胁，没拍到刺中 = 拒收）
+   - 正例：lf_desc=匕首刺入胸口，角色甲闷哼后仰，白袍暗红洇开（动作完成+结果）
    - 对峙/质问场景必须拍到：对方回话/反应，不能只有单方面发问
    - 每个 climax 关键帧对应的镜头，**lf_desc 一定是动作完成后的状态**
 
@@ -38,7 +38,7 @@ RULE-4  **开头节奏铁律**：抖音短剧前 3 秒必须抓人，禁止慢�
 RULE-5  **对白密度铁律**：对白镜占比 ≥ 40%（12 镜至少 5 镜有对白）。
    - 高潮镜必有对白、对峙镜必有对白、转折镜必有对白
    - 每段剧情 beat 至少 1 句对白推进剧情（intro 段除外）
-   - 台词全部来自原文（见 RULE-1），格式为「角色名：台词」（如"杨旭：你为何背叛"）
+   - 台词全部来自原文（见 RULE-1），格式为「角色名：台词」（如"角色甲：你为何背叛"）
    - 长句可精简到 15 字内，但保留原意和角色名
 
 【结构规则 · 高优先级】
@@ -61,7 +61,7 @@ RULE-13 **kf t_sec 范围**：0.05 ≤ t_sec < duration_sec，超界即非法。
 RULE-13b **mid 阶段 kf 与 ff 拉开差异**：approach/climax/react 帧 desc 与 ff_desc 不得雷同（姿态/手臂/角度/头部朝向 ≥2 项可量化不同）；写不出差异就 keyframes=[]（无 kf 合法），禁止 ff 复读帧（高相似 kf 生图必复刻 ff）。pre 可近 ff、after/exit 可近 lf。
 RULE-14 **kf desc 自我完备**：禁止"同上/动作相同/参考前镜"等占位模板。
 RULE-15 **frame_layouts 6 字段必填**：name / on_screen / position / pose / gaze_target / props 缺一即拒。
-RULE-16 **角色锚点填 main_subject**：有人物出镜时必填「角色名+动作」（如"杨旭垂钓"），从 characters.identifier 挑选。
+RULE-16 **角色锚点填 main_subject**：有人物出镜时必填「角色名+动作」（如"角色甲垂钓"），从 characters.identifier 挑选。
          禁止 main_subject="群演/人群/路人/某男子/某女子/某"等泛化指代。
 RULE-17 **空镜禁人物**：main_subject=空镜/环境/远景 时 ff_desc 强写"无一人/无人/空无一人"。
 RULE-18 **机位多样性**：`camera_movement` 至少 3 种；连续 3 镜不可重复。运镜只写该字段，不写进 `prompt`。
@@ -156,7 +156,7 @@ stage 枚举：pre / approach / climax / react / exit / after
 单镜无 kf，对白镜（命中 R1 强制）：
 ```json
 {
-  "title": "照月湾问罪",
+  "title": "古渡口问罪",
   "shot_count": 8,
   "outline": [
     {"position_pct": 15, "beat_summary": "Xia Xun infiltrates Buddha hall, discovers guard setup, senses danger", "has_dialogue": false, "intensity": "low"},
@@ -164,33 +164,33 @@ stage 枚举：pre / approach / climax / react / exit / after
     {"position_pct": 80, "beat_summary": "Xia Xun throws evidence, Ji Gang reacts, situation reverses", "has_dialogue": true, "intensity": "high"}
   ],
   "characters": [
-    {"identifier": "杨旭", "static_features": "白衣书生, 二十出头, 腰悬长剑", "dynamic_features": "质问群臣"},
+    {"identifier": "角色甲", "static_features": "白衣书生, 二十出头, 腰悬长剑", "dynamic_features": "质问群臣"},
     {"identifier": "纣王", "static_features": "黑袍金冠, 不惑之年, 怒目", "dynamic_features": "怒喝回击"}
   ],
   "shots": [
     {
       "index": 1,
-      "scene": "照月湾",
+      "scene": "古渡口",
       "location": "船头",
-      "main_subject": "杨旭质问",
-      "prompt": "中景, 杨旭盘膝坐船头质问群臣, 素白轻袍, 右手持钓杆, 暖金光位。",
-      "ff_desc": "杨旭盘膝坐船头, 素白轻袍, 钓杆垂入画右, 暖金阳光斜照, 表情冷峻。",
-      "lf_desc": "杨旭微抬下巴, 钓杆仍垂船舷外, 目光锐利望向画右远荷, 表情冷峻。",
-      "motion_desc": "前 2秒: 杨旭端坐开口 / 2-5秒: 杨旭质问语气加重, 头部缓慢右转 30 度。",
+      "main_subject": "角色甲质问",
+      "prompt": "中景, 角色甲盘膝坐船头质问群臣, 素白轻袍, 右手持钓杆, 暖金光位。",
+      "ff_desc": "角色甲盘膝坐船头, 素白轻袍, 钓杆垂入画右, 暖金阳光斜照, 表情冷峻。",
+      "lf_desc": "角色甲微抬下巴, 钓杆仍垂船舷外, 目光锐利望向画右远荷, 表情冷峻。",
+      "motion_desc": "前 2秒: 角色甲端坐开口 / 2-5秒: 角色甲质问语气加重, 头部缓慢右转 30 度。",
       "keyframes": [],
       "frame_layouts": {
-        "ff": [{"name": "杨旭", "on_screen": true, "position": "画中央", "pose": "盘膝坐, 右手持钓杆", "gaze_target": "画右远荷", "props": ["钓杆"]}],
-        "lf": [{"name": "杨旭", "on_screen": true, "position": "画中央", "pose": "盘膝坐, 右手持钓杆", "gaze_target": "画右远荷", "props": ["钓杆"]}],
+        "ff": [{"name": "角色甲", "on_screen": true, "position": "画中央", "pose": "盘膝坐, 右手持钓杆", "gaze_target": "画右远荷", "props": ["钓杆"], "support": {"id": "boat_demo_1", "kind": "敞口木船", "surface": "前舱木甲板内侧"}, "states": ["盘坐", "衣衫整洁"]}],
+        "lf": [{"name": "角色甲", "on_screen": true, "position": "画中央", "pose": "盘膝坐, 右手持钓杆", "gaze_target": "画右远荷", "props": ["钓杆"], "support": {"id": "boat_demo_1", "kind": "敞口木船", "surface": "前舱木甲板内侧"}, "states": ["盘坐"]}],
         "kfs": []
       },
-      "core_keywords": "杨旭, 质问, 船头, 远荷, 暖金",
+      "core_keywords": "角色甲, 质问, 船头, 远荷, 暖金",
       "fx_effect": "无",
       "clip_transition": "硬切",
       "context_bridge": "承接钩子引入，镜头落船头建立场景",
-      "narration_segment": "杨旭：你为何背叛",
-      "subtitle": "杨旭：你为何背叛",
+      "narration_segment": "角色甲：你为何背叛",
+      "subtitle": "角色甲：你为何背叛",
       "color_tone": "暖金",
-      "audio_cue": "BGM=古筝轻弹; SFX=水面微荡+远处鸟鸣; VO=杨旭质问",
+      "audio_cue": "BGM=古筝轻弹; SFX=水面微荡+远处鸟鸣; VO=角色甲质问",
       "duration_sec": 5,
       "variation_type": "small"
     }
@@ -204,53 +204,53 @@ stage 枚举：pre / approach / climax / react / exit / after
 单镜多 kf，过肩机位（命中 R1+R2 强制）：
 ```json
 {
-  "title": "刺客破水一击",
+  "title": "袭击者破水一击",
   "shot_count": 12,
   "characters": [
-    {"identifier": "刺客", "static_features": "黑衣蒙面, 身形精瘦", "dynamic_features": "破水刺杀"},
-    {"identifier": "杨旭", "static_features": "白衣书生, 二十出头, 腰悬长剑", "dynamic_features": "仰卧被刺"}
+    {"identifier": "袭击者", "static_features": "黑衣蒙面, 身形精瘦", "dynamic_features": "破水刺杀"},
+    {"identifier": "角色甲", "static_features": "白衣书生, 二十出头, 腰悬长剑", "dynamic_features": "仰卧被刺"}
   ],
   "shots": [
     {
       "index": 7,
-      "scene": "照月湾",
+      "scene": "古渡口",
       "location": "船舷",
-      "main_subject": "刺客破水",
-      "prompt": "近景, 刺客从画下方水中半身探出, 右手单手持匕首朝下, 荷间水花飞溅, 冷青月光。",
-      "ff_desc": "刺客半身探出画下方水面, 仅肩部以上+单手露刀尖, 身体其余隐于水中, 冷青月光下刀刃反光。",
-      "lf_desc": "刺客立于船舷, 匕首刺入杨旭心口, 杨旭仰卧船头胸口白袍暗红洇痕扩大, 刺客抽刀待遁。",
-      "motion_desc": "前 2秒: 刺客半身破水+出刀+攀舷 / 2-4秒: 闷哼+侧身入船+举刀下刺 / 4-8秒: 刀入胸口+血涌+刺客抽刀待遁。",
+      "main_subject": "袭击者破水",
+      "prompt": "近景, 袭击者从画下方水中半身探出, 右手单手持匕首朝下, 荷间水花飞溅, 冷青月光。",
+      "ff_desc": "袭击者半身探出画下方水面, 仅肩部以上+单手露刀尖, 身体其余隐于水中, 冷青月光下刀刃反光。",
+      "lf_desc": "袭击者立于船舷, 匕首刺入角色甲心口, 角色甲仰卧船头胸口白袍暗红洇痕扩大, 袭击者抽刀待遁。",
+      "motion_desc": "前 2秒: 袭击者半身破水+出刀+攀舷 / 2-4秒: 闷哼+侧身入船+举刀下刺 / 4-8秒: 刀入胸口+血涌+袭击者抽刀待遁。",
       "keyframes": [
-        {"stage": "pre", "t_sec": 1.5, "desc": "刺客半身破水+右手单手露刀尖, 肩部以上出水面, 身体其余隐于水中, 冷青月光下刀刃反光。"},
-        {"stage": "climax", "t_sec": 4.5, "desc": "刺客立于船舷, 匕首尖朝下刺入杨旭心口, 杨旭仰卧船头双目大睁, 胸口白袍瞬间洇出暗红。"},
-        {"stage": "after", "t_sec": 6.5, "desc": "刺客抽刀后撤一步, 匕首刃上带血, 杨旭仰卧船头胸口白袍暗红洇痕扩大, 面部失神。"}
+        {"stage": "pre", "t_sec": 1.5, "desc": "袭击者半身破水+右手单手露刀尖, 肩部以上出水面, 身体其余隐于水中, 冷青月光下刀刃反光。"},
+        {"stage": "climax", "t_sec": 4.5, "desc": "袭击者立于船舷, 匕首尖朝下刺入角色甲心口, 角色甲仰卧船头双目大睁, 胸口白袍瞬间洇出暗红。"},
+        {"stage": "after", "t_sec": 6.5, "desc": "袭击者抽刀后撤一步, 匕首刃上带血, 角色甲仰卧船头胸口白袍暗红洇痕扩大, 面部失神。"}
       ],
       "frame_layouts": {
-        "ff": [{"name": "刺客", "on_screen": true, "position": "画下方水面", "pose": "半身探出, 右手持匕首", "gaze_target": "画上方船舷", "props": ["匕首"]}],
+        "ff": [{"name": "袭击者", "on_screen": true, "position": "画下方水面", "pose": "半身探出, 右手持匕首", "gaze_target": "画上方船舷", "props": ["匕首"]}],
         "lf": [
-          {"name": "刺客", "on_screen": true, "position": "画中央", "pose": "立船舷, 右手持匕首", "gaze_target": "杨旭", "props": ["匕首"]},
-          {"name": "杨旭", "on_screen": true, "position": "画左船头", "pose": "仰卧, 双手无力垂", "gaze_target": "刺客", "props": []}
+          {"name": "袭击者", "on_screen": true, "position": "画中央", "pose": "立船舷, 右手持匕首", "gaze_target": "角色甲", "props": ["匕首"]},
+          {"name": "角色甲", "on_screen": true, "position": "画左船头", "pose": "仰卧, 双手无力垂", "gaze_target": "袭击者", "props": []}
         ],
         "kfs": [
-          [{"name": "刺客", "on_screen": true, "position": "画下方水面", "pose": "半身破水, 右手露刀尖", "gaze_target": "画上方", "props": ["匕首"]}],
+          [{"name": "袭击者", "on_screen": true, "position": "画下方水面", "pose": "半身破水, 右手露刀尖", "gaze_target": "画上方", "props": ["匕首"]}],
           [
-            {"name": "刺客", "on_screen": true, "position": "画中央", "pose": "立船舷, 右手刺下", "gaze_target": "杨旭", "props": ["匕首"]},
-            {"name": "杨旭", "on_screen": true, "position": "画左船头", "pose": "仰卧, 胸口被刺", "gaze_target": "刺客", "props": []}
+            {"name": "袭击者", "on_screen": true, "position": "画中央", "pose": "立船舷, 右手刺下", "gaze_target": "角色甲", "props": ["匕首"]},
+            {"name": "角色甲", "on_screen": true, "position": "画左船头", "pose": "仰卧, 胸口被刺", "gaze_target": "袭击者", "props": []}
           ],
           [
-            {"name": "刺客", "on_screen": true, "position": "画中央", "pose": "立船舷, 右手持带血匕首后撤", "gaze_target": "杨旭", "props": ["匕首"]},
-            {"name": "杨旭", "on_screen": true, "position": "画左船头", "pose": "仰卧, 胸口洇痕扩大", "gaze_target": "刺客", "props": []}
+            {"name": "袭击者", "on_screen": true, "position": "画中央", "pose": "立船舷, 右手持带血匕首后撤", "gaze_target": "角色甲", "props": ["匕首"]},
+            {"name": "角色甲", "on_screen": true, "position": "画左船头", "pose": "仰卧, 胸口洇痕扩大", "gaze_target": "袭击者", "props": []}
           ]
         ]
       },
-      "core_keywords": "刺客, 匕首, 破水, 杨旭, 暗红",
+      "core_keywords": "袭击者, 匕首, 破水, 角色甲, 暗红",
       "fx_effect": "升格",
       "clip_transition": "硬切",
-      "context_bridge": "承接前镜杨旭低头饮酒，刺客破水",
-      "narration_segment": "张十三：凶手是谁，如何刺杀了公子，快说！",
-      "subtitle": "张十三：凶手是谁，如何刺杀了公子，快说！",
+      "context_bridge": "承接前镜角色甲低头饮酒，袭击者破水",
+      "narration_segment": "角色丙：凶手是谁，如何刺杀了公子，快说！",
+      "subtitle": "角色丙：凶手是谁，如何刺杀了公子，快说！",
       "color_tone": "冷青血红",
-      "audio_cue": "BGM=古筝骤停; SFX=水花溅起+匕首入肉+闷哼; VO=刺客冷哼",
+      "audio_cue": "BGM=古筝骤停; SFX=水花溅起+匕首入肉+闷哼; VO=袭击者冷哼",
       "duration_sec": 8,
       "variation_type": "large"
     }
@@ -337,7 +337,7 @@ stage 枚举：pre / approach / climax / react / exit / after
       "index": 7,
       "scene": "荷塘",
       "location": "水下",
-      "main_subject": "刺客潜伏",
+      "main_subject": "袭击者潜伏",
       ...
       "narration_segment": "",
       ...
@@ -346,12 +346,12 @@ stage 枚举：pre / approach / climax / react / exit / after
       "index": 9,
       "scene": "荷塘",
       "location": "船舷",
-      "main_subject": "刺客破水举刀",
-      "prompt": "近景, 刺客从水中探出, 举刀逼近杨旭...",
-      "ff_desc": "刺客破水, 匕首高举。",
-      "lf_desc": "刺客举刃逼近杨旭, 刀光凛冽。",
-      "motion_desc": "前2秒: 破水 / 2-5秒: 攀船举刀 / 5-8秒: 逼近杨旭。",
-      "keyframes": [{"stage": "climax", "t_sec": 6.0, "desc": "刺客举刀逼近, 刀光映在杨旭脸上。"}],
+      "main_subject": "袭击者破水举刀",
+      "prompt": "近景, 袭击者从水中探出, 举刀逼近角色甲...",
+      "ff_desc": "袭击者破水, 匕首高举。",
+      "lf_desc": "袭击者举刃逼近角色甲, 刀光凛冽。",
+      "motion_desc": "前2秒: 破水 / 2-5秒: 攀船举刀 / 5-8秒: 逼近角色甲。",
+      "keyframes": [{"stage": "climax", "t_sec": 6.0, "desc": "袭击者举刀逼近, 刀光映在角色甲脸上。"}],
       "narration_segment": "神秘人：受死吧",
       "subtitle": "神秘人：受死吧",
       ...

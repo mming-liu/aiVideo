@@ -323,7 +323,7 @@ _AUDIT_RULES_TEMPLATE = """# 审查规则
 
 ```json
 "characters": [
-  {{"identifier": "张十三", "aliases": ["小厮"], "evidence": "原文此段只有张十三在场，小厮是他随从的泛称，不是第二个角色"}}
+  {{"identifier": "护卫甲", "aliases": ["随从"], "evidence": "原文此段只有护卫甲在场，随从是他随从的泛称，不是第二个角色"}}
 ]
 ```
 ⚠️ 上面这段是 JSON 示例（`{{`/`}}` 是模板转义，实际输出写单个花括号）。
@@ -424,7 +424,7 @@ def _normalize_character_aliases(root: "dict | None") -> list[dict]:
 
     协议（生产者侧声明「某称谓与某已在场人物是**同一实体**」）：
 
-        "characters": [{"identifier": "张十三", "aliases": ["小厮"],
+        "characters": [{"identifier": "护卫甲", "aliases": ["随从"],
                         "evidence": "<原文/帧内证据>"}]
 
     **宽容读**（本函数只做形状归一，不猜语义）：

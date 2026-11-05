@@ -49,11 +49,8 @@ CLIMAX_WORDS_GAP_GENERIC: tuple[str, ...] = (
 # B.3.3 Doubao 高潮回灌使用的最小集合。必须保持是 GAP 检测词表的子集，
 # 否则修复器注入后 GAP 仍然读不到。
 CLIMAX_WORDS_GAP_INJECT: tuple[str, ...] = ("冲突", "反转", "真相")
-# 特化兜底：锦衣夜行第一部第一章的情节标记词（历史种子数据）。
-# 迁移目标：script["meta"]["climax_keywords"]——meta 提供后本兜底自动停用。
-CLIMAX_WORDS_GAP_NOVEL_FALLBACK: tuple[str, ...] = (
-    "密信", "圣旨", "破水而出",
-)
+# 特化兜底已清空：不得把某部小说的情节词作为通用回退。
+CLIMAX_WORDS_GAP_NOVEL_FALLBACK: tuple[str, ...] = ()
 
 # ---------------------------------------------------------------------------
 # 爆点/高潮「抽象节拍词」注入产物清单（v6.62 收敛，2026-09-06）——单一事实源
@@ -112,23 +109,56 @@ def strip_injected_suffixes(text: str) -> str:
         return ""
     return out
 
-# 历史 23 词**原序**表（含特化 3 词原位：第 13/14/23 位）。检测用 any() 匹配、
-# 顺序不影响语义，但为满足「无 meta 时与历史词表逐字有序一致」的零变化断言，
-# 无 meta 路径直接返回本表。
-_CLIMAX_WORDS_GAP_NO_META: tuple[str, ...] = (
-    "战斗", "刺杀", "决斗", "冲突", "反转", "爆炸", "死亡", "离开", "逃离",
-    "追逐", "阴谋", "暴露", "密信", "圣旨", "真相", "身份暴露", "杀", "死", "跑",
-    "寒光", "鲜血", "尖叫", "破水而出",
-)
+# 无 meta 时只用通用词表；不再保留某部小说的情节词。
+_CLIMAX_WORDS_GAP_NO_META: tuple[str, ...] = CLIMAX_WORDS_GAP_GENERIC
+
+
+def derive_chapter_climax_keywords(script: dict | None) -> list[str]:
+    """无显式 meta 时，从本章 core_keywords / chapter_outline 派生高频实词.
+
+    只做确定性计数，不调用模型、不猜剧情；没有足够重复时返回空，由调用方
+    退回通用词表并留下“未派生”缺口。
+    """
+    if not isinstance(script, dict):
+        return []
+    meta = script.get("meta")
+    if isinstance(meta, dict):
+        extra = meta.get("climax_keywords")
+        if (isinstance(extra, (list, tuple)) and extra
+                and all(isinstance(w, str) and w for w in extra)):
+            return list(extra)
+    from collections import Counter
+    import re as _re
+    counts: Counter[str] = Counter()
+    units = []
+    for key in ("hook", "shots"):
+        if key == "hook":
+            units.append(script.get("hook"))
+        else:
+            units.extend(script.get("shots") or [])
+    for unit in units:
+        if not isinstance(unit, dict):
+            continue
+        raw = unit.get("core_keywords")
+        if isinstance(raw, str):
+            raw = _re.split(r"[，,、;；\s]+", raw)
+        if isinstance(raw, (list, tuple)):
+            for w in raw:
+                w = str(w).strip()
+                if 2 <= len(w) <= 12:
+                    counts[w] += 1
+    outline = script.get("chapter_outline") or script.get("outline")
+    if isinstance(outline, str):
+        for w in _re.findall(r"[一-龥]{2,6}", outline):
+            counts[w] += 1
+    derived = [w for w, n in counts.most_common() if n >= 2][:5]
+    if derived:
+        script.setdefault("meta", {})["climax_keywords"] = derived
+    return derived
 
 
 def climax_words_for_gap(script: dict | None) -> list[str]:
-    """GAP 高潮覆盖检测用词表 = 通用半 +（meta 注入 或 特化兜底）.
-
-    meta 形态：script["meta"]["climax_keywords"] = ["词1", "词2", ...]
-    （list/tuple 均可且全为 str、非空时视为该章/部自己的特化标记词，
-    替换 NOVEL_FALLBACK；否则恒走 fallback——见模块头现状声明）。
-    """
+    """GAP 高潮覆盖检测用词表 = 通用词 + 本章显式/派生标记词."""
     if script and isinstance(script, dict):
         meta = script.get("meta")
         if isinstance(meta, dict):
@@ -136,7 +166,9 @@ def climax_words_for_gap(script: dict | None) -> list[str]:
             if (isinstance(extra, (list, tuple)) and extra
                     and all(isinstance(w, str) and w for w in extra)):
                 return list(CLIMAX_WORDS_GAP_GENERIC) + list(extra)
-    # 无 meta（现状）：返回历史 23 词原序表——与改前内联字面量逐字有序一致
+        derived = derive_chapter_climax_keywords(script)
+        if derived:
+            return list(CLIMAX_WORDS_GAP_GENERIC) + derived
     return list(_CLIMAX_WORDS_GAP_NO_META)
 
 
@@ -186,6 +218,7 @@ __all__ = [
     "CLIMAX_INJECTED_PUNCH_PATTERN",
     "CLIMAX_INJECTED_MERGE_MARKER",
     "climax_words_for_gap",
+    "derive_chapter_climax_keywords",
     "strip_injected_suffixes",
     "KEYWORD_SYNONYMS",
 ]

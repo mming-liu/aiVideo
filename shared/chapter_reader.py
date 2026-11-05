@@ -1,4 +1,4 @@
-"""章节提取工具 — 从 锦衣夜行 小说文件中提取指定章节.
+"""章节提取工具 — 从小说文件中提取指定章节.
 
 小说结构:
   - GBK 编码
@@ -435,7 +435,8 @@ def filter_section_by_chapter(novel_path: str, section_index: int, text: str, _r
 if __name__ == "__main__":
     # 快速测试
     import sys
-    novel = "锦衣夜行_77119小说.txt"
+    from shared.config import resolve_novel_file
+    novel = resolve_novel_file()
     if len(sys.argv) > 1:
         novel = sys.argv[1]
 

@@ -159,7 +159,7 @@ def _check_ff_lf_stage_conflict(prompt: str) -> list[str]:
     has_anchor = any(w in prompt for w in injury_anchor)
     if has_pre and has_anchor:
         return ["ff_lf_stage_conflict（ff 同时含前态词+伤锚结束词，"
-                "如「杨旭闭目吟哦」+「伤处白袍心口一片暗红血迹洇开」→ 矛盾）"]
+                "如「角色A闭目吟哦」+「肩头青衫一片暗红血迹洇开」→ 矛盾）"]
     return []
 
 

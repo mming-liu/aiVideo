@@ -218,10 +218,31 @@ def test_support_binding_is_not_boat_only():
     block = bridge._extract_char_layout(
         shot, [{"identifier": "甲"}, {"identifier": "乙"}, {"identifier": "丙"}],
         frame_kind="first_frame")
-    assert "甲位于马车 cart_1的车板" in block
-    assert "乙位于平台 platform_2的台面" in block
+    assert "甲位于马车的车板" in block
+    assert "cart_1" not in block
+    assert "乙位于平台的台面" in block
+    assert "platform_2" not in block
     assert "并排" not in block
     assert "同一甲板平面" not in block
+
+
+def test_shared_support_uses_same_label_without_ascii_id():
+    import shared.vimax_bridge as bridge
+
+    ff = [
+        {"name": "甲", "on_screen": True, "position": "前舱", "pose": "坐着",
+         "support": {"id": "boat_zhaoyue_1", "kind": "敞口木舟", "surface": "前舱木甲板内侧"}},
+        {"name": "乙", "on_screen": True, "position": "中舱", "pose": "站着",
+         "support": {"id": "boat_zhaoyue_1", "kind": "敞口木舟", "surface": "中舱木甲板内侧"}},
+    ]
+    shot = {"index": 1, "location": "湖湾", "ff_desc": "甲和乙在船上。",
+            "lf_desc": "甲和乙在船上。", "frame_layouts": {"ff": ff, "lf": ff}}
+    block = bridge._extract_char_layout(
+        shot, [{"identifier": "甲"}, {"identifier": "乙"}], frame_kind="first_frame")
+    assert "甲位于同一敞口木舟的前舱木甲板内侧" in block
+    assert "乙位于同一敞口木舟的中舱木甲板内侧" in block
+    assert "boat_zhaoyue_1" not in block
+    assert "各自双脚/坐姿与衣摆底端均处于对应承载面边界内侧" in block
 
 
 def test_boat_capacity_anchor_excludes_water_and_non_boat():

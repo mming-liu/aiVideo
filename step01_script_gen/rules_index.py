@@ -1168,7 +1168,7 @@ RULES_INDEX: dict[str, RuleEntry] = {
         "date": "2026-09-13",
         "prompt_sections": [
             "prompts/system.md:K3. mid 阶段 kf 必须与 ff 拉开动作差异",
-            "prompts/system.md:规划目标 70-80s（按 ~75s 分配）",
+            "prompts/system.md:规划目标 {{TARGET_MIN}}-{{TARGET_MAX}}s（按 ~{{TARGET_MID}}s 分配）",
             "prompts/doubao_system.md:RULE-13b",
             "prompts/doubao_system.md:RULE-8",
             "prompts.py:_build_total_duration_constraint",

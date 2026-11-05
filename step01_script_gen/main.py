@@ -39,7 +39,7 @@ from shared.config import (DURATION_MIN_SEC, DURATION_MAX_SEC,
                            DURATION_TARGET_MIN_SEC, DURATION_TARGET_MAX_SEC,
                            duration_band, duration_band_matches)
 from shared.config import (
-    NOVEL_CHAPTER, BOOK_INDEX,
+    NOVEL_CHAPTER, BOOK_INDEX, resolve_novel_file,
     CHARACTER_EXTRACTION_ENABLED,
     SCENE_OBJECT_EXTRACTION_ENABLED,
     SCENE_ASSET_EXTRACTION_ENABLED,
@@ -212,9 +212,9 @@ import shared.content_safety as content_safety
 # 1. 从小说提取指定章节
 # ============================================================================
 
-def read_chapter(path: str = "锦衣夜行_77119小说.txt", chapter: int = 1) -> str:
+def read_chapter(path: str | None = None, chapter: int = 1) -> str:
     """提取小说指定章节（合并多个小节），返回完整内容."""
-    full_text = extract_section(path, chapter)
+    full_text = extract_section(resolve_novel_file(path), chapter)
     _logger.info(f"[INFO] 选取第 {chapter} 章全文 {len(full_text)} 字符作为素材")
     return full_text
 
@@ -7332,14 +7332,14 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "**为修复被点名的问题，可以在授权字段补必要动作**——"
             "「motion_desc 缺少跃船过程」的正解就是补上该动作，不得因为「禁止新增」而回避；"
             "**视线方位（画左/画右/画上方/目光/凝望/仰望/俯视）** 是规则 22.5a 硬性要求——"
-            "禁止砍/省略，但**禁止写成「望着她」「看杨旭」这类无空间方位词**\n"
+            "禁止砍/省略，但**禁止写成「望着她」「看角色甲」这类无空间方位词**\n"
             "3. 禁止未经授权改景别/时长；台词/剧情/narration_segment 文本保持原样\n"
             "4. 禁止增删镜头、改 shot.index\n"
             "5. 只输出 shot_replacements，不输出整本脚本；未列问题的镜头绝不进入；"
             "替换镜头内**未被 warn 点到的字段逐字保留**（可照抄原镜文本）\n"
             "patch 未覆盖的字段**逐字保留**\n"
             "6. **lf_desc 至少 40 字，含本镜所有出镜角色的完整静态布局**（姿态/位置/服装色/视线）"
-            "——过短（如「已没入水下，杨旭仰卧船头」单句）会丢角色状态、产生内部矛盾\n\n"
+            "——过短（如「已没入水下，角色甲仰卧船头」单句）会丢角色状态、产生内部矛盾\n\n"
             "**关键字段保留白名单（最高优先级，违反 = 致命伤/漂色/连续性破缺）**：\n"
             "即使该字段不在 warn 列表中，下述字段也**禁止删/改/移位**——\n"
             "C 模式实验教训：改服装色 warn 连带删掉致命伤 anchor（shot14/24/25）。\n"
@@ -7359,8 +7359,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "若一条 warn 改 X 字段（ff_desc/lf_desc/prompt），该字段内已存在的\n"
             "  致命伤 anchor / 服装色 / 角色状态 / 锚点连贯子句 必须**逐字保留**。\n"
             "例：ff_desc 报「缺服装色」→ 仅追加缺色角色的服装色，**禁止**顺手删\n"
-            "  已有的「心口暗红洇痕」；lf_desc 报「缺服装色」→ 同样只补服装色，\n"
-            "  已有的「仰卧/血痕/听香捂嘴」等不删。\n\n"
+            "  已有的「肩头暗红洇痕」；lf_desc 报「缺服装色」→ 同样只补服装色，\n"
+            "  已有的「仰卧/血痕/配角捂嘴」等不删。\n\n"
             "**修复决策树（最高优先级，不知道改哪里时按表走）**：\n"
             "- ff_desc/lf_desc 报「缺服装色」→ 仅在对应字段末尾追加缺色角色服装色，\n"
             "  已有 anchor 全保留（见上「同镜内 anchor」原则）\n"
@@ -7376,24 +7376,24 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "- 报「kf 时段缺段」→ 按 motion_desc 时段表补 1 帧定格（time_ratio = 段中点/duration_sec）\n\n"
             "**3 组正反例（最高优先级）**——C 模式实验的具体教训：\n"
             "1. **致命伤保护**：\n"
-            "   - ❌ 反例：报「缺服装色」→ 整段重写 ff_desc（顺手删心口暗红洇痕）\n"
-            "   - ✅ 正例：报「缺服装色」→ 仅追加「刺客玄色劲装」5 字到 ff_desc 末尾，\n"
-            "     已有的「心口暗红洇痕/仰卧/听香跪坐」一字不动\n"
+            "   - ❌ 反例：报「缺服装色」→ 整段重写 ff_desc（顺手删肩头暗红洇痕）\n"
+            "   - ✅ 正例：报「缺服装色」→ 仅追加「袭击者玄色劲装」5 字到 ff_desc 末尾，\n"
+            "     已有的「肩头暗红洇痕/仰卧/配角跪坐」一字不动\n"
             "2. **视线方位**：\n"
-            "   - ❌ 反例：报「视线无方位」→ 删整句「杨旭望一眼星空」\n"
-            "   - ✅ 正例：报「视线无方位」→ 改写为「杨旭仰望画上方星空」\n"
+            "   - ❌ 反例：报「视线无方位」→ 删整句「角色甲望一眼星空」\n"
+            "   - ✅ 正例：报「视线无方位」→ 改写为「角色甲仰望画上方星空」\n"
             "     （加方位词 + 保留原意，**这是规则 22.5a 硬性要求，禁砍**）\n"
             "3. **lf_desc 完整性（v6.37 实测坑）**：\n"
-            "   - ❌ 反例：报「服装色遗漏」→ 整句改写「杨旭仰卧」为「杨旭仰卧船头」\n"
+            "   - ❌ 反例：报「服装色遗漏」→ 整句改写「角色甲仰卧」为「角色甲仰卧船头」\n"
             "     （丢原 anchor 短语 + lf_desc 砍到 21 字 / 产生内部矛盾\n"
             "     「已没入水下」+「举刀正对」单句并存）\n"
-            "   - ✅ 正例：报「服装色遗漏」→ 仅追加「素白轻袍」到 lf_desc 末尾，\n"
+            "   - ✅ 正例：报「服装色遗漏」→ 仅追加「素色轻袍」到 lf_desc 末尾，\n"
             "     原 lf_desc 完整保留 + ≥40 字下限（防 lf_desc 整体被砍短）\n\n"
             "**同角色跨镜一致性（最高优先级）**：\n"
             "同一角色在多镜出现时，**服装色 / 当前状态（坐/站/仰卧）/ kf 顺序** 必须跨镜一致：\n"
-            "- 服装色：shot_1 杨旭素白轻袍 → shot_5 杨旭也必须素白轻袍，禁中途换色\n"
-            "- 当前状态：shot_3 杨旭盘坐 → shot_4 杨旭仍盘坐，禁无动机跳变（站起/躺下需承接）\n"
-            "- 致命伤持续：被刺后所有镜头都需带「心口暗红洇痕」（不只是伤镜）\n\n"
+            "- 服装色：shot_1 角色甲素色轻袍 → shot_5 角色甲也必须素色轻袍，禁中途换色\n"
+            "- 当前状态：shot_3 角色甲盘坐 → shot_4 角色甲仍盘坐，禁无动机跳变（站起/躺下需承接）\n"
+            "- 致命伤持续：被刺后所有镜头都需带「肩头暗红洇痕」（不只是伤镜）\n\n"
             "修复要点：\n"
             "1. ff/lf_desc 锚点：威胁源写朝向/目标、出镜角色重述服装色\n"
             "2. keyframes desc：补角色姿态/位置锚定\n"
@@ -7464,7 +7464,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "kf矛盾→改kf.desc（连带 stage/布局条目一起改）；景别跳→改中间级；光位模糊→具体光位。\n"
             "**3 组正反例（按例做）**：致命伤保护=追加5字不删anchor；视线方位=加方位词不砍原意；"
             "lf_desc完整性=追加不砍到<40字（防「已没入水下」+「举刀正对」矛盾）。\n"
-            "**同角色跨镜一致性**：服装色/状态/kf顺序跨镜一致（杨旭素白轻袍不中途换色，致命伤持续到所有伤后镜）。"
+            "**同角色跨镜一致性**：服装色/状态/kf顺序跨镜一致（角色甲素色轻袍不中途换色，致命伤持续到所有伤后镜）。"
             + _retry_feedback
             + "\n".join(parts)
         )
@@ -10541,7 +10541,7 @@ def main() -> None:
         _logger.console_silent = True
 
         # 读取章节
-        novel_text = read_chapter("锦衣夜行_77119小说.txt", chapter=NOVEL_CHAPTER)
+        novel_text = read_chapter(None, chapter=NOVEL_CHAPTER)
         # v6.115（审核）：缓存指纹此前只取章节**前 1000 字**——后文改动不会改变
         # 指纹，于是「原文变了但缓存命中」→ 用旧稿当新稿用。指纹必须覆盖全部输入。
         novel_source_text = novel_text
@@ -10658,7 +10658,7 @@ def main() -> None:
                 script.pop("hook", None)
             # 补写章节元信息（部名/章名，老缓存可能缺失）
             if not script.get("chapter_title"):
-                script.update(get_chapter_meta("锦衣夜行_77119小说.txt", NOVEL_CHAPTER))
+                script.update(get_chapter_meta(resolve_novel_file(), NOVEL_CHAPTER))
             # 重新计算时间轴（使用增强算法）
             _compute_timecodes(script)
             # v7: 缓存命中时也要跑场景/道具资产提取（老缓存无 scene_assets/prop_assets），
@@ -10812,7 +10812,7 @@ def main() -> None:
                          ensure_ascii=False, indent=2)
                     report = generate_gap_report(
                         str(partial_path),
-                        "锦衣夜行_77119小说.txt",
+                        resolve_novel_file(),
                         NOVEL_CHAPTER
                     )
                     # 打印报告摘要
@@ -11250,9 +11250,9 @@ def main() -> None:
                     _dup_note = (
                         f"上一版钩子台词「{_hook_line_prev[:30]}」与主分镜镜头 {_dup_hits} 的台词重复"
                         f"（观众刚在钩子听到、又在正片听到，倒叙穿帮）。请严格换一句完全不同的台词：\n"
-                        f"1. 优先选主分镜其它镜头未用过的对话（如张十三的质问/密谋、杨旭的台词、肖管事的试探）；\n"
+                        f"1. 优先选主分镜其它镜头未用过的对话（如角色丙的质问/密谋、角色甲的台词、管事丁的试探）；\n"
                         f"2. 若所有人物对话都与主分镜重复，则把 narration_segment 和 subtitle 设为空字符串\"\"，"
-                        f"钩子改纯画面动作开场（刺客破水而出、匕首出鞘的瞬间），靠视觉冲击不靠台词。"
+                        f"钩子改纯画面动作开场（袭击者破水而出、匕首出鞘的瞬间），靠视觉冲击不靠台词。"
                     )
                     _hook_retry = gen_hook_script(
                         novel_text, bank=character_bank, objects_bank=scene_objects_bank,
@@ -11364,7 +11364,7 @@ def main() -> None:
         _check_fps_consistency(script)
 
         # 章节元信息（部名/章名，来自小说标题行「第一部 杀青州 第NNN章 章名」）
-        script.update(get_chapter_meta("锦衣夜行_77119小说.txt", NOVEL_CHAPTER))
+        script.update(get_chapter_meta(resolve_novel_file(), NOVEL_CHAPTER))
 
         # 写入 hash
         # v6.83（二次审核发现 6）：**必须用非下划线键**。

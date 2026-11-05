@@ -36,7 +36,7 @@ CHARACTER_EXTRACTION_PROMPT = """
       "gender": "male 或 female，表示性别",
       "age_range": "young(青年) / middle(中年) / old(老年)，表示大致年龄段",
       "static_features": "外貌、体型等不变特征（如：剑眉星目，黑发束冠，身姿挺拔）",
-      "dynamic_features": "本场景服装、配饰等可变特征（如：素白轻袍，平定四方巾）",
+      "dynamic_features": "本场景服装、配饰等可变特征（如：玄色劲装，束发木簪）",
       "is_visible": true,
       "is_new": true
     }}
