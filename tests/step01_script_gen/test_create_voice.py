@@ -70,6 +70,45 @@ def _compile(view, slot, answer):
     return _delta, _dp, _scope
 
 
+def test_representable_long_span_is_kept_whole():
+    """能按句末跨镜讲完的长段**整段保留**：拆碎会让事实永远表达不全（2026-11-05）."""
+    from step01_script_gen.plan_feasibility import _estimate_duration, find_legal_split
+    from step01_script_gen.timecode import active_shot_cap
+    _cap = float(active_shot_cap())
+    _long = "".join("第%d句甲留在门外。" % i for i in range(1, 7))
+    assert _estimate_duration(_long) > _cap, "本用例要的是超单镜上限的长段"
+    assert find_legal_split(_long), "这段应能按句末跨镜讲完"
+    assert pcr._voice_feasible_spans([_long]) == [_long]
+
+
+def test_unrepresentable_long_span_is_dropped():
+    """需要超过 4 段才能讲完的整段**不作为候选**：选中它必然被拒（实跑 140 字旁白）."""
+    from step01_script_gen.plan_feasibility import _estimate_duration, find_legal_split
+    from step01_script_gen.timecode import active_shot_cap
+    _huge = "".join("第%02d句甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未。" % i
+                    for i in range(10))
+    assert _estimate_duration(_huge) > active_shot_cap() * 4
+    assert find_legal_split(_huge) is None
+    assert pcr._voice_feasible_spans([_huge]) == []
+
+def test_unbreakable_overlong_span_is_not_offered_as_a_voice():
+    """没有句末边界的超长句**不作为候选**：选中它必然 budget_unrepresentable."""
+    from step01_script_gen.plan_feasibility import _estimate_duration
+    from step01_script_gen.timecode import active_shot_cap
+    _txt = "甲留在门外，" * 40 + "。"
+    assert _estimate_duration(_txt) > active_shot_cap()
+    assert pcr._voice_feasible_spans([_txt]) == []
+
+
+def test_slot_request_carries_the_voice_budget_numbers():
+    """槽位请求必须带**还能讲多久**：否则生产者只能靠猜（实跑 170s / 上限 90s）."""
+    v = _view_for(existing=True)
+    req = pcr.slot_request(v, [_slot(v)])
+    _vb = req["voice_budget"]
+    assert _vb["max_sec"] > 0
+    assert _vb["used_sec"] >= 0
+    assert "发声预算" in pcr.slot_prompt(req, novel_text=NOVEL)
+
 def test_create_narration_on_existing_beat_keeps_beat_count_and_fact():
     v = _view_for(existing=True)
     slot = _slot(v)

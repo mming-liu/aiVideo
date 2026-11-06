@@ -495,33 +495,54 @@ def narration_voice_roles(view: dict) -> dict:
     return _out
 
 
-def _voice_handoff_target(base_view: dict, view: dict, uid: str, role: str):
-    """删除旁白单元的**可证明**合法去向：同文本、同有效声源的**新增对白**单元.
+def _voice_removal_verdict(base_view: dict, view: dict, uid: str, role: str):
+    """删除基线旁白单元时的**可证明**判定 → `(verdict, other_uid, other_role)`.
 
-    R06：删除即换声源，唯一例外是既有的「旁白→对白」重分类——正文**逐字相同**、
-    有效声源相同，代码因此能证明是同一声音换了承载，而不是换了说话人。
+    - `handoff`：同一句正文出现在候选的**另一条**单元里、且**有效声源相同**——同一声音换了
+      承载（含既有的「旁白→对白」重分类），放行；
+    - `removed`：这句正文在候选里**不再出现**——整条撤下。这是计划层既有的合法修法：
+      `budget_unrepresentable` 的反馈在原文找不到更短合法句时，本来就要求
+      `must_delete` + “删掉这条声音，并把它所在节拍改成画面载体”；
+    - `reattributed`：同一句正文被改挂到**有效声源不同**的单元上——这是换人念同一句；
+    - `unknown`：基线单元读不出正文，无法证明任何事（按拒收处理）。
+
+    R06（2026-10-30）原本把"uid 不见了"直接当成换声源。实测（2026-11-05，
+    run 20261105T224857-15972）这条口径把**反馈自己给出的修法**判成非法：
+    第 2/3 轮照 `must_delete` 的提示删除 n03，被 `view_voice_role_changed` 拒收，
+    3 轮额度耗尽落成 `illegal_response`。正文**消失**与**同一句换人**是两件事，
+    冻结要看后者——撤下之后的承载/预算/原文逐字仍由统一验收链判，不靠这条守卫代替。
+
     不做文本相似度匹配（那会把"看起来像"当成"就是同一条"）：必须是字符串相等。
+    **基线本来就有**同文的另一条单元不算这次移动，否则合法的撤下会被既有重复误拒。
     """
     _lost = [u for u in (base_view.get("narration_units") or []) if ref_uid(u) == uid]
     if not _lost:
-        return None
+        return "unknown", "", ""
     _text = str(_lost[0].get("text") or "")
     if not _text:
-        return None
-    _known = {ref_uid(u) for u in (base_view.get("dialogue_units") or [])}
+        return "unknown", "", ""
+    _base_text = {ref_uid(u): str(u.get("text") or "")
+                  for _coll in ("narration_units", "dialogue_units")
+                  for u in (base_view.get(_coll) or [])}
     _cands = []
-    for _u in view.get("dialogue_units") or []:
-        if ref_uid(_u) in _known:
-            continue
-        if str(_u.get("text") or "") != _text:
-            continue
-        try:
-            if narration_role(_u) != role:
+    for _coll in ("narration_units", "dialogue_units"):
+        for _u in view.get(_coll) or []:
+            _other = ref_uid(_u)
+            if _other == uid or str(_u.get("text") or "") != _text:
                 continue
-        except ValueError:
-            continue
-        _cands.append(_u)
-    return ref_uid(_cands[0]) if len(_cands) == 1 else None
+            if _other in _base_text and _base_text[_other] == _text:
+                continue    # 基线本来就有这句：不是本次把正文挪过去
+            try:
+                _r = narration_role(_u)
+            except ValueError:
+                _r = None
+            _cands.append((_other, _r))
+    if not _cands:
+        return "removed", "", ""
+    for _other, _r in _cands:
+        if _r != role:
+            return "reattributed", _other, str(_r if _r is not None else "（非法声源值）")
+    return "handoff", _cands[0][0], str(role)
 
 
 def _narration_entries(value, probs, *, field="narration_lines") -> list:
@@ -2240,28 +2261,43 @@ def apply_editable_view(base_view: dict, response, *, mode: str | None = None,
     #     角色发声，守卫放行；
     #   · 旧写法又按**原值**比较 ⇒ 显式 `narrator` 与省略字段这两种等价表示会互相误报
     #     `view_voice_role_changed`（等价改写被拒，属于假拒收）。
-    # 删除后重建同样是换声源：uid 不见了就按"删除即换声源"拒收，不给新 uid 绕过的机会。
+    # 冻结的是**声源归属**，不是"uid 必须存在"（2026-11-05 收口）：整条撤下是计划层既有的
+    # 合法修法（`budget_unrepresentable` 的 `must_delete` 反馈就要求这么做），撤下后的
+    # 承载/预算/逐字由统一验收链判；仍然拒收的是"同一句正文换一个声源"——删掉后用新 uid
+    # 换人重建、或改挂到角色发声的单元上。
     # 非法值（null/空串/空白/未知角色）由读取准入与 `narration_voice_roles` 报错，
     # 错误里带单元身份与字段路径。
     _base_roles = narration_voice_roles(base_view)
     _cand_roles = narration_voice_roles(_view)
     _n_by_uid = {ref_uid(u): u for u in _view.get("narration_units") or []}
+    _REPLACE_FIX = ("要保留这句就保持原 uid 与原声源；要在原 uid 上换短句，就从原文里另选"
+                    "一句带句末标点、一镜说得完的；确需整条撤下就删掉它并把事实改挂画面载体。")
     for _uid, _role in _base_roles.items():
         if _uid not in _n_by_uid:
-            # 删除即换声源；唯一例外是代码能**证明**的「旁白→对白」重分类。
-            if _voice_handoff_target(base_view, _view, _uid, _role):
+            _verdict, _other, _other_role = _voice_removal_verdict(
+                base_view, _view, _uid, _role)
+            if _verdict in ("handoff", "removed"):
+                continue
+            if _verdict == "reattributed":
+                _p.append(_rec("view_voice_role_changed", "voice", _uid,
+                               "基线旁白单元的正文被改挂到另一条**不同声源**的单元"
+                               "（%s，有效声源 %r → %s）：同一句不能换人念，"
+                               "删除后以新 uid 重现同样拒收"
+                               % (_other, _role, _other_role),
+                               "narration_units[%s]" % _uid, _REPLACE_FIX))
                 continue
             _p.append(_rec("view_voice_role_changed", "voice", _uid,
-                           "基线旁白单元被删除（有效声源 %r）：删除后重建等于换声源，"
-                           "须显式迁移基线" % (_role,),
-                           "narration_units[%s]" % _uid))
+                           "基线旁白单元被删除，且读不出它的正文——无法证明这不是换声源",
+                           "narration_units[%s]" % _uid, _REPLACE_FIX))
             continue
         _cand = _cand_roles.get(_uid)
         if _cand != _role:
             _p.append(_rec("view_voice_role_changed", "voice", _uid,
-                           "有效声源被改写（基线 %r → 候选 %r）；声源变更须显式迁移基线"
+                           "有效声源被改写（基线 %r → 候选 %r）；声源随 uid 冻结"
                            % (_role, _cand),
-                           "narration_units[%s].voice_role" % _uid))
+                           "narration_units[%s].voice_role" % _uid,
+                           "把 `voice_role` 改回基线值 %r；确需换人只能整条撤下、"
+                           "另起一条新声音（不是把同一句改挂过去）" % (_role,)))
     if _p:
         return None, _p, {"kind": "illegal", "mapping": {}, "residuals": [],
                           "detail": _detail_of(_p)}

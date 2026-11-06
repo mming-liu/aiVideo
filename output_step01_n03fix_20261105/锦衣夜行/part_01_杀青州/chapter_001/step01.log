@@ -1,0 +1,98 @@
+[2026-11-05 23:28:08] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-11-05 23:28:08] ==================================================
+[2026-11-05 23:28:08]   步骤1: 分镜脚本生成 (v6.0)
+[2026-11-05 23:28:08]   新增: 钩子分镜 + 敏感词校验
+[2026-11-05 23:28:08] ==================================================
+[2026-11-05 23:28:09]   [场景缓存] 第 1 章缓存已加载
+[2026-11-05 23:28:09] [OK] 提取第 001 章「溪上何人品玉箫」: 4847 字符
+[2026-11-05 23:28:09] [INFO] 选取第 1 章全文 4847 字符作为素材
+[2026-11-05 23:28:09] [INFO] 并发预提取 角色/场景物体/大纲（3 路并发）...
+[2026-11-05 23:28:09] [WARN] 章节大纲缓存读取失败（按首版重新规划）: [Errno 2] No such file or directory: 'C:\\myFloders\\git\\aiVideo\\output_step01_n03fix_20261105\\锦衣夜行\\part_01_杀青州\\chapter_001\\chapter_outline.cache.json'
+[2026-11-05 23:28:09] [INFO] 正在调用 Agent Plan (deepseek-v4.1-flash) 生成分镜脚本... max_completion_tokens=6000, thinking.type=disabled
+[2026-11-05 23:28:09] [INFO] 正在调用 Agent Plan (deepseek-v4.1-flash) 生成分镜脚本... max_completion_tokens=50000, thinking.type=disabled
+[2026-11-05 23:28:09] [INFO] 正在调用 Agent Plan (deepseek-v4.1-flash) 生成分镜脚本... max_completion_tokens=6000, thinking.type=disabled
+[2026-11-05 23:28:09] [DEBUG] agent_plan_text_submit: model=deepseek-v4.1-flash, messages=2, temperature=0.3, top_p=0.2, seed=42, response_format={'type': 'json_object'}, 指纹=c353bb3106133784, 实发结构化输出=json_object｜⚠️ 调用方要的是 json_schema:characters，**本通道不下发**（形状由解析端结构化拒收兜底）
+[2026-11-05 23:28:09] [DEBUG] agent_plan_text_submit: model=deepseek-v4.1-flash, messages=2, temperature=0.3, top_p=0.2, seed=42, response_format={'type': 'json_object'}, 指纹=3b853f8f05e1f783, 实发结构化输出=json_object｜⚠️ 调用方要的是 json_schema:chapter_outline，**本通道不下发**（形状由解析端结构化拒收兜底）
+[2026-11-05 23:28:09] [DEBUG] agent_plan_text_submit: model=deepseek-v4.1-flash, messages=2, temperature=0.2, top_p=0.2, seed=42, response_format={'type': 'json_object'}, 指纹=cb32c7d7897a168f, 实发结构化输出=json_object｜⚠️ 调用方要的是 json_schema:scene_objects，**本通道不下发**（形状由解析端结构化拒收兜底）
+[2026-11-05 23:28:12] [DEBUG] agent_plan_text_submit response: status=400, body={"error":{"param":null,"type":"invalid_request_error","code":"invalid_request_error","message":"Upstream request failed: [invalid_request_error] this feature is not yet supported by atlas (request_id: gw-1a55bc30f039-65529)"}}
+[2026-11-05 23:28:12] [TRACE] agent_plan_text 阶段轨迹：指纹=c353bb3106133784｜强度=thinking=disabled（要求 'none'）｜关联ID=a55ce468d89a9d5a-LAX｜响应头 3.763s｜正文 226 字节｜收完 3.763
+[2026-11-05 23:28:12] [WARN] 角色提取失败（**未产出**，不写库）: 参数错误 [400]: {"error":{"param":null,"type":"invalid_request_error","code":"invalid_request_error","message":"Upstream request failed: [invalid_request_error] this feature is not yet supported by atlas (request_id: gw-1a55bc30f039-65529)"}}
+[2026-11-05 23:28:16] [DEBUG] agent_plan_text_submit response: status=200, body={"id":"gw-e277e5a2804-1dd2c0","object":"chat.completion","created":1793892549,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"{\n  \"scene_objects\": [\n    {\n      \"identifier\": \"荷花湾小舟\",\n      \"category\": \"船\",\n      \"subtype\": \"平底敞口采莲舟\",\n      \"length_m\": 4.5,\n      \"width_m\": 1.2,\n      \"height_m\": 0.4,\n      \"capacity\": \"可容2-3人，舱中可生炭炉、摆酒菜\",\n      \"structure\": \"船头平坦可盘膝坐，中舱敞口可站立烹煮，船梢收窄；无篷，船舷低矮\"
+[2026-11-05 23:28:16] [TRACE] agent_plan_text 阶段轨迹：指纹=cb32c7d7897a168f｜强度=thinking=disabled（要求 'none'）｜关联ID=a55ce468dec1cb93-LAX｜响应头 7.475s｜正文 2396 字节｜收完 7.475
+[2026-11-05 23:28:16] [TRACE] agent_plan_text 用量：思维链=0｜输出=532
+[2026-11-05 23:28:16] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=532, max_completion_tokens=6000
+[2026-11-05 23:28:16] [INFO] 提取到 2 个场景物体: ['荷花湾小舟', '杨家马车']
+[2026-11-05 23:28:49] [DEBUG] agent_plan_text_submit response: status=200, body={"id":"chatcmpl-RTAMLYVwHArSfLJUSh06M5jH","object":"chat.completion","created":1793892585,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":"stop","logprobs":null,"message":{"role":"assistant","content":"{\"main_events\": [\"杨旭携美人听香在杨家别业水湾荷花丛中泛舟吹箫、做野餐\", \"夜色中刺客从水中跃出，一刺穿心杀死杨旭后遁水而去\", \"听香惊叫，张十三飞掠上船发现杨旭已死\", \"张十三掌掴听香并恐吓她不得声张\", \"张十三对佃仆谎称公子醉酒，驾车连夜离庄\"], \"characters\": [\"杨旭（杨文轩）\", \"听香\", \"张十三\", \"刺客\", \"牵牛老农\", \"佃仆家仆\"], \"emotional_arc\": \"闲适旖旎→骤起杀机→惊惧混乱→压抑算计→夜色遁走\", \
+[2026-11-05 23:28:49] [TRACE] agent_plan_text 阶段轨迹：指纹=3b853f8f05e1f783｜强度=thinking=disabled（要求 'none'）｜关联ID=a55ce46cedb87553-SEA｜响应头 40.45s｜正文 10193 字节｜收完 40.45
+[2026-11-05 23:28:49] [TRACE] agent_plan_text 用量：思维链=0｜输出=2502
+[2026-11-05 23:28:49] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=2502, max_completion_tokens=50000
+[2026-11-05 23:28:49] [PLAN] 内容核验已开启（候选核验和记录纠正共用最多 4 次调用；原文 aba1adc22826…）
+[2026-11-05 23:28:49] [INFO] 正在调用 Agent Plan (deepseek-v4.1-flash) 生成分镜脚本... max_completion_tokens=16000, thinking.type=disabled
+[2026-11-05 23:28:49] [DEBUG] agent_plan_text_submit: model=deepseek-v4.1-flash, messages=2, temperature=0.0, top_p=0.2, seed=42, response_format={'type': 'json_object'}, 指纹=5760611a5c040bf8, 实发结构化输出=json_object｜⚠️ 调用方要的是 json_schema:content_verification，**本通道不下发**（形状由解析端结构化拒收兜底）
+[2026-11-05 23:29:13] [DEBUG] agent_plan_text_submit response: status=200, body={"id":"chatcmpl-RYlFIjDsvkAc9Mj7vumlS0dZ","object":"chat.completion","created":1793892609,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":"stop","logprobs":null,"message":{"role":"assistant","content":"{\"source_support\": [{\"fact_uid\": \"f01\", \"verdict\": \"supported\", \"evidence_spans\": [\"src_aba1adc22826c283_983\"], \"reason\": \"原文明确写出杨旭字文轩、今年刚及弱冠，与主张完全一致。\"}, {\"fact_uid\": \"f02\", \"verdict\": \"supported\", \"evidence_spans\": [\"src_aba1adc22826c283_1027\", \"
+[2026-11-05 23:29:13] [TRACE] agent_plan_text 阶段轨迹：指纹=5760611a5c040bf8｜强度=thinking=disabled（要求 'none'）｜关联ID=a55ce5677fdf2590-LAX｜响应头 23.967s｜正文 14498 字节｜收完 23.982
+[2026-11-05 23:29:13] [TRACE] agent_plan_text 用量：思维链=0｜输出=3986
+[2026-11-05 23:29:13] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=3986, max_completion_tokens=16000
+[2026-11-05 23:29:13] [PLAN] ⇒ 走 plan_revision.delta.v1 增量修订（本轮问题里有只能改**关系**的修法：legacy_audio；内容槽位不适用：这些修法内容槽位表达不了（budget_unrepresentable、carrier_fact_line_mismatch、carrier_fact_narration_mismatch））
+[2026-11-05 23:29:13] [INFO] 正在调用 Agent Plan (deepseek-v4.1-flash) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-11-05 23:29:13] [DEBUG] agent_plan_text_submit: model=deepseek-v4.1-flash, messages=2, temperature=0.3, top_p=0.2, seed=42, response_format={'type': 'json_object'}, 指纹=b5ecfff482f2734f, 实发结构化输出=json_object｜⚠️ 调用方要的是 json_schema:plan_revision_delta_v1，**本通道不下发**（形状由解析端结构化拒收兜底）
+[2026-11-05 23:29:25] [DEBUG] agent_plan_text_submit response: status=200, body={"id":"chatcmpl-RQuYEe9Q30s3kUyLT3cuaqr3","object":"chat.completion","created":1793892621,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":"stop","logprobs":null,"message":{"role":"assistant","content":"{\"schema\": \"plan_revision.delta.v1\", \"rule_version\": \"plan_revision.delta.v1\", \"base_plan_hash\": \"ba6686ee2b56f8b96e88786db3ed8164789455a7e954efc7c423f49f67c1066f\", \"fact_basis_hash\": \"bb86d0117e98f4b59be466862a4ad1e436d372b4c15010c20cdf68a334522190\", \"upsert\"
+[2026-11-05 23:29:25] [TRACE] agent_plan_text 阶段轨迹：指纹=b5ecfff482f2734f｜强度=thinking=disabled（要求 'none'）｜关联ID=a55ce5fadbf6d254-LAX｜响应头 11.762s｜正文 6731 字节｜收完 11.766
+[2026-11-05 23:29:25] [TRACE] agent_plan_text 用量：思维链=0｜输出=1794
+[2026-11-05 23:29:25] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=1794, max_completion_tokens=32768
+[2026-11-05 23:29:25] [INFO] 正在调用 Agent Plan (deepseek-v4.1-flash) 生成分镜脚本... max_completion_tokens=16000, thinking.type=disabled
+[2026-11-05 23:29:25] [DEBUG] agent_plan_text_submit: model=deepseek-v4.1-flash, messages=2, temperature=0.0, top_p=0.2, seed=42, response_format={'type': 'json_object'}, 指纹=31fb58e44369670d, 实发结构化输出=json_object｜⚠️ 调用方要的是 json_schema:content_verification，**本通道不下发**（形状由解析端结构化拒收兜底）
+[2026-11-05 23:30:09] [DEBUG] agent_plan_text_submit response: status=200, body={"id":"chatcmpl-Rj6U6c5D61MocJi5OH5HiTTV","object":"chat.completion","created":1793892665,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":"stop","logprobs":null,"message":{"role":"assistant","content":"{\"source_support\": [{\"fact_uid\": \"f01\", \"verdict\": \"supported\", \"evidence_spans\": [\"src_aba1adc22826c283_983\"], \"reason\": \"原文明确交代杨旭字文轩，今年刚及弱冠。\"}, {\"fact_uid\": \"f02\", \"verdict\": \"supported\", \"evidence_spans\": [\"src_aba1adc22826c283_1027\", \"src_aba1
+[2026-11-05 23:30:09] [TRACE] agent_plan_text 阶段轨迹：指纹=31fb58e44369670d｜强度=thinking=disabled（要求 'none'）｜关联ID=a55ce64588c8757c-SEA｜响应头 43.847s｜正文 14278 字节｜收完 43.883
+[2026-11-05 23:30:09] [TRACE] agent_plan_text 用量：思维链=0｜输出=3845
+[2026-11-05 23:30:09] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=3845, max_completion_tokens=16000
+[2026-11-05 23:30:09] [PLAN] ⇒ 走 plan_revision.delta.v1 增量修订（本轮问题里有只能改**关系**的修法：legacy_audio；内容槽位不适用：这些修法内容槽位表达不了（budget_unrepresentable、carrier_dangling））
+[2026-11-05 23:30:09] [INFO] 正在调用 Agent Plan (deepseek-v4.1-flash) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-11-05 23:30:09] [DEBUG] agent_plan_text_submit: model=deepseek-v4.1-flash, messages=2, temperature=0.3, top_p=0.2, seed=42, response_format={'type': 'json_object'}, 指纹=97860e95c0de1abc, 实发结构化输出=json_object｜⚠️ 调用方要的是 json_schema:plan_revision_delta_v1，**本通道不下发**（形状由解析端结构化拒收兜底）
+[2026-11-05 23:30:20] [DEBUG] agent_plan_text_submit response: status=200, body={"id":"chatcmpl-Rd8K15kUZV7lV0aw5bzXQjyJ","object":"chat.completion","created":1793892676,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":"stop","logprobs":null,"message":{"role":"assistant","content":"{\"schema\": \"plan_revision.delta.v1\", \"rule_version\": \"plan_revision.delta.v1\", \"base_plan_hash\": \"48312562fbcfb5698503df8f7ce54ffd276884d633910d2ccd0a4483896dcf6e\", \"fact_basis_hash\": \"bb86d0117e98f4b59be466862a4ad1e436d372b4c15010c20cdf68a334522190\", \"upsert\"
+[2026-11-05 23:30:20] [TRACE] agent_plan_text 阶段轨迹：指纹=97860e95c0de1abc｜强度=thinking=disabled（要求 'none'）｜关联ID=a55ce75ca9e7f7bb-LAX｜响应头 11.168s｜正文 5163 字节｜收完 11.168
+[2026-11-05 23:30:20] [TRACE] agent_plan_text 用量：思维链=0｜输出=1315
+[2026-11-05 23:30:20] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=1315, max_completion_tokens=32768
+[2026-11-05 23:30:20] [INFO] 正在调用 Agent Plan (deepseek-v4.1-flash) 生成分镜脚本... max_completion_tokens=16000, thinking.type=disabled
+[2026-11-05 23:30:20] [DEBUG] agent_plan_text_submit: model=deepseek-v4.1-flash, messages=2, temperature=0.0, top_p=0.2, seed=42, response_format={'type': 'json_object'}, 指纹=7bd0ad4e72ac8e1b, 实发结构化输出=json_object｜⚠️ 调用方要的是 json_schema:content_verification，**本通道不下发**（形状由解析端结构化拒收兜底）
+[2026-11-05 23:30:42] [DEBUG] agent_plan_text_submit response: status=200, body={"id":"chatcmpl-RDHzQqF7NKgyuQoUKw1Q6mVB","object":"chat.completion","created":1793892698,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":"stop","logprobs":null,"message":{"role":"assistant","content":"{\"source_support\": [{\"fact_uid\": \"f01\", \"verdict\": \"supported\", \"evidence_spans\": [\"src_aba1adc22826c283_983\"], \"reason\": \"原文明确交代杨旭字文轩、刚及弱冠。\"}, {\"fact_uid\": \"f02\", \"verdict\": \"supported\", \"evidence_spans\": [\"src_aba1adc22826c283_1027\", \"src_aba1ad
+[2026-11-05 23:30:42] [TRACE] agent_plan_text 阶段轨迹：指纹=7bd0ad4e72ac8e1b｜强度=thinking=disabled（要求 'none'）｜关联ID=a55ce7a37cca2b68-LAX｜响应头 22.233s｜正文 13472 字节｜收完 22.248
+[2026-11-05 23:30:42] [TRACE] agent_plan_text 用量：思维链=0｜输出=3688
+[2026-11-05 23:30:42] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=3688, max_completion_tokens=16000
+[2026-11-05 23:30:42] [PLAN] ⇒ 走**内容槽位**修订（模型只选内容与关系、代码装配增量；6 个槽：slot:fact:f02、slot:fact:f03、slot:fact:f04、slot:fact:f06、slot:fact:f07、slot:fact:f09）
+[2026-11-05 23:30:42] [INFO] 正在调用 Agent Plan (deepseek-v4.1-flash) 生成分镜脚本... max_completion_tokens=32768, thinking.type=disabled
+[2026-11-05 23:30:42] [DEBUG] agent_plan_text_submit: model=deepseek-v4.1-flash, messages=2, temperature=0.3, top_p=0.2, seed=42, response_format={'type': 'json_object'}, 指纹=c7aed35add828059, 实发结构化输出=json_object｜⚠️ 调用方要的是 json_schema:plan_content_repair_answer，**本通道不下发**（形状由解析端结构化拒收兜底）
+[2026-11-05 23:30:52] [DEBUG] agent_plan_text_submit response: status=200, body={"id":"chatcmpl-RsNilRslVpUvlAZkwE09o4HS","object":"chat.completion","created":1793892708,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":"stop","logprobs":null,"message":{"role":"assistant","content":"{\"schema\": \"plan_content_repair.answer.v1\", \"answers\": [{\"slot_id\": \"slot:fact:f02\", \"action\": \"create_voice\", \"text\": \"杨家在青州本来只算得一个中等殷实的人家。四年前杨家老主人杨炳坤病逝的时候，把兴步维艰的的家当一股脑儿交到了他年仅十六岁的独生子杨旭手中。旁人都以为杨家要从此败落了，杨旭接手家业的头一年确也没有显出什么本事来，漫说是开拓，就是守成也嫌不足。\", \"voice_kind\": \"
+[2026-11-05 23:30:52] [TRACE] agent_plan_text 阶段轨迹：指纹=c7aed35add828059｜强度=thinking=disabled（要求 'none'）｜关联ID=a55ce82e38eccc9f-LAX｜响应头 10.018s｜正文 4002 字节｜收完 10.018
+[2026-11-05 23:30:52] [TRACE] agent_plan_text 用量：思维链=0｜输出=883
+[2026-11-05 23:30:52] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=883, max_completion_tokens=32768
+[2026-11-05 23:30:52] [INFO] 正在调用 Agent Plan (deepseek-v4.1-flash) 生成分镜脚本... max_completion_tokens=16000, thinking.type=disabled
+[2026-11-05 23:30:52] [DEBUG] agent_plan_text_submit: model=deepseek-v4.1-flash, messages=2, temperature=0.0, top_p=0.2, seed=42, response_format={'type': 'json_object'}, 指纹=2774c83cfc9ddbcd, 实发结构化输出=json_object｜⚠️ 调用方要的是 json_schema:content_verification，**本通道不下发**（形状由解析端结构化拒收兜底）
+[2026-11-05 23:31:45] [DEBUG] agent_plan_text_submit response: status=200, body={"id":"chatcmpl-RIFkI1NenK5BJjCPVMHGDwLC","object":"chat.completion","created":1793892760,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":"stop","logprobs":null,"message":{"role":"assistant","content":"{\"source_support\": [{\"fact_uid\": \"f01\", \"verdict\": \"supported\", \"evidence_spans\": [\"src_aba1adc22826c283_983\"], \"reason\": \"原文明确交代杨旭字文轩、刚及弱冠。\"}, {\"fact_uid\": \"f02\", \"verdict\": \"supported\", \"evidence_spans\": [\"src_aba1adc22826c283_1027\", \"src_aba1ad
+[2026-11-05 23:31:45] [TRACE] agent_plan_text 阶段轨迹：指纹=2774c83cfc9ddbcd｜强度=thinking=disabled（要求 'none'）｜关联ID=a55ce8684d887584-SEA｜响应头 51.669s｜正文 19352 字节｜收完 52.821
+[2026-11-05 23:31:45] [TRACE] agent_plan_text 用量：思维链=0｜输出=5190
+[2026-11-05 23:31:45] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=5190, max_completion_tokens=16000
+[2026-11-05 23:31:45] [REVISION] 停止：calls_exhausted（已用 3/3 次）
+[2026-11-05 23:31:45] [WARN] 角色预提取未产出（不写库；既有角色库原样保留）
+[2026-11-05 23:31:45] [INFO] 预提取到 2 个场景物体（已保存到场景物体库）
+[2026-11-05 23:31:45] [PLAN] 大纲未产出可执行计划（calls_exhausted）⇒ 停在计划层，不生成候选：事实 f07 的**原文出处不支持这条主张**（partial）：原文有三年苦心栽培、大计刚有希望及数年心血化为乌有之意，但主张的“心中暗想”与“尽皆化为乌有”分属不同处，且“三年”与“数年”表述不完全一致，不能完整逐字支持。——补齐出处（或由故事侧改写主张）后才能继续；**不许**为了让计划通过而悄悄改写主张；事实 f02 的实际载体**没有完整表达**这条事实（partial）：实际展示正文只……（另有 123 字未显示）
+[2026-11-05 23:31:45] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-11-05 23:31:45] [PLAN] 计划契约未完成（plan_contract_invalid）——**不是**「故事装不下／需拆集」，也不进预算重选：事实 f07 的**原文出处不支持这条主张**（partial）：原文有三年苦心栽培、大计刚有希望及数年心血化为乌有之意，但主张的“心中暗想”与“尽皆化为乌有”分属不同处，且“三年”与“数年”表述不完全一致，不能完整逐字支持。——补齐出处（或由故事侧改写主张）后才能继续；**不许**为了让计划通过而悄悄改写主张；事实 f02 的实际载体**没有完整表达**这条事实（partial）：实际展示正文只交代十六岁接手、头一年未见本事，未展示第二年起经商种地养马开矿无往不利、财富暴增跻身青州十大豪门。；事实 f07 的实际载体**没有完整表达**这条事实（partial）：实际展示正文只表达数年心血化为乌有，未表达“三年苦心栽培、大计刚有希望”。；事实 f09 的实际载体**没有完整表达**这条事实（partial）：实际展示正文只表达城里有生意急事要送公子回城，未表达“谎称公子吃醉酒险些落水”。
+[2026-11-05 23:31:45] Traceback (most recent call last):
+[2026-11-05 23:31:45]   File "C:\myFloders\git\aiVideo\step01_script_gen\main.py", line 11623, in <module>
+[2026-11-05 23:31:45]     main()
+[2026-11-05 23:31:45]     ~~~~^^
+[2026-11-05 23:31:45]   File "C:\myFloders\git\aiVideo\step01_script_gen\main.py", line 10744, in main
+[2026-11-05 23:31:45]     _stop_if_outline_unavailable(_outline_result, novel_text, _deadline_monotonic)
+[2026-11-05 23:31:45]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[2026-11-05 23:31:45]   File "C:\myFloders\git\aiVideo\step01_script_gen\main.py", line 9275, in _stop_if_outline_unavailable
+[2026-11-05 23:31:45]     check_plan_before_generation(_plan, chapter_dir=CHAPTER_DIR, novel_text=novel_text,
+[2026-11-05 23:31:45]     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[2026-11-05 23:31:45]                                  deadline_monotonic=deadline_monotonic)
+[2026-11-05 23:31:45]                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[2026-11-05 23:31:45]   File "C:\myFloders\git\aiVideo\step01_script_gen\plan_feasibility.py", line 4925, in check_plan_before_generation
+[2026-11-05 23:31:45]     raise PlanContractInvalidError(
+[2026-11-05 23:31:45]         "计划契约未完成（必保留事实/钩子的承载缺失或无效）⇒ 停在计划层，"
+[2026-11-05 23:31:45]         "不生成完整稿：%s" % "；".join(_contract[:6]))
+[2026-11-05 23:31:45] step01_script_gen.plan_feasibility.PlanContractInvalidError: 计划契约未完成（必保留事实/钩子的承载缺失或无效）⇒ 停在计划层，不生成完整稿：事实 f07 的**原文出处不支持这条主张**（partial）：原文有三年苦心栽培、大计刚有希望及数年心血化为乌有之意，但主张的“心中暗想”与“尽皆化为乌有”分属不同处，且“三年”与“数年”表述不完全一致，不能完整逐字支持。——补齐出处（或由故事侧改写主张）后才能继续；**不许**为了让计划通过而悄悄改写主张；事实 f02 的实际载体**没有完整表达**这条事实（partial）：实际展示正文只交代十六岁接手、头一年未见本事，未展示第二年起经商种地养马开矿无往不利、财富暴增跻身青州十大豪门。；事实 f07 的实际载体**没有完整表达**这条事实（partial）：实际展示正文只表达数年心血化为乌有，未表达“三年苦心栽培、大计刚有希望”。；事实 f09 的实际载体**没有完整表达**这条事实（partial）：实际展示正文只表达城里有生意急事要送公子回城，未表达“谎称公子吃醉酒险些落水”。；整体顺序大体可执行，但 b04 的旁白 n03 只重复十六岁接手，未承接 b03 之后交代次年暴富跻身十大豪门，导致 b03→b04 的递进断裂；b07 的旁白 n06 只提买价，未演出舟中做野餐与亲热，与 b08 重复且缺动作；b15 的 d01 只谎称醉酒落水，未含“城里有生意急事要连夜送公子回城”，该内容直到 b16 才出现，造成 b15 与 b16 的谎称内容前后错位。；核对完整先后依赖，用既有 order/upsert 修订并保留核心事实与台词。
+[2026-11-05 23:31:45] [FATAL] PlanContractInvalidError: 计划契约未完成（必保留事实/钩子的承载缺失或无效）⇒ 停在计划层，不生成完整稿：事实 f07 的**原文出处不支持这条主张**（partial）：原文有三年苦心栽培、大计刚有希望及数年心血化为乌有之意，但主张的“心中暗想”与“尽皆化为乌有”分属不同处，且“三年”与“数年”表述不完全一致，不能完整逐字支持。——补齐出处（或由故事侧改写主张）后才能继续；**不许**为了让计划通过而悄悄改写主张；事实 f02 的实际载体**没有完整表达**这条事实（partial）：实际展示正文只交代十六岁接手、头一年未见本事，未展示第二年起经商种地养马开矿无往不利、财富暴增跻身青州十大豪门。；事实 f07 的实际载体**没有完整表达**这条事实（partial）：实际展示正文只表达数年心血化为乌有，未表达“三年苦心栽培、大计刚有希望”。；事实 f09 的实际载体**没有完整表达**这条事实（partial）：实际展示正文只表达城里有生意急事要送公子回城，未表达“谎称公子吃醉酒险些落水”。；整体顺序大体可执行，但 b04 的旁白 n03 只重复十六岁接手，未承接 b03 之后交代次年暴富跻身十大豪门，导致 b03→b04 的递进断裂；b07 的旁白 n06 只提买价，未演出舟中做野餐与亲热，与 b08 重复且缺动作；b15 的 d01 只谎称醉酒落水，未含“城里有生意急事要连夜送公子回城”，该内容直到 b16 才出现，造成 b15 与 b16 的谎称内容前后错位。；核对完整先后依赖，用既有 order/upsert 修订并保留核心事实与台词。

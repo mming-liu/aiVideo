@@ -1,0 +1,29 @@
+{
+  "run_id": "20261105T235906-11852",
+  "written_at": "2026-11-06T00:01:01",
+  "stop_layer": "plan",
+  "plan_contract_version": 5,
+  "verdict": "unevaluable",
+  "conclusion": "",
+  "reasons": [
+    "计划未选用任何逐字台词（`dialogue_lines` 为空）——生成阶段会自行决定台词，计划就不是内容取舍的权威"
+  ],
+  "suggestions": [
+    "回到规划层按原文**逐字**摘出台词（宁少勿滥）后重跑"
+  ],
+  "dialogue_lines": 0,
+  "dialogue_sec": 0.0,
+  "narration_lines": null,
+  "narration_sec": null,
+  "dialogue_rejected": [],
+  "dialogue_unrepresentable": [],
+  "beats_floor_basis": null,
+  "lower_bound_basis": "voice",
+  "lower_bound_sec": null,
+  "replan": null,
+  "budget": {
+    "min": 60.0,
+    "max": 90.0
+  },
+  "note": ""
+}

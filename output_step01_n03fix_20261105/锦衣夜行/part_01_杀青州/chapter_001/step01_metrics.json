@@ -1,0 +1,22 @@
+{
+  "run_started": 1793892488.9587936,
+  "calls": {},
+  "repair": {},
+  "audit": {},
+  "hook": {},
+  "duration": {},
+  "quality": {},
+  "run_id": "20261105T232812-9724",
+  "status": "failed",
+  "outcome_code": "PlanContractInvalidError",
+  "phases": [
+    {
+      "phase": "_total",
+      "status": "failed",
+      "phase_duration_sec": 216.9,
+      "elapsed_since_start_sec": 216.9,
+      "elapsed_sec": 216.9
+    }
+  ],
+  "total_elapsed_sec": 216.9
+}

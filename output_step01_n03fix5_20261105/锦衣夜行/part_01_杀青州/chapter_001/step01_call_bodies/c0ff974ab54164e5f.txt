@@ -1,0 +1,436 @@
+{
+  "source_support": [
+    {
+      "fact_uid": "f01",
+      "verdict": "supported",
+      "evidence_spans": ["src_aba1adc22826c283_983"],
+      "reason": "原文明确杨旭是杨家主人，今年刚及弱冠。"
+    },
+    {
+      "fact_uid": "f02",
+      "verdict": "supported",
+      "evidence_spans": ["src_aba1adc22826c283_1027", "src_aba1adc22826c283_1148"],
+      "reason": "原文说四年前杨炳坤病逝时把家当交给年仅十六岁的独生子杨旭，如今已跻身青州十大豪门；从十六岁接手到四年后，与主张一致。"
+    },
+    {
+      "fact_uid": "f03",
+      "verdict": "supported",
+      "evidence_spans": ["src_aba1adc22826c283_1240"],
+      "reason": "原文明确杨文轩参加府学考中诸生（秀才），有了功名在身。"
+    },
+    {
+      "fact_uid": "f04",
+      "verdict": "supported",
+      "evidence_spans": ["src_aba1adc22826c283_983", "src_aba1adc22826c283_1679", "src_aba1adc22826c283_1741", "src_aba1adc22826c283_2405"],
+      "reason": "原文交代杨家主人到乡下别庄避暑，杨旭携女子到自家别庄避暑，小舟停于水湾，美人名唤听香，与主张一致。"
+    },
+    {
+      "fact_uid": "f05",
+      "verdict": "supported",
+      "evidence_spans": ["src_aba1adc22826c283_2405"],
+      "reason": "原文明确名唤听香的美人儿是杨公子花两百贯宝钞高价买下的，且上下文表明她来自青楼。"
+    },
+    {
+      "fact_uid": "f06",
+      "verdict": "supported",
+      "evidence_spans": ["src_aba1adc22826c283_2703", "src_aba1adc22826c283_2814"],
+      "reason": "原文写水中窜出人影跃上船头，右手一扬寒光刺进杨旭心口。"
+    },
+    {
+      "fact_uid": "f07",
+      "verdict": "supported",
+      "evidence_spans": ["src_aba1adc22826c283_3448"],
+      "reason": "原文明确跃上船来的人正是杨旭的贴身伴当张十三。"
+    },
+    {
+      "fact_uid": "f08",
+      "verdict": "supported",
+      "evidence_spans": ["src_aba1adc22826c283_3448", "src_aba1adc22826c283_3558"],
+      "reason": "原文写张十三查看后确认杨旭死透，并有内心独白“死了？杨旭竟然死了！三年苦心栽培，大计刚刚有点希望，他竟然死了？”。"
+    },
+    {
+      "fact_uid": "f09",
+      "verdict": "supported",
+      "evidence_spans": ["src_aba1adc22826c283_3848", "src_aba1adc22826c283_4136", "src_aba1adc22826c283_4261"],
+      "reason": "原文写张十三反手一掌扇在听香脸上，并威胁她若不想吃官司便听吩咐、莫要胡乱声张。"
+    },
+    {
+      "fact_uid": "f10",
+      "verdict": "supported",
+      "evidence_spans": ["src_aba1adc22826c283_4529", "src_aba1adc22826c283_4658", "src_aba1adc22826c283_4759"],
+      "reason": "原文写张十三对佃仆谎称公子吃醉酒险些落水，随后驾马车载杨旭尸体连夜回城。"
+    }
+  ],
+  "facts": [
+    {
+      "fact_uid": "f01",
+      "verdict": "supported",
+      "support_spans": ["杨家的主人姓杨名旭，字文轩，今年刚及弱冠。"],
+      "missing": "",
+      "suggested_carriers": ["n01"],
+      "obligations": [
+        {
+          "obligation_id": "claim",
+          "text": "杨旭是青州杨家的主人，年方弱冠",
+          "verdict": "supported",
+          "evidence": [
+            {
+              "carrier_uid": "n01",
+              "exhibitor_span": "杨家的主人姓杨名旭，字文轩，今年刚及弱冠。"
+            }
+          ],
+          "missing": "",
+          "reason": "旁白直接交代杨旭是杨家主人且刚及弱冠。"
+        }
+      ]
+    },
+    {
+      "fact_uid": "f02",
+      "verdict": "partial",
+      "support_spans": ["杨旭接手家业后迅速发家，跻身青州十大豪门"],
+      "missing": "未展示杨旭十六岁接手家业这一年龄与时间起点。",
+      "suggested_carriers": ["b02"],
+      "obligations": [
+        {
+          "obligation_id": "claim",
+          "text": "杨旭十六岁接手家业，四年后已跻身青州十大豪门",
+          "verdict": "partial",
+          "evidence": [
+            {
+              "carrier_uid": "b02",
+              "exhibitor_span": "杨旭接手家业后迅速发家，跻身青州十大豪门"
+            }
+          ],
+          "missing": "画面只表达接手后迅速发家并跻身十大豪门，没有表达十六岁接手及四年后这一时间跨度。",
+          "reason": "发家结果有展示，但年龄与四年时间限定缺失。"
+        }
+      ]
+    },
+    {
+      "fact_uid": "f03",
+      "verdict": "supported",
+      "support_spans": ["杨文轩杨公子又参加府学，一举考中了诸生（秀才），有了功名在身"],
+      "missing": "",
+      "suggested_carriers": ["n02"],
+      "obligations": [
+        {
+          "obligation_id": "claim",
+          "text": "杨旭已考中秀才，功名在身",
+          "verdict": "supported",
+          "evidence": [
+            {
+              "carrier_uid": "n02",
+              "exhibitor_span": "杨文轩杨公子又参加府学，一举考中了诸生（秀才），有了功名在身"
+            }
+          ],
+          "missing": "",
+          "reason": "旁白直接说明杨文轩考中秀才并有功名在身。"
+        }
+      ]
+    },
+    {
+      "fact_uid": "f04",
+      "verdict": "supported",
+      "support_spans": ["杨旭携听香在船上避暑，听香撑伞侍立"],
+      "missing": "",
+      "suggested_carriers": ["b04"],
+      "obligations": [
+        {
+          "obligation_id": "claim",
+          "text": "杨旭携美人听香到自家别业水湾的船上避暑",
+          "verdict": "supported",
+          "evidence": [
+            {
+              "carrier_uid": "b04",
+              "exhibitor_span": "杨旭携听香在船上避暑，听香撑伞侍立"
+            }
+          ],
+          "missing": "",
+          "reason": "画面展示杨旭携听香在船上避暑，结合前序荷湾场景可理解为自家别业水湾。"
+        }
+      ]
+    },
+    {
+      "fact_uid": "f05",
+      "verdict": "partial",
+      "support_spans": ["听香在舱中忙碌做晚餐，杨旭钓鱼"],
+      "missing": "未展示听香是花两百贯宝钞买来的青楼女子这一身份与交易信息。",
+      "suggested_carriers": ["b05"],
+      "obligations": [
+        {
+          "obligation_id": "claim",
+          "text": "听香是杨旭花两百贯宝钞买来的青楼女子",
+          "verdict": "partial",
+          "evidence": [
+            {
+              "carrier_uid": "b05",
+              "exhibitor_span": "听香在舱中忙碌做晚餐，杨旭钓鱼"
+            }
+          ],
+          "missing": "画面只展示听香在舱中做晚餐，没有展示她被买来的身份、青楼出身或两百贯宝钞的价钱。",
+          "reason": "听香在场并劳作，但买来身份与价钱未表达。"
+        }
+      ]
+    },
+    {
+      "fact_uid": "f06",
+      "verdict": "supported",
+      "support_spans": ["夜色中，刺客从水中跃出，一剑刺入杨旭心口，随即跳入水中消失"],
+      "missing": "",
+      "suggested_carriers": ["b06"],
+      "obligations": [
+        {
+          "obligation_id": "claim",
+          "text": "刺客从水中跃出，一剑刺入杨旭心口",
+          "verdict": "supported",
+          "evidence": [
+            {
+              "carrier_uid": "b06",
+              "exhibitor_span": "夜色中，刺客从水中跃出，一剑刺入杨旭心口，随即跳入水中消失"
+            }
+          ],
+          "missing": "",
+          "reason": "画面完整演出刺客从水中跃出并一剑刺入杨旭心口。"
+        }
+      ]
+    },
+    {
+      "fact_uid": "f07",
+      "verdict": "supported",
+      "support_spans": ["那跃上船来的人青衣小帽打扮，正是杨旭的贴身伴当张十三"],
+      "missing": "",
+      "suggested_carriers": ["n03"],
+      "obligations": [
+        {
+          "obligation_id": "claim",
+          "text": "张十三是杨旭的贴身伴当",
+          "verdict": "supported",
+          "evidence": [
+            {
+              "carrier_uid": "n03",
+              "exhibitor_span": "那跃上船来的人青衣小帽打扮，正是杨旭的贴身伴当张十三"
+            }
+          ],
+          "missing": "",
+          "reason": "旁白直接说明张十三是杨旭的贴身伴当。"
+        }
+      ]
+    },
+    {
+      "fact_uid": "f08",
+      "verdict": "supported",
+      "support_spans": ["张十三确认杨旭已死，脸色铁青，内心独白“死了？杨旭竟然死了！三年苦心栽培，大计刚刚有点希望，他竟然死了？”"],
+      "missing": "",
+      "suggested_carriers": ["b08"],
+      "obligations": [
+        {
+          "obligation_id": "claim",
+          "text": "张十三确认杨旭已死，心中暗惊三年苦心栽培大计受挫",
+          "verdict": "supported",
+          "evidence": [
+            {
+              "carrier_uid": "b08",
+              "exhibitor_span": "张十三确认杨旭已死，脸色铁青，内心独白“死了？杨旭竟然死了！三年苦心栽培，大计刚刚有点希望，他竟然死了？”"
+            }
+          ],
+          "missing": "",
+          "reason": "画面以确认死亡、脸色铁青和内心独白完整表达张十三的震惊与三年大计受挫。"
+        }
+      ]
+    },
+    {
+      "fact_uid": "f09",
+      "verdict": "supported",
+      "support_spans": ["张十三掌掴听香，威胁她不得声张"],
+      "missing": "",
+      "suggested_carriers": ["b09"],
+      "obligations": [
+        {
+          "obligation_id": "claim",
+          "text": "张十三掌掴听香并威胁她不得声张",
+          "verdict": "supported",
+          "evidence": [
+            {
+              "carrier_uid": "b09",
+              "exhibitor_span": "张十三掌掴听香，威胁她不得声张"
+            }
+          ],
+          "missing": "",
+          "reason": "画面直接演出掌掴与威胁不得声张。"
+        }
+      ]
+    },
+    {
+      "fact_uid": "f10",
+      "verdict": "supported",
+      "support_spans": ["张十三对佃仆谎称公子醉酒，驾车载杨旭尸体连夜回城"],
+      "missing": "",
+      "suggested_carriers": ["b10"],
+      "obligations": [
+        {
+          "obligation_id": "claim",
+          "text": "张十三对佃仆谎称公子醉酒，驾车载杨旭尸体连夜回城",
+          "verdict": "supported",
+          "evidence": [
+            {
+              "carrier_uid": "b10",
+              "exhibitor_span": "张十三对佃仆谎称公子醉酒，驾车载杨旭尸体连夜回城"
+            }
+          ],
+          "missing": "",
+          "reason": "画面完整演出谎称醉酒、载尸连夜回城。"
+        }
+      ]
+    }
+  ],
+  "voice_units": [
+    {
+      "unit_uid": "d01",
+      "verdict": "supported",
+      "source_kind": "novel_speech",
+      "speaker": "听香",
+      "echo_text": "公……公子他……杀……杀人啦……",
+      "reason": "原文中听香惊恐尖叫说出此话。"
+    },
+    {
+      "unit_uid": "d02",
+      "verdict": "supported",
+      "source_kind": "novel_speech",
+      "speaker": "张十三",
+      "echo_text": "凶手是谁，如何刺杀了公子，快说！",
+      "reason": "原文中张十三转向听香杀气腾腾地问出此话。"
+    },
+    {
+      "unit_uid": "d03",
+      "verdict": "supported",
+      "source_kind": "novel_speech",
+      "speaker": "听香",
+      "echo_text": "不……不知道，那人……那人一下子从水里跳出来，就……就杀了公子，然后又……又跳进水里不见了，奴家……奴家连他是男是女都没看清……",
+      "reason": "原文中听香指着水面颤声回答张十三。"
+    },
+    {
+      "unit_uid": "d04",
+      "verdict": "supported",
+      "source_kind": "novel_speech",
+      "speaker": "张十三",
+      "echo_text": "住嘴！",
+      "reason": "原文中张十三怒极喝令听香住嘴。"
+    },
+    {
+      "unit_uid": "d05",
+      "verdict": "supported",
+      "source_kind": "novel_speech",
+      "speaker": "张十三",
+      "echo_text": "这场官司打到官府里，你便休想脱身了。",
+      "reason": "原文中张十三低声对听香说出的威胁。"
+    },
+    {
+      "unit_uid": "d06",
+      "verdict": "supported",
+      "source_kind": "novel_speech",
+      "speaker": "听香",
+      "echo_text": "十三郎，真的不关奴家的事啊，奴家当时正在……正在……",
+      "reason": "原文中听香哭诉辩解。"
+    },
+    {
+      "unit_uid": "d07",
+      "verdict": "supported",
+      "source_kind": "novel_speech",
+      "speaker": "张十三",
+      "echo_text": "你若不想吃官司，便听我吩咐，由我作主，莫要胡乱声张。",
+      "reason": "原文中张十三厉声威胁听香。"
+    },
+    {
+      "unit_uid": "d08",
+      "verdict": "supported",
+      "source_kind": "novel_speech",
+      "speaker": "听香",
+      "echo_text": "是是是，奴家……奴家听你的，都听你的。",
+      "reason": "原文中听香受吓后连声答应。"
+    },
+    {
+      "unit_uid": "d09",
+      "verdict": "supported",
+      "source_kind": "novel_speech",
+      "speaker": "庄中佃仆",
+      "echo_text": "公子爷，出了什么事，可是有贼闯进了咱家么？",
+      "reason": "原文中庄中佃仆赶到岸边向船上喊话。"
+    },
+    {
+      "unit_uid": "d10",
+      "verdict": "supported",
+      "source_kind": "novel_speech",
+      "speaker": "张十三",
+      "echo_text": "公子爷吃醉了酒，险些跌落水中，所以惊得听香姑娘尖叫起来。",
+      "reason": "原文中张十三沉住气对佃仆谎称公子醉酒。"
+    },
+    {
+      "unit_uid": "d11",
+      "verdict": "supported",
+      "source_kind": "novel_speech",
+      "speaker": "庄中佃仆",
+      "echo_text": "既然公子爷无事，我等便退下了。",
+      "reason": "原文中佃仆家仆们信以为真后七嘴八舌地告退。"
+    },
+    {
+      "unit_uid": "n01",
+      "verdict": "supported",
+      "source_kind": "novel_narration",
+      "speaker": "",
+      "echo_text": "杨家的主人姓杨名旭，字文轩，今年刚及弱冠。",
+      "reason": "原文叙述句，非人物发言。"
+    },
+    {
+      "unit_uid": "n02",
+      "verdict": "supported",
+      "source_kind": "novel_narration",
+      "speaker": "",
+      "echo_text": "杨文轩杨公子又参加府学，一举考中了诸生（秀才），有了功名在身",
+      "reason": "原文叙述句，非人物发言。"
+    },
+    {
+      "unit_uid": "n03",
+      "verdict": "supported",
+      "source_kind": "novel_narration",
+      "speaker": "",
+      "echo_text": "那跃上船来的人青衣小帽打扮，正是杨旭的贴身伴当张十三",
+      "reason": "原文叙述句，非人物发言。"
+    }
+  ],
+  "coherence": {
+    "beat_uids": ["b01", "b02", "b03", "b04", "b05", "b06", "b07", "b08", "b09", "b10", "b11", "b12", "b13", "b14", "b15", "b16", "b17", "b18", "b19", "b20", "b21"],
+    "verdict": "contradicted",
+    "conflict_beats": ["b10", "b11", "b12", "b13", "b14", "b15", "b16", "b17", "b18", "b19", "b20", "b21"],
+    "evidence_spans": ["src_aba1adc22826c283_2814", "src_aba1adc22826c283_3067", "src_aba1adc22826c283_3304", "src_aba1adc22826c283_3594", "src_aba1adc22826c283_3677", "src_aba1adc22826c283_3841", "src_aba1adc22826c283_3848", "src_aba1adc22826c283_4136", "src_aba1adc22826c283_4226", "src_aba1adc22826c283_4261", "src_aba1adc22826c283_4392", "src_aba1adc22826c283_4474", "src_aba1adc22826c283_4529", "src_aba1adc22826c283_4574", "src_aba1adc22826c283_4658", "src_aba1adc22826c283_4759"],
+    "reason": "b10 已演出张十三对佃仆谎称公子醉酒并驾车载尸连夜回城，把听香尖叫、张十三上船查死、逼问凶手、掌掴威胁、听香答应、佃仆询问与告退等 b11-b21 全部前置情节跳过；随后 b11-b21 又倒回刺杀后听香尖叫、张十三上船、逼问、威胁、佃仆询问与告退，造成同一事件先结束后重演、张十三在已驾车回城后又出现在船上盘问的不可兼容先后与主体状态冲突。",
+    "dependencies": [
+      {"beat_uid": "b01", "requires_before": [], "reason": "开场荷湾全景，无先行依赖。"},
+      {"beat_uid": "b02", "requires_before": [], "reason": "交代杨旭发家背景，不依赖前序动作。"},
+      {"beat_uid": "b03", "requires_before": [], "reason": "交代杨旭功名，不依赖前序动作。"},
+      {"beat_uid": "b04", "requires_before": ["b01"], "reason": "杨旭与听香在船上避暑需以 b01 的荷湾小舟场景为空间前提。"},
+      {"beat_uid": "b05", "requires_before": ["b04"], "reason": "听香在舱中做晚餐、杨旭钓鱼承接 b04 两人已在船上避暑的状态。"},
+      {"beat_uid": "b06", "requires_before": ["b04", "b05"], "reason": "刺客从水中跃出刺杀杨旭需以杨旭在船上为前提。"},
+      {"beat_uid": "b07", "requires_before": ["b06"], "reason": "听香尖叫、张十三上船查看需以 b06 杨旭被刺为前提。"},
+      {"beat_uid": "b08", "requires_before": ["b07"], "reason": "张十三确认杨旭已死承接 b07 上船俯身查看的动作。"},
+      {"beat_uid": "b09", "requires_before": ["b08"], "reason": "张十三掌掴威胁听香发生在确认杨旭已死之后。"},
+      {"beat_uid": "b10", "requires_before": ["b09"], "reason": "张十三对佃仆谎称公子醉酒并驾车回城需以 b09 控制听香、掩盖死讯为前提。"},
+      {"beat_uid": "b11", "requires_before": ["b06"], "reason": "听香惊恐尖叫需以 b06 刺杀发生为前提；但 b10 已先行回城，造成状态冲突。"},
+      {"beat_uid": "b12", "requires_before": ["b11"], "reason": "张十三逼问凶手承接 b11 听香尖叫。"},
+      {"beat_uid": "b13", "requires_before": ["b12"], "reason": "听香回答凶手问题承接 b12 的逼问。"},
+      {"beat_uid": "b14", "requires_before": ["b13"], "reason": "张十三怒喝住嘴承接 b13 听香的回答。"},
+      {"beat_uid": "b15", "requires_before": ["b14"], "reason": "张十三威胁官司脱身承接 b14 喝止听香。"},
+      {"beat_uid": "b16", "requires_before": ["b15"], "reason": "听香哭诉不关己事承接 b15 的威胁。"},
+      {"beat_uid": "b17", "requires_before": ["b16"], "reason": "张十三厉声威胁听吩咐承接 b16 听香哭诉。"},
+      {"beat_uid": "b18", "requires_before": ["b17"], "reason": "听香连声答应承接 b17 的威胁。"},
+      {"beat_uid": "b19", "requires_before": ["b11"], "reason": "佃仆听到呼喊赶到岸边询问需以 b11 听香尖叫为前提。"},
+      {"beat_uid": "b20", "requires_before": ["b19"], "reason": "张十三回答佃仆谎称公子醉酒承接 b19 的询问。"},
+      {"beat_uid": "b21", "requires_before": ["b20"], "reason": "佃仆信以为真告退承接 b20 张十三的谎称。"}
+    ]
+  },
+  "source_preservation": {
+    "target_uids": ["f02"],
+    "verdict": "supported",
+    "evidence_spans": ["src_aba1adc22826c283_1027", "src_aba1adc22826c283_1148"],
+    "reason": "修正仅将无原文支持的“三年后”改为“四年后”，保留杨旭十六岁接手家业及已跻身青州十大豪门的核心内容；原文明确四年前病逝时杨旭十六岁、如今已跻身十大豪门，核心动作、主体与时间关系完整保留。"
+  }
+}

@@ -1,0 +1,349 @@
+{
+  "schema": "plan_revision.delta.v1",
+  "rule_version": "plan_revision.delta.v1",
+  "base_plan_hash": "1eb4150842075fe1e2989a1df603b800f6c24706d79e4f2074847e19780cdd66",
+  "fact_basis_hash": "be086715cdf8bcc22df7d9669d90855dfdd5be04a62de2070d4b55a1d60b7909",
+  "upsert": {
+    "beats": [
+      {
+        "uid": "b01",
+        "event_uids": [],
+        "text": "黄昏荷湾全景，小舟隐于荷花丛中，箫声悠扬",
+        "purpose": "交代环境与杨旭身份",
+        "evidence": "杨家的主人姓杨名旭，字文轩，今年刚及弱冠。",
+        "source": {},
+        "voice_ref": {
+          "kind": "narration",
+          "uid": "n01"
+        }
+      },
+      {
+        "uid": "b02",
+        "event_uids": [],
+        "text": "杨旭接手家业后迅速发家，跻身青州十大豪门",
+        "purpose": "交代杨旭发家史",
+        "evidence": "四年前杨家老主人杨炳坤病逝的时候，把兴步维艰的的家当一股脑儿交到了他年仅十六岁的独生子杨旭手中。",
+        "source": {},
+        "voice_ref": {
+          "kind": "visual",
+          "uid": "b02"
+        }
+      },
+      {
+        "uid": "b03",
+        "event_uids": [],
+        "text": "杨旭考中秀才，成为青州炙手可热的未婚青年",
+        "purpose": "交代杨旭功名",
+        "evidence": "杨文轩杨公子又参加府学，一举考中了诸生（秀才），有了功名在身",
+        "source": {},
+        "voice_ref": {
+          "kind": "narration",
+          "uid": "n03"
+        }
+      },
+      {
+        "uid": "b04",
+        "event_uids": [],
+        "text": "杨旭携听香在船上避暑，听香撑伞侍立",
+        "purpose": "展示杨旭与听香在别业水湾船上",
+        "evidence": "今天的确是杨家主人到乡下别庄避暑游玩来了。",
+        "source": {},
+        "voice_ref": {
+          "kind": "visual",
+          "uid": "b04"
+        }
+      },
+      {
+        "uid": "b05",
+        "event_uids": [],
+        "text": "听香在舱中忙碌做晚餐，杨旭钓鱼",
+        "purpose": "交代听香身份",
+        "evidence": "这个名唤听香的美人儿当真不错，生就一副如花似玉的俏模样，做得一手赞不绝口的美味佳肴，服侍人的本领更是了得，若非如此，前几日往泰州府去时，杨公子也不会花了两百贯宝钞的高价把她买下",
+        "source": {},
+        "voice_ref": {
+          "kind": "visual",
+          "uid": "b05"
+        }
+      },
+      {
+        "uid": "b06",
+        "event_uids": [],
+        "text": "夜色中，刺客从水中跃出，一剑刺入杨旭心口，随即跳入水中消失",
+        "purpose": "呈现刺杀高潮",
+        "evidence": "那人右手一扬，手中一道寒光一闪，恰如天边那轮弦月一般，一道清寒幽冷的光芒‘噗’地一声便刺进了杨旭的心口。",
+        "source": {},
+        "voice_ref": {
+          "kind": "visual",
+          "uid": "b06"
+        }
+      },
+      {
+        "uid": "b07",
+        "event_uids": [],
+        "text": "听香尖叫，张十三从岸上飞掠上船，俯身查看杨旭",
+        "purpose": "交代张十三身份并展示其反应",
+        "evidence": "那跃上船来的人青衣小帽打扮，正是杨旭的贴身伴当张十三",
+        "source": {},
+        "voice_ref": {
+          "kind": "narration",
+          "uid": "n05"
+        }
+      },
+      {
+        "uid": "b08",
+        "event_uids": [],
+        "text": "张十三确认杨旭已死，脸色铁青，内心独白“死了？杨旭竟然死了！三年苦心栽培，大计刚刚有点希望，他竟然死了？”",
+        "purpose": "揭示张十三隐藏的阴谋",
+        "evidence": "死了？杨旭竟然死了！三年苦心栽培，大计刚刚有点希望，他竟然死了？",
+        "source": {},
+        "voice_ref": {
+          "kind": "visual",
+          "uid": "b08"
+        }
+      },
+      {
+        "uid": "b09",
+        "event_uids": [],
+        "text": "张十三掌掴听香，威胁她不得声张",
+        "purpose": "展示张十三控制局面",
+        "evidence": "张十三怒极，反手一掌，一个清脆的耳光便扇在她的脸上",
+        "source": {},
+        "voice_ref": {
+          "kind": "visual",
+          "uid": "b09"
+        }
+      },
+      {
+        "uid": "b10",
+        "event_uids": [],
+        "text": "张十三对佃仆谎称公子醉酒，驾车载杨旭尸体连夜回城",
+        "purpose": "展示张十三掩盖真相",
+        "evidence": "张十三驾着马车疾驰而出，迅速投入了茫茫夜色之中……",
+        "source": {},
+        "voice_ref": {
+          "kind": "visual",
+          "uid": "b10"
+        }
+      },
+      {
+        "uid": "new:b11",
+        "event_uids": [],
+        "text": "听香惊恐尖叫，张十三喝问凶手",
+        "purpose": "承载听香与张十三的对话",
+        "evidence": "公……公子他……杀……杀人啦……",
+        "source": {},
+        "voice_ref": {
+          "kind": "dialogue",
+          "uid": "d02"
+        }
+      },
+      {
+        "uid": "new:b12",
+        "event_uids": [],
+        "text": "张十三逼问听香凶手是谁",
+        "purpose": "承载张十三的追问",
+        "evidence": "凶手是谁，如何刺杀了公子，快说！",
+        "source": {},
+        "voice_ref": {
+          "kind": "dialogue",
+          "uid": "d03"
+        }
+      },
+      {
+        "uid": "new:b13",
+        "event_uids": [],
+        "text": "听香颤抖着描述刺客从水中跃出刺杀杨旭",
+        "purpose": "承载听香的描述",
+        "evidence": "不……不知道，那人……那人一下子从水里跳出来，就……就杀了公子，然后又……又跳进水里不见了，奴家……奴家连他是男是女都没看清……",
+        "source": {},
+        "voice_ref": {
+          "kind": "dialogue",
+          "uid": "d04"
+        }
+      },
+      {
+        "uid": "new:b14",
+        "event_uids": [],
+        "text": "张十三怒喝住嘴",
+        "purpose": "承载张十三的怒喝",
+        "evidence": "住嘴！",
+        "source": {},
+        "voice_ref": {
+          "kind": "dialogue",
+          "uid": "d05"
+        }
+      },
+      {
+        "uid": "new:b15",
+        "event_uids": [],
+        "text": "张十三威胁听香这场官司打到官府里休想脱身",
+        "purpose": "承载张十三的威胁",
+        "evidence": "这场官司打到官府里，你便休想脱身了。",
+        "source": {},
+        "voice_ref": {
+          "kind": "dialogue",
+          "uid": "d06"
+        }
+      },
+      {
+        "uid": "new:b16",
+        "event_uids": [],
+        "text": "听香哭诉不关自己的事",
+        "purpose": "承载听香的哭诉",
+        "evidence": "十三郎，真的不关奴家的事啊，奴家当时正在……正在……",
+        "source": {},
+        "voice_ref": {
+          "kind": "dialogue",
+          "uid": "d07"
+        }
+      },
+      {
+        "uid": "new:b17",
+        "event_uids": [],
+        "text": "张十三厉声威胁听香若不想吃官司便听吩咐",
+        "purpose": "承载张十三的威胁",
+        "evidence": "你若不想吃官司，便听我吩咐，由我作主，莫要胡乱声张。",
+        "source": {},
+        "voice_ref": {
+          "kind": "dialogue",
+          "uid": "d08"
+        }
+      },
+      {
+        "uid": "new:b18",
+        "event_uids": [],
+        "text": "听香连声答应听从张十三",
+        "purpose": "承载听香的答应",
+        "evidence": "是是是，奴家……奴家听你的，都听你的。",
+        "source": {},
+        "voice_ref": {
+          "kind": "dialogue",
+          "uid": "d09"
+        }
+      },
+      {
+        "uid": "new:b19",
+        "event_uids": [],
+        "text": "佃仆赶到岸边询问出了什么事",
+        "purpose": "承载佃仆的询问",
+        "evidence": "公子爷，出了什么事，可是有贼闯进了咱家么？",
+        "source": {},
+        "voice_ref": {
+          "kind": "dialogue",
+          "uid": "d10"
+        }
+      },
+      {
+        "uid": "new:b20",
+        "event_uids": [],
+        "text": "张十三谎称公子醉酒险些落水",
+        "purpose": "承载张十三的谎言",
+        "evidence": "公子爷吃醉了酒，险些跌落水中，所以惊得听香姑娘尖叫起来。",
+        "source": {},
+        "voice_ref": {
+          "kind": "dialogue",
+          "uid": "d12"
+        }
+      },
+      {
+        "uid": "new:b21",
+        "event_uids": [],
+        "text": "佃仆信以为真告退",
+        "purpose": "承载佃仆的告退",
+        "evidence": "既然公子爷无事，我等便退下了。",
+        "source": {},
+        "voice_ref": {
+          "kind": "dialogue",
+          "uid": "d13"
+        }
+      }
+    ],
+    "dialogue_units": [
+      {
+        "uid": "d06",
+        "text": "这场官司打到官府里，你便休想脱身了。",
+        "source": {}
+      },
+      {
+        "uid": "d08",
+        "text": "你若不想吃官司，便听我吩咐，由我作主，莫要胡乱声张。",
+        "source": {}
+      }
+    ],
+    "narration_units": []
+  },
+  "delete": {
+    "dialogue_units": [
+      "d01",
+      "d11",
+      "d14"
+    ],
+    "narration_units": [
+      "n02",
+      "n04"
+    ]
+  },
+  "order": {
+    "beats": [
+      "b01",
+      "b02",
+      "b03",
+      "b04",
+      "b05",
+      "b06",
+      "b07",
+      "b08",
+      "b09",
+      "b10",
+      "new:b11",
+      "new:b12",
+      "new:b13",
+      "new:b14",
+      "new:b15",
+      "new:b16",
+      "new:b17",
+      "new:b18",
+      "new:b19",
+      "new:b20",
+      "new:b21"
+    ],
+    "dialogue_units": [
+      "d02",
+      "d03",
+      "d04",
+      "d05",
+      "d06",
+      "d07",
+      "d08",
+      "d09",
+      "d10",
+      "d12",
+      "d13"
+    ],
+    "narration_units": [
+      "n01",
+      "n03",
+      "n05"
+    ]
+  },
+  "fact_bindings": [
+    {
+      "fact_uid": "f02",
+      "carriers": [
+        {
+          "kind": "visual",
+          "uid": "b02"
+        }
+      ]
+    },
+    {
+      "fact_uid": "f05",
+      "carriers": [
+        {
+          "kind": "visual",
+          "uid": "b05"
+        }
+      ]
+    }
+  ]
+}

@@ -830,12 +830,40 @@ def _beat_evidence_positions(beat, novel_text) -> list:
     return _occurrences(str((beat or {}).get("evidence") or ""), novel_text)
 
 
+def _voice_feasible_spans(spans) -> list:
+    """把可选的逐字正文**收窄到计划层真的可表示**的整段（2026-11-05 实跑根因）.
+
+    旧行为把 `voice_source_spans` 原样交给模型，模型只能整段选：实测一轮里造出
+    119~140 字的四条旁白，4 条 `budget_unrepresentable` + 总下界 170s（上限 90s），
+    把 6 条残余变成 10 条。这里按**与守卫同一套判据**（`find_legal_split`）过滤：
+
+    - 整段 ≤ 单镜上限 ⇒ 可表示，原样保留；
+    - 超上限但能按句末切成 ≤4 段、每段 ≤上限 ⇒ **仍是可表示的整段**（生成层会跨镜
+      讲完），原样保留——所以这里**不拆碎**：拆碎会把"一句 25s 的完整表达"变成
+      "半句 8s 的部分表达"，事实反而永远表达不全；
+    - 切不出来（长句无句末边界，或需要 >4 段）⇒ 不作为候选；选中它必然被拒。
+    """
+    from step01_script_gen.plan_feasibility import find_legal_split, _estimate_duration
+    from step01_script_gen.timecode import active_shot_cap
+    _cap = float(active_shot_cap())
+    _out: list = []
+    for _s in spans or []:
+        _t = str(_s or "").strip()
+        if not _t or _t in _out:
+            continue
+        if float(_estimate_duration(_t)) > _cap + 0.01 and find_legal_split(_t) is None:
+            continue
+        _out.append(_t)
+    return _out
+
+
 def _voice_source_spans(view, fact_uid, record, novel_text, *,
                         admitted=False) -> list:
     """创建声音可用的逐字来源：**已准入**记录的 spans + 事实证据，且落在原文.
 
     事实 evidence 只能作为逐字内容来源，不能替代记录准入；`admitted=False` 时
-    即使 evidence 在原文里也不返回任何来源。
+    即使 evidence 在原文里也不返回任何来源。返回的是**单镜说得完**的片段
+    （超长 span 按句末展开，见 `_voice_feasible_spans`）。
     """
     if not admitted or not isinstance(record, dict):
         return []
@@ -848,7 +876,7 @@ def _voice_source_spans(view, fact_uid, record, novel_text, *,
         _s = str(_s or "").strip()
         if _s and _s not in _out and _occurrences(_s, novel_text):
             _out.append(_s)
-    return _out
+    return _voice_feasible_spans(_out)
 
 
 def _voice_landings(view, novel_text, spans) -> list:
@@ -1360,11 +1388,28 @@ def slot_request(view, slots, *, limits=None, remaining_calls=None,
             for _k in ("target_uids", "voice_target_uids", "current_carriers"):
                 _d.pop(_k, None)
         _out_slots.append(_d)
+    #: 发声预算的**实际数字**（2026-11-05：槽位答复只能看到"要表达什么"，
+    #: 看不到"还能讲多久"，于是六个事实各造一条长旁白，总下界 170s / 上限 90s）。
+    #: 画面承载不占发声时长——这个差值必须让生产者看到，否则它只能靠猜。
+    _voice_used = 0.0
+    try:
+        from step01_script_gen.plan_feasibility import voice_seconds
+        from shared.config import DURATION_MAX_SEC as _dmax
+        _units = [{"kind": "dialogue", "text": str(u.get("text") or "")}
+                  for u in (view or {}).get("dialogue_units") or []]
+        _units += [{"kind": "narration", "text": str(u.get("text") or "")}
+                   for u in (view or {}).get("narration_units") or []]
+        _voice_used = float(voice_seconds(_units))
+        _voice_budget = {"max_sec": float(_dmax), "used_sec": round(_voice_used, 2),
+                         "remaining_sec": round(float(_dmax) - _voice_used, 2)}
+    except Exception:                                                   # noqa: BLE001
+        _voice_budget = {}
     return {
         "schema": SLOT_REQUEST_SCHEMA, "rule_version": REPAIR_RULE_VERSION,
         "base_plan_hash": view_digest(view), "fact_basis_hash": fact_basis_digest(view),
         "limits": dict(limits or {}, remaining_calls=remaining_calls,
                        remaining_sec=remaining_sec),
+        "voice_budget": _voice_budget,
         "resources": planning_resource_context(view),
         "frozen_facts": _request_facts(slots),
         "current_bindings": _bindings,
@@ -1415,10 +1460,12 @@ _ACT_RULE = {
                  "`insert_after_uid` = 插在哪个现有画面之后（`insert_positions` 里选，"
                  "空串 = 排在最后）；`event_index` = 这条画面归属的冻结事件序号"
                  "（1..N，**0 = 不归属任何冻结事件**，回忆/背景画面通常为 0）"),
-    ACT_CREATE_VOICE: ("`text` = 逐字取自 `voice_source_spans` 的连续片段；`voice_kind` ="
-                       " dialogue / narration；`placement` = existing（`beat_uid` 从"
+    ACT_CREATE_VOICE: ("`text` = 逐字取自 `voice_source_spans` 的连续片段，**整条必须一镜"
+                       "说得完**（候选已按单镜上限切好，直接选一段；宁短勿长，不要自己拼长段）；"
+                       "`voice_kind` = dialogue / narration；`placement` = existing（`beat_uid` 从"
                        " `voice_existing_beat_uids` 选）或 new（`insert_after_uid` /"
-                       " `event_index` / `beat_text` 从允许集合选）。已有合法落点时不得 new。"),
+                       " `event_index` / `beat_text` 从允许集合选）。已有合法落点时不得 new。"
+                       "画面能承载时优先用视觉动作——声音会吃掉发声预算。"),
     ACT_BIND: ("`target_uid` = **已经演出**该事实的现有画面（`target_uids` 里选）；"
                "`text` 只能给**空串**"),
     ACT_REWRITE: ("`target_uid` = 要改写的现有承载画面（`target_uids` 里选）；"
@@ -1509,6 +1556,12 @@ def slot_prompt(request, novel_text: str = "") -> str:
         _rule += ("\n\n# 旧表示的单载体语义\n"
                   "本模式最多保留 1 条画面载体：替换该事实原有绑定，"
                   "不得扩展为多条并列载体。")
+    _vb = request.get("voice_budget") or {}
+    if _vb:
+        _rule += ("\n\n# 发声预算（本轮实际数字）\n"
+                  "已用 %s s / 上限 %s s（剩 %s s）。新增声音**直接吃剩余预算**；"
+                  "画面承载不占发声时长，能拍出来就别加旁白/台词。"
+                  % (_vb.get("used_sec"), _vb.get("max_sec"), _vb.get("remaining_sec")))
     return ("%s\n# 槽位请求（只在这些集合里选）\n%s\n%s"
             % (_head, _body, _rule))
 
@@ -1979,6 +2032,8 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
     _units_up: dict = {"dialogue": {}, "narration": {}}
     _units_del: dict = {"dialogue": [], "narration": []}
     _voice_order_changed = False
+    #: 本轮的声音迁移表 ``(from_kind, old_uid) -> (to_kind, new_uid)``（2026-11-06）
+    _reclass_map: dict = {}
 
     def _claim_write(kind, uid, slot_id, payload) -> str:
         """同一实体被两个槽写：`"new"` 写一次 / `"same"` 复用（**该槽的关系照旧要应用**）
@@ -2058,6 +2113,7 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
             _units_del[_from].append(_old)
             _units_up[_to][_new_uid] = {"uid": _new_uid, "text": _text,
                                         "source": _source}
+            _reclass_map[(_from, _old)] = (_to, _new_uid)
             for _b in _base_beats:
                 _vr = _b.get("voice_ref") or {}
                 if ref_uid(_vr) == _old and str(_vr.get("kind") or "") == _from:
@@ -2271,6 +2327,22 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
         if not _exists:
             _b.setdefault("carriers", []).append(
                 {"kind": KIND_VISUAL, "beat_uid": str(_beat.get("uid") or "")})
+    # **跨槽一致性：迁移后的残留引用**（2026-11-06 实跑根因）
+    # 同一轮里"把 d01 迁到旁白"和"把事实绑到 d01"同时出现时，绑定动作拿到的是迁移前
+    # 的身份（或迁移前的 base 视图），编译出来的 delta 会引用已不存在的 dialogue d01，
+    # 应用器判 `view_binding_dangling`；模型照同一份答案重试 3 次全被拒。
+    # 迁移是**同一条声音换集合**、目标唯一，这里按迁移表把残留引用改写成新身份。
+    if _reclass_map:
+        def _remap(_c):
+            if not isinstance(_c, dict):
+                return _c
+            _key = (str(_c.get("kind") or ""), ref_uid(_c))
+            if _key not in _reclass_map:
+                return _c
+            _to_k, _to_u = _reclass_map[_key]
+            return {"kind": _to_k, "uid": _to_u}
+        for _b in _bindings.values():
+            _b["carriers"] = [_remap(_c) for _c in (_b.get("carriers") or [])]
     if _p:
         return None, _p
     if _order_changed:

@@ -1,0 +1,14 @@
+{
+  "schema": "plan_revision.delta.v1",
+  "rule_version": "plan_revision.delta.v1",
+  "base_plan_hash": "05098a632f00ba9fb3528f6b7592306f4142fd4a439b94b7596874186b956488",
+  "fact_basis_hash": "7c16996723cef0dfa1e75140fb94ead264ce40a0d0d2f8b794c29d22ebe7707b",
+  "upsert": {
+    "narration_units": [
+    1,
+    2,
+    3,
+    4
+   ]
+  }
+}
