@@ -1460,8 +1460,9 @@ _ACT_RULE = {
                  "`insert_after_uid` = 插在哪个现有画面之后（`insert_positions` 里选，"
                  "空串 = 排在最后）；`event_index` = 这条画面归属的冻结事件序号"
                  "（1..N，**0 = 不归属任何冻结事件**，回忆/背景画面通常为 0）"),
-    ACT_CREATE_VOICE: ("`text` = 逐字取自 `voice_source_spans` 的连续片段，**整条必须一镜"
-                       "说得完**（候选已按单镜上限切好，直接选一段；宁短勿长，不要自己拼长段）；"
+    ACT_CREATE_VOICE: ("`text` = **整段**取自 `voice_source_spans` 的其中一项（必须与该项"
+                       "**完全一致**，不得截短、拼接或改写；候选已按单镜上限切好，多段可选时"
+                       "优先较短的整段）——校验按**整段相等**判定，自行截短的子片段会被拒收；"
                        "`voice_kind` = dialogue / narration；`placement` = existing（`beat_uid` 从"
                        " `voice_existing_beat_uids` 选）或 new（`insert_after_uid` /"
                        " `event_index` / `beat_text` 从允许集合选）。已有合法落点时不得 new。"

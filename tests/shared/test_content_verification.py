@@ -473,6 +473,41 @@ def test_deadline_exhausted_is_recorded_as_failed():
     assert _c.used == 0, "过点后不该再发调用"
 
 
+def test_protocol_correction_echoes_only_the_verifier_answer():
+    """协议纠正**不许**把本地证据包（上一轮整份请求正文）回显给核验员.
+
+    2026-11-06 隔离重跑实测：`previous_response=json.dumps(_rec)` 把
+    `_call_evidence.prompt` 一起带回，纠正请求 21,448 → 67k → … → 54,234,784
+    字符，最后一轮 300s 超时（既没拿到记录，也没有任何响应字节）。
+    """
+    _v = _view()
+    _dig = cv.plan_digest_of(cv.view_candidate(_v, _v))
+    echoes = []
+
+    def _verify(view, digest):
+        rec = _record(view, digest=digest)
+        rec["_call_evidence"] = {"prompt": "P" * 5000, "raw": "R" * 100}
+        return rec
+
+    def _validate(rec, view, digest):
+        return [{"code": "verify_fake_protocol", "kind": "verification",
+                 "ref": "", "uid": "", "path": "", "reason": "x", "fix": ""}]
+
+    def _repair(view, digest, failure, previous):
+        echoes.append(previous)
+        rec = _record(view, digest=digest)
+        rec["_call_evidence"] = {"prompt": "P" * 5000, "raw": "R" * 100}
+        return rec
+
+    _c = cv.VerificationController(verify=_verify, validate_record=_validate,
+                                   repair=_repair, max_verifications=2)
+    _c.record_for(_v, _dig)
+
+    assert echoes, "没有发起协议纠正"
+    assert all("P" * 100 not in _e for _e in echoes), \
+        "上一轮请求正文被回显进纠正请求"
+
+
 # ---------------------------------------------------------------------------
 # ⑥ 请求装配：原文上下文、三问分开、引文不混入展示正文
 # ---------------------------------------------------------------------------

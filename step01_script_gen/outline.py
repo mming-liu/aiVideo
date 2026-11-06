@@ -4564,6 +4564,7 @@ def generate_outline_result(novel_text: str, model: str | None = None,
                             run_deadline_at: float | None = None,
                             max_revision_calls: int = DEFAULT_REVISION_MAX_CALLS,
                             revision_deadline_sec: float = DEFAULT_REVISION_DEADLINE_SEC,
+                            max_verifications: int | None = None,
                             verify=None) -> dict:
     """**结构化大纲结果**（工作包 §4 D / §7.2）：生产链路的唯一结果声明.
 
@@ -5002,6 +5003,11 @@ def generate_outline_result(novel_text: str, model: str | None = None,
                 correction={"problems": failure.get("problems", []),
                             "error": failure.get("error", ""), "previous_response": previous})
 
+        # 核验次数按**显式参数**注入（默认 None = 沿用 MAX_VERIFICATIONS_PER_RUN）：
+        # 只给实验/调用方一个可复核的入口，不做环境变量隐式覆盖，避免实验额度
+        # 混进生产默认。
+        _vc_kw = ({"max_verifications": int(max_verifications)}
+                  if max_verifications is not None else {})
         _verify_ctl = VerificationController(verify=_verify,
                                              require_coherence=True,
                                              validate_record=_protocol_problems,
@@ -5011,7 +5017,8 @@ def generate_outline_result(novel_text: str, model: str | None = None,
                                              log=print,
                                              # 原文身份由控制器盖章（复核 2026-10-07
                                              # 三轮 ②）：记录必须绑**本次**原文。
-                                             novel_digest=_novel_id["digest"])
+                                             novel_digest=_novel_id["digest"],
+                                             **_vc_kw)
         # ---- **把已验证的缓存记录交给控制器复用**（复核 2026-10-05 P2）----
         #
         # 读数：命中缓存后 `cache_hit=True`、生成 0 次、**核验仍 1 次**。原因就在这里：

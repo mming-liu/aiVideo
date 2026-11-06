@@ -2136,9 +2136,14 @@ class VerificationController:
             if _protocol_bad:
                 _r = self._failed(_dig, "核验记录无法复核", status=FAIL_BAD_RESPONSE)
                 _r["problems"] = list(_protocol_bad)
+                # 回显给核验员的只能是**它自己的答案**：记录里的 `_call_evidence`
+                # 是本地诊断包（含上一轮**整份请求正文** `prompt`），把它一起
+                # json 回去会让纠正请求逐轮自乘——2026-11-06 隔离重跑实测
+                # 21,448 → 54,234,784 字符，最后一轮 300s 超时。
+                _echo = {k: v for k, v in _rec.items() if k != "_call_evidence"}
                 _corrected = (self._correct_record(
                     view, _dig, _r,
-                    previous_response=json.dumps(_rec, ensure_ascii=False))
+                    previous_response=json.dumps(_echo, ensure_ascii=False))
                     if allow_correction else None)
                 if _corrected is not None:
                     return _corrected
