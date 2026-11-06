@@ -177,6 +177,64 @@ class TestScopedFieldPatch(unittest.TestCase):
         self.assertEqual(out_shot["keyframes"][2]["stage"], "after")
         self.assertEqual(out_shot["frame_layouts"]["kfs"][2][0]["props"], [])
         self.assertEqual(out_shot["narration_segment"], shot5["narration_segment"])
+    def test_main_apply_shot_replacements_accepts_updates_plus_keyframe_additions(self):
+        """同一镜可以「补一处字段 + 补一帧」：两件事互不替代（2026-11-06）。
+
+        实测 f13 既缺一段动作帧、尾帧布局又漏了被抬的人；旧 `_stage` 只允许一种
+        形态，模型只能二选一，另一半永远修不掉。
+        """
+        import step01_script_gen.main as m
+
+        shot5 = _make_shot(5)
+        script = {"shots": [shot5], "characters": []}
+        merged, count, rejected = m._apply_shot_replacements(
+            script,
+            replacements=[{
+                "shot_id": "5",
+                "updates": {"lf_desc": "旅人甲仍仰卧船头，守卫乙扣住船梢稳住身形"},
+                "keyframe_additions": [{
+                    "frame": {"t_sec": 5.0, "desc": "守卫乙扣住船梢稳住身形", "stage": "after"},
+                    "layout": [{"name": "守卫乙", "on_screen": True, "position": "画右",
+                                "pose": "扣住船梢", "props": []}],
+                }],
+            }],
+            picked={"shot_5"},
+            allowed_by_target={"shot_5": {"lf_desc", "keyframes", "frame_layouts.kfs"}},
+            expected_targets={"5"},
+        )
+        self.assertEqual(rejected, [])
+        self.assertEqual(count, 1)
+        out = merged["shots"][0]
+        self.assertTrue(out["lf_desc"].startswith("旅人甲仍仰卧船头"))
+        self.assertEqual(len(out["keyframes"]), 4)
+        self.assertEqual(len(out["frame_layouts"]["kfs"]), 4)
+        self.assertEqual(out["keyframes"][3]["desc"], "守卫乙扣住船梢稳住身形")
+
+    def test_repair_example_prefers_keyframe_additions_over_whole_kf_table(self):
+        """授权面含整个 `keyframes` 时，示例必须给成对补帧，不得诱导整表覆盖。"""
+        import json as _json
+        import step01_script_gen.main as m
+
+        shot = _make_shot(5)
+        example = _json.loads(m._repair_answer_example(
+            {"shot_5": shot}, ["shot_5"],
+            {"shot_5": {"keyframes", "frame_layouts.kfs", "lf_desc"}}))
+        item = example["shot_replacements"][0]
+        self.assertIn("keyframe_additions", item)
+        self.assertEqual({p["field_path"] for p in item.get("updates", [])}, {"lf_desc"})
+        frame, layout = item["keyframe_additions"][0]["frame"], item["keyframe_additions"][0]["layout"]
+        self.assertIn("t_sec", frame)
+        self.assertTrue(layout and "name" in layout[0])
+
+
+class TestRepairFieldAuthorizationNarrowing(unittest.TestCase):
+    def test_kf_segment_missing_no_longer_authorizes_whole_frame_layouts(self):
+        from step01_script_gen.repair_fields import _REPAIR_CODE_FIELDS
+
+        fields = _REPAIR_CODE_FIELDS["kf_segment_missing"]
+        self.assertIn("frame_layouts.kfs", fields)
+        self.assertNotIn("frame_layouts", fields)
+        self.assertEqual(_REPAIR_CODE_FIELDS["weapon_hand_conflict"], ())
 
 
 class TestVideoGenP0Optimizations(unittest.TestCase):

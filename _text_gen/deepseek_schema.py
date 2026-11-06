@@ -880,15 +880,25 @@ for _replacement_key in ("shot_replacements", "hook_replacement"):
         "type": "object", "properties": {"shot_id": {"type": "string"}, "updates": _REPAIR_UPDATES},
         "required": ["shot_id", "updates"], "additionalProperties": False}]
     if _replacement_key == "shot_replacements":
+        _kf_additions = {
+            "type": "array", "minItems": 1, "items": {
+                "type": "object", "properties": {"frame": {"type": "object"},
+                                                 "layout": {"type": "array", "items": {"type": "object"}}},
+                "required": ["frame", "layout"], "additionalProperties": False}}
         _branches.append({"type": "object", "properties": {
-            "shot_id": {"type": "string"}, "keyframe_additions": {
-                "type": "array", "minItems": 1, "items": {
-                    "type": "object", "properties": {"frame": {"type": "object"},
-                                                         "layout": {"type": "array", "items": {"type": "object"}}},
-                    "required": ["frame", "layout"], "additionalProperties": False}}},
+            "shot_id": {"type": "string"}, "keyframe_additions": _kf_additions},
             "required": ["shot_id", "keyframe_additions"], "additionalProperties": False})
+        # 2026-11-06：字段补丁与成对补帧**可以并用**——缺一段动作帧的同时还可能
+        # 要补一处布局字段，只允许二选一会让另一半永远修不掉。
+        _branches.append({"type": "object", "properties": {
+            "shot_id": {"type": "string"}, "updates": _REPAIR_UPDATES,
+            "keyframe_additions": _kf_additions},
+            "required": ["shot_id", "updates", "keyframe_additions"],
+            "additionalProperties": False})
         _container["items"] = {"oneOf": _branches}
-        _container["description"] = "仅点名目标；优先 updates 窄补丁，兼容完整 shot 和 keyframe_additions，每目标只选一种。"
+        _container["description"] = ("仅点名目标；优先 updates 窄补丁，兼容完整 shot 与 "
+                                     "keyframe_additions；updates 可与 keyframe_additions "
+                                     "并用，完整 shot 必须单独使用。")
     else:
         REPAIR_SHOT_REPLACEMENT_SCHEMA["schema"]["properties"][_replacement_key] = {"oneOf": _branches}
 REPAIR_SHOT_REPLACEMENT_SCHEMA["strict"] = False

@@ -1810,6 +1810,9 @@ _REPAIR_PRIORITY_CATEGORIES = (
     # `repairable=True`，与同族的 `kf_time_window_alignment` 是同一个字段、
     # 同一类缺陷、同一套修法——一个接线了一个没接，属漏接。
     "kf_event_window_mismatch",
+    # 2026-11-06：同镜同武器左右手矛盾——审计能看见、确定性层此前看不见；
+    # 新检查给成对 repair_targets（冲突涉及的全部字段），必须进修复轮才有收敛路径。
+    "weapon_hand_conflict",
     "shot_transition", "action_overlap",
     # === 景别/运镜（3） ===
     "shot_size_jump", "camera_movement", "camera_upgrade", "focal_switch",
@@ -4718,8 +4721,18 @@ def _repair_answer_example(shots_by_id: dict, picked, allowed_by_target=None) ->
             from step01_script_gen.repair_fields import path_allowed
             updates = []
             allowed = allowed_by_target.get(target_id, set())
+            # 2026-11-06：缺帧/缺段的授权面里有**整个 `keyframes`** 时，示例必须
+            # 给「成对补帧」而不是整表覆盖——整表 `updates` 会诱导模型手抄
+            # keyframes 却漏掉同序号的 frame_layouts.kfs（两表长度不等，整条拒收）。
+            wants_kf = "keyframes" in allowed
+            def _kf_path(path: str) -> bool:
+                return (path == "keyframes" or path.startswith("keyframes.")
+                        or path == "frame_layouts.kfs"
+                        or path.startswith("frame_layouts.kfs."))
             def visit(value, path):
                 if path and path_allowed(path, allowed):
+                    if wants_kf and _kf_path(path):
+                        return
                     updates.append({"field_path": path, "value": value})
                 elif isinstance(value, dict):
                     for key, child in value.items():
@@ -4728,8 +4741,19 @@ def _repair_answer_example(shots_by_id: dict, picked, allowed_by_target=None) ->
                     for index, child in enumerate(value):
                         visit(child, f"{path}.{index}")
             visit(shots_by_id[target_id], "")
+            replacement = {"shot_id": replacement["shot_id"]}
             if updates:
-                replacement = {"shot_id": replacement["shot_id"], "updates": updates}
+                replacement["updates"] = updates
+            if wants_kf:
+                replacement["keyframe_additions"] = [{
+                    "frame": {"t_sec": "<该缺段中点（秒）>",
+                              "stage": "pre|mid|after",
+                              "desc": "…描写该时段自己的动作，不要复述别的时段…"},
+                    "layout": [{"name": "…该帧在场角色…", "on_screen": True,
+                                "pose": "…", "props": [],
+                                "support": {"id": "…", "kind": "…", "surface": "…"},
+                                "states": ["…"]}],
+                }]
         if target_id == "hook":
             answer["hook_replacement"] = replacement
         else:
@@ -4786,13 +4810,21 @@ def _apply_shot_replacements(script: dict, replacements: list,
         new_shot = item.get("shot")
         forms = [key for key in ("shot", "updates", "field_patches", "keyframe_additions")
                  if key in item]
-        if len(forms) != 1 or item.get(forms[0]) is None:
-            rejected.append("同一目标只能提供一种替换形态")
+        # 2026-11-06：同一镜**可以**同时给「窄字段补丁」与「成对补帧」——两件事互不
+        # 替代（实测 f13 既缺一段动作帧、尾帧布局又漏了被抬的人；只让选一种，另一
+        # 半永远修不掉）。完整 `shot` 仍必须独占：它自带 keyframes/frame_layouts，
+        # 再叠补丁无法判定以谁为准。
+        _patch_forms = [k for k in forms if k in ("updates", "field_patches")]
+        _combo = ("shot" not in forms and "keyframe_additions" in forms
+                  and len(_patch_forms) <= 1)
+        if (not forms or (len(forms) != 1 and not _combo)
+                or any(item.get(k) is None for k in forms)):
+            rejected.append("同一目标只能提供一种替换形态（updates 与 keyframe_additions 可并用）")
             return
-        if forms[0] == "shot" and not isinstance(new_shot, dict):
+        if "shot" in forms and not isinstance(new_shot, dict):
             rejected.append("shot 必须是对象")
             return
-        if forms and forms[0] in ("updates", "field_patches") and set(item) != {"shot_id", forms[0]}:
+        if "shot" not in forms and set(item) != {"shot_id", *forms}:
             rejected.append("窄字段补丁条目含未知字段")
             return
         if not sid:
@@ -4818,14 +4850,6 @@ def _apply_shot_replacements(script: dict, replacements: list,
         if expected_targets is not None and sid not in {str(t) for t in expected_targets}:
             rejected.append(f"shot {sid} 不在本轮点名集合内（该条丢弃）")
             return
-        # 2026-09-27（用户决定）：联动修复的**成对数据**形状——模型只给
-        # 「帧 + 对应布局」，代码按时间顺序把两半装进同一声序号。缺任一半即拒收。
-        if new_shot is None and item.get("keyframe_additions") is not None:
-            new_shot, _why = _assemble_keyframe_additions(
-                target, item.get("keyframe_additions"))
-            if _why:
-                rejected.append(f"shot {sid}: {_why}")
-                return
         allowed = None
         if isinstance(allowed_by_target, dict):
             allowed = allowed_by_target.get(f"shot_{sid}", allowed_by_target.get(sid))
@@ -4840,6 +4864,17 @@ def _apply_shot_replacements(script: dict, replacements: list,
         _raw_updates = item.get("updates") if item.get("updates") is not None else item.get("field_patches")
         if new_shot is None and _raw_updates is not None:
             new_shot, _why = _apply_scoped_field_updates(target, _raw_updates, allowed=allowed)
+            if _why:
+                rejected.append(f"shot {sid}: {_why}")
+                return
+        # 2026-09-27（用户决定）：联动修复的**成对数据**形状——模型只给
+        # 「帧 + 对应布局」，代码按时间顺序把两半装进同一声序号。缺任一半即拒收。
+        # 2026-11-06：装配放在**字段补丁之后**，让「补一处字段 + 补一帧」能在同一
+        # 条目里成立（补丁先落到镜头上，新帧再插进它的 keyframes/frame_layouts.kfs）。
+        if item.get("keyframe_additions") is not None:
+            _kf_base = new_shot if isinstance(new_shot, dict) else target
+            new_shot, _why = _assemble_keyframe_additions(
+                _kf_base, item.get("keyframe_additions"))
             if _why:
                 rejected.append(f"shot {sid}: {_why}")
                 return
@@ -7269,7 +7304,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "对应布局条目，就一起改；审计已把这些字段都列为授权目标）。\n"
             "优先只返回被点名镜头的窄字段补丁 `updates`（路径和值），无需重抄未改字段。格式："
             f"{_repair_answer_example(shots_by_id, picked, _allowed_by_target)}\n"
-            "上面是本次授权字段与当前值的 JSON 示例；只提交需要修改的授权路径。`updates` 可为路径到值的字典，或 field_path/value 列表；未提交的字段由代码保留。完整 shot 替换和 keyframe_additions 仍兼容，同一目标只选一种形态。\n"
+            "上面是本次授权字段与当前值的 JSON 示例；只提交需要修改的授权路径。`updates` 可为路径到值的字典，或 field_path/value 列表；未提交的字段由代码保留。完整 shot 替换必须单独使用；`updates` 与 `keyframe_additions` **可以在同一目标上并用**（先落字段补丁，再装配新帧）。\n"
             "**hook 必须放在 `hook_replacement` 里**（它与普通镜头字段不同，无 scene/location），"
             "普通镜头放 `shot_replacements`；两个键都可为空数组/省略。\n"
             # 2026-09-27（用户决定）：缺帧这类**联动**修复改「成对数据」形状——
@@ -7426,7 +7461,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "**需要联动时一次改全**（如 kf 时序矛盾牵涉 kf 的 desc / stage / 布局条目）。"
             "优先返回被点名镜头的窄字段补丁 `updates`（路径和值）。格式："
             f"{_repair_answer_example(shots_by_id, picked, _allowed_by_target)}\n"
-            "上面是本次授权字段与当前值的 JSON 示例；只提交需要修改的授权路径。`updates` 可为路径到值的字典，或 field_path/value 列表；未提交的字段由代码保留。完整 shot 替换和 keyframe_additions 仍兼容，同一目标只选一种形态。\n"
+            "上面是本次授权字段与当前值的 JSON 示例；只提交需要修改的授权路径。`updates` 可为路径到值的字典，或 field_path/value 列表；未提交的字段由代码保留。完整 shot 替换必须单独使用；`updates` 与 `keyframe_additions` **可以在同一目标上并用**（先落字段补丁，再装配新帧）。\n"
             "hook 放 hook_replacement，普通镜头放 shot_replacements，两者都可为空；"
             "shot_id 用裸镜号（\"10\"，不是 \"shot_10\"）；"
             "每个被点名镜头恰好出现一次（重复/遗漏/多出则整批回滚）。"

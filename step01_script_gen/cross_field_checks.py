@@ -444,6 +444,84 @@ def result_action_evidence_groups(clause: str) -> tuple:
 
 
 # ---------------------------------------------------------------------------
+# 5. weapon_hand_conflict (2026-11-06)
+# ---------------------------------------------------------------------------
+#: 明确的「手别 + 持握/挥动动作」写法。只认这一类，开放语义交给审计。
+_HAND_HOLD_RE = re.compile(r"(左|右)手[^，。；！？]{0,8}?(?:持|握|拿|攥|扬|举|挥|提|刺|捅|扎|抵|顶|架|按)")
+#: 显式换手动作——出现即说明左右手变化是**剧情动作**，不判矛盾。
+_HAND_SWITCH = ("换手", "交到左", "交到右", "换到左", "换到右",
+                "改用左", "改用右", "递到左", "递到右", "从左手", "从右手")
+
+
+def _weapon_hand_issues(shot: dict, shot_id) -> list[Issue]:
+    """同镜**同一武器**被写成「左手…」又写成「右手…」的跨字段矛盾（纯检测）.
+
+    审计（model_audit_STATE_CHAIN_CONFLICT）能看出来，确定性层此前看不见：实测
+    f6 的 ff_desc/关键帧写「左手短刃」，motion_desc 写「右手寒光短刃扬起」，两条
+    口径互相矛盾，生成时模型只能随机选一个。
+
+    判据（刻意收窄，避免误报）：
+      - 同一**子句**里同时出现「手别词 + 持握动作」与**同一个武器词**；
+      - 左右两种手别指向**同一武器**才判矛盾（左手持箫 + 右手持剑不是矛盾）；
+      - `motion_desc` 里出现显式换手动作时整镜放行（剧情真的换了手）。
+
+    只报告 + 给**成对授权目标**（冲突涉及的全部字段），不写任何字段。
+    """
+    from step01_script_gen.prompt_semantic.registry import WEAPON_KEYWORDS
+
+    texts = [("ff_desc", shot.get("ff_desc"))]
+    texts += [(f"keyframes.{i}.desc", (kf or {}).get("desc"))
+              for i, kf in enumerate(shot.get("keyframes") or []) if isinstance(kf, dict)]
+    texts += [("motion_desc", shot.get("motion_desc")), ("lf_desc", shot.get("lf_desc"))]
+    motion = str(shot.get("motion_desc") or "")
+    if any(mark in motion for mark in _HAND_SWITCH):
+        return []
+
+    by_weapon: dict = {}
+    for field, raw in texts:
+        text = str(raw or "")
+        if not text:
+            continue
+        for clause in _clauses(text):
+            weapons = [w for w in WEAPON_KEYWORDS if w and w in clause]
+            if not weapons:
+                continue
+            for match in _HAND_HOLD_RE.finditer(clause):
+                hand = match.group(1)
+                for weapon in weapons:
+                    by_weapon.setdefault(weapon, {"左": [], "右": []})[hand].append((field, clause))
+
+    conflicts = []
+    for weapon, sides in by_weapon.items():
+        if sides["左"] and sides["右"]:
+            conflicts.append((weapon, sides["左"], sides["右"]))
+    if not conflicts:
+        return []
+
+    # 同一镜只出**一条**：不同武器词可能落在同一批子句里（「短刃」与「刀」同时命中），
+    # 逐词各报一条会让同一次修复在阻塞表里重复计票。授权面取并集。
+    targets: list = []
+    for _weapon, left, right in conflicts:
+        for field, _clause in left + right:
+            item = {"shot_id": shot_id, "field_path": field}
+            if item not in targets:
+                targets.append(item)
+    weapons = "、".join(w for w, _l, _r in conflicts)
+    left0, right0 = conflicts[0][1][0], conflicts[0][2][0]
+    return [Issue(
+        code="weapon_hand_conflict", severity="visual_risk",
+        message=(f"同一镜内「{weapons}」被写成两种手别："
+                 f"左手见 {left0[0]}「{left0[1][:28]}」，"
+                 f"右手见 {right0[0]}「{right0[1][:28]}」；"
+                 f"motion_desc 没有换手动作，两条口径无法同时执行"),
+        shot_id=shot_id, frame_id="", entity_id="",
+        field_path=left0[0],
+        evidence=(left0[1][:100] + " / " + right0[1][:100]),
+        repair_targets=targets, repairable=True,
+    )]
+
+
+# ---------------------------------------------------------------------------
 # 入口
 # ---------------------------------------------------------------------------
 CROSS_FIELD_CODES = (
@@ -451,6 +529,7 @@ CROSS_FIELD_CODES = (
     "prop_possession_consistency",
     "frame_stage_pose_consistency",
     "result_action_support",
+    "weapon_hand_conflict",
 )
 
 CHECKS = (
@@ -458,6 +537,7 @@ CHECKS = (
     _possession_issues,
     _stage_pose_issues,
     _result_action_issues,
+    _weapon_hand_issues,
 )
 
 

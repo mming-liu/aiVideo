@@ -138,8 +138,13 @@ _REPAIR_CODE_FIELDS: dict = {
     "kf_event_window_mismatch": ("keyframes.*.desc",),
     # v6.143（2026-09-27）：缺段只能靠**新增帧**修——列表增长 + 同序号
     # `frame_layouts.kfs` 条目，属联动修改（帧/时间/布局一起动才自洽）。
+    # 2026-11-06：原映射给的 `frame_layouts`（整块）会连 ff/lf 一起授权，并且示例
+    # 会把整个布局塞进 `updates`；缺段只需要**同步追加同序号的 kfs 条目**，故收窄。
     "kf_segment_missing": ("keyframes.*.t_sec", "keyframes.*.desc",
-                           "keyframes.*.stage", "frame_layouts"),
+                           "keyframes.*.stage", "frame_layouts.kfs"),
+    # 同镜同实体持同一武器的「左手 / 右手」跨字段矛盾：检测器自己声明精确
+    # repair_targets（冲突涉及的全部字段），这里刻意留空，防结构码放宽授权面。
+    "weapon_hand_conflict": (),
     "duration_two_calibers": ("duration",),
     "timecode_span_mismatch": ("duration",),
     "time_field_audit_write": ("duration",),
