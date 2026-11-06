@@ -300,6 +300,10 @@ def revise_with_service(plan, issues, *, novel_text, service, model=None,
     source_catalog=catalog_for(novel_text)
     prompt_text=('你是本计划的原规划生产者。来源核验发现部分首版主张加入了原文不支持的限定。'
         '仅修正授权事实的无来源部分，保留原文真实支持的核心事件、主体、否定、条件、因果。'
+        '当原证据是「若非…也不会…」「险些…」这类复杂句式、导致部分限定被判 partial 时，'
+        '允许把该事实的 claim 简化为原文直接可证的核心事实（去掉争议限定或改用原文直陈表述），'
+        '并在 core_updates 同步仍带同一无来源推断的摘要字段；不得借简化删掉原文真实支持的'
+        '主体、动作、否定、条件或因果。'
         'fact_updates 必须按授权身份同序完整返回，每项 fact_uid、claim、evidence；'
         'evidence 为下方 src_ 原文片段编号的非空数组，代码将所选片段的最短连续原文区间展开为逐字证据。'
         '不抄写或改写原文，不编造编号。不得增删事实或改变其他事实。'

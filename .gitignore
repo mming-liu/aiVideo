@@ -298,3 +298,6 @@ tests/step02_video_gen/*
 
 !tests/shared/test_vimax_bridge_v6321.py
 !tests/shared/test_hook_shot0_v661.py
+
+# 隔离重跑/审计证据（10+ MB 二进制与日志，只留本地盘）
+output_step01_*/

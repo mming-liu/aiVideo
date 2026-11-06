@@ -273,14 +273,40 @@ def get_style_prefix(name: str = None) -> str:
 _RATIO_TOKEN_RE = re.compile(r"\b\d+:\d+(?:电影宽幅|短视频画幅|竖屏|横屏|画幅)?")
 
 
-def _canvas_prefix(prefix: str, ratio: str) -> str:
+#: 画幅 → 朝向词（分镜帧提示词用；把横/竖写清楚，别让模型按错方向构图）
+_ORIENT_LABEL = {"16:9": "横屏", "9:16": "竖屏"}
+
+
+def _canvas_prefix(prefix: str, ratio: str, *, orient: bool = False) -> str:
     """剥掉预设里写死的比例词，再按调用方画幅追加."""
     cleaned = _RATIO_TOKEN_RE.sub("", prefix)
     cleaned = re.sub(r"[，,]\s*[，,]", "，", cleaned).strip("，, ")
-    return f"{cleaned}；{ratio}画幅"
+    label = f"{ratio}{_ORIENT_LABEL.get(ratio, '')}" if orient else ratio
+    return f"{cleaned}；{label}画幅"
 
 
-def style_prefix_for_canvas(ratio: str = "16:9", style: str | None = None) -> str:
+def frame_canvas_ratio() -> str:
+    """分镜帧**实际**画幅（由 VIDEO_SIZE 决定；缺失/不可解析回退 9:16）.
+
+    帧 prompt 里的画幅词必须与真正请求的画布一致：写死 9:16 而按 16:9 出图
+    （或反之）等于给模型一句错的构图指令。2026-11-06 S27 实测 prompt 说
+    「9:16画幅」、实际请求 1280x720，图像只能靠构图句兜住。
+    """
+    import math
+
+    raw = (os.getenv("VIDEO_SIZE") or "1440*2560").strip().lower().replace("*", "x")
+    m = re.fullmatch(r"(\d+)\s*x\s*(\d+)", raw)
+    if not m:
+        return "9:16"
+    w, h = int(m.group(1)), int(m.group(2))
+    if w <= 0 or h <= 0:
+        return "9:16"
+    g = math.gcd(w, h)
+    return f"{w // g}:{h // g}"
+
+
+def style_prefix_for_canvas(ratio: str = "16:9", style: str | None = None,
+                            *, orient: bool = False) -> str:
     """当前生效风格 + 调用方画幅（预设里写死的比例由画幅拥有者改写）.
 
     风格预设（STYLE_PRESETS[*].prefix）各自写死了 16:9/9:16，但资产图与分镜帧
@@ -288,7 +314,7 @@ def style_prefix_for_canvas(ratio: str = "16:9", style: str | None = None) -> st
     参数说 9:16，模型会按文字画成横幅/留黑边（anime 预设正是「16:9短视频画幅」）。
     style 缺省取当前 VIDEO_STYLE；显式传入供预检/测试遍历预设。
     """
-    return _canvas_prefix(get_style_prefix(style), ratio)
+    return _canvas_prefix(get_style_prefix(style), ratio, orient=orient)
 
 
 def asset_style_prefix(ratio: str = "16:9") -> str:

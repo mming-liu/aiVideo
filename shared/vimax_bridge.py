@@ -104,7 +104,7 @@ _ATTEMPT_VARIATIONS = (
 )
 
 # 首帧/尾帧生成需要风格前缀（与视频生成保持一致）
-from shared.style_prefix import (style_prefix_for_canvas, sanitize_prompt,
+from shared.style_prefix import (style_prefix_for_canvas, frame_canvas_ratio, sanitize_prompt,
                                  ensure_prefix, is_empty_scene, add_image_strict_constraints,
                                  preprocess_prompt_for_image)
 from shared.style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT, image_lock_prompt
@@ -1182,7 +1182,7 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
     stable_fields.append(keywords_str)
 
     key_parts = [
-        style_prefix_for_canvas("9:16"),          # 风格前缀（含本帧画幅）变化时首帧也应重新生成
+        style_prefix_for_canvas(frame_canvas_ratio(), orient=True),          # 风格前缀（含本帧画幅）变化时首帧也应重新生成
         f"lock={lock_kind}",               # 锁类型是 prompt 语义的一部分
     ]
     key_parts.extend(stable_fields)
@@ -3446,7 +3446,7 @@ def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
                     " Strictly no swimming pool, no indoor pool, no ceramic tile, "
                     "no white tile surface, no bathtub, no modern architecture."
                 )
-        text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas("9:16")), verbose=False)
+        text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas(frame_canvas_ratio(), orient=True)), verbose=False)
         text = add_image_strict_constraints(text, "首帧" if frame_kind == "first_frame" else "尾帧", shot=shot, characters=characters)
         # v6.50：多模板拼接点的双句号归一化（防御性兜底，矛盾门此前会拦）
         while "。。" in text:
@@ -3743,7 +3743,7 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
                                     frame_kind="first_frame")
         if prop:
             text = f"{text}。{prop}"
-        text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas("9:16")), verbose=False)
+        text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas(frame_canvas_ratio(), orient=True)), verbose=False)
         return add_image_strict_constraints(text, "首帧", shot=shot, characters=chars)
 
     if frame_kind == "last_frame":
@@ -3781,7 +3781,7 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
             text = (f"{text}{ctx}"
                     f"，构图需按尾帧描述重新布局，"
                     f"可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。")
-        text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas("9:16")), verbose=False)
+        text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas(frame_canvas_ratio(), orient=True)), verbose=False)
         return add_image_strict_constraints(text, "尾帧", shot=shot, characters=chars)
 
     raise ValueError("frame_kind 必须是 first_frame / last_frame")
@@ -4506,7 +4506,7 @@ async def _gen_keyframes_async(
                 f"水面荷叶分布不变（仅环境连续性约束，人物站位/动作以本帧描述为准），"
                 f"表现动作过程中的瞬间状态。"
             )
-            kf_desc_full = sanitize_prompt(ensure_prefix(kf_desc_full, style_prefix_for_canvas("9:16")), verbose=False)
+            kf_desc_full = sanitize_prompt(ensure_prefix(kf_desc_full, style_prefix_for_canvas(frame_canvas_ratio(), orient=True)), verbose=False)
             kf_desc_full = add_image_strict_constraints(kf_desc_full, "关键帧", shot=shot, characters=characters)
             refs = reference_paths if reference_paths else []
             # 09-13：逐帧重配参考图（ff 整图锚条件化 + 道具/肖像参图 per-frame）。
