@@ -258,6 +258,23 @@ def test_strong_own_score_is_not_flagged_as_window_mismatch():
     weak = KfSlot(index=1, desc="x", t_sec=3.0, own=1, best=0, scores=[0.80, 0.30])
     assert weak.mismatched is True
 
+
+
+def test_dialogue_gate_accepts_plan_line_with_attribution_prefix():
+    """计划台词带「某某沉住了气，漫声说道：…」归属语时，仍按引号内台词本体匹配.
+
+    2026-11-07 run15 实测：归属语含逗号 → `_split_speaker_prefix` 不把它当前缀
+    （这是对「且慢，我告诉你：…」的防误切），整句成为 needle；剧本只写说的话就判
+    not_found。补一条「引号内正文」形态，两侧仍过同一套归一。
+    """
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    plan = {"dialogue_lines": ["甲沉住了气，漫声说道：“乙方才那句话，谁听见了？”"]}
+    script = {"shots": [{"index": 1, "narration_segment": "乙方才那句话，谁听见了？",
+                         "subtitle": "乙方才那句话，谁听见了？"}]}
+    ok, broken = check_script_dialogue_integrity(script, plan)
+    assert ok, broken
+
 class TestRepairFieldAuthorizationNarrowing(unittest.TestCase):
     def test_kf_segment_missing_no_longer_authorizes_whole_frame_layouts(self):
         from step01_script_gen.repair_fields import _REPAIR_CODE_FIELDS

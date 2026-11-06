@@ -1236,11 +1236,24 @@ def _match_forms(text: str) -> list:
     return out
 
 
+#: 计划台词里「引号内的台词本体」（2026-11-07）.
+#:
+#: 计划可能把「某某沉住了气，漫声说道：“…”」整句抄进 dialogue_lines；归属语含逗号，
+#: 按 `_split_speaker_prefix` 的判据**不算**说话人前缀（那是对「且慢，我告诉你：…」
+#: 的防误切），于是整句成了 needle，剧本只写说的话就判 `not_found`（run15 实测）。
+#: 这里补一条「引号内正文」形态，两侧仍过同一套 sanitize/归一，不改任何存储内容。
+_QUOTED_BODY_RE = re.compile(r"[\u201c\"\u300c\u300e]([^\u201d\"\u300d\u300f]{2,})[\u201d\"\u300d\u300f]")
+
+
 def _line_forms(line: str) -> list:
     """一条计划台词的全部归一化形态（原文 / 去说话人前缀 × 净化后 / 原样）."""
     out: list = []
     for f in (line, _speaker_body(line)):
         for nf in _match_forms(f):
+            if nf and nf not in out:
+                out.append(nf)
+    for _m in _QUOTED_BODY_RE.finditer(str(line or "")):
+        for nf in _match_forms(_m.group(1)):
             if nf and nf not in out:
                 out.append(nf)
     return out
