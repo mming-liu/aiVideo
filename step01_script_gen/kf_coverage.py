@@ -48,6 +48,14 @@ _WINDOW_TOL = 0.01
 MISMATCH_MIN_SCORE = 0.45
 MISMATCH_MARGIN = 0.12
 
+#: 本段匹配已经**足够高**时不再判「内容错位」（2026-11-06）.
+#:
+#: 实测：给缺失时段补的新帧必然带角色名/服饰/场景等公共词，而相邻某段正文更短、
+#: 公共词占比更高时，`s_best` 会反超 `s_own`（判据只看 2-gram 覆盖率），把写对了
+#: 本段动作的新帧判成 `kf_event_window_mismatch` → 补帧换来一条新阻塞、整轮回退。
+#: 0.55 = 比 0.45 门限再高 0.10：本段已经明显更像，就不因邻段公共词密度更高而翻案。
+MISMATCH_STRONG_SCORE = 0.55
+
 #: 「内容对应已核实」的下限——**沿用既有的 0.45**（不新造数字）。它只用于
 #: `KfSlot.content_ok` / `KfCoverage.content_unverified` 的**记录**；内容维度的
 #: 阻塞范围待判别样例定案（2026-09-27 复核 2-3），本轮不改门。
@@ -167,6 +175,9 @@ class KfSlot:
             return False
         s_best = self.scores[self.best]
         s_own = self.scores[self.own]
+        if s_own >= MISMATCH_STRONG_SCORE:
+            # 本段已足够像（公共角色/场景词不该把它判到别段去）——见常量注释
+            return False
         return s_best >= MISMATCH_MIN_SCORE and s_best >= s_own + MISMATCH_MARGIN
 
 

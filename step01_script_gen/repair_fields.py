@@ -277,6 +277,20 @@ _PAIRED_FRAME_DESC_CODES = (
     "prop_possession_consistency",
 )
 
+#: 模型审计里「改一处必须同步同镜另几处」的 code → 目标字段前缀 → 连带授权字段.
+#:
+#: 实测（2026-11-06 shot 7）：`model_audit_CONTENT_OMISSION` 只点名 `prompt`，模型
+#: 为保持首帧/动作与 prompt 一致，在 `updates` 里同时提交了 `ff_desc` → 整镜被判
+#: 「越权字段补丁」拒收 → 「目标 ['7'] 本轮未返回替换」→ 该条永远修不掉。
+#:
+#: 只对这两类**跨字段一致性**问题放开同镜的关联字段；锁定字段仍由既有闸门硬拒收，
+#: 放开范围也只到「同一镜、这几处」。
+_AUDIT_PAIRED_PATHS: dict = {
+    "CONTENT_OMISSION": {"prompt": ("ff_desc", "motion_desc", "lf_desc")},
+    "CHARACTER_MISSING": {"frame_layouts.lf": ("lf_desc",),
+                          "frame_layouts.ff": ("ff_desc",)},
+}
+
 
 def _audit_props_paths(fp: str, frame_id: str) -> tuple:
     """审计 `field_path` 含 `props` 时的**两侧**授权（v6.113）.
@@ -676,11 +690,19 @@ def allowed_repair_fields(warnings, audit_issues=None, *,
                 # 「必须增删 KF 才能修」的配套结构能力（见 `_KF_STRUCTURAL_CODES`）：
                 # 只在**确有**有效成对目标时给出，且随后由 `kf_structural_guard` 验收
                 structural = True
+            _tail = code[len("model_audit_"):] if code.startswith("model_audit_") else code
+            _companions = _AUDIT_PAIRED_PATHS.get(_tail, {})
             for _p in _valid:
-                if _target_id_of(_p["shot_id"]) == target_shot_id:
-                    # **保留下标**（`keyframes.2.desc`）——点名 kf2 就只授权 kf2。
-                    # 旧的 `code`/`field_path`/文案关键词路径仍走通配形态（零变化）。
-                    allowed_exact.add(_norm_keep_index(_p["field_path"]))
+                if _target_id_of(_p["shot_id"]) != target_shot_id:
+                    continue
+                # **保留下标**（`keyframes.2.desc`）——点名 kf2 就只授权 kf2。
+                # 旧的 `code`/`field_path`/文案关键词路径仍走通配形态（零变化）。
+                _fp_norm = _norm_keep_index(_p["field_path"])
+                allowed_exact.add(_fp_norm)
+                # 2026-11-06：跨字段一致性问题的**同镜关联字段**（见 _AUDIT_PAIRED_PATHS）
+                for _prefix, _extra in _companions.items():
+                    if _fp_norm == _prefix or _fp_norm.startswith(_prefix + "."):
+                        allowed.update(_extra)
             continue
         if _is_structural_code(code):
             structural = True

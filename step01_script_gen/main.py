@@ -5677,6 +5677,39 @@ def _cross_field_evidence_removed(before_state: dict | None, script_after: dict,
 # 「必须增删 KF 才能修」的问题上，普通修复轮不适用——把单调性检查加到全局
 # 校验里，会把「本来就乱序但从未被点名的镜头」也判成越权，重现本仓反复出现过的
 # 「假拒绝 → resolved=0」形态。范围收在「本轮拿到列表授权」的镜头上。
+def _neighbor_motion_window(script: dict, tid: str, novel_text: str):
+    """本镜没有台词/旁白时的**邻近原文窗口**（±1~2 镜，再外扩 600 字）.
+
+    实测（2026-11-06 f6 刺杀、f8 抓船舷）：纯动作镜头的 `narration_segment` 为空，
+    `shot_source_window_raw` 只能回落整章，于是 `narrow_motion_patch` 一律合回基线——
+    这类镜头的 motion 修复**结构性不可达**。相邻镜往往描写同一段连续动作，用它定位
+    出的窗口仍由同一套判据复核（同组动作 + 施事/受事），只扩大可核对范围，不放松判据。
+    """
+    from step01_script_gen.validation import shot_source_window_raw
+
+    shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+    idx = None
+    for i, s in enumerate(shots):
+        if "shot_%s" % s.get("index") == tid:
+            idx = i
+            break
+    if idx is None:
+        return "", False
+    raw = str(novel_text or "")
+    for off in (1, -1, 2, -2):
+        j = idx + off
+        if not (0 <= j < len(shots)):
+            continue
+        w, strict = shot_source_window_raw(shots[j], novel_text)
+        if not (strict and w):
+            continue
+        pos = raw.find(w)
+        if pos < 0:
+            return w, True
+        return raw[max(0, pos - 600): min(len(raw), pos + len(w) + 600)], True
+    return "", False
+
+
 def _kf_structural_violations(before_script: dict, after_script: dict,
                               allowed_by_target: dict | None,
                               picked: set, novel_text: str = "") -> list[str]:
@@ -5737,6 +5770,11 @@ def _kf_structural_violations(before_script: dict, after_script: dict,
         _skip_motion = False
         if _editable_motion:
             _window, _strict = shot_source_window_raw(before, novel_text)
+            if not _strict:
+                # 2026-11-06：无台词镜头用邻近镜的严格窗口兜底（仍过同一关系判据）
+                _nw, _nstrict = _neighbor_motion_window(before_script, tid, novel_text)
+                if _nstrict:
+                    _window, _strict = _nw, True
             _new_motion, _notes = narrow_motion_patch(
                 before, after, canonical=_canonical, novel_window=_window,
                 window_strict=_strict)
@@ -7492,7 +7530,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "**已有帧默认逐字保留**，只在列表追加新帧（只挪时刻不改文案会让它落进"
             "别的时段 → 立刻多出一条窗口错配）；**仅当问题文案说「时间/内容错位」时**，"
             "才可同时改该帧的 t_sec + desc + 对应布局条目（改时刻必须与改文案成对）；"
-            "缺帧优先用 `keyframe_additions` 成对形状（frame + layout 一起给，代码装配）。\n"
+            "缺帧优先用 `keyframe_additions` 成对形状（frame + layout 一起给，代码装配）。"
+            "**新帧 desc 必须逐字嵌入该时段的动作短语**、且不要复述别的时段——"
+            "新帧文案若更像相邻段，会被判窗口错配、整条回退。\n"
             "**同镜内 warn 改字段时必须保留同字段 anchor（最高优先级）**：改 ff_desc/lf_desc/prompt"
             " 的某条 warn 时，**禁止**顺手删该字段已有的 anchor 子句（致命伤/服装色/角色状态）。\n"
             "**修复决策树**（精简版）：缺服装色→追加；视线无方位→加画X/目光；致命伤缺→补洇痕；"

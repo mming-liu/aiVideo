@@ -896,6 +896,10 @@ def _kf_segment_missing_issues(shot: dict, shot_id) -> list[Issue]:
                     f"描写它自己那段」，①②怎么组合都算修好——同一帧若另有"
                     f"`kf_event_window_mismatch`（那条要求不改 t_sec），照它的"
                     f"要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。"
+                    f"**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语"
+                    f"（「{str(_body)[:24]}」这类原词要出现），并且**不要复述别的时段**"
+                    f"的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`"
+                    f"（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。"
                     f"**禁止**改写、删除或合并 motion_desc 来消除本条"
                     f"——那只会让告警消失，动作证据并没有增加。"
                 ),

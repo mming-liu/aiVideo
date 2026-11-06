@@ -172,6 +172,26 @@ def test_explicit_empty_array_gets_no_authorization():
                                  shots_by_id=_shots(5)) == set()
 
 
+
+
+def test_content_omission_grants_paired_shot_fields():
+    """审计只点名 prompt 时，同镜 ff_desc/motion_desc/lf_desc 也应获授权（2026-11-06）.
+
+    实测 f7：模型为保持首帧与 prompt 一致顺带改了 ff_desc，旧授权面只有 prompt →
+    整镜判「越权字段补丁」拒收，该条永远修不掉。
+    """
+    from step01_script_gen.quality_issues import Issue
+    from step01_script_gen.repair_fields import allowed_repair_fields
+
+    shot = {"index": 7, "prompt": "x", "ff_desc": "y", "lf_desc": "z", "motion_desc": "w"}
+    issue = Issue(code="model_audit_CONTENT_OMISSION", severity="visual_risk",
+                  message="prompt 缺动作", shot_id="7", field_path="prompt",
+                  repair_targets=[{"shot_id": "7", "field_path": "prompt"}],
+                  repairable=True)
+    allowed = allowed_repair_fields([], [issue], target_shot_id="shot_7",
+                                    shots_by_id={"shot_7": shot})
+    assert {"prompt", "ff_desc", "lf_desc", "motion_desc"} <= allowed
+
 def test_explicit_empty_array_does_not_grant_the_kf_list():
     """显式 `[]` 也不得经由**结构码**拿到 `keyframes` 的增删权限.
 

@@ -167,6 +167,20 @@ def _group_relation_ok(group, new_text: str, names: set, novel_window: str) -> b
     return False
 
 
+def _hand_only_change(before_text: str, after_text: str) -> bool:
+    """改写只换了「左手 / 右手」这一类手别，其余逐字未变（本镜自洽纠错）.
+
+    实测（2026-11-06 f6）：ff_desc / 关键帧写「左手短刃」，motion_desc 写「右手
+    寒光短刃扬起」；修复只需把 motion 的手别再对齐本镜已写死的那只手，动作、
+    施事、受事一个字都没变。这类改写**不可能**把「甲伤乙」换成「乙伤甲」，所以
+    不该被「原文事件绑定不上」整段合回。
+    """
+    if not before_text or not after_text:
+        return False
+    _swap = lambda s: str(s).replace("左手", "手").replace("右手", "手")
+    return ("手" in str(before_text)) and _norm(_swap(before_text)) == _norm(_swap(after_text))
+
+
 def _motion_relation_ok(new_text: str, canonical, novel_window: str,
                         strict: bool = False) -> tuple:
     """核实改后段的**动作及其施事/受事关系** → `(是否成立, 原因)`.
@@ -239,6 +253,11 @@ def narrow_motion_patch(before_shot, after_shot, *, canonical=(),
     for i, (b, a) in enumerate(zip(bs, as_)):
         if _norm(b.get("text")) == _norm(a.get("text")):
             merged.append(b)
+            continue
+        # 2026-11-06：先判「只换手别」的本镜自洽纠错——它不改变动作/施事/受事，
+        # 用整章窗口拒收会让 f6/f8 这类纯动作镜头的 motion 修复永远无法采纳。
+        if _hand_only_change(str(b.get("text") or ""), str(a.get("text") or "")):
+            merged.append(a)
             continue
         ok, why = _motion_relation_ok(str(a.get("text") or ""), canonical,
                                      novel_window, strict=window_strict)

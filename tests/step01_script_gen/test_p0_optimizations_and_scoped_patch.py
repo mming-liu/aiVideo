@@ -227,6 +227,37 @@ class TestScopedFieldPatch(unittest.TestCase):
         self.assertTrue(layout and "name" in layout[0])
 
 
+
+
+def test_hand_only_motion_correction_is_accepted_without_source_window():
+    """只换「左手/右手」的 motion 改写不该被「整章窗口」整段合回（2026-11-06）.
+
+    纯动作镜头没有 narration_segment，window_strict 恒为 False；f6 只需把手别对齐
+    本镜 ff_desc/关键帧。旧实现一律合回 → 该条永远修不掉。
+    """
+    from step01_script_gen.kf_structural_guard import narrow_motion_patch
+
+    before = {"index": 6, "duration_sec": 6,
+              "motion_desc": "0-2秒：甲按住乙；2-4秒：右手短刃扬起。",
+              "keyframes": [], "frame_layouts": {"kfs": []}}
+    after = copy.deepcopy(before)
+    after["motion_desc"] = "0-2秒：甲按住乙；2-4秒：左手短刃扬起。"
+    out, notes = narrow_motion_patch(before, after, canonical={"甲", "乙"},
+                                    novel_window="", window_strict=False)
+    assert out is not None, notes
+    assert "左手" in out and "右手" not in out
+
+
+def test_strong_own_score_is_not_flagged_as_window_mismatch():
+    """本段已够像（>=0.55）时，不因邻段公共词密度更高判错位（2026-11-06）."""
+    from step01_script_gen.kf_coverage import KfSlot
+
+    borderline = KfSlot(index=1, desc="x", t_sec=3.0, own=1, best=0, scores=[0.78, 0.60])
+    assert borderline.mismatched is False
+    # 对照：本段明显不像时仍按原判据报错位
+    weak = KfSlot(index=1, desc="x", t_sec=3.0, own=1, best=0, scores=[0.80, 0.30])
+    assert weak.mismatched is True
+
 class TestRepairFieldAuthorizationNarrowing(unittest.TestCase):
     def test_kf_segment_missing_no_longer_authorizes_whole_frame_layouts(self):
         from step01_script_gen.repair_fields import _REPAIR_CODE_FIELDS
