@@ -60,8 +60,31 @@ AGENT_PLAN_TEXT_TIMEOUT_SEC = int(os.getenv("AGENT_PLAN_TEXT_TIMEOUT_SEC", "600"
 #: SSE 传输开关（**默认关**：非流式路径逐字不变，便于同请求对照）。
 #: 打开后 payload 显式发 `stream:true` + `stream_options.include_usage`，按事件流增量解析。
 #: 注意：`requests.post(stream=True)` 只是客户端读取方式，不等于请求了协议流式。
-AGENT_PLAN_TEXT_STREAM = str(os.getenv("AGENT_PLAN_TEXT_STREAM", "")).strip().lower() in (
-    "1", "true", "yes", "on")
+_STREAM_RAW = str(os.getenv("AGENT_PLAN_TEXT_STREAM", "")).strip().lower()
+AGENT_PLAN_TEXT_STREAM = _STREAM_RAW in ("1", "true", "yes", "on")
+#: `auto`（默认）：只对**长请求**开协议流式。本机系统代理会在 ~66s 掐断非流式的
+#: 长响应（2026-11-06 实测：分镜 45KB prompt 被 ProxyError 断开），但短请求保持
+#: 逐字不变的旧路径——线上请求形状只在真正需要长连接的调用上变化。
+AGENT_PLAN_TEXT_STREAM_AUTO = _STREAM_RAW in ("auto", "long", "")
+
+#: 触发 auto 流式的门槛：正文规模或输出上限任一达到即开。
+_STREAM_AUTO_MIN_CHARS = 20000
+_STREAM_AUTO_MIN_MAX_TOKENS = 32000
+
+
+def _stream_requested(req) -> bool:
+    """本次请求是否走协议流式（显式开 → 全开；auto → 只看长请求）。"""
+    if AGENT_PLAN_TEXT_STREAM:
+        return True
+    if not AGENT_PLAN_TEXT_STREAM_AUTO:
+        return False
+    try:
+        _chars = (len(str(getattr(req, "user_prompt", "") or ""))
+                  + len(str(getattr(req, "system_prompt", "") or "")))
+        _cap = int(getattr(req, "max_tokens", 0) or 0)
+    except Exception:
+        return False
+    return _chars >= _STREAM_AUTO_MIN_CHARS or _cap >= _STREAM_AUTO_MIN_MAX_TOKENS
 
 
 def normalize_endpoint(base_url: str) -> str:
@@ -352,8 +375,8 @@ class AgentPlanTextService(TextGenerationService):
             # 先接受、后连最小 schema 也返回 400；不能把一次成功当成稳定能力。
             # 业务调用方须把内部契约交给模型并在本地验收；不在 400 后隐式重发。
             payload["response_format"] = {"type": "json_object"}
-        if AGENT_PLAN_TEXT_STREAM:
-            # 协议层流式（不是客户端读取方式）：只在显式开关下发，便于同请求对照。
+        if _stream_requested(req):
+            # 协议层流式（不是客户端读取方式）：显式开关全开；auto 只对长请求开。
             payload["stream"] = True
             payload["stream_options"] = {"include_usage": True}
         return payload
@@ -781,7 +804,7 @@ class AgentPlanTextService(TextGenerationService):
                     _attempt["id"] = _guard.before_send(
                         provider="agent_plan", model=model, endpoint="chat.completions")
                     _attempt["made"] = True
-                if AGENT_PLAN_TEXT_STREAM:
+                if _stream_requested(req):
                     return self._send_sse(url, payload, _t, gate=_gate, trace=_trace,
                                           stop=_stop)
                 return self._send_once(url, payload, _t, _trace)
