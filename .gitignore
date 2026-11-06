@@ -144,6 +144,9 @@ tests/step01_script_gen/*
 !tests/step01_script_gen/test_repair_target_rollback.py
 !tests/step01_script_gen/test_step01_commit.py
 !tests/step01_script_gen/test_plan_phase_e_commit_chain.py
+# 2026-11-06：四类跨字段检测（含新增 weapon_hand_conflict）的回归用例——
+# 是「同一武器左右手矛盾」唯一的确定性判据，必须随代码入库。
+!tests/step01_script_gen/test_cross_field_checks.py
 !tests/step02b_video_gen/
 tests/step02b_video_gen/*
 !tests/step02b_video_gen/test_frame_contract.py
