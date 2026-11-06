@@ -41,8 +41,8 @@ metadata:
 
 ```json
 "char_layout": [
-  {"name": "杨旭", "position": "画左前景", "facing": "面向画右的听香", "role": "主"},
-  {"name": "听香", "position": "画右中景", "facing": "面向画左的杨旭", "role": "次"}
+  {"name": "角色甲", "position": "画左前景", "facing": "面向画右的角色乙", "role": "主"},
+  {"name": "角色乙", "position": "画右中景", "facing": "面向画左的角色甲", "role": "次"}
 ]
 ```
 

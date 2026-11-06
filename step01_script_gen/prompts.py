@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 import sys
 from pathlib import Path
@@ -488,7 +489,8 @@ def _load_knowledge_skills(novel_text: str = "") -> str:
 
     v6.43 08-25 优化：
     - 删 4 个与 cinematic_vocab 重复的 skill（camera/transition/portrait/material）
-    - 3 个通用 skill 默认全注入（seedance-craft / character-performance / story-bible）
+    - 2 个通用 skill 默认注入（seedance-craft / character-performance）
+    - **story-bible 默认不注入**（作品专属设定；`STORY_BIBLE_ENABLED=1` 才加载，2026-11-06）
     - 2 个按需 skill（combat-mastery / character-entrance）按 novel_text 关键词检测注入
 
     Args:
@@ -500,7 +502,7 @@ def _load_knowledge_skills(novel_text: str = "") -> str:
     try:
         parts = []
 
-        # === 通用 skill（默认注入） ===
+        # === 通用 skill（默认注入；story-bible 见下方开关） ===
 
         # Seedance 镜头工艺全集（v2.0 合并：13 个 seedance-* 技能）
         craft_body = mod.read_skill("seedance-craft")
@@ -512,10 +514,14 @@ def _load_knowledge_skills(novel_text: str = "") -> str:
         if performance_body:
             parts.append(f"\n\n# 角色表演工艺全集（来自 character-performance）\n{performance_body}")
 
-        # 故事圣经（世界观/人物/主线设定）
-        bible_body = mod.read_skill("story-bible")
-        if bible_body:
-            parts.append(f"\n\n# 故事圣经（来自 story-bible）\n{bible_body}")
+        # 故事圣经（世界观/人物/主线设定）——**默认不注入**（2026-11-06 G05-Phase2）。
+        # 它是**作品专属**设定：旧实现无条件把当前测试小说的世界观/人物写进每一次
+        # Step01 提示，换一本书就会把上一本的设定带进选材。需要时显式
+        # `STORY_BIBLE_ENABLED=1`，且文件本身必须是**通用模板**（不得写死某本书）。
+        if os.getenv("STORY_BIBLE_ENABLED", "").strip() == "1":
+            bible_body = mod.read_skill("story-bible")
+            if bible_body:
+                parts.append(f"\n\n# 故事圣经（来自 story-bible）\n{bible_body}")
 
         # === 按需 skill（关键词检测） ===
 
@@ -663,7 +669,7 @@ def _build_regen_iron_rules() -> str:
         "禁止 1-2s 短镜堆叠凑镜头数，也禁止全章一刀切默认 6s——写时长时先算 SUM，"
         f"不足 {DURATION_MIN_SEC:g}s 就加长对话镜/加反应镜，超 {DURATION_TARGET_MAX_SEC:g}s 就压缩无对白过渡镜。\n"
         "2. **台词（narration_segment/subtitle）必须逐字来自原文**——禁止编造原文没有的"
-        "对白（如『凶手是谁？如何击杀了公子』这类原文不存在的台词）。\n"
+        "对白（如凭空给角色编一句「你逃不掉了」这类原文不存在的台词）。\n"
         "3. **合规**：禁止「击杀/杀人/尸体」等敏感词，用「出人命/倒地/倒下」替换。\n"
         "4. **每镜 kf.t_sec 必须在 [0.1, 0.9]×duration_sec 内**——写 kf 前先定 "
         "duration_sec，不要写绝对值（如 24.5s/44.1s 这种远超单镜时长的值）。\n"

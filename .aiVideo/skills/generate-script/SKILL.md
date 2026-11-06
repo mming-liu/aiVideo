@@ -60,7 +60,7 @@ description: "将小说章节转化为视听同步的动漫电影级分镜脚本
 5. 固定前缀必须一致（见 style_prefix.py）
 6. **首尾帧描述完整规则**：ff_Desc 和 lf_Desc 必须包含本镜头 prompt 中出现的所有角色
    - 镜头有 N 个角色，ff_Desc 和 lf_Desc 也必须出现 N 个角色
-   - 示例：prompt 说"杨旭吹箫，听香撑伞"，ff_Desc 必须包含听香
+   - 示例：prompt 说"角色甲吹箫，角色乙撑伞"，ff_Desc 必须包含角色乙
 
 ## 可重写类别
 

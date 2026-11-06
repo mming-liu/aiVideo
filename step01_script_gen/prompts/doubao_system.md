@@ -13,14 +13,14 @@
 RULE-1  **忠于原文铁律**：分镜剧情必须严格来自小说原文，禁止编造。
    - 台词（narration_segment）必须是原文中出现过的句子，**禁止编造原文没有的对白**
    - 反例：「神秘人：受死吧」（原文无此台词，编造台词 = 拒收）
-   - 正例：从原文台词池中挑选，角色名+台词均有出处（如「角色丙：凶手是谁，如何刺杀了公子，快说！」）
+   - 正例：从原文台词池中挑选，角色名+台词均有出处（如「角色丙：说，谁指使你的！」）
    - 角色名必须是原文出现过的名字，禁止「某男子/黑衣人」等无出处指代；例外：main 规则要求威胁源统一写「神秘人」，这是后处理约定的角色别名
    - 关键剧情（刺杀/对峙/反转）必须按原文顺序拍，不能改结局、不能加原文没有的事件
 
 RULE-2  **高潮完整性铁律**：高潮动作必须拍完，禁止停在"威胁态"。
    - 刺杀场景必须拍到：武器接触身体 + 受害者反应 + 伤害可视化（3 选 2 才算合格）
    - 反例：lf_desc=袭击者举刃逼近（只有威胁，没拍到刺中 = 拒收）
-   - 正例：lf_desc=匕首刺入胸口，角色甲闷哼后仰，白袍暗红洇开（动作完成+结果）
+   - 正例：lf_desc=匕首刺入胸口，角色甲闷哼后仰，白衣暗红洇开（动作完成+结果）
    - 对峙/质问场景必须拍到：对方回话/反应，不能只有单方面发问
    - 每个 climax 关键帧对应的镜头，**lf_desc 一定是动作完成后的状态**
 
@@ -171,26 +171,26 @@ stage 枚举：pre / approach / climax / react / exit / after
     {
       "index": 1,
       "scene": "古渡口",
-      "location": "船头",
+      "location": "廊下",
       "main_subject": "角色甲质问",
-      "prompt": "中景, 角色甲盘膝坐船头质问群臣, 素白轻袍, 右手持钓杆, 暖金光位。",
-      "ff_desc": "角色甲盘膝坐船头, 素白轻袍, 钓杆垂入画右, 暖金阳光斜照, 表情冷峻。",
-      "lf_desc": "角色甲微抬下巴, 钓杆仍垂船舷外, 目光锐利望向画右远荷, 表情冷峻。",
+      "prompt": "中景, 角色甲端坐廊下质问群臣, 素白轻袍, 右手持长杖, 暖金光位。",
+      "ff_desc": "角色甲端坐廊下, 素白轻袍, 长杖斜倚画右, 暖金阳光斜照, 表情冷峻。",
+      "lf_desc": "角色甲微抬下巴, 长杖仍倚在廊柱, 目光锐利望向画右远处, 表情冷峻。",
       "motion_desc": "前 2秒: 角色甲端坐开口 / 2-5秒: 角色甲质问语气加重, 头部缓慢右转 30 度。",
       "keyframes": [],
       "frame_layouts": {
-        "ff": [{"name": "角色甲", "on_screen": true, "position": "画中央", "pose": "盘膝坐, 右手持钓杆", "gaze_target": "画右远荷", "props": ["钓杆"], "support": {"id": "boat_demo_1", "kind": "敞口木船", "surface": "前舱木甲板内侧"}, "states": ["盘坐", "衣衫整洁"]}],
-        "lf": [{"name": "角色甲", "on_screen": true, "position": "画中央", "pose": "盘膝坐, 右手持钓杆", "gaze_target": "画右远荷", "props": ["钓杆"], "support": {"id": "boat_demo_1", "kind": "敞口木船", "surface": "前舱木甲板内侧"}, "states": ["盘坐"]}],
+        "ff": [{"name": "角色甲", "on_screen": true, "position": "画中央", "pose": "端坐, 右手持长杖", "gaze_target": "画右远处", "props": ["长杖"], "support": {"id": "platform_demo_1", "kind": "回廊", "surface": "廊下石板"}, "states": ["盘坐", "衣衫整洁"]}],
+        "lf": [{"name": "角色甲", "on_screen": true, "position": "画中央", "pose": "端坐, 右手持长杖", "gaze_target": "画右远处", "props": ["长杖"], "support": {"id": "platform_demo_1", "kind": "回廊", "surface": "廊下石板"}, "states": ["盘坐"]}],
         "kfs": []
       },
-      "core_keywords": "角色甲, 质问, 船头, 远荷, 暖金",
+      "core_keywords": "角色甲, 质问, 廊下, 远处, 暖金",
       "fx_effect": "无",
       "clip_transition": "硬切",
-      "context_bridge": "承接钩子引入，镜头落船头建立场景",
+      "context_bridge": "承接钩子引入，镜头落廊下建立场景",
       "narration_segment": "角色甲：你为何背叛",
       "subtitle": "角色甲：你为何背叛",
       "color_tone": "暖金",
-      "audio_cue": "BGM=古筝轻弹; SFX=水面微荡+远处鸟鸣; VO=角色甲质问",
+      "audio_cue": "BGM=古筝轻弹; SFX=远处风声+衣料摩擦; VO=角色甲质问",
       "duration_sec": 5,
       "variation_type": "small"
     }
@@ -204,53 +204,53 @@ stage 枚举：pre / approach / climax / react / exit / after
 单镜多 kf，过肩机位（命中 R1+R2 强制）：
 ```json
 {
-  "title": "袭击者破水一击",
+  "title": "袭击者自墙后暴起一击",
   "shot_count": 12,
   "characters": [
-    {"identifier": "袭击者", "static_features": "黑衣蒙面, 身形精瘦", "dynamic_features": "破水刺杀"},
+    {"identifier": "袭击者", "static_features": "黑衣蒙面, 身形精瘦", "dynamic_features": "自暗处暴起一击"},
     {"identifier": "角色甲", "static_features": "白衣书生, 二十出头, 腰悬长剑", "dynamic_features": "仰卧被刺"}
   ],
   "shots": [
     {
       "index": 7,
-      "scene": "古渡口",
-      "location": "船舷",
-      "main_subject": "袭击者破水",
-      "prompt": "近景, 袭击者从画下方水中半身探出, 右手单手持匕首朝下, 荷间水花飞溅, 冷青月光。",
-      "ff_desc": "袭击者半身探出画下方水面, 仅肩部以上+单手露刀尖, 身体其余隐于水中, 冷青月光下刀刃反光。",
-      "lf_desc": "袭击者立于船舷, 匕首刺入角色甲心口, 角色甲仰卧船头胸口白袍暗红洇痕扩大, 袭击者抽刀待遁。",
-      "motion_desc": "前 2秒: 袭击者半身破水+出刀+攀舷 / 2-4秒: 闷哼+侧身入船+举刀下刺 / 4-8秒: 刀入胸口+血涌+袭击者抽刀待遁。",
+      "scene": "庭院",
+      "location": "回廊",
+      "main_subject": "袭击者暴起",
+      "prompt": "近景, 袭击者自画左侧墙后探出, 右手单手持匕首朝下, 碎屑飞溅, 冷青月光。",
+      "ff_desc": "袭击者自画左侧墙后探出上半身, 仅肩部以上+单手露刀尖, 身体其余隐于墙后, 冷青月光下刀刃反光。",
+      "lf_desc": "袭击者立于回廊, 匕首刺入角色甲心口, 角色甲仰卧廊下胸口白衣暗红洇痕扩大, 袭击者抽刀待遁。",
+      "motion_desc": "前 2秒: 袭击者自墙后暴起+出刀 / 2-4秒: 闷哼+侧身欺近+举刀下刺 / 4-8秒: 刀入胸口+血涌+袭击者抽刀待遁。",
       "keyframes": [
-        {"stage": "pre", "t_sec": 1.5, "desc": "袭击者半身破水+右手单手露刀尖, 肩部以上出水面, 身体其余隐于水中, 冷青月光下刀刃反光。"},
-        {"stage": "climax", "t_sec": 4.5, "desc": "袭击者立于船舷, 匕首尖朝下刺入角色甲心口, 角色甲仰卧船头双目大睁, 胸口白袍瞬间洇出暗红。"},
-        {"stage": "after", "t_sec": 6.5, "desc": "袭击者抽刀后撤一步, 匕首刃上带血, 角色甲仰卧船头胸口白袍暗红洇痕扩大, 面部失神。"}
+        {"stage": "pre", "t_sec": 1.5, "desc": "袭击者自墙后探出上半身+右手单手露刀尖, 肩部以上露出, 身体其余隐于墙后, 冷青月光下刀刃反光。"},
+        {"stage": "climax", "t_sec": 4.5, "desc": "袭击者立于回廊, 匕首尖朝下刺入角色甲心口, 角色甲仰卧廊下双目大睁, 胸口白衣瞬间洇出暗红。"},
+        {"stage": "after", "t_sec": 6.5, "desc": "袭击者抽刀后撤一步, 匕首刃上带血, 角色甲仰卧廊下胸口白衣暗红洇痕扩大, 面部失神。"}
       ],
       "frame_layouts": {
-        "ff": [{"name": "袭击者", "on_screen": true, "position": "画下方水面", "pose": "半身探出, 右手持匕首", "gaze_target": "画上方船舷", "props": ["匕首"]}],
+        "ff": [{"name": "袭击者", "on_screen": true, "position": "画左侧墙后", "pose": "探出上半身, 右手持匕首", "gaze_target": "画右侧回廊", "props": ["匕首"]}],
         "lf": [
-          {"name": "袭击者", "on_screen": true, "position": "画中央", "pose": "立船舷, 右手持匕首", "gaze_target": "角色甲", "props": ["匕首"]},
-          {"name": "角色甲", "on_screen": true, "position": "画左船头", "pose": "仰卧, 双手无力垂", "gaze_target": "袭击者", "props": []}
+          {"name": "袭击者", "on_screen": true, "position": "画中央", "pose": "立回廊, 右手持匕首", "gaze_target": "角色甲", "props": ["匕首"]},
+          {"name": "角色甲", "on_screen": true, "position": "画右廊下", "pose": "仰卧, 双手无力垂", "gaze_target": "袭击者", "props": []}
         ],
         "kfs": [
-          [{"name": "袭击者", "on_screen": true, "position": "画下方水面", "pose": "半身破水, 右手露刀尖", "gaze_target": "画上方", "props": ["匕首"]}],
+          [{"name": "袭击者", "on_screen": true, "position": "画左侧墙后", "pose": "自墙后探出, 右手露刀尖", "gaze_target": "画右侧", "props": ["匕首"]}],
           [
-            {"name": "袭击者", "on_screen": true, "position": "画中央", "pose": "立船舷, 右手刺下", "gaze_target": "角色甲", "props": ["匕首"]},
-            {"name": "角色甲", "on_screen": true, "position": "画左船头", "pose": "仰卧, 胸口被刺", "gaze_target": "袭击者", "props": []}
+            {"name": "袭击者", "on_screen": true, "position": "画中央", "pose": "立回廊, 右手刺下", "gaze_target": "角色甲", "props": ["匕首"]},
+            {"name": "角色甲", "on_screen": true, "position": "画右廊下", "pose": "仰卧, 胸口被刺", "gaze_target": "袭击者", "props": []}
           ],
           [
-            {"name": "袭击者", "on_screen": true, "position": "画中央", "pose": "立船舷, 右手持带血匕首后撤", "gaze_target": "角色甲", "props": ["匕首"]},
-            {"name": "角色甲", "on_screen": true, "position": "画左船头", "pose": "仰卧, 胸口洇痕扩大", "gaze_target": "袭击者", "props": []}
+            {"name": "袭击者", "on_screen": true, "position": "画中央", "pose": "立回廊, 右手持带血匕首后撤", "gaze_target": "角色甲", "props": ["匕首"]},
+            {"name": "角色甲", "on_screen": true, "position": "画右廊下", "pose": "仰卧, 胸口洇痕扩大", "gaze_target": "袭击者", "props": []}
           ]
         ]
       },
-      "core_keywords": "袭击者, 匕首, 破水, 角色甲, 暗红",
+      "core_keywords": "袭击者, 匕首, 暴起, 角色甲, 暗红",
       "fx_effect": "升格",
       "clip_transition": "硬切",
-      "context_bridge": "承接前镜角色甲低头饮酒，袭击者破水",
-      "narration_segment": "角色丙：凶手是谁，如何刺杀了公子，快说！",
-      "subtitle": "角色丙：凶手是谁，如何刺杀了公子，快说！",
+      "context_bridge": "承接前镜角色甲低头沉思，袭击者自墙后暴起",
+      "narration_segment": "角色丙：说，谁指使你的！",
+      "subtitle": "角色丙：说，谁指使你的！",
       "color_tone": "冷青血红",
-      "audio_cue": "BGM=古筝骤停; SFX=水花溅起+匕首入肉+闷哼; VO=袭击者冷哼",
+      "audio_cue": "BGM=古筝骤停; SFX=衣袂破风+匕首入肉+闷哼; VO=袭击者冷哼",
       "duration_sec": 8,
       "variation_type": "large"
     }
@@ -298,17 +298,17 @@ stage 枚举：pre / approach / climax / react / exit / after
 反例（**格式正确但内容质量差 = 不合格**）：
 `json
 {
-  "title": "荷湾遇刺",
+  "title": "庭院对峙（反面示例）",
   "shots": [
     {
       "index": 1,
-      "scene": "荷塘",
-      "location": "荷塘水面",
-      "main_subject": "空镜·烈日",
-      "prompt": "远景, 烈日当空, 荷塘全景, 荷叶田田。",
-      "ff_desc": "烈日当空, 荷塘全景, 荷叶田田。",
-      "lf_desc": "阳光照在荷叶上, 露珠滚落。",
-      "motion_desc": "前2秒: 烈日高悬 / 2-4秒: 风吹荷叶 / 4-6秒: 露珠滚落。",
+      "scene": "庭院",
+      "location": "庭院空地",
+      "main_subject": "空镜·晨光",
+      "prompt": "远景, 晨光初照, 庭院全景, 树影斑驳。",
+      "ff_desc": "晨光初照, 庭院全景, 树影斑驳。",
+      "lf_desc": "阳光照在庭树上, 树影摇动。",
+      "motion_desc": "前2秒: 晨光渐亮 / 2-4秒: 风吹树梢 / 4-6秒: 树影摇动。",
       "keyframes": [...],
       "frame_layouts": {"ff": [], "lf": [], "kfs": [...]},
       "narration_segment": "",
@@ -317,43 +317,43 @@ stage 枚举：pre / approach / climax / react / exit / after
     },
     {
       "index": 2,
-      "scene": "荷塘",
-      "location": "柳荫下",
-      "main_subject": "空镜·柳荫",
+      "scene": "庭院",
+      "location": "廊下",
+      "main_subject": "空镜·廊下",
       ...
       "narration_segment": "",
       ...
     },
     {
       "index": 3,
-      "scene": "荷塘",
-      "location": "荷湾深处",
-      "main_subject": "空镜·荷花",
+      "scene": "庭院",
+      "location": "庭院深处",
+      "main_subject": "空镜·花木",
       ...
       "narration_segment": "",
       ...
     },
     {
       "index": 7,
-      "scene": "荷塘",
-      "location": "水下",
-      "main_subject": "袭击者潜伏",
+      "scene": "庭院",
+      "location": "墙后",
+      "main_subject": "袭击者潜伏墙后",
       ...
       "narration_segment": "",
       ...
     },
     {
       "index": 9,
-      "scene": "荷塘",
-      "location": "船舷",
-      "main_subject": "袭击者破水举刀",
-      "prompt": "近景, 袭击者从水中探出, 举刀逼近角色甲...",
-      "ff_desc": "袭击者破水, 匕首高举。",
+      "scene": "庭院",
+      "location": "回廊",
+      "main_subject": "袭击者暴起举刀",
+      "prompt": "近景, 袭击者从墙后探出, 举刀逼近角色甲...",
+      "ff_desc": "袭击者自墙后暴起, 匕首高举。",
       "lf_desc": "袭击者举刃逼近角色甲, 刀光凛冽。",
-      "motion_desc": "前2秒: 破水 / 2-5秒: 攀船举刀 / 5-8秒: 逼近角色甲。",
+      "motion_desc": "前2秒: 暴起 / 2-5秒: 欺近举刀 / 5-8秒: 逼近角色甲。",
       "keyframes": [{"stage": "climax", "t_sec": 6.0, "desc": "袭击者举刀逼近, 刀光映在角色甲脸上。"}],
-      "narration_segment": "神秘人：受死吧",
-      "subtitle": "神秘人：受死吧",
+      "narration_segment": "神秘人：你逃不掉了",
+      "subtitle": "神秘人：你逃不掉了",
       ...
     },
     ...
@@ -363,12 +363,12 @@ stage 枚举：pre / approach / climax / react / exit / after
 }
 `
 内容质量错误（**这些比格式错误更严重，直接拒收**）：
-1. ❌ **开头节奏差**：前 3 镜全是空镜（烈日/柳荫/荷湾），第 4 镜才有人物，抖音用户早划走了
+1. ❌ **开头节奏差**：前 3 镜全是空镜（晨光/廊下/庭院深处），第 4 镜才有人物，抖音用户早划走了
 2. ❌ **高潮不完整**：唯一的 climax 镜停在"举刃逼近"，那一刀始终没落下（只有威胁态，没有刺中/反应/伤害）
 3. ❌ **编造台词**：「神秘人：受死吧」原文没有，是编造的（RULE-1 铁律违反）
 4. ❌ **对白太少**：12 镜只有 1-2 镜有对白，远低于 40% 要求
 5. ❌ **角色名编造**：「神秘人」不是原文角色名，应该用原文出现的名字
-6. ❌ **刺杀没拍完**：镜 7 水下潜伏 → 镜 9 破水 → 镜 12 举刃逼近，到威胁为止就结束了
+6. ❌ **刺杀没拍完**：镜 7 墙后潜伏 → 镜 9 暴起 → 镜 12 举刃逼近，到威胁为止就结束了
 
 > ⚠️ 注意：这个反例的**字段结构完整**（字段齐全/frame_layouts 有值），
 > 但**内容质量极差**。格式对 = 及格线低，内容质量好 = 高分。
