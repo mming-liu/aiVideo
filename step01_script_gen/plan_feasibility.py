@@ -1394,6 +1394,77 @@ def _line_offset_in_units(line: str, units_raw: list, start: int) -> tuple:
     return True, _best
 
 
+def normalize_plan_refs(script: dict, plan) -> int:
+    """按**实际旁白落点**校正 `plan_refs`（B↔D 确定性归一，2026-11-07）.
+
+    判据（P1-5）：台词 Dk 在哪一镜被**说出来**，那一镜就必须声明 `lines` 含 k、
+    `beats` 含承载它的 `载体：台词k` 那条节拍；没说出 Dk 的镜头则不许声明 k。
+
+    模型经常漏填/错填这两个数字（run18/run19 的 `plan_refs_pairing_broken` 全部
+    来自此），而「文本里到底说了哪句」是可确定性定位的——声明必须跟着文本走，
+    不能让一次填表失误作废整份候选。只改声明，不改任何正文。
+
+    Returns: 改动计数（0 = 无需校正）。
+    """
+    try:
+        shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+        lines = plan_dialogue_lines(plan)
+        beats = [str(b) for b in ((plan or {}).get("shot_beats") or [])]
+    except Exception:
+        return 0
+    if not shots or not lines:
+        return 0
+    _carrier: dict = {}
+    for _i, _b in enumerate(beats, 1):
+        try:
+            _kind, _k = BeatRecord.parse(_b).carrier()
+        except Exception:
+            continue
+        if _kind == VOICE_KIND_DIALOGUE and _k:
+            try:
+                _carrier.setdefault(int(_k), _i)
+            except (TypeError, ValueError):
+                continue
+    if not _carrier:
+        return 0
+    _spoken: dict = {}
+    for _s in shots:
+        _spoken[str(_s.get("index"))] = _match_forms(str(_s.get("narration_segment") or ""))
+    _changed = 0
+    for _k, _text in enumerate(lines, 1):
+        if _k not in _carrier:
+            continue
+        _forms = [f for f in _match_forms(_text) if f]
+        if not _forms:
+            continue
+        _hits = {sid for sid, _uf in _spoken.items()
+                 if any(f in u for f in _forms for u in _uf)}
+        if not _hits:
+            continue
+        for _s in shots:
+            _sid = str(_s.get("index"))
+            _refs = _s.get("plan_refs")
+            if not isinstance(_refs, dict):
+                # 没有 plan_refs 的镜头不做补造——「整稿缺声明」由既有判据单独报。
+                continue
+            _lines_now = list(_refs.get("lines") or [])
+            _beats_now = list(_refs.get("beats") or [])
+            _has_k = any(coerce_ref_index(x, "D") == _k for x in _lines_now)
+            _has_b = any(coerce_ref_index(x, "B") == _carrier[_k] for x in _beats_now)
+            if _sid in _hits:
+                if not _has_k:
+                    _refs["lines"] = _lines_now + [_k]
+                    _changed += 1
+                if not _has_b:
+                    _refs["beats"] = _beats_now + [_carrier[_k]]
+                    _changed += 1
+            elif _has_k:
+                _refs["lines"] = [x for x in _lines_now
+                                  if coerce_ref_index(x, "D") != _k]
+                _changed += 1
+    return _changed
+
+
 def shadowed_dialogue_map(plan: dict) -> dict:
     """同句子串遮蔽：`{k: j}` = 台词 Dk 被 Dj 遮蔽（判据归并，**不改计划文本**）.
 
