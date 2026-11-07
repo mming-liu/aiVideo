@@ -1430,15 +1430,55 @@ def normalize_plan_refs(script: dict, plan) -> int:
     _spoken: dict = {}
     for _s in shots:
         _spoken[str(_s.get("index"))] = _match_forms(str(_s.get("narration_segment") or ""))
+    # 每条台词在每个镜头里的**命中区间**（归一化坐标）：只有「整段命中」才算说出来。
+    # 2026-11-07 复核 P1：子串命中不能等于承载——「我说先关门，但你不要照做」包含
+    # 「先关门」，但那是另一句话。若本镜同时命中了一条**更长且覆盖本段**的台词，
+    # 就保留身份歧义、不自动补引用（真实 run21 的第二份候选正是被这样改坏的）。
+    _spans: dict = {}
+    for _s in shots:
+        _sid = str(_s.get("index"))
+        _uf = _spoken.get(_sid) or []
+        for _k, _text in enumerate(lines, 1):
+            _cands = []
+            for _f in _match_forms(_text):
+                if not _f:
+                    continue
+                for _u in _uf:
+                    _p = _u.find(_f)
+                    if _p >= 0:
+                        _cands.append((_p, len(_f)))
+            if _cands:
+                _spans[(_sid, _k)] = max(_cands, key=lambda x: x[1])
+
+    def _covered_by_other(_sid: str, _k: int) -> bool:
+        _mine = _spans.get((_sid, _k))
+        if not _mine:
+            return False
+        for (_sid2, _j), _sp in _spans.items():
+            if _sid2 != _sid or _j == _k:
+                continue
+            if _sp[1] > _mine[1] and _sp[0] <= _mine[0] and _sp[0] + _sp[1] >= _mine[0] + _mine[1]:
+                return True
+        return False
+
+    # 2026-11-07 复核 P1：自动补引用**不得让候选变差**。补完先复核一遍，
+    # 违例数上升就整体还原（真实 run21 出现了「修好 2 条 pairing、换来 1 条
+    # beats_order_violation」的放大路径）。
+    import copy as _copy
+    _snapshot = [(s, _copy.deepcopy(s.get("plan_refs"))) for s in shots]
+
+    def _viol_codes():
+        try:
+            return {str(v.get("code")) for v in (check_event_contract(script, plan)[1] or [])}
+        except Exception:
+            return None
+
+    _codes_before = _viol_codes()
     _changed = 0
     for _k, _text in enumerate(lines, 1):
         if _k not in _carrier:
             continue
-        _forms = [f for f in _match_forms(_text) if f]
-        if not _forms:
-            continue
-        _hits = {sid for sid, _uf in _spoken.items()
-                 if any(f in u for f in _forms for u in _uf)}
+        _hits = {sid for sid, _j in _spans if _j == _k}
         if not _hits:
             continue
         for _s in shots:
@@ -1451,7 +1491,9 @@ def normalize_plan_refs(script: dict, plan) -> int:
             _beats_now = list(_refs.get("beats") or [])
             _has_k = any(coerce_ref_index(x, "D") == _k for x in _lines_now)
             _has_b = any(coerce_ref_index(x, "B") == _carrier[_k] for x in _beats_now)
-            if _sid in _hits:
+            _in_shot = (_sid, _k) in _spans
+            _ambiguous = _in_shot and _covered_by_other(_sid, _k)
+            if _in_shot and not _ambiguous:
                 # 2026-11-07（run20 实测）：必须按编号插到有序位置——直接 append
                 # 会把 B9 排到 B10 后面，同镜内立刻判 beats_order_violation。
                 if not _has_k:
@@ -1462,10 +1504,18 @@ def normalize_plan_refs(script: dict, plan) -> int:
                     _refs["beats"] = sorted({int(x) for x in _beats_now
                                              if str(x).strip().isdigit()} | {_carrier[_k]})
                     _changed += 1
-            elif _has_k:
+            elif _has_k and not _in_shot:
+                # 只有「本镜确实没有这句话」才撤销声明；被更长台词覆盖的歧义情形保持原样
                 _refs["lines"] = [x for x in _lines_now
                                   if coerce_ref_index(x, "D") != _k]
                 _changed += 1
+    if _changed and _codes_before is not None:
+        _codes_after = _viol_codes()
+        # 出现**新的违例类别**就整体还原：修好配对却换来一条顺序回退，是净损失。
+        if _codes_after is not None and (_codes_after - _codes_before):
+            for _s, _old_refs in _snapshot:
+                _s["plan_refs"] = _old_refs
+            return 0
     return _changed
 
 

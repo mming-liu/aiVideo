@@ -9547,14 +9547,7 @@ def _generate_script_candidates(
             )
             raise
         _cand = parse_response(raw, novel_text=novel_text)
-        # 2026-11-07（P1-5，候选解析入口）：按**实际旁白落点**校正 plan_refs——只改
-        # 声明、不改正文。模型漏填/错填 B/D 编号会让整份候选作废，而「哪一镜真的
-        # 说了哪句」是可确定性定位的；判据本体（check_event_contract）语义不变。
-        try:
-            from step01_script_gen.plan_feasibility import normalize_plan_refs as _norm_refs
-            _norm_refs(_cand, outline)
-        except Exception:
-            pass
+
         # v6.135（工作包 sunny-kindling-wilkinson；预算语义 2026-09-26 二审 C1 定稿）：
         # 候选层**台词完整性硬门**——破损候选直接判无效、不占合格名额；**差额在既有
         # `_max_attempts` 预算内继续补取**（与解析失败共用同一预算池，不扩预算）；
@@ -9583,6 +9576,14 @@ def _generate_script_candidates(
         # 旧顺序（先核验、通过后才落戳）有洞：新稿没有 `plan_id` ⇒ 校验函数直接按
         # 「未声明」返回 ⇒ **未经覆盖/顺序核验**就被盖上「已核验」的身份。
         bind_plan_identity(_cand, outline)
+        # 2026-11-07（P1-5，候选解析入口）：按**实际旁白落点**校正 plan_refs——只改
+        # 声明、不改正文。必须在绑定身份之后（复核要机器读得懂 plan_id），并且
+        # 只有「复核违例数不上升」时才保留（见 normalize_plan_refs 内的回滚闸门）。
+        try:
+            from step01_script_gen.plan_feasibility import normalize_plan_refs as _norm_refs
+            _norm_refs(_cand, outline)
+        except Exception:
+            pass
         try:
             _ct_ok, _ct_viol, _ct_declared = check_event_contract(
                 _cand, outline, require_declaration=True)

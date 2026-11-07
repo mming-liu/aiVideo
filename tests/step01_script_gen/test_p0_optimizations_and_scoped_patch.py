@@ -262,6 +262,62 @@ def test_strong_own_score_is_not_flagged_as_window_mismatch():
 
 
 
+
+
+def test_normalize_plan_refs_keeps_ambiguous_substring_utterances():
+    """子串命中 ≠ 承载：两条台词有包含关系但表达不同意图时不得自动补引用.
+
+    2026-11-07 复核 P1 反例：D1「先关门。」、D2「我说先关门，但你不要照做。」；
+    镜头 1 说 D1、镜头 2 说 D2。归一化若按子串给镜头 2 补 D1，会凭空造出
+    lines_order_violation（真实 run21 的第二份候选就是这样被改坏的）。
+    """
+    from step01_script_gen.plan_feasibility import normalize_plan_refs
+
+    plan = {"dialogue_lines": ["先关门。", "我说先关门，但你不要照做。"],
+            "shot_beats": ["节拍：甲关门。｜载体：台词1", "节拍：乙提醒。｜载体：台词2"]}
+    script = {"shots": [
+        {"index": 1, "narration_segment": "甲：先关门。",
+         "plan_refs": {"beats": [1], "lines": [1]}},
+        {"index": 2, "narration_segment": "乙：我说先关门，但你不要照做。",
+         "plan_refs": {"beats": [2], "lines": [2]}},
+    ]}
+    assert normalize_plan_refs(script, plan) == 0
+    assert script["shots"][1]["plan_refs"] == {"beats": [2], "lines": [2]}
+
+
+def test_normalize_plan_refs_fixes_unambiguous_missing_beat():
+    """无歧义时仍要补齐：本镜确实说了该台词、却没声明承载它的节拍 ⇒ 补引用.
+
+    2026-11-07 复核 P1 反例：D1「先关门。」、D2「我说先关门，但你不要照做。」；
+    镜头 1 说 D1、镜头 2 说 D2。归一化若按子串给镜头 2 补 D1，会凭空造出
+    lines_order_violation（真实 run21 的第二份候选就是这样被改坏的）。
+    """
+    from step01_script_gen.plan_feasibility import normalize_plan_refs
+
+    plan = {"dialogue_lines": ["先关门。"],
+            "shot_beats": ["节拍：甲关门。｜载体：台词1"]}
+    script = {"shots": [
+        {"index": 1, "narration_segment": "甲：先关门。",
+         "plan_refs": {"beats": [], "lines": []}},
+    ]}
+    assert normalize_plan_refs(script, plan) >= 1
+    assert script["shots"][0]["plan_refs"] == {"beats": [1], "lines": [1]}
+
+
+def test_dialogue_body_is_offered_as_voice_source_and_reuse_target():
+    """带归属语的整句要能引出「台词本体」：既作来源片段，也作复用目标（2026-11-07）。"""
+    from step01_script_gen.plan_content_repair import _dialogue_bodies, _voice_targets
+
+    span = "乙沉住了气，缓缓说道：“先关门，再关窗。”"
+    assert _dialogue_bodies(span) == ["先关门，再关窗。"]
+    assert _dialogue_bodies("没有引号的叙述句") == []
+    view = {"frozen_facts": [{"uid": "f1", "claim": "甲吩咐关门",
+                             "evidence": span}],
+            "dialogue_units": [{"uid": "d01", "text": "先关门，再关窗。"}],
+            "narration_units": []}
+    targets = _voice_targets(view, "f1")
+    assert {"kind": "dialogue", "uid": "d01"} in targets
+
 def test_plan_dialogue_lines_are_never_rewritten():
     """计划台词读取只做清洗，**不得**用子串关系替换文本（2026-11-07 复核 P1）.
 

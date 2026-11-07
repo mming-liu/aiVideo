@@ -736,7 +736,13 @@ def _voice_targets(view, fact_uid) -> list:
             _t = _norm_key(_u.get("text"))
             if not _t:
                 continue
-            if (_claim and _claim in _t) or (_ev and _ev in _t):
+            # 2026-11-07 复核 P1：已有声音是**台词本体**（引号内那段）时，它不会被
+            # 「整条主张/证据」包含，但正是同一句发言——必须给出复用目标，否则模型
+            # 只能再建一条带归属语的新声音（同句重复的直接来源）。
+            _bodies = {_norm_key(_b) for _b in (_dialogue_bodies(_f.get("claim"))
+                                                + _dialogue_bodies(_f.get("evidence")))}
+            if ((_claim and _claim in _t) or (_ev and _ev in _t)
+                    or (_t in _bodies)):
                 _out.append({"kind": _key.split("_")[0],
                              "uid": str(_u.get("uid") or "")})
     return [x for x in _out if x["uid"]]
@@ -857,6 +863,25 @@ def _voice_feasible_spans(spans) -> list:
     return _out
 
 
+_QUOTED_BODY_RE = re.compile("[\u201c\u300c\u300e]([^\u201d\u300d\u300f]{2,})[\u201d\u300d\u300f]")
+
+
+def _dialogue_bodies(text) -> list:
+    """归属语整句里的**台词本体**（引号内正文）；没有引号返回空表.
+
+    2026-11-07 复核 P1：`create_voice` 的来源片段只给「某某沉住了气，漫声说道：“…”」
+    这种整句，接口又要求回答与来源**整段相等**，于是模型只能把带归属语的整句再建成
+    一条新声音——同一句话被记成两条（缓存计划与 run22 第 4 轮都这样来的）。
+    把引号内正文也作为来源片段，本体才可能被选中复用/新建；不改任何正文。
+    """
+    out: list = []
+    for _m in _QUOTED_BODY_RE.finditer(str(text or "")):
+        _b = _m.group(1).strip()
+        if _b and _b not in out:
+            out.append(_b)
+    return out
+
+
 def _voice_source_spans(view, fact_uid, record, novel_text, *,
                         admitted=False) -> list:
     """创建声音可用的逐字来源：**已准入**记录的 spans + 事实证据，且落在原文.
@@ -876,6 +901,10 @@ def _voice_source_spans(view, fact_uid, record, novel_text, *,
         _s = str(_s or "").strip()
         if _s and _s not in _out and _occurrences(_s, novel_text):
             _out.append(_s)
+        # 归属语整句 → 同时给出引号内的台词本体（见 _dialogue_bodies）
+        for _b in _dialogue_bodies(_s):
+            if _b and _b not in _out and _occurrences(_b, novel_text):
+                _out.append(_b)
     return _voice_feasible_spans(_out)
 
 
