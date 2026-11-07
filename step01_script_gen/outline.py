@@ -2372,6 +2372,9 @@ _PLAN_DELTA_INSTRUCTION = """
    **每一个** uid 都要能在某条节拍的 `voice_ref` 上找到；删节拍、改 `voice_ref` 或替换
    声音条目时，别把某条声音弄成"没有任何节拍念它"（`view_voice_unit_unplaced`，
    实测第 16/17 次都栽在这里）。
+   **保留在 `dialogue_units` 或 `narration_units` 里的每个 uid，都必须同时被某条
+   `beats[].voice_ref`（形如 `{"kind": "dialogue", "uid": "d01"}`）绑定**；严禁只保留
+   `d01` 却把承载节拍的 `voice_ref` 设为 `null` 或删掉（必触发 `view_voice_unit_unplaced`）。
 8. **预算**：`budget` 里的总发声下界上限（{{DURATION_MAX}} s）与单镜上限（{{SHOT_CAP}} s）是**硬约束**。
    某条声音超单镜上限、或总下界超预算时，**两条合法修法**：
    · **保留原 uid 换短句**：`upsert` 原 id + **完整对象**，`text` 换成原文里更短、

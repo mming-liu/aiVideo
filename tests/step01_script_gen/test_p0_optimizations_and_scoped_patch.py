@@ -260,6 +260,56 @@ def test_strong_own_score_is_not_flagged_as_window_mismatch():
 
 
 
+
+
+def test_plan_dialogue_lines_are_never_rewritten():
+    """计划台词读取只做清洗，**不得**用子串关系替换文本（2026-11-07 复核 P1）.
+
+    反例：D1「明天必须离开这里。」与 D2「你说明天必须离开这里，但我不同意。」
+    是两条独立主张；把 D1 换成 D2 会改写主张，并连带影响提示、预算与声音条目。
+    子串关系不能证明两条声音身份相同——重复条目应由计划层按声音身份处理。
+    """
+    from step01_script_gen.plan_feasibility import plan_dialogue_lines
+
+    d1 = "明天必须离开这里。"
+    d2 = "你说明天必须离开这里，但我不同意。"
+    assert plan_dialogue_lines({"dialogue_lines": [d1, d2]}) == [d1, d2]
+
+
+
+def test_partial_quoted_dialogue_is_rejected():
+    """引号内片段不得当成完整台词（2026-11-07 复核 P1）.
+
+    计划「甲说：“先关门。”随后又说：“不要点灯。”」时，只写出第一句的稿子必须判破损。
+    """
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    plan = {"dialogue_lines": ["甲说：“先关门。”随后又说：“不要点灯。”"]}
+    script = {"shots": [{"index": 1, "narration_segment": "甲：先关门。",
+                         "subtitle": "甲：先关门。"}]}
+    ok, broken = check_script_dialogue_integrity(script, plan)
+    assert ok is False, broken
+
+
+def test_dialogue_split_by_empty_shot_is_rejected():
+    """跨镜拼回的台词必须落在连续镜头上（2026-11-07 复核 P1）.
+
+    三镜承载「先关门。再关窗。」而中间镜旁白为空时，声音被空镜切断——
+    旧实现把空镜从单元序列里滤掉，拼接照样成立。
+    """
+    from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
+
+    def _shot(i, text):
+        return {"index": i, "narration_segment": text, "subtitle": text}
+
+    plan = {"dialogue_lines": ["先关门。再关窗。"]}
+    gap = {"shots": [_shot(1, "甲：先关门。"), _shot(2, ""), _shot(3, "甲：再关窗。")]}
+    ok, broken = check_script_dialogue_integrity(gap, plan)
+    assert ok is False
+    assert any(b.get("reason") == "cross_shot_gap" for b in broken), broken
+    adj = {"shots": [_shot(1, "甲：先关门。"), _shot(2, "甲：再关窗。")]}
+    assert check_script_dialogue_integrity(adj, plan)[0] is True
+
 def test_dialogue_gate_accepts_plan_line_with_attribution_prefix():
     """计划台词带「某某沉住了气，漫声说道：…」归属语时，仍按引号内台词本体匹配.
 

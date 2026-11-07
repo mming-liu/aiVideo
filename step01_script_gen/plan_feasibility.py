@@ -402,20 +402,27 @@ def voice_units(plan, shots) -> list:
         _sids = _decl.get((e["kind"], e["index"])) or []
         _first = _sids[0] if _sids else None
         _span: list = []
-        # 起点：承载镜头里**第一个有文本的**那一个（前导空镜是合法的「建立镜」，
-        # 与台词侧「锚在真的说出这句的那一镜」同口径）——坐标在这里从镜头坐标
-        # 换成单元坐标。
-        _u0 = next((_unit_pos[_s] for _s in _sids if _s in _unit_pos), None)
-        if _u0 is not None:
-            _hit, _join, _units = _line_span_in_units(e["text"], units_raw, _u0)
+        # 起点：声明承载它的**任一**镜头（坐标在这里从镜头坐标换成单元坐标）。
+        # 2026-11-07（run13/run15 实测）：一个节拍可由多镜共同承载，旁白完全可能
+        # 落在**后**一镜（前一镜在说别的）。旧实现只取「第一个有文本的声明镜头」当
+        # 起点，后一镜的合法落点被漏判 → 假阴性 plan_refs_narration_missing。
+        # 现在遍历全部声明镜头作候选起点，任一起点能完整匹配（或按句末跨镜拼回）
+        # 即算合法落点。
+        _starts = [_unit_pos[_s] for _s in _sids if _s in _unit_pos]
+        _hit = False
+        _units: list = []
+        for _cand_start in _starts:
+            _hit, _join, _units = _line_span_in_units(e["text"], units_raw, _cand_start)
             if _hit:
-                _cand = [_unit_shot[_u] for _u in _units
-                         if 0 <= _u < len(_unit_shot)]
-                # **连续片段按镜头坐标连续**：中间夹一个没有文本的镜头 = 声音被切断
-                # （空镜中断承载）。只在单元序列里连续是不够的——那正是反例 2 的假绿。
-                if _cand and all(_shot_pos[_cand[_i + 1]] == _shot_pos[_cand[_i]] + 1
-                                 for _i in range(len(_cand) - 1)):
-                    _span = _cand
+                break
+        if _hit:
+            _cand = [_unit_shot[_u] for _u in _units
+                     if 0 <= _u < len(_unit_shot)]
+            # **连续片段按镜头坐标连续**：中间夹一个没有文本的镜头 = 声音被切断
+            # （空镜中断承载）。只在单元序列里连续是不够的——那正是反例 2 的假绿。
+            if _cand and all(_shot_pos[_cand[_i + 1]] == _shot_pos[_cand[_i]] + 1
+                             for _i in range(len(_cand) - 1)):
+                _span = _cand
         out.append({"kind": e["kind"], "index": e["index"], "id": e["id"],
                     "text": e["text"], "source": e["source"],
                     "fact_refs": list(e["fact_refs"]),
@@ -1236,13 +1243,21 @@ def _match_forms(text: str) -> list:
     return out
 
 
-#: 计划台词里「引号内的台词本体」（2026-11-07）.
+#: 计划台词里「归属语 + 整句引语」的**完整对白**形态（2026-11-07）.
 #:
 #: 计划可能把「某某沉住了气，漫声说道：“…”」整句抄进 dialogue_lines；归属语含逗号，
 #: 按 `_split_speaker_prefix` 的判据**不算**说话人前缀（那是对「且慢，我告诉你：…」
 #: 的防误切），于是整句成了 needle，剧本只写说的话就判 `not_found`（run15 实测）。
-#: 这里补一条「引号内正文」形态，两侧仍过同一套 sanitize/归一，不改任何存储内容。
-_QUOTED_BODY_RE = re.compile(r"[\u201c\"\u300c\u300e]([^\u201d\"\u300d\u300f]{2,})[\u201d\"\u300d\u300f]")
+#:
+#: **必须限定为「整条就是 归属语：“一句话”」**：归属语里不能再有引号、引号后不能再
+#: 接别的内容。旧版把**任意一段**引号内文本都当可接受形态，于是
+#: 「甲说：“先关门。”随后又说：“不要点灯。”」只要剧本写出第一句就算通过，
+#: 「门上写着“禁止通行”，但这块牌子已经作废。」只念“禁止通行”也能过——把部分内容
+#: 当成了完整台词/旁白（2026-11-07 复核实测）。
+_ATTRIBUTED_QUOTE_RE = re.compile(
+    r"^[^\u201c\u201d\"\u300c\u300d\u300e\u300f]{1,24}[:：]\s*"
+    r"[\u201c\"\u300c\u300e]([^\u201d\"\u300d\u300f]{2,})[\u201d\"\u300d\u300f]"
+    r"\s*[。！？…!?]?\s*$")
 
 
 def _line_forms(line: str) -> list:
@@ -1252,7 +1267,10 @@ def _line_forms(line: str) -> list:
         for nf in _match_forms(f):
             if nf and nf not in out:
                 out.append(nf)
-    for _m in _QUOTED_BODY_RE.finditer(str(line or "")):
+    # 只有「整条 = 归属语 + 一句引语」时，才把引号内正文当成同一句台词的另一形态；
+    # 引号内片段绝不单独作为 needle（那会把部分内容当成完整台词）。
+    _m = _ATTRIBUTED_QUOTE_RE.match(str(line or "").strip())
+    if _m:
         for nf in _match_forms(_m.group(1)):
             if nf and nf not in out:
                 out.append(nf)
@@ -1445,6 +1463,19 @@ def check_script_dialogue_integrity(script: dict, plan: dict | None) -> tuple:
         if not hit:
             broken.append({"line": str(line)[:60],
                            "reason": "cross_shot_split" if _joinable else "not_found"})
+            continue
+        # 2026-11-07（复核 P1）：跨镜拼回的台词必须落在**连续**镜头上。旧实现的
+        # 单元序列只收「有旁白的镜头」，中间夹一个空镜时拼接仍成立 → 声音被空镜
+        # 切断却照样过门（台词门与事件门都放行，voice_units 的 shot_indexes 为空）。
+        _hit2, _join2, _span2 = _line_span_in_units(line, units_raw)
+        if _hit2 and len(_span2) > 1:
+            _nums = []
+            for _u in _span2:
+                _s = str(unit_shots[_u]) if 0 <= _u < len(unit_shots) else ""
+                _nums.append(int(_s) if _s.isdigit() else None)
+            if any(_n is None for _n in _nums) or any(
+                    _nums[_i + 1] != _nums[_i] + 1 for _i in range(len(_nums) - 1)):
+                broken.append({"line": str(line)[:60], "reason": "cross_shot_gap"})
     # v6.138（九审 P2-4）：**排他性**——计划句逐字保住还不够，稿件不得**另编**计划外
     # 对白（"5/5 命中 + 1 句自选"此前照样过门，含 BEST-GUARD 历史快照；自选台词 =
     # 生成层重新选材，违反计划权威）。判据收窄到**带说话人前缀**的旁白：其正文与
