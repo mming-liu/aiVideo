@@ -4344,6 +4344,36 @@ def _locked_repair_signature(script: dict) -> str:
     return _json.dumps(out, ensure_ascii=False, sort_keys=True)
 
 
+def _rescale_shot_timeline(shot: dict, old_d: float, new_d: float) -> None:
+    """把镜内时间轴按 `new_d / old_d` 等比缩放（只动时间标签，不改任何文字描述）.
+
+    2026-11-07（D4）：`duration_budget` 的合法修法是缩短镜头，但只改 `duration`
+    会让 `motion_desc` 的时段终点与 `keyframes[*].t_sec` 越过新镜长，立刻触发
+    `action_time_out_of_range` / `kf_time_out_of_shot`（后者是 HARD）——修一条换两条。
+    这里在**已授权 duration** 的补丁落地后统一缩放：时段与帧保持相对位置，文字不动。
+    """
+    if old_d <= 0 or new_d <= 0 or new_d >= old_d:
+        return
+    _k = float(new_d) / float(old_d)
+    import re as _re
+
+    def _scale(m):
+        _a, _b = float(m.group(1)), float(m.group(2))
+        return "%g-%g秒" % (round(_a * _k, 2), round(_b * _k, 2))
+
+    _motion = str(shot.get("motion_desc") or "")
+    if _motion:
+        shot["motion_desc"] = _re.sub(
+            r"(\d+(?:\.\d+)?)\s*[-－–~～至到]\s*(\d+(?:\.\d+)?)\s*秒", _scale, _motion)
+    for _kf in (shot.get("keyframes") or []):
+        if isinstance(_kf, dict) and _kf.get("t_sec") is not None:
+            try:
+                _kf["t_sec"] = round(float(_kf["t_sec"]) * _k, 2)
+            except (TypeError, ValueError):
+                pass
+    shot["duration_sec"] = round(float(new_d), 2)
+
+
 def _split_executable_allowed(allowed) -> tuple:
     """把某目标的授权字段拆成 `(可执行字段, 命中的锁定字段)`（v6.149 可执行性预检）.
 
@@ -4912,6 +4942,20 @@ def _apply_shot_replacements(script: dict, replacements: list,
         # duration_sec 是派生值：授权合并后再同步，避免被回填成旧时长。
         if _raw_updates is not None and isinstance(new_shot, dict) and new_shot.get("duration") != target.get("duration"):
             new_shot["duration_sec"] = new_shot["duration"]
+            # 2026-11-07（D4）：授权改 duration 且确实缩短时，按比例缩放镜内时间轴
+            # （motion 时段与 kf 的 t_sec）——否则缩短镜长会立刻触发动作越界与
+            # kf_time_out_of_shot，修一条换两条。
+            if allowed is not None and "duration" in {str(a) for a in allowed}:
+                try:
+                    _old_d = float(target.get("duration_sec") or target.get("duration") or 0)
+                    _new_d = float(new_shot.get("duration_sec") or new_shot.get("duration") or 0)
+                except (TypeError, ValueError):
+                    _old_d, _new_d = 0.0, 0.0
+                if _old_d > 0 and 0 < _new_d < _old_d:
+                    _rescale_shot_timeline(new_shot, _old_d, _new_d)
+                    _logger.info(
+                        "[REPAIR] shot %s: duration %.2f->%.2f，镜内时间轴按 %.3f 等比缩放"
+                        % (sid, _old_d, _new_d, _new_d / _old_d))
         reason = _validate_replacement_shot(target, new_shot, is_hook=force_hook,
                                             allowed=allowed)
         if reason:
@@ -7934,6 +7978,25 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             # v6.95：`_locked_after_patch` 已在**合并后立刻**取（见循环内），这里不再重取
             # ——重取会把归一化/还原的写入算进来，正是上面那个假拒绝的成因。
             _locked_changed = _locked_before != _locked_after_patch
+            if _locked_changed:
+                # 2026-11-07（D4）：本轮显式授权了某镜的 duration 时，duration_sec 是
+                # 代码同步出来的**派生值**，不算越权。只放行这一类差异；narration_segment
+                # / subtitle / scene / location / variation_type 仍一票否决。
+                try:
+                    _dur_allowed = {str(_tid) for _tid, _fs in (_allowed_by_target or {}).items()
+                                    if "duration" in {str(_x) for _x in (_fs or ())}}
+                    _remain = []
+                    for _line in _locked_signature_diff(_locked_before, _locked_after_patch,
+                                                        limit=200):
+                        _sid2, _, _rest = str(_line).partition(".")
+                        _fld2 = _rest.split(":", 1)[0].strip()
+                        if _sid2 in _dur_allowed and _fld2 == "duration_sec":
+                            continue
+                        _remain.append(_line)
+                    if not _remain:
+                        _locked_changed = False
+                except Exception:
+                    pass
             # v6.77（第四阶段）：修复轮是「镜头事务」——只许动被点名的镜头。
             # 用逐镜语义 revision 快照判定：不在 picked 里的镜头若发生任何语义变化，
             # 本轮即拒绝（原判据只看聚合的 blocking 身份，看不见"顺手动别镜"）。

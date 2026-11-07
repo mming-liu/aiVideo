@@ -145,6 +145,14 @@ _REPAIR_CODE_FIELDS: dict = {
     # 同镜同实体持同一武器的「左手 / 右手」跨字段矛盾：检测器自己声明精确
     # repair_targets（冲突涉及的全部字段），这里刻意留空，防结构码放宽授权面。
     "weapon_hand_conflict": (),
+    # 2026-11-07：checklist 包装层把**分类名**当 code / field_path 使用——这些名字
+    # 必须映射到真实镜头字段，否则授权面全是死路径（run17 r1 实测）。
+    "ff_desc_anchors": ("ff_desc",),
+    "ff_lf_completeness": ("ff_desc", "lf_desc"),
+    "action_overlap": ("motion_desc", "ff_desc", "lf_desc"),
+    "prop_spatial_anchor": ("ff_desc", "lf_desc", "prompt"),
+    "pose_continuity": ("ff_desc", "lf_desc", "frame_layouts"),
+    "camera_movement": ("camera_movement", "prompt"),
     "duration_two_calibers": ("duration",),
     "timecode_span_mismatch": ("duration",),
     "time_field_audit_write": ("duration",),
@@ -708,7 +716,19 @@ def allowed_repair_fields(warnings, audit_issues=None, *,
             structural = True
         allowed.update(_REPAIR_CODE_FIELDS.get(code, ()))
         if fp and fp != "global":
-            allowed.add(fp)
+            # 2026-11-07（复核 P1）：checklist 包装层把**检查项分类名**当 field_path
+            # 写进来（ff_desc_anchors / ff_lf_completeness / action_overlap）。分类名
+            # 不是镜头字段，塞进授权面只会得到一条改不动的死路径，并且下面那个
+            # continue 还会跳掉文案解析。有镜头对象时按真实叶子判定：不是真实叶子
+            # 就改用映射，并继续走文案解析。
+            _shot_obj = (shots_by_id or {}).get(target_shot_id) if _pairs_mode else None
+            _fp_is_real = (_shot_obj is None
+                           or _is_real_leaf(fp, _shot_obj,
+                                            structural=_is_structural_code(code)))
+            if _fp_is_real:
+                allowed.add(fp)
+            else:
+                allowed.update(_REPAIR_CODE_FIELDS.get(fp, ()))
             # v6.113：审计路径含 props → 布局条目的 props 同样授权（两侧，见上）
             if "props" in fp.lower():
                 _pp = _audit_props_paths(fp, getattr(issue, "frame_id", ""))
@@ -732,7 +752,8 @@ def allowed_repair_fields(warnings, audit_issues=None, *,
             # 一个叶子。总计划 §2.3 明确要求「禁止顺带修改其他帧」，所以具体路径
             # 优先于文案关键词（与本模块「code 命中时优先用它，比文本关键词准」
             # 同一条原则）。
-            continue
+            if _fp_is_real:
+                continue
         allowed.update(_fields_from_text(str(getattr(issue, "message", "") or "")))
     for w in warnings or []:
         text = str(w)

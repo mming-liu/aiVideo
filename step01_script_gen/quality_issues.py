@@ -1070,6 +1070,11 @@ def _keyframe_timeline_issues(shot: dict, shot_id) -> list[Issue]:
                         shot_id=shot_id, frame_id=f"kf{_slot.index}",
                         field_path="keyframes.desc",
                         evidence=_slot.desc[-120:], repairable=True,
+                        # 2026-11-07：改写帧文案时常要同步该帧 stage 与 kfs[i] 布局，
+                        # 否则一动就撞 kf_desc_layout_pose_conflict。精确到帧下标，
+                        # 且只给**确实存在**的叶子（不存在的目标会让整条 issue 被
+                        # validate_repair_targets 拒成「无授权」）。
+                        repair_targets=_kf_mismatch_targets(shot, shot_id, _slot.index),
                     ))
         except Exception:
             pass
@@ -1292,6 +1297,26 @@ def _timeline_issues(script: dict) -> list[Issue]:
                   field_path="timeline", repairable=False) for err in errors]
 
 
+def _kf_mismatch_targets(shot: dict, shot_id: str, index: int) -> list:
+    """`kf_event_window_mismatch` 的精确修复目标（帧描述 + 该帧 stage + 对应 kfs 布局）.
+
+    只列**镜头里真实存在**的路径：`validate_repair_targets` 对任一条无效目标会拒绝
+    整条 issue（半组修复更糟），所以缺 stage / 缺布局条目时宁可不授权。
+    """
+    out: list = [{"shot_id": str(shot_id), "field_path": "keyframes[%d].desc" % index}]
+    try:
+        _kfs = shot.get("keyframes") or []
+        if 0 <= index < len(_kfs) and isinstance(_kfs[index], dict) and "stage" in _kfs[index]:
+            out.append({"shot_id": str(shot_id), "field_path": "keyframes[%d].stage" % index})
+        _layout = (shot.get("frame_layouts") or {}).get("kfs") or []
+        if 0 <= index < len(_layout):
+            out.append({"shot_id": str(shot_id),
+                        "field_path": "frame_layouts.kfs[%d]" % index})
+    except Exception:
+        pass
+    return out
+
+
 def _duration_budget_issues(script: dict) -> list[Issue]:
     """Make the project's 60-90s acceptance range a blocking invariant.
 
@@ -1311,14 +1336,48 @@ def _duration_budget_issues(script: dict) -> list[Issue]:
     total = sum(durations)
     if DURATION_MIN_SEC - 0.01 <= total <= DURATION_MAX_SEC + 0.01:
         return []
+    targets: list = []
+    hint = ""
     if total > DURATION_MAX_SEC:
         msg = (f"正片总时长 {total:.1f}s > {DURATION_MAX_SEC:g}s，违反 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s 验收区间；"
                "需精简剧情/动作或合并镜头，不能静默截断台词或动作")
+        # 2026-11-07（run17 r1 实测）：这条问题唯一合法的修法是改各镜 duration，
+        # 但旧 Issue 没有 repair_targets、code 也不在 _REPAIR_CODE_FIELDS 里 ⇒ 授权
+        # 面为空；模型一改 duration 就被整轮判越权（rejected_by_validation）。
+        # 这里按「可压缩余量」挑镜，给**精确到镜**的授权，并写明目标秒数。
+        try:
+            from step01_script_gen.timecode import MIN_SHOT_DURATION as _MIN_SHOT
+        except Exception:
+            _MIN_SHOT = 2.0
+        try:
+            _min_shot = float(_MIN_SHOT or 2.0)
+        except (TypeError, ValueError):
+            _min_shot = 2.0
+        _need = total - DURATION_MAX_SEC
+        _cands = sorted(
+            ((max(0.0, _d - _min_shot), str(_s.get("index")), _d)
+             for _s, _d in zip(shots, durations)),
+            key=lambda x: x[0], reverse=True)
+        _acc, _hints = 0.0, []
+        for _room, _sid, _d in _cands:
+            if _room <= 0:
+                continue
+            targets.append({"shot_id": _sid, "field_path": "duration"})
+            _hints.append("镜%s→≤%.1fs" % (_sid, max(_min_shot, _d - _room)))
+            _acc += _room
+            if _acc >= _need + 2.0:
+                break
+        if targets:
+            hint = ("；**修法（本轮已按镜授权 duration）**：下调下列镜头时长——代码会同步 "
+                    "duration_sec 并按比例缩放该镜 motion 时段与 kf 的 t_sec：" + "、".join(_hints))
     else:
         msg = (f"正片总时长 {total:.1f}s < {DURATION_MIN_SEC:g}s，低于 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s 验收区间；"
                "需补充有效镜头或重新分配时长")
-    return [Issue("duration_budget", "visual_risk", msg,
-                  field_path="total_duration", repairable=False)]
+    return [Issue("duration_budget", "visual_risk", msg + hint,
+                  field_path="total_duration",
+                  shot_id=targets[0]["shot_id"] if targets else None,
+                  repair_targets=targets or None,
+                  repairable=bool(targets))]
 
 
 def _adjacent_duplicate_issues(script: dict) -> list[Issue]:
