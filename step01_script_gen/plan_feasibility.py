@@ -1482,6 +1482,17 @@ def normalize_plan_refs(script: dict, plan) -> int:
 
     _codes_before = _viol_codes()
     _shadow = shadowed_dialogue_map(plan)
+    # 2026-11-07 复核：有「疑似同源」关系的编号（正文被另一条包含、但两条都有承载）
+    # **不自动补引用**——那会把 D1 补进正在说 D2 的镜头，凭空造出镜内顺序回退。
+    _疑似: set = set()
+    _all_forms = [(i, set(_line_forms(t))) for i, t in enumerate(lines, 1)]
+    for _i, _fi in _all_forms:
+        for _j, _fj in _all_forms:
+            if _i == _j:
+                continue
+            if any(_a and _b and _a in _b for _a in _fi for _b in _fj):
+                _疑似.add(_i)
+                break
     _changed = 0
     for _k, _text in enumerate(lines, 1):
         if _k not in _carrier:
@@ -1500,7 +1511,7 @@ def normalize_plan_refs(script: dict, plan) -> int:
             _has_k = any(coerce_ref_index(x, "D") == _k for x in _lines_now)
             _has_b = any(coerce_ref_index(x, "B") == _carrier[_k] for x in _beats_now)
             _in_shot = (_sid, _k) in _spans
-            _ambiguous = _in_shot and _covered_by_other(_sid, _k)
+            _ambiguous = _in_shot and (_covered_by_other(_sid, _k) or _k in _疑似)
             if _in_shot and not _ambiguous:
                 # 2026-11-07（run20 实测）：必须按编号插到有序位置——直接 append
                 # 会把 B9 排到 B10 后面，同镜内立刻判 beats_order_violation。
@@ -1522,31 +1533,28 @@ def normalize_plan_refs(script: dict, plan) -> int:
                                   if coerce_ref_index(x, "D") != _k]
                 _changed += 1
                 _LOG.info("[REFS] shot %s: lines -= D%d（本镜旁白没有这句）", _sid, _k)
-    # 2026-11-07（复核）：承载台词的节拍被声明在**没有说这句**的镜头里，同样是
-    # 配对破损的来源（实测：B9 被 3 个镜头声明，但这些镜头都没有说 D2）。
-    # 只在这些镜头明确没说过该台词时移除，且由下面的「变差就还原」兜底。
+    # 2026-11-07 复核 P2：**不得删除**非发声镜头的节拍声明——一个节拍可以由建立镜、
+    # 动作镜与发声镜共同承载（镜头 1 起身无台词但确实在演 B9）。合法修法是给真正说
+    # 这句的镜头**补上**承载节拍：保留原声明，只补缺失的那条。
     for _s in shots:
         _sid = str(_s.get("index"))
         _refs = _s.get("plan_refs")
         if not isinstance(_refs, dict):
             continue
-        _beats_now = [int(x) for x in (_refs.get("beats") or []) if str(x).strip().isdigit()]
-        if not _beats_now:
+        _lines_now = [int(x) for x in (_refs.get("lines") or []) if str(x).strip().isdigit()]
+        if not _lines_now:
             continue
-        _keep = []
-        for _b in _beats_now:
-            _carried_k = None
-            for _k2, _car2 in _carrier.items():
-                if _car2 == _b:
-                    _carried_k = _k2
-                    break
-            if _carried_k is None or (_sid, _carried_k) in _spans:
-                _keep.append(_b)
-                continue
-            _changed += 1
-            _LOG.info("[REFS] shot %s: beats -= B%d（本镜没有说 D%d）", _sid, _b, _carried_k)
-        if _keep != _beats_now:
-            _refs["beats"] = _keep
+        _beats_now = [int(x) for x in (_refs.get("beats") or []) if str(x).strip().isdigit()]
+        _new_beats = set(_beats_now)
+        for _k2 in _lines_now:
+            _b2 = _carrier.get(_k2) or _carrier.get(_shadow.get(_k2, _k2))
+            if _b2 and _b2 not in _new_beats:
+                _new_beats.add(_b2)
+                _changed += 1
+                _LOG.info("[REFS] shot %s: beats += B%d（说了 D%d，补齐承载节拍）",
+                          _sid, _b2, _k2)
+        if sorted(_new_beats) != _beats_now:
+            _refs["beats"] = sorted(_new_beats)
     if _changed and _shadow:
         # 声明里的被遮蔽编号统一归并到宿主（同一次发言只留一个编号）
         for _s in shots:
@@ -1599,10 +1607,12 @@ def shadowed_dialogue_map(plan: dict) -> dict:
                 continue
     out: dict = {}
     for _k in range(1, len(lines) + 1):
-        # 2026-11-07（复核）：双承载也要能归并——只要满足严格同源（Dk 的整句形态
-        # 等于 Dj 的台词本体），两条编号就是同一次发言。旧实现先跳过 carried 的编号，
-        # 把缓存计划里「D1、D2 各有一条承载节拍」的形态整个略过，于是 D1 永远
-        # 被判 pairing_broken。
+        # 2026-11-07 复核 P1：**恢复歧义保护**——两条各自都有承载节拍的台词不能
+        # 仅凭正文相等就互相归并（匿名反例：D1「现在出发。」甲先下令、D2 同文乙稍后
+        # 转达 → 双向映射 {1:2, 2:1} → 凭空制造顺序回退）。同源归并只用于
+        # 「没有承载节拍的重复条目」；两条都有节拍时保留独立身份。
+        if _k in _carried:
+            continue
         _forms_k = _match_forms(lines[_k - 1])
         if not _forms_k:
             continue

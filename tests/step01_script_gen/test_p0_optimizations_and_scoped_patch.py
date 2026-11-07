@@ -321,23 +321,48 @@ def test_dialogue_body_requires_a_spoken_attribution():
 
 
 
-def test_double_carried_same_source_dialogue_merges_in_contract():
-    """D1 是 D2 的台词本体且各有一条承载节拍时，契约门不得判 pairing 破损（S04）."""
+def test_double_carried_same_source_dialogue_is_not_merged():
+    """两条同文但各自有承载节拍的台词**不得**归并（2026-11-07 复核 P1）.
+
+    匿名反例：D1「现在出发。」甲先下令、D2 同文乙稍后转达。若仅凭正文相等互相映射，
+    会得到 {1:2, 2:1} 的循环，并凭空制造镜内顺序回退；同源归并只适用于「没有承载
+    节拍的重复条目」。
+    """
     from step01_script_gen.plan_feasibility import (check_event_contract,
                                                     bind_plan_identity,
                                                     shadowed_dialogue_map)
 
-    body = "先关门，再关窗。"
-    plan = {"dialogue_lines": [body, "乙沉住了气，缓缓说道：“" + body + "”"],
-            "shot_beats": ["节拍：乙开口。｜载体：台词1", "节拍：乙说完。｜载体：台词2"]}
-    assert shadowed_dialogue_map(plan) == {1: 2}
+    text = "现在出发。"
+    plan = {"dialogue_lines": [text, text],
+            "shot_beats": ["节拍：甲下令。｜载体：台词1", "节拍：乙转达。｜载体：台词2"]}
+    assert shadowed_dialogue_map(plan) == {}
     script = {"shots": [
-        {"index": 1, "narration_segment": "乙：“" + body + "”",
-         "plan_refs": {"beats": [1, 2], "lines": [2]}},
+        {"index": 1, "narration_segment": "甲：“" + text + "”",
+         "plan_refs": {"beats": [1], "lines": [1]}},
+        {"index": 2, "narration_segment": "乙：“" + text + "”",
+         "plan_refs": {"beats": [2], "lines": [2]}},
     ]}
     bind_plan_identity(script, plan)
     ok, viol, declared = check_event_contract(script, plan, require_declaration=True)
     assert ok, viol
+
+
+def test_normalize_plan_refs_keeps_establishing_shot_beat():
+    """非发声的建立镜不得被摘掉承载节拍（2026-11-07 复核 P1）.
+
+    镜头 1 起身无台词但确实在演 B1；镜头 2 才说出 D1。删镜头 1 的 B1 会丢掉真实承载。
+    """
+    from step01_script_gen.plan_feasibility import normalize_plan_refs
+
+    plan = {"dialogue_lines": ["现在出发。"],
+            "shot_beats": ["节拍：甲起身并下令。｜载体：台词1"]}
+    script = {"shots": [
+        {"index": 1, "narration_segment": "", "plan_refs": {"beats": [1], "lines": []}},
+        {"index": 2, "narration_segment": "甲：“现在出发。”",
+         "plan_refs": {"beats": [1], "lines": [1]}},
+    ]}
+    normalize_plan_refs(script, plan)
+    assert script["shots"][0]["plan_refs"]["beats"] == [1]
 
 
 def test_duration_shrink_rescales_timeline_inside_the_shot():
