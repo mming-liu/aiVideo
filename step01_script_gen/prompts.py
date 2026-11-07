@@ -821,8 +821,19 @@ def render_execution_contract(plan) -> str:
                      "确需增减须回规划层按「可省略内容」重选）："
                      % (len(_lines),
                         "按已批准播出文本，基底已核验" if _adapted else "**逐字**"))
-        parts += ["%d. %s%s" % (i, x, "（已批准改编）" if x in _adapted_texts else "")
-                  for i, x in enumerate(_lines, 1)]
+        # 2026-11-07：同句子串遮蔽（D1 ⊂ D2，且只有 D2 有承载节拍）时，模型填 1
+        # 必然 pairing/顺序双违例——在清单里直接标明「与第 j 句同源，统一填 j」。
+        try:
+            from step01_script_gen.plan_feasibility import shadowed_dialogue_map
+            _shadow = shadowed_dialogue_map(plan or {})
+        except Exception:
+            _shadow = {}
+        parts += ["%d. %s%s%s" % (
+            i, x,
+            "（已批准改编）" if x in _adapted_texts else "",
+            ("（与第 %d 句同源：plan_refs.lines 统一填 %d）" % (_shadow[i], _shadow[i]))
+            if i in _shadow else "")
+            for i, x in enumerate(_lines, 1)]
     if _facts:
         parts.append("二、必保留事实（**一条都不许省**，原文证据随附）：")
         parts += ["%d. %s" % (i, x) for i, x in enumerate(_facts, 1)]

@@ -6774,9 +6774,34 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 重试轮空转返回。
         if (_round == 1 or _retry_feedback) and audit_issues:
             audited = per_shot_dict.setdefault("shots", {})
+            # 2026-11-07（复核 P1-2）：**只指向锁定字段**的审计项必须在进入
+            # per_shot_dict / 联动组 / "### 待修镜头" 之前就摘掉。否则它会：
+            #   ① 与其它问题组成联动组、挤掉真正可修的确定性问题；
+            #   ② 在提示里命令模型改 narration_segment，而 allowed_fields 里
+            #      这些字段已被 _split_executable_allowed 剥掉 → 模型一动手就
+            #      「越权字段补丁」，整轮 rejected_by_validation（run17 r1 实测）。
+            _shots_by_id_audit = {"shot_%s" % _s.get("index"): _s
+                                  for _s in (script.get("shots") or [])
+                                  if isinstance(_s, dict)}
+            if isinstance(script.get("hook"), dict):
+                _shots_by_id_audit["hook"] = script["hook"]
+            _locked_only: list = []
             for _issue in audit_issues:
                 if not is_blocking(_issue):
                     continue
+                _tid_audit = _target_of_record(_issue)
+                if _tid_audit and _tid_audit in _shots_by_id_audit:
+                    try:
+                        _audit_fields = allowed_repair_fields(
+                            [], [_issue], target_shot_id=_tid_audit,
+                            shots_by_id=_shots_by_id_audit)
+                        _exec_audit, _locked_audit = _split_executable_allowed(_audit_fields)
+                    except Exception:
+                        _audit_fields = []
+                    if _audit_fields and not _exec_audit:
+                        _locked_only.append("%s@%s→%s" % (_issue.code, _tid_audit,
+                                                         sorted(_locked_audit)))
+                        continue
                 per_shot_dict["_has_hard"] = True
                 _sid = _issue.shot_id
                 _detail = (
@@ -6792,6 +6817,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 if str(_sid or "").strip() == "":
                     continue          # 无定位镜头的全局问题：不挂到任何目标
                 audited.setdefault(_target_of_record(_issue), []).append(_detail)
+            if _locked_only:
+                _logger.info("[REPAIR] 跳过仅指向锁定字段的审计项 %d 条: %s"
+                             % (len(_locked_only), _locked_only[:5]))
         # v6.43 08-25：HARD-only 触发——没 hard violation 就不调 LLM
         if not per_shot_dict.get("_has_hard", False):
             if _round == 1:

@@ -1394,6 +1394,53 @@ def _line_offset_in_units(line: str, units_raw: list, start: int) -> tuple:
     return True, _best
 
 
+def shadowed_dialogue_map(plan: dict) -> dict:
+    """同句子串遮蔽：`{k: j}` = 台词 Dk 被 Dj 遮蔽（判据归并，**不改计划文本**）.
+
+    2026-11-07（run18 实测）：计划把同一句写成两条——D1 只有说的话，D2 是带
+    「某某沉住了气，漫声说道：…」归属语的整句（D1 是 D2 的子串），而 `shot_beats`
+    里只有 `载体：台词2`。于是任何镜头只要在 `plan_refs.lines` 里填了 1，就必然
+    `plan_refs_pairing_broken` + 同镜顺序回退：模型按契约填 1 反而必错。
+
+    这里只把「**没有任何节拍承载**、且文本被另一条承载中的台词包含」的编号归并到
+    宿主编号。它不增删台词、不改正文，只让判据按「同一句话」处理；D1 被说出来时
+    仍然由文本包含关系满足（台词完整性门不受影响）。
+    """
+    try:
+        lines = plan_dialogue_lines(plan)
+        beats = [str(b) for b in ((plan or {}).get("shot_beats") or [])]
+    except Exception:
+        return {}
+    if len(lines) < 2:
+        return {}
+    _carried: set = set()
+    for _b in beats:
+        try:
+            _kind, _k = BeatRecord.parse(_b).carrier()
+        except Exception:
+            continue
+        if _kind == VOICE_KIND_DIALOGUE and _k:
+            try:
+                _carried.add(int(_k))
+            except (TypeError, ValueError):
+                continue
+    out: dict = {}
+    for _k in range(1, len(lines) + 1):
+        if _k in _carried:
+            continue
+        _forms_k = _match_forms(lines[_k - 1])
+        if not _forms_k:
+            continue
+        for _j in sorted(_carried):
+            if not (1 <= _j <= len(lines)) or _j == _k:
+                continue
+            _forms_j = _match_forms(lines[_j - 1])
+            if any(_a and _a in _b for _a in _forms_k for _b in _forms_j):
+                out[_k] = _j
+                break
+    return out
+
+
 def check_script_dialogue_integrity(script: dict, plan: dict | None) -> tuple:
     """**台词完整性硬门**（纯函数、确定性、零模型调用）：计划选用的台词是否逐字保住.
 
@@ -3693,6 +3740,9 @@ def check_event_contract(script: dict, plan: dict | None, *,
     covered: set = set()
     beat_seq: list = []
     line_seq: list = []
+    # 2026-11-07（run18 实测）：同句子串遮蔽（D1 ⊂ D2 且只有 D2 有承载节拍）时，
+    # 模型填 1 必然 pairing/顺序双违例。声明解析处统一归并到宿主编号。
+    _shadow = shadowed_dialogue_map(plan or {})
     for s, r in zip(shots, refs_list):
         sid = str(s.get("index"))
         for _raw in r["beats"]:
@@ -3723,7 +3773,7 @@ def check_event_contract(script: dict, plan: dict | None, *,
                     "code": "plan_refs_out_of_range", "shot": sid,
                     "detail": "D%d 不存在（选用台词共 %d 句）" % (d, n_lines)})
                 continue
-            line_seq.append((sid, d))
+            line_seq.append((sid, _shadow.get(d, d)))
     # 事件/台词顺序 —— **同时承载 vs 串行**在这里定死（第 15 轮复核；与预算侧
     # `beats_floor_basis` 同一份时间语义）：
     #   · **同时承载**：同一镜内声明多条；或同一条（声音）节拍被**连续多镜共同承载**
@@ -3857,7 +3907,8 @@ def check_event_contract(script: dict, plan: dict | None, *,
         sid = str(s.get("index"))
         _shot_beats[sid] = {b for b in (coerce_ref_index(x, "B") for x in r["beats"])
                             if b and 1 <= b <= len(beats)}
-        _shot_lines[sid] = {d for d in (coerce_ref_index(x, "D") for x in r["lines"])
+        _shot_lines[sid] = {_shadow.get(d, d)
+                            for d in (coerce_ref_index(x, "D") for x in r["lines"])
                             if d and 1 <= d <= n_lines}
     if _has_carrier_contract:
         # (i) 这一镜**说** Dk ⇒ 本镜声明的节拍里必须有一条承载 Dk（否则说的是别人节拍的台词）
