@@ -581,7 +581,7 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
     for _uid in _facts_seen:
         _f = _fact_of(view, _uid)
         _cur = _visual_carriers(view, _uid)
-        _vt = _voice_targets(view, _uid)
+        _vt = _voice_targets(view, _uid, novel_text=novel_text)
         _acts = ([ACT_CREATE] if allow_create else [])
         _vspans = _voice_source_spans(view, _uid, _rec_in, novel_text,
                                       admitted=bool(record_admitted))
@@ -618,6 +618,8 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
             "target_uids": list(_visual_targets), "insert_positions": [""] + list(_beats),
             "voice_target_uids": [x["uid"] for x in _vt],
             "voice_source_spans": _vspans,
+            # S02：位置/种类/歧义的结构化依据（列表本身不变，兼容既有比较）
+            "voice_source_meta": _voice_source_meta(_vspans, novel_text),
             "voice_landings": _landings,
             "voice_existing_beat_uids": _existing,
             "voice_new_allowed": not _existing,
@@ -720,7 +722,33 @@ def _voice_unit_of(view, uid) -> tuple:
     return None, {}
 
 
-def _voice_targets(view, fact_uid) -> list:
+def _voice_source_meta(spans, novel_text) -> dict:
+    """每个来源片段的**结构化依据**（S02：位置 / 种类 / 是否歧义）.
+
+    仅供 prompt 之外的消费者（`answer_problems`、S03、诊断）使用；
+    `voice_source_spans` 本身保持纯字符串列表，字符串比较与既有调用不变。
+    """
+    _out: dict = {}
+    for _s in spans or []:
+        _s = str(_s or "")
+        if not _s:
+            continue
+        _pos = _occurrences(_s, novel_text)
+        _kind, _parent = "full_evidence", ""
+        for _p in spans or []:
+            _p = str(_p or "")
+            if _p and _p != _s and _s in _dialogue_bodies(_p):
+                _kind, _parent = "dialogue_body", _p
+                break
+        _out[_s] = {"occurrences": len(_pos),
+                    "first_pos": _pos[0] if _pos else None,
+                    "source_kind": _kind,
+                    "parent_span": _parent,
+                    "ambiguous": len(_pos) > 1}
+    return _out
+
+
+def _voice_targets(view, fact_uid, novel_text=None) -> list:
     """事实可绑定的**现有声音**：正文（去空白/标点）包含该事实的主张或证据.
 
     只做确定性包含，不做相似度；没有逐字/归一化包含就不出声音目标，绝不猜。
@@ -739,10 +767,19 @@ def _voice_targets(view, fact_uid) -> list:
             # 2026-11-07 复核 P1：已有声音是**台词本体**（引号内那段）时，它不会被
             # 「整条主张/证据」包含，但正是同一句发言——必须给出复用目标，否则模型
             # 只能再建一条带归属语的新声音（同句重复的直接来源）。
-            _bodies = {_norm_key(_b) for _b in (_dialogue_bodies(_f.get("claim"))
-                                                + _dialogue_bodies(_f.get("evidence")))}
+            _body_raw = ""
+            for _b in (_dialogue_bodies(_f.get("claim"))
+                       + _dialogue_bodies(_f.get("evidence"))):
+                if _norm_key(_b) == _t:
+                    _body_raw = _b
+                    break
+            # 2026-11-07（S02）：同文多处且无法由本事实锚定唯一一次时，**不给复用目标**
+            # ——不同位置/不同说话人的同一句话是两件事，静默合并会把发言归属搞错。
+            if (_body_raw and novel_text
+                    and len(_occurrences(_body_raw, novel_text)) > 1):
+                continue
             if ((_claim and _claim in _t) or (_ev and _ev in _t)
-                    or (_t in _bodies)):
+                    or (_body_raw != "")):
                 _out.append({"kind": _key.split("_")[0],
                              "uid": str(_u.get("uid") or "")})
     return [x for x in _out if x["uid"]]
@@ -863,7 +900,24 @@ def _voice_feasible_spans(spans) -> list:
     return _out
 
 
-_QUOTED_BODY_RE = re.compile("[\u201c\u300c\u300e]([^\u201d\u300d\u300f]{2,})[\u201d\u300d\u300f]")
+#: 发声归属语：前缀末段必须含「说/道/问/答…」类发声动词 + 冒号（2026-11-07 复核）.
+#: 只用来**判定这是不是人物开口**；书名/牌匾/内心独白不满足（见 _NON_SPEECH_MARKS）。
+_SPEECH_MARKS = ("说道", "说", "道", "问道", "答道", "喝道", "笑道", "冷笑", "低声",
+                 "沉声", "漫声", "喝道", "喊道", "叫道", "嚷道", "叹道", "骂道")
+_NON_SPEECH_MARKS = ("写着", "刻着", "挂着", "牌上", "匾", "书名", "心想", "暗想",
+                     "暗道", "心道", "念头", "寻思", "题着", "印着")
+#: 整句 = 归属语前缀 + **单段**成对引号正文，引号外不再接内容。
+_ATTRIBUTED_VOICE_RE = re.compile(
+    "^([^\u201c\u201d\u300c\u300d\u300e\u300f]{1,24})[:：]\\s*"
+    "[\u201c\u300c\u300e]([^\u201d\u300d\u300f]{2,})[\u201d\u300d\u300f]\\s*[。！？…!?]?\\s*$")
+
+
+def _speaks_aloud(prefix: str) -> bool:
+    """前缀是否是**人物开口**的归属语（含发声动词、且不含题铭/内省标记）."""
+    _p = str(prefix or "")
+    if any(_m in _p for _m in _NON_SPEECH_MARKS):
+        return False
+    return any(_m in _p for _m in _SPEECH_MARKS)
 
 
 def _dialogue_bodies(text) -> list:
@@ -875,10 +929,15 @@ def _dialogue_bodies(text) -> list:
     把引号内正文也作为来源片段，本体才可能被选中复用/新建；不改任何正文。
     """
     out: list = []
-    for _m in _QUOTED_BODY_RE.finditer(str(text or "")):
-        _b = _m.group(1).strip()
-        if _b and _b not in out:
-            out.append(_b)
+    _m = _ATTRIBUTED_VOICE_RE.match(str(text or "").strip())
+    if not _m:
+        return out
+    # 前缀必须是人物开口（含发声动词、无题铭/内省标记）——书名、牌匾、心想不算
+    if not _speaks_aloud(_m.group(1)):
+        return out
+    _b = _m.group(2).strip()
+    if _b:
+        out.append(_b)
     return out
 
 

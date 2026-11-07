@@ -1569,8 +1569,14 @@ def shadowed_dialogue_map(plan: dict) -> dict:
         for _j in sorted(_carried):
             if not (1 <= _j <= len(lines)) or _j == _k:
                 continue
-            _forms_j = _match_forms(lines[_j - 1])
-            if any(_a and _a in _b for _a in _forms_k for _b in _forms_j):
+            _forms_j = set(_match_forms(lines[_j - 1]))
+            # 2026-11-07（S03）：宿主句可能是「归属语 + 整句引语」，它的**台词本体**
+            # 才是与 Dk 对比的对象。判据必须是**整段相等**——任意子串包含会把
+            # 「先关门」误映射给「我说先关门，但你不要照做」。
+            _m_body = _ATTRIBUTED_QUOTE_RE.match(str(lines[_j - 1] or "").strip())
+            if _m_body:
+                _forms_j |= set(_match_forms(_m_body.group(1)))
+            if any(_a and _b and _a == _b for _a in _forms_k for _b in _forms_j):
                 out[_k] = _j
                 break
     return out

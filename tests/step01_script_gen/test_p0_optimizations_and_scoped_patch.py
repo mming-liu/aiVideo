@@ -306,6 +306,31 @@ def test_normalize_plan_refs_fixes_unambiguous_missing_beat():
 
 
 
+
+
+def test_dialogue_body_requires_a_spoken_attribution():
+    """只有「人物开口」的归属语才引出本体：内省/题铭/多段引语都不算（S02 验收）."""
+    from step01_script_gen.plan_content_repair import _dialogue_bodies
+
+    assert _dialogue_bodies("乙沉住了气，缓缓说道：“先关门。”") == ["先关门。"]
+    assert _dialogue_bodies("他心想：“这下完了。”") == []
+    assert _dialogue_bodies("牌上写着：“禁止通行”") == []
+    assert _dialogue_bodies("甲说：“走。”乙说：“等等。”") == []
+    assert _dialogue_bodies("甲说：“先走。”随后离开了。") == []
+
+
+def test_shadowed_dialogue_map_requires_whole_body_equality():
+    """阴影归并只认「本段 == 宿主句的台词本体」，不认任意子串（S03 验收）."""
+    from step01_script_gen.plan_feasibility import shadowed_dialogue_map
+
+    anonymous = {"dialogue_lines": ["先关门。", "我说先关门，但你不要照做。"],
+                 "shot_beats": ["节拍：乙说。｜载体：台词2"]}
+    assert shadowed_dialogue_map(anonymous) == {}
+    attributed = {"dialogue_lines": ["先关门，再关窗。",
+                                     "乙沉住了气，缓缓说道：“先关门，再关窗。”"],
+                  "shot_beats": ["节拍：乙说。｜载体：台词2"]}
+    assert shadowed_dialogue_map(attributed) == {1: 2}
+
 def test_normalize_plan_refs_is_idempotent():
     """归一化必须幂等：第二次调用产生零变更（S03 验收）."""
     from step01_script_gen.plan_feasibility import normalize_plan_refs
