@@ -161,6 +161,7 @@ from step01_script_gen.prompts import (
     _load_gap_analysis_context, _build_regen_iron_rules,
     _build_character_anchors,
     _load_knowledge_skills, _load_local_skill_context,
+    _load_knowledge_skills_for,
     auto_select_prompt_builder, auto_select_system_prompt,
     resolve_model_prompt_profile, render_execution_contract,
     append_execution_contract,
@@ -2880,8 +2881,16 @@ def _reusable_final_audit(script: dict) -> "dict | None":
     # 只因模型波动，而不是因为稿子变好了。所以除正式产物外，也读 BLOCK 时留下的
     # sidecar，把它当作**本轮未决清单**复用：让修复轮去修这些条目，而不是再掷一次骰子。
     # 修复真正落地后 revision 会变，下一次审计自然是对新对象的全新调用。
+    # 恢复入口可以指向章节目录**之外**的不可变审计副本（STEP01_AUDIT_SOURCE）：
+    # 否则要先把副本塞进正式章节目录，那等于在发布前改正式产物。
+    _audit_sources = []
+    _ov = str(os.getenv("STEP01_AUDIT_SOURCE") or "").strip()
+    if _ov:
+        _audit_sources.append(Path(_ov))
     for name in ("step01_audit.json", "step01_audit.blocked.json"):
-        audit = _read_json_quiet(CHAPTER_DIR / name)
+        _audit_sources.append(CHAPTER_DIR / name)
+    for _src in _audit_sources:
+        audit = _read_json_quiet(_src)
         if not audit:
             continue
         # 只复用**真的跑出结论**的审计；调用失败（超时/解析失败）不得被冻结复用。
@@ -3028,6 +3037,116 @@ def project_for_commit(script: dict, novel_text: str = "", *, label: str = "落�
     _s = _strip_runtime_fields(_s)
     ensure_script_revision(_s)
     return _s, []
+
+
+def _create_adoption_receipt(revision: str, run_id: str) -> str:
+    """首次采纳：按现有 schema 生成凭据，**先落临时文件并 verify，通过才换名**.
+
+    缺失的身份信息显式写 null/说明，不编造；verify 失败则删除临时文件并返回
+    create_failed——绝不留一份自称 adopted_and_verified 却没核验过的凭据。
+    """
+    import hashlib as _hashlib
+    from pathlib import Path as _Path
+    from tools import production_context as _pc
+
+    ch = _Path(CHAPTER_DIR)
+    formal = {}
+    for name in ("script_result.json", "step01_quality.json",
+                 "step01_audit.json", "step01_commit.json"):
+        f = ch / name
+        if not f.exists():
+            return "create_failed:missing:%s" % name
+        formal[name] = _hashlib.sha256(f.read_bytes()).hexdigest()
+    from shared.config import duration_band
+    _band = duration_band()
+    receipt = {
+        "schema": _pc.RECEIPT_SCHEMA,
+        "status": "adopted_and_verified",
+        "formal_chapter": str(ch),
+        "output_base_override": str(_Path(os.getenv("OUTPUT_BASE") or ch.parent.parent.parent)),
+        "script_revision": revision,
+        "source_run_id": run_id,
+        "adopted_at": _step01_now(),
+        "scope": {"novel": os.getenv("NOVEL_NAME", ""),
+                  "book_index": int(os.getenv("BOOK_INDEX", "1") or 1),
+                  "book_name": os.getenv("BOOK_NAME", ""),
+                  "chapter": int(os.getenv("NOVEL_CHAPTER", "1") or 1)},
+        "formal_sha256": formal,
+        "effective_config": {"DURATION_MIN_SEC": _band["min"],
+                             "DURATION_MAX_SEC": _band["max"],
+                             "DURATION_TARGET_MIN_SEC": _band["target_min"],
+                             "DURATION_TARGET_MAX_SEC": _band["target_max"]},
+        "authorization": {"adopted_by": "step01_commit",
+                          "run_id": run_id,
+                          "rule_version": RULE_VERSION},
+        "previous_receipt": None,
+    }
+    tmp = ch / "step01_adoption.json.tmp"
+    tmp.write_text(json.dumps(receipt, ensure_ascii=False, indent=1), encoding="utf-8")
+    try:
+        _pc.load_receipt(tmp)
+        _pc.verify(receipt, apply=False)
+    except Exception as exc:                                  # noqa: BLE001
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return "create_failed:%s" % exc
+    tmp.replace(ch / "step01_adoption.json")
+    return "created"
+
+
+def _sync_adoption_receipt(revision: str, run_id: str) -> str:
+    """S06：COMMITTED 后把采纳凭据与新产物同步（同一事务内）.
+
+    只更新**已存在**的凭据：首次采纳凭据由正式发布流程产生（本仓库只有消费端），
+    在缺少契约生产端时凭空造一份会把"谁采纳的、依据什么"变成编造。返回状态串，
+    写失败直接抛错——由调用方回滚整组发布。
+
+    更新字段与 production_context 的消费口径一致：script_revision / source_run_id /
+    adopted_at / formal_sha256（**SHA-256**，与 verify 的 _sha256_file 对齐）。
+    """
+    import hashlib as _hashlib
+    from pathlib import Path as _Path
+
+    p = _Path(CHAPTER_DIR) / "step01_adoption.json"
+    if not p.exists():
+        return _create_adoption_receipt(revision, run_id)
+    receipt = json.loads(p.read_text(encoding="utf-8"))
+    formal = dict(receipt.get("formal_sha256") or {})
+    for name in ("script_result.json", "step01_quality.json",
+                 "step01_audit.json", "step01_commit.json"):
+        f = _Path(CHAPTER_DIR) / name
+        if not f.exists():
+            raise RuntimeError("采纳凭据更新缺少正式产物: %s" % name)
+        formal[name] = _hashlib.sha256(f.read_bytes()).hexdigest()
+    receipt["formal_sha256"] = formal
+    receipt["script_revision"] = revision
+    receipt["source_run_id"] = run_id
+    receipt["adopted_at"] = _step01_now()
+    receipt["status"] = "adopted_and_verified"
+    # 时长带必须跟着新产物走：凭据里的 effective_config 是 verify() 的核验输入，
+    # 沿用旧带会让"新稿 + 旧配置"通过不了导入顺序检查（也会误导下游）。
+    from shared.config import duration_band as _db
+    _b = _db()
+    receipt["effective_config"] = {"DURATION_MIN_SEC": _b["min"],
+                                   "DURATION_MAX_SEC": _b["max"],
+                                   "DURATION_TARGET_MIN_SEC": _b["target_min"],
+                                   "DURATION_TARGET_MAX_SEC": _b["target_max"]}
+    atomic = p.with_suffix(".json.tmp")
+    atomic.write_text(json.dumps(receipt, ensure_ascii=False, indent=1), encoding="utf-8")
+    from tools import production_context as _pc2
+    try:
+        _pc2.load_receipt(atomic)
+        _pc2.verify(receipt, apply=False)
+    except Exception as exc:                                  # noqa: BLE001
+        try:
+            atomic.unlink()
+        except OSError:
+            pass
+        raise RuntimeError("采纳凭据核验失败（不替换旧凭据）: %s" % exc) from exc
+    atomic.replace(p)
+    return "updated"
 
 
 def _commit_step01_outputs(script: dict, novel_text: str, *,
@@ -3627,7 +3746,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                                audit_status=_audit_status)
         _clear_staged_dir()
         try:
-            _snapshot_run_artifacts(script)      # 保留诊断证据供人工恢复
+            _snapshot_run_artifacts(script, audit=audit, novel_text=novel_text)  # 诊断证据 + 不可变配对
         except Exception:
             pass
         _console(f"  [COMMIT] x BLOCK：{summary['detail']}")
@@ -3660,8 +3779,15 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         _console(f"  [COMMIT] x {summary['detail']}")
         return script, summary
 
-    # ---- 原子替换：audit → quality → script（script 最后）----
+    # ---- 发布事务（S06）：一次事务覆盖**全部**发布步骤 ----
+    # 单个文件的原子写不能保证"整组同时切换"：进程在写之间被杀，会留下
+    # 新 audit + 旧 script 的身份不一致组合。这里先备份、再写、验完再 commit；
+    # **manifest 构造与写入也在事务内**——它抛错同样要回滚，不能留下半套发布。
+    from shared.publish_txn import PublishTransaction
+    _txn = PublishTransaction(CHAPTER_DIR, label="step01:%s" % run_id)
+    manifest = None
     try:
+        _txn.begin()
         from shared.json_io import atomic_dump_json
         atomic_dump_json(CHAPTER_DIR / "step01_audit.json", audit,
                          ensure_ascii=False, indent=2)
@@ -3669,34 +3795,32 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                          ensure_ascii=False, indent=2)
         atomic_dump_json(OUTPUT_FILE, _strip_runtime_fields(script),
                          ensure_ascii=False, indent=2)
-    except Exception as exc:
-        summary["detail"] = f"正式产物替换失败：{exc}"
-        _metrics_inc("commit.blocked")
-        _write_blocked_manifest(revision, run_id=run_id,
-                               detail=summary["detail"], blocking=[])
-        _clear_staged_dir()
-        _console(f"  [COMMIT] x {summary['detail']}")
-        return script, summary
-
-    # ---- commit manifest 是「提交完成」的唯一标志 ----
-    manifest = build_step01_commit_manifest(
-        run_id=run_id, created_at=_step01_now(), revision=revision,
-        rule_source_fingerprint=RULE_SOURCE_FINGERPRINT,
-        rule_version=RULE_VERSION, audit_scope=STEP01_AUDIT_SCOPE,
-        prompt_source_fingerprint=PROMPT_SOURCE_FINGERPRINT,
-        chapter_dir=CHAPTER_DIR, status="COMMITTED")
-    write_step01_commit_manifest(CHAPTER_DIR, manifest)
-
-    # ---- 正式路径再自验一次（含 manifest）----
-    try:
+        # commit manifest 是「提交完成」的唯一标志
+        manifest = build_step01_commit_manifest(
+            run_id=run_id, created_at=_step01_now(), revision=revision,
+            rule_source_fingerprint=RULE_SOURCE_FINGERPRINT,
+            rule_version=RULE_VERSION, audit_scope=STEP01_AUDIT_SCOPE,
+            prompt_source_fingerprint=PROMPT_SOURCE_FINGERPRINT,
+            chapter_dir=CHAPTER_DIR, status="COMMITTED")
+        write_step01_commit_manifest(CHAPTER_DIR, manifest)
+        # 正式路径再自验一次（含 manifest）
         committed_script = json.loads(OUTPUT_FILE.read_text(encoding="utf-8"))
         require_semantic_gate(CHAPTER_DIR / "step01_quality.json",
                               CHAPTER_DIR / "step01_audit.json", committed_script,
                               stage="step01")
         verify_step01_commit_manifest(CHAPTER_DIR, committed_script, stage="step01",
                                       expected_chapter=NOVEL_CHAPTER)
+        # 凭据与新产物同事务：写失败同样回滚，避免"产物新、凭据旧"
+        summary["adoption"] = _sync_adoption_receipt(revision, run_id)
     except Exception as exc:
-        summary["detail"] = f"提交后自验失败：{exc}"
+        try:
+            _restored = _txn.rollback("发布失败: %s" % exc)
+            _rb = "已回滚 %d 个文件" % len(_restored)
+        except Exception as _rb_err:                             # noqa: BLE001
+            _rb = "回滚不完整（锁保留，待 recover_pending）：%s" % _rb_err
+        # 保持阶段语义：替换阶段失败 vs 提交后自验失败，调用方/测试都按它判读。
+        _stage = "提交后自验失败" if manifest is not None else "正式产物替换失败"
+        summary["detail"] = f"{_stage}：{exc}（{_rb}）"
         _metrics_inc("commit.blocked")
         _write_blocked_manifest(revision, run_id=run_id,
                                detail=summary["detail"], blocking=[])
@@ -3704,6 +3828,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         _console(f"  [COMMIT] x {summary['detail']}")
         return script, summary
 
+    _txn.commit()
     summary["status"] = "COMMITTED"
     summary["revision"] = revision
     summary["manifest"] = manifest
@@ -4739,15 +4864,57 @@ def _assemble_keyframe_additions(target: dict, additions) -> tuple:
     return out, ""
 
 
-def _repair_answer_example(shots_by_id: dict, picked, allowed_by_target=None) -> str:
-    """Render a valid answer envelope from the actual authorized objects."""
+def _repair_answer_example(shots_by_id: dict, picked, allowed_by_target=None,
+                           compact: bool = False) -> str:
+    """Render a valid answer envelope from the actual authorized objects.
+
+    `compact=True`（S03 生产路径）：只给**结构规格**——shot_id、允许改的字段名与
+    占位值；不再把整份镜头对象抄进示例。理由：镜头正文已经在 INPUT 1 里，示例再抄
+    一遍只是让请求变大，并诱导模型把原值原样回抄（等于没改）。
+    """
     import json
     answer = {"shot_replacements": []}
     for target_id in picked:
         if target_id not in shots_by_id:
             continue
         replacement = {"shot_id": str(target_id).removeprefix("shot_"), "shot": shots_by_id[target_id]}
-        if allowed_by_target is not None:
+        if allowed_by_target is not None and compact:
+            _allowed_c = allowed_by_target.get(target_id, set())
+            _tops = []
+            for _p in sorted(_allowed_c):
+                _top = str(_p).split(".")[0].split("[")[0]
+                # 结构字段不给字符串占位：keyframes / frame_layouts 的占位值会诱导
+                # 模型把列表写成字符串（2026-11-07 实跑：round 3 因此 patch_unusable，
+                # 报“字段 keyframes 的值类型不匹配”）。补帧走 keyframe_additions。
+                if _top == "keyframes":
+                    continue
+                if _top and _top not in _tops:
+                    _tops.append(_top)
+            replacement = {"shot_id": replacement["shot_id"]}
+            if _tops:
+                # 占位值必须**类型正确**：列表字段给列表、数字字段给数字，
+                # 否则模型会照抄一个字符串（实测 round 3 patch_unusable）。
+                _ph = {"frame_layouts": [{"name": "<在场角色>",
+                                          "on_screen": True,
+                                          "pose": "<姿态>"}],
+                       "duration": 3.0}
+                replacement["updates"] = [
+                    {"field_path": _t,
+                     "value": _ph.get(_t, "<按该问题改写后的完整字段文本>")}
+                    for _t in _tops[:5]]
+            if ("keyframes" in _allowed_c
+                    or any(str(_p).startswith("frame_layouts.kfs") for _p in _allowed_c)):
+                replacement["keyframe_additions"] = [{
+                    "frame": {"t_sec": "<该缺段中点（秒）>",
+                              "stage": "pre|approach|climax|react|exit|after",
+                              "desc": "<描写该时段自己的动作，不要复述别的时段>"},
+                    "layout": [{"name": "<该帧在场角色>", "on_screen": True,
+                                "pose": "<姿态>", "props": [],
+                                "support": {"id": "<支撑物>", "kind": "<类型>",
+                                            "surface": "<表面>"},
+                                "states": ["<状态>"]}],
+                }]
+        elif allowed_by_target is not None:
             from step01_script_gen.repair_fields import path_allowed
             updates = []
             allowed = allowed_by_target.get(target_id, set())
@@ -4789,6 +4956,38 @@ def _repair_answer_example(shots_by_id: dict, picked, allowed_by_target=None) ->
         else:
             answer["shot_replacements"].append(replacement)
     return json.dumps(answer, ensure_ascii=False, default=str)
+
+
+def _duplicate_keyframe_additions(base: dict, additions) -> str:
+    """同一响应里"整表替换"与"追加同一帧"并存 → 装配前拒绝（2026-11-07 实测）.
+
+    round 3 的响应同时给了 updates.keyframes（1、3.5、4.5）和 keyframe_additions
+    （4.5），四个追加帧都逐对象存在于替换表里；应用器先替换再追加 → 重复事件 +
+    重复时刻（kf_event_duplicate / kf_time_not_strict），整轮被新阻塞回滚。
+    代码只在**同一时刻重复**这一确定判据上拒绝，不猜语义。
+    """
+    from shared.kf_time import get_kf_t_sec
+    times = set()
+    for kf in (base.get("keyframes") or []):
+        if not isinstance(kf, dict):
+            continue
+        t = get_kf_t_sec(kf, base)
+        if t is not None:
+            times.add(round(float(t), 3))
+    for i, item in enumerate(additions or []):
+        if not isinstance(item, dict):
+            continue
+        frame = item.get("frame")
+        if not isinstance(frame, dict):
+            continue
+        t = get_kf_t_sec(frame, base)
+        if t is None:
+            continue
+        if round(float(t), 3) in times:
+            return ("keyframe_additions[%d] 与已存在帧时刻重复（t_sec=%g）——"
+                    "同一响应里不得既整表替换又追加同一帧；请只用其中一种表达"
+                    % (i, float(t)))
+    return ""
 
 
 def _apply_shot_replacements(script: dict, replacements: list,
@@ -4903,6 +5102,11 @@ def _apply_shot_replacements(script: dict, replacements: list,
         # 条目里成立（补丁先落到镜头上，新帧再插进它的 keyframes/frame_layouts.kfs）。
         if item.get("keyframe_additions") is not None:
             _kf_base = new_shot if isinstance(new_shot, dict) else target
+            _dup_why = _duplicate_keyframe_additions(
+                _kf_base, item.get("keyframe_additions"))
+            if _dup_why:
+                rejected.append(f"shot {sid}: {_dup_why}")
+                return
             new_shot, _why = _assemble_keyframe_additions(
                 _kf_base, item.get("keyframe_additions"))
             if _why:
@@ -6644,6 +6848,104 @@ def _repair_blocking_coverage(blocking_issues, det_targets, allowed_by_target) -
     return cover
 
 
+# v6.160（S03，2026-11-07）：**修复轮按问题依赖选技能段**。
+#
+# 判定顺序（唯一实现，调用方不得各写一份）：
+#   1. 问题文本/错误码命中运镜、打斗、表演、出场词表 → 只加载对应段；
+#   2. 否则若问题码属于「关键帧/布局」这类结构类（kf_* / frame_layouts_*），
+#      不加载技能——补帧要的是时间窗与现有帧，不是运镜词库；
+#   3. 其余（未登记类型）→ 回退完整上下文，并**显式报告**尚未分类，
+#      不静默减少模型可见信息。
+_REPAIR_SKILL_PATTERNS = (
+    ("craft", ("运镜", "景别", "机位", "光位", "逆光", "侧光", "顶光", "顶光位",
+               "构图", "转场", "镜头运动", "推镜", "拉镜", "摇镜")),
+    ("combat", ("打斗", "招式", "兵器", "出招", "格挡", "劈砍", "挥刀", "挥剑",
+                "厮杀", "过招")),
+    ("performance", ("表演", "情绪", "表情", "视线", "目光", "凝视", "神态")),
+    ("entrance", ("出场", "登场", "亮相", "下轿", "下马")),
+)
+#: 明确「需要某段技能」的问题码家族（**结构化**判据）。
+_REPAIR_SKILL_CODE_FAMILIES = (
+    ("craft", ("camera_", "shot_size", "lighting_", "light_", "composition_",
+               "transition_", "framing_")),
+    ("combat", ("combat_", "fight_", "weapon_")),
+    ("performance", ("performance_", "gaze_", "expression_", "emotion_")),
+    ("entrance", ("entrance_",)),
+)
+#: 明确「不需要技能词库」的问题码家族：结构/时间窗/布局/文本/声音/时长/服色。
+#: 逐个列家族，不再用宽泛前缀把整片码域吞掉（S03 复核 P1）。
+_REPAIR_NO_SKILL_CODE_FAMILIES = (
+    "kf_", "frame_layouts_", "layout_", "narration_", "subtitle", "text_",
+    "voice_", "duration_", "shot_count", "hook_", "costume_", "wardrobe_",
+    "character_color", "character_",
+)
+#: 审计码是自由文案家族：码本身不带依赖，依赖由 message 判定。
+_REPAIR_AUDIT_CODE_FAMILY = "model_audit"
+
+
+#: S03（2026-11-07）：修复请求的**体积上限**（编码后字节）。0 = 关闭。
+#: 默认 120,000：当前 4 镜请求实测 62,610 B，仍在预算内；超过时才按整组拆分。
+_REPAIR_MAX_REQUEST_BYTES = int(os.getenv("REPAIR_MAX_REQUEST_BYTES", "120000") or 0)
+#: 请求中与目标数量无关的固定部分（system + 任务说明 + 示例 + 技能段）的保守估计。
+_REPAIR_FIXED_OVERHEAD_BYTES = int(os.getenv("REPAIR_FIXED_OVERHEAD_BYTES", "35000") or 0)
+
+
+def _estimate_repair_target_bytes(shot: dict, warnings) -> int:
+    """单个目标的**编码后**字节估计（镜头正文 + 告警文本）."""
+    import json as _json
+    try:
+        _shot = len(_json.dumps(shot or {}, ensure_ascii=False).encode("utf-8"))
+    except Exception:
+        _shot = 0
+    _warn = len("\n".join(str(w) for w in (warnings or [])).encode("utf-8"))
+    return _shot + _warn
+
+
+def _repair_skill_sections(picked: dict, audit_by_shot: dict | None = None) -> tuple:
+    """返回 (sections, unclassified)。空 sections 表示"本轮确实不需要技能段"。"""
+    codes: list = []
+    texts: list = []
+    for _tid, _ws in (picked or {}).items():
+        for _w in (_ws or []):
+            _s = str(_w or "")
+            texts.append(_s)
+            if _s.startswith("[") and "]" in _s:
+                codes.append(_s[1:_s.find("]")])
+    for _tid, _issues in (audit_by_shot or {}).items():
+        for _it in (_issues or []):
+            if isinstance(_it, dict):
+                codes.append(str(_it.get("code") or ""))
+                texts.append(str(_it.get("message") or ""))
+    blob = "\n".join(texts)
+    # 1) **结构化判据**：按码决定依赖（唯一可验收的口径）。
+    sections: set = set()
+    unknown: list = []
+    for _c in codes:
+        _code = str(_c or "").strip()
+        if not _code:
+            continue
+        if _code.startswith(_REPAIR_AUDIT_CODE_FAMILY):
+            # 审计码：依赖由 message 判定（已在 blob 里扫过），码本身不作"未知"。
+            continue
+        _hit = [key for key, prefixes in _REPAIR_SKILL_CODE_FAMILIES
+                if _code.startswith(prefixes)]
+        if _hit:
+            sections.update(_hit)
+            continue
+        if _code.startswith(_REPAIR_NO_SKILL_CODE_FAMILIES):
+            continue
+        unknown.append(_code)
+    # 2) 文案只做**补充**：命中就往里加；但它不能证明"其它上下文不需要"。
+    sections |= {key for key, words in _REPAIR_SKILL_PATTERNS
+                 if any(w in blob for w in words)}
+    if unknown:
+        # 未知类型：保留完整上下文（调用方回退），并明确报告未覆盖。
+        _logger.warn("[REPAIR] 有未登记技能依赖的问题码——本轮保留完整技能上下文：%s"
+                     % sorted(set(unknown))[:6])
+        return sections, True
+    return sections, False
+
+
 def _repair_shot_warnings(script: dict, novel_text: str,
                           bank=None, objects_bank=None,
                           model: str | None = None,
@@ -6728,6 +7030,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     # **每轮重算**（`_rejected_targets` 会在轮次间被重试门更新），不能在循环外
     # 快照——2026-09-26 单测实锤：快照版让重试轮的剔除静默失效。
     _defer = set(defer_targets or ())
+    # S03：上一轮因**体积**被暂缓的目标，本轮优先装（否则永远排在队尾饿死）。
+    _carry_deferred: set = set()
     for _round in range(1, _rounds + 1):
         _excluded_all = _rejected_targets | _defer   # v6.140：每轮重算（见上）
         # §14 P3：**已封存的布局效果冲突 ⇒ 不再发请求**。
@@ -7048,6 +7352,55 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             _logger.warn("[REPAIR] repair_targets 校验未通过 %d 项（这些条目不参与授权）: %s"
                          % (len(_pair_rejects), _pair_rejects[:8]))
 
+        # S03（2026-11-07）：**按最终编码字节装批**，不是只按条数。
+        # 先保留必须联动的整组，再按体积裁掉尾部独立目标；被裁目标写进本轮 diag，
+        # 由下一轮 / 下一次提交尝试继续。不静默丢问题，也不为凑体积截断镜头正文、
+        # 证据或授权字段（那是用缺信息换字节，不可验收）。
+        if _carry_deferred and any(t in picked for t in _carry_deferred):
+            _first = {t: picked[t] for t in list(picked) if t in _carry_deferred}
+            _rest = {t: picked[t] for t in list(picked) if t not in _carry_deferred}
+            picked = {**_first, **_rest}
+        if _REPAIR_MAX_REQUEST_BYTES > 0:
+            _picked_bytes = {_tid: _estimate_repair_target_bytes(
+                shots_by_id.get(_tid), _ws) for _tid, _ws in picked.items()}
+            _units: list = []
+            _seen_ids: set = set()
+            for _grp in (_active_groups or []):
+                _ids = [t for t in _grp if t in picked and t not in _seen_ids]
+                if _ids:
+                    _units.append(_ids)
+                    _seen_ids |= set(_ids)
+            for _tid in picked:
+                if _tid not in _seen_ids:
+                    _units.append([_tid])
+                    _seen_ids.add(_tid)
+            _budget = max(0, _REPAIR_MAX_REQUEST_BYTES - _REPAIR_FIXED_OVERHEAD_BYTES)
+            _cap_keep: list = []
+            _cap_defer: list = []
+            _cap_used = 0
+            for _u in _units:
+                _ub = sum(_picked_bytes.get(t, 0) for t in _u)
+                if _cap_keep and (_cap_used + _ub) > _budget:
+                    _cap_defer.extend(_u)
+                    continue
+                _cap_keep.extend(_u)
+                _cap_used += _ub
+            if _cap_defer:
+                picked = {t: ws for t, ws in picked.items()
+                          if t not in set(_cap_defer)}
+                _logger.warn(
+                    "[REPAIR] 请求体积超预算（上限 %d B，已装 %d B）——本轮暂缓 %s，"
+                    "下一轮/下一次提交尝试继续" % (_REPAIR_MAX_REQUEST_BYTES, _cap_used,
+                                                sorted(_cap_defer)))
+                if repair_diag is not None:
+                    repair_diag.append({"repair_round": _round,
+                                        "kind": "deferred_by_capacity",
+                                        "deferred": sorted(_cap_defer),
+                                        "used_bytes": _cap_used,
+                                        "cap_bytes": _REPAIR_MAX_REQUEST_BYTES})
+                _metrics_inc("repair.deferred_by_capacity", len(_cap_defer))
+                _carry_deferred = set(_cap_defer)
+
         _console(f"  [修复轮{_round}] {len(picked)} 镜待修（{', '.join(picked)}）...")
         # 08-18 方案 C：先统计全片各 label 的 WARN 总数（按分镜聚合之前算一次），
         # 后面拼 parts 时每条 WARN 末尾追加"（同类全片共 N 处）"——让 LLM 改 shot_4
@@ -7164,11 +7517,30 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             except Exception:
                 _char_anchors_str = ""
 
-        # skills（运镜/光线/招式词库）——修运镜/光位/打斗反馈必备
+        # skills（S03）：**按本轮问题的依赖选段**，不再无条件塞 1.3 万字全集。
+        # 未登记的题型仍回退完整上下文并显式告警——减少体积不能以静默丢信息为代价。
         try:
-            _skills_str = _load_knowledge_skills()
-        except Exception:
-            _skills_str = ""
+            _skill_sections, _skill_unclassified = _repair_skill_sections(
+                picked,
+                {"_audit": [{"code": getattr(_ai, "code", ""),
+                             "message": getattr(_ai, "message", "")}
+                            for _ai in (audit_issues or [])]})
+            if _skill_unclassified:
+                _logger.warn(
+                    "[REPAIR] 本轮问题类型尚未登记技能依赖——保留**完整**技能上下文"
+                    "（体积换安全；登记依赖后再裁剪）")
+                _skills_str = _load_knowledge_skills()
+            else:
+                _skills_str = _load_knowledge_skills_for(_skill_sections)
+            _logger.info("[REPAIR] 技能段=%s（未分类=%s，%d 字）"
+                         % (sorted(_skill_sections) or "无", _skill_unclassified,
+                            len(_skills_str)))
+        except Exception as _skill_err:
+            _logger.warn("[REPAIR] 技能段选择失败，回退完整上下文: %s" % _skill_err)
+            try:
+                _skills_str = _load_knowledge_skills()
+            except Exception:
+                _skills_str = ""
 
         # Turn 0：INPUT（当前分镜 + 角色锚点 + skills，不含 novel）
         _input_turn = (
@@ -7369,17 +7741,13 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         for _tid, _ws in picked.items():
             if _tid == "global" or _tid not in _allowed_by_target:
                 continue
-            _s = shots_by_id.get(_tid) or {}
+            # S03：**不再复制镜头正文**。当前值只有一份权威表示——INPUT 1。
+            # 这里只给身份、授权面与问题；模型要读现值就看 INPUT 1 的同名 shot。
             _feedback_json["shots"][_tid] = {
+                "shot_ref": "INPUT 1 里键为 %s 的对象" % _tid,
                 "audit_issues": _audit_by_shot.get(_tid, []),
                 # **只允许改这些字段**；其余字段逐字照抄原镜
                 "allowed_fields": sorted(_allowed_by_target[_tid]),
-                "current": {
-                    "ff_desc": _s.get("ff_desc", ""),
-                    "lf_desc": _s.get("lf_desc", ""),
-                    "prompt": _s.get("prompt", ""),
-                    "color_tone": _s.get("color_tone", ""),
-                },
                 "warnings": _ws,
             }
         # §14 P3：**冲突 issue 进下一修复请求**的承载层——`_feedback_json["conflicts"]`
@@ -7413,7 +7781,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "**需要联动时一次改全**（例如 kf 时序矛盾牵涉 kf 的 desc / stage /"
             "对应布局条目，就一起改；审计已把这些字段都列为授权目标）。\n"
             "优先只返回被点名镜头的窄字段补丁 `updates`（路径和值），无需重抄未改字段。格式："
-            f"{_repair_answer_example(shots_by_id, picked, _allowed_by_target)}\n"
+            f"{_repair_answer_example(shots_by_id, picked, _allowed_by_target, compact=True)}\n"
             "上面是本次授权字段与当前值的 JSON 示例；只提交需要修改的授权路径。`updates` 可为路径到值的字典，或 field_path/value 列表；未提交的字段由代码保留。完整 shot 替换必须单独使用；`updates` 与 `keyframe_additions` **可以在同一目标上并用**（先落字段补丁，再装配新帧）。\n"
             "**hook 必须放在 `hook_replacement` 里**（它与普通镜头字段不同，无 scene/location），"
             "普通镜头放 `shot_replacements`；两个键都可为空数组/省略。\n"
@@ -7429,6 +7797,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "（两表长度由装配保证一致），缺任一半整条拒收。"
             "**代码不会替你猜姿态/持物**：`layout` 里的角色姿态、持物、on_screen "
             "必须由你写全。\n"
+            "**同一个镜头只能用一种表达补同一帧**：若 `updates`／整镜替换里已经包含该帧，"
+            "禁止再用 `keyframe_additions` 追加它——时刻重复会被判重复事件，整轮回滚。\n"
             "shot 必须与首次生成**同构**——index/narration_segment/subtitle/prompt/motion_desc/"
             "ff_desc/lf_desc/duration/keyframes/frame_layouts 等**成套出现**，缺一即被拒。\n"
             "**未点名的镜头绝不允许出现在 shot_replacements 里**；每个被点名镜头**恰好出现一次**"
@@ -7543,7 +7913,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "1. ff/lf_desc 锚点：威胁源写朝向/目标、出镜角色重述服装色\n"
             "2. keyframes desc：补角色姿态/位置锚定\n"
             "3. 保持原文锚定（narration_segment 逐字来自原文）、服装色、致命伤连续性不变\n"
-            "4. 镜头衔接/动作重叠（跨镜）：看 REPAIR FEEDBACK 中「current」字段"
+            "4. 镜头衔接/动作重叠（跨镜）：看 INPUT 1 中该镜的 ff_desc / lf_desc"
             "——相邻镜头同地点时在结尾补衔接词（自然过渡/淡入淡出等），后一镜"
             "开头承接前一镜结尾的动作，禁止无承接硬切\n"
             "5. 景别跳跃（无夹心的真跳跃）：把后一镜的景别改为中间级（如全景→中景），"
@@ -7570,7 +7940,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "以下是分镜问题清单。请**逐条**修复；每条问题只改**解决它所需的已授权字段**——"
             "**需要联动时一次改全**（如 kf 时序矛盾牵涉 kf 的 desc / stage / 布局条目）。"
             "优先返回被点名镜头的窄字段补丁 `updates`（路径和值）。格式："
-            f"{_repair_answer_example(shots_by_id, picked, _allowed_by_target)}\n"
+            f"{_repair_answer_example(shots_by_id, picked, _allowed_by_target, compact=True)}\n"
             "上面是本次授权字段与当前值的 JSON 示例；只提交需要修改的授权路径。`updates` 可为路径到值的字典，或 field_path/value 列表；未提交的字段由代码保留。完整 shot 替换必须单独使用；`updates` 与 `keyframe_additions` **可以在同一目标上并用**（先落字段补丁，再装配新帧）。\n"
             "hook 放 hook_replacement，普通镜头放 shot_replacements，两者都可为空；"
             "shot_id 用裸镜号（\"10\"，不是 \"shot_10\"）；"
@@ -7656,6 +8026,43 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             model=_rep_channel_model or model,
             timeout_sec=_repair_timeout_sec(),  # v6.70.3: 修复轮 180s——超时保留原版，不再盲等 600s
         )
+
+        # S03（复核 P1）：按 provider 的**最终 payload** 计量——messages 只是其中
+        # 一部分，model/上限/采样/response_format/stream 同样是请求体。
+        # 超限 ⇒ 不发送，明确记录并延后本轮目标。
+        if _REPAIR_MAX_REQUEST_BYTES > 0:
+            _final_bytes = 0
+            try:
+                if _rep_channel_provider in (None, "agent_plan"):
+                    from _text_gen.agent_plan_provider import preview_wire as _wpv
+                    _wp, _wb = _wpv(req, model=req.model)
+                    # 只构造一次：容量判定、摘要与真正发送共用同一份 payload/bytes
+                    from dataclasses import replace as _dc_replace
+                    req = _dc_replace(req, prebuilt_payload=_wp, prebuilt_body=_wb)
+                else:
+                    from _text_gen.wire import encode_json_body as _we
+                    _wb = _we({"messages": ([{"role": "system",
+                                             "content": req.system_prompt}]
+                                            + list(req.user_inputs or []))})
+                _final_bytes = len(_wb)
+            except Exception as _enc_err:
+                _logger.warn("[REPAIR] 最终 payload 编码计量失败（按超限处理，不发送）: %s"
+                             % _enc_err)
+            if _final_bytes == 0 or _final_bytes > _REPAIR_MAX_REQUEST_BYTES:
+                _omsg = ("修复请求最终 payload %d 字节 > 上限 %d（目标 %s）——不发送；"
+                         "本轮目标整体延后，待装批或人工拆分"
+                         % (_final_bytes, _REPAIR_MAX_REQUEST_BYTES, sorted(picked)))
+                _logger.warn("[REPAIR] " + _omsg)
+                if repair_diag is not None:
+                    repair_diag.append({"repair_round": _round,
+                                        "kind": "oversize_request_refused",
+                                        "request_bytes": _final_bytes,
+                                        "cap_bytes": _REPAIR_MAX_REQUEST_BYTES,
+                                        "targets": sorted(picked)})
+                if block_reasons is not None:
+                    block_reasons.append(_omsg)
+                _metrics_inc("repair.oversize_request_refused")
+                return script
         # v6.84（二次审核发现 3）：模型调用失败/截断**立即返回**，不进提交尾部。
         #
         # 原实现用 `break` 跳出循环，然后仍会执行循环后的全局 `post_fix_shot_prompts()`
@@ -8793,7 +9200,8 @@ def _snapshot_log_delta(log_file, dest, snap_dir) -> None:
         pass
 
 
-def _snapshot_run_artifacts(script: dict | None = None) -> None:
+def _snapshot_run_artifacts(script: dict | None = None, *, audit: dict | None = None,
+                            novel_text: str = "") -> None:
     """跑批快照（v6.50 P3，08-28）：script + step01.log 时间戳备份到 snapshots/.
 
     output 不进 git（P2 教训：想回滚 LLM 原始输出时无 .bak 无 raw 缓存），
@@ -8807,10 +9215,36 @@ def _snapshot_run_artifacts(script: dict | None = None) -> None:
         snap_dir = OUTPUT_FILE.parent / "snapshots"
         snap_dir.mkdir(parents=True, exist_ok=True)
         ts = _time.strftime("%Y%m%d_%H%M%S")
+        _snap_path = None
         if script is not None:
             from shared.json_io import atomic_dump_json as _adj
-            _adj(snap_dir / f"script_result_{ts}.json", script,
-                 ensure_ascii=False, indent=2)
+            _snap_path = snap_dir / f"script_result_{ts}.json"
+            _adj(_snap_path, script, ensure_ascii=False, indent=2)
+        # S07（复核）：修后稿落盘时**同步**保存不可变审计副本与恢复清单，
+        # 按同一 revision 显式关联——否则下一轮的同名审计会覆盖，旧清单指向错配。
+        if _snap_path is not None and isinstance(audit, dict):
+            try:
+                from step01_script_gen import resume as _resume
+                _audit_copy = snap_dir / f"step01_audit_{ts}.json"
+                _adj(_audit_copy, audit, ensure_ascii=False, indent=2)
+                _novel_p, _novel_sha = _resume.freeze_text(OUTPUT_FILE.parent, novel_text)
+                _man = _resume.build_manifest(
+                    OUTPUT_FILE.parent, snapshot_path=_snap_path,
+                    audit_path=_audit_copy, novel_text_path=_novel_p,
+                    run_id=_step01_run_id(), stage="block")
+                _man_p = snap_dir / f"step01_resume_{ts}.json"
+                _adj(_man_p, _man, ensure_ascii=False, indent=2)
+                # 写入后**读回核验**：路径与 revision 必须一致，否则恢复清单不可用
+                _back = json.loads(_man_p.read_text(encoding="utf-8"))
+                _rev_now = _resume._read_json(_snap_path)
+                from shared.quality_gate import compute_script_revision as _csr
+                if str(_back.get("script_revision")) != _csr(_rev_now):
+                    raise RuntimeError("恢复清单 revision 与快照不一致")
+                _logger.info("[SNAPSHOT] 修后稿+审计+恢复清单已按 revision 关联: %s"
+                             % _man_p.name)
+            except Exception as _pair_e:
+                _logger.warn("[SNAPSHOT] 配对审计/恢复清单写入失败（恢复将不可用）: %s"
+                             % _pair_e)
         log_file = OUTPUT_FILE.parent / "step01.log"
         if log_file.exists():
             _snapshot_log_delta(log_file, snap_dir / f"step01_{ts}.log", snap_dir)

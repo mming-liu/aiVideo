@@ -44,6 +44,7 @@ import requests
 
 from . import retry_policy
 from .deadline import TransportGate
+from .wire import body_stats, encode_json_body
 from .config import config
 from .models import TextGenerationRequest, TextGenerationResult, truncated_result
 from .service import TextGenerationService
@@ -255,6 +256,23 @@ def _openai_effort_tier(effort) -> str:
     return _OPENAI_EFFORT_ALIASES.get(_e, "")
 
 
+def preview_wire(req, *, model=None, base_url=None):
+    """构造该请求**最终** payload 并按线上编码计量（**不发送**）.
+
+    为什么需要它：容量检查若只编码 messages，就漏掉 provider 追加的 model /
+    输出上限 / 采样参数 / response_format / stream 字段——那仍是请求的一部分，
+    不能当作"实际传输字节"的上限。这里复用 _build_payload + encode_json_body，
+    与真正发送走同一份构造与编码。
+    """
+    svc = object.__new__(AgentPlanTextService)
+    svc._model = model or config.AGENT_PLAN_TEXT_MODEL
+    svc._base_url = (base_url or config.AGENT_PLAN_TEXT_BASE_URL
+                     or config.AGENT_PLAN_BASE_URL)
+    payload = svc._build_payload(req)
+    body = encode_json_body(payload)
+    return payload, body
+
+
 class AgentPlanTextService(TextGenerationService):
     """火山方舟 Agent Plan 文本生成服务.
 
@@ -318,6 +336,9 @@ class AgentPlanTextService(TextGenerationService):
           - thinking: {type: "disabled"}（不是 OpenAI 的 reasoning_effort）— 默认开启深度思考
             会拉长推理耗时到 180s+ 触发客户端超时；分镜/修复轮结构化任务关掉思考收益最大
         """
+        _pre = getattr(req, "prebuilt_payload", None)
+        if isinstance(_pre, dict):
+            return _pre
         model = req.model or self._model
         # thinking.type 映射：req.reasoning_effort / config 都用 none→disabled / 其他→enabled
         # （保持与 deepseek 路径的 reasoning_effort 字符串契约，转换在 provider 内做）
@@ -382,16 +403,34 @@ class AgentPlanTextService(TextGenerationService):
         return payload
 
     # -- 传输阶段的证据 ---------------------------------------------------
+    def _post(self, url: str, payload: dict, timeout, body: bytes | None = None):
+        """S02：**编码 + 发送的唯一出口**（流式与非流式共用）.
+
+        为什么不用 requests 的 `json=`：它默认 `ensure_ascii=True`，中文膨胀 1.7×。
+        这里显式编码成 UTF-8 字节后以 `data=` 发送，`Content-Type` 仍由 `_headers`
+        给出 `application/json`（解码后的 JSON 与旧路径逐字相等）。
+        """
+        if body is None:
+            body = encode_json_body(payload)
+        _st = body_stats(body)
+        # 实际传输计量（S02）：字节数与摘要一起进日志——事后不必按字符数估算。
+        _verbose_write("[WIRE] agent_plan 请求体 %d 字节（sha256=%s）"
+                       % (_st["request_bytes"], _st["request_sha256"][:16]))
+        resp = requests.post(url, data=body, headers=self._headers,
+                             timeout=timeout, stream=True, allow_redirects=False)
+        return resp, body
+
     @staticmethod
     def _request_fingerprint(payload: dict) -> str:
         """请求体指纹（**脱敏**：只留哈希，正文不进日志）."""
         try:
-            _b = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
-            return hashlib.sha256(_b).hexdigest()[:16]
+            # S02：指纹取**实际发送的字节**（同一编码函数），不再另写一套 dumps。
+            return body_stats(encode_json_body(payload))["request_sha256"][:16]
         except Exception:
             return ""
 
-    def _send_once(self, url: str, payload: dict, timeout, trace: dict):
+    def _send_once(self, url: str, payload: dict, timeout, trace: dict,
+                   body: bytes | None = None):
         """一次 POST，并把**分阶段时刻**记进 `trace`（复核 2026-10-03 要求）.
 
         为什么要 `stream=True`：非流式调用要等**整个响应体**到齐才返回，于是墙钟被
@@ -411,8 +450,16 @@ class AgentPlanTextService(TextGenerationService):
         _cap("agent_plan", payload, where="requests.post")
         # 复核 2026-10-30（F3 补充）：受控通道**不跟随重定向**——跨 host 的 302 会让
         # 套餐核验看到的端点与实际落点不一致。3xx 按非 200 处理（零采纳）。
-        resp = requests.post(url, json=payload, headers=self._headers,
-                             timeout=timeout, stream=True, allow_redirects=False)
+        # S02（失败计量）：编码与计量必须发生在**发送之前**——连接异常时
+        # 这个 attempt 仍要能报出"本来要发多大"，而不是留下空 trace。
+        _wire_body = body if body is not None else encode_json_body(payload)
+        trace.update(body_stats(_wire_body))
+        trace["logical_sha256"] = self._request_fingerprint(payload)
+        try:
+            resp, _ = self._post(url, payload, timeout, body=_wire_body)
+        except Exception as _post_err:
+            trace["post_error"] = "%s: %s" % (type(_post_err).__name__, _post_err)
+            raise
         trace["headers_at"] = round(time.monotonic() - _t0, 3)
         trace["status"] = getattr(resp, "status_code", None)
         try:
@@ -626,15 +673,23 @@ class AgentPlanTextService(TextGenerationService):
                 "usage": usage}
 
     def _send_sse(self, url: str, payload: dict, timeout, *, gate, trace: dict,
-                  stop=None):
+                  stop=None, body: bytes | None = None):
         """一次 SSE POST；**读取也在发送闭包内**，因此闸门的墙钟覆盖到等流。"""
         from _text_gen.payload_capture import maybe_capture as _cap
         _cap("agent_plan", payload, where="requests.post(sse)")
         _t0 = time.monotonic()
         # 复核 2026-10-30（F3 补充）：受控通道**不跟随重定向**——跨 host 的 302 会让
         # 套餐核验看到的端点与实际落点不一致。3xx 按非 200 处理（零采纳）。
-        resp = requests.post(url, json=payload, headers=self._headers,
-                             timeout=timeout, stream=True, allow_redirects=False)
+        # S02（失败计量）：编码与计量必须发生在**发送之前**——连接异常时
+        # 这个 attempt 仍要能报出"本来要发多大"，而不是留下空 trace。
+        _wire_body = body if body is not None else encode_json_body(payload)
+        trace.update(body_stats(_wire_body))
+        trace["logical_sha256"] = self._request_fingerprint(payload)
+        try:
+            resp, _ = self._post(url, payload, timeout, body=_wire_body)
+        except Exception as _post_err:
+            trace["post_error"] = "%s: %s" % (type(_post_err).__name__, _post_err)
+            raise
         trace["headers_at"] = round(time.monotonic() - _t0, 3)
         trace["status"] = getattr(resp, "status_code", None)
         try:
@@ -731,6 +786,7 @@ class AgentPlanTextService(TextGenerationService):
                 error="%s（排队未取得可用 Key：%s）" % (_gate.expiry_reason(), _e))
 
         payload = self._build_payload(req)
+        _pre_body = getattr(req, "prebuilt_body", None)
         model = payload.get("model", self._model)
         # 与套餐核验共享同一个规范化端点（F3）：含 .. / 双重编码直接抛错，不发送。
         url = chat_completions_url(self._base_url)
@@ -806,8 +862,8 @@ class AgentPlanTextService(TextGenerationService):
                     _attempt["made"] = True
                 if _stream_requested(req):
                     return self._send_sse(url, payload, _t, gate=_gate, trace=_trace,
-                                          stop=_stop)
-                return self._send_once(url, payload, _t, _trace)
+                                          stop=_stop, body=_pre_body)
+                return self._send_once(url, payload, _t, _trace, body=_pre_body)
 
             try:
                 # 2026-11-07（run18 实测）：本地代理 66s 空闲超时会掐断连接，一个字节

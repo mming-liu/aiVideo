@@ -104,6 +104,11 @@ class _LedgeredService(TextGenerationService):
         # 当前线程绑定的一次性授权守卫与本次 `call_id` 一起显式写进请求的本地运行字段，
         # provider 在真正的 SDK 调用前消费它；没有守卫时请求原样返回（旧行为不变）。
         from .send_guard import bind_request
+        # 本包 §5：**跨恢复的发送预算**在唯一出口处扣减——重启进程不会清零。
+        # 未配置 STEP01_SEND_BUDGET_FILE 时不生效（零行为变化）。
+        from shared.send_budget import allow as _budget_allow
+        _schema = getattr(req, "json_schema", None)
+        _budget_allow((_schema or {}).get("name") if isinstance(_schema, dict) else "")
         _req = bind_request(req, _cid)
         _t0 = _t.monotonic()
         _res = None

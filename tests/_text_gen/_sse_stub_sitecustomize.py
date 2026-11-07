@@ -94,8 +94,22 @@ import requests as _rq  # noqa: E402
 _ReadTimeout = _rq.exceptions.ReadTimeout
 
 
+def _payload_of(kwargs):
+    """S02：请求体改走 data=<utf-8 bytes>，这里两种形状都要能读出 payload."""
+    body = kwargs.get("json")
+    if body is None:
+        raw = kwargs.get("data")
+        try:
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8")
+            body = json.loads(raw) if raw else {}
+        except Exception:
+            body = {}
+    return body or {}
+
+
 def _post(url, **kwargs):
-    _record(kwargs.get("json") or {})
+    _record(_payload_of(kwargs))
     return _Resp(_lines(_MODE), timeout=kwargs.get("timeout"))
 
 

@@ -304,3 +304,8 @@ tests/step02_video_gen/*
 
 # 隔离重跑/审计证据（10+ MB 二进制与日志，只留本地盘）
 output_step01_*/
+# 2026-11-07：S02/S03/S04/S06 回归（wire 编码、技能选段、compact 示例、发布事务）
+!tests/_text_gen/test_wire_encoding.py
+!tests/step01_script_gen/test_repair_skill_selection.py
+!tests/step01_script_gen/test_repair_compact_example.py
+!tests/shared/test_publish_txn.py

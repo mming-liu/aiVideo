@@ -70,6 +70,11 @@ class TextGenerationRequest:
     # provider 构造 payload 时不会读取它（也不允许读取）。
     # 默认 `None` = 不拦截，普通生成入口行为与改造前逐字一致。
     send_guard: Optional[object] = field(default=None, repr=False, compare=False)
+    # S02（2026-11-07 复核）：**只构造一次的请求体**。容量判定、摘要与真正发送
+    # 必须共用同一份 payload/bytes——否则"检查的是 A、发出去的是 B"。
+    # 由调用方（修复轮）在 preview_wire() 之后用 dataclasses.replace 带上。
+    prebuilt_payload: Optional[dict] = field(default=None, repr=False, compare=False)
+    prebuilt_body: Optional[bytes] = field(default=None, repr=False, compare=False)
 
 
 @dataclass

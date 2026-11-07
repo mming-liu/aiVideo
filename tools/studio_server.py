@@ -94,9 +94,61 @@ class Studio:
         self.production = self.chapter / "_production"
         self.state_path = self.production / "ui_review_state.json"
         self.lock = threading.RLock()
+        self._receipt_fp = self._receipt_fingerprint()
+        self._receipt_generation = 0
+
+    # ---------------------------------------------------- 采纳凭据一致性（S06）
+    def _receipt_fingerprint(self) -> tuple:
+        try:
+            st = self.receipt_path.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return (0, 0)
+
+    def refresh_if_receipt_changed(self) -> bool:
+        """正式采纳凭据变了就**重新加载**，不继续用旧 revision 的派生信息.
+
+        返回 True = 发生了重载。只接受**同一章节**：换章必须新建 Studio，
+        否则会把"另一章的产物"当成本章新稿读出来。
+        """
+        fp = self._receipt_fingerprint()
+        if fp == getattr(self, "_receipt_fp", None):
+            return False
+        receipt = self.pc.load_receipt(self.receipt_path)
+        chapter = Path(receipt["formal_chapter"]).resolve()
+        if chapter != self.chapter:
+            raise StudioError(
+                "receipt_chapter_changed",
+                "采纳凭据指向的章节变了（%s -> %s），请重新打开" % (self.chapter, chapter),
+                409)
+        self.receipt = receipt
+        self._receipt_fp = fp
+        self._receipt_generation = int(getattr(self, "_receipt_generation", 0)) + 1
+        # 按旧 revision 缓存的派生信息一律作废（当前无长期缓存；显式清空防后续新增）
+        for attr in ("_script_cache", "_units_cache"):
+            if hasattr(self, attr):
+                delattr(self, attr)
+        return True
+
+    @property
+    def receipt_generation(self) -> int:
+        return int(getattr(self, "_receipt_generation", 0))
+
+    def _config_stale(self) -> bool:
+        """凭据里的时长带与**本进程已生效**的配置是否已经不一致（import 期求值）."""
+        want = self.receipt.get("duration_band")
+        if not isinstance(want, dict):
+            return False
+        try:
+            from shared.config import duration_band
+            return dict(duration_band()) != {k: want[k] for k in
+                                            ("min", "max", "target_min", "target_max")}
+        except Exception:
+            return False
 
     # ---------------------------------------------------------------- 基础读
     def script(self) -> dict:
+        self.refresh_if_receipt_changed()
         path = self.chapter / "script_result.json"
         try:
             return json.loads(path.read_text(encoding="utf-8"))
@@ -288,6 +340,10 @@ class Studio:
                 "run_id": self.receipt.get("source_run_id"),
                 "script_revision": self.receipt.get("script_revision"),
                 "adopted_at": self.receipt.get("adopted_at"),
+                # S06：凭据热更新后这里会变化；config_stale=True 表示凭据的时长带
+                # 与本进程 import 期求值的配置不一致，需要重启 Studio 才能完全生效。
+                "receipt_generation": self.receipt_generation,
+                "config_stale": self._config_stale(),
             },
             "gate": gate,
             "safety": {"model_sends": 0,

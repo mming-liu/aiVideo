@@ -1131,3 +1131,44 @@ def resolve_model_prompt_profile(model: str | None = None):
 
 
 # 兼容别名
+
+# v6.160（S03，2026-11-07）：按问题依赖只加载相关技能段。
+#
+# 修复轮此前无条件把 12,998 字（约 52KB 转义字节 / 约 8,500 tokens）的四套技能全集
+# 塞进每一条请求——补一个关键帧、补一个服装色也用不上运镜/招式/出场词库。
+# 这里按“本轮问题到底在问什么”选段：运镜/景别/光位才要 craft，打斗才要 combat，
+# 表演/视线才要 performance，出场才要 entrance。
+#
+# 未登记的问题类型不静默丢上下文：调用方判定为“分类不出来”时回退到
+# _load_knowledge_skills() 的完整上下文并明确记录（见 main 的 _repair_skill_sections）。
+_SKILL_SECTION_SPECS = (
+    ("craft", "seedance-craft", "# Seedance 镜头工艺全集（来自 seedance-craft）"),
+    ("performance", "character-performance",
+     "# 角色表演工艺全集（来自 character-performance）"),
+    ("bible", "story-bible", "# 故事圣经（来自 story-bible）"),
+    ("combat", "combat-mastery", "# 打斗工艺全集（来自 combat-mastery）"),
+    ("entrance", "character-entrance", "# 人物出场四大方式（来自 character-entrance）"),
+)
+
+
+def _load_knowledge_skills_for(sections) -> str:
+    """只加载 sections 指定的技能段（顺序固定，与 _load_knowledge_skills 一致）."""
+    mod = _get_skills_loader()
+    if not mod or not sections:
+        return ""
+    wanted = {str(s) for s in sections}
+    # 故事圣经是作品专属设定：即使被显式点名，也仍受原有开关约束。
+    if os.getenv("STORY_BIBLE_ENABLED", "").strip() != "1":
+        wanted.discard("bible")
+    out = []
+    try:
+        for key, name, title in _SKILL_SECTION_SPECS:
+            if key not in wanted:
+                continue
+            body = mod.read_skill(name)
+            if body:
+                out.append("\n\n%s\n%s" % (title, body))
+    except Exception:
+        return "".join(out)
+    return "".join(out)
+
