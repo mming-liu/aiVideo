@@ -10,6 +10,7 @@ continuity/vimax_bridge 等仍直接 `json.dump` 覆盖写——磁盘满、序�
 """
 import json
 import os
+import time
 from pathlib import Path
 
 
@@ -57,11 +58,22 @@ def commit_json_swap(path, tmp_path) -> None:
 
     只有走到这里，盘上那份才被换成新内容；失败时清掉临时文件并抛出。
     """
-    try:
-        os.replace(Path(tmp_path), Path(path))
-    except Exception:
-        _unlink_quiet(tmp_path)
-        raise
+    # Windows：读者短暂持有目标文件时 os.replace 会报 WinError 5（共享冲突）。
+    # 这是**瞬时**冲突而不是数据错误——短重试几次，仍失败才抛出（调用方回滚）。
+    last = None
+    # 读者持有目标文件时 Windows 会拒绝 replace；读者只持有微秒级，给足 ~2s 窗口。
+    for attempt in range(100):
+        try:
+            os.replace(Path(tmp_path), Path(path))
+            return
+        except PermissionError as exc:          # 只对共享冲突重试
+            last = exc
+            time.sleep(0.02)
+        except Exception:
+            _unlink_quiet(tmp_path)
+            raise
+    _unlink_quiet(tmp_path)
+    raise last
 
 
 def discard_json_swap(tmp_path) -> None:

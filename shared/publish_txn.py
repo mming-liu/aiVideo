@@ -48,6 +48,13 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
         fh.write(data)
         fh.flush()
         os.fsync(fh.fileno())
+    # Windows 共享冲突：读者握着目标文件时 replace 会失败，短重试后仍失败才抛。
+    for _attempt in range(100):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.02)
     os.replace(tmp, path)
 
 
@@ -252,6 +259,43 @@ class PublishTransaction:
         return False
 
 
+
+
+class Publishing(PublishError):
+    """发布进行中：读者在有界等待内没有拿到一致的一组文件."""
+
+
+def read_consistent(chapter_dir, names=("script_result.json", "step01_commit.json"),
+                    *, max_wait: float = 2.0, poll: float = 0.01):
+    """**一致读**：把一组正式文件读成同一 revision，或明确报"发布中".
+
+    文件级原子替换不能保证**整组**同时切换：读者可能先读到新稿、再读到旧清单。
+    这里用有界重试直到两边的 script_revision 一致；超时抛 Publishing，让调用方
+    返回"暂不可读"而不是把混合状态当成结果。
+    """
+    chapter = Path(chapter_dir)
+    deadline = time.monotonic() + max(0.0, float(max_wait))
+    last = ""
+    while True:
+        try:
+            payloads = {n: json.loads((chapter / n).read_text(encoding="utf-8"))
+                        for n in names}
+        except (FileNotFoundError, PermissionError, OSError,
+                json.JSONDecodeError) as exc:
+            last = "%s: %s" % (type(exc).__name__, exc)
+            payloads = None
+        if payloads is not None:
+            revs = {str(p.get("script_revision") or "")
+                    for p in payloads.values() if isinstance(p, dict)}
+            revs.discard("")
+            if len(revs) <= 1:
+                return payloads
+            last = "revision 不一致: %s" % sorted(revs)
+        if time.monotonic() >= deadline:
+            raise Publishing("发布进行中（%s 内未取得一致的一组文件：%s）"
+                             % (max_wait, last))
+        time.sleep(poll)
+
 def recover_pending(chapter_dir, *, lock_held: bool = False) -> dict:
     """按 journal 恢复未完成的发布事务.
 
@@ -282,7 +326,8 @@ def recover_pending(chapter_dir, *, lock_held: bool = False) -> dict:
             pid = int(raw[0])
         except (OSError, ValueError, IndexError):
             pid = 0
-        if pid and _pid_alive(pid):
+        # 同一进程内的嵌套调用 = 锁的**所有者**自己，不该被自己的锁挡住。
+        if pid and pid != os.getpid() and _pid_alive(pid):
             return {"ok": False, "state": state, "restored": [], "removed": [],
                     "failed": ["持锁进程仍存活 pid=%d" % pid]}
 
@@ -316,6 +361,12 @@ def recover_pending(chapter_dir, *, lock_held: bool = False) -> dict:
     _finish_journal(journal_p, journal,
                     "rollback_failed" if failed else "recovered",
                     restored, removed, failed)
+    if not failed and not lock_held:
+        # 独立恢复入口：恢复完成后清掉陈旧锁，把章节交还给下一个发布者。
+        try:
+            (chapter / LOCK_NAME).unlink()
+        except OSError:
+            pass
     return {"ok": not failed, "state": "rollback_failed" if failed else "recovered",
             "restored": restored, "removed": removed, "failed": failed}
 

@@ -225,7 +225,7 @@ def _install_send_budget(run_dir: Path, expected_base: str) -> None:
     from _text_gen.agent_plan_provider import AgentPlanTextService
     _orig = AgentPlanTextService._send_once
 
-    def _send(self, url, payload, timeout, trace):
+    def _send(self, url, payload, timeout, trace, body=None):
         if not _url_allowed(url, expected_base):
             SENDS["blocked_url"] = str(url)
             _refuse(run_dir, STOP_ENDPOINT, "send_blocked_url.json",
@@ -262,7 +262,7 @@ def _install_send_budget(run_dir: Path, expected_base: str) -> None:
         SENDS["urls"].append(str(url))
         _t0 = time.time()
         try:
-            _resp = _orig(self, url, payload, timeout, trace)
+            _resp = _orig(self, url, payload, timeout, trace, body=body)
         except Exception as exc:                                     # noqa: BLE001
             try:
                 _write(run_dir / "sends" / ("send_%02d_error.json" % _next),

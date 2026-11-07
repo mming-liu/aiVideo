@@ -866,39 +866,12 @@ class AgentPlanTextService(TextGenerationService):
                 return self._send_once(url, payload, _t, _trace, body=_pre_body)
 
             try:
-                # 2026-11-07（run18 实测）：本地代理 66s 空闲超时会掐断连接，一个字节
-                # 都没回来就被判失败，直接吃掉 1/3 的候选名额。连接级闪断且
-                # **未收到任何正文**时重试 1 次（受控审计的 guard 下不重试——那有
-                # 一次发送的契约）。
+                # 2026-11-08（WP1）：连接级重试**不再在此层叠加**。
+                # retry_policy 已对 TRANSPORT_CONNECT 给 3 次提交（含退避）；这里再套
+                # 一层会让一次物理发送最多变成 6 次，测试计数与发送预算都对不上，
+                # 也违反"统一层是重试判定的唯一来源"。代理 66s 闪断由同一策略覆盖。
                 resp = None
-                for _try_no in (1, 2):
-                    try:
-                        resp, _timed_out, _why = _gate.request(_guarded)
-                        break
-                    except requests.exceptions.RequestException as _e_conn:
-                        _conn_level = isinstance(
-                            _e_conn, (requests.exceptions.ProxyError,
-                                      requests.exceptions.ConnectionError))
-                        _no_bytes = (not _trace.get("status")
-                                     and not int(_trace.get("bytes") or 0))
-                        _ok_time = True
-                        try:
-                            _dl = getattr(_gate, "deadline", None)
-                            if _dl is not None and hasattr(_dl, "remaining"):
-                                _ok_time = float(_dl.remaining()) > 5.0
-                        except Exception:
-                            _ok_time = True
-                        if (_try_no == 1 and _conn_level and _no_bytes
-                                and _guard is None and _ok_time):
-                            _verbose_write(
-                                "[!] 连接级中断（%s，未收到正文）→ 2.5s 后重试 1 次"
-                                % type(_e_conn).__name__)
-                            time.sleep(2.5)
-                            _trace.clear()
-                            _attempt.clear()
-                            _attempt.update({"id": "", "made": False})
-                            continue
-                        raise
+                resp, _timed_out, _why = _gate.request(_guarded)
                 if _why:
                     _stop.set()          # 墙钟已到：通知读取器停止消费
             except _SseAborted as exc:

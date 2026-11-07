@@ -309,3 +309,4 @@ output_step01_*/
 !tests/step01_script_gen/test_repair_skill_selection.py
 !tests/step01_script_gen/test_repair_compact_example.py
 !tests/shared/test_publish_txn.py
+!tests/shared/test_publish_txn_concurrency.py
