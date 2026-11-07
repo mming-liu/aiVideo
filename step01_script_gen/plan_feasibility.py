@@ -1452,11 +1452,15 @@ def normalize_plan_refs(script: dict, plan) -> int:
             _has_k = any(coerce_ref_index(x, "D") == _k for x in _lines_now)
             _has_b = any(coerce_ref_index(x, "B") == _carrier[_k] for x in _beats_now)
             if _sid in _hits:
+                # 2026-11-07（run20 实测）：必须按编号插到有序位置——直接 append
+                # 会把 B9 排到 B10 后面，同镜内立刻判 beats_order_violation。
                 if not _has_k:
-                    _refs["lines"] = _lines_now + [_k]
+                    _refs["lines"] = sorted({int(x) for x in _lines_now
+                                             if str(x).strip().isdigit()} | {_k})
                     _changed += 1
                 if not _has_b:
-                    _refs["beats"] = _beats_now + [_carrier[_k]]
+                    _refs["beats"] = sorted({int(x) for x in _beats_now
+                                             if str(x).strip().isdigit()} | {_carrier[_k]})
                     _changed += 1
             elif _has_k:
                 _refs["lines"] = [x for x in _lines_now
