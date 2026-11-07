@@ -1445,7 +1445,9 @@ def normalize_plan_refs(script: dict, plan) -> int:
         _uf = _spoken.get(_sid) or []
         for _k, _text in enumerate(lines, 1):
             _cands = []
-            for _f in _match_forms(_text):
+            # 2026-11-07（复核）：用 _line_forms —— 带归属语的 D2 要能按「台词本体」
+            # 命中旁白（剧本通常只写 说话人：“本体”），否则归一化永不生效。
+            for _f in _line_forms(_text):
                 if not _f:
                     continue
                 for _u in _uf:
@@ -1479,6 +1481,7 @@ def normalize_plan_refs(script: dict, plan) -> int:
             return None
 
     _codes_before = _viol_codes()
+    _shadow = shadowed_dialogue_map(plan)
     _changed = 0
     for _k, _text in enumerate(lines, 1):
         if _k not in _carrier:
@@ -1519,6 +1522,41 @@ def normalize_plan_refs(script: dict, plan) -> int:
                                   if coerce_ref_index(x, "D") != _k]
                 _changed += 1
                 _LOG.info("[REFS] shot %s: lines -= D%d（本镜旁白没有这句）", _sid, _k)
+    # 2026-11-07（复核）：承载台词的节拍被声明在**没有说这句**的镜头里，同样是
+    # 配对破损的来源（实测：B9 被 3 个镜头声明，但这些镜头都没有说 D2）。
+    # 只在这些镜头明确没说过该台词时移除，且由下面的「变差就还原」兜底。
+    for _s in shots:
+        _sid = str(_s.get("index"))
+        _refs = _s.get("plan_refs")
+        if not isinstance(_refs, dict):
+            continue
+        _beats_now = [int(x) for x in (_refs.get("beats") or []) if str(x).strip().isdigit()]
+        if not _beats_now:
+            continue
+        _keep = []
+        for _b in _beats_now:
+            _carried_k = None
+            for _k2, _car2 in _carrier.items():
+                if _car2 == _b:
+                    _carried_k = _k2
+                    break
+            if _carried_k is None or (_sid, _carried_k) in _spans:
+                _keep.append(_b)
+                continue
+            _changed += 1
+            _LOG.info("[REFS] shot %s: beats -= B%d（本镜没有说 D%d）", _sid, _b, _carried_k)
+        if _keep != _beats_now:
+            _refs["beats"] = _keep
+    if _changed and _shadow:
+        # 声明里的被遮蔽编号统一归并到宿主（同一次发言只留一个编号）
+        for _s in shots:
+            _refs = _s.get("plan_refs")
+            if not isinstance(_refs, dict):
+                continue
+            _cur = [int(x) for x in (_refs.get("lines") or []) if str(x).strip().isdigit()]
+            _mapped = sorted({_shadow.get(_x, _x) for _x in _cur})
+            if _mapped != _cur:
+                _refs["lines"] = _mapped
     if _changed and _codes_before is not None:
         _codes_after = _viol_codes()
         # 出现**新的违例类别**就整体还原：修好配对却换来一条顺序回退，是净损失。
@@ -1561,8 +1599,10 @@ def shadowed_dialogue_map(plan: dict) -> dict:
                 continue
     out: dict = {}
     for _k in range(1, len(lines) + 1):
-        if _k in _carried:
-            continue
+        # 2026-11-07（复核）：双承载也要能归并——只要满足严格同源（Dk 的整句形态
+        # 等于 Dj 的台词本体），两条编号就是同一次发言。旧实现先跳过 carried 的编号，
+        # 把缓存计划里「D1、D2 各有一条承载节拍」的形态整个略过，于是 D1 永远
+        # 被判 pairing_broken。
         _forms_k = _match_forms(lines[_k - 1])
         if not _forms_k:
             continue
@@ -4058,7 +4098,7 @@ def check_event_contract(script: dict, plan: dict | None, *,
             for b in sorted(_shot_beats.get(sid) or ()):
                 _kind, _k = BeatRecord.parse(beats[b - 1]).carrier()
                 if _kind == "dialogue" and _k:
-                    _carried.add(_k)
+                    _carried.add(_shadow.get(_k, _k))
             for d in sorted(_ds):
                 if d not in _carried:
                     violations.append({
@@ -4073,7 +4113,8 @@ def check_event_contract(script: dict, plan: dict | None, *,
         for b in range(1, len(beats) + 1):
             _kind, _k = BeatRecord.parse(beats[b - 1]).carrier()
             if _kind == "dialogue" and _k:
-                _carrier_of[b] = _k
+                # 同源遮蔽（D1 是 D2 的台词本体）时，承载 D1 的节拍按宿主 D2 记账
+                _carrier_of[b] = _shadow.get(_k, _k)
         for b, k in sorted(_carrier_of.items()):
             _holders = [sid for sid, _bs in _shot_beats.items() if b in _bs]
             if not _holders:
