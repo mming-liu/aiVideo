@@ -304,6 +304,31 @@ def test_normalize_plan_refs_fixes_unambiguous_missing_beat():
     assert script["shots"][0]["plan_refs"] == {"beats": [1], "lines": [1]}
 
 
+
+
+def test_normalize_plan_refs_is_idempotent():
+    """归一化必须幂等：第二次调用产生零变更（S03 验收）."""
+    from step01_script_gen.plan_feasibility import normalize_plan_refs
+
+    plan = {"dialogue_lines": ["先关门。"],
+            "shot_beats": ["节拍：甲关门。｜载体：台词1"]}
+    script = {"shots": [{"index": 1, "narration_segment": "甲：先关门。",
+                         "plan_refs": {"beats": [], "lines": []}}]}
+    assert normalize_plan_refs(script, plan) >= 1
+    assert normalize_plan_refs(script, plan) == 0
+
+
+def test_voice_source_spans_offer_the_dialogue_body(monkeypatch):
+    """证据是带归属语的整句时，台词本体也要作为来源片段（S02 验收）."""
+    from step01_script_gen import plan_content_repair as pcr
+
+    span = "乙沉住了气，缓缓说道：“先关门，再关窗。”"
+    monkeypatch.setattr(pcr, "source_spans_by_fact", lambda _r: {"f1": [span]})
+    view = {"frozen_facts": [{"uid": "f1", "claim": "甲吩咐", "evidence": span}]}
+    spans = pcr._voice_source_spans(view, "f1", {"_": 1}, span, admitted=True)
+    assert span in spans
+    assert "先关门，再关窗。" in spans
+
 def test_dialogue_body_is_offered_as_voice_source_and_reuse_target():
     """带归属语的整句要能引出「台词本体」：既作来源片段，也作复用目标（2026-11-07）。"""
     from step01_script_gen.plan_content_repair import _dialogue_bodies, _voice_targets

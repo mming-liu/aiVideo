@@ -1394,6 +1394,11 @@ def _line_offset_in_units(line: str, units_raw: list, start: int) -> tuple:
     return True, _best
 
 
+import logging as _logging
+
+_LOG = _logging.getLogger(__name__)
+
+
 def normalize_plan_refs(script: dict, plan) -> int:
     """按**实际旁白落点**校正 `plan_refs`（B↔D 确定性归一，2026-11-07）.
 
@@ -1500,15 +1505,20 @@ def normalize_plan_refs(script: dict, plan) -> int:
                     _refs["lines"] = sorted({int(x) for x in _lines_now
                                              if str(x).strip().isdigit()} | {_k})
                     _changed += 1
+                    _LOG.info("[REFS] shot %s: lines += D%d（%s）",
+                              _sid, _k, "旁白完整包含该台词")
                 if not _has_b:
                     _refs["beats"] = sorted({int(x) for x in _beats_now
                                              if str(x).strip().isdigit()} | {_carrier[_k]})
                     _changed += 1
+                    _LOG.info("[REFS] shot %s: beats += B%d（承载 D%d）",
+                              _sid, _carrier[_k], _k)
             elif _has_k and not _in_shot:
                 # 只有「本镜确实没有这句话」才撤销声明；被更长台词覆盖的歧义情形保持原样
                 _refs["lines"] = [x for x in _lines_now
                                   if coerce_ref_index(x, "D") != _k]
                 _changed += 1
+                _LOG.info("[REFS] shot %s: lines -= D%d（本镜旁白没有这句）", _sid, _k)
     if _changed and _codes_before is not None:
         _codes_after = _viol_codes()
         # 出现**新的违例类别**就整体还原：修好配对却换来一条顺序回退，是净损失。
