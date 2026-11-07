@@ -319,6 +319,39 @@ def test_dialogue_body_requires_a_spoken_attribution():
     assert _dialogue_bodies("甲说：“先走。”随后离开了。") == []
 
 
+
+
+def test_double_carried_same_source_dialogue_merges_in_contract():
+    """D1 是 D2 的台词本体且各有一条承载节拍时，契约门不得判 pairing 破损（S04）."""
+    from step01_script_gen.plan_feasibility import (check_event_contract,
+                                                    bind_plan_identity,
+                                                    shadowed_dialogue_map)
+
+    body = "先关门，再关窗。"
+    plan = {"dialogue_lines": [body, "乙沉住了气，缓缓说道：“" + body + "”"],
+            "shot_beats": ["节拍：乙开口。｜载体：台词1", "节拍：乙说完。｜载体：台词2"]}
+    assert shadowed_dialogue_map(plan) == {1: 2}
+    script = {"shots": [
+        {"index": 1, "narration_segment": "乙：“" + body + "”",
+         "plan_refs": {"beats": [1, 2], "lines": [2]}},
+    ]}
+    bind_plan_identity(script, plan)
+    ok, viol, declared = check_event_contract(script, plan, require_declaration=True)
+    assert ok, viol
+
+
+def test_duration_shrink_rescales_timeline_inside_the_shot():
+    """D4：缩短 duration 时镜内时段与 kf t_sec 等比缩放，不越出新镜长（S04）."""
+    from step01_script_gen.main import _rescale_shot_timeline
+
+    shot = {"index": 1, "duration_sec": 8.0,
+            "motion_desc": "0-3秒：甲起身；3-6秒：甲走近；6-8秒：甲停住。",
+            "keyframes": [{"t_sec": 1.0}, {"t_sec": 4.0}, {"t_sec": 6.5}]}
+    _rescale_shot_timeline(shot, 8.0, 5.0)
+    assert shot["duration_sec"] == 5.0
+    assert max(k["t_sec"] for k in shot["keyframes"]) <= 5.0
+    assert "3.75-5秒" in shot["motion_desc"]
+
 def test_shadowed_dialogue_map_requires_whole_body_equality():
     """阴影归并只认「本段 == 宿主句的台词本体」，不认任意子串（S03 验收）."""
     from step01_script_gen.plan_feasibility import shadowed_dialogue_map
