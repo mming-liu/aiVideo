@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -179,3 +180,24 @@ def test_step04_merge_produces_final_mp4(tmp_path, monkeypatch):
     srt = (ch / "subtitles.srt").read_text(encoding="utf-8")
     assert "00:00:" in srt and len(srt.strip().splitlines()) >= 4
     print("final:", out, "duration:", info["format"]["duration"], "tts:", made)
+
+    # WP6 交付：显式要求时才把样片与报告留在隔离目录（默认不留，保持用例自足）
+    keep = (os.getenv("WP6_DELIVERY_DIR") or "").strip()
+    if keep:
+        import hashlib
+        dst = Path(keep)
+        dst.mkdir(parents=True, exist_ok=True)
+        for name in ("final.mp4", "subtitles.srt"):
+            shutil.copy2(ch / name, dst / name)
+        report = {
+            "script_revision": rev,
+            "duration_sec": float(info["format"]["duration"]),
+            "expected_timeline_sec": 71.88,
+            "resolution": [WIDTH, HEIGHT],
+            "audio_streams": sorted(kinds),
+            "tts_shots": made,
+            "subtitles_file": "subtitles.srt",
+            "final_sha256": hashlib.sha256(out.read_bytes()).hexdigest(),
+        }
+        (dst / "wp6_report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
