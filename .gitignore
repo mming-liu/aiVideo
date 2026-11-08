@@ -224,6 +224,7 @@ tests/shared/*
 !tests/step02a_frame_gen/test_frame_replay_wp3.py
 !tests/step02b_video_gen/test_stub_clips_wp4.py
 !tests/step02b_video_gen/test_media_plan_wp4.py
+!tests/step02b_video_gen/test_step02b_report_wp5.py
 !tests/step04_merge/test_final_render_wp5.py
 !tests/integration/
 tests/integration/*
