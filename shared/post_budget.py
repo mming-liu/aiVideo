@@ -214,6 +214,19 @@ def usage(kind: str) -> dict:
     return data
 
 
+def clear_quota(kind: str) -> None:
+    """清除额度熔断标记但保留已用次数（账户限额调整后恢复用）."""
+    _QUOTA.pop(kind, None)
+    path, limit = _config(kind)
+    if path is None:
+        return
+    with _LOCK, _file_lock(path):
+        data = _read(path, kind, limit)
+        data.pop("quota_exhausted", None)
+        data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        _write(path, data)
+
+
 def reset(kind=None) -> None:
     """测试/人工重置：清内存标记并删除账本（含锁文件）."""
     kinds = [kind] if kind else list(_KINDS)
@@ -236,5 +249,5 @@ def is_quota_error(text) -> bool:
     return any(marker in lowered for marker in _QUOTA_ERROR_MARKERS)
 
 
-__all__ = ["PostBudgetExhausted", "acquire", "is_quota_error",
+__all__ = ["PostBudgetExhausted", "acquire", "clear_quota", "is_quota_error",
            "mark_quota_exhausted", "quota_exhausted", "reset", "usage"]

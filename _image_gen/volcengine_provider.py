@@ -310,15 +310,33 @@ class VolcengineImageService(ImageGenerationService):
                     break
                 return _finish(self._download(req, img_url, model_idx))
 
-            # ---- 429: 限速，等待后重试 ----
+            # ---- 429: 真正的限速才等待重试；SetLimitExceeded 是账户额度耗尽 ----
             if resp.status_code == 429:
+                from shared import post_budget
+                if post_budget.is_quota_error(resp.text):
+                    post_budget.mark_quota_exhausted("image", resp.text[:300])
+                    last_error = ("账户图片额度耗尽（429 SetLimitExceeded），"
+                                  "本批停止后续 POST: %s" % resp.text[:300])
+                    _verbose_write(f"  [镜头{req.shot_index}] [BUDGET] {last_error}")
+                    with _POST_LOCK:
+                        _ABORT[0] = last_error
+                    break
                 wait = compute_429_wait(resp.text, fallback_seconds=60.0 / 10, backoff_seconds=1.0)
                 _verbose_write(f"  [镜头{req.shot_index}] [!] 429 限速，等待 {wait:.0f}s 后重试...")
                 time.sleep(wait)
                 continue
 
-            # ---- 403: 额度耗尽/无权限，回退模型 ----
+            # ---- 403: 额度耗尽/无权限，回退模型；明确额度耗尽则整批熔断 ----
             if resp.status_code == 403:
+                from shared import post_budget
+                if post_budget.is_quota_error(resp.text):
+                    post_budget.mark_quota_exhausted("image", resp.text[:300])
+                    last_error = ("账户图片额度耗尽（403），"
+                                  "本批停止后续 POST: %s" % resp.text[:300])
+                    _verbose_write(f"  [镜头{req.shot_index}] [BUDGET] {last_error}")
+                    with _POST_LOCK:
+                        _ABORT[0] = last_error
+                    break
                 if model_idx + 1 < len(self._model_queue):
                     model_idx += 1
                     _verbose_write(f"  [镜头{req.shot_index}] [!] 模型 {model} 返回 403，"

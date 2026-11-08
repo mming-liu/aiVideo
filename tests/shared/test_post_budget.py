@@ -134,3 +134,16 @@ def test_changed_total_cannot_expand_existing_ledger(monkeypatch, tmp_path):
     data = json.loads(ledger.read_text(encoding="utf-8"))
     assert data["used"] == 1, "被拒的请求不得改写账本"
     assert data["limit"] == 5
+
+
+def test_clear_quota_keeps_used_and_reallows(monkeypatch, tmp_path):
+    ledger = _enable(monkeypatch, tmp_path, total=5)
+    post_budget.acquire("image")
+    post_budget.mark_quota_exhausted("image", "SetLimitExceeded")
+    assert post_budget.quota_exhausted("image")
+
+    post_budget.clear_quota("image")
+    assert post_budget.quota_exhausted("image") == ""
+    assert post_budget.acquire("image") == 2
+    data = json.loads(ledger.read_text(encoding="utf-8"))
+    assert data["used"] == 2, "clear_quota 不得重置已用次数"

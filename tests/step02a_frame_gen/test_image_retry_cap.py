@@ -362,3 +362,44 @@ def test_persistent_post_budget_survives_restart(monkeypatch, tmp_path):
     assert len(posts) == 2, "重启后仍发了新 POST：%d" % len(posts)
     assert "预算" in (second.error or "") or "额度" in (second.error or "")
     post_budget.reset("image")
+
+
+def test_quota_429_aborts_batch_and_blocks_future_posts(monkeypatch, tmp_path):
+    """账户额度耗尽（429 SetLimitExceeded）不是限速：必须熔断，不能反复 POST."""
+    from shared import post_budget
+
+    vp = _service(monkeypatch)
+    monkeypatch.setenv("STEP02A_IMAGE_BUDGET_TOTAL", "20")
+    monkeypatch.setenv("STEP02A_IMAGE_BUDGET_FILE", str(tmp_path / "img_budget.json"))
+    monkeypatch.delenv("VOLCENGINE_IMAGE_MAX_ATTEMPTS", raising=False)
+    monkeypatch.delenv("VOLCENGINE_IMAGE_MAX_POSTS", raising=False)
+    post_budget.reset("image")
+    from _image_gen.models import ImageGenerationRequest
+
+    posts: list = []
+
+    class _Quota:
+        status_code = 429
+        text = '{"error":{"code":"SetLimitExceeded","message":"quota"}}'
+
+    def _post(*a, **k):
+        posts.append(1)
+        return _Quota()
+
+    monkeypatch.setattr(vp.requests, "post", _post)
+    monkeypatch.setattr(vp, "_POSTS_USED", [0])
+    monkeypatch.setattr(vp, "_ABORT", [None])
+    req = ImageGenerationRequest(prompt="p", shot_index=2, size="1024x1024")
+
+    first = vp.VolcengineImageService().generate(req)
+    assert first.success is False
+    assert len(posts) == 1, "额度耗尽后仍在重试：%d 次" % len(posts)
+    assert post_budget.quota_exhausted("image")
+    assert "额度耗尽" in (first.error or "")
+
+    monkeypatch.setattr(vp, "_POSTS_USED", [0])
+    monkeypatch.setattr(vp, "_ABORT", [None])
+    second = vp.VolcengineImageService().generate(req)
+    assert second.success is False
+    assert len(posts) == 1, "熔断后仍发了新 POST：%d 次" % len(posts)
+    post_budget.reset("image")
