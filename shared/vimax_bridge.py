@@ -1255,6 +1255,22 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
         if is_fixed_camera(str(shot.get("camera_movement") or "")):
             key_parts.append("lf_camera=fixed_camera_only_v1")
 
+    # 多人同载的固定构图已移除；只使受影响首尾帧的旧缓存过期。
+    if frame_kind in ("first_frame", "last_frame"):
+        from collections import Counter
+        from shared.frame_spec import get_frame_spec, is_on_screen
+        support_ids = []
+        for item in get_frame_spec(shot, frame_kind):
+            if not is_on_screen(item):
+                continue
+            support = item.get("support")
+            sid = (support.get("id") if isinstance(support, dict)
+                   else item.get("support_id"))
+            if sid:
+                support_ids.append(str(sid))
+        if any(count >= 2 for count in Counter(support_ids).values()):
+            key_parts.append("support_prompt=relations_only_v1")
+
     key = "|".join(key_parts)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
@@ -3449,51 +3465,8 @@ def fix_lf_desc_gaze(lf_desc: str, shot: dict | None = None,
 
 def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
                               characters: list | None = None) -> str:
-    """构建实际生成图片的最终 prompt（供 QC 语义核对用）.
-
-    与 _gen_first_frame_async / _gen_last_frame_async 的组装链一致：
-    normalize(已在 shot["ff_desc"] 回写) → preprocess_prompt_for_image(青丝→黑发等)
-    → _inject_object_size_anchor → ensure_prefix + sanitize_prompt → add_image_strict_constraints。
-
-    缓存命中路径（QC 在 ff_desc_full 计算前调用）用此函数补算最终 prompt，
-    保证 QC 拿到的"画面描述"与图片模型实际收到的一致（code-audit 2026-08-08）。
-    """
-    try:
-        from shared.style_prefix import (
-            preprocess_prompt_for_image, sanitize_prompt, ensure_prefix,
-            add_image_strict_constraints,
-        )
-        text = preprocess_prompt_for_image(desc)
-        text = _inject_boat_composition_anchor(text, shot, frame_kind)
-        # v1.1：注入出镜角色服装特征（与 _gen_first_frame_async 生成链一致）
-        # 首帧过滤动作结果/武器词，保证 QC 与图片模型看到的 prompt 一致
-        text = _inject_frame_spec_and_closeup(text, shot, characters, frame_kind=frame_kind)
-        # v1.1：尾帧目光修复（与 _gen_last_frame_async 一致，QC 看到修复后 prompt）
-        if frame_kind == "last_frame":
-            text = fix_lf_desc_gaze(text, shot, characters)
-        text = _inject_object_size_anchor(shot, text)
-        text = _inject_tone_anchor(shot, text)
-        # 2026-09-04 W16/W17 兜底：钩子水面/夜泊类场景追加泳池禁词。
-        # Seedream 全档 supports_negative_prompt=False（shared/model_caps.py:53），
-        # 必须走 prompt 内文禁词。W17 step01 已在 [ENV-ANCHOR] 前缀注入过同类禁词，
-        # 哨兵存在则跳过避免重复叠加。
-        if shot.get("is_hook") is True and "[ENV-ANCHOR]" not in text:
-            import re as _re_hook
-            if _re_hook.search(
-                r"水|夜泊|泊|月色|月|夜|河|湖|湾|渡|舟|舴艋|船", text
-            ):
-                text += (
-                    " Strictly no swimming pool, no indoor pool, no ceramic tile, "
-                    "no white tile surface, no bathtub, no modern architecture."
-                )
-        text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas(frame_canvas_ratio(), orient=True)), verbose=False)
-        text = add_image_strict_constraints(text, "首帧" if frame_kind == "first_frame" else "尾帧", shot=shot, characters=characters)
-        # v6.50：多模板拼接点的双句号归一化（防御性兜底，矛盾门此前会拦）
-        while "。。" in text:
-            text = text.replace("。。", "。")
-        return text
-    except Exception:
-        return desc
+    """QC 与生成、预检使用同一提示组装入口，包括逐帧承载关系。"""
+    return compose_frame_prompt(shot, characters, frame_kind, desc=desc)
 
 
 # ──────────────────── Doodle 区域编辑 (Seedream 负向词替代品) ────────────────────
@@ -3690,90 +3663,6 @@ def _fixed_camera_shift_anchor(desc: str) -> str:
     return ""
 
 
-def _inject_boat_composition_anchor(text: str, shot: dict,
-                                    frame_kind: str) -> str:
-    """多人同船：在画面描述开头注入微俯视斜侧构图与船体相对站位.
-
-    只消费显式 support 合同：同一 support.id 上 >=2 个 on_screen 角色，且
-    kind 明确为船/舟/艇。没有显式 support 时不猜，避免把普通镜头误改成船景。
-    """
-    if not text or "【画面构图】" in text:
-        return text
-    try:
-        from shared.frame_spec import get_frame_spec, is_on_screen
-        spec = [s for s in get_frame_spec(shot, frame_kind)
-                if isinstance(s, dict) and is_on_screen(s)]
-    except Exception:
-        return text
-    groups: dict[str, list[dict]] = {}
-    for item in spec:
-        sup = item.get("support")
-        if isinstance(sup, dict):
-            sid = str(sup.get("id") or "").strip()
-            kind = str(sup.get("kind") or "").strip()
-        else:
-            sid = str(item.get("support_id") or "").strip()
-            kind = str(item.get("support_kind") or "").strip()
-        if not sid or not kind:
-            continue
-        groups.setdefault(sid, []).append(item)
-    group = next((v for v in groups.values() if len(v) >= 2), None)
-    if not group:
-        return text
-
-    def _surface(item):
-        sup = item.get("support")
-        if isinstance(sup, dict):
-            return str(sup.get("surface") or "").strip() or "甲板"
-        return str(item.get("support_surface") or "").strip() or "甲板"
-
-    def _pose_parts(item):
-        raw = str(item.get("pose") or "").strip() or "站立"
-        # 姿态里常含“于船板中央”等绝对落点；这里只取动作本身，避免
-        # “盘膝坐于船板中央……于该船甲板左侧”这种双“于”病句。
-        import re as _re
-        head = _re.split(r"[，,]|于", raw)[0].strip("，, ") or "站立"
-        props = [str(p).strip() for p in (item.get("props") or []) if str(p).strip()]
-        prop_txt = ""
-        if props and "持" in raw and not any(p in raw for p in props):
-            prop_txt = "，持" + "、".join(props)
-        return head, prop_txt
-
-    # 前舱者放左、其余放右；没有“前”标记时按 spec 顺序。
-    group = sorted(group, key=lambda x: 0 if "前" in _surface(x) else 1)
-    left, right = group[0], group[1]
-    left_name = str(left.get("name") or "").strip()
-    right_name = str(right.get("name") or "").strip()
-    left_head, left_prop = _pose_parts(left)
-    right_head, right_prop = _pose_parts(right)
-    people = "两人" if len(group) == 2 else f"{len(group)}人"
-    kind = str((group[0].get("support") or {}).get("kind")
-               if isinstance(group[0].get("support"), dict)
-               else group[0].get("support_kind") or "").strip()
-    if any(w in kind for w in ("船", "舟", "艇")):
-        anchor = (
-            "【画面构图】微俯视斜侧视角，单艘宽体敞口木船斜向横贯画面中下部"
-            "（船身由画左下向画右延伸，船体横向占画面宽度80%以上）。"
-            f"前舱与中舱木甲板平整宽阔，{people}同在船体内。"
-            f"【船内站位】{left_name}{left_head}于该船{_surface(left)}左侧{left_prop}；"
-            f"{right_name}{right_head}于该船{_surface(right)}右侧{right_prop}。"
-            f"{right_name}双脚及裙摆完全踩在木甲板内侧，"
-            f"木船右侧木船舷清晰包裹在{right_name}身体右外侧，"
-            f"严禁{right_name}踩在船外荷叶或水面中。"
-        )
-        return anchor + text
-    # 非船载体：同一 support 上多人时，用载体自身类名生成同载构图，
-    # 不再套用木船措辞（2026-11-08 复核：原先只认船/舟/艇，其它载具被静默跳过）。
-    label = kind
-    anchor = (
-        f"【画面构图】中景，{label}完整出现在画面中，{people}同处{label}范围内。"
-        f"【同载站位】{left_name}{left_head}于{label}{_surface(left)}左侧{left_prop}；"
-        f"{right_name}{right_head}于{label}{_surface(right)}右侧{right_prop}。"
-        f"{right_name}身体与{label}保持接触，不得悬空或落到{label}之外。"
-    )
-    return anchor + text
-
-
 def _dedupe_prompt_clauses(text: str) -> str:
     """去掉**完全重复**的分句（同一句被多个注入器追加时只留第一处）.
 
@@ -3808,7 +3697,6 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
     if frame_kind == "first_frame":
         base = desc if desc is not None else (shot.get("ff_desc") or shot.get("prompt") or "")
         text = preprocess_prompt_for_image(base)
-        text = _inject_boat_composition_anchor(text, shot, "first_frame")
         text = _inject_frame_spec_and_closeup(text, shot, chars, frame_kind="first_frame")
         text = _inject_object_size_anchor(shot, text)
         text = _inject_tone_anchor(shot, text)
@@ -3828,7 +3716,6 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
     if frame_kind == "last_frame":
         base = desc if desc is not None else (shot.get("lf_desc") or shot.get("prompt") or "")
         text = preprocess_prompt_for_image(base)
-        text = _inject_boat_composition_anchor(text, shot, "last_frame")
         text = _inject_frame_spec_and_closeup(text, shot, chars, frame_kind="last_frame")
         text = fix_lf_desc_gaze(text, shot, chars)
         text = _inject_object_size_anchor(shot, text)

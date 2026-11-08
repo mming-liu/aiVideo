@@ -215,28 +215,43 @@ def _support_shot(kind, people=("甲", "乙"), sid="s1"):
                 for n in people]}}
 
 
-def test_support_anchor_generic_kind():
-    from shared.vimax_bridge import _inject_boat_composition_anchor
-    out = _inject_boat_composition_anchor("原文", _support_shot("马车"), "first_frame")
-    assert out.startswith("【画面构图】")
-    assert "马车" in out and "甲" in out and "乙" in out
-    assert "木船" not in out          # 非船载体不得套用船体措辞
+@pytest.mark.parametrize("kind", ["窄身舴艋舟", "有篷马车"])
+@pytest.mark.parametrize("frame_kind,layout_key", [("first_frame", "ff"), ("last_frame", "lf")])
+def test_composed_prompt_preserves_camera_and_support(kind, frame_kind, layout_key):
+    from shared.vimax_bridge import compose_frame_prompt
+    shot = _support_shot(kind, people=("甲", "乙", "丙"))
+    layout = shot["frame_layouts"]["ff"]
+    for item, position in zip(layout, ["画右", "画左", "后方"]):
+        item["position"] = position
+    shot["frame_layouts"][layout_key] = layout
+    shot["camera_movement"] = "固定机位"
+    desc = "平视近景，甲在画右，乙在画左，丙在后方。"
+    shot["ff_desc"] = shot["lf_desc"] = "甲与乙同乘，丙在后方。"
+    out = compose_frame_prompt(shot, [{"identifier": n} for n in ("甲", "乙", "丙")],
+                               frame_kind, desc=desc)
+    assert desc in out
+    for name in ("甲", "乙", "丙"):
+        assert f"{name}位于同一{kind}的中段" in out
+    assert "不落入承载面外侧" in out
+    for invented in ("微俯视", "80%", "宽体敞口", "完整出现在画面", "【船内站位】"):
+        assert invented not in out
+    if frame_kind == "last_frame":
+        assert "机位固定" in out
 
 
-def test_support_anchor_keeps_boat_wording():
-    from shared.vimax_bridge import _inject_boat_composition_anchor
-    out = _inject_boat_composition_anchor("原文", _support_shot("窄身舴艋舟"), "first_frame")
-    assert "【船内站位】" in out and "木船" in out
-
-
-def test_support_anchor_needs_two_people_on_same_support():
-    from shared.vimax_bridge import _inject_boat_composition_anchor
-    one = _support_shot("马车", people=("甲",))
-    assert _inject_boat_composition_anchor("原文", one, "first_frame") == "原文"
-    two = {"ff_desc": "x", "lf_desc": "x", "frame_layouts": {"ff": [
-        {"name": "甲", "on_screen": True, "support": {"id": "a", "kind": "马车"}},
-        {"name": "乙", "on_screen": True, "support": {"id": "b", "kind": "马车"}}]}}
-    assert _inject_boat_composition_anchor("原文", two, "first_frame") == "原文"
+def test_composed_prompt_preserves_distinct_supports_and_absence():
+    from shared.vimax_bridge import compose_frame_prompt
+    shot = _support_shot("小艇", people=("甲", "乙", "丙"))
+    layout = shot["frame_layouts"]["ff"]
+    layout[1]["support"] = {"id": "shore", "kind": "石岸", "surface": "台阶"}
+    layout[2]["on_screen"] = False
+    shot["ff_desc"] = shot["lf_desc"] = "甲与乙同乘，丙在后方。"
+    out = compose_frame_prompt(shot, [{"identifier": n} for n in ("甲", "乙", "丙")],
+                               "first_frame", desc="甲坐在艇内，乙站在岸上。")
+    assert "甲位于小艇的中段" in out
+    assert "乙位于石岸的台阶" in out
+    assert "丙位于" not in out
+    assert "同一小艇" not in out
 
 
 # ── 媒体过期按镜判定（2026-11-08 WP2-5）─────────────────────────────
@@ -433,3 +448,35 @@ def test_qc_extra_person_category_in_whitelist():
     from shared.image_qc import _map_category, _VALID_CATEGORIES
     assert "extra_person" in _VALID_CATEGORIES
     assert _map_category("extra_person") == "extra_person"
+
+@pytest.mark.parametrize("frame_kind", ["first_frame", "last_frame"])
+def test_qc_prompt_uses_generation_composer(frame_kind):
+    from copy import deepcopy
+    from shared.vimax_bridge import _build_final_frame_prompt, compose_frame_prompt
+    shot = _support_shot("有篷渡船")
+    shot["frame_layouts"]["lf"] = deepcopy(shot["frame_layouts"]["ff"])
+    shot["ff_desc"] = shot["lf_desc"] = "甲坐在左侧，乙站在右侧。"
+    chars = [{"identifier": "甲"}, {"identifier": "乙"}]
+    desc = "平视近景，甲坐在左侧，乙站在右侧。"
+    assert _build_final_frame_prompt(deepcopy(shot), desc, frame_kind, chars) == compose_frame_prompt(
+        deepcopy(shot), chars, frame_kind, desc=desc)
+
+@pytest.mark.parametrize("frame_kind,key", [("first_frame", "ff"), ("last_frame", "lf")])
+@pytest.mark.parametrize("shared_support", [True, False])
+def test_support_prompt_policy_scopes_cache_version(monkeypatch, frame_kind, key, shared_support):
+    from copy import deepcopy
+    import shared.vimax_bridge as bridge
+    shot = _support_shot("窄身小艇")
+    shot["frame_layouts"][key] = deepcopy(shot["frame_layouts"]["ff"])
+    if not shared_support:
+        shot["frame_layouts"][key][1]["support"]["id"] = "another"
+    original_sha256 = bridge.hashlib.sha256
+    inputs = []
+
+    def capture(data=b""):
+        inputs.append(data)
+        return original_sha256(data)
+
+    monkeypatch.setattr(bridge.hashlib, "sha256", capture)
+    bridge._get_frame_content_hash(shot, frame_kind=frame_kind)
+    assert (b"support_prompt=relations_only_v1" in inputs[-1]) is shared_support

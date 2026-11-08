@@ -300,18 +300,15 @@ def test_scenario1_prompts_and_multi_character_refs(script, portrait_bank):
                 if sid and kind:
                     groups.setdefault((sid, kind), []).append(item)
 
-            expect_anchor = any(len(v) >= 2 for v in groups.values())
-            assert ("【画面构图】" in prompt) is expect_anchor, (
-                "shot %s %s 同载构图锚与 support 合同不一致: %r"
-                % (shot["index"], frame_kind, list(groups)))
-            boat_group = next(
-                (v for (sid, kind), v in groups.items()
-                 if len(v) >= 2 and any(w in kind for w in ("船", "舟", "艇"))),
-                None)
-            if boat_group:
-                assert "【船内站位】" in prompt
-                for item in boat_group[:2]:
-                    assert str(item.get("name")) in prompt
+            assert "微俯视斜侧视角" not in prompt
+            assert "船体横向占画面宽度80%以上" not in prompt
+            for (_sid, kind), group in groups.items():
+                if len(group) < 2:
+                    continue
+                assert "承载关系" in prompt
+                assert "不落入承载面外侧" in prompt
+                for item in group:
+                    assert f"{item['name']}位于同一{kind}" in prompt
 
     assert checked == EXPECTED_SHOTS * 2, "首尾帧 prompt 数不是 26: %d" % checked
 
@@ -331,10 +328,11 @@ def test_scenario1_prompts_and_multi_character_refs(script, portrait_bank):
     assert "【画面构图】" not in compose_frame_prompt(empty, characters, "first_frame")
     assert _select_all_character_refs(empty, bank, characters, limit=2) == []
 
-    # 同船两人（shot 2）：构图锚 + 两张在场角色肖像
+    # 同船两人（shot 2）：承载关系 + 两张在场角色肖像（不再注入固定构图）
     two_person = _shot(script, 2)
     prompt2 = compose_frame_prompt(two_person, characters, "first_frame")
-    assert "【画面构图】" in prompt2 and "【船内站位】" in prompt2
+    assert "承载关系" in prompt2 and "不落入承载面外侧" in prompt2
+    assert "【画面构图】" not in prompt2 and "【船内站位】" not in prompt2
     refs2 = _select_all_character_refs(two_person, bank, characters, limit=2)
     assert len(refs2) == 2
     names2 = {str(item.get("name")) for item in get_frame_spec(two_person, "first_frame")
