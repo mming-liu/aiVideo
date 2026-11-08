@@ -225,6 +225,7 @@ tests/shared/*
 !tests/step02b_video_gen/test_stub_clips_wp4.py
 !tests/step02b_video_gen/test_media_plan_wp4.py
 !tests/step02b_video_gen/test_step02b_report_wp5.py
+!tests/step02b_video_gen/test_prompt_contract_wp4.py
 !tests/integration/
 tests/integration/*
 !tests/integration/test_chain5_artifact_protection.py
