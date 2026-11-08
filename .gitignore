@@ -297,6 +297,9 @@ tests/step02a_frame_gen/*
 # 后写的 `tests/step02a_frame_gen/*` 又把它盖掉——这次连文件一起提交。
 !tests/step02a_frame_gen/test_frame_replay_wp3.py
 !tests/step02a_frame_gen/test_wp3_58c1b6bd_doodle_and_qc.py
+# 2026-11-08 裁决：全量跑实际执行的两份用例一并入库，消除「本机多跑、干净检出少跑」。
+!tests/step02a_frame_gen/test_dump_safety.py
+!tests/step02a_frame_gen/test_gen_all_frames_parallel.py
 !tests/step04_merge/
 tests/step04_merge/*
 !tests/step04_merge/test_step04_shots_subset.py

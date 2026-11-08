@@ -465,3 +465,9 @@ def test_scenario4_failed_doodle_falls_back_to_retry(monkeypatch, tmp_path, scri
     assert sidecar["has_hallucination"] is False
     assert (shot_dir / "frame_hash.txt").exists()
     assert not list(shot_dir.glob("*.bak"))
+
+    # 未被采纳的二修候选不得留在镜目录：图/侧车/红框标注都清掉，只留复检日志
+    assert not (shot_dir / "first_frame_repair.png").exists()
+    assert not (shot_dir / "first_frame_repair_hallucination.json").exists()
+    assert not (shot_dir / "first_frame_doodle.png").exists()
+    assert (shot_dir / "first_frame_repair_qc_log.json").exists()

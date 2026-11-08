@@ -1084,6 +1084,23 @@ def _no_auto_repair() -> bool:
         return True
 
 
+def _cleanup_doodle_candidate(frame_path, tmp) -> None:
+    """二修未被采纳时清理候选产物，只保留 `*_repair_qc_log.json` 审计留痕.
+
+    失败候选图与 `<stem>_repair_hallucination.json` 没有消费者；留在镜目录里会让
+    人工排查把「被拒的图」当成可用帧。红框标注图同理，一并删除。
+    """
+    from shared.image_qc import sidecar_path
+
+    base = Path(frame_path)
+    for path in (Path(tmp), sidecar_path(Path(tmp)),
+                 base.parent / f"{base.stem}_doodle.png"):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as e:
+            _bridge_log(f"  [REPAIR] 候选清理失败 {path}: {e}")
+
+
 async def _try_qc_repair(image_adapter, shot: dict, frame_path: str, frame_kind: str,
                          characters: list | None, empty_scene: bool, idx, kf_index: int | None = None) -> bool:
     """QC critical 后先试局部修复（v6.54.1 先修后抽）.
@@ -1110,6 +1127,7 @@ async def _try_qc_repair(image_adapter, shot: dict, frame_path: str, frame_kind:
     edited = await _doodle_refine_first_frame(
         image_adapter, frame_path, plan["bbox_ratio"], plan["edit_prompt"], str(tmp), idx)
     if not edited or not _validate_frame(edited):
+        _cleanup_doodle_candidate(frame_path, tmp)
         _bridge_log("  [REPAIR] 编辑失败/输出无效，回落重抽")
         return False
     # P0-6：任何二修覆盖原图前都必须复检（含「不得保留红框」断言）；
@@ -1118,6 +1136,7 @@ async def _try_qc_repair(image_adapter, shot: dict, frame_path: str, frame_kind:
                                        empty_scene, prompt=None, kf_index=kf_index):
         _bridge_log("  [REPAIR] 修复后复检通过")
         return True
+    _cleanup_doodle_candidate(frame_path, tmp)
     _bridge_log("  [REPAIR] 修复后复检未通过/未执行，回落重抽")
     return False
 
