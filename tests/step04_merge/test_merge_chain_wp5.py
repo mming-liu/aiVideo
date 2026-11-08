@@ -127,11 +127,13 @@ def test_step04_merge_produces_final_mp4(tmp_path, monkeypatch):
     from shared.dialogue import strip_speaker_prefix
     from step01_script_gen.plan_feasibility import (
         shot_needs_dialogue_track, shot_voice_parts)
-    made = []
+    # 只给**真正需要对白轨**的镜头写对白轨；其余声音走旁白 N1..N4
+    plan = script.get("chapter_outline")
+    dialogue_shots = []
     for shot in script["shots"]:
-        if not shot_needs_dialogue_track(shot, None):
+        if not shot_needs_dialogue_track(shot, plan):
             continue
-        split = shot_voice_parts(shot, None)
+        split = shot_voice_parts(shot, plan)
         text = (split["dialogue"].strip() if split["entries"]
                 else strip_speaker_prefix(
                     str(shot.get("narration_segment", "")).strip(),
@@ -142,19 +144,21 @@ def test_step04_merge_produces_final_mp4(tmp_path, monkeypatch):
         # 消费侧要求 >10240 字节，64kbps 下约需 1.3s；取 2.0s 且不超过本镜可用时长
         _tts(audio, min(2.0, max(1.5, float(shot["duration_sec"]) - 0.5)))
         _voice(audio, text, "stub-voice")
-        made.append(shot["index"])
-    assert made, "没有任何镜头被判需要对白轨"
+        dialogue_shots.append(shot["index"])
+    assert dialogue_shots == [12], "正式稿只有 shot 12 有对白轨: %s" % dialogue_shots
 
     # 旁白轨：N1..N4（消费侧单独按 N 编号取，不走 shot 索引）
     from step01_script_gen.plan_feasibility import voice_units
     from tts.voice_registry import NARRATOR_VOICE
-    units = voice_units(script.get("chapter_outline"), script) or []
+    units = voice_units(plan, script) or []
+    narration_ids = []
     assert units, "正式稿没有任何旁白单元"
     for unit in units:
         n = int(unit["index"])
         audio = paths.narration_audio_file(n)
         _tts(audio, 2.5)
         _voice(audio, str(unit["text"]), str(NARRATOR_VOICE.get("id", "")))
+        narration_ids.append(n)
 
     # 4) 真实合并入口
     import step04_merge.main as m
@@ -179,7 +183,8 @@ def test_step04_merge_produces_final_mp4(tmp_path, monkeypatch):
     assert (int(video["width"]), int(video["height"])) == (WIDTH, HEIGHT)
     srt = (ch / "subtitles.srt").read_text(encoding="utf-8")
     assert "00:00:" in srt and len(srt.strip().splitlines()) >= 4
-    print("final:", out, "duration:", info["format"]["duration"], "tts:", made)
+    print("final:", out, "duration:", info["format"]["duration"],
+          "dialogue_shots:", dialogue_shots, "narration_N:", sorted(set(narration_ids)))
 
     # WP6 交付：显式要求时才把样片与报告留在隔离目录（默认不留，保持用例自足）
     keep = (os.getenv("WP6_DELIVERY_DIR") or "").strip()
@@ -195,7 +200,8 @@ def test_step04_merge_produces_final_mp4(tmp_path, monkeypatch):
             "expected_timeline_sec": 71.88,
             "resolution": [WIDTH, HEIGHT],
             "audio_streams": sorted(kinds),
-            "tts_shots": made,
+            "dialogue_shots": dialogue_shots,
+            "narration_units": sorted(set(narration_ids)),
             "subtitles_file": "subtitles.srt",
             "final_sha256": hashlib.sha256(out.read_bytes()).hexdigest(),
         }

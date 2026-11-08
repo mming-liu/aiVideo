@@ -121,3 +121,24 @@
       但还没有独立断言把「合并读取路径 = step02b 写出路径」钉死。
 - [ ] **WP6 归档**：本文件与 problems.md 的条目已补，交付样片目录与成本/返工账待补。
 - [ ] **WP7–WP12**：未启动；Step02b 每次付费调用需人工确认（`CLAUDE.md` 暂停条件 3）。
+### WP6 交付样片（2026-11-08）
+- 位置：`.probe_payload/wp6_delivery/`（`final.mp4` / `subtitles.srt` / `wp6_report.json`，不入库）
+- 读数：时长 **71.875s**（时间线预期 71.88s）、1440×2560、视频+音频、5 个对白轨镜头 `[2,3,4,8,12]`
+- `final_sha256 = a27c79313daeee6dba45e4350b8f1668ff80abbeadb79b0c30a8084a8cb70868`
+- 素材性质：**桩素材（纯色+噪声）、零模型调用、真实 FFmpeg 合成**；不代表真实画面质量
+- 复现命令：`$env:WP6_DELIVERY_DIR="<dir>"; python -m pytest tests/step04_merge/test_merge_chain_wp5.py -q -p no:cacheprovider`
+### 更正：对白轨与旁白轨的分类（2026-11-08 复核）
+
+上一轮报告把 2/3/4/8/12 笼统写成对白轨镜头，不准确。按 voice_units、逐镜声音分流
+与侧车逐条核对后：shot 12 才是对白轨（shot_needs_dialogue_track=True，含 .voice 侧车）；
+2/3/4/8 是纯旁白镜，声音由图外旁白 N1..N4 承担，合并侧会告警并忽略多余的对白轨文件；
+其余 8 镜无发声。上一轮为 2/3/4/8 写的 shot_N.mp3 属于多余产物。
+
+### 零模型调用的证据范围（限定表述）
+
+成立范围：tests/step04_merge 的验收运行。用例开场把 requests.post/get 与
+Session.request 替换为抛错实现，覆盖导入期、缓存缺失与审计路径；这些运行未发出请求。
+不成立范围：2026-11-08 上午探测隔离章节 step01 提交链时，直接调用
+_commit_step01_outputs，实际发出 2 次 agent_plan 审计请求（14112 / 14183 字节，
+sha256=cb21c338… / 175f816d…），两次均 BLOCK、未替换正式产物。
+因此零调用只适用于网络阻断后的验收运行，不覆盖上述 2 次探测。
