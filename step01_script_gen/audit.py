@@ -273,6 +273,8 @@ _AUDIT_RULES_TEMPLATE = """# 审查规则
 合规替换（不算缺陷）：
 - 台词字段 `narration_segment` / `subtitle` 与原文的差异若属于既定合规映射（`杀人→出人命`、`击杀→制服`、`刺客→神秘人` 等，见 `shared/content_safety.NARRATION_SUBSTITUTIONS` / `SENSITIVE_SUBSTITUTIONS`）则不判为错词/改词/漏词；
 - 以 `出人命` 等合规词判错词前，先确认原文该句是否含对应被替换词（如原文含 `杀人` 则 `出人命` 为合规产物）。
+- `narration_segment` / `subtitle` 已由 `# 故事规划` 逐字锁定并由前置确定性门核验；跨相邻镜头分句衔接的旁白（如前镜「若非…」接本镜「也不会…」）以及原著句内标点属于合法逐字还原，**不得**判为截断、错词或要求改写句式。
+- 按规划属于无声画面的镜头（`narration_segment` 为空）**不得**要求在 `narration_segment` / `subtitle` 中补台词或旁白。若认为剧情威胁、因果或互动交代不足，必须把 `field_path` 与 `repair_targets` 指向可执行的画面字段（`motion_desc` / `ff_desc` / `lf_desc` / `prompt`），**不得**指向 `narration_segment` / `subtitle`。
 
 帧职责：
 - ff 只检查动作开始前准备态；

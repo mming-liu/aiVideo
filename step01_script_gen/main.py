@@ -2269,6 +2269,49 @@ def _audit_blocking_records(payload: "dict | None") -> list:
     ]
 
 
+def _audit_issue_allowed_fields(issue: dict) -> list[str]:
+    """审计条目声明的可执行目标字段（field_path + repair_targets 的并集）."""
+    out: list[str] = []
+    fp = str(issue.get("field_path") or "").strip()
+    if fp:
+        out.append(fp)
+    for target in issue.get("repair_targets") or []:
+        if isinstance(target, dict):
+            path = str(target.get("field_path") or "").strip()
+            if path:
+                out.append(path)
+    return out
+
+
+def _downgrade_locked_only_audit_issues(audit: "dict | None", *,
+                                        contracts_ok: bool) -> int:
+    """把仅指向已过契约门的锁定字段的 blocking 审计项降为 warning.
+
+    前置台词完整性门与事件履约契约门已通过时，`narration_segment` / `subtitle`
+    等轮级锁定字段不可能再被修复轮修改（P1-2 的 `_split_executable_allowed`）。
+    若审计仍把它列为 blocking 且没有任何可执行画面/结构字段，保留 blocking 会
+    形成「改则破前置门、不改则 0 轮修复必 BLOCK」的三向死锁。此处只降级这类
+    **零可执行目标**条目；仍有可执行字段的条目原样保留 blocking。
+    """
+    if not contracts_ok or not isinstance(audit, dict):
+        return 0
+    changed = 0
+    for issue in audit.get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        if str(issue.get("severity") or "").strip() not in ("hard", "visual_risk", "blocking"):
+            continue
+        executable, locked = _split_executable_allowed(_audit_issue_allowed_fields(issue))
+        if locked and not executable:
+            issue["severity"] = "warning"
+            issue["_downgraded_locked_only"] = True
+            changed += 1
+            _logger.warn(
+                "[COMMIT] 审计项 %s@shot%s 仅指向已过契约门的锁定字段 %s，降级为 warning"
+                % (issue.get("code"), issue.get("shot_id"), ",".join(locked)))
+    return changed
+
+
 #: 单条审计问题的成对目标**最多覆盖的镜头数** = 联动组上限（`_REPAIR_MAX_SHOTS_PER_GROUP`）。
 #: 定义在这里而不是从 audit.py 反向 import：本文件是消费方，且审计侧只负责**声明**，
 #: 上限属于修复侧的容量契约。两侧同值由 `test_audit_oversize_target_split.py` 锁定。
@@ -3279,6 +3322,9 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
     # BLOCK 原因记 `dialogue_truncated`（与 locked_changed/零改善区分，决策点 2 口径：
     # 这是生成稿完整性问题，不触发计划重选语义）。
     _dlg_skip_audit = False
+    # 台词/事件两道契约门都通过后，才能把「仅指向锁定字段」的审计项降级；
+    # 否则仍按 blocking 交回上游，避免掩盖真实台词/契约破损。
+    _contracts_ok = True
     # v6.135：门只核「稿件 vs 本轮计划的选材台词」。**计划覆盖面（三审 P2-1 更正）**：
     # 生成/快照两入口的计划经 `check_plan_before_generation` 保证 dialogue_lines 非空；
     # **缓存入口的旧缓存可能没有 chapter_outline——此时门不启用（兼容取舍，显式记录），
@@ -3319,6 +3365,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         _console(f"  [COMMIT] 台词完整性硬门 BLOCK（{len(_dlg_broken)}/{_dlg_total} 句破损）")
         blocking = [{"code": summary["repair_outcome"], "severity": "blocking",
                      "message": summary["detail"]}]
+        _contracts_ok = False
         _dlg_skip_audit = True
     # v6.156（2026-09-30 复核第 5 组）：**事件履约契约同源复核**。拆分/修复/终稿都可能
     # 让「哪个镜头承载哪条节拍、说哪句台词」断开，而覆盖门与台词门**各自都能过**
@@ -3347,6 +3394,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             _console("  [COMMIT] 事件履约契约 BLOCK（节拍/台词/镜头关系断开）")
             blocking = [{"code": "event_contract_broken", "severity": "blocking",
                          "message": summary["detail"]}]
+            _contracts_ok = False
             _dlg_skip_audit = True
     # `audit_ok` 必须**显式**记录：只看 `audit` 是否为 None 是 fail-open ——
     # 审计「调用失败」时 payload 照样是 dict（status=request_failed），
@@ -3445,6 +3493,12 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             break
         audit_ok = True
         # blocking = 审计条目 ∪ 确定性质量门条目（两者都必须被修掉才算通过）
+        if _contracts_ok:
+            _downgraded = _downgrade_locked_only_audit_issues(audit, contracts_ok=True)
+            if _downgraded:
+                _logger.warn(
+                    "[COMMIT] 本轮 %d 条审计项仅指向已过契约门的锁定字段，已降级为 warning"
+                    % _downgraded)
         blocking = _audit_blocking_records(audit) + _q_blocking
         if not blocking:
             break
