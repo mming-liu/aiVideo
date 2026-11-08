@@ -160,7 +160,12 @@ async def gen_all_videos(script: dict, working_dir: Path, script_file_path: Path
             tasks.append(shot)
 
     polls = []
+    from shared import post_budget
     for shot in tasks:
+        if post_budget.quota_exhausted("video"):
+            logger.warn("  [BUDGET] 视频额度已耗尽/熔断：停止后续镜头提交；"
+                        "已提交任务继续轮询，额度恢复后可断点续跑剩余镜头")
+            break
         poll_task = await _process_one_shot_skip_frames(
             shot, shots_dir, video_adapter,
             script_mtime, script,

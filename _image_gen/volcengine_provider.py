@@ -195,6 +195,13 @@ class VolcengineImageService(ImageGenerationService):
                 if _max_posts and _POSTS_USED[0] >= _max_posts:
                     raise _PostLimit("达到批次 POST 上限 %d（VOLCENGINE_IMAGE_MAX_POSTS）"
                                      % _max_posts)
+                # 跨进程账本（STEP02A_IMAGE_BUDGET_TOTAL>0 时启用）：发送前原子扣减，
+                # 重启/分批续跑会接着已用次数；账本损坏 fail-closed。
+                from shared import post_budget
+                try:
+                    post_budget.acquire("image")
+                except post_budget.PostBudgetExhausted as exc:
+                    raise _PostLimit(str(exc)) from exc
                 _attempts += 1
                 _POSTS_USED[0] += 1
             return requests.post(f"{self._base_url}/images/generations",

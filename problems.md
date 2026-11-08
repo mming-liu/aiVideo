@@ -562,20 +562,24 @@
 - 合并读取片段：`<chapter>/vimax_working/shots/<idx>/video.mp4`。
 - 当前视频模型无原生声音合同 → `effective=tts_mix`；纯旁白镜不消费对白轨。
 - 对白/旁白轨均需 `>10240` 字节，且都要 `.voice` 侧车（`voice_id|正文指纹`）。
-### WP7-Prep 场景身份修正（2026-11-08，零调用）
+### WP7-Prep 场景身份与发送预算（2026-11-08，零调用）
 
-`_collect_scene_asset_refs` 原先按 bank 顺序取第一个 `scene_matches_location` 命中的场景：
-`照月湾荷湾` 与 `照月湾荷塘` 的 location 相同，两者都能用「照月湾」公共子串命中，
-bank 中荷湾在前 → 荷塘被静默遮蔽。
+场景参考原先按 bank 顺序取第一个模糊命中；同 location 的「照月湾荷湾/荷塘」导致荷塘被遮蔽。
+新增 `shared/scene_identity.py`：显式 `scene_asset_id`/`scene_id` 优先；否则按
+「精确相等 > 完整子串（按匹配串长度）> 最长公共子串（按公共长度）」取最优；
+同分判歧义并跳过选图，稳定排序只用于诊断。两个消费入口
+（`vimax_bridge._collect_scene_asset_refs`、`prompt_builder._collect_r2v_references`）均已接入。
+`tests/shared/test_scene_identity_match.py`（16 例）覆盖顺序置换、三层匹配、歧义、无命中、
+无关场景组、显式 id、非法词条、空输入与组装入口集成。
 
-修法：新增 `shared/scene_identity.py`，按「显式 `scene_asset_id`/`scene_id` → 完整相等的
-identifier/别名（对 shot.scene / shot.location）→ 唯一命中」解析；多项命中、仅共享地名、
-无命中均返回诊断并跳过选图，稳定排序只用于诊断。`shot["_scene_match"]` 暂存 reason/candidates。
-
-验收：`tests/shared/test_scene_identity_match.py`（11 例）覆盖 bank 顺序置换、唯一 identifier/别名、
-共享地名歧义、无命中、无关场景组、显式 id 优先/缺失、非法词条与空输入，以及参考图组装入口集成。
 零调用回放：场景命中 `照月湾荷塘:near` + `湾堤岸边:near`（2 个），FF/LF/KF 最终参考均 ≤3；
 消费并集为场景 2、道具 6、角色 3（张十三待补），B 的 16/81/172 与 3.52/17.82/37.84 元不变。
-
 未合并荷湾/荷塘：两者 near 陈设与光照不同，是否同一资产需叙事用途确认。
-遗留：step02b 的 r2v 参考链仍用旧模糊匹配。
+
+新增 `shared/post_budget.py`：threading 锁 + msvcrt/fcntl 文件锁的章节级 POST 账本
+（`STEP02A_IMAGE_BUDGET_TOTAL` / `STEP02B_VIDEO_BUDGET_TOTAL`，未设置=禁用）；发送前原子扣减、
+损坏 fail-closed、额度耗尽标记落盘并跨重启生效。图片 `_send` 与视频 `create_prepared_task` 已接入；
+视频 403 SetLimitExceeded 触发批次熔断：`_submit_over_queue` 不再换模型，`gen_all_videos` 停止后续
+镜头提交（已提交任务继续轮询，可断点续跑）。测试：`test_post_budget.py` 7 例、
+`test_image_retry_cap.py` 重启后续跑、`test_video_quota_breaker.py` 熔断后零 POST。
+

@@ -1574,23 +1574,23 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
     if loc:
         try:
             from shared.assets_bank import SceneAssetsBank
+            from shared.scene_identity import resolve_scene_identity
             sbank = SceneAssetsBank()
             sbank.load()
+            entries = {}
             for sid in sbank.get_all_identifiers():
-                if not sid:
-                    continue
-                scene = sbank.get_scene(sid) or {}
-                # 匹配源：场景名 + 场景 consistent_terms（别名）+ 场景 location。
-                # 模糊匹配：公共连续子串 ≥2 字即算同一地点
-                # （"照月湾小舟" vs "云河镇照月湾" → 共"照月湾"3字命中）。
-                # 单纯双向子串会漏（如"照月湾荷花丛中，一叶小舟上"不含完整场景名）。
-                match_sources = [sid] + list(scene.get("consistent_terms", []) or [])
-                if scene.get("location"):
-                    match_sources.append(scene["location"])
-                from shared.assets_bank import scene_matches_location
-                matched = any(scene_matches_location(src, loc) for src in match_sources if src)
-                if not matched:
-                    continue
+                if sid:
+                    entries[str(sid)] = sbank.get_scene(sid) or {}
+            # 2026-11-08：与 step02a 同源的特异性解析（显式 id > 精确 > 包含 > 公共子串；
+            # 同分判歧义，不按 bank 顺序取第一个）。
+            match = resolve_scene_identity(
+                entries,
+                explicit_id=shot.get("scene_asset_id") or shot.get("scene_id"),
+                scene_name=shot.get("scene"),
+                location=loc,
+            )
+            if match.ok:
+                sid = match.scene_id
                 wide = sbank.get_wide_image(sid)
                 near = sbank.get_near_image(sid)
                 if wide:
@@ -1599,9 +1599,12 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
                     scene_refs.append(near)
                 _log_r2v_collect(
                     f"  场景「{sid}」匹配(location='{loc[:30]}') → "
-                    f"{Path(wide or near).name}（匹配源: {[s for s in match_sources if s][:4]}）"
+                    f"{Path(wide or near).name}（{match.reason}）"
                 )
-                break
+            else:
+                _log_r2v_collect(
+                    "  场景参考跳过（%s）: %s"
+                    % (match.reason, "; ".join(match.diagnostics)))
         except Exception as e:
             _log_r2v_collect(f"  场景资产收集异常: {e}")
             scene_refs = []

@@ -634,6 +634,19 @@ class VolcengineVideoService(VideoGenerationService):
         payload.update(prepared.parameters or {})
         self._log_submit(prepared, payload)
 
+        # 跨进程账本 + 额度熔断：有账本时发送前原子扣减；熔断后重启也拒绝。
+        from shared import post_budget
+        quota = post_budget.quota_exhausted("video")
+        if quota:
+            raise VideoSubmissionError(
+                "quota_exhausted", "视频账户额度已熔断，拒绝继续提交: %s" % quota,
+                http_status=403)
+        try:
+            post_budget.acquire("video")
+        except post_budget.PostBudgetExhausted as exc:
+            raise VideoSubmissionError(
+                "budget_exhausted", str(exc), http_status=403) from exc
+
         try:
             resp = requests.post(
                 f"{self._base_url}/contents/generations/tasks",
@@ -648,6 +661,9 @@ class VolcengineVideoService(VideoGenerationService):
 
         _verbose_write(f"[DEBUG] video_submit response: status={resp.status_code}, "
                        f"body={resp.text[:500]}")
+        if resp.status_code == 403 and post_budget.is_quota_error(resp.text):
+            post_budget.mark_quota_exhausted("video", resp.text[:300])
+            _verbose_write("  [BUDGET] 上游 403 额度耗尽，已写入熔断标记；本批停止后续提交")
         task_id = classify_post_response(resp, provider="volcengine")
         _verbose_write(f"  [镜头{prepared.parameters.get('clip_index', '')}] "
                        f"任务已创建 [Seedance] -> task_id: {task_id}")
@@ -675,7 +691,12 @@ class VolcengineVideoService(VideoGenerationService):
         """旧生产路径：模型队列 + 403 回退。**每个模型都是一个新的 prepared 候选**
         （新 content_key），且每个 prepared 入口至多一个 POST（§V2 改动 6）。"""
         from shared.model_caps import get_seedance_cap
+        from shared import post_budget
         from .models import VideoSubmissionError
+
+        quota = post_budget.quota_exhausted("video")
+        if quota:
+            raise RuntimeError("视频额度已熔断，停止后续提交: %s" % quota)
 
         last_error = ""
         for model in queue:
@@ -688,6 +709,8 @@ class VolcengineVideoService(VideoGenerationService):
                 return self.create_prepared_task(prepared)
             except VideoSubmissionError as exc:
                 if exc.http_status == 403:
+                    if post_budget.quota_exhausted("video"):
+                        raise
                     _verbose_write(f"  [镜头{req.clip_index}] [!] 模型 {model} 返回 403，尝试下一个")
                     last_error = str(exc)
                     continue

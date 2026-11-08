@@ -320,3 +320,45 @@ def test_no_auto_repair_short_circuits(monkeypatch):
     out = asyncio.run(vb._try_qc_repair(_Adapter(), {}, "frame.png", "first_frame",
                                        [], False, 1))
     assert out is False
+
+
+def test_persistent_post_budget_survives_restart(monkeypatch, tmp_path):
+    """跨进程账本：重启后从已用次数继续，第二次 generate 不再发 POST."""
+    from shared import post_budget
+
+    vp = _service(monkeypatch)
+    monkeypatch.setenv("STEP02A_IMAGE_BUDGET_TOTAL", "2")
+    monkeypatch.setenv("STEP02A_IMAGE_BUDGET_FILE", str(tmp_path / "img_budget.json"))
+    monkeypatch.delenv("VOLCENGINE_IMAGE_MAX_ATTEMPTS", raising=False)
+    monkeypatch.delenv("VOLCENGINE_IMAGE_MAX_POSTS", raising=False)
+    post_budget.reset("image")
+    from _image_gen.models import ImageGenerationRequest
+
+    posts: list = []
+
+    class _Resp:
+        status_code = 500
+        text = "server error"
+
+    def _post(*a, **k):
+        posts.append(1)
+        return _Resp()
+
+    monkeypatch.setattr(vp.requests, "post", _post)
+    monkeypatch.setattr(vp.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(vp, "_POSTS_USED", [0])
+    monkeypatch.setattr(vp, "_ABORT", [None])
+    req = ImageGenerationRequest(prompt="p", shot_index=1, size="1024x1024")
+
+    first = vp.VolcengineImageService().generate(req)
+    assert first.success is False
+    assert len(posts) == 2, "账本应在第 2 次 POST 后拒绝：%d" % len(posts)
+
+    # 模拟重启：内存计数归零，但账本文件仍记录已用 2 次
+    monkeypatch.setattr(vp, "_POSTS_USED", [0])
+    monkeypatch.setattr(vp, "_ABORT", [None])
+    second = vp.VolcengineImageService().generate(req)
+    assert second.success is False
+    assert len(posts) == 2, "重启后仍发了新 POST：%d" % len(posts)
+    assert "预算" in (second.error or "") or "额度" in (second.error or "")
+    post_budget.reset("image")
