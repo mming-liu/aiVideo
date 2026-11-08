@@ -225,8 +225,6 @@ tests/shared/*
 !tests/step02b_video_gen/test_stub_clips_wp4.py
 !tests/step02b_video_gen/test_media_plan_wp4.py
 !tests/step02b_video_gen/test_step02b_report_wp5.py
-!tests/step04_merge/test_final_render_wp5.py
-!tests/step04_merge/test_merge_chain_wp5.py
 !tests/integration/
 tests/integration/*
 !tests/integration/test_chain5_artifact_protection.py
@@ -298,6 +296,8 @@ tests/step02a_frame_gen/*
 tests/step04_merge/*
 !tests/step04_merge/test_step04_shots_subset.py
 !tests/step04_merge/test_step04_shots_subset_e2e.py
+!tests/step04_merge/test_final_render_wp5.py
+!tests/step04_merge/test_merge_chain_wp5.py
 !tests/step03_tts_audio/
 tests/step03_tts_audio/*
 !tests/step03_tts_audio/test_narration_tts.py
