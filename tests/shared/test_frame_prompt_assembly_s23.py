@@ -119,7 +119,12 @@ def test_action_result_words_cover_shock_phrases():
 
 
 def test_fixed_camera_last_frame_hash_invalidates_only_last_frame():
-    """S23-3：固定机位尾帧策略只改尾帧哈希；首帧/非固定机位哈希不变."""
+    """S23-3：固定机位尾帧策略只改尾帧哈希；首帧哈希不受影响.
+
+    2026-11-08（WP2-5）：摘要现在只吃**本帧**用到的描述，首帧不再因为改了
+    尾帧描述而失效；因此这里改为直接比较"固定机位 vs 横移"的两种帧哈希，
+    不再拿 frame_kind 缺省的旧口径当基准。
+    """
     from shared.vimax_bridge import _get_frame_content_hash
 
     shot = {
@@ -129,15 +134,19 @@ def test_fixed_camera_last_frame_hash_invalidates_only_last_frame():
         "ff_desc": "甲在船头。",
         "lf_desc": "船行至开阔水面。",
     }
-    h_first = _get_frame_content_hash(shot, frame_kind="first_frame")
-    h_last = _get_frame_content_hash(shot, frame_kind="last_frame")
-    h_default = _get_frame_content_hash(shot)
-    assert h_first == h_default
-    assert h_last != h_default
-
     moving = {**shot, "camera_movement": "镜头横移"}
-    assert _get_frame_content_hash(moving, frame_kind="last_frame") \
-        == _get_frame_content_hash(moving)
+
+    # 固定机位策略只进尾帧摘要
+    assert (_get_frame_content_hash(shot, frame_kind="first_frame")
+            == _get_frame_content_hash(moving, frame_kind="first_frame"))
+    assert (_get_frame_content_hash(shot, frame_kind="last_frame")
+            != _get_frame_content_hash(moving, frame_kind="last_frame"))
+
+    # 首帧摘要不吃尾帧描述（改了尾帧不该废掉首帧）
+    assert (_get_frame_content_hash({**shot, "lf_desc": "另一段结尾"}, frame_kind="first_frame")
+            == _get_frame_content_hash(shot, frame_kind="first_frame"))
+    assert (_get_frame_content_hash({**shot, "lf_desc": "另一段结尾"}, frame_kind="last_frame")
+            != _get_frame_content_hash(shot, frame_kind="last_frame"))
 
 
 def test_char_anchor_deduplicates_pose_and_includes_unregistered_on_screen():

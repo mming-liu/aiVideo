@@ -1188,7 +1188,15 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
     key_parts.extend(stable_fields)
 
     # v4: 规范化后的实际图片 prompt 文本 — 分镜词变了图片就该重新生成
-    for field_name in ("ff_desc", "lf_desc", "motion_desc"):
+    # 2026-11-08（WP2-5）：只把**本帧**用到的描述纳入摘要，否则改尾帧会把首帧
+    # 一起判为过期（未受影响的媒体被误废）。frame_kind 缺省时保持旧口径。
+    if frame_kind == "first_frame":
+        _hash_fields = ("ff_desc", "motion_desc")
+    elif frame_kind == "last_frame":
+        _hash_fields = ("lf_desc", "motion_desc")
+    else:
+        _hash_fields = ("ff_desc", "lf_desc", "motion_desc")
+    for field_name in _hash_fields:
         val = shot.get(field_name, "")
         if val:
             key_parts.append(f"{field_name}={_normalize(val)}")
@@ -3674,7 +3682,7 @@ def _inject_boat_composition_anchor(text: str, shot: dict,
         else:
             sid = str(item.get("support_id") or "").strip()
             kind = str(item.get("support_kind") or "").strip()
-        if not sid or not any(w in kind for w in ("船", "舟", "艇")):
+        if not sid or not kind:
             continue
         groups.setdefault(sid, []).append(item)
     group = next((v for v in groups.values() if len(v) >= 2), None)
@@ -3707,15 +3715,29 @@ def _inject_boat_composition_anchor(text: str, shot: dict,
     left_head, left_prop = _pose_parts(left)
     right_head, right_prop = _pose_parts(right)
     people = "两人" if len(group) == 2 else f"{len(group)}人"
+    kind = str((group[0].get("support") or {}).get("kind")
+               if isinstance(group[0].get("support"), dict)
+               else group[0].get("support_kind") or "").strip()
+    if any(w in kind for w in ("船", "舟", "艇")):
+        anchor = (
+            "【画面构图】微俯视斜侧视角，单艘宽体敞口木船斜向横贯画面中下部"
+            "（船身由画左下向画右延伸，船体横向占画面宽度80%以上）。"
+            f"前舱与中舱木甲板平整宽阔，{people}同在船体内。"
+            f"【船内站位】{left_name}{left_head}于该船{_surface(left)}左侧{left_prop}；"
+            f"{right_name}{right_head}于该船{_surface(right)}右侧{right_prop}。"
+            f"{right_name}双脚及裙摆完全踩在木甲板内侧，"
+            f"木船右侧木船舷清晰包裹在{right_name}身体右外侧，"
+            f"严禁{right_name}踩在船外荷叶或水面中。"
+        )
+        return anchor + text
+    # 非船载体：同一 support 上多人时，用载体自身类名生成同载构图，
+    # 不再套用木船措辞（2026-11-08 复核：原先只认船/舟/艇，其它载具被静默跳过）。
+    label = kind
     anchor = (
-        "【画面构图】微俯视斜侧视角，单艘宽体敞口木船斜向横贯画面中下部"
-        "（船身由画左下向画右延伸，船体横向占画面宽度80%以上）。"
-        f"前舱与中舱木甲板平整宽阔，{people}同在船体内。"
-        f"【船内站位】{left_name}{left_head}于该船{_surface(left)}左侧{left_prop}；"
-        f"{right_name}{right_head}于该船{_surface(right)}右侧{right_prop}。"
-        f"{right_name}双脚及裙摆完全踩在木甲板内侧，"
-        f"木船右侧木船舷清晰包裹在{right_name}身体右外侧，"
-        f"严禁{right_name}踩在船外荷叶或水面中。"
+        f"【画面构图】中景，{label}完整出现在画面中，{people}同处{label}范围内。"
+        f"【同载站位】{left_name}{left_head}于{label}{_surface(left)}左侧{left_prop}；"
+        f"{right_name}{right_head}于{label}{_surface(right)}右侧{right_prop}。"
+        f"{right_name}身体与{label}保持接触，不得悬空或落到{label}之外。"
     )
     return anchor + text
 

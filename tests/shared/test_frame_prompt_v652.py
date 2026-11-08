@@ -205,6 +205,76 @@ def test_roster_matches_alias_names():
     assert "总共1人" in lf, lf[-200:]
 
 
+# ── 载体构图锚（2026-11-08：由 support.kind 驱动，不再只认船）──────
+def _support_shot(kind, people=("甲", "乙"), sid="s1"):
+    return {"ff_desc": "同乘", "lf_desc": "同乘",
+            "frame_layouts": {"ff": [
+                {"name": n, "on_screen": True,
+                 "support": {"id": sid, "kind": kind, "surface": "中段"},
+                 "pose": "坐着"}
+                for n in people]}}
+
+
+def test_support_anchor_generic_kind():
+    from shared.vimax_bridge import _inject_boat_composition_anchor
+    out = _inject_boat_composition_anchor("原文", _support_shot("马车"), "first_frame")
+    assert out.startswith("【画面构图】")
+    assert "马车" in out and "甲" in out and "乙" in out
+    assert "木船" not in out          # 非船载体不得套用船体措辞
+
+
+def test_support_anchor_keeps_boat_wording():
+    from shared.vimax_bridge import _inject_boat_composition_anchor
+    out = _inject_boat_composition_anchor("原文", _support_shot("窄身舴艋舟"), "first_frame")
+    assert "【船内站位】" in out and "木船" in out
+
+
+def test_support_anchor_needs_two_people_on_same_support():
+    from shared.vimax_bridge import _inject_boat_composition_anchor
+    one = _support_shot("马车", people=("甲",))
+    assert _inject_boat_composition_anchor("原文", one, "first_frame") == "原文"
+    two = {"ff_desc": "x", "lf_desc": "x", "frame_layouts": {"ff": [
+        {"name": "甲", "on_screen": True, "support": {"id": "a", "kind": "马车"}},
+        {"name": "乙", "on_screen": True, "support": {"id": "b", "kind": "马车"}}]}}
+    assert _inject_boat_composition_anchor("原文", two, "first_frame") == "原文"
+
+
+# ── 媒体过期按镜判定（2026-11-08 WP2-5）─────────────────────────────
+def test_frame_content_hash_is_per_shot_and_change_sensitive():
+    from shared.vimax_bridge import _get_frame_content_hash
+    chars = [{"identifier": "甲"}, {"identifier": "乙"}]
+    a = {"index": 1, "ff_desc": "甲站在船头", "lf_desc": "甲坐下"}
+    b = {"index": 2, "ff_desc": "乙在岸上", "lf_desc": "乙离开"}
+
+    def h(shot, kind="first_frame"):
+        return _get_frame_content_hash(shot, characters=chars, frame_kind=kind)
+
+    # 内容不变 ⇒ 同摘要 ⇒ 旧帧可复用
+    assert h(a) == h(dict(a))
+    # 只有 a 的 ff_desc 变了 ⇒ 只有 a 失效
+    changed = dict(a, ff_desc="甲跌入水中")
+    assert h(changed) != h(a)
+    assert h(b) == h(dict(b))
+    # 改尾帧只废尾帧：首帧不受影响（未受影响媒体保持可用）
+    lf_changed = dict(a, lf_desc="甲站起"
+                      )
+    assert h(lf_changed, "last_frame") != h(a, "last_frame")
+    assert h(lf_changed, "first_frame") == h(a, "first_frame")
+
+
+def test_reference_change_invalidates_frame(tmp_path):
+    from shared.vimax_bridge import _get_frame_content_hash
+    shot = {"index": 3, "ff_desc": "丙在门口", "lf_desc": "丙转身"}
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(b"ref-1")
+    before = _get_frame_content_hash(shot, reference_paths=[str(ref)],
+                                     frame_kind="first_frame")
+    ref.write_bytes(b"ref-2")
+    after = _get_frame_content_hash(shot, reference_paths=[str(ref)],
+                                    frame_kind="first_frame")
+    assert before != after, "参考图内容变化必须让旧帧失效"
+
+
 def test_boat_relative_width_anchor(tmp_path, monkeypatch):
     """category=船 的物体注入相对宽度锚（肩宽三倍），不依赖绝对米数."""
     import json
