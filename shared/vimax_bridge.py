@@ -992,7 +992,9 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
         if frame_kind == "last_frame":
             prompt = shot.get("lf_desc_final") or shot.get("ff_desc_final")
         elif frame_kind == "keyframe":
-            prompt = (shot.get("kf_0_desc_final") or shot.get("kf_desc_final")
+            prompt = ((shot.get(f"kf_{kf_index}_desc_final")
+                       if kf_index is not None else None)
+                      or shot.get("kf_0_desc_final") or shot.get("kf_desc_final")
                       or shot.get("ff_desc_final") or shot.get("lf_desc_final"))
         else:
             prompt = shot.get("ff_desc_final") or shot.get("lf_desc_final")

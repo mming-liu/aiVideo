@@ -587,3 +587,15 @@ prompt_builder._collect_r2v_references）已接入。
 
 测试：`test_post_budget.py` 11 例（含 used 缺失/负数/字符串、kind/limit 身份不符、TOTAL 变更拒绝、
 并发、熔断落盘）、`test_image_retry_cap.py` 重启续跑、`test_video_quota_breaker.py` 熔断零 POST。
+
+### KF 质检提示索引修复（2026-11-08）
+
+真实运行 shot 1 时 stderr 出现 5 次 `get_frame_spec: kf_index=None 越界`。用假 adapter 在临时目录复现完整 KF 生成链并打印调用栈，根因在 QC 侧：
+
+- `_maybe_qc_frame` 已把 `kf_index` 传进 `maybe_qc_sync`，但 `maybe_qc_sync` 的 opencode 分支调用 `build_qc_prompt` 时没有继续传；
+- `build_qc_prompt` 也没有 `kf_index` 参数，`_shot_characters` → `project_frame_facts` → `get_frame_spec` 最终拿到 `None`；
+- 同一分支还**忽略调用方传入的实际生成 prompt**，且 `build_qc_prompt` 的 KF 文本固定取 `kf_0_desc_final`，导致 KF1/2 的 QC 一直拿 KF0 的提示比对。
+
+修复：`build_qc_prompt`/`_shot_characters`/`qc_image` 增加并透传 `kf_index`；opencode 分支优先使用调用方实际 prompt，未提供时才按本帧 spec 重建；KF 文本优先 `kf_{i}_desc_final`；`_maybe_qc_frame` 的兜底也按索引取。新增 `tests/shared/test_image_qc_kf_prompt.py`（5 例）：逐帧 spec/文本、FF/LF 不变、显式 prompt 优先、无索引时重建路径传参。假 adapter 完整 KF 链复跑：**0 次越界告警**，3 帧各自拿到自己的 spec。
+
+KF1 对比结论：生成提示修复前后一致，含“敞口木舟…从荷花丛中缓缓探出船头”、长 4.5 米/宽 1.3 米，但**不含**“隐于/只露/遮挡”；KF0 才含“隐于荷花丛中只露船头一角”。索引修复只改 QC 提示，不改生成提示；用 KF1 自己的提示强制复检（不写 sidecar）结果为无问题。此前 KF1 的船体告警来自“拿 KF0 提示比 KF1 图”的错配，不能归因于索引缺失；是否重出 KF1 取决于叙事上是否要求船身继续被荷叶遮挡，而不是本次告警。

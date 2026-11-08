@@ -164,12 +164,14 @@ def _truncate(text: str, limit: int = 220) -> str:
 
 
 def _shot_characters(shot: dict, characters: list | None,
-                     frame_kind: str | None = None) -> str:
+                     frame_kind: str | None = None,
+                     kf_index: int | None = None) -> str:
     """提取本镜应出现的人物：优先本帧 on_screen spec，老章回退文本。"""
     if frame_kind:
         try:
             from shared.prompt_facts import project_frame_facts
-            proj = project_frame_facts(shot, frame_kind, characters)
+            proj = project_frame_facts(shot, frame_kind, characters,
+                                       kf_index=kf_index)
             names = [str(e.get("name") or "").strip()
                      for e in (proj.get("entities") or []) if str(e.get("name") or "").strip()]
             if proj.get("spec_present"):
@@ -208,7 +210,8 @@ def _active_style_head() -> str:
 
 
 def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
-                    empty_scene: bool = False) -> str:
+                    empty_scene: bool = False,
+                    kf_index: int | None = None) -> str:
     """构建质检 prompt（中文，要求视觉模型只返回严格 JSON）.
 
     prompt 不含字面双引号或 $（PowerShell -File 参数引号安全），中文安全。
@@ -226,15 +229,19 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
     if frame_kind == "last_frame":
         desc = shot.get("lf_desc_final") or shot.get("lf_desc") or shot.get("ff_desc") or shot.get("motion_desc") or desc
     elif frame_kind == "keyframe":
-        # 关键帧：用关键帧实际最终 prompt 核对（kf_{i}_desc_final 由 _gen_keyframes_async 挂载）
-        desc = (shot.get("kf_0_desc_final") or shot.get("kf_desc_final")
+        # 关键帧：用本帧实际最终 prompt 核对（kf_{i}_desc_final 由 _gen_keyframes_async 挂载）。
+        # 2026-11-08：此前固定取 kf_0，KF1/2 的 QC 语义核对会拿 KF0 的 prompt。
+        _kf_final = (shot.get(f"kf_{kf_index}_desc_final")
+                     if kf_index is not None else None)
+        desc = (_kf_final or shot.get("kf_0_desc_final") or shot.get("kf_desc_final")
                 or shot.get("ff_desc_final") or shot.get("ff_desc")
                 or shot.get("lf_desc") or shot.get("motion_desc") or desc)
     # 期望道具/关键词
     core_keywords = shot.get("core_keywords") or []
     if isinstance(core_keywords, list):
         core_keywords = "、".join(str(k) for k in core_keywords)
-    chars = _shot_characters(shot, characters, frame_kind=frame_kind)
+    chars = _shot_characters(shot, characters, frame_kind=frame_kind,
+                             kf_index=kf_index)
 
     lines = [
         "你是专业图片质检员，检查这张古风分镜图的视觉问题。",
@@ -570,7 +577,8 @@ def write_sidecar(frame_path: Path, result: QcResult) -> Path:
 
 def qc_image(frame_path: str | Path, prompt: str | None = None,
              shot: dict | None = None, frame_kind: str = "first_frame",
-             characters: list | None = None, empty_scene: bool = False) -> QcResult:
+             characters: list | None = None, empty_scene: bool = False,
+             kf_index: int | None = None) -> QcResult:
     """对单张图片执行视觉质检（同步，软失败不抛异常）.
 
     Args:
@@ -589,7 +597,8 @@ def qc_image(frame_path: str | Path, prompt: str | None = None,
     # P4 修复：空串/纯空白也算「未提供」——否则视觉模型拿到空的「画面描述」，
     # prompt_semantics 必然全过（sidecar clean 实为「没查」而非「没问题」）。
     if not (prompt and prompt.strip()):
-        prompt = build_qc_prompt(shot or {}, frame_kind, characters, empty_scene)
+        prompt = build_qc_prompt(shot or {}, frame_kind, characters, empty_scene,
+                                 kf_index=kf_index)
 
     try:
         proc = _invoke_router(frame, prompt)
@@ -1839,14 +1848,18 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
         # ds-vision-skill router（agnes 单次 300s 超时 → QC 比生图还慢）。
         # 通用语义 QC 这一层也由 deepseek-v4.1-flash 直接看图判定。
         try:
-            _qc_prompt = build_qc_prompt(shot, frame_kind, characters, empty_scene)
+            # 调用方传了实际生成 prompt 就用它；否则才按本帧 spec 重建。
+            # 2026-11-08：此前忽略 prompt 参数，KF1/2 的 QC 一直在拿 KF0 的文本比对。
+            _qc_prompt = prompt if (prompt and str(prompt).strip()) else build_qc_prompt(
+                shot, frame_kind, characters, empty_scene, kf_index=kf_index)
             router_result = parse_verdict(_opencode_vision_chat(frame_path, _qc_prompt))
         except Exception as e:
             return QcResult(has_hallucination=False, issues=[], ok=False,
                             raw_result="", error=f"opencode QC 调用失败: {e}")
     else:
         router_result = qc_image(frame_path, prompt=prompt, shot=shot, frame_kind=frame_kind,
-                                 characters=characters, empty_scene=empty_scene)
+                                 characters=characters, empty_scene=empty_scene,
+                                 kf_index=kf_index)
 
     if provider not in ("ark", "auto", "opencode"):
         return router_result
