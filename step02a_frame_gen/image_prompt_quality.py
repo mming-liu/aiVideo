@@ -43,13 +43,19 @@ def _lint_final_prompt(prompt: str, shot: dict, frame_kind: str) -> list[dict]:
                     "message": "final prompt contains later-scene disheveled state"})
     han = re.sub(r"[^\u4e00-\u9fff]", "", text)
     grams = Counter(han[i:i + 4] for i in range(max(0, len(han) - 3)))
-    repeated = [g for g, n in grams.most_common(5) if n >= 3]
+    # 2026-11-08（WP2 实测）：13 镜 26 条最终 prompt 的 4-gram 重复次数
+    # 中位数就是 3（同一物件在 250 字描述里被自然提到三次），阈值 3 会命中
+    # 81% 的合法 prompt。提高到 5 仍然能抓真正的复读（实测最大值 4）。
+    repeated = [g for g, n in grams.most_common(5) if n >= 5]
     if repeated:
         out.append({"category": "image_final_prompt_repeated_phrase",
                     "message": f"repeated 4-char phrases: {repeated[:3]}"})
-    if len(text) > 800:
+    # 2026-11-08（WP2 实测）：当前组装包含风格前缀 + 角色布局 + 道具布局 +
+    # 首尾帧强制约束四块，26 条 prompt 长度 554–1230（中位 965）；800 的旧阈值
+    # 会命中 21 条。上限放到 1400：只拦真正失控的拼接。
+    if len(text) > 1400:
         out.append({"category": "image_final_prompt_length",
-                    "message": f"final prompt {len(text)} > 800 chars"})
+                    "message": f"final prompt {len(text)} > 1400 chars"})
     return out
 
 

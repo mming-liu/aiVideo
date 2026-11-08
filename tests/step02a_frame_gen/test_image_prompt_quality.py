@@ -17,8 +17,10 @@ def test_image_quality_reports_video_leak(monkeypatch,tmp_path):
 
 def test_final_prompt_lint_flags_s25_markers():
     import step02a_frame_gen.image_prompt_quality as q
+    # 2026-11-08：阈值已按实测分布上调（4-gram >=5、长度 >1400），
+    # 样本必须真的越过新阈值，否则这两个断言失去判别力。
     text = ("无篷舴艋舟，young男子，披头散发，"
-            + "船板中央" * 3 + "x" * 900)
+            + "船板中央" * 6 + "x" * 1500)
     cats = {w["category"] for w in q._lint_final_prompt(
         text, {"ff_desc": "平静湖面"}, "first_frame")}
     assert "image_final_prompt_negated_object" in cats

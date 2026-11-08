@@ -3720,6 +3720,28 @@ def _inject_boat_composition_anchor(text: str, shot: dict,
     return anchor + text
 
 
+def _dedupe_prompt_clauses(text: str) -> str:
+    """去掉**完全重复**的分句（同一句被多个注入器追加时只留第一处）.
+
+    2026-11-08（WP2）：13 镜图片 prompt 体检里的重复短语，大多来自
+    _inject_frame_spec_and_closeup / _extract_char_layout /
+    add_image_strict_constraints 各自把同一句描述再写一遍。
+    这里只做**确定性去重**（归一化后完全相同的分句），不改写、不删信息。
+    """
+    import re as _re
+    parts = _re.split(r"(?<=[。；;])", str(text or ""))
+    seen = set()
+    out = []
+    for part in parts:
+        key = _re.sub(r"[\s，。；;、（）()【】]", "", part)
+        if not key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(part)
+    return "".join(out) or str(text or "")
+
 def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
                          *, desc: str | None = None) -> str:
     """帧 prompt 唯一组装入口：生成链与 --plan-only 预检共用同一份逻辑.
@@ -3744,7 +3766,8 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
         if prop:
             text = f"{text}。{prop}"
         text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas(frame_canvas_ratio(), orient=True)), verbose=False)
-        return add_image_strict_constraints(text, "首帧", shot=shot, characters=chars)
+        return _dedupe_prompt_clauses(
+            add_image_strict_constraints(text, "首帧", shot=shot, characters=chars))
 
     if frame_kind == "last_frame":
         base = desc if desc is not None else (shot.get("lf_desc") or shot.get("prompt") or "")
@@ -3782,7 +3805,8 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
                     f"，构图需按尾帧描述重新布局，"
                     f"可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。")
         text = sanitize_prompt(ensure_prefix(text, style_prefix_for_canvas(frame_canvas_ratio(), orient=True)), verbose=False)
-        return add_image_strict_constraints(text, "尾帧", shot=shot, characters=chars)
+        return _dedupe_prompt_clauses(
+            add_image_strict_constraints(text, "尾帧", shot=shot, characters=chars))
 
     raise ValueError("frame_kind 必须是 first_frame / last_frame")
 
