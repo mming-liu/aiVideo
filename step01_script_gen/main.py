@@ -2283,6 +2283,143 @@ def _audit_issue_allowed_fields(issue: dict) -> list[str]:
     return out
 
 
+def _shot_semantic_digest(shot: dict) -> str:
+    """镜头内容摘要（排除 revision/hash 等运行字段），用于增量审计作用域."""
+    import hashlib as _hashlib
+    import json as _json
+    fields = ("ff_desc", "motion_desc", "lf_desc", "prompt", "camera_movement",
+              "keyframes", "frame_layouts", "narration_segment", "subtitle",
+              "duration_sec", "scene", "location", "main_subject", "plan_refs")
+    payload = {k: shot.get(k) for k in fields}
+    blob = _json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return _hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _committed_baseline_script():
+    """读取当前章节目录里已 COMMITTED 的基线稿；不可用/未验证时返回 None."""
+    import json as _json
+    from shared.quality_gate import verify_step01_commit_manifest
+    path = CHAPTER_DIR / "script_result.json"
+    manifest_path = CHAPTER_DIR / "step01_commit.json"
+    if not path.exists() or not manifest_path.exists():
+        return None
+    try:
+        manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+        if str(manifest.get("status") or "") != "COMMITTED":
+            return None
+        script = _json.loads(path.read_text(encoding="utf-8"))
+        verify_step01_commit_manifest(CHAPTER_DIR, script, stage="step01",
+                                      expected_chapter=NOVEL_CHAPTER)
+        return script
+    except Exception:
+        return None
+
+
+def _changed_shot_ids(script: dict, baseline: dict) -> set:
+    base = {str(s.get("index")): s for s in (baseline.get("shots") or [])
+            if isinstance(s, dict)}
+    cand = {str(s.get("index")): s for s in (script.get("shots") or [])
+            if isinstance(s, dict)}
+    out = set()
+    for sid in set(base) | set(cand):
+        if sid not in base or sid not in cand:
+            out.add(sid)
+        elif _shot_semantic_digest(base[sid]) != _shot_semantic_digest(cand[sid]):
+            out.add(sid)
+    return out
+
+
+def _downgrade_out_of_delta_audit_issues(audit, active_scope, *,
+                                         contracts_ok: bool) -> int:
+    """局部修订时，把完全落在未改动镜头上的新增审计 blocking 降为 warning.
+
+    确定性质量门 _q_blocking 不受此函数影响；只有 LLM 审计条目、且其全部
+    目标镜头都在 active_scope 之外时才降级，避免未改动镜的采样波动阻断局部提交。
+    """
+    if not contracts_ok or not active_scope or not isinstance(audit, dict):
+        return 0
+    changed = 0
+    for issue in audit.get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        if str(issue.get("severity") or "").strip() not in ("hard", "visual_risk", "blocking"):
+            continue
+        ids = {str(t.get("shot_id") or "").strip()
+               for t in (issue.get("repair_targets") or []) if isinstance(t, dict)}
+        ids.discard("")
+        if not ids:
+            sid = str(issue.get("shot_id") or "").strip()
+            if sid:
+                ids.add(sid)
+        if ids and not (ids & active_scope):
+            issue["severity"] = "warning"
+            issue["out_of_delta_scope"] = True
+            changed += 1
+            _logger.warn(
+                "[COMMIT] 审计项 %s@shot%s 落在未改动镜头（增量作用域 %s），降级为 warning"
+                % (issue.get("code"), issue.get("shot_id"),
+                   ",".join(sorted(active_scope))))
+    return changed
+
+
+def _downgrade_stage_enum_false_positives(audit: "dict | None", script: dict, *,
+                                            contracts_ok: bool) -> int:
+    """把「已合法 stage 却要求改成 process/result」的审计 blocking 降为 warning.
+
+    `shared/kf_time.KF_STAGE_ENUM` 是 stage 的唯一权威枚举；审计模板若不声明它，
+    模型会把合法值误判为非法。仅当一条 blocking 的全部目标都是
+    `keyframes[N].stage`、当前值均在枚举内、且审计文本要求 process/result 时才降级。
+    """
+    import re as _re
+    from shared.kf_time import KF_STAGE_ENUM
+    if not contracts_ok or not isinstance(audit, dict):
+        return 0
+    by_idx = {str(s.get("index")): s for s in (script.get("shots") or [])
+              if isinstance(s, dict)}
+    stage_re = _re.compile(r"^keyframes\[(\d+)\]\.stage$")
+    changed = 0
+    for issue in audit.get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        if str(issue.get("severity") or "").strip() not in ("hard", "visual_risk", "blocking"):
+            continue
+        targets = []
+        for target in issue.get("repair_targets") or []:
+            if isinstance(target, dict):
+                targets.append((str(target.get("shot_id") or issue.get("shot_id") or ""),
+                                str(target.get("field_path") or "")))
+        if not targets:
+            targets = [(str(issue.get("shot_id") or ""),
+                        str(issue.get("field_path") or ""))]
+        if not targets or any(not stage_re.match(path) for _sid, path in targets):
+            continue
+        text = " ".join(str(issue.get(k) or "") for k in
+                        ("message", "minimal_fix", "evidence", "impact"))
+        if not any(tok in text.lower() for tok in ("process", "result", "非法", "不合法")):
+            continue
+        legal = True
+        for sid, path in targets:
+            shot = by_idx.get(sid)
+            match = stage_re.match(path)
+            if not shot or not match:
+                legal = False
+                break
+            kfs = shot.get("keyframes") or []
+            idx = int(match.group(1))
+            stage = str((kfs[idx] or {}).get("stage") or "").strip() if idx < len(kfs) else ""
+            if stage not in KF_STAGE_ENUM:
+                legal = False
+                break
+        if legal:
+            issue["severity"] = "warning"
+            issue["_downgraded_stage_enum"] = True
+            changed += 1
+            _logger.warn(
+                "[COMMIT] 审计项 %s@shot%s 把合法 stage 枚举误判为非法，降级为 warning"
+                % (issue.get("code"), issue.get("shot_id")))
+    return changed
+
+
 def _downgrade_locked_only_audit_issues(audit: "dict | None", *,
                                         contracts_ok: bool) -> int:
     """把仅指向已过契约门的锁定字段的 blocking 审计项降为 warning.
@@ -3055,6 +3192,133 @@ def _is_hook_enabled() -> bool:
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _sync_missing_onscreen_layout_entries(script: dict) -> int:
+    """确定性补齐 ff/lf/kfs 中「描述明确在场、布局列表漏登记」的角色条目.
+
+    只补结构化 layout，不改描述/台词；角色名来自本次输入 characters[].identifier。
+    否定语境（不见/没有/未出现/空无一人/离开/消失）不补。
+    """
+    import copy as _copy
+    import re as _re
+    names = [str(c.get("identifier") or "").strip()
+             for c in (script.get("characters") or []) if isinstance(c, dict)]
+    names = [n for n in names if n]
+    if not names:
+        return 0
+
+    def _visible(name: str, text: str) -> bool:
+        if not text:
+            return False
+        for m in _re.finditer(_re.escape(name), text):
+            prefix = text[max(0, m.start() - 12):m.start()]
+            if any(neg in prefix for neg in ("不见", "没有", "未出现", "空无一人",
+                                             "离开", "消失", "并未", "不在")):
+                continue
+            return True
+        return False
+
+    def _position(name: str, text: str, fallback: str) -> str:
+        for token in ("画中偏左", "画中偏右", "画左", "画右", "画中",
+                      "船头", "船尾", "岸边", "水面", "前景", "背景",
+                      "左侧", "右侧"):
+            if token in text:
+                return token
+        return fallback or "画面内"
+
+    def _pose(name: str, text: str, fallback: str) -> str:
+        m = _re.search(_re.escape(name) + r"([^，。；]{1,18})", text or "")
+        if m:
+            frag = _re.sub(r"^(的|是|在|正|已|仍|还)+", "", m.group(1)).strip()
+            frag = _re.sub(r"(可见|出现|位于|站在|坐在|跪在|躺在)$", "", frag).strip()
+            if frag:
+                return frag[:18]
+        return fallback or "按本帧描述"
+
+    def _entry_for(name, text, existing, seed):
+        base = _copy.deepcopy(existing or seed or {})
+        support = base.get("support") or {}
+        if not support:
+            for cand in (seed or {}).get("_all_entries") or []:
+                if isinstance(cand, dict) and cand.get("support"):
+                    support = _copy.deepcopy(cand["support"])
+                    break
+        return {
+            "name": name,
+            "on_screen": True,
+            "position": _position(name, text, str(base.get("position") or "")),
+            "pose": _pose(name, text, str(base.get("pose") or "")),
+            "gaze_target": str(base.get("gaze_target") or "画面内"),
+            "props": _copy.deepcopy(base.get("props") or []),
+            "support": _copy.deepcopy(support or {}),
+            "states": list(dict.fromkeys(list(base.get("states") or []) + ["在场"])),
+        }
+
+    added = 0
+    prev_entries = []
+    for shot in script.get("shots") or []:
+        if not isinstance(shot, dict):
+            continue
+        layouts = shot.get("frame_layouts")
+        if not isinstance(layouts, dict):
+            layouts = {}
+            shot["frame_layouts"] = layouts
+        all_entries = []
+        for key in ("ff", "lf"):
+            if isinstance(layouts.get(key), list):
+                all_entries.extend(layouts[key])
+        for kf_list in (layouts.get("kfs") or []):
+            if isinstance(kf_list, list):
+                all_entries.extend(kf_list)
+        for e in all_entries:
+            if isinstance(e, dict) and e.get("on_screen", True):
+                e["_all_entries"] = all_entries
+        known = {str(e.get("name") or ""): e for e in all_entries if isinstance(e, dict)}
+        known.update({str(e.get("name") or ""): e for e in prev_entries
+                      if isinstance(e, dict) and e.get("name")})
+        frames = [("ff", str(shot.get("ff_desc") or "")),
+                  ("lf", str(shot.get("lf_desc") or ""))]
+        kfs = shot.get("keyframes") or []
+        if not isinstance(layouts.get("kfs"), list):
+            layouts["kfs"] = []
+        kf_layouts = layouts["kfs"]
+        for i, kf in enumerate(kfs):
+            if isinstance(kf, dict):
+                frames.append(("kfs[%d]" % i, str(kf.get("desc") or "")))
+        for fkey, text in frames:
+            if not text:
+                continue
+            if fkey.startswith("kfs["):
+                idx = int(fkey[4:-1])
+                while len(kf_layouts) <= idx:
+                    kf_layouts.append([])
+                target = kf_layouts[idx]
+                if not isinstance(target, list):
+                    target = []
+                    kf_layouts[idx] = target
+            else:
+                target = layouts.get(fkey)
+                if not isinstance(target, list):
+                    target = []
+                    layouts[fkey] = target
+            present = {str(e.get("name") or "") for e in target if isinstance(e, dict)}
+            for name in names:
+                if name in present or not _visible(name, text):
+                    continue
+                entry = _entry_for(name, text, known.get(name),
+                                   {"_all_entries": all_entries})
+                entry.pop("_all_entries", None)
+                target.append(entry)
+                known[name] = entry
+                added += 1
+                _logger.info("[FINALIZE] 自动补齐漏登记的在场角色布局条目: shot=%s frame=%s name=%s"
+                             % (shot.get("index"), fkey, name))
+        for e in all_entries:
+            if isinstance(e, dict):
+                e.pop("_all_entries", None)
+        prev_entries = [e for e in (layouts.get("lf") or []) if isinstance(e, dict)]
+    return added
+
+
 def project_for_commit(script: dict, novel_text: str = "", *, label: str = "落盘前",
                        repair_effects=None) -> tuple[dict, list[str]]:
     """提交点**实际会审计并落盘**的投影——唯一实现.
@@ -3077,6 +3341,14 @@ def project_for_commit(script: dict, novel_text: str = "", *, label: str = "落�
                                        repair_effects=repair_effects)
     if _errs:
         return _s, [str(e) for e in _errs]
+    # 显式修复效果（repair_effects）可能是在删除某角色的布局条目；此时不得
+    # 用描述提及反向补回，否则会把用户的删除决定覆盖掉。常规提交才启用自愈。
+    _autofill = str(os.getenv("STEP01_LAYOUT_AUTOFILL", "1")).strip().lower() not in (
+        "0", "false", "off", "no")
+    _added = (0 if (repair_effects is not None or not _autofill)
+              else _sync_missing_onscreen_layout_entries(_s))
+    if _added:
+        _logger.info("[FINALIZE] 布局自愈共补齐 %d 条在场角色条目" % _added)
     _s = _strip_runtime_fields(_s)
     ensure_script_revision(_s)
     return _s, []
@@ -3255,6 +3527,21 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
     except Exception as _e:
         _logger.warn(f"[COMMIT] 进入提交点的 revision 计算失败（欠账台账少记一条）: {_e}")
     summary["entry_revision"] = _entry_revision
+
+    # M1.2：局部修订的增量审计作用域。仅在有已 COMMITTED 基线、且确有改动镜
+    # 时才启用；作用域严格等于实际改动镜（不拉邻镜），邻镜连续性由确定性检查兜底。
+    _active_audit_scope: set = set()
+    try:
+        _baseline_script = _committed_baseline_script()
+        if _baseline_script is not None:
+            _changed = _changed_shot_ids(script, _baseline_script)
+            if 0 < len(_changed) < len(_baseline_script.get("shots") or []):
+                _active_audit_scope = _changed
+                _logger.info(
+                    "[COMMIT] 增量审计作用域：changed_shot_ids=%s（其余镜头仅确定性质量门全量生效）"
+                    % ",".join(sorted(_active_audit_scope)))
+    except Exception as _scope_err:
+        _logger.warn("[COMMIT] 增量审计作用域计算失败，回退全量审计: %s" % _scope_err)
 
     # 统一收口：缓存稿和 BEST-GUARD 历史快照可能仍含旧钩子——归一在
     # `project_for_commit` 里做（唯一实现）；这里只保证禁用时不跑钩子质量门。
@@ -3495,10 +3782,22 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         # blocking = 审计条目 ∪ 确定性质量门条目（两者都必须被修掉才算通过）
         if _contracts_ok:
             _downgraded = _downgrade_locked_only_audit_issues(audit, contracts_ok=True)
+            _stage_downgraded = _downgrade_stage_enum_false_positives(
+                audit, script, contracts_ok=True)
+            _delta_downgraded = _downgrade_out_of_delta_audit_issues(
+                audit, _active_audit_scope, contracts_ok=True)
             if _downgraded:
                 _logger.warn(
                     "[COMMIT] 本轮 %d 条审计项仅指向已过契约门的锁定字段，已降级为 warning"
                     % _downgraded)
+            if _stage_downgraded:
+                _logger.warn(
+                    "[COMMIT] 本轮 %d 条审计项把合法 stage 枚举误判为非法，已降级为 warning"
+                    % _stage_downgraded)
+            if _delta_downgraded:
+                _logger.warn(
+                    "[COMMIT] 本轮 %d 条审计项落在未改动镜头（增量作用域），已降级为 warning"
+                    % _delta_downgraded)
         blocking = _audit_blocking_records(audit) + _q_blocking
         if not blocking:
             break

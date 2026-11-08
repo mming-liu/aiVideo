@@ -35,7 +35,7 @@
   },
   "audit_contract": {
     "rule_source_fingerprint": "fe260ed333647ca7",
-    "audit_prompt_version": "698eb56f54fe",
+    "audit_prompt_version": "adb3e6fe905c",
     "duration_band": {
       "min": 60,
       "max": 120,

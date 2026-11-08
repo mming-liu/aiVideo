@@ -146,12 +146,15 @@ def identity_names_of(paths: list[str]) -> list[str]:
     return names
 
 
-def describe_ref(path: str) -> str:
+def describe_ref(path: str, *, consumer_kind: str = "") -> str:
     """按路径判定参考图用途标签（供 prompt 里的「图N」清单复用）.
 
     识别约定：ref_sheet_*_{类别}.png（fit_refs 产物；v6.53 起 chars 表文件名
     带从左至右角色顺序后缀 ref_sheet_*_chars_A+B+C.png）、scenes_bank/、
     characters_bank/、portrait_crops/、props_bank/ 目录、first_frame/last_frame 帧名。
+
+    consumer_kind 只影响 first_frame.png 的说明：当它作为尾帧/关键帧的参考图时，
+    必须明确「只锁环境/外观，人物动作姿态按本帧描述演变」，不能写「站位以它为准」。
     """
     if not path:
         return ""
@@ -177,6 +180,12 @@ def describe_ref(path: str) -> str:
     if name == FIRST_FRAME_FILENAME:
         # S04：r2v 里它只是 reference_image 的构图锚点，不是 first_frame role；
         # 文案不得让报告/读者误以为"已发首帧角色"。
+        if consumer_kind == "last_frame":
+            return ("同镜首帧环境与外观锚点（仅保持场景环境、载具/建筑外观与人物服饰一致；"
+                    "人物动作、姿态、朝向与位置必须按本尾帧描述发生演变，禁止照搬首帧静态姿态）")
+        if consumer_kind == "keyframe":
+            return ("同镜首帧环境与外观锚点（保持环境、载具与人物服饰一致；"
+                    "人物动作按本关键帧中间态描述变化）")
         return "构图基准（参考图角色，不是首帧 role；动作起点与人物站位以它为准）"
     if name == LAST_FRAME_FILENAME:
         return "视频终点画面（尾帧）"
@@ -199,7 +208,8 @@ def describe_ref(path: str) -> str:
     return "一致性参考（人物/场景/道具特征以该图为准）"
 
 
-def build_ref_manifest(paths: list[str], numbered: bool = True) -> str:
+def build_ref_manifest(paths: list[str], numbered: bool = True, *,
+                       consumer_kind: str = "") -> str:
     """生成「图N：用途」参考图清单文本（prompt 注入用）.
 
     numbered=True 用「图1/图2」（wan2.7-r2v 图N 引用格式、MiniMax/Seedance
@@ -207,7 +217,7 @@ def build_ref_manifest(paths: list[str], numbered: bool = True) -> str:
     """
     entries = []
     for i, p in enumerate(paths or [], start=1):
-        label = describe_ref(p)
+        label = describe_ref(p, consumer_kind=consumer_kind)
         if label:
             prefix = f"图{i}" if numbered else f"参考图{i}"
             entries.append(f"{prefix}：{label}")

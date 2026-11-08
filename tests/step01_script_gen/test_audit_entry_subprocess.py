@@ -290,6 +290,9 @@ def _run(tmp_path, package_obj, mode="ok", *, authorized=True, mutate=None,
     # step01_adoption.json 继承时长档位（S10R），子进程若仍指向本机 output/，
     # 同一夹具在不同机器/现场状态下会得到不同带宽。隔离到 tmp。
     env["OUTPUT_BASE"] = str(tmp_path / "output")
+    # 外部冻结审计包绑定的是原始候选 revision；M2 布局自愈会改变投影结果，
+    # 这些外部回放用例显式关闭自愈，保持包身份不变。
+    env["STEP01_LAYOUT_AUTOFILL"] = "0"
     env["PYTHONPATH"] = "%s%s%s" % (stub, os.pathsep, ROOT)
     env["STEP01_STUB_MODE"] = mode
     env["STEP01_STUB_LOG"] = str(log)

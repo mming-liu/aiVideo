@@ -177,7 +177,11 @@ class ImageGeneratorAiVideoAdapter:
             final_refs = ref_paths if ref_paths else ([ref] if ref else [])
             if len(final_refs) >= 2:
                 from shared.ref_compose import build_ref_manifest
-                manifest = build_ref_manifest(final_refs, numbered=False)
+                _frame_text = str(frame_desc or "")
+                _consumer = ("last_frame" if "尾帧" in _frame_text
+                             else "keyframe" if "关键帧" in _frame_text else "")
+                manifest = build_ref_manifest(final_refs, numbered=False,
+                                              consumer_kind=_consumer)
                 if manifest:
                     full_prompt = f"{full_prompt}\n\n{manifest}"
         except Exception:

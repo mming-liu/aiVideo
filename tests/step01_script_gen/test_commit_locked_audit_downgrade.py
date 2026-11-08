@@ -65,3 +65,64 @@ def test_audit_template_declares_locked_narration_rules():
     assert "narration_segment" in _AUDIT_RULES_TEMPLATE
     assert "不得" in _AUDIT_RULES_TEMPLATE
     assert "跨相邻镜头分句衔接" in _AUDIT_RULES_TEMPLATE
+
+
+def _script_with_stage(stage="approach"):
+    return {"shots": [{"index": 1, "keyframes": [{"stage": stage}]}]}
+
+
+def _stage_issue(repair_targets=None, message="stage 非法，请改为 process/result"):
+    rec = {"code": "KF_STAGE_MISMATCH", "severity": "blocking", "shot_id": "1",
+           "field_path": "keyframes[0].stage", "message": message}
+    if repair_targets is not None:
+        rec["repair_targets"] = repair_targets
+    return rec
+
+
+def test_legal_stage_rewrite_issue_is_downgraded():
+    from step01_script_gen.main import _downgrade_stage_enum_false_positives
+    audit = _audit(_stage_issue())
+    assert _downgrade_stage_enum_false_positives(audit, _script_with_stage(), contracts_ok=True) == 1
+    assert audit["issues"][0]["severity"] == "warning"
+    assert audit["issues"][0]["_downgraded_stage_enum"] is True
+
+
+def test_illegal_current_stage_keeps_blocking():
+    from step01_script_gen.main import _downgrade_stage_enum_false_positives
+    audit = _audit(_stage_issue())
+    assert _downgrade_stage_enum_false_positives(audit, _script_with_stage("process"), contracts_ok=True) == 0
+    assert audit["issues"][0]["severity"] == "blocking"
+
+
+def test_stage_issue_with_visual_target_keeps_blocking():
+    from step01_script_gen.main import _downgrade_stage_enum_false_positives
+    audit = _audit(_stage_issue(repair_targets=[
+        {"shot_id": "1", "field_path": "keyframes[0].stage"},
+        {"shot_id": "1", "field_path": "motion_desc"},
+    ]))
+    assert _downgrade_stage_enum_false_positives(audit, _script_with_stage(), contracts_ok=True) == 0
+    assert audit["issues"][0]["severity"] == "blocking"
+
+
+def test_changed_shot_ids_detects_only_changed_shot():
+    from step01_script_gen.main import _changed_shot_ids
+    base = {"shots": [{"index": 1, "ff_desc": "a"}, {"index": 2, "ff_desc": "b"}]}
+    cand = {"shots": [{"index": 1, "ff_desc": "a"}, {"index": 2, "ff_desc": "c"}]}
+    assert _changed_shot_ids(cand, base) == {"2"}
+
+
+def test_out_of_delta_scope_issue_is_downgraded():
+    from step01_script_gen.main import _downgrade_out_of_delta_audit_issues
+    audit = _audit(_issue("frame_layouts.ff", code="LAYOUT_MISSING"))
+    audit["issues"][0]["shot_id"] = "9"
+    assert _downgrade_out_of_delta_audit_issues(audit, {"1"}, contracts_ok=True) == 1
+    assert audit["issues"][0]["severity"] == "warning"
+    assert audit["issues"][0]["out_of_delta_scope"] is True
+
+
+def test_in_delta_scope_issue_keeps_blocking():
+    from step01_script_gen.main import _downgrade_out_of_delta_audit_issues
+    audit = _audit(_issue("frame_layouts.ff", code="LAYOUT_MISSING"))
+    audit["issues"][0]["shot_id"] = "1"
+    assert _downgrade_out_of_delta_audit_issues(audit, {"1"}, contracts_ok=True) == 0
+    assert audit["issues"][0]["severity"] == "blocking"

@@ -277,6 +277,7 @@ _AUDIT_RULES_TEMPLATE = """# 审查规则
 - 按规划属于无声画面的镜头（`narration_segment` 为空）**不得**要求在 `narration_segment` / `subtitle` 中补台词或旁白。若认为剧情威胁、因果或互动交代不足，必须把 `field_path` 与 `repair_targets` 指向可执行的画面字段（`motion_desc` / `ff_desc` / `lf_desc` / `prompt`），**不得**指向 `narration_segment` / `subtitle`。
 
 帧职责：
+- `keyframes[N].stage` 的合法枚举严格为 `pre / approach / climax / react / exit / after`（与 `shared/kf_time.KF_STAGE_ENUM` 同源）；**不得**判为非法，也不得要求改成 `process` / `result` 等非枚举词。
 - ff 只检查动作开始前准备态；
 - kf 只检查对应中间过程；
 - lf 只检查结果态；

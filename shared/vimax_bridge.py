@@ -3716,6 +3716,13 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
     if frame_kind == "last_frame":
         base = desc if desc is not None else (shot.get("lf_desc") or shot.get("prompt") or "")
         text = preprocess_prompt_for_image(base)
+        _ff_core = str(shot.get("ff_desc") or "").strip()
+        _lf_core = str(shot.get("lf_desc") or "").strip()
+        if desc is None and _ff_core and _lf_core and _ff_core != _lf_core:
+            # 正文 base 已经是 lf_desc；这里只加状态差量指令，避免整段 lf_desc
+            # 重复注入触发 prompt 矛盾/重复检测。
+            text = ("【尾帧终态（须与首帧起始态区分）】画面按本尾帧终态演变，"
+                    "禁止复刻首帧姿态。\n%s" % text)
         text = _inject_frame_spec_and_closeup(text, shot, chars, frame_kind="last_frame")
         text = fix_lf_desc_gaze(text, shot, chars)
         text = _inject_object_size_anchor(shot, text)

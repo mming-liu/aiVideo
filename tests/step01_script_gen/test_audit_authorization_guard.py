@@ -34,7 +34,7 @@ def package():
     # 审计规则模板已更新（锁定台词规则），冻结包必须按当前 prompt 身份重新绑定；
     # 只覆盖版本字段，不改外部数据集本身。此处用子进程的生效版本（父进程的
     # 时长带/配置可能不同，直接调用 audit_prompt_version() 会得到另一组哈希）。
-    data.setdefault("audit_contract", {})["audit_prompt_version"] = "698eb56f54fe"
+    data.setdefault("audit_contract", {})["audit_prompt_version"] = "adb3e6fe905c"
     return _pin_stub_channel(data)
 
 
@@ -56,6 +56,7 @@ def _project_revision(candidate_path: Path, tmp_path: Path, package: dict) -> st
         "STEP01_LOG_PATH": str(tmp_path / "project.log"),
         "TEXT_CALL_LEDGER": str(tmp_path / "project_calls.jsonl"),
         "PYTHONIOENCODING": "utf-8",
+        "STEP01_LAYOUT_AUTOFILL": "0",
     })
     code = r'''
 import json, sys
@@ -153,6 +154,7 @@ def test_concurrent_same_authorization_sends_at_most_once(tmp_path, package):
         env["STEP01_STUB_DELAY"] = "0.6"
         env["STEP01_TEST_AUTH_ROOT"] = str(state)
         env["STEP01_AUDIT_AUTHORIZED"] = "1"
+        env["STEP01_LAYOUT_AUTOFILL"] = "0"
         procs.append(subprocess.Popen(
             [sys.executable, "-B", str(ENTRY), "--package", str(pkg), "--out-root", str(out)],
             cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
