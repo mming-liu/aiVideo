@@ -158,6 +158,81 @@ def test_both_chapters_products_are_under_stage_protection():
     assert _rep["missing"] == [] and _rep["mismatched"] == [], _rep
 
 
+def _seed_product_group(root, rev="revA", chapter_rel="chapter_001"):
+    """造一组**合法形状**的正式产物（用于自足保护用例）."""
+    ch = Path(root) / chapter_rel
+    ch.mkdir(parents=True, exist_ok=True)
+    (ch / "script_result.json").write_text(
+        json.dumps({"script_revision": rev, "shots": [{"index": 1}]},
+                   ensure_ascii=False), encoding="utf-8")
+    (ch / "step01_quality.json").write_text(
+        json.dumps({"status": "PASS"}), encoding="utf-8")
+    (ch / "step01_audit.json").write_text(
+        json.dumps({"status": "ok", "input_revision": rev}), encoding="utf-8")
+    (ch / "step01_commit.json").write_text(
+        json.dumps({"status": "COMMITTED", "script_revision": rev}), encoding="utf-8")
+    (ch / "step01_adoption.json").write_text(
+        json.dumps({"status": "adopted_and_verified", "script_revision": rev}),
+        encoding="utf-8")
+    return ch
+
+
+def _digest_manifest(root, chapter_rel="chapter_001"):
+    ch = Path(root) / chapter_rel
+    lines = []
+    for name in sorted(_FORMAL_PRODUCT_NAMES):
+        p = ch / name
+        if p.is_file():
+            lines.append("%s  %s" % (_sha256(p), "%s/%s" % (chapter_rel, name)))
+    return "\n".join(lines) + "\n"
+
+
+def test_byte_protection_detects_missing_tamper_and_cross_chapter(tmp_path):
+    """自足：临时产物组 + 真实摘要检查器，缺件/正文篡改/跨章污染都必须被识别."""
+    root = tmp_path / "out"
+    ch = _seed_product_group(root)
+    base = tmp_path / "artifacts.sha256"
+    base.write_text(_digest_manifest(root), encoding="utf-8")
+
+    clean = _audit_against_baseline(base, root)
+    assert clean["missing"] == [] and clean["mismatched"] == [], clean
+    assert clean["good"] >= 5
+
+    # 1) 缺件
+    (ch / "step01_adoption.json").unlink()
+    miss = _audit_against_baseline(base, root)
+    assert any("step01_adoption.json" in m for m in miss["missing"]), miss
+
+    # 2) 正文篡改但**保留旧 revision**：摘要必须变红
+    (ch / "step01_adoption.json").write_text(
+        json.dumps({"status": "adopted_and_verified", "script_revision": "revA"}),
+        encoding="utf-8")
+    (ch / "script_result.json").write_text(
+        json.dumps({"script_revision": "revA", "shots": [{"index": 1, "prompt": "tampered"}]},
+                   ensure_ascii=False), encoding="utf-8")
+    tampered = _audit_against_baseline(base, root)
+    assert any("script_result.json" in m for m in tampered["mismatched"]), tampered
+
+    # 3) 跨章污染：把另一章的产物放到本章路径
+    other = _seed_product_group(tmp_path / "other", rev="revOTHER")
+    (ch / "script_result.json").write_bytes((other / "script_result.json").read_bytes())
+    crossed = _audit_against_baseline(base, root)
+    assert any("script_result.json" in m for m in crossed["mismatched"]), crossed
+
+
+def test_restore_then_reaudit_is_clean(tmp_path):
+    """恢复成原字节后必须重新变绿（保护不是一次性的）."""
+    root = tmp_path / "out"
+    ch = _seed_product_group(root)
+    base = tmp_path / "artifacts.sha256"
+    base.write_text(_digest_manifest(root), encoding="utf-8")
+    before = (ch / "script_result.json").read_bytes()
+    (ch / "script_result.json").write_bytes(before + b" ")
+    assert _audit_against_baseline(base, root)["mismatched"]
+    (ch / "script_result.json").write_bytes(before)
+    assert _audit_against_baseline(base, root)["mismatched"] == []
+
+
 def test_live_formal_products_are_consistent():
     """现网正式产物自洽：稿件/审计/清单同一 revision，采纳凭据可核验.
 

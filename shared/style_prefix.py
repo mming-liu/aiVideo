@@ -1689,6 +1689,35 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
         for _n in _extra_on_screen:
             if _n not in char_names:
                 char_names.append(_n)
+        # 2026-11-08（WP2）：名单只保留**本帧 on_screen** 的角色。
+        # 首帧/尾帧的出镜人不同（shot 5/8/12 实测），旧实现把整镜 present_chars
+        # 全写进「总共 N 人」，与本帧 frame_layouts 直接打架，也触发
+        # image_final_prompt_offscreen_entity。全离屏时保留原名单，避免"总共 0 人"。
+        if _frame_kind and _spec_on_screen:
+            _visible_names = set(_spec_on_screen)
+            _alias_of: dict = {}
+            for _c in (characters or []):
+                _ident = str(_c.get("identifier") or "").strip()
+                if not _ident:
+                    continue
+                try:
+                    _alias_of[_ident] = set(_char_aliases(_ident, characters or []))
+                except Exception:
+                    _alias_of[_ident] = {_ident}
+
+            def _is_visible(_name: str) -> bool:
+                """名字（含威胁别名）在本帧是否可见：按**角色身份**而不是字面名判定."""
+                if _name in _visible_names:
+                    return True
+                for _ident, _aliases in _alias_of.items():
+                    if _name in _aliases and (_ident in _visible_names
+                                                or _aliases & _visible_names):
+                        return True
+                return False
+
+            _filtered = [n for n in char_names if _is_visible(n)]
+            if _filtered:
+                char_names = _filtered
 
         if char_names:
             # 威胁源以水下黑影/刀尖呈现时，黑影是剧情要素，不在禁用之列——

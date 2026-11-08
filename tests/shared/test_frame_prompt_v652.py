@@ -13,6 +13,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+import pytest
+
 from PIL import Image
 
 from shared.portrait_stitch import crop_head_portrait, _HEAD_BOX
@@ -103,6 +105,104 @@ def test_embedded_size_strip_idempotent():
     strip = lambda s: re.sub(r"[（(][^（）()]*\d+(?:\.\d+)?米[^（）()]*[）)]", "", s)
     t = "舴艋舟（宽1.4米，可容3人）靠岸"
     assert strip(strip(t)) == strip(t)
+
+
+# ── 去重不得改变语义（2026-11-08 复核 P1）─────────────────────────────
+@pytest.mark.parametrize("text", [
+    "画面文字：不，放行。画面文字：不放行。",
+    "甲站左，乙站右。甲站左、乙站右。",
+    "少年（左）持刀。少年左持刀。",
+    "他说：走。他说走。",
+])
+def test_dedupe_keeps_semantically_different_clauses(text):
+    from shared.vimax_bridge import _dedupe_prompt_clauses
+    out = _dedupe_prompt_clauses(text)
+    # 标点不同 ⇒ 语义不同 ⇒ 一句都不能删
+    assert out.count("。") == text.count("。"), out
+
+
+def test_dedupe_removes_only_byte_identical_clauses():
+    from shared.vimax_bridge import _dedupe_prompt_clauses
+    text = "甲站左，乙站右。丙在门外。甲站左，乙站右。"
+    out = _dedupe_prompt_clauses(text)
+    assert out.count("甲站左，乙站右") == 1
+    assert "丙在门外" in out
+
+
+# ── 本帧可见性名单（2026-11-08 WP2）──────────────────────────────────
+_CHARS3 = [{"identifier": "甲"}, {"identifier": "乙"}, {"identifier": "丙"}]
+
+
+def _shot_with_layout(ff, lf, *, desc="甲与乙在船头"):
+    return {"ff_desc": desc, "lf_desc": desc,
+            "frame_layouts": {"ff": ff, "lf": lf}}
+
+
+def _roster(out: str) -> str:
+    i = out.find("【人物数量限制】")
+    return out[i:i + 120] if i >= 0 else ""
+
+
+def test_roster_follows_first_frame_visibility():
+    from shared.style_prefix import add_image_strict_constraints
+    shot = {"ff_desc": "甲与乙在船头，丙在岸上",
+            "lf_desc": "甲与丙在船头，乙已离开",
+            "frame_layouts": {
+                "ff": [{"name": "甲", "on_screen": True},
+                       {"name": "乙", "on_screen": True},
+                       {"name": "丙", "on_screen": False}],
+                "lf": [{"name": "甲", "on_screen": True},
+                       {"name": "丙", "on_screen": True},
+                       {"name": "乙", "on_screen": False}]}}
+    ff = add_image_strict_constraints("x", "首帧", shot=shot, characters=_CHARS3)
+    lf = add_image_strict_constraints("x", "尾帧", shot=shot, characters=_CHARS3)
+    # 首帧看见甲、乙；尾帧看见甲、丙 —— 人数与名单都必须跟着本帧走
+    assert "总共2人" in ff and "总共2人" in lf, (ff[-160:], lf[-160:])
+    ff_names = ff[ff.find("【人物数量限制】"):][:40]
+    lf_names = lf[lf.find("【人物数量限制】"):][:40]
+    assert "乙" in ff_names and "丙" not in ff_names, ff_names
+    assert "丙" in lf_names and "乙" not in lf_names, lf_names
+
+
+def test_roster_keeps_full_list_when_all_off_screen():
+    from shared.style_prefix import add_image_strict_constraints
+    shot = _shot_with_layout(
+        [{"name": "甲", "on_screen": False}, {"name": "乙", "on_screen": False}],
+        [{"name": "甲", "on_screen": False}])
+    ff = _roster(add_image_strict_constraints("x", "首帧", shot=shot, characters=_CHARS3))
+    assert "甲" in ff, ff            # 全离屏不塌缩成"0 人"
+
+
+def test_roster_without_layout_keeps_everyone():
+    from shared.style_prefix import add_image_strict_constraints
+    shot = {"ff_desc": "甲与乙在船头", "lf_desc": "甲与乙在船头"}
+    out = _roster(add_image_strict_constraints("x", "首帧", shot=shot, characters=_CHARS3))
+    assert "甲" in out and "乙" in out, out
+
+
+def test_roster_includes_on_screen_extras():
+    from shared.style_prefix import add_image_strict_constraints
+    shot = _shot_with_layout([{"name": "甲", "on_screen": True},
+                              {"name": "群演老农", "on_screen": True}],
+                             [{"name": "甲", "on_screen": True}])
+    ff = _roster(add_image_strict_constraints("x", "首帧", shot=shot, characters=_CHARS3))
+    assert "群演老农" in ff, ff
+
+
+def test_roster_matches_alias_names():
+    """布局写的是别名、角色记录写的是身份名：按身份判定可见性，不能把别名当陌生人."""
+    from shared.style_prefix import add_image_strict_constraints
+    # 威胁源在脚本里是"刺客"，合规替换后正文/布局写成"神秘人"
+    chars = [{"identifier": "刺客"}, {"identifier": "乙"}]
+    shot = {"ff_desc": "神秘人与乙在船头", "lf_desc": "乙独自在船头",
+            "frame_layouts": {
+                "ff": [{"name": "神秘人", "on_screen": True},
+                       {"name": "乙", "on_screen": True}],
+                "lf": [{"name": "乙", "on_screen": True}]}}
+    ff = add_image_strict_constraints("x", "首帧", shot=shot, characters=chars)
+    assert "总共2人" in ff, ff[-200:]
+    lf = add_image_strict_constraints("x", "尾帧", shot=shot, characters=chars)
+    assert "总共1人" in lf, lf[-200:]
 
 
 def test_boat_relative_width_anchor(tmp_path, monkeypatch):

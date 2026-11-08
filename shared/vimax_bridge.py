@@ -3733,7 +3733,9 @@ def _dedupe_prompt_clauses(text: str) -> str:
     seen = set()
     out = []
     for part in parts:
-        key = _re.sub(r"[\s，。；;、（）()【】]", "", part)
+        # 只把**原文相同**（仅去首尾空白）的分句视为重复：标点参与语义，
+        # 「不，放行」与「不放行」不是同一句（复核 2026-11-08 已复现误删）。
+        key = part.strip()
         if not key:
             continue
         if key in seen:
