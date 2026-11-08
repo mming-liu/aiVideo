@@ -119,8 +119,13 @@ def test_step04_merge_produces_final_mp4(tmp_path, monkeypatch):
         _clip(wd / "shots" / str(shot["index"]) / "video.mp4", frames)
 
     # 2) step02b 完成报告走真实生产入口
-    from step02_video_gen.video_prompt_quality import write_video_product_quality
-    report = write_video_product_quality(script, wd)
+    # 该模块在 import 期 `from shared.paths import chapter_dir` 绑定了函数对象，
+    # 本用例必须同时改写这个绑定：否则会话里第一个 import 它的用例留下的 lambda
+    # 会把报告写进那一次的 tmp 目录（2026-11-08 全量跑实证：merge 找不到
+    # chapter_001/step02b_quality.json）。
+    import step02_video_gen.video_prompt_quality as vpq
+    monkeypatch.setattr(vpq, "chapter_dir", lambda *a, **k: ch)
+    report = vpq.write_video_product_quality(script, wd)
     assert report["status"] == "PASS", report.get("missing")
 
     # 3) 按**消费入口**的判据生成对白轨 + v2 身份侧车
@@ -162,6 +167,9 @@ def test_step04_merge_produces_final_mp4(tmp_path, monkeypatch):
 
     # 4) 真实合并入口
     import step04_merge.main as m
+    # 章号常量是 import 期求值；本用例只对 chapter_001 副本出片，必须钉住副本章号，
+    # 否则同会话里别的用例写过的 NOVEL_CHAPTER 会让一致性门误判（2026-11-08 全量跑实证）。
+    m.CHAPTER_INDEX = int(script.get("chapter_index") or 1)
     m.CHAPTER_DIR = ch
     m.SCRIPT_FILE = ch / "script_result.json"
     m.CLIP_DIR = wd

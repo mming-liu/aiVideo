@@ -517,8 +517,45 @@
 ### 已解决
 - 全仓测试 36 → 0 failed；`.gitignore` 后写覆盖先写的问题已修（两处）。
 - 图片提示词告警 53 → 8，阈值变化与去重收益分开记账（去重 0 条、阈值 45 条）。
-- `step04_merge.main` 真跑通：13 段桩片 + 5 条对白轨 + 4 条旁白轨 + 7 条字幕，
-  成片 1440×2560、时间线 71.88s（75.25s 减 13 处转场重叠）。
+- `step04_merge.main` 真跑通：13 段桩片 + 1 条对白轨（shot 12）+ 4 条旁白轨（N1..N4）
+  + 7 条字幕，成片 1440×2560、时间线 71.88s（75.25s 减 13 处转场重叠）。早期报告的
+  「5 条对白轨」已按逐镜声音分流与 `.voice` 侧车更正（见 todolist.md 同名更正）。
+- **WP3 真入口已映射到 `58c1b6bd`**：新增
+  `tests/step02a_frame_gen/test_wp3_58c1b6bd_doodle_and_qc.py`（4 用例），覆盖 13 镜 ×
+  首尾帧 26 条 prompt 过矛盾自检、同船多角色参考图、首抽直过 QC、doodle 二修复检通过、
+  二修失败回落 `attempt=1` 重抽；只有生图 provider 与 VLM 质检两个外部出口打桩，QC 分类、
+  红框绘制、复检准入、替换/回滚均走生产代码。计划稿两处过期命名已按源码更正：多角色
+  参考图接口实为 `_select_all_character_refs(shot, bank, characters_data, limit=2)`；
+  QC 侧车实为 `<stem>_hallucination.json`（`.qc.json` 是笔误）。
+  残余（待办，不阻断）：二修复检失败回落时，`<stem>_repair.png` 与
+  `<stem>_repair_hallucination.json` 会留在镜目录；当前无消费者读取，但会混淆人工排查。
+
+### C4 全量跑暴露的两次顺序依赖（2026-11-08 已修，仅测试改动）
+
+**第 1 次冻结跑**（`1 failed / 6362 passed`）：唯一失败是
+`tests/step04_merge/test_merge_chain_wp5.py::test_step04_merge_produces_final_mp4`，
+在 `verify_step01_commit_manifest` 处抛
+`QualityGateError: step01 chapter mismatch: 请求第 2 章，但目录是 chapter_001`。
+根因：`tests/step03_tts_audio/test_tts_units_and_cli.py` 的
+`cli.bootstrap("t", ["--chapter", "2"])` 按设计直接写 `os.environ`，用例只断言副作用、
+不还原；`step04_merge.main` 的 `CHAPTER_INDEX = int(os.getenv(...))` 是 import 期常量，
+于是被缓存成 2。单跑 step04 时 env 仍是 1，所以只在全量顺序下复现。
+修法：①该文件加 autouse fixture，用 monkeypatch 登记并还原
+`NOVEL_CHAPTER`/`BOOK_INDEX`；②merge 用例 import 后把 `m.CHAPTER_INDEX` 钉成副本
+`script.chapter_index`，不再依赖会话 env。
+
+**第 2 次冻结跑**仍是同一用例失败，但错误换了：
+`QualityGateError: quality gate report missing: .../chapter_001/step02b_quality.json`。
+根因：`step02_video_gen/video_prompt_quality.py` 在 import 期
+`from shared.paths import chapter_dir` 绑定函数对象；会话里第一个 import 它的
+`test_step02b_report_wp5.py` 当时已把 `paths.chapter_dir` 指向自己的 tmp 目录，
+绑定被缓存。merge 用例只改 `paths.chapter_dir`，报告因此写到已失效路径。
+修法：merge 用例同时把 `video_prompt_quality.chapter_dir` 指向副本。
+
+两次都只改测试隔离，无生产语义变化；两文件组合复跑通过后，第 3 次全量
+`6363 passed / 281 skipped / 4 xfailed / 0 failed`（816.85s，含 Tee 落盘开销）。
+正式产物复核不变：`script_sha256=88645710…`、`script_revision=58c1b6bd…`、
+`commit_status=COMMITTED`、13 镜、`blocking_count=0`。
 
 ### 关键事实（供后续复用）
 - 合并读取片段：`<chapter>/vimax_working/shots/<idx>/video.mp4`。

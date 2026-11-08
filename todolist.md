@@ -111,20 +111,37 @@
 - **WP2 已完成**：`58c1b6bd` 的 13 镜图片提示词告警 53 → 8；其中 45 条来自阈值重标定
   （4-gram ≥3→≥5、长度 800→1400），去重本身只省 56 字符、消除 0 条告警；剩 8 条为
   `prompt_facts` 判定的「正文提到、布局离屏」，保留评阅。
+- **WP3 已完成（2026-11-08 收口）**：参考图组装、`*_qc_log.json` 落盘、doodle 先修后抽
+  状态机已由 `tests/step02a_frame_gen/test_wp3_58c1b6bd_doodle_and_qc.py` 钉在 `58c1b6bd`
+  真入口：13 镜 × 首尾帧 26 条 prompt 过矛盾自检、同船多角色参考图；首抽直过 / 二修复检
+  通过 / 二修失败回落重抽三条状态链；主图与 `_repair` 两份 QC 尝试日志分开落盘。
+  计划稿两处过期命名已按源码更正：多角色参考图接口是
+  `_select_all_character_refs(shot, bank, characters_data, limit=2)`（不存在
+  `_select_multi_character_references`）；QC 侧车是 `<stem>_hallucination.json`，
+  `.qc.json` 为笔误。
 - **WP5 已完成**：`step04_merge.main` 在章节副本里真跑通，产出 `final.mp4`，13 段桩片 +
   对白/旁白桩音轨 + `.voice` 签名侧车 + 7 条字幕 cue；时间线重叠后总时长 **71.88s**。
+- **C4 终局（2026-11-08）**：冻结态 `python -m pytest tests` =
+  `6363 passed / 281 skipped / 4 xfailed / 0 failed`。前两次冻结跑各暴露一处
+  用例间顺序依赖（`NOVEL_CHAPTER` 泄漏、`video_prompt_quality.chapter_dir` 的
+  import 期绑定），均为测试隔离修复、无生产语义变化；根因与修法见 problems.md
+  同名节。正式产物复核仍为 `58c1b6bd…` / `COMMITTED` / 13 镜 / 0 blocking。
 
 ### 仍未完成
-- [ ] **WP3 剩余**：参考图组装、`*_qc_log.json` 落盘、doodle 先修后抽状态机，尚未逐项
-      映射到 `58c1b6bd` 并补证据（现有用例覆盖的是通用路径）。
 - [ ] **WP4 路径契约**：`<chapter>/vimax_working/shots/<idx>/video.mp4` 已由合并实测确认，
       但还没有独立断言把「合并读取路径 = step02b 写出路径」钉死。
 - [ ] **WP6 归档**：本文件与 problems.md 的条目已补，交付样片目录与成本/返工账待补。
+- [ ] **两份本地用例未入库**：`tests/step02a_frame_gen/test_dump_safety.py`、
+      `test_gen_all_frames_parallel.py` 仍被 `.gitignore` 的
+      `tests/step02a_frame_gen/*` 覆盖，只在本地跑（全量套件会执行）；是否入库待裁决。
 - [ ] **WP7–WP12**：未启动；Step02b 每次付费调用需人工确认（`CLAUDE.md` 暂停条件 3）。
 ### WP6 交付样片（2026-11-08）
 - 位置：`.probe_payload/wp6_delivery/`（`final.mp4` / `subtitles.srt` / `wp6_report.json`，不入库）
-- 读数：时长 **71.875s**（时间线预期 71.88s）、1440×2560、视频+音频、5 个对白轨镜头 `[2,3,4,8,12]`
-- `final_sha256 = a27c79313daeee6dba45e4350b8f1668ff80abbeadb79b0c30a8084a8cb70868`
+- 读数：时长 **71.875s**（时间线预期 71.88s）、1440×2560、视频+音频；对白轨仅 **shot 12**，
+  旁白 N1..N4（`wp6_report.json` 的 `narration_units=[1,2,3,4]`）
+- `final_sha256 = 233720fc07fe29da76db45a46af440bd723c10fa689af1a3459effbf6cb002f8`
+  （2,577,434,247 字节；2026-11-08 用当前用例整跑复核，成片字节与上一次一致；
+  旧记录的 `a27c79…` 与 `[2,3,4,8,12]` 是修正对白轨分类前的读数）
 - 素材性质：**桩素材（纯色+噪声）、零模型调用、真实 FFmpeg 合成**；不代表真实画面质量
 - 复现命令：`$env:WP6_DELIVERY_DIR="<dir>"; python -m pytest tests/step04_merge/test_merge_chain_wp5.py -q -p no:cacheprovider`
 ### 更正：对白轨与旁白轨的分类（2026-11-08 复核）

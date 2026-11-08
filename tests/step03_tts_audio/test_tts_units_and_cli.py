@@ -44,6 +44,22 @@ def _isolated_registry(tmp_path, monkeypatch):
     vreg.reset_registry_cache()
 
 
+@pytest.fixture(autouse=True)
+def _restore_scope_env(monkeypatch):
+    """还原 `cli.bootstrap()` 直接写进 `os.environ` 的章号.
+
+    bootstrap 按设计调 run_scope.apply 写 env，本文件又显式断言这个副作用；
+    不还原就会把 `NOVEL_CHAPTER=2/4` 泄漏给后续用例。2026-11-08 全量跑实证：
+    step04_merge 在 import 期按泄漏值缓存 `CHAPTER_INDEX=2`，章号一致性门把
+    合法的 chapter_001 副本判成错章。用 monkeypatch 登记原值，teardown 恢复。
+    """
+    import os
+
+    for key, default in (("NOVEL_CHAPTER", "1"), ("BOOK_INDEX", "1")):
+        monkeypatch.setenv(key, os.environ.get(key, default))
+    yield
+
+
 def _script(seg: str, *, duration: float = 8.0) -> dict:
     plan = {
         "shot_beats": [
