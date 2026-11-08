@@ -1268,48 +1268,59 @@ def _collect_scene_asset_refs(shot: dict) -> list[str]:
     首帧的时间由 ff_desc 决定，若注入时段冲突的场景图（黄昏 wide 配夜晚
     首帧），会把时间带偏。故：画面描述含夜晚/月光/夜色 → 优先 near；
     含黄昏/夕阳/落日 → 优先 wide；无法判断时近景 near 兜底（含正确船型）。
-    匹配逻辑与 prompt_builder._collect_r2v_references 保持一致（location 双向子串匹配）。
+    场景身份按 shared.scene_identity 解析：显式 scene_asset_id/scene_id 优先，
+    否则只认完整 identifier/别名唯一命中；歧义与无命中只写诊断并跳过，
+    不再按 bank 顺序或公共地名猜（2026-11-08 WP7-Prep 复核）。
+    注意：step02b 的 r2v 参考链仍用旧的模糊匹配，属后续收敛项。
     """
     try:
         from shared.assets_bank import SceneAssetsBank
+        from shared.scene_identity import resolve_scene_identity
         sbank = SceneAssetsBank()
         sbank.load()
-        loc = shot.get("location", "") or shot.get("scene", "")
-        if not loc:
-            return []
+        entries = {}
         for sid in sbank.get_all_identifiers():
-            if not sid:
-                continue
-            scene = sbank.get_scene(sid) or {}
-            match_sources = [sid] + list(scene.get("consistent_terms", []) or [])
-            if scene.get("location"):
-                match_sources.append(scene["location"])
-            # 模糊匹配：公共连续子串 ≥2 字即算同一地点
-            # （"照月湾小舟" vs "云河镇照月湾" → 共"照月湾"3字命中）
-            from shared.assets_bank import scene_matches_location
-            matched = any(scene_matches_location(src, loc) for src in match_sources if src)
-            if not matched:
-                continue
-            wide = sbank.get_wide_image(sid)
-            near = sbank.get_near_image(sid)
-            # 时间段判定：夜间 → near；黄昏/白天 → wide；默认 near（含正确物体尺寸）
-            probe = " ".join([shot.get("ff_desc", ""), shot.get("motion_desc", ""),
-                              shot.get("lf_desc", ""), shot.get("prompt", "")])
-            night_kw = ("夜", "月", "星光", "星", "灯笼", "烛火", "黑暗", "入夜", "暮色")
-            dusk_kw = ("黄昏", "夕阳", "落日", "傍晚", "余晖", "晚霞", "西下")
-            is_night = any(k in probe for k in night_kw)
-            is_dusk = any(k in probe for k in dusk_kw)
-            picked = None
-            if is_night and near:
-                picked = near
-            elif is_dusk and wide:
-                picked = wide
-            else:
-                picked = near or wide
-            if picked and Path(picked).exists():
-                _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 首帧参考图=场景 {sid} {Path(picked).name}"
-                            f"（{'夜→near' if is_night else '昏→wide' if is_dusk else '近景兜底'}）")
-                return [picked]
+            if sid:
+                entries[str(sid)] = sbank.get_scene(sid) or {}
+        # 2026-11-08 WP7-Prep：显式 id -> 完整 identifier/别名唯一命中；
+        # 歧义/无命中只诊断、不按 bank 顺序猜（照月湾荷湾/荷塘静默选图根因）。
+        match = resolve_scene_identity(
+            entries,
+            explicit_id=shot.get("scene_asset_id") or shot.get("scene_id"),
+            scene_name=shot.get("scene"),
+            location=shot.get("location"),
+        )
+        try:
+            shot["_scene_match"] = match.as_dict()
+        except Exception:
+            pass
+        if not match.ok:
+            _bridge_log(
+                "  [bridge] 镜头%s 场景参考跳过（%s）: %s"
+                % (shot.get("index", "?"), match.reason,
+                   "; ".join(match.diagnostics)))
+            return []
+        sid = match.scene_id
+        wide = sbank.get_wide_image(sid)
+        near = sbank.get_near_image(sid)
+        # 时间段判定：夜间 → near；黄昏/白天 → wide；默认 near（含正确物体尺寸）
+        probe = " ".join([shot.get("ff_desc", ""), shot.get("motion_desc", ""),
+                          shot.get("lf_desc", ""), shot.get("prompt", "")])
+        night_kw = ("夜", "月", "星光", "星", "灯笼", "烛火", "黑暗", "入夜", "暮色")
+        dusk_kw = ("黄昏", "夕阳", "落日", "傍晚", "余晖", "晚霞", "西下")
+        is_night = any(k in probe for k in night_kw)
+        is_dusk = any(k in probe for k in dusk_kw)
+        picked = None
+        if is_night and near:
+            picked = near
+        elif is_dusk and wide:
+            picked = wide
+        else:
+            picked = near or wide
+        if picked and Path(picked).exists():
+            _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 首帧参考图=场景 {sid} {Path(picked).name}"
+                        f"（{'夜→near' if is_night else '昏→wide' if is_dusk else '近景兜底'}）")
+            return [picked]
         return []
     except Exception as e:
         _bridge_log(f"  [bridge] 场景资产参考图收集异常: {e}")
