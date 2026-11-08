@@ -61,15 +61,42 @@ def _config(kind: str):
     return Path(chapter_dir()) / default_name, limit
 
 
-def _read(path: Path) -> dict:
+def _read(path: Path, kind: str, expected_limit: int) -> dict:
+    """读取并严格校验账本；缺失返回初始状态；字段损坏/身份不符一律拒绝.
+
+    不允许 used 缺失/负数/字符串被当成 0（那会静默恢复额度），也不允许
+    账本 limit 与本次 TOTAL 不一致（那会在恢复时静默扩大/缩小预算）。
+    """
     if not path.exists():
-        return {}
+        return {"kind": kind, "used": 0, "limit": int(expected_limit),
+                "quota_exhausted": ""}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise PostBudgetExhausted("预算账本不可读（拒绝发送）: %s" % exc) from exc
     if not isinstance(data, dict):
         raise PostBudgetExhausted("预算账本不是 JSON 对象（拒绝发送）: %s" % path)
+    if data.get("kind") != kind:
+        raise PostBudgetExhausted(
+            "预算账本身份不符：kind=%r，期望 %r（拒绝发送）"
+            % (data.get("kind"), kind))
+    used = data.get("used")
+    if isinstance(used, bool) or not isinstance(used, int) or used < 0:
+        raise PostBudgetExhausted(
+            "预算账本 used 非法：%r（拒绝发送，禁止按 0 重置）" % (used,))
+    limit = data.get("limit")
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        raise PostBudgetExhausted(
+            "预算账本 limit 非法：%r（拒绝发送）" % (limit,))
+    if int(expected_limit) and limit != int(expected_limit):
+        raise PostBudgetExhausted(
+            "预算身份不一致：账本 limit=%d，本次 TOTAL=%d；"
+            "不得静默扩大/重置，如需改预算请显式 reset"
+            % (limit, int(expected_limit)))
+    quota = data.get("quota_exhausted", "")
+    if quota not in (None, "") and not isinstance(quota, str):
+        raise PostBudgetExhausted("预算账本 quota_exhausted 非法（拒绝发送）")
+    data["quota_exhausted"] = str(quota or "")
     return data
 
 
@@ -122,14 +149,14 @@ def acquire(kind: str, amount: int = 1) -> int:
             raise PostBudgetExhausted("额度已熔断（%s）：%s" % (kind, _QUOTA[kind]))
         return 0
     with _LOCK, _file_lock(path):
-        data = _read(path)
-        quota = str(data.get("quota_exhausted") or "")
+        data = _read(path, kind, limit)
+        quota = data["quota_exhausted"]
         if quota:
             _QUOTA[kind] = quota
             raise PostBudgetExhausted("额度已熔断（%s）：%s" % (kind, quota))
-        used = _int(data.get("used"), 0)
-        effective = limit or _int(data.get("limit"), 0)
-        if effective and used + amount > effective:
+        used = data["used"]
+        effective = data["limit"]
+        if used + amount > effective:
             raise PostBudgetExhausted(
                 "POST 预算耗尽（%s）：已用 %d/%d" % (kind, used, effective))
         used += amount
@@ -148,7 +175,7 @@ def mark_quota_exhausted(kind: str, message: str) -> None:
     if path is None:
         return
     with _LOCK, _file_lock(path):
-        data = _read(path)
+        data = _read(path, kind, _limit)
         data.update({"kind": kind, "quota_exhausted": text,
                      "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")})
         _write(path, data)
@@ -163,7 +190,7 @@ def quota_exhausted(kind: str) -> str:
         return ""
     try:
         with _LOCK, _file_lock(path):
-            data = _read(path)
+            data = _read(path, kind, _limit)
     except PostBudgetExhausted as exc:
         return str(exc)
     text = str(data.get("quota_exhausted") or "")
@@ -179,7 +206,7 @@ def usage(kind: str) -> dict:
         return {}
     try:
         with _LOCK, _file_lock(path):
-            data = _read(path)
+            data = _read(path, kind, limit)
     except PostBudgetExhausted as exc:
         return {"error": str(exc), "path": str(path), "limit": limit}
     data.setdefault("limit", limit)

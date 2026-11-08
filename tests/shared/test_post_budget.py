@@ -97,3 +97,40 @@ def test_is_quota_error_markers():
     assert post_budget.is_quota_error("QuotaExceeded: no balance")
     assert post_budget.is_quota_error("账户额度不足")
     assert not post_budget.is_quota_error("400 bad request")
+
+
+def _write_ledger(path, payload):
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def test_missing_used_is_rejected_not_reset(monkeypatch, tmp_path):
+    ledger = _enable(monkeypatch, tmp_path, total=5)
+    _write_ledger(ledger, {"kind": "image", "limit": 5})
+    with pytest.raises(post_budget.PostBudgetExhausted):
+        post_budget.acquire("image")
+
+
+def test_illegal_used_values_are_rejected(monkeypatch, tmp_path):
+    ledger = _enable(monkeypatch, tmp_path, total=5)
+    for bad in (-1, "1", True, 1.5):
+        _write_ledger(ledger, {"kind": "image", "used": bad, "limit": 5})
+        with pytest.raises(post_budget.PostBudgetExhausted):
+            post_budget.acquire("image")
+
+
+def test_ledger_kind_mismatch_is_rejected(monkeypatch, tmp_path):
+    ledger = _enable(monkeypatch, tmp_path, total=5)
+    _write_ledger(ledger, {"kind": "video", "used": 0, "limit": 5})
+    with pytest.raises(post_budget.PostBudgetExhausted):
+        post_budget.acquire("image")
+
+
+def test_changed_total_cannot_expand_existing_ledger(monkeypatch, tmp_path):
+    ledger = _enable(monkeypatch, tmp_path, total=5)
+    post_budget.acquire("image")
+    monkeypatch.setenv("STEP02A_IMAGE_BUDGET_TOTAL", "9")
+    with pytest.raises(post_budget.PostBudgetExhausted):
+        post_budget.acquire("image")
+    data = json.loads(ledger.read_text(encoding="utf-8"))
+    assert data["used"] == 1, "被拒的请求不得改写账本"
+    assert data["limit"] == 5

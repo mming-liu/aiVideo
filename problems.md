@@ -564,22 +564,26 @@
 - 对白/旁白轨均需 `>10240` 字节，且都要 `.voice` 侧车（`voice_id|正文指纹`）。
 ### WP7-Prep 场景身份与发送预算（2026-11-08，零调用）
 
-场景参考原先按 bank 顺序取第一个模糊命中；同 location 的「照月湾荷湾/荷塘」导致荷塘被遮蔽。
-新增 `shared/scene_identity.py`：显式 `scene_asset_id`/`scene_id` 优先；否则按
-「精确相等 > 完整子串（按匹配串长度）> 最长公共子串（按公共长度）」取最优；
-同分判歧义并跳过选图，稳定排序只用于诊断。两个消费入口
-（`vimax_bridge._collect_scene_asset_refs`、`prompt_builder._collect_r2v_references`）均已接入。
-`tests/shared/test_scene_identity_match.py`（16 例）覆盖顺序置换、三层匹配、歧义、无命中、
-无关场景组、显式 id、非法词条、空输入与组装入口集成。
+场景参考曾按 bank 顺序取第一个模糊命中，同 location 的「照月湾荷湾/荷塘」导致荷塘被遮蔽。
+最终恢复已确认规则：显式 `scene_asset_id`/`scene_id`（必须在库）→ 完整相等的 identifier/
+已声明别名（对 shot.scene/location）→ 唯一命中才选；多项命中、仅共享地名、无命中一律诊断并
+跳过，稳定排序只用于诊断。两个消费入口（vimax_bridge._collect_scene_asset_refs、
+prompt_builder._collect_r2v_references）已接入。
+
+反例回归：输入「东城」不选「东城旧仓库」；「南城码头」不选「北城码头」；带前缀的
+「云河镇照月湾荷塘」不精确命中即 no_match（fail-closed）。tests/shared/test_scene_identity_match.py
+18 例覆盖顺序置换、唯一 identifier/别名、共享地名歧义、无命中、无关组、显式 id、非法词条、
+空输入、两个用户反例与组装入口集成。
 
 零调用回放：场景命中 `照月湾荷塘:near` + `湾堤岸边:near`（2 个），FF/LF/KF 最终参考均 ≤3；
 消费并集为场景 2、道具 6、角色 3（张十三待补），B 的 16/81/172 与 3.52/17.82/37.84 元不变。
-未合并荷湾/荷塘：两者 near 陈设与光照不同，是否同一资产需叙事用途确认。
+未合并荷湾/荷塘：near 陈设与光照不同，是否同一资产待叙事用途确认。
 
-新增 `shared/post_budget.py`：threading 锁 + msvcrt/fcntl 文件锁的章节级 POST 账本
-（`STEP02A_IMAGE_BUDGET_TOTAL` / `STEP02B_VIDEO_BUDGET_TOTAL`，未设置=禁用）；发送前原子扣减、
-损坏 fail-closed、额度耗尽标记落盘并跨重启生效。图片 `_send` 与视频 `create_prepared_task` 已接入；
-视频 403 SetLimitExceeded 触发批次熔断：`_submit_over_queue` 不再换模型，`gen_all_videos` 停止后续
-镜头提交（已提交任务继续轮询，可断点续跑）。测试：`test_post_budget.py` 7 例、
-`test_image_retry_cap.py` 重启后续跑、`test_video_quota_breaker.py` 熔断后零 POST。
+新增 `shared/post_budget.py`：threading 锁 + msvcrt/fcntl 文件锁的章节级 POST 账本；
+账本字段严格校验（kind/used≥0 整数/limit>0；缺失、负数、类型错、kind 不符、limit 与本次 TOTAL
+不一致均拒绝发送），不允许静默重置或扩大限额。图片 `_send` 与视频 `create_prepared_task` 接入；
+视频仅对明确额度耗尽的 403 熔断（停止换模型/后续提交），其他 403 仍走回退。
+视频请求硬上限只由显式 `STEP02B_VIDEO_BUDGET_TOTAL` 保证；未设置时不存在通用 ≤14 上界。
 
+测试：`test_post_budget.py` 11 例（含 used 缺失/负数/字符串、kind/limit 身份不符、TOTAL 变更拒绝、
+并发、熔断落盘）、`test_image_retry_cap.py` 重启续跑、`test_video_quota_breaker.py` 熔断零 POST。

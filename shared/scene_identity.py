@@ -5,9 +5,9 @@
 - 不再用「最长公共子串 + bank 顺序」选场景图：那会把「照月湾荷湾 vs 照月湾荷塘」
   这类同地点双条目变成静默选图。
 - 镜头带显式场景身份（scene_asset_id / scene_id）时优先使用，且必须存在于资产库。
-- 无显式身份时按**匹配特异性**取最优：精确相等 > 完整子串包含（按匹配串长度）>
-  最长公共子串（按公共长度）；同分仍返回歧义诊断（不按 bank 顺序裁决），
-  由输入侧提供显式 id 或收敛重复别名。
+- 无显式身份时只接受**完整相等**的 identifier / 已声明别名（对 scene/location）；
+  唯一命中才选。多项命中、仅共享地名、无命中返回诊断，由输入侧提供显式 id
+  或收敛重复别名；稳定排序只用于诊断展示。
 - 稳定排序只用于诊断展示，不承担身份裁决。
 """
 from __future__ import annotations
@@ -111,59 +111,33 @@ def resolve_scene_identity(
     if not texts:
         return SceneMatch(None, "empty_input", (), ("镜头缺少 scene/location，无法匹配场景",))
 
-    def _lcs_len(a: str, b: str) -> int:
-        if not a or not b:
-            return 0
-        prev = [0] * (len(b) + 1)
-        best = 0
-        for ca in a:
-            cur = [0] * (len(b) + 1)
-            for j, cb in enumerate(b, 1):
-                if ca == cb:
-                    cur[j] = prev[j - 1] + 1
-                    if cur[j] > best:
-                        best = cur[j]
-            prev = cur
-        return best
-
-    # 特异性打分：精确相等(3) > 完整子串包含(2，按匹配串长度) >
-    # 最长公共子串(1，按公共长度)。取最高分；同分仍判歧义，不按 bank 顺序裁决。
-    scored: dict[str, tuple] = {}
+    # 已确认规则：只认完整相等的 identifier / 已声明别名（对 scene / location）；
+    # 不做子串包含或最长公共子串的「最优打分」——那会把「东城」判给「东城旧仓库」、
+    # 把「南城码头」判给「北城码头」。唯一命中才选，其余一律诊断。
+    candidates: dict[str, list[str]] = {}
     for sid in entries:
         entry = entries[sid]
         sources = [("identifier", _norm(sid))]
         sources.extend(("alias", term) for term in _declared_terms(entry, diagnostics))
-        best = None
-        for _kind, source in sources:
+        for kind, source in sources:
             if not source:
                 continue
-            for _label, text in texts:
+            for label, text in texts:
                 if source == text:
-                    score = (3, len(source), "exact")
-                elif source in text or text in source:
-                    score = (2, len(source), "contained")
-                else:
-                    common = _lcs_len(source, text)
-                    if common < 2:
-                        continue
-                    score = (1, common, "common_substr")
-                if best is None or score > best:
-                    best = score
-        if best is not None:
-            scored[sid] = best
+                    candidates.setdefault(sid, []).append(
+                        "%s:%s == %s" % (kind, source, label))
+                    break
 
-    if not scored:
+    ordered = tuple(sorted(candidates))
+    if len(ordered) == 1:
+        return SceneMatch(ordered[0], "unique", ordered, tuple(diagnostics))
+    if len(ordered) > 1:
+        detail = "; ".join(
+            "%s <- %s" % (sid, ", ".join(candidates[sid])) for sid in ordered)
         diagnostics.append(
-            "场景无命中：%s；现有 %d 个场景条目" % (texts, len(entries)))
-        return SceneMatch(None, "no_match", (), tuple(diagnostics))
-
-    top = max(scored.values())
-    winners = tuple(sorted(sid for sid, score in scored.items() if score == top))
-    if len(winners) == 1:
-        return SceneMatch(winners[0], top[2], tuple(sorted(scored)), tuple(diagnostics))
-
-    detail = "; ".join("%s=%s" % (sid, scored[sid]) for sid in winners)
+            "场景身份歧义（%d 个候选）：%s；请提供 scene_asset_id 或收敛重复别名"
+            % (len(ordered), detail))
+        return SceneMatch(None, "ambiguous", ordered, tuple(diagnostics))
     diagnostics.append(
-        "场景身份同分/歧义（%d 个候选）：%s；请提供 scene_asset_id 或收敛重复别名"
-        % (len(winners), detail))
-    return SceneMatch(None, "ambiguous", winners, tuple(diagnostics))
+        "场景无完整命中：%s；现有 %d 个场景条目" % (texts, len(entries)))
+    return SceneMatch(None, "no_match", (), tuple(diagnostics))
