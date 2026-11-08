@@ -527,8 +527,9 @@
   红框绘制、复检准入、替换/回滚均走生产代码。计划稿两处过期命名已按源码更正：多角色
   参考图接口实为 `_select_all_character_refs(shot, bank, characters_data, limit=2)`；
   QC 侧车实为 `<stem>_hallucination.json`（`.qc.json` 是笔误）。
-  残余（待办，不阻断）：二修复检失败回落时，`<stem>_repair.png` 与
-  `<stem>_repair_hallucination.json` 会留在镜目录；当前无消费者读取，但会混淆人工排查。
+  已修（2026-11-08 裁决）：二修未被采纳时由 `_cleanup_doodle_candidate` 删除
+  `<stem>_repair.png`、`<stem>_repair_hallucination.json` 与 `<stem>_doodle.png`，
+  只保留 `<stem>_repair_qc_log.json` 审计留痕；路径 C 用例已补残留断言。
 
 ### C4 全量跑暴露的两次顺序依赖（2026-11-08 已修，仅测试改动）
 

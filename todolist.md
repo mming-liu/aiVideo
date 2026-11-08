@@ -131,9 +131,9 @@
 - [ ] **WP4 路径契约**：`<chapter>/vimax_working/shots/<idx>/video.mp4` 已由合并实测确认，
       但还没有独立断言把「合并读取路径 = step02b 写出路径」钉死。
 - [ ] **WP6 归档**：本文件与 problems.md 的条目已补，交付样片目录与成本/返工账待补。
-- [ ] **两份本地用例未入库**：`tests/step02a_frame_gen/test_dump_safety.py`、
-      `test_gen_all_frames_parallel.py` 仍被 `.gitignore` 的
-      `tests/step02a_frame_gen/*` 覆盖，只在本地跑（全量套件会执行）；是否入库待裁决。
+- [x] **两份本地用例已入库（2026-11-08 裁决）**：`test_dump_safety.py` 与
+      `test_gen_all_frames_parallel.py` 已在 `.gitignore` 放行并提交，本机与干净检出的
+      用例集合一致。
 - [ ] **WP7–WP12**：未启动；Step02b 每次付费调用需人工确认（`CLAUDE.md` 暂停条件 3）。
 ### WP6 交付样片（2026-11-08）
 - 位置：`.probe_payload/wp6_delivery/`（`final.mp4` / `subtitles.srt` / `wp6_report.json`，不入库）
