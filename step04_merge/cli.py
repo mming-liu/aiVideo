@@ -48,6 +48,8 @@ class BootstrapOptions:
     audio_candidates: Path | None = None
     #: --shots 子集试合并（不放进 ENHANCEMENT_FLAGS：无候选根也能直接单跑）
     shots: str | None = None
+    #: --dry-run：只构建/校验时间线与字幕计划，不编码、不写正式成片/SRT。
+    dry_run: bool = False
     argv: tuple = ()
 
     @property
@@ -99,6 +101,9 @@ def build_parser(description: str = "") -> argparse.ArgumentParser:
     parser.add_argument("--shots", default=None, metavar="SPEC",
                         help="只试合并指定镜头（逗号分隔/区间，如 1,3-5）。输出写 "
                              "final_shots_<tag>.mp4，不覆盖正式 final.mp4；不给则整章合并")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="秒级离线预检：构建并校验时间线/字幕/音轨，打印报告；"
+                             "不编码、不写 final.mp4 / SRT / 正式质量报告")
     return parser
 
 
@@ -142,6 +147,7 @@ def parse_bootstrap(argv=None) -> BootstrapOptions:
         video_candidates=args.video_candidates,
         audio_candidates=args.audio_candidates,
         shots=getattr(args, "shots", None),
+        dry_run=bool(getattr(args, "dry_run", False)),
         argv=tuple(sys.argv[1:] if argv is None else argv),
     )
 

@@ -16,7 +16,7 @@ def test_unsupported_prepared_is_pending_not_ready(tmp_path, monkeypatch):
     shot_dir = tmp_path / "shots" / "1"
     shot_dir.mkdir(parents=True)
     Image.new("RGB", (8, 8), "white").save(shot_dir / "first_frame.png")
-    Image.new("RGB", (8, 8), "white").save(shot_dir / "last_frame.png")
+    Image.new("RGB", (8, 8), "black").save(shot_dir / "last_frame.png")
 
     class _Svc:
         def supports_prepared(self):
@@ -34,3 +34,24 @@ def test_unsupported_prepared_is_pending_not_ready(tmp_path, monkeypatch):
     assert entry["verdict"] == "pending"
     assert entry["generations"] == 0
     assert plan["ready"] == 0
+
+
+def test_identical_first_last_frames_block_plan_and_record_ledger(tmp_path):
+    from PIL import Image
+    from step02b_video_gen import main
+
+    shot_dir = tmp_path / "shots" / "1"
+    shot_dir.mkdir(parents=True)
+    Image.new("RGB", (8, 8), "white").save(shot_dir / "first_frame.png")
+    Image.new("RGB", (8, 8), "white").save(shot_dir / "last_frame.png")
+    ledger = tmp_path / "precheck.json"
+
+    script = {"shots": [{"index": 1, "ff_desc": "甲", "lf_desc": "乙"}]}
+    plan = main.build_plan(script, tmp_path / "shots", only_indices={1},
+                           chapter=1, provider="stub", precheck_ledger=ledger)
+
+    entry = plan["shots"][0]
+    assert entry["verdict"] == "blocked"
+    assert entry["code"] == "frames_identical"
+    assert plan["estimated_generations"] == 0
+    assert ledger.exists(), "预检结果必须持久化"

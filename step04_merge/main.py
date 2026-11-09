@@ -1064,6 +1064,9 @@ def main(options=None):
 
 def _run_merge(options, attempt):
   global FINAL_OUT, SRT_OUT
+  import time as _time
+  _started = _time.perf_counter()
+  _dry_run = bool(getattr(options, "dry_run", False))
   _logger.separator("=", 60)
   _logger.info(" Step 4: Video Merge (Stretch + Concat + Subtitle + Color)")
   # S19-3：--shots 子集试合并。子集输出走独立文件名，绝不覆盖正式 final.mp4。
@@ -1108,8 +1111,9 @@ def _run_merge(options, attempt):
       )
 
   # Ensure output directories exist
-  CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
-  TEMP_DIR.mkdir(parents=True, exist_ok=True)
+  if not _dry_run:
+    CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
   # 1. Load script
   with open(SCRIPT_FILE, "r", encoding="utf-8") as f:
@@ -1270,7 +1274,23 @@ def _run_merge(options, attempt):
 
   # 4. 时间线：显式 shot_index 排序 + 边界/端点分离（唯一时间算术在 timeline.py）
   _logger.info("[INFO] Merge: 显式时间线（clips → 转场 → 音频 → overlay → 字幕）")
-  native_transitions = [_parse_transition(s.get("clip_transition")) for s in valid_shots]
+  # M8.4：SMART_TRANSITION=1 时，只给**没有显式 clip_transition** 的边界按镜头
+  # 关系补转场（场景/空间/时间跳跃/动作）；显式值永远优先，默认关闭。
+  _smart = os.getenv("SMART_TRANSITION", "0").strip() == "1"
+  _suggestions = None
+  if _smart:
+    from shared.transition_picker import fill_missing_transitions
+    _suggestions = fill_missing_transitions(valid_shots)
+  native_transitions = []
+  for _i, _s in enumerate(valid_shots):
+    _raw = str(_s.get("clip_transition") or "").strip()
+    if _raw:
+      native_transitions.append(_parse_transition(_raw))
+    elif _suggestions is not None and _suggestions[_i]:
+      _ch = _suggestions[_i]
+      native_transitions.append((_ch["kind"], _ch["duration_sec"]))
+    else:
+      native_transitions.append(_parse_transition(_raw))
   clip_kinds = ["hook" if (hook_clip is not None and i == 0) else "shot"
                 for i in range(len(clips))]
   shot_indexes = [int(s.get("index", i)) for i, s in enumerate(valid_shots)]
@@ -1298,9 +1318,13 @@ def _run_merge(options, attempt):
     script_revision=script_revision,
     shot_audio_sha256=(_shot_audio_hashes(valid_shots, audio_resolve)
                        if validated_timings is not None else None))
-  write_srt(subtitle_plan, SRT_OUT)
-  _logger.info(f"[OK] SRT generated: {SRT_OUT} ({len(subtitle_plan.cues)} subtitles, "
-               f"source={subtitle_plan.source})")
+  if _dry_run:
+    _logger.info(f"[DRY-RUN] 字幕计划已构建：{len(subtitle_plan.cues)} cues，"
+                 f"source={subtitle_plan.source}（不写 SRT）")
+  else:
+    write_srt(subtitle_plan, SRT_OUT)
+    _logger.info(f"[OK] SRT generated: {SRT_OUT} ({len(subtitle_plan.cues)} subtitles, "
+                 f"source={subtitle_plan.source})")
   if subtitle_plan.fallbacks:
     _logger.warn(f"[WARN] 对齐候选逐镜降级 {len(subtitle_plan.fallbacks)} 处: "
                  f"{subtitle_plan.fallbacks[:4]}")
@@ -1409,11 +1433,65 @@ def _run_merge(options, attempt):
                              [t.path for t in timeline.audio_tracks])
   settings = _encode_settings(require_explicit_font=(attempt is not None))
   subtitle_filter = ""
+  _dry_srt = None
   if subtitle_plan.cues:
     try:
-      subtitle_filter = ffmpeg_subtitle_filter(SRT_OUT, subtitle_plan, settings.subtitle_style)
+      _srt_for_filter = SRT_OUT
+      if _dry_run:
+        # dry-run 不写正式 SRT，但在临时文件里验证「cue 列表 ↔ SRT 文本」契约与字形。
+        import tempfile
+        _dry_srt = Path(tempfile.mkdtemp(prefix="step04_dry_")) / "subtitles.srt"
+        write_srt(subtitle_plan, _dry_srt)
+        _srt_for_filter = _dry_srt
+      subtitle_filter = ffmpeg_subtitle_filter(_srt_for_filter, subtitle_plan,
+                                               settings.subtitle_style)
     except SubtitleContractError as exc:
       raise RenderError(exc.code, "compile", str(exc), exit_code=2) from exc
+  if _dry_run:
+    # M4：秒级预检——时间线/字幕/音轨已按生产同一链构建并校验，到此为止。
+    # 不调用 FFmpeg、不写 final.mp4/SRT/正式质量报告；报告写候选 attempt 或 stdout。
+    from step04_merge.dry_run import build_report, write_report
+    _media_prechecks = None
+    if os.getenv("STEP04_DRY_RUN_MEDIA_PRECHECK", "1").strip() != "0":
+      # M8.2：本地 FFmpeg 帧采样预筛（静止/闪帧/时长偏差），不调视觉模型。
+      _media_prechecks = []
+      try:
+        from shared.media_precheck import precheck_video as _precheck_video
+        for _clip in timeline.clips:
+          try:
+            _media_prechecks.append(_precheck_video(
+              _clip.path, expected_duration_sec=_clip.duration_sec,
+              fps=1.0, max_frames=60))
+          except Exception as _pe:
+            _media_prechecks.append({"path": str(_clip.path),
+                                     "verdict": "unknown",
+                                     "warnings": [{"code": "precheck_failed",
+                                                   "message": str(_pe)[:300]}]})
+      except Exception as _me:
+        _media_prechecks = [{"verdict": "unknown",
+                             "warnings": [{"code": "precheck_unavailable",
+                                           "message": str(_me)[:300]}]}]
+    _report = build_report(
+        timeline, output=FINAL_OUT, srt_path=SRT_OUT, settings=settings,
+        elapsed_ms=(_time.perf_counter() - _started) * 1000.0,
+        media_prechecks=_media_prechecks)
+    if attempt is not None:
+      _report_path = attempt.outputs_dir / "dry_run_report.json"
+      write_report(_report, _report_path)
+      _report["report_path"] = str(_report_path)
+    if _dry_srt is not None:
+      try:
+        _dry_srt.unlink(missing_ok=True)
+        _dry_srt.parent.rmdir()
+      except OSError:
+        pass
+    print(json.dumps(_report, ensure_ascii=False))
+    _logger.info("[DRY-RUN] ready：%d clips，总长 %.2fs，%d 音轨，%d cues，"
+                 "elapsed=%.0fms（零编码/零网络）"
+                 % (len(timeline.clips), timeline.total_duration_sec,
+                    len(timeline.audio_tracks), len(subtitle_plan.cues),
+                    _report["elapsed_ms"] or 0))
+    return _report
   _logger.info(f"[INFO] 编码: preset={VIDEO_PRESET} crf={_CRF} 分辨率={OUT_W}x{OUT_H}"
                f"（MERGE_RESOLUTION 可调；上线 1080x1920 时同步改 BAILIAN_VIDEO_RESOLUTION=1080P）")
   result = render(timeline, FINAL_OUT, TEMP_DIR, settings=settings,

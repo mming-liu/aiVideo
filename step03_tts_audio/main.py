@@ -394,6 +394,19 @@ def main(options=None):
                                         provider=tts_config.PROVIDER, source="plan")
         _logger.info("[PLAN] 已写出 %d 个声音单元（未调用任何 provider）: %s"
                      % (len(units), target))
+        # M4：精准分轨（期望集合与生成/消费同一判据，不读盘、不合成）。
+        from step03_tts_audio.track_cleanup import expected_tracks
+        _expected = expected_tracks(gen_script, only_indices=only_indices,
+                                    full_shots=script.get("shots"))
+        _logger.info("[PLAN] 期望音轨：对白 %d 条、旁白 %d 条（精准分轨，未写盘）"
+                     % (len(_expected["dialogue"]), len(_expected["narration"])))
+        # M8.3：音色绑定一一关系（同一档案不绑多声线、同一声线不复用多档案）。
+        from shared.voice_fit import binding_issues
+        _bind_issues = binding_issues(units)
+        if _bind_issues:
+            _logger.warn("[PLAN] 音色绑定冲突 %d 条: %s"
+                         % (len(_bind_issues),
+                            [i.get("code") for i in _bind_issues[:4]]))
         return
 
     try:
@@ -480,6 +493,29 @@ def main(options=None):
                      f"missing={len(_pq.get('missing') or [])}")
     except Exception as exc:
         _logger.warn(f"[WARN] step03_quality.json 写入失败（不阻断已生成的音轨）: {exc}")
+
+    # M4：脏轨清理。默认关闭（只读生产环境不做意外移动）；显式
+    # STEP03_DIRTY_TRACK_CLEANUP=report 只报告，=quarantine/apply 才把旧轨移入
+    # audio/_dirty_tracks/ 隔离目录。候选模式不碰正式 audio/。
+    _clean_mode = os.getenv("STEP03_DIRTY_TRACK_CLEANUP", "").strip().lower()
+    if _clean_mode and candidate_root is None:
+        try:
+            from step03_tts_audio.track_cleanup import run as _track_cleanup
+            _plan = _track_cleanup(
+                script, only_indices=only_indices,
+                apply=_clean_mode in ("1", "apply", "quarantine", "move"))
+            _logger.info("[TRACKS] 期望 %d 条，保留 %d 条，脏轨 %d 条，缺轨 %d 条"
+                         % (len(_plan["expected"]), len(_plan["keep"]),
+                            len(_plan["dirty"]), len(_plan["missing"])))
+            if _plan["dirty"]:
+                _logger.warn("[TRACKS] 脏轨明细: %s"
+                             % [d.get("name") for d in _plan["dirty"][:8]])
+            if _plan.get("applied"):
+                _logger.info("[TRACKS] 已隔离 %d 个文件 -> %s"
+                             % (len(_plan["applied"]["moved"]),
+                                _plan["applied"]["quarantine"]))
+        except Exception as exc:
+            _logger.warn(f"[WARN] 脏轨清理失败（不阻断已生成的音轨）: {exc}")
 
 
 if __name__ == "__main__":

@@ -334,8 +334,13 @@ def snapshot_changes(before: dict, after: dict) -> dict:
 
 
 def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
-               chapter: int, provider: str, model_id: str | None = None) -> dict:
+               chapter: int, provider: str, model_id: str | None = None,
+               precheck_ledger: Path | None = None) -> dict:
     """只组装**冻结请求 + 结构预检**（零网络、零生成 POST，§V2「plan-only+force 仍零网络」）。
+
+    M4：image 模式下额外做首尾帧 SHA-256 / 差异度预检；给了
+    ``precheck_ledger`` 时把结果追加到持久化账本（本函数仍不写正式章目录，
+    账本路径由调用方决定）。首尾帧同一张图会在计划里标 blocked。
 
     注意：provider 的压缩/合规改写只在实际 prepare 时发生，因此这里冻结的是
     "组装完成、尚未 provider 化"的事实，``semantic_preflight=unverified``。
@@ -367,6 +372,33 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
                               "needed_change": "先跑 step02a_frame_gen 补齐所需帧"})
                 entries.append(entry)
                 continue
+            # M4：first/last-frame hash + difference precheck（纯本地，零网络）。
+            # 只在策略**同时要求** ff/lf 时做 pair 预检；first_only/reference
+            # 没有尾帧，不能按「缺尾帧」误判 blocked。
+            from shared.video_media_plan import required_frames as _required_frames
+            _need = set(_required_frames(_policy))
+            if {"ff", "lf"} <= _need:
+                from shared import frame_precheck as _fpc
+                _frame_check = _fpc.precheck_shot(shot, frame_paths)
+                entry["frame_precheck"] = _frame_check
+                if precheck_ledger is not None:
+                    try:
+                        _fpc.record(precheck_ledger, _frame_check)
+                    except Exception as _pc_exc:  # 账本损坏不阻断离线规划，但必须可见
+                        entry.setdefault("warnings", []).append({
+                            "code": "precheck_ledger_error",
+                            "message": "首尾帧预检账本读写失败: %s" % _pc_exc,
+                        })
+                if _frame_check["verdict"] == "blocked":
+                    entry.update({
+                        "verdict": "blocked",
+                        "code": _frame_check["code"],
+                        "field_path": f"shots[{idx}].frames",
+                        "message": "；".join(p["message"] for p in _frame_check["problems"]),
+                        "needed_change": "重新生成缺失/损坏/重复的首尾帧后再提交",
+                    })
+                    entries.append(entry)
+                    continue
         else:
             frame_paths = []
         _prepared_status = "not_prepared"
@@ -460,11 +492,14 @@ def _plan_only(options, script: dict, shots_dir: Path, chapter: int) -> int:
     out_root = package_root("video", experiment_id, chapter) / "plans"
     out_root.mkdir(parents=True, exist_ok=True)
     only_indices = parse_shot_selector(options.shots)
+    ledger = out_root / "step02b_frame_precheck.json"
     plan = build_plan(script, shots_dir, only_indices=only_indices, chapter=chapter,
-                      provider=str(os.getenv("VIDEO_PROVIDER", "")))
+                      provider=str(os.getenv("VIDEO_PROVIDER", "")),
+                      precheck_ledger=ledger)
     path = out_root / f"plan_{len(list(out_root.glob('plan_*.json'))) + 1:04d}.json"
     path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"plan": str(path), "ready": plan["ready"], "blocked": plan["blocked"],
+                      "frame_precheck_ledger": str(ledger),
                       "estimated_generations": plan["estimated_generations"],
                       "network_calls": 0}, ensure_ascii=False))
     return 0
