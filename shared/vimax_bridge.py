@@ -1057,6 +1057,13 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
             _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 检出 critical，"
                         f"将删帧重生成: " + "; ".join(
                             f"[{i.severity}]{i.category} {i.description}" for i in result.issues))
+            # M0.3：把刚生成、已被质检拒收的图片从 generated_ok 改判为 qc_rejected。
+            # 只在账本启用时有副作用；无 generated_ok 可扣时返回 False（不制造负计数）。
+            try:
+                from shared import post_budget
+                post_budget.record_qc_rejected("image")
+            except Exception:
+                pass
             return True
         if result.has_hallucination:
             _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 检出问题: "

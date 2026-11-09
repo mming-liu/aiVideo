@@ -343,3 +343,14 @@ output_step01_*/
 !tests/step01_script_gen/test_repair_compact_example.py
 !tests/shared/test_publish_txn.py
 !tests/shared/test_publish_txn_concurrency.py
+
+# 2026-11-09：M0.3 / M2.2 / M4 / M8 离线收口回归（随仓库交付，干净检出可复现）
+!tests/shared/test_post_budget_outcomes.py
+!tests/step01_script_gen/test_m22_cross_field_continuity.py
+!tests/step02b_video_gen/test_frame_precheck_ledger.py
+!tests/step03_tts_audio/test_track_cleanup.py
+!tests/step04_merge/test_dry_run.py
+!tests/shared/test_i2v_motion_prompt.py
+!tests/shared/test_media_precheck.py
+!tests/shared/test_voice_fit.py
+!tests/shared/test_transition_picker.py

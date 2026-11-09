@@ -184,6 +184,14 @@ class VolcengineImageService(ImageGenerationService):
                     _ABORT[0] = result.error or "生成失败"
             return result
 
+        def _record(outcome: str) -> None:
+            """回写本次已发送 POST 的终局分类；账本错误不得掩盖生成结果."""
+            try:
+                from shared import post_budget
+                post_budget.record("image", outcome)
+            except Exception:
+                pass
+
         def _send(payload: dict):
             nonlocal _attempts
             with _POST_LOCK:
@@ -204,8 +212,12 @@ class VolcengineImageService(ImageGenerationService):
                     raise _PostLimit(str(exc)) from exc
                 _attempts += 1
                 _POSTS_USED[0] += 1
-            return requests.post(f"{self._base_url}/images/generations",
-                                 json=payload, headers=self._headers, timeout=180)
+            try:
+                return requests.post(f"{self._base_url}/images/generations",
+                                     json=payload, headers=self._headers, timeout=180)
+            except Exception:
+                _record("transport_failed")
+                raise
         # 2026-08-29：OutputImageSensitiveContentDetected 专用旗。
         # 当主模型 + 所有 fallback 都因输出安全过滤失败时，标记为软跳过：
         # 不阻塞整批生成（避免 1 张刺杀/流血图把整条 shot 链路 kill），
@@ -278,6 +290,7 @@ class VolcengineImageService(ImageGenerationService):
                 from shared.content_safety import input_sensitive_retry_prompt
                 sanitized = input_sensitive_retry_prompt(req.prompt)
                 if sanitized and sanitized != req.prompt:
+                    _record("transport_failed")
                     _verbose_write(f"[IMAGE-RETRY] input_sensitive: original={req.prompt}; revised={sanitized}")
                     payload["prompt"] = sanitized
                     try:
@@ -290,6 +303,7 @@ class VolcengineImageService(ImageGenerationService):
                         last_error = f"input-sensitive retry failed: {exc}"
                         break
                     if resp.status_code != 200:
+                        _record("transport_failed")
                         last_error = f"input-sensitive retry rejected [{resp.status_code}]: {resp.text}"
                         break
 
@@ -298,14 +312,17 @@ class VolcengineImageService(ImageGenerationService):
                 try:
                     data = resp.json().get("data", [])
                 except Exception as e:
+                    _record("transport_failed")
                     last_error = f"响应解析失败: {e} ({resp.text[:200]})"
                     break
                 if not data:
+                    _record("transport_failed")
                     last_error = f"响应中无 data: {resp.text[:300]}"
                     break
                 item = data[0]
                 img_url = item.get("url")
                 if not img_url:
+                    _record("transport_failed")
                     last_error = f"响应中未找到图片 URL: {resp.text[:300]}"
                     break
                 return _finish(self._download(req, img_url, model_idx))
@@ -314,6 +331,7 @@ class VolcengineImageService(ImageGenerationService):
             if resp.status_code == 429:
                 from shared import post_budget
                 if post_budget.is_quota_error(resp.text):
+                    _record("account_quota_refused")
                     post_budget.mark_quota_exhausted("image", resp.text[:300])
                     last_error = ("账户图片额度耗尽（429 SetLimitExceeded），"
                                   "本批停止后续 POST: %s" % resp.text[:300])
@@ -321,6 +339,7 @@ class VolcengineImageService(ImageGenerationService):
                     with _POST_LOCK:
                         _ABORT[0] = last_error
                     break
+                _record("transport_failed")
                 wait = compute_429_wait(resp.text, fallback_seconds=60.0 / 10, backoff_seconds=1.0)
                 _verbose_write(f"  [镜头{req.shot_index}] [!] 429 限速，等待 {wait:.0f}s 后重试...")
                 time.sleep(wait)
@@ -330,6 +349,7 @@ class VolcengineImageService(ImageGenerationService):
             if resp.status_code == 403:
                 from shared import post_budget
                 if post_budget.is_quota_error(resp.text):
+                    _record("account_quota_refused")
                     post_budget.mark_quota_exhausted("image", resp.text[:300])
                     last_error = ("账户图片额度耗尽（403），"
                                   "本批停止后续 POST: %s" % resp.text[:300])
@@ -337,6 +357,7 @@ class VolcengineImageService(ImageGenerationService):
                     with _POST_LOCK:
                         _ABORT[0] = last_error
                     break
+                _record("transport_failed")
                 if model_idx + 1 < len(self._model_queue):
                     model_idx += 1
                     _verbose_write(f"  [镜头{req.shot_index}] [!] 模型 {model} 返回 403，"
@@ -354,6 +375,7 @@ class VolcengineImageService(ImageGenerationService):
             #       ② 全失败则 soft_skip=True，下游不 raise 阻塞整批
             # 不重写 prompt（确定性兜底范围外，应触发 LLM regen 而非代码层硬填）。
             if resp.status_code == 400 and "OutputImageSensitiveContentDetected" in resp.text:
+                _record("qc_rejected")
                 if model_idx + 1 < len(self._model_queue):
                     model_idx += 1
                     _verbose_write(f"  [镜头{req.shot_index}] [!] 模型 {model} 输出触发内容安全过滤，"
@@ -369,16 +391,19 @@ class VolcengineImageService(ImageGenerationService):
 
             # ---- 400 且报 negative_prompt 不支持：去掉后重试一次 ----
             if resp.status_code == 400 and "negative_prompt" in resp.text and payload.get("negative_prompt"):
+                _record("transport_failed")
                 _verbose_write(f"  [镜头{req.shot_index}] [!] {model} 不支持 negative_prompt，去掉后重试")
                 payload.pop("negative_prompt", None)
                 continue
 
             # ---- 5xx / 连接类：重试 ----
             if 500 <= resp.status_code < 600:
+                _record("transport_failed")
                 _verbose_write(f"  [镜头{req.shot_index}] [!] 服务端 {resp.status_code}，3s 后重试...")
                 time.sleep(3)
                 continue
 
+            _record("transport_failed")
             last_error = f"API 错误 [{resp.status_code}]: {resp.text[:300]}"
             break
 
@@ -421,10 +446,20 @@ class VolcengineImageService(ImageGenerationService):
                 _verbose_write(f"  [INFO] 图片已回退到模型: {self._model_queue[model_idx]}")
             _verbose_write(f"  [镜头{req.shot_index}] [OK] {frame_label}已保存 -> "
                   f"{save_path} ({size_kb:.1f} KB)")
+            try:
+                from shared import post_budget
+                post_budget.record("image", "generated_ok")
+            except Exception:
+                pass
             return ImageGenerationResult(
                 success=True,
                 save_path=save_path,
                 image_url=img_url,
             )
         except Exception as e:
+            try:
+                from shared import post_budget
+                post_budget.record("image", "transport_failed")
+            except Exception:
+                pass
             return ImageGenerationResult(success=False, error=f"下载失败: {e}")

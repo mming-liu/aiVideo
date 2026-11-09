@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""图片/视频 POST 的跨进程预算与额度熔断（2026-11-08 WP7-Prep）.
+"""图片/视频 POST 的跨进程预算、额度熔断与请求结果账本（2026-11-08 WP7-Prep）.
 
 与 Step01 的 shared/send_budget.py 同构，但面向 POST 次数：
 
@@ -9,6 +9,20 @@
 - 文件损坏/不可读 ⇒ 拒绝发送（fail-closed）。
 - 上游明确返回额度耗尽（403 SetLimitExceeded / QuotaExceeded）时写入熔断标记，
   重启后仍拒绝发送；需显式 reset 或人工删账本。
+
+M0.3（2026-11-09）：`used` 仍是**已发送 POST 次数**（口径不变），另加**互斥**
+结果分类：
+
+    generated_ok          请求成功并拿到可用图片
+    account_quota_refused 上游明确因账户额度/配额拒绝（403/429 限额类）
+    transport_failed      网络、5xx、解析或下载失败等请求级失败
+    qc_rejected           已生成但被本地视觉质检拒收（从 generated_ok 改判）
+
+恒等式：`sum(outcomes) + pending == used`。`pending` 是已扣预算、结果尚未回写的
+请求数（发送与下载/解析之间）。旧账本（只有 kind/used/limit）在读取时按
+`generated_ok = used - pending` 派生迁移视图，**不改写文件**；显式
+`migrate(kind)` 才把 schema_version=2 与 outcomes 落盘。真实账本在只读核对中
+保持原样。
 """
 from __future__ import annotations
 
@@ -25,6 +39,11 @@ _KINDS = {
     "video": ("STEP02B_VIDEO_BUDGET_FILE", "STEP02B_VIDEO_BUDGET_TOTAL",
               "step02b_video_budget.json"),
 }
+
+#: 结果分类（互斥，顺序即报告顺序）。
+OUTCOMES = ("generated_ok", "account_quota_refused",
+            "transport_failed", "qc_rejected")
+SCHEMA_VERSION = 2
 
 _LOCK = threading.Lock()
 _QUOTA: dict[str, str] = {}
@@ -61,6 +80,51 @@ def _config(kind: str):
     return Path(chapter_dir()) / default_name, limit
 
 
+def _empty_outcomes() -> dict:
+    return {name: 0 for name in OUTCOMES}
+
+
+def _normalize_outcomes(data: dict, used: int) -> dict:
+    """读取/派生 outcomes 与 pending；旧账本按 generated_ok 迁移到内存视图.
+
+    只做**读时归一**，不写文件。任何字段类型/范围/恒等式不成立一律 fail-closed。
+    """
+    version = data.get("schema_version", 1)
+    if isinstance(version, bool) or not isinstance(version, int) or version not in (1, 2):
+        raise PostBudgetExhausted("预算账本 schema_version 非法（拒绝发送）: %r"
+                                  % (version,))
+    pending = data.get("pending", 0)
+    if isinstance(pending, bool) or not isinstance(pending, int) or pending < 0:
+        raise PostBudgetExhausted("预算账本 pending 非法（拒绝发送）: %r" % (pending,))
+    raw = data.get("outcomes")
+    if raw is None:
+        # 旧账本：已发送的 POST 没有结果回写，按「已生成」派生；不丢 used 口径。
+        outcomes = _empty_outcomes()
+        outcomes["generated_ok"] = max(0, used - pending)
+    else:
+        if not isinstance(raw, dict):
+            raise PostBudgetExhausted("预算账本 outcomes 不是对象（拒绝发送）")
+        unknown = set(raw) - set(OUTCOMES)
+        if unknown:
+            raise PostBudgetExhausted("预算账本 outcomes 含未知分类（拒绝发送）: %s"
+                                      % ", ".join(sorted(str(x) for x in unknown)))
+        outcomes = {}
+        for name in OUTCOMES:
+            value = raw.get(name, 0)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise PostBudgetExhausted(
+                    "预算账本 outcomes.%s 非法（拒绝发送）: %r" % (name, value))
+            outcomes[name] = value
+    if sum(outcomes.values()) + pending != used:
+        raise PostBudgetExhausted(
+            "预算账本结果分类与 used 不一致（拒绝发送）：sum(outcomes)=%d + pending=%d != used=%d"
+            % (sum(outcomes.values()), pending, used))
+    data["schema_version"] = version
+    data["outcomes"] = outcomes
+    data["pending"] = pending
+    return data
+
+
 def _read(path: Path, kind: str, expected_limit: int) -> dict:
     """读取并严格校验账本；缺失返回初始状态；字段损坏/身份不符一律拒绝.
 
@@ -69,7 +133,8 @@ def _read(path: Path, kind: str, expected_limit: int) -> dict:
     """
     if not path.exists():
         return {"kind": kind, "used": 0, "limit": int(expected_limit),
-                "quota_exhausted": ""}
+                "quota_exhausted": "", "schema_version": SCHEMA_VERSION,
+                "outcomes": _empty_outcomes(), "pending": 0}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
@@ -97,11 +162,14 @@ def _read(path: Path, kind: str, expected_limit: int) -> dict:
     if quota not in (None, "") and not isinstance(quota, str):
         raise PostBudgetExhausted("预算账本 quota_exhausted 非法（拒绝发送）")
     data["quota_exhausted"] = str(quota or "")
-    return data
+    return _normalize_outcomes(data, used)
 
 
 def _write(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    data["schema_version"] = SCHEMA_VERSION
+    data.setdefault("outcomes", _empty_outcomes())
+    data.setdefault("pending", 0)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp, path)
@@ -161,6 +229,7 @@ def acquire(kind: str, amount: int = 1) -> int:
                 "POST 预算耗尽（%s）：已用 %d/%d" % (kind, used, effective))
         used += amount
         data.update({"kind": kind, "used": used, "limit": effective,
+                     "pending": int(data.get("pending") or 0) + amount,
                      "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")})
         data.pop("quota_exhausted", None)
         _write(path, data)
@@ -214,6 +283,83 @@ def usage(kind: str) -> dict:
     return data
 
 
+def record(kind: str, outcome: str, amount: int = 1) -> dict:
+    """回写**已发送请求**的结果分类；返回最新账本视图.
+
+    `used` 口径不变（acquire 已 +1）；这里把对应数量的 `pending` 结清并计入
+    互斥分类。调用方必须只在请求真正有终局结果后调用（成功/额度拒绝/传输失败），
+    不得用猜测的结果回写。未启用账本时返回 `{}`。
+    """
+    outcome = str(outcome or "")
+    if outcome not in OUTCOMES:
+        raise ValueError("未知图片/视频请求结果分类: %r（合法：%s）"
+                         % (outcome, ", ".join(OUTCOMES)))
+    amount = max(1, int(amount))
+    path, limit = _config(kind)
+    if path is None:
+        return {}
+    with _LOCK, _file_lock(path):
+        data = _read(path, kind, limit)
+        pending = int(data.get("pending") or 0)
+        if pending < amount:
+            # 兼容旧调用/迁移：没有 pending 记录时把本次结果视为一次未登记请求，
+            # 同步补 used（仍保持 sum(outcomes)+pending == used）。
+            data["used"] = int(data["used"]) + (amount - pending)
+            pending = amount
+        data["pending"] = pending - amount
+        data["outcomes"][outcome] += amount
+        data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        _write(path, data)
+        data["path"] = str(path)
+        return data
+
+
+def reclassify(kind: str, from_outcome: str, to_outcome: str,
+               amount: int = 1) -> bool:
+    """把一个已记录分类改判为另一个（如 generated_ok → qc_rejected）.
+
+    只有源分类计数足够时才改；否则返回 False 且**不改账本**（不制造负计数）。
+    """
+    for name in (from_outcome, to_outcome):
+        if name not in OUTCOMES:
+            raise ValueError("未知图片/视频请求结果分类: %r" % (name,))
+    amount = max(1, int(amount))
+    path, limit = _config(kind)
+    if path is None:
+        return False
+    with _LOCK, _file_lock(path):
+        data = _read(path, kind, limit)
+        outcomes = data["outcomes"]
+        if outcomes.get(from_outcome, 0) < amount:
+            return False
+        outcomes[from_outcome] -= amount
+        outcomes[to_outcome] += amount
+        data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        _write(path, data)
+        return True
+
+
+def record_qc_rejected(kind: str, amount: int = 1) -> bool:
+    """把已生成图片改判为质检拒收；无 generated_ok 可扣时返回 False."""
+    return reclassify(kind, "generated_ok", "qc_rejected", amount)
+
+
+def migrate(kind: str) -> dict:
+    """把旧账本显式迁移到 schema_version=2（保留 used/limit/quota 与更新时间）.
+
+    只补 outcomes/pending/schema_version；**不 reset、不改 used 计数口径**。
+    """
+    path, limit = _config(kind)
+    if path is None:
+        return {}
+    with _LOCK, _file_lock(path):
+        data = _read(path, kind, limit)
+        data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        _write(path, data)
+        data["path"] = str(path)
+        return data
+
+
 def clear_quota(kind: str) -> None:
     """清除额度熔断标记但保留已用次数（账户限额调整后恢复用）."""
     _QUOTA.pop(kind, None)
@@ -249,5 +395,6 @@ def is_quota_error(text) -> bool:
     return any(marker in lowered for marker in _QUOTA_ERROR_MARKERS)
 
 
-__all__ = ["PostBudgetExhausted", "acquire", "clear_quota", "is_quota_error",
-           "mark_quota_exhausted", "quota_exhausted", "reset", "usage"]
+__all__ = ["OUTCOMES", "PostBudgetExhausted", "acquire", "clear_quota",
+           "is_quota_error", "mark_quota_exhausted", "migrate", "quota_exhausted",
+           "record", "record_qc_rejected", "reclassify", "reset", "usage"]
