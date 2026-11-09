@@ -1297,6 +1297,12 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         if cinematic_prefix:
             full_prompt = cinematic_prefix + full_prompt
 
+    # M8.1：显式首尾帧模式（VIDEO_MEDIA_POLICY=first_last）已用两张图承载外观/
+    # 构图/终态，文字切到 150–220 字的运动专用 prompt，避免长静态描述与图打架。
+    if policy == "first_last" and _reference_mode() == "image":
+        from shared.i2v_motion_prompt import build_motion_prompt
+        full_prompt = build_motion_prompt(shot)
+
     # _MODEL_VOICE=0 时（旧行为），负面提示词追加人声类条目（双保险）。
     # 英文 token 仅 Agnes 使用，中文模型用纯中文版（profile 按 VIDEO_PROVIDER 判定）
     negative = (
