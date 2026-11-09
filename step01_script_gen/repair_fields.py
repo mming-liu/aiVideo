@@ -145,6 +145,13 @@ _REPAIR_CODE_FIELDS: dict = {
     # 同镜同实体持同一武器的「左手 / 右手」跨字段矛盾：检测器自己声明精确
     # repair_targets（冲突涉及的全部字段），这里刻意留空，防结构码放宽授权面。
     "weapon_hand_conflict": (),
+    # M2.2（2026-11-09）：跨镜时段/光线、邻镜状态、镜内运镜冲突。前三类当前
+    # 只作 advisory（不进阻塞），登记字段是为了让后续人工/定向修复有最小授权面；
+    # 运镜冲突是确定性互斥，允许改 camera_movement 与 motion_desc。
+    "cross_shot_time_reversal": ("ff_desc", "lf_desc"),
+    "cross_shot_lighting_conflict": ("ff_desc", "lf_desc"),
+    "adjacent_state_break": ("ff_desc", "lf_desc"),
+    "intra_shot_camera_conflict": ("camera_movement", "motion_desc"),
     # 2026-11-07：checklist 包装层把**分类名**当 code / field_path 使用——这些名字
     # 必须映射到真实镜头字段，否则授权面全是死路径（run17 r1 实测）。
     "ff_desc_anchors": ("ff_desc",),

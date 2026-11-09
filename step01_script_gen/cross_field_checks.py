@@ -522,6 +522,201 @@ def _weapon_hand_issues(shot: dict, shot_id) -> list[Issue]:
 
 
 # ---------------------------------------------------------------------------
+# 6. 跨镜光线/时段倒流（M2.2，2026-11-09）
+# ---------------------------------------------------------------------------
+#: 明确的时间段词 → 单调序号。只收**确定性**时段词；「天色渐暗」这类过程
+#: 描述不排时间，避免把合法过渡判成倒流。
+_TIME_OF_DAY = (
+    (0, ("清晨", "黎明", "拂晓", "破晓", "日出", "早晨", "晨光", "朝阳")),
+    (1, ("上午", "日上三竿")),
+    (2, ("正午", "中午", "晌午", "烈日当空")),
+    (3, ("下午", "午后")),
+    (4, ("黄昏", "傍晚", "日落", "夕阳", "夕照", "晚霞", "暮色")),
+    (5, ("夜晚", "入夜", "夜色", "月光", "月色", "星夜", "深夜", "半夜",
+         "烛光", "灯火")),
+)
+#: 显式时间跳跃/回忆标记：出现即说明相邻镜不是连续时间，不做倒流判定。
+_TIME_JUMP_MARKERS = (
+    "回忆", "闪回", "倒叙", "数日前", "数年前", "次日", "翌日", "第二天",
+    "隔日", "多年后", "三日后", "半个月后", "一个月后", "时间流逝",
+    "与此同时", "同一时间", "另一处", "转场",
+)
+#: 日/夜光线的互斥族（只判这两族，晨昏之间的连续变化不判矛盾）。
+_DAYLIGHT_WORDS = ("阳光", "日光", "白昼", "天光大亮", "烈日", "晴空", "日照")
+_NIGHT_WORDS = ("月光", "月色", "夜色", "星夜", "灯火", "烛光", "漆黑", "夜幕")
+_STATE_RESET_MARKERS = (
+    "已起身", "被扶起", "整理后", "换过", "重新站起", "伤已包扎", "卸下",
+    "放下", "交出", "丢弃", "方才起身", "这才站起",
+)
+#: 相邻镜状态衔接：上镜 LF 终态 → 下镜 FF 初态不得无依据复原。
+_STATE_RESET_PAIRS = (
+    (("倒地", "倒伏", "仰倒", "僵卧", "伏地", "倒地不起"),
+     ("站立", "站起", "起身", "端坐", "跪坐", "跪立", "跃起")),
+    (("已无神", "双目无神", "气绝", "身亡", "死去"),
+     ("睁眼", "睁目", "开口", "说话", "站起", "起身")),
+    (("浑身湿透", "湿透", "浸透", "衣袍滴水"),
+     ("干爽", "衣袍干燥", "滴水未沾")),
+    (("空手", "手中无物", "赤手空拳", "两手空空"),
+     ("持刀", "握刀", "持剑", "握剑", "手持", "提着", "攥着")),
+)
+
+
+def _time_ordinal(text: str) -> int | None:
+    """该文本里最先出现的**明确时段**序号；没有则 None."""
+    text = str(text or "")
+    best = None
+    for order, words in _TIME_OF_DAY:
+        for word in words:
+            pos = text.find(word)
+            if pos < 0:
+                continue
+            if best is None or pos < best[0]:
+                best = (pos, order)
+    return None if best is None else best[1]
+
+
+def _light_family(text: str) -> str:
+    text = str(text or "")
+    if any(w in text for w in _NIGHT_WORDS):
+        return "night"
+    if any(w in text for w in _DAYLIGHT_WORDS):
+        return "day"
+    return ""
+
+
+def _cross_shot_time_issues(script: dict) -> list[Issue]:
+    shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+    issues: list[Issue] = []
+    for prev, curr in zip(shots, shots[1:]):
+        if str(prev.get("scene") or "") != str(curr.get("scene") or ""):
+            continue
+        if str(prev.get("location") or "") != str(curr.get("location") or ""):
+            continue
+        prev_text = str(prev.get("lf_desc") or prev.get("ff_desc") or "")
+        curr_text = str(curr.get("ff_desc") or curr.get("lf_desc") or "")
+        if not prev_text or not curr_text:
+            continue
+        if any(mark in curr_text for mark in _TIME_JUMP_MARKERS):
+            continue
+        prev_t, curr_t = _time_ordinal(prev_text), _time_ordinal(curr_text)
+        if prev_t is not None and curr_t is not None and curr_t < prev_t:
+            issues.append(Issue(
+                code="cross_shot_time_reversal", severity="advisory",
+                message=(f"相邻镜同一场景时段倒流：上镜 LF 时段序号 {prev_t}，"
+                         f"本镜 FF 时段序号 {curr_t}（无回忆/时间跳跃依据）"),
+                shot_id=curr.get("index"), frame_id="ff",
+                field_path="ff_desc", evidence=curr_text[:60],
+                repairable=False,
+            ))
+            continue
+        prev_l, curr_l = _light_family(prev_text), _light_family(curr_text)
+        if {prev_l, curr_l} == {"day", "night"}:
+            issues.append(Issue(
+                code="cross_shot_lighting_conflict", severity="advisory",
+                message=(f"相邻镜同一场景光线族冲突：上镜 LF={prev_l}，本镜 FF={curr_l}"
+                         f"（无时间过渡/回忆依据）"),
+                shot_id=curr.get("index"), frame_id="ff",
+                field_path="ff_desc", evidence=curr_text[:60],
+                repairable=False,
+            ))
+    return issues
+
+
+def _cross_shot_state_issues(script: dict) -> list[Issue]:
+    shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+    issues: list[Issue] = []
+    for prev, curr in zip(shots, shots[1:]):
+        if str(prev.get("scene") or "") != str(curr.get("scene") or ""):
+            continue
+        if str(prev.get("location") or "") != str(curr.get("location") or ""):
+            continue
+        lf = str(prev.get("lf_desc") or "")
+        ff = str(curr.get("ff_desc") or "")
+        if not lf or not ff:
+            continue
+        if any(mark in ff for mark in _STATE_RESET_MARKERS):
+            continue
+        for before, after in _STATE_RESET_PAIRS:
+            hit_before = next((w for w in before if w in lf), "")
+            hit_after = next((w for w in after if w in ff), "")
+            if hit_before and hit_after:
+                issues.append(Issue(
+                    code="adjacent_state_break", severity="advisory",
+                    message=(f"邻镜状态衔接无过渡：上镜 LF 为「{hit_before}」，"
+                             f"本镜 FF 直接「{hit_after}」且无起身/整理/换手依据"),
+                    shot_id=curr.get("index"), frame_id="ff",
+                    field_path="ff_desc", evidence=ff[:60],
+                    repairable=False,
+                ))
+                break
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# 7. 镜内运镜冲突（M2.2）
+# ---------------------------------------------------------------------------
+_CAMERA_OPPOSITES = (
+    (("推近", "推进", "推镜", "向前推"), ("拉远", "拉后", "拉镜", "向后拉")),
+    (("左摇", "向左摇", "左移", "向左移", "向左横移"),
+     ("右摇", "向右摇", "右移", "向右移", "向右横移")),
+    (("上升", "升镜", "升高", "向上摇"), ("下降", "降镜", "降低", "向下摇")),
+    (("顺时针环绕", "顺旋"), ("逆时针环绕", "逆旋")),
+)
+#: 分段标记：同一镜内分段运镜是合法的，不判冲突。必须用**显式分段句式**
+#: （先…再… / 前N秒 / 随后），不能用裸「前/后/秒」——它们会命中「向前推」
+#: 「镜头后拉」这类正常运镜词，把真冲突全部跳过。
+_CAMERA_SEGMENT_RE = re.compile(
+    r"(?:先|再|随后|然后|接着|之后|随即|片刻后|紧接着|第[一二三四]段|前段|后段"
+    r"|前\s*\d+(?:\.\d+)?\s*秒|后\s*\d+(?:\.\d+)?\s*秒)")
+_FIXED_CAMERA = ("固定机位", "固定镜头", "机位固定", "静止镜头", "镜头固定")
+
+
+def _camera_conflict_issues(shot: dict, shot_id) -> list[Issue]:
+    camera = str(shot.get("camera_movement") or "")
+    motion = str(shot.get("motion_desc") or "")
+    text = (camera + "\n" + motion).strip()
+    if not text:
+        return []
+    issues: list[Issue] = []
+    for left, right in _CAMERA_OPPOSITES:
+        l_hit = next((w for w in left if w in text), "")
+        r_hit = next((w for w in right if w in text), "")
+        if not (l_hit and r_hit):
+            continue
+        # 同一镜显式写「先…再…」是合法分段运镜；只有两侧都出现在**同一连续
+        # 指令段**（无分段标记）时才是冲突。
+        if _CAMERA_SEGMENT_RE.search(motion):
+            continue
+        l_in_camera = any(w in camera for w in left)
+        r_in_camera = any(w in camera for w in right)
+        evidence = camera if (l_in_camera and r_in_camera) else motion
+        issues.append(Issue(
+            code="intra_shot_camera_conflict", severity="visual_risk",
+            message=(f"同一镜内运镜互斥：「{l_hit}」与「{r_hit}」同时出现，"
+                     f"且 motion_desc 没有先/再分段，模型无法同时执行"),
+            shot_id=shot_id, frame_id="",
+            field_path="camera_movement" if evidence is camera else "motion_desc",
+            evidence=evidence[:100], repairable=True,
+        ))
+        break
+    fixed = next((w for w in _FIXED_CAMERA if w in camera), "")
+    if fixed:
+        move = next((w for w in _CAMERA_OPPOSITES[0][0] + _CAMERA_OPPOSITES[0][1]
+                     + _CAMERA_OPPOSITES[1][0] + _CAMERA_OPPOSITES[1][1]
+                     + ("跟拍", "环绕", "摇镜", "俯冲", "拉升") if w in motion), "")
+        if move and not _CAMERA_SEGMENT_RE.search(motion):
+            issues.append(Issue(
+                code="intra_shot_camera_conflict", severity="visual_risk",
+                message=(f"camera_movement 为「{fixed}」，但 motion_desc 要求「{move}」；"
+                         f"固定机位与运动镜头互斥"),
+                shot_id=shot_id, frame_id="",
+                field_path="camera_movement", evidence=f"{fixed} / {move}",
+                repairable=True,
+            ))
+    return issues
+
+
+# ---------------------------------------------------------------------------
 # 入口
 # ---------------------------------------------------------------------------
 CROSS_FIELD_CODES = (
@@ -530,6 +725,10 @@ CROSS_FIELD_CODES = (
     "frame_stage_pose_consistency",
     "result_action_support",
     "weapon_hand_conflict",
+    "cross_shot_time_reversal",
+    "cross_shot_lighting_conflict",
+    "adjacent_state_break",
+    "intra_shot_camera_conflict",
 )
 
 CHECKS = (
@@ -538,6 +737,7 @@ CHECKS = (
     _stage_pose_issues,
     _result_action_issues,
     _weapon_hand_issues,
+    _camera_conflict_issues,
 )
 
 
@@ -568,6 +768,14 @@ def cross_field_issues(script: dict) -> tuple:
                 failures.append(
                     "%s@shot%s: %s: %s" % (getattr(check, "__name__", "check"),
                                            shot_id, type(exc).__name__, exc))
+    # M2.2：跨镜检查需要**相邻镜对**，不能放进逐镜检查表。失败同样计入
+    # `failures`（fail-closed），不能因为异常而静默跳过跨镜检测。
+    for check in (_cross_shot_time_issues, _cross_shot_state_issues):
+        try:
+            issues.extend(check(script))
+        except Exception as exc:
+            failures.append("%s: %s: %s" % (getattr(check, "__name__", "check"),
+                                            type(exc).__name__, exc))
     return issues, failures
 
 
