@@ -775,6 +775,10 @@ def synthesize_unit(unit: SpeechUnit | dict, candidate_context: TtsCandidateCont
     unit = normalize_unit(unit)
     provider = provider or create_provider(unit.provider or None)
     caps = provider_capabilities(provider, name=unit.provider)
+    # M8.3：窗口自适应变速（仅 provider 声明 supports_rate、rate 仍为 1.0 时，
+    # 在 [1.0,1.20] 内按估算时长/计划窗口确定性调整；超 1.20 不改写，交窗口验收拒收）。
+    from shared.voice_fit import fit_unit as _fit_voice_unit
+    unit, _rate_fit = _fit_voice_unit(unit, caps=caps)
     _check_speaker(unit, caps)
     applied = resolve_applied(unit, caps)
 
