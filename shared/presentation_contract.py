@@ -2657,13 +2657,18 @@ def _delta_deleted_uid_references(obj, base_view) -> list:
     _ups = obj.get("upsert") if isinstance(obj.get("upsert"), dict) else {}
     _deleted: dict = {}
     _available: dict = {}
+    def _as_list(value) -> list:
+        """只认真正的列表：嵌套类型违约（如 carriers=1）不是「空」，也不可迭代."""
+        return value if isinstance(value, list) else []
     for _key in DELTA_ENTITY_KEYS:
-        _ids = [str(x) for x in (_del.get(_key) or []) if str(x).strip()]
+        # 旧写法用 X or [] 兜底：整数 1 求值仍是 1，enumerate(1) 抛 TypeError，
+        # 把「结构上应拒收」的响应变成裸异常（R2 回归，2026-11-10）。
+        _ids = [str(x) for x in _as_list(_del.get(_key)) if str(x).strip()]
         _deleted[_key] = set(_ids)
         _idk = DELTA_ID_KEY[_key]
-        _base_ids = [str(x.get(_idk) or "") for x in (base_view.get(_key) or [])
+        _base_ids = [str(x.get(_idk) or "") for x in _as_list(base_view.get(_key))
                      if isinstance(x, dict)]
-        _ups_ids = [str(x.get(_idk) or "") for x in (_ups.get(_key) or [])
+        _ups_ids = [str(x.get(_idk) or "") for x in _as_list(_ups.get(_key))
                     if isinstance(x, dict)]
         _available[_key] = ([u for u in _base_ids if u not in _deleted[_key]]
                             + [u for u in _ups_ids if u not in _deleted[_key]])
@@ -2686,17 +2691,17 @@ def _delta_deleted_uid_references(obj, base_view) -> list:
             "删除后可用 id：%s"
             % (_where, _key, _uid, _available[_key][:20]), _where))
 
-    for _i, _b in enumerate(_ups.get("beats") or []):
+    for _i, _b in enumerate(_as_list(_ups.get("beats"))):
         if isinstance(_b, dict):
             _check(_b.get("voice_ref"), "upsert.beats[%d].voice_ref" % _i)
-    for _i, _b in enumerate(obj.get("fact_bindings") or []):
+    for _i, _b in enumerate(_as_list(obj.get("fact_bindings"))):
         if not isinstance(_b, dict):
             continue
-        for _j, _c in enumerate(_b.get("carriers") or []):
+        for _j, _c in enumerate(_as_list(_b.get("carriers"))):
             _check(_c, "fact_bindings[%d].carriers[%d]" % (_i, _j))
     _hb = obj.get("hook_bindings")
     if isinstance(_hb, dict):
-        for _j, _c in enumerate(_hb.get("carriers") or []):
+        for _j, _c in enumerate(_as_list(_hb.get("carriers"))):
             _check(_c, "hook_bindings.carriers[%d]" % _j)
     return _p
 

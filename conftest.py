@@ -18,8 +18,16 @@ if os.name == "nt":
     _orig_make_numbered_dir = _pytest_pathlib.make_numbered_dir
 
     def _make_numbered_dir(*args, **kwargs):
-        kwargs["mode"] = 0o777
-        return _orig_make_numbered_dir(*args, **kwargs)
+        # pytest 9.1.1 的 getbasetemp 会把 mode 作为**第 3 个位置参数**传进来；
+        # 旧写法无条件再塞 kwargs["mode"]，于是 "got multiple values for argument
+        # 'mode'"——所有用 tmp_path 的用例在 setup 阶段报错（2026-11-10 全量实测）。
+        _args = list(args)
+        if len(_args) >= 3:
+            _args[2] = 0o777
+            kwargs.pop("mode", None)
+        else:
+            kwargs["mode"] = 0o777
+        return _orig_make_numbered_dir(*_args, **kwargs)
 
     _pytest_pathlib.make_numbered_dir = _make_numbered_dir
     _pytest_tmpdir.make_numbered_dir = _make_numbered_dir

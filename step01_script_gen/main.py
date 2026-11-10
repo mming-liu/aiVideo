@@ -3211,8 +3211,12 @@ def _sync_missing_onscreen_layout_entries(script: dict) -> int:
             return False
         for m in _re.finditer(_re.escape(name), text):
             prefix = text[max(0, m.start() - 12):m.start()]
+            # 2026-11-10：画外音（「画外听香欲呼传来」）是**不在画面内**的声源，
+            # 旧写法把她补成 on_screen 布局条目（position 退化成「画面内」），
+            # 触发 multi_person_staging 视觉风险——重放已验收稿会新引入 blocking。
             if any(neg in prefix for neg in ("不见", "没有", "未出现", "空无一人",
-                                             "离开", "消失", "并未", "不在")):
+                                             "离开", "消失", "并未", "不在",
+                                             "画外", "幕后")):
                 continue
             return True
         return False
