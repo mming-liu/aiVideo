@@ -41,6 +41,11 @@ from __future__ import annotations
 import re
 
 from shared.alias_map import CHARACTER_ALIASES, apply_char_alias
+from step01_script_gen.continuity_semantics import (
+    TIME_JUMP_MARKERS as _TIME_JUMP_MARKERS,
+    camera_conflicts,
+    state_break_candidates,
+)
 from step01_script_gen.quality_issues import Issue
 from step01_script_gen.weapon_states import asserted_marker, prop_state_owner
 
@@ -535,30 +540,9 @@ _TIME_OF_DAY = (
     (5, ("夜晚", "入夜", "夜色", "月光", "月色", "星夜", "深夜", "半夜",
          "烛光", "灯火")),
 )
-#: 显式时间跳跃/回忆标记：出现即说明相邻镜不是连续时间，不做倒流判定。
-_TIME_JUMP_MARKERS = (
-    "回忆", "闪回", "倒叙", "数日前", "数年前", "次日", "翌日", "第二天",
-    "隔日", "多年后", "三日后", "半个月后", "一个月后", "时间流逝",
-    "与此同时", "同一时间", "另一处", "转场",
-)
 #: 日/夜光线的互斥族（只判这两族，晨昏之间的连续变化不判矛盾）。
 _DAYLIGHT_WORDS = ("阳光", "日光", "白昼", "天光大亮", "烈日", "晴空", "日照")
 _NIGHT_WORDS = ("月光", "月色", "夜色", "星夜", "灯火", "烛光", "漆黑", "夜幕")
-_STATE_RESET_MARKERS = (
-    "已起身", "被扶起", "整理后", "换过", "重新站起", "伤已包扎", "卸下",
-    "放下", "交出", "丢弃", "方才起身", "这才站起",
-)
-#: 相邻镜状态衔接：上镜 LF 终态 → 下镜 FF 初态不得无依据复原。
-_STATE_RESET_PAIRS = (
-    (("倒地", "倒伏", "仰倒", "僵卧", "伏地", "倒地不起"),
-     ("站立", "站起", "起身", "端坐", "跪坐", "跪立", "跃起")),
-    (("已无神", "双目无神", "气绝", "身亡", "死去"),
-     ("睁眼", "睁目", "开口", "说话", "站起", "起身")),
-    (("浑身湿透", "湿透", "浸透", "衣袍滴水"),
-     ("干爽", "衣袍干燥", "滴水未沾")),
-    (("空手", "手中无物", "赤手空拳", "两手空空"),
-     ("持刀", "握刀", "持剑", "握剑", "手持", "提着", "攥着")),
-)
 
 
 def _time_ordinal(text: str) -> int | None:
@@ -623,96 +607,87 @@ def _cross_shot_time_issues(script: dict) -> list[Issue]:
 
 
 def _cross_shot_state_issues(script: dict) -> list[Issue]:
+    """相邻镜状态衔接：按**同一实体**比较上镜 LF 终态与下镜 FF 初态.
+
+    M2.2 修订（U2）：
+      - 优先用两帧的 frame_layouts，按实体名配对；甲的「倒地」不再和乙的
+        「站立」相比（旧实现在整段文本上做子串匹配，跨人物误报的来源）；
+      - 布局缺失时才退回文本，且只接受**同一实体被显式点名**的成对分句；
+      - 文本出现状态词但主体归属不明时只输出 advisory（证据不足），不硬判；
+      - 过渡依据（起身/被扶起/换装/醒来…）必须落在**同一实体**的下一镜描述里。
+    """
     shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+    known = []
+    for shot in shots:
+        for key in ("char_layout",):
+            for entry in shot.get(key) or []:
+                if isinstance(entry, dict) and entry.get("name"):
+                    known.append(str(entry["name"]).strip())
+        layouts = shot.get("frame_layouts") or {}
+        for bucket in [layouts.get("ff"), layouts.get("lf")] + list(layouts.get("kfs") or []):
+            for entry in bucket or []:
+                if isinstance(entry, dict) and entry.get("name"):
+                    known.append(str(entry["name"]).strip())
+    for char in script.get("characters") or []:
+        if isinstance(char, dict) and char.get("identifier"):
+            known.append(str(char["identifier"]).strip())
+    names = tuple(dict.fromkeys(known))
+
     issues: list[Issue] = []
     for prev, curr in zip(shots, shots[1:]):
         if str(prev.get("scene") or "") != str(curr.get("scene") or ""):
             continue
         if str(prev.get("location") or "") != str(curr.get("location") or ""):
             continue
-        lf = str(prev.get("lf_desc") or "")
-        ff = str(curr.get("ff_desc") or "")
-        if not lf or not ff:
-            continue
-        if any(mark in ff for mark in _STATE_RESET_MARKERS):
-            continue
-        for before, after in _STATE_RESET_PAIRS:
-            hit_before = next((w for w in before if w in lf), "")
-            hit_after = next((w for w in after if w in ff), "")
-            if hit_before and hit_after:
+        for cand in state_break_candidates(prev, curr, names):
+            if cand.get("basis") == "ambiguous":
                 issues.append(Issue(
                     code="adjacent_state_break", severity="advisory",
-                    message=(f"邻镜状态衔接无过渡：上镜 LF 为「{hit_before}」，"
-                             f"本镜 FF 直接「{hit_after}」且无起身/整理/换手依据"),
+                    message=("邻镜可能的状态断裂，但状态主体归属不明确；"
+                             "保留不确定性，请人工核对（未按硬冲突处理）"),
                     shot_id=curr.get("index"), frame_id="ff",
-                    field_path="ff_desc", evidence=ff[:60],
+                    field_path="ff_desc", evidence=str(cand.get("evidence") or "")[:80],
                     repairable=False,
                 ))
-                break
+                continue
+            issues.append(Issue(
+                code="adjacent_state_break", severity="advisory",
+                message=(f"邻镜状态衔接无过渡：上镜 LF 中「{cand['entity']}」为"
+                         f"「{cand['before']}」，本镜 FF 同一角色直接「{cand['after']}」"
+                         f"且无起身/整理/包扎等过渡依据"),
+                shot_id=curr.get("index"), frame_id="ff",
+                field_path="ff_desc",
+                entity_id=str(cand["entity"]),
+                evidence=str(cand.get("evidence") or "")[:100],
+                repairable=False,
+            ))
     return issues
 
 
 # ---------------------------------------------------------------------------
-# 7. 镜内运镜冲突（M2.2）
+# 7. 镜内运镜冲突（M2.2 / U2 结构化重写）
 # ---------------------------------------------------------------------------
-_CAMERA_OPPOSITES = (
-    (("推近", "推进", "推镜", "向前推"), ("拉远", "拉后", "拉镜", "向后拉")),
-    (("左摇", "向左摇", "左移", "向左移", "向左横移"),
-     ("右摇", "向右摇", "右移", "向右移", "向右横移")),
-    (("上升", "升镜", "升高", "向上摇"), ("下降", "降镜", "降低", "向下摇")),
-    (("顺时针环绕", "顺旋"), ("逆时针环绕", "逆旋")),
-)
-#: 分段标记：同一镜内分段运镜是合法的，不判冲突。必须用**显式分段句式**
-#: （先…再… / 前N秒 / 随后），不能用裸「前/后/秒」——它们会命中「向前推」
-#: 「镜头后拉」这类正常运镜词，把真冲突全部跳过。
-_CAMERA_SEGMENT_RE = re.compile(
-    r"(?:先|再|随后|然后|接着|之后|随即|片刻后|紧接着|第[一二三四]段|前段|后段"
-    r"|前\s*\d+(?:\.\d+)?\s*秒|后\s*\d+(?:\.\d+)?\s*秒)")
-_FIXED_CAMERA = ("固定机位", "固定镜头", "机位固定", "静止镜头", "镜头固定")
-
-
+#: 旧实现的机械常量已移除：运镜判定改由 continuity_semantics 的结构化陈述承担
+#: （主体/否定/分段归属在提取期确定，见该模块 docstring）。
 def _camera_conflict_issues(shot: dict, shot_id) -> list[Issue]:
-    camera = str(shot.get("camera_movement") or "")
-    motion = str(shot.get("motion_desc") or "")
-    text = (camera + "\n" + motion).strip()
-    if not text:
-        return []
+    """镜内运镜冲突：只消费**结构化相机陈述**，不整段扫子串.
+
+    - 人物/载具/物体动作不算相机动作（「他起身」不是升镜）；
+    - 否定绑定所属分句（「推近，禁止拉远」不是冲突）；
+    - 顺序标记只切分它所在的那条指令链（人物动作的「先/再」不豁免相机冲突）；
+    - 主体/否定/时间归属不明 → advisory（证据不足），不硬判。
+    """
     issues: list[Issue] = []
-    for left, right in _CAMERA_OPPOSITES:
-        l_hit = next((w for w in left if w in text), "")
-        r_hit = next((w for w in right if w in text), "")
-        if not (l_hit and r_hit):
-            continue
-        # 同一镜显式写「先…再…」是合法分段运镜；只有两侧都出现在**同一连续
-        # 指令段**（无分段标记）时才是冲突。
-        if _CAMERA_SEGMENT_RE.search(motion):
-            continue
-        l_in_camera = any(w in camera for w in left)
-        r_in_camera = any(w in camera for w in right)
-        evidence = camera if (l_in_camera and r_in_camera) else motion
+    for rec in camera_conflicts(shot):
+        severity = "visual_risk" if rec.get("severity") == "visual_risk" else "advisory"
         issues.append(Issue(
-            code="intra_shot_camera_conflict", severity="visual_risk",
-            message=(f"同一镜内运镜互斥：「{l_hit}」与「{r_hit}」同时出现，"
-                     f"且 motion_desc 没有先/再分段，模型无法同时执行"),
+            code="intra_shot_camera_conflict", severity=severity,
+            message=str(rec.get("message") or ""),
             shot_id=shot_id, frame_id="",
-            field_path="camera_movement" if evidence is camera else "motion_desc",
-            evidence=evidence[:100], repairable=True,
+            field_path=str(rec.get("field") or "camera_movement"),
+            evidence=str(rec.get("evidence") or "")[:160],
+            repairable=severity == "visual_risk",
         ))
-        break
-    fixed = next((w for w in _FIXED_CAMERA if w in camera), "")
-    if fixed:
-        move = next((w for w in _CAMERA_OPPOSITES[0][0] + _CAMERA_OPPOSITES[0][1]
-                     + _CAMERA_OPPOSITES[1][0] + _CAMERA_OPPOSITES[1][1]
-                     + ("跟拍", "环绕", "摇镜", "俯冲", "拉升") if w in motion), "")
-        if move and not _CAMERA_SEGMENT_RE.search(motion):
-            issues.append(Issue(
-                code="intra_shot_camera_conflict", severity="visual_risk",
-                message=(f"camera_movement 为「{fixed}」，但 motion_desc 要求「{move}」；"
-                         f"固定机位与运动镜头互斥"),
-                shot_id=shot_id, frame_id="",
-                field_path="camera_movement", evidence=f"{fixed} / {move}",
-                repairable=True,
-            ))
     return issues
 
 

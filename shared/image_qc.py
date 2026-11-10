@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import time
 import os
 import re
 import shutil
@@ -529,30 +530,141 @@ def sidecar_path(frame_path: Path) -> Path:
     return p.with_name(p.stem + "_hallucination.json")
 
 
+# ---------------------------------------------------------------------------
+# QC 生命周期（U4）：结果必须绑定**实际检查过的那张图**
+# ---------------------------------------------------------------------------
+#: 统一状态。下游只认这五个值，has_hallucination 仅作兼容字段。
+QC_STATUSES = ("qc_passed", "qc_rejected", "qc_call_failed", "qc_not_run", "qc_stale")
+
+#: 「结果有效且已终局」——不需要重跑。
+_SETTLED = ("qc_passed", "qc_rejected")
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return ""
+    return h.hexdigest()
+
+
+def frame_identity(frame_path: str | Path) -> dict:
+    """图片身份：内容摘要负责身份，mtime 只作诊断信息."""
+    p = Path(frame_path)
+    try:
+        st = p.stat()
+    except OSError:
+        return {"path": str(p), "exists": False, "sha256": "", "bytes": 0,
+                "mtime": None}
+    return {"path": str(p), "exists": True, "sha256": _sha256_file(p),
+            "bytes": st.st_size,
+            "mtime": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime))}
+
+
+def read_sidecar(frame_path: str | Path) -> dict | None:
+    try:
+        data = json.loads(sidecar_path(Path(frame_path)).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def qc_state(frame_path: str | Path) -> dict:
+    """当前图片的 QC 状态（**按内容摘要**判定结果是否属于这张图）.
+
+    Returns:
+        {"status", "reason", "image", "data"}
+        旧 sidecar 缺 image.sha256 → qc_stale/unbound（允许补检，不静默升级为
+        当前图的有效 PASS）。
+    """
+    image = frame_identity(frame_path)
+    if not image["exists"]:
+        return {"status": "qc_not_run", "reason": "image_missing",
+                "image": image, "data": None}
+    data = read_sidecar(frame_path)
+    if data is None:
+        return {"status": "qc_not_run", "reason": "no_sidecar",
+                "image": image, "data": None}
+    bound = (data.get("image") or {}) if isinstance(data.get("image"), dict) else {}
+    if not bound.get("sha256"):
+        return {"status": "qc_stale", "reason": "legacy_unbound",
+                "image": image, "data": data}
+    if bound.get("sha256") != image["sha256"]:
+        return {"status": "qc_stale", "reason": "image_changed",
+                "image": image, "data": data}
+    status = str(data.get("status") or "")
+    if status not in QC_STATUSES:
+        return {"status": "qc_stale", "reason": "status_missing",
+                "image": image, "data": data}
+    return {"status": status, "reason": "", "image": image, "data": data}
+
+
 def should_run_qc(frame_path: Path) -> bool:
-    """是否需要对某帧执行质检：总开关开启 + sidecar 缺失或过期."""
+    """是否需要对该帧执行质检：总开关开启 + 结果未绑定到当前图片.
+
+    判据从「sidecar mtime 比图片新」改为**内容摘要**：相同 mtime 不同内容、
+    换图不换名、旧 sidecar 缺摘要，都必须重检。
+    """
     if not QC_ENABLED:
         return False
+    state = qc_state(frame_path)
+    return state["status"] not in _SETTLED
+
+
+def _emit_qc_event(status: str, frame_path, image: dict, **fields) -> None:
     try:
-        frame = Path(frame_path)
-        if not frame.exists():
-            return False
-        sc = sidecar_path(frame)
-        if not sc.exists():
-            return True
-        # sidecar 比帧旧 → 需要重新质检（帧可能已重生成）
-        return sc.stat().st_mtime < frame.stat().st_mtime
+        from shared import request_events
+        request_events.emit(status, kind="image_qc",
+                            frame={"path": str(frame_path),
+                                   "sha256": image.get("sha256", ""),
+                                   "bytes": image.get("bytes", 0)},
+                            **fields)
     except Exception:
-        return False
+        pass
 
 
-def write_sidecar(frame_path: Path, result: QcResult) -> Path:
-    """写质检 sidecar（submit_poll 兼容格式）.
+def write_sidecar(frame_path: Path, result: QcResult, *,
+                  pre_digest: str | None = None,
+                  frame_meta: dict | None = None,
+                  status: str | None = None) -> Path:
+    """写质检 sidecar（兼容旧字段，新增身份/状态/历史）.
 
-    IMAGE_QC_WRITE_CRITICAL=0 时所有 issues severity 封顶为 warning（仅告警）；
-    =1（默认）时写真实 severity，submit_poll 遇 critical 自动删帧重生成（审计 P0-3）。
+    - 写回前**再次**核对图片摘要：与 QC 开始前不同 → 结果记为 qc_stale，
+      不给新图生成有效 PASS；
+    - 调用失败（ok=False）写 qc_call_failed，并保留旧结果的摘要历史；
+    - 原子落盘：写失败不破坏旧 sidecar。
     """
     sc = sidecar_path(frame_path)
+    image = frame_identity(frame_path)
+    final_status = status
+    reason = ""
+    if pre_digest and image.get("sha256") and pre_digest != image["sha256"]:
+        final_status = "qc_stale"
+        reason = "image_replaced_during_qc"
+    if final_status is None:
+        if not result.ok:
+            final_status = "qc_call_failed"
+        elif result.has_hallucination:
+            final_status = "qc_rejected"
+        else:
+            final_status = "qc_passed"
+
+    previous = read_sidecar(frame_path)
+    history: list = []
+    if isinstance(previous, dict):
+        history = list(previous.get("history") or [])[-4:]
+        prev_image = previous.get("image") or {}
+        history.append({
+            "status": previous.get("status") or (
+                "qc_passed" if previous.get("has_hallucination") is False else "qc_rejected"),
+            "sha256": prev_image.get("sha256", ""),
+            "at": previous.get("at", ""),
+        })
+
     issues_data = []
     for i in result.issues:
         severity = i.severity
@@ -564,10 +676,28 @@ def write_sidecar(frame_path: Path, result: QcResult) -> Path:
             "severity": severity,
         })
     data = {
+        # 兼容字段（submit_poll 旧读法仍可读）
         "has_hallucination": bool(result.has_hallucination),
         "issues": issues_data,
+        # v2 身份/状态
+        "schema_version": 2,
+        "status": final_status,
+        "status_reason": reason,
+        "image": image,
+        "frame": frame_meta or {},
+        "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "error": str(result.error or "")[:500],
+        "person_count": getattr(result, "person_count", None),
+        "answers": getattr(result, "answers", None),
+        "history": history[-5:],
     }
-    sc.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    sc.parent.mkdir(parents=True, exist_ok=True)
+    tmp = sc.with_name(sc.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, sc)
+    _emit_qc_event(final_status, frame_path, image,
+                   reason=reason or str(result.error or "")[:120],
+                   issues=len(issues_data))
     return sc
 
 

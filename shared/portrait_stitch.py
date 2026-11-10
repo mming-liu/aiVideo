@@ -47,11 +47,67 @@ def crop_head_portrait(img: Image.Image) -> Image.Image:
         return img
 
 
-def stitch_portraits(paths: list[str], output_path: str) -> str:
-    """将多张角色肖像横向拼接为单张参考表.
+def stitch_portraits_with_layout(
+    paths: list[str],
+    output_path: str,
+    *,
+    height: int = _STITCH_HEIGHT,
+    gap: int = _GAP,
+) -> dict:
+    """横向拼接肖像并**返回每张成员在输出图里的实际像素区域**.
 
-    布局: [角色A | 间隔 | 角色B | 间隔 | 角色C]，统一高度、白色背景。
-    模型会把整张图当作参考，从而同时感知到多个角色的面部/服装特征。
+    拼图是压缩参考图数量的唯一手段，但拼完只剩一张 PNG：谁在左边、哪块是
+    武器、哪块是场景，全靠文件名猜。这里把「成员 → 区域」由拼图操作**确定性**
+    产出，供参考说明与验收直接消费（不再用「整图从左到右」一类含糊说法）。
+
+    Returns:
+        {"output": str, "size": [w, h], "members": [{"source", "region",
+          "scaled"}], "skipped": [{"source", "error"}]}
+        output 为空串表示成员不足两张（无需/无法拼图）。
+    """
+    valid = [p for p in paths if p and Path(p).exists()]
+    skipped: list[dict] = []
+    if len(valid) < 2:
+        return {"output": "", "size": [], "members": [], "skipped": skipped}
+
+    images: list = []
+    metas: list[str] = []
+    for p in valid:
+        try:
+            img = Image.open(p).convert("RGB")
+            ratio = height / img.height
+            new_w = max(1, int(img.width * ratio))
+            images.append(img.resize((new_w, height), Image.LANCZOS))
+            metas.append(str(p))
+        except Exception as exc:
+            skipped.append({"source": str(p), "error": "%s: %s" % (type(exc).__name__, exc)})
+
+    if len(images) < 2:
+        return {"output": "", "size": [], "members": [], "skipped": skipped}
+
+    total_w = sum(im.width for im in images) + gap * (len(images) - 1)
+    sheet = Image.new("RGB", (total_w, height), (255, 255, 255))
+
+    members: list[dict] = []
+    x = 0
+    for im, src in zip(images, metas):
+        sheet.paste(im, (x, 0))
+        members.append({"source": src,
+                        "region": [x, 0, x + im.width, height],
+                        "scaled": [im.width, height]})
+        x += im.width + gap
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(output_path, "PNG")
+    return {"output": output_path, "size": [total_w, height],
+            "members": members, "skipped": skipped}
+
+
+def stitch_portraits(paths: list[str], output_path: str) -> str:
+    """将多张角色肖像横向拼接为单张参考表（向后兼容的薄封装）.
+
+    布局: [角色A | 间隔 | 角色B | ...]，统一高度、白色背景。
+    需要成员区域时用 stitch_portraits_with_layout（返回结构化结果）。
 
     Args:
         paths: 角色肖像本地路径列表（按出镜顺序）
@@ -60,33 +116,4 @@ def stitch_portraits(paths: list[str], output_path: str) -> str:
     Returns:
         拼图文件路径；失败或输入不足时返回空字符串
     """
-    valid = [p for p in paths if p and Path(p).exists()]
-    if len(valid) < 2:
-        # 少于 2 张无需拼图，调用方应直接用单张
-        return ""
-
-    images: list[Image.Image] = []
-    for p in valid:
-        try:
-            img = Image.open(p).convert("RGB")
-            # 等比缩放到统一高度
-            ratio = _STITCH_HEIGHT / img.height
-            new_w = max(1, int(img.width * ratio))
-            images.append(img.resize((new_w, _STITCH_HEIGHT), Image.LANCZOS))
-        except Exception:
-            continue
-
-    if len(images) < 2:
-        return ""
-
-    total_w = sum(im.width for im in images) + _GAP * (len(images) - 1)
-    sheet = Image.new("RGB", (total_w, _STITCH_HEIGHT), (255, 255, 255))
-
-    x = 0
-    for im in images:
-        sheet.paste(im, (x, 0))
-        x += im.width + _GAP
-
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    sheet.save(output_path, "PNG")
-    return output_path
+    return stitch_portraits_with_layout(paths, output_path)["output"] or ""

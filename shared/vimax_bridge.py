@@ -999,7 +999,14 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
         else:
             prompt = shot.get("ff_desc_final") or shot.get("lf_desc_final")
     try:
-        from shared.image_qc import maybe_qc_sync, sidecar_path, write_sidecar
+        from shared.image_qc import (frame_identity, qc_state, sidecar_path,
+                                     write_sidecar)
+        # U4：QC 开始前记录图片摘要——写回时再次核对，期间换图则结果记 qc_stale，
+        # 绝不给新图写有效 PASS。
+        pre = frame_identity(frame_path)
+        pre_digest = pre.get("sha256") or None
+        frame_meta = {"shot_id": shot.get("index") if isinstance(shot, dict) else None,
+                      "frame_kind": frame_kind, "kf_index": kf_index}
         result = await asyncio.to_thread(
             maybe_qc_sync, frame_path, shot, frame_kind, characters, empty_scene, prompt,
             kf_index,
@@ -1009,19 +1016,43 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
             shot["_qc_last"] = result
         except Exception:
             pass
-        if not result.ok:
-            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 质检失败跳过（未写 sidecar）: {result.error}")
-            return False
         if result.error == "skipped":
-            # v6.50：skip 静默是 15:42 坏图带 clean sidecar 流出的排障盲区——
-            # 免检必须留痕（帧此前已质检过才允许 skip）
-            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} sidecar 新鲜免检")
+            # 免检必须留痕；已有 sidecar 保持原样（它是上一张图的历史身份）。
+            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} "
+                        f"sidecar 已绑定当前图，免检")
+            try:
+                from shared import request_events
+                request_events.emit("qc_not_run", kind="image_qc",
+                                    frame={"path": str(frame_path),
+                                           "sha256": pre_digest or ""},
+                                    reason="sidecar_settled")
+            except Exception:
+                pass
+            return False
+        if not result.ok:
+            # 调用失败：写结构化 qc_call_failed（含旧结果历史），下次仍会重检。
+            try:
+                write_sidecar(Path(frame_path), result, pre_digest=pre_digest,
+                              frame_meta=frame_meta)
+            except Exception as e:
+                _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} "
+                            f"失败记录写入失败: {e}")
+            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} "
+                        f"质检失败（qc_call_failed）: {result.error}")
             return False
         # QC 成功 → 写 sidecar（检出与否都写），供下次跳过与 step02b 消费
+        wrote_status = ""
         try:
-            write_sidecar(Path(frame_path), result)
+            write_sidecar(Path(frame_path), result, pre_digest=pre_digest,
+                          frame_meta=frame_meta)
+            wrote_status = qc_state(frame_path).get("status", "")
         except Exception as e:
             _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} sidecar 写入失败: {e}")
+        if wrote_status == "qc_stale":
+            # 检查期间图片被替换：本次结果不属于新图，不能据此删帧。
+            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} "
+                        f"检查期间图片已变化，结果记 qc_stale（不删帧）")
+            return False
         # v6.53 A.4：尝试日志落盘（人数/问答答案/判定），重抽对比「哪里变了」
         try:
             import time as _time
@@ -1553,7 +1584,8 @@ def _compose_frame_refs_by_category(
 
 
 def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
-                                 limit: int = 5, for_frame: str = "首帧") -> list[str]:
+                                 limit: int = 5, for_frame: str = "首帧",
+                                 return_buckets: bool = False):
     """为 step02a 首帧/尾帧图生图收集参考图（场景 → 角色 → 道具）.
 
     与 r2v 参考图同源、同一套匹配逻辑，保证图生视频前导帧（首帧/尾帧）的
@@ -1573,12 +1605,25 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
     scene_refs = _collect_scene_asset_refs(shot)
     # 09-13 特写帧场景门控：spec 含「特写」的帧是局部构图，广角场景资产图会
     # 把构图拉回全景（shot_4 lf 手部特写 3 次 QC 未中根因）——跳过场景参考。
+    omissions: list[dict] = []
     if scene_refs and for_frame in ("首帧", "尾帧"):
         _fk = "ff" if for_frame == "首帧" else "lf"
         if _frame_spec_closeup(shot, _fk):
+            # 省略必须留依据：这是自动规则（spec 特写 → 广角场景图会拉回全景），
+            # 不是"首帧已覆盖环境"的泛化推断；报告里标 reviewed=False 供人工评阅。
+            omissions.append({
+                "kind": "scene",
+                "reason": "closeup_frame",
+                "detail": "spec 含特写，广角场景资产图会把构图拉回全景",
+                "reviewed": False,
+            })
             scene_refs = []
             _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 特写帧跳过场景资产图（防广角拉构图）")
     if empty_scene:
+        if return_buckets:
+            return {"refs": scene_refs[:limit],
+                    "buckets": [("scene", scene_refs[:limit])],
+                    "omissions": omissions}
         return scene_refs[:limit]
 
     # v6.26：按类别分组拼图。类别内配额放宽（多图类别会被拼成 1 张），
@@ -1613,6 +1658,13 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
     )
     prop_refs = _collect_prop_asset_refs(shot, limit=3, frame_desc=frame_desc, characters=characters)
 
+    bucket_list = [("scene", list(scene_refs) + list(space_refs)),
+                   ("chars", list(portrait_refs)),
+                   ("props", list(prop_refs))]
+    if return_buckets:
+        # 调用方要自己组合时（如尾帧把首帧整图当第一优先级）不再预压缩，
+        # 由一次 fit_refs 决定最终名额，避免"先压一次、再压一次"丢失类别。
+        return {"refs": None, "buckets": bucket_list, "omissions": omissions}
     return _compose_frame_refs_by_category(
         shot, for_frame, scene_refs, space_refs, portrait_refs, prop_refs, limit=limit,
     )
@@ -4647,7 +4699,8 @@ async def gen_shot_frames(
     # 肖像），关键帧传合并全文（动作中间态，威胁源以动作可见→保留肖像供
     # kf0「刺客半身探出举匕首」使用）。
     frame_refs_ff = _collect_frame_refs_for_shot(shot, characters, limit=5, for_frame="首帧")
-    frame_refs_lf = _collect_frame_refs_for_shot(shot, characters, limit=5, for_frame="尾帧")
+    # 尾帧不在这里预算：它要把「首帧整图」并入同一组类别后**一次**压缩，
+    # 预算会白跑一次拼图并让类别信息丢失。
     frame_refs_kf = _collect_frame_refs_for_shot(shot, characters, limit=5, for_frame="关键帧")
 
     # ---- 帧选择解析：frames 提供时精确控制（调试），None 沿用 Mode A/B 默认 ----
@@ -4688,9 +4741,14 @@ async def gen_shot_frames(
         # 构图雷同。首帧文件缺失时直接失败（禁止尾帧脱离首帧单独成图）。
         if not ff_path.is_file() or (want_ff and not ff_path_str):
             raise FileNotFoundError(f"shot {idx}: last frame requires a valid first frame")
-        from shared.ref_compose import fit_flat, active_image_ref_limit
-        lf_refs = fit_flat([str(ff_path)] + [p for p in frame_refs_lf if p != str(ff_path)],
-                           active_image_ref_limit(), shot_dir, f"shot{idx}_lf")
+        from shared.ref_compose import fit_refs, active_image_ref_limit
+        # 尾帧参考图按**类别**组合：首帧整图（环境/服饰基底）+ 场景 + 人物 + 道具，
+        # 一次压缩到上限；每张拼合表都带 refmap（成员区域），身份不再靠文件名。
+        _lf = _collect_frame_refs_for_shot(
+            shot, characters, limit=5, for_frame="尾帧", return_buckets=True)
+        lf_buckets = [("frame", [str(ff_path)])] + list(_lf["buckets"])
+        lf_refs = fit_refs(lf_buckets, active_image_ref_limit(), shot_dir,
+                           f"shot{idx}_lf", omissions=_lf.get("omissions"))
         lf_path_str = await _gen_last_frame_async(
             image_adapter, shots_dir, shot,
             force=force, script_mtime=script_mtime,

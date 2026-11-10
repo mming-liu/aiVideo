@@ -51,6 +51,9 @@ def _compute_rule_source_fingerprint() -> str:
         # 当成仍然有效。
         root / "audit.py",
         root / "cross_field_checks.py",
+        # U2（2026-11-09）：运镜/状态判据拆到独立模块——只改提取与冲突判定
+        # （主体/否定/分段/实体匹配）也必须让旧报告失效。
+        root / "continuity_semantics.py",
         root / "kf_structural_guard.py",
         root / "subject_attribution.py",
         root / "weapon_states.py",

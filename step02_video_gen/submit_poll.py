@@ -175,37 +175,33 @@ def _qc_video_product_result(video_path: Path, shot_idx: int, expected_duration:
 
 
 def _check_keyframe_hallucination(frame_path: str) -> dict:
-    """
-    检查关键帧是否有 critical 级别的幻觉。
+    """读取某帧的 QC 结论，**只认绑定到当前图片结果**的 sidecar.
+
+    U4：sidecar 必须带 image.sha256 且与当前文件一致，status 才有效。旧 sidecar
+    （无摘要）、换图后遗留的旧结论、调用失败与未运行，一律按「未验证」返回：
+    不冒充通过，也不凭旧结论删新图。旧字段 has_hallucination/issues 仍兼容读取。
 
     Returns:
-        dict: {"has_critical": bool, "issues": list}
+        {"has_critical", "issues", "status", "verified", "reason"}
     """
     if not frame_path:
-        return {"has_critical": False, "issues": []}
-
+        return {"has_critical": False, "issues": [], "status": "qc_not_run",
+                "verified": False, "reason": "no_frame"}
     frame_path_obj = Path(frame_path)
-    # sidecar 命名契约与 shared/image_qc.sidecar_path 完全一致：<stem>_hallucination.json。
-    # 此前用 with_suffix(".png").with_name(...) 拼名 + glob("*_hallucination.json") 盲取
-    # 第一个（多帧时可能张冠李戴）——统一走 image_qc.sidecar_path，消除双份命名约定（审计 P0-3）。
-    from shared.image_qc import sidecar_path
-    hallucination_file = sidecar_path(frame_path_obj)
-
-    if hallucination_file.exists():
-        try:
-            with open(hallucination_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            has_critical = False
-            critical_issues = []
-            for issue in data.get("issues", []):
-                if issue.get("severity") == "critical":
-                    has_critical = True
-                    critical_issues.append(issue)
-            return {"has_critical": has_critical, "issues": critical_issues}
-        except Exception:
-            pass
-
-    return {"has_critical": False, "issues": []}
+    from shared.image_qc import qc_state
+    state = qc_state(frame_path_obj)
+    status = state["status"]
+    data = state.get("data") or {}
+    if status == "qc_rejected":
+        critical = [i for i in data.get("issues", [])
+                    if isinstance(i, dict) and i.get("severity") == "critical"]
+        return {"has_critical": bool(critical), "issues": critical,
+                "status": status, "verified": True, "reason": ""}
+    if status == "qc_passed":
+        return {"has_critical": False, "issues": [], "status": status,
+                "verified": True, "reason": ""}
+    return {"has_critical": False, "issues": [], "status": status,
+            "verified": False, "reason": state.get("reason") or status}
 
 
 def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> str:

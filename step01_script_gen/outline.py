@@ -89,6 +89,10 @@ OUTLINE_PROMPT = """
   **一条事实只写一件事**（一个命题）：身份、年龄、来历、继业、功名等要**各自成条**，
   不要把几件事并成一条；该条的「原文证据」必须**覆盖这条的全部内容**（引文覆盖不到的
   部分，没有任何机制能证明它被承载）。
+  **「原文证据」还必须是一段连续原文**：不得用「……」跳过中间叙述。逐字承载（台词/旁白）
+  只能取一段连续原文，把两段相隔很远的话用省略号拼成一条事实，无论改哪条旁白都只能
+  覆盖一半，而事实登记后被冻结、修订层改不了，整章会停在计划层。一条事实横跨两段
+  不连续原文时，就**各自另立一条事实**——每条只引用一段连续原文、各自声明承载。
   **主张要写成原文直接成立的核心事实，不绑非必要的修辞限定词**：尤其别把「若非…也不会…」
   「险些…」这类假设/反事实句里的字面限定抄进主张——证据句含否定/条件词时，主张只保留
   上下文确已成立的核心判断（例：证据是「若非如此，他也不会花重金买下」，主张写「她是他
@@ -163,6 +167,14 @@ OUTLINE_PROMPT = """
   （k 按 dialogue_lines 顺序编号）；`载体：画面` = 由画面动作承载、不占台词时长。
   第三条合法值是 `载体：旁白k`（由 `narration_lines` 第 k 条旁白讲出来）。
   一个节拍只能有一个载体；之后重选台词增删时，受影响节拍的载体必须同步更新。
+  **格式硬约束（解析器逐字匹配）**：节拍条目里的承载段必须以**全角竖线 `｜`** 起头，
+  逐字写成 `｜载体：画面`、`｜载体：台词k` 或 `｜载体：旁白k`——`｜` 是全角竖线
+  （U+FF5C），`：` 是全角冒号（U+FF1A）。**不要**写成 `；载体：画面`（中文分号）、
+  `|载体：画面`（半角竖线）、`｜载体:画面`（半角冒号）或 `载体：画面`（前面没有 `｜`）。
+  解析器只按 `｜载体：` 逐字匹配；分隔符不对时，这条节拍会被当成**没有登记载体**，
+  后面所有承载检查都会失败。正例：`节拍：黄昏水湾全景｜本镜信息目的：交代环境｜原文依据：“夕阳西下……”｜载体：画面`；
+  反例：`节拍：黄昏水湾全景｜本镜信息目的：交代环境｜原文依据：“夕阳西下……”；载体：画面`。
+  每条节拍**恰好一个** `｜载体：` 段，放在条目末尾。
   载体**必须写单值**：`载体：台词3`、`载体：旁白2`——**不许写区间**（`台词1-2`、
   `旁白1-5` 都是无效登记，会被判「载体非法」打回）。要表达"这条声音由连续几个镜头
   承载"，就写到**一条**节拍上（生成阶段会按句末展开成连续镜头），不要拆成多条。
@@ -1867,6 +1879,16 @@ PLAN_FIX_CAPABILITY = {
     "verify_source_support_missing": ("content", "plan_verification"),
     "verify_source_verdict_invalid": ("content", "plan_verification"),
     "fact_basis_invalid": ("content", "required_facts"),
+    # 规划期问题（2026-11-10）：一条事实的「原文证据」用省略号跨过原文中间内容，
+    # 逐字承载（台词/旁白）只能覆盖一半；而事实正文在修订期冻结，换载体解决不了。
+    # 标 content = "必须改内容"，让它走完整计划路由并在反馈里说清：
+    # 真正的修法是在**生成大纲时**把复合事实拆成两条（各引一段连续原文）。
+    "fact_evidence_noncontiguous": ("content", "required_facts"),
+    # 规划期**格式**问题（2026-11-10 R1）：节拍载体段写了 `；载体：` / `|载体：` /
+    # `｜载体:` 等解析器不认的分隔符。只改末尾的载体登记段即可（ops），不改正文；
+    # 与 `fact_evidence_noncontiguous` 一样是规划层问题，但修法不同：那条要拆事实，
+    # 这条只要把分隔符改回全角 `｜载体：`。
+    "carrier_format_invalid": ("ops", "shot_beats"),
     "source_preservation_failed": ("content", "required_facts"),
     "verify_source_revision_context": ("content", "plan_verification"),
     "verify_source_preservation_record": ("content", "plan_verification"),
@@ -3413,7 +3435,8 @@ def _replan_by_split(plan, problems, novel_text, budget, rejections=None, *,
 
 def _replan_by_view(plan, problems, novel_text, budget, rejections=None, *,
                     model=None, system_prompt=None, evidence=None,
-                    mode=None, verification=None, protocol=None, verify_axes=None) -> tuple:
+                    mode=None, verification=None, protocol=None, verify_axes=None,
+                    allowed_fields=None) -> tuple:
     """**视图协议一轮修订**：装配请求 → 调模型 → 严格解析 → 完整关系事务应用.
 
     `returns (new_plan|None, why, call_id, evidence)`——与 `_replan_by_ops` /
@@ -3534,6 +3557,14 @@ def _replan_by_view(plan, problems, novel_text, budget, rejections=None, *,
     # 版本判据也不能只有增量那条有——这里把**本轮实际按哪套规则问的**传下去。
     _accept = lambda _v: _accept_view_candidate(_v, novel_text, verification, verify_axes=verify_axes)
     if _is_delta:
+        from step01_script_gen.revision_route import delta_field_violations
+        _field_bad = delta_field_violations(_data, allowed_fields)
+        if _field_bad:
+            if evidence is not None:
+                evidence["route_field_violations"] = _field_bad
+            return None, "route_field_violation: %s" % "；".join(
+                str(x.get("reason") or x.get("path") or "") for x in _field_bad), \
+                _cid, (evidence or {})
         _cand_view, _probs, _res_k = apply_delta_view(_base_view, _data, mode=_mode,
                                                       accept=_accept)
     else:
@@ -3922,6 +3953,8 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
     不合法"；只给前者，模型会重复同一个错误。
     """
     from step01_script_gen.plan_feasibility import evaluate_plan
+    from step01_script_gen.revision_route import (ROUTE_CARRIER, ROUTE_SOURCE,
+                                                  route_decision)
     record = plan.get("plan_verification")
     _rejected = plan.get("verification_rejected")
     _failed = (_rejected if isinstance(_rejected, dict)
@@ -3933,6 +3966,7 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
                 "detail": "核验记录纠正未完成，候选保持不变：%s"
                           % _why.get("error", ""),
                 "evidence": {"applied": False, "no_model_call": True}}
+    _route_dec = route_decision(problems)
     _timeout = budget.remaining_sec()
     # 工作包 §4 B：控制器只开**一次**表（`budget.deadline_at`），通道里的排队/退避/
     # 每次 POST 都按它重算余量——不再各自拿一个"剩余秒数"重新解释
@@ -3969,15 +4003,27 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
             system_prompt=system_prompt, evidence=_ev, verification=verification,
             ctx=_slot_ctx, target_fact_uids=target_fact_uids)
     from step01_script_gen import source_revision as _source_revision
-    if any(p.get('code') in ('fact_basis_invalid', 'source_preservation_failed') for p in (problems or [])):
+    if _route_dec["route"] == ROUTE_SOURCE:
         if not _source_revision.eligible_targets(plan):
             return {'kind':'verification_failed','call_id':'',
                     'detail':'来源修正缺少当前有效的独立负面核验，先纠正核验记录，候选保持不变',
-                    'evidence':{'applied':False,'no_model_call':True,'route':'source_basis_revision'}}
+                    'evidence':{'applied':False,'no_model_call':True,
+                                'route':'source_basis_revision',
+                                'route_decision':_route_dec}}
+        _allowed_core = {}
+        for _p in (problems or []):
+            if not isinstance(_p, dict):
+                continue
+            _dep = str(_p.get("core_dependency") or "").strip()
+            if not _dep:
+                continue
+            for _f in (_p.get("core_fields") or []):
+                _allowed_core[str(_f)] = _dep
         return _source_revision.revise_with_service(
             plan, problems, novel_text=novel_text, service=create_service(),
             model=model, timeout_sec=_timeout, deadline_monotonic=_deadline_at,
-            verification=verification)
+            verification=verification,
+            allowed_core_updates=(_allowed_core or None))
     _budget_ctx = bool(problems) and all(
         str((p or {}).get("code") or "").startswith("budget") for p in problems)
     # **按修法能力分流**（复核 2026-10-02 之九 P1）：问题记录自带 `fix`（生产者给）——
@@ -4017,6 +4063,7 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
     _ev = {"fix_capability": _cap,
            "request": _request_feedback(problems),
            "route": _route,
+           "route_decision": _route_dec,
            # 预算读数（数字 + 已验算替代菜单）只有预算路给得出；它是**反馈的 flavor**，
            # 不是接口——单独记一栏，免得把"走了预算反馈"读成"回了操作"
            "budget_context": _budget_ctx,
@@ -4130,7 +4177,9 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
                 plan, problems, novel_text, budget, rejections,
                 model=model, system_prompt=system_prompt, evidence=_ev,
                 mode=plan_mode(plan) or MODE_LEGACY, verification=verification,
-                protocol=_route, verify_axes=verify_axes)
+                protocol=_route, verify_axes=verify_axes,
+                allowed_fields=(_route_dec["allowed_fields"]
+                                if _route_dec["route"] == ROUTE_CARRIER else None))
     elif _route == ROUTE_FULL_PLAN:
         from step01_script_gen import plan_content_repair as _pcr_state
         # 2026-10-23（v5 第一包）：事实目标与声音残余同轮时，**仍走窄槽位**修可表达的那部分；
@@ -5337,7 +5386,9 @@ _PLAN_OPS_INSTRUCTION = """
 「原文依据」（长引文 ≥8 字连续命中；4-7 字的短引文要整段逐字）。
 
 **承载关系必须双向闭合**：每条节拍至多一个「｜载体：…」段；**每一句选中的台词
-都要至少被一个节拍声明承载**（`载体：台词k`）。你改某条节拍的载体时，要保证没有
+都要至少被一个节拍声明承载**（`载体：台词k`）。**分隔符必须是全角竖线 `｜` +
+全角冒号 `：`**；`；载体：`、`|载体：`、`｜载体:` 都不算登记（解析器逐字匹配）。
+你改某条节拍的载体时，要保证没有
 哪句台词因此失去全部承载——把原承载改掉就同时把新承载指派到别的节拍上。
 （代码会重新验算整张承载关系，违反即整轮拒收。）
 """

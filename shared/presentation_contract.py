@@ -298,7 +298,10 @@ _RELATION_KEYS = ("shot_beats", "dialogue_lines", "narration_lines",
 _BASIS_SKIP = set(_RELATION_KEYS) | {
     "presentation", "plan_contract_version", "plan_verification",
     "verification_rejected", "plan_revision", "main_events",
-    "voice_adaptations"}
+    "voice_adaptations",
+    # R2-1：来源元数据与事实身份**同表**投影（`frozen_facts[].source`），
+    # 不能让 `plan_basis` 再带一份——两份副本在拆分/重排后必然漂移。
+    "fact_sources"}
 
 #: `presentation` 块里的**并行 uid 表**：稳定身份必须随块保存，否则投影读回时会被
 #: 按数组位置**重新编号**（"稳定 ID 只在内存里稳定"等于不稳定）。旧块缺这些键时按
@@ -979,6 +982,16 @@ def _view_from_legacy_plan(plan: dict, *, mode: str = MODE_LEGACY) -> tuple:
     for _i, _f in enumerate(_facts, 1):
         _claim, _ev = _split_claim_evidence(_f)
         _frozen.append({"uid": _fact_uids[_i - 1], "claim": _claim, "evidence": _ev})
+    # R2-1：只有**计划显式带了** `fact_sources` 才挂来源，旧计划视图逐字不变。
+    if plan.get("fact_sources"):
+        from shared.fact_sources import source_records as _source_records
+        _src = _source_records(plan)
+        for _i, _f in enumerate(_frozen):
+            if _i < len(_src):
+                _f["source"] = {k: _src[_i].get(k) for k in
+                                ("uid", "source", "level", "basis",
+                                 "adjudicated_by")
+                                if _src[_i].get(k) is not None}
 
     _units_d = [_unit("d%02d" % _i, _t) for _i, _t in enumerate(_lines, 1)]
     _units_n = [_unit("n%02d" % _i, _e.get("text"), _src_span(_e.get("source")), **role_fields(_e))
@@ -1212,7 +1225,8 @@ def parse_view(obj, *, expected_mode: str | None = None) -> tuple:
         _pool = {KIND_VISUAL: _beat_uids, KIND_CARD: _card_ids,
                  KIND_DIALOGUE: _d_uids, KIND_NARRATION: _n_uids}[_k]
         if _t not in _pool:
-            return "", "%s 引用了不存在的 %s：%r" % (where, _k, _t)
+            return "", ("%s 引用了不存在的 %s：%r（当前可用 %s：%s）"
+                        % (where, _k, _t, _k, sorted(_pool)[:20]))
         return "", ""
 
     # `voice_ref` 也必须闭合（旧写法只查承载表：节拍标着一个不存在的声音单位时无人发现）
@@ -1613,11 +1627,27 @@ def plan_from_view(view: dict) -> dict:
     # 新模式的表在 `presentation.fact_uids` 里，不在顶层重复。
     if _mode == MODE_LEGACY:
         _out["fact_uids"] = list(_fact_order)
+        _srcs = []
+        for _fu in _fact_order:
+            _s = (_frozen.get(_fu) or {}).get("source")
+            _srcs.append(dict(_s) if isinstance(_s, dict) and _s else None)
+        if any(_s is not None for _s in _srcs):
+            _out["fact_sources"] = _srcs
+        else:
+            _out.pop("fact_sources", None)
     else:
         _out.pop("fact_uids", None)
+        _out.pop("fact_sources", None)
     if _mode == MODE_HYBRID or _cards:
         # 新模式的**结构化关系是唯一承载事实源**。`｜承载：…` 文案仍投影出来（供人读、
         # 供旧消费者显示），但**不另作权威判据**——消费者读这一块。
+        _pres_src = [
+            (dict((_frozen.get(_fu) or {}).get("source"))
+             if isinstance((_frozen.get(_fu) or {}).get("source"), dict)
+             and (_frozen.get(_fu) or {}).get("source") else None)
+            for _fu in _fact_order]
+        _pres_extra = ({"fact_sources": _pres_src}
+                       if any(_s is not None for _s in _pres_src) else {})
         _out["presentation"] = {
             "schema": PRESENTATION_SCHEMA,
             "mode": _mode,
@@ -1628,6 +1658,8 @@ def plan_from_view(view: dict) -> dict:
             "narration_uids": [ref_uid(u) for u in _n],
             "beat_events": [list(b.get("event_uids") or []) for b in _beats],
             "screen_cards": [dict(c) for c in _cards],
+            # R2-1：来源元数据随结构化身份块保存；旧计划无此键时保持缺省。
+            **_pres_extra,
             "fact_bindings": [
                 {"fact_uid": _fu,
                  "carriers": [_ref_out(c) for c in ref_items(
@@ -2610,6 +2642,65 @@ def delta_request(base_view: dict, *, problems=None, rejections=None,
     return dict(_r, schema=DELTA_SCHEMA)
 
 
+def _delta_deleted_uid_references(obj, base_view) -> list:
+    """同一笔 delta **删了又引用**的自相矛盾（R2-3/R1 `n02` 实测形态）.
+
+    2026-11-10 R1 的修订响应：`delete.narration_units=["n02"]`，同时
+    `upsert.beats[new:b10].voice_ref.uid="n02"`、`fact_bindings[f02]` 也引用 `n02`。
+    通用悬空检查报的是「不存在 n02」，但**基线里本来有 n02**——真正原因是模型自己的
+    delete 把它删了。这里在应用前按**同一笔响应**判：删除集合与引用集合相交即拒收，
+    并列出删除后仍可用的 id，避免把可修的编排错误读成"视图丢了 id"。
+    """
+    if not isinstance(obj, dict) or not isinstance(base_view, dict):
+        return []
+    _del = obj.get("delete") if isinstance(obj.get("delete"), dict) else {}
+    _ups = obj.get("upsert") if isinstance(obj.get("upsert"), dict) else {}
+    _deleted: dict = {}
+    _available: dict = {}
+    for _key in DELTA_ENTITY_KEYS:
+        _ids = [str(x) for x in (_del.get(_key) or []) if str(x).strip()]
+        _deleted[_key] = set(_ids)
+        _idk = DELTA_ID_KEY[_key]
+        _base_ids = [str(x.get(_idk) or "") for x in (base_view.get(_key) or [])
+                     if isinstance(x, dict)]
+        _ups_ids = [str(x.get(_idk) or "") for x in (_ups.get(_key) or [])
+                    if isinstance(x, dict)]
+        _available[_key] = ([u for u in _base_ids if u not in _deleted[_key]]
+                            + [u for u in _ups_ids if u not in _deleted[_key]])
+    _kind_key = {KIND_VISUAL: "beats", KIND_DIALOGUE: "dialogue_units",
+                 KIND_NARRATION: "narration_units", KIND_CARD: "screen_cards"}
+    _p: list = []
+
+    def _check(_ref, _where):
+        if not isinstance(_ref, dict):
+            return
+        _kind = str(_ref.get("kind") or "")
+        _uid = str(_ref.get("uid") or "")
+        _key = _kind_key.get(_kind)
+        if not _key or not _uid or _uid not in _deleted[_key]:
+            return
+        _p.append(_delta_rec(
+            "delta_deleted_uid_referenced",
+            "%s 引用了本次 `delete.%s` 已删除的 %r——同一笔响应自相矛盾；"
+            "若要改正文，请 `upsert` 该 uid（保留身份），不要删除后再引用。"
+            "删除后可用 id：%s"
+            % (_where, _key, _uid, _available[_key][:20]), _where))
+
+    for _i, _b in enumerate(_ups.get("beats") or []):
+        if isinstance(_b, dict):
+            _check(_b.get("voice_ref"), "upsert.beats[%d].voice_ref" % _i)
+    for _i, _b in enumerate(obj.get("fact_bindings") or []):
+        if not isinstance(_b, dict):
+            continue
+        for _j, _c in enumerate(_b.get("carriers") or []):
+            _check(_c, "fact_bindings[%d].carriers[%d]" % (_i, _j))
+    _hb = obj.get("hook_bindings")
+    if isinstance(_hb, dict):
+        for _j, _c in enumerate(_hb.get("carriers") or []):
+            _check(_c, "hook_bindings.carriers[%d]" % _j)
+    return _p
+
+
 def delta_response_problems(obj, *, base_view=None,
                             expected_rule_version: str = "") -> list:
     """增量响应**信封 / 版本 / 改动块 / 嵌套类型**的严格准入（白名单，不猜形状）.
@@ -2782,6 +2873,7 @@ def delta_response_problems(obj, *, base_view=None,
         if _k in obj and not isinstance(obj.get(_k), list):
             _p.append(_delta_rec("delta_evidence_type",
                                  "`%s` 必须是数组" % _k, _k))
+    _p.extend(_delta_deleted_uid_references(obj, base_view))
     return _p
 
 

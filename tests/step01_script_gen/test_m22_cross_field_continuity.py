@@ -63,10 +63,20 @@ def test_adjacent_state_break_requires_no_bridge():
 
 
 def test_intra_shot_camera_opposites_conflict():
+    """同一段内**同时**要求推近与拉远 → 冲突（旧的「推近后随即拉远」是先后，
+    属合法分段运镜，见下一条）。"""
+    script = _script(
+        one={"camera_movement": "镜头缓慢推近并同时拉远", "motion_desc": "人物抬头"},
+    )
+    assert "intra_shot_camera_conflict" in _codes(script)
+
+
+def test_intra_shot_camera_ordered_opposites_are_legal():
+    """「推近后随即拉远」是显式先后顺序，不是同一时刻的互斥要求."""
     script = _script(
         one={"camera_movement": "镜头缓慢推近后随即拉远", "motion_desc": "人物抬头"},
     )
-    assert "intra_shot_camera_conflict" in _codes(script)
+    assert "intra_shot_camera_conflict" not in _codes(script)
 
 
 def test_intra_shot_camera_segmented_is_legal():

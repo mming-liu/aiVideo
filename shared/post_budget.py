@@ -208,8 +208,21 @@ def _file_lock(path: Path):
         handle.close()
 
 
-def acquire(kind: str, amount: int = 1) -> int:
-    """发送前原子扣减；超限/熔断抛 PostBudgetExhausted；返回已用次数."""
+def _event(event_name: str, kind: str, request_id: str | None, **fields) -> None:
+    """请求事件是证据，不是发送前提：任何异常都不得改变预算语义."""
+    try:
+        from shared import request_events
+        request_events.emit(event_name, request_id=request_id or "", kind=kind, **fields)
+    except Exception:
+        pass
+
+
+def acquire(kind: str, amount: int = 1, request_id: str | None = None) -> int:
+    """发送前原子扣减；超限/熔断抛 PostBudgetExhausted；返回已用次数.
+
+    request_id 用于把「这次扣减」与后续响应/图片/QC 事件关联；不传时由调用方
+    上下文（request_events.begin_request）提供，没有就留空——不编造身份。
+    """
     amount = max(1, int(amount))
     path, limit = _config(kind)
     if path is None:
@@ -233,6 +246,8 @@ def acquire(kind: str, amount: int = 1) -> int:
                      "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")})
         data.pop("quota_exhausted", None)
         _write(path, data)
+        _event("request_sent", kind, request_id,
+               amount=amount, used=used, limit=effective)
         return used
 
 
@@ -240,6 +255,7 @@ def mark_quota_exhausted(kind: str, message: str) -> None:
     """记录上游额度耗尽；有账本时落盘，重启后仍拒绝发送."""
     text = str(message or "quota exhausted")[:500]
     _QUOTA[kind] = text
+    _event("account_refused", kind, None, source="quota_marker", detail=text)
     path, _limit = _config(kind)
     if path is None:
         return
@@ -283,7 +299,17 @@ def usage(kind: str) -> dict:
     return data
 
 
-def record(kind: str, outcome: str, amount: int = 1) -> dict:
+#: 预算结果分类 → 请求事件名（终局事件只由真实终局触发）。
+_OUTCOME_EVENTS = {
+    "generated_ok": "response_received",
+    "account_quota_refused": "account_refused",
+    "transport_failed": "transport_failed",
+    "qc_rejected": "qc_rejected",
+}
+
+
+def record(kind: str, outcome: str, amount: int = 1,
+           request_id: str | None = None) -> dict:
     """回写**已发送请求**的结果分类；返回最新账本视图.
 
     `used` 口径不变（acquire 已 +1）；这里把对应数量的 `pending` 结清并计入
@@ -310,6 +336,9 @@ def record(kind: str, outcome: str, amount: int = 1) -> dict:
         data["outcomes"][outcome] += amount
         data["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         _write(path, data)
+        _event(_OUTCOME_EVENTS.get(outcome, "response_received"), kind, request_id,
+               outcome=outcome, amount=amount,
+               used=data["used"], pending=data["pending"])
         data["path"] = str(path)
         return data
 

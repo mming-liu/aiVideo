@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -109,6 +110,9 @@ def _run(tmp_path, *, execute=False, remaining=1, corrupt=None, auth_id=None):
     log = tmp_path / "sends.log"
     out = tmp_path / "out"
     env = dict(os.environ)
+    # 子进程脚本用 `python` 启动；必须钉到当前测试解释器，否则会落到
+    # 另一个未装 python-dotenv 的 python.exe（R3-6 环境问题）。
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
     env["PYTHONPATH"] = "%s%s%s" % (tmp_path / "stub", os.pathsep, ROOT)
     env["STEP01_STUB_MODE"] = "ok"
     env["STEP01_STUB_LOG"] = str(log)
@@ -201,6 +205,9 @@ def test_execute_twice_same_authorization_sends_once(tmp_path):
     log = tmp_path / "sends2.log"
     out2 = tmp_path / "out2"
     env = dict(os.environ)
+    # 子进程脚本用 `python` 启动；必须钉到当前测试解释器，否则会落到
+    # 另一个未装 python-dotenv 的 python.exe（R3-6 环境问题）。
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
     env["PYTHONPATH"] = "%s%s%s" % (tmp_path / "stub", os.pathsep, ROOT)
     env["STEP01_STUB_MODE"] = "ok"
     env["STEP01_STUB_LOG"] = str(log)
