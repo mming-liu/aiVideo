@@ -177,6 +177,13 @@ def check_subtitle_coverage(subtitle: str, prompt_text: str, speakers: frozenset
     # 这样既消除「对白镜覆盖率 0%」的批量误报，又保留"喊了话但画面里没人"的真缺陷检测。
     # 说话人从 script 的角色清单里精确匹配（避免把「惊叫/颤声」等动词修饰语误当说话人）。
     speakers = speakers or frozenset()
+    # 2026-11-10：旁白是**图外声音**，本来就承担「画面拍不出来」的内容
+    # （身份/年龄/前情）。旧判据把它当字幕实词要求画面逐词覆盖，四个旁白镜
+    # 必然 0% 覆盖——这是类别错误，不是内容遗漏。旁白正文由 plan 契约与
+    # narration_source_records 逐字核验，不在这里做视觉覆盖。
+    if re.match(r"^旁白\s*[:：]", str(subtitle or "").strip()):
+        return {"pass": True, "rate": 1.0, "missing": [], "covered": [],
+                "all_nouns": [], "voice_over": True}
     if ("：" in subtitle or ":" in subtitle) and speakers:
         for sp in sorted(speakers, key=len, reverse=True):
             if subtitle.startswith(sp):

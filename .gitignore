@@ -374,3 +374,4 @@ output_step01_*/
 # 2026-11-10（R5）：并发/FFmpeg 超时回归（干净检出可复现）
 !tests/step01_script_gen/test_concurrent_extract_timeout.py
 !tests/step04_merge/test_ffmpeg_timeout.py
+!tests/step01_script_gen/test_scene_compliance_narration_coverage.py
