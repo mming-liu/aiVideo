@@ -148,11 +148,30 @@ def _pid_is_alive(pid: int) -> bool:
     return True
 
 
+def _count_files_bounded(path, limit: int = 21) -> int:
+    n = 0
+    try:
+        for _root, _dirs, files in os.walk(path):
+            n += len(files)
+            if n >= limit:
+                return n
+    except OSError:
+        return limit
+    return n
+
+
 def _reap_stale_pid_dirs(root, current_pid: int) -> list:
-    """删掉**非本进程且进程已退出**的 PID 隔离根；返回保留的目录名."""
+    """删掉**非本进程且进程已退出**的 PID 隔离根；返回保留的目录名.
+
+    R3-6 环境修正：safe-delete 在沙箱里可能拿不到 bulk lock；旧写法对任意
+    大小的遗留根直接 `shutil.rmtree`，会 `SystemExit: 1` 并让整个会话在
+    setup 阶段失败。这里把**单次会话删除预算**限制在 20 个文件以内；超过
+    预算或删除被安全守卫拒绝时，保留目录、继续测试（不绕过守卫）。
+    """
     import shutil
 
     survivors: list = []
+    budget = 20
     try:
         children = list(root.iterdir())
     except OSError:
@@ -170,7 +189,16 @@ def _reap_stale_pid_dirs(root, current_pid: int) -> list:
         if pid == current_pid or _pid_is_alive(pid):
             survivors.append(child.name)
             continue
-        shutil.rmtree(child, ignore_errors=True)
+        n = _count_files_bounded(child, budget + 1)
+        if n > budget:
+            survivors.append(child.name)
+            continue
+        try:
+            shutil.rmtree(child)
+            budget -= n
+        except BaseException:
+            # 安全守卫拒绝/锁不可得：保留现场，不把环境故障升级为会话失败。
+            survivors.append(child.name)
     return survivors
 
 

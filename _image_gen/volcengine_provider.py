@@ -187,8 +187,9 @@ class VolcengineImageService(ImageGenerationService):
         def _record(outcome: str) -> None:
             """回写本次已发送 POST 的终局分类；账本错误不得掩盖生成结果."""
             try:
-                from shared import post_budget
-                post_budget.record("image", outcome)
+                from shared import post_budget, request_events
+                post_budget.record("image", outcome,
+                                   request_id=request_events.current_request_id())
             except Exception:
                 pass
 
@@ -205,9 +206,10 @@ class VolcengineImageService(ImageGenerationService):
                                      % _max_posts)
                 # 跨进程账本（STEP02A_IMAGE_BUDGET_TOTAL>0 时启用）：发送前原子扣减，
                 # 重启/分批续跑会接着已用次数；账本损坏 fail-closed。
-                from shared import post_budget
+                from shared import post_budget, request_events
+                _rid = request_events.begin_request("image")
                 try:
-                    post_budget.acquire("image")
+                    post_budget.acquire("image", request_id=_rid)
                 except post_budget.PostBudgetExhausted as exc:
                     raise _PostLimit(str(exc)) from exc
                 _attempts += 1
@@ -441,14 +443,28 @@ class VolcengineImageService(ImageGenerationService):
             with open(save_path, "wb") as f:
                 f.write(img_bytes)
 
+            # U4：图片事件带内容摘要——预算只说明「发了几次」，这里说明「换回了哪张图」。
+            try:
+                import hashlib as _hashlib
+                from shared import request_events
+                request_events.emit(
+                    "image_saved", kind="image",
+                    image={"path": str(save_path),
+                           "sha256": _hashlib.sha256(img_bytes).hexdigest(),
+                           "bytes": len(img_bytes)},
+                    shot_id=req.shot_index, frame=req.frame_desc or "")
+            except Exception:
+                pass
+
             size_kb = len(img_bytes) / 1024
             if model_idx > 0:
                 _verbose_write(f"  [INFO] 图片已回退到模型: {self._model_queue[model_idx]}")
             _verbose_write(f"  [镜头{req.shot_index}] [OK] {frame_label}已保存 -> "
                   f"{save_path} ({size_kb:.1f} KB)")
             try:
-                from shared import post_budget
-                post_budget.record("image", "generated_ok")
+                from shared import post_budget, request_events
+                post_budget.record("image", "generated_ok",
+                                   request_id=request_events.current_request_id())
             except Exception:
                 pass
             return ImageGenerationResult(
@@ -458,8 +474,11 @@ class VolcengineImageService(ImageGenerationService):
             )
         except Exception as e:
             try:
-                from shared import post_budget
-                post_budget.record("image", "transport_failed")
+                from shared import post_budget, request_events
+                post_budget.record("image", "transport_failed",
+                                   request_id=request_events.current_request_id())
+                request_events.emit("image_download_failed", kind="image",
+                                    detail=str(e)[:300])
             except Exception:
                 pass
             return ImageGenerationResult(success=False, error=f"下载失败: {e}")

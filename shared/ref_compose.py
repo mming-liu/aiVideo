@@ -20,7 +20,10 @@
 未注册模型回退到环境变量 IMAGE_MAX_REFS（默认 3）。
 """
 
+import hashlib
+import json
 import os
+import time
 from pathlib import Path
 
 from shared.model_alias import normalize_model_name
@@ -146,6 +149,126 @@ def identity_names_of(paths: list[str]) -> list[str]:
     return names
 
 
+def _sha256_file(path: str | Path) -> str:
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return "unreadable"
+    return h.hexdigest()
+
+
+def ref_layout_path(path: str | Path) -> Path:
+    """拼合参考表的成员映射 sidecar 路径：<sheet>.refmap.json."""
+    p = Path(path)
+    return p.with_name(p.stem + ".refmap.json")
+
+
+def load_ref_layout(path: str | Path) -> dict | None:
+    """读取拼合表成员映射；缺失/损坏/摘要不符时返回 None（不猜身份）."""
+    sidecar = ref_layout_path(path)
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict) or data.get("schema") != "ref.sheet/1":
+        return None
+    try:
+        if data.get("sha256") != _sha256_file(path):
+            return None
+    except Exception:
+        return None
+    return data
+
+
+def _write_ref_layout(sheet: str | Path, record: dict) -> None:
+    sidecar = ref_layout_path(sheet)
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    tmp = sidecar.with_name(sidecar.name + ".tmp")
+    tmp.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, sidecar)
+
+
+def ref_identity(path: str | Path) -> dict:
+    """参考图的类别与实体身份（由路径约定确定性得出，不读文件名猜语义）."""
+    p = str(path).replace("\\", "/")
+    name = p.rsplit("/", 1)[-1]
+    stem = name[:-4] if name.endswith(".png") else name
+    if "/portrait_crops/" in p:
+        return {"kind": "chars", "entity": stem.split("_")[0], "purpose": "人物形象"}
+    if "/characters_bank/" in p:
+        return {"kind": "chars", "entity": p.rsplit("/", 2)[-2], "purpose": "人物形象"}
+    if "/scenes_bank/" in p:
+        return {"kind": "scene", "entity": p.rsplit("/", 2)[-2], "purpose": "场景环境"}
+    if "/props_bank/" in p:
+        return {"kind": "props", "entity": p.rsplit("/", 2)[-2], "purpose": "道具外观"}
+    if name == FIRST_FRAME_FILENAME:
+        return {"kind": "frame", "entity": "ff", "purpose": "首帧锚点"}
+    if name == LAST_FRAME_FILENAME:
+        return {"kind": "frame", "entity": "lf", "purpose": "尾帧"}
+    return {"kind": "unknown", "entity": "", "purpose": "一致性参考"}
+
+
+def _pct(value: float) -> str:
+    return "%d%%" % round(value * 100)
+
+
+def describe_sheet_layout(layout: dict) -> str:
+    """按**成员区域**描述拼合表（不假定「整图从左到右」）."""
+    members = [m for m in (layout.get("members") or []) if isinstance(m, dict)]
+    if not members:
+        return _SHEET_LABELS["all"]
+    size = layout.get("size") or [0, 0]
+    width = float(size[0]) or 1.0
+    groups: dict[str, list] = {}
+    for m in members:
+        groups.setdefault(str(m.get("kind") or "unknown"), []).append(m)
+
+    def _span(m: dict) -> str:
+        region = m.get("region") or [0, 0, 0, 0]
+        return "%s–%s" % (_pct(float(region[0]) / width), _pct(float(region[2]) / width))
+
+    parts: list[str] = []
+    where: list[str] = []
+    if groups.get("chars"):
+        who = [m for m in groups["chars"] if m.get("entity")]
+        desc = "人物形象参考表（%d 名角色横向拼合" % len(groups["chars"])
+        if who:
+            desc += "：%s" % "、".join("%s 占 x≈%s" % (m.get("entity"), _span(m)) for m in who)
+        desc += "；仅取各角色面部/发型/上装特征，禁止照搬姿态、持物与人数）"
+        parts.append(desc)
+        where += ["人物 %s 位于 x≈%s" % (m.get("entity") or "未记录", _span(m))
+                  for m in groups["chars"]]
+    if groups.get("scene"):
+        parts.append("场景环境参考表（%d 张环境图拼合；只取环境光线与布局，禁止当作画面构图）"
+                     % len(groups["scene"]))
+        where += ["场景 %s 位于 x≈%s" % (m.get("entity") or "未记录", _span(m))
+                  for m in groups["scene"]]
+    if groups.get("props"):
+        parts.append("道具外观参考表（%d 件道具拼合；只取各道具外观与比例）"
+                     % len(groups["props"]))
+        where += ["道具 %s 位于 x≈%s" % (m.get("entity") or "未记录", _span(m))
+                  for m in groups["props"]]
+    if groups.get("frame"):
+        where += ["帧锚点 位于 x≈%s" % _span(m) for m in groups["frame"]]
+    if groups.get("unknown"):
+        where += ["未登记成员 位于 x≈%s" % _span(m) for m in groups["unknown"]]
+
+    if len(groups) == 1 and "chars" in groups:
+        return parts[0]
+    head = "；".join(parts) if parts else "综合参考表"
+    if where:
+        head += "；区域对应：" + "，".join(where)
+    head += "。按区域分别取用，禁止把整图当作单一参考或按统一方向理解"
+    nested = [m for m in members if m.get("nested")]
+    if nested:
+        head += "；其中 %s 本身也是拼合表，其成员区域已按外层区域换算" % "、".join(
+            Path(str(m.get("source"))).name for m in nested)
+    return head
+
+
 def describe_ref(path: str, *, consumer_kind: str = "") -> str:
     """按路径判定参考图用途标签（供 prompt 里的「图N」清单复用）.
 
@@ -162,20 +285,12 @@ def describe_ref(path: str, *, consumer_kind: str = "") -> str:
     name = p.rsplit("/", 1)[-1]
     # 拼图表：ref_sheet_{tag}_{group}[_A+B+C].png
     if name.startswith("ref_sheet_"):
-        base = name[:-4] if name.endswith(".png") else name
-        group = "all"
-        names_part = ""
-        for pt in base.split("_")[2:]:
-            if pt in ("chars", "scene", "props", "mix", "extra"):
-                group = pt
-            elif "+" in pt:
-                names_part = pt
-        label = _SHEET_LABELS.get(group, _SHEET_LABELS["all"])
-        # v6.53 人↔参考图绑定：拼表内逐人点名（左→右），模型不再猜左一是谁
-        if group == "chars" and names_part:
-            ordered = "、".join(names_part.split("+"))
-            label += f"；从左至右依次为：{ordered} 的头肩像，各自的长相与上装以对应位置为准"
-        return label
+        layout = load_ref_layout(path)
+        if layout:
+            return describe_sheet_layout(layout)
+        # 旧拼合表没有成员映射：不按文件名回填身份，也不宣称统一方向。
+        return ("拼合参考表（成员构成未记录；只取各单项特征，"
+                "禁止当作画面构图，禁止按统一方向理解整图）")
     # 文件名分类匹配（非路径构建）；文件名契约单源 shared/paths.py 的 *_FILENAME 常量
     if name == FIRST_FRAME_FILENAME:
         # S04：r2v 里它只是 reference_image 的构图锚点，不是 first_frame role；
@@ -247,32 +362,125 @@ def active_image_ref_limit() -> int:
         return get_ref_limit(None)
 
 
-def _stitch(paths: list[str], output_path: str) -> str:
-    from shared.portrait_stitch import stitch_portraits
-    return stitch_portraits(paths, output_path)
+def _stitch(paths: list[str], output_path: str) -> dict:
+    from shared.portrait_stitch import stitch_portraits_with_layout
+    return stitch_portraits_with_layout(paths, output_path)
 
 
-def _atomic_reference_sheet(paths, output):
-    """Content-addressed destination plus private temporary file for concurrent callers."""
-    import hashlib
+def _build_layout_record(out_path: Path, kind: str, layout: dict) -> dict:
+    members = []
+    for item in layout.get("members") or []:
+        src = str(item.get("source"))
+        ident = ref_identity(src)
+        entry = {
+            "source": src,
+            "sha256": _sha256_file(src),
+            "kind": ident["kind"],
+            "entity": ident["entity"],
+            "purpose": ident["purpose"],
+            "region": item.get("region"),
+            "scaled": item.get("scaled"),
+        }
+        inner = load_ref_layout(src)
+        if inner:
+            entry["nested"] = {
+                "output": src,
+                "sha256": inner.get("sha256"),
+                "members": [
+                    {"source": m.get("source"), "kind": m.get("kind"),
+                     "entity": m.get("entity"), "region_in_parent": m.get("region")}
+                    for m in inner.get("members") or [] if isinstance(m, dict)
+                ],
+            }
+        members.append(entry)
+    return {
+        "schema": "ref.sheet/1",
+        "output": str(out_path),
+        "sha256": _sha256_file(out_path),
+        "size": layout.get("size") or [0, 0],
+        "kind": kind,
+        "members": members,
+        "skipped": layout.get("skipped") or [],
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def _atomic_reference_sheet(paths, output, kind: str = "all"):
+    """Content-addressed destination plus private temporary file for concurrent callers.
+
+    返回 (path, layout_record)；layout 记录每张成员在输出图中的**实际区域**与
+    身份，写在 <sheet>.refmap.json —— 下游说明与验收不再靠文件名恢复身份。
+    已存在且 sidecar 摘要匹配时直接复用（不重写盘）。
+    """
     import uuid
     h = hashlib.sha256()
     for item in paths:
         p = Path(item)
         h.update(str(p).encode("utf-8"))
-        h.update(hashlib.sha256(p.read_bytes()).digest())
+        try:
+            h.update(hashlib.sha256(p.read_bytes()).digest())
+        except OSError:
+            h.update(b"unreadable")
     out = Path(output)
     out = out.with_name(out.stem + "_" + h.hexdigest()[:20] + out.suffix)
     out.parent.mkdir(parents=True, exist_ok=True)
+    existing = load_ref_layout(out)
+    if out.exists() and existing is not None:
+        return str(out), existing
     tmp = out.with_name("." + out.stem + "." + uuid.uuid4().hex + ".png")
     try:
-        result = _stitch(paths, str(tmp))
-        if not result:
-            return ""
+        layout = _stitch(paths, str(tmp))
+        if not layout.get("output"):
+            return "", None
+        record = _build_layout_record(Path(str(tmp)), kind, layout)
         os.replace(tmp, out)
-        return str(out)
+        record["output"] = str(out)
+        record["sha256"] = _sha256_file(out)
+        _write_ref_layout(out, record)
+        return str(out), record
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def _write_compose_report(sheet_dir, sheet_tag: str, buckets, composed,
+                          omissions, dropped, *, included: int) -> None:
+    """把本次参考图组合结果落盘（谁被保留、谁被拼合、谁被省略及理由）.
+
+    组合报告是**评阅证据**，不参与生成；缺失/写失败不影响出图。
+    """
+    try:
+        entries = []
+        for name, items in buckets:
+            for p in items:
+                entries.append({"path": p, "bucket": name, **ref_identity(p)})
+        outputs = []
+        for p in composed:
+            layout = load_ref_layout(p)
+            outputs.append({
+                "path": p,
+                "members": [{"entity": m.get("entity"), "kind": m.get("kind"),
+                             "region": m.get("region")} for m in (layout or {}).get("members") or []],
+            })
+        payload = {
+            "schema": "ref.compose/1",
+            "tag": sheet_tag,
+            "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "included": included,
+            "inputs": entries,
+            "outputs": outputs,
+            "omissions": list(omissions or []),
+            "dropped": list(dropped or []),
+            "readability_risk": ("参考图数量超上限且有成员被拼合/省略，"
+                                 "请人工核对脸部可读性与裁切；未记录省略理由的类别不得视为已评阅"
+                                 if (dropped or any(o.get("members") for o in outputs)) else ""),
+        }
+        out = Path(sheet_dir) / ("ref_compose_%s.json" % sheet_tag)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_name(out.name + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, out)
+    except Exception:
+        return
 
 
 def fit_refs(
@@ -280,6 +488,7 @@ def fit_refs(
     limit: int,
     sheet_dir: Path | str,
     sheet_tag: str,
+    omissions: list[dict] | None = None,
 ) -> list[str]:
     """把分组参考图无损压缩到 limit 个名额.
 
@@ -288,6 +497,9 @@ def fit_refs(
         limit:   模型参考图上限
         sheet_dir: 参考表落盘目录（如 vimax_working/shots/<idx>）
         sheet_tag: 参考表文件名前缀（如 "ff"/"lf"/"shot3"），防不同帧互相覆盖
+
+    omissions: 本次**主动省略**的参考类别及依据（如「特写帧不注入场景资产图」）。
+        省略必须带理由，写进组合报告；没有依据的省略不允许静默发生。
 
     Returns:
         ≤limit 个路径的列表。极端兜底（拼图全部失败）时裁剪到 limit 并保留
@@ -317,22 +529,21 @@ def fit_refs(
     except Exception:
         pass
 
-    def _sheet(name: str, paths: list[str]) -> str:
-        # v6.53 人↔参考图绑定：chars 表文件名带从左至右角色顺序（stitch 保序，
-        # collect 顺序=动作主体优先的出镜顺序），describe_ref/build_ref_manifest
-        # 据此生成逐人绑定说明——模型不再猜左一是谁
+    def _sheet(name: str, paths: list[str], kind: str | None = None) -> str:
+        # 文件名后缀仅作向后兼容的**辅助**线索；成员身份与区域以 refmap sidecar
+        # 为准（旧表无 sidecar 时说明层不回填身份）。
         suffix = ""
         if name == "chars":
             names = identity_names_of(paths)
             if names:
                 suffix = "_" + "+".join(names)
         out = str(sheet_dir / f"ref_sheet_{sheet_tag}_{name}{suffix}.png")
-        stitched = _atomic_reference_sheet(paths, out)
+        stitched, _layout = _atomic_reference_sheet(paths, out, kind=kind or name)
         return stitched if stitched else ""
 
     # 单张上限：全部拼成一张大参考表
     if limit == 1:
-        merged = _sheet("all", flat)
+        merged = _sheet("all", flat, kind=clean[0][0] if len(clean) == 1 else "all")
         if merged:
             return [merged]
         return flat[:1]
@@ -372,8 +583,12 @@ def fit_refs(
         else:
             composed += keep + tail
     # 拼图异常兜底：裁剪保优先级（比 400 中断生成轻）
+    dropped = []
     if len(composed) > limit:
+        dropped = [{"path": p, "reason": "limit_truncation"} for p in composed[limit:]]
         composed = composed[:limit]
+    _write_compose_report(sheet_dir, sheet_tag, clean, composed, omissions, dropped,
+                          included=len(flat))
     return composed
 
 
@@ -394,8 +609,7 @@ def fit_flat(
         sheet_dir = Path(sheet_dir)
         sheet_dir.mkdir(parents=True, exist_ok=True)
         out = str(sheet_dir / f"ref_sheet_{sheet_tag}_extra.png")
-        from shared.portrait_stitch import stitch_portraits
-        stitched = _atomic_reference_sheet(valid[keep:], out)
+        stitched, _layout = _atomic_reference_sheet(valid[keep:], out, kind="extra")
         if stitched:
             return valid[:keep] + [stitched]
     except Exception:

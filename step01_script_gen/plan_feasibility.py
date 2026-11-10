@@ -1965,6 +1965,59 @@ def _beat_carrier(beat_text: str) -> tuple:
     return BeatRecord.parse(beat_text).carrier()
 
 
+#: 载体声明**像什么**：可选分隔符 + `载体` + 冒号 + 合法取值。
+#: 只用来判**分隔符/冒号**，取值合法性仍由 `parse_beat_carrier` 判（单一事实源）。
+_BEAT_CARRIER_LIKE_RE = re.compile(
+    r"(?P<delim>[｜；;|])?\s*载体\s*(?P<colon>[：:])\s*"
+    r"(?P<value>画面|台词\s*\d+|旁白\s*\d+)")
+
+
+def beat_carrier_format_problem(beat_text, index=None) -> dict | None:
+    """节拍载体段的**格式合规**检查（只判分隔符/冒号，**不判内容或取值**）.
+
+    为什么需要它（2026-11-10 P05 实测）：模型把 6/6 条节拍写成
+    `……；载体：画面`（中文分号），而 `BeatRecord.parse()` 只按全角竖线 `｜`
+    切段、只认段首 `载体：`（全角冒号）。于是解析器把整条载体声明当成正文，
+    `carrier()` 返回 `(None, None)`，后面的承载检查全部报「该节拍没有标载体」——
+    看到的是一连串事实承载失败，真正的原因只是分隔符写错。这里在契约层先把
+    **格式**原因单独报出来，并给出可执行的改法。
+
+    判据（与解析器**同一文法**，不另造一套）：
+    - `｜` 后允许空白，再写 `载体：`（全角冒号）→ 合法；
+    - `；载体：`、`;载体：`、`|载体：`、`｜载体:`、`载体：`（前面没有 `｜`）→ 非法；
+    - 正文/引文里只提到「载体」但没有形如 `载体：画面|台词k|旁白k` 的声明 → 不判。
+
+    返回 `_problem_record`（`carrier_format_invalid`）或 `None`。这是**规划期格式问题**，
+    不是内容判定，也不改变 `RULE_SOURCE_FINGERPRINT`（`plan_feasibility.py` 不在
+    判定指纹的源码清单里，见 `quality_issues._compute_rule_source_fingerprint`）。
+    """
+    _txt = str(beat_text or "")
+    if "载体" not in _txt:
+        return None
+    for _m in _BEAT_CARRIER_LIKE_RE.finditer(_txt):
+        _delim = _m.group("delim")
+        _colon = _m.group("colon")
+        if _delim == "｜" and _colon == "：":
+            continue
+        _snippet = _txt[max(0, _m.start() - 12):_m.end() + 12]
+        _n = int(index) if index else None
+        _path = ("shot_beats[%d].载体" % (_n - 1)) if _n else "shot_beats"
+        _where = ("B%d " % _n) if _n else ""
+        return _problem_record(
+            "carrier_format_invalid", "beat", _n, _path,
+            "%s的载体段分隔符不符合逐字格式（看到「%s」）——解析器只认 `｜载体：`："
+            "`｜` 必须是全角竖线（U+FF5C），`：` 必须是全角冒号（U+FF1A）。"
+            "`；载体：`、`;载体：`、`|载体：`、`｜载体:` 以及前面没有 `｜` 的 "
+            "`载体：` 都不算登记；分隔符不对时整条节拍会被解析成「没有标载体」，"
+            "后面所有承载检查都会失败。修法：把这条节拍末尾的载体段改成 "
+            "`｜载体：画面`、`｜载体：台词k` 或 `｜载体：旁白k`"
+            "（每条节拍恰好一个，放在末尾）" % (_where, _snippet),
+            "规划期格式：节拍载体段必须用全角竖线 `｜` + 全角冒号 `载体：` 逐字登记；"
+            "这是格式合规检查，不判内容、不判载体取值是否越界",
+            fix="把载体段改写为 `｜载体：画面|台词k|旁白k`（全角竖线+全角冒号）")
+    return None
+
+
 def _strip_beat_carrier(beat_text: str) -> str:
     """去掉节拍条目的**所有**「｜载体：…」段——规划重选核心字段比较用（只许改载体标注）."""
     _rec = BeatRecord.parse(beat_text)
@@ -2955,6 +3008,81 @@ def uncovered_fact_clauses(fact, carrier_text, *, verbatim: bool) -> tuple:
     return _missing, _judged
 
 
+_ELISION_RE = re.compile(r"……|…|\.{3,}")
+
+
+def fact_evidence_noncontiguous(fact, novel_text: str) -> str:
+    """「原文证据」是否用省略号跨过原文中间内容（返回说明；空串 = 连续/判不了）.
+
+    为什么需要这条：模型会把两句相隔很远的原文用省略号拼成一条证据
+    （「…十六岁接手家业……如今已跻身十大豪门…」）。逐字承载（台词/旁白）只能
+    取一段连续原文，这种事实无论改哪条旁白都只能覆盖一半；而修订协议又冻结
+    事实正文——不在这里拦，就会白烧修订单并把整章停在计划层（2026-11-10 实测）。
+
+    判定：归一后整段证据能在原文里连续找到 = 连续（原文自带的省略号也算连续）；
+    否则按省略号拆开，各段按顺序都能在原文找到且中间隔着原文 = 非连续。
+    任一段找不到 = 判不了，交既有的逐字/来源检查（不在这里重复报）。
+    """
+    _ev = fact_evidence_text(fact)
+    if not _ev:
+        return ""
+    # 没有省略号就没有「跨段拼接」这回事（逐字/来源由既有检查负责）；先做这一条
+    # 既准确又避免为每条事实扫一遍 12MB 原文。
+    if not _ELISION_RE.search(_ev):
+        return ""
+    # 快路径：证据本来就该逐字来自原文，先在**原文**上直接找（12MB 原文归一化
+    # 一次要几十毫秒，每个事实都做会把整轮验收拖慢一个量级）。
+    _novel = str(novel_text or "")
+    _ev_raw = _ev.strip()
+    if not _novel or not _ev_raw:
+        return ""
+    # 整段证据（含原文自带的省略号）本身就是连续原文 ⇒ 连续。
+    if _ev_raw in _novel:
+        return ""
+    _parts_raw = [p.strip() for p in _ELISION_RE.split(_ev) if p.strip()]
+    if not _parts_raw:
+        return ""
+    if len(_parts_raw) == 1:
+        return "" if _parts_raw[0] in _novel else ""
+    _pos = []
+    _cur = 0
+    _ok_raw = True
+    for _p in _parts_raw:
+        _i = _novel.find(_p, _cur)
+        if _i < 0:
+            _ok_raw = False
+            break
+        _pos.append((_i, _i + len(_p)))
+        _cur = _i + len(_p)
+    if _ok_raw:
+        _gap = _pos[-1][0] - _pos[0][1]
+        if _gap <= 0:
+            return ""
+        return "用省略号跨过了原文中间约 %d 字（证据不是一段连续原文）" % _gap
+    # 慢路径：原文/证据有标点或空白差异时才归一化重判（判不了就不在这里报）。
+    _n = _source_norm(_novel)
+    _e = _source_norm(_ev)
+    if not _n or not _e:
+        return ""
+    if _e in _n:
+        return ""
+    _parts = [p for p in (_source_norm(x) for x in _ELISION_RE.split(_ev)) if p]
+    if len(_parts) < 2:
+        return ""
+    _pos = []
+    _cur = 0
+    for _p in _parts:
+        _i = _n.find(_p, _cur)
+        if _i < 0:
+            return ""
+        _pos.append((_i, _i + len(_p)))
+        _cur = _i + len(_p)
+    _gap = _pos[-1][0] - _pos[0][1]
+    if _gap <= 0:
+        return ""
+    return "用省略号跨过了原文中间约 %d 字（证据不是一段连续原文）" % _gap
+
+
 def _incomplete_reason(i, what, carrier_text, missing):
     """部分缺失的**统一文案**（三种载体共用，只有「什么载体」不同）.
 
@@ -3418,6 +3546,13 @@ def plan_contract_records(plan, *, novel_text: str = "",
     beats = [str(b) for b in (plan.get("shot_beats") or [])]
     lines = plan_dialogue_lines(plan)
     problems: list = []
+    # **格式先于承载语义**：分隔符写错（`；载体：` / `|载体：` / `｜载体:`）时
+    # `BeatRecord.carrier()` 读不到载体段，后面每条事实都会误报「该节拍没有标载体」。
+    # 先把可执行的格式修法放在最前面，报告层不必让模型从一串语义失败里反推分隔符。
+    for _i, _b in enumerate(beats, 1):
+        _fmt = beat_carrier_format_problem(_b, _i)
+        if _fmt:
+            problems.append(_fmt)
     _basis = "计划契约：每条必保留事实与钩子都必须有**有效承载**（事实的「承载：Bn/…」与节拍上的「载体：…」必须互指）"
     def _add(code, kind, index, path, reason, fix=""):
         problems.append(_problem_record(code, kind, index, path,
@@ -3464,6 +3599,17 @@ def plan_contract_records(plan, *, novel_text: str = "",
                         "——一条节拍只能标**一个**载体：k 句台词要各配一条标着"
                         "「载体：台词k」的节拍，把它们**分散开**"
                         % (i, _b, _k))
+                continue
+            _noncontig = fact_evidence_noncontiguous(fact, novel_text)
+            if _noncontig:
+                _add("fact_evidence_noncontiguous", "fact", i,
+                     "required_facts[%d].原文证据" % (i - 1),
+                     "F%d 由台词 D%d 逐字承载，但它的「原文证据」%s——逐字承载只能"
+                     "取一段连续原文，本条事实在修订轮无论改哪条台词/旁白都只能"
+                     "覆盖一半（事实正文冻结，修订协议改不了）。修法：在规划层把它"
+                     "拆成两条事实，每条只引用一段连续原文并各自选承载；"
+                     "或改由画面承载（画面可以转述）" % (i, _k, _noncontig),
+                     fix="规划层拆分事实，或改由画面承载")
                 continue
             _missing, _judged = uncovered_fact_clauses(
                 fact, str(lines[_k - 1]), verbatim=True)
@@ -3522,6 +3668,17 @@ def plan_contract_records(plan, *, novel_text: str = "",
             # （`text ⊆ source ⊆ 原文`，见 `narration_source_records`），与「选中的台词」
             # 同类；画面节拍是**转述**，才用更松的 `shares_terms`。不新造阈值、不看人物名
             # 重合、不做关键词匹配——与既有两条同一套口径。
+            _noncontig = fact_evidence_noncontiguous(fact, novel_text)
+            if _noncontig:
+                _add("fact_evidence_noncontiguous", "fact", i,
+                     "required_facts[%d].原文证据" % (i - 1),
+                     "F%d 由旁白 N%d 逐字承载，但它的「原文证据」%s——逐字承载只能"
+                     "取一段连续原文，本条事实在修订轮无论改哪条台词/旁白都只能"
+                     "覆盖一半（事实正文冻结，修订协议改不了）。修法：在规划层把它"
+                     "拆成两条事实，每条只引用一段连续原文并各自选承载；"
+                     "或改由画面承载（画面可以转述）" % (i, _k, _noncontig),
+                     fix="规划层拆分事实，或改由画面承载")
+                continue
             _ntext = str(_narr[_k - 1].get("text") or "")
             # **同一条判据边界**（`narration_source_records` 已有裁决）：正文本身
             # 不在原文 ⇒ 它本来就该由 `evaluate_plan` 的逐字核验剔除并重映射引用；

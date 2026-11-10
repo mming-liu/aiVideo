@@ -1,17 +1,90 @@
 """step01_script_gen.concurrent_extract - 并发预提取 helper.
 
 v6.43（08-25）优化：3 个 LLM 预提取（角色/场景物体/大纲）无依赖关系，
-原本按顺序执行 = 3 × LLM 延迟（~16s 总耗时）；改用 ThreadPoolExecutor
-并发执行后 = max(3) ≈ 5s，节省 ~10s。
+原本按顺序执行 = 3 × LLM 延迟（~16s 总耗时）；改用并发后 = max(3) ≈ 5s。
 
-合并 schema 是替代方案但改动大（要改 deepseek_schema.py + 3 个 extractor），
-并发更简单且不影响 3 个模块的独立 schema（保留各自优化空间）。
+R4-2：旧实现用 `ThreadPoolExecutor` + 无 timeout 的 `as_completed`。任一 worker
+卡在导入锁/网络/回调时，整个 pytest/生产进程会永久等待；`with` 退出还会
+`shutdown(wait=True)` 再等一次。现在改成 **daemon 线程 + 有界 join**：
+- 每个任务一个 daemon 线程，超时后主线程返回，不阻塞解释器退出；
+- `outline` 超时返回结构化 `worker_timeout`（不被 None 吞掉）；
+- 未给 deadline 时仍有 300s 上限，避免无限等待。
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+import time
 from pathlib import Path
 from typing import Any
+
+VERSION = "concurrent_extract.v2"
+DEFAULT_WAIT_TIMEOUT_SEC = 300.0
+OUTLINE_TIMEOUT_GRACE_SEC = 10.0
+
+
+def _outline_timeout_result() -> dict:
+    from step01_script_gen.outline import _outline_result_skeleton
+    _res = _outline_result_skeleton()
+    _res["failure"] = {
+        "code": "worker_timeout",
+        "detail": "大纲预提取超过等待上限（worker 未在截止时刻内返回）",
+        "source": "initial",
+    }
+    return _res
+
+
+def _run_tasks(tasks, *, timeout_sec, log) -> dict:
+    """并发跑 `[(key, fn), ...]`；超时返回部分结果，不等待卡住的 daemon 线程."""
+    results: dict[str, Any] = {key: None for key, _fn in tasks}
+    errors: dict[str, BaseException] = {}
+    threads: dict[str, threading.Thread] = {}
+    lock = threading.Lock()
+
+    def _runner(key, fn):
+        try:
+            value = fn()
+        except BaseException as exc:  # noqa: BLE001 - 失败要保真到调用方
+            with lock:
+                errors[key] = exc
+            return
+        with lock:
+            results[key] = value
+
+    for key, fn in tasks:
+        th = threading.Thread(target=_runner, args=(key, fn),
+                              name="pre_extract_%s" % key, daemon=True)
+        th.start()
+        threads[key] = th
+
+    deadline = (time.monotonic() + max(0.0, float(timeout_sec))
+                if timeout_sec is not None else None)
+    for key, th in threads.items():
+        remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+        th.join(remaining)
+
+    for key, th in threads.items():
+        if th.is_alive():
+            log("[WARN] 预提取 %s 超时（%.1fs），不等待卡住的 worker" % (
+                key, float(timeout_sec) if timeout_sec is not None else -1.0))
+            if key == "outline":
+                results[key] = _outline_timeout_result()
+            continue
+        with lock:
+            exc = errors.get(key)
+        if exc is not None:
+            log("[WARN] 预提取 %s 失败: %s" % (key, exc))
+            if key == "outline":
+                from step01_script_gen.outline import _outline_result_skeleton
+                _res = _outline_result_skeleton()
+                _res["failure"] = {
+                    "code": "call_failed",
+                    "detail": "%s: %s" % (type(exc).__name__, exc),
+                    "source": "initial",
+                }
+                results[key] = _res
+            else:
+                results[key] = None
+    return results
 
 
 def extract_all_concurrent(
@@ -26,23 +99,14 @@ def extract_all_concurrent(
     outline_cache_path: Path | None = None,
     outline_deadline_monotonic: float | None = None,
     log_func=None,
+    wait_timeout_sec: float | None = None,
 ) -> dict[str, Any]:
     """并发跑 3 个 LLM 预提取（角色/场景物体/大纲），返回 dict 各项.
 
-    Args:
-        novel_text: 小说原文
-        character_bank: CharacterBank 实例（角色提取写入）
-        scene_objects_bank: SceneObjectsBank 实例（场景物体写入）
-        enable_*: 各项独立开关（用 .env 推断）
-        log_func: 进度日志函数（默认 print 兜底）
-
-    Returns:
-        {"characters": [...], "scene_objects": [...], "outline": {...}}
-
-        `characters` / `scene_objects` 失败时为 None（调用方按现状继续，不阻断）；
-        **`outline` 是结构化结果**（`generate_outline_result` 的固定键，工作包 §7.2）——
-        未启用大纲提取时才为 None。大纲的失败**不许被 None 吞掉**（§7.6）：本函数把异常
-        也收成结构化失败记录，调用方据此写对应诊断并停止。
+    超时上限：
+    - 显式 `wait_timeout_sec` 优先；
+    - 否则若有 `outline_deadline_monotonic`，用「剩余时间 + 10s 宽限」；
+    - 否则用 `DEFAULT_WAIT_TIMEOUT_SEC`。
     """
     _log = log_func or (lambda msg: print(msg))
 
@@ -55,12 +119,7 @@ def extract_all_concurrent(
         return extract_scene_objects(novel_text, scene_objects_bank)
 
     def _do_outline() -> dict:
-        """**结构化**大纲结果（工作包 §4 D）：生产链路消费它，不再拿裸计划.
-
-        工作包 §4 B：**同一个**绝对截止时刻随请求上下文传下去——首版模型调用用
-        `deadline_monotonic`，修订控制器只开一次的那张表用 `run_deadline_at`，
-        两者必须是**同一个**绝对时刻（`generate_outline_result` 会取更早者并告警）。
-        """
+        """**结构化**大纲结果（工作包 §4 D）：生产链路消费它，不再拿裸计划."""
         from step01_script_gen.outline import (generate_outline_result,
                                                _outline_result_skeleton)
         try:
@@ -69,8 +128,6 @@ def extract_all_concurrent(
                 deadline_monotonic=outline_deadline_monotonic,
                 run_deadline_at=outline_deadline_monotonic)
         except Exception as exc:                       # noqa: BLE001
-            # **失败保真**（§7.6）：调用/解析异常也要给结构化原因，调用方据此写诊断并
-            # 停止——旧实现在并发层一律置 None，主流程分不清"没跑成"和"无计划"。
             _log("[ERROR] 大纲预提取异常: %s: %s" % (type(exc).__name__, exc))
             _res = _outline_result_skeleton()
             _res["failure"] = {"code": "call_failed",
@@ -78,25 +135,23 @@ def extract_all_concurrent(
                                "source": "initial"}
             return _res
 
-    # 提交 3 个任务
-    futures = {}
-    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="pre_extract") as ex:
-        if enable_characters:
-            futures[ex.submit(_do_characters)] = "characters"
-        if enable_scene_objects:
-            futures[ex.submit(_do_scene_objects)] = "scene_objects"
-        if enable_outline:
-            futures[ex.submit(_do_outline)] = "outline"
+    if wait_timeout_sec is None:
+        if outline_deadline_monotonic is not None:
+            wait_timeout_sec = max(
+                0.0,
+                float(outline_deadline_monotonic) - time.monotonic(),
+            ) + OUTLINE_TIMEOUT_GRACE_SEC
+        else:
+            wait_timeout_sec = DEFAULT_WAIT_TIMEOUT_SEC
 
-        results: dict[str, Any] = {key: None for key in futures.values()}
-        for fut in as_completed(futures):
-            key = futures[fut]
-            try:
-                results[key] = fut.result()
-            except Exception as e:
-                _log(f"[WARN] 预提取 {key} 失败: {e}")
-                results[key] = None
-    return results
+    tasks = []
+    if enable_characters:
+        tasks.append(("characters", _do_characters))
+    if enable_scene_objects:
+        tasks.append(("scene_objects", _do_scene_objects))
+    if enable_outline:
+        tasks.append(("outline", _do_outline))
+    return _run_tasks(tasks, timeout_sec=float(wait_timeout_sec), log=_log)
 
 
 def extract_assets_concurrent(
@@ -107,12 +162,9 @@ def extract_assets_concurrent(
     enable_scene_assets: bool = True,
     enable_props: bool = True,
     log_func=None,
+    wait_timeout_sec: float | None = None,
 ) -> dict[str, Any]:
-    """并发跑 2 个 LLM 资产提取（场景/道具），返回 dict 各项.
-
-    v6.43（08-25）优化：2 个 LLM 提取都基于同一份 script_json，无依赖关系，
-    并发执行可节省 ~5s wall-clock（同 #29 思路）。
-    """
+    """并发跑 2 个 LLM 资产提取（场景/道具）；同样有界等待."""
     _log = log_func or (lambda msg: print(msg))
 
     def _do_scene_assets() -> list[dict] | None:
@@ -123,19 +175,15 @@ def extract_assets_concurrent(
         from step01_script_gen.asset_extractor import extract_props
         return extract_props(script, prop_assets_bank)
 
-    futures = {}
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="asset_extract") as ex:
-        if enable_scene_assets:
-            futures[ex.submit(_do_scene_assets)] = "scene_assets"
-        if enable_props:
-            futures[ex.submit(_do_props)] = "prop_assets"
+    tasks = []
+    if enable_scene_assets:
+        tasks.append(("scene_assets", _do_scene_assets))
+    if enable_props:
+        tasks.append(("props", _do_props))
+    return _run_tasks(tasks, timeout_sec=float(
+        wait_timeout_sec if wait_timeout_sec is not None else DEFAULT_WAIT_TIMEOUT_SEC),
+        log=_log)
 
-        results: dict[str, Any] = {key: None for key in futures.values()}
-        for fut in as_completed(futures):
-            key = futures[fut]
-            try:
-                results[key] = fut.result()
-            except Exception as e:
-                _log(f"[WARN] 资产提取 {key} 失败: {e}")
-                results[key] = None
-    return results
+
+__all__ = ["VERSION", "DEFAULT_WAIT_TIMEOUT_SEC", "extract_all_concurrent",
+           "extract_assets_concurrent"]

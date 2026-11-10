@@ -354,3 +354,23 @@ output_step01_*/
 !tests/shared/test_media_precheck.py
 !tests/shared/test_voice_fit.py
 !tests/shared/test_transition_picker.py
+
+# 2026-11-09（U2–U4）：本轮契约回归入库（干净检出可复现）
+!tests/step01_script_gen/test_u2_camera_and_state_semantics.py
+!tests/shared/test_u3_reference_identity.py
+!tests/shared/test_u4_qc_lifecycle_and_events.py
+!tests/step01_script_gen/test_plan_evidence_contiguity.py
+# 2026-11-10（R1）：节拍载体分隔符格式回归（干净检出可复现）
+!tests/step01_script_gen/test_beat_carrier_format.py
+# 2026-11-10（R2）：事实来源分级合同 / legacy 投影往返
+!tests/shared/test_fact_sources.py
+!tests/step01_script_gen/test_restricted_split.py
+!tests/shared/test_delta_deleted_uid_reference.py
+!tests/step01_script_gen/test_voice_carrier_closure.py
+!tests/step01_script_gen/test_revision_route.py
+!tests/step01_script_gen/test_fact_atomicity.py
+!tests/step01_script_gen/test_plan_preflight.py
+!tests/step01_script_gen/test_core_update_guard.py
+# 2026-11-10（R5）：并发/FFmpeg 超时回归（干净检出可复现）
+!tests/step01_script_gen/test_concurrent_extract_timeout.py
+!tests/step04_merge/test_ffmpeg_timeout.py

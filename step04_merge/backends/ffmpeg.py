@@ -88,7 +88,7 @@ class EncodeSettings:
                                  "-pix_fmt", "yuv420p")
     ffmpeg: str | None = None
     ffprobe: str | None = None
-    timeout_sec: float | None = None
+    timeout_sec: float | None = None      # None = 按时间线时长推导；显式值优先
 
 
 @dataclass(frozen=True)
@@ -478,6 +478,29 @@ def _tts_stable_id(timeline: MergeTimeline, clip_position: int) -> str:
     return ""
 
 
+#: 编码超时推导：基础 60s + 每 1s 成片 5s，夹在 [120s, 3600s]。
+#: 75s 成片 -> 435s；1h 成片 -> 3600s。显式 timeout_sec 仍优先。
+ENCODE_TIMEOUT_BASE_SEC = 60.0
+ENCODE_TIMEOUT_PER_MEDIA_SEC = 5.0
+ENCODE_TIMEOUT_FLOOR_SEC = 120.0
+ENCODE_TIMEOUT_CEILING_SEC = 3600.0
+
+
+def resolve_encode_timeout(timeline, settings: EncodeSettings | None = None,
+                           explicit: float | None = None) -> float:
+    """返回**有限**的 FFmpeg 编码超时；显式参数 > settings > 时间线推导."""
+    if explicit is not None:
+        return float(explicit)
+    if settings is not None and settings.timeout_sec is not None:
+        return float(settings.timeout_sec)
+    try:
+        media_sec = max(0.0, float(getattr(timeline, "total_duration_sec", 0.0) or 0.0))
+    except (TypeError, ValueError):
+        media_sec = 0.0
+    derived = ENCODE_TIMEOUT_BASE_SEC + ENCODE_TIMEOUT_PER_MEDIA_SEC * media_sec
+    return min(ENCODE_TIMEOUT_CEILING_SEC, max(ENCODE_TIMEOUT_FLOOR_SEC, derived))
+
+
 def command_for(timeline: MergeTimeline, settings: EncodeSettings, inputs, filter_complex: str,
                 v_label: str, a_label: str, output: Path) -> list:
     ffmpeg = _find_exe("ffmpeg", settings.ffmpeg)
@@ -547,7 +570,7 @@ def render(timeline: MergeTimeline, candidate_path, work_dir, *, settings: Encod
     stages.append("compile")
 
     log_path = work / (target.stem + ".ffmpeg.log")
-    deadline = timeout_sec if timeout_sec is not None else settings.timeout_sec
+    deadline = resolve_encode_timeout(validated, settings, timeout_sec)
     proc = None
     try:
         with open(log_path, "w", encoding="utf-8", errors="replace") as log_file:
@@ -672,5 +695,5 @@ __all__ = [
     "BACKEND_NAME", "SCHEMA_MEDIA_DECODE_EVIDENCE", "EncodeSettings", "InputSpec", "MediaInfo",
     "RenderError", "RenderResult", "build_decode_evidence", "build_inputs", "command_for",
     "compile_graph", "duration_tolerance_sec", "ffmpeg_version", "get_backend", "probe_media",
-    "render", "write_decode_evidence",
+    "render", "resolve_encode_timeout", "write_decode_evidence",
 ]

@@ -218,11 +218,14 @@ def eligible_targets(plan):
     return [f['uid'] for f in view['frozen_facts'] if f['uid'] in negative]
 
 
-def apply_response(plan, response, *, novel_text, novel_digest):
+def apply_response(plan, response, *, novel_text, novel_digest,
+                   allowed_core_updates=None):
     """A source transaction keeps fact identities and non-target claims intact."""
     from shared.presentation_contract import view_from_plan
     from shared.content_verification import plan_digest_of
     from step01_script_gen.content_verify import novel_identity
+    from step01_script_gen.revision_route import (core_update_problems,
+                                                  core_update_trace)
     view,bad=view_from_plan(plan)
     targets=eligible_targets(plan)
     if (bad or not targets or novel_identity(novel_text)['digest']!=novel_digest
@@ -244,6 +247,9 @@ def apply_response(plan, response, *, novel_text, novel_digest):
             or '｜' in r['claim'] or '｜' in r['evidence'] or r['evidence'] not in novel_text for r in rows)
             or [r['fact_uid'] for r in rows]!=targets):
         return None,[problem('source_revision_response','修正表必须完整同序覆盖授权身份、主张非空且证据逐字来自原文')]
+    _core_bad=core_update_problems(response['core_updates'],allowed_core_updates)
+    if _core_bad:
+        return None,_core_bad
     for key,value in response['core_updates'].items():
         old=plan.get(key)
         if ((isinstance(old,list) and (not isinstance(value,list)
@@ -261,10 +267,13 @@ def apply_response(plan, response, *, novel_text, novel_digest):
         suffix=[part for part in old.split('｜')[1:] if not part.strip().startswith('原文证据：')]
         candidate['required_facts'][i]='｜'.join([row['claim'],'原文证据：“'+row['evidence']+'”']+suffix)
     candidate.update(copy.deepcopy(response['core_updates']))
+    _trace=core_update_trace(response['core_updates'],allowed_core_updates)
     candidate[FIELD]=copy.deepcopy(context(view)) if context(view) else {
         'version':VERSION,'novel_digest':novel_digest,'base_digest':plan_digest_of(plan),
         'targets':targets,'baseline_facts':[{'uid':f['uid'],'claim':f['claim']} for f in view['frozen_facts']],
         'baseline_core':{k:copy.deepcopy(plan.get(k,[] if k in ('main_events','causal_chain','character_motives') else '')) for k in CORE_FIELDS}}
+    if _trace:
+        candidate[FIELD]['core_update_trace']=_trace
     candidate[FIELD]['targets']=targets
     for key in ('plan_verification','verification_rejected','verification_context'):
         candidate.pop(key,None)
@@ -274,7 +283,8 @@ def apply_response(plan, response, *, novel_text, novel_digest):
 
 
 def revise_with_service(plan, issues, *, novel_text, service, model=None,
-                        timeout_sec=None, deadline_monotonic=None, verification=None):
+                        timeout_sec=None, deadline_monotonic=None, verification=None,
+                        allowed_core_updates=None):
     """One original-producer call; the existing controller owns budget and acceptance."""
     from _text_gen import TextGenerationRequest
     from step01_script_gen.outline import _parse_outline_json, _outline_max_tokens
@@ -355,7 +365,8 @@ def revise_with_service(plan, issues, *, novel_text, service, model=None,
             evidence['applied']=False
             return {'kind':'illegal','detail':str(exc),'call_id':call_id,'evidence':evidence}
     candidate,bad=apply_response(plan,response,novel_text=novel_text,
-                               novel_digest=novel_digest)
+                               novel_digest=novel_digest,
+                               allowed_core_updates=allowed_core_updates)
     evidence['applied']=candidate is not None
     if bad:
         return {'kind':'illegal','detail':json.dumps(bad,ensure_ascii=False),'call_id':call_id,'evidence':evidence}
