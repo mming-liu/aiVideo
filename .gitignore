@@ -375,3 +375,11 @@ output_step01_*/
 !tests/step01_script_gen/test_concurrent_extract_timeout.py
 !tests/step04_merge/test_ffmpeg_timeout.py
 !tests/step01_script_gen/test_scene_compliance_narration_coverage.py
+
+# [contract/step01-layered-execution] S01/S02：执行合同离线单测与三个受控样本族。
+# 独立块便于与 master 合并；只放行本包新增文件，不放开 tests/shared 或 docs 其余内容。
+!tests/shared/fixtures/
+!tests/shared/fixtures/**
+!tests/shared/test_execution_contract.py
+!docs/step01-layered-execution/
+!docs/step01-layered-execution/**

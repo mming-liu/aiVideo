@@ -1,0 +1,336 @@
+{
+  "schema": "execution_contract.sample_family.v1",
+  "family": "offscreen_voice",
+  "note": "画外声音、听者反应与人物/道具可见性的合法基线；变异把画外说话人画进画面并移除听者反应，形成“画外声音但错误出镜”的反例。内容为匿名构造。",
+  "scope": {
+    "chapter": 5,
+    "book_index": 1,
+    "book_name": "匿名样本B"
+  },
+  "baseline": {
+    "label": "合法：来客只在画外发声，阿澄以转头/凝视回应",
+    "script": {
+      "book_name": "匿名样本B",
+      "book_index": 1,
+      "chapter_index": 5,
+      "chapter_title": "旧驿站",
+      "script_revision": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+      "source_hash": "2b2b2b2b2b2b2b2b",
+      "characters": [
+        {"identifier": "值守者阿澄"},
+        {"identifier": "门外来客"}
+      ],
+      "shots": [
+        {
+          "index": 2,
+          "duration_sec": 4.0,
+          "main_subject": "值守者阿澄",
+          "prompt": "[中景] 旧驿站堂内，阿澄背对镜头擦铜灯，门在画左；门外传来人声",
+          "ff_desc": "阿澄背对镜头站在堂内，手扶铜灯灯罩",
+          "lf_desc": "阿澄转头看向画左的门，门仍然关着",
+          "motion_desc": "前两秒：阿澄擦灯；后两秒：阿澄转头看向门",
+          "narration_segment": "门外来客（画外）：灯还亮着吗？",
+          "audio_cue": "画外人声=门外来客：灯还亮着吗？；环境声=风穿过门缝",
+          "frame_layouts": {
+            "ff": [
+              {"name": "值守者阿澄", "on_screen": true, "position": "堂内", "pose": "背对镜头擦灯", "gaze_target": "铜灯", "props": ["铜灯"]}
+            ],
+            "lf": [
+              {"name": "值守者阿澄", "on_screen": true, "position": "堂内", "pose": "转头看向门", "gaze_target": "门", "props": ["铜灯"]}
+            ],
+            "kfs": []
+          },
+          "keyframes": []
+        },
+        {
+          "index": 5,
+          "duration_sec": 3.0,
+          "main_subject": "值守者阿澄",
+          "prompt": "[近景] 阿澄正面，目光落在画左门缝，嘴唇闭合，没有出声",
+          "ff_desc": "阿澄正面近景，目光看向画左门缝",
+          "lf_desc": "阿澄眉峰收紧，嘴唇仍然闭合",
+          "motion_desc": "阿澄凝视门缝，嘴唇保持闭合",
+          "narration_segment": "值守者阿澄（画外）：我听见了。",
+          "audio_cue": "画外低语=值守者阿澄：我听见了。；无口型对白",
+          "frame_layouts": {
+            "ff": [
+              {"name": "值守者阿澄", "on_screen": true, "position": "堂内", "pose": "正面站立", "gaze_target": "门缝", "props": []}
+            ],
+            "lf": [
+              {"name": "值守者阿澄", "on_screen": true, "position": "堂内", "pose": "正面站立", "gaze_target": "门缝", "props": []}
+            ],
+            "kfs": []
+          },
+          "keyframes": []
+        },
+        {
+          "index": 8,
+          "duration_sec": 3.0,
+          "main_subject": "信封",
+          "prompt": "[特写] 门缝下塞进一封信，阿澄低头看见信封",
+          "ff_desc": "门缝下露出信封一角",
+          "lf_desc": "阿澄弯腰拾起信封，门仍关着",
+          "motion_desc": "信封从门缝滑入；阿澄低头并弯腰",
+          "narration_segment": "",
+          "audio_cue": "环境声=纸张摩擦门板",
+          "frame_layouts": {
+            "ff": [
+              {"name": "值守者阿澄", "on_screen": true, "position": "堂内", "pose": "站立低头", "gaze_target": "门缝", "props": ["信封"]}
+            ],
+            "lf": [
+              {"name": "值守者阿澄", "on_screen": true, "position": "门边", "pose": "弯腰拾信", "gaze_target": "信封", "props": ["信封"]}
+            ],
+            "kfs": []
+          },
+          "keyframes": []
+        }
+      ],
+      "total_duration": 10.0,
+      "body_duration": 10.0,
+      "hook_duration": 0.0,
+      "chapter_outline": {
+        "plan_contract_version": 5,
+        "fact_uids": ["f01", "f02", "f03"],
+        "required_facts": [
+          "门外来客只以画外声音出现，始终没有进入画面。",
+          "值守者阿澄用转头和凝视回应画外声音，没有开口对上门口型。",
+          "一封信从门缝塞入，阿澄低头拾起。"
+        ],
+        "shot_beats": [
+          "节拍：阿澄背对镜头擦灯，门外传来画外人声，阿澄转头｜本镜信息目的：建立画外声源与听者反应｜载体：画面+画外音",
+          "节拍：阿澄正面近景，凝视门缝、嘴唇闭合｜本镜信息目的：确认声音只被听见、未被看见｜载体：画面+画外音",
+          "节拍：信封从门缝滑入，阿澄拾起｜本镜信息目的：推进事件｜载体：画面"
+        ],
+        "dialogue_lines": ["灯还亮着吗？", "我听见了。"],
+        "narration_lines": [
+          {"text": "门外来客的声音穿过门缝。", "source": "门外来客的声音穿过门缝。", "fact_refs": [1]}
+        ],
+        "voice_units": [
+          {"unit_id": "d01", "kind": "offscreen_dialogue", "speaker": "门外来客", "text": "灯还亮着吗？", "shot_index": 2, "window_sec": 4.0, "actual_sec": 2.0, "verified": true},
+          {"unit_id": "d02", "kind": "offscreen_dialogue", "speaker": "值守者阿澄", "text": "我听见了。", "shot_index": 5, "window_sec": 3.0, "actual_sec": 1.5, "verified": true}
+        ],
+        "main_events": [
+          "门外来客以画外声音询问",
+          "阿澄转头并凝视门缝回应",
+          "信从门缝塞入，阿澄拾起"
+        ],
+        "climax": "阿澄听见画外声音却没有看到说话人",
+        "causal_chain": [
+          "起因：门外来客不愿露面，只隔门发声",
+          "行动：阿澄用转头和凝视回应声音",
+          "结果：信从门缝塞入，来客仍未进入画面"
+        ],
+        "end_hook": "阿澄拿着信站在门边，门外脚步声远去",
+        "character_motives": [
+          "门外来客：不愿暴露身份，只想递信",
+          "值守者阿澄：警惕但不想开门，先用反应确认声音来源"
+        ],
+        "plan_verification": {
+          "plan_digest": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+        }
+      }
+    },
+    "execution": {
+      "stage": "step02a.visual_plan",
+      "allowed_changes": ["prompt", "camera_movement", "visual_plan.visible_characters"],
+      "candidate": {
+        "shots": [
+          {
+            "index": 2,
+            "prompt": "阿澄背对镜头擦铜灯，门外传来人声，阿澄转头看向门",
+            "camera_movement": "固定",
+            "speaker": "",
+            "frame_layouts": {
+              "ff": [{"name": "值守者阿澄", "on_screen": true, "position": "堂内", "props": ["铜灯"]}],
+              "lf": [{"name": "值守者阿澄", "on_screen": true, "position": "堂内", "props": ["铜灯"]}]
+            }
+          },
+          {
+            "index": 5,
+            "prompt": "阿澄正面近景，凝视门缝，嘴唇闭合",
+            "camera_movement": "缓慢推近",
+            "speaker": "",
+            "frame_layouts": {
+              "ff": [{"name": "值守者阿澄", "on_screen": true, "position": "堂内"}],
+              "lf": [{"name": "值守者阿澄", "on_screen": true, "position": "堂内"}]
+            }
+          }
+        ],
+        "visual_plan": {
+          "visible_characters": ["值守者阿澄"],
+          "offscreen_speakers": ["门外来客"],
+          "visible_props": ["铜灯", "信封"]
+        }
+      }
+    },
+    "expected": {
+      "verdict": "accept",
+      "codes": [],
+      "note": "门外来客的声音有明确画外标记；听者阿澄有转头、凝视等可见反应；画内人物与道具（铜灯、信封）均有布局条目。画外说话人不在任何可见布局中。"
+    }
+  },
+  "mutation": {
+    "label": "变异：画外说话人被画进画面，听者反应被移除",
+    "script": {
+      "book_name": "匿名样本B",
+      "book_index": 1,
+      "chapter_index": 5,
+      "chapter_title": "旧驿站",
+      "script_revision": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "source_hash": "2b2b2b2b2b2b2b2c",
+      "characters": [
+        {"identifier": "值守者阿澄"},
+        {"identifier": "门外来客"}
+      ],
+      "shots": [
+        {
+          "index": 2,
+          "duration_sec": 4.0,
+          "main_subject": "值守者阿澄",
+          "prompt": "[中景] 旧驿站堂内，门外来客推门进入，站在阿澄对面；阿澄背对镜头继续擦灯",
+          "ff_desc": "门外来客站在堂内门口，阿澄背对镜头擦铜灯",
+          "lf_desc": "门外来客走近一步，阿澄背对镜头继续擦灯，没有回头",
+          "motion_desc": "来客推门进入；阿澄继续擦灯",
+          "narration_segment": "门外来客（画外）：灯还亮着吗？",
+          "audio_cue": "画外人声=门外来客：灯还亮着吗？；环境声=风穿过门缝",
+          "frame_layouts": {
+            "ff": [
+              {"name": "值守者阿澄", "on_screen": true, "position": "堂内", "pose": "背对镜头擦灯", "gaze_target": "铜灯", "props": ["铜灯"]},
+              {"name": "门外来客", "on_screen": true, "position": "堂内门口", "pose": "推门站立", "gaze_target": "值守者阿澄", "props": []}
+            ],
+            "lf": [
+              {"name": "值守者阿澄", "on_screen": true, "position": "堂内", "pose": "背对镜头擦灯", "gaze_target": "铜灯", "props": ["铜灯"]},
+              {"name": "门外来客", "on_screen": true, "position": "堂内", "pose": "走近", "gaze_target": "值守者阿澄", "props": []}
+            ],
+            "kfs": []
+          },
+          "keyframes": []
+        },
+        {
+          "index": 5,
+          "duration_sec": 3.0,
+          "main_subject": "值守者阿澄",
+          "prompt": "[近景] 阿澄正面，目光落在画左门缝，嘴唇闭合，没有出声",
+          "ff_desc": "阿澄正面近景，目光看向画左门缝",
+          "lf_desc": "阿澄眉峰收紧，嘴唇仍然闭合",
+          "motion_desc": "阿澄凝视门缝，嘴唇保持闭合",
+          "narration_segment": "值守者阿澄（画外）：我听见了。",
+          "audio_cue": "画外低语=值守者阿澄：我听见了。；无口型对白",
+          "frame_layouts": {
+            "ff": [
+              {"name": "值守者阿澄", "on_screen": true, "position": "堂内", "pose": "正面站立", "gaze_target": "门缝", "props": []}
+            ],
+            "lf": [
+              {"name": "值守者阿澄", "on_screen": true, "position": "堂内", "pose": "正面站立", "gaze_target": "门缝", "props": []}
+            ],
+            "kfs": []
+          },
+          "keyframes": []
+        },
+        {
+          "index": 8,
+          "duration_sec": 3.0,
+          "main_subject": "信封",
+          "prompt": "[特写] 门缝下塞进一封信，阿澄低头看见信封",
+          "ff_desc": "门缝下露出信封一角",
+          "lf_desc": "阿澄弯腰拾起信封，门仍关着",
+          "motion_desc": "信封从门缝滑入；阿澄低头并弯腰",
+          "narration_segment": "",
+          "audio_cue": "环境声=纸张摩擦门板",
+          "frame_layouts": {
+            "ff": [
+              {"name": "值守者阿澄", "on_screen": true, "position": "堂内", "pose": "站立低头", "gaze_target": "门缝", "props": ["信封"]}
+            ],
+            "lf": [
+              {"name": "值守者阿澄", "on_screen": true, "position": "门边", "pose": "弯腰拾信", "gaze_target": "信封", "props": ["信封"]}
+            ],
+            "kfs": []
+          },
+          "keyframes": []
+        }
+      ],
+      "total_duration": 10.0,
+      "body_duration": 10.0,
+      "hook_duration": 0.0,
+      "chapter_outline": {
+        "plan_contract_version": 5,
+        "fact_uids": ["f01", "f02", "f03"],
+        "required_facts": [
+          "门外来客推门进入画面，站在值守者阿澄对面。",
+          "值守者阿澄没有转头或凝视回应，继续背对镜头擦灯。",
+          "一封信从门缝塞入，阿澄低头拾起。"
+        ],
+        "shot_beats": [
+          "节拍：门外来客推门进入，阿澄背对镜头继续擦灯｜本镜信息目的：让人物出镜但保留画外音台词｜载体：画面+画外音",
+          "节拍：阿澄正面近景，凝视门缝、嘴唇闭合｜本镜信息目的：保留声音与口型分离｜载体：画面+画外音",
+          "节拍：信封从门缝滑入，阿澄拾起｜本镜信息目的：推进事件｜载体：画面"
+        ],
+        "dialogue_lines": ["灯还亮着吗？", "我听见了。"],
+        "narration_lines": [
+          {"text": "门外来客的声音穿过门缝。", "source": "门外来客的声音穿过门缝。", "fact_refs": [1]}
+        ],
+        "voice_units": [
+          {"unit_id": "d01", "kind": "offscreen_dialogue", "speaker": "门外来客", "text": "灯还亮着吗？", "shot_index": 2, "window_sec": 4.0, "actual_sec": 2.0, "verified": true, "on_screen": true},
+          {"unit_id": "d02", "kind": "offscreen_dialogue", "speaker": "值守者阿澄", "text": "我听见了。", "shot_index": 5, "window_sec": 3.0, "actual_sec": 1.5, "verified": true}
+        ],
+        "main_events": [
+          "门外来客推门进入画面",
+          "阿澄背对镜头继续擦灯",
+          "信从门缝塞入，阿澄拾起"
+        ],
+        "climax": "画外声音与画内可见的说话人同时出现",
+        "causal_chain": [
+          "起因：门外来客进入堂内",
+          "行动：来客开口询问，阿澄没有回头",
+          "结果：画外音与可见说话人冲突"
+        ],
+        "end_hook": "阿澄拿着信站在门边，门外脚步声远去",
+        "character_motives": [
+          "门外来客：进门后仍以画外音方式说话",
+          "值守者阿澄：背对来客，不回应"
+        ],
+        "plan_verification": {
+          "plan_digest": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+        }
+      }
+    },
+    "execution": {
+      "stage": "step02a.visual_plan",
+      "allowed_changes": ["prompt", "camera_movement", "visual_plan.visible_characters"],
+      "candidate": {
+        "shots": [
+          {
+            "index": 2,
+            "prompt": "门外来客推门进入堂内，阿澄背对镜头继续擦灯",
+            "camera_movement": "固定",
+            "speaker": "",
+            "frame_layouts": {
+              "ff": [{"name": "值守者阿澄", "on_screen": true, "position": "堂内", "props": ["铜灯"]}, {"name": "门外来客", "on_screen": true, "position": "堂内门口", "props": []}],
+              "lf": [{"name": "值守者阿澄", "on_screen": true, "position": "堂内", "props": ["铜灯"]}, {"name": "门外来客", "on_screen": true, "position": "堂内", "props": []}]
+            }
+          },
+          {
+            "index": 5,
+            "prompt": "阿澄正面近景，凝视门缝，嘴唇闭合",
+            "camera_movement": "缓慢推近",
+            "speaker": "",
+            "frame_layouts": {
+              "ff": [{"name": "值守者阿澄", "on_screen": true, "position": "堂内"}],
+              "lf": [{"name": "值守者阿澄", "on_screen": true, "position": "堂内"}]
+            }
+          }
+        ],
+        "visual_plan": {
+          "visible_characters": ["值守者阿澄", "门外来客"],
+          "offscreen_speakers": ["门外来客"],
+          "visible_props": ["铜灯", "信封"]
+        }
+      }
+    },
+    "expected": {
+      "verdict": "reject",
+      "codes": ["offscreen_speaker_visible", "listener_reaction_missing"],
+      "note": "台词仍标为画外音，但门外来客已出现在 ff/lf 可见布局中，且阿澄没有转头/凝视反应。应把说话人留在画外并恢复听者反应；若确需让来客出镜，则必须改台词载体与口型关系，回到 Step01 语义修订。"
+    }
+  }
+}

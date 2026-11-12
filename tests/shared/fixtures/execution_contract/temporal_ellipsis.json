@@ -1,0 +1,262 @@
+{
+  "schema": "execution_contract.sample_family.v1",
+  "family": "temporal_ellipsis",
+  "note": "时间跳跃与常规过程省略的合法基线；变异删除修补动作与时间标记，只留下“修好的船”这一结果，构成本因果缺失。内容为匿名构造，与任何现有小说章节无关。",
+  "scope": {
+    "chapter": 2,
+    "book_index": 1,
+    "book_name": "匿名样本A"
+  },
+  "baseline": {
+    "label": "合法：三日后取船，常规修船工序省略",
+    "script": {
+      "book_name": "匿名样本A",
+      "book_index": 1,
+      "chapter_index": 2,
+      "chapter_title": "修船铺",
+      "script_revision": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "source_hash": "1a1a1a1a1a1a1a1a",
+      "characters": [
+        {"identifier": "工匠阿岚"},
+        {"identifier": "船主老邵"},
+        {"identifier": "学徒小石"}
+      ],
+      "shots": [
+        {
+          "index": 1,
+          "duration_sec": 4.0,
+          "main_subject": "工匠阿岚",
+          "prompt": "[中景] 修船铺内，阿岚接过老邵递来的修船单，抬手指向船底裂缝",
+          "ff_desc": "阿岚站在铺内，双手接过修船单",
+          "lf_desc": "阿岚俯身指向船底裂缝，老邵站在画右",
+          "motion_desc": "前两秒：阿岚接单；后两秒：阿岚俯身指向裂缝",
+          "narration_segment": "",
+          "audio_cue": "对白=老邵：船底裂了，三日后我来取。；环境声=刨木声",
+          "frame_layouts": {
+            "ff": [
+              {"name": "工匠阿岚", "on_screen": true, "position": "铺内", "pose": "站立接单", "gaze_target": "船主老邵", "props": ["修船单"]},
+              {"name": "船主老邵", "on_screen": true, "position": "画右", "pose": "递单", "gaze_target": "工匠阿岚", "props": ["修船单"]}
+            ],
+            "lf": [
+              {"name": "工匠阿岚", "on_screen": true, "position": "铺内", "pose": "俯身指向船底", "gaze_target": "船底裂缝", "props": []},
+              {"name": "船主老邵", "on_screen": true, "position": "画右", "pose": "站立旁观", "gaze_target": "船底裂缝", "props": []}
+            ],
+            "kfs": []
+          },
+          "keyframes": []
+        },
+        {
+          "index": 2,
+          "duration_sec": 6.0,
+          "main_subject": "修船工序",
+          "prompt": "[中景] 修船铺内，打磨、填缝、上漆的常规工序快切，学徒小石递来漆桶；画面角落提示三日后",
+          "ff_desc": "船底裂缝尚未填缝，木屑散落，小石提着漆桶站在画右",
+          "lf_desc": "船底裂缝已填平，漆面未干，阿岚放下刷子，小石收走漆桶",
+          "motion_desc": "前三秒：打磨裂缝边缘；后三秒：小石递漆桶，阿岚填缝上漆",
+          "narration_segment": "三日后，阿岚把船底裂缝补好。",
+          "audio_cue": "旁白=三日后，阿岚把船底裂缝补好。；环境声=打磨声、刷漆声",
+          "frame_layouts": {
+            "ff": [
+              {"name": "工匠阿岚", "on_screen": true, "position": "船底旁", "pose": "手持砂纸", "gaze_target": "船底裂缝", "props": ["砂纸"]},
+              {"name": "学徒小石", "on_screen": true, "position": "画右", "pose": "提着漆桶", "gaze_target": "船底裂缝", "props": ["漆桶"]}
+            ],
+            "lf": [
+              {"name": "工匠阿岚", "on_screen": true, "position": "船底旁", "pose": "放下刷子", "gaze_target": "补好的船底", "props": ["漆刷"]},
+              {"name": "学徒小石", "on_screen": true, "position": "画右", "pose": "收走漆桶", "gaze_target": "工匠阿岚", "props": ["漆桶"]}
+            ],
+            "kfs": []
+          },
+          "keyframes": []
+        },
+        {
+          "index": 3,
+          "duration_sec": 4.0,
+          "main_subject": "船主老邵",
+          "prompt": "[中景] 老邵来取船，俯身检查船底后点头",
+          "ff_desc": "老邵站在铺门口，手里拿着取船凭据",
+          "lf_desc": "老邵点头，把修好的船推向门外",
+          "motion_desc": "前两秒：老邵进门；后两秒：俯身检查并推船",
+          "narration_segment": "",
+          "audio_cue": "对白=老邵：补得不错。；环境声=船底摩擦地面",
+          "frame_layouts": {
+            "ff": [
+              {"name": "船主老邵", "on_screen": true, "position": "铺门口", "pose": "站立", "gaze_target": "船底", "props": ["取船凭据"]}
+            ],
+            "lf": [
+              {"name": "船主老邵", "on_screen": true, "position": "门口", "pose": "推船", "gaze_target": "门外", "props": ["取船凭据"]}
+            ],
+            "kfs": []
+          },
+          "keyframes": []
+        }
+      ],
+      "total_duration": 14.0,
+      "body_duration": 14.0,
+      "hook_duration": 0.0,
+      "chapter_outline": {
+        "plan_contract_version": 5,
+        "fact_uids": ["f01", "f02", "f03"],
+        "required_facts": [
+          "工匠阿岚接下老邵的修船单，船底有一道裂缝。",
+          "三日后，阿岚用打磨、填缝、上漆的常规工序补好船底。",
+          "老邵来取船，确认船底已补好并把船推走。"
+        ],
+        "shot_beats": [
+          "节拍：阿岚接单，俯身指向船底裂缝｜本镜信息目的：建立修船任务｜载体：画面+对白",
+          "节拍：三日后，打磨、填缝、上漆的常规工序快切，裂缝补平｜本镜信息目的：以省略方式交代过程｜载体：画面+旁白",
+          "节拍：老邵来取船，俯身检查后点头推船｜本镜信息目的：确认结果｜载体：画面+对白"
+        ],
+        "dialogue_lines": ["补得不错。"],
+        "narration_lines": [
+          {"text": "三日后，阿岚把船底裂缝补好。", "source": "三日后，阿岚把船底裂缝补好。", "fact_refs": [2]}
+        ],
+        "main_events": [
+          "阿岚接下修船单",
+          "三日后阿岚补好船底",
+          "老邵来取船并确认修好"
+        ],
+        "climax": "老邵确认船底已补好",
+        "causal_chain": [
+          "起因：船底有裂缝",
+          "行动：阿岚用三日补好船底",
+          "结果：老邵取走修好的船"
+        ],
+        "end_hook": "老邵推船离开，铺内恢复安静",
+        "character_motives": [
+          "阿岚：靠修船手艺谋生，想把裂缝补牢",
+          "老邵：急着取回船继续跑运输"
+        ],
+        "plan_verification": {
+          "plan_digest": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        }
+      }
+    },
+    "execution": {
+      "stage": "step02a.visual_plan",
+      "allowed_changes": ["prompt", "camera_movement"],
+      "candidate": {
+        "shots": [
+          {"index": 1, "prompt": "阿岚在铺内接单，俯身指向船底裂缝", "camera_movement": "固定", "speaker": ""},
+          {"index": 2, "prompt": "常规修船工序快切，裂缝补平", "camera_movement": "缓慢横移", "speaker": ""},
+          {"index": 3, "prompt": "老邵俯身检查船底后推船离开", "camera_movement": "缓慢推近", "speaker": "船主老邵"}
+        ]
+      }
+    },
+    "expected": {
+      "verdict": "accept",
+      "codes": [],
+      "note": "时间跳跃有明确“三日后”标记；修船常规过程以蒙太奇省略属于合法省略；结果“补好的船”有对应修补动作与时间依据。"
+    }
+  },
+  "mutation": {
+    "label": "变异：删除修补动作与时间标记，只保留“修好的船”结果",
+    "script": {
+      "book_name": "匿名样本A",
+      "book_index": 1,
+      "chapter_index": 2,
+      "chapter_title": "修船铺",
+      "script_revision": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+      "source_hash": "1a1a1a1a1a1a1a1b",
+      "characters": [
+        {"identifier": "工匠阿岚"},
+        {"identifier": "船主老邵"},
+        {"identifier": "学徒小石"}
+      ],
+      "shots": [
+        {
+          "index": 1,
+          "duration_sec": 4.0,
+          "main_subject": "工匠阿岚",
+          "prompt": "[中景] 修船铺内，阿岚接过老邵递来的修船单，抬手指向船底裂缝",
+          "ff_desc": "阿岚站在铺内，双手接过修船单",
+          "lf_desc": "阿岚俯身指向船底裂缝，老邵站在画右",
+          "motion_desc": "前两秒：阿岚接单；后两秒：阿岚俯身指向裂缝",
+          "narration_segment": "",
+          "audio_cue": "对白=老邵：船底裂了，我晚些来取。；环境声=刨木声",
+          "frame_layouts": {
+            "ff": [
+              {"name": "工匠阿岚", "on_screen": true, "position": "铺内", "pose": "站立接单", "gaze_target": "船主老邵", "props": ["修船单"]},
+              {"name": "船主老邵", "on_screen": true, "position": "画右", "pose": "递单", "gaze_target": "工匠阿岚", "props": ["修船单"]}
+            ],
+            "lf": [
+              {"name": "工匠阿岚", "on_screen": true, "position": "铺内", "pose": "俯身指向船底", "gaze_target": "船底裂缝", "props": []},
+              {"name": "船主老邵", "on_screen": true, "position": "画右", "pose": "站立旁观", "gaze_target": "船底裂缝", "props": []}
+            ],
+            "kfs": []
+          },
+          "keyframes": []
+        },
+        {
+          "index": 3,
+          "duration_sec": 4.0,
+          "main_subject": "船主老邵",
+          "prompt": "[中景] 老邵来取船，看到船已修好，点头后把船推走",
+          "ff_desc": "老邵站在铺门口，手里拿着取船凭据",
+          "lf_desc": "老邵点头，把已经修好的船推向门外",
+          "motion_desc": "前两秒：老邵进门；后两秒：俯身查看并推船",
+          "narration_segment": "",
+          "audio_cue": "对白=老邵：补得不错。；环境声=船底摩擦地面",
+          "frame_layouts": {
+            "ff": [
+              {"name": "船主老邵", "on_screen": true, "position": "铺门口", "pose": "站立", "gaze_target": "船底", "props": ["取船凭据"]}
+            ],
+            "lf": [
+              {"name": "船主老邵", "on_screen": true, "position": "门口", "pose": "推船", "gaze_target": "门外", "props": ["取船凭据"]}
+            ],
+            "kfs": []
+          },
+          "keyframes": []
+        }
+      ],
+      "total_duration": 8.0,
+      "body_duration": 8.0,
+      "hook_duration": 0.0,
+      "chapter_outline": {
+        "plan_contract_version": 5,
+        "fact_uids": ["f01", "f03"],
+        "required_facts": [
+          "工匠阿岚接下老邵的修船单，船底有一道裂缝。",
+          "老邵来取船，确认船已修好并把船推走。"
+        ],
+        "shot_beats": [
+          "节拍：阿岚接单，俯身指向船底裂缝｜本镜信息目的：建立修船任务｜载体：画面+对白",
+          "节拍：老邵来取船，看到船已修好后推走｜本镜信息目的：确认结果｜载体：画面+对白"
+        ],
+        "dialogue_lines": ["补得不错。"],
+        "narration_lines": [],
+        "main_events": [
+          "阿岚接下修船单",
+          "老邵来取船并确认修好"
+        ],
+        "climax": "老邵确认船已修好",
+        "causal_chain": [
+          "起因：船底有裂缝",
+          "结果：老邵取走修好的船"
+        ],
+        "end_hook": "老邵推船离开，铺内恢复安静",
+        "character_motives": [
+          "阿岚：靠修船手艺谋生，想把裂缝补牢",
+          "老邵：急着取回船继续跑运输"
+        ],
+        "plan_verification": {
+          "plan_digest": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+        }
+      }
+    },
+    "execution": {
+      "stage": "step02a.visual_plan",
+      "allowed_changes": ["prompt", "camera_movement"],
+      "candidate": {
+        "shots": [
+          {"index": 1, "prompt": "阿岚在铺内接单，俯身指向船底裂缝", "camera_movement": "固定", "speaker": ""},
+          {"index": 3, "prompt": "老邵看到船已修好，推船离开", "camera_movement": "缓慢推近", "speaker": "船主老邵"}
+        ]
+      }
+    },
+    "expected": {
+      "verdict": "reject",
+      "codes": ["causal_gap", "time_ellipsis_lost"],
+      "note": "修补动作与“三日后”标记同时消失，却保留“船已修好”的结果；这不是合法的常规过程省略，而是结果失去因果与时间依据。应回到 Step01 修订，不能由下游执行阶段补造内容。"
+    }
+  }
+}

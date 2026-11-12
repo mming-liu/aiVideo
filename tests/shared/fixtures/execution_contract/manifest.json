@@ -1,0 +1,47 @@
+{
+  "schema": "execution_contract.fixture_manifest.v1",
+  "note": "S01 三个受控样本族的实算摘要。摘要算法为 sha256(file bytes)；夹具不依赖 .tmp、生产 output、现场日志或网络。manifest 自身不列入摘要，避免循环。",
+  "algorithm": "sha256",
+  "fixture_root": "tests/shared/fixtures/execution_contract",
+  "families": [
+    {
+      "family": "temporal_ellipsis",
+      "file": "temporal_ellipsis.json",
+      "sha256": "d67557b76398cb0b6bf9a576ca941021bad2e58b6ad99c029da4a0439f32c9bc",
+      "size": 12774,
+      "scope": {"chapter": 2, "book_index": 1, "book_name": "匿名样本A"},
+      "character_count": 3,
+      "shot_indices": [1, 2, 3],
+      "voice_unit_count": 0,
+      "baseline_verdict": "accept",
+      "mutation_verdict": "reject",
+      "mutation_codes": ["causal_gap", "time_ellipsis_lost"]
+    },
+    {
+      "family": "offscreen_voice",
+      "file": "offscreen_voice.json",
+      "sha256": "e6caaa9d7fee8007f095524080e7c18f9cfb0630a45a8415113fcc8b90d06d7e",
+      "size": 16369,
+      "scope": {"chapter": 5, "book_index": 1, "book_name": "匿名样本B"},
+      "character_count": 2,
+      "shot_indices": [2, 5, 8],
+      "voice_unit_count": 2,
+      "baseline_verdict": "accept",
+      "mutation_verdict": "reject",
+      "mutation_codes": ["offscreen_speaker_visible", "listener_reaction_missing"]
+    },
+    {
+      "family": "voice_timing",
+      "file": "voice_timing.json",
+      "sha256": "4d19b0a8558a9c52a0cf1542c4e8f722c821090cdb97c7457b6bc7850f74bee3",
+      "size": 12943,
+      "scope": {"chapter": 7, "book_index": 1, "book_name": "匿名样本C"},
+      "character_count": 2,
+      "shot_indices": [3, 4],
+      "voice_unit_count": 3,
+      "baseline_verdict": "accept",
+      "mutation_verdict": "reject",
+      "mutation_codes": ["audio_window_overflow", "native_dialogue_unverified"]
+    }
+  ]
+}
