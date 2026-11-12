@@ -14,16 +14,23 @@
                             角色静态形象与首见状态相反、且此前没有任何过渡，也算；
   · ``STATE_CONFLICT``      同一字段同时声明一对状态的两侧（如 prompt 既写挽髻
                             又写披头散发）；
-  · ``STATE_RESULT_LEAK``   首帧已经呈现本镜动作之后的结果态。
+  · ``STATE_RESULT_LEAK``   首帧已经呈现本镜动作之后的结果态；
+  · ``LF_PROCESS_STATE``    尾帧仍停留在显式未收束的过程态（与 ``STATE_RESULT_LEAK``
+                            互补：后者是首帧提前呈现结果态）；
+  · ``ADDED_DIALOGUE``      脚本台词在**调用方提供的对照源**里找不到逐字依据
+                            （新增台词/画外音）。未传对照源时该码**不产出**。
 
 ## 边界（与正式门禁的关系）
 
 * 本模块**只读**：不修改 script、不产生修复动作、不改变任何 issue 的 severity，
   也不参与 blocking 计数；
 * 找不到双方逐字依据时**不出 finding**；宁缺勿滥，未覆盖的部分仍由语义审计负责；
-* 时间跳跃 / 场景变化 / 取回动作 / 运镜轨迹是**反证**：命中即不出 finding；
+* 时间跳跃 / 场景变化 / 取回动作 / 运镜轨迹 / 明说动作延续到镜外是**反证**：
+  命中即不出 finding；
 * 产物由 ``audit_adjudication.build_shadow_report`` 以 ``gate_effect=shadow_only``
   落盘，接入正式门禁属于准入语义变更，不在本模块内做；
+* ``ADDED_DIALOGUE`` 的「新增」必须有对照源才能判定：``scan_script`` 只在调用方
+  显式传入 ``source_text`` 时检查，未传入时宁缺勿滥、不产出该码；
 * 正文 `shots` 与 `hook` 分开：重复/景别扫 `shots`，跨镜道具/状态链只连正文，
   不把独立开场钩子接到第 1 镜（hook 的检查留给后续工作包）。
 
@@ -90,12 +97,39 @@ _ACQUIRE_MARKERS = (
     "重新握住",
 )
 
+#: 否定词：取回动词**之前**出现即表示该动作被否定（「茶盏未再被拿起」不是取回）。
+#: 只做同分句前缀判断，不跨分句、不猜语义；长词在前仅为可读性，匹配用子串包含。
+_NEGATION_MARKERS = (
+    "未曾", "没有", "并未", "仍未", "不再", "不曾", "不可",
+    "未", "没", "无", "不", "莫", "勿",
+)
+
 #: 显式时间跳跃（不含「淡入淡出/叠化」——它们在当前稿里也用于连续动作的过渡，
 #: 单凭转场类型不能证明时间过去了；只有文字依据才算）。
 _TIME_JUMP_MARKERS = (
     "次日", "翌日", "第二天", "隔日", "数日后", "三日后", "三天后",
     "一柱香", "一炷香", "半个时辰", "一个时辰", "片刻之后", "许久之后",
     "多年后", "多年以后", "回忆", "闪回", "时间流逝", "天亮之后", "入夜之后",
+)
+
+#: 尾帧「动作延续到镜外」的显式反证：写明本镜不要求动作收束时才豁免。
+#: 只收**明说**的延续/切走，不把普通多段动作当成故意留白。
+_LF_OPEN_END_MARKERS = (
+    "动作未完", "动作未收", "未及收势", "未收势",
+    "持续到镜末", "持续到镜头结束", "延续到下一镜", "延续至下一镜",
+    "留待下一镜", "切在动作中", "镜头在动作中切",
+)
+
+#: 尾帧同一分句已明说收束/停住：过程标记只是过渡描述，不是「停在过程态」。
+_LF_CLOSURE_MARKERS = (
+    "停住", "停下", "停手", "收势", "收手", "完成", "结束",
+    "落定", "定格", "静止", "已停", "不再动", "终了",
+)
+
+#: 台词引号对（成对或同字符）；只用于从播出文本里提取**显式台词**。
+_QUOTE_PAIRS = (
+    ("「", "」"), ("『", "』"), ("“", "”"), ("‘", "’"),
+    ('"', '"'), ("'", "'"),
 )
 
 #: 成对状态：只放**可观察、成对、且方向明确**的状态词。
@@ -124,6 +158,8 @@ _FINDING_ORDER = {
     "STATE_CHAIN_CONFLICT": 3,
     "STATE_CONFLICT": 4,
     "STATE_RESULT_LEAK": 5,
+    "LF_PROCESS_STATE": 6,
+    "ADDED_DIALOGUE": 7,
 }
 _FIELD_ORDER = {
     "prompt": 0,
@@ -514,11 +550,23 @@ def _prop_state(text: str, prop: str) -> "str | None":
 
 
 def _acquire_in(text: str, prop: str) -> bool:
+    """文本里是否有对 `prop` 的**肯定**取回动作.
+
+    否定式（「茶盏未再被拿起」「甲没有拿起茶盏」）里的取回动词不是状态变化的依据：
+    取同分句内**最早出现**的取回动词，只有它之前没有否定词时才算取回；否则跳过
+    该分句，继续检查其他分句里的真实取回动作。
+    """
     for clause in _clauses(text):
         if prop not in clause:
             continue
-        if any(marker in clause for marker in _ACQUIRE_MARKERS):
-            return True
+        positions = [clause.find(marker) for marker in _ACQUIRE_MARKERS
+                     if marker in clause]
+        if not positions:
+            continue
+        earliest = min(positions)
+        if any(neg in clause[:earliest] for neg in _NEGATION_MARKERS):
+            continue
+        return True
     return False
 
 
@@ -929,11 +977,178 @@ def _state_findings(script: dict) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# 4. 尾帧过程态（与 STATE_RESULT_LEAK 互补）
+# ---------------------------------------------------------------------------
+
+def _lf_process_findings(script: dict) -> list[dict]:
+    """尾帧仍停在显式未收束的过程态.
+
+    判据（内容无关、可判定）：
+
+    1. 复用 ``shared.style_prefix.detect_lf_midstate`` 的保守闸门——它要求
+       「过程标记 + 匹配动词」成对（或武器+水面残留、半身态）才命中；静态的
+       「门开着」不触发，避免把合法的持续状态当成过程态；
+    2. 本镜没有显式时间跳跃（``_explicit_time_jump``）；
+    3. motion / context_bridge / clip_transition 没有明说「动作延续到镜外」
+       （``_LF_OPEN_END_MARKERS``）——故意切在动作中的镜头有显式依据时不报；
+    4. 命中的尾帧分句本身没有收束词（``_LF_CLOSURE_MARKERS``）。
+    """
+    try:
+        from shared.style_prefix import detect_lf_midstate
+    except Exception:                                      # noqa: BLE001 - 缺依赖不猜
+        return []
+    findings: list[dict] = []
+    for pos, shot in enumerate(_shots(script)):
+        lf = _field_text(shot.get("lf_desc"))
+        if not lf:
+            continue
+        try:
+            problems = detect_lf_midstate(lf)
+        except Exception:                                  # noqa: BLE001 - 诊断不改变结论
+            continue
+        if not problems:
+            continue
+        if _explicit_time_jump(shot):
+            continue
+        motion = _field_text(shot.get("motion_desc"))
+        bridge = str(shot.get("context_bridge") or "")
+        transition = str(shot.get("clip_transition") or "")
+        if any(marker in (motion + "\n" + bridge + "\n" + transition)
+               for marker in _LF_OPEN_END_MARKERS):
+            continue
+        open_problems = [
+            p for p in problems
+            if not any(marker in str(p.get("clause") or "")
+                       for marker in _LF_CLOSURE_MARKERS)
+        ]
+        if not open_problems:
+            continue
+        first = open_problems[0]
+        kinds = sorted({str(p.get("type") or "") for p in open_problems
+                        if p.get("type")})
+        kind_text = "/".join(kinds)
+        detail = ("尾帧仍停留在过程态（%s）；未发现显式时间跳跃或"
+                  "「动作延续到镜外」的依据，尾帧应落到动作终态" % kind_text
+                  if kind_text else
+                  "尾帧仍停留在过程态；尾帧应落到动作终态")
+        findings.append({
+            "code": "LF_PROCESS_STATE",
+            "family": "state",
+            "shot_id": _shot_id(shot, pos),
+            "frame_id": "lf",
+            "field_path": "lf_desc",
+            "evidence": str(first.get("clause") or lf).strip(),
+            "detail": detail,
+            "related": [{"field_path": "motion_desc", "evidence": motion[:80]}]
+            if motion else [],
+        })
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# 5. 新增台词（必须有对照源）
+# ---------------------------------------------------------------------------
+
+def _quoted_spans(text: str) -> list[str]:
+    """播出文本里的显式引号台词（按出现顺序，去空）."""
+    spans: list[str] = []
+    i, n = 0, len(text or "")
+    while i < n:
+        ch = text[i]
+        for opener, closer in _QUOTE_PAIRS:
+            if ch != opener:
+                continue
+            end = text.find(closer, i + 1)
+            if end > i + 1:
+                spans.append(text[i + 1:end].strip())
+                i = end + 1
+                break
+        else:
+            i += 1
+    return [s for s in spans if s]
+
+
+def _dialogue_lines(seg: str, characters: list[dict]) -> list[str]:
+    """播出文本里的**显式台词**：引号内容优先，其次「说话人+言语动词+冒号」后的正文.
+
+    只收能确定性识别的台词；没有引号、也没有可核说话人前缀的纯叙述/画外音
+    不在此判定（避免把旁白改写、合规替换误判成「新增台词」）。
+    """
+    if not seg:
+        return []
+    quoted = _quoted_spans(seg)
+    if quoted:
+        return quoted
+    try:
+        from shared.dialogue import speaker_prefix
+    except Exception:                                      # noqa: BLE001 - 缺依赖不猜
+        return []
+    speaker = speaker_prefix(seg, characters)
+    if not speaker:
+        return []
+    colon = re.search(r"[:：]", seg)
+    if not colon:
+        return []
+    body = seg[colon.end():].strip()
+    return [body] if body else []
+
+
+def _added_dialogue_findings(script: dict, source_text) -> list[dict]:
+    """脚本显式台词在对照源里找不到逐字依据 → ``ADDED_DIALOGUE``.
+
+    **没有对照源就不产出**：纯脚本内无法区分「新增」与「合法改编」。
+    """
+    if not isinstance(source_text, str) or not source_text.strip():
+        return []
+    try:
+        from step01_script_gen.plan_feasibility import source_contains
+    except Exception:                                      # noqa: BLE001 - 缺依赖不猜
+        return []
+    characters = [c for c in ((script or {}).get("characters") or [])
+                  if isinstance(c, dict)]
+    findings: list[dict] = []
+    for pos, shot in enumerate(_shots(script)):
+        sid = _shot_id(shot, pos)
+        narration = _field_text(shot.get("narration_segment"))
+        subtitle = _field_text(shot.get("subtitle"))
+        seg = narration or subtitle
+        field_path = "narration_segment" if narration else "subtitle"
+        seen: set[str] = set()
+        for line in _dialogue_lines(seg, characters):
+            line = line.strip()
+            if not line or line in seen:
+                continue
+            seen.add(line)
+            try:
+                grounded = source_contains(source_text, line)
+            except Exception:                              # noqa: BLE001 - 诊断不改变结论
+                continue
+            if grounded:
+                continue
+            findings.append({
+                "code": "ADDED_DIALOGUE",
+                "family": "dialogue",
+                "shot_id": sid,
+                "frame_id": "",
+                "field_path": field_path,
+                "evidence": line,
+                "detail": ("台词在对照源中找不到逐字依据，可能是新增台词/画外音"
+                           "（已提供对照源）"),
+                "source": "source_text",
+            })
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # 汇总
 # ---------------------------------------------------------------------------
 
-def scan_script(script: dict) -> list[dict]:
-    """全稿确定性检查 → 按镜头/字段/代码排序的 findings（只读，不改脚本）."""
+def scan_script(script: dict, *, source_text: "str | None" = None) -> list[dict]:
+    """全稿确定性检查 → 按镜头/字段/代码排序的 findings（只读，不改脚本）.
+
+    ``source_text`` 是 ``ADDED_DIALOGUE`` 的**对照源**（原文/规划文本）。不传时该码
+    不产出——纯脚本内无法区分「新增台词」与「合法改编」，宁缺勿滥。
+    """
     if not isinstance(script, dict):
         return []
     findings: list[dict] = []
@@ -941,6 +1156,8 @@ def scan_script(script: dict) -> list[dict]:
     findings.extend(_framing_findings(script))
     findings.extend(_prop_chain_findings(script))
     findings.extend(_state_findings(script))
+    findings.extend(_lf_process_findings(script))
+    findings.extend(_added_dialogue_findings(script, source_text))
 
     # 去重：同一 (code, shot, field, evidence) 只留一条。
     seen: set[tuple] = set()

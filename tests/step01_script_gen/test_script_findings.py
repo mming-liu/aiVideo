@@ -175,6 +175,36 @@ def test_prop_reappearance_across_time_jump_is_legal():
     assert "PROP_STATE_CHAIN" not in _codes(scan_script(_script(shot1, shot2)))
 
 
+def _negated_acquire_script(shot2_ff: str) -> dict:
+    """道具脱手后回到手中：shot2 的取回表述由调用方给定（正例/阴性对照）."""
+    shot1 = _shot(1, ff_desc="甲将茶盏置于案上", lf_desc="茶盏静置案上",
+                  frame_layouts={"ff": [{"name": "甲", "props": ["茶盏"]}],
+                                 "lf": [], "kfs": []})
+    shot2 = _shot(2, ff_desc=shot2_ff, lf_desc="甲饮茶",
+                  frame_layouts={"ff": [{"name": "甲", "props": ["茶盏"]}],
+                                 "lf": [], "kfs": []})
+    return _script(shot1, shot2)
+
+
+def test_negated_acquire_does_not_excuse_prop_state_chain():
+    """「茶盏未再被拿起」是**否定**，不能当成真实取回动作而压制缺陷."""
+    findings = [f for f in scan_script(
+        _negated_acquire_script("甲右手端着茶盏，茶盏未再被拿起"))
+        if f["code"] == "PROP_STATE_CHAIN"]
+    assert len(findings) == 1
+    assert findings[0]["shot_id"] == "2"
+    assert findings[0]["field_path"] == "ff_desc"
+    assert findings[0]["prop"] == "茶盏"
+
+
+def test_affirmed_acquire_still_excuses_prop_state_chain():
+    """阴性对照：真实取回（无否定前缀）仍然豁免，修复不得误杀."""
+    findings = [f for f in scan_script(
+        _negated_acquire_script("甲右手端着茶盏，甲重新拿起茶盏"))
+        if f["code"] == "PROP_STATE_CHAIN"]
+    assert findings == []
+
+
 # ---------------------------------------------------------------------------
 # 4. 成对状态链
 # ---------------------------------------------------------------------------
@@ -243,7 +273,96 @@ def test_scan_does_not_mutate_script():
 
 
 # ---------------------------------------------------------------------------
-# 5. 裁决接线
+# 5. 尾帧过程态
+# ---------------------------------------------------------------------------
+
+def test_lf_process_state_is_reported():
+    """尾帧停在「缓缓沉入」的过程态，且没有收束/时间跳跃依据."""
+    shot = _shot(1, ff_desc="甲松开手", lf_desc="灯盏缓缓沉入水底",
+                 motion_desc="甲松手，灯盏坠向水面")
+    findings = [f for f in scan_script(_script(shot))
+                if f["code"] == "LF_PROCESS_STATE"]
+    assert len(findings) == 1
+    assert findings[0]["shot_id"] == "1"
+    assert findings[0]["frame_id"] == "lf"
+    assert findings[0]["field_path"] == "lf_desc"
+    assert "沉入" in findings[0]["evidence"]
+
+
+def test_lf_terminal_state_is_legal():
+    shot = _shot(1, ff_desc="甲松开手", lf_desc="灯盏已沉入水底",
+                 motion_desc="甲松手，灯盏坠向水面")
+    assert "LF_PROCESS_STATE" not in _codes(scan_script(_script(shot)))
+
+
+def test_lf_process_state_with_declared_open_end_is_legal():
+    """motion 明说动作延续到镜外（故意切在动作中）时不报."""
+    shot = _shot(1, ff_desc="甲松开手", lf_desc="灯盏缓缓沉入水底",
+                 motion_desc="甲松手，动作未完，镜头在灯盏入水前切走")
+    assert "LF_PROCESS_STATE" not in _codes(scan_script(_script(shot)))
+
+
+def test_lf_process_state_with_explicit_closure_is_legal():
+    """尾帧分句自己已写「停住」，不是停在过程态."""
+    shot = _shot(1, ff_desc="甲松开手", lf_desc="灯盏缓缓沉入水底后停住",
+                 motion_desc="甲松手，灯盏坠向水面")
+    assert "LF_PROCESS_STATE" not in _codes(scan_script(_script(shot)))
+
+
+def test_lf_process_state_across_time_jump_is_legal():
+    shot = _shot(1, context_bridge="次日清晨", ff_desc="甲松开手",
+                 lf_desc="灯盏缓缓沉入水底", motion_desc="甲松手，灯盏坠向水面")
+    assert "LF_PROCESS_STATE" not in _codes(scan_script(_script(shot)))
+
+
+# ---------------------------------------------------------------------------
+# 6. 新增台词（带/不带对照源）
+# ---------------------------------------------------------------------------
+
+def _dialogue_script(narration: str) -> dict:
+    return _script(_shot(1, narration_segment=narration),
+                   characters=[{"identifier": "甲", "static_features": ""}])
+
+
+def test_added_dialogue_without_source_is_not_reported():
+    """没有对照源就无法判定「新增」，该码不产出."""
+    script = _dialogue_script("甲道：我们明早就走。")
+    assert "ADDED_DIALOGUE" not in _codes(scan_script(script))
+
+
+def test_added_dialogue_with_source_is_reported():
+    script = _dialogue_script("甲道：我们明早就走。")
+    findings = [f for f in scan_script(script, source_text="甲道：今夜就走。")
+                if f["code"] == "ADDED_DIALOGUE"]
+    assert len(findings) == 1
+    assert findings[0]["shot_id"] == "1"
+    assert findings[0]["field_path"] == "narration_segment"
+    assert findings[0]["evidence"] == "我们明早就走。"
+
+
+def test_verbatim_dialogue_with_source_is_legal():
+    script = _dialogue_script("甲道：今夜就走。")
+    assert "ADDED_DIALOGUE" not in _codes(
+        scan_script(script, source_text="甲道：今夜就走。"))
+
+
+def test_added_quoted_dialogue_is_reported():
+    script = _dialogue_script("甲道：「我们明早就走。」")
+    findings = [f for f in scan_script(script, source_text="甲道：「今夜就走。」")
+                if f["code"] == "ADDED_DIALOGUE"]
+    assert len(findings) == 1
+    assert findings[0]["evidence"] == "我们明早就走。"
+
+
+def test_unquoted_narration_is_not_treated_as_dialogue():
+    """纯叙述/无显式说话人前缀的文本不参与「新增台词」判定（避免误伤旁白改编）."""
+    script = _dialogue_script("甲推门走进屋内")
+    assert "ADDED_DIALOGUE" not in _codes(
+        scan_script(script, source_text="乙立于院中"))
+
+
+# ---------------------------------------------------------------------------
+# 7. 裁决接线
 # ---------------------------------------------------------------------------
 
 def test_adjudication_confirms_framing_finding():
