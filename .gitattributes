@@ -1,0 +1,4 @@
+# 版本化受控快照必须字节级保真。
+# baselines/.../manifest.json 里的 sha256 按原始字节计算；core.autocrlf=true 会在
+# checkout 时把 LF 改成 CRLF，导致干净 checkout 后 --verify 全部失配。
+baselines/** -text
