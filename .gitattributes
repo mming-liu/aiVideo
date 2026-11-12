@@ -1,6 +1,8 @@
-# 版本化受控快照与三族夹具必须字节级保真。
-# 它们的 manifest.json 按文件原始字节记录 sha256；core.autocrlf=true 会在 add 时把
-# CRLF 规范化成 LF、在 checkout 时再转回 CRLF，两种方向都会让摘要失配。
-# -text 禁止任何 eol 转换，保证干净 checkout 后 --verify 与夹具字节校验仍成立。
+# baselines/ 里的证据文件保留原始字节（多数为 CRLF），manifest.json 的 sha256
+# 按原始字节记录；core.autocrlf=true 会在 add/checkout 时改写它们，导致摘要失配。
+# -text 禁止任何 eol 转换，保证干净 checkout 后 compare.py --verify 成立。
 baselines/** -text
-tests/shared/fixtures/execution_contract/** -text
+
+# 三族受控夹具由会话生成为 LF，manifest.json 的 sha256 按 LF 字节记录。
+# 强制 LF 可避免 autocrlf=true 在 checkout 时写成 CRLF 使字节校验失败。
+tests/shared/fixtures/execution_contract/** text eol=lf
