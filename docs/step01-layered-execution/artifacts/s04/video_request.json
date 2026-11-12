@@ -1,0 +1,227 @@
+{
+  "request_id": "req-20032-1794448412123598300",
+  "provider": "stub",
+  "model_id": "stub-model-1",
+  "mode": "text",
+  "prompt": "[中景] 夜台，阿遥抱琴面向听众席，开口说话",
+  "media_mode": "none",
+  "parameters": {
+    "duration": 5.0,
+    "size": "720x1280",
+    "seed": null,
+    "negative_prompt": "",
+    "camera_movement": ""
+  },
+  "references": [],
+  "requirements": {
+    "execution": {
+      "schema": "video_execution_requirements.v1",
+      "semantic_shot": {
+        "shot_id": "shot-3",
+        "shot_index": 3,
+        "main_subject": "乐师阿遥",
+        "source_spans": [],
+        "plan_refs": {},
+        "start_end_state": {
+          "start": {
+            "desc": "阿遥坐在夜台中央，双手扶琴",
+            "layout": [
+              {
+                "name": "乐师阿遥",
+                "on_screen": true,
+                "position": "夜台中央",
+                "pose": "抱琴坐姿",
+                "gaze_target": "听众席",
+                "props": [
+                  "琴"
+                ]
+              }
+            ]
+          },
+          "end": {
+            "desc": "阿遥说完后低头拨弦，琴身微微前倾",
+            "layout": [
+              {
+                "name": "乐师阿遥",
+                "on_screen": true,
+                "position": "夜台中央",
+                "pose": "低头拨弦",
+                "gaze_target": "琴弦",
+                "props": [
+                  "琴"
+                ]
+              }
+            ]
+          }
+        },
+        "required_events": [
+          {
+            "order": 1,
+            "event": "阿遥抬头说话",
+            "source": "motion_desc"
+          },
+          {
+            "order": 2,
+            "event": "低头拨弦",
+            "source": "motion_desc"
+          }
+        ],
+        "action_order": [
+          "阿遥抬头说话",
+          "低头拨弦"
+        ]
+      },
+      "production_fragments": [],
+      "references": {
+        "mode": "image",
+        "materials": [],
+        "unsupported_roles": [],
+        "unverified": [
+          "no_reference_material_used"
+        ]
+      },
+      "audio": {
+        "policy": {
+          "native_voice": false,
+          "tts_required": true,
+          "effective_merge_mode": "tts_mix",
+          "narration_tts_required": true,
+          "reason": "video model doubao-seedance-1-0-pro-250528 has no native audio"
+        },
+        "has_dialogue": true,
+        "has_narration": false,
+        "retained_voice_identity": [
+          {
+            "unit_id": "d01",
+            "kind": "native_dialogue",
+            "speaker": "乐师阿遥",
+            "text": "这一曲，送你。",
+            "verified": true,
+            "actual_sec": 2.4,
+            "window_sec": 4.0
+          }
+        ],
+        "native_voice_requires_verification": true,
+        "continuity": {
+          "semantic_shot_id": "shot-3",
+          "fragment_ids": [],
+          "same_semantic_shot": true,
+          "voice_units": [
+            "d01"
+          ],
+          "note": "片段拆分只重排同一语义镜头内的制作粒度；声音单元仍绑同一 shot_index，不跨镜换说话人/改正文"
+        }
+      },
+      "duration": {
+        "planned_sec": 5.0,
+        "model_range": [
+          0,
+          0
+        ],
+        "unverified": []
+      },
+      "visual_plan": {
+        "digest": "a77c62bbf445317cfb3e4448b6916010b67e6e6ed1b5ab85ea400c9d1b63d730",
+        "frames": [
+          "shot-3:ff",
+          "shot-3:lf"
+        ],
+        "visible_characters": [
+          "乐师阿遥"
+        ],
+        "offscreen_speakers": []
+      },
+      "audio_artifacts": {
+        "digest": "0d8da72dfbe196add0c0f46bc5b7c41fefefa645a33274135259fe28ce562145",
+        "units": [
+          {
+            "unit_id": "d01",
+            "kind": "native_dialogue",
+            "speaker": "乐师阿遥",
+            "text": "这一曲，送你。",
+            "verified": true,
+            "actual_sec": 2.4,
+            "window_sec": 4.0
+          }
+        ]
+      },
+      "theoretical_shot_index": 3,
+      "issues": [],
+      "unverified": []
+    }
+  },
+  "source": {
+    "scope": {
+      "chapter": 7,
+      "book_index": 1,
+      "book_name": "匿名样本C"
+    },
+    "shot_id": "shot-3",
+    "shot_index": 3,
+    "script_revision": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+    "source_spans": [],
+    "semantic_shot": {
+      "shot_id": "shot-3",
+      "shot_index": 3,
+      "main_subject": "乐师阿遥",
+      "source_spans": [],
+      "plan_refs": {},
+      "start_end_state": {
+        "start": {
+          "desc": "阿遥坐在夜台中央，双手扶琴",
+          "layout": [
+            {
+              "name": "乐师阿遥",
+              "on_screen": true,
+              "position": "夜台中央",
+              "pose": "抱琴坐姿",
+              "gaze_target": "听众席",
+              "props": [
+                "琴"
+              ]
+            }
+          ]
+        },
+        "end": {
+          "desc": "阿遥说完后低头拨弦，琴身微微前倾",
+          "layout": [
+            {
+              "name": "乐师阿遥",
+              "on_screen": true,
+              "position": "夜台中央",
+              "pose": "低头拨弦",
+              "gaze_target": "琴弦",
+              "props": [
+                "琴"
+              ]
+            }
+          ]
+        }
+      },
+      "required_events": [
+        {
+          "order": 1,
+          "event": "阿遥抬头说话",
+          "source": "motion_desc"
+        },
+        {
+          "order": 2,
+          "event": "低头拨弦",
+          "source": "motion_desc"
+        }
+      ],
+      "action_order": [
+        "阿遥抬头说话",
+        "低头拨弦"
+      ]
+    },
+    "production_fragments": [],
+    "visual_plan_digest": "a77c62bbf445317cfb3e4448b6916010b67e6e6ed1b5ab85ea400c9d1b63d730",
+    "audio_digest": "0d8da72dfbe196add0c0f46bc5b7c41fefefa645a33274135259fe28ce562145",
+    "execution_requirements_schema": "video_execution_requirements.v1"
+  },
+  "capability_revision": null,
+  "media_selection": {},
+  "request_key": "010d3e92dcd9ca7b22de4764d5a2e091aa2a28df26ec62fea7fdf63a6b139245",
+  "schema_version": "video_request.v1"
+}

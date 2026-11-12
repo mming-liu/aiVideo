@@ -11,13 +11,17 @@ import pytest
 
 from shared.execution_contract import (
     CONTRACT_VERSION,
+    GUARDED_SEGMENTS,
     SCHEMA,
     ExecutionContractError,
+    attach_semantic_checks,
     build_execution_binding,
     script_digest,
+    unresolved_gate_issues,
     validate_execution_binding,
     validate_execution_changes,
 )
+from shared.execution_semantics import check_execution_semantics
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "execution_contract"
 STAGE = "step02a.visual_plan"
@@ -356,11 +360,20 @@ def _with_reason(binding: dict, path: str, reason: str = "执行细化") -> dict
     return binding
 
 
+def _with_semantic_pass(binding: dict, path: str) -> dict:
+    binding = copy.deepcopy(binding)
+    binding.setdefault("checks", []).append(
+        {"kind": "semantic", "checker": "execution_semantics.v1",
+         "status": "pass", "path": path})
+    return binding
+
+
 def test_validate_changes_allows_declared_execution_field():
     before = _execution_before()
     after = copy.deepcopy(before)
     after["shots"][0]["prompt"] = "甲在门口停步"
-    binding = _with_reason(_binding(), "shots[0].prompt")
+    binding = _with_semantic_pass(_with_reason(_binding(), "shots[0].prompt"),
+                                  "shots[0].prompt")
     issues = validate_execution_changes(before, after, binding=binding,
                                         allowed_changes=["prompt"])
     assert issues == []
@@ -402,13 +415,14 @@ def test_validate_changes_rejects_protected_fields_even_if_allowed():
 def test_validate_changes_requires_reason(changes):
     before = _execution_before()
     after = copy.deepcopy(before)
-    after["shots"][0]["prompt"] = "甲在门口停步"
+    # 用非语义承载字段验证「已授权但仍缺理由」，避免和 guarded 字段检查混在一起。
+    after["shots"][0]["camera_movement"] = "推近"
     binding = _binding()
     binding["changes"] = changes
     issues = validate_execution_changes(before, after, binding=binding,
-                                        allowed_changes=["prompt"])
+                                        allowed_changes=["camera_movement"])
     assert "change_reason_missing" in _codes(issues)
-    assert "shots[0].prompt" in _paths(issues)
+    assert "shots[0].camera_movement" in _paths(issues)
 
 
 def test_validate_changes_missing_or_unknown_binding():
@@ -428,16 +442,16 @@ def test_validate_changes_missing_or_unknown_binding():
 def test_validate_changes_invalid_allowed_changes():
     before = _execution_before()
     after = copy.deepcopy(before)
-    after["shots"][0]["prompt"] = "甲在门口停步"
+    after["shots"][0]["camera_movement"] = "推近"
     binding = _binding()
 
     issues = validate_execution_changes(before, after, binding=binding,
-                                        allowed_changes="prompt")
+                                        allowed_changes="camera_movement")
     assert "allowed_changes_invalid" in _codes(issues)
     assert "change_not_allowed" in _codes(issues)
 
     issues = validate_execution_changes(before, after, binding=binding,
-                                        allowed_changes=["prompt", "   "])
+                                        allowed_changes=["camera_movement", "   "])
     assert "allowed_changes_invalid" in _codes(issues)
     assert "allowed_changes[1]" in _paths(issues)
 
@@ -462,7 +476,7 @@ def test_validate_changes_parent_permission_covers_child():
     before = _execution_before()
     after = copy.deepcopy(before)
     after["visual_plan"]["visible_characters"] = ["甲", "乙"]
-    binding = _with_reason(_binding(), "visual_plan")
+    binding = _with_semantic_pass(_with_reason(_binding(), "visual_plan"), "visual_plan")
     issues = validate_execution_changes(before, after, binding=binding,
                                         allowed_changes=["visual_plan"])
     assert issues == []
@@ -556,3 +570,82 @@ def test_fixture_voice_timing_legal_change_and_text_protection():
                          "voice_units[2].actual_sec", "audio_windows",
                          "voice_units[1].text"])
     assert "protected_field_change" in _codes(issues)
+
+
+# ---------------------------------------------------------------------------
+# S02 R3：prompt / visible_characters 不能绕过语义保护
+# ---------------------------------------------------------------------------
+
+def test_guarded_prompt_change_without_semantic_check_is_rejected():
+    before = _execution_before()
+    after = copy.deepcopy(before)
+    after["shots"][0]["prompt"] = "甲在门口停步"
+    binding = _with_reason(_binding(), "shots[0].prompt")
+    issues = validate_execution_changes(before, after, binding=binding,
+                                        allowed_changes=["prompt"])
+    assert "semantic_change_unverified" in _codes(issues)
+    record = next(i for i in issues if i["code"] == "semantic_change_unverified")
+    assert record["route"] == "step01"
+    assert record["feedback"][0]["path"] == "shots[0].prompt"
+    assert "prompt" in GUARDED_SEGMENTS
+
+
+def test_offscreen_visible_bypass_is_rejected_even_if_allowed():
+    family = _load_family("offscreen_voice")
+    baseline = family["baseline"]
+    mutation = family["mutation"]
+    after = mutation["execution"]["candidate"]
+    before = baseline["execution"]["candidate"]
+    binding = build_execution_binding(
+        mutation["script"], scope=family["scope"],
+        stage=mutation["execution"]["stage"],
+        source_digest=script_digest(mutation["script"]))
+    allowed = ["prompt", "frame_layouts", "visual_plan.visible_characters",
+               "visual_plan", "visual_plan.offscreen_speakers"]
+    binding["changes"] = [{"path": "visual_plan", "reason": "执行细化"},
+                          {"path": "shots", "reason": "执行细化"}]
+    issues = validate_execution_changes(before, after, binding=binding,
+                                        allowed_changes=allowed)
+    paths = _paths(issues)
+    assert "visual_plan.visible_characters[1]" in paths
+    assert _codes(issues) <= {"semantic_change_unverified", "change_reason_missing"}
+
+    findings = check_execution_semantics(mutation["script"], after)
+    binding = attach_semantic_checks(binding, checked_paths=allowed, findings=findings)
+    assert {u["code"] for u in binding["unresolved"]} >= {
+        "offscreen_speaker_visible", "listener_reaction_missing"}
+    assert any(f["route"] == "step01" for f in binding["feedback"])
+    assert "semantic_change_unverified" in _codes(unresolved_gate_issues(binding))
+    issues = validate_execution_changes(before, after, binding=binding,
+                                        allowed_changes=allowed)
+    assert "semantic_change_unverified" in _codes(issues)
+
+
+def test_semantic_pass_record_allows_guarded_execution_refinement():
+    before = _execution_before()
+    after = copy.deepcopy(before)
+    after["shots"][0]["prompt"] = "甲在门口停步"
+    script = _mini_script()
+    binding = build_execution_binding(
+        script, scope=_scope(), stage=STAGE, source_digest=script_digest(script))
+    binding = attach_semantic_checks(binding, checked_paths=["shots[0].prompt"],
+                                     findings=[])
+    binding["changes"] = [{"path": "shots[0].prompt", "reason": "构图细化"}]
+    assert validate_execution_changes(before, after, binding=binding,
+                                      allowed_changes=["prompt"]) == []
+    assert unresolved_gate_issues(binding) == []
+
+
+def test_protection_is_configurable_per_binding():
+    script = _mini_script()
+    binding = build_execution_binding(
+        script, scope=_scope(), stage=STAGE, source_digest=script_digest(script),
+        protection={"guarded_segments": ["camera_movement"]})
+    assert "camera_movement" in binding["protection"]["guarded_segments"]
+    before = _execution_before()
+    after = copy.deepcopy(before)
+    after["shots"][0]["camera_movement"] = "推近"
+    binding["changes"] = [{"path": "shots[0].camera_movement", "reason": "运镜"}]
+    issues = validate_execution_changes(before, after, binding=binding,
+                                        allowed_changes=["camera_movement"])
+    assert "semantic_change_unverified" in _codes(issues)

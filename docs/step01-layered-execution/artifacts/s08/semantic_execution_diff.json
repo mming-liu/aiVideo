@@ -1,0 +1,294 @@
+{
+  "schema": "s08_semantic_execution_diff.v1",
+  "rows": [
+    {
+      "family": "temporal_ellipsis",
+      "sides": {
+        "baseline": {
+          "execution_fields_changed": [
+            "shots"
+          ],
+          "prompt_refined": true,
+          "candidate_visible_characters": null,
+          "protected_values": {
+            "fact_uids": [
+              "f01",
+              "f02",
+              "f03"
+            ],
+            "required_facts": [
+              "工匠阿岚接下老邵的修船单，船底有一道裂缝。",
+              "三日后，阿岚用打磨、填缝、上漆的常规工序补好船底。",
+              "老邵来取船，确认船底已补好并把船推走。"
+            ],
+            "dialogue_lines": [
+              "补得不错。"
+            ],
+            "narration_lines": [
+              {
+                "text": "三日后，阿岚把船底裂缝补好。",
+                "source": "三日后，阿岚把船底裂缝补好。",
+                "fact_refs": [
+                  2
+                ]
+              }
+            ],
+            "voice_units": []
+          },
+          "semantic_codes": []
+        },
+        "mutation": {
+          "execution_fields_changed": [
+            "shots"
+          ],
+          "prompt_refined": true,
+          "candidate_visible_characters": null,
+          "protected_values": {
+            "fact_uids": [
+              "f01",
+              "f03"
+            ],
+            "required_facts": [
+              "工匠阿岚接下老邵的修船单，船底有一道裂缝。",
+              "老邵来取船，确认船已修好并把船推走。"
+            ],
+            "dialogue_lines": [
+              "补得不错。"
+            ],
+            "narration_lines": [],
+            "voice_units": []
+          },
+          "semantic_codes": [
+            "causal_gap",
+            "time_ellipsis_lost"
+          ]
+        }
+      }
+    },
+    {
+      "family": "offscreen_voice",
+      "sides": {
+        "baseline": {
+          "execution_fields_changed": [
+            "shots",
+            "visual_plan"
+          ],
+          "prompt_refined": true,
+          "candidate_visible_characters": [
+            "值守者阿澄"
+          ],
+          "protected_values": {
+            "fact_uids": [
+              "f01",
+              "f02",
+              "f03"
+            ],
+            "required_facts": [
+              "门外来客只以画外声音出现，始终没有进入画面。",
+              "值守者阿澄用转头和凝视回应画外声音，没有开口对上门口型。",
+              "一封信从门缝塞入，阿澄低头拾起。"
+            ],
+            "dialogue_lines": [
+              "灯还亮着吗？",
+              "我听见了。"
+            ],
+            "narration_lines": [
+              {
+                "text": "门外来客的声音穿过门缝。",
+                "source": "门外来客的声音穿过门缝。",
+                "fact_refs": [
+                  1
+                ]
+              }
+            ],
+            "voice_units": [
+              {
+                "unit_id": "d01",
+                "kind": "offscreen_dialogue",
+                "speaker": "门外来客",
+                "text": "灯还亮着吗？"
+              },
+              {
+                "unit_id": "d02",
+                "kind": "offscreen_dialogue",
+                "speaker": "值守者阿澄",
+                "text": "我听见了。"
+              }
+            ]
+          },
+          "semantic_codes": []
+        },
+        "mutation": {
+          "execution_fields_changed": [
+            "shots",
+            "visual_plan"
+          ],
+          "prompt_refined": true,
+          "candidate_visible_characters": [
+            "值守者阿澄",
+            "门外来客"
+          ],
+          "protected_values": {
+            "fact_uids": [
+              "f01",
+              "f02",
+              "f03"
+            ],
+            "required_facts": [
+              "门外来客推门进入画面，站在值守者阿澄对面。",
+              "值守者阿澄没有转头或凝视回应，继续背对镜头擦灯。",
+              "一封信从门缝塞入，阿澄低头拾起。"
+            ],
+            "dialogue_lines": [
+              "灯还亮着吗？",
+              "我听见了。"
+            ],
+            "narration_lines": [
+              {
+                "text": "门外来客的声音穿过门缝。",
+                "source": "门外来客的声音穿过门缝。",
+                "fact_refs": [
+                  1
+                ]
+              }
+            ],
+            "voice_units": [
+              {
+                "unit_id": "d01",
+                "kind": "offscreen_dialogue",
+                "speaker": "门外来客",
+                "text": "灯还亮着吗？"
+              },
+              {
+                "unit_id": "d02",
+                "kind": "offscreen_dialogue",
+                "speaker": "值守者阿澄",
+                "text": "我听见了。"
+              }
+            ]
+          },
+          "semantic_codes": [
+            "listener_reaction_missing",
+            "offscreen_speaker_visible"
+          ]
+        }
+      }
+    },
+    {
+      "family": "voice_timing",
+      "sides": {
+        "baseline": {
+          "execution_fields_changed": [
+            "audio_windows",
+            "voice_units"
+          ],
+          "prompt_refined": false,
+          "candidate_visible_characters": null,
+          "protected_values": {
+            "fact_uids": [
+              "f01",
+              "f02",
+              "f03"
+            ],
+            "required_facts": [
+              "乐师阿遥在夜台弹琴，并对听众说“这一曲，送你”。",
+              "听众阿岚听完后回应“再弹一曲”。",
+              "旁白交代琴声落下后阿岚没有起身。"
+            ],
+            "dialogue_lines": [
+              "这一曲，送你。",
+              "再弹一曲。"
+            ],
+            "narration_lines": [
+              {
+                "text": "琴声落下，阿岚没有起身。",
+                "source": "琴声落下，阿岚没有起身。",
+                "fact_refs": [
+                  3
+                ]
+              }
+            ],
+            "voice_units": [
+              {
+                "unit_id": "d01",
+                "kind": "native_dialogue",
+                "speaker": "乐师阿遥",
+                "text": "这一曲，送你。"
+              },
+              {
+                "unit_id": "d02",
+                "kind": "tts_dialogue",
+                "speaker": "听众阿岚",
+                "text": "再弹一曲。"
+              },
+              {
+                "unit_id": "n01",
+                "kind": "narration",
+                "speaker": "",
+                "text": "琴声落下，阿岚没有起身。"
+              }
+            ]
+          },
+          "semantic_codes": []
+        },
+        "mutation": {
+          "execution_fields_changed": [
+            "audio_windows",
+            "voice_units"
+          ],
+          "prompt_refined": false,
+          "candidate_visible_characters": null,
+          "protected_values": {
+            "fact_uids": [
+              "f01",
+              "f02",
+              "f03"
+            ],
+            "required_facts": [
+              "乐师阿遥在夜台弹琴，并对听众说“这一曲，送你”。",
+              "听众阿岚听完后回应“再弹一曲”。",
+              "旁白交代琴声落下后阿岚没有起身。"
+            ],
+            "dialogue_lines": [
+              "这一曲，送你。",
+              "再弹一曲。"
+            ],
+            "narration_lines": [
+              {
+                "text": "琴声落下，阿岚没有起身。",
+                "source": "琴声落下，阿岚没有起身。",
+                "fact_refs": [
+                  3
+                ]
+              }
+            ],
+            "voice_units": [
+              {
+                "unit_id": "d01",
+                "kind": "native_dialogue",
+                "speaker": "乐师阿遥",
+                "text": "这一曲，送你。"
+              },
+              {
+                "unit_id": "d02",
+                "kind": "tts_dialogue",
+                "speaker": "听众阿岚",
+                "text": "再弹一曲。"
+              },
+              {
+                "unit_id": "n01",
+                "kind": "narration",
+                "speaker": "",
+                "text": "琴声落下，阿岚没有起身。"
+              }
+            ]
+          },
+          "semantic_codes": [
+            "audio_window_overflow",
+            "native_dialogue_unverified"
+          ]
+        }
+      }
+    }
+  ]
+}

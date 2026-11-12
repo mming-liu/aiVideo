@@ -192,6 +192,8 @@ class MergeTimeline:
     subtitle_plan: SubtitlePlan | None = None
     overlays: tuple[OverlayEntry, ...] = ()
     source: dict = field(default_factory=dict)
+    #: S06 验收记录：实测时长/音轨/字幕/转场/正片与钩子口径。合成前后都写这里。
+    acceptance: dict = field(default_factory=dict)
 
     # -- 计算属性（与编译共用同一套函数，不各自实现） --
     @property
@@ -246,6 +248,7 @@ class MergeTimeline:
                 "fallbacks": [dict(f) for f in self.subtitle_plan.fallbacks],
             },
             "source": dict(self.source),
+            "acceptance": dict(self.acceptance),
         }
 
 
@@ -626,6 +629,244 @@ def validate_overlays(timeline: MergeTimeline, clips, windows) -> tuple[OverlayE
                                                 float(o.start_sec))))
 
 
+# ------------------------------------------------------------------ 时间轴验收（S06）
+
+def _probe_media(path) -> dict:
+    """本地 ffprobe；工具不可用时返回 ``unavailable``，不猜时长."""
+    try:
+        from shared.media_inspect import ffprobe_executable, probe_media
+        if not ffprobe_executable():
+            return {"status": "unavailable", "reason": "ffprobe_unavailable"}
+        info = probe_media(path)
+        return {"status": "ok", "probe": info} if isinstance(info, dict) else {
+            "status": "unavailable", "reason": "probe_unreadable"}
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "unavailable", "reason": str(exc)[:300]}
+
+
+def _probe_duration_audio(path) -> tuple[float | None, bool | None, dict]:
+    result = _probe_media(path)
+    if result.get("status") != "ok":
+        return None, None, result
+    info = result["probe"]
+    duration = info.get("duration_sec")
+    if not isinstance(duration, (int, float)):
+        fmt = info.get("format") or {}
+        duration = fmt.get("duration") if isinstance(fmt, dict) else None
+    has_audio = info.get("has_audio")
+    if has_audio is None:
+        streams = info.get("streams") or []
+        has_audio = any(str(s.get("codec_type")) == "audio" for s in streams
+                        if isinstance(s, dict))
+    return (float(duration) if isinstance(duration, (int, float)) else None,
+            bool(has_audio) if has_audio is not None else None, result)
+
+
+def build_timeline_acceptance(timeline: MergeTimeline, *,
+                              expected_body_sec: float | None = None,
+                              expected_hook_sec: float | None = None,
+                              duration_tolerance_sec: float | None = None,
+                              required_audio: bool | None = None) -> dict:
+    """合成前的完整时间轴验收：实测片段/音轨、转场、字幕、正片与钩子口径.
+
+    - 片段：逐条 ffprobe 实际时长 + 音频流，与 ``raw_duration_sec`` 对账；
+    - 音轨：逐条实测时长，逐镜 TTS 必须落在对应 clip 窗口，旁白必须落在声明的
+      start/end 内；
+    - 字幕：每条 cue 必须落在成片总长内（越界给 cue_id 与差额）；
+    - 正片/钩子：分别累计（hook 与 shot 身份分开），并报告边界转场重叠；
+    - 时长不足/超长：返回 ``delta_sec`` 与受影响 clip，不自动拉长/截断。
+    """
+    if not isinstance(timeline, MergeTimeline):
+        raise TimelineError("timeline_invalid", "验收对象必须是 MergeTimeline")
+    fps = max(1, int(timeline.fps))
+    tolerance = (1.0 / fps if duration_tolerance_sec is None
+                 else float(duration_tolerance_sec))
+    windows = timeline.windows
+    total = timeline.total_duration_sec
+    issues: list[dict] = []
+    clips_report: list[dict] = []
+    for i, clip in enumerate(timeline.clips):
+        actual, has_audio, probe = _probe_duration_audio(clip.path)
+        declared = float(clip.raw_duration_sec)
+        row = {
+            "clip_index": i, "shot_index": clip.shot_index, "kind": clip.kind,
+            "stable_id": clip.stable_id, "path": str(clip.path),
+            "declared_sec": round(declared, 6),
+            "actual_sec": None if actual is None else round(actual, 6),
+            "has_audio": has_audio,
+            "probe_status": probe.get("status"),
+            "window": {"start_sec": windows[i].start_sec, "end_sec": windows[i].end_sec},
+        }
+        if actual is None:
+            issues.append({"code": "clip_duration_unmeasured", "clip_index": i,
+                           "path": str(clip.path),
+                           "message": "片段实测时长不可得（ffprobe 不可用/不可读）"})
+        elif abs(actual - declared) > tolerance:
+            row["delta_sec"] = round(actual - declared, 6)
+            issues.append({"code": "clip_duration_mismatch", "clip_index": i,
+                           "shot_index": clip.shot_index,
+                           "path": str(clip.path),
+                           "message": f"片段实测 {actual:.3f}s 与声明 {declared:.3f}s 不符",
+                           "delta_sec": round(actual - declared, 6)})
+        clips_report.append(row)
+
+    audio_report: list[dict] = []
+    if (required_audio is True and not timeline.audio_tracks
+            and not any(c.has_audio for c in timeline.clips)):
+        issues.append({"code": "audio_track_missing", "path": "timeline.audio_tracks",
+                       "message": "audio_mode=tts_mix 但既没有额外音轨，也没有带音频的片段"})
+    for track in timeline.audio_tracks:
+        actual, has_audio, probe = _probe_duration_audio(track.path)
+        row = {"kind": track.kind, "stable_id": track.stable_id,
+               "path": str(track.path), "clip_index": track.clip_index,
+               "start_sec": track.start_sec, "end_sec": track.end_sec,
+               "actual_sec": None if actual is None else round(actual, 6),
+               "probe_status": probe.get("status"), "has_audio": has_audio}
+        if actual is None:
+            issues.append({"code": "audio_duration_unmeasured",
+                           "stable_id": track.stable_id, "path": str(track.path),
+                           "message": "音轨实测时长不可得"})
+        elif track.kind == "shot_tts" and track.clip_index is not None:
+            window = windows[int(track.clip_index)]
+            if actual > window.duration_sec + 1.0 / fps:
+                row["overflow_sec"] = round(actual - window.duration_sec, 6)
+                issues.append({
+                    "code": "audio_window_overflow", "stable_id": track.stable_id,
+                    "clip_index": int(track.clip_index),
+                    "shot_index": timeline.clips[int(track.clip_index)].shot_index,
+                    "path": str(track.path),
+                    "message": f"逐镜音轨 {actual:.3f}s 超过镜头窗口 "
+                               f"{window.duration_sec:.3f}s",
+                    "overflow_sec": round(actual - window.duration_sec, 6)})
+        elif track.kind == "narration":
+            start = float(track.start_sec or 0.0)
+            declared_end = float(track.end_sec or 0.0)
+            if actual > (declared_end - start) + 1.0 / fps:
+                row["overflow_sec"] = round(actual - (declared_end - start), 6)
+                issues.append({
+                    "code": "audio_window_overflow", "stable_id": track.stable_id,
+                    "path": str(track.path),
+                    "message": f"旁白实测 {actual:.3f}s 超过声明窗口 "
+                               f"{declared_end - start:.3f}s",
+                    "overflow_sec": round(actual - (declared_end - start), 6)})
+            if declared_end > total + 1.0 / fps:
+                issues.append({"code": "audio_window_out_of_timeline",
+                               "stable_id": track.stable_id,
+                               "message": "旁白落点超出成片总长"})
+        audio_report.append(row)
+
+    subtitle_rows: list[dict] = []
+    if timeline.subtitle_plan is not None:
+        for cue in timeline.subtitle_plan.cues:
+            row = {"cue_id": cue.cue_id, "start_sec": cue.start_sec,
+                   "end_sec": cue.end_sec, "shot_index": cue.shot_index}
+            if cue.start_sec < -1.0 / fps or cue.end_sec > total + 1.0 / fps:
+                row["overflow_sec"] = round(cue.end_sec - total, 6)
+                issues.append({
+                    "code": "subtitle_out_of_window", "cue_id": cue.cue_id,
+                    "path": f"subtitle.cues[{cue.cue_id}]",
+                    "message": f"字幕 {cue.cue_id} 落在成片总长 {total:.3f}s 之外",
+                    "overflow_sec": round(cue.end_sec - total, 6)})
+            subtitle_rows.append(row)
+
+    hook_sec = round(sum(c.duration_sec for c in timeline.clips if c.kind == "hook"), 6)
+    body_sec = round(sum(c.duration_sec for c in timeline.clips if c.kind == "shot"), 6)
+    overlap = round(sum(float(b.duration_sec) for b in timeline.boundary_transitions
+                        if b.kind != BOUNDARY_CUT), 6)
+    duration = {
+        "hook_sec": hook_sec,
+        "body_sec": body_sec,
+        "transition_overlap_sec": overlap,
+        "total_sec": round(total, 6),
+        "expected_hook_sec": expected_hook_sec,
+        "expected_body_sec": expected_body_sec,
+        "hook_delta_sec": (None if expected_hook_sec is None
+                           else round(hook_sec - float(expected_hook_sec), 6)),
+        "body_delta_sec": (None if expected_body_sec is None
+                           else round(body_sec - float(expected_body_sec), 6)),
+    }
+    if expected_body_sec is not None:
+        delta = body_sec - float(expected_body_sec)
+        if delta < -tolerance:
+            duration["shortfall_sec"] = round(-delta, 6)
+            issues.append({
+                "code": "timeline_duration_short", "path": "timeline.body",
+                "message": f"正片 {body_sec:.3f}s 比计划 {expected_body_sec:.3f}s "
+                           f"少 {abs(delta):.3f}s",
+                "delta_sec": round(delta, 6),
+                "affected_clips": [
+                    {"clip_index": i, "shot_index": c.shot_index,
+                     "duration_sec": round(c.duration_sec, 6)}
+                    for i, c in enumerate(timeline.clips) if c.kind == "shot"]})
+        elif delta > tolerance:
+            duration["excess_sec"] = round(delta, 6)
+            issues.append({
+                "code": "timeline_duration_long", "path": "timeline.body",
+                "message": f"正片 {body_sec:.3f}s 比计划 {expected_body_sec:.3f}s "
+                           f"多 {delta:.3f}s",
+                "delta_sec": round(delta, 6),
+                "affected_clips": [
+                    {"clip_index": i, "shot_index": c.shot_index,
+                     "duration_sec": round(c.duration_sec, 6)}
+                    for i, c in enumerate(timeline.clips) if c.kind == "shot"]})
+    if expected_hook_sec is not None:
+        delta = hook_sec - float(expected_hook_sec)
+        if abs(delta) > tolerance:
+            issues.append({
+                "code": "timeline_hook_duration_mismatch", "path": "timeline.hook",
+                "message": f"钩子 {hook_sec:.3f}s 与计划 {expected_hook_sec:.3f}s 相差 "
+                           f"{delta:.3f}s", "delta_sec": round(delta, 6)})
+    status = "blocked" if any(i["code"] in {
+        "clip_duration_mismatch", "clip_duration_unmeasured",
+        "audio_window_overflow", "audio_window_out_of_timeline",
+        "subtitle_out_of_window", "timeline_duration_short",
+        "timeline_duration_long", "timeline_hook_duration_mismatch",
+        "audio_duration_unmeasured", "audio_track_missing"} for i in issues) else "pass"
+    return {
+        "schema": "timeline_acceptance.v1",
+        "status": status,
+        "clips": clips_report,
+        "audio_tracks": audio_report,
+        "subtitles": subtitle_rows,
+        "overlays": [{"overlay_id": o.overlay_id, "shot_index": o.shot_index,
+                      "start_sec": o.start_sec, "end_sec": o.end_sec,
+                      "kind": o.kind} for o in timeline.overlays],
+        "duration": duration,
+        "issues": issues,
+        "codes": sorted({i["code"] for i in issues}),
+    }
+
+
+def verify_rendered_output(path, timeline: MergeTimeline, acceptance: dict | None = None,
+                           *, tolerance_sec: float = 0.15) -> dict:
+    """合成后复核：成片时长、音频轨道是否真的存在.</"""
+    actual, has_audio, probe = _probe_duration_audio(path)
+    issues: list[dict] = []
+    expected_total = timeline.total_duration_sec
+    if actual is None:
+        issues.append({"code": "rendered_unmeasured", "path": str(path),
+                       "message": "成片无法用 ffprobe 读取"})
+    elif abs(actual - expected_total) > tolerance_sec:
+        issues.append({"code": "rendered_duration_mismatch", "path": str(path),
+                       "message": f"成片 {actual:.3f}s 与时间轴 {expected_total:.3f}s 不符",
+                       "delta_sec": round(actual - expected_total, 6)})
+    if timeline.audio_tracks and has_audio is False:
+        issues.append({"code": "rendered_audio_missing", "path": str(path),
+                       "message": "时间轴声明了额外音轨，但成片没有音频流"})
+    return {
+        "schema": "rendered_timeline_check.v1",
+        "status": "pass" if not issues else "blocked",
+        "path": str(path),
+        "actual_sec": None if actual is None else round(actual, 6),
+        "expected_sec": round(expected_total, 6),
+        "has_audio": has_audio,
+        "probe_status": probe.get("status"),
+        "acceptance_status_at_render": (acceptance or {}).get("status"),
+        "issues": issues,
+        "codes": sorted({i["code"] for i in issues}),
+    }
+
+
 # ------------------------------------------------------------------ 动效计划（A 包）适配
 
 MOTION_OVERLAY_PLAN_SCHEMA = "motion_overlay_plan.v1"
@@ -776,7 +1017,7 @@ def resolve_merge_candidates(video_manifest, audio_manifest=None, *, script_revi
     音频编号来自生产者 manifest 的 ``narration_index``（旁白）或 ``shot_index``（对白）；
     缺编号即拒收（不按数组位置猜）。
     """
-    from shared.candidate_inputs import resolve_candidate_inputs
+    from shared.candidate_inputs import revalidate_candidate_inputs, resolve_candidate_inputs
 
     if audio_manifest is not None and video_manifest is None:
         raise TimelineError(
@@ -788,6 +1029,10 @@ def resolve_merge_candidates(video_manifest, audio_manifest=None, *, script_revi
         video_manifest, audio_manifest, context=context, experiment_root=experiment_root,
         expect_scope=expect_scope, expect_script_revision=script_revision,
         required_checks=tuple(required_checks))
+    # 消费前第二次核对：manifest 与每个 unit 的文件摘要、scope/revision。
+    resolved = revalidate_candidate_inputs(
+        resolved, expect_scope=expect_scope,
+        expect_script_revision=script_revision)
 
     # 生产者的编号映射（resolver 只保证 unit_id/路径/摘要，编号仍来自 manifest 声明）
     raw_units: list = []
@@ -874,4 +1119,5 @@ __all__ = [
     "CandidateInputs", "overlays_from_motion_plan", "quantize_transitions",
     "resolve_merge_candidates", "stable_shot_id",
     "transitions_from_legacy", "validate_overlays", "validate_timeline", "windows_from_legacy",
+    "build_timeline_acceptance", "verify_rendered_output",
 ]

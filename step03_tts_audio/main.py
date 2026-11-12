@@ -147,6 +147,22 @@ def _run_candidate(*, candidate_root, attempt_id, experiment_id, scope, revision
                        "detail": "未产出: %s" % unresolved}]
         publish_attempt(ctx, artifacts, status="completed" if not unresolved else "partial",
                         checks=checks)
+        # S05：用实际音频探测时长，把所需/实际/窗口/冲突写入 attempt（不猜）。
+        try:
+            from shared.voice_preparation import build_voice_preparation
+            from step03_tts_audio.shot_tts import _compute_voice_windows
+            _wins, _ = _compute_voice_windows(script, script.get("shots") or [])
+            _windows = {str(k): max(0.0, e - s) for k, (s, e) in _wins.items()}
+            _paths = {a.unit_id: str(a.path) for a in artifacts}
+            _report = build_voice_preparation(
+                script, scope=scope, windows=_windows, audio_paths=_paths,
+                require_audio_artifacts=True)
+            _target = attempt / "voice_preparation.json"
+            eio.commit_json_swap(_target, eio.prepare_json_swap(
+                _target, _report, ensure_ascii=False, indent=2))
+        except Exception as _vp_exc:  # noqa: BLE001 - 报告失败不掩盖合成结果，但必须可见
+            eio.append_event(attempt, "voice_preparation_failed",
+                             message=str(_vp_exc)[:500])
         return artifacts
 
 
@@ -394,6 +410,21 @@ def main(options=None):
                                         provider=tts_config.PROVIDER, source="plan")
         _logger.info("[PLAN] 已写出 %d 个声音单元（未调用任何 provider）: %s"
                      % (len(units), target))
+        # S05：准备报告（所需/实际/窗口/冲突）与声音单元计划同目录落盘。
+        try:
+            from shared.voice_preparation import (
+                build_voice_preparation, feedback_for_conflicts,
+            )
+            _windows = {str(k): max(0.0, e - s) for k, (s, e) in _win.items()}
+            _vp = build_voice_preparation(gen_script, scope=scope, windows=_windows)
+            _vp["feedback"] = feedback_for_conflicts(_vp)
+            _vp_path = Path(candidate_root) / "plan" / "voice_preparation.json"
+            _vp_path.write_text(json.dumps(_vp, ensure_ascii=False, indent=2),
+                                encoding="utf-8")
+            _logger.info("[PLAN] 声音准备报告: %s status=%s codes=%s"
+                         % (_vp_path, _vp.get("status"), _vp.get("codes")))
+        except Exception as _vp_exc:  # noqa: BLE001 - 规划失败要显式报出
+            _logger.warn("[PLAN] 声音准备报告失败: %s" % _vp_exc)
         # M4：精准分轨（期望集合与生成/消费同一判据，不读盘、不合成）。
         from step03_tts_audio.track_cleanup import expected_tracks
         _expected = expected_tracks(gen_script, only_indices=only_indices,

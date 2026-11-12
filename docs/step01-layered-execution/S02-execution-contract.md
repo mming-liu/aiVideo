@@ -1,8 +1,11 @@
-# S02：`shared/execution_contract.py` 最小派生合同
+# S02：`shared/execution_contract.py` 执行合同（R1/R2/R3 补齐）
 
-> 本文件记录 S02 的实现语义、离线单测读数与未验证项。只做纯函数与离线测试；
-> 未接入生产主门，未改变任何正式门禁语义，未发起模型/媒体调用。
+> 本文件记录 S02 的实现语义、真实装载入口、自动语义检查器、绕过封堵与离线读数。
+> 未改变 Step01 正式门禁语义，未采纳正式产物，未发起模型/媒体调用。
 > S01 的责任表与样本族见 [S01-baseline-and-responsibility.md](S01-baseline-and-responsibility.md)。
+>
+> 本轮补齐上一轮四个缺口：真实非测试调用点、`expected.codes` 自动检查器、
+> `prompt`/`visual_plan.visible_characters` 语义保护、按模块分别记读数。
 
 ## 1. 接口与数据
 
@@ -102,25 +105,63 @@ script_digest(script: dict) -> str   # source_digest 的唯一算法
 - 未知/缺失/空白输入以结构化记录返回；只有构建期不可修复的输入才抛
   `ExecutionContractError`（带 `code`/`path`）。
 
-## 3. 离线单测命令与读数
+## 3. R1：真实装载入口（非测试调用点）
 
-命令（KICKOFF 指定 Python）：
+| 调用点 | 调用 | 证据 |
+|---|---|---|
+| `step02a_frame_gen/execution_plan.py::build_visual_plan` | `build_execution_binding` → `validate_execution_binding` → `attach_semantic_checks` | `grep -n "build_execution_binding\|validate_execution_binding" step02a_frame_gen/execution_plan.py` |
+| `step02a_frame_gen/main.py::_plan_only_report` | `build_visual_plan` / `validate_plan_identity`（plan-only） | `--plan-only` 输出 `visual_plan` / `execution_binding` |
+| `step02a_frame_gen/main.py::main` + `gen_all_frames` | 真实生成前构建、落 `visual_plan.json`、发送前重验 | `main.py:583` 起、`gen_all_frames` 入口 |
+
+`grep` 可复现：
+
+```powershell
+Select-String -Path step02a_frame_gen/execution_plan.py,step02a_frame_gen/main.py `
+  -Pattern "build_execution_binding|validate_execution_binding|build_visual_plan|validate_plan_identity"
+```
+
+## 4. R2：自动语义检查器（三族 `expected.codes`）
+
+模块 `shared/execution_semantics.py` 实现六个 code：`causal_gap`、
+`time_ellipsis_lost`、`offscreen_speaker_visible`、`listener_reaction_missing`、
+`audio_window_overflow`、`native_dialogue_unverified`。
+
+- 基线三族 findings 均为 `[]`；
+- 变异三族分别自动检出 `[causal_gap, time_ellipsis_lost]`、
+  `[offscreen_speaker_visible, listener_reaction_missing]`、
+  `[audio_window_overflow, native_dialogue_unverified]`；
+- 每个 code 另有独立最小变异测试，不是靠同一处“一起报错”；
+- `visual_plan` / `voice_preparation` 真实入口消费同一检查器。
+
+## 5. R3：`prompt` / `visible_characters` 绕过封堵
+
+- `GUARDED_SEGMENTS`（`prompt`、`visual_plan.visible_characters`、`frame_layouts`、
+  `visible_props`、`main_subject`、`offscreen_speakers`、`on_screen` 等）属于
+  **受验证语义承载字段**：`allowed_changes` 列出也不放行；
+- 必须有 `binding.checks` 中 `checker/kind` 以 `execution_semantics` 开头、
+  `status=pass`、路径覆盖本次变化的记录；
+- 检查失败时 `attach_semantic_checks` 写 `unresolved`（`route=step01`）与 `feedback`，
+  `validate_execution_changes` 返回 `semantic_change_unverified`；
+- `protection` 可配置追加受保护/受验证字段（默认集 + 绑定内配置 + 调用参数）。
+
+## 6. 离线单测命令与读数（按模块分开）
 
 ```powershell
 C:/Users/ee54/AppData/Local/Python/pythoncore-3.14-64/python.exe -m pytest `
-  tests/shared/test_execution_contract.py -q
+  tests/shared/test_execution_contract.py -q `
+  --basetemp=.pytest_tmp/s02_contract -p no:cacheprovider
+# 43 passed（含原有 39 + 本轮 R3 新增 4）
+
+C:/Users/ee54/AppData/Local/Python/pythoncore-3.14-64/python.exe -m pytest `
+  tests/shared/test_execution_semantics.py -q `
+  --basetemp=.pytest_tmp/s02_semantics -p no:cacheprovider
+# 11 passed（R2 新增；三族参数化 + 六个独立反例 + 合法细化/差分）
 ```
 
-本轮读数：**39 passed**（`tests/shared/test_execution_contract.py`）。与 S01 的 R3 五个
-测试文件组合运行读数为 **106 passed**（39 + 67）。
+**不再把含原有回归的总数当本模块验收**：R2 看 `test_execution_semantics.py`
+的 11 条；R3 看 `test_execution_contract.py` 新增的 guarded/bypass 用例。
 
-本轮 S02 代码身份（sha256，file bytes）：
-
-| 路径 | 字节 | sha256 |
-|---|---:|---|
-| `shared/execution_contract.py` | 35624 | `a9960009441b3cefa2ebdad28dd1c02ff7a822831d68c27544e3aff0df5c540d` |
-| `tests/shared/test_execution_contract.py` | 24055 | `2e412f62bcca679d7b20e664a0da2f92b0976e36ebbab26bad536135bbe32ea8` |
-| `tests/shared/fixtures/execution_contract/manifest.json` | 1881 | `21e4999cfdba390953f3b20d046dea4e7a38584746a723006be1b31766042c1c` |
+本轮 S02 代码身份（sha256，file bytes 见交付报告；文件已改动，旧摘要作废）。
 
 覆盖矩阵：
 
@@ -136,26 +177,31 @@ C:/Users/ee54/AppData/Local/Python/pythoncore-3.14-64/python.exe -m pytest `
 | 越界/受保护拒绝 | `test_validate_changes_rejects_undeclared_field`、`test_validate_changes_rejects_protected_fields_even_if_allowed` |
 | 变化理由 | `test_validate_changes_requires_reason`（无记录/空理由/空白理由） |
 | 样本族自足 | `test_fixture_manifest_digests_match_file_bytes`、`test_fixture_families_build_and_validate_bindings`、`test_fixture_baseline_binding_is_stale_against_mutation`、`test_fixture_voice_timing_legal_change_and_text_protection` |
+| guarded 字段绕过 | `test_guarded_prompt_change_without_semantic_check_is_rejected`、`test_offscreen_visible_bypass_is_rejected_even_if_allowed`、`test_semantic_pass_record_allows_guarded_execution_refinement`、`test_protection_is_configurable_per_binding` |
+| 自动语义检查 | `tests/shared/test_execution_semantics.py` 11 条（三族参数化 + 六 code 独立变异 + 合法细化/差分） |
 
 测试只读受控夹具、只在 pytest 临时根内运行；无网络、无模型、无媒体、无凭据。
 测试文件与夹具已用 `.gitignore` 的独立标记块放行（`[contract/step01-layered-execution]`）。
 
-## 4. 兼容与责任边界
+## 7. 兼容与责任边界
 
-- **尚未接入生产入口**：本轮只交付纯函数与单测；S03–S06 才把绑定写入候选 manifest/
-  冻结请求/声音记录，并在消费前调用校验。没有生产调用点意味着“合同存在”不等于
-  “生产已强制”。
+- **已接入真实入口**：Step02a `--plan-only` 与真实生成前都构建/重验绑定；S04 冻结请求
+  带 `requirements.execution`；S05/S06 消费各自报告。合同从「存在」变为「入口强制」。
 - **不改正式门禁语义**：`shared/execution_contract.py` 不修改 Step01 的 quality/audit/
-  commit 判定；正式切换清单属于 S07 GATE。
+  commit 判定；正式切换清单属于 S07（只产出清单，不执行切换）。
 - **旧产物**：没有 `execution_binding.v1` 字段的旧产物按旧入口规则处理，不能据此认定
   已通过新验收（S07 迁移时显式选择正式/候选输入）。
 - **语义限制**：`validate_execution_changes` 只能证明字段/权限/摘要层面；台词改写、
   事实等价、因果是否成立等自然语言判断仍由内容合同与人工/模型复核承担。
+- **受验证字段不是禁止细化**：合法执行细化仍可改 `prompt`/构图，但必须由真实入口
+  运行语义检查并留下 `checks` 通过记录；没有证据不放行。
 
-## 5. 未验证项
+## 8. 未验证项
 
-- 未在真实 Step02a/02b/03/04 入口装载/消费绑定；未验证候选 manifest 的写入与恢复。
-- 未验证 `source_digest` 在真实稿件（含运行期字段、浮点/Unicode）上的跨进程稳定性；
+- 未在真实模型/媒体产物上验证 `source_digest` 跨进程稳定性和语义检查器的判别力；
   当前只对受控夹具与构造样本做了确定性测试。
-- 未实现 `checks`/`unresolved`/`feedback` 的生产填写与消费；本轮只定义槽位。
-- 未做并发、发布中断、accepted 指针恢复测试；这些属于 S07。
+- 未验证真实候选 manifest 的并发发布与中断恢复；S07 只复核既有事务/锁契约与
+  消费前二次摘要核对，未模拟真实发布中断。
+- 检查器只证明六个结构化主张；台词改写等价、因果是否成立等自然语言判断仍由
+  Step01 审计/人工承担。
+

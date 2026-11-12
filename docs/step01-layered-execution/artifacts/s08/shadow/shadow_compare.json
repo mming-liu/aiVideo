@@ -1,0 +1,403 @@
+{
+  "schema": "step01_shadow_compare.v1",
+  "note": "同一冻结夹具输入；现行 Step01 结果按 S01 责任表记录，不冒充真实运行；新责任分配由 S02/S03/S05 的离线检查器计算。",
+  "families": {
+    "temporal_ellipsis": {
+      "family": "temporal_ellipsis",
+      "scope": {
+        "chapter": 2,
+        "book_index": 1,
+        "book_name": "匿名样本A"
+      },
+      "sides": {
+        "baseline": {
+          "expected": "accept",
+          "semantic_codes": [],
+          "visual_plan_status": "planned",
+          "visual_plan_feedback": [],
+          "voice_status": "blocked",
+          "voice_codes": [
+            "audio_units_missing"
+          ]
+        },
+        "mutation": {
+          "expected": "reject",
+          "semantic_codes": [
+            "causal_gap",
+            "time_ellipsis_lost"
+          ],
+          "visual_plan_status": "blocked",
+          "visual_plan_feedback": [
+            {
+              "route": "step01",
+              "code": "causal_gap",
+              "path": "chapter_outline.causal_chain",
+              "action": "revise_or_restore_semantics",
+              "affected": null
+            },
+            {
+              "route": "step01",
+              "code": "time_ellipsis_lost",
+              "path": "chapter_outline.narration_lines",
+              "action": "revise_or_restore_semantics",
+              "affected": null
+            }
+          ],
+          "voice_status": "ready",
+          "voice_codes": []
+        }
+      }
+    },
+    "offscreen_voice": {
+      "family": "offscreen_voice",
+      "scope": {
+        "chapter": 5,
+        "book_index": 1,
+        "book_name": "匿名样本B"
+      },
+      "sides": {
+        "baseline": {
+          "expected": "accept",
+          "semantic_codes": [],
+          "visual_plan_status": "planned",
+          "visual_plan_feedback": [],
+          "voice_status": "ready",
+          "voice_codes": []
+        },
+        "mutation": {
+          "expected": "reject",
+          "semantic_codes": [
+            "listener_reaction_missing",
+            "offscreen_speaker_visible"
+          ],
+          "visual_plan_status": "blocked",
+          "visual_plan_feedback": [
+            {
+              "route": "step01",
+              "code": "offscreen_speaker_visible",
+              "path": "chapter_outline.voice_units[0].speaker",
+              "action": "revise_or_restore_semantics",
+              "affected": 2
+            },
+            {
+              "route": "step01",
+              "code": "listener_reaction_missing",
+              "path": "shots[5].motion_desc",
+              "action": "revise_or_restore_semantics",
+              "affected": 5
+            }
+          ],
+          "voice_status": "ready",
+          "voice_codes": []
+        }
+      }
+    },
+    "voice_timing": {
+      "family": "voice_timing",
+      "scope": {
+        "chapter": 7,
+        "book_index": 1,
+        "book_name": "匿名样本C"
+      },
+      "sides": {
+        "baseline": {
+          "expected": "accept",
+          "semantic_codes": [],
+          "visual_plan_status": "planned",
+          "visual_plan_feedback": [],
+          "voice_status": "ready",
+          "voice_codes": []
+        },
+        "mutation": {
+          "expected": "reject",
+          "semantic_codes": [
+            "audio_window_overflow",
+            "native_dialogue_unverified"
+          ],
+          "visual_plan_status": "blocked",
+          "visual_plan_feedback": [
+            {
+              "route": "step01",
+              "code": "native_dialogue_unverified",
+              "path": "chapter_outline.voice_units[0].verified",
+              "action": "revise_or_restore_semantics",
+              "affected": "d01"
+            },
+            {
+              "route": "step01",
+              "code": "audio_window_overflow",
+              "path": "chapter_outline.voice_units[1].actual_sec",
+              "action": "revise_or_restore_semantics",
+              "affected": "d02"
+            },
+            {
+              "route": "step01",
+              "code": "audio_window_overflow",
+              "path": "shots[4].audio_window",
+              "action": "revise_or_restore_semantics",
+              "affected": 4
+            }
+          ],
+          "voice_status": "blocked",
+          "voice_codes": [
+            "audio_window_overflow",
+            "native_dialogue_unverified"
+          ]
+        }
+      }
+    }
+  },
+  "blockers": [
+    {
+      "id": "D1",
+      "name": "正片总时长低于下限",
+      "current": {
+        "owner": "step01",
+        "gate": "commit BLOCK",
+        "code": "duration_budget",
+        "severity": "blocking"
+      },
+      "new": {
+        "owner": "S05/S06",
+        "receiver": "voice_preparation / timeline_acceptance",
+        "route": "s06_duration_feedback",
+        "step01_block": false
+      },
+      "legal_positive": "合法短稿不靠下游补造内容；S06 报差额，内容确需变化才回 Step01",
+      "defect_counterexample": "S06 `timeline_duration_short` 报 delta 与受影响 clip",
+      "downstream_receipts": [],
+      "received": null,
+      "final_disposition": "checklist_only_no_synthetic_input"
+    },
+    {
+      "id": "D2",
+      "name": "正片总时长超过上限",
+      "current": {
+        "owner": "step01",
+        "gate": "commit BLOCK",
+        "code": "duration_budget",
+        "severity": "blocking"
+      },
+      "new": {
+        "owner": "S05/S06",
+        "receiver": "timeline_acceptance",
+        "route": "s06_duration_feedback",
+        "step01_block": false
+      },
+      "legal_positive": "合法长稿由 Step01 决定精简/合并；执行阶段不静默截断",
+      "defect_counterexample": "S06 `timeline_duration_long` 报差额与受影响 clip",
+      "downstream_receipts": [],
+      "received": null,
+      "final_disposition": "checklist_only_no_synthetic_input"
+    },
+    {
+      "id": "D3",
+      "name": "红果时长标准告警",
+      "current": {
+        "owner": "step01",
+        "gate": "advisory warning",
+        "code": "redguo_standard",
+        "severity": "advisory"
+      },
+      "new": {
+        "owner": "S06",
+        "receiver": "timeline_acceptance",
+        "route": "advisory",
+        "step01_block": false
+      },
+      "legal_positive": "只作提示，不与 D1/D2 双算为阻塞",
+      "defect_counterexample": "同一时长样本只有一条阻塞权威",
+      "downstream_receipts": [],
+      "received": null,
+      "final_disposition": "checklist_only_no_synthetic_input"
+    },
+    {
+      "id": "S-01",
+      "name": "结果缺因果/过程（causal_gap）",
+      "current": {
+        "owner": "step01",
+        "gate": "audit blocking（语义审计）",
+        "code": "causal_gap",
+        "severity": "blocking"
+      },
+      "new": {
+        "owner": "S03",
+        "receiver": "build_visual_plan / check_execution_semantics",
+        "route": "candidate_failed + step01_feedback",
+        "step01_block": true
+      },
+      "legal_positive": "合法时间省略 + 过程载体：`temporal_ellipsis` 基线 findings=[]",
+      "defect_counterexample": "变异被自动检出 `causal_gap`，候选 blocked 并回 Step01",
+      "downstream_receipts": [
+        {
+          "family": "temporal_ellipsis",
+          "mutation_codes": [
+            "causal_gap",
+            "time_ellipsis_lost"
+          ],
+          "receiver": "blocked"
+        }
+      ],
+      "received": true,
+      "final_disposition": "downstream_detected_and_routed"
+    },
+    {
+      "id": "S-02",
+      "name": "时间省略丢失（time_ellipsis_lost）",
+      "current": {
+        "owner": "step01",
+        "gate": "audit blocking（语义审计）",
+        "code": "time_ellipsis_lost",
+        "severity": "blocking"
+      },
+      "new": {
+        "owner": "S03",
+        "receiver": "check_execution_semantics",
+        "route": "candidate_failed + step01_feedback",
+        "step01_block": true
+      },
+      "legal_positive": "基线有“三日后”与过程动作；findings=[]",
+      "defect_counterexample": "变异同时被检出 `causal_gap` 与 `time_ellipsis_lost`",
+      "downstream_receipts": [
+        {
+          "family": "temporal_ellipsis",
+          "mutation_codes": [
+            "causal_gap",
+            "time_ellipsis_lost"
+          ],
+          "receiver": "blocked"
+        }
+      ],
+      "received": true,
+      "final_disposition": "downstream_detected_and_routed"
+    },
+    {
+      "id": "S-03",
+      "name": "画外声音错误出镜（offscreen_speaker_visible）",
+      "current": {
+        "owner": "step01",
+        "gate": "无执行级检查（语义审计不可见）",
+        "code": "offscreen_speaker_visible",
+        "severity": "not_detected"
+      },
+      "new": {
+        "owner": "S03",
+        "receiver": "build_visual_plan / validate_execution_changes",
+        "route": "candidate_failed + step01_feedback",
+        "step01_block": true
+      },
+      "legal_positive": "基线画外说话人不在可见布局；findings=[]",
+      "defect_counterexample": "变异 `on_screen=true` + 布局出镜被自动检出；`prompt`/`visible_characters` 不再能绕过",
+      "downstream_receipts": [
+        {
+          "family": "offscreen_voice",
+          "mutation_codes": [
+            "listener_reaction_missing",
+            "offscreen_speaker_visible"
+          ],
+          "receiver": "blocked"
+        }
+      ],
+      "received": true,
+      "final_disposition": "downstream_detected_and_routed"
+    },
+    {
+      "id": "S-04",
+      "name": "听者反应缺失（listener_reaction_missing）",
+      "current": {
+        "owner": "step01",
+        "gate": "无执行级检查",
+        "code": "listener_reaction_missing",
+        "severity": "not_detected"
+      },
+      "new": {
+        "owner": "S03",
+        "receiver": "check_execution_semantics",
+        "route": "candidate_failed + step01_feedback",
+        "step01_block": true
+      },
+      "legal_positive": "基线 ff→lf 布局变化/动作反应；findings=[]",
+      "defect_counterexample": "变异移除反应后自动检出",
+      "downstream_receipts": [
+        {
+          "family": "offscreen_voice",
+          "mutation_codes": [
+            "listener_reaction_missing",
+            "offscreen_speaker_visible"
+          ],
+          "receiver": "blocked"
+        }
+      ],
+      "received": true,
+      "final_disposition": "downstream_detected_and_routed"
+    },
+    {
+      "id": "S-05",
+      "name": "独立声音超窗口（audio_window_overflow）",
+      "current": {
+        "owner": "step01",
+        "gate": "无实测（计划时长不冒充实测）",
+        "code": "audio_window_overflow",
+        "severity": "not_detected"
+      },
+      "new": {
+        "owner": "S05/S06",
+        "receiver": "voice_preparation / timeline_acceptance",
+        "route": "voice_execution_feedback",
+        "step01_block": false
+      },
+      "legal_positive": "基线 1.8+1.2 <= 4.0；findings=[]",
+      "defect_counterexample": "变异 3.4+1.2 > 4.0，报 unit_id/shot_index/overflow_sec",
+      "downstream_receipts": [
+        {
+          "family": "voice_timing",
+          "mutation_codes": [
+            "audio_window_overflow",
+            "native_dialogue_unverified"
+          ],
+          "receiver": "blocked"
+        }
+      ],
+      "received": true,
+      "final_disposition": "downstream_detected_and_routed"
+    },
+    {
+      "id": "S-06",
+      "name": "原生对白未核实（native_dialogue_unverified）",
+      "current": {
+        "owner": "step01",
+        "gate": "无实测",
+        "code": "native_dialogue_unverified",
+        "severity": "not_detected"
+      },
+      "new": {
+        "owner": "S05",
+        "receiver": "voice_preparation",
+        "route": "voice_execution_feedback",
+        "step01_block": false
+      },
+      "legal_positive": "基线 verified=true 且有实测时长",
+      "defect_counterexample": "变异 verified=false，明确记未验证，不凭音轨存在判通过",
+      "downstream_receipts": [
+        {
+          "family": "voice_timing",
+          "mutation_codes": [
+            "audio_window_overflow",
+            "native_dialogue_unverified"
+          ],
+          "receiver": "blocked"
+        }
+      ],
+      "received": true,
+      "final_disposition": "downstream_detected_and_routed"
+    }
+  ],
+  "summary": {
+    "baseline_all_green": true,
+    "mutation_all_detected": true,
+    "voice_mutation_detected": [
+      "audio_window_overflow",
+      "native_dialogue_unverified"
+    ]
+  }
+}

@@ -1,0 +1,447 @@
+{
+  "schema": "step02a.visual_plan.v1",
+  "stage": "step02a.visual_plan",
+  "scope": {
+    "chapter": 5,
+    "book_index": 1,
+    "book_name": "匿名样本B"
+  },
+  "source": {
+    "scope": {
+      "chapter": 5,
+      "book_index": 1,
+      "book_name": "匿名样本B"
+    },
+    "script_revision": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+    "source_digest": "58aa69e220c1f3bdd917227b94ad3b3b9443dc3390178e9b8a5cd13c20b9130a",
+    "digest_algorithm": "sha256.canonical_json.v1",
+    "input": {
+      "book_name": "匿名样本B",
+      "chapter_index": 5,
+      "chapter_title": "旧驿站",
+      "source_hash": "2b2b2b2b2b2b2b2b",
+      "plan_contract_version": 5,
+      "plan_digest": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+    }
+  },
+  "execution_binding": {
+    "schema": "execution_binding.v1",
+    "contract_version": 1,
+    "stage": "step02a.visual_plan",
+    "source": {
+      "scope": {
+        "chapter": 5,
+        "book_index": 1,
+        "book_name": "匿名样本B"
+      },
+      "script_revision": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+      "source_digest": "58aa69e220c1f3bdd917227b94ad3b3b9443dc3390178e9b8a5cd13c20b9130a",
+      "digest_algorithm": "sha256.canonical_json.v1",
+      "input": {
+        "book_name": "匿名样本B",
+        "chapter_index": 5,
+        "chapter_title": "旧驿站",
+        "source_hash": "2b2b2b2b2b2b2b2b",
+        "plan_contract_version": 5,
+        "plan_digest": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+      }
+    },
+    "requirements": {
+      "facts": [
+        {
+          "uid": "f01",
+          "claim": "门外来客只以画外声音出现，始终没有进入画面。"
+        },
+        {
+          "uid": "f02",
+          "claim": "值守者阿澄用转头和凝视回应画外声音，没有开口对上门口型。"
+        },
+        {
+          "uid": "f03",
+          "claim": "一封信从门缝塞入，阿澄低头拾起。"
+        }
+      ],
+      "shots": [
+        {
+          "index": 2,
+          "plan_refs": {},
+          "duration_sec": 4.0
+        },
+        {
+          "index": 5,
+          "plan_refs": {},
+          "duration_sec": 3.0
+        },
+        {
+          "index": 8,
+          "plan_refs": {},
+          "duration_sec": 3.0
+        }
+      ],
+      "characters": [
+        "值守者阿澄",
+        "门外来客"
+      ],
+      "voice_units": [
+        {
+          "unit_id": "d01",
+          "kind": "offscreen_dialogue",
+          "speaker": "门外来客",
+          "text": "灯还亮着吗？",
+          "shot_index": 2,
+          "window_sec": 4.0,
+          "actual_sec": 2.0,
+          "verified": true
+        },
+        {
+          "unit_id": "d02",
+          "kind": "offscreen_dialogue",
+          "speaker": "值守者阿澄",
+          "text": "我听见了。",
+          "shot_index": 5,
+          "window_sec": 3.0,
+          "actual_sec": 1.5,
+          "verified": true
+        }
+      ]
+    },
+    "protection": {
+      "protected_segments": [
+        "audio_mode",
+        "causal_chain",
+        "character_motives",
+        "characters",
+        "climax",
+        "dialogue",
+        "dialogue_lines",
+        "end_hook",
+        "event_order",
+        "events",
+        "fact_bindings",
+        "fact_uids",
+        "facts",
+        "hook_bindings",
+        "main_events",
+        "narration",
+        "narration_lines",
+        "narration_segment",
+        "order",
+        "required_facts",
+        "shot_beats",
+        "speaker",
+        "speakers",
+        "spoken_text",
+        "story",
+        "story_text",
+        "subtitle",
+        "voice",
+        "voice_mode"
+      ],
+      "guarded_segments": [
+        "audio_cue",
+        "ff_desc",
+        "frame_layouts",
+        "lf_desc",
+        "main_subject",
+        "motion_desc",
+        "offscreen_speakers",
+        "on_screen",
+        "prompt",
+        "visible_characters",
+        "visible_props",
+        "visual_plan"
+      ]
+    },
+    "allowed_changes": [
+      "prompt",
+      "camera_movement",
+      "frame_layouts",
+      "visual_plan.visible_characters",
+      "visual_plan.visible_props",
+      "visual_plan.offscreen_speakers"
+    ],
+    "changes": [],
+    "checks": [
+      {
+        "kind": "semantic",
+        "checker": "execution_semantics.v1",
+        "status": "pass",
+        "path": "prompt"
+      },
+      {
+        "kind": "semantic",
+        "checker": "execution_semantics.v1",
+        "status": "pass",
+        "path": "frame_layouts"
+      },
+      {
+        "kind": "semantic",
+        "checker": "execution_semantics.v1",
+        "status": "pass",
+        "path": "visual_plan.visible_characters"
+      },
+      {
+        "kind": "semantic",
+        "checker": "execution_semantics.v1",
+        "status": "pass",
+        "path": "visual_plan.visible_props"
+      },
+      {
+        "kind": "semantic",
+        "checker": "execution_semantics.v1",
+        "status": "pass",
+        "path": "visual_plan.offscreen_speakers"
+      }
+    ],
+    "unresolved": [],
+    "feedback": []
+  },
+  "allowed_changes": [
+    "prompt",
+    "camera_movement",
+    "frame_layouts",
+    "visual_plan.visible_characters",
+    "visual_plan.visible_props",
+    "visual_plan.offscreen_speakers"
+  ],
+  "model": "volcengine:agnes-image-2.1-flash",
+  "frames": [
+    {
+      "shot_index": 2,
+      "frame": "ff",
+      "frame_id": "shot-2:ff",
+      "moment": "start",
+      "responsibility": "本镜动作起始时刻的构图（不得提前画出终态）",
+      "prompt": "高清国漫二次元漫剧画风，精致厚涂人物上色，清晰干净黑色轮廓线， 细腻皮肤质感， 发丝分层精细， 柔和电影级漫反射光影， 浅景深虚化背景， 古风/都市小说人物适配， 动态张力强， 衣物布料褶皱真实， 环境细节丰富， 氛围感色调统一， 4K高细节渲染， 全程锁定人物五官、 发型、 服饰；9:16竖屏画幅，阿澄背对镜头站在堂内，手扶铜灯灯罩。【角色锚定】值守者阿澄，背对镜头擦灯，位于堂内（目光看向铜灯）\n\n【强制】严格按以下画面描述生成。画面中只允许出现描述明确提到的角色，不添加额外人物。画面必须是完整连贯的单幅场景环境，禁止纯白背景/影棚布光/产品图版式，禁止输出上下拼接或分屏的合成画面；参考图仅用于人物长相、服装与道具外观参考，参考图的背景样式禁止混入画面。【首帧】这是动作开始前的静态构图画面，展示动作发生前的瞬间静态布局。【禁止武器】本镜头无任何武器，画面中禁止出现武器、刀具、匕首、刀、剑、短刃、暗器、凶器；所有角色徒手空拳，手中禁止握持任何物品。【人物数量限制】画面中只允许出现以下角色：值守者阿澄。总共1人，禁止出现任何其他人物、黑影、人影。禁止复制/复用画面已列角色作为新人物（如把同一角色画两次、给蒙面人画第二个分身），每个角色在画面中只出现一次。",
+      "model": "volcengine:agnes-image-2.1-flash",
+      "content_hash": "0acf37d2c2d4035b9e368e50dad88fc568c84eb9be0104b5921705def3587385",
+      "references": [],
+      "visible_characters": [
+        "值守者阿澄"
+      ],
+      "visible_props": [
+        "铜灯"
+      ],
+      "status": "planned",
+      "unresolved": []
+    },
+    {
+      "shot_index": 2,
+      "frame": "lf",
+      "frame_id": "shot-2:lf",
+      "moment": "end",
+      "responsibility": "本镜动作终态（与首帧同一外观/空间连续）",
+      "prompt": "高清国漫二次元漫剧画风，精致厚涂人物上色，清晰干净黑色轮廓线， 细腻皮肤质感， 发丝分层精细， 柔和电影级漫反射光影， 浅景深虚化背景， 古风/都市小说人物适配， 动态张力强， 衣物布料褶皱真实， 环境细节丰富， 氛围感色调统一， 4K高细节渲染， 全程锁定人物五官、 发型、 服饰；9:16竖屏画幅，【尾帧终态（须与首帧起始态区分）】画面按本尾帧终态演变，禁止复刻首帧姿态。\n阿澄转头看向画左的门，门仍然关着。【角色锚定】值守者阿澄，转头看向门，位于堂内（目光看向门），构图需按尾帧描述重新布局，可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。\n\n【强制】严格按以下画面描述生成。画面中只允许出现描述明确提到的角色，不添加额外人物。画面必须是完整连贯的单幅场景环境，禁止纯白背景/影棚布光/产品图版式，禁止输出上下拼接或分屏的合成画面；参考图仅用于人物长相、服装与道具外观参考，参考图的背景样式禁止混入画面。【尾帧】这是动作完成后的结果画面，展示动作最终状态。【禁止武器】本镜头无任何武器，画面中禁止出现武器、刀具、匕首、刀、剑、短刃、暗器、凶器；所有角色徒手空拳，手中禁止握持任何物品。【人物数量限制】画面中只允许出现以下角色：值守者阿澄。总共1人，禁止出现任何其他人物、黑影、人影。禁止复制/复用画面已列角色作为新人物（如把同一角色画两次、给蒙面人画第二个分身），每个角色在画面中只出现一次。",
+      "model": "volcengine:agnes-image-2.1-flash",
+      "content_hash": "bd40d5175b569de7cf35081e795fe8d50ff83c4532177780b7888baf728b0cbb",
+      "references": [],
+      "visible_characters": [
+        "值守者阿澄"
+      ],
+      "visible_props": [
+        "铜灯"
+      ],
+      "status": "planned",
+      "unresolved": []
+    },
+    {
+      "shot_index": 5,
+      "frame": "ff",
+      "frame_id": "shot-5:ff",
+      "moment": "start",
+      "responsibility": "本镜动作起始时刻的构图（不得提前画出终态）",
+      "prompt": "高清国漫二次元漫剧画风，精致厚涂人物上色，清晰干净黑色轮廓线， 细腻皮肤质感， 发丝分层精细， 柔和电影级漫反射光影， 浅景深虚化背景， 古风/都市小说人物适配， 动态张力强， 衣物布料褶皱真实， 环境细节丰富， 氛围感色调统一， 4K高细节渲染， 全程锁定人物五官、 发型、 服饰；9:16竖屏画幅，阿澄正面近景，目光看向画左门缝。【角色锚定】值守者阿澄，正面站立，位于堂内（目光看向门缝）\n\n【强制】严格按以下画面描述生成。画面中只允许出现描述明确提到的角色，不添加额外人物。画面必须是完整连贯的单幅场景环境，禁止纯白背景/影棚布光/产品图版式，禁止输出上下拼接或分屏的合成画面；参考图仅用于人物长相、服装与道具外观参考，参考图的背景样式禁止混入画面。【首帧】这是动作开始前的静态构图画面，展示动作发生前的瞬间静态布局。【禁止武器】本镜头无任何武器，画面中禁止出现武器、刀具、匕首、刀、剑、短刃、暗器、凶器；所有角色徒手空拳，手中禁止握持任何物品。【人物数量限制】画面中只允许出现以下角色：值守者阿澄。总共1人，禁止出现任何其他人物、黑影、人影。禁止复制/复用画面已列角色作为新人物（如把同一角色画两次、给蒙面人画第二个分身），每个角色在画面中只出现一次。",
+      "model": "volcengine:agnes-image-2.1-flash",
+      "content_hash": "f9f5fc98489135640773b3ebb12b088a0c31c79c609e7d3edcfc757fb8cde8d8",
+      "references": [],
+      "visible_characters": [
+        "值守者阿澄"
+      ],
+      "visible_props": [],
+      "status": "planned",
+      "unresolved": []
+    },
+    {
+      "shot_index": 5,
+      "frame": "lf",
+      "frame_id": "shot-5:lf",
+      "moment": "end",
+      "responsibility": "本镜动作终态（与首帧同一外观/空间连续）",
+      "prompt": "高清国漫二次元漫剧画风，精致厚涂人物上色，清晰干净黑色轮廓线， 细腻皮肤质感， 发丝分层精细， 柔和电影级漫反射光影， 浅景深虚化背景， 古风/都市小说人物适配， 动态张力强， 衣物布料褶皱真实， 环境细节丰富， 氛围感色调统一， 4K高细节渲染， 全程锁定人物五官、 发型、 服饰；9:16竖屏画幅，【尾帧终态（须与首帧起始态区分）】画面按本尾帧终态演变，禁止复刻首帧姿态。\n阿澄眉峰收紧，嘴唇仍然闭合。【角色锚定】值守者阿澄，正面站立，位于堂内（目光看向门缝），构图需按尾帧描述重新布局，可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。\n\n【强制】严格按以下画面描述生成。画面中只允许出现描述明确提到的角色，不添加额外人物。画面必须是完整连贯的单幅场景环境，禁止纯白背景/影棚布光/产品图版式，禁止输出上下拼接或分屏的合成画面；参考图仅用于人物长相、服装与道具外观参考，参考图的背景样式禁止混入画面。【尾帧】这是动作完成后的结果画面，展示动作最终状态。【禁止武器】本镜头无任何武器，画面中禁止出现武器、刀具、匕首、刀、剑、短刃、暗器、凶器；所有角色徒手空拳，手中禁止握持任何物品。【人物数量限制】画面中只允许出现以下角色：值守者阿澄。总共1人，禁止出现任何其他人物、黑影、人影。禁止复制/复用画面已列角色作为新人物（如把同一角色画两次、给蒙面人画第二个分身），每个角色在画面中只出现一次。",
+      "model": "volcengine:agnes-image-2.1-flash",
+      "content_hash": "b03d29e4e4f2c170811055231693a2b091ff1464357e407389b6095f4f7eeb80",
+      "references": [],
+      "visible_characters": [
+        "值守者阿澄"
+      ],
+      "visible_props": [],
+      "status": "planned",
+      "unresolved": []
+    }
+  ],
+  "shots": [
+    {
+      "shot_index": 2,
+      "main_subject": "值守者阿澄",
+      "visible_characters": [
+        "值守者阿澄"
+      ],
+      "visible_props": [
+        "铜灯"
+      ],
+      "necessary_props": [
+        "铜灯"
+      ],
+      "offscreen_speakers": [
+        "门外来客"
+      ],
+      "voice_units": [
+        {
+          "unit_id": "d01",
+          "kind": "offscreen_dialogue",
+          "speaker": "门外来客",
+          "text": "灯还亮着吗？",
+          "shot_index": 2,
+          "window_sec": 4.0,
+          "actual_sec": 2.0,
+          "verified": true
+        }
+      ],
+      "frames": [
+        {
+          "shot_index": 2,
+          "frame": "ff",
+          "frame_id": "shot-2:ff",
+          "moment": "start",
+          "responsibility": "本镜动作起始时刻的构图（不得提前画出终态）",
+          "prompt": "高清国漫二次元漫剧画风，精致厚涂人物上色，清晰干净黑色轮廓线， 细腻皮肤质感， 发丝分层精细， 柔和电影级漫反射光影， 浅景深虚化背景， 古风/都市小说人物适配， 动态张力强， 衣物布料褶皱真实， 环境细节丰富， 氛围感色调统一， 4K高细节渲染， 全程锁定人物五官、 发型、 服饰；9:16竖屏画幅，阿澄背对镜头站在堂内，手扶铜灯灯罩。【角色锚定】值守者阿澄，背对镜头擦灯，位于堂内（目光看向铜灯）\n\n【强制】严格按以下画面描述生成。画面中只允许出现描述明确提到的角色，不添加额外人物。画面必须是完整连贯的单幅场景环境，禁止纯白背景/影棚布光/产品图版式，禁止输出上下拼接或分屏的合成画面；参考图仅用于人物长相、服装与道具外观参考，参考图的背景样式禁止混入画面。【首帧】这是动作开始前的静态构图画面，展示动作发生前的瞬间静态布局。【禁止武器】本镜头无任何武器，画面中禁止出现武器、刀具、匕首、刀、剑、短刃、暗器、凶器；所有角色徒手空拳，手中禁止握持任何物品。【人物数量限制】画面中只允许出现以下角色：值守者阿澄。总共1人，禁止出现任何其他人物、黑影、人影。禁止复制/复用画面已列角色作为新人物（如把同一角色画两次、给蒙面人画第二个分身），每个角色在画面中只出现一次。",
+          "model": "volcengine:agnes-image-2.1-flash",
+          "content_hash": "0acf37d2c2d4035b9e368e50dad88fc568c84eb9be0104b5921705def3587385",
+          "references": [],
+          "visible_characters": [
+            "值守者阿澄"
+          ],
+          "visible_props": [
+            "铜灯"
+          ],
+          "status": "planned",
+          "unresolved": []
+        },
+        {
+          "shot_index": 2,
+          "frame": "lf",
+          "frame_id": "shot-2:lf",
+          "moment": "end",
+          "responsibility": "本镜动作终态（与首帧同一外观/空间连续）",
+          "prompt": "高清国漫二次元漫剧画风，精致厚涂人物上色，清晰干净黑色轮廓线， 细腻皮肤质感， 发丝分层精细， 柔和电影级漫反射光影， 浅景深虚化背景， 古风/都市小说人物适配， 动态张力强， 衣物布料褶皱真实， 环境细节丰富， 氛围感色调统一， 4K高细节渲染， 全程锁定人物五官、 发型、 服饰；9:16竖屏画幅，【尾帧终态（须与首帧起始态区分）】画面按本尾帧终态演变，禁止复刻首帧姿态。\n阿澄转头看向画左的门，门仍然关着。【角色锚定】值守者阿澄，转头看向门，位于堂内（目光看向门），构图需按尾帧描述重新布局，可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。\n\n【强制】严格按以下画面描述生成。画面中只允许出现描述明确提到的角色，不添加额外人物。画面必须是完整连贯的单幅场景环境，禁止纯白背景/影棚布光/产品图版式，禁止输出上下拼接或分屏的合成画面；参考图仅用于人物长相、服装与道具外观参考，参考图的背景样式禁止混入画面。【尾帧】这是动作完成后的结果画面，展示动作最终状态。【禁止武器】本镜头无任何武器，画面中禁止出现武器、刀具、匕首、刀、剑、短刃、暗器、凶器；所有角色徒手空拳，手中禁止握持任何物品。【人物数量限制】画面中只允许出现以下角色：值守者阿澄。总共1人，禁止出现任何其他人物、黑影、人影。禁止复制/复用画面已列角色作为新人物（如把同一角色画两次、给蒙面人画第二个分身），每个角色在画面中只出现一次。",
+          "model": "volcengine:agnes-image-2.1-flash",
+          "content_hash": "bd40d5175b569de7cf35081e795fe8d50ff83c4532177780b7888baf728b0cbb",
+          "references": [],
+          "visible_characters": [
+            "值守者阿澄"
+          ],
+          "visible_props": [
+            "铜灯"
+          ],
+          "status": "planned",
+          "unresolved": []
+        }
+      ],
+      "issues": [],
+      "status": "planned"
+    },
+    {
+      "shot_index": 5,
+      "main_subject": "值守者阿澄",
+      "visible_characters": [
+        "值守者阿澄"
+      ],
+      "visible_props": [],
+      "necessary_props": [],
+      "offscreen_speakers": [
+        "值守者阿澄"
+      ],
+      "voice_units": [
+        {
+          "unit_id": "d02",
+          "kind": "offscreen_dialogue",
+          "speaker": "值守者阿澄",
+          "text": "我听见了。",
+          "shot_index": 5,
+          "window_sec": 3.0,
+          "actual_sec": 1.5,
+          "verified": true
+        }
+      ],
+      "frames": [
+        {
+          "shot_index": 5,
+          "frame": "ff",
+          "frame_id": "shot-5:ff",
+          "moment": "start",
+          "responsibility": "本镜动作起始时刻的构图（不得提前画出终态）",
+          "prompt": "高清国漫二次元漫剧画风，精致厚涂人物上色，清晰干净黑色轮廓线， 细腻皮肤质感， 发丝分层精细， 柔和电影级漫反射光影， 浅景深虚化背景， 古风/都市小说人物适配， 动态张力强， 衣物布料褶皱真实， 环境细节丰富， 氛围感色调统一， 4K高细节渲染， 全程锁定人物五官、 发型、 服饰；9:16竖屏画幅，阿澄正面近景，目光看向画左门缝。【角色锚定】值守者阿澄，正面站立，位于堂内（目光看向门缝）\n\n【强制】严格按以下画面描述生成。画面中只允许出现描述明确提到的角色，不添加额外人物。画面必须是完整连贯的单幅场景环境，禁止纯白背景/影棚布光/产品图版式，禁止输出上下拼接或分屏的合成画面；参考图仅用于人物长相、服装与道具外观参考，参考图的背景样式禁止混入画面。【首帧】这是动作开始前的静态构图画面，展示动作发生前的瞬间静态布局。【禁止武器】本镜头无任何武器，画面中禁止出现武器、刀具、匕首、刀、剑、短刃、暗器、凶器；所有角色徒手空拳，手中禁止握持任何物品。【人物数量限制】画面中只允许出现以下角色：值守者阿澄。总共1人，禁止出现任何其他人物、黑影、人影。禁止复制/复用画面已列角色作为新人物（如把同一角色画两次、给蒙面人画第二个分身），每个角色在画面中只出现一次。",
+          "model": "volcengine:agnes-image-2.1-flash",
+          "content_hash": "f9f5fc98489135640773b3ebb12b088a0c31c79c609e7d3edcfc757fb8cde8d8",
+          "references": [],
+          "visible_characters": [
+            "值守者阿澄"
+          ],
+          "visible_props": [],
+          "status": "planned",
+          "unresolved": []
+        },
+        {
+          "shot_index": 5,
+          "frame": "lf",
+          "frame_id": "shot-5:lf",
+          "moment": "end",
+          "responsibility": "本镜动作终态（与首帧同一外观/空间连续）",
+          "prompt": "高清国漫二次元漫剧画风，精致厚涂人物上色，清晰干净黑色轮廓线， 细腻皮肤质感， 发丝分层精细， 柔和电影级漫反射光影， 浅景深虚化背景， 古风/都市小说人物适配， 动态张力强， 衣物布料褶皱真实， 环境细节丰富， 氛围感色调统一， 4K高细节渲染， 全程锁定人物五官、 发型、 服饰；9:16竖屏画幅，【尾帧终态（须与首帧起始态区分）】画面按本尾帧终态演变，禁止复刻首帧姿态。\n阿澄眉峰收紧，嘴唇仍然闭合。【角色锚定】值守者阿澄，正面站立，位于堂内（目光看向门缝），构图需按尾帧描述重新布局，可与首帧/参考图的景别、机位、人物位置不同，表现动作演变的最终状态。\n\n【强制】严格按以下画面描述生成。画面中只允许出现描述明确提到的角色，不添加额外人物。画面必须是完整连贯的单幅场景环境，禁止纯白背景/影棚布光/产品图版式，禁止输出上下拼接或分屏的合成画面；参考图仅用于人物长相、服装与道具外观参考，参考图的背景样式禁止混入画面。【尾帧】这是动作完成后的结果画面，展示动作最终状态。【禁止武器】本镜头无任何武器，画面中禁止出现武器、刀具、匕首、刀、剑、短刃、暗器、凶器；所有角色徒手空拳，手中禁止握持任何物品。【人物数量限制】画面中只允许出现以下角色：值守者阿澄。总共1人，禁止出现任何其他人物、黑影、人影。禁止复制/复用画面已列角色作为新人物（如把同一角色画两次、给蒙面人画第二个分身），每个角色在画面中只出现一次。",
+          "model": "volcengine:agnes-image-2.1-flash",
+          "content_hash": "b03d29e4e4f2c170811055231693a2b091ff1464357e407389b6095f4f7eeb80",
+          "references": [],
+          "visible_characters": [
+            "值守者阿澄"
+          ],
+          "visible_props": [],
+          "status": "planned",
+          "unresolved": []
+        }
+      ],
+      "issues": [],
+      "status": "planned"
+    }
+  ],
+  "checks": {
+    "binding": [],
+    "semantic": [],
+    "preflight": [],
+    "unresolved_gate": []
+  },
+  "unresolved": [],
+  "feedback": [],
+  "unverified": [
+    {
+      "code": "actual_pixels_unverified",
+      "path": "shot-2:ff",
+      "message": "计划阶段只核对声明/身份/引用；实际人物、道具、构图需视觉 QC 或显式观测"
+    },
+    {
+      "code": "actual_pixels_unverified",
+      "path": "shot-2:lf",
+      "message": "计划阶段只核对声明/身份/引用；实际人物、道具、构图需视觉 QC 或显式观测"
+    },
+    {
+      "code": "actual_pixels_unverified",
+      "path": "shot-5:ff",
+      "message": "计划阶段只核对声明/身份/引用；实际人物、道具、构图需视觉 QC 或显式观测"
+    },
+    {
+      "code": "actual_pixels_unverified",
+      "path": "shot-5:lf",
+      "message": "计划阶段只核对声明/身份/引用；实际人物、道具、构图需视觉 QC 或显式观测"
+    }
+  ],
+  "status": "planned"
+}

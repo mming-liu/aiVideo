@@ -1,0 +1,310 @@
+{
+  "schema": "s06_sample.v1",
+  "timeline": {
+    "schema_version": "merge_timeline.v1",
+    "scope": "demo:chapter_1",
+    "script_revision": "s06-demo-revision",
+    "width": 320,
+    "height": 240,
+    "fps": 24,
+    "audio_mode": "tts_mix",
+    "clips": [
+      {
+        "shot_index": 0,
+        "kind": "hook",
+        "stable_id": "demo:chapter_1:s06-demo-revision:hook",
+        "path": ".pytest_tmp\\s06\\clips\\hook.mp4",
+        "sha256": null,
+        "duration_sec": 2.0,
+        "frames": 48,
+        "has_audio": true,
+        "source": "offline_sample"
+      },
+      {
+        "shot_index": 1,
+        "kind": "shot",
+        "stable_id": "demo:chapter_1:s06-demo-revision:shot:1",
+        "path": ".pytest_tmp\\s06\\clips\\shot_1.mp4",
+        "sha256": null,
+        "duration_sec": 3.0,
+        "frames": 72,
+        "has_audio": true,
+        "source": "offline_sample"
+      },
+      {
+        "shot_index": 2,
+        "kind": "shot",
+        "stable_id": "demo:chapter_1:s06-demo-revision:shot:2",
+        "path": ".pytest_tmp\\s06\\clips\\shot_2.mp4",
+        "sha256": null,
+        "duration_sec": 2.0,
+        "frames": 48,
+        "has_audio": true,
+        "source": "offline_sample"
+      }
+    ],
+    "boundary_transitions": [
+      {
+        "index": 1,
+        "kind": "fade",
+        "duration_sec": 0.416666667
+      },
+      {
+        "index": 2,
+        "kind": "fade",
+        "duration_sec": 0.416666667
+      }
+    ],
+    "endpoint_effects": [],
+    "audio_tracks": [
+      {
+        "kind": "shot_tts",
+        "stable_id": "shot-1:tts",
+        "path": ".pytest_tmp\\s06\\audio\\shot_1_tts.wav",
+        "clip_index": 1,
+        "start_sec": null,
+        "end_sec": null,
+        "gain": 1.0,
+        "sha256": null,
+        "source": "offline_sample"
+      },
+      {
+        "kind": "narration",
+        "stable_id": "N1:narration",
+        "path": ".pytest_tmp\\s06\\audio\\narration.wav",
+        "clip_index": null,
+        "start_sec": 3.0,
+        "end_sec": 4.5,
+        "gain": 1.0,
+        "sha256": null,
+        "source": "offline_sample"
+      }
+    ],
+    "overlays": [],
+    "subtitle": {
+      "source": "offline_sample",
+      "sha256": "ff0ba571bfbd6cc066406efeb0ec3b372624272dda390498ef98ff40bff44ec9",
+      "cues": [
+        {
+          "cue_id": "c1",
+          "text": "离线样片字幕",
+          "start_sec": 1.0,
+          "end_sec": 2.0,
+          "shot_index": 1,
+          "source": "legacy"
+        }
+      ],
+      "fallbacks": []
+    },
+    "source": {
+      "kind": "offline_sample",
+      "scope": "demo:chapter_1",
+      "revision": "s06-demo-revision"
+    },
+    "acceptance": {
+      "schema": "timeline_acceptance.v1",
+      "status": "pass",
+      "clips": [
+        {
+          "clip_index": 0,
+          "shot_index": 0,
+          "kind": "hook",
+          "stable_id": "demo:chapter_1:s06-demo-revision:hook",
+          "path": ".pytest_tmp\\s06\\clips\\hook.mp4",
+          "declared_sec": 2.0,
+          "actual_sec": 2.0,
+          "has_audio": true,
+          "probe_status": "ok",
+          "window": {
+            "start_sec": 0.0,
+            "end_sec": 2.0
+          }
+        },
+        {
+          "clip_index": 1,
+          "shot_index": 1,
+          "kind": "shot",
+          "stable_id": "demo:chapter_1:s06-demo-revision:shot:1",
+          "path": ".pytest_tmp\\s06\\clips\\shot_1.mp4",
+          "declared_sec": 3.0,
+          "actual_sec": 3.0,
+          "has_audio": true,
+          "probe_status": "ok",
+          "window": {
+            "start_sec": 1.583333333,
+            "end_sec": 4.583333333
+          }
+        },
+        {
+          "clip_index": 2,
+          "shot_index": 2,
+          "kind": "shot",
+          "stable_id": "demo:chapter_1:s06-demo-revision:shot:2",
+          "path": ".pytest_tmp\\s06\\clips\\shot_2.mp4",
+          "declared_sec": 2.0,
+          "actual_sec": 2.0,
+          "has_audio": true,
+          "probe_status": "ok",
+          "window": {
+            "start_sec": 4.166666666,
+            "end_sec": 6.166666666
+          }
+        }
+      ],
+      "audio_tracks": [
+        {
+          "kind": "shot_tts",
+          "stable_id": "shot-1:tts",
+          "path": ".pytest_tmp\\s06\\audio\\shot_1_tts.wav",
+          "clip_index": 1,
+          "start_sec": null,
+          "end_sec": null,
+          "actual_sec": 2.0,
+          "probe_status": "ok",
+          "has_audio": true
+        },
+        {
+          "kind": "narration",
+          "stable_id": "N1:narration",
+          "path": ".pytest_tmp\\s06\\audio\\narration.wav",
+          "clip_index": null,
+          "start_sec": 3.0,
+          "end_sec": 4.5,
+          "actual_sec": 1.5,
+          "probe_status": "ok",
+          "has_audio": true
+        }
+      ],
+      "subtitles": [
+        {
+          "cue_id": "c1",
+          "start_sec": 1.0,
+          "end_sec": 2.0,
+          "shot_index": 1
+        }
+      ],
+      "overlays": [],
+      "duration": {
+        "hook_sec": 2.0,
+        "body_sec": 5.0,
+        "transition_overlap_sec": 0.833333,
+        "total_sec": 6.166667,
+        "expected_hook_sec": 2.0,
+        "expected_body_sec": 5.0,
+        "hook_delta_sec": 0.0,
+        "body_delta_sec": 0.0
+      },
+      "issues": [],
+      "codes": []
+    }
+  },
+  "acceptance": {
+    "schema": "timeline_acceptance.v1",
+    "status": "pass",
+    "clips": [
+      {
+        "clip_index": 0,
+        "shot_index": 0,
+        "kind": "hook",
+        "stable_id": "demo:chapter_1:s06-demo-revision:hook",
+        "path": ".pytest_tmp\\s06\\clips\\hook.mp4",
+        "declared_sec": 2.0,
+        "actual_sec": 2.0,
+        "has_audio": true,
+        "probe_status": "ok",
+        "window": {
+          "start_sec": 0.0,
+          "end_sec": 2.0
+        }
+      },
+      {
+        "clip_index": 1,
+        "shot_index": 1,
+        "kind": "shot",
+        "stable_id": "demo:chapter_1:s06-demo-revision:shot:1",
+        "path": ".pytest_tmp\\s06\\clips\\shot_1.mp4",
+        "declared_sec": 3.0,
+        "actual_sec": 3.0,
+        "has_audio": true,
+        "probe_status": "ok",
+        "window": {
+          "start_sec": 1.583333333,
+          "end_sec": 4.583333333
+        }
+      },
+      {
+        "clip_index": 2,
+        "shot_index": 2,
+        "kind": "shot",
+        "stable_id": "demo:chapter_1:s06-demo-revision:shot:2",
+        "path": ".pytest_tmp\\s06\\clips\\shot_2.mp4",
+        "declared_sec": 2.0,
+        "actual_sec": 2.0,
+        "has_audio": true,
+        "probe_status": "ok",
+        "window": {
+          "start_sec": 4.166666666,
+          "end_sec": 6.166666666
+        }
+      }
+    ],
+    "audio_tracks": [
+      {
+        "kind": "shot_tts",
+        "stable_id": "shot-1:tts",
+        "path": ".pytest_tmp\\s06\\audio\\shot_1_tts.wav",
+        "clip_index": 1,
+        "start_sec": null,
+        "end_sec": null,
+        "actual_sec": 2.0,
+        "probe_status": "ok",
+        "has_audio": true
+      },
+      {
+        "kind": "narration",
+        "stable_id": "N1:narration",
+        "path": ".pytest_tmp\\s06\\audio\\narration.wav",
+        "clip_index": null,
+        "start_sec": 3.0,
+        "end_sec": 4.5,
+        "actual_sec": 1.5,
+        "probe_status": "ok",
+        "has_audio": true
+      }
+    ],
+    "subtitles": [
+      {
+        "cue_id": "c1",
+        "start_sec": 1.0,
+        "end_sec": 2.0,
+        "shot_index": 1
+      }
+    ],
+    "overlays": [],
+    "duration": {
+      "hook_sec": 2.0,
+      "body_sec": 5.0,
+      "transition_overlap_sec": 0.833333,
+      "total_sec": 6.166667,
+      "expected_hook_sec": 2.0,
+      "expected_body_sec": 5.0,
+      "hook_delta_sec": 0.0,
+      "body_delta_sec": 0.0
+    },
+    "issues": [],
+    "codes": []
+  },
+  "rendered": {
+    "schema": "rendered_timeline_check.v1",
+    "status": "pass",
+    "path": ".pytest_tmp\\s06\\sample.mp4",
+    "actual_sec": 6.208333,
+    "expected_sec": 6.166667,
+    "has_audio": true,
+    "probe_status": "ok",
+    "acceptance_status_at_render": "pass",
+    "issues": [],
+    "codes": []
+  },
+  "sample_path": "C:\\myFloders\\git\\aiVideo-contract\\.pytest_tmp\\s06\\sample.mp4"
+}

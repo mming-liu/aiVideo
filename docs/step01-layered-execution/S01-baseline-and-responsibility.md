@@ -3,6 +3,12 @@
 > 本文件是本分支 `contract/step01-layered-execution` 上重新核对的基线快照，不沿用半完成态工作树的旧结论。
 > 只做离线核对；未发起任何付费或媒体调用。S02 的合同接口与单测见
 > [S02-execution-contract.md](S02-execution-contract.md)。
+>
+> **2026-11-12 更新**：master 已合并（HEAD `78ebbb1`）；S01 责任表仍有效。S02 的
+> 语义检查器已实现并接入 Step02a 真实入口（见 `S02-execution-contract.md` 与
+> `S03-execution-plan.md`）；S07 影子比较/切换清单见
+> `S07-formal-gate-switch-checklist.md`。本文件第 1 节的 HEAD/摘要保留为**当时**
+> 基线快照，不代表本轮最终 HEAD。
 
 ## 1. 基线身份（实算）
 
@@ -175,9 +181,11 @@ D8 的 commit manifest 读数是验收案例，不是本轮实测。
 **未验证（本轮明确不做）**：
 - 任何真实 Step01/02a/02b/03/04 模型或媒体调用；本轮全部离线。
 - `plan_preflight` / `fact_atomicity` 的生产接线与真实入口行为。
-- 正式门禁语义切换、正式产物采纳、S07 影子比较/切换清单（等 master 合并与用户裁决）。
-- 三个样本族的语义检查器尚未实现；`expected.codes` 是给 S03–S06 的验收声明，不是本轮已通过的自动判定。
-- 真实媒体夹具与可播放样片（S06/S08）。
+- 正式门禁语义切换、正式产物采纳、S07 GATE 裁决（只产出切换清单）。
+- ~~三个样本族的语义检查器尚未实现~~：**2026-11-12 已补齐**，见
+  `shared/execution_semantics.py` 与 `tests/shared/test_execution_semantics.py`
+  （11 passed；基线过、变异六个 code 自动检出）。
+- 真实媒体夹具与可播放样片：S06 离线样片已产出（本机 ffmpeg），真实模型成品未运行。
 
 **下一步**：
 1. S03 消费 S02 的绑定/变化接口，把 `visual_plan.json` 作为候选产物；用 `offscreen_voice` 族做“画外声音错误出镜”入口反例。

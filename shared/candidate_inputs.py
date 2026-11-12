@@ -345,6 +345,59 @@ def resolve_candidate_inputs(video_manifest, audio_manifest=None, *, source: str
     }
 
 
+def revalidate_candidate_inputs(resolved: dict, *, expect_scope: dict | None = None,
+                                expect_script_revision: str | None = None) -> dict:
+    """消费前**再次**核对来源与文件摘要（防解析后文件被替换/改写）.
+
+    ``resolve_candidate_inputs`` 已在解析时核过一遍；本函数用于实际消费前的
+    第二次核对：manifest 字节、每个 unit 的产物摘要、scope/revision。任一失配
+    抛 ``CandidateInputError``，不降级、不按路径猜。
+    """
+    if not isinstance(resolved, dict) or resolved.get("schema_version") != "candidate_inputs.v1":
+        raise CandidateInputError("candidate_inputs_invalid", "候选解析结果 schema 不符",
+                                  field_path="schema_version")
+    from shared.run_scope import scope_identity
+    if expect_scope is not None and scope_identity(expect_scope) != scope_identity(
+            resolved.get("scope") or {}):
+        raise CandidateInputError("scope_mismatch",
+                                  f"候选 scope 与期望不符: {resolved.get('scope')} != {expect_scope}",
+                                  field_path="scope")
+    if expect_script_revision is not None and str(expect_script_revision) != str(
+            resolved.get("script_revision") or ""):
+        raise CandidateInputError("script_revision_mismatch",
+                                  "候选 revision 与期望不符",
+                                  field_path="script_revision")
+    for key, sha_key in (("video_manifest_path", "video_manifest_sha256"),
+                         ("audio_manifest_path", "audio_manifest_sha256")):
+        path = resolved.get(key)
+        expected = resolved.get(sha_key)
+        if path and expected:
+            actual = eio.sha256_file(Path(path))
+            if actual != expected:
+                raise CandidateInputError(
+                    "manifest_digest_mismatch",
+                    f"{key} 在解析后被改写: {actual[:12]} != {str(expected)[:12]}",
+                    field_path=sha_key)
+    for uid, unit in (resolved.get("units") or {}).items():
+        for path_key, sha_key in (("video_path", "video_sha256"),
+                                  ("audio_path", "audio_sha256")):
+            path = unit.get(path_key)
+            if not path:
+                continue
+            p = Path(path)
+            if not p.is_file():
+                raise CandidateInputError("candidate_missing",
+                                          f"候选 {uid} 的产物在消费前消失: {p}",
+                                          field_path=path_key, unit_id=uid)
+            expected = unit.get(sha_key)
+            if expected and eio.sha256_file(p) != expected:
+                raise CandidateInputError(
+                    "candidate_digest_mismatch",
+                    f"候选 {uid} 的产物在消费前被改写: {p}",
+                    field_path=sha_key, unit_id=uid)
+    return resolved
+
+
 def _infer_experiment_root(manifest_path: Path) -> Path:
     """从 ``…/<experiment>/<package>/attempts/<id>/manifest.json`` 反推实验根。"""
     p = Path(manifest_path).resolve()

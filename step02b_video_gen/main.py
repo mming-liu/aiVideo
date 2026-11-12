@@ -256,16 +256,24 @@ async def _process_one_shot_skip_frames(
         logger.info(f"  [Shot {idx}] Mode: IMAGE policy={policy} "
                     f"frames={[Path(p).name for p in frame_paths]}")
 
+    # S04：读取 Step02a 画面计划并构建同一份执行要求；实际提交与 plan-only
+    # 共用 build_requirements，缓存键因此也包含语义镜头/参考/声音事实。
+    from shared.model_caps import active_video_model
+    _visual_plan = _load_visual_plan(shots_dir.parent)
+    _reqs = _execution_requirements(shot, script, _visual_plan, frame_paths,
+                                    str(active_video_model() or ""))
+    if _reqs.get("issues"):
+        logger.warn(f"  [Shot {idx}] 执行要求问题: {_reqs['issues'][:3]}")
+
     # Cache check（§V2 改动 4）：prompt_hash + 产物检查 + 冻结请求关系
     shot_hash = _get_shot_hash(shot, script, shot_dir=frames_dir)
     _frozen_for_cache = None
     if policy != "auto" and REFERENCE_MODE == "image":
-        from shared.model_caps import active_video_model
         _frozen_for_cache, _ = build_frozen_for_shot(
             shot=shot, script=script, video_adapter=video_adapter,
             frame_paths=frame_paths, mode="A",
             provider=os.getenv("VIDEO_PROVIDER", ""),
-            model_id=active_video_model())
+            model_id=active_video_model(), execution_requirements=_reqs)
     _cache = cache_decision(shot, script, shot_dir, video_path, clip_path=_clip_dst,
                             force=force, shot_hash=shot_hash,
                             frozen_request=_frozen_for_cache,
@@ -285,6 +293,7 @@ async def _process_one_shot_skip_frames(
         video_adapter, poll_semaphore, script, idx,
         continuity_ref_image=None, mode="A",
         candidate_context=candidate_context,
+        execution_requirements=_reqs,
     )
 
 
@@ -333,9 +342,31 @@ def snapshot_changes(before: dict, after: dict) -> dict:
     }
 
 
+def _load_visual_plan(working_dir: Path) -> dict | None:
+    """读取 Step02a 写出的候选画面计划；缺失/损坏返回 None（调用方记未验证）."""
+    path = Path(working_dir) / "visual_plan.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _execution_requirements(shot: dict, script: dict, visual_plan: dict | None,
+                            frame_paths: list, model_id: str | None) -> dict:
+    from step02_video_gen.execution_requirements import build_requirements
+    return build_requirements(
+        shot, script, visual_plan=visual_plan, frame_paths=frame_paths,
+        reference_mode=os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower(),
+        model_id=model_id)
+
+
 def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
                chapter: int, provider: str, model_id: str | None = None,
-               precheck_ledger: Path | None = None) -> dict:
+               precheck_ledger: Path | None = None,
+               visual_plan: dict | None = None) -> dict:
     """只组装**冻结请求 + 结构预检**（零网络、零生成 POST，§V2「plan-only+force 仍零网络」）。
 
     M4：image 模式下额外做首尾帧 SHA-256 / 差异度预检；给了
@@ -351,6 +382,16 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
 
     _policy = active_media_policy()
     resolved_model = model_id if model_id is not None else str(active_video_model() or "")
+    if visual_plan is None:
+        try:
+            from step02a_frame_gen.execution_plan import build_visual_plan
+            _scope = {"chapter": chapter,
+                      "book_index": script.get("book_index") or 1,
+                      "book_name": script.get("book_name") or ""}
+            visual_plan = build_visual_plan(
+                script, scope=_scope, only_indices=only_indices)
+        except Exception:
+            visual_plan = None
     entries: list[dict] = []
     shots = list(script.get("shots") or [])
     hook = script.get("hook")
@@ -401,13 +442,16 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
                     continue
         else:
             frame_paths = []
+        _reqs = _execution_requirements(shot, script, visual_plan, frame_paths,
+                                        resolved_model)
+        entry["execution_requirements"] = _reqs
         _prepared_status = "not_prepared"
         _prep_block = None
         try:
             frozen, _req = build_frozen_for_shot(
                 shot=shot, script=script, video_adapter=None, frame_paths=frame_paths,
                 mode="A", scope={"chapter": chapter}, provider=provider,
-                model_id=resolved_model)
+                model_id=resolved_model, execution_requirements=_reqs)
             # S04：预检走与实发相同的 prepare 链路（纯离线，不提交）。
             try:
                 from _video_gen import create_service
@@ -425,7 +469,8 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
                         frozen, _req = build_frozen_for_shot(
                             shot=shot, script=script, video_adapter=None, frame_paths=frame_paths,
                             mode="A", scope={"chapter": chapter}, provider=provider,
-                            model_id=resolved_model, prepared=_prepared)
+                            model_id=resolved_model, prepared=_prepared,
+                            execution_requirements=_reqs)
                         _prepared_status = "prepared"
             except (SystemCameraError, VideoCapabilityError) as _prep_exc:
                 # 确定阻断：系统段冲突/超长、provider 能力不足
@@ -456,6 +501,8 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
             entries.append(entry)
             continue
         problems = rp.validate_frozen_request(frozen)
+        from step02_video_gen.execution_requirements import validate_requirements
+        problems = list(problems) + validate_requirements(frozen, _reqs)
         # S22-D：运镜一致性告警；默认不阻断，SHOT_MOTION_STRICT=1 时升级为 blocked。
         from shared.shot_motion_checks import motion_warnings
         warnings = motion_warnings(shot)

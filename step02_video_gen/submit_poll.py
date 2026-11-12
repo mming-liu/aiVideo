@@ -444,7 +444,8 @@ def _script_revision(script) -> str:
 def build_frozen_for_shot(*, shot, script, video_adapter, frame_paths, mode,
                           continuity_ref_image=None, shot_dir=None, script_revision=None,
                           scope=None, provider=None, model_id=None, prompt=None,
-                          requirements=None, prepared=None):
+                          requirements=None, prepared=None,
+                          execution_requirements=None):
     """按**当前输入**组装冻结请求（提交冻结与缓存关系核对共用同一份组装）。"""
     from step02_video_gen import request_plan as rp
     from step02_video_gen.prompt_builder import _build_prompt, _make_request
@@ -465,6 +466,9 @@ def build_frozen_for_shot(*, shot, script, video_adapter, frame_paths, mode,
         model_id=model_id or str(active_video_model() or ""),
         requirements=requirements if requirements is not None else generation_requirements(),
         prepared=prepared)
+    if execution_requirements is not None:
+        from step02_video_gen.execution_requirements import merge_into_frozen
+        merge_into_frozen(frozen, execution_requirements)
     return frozen, req
 
 
@@ -1404,7 +1408,8 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
                                   frame_paths: list, shot_hash: str, video_adapter,
                                   poll_semaphore, script: dict, idx: int, prompt: str,
                                   characters: list, continuity_ref_image, mode: str,
-                                  candidate_context, logger, make_request, production_output=False):
+                                  candidate_context, logger, make_request, production_output=False,
+                                  execution_requirements=None):
     """候选模式提交：**一次尝试 = 至多一个生成 POST**（计划 §V1/§V2 改动 1/2/6）。
 
     与旧路的区别（本函数是候选模式的**唯一**提交入口）：
@@ -1497,6 +1502,21 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
         provider=prepared.provider, model_id=prepared.model_id,
         capability_revision=prepared.capability_revision,
         requirements=generation_requirements(), prepared=prepared)
+    if execution_requirements is not None:
+        from step02_video_gen.execution_requirements import (
+            merge_into_frozen, validate_requirements,
+        )
+        merge_into_frozen(frozen, execution_requirements)
+        _exec_problems = validate_requirements(frozen, execution_requirements)
+        if _exec_problems:
+            va.open_attempt(package_root, attempt_id, request_key=frozen.request_key,
+                            scope=scope, script_revision=script_revision,
+                            provider=prepared.provider, model_id=prepared.model_id)
+            eio.append_event(attempt, "execution_requirements_blocked",
+                             problems=_exec_problems)
+            return _fail(f"execution_requirements: {_exec_problems[:2]}",
+                         code=(_exec_problems[0].get("code")
+                               or "execution_requirements_blocked"))
     prepared.request_key = frozen.request_key
     # S02：prepared 是下发事实源；冻结记录必须与它一致（prompt 逐字、其余规范化）。
     _mismatch = rp.verify_prepared_frozen(prepared, frozen)
@@ -1688,6 +1708,7 @@ async def _submit_video(
     continuity_ref_image: str | None = None,
     mode: str = "A",
     candidate_context=None,
+    execution_requirements=None,
 ) -> asyncio.Task | None:
     """提交视频任务并返回轮询 task.
 
@@ -1713,7 +1734,7 @@ async def _submit_video(
             script=script, idx=idx, prompt=prompt, characters=characters,
             continuity_ref_image=continuity_ref_image, mode=mode,
             candidate_context=candidate_context, logger=logger,
-            make_request=_make_request)
+            make_request=_make_request, execution_requirements=execution_requirements)
 
     from types import SimpleNamespace
     from shared.paths import production_video_attempts_root
@@ -1728,7 +1749,8 @@ async def _submit_video(
             shot_hash=shot_hash, video_adapter=video_adapter, poll_semaphore=poll_semaphore,
             script=script, idx=idx, prompt=prompt, characters=characters,
             continuity_ref_image=continuity_ref_image, mode=mode, candidate_context=ctx,
-            logger=logger, make_request=_make_request, production_output=True)
+            logger=logger, make_request=_make_request, production_output=True,
+            execution_requirements=execution_requirements)
     except Exception as exc:
         # Includes post-submit persistence failure: never turn it into another POST.
         _failed_videos[idx].append({"attempt": str(ctx.attempt_dir),

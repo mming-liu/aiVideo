@@ -1428,6 +1428,28 @@ def _run_merge(options, attempt):
   timeline = _replace(timeline, source={
       **(timeline.source or {}),
       "source_declarations": _source_declarations(timeline, script, shots)})
+  # S06：合成前先按真实媒体/音轨/字幕/转场做完整验收；阻塞项不进入编码。
+  from step04_merge.timeline import build_timeline_acceptance
+  _expected_hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
+  _expected_body_sec = sum(float(s.get("duration_sec") or s.get("duration") or 0)
+                           for s in shots if isinstance(s, dict)) or None
+  _expected_hook_sec = (float(_expected_hook.get("duration_sec")
+                              or _expected_hook.get("duration") or 0)
+                        if _expected_hook else None) or None
+  _outline = script.get("chapter_outline") if isinstance(script, dict) else None
+  _requires_audio = bool(
+      (isinstance(_outline, dict) and (_outline.get("voice_units")
+                                       or _outline.get("dialogue_lines")
+                                       or _outline.get("narration_lines"))))
+  _acceptance = build_timeline_acceptance(
+      timeline, expected_body_sec=_expected_body_sec,
+      expected_hook_sec=_expected_hook_sec, required_audio=_requires_audio)
+  timeline = _replace(timeline, acceptance=_acceptance)
+  if _acceptance.get("status") != "pass":
+    _logger.error(f"[TIMELINE] 合成前验收未通过: {_acceptance.get('codes')}")
+    raise RenderError("timeline_acceptance_blocked", "timeline",
+                      "时间轴验收未通过（%s）" % ",".join(_acceptance.get("codes") or []),
+                      exit_code=2)
   if attempt is not None:
     _validate_candidate_path(attempt, clips,
                              [t.path for t in timeline.audio_tracks])
@@ -1475,6 +1497,7 @@ def _run_merge(options, attempt):
         timeline, output=FINAL_OUT, srt_path=SRT_OUT, settings=settings,
         elapsed_ms=(_time.perf_counter() - _started) * 1000.0,
         media_prechecks=_media_prechecks)
+    _report["timeline_acceptance"] = _acceptance
     if attempt is not None:
       _report_path = attempt.outputs_dir / "dry_run_report.json"
       write_report(_report, _report_path)
@@ -1504,6 +1527,25 @@ def _run_merge(options, attempt):
                f"实测 {duration:.2f}s {result.width}x{result.height}@{result.fps:g} "
                f"音频={result.has_audio} 耗时={result.elapsed_sec:.1f}s "
                f"阶段={'→'.join(result.stages)}")
+  # S06：合成后复核成片时长与关键音轨；不一致按失败退出，不宣称成片可用。
+  from step04_merge.timeline import verify_rendered_output
+  _rendered = verify_rendered_output(FINAL_OUT, timeline, _acceptance)
+  timeline = _replace(timeline, acceptance={**_acceptance, "rendered": _rendered})
+  if _rendered.get("status") != "pass":
+    _logger.error(f"[TIMELINE] 合成后复核未通过: {_rendered.get('codes')}")
+    raise RenderError("rendered_timeline_mismatch", "render",
+                      "成片复核未通过（%s）" % ",".join(_rendered.get("codes") or []),
+                      exit_code=2)
+  if attempt is not None:
+    try:
+      import json as _json
+      _acc_path = attempt.outputs_dir / "timeline_acceptance.json"
+      _acc_path.write_text(_json.dumps({"acceptance": _acceptance,
+                                        "rendered": _rendered},
+                                       ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+    except OSError:
+      pass
 
   # 8. 候选提交（只在增强模式）：冻结输入 → manifest → accepted 替换 + 读回
   if attempt is not None:

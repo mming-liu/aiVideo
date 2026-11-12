@@ -395,3 +395,13 @@ output_step01_*/
 !tests/shared/test_execution_contract.py
 !docs/step01-layered-execution/
 !docs/step01-layered-execution/**
+
+# [contract/step01-layered-execution] S02-S08：自动检查器/执行计划/视频要求/声音准备/时间轴验收/影子比较测试。
+# 独立块，便于后续与 master 合并；只放行本包新增测试文件与 tests 包标记。
+!tests/__init__.py
+!tests/shared/test_execution_semantics.py
+!tests/step02a_frame_gen/test_execution_plan.py
+!tests/step02_video_gen/test_execution_requirements.py
+!tests/step03_tts_audio/test_voice_preparation.py
+!tests/step04_merge/test_timeline_acceptance_s06.py
+!tests/integration/test_s07_shadow_and_candidate_revalidation.py

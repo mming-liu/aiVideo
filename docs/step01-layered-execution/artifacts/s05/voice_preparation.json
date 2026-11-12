@@ -1,0 +1,98 @@
+{
+  "schema": "voice_preparation.v1",
+  "status": "ready",
+  "scope": {
+    "chapter": 7,
+    "book_index": 1,
+    "book_name": "匿名样本C"
+  },
+  "script_revision": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+  "units": [
+    {
+      "unit_id": "d01",
+      "kind": "native_dialogue",
+      "speaker": "乐师阿遥",
+      "text": "这一曲，送你。",
+      "shot_index": 3,
+      "required_playback_sec": 2.4,
+      "declared_sec": 2.4,
+      "actual_sec": 2.4,
+      "available_window_sec": 4.0,
+      "shot_audio_window_sec": 4.0,
+      "unit_window_sec": 4.0,
+      "verified": false,
+      "measurement": "not_measured",
+      "audio_path": "",
+      "audio_sha256": null,
+      "identity": {
+        "text_sha256": "68519a87c0b00926da2342c061a89e425ceb6f0275a049a8ab643e5c56c021df",
+        "speaker": "乐师阿遥",
+        "script_revision": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+        "source": null
+      }
+    },
+    {
+      "unit_id": "d02",
+      "kind": "tts_dialogue",
+      "speaker": "听众阿岚",
+      "text": "再弹一曲。",
+      "shot_index": 4,
+      "required_playback_sec": 1.8,
+      "declared_sec": 1.8,
+      "actual_sec": 1.8,
+      "available_window_sec": 2.5,
+      "shot_audio_window_sec": 4.0,
+      "unit_window_sec": 2.5,
+      "verified": false,
+      "measurement": "not_measured",
+      "audio_path": "",
+      "audio_sha256": null,
+      "identity": {
+        "text_sha256": "c43f9ff2acdb2901bae6bf95fe59b52e7c03113431154a37b4bc78d8639214d1",
+        "speaker": "听众阿岚",
+        "script_revision": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+        "source": null
+      }
+    },
+    {
+      "unit_id": "n01",
+      "kind": "narration",
+      "speaker": "",
+      "text": "琴声落下，阿岚没有起身。",
+      "shot_index": 4,
+      "required_playback_sec": 1.2,
+      "declared_sec": 1.2,
+      "actual_sec": 1.2,
+      "available_window_sec": 2.5,
+      "shot_audio_window_sec": 4.0,
+      "unit_window_sec": 2.5,
+      "verified": false,
+      "measurement": "not_measured",
+      "audio_path": "",
+      "audio_sha256": null,
+      "identity": {
+        "text_sha256": "ac2b569e5a60f1033b16ad0a928c145eb710aeb1e9ee942a98be604b93ab855e",
+        "speaker": "",
+        "script_revision": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+        "source": null
+      }
+    }
+  ],
+  "conflicts": [],
+  "codes": [],
+  "no_audio_confirmation": null,
+  "by_shot": {
+    "3": [
+      "d01"
+    ],
+    "4": [
+      "d02",
+      "n01"
+    ]
+  },
+  "unverified": [
+    "d01",
+    "d02",
+    "n01"
+  ]
+}

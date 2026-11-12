@@ -43,7 +43,7 @@ DIGEST_ALGORITHM = "sha256.canonical_json.v1"
 #: 绑定必填顶层字段（顺序用于稳定报错）。
 BINDING_FIELDS = (
     "schema", "contract_version", "stage", "source", "requirements",
-    "allowed_changes", "changes", "checks", "unresolved", "feedback",
+    "protection", "allowed_changes", "changes", "checks", "unresolved", "feedback",
 )
 
 #: 下游执行可以细化、但**不能**借此改写 Step01 语义的路径段。
@@ -59,6 +59,34 @@ PROTECTED_SEGMENTS = frozenset({
     "dialogue", "dialogue_lines", "narration", "narration_lines",
     "narration_segment", "subtitle", "spoken_text",
 })
+
+#: 语义承载、但允许执行阶段**在通过语义检查后**细化的字段段（S02 R3）。
+#:
+#: 这些字段过去不在保护集里，``allowed_changes=["prompt"]`` 或
+#: ``["visual_plan.visible_characters"]`` 就能把画外说话人画进画面。现在它们属于
+#: **受保护但可验证细化** 的字段：
+#:
+#: 1. 变化必须由语义检查器（``shared.execution_semantics``）给出通过记录
+#:    （``binding.checks`` 中 ``kind/checker`` 以 ``execution_semantics`` 开头、
+#:    ``status=pass`` 且路径覆盖本次变化）；
+#: 2. 没有通过记录、或存在对应 ``unresolved`` 时，返回
+#:    ``semantic_change_unverified`` 并给出 ``route=step01`` 的反馈路径；
+#: 3. 调用方可通过 ``protection`` / ``build_execution_binding(protection=...)``
+#:    追加自定义受保护/受验证字段，不把保护集写死成一个不可扩展的常量。
+GUARDED_SEGMENTS = frozenset({
+    "prompt", "visual_plan", "visible_characters", "visible_props",
+    "frame_layouts", "ff_desc", "lf_desc", "motion_desc", "main_subject",
+    "offscreen_speakers", "on_screen", "audio_cue",
+})
+
+#: 语义检查记录的可识别前缀（写入 ``binding.checks[].checker``）。
+SEMANTIC_CHECKER_PREFIX = "execution_semantics"
+
+#: 默认保护配置（构建时复制进绑定，消费侧可再追加）。
+DEFAULT_PROTECTION = {
+    "protected_segments": sorted(PROTECTED_SEGMENTS),
+    "guarded_segments": sorted(GUARDED_SEGMENTS),
+}
 
 #: ``text`` 只有在声音/对白/旁白上下文中才受保护（普通画面字段叫 prompt/desc）。
 _TEXT_SEGMENTS = frozenset({"voice", "voices", "voice_unit", "voice_units",
@@ -301,11 +329,52 @@ def _extract_requirements(script: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 保护配置
+# ---------------------------------------------------------------------------
+
+def _normalize_segment_list(value: Any, *, path: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ExecutionContractError("protection_invalid", f"{path} 必须是数组", path=path)
+    out: list[str] = []
+    for i, entry in enumerate(value):
+        text = entry.strip() if isinstance(entry, str) else ""
+        if not text:
+            raise ExecutionContractError(
+                "protection_invalid", f"{path}[{i}] 必须是非空字符串", path=f"{path}[{i}]")
+        if text not in out:
+            out.append(text)
+    return out
+
+
+def normalize_protection(protection: dict | None = None) -> dict:
+    """合并默认与调用方追加的保护配置（默认在前，追加项排序去重）。
+
+    ``protection`` 可含 ``protected_segments``（完全禁止执行改写）和
+    ``guarded_segments``（必须附 ``execution_semantics`` 通过记录才可改写）。
+    """
+    if protection is not None and not isinstance(protection, dict):
+        raise ExecutionContractError("protection_invalid", "protection 必须是对象",
+                                     path="protection")
+    extra = protection or {}
+    return {
+        "protected_segments": sorted(set(DEFAULT_PROTECTION["protected_segments"]) | set(
+            _normalize_segment_list(extra.get("protected_segments"),
+                                    path="protection.protected_segments"))),
+        "guarded_segments": sorted(set(DEFAULT_PROTECTION["guarded_segments"]) | set(
+            _normalize_segment_list(extra.get("guarded_segments"),
+                                    path="protection.guarded_segments"))),
+    }
+
+
+# ---------------------------------------------------------------------------
 # 构建
 # ---------------------------------------------------------------------------
 
 def build_execution_binding(script: dict, *, scope: dict, stage: str,
-                            source_digest: str) -> dict:
+                            source_digest: str,
+                            protection: dict | None = None) -> dict:
     """从稿件与显式 scope/stage 构建有版本的执行绑定.
 
     Args:
@@ -315,12 +384,14 @@ def build_execution_binding(script: dict, *, scope: dict, stage: str,
         stage: 责任阶段标识（如 ``step02a.visual_plan``），不能为空。
         source_digest: 调用方用 :func:`script_digest` 算出的摘要；必须与当前
             ``script`` 一致，否则拒绝构建。
+        protection: 可选的追加保护配置（见 :func:`normalize_protection`）。
 
     Raises:
         ExecutionContractError: 任一输入缺失/空白/类型不符/摘要不匹配。
     """
     stage_text = _require_text(stage, code="stage_blank", path="stage", label="stage")
     scope_norm = _normalize_scope(scope, path="scope")
+    protection_norm = normalize_protection(protection)
     digest_text = _require_text(source_digest, code="source_digest_blank",
                                 path="source_digest", label="source_digest")
     if not _SHA256_RE.match(digest_text):
@@ -358,6 +429,7 @@ def build_execution_binding(script: dict, *, scope: dict, stage: str,
             "input": source_input,
         },
         "requirements": _extract_requirements(script),
+        "protection": protection_norm,
         "allowed_changes": [],
         "changes": [],
         "checks": [],
@@ -460,6 +532,27 @@ def _binding_shape_issues(binding: Any) -> list[dict]:
                     issues.append(_issue("requirement_identity_missing",
                                          f"binding.requirements.voice_units[{i}].unit_id",
                                          "声音要求缺稳定 unit_id，无法绑定到声音单元"))
+
+    protection = binding.get("protection")
+    if "protection" in binding:
+        if not isinstance(protection, dict):
+            issues.append(_issue("protection_invalid", "binding.protection",
+                                 "绑定 protection 必须是对象"))
+        else:
+            for key in ("protected_segments", "guarded_segments"):
+                if key not in protection:
+                    issues.append(_issue("field_missing", f"binding.protection.{key}",
+                                         f"绑定 protection 缺 {key}"))
+                elif not isinstance(protection.get(key), list):
+                    issues.append(_issue("protection_invalid", f"binding.protection.{key}",
+                                         f"protection.{key} 必须是数组"))
+                else:
+                    for i, entry in enumerate(protection.get(key) or []):
+                        if not _text(entry):
+                            issues.append(_issue(
+                                "protection_invalid",
+                                f"binding.protection.{key}[{i}]",
+                                "保护配置条目必须是非空字符串"))
 
     for key in ("allowed_changes", "changes", "checks", "unresolved", "feedback"):
         if key in binding and not isinstance(binding.get(key), list):
@@ -592,15 +685,82 @@ def _path_segments(path: str) -> list[str]:
     return [token for token in _PATH_TOKEN_RE.findall(str(path or "")) if token]
 
 
-def _is_protected_path(path: str) -> bool:
+def _path_hits_segments(path: str, configured) -> bool:
+    names = {str(s).strip().lower() for s in configured if str(s).strip()}
     segments = _path_segments(path)
     lowered = [s.lower() for s in segments]
     for i, segment in enumerate(lowered):
-        if segment in PROTECTED_SEGMENTS:
+        if segment in names:
             return True
         if segment == "text" and any(s in _TEXT_SEGMENTS for s in lowered[:i]):
             return True
     return False
+
+
+def _is_protected_path(path: str, protected_segments=None) -> bool:
+    return _path_hits_segments(
+        path, PROTECTED_SEGMENTS if protected_segments is None else protected_segments)
+
+
+def _is_guarded_path(path: str, guarded_segments=None) -> bool:
+    return _path_hits_segments(
+        path, GUARDED_SEGMENTS if guarded_segments is None else guarded_segments)
+
+
+def _effective_segments(binding: Any, protection: dict | None, key: str) -> list[str]:
+    """默认保护集 + 绑定内配置 + 本次调用追加配置（不修改入参）."""
+    values = list(DEFAULT_PROTECTION[key])
+    if isinstance(binding, dict) and isinstance(binding.get("protection"), dict):
+        configured = binding["protection"].get(key)
+        if isinstance(configured, list):
+            values.extend(str(v).strip() for v in configured if str(v).strip())
+    if isinstance(protection, dict):
+        configured = protection.get(key)
+        if isinstance(configured, list):
+            values.extend(str(v).strip() for v in configured if str(v).strip())
+    return sorted(set(values))
+
+
+def _semantic_check_passes(path: str, binding: Any) -> bool:
+    """``binding.checks`` 里是否有覆盖本次变化的语义通过记录."""
+    checks = binding.get("checks") if isinstance(binding, dict) else None
+    if not isinstance(checks, list):
+        return False
+    for record in checks:
+        if not isinstance(record, dict):
+            continue
+        status = str(record.get("status") or "").strip().lower()
+        checker = str(record.get("checker") or record.get("kind") or "").strip().lower()
+        if status not in ("pass", "ok", "passed"):
+            continue
+        if not checker.startswith(SEMANTIC_CHECKER_PREFIX):
+            continue
+        if any(_entry_covers(entry, path) for entry in _change_record_paths(record)):
+            return True
+    return False
+
+
+def _unresolved_for_path(path: str, binding: Any) -> list[dict]:
+    """返回覆盖该路径、仍为未决语义问题的 ``binding.unresolved`` 记录."""
+    unresolved = binding.get("unresolved") if isinstance(binding, dict) else None
+    if not isinstance(unresolved, list):
+        return []
+    out: list[dict] = []
+    for record in unresolved:
+        if not isinstance(record, dict):
+            continue
+        status = str(record.get("status") or "unresolved").strip().lower()
+        if status in ("resolved", "pass", "ok"):
+            continue
+        route = str(record.get("route") or "").strip().lower()
+        code = str(record.get("code") or "")
+        if route != "step01" and not code:
+            continue
+        entries = _change_record_paths(record)
+        if entries and not any(_entry_covers(entry, path) for entry in entries):
+            continue
+        out.append(record)
+    return out
 
 
 def _entry_covers(entry: str, path: str) -> bool:
@@ -705,21 +865,29 @@ def _changes_version_issues(binding: Any) -> list[dict]:
 
 
 def validate_execution_changes(before: dict, after: dict, *, binding: dict,
-                               allowed_changes: list[str]) -> list[dict]:
+                               allowed_changes: list[str],
+                               protection: dict | None = None) -> list[dict]:
     """比较执行前/后的候选，逐条判定变化是否在授权内且有理由.
 
-    拒绝两类变化：
+    拒绝四类变化：
 
-    1. **越界变化**：路径不在 ``allowed_changes`` 覆盖范围内；
-    2. **语义变化**：路径命中 :data:`PROTECTED_SEGMENTS`（事实、事件顺序、必要
+    1. **语义变化**：路径命中 :data:`PROTECTED_SEGMENTS`（事实、事件顺序、必要
        人物/事件、说话人、播出文本、声音模式等），即使列进 ``allowed_changes``
-       也不能由下游改写。
+       也不能由下游改写；
+    2. **受验证字段无证据**：路径命中 :data:`GUARDED_SEGMENTS`（``prompt``、
+       ``visual_plan.visible_characters`` 等语义承载字段），但 ``binding.checks``
+       没有 ``execution_semantics`` 的通过记录，或有对应未决项 → 
+       ``semantic_change_unverified``，反馈路由回 Step01；
+    3. **越界变化**：路径不在 ``allowed_changes`` 覆盖范围内；
+    4. **缺少理由**：合法变化必须在 ``binding["changes"]`` 留非空 ``path`` + ``reason``。
 
-    合法变化还必须在 ``binding["changes"]`` 里留下非空理由（``path`` + ``reason``），
-    否则报 ``change_reason_missing``。本函数只做确定性字段判据，不判断自然语言
+    ``protection`` 可在默认集合之外追加受保护/受验证字段；绑定内
+    ``binding["protection"]`` 同样生效。本函数只做确定性字段判据，不判断自然语言
     改写是否语义等价。
     """
     issues = _changes_version_issues(binding)
+    protected_segments = _effective_segments(binding, protection, "protected_segments")
+    guarded_segments = _effective_segments(binding, protection, "guarded_segments")
 
     if not isinstance(allowed_changes, list):
         issues.append(_issue("allowed_changes_invalid", "allowed_changes",
@@ -745,12 +913,36 @@ def validate_execution_changes(before: dict, after: dict, *, binding: dict,
 
     for item in _diff(before, after):
         path = item["path"]
-        if _is_protected_path(path):
+        if _path_hits_segments(path, protected_segments):
             issues.append(_issue(
                 "protected_field_change", path,
                 f"{path} 属于 Step01 语义/声音权限，下游执行候选不得改写",
-                before=_display(item["before"]), after=_display(item["after"])))
-        elif not _path_allowed(path, allowed):
+                route="step01", before=_display(item["before"]),
+                after=_display(item["after"])))
+            continue
+        if _path_hits_segments(path, guarded_segments):
+            unresolved = _unresolved_for_path(path, binding)
+            if unresolved:
+                issues.append(_issue(
+                    "semantic_change_unverified", path,
+                    f"{path} 的语义检查未决，不能按执行细化默认放行",
+                    route="step01",
+                    unresolved=[dict(record) for record in unresolved],
+                    feedback=[{"route": "step01", "path": path,
+                               "action": "revise_or_restore_semantics"}],
+                    before=_display(item["before"]), after=_display(item["after"])))
+                continue
+            if not _semantic_check_passes(path, binding):
+                issues.append(_issue(
+                    "semantic_change_unverified", path,
+                    f"{path} 是语义承载字段，必须附 execution_semantics 通过记录"
+                    "（未验证不得默认放行）",
+                    route="step01",
+                    feedback=[{"route": "step01", "path": path,
+                               "action": "attach_semantic_check_or_revise"}],
+                    before=_display(item["before"]), after=_display(item["after"])))
+                continue
+        if not _path_allowed(path, allowed):
             issues.append(_issue(
                 "change_not_allowed", path,
                 f"{path} 不在本次 allowed_changes 授权范围内",
@@ -764,13 +956,103 @@ def validate_execution_changes(before: dict, after: dict, *, binding: dict,
     return _dedupe(issues)
 
 
+def attach_semantic_checks(binding: dict, *, checked_paths: list[str],
+                           findings: list[dict],
+                           checker: str = "execution_semantics.v1") -> dict:
+    """把语义检查结果写进绑定副本：通过 → ``checks``；失败 → ``unresolved`` + 反馈.
+
+    这是唯一的生产填写入口：真实候选入口调用语义检查器后必须调用本函数，消费侧
+    :func:`validate_execution_changes` 只认 ``kind/checker`` 以
+    ``execution_semantics`` 开头且 ``status=pass`` 的记录。不修改入参。
+    """
+    import copy as _copy
+
+    updated = _copy.deepcopy(binding) if isinstance(binding, dict) else {}
+    checks = updated.get("checks")
+    checks = checks if isinstance(checks, list) else []
+    unresolved = updated.get("unresolved")
+    unresolved = unresolved if isinstance(unresolved, list) else []
+    feedback = updated.get("feedback")
+    feedback = feedback if isinstance(feedback, list) else []
+    paths = [str(p) for p in (checked_paths or []) if str(p).strip()]
+    if findings:
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            rec = {
+                "code": str(finding.get("code") or "semantic_check_failed"),
+                "path": str(finding.get("path") or ""),
+                "message": str(finding.get("message") or ""),
+                "severity": "reject",
+                "route": "step01",
+                "status": "unresolved",
+            }
+            unresolved.append(rec)
+            feedback.append({
+                "route": "step01",
+                "code": rec["code"],
+                "path": rec["path"],
+                "action": "revise_or_restore_semantics",
+                "affected": finding.get("unit_id") or finding.get("shot_index")
+                or finding.get("speaker") or finding.get("listeners"),
+            })
+        checks.append({
+            "kind": "semantic", "checker": checker, "status": "fail",
+            "paths": paths, "codes": sorted({str(f.get("code")) for f in findings}),
+        })
+    else:
+        for path in paths or ["<all>"]:
+            checks.append({
+                "kind": "semantic", "checker": checker, "status": "pass",
+                "path": path,
+            })
+    updated["checks"] = checks
+    updated["unresolved"] = unresolved
+    updated["feedback"] = feedback
+    return updated
+
+
+def unresolved_gate_issues(binding: dict) -> list[dict]:
+    """消费前检查 ``binding.unresolved``：未决语义项一律拒收并给出 Step01 路由."""
+    issues: list[dict] = []
+    unresolved = binding.get("unresolved") if isinstance(binding, dict) else None
+    if not isinstance(unresolved, list):
+        return issues
+    for record in unresolved:
+        if not isinstance(record, dict):
+            continue
+        status = str(record.get("status") or "unresolved").strip().lower()
+        if status in ("resolved", "pass", "ok"):
+            continue
+        route = str(record.get("route") or "").strip().lower()
+        code = str(record.get("code") or "")
+        if route != "step01" and not code:
+            continue
+        issues.append(_issue(
+            "semantic_change_unverified",
+            str(record.get("path") or "binding.unresolved"),
+            f"候选仍含未决语义项 {code or 'unresolved'}，不得默认放行",
+            route="step01",
+            feedback=[{"route": "step01", "path": record.get("path"),
+                       "action": "revise_or_restore_semantics"}],
+        ))
+    return _dedupe(issues)
+
+
 __all__ = [
     "SCHEMA",
     "CONTRACT_VERSION",
     "DIGEST_ALGORITHM",
+    "PROTECTED_SEGMENTS",
+    "GUARDED_SEGMENTS",
+    "DEFAULT_PROTECTION",
+    "SEMANTIC_CHECKER_PREFIX",
     "ExecutionContractError",
     "script_digest",
+    "normalize_protection",
     "build_execution_binding",
     "validate_execution_binding",
     "validate_execution_changes",
+    "attach_semantic_checks",
+    "unresolved_gate_issues",
 ]

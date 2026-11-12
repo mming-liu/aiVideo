@@ -34,7 +34,9 @@ from shared.shot_selector import parse_shot_selector, parse_frame_selector
 async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
                          only_indices: set | None = None,
                          frames: set[str] | None = None,
-                         concurrency: int | None = None) -> dict:
+                         concurrency: int | None = None,
+                         visual_plan: dict | None = None,
+                         scope: dict | None = None) -> dict:
     """生成所有镜头的首帧/尾帧/关键帧图片
 
     Args:
@@ -67,6 +69,24 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
     # 加载 script
     with open(script_path, "r", encoding="utf-8") as f:
         script = json.load(f)
+
+    # S03：发送前消费画面执行计划并重验输入身份。计划由 main() 统一构建；
+    # 只有真实入口（提供 scope）强制走这条链，旧测试/库调用保持原行为。
+    if scope is not None:
+        if visual_plan is None:
+            from step02a_frame_gen.execution_plan import build_visual_plan
+            visual_plan = build_visual_plan(
+                script, scope=scope, only_indices=only_indices, frames=frames)
+        from step02a_frame_gen.execution_plan import validate_plan_identity
+        _plan_issues = validate_plan_identity(visual_plan, script, scope=scope)
+        if _plan_issues:
+            logger = get_logger(chapter_dir() / "step02a.log", console_level="INFO")
+            logger.error(f"[PLAN] 画面计划重验失败，拒绝发送生成: {_plan_issues[:3]}")
+            raise SystemExit(2)
+        _planned_shots = {int(s.get("shot_index")) for s in visual_plan.get("shots") or []
+                          if s.get("status") != "blocked"}
+        if only_indices is None:
+            only_indices = _planned_shots or None
 
     shots = script.get("shots", [])
     hook = script.get("hook")
@@ -294,7 +314,8 @@ def _plan_frame_state(unit: dict, shot_dir: Path, characters: list,
         return "generate"
 
 
-def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dict:
+def _plan_only_report(script: dict, work_dir: Path, only_indices, frames,
+                      scope: dict | None = None) -> dict:
     """零网络账单预检：列出本次会生成多少张肖像/场景/道具/分镜帧.
 
     计数口径：肖像/场景/道具按文件存在性；分镜帧按“文件存在 + 内容哈希匹配”
@@ -426,6 +447,23 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dic
     except Exception as _exc:  # noqa: BLE001 - 预检失败要显式报出，不静默
         assembled_prompts = {"error": str(_exc)}
         prompt_problems.append({"shot": None, "frame": None, "message": str(_exc)[:500]})
+    visual_plan: dict = {}
+    plan_issues: list = []
+    if scope:
+        try:
+            from step02a_frame_gen.execution_plan import (
+                build_visual_plan, validate_plan_identity,
+            )
+            visual_plan = build_visual_plan(
+                script, scope=scope, only_indices=only_indices, frames=frames)
+            plan_issues = validate_plan_identity(visual_plan, script, scope=scope)
+        except Exception as exc:  # noqa: BLE001 - 预检失败必须显式报出，不静默
+            visual_plan = {"schema": "step02a.visual_plan.v1", "status": "blocked",
+                           "error": str(exc)[:1000]}
+            plan_issues = [{"code": "visual_plan_build_failed",
+                            "severity": "reject", "path": "visual_plan",
+                            "message": str(exc)[:1000]}]
+
     return {
         "schema": "step02a.plan/1",
         "model_sends": 0,
@@ -448,6 +486,10 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames) -> dic
         "prompt_stage": "assembled_pre_adapter",
         "prompt_preflight": {"status": "blocked" if prompt_problems else "ok",
                              "problems": prompt_problems},
+        "visual_plan": visual_plan,
+        "visual_plan_status": visual_plan.get("status", "blocked"),
+        "visual_plan_issues": plan_issues,
+        "execution_binding": visual_plan.get("execution_binding"),
         "note": "分镜帧按文件存在 + 内容哈希判断；哈希不匹配的旧帧计为 generate",
     }
 
@@ -477,6 +519,8 @@ def main():
     parser.add_argument("--plan-only", action="store_true",
                         help="零网络账单预检：只打印本次将生成的肖像/场景/道具/帧张数，"
                              "不发任何生成请求")
+    parser.add_argument("--plan-out", default=None,
+                        help="把候选 visual_plan.json 写到显式路径（plan-only 与真实入口共用）")
     add_scope_arguments(parser)
     args = parser.parse_args()
 
@@ -539,9 +583,15 @@ def main():
     if args.plan_only:
         with open(script_path, "r", encoding="utf-8") as _sf_plan:
             _script_plan = json.load(_sf_plan)
-        _report = _plan_only_report(_script_plan, work_dir, only_indices, frames)
+        _report = _plan_only_report(_script_plan, work_dir, only_indices, frames,
+                                    scope=scope)
         print(json.dumps(_report, ensure_ascii=False, indent=2))
-        if (_report.get("prompt_preflight") or {}).get("status") == "blocked":
+        if args.plan_out:
+            from step02a_frame_gen.execution_plan import write_visual_plan
+            _target = write_visual_plan(_report["visual_plan"], Path(args.plan_out))
+            logger.info(f"[PLAN] 候选画面计划已写出: {_target}")
+        if (_report.get("prompt_preflight") or {}).get("status") == "blocked" \
+                or _report.get("visual_plan_status") == "blocked":
             raise SystemExit(2)
         return
 
@@ -554,6 +604,21 @@ def main():
         logger.info(f"  force:  True (忽略缓存)")
     if frames is not None:
         logger.info(f"  frames: {sorted(frames)} (指定图片类型)")
+
+    # S03：真实入口与 plan-only 共用同一套画面计划构建；发送前重验输入身份，
+    # 阻塞项一律不进入生成。计划落在 vimax 工作目录（非 Step01 正式产物）。
+    from step02a_frame_gen.execution_plan import (
+        build_visual_plan, validate_plan_identity, write_visual_plan,
+    )
+    _visual_plan = build_visual_plan(
+        _script_for_qa, scope=scope, only_indices=only_indices, frames=frames)
+    _plan_issues = validate_plan_identity(_visual_plan, _script_for_qa, scope=scope)
+    if _plan_issues:
+        logger.error(f"[PLAN] 画面计划阻塞，拒绝发送生成: {_plan_issues[:5]}")
+        raise SystemExit(2)
+    _plan_path = write_visual_plan(_visual_plan, work_dir / "visual_plan.json")
+    logger.info(f"[PLAN] visual_plan: {_plan_path} status={_visual_plan.get('status')} "
+                f"frames={len(_visual_plan.get('frames') or [])}")
 
     # 确保 working dir 结构
     asyncio.run(build_working_dir(
@@ -586,7 +651,7 @@ def main():
     results = asyncio.run(gen_all_frames(
         script_path, work_dir, force=args.force,
         only_indices=only_indices, frames=frames,
-        concurrency=args.concurrency,
+        concurrency=args.concurrency, visual_plan=_visual_plan, scope=scope,
     ))
 
     # Product acceptance is separate from the pre-generation prompt report.

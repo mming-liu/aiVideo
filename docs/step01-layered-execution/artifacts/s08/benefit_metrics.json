@@ -1,0 +1,78 @@
+{
+  "schema": "s08_benefit_metrics.v1",
+  "offline_proxy_not_real_benefit": true,
+  "content_completeness": {
+    "baseline_semantic_violations": {
+      "temporal_ellipsis": [],
+      "offscreen_voice": [],
+      "voice_timing": []
+    },
+    "baseline_all_green": true,
+    "protected_fields_preserved_by_construction": true
+  },
+  "false_reject_and_missed_detection": {
+    "baseline_false_rejects": 0,
+    "baseline_total": 3,
+    "mutation_expected_codes": [
+      "audio_window_overflow",
+      "causal_gap",
+      "listener_reaction_missing",
+      "native_dialogue_unverified",
+      "offscreen_speaker_visible",
+      "time_ellipsis_lost"
+    ],
+    "mutation_detected_codes": [
+      "audio_window_overflow",
+      "causal_gap",
+      "listener_reaction_missing",
+      "native_dialogue_unverified",
+      "offscreen_speaker_visible",
+      "time_ellipsis_lost"
+    ],
+    "missed_codes": [],
+    "mutation_detection_coverage": "6/6"
+  },
+  "revision_degradation": {
+    "candidate_changed_protected_values": false,
+    "evidence": "semantic_execution_diff.json：受保护字段来自原稿，候选只改执行字段"
+  },
+  "step01_workload": {
+    "offline_model_calls": 0,
+    "offline_step01_reruns": 0,
+    "note": "真实 Step01 调用量与返工次数未运行，不以外推值冒充"
+  },
+  "downstream_rework": {
+    "candidate_failures_detected": 6,
+    "feedback_routes": {
+      "step01": [
+        "causal_gap",
+        "time_ellipsis_lost",
+        "offscreen_speaker_visible",
+        "listener_reaction_missing"
+      ],
+      "voice_execution": [
+        "audio_window_overflow",
+        "native_dialogue_unverified"
+      ]
+    }
+  },
+  "total_consumption": {
+    "video_model_calls": 0,
+    "image_model_calls": 0,
+    "tts_calls": 0,
+    "media_provider_calls": 0,
+    "local_ffmpeg_runs": "见 S06 样片命令"
+  },
+  "usability": {
+    "playable_sample": {
+      "path": "docs\\step01-layered-execution\\artifacts\\s06\\sample.mp4",
+      "exists": true,
+      "duration_sec": 6.208333,
+      "video": true,
+      "audio": true,
+      "playable": true
+    },
+    "real_model_usability": "unverified"
+  },
+  "real_benefit": "unverified"
+}
