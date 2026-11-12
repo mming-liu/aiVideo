@@ -1,0 +1,47 @@
+{
+  "family": "state_contradiction",
+  "case_id": "broken_prop_restored_without_evidence",
+  "expected": {
+    "verdict": "defect",
+    "defect_class": "contradiction",
+    "discriminating": ["ff_desc", "frame_layouts.ff"],
+    "why": "同一场景、连续时间（硬切、无时间跳跃依据），前镜尾帧酒壶已放在案上、甲双手空，后镜首帧酒壶却又回到甲手里、案上无壶。没有任何依据说明它怎么回来的——状态被无理由复原。",
+    "must_preserve": ["前镜终态：壶在案上", "后镜动作：甲仰头饮酒", "中间不得凭空复原"]
+  },
+  "novel": "甲把酒壶放在案上，随即又提起壶来仰头饮尽。",
+  "plan": {},
+  "script": {
+    "shots": [
+      {
+        "index": 1, "duration_sec": 6.0, "main_subject": "甲",
+        "scene": "舱内·夜", "location": "舱内", "clip_transition": "硬切",
+        "context_bridge": "",
+        "ff_desc": "甲右手提着酒壶站在案边",
+        "lf_desc": "甲把酒壶放在案上，双手垂落",
+        "motion_desc": "前3秒：甲放下酒壶；后3秒：甲松手",
+        "prompt": "[中景] 舱内，甲把酒壶放到案上",
+        "narration_segment": "",
+        "frame_layouts": {"ff": [{"name": "甲", "on_screen": true, "position": "案边", "pose": "提壶", "gaze_target": "案面", "props": ["酒壶"]}],
+                          "lf": [{"name": "甲", "on_screen": true, "position": "案边", "pose": "垂手", "gaze_target": "案面", "props": []}],
+                          "kfs": []},
+        "keyframes": []
+      },
+      {
+        "index": 2, "duration_sec": 6.0, "main_subject": "甲",
+        "scene": "舱内·夜", "location": "舱内", "clip_transition": "硬切",
+        "context_bridge": "",
+        "ff_desc": "甲右手提着酒壶仰头饮下，案上空的",
+        "lf_desc": "甲把酒壶摔在案上",
+        "motion_desc": "前3秒：甲仰头饮酒；后3秒：甲摔壶",
+        "prompt": "[中景] 舱内，甲提壶仰头饮酒后把壶摔在案上",
+        "narration_segment": "",
+        "frame_layouts": {"ff": [{"name": "甲", "on_screen": true, "position": "案边", "pose": "仰头提壶", "gaze_target": "壶", "props": ["酒壶"]}],
+                          "lf": [{"name": "甲", "on_screen": true, "position": "案边", "pose": "摔壶", "gaze_target": "案面", "props": []}],
+                          "kfs": []},
+        "keyframes": []
+      }
+    ],
+    "hook": null,
+    "total_duration": 12.0
+  }
+}

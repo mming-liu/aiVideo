@@ -372,6 +372,15 @@ def test_success_commits_with_exactly_one_send_and_one_ledger_row(tmp_path, pack
     assert receipt["revision"] == payload["revision"]
     assert receipt["authorization"]["claimed"] is True
     assert receipt["attempt_ids"] == payload["evidence"]["attempt_ids"]
+    # S05（2026-11-11）：三个预算读数分别标来源，不让人猜哪个是包内声明、哪个是派生
+    src = receipt["budget_sources"]
+    assert src["authorized_total"].startswith("package.budget.")
+    assert src["used_before"].startswith("package.budget.")
+    assert src["remaining_before"].startswith("package.budget.")
+    assert src["sends"] == "attempts"
+    assert src["remaining_after"].startswith("derived:")
+    # 审计实际状态贯通到收据（非 ok 时同样会写这个字段）
+    assert receipt["audit_status"] == "ok", receipt
 
 
 def test_streaming_path_is_also_guarded(tmp_path, package):

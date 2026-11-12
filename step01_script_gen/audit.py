@@ -156,6 +156,7 @@ _AUDIT_SYSTEM = """你是独立分镜审查员。不要证明脚本优秀，只�
 - 如果后续动作缺失，field_path 应指向 motion_desc 或对应 kf/lf，不得要求把它补进 ff。
 - severity 必须填写 blocking/warning/info；impact 只写影响，不要把 blocking/warning 写进 impact。
 - 可选 stage 必须填写 pre/process/result，与 frame_id 职责一致。
+- 合法的场景转换、时间跳跃与常规过程省略不算缺陷。报「信息缺失」必须说明观众缺少哪一项必要信息、已有前文为何不足；报「状态矛盾」必须先核对时间关系与状态变化依据。
 """
 
 
@@ -165,6 +166,12 @@ _AUDIT_SYSTEM = """你是独立分镜审查员。不要证明脚本优秀，只�
 _COMPACT_SHOT_FIELDS: tuple = (
     "index", "duration_sec", "main_subject", "ff_desc", "lf_desc",
     "motion_desc", "prompt", "narration_segment", "frame_layouts", "keyframes",
+    # S02（2026-11-11）：衔接上下文。审计规则要求判断「动作是否缺失 / 跨镜状态是否
+    # 矛盾 / 转场是否成立」，而这三类判断的依据恰好是这四个字段——此前它们**不在**
+    # 送审范围里：模型只能从 ff/lf 文字里猜时间关系，于是把合法的场景转换与时间省略
+    # 判成断裂，又看不见 `clip_transition` 已声明的转场。缺失字段按未知处理（渲染为
+    # null），不得据此推断时间关系。
+    "scene", "location", "clip_transition", "context_bridge",
 )
 
 
@@ -276,6 +283,18 @@ _AUDIT_RULES_TEMPLATE = """# 审查规则
 - `narration_segment` / `subtitle` 已由 `# 故事规划` 逐字锁定并由前置确定性门核验；跨相邻镜头分句衔接的旁白（如前镜「若非…」接本镜「也不会…」）以及原著句内标点属于合法逐字还原，**不得**判为截断、错词或要求改写句式。
 - 按规划属于无声画面的镜头（`narration_segment` 为空）**不得**要求在 `narration_segment` / `subtitle` 中补台词或旁白。若认为剧情威胁、因果或互动交代不足，必须把 `field_path` 与 `repair_targets` 指向可执行的画面字段（`motion_desc` / `ff_desc` / `lf_desc` / `prompt`），**不得**指向 `narration_segment` / `subtitle`。
 
+## 时间、场景与衔接（S02，2026-11-11）
+
+本节判据只约束**缺陷是否成立**，不改变严重级别定义。
+
+- **衔接事实**：每镜的 `scene` / `location` / `clip_transition` / `context_bridge` 就是本稿声明的衔接依据，它们已随分镜一起送审。
+- **缺失即未知**：字段缺失或为空**只表示未知**。不得据此推断「紧接着」「同一时刻」「同一空间」，也不得因为字段缺失本身判缺陷；缺失时只能按已有 `ff_desc` / `lf_desc` / `narration_segment` / 原文能证明的内容下判断。
+- **合法省略**：跨场景、跨时间的跳跃，以及常规过程（赶路、等待、准备、重复劳作、布置场面）**不需要**逐拍补写。观众能从已有前后文与原文推出必要信息时，省略是合法剪辑，不是缺陷。
+- **信息缺失的举证责任**：报「动作/信息缺失」时必须同时写清两件事——观众缺少的是哪一项**理解剧情所必需**的信息；已有前文（`context_bridge` / 上一镜 `lf_desc` / `scene` / `location` / `narration_segment` / 原文）**为什么不足以**提供它。写不出这两点的，不得判 blocking。
+- **状态冲突**：报跨镜状态矛盾前，先核对时间关系与状态变化依据。出现下列任一依据时，**不得**把前后状态差异直接判为矛盾：`scene` / `location` 变化；`clip_transition` 表明时间跳跃（淡出、黑场、叠化、闪回、时间流逝）；`context_bridge` 明确交代了经过时间；原文本身写明了过程。只有**同一场景、连续时间内、且没有任何依据**恢复原状态时，矛盾才成立。
+- **转场是剪辑表达**：硬切是合法表达，**不得**要求把硬切改成淡入淡出或叠化；淡入淡出、叠化、黑场同样**不能证明**因果或时间关系成立，不得因为用了某种转场就认定动作缺失已被补足，也不得据此判问题已解决。
+- **`context_bridge` 的效力**：它是生成侧的衔接说明，不是原文事实。与原文冲突时以原文为准，按缺陷报告；与原文一致时，它就是「已有前文」的一部分。
+
 帧职责：
 - `keyframes[N].stage` 的合法枚举严格为 `pre / approach / climax / react / exit / after`（与 `shared/kf_time.KF_STAGE_ENUM` 同源）；**不得**判为非法，也不得要求改成 `process` / `result` 等非枚举词。
 - ff 只检查动作开始前准备态；
@@ -381,11 +400,25 @@ def render_audit_rules(*, hook_present: bool) -> str:
         hook_rule=hook_rule, **_audit_duration_rule_values())
 
 
+#: 只用于**运行诊断**、不得进入请求字节的元数据键（S05，2026-11-11）
+#:
+#: `run_id` 每次运行都不同。它此前逐字进提示，于是「同一份稿、同一份规则」的请求
+#: 每轮都不一样：`final_audit_request_identity` 跟着变，磁盘上的审计结论永远无法
+#: 按内容身份复用（只能靠 revision + 指纹那几条弱判据）。把诊断字段从**请求字节**
+#: 里拿掉，内容身份才等于「将要发出的那条请求」的身份，同时 payload 仍保留 run_id。
+_DIAGNOSTIC_METADATA_KEYS = ("run_id",)
+
+
+def content_metadata(metadata: "dict | None") -> dict:
+    """去掉运行诊断字段后的元数据（进提示、进内容身份的那一份）."""
+    return {k: v for k, v in (metadata or {}).items() if k not in _DIAGNOSTIC_METADATA_KEYS}
+
+
 def build_audit_prompt(novel_text: str, plan: dict | None, script: dict,
                        audit_focus: list[str] | None = None,
                        metadata: dict | None = None) -> str:
     focus_lines = "\n".join(f"- {item}" for item in (audit_focus or [])) or "- 无额外定向项"
-    metadata_text = json.dumps(metadata or {}, ensure_ascii=False, indent=2)
+    metadata_text = json.dumps(content_metadata(metadata), ensure_ascii=False, indent=2)
     return f"""# 审查元数据
 {metadata_text}
 
@@ -731,6 +764,22 @@ def final_audit_request_identity(novel_text: str, plan: dict | None, script: dic
     return _hashlib.sha256(
         _json.dumps(_blob, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
+
+
+def content_identity(novel_text: str, plan: dict | None, script: dict, *,
+                     audit_focus: list[str] | None = None,
+                     metadata: dict | None = None,
+                     model: str | None = None) -> str:
+    """**内容身份**：与 `run_id` 等运行诊断无关的那条请求的身份（S05）.
+
+    与 `final_audit_request_identity` 的关系：后者就是前者——因为
+    `build_audit_prompt` 已经把 `_DIAGNOSTIC_METADATA_KEYS` 从请求字节里剔除。
+    单独给出这个名字，是为了让**恢复/复用判定**读的是「内容」而不是「这一次运行」，
+    避免调用方把 `run_id` 混进身份后又要自己解释。
+    """
+    return final_audit_request_identity(
+        novel_text, plan, script, audit_focus=audit_focus,
+        metadata=metadata, model=model)
 
 
 # ---------------------------------------------------------------------------
@@ -1243,7 +1292,8 @@ def run_same_model_audit(novel_text: str, plan: dict | None, script: dict,
 
 
 __all__ = [
-    "AUDIT_SCHEMA", "AuditResult", "build_audit_prompt", "resolve_audit_channel",
+    "AUDIT_SCHEMA", "AuditResult", "build_audit_prompt", "content_identity",
+    "content_metadata", "resolve_audit_channel",
     "run_same_model_audit", "run_same_model_audit_with_status", "audit_prompt_version",
     "final_audit_request_identity", "parse_audit_payload",
 ]

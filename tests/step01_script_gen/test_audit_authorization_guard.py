@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import time
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -28,13 +29,30 @@ from tests.step01_script_gen.test_audit_entry_subprocess import (  # noqa: E402
     SITECUSTOMIZE, _binding_digest, _grant, _pin_stub_channel, _run)
 
 
+@lru_cache(maxsize=8)
+def _current_prompt_version(band_key: tuple) -> str:
+    """用**包内生效配置**算当前审计提示版本（必须在子进程里算）.
+
+    父进程可能已经按另一档时长带导入过 `shared.config`，直接调
+    `audit_prompt_version()` 会得到另一组哈希（S02 之前这里硬编码了一个版本号，
+    契约一变就整组用例以「版本不符」提前拒收，走不到它要验的授权门）。
+    """
+    env = dict(os.environ)
+    env.update({k: str(v) for k, v in band_key})
+    env.update({"PYTHONIOENCODING": "utf-8", "OUTPUT_BASE": os.environ.get("OUTPUT_BASE", "")})
+    code = "from step01_script_gen.audit import audit_prompt_version; print(audit_prompt_version())"
+    proc = subprocess.run([sys.executable, "-B", "-c", code], cwd=str(ROOT), env=env,
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return next(line.strip() for line in reversed(proc.stdout.splitlines()) if line.strip())
+
+
 @pytest.fixture()
 def package():
     data = json.loads(PACKAGE.read_text(encoding="utf-8-sig"))
-    # 审计规则模板已更新（锁定台词规则），冻结包必须按当前 prompt 身份重新绑定；
-    # 只覆盖版本字段，不改外部数据集本身。此处用子进程的生效版本（父进程的
-    # 时长带/配置可能不同，直接调用 audit_prompt_version() 会得到另一组哈希）。
-    data.setdefault("audit_contract", {})["audit_prompt_version"] = "adb3e6fe905c"
+    # S02（2026-11-11）：契约身份按**当前源码 + 包内生效配置**重算，不再写死版本号。
+    band = tuple(sorted((str(k), str(v)) for k, v in (data.get("effective_config") or {}).items()))
+    data.setdefault("audit_contract", {})["audit_prompt_version"] = _current_prompt_version(band)
     return _pin_stub_channel(data)
 
 

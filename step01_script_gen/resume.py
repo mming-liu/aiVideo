@@ -270,12 +270,8 @@ def run(manifest_path, *, dry_run: bool = False) -> int:
     if isinstance(script.get("script"), dict):
         script = script["script"]
 
-    # 审计复用是"本次恢复还要不要再花一次审计"的唯一判据：按真实入口问一句。
-    reusable = m._reusable_final_audit(script)
-    if reusable is None:
-        raise ResumeError(
-            "审计不可复用（revision/规则指纹/时长带/scope/提示版本/通道任一不符）——"
-            "拒绝恢复；请核对清单身份，或明确接受重新审计后再跑")
+    # 审计复用判定移到「冻结原文与计划」之后：S05 起它要核内容身份，
+    # 而内容身份包含原文与计划——先判复用等于用还没加载的输入下结论。
 
     # 冻结原文与计划：恢复必须在**同一份**输入与计划上继续，而不是读"当前"的。
     # **不调用 read_chapter**：场景缓存缺失时它会调模型，dry-run 就不能保证零调用。
@@ -287,6 +283,19 @@ def run(manifest_path, *, dry_run: bool = False) -> int:
     plan = cache.get("outline") if isinstance(cache, dict) else None
     if not isinstance(plan, dict):
         raise ResumeError("冻结计划文件里没有 outline（plan_path 不是大纲缓存？）")
+
+    # 审计复用是"本次恢复还要不要再花一次审计"的唯一判据：按真实入口问一句。
+    # S05：核的是**内容身份**（原文 + 计划 + 送审稿 + 规则/提示版本 + 时长带 + 通道），
+    # 而不只是 revision/指纹——原文或计划换了也照样复用是此前的漏洞。旧审计没有
+    # 身份字段时，`_reusable_final_audit` 会明确拒收（复用证据不足）。
+    expected_source = m._final_audit_source_identity(
+        script, novel_text, plan, man.get("channel_model"))
+    reusable = m._reusable_final_audit(script, expected_source_identity=expected_source)
+    if reusable is None:
+        raise ResumeError(
+            "审计不可复用（内容身份 / 原文 / 计划 / revision / 规则指纹 / 时长带 / "
+            "scope / 提示版本 / 通道任一不符，或旧审计缺少身份字段）——拒绝恢复；"
+            "请核对清单身份，或明确接受重新审计后再跑")
 
     if dry_run:
         print(json.dumps({

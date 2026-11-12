@@ -173,8 +173,20 @@ def test_commit_writes_three_artifacts_and_manifest(chapter, monkeypatch):
     assert manifest["script_revision"] == rev
     assert manifest["status"] == "COMMITTED"
     assert manifest["audit_scope"] == m.STEP01_AUDIT_SCOPE
+    # S05（2026-11-11）：审计实际状态必须**同名**贯通三处——
+    # 审计 payload / 提交摘要 / 提交清单。空 `audit_status` 无法区分
+    # 「审计跑成功」与「没有可用审计」。
+    assert audit["audit_status"] == "ok"
+    assert manifest["audit_status"] == "ok"
+    assert summary["audit_status"] == "ok"
     assert set(manifest["artifacts"]) == {
         "script_result.json", "step01_quality.json", "step01_audit.json"}
+
+    # S03（2026-11-11）：影子裁决报告由**真实提交路径**写出（诊断产物，不参与准入）
+    adjudication = json.loads(
+        (chapter / "step01_audit_adjudication.json").read_text(encoding="utf-8"))
+    assert adjudication["gate_effect"] == "shadow_only"
+    assert adjudication["summary"]["issues"] == len(audit["issues"])
 
     # 真实 consumer：不 mock，直接读真实文件
     require_semantic_gate(chapter / "step01_quality.json",
