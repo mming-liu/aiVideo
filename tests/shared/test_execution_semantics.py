@@ -45,7 +45,13 @@ def test_fixture_manifest_expectation_is_autodetected(name):
     for side in ("baseline", "mutation"):
         for finding in check_execution_semantics(
                 family[side]["script"], family[side]["execution"]["candidate"]):
-            assert finding["severity"] == "reject"
+            # 2026-11-12（复核 P4）：`causal_gap` 是**计划结构记录**（标签缺失），
+            # 不阻塞——合法省略在 Step01 通过、到 Step02a 又被拒收就是这条造成的。
+            # 其余 code 仍必须是 reject；这条断言防止 advisory 被扩大到别的判据上。
+            if finding["code"] == "causal_gap":
+                assert finding["severity"] == "advisory", finding
+            else:
+                assert finding["severity"] == "reject", finding
             assert finding["path"]
             assert finding["message"]
 

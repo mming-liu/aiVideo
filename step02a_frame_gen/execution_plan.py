@@ -20,6 +20,7 @@
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -290,6 +291,7 @@ def _frame_entry(unit: dict, characters: list[dict], kind: str, model: str,
     return {
         "shot_index": idx,
         "frame": label,
+        "kind": kind,
         "frame_id": f"shot-{idx}:{label}",
         "moment": moment,
         "responsibility": responsibility,
@@ -375,6 +377,11 @@ def build_visual_plan(script: dict, *, scope: dict, stage: str = VISUAL_PLAN_STA
             "voice_units": _unit_voice_units(planned, idx),
             "frames": [],
             "issues": shot_issues,
+            # M05（2026-11-12 复核 P2）：**生成侧要消费的那一份参数**。
+            # 此前计划只做验收、生成仍从原稿 `script` 取 `shot` 重新构建请求，
+            # 于是「计划通过、发送内容没采用计划」可以同时成立。这里把合并后的
+            # 单元整份带进计划，`gen_all_frames` 直接把它交给 `gen_shot_frames`。
+            "execution": {"unit": copy.deepcopy(unit)},
             "status": "blocked" if any(i.get("code") in {
                 "prompt_contradiction", "required_character_missing",
                 "reference_capacity"} for i in shot_issues) else "planned",
@@ -395,6 +402,12 @@ def build_visual_plan(script: dict, *, scope: dict, stage: str = VISUAL_PLAN_STA
             all_frames.append(frame)
         shot_entries.append(entry)
 
+    # 2026-11-12（复核 P4）：只有**阻塞级**语义 finding 才把计划判成 blocked。
+    # advisory 是计划结构记录（例如 `causal_chain` 缺「行动」标签、而镜头里过程完整），
+    # 让它在 Step02a 再次拦下合法省略，等于把 Step01 已经通过的结论推翻。
+    _semantic_blocking = [f for f in semantic
+                          if str(f.get("severity") or "reject").strip().lower()
+                          != "advisory"]
     plan = {
         "schema": VISUAL_PLAN_SCHEMA,
         "stage": stage,
@@ -414,7 +427,7 @@ def build_visual_plan(script: dict, *, scope: dict, stage: str = VISUAL_PLAN_STA
         "unresolved": unresolved,
         "feedback": feedback,
         "unverified": [],
-        "status": "blocked" if (semantic or unresolved_gate_issues(binding)
+        "status": "blocked" if (_semantic_blocking or unresolved_gate_issues(binding)
                                 or any(s["status"] == "blocked" for s in shot_entries))
         else "planned",
     }
@@ -454,6 +467,78 @@ def validate_plan_identity(plan: dict, script: dict, *, scope: dict,
         issues.append({"code": "source_digest_stale", "severity": "reject",
                        "path": "visual_plan.source.source_digest",
                        "message": "画面计划的 source_digest 与当前稿件不一致"})
+    return issues
+
+
+def verify_plan_execution(plan: dict, *, characters: list | None = None,
+                          check_reference_files: bool = True) -> list[dict]:
+    """发送前：**计划里的最终提示与参考摘要必须仍能由计划自己的参数复算出来**.
+
+    2026-11-12（复核 P2）：`validate_plan_identity` 只核上游身份（绑定/scope/digest），
+    不核计划内部的最终提示与参考文件。于是「计划被改过」「参考文件在计划之后被替换」
+    都能通过身份检查，而生成侧仍然照旧构建请求——出现「计划验收通过、发送内容没采用
+    计划」的假贯通。本函数补的就是这一段：
+
+    - 逐帧用 `execution.unit` 重算 `compose_frame_prompt`，与计划记录的 `prompt` 比对；
+    - 逐参考重算文件 sha256，与计划记录的 `sha256` 比对（文件缺失也算失配）。
+
+    Returns:
+        问题列表（空 = 通过）；每条含 `code` / `severity` / `path` / `message`。
+    """
+    import hashlib as _hashlib
+    from pathlib import Path as _Path
+
+    issues: list[dict] = []
+    chars = list(characters or [])
+    for shot in (plan or {}).get("shots") or []:
+        if not isinstance(shot, dict):
+            continue
+        idx = shot.get("shot_index")
+        unit = ((shot.get("execution") or {}).get("unit"))
+        if not isinstance(unit, dict):
+            issues.append({"code": "plan_execution_missing", "severity": "reject",
+                           "path": f"visual_plan.shots[{idx}].execution",
+                           "message": "计划缺少生成侧要消费的执行参数"})
+            continue
+        if str(unit.get("index")) != str(idx):
+            issues.append({"code": "plan_execution_identity", "severity": "reject",
+                           "path": f"visual_plan.shots[{idx}].execution.unit",
+                           "message": f"执行参数属于镜 {unit.get('index')}，与条目镜 {idx} 不一致"})
+            continue
+        for frame in shot.get("frames") or []:
+            if not isinstance(frame, dict):
+                continue
+            kind = frame.get("kind") or frame.get("frame")
+            prompt, err = _frame_prompt(unit, chars, str(kind))
+            if err or prompt != frame.get("prompt"):
+                issues.append({
+                    "code": "plan_prompt_drift", "severity": "reject",
+                    "path": f"visual_plan.{frame.get('frame_id')}.prompt",
+                    "message": ("计划的最终提示与执行参数复算结果不一致"
+                                + (f"（{err}）" if err else "")),
+                })
+            if not check_reference_files:
+                continue
+            for ref in frame.get("references") or []:
+                if not isinstance(ref, dict):
+                    continue
+                expected = str(ref.get("sha256") or "")
+                path = str(ref.get("path") or "")
+                if not expected or not path:
+                    continue
+                target = _Path(path)
+                if not target.is_file():
+                    issues.append({
+                        "code": "plan_reference_missing", "severity": "reject",
+                        "path": f"visual_plan.{frame.get('frame_id')}.references",
+                        "message": f"计划引用的参考文件不存在：{path}"})
+                    continue
+                actual = _hashlib.sha256(target.read_bytes()).hexdigest()
+                if actual != expected:
+                    issues.append({
+                        "code": "plan_reference_drift", "severity": "reject",
+                        "path": f"visual_plan.{frame.get('frame_id')}.references",
+                        "message": f"参考文件在计划之后被替换：{path}"})
     return issues
 
 

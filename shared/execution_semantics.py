@@ -80,6 +80,43 @@ _RESULT_ROLES = ("结果", "后果", "result", "outcome")
 
 _ROLE_SPLIT_RE = re.compile(r"^\s*([^：:]{1,12})\s*[：:]\s*(.*)$", re.S)
 
+#: 动作分段标记（`前2秒：` / `2-4秒：`）。**结构证据**，不依赖任何作品词表。
+_MOTION_SEGMENT_RE = re.compile(
+    r"(?:前|后)\s*\d+(?:\.\d+)?\s*秒|\d+(?:\.\d+)?\s*[-－~～至]\s*\d+(?:\.\d+)?\s*秒")
+
+
+def _bridge_text(script: dict) -> str:
+    """镜头衔接字段（`context_bridge` 等）——时间推进标记的**统一读取范围**之一.
+
+    2026-11-12 复核：`_has_temporal_marker` 此前只读镜头正文与 `narration_lines` /
+    `main_events`，**不读 `context_bridge`**。于是「次日到达」这类合法省略写在衔接
+    字段里时被判成「全稿没有时间推进标记」，进而触发 `time_ellipsis_lost`。
+    """
+    parts = [_text(shot.get("context_bridge")) for shot in _iter_shots(script)]
+    outline = _outline(script)
+    for key in ("context_bridge", "time_notes", "temporal_notes"):
+        value = outline.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+    return "\n".join(p for p in parts if p)
+
+
+def _process_carriers(script: dict) -> list[str]:
+    """镜头里**实际呈现的过程载体**（动作分段 / 关键帧），不依赖计划标签.
+
+    2026-11-12 复核反例：`起因 → 结果` 的合法省略（约定赴城 → 离开 → 次日到达）
+    被 `causal_gap` 判成 reject，理由只是 `causal_chain` 少了「行动」标签——而两个
+    镜头各自都有两段动作。**标签缺失是计划结构问题，不是镜头缺少过程**，所以判据
+    必须先看稿子里有没有过程载体。
+    """
+    out: list[str] = []
+    for shot in _iter_shots(script):
+        segments = _MOTION_SEGMENT_RE.findall(_text(shot.get("motion_desc")))
+        keyframes = shot.get("keyframes")
+        if len(segments) >= 2 or (isinstance(keyframes, list) and keyframes):
+            out.append("shot:%s" % (shot.get("index"),))
+    return out
+
 
 def _issue(code: str, path: str, message: str, *, family: str, **fields) -> dict:
     if code not in KNOWN_CODES:  # 开发期自检：不允许悄悄新增未登记的 code
@@ -149,6 +186,7 @@ def _role_matches(role: str, candidates: tuple) -> bool:
 
 def _has_temporal_marker(script: dict) -> bool:
     text = "\n".join([_all_shot_text(script),
+                      _bridge_text(script),
                       str(_outline(script).get("narration_lines") or ""),
                       str(_outline(script).get("main_events") or "")])
     return any(re.search(pattern, text, re.I) for pattern in DEFAULT_TEMPORAL_MARKERS)
@@ -242,17 +280,24 @@ def _check_causal_and_time(script: dict) -> list[dict]:
     has_cause = any(_role_matches(role, _CAUSE_ROLES) for role, _t, _i in roles)
     if not (has_result and has_cause and not has_action):
         return []
+    # 标签缺失先作为**结构证据**记录（advisory），不再直接拒收：合法省略的镜头
+    # 往往有完整过程，只是计划没写「行动」标签。
+    carriers = _process_carriers(script)
     findings = [_issue(
         "causal_gap", "chapter_outline.causal_chain",
-        "因果链只有起因与结果、没有行动/过程：结果缺少执行路径",
+        "因果链只有起因与结果、没有行动/过程标签：结果缺少显式执行路径（结构记录）",
         family="temporal_ellipsis",
+        severity="advisory",
         expected_roles=["起因", "行动", "结果"],
         actual_roles=[role for role, _t, _i in roles],
+        carrier_evidence=carriers,
     )]
-    if not _has_temporal_marker(script) and _has_completion_marker(script):
+    # 只有在**稿子里也没有过程载体**时，才把「结果已断言完成」判成删过程。
+    if (not carriers and not _has_temporal_marker(script)
+            and _has_completion_marker(script)):
         findings.append(_issue(
             "time_ellipsis_lost", "chapter_outline.narration_lines",
-            "结果状态已断言完成，但全稿没有时间推进标记或过程载体；"
+            "结果状态已断言完成，但全稿既没有时间推进标记也没有过程载体；"
             "这是删除时间/过程后只留结果，不是合法的常规省略",
             family="temporal_ellipsis",
             missing=["temporal_marker", "process_carrier"],

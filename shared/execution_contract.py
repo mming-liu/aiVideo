@@ -975,10 +975,30 @@ def attach_semantic_checks(binding: dict, *, checked_paths: list[str],
     feedback = updated.get("feedback")
     feedback = feedback if isinstance(feedback, list) else []
     paths = [str(p) for p in (checked_paths or []) if str(p).strip()]
-    if findings:
-        for finding in findings:
-            if not isinstance(finding, dict):
-                continue
+    # 2026-11-12（复核 P4）：finding 的 severity 必须被尊重。
+    # 此前**所有** finding 一律写成 `severity=reject` + `status=unresolved`，
+    # 于是一条「计划结构记录」（例如 causal_chain 缺「行动」标签、而镜头里明明有
+    # 完整过程）也会把画面计划判成 blocked——合法省略在 Step01 通过、到 Step02a
+    # 又被拒收，返工只是换了阶段。现在 advisory 只进 `advisories`，不阻塞。
+    _blocking = [f for f in (findings or []) if isinstance(f, dict)
+                 and str(f.get("severity") or "reject").strip().lower() != "advisory"]
+    _advisory = [f for f in (findings or []) if isinstance(f, dict)
+                 and str(f.get("severity") or "reject").strip().lower() == "advisory"]
+    if _advisory:
+        advisories = updated.get("advisories")
+        advisories = advisories if isinstance(advisories, list) else []
+        for finding in _advisory:
+            advisories.append({
+                "code": str(finding.get("code") or "semantic_advisory"),
+                "path": str(finding.get("path") or ""),
+                "message": str(finding.get("message") or ""),
+                "severity": "advisory",
+                "route": "step01",
+                "status": "advisory",
+            })
+        updated["advisories"] = advisories
+    if _blocking:
+        for finding in _blocking:
             rec = {
                 "code": str(finding.get("code") or "semantic_check_failed"),
                 "path": str(finding.get("path") or ""),
@@ -998,13 +1018,15 @@ def attach_semantic_checks(binding: dict, *, checked_paths: list[str],
             })
         checks.append({
             "kind": "semantic", "checker": checker, "status": "fail",
-            "paths": paths, "codes": sorted({str(f.get("code")) for f in findings}),
+            "paths": paths, "codes": sorted({str(f.get("code")) for f in _blocking}),
         })
     else:
         for path in paths or ["<all>"]:
             checks.append({
                 "kind": "semantic", "checker": checker, "status": "pass",
                 "path": path,
+                **({"advisory_codes": sorted({str(f.get("code")) for f in _advisory})}
+                   if _advisory else {}),
             })
     updated["checks"] = checks
     updated["unresolved"] = unresolved

@@ -75,6 +75,32 @@ def test_mutation_offscreen_visible_is_blocked_by_real_entry():
     assert "visual_plan_blocked" in {i["code"] for i in issues}
 
 
+def test_legal_ellipsis_is_not_blocked_by_the_frame_plan_entry():
+    """复核 P4：计划只缺「行动」标签、镜头过程完整 → 计划仍须放行.
+
+    Step01 已判为合法省略的样本，不能在 Step02a 被同一条结构标签再次拦下——
+    否则返工只是换了阶段。这里断言：计划 `planned`、无阻塞级语义 finding、
+    `causal_gap` 作为 advisory 被记录。
+    """
+    family = _family("temporal_ellipsis")
+    script = copy.deepcopy(family["baseline"]["script"])
+    outline = script["chapter_outline"]
+    outline["causal_chain"] = [entry for entry in outline["causal_chain"]
+                               if not entry.startswith("行动：")]
+
+    plan = build_visual_plan(script, scope=family["scope"], only_indices={1, 2})
+    assert plan["status"] == "planned", plan.get("checks")
+    blocking = [f for f in plan["checks"]["semantic"]
+                if str(f.get("severity") or "reject") != "advisory"]
+    assert blocking == [], blocking
+    assert codes_of(plan["checks"]["semantic"]) == ["causal_gap"]
+    advisories = [a.get("code") for a in
+                  (plan["execution_binding"].get("advisories") or [])]
+    assert advisories == ["causal_gap"]
+    assert plan["checks"]["unresolved_gate"] == []
+    assert validate_plan_identity(plan, script, scope=family["scope"]) == []
+
+
 def test_required_main_subject_missing_is_detected():
     family = _family("temporal_ellipsis")
     script = copy.deepcopy(family["baseline"]["script"])

@@ -83,6 +83,16 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
             logger = get_logger(chapter_dir() / "step02a.log", console_level="INFO")
             logger.error(f"[PLAN] 画面计划重验失败，拒绝发送生成: {_plan_issues[:3]}")
             raise SystemExit(2)
+        # M05（2026-11-12 复核 P2）：身份通过还不够——计划内部的最终提示与参考摘要
+        # 也必须仍能复算出来，否则会出现「计划验收通过、发送内容没采用计划」。
+        from step02a_frame_gen.execution_plan import verify_plan_execution
+        _exec_issues = verify_plan_execution(
+            visual_plan, characters=script.get("characters") or [])
+        if _exec_issues:
+            logger = get_logger(chapter_dir() / "step02a.log", console_level="INFO")
+            logger.error("[PLAN] 计划执行参数与最终提示/参考不一致，拒绝发送生成: "
+                         f"{_exec_issues[:3]}")
+            raise SystemExit(2)
         _planned_shots = {int(s.get("shot_index")) for s in visual_plan.get("shots") or []
                           if s.get("status") != "blocked"}
         if only_indices is None:
@@ -100,11 +110,24 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
     failed: list[int] = []
 
     # 组装任务列表（hook + 各镜头，统一并发单元）
+    # M05（2026-11-12 复核 P2）：**生成消费计划里的执行参数**，不再回读原稿 `shot`。
+    # 计划与生成从此是同一份输入：计划改了什么，生成就收到什么。
+    _plan_units: dict[int, dict] = {}
+    if isinstance(visual_plan, dict):
+        for _entry in visual_plan.get("shots") or []:
+            if not isinstance(_entry, dict):
+                continue
+            _unit = ((_entry.get("execution") or {}).get("unit"))
+            if isinstance(_unit, dict):
+                try:
+                    _plan_units[int(_entry.get("shot_index"))] = _unit
+                except (TypeError, ValueError):
+                    continue
     tasks_spec: list[tuple[int, dict, bool]] = []
     if hook and hook.get("prompt"):
         if only_indices is None or 0 in only_indices:
             hook["index"] = 0
-            tasks_spec.append((0, hook, False))
+            tasks_spec.append((0, _plan_units.get(0, hook), False))
     for shot in shots:
         idx = shot["index"]
         if only_indices is not None and idx not in only_indices:
@@ -115,7 +138,7 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
             os.getenv("STEP02A_USE_CONTINUITY_FRAME", "0").strip() == "1"
             and idx >= 2
         )
-        tasks_spec.append((idx, shot, skip_first))
+        tasks_spec.append((idx, _plan_units.get(idx, shot), skip_first))
 
     sem = asyncio.Semaphore(concurrency)
     logger.info(f"[INFO] 帧生成并发数: {concurrency}（{len(tasks_spec)} 个镜头单元）")
