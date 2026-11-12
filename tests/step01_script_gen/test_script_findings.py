@@ -145,11 +145,15 @@ def test_ff_lf_framing_jump_without_motion_is_conflict():
 
 def test_prop_release_then_hold_fixture():
     case = json.loads((FIXTURES / "state_broken.json").read_text(encoding="utf-8"))
+    shots = case["script"]["shots"]
+    # 编号与道具名从夹具自身派生，不写死故事内容（AGENTS.md 内容无关性）。
+    prop = next(p for item in shots[0]["frame_layouts"]["ff"]
+                for p in (item.get("props") or []))
     findings = [f for f in scan_script(case["script"]) if f["code"] == "PROP_STATE_CHAIN"]
     assert len(findings) == 1
-    assert findings[0]["shot_id"] == "2"
+    assert str(findings[0]["shot_id"]) == str(shots[1]["index"])
     assert findings[0]["field_path"] == "ff_desc"
-    assert findings[0]["prop"] == "酒壶"
+    assert findings[0]["prop"] == prop
 
 
 def test_prop_legal_fixture_has_no_chain_finding():

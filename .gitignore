@@ -411,3 +411,9 @@ output_step01_*/
 !baselines/
 !baselines/**/
 !baselines/**
+
+# 2026-11-12：三族审计夹具的「内容无关机制」——构造器与跨内容验收必须随仓库交付，
+# 否则干净检出只有三份冻结 JSON，无法验证「相同契约换一部小说后是否仍成立」。
+# 样本包在 fixtures/** 下已由上面的白名单放行；此处按项目约定逐条放行两个 .py。
+!tests/step01_script_gen/narrative_family_builder.py
+!tests/step01_script_gen/test_narrative_family_genericity.py

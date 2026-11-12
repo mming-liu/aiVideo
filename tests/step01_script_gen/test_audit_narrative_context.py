@@ -35,10 +35,12 @@ def test_compact_fields_carry_narrative_context():
 def test_prompt_contains_context_fields_and_unknown_renders_null():
     case = json.loads((FIXTURES / "time_ellipsis_legal.json").read_text(encoding="utf-8"))
     prompt = audit.build_audit_prompt(case["novel"], case["plan"], case["script"])
-    # 送审稿里真的带着这四个字段（逐字取自样本）
-    assert '"scene": "院中·夜"' in prompt
-    assert '"clip_transition": "淡出黑场，0.5s"' in prompt
-    assert '"context_bridge": "次日清晨，天光初亮"' in prompt
+    # 断言从夹具字段派生，不写死任何具体故事文本（AGENTS.md「内容无关性与夹具」）。
+    # 换小说/章节时只需换样本包，本用例不需要跟着改字符串。
+    shot = next(s for s in case["script"]["shots"] if s["context_bridge"])
+    for field in ("scene", "clip_transition", "context_bridge"):
+        rendered = json.dumps(shot[field], ensure_ascii=False)
+        assert '"%s": %s' % (field, rendered) in prompt, field
     # 缺字段 → null（未知），不得补造时间关系
     bare = {"shots": [{"index": 1, "duration_sec": 5.0, "ff_desc": "甲站立"}],
             "total_duration": 5.0}

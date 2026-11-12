@@ -4,44 +4,92 @@
   "expected": {
     "verdict": "legal",
     "defect_class": "none",
-    "discriminating": ["narration_segment", "frame_layouts.ff"],
-    "why": "丙始终在画外（两镜 frame_layouts 都没有丙的出镜条目），旁白的说话人前缀一直是丙。听者反应只证明甲听见了，没有改变声音归属。",
-    "must_preserve": ["声音归属：丙", "丙不在画内", "甲的反应指向门外"]
+    "discriminating": [
+      "narration_segment",
+      "frame_layouts.ff"
+    ],
+    "why": "样本包显式声明「声音归属：丙始终画外，旁白前缀一致，只换听者反应」；基线在其它轴上同样与原文一致：不新增台词或事件、每镜尾帧为该镜动作的结果态、末镜完成原文最后一个动作。因此它是全轴干净的正例，而不只是单轴合法。",
+    "must_preserve": [
+      "声音归属：丙",
+      "丙不在画内",
+      "甲的反应指向门外"
+    ]
   },
   "novel": "门外传来丙的声音：「你终于来了。」甲转头看向门口。",
   "plan": {},
   "script": {
     "shots": [
       {
-        "index": 1, "duration_sec": 6.0, "main_subject": "甲",
-        "scene": "堂内·夜", "location": "堂内", "clip_transition": "硬切",
+        "index": 1,
+        "duration_sec": 6.0,
+        "main_subject": "甲",
+        "scene": "堂内·夜",
+        "location": "堂内",
+        "clip_transition": "硬切",
         "context_bridge": "",
-        "ff_desc": "甲背对镜头站在堂中，门在画左",
+        "ff_desc": "甲背对镜头站在堂中",
         "lf_desc": "甲转头看向画左的门",
-        "motion_desc": "前3秒：声音入；后3秒：甲转头",
-        "prompt": "[中景] 堂内，甲背对镜头站立后转头看向门口",
+        "motion_desc": "前3秒：甲听见门外的声音并转头；后3秒：甲转头看向画左的门",
+        "prompt": "[近景] 堂内·夜，甲听见门外的声音并转头",
         "narration_segment": "丙：你终于来了。",
-        "frame_layouts": {"ff": [{"name": "甲", "on_screen": true, "position": "堂中", "pose": "背对站立", "gaze_target": "门", "props": []}],
-                          "lf": [{"name": "甲", "on_screen": true, "position": "堂中", "pose": "转头", "gaze_target": "门", "props": []}],
-                          "kfs": []},
+        "frame_layouts": {
+          "ff": [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "props": []
+            }
+          ],
+          "lf": [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "props": []
+            }
+          ],
+          "kfs": []
+        },
         "keyframes": []
       },
       {
-        "index": 2, "duration_sec": 6.0, "main_subject": "甲",
-        "scene": "堂内·夜", "location": "堂内", "clip_transition": "硬切",
+        "index": 2,
+        "duration_sec": 6.0,
+        "main_subject": "甲",
+        "scene": "堂内·夜",
+        "location": "堂内",
+        "clip_transition": "硬切",
         "context_bridge": "",
         "ff_desc": "甲正面近景，目光落在画左门外",
         "lf_desc": "甲眉头收紧，没有出声",
-        "motion_desc": "前3秒：甲凝视；后3秒：甲眉峰收紧",
-        "prompt": "[近景] 堂内，甲正面凝视门外，眉头收紧",
-        "narration_segment": "丙：我知道你在想什么。",
-        "frame_layouts": {"ff": [{"name": "甲", "on_screen": true, "position": "堂中", "pose": "正面站立", "gaze_target": "门外", "props": []}],
-                          "lf": [{"name": "甲", "on_screen": true, "position": "堂中", "pose": "正面站立", "gaze_target": "门外", "props": []}],
-                          "kfs": []},
+        "motion_desc": "前3秒：甲凝视门外不出声；后3秒：甲眉头收紧，没有出声",
+        "prompt": "[近景] 堂内·夜，甲凝视门外不出声",
+        "narration_segment": "",
+        "frame_layouts": {
+          "ff": [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "props": []
+            }
+          ],
+          "lf": [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "props": []
+            }
+          ],
+          "kfs": []
+        },
         "keyframes": []
       }
     ],
     "hook": null,
     "total_duration": 12.0
+  },
+  "spec": {
+    "schema": "narrative_family_pack.v1",
+    "pack_id": "pack_hall_voice",
+    "spec_version": 1
   }
 }

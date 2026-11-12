@@ -4,44 +4,101 @@
   "expected": {
     "verdict": "legal",
     "defect_class": "none",
-    "discriminating": ["scene", "clip_transition", "context_bridge"],
-    "why": "两镜之间明确隔了一夜：scene 变了、转场声明淡出黑场、context_bridge 写了「次日清晨」。观众不需要看见夜里发生了什么就能跟上剧情，补写过程反而是多余的。",
-    "must_preserve": ["时间关系：次日清晨", "收剑这一动作已经完成", "剑在第二镜仍处于入鞘状态"]
+    "discriminating": [
+      "scene",
+      "clip_transition",
+      "context_bridge"
+    ],
+    "why": "样本包显式声明「时间省略：两镜之间明确隔了一夜」；基线在其它轴上同样与原文一致：不新增台词或事件、每镜尾帧为该镜动作的结果态、末镜完成原文最后一个动作。因此它是全轴干净的正例，而不只是单轴合法。",
+    "must_preserve": [
+      "时间关系：次日清晨，天光初亮",
+      "收剑这一动作已完成",
+      "剑在第二镜仍处入鞘状态"
+    ]
   },
   "novel": "甲在院中收了剑。次日清晨，甲提剑出门。",
   "plan": {},
   "script": {
     "shots": [
       {
-        "index": 1, "duration_sec": 6.0, "main_subject": "甲",
-        "scene": "院中·夜", "location": "院中", "clip_transition": "硬切",
+        "index": 1,
+        "duration_sec": 6.0,
+        "main_subject": "甲",
+        "scene": "院中·夜",
+        "location": "院中",
+        "clip_transition": "硬切",
         "context_bridge": "",
-        "ff_desc": "甲立于院中，右手按在剑柄上",
-        "lf_desc": "甲把剑插回鞘中，转身面向院门",
-        "motion_desc": "前3秒：甲收剑入鞘；后3秒：甲转身",
-        "prompt": "[中景] 夜里的院子，甲收剑入鞘后转身",
+        "ff_desc": "甲右手按在剑柄上",
+        "lf_desc": "甲把剑收回鞘中，转身面向院门",
+        "motion_desc": "前3秒：甲收剑入鞘；后3秒：甲把剑收回鞘中，转身面向院门",
+        "prompt": "[中景] 院中·夜，甲收剑入鞘",
         "narration_segment": "",
-        "frame_layouts": {"ff": [{"name": "甲", "on_screen": true, "position": "院中", "pose": "按剑", "gaze_target": "剑", "props": ["剑"]}],
-                          "lf": [{"name": "甲", "on_screen": true, "position": "院中", "pose": "转身", "gaze_target": "院门", "props": ["剑"]}],
-                          "kfs": []},
+        "frame_layouts": {
+          "ff": [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "props": [
+                "剑"
+              ]
+            }
+          ],
+          "lf": [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "props": [
+                "剑"
+              ]
+            }
+          ],
+          "kfs": []
+        },
         "keyframes": []
       },
       {
-        "index": 2, "duration_sec": 6.0, "main_subject": "甲",
-        "scene": "院中·清晨", "location": "院中", "clip_transition": "淡出黑场，0.5s",
+        "index": 2,
+        "duration_sec": 6.0,
+        "main_subject": "甲",
+        "scene": "院中·清晨",
+        "location": "院中",
+        "clip_transition": "淡出黑场，0.5s",
         "context_bridge": "次日清晨，天光初亮",
         "ff_desc": "甲提剑立于院中，剑仍在鞘内",
-        "lf_desc": "甲迈步走向院门",
-        "motion_desc": "前3秒：甲起步；后3秒：甲走到院门",
-        "prompt": "[中景] 清晨的院子，甲提剑走向院门",
+        "lf_desc": "甲已走出院门，剑仍在鞘内",
+        "motion_desc": "前3秒：甲提剑出门；后3秒：甲已走出院门，剑仍在鞘内",
+        "prompt": "[中景] 院中·清晨，甲提剑出门",
         "narration_segment": "",
-        "frame_layouts": {"ff": [{"name": "甲", "on_screen": true, "position": "院中", "pose": "提剑站立", "gaze_target": "院门", "props": ["剑"]}],
-                          "lf": [{"name": "甲", "on_screen": true, "position": "院门", "pose": "迈步", "gaze_target": "门外", "props": ["剑"]}],
-                          "kfs": []},
+        "frame_layouts": {
+          "ff": [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "props": [
+                "剑"
+              ]
+            }
+          ],
+          "lf": [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "props": [
+                "剑"
+              ]
+            }
+          ],
+          "kfs": []
+        },
         "keyframes": []
       }
     ],
     "hook": null,
     "total_duration": 12.0
+  },
+  "spec": {
+    "schema": "narrative_family_pack.v1",
+    "pack_id": "pack_courtyard_time",
+    "spec_version": 1
   }
 }

@@ -4,44 +4,94 @@
   "expected": {
     "verdict": "legal",
     "defect_class": "none",
-    "discriminating": ["ff_desc", "frame_layouts.ff"],
-    "why": "同一场景、连续时间内，后镜首帧的道具状态与前镜尾帧一致（壶在案上、已空、甲空手）。状态被正确继承，不是矛盾。",
-    "must_preserve": ["酒壶的位置：案上", "酒壶的容量状态：已空", "甲的手：空"]
+    "discriminating": [
+      "ff_desc",
+      "frame_layouts.ff"
+    ],
+    "why": "样本包显式声明「跨镜状态继承：壶在案上、已空、甲空手」；基线在其它轴上同样与原文一致：不新增台词或事件、每镜尾帧为该镜动作的结果态、末镜完成原文最后一个动作。因此它是全轴干净的正例，而不只是单轴合法。",
+    "must_preserve": [
+      "酒壶的位置：案上",
+      "酒壶的容量状态：已空",
+      "甲的手：空"
+    ]
   },
   "novel": "甲把酒壶放在案上，壶已空了。他空着手站着。",
   "plan": {},
   "script": {
     "shots": [
       {
-        "index": 1, "duration_sec": 6.0, "main_subject": "甲",
-        "scene": "舱内·夜", "location": "舱内", "clip_transition": "硬切",
+        "index": 1,
+        "duration_sec": 6.0,
+        "main_subject": "甲",
+        "scene": "舱内·夜",
+        "location": "舱内",
+        "clip_transition": "硬切",
         "context_bridge": "",
         "ff_desc": "甲右手提着酒壶站在案边",
         "lf_desc": "甲把空酒壶放在案上，双手垂落",
-        "motion_desc": "前3秒：甲放下酒壶；后3秒：甲松手",
-        "prompt": "[中景] 舱内，甲把空酒壶放到案上",
+        "motion_desc": "前3秒：甲放下空酒壶；后3秒：甲把空酒壶放在案上，双手垂落",
+        "prompt": "[中景] 舱内·夜，甲放下空酒壶",
         "narration_segment": "",
-        "frame_layouts": {"ff": [{"name": "甲", "on_screen": true, "position": "案边", "pose": "提壶", "gaze_target": "案面", "props": ["酒壶"]}],
-                          "lf": [{"name": "甲", "on_screen": true, "position": "案边", "pose": "垂手", "gaze_target": "案面", "props": []}],
-                          "kfs": []},
+        "frame_layouts": {
+          "ff": [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "props": [
+                "酒壶"
+              ]
+            }
+          ],
+          "lf": [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "props": []
+            }
+          ],
+          "kfs": []
+        },
         "keyframes": []
       },
       {
-        "index": 2, "duration_sec": 6.0, "main_subject": "甲",
-        "scene": "舱内·夜", "location": "舱内", "clip_transition": "硬切",
+        "index": 2,
+        "duration_sec": 6.0,
+        "main_subject": "甲",
+        "scene": "舱内·夜",
+        "location": "舱内",
+        "clip_transition": "硬切",
         "context_bridge": "",
-        "ff_desc": "案上放着那只空酒壶，甲空手立在案边",
-        "lf_desc": "甲转身走向舱门",
-        "motion_desc": "前3秒：甲转身；后3秒：甲走到舱门",
-        "prompt": "[中景] 舱内，空酒壶在案上，甲空手转身",
+        "ff_desc": "甲空手立在案边，案上放着那只空酒壶",
+        "lf_desc": "甲空手静立，案上酒壶未动",
+        "motion_desc": "前3秒：甲空手静立；后3秒：甲空手静立，案上酒壶未动",
+        "prompt": "[中景] 舱内·夜，甲空手静立",
         "narration_segment": "",
-        "frame_layouts": {"ff": [{"name": "甲", "on_screen": true, "position": "案边", "pose": "垂手站立", "gaze_target": "舱门", "props": []}],
-                          "lf": [{"name": "甲", "on_screen": true, "position": "舱门", "pose": "迈步", "gaze_target": "门外", "props": []}],
-                          "kfs": []},
+        "frame_layouts": {
+          "ff": [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "props": []
+            }
+          ],
+          "lf": [
+            {
+              "name": "甲",
+              "on_screen": true,
+              "props": []
+            }
+          ],
+          "kfs": []
+        },
         "keyframes": []
       }
     ],
     "hook": null,
     "total_duration": 12.0
+  },
+  "spec": {
+    "schema": "narrative_family_pack.v1",
+    "pack_id": "pack_cabin_state",
+    "spec_version": 1
   }
 }
