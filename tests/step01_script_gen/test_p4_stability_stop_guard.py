@@ -47,7 +47,7 @@ tool = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = tool
 _spec.loader.exec_module(tool)
 
-BASE_URL = "https://opencode.ai/zen/go/v1"
+BASE_URL = "https://opencode.ai/inference/go/openai/v1"
 
 
 # ---------------------------------------------------------------------------

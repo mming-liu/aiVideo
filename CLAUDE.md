@@ -6,7 +6,7 @@ Claude 负责 aiVideo 的实施、测试、运行与交付。目标与授权以�
 
 ## 授权与费用
 
-执行 [AGENTS.md「授权与费用」](AGENTS.md#授权与费用)。用户已授权 dsh 执行端直接发起 Step01 真实调用，无需另行申请运行权限、单独授权或逐次请示；**该授权绑定 OpenCode Go 订阅制套餐**（`TEXT_PROVIDER=agent_plan`、`AGENT_PLAN_TEXT_BASE_URL=https://opencode.ai/zen/go/v1`、模型取生效配置，端点精确匹配 `/zen/go/v1/chat/completions`），运行前核对进程环境、命令行与 `.env.content` 的最终生效值，**禁止**落到 `deepseek` provider / `DEEPSEEK_API_KEY` / `api.deepseek.com` 官方按次计费 API；遵守已指定的上限与止损条件。用户同时授权 dsh 会话以 `DSH_PERMISSION_MODE=danger-full-access` 运行并自行提交本项目改动。Step02a 扩量及 Step02b 每次付费调用仍按该节办理。已获授权的动作沿用原范围、预算和止损条件。
+执行 [AGENTS.md「授权与费用」](AGENTS.md#授权与费用)。用户已授权 dsh 执行端直接发起 Step01 真实调用，无需另行申请运行权限、单独授权或逐次请示；**该授权绑定 OpenCode Go 订阅制套餐**（`TEXT_PROVIDER=agent_plan`、`AGENT_PLAN_TEXT_BASE_URL=https://opencode.ai/inference/go/openai/v1`、模型取生效配置，端点精确匹配 `/inference/go/openai/v1/chat/completions`，旧别名 `/zen/go/v1/chat/completions` 同属订阅端点），运行前核对进程环境、命令行与 `.env.content` 的最终生效值，**禁止**落到 `deepseek` provider / `DEEPSEEK_API_KEY` / `api.deepseek.com` 官方按次计费 API；遵守已指定的上限与止损条件。用户同时授权 dsh 会话以 `DSH_PERMISSION_MODE=danger-full-access` 运行并自行提交本项目改动。Step02a 扩量及 Step02b 每次付费调用仍按该节办理。已获授权的动作沿用原范围、预算和止损条件。
 
 ## 自主推进与升级
 

@@ -5,7 +5,8 @@
 缩略图会丢掉，模型会误判成"已经在吹"。本工具按区域裁切（face/hands/boat/full）
 并放大到 640px，再连同问题发给视觉模型。
 
-端点（nexus-audit 同款）：https://opencode.ai/zen/go/v1/chat/completions
+端点（nexus-audit 同款）：https://opencode.ai/inference/go/openai/v1/chat/completions
+（2026-11-12 迁移；旧 /zen/go/v1 仍作别名在服务）
 鉴权：Bearer AGENT_PLAN_API_KEY（或 OPENCODE_API_KEY）
 必需头：User-Agent（标识客户端）+ x-opencode-session（稳定会话）
 """
@@ -20,7 +21,7 @@ import sys
 import uuid
 
 DEFAULT_MODEL = "glm-5.3-flash"
-BASE_URL = "https://opencode.ai/zen/go/v1/chat/completions"
+BASE_URL = "https://opencode.ai/inference/go/openai/v1/chat/completions"
 
 #: 相对裁切框 (left, top, right, bottom)，按比例
 CROPS = {

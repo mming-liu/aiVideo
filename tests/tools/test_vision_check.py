@@ -31,7 +31,7 @@ def test_ask_uses_go_endpoint_and_session_header(monkeypatch):
     out = vc.ask("q", [("x.png", "face")])
 
     assert out["status"] == 200
-    assert seen["url"] == "https://opencode.ai/zen/go/v1/chat/completions"
+    assert seen["url"] == "https://opencode.ai/inference/go/openai/v1/chat/completions"
     assert seen["headers"]["Authorization"] == "Bearer oc_sk_test"
     assert seen["headers"]["x-opencode-session"]
     assert seen["headers"]["User-Agent"].startswith("aiVideo-vision/")

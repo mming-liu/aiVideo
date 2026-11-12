@@ -128,8 +128,18 @@ def normalize_endpoint(base_url: str) -> str:
 
 #: 订阅制（OpenCode Go）只认**精确**的 chat 端点；不用前缀判断，
 #: 也不靠逐个补编码反例（复核 F3：前缀检查已被 %252e 绕过）。
+#:
+#: 2026-11-12 迁移（用户决定「万一他们后面改了」）：官方文档端点改为
+#: `/inference/go/openai/v1/chat/completions`；旧 `/zen/go/v1/chat/completions`
+#: 仍作为别名在服务（同日实测两路径响应同构、`usage.opencode.billing_source`
+#: 均为 "go"）。**两者都算套餐端点**：已冻结的包/回放仍按旧路径核验，
+#: 新请求按 `.env.content` 走新路径。
 SUBSCRIPTION_HOST = "opencode.ai"
-SUBSCRIPTION_CHAT_PATH = "/zen/go/v1/chat/completions"
+SUBSCRIPTION_CHAT_PATH = "/inference/go/openai/v1/chat/completions"
+SUBSCRIPTION_CHAT_PATHS = (
+    SUBSCRIPTION_CHAT_PATH,
+    "/zen/go/v1/chat/completions",
+)
 
 
 def chat_completions_url(base_url: str) -> str:
@@ -160,7 +170,7 @@ def is_subscription_endpoint(base_url: str) -> bool:
     if port not in (None, 443):
         return False
     return (parts.hostname or "").lower() == SUBSCRIPTION_HOST and \
-        (parts.path or "") == SUBSCRIPTION_CHAT_PATH
+        (parts.path or "") in SUBSCRIPTION_CHAT_PATHS
 
 
 class _SseIncomplete(RuntimeError):
@@ -194,7 +204,8 @@ _AUTO_SESSION_ID = "aivideo-%s" % uuid.uuid4().hex[:12]
 #: 文本通道的**请求方言**——由**解析后的端点**决定。切换通道时必须同时改这里：
 #: 端点即契约，方舟的 Doubao 字段名（`thinking.type`）在 OpenAI 兼容网关上没有意义。
 #:
-#: - `openai`：OpenAI 兼容网关（`AGENT_PLAN_TEXT_BASE_URL`；2026-10-02 起指向 OpenCode Go）。
+#: - `openai`：OpenAI 兼容网关（`AGENT_PLAN_TEXT_BASE_URL`；2026-10-02 起指向 OpenCode Go，
+#:   2026-11-12 起为 `/inference/go/openai/v1`，旧 `/zen/go/v1` 仍是可用别名）。
 #:   思考强度走 `reasoning_effort`——官方模型目录登记
 #:   `[[reasoning_options]] type = "effort" / values = ["low", "high", "max"]`
 #:   （2026-10-03 核对 https://raw.githubusercontent.com/anomalyco/models.dev/dev/providers/opencode-go/models/deepseek-v4.1-flash.toml）。

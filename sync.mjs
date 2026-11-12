@@ -35,7 +35,7 @@ const PROTOCOL_BY_NPM = {
   [NPM_ANTHROPIC]: 'anthropic-messages',
   [NPM_COMPATIBLE]: 'openai-completions',
 };
-const GATEWAY_MODELS_URL = 'https://opencode.ai/zen/go/v1/models';
+const GATEWAY_MODELS_URL = 'https://opencode.ai/inference/go/v1/models';
 const MODELS_DEV_URL = 'https://models.dev/api.json';
 const DEFAULT_SNAPSHOT = path.join(REPO_ROOT, 'catalog', 'opencode-go.json');
 const DEFAULT_SNAPSHOT_URL = 'https://api.github.com/repos/M1012-w0917/dsh-ocgo-sync/contents/catalog/opencode-go.json';
@@ -244,8 +244,8 @@ function buildFromLive(base, opts) {
   const baseIdx = descriptorIndex(base);
   const out = emptyCatalogLike(base);
   const firstEntry = baseIdx.values().next();
-  const fallbackBaseUrl = firstEntry.done ? 'https://opencode.ai/zen/go/v1' : firstEntry.value.descriptor.baseUrl;
-  const baseUrl = (providerMeta && providerMeta.api) || fallbackBaseUrl || 'https://opencode.ai/zen/go/v1';
+  const fallbackBaseUrl = firstEntry.done ? 'https://opencode.ai/inference/go/openai/v1' : firstEntry.value.descriptor.baseUrl;
+  const baseUrl = (providerMeta && providerMeta.api) || fallbackBaseUrl || 'https://opencode.ai/inference/go/openai/v1';
   const providerNpm = (providerMeta && providerMeta.npm) || NPM_COMPATIBLE;
   const added = [];
   const changed = [];

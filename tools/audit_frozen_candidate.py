@@ -63,7 +63,6 @@ AUDIT_CHANNEL_PROVIDERS = ("deepseek", "agent_plan")
 #: 实际解析到的模型与端点，并把端点写进绑定摘要（P1，2026-10-29 复核）。
 SUBSCRIPTION_PROVIDER = "agent_plan"
 SUBSCRIPTION_HOST = "opencode.ai"
-SUBSCRIPTION_PATH_HINT = "/zen/go/"
 
 
 def _audit_endpoint(pkg: dict) -> str:

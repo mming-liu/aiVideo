@@ -111,7 +111,7 @@ def test_config_validate_agent_plan_missing_key(monkeypatch):
 
 #: 两个端点的**请求方言**（2026-10-03）：端点即契约，测试必须显式钉住自己测的是哪一个。
 ARK_URL = "https://ark.cn-beijing.volces.com/api/plan/v3"
-OPENCODE_URL = "https://opencode.ai/zen/go/v1"
+OPENCODE_URL = "https://opencode.ai/inference/go/openai/v1"
 
 
 def _make_text_service(monkeypatch, base_url: str = ARK_URL,

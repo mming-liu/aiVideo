@@ -378,16 +378,16 @@ def test_the_real_runner_only_allows_the_opencode_go_endpoint():
     from tools import p3_split_real_run as runner
 
     _base = runner.OPENCODE_GO_BASE_URL
-    assert _base == "https://opencode.ai/zen/go/v1"
+    assert _base == "https://opencode.ai/inference/go/openai/v1"
     assert runner._base_allowed(_base, _base) is True
     assert runner._base_allowed(_base + "/", _base) is True
     assert runner._base_allowed("https://ark.cn-beijing.volces.com/api/plan/v3",
                                 _base) is False
     assert runner._url_allowed(_base + "/chat/completions", _base) is True
     for _bad in ("https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions",
-                 "https://opencode.ai/zen/go/v1.evil.example/chat/completions",
-                 "http://opencode.ai/zen/go/v1/chat/completions",
-                 "https://opencode.ai/zen/go/v10/chat/completions",
+                 "https://opencode.ai/inference/go/openai/v1.evil.example/chat/completions",
+                 "http://opencode.ai/inference/go/openai/v1/chat/completions",
+                 "https://opencode.ai/inference/go/openai/v10/chat/completions",
                  "https://api.other.example/v1/chat/completions"):
         assert runner._url_allowed(_bad, _base) is False, _bad
     assert runner._url_allowed(_base + "/chat/completions", "") is False

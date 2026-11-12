@@ -25,7 +25,7 @@ _BASE = {
 def _pinned_subscription(monkeypatch):
     monkeypatch.setattr(cfg, "AGENT_PLAN_TEXT_MODEL", "deepseek-v4.1-flash", raising=False)
     monkeypatch.setattr(cfg, "AGENT_PLAN_TEXT_BASE_URL",
-                        "https://opencode.ai/zen/go/v1", raising=False)
+                        "https://opencode.ai/inference/go/openai/v1", raising=False)
 
 
 def test_unlimited_active_on_verified_subscription_channel():
@@ -64,18 +64,18 @@ def test_binding_covers_resolved_endpoint(monkeypatch):
     pkg = copy.deepcopy(_BASE)
     base = entry._authorization_binding(pkg, revision="r")
     monkeypatch.setattr(cfg, "AGENT_PLAN_TEXT_BASE_URL",
-                        "https://opencode.ai/zen/go/v1/other", raising=False)
+                        "https://opencode.ai/inference/go/openai/v1/other", raising=False)
     moved = entry._authorization_binding(pkg, revision="r")
     assert base["endpoint"] != moved["endpoint"], "换端点必须改变绑定摘要的输入"
 
 
 def test_ambiguous_endpoint_is_rejected(monkeypatch):
-    """F3：/zen/go/../../zen/v1 这类歧义路径不能通过套餐核验。"""
+    """F3：/inference/go/../go/openai/v1 这类歧义路径不能通过套餐核验。"""
     from _text_gen.agent_plan_provider import normalize_endpoint
     with pytest.raises(ValueError):
-        normalize_endpoint("https://opencode.ai/zen/go/../../zen/v1")
+        normalize_endpoint("https://opencode.ai/inference/go/../go/openai/v1")
     monkeypatch.setattr(cfg, "AGENT_PLAN_TEXT_BASE_URL",
-                        "https://opencode.ai/zen/go/../../zen/v1", raising=False)
+                        "https://opencode.ai/inference/go/../go/openai/v1", raising=False)
     pkg = copy.deepcopy(_BASE)
     assert entry._unlimited_active(pkg) is False
     err = entry._validate_budget(pkg, require_authorization=True)
@@ -86,34 +86,40 @@ def test_double_encoded_traversal_is_rejected(monkeypatch):
     """F3 二轮：%252e%252e 只能解出 %2e%2e，requests 还会再解一次 ⇒ 必须拒绝。"""
     from _text_gen.agent_plan_provider import chat_completions_url, normalize_endpoint
     with pytest.raises(ValueError):
-        normalize_endpoint("https://opencode.ai/zen/go/%252e%252e/%252e%252e/zen/v1")
+        normalize_endpoint("https://opencode.ai/inference/go/%252e%252e/openai/v1")
     with pytest.raises(ValueError):
-        chat_completions_url("https://opencode.ai/zen/go/%252e%252e/zen/v1")
+        chat_completions_url("https://opencode.ai/inference/go/%252e%252e/v1")
     monkeypatch.setattr(cfg, "AGENT_PLAN_TEXT_BASE_URL",
-                        "https://opencode.ai/zen/go/%252e%252e/%252e%252e/zen/v1",
+                        "https://opencode.ai/inference/go/%252e%252e/v1",
                         raising=False)
     pkg = copy.deepcopy(_BASE)
     assert entry._unlimited_active(pkg) is False
 
 
 def test_subscription_requires_exact_path(monkeypatch):
-    """豁免只认最终 URL 的精确 path；/zen/go/v1/extra 不得算套餐端点。"""
+    """豁免只认最终 URL 的精确 path；新文档路径与旧别名都算，子路径不算。"""
     from _text_gen.agent_plan_provider import is_subscription_endpoint
+    assert is_subscription_endpoint("https://opencode.ai/inference/go/openai/v1") is True
+    assert is_subscription_endpoint("https://opencode.ai/inference/go/openai/v1/") is True
     assert is_subscription_endpoint("https://opencode.ai/zen/go/v1") is True
     assert is_subscription_endpoint("https://opencode.ai/zen/go/v1/") is True
+    assert is_subscription_endpoint("https://opencode.ai/inference/go/openai/v1/extra") is False
+    assert is_subscription_endpoint("https://opencode.ai/inference/go/openai/v2") is False
     assert is_subscription_endpoint("https://opencode.ai/zen/go/v1/extra") is False
     assert is_subscription_endpoint("https://opencode.ai/zen/go/v2") is False
     assert is_subscription_endpoint("https://evil.example/zen/go/v1") is False
+    assert is_subscription_endpoint("https://evil.example/inference/go/openai/v1") is False
 
 
 def test_subscription_requires_https_and_port():
     """F3 四轮：豁免 = HTTPS + 443 + 无用户名/密码 + 精确路径。"""
     from _text_gen.agent_plan_provider import is_subscription_endpoint
+    assert is_subscription_endpoint("https://opencode.ai/inference/go/openai/v1") is True
+    assert is_subscription_endpoint("https://opencode.ai:443/inference/go/openai/v1") is True
     assert is_subscription_endpoint("https://opencode.ai/zen/go/v1") is True
-    assert is_subscription_endpoint("https://opencode.ai:443/zen/go/v1") is True
-    assert is_subscription_endpoint("http://opencode.ai/zen/go/v1") is False
-    assert is_subscription_endpoint("https://opencode.ai:8443/zen/go/v1") is False
-    assert is_subscription_endpoint("https://user:pw@opencode.ai/zen/go/v1") is False
+    assert is_subscription_endpoint("http://opencode.ai/inference/go/openai/v1") is False
+    assert is_subscription_endpoint("https://opencode.ai:8443/inference/go/openai/v1") is False
+    assert is_subscription_endpoint("https://user:pw@opencode.ai/inference/go/openai/v1") is False
     # 空 userinfo（username/password 为空串而非 None）同样不得豁免
-    assert is_subscription_endpoint("https://@opencode.ai/zen/go/v1") is False
-    assert is_subscription_endpoint("https://:@opencode.ai/zen/go/v1") is False
+    assert is_subscription_endpoint("https://@opencode.ai/inference/go/openai/v1") is False
+    assert is_subscription_endpoint("https://:@opencode.ai/inference/go/openai/v1") is False

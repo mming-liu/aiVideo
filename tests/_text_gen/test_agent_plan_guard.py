@@ -59,7 +59,7 @@ class _Resp:
 def _service() -> ap.AgentPlanTextService:
     svc = object.__new__(ap.AgentPlanTextService)
     svc._model = "deepseek-v4.1-flash"
-    svc._base_url = "https://opencode.ai/zen/go/v1"
+    svc._base_url = "https://opencode.ai/inference/go/openai/v1"
     svc._key_scheduler = types.SimpleNamespace(acquire=lambda timeout=None: None)
     return svc
 

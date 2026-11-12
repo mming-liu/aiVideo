@@ -112,9 +112,11 @@ class TextGenCfg:
     )
     #: **文本通道专用**端点：留空 ⇒ 回落到共享的 `AGENT_PLAN_BASE_URL`。
     #: 2026-10-02（用户决定）：方舟 Agent Plan 订阅到期，真实 step01 跑批改用
-    #: opencode go 网关（`https://opencode.ai/zen/go/v1`）；而**图片通道仍是方舟**
+    #: opencode go 网关；而**图片通道仍是方舟**
     #: （`IMAGE_PROVIDER=agent_plan`，见 `shared/config.py` 的同名端点）——两者共用
     #: 一个 `AGENT_PLAN_BASE_URL` 会把图片也一起换掉，所以文本侧单开一个名字。
+    #: 2026-11-12：官方文档端点迁到 `/inference/go/openai/v1`（旧 `/zen/go/v1`
+    #: 仍作别名服务，两者都算订阅端点，见 `agent_plan_provider.is_subscription_endpoint`）。
     AGENT_PLAN_TEXT_BASE_URL: str = (
         os.getenv("AGENT_PLAN_TEXT_BASE_URL", "").strip() or AGENT_PLAN_BASE_URL
     )

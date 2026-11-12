@@ -56,7 +56,7 @@ DEFAULT_NOVEL = (ROOT / "output" / "step01_ab" / "20261018T135622"
                  / "d9_feasibility" / "input" / "novel.txt")
 
 TARGET_MODEL = "deepseek-v4.1-flash"
-OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
+OPENCODE_GO_BASE_URL = "https://opencode.ai/inference/go/openai/v1"
 VERIFY_MAX_TOKENS = 16000
 MAX_SENDS = 3
 

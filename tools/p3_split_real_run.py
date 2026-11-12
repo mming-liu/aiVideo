@@ -52,7 +52,7 @@ from step01_script_gen.content_verify import verify_view_with_service         # 
 SAMPLE_PATH = ROOT / "tools" / "samples" / "p3_split_f02.json"
 #: 本轮唯一允许的文本计费端点（OpenCode Go）。配置变化后必须显式改这里并重新评审，
 #: 不能只凭 `provider == agent_plan` 放行——该 provider 也支持其他端点。
-OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
+OPENCODE_GO_BASE_URL = "https://opencode.ai/inference/go/openai/v1"
 MAX_SENDS = 4
 M_MAX_TOKENS = 512
 M_SYSTEM_PROMPT = ("你是严格的事实拆分完整性判定器。只判断子主张合起来是否完整保留"
