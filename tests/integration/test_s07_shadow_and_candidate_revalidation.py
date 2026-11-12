@@ -133,10 +133,12 @@ def test_shadow_comparison_covers_all_blockers_and_mutations(tmp_path):
     assert (tmp_path / "shadow" / "shadow_compare.md").is_file()
 
 
-def test_switch_checklist_is_checklist_only():
+def test_switch_checklist_records_unified_behavior():
     path = ROOT / "docs" / "step01-layered-execution" / "S07-formal-gate-switch-checklist.md"
-    assert path.is_file(), "S07 必须产出正式门禁切换清单"
+    assert path.is_file(), "S07 必须记录合并后的责任与门禁现状"
     text = path.read_text(encoding="utf-8")
-    assert "不执行切换" in text
+    assert "一套行为" in text
+    assert "不区分" in text
+    assert "已随合并生效" in text
     for blocker_id in ("D1", "S-01", "S-03", "S-05"):
         assert blocker_id in text
