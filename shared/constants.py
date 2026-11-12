@@ -11,7 +11,11 @@ env 变量，而不是再加字面量。
 # ---- 供应商默认值 ----
 # TEXT_PROVIDER 默认值（供应商选择出现于 shared/config.py 全局段与
 # _text_gen/config.py 包配置两处，默认值必须同源；main.py 挂载门也引用此常量）
-TEXT_PROVIDER_DEFAULT = "deepseek"
+# 2026-11-12 用户裁决：Step01 文本通道绑定 OpenCode Go 订阅制套餐，不调
+# DeepSeek 官方按次计费 API。原默认值 "deepseek" 会在 .env.content 未加载时
+# 静默回落到 api.deepseek.com，故改为订阅通道；显式环境变量仍可覆盖（由
+# step01_script_gen/main.py 的 env_guard 硬阻断文本通道漂移）。
+TEXT_PROVIDER_DEFAULT = "agent_plan"
 
 # ---- 分镜 JSON 解析（step01 main，解析失败重试） ----
 SCRIPT_PARSE_RETRIES = 3          # range(1, 1 + SCRIPT_PARSE_RETRIES)

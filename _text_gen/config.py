@@ -21,7 +21,8 @@ class TextGenCfg:
 
     # ---- 供应商选择 ----
     # dashscope → 阿里云百炼 DashScope (Qwen)
-    # deepseek  → DeepSeek (OpenAI 兼容接口) [默认]
+    # agent_plan → OpenCode Go 订阅制（默认；2026-11-12 用户裁决 Step01 绑定此通道）
+    # deepseek  → DeepSeek 官方按次计费 API（**Step01 禁用**，仅保留 A/B 工具与历史回放）
     # agnes     → agnes ai (OpenAI 兼容协议)
     PROVIDER: str = os.getenv("TEXT_PROVIDER", TEXT_PROVIDER_DEFAULT)
 

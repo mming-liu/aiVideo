@@ -87,12 +87,26 @@ from shared.tee_logger import get_logger
 _logger = get_logger(step01_log_file(), console_level="INFO")
 
 # v6.59 (2026-09-04)：检测 shell 环境变量是否覆盖 .env.content 的 PROVIDER 设置。
-# 不阻断，仅 WARN 提示。详细设计见 shared/env_guard.py 顶部。
-# 切到 agent_plan/doubao 调试时建议 raise_if_override=True 强约束，避免误以为 .env.content 生效。
+# 媒体/语音通道不阻断，仅 WARN 提示。详细设计见 shared/env_guard.py 顶部。
 from shared.env_guard import warn_shell_overrides as _warn_shell_overrides
 _warn_shell_overrides(
-    ["TEXT_PROVIDER", "IMAGE_PROVIDER", "VIDEO_PROVIDER", "TTS_PROVIDER"],
+    ["IMAGE_PROVIDER", "VIDEO_PROVIDER", "TTS_PROVIDER"],
     logger=_logger,
+)
+# 2026-11-12 用户裁决：Step01 文本通道绑定 OpenCode Go 订阅制套餐，禁止被 shell
+# 覆盖成 deepseek / api.deepseek.com 官方按次计费 API。复用 env_guard 已有的
+# raise_if_override，对**决定套餐身份**的三个 key 做硬阻断（不新增开关、不区分模式）。
+# AUDIT_TEXT_PROVIDER / REPAIR_TEXT_PROVIDER 只 WARN：tools/audit_frozen_candidate
+# 会按冻结包把这俩设成 deepseek 走桩回放（零真实发送），硬阻断会破坏历史审计回放；
+# 非订阅通道下 budget.unlimited 本就不生效、退回一次性授权，规则层也禁止真实运行改它。
+_warn_shell_overrides(
+    ["AUDIT_TEXT_PROVIDER", "REPAIR_TEXT_PROVIDER"],
+    logger=_logger,
+)
+_warn_shell_overrides(
+    ["TEXT_PROVIDER", "AGENT_PLAN_TEXT_BASE_URL", "AGENT_PLAN_TEXT_MODEL"],
+    logger=_logger,
+    raise_if_override=True,
 )
 
 
