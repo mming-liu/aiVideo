@@ -449,7 +449,13 @@ def test_localization_field_and_code_table_do_not_authorize():
 
     allowed = allowed_repair_fields([], [issue], target_shot_id="shot_5",
                                     shots_by_id=_shots(5))
-    assert allowed == {"lf_desc"}, "只认成对目标：定位字段与 code 表都不得进授权"
+    # 只认成对目标：定位字段（ff_desc）与 code 表（prompt/motion_desc）都不得进授权。
+    # M02 起唯一允许的扩展是**同帧布局条目**的 props/on_screen——同一事实在布局里
+    # 还有一份，只改描述会留下矛盾；它不改变「授权来自成对目标」这条判据。
+    assert "ff_desc" not in allowed, "定位字段不得进授权"
+    assert "prompt" not in allowed and "motion_desc" not in allowed, "code 表不得进授权"
+    assert "lf_desc" in allowed
+    assert all(p == "lf_desc" or p.startswith("frame_layouts.lf.") for p in allowed), allowed
 
 
 def test_pair_pointing_at_a_foreign_shot_does_not_authorize_this_shot():
@@ -540,7 +546,10 @@ def test_cross_shot_issue_reaches_every_group_member():
     for _tid in ("shot_5", "shot_7", "shot_8", "shot_9"):
         allowed = allowed_repair_fields([], [issue], target_shot_id=_tid,
                                         shots_by_id=_shots(5, 7, 8, 9))
-        assert allowed == {"ff_desc"}, f"{_tid} 应拿到 ff_desc 授权"
+        assert "ff_desc" in allowed, f"{_tid} 应拿到 ff_desc 授权"
+        # M02：同帧布局条目随描述互授（同一事实的另一份），除此之外不得越界。
+        assert all(p == "ff_desc" or p.startswith("frame_layouts.ff.") for p in allowed), \
+            (_tid, allowed)
 
 
 def test_groups_merge_when_they_share_a_shot():

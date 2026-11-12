@@ -1,0 +1,417 @@
+{
+  "diag": [
+    {
+      "repair_round": 1,
+      "kind": "call_ok",
+      "usage": {},
+      "max_tokens": null,
+      "reasoning_tokens": null,
+      "output_tokens": null,
+      "total_tokens": null,
+      "budget_left_sec": null
+    },
+    {
+      "repair_round": 1,
+      "targets": [
+        "shot_1",
+        "shot_11",
+        "shot_6",
+        "shot_7"
+      ],
+      "groups": [
+        [
+          "shot_1"
+        ],
+        [
+          "shot_11"
+        ],
+        [
+          "shot_6"
+        ],
+        [
+          "shot_7"
+        ]
+      ],
+      "new_blocking_keys": [],
+      "new_blocking_targets": [],
+      "rolled_back_groups": [],
+      "targets_rolled_back": [],
+      "accepted": true,
+      "round_ok": true,
+      "resolved": 0,
+      "reason": "",
+      "origin_reason": "",
+      "evidence_removed": [],
+      "audit_field_touched": 3,
+      "audit_touched_ids": [
+        [
+          "7",
+          "prop_state"
+        ],
+        [
+          "11",
+          "FF_RESULT_LEAK"
+        ],
+        [
+          "7",
+          "prop_state"
+        ]
+      ],
+      "revision_before": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+      "revision_after": "abfd217dae61e9f8604ab95e3654a91893c2d2a3b53ba68f54d310c460efc88a",
+      "effect_conflict": null,
+      "related_readback": {
+        "targets": [
+          {
+            "target": "ff_desc",
+            "target_changed": true,
+            "requested": [],
+            "applied": [
+              "frame_layouts.ff"
+            ],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": []
+          },
+          {
+            "target": "frame_layouts.ff.0.on_screen",
+            "target_changed": false,
+            "requested": [],
+            "applied": [
+              "ff_desc"
+            ],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": []
+          },
+          {
+            "target": "frame_layouts.ff.0.props",
+            "target_changed": true,
+            "requested": [],
+            "applied": [
+              "ff_desc"
+            ],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": []
+          },
+          {
+            "target": "frame_layouts.ff.1.on_screen",
+            "target_changed": false,
+            "requested": [],
+            "applied": [
+              "ff_desc"
+            ],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": []
+          },
+          {
+            "target": "frame_layouts.ff.1.props",
+            "target_changed": false,
+            "requested": [],
+            "applied": [
+              "ff_desc"
+            ],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": []
+          },
+          {
+            "target": "frame_layouts.lf.0.on_screen",
+            "target_changed": false,
+            "requested": [],
+            "applied": [
+              "lf_desc"
+            ],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": []
+          },
+          {
+            "target": "frame_layouts.lf.0.props",
+            "target_changed": false,
+            "requested": [],
+            "applied": [
+              "lf_desc"
+            ],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": []
+          },
+          {
+            "target": "frame_layouts.lf.1.on_screen",
+            "target_changed": false,
+            "requested": [],
+            "applied": [
+              "lf_desc"
+            ],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": []
+          },
+          {
+            "target": "frame_layouts.lf.1.props",
+            "target_changed": false,
+            "requested": [],
+            "applied": [
+              "lf_desc"
+            ],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": []
+          },
+          {
+            "target": "lf_desc",
+            "target_changed": true,
+            "requested": [],
+            "applied": [],
+            "reverted": [],
+            "half_repaired": true,
+            "unchanged_fields": [
+              "frame_layouts.lf"
+            ]
+          },
+          {
+            "target": "ff_desc",
+            "target_changed": true,
+            "requested": [],
+            "applied": [
+              "frame_layouts.ff"
+            ],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": []
+          },
+          {
+            "target": "frame_layouts.ff.0.on_screen",
+            "target_changed": false,
+            "requested": [],
+            "applied": [
+              "ff_desc"
+            ],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": []
+          },
+          {
+            "target": "frame_layouts.ff.0.pose",
+            "target_changed": true,
+            "requested": [],
+            "applied": [
+              "ff_desc"
+            ],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": []
+          },
+          {
+            "target": "frame_layouts.ff.0.props",
+            "target_changed": false,
+            "requested": [],
+            "applied": [
+              "ff_desc"
+            ],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": []
+          }
+        ],
+        "requested_basis": "unavailable",
+        "checked": 14,
+        "changed": 13,
+        "reverted": 0,
+        "half_repaired": [
+          {
+            "target": "lf_desc",
+            "fields": [
+              "frame_layouts.lf"
+            ]
+          }
+        ],
+        "residual_after_projection": {
+          "checked": 14,
+          "changed": 0,
+          "rows": [
+            {
+              "target": "ff_desc",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "frame_layouts.ff"
+              ]
+            },
+            {
+              "target": "frame_layouts.ff.0.on_screen",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "ff_desc"
+              ]
+            },
+            {
+              "target": "frame_layouts.ff.0.props",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "ff_desc"
+              ]
+            },
+            {
+              "target": "frame_layouts.ff.1.on_screen",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "ff_desc"
+              ]
+            },
+            {
+              "target": "frame_layouts.ff.1.props",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "ff_desc"
+              ]
+            },
+            {
+              "target": "frame_layouts.lf.0.on_screen",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "lf_desc"
+              ]
+            },
+            {
+              "target": "frame_layouts.lf.0.props",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "lf_desc"
+              ]
+            },
+            {
+              "target": "frame_layouts.lf.1.on_screen",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "lf_desc"
+              ]
+            },
+            {
+              "target": "frame_layouts.lf.1.props",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "lf_desc"
+              ]
+            },
+            {
+              "target": "lf_desc",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "frame_layouts.lf"
+              ]
+            },
+            {
+              "target": "ff_desc",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "frame_layouts.ff"
+              ]
+            },
+            {
+              "target": "frame_layouts.ff.0.on_screen",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "ff_desc"
+              ]
+            },
+            {
+              "target": "frame_layouts.ff.0.pose",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "ff_desc"
+              ]
+            },
+            {
+              "target": "frame_layouts.ff.0.props",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "ff_desc"
+              ]
+            }
+          ]
+        }
+      },
+      "rejected": [],
+      "authorization": {
+        "shot_7": {
+          "allowed": [
+            "ff_desc",
+            "frame_layouts.ff.0.on_screen",
+            "frame_layouts.ff.0.props",
+            "frame_layouts.ff.1.on_screen",
+            "frame_layouts.ff.1.props",
+            "frame_layouts.lf.0.on_screen",
+            "frame_layouts.lf.0.props",
+            "frame_layouts.lf.1.on_screen",
+            "frame_layouts.lf.1.props",
+            "lf_desc",
+            "motion_desc",
+            "prompt"
+          ],
+          "declared": [
+            "ff_desc",
+            "lf_desc",
+            "motion_desc",
+            "prompt"
+          ],
+          "beyond_declared": [
+            "frame_layouts.ff.0.on_screen",
+            "frame_layouts.ff.0.props",
+            "frame_layouts.ff.1.on_screen",
+            "frame_layouts.ff.1.props",
+            "frame_layouts.lf.0.on_screen",
+            "frame_layouts.lf.0.props",
+            "frame_layouts.lf.1.on_screen",
+            "frame_layouts.lf.1.props"
+          ]
+        },
+        "shot_11": {
+          "allowed": [
+            "ff_desc",
+            "frame_layouts.ff.0.on_screen",
+            "frame_layouts.ff.0.pose",
+            "frame_layouts.ff.0.props"
+          ],
+          "declared": [
+            "ff_desc",
+            "frame_layouts.ff.0.pose"
+          ],
+          "beyond_declared": [
+            "frame_layouts.ff.0.on_screen",
+            "frame_layouts.ff.0.props"
+          ]
+        },
+        "shot_1": {
+          "allowed": [
+            "prompt"
+          ],
+          "declared": [
+            "prompt"
+          ],
+          "beyond_declared": []
+        },
+        "shot_6": {
+          "allowed": [
+            "prompt"
+          ],
+          "declared": [
+            "prompt"
+          ],
+          "beyond_declared": []
+        }
+      },
+      "postprocess_reverted": {
+        "shot_1": [
+          "prompt"
+        ],
+        "shot_6": [
+          "prompt"
+        ]
+      }
+    }
+  ],
+  "block": []
+}

@@ -1,0 +1,1631 @@
+{
+  "schema": "step01_call_index.v1",
+  "inputs": {
+    "baseline_root": "baselines/2026-11-12-pre-layered/s06_ab",
+    "live_root": ".pytest_tmp/s06",
+    "fixtures": "tests/step01_script_gen/fixtures/audit_narrative_families"
+  },
+  "campaigns": [
+    {
+      "campaign_id": "s06_ab",
+      "source": "baselines/2026-11-12-pre-layered/s06_ab",
+      "note": "S06 报告所称的八次发送：6 次审计 A/B + 1 次受限修订 + 1 次终局审计",
+      "calls": 8,
+      "elapsed_sec_total": 983.0,
+      "usage_total": {
+        "input_tokens": 73977,
+        "output_tokens": 79449,
+        "reasoning_tokens": 72189,
+        "total_tokens": 153426
+      },
+      "entries": [
+        {
+          "call_id": "runs_20261112T070909/ab-01",
+          "phase": "audit_ab",
+          "sample": "time_ellipsis_legal",
+          "contract": "old",
+          "prompt_version": "a5929a9f6abc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "5b5cca632df83048eab8df060a9fb7d4b8f89e80",
+            "prompt_chars": 6645
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 114.3,
+          "usage": {
+            "input_tokens": 3984,
+            "output_tokens": 11795,
+            "reasoning_tokens": 11101,
+            "total_tokens": 15779
+          },
+          "parsed": {
+            "issues_count": 3,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_LF_RESULT_MISMATCH",
+                "shot_id": "2",
+                "field_path": "lf_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_LF_PROCESS_NOT_RESULT",
+                "shot_id": "1",
+                "field_path": "lf_desc",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_FF_STATE_CONFLICT",
+                "shot_id": "1",
+                "field_path": "ff_desc",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "运行脚本只保存 `raw_text[:400]`，而该批记录的 `raw_head` 为空；原始响应未落盘，只有解析结果"
+          },
+          "repo_head": "7286516",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "runs_20261112T070909/ab-02",
+          "phase": "audit_ab",
+          "sample": "time_ellipsis_legal",
+          "contract": "new",
+          "prompt_version": "857e4768d3dc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "6cca1c6aeb49480f9737aed606f7f1aa63aaadb2",
+            "prompt_chars": 7801
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 83.2,
+          "usage": {
+            "input_tokens": 4639,
+            "output_tokens": 8792,
+            "reasoning_tokens": 8567,
+            "total_tokens": 13431
+          },
+          "parsed": {
+            "issues_count": 1,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_LF_RESULT_MISMATCH",
+                "shot_id": "2",
+                "field_path": "lf_desc",
+                "severity": "visual_risk"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "运行脚本只保存 `raw_text[:400]`，而该批记录的 `raw_head` 为空；原始响应未落盘，只有解析结果"
+          },
+          "repo_head": "7286516",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "runs_20261112T070909/ab-03",
+          "phase": "audit_ab",
+          "sample": "state_broken",
+          "contract": "old",
+          "prompt_version": "a5929a9f6abc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "89f94c406d213bcf70fd5c62eb49be5b169e1cee",
+            "prompt_chars": 6645
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 111.3,
+          "usage": {
+            "input_tokens": 3994,
+            "output_tokens": 11639,
+            "reasoning_tokens": 11088,
+            "total_tokens": 15633
+          },
+          "parsed": {
+            "issues_count": 3,
+            "blocking_count": 2,
+            "issues": [
+              {
+                "code": "model_audit_FF_RESULT_LEAK",
+                "shot_id": "2",
+                "field_path": "ff_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_STORY_DEVIATION",
+                "shot_id": "2",
+                "field_path": "lf_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_WORD_ERROR",
+                "shot_id": "2",
+                "field_path": "ff_desc",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "运行脚本只保存 `raw_text[:400]`，而该批记录的 `raw_head` 为空；原始响应未落盘，只有解析结果"
+          },
+          "repo_head": "7286516",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "runs_20261112T070909/ab-04",
+          "phase": "audit_ab",
+          "sample": "state_broken",
+          "contract": "new",
+          "prompt_version": "857e4768d3dc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "880fb79fbc9dc031f2057a6f06e067acd631cf20",
+            "prompt_chars": 7784
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 72.1,
+          "usage": {
+            "input_tokens": 4635,
+            "output_tokens": 6989,
+            "reasoning_tokens": 6370,
+            "total_tokens": 11624
+          },
+          "parsed": {
+            "issues_count": 4,
+            "blocking_count": 3,
+            "issues": [
+              {
+                "code": "model_audit_ACTION_OMISSION",
+                "shot_id": "2",
+                "field_path": "motion_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_FF_RESULT_LEAK",
+                "shot_id": "2",
+                "field_path": "ff_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_SCRIPT_DEVIATION",
+                "shot_id": "2",
+                "field_path": "lf_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_TEXT_TRUNCATION",
+                "shot_id": "2",
+                "field_path": "ff_desc",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "运行脚本只保存 `raw_text[:400]`，而该批记录的 `raw_head` 为空；原始响应未落盘，只有解析结果"
+          },
+          "repo_head": "7286516",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "runs_20261112T070909/ab-05",
+          "phase": "audit_ab",
+          "sample": "voice_broken",
+          "contract": "old",
+          "prompt_version": "a5929a9f6abc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "13db0f3e75b8ba6e132a4b5091f80c961c95ee98",
+            "prompt_chars": 6674
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 105.7,
+          "usage": {
+            "input_tokens": 3988,
+            "output_tokens": 11072,
+            "reasoning_tokens": 10784,
+            "total_tokens": 15060
+          },
+          "parsed": {
+            "issues_count": 2,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_DIALOGUE_NOT_IN_SOURCE",
+                "shot_id": "2",
+                "field_path": "narration_segment",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_STATE_CHAIN_CONFLICT",
+                "shot_id": "1",
+                "field_path": "frame_layouts.ff[0].gaze_target",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "运行脚本只保存 `raw_text[:400]`，而该批记录的 `raw_head` 为空；原始响应未落盘，只有解析结果"
+          },
+          "repo_head": "7286516",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "runs_20261112T070909/ab-06",
+          "phase": "audit_ab",
+          "sample": "voice_broken",
+          "contract": "new",
+          "prompt_version": "857e4768d3dc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "37724d885f0b46f0f764e7098fef32c269a3d8d9",
+            "prompt_chars": 7813
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 47.8,
+          "usage": {
+            "input_tokens": 4629,
+            "output_tokens": 4261,
+            "reasoning_tokens": 4090,
+            "total_tokens": 8890
+          },
+          "parsed": {
+            "issues_count": 1,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_DIALOGUE_VISUAL_CONFLICT",
+                "shot_id": "2",
+                "field_path": "narration_segment",
+                "severity": "visual_risk"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "运行脚本只保存 `raw_text[:400]`，而该批记录的 `raw_head` 为空；原始响应未落盘，只有解析结果"
+          },
+          "repo_head": "7286516",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "phase2_20261112T072011/repair-01",
+          "phase": "repair",
+          "sample": "u6_candidate",
+          "contract": "repair_shot_replacements",
+          "prompt_version": null,
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": null,
+            "prompt_chars": null,
+            "note": "请求体未单独落盘；`step01.log` 记录了请求体字节数与 sha256 （见 log 的 `[WIRE]` 行）"
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 41.0,
+          "usage": {
+            "input_tokens": 20326,
+            "output_tokens": 3065,
+            "reasoning_tokens": 0,
+            "total_tokens": 23391
+          },
+          "parsed": {
+            "issues_count": null,
+            "blocking_count": null,
+            "issues": [],
+            "decision": {
+              "targets": [
+                "shot_1",
+                "shot_11",
+                "shot_6",
+                "shot_7"
+              ],
+              "groups": [
+                [
+                  "shot_1"
+                ],
+                [
+                  "shot_11"
+                ],
+                [
+                  "shot_6"
+                ],
+                [
+                  "shot_7"
+                ]
+              ],
+              "accepted": false,
+              "round_ok": false,
+              "resolved": 0,
+              "reason": "no_target_resolved",
+              "origin_reason": "no_target_resolved",
+              "audit_field_touched": 0,
+              "revision_before": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+              "revision_after": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+              "rolled_back_groups": []
+            }
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "`_text_gen.agent_plan_provider` 只把 `resp.text[:500]` 写进日志；日志里能看到的片段以 shot 7 的 prompt/ff_desc/lf_desc 开头，其余镜头与后续字段（含 keyframes）无法从盘上恢复",
+            "partial": {
+              "source": "step01.log（隔离输出目录）",
+              "visible_chars": 500,
+              "first_shot_id": "7",
+              "visible_field_paths": [
+                "prompt",
+                "ff_desc",
+                "lf_desc"
+              ]
+            }
+          },
+          "repo_head": null,
+          "candidate_identity": {
+            "revision_before": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+            "revision_after": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7"
+          }
+        },
+        {
+          "call_id": "phase2_20261112T072011/final-audit-01",
+          "phase": "final_audit",
+          "sample": "u6_candidate",
+          "contract": "script_audit",
+          "prompt_version": "857e4768d3dc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": null,
+            "prompt_chars": null,
+            "note": "请求体未单独落盘；`[WIRE]` 行记录了 97173 字节与 sha256"
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 407.6,
+          "usage": {
+            "input_tokens": 27782,
+            "output_tokens": 21836,
+            "reasoning_tokens": 20189,
+            "total_tokens": 49618
+          },
+          "parsed": {
+            "issues_count": 11,
+            "blocking_count": 0,
+            "issues": [
+              {
+                "code": "model_audit_VISUAL_SPEC_CONFLICT",
+                "shot_id": "1",
+                "field_path": "prompt",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_SOUND_PROP_MISMATCH",
+                "shot_id": "1",
+                "field_path": "motion_desc",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_PROP_CONTINUITY",
+                "shot_id": "5",
+                "field_path": "frame_layouts.ff[2].props",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_TEXT_DUPLICATION",
+                "shot_id": "6",
+                "field_path": "prompt",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_STATE_CHAIN_CONFLICT",
+                "shot_id": "7",
+                "field_path": "lf_desc",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_DIALOGUE_CONTENT_MISMATCH",
+                "shot_id": "8",
+                "field_path": "ff_desc",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_MOTIVATION_GAP",
+                "shot_id": "10",
+                "field_path": "motion_desc",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_FF_RESULT_LEAK",
+                "shot_id": "11",
+                "field_path": "ff_desc",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_DIALOGUE_CONTENT_MISSING",
+                "shot_id": "11",
+                "field_path": "motion_desc",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_LAYOUT_VISIBILITY_CONFLICT",
+                "shot_id": "12",
+                "field_path": "frame_layouts.lf[2].on_screen",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_LAYOUT_OMISSION",
+                "shot_id": "8",
+                "field_path": "frame_layouts.ff",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同 provider 的 500 字符截断；只有解析后的 issues"
+          },
+          "repo_head": null,
+          "candidate_identity": {
+            "revision": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+            "content_identity": "3caa3cb76d97fdfc16331513e7f999ce6ec4f41fcc874f68f569a146b1418d3c"
+          }
+        }
+      ]
+    },
+    {
+      "campaign_id": "s06_ab_rerun",
+      "source": ".pytest_tmp/s06",
+      "note": "S06 之后的复跑批次（现场数据，未纳入版本管理）；不计入报告的八次口径",
+      "calls": 20,
+      "elapsed_sec_total": 2021.1,
+      "usage_total": {
+        "input_tokens": 85775,
+        "output_tokens": 164453,
+        "reasoning_tokens": 156272,
+        "total_tokens": 250228
+      },
+      "entries": [
+        {
+          "call_id": "20261112T131449/ab-01",
+          "phase": "audit_ab_rerun",
+          "sample": "time_ellipsis_legal",
+          "contract": "old",
+          "prompt_version": "a5929a9f6abc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "5b5cca632df83048eab8df060a9fb7d4b8f89e80",
+            "prompt_chars": 6645
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 119.5,
+          "usage": {
+            "input_tokens": 3984,
+            "output_tokens": 9683,
+            "reasoning_tokens": 9061,
+            "total_tokens": 13667
+          },
+          "parsed": {
+            "issues_count": 3,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_STATE_CHAIN_CONFLICT",
+                "shot_id": "2",
+                "field_path": "motion_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_FRAME_ROLE_MISMATCH",
+                "shot_id": "1",
+                "field_path": "frame_layouts.lf[0].pose",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_PROP_CONTINUITY",
+                "shot_id": "1",
+                "field_path": "frame_layouts.lf[0].props",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T131654/ab-01",
+          "phase": "audit_ab_rerun",
+          "sample": "time_ellipsis_legal",
+          "contract": "old",
+          "prompt_version": "a5929a9f6abc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "5b5cca632df83048eab8df060a9fb7d4b8f89e80",
+            "prompt_chars": 6645
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 119.2,
+          "usage": {
+            "input_tokens": 4006,
+            "output_tokens": 8282,
+            "reasoning_tokens": 7939,
+            "total_tokens": 12288
+          },
+          "parsed": {
+            "issues_count": 2,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_STORY_ENDING_OMITTED",
+                "shot_id": "2",
+                "field_path": "motion_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_LF_PROCESS_LEAK",
+                "shot_id": "1",
+                "field_path": "lf_desc",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T131654/ab-02",
+          "phase": "audit_ab_rerun",
+          "sample": "time_ellipsis_legal",
+          "contract": "new",
+          "prompt_version": "857e4768d3dc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "6cca1c6aeb49480f9737aed606f7f1aa63aaadb2",
+            "prompt_chars": 7801
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 117.7,
+          "usage": {
+            "input_tokens": 4661,
+            "output_tokens": 7156,
+            "reasoning_tokens": 6772,
+            "total_tokens": 11817
+          },
+          "parsed": {
+            "issues_count": 2,
+            "blocking_count": 2,
+            "issues": [
+              {
+                "code": "model_audit_PREP_STATE_MISSING",
+                "shot_id": "1",
+                "field_path": "ff_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_ACTION_RESULT_MISSING",
+                "shot_id": "2",
+                "field_path": "motion_desc",
+                "severity": "visual_risk"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T131654/ab-03",
+          "phase": "audit_ab_rerun",
+          "sample": "state_broken",
+          "contract": "old",
+          "prompt_version": "a5929a9f6abc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "89f94c406d213bcf70fd5c62eb49be5b169e1cee",
+            "prompt_chars": 6645
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 150.1,
+          "usage": {
+            "input_tokens": 4016,
+            "output_tokens": 9298,
+            "reasoning_tokens": 8935,
+            "total_tokens": 13314
+          },
+          "parsed": {
+            "issues_count": 2,
+            "blocking_count": 2,
+            "issues": [
+              {
+                "code": "model_audit_FF_RESULT_LEAK",
+                "shot_id": "2",
+                "field_path": "ff_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_ACTION_SEQUENCE_DRIFT",
+                "shot_id": "2",
+                "field_path": "motion_desc",
+                "severity": "visual_risk"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T131654/ab-04",
+          "phase": "audit_ab_rerun",
+          "sample": "state_broken",
+          "contract": "new",
+          "prompt_version": "857e4768d3dc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "880fb79fbc9dc031f2057a6f06e067acd631cf20",
+            "prompt_chars": 7784
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 162.1,
+          "usage": {
+            "input_tokens": 4657,
+            "output_tokens": 11036,
+            "reasoning_tokens": 10588,
+            "total_tokens": 15693
+          },
+          "parsed": {
+            "issues_count": 3,
+            "blocking_count": 2,
+            "issues": [
+              {
+                "code": "model_audit_STORY_DEVIATION",
+                "shot_id": "2",
+                "field_path": "lf_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_FF_RESULT_LEAK",
+                "shot_id": "2",
+                "field_path": "ff_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_TEXT_TRUNCATION",
+                "shot_id": "2",
+                "field_path": "ff_desc",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T131654/ab-05",
+          "phase": "audit_ab_rerun",
+          "sample": "voice_broken",
+          "contract": "old",
+          "prompt_version": "a5929a9f6abc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "13db0f3e75b8ba6e132a4b5091f80c961c95ee98",
+            "prompt_chars": 6674
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 57.2,
+          "usage": {
+            "input_tokens": 4010,
+            "output_tokens": 3100,
+            "reasoning_tokens": 2518,
+            "total_tokens": 7110
+          },
+          "parsed": {
+            "issues_count": 3,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_NARRATION_ADDED_DIALOGUE",
+                "shot_id": "2",
+                "field_path": "narration_segment",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_MISSING_KEYFRAME",
+                "shot_id": "2",
+                "field_path": "motion_desc",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_MOTION_REDUNDANT",
+                "shot_id": "2",
+                "field_path": "motion_desc",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T131654/ab-06",
+          "phase": "audit_ab_rerun",
+          "sample": "voice_broken",
+          "contract": "new",
+          "prompt_version": "857e4768d3dc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "37724d885f0b46f0f764e7098fef32c269a3d8d9",
+            "prompt_chars": 7813
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 54.9,
+          "usage": {
+            "input_tokens": 4651,
+            "output_tokens": 2545,
+            "reasoning_tokens": 2362,
+            "total_tokens": 7196
+          },
+          "parsed": {
+            "issues_count": 1,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_UNAUTHORED_DIALOGUE",
+                "shot_id": "2",
+                "field_path": "narration_segment",
+                "severity": "visual_risk"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T134738/ab-01",
+          "phase": "audit_ab_rerun",
+          "sample": "time_ellipsis_legal",
+          "contract": "old",
+          "prompt_version": "a5929a9f6abc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "5b5cca632df83048eab8df060a9fb7d4b8f89e80",
+            "prompt_chars": 6645
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 135.2,
+          "usage": {
+            "input_tokens": 3984,
+            "output_tokens": 11279,
+            "reasoning_tokens": 10710,
+            "total_tokens": 15263
+          },
+          "parsed": {
+            "issues_count": 3,
+            "blocking_count": 2,
+            "issues": [
+              {
+                "code": "model_audit_FF_ACTION_PREREQUISITE_MISSING",
+                "shot_id": "1",
+                "field_path": "ff_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_STORY_ACTION_OMISSION",
+                "shot_id": "2",
+                "field_path": "motion_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_LF_RESULT_STATE_CONFLICT",
+                "shot_id": "1",
+                "field_path": "frame_layouts.lf[0].pose",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T135000/ab-01",
+          "phase": "audit_ab_rerun",
+          "sample": "time_ellipsis_legal",
+          "contract": "old",
+          "prompt_version": "a5929a9f6abc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "5b5cca632df83048eab8df060a9fb7d4b8f89e80",
+            "prompt_chars": 6645
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 120.0,
+          "usage": {
+            "input_tokens": 3984,
+            "output_tokens": 10183,
+            "reasoning_tokens": 9604,
+            "total_tokens": 14167
+          },
+          "parsed": {
+            "issues_count": 3,
+            "blocking_count": 2,
+            "issues": [
+              {
+                "code": "model_audit_FF_PREP_STATE_CONFLICT",
+                "shot_id": "1",
+                "field_path": "ff_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_LF_RESULT_STATE_MISMATCH",
+                "shot_id": "2",
+                "field_path": "lf_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_LF_RESULT_STATE_MISMATCH",
+                "shot_id": "1",
+                "field_path": "frame_layouts.lf[0].pose",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T135000/ab-02",
+          "phase": "audit_ab_rerun",
+          "sample": "time_ellipsis_legal",
+          "contract": "new",
+          "prompt_version": "857e4768d3dc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "6cca1c6aeb49480f9737aed606f7f1aa63aaadb2",
+            "prompt_chars": 7801
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 95.3,
+          "usage": {
+            "input_tokens": 4639,
+            "output_tokens": 7821,
+            "reasoning_tokens": 7614,
+            "total_tokens": 12460
+          },
+          "parsed": {
+            "issues_count": 1,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_MOTION_ENDPOINT_MISMATCH",
+                "shot_id": "2",
+                "field_path": "motion_desc",
+                "severity": "visual_risk"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T135000/ab-03",
+          "phase": "audit_ab_rerun",
+          "sample": "state_legal",
+          "contract": "old",
+          "prompt_version": "a5929a9f6abc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "0a64d386c1d3597cf6b1283f95cb0f90df5bb78a",
+            "prompt_chars": 6642
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 90.6,
+          "usage": {
+            "input_tokens": 3986,
+            "output_tokens": 7300,
+            "reasoning_tokens": 7040,
+            "total_tokens": 11286
+          },
+          "parsed": {
+            "issues_count": 1,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_SOURCE_DEVIATION",
+                "shot_id": "2",
+                "field_path": "lf_desc",
+                "severity": "visual_risk"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T135000/ab-04",
+          "phase": "audit_ab_rerun",
+          "sample": "state_legal",
+          "contract": "new",
+          "prompt_version": "857e4768d3dc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "bcb11deda849a1845abddc5d82c06ba906412c46",
+            "prompt_chars": 7781
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 165.9,
+          "usage": {
+            "input_tokens": 4627,
+            "output_tokens": 14692,
+            "reasoning_tokens": 14471,
+            "total_tokens": 19319
+          },
+          "parsed": {
+            "issues_count": 1,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_STATE_CHAIN_CONFLICT",
+                "shot_id": "2",
+                "field_path": "lf_desc",
+                "severity": "visual_risk"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T135000/ab-05",
+          "phase": "audit_ab_rerun",
+          "sample": "voice_legal",
+          "contract": "old",
+          "prompt_version": "a5929a9f6abc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "7e66dbbb9f93beadf27c63522f42130c4553fce2",
+            "prompt_chars": 6664
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 108.0,
+          "usage": {
+            "input_tokens": 3980,
+            "output_tokens": 9147,
+            "reasoning_tokens": 8744,
+            "total_tokens": 13127
+          },
+          "parsed": {
+            "issues_count": 2,
+            "blocking_count": 2,
+            "issues": [
+              {
+                "code": "model_audit_FF_RESULT_LEAK",
+                "shot_id": "1",
+                "field_path": "frame_layouts.ff[0].gaze_target",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_NARRATION_NOT_IN_SOURCE",
+                "shot_id": "2",
+                "field_path": "narration_segment",
+                "severity": "visual_risk"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T135000/ab-06",
+          "phase": "audit_ab_rerun",
+          "sample": "voice_legal",
+          "contract": "new",
+          "prompt_version": "857e4768d3dc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "ddc541b46a8cdd21f9989559d6ce2816789544b1",
+            "prompt_chars": 7803
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 92.9,
+          "usage": {
+            "input_tokens": 4621,
+            "output_tokens": 7202,
+            "reasoning_tokens": 6807,
+            "total_tokens": 11823
+          },
+          "parsed": {
+            "issues_count": 2,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_FF_RESULT_LEAK",
+                "shot_id": "1",
+                "field_path": "frame_layouts.ff[0].gaze_target",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_NARRATION_SOURCE_MISMATCH",
+                "shot_id": "2",
+                "field_path": "narration_segment",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T140115/ab-01",
+          "phase": "audit_ab_rerun",
+          "sample": "time_ellipsis_legal",
+          "contract": "old",
+          "prompt_version": "a5929a9f6abc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "5b5cca632df83048eab8df060a9fb7d4b8f89e80",
+            "prompt_chars": 6645
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 84.1,
+          "usage": {
+            "input_tokens": 4006,
+            "output_tokens": 9918,
+            "reasoning_tokens": 9550,
+            "total_tokens": 13924
+          },
+          "parsed": {
+            "issues_count": 2,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_STATE_CHAIN_CONFLICT",
+                "shot_id": "2",
+                "field_path": "lf_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_STATE_CHAIN_CONFLICT",
+                "shot_id": "1",
+                "field_path": "ff_desc",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T140115/ab-02",
+          "phase": "audit_ab_rerun",
+          "sample": "time_ellipsis_legal",
+          "contract": "new",
+          "prompt_version": "857e4768d3dc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "6cca1c6aeb49480f9737aed606f7f1aa63aaadb2",
+            "prompt_chars": 7801
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 2,
+          "elapsed_sec": 82.3,
+          "usage": {
+            "input_tokens": 4661,
+            "output_tokens": 5535,
+            "reasoning_tokens": 5323,
+            "total_tokens": 10196
+          },
+          "parsed": {
+            "issues_count": 1,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_MOTION_MISSING",
+                "shot_id": "2",
+                "field_path": "motion_desc",
+                "severity": "visual_risk"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T140115/ab-03",
+          "phase": "audit_ab_rerun",
+          "sample": "state_legal",
+          "contract": "old",
+          "prompt_version": "a5929a9f6abc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "0a64d386c1d3597cf6b1283f95cb0f90df5bb78a",
+            "prompt_chars": 6642
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 92.6,
+          "usage": {
+            "input_tokens": 4008,
+            "output_tokens": 11050,
+            "reasoning_tokens": 10547,
+            "total_tokens": 15058
+          },
+          "parsed": {
+            "issues_count": 2,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_UNSUPPORTED_PLOT_ACTION",
+                "shot_id": "2",
+                "field_path": "lf_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_UNSUPPORTED_SETTING",
+                "shot_id": "1",
+                "field_path": "prompt",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T140115/ab-04",
+          "phase": "audit_ab_rerun",
+          "sample": "state_legal",
+          "contract": "new",
+          "prompt_version": "857e4768d3dc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "bcb11deda849a1845abddc5d82c06ba906412c46",
+            "prompt_chars": 7781
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 90.1,
+          "usage": {
+            "input_tokens": 4649,
+            "output_tokens": 11413,
+            "reasoning_tokens": 10755,
+            "total_tokens": 16062
+          },
+          "parsed": {
+            "issues_count": 3,
+            "blocking_count": 2,
+            "issues": [
+              {
+                "code": "model_audit_LF_STATE_MISMATCH",
+                "shot_id": "2",
+                "field_path": "lf_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_STORY_DEVIATION",
+                "shot_id": "2",
+                "field_path": "motion_desc",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_MISSING_INFO",
+                "shot_id": "1",
+                "field_path": "ff_desc",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T140115/ab-05",
+          "phase": "audit_ab_rerun",
+          "sample": "voice_legal",
+          "contract": "old",
+          "prompt_version": "a5929a9f6abc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "7e66dbbb9f93beadf27c63522f42130c4553fce2",
+            "prompt_chars": 6664
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 53.3,
+          "usage": {
+            "input_tokens": 4002,
+            "output_tokens": 5399,
+            "reasoning_tokens": 5068,
+            "total_tokens": 9401
+          },
+          "parsed": {
+            "issues_count": 2,
+            "blocking_count": 1,
+            "issues": [
+              {
+                "code": "model_audit_NARRATION_EXTRA",
+                "shot_id": "2",
+                "field_path": "narration_segment",
+                "severity": "visual_risk"
+              },
+              {
+                "code": "model_audit_STORY_ADDITION",
+                "shot_id": "2",
+                "field_path": "motion_desc",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        },
+        {
+          "call_id": "20261112T140115/ab-06",
+          "phase": "audit_ab_rerun",
+          "sample": "voice_legal",
+          "contract": "new",
+          "prompt_version": "857e4768d3dc",
+          "request": {
+            "prompt_file": null,
+            "prompt_sha1": "ddc541b46a8cdd21f9989559d6ce2816789544b1",
+            "prompt_chars": 7803
+          },
+          "channel": {
+            "provider": "agent_plan",
+            "model": "deepseek-v4.1-flash"
+          },
+          "status": "ok",
+          "error": "",
+          "attempts": 1,
+          "elapsed_sec": 30.1,
+          "usage": {
+            "input_tokens": 4643,
+            "output_tokens": 2414,
+            "reasoning_tokens": 1864,
+            "total_tokens": 7057
+          },
+          "parsed": {
+            "issues_count": 3,
+            "blocking_count": 0,
+            "issues": [
+              {
+                "code": "model_audit_NARRATION_ADDED_LINE",
+                "shot_id": "2",
+                "field_path": "narration_segment",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_LF_LAYOUT_STATE_MISMATCH",
+                "shot_id": "2",
+                "field_path": "frame_layouts.lf[0].pose",
+                "severity": "advisory"
+              },
+              {
+                "code": "model_audit_BODY_DURATION_BELOW_BAND",
+                "shot_id": "1",
+                "field_path": "body_duration",
+                "severity": "advisory"
+              }
+            ]
+          },
+          "raw_response": {
+            "available": false,
+            "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
+          },
+          "repo_head": "0a2bcc4",
+          "candidate_identity": null
+        }
+      ]
+    }
+  ],
+  "fixture_drift": {
+    "checked": 6,
+    "match": 4,
+    "drift": 2,
+    "rows": [
+      {
+        "sample": "state_broken",
+        "contract": "new",
+        "recorded_sha1": "880fb79fbc9dc031f2057a6f06e067acd631cf20",
+        "status": "match",
+        "current_sha1": "880fb79fbc9dc031f2057a6f06e067acd631cf20",
+        "current_chars": 7784,
+        "fixture": "tests/step01_script_gen/fixtures/audit_narrative_families/state_broken.json",
+        "fixture_sha256": "adc731ad7d7289b1529e65e65a211b482b87f52584210c5301e2a0542e9c49da"
+      },
+      {
+        "sample": "state_broken",
+        "contract": "old",
+        "recorded_sha1": "89f94c406d213bcf70fd5c62eb49be5b169e1cee",
+        "status": "match",
+        "current_sha1": "89f94c406d213bcf70fd5c62eb49be5b169e1cee",
+        "current_chars": 6645,
+        "fixture": "tests/step01_script_gen/fixtures/audit_narrative_families/state_broken.json",
+        "fixture_sha256": "adc731ad7d7289b1529e65e65a211b482b87f52584210c5301e2a0542e9c49da"
+      },
+      {
+        "sample": "time_ellipsis_legal",
+        "contract": "new",
+        "recorded_sha1": "6cca1c6aeb49480f9737aed606f7f1aa63aaadb2",
+        "status": "drift",
+        "current_sha1": "fd3d8759c931013ebd6c76f786280a426d7023c9",
+        "current_chars": 7602,
+        "fixture": "tests/step01_script_gen/fixtures/audit_narrative_families/time_ellipsis_legal.json",
+        "fixture_sha256": "0e915425ef9de81391f25fe6dcdc65be232b7c8ab873efb50d1745eec6448c2b"
+      },
+      {
+        "sample": "time_ellipsis_legal",
+        "contract": "old",
+        "recorded_sha1": "5b5cca632df83048eab8df060a9fb7d4b8f89e80",
+        "status": "drift",
+        "current_sha1": "b8fe76ad7eb46f2c0e308e81842645915d03f107",
+        "current_chars": 6446,
+        "fixture": "tests/step01_script_gen/fixtures/audit_narrative_families/time_ellipsis_legal.json",
+        "fixture_sha256": "0e915425ef9de81391f25fe6dcdc65be232b7c8ab873efb50d1745eec6448c2b"
+      },
+      {
+        "sample": "voice_broken",
+        "contract": "new",
+        "recorded_sha1": "37724d885f0b46f0f764e7098fef32c269a3d8d9",
+        "status": "match",
+        "current_sha1": "37724d885f0b46f0f764e7098fef32c269a3d8d9",
+        "current_chars": 7813,
+        "fixture": "tests/step01_script_gen/fixtures/audit_narrative_families/voice_broken.json",
+        "fixture_sha256": "3ae6db301004da49cc86604d63d7db9e6a1b7832457e27cdac1feb65262d2096"
+      },
+      {
+        "sample": "voice_broken",
+        "contract": "old",
+        "recorded_sha1": "13db0f3e75b8ba6e132a4b5091f80c961c95ee98",
+        "status": "match",
+        "current_sha1": "13db0f3e75b8ba6e132a4b5091f80c961c95ee98",
+        "current_chars": 6674,
+        "fixture": "tests/step01_script_gen/fixtures/audit_narrative_families/voice_broken.json",
+        "fixture_sha256": "3ae6db301004da49cc86604d63d7db9e6a1b7832457e27cdac1feb65262d2096"
+      }
+    ]
+  },
+  "totals": {
+    "campaigns": 2,
+    "calls": 28,
+    "sends_by_phase": {
+      "audit_ab": 6,
+      "audit_ab_rerun": 20,
+      "final_audit": 1,
+      "repair": 1
+    }
+  }
+}

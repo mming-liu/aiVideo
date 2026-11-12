@@ -298,7 +298,7 @@ def _load_prop_assets_registry() -> dict:
 
 
 def _classify_reference_purpose(path: str, shot: dict, registry: dict,
-                                characters: list) -> str:
+                                characters: list, *, r2v: bool = False) -> str:
     """为一张 r2v 参考图判定用途标签（seedance2-skill @引用语义吸收）.
 
     判定优先级：
@@ -322,6 +322,15 @@ def _classify_reference_purpose(path: str, shot: dict, registry: dict,
 
     # 0. 本镜首帧：视频起点构图锚点（时间/场景/人物站位/动作起点以它为准）
     if name == FIRST_FRAME_FILENAME:
+        # M06（2026-11-12）：r2v 下这张图与其它参考图一样以 `reference_image`
+        # 下发（`_video_gen/volcengine_provider.py` 的 r2v 分支不使用 `first_frame`
+        # 角色），**没有**任何代码保证「视频从该静态瞬间开始」。此处若继续写
+        # 「画面从该静态瞬间开始、与图中完全一致」，就是把语言引导冒充成已实现契约。
+        # 所以 r2v 只声明「可对齐什么」，并把首帧锁定显式标成待验证项。
+        if r2v:
+            return ("本镜首帧的参考图（与其它参考图一样以 reference_image 下发）："
+                    "可用于对齐构图、时间、人物站位与动作起点；"
+                    "它不锁定视频首帧——首帧是否与该图一致由模型决定，属待验证项")
         return ("视频起点构图锚点，画面从该静态瞬间开始，时间、场景、人物站位、"
                 "动作起点与图中完全一致，后续动作在此基础上推进")
 
@@ -605,7 +614,8 @@ def _build_r2v_purpose_list(shot: dict, registry: dict = None,
         # 编号必须**按实际提交顺序连续**：不存在的路径直接跳过、不占号
         # （否则会出现「图3 缺失」导致模型把图4 当图3）。
         idx += 1
-        purpose = _classify_reference_purpose(str(p), shot, registry, characters)
+        purpose = _classify_reference_purpose(str(p), shot, registry, characters,
+                                              r2v=True)
         kind = _classify_reference_kind(str(p), shot, registry, characters)
         if kind in ("character", "character_sheet"):
             char_refs += 1

@@ -6120,6 +6120,60 @@ def _audit_paired_fields(script: dict | None, issue) -> dict:
             for tid in shots}
 
 
+def _declared_repair_paths(issues, tid: str) -> set:
+    """本轮**声明**给该目标的字段路径（`repair_targets` 里属于本镜的那些）.
+
+    M02（2026-11-12）：与 `allowed_repair_fields` 的最终授权面**分开记账**——
+    两者的差集就是「本轮由 code 表 / 关联推导 / 同帧实体互授扩出来的可改字段」。
+    台账要能回答「为什么这一轮允许改这些字段」，而不是只能从提示词正文反推。
+    声明缺席（`repair_targets is None`）时返回空集：它表示「没有声明」，
+    与「显式声明为空」的区别由 `allowed_repair_fields` 的三态语义负责。
+    """
+    from step01_script_gen.repair_fields import _norm_keep_index, _target_id_of
+    out: set = set()
+    for issue in issues or []:
+        for pair in (getattr(issue, "repair_targets", None) or []):
+            if not isinstance(pair, dict):
+                continue
+            if _target_id_of(str(pair.get("shot_id") or "")) != tid:
+                continue
+            path = _norm_keep_index(str(pair.get("field_path") or "").strip())
+            if path:
+                out.add(path)
+    return out
+
+
+def _authorized_changes_lost(merged: "dict | None", after: dict,
+                             allowed_by_target: dict | None) -> dict:
+    """合并后**已授权**的改动被后处理改回/改写的清单（M02）.
+
+    `merged` 是「合并后、后处理前」的快照（只含 LLM 的写入），`after` 是本轮结束时的
+    稿件。逐目标、逐授权路径比较两者的扁平化取值：凡授权路径上的值被后处理改动，
+    都记进来。
+
+    ⚠️ 这里**只记账、不改变接受判据**。接受与否仍由
+    `_repair_acceptance_decision` 的既有闸门决定；把「后处理抵消」直接升级成拒绝，
+    等于在没有判别证据的情况下改准入语义（须走 M09 的正式门禁裁决）。
+    已知适用面：`prompt` 这类会被后处理 writer 重写的聚合字段——S06/U6 实测里
+    模型对 `prompt` 的修复没有落到稿子上，而当时**没有任何台账记录**这件事。
+    """
+    from step01_script_gen.repair_fields import flatten_paths, path_allowed, shot_by_target
+    out: dict = {}
+    for tid, allowed in (allowed_by_target or {}).items():
+        if not allowed:
+            continue
+        _b = shot_by_target(merged, tid) if isinstance(merged, dict) else None
+        _a = shot_by_target(after, tid)
+        if not isinstance(_b, dict) or not isinstance(_a, dict):
+            continue
+        _fb, _fa = flatten_paths(_b), flatten_paths(_a)
+        _lost = sorted(p for p, v in _fb.items()
+                       if path_allowed(p, allowed) and _fa.get(p) != v)
+        if _lost:
+            out[str(tid)] = _lost
+    return out
+
+
 def _audit_issue_newly_resolved(script_after: dict, script_before: dict | None,
                                 issue: Issue, attempted: set | None = None) -> bool:
     """该 audit issue 是否**在本轮内新解决**（v6.102）.
@@ -7096,7 +7150,8 @@ def _record_repair_call_failure(repair_diag: list | None, repair_round: int, *,
 
 def _record_repair_unusable(repair_diag: list | None, repair_round: int, *,
                             reason: str, detail: str = "",
-                            raw_head: str = "") -> None:
+                            raw_head: str = "",
+                            extra: dict | None = None) -> None:
     """记一次"拿到了完整响应、但补丁不可用"（`kind="patch_unusable"`）.
 
     v6.133（2026-09-26 用户复核）：此前只有 **API 调用失败/截断**才算 `call_failed`，
@@ -7114,14 +7169,19 @@ def _record_repair_unusable(repair_diag: list | None, repair_round: int, *,
     if repair_diag is None:
         return
     _raw = str(raw_head or "")
-    repair_diag.append({
+    _rec = {
         "repair_round": repair_round,
         "kind": "patch_unusable",
         "reason": str(reason),
         "detail": str(detail)[:300],
         "raw_text_head": _raw[:_DIAG_RAW_HEAD_MAX],
         "raw_text_len": len(_raw),
-    })
+    }
+    # M02：`detail` 只留前 3 条（日志可读），完整清单走结构化字段——
+    # 「哪几个目标因为哪几条路径被拒」是台账要能逐条回答的问题。
+    for _k, _v in (extra or {}).items():
+        _rec[str(_k)] = _v
+    repair_diag.append(_rec)
 
 
 def _repair_max_output_tokens() -> int | None:
@@ -7618,6 +7678,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     _mask_violations_after_patch: list = []
     # v6.104.1：KF 结构验收快照（合并后立刻取，见循环内）
     _kf_struct_after_patch: list = []
+    # M02：合并后、后处理前的**授权效果**快照（见 `_authorized_changes_lost`）
+    _post_merge_snapshot: "dict | None" = None
 
     # v6.94（2026-09-22 实测）：④ 的根因**不在这里**——是轮尾 `run_hard_fix` 跑到
     # `shot_index_renumber`（它没有 repair-loop 守卫），把结构收敛轮拆出的半整数
@@ -8308,6 +8370,11 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             return _target_of_record(_ai) == _tid
 
         _allowed_by_target: dict = {}
+        # M02（2026-11-12）：本轮**授权面台账**——`allowed` / `declared` /
+        # `beyond_declared` 三栏。台账要能回答「这一轮为什么允许改这些字段」，
+        # 而不是只能从提示词正文反推（S06 的 `repair_diag.json` 没有这一栏，
+        # 「授权面是否足够」当时无法从盘上核实）。
+        _auth_ledger: dict = {}
         _unauthorized_targets: list = []
         _inexecutable_locked: dict = {}     # tid → 命中的锁定字段（v6.149 预检）
         for _tid, _ws in picked.items():
@@ -8329,6 +8396,13 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 _inexecutable_locked[_tid] = _locked_hit or [str(a) for a in _allowed]
                 continue
             _allowed_by_target[_tid] = _exec
+            _declared_paths = _declared_repair_paths(_structured, _tid)
+            _auth_ledger[_tid] = {
+                "allowed": sorted(str(p) for p in _exec),
+                "declared": sorted(_declared_paths),
+                "beyond_declared": sorted(str(p) for p in _exec
+                                          if str(p) not in _declared_paths),
+            }
         if _unauthorized_targets:
             _logger.warn(
                 "[REPAIR] %d 个目标的问题未点名字段路径，本轮不走定向修复：%s"
@@ -8802,9 +8876,16 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         if _n_applied <= 0:
             _logger.warn("[WARN] 定向修复替换镜头均未通过校验，保留原版（未做任何后处理）")
             _record_repair_unusable(repair_diag, _round, reason="rejected_by_validation",
-                                    detail="；".join(str(x) for x in _rejected[:3]))
+                                    detail="；".join(str(x) for x in _rejected[:3]),
+                                    raw_head=result.text,
+                                    extra={"rejected": list(_rejected),
+                                           "authorization": _auth_ledger})
             return script
         _logger.info(f"[REPAIR] 应用完整镜头替换 {_n_applied} 镜")
+        # M02：留一份「合并后、后处理前」的深拷贝——后处理是在**同一个对象**上
+        # 就地改写的（`script = merged` 之后各处 writer 直接写 `script`），不拷贝
+        # 就没有任何基线能回答「授权改动有没有被后处理抵消」。
+        _post_merge_snapshot = copy.deepcopy(merged)
         # v6.87（2026-09-21 23:19 实测）：**锁定字段权威快照必须在合并后立刻取**。
         #
         # `_FINAL_LOCKED_FIELDS` 要回答的问题是「**LLM** 有没有改动锁定字段」。
@@ -9488,6 +9569,16 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     # `reverted` 里；不单独记，台账就会漏掉「模型想改但被挡在门外」
                     # 这一半事实（2026-11-12 实跑：shot7/shot11 因 keyframes 被拒）。
                     "rejected": list(_rejected or [])[:6],
+                    # M02（2026-11-12）：本轮**请求允许范围**与「声明之外扩出来的字段」。
+                    # 三栏台账（allowed / declared / beyond_declared）回答两个问题：
+                    #   ① 这一轮到底允许模型改哪些字段；
+                    #   ② 其中哪些不是问题自己声明的，而是关联推导/同帧实体互授得来的。
+                    # 没有这一栏时，「授权面是否足够」只能从提示词正文反推（S06 即是）。
+                    "authorization": _auth_ledger,
+                    # M02：**已授权的改动有没有落到稿子上**。只记账、不改判据；
+                    # 空字典 = 本轮授权路径上的值没有被后处理改动。
+                    "postprocess_reverted": _authorized_changes_lost(
+                        _post_merge_snapshot, script, _allowed_by_target),
                 })
             except Exception as _diag_err:
                 _logger.warn(f"[REPAIR] 修复轮诊断记录失败（不影响结论）: {_diag_err}")

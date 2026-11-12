@@ -306,6 +306,145 @@ _AUDIT_PAIRED_PATHS: dict = {
                           "frame_layouts.ff": ("ff_desc",)},
 }
 
+# ---------------------------------------------------------------------------
+# M02（2026-11-12）：帧描述 ↔ **同帧布局条目**的按实体互授
+# ---------------------------------------------------------------------------
+# 实测（M02 探针，合法桩响应经真实修订入口）：`PROP_CONTINUITY` 只点名 `lf_desc`，
+# 模型把尾帧描述改对的同时补了同帧布局的道具 → 整条补丁被判
+# 「越权字段补丁：'frame_layouts.lf.0.props' 不在本轮授权集合 ['lf_desc'] 内」，
+# 该轮 `rejected_by_validation`，缺陷零进展。
+#
+# 这不是「模型输出面过大」：同一事实在**帧描述**与**布局条目**里各存一份，只改一份
+# 必然留下矛盾，下一轮审计会再报一条新的（与 `_PAIRED_FRAME_DESC_CODES` 的
+# 「矛盾两侧都可修」同一条原则，只是那一处只覆盖两个确定性 code）。
+#
+# 收窄边界（三条同时成立才扩，缺一不扩）：
+#   1. **同一镜**——`target_shot_id` 已限定，未点名镜头逐字节不动；
+#   2. **同一帧**——按声明路径或 `issue.frame_id` 解析出 ff/lf/kfN，不跨帧；
+#   3. **同一实体**——`entity_id` 命中该帧布局条目名时只授该条目的叶子；
+#      命中不了（空/`scene`/名册对不上）才退到**该帧全部条目**，仍不跨帧。
+# 只授「条目已存在的叶子」（props/pose/on_screen/position），不授列表本身：
+# 增删条目仍走 `frame_layout_structural_violations` 的结构授权面。
+#: 只授「承载**事实归属**的两个叶子」：道具（谁拿着什么）与在场（看不看得见）。
+#: `pose` / `position` 不在此列——姿态与站位由**审计自己**在 `repair_targets` 里
+#: 点名（`FF_RESULT_LEAK` 就是这么做的），不由描述路径连带放开，避免把「改一句
+#: 描述」放大成「可改整帧站位」。
+_LAYOUT_COMPANION_LEAVES: tuple = ("props", "on_screen")
+
+#: `frame_layouts` 路径的帧段解析（`ff` / `lf` / `kfs[N]`），保留原始下标。
+_FL_FRAME_RE = re.compile(r"^frame_layouts\.(ff|lf|kfs)(?:\[(\d+)\])?")
+#: `keyframes[N]` 的帧段解析。
+_KF_FRAME_RE = re.compile(r"^keyframes\[(\d+)\]")
+
+#: 实体名里不指向具体布局条目的取值（问题定位到「场景」而非某个角色时）。
+_NON_ENTITY_IDS = frozenset({"", "scene", "scene_object", "group", "global"})
+
+
+def _frame_layout_entries(shot, frame_id: str) -> tuple:
+    """该帧的 `(条目列表, 路径前缀)`；解析不了返回 `(None, "")`."""
+    if not isinstance(shot, dict):
+        return None, ""
+    fl = shot.get("frame_layouts")
+    if not isinstance(fl, dict):
+        return None, ""
+    fid = str(frame_id or "").strip()
+    if fid in ("ff", "lf"):
+        entries = fl.get(fid)
+        return (entries if isinstance(entries, list) else None), "frame_layouts.%s" % fid
+    if fid.startswith("kf"):
+        try:
+            idx = int(fid[2:])
+        except ValueError:
+            return None, ""
+        kfs = fl.get("kfs")
+        if not isinstance(kfs, list) or not (0 <= idx < len(kfs)):
+            return None, ""
+        entries = kfs[idx]
+        return (entries if isinstance(entries, list) else None), "frame_layouts.kfs.%d" % idx
+    return None, ""
+
+
+def _layout_entry_leaf_paths(shot, frame_id: str, entity_id: str) -> set:
+    """同帧布局里**该实体条目**已存在叶子的精确路径（命中不了则退到整帧条目）."""
+    entries, base = _frame_layout_entries(shot, frame_id)
+    if not entries or not base:
+        return set()
+    ent = str(entity_id or "").strip()
+    picked = [i for i, item in enumerate(entries)
+              if isinstance(item, dict)
+              and (ent in _NON_ENTITY_IDS
+                   or ent == str(item.get("name") or "").strip())]
+    if not picked:
+        # 实体对不上名册：退到**该帧**全部条目（仍不跨帧、不跨镜）
+        picked = [i for i, item in enumerate(entries) if isinstance(item, dict)]
+    out = set()
+    for i in picked:
+        for leaf in _LAYOUT_COMPANION_LEAVES:
+            if leaf in entries[i]:
+                out.add("%s.%d.%s" % (base, i, leaf))
+    return out
+
+
+def _paired_desc_for_frame(frame_id: str) -> str:
+    """该帧对应的**描述字段**路径（`keyframes[N].desc` 保留下标）."""
+    fid = str(frame_id or "").strip()
+    if fid == "ff":
+        return "ff_desc"
+    if fid == "lf":
+        return "lf_desc"
+    if fid.startswith("kf"):
+        try:
+            return "keyframes[%d].desc" % int(fid[2:])
+        except ValueError:
+            return ""
+    return ""
+
+
+def _frame_id_of_layout_path(path: str) -> str:
+    """`frame_layouts.*` 路径 → 帧标识（`ff` / `lf` / `kfN`）；解析不了返回空串."""
+    m = _FL_FRAME_RE.match(str(path or "").strip())
+    if not m:
+        return ""
+    kind, idx = m.group(1), m.group(2)
+    if kind in ("ff", "lf"):
+        return kind
+    return "kf%s" % idx if idx is not None else ""
+
+
+def _frame_id_of_desc_path(path: str) -> str:
+    """帧描述路径 → 帧标识；不是帧描述返回空串."""
+    p = str(path or "").strip()
+    if p == "ff_desc":
+        return "ff"
+    if p == "lf_desc":
+        return "lf"
+    m = _KF_FRAME_RE.match(p)
+    if m and p.startswith("keyframes[") and ".desc" in p:
+        return "kf%s" % m.group(1)
+    return ""
+
+
+def frame_layout_companions(shot, declared_path: str, *,
+                            frame_id: str = "", entity_id: str = "") -> set:
+    """声明路径是**帧描述**时，返回同帧布局条目的精确可改路径.
+
+    只做**一个方向**：`ff_desc` / `lf_desc` / `keyframes[N].desc` → 同帧布局条目
+    的叶子。反向（布局叶子 → 描述）不做——审计的 `minimal_fix` 对可见性/持物这类
+    问题通常给出「改布局」或「改描述」两种合法方向，只授布局侧仍能修；而反向放开
+    会把「点名布局」变成「连带可改整段描述」，授权面增长得不偿失。
+
+    返回空集表示不适用（例如 `prompt`、`motion_desc` 这类跨帧聚合字段——
+    它们由各自的授权路径负责，不在这里连带放开）。
+    """
+    declared = str(declared_path or "").strip()
+    if not declared:
+        return set()
+    fid = _frame_id_of_desc_path(declared)
+    if not fid:
+        return set()
+    return _layout_entry_leaf_paths(shot, fid, entity_id)
+
+
 
 def _audit_props_paths(fp: str, frame_id: str) -> tuple:
     """审计 `field_path` 含 `props` 时的**两侧**授权（v6.113）.
@@ -677,6 +816,10 @@ def allowed_repair_fields(warnings, audit_issues=None, *,
     # 下标（`keyframes.2.desc` 不覆盖 kf0/kf1）。旧路径（code 表 / field_path /
     # 文案关键词）仍进 `allowed` 走通配形态，行为与之前逐字一致。
     allowed_exact: set = set()
+    #: M02：帧描述带出的同帧布局叶子。先收集、**最后**再并入——并入前要与本轮
+    #: 已授权的全部路径比一次：被更宽路径（如结构码给出的 `frame_layouts.kfs.0`）
+    #: 覆盖的不再单列，授权面因此不会因「同一件事写两种粒度」而膨胀。
+    _companion_paths: set = set()
     # v6.104：本轮是否出现「必须增删 KF 才能修」的问题（决定是否授权 KF 列表本身）
     structural = False
     _pairs_mode = target_shot_id is not None and shots_by_id is not None
@@ -718,6 +861,14 @@ def allowed_repair_fields(warnings, audit_issues=None, *,
                 for _prefix, _extra in _companions.items():
                     if _fp_norm == _prefix or _fp_norm.startswith(_prefix + "."):
                         allowed.update(_extra)
+                # M02（2026-11-12）：帧描述 ↔ 同帧布局条目的按实体互授。
+                # 只补**同一镜、同一帧、同一实体**的精确叶子；锁定字段与未点名镜头
+                # 不在扩展范围内，仍由既有闸门硬拒收。
+                _companion_paths.update(frame_layout_companions(
+                    (shots_by_id or {}).get(target_shot_id),
+                    _p["field_path"],
+                    frame_id=str(getattr(issue, "frame_id", "") or ""),
+                    entity_id=str(getattr(issue, "entity_id", "") or "")))
             continue
         if _is_structural_code(code):
             structural = True
@@ -774,6 +925,12 @@ def allowed_repair_fields(warnings, audit_issues=None, *,
         if any(_text_hits(text, kw) for kw in _KF_STRUCTURAL_KEYWORDS):
             structural = True
         allowed.update(_fields_from_text(text))
+    # M02：同帧布局叶子**最后**并入——先与本轮已授权的全部路径比一次，
+    # 被更宽路径覆盖的不再单列（见 `_companion_paths` 的注释）。
+    if _companion_paths:
+        _already = allowed | allowed_exact
+        allowed_exact |= {p for p in _companion_paths
+                          if not path_allowed(p, _already)}
     return (_with_kf_structural(_narrow({_norm(a) for a in allowed if a}), structural)
             | {a for a in allowed_exact if a})
 

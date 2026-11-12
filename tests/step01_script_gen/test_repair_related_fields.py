@@ -125,8 +125,10 @@ def test_round_records_related_readback_in_ledger(monkeypatch):
 
     fixed = _complete_shot(4)
     fixed["ff_desc"] = "张十三举灯盏站立，" + MARKER   # 授权字段：改描述
-    # 同时**越权**改了同帧布局（未授权）——四栏台账必须把它记成「请求了但被回填」
-    fixed["frame_layouts"]["ff"][0]["props"] = ["碎灯盏"]
+    # 同时**越权**改了同帧布局的**姿态**——四栏台账必须把它记成「请求了但被回填」。
+    # 注意：M02 起同帧布局的 `props`/`on_screen` 已随帧描述互授（同一事实的另一份），
+    # 拿 props 当「越权样本」会失效；`pose` 仍不在互授范围内。
+    fixed["frame_layouts"]["ff"][0]["pose"] = "举灯盏"
 
     issue = Issue(code="model_audit_PROP_STATE", severity="visual_risk",
                   message="首帧道具状态不符", shot_id="4", frame_id="ff",
@@ -141,7 +143,9 @@ def test_round_records_related_readback_in_ledger(monkeypatch):
     assert h.diag, h.logs[:12]
     rb = h.diag[-1].get("related_readback") or {}
     assert rb.get("checked", 0) >= 1, rb
-    assert rb.get("changed") == 0, rb
+    # 越权改动必须记进 `reverted`；`changed` 只统计**实际应用**的变化，
+    # 不再要求整轮为 0（同一目标里被授权的那一半会正常计入）。
+    assert rb.get("reverted", 0) >= 1, rb
     row = (rb.get("targets") or [{}])[0]
     # 四栏：模型请求 / 实际应用 / 越权回填 / 投影后残余
     assert rb.get("requested_basis") == "shot_replacements[].shot", rb

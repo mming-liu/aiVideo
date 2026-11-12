@@ -1,4 +1,4 @@
-# API 密钥（包含敏感信息，绝对不能提交）
+﻿# API 密钥（包含敏感信息，绝对不能提交）
 .env
 .env.keys
 # 密钥文件的所有备份变体（如 .env.keys.bak.20261018-104737），防止再次误提交
@@ -141,6 +141,9 @@ tests/step01_script_gen/*
 !tests/step01_script_gen/conftest.py
 !tests/step01_script_gen/test_repair_targets.py
 !tests/step01_script_gen/test_linked_group_capacity.py
+# 2026-11-12 M02/M03：修订入口与已确认问题台账的契约用例（干净检出可运行）
+!tests/step01_script_gen/test_m02_revision_entry.py
+!tests/step01_script_gen/test_issue_ledger.py
 !tests/step01_script_gen/test_repair_target_rollback.py
 !tests/step01_script_gen/test_step01_commit.py
 !tests/step01_script_gen/test_plan_phase_e_commit_chain.py
@@ -286,6 +289,8 @@ tests/tts/*
 !tests/tools/
 tests/tools/*
 !tests/tools/test_bench_video_prompt_patterns.py
+# 2026-11-12 M01：调用索引与样本漂移核对的锁定用例
+!tests/tools/test_step01_call_index.py
 !tests/tools/test_vision_check.py
 # 2026-11-02：Studio 工作台（tools/studio_server.py）离线用例入库。
 !tests/tools/test_studio_server.py
@@ -321,6 +326,8 @@ tests/step02_video_gen/*
 !tests/step02_video_gen/test_video_prepared_providers.py
 !tests/step02_video_gen/test_prepared_frozen.py
 !tests/step02_video_gen/test_video_quota_breaker.py
+# 2026-11-12 M06：参考用途与实际下发方式一致（首帧不冒充契约）
+!tests/step02_video_gen/test_m06_reference_purpose.py
 !tests/shared/test_cache_and_card_handoff.py
 !tests/shared/test_plan_revision_delta_end_to_end.py
 !tests/shared/test_content_verification.py

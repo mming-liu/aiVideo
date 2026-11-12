@@ -1,0 +1,102 @@
+{
+  "schema": "confirmed_issue_set.v1",
+  "source": "docs/step01-s01-audit-baseline-2026-11-11.md#3",
+  "note": "S01 冻结语义裁决表（U6 主线）。这是历史事故的独立回归数据：身份与处置来自人工裁决，不含正文全文。",
+  "candidate": {
+    "path": "baselines/2026-11-12-pre-layered/u6_frozen/candidate_d1a/candidate.json",
+    "revision": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+    "sha256": "3f88a060082173ca36cdcb6f14f94002843d502fe09930812ea13dc3bf42321f"
+  },
+  "issues": [
+    {
+      "id": "u6-01",
+      "code": "ACTION_OMISSION",
+      "shot_id": "13",
+      "field_path": "ff_desc",
+      "disposition": "legal_expression",
+      "evidence": "一柱香的时间之后",
+      "why": "原文自身以时间跳跃省略搬运过程，观众不需要看过程；审计把它判成因果断裂属于误报。"
+    },
+    {
+      "id": "u6-02",
+      "code": "PROP_CONTINUITY",
+      "shot_id": "7",
+      "field_path": "lf_desc",
+      "disposition": "confirmed",
+      "evidence": "右手酒壶倾倒",
+      "why": "shot6 已写酒壶脱手，原文「丢了酒囊」，尾帧不能又回到右手。"
+    },
+    {
+      "id": "u6-03",
+      "code": "PROP_CONTINUITY",
+      "shot_id": "5",
+      "field_path": "frame_layouts.ff[2].props",
+      "disposition": "improvement",
+      "evidence": "props为空数组",
+      "why": "钓杆在中刃后才脱手；本镜布局漏列属轻微连续性改进，不是确认缺陷。"
+    },
+    {
+      "id": "u6-04",
+      "code": "FF_RESULT_LEAK",
+      "shot_id": "11",
+      "field_path": "ff_desc",
+      "disposition": "confirmed",
+      "evidence": "右手食指竖于唇前",
+      "why": "motion 前 2 秒才是竖指封口，首帧提前画完过程动作。"
+    },
+    {
+      "id": "u6-05",
+      "code": "FIELD_CONFLICT",
+      "shot_id": "1",
+      "field_path": "prompt",
+      "disposition": "confirmed",
+      "evidence": "大特写",
+      "why": "同镜 ff/lf/motion 均为大远景空镜，prompt 写大特写自相矛盾。"
+    },
+    {
+      "id": "u6-06",
+      "code": "TEXT_REPETITION",
+      "shot_id": "6",
+      "field_path": "prompt",
+      "disposition": "confirmed",
+      "evidence": "同一括号说明连写两遍",
+      "why": "逐字重复，确定性可证。"
+    },
+    {
+      "id": "u6-07",
+      "code": "SCENE_CONTINUITY",
+      "shot_id": "13",
+      "field_path": "prompt",
+      "disposition": "undecided",
+      "evidence": "湾堤岸边",
+      "why": "prompt 与 scene/location 一致，与 ff_desc 措辞不同，孰为准需内容裁决。"
+    },
+    {
+      "id": "u6-08",
+      "code": "STATE_CHAIN_CONFLICT",
+      "shot_id": "10",
+      "field_path": "ff_desc",
+      "disposition": "confirmed",
+      "evidence": "披头散发撑坐船板",
+      "why": "原文步摇在掌掴同时被碰落；首帧在掌掴前，应是挽髻。"
+    },
+    {
+      "id": "u6-09",
+      "code": "PROP_CONTINUITY",
+      "shot_id": "4",
+      "field_path": "ff_desc",
+      "disposition": "confirmed",
+      "evidence": "右手提青瓷酒壶",
+      "why": "shot3 尾帧写壶搁在船板，与本镜提壶矛盾；根因在 shot3 偏离原文。"
+    },
+    {
+      "id": "u6-10",
+      "code": "PROP_CONTINUITY",
+      "shot_id": "7",
+      "field_path": "ff_desc",
+      "disposition": "confirmed",
+      "evidence": "右手反握带血短刃",
+      "why": "原文没有拔刃动作：短刃应留在心口、刺客空手入水。"
+    }
+  ]
+}
