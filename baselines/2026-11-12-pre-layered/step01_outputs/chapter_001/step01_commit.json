@@ -1,0 +1,36 @@
+{
+  "manifest_version": 1,
+  "duration_band": {
+    "min": 60.0,
+    "max": 90.0,
+    "target_min": 70.0,
+    "target_max": 80.0
+  },
+  "status": "COMMITTED",
+  "run_id": "20261109T075259-24828",
+  "created_at": "2026-11-09T07:56:57",
+  "script_revision": "51978e8b92f6bf7c877acd9f51103312383e793332b2bce730cf9ecdb7140172",
+  "rule_source_fingerprint": "72dcb353990a2071",
+  "rule_version": "2026-09-23.4",
+  "prompt_source_fingerprint": "cdef3ffa693f2daf",
+  "audit_scope": "final_after_deterministic_fixes",
+  "blocking_count": 0,
+  "blocking_truncated": false,
+  "blocking": [],
+  "audit_status": "",
+  "detail": "",
+  "artifacts": {
+    "script_result.json": {
+      "sha1": "214dc19dae139189b54534d0682d3e23710114ff",
+      "bytes": 175314
+    },
+    "step01_quality.json": {
+      "sha1": "dca4a48f1cd31b1777b3c112b0912645acbd6d2c",
+      "bytes": 50411
+    },
+    "step01_audit.json": {
+      "sha1": "7ef46630593beccec5f033af80eb2cb479591679",
+      "bytes": 7193
+    }
+  }
+}

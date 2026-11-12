@@ -1,0 +1,85 @@
+{
+  "props": {
+    "油纸伞": {
+      "category": "雨具",
+      "appearance": "竹骨油纸伞，伞面呈浅黄色，涂有桐油，半透明，可见竹篾骨架。伞面绘有淡雅兰花图案，边缘有磨损和细小破洞，伞柄为深褐色竹制，有手握的包浆。伞骨为竹制，部分伞骨有修补痕迹。",
+      "consistent_terms": [
+        "油纸伞",
+        "伞"
+      ],
+      "identifier": "油纸伞",
+      "first_chapter": 1,
+      "last_chapter": 1,
+      "asset_id": "P01",
+      "image": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\global\\props_bank\\油纸伞\\prop.png",
+      "image_desc": "油纸伞 道具资产参考图"
+    },
+    "灯笼": {
+      "category": "照明",
+      "appearance": "竹骨纸灯笼，高约40厘米，圆柱形，外糊白色宣纸，纸面有竹篾骨架的凸痕，灯笼上下有黑色木盖，提梁为铁丝。灯笼内点蜡烛，发出暖黄光，纸面有烟熏痕迹。",
+      "consistent_terms": [
+        "灯笼",
+        "灯盏"
+      ],
+      "identifier": "灯笼",
+      "first_chapter": 1,
+      "last_chapter": 1,
+      "asset_id": "P02"
+    },
+    "短刃": {
+      "category": "武器",
+      "appearance": "精钢短刃，长约30厘米，单刃，刀身有锻造纹理，刃口锋利，寒光闪闪。刀柄为深色木制，缠有黑色麻绳，刀格为铁制，有锈迹。配有一副黑色皮革刀鞘，鞘口有铜箍。刺出时寒光如弦月清冷。",
+      "consistent_terms": [
+        "短刃",
+        "寒光短刃"
+      ],
+      "identifier": "短刃",
+      "first_chapter": 1,
+      "last_chapter": 1,
+      "asset_id": "P03"
+    },
+    "酒壶": {
+      "category": "容器",
+      "appearance": "青瓷酒壶，高约20厘米，圆腹，细颈，壶嘴弯曲，壶身施青釉，釉面有细密开片，局部有使用留下的污渍和磕碰小缺口。壶盖为木塞，配有一根细绳系于壶柄。",
+      "consistent_terms": [
+        "青瓷酒壶",
+        "酒壶"
+      ],
+      "identifier": "酒壶",
+      "first_chapter": 1,
+      "last_chapter": 1,
+      "asset_id": "P04",
+      "image": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\global\\props_bank\\酒壶\\prop.png",
+      "image_desc": "酒壶 道具资产参考图"
+    },
+    "钓杆": {
+      "category": "渔具",
+      "appearance": "细长竹制钓杆，长约2米，竿身呈黄褐色，竹节明显，表面有使用留下的光滑包浆。竿梢系有白色丝线，线上有芦苇浮漂，竿柄缠有深色布条以防滑。鱼线绷直探入水中时可见丝线反光。",
+      "consistent_terms": [
+        "钓杆"
+      ],
+      "identifier": "钓杆",
+      "first_chapter": 1,
+      "last_chapter": 1,
+      "asset_id": "P05",
+      "image": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\global\\props_bank\\钓杆\\prop.png",
+      "image_desc": "钓杆 道具资产参考图"
+    },
+    "两轮带篷马车": {
+      "category": "交通工具",
+      "appearance": "两轮带篷载客马车，长3.5米、宽1.6米、高2.0米，可容2-3人。车厢为木制，外覆深蓝色粗布篷，篷布有补丁和磨损，车帘为同色布帘，半掀。车轮为木制辐条轮，轮缘有铁箍，车篷前挂一盏摇晃的灯笼。",
+      "consistent_terms": [
+        "两轮带篷马车",
+        "马车"
+      ],
+      "identifier": "两轮带篷马车",
+      "first_chapter": 1,
+      "last_chapter": 1,
+      "asset_id": "P06"
+    }
+  },
+  "meta": {
+    "last_updated_chapter": 1,
+    "total_props": 6
+  }
+}

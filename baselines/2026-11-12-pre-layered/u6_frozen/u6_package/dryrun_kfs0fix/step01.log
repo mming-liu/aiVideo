@@ -1,0 +1,19 @@
+[2026-11-11 20:43:35] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-11-11 20:43:35] [HARD_FIX] 本轮路径: Constraint 框架
+[2026-11-11 20:43:36] [CONSTRAINT] 修复 131 处 (top: prop_spatial_anchor=43, kf_pose_anchor=32, v6_43_prompt_enforcement=18, final_quality_normalizer=9, kf_blood_monotonic=6)
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] prop_spatial_anchor@shot2（另 42 处）: 道具 油纸伞 方位缺失，禁止自动注入默认方位
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 31 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] v6_43_prompt_enforcement@shot1（另 16 处）: 关键帧与 ff 文本重叠 0.82；保留事件原文，交 audit/LLM 改写
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] final_quality_normalizer@shot3（另 8 处）: 船只/水面镜头含位移或腾空动作，但缺少明确的承重面或稳定状态；保留原文，交 audit 判断，禁止自动追加“人物稳定位于船板”。
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] kf_frame_redundancy@shot2（另 3 处）: 镜头2 kf1 与 ff 相似度 44%; 拉开姿态/角度或下一轮重生（否则图片必复刻 ff）
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] kf_time_window_alignment@shot3（另 1 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] axis_jump@shot3（另 1 处）: 方向翻转缺乏机位证据，保留原文交由 audit
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] cross_shot_continuity@shot9（另 1 处）: LF→FF 状态跳变（时序倒流）
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] frame_layouts_required@shot1（另 1 处）: shot 1 frame_layouts.ff 为空（应至少 1 条角色入镜条目）。
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] opening_hook@shot1: 前 1/3 镜缺少爆点词：仅提示，不注入固定情绪措辞
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] threat_gaze_coupling@shot5: 具体站位与视线方向冲突，保留原文交由 audit
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] camera_movement_fill@shot9: 连续 3 镜 camera_movement='环绕镜'，镜头语言单调
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] dialogue_density@script: 对白镜 1/13 = 7%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] shot_count_bounds@script: 场景数 7 > 上限 5（场景过多=频繁转场，单章 60-90s 不易把控）。
+[2026-11-11 20:43:36] [CONSTRAINT-WARN] 合计 119 条告警 / 15 类约束

@@ -1,0 +1,53 @@
+{
+ "manifest_version": 1,
+ "run_id": "20261107T225039-18832",
+ "stage": "commit",
+ "chapter_dir": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001",
+ "novel_name": "锦衣夜行",
+ "book_index": 1,
+ "book_name": "杀青州",
+ "novel_chapter": 1,
+ "snapshot_path": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\snapshots\\script_result_20261107_231721.json",
+ "snapshot_sha256": "81265bc2579ddd47253d42570707919a2d086c11c00e89e3cf852704ba8fab5c",
+ "script_revision": "8198de7d56aa0bf34cf2e99696f79fdbfeaf09c303c4a1fe3f2e554b278af117",
+ "audit_path": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\snapshots\\step01_audit_20261107_231721.json",
+ "audit_revision": "8198de7d56aa0bf34cf2e99696f79fdbfeaf09c303c4a1fe3f2e554b278af117",
+ "audit_status": "ok",
+ "rule_source_fingerprint": "7e0af5cff02d205a",
+ "audit_prompt_version": "75b217bc8626",
+ "audit_focus_version": "066a87e6da63",
+ "audit_scope": "final_after_deterministic_fixes",
+ "duration_band": {
+  "min": 60.0,
+  "max": 90.0,
+  "target_min": 70.0,
+  "target_max": 80.0
+ },
+ "channel_provider": "agent_plan",
+ "channel_model": "deepseek-v4.1-flash",
+ "novel_text_path": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\_resume\\novel_aba1adc22826.txt",
+ "novel_sha256": "aba1adc22826c2834754af529b6235e3bd4a5428b59a45c10353f5483ce854c3",
+ "plan_path": "output_s07_resume\\锦衣夜行\\part_01_杀青州\\chapter_001\\chapter_outline.cache.json",
+ "plan_sha256": "32cde26e12cba231036089b43ba7a472f62d0378c8e632583a32c83ee6c8c42c",
+ "unresolved": [
+  "model_audit_STATE_CHAIN_CONFLICT",
+  "model_audit_MISSING_CAUSAL_BEAT",
+  "model_audit_MISSING_CAUSAL_BEAT",
+  "model_audit_MISSING_PLOT_ELEMENT",
+  "model_audit_NARRATION_TEXT_ERROR",
+  "model_audit_TEXT_DUPLICATION",
+  "model_audit_KF_STAGE_MISMATCH",
+  "model_audit_LAYOUT_ENTITY_MISSING",
+  "model_audit_LAYOUT_ENTITY_MISSING",
+  "model_audit_LAYOUT_ENTITY_MISSING",
+  "model_audit_LAYOUT_ENTITY_MISSING",
+  "model_audit_PROP_CONTINUITY",
+  "model_audit_PROP_CONTINUITY"
+ ],
+ "usage": {
+  "input_tokens": 50768,
+  "output_tokens": 23740,
+  "reasoning_tokens": 21461,
+  "total_tokens": 74508
+ }
+}

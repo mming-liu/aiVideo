@@ -1,0 +1,121 @@
+{
+ "production": {
+  "subtitle": "旁白：那跃上船来的人青衣小帽打扮，正是杨旭的贴身伴当张十三",
+  "motion_desc": "前2秒：张十三在堤上纵身跃起；2-4秒：他飞掠一丈多远，落向船梢；4-6秒：双足踏船梢，敞口木舟（长4.5米宽1.3米，可容2-3人）剧烈摇晃",
+  "ff": [
+   {
+    "name": "张十三",
+    "on_screen": true,
+    "position": "画中堤边",
+    "pose": "闻声急奔屈膝欲跃",
+    "support": {
+     "id": "堤岸",
+     "kind": "土堤",
+     "surface": "堤面"
+    }
+   },
+   {
+    "name": "听香",
+    "on_screen": true,
+    "position": "画面内",
+    "pose": "欲呼传来",
+    "support": {
+     "id": "堤岸",
+     "kind": "土堤",
+     "surface": "堤面"
+    }
+   }
+  ],
+  "kfs0": [
+   {
+    "name": "张十三",
+    "on_screen": true,
+    "position": "画中堤边",
+    "pose": "闻声急奔屈膝欲跃",
+    "support": {
+     "id": "堤岸",
+     "kind": "土堤",
+     "surface": "堤面"
+    }
+   },
+   {
+    "name": "听香",
+    "on_screen": true,
+    "position": "水面",
+    "pose": "尖叫传来",
+    "support": {
+     "id": "堤岸",
+     "kind": "土堤",
+     "surface": "堤面"
+    }
+   }
+  ]
+ },
+ "candidate": {
+  "subtitle": "旁白：那跃上船来的人青衣小帽打扮，正是杨旭的贴身伴当张十三",
+  "motion_desc": "前2秒：张十三在堤上纵身跃起；2-4秒：他飞掠一丈多远，落向船梢；4-6秒：双足踏船梢，敞口木舟（长4.5米宽1.3米，可容2-3人）剧烈摇晃",
+  "ff": [
+   {
+    "name": "张十三",
+    "on_screen": true,
+    "position": "画中堤边",
+    "pose": "闻声急奔屈膝欲跃",
+    "support": {
+     "id": "堤岸",
+     "kind": "土堤",
+     "surface": "堤面"
+    }
+   }
+  ],
+  "kfs0": [
+   {
+    "name": "张十三",
+    "on_screen": true,
+    "position": "画中堤边",
+    "pose": "闻声急奔屈膝欲跃",
+    "support": {
+     "id": "堤岸",
+     "kind": "土堤",
+     "surface": "堤面"
+    }
+   },
+   {
+    "name": "听香",
+    "on_screen": true,
+    "position": "水面",
+    "pose": "尖叫传来",
+    "support": {
+     "id": "堤岸",
+     "kind": "土堤",
+     "surface": "堤面"
+    }
+   }
+  ]
+ },
+ "old_audit_issue": {
+  "code": "model_audit_STATE_CHAIN_CONFLICT",
+  "severity": "warning",
+  "message": "听香此刻应在船上且为画外声源；布局标在堤岸会让画面出现岸上听香，与镜头5-7及本镜“画外”矛盾。；建议：删除 ff 与 kfs[0] 中的听香条目，只保留画外尖叫；或改为船上条位。",
+  "shot_id": "8",
+  "frame_id": "ff",
+  "entity_id": "听香",
+  "field_path": "frame_layouts.ff[1].support",
+  "evidence": "堤岸",
+  "related_shot_ids": [],
+  "repair_targets": [
+   {
+    "shot_id": "8",
+    "field_path": "frame_layouts.ff"
+   },
+   {
+    "shot_id": "8",
+    "field_path": "frame_layouts.kfs[0]"
+   }
+  ],
+  "repairable": true,
+  "out_of_delta_scope": true
+ },
+ "finding": "候选只删除了 shot 8 frame_layouts.ff 的听香条目；frame_layouts.kfs[0] 仍有 name=听香、on_screen=true、position=水面、support=堤岸 的条目。旧审计的 repair_targets 明确包含 frame_layouts.kfs[0]，消息要求删除 ff 与 kfs[0] 中的听香条目。候选修复不完整。",
+ "risk": "新审计是全 13 镜、无增量降级；shot 8 的 kfs[0] 残留很可能再次被判 visual_risk/blocking。STEP01_AUDIT_ONLY=1 下 U6 会停在审计 blocking，这 1 次审计发送不会产生合法提交。",
+ "recommendation": "在 S02 前做零调用数据修正：删除 shot 8 frame_layouts.kfs[0] 的听香条目（保留文本/旁白/画外尖叫），重新 project_for_commit、重建质量报告、重算 revision 与审计包绑定摘要；或明确接受本次审计 blocking 后另开修复轮。"
+}

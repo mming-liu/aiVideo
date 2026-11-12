@@ -1,0 +1,31 @@
+{
+  "manifest_version": 1,
+  "duration_band": {
+    "min": 60.0,
+    "max": 90.0,
+    "target_min": 70.0,
+    "target_max": 80.0
+  },
+  "status": "BLOCK",
+  "run_id": "20261110T231615-12932",
+  "created_at": "2026-11-10T23:16:23",
+  "script_revision": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+  "rule_source_fingerprint": "593deea03c7cddc6",
+  "rule_version": "2026-09-23.4",
+  "prompt_source_fingerprint": "3f31c2452f71e185",
+  "audit_scope": "final_after_deterministic_fixes",
+  "blocking_count": 1,
+  "blocking_truncated": false,
+  "blocking": [
+    {
+      "code": "audit_call_failed",
+      "severity": "blocking",
+      "shot_id": null,
+      "transient": true,
+      "message": "final semantic audit request_failed（调用失败 != 0 issue；本条为本次终局原因，不是稿件缺陷清单）"
+    }
+  ],
+  "audit_status": "request_failed",
+  "detail": "final semantic audit request_failed: Agent Plan 提交失败[transport_connect]: HTTPSConnectionPool(host='opencode.ai', port=443): Max retries exceeded with url: /zen/go/v1/chat/completions (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate is not yet valid (_ssl.c:1081)')))（尝试 1/1，已用 7.2s；重试预算 30s）",
+  "artifacts": {}
+}

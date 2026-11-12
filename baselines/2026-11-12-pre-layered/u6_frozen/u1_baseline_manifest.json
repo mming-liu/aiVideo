@@ -1,0 +1,133 @@
+{
+ "schema": "u1.baseline/1",
+ "frozen_at": "2026-11-10 13:32:25",
+ "git_head": "c371d9a4fca892f0454b41a3448204a594c2dff7",
+ "formal_dir": "output\\锦衣夜行\\part_01_杀青州\\chapter_001",
+ "identity": {
+  "script_revision": "51978e8b92f6bf7c877acd9f51103312383e793332b2bce730cf9ecdb7140172",
+  "shot_count": 13,
+  "total_duration": 75.25,
+  "commit_status": "COMMITTED",
+  "commit_blocking_count": 0,
+  "commit_run_id": "20261109T075259-24828",
+  "commit_rule_fingerprint": "72dcb353990a2071",
+  "commit_script_revision": "51978e8b92f6bf7c877acd9f51103312383e793332b2bce730cf9ecdb7140172",
+  "quality_rule_fingerprint": "72dcb353990a2071",
+  "current_rule_source_fingerprint": "593deea03c7cddc6",
+  "adoption_keys": [
+   "adopted_at",
+   "authorization",
+   "body_verified_count",
+   "effective_config",
+   "formal_chapter",
+   "formal_gate",
+   "formal_sha256",
+   "gate_refresh",
+   "ledger_relocations",
+   "limitations",
+   "model_sends",
+   "output_base_override"
+  ]
+ },
+ "documents": [
+  {
+   "path": "output\\锦衣夜行\\part_01_杀青州\\chapter_001\\script_result.json",
+   "exists": true,
+   "bytes": 175314,
+   "mtime": "2026-11-09 07:56:57",
+   "sha256": "7b4ab0019730911233cb1cc85cdd99f5fa4432c367e78af2837e6c046120caac"
+  },
+  {
+   "path": "output\\锦衣夜行\\part_01_杀青州\\chapter_001\\step01_commit.json",
+   "exists": true,
+   "bytes": 1018,
+   "mtime": "2026-11-09 07:56:57",
+   "sha256": "88f572a70ad2f671bf98b6888af3fdda758dcf1c34aa3bd8b4ab5c11d15b7b8b"
+  },
+  {
+   "path": "output\\锦衣夜行\\part_01_杀青州\\chapter_001\\step01_quality.json",
+   "exists": true,
+   "bytes": 50411,
+   "mtime": "2026-11-09 07:56:57",
+   "sha256": "e558d99a010d274641a30cf73d56ebdb3b83473c81222271a0794b5910fdfba1"
+  },
+  {
+   "path": "output\\锦衣夜行\\part_01_杀青州\\chapter_001\\step01_audit.json",
+   "exists": true,
+   "bytes": 7193,
+   "mtime": "2026-11-09 07:56:57",
+   "sha256": "a4e977d8a05e952c75da8907d73c2d51ae3f67166a6c0b734dfa6c73bf84232d"
+  },
+  {
+   "path": "output\\锦衣夜行\\part_01_杀青州\\chapter_001\\step01_adoption.json",
+   "exists": true,
+   "bytes": 4251,
+   "mtime": "2026-11-09 07:56:57",
+   "sha256": "4c9b087d254702100c84168869c5af6ceaa11e9014c0d7c66b4cfd0ad1bbe0d3"
+  },
+  {
+   "path": "output\\锦衣夜行\\part_01_杀青州\\chapter_001\\chapter_outline.json",
+   "exists": false
+  }
+ ],
+ "media": [
+  {
+   "path": "output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\shots\\2\\first_frame.png",
+   "exists": true,
+   "bytes": 2910149,
+   "mtime": "2026-11-09 08:04:44",
+   "sha256": "4089f234ff475f7a7053975cd26e0a9e347e17eec99feb8aab153708f070389e"
+  },
+  {
+   "path": "output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\shots\\2\\frame_hash.txt",
+   "exists": true,
+   "bytes": 16,
+   "mtime": "2026-11-09 08:04:44",
+   "sha256": "50073a60e5ed54fb4025047afa7f7e603129fb188933744f7633f651bfb795b1"
+  },
+  {
+   "path": "output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\shots\\2\\last_frame.png",
+   "exists": true,
+   "bytes": 3118483,
+   "mtime": "2026-11-09 08:06:30",
+   "sha256": "f1a791d6fae8091c84f681a03b05702a230a0b8c34d3cb7e955f22d160beb0c0"
+  },
+  {
+   "path": "output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\shots\\2\\last_frame_hash.txt",
+   "exists": true,
+   "bytes": 16,
+   "mtime": "2026-11-09 08:06:30",
+   "sha256": "3c786c2884fa1fccdc7f9f8b721d7d47dcb94dfcbf1515cce1d4b30293f1a21b"
+  },
+  {
+   "path": "output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\shots\\2\\last_frame_hallucination.json",
+   "exists": true,
+   "bytes": 238,
+   "mtime": "2026-11-08 20:03:06",
+   "sha256": "71def67772de780299c09edf6a546e1844a3648f84a3006751a9acc6bc4c3f84"
+  },
+  {
+   "path": "output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\shots\\2\\last_frame_qc_log.json",
+   "exists": true,
+   "bytes": 1046,
+   "mtime": "2026-11-08 20:03:06",
+   "sha256": "3cf7189087e9acf1ed33217215fc09148826016465291c7594e3e2fca7ade1f7"
+  }
+ ],
+ "budgets": [
+  {
+   "path": "output\\锦衣夜行\\part_01_杀青州\\chapter_001\\step01_send_budget.json",
+   "exists": true,
+   "bytes": 165,
+   "mtime": "2026-11-09 07:53:00",
+   "sha256": "0fe3d4c45f7291f6499c4ca0771192c199bc05e6e750605273a24342ac5b511c"
+  },
+  {
+   "path": "output\\锦衣夜行\\part_01_杀青州\\chapter_001\\step02a_image_budget.json",
+   "exists": true,
+   "bytes": 91,
+   "mtime": "2026-11-09 08:05:18",
+   "sha256": "a80abad5d6b8dcbc2271b295f1321c47a6f046e404b981f449d040b658bdded3"
+  }
+ ]
+}

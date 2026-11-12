@@ -1,0 +1,48 @@
+{
+ "schema": "ref.sheet/1",
+ "output": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\shots\\2\\ref_sheet_ff_chars_杨旭+听香_a3f68e05f200118b8e1a.png",
+ "sha256": "e8a443bb7ae3929177e82e347bffe6828afec8144353bed91e2cfb98e81b9844",
+ "size": [
+  996,
+  1024
+ ],
+ "kind": "chars",
+ "members": [
+  {
+   "source": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\portrait_crops\\杨旭_side.png",
+   "sha256": "df764fd6678ec200aaab03851cfc43841e4f65e24959c668d485b3fcf64f4181",
+   "kind": "chars",
+   "entity": "杨旭",
+   "purpose": "人物形象",
+   "region": [
+    0,
+    0,
+    486,
+    1024
+   ],
+   "scaled": [
+    486,
+    1024
+   ]
+  },
+  {
+   "source": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\portrait_crops\\听香_side.png",
+   "sha256": "98c290fe9065edfbaed4e363ff4b4356278870299c9c20718932eceeb3bc71fb",
+   "kind": "chars",
+   "entity": "听香",
+   "purpose": "人物形象",
+   "region": [
+    510,
+    0,
+    996,
+    1024
+   ],
+   "scaled": [
+    486,
+    1024
+   ]
+  }
+ ],
+ "skipped": [],
+ "created_at": "2026-11-10 13:49:53"
+}

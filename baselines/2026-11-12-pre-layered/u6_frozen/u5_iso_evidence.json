@@ -1,0 +1,14 @@
+{
+ "script_path": ".pytest_tmp\\u1_u5_closeout_20261110\\iso\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\script_result.json",
+ "script_sha256": "0305bc41987d58468f0a98b2bf9eb32e4356050fccfa71afac610d3525daec04",
+ "script_revision": "51978e8b92f6bf7c877acd9f51103312383e793332b2bce730cf9ecdb7140172",
+ "quality_status": "PASS",
+ "quality_blocking": false,
+ "quality_fingerprint": "593deea03c7cddc6",
+ "downstream_gate": {
+  "step02b": "blocked: step01_commit.json missing (verify_step01_commit_manifest)",
+  "step03": "blocked: step01_commit.json missing",
+  "step04": "blocked: step02b_quality.json missing (requires real video generation)"
+ },
+ "note": "commit manifest 绑定三件套 sha1；伪造即假采纳，故候选下游预检必须等 U6 采纳后重跑"
+}

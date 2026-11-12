@@ -1,0 +1,39 @@
+{
+  "source": "step02a.product_acceptance",
+  "report_type": "product_acceptance",
+  "rule_version": "2026-09-23.4",
+  "status": "PASS",
+  "blocking": false,
+  "missing": [],
+  "outputs": {
+    "2": {
+      "ff": {
+        "path": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\shots\\2\\first_frame.png",
+        "sha1": "a3568aa8bfbfe9d6922324f1a901934363d17802"
+      },
+      "lf": {
+        "path": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\shots\\2\\last_frame.png",
+        "sha1": "debe2942500d49c9f77bbbbac93cba8b391694c1"
+      },
+      "keyframes": {}
+    }
+  },
+  "issues_by_shot": {
+    "2": []
+  },
+  "scope": {
+    "shots": [
+      2
+    ],
+    "keyframes_required": false,
+    "media_policy": "auto",
+    "requirements": {
+      "frames": [
+        "ff",
+        "lf"
+      ],
+      "keyframes": false
+    }
+  },
+  "script_revision": "51978e8b92f6bf7c877acd9f51103312383e793332b2bce730cf9ecdb7140172"
+}

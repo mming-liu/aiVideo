@@ -1,0 +1,199 @@
+{
+  "diag": [
+    {
+      "repair_round": 1,
+      "kind": "call_ok",
+      "usage": {
+        "input_tokens": 20326,
+        "output_tokens": 3065,
+        "reasoning_tokens": 0,
+        "total_tokens": 23391
+      },
+      "max_tokens": null,
+      "reasoning_tokens": 0,
+      "output_tokens": 3065,
+      "total_tokens": 23391,
+      "budget_left_sec": null
+    },
+    {
+      "repair_round": 1,
+      "targets": [
+        "shot_1",
+        "shot_11",
+        "shot_6",
+        "shot_7"
+      ],
+      "groups": [
+        [
+          "shot_1"
+        ],
+        [
+          "shot_11"
+        ],
+        [
+          "shot_6"
+        ],
+        [
+          "shot_7"
+        ]
+      ],
+      "new_blocking_keys": [],
+      "new_blocking_targets": [],
+      "rolled_back_groups": [],
+      "targets_rolled_back": [],
+      "accepted": false,
+      "round_ok": false,
+      "resolved": 0,
+      "reason": "no_target_resolved",
+      "origin_reason": "no_target_resolved",
+      "evidence_removed": [],
+      "audit_field_touched": 0,
+      "audit_touched_ids": [],
+      "revision_before": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+      "revision_after": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+      "effect_conflict": null,
+      "related_readback": {
+        "targets": [
+          {
+            "target": "ff_desc",
+            "target_changed": false,
+            "requested": [],
+            "applied": [],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": [
+              "frame_layouts.ff"
+            ]
+          },
+          {
+            "target": "lf_desc",
+            "target_changed": false,
+            "requested": [],
+            "applied": [],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": [
+              "frame_layouts.lf"
+            ]
+          },
+          {
+            "target": "ff_desc",
+            "target_changed": false,
+            "requested": [],
+            "applied": [],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": [
+              "frame_layouts.ff"
+            ]
+          },
+          {
+            "target": "frame_layouts.ff.0.pose",
+            "target_changed": false,
+            "requested": [],
+            "applied": [],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": [
+              "ff_desc"
+            ]
+          },
+          {
+            "target": "lf_desc",
+            "target_changed": false,
+            "requested": [],
+            "applied": [],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": [
+              "frame_layouts.lf"
+            ]
+          },
+          {
+            "target": "ff_desc",
+            "target_changed": false,
+            "requested": [],
+            "applied": [],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": [
+              "frame_layouts.ff"
+            ]
+          },
+          {
+            "target": "lf_desc",
+            "target_changed": false,
+            "requested": [],
+            "applied": [],
+            "reverted": [],
+            "half_repaired": false,
+            "unchanged_fields": [
+              "frame_layouts.lf"
+            ]
+          }
+        ],
+        "requested_basis": "unavailable",
+        "checked": 7,
+        "changed": 0,
+        "reverted": 0,
+        "half_repaired": [],
+        "residual_after_projection": {
+          "checked": 7,
+          "changed": 0,
+          "rows": [
+            {
+              "target": "ff_desc",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "frame_layouts.ff"
+              ]
+            },
+            {
+              "target": "lf_desc",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "frame_layouts.lf"
+              ]
+            },
+            {
+              "target": "ff_desc",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "frame_layouts.ff"
+              ]
+            },
+            {
+              "target": "frame_layouts.ff.0.pose",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "ff_desc"
+              ]
+            },
+            {
+              "target": "lf_desc",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "frame_layouts.lf"
+              ]
+            },
+            {
+              "target": "ff_desc",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "frame_layouts.ff"
+              ]
+            },
+            {
+              "target": "lf_desc",
+              "changed_fields": [],
+              "unchanged_fields": [
+                "frame_layouts.lf"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "block": []
+}

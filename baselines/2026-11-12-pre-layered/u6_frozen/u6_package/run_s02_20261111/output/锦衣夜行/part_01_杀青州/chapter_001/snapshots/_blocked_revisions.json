@@ -1,0 +1,29 @@
+{
+  "revisions": [
+    "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7"
+  ],
+  "debt": {
+    "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7": 1
+  },
+  "criteria": {
+    "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7": {
+      "rules": "593deea03c7cddc6",
+      "prompts": "3f31c2452f71e185"
+    }
+  },
+  "issues": {
+    "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7": [
+      {
+        "code": "model_audit_ACTION_OMISSION",
+        "shot": "13",
+        "field": "ff_desc",
+        "crit_kind": "audit",
+        "crit_fp": "a5929a9f6abc"
+      }
+    ]
+  },
+  "entry_versions": {
+    "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7": 2
+  },
+  "revision_version": 2
+}

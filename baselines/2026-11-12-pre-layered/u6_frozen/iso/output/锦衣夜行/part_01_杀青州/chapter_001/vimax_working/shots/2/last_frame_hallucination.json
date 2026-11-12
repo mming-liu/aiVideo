@@ -1,0 +1,10 @@
+{
+  "has_hallucination": false,
+  "issues": [
+    {
+      "category": "unexpected_object",
+      "description": "[opencode] 检测到潜在视觉问题（解析失败，关键词匹配）",
+      "severity": "warning"
+    }
+  ]
+}

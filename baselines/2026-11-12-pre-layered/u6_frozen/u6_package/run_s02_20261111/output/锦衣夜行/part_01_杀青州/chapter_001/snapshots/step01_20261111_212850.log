@@ -1,0 +1,8 @@
+# step01.log delta bytes=0..1922 (v6.112 per-run slice)
+[2026-11-11 21:22:39] [INFO] 正在调用 Agent Plan (deepseek-v4.1-flash) 生成分镜脚本... max_completion_tokens=64000, thinking.type=enabled
+[2026-11-11 21:22:39] [DEBUG] agent_plan_text_submit: model=deepseek-v4.1-flash, messages=2, temperature=0.0, top_p=0.2, seed=42, response_format={'type': 'json_object'}, 指纹=2472a681db830aed, 实发结构化输出=json_object｜⚠️ 调用方要的是 json_schema:script_audit，**本通道不下发**（形状由解析端结构化拒收兜底）
+[2026-11-11 21:22:39] [WIRE] agent_plan 请求体 119789 字节（sha256=2472a681db830aed）
+[2026-11-11 21:28:50] [DEBUG] agent_plan_text_submit response: status=200, body={"choices": [{"index": 0, "message": {"role": "assistant", "content": "{\"issues\":[{\"issue_index\":1,\"code\":\"ACTION_OMISSION\",\"shot_id\":\"13\",\"frame_id\":\"ff\",\"entity_id\":\"杨旭、听香、张十三\",\"field_path\":\"ff_desc\",\"evidence\":\"车厢内杨旭素白色轻袍仰卧、心口暗红洇痕，听香一袭春衫披头散发倚坐其侧\",\"impact\":\"前镜12尾帧张十三仍在船梢、庄仆刚去赶车，本镜首帧杨旭和听香已在车厢、张十三已坐车辕扬鞭；从船到车的搬运与上车过程被完全跳过，因果链断裂。\",\"minimal_fix\":\"在镜头13 motion_desc 前2秒补“张十三与听香将杨旭扶入车厢后跳上车辕”，并把 ff_desc 改为搬运/上车过程中的准备态。\",\"severity\":\"blocking\",\"stage\":\"pre\",\"r
+[2026-11-11 21:28:50] [TRACE] agent_plan_text 阶段轨迹：指纹=2472a681db830aed｜强度=low（要求 'low'）｜关联ID=a58d9b831acf72d5-LAX｜响应头 18.602s｜SSE 首事件 18.602s｜事件 4415｜终态收完 371.269
+[2026-11-11 21:28:50] [TRACE] agent_plan_text 用量：思维链=20527｜输出=22283
+[2026-11-11 21:28:50] [DEBUG] agent_plan_text finish_reason=stop, completion_tokens=22283, max_completion_tokens=64000

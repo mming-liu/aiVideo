@@ -1,0 +1,103 @@
+{
+ "shot": 2,
+ "for_frame": "尾帧",
+ "refs": [],
+ "buckets": [
+  [
+   "scene",
+   [
+    "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\global\\scenes_bank\\照月湾荷塘\\near.png"
+   ]
+  ],
+  [
+   "chars",
+   [
+    "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\portrait_crops\\杨旭_side.png",
+    "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\portrait_crops\\听香_side.png"
+   ]
+  ],
+  [
+   "props",
+   [
+    "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\global\\props_bank\\油纸伞\\prop.png"
+   ]
+  ]
+ ],
+ "omissions": [],
+ "sheet": {
+  "paths": [
+   "C:\\myFloders\\git\\aiVideo\\.pytest_tmp\\u1_u5_closeout_20261110\\u3_sheet\\ref_sheet_lf_all_cada58c26fda83b1cc6a.png"
+  ],
+  "members": [
+   {
+    "source": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\global\\scenes_bank\\照月湾荷塘\\near.png",
+    "sha256": "7d593698d12090def76743d0302b44c8d06d81cd17c1e845c08c18e217daa46f",
+    "kind": "scene",
+    "entity": "照月湾荷塘",
+    "purpose": "场景环境",
+    "region": [
+     0,
+     0,
+     1820,
+     1024
+    ],
+    "scaled": [
+     1820,
+     1024
+    ]
+   },
+   {
+    "source": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\portrait_crops\\杨旭_side.png",
+    "sha256": "df764fd6678ec200aaab03851cfc43841e4f65e24959c668d485b3fcf64f4181",
+    "kind": "chars",
+    "entity": "杨旭",
+    "purpose": "人物形象",
+    "region": [
+     1844,
+     0,
+     2330,
+     1024
+    ],
+    "scaled": [
+     486,
+     1024
+    ]
+   },
+   {
+    "source": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\portrait_crops\\听香_side.png",
+    "sha256": "98c290fe9065edfbaed4e363ff4b4356278870299c9c20718932eceeb3bc71fb",
+    "kind": "chars",
+    "entity": "听香",
+    "purpose": "人物形象",
+    "region": [
+     2354,
+     0,
+     2840,
+     1024
+    ],
+    "scaled": [
+     486,
+     1024
+    ]
+   },
+   {
+    "source": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\global\\props_bank\\油纸伞\\prop.png",
+    "sha256": "5214e9315b5577c3cc0b346b281518b9e286454508770ffc82d9d42c7ee861c5",
+    "kind": "props",
+    "entity": "油纸伞",
+    "purpose": "道具外观",
+    "region": [
+     2864,
+     0,
+     4684,
+     1024
+    ],
+    "scaled": [
+     1820,
+     1024
+    ]
+   }
+  ],
+  "describe": "人物形象参考表（2 名角色横向拼合：杨旭 占 x≈39%–50%、听香 占 x≈50%–61%；仅取各角色面部/发型/上装特征，禁止照搬姿态、持物与人数）；场景环境参考表（1 张环境图拼合；只取环境光线与布局，禁止当作画面构图）；道具外观参考表（1 件道具拼合；只取各道具外观与比例）；区域对应：人物 杨旭 位于 x≈39%–50%，人物 听香 位于 x≈50%–61%，场景 照月湾荷塘 位于 x≈0%–39%，道具 油纸伞 位于 x≈61%–100%。按区域分别取用，禁止把整图当作单一参考或按统一方向理解"
+ }
+}

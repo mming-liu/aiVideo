@@ -1,0 +1,97 @@
+# 审查元数据
+{}
+
+# 定向审查项
+- 无额外定向项
+
+# 原文
+门外传来丙的声音：「你终于来了。」甲转头看向门口。
+
+# 故事规划
+{}
+
+# 当前分镜（本节编号即问题清单里 `issue_index` 所依据的版本）
+{"hook": null, "shots": [{"index": 1, "duration_sec": 6.0, "main_subject": "甲", "ff_desc": "甲背对镜头站在堂中，门在画左", "lf_desc": "甲转头看向画左的门", "motion_desc": "前3秒：声音入；后3秒：甲转头", "prompt": "[中景] 堂内，甲背对镜头站立后转头看向门口", "narration_segment": "丙：你终于来了。", "frame_layouts": {"ff": [{"name": "甲", "on_screen": true, "position": "堂中", "pose": "背对站立", "gaze_target": "门", "props": []}], "lf": [{"name": "甲", "on_screen": true, "position": "堂中", "pose": "转头", "gaze_target": "门", "props": []}], "kfs": []}, "keyframes": []}, {"index": 2, "duration_sec": 6.0, "main_subject": "甲", "ff_desc": "甲正面近景，双唇闭合，目光落在画左门外", "lf_desc": "甲眉头收紧，没有出声", "motion_desc": "前3秒：甲凝视；后3秒：甲眉峰收紧", "prompt": "[近景] 堂内，甲正面凝视门外，双唇闭合，眉头收紧", "narration_segment": "甲：我知道你在想什么。", "frame_layouts": {"ff": [{"name": "甲", "on_screen": true, "position": "堂中", "pose": "正面站立", "gaze_target": "门外", "props": []}], "lf": [{"name": "甲", "on_screen": true, "position": "堂中", "pose": "正面站立", "gaze_target": "门外", "props": []}], "kfs": []}, "keyframes": []}], "total_duration": 12.0, "body_duration": 12.0, "hook_duration": 0.0}
+
+# 审查规则
+重点检查：
+1. 观众是否知道人物为什么这样做；
+2. 是否省略理解剧情必需的信息；
+3. 首帧→动作→关键帧→尾帧是否成立；
+4. 哪些镜头重复表达同一信息；
+5. **时长上限（60–90 秒，取自本轮生效配置）只作用于正片 `body_duration`**（各镜 `duration_sec` 之和）；
+   正片超过 90 秒即判 blocking，不得因钩子另算而豁免；
+   `hook_duration` 单独计时、**不计入**；`total_duration` = 正片 + 钩子，**不得**因为 `total_duration` 超过上限而判 blocking（用户裁决 2026-10-28）。
+   无钩子时 `total_duration` 就等于 `body_duration`；本规则中的数字来自生效配置（`shared.config.duration_band()`），不是固定常量。
+5. 结尾是否真的来自当前故事。
+
+合规替换（不算缺陷）：
+- 台词字段 `narration_segment` / `subtitle` 与原文的差异若属于既定合规映射（`杀人→出人命`、`击杀→制服`、`刺客→神秘人` 等，见 `shared/content_safety.NARRATION_SUBSTITUTIONS` / `SENSITIVE_SUBSTITUTIONS`）则不判为错词/改词/漏词；
+- 以 `出人命` 等合规词判错词前，先确认原文该句是否含对应被替换词（如原文含 `杀人` 则 `出人命` 为合规产物）。
+- `narration_segment` / `subtitle` 已由 `# 故事规划` 逐字锁定并由前置确定性门核验；跨相邻镜头分句衔接的旁白（如前镜「若非…」接本镜「也不会…」）以及原著句内标点属于合法逐字还原，**不得**判为截断、错词或要求改写句式。
+- 按规划属于无声画面的镜头（`narration_segment` 为空）**不得**要求在 `narration_segment` / `subtitle` 中补台词或旁白。若认为剧情威胁、因果或互动交代不足，必须把 `field_path` 与 `repair_targets` 指向可执行的画面字段（`motion_desc` / `ff_desc` / `lf_desc` / `prompt`），**不得**指向 `narration_segment` / `subtitle`。
+
+帧职责：
+- `keyframes[N].stage` 的合法枚举严格为 `pre / approach / climax / react / exit / after`（与 `shared/kf_time.KF_STAGE_ENUM` 同源）；**不得**判为非法，也不得要求改成 `process` / `result` 等非枚举词。
+- ff 只检查动作开始前准备态；
+- kf 只检查对应中间过程；
+- lf 只检查结果态；
+- 后续动作缺失必须指向 motion_desc/对应 kf/lf，禁止要求 ff 提前完成过程或结果动作。
+- **上一镜终态可以合法成为下一镜起态**。是否泄漏，要看本镜尚未发生的动作是否已在首帧完成，而不是比较两段描述是否相同；首帧与上一镜尾帧文字相同本身不构成结果泄漏，两段文字不同也不能证明修复正确。
+
+每个问题必须给 code、shot_id、frame_id、entity_id、field_path、evidence、impact、minimal_fix。
+- `code`：该缺陷的**族名**，大写蛇形（如 `STATE_CHAIN_CONFLICT`、`PROP_CONTINUITY`、`FF_RESULT_LEAK`、`KF_STAGE_MISMATCH`）。**同类缺陷在不同镜头必须用同一个 `code`**——下游按它归族统计与判优先级；不得留空，也不得写 `ISSUE`/`UNKNOWN`/`PROBLEM` 这类无信息名。
+- `field_path` 必须是**非空**的具体字段路径（就是你建议「修改」的那个字段）；留空的问题本轮**拿不到修复授权**，等于白报。
+  ⚠️ 这两条是硬要求：通道不支持 json_schema 时（schema 里的 required 不再被强制）只能靠本段约束，实测漏掉会让全部问题退化成同一个无名族。
+**field_path 必须是你建议「修改」的那个字段，不是矛盾被观察到的字段**：要改 ff_desc 就写 `ff_desc`；要改动作时序/过程就写 `motion_desc`；要改某一关键帧就写 `keyframes[N].desc`；要改布局条目按下面**两种形状**写（写错形状该条目标会被剔除，该问题本轮拿不到修复授权）。定位到观察点而非修改点，会把修复引导到错误字段。
+
+**布局路径的两种形状（下标一层都不能省）**：
+- `ff` / `lf` 是**人物列表**（一层）：`frame_layouts.ff[人物下标].<叶子>`，如 `frame_layouts.ff[0].pose`。
+- `kfs` 是**关键帧列表 → 人物列表（两层）**：`frame_layouts.kfs[关键帧下标][人物下标].<叶子>`，如 `frame_layouts.kfs[2][0].props`。**两个下标都要写**。
+- **要增删条目（不是改条目字段）时写第三形状——「帧的人物列表」本身**：`frame_layouts.ff` / `frame_layouts.lf`（该帧一层），或 `frame_layouts.kfs[关键帧下标]`（那一个关键帧一层）。**这一形状只用于增删条目**；改条目的字段仍按上面两种形状写叶子。
+- 反例（**无效**，会被判「不是该镜头的真实字段路径」→ 该条目标被剔除）：`frame_layouts.kfs[2].props`（漏人物下标——一个关键帧里可能有多个出镜人物，系统**不会**替你猜是谁）、`frame_layouts.ff.props`（漏人物下标）、`frame_layouts.kfs`（只写列表名）。
+
+## repair_targets（**唯一被用于授权的字段**）
+一对一的 `(shot_id, field_path)` 列表，写清「要修好这条问题，必须**一起**修改的全部镜头与字段」：
+- **必须联动修改的字段一个都不能漏**：修复端只被授权改这里列出的字段，没列出的改动会被**回填**；漏掉的那部分会让修复自相矛盾（半条修复）→ 引入新的阻塞 → **整组被回退**。典型漏法：kf 时序矛盾通常要同时改 `keyframes[N].desc` + `keyframes[N].stage` + `frame_layouts.kfs[N][n].props`，只写 `desc` 必然被回填。
+- `shot_id` 一律写该镜在上文分镜里的 **`index` 裸数字**（如 `5`；钩子写 `0`）。不要写 `shot5` / `shot_5` / `第5镜` 之类的写法——**本文档全篇的镜头号都按裸数字读**，下面举例中的「5 号镜」等价于 `"shot_id": "5"`。
+- 只写该镜头里**真实存在**的字段叶子：`ff_desc` / `lf_desc` / `motion_desc` / `prompt` / `keyframes[N].desc` / `keyframes[N].stage` / `keyframes[N].t_sec` / `frame_layouts.ff[N].<叶子>` / `frame_layouts.lf[N].<叶子>` / `frame_layouts.kfs[N][n].<叶子>` / `temporal_plan`。不要写 `ff_desc.props` 这类组合路径，也不要编造字段。**数组下标必须落在本稿该镜的实际长度内**（该镜 `keyframes` 只有 2 项就不要写 `keyframes[2]`；`frame_layouts.kfs[0]` 的出镜表只有 1 人就别写 `[0][1]`）——越界、编造的路径会被逐条剔除，该问题本轮拿不到修复授权，白等一轮审计。
+- 一条问题需要跨镜联动才能修好时（例如同一事实在 5 号镜的 ff_desc 与 7、8、9 号镜的 ff_desc 里互相矛盾），**每一镜各写一条**。系统把它们当成**一个事务**：整组修、整组验收、整组回退——写漏一镜会让整组被回退。
+- **单条问题的 repair_targets 最多覆盖 6 个镜头**（联动组容量上限）。systemic 缺陷（例如某字段取值全篇非法）**按镜拆成多条问题**，每条只覆盖它自己的那几镜。**跨 7 镜以上的单条声明修复侧整组做不完，会整轮停在门口**（不调修复、不再发审计）——拆成多条才能逐镜修掉。
+- 只改一个字段就写一条（**不要多写**没必要的字段：多列的条目同样要一起改完才算通过）。确实无法确定要改哪个字段时写空数组 `[]`，该问题本轮不进入定向修复。
+- **要增删某个出镜人物条目，目标必须是那一「帧的人物列表」本身，不是条目里的叶子**：
+  `frame_layouts.ff` / `frame_layouts.lf`（该帧这一层），或 `frame_layouts.kfs[N]`（第 N 个关键帧这一层）。
+  授权它 = 允许**这一帧**的列表增删条目；别的帧、别的字段一律回填。
+  ⚠️ **写错形状的代价（实测踩过）**：建议「删除 `kfs[0][1]` 的『小厮』条目」却把目标写成
+  `frame_layouts.kfs[0][1].name`（叶子）时，系统只被授权改**这个名字**——删除造成的列表长度变化
+  会被**原样回填**，删除白做，还会被记成"没修好"。**凡建议删除/新增条目，目标就写列表本身。**
+  仍然**不要**写整张 `frame_layouts.kfs`（那是**所有**关键帧，会一并放开）。
+- **某一帧的人物列表整块缺失时**（本镜有 `ff_desc` / `lf_desc`，`frame_layouts` 里却没有 `ff` / `lf` 这一项），
+  要**新建**它就把目标写成 `frame_layouts.ff` / `frame_layouts.lf` 本身：授权它会新写这一帧的人物列表
+  （一帧一个非空列表，每项含 `name` / `on_screen` / `position` / `pose` / `gaze_target` / `props`）。
+  这是**唯一**允许指向"此刻还不存在的字段"的情形——其余路径一律必须是本稿里**真实存在**的叶子。
+- **列了列表本身之后，那一帧里只允许纯增删**：保留下来的条目会被**逐字核对**（字段、相对顺序都不许变）。同轮想顺带改写某个保留条目的字段，会让整轮被拒——一条问题只做一件事。
+- `shot_id` / `field_path` 仍要填，用来**定位问题出现在哪里**（可与 repair_targets 不同：问题出现在这镜，要改的是别的镜）。
+严重级别：blocking=确定影响剧情/可执行性；warning=可能影响；info=优化建议。
+
+## characters[].aliases（**身份关系声明**，与上面的问题清单并列的根级字段）
+
+你建议「某个称谓与某个已在场人物是**同一实体**，删掉多余条目」时，**必须**在根级
+`characters` 里把这条关系显式写出来，否则修复端拿不到裁决依据：
+
+```json
+"characters": [
+  {"identifier": "护卫甲", "aliases": ["随从"], "evidence": "原文此段只有护卫甲在场，随从是他随从的泛称，不是第二个角色"}
+]
+```
+⚠️ 上面这段是 JSON 示例（`{`/`}` 是模板转义，实际输出写单个花括号）。
+
+- `identifier` 必须**逐字照抄**本稿 `characters` 里已有的 identifier，**不要新造角色**。
+- `aliases` 写指向**同一实体**的表层称谓（就是布局条目 `name` 里那个写法）。
+- **这不是角色名册**：只写你声明了身份关系的那些；没有关系要声明就写 `[]`（或省略）。
+- **给不出同一实体的证据就不要写**——写了会被当作「同一实体」用于裁决（决定那条
+  删除是否保留）；反过来，**不写**等于「身份未知」，系统**不会**替你猜，那条删除
+  会停在 `repair_capability_missing` 上、整轮拿不到结论。
+- 只说明**类别**的称谓（「小厮」「家丁」「船夫」这类泛称）**本身不构成**同一实体的
+  证据，也不构成「是另一个人」的证据——两个方向都必须由你按原文给出关系。
+

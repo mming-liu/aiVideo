@@ -1,0 +1,20 @@
+{
+  "run_dir": "C:\\myFloders\\git\\aiVideo\\.pytest_tmp\\s06\\runs\\20261112T070909",
+  "provider": "agent_plan",
+  "model": "deepseek-v4.1-flash",
+  "old_prompt_version": "a5929a9f6abc",
+  "new_prompt_version": "857e4768d3dc",
+  "samples": [
+    "time_ellipsis_legal",
+    "state_broken",
+    "voice_broken"
+  ],
+  "max_sends": 6,
+  "duration_band": {
+    "min": 60.0,
+    "max": 90.0,
+    "target_min": 70.0,
+    "target_max": 80.0
+  },
+  "repo_head": "7286516"
+}

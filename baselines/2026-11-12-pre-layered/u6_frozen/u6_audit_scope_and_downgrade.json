@@ -1,0 +1,776 @@
+{
+ "candidate": {
+  "path": "C:\\myFloders\\git\\aiVideo\\.pytest_tmp\\u1_u5_closeout_20261110\\candidate_d1a\\candidate.json",
+  "revision_projected": "1d70284ed0d241a95eb3842e9028c26711e5dd5248e94f36ae0a78d1d52be116",
+  "projection_errors": [],
+  "quality_revision": "1d70284ed0d241a95eb3842e9028c26711e5dd5248e94f36ae0a78d1d52be116",
+  "quality_status": "PASS",
+  "quality_fingerprint": "593deea03c7cddc6",
+  "shot_count": 13
+ },
+ "audit_input_scope": {
+  "constant": "final_after_deterministic_fixes",
+  "prompt_chars": 61778,
+  "shot_indices_in_prompt": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13
+  ],
+  "all_shot_indices": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13
+  ],
+  "all_shots_present": true,
+  "novel_chars": 4847,
+  "novel_truncated_at": 12000,
+  "compact_fields": [
+   "index",
+   "duration_sec",
+   "main_subject",
+   "ff_desc",
+   "lf_desc",
+   "motion_desc",
+   "prompt",
+   "narration_segment",
+   "frame_layouts",
+   "keyframes"
+  ],
+  "audit_focus": [
+   "逐镜检查上一镜 LF → 本镜 FF → 全部 KF → 本镜 LF → 下一镜 FF 的状态链；最多返回 20 条，证据简洁。",
+   "检查武器/道具释放后是否持续释放，直到明确重新获得。",
+   "检查是否存在动作重复、遗漏、未来状态提前或无事件依据的动作补充。",
+   "未决项必须保留并给出原文证据，不得为了通过门禁而删除证据。",
+   "表演语义复核（镜头 2、3、11、12、13）：词表未命中示例动作仅是候选，不能据此判错。区分外貌/发式修饰与当前表演；按人物及对应帧核对是否已有具体可见的表情或动作，不要求固定措辞。确实只有抽象表演而无可执行画面时，按实际影响报告问题、原字段证据及成对修复目标。"
+  ],
+  "metadata": {
+   "input_revision": "1d70284ed0d241a95eb3842e9028c26711e5dd5248e94f36ae0a78d1d52be116",
+   "rule_source_fingerprint": "593deea03c7cddc6",
+   "audit_scope": "final_after_deterministic_fixes",
+   "audit_prompt_version": "a5929a9f6abc",
+   "audit_focus_version": "066a87e6da63",
+   "duration_band": {
+    "min": 60.0,
+    "max": 90.0,
+    "target_min": 70.0,
+    "target_max": 80.0
+   }
+  }
+ },
+ "old_audit": {
+  "path": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\step01_audit.json",
+  "status": "ok",
+  "input_revision": "51978e8b92f6bf7c877acd9f51103312383e793332b2bce730cf9ecdb7140172",
+  "rule_source_fingerprint": "72dcb353990a2071",
+  "audit_prompt_version": "a5929a9f6abc",
+  "audit_focus_version": "066a87e6da63",
+  "created_at": "2026-11-09T07:56:57",
+  "stale": true,
+  "issues_formal": [
+   {
+    "shot_id": "8",
+    "severity": "warning",
+    "code": "model_audit_STATE_CHAIN_CONFLICT",
+    "field_path": "frame_layouts.ff[1].support",
+    "out_of_delta_scope": true,
+    "_downgraded_locked_only": null,
+    "_downgraded_stage_enum": null,
+    "repair_targets": [
+     {
+      "shot_id": "8",
+      "field_path": "frame_layouts.ff"
+     },
+     {
+      "shot_id": "8",
+      "field_path": "frame_layouts.kfs[0]"
+     }
+    ]
+   },
+   {
+    "shot_id": "6",
+    "severity": "advisory",
+    "code": "model_audit_PROMPT_REPETITION",
+    "field_path": "prompt",
+    "out_of_delta_scope": null,
+    "_downgraded_locked_only": null,
+    "_downgraded_stage_enum": null,
+    "repair_targets": [
+     {
+      "shot_id": "6",
+      "field_path": "prompt"
+     }
+    ]
+   },
+   {
+    "shot_id": "7",
+    "severity": "advisory",
+    "code": "model_audit_PROP_CONTINUITY",
+    "field_path": "lf_desc",
+    "out_of_delta_scope": null,
+    "_downgraded_locked_only": null,
+    "_downgraded_stage_enum": null,
+    "repair_targets": [
+     {
+      "shot_id": "7",
+      "field_path": "lf_desc"
+     },
+     {
+      "shot_id": "7",
+      "field_path": "prompt"
+     }
+    ]
+   },
+   {
+    "shot_id": "11",
+    "severity": "advisory",
+    "code": "model_audit_FF_RESULT_LEAK",
+    "field_path": "ff_desc",
+    "out_of_delta_scope": null,
+    "_downgraded_locked_only": null,
+    "_downgraded_stage_enum": null,
+    "repair_targets": [
+     {
+      "shot_id": "11",
+      "field_path": "ff_desc"
+     },
+     {
+      "shot_id": "11",
+      "field_path": "frame_layouts.ff[0].pose"
+     },
+     {
+      "shot_id": "11",
+      "field_path": "frame_layouts.ff[0].states"
+     },
+     {
+      "shot_id": "11",
+      "field_path": "keyframes[0].desc"
+     },
+     {
+      "shot_id": "11",
+      "field_path": "frame_layouts.kfs[0][0].pose"
+     },
+     {
+      "shot_id": "11",
+      "field_path": "frame_layouts.kfs[0][0].states"
+     }
+    ]
+   },
+   {
+    "shot_id": "13",
+    "severity": "advisory",
+    "code": "model_audit_FF_RESULT_LEAK",
+    "field_path": "ff_desc",
+    "out_of_delta_scope": null,
+    "_downgraded_locked_only": null,
+    "_downgraded_stage_enum": null,
+    "repair_targets": [
+     {
+      "shot_id": "13",
+      "field_path": "ff_desc"
+     },
+     {
+      "shot_id": "13",
+      "field_path": "frame_layouts.ff[0].pose"
+     },
+     {
+      "shot_id": "13",
+      "field_path": "keyframes[0].desc"
+     },
+     {
+      "shot_id": "13",
+      "field_path": "frame_layouts.kfs[0][0].pose"
+     }
+    ]
+   },
+   {
+    "shot_id": "10",
+    "severity": "advisory",
+    "code": "model_audit_STATE_CHAIN_CONFLICT",
+    "field_path": "ff_desc",
+    "out_of_delta_scope": null,
+    "_downgraded_locked_only": null,
+    "_downgraded_stage_enum": null,
+    "repair_targets": [
+     {
+      "shot_id": "10",
+      "field_path": "ff_desc"
+     },
+     {
+      "shot_id": "10",
+      "field_path": "frame_layouts.ff[1].states"
+     },
+     {
+      "shot_id": "10",
+      "field_path": "prompt"
+     },
+     {
+      "shot_id": "10",
+      "field_path": "keyframes[2].desc"
+     },
+     {
+      "shot_id": "10",
+      "field_path": "frame_layouts.kfs[2][1].states"
+     }
+    ]
+   },
+   {
+    "shot_id": "13",
+    "severity": "advisory",
+    "code": "model_audit_VISUAL_CONTINUITY",
+    "field_path": "lf_desc",
+    "out_of_delta_scope": null,
+    "_downgraded_locked_only": null,
+    "_downgraded_stage_enum": null,
+    "repair_targets": [
+     {
+      "shot_id": "13",
+      "field_path": "lf_desc"
+     }
+    ]
+   }
+  ]
+ },
+ "old_round_pre_downgrade": {
+  "recorded_at": "2026-11-09T07:56:57",
+  "run_id": "20261109T075259-24828",
+  "input_revision": "51978e8b92f6bf7c877acd9f51103312383e793332b2bce730cf9ecdb7140172",
+  "rule_source_fingerprint": "72dcb353990a2071",
+  "issue_count": 7,
+  "blocking_count": 1,
+  "issues": [
+   {
+    "shot_id": "8",
+    "severity": "visual_risk",
+    "code": "model_audit_STATE_CHAIN_CONFLICT",
+    "field_path": "frame_layouts.ff[1].support",
+    "out_of_delta_scope": null,
+    "_downgraded_locked_only": null,
+    "_downgraded_stage_enum": null,
+    "repair_targets": [
+     {
+      "shot_id": "8",
+      "field_path": "frame_layouts.ff"
+     },
+     {
+      "shot_id": "8",
+      "field_path": "frame_layouts.kfs[0]"
+     }
+    ]
+   },
+   {
+    "shot_id": "6",
+    "severity": "advisory",
+    "code": "model_audit_PROMPT_REPETITION",
+    "field_path": "prompt",
+    "out_of_delta_scope": null,
+    "_downgraded_locked_only": null,
+    "_downgraded_stage_enum": null,
+    "repair_targets": [
+     {
+      "shot_id": "6",
+      "field_path": "prompt"
+     }
+    ]
+   },
+   {
+    "shot_id": "7",
+    "severity": "advisory",
+    "code": "model_audit_PROP_CONTINUITY",
+    "field_path": "lf_desc",
+    "out_of_delta_scope": null,
+    "_downgraded_locked_only": null,
+    "_downgraded_stage_enum": null,
+    "repair_targets": [
+     {
+      "shot_id": "7",
+      "field_path": "lf_desc"
+     },
+     {
+      "shot_id": "7",
+      "field_path": "prompt"
+     }
+    ]
+   },
+   {
+    "shot_id": "11",
+    "severity": "advisory",
+    "code": "model_audit_FF_RESULT_LEAK",
+    "field_path": "ff_desc",
+    "out_of_delta_scope": null,
+    "_downgraded_locked_only": null,
+    "_downgraded_stage_enum": null,
+    "repair_targets": [
+     {
+      "shot_id": "11",
+      "field_path": "ff_desc"
+     },
+     {
+      "shot_id": "11",
+      "field_path": "frame_layouts.ff[0].pose"
+     },
+     {
+      "shot_id": "11",
+      "field_path": "frame_layouts.ff[0].states"
+     },
+     {
+      "shot_id": "11",
+      "field_path": "keyframes[0].desc"
+     },
+     {
+      "shot_id": "11",
+      "field_path": "frame_layouts.kfs[0][0].pose"
+     },
+     {
+      "shot_id": "11",
+      "field_path": "frame_layouts.kfs[0][0].states"
+     }
+    ]
+   },
+   {
+    "shot_id": "13",
+    "severity": "advisory",
+    "code": "model_audit_FF_RESULT_LEAK",
+    "field_path": "ff_desc",
+    "out_of_delta_scope": null,
+    "_downgraded_locked_only": null,
+    "_downgraded_stage_enum": null,
+    "repair_targets": [
+     {
+      "shot_id": "13",
+      "field_path": "ff_desc"
+     },
+     {
+      "shot_id": "13",
+      "field_path": "frame_layouts.ff[0].pose"
+     },
+     {
+      "shot_id": "13",
+      "field_path": "keyframes[0].desc"
+     },
+     {
+      "shot_id": "13",
+      "field_path": "frame_layouts.kfs[0][0].pose"
+     }
+    ]
+   },
+   {
+    "shot_id": "10",
+    "severity": "advisory",
+    "code": "model_audit_STATE_CHAIN_CONFLICT",
+    "field_path": "ff_desc",
+    "out_of_delta_scope": null,
+    "_downgraded_locked_only": null,
+    "_downgraded_stage_enum": null,
+    "repair_targets": [
+     {
+      "shot_id": "10",
+      "field_path": "ff_desc"
+     },
+     {
+      "shot_id": "10",
+      "field_path": "frame_layouts.ff[1].states"
+     },
+     {
+      "shot_id": "10",
+      "field_path": "prompt"
+     },
+     {
+      "shot_id": "10",
+      "field_path": "keyframes[2].desc"
+     },
+     {
+      "shot_id": "10",
+      "field_path": "frame_layouts.kfs[2][1].states"
+     }
+    ]
+   },
+   {
+    "shot_id": "13",
+    "severity": "advisory",
+    "code": "model_audit_VISUAL_CONTINUITY",
+    "field_path": "lf_desc",
+    "out_of_delta_scope": null,
+    "_downgraded_locked_only": null,
+    "_downgraded_stage_enum": null,
+    "repair_targets": [
+     {
+      "shot_id": "13",
+      "field_path": "lf_desc"
+     }
+    ]
+   }
+  ]
+ },
+ "downgrade_replay": {
+  "actual_2026_11_09_scope": {
+   "scope": [
+    "1",
+    "10",
+    "11",
+    "12",
+    "2",
+    "3",
+    "5"
+   ],
+   "locked_only": 0,
+   "stage_enum": 0,
+   "out_of_delta": 1,
+   "issues": [
+    {
+     "shot_id": "8",
+     "severity": "warning",
+     "code": "model_audit_STATE_CHAIN_CONFLICT",
+     "field_path": "frame_layouts.ff[1].support",
+     "out_of_delta_scope": true,
+     "_downgraded_locked_only": null,
+     "_downgraded_stage_enum": null,
+     "repair_targets": [
+      {
+       "shot_id": "8",
+       "field_path": "frame_layouts.ff"
+      },
+      {
+       "shot_id": "8",
+       "field_path": "frame_layouts.kfs[0]"
+      }
+     ]
+    },
+    {
+     "shot_id": "6",
+     "severity": "advisory",
+     "code": "model_audit_PROMPT_REPETITION",
+     "field_path": "prompt",
+     "out_of_delta_scope": null,
+     "_downgraded_locked_only": null,
+     "_downgraded_stage_enum": null,
+     "repair_targets": [
+      {
+       "shot_id": "6",
+       "field_path": "prompt"
+      }
+     ]
+    },
+    {
+     "shot_id": "7",
+     "severity": "advisory",
+     "code": "model_audit_PROP_CONTINUITY",
+     "field_path": "lf_desc",
+     "out_of_delta_scope": null,
+     "_downgraded_locked_only": null,
+     "_downgraded_stage_enum": null,
+     "repair_targets": [
+      {
+       "shot_id": "7",
+       "field_path": "lf_desc"
+      },
+      {
+       "shot_id": "7",
+       "field_path": "prompt"
+      }
+     ]
+    },
+    {
+     "shot_id": "11",
+     "severity": "advisory",
+     "code": "model_audit_FF_RESULT_LEAK",
+     "field_path": "ff_desc",
+     "out_of_delta_scope": null,
+     "_downgraded_locked_only": null,
+     "_downgraded_stage_enum": null,
+     "repair_targets": [
+      {
+       "shot_id": "11",
+       "field_path": "ff_desc"
+      },
+      {
+       "shot_id": "11",
+       "field_path": "frame_layouts.ff[0].pose"
+      },
+      {
+       "shot_id": "11",
+       "field_path": "frame_layouts.ff[0].states"
+      },
+      {
+       "shot_id": "11",
+       "field_path": "keyframes[0].desc"
+      },
+      {
+       "shot_id": "11",
+       "field_path": "frame_layouts.kfs[0][0].pose"
+      },
+      {
+       "shot_id": "11",
+       "field_path": "frame_layouts.kfs[0][0].states"
+      }
+     ]
+    },
+    {
+     "shot_id": "13",
+     "severity": "advisory",
+     "code": "model_audit_FF_RESULT_LEAK",
+     "field_path": "ff_desc",
+     "out_of_delta_scope": null,
+     "_downgraded_locked_only": null,
+     "_downgraded_stage_enum": null,
+     "repair_targets": [
+      {
+       "shot_id": "13",
+       "field_path": "ff_desc"
+      },
+      {
+       "shot_id": "13",
+       "field_path": "frame_layouts.ff[0].pose"
+      },
+      {
+       "shot_id": "13",
+       "field_path": "keyframes[0].desc"
+      },
+      {
+       "shot_id": "13",
+       "field_path": "frame_layouts.kfs[0][0].pose"
+      }
+     ]
+    },
+    {
+     "shot_id": "10",
+     "severity": "advisory",
+     "code": "model_audit_STATE_CHAIN_CONFLICT",
+     "field_path": "ff_desc",
+     "out_of_delta_scope": null,
+     "_downgraded_locked_only": null,
+     "_downgraded_stage_enum": null,
+     "repair_targets": [
+      {
+       "shot_id": "10",
+       "field_path": "ff_desc"
+      },
+      {
+       "shot_id": "10",
+       "field_path": "frame_layouts.ff[1].states"
+      },
+      {
+       "shot_id": "10",
+       "field_path": "prompt"
+      },
+      {
+       "shot_id": "10",
+       "field_path": "keyframes[2].desc"
+      },
+      {
+       "shot_id": "10",
+       "field_path": "frame_layouts.kfs[2][1].states"
+      }
+     ]
+    },
+    {
+     "shot_id": "13",
+     "severity": "advisory",
+     "code": "model_audit_VISUAL_CONTINUITY",
+     "field_path": "lf_desc",
+     "out_of_delta_scope": null,
+     "_downgraded_locked_only": null,
+     "_downgraded_stage_enum": null,
+     "repair_targets": [
+      {
+       "shot_id": "13",
+       "field_path": "lf_desc"
+      }
+     ]
+    }
+   ]
+  },
+  "u6_adoption_scope": {
+   "scope": [
+    "1",
+    "8"
+   ],
+   "locked_only": 0,
+   "stage_enum": 0,
+   "out_of_delta": 0,
+   "issues": [
+    {
+     "shot_id": "8",
+     "severity": "visual_risk",
+     "code": "model_audit_STATE_CHAIN_CONFLICT",
+     "field_path": "frame_layouts.ff[1].support",
+     "out_of_delta_scope": null,
+     "_downgraded_locked_only": null,
+     "_downgraded_stage_enum": null,
+     "repair_targets": [
+      {
+       "shot_id": "8",
+       "field_path": "frame_layouts.ff"
+      },
+      {
+       "shot_id": "8",
+       "field_path": "frame_layouts.kfs[0]"
+      }
+     ]
+    },
+    {
+     "shot_id": "6",
+     "severity": "advisory",
+     "code": "model_audit_PROMPT_REPETITION",
+     "field_path": "prompt",
+     "out_of_delta_scope": null,
+     "_downgraded_locked_only": null,
+     "_downgraded_stage_enum": null,
+     "repair_targets": [
+      {
+       "shot_id": "6",
+       "field_path": "prompt"
+      }
+     ]
+    },
+    {
+     "shot_id": "7",
+     "severity": "advisory",
+     "code": "model_audit_PROP_CONTINUITY",
+     "field_path": "lf_desc",
+     "out_of_delta_scope": null,
+     "_downgraded_locked_only": null,
+     "_downgraded_stage_enum": null,
+     "repair_targets": [
+      {
+       "shot_id": "7",
+       "field_path": "lf_desc"
+      },
+      {
+       "shot_id": "7",
+       "field_path": "prompt"
+      }
+     ]
+    },
+    {
+     "shot_id": "11",
+     "severity": "advisory",
+     "code": "model_audit_FF_RESULT_LEAK",
+     "field_path": "ff_desc",
+     "out_of_delta_scope": null,
+     "_downgraded_locked_only": null,
+     "_downgraded_stage_enum": null,
+     "repair_targets": [
+      {
+       "shot_id": "11",
+       "field_path": "ff_desc"
+      },
+      {
+       "shot_id": "11",
+       "field_path": "frame_layouts.ff[0].pose"
+      },
+      {
+       "shot_id": "11",
+       "field_path": "frame_layouts.ff[0].states"
+      },
+      {
+       "shot_id": "11",
+       "field_path": "keyframes[0].desc"
+      },
+      {
+       "shot_id": "11",
+       "field_path": "frame_layouts.kfs[0][0].pose"
+      },
+      {
+       "shot_id": "11",
+       "field_path": "frame_layouts.kfs[0][0].states"
+      }
+     ]
+    },
+    {
+     "shot_id": "13",
+     "severity": "advisory",
+     "code": "model_audit_FF_RESULT_LEAK",
+     "field_path": "ff_desc",
+     "out_of_delta_scope": null,
+     "_downgraded_locked_only": null,
+     "_downgraded_stage_enum": null,
+     "repair_targets": [
+      {
+       "shot_id": "13",
+       "field_path": "ff_desc"
+      },
+      {
+       "shot_id": "13",
+       "field_path": "frame_layouts.ff[0].pose"
+      },
+      {
+       "shot_id": "13",
+       "field_path": "keyframes[0].desc"
+      },
+      {
+       "shot_id": "13",
+       "field_path": "frame_layouts.kfs[0][0].pose"
+      }
+     ]
+    },
+    {
+     "shot_id": "10",
+     "severity": "advisory",
+     "code": "model_audit_STATE_CHAIN_CONFLICT",
+     "field_path": "ff_desc",
+     "out_of_delta_scope": null,
+     "_downgraded_locked_only": null,
+     "_downgraded_stage_enum": null,
+     "repair_targets": [
+      {
+       "shot_id": "10",
+       "field_path": "ff_desc"
+      },
+      {
+       "shot_id": "10",
+       "field_path": "frame_layouts.ff[1].states"
+      },
+      {
+       "shot_id": "10",
+       "field_path": "prompt"
+      },
+      {
+       "shot_id": "10",
+       "field_path": "keyframes[2].desc"
+      },
+      {
+       "shot_id": "10",
+       "field_path": "frame_layouts.kfs[2][1].states"
+      }
+     ]
+    },
+    {
+     "shot_id": "13",
+     "severity": "advisory",
+     "code": "model_audit_VISUAL_CONTINUITY",
+     "field_path": "lf_desc",
+     "out_of_delta_scope": null,
+     "_downgraded_locked_only": null,
+     "_downgraded_stage_enum": null,
+     "repair_targets": [
+      {
+       "shot_id": "13",
+       "field_path": "lf_desc"
+      }
+     ]
+    }
+   ]
+  },
+  "note": "复现 2026-11-09 07:56:57 的生产降级：shot 8 的 visual_risk 因落在增量作用域之外被改为 warning；同一份问题在 U6 的 {1,8} 作用域下不会被降级。旧报告整体已 stale，不能复用；此复现只证明降级机制。"
+ }
+}

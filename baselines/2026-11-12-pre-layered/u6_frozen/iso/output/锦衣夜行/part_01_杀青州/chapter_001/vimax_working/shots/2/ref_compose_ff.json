@@ -1,0 +1,74 @@
+{
+ "schema": "ref.compose/1",
+ "tag": "ff",
+ "at": "2026-11-10 14:12:11",
+ "included": 4,
+ "inputs": [
+  {
+   "path": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\global\\scenes_bank\\照月湾荷塘\\near.png",
+   "bucket": "scene",
+   "kind": "scene",
+   "entity": "照月湾荷塘",
+   "purpose": "场景环境"
+  },
+  {
+   "path": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\portrait_crops\\杨旭_side.png",
+   "bucket": "chars",
+   "kind": "chars",
+   "entity": "杨旭",
+   "purpose": "人物形象"
+  },
+  {
+   "path": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\portrait_crops\\听香_side.png",
+   "bucket": "chars",
+   "kind": "chars",
+   "entity": "听香",
+   "purpose": "人物形象"
+  },
+  {
+   "path": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\global\\props_bank\\油纸伞\\prop.png",
+   "bucket": "props",
+   "kind": "props",
+   "entity": "油纸伞",
+   "purpose": "道具外观"
+  }
+ ],
+ "outputs": [
+  {
+   "path": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\global\\scenes_bank\\照月湾荷塘\\near.png",
+   "members": []
+  },
+  {
+   "path": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\vimax_working\\shots\\2\\ref_sheet_ff_chars_杨旭+听香_a3f68e05f200118b8e1a.png",
+   "members": [
+    {
+     "entity": "杨旭",
+     "kind": "chars",
+     "region": [
+      0,
+      0,
+      486,
+      1024
+     ]
+    },
+    {
+     "entity": "听香",
+     "kind": "chars",
+     "region": [
+      510,
+      0,
+      996,
+      1024
+     ]
+    }
+   ]
+  },
+  {
+   "path": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\global\\props_bank\\油纸伞\\prop.png",
+   "members": []
+  }
+ ],
+ "omissions": [],
+ "dropped": [],
+ "readability_risk": "参考图数量超上限且有成员被拼合/省略，请人工核对脸部可读性与裁切；未记录省略理由的类别不得视为已评阅"
+}

@@ -1,0 +1,7 @@
+{
+ "sends": 16,
+ "repairs": 6,
+ "audits": 10,
+ "note": "seeded from 20261107T225039 run (4 repair + 4 audit); package cap 12",
+ "last_schema": "script_audit"
+}

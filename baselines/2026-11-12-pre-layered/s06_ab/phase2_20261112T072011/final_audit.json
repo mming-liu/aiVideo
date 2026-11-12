@@ -1,0 +1,257 @@
+{
+  "input_revision": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+  "rule_version": "2026-09-23.4",
+  "rule_source_fingerprint": "df0dbf3fa10ee903",
+  "duration_band": {
+    "min": 60.0,
+    "max": 90.0,
+    "target_min": 70.0,
+    "target_max": 80.0
+  },
+  "prompt_source_fingerprint": "11e0e41de7a4b3ea",
+  "audit_scope": "final_after_deterministic_fixes",
+  "audit_prompt_version": "857e4768d3dc",
+  "audit_focus_version": "066a87e6da63",
+  "audit_temperature": 0.0,
+  "run_id": "s06-phase2",
+  "status": "ok",
+  "audit_status": "ok",
+  "model": "deepseek-v4.1-flash",
+  "channel_provider": "agent_plan",
+  "schema_deviations": [],
+  "usage": {
+    "input_tokens": 27782,
+    "output_tokens": 21836,
+    "reasoning_tokens": 20189,
+    "total_tokens": 49618
+  },
+  "error": "",
+  "issues": [
+    {
+      "code": "model_audit_VISUAL_SPEC_CONFLICT",
+      "severity": "advisory",
+      "message": "ff_desc/lf_desc/motion_desc均写大远景且镜头推近，prompt却写大特写，景别自相矛盾，生成结果不可执行。；建议：将prompt开头“大特写”改为“大远景”，与全镜景别一致。",
+      "shot_id": "1",
+      "frame_id": "ff",
+      "entity_id": "scene",
+      "field_path": "prompt",
+      "evidence": "大特写",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "1",
+          "field_path": "prompt"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_SOUND_PROP_MISMATCH",
+      "severity": "advisory",
+      "message": "镜2杨旭吹竹箫、原文为箫音，本镜画外却写笛声，开场音效与人物乐器矛盾。；建议：将motion_desc中的“笛声”改为“箫声”。",
+      "shot_id": "1",
+      "frame_id": "kf1",
+      "entity_id": "scene",
+      "field_path": "motion_desc",
+      "evidence": "笛声",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "1",
+          "field_path": "motion_desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_PROP_CONTINUITY",
+      "severity": "advisory",
+      "message": "镜4 lf杨旭持钓杆与青瓷酒壶，镜6 ff又列出二者；本镜ff/lf/三个kfs均为空数组，道具无依据消失又恢复。；建议：在ff/lf/三个kfs的杨旭props补“钓杆、青瓷酒壶”，并在prompt补可见描述。",
+      "shot_id": "5",
+      "frame_id": "ff",
+      "entity_id": "杨旭",
+      "field_path": "frame_layouts.ff[2].props",
+      "evidence": "props为空数组，未列出钓杆与青瓷酒壶",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.ff[2].props"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.lf[2].props"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.kfs[0][2].props"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.kfs[1][2].props"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.kfs[2][2].props"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "prompt"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_TEXT_DUPLICATION",
+      "severity": "advisory",
+      "message": "同一括号说明连续重复，prompt冗余，易让生成模型把寒光误当两个独立光源或混淆。；建议：删除重复的括号说明，只保留一份。",
+      "shot_id": "6",
+      "frame_id": "ff",
+      "entity_id": "神秘人",
+      "field_path": "prompt",
+      "evidence": "（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "6",
+          "field_path": "prompt"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_STATE_CHAIN_CONFLICT",
+      "severity": "advisory",
+      "message": "镜6 lf已写酒壶脱手，本镜ff杨旭props已无酒壶，lf又写右手持壶倾倒，状态链矛盾。；建议：改为“酒壶滚落甲板，酒水洒在甲板”，避免右手重新持壶。",
+      "shot_id": "7",
+      "frame_id": "lf",
+      "entity_id": "杨旭",
+      "field_path": "lf_desc",
+      "evidence": "右手酒壶倾倒酒水洒在甲板",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "7",
+          "field_path": "lf_desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_DIALOGUE_CONTENT_MISMATCH",
+      "severity": "advisory",
+      "message": "同句紧接着写“闻声急奔”，prompt也写“尖叫传来”；“欲呼”尚未出声却已闻声，触发矛盾。；建议：将“画外听香欲呼传来”改为“画外听香尖叫传来”。",
+      "shot_id": "8",
+      "frame_id": "ff",
+      "entity_id": "听香",
+      "field_path": "ff_desc",
+      "evidence": "画外听香欲呼传来",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "8",
+          "field_path": "ff_desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_MOTIVATION_GAP",
+      "severity": "advisory",
+      "message": "观众不知道张十三为何掌掴听香，人物行为突兀，削弱后续胁迫的因果。；建议：在motion_desc前段补张十三厉声追问凶手、听香答不出或尖叫“他又来啦”，再接转身扬手。",
+      "shot_id": "10",
+      "frame_id": "ff",
+      "entity_id": "张十三",
+      "field_path": "motion_desc",
+      "evidence": "motion_desc在“猛地转身扬手”前未写质问或听香尖叫触发",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "10",
+          "field_path": "motion_desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_FF_RESULT_LEAK",
+      "severity": "advisory",
+      "message": "motion_desc前2秒才写“右手竖指封口”，首帧已完成该过程动作，动作重复。；建议：ff_desc改为“俯身欲近，右手尚未抬起/竖指”，同步改布局pose。",
+      "shot_id": "11",
+      "frame_id": "ff",
+      "entity_id": "张十三",
+      "field_path": "ff_desc",
+      "evidence": "右手食指竖于唇前",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "11",
+          "field_path": "ff_desc"
+        },
+        {
+          "shot_id": "11",
+          "field_path": "frame_layouts.ff[0].pose"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_DIALOGUE_CONTENT_MISSING",
+      "severity": "advisory",
+      "message": "观众不知道张十三用什么理由让听香噤声，听香点头配合缺乏动机。；建议：在motion_desc补低声说：你一个人在船上说不清，进了衙门脱不了身，听我吩咐别声张。",
+      "shot_id": "11",
+      "frame_id": "kf1",
+      "entity_id": "张十三",
+      "field_path": "motion_desc",
+      "evidence": "motion_desc仅写“低声厉色开口，目光扫向岸边”，未呈现可理解的威胁内容",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "11",
+          "field_path": "motion_desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_LAYOUT_VISIBILITY_CONFLICT",
+      "severity": "advisory",
+      "message": "lf_desc写杨旭“仍被其背影遮挡”，prompt写“岸上视角不可见”，布局却标on_screen=true，可见性矛盾。；建议：将杨旭on_screen改为false，或删除“不可见”表述。",
+      "shot_id": "12",
+      "frame_id": "lf",
+      "entity_id": "杨旭",
+      "field_path": "frame_layouts.lf[2].on_screen",
+      "evidence": "字段值为true",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "12",
+          "field_path": "frame_layouts.lf[2].on_screen"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_LAYOUT_OMISSION",
+      "severity": "advisory",
+      "message": "生成可能忽略背景中的杨旭，削弱张十三赶来目标与尸体位置确认。；建议：在frame_layouts.ff增补杨旭条目：远处船头仰倒，on_screen为true。",
+      "shot_id": "8",
+      "frame_id": "ff",
+      "entity_id": "杨旭",
+      "field_path": "frame_layouts.ff",
+      "evidence": "ff人物列表只有张十三，未列ff_desc/prompt中远处船头仰倒的杨旭",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "8",
+          "field_path": "frame_layouts.ff"
+        }
+      ],
+      "repairable": true
+    }
+  ],
+  "character_aliases": [],
+  "created_at": "2026-11-12T07:27:40",
+  "content_identity": "3caa3cb76d97fdfc16331513e7f999ce6ec4f41fcc874f68f569a146b1418d3c",
+  "source_identity": "120168fc23844b168ad7d3522fa896076e5c8012211895a232c856d87d148406"
+}

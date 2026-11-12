@@ -1,0 +1,180 @@
+{
+ "source_path": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\script_result.json",
+ "candidate_path": "C:\\myFloders\\git\\aiVideo\\.pytest_tmp\\u1_u5_closeout_20261110\\candidate_d1a\\candidate.json",
+ "source": {
+  "plan_dialogue_lines": [
+   "公子爷吃醉了酒，险些跌落水中"
+  ],
+  "plan_voice_entry_D1": [
+   {
+    "kind": "dialogue",
+    "index": 1,
+    "id": "D1",
+    "text": "公子爷吃醉了酒，险些跌落水中",
+    "source": "",
+    "fact_refs": [],
+    "beats": [
+     8
+    ]
+   }
+  ],
+  "voice_adaptations_present": false,
+  "carrier_shots": [
+   12,
+   13
+  ],
+  "characters": [
+   "杨旭",
+   "听香",
+   "张十三",
+   "老汉",
+   "小娃娃"
+  ],
+  "shots": [
+   {
+    "index": 12,
+    "subtitle": "张十三道：公子爷吃醉了酒，险些跌落水中",
+    "narration_segment": "张十三道：公子爷吃醉了酒，险些跌落水中",
+    "plan_refs": {
+     "beats": [
+      8
+     ],
+     "lines": [
+      1
+     ]
+    },
+    "voice_parts": {
+     "dialogue": "公子爷吃醉了酒，险些跌落水中",
+     "narration": "",
+     "prefix": "张十三道：",
+     "split_ok": true
+    },
+    "voice_parts_entries": [
+     {
+      "kind": "dialogue",
+      "id": "D1",
+      "text": "公子爷吃醉了酒，险些跌落水中",
+      "speaker": null
+     }
+    ],
+    "raw_for_speaker": "张十三道：公子爷吃醉了酒，险些跌落水中",
+    "speech_text": "公子爷吃醉了酒，险些跌落水中",
+    "resolved": {
+     "role": "张十三",
+     "source": "prefix"
+    },
+    "resolved_error": ""
+   },
+   {
+    "index": 13,
+    "subtitle": "",
+    "narration_segment": "",
+    "plan_refs": {
+     "beats": [
+      8
+     ],
+     "lines": []
+    },
+    "voice_parts": {
+     "dialogue": "",
+     "narration": "",
+     "prefix": "",
+     "split_ok": true
+    },
+    "voice_parts_entries": [],
+    "raw_for_speaker": null,
+    "speech_text": null,
+    "resolved": null,
+    "resolved_error": "SynthesisError: 镜头 13 的对白条目没有 speaker，文本也没有可识别的说话人前缀"
+   }
+  ]
+ },
+ "candidate": {
+  "plan_dialogue_lines": [
+   "公子爷吃醉了酒，险些跌落水中"
+  ],
+  "plan_voice_entry_D1": [
+   {
+    "kind": "dialogue",
+    "index": 1,
+    "id": "D1",
+    "text": "公子爷吃醉了酒，险些跌落水中",
+    "source": "",
+    "fact_refs": [],
+    "beats": [
+     8
+    ]
+   }
+  ],
+  "voice_adaptations_present": false,
+  "carrier_shots": [
+   12,
+   13
+  ],
+  "characters": [
+   "杨旭",
+   "听香",
+   "张十三",
+   "老汉",
+   "小娃娃"
+  ],
+  "shots": [
+   {
+    "index": 12,
+    "subtitle": "张十三道：公子爷吃醉了酒，险些跌落水中",
+    "narration_segment": "张十三道：公子爷吃醉了酒，险些跌落水中",
+    "plan_refs": {
+     "beats": [
+      8
+     ],
+     "lines": [
+      1
+     ]
+    },
+    "voice_parts": {
+     "dialogue": "公子爷吃醉了酒，险些跌落水中",
+     "narration": "",
+     "prefix": "张十三道：",
+     "split_ok": true
+    },
+    "voice_parts_entries": [
+     {
+      "kind": "dialogue",
+      "id": "D1",
+      "text": "公子爷吃醉了酒，险些跌落水中",
+      "speaker": null
+     }
+    ],
+    "raw_for_speaker": "张十三道：公子爷吃醉了酒，险些跌落水中",
+    "speech_text": "公子爷吃醉了酒，险些跌落水中",
+    "resolved": {
+     "role": "张十三",
+     "source": "prefix"
+    },
+    "resolved_error": ""
+   },
+   {
+    "index": 13,
+    "subtitle": "",
+    "narration_segment": "",
+    "plan_refs": {
+     "beats": [
+      8
+     ],
+     "lines": []
+    },
+    "voice_parts": {
+     "dialogue": "",
+     "narration": "",
+     "prefix": "",
+     "split_ok": true
+    },
+    "voice_parts_entries": [],
+    "raw_for_speaker": null,
+    "speech_text": null,
+    "resolved": null,
+    "resolved_error": "SynthesisError: 镜头 13 的对白条目没有 speaker，文本也没有可识别的说话人前缀"
+   }
+  ]
+ }
+}

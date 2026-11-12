@@ -1,0 +1,444 @@
+[
+  {
+    "recorded_at": "2026-11-07T22:51:33",
+    "run_id": "20261107T225039-18832",
+    "commit_round": 1,
+    "repair_round": 1,
+    "kind": "call_ok",
+    "usage": {
+      "input_tokens": 19021,
+      "output_tokens": 5023,
+      "reasoning_tokens": 0,
+      "total_tokens": 24044
+    },
+    "max_tokens": null,
+    "reasoning_tokens": 0,
+    "output_tokens": 5023,
+    "total_tokens": 24044,
+    "budget_left_sec": null
+  },
+  {
+    "recorded_at": "2026-11-07T22:51:33",
+    "run_id": "20261107T225039-18832",
+    "commit_round": 1,
+    "repair_round": 1,
+    "targets": [
+      "shot_12",
+      "shot_13",
+      "shot_7",
+      "shot_8"
+    ],
+    "groups": [
+      [
+        "shot_12"
+      ],
+      [
+        "shot_13"
+      ],
+      [
+        "shot_7"
+      ],
+      [
+        "shot_8"
+      ]
+    ],
+    "new_blocking_keys": [],
+    "new_blocking_targets": [
+      "shot_12",
+      "shot_13"
+    ],
+    "rolled_back_groups": [
+      [
+        "shot_12"
+      ],
+      [
+        "shot_13"
+      ]
+    ],
+    "targets_rolled_back": [
+      "shot_12",
+      "shot_13"
+    ],
+    "accepted": true,
+    "round_ok": true,
+    "resolved": 1,
+    "reason": "",
+    "origin_reason": "layout_structure_invalid",
+    "evidence_removed": [],
+    "audit_field_touched": 1,
+    "audit_touched_ids": [
+      [
+        "7",
+        "prop_state"
+      ]
+    ],
+    "revision_before": "57f05fa7b4fd8dfd9073852b6ba6fce943d0a5cc24e6fa2ff12cc6fa5f4962ce",
+    "revision_after": "b36f00b4756d7a4ce2c4aac04dd81415ac4a8474abff295e0ce99a075808ee44",
+    "effect_conflict": null
+  },
+  {
+    "recorded_at": "2026-11-07T22:58:06",
+    "run_id": "20261107T225039-18832",
+    "commit_round": 2,
+    "repair_round": 1,
+    "kind": "call_ok",
+    "usage": {
+      "input_tokens": 21477,
+      "output_tokens": 3719,
+      "reasoning_tokens": 0,
+      "total_tokens": 25196
+    },
+    "max_tokens": null,
+    "reasoning_tokens": 0,
+    "output_tokens": 3719,
+    "total_tokens": 25196,
+    "budget_left_sec": null
+  },
+  {
+    "recorded_at": "2026-11-07T22:58:06",
+    "run_id": "20261107T225039-18832",
+    "commit_round": 2,
+    "repair_round": 1,
+    "targets": [
+      "shot_10",
+      "shot_12",
+      "shot_6",
+      "shot_8"
+    ],
+    "groups": [
+      [
+        "shot_10"
+      ],
+      [
+        "shot_12"
+      ]
+    ],
+    "new_blocking_keys": [
+      [
+        "kf_segment_missing",
+        "10",
+        "seg1",
+        "",
+        "keyframes"
+      ]
+    ],
+    "new_blocking_targets": [
+      "shot_10"
+    ],
+    "rolled_back_groups": [
+      [
+        "shot_10"
+      ]
+    ],
+    "targets_rolled_back": [
+      "shot_10"
+    ],
+    "accepted": true,
+    "round_ok": true,
+    "resolved": 3,
+    "reason": "",
+    "origin_reason": "new_blocking",
+    "evidence_removed": [],
+    "audit_field_touched": 1,
+    "audit_touched_ids": [
+      [
+        "12",
+        "state_contradiction"
+      ]
+    ],
+    "revision_before": "b36f00b4756d7a4ce2c4aac04dd81415ac4a8474abff295e0ce99a075808ee44",
+    "revision_after": "809bf32a1a9a3c4ea222284887fb67b72dea442f50d029c1053794b5cbdc13b1",
+    "effect_conflict": null
+  },
+  {
+    "recorded_at": "2026-11-07T23:05:35",
+    "run_id": "20261107T225039-18832",
+    "commit_round": 3,
+    "repair_round": 1,
+    "kind": "call_ok",
+    "usage": {
+      "input_tokens": 14961,
+      "output_tokens": 731,
+      "reasoning_tokens": 0,
+      "total_tokens": 15692
+    },
+    "max_tokens": null,
+    "reasoning_tokens": 0,
+    "output_tokens": 731,
+    "total_tokens": 15692,
+    "budget_left_sec": null
+  },
+  {
+    "recorded_at": "2026-11-07T23:05:35",
+    "run_id": "20261107T225039-18832",
+    "commit_round": 3,
+    "repair_round": 1,
+    "targets": [
+      "shot_10",
+      "shot_13",
+      "shot_9"
+    ],
+    "groups": [],
+    "new_blocking_keys": [],
+    "new_blocking_targets": [],
+    "rolled_back_groups": [],
+    "targets_rolled_back": [],
+    "accepted": true,
+    "round_ok": true,
+    "resolved": 3,
+    "reason": "",
+    "origin_reason": "",
+    "evidence_removed": [],
+    "audit_field_touched": 0,
+    "audit_touched_ids": [],
+    "revision_before": "809bf32a1a9a3c4ea222284887fb67b72dea442f50d029c1053794b5cbdc13b1",
+    "revision_after": "4330e962542f8bfb881eb8a0b7dd942a29d545ae1d9712ae38de6ba562da61db",
+    "effect_conflict": null
+  },
+  {
+    "recorded_at": "2026-11-07T23:12:03",
+    "run_id": "20261107T225039-18832",
+    "commit_round": 4,
+    "repair_round": 1,
+    "kind": "call_ok",
+    "usage": {
+      "input_tokens": 23070,
+      "output_tokens": 4766,
+      "reasoning_tokens": 0,
+      "total_tokens": 27836
+    },
+    "max_tokens": null,
+    "reasoning_tokens": 0,
+    "output_tokens": 4766,
+    "total_tokens": 27836,
+    "budget_left_sec": null
+  },
+  {
+    "recorded_at": "2026-11-07T23:12:03",
+    "run_id": "20261107T225039-18832",
+    "commit_round": 4,
+    "repair_round": 1,
+    "targets": [
+      "shot_1",
+      "shot_3",
+      "shot_4",
+      "shot_5",
+      "shot_6",
+      "shot_7"
+    ],
+    "groups": [
+      [
+        "shot_1",
+        "shot_3",
+        "shot_4",
+        "shot_5",
+        "shot_6",
+        "shot_7"
+      ]
+    ],
+    "new_blocking_keys": [],
+    "new_blocking_targets": [],
+    "rolled_back_groups": [],
+    "targets_rolled_back": [],
+    "accepted": true,
+    "round_ok": true,
+    "resolved": 0,
+    "reason": "",
+    "origin_reason": "",
+    "evidence_removed": [],
+    "audit_field_touched": 1,
+    "audit_touched_ids": [
+      [
+        "5",
+        "state_contradiction"
+      ]
+    ],
+    "revision_before": "4330e962542f8bfb881eb8a0b7dd942a29d545ae1d9712ae38de6ba562da61db",
+    "revision_after": "8198de7d56aa0bf34cf2e99696f79fdbfeaf09c303c4a1fe3f2e554b278af117",
+    "effect_conflict": {
+      "reason": "postprocess_effect_reverted",
+      "mechanism": "postprocess_effect_reverted",
+      "writer": "multi_char_layout_depth",
+      "targets": [
+        "shot_5"
+      ],
+      "first_revert": {
+        "shot_id": "shot_5",
+        "frame_locator": "frame_layouts.ff",
+        "authorized_targets": [
+          "frame_layouts.ff"
+        ],
+        "before_digest": "d4beda80e8e5fa52",
+        "merged_digest": "8eecab023ed31e10",
+        "now_digest": "de38886783e2bb75",
+        "merged_signature": "神秘人|听香",
+        "now_signature": "神秘人|听香",
+        "restored_names": [],
+        "lost_names": [],
+        "removed_by_repair": [],
+        "added_by_repair": [
+          "听香"
+        ]
+      },
+      "bindings": {},
+      "detail": "已授权的帧子列表改动被**确定性后处理**抵消（责任 writer=multi_char_layout_depth）——这不是「模型没改」，也不是 no_target_resolved",
+      "capability_missing": false,
+      "needed_field": ""
+    }
+  },
+  {
+    "recorded_at": "2026-11-07T23:27:33",
+    "run_id": "20261107T232711-8676",
+    "commit_round": 1,
+    "repair_round": 1,
+    "kind": "call_ok",
+    "usage": {
+      "input_tokens": 17968,
+      "output_tokens": 4537,
+      "reasoning_tokens": 0,
+      "total_tokens": 22505
+    },
+    "max_tokens": null,
+    "reasoning_tokens": 0,
+    "output_tokens": 4537,
+    "total_tokens": 22505,
+    "budget_left_sec": null
+  },
+  {
+    "recorded_at": "2026-11-07T23:27:33",
+    "run_id": "20261107T232711-8676",
+    "commit_round": 1,
+    "repair_round": 1,
+    "targets": [
+      "shot_12",
+      "shot_13",
+      "shot_7",
+      "shot_8"
+    ],
+    "groups": [
+      [
+        "shot_12"
+      ],
+      [
+        "shot_13"
+      ],
+      [
+        "shot_7"
+      ],
+      [
+        "shot_8"
+      ]
+    ],
+    "new_blocking_keys": [
+      [
+        "kf_event_window_mismatch",
+        "12",
+        "kf2",
+        "",
+        "keyframes.desc"
+      ],
+      [
+        "kf_segment_missing",
+        "12",
+        "seg3",
+        "",
+        "keyframes"
+      ],
+      [
+        "kf_segment_missing",
+        "7",
+        "seg1",
+        "",
+        "keyframes"
+      ]
+    ],
+    "new_blocking_targets": [
+      "shot_12",
+      "shot_7"
+    ],
+    "rolled_back_groups": [
+      [
+        "shot_12"
+      ],
+      [
+        "shot_7"
+      ]
+    ],
+    "targets_rolled_back": [
+      "shot_12",
+      "shot_7"
+    ],
+    "accepted": true,
+    "round_ok": true,
+    "resolved": 0,
+    "reason": "",
+    "origin_reason": "new_blocking",
+    "evidence_removed": [],
+    "audit_field_touched": 2,
+    "audit_touched_ids": [
+      [
+        "8",
+        "missing_beat"
+      ],
+      [
+        "13",
+        "missing_beat"
+      ]
+    ],
+    "revision_before": "8198de7d56aa0bf34cf2e99696f79fdbfeaf09c303c4a1fe3f2e554b278af117",
+    "revision_after": "3e085e7dba2b5c6e3cd800dcaf2319320e41d09acb3d40622da36142c684857d",
+    "effect_conflict": null
+  },
+  {
+    "recorded_at": "2026-11-07T23:29:22",
+    "run_id": "20261107T232711-8676",
+    "commit_round": 2,
+    "repair_round": 1,
+    "kind": "call_ok",
+    "usage": {
+      "input_tokens": 10360,
+      "output_tokens": 1162,
+      "reasoning_tokens": 0,
+      "total_tokens": 11522
+    },
+    "max_tokens": null,
+    "reasoning_tokens": 0,
+    "output_tokens": 1162,
+    "total_tokens": 11522,
+    "budget_left_sec": null
+  },
+  {
+    "recorded_at": "2026-11-07T23:29:22",
+    "run_id": "20261107T232711-8676",
+    "commit_round": 2,
+    "repair_round": 1,
+    "targets": [
+      "shot_12"
+    ],
+    "groups": [
+      [
+        "shot_12"
+      ]
+    ],
+    "new_blocking_keys": [],
+    "new_blocking_targets": [],
+    "rolled_back_groups": [],
+    "targets_rolled_back": [],
+    "accepted": true,
+    "round_ok": true,
+    "resolved": 0,
+    "reason": "",
+    "origin_reason": "",
+    "evidence_removed": [],
+    "audit_field_touched": 1,
+    "audit_touched_ids": [
+      [
+        "12",
+        "CAUSAL_GAP"
+      ]
+    ],
+    "revision_before": "3e085e7dba2b5c6e3cd800dcaf2319320e41d09acb3d40622da36142c684857d",
+    "revision_after": "58c1b6bdd9b3d4589af3a24807beb9b776ab83867a855b37bbbc232bda85d9e4",
+    "effect_conflict": null
+  }
+]

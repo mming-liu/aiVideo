@@ -1,0 +1,577 @@
+{
+  "meta": {
+    "run_dir": "C:\\myFloders\\git\\aiVideo\\.pytest_tmp\\s06\\runs\\20261112T070909",
+    "provider": "agent_plan",
+    "model": "deepseek-v4.1-flash",
+    "old_prompt_version": "a5929a9f6abc",
+    "new_prompt_version": "857e4768d3dc",
+    "samples": [
+      "time_ellipsis_legal",
+      "state_broken",
+      "voice_broken"
+    ],
+    "max_sends": 6,
+    "duration_band": {
+      "min": 60.0,
+      "max": 90.0,
+      "target_min": 70.0,
+      "target_max": 80.0
+    },
+    "repo_head": "7286516"
+  },
+  "sends": 6,
+  "results": [
+    {
+      "sample": "time_ellipsis_legal",
+      "contract": "old",
+      "prompt_sha1": "5b5cca632df83048eab8df060a9fb7d4b8f89e80",
+      "prompt_chars": 6645,
+      "expected": {
+        "verdict": "legal",
+        "defect_class": "none",
+        "discriminating": [
+          "scene",
+          "clip_transition",
+          "context_bridge"
+        ],
+        "why": "两镜之间明确隔了一夜：scene 变了、转场声明淡出黑场、context_bridge 写了「次日清晨」。观众不需要看见夜里发生了什么就能跟上剧情，补写过程反而是多余的。",
+        "must_preserve": [
+          "时间关系：次日清晨",
+          "收剑这一动作已经完成",
+          "剑在第二镜仍处于入鞘状态"
+        ]
+      },
+      "status": "ok",
+      "error": "",
+      "attempts": 1,
+      "usage": {
+        "input_tokens": 3984,
+        "output_tokens": 11795,
+        "reasoning_tokens": 11101,
+        "total_tokens": 15779
+      },
+      "channel_provider": "agent_plan",
+      "channel_model": "deepseek-v4.1-flash",
+      "raw_head": "",
+      "issues": [
+        {
+          "code": "model_audit_LF_RESULT_MISMATCH",
+          "severity": "visual_risk",
+          "message": "motion_desc写后3秒“甲走到院门”、布局position为“院门”，尾帧却仍写“走向院门”；原文“提剑出门”也未跨出院门，结果态不一致且结尾缺失。；建议：将motion_desc后段改为走到院门并跨出门外，lf_desc改为“甲跨出院门”，布局position改“门外”，prompt改“提剑出门”。",
+          "shot_id": "2",
+          "frame_id": "lf",
+          "entity_id": "甲",
+          "field_path": "lf_desc",
+          "evidence": "甲迈步走向院门",
+          "related_shot_ids": [],
+          "repair_targets": [
+            {
+              "shot_id": "2",
+              "field_path": "motion_desc"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "lf_desc"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "frame_layouts.lf[0].position"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "prompt"
+            }
+          ],
+          "repairable": true
+        },
+        {
+          "code": "model_audit_LF_PROCESS_NOT_RESULT",
+          "severity": "advisory",
+          "message": "lf应只审结果态，当前仍描述插剑过程；布局pose仍为“转身”而非面向院门的结果，尾帧可能重复动作且状态不明。；建议：lf_desc改为“剑已入鞘，甲面向院门”，frame_layouts.lf[0].pose改为“面向院门”。",
+          "shot_id": "1",
+          "frame_id": "lf",
+          "entity_id": "甲",
+          "field_path": "lf_desc",
+          "evidence": "甲把剑插回鞘中",
+          "related_shot_ids": [],
+          "repair_targets": [
+            {
+              "shot_id": "1",
+              "field_path": "lf_desc"
+            },
+            {
+              "shot_id": "1",
+              "field_path": "frame_layouts.lf[0].pose"
+            }
+          ],
+          "repairable": true
+        },
+        {
+          "code": "model_audit_FF_STATE_CONFLICT",
+          "severity": "advisory",
+          "message": "按剑柄通常表示剑在鞘内，而motion_desc前3秒要求“收剑入鞘”；首帧未明确剑身在外，动作缺少可执行来源。；建议：改为“甲右手握剑，剑身尚未入鞘”或明确剑出鞘。",
+          "shot_id": "1",
+          "frame_id": "ff",
+          "entity_id": "甲",
+          "field_path": "ff_desc",
+          "evidence": "右手按在剑柄上",
+          "related_shot_ids": [],
+          "repair_targets": [
+            {
+              "shot_id": "1",
+              "field_path": "ff_desc"
+            }
+          ],
+          "repairable": true
+        }
+      ],
+      "elapsed_sec": 114.3,
+      "issues_count": 3,
+      "blocking_count": 1
+    },
+    {
+      "sample": "time_ellipsis_legal",
+      "contract": "new",
+      "prompt_sha1": "6cca1c6aeb49480f9737aed606f7f1aa63aaadb2",
+      "prompt_chars": 7801,
+      "expected": {
+        "verdict": "legal",
+        "defect_class": "none",
+        "discriminating": [
+          "scene",
+          "clip_transition",
+          "context_bridge"
+        ],
+        "why": "两镜之间明确隔了一夜：scene 变了、转场声明淡出黑场、context_bridge 写了「次日清晨」。观众不需要看见夜里发生了什么就能跟上剧情，补写过程反而是多余的。",
+        "must_preserve": [
+          "时间关系：次日清晨",
+          "收剑这一动作已经完成",
+          "剑在第二镜仍处于入鞘状态"
+        ]
+      },
+      "status": "ok",
+      "error": "",
+      "attempts": 1,
+      "usage": {
+        "input_tokens": 4639,
+        "output_tokens": 8792,
+        "reasoning_tokens": 8567,
+        "total_tokens": 13431
+      },
+      "channel_provider": "agent_plan",
+      "channel_model": "deepseek-v4.1-flash",
+      "raw_head": "",
+      "issues": [
+        {
+          "code": "model_audit_LF_RESULT_MISMATCH",
+          "severity": "visual_risk",
+          "message": "尾帧仍写「走向院门」，与 motion_desc「甲走到院门」和 frame_layouts.lf[0].position「院门」矛盾；全片也停在院门，未呈现原文「出门」的离开结果。；建议：将后3秒改为跨出院门，尾帧改为「甲提剑跨出院门」，布局位置改「院门外」，prompt 同步改为走出院门。",
+          "shot_id": "2",
+          "frame_id": "lf",
+          "entity_id": "甲",
+          "field_path": "lf_desc",
+          "evidence": "迈步走向院门",
+          "related_shot_ids": [],
+          "repair_targets": [
+            {
+              "shot_id": "2",
+              "field_path": "motion_desc"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "lf_desc"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "frame_layouts.lf[0].position"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "prompt"
+            }
+          ],
+          "repairable": true
+        }
+      ],
+      "elapsed_sec": 83.2,
+      "issues_count": 1,
+      "blocking_count": 1
+    },
+    {
+      "sample": "state_broken",
+      "contract": "old",
+      "prompt_sha1": "89f94c406d213bcf70fd5c62eb49be5b169e1cee",
+      "prompt_chars": 6645,
+      "expected": {
+        "verdict": "defect",
+        "defect_class": "contradiction",
+        "discriminating": [
+          "ff_desc",
+          "frame_layouts.ff"
+        ],
+        "why": "同一场景、连续时间（硬切、无时间跳跃依据），前镜尾帧酒壶已放在案上、甲双手空，后镜首帧酒壶却又回到甲手里、案上无壶。没有任何依据说明它怎么回来的——状态被无理由复原。",
+        "must_preserve": [
+          "前镜终态：壶在案上",
+          "后镜动作：甲仰头饮酒",
+          "中间不得凭空复原"
+        ]
+      },
+      "status": "ok",
+      "error": "",
+      "attempts": 1,
+      "usage": {
+        "input_tokens": 3994,
+        "output_tokens": 11639,
+        "reasoning_tokens": 11088,
+        "total_tokens": 15633
+      },
+      "channel_provider": "agent_plan",
+      "channel_model": "deepseek-v4.1-flash",
+      "raw_head": "",
+      "issues": [
+        {
+          "code": "model_audit_FF_RESULT_LEAK",
+          "severity": "visual_risk",
+          "message": "首帧已呈现『饮下』结果，动作尚未开始；随后 motion 又从头饮酒，且从放壶直接跳到饮酒，原文『又提起壶来』的衔接缺失。；建议：ff 改为『甲右手伸向案上的酒壶，尚未提起』，motion 前3秒补『从案上提起酒壶』后再仰头饮酒，并同步 ff 姿态与道具。",
+          "shot_id": "2",
+          "frame_id": "ff",
+          "entity_id": "甲",
+          "field_path": "ff_desc",
+          "evidence": "仰头饮下",
+          "related_shot_ids": [],
+          "repair_targets": [
+            {
+              "shot_id": "2",
+              "field_path": "ff_desc"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "motion_desc"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "frame_layouts.ff[0].pose"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "frame_layouts.ff[0].props"
+            }
+          ],
+          "repairable": true
+        },
+        {
+          "code": "model_audit_STORY_DEVIATION",
+          "severity": "visual_risk",
+          "message": "原文结尾是『仰头饮尽』，摔壶是新增动作，替代了饮尽结果；motion、prompt、lf 姿态同样写摔壶，人物动作与剧情结尾被改写。；建议：lf 改为饮尽后的结果态，如『甲仰头饮尽，手垂落，酒壶放在案上』；同步改 motion 后段、prompt 和 lf 的 pose，去掉摔壶。",
+          "shot_id": "2",
+          "frame_id": "lf",
+          "entity_id": "甲",
+          "field_path": "lf_desc",
+          "evidence": "甲把酒壶摔在案上",
+          "related_shot_ids": [],
+          "repair_targets": [
+            {
+              "shot_id": "2",
+              "field_path": "lf_desc"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "motion_desc"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "prompt"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "frame_layouts.lf[0].pose"
+            }
+          ],
+          "repairable": true
+        },
+        {
+          "code": "model_audit_WORD_ERROR",
+          "severity": "advisory",
+          "message": "『案上空的』成分残缺，语义含混，影响首帧状态的可执行描述。；建议：改为『案面已空』。",
+          "shot_id": "2",
+          "frame_id": "ff",
+          "entity_id": "甲",
+          "field_path": "ff_desc",
+          "evidence": "案上空的",
+          "related_shot_ids": [],
+          "repair_targets": [
+            {
+              "shot_id": "2",
+              "field_path": "ff_desc"
+            }
+          ],
+          "repairable": true
+        }
+      ],
+      "elapsed_sec": 111.3,
+      "issues_count": 3,
+      "blocking_count": 2
+    },
+    {
+      "sample": "state_broken",
+      "contract": "new",
+      "prompt_sha1": "880fb79fbc9dc031f2057a6f06e067acd631cf20",
+      "prompt_chars": 7784,
+      "expected": {
+        "verdict": "defect",
+        "defect_class": "contradiction",
+        "discriminating": [
+          "ff_desc",
+          "frame_layouts.ff"
+        ],
+        "why": "同一场景、连续时间（硬切、无时间跳跃依据），前镜尾帧酒壶已放在案上、甲双手空，后镜首帧酒壶却又回到甲手里、案上无壶。没有任何依据说明它怎么回来的——状态被无理由复原。",
+        "must_preserve": [
+          "前镜终态：壶在案上",
+          "后镜动作：甲仰头饮酒",
+          "中间不得凭空复原"
+        ]
+      },
+      "status": "ok",
+      "error": "",
+      "attempts": 1,
+      "usage": {
+        "input_tokens": 4635,
+        "output_tokens": 6989,
+        "reasoning_tokens": 6370,
+        "total_tokens": 11624
+      },
+      "channel_provider": "agent_plan",
+      "channel_model": "deepseek-v4.1-flash",
+      "raw_head": "",
+      "issues": [
+        {
+          "code": "model_audit_ACTION_OMISSION",
+          "severity": "visual_risk",
+          "message": "镜1尾酒壶已放案、双手垂落；本镜开场直接饮酒，原文“随即又提起壶来”被省略，观众看不到酒壶如何回到手中。；建议：在饮酒前补“甲从案上提起酒壶”节拍，并同步首帧准备态。",
+          "shot_id": "2",
+          "frame_id": "ff",
+          "entity_id": "甲",
+          "field_path": "motion_desc",
+          "evidence": "前3秒：甲仰头饮酒",
+          "related_shot_ids": [],
+          "repair_targets": [
+            {
+              "shot_id": "2",
+              "field_path": "motion_desc"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "ff_desc"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "frame_layouts.ff[0].pose"
+            }
+          ],
+          "repairable": true
+        },
+        {
+          "code": "model_audit_FF_RESULT_LEAK",
+          "severity": "visual_risk",
+          "message": "ff已呈现“仰头饮下”的过程动作，不是动作开始前准备态，首帧与motion_desc过程重叠。；建议：改为提壶前准备态，如手扶案上酒壶、尚未仰头。",
+          "shot_id": "2",
+          "frame_id": "ff",
+          "entity_id": "甲",
+          "field_path": "ff_desc",
+          "evidence": "甲右手提着酒壶仰头饮下",
+          "related_shot_ids": [],
+          "repair_targets": [
+            {
+              "shot_id": "2",
+              "field_path": "ff_desc"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "frame_layouts.ff[0].pose"
+            }
+          ],
+          "repairable": true
+        },
+        {
+          "code": "model_audit_SCRIPT_DEVIATION",
+          "severity": "visual_risk",
+          "message": "原文只写“饮尽”，未写摔壶；本镜增加摔壶动作，改变结尾动作与语气。；建议：改为“甲饮尽，将酒壶放回案上”或只保留饮尽。",
+          "shot_id": "2",
+          "frame_id": "lf",
+          "entity_id": "甲",
+          "field_path": "lf_desc",
+          "evidence": "甲把酒壶摔在案上",
+          "related_shot_ids": [],
+          "repair_targets": [
+            {
+              "shot_id": "2",
+              "field_path": "lf_desc"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "motion_desc"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "prompt"
+            },
+            {
+              "shot_id": "2",
+              "field_path": "frame_layouts.lf[0].pose"
+            }
+          ],
+          "repairable": true
+        },
+        {
+          "code": "model_audit_TEXT_TRUNCATION",
+          "severity": "advisory",
+          "message": "语句不完整、语义不明，读者无法确定案面状态，疑似截断。；建议：改为“案面空着”或删去该片段。",
+          "shot_id": "2",
+          "frame_id": "ff",
+          "entity_id": "甲",
+          "field_path": "ff_desc",
+          "evidence": "案上空的",
+          "related_shot_ids": [],
+          "repair_targets": [
+            {
+              "shot_id": "2",
+              "field_path": "ff_desc"
+            }
+          ],
+          "repairable": true
+        }
+      ],
+      "elapsed_sec": 72.1,
+      "issues_count": 4,
+      "blocking_count": 3
+    },
+    {
+      "sample": "voice_broken",
+      "contract": "old",
+      "prompt_sha1": "13db0f3e75b8ba6e132a4b5091f80c961c95ee98",
+      "prompt_chars": 6674,
+      "expected": {
+        "verdict": "defect",
+        "defect_class": "contradiction",
+        "discriminating": [
+          "narration_segment",
+          "frame_layouts.ff"
+        ],
+        "why": "原文这句是丙说的，且丙始终不在画内。第二镜把旁白前缀写成甲，画面里又只有甲且没有开口动作——声音归属被改到了另一个角色身上，属于改变关键关系，不是措辞差异。",
+        "must_preserve": [
+          "声音归属：丙",
+          "甲只作听者",
+          "丙仍在画外"
+        ]
+      },
+      "status": "ok",
+      "error": "",
+      "attempts": 1,
+      "usage": {
+        "input_tokens": 3988,
+        "output_tokens": 11072,
+        "reasoning_tokens": 10784,
+        "total_tokens": 15060
+      },
+      "channel_provider": "agent_plan",
+      "channel_model": "deepseek-v4.1-flash",
+      "raw_head": "",
+      "issues": [
+        {
+          "code": "model_audit_DIALOGUE_NOT_IN_SOURCE",
+          "severity": "visual_risk",
+          "message": "原文只有丙的声音和甲转头，没有甲的台词；此句凭空新增对白，并与同镜尾帧“没有出声”矛盾。；建议：删除该句，本镜不设甲对白，保留“没有出声”的尾帧。",
+          "shot_id": "2",
+          "frame_id": "lf",
+          "entity_id": "甲",
+          "field_path": "narration_segment",
+          "evidence": "甲：我知道你在想什么。",
+          "related_shot_ids": [],
+          "repair_targets": [
+            {
+              "shot_id": "2",
+              "field_path": "narration_segment"
+            }
+          ],
+          "repairable": true
+        },
+        {
+          "code": "model_audit_STATE_CHAIN_CONFLICT",
+          "severity": "advisory",
+          "message": "首帧准备态已把视线落在门上，后3秒才“转头看向画左的门”会显得动作重复、动机不清。；建议：将 ff 的 gaze_target 改为“前方”或“未看向门”。",
+          "shot_id": "1",
+          "frame_id": "ff",
+          "entity_id": "甲",
+          "field_path": "frame_layouts.ff[0].gaze_target",
+          "evidence": "门",
+          "related_shot_ids": [],
+          "repair_targets": [
+            {
+              "shot_id": "1",
+              "field_path": "frame_layouts.ff[0].gaze_target"
+            }
+          ],
+          "repairable": true
+        }
+      ],
+      "elapsed_sec": 105.7,
+      "issues_count": 2,
+      "blocking_count": 1
+    },
+    {
+      "sample": "voice_broken",
+      "contract": "new",
+      "prompt_sha1": "37724d885f0b46f0f764e7098fef32c269a3d8d9",
+      "prompt_chars": 7813,
+      "expected": {
+        "verdict": "defect",
+        "defect_class": "contradiction",
+        "discriminating": [
+          "narration_segment",
+          "frame_layouts.ff"
+        ],
+        "why": "原文这句是丙说的，且丙始终不在画内。第二镜把旁白前缀写成甲，画面里又只有甲且没有开口动作——声音归属被改到了另一个角色身上，属于改变关键关系，不是措辞差异。",
+        "must_preserve": [
+          "声音归属：丙",
+          "甲只作听者",
+          "丙仍在画外"
+        ]
+      },
+      "status": "ok",
+      "error": "",
+      "attempts": 1,
+      "usage": {
+        "input_tokens": 4629,
+        "output_tokens": 4261,
+        "reasoning_tokens": 4090,
+        "total_tokens": 8890
+      },
+      "channel_provider": "agent_plan",
+      "channel_model": "deepseek-v4.1-flash",
+      "raw_head": "",
+      "issues": [
+        {
+          "code": "model_audit_DIALOGUE_VISUAL_CONFLICT",
+          "severity": "visual_risk",
+          "message": "原文只有丙的门外声音，甲无台词；本镜画面明确甲双唇闭合、没有出声，配音却让甲说话，观众看到闭嘴发声，剧情被无依据改写。；建议：删除该句甲台词，保持本镜无声；若确需甲开口，再改 ff/lf/motion 为开口说话并补原文依据。",
+          "shot_id": "2",
+          "frame_id": "lf",
+          "entity_id": "甲",
+          "field_path": "narration_segment",
+          "evidence": "甲：我知道你在想什么。",
+          "related_shot_ids": [],
+          "repair_targets": [
+            {
+              "shot_id": "2",
+              "field_path": "narration_segment"
+            }
+          ],
+          "repairable": true
+        }
+      ],
+      "elapsed_sec": 47.8,
+      "issues_count": 1,
+      "blocking_count": 1
+    }
+  ]
+}

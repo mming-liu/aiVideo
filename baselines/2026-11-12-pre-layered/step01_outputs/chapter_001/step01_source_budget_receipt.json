@@ -1,0 +1,56 @@
+{
+  "recorded_at": "2026-10-31T14:24:35",
+  "package": ".tmp\\repair6_20261031\\audit_package.json",
+  "revision": "3cb102b7f5144164b5e31280def7cc712cda61bf58e69426fc4bfbabdaad7818",
+  "provider": "agent_plan",
+  "model": "deepseek-v4.1-flash",
+  "authorized_total": 13,
+  "used_before": 12,
+  "remaining_before": 0,
+  "sends": 1,
+  "sends_known": true,
+  "send_state": "returned",
+  "sends_source": "attempts",
+  "remaining_after": 0,
+  "audit_status": null,
+  "verdict": "COMMITTED",
+  "commit_status": "COMMITTED",
+  "evidence_complete": true,
+  "evidence_dimensions": {
+    "authorization_chain": true,
+    "transport_trace_known": true,
+    "response_complete": true,
+    "chain_problems": [],
+    "note": "四个维度彼此独立：授权链可关联 ≠ 传输轨迹可判定 ≠ 响应完整 ≠ 审计有结论；evidence_complete 只表示本次该核的项都核到了"
+  },
+  "evidence_problems": [],
+  "call_ids": [
+    "ce637f003fd9f4665"
+  ],
+  "logic_calls": 1,
+  "attempt_ids": [
+    "att_e48f1bc067794bad"
+  ],
+  "authorization": {
+    "send_state": "returned",
+    "claimed": true,
+    "claimed_at": "2026-10-31T14:21:06+08:00",
+    "claim_run_id": "20261031T142106-10528",
+    "claim_pid": 10528,
+    "claim_call_id": "ce637f003fd9f4665",
+    "claim_out_root": ".tmp\\repair6_20261031\\run1",
+    "binding_digest": "49737a5f83830ee4fa64d3c506d560b3",
+    "attempts": 1,
+    "attempt_ids": [
+      "att_e48f1bc067794bad"
+    ],
+    "outcomes": 1,
+    "send_attempted": true,
+    "finished": true,
+    "result_status": "COMMITTED",
+    "state_dir": "C:\\myFloders\\git\\aiVideo\\.p1a_exp\\step01_delivery_20261028\\audit_authorizations\\auth_85d9ee92765503a60461248d24e544f1",
+    "authorization_id": "repair-20261031-r7",
+    "write_errors": []
+  },
+  "note": "sends = 实际进入 SDK 发送边界的尝试数（attempt 记录）；logic_calls = 逻辑调用台账行数，**不是**发送次数。send_state=reserved 表示授权已被占用、但确认没有发送；send_state=unknown 表示发送边界附近中断，次数/结果不明且授权不可重用。"
+}

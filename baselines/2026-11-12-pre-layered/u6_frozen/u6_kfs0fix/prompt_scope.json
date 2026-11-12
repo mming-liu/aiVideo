@@ -1,0 +1,22 @@
+{
+ "revision": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+ "prompt_chars": 61602,
+ "shot_indices_in_prompt": [
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  12,
+  13
+ ],
+ "all_13": true,
+ "novel_chars": 4847,
+ "novel_truncated_at": 12000
+}

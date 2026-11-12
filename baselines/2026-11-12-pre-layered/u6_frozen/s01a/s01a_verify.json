@@ -1,0 +1,31 @@
+{
+ "schema": "s01a_verify.v1",
+ "shot_count": {
+  "old": 13,
+  "new": 13
+ },
+ "shot_object_digest_deltas": [
+  {
+   "index": 8,
+   "changed_keys": [
+    "frame_layouts"
+   ]
+  }
+ ],
+ "unchanged_shots": 12,
+ "revision_new": "84ff4112e6f66494",
+ "L1_structure": {
+  "pass": true,
+  "fail_count": 0,
+  "warn_count": 8,
+  "fails": []
+ },
+ "L3_cross_field": {
+  "issue_count": 0,
+  "failure_count": 0,
+  "by_code": {},
+  "failures": [],
+  "shot8_issues": []
+ },
+ "shot2_identity_unchanged": true
+}

@@ -1,0 +1,40 @@
+{
+ "env": {
+  "TEXT_TRANSPORT_RETRIES": "0",
+  "TEXT_TRANSPORT_CONNECT_RETRIES": "0",
+  "AUDIT_PARSE_RETRIES": "0"
+ },
+ "submit_attempts": {
+  "transport_connect": 1,
+  "transport_timeout": 1,
+  "server_error": 1,
+  "rate_limit": 1,
+  "truncation": 1,
+  "parse": 1,
+  "fatal": 1,
+  "unknown": 1
+ },
+ "provider_retry": {
+  "deepseek_sdk_max_retries": 0,
+  "agent_plan_guarded_second_attempt": "provider 在 attempt>1 且绑定守卫时直接返回失败，不再发送"
+ },
+ "audit_with_blocking_missing_targets": {
+  "logical_calls": 1,
+  "attempts": 1,
+  "status": "ok",
+  "issues": 1,
+  "completion": {
+   "called": false,
+   "skipped": "budget_exhausted",
+   "requested": 1,
+   "filled": 0
+  },
+  "note": "AUDIT_PARSE_RETRIES=0 ⇒ 首调后 remaining_calls=0，A3 补全未发起；blocking 保留原样。"
+ },
+ "send_guard": {
+  "first_attempt_id": "att_1671a9e117154694",
+  "second_send_refused": true,
+  "second_error": "授权 u6probe01 的一次性发送资格已用（第 2 次被拒绝）",
+  "max_sends": 1
+ }
+}

@@ -1,0 +1,990 @@
+{
+  "schema": "aivideo.baseline_snapshot_manifest.v1",
+  "created_at": "2026-11-12T10:48:23",
+  "baseline_commit": "bc5c50e",
+  "baseline_branch": "master",
+  "purpose": "合并前上一版 Step01 结果留档，用于比对修复效果变好/变差；只读，不参与运行",
+  "python": "C:/Users/ee54/AppData/Local/Python/pythoncore-3.14-64/python.exe",
+  "total_files": 163,
+  "total_bytes": 4760546,
+  "files": [
+    {
+      "path": "compare.py",
+      "sha256": "8fef7c21368c973313c40d6556d4fe1677dfb54836ed6e9191d64c8f0f190b3e",
+      "size": 9139,
+      "origin": "created for this snapshot"
+    },
+    {
+      "path": "misc/untracked_baseline_20261112.zip",
+      "sha256": "a7651f3a3b45df6bf6d7358778b9477c17a1f54dedd23bd9c5a46a2b5abd4c3b",
+      "size": 39161,
+      "origin": ".pytest_tmp/baseline_20261112/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "README.md",
+      "sha256": "df57f5679229faedaf7309f8f75a5f93fba443261254376af7a970531bf7a759",
+      "size": 6189,
+      "origin": "created for this snapshot"
+    },
+    {
+      "path": "regression_baseline.json",
+      "sha256": "e254bc01649048e74f16a9af0043224f411de0d7559662d794f5fc50e12daadd",
+      "size": 4371,
+      "origin": "created for this snapshot"
+    },
+    {
+      "path": "s06_ab/phase2_20261112T072011/final_audit.json",
+      "sha256": "b74fc6938edb263f8789f05f6f55ed89fce9a321b34e303ff77bb4856e6f4a7d",
+      "size": 9358,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/phase2_20261112T072011/repair_diag.json",
+      "sha256": "26fefba25ea3cc6a481bc0818a706e4885f392121ac157c13aef1ca1960f29c2",
+      "size": 5232,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/phase2_20261112T072011/repaired_script.json",
+      "sha256": "07c91e774032dfbf7facfcb936079a71b2c8a226f705ee3cf4290661414a77c1",
+      "size": 174099,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/phase2_20261112T072011/summary.json",
+      "sha256": "e7c01014900cf548a1240cde222c837d73751fee7ecfaa899a79690feca0d61f",
+      "size": 573,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/prompt_pairs_20261112T070806/meta.json",
+      "sha256": "40fde942881b82da7f2127a2e3bf58d30ca612b0781daf42136b7e9f702b3adb",
+      "size": 485,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/prompt_pairs_20261112T070806/prompt_state_broken_new.txt",
+      "sha256": "f98b9d329b2c69d3d3874bfad289642527ffda9eab33f2fe24213e42389b3571",
+      "size": 14857,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/prompt_pairs_20261112T070806/prompt_state_broken_old.txt",
+      "sha256": "19629cc7357f767e0b365eca4a3833551ef90ca36c4948208a37bf2c41043948",
+      "size": 12474,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/prompt_pairs_20261112T070806/prompt_time_ellipsis_legal_new.txt",
+      "sha256": "c82e990d7ddda91b05e95ac4714d4c8d359fdff61e74e4cdf82f5ab7ce28ef40",
+      "size": 14892,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/prompt_pairs_20261112T070806/prompt_time_ellipsis_legal_old.txt",
+      "sha256": "076d1492ce00ad58993650c5e8fa95844b2a1d8fa6c3a1b1195a40d16d0e6eb6",
+      "size": 12466,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/prompt_pairs_20261112T070806/prompt_voice_broken_new.txt",
+      "sha256": "1968d96074478996f613118b0a099ae3071f9f519290868be1ee35ff57d5dd1b",
+      "size": 14952,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/prompt_pairs_20261112T070806/prompt_voice_broken_old.txt",
+      "sha256": "2087a855b629b1faf99711e66cd6e5eeef07d437bd495af5951191fda6d7bf61",
+      "size": 12569,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/prompt_pairs_20261112T070806/results.json",
+      "sha256": "90fe74fbf1f54f983c5d04f49b8ac33daca32d870a9c30c2643dc6b1d3edbdeb",
+      "size": 6035,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/runs_20261112T070909/meta.json",
+      "sha256": "4566926a66544948f9c50a38e40e029cb8b8cd3939ff1d825b68afb02d069ecc",
+      "size": 485,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/runs_20261112T070909/results.json",
+      "sha256": "b8357f72b8712fa1c57f7a9e662ca063583d225961a4d2c2de8e81ad97a06d6d",
+      "size": 20885,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/runs_20261112T070909/sends.jsonl",
+      "sha256": "fd352045ca8f7d37b1c1db0e8629de729f6b8ecf2e347172cb5470758fefab89",
+      "size": 581,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/tools/analyze_phase2.py",
+      "sha256": "8edb61d4acdd6eaf9656b32bda44468cbf6f6f98a3eafa9c5aee3b85edadcac0",
+      "size": 3893,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/tools/audit_old.py",
+      "sha256": "75f452c305c80d8405a58357795904cea541d399fd60341aa15d23bed59a1bba",
+      "size": 79087,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/tools/compare_ab.py",
+      "sha256": "dacb0fcc7b03d25638e7f03c7de8740950124a90351dc7dc7ad6d0059b0d82ee",
+      "size": 2426,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/tools/run_audit_ab.py",
+      "sha256": "0a148728aaea99031568508e185918b507b3a44586956a049eac1c5d35101626",
+      "size": 6420,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "s06_ab/tools/run_phase2.py",
+      "sha256": "8e6d7d57a8b6a45249f111e060250e79e916bfd1c3a5e62c324ee63fb863774b",
+      "size": 4718,
+      "origin": ".pytest_tmp/s06/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "source_bc5c50e/audit.py",
+      "sha256": "26dd790025aa2d35c4b24af40160f6755f2dd9d1f2a038962f52694a72e11297",
+      "size": 82567,
+      "origin": "git show bc5c50e:step01_script_gen/<name>"
+    },
+    {
+      "path": "source_bc5c50e/audit_adjudication.py",
+      "sha256": "c0eea426ef939c328c8d66aabf2aa2b325a3400b2d3dfe0ff188bf21b9eb2dac",
+      "size": 31574,
+      "origin": "git show bc5c50e:step01_script_gen/<name>"
+    },
+    {
+      "path": "source_bc5c50e/main.py",
+      "sha256": "3b7fa235758f6a98ed1193df2d377d4c547b6a516f2f6564f675cca8f295a49c",
+      "size": 734004,
+      "origin": "git show bc5c50e:step01_script_gen/<name>"
+    },
+    {
+      "path": "source_bc5c50e/repair_fields.py",
+      "sha256": "e39e4bd0d63dc0668f6b4a637630b2f67961773b7cf0aab3f3affc158ff382a4",
+      "size": 78180,
+      "origin": "git show bc5c50e:step01_script_gen/<name>"
+    },
+    {
+      "path": "source_bc5c50e/resume.py",
+      "sha256": "4c922759b671032ccbf6b64a440ddb51e8b70762fe9d7c0b391988c171c3c5f8",
+      "size": 18390,
+      "origin": "git show bc5c50e:step01_script_gen/<name>"
+    },
+    {
+      "path": "source_bc5c50e/revision_route.py",
+      "sha256": "fbac6276e0c87568c48f1fdd8cf5037ba4b459689f76f14bea009fb651043cee",
+      "size": 7023,
+      "origin": "git show bc5c50e:step01_script_gen/<name>"
+    },
+    {
+      "path": "source_bc5c50e/script_findings.py",
+      "sha256": "76966350ecc608eb85fb0b8f2ae8c1f69f06a2d2bf612a4e60283a89d1402a8f",
+      "size": 43666,
+      "origin": "git show bc5c50e:step01_script_gen/<name>"
+    },
+    {
+      "path": "source_bc5c50e/validation.py",
+      "sha256": "177ecab770791faa5efa26d87c586ca4c7cb003c8b34660baddf8b554e71bf02",
+      "size": 441044,
+      "origin": "git show bc5c50e:step01_script_gen/<name>"
+    },
+    {
+      "path": "step01_outputs/chapter_001/script_result.json",
+      "sha256": "7b4ab0019730911233cb1cc85cdd99f5fa4432c367e78af2837e6c046120caac",
+      "size": 175314,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/chapter_001/step01_adoption.json",
+      "sha256": "4c9b087d254702100c84168869c5af6ceaa11e9014c0d7c66b4cfd0ad1bbe0d3",
+      "size": 4251,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/chapter_001/step01_audit.blocked.json",
+      "sha256": "cd289488ae7ea0105ae2e6a5866c9df82e9c605f1b9b40053e165222fb0a61fa",
+      "size": 14028,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/chapter_001/step01_audit.json",
+      "sha256": "a4e977d8a05e952c75da8907d73c2d51ae3f67166a6c0b734dfa6c73bf84232d",
+      "size": 7193,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/chapter_001/step01_audit_rounds.json",
+      "sha256": "febbea2340067be0d450a16ee1d3100e8d97286459c0e4c45d69b5862c201a0c",
+      "size": 121358,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/chapter_001/step01_commit.json",
+      "sha256": "88f572a70ad2f671bf98b6888af3fdda758dcf1c34aa3bd8b4ab5c11d15b7b8b",
+      "size": 1018,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/chapter_001/step01_publish_journal.json",
+      "sha256": "47282a0a465f02c1733833d7878b4342954f32d12e8f8a839c9c68506c196b10",
+      "size": 361,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/chapter_001/step01_quality.json",
+      "sha256": "e558d99a010d274641a30cf73d56ebdb3b83473c81222271a0794b5910fdfba1",
+      "size": 50411,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/chapter_001/step01_repair_rounds.json",
+      "sha256": "e229ba8326eac8bd64cbb53e6e1487665a8c4faad49e7c519fc82a0e9ef2c2db",
+      "size": 10344,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/chapter_001/step01_resume.json",
+      "sha256": "a7c3ffd502666d65920b8ea6807a33396f6459079ce89827ac34d86cf8ce1b78",
+      "size": 2302,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/chapter_001/step01_send_budget.json",
+      "sha256": "0fe3d4c45f7291f6499c4ca0771192c199bc05e6e750605273a24342ac5b511c",
+      "size": 165,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/chapter_001/step01_source_budget_receipt.json",
+      "sha256": "259d7a541f2da9099843a7778093b35167d668a271f9f7a98347e2981dd43811",
+      "size": 2143,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/chapter_001/step02a_image_budget.json",
+      "sha256": "a80abad5d6b8dcbc2271b295f1321c47a6f046e404b981f449d040b658bdded3",
+      "size": 91,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/chapter_001/step02a_prompt_quality.json",
+      "sha256": "c55a46c2a6f8b67d76933edcafb3eea4d4c5ae4ce8e69973156d60a041acea65",
+      "size": 1496,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/chapter_001/step02a_quality.json",
+      "sha256": "999358814b114c1db01abe01a930e54b3cc8339f57db5fc21a4ec0050e04acfa",
+      "size": 1065,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/run_review_20261013/script_result.json",
+      "sha256": "c47950fd2e1958b7eae6be50b6ebd614e14dc6725d82860eff58219d55837219",
+      "size": 99627,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/run_review_20261013/step01_audit.advisory.json",
+      "sha256": "8f10f20f79a0cdd3f1ea7dba51b88046c43a244ccdc0d48754e41c455b162ebf",
+      "size": 10989,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/run_review_20261013/step01_audit.blocked.json",
+      "sha256": "57d73bb493f433881a6582982e654e6765d997cf460b826e8050256e5d07a914",
+      "size": 10817,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/run_review_20261013/step01_audit.initial.json",
+      "sha256": "adc34dfb143d471c1ac3c042875bc72adfbabb57e1b7a76d3b07e54a94f23e9e",
+      "size": 8553,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "step01_outputs/run_review_20261013/step01_audit.json",
+      "sha256": "279eb6cabbd017bd72023489ca583dbd5f40862260dd2b3941883a6937da63d1",
+      "size": 11346,
+      "origin": "output/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/add_d1_speaker_evidence.py",
+      "sha256": "f1bd63a39b60cc9133ac656e9b879a36cb18a787df4ef9e426679b40e26acc7d",
+      "size": 1431,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/candidate_d1a/candidate.json",
+      "sha256": "3f88a060082173ca36cdcb6f14f94002843d502fe09930812ea13dc3bf42321f",
+      "size": 149305,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/candidate_d1a/candidate.pre_s01a.json",
+      "sha256": "0305bc41987d58468f0a98b2bf9eb32e4356050fccfa71afac610d3525daec04",
+      "size": 149655,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/candidate_d1a/candidate_d1a_reading.md",
+      "sha256": "18ecc6f6a43d00277e999a8d40d88b9ab1e651e00684ce4b783d4177a0f0f8c6",
+      "size": 50827,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/candidate_d1a/candidate_d1a_reading.pre_s01a.md",
+      "sha256": "210f3469498ddbc20c70a2db5e9c0b9e8b2714e22c70284f51225966e814163c",
+      "size": 50993,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/candidate_d1a/edit_spec.json",
+      "sha256": "aad21ecf04117dcc0bd91a88e6eaf95b611bd18b6951bee187a46b6031443d0d",
+      "size": 104697,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/candidate_d1a/edit_spec.pre_s01a.json",
+      "sha256": "8ee74dd0a2977ccc918091499d754b6f7f9108eec7985d835825fdc6071f28ea",
+      "size": 104379,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/candidate_diff.json",
+      "sha256": "c9d1c43d70874dd0cbccdad524e285f37150114d8cd9fe5faada63adcedbafd7",
+      "size": 3139,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/fix_candidate_kfs0.py",
+      "sha256": "a817ae7e2561ee67ea2b66a94eeb2df9d71ebc3e18353d53747bda431aefe617",
+      "size": 11118,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/full_pytest.log",
+      "sha256": "d610719928c123dd26a6e61b82319730226ae85178dbc88dadba8570ddcc7618",
+      "size": 27622,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/global/chapter_cache/chapter_001_scenes.json",
+      "sha256": "9c0a6ec4e3cabd168fe7e553f02314529c56aef159bfd3dfa55b05f0b7c645bf",
+      "size": 963,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/global/characters_bank/characters_bank.json",
+      "sha256": "30868382956bdecde3274099c039249d43881fba457a101d1e6d734d84f92c3a",
+      "size": 3506,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/global/props_bank/props_bank.json",
+      "sha256": "ef0066cb44a349c026c0dc839f6a514159a6d8918b16ddffe2d6d6464e4f4eee",
+      "size": 3638,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/global/props_bank/油纸伞/prop_hallucination.json",
+      "sha256": "71def67772de780299c09edf6a546e1844a3648f84a3006751a9acc6bc4c3f84",
+      "size": 238,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/global/props_bank/油纸伞/prop_qc_log.json",
+      "sha256": "c11903ad0c2f7c070e15c4b3a42ec51d35eff836509e4d9a2b1a08369c688210",
+      "size": 481,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/global/props_bank/酒壶/prop_hallucination.json",
+      "sha256": "4255098d15fcf10a099883254f753d64876548ff37578efd659e7878c204f8c6",
+      "size": 51,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/global/props_bank/酒壶/prop_qc_log.json",
+      "sha256": "fc7d798b27350526990188897defdc53908a2caa11e504fb0e6bd3f50000e579",
+      "size": 282,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/global/props_bank/钓杆/prop_hallucination.json",
+      "sha256": "4255098d15fcf10a099883254f753d64876548ff37578efd659e7878c204f8c6",
+      "size": 51,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/global/props_bank/钓杆/prop_qc_log.json",
+      "sha256": "ed0a9307b07e919b698f9487abead81209e0dcc1183e731b18578214eb6a3e88",
+      "size": 282,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/global/scenes_bank/scenes_bank.json",
+      "sha256": "ea2316402a8934d6b1e515675a85fc06389ee3c1ceb37749daeeb50dac172e1e",
+      "size": 2907,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/global/voice_registry.json",
+      "sha256": "20c02d9e780453e44258a4eee4a45782a80fb6267a4da2c5eb4422b1487b92af",
+      "size": 498,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/_enhancement/u5_iso/tts/attempts/tts-20261110T131821-8435/logs/step03.log",
+      "sha256": "a0bcccc0059fe9774cab54eaa1535d4d8d38168d15b4717e3c7ae4e34fa37470",
+      "size": 257,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/_enhancement/u5_iso/video/logs/step02b.log",
+      "sha256": "b9a74f29fb8c092a21955f927f471b1cd78611182482ad377c58b3b764bcdfa8",
+      "size": 456,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/script_result.json",
+      "sha256": "3f88a060082173ca36cdcb6f14f94002843d502fe09930812ea13dc3bf42321f",
+      "size": 149305,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/script_result.pre_s01a.json",
+      "sha256": "0305bc41987d58468f0a98b2bf9eb32e4356050fccfa71afac610d3525daec04",
+      "size": 149655,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/step01.log",
+      "sha256": "c5eeb5b13824def4cb97c5ee6bf7cfd0c775c9c81e9a76ec4e0b07e47976e082",
+      "size": 75474,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/step01_quality.json",
+      "sha256": "1f6ad9fa640e4059195c67b6baea915f1313c2c9625bac5bb266d0c06045d791",
+      "size": 48872,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/step01_quality.pre_s01a.json",
+      "sha256": "49ea5bb699a49449f9a164229e53818dbd5d68a91699fe5a6f0d0b1900ba1802",
+      "size": 49782,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/2/first_frame_hallucination.json",
+      "sha256": "4255098d15fcf10a099883254f753d64876548ff37578efd659e7878c204f8c6",
+      "size": 51,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/2/first_frame_qc_log.json",
+      "sha256": "c7c0e47f33650650fcafd65cdff9fa3d12639d98203c0a01a292b173ed8dfc02",
+      "size": 1691,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/2/keyframe_0_hallucination.json",
+      "sha256": "4255098d15fcf10a099883254f753d64876548ff37578efd659e7878c204f8c6",
+      "size": 51,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/2/keyframe_0_qc_log.json",
+      "sha256": "56573d08dbdbede47d27733a55b6a3db549741bae6613fdf57f00a8fa370fbd3",
+      "size": 847,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/2/keyframe_1_hallucination.json",
+      "sha256": "e9d0541f08f09af2e27b8dac7ee2c60bb0ce3164539e4dc22aa65f2f49b4ae79",
+      "size": 298,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/2/keyframe_1_qc_log.json",
+      "sha256": "0fc2102e9b4ba25aa22d88029060cd3ae719f1336ab32c1329b47bd1607353f0",
+      "size": 1106,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/2/keyframe_2_hallucination.json",
+      "sha256": "4255098d15fcf10a099883254f753d64876548ff37578efd659e7878c204f8c6",
+      "size": 51,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/2/keyframe_2_qc_log.json",
+      "sha256": "2af8a3f6d8b0bfecb46e92713242c6dd327adf2b1e59c9e002298426d3d85185",
+      "size": 847,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/2/last_frame_hallucination.json",
+      "sha256": "71def67772de780299c09edf6a546e1844a3648f84a3006751a9acc6bc4c3f84",
+      "size": 238,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/2/last_frame_qc_log.json",
+      "sha256": "3cf7189087e9acf1ed33217215fc09148826016465291c7594e3e2fca7ade1f7",
+      "size": 1046,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/2/ref_compose_ff.json",
+      "sha256": "93593797b17e5e14fec03f5cf69211eb115b2a05ab46d2738e5adf7d6f1d84c1",
+      "size": 2060,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/2/ref_sheet_ff_chars_杨旭+听香_a3f68e05f200118b8e1a.refmap.json",
+      "sha256": "491975d48905b3f03f09aa647ccbfd25cd62b403361a5bf8d54ba21b162b22b6",
+      "size": 1254,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/iso/output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/2/shot_description.json",
+      "sha256": "7791c55150388d056ed2d3d879b2ddab7e934bc41d1812edb2b11d0be961cd20",
+      "size": 1560,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/l1_l2_evidence.json",
+      "sha256": "e97a1d8a3f7b62a869c3ed7cd6972ae9aae34bb6078a84dbdc9469b71f7aae8a",
+      "size": 3762,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/l2_d1_speaker_probe.json",
+      "sha256": "8d9a6a350b1bc5e9c880a484d7346f728bc0ca9ad5bfc0231747f0388abe3400",
+      "size": 4176,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/make_u6_package.py",
+      "sha256": "ea8f0c2cfd4cbec023f16a470412d5de8b167b0791bc99f4b8790b38cfa8ff80",
+      "size": 6324,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/probe_d1_speaker.py",
+      "sha256": "686543f70fc1e3d9444674940a3c0c937419ce7324ceb0cf08eaa8d93d80c872",
+      "size": 3278,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/probe_prompt_scope.py",
+      "sha256": "9341edafc7bd4c43e900d831b3adcef1e1aa687f01f53763e0b908ebcc9ad8b0",
+      "size": 1427,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/probe_u6_audit_scope.py",
+      "sha256": "4508d566a8ecdb2d665af4ff805a12689bf68fa0647f3e1b67c8cb279c1d251b",
+      "size": 6241,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/probe_u6_image_qc_budget.py",
+      "sha256": "0f46d5e7be5dde3770cb67085dd1e6db703512bf9583de06d1b204fda9e44945",
+      "size": 3383,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/probe_u6_shot8_layout.py",
+      "sha256": "05e2a0852021fac414f750e0ea8d7ff01f9fae9f0718832d836a4996f539736a",
+      "size": 2605,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/probe_u6_single_send.py",
+      "sha256": "d4844506ea727a65561b9d9345cafecada8b73577ea2b76d321575ea7f8d1abe",
+      "size": 3974,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/s01a/s01a_apply.json",
+      "sha256": "0ba62ed3dbe1b3655612b6b88f40807dd6402ad80d21987b234a47d537d998e7",
+      "size": 3116,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/s01a/s01a_probe.json",
+      "sha256": "8d9040d37d17ff0a050af5ba479be2aed3a73c2c3303e5e2ebe38f8f2b93198c",
+      "size": 1272,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/s01a/s01a_verify.json",
+      "sha256": "095bbd68404b2b0a3e5a35a8a5894154d2eaf0207f70521139c82b99b841a5c3",
+      "size": 522,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/s01a_rebuild.py",
+      "sha256": "43ce66c074dfcf3a3199bfe4c51d7f0af7a466ae24c22d4dedae60853c155c50",
+      "size": 7842,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/s01a_verify.py",
+      "sha256": "c6ae92111042b37fa8d66741e83742701f7b4e0623c6c20b389392d49be57999",
+      "size": 3392,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/summarize_s03.py",
+      "sha256": "a80974072742ebc2c3692462051db9ed01d82540307cf59119290456cc158b21",
+      "size": 3219,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/tls_preflight.py",
+      "sha256": "c3ef7ce9f1f6327056e2a26ba478ae67c6da571c81511b9b1f17a8675757aa09",
+      "size": 1540,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u1_baseline_manifest.json",
+      "sha256": "b1923b3cf21efc219d328b364c3833abe713214cd334fdacebc698f17cff08e4",
+      "size": 4678,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u2_cross_field.json",
+      "sha256": "111784e34c40fa717061cbf7fa33d7039db912ee3a2ec560ee5368542c5ac2d7",
+      "size": 74,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u3_refs.json",
+      "sha256": "0e56a73e418ff8ff90c4003c19dbcedc36ee301818402f1c5c3ee69aa729eaaf",
+      "size": 3206,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u4_qc_states.json",
+      "sha256": "e42a1d1912c071dc14164b45f2321ee2eb940eff3269969ef98658b0baf34922",
+      "size": 3175,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u5_iso_evidence.json",
+      "sha256": "069e3356eb95fb7978feffcdc9e65b6c617aaea3f4dd42d9b50dd0c8e633d72b",
+      "size": 791,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u5_layers.json",
+      "sha256": "cec99e33dc24455c22bb40e3f901849761199c2dce269f5d4bfcacbaa88dc042",
+      "size": 851,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u5_shot2_hash.json",
+      "sha256": "b8652d99aa1c7e4e83d9877433acc5bfdfe58d95ce833e6d8639f42a9eda5a6a",
+      "size": 542,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_audit_scope_and_downgrade.json",
+      "sha256": "7027dd820dc87ceaec9d4ba2364edbbceb7224117836a0baf7b8d8d3f6e8720d",
+      "size": 18869,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_image_qc_budget.json",
+      "sha256": "2bcffd4b9dbe6a11a4041bcbfbac064a52457a85e0f3078391e7f3f9a8156940",
+      "size": 2226,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_kfs0fix/old_probe/output/锦衣夜行/part_01_杀青州/chapter_001/step01.log",
+      "sha256": "00639c3afd75d3ad5f0dd55ffda6514e2edb7b8fae4a453187d5d64941427b2e",
+      "size": 2800,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_kfs0fix/output/锦衣夜行/part_01_杀青州/chapter_001/step01.log",
+      "sha256": "89337f67b8edb0647f53ae595bfb878b64322e8668f470e132d9c434777f0141",
+      "size": 57561,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_kfs0fix/prompt_scope.json",
+      "sha256": "a6e93687ad2bfcfea3778f1df5068b344d4f178909bf1d5a9f63383f4310b342",
+      "size": 298,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_kfs0fix/script_projected.json",
+      "sha256": "07c91e774032dfbf7facfcb936079a71b2c8a226f705ee3cf4290661414a77c1",
+      "size": 174099,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_kfs0fix/step01.log",
+      "sha256": "2d999b95dc9fdb6da49f16f4f60e785299dde497d0f38be2ef489107e02318a4",
+      "size": 157521,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_kfs0fix/step01_quality.before_repro.json",
+      "sha256": "9a0111893db398229b591bb34239e0d277e952ef582b9934d74d62a883585e84",
+      "size": 47726,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_kfs0fix/step01_quality.json",
+      "sha256": "db276e715a0f39d2bc058b188c909e8871171c6b5baed3ab6b5c6db765058319",
+      "size": 47726,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/audit_package.json",
+      "sha256": "519000869e9003719ac9a66704abc2952c66207bdd05948d3a9d50a58f6efa76",
+      "size": 5236,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/audit_package.pre_authorization.json",
+      "sha256": "62d3b0567f906b69e2afee29ce7b2b917f994aa9d8f92d6e67f96be7002eab88",
+      "size": 4001,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/audit_package.pre_s01a.json",
+      "sha256": "3a363305d8258b4c2f2d6bb4fe1dd12e11cd1e3c60c4efd049db71b17574dd8a",
+      "size": 4039,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/dryrun/step01.log",
+      "sha256": "63a80319e9e76dc7c4306883ad2c69c3da9bd2d2403a2b1b20b82d087da81578",
+      "size": 2800,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/dryrun2/step01.log",
+      "sha256": "d7dcea8d0dc8d55cd697a8abfacc9d9a3c92ca5c8742089a8d74020ed0258e8b",
+      "size": 2800,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/dryrun3/step01.log",
+      "sha256": "a9962a9de6f6888d91b8ac4e5e35e2092a6d0b6d2711af24b538526a52d9da83",
+      "size": 2800,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/dryrun_kfs0fix/step01.log",
+      "sha256": "32b2dbd476aac99635e0b66eb9348d22ee1f195f0c9c57697396da0a0f6c3ebf",
+      "size": 2800,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/dryrun_kfs0fix2/step01.log",
+      "sha256": "e3e2cf604df1d9411912bfbac40061eff2778222778d77a7273e6156a11a088f",
+      "size": 2800,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/dryrun_s02_20261111/step01.log",
+      "sha256": "a67e4a608358c37d7ff6e012fc7c74e748bd752efe31b89b7b16724f1ca2670e",
+      "size": 2800,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run/budget_receipt.json",
+      "sha256": "65a415fe034cba9c0160940dc6e6891625b99a4e0cf4b4e49f9f73ba0e44a7e0",
+      "size": 2186,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run/output/锦衣夜行/part_01_杀青州/chapter_001/snapshots/script_result_20261110_231623.json",
+      "sha256": "07c91e774032dfbf7facfcb936079a71b2c8a226f705ee3cf4290661414a77c1",
+      "size": 174099,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run/output/锦衣夜行/part_01_杀青州/chapter_001/snapshots/step01_20261110_231623.log",
+      "sha256": "d37015ea57847f29fc48fa83bfe775eafcfd8e372c63cad35d75b95f7e9e0664",
+      "size": 652,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run/output/锦衣夜行/part_01_杀青州/chapter_001/snapshots/step01_audit_20261110_231623.json",
+      "sha256": "d17249e691fff61ea3bf176438196d737ea394b2e04de350ba8a6dbdf8e3d4ca",
+      "size": 1201,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run/output/锦衣夜行/part_01_杀青州/chapter_001/step01.log",
+      "sha256": "9cb62a40d60916d48bf5058366eb2dcd995062675da0335ac1ffa4555abcec43",
+      "size": 597,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run/output/锦衣夜行/part_01_杀青州/chapter_001/step01_audit.blocked.json",
+      "sha256": "d17249e691fff61ea3bf176438196d737ea394b2e04de350ba8a6dbdf8e3d4ca",
+      "size": 1201,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run/output/锦衣夜行/part_01_杀青州/chapter_001/step01_audit_rounds.json",
+      "sha256": "4ab11e4c549adac85f68260d48e2726367428f0319e9986263d8d40aaf70a8a3",
+      "size": 1328,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run/output/锦衣夜行/part_01_杀青州/chapter_001/step01_commit.json",
+      "sha256": "ba0ede6b75c3ce6e98d6f39beb72750fea42ee91fac971b3fc7bd20998f5a904",
+      "size": 1343,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run/step01.log",
+      "sha256": "48ebd031866936f7fe37af1439fc4a6fd679957b1db088d48eb63bbddc128997",
+      "size": 25461,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run.log",
+      "sha256": "bd8559ef0eb983f0df07d652f021f35548e91c504ed0493948fd24e274a9f55d",
+      "size": 10411,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run_s02_20261111/budget_receipt.json",
+      "sha256": "95dbda2a5191cf0bfcb787eb630a7d6d8e3b808d07e7f614f85350b8edc17dd8",
+      "size": 2201,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run_s02_20261111/output/锦衣夜行/part_01_杀青州/chapter_001/snapshots/_blocked_revisions.json",
+      "sha256": "03ddf4a788bb7c4dd67be495510e1a4f406918aaf48a066caa6dc3c6d82c3b2f",
+      "size": 788,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run_s02_20261111/output/锦衣夜行/part_01_杀青州/chapter_001/snapshots/script_result_20261111_212850.json",
+      "sha256": "07c91e774032dfbf7facfcb936079a71b2c8a226f705ee3cf4290661414a77c1",
+      "size": 174099,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run_s02_20261111/output/锦衣夜行/part_01_杀青州/chapter_001/snapshots/step01_20261111_212850.log",
+      "sha256": "ba7bf0bc501a1f725e2a466bb8c650767de4e95ab6b69b030bba6304e0c05ade",
+      "size": 1978,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run_s02_20261111/output/锦衣夜行/part_01_杀青州/chapter_001/snapshots/step01_audit_20261111_212850.json",
+      "sha256": "11b518cdb2810e3eeb69822cebb1966a751b66fd61dd6fa1c055cb777ee56d96",
+      "size": 9283,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run_s02_20261111/output/锦衣夜行/part_01_杀青州/chapter_001/step01.log",
+      "sha256": "5c0fdb2618a5bff6176d3bde8490deb7ea6940fc334ae011d2d63f872fc9e3c2",
+      "size": 1922,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run_s02_20261111/output/锦衣夜行/part_01_杀青州/chapter_001/step01_audit.blocked.json",
+      "sha256": "11b518cdb2810e3eeb69822cebb1966a751b66fd61dd6fa1c055cb777ee56d96",
+      "size": 9283,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run_s02_20261111/output/锦衣夜行/part_01_杀青州/chapter_001/step01_audit_rounds.json",
+      "sha256": "8a8955e9870ae252f2b0e2218b5db478b4e794d94b721d55eee559fceaebd9f5",
+      "size": 9921,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run_s02_20261111/output/锦衣夜行/part_01_杀青州/chapter_001/step01_commit.json",
+      "sha256": "95050a79aa726bf57d051aeda993c5f7ed2843c98b27ad9c0c562adb655e01d8",
+      "size": 1767,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run_s02_20261111/step01.log",
+      "sha256": "c6843763a14d3a6d9e395cfd780811d6d82dfa3a609fb296892d6b887966a171",
+      "size": 24986,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/run_s02_20261111_console.log",
+      "sha256": "8c9c6ee788e6960e47933637578cd7b58e145864583429543926c5e54f4988a5",
+      "size": 15370,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_package/tls_preflight.json",
+      "sha256": "a364c187a420f947a3a6703b9c2d629f5115360be9a73ea42504966964d04879",
+      "size": 667,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_probe/output/锦衣夜行/part_01_杀青州/chapter_001/step01.log",
+      "sha256": "2b0cdebb900f8a1a1fa57a03906c0fc1de8eb64026ab2182566e9e8c8c5bf584",
+      "size": 5761,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_s03_result.json",
+      "sha256": "0550d646397ac637796e863037a82cc357b000342924ea2c27cc179420e1a7cc",
+      "size": 8289,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_shot8_layout_fixed.before_repro.json",
+      "sha256": "b4f8806a551a56474200db669fd3bcd0d8eed1848268ae2c010c5f4f513bcd8b",
+      "size": 36126,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_shot8_layout_fixed.json",
+      "sha256": "b4f8806a551a56474200db669fd3bcd0d8eed1848268ae2c010c5f4f513bcd8b",
+      "size": 36126,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_shot8_layout_risk.json",
+      "sha256": "518eb14ef9d7456624019060ff7cca6700712d7dd1c0911807cc1a44a7a88a3b",
+      "size": 3919,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/u6_single_send_controls.json",
+      "sha256": "0f75bda83fb3245b08bcd68131714ab6dc18c2ea6f6f92d5bf840345f3d5d8b7",
+      "size": 1063,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    },
+    {
+      "path": "u6_frozen/verify_kfs0_fix.py",
+      "sha256": "8cc32baebeb44d49ae8629da4d9621c3dd9845cc1d75ad390bfac2d6fcba5904",
+      "size": 14595,
+      "origin": ".pytest_tmp/u1_u5_closeout_20261110/ (gitignored, master 工作树)"
+    }
+  ]
+}

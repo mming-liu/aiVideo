@@ -1,0 +1,10 @@
+{
+  "has_hallucination": false,
+  "issues": [
+    {
+      "category": "extra_person",
+      "description": "白色人物出现 2 次，名单中该色角色不足 2 个。若为夜色阴影/同色服装误读可忽略；否则疑似角色被复制",
+      "severity": "warning"
+    }
+  ]
+}

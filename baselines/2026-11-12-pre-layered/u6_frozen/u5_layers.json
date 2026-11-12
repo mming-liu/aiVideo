@@ -1,0 +1,54 @@
+{
+ "L1_structure": {
+  "pass": false,
+  "fail_count": 4,
+  "warn_count": 12,
+  "fails": [
+   {
+    "index": 2,
+    "checks": [
+     "coverage"
+    ]
+   },
+   {
+    "index": 3,
+    "checks": [
+     "coverage"
+    ]
+   },
+   {
+    "index": 4,
+    "checks": [
+     "coverage"
+    ]
+   },
+   {
+    "index": 8,
+    "checks": [
+     "coverage"
+    ]
+   }
+  ]
+ },
+ "L2_content": {
+  "plan_problems": [],
+  "dialogue_kept": 0,
+  "dialogue_rejected": [],
+  "narration_source_problems": []
+ },
+ "L3_cross_field": {
+  "issue_count": 0,
+  "failures": [],
+  "by_code": {}
+ },
+ "L4_quality": {
+  "status": "PASS",
+  "blocking": false,
+  "hard_count": 0,
+  "visual_risk_count": 0,
+  "advisory_count": 85,
+  "checker_failed": false,
+  "rule_source_fingerprint": "593deea03c7cddc6",
+  "blocking_categories": []
+ }
+}

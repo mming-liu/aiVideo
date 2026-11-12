@@ -1,0 +1,6 @@
+{"seq": 1, "sample": "time_ellipsis_legal", "contract": "old", "status": "ok", "elapsed_sec": 114.3}
+{"seq": 2, "sample": "time_ellipsis_legal", "contract": "new", "status": "ok", "elapsed_sec": 83.2}
+{"seq": 3, "sample": "state_broken", "contract": "old", "status": "ok", "elapsed_sec": 111.3}
+{"seq": 4, "sample": "state_broken", "contract": "new", "status": "ok", "elapsed_sec": 72.1}
+{"seq": 5, "sample": "voice_broken", "contract": "old", "status": "ok", "elapsed_sec": 105.7}
+{"seq": 6, "sample": "voice_broken", "contract": "new", "status": "ok", "elapsed_sec": 47.8}

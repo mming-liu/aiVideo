@@ -1,0 +1,17 @@
+{
+  "run_dir": "C:\\myFloders\\git\\aiVideo\\.pytest_tmp\\s06\\phase2\\20261112T072011",
+  "candidate_revision": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+  "repaired_revision": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+  "repair_sec": 41.0,
+  "audit_sec": 407.6,
+  "final_status": "ok",
+  "final_issues": 11,
+  "final_blocking": 0,
+  "usage": {
+    "input_tokens": 27782,
+    "output_tokens": 21836,
+    "reasoning_tokens": 20189,
+    "total_tokens": 49618
+  },
+  "audit_prompt_version": "857e4768d3dc"
+}

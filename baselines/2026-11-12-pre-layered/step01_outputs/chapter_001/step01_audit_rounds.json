@@ -1,0 +1,3526 @@
+[
+  {
+    "recorded_at": "2026-10-31T14:24:35",
+    "run_id": "20261031T142106-10528",
+    "phase": "commit_round",
+    "round": 1,
+    "reused": false,
+    "status": "ok",
+    "error": "",
+    "model": "deepseek-v4.1-flash",
+    "provider": "agent_plan",
+    "input_revision": "3cb102b7f5144164b5e31280def7cc712cda61bf58e69426fc4bfbabdaad7818",
+    "rule_source_fingerprint": "f8fe0d8f66752dec",
+    "duration_band": {
+      "min": 60.0,
+      "max": 120.0,
+      "target_min": 105.0,
+      "target_max": 115.0
+    },
+    "prompt_source_fingerprint": "5d2a5c3078661af8",
+    "audit_scope": "final_after_deterministic_fixes",
+    "audit_prompt_version": "e58119e5f0f0",
+    "audit_focus_version": "066a87e6da63",
+    "audit_temperature": 0.0,
+    "issue_count": 5,
+    "blocking_count": 0,
+    "schema_deviations": [],
+    "usage": {
+      "input_tokens": 30141,
+      "output_tokens": 19428,
+      "reasoning_tokens": 18640,
+      "total_tokens": 49569
+    },
+    "blocking": [],
+    "issues": [
+      {
+        "code": "model_audit_MISSING_CAUSE",
+        "severity": "advisory",
+        "message": "该段直接进入掌掴，前镜无听香再次尖叫或张十三怒极的触发，观众不明他为何突然打人。；建议：在 motion_desc 开头补一句听香再次尖叫/喊救命、张十三怒极，再转身挥掌。",
+        "shot_id": "13",
+        "frame_id": "ff",
+        "entity_id": "张十三",
+        "field_path": "motion_desc",
+        "evidence": "前1.4秒：张十三猛地转身，右手后引",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "13",
+            "field_path": "motion_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_STATE_CHAIN_CONFLICT",
+        "severity": "advisory",
+        "message": "首帧已披发且无步摇，但前镜无步摇被碰落、长发披散的过程，造型状态断层。；建议：在镜头10 motion_desc 前补步摇坠水、长发散落过程，或前镜补该动作，使 ff 的披发有来源。",
+        "shot_id": "10",
+        "frame_id": "ff",
+        "entity_id": "听香",
+        "field_path": "ff_desc",
+        "evidence": "披头散发",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "10",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "motion_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_ACTION_REPETITION",
+        "severity": "advisory",
+        "message": "镜头18尾已让佃仆提灯转身，本镜又从转身开始，同一动作重复，节奏拖沓。；建议：镜头18改为佃仆提灯静听/只半侧身，把转身动作留给镜头19。",
+        "shot_id": "19",
+        "frame_id": "kf1",
+        "entity_id": "佃仆",
+        "field_path": "motion_desc",
+        "evidence": "佃仆领命提灯转身",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "18",
+            "field_path": "motion_desc"
+          },
+          {
+            "shot_id": "18",
+            "field_path": "lf_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "只交代钓杆脱手，未交代右手酒壶；原文此处丢了酒囊洒酒，下一镜酒壶不再出现，道具状态未闭合。；建议：在 lf_desc/motion_desc 补右手酒壶脱手、酒水洒甲板，并同步杨旭 props 移除酒壶。",
+        "shot_id": "8",
+        "frame_id": "lf",
+        "entity_id": "杨旭",
+        "field_path": "lf_desc",
+        "evidence": "杨旭左手松开，钓杆已被拖入水中",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "8",
+            "field_path": "motion_desc"
+          },
+          {
+            "shot_id": "8",
+            "field_path": "lf_desc"
+          },
+          {
+            "shot_id": "8",
+            "field_path": "frame_layouts.lf[1].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_SOURCE_QUOTE_MISMATCH",
+        "severity": "advisory",
+        "message": "事件0描述水下静止潜伏，却引用原文“突然窜出”，动作依据与画面时序矛盾。；建议：改用与潜伏/水面暗影相符的原文，或删除该引用。",
+        "shot_id": "0",
+        "frame_id": "ff",
+        "entity_id": "神秘人",
+        "field_path": "temporal_plan.events[0].source_quote",
+        "evidence": "小舟一侧的水中突然窜出一道人影",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "0",
+            "field_path": "temporal_plan.events[0].source_quote"
+          }
+        ],
+        "repairable": true
+      }
+    ]
+  },
+  {
+    "recorded_at": "2026-11-07T22:50:40",
+    "run_id": "20261107T225039-18832",
+    "phase": "commit_round",
+    "round": 1,
+    "reused": true,
+    "status": "ok",
+    "error": "",
+    "model": "deepseek-v4.1-flash",
+    "provider": "agent_plan",
+    "input_revision": "57f05fa7b4fd8dfd9073852b6ba6fce943d0a5cc24e6fa2ff12cc6fa5f4962ce",
+    "rule_source_fingerprint": "7e0af5cff02d205a",
+    "duration_band": {
+      "min": 60.0,
+      "max": 90.0,
+      "target_min": 70.0,
+      "target_max": 80.0
+    },
+    "prompt_source_fingerprint": "3019ee06da1fca0b",
+    "audit_scope": "final_after_deterministic_fixes",
+    "audit_prompt_version": "75b217bc8626",
+    "audit_focus_version": "066a87e6da63",
+    "audit_temperature": 0.0,
+    "issue_count": 13,
+    "blocking_count": 5,
+    "schema_deviations": [],
+    "usage": {
+      "input_tokens": 21531,
+      "output_tokens": 23311,
+      "reasoning_tokens": 20833,
+      "total_tokens": 44842
+    },
+    "blocking": [
+      [
+        "3",
+        "model_audit_PROP_CONTINUITY"
+      ],
+      [
+        "7",
+        "model_audit_PROP_CONTINUITY"
+      ],
+      [
+        "8",
+        "model_audit_MISSING_CAUSAL_LINK"
+      ],
+      [
+        "12",
+        "model_audit_STATE_CHAIN_CONFLICT"
+      ],
+      [
+        "13",
+        "model_audit_MISSING_PLOT_ELEMENT"
+      ]
+    ],
+    "issues": [
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "visual_risk",
+        "message": "杨旭已持酒盏，听香又捧酒盏递来，酒盏数量和递盏动作重复矛盾；建议：删去杨旭手中酒盏，保留听香捧盏递向杨旭",
+        "shot_id": "3",
+        "frame_id": "ff",
+        "entity_id": "听香",
+        "field_path": "prompt",
+        "evidence": "左手持酒盏",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "3",
+            "field_path": "frame_layouts.ff[0].props"
+          },
+          {
+            "shot_id": "3",
+            "field_path": "frame_layouts.kfs[0][0].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "visual_risk",
+        "message": "上一镜短刃仍在神秘人手中，本镜消失且未交代留在伤口或带走；建议：在神秘人手中保留短刃，或明确短刃插在杨旭心口",
+        "shot_id": "7",
+        "frame_id": "ff",
+        "entity_id": "神秘人",
+        "field_path": "frame_layouts.ff[0].props",
+        "evidence": "该镜 ff 神秘人 props 为空数组（[]），无短刃",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.ff[0].props"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.kfs[0][0].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_MISSING_CAUSAL_LINK",
+        "severity": "visual_risk",
+        "message": "缺少听香尖叫、张十三闻声出屋问话的来源，观众不知他为何突然跃上船；建议：在跃起前补听香尖叫或张十三闻声出屋/问话的过渡",
+        "shot_id": "8",
+        "frame_id": "ff",
+        "entity_id": "张十三",
+        "field_path": "motion_desc",
+        "evidence": "前2秒：张十三在堤上纵身跃起",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "8",
+            "field_path": "motion_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_STATE_CHAIN_CONFLICT",
+        "severity": "visual_risk",
+        "message": "上一镜听香仍在船上点头，本镜完全消失，下一镜又出现在马车车厢；建议：在镜头12 的 ff/lf 及关键帧列表补听香条目，并在 prompt 中写出她仍在船上",
+        "shot_id": "12",
+        "frame_id": "ff",
+        "entity_id": "听香",
+        "field_path": "frame_layouts.ff",
+        "evidence": "ff/lf 人物列表只有张十三与群演，没有听香条目",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "12",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "ff_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_MISSING_PLOT_ELEMENT",
+        "severity": "visual_risk",
+        "message": "车厢只有听香，杨旭尸体未交代，张十三隐瞒死讯与扶公子回城的计划断裂；建议：在车厢内加入杨旭被扶/仰卧的可见交代，或明确尸体已转移",
+        "shot_id": "13",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "prompt",
+        "evidence": "车厢内听香一袭春衫披头散发倚坐",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "13",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "lf_desc"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.kfs[1]"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_KF_STAGE_MISMATCH",
+        "severity": "advisory",
+        "message": "关键帧设在3.0秒已没入，motion 写4-5秒才没入，结果提前；建议：将关键帧改为刺入中，或把 t_sec 后移到没入时刻",
+        "shot_id": "6",
+        "frame_id": "kf1",
+        "entity_id": "杨旭",
+        "field_path": "keyframes[1].desc",
+        "evidence": "短刃疾刺没入杨旭心口",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "keyframes[1].desc"
+          },
+          {
+            "shot_id": "6",
+            "field_path": "keyframes[1].t_sec"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_KF_STAGE_MISMATCH",
+        "severity": "advisory",
+        "message": "pre 关键帧已离船，ff 仅屈腿，motion 前2秒才倒纵，阶段提前；建议：将 pre 关键帧改为屈腿蓄势未离船，或把该帧 stage 改为 approach",
+        "shot_id": "7",
+        "frame_id": "kf0",
+        "entity_id": "神秘人",
+        "field_path": "keyframes[0].desc",
+        "evidence": "神秘人双腿屈弹倒纵离船",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "keyframes[0].desc"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "keyframes[0].stage"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_STATE_CHAIN_CONFLICT",
+        "severity": "advisory",
+        "message": "上一镜终态鱼线绷直、钓杆弯成弧，本镜无事件却变成垂落；建议：改为左手钓杆仍弯、鱼线绷直，保持咬钩张力",
+        "shot_id": "6",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "prompt",
+        "evidence": "左手钓杆垂落",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_FF_RESULT_LEAK",
+        "severity": "advisory",
+        "message": "ff 已完成转身扬手，motion 前2秒又重复转身扬手，动作重复；建议：ff 改为面向听香、右臂微抬，尚未完成扬手",
+        "shot_id": "10",
+        "frame_id": "ff",
+        "entity_id": "张十三",
+        "field_path": "ff_desc",
+        "evidence": "张十三转身扬手",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "10",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.ff[0].pose"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "keyframes[0].desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_FF_RESULT_LEAK",
+        "severity": "advisory",
+        "message": "ff 已完成俯身逼近并竖指，motion 前2秒又重复同一动作；建议：ff 改为转向听香、身体前倾但尚未竖指",
+        "shot_id": "11",
+        "frame_id": "ff",
+        "entity_id": "张十三",
+        "field_path": "ff_desc",
+        "evidence": "张十三俯身逼近听香，竖指于唇前",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "11",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.ff[0].pose"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "keyframes[0].desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_MISSING_CAUSAL_LINK",
+        "severity": "advisory",
+        "message": "只演到庄仆散去，没有吩咐备车，镜头13 马车直接停在门前缺少来源；建议：在 motion_desc/narration_segment 补张十三吩咐庄仆把马车赶到水边",
+        "shot_id": "12",
+        "frame_id": "kf1",
+        "entity_id": "张十三",
+        "field_path": "motion_desc",
+        "evidence": "前2秒：张十三立于船梢拱手",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "12",
+            "field_path": "motion_desc"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_TEXT_REPETITION",
+        "severity": "advisory",
+        "message": "同句连续重复，生成提示冗余且可能强化错误画面；建议：删去重复括号，只保留一次说明",
+        "shot_id": "6",
+        "frame_id": "ff",
+        "entity_id": "神秘人",
+        "field_path": "prompt",
+        "evidence": "（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_TEXT_ERROR",
+        "severity": "advisory",
+        "message": "“宝钞的，高价”断句错误，旁白语法不通；建议：改为“也不会花两百贯宝钞的高价把她买下”",
+        "shot_id": "3",
+        "frame_id": "ff",
+        "entity_id": "旁白",
+        "field_path": "narration_segment",
+        "evidence": "也不会花了两百贯宝钞的，高价把她买下",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      }
+    ],
+    "reuse_source": "disk"
+  },
+  {
+    "recorded_at": "2026-11-07T22:57:25",
+    "run_id": "20261107T225039-18832",
+    "phase": "commit_round",
+    "round": 2,
+    "reused": false,
+    "status": "ok",
+    "error": "",
+    "model": "deepseek-v4.1-flash",
+    "provider": "agent_plan",
+    "input_revision": "b36f00b4756d7a4ce2c4aac04dd81415ac4a8474abff295e0ce99a075808ee44",
+    "rule_source_fingerprint": "7e0af5cff02d205a",
+    "duration_band": {
+      "min": 60.0,
+      "max": 90.0,
+      "target_min": 70.0,
+      "target_max": 80.0
+    },
+    "prompt_source_fingerprint": "3019ee06da1fca0b",
+    "audit_scope": "final_after_deterministic_fixes",
+    "audit_prompt_version": "75b217bc8626",
+    "audit_focus_version": "066a87e6da63",
+    "audit_temperature": 0.0,
+    "issue_count": 10,
+    "blocking_count": 3,
+    "schema_deviations": [],
+    "usage": {
+      "input_tokens": 48767,
+      "output_tokens": 22949,
+      "reasoning_tokens": 21244,
+      "total_tokens": 71716
+    },
+    "blocking": [
+      [
+        "3",
+        "model_audit_PROP_CONTINUITY"
+      ],
+      [
+        "10",
+        "model_audit_MISSING_CAUSAL"
+      ],
+      [
+        "12",
+        "model_audit_LOGIC_CONFLICT"
+      ]
+    ],
+    "issues": [
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "visual_risk",
+        "message": "杨旭首帧已持酒盏，听香同时捧盏递来，同盏双持使“斟酒入盏”对象不清。；建议：首帧仅让杨旭提壶、听香捧盏，并在motion补递盏交接后再由杨旭斟酒。",
+        "shot_id": "3",
+        "frame_id": "ff",
+        "entity_id": "杨旭/听香",
+        "field_path": "frame_layouts.ff[0].props",
+        "evidence": "酒盏",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "frame_layouts.ff[0].props"
+          },
+          {
+            "shot_id": "3",
+            "field_path": "frame_layouts.kfs[0][0].props"
+          },
+          {
+            "shot_id": "3",
+            "field_path": "motion_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_TEXT_TYPO",
+        "severity": "advisory",
+        "message": "旁白在“的”后多出逗号，断句成“宝钞的，高价”，念白与语义均被切断。；建议：删去多余逗号，恢复“两百贯宝钞的高价”。",
+        "shot_id": "3",
+        "frame_id": "ff",
+        "entity_id": "旁白",
+        "field_path": "narration_segment",
+        "evidence": "的，高价",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_TEXT_REPETITION",
+        "severity": "advisory",
+        "message": "同一括号说明连续重复两次，插入短刃描述中间，导致句子断裂且生图提示冗余。；建议：删除重复的一份括号说明，保留一句并理顺“寒光/短刃”句。",
+        "shot_id": "6",
+        "frame_id": "ff",
+        "entity_id": "短刃",
+        "field_path": "prompt",
+        "evidence": "（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_FF_RESULT_LEAK",
+        "severity": "advisory",
+        "message": "首帧已呈现灯盏脱手落地，motion却从纵身跃起开始，丢灯动作无起点，观众看不到灯盏如何离手。；建议：首帧改为手提灯盏屈膝欲跃，并在motion开头补丢灯盏后纵身。",
+        "shot_id": "8",
+        "frame_id": "ff",
+        "entity_id": "张十三",
+        "field_path": "ff_desc",
+        "evidence": "灯盏脱手落地",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "8",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "8",
+            "field_path": "motion_desc"
+          },
+          {
+            "shot_id": "8",
+            "field_path": "keyframes[0].desc"
+          },
+          {
+            "shot_id": "8",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "8",
+            "field_path": "frame_layouts.ff[0].props"
+          },
+          {
+            "shot_id": "8",
+            "field_path": "frame_layouts.ff[0].states"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "原文鱼拖钓杆逃走未呈现，钓杆仍留在杨旭处；镜头9继续把钓杆归给杨旭，释放后未持续消失。；建议：在镜头7补鱼拖钓杆入水，并在镜头7、9移除杨旭的钓杆道具归属。",
+        "shot_id": "7",
+        "frame_id": "lf",
+        "entity_id": "钓杆",
+        "field_path": "lf_desc",
+        "evidence": "左手钓杆垂落船舷",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "motion_desc"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "lf_desc"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "keyframes[2].desc"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.lf[1].props"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.kfs[2][1].props"
+          },
+          {
+            "shot_id": "9",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "9",
+            "field_path": "frame_layouts.ff[1].props"
+          },
+          {
+            "shot_id": "9",
+            "field_path": "frame_layouts.lf[1].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_MISSING_CAUSAL",
+        "severity": "visual_risk",
+        "message": "此前没有张十三逼问凶手或听香尖叫的触发，掌掴缺少动机，观众不知他为何突然打人。；建议：在掌掴前补一句逼问“凶手是谁”及听香尖叫，再写张十三怒极反手一掌。",
+        "shot_id": "10",
+        "frame_id": "kf2",
+        "entity_id": "张十三",
+        "field_path": "motion_desc",
+        "evidence": "反手一掌扇在听香脸上",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "10",
+            "field_path": "motion_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_STATE_CHAIN_CONFLICT",
+        "severity": "advisory",
+        "message": "镜头2、3听香仍斜插步摇，此前无抓发或步摇掉落动作，镜头10突然披头散发，发式与道具状态跳变。；建议：补出步摇掉落、发髻散开的前置动作，或把本镜改为有来源的发髻散乱。",
+        "shot_id": "10",
+        "frame_id": "ff",
+        "entity_id": "听香",
+        "field_path": "ff_desc",
+        "evidence": "披头散发",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "10",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "keyframes[0].desc"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.ff[1].states"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_MISSING_DIALOGUE",
+        "severity": "advisory",
+        "message": "只写开口而无台词，观众听不到“听我吩咐、莫要声张”的威胁内容，张十三说服听香隐瞒的语义不完整。；建议：在narration_segment补低声威胁台词，或把开口内容写入motion_desc。",
+        "shot_id": "11",
+        "frame_id": "kf2",
+        "entity_id": "张十三",
+        "field_path": "motion_desc",
+        "evidence": "低声厉色开口",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "11",
+            "field_path": "motion_desc"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_LOGIC_CONFLICT",
+        "severity": "visual_risk",
+        "message": "岸边庄仆举灯张望，画面却明确露出仰倒尸体与心口红痕，他们仍信“公子醉酒”并哄笑散去，骗局逻辑不成立。；建议：调整构图让尸体被张十三或船舱遮挡、岸上视角不可见，或删去给岸上视角的心口暗红。",
+        "shot_id": "12",
+        "frame_id": "ff",
+        "entity_id": "庄仆",
+        "field_path": "prompt",
+        "evidence": "杨旭素白身影仰倒船头，心口暗红",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "12",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "keyframes[0].desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_SPATIAL_CONTINUITY",
+        "severity": "advisory",
+        "message": "首帧说马车停在门前、关键帧写别庄门前，prompt却把同一场景写成湾堤岸边，马车位置空间关系不一致。；建议：统一为“别庄门前”，或统一为“湾堤岸边”并同步门前/大门描述。",
+        "shot_id": "13",
+        "frame_id": "ff",
+        "entity_id": "马车",
+        "field_path": "prompt",
+        "evidence": "湾堤岸边",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "13",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      }
+    ]
+  },
+  {
+    "recorded_at": "2026-11-07T23:05:16",
+    "run_id": "20261107T225039-18832",
+    "phase": "commit_round",
+    "round": 3,
+    "reused": false,
+    "status": "ok",
+    "error": "",
+    "model": "deepseek-v4.1-flash",
+    "provider": "agent_plan",
+    "input_revision": "809bf32a1a9a3c4ea222284887fb67b72dea442f50d029c1053794b5cbdc13b1",
+    "rule_source_fingerprint": "7e0af5cff02d205a",
+    "duration_band": {
+      "min": 60.0,
+      "max": 90.0,
+      "target_min": 70.0,
+      "target_max": 80.0
+    },
+    "prompt_source_fingerprint": "3019ee06da1fca0b",
+    "audit_scope": "final_after_deterministic_fixes",
+    "audit_prompt_version": "75b217bc8626",
+    "audit_focus_version": "066a87e6da63",
+    "audit_temperature": 0.0,
+    "issue_count": 3,
+    "blocking_count": 0,
+    "schema_deviations": [
+      "`shot_id` 非 string（实际 int）——已 `str()` 归一",
+      "1/3 条缺 `entity_id`（schema required）"
+    ],
+    "usage": {
+      "input_tokens": 49409,
+      "output_tokens": 31390,
+      "reasoning_tokens": 30817,
+      "total_tokens": 80799
+    },
+    "blocking": [],
+    "issues": [
+      {
+        "code": "model_audit_PROP_CONTINUITY_CONFLICT",
+        "severity": "advisory",
+        "message": "ff 时听香正捧盏递向杨旭，杨旭手中不应已有酒盏；道具重复会让递盏/斟酒动作失去前提。；建议：从 ff 与 kfs[0][0] 的 props 中删除“酒盏”，仅保留“青瓷酒壶”，待 kfs[1] 接盏后再加入。",
+        "shot_id": "3",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.ff[0].props",
+        "evidence": "酒盏",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "frame_layouts.ff[0].props"
+          },
+          {
+            "shot_id": "3",
+            "field_path": "frame_layouts.kfs[0][0].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_TEXT_REPETITION",
+        "severity": "advisory",
+        "message": "同一提示短语连续重复两遍，生成器可能据此渲染双重寒光或产生画面噪音。；建议：删除其中一组括号说明，只保留一处。",
+        "shot_id": "6",
+        "frame_id": "ff",
+        "entity_id": "神秘人",
+        "field_path": "prompt",
+        "evidence": "（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_NARRATION_TEXT_ERROR",
+        "severity": "advisory",
+        "message": "原文为“两百贯宝钞的高价”，此处插入逗号截断短语，旁白断句错误。；建议：改为“两百贯宝钞的高价把她买下”，删除“的”后逗号。",
+        "shot_id": "3",
+        "frame_id": "kf2",
+        "entity_id": "",
+        "field_path": "narration_segment",
+        "evidence": "两百贯宝钞的，高价",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      }
+    ]
+  },
+  {
+    "recorded_at": "2026-11-07T23:11:11",
+    "run_id": "20261107T225039-18832",
+    "phase": "commit_round",
+    "round": 4,
+    "reused": false,
+    "status": "ok",
+    "error": "",
+    "model": "deepseek-v4.1-flash",
+    "provider": "agent_plan",
+    "input_revision": "4330e962542f8bfb881eb8a0b7dd942a29d545ae1d9712ae38de6ba562da61db",
+    "rule_source_fingerprint": "7e0af5cff02d205a",
+    "duration_band": {
+      "min": 60.0,
+      "max": 90.0,
+      "target_min": 70.0,
+      "target_max": 80.0
+    },
+    "prompt_source_fingerprint": "3019ee06da1fca0b",
+    "audit_scope": "final_after_deterministic_fixes",
+    "audit_prompt_version": "75b217bc8626",
+    "audit_focus_version": "066a87e6da63",
+    "audit_temperature": 0.0,
+    "issue_count": 15,
+    "blocking_count": 7,
+    "schema_deviations": [
+      "`shot_id` 非 string（实际 int）——已 `str()` 归一"
+    ],
+    "usage": {
+      "input_tokens": 50171,
+      "output_tokens": 26544,
+      "reasoning_tokens": 23064,
+      "total_tokens": 76715
+    },
+    "blocking": [
+      [
+        "5",
+        "model_audit_STATE_CHAIN_CONFLICT"
+      ],
+      [
+        "6",
+        "model_audit_STATE_CHAIN_CONFLICT"
+      ],
+      [
+        "7",
+        "model_audit_STATE_CHAIN_CONFLICT"
+      ],
+      [
+        "12",
+        "model_audit_CAUSAL_GAP"
+      ],
+      [
+        "7",
+        "model_audit_PROP_CONTINUITY"
+      ],
+      [
+        "1",
+        "model_audit_KF_STAGE_MISMATCH"
+      ],
+      [
+        "8",
+        "model_audit_KF_STAGE_MISMATCH"
+      ]
+    ],
+    "issues": [
+      {
+        "code": "model_audit_STATE_CHAIN_CONFLICT",
+        "severity": "visual_risk",
+        "message": "刺客从水中跃上船时听香本应在船中；镜头5完全缺席，导致后续镜头10她突然出现时观众无法理解在场关系。；建议：在镜头5各帧布局与描述中补入听香，保持她在船中目睹刺杀。",
+        "shot_id": "5",
+        "frame_id": "ff",
+        "entity_id": "听香",
+        "field_path": "frame_layouts.ff",
+        "evidence": "缺失：frame_layouts.ff 列表只有神秘人，无听香条目",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.kfs[2]"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_STATE_CHAIN_CONFLICT",
+        "severity": "visual_risk",
+        "message": "刺杀发生时听香应在旁并被溅血；镜头6仍无听香，镜头10的披头散发、嘴唇带血缺少来源。；建议：在镜头6各帧布局与描述中补入听香，并保留其受惊状态。",
+        "shot_id": "6",
+        "frame_id": "ff",
+        "entity_id": "听香",
+        "field_path": "frame_layouts.ff",
+        "evidence": "缺失：frame_layouts.ff 列表只有神秘人和杨旭，无听香条目",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "6",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "6",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "6",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "6",
+            "field_path": "frame_layouts.kfs[2]"
+          },
+          {
+            "shot_id": "6",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_STATE_CHAIN_CONFLICT",
+        "severity": "visual_risk",
+        "message": "刺杀结束后听香应目睹杨旭死亡并受惊；镜头7仍无听香，镜头10她突然披头散发出现，状态链断裂。；建议：在镜头7各帧布局与描述中补入听香，保持其在船中且受惊。",
+        "shot_id": "7",
+        "frame_id": "lf",
+        "entity_id": "听香",
+        "field_path": "frame_layouts.lf",
+        "evidence": "缺失：frame_layouts.lf 列表只有杨旭和已不见踪影的神秘人，无听香条目",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.kfs[2]"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_CAUSAL_GAP",
+        "severity": "visual_risk",
+        "message": "台词只保留解释醉酒，删去“所以惊得听香姑娘尖叫”及让庄仆把马车赶到水边、回城的交代；镜头13马车出现无因。；建议：补全台词或增加让庄仆赶马车、张十三要扶公子回城的动作，交代马车来源。",
+        "shot_id": "12",
+        "frame_id": "ff",
+        "entity_id": "张十三",
+        "field_path": "narration_segment",
+        "evidence": "公子爷吃醉了酒，险些跌落水中",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "12",
+            "field_path": "narration_segment"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "motion_desc"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "ff_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "visual_risk",
+        "message": "镜头6 lf 短刃仍没入杨旭心口，本镜ff已反握带血短刃，镜头6到7之间没有拔刃动作，武器状态跳跃。；建议：在镜头6 lf 或镜头7 motion_desc 补拔刃动作，或让镜头7 ff 仍保持短刃在伤口处。",
+        "shot_id": "7",
+        "frame_id": "ff",
+        "entity_id": "神秘人",
+        "field_path": "ff_desc",
+        "evidence": "右手反握带血短刃",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "lf_desc"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "motion_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_KF_STAGE_MISMATCH",
+        "severity": "visual_risk",
+        "message": "本镜及镜头3、4、5、6、7的 keyframes.stage 使用 approach/climax/exit/after 等非许可值，程序无法按 pre/process/result 校验帧职责。；建议：将各关键帧 stage 统一改为 pre/process/result，中间过程用 process。",
+        "shot_id": "1",
+        "frame_id": "kf2",
+        "entity_id": "关键帧",
+        "field_path": "keyframes[1].stage",
+        "evidence": "approach",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "1",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "3",
+            "field_path": "keyframes[2].stage"
+          },
+          {
+            "shot_id": "4",
+            "field_path": "keyframes[2].stage"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "6",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "keyframes[1].stage"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_KF_STAGE_MISMATCH",
+        "severity": "visual_risk",
+        "message": "镜头8到13的关键帧 stage 继续使用 approach/react/exit/climax 等非许可值，帧职责无法按统一枚举校验。；建议：将剩余镜头关键帧 stage 统一改为 pre/process/result。",
+        "shot_id": "8",
+        "frame_id": "kf2",
+        "entity_id": "关键帧",
+        "field_path": "keyframes[1].stage",
+        "evidence": "approach",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "8",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "9",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "keyframes[1].stage"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_TEXT_DUPLICATION",
+        "severity": "advisory",
+        "message": "同一括号说明连续重复，提示词冗余，生成时可能干扰对短刃与寒光关系的理解。；建议：删除重复括号，只保留一处说明。",
+        "shot_id": "6",
+        "frame_id": "ff",
+        "entity_id": "短刃",
+        "field_path": "prompt",
+        "evidence": "（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_TEXT_ERROR",
+        "severity": "advisory",
+        "message": "漏“两”且“的”位置错误，旁白成为病句，与原文“两百贯宝钞的高价”不符。；建议：改为“也不会花两百贯宝钞的高价把她买下”。",
+        "shot_id": "3",
+        "frame_id": "ff",
+        "entity_id": "旁白",
+        "field_path": "narration_segment",
+        "evidence": "也不会花两百贯宝钞的，高价把她买下",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_FF_RESULT_LEAK",
+        "severity": "advisory",
+        "message": "pre 关键帧应呈现动作前蓄势态，却已写出倒纵离船的结果，与 ff_desc 的“半起身”准备态矛盾。；建议：改为屈腿蓄势、尚未离船，把离船动作放到后续关键帧。",
+        "shot_id": "7",
+        "frame_id": "kf1",
+        "entity_id": "神秘人",
+        "field_path": "keyframes[0].desc",
+        "evidence": "双腿屈弹倒纵离船",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "keyframes[0].desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "lf_desc 与 prompt 写“右手酒壶倾倒酒水洒在甲板”，布局却没有酒壶，酒壶从镜头6脱手到镜头7倾倒的状态断链。；建议：在 lf props 补酒壶，并明确其倾倒或落在船板的位置。",
+        "shot_id": "7",
+        "frame_id": "lf",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.lf[0].props",
+        "evidence": "缺失：props 列表仅列钓杆，未列酒壶",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.lf[0].props"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "lf_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "原文鱼咬钩后拖着钓杆逃走；分镜镜头7仍写钓杆垂落，镜头9布局仍把钓杆列在杨旭身上，道具未按事件释放。；建议：在镜头7表现鱼拖走钓杆，并从后续杨旭 props 移除钓杆。",
+        "shot_id": "9",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.ff[0].props",
+        "evidence": "钓杆",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "lf_desc"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.lf[0].props"
+          },
+          {
+            "shot_id": "9",
+            "field_path": "frame_layouts.ff[0].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "听香捧盏递向杨旭，但同一帧杨旭 props 也已有酒盏，画面出现两个酒盏，斟酒对象不清。；建议：统一酒盏归属：让杨旭空手接盏，或删去听香手持的额外酒盏。",
+        "shot_id": "3",
+        "frame_id": "ff",
+        "entity_id": "听香",
+        "field_path": "frame_layouts.ff[1].props",
+        "evidence": "酒盏",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "frame_layouts.ff[0].props"
+          },
+          {
+            "shot_id": "3",
+            "field_path": "frame_layouts.ff[1].props"
+          },
+          {
+            "shot_id": "3",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_FACT_COVERAGE_GAP",
+        "severity": "advisory",
+        "message": "画面只写“少年”未明确十六岁，旁白只提考中秀才；“暴富”仅靠店铺田产轮廓暗示，事实f02的年龄与暴富信息不够明确。；建议：在 prompt 或旁白中明确十六岁接手家业及财富暴增。",
+        "shot_id": "4",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "prompt",
+        "evidence": "少年杨旭素白色轻袍双手接过账册与钥匙",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "4",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "4",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_STATE_CHAIN_CONFLICT",
+        "severity": "advisory",
+        "message": "张十三的动机是隐瞒杨旭死讯，但镜头13车厢只有听香，没有杨旭尸体或遮盖处理，尸体去向未交代。；建议：在车厢内补杨旭尸体或被遮盖的遗体，或在上一镜交代搬运。",
+        "shot_id": "13",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "prompt",
+        "evidence": "车厢内听香一袭春衫披头散发倚坐",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "13",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "ff_desc"
+          }
+        ],
+        "repairable": true
+      }
+    ]
+  },
+  {
+    "recorded_at": "2026-11-07T23:17:21",
+    "run_id": "20261107T225039-18832",
+    "phase": "commit_round",
+    "round": 5,
+    "reused": false,
+    "status": "ok",
+    "error": "",
+    "model": "deepseek-v4.1-flash",
+    "provider": "agent_plan",
+    "input_revision": "8198de7d56aa0bf34cf2e99696f79fdbfeaf09c303c4a1fe3f2e554b278af117",
+    "rule_source_fingerprint": "7e0af5cff02d205a",
+    "duration_band": {
+      "min": 60.0,
+      "max": 90.0,
+      "target_min": 70.0,
+      "target_max": 80.0
+    },
+    "prompt_source_fingerprint": "3019ee06da1fca0b",
+    "audit_scope": "final_after_deterministic_fixes",
+    "audit_prompt_version": "75b217bc8626",
+    "audit_focus_version": "066a87e6da63",
+    "audit_temperature": 0.0,
+    "issue_count": 13,
+    "blocking_count": 4,
+    "schema_deviations": [],
+    "usage": {
+      "input_tokens": 50768,
+      "output_tokens": 23740,
+      "reasoning_tokens": 21461,
+      "total_tokens": 74508
+    },
+    "blocking": [
+      [
+        "7",
+        "model_audit_STATE_CHAIN_CONFLICT"
+      ],
+      [
+        "8",
+        "model_audit_MISSING_CAUSAL_BEAT"
+      ],
+      [
+        "12",
+        "model_audit_MISSING_CAUSAL_BEAT"
+      ],
+      [
+        "13",
+        "model_audit_MISSING_PLOT_ELEMENT"
+      ]
+    ],
+    "issues": [
+      {
+        "code": "model_audit_STATE_CHAIN_CONFLICT",
+        "severity": "visual_risk",
+        "message": "镜头6尾帧短刃仍没入杨旭心口，本镜首帧已反握带血短刃半起身，中间缺拔刃动作，武器状态跳变。；建议：在motion_desc前2秒补“先拔刃”或改ff_desc为手握没入心口的刀柄、再倒纵。",
+        "shot_id": "7",
+        "frame_id": "ff",
+        "entity_id": "神秘人",
+        "field_path": "motion_desc",
+        "evidence": "前2秒：神秘人双腿一弹倒纵离船",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "motion_desc"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "keyframes[0].desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_MISSING_CAUSAL_BEAT",
+        "severity": "visual_risk",
+        "message": "镜头7无听香尖叫，本镜张十三直接跃船，观众不知他为何赶来。；建议：在ff_desc与kf0补“画外听香尖叫传来，张十三闻声急奔”。",
+        "shot_id": "8",
+        "frame_id": "ff",
+        "entity_id": "张十三",
+        "field_path": "ff_desc",
+        "evidence": "张十三立于堤边屈膝半起身，灯盏脱手落地",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "8",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "8",
+            "field_path": "keyframes[0].desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_MISSING_CAUSAL_BEAT",
+        "severity": "visual_risk",
+        "message": "庄仆直接散去，未交代谁把马车赶到水边，镜头13马车出现无因。；建议：在motion_desc与kf2补张十三叫住庄仆、吩咐去赶马车，庄仆应声而去。",
+        "shot_id": "12",
+        "frame_id": "lf",
+        "entity_id": "张十三",
+        "field_path": "motion_desc",
+        "evidence": "4-6秒：庄仆们转身散去",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "12",
+            "field_path": "motion_desc"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "keyframes[2].desc"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_MISSING_PLOT_ELEMENT",
+        "severity": "visual_risk",
+        "message": "车厢只有听香，杨旭尸体未交代去向；张十三以公子醉酒为由带人离开却丢下尸体，与隐瞒死讯计划矛盾。；建议：在prompt加“车厢内杨旭尸体仰卧”，并在ff/lf/kfs新增杨旭尸体条目。",
+        "shot_id": "13",
+        "frame_id": "lf",
+        "entity_id": "杨旭",
+        "field_path": "prompt",
+        "evidence": "车厢内听香一袭春衫披头散发倚坐",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "13",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.kfs[2]"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_NARRATION_TEXT_ERROR",
+        "severity": "advisory",
+        "message": "“的，”错位，且“不会花”与“把她买下”语义矛盾，观众无法理解听香是花高价买的。；建议：改为“杨公子花了两百贯宝钞的高价把她买下”。",
+        "shot_id": "3",
+        "frame_id": "lf",
+        "entity_id": "旁白",
+        "field_path": "narration_segment",
+        "evidence": "杨公子也不会花两百贯宝钞的，高价把她买下",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_TEXT_DUPLICATION",
+        "severity": "advisory",
+        "message": "同一提示连续重复两遍，属可验证的重复文本，降低生成稳定性。；建议：删除其中一遍括号提示。",
+        "shot_id": "6",
+        "frame_id": "ff",
+        "entity_id": "镜头6",
+        "field_path": "prompt",
+        "evidence": "（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_KF_STAGE_MISMATCH",
+        "severity": "advisory",
+        "message": "kf2为掌掴瞬间，布局却已收手且听香已半边脸红肿，结果提前到climax帧。；建议：kf2改为扬掌接触脸、听香头刚被打偏脸颊初红；收手与红肿留到kf3/lf。",
+        "shot_id": "10",
+        "frame_id": "kf2",
+        "entity_id": "张十三",
+        "field_path": "frame_layouts.kfs[1][0].pose",
+        "evidence": "收手怒视",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.kfs[1][0].pose"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.kfs[1][1].states"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "keyframes[1].desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_LAYOUT_ENTITY_MISSING",
+        "severity": "advisory",
+        "message": "ff_desc与prompt均写船头杨旭背影可见，布局缺条目会使杨旭消失或状态不一致。；建议：在ff/lf与三个kfs人物列表新增杨旭背影条目。",
+        "shot_id": "5",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.ff",
+        "evidence": "frame_layouts.ff人物列表仅含神秘人、听香，无杨旭条目",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.kfs[2]"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_LAYOUT_ENTITY_MISSING",
+        "severity": "advisory",
+        "message": "prompt写杨旭仰倒画左船头，布局缺条目会使尸体在掌掴画面中消失。；建议：在ff/lf与三个kfs人物列表新增杨旭仰倒条目。",
+        "shot_id": "10",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.ff",
+        "evidence": "frame_layouts.ff人物列表仅含张十三、听香，无杨旭条目",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.kfs[2]"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_LAYOUT_ENTITY_MISSING",
+        "severity": "advisory",
+        "message": "ff_desc写杨旭仰倒船头心口暗红，布局缺条目会使尸体在本镜消失。；建议：在ff/lf与三个kfs人物列表新增杨旭仰倒条目。",
+        "shot_id": "11",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.ff",
+        "evidence": "frame_layouts.ff人物列表仅含张十三、听香，无杨旭条目",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.kfs[2]"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_LAYOUT_ENTITY_MISSING",
+        "severity": "advisory",
+        "message": "prompt写杨旭尸体被张十三背影遮挡，布局缺条目会使遮挡关系无法执行。；建议：在ff/lf与三个kfs人物列表新增杨旭仰倒条目。",
+        "shot_id": "12",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.ff",
+        "evidence": "frame_layouts.ff人物列表仅含张十三、群演，无杨旭条目",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "12",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "frame_layouts.kfs[2]"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "lf_desc写酒壶脱手，但布局props只有钓杆，酒壶脱手后消失，下一镜难接。；建议：在kf3与lf杨旭props中加入“酒壶（脱手/落地）”。",
+        "shot_id": "6",
+        "frame_id": "lf",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.lf[1].props",
+        "evidence": "钓杆",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "frame_layouts.kfs[2][1].props"
+          },
+          {
+            "shot_id": "6",
+            "field_path": "frame_layouts.lf[1].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "lf_desc写酒壶倾倒酒水洒甲板，布局props缺酒壶，道具状态不连续。；建议：在lf杨旭props中加入“酒壶（倾倒）”。",
+        "shot_id": "7",
+        "frame_id": "lf",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.lf[1].props",
+        "evidence": "钓杆",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.lf[1].props"
+          }
+        ],
+        "repairable": true
+      }
+    ]
+  },
+  {
+    "recorded_at": "2026-11-07T23:27:11",
+    "run_id": "20261107T232711-8676",
+    "phase": "commit_round",
+    "round": 1,
+    "reused": true,
+    "status": "ok",
+    "error": "",
+    "model": "deepseek-v4.1-flash",
+    "provider": "agent_plan",
+    "input_revision": "8198de7d56aa0bf34cf2e99696f79fdbfeaf09c303c4a1fe3f2e554b278af117",
+    "rule_source_fingerprint": "7e0af5cff02d205a",
+    "duration_band": {
+      "min": 60.0,
+      "max": 90.0,
+      "target_min": 70.0,
+      "target_max": 80.0
+    },
+    "prompt_source_fingerprint": "3019ee06da1fca0b",
+    "audit_scope": "final_after_deterministic_fixes",
+    "audit_prompt_version": "75b217bc8626",
+    "audit_focus_version": "066a87e6da63",
+    "audit_temperature": 0.0,
+    "issue_count": 13,
+    "blocking_count": 4,
+    "schema_deviations": [],
+    "usage": {
+      "input_tokens": 50768,
+      "output_tokens": 23740,
+      "reasoning_tokens": 21461,
+      "total_tokens": 74508
+    },
+    "blocking": [
+      [
+        "7",
+        "model_audit_STATE_CHAIN_CONFLICT"
+      ],
+      [
+        "8",
+        "model_audit_MISSING_CAUSAL_BEAT"
+      ],
+      [
+        "12",
+        "model_audit_MISSING_CAUSAL_BEAT"
+      ],
+      [
+        "13",
+        "model_audit_MISSING_PLOT_ELEMENT"
+      ]
+    ],
+    "issues": [
+      {
+        "code": "model_audit_STATE_CHAIN_CONFLICT",
+        "severity": "visual_risk",
+        "message": "镜头6尾帧短刃仍没入杨旭心口，本镜首帧已反握带血短刃半起身，中间缺拔刃动作，武器状态跳变。；建议：在motion_desc前2秒补“先拔刃”或改ff_desc为手握没入心口的刀柄、再倒纵。",
+        "shot_id": "7",
+        "frame_id": "ff",
+        "entity_id": "神秘人",
+        "field_path": "motion_desc",
+        "evidence": "前2秒：神秘人双腿一弹倒纵离船",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "motion_desc"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "keyframes[0].desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_MISSING_CAUSAL_BEAT",
+        "severity": "visual_risk",
+        "message": "镜头7无听香尖叫，本镜张十三直接跃船，观众不知他为何赶来。；建议：在ff_desc与kf0补“画外听香尖叫传来，张十三闻声急奔”。",
+        "shot_id": "8",
+        "frame_id": "ff",
+        "entity_id": "张十三",
+        "field_path": "ff_desc",
+        "evidence": "张十三立于堤边屈膝半起身，灯盏脱手落地",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "8",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "8",
+            "field_path": "keyframes[0].desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_MISSING_CAUSAL_BEAT",
+        "severity": "visual_risk",
+        "message": "庄仆直接散去，未交代谁把马车赶到水边，镜头13马车出现无因。；建议：在motion_desc与kf2补张十三叫住庄仆、吩咐去赶马车，庄仆应声而去。",
+        "shot_id": "12",
+        "frame_id": "lf",
+        "entity_id": "张十三",
+        "field_path": "motion_desc",
+        "evidence": "4-6秒：庄仆们转身散去",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "12",
+            "field_path": "motion_desc"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "keyframes[2].desc"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_MISSING_PLOT_ELEMENT",
+        "severity": "visual_risk",
+        "message": "车厢只有听香，杨旭尸体未交代去向；张十三以公子醉酒为由带人离开却丢下尸体，与隐瞒死讯计划矛盾。；建议：在prompt加“车厢内杨旭尸体仰卧”，并在ff/lf/kfs新增杨旭尸体条目。",
+        "shot_id": "13",
+        "frame_id": "lf",
+        "entity_id": "杨旭",
+        "field_path": "prompt",
+        "evidence": "车厢内听香一袭春衫披头散发倚坐",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "13",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.kfs[2]"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_NARRATION_TEXT_ERROR",
+        "severity": "advisory",
+        "message": "“的，”错位，且“不会花”与“把她买下”语义矛盾，观众无法理解听香是花高价买的。；建议：改为“杨公子花了两百贯宝钞的高价把她买下”。",
+        "shot_id": "3",
+        "frame_id": "lf",
+        "entity_id": "旁白",
+        "field_path": "narration_segment",
+        "evidence": "杨公子也不会花两百贯宝钞的，高价把她买下",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_TEXT_DUPLICATION",
+        "severity": "advisory",
+        "message": "同一提示连续重复两遍，属可验证的重复文本，降低生成稳定性。；建议：删除其中一遍括号提示。",
+        "shot_id": "6",
+        "frame_id": "ff",
+        "entity_id": "镜头6",
+        "field_path": "prompt",
+        "evidence": "（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_KF_STAGE_MISMATCH",
+        "severity": "advisory",
+        "message": "kf2为掌掴瞬间，布局却已收手且听香已半边脸红肿，结果提前到climax帧。；建议：kf2改为扬掌接触脸、听香头刚被打偏脸颊初红；收手与红肿留到kf3/lf。",
+        "shot_id": "10",
+        "frame_id": "kf2",
+        "entity_id": "张十三",
+        "field_path": "frame_layouts.kfs[1][0].pose",
+        "evidence": "收手怒视",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.kfs[1][0].pose"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.kfs[1][1].states"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "keyframes[1].desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_LAYOUT_ENTITY_MISSING",
+        "severity": "advisory",
+        "message": "ff_desc与prompt均写船头杨旭背影可见，布局缺条目会使杨旭消失或状态不一致。；建议：在ff/lf与三个kfs人物列表新增杨旭背影条目。",
+        "shot_id": "5",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.ff",
+        "evidence": "frame_layouts.ff人物列表仅含神秘人、听香，无杨旭条目",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.kfs[2]"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_LAYOUT_ENTITY_MISSING",
+        "severity": "advisory",
+        "message": "prompt写杨旭仰倒画左船头，布局缺条目会使尸体在掌掴画面中消失。；建议：在ff/lf与三个kfs人物列表新增杨旭仰倒条目。",
+        "shot_id": "10",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.ff",
+        "evidence": "frame_layouts.ff人物列表仅含张十三、听香，无杨旭条目",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.kfs[2]"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_LAYOUT_ENTITY_MISSING",
+        "severity": "advisory",
+        "message": "ff_desc写杨旭仰倒船头心口暗红，布局缺条目会使尸体在本镜消失。；建议：在ff/lf与三个kfs人物列表新增杨旭仰倒条目。",
+        "shot_id": "11",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.ff",
+        "evidence": "frame_layouts.ff人物列表仅含张十三、听香，无杨旭条目",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.kfs[2]"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_LAYOUT_ENTITY_MISSING",
+        "severity": "advisory",
+        "message": "prompt写杨旭尸体被张十三背影遮挡，布局缺条目会使遮挡关系无法执行。；建议：在ff/lf与三个kfs人物列表新增杨旭仰倒条目。",
+        "shot_id": "12",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.ff",
+        "evidence": "frame_layouts.ff人物列表仅含张十三、群演，无杨旭条目",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "12",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "frame_layouts.kfs[2]"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "lf_desc写酒壶脱手，但布局props只有钓杆，酒壶脱手后消失，下一镜难接。；建议：在kf3与lf杨旭props中加入“酒壶（脱手/落地）”。",
+        "shot_id": "6",
+        "frame_id": "lf",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.lf[1].props",
+        "evidence": "钓杆",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "frame_layouts.kfs[2][1].props"
+          },
+          {
+            "shot_id": "6",
+            "field_path": "frame_layouts.lf[1].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "lf_desc写酒壶倾倒酒水洒甲板，布局props缺酒壶，道具状态不连续。；建议：在lf杨旭props中加入“酒壶（倾倒）”。",
+        "shot_id": "7",
+        "frame_id": "lf",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.lf[1].props",
+        "evidence": "钓杆",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.lf[1].props"
+          }
+        ],
+        "repairable": true
+      }
+    ],
+    "reuse_source": "disk"
+  },
+  {
+    "recorded_at": "2026-11-07T23:29:09",
+    "run_id": "20261107T232711-8676",
+    "phase": "commit_round",
+    "round": 2,
+    "reused": false,
+    "status": "ok",
+    "error": "",
+    "model": "deepseek-v4.1-flash",
+    "provider": "agent_plan",
+    "input_revision": "3e085e7dba2b5c6e3cd800dcaf2319320e41d09acb3d40622da36142c684857d",
+    "rule_source_fingerprint": "7e0af5cff02d205a",
+    "duration_band": {
+      "min": 60.0,
+      "max": 90.0,
+      "target_min": 70.0,
+      "target_max": 80.0
+    },
+    "prompt_source_fingerprint": "3019ee06da1fca0b",
+    "audit_scope": "final_after_deterministic_fixes",
+    "audit_prompt_version": "75b217bc8626",
+    "audit_focus_version": "066a87e6da63",
+    "audit_temperature": 0.0,
+    "issue_count": 7,
+    "blocking_count": 1,
+    "schema_deviations": [],
+    "usage": {
+      "input_tokens": 51465,
+      "output_tokens": 19515,
+      "reasoning_tokens": 18555,
+      "total_tokens": 70980
+    },
+    "blocking": [
+      [
+        "12",
+        "model_audit_CAUSAL_GAP"
+      ]
+    ],
+    "issues": [
+      {
+        "code": "model_audit_CAUSAL_GAP",
+        "severity": "visual_risk",
+        "message": "上一镜没有张十三叫住庄仆、吩咐备车，下一镜马车已载尸停在门前，观众不知道马车和尸体如何到位。；建议：在庄仆散去前补入张十三叫住庄仆、吩咐把马车赶到水边，庄仆应声去赶车。",
+        "shot_id": "12",
+        "frame_id": "lf",
+        "entity_id": "张十三",
+        "field_path": "motion_desc",
+        "evidence": "庄仆们转身散去",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "12",
+            "field_path": "motion_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "上一镜酒壶已脱手，此镜又出现在杨旭右手，道具状态前后矛盾。；建议：改为酒壶已脱手落在甲板、酒水洒出，或删除右手持壶描述并同步修正提示词与道具项。",
+        "shot_id": "7",
+        "frame_id": "lf",
+        "entity_id": "杨旭",
+        "field_path": "lf_desc",
+        "evidence": "右手酒壶倾倒酒水洒在甲板",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "lf_desc"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.kfs[2][1].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_KF_STAGE_MISMATCH",
+        "severity": "advisory",
+        "message": "该关键帧标记为 pre，却已写出离船结果动作，提前呈现了本应后续发生的动作。；建议：改为“双腿屈弹欲纵，尚未离船”，离船动作留给后续关键帧。",
+        "shot_id": "7",
+        "frame_id": "kf0",
+        "entity_id": "神秘人",
+        "field_path": "keyframes[0].desc",
+        "evidence": "双腿屈弹倒纵离船",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "keyframes[0].desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_FF_RESULT_LEAK",
+        "severity": "advisory",
+        "message": "耳光动作尚未发生，听香已呈披头散发结果态，且前镜没有头发散落事件，结果提前。；建议：首帧与首关键帧改为发髻完整或仅微乱，并在耳光动作后补入发髻散开、步摇坠落。",
+        "shot_id": "10",
+        "frame_id": "ff",
+        "entity_id": "听香",
+        "field_path": "ff_desc",
+        "evidence": "听香披头散发撑船板",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "10",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "keyframes[0].desc"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.ff[1].states"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.kfs[0][1].states"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "motion_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_TEXT_ERROR",
+        "severity": "advisory",
+        "message": "旁白在“的”后多出逗号，断句错误且语义不顺。；建议：删除多余逗号，改为“两百贯宝钞的高价”。",
+        "shot_id": "3",
+        "frame_id": "lf",
+        "entity_id": "旁白",
+        "field_path": "narration_segment",
+        "evidence": "两百贯宝钞的，高价",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_DUPLICATE_TEXT",
+        "severity": "advisory",
+        "message": "提示词中同一括注连续重复，造成冗余并可能干扰生成。；建议：删除重复括注，只保留一处。",
+        "shot_id": "6",
+        "frame_id": "ff",
+        "entity_id": "神秘人",
+        "field_path": "prompt",
+        "evidence": "（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_TEXT_ERROR",
+        "severity": "advisory",
+        "message": "“欲呼传来”措辞不通，读者难以确定是惊呼传来还是即将呼叫。；建议：改为“画外听香惊呼传来”。",
+        "shot_id": "8",
+        "frame_id": "ff",
+        "entity_id": "张十三",
+        "field_path": "ff_desc",
+        "evidence": "画外听香欲呼传来",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "8",
+            "field_path": "ff_desc"
+          }
+        ],
+        "repairable": true
+      }
+    ]
+  },
+  {
+    "recorded_at": "2026-11-07T23:30:53",
+    "run_id": "20261107T232711-8676",
+    "phase": "commit_round",
+    "round": 3,
+    "reused": false,
+    "status": "ok",
+    "error": "",
+    "model": "deepseek-v4.1-flash",
+    "provider": "agent_plan",
+    "input_revision": "58c1b6bdd9b3d4589af3a24807beb9b776ab83867a855b37bbbc232bda85d9e4",
+    "rule_source_fingerprint": "7e0af5cff02d205a",
+    "duration_band": {
+      "min": 60.0,
+      "max": 90.0,
+      "target_min": 70.0,
+      "target_max": 80.0
+    },
+    "prompt_source_fingerprint": "3019ee06da1fca0b",
+    "audit_scope": "final_after_deterministic_fixes",
+    "audit_prompt_version": "75b217bc8626",
+    "audit_focus_version": "066a87e6da63",
+    "audit_temperature": 0.0,
+    "issue_count": 8,
+    "blocking_count": 0,
+    "schema_deviations": [
+      "1/8 条缺 `entity_id`（schema required）"
+    ],
+    "usage": {
+      "input_tokens": 51536,
+      "output_tokens": 17676,
+      "reasoning_tokens": 16398,
+      "total_tokens": 69212
+    },
+    "blocking": [],
+    "issues": [
+      {
+        "code": "model_audit_STATE_CHAIN_CONFLICT",
+        "severity": "advisory",
+        "message": "镜1船中明写“画面中无任何人物”却已有箫音，镜2首帧杨旭才“持箫欲吹”，声音先于演奏，观众无法确认吹箫人。；建议：删除镜1 motion_desc“一缕箫音逸出”与 lf_desc“箫音余韵未散”，把箫声起点移到镜2吹奏开始处。",
+        "shot_id": "1",
+        "frame_id": "lf",
+        "entity_id": "杨旭/竹箫",
+        "field_path": "lf_desc",
+        "evidence": "箫音余韵未散",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "1",
+            "field_path": "motion_desc"
+          },
+          {
+            "shot_id": "1",
+            "field_path": "lf_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_TEXT_ERROR",
+        "severity": "advisory",
+        "message": "旁白句在“的”后插入逗号，断句错误，字幕/朗读会念成两截。；建议：改为“花了两百贯宝钞的高价把她买下”，删去“的”后逗号。",
+        "shot_id": "3",
+        "frame_id": "ff",
+        "entity_id": "听香",
+        "field_path": "narration_segment",
+        "evidence": "宝钞的，高价",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "听香首帧正“捧盏递向杨旭”，杨旭却已左手持盏，同一酒盏同时由两人持有，斟酒动作无对象。；建议：改为“右手提青瓷酒壶，左手虚按船板”，酒盏只归听香，斟酒后杨旭再接盏。",
+        "shot_id": "3",
+        "frame_id": "ff",
+        "entity_id": "酒盏",
+        "field_path": "prompt",
+        "evidence": "右手提青瓷酒壶，左手持酒盏",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "3",
+            "field_path": "frame_layouts.ff[0].props"
+          },
+          {
+            "shot_id": "3",
+            "field_path": "frame_layouts.kfs[0][0].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_LIGHT_CONTINUITY",
+        "severity": "advisory",
+        "message": "镜2同一舟同机位写“夕照暖光从画左斜照”，镜3光向翻到画右，两镜连看光源矛盾。；建议：镜3改为“夕照余晖从画左斜照”，与镜2保持同一光向。",
+        "shot_id": "3",
+        "frame_id": "ff",
+        "entity_id": "",
+        "field_path": "prompt",
+        "evidence": "夕照余晖从画右斜照",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_TEXT_DUPLICATION",
+        "severity": "advisory",
+        "message": "同一句提示连续重复两遍，生成时易被当成两条指令叠加，且提示词可读性受损。；建议：删去重复的一份括号说明，仅保留一次。",
+        "shot_id": "6",
+        "frame_id": "ff",
+        "entity_id": "神秘人",
+        "field_path": "prompt",
+        "evidence": "（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "尾帧酒壶凭空丢失，而同镜关键帧仍持壶，酒壶倾倒的画面无法落到尾帧状态上。；建议：在 lf 杨旭 props 中补入“酒壶”，与 lf_desc、kfs[2][0] 保持一致。",
+        "shot_id": "7",
+        "frame_id": "lf",
+        "entity_id": "酒壶",
+        "field_path": "frame_layouts.lf[1].props",
+        "evidence": "该字段只列“钓杆”，缺“酒壶”；同镜 lf_desc 写“右手酒壶倾倒酒水洒在甲板”，kfs[2][0].props 亦含“酒壶”",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.lf[1].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_FF_RESULT_LEAK",
+        "severity": "advisory",
+        "message": "首帧已呈现灯盏落地的结果，而 motion_desc 全程未写丢灯动作，灯盏从持灯到落地无过程。；建议：ff 只保留“急奔至堤边、屈膝欲跃持灯”，把“丢了灯盏”写入 motion_desc 前 2 秒。",
+        "shot_id": "8",
+        "frame_id": "ff",
+        "entity_id": "灯盏",
+        "field_path": "ff_desc",
+        "evidence": "灯盏脱手落地",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "8",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "8",
+            "field_path": "motion_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_DIALOGUE_MISSING",
+        "severity": "advisory",
+        "message": "motion_desc 让张十三“吩咐把马车赶到水边”，却无对应台词，观众只见庄仆应声去赶车，不知缘由。；建议：在镜12 台词或旁白补入“且慢……去把公子的马车赶到水边来”，与庄仆转身动作对应。",
+        "shot_id": "12",
+        "frame_id": "lf",
+        "entity_id": "张十三",
+        "field_path": "narration_segment",
+        "evidence": "该字段只有“张十三道：公子爷吃醉了酒，险些跌落水中”，缺“去把公子的马车赶到水边来”一句的台词载体",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "12",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      }
+    ]
+  },
+  {
+    "recorded_at": "2026-11-08T22:05:39",
+    "run_id": "20261108T220004-23680",
+    "phase": "commit_round",
+    "round": 1,
+    "reused": false,
+    "status": "ok",
+    "error": "",
+    "model": "deepseek-v4.1-flash",
+    "provider": "agent_plan",
+    "input_revision": "1dd43b934b81f9d4ce0c6a74deb8ea94ea42d7ce570953be1dc938654a07cbab",
+    "rule_source_fingerprint": "7e0af5cff02d205a",
+    "duration_band": {
+      "min": 60.0,
+      "max": 90.0,
+      "target_min": 70.0,
+      "target_max": 80.0
+    },
+    "prompt_source_fingerprint": "3019ee06da1fca0b",
+    "audit_scope": "final_after_deterministic_fixes",
+    "audit_prompt_version": "75b217bc8626",
+    "audit_focus_version": "066a87e6da63",
+    "audit_temperature": 0.0,
+    "issue_count": 8,
+    "blocking_count": 3,
+    "schema_deviations": [],
+    "usage": {
+      "input_tokens": 51456,
+      "output_tokens": 24605,
+      "reasoning_tokens": 23320,
+      "total_tokens": 76061
+    },
+    "blocking": [
+      [
+        "5",
+        "model_audit_LAYOUT_MISSING_ENTITY"
+      ],
+      [
+        "11",
+        "model_audit_DIALOGUE_MISSING"
+      ],
+      [
+        "3",
+        "model_audit_NARRATION_TRUNCATION"
+      ]
+    ],
+    "issues": [
+      {
+        "code": "model_audit_LAYOUT_MISSING_ENTITY",
+        "severity": "visual_risk",
+        "message": "杨旭是刺杀的在场目标，ff/lf 布局缺其条目会导致生成时目标缺失，状态链断在刺客上船一刻。；建议：在镜头5 的 frame_layouts.ff 与 frame_layouts.lf 各补杨旭条目：盘坐、背影、道具钓杆、心口状态按剧情递进。",
+        "shot_id": "5",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.ff",
+        "evidence": "frame_layouts.ff 中无杨旭条目；ff_desc 写有“船头杨旭素白色轻袍盘坐背影可见”",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.lf"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_DIALOGUE_MISSING",
+        "severity": "visual_risk",
+        "message": "观众听不到张十三以官司、官府吓阻听香，听香连连点头和后续隐瞒死讯失去因果依据。；建议：补一句张十三低声威胁的台词或旁白，明确“不许声张、听我吩咐、否则吃官司”。",
+        "shot_id": "11",
+        "frame_id": "kf1",
+        "entity_id": "张十三、听香",
+        "field_path": "narration_segment",
+        "evidence": "narration_segment 为空；motion_desc 仅写“低声厉色开口”，无威胁内容。",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "11",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_DIALOGUE_MISSING",
+        "severity": "advisory",
+        "message": "观众只看到庄仆转身去赶车，却听不到张十三安排马车，下一镜马车出现缺乏直接声音依据。；建议：在解释醉酒的台词后补一句：叫住庄仆，让把公子马车赶到水边来。",
+        "shot_id": "12",
+        "frame_id": "lf",
+        "entity_id": "张十三",
+        "field_path": "narration_segment",
+        "evidence": "台词只有“公子爷吃醉了酒，险些跌落水中”，缺少吩咐庄仆赶马车的声音内容。",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "12",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "镜头6 末酒壶已脱手，本镜 lf 又写右手持壶，且 frame_layouts.lf[1].props 只有钓杆，酒壶状态自相矛盾。；建议：改为酒壶倒在甲板、酒水洒开，并在 frame_layouts.lf[1].props 补酒壶，保持脱手后不再回手。",
+        "shot_id": "7",
+        "frame_id": "lf",
+        "entity_id": "杨旭、酒壶",
+        "field_path": "lf_desc",
+        "evidence": "右手酒壶倾倒酒水洒在甲板",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "lf_desc"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.lf[1].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_REPEATED_TEXT",
+        "severity": "advisory",
+        "message": "提示词连续重复同一括注，增加冗余且可能干扰短刃与寒光的生成权重。；建议：删除重复的一处括注，只保留一次。",
+        "shot_id": "6",
+        "frame_id": "ff",
+        "entity_id": "神秘人",
+        "field_path": "prompt",
+        "evidence": "（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_NARRATION_TRUNCATION",
+        "severity": "visual_risk",
+        "message": "抽掉“若非如此”前提后，“不会花高价买下”听起来像否定购买，与画面和“听香是买来的”事实相反；逗号也断错。；建议：改为肯定句“杨公子花了两百贯宝钞的高价把她买下”，并删去“的”后逗号。",
+        "shot_id": "3",
+        "frame_id": "ff",
+        "entity_id": "旁白",
+        "field_path": "narration_segment",
+        "evidence": "杨公子也不会花了两百贯宝钞的，高价把她买下",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_COSTUME_CONTINUITY",
+        "severity": "advisory",
+        "message": "听香自耳光后已披头散发，原文步摇也在刺杀时碰落；本镜 prompt 仍写插步摇，画面发式与前镜矛盾。；建议：删去“斜插一枝步摇”，或改为“发髻散乱、无步摇”。",
+        "shot_id": "13",
+        "frame_id": "ff",
+        "entity_id": "听香",
+        "field_path": "prompt",
+        "evidence": "斜插一枝步摇",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "13",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_LOCATION_CONTINUITY",
+        "severity": "advisory",
+        "message": "镜头12 庄仆刚去水边赶车，本镜 ff 马车却停在门前，prompt 又写“湾堤岸边”，空间衔接断裂。；建议：统一为湾堤岸边（别庄大门在后方），并同步改 keyframes[0].desc 与 motion_desc 的行车方向。",
+        "shot_id": "13",
+        "frame_id": "ff",
+        "entity_id": "张十三、马车",
+        "field_path": "ff_desc",
+        "evidence": "马车停在门前",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "13",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "keyframes[0].desc"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "motion_desc"
+          }
+        ],
+        "repairable": true
+      }
+    ]
+  },
+  {
+    "recorded_at": "2026-11-08T22:28:57",
+    "run_id": "20261108T222543-23920",
+    "phase": "commit_round",
+    "round": 1,
+    "reused": false,
+    "status": "ok",
+    "error": "",
+    "model": "deepseek-v4.1-flash",
+    "provider": "agent_plan",
+    "input_revision": "92c80008823b9e237b4547137b55acd1d6448cd8d02b87e0fe9ee2c1bfb45b7d",
+    "rule_source_fingerprint": "31f919561d24b17d",
+    "duration_band": {
+      "min": 60.0,
+      "max": 90.0,
+      "target_min": 70.0,
+      "target_max": 80.0
+    },
+    "prompt_source_fingerprint": "913442d59ede3471",
+    "audit_scope": "final_after_deterministic_fixes",
+    "audit_prompt_version": "b30a73da0b0b",
+    "audit_focus_version": "066a87e6da63",
+    "audit_temperature": 0.0,
+    "issue_count": 15,
+    "blocking_count": 10,
+    "schema_deviations": [],
+    "usage": {
+      "input_tokens": 51936,
+      "output_tokens": 23131,
+      "reasoning_tokens": 20154,
+      "total_tokens": 75067
+    },
+    "blocking": [
+      [
+        "3",
+        "model_audit_NARRATION_TEXT_ERROR"
+      ],
+      [
+        "3",
+        "model_audit_CROSS_FIELD_CONFLICT"
+      ],
+      [
+        "5",
+        "model_audit_CHARACTER_PRESENCE_MISSING"
+      ],
+      [
+        "10",
+        "model_audit_FF_RESULT_LEAK"
+      ],
+      [
+        "11",
+        "model_audit_UNSUPPORTED_PROP"
+      ],
+      [
+        "11",
+        "model_audit_CHARACTER_PRESENCE_MISSING"
+      ],
+      [
+        "12",
+        "model_audit_KF_STATE_CONFLICT"
+      ],
+      [
+        "1",
+        "model_audit_KF_STAGE_MISMATCH"
+      ],
+      [
+        "5",
+        "model_audit_KF_STAGE_MISMATCH"
+      ],
+      [
+        "9",
+        "model_audit_KF_STAGE_MISMATCH"
+      ]
+    ],
+    "issues": [
+      {
+        "code": "model_audit_NARRATION_TEXT_ERROR",
+        "severity": "visual_risk",
+        "message": "旁白插入“的，”且与规划文本不符，语义断裂，观众听到错误断句。；建议：改为“宝钞的高价”，删去“的，”。",
+        "shot_id": "3",
+        "frame_id": "ff",
+        "entity_id": "narration",
+        "field_path": "narration_segment",
+        "evidence": "宝钞的，高价",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "narration_segment"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_CROSS_FIELD_CONFLICT",
+        "severity": "visual_risk",
+        "message": "与ff_desc“左手提青瓷酒壶”相反；且听香仍捧盏递来，杨旭首帧已持盏矛盾。；建议：统一手别，删杨旭首帧酒盏，盏留在听香手中。",
+        "shot_id": "3",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "prompt",
+        "evidence": "右手提青瓷酒壶，左手持酒盏",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "3",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "3",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "3",
+            "field_path": "frame_layouts.ff[0].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "镜4尾帧与镜6首帧杨旭均持钓杆，镜5全程缺钓杆，道具连续断裂。；建议：在ff/lf杨旭props补“钓杆”。",
+        "shot_id": "5",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.ff[2].props",
+        "evidence": "props 为空，未列钓杆",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.ff[2].props"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.lf[2].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_CHARACTER_PRESENCE_MISSING",
+        "severity": "visual_risk",
+        "message": "prompt与ff_desc均有杨旭背影，关键帧三帧却无杨旭，中间过程人物消失。；建议：在kfs[0]/[1]/[2]增补杨旭条目。",
+        "shot_id": "5",
+        "frame_id": "kf1",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.kfs[0]",
+        "evidence": "关键帧出镜列表无杨旭条目",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "frame_layouts.kfs[2]"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROMPT_DUPLICATE_TEXT",
+        "severity": "advisory",
+        "message": "同一括号说明连续重复，提示词冗余，可能干扰生成权重分配。；建议：删除一份重复括号句。",
+        "shot_id": "6",
+        "frame_id": "ff",
+        "entity_id": "神秘人",
+        "field_path": "prompt",
+        "evidence": "（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_LAYOUT_MISSING",
+        "severity": "advisory",
+        "message": "lf_desc写右手酒壶倾倒酒水，布局仅列钓杆未列酒壶，尾帧道具状态不一致。；建议：在lf杨旭props补“酒壶”或改为落地道具。",
+        "shot_id": "7",
+        "frame_id": "lf",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.lf[1].props",
+        "evidence": "钓杆",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "frame_layouts.lf[1].props"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_FF_RESULT_LEAK",
+        "severity": "visual_risk",
+        "message": "首帧已完成motion前2秒的“猛地转身扬手”，过程动作提前，正片会重复。；建议：首帧改为背对听香、手未扬起。",
+        "shot_id": "10",
+        "frame_id": "ff",
+        "entity_id": "张十三",
+        "field_path": "ff_desc",
+        "evidence": "转身扬手",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "10",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.ff[0].pose"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.ff[0].states"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_UNSUPPORTED_PROP",
+        "severity": "visual_risk",
+        "message": "原文张十三无刀；且lf_desc写“右手仍按刀柄”，与ff/motion左手按刀柄矛盾，布局props也无刀。；建议：删除刀柄描写，或明确腰刀并统一左右手与布局。",
+        "shot_id": "11",
+        "frame_id": "ff",
+        "entity_id": "张十三",
+        "field_path": "prompt",
+        "evidence": "左手按在腰间刀柄上",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "11",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "lf_desc"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "motion_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_CHARACTER_PRESENCE_MISSING",
+        "severity": "visual_risk",
+        "message": "prompt写杨旭素白身影仰倒画左船头，布局全程缺尸体，与镜10/12/13在场状态断裂。；建议：在ff/lf/kfs中增补仰倒的杨旭条目。",
+        "shot_id": "11",
+        "frame_id": "ff",
+        "entity_id": "杨旭",
+        "field_path": "frame_layouts.ff",
+        "evidence": "frame_layouts 各帧无杨旭条目",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.lf"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.kfs[0]"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.kfs[1]"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.kfs[2]"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_KF_STATE_CONFLICT",
+        "severity": "visual_risk",
+        "message": "与motion“吩咐把公子马车赶到水边来，庄仆应声转身去赶车”及lf“应声去赶车的庄仆”矛盾。；建议：改为“庄仆们应声转身去赶车”。",
+        "shot_id": "12",
+        "frame_id": "kf3",
+        "entity_id": "群演",
+        "field_path": "keyframes[2].desc",
+        "evidence": "庄仆们转身散去",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "12",
+            "field_path": "keyframes[2].desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_LF_SCOPE_CONFLICT",
+        "severity": "advisory",
+        "message": "同一尾帧又说车厢内杨旭听香细节；远景没入夜色时无法同框看见车内人物。；建议：二选一：只保留车影没入夜色，或改近景车厢内。",
+        "shot_id": "13",
+        "frame_id": "lf",
+        "entity_id": "听香",
+        "field_path": "lf_desc",
+        "evidence": "车影没入夜色",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "13",
+            "field_path": "lf_desc"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_APPEARANCE_STATE_CONFLICT",
+        "severity": "advisory",
+        "message": "与ff/lf“披头散发”矛盾；步摇已在刺杀时落水，外观提示会生成错误发式。；建议：prompt改为披头散发、无步摇。",
+        "shot_id": "13",
+        "frame_id": "lf",
+        "entity_id": "听香",
+        "field_path": "prompt",
+        "evidence": "一头乌黑青丝挽慵懒美人髻，斜插一枝步摇",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "13",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_KF_STAGE_MISMATCH",
+        "severity": "visual_risk",
+        "message": "镜1-4关键帧后两帧使用approach/after/react/climax等非法stage，无法按pre/process/result对齐。；建议：各关键帧后两帧改为process/result。",
+        "shot_id": "1",
+        "frame_id": "kf2",
+        "entity_id": "scene",
+        "field_path": "keyframes[1].stage",
+        "evidence": "approach",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "1",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "1",
+            "field_path": "keyframes[2].stage"
+          },
+          {
+            "shot_id": "2",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "2",
+            "field_path": "keyframes[2].stage"
+          },
+          {
+            "shot_id": "3",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "3",
+            "field_path": "keyframes[2].stage"
+          },
+          {
+            "shot_id": "4",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "4",
+            "field_path": "keyframes[2].stage"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_KF_STAGE_MISMATCH",
+        "severity": "visual_risk",
+        "message": "镜5-8关键帧后两帧使用approach/climax/exit/react/after等非法stage。；建议：各关键帧后两帧改为process/result。",
+        "shot_id": "5",
+        "frame_id": "kf2",
+        "entity_id": "scene",
+        "field_path": "keyframes[1].stage",
+        "evidence": "approach",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "5",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "5",
+            "field_path": "keyframes[2].stage"
+          },
+          {
+            "shot_id": "6",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "6",
+            "field_path": "keyframes[2].stage"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "keyframes[2].stage"
+          },
+          {
+            "shot_id": "8",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "8",
+            "field_path": "keyframes[2].stage"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_KF_STAGE_MISMATCH",
+        "severity": "visual_risk",
+        "message": "镜9-13关键帧后两帧使用approach/react/climax/exit等非法stage。；建议：各关键帧后两帧改为process/result。",
+        "shot_id": "9",
+        "frame_id": "kf2",
+        "entity_id": "scene",
+        "field_path": "keyframes[1].stage",
+        "evidence": "approach",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "9",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "9",
+            "field_path": "keyframes[2].stage"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "keyframes[2].stage"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "keyframes[2].stage"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "12",
+            "field_path": "keyframes[2].stage"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "keyframes[1].stage"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "keyframes[2].stage"
+          }
+        ],
+        "repairable": true
+      }
+    ]
+  },
+  {
+    "recorded_at": "2026-11-09T07:56:57",
+    "run_id": "20261109T075259-24828",
+    "phase": "commit_round",
+    "round": 1,
+    "reused": false,
+    "status": "ok",
+    "error": "",
+    "model": "deepseek-v4.1-flash",
+    "provider": "agent_plan",
+    "input_revision": "51978e8b92f6bf7c877acd9f51103312383e793332b2bce730cf9ecdb7140172",
+    "rule_source_fingerprint": "72dcb353990a2071",
+    "duration_band": {
+      "min": 60.0,
+      "max": 90.0,
+      "target_min": 70.0,
+      "target_max": 80.0
+    },
+    "prompt_source_fingerprint": "cdef3ffa693f2daf",
+    "audit_scope": "final_after_deterministic_fixes",
+    "audit_prompt_version": "a5929a9f6abc",
+    "audit_focus_version": "066a87e6da63",
+    "audit_temperature": 0.0,
+    "issue_count": 7,
+    "blocking_count": 1,
+    "schema_deviations": [],
+    "usage": {
+      "input_tokens": 53589,
+      "output_tokens": 21707,
+      "reasoning_tokens": 20449,
+      "total_tokens": 75296
+    },
+    "blocking": [
+      [
+        "8",
+        "model_audit_STATE_CHAIN_CONFLICT"
+      ]
+    ],
+    "issues": [
+      {
+        "code": "model_audit_STATE_CHAIN_CONFLICT",
+        "severity": "visual_risk",
+        "message": "听香此刻应在船上且为画外声源；布局标在堤岸会让画面出现岸上听香，与镜头5-7及本镜“画外”矛盾。；建议：删除 ff 与 kfs[0] 中的听香条目，只保留画外尖叫；或改为船上条位。",
+        "shot_id": "8",
+        "frame_id": "ff",
+        "entity_id": "听香",
+        "field_path": "frame_layouts.ff[1].support",
+        "evidence": "堤岸",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "8",
+            "field_path": "frame_layouts.ff"
+          },
+          {
+            "shot_id": "8",
+            "field_path": "frame_layouts.kfs[0]"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROMPT_REPETITION",
+        "severity": "advisory",
+        "message": "重复提示会污染生成语义，可能让模型输出重复寒光或双短刃。；建议：删除重复括号，仅保留一次“寒光是独立物体，不是从角色身上长出来的”。",
+        "shot_id": "6",
+        "frame_id": "ff",
+        "entity_id": "短刃",
+        "field_path": "prompt",
+        "evidence": "（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "6",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_PROP_CONTINUITY",
+        "severity": "advisory",
+        "message": "镜头6 lf 已写“酒壶脱手”，此处又写右手持壶，无重新获得事件，死后道具回到手中。；建议：改为“酒壶倒落甲板，酒水洒在甲板”，同步修改 prompt 中同一表述。",
+        "shot_id": "7",
+        "frame_id": "lf",
+        "entity_id": "酒壶",
+        "field_path": "lf_desc",
+        "evidence": "右手酒壶倾倒酒水洒在甲板",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "7",
+            "field_path": "lf_desc"
+          },
+          {
+            "shot_id": "7",
+            "field_path": "prompt"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_FF_RESULT_LEAK",
+        "severity": "advisory",
+        "message": "ff 已完成 motion 前2秒的俯身竖指，导致过程动作重复、首帧越位。；建议：ff 改为张十三尚未俯身、右手未抬；逼近与竖指交给 motion 前2秒完成。",
+        "shot_id": "11",
+        "frame_id": "ff",
+        "entity_id": "张十三",
+        "field_path": "ff_desc",
+        "evidence": "张十三压低身形逼近听香耳畔，右手食指竖于唇前",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "11",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.ff[0].pose"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.ff[0].states"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "keyframes[0].desc"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.kfs[0][0].pose"
+          },
+          {
+            "shot_id": "11",
+            "field_path": "frame_layouts.kfs[0][0].states"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_FF_RESULT_LEAK",
+        "severity": "advisory",
+        "message": "ff 已完成扬鞭，motion 前2秒再次扬鞭，马车起步动作过程缺失。；建议：ff 改为坐于车辕持鞭未扬，扬鞭催马交给 motion 前2秒。",
+        "shot_id": "13",
+        "frame_id": "ff",
+        "entity_id": "张十三",
+        "field_path": "ff_desc",
+        "evidence": "张十三坐于车辕扬鞭",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "13",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.ff[0].pose"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "keyframes[0].desc"
+          },
+          {
+            "shot_id": "13",
+            "field_path": "frame_layouts.kfs[0][0].pose"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_STATE_CHAIN_CONFLICT",
+        "severity": "advisory",
+        "message": "听香“披头散发”在镜头10 突现，前镜无步摇碰落或头发散落事件，属无依据状态跳变。；建议：删去镜头10 的“披头散发”并同步布局与提示，或在前镜补步摇碰落/发髻散乱。",
+        "shot_id": "10",
+        "frame_id": "ff",
+        "entity_id": "听香",
+        "field_path": "ff_desc",
+        "evidence": "听香披头散发撑坐船板",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "10",
+            "field_path": "ff_desc"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.ff[1].states"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "prompt"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "keyframes[2].desc"
+          },
+          {
+            "shot_id": "10",
+            "field_path": "frame_layouts.kfs[2][1].states"
+          }
+        ],
+        "repairable": true
+      },
+      {
+        "code": "model_audit_VISUAL_CONTINUITY",
+        "severity": "advisory",
+        "message": "车影已没入夜色却仍清晰展示车厢内人物，空间可见性矛盾。；建议：改为“夜色中车篷灯笼映出车厢内……，车影渐远”，避免全黑车影与车内可见并存。",
+        "shot_id": "13",
+        "frame_id": "lf",
+        "entity_id": "马车",
+        "field_path": "lf_desc",
+        "evidence": "车影没入夜色，尘土未落，车厢内杨旭素白色轻袍仰卧",
+        "related_shot_ids": [],
+        "repair_targets": [
+          {
+            "shot_id": "13",
+            "field_path": "lf_desc"
+          }
+        ],
+        "repairable": true
+      }
+    ]
+  }
+]

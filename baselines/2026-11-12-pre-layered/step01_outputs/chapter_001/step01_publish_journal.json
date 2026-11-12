@@ -1,0 +1,17 @@
+{
+ "state": "committed",
+ "label": "step01:20261109T075259-24828",
+ "pid": 24828,
+ "at": "2026-11-09T07:56:57",
+ "backup_dir": "_publish_backup_20261109_075657_24828",
+ "backed_up": [
+  "script_result.json",
+  "step01_quality.json",
+  "step01_audit.json",
+  "step01_commit.json",
+  "step01_adoption.json"
+ ],
+ "created": [],
+ "old_revision": "",
+ "detail": ""
+}

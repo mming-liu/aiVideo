@@ -1,0 +1,34 @@
+[
+  {
+    "recorded_at": "2026-11-10T23:16:23",
+    "run_id": "20261110T231615-12932",
+    "phase": "commit_round",
+    "round": 1,
+    "reused": false,
+    "status": "request_failed",
+    "error": "Agent Plan 提交失败[transport_connect]: HTTPSConnectionPool(host='opencode.ai', port=443): Max retries exceeded with url: /zen/go/v1/chat/completions (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate is not yet valid (_ssl.c:1081)')))（尝试 1/1，已用 7.2s；重试预算 30s）",
+    "model": "deepseek-v4.1-flash",
+    "provider": "agent_plan",
+    "input_revision": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+    "rule_source_fingerprint": "593deea03c7cddc6",
+    "duration_band": {
+      "min": 60.0,
+      "max": 90.0,
+      "target_min": 70.0,
+      "target_max": 80.0
+    },
+    "prompt_source_fingerprint": "3f31c2452f71e185",
+    "audit_scope": "final_after_deterministic_fixes",
+    "audit_prompt_version": "a5929a9f6abc",
+    "audit_focus_version": "066a87e6da63",
+    "audit_temperature": 0.0,
+    "issue_count": 0,
+    "blocking_count": 0,
+    "schema_deviations": [],
+    "usage": null,
+    "blocking": [],
+    "issues": [],
+    "raw_text_head": "",
+    "raw_text_len": 0
+  }
+]

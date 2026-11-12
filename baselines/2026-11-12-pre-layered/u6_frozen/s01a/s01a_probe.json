@@ -1,0 +1,55 @@
+{
+ "schema": "s01a_rebuild_probe.v1",
+ "novel_present": true,
+ "shot8_layout_before": {
+  "ff": [
+   "张十三"
+  ],
+  "kfs0": [
+   "张十三",
+   "听香"
+  ]
+ },
+ "shot8_layout_after": {
+  "ff": [
+   "张十三"
+  ],
+  "kfs0": [
+   "张十三"
+  ]
+ },
+ "diff_vs_old_candidate": [
+  {
+   "path": "/script_revision",
+   "kind": "value",
+   "old": "51978e8b92f6bf7c877acd9f51103312383e793332b2bce730cf9ecdb7140172",
+   "new": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7"
+  },
+  {
+   "path": "/shots[7]/frame_layouts/kfs[0]",
+   "kind": "len",
+   "old": 2,
+   "new": 1
+  }
+ ],
+ "diff_count": 2,
+ "revision_computed": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+ "revision_recheck": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+ "quality": {
+  "status": "PASS",
+  "blocking": false,
+  "hard_count": 0,
+  "visual_risk_count": 0,
+  "advisory_count": 83,
+  "rule_source_fingerprint": "593deea03c7cddc6",
+  "script_revision": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7"
+ },
+ "shot_count": 13,
+ "duration_sec": 75.25,
+ "narration_kept": true,
+ "advisory_delta_vs_old_quality": {
+  "resolved": [],
+  "new": []
+ },
+ "applied": false
+}

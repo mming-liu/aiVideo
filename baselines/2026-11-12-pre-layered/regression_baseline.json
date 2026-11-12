@@ -1,0 +1,81 @@
+{
+  "schema": "aivideo.regression_baseline.v1",
+  "captured_at": "2026-11-12T10:42:00+08:00",
+  "baseline_commit": "bc5c50e",
+  "baseline_branch": "master",
+  "superseded_by": ["f7d4cf1", "78ebbb1", "831eef1"],
+  "python": "C:/Users/ee54/AppData/Local/Python/pythoncore-3.14-64/python.exe",
+  "pytest_flags": "--basetemp=.pytest_tmp/<unique> -p no:cacheprovider",
+  "env_note": "本机 WorkBuddy safe-delete 批量删除确认门会在单进程约 50 次删除后打断全量回归；需把 CODEBUDDY_SAFE_DELETE_BULK_STATE_DIR 指向工作区可写目录，或按目录分组运行。这不是代码失败。",
+  "readings": {
+    "master_full_after_s06": {"passed": 4212, "skipped": 278, "xfailed": 4, "failed": 0},
+    "step01_script_gen_full": {"passed": 4189, "skipped": 278, "xfailed": 4},
+    "affected_subset_s01_s05": {"passed": 950, "skipped": 27, "failed": 0},
+    "new_offline_cases_s01_s05": 46,
+    "f7d4cf1_offline": {"passed": 106, "note": "其中 39 条为本轮新增，67 条为仓库原有 R3 回归"},
+    "78ebbb1_post_merge_smoke": {"passed": 89},
+    "831eef1_seven_acceptance_files": {"passed": 84, "note": "S02 原有 39 + 本轮新增 45"},
+    "831eef1_wide_regression": {"passed": 804, "failed": 25, "skipped": 11, "note": "25 条全部为本机删除确认门；同批 8 个文件小批重跑 132 passed"},
+    "831eef1_failed_files_isolated": {"passed": 132}
+  },
+  "s06_real_model_ab": {
+    "authorized_at": "2026-11-12T07:04:00+08:00",
+    "finished_at": "2026-11-12T07:32:00+08:00",
+    "channel": "agent_plan",
+    "model": "deepseek-v4.1-flash",
+    "sends": 8,
+    "send_cap": "6 对照 + 1 修订 + 1 终局审计",
+    "all_sends_succeeded": true,
+    "new_contract": {"seconds": 203, "tokens": 33945, "found": "ACTION_OMISSION（旧契约漏检）"},
+    "old_contract": {"seconds": 331, "tokens": 46472},
+    "legal_time_ellipsis_not_tested": true,
+    "restricted_repair": {
+      "confirmed_defects_entered": 7,
+      "named_shots": 4,
+      "shot7_11": "因返回含未授权 keyframes 的整镜替换被拒",
+      "shot1_6": "resolved=0",
+      "script_revision_unchanged": true,
+      "defects_resolved": 0
+    },
+    "final_audit": {
+      "issues": 11,
+      "advisory": 11,
+      "blocking": 0,
+      "frozen_audit": {"issues": 10, "blocking": 1},
+      "missed_confirmed_defects": 3,
+      "suspected_new_real_issues": ["镜1 笛声 vs 原文箫音", "镜12 on_screen 与不可见矛盾"]
+    },
+    "conclusion": "新审计契约方向可保留，但证据不足以放宽正式门禁；模型给严重度不稳定而门禁依赖 blocking；修订瓶颈是授权面太窄（同帧 keyframes/布局），不是模型输出面太大",
+    "limits": ["每格 n=1", "旧契约固定先跑", "只跑 1 轮修订", "未重跑 Step02a/02b 等下游"]
+  },
+  "u6_frozen": {
+    "revision": "84ff4112…",
+    "candidate_sha256_prefix": "3f88a060",
+    "run_id": "20261111T212239-13228",
+    "terminal": "BLOCK",
+    "location_note": "原本位于 .pytest_tmp/u1_u5_closeout_20261110（被 .gitignore 忽略），本快照已实体化"
+  },
+  "s01_ten_issue_adjudication": {
+    "confirmed_defects": 7,
+    "legal_expression": 1,
+    "pending_adjudication": 1,
+    "improvement": 1,
+    "note": "#1 时间省略判定不成立；#10 修法方向被纠正"
+  },
+  "fixture_expected_codes": {
+    "temporal_ellipsis": {"baseline": [], "mutation": ["causal_gap", "time_ellipsis_lost"]},
+    "offscreen_voice": {"baseline": [], "mutation": ["listener_reaction_missing", "offscreen_speaker_visible"]},
+    "voice_timing": {"baseline": [], "mutation": ["audio_window_overflow", "native_dialogue_unverified"]}
+  },
+  "prior_round_gaps": [
+    "三族夹具 expected.codes 当时没有检查器消费，baseline 与 mutation 都通过绑定校验",
+    "shared/execution_contract.py 当时全库只有测试文件 import，无生产调用点",
+    "prompt 与 visual_plan.visible_characters 可绕过语义保护",
+    "106 passed 里 67 条是仓库原有 R3 回归，不能当本模块验收"
+  ],
+  "gate_status_at_baseline": {
+    "step01_duration_budget": "BLOCK（正片 <60s / >90s 由 Step01 提交门阻塞）",
+    "audit_adjudication": "gate_effect=shadow_only（确定性发现只进报告，不改 severity/blocking）",
+    "conclusion": "证据不足以放宽正式门禁；正式切换清单只产出、未执行"
+  }
+}

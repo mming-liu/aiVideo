@@ -1,0 +1,89 @@
+{
+ "schema": "step01.formal_adoption/1",
+ "status": "adopted_and_verified",
+ "adopted_at": "2026-11-09T07:56:57",
+ "authorization": "User instruction: 正式写入",
+ "source_chapter": "C:\\myFloders\\git\\aiVideo\\.tmp\\repair6_20261031\\run1\\output\\锦衣夜行\\part_01_杀青州\\chapter_001",
+ "formal_chapter": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001",
+ "source_run_id": "20261109T075259-24828",
+ "script_revision": "51978e8b92f6bf7c877acd9f51103312383e793332b2bce730cf9ecdb7140172",
+ "scope": {
+  "novel": "锦衣夜行",
+  "book_index": 1,
+  "book_name": "杀青州",
+  "chapter": 1
+ },
+ "effective_config": {
+  "DURATION_MIN_SEC": 60.0,
+  "DURATION_MAX_SEC": 90.0,
+  "DURATION_TARGET_MIN_SEC": 70.0,
+  "DURATION_TARGET_MAX_SEC": 80.0
+ },
+ "output_base_override": "C:\\myFloders\\git\\aiVideo\\output",
+ "source_sha256": {
+  "script_result.json": "0517d9c40a50bfef418011ce48968c9297bbd68a33c82176b0ed6a0c218ff91a",
+  "step01_quality.json": "2ac4eb91f85ac0cabfa0d0b45dcb13ec929bae478daf212d8c3fd296f551effd",
+  "step01_audit.json": "7ffe4132dd2355f82bf45c44b7649180cc56e94ebd1b47cc511daceeee7f3fc6",
+  "step01_commit.json": "bd258ee683737fde960c6d47fe81c559ad64c99ff6105c6e0997f903b12e0a61",
+  "step01_calls.jsonl": "c6b4b0c8671f2223efc7d13f9f5da1fcd49b07636d60c0ea02bbfa1fe7bc28fa",
+  "step01_audit_rounds.json": "e820eac0503508bb242b86fa096ee49b44eec9cfe282557ce299839fa0f79903",
+  "step01.log": "fd000c0dc22bf4a198e4a306319c4168bf1915a80390f34a9bc4754be8a73c11",
+  "step01_call_bodies\\ce637f003fd9f4665.txt": "0a52b106d1a81f98004d004c0f5c7de2812afe100e6535e93c3ef0ec18619273"
+ },
+ "ledger_relocations": [
+  {
+   "call_id": "ce637f003fd9f4665",
+   "source": "C:\\myFloders\\git\\aiVideo\\.tmp\\repair6_20261031\\run1\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\step01_call_bodies\\ce637f003fd9f4665.txt",
+   "formal": "C:\\myFloders\\git\\aiVideo\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\step01_call_bodies\\ce637f003fd9f4665.txt"
+  }
+ ],
+ "source_ledger_preserved_as": "step01_calls.source.jsonl",
+ "source_budget_receipt_preserved_as": "step01_source_budget_receipt.json",
+ "model_sends": 0,
+ "limitations": [
+  "Source script has no chapter_index; package scope and explicit requested chapter were checked.",
+  "Global OUTPUT_BASE remains ./output/video; use this receipt output_base_override for downstream.",
+  "5 advisory remain; server billing attribution not verified."
+ ],
+ "formal_gate": "passed",
+ "body_verified_count": 1,
+ "formal_sha256": {
+  "script_result.json": "7b4ab0019730911233cb1cc85cdd99f5fa4432c367e78af2837e6c046120caac",
+  "step01.log": "fd000c0dc22bf4a198e4a306319c4168bf1915a80390f34a9bc4754be8a73c11",
+  "step01_audit.json": "a4e977d8a05e952c75da8907d73c2d51ae3f67166a6c0b734dfa6c73bf84232d",
+  "step01_audit_rounds.json": "e820eac0503508bb242b86fa096ee49b44eec9cfe282557ce299839fa0f79903",
+  "step01_calls.jsonl": "bb0ceb6f02c28636b146d8a917410f68f33c3c02201dc0f974e3fd021eb6612f",
+  "step01_calls.source.jsonl": "c6b4b0c8671f2223efc7d13f9f5da1fcd49b07636d60c0ea02bbfa1fe7bc28fa",
+  "step01_commit.json": "88f572a70ad2f671bf98b6888af3fdda758dcf1c34aa3bd8b4ab5c11d15b7b8b",
+  "step01_quality.json": "e558d99a010d274641a30cf73d56ebdb3b83473c81222271a0794b5910fdfba1",
+  "step01_source_budget_receipt.json": "259d7a541f2da9099843a7778093b35167d668a271f9f7a98347e2981dd43811",
+  "step01_call_bodies\\ce637f003fd9f4665.txt": "0a52b106d1a81f98004d004c0f5c7de2812afe100e6535e93c3ef0ec18619273"
+ },
+ "gate_refresh": {
+  "schema": "step01.gate_refresh/1",
+  "at": "2026-11-01T21:29:15+08:00",
+  "from_fingerprint": "2d9dda15ae529a12",
+  "to_fingerprint": "86ba79a2eb6649d1",
+  "script_sha256": "8d83492837ee0e8f2d9e247e80c59efb0c65441b0199308ecd00cb0ea9117013",
+  "script_revision": "b5ec17f69c7e9af57d536d759bbabc5f6333d87f3463b26b7eb140b13ef3649e",
+  "duration_band": {
+   "min": 60.0,
+   "max": 120.0,
+   "target_min": 105.0,
+   "target_max": 115.0
+  },
+  "model_sends": 0
+ },
+ "shot_patch": {
+  "shot_index": 1,
+  "changed_fields": [
+   "camera_movement",
+   "ff_desc",
+   "frame_layouts",
+   "keyframes",
+   "lf_desc",
+   "motion_desc",
+   "prompt"
+  ]
+ }
+}

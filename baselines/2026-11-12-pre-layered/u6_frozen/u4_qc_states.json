@@ -1,0 +1,116 @@
+{
+ "frames": [
+  {
+   "path": "vimax_working\\shots\\1\\first_frame.png",
+   "status": "qc_stale",
+   "reason": "legacy_unbound",
+   "sha256": "c05efb6df85a1cb4",
+   "sidecar_status": null,
+   "sidecar_bound_sha": ""
+  },
+  {
+   "path": "vimax_working\\shots\\1\\keyframe_0.png",
+   "status": "qc_stale",
+   "reason": "legacy_unbound",
+   "sha256": "28ee34b5945df9c6",
+   "sidecar_status": null,
+   "sidecar_bound_sha": ""
+  },
+  {
+   "path": "vimax_working\\shots\\1\\keyframe_1.png",
+   "status": "qc_stale",
+   "reason": "legacy_unbound",
+   "sha256": "f428b16bb85d215f",
+   "sidecar_status": null,
+   "sidecar_bound_sha": ""
+  },
+  {
+   "path": "vimax_working\\shots\\1\\keyframe_2.png",
+   "status": "qc_stale",
+   "reason": "legacy_unbound",
+   "sha256": "1ed1e28a83e9e4cb",
+   "sidecar_status": null,
+   "sidecar_bound_sha": ""
+  },
+  {
+   "path": "vimax_working\\shots\\1\\last_frame.png",
+   "status": "qc_stale",
+   "reason": "legacy_unbound",
+   "sha256": "b744dc42bd42a340",
+   "sidecar_status": null,
+   "sidecar_bound_sha": ""
+  },
+  {
+   "path": "vimax_working\\shots\\2\\first_frame.png",
+   "status": "qc_stale",
+   "reason": "legacy_unbound",
+   "sha256": "4089f234ff475f7a",
+   "sidecar_status": null,
+   "sidecar_bound_sha": ""
+  },
+  {
+   "path": "vimax_working\\shots\\2\\keyframe_0.png",
+   "status": "qc_stale",
+   "reason": "legacy_unbound",
+   "sha256": "c6857f3bae22201a",
+   "sidecar_status": null,
+   "sidecar_bound_sha": ""
+  },
+  {
+   "path": "vimax_working\\shots\\2\\keyframe_1.png",
+   "status": "qc_stale",
+   "reason": "legacy_unbound",
+   "sha256": "075a77a58d57a4e6",
+   "sidecar_status": null,
+   "sidecar_bound_sha": ""
+  },
+  {
+   "path": "vimax_working\\shots\\2\\keyframe_2.png",
+   "status": "qc_stale",
+   "reason": "legacy_unbound",
+   "sha256": "c2668f362bf50706",
+   "sidecar_status": null,
+   "sidecar_bound_sha": ""
+  },
+  {
+   "path": "vimax_working\\shots\\2\\last_frame.png",
+   "status": "qc_stale",
+   "reason": "legacy_unbound",
+   "sha256": "f1a791d6fae8091c",
+   "sidecar_status": null,
+   "sidecar_bound_sha": ""
+  },
+  {
+   "path": "vimax_working\\shots\\2\\ref_sheet_ff_chars_杨旭+听香_a3f68e05f200118b8e1a.png",
+   "status": "qc_not_run",
+   "reason": "no_sidecar",
+   "sha256": "e8a443bb7ae39291",
+   "sidecar_status": null,
+   "sidecar_bound_sha": ""
+  },
+  {
+   "path": "vimax_working\\shots\\2\\ref_sheet_kf_chars_杨旭+听香_a3f68e05f200118b8e1a.png",
+   "status": "qc_not_run",
+   "reason": "no_sidecar",
+   "sha256": "e8a443bb7ae39291",
+   "sidecar_status": null,
+   "sidecar_bound_sha": ""
+  },
+  {
+   "path": "vimax_working\\shots\\2\\ref_sheet_lf_chars_杨旭+听香_a3f68e05f200118b8e1a.png",
+   "status": "qc_not_run",
+   "reason": "no_sidecar",
+   "sha256": "e8a443bb7ae39291",
+   "sidecar_status": null,
+   "sidecar_bound_sha": ""
+  },
+  {
+   "path": "vimax_working\\shots\\2\\ref_sheet_shot2_lf_extra_2f78370ee70709cd76f5.png",
+   "status": "qc_not_run",
+   "reason": "no_sidecar",
+   "sha256": "1054c21c3dd8ac2a",
+   "sidecar_status": null,
+   "sidecar_bound_sha": ""
+  }
+ ]
+}

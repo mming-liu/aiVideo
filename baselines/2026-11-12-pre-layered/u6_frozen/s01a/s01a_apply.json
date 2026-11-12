@@ -1,0 +1,92 @@
+{
+ "schema": "s01a_rebuild_probe.v1",
+ "novel_present": true,
+ "shot8_layout_before": {
+  "ff": [
+   "张十三"
+  ],
+  "kfs0": [
+   "张十三",
+   "听香"
+  ]
+ },
+ "shot8_layout_after": {
+  "ff": [
+   "张十三"
+  ],
+  "kfs0": [
+   "张十三"
+  ]
+ },
+ "diff_vs_old_candidate": [
+  {
+   "path": "/script_revision",
+   "kind": "value",
+   "old": "51978e8b92f6bf7c877acd9f51103312383e793332b2bce730cf9ecdb7140172",
+   "new": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7"
+  },
+  {
+   "path": "/shots[7]/frame_layouts/kfs[0]",
+   "kind": "len",
+   "old": 2,
+   "new": 1
+  }
+ ],
+ "diff_count": 2,
+ "revision_computed": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+ "revision_recheck": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+ "quality": {
+  "status": "PASS",
+  "blocking": false,
+  "hard_count": 0,
+  "visual_risk_count": 0,
+  "advisory_count": 83,
+  "rule_source_fingerprint": "593deea03c7cddc6",
+  "script_revision": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7"
+ },
+ "shot_count": 13,
+ "duration_sec": 75.25,
+ "narration_kept": true,
+ "advisory_delta_vs_old_quality": {
+  "resolved": [
+   "advisory|ff_desc_anchors|10|68|f9a08986",
+   "advisory|ff_desc_anchors|10|69|9720c2ca",
+   "advisory|ff_desc_anchors|11|70|fde3f8b6",
+   "advisory|ff_desc_anchors|11|71|5a56ca4b",
+   "advisory|ff_desc_anchors|2|58|61519190",
+   "advisory|ff_desc_anchors|2|59|dd082f20",
+   "advisory|presence_insufficient_diag|10|78|b62f5dd4",
+   "advisory|presence_insufficient_diag|10|79|a5ef0458",
+   "advisory|presence_insufficient_diag|10|80|c4758d13",
+   "advisory|presence_insufficient_diag|10|81|62416bec",
+   "advisory|presence_insufficient_diag|12|82|1baf1e30",
+   "advisory|presence_insufficient_diag|8|75|449d7ea1",
+   "advisory|presence_insufficient_diag|8|76|7aa3cc69",
+   "advisory|presence_insufficient_diag|8|77|d419047c",
+   "advisory|temporal_plan|3|83|69f0a801",
+   "advisory|temporal_plan|8|84|3d7c6333"
+  ],
+  "new": [
+   "advisory|ff_desc_anchors|10|68|08452ca3",
+   "advisory|ff_desc_anchors|10|69|7d821086",
+   "advisory|ff_desc_anchors|11|70|477f90c6",
+   "advisory|ff_desc_anchors|11|71|0680e2ee",
+   "advisory|ff_desc_anchors|2|58|318d584b",
+   "advisory|ff_desc_anchors|2|59|401163fb",
+   "advisory|presence_insufficient_diag|10|76|b62f5dd4",
+   "advisory|presence_insufficient_diag|10|77|a5ef0458",
+   "advisory|presence_insufficient_diag|10|78|c4758d13",
+   "advisory|presence_insufficient_diag|10|79|62416bec",
+   "advisory|presence_insufficient_diag|12|80|1baf1e30",
+   "advisory|presence_insufficient_diag|8|75|d419047c",
+   "advisory|temporal_plan|3|81|69f0a801",
+   "advisory|temporal_plan|8|82|3d7c6333"
+  ]
+ },
+ "applied": true,
+ "written": {
+  "candidate_sha256": "748095f252861badc3a9b2d1efa24c0630b138065cd6957752703919a8b026df",
+  "iso_script_sha256": "3f88a060082173ca36cdcb6f14f94002843d502fe09930812ea13dc3bf42321f",
+  "iso_quality_sha256": "1f6ad9fa640e4059195c67b6baea915f1313c2c9625bac5bb266d0c06045d791"
+ }
+}

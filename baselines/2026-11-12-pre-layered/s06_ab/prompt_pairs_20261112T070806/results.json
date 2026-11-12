@@ -1,0 +1,177 @@
+{
+  "meta": {
+    "run_dir": "C:\\myFloders\\git\\aiVideo\\.pytest_tmp\\s06\\runs\\20261112T070806",
+    "provider": "agent_plan",
+    "model": "deepseek-v4.1-flash",
+    "old_prompt_version": "a5929a9f6abc",
+    "new_prompt_version": "857e4768d3dc",
+    "samples": [
+      "time_ellipsis_legal",
+      "state_broken",
+      "voice_broken"
+    ],
+    "max_sends": 6,
+    "duration_band": {
+      "min": 60.0,
+      "max": 90.0,
+      "target_min": 70.0,
+      "target_max": 80.0
+    },
+    "repo_head": "7286516"
+  },
+  "sends": 0,
+  "results": [
+    {
+      "sample": "time_ellipsis_legal",
+      "contract": "old",
+      "prompt_sha1": "5b5cca632df83048eab8df060a9fb7d4b8f89e80",
+      "prompt_chars": 6645,
+      "expected": {
+        "verdict": "legal",
+        "defect_class": "none",
+        "discriminating": [
+          "scene",
+          "clip_transition",
+          "context_bridge"
+        ],
+        "why": "两镜之间明确隔了一夜：scene 变了、转场声明淡出黑场、context_bridge 写了「次日清晨」。观众不需要看见夜里发生了什么就能跟上剧情，补写过程反而是多余的。",
+        "must_preserve": [
+          "时间关系：次日清晨",
+          "收剑这一动作已经完成",
+          "剑在第二镜仍处于入鞘状态"
+        ]
+      },
+      "status": "dry",
+      "issues": [],
+      "issues_count": 0,
+      "blocking_count": 0,
+      "elapsed_sec": 0.0
+    },
+    {
+      "sample": "time_ellipsis_legal",
+      "contract": "new",
+      "prompt_sha1": "6cca1c6aeb49480f9737aed606f7f1aa63aaadb2",
+      "prompt_chars": 7801,
+      "expected": {
+        "verdict": "legal",
+        "defect_class": "none",
+        "discriminating": [
+          "scene",
+          "clip_transition",
+          "context_bridge"
+        ],
+        "why": "两镜之间明确隔了一夜：scene 变了、转场声明淡出黑场、context_bridge 写了「次日清晨」。观众不需要看见夜里发生了什么就能跟上剧情，补写过程反而是多余的。",
+        "must_preserve": [
+          "时间关系：次日清晨",
+          "收剑这一动作已经完成",
+          "剑在第二镜仍处于入鞘状态"
+        ]
+      },
+      "status": "dry",
+      "issues": [],
+      "issues_count": 0,
+      "blocking_count": 0,
+      "elapsed_sec": 0.0
+    },
+    {
+      "sample": "state_broken",
+      "contract": "old",
+      "prompt_sha1": "89f94c406d213bcf70fd5c62eb49be5b169e1cee",
+      "prompt_chars": 6645,
+      "expected": {
+        "verdict": "defect",
+        "defect_class": "contradiction",
+        "discriminating": [
+          "ff_desc",
+          "frame_layouts.ff"
+        ],
+        "why": "同一场景、连续时间（硬切、无时间跳跃依据），前镜尾帧酒壶已放在案上、甲双手空，后镜首帧酒壶却又回到甲手里、案上无壶。没有任何依据说明它怎么回来的——状态被无理由复原。",
+        "must_preserve": [
+          "前镜终态：壶在案上",
+          "后镜动作：甲仰头饮酒",
+          "中间不得凭空复原"
+        ]
+      },
+      "status": "dry",
+      "issues": [],
+      "issues_count": 0,
+      "blocking_count": 0,
+      "elapsed_sec": 0.0
+    },
+    {
+      "sample": "state_broken",
+      "contract": "new",
+      "prompt_sha1": "880fb79fbc9dc031f2057a6f06e067acd631cf20",
+      "prompt_chars": 7784,
+      "expected": {
+        "verdict": "defect",
+        "defect_class": "contradiction",
+        "discriminating": [
+          "ff_desc",
+          "frame_layouts.ff"
+        ],
+        "why": "同一场景、连续时间（硬切、无时间跳跃依据），前镜尾帧酒壶已放在案上、甲双手空，后镜首帧酒壶却又回到甲手里、案上无壶。没有任何依据说明它怎么回来的——状态被无理由复原。",
+        "must_preserve": [
+          "前镜终态：壶在案上",
+          "后镜动作：甲仰头饮酒",
+          "中间不得凭空复原"
+        ]
+      },
+      "status": "dry",
+      "issues": [],
+      "issues_count": 0,
+      "blocking_count": 0,
+      "elapsed_sec": 0.0
+    },
+    {
+      "sample": "voice_broken",
+      "contract": "old",
+      "prompt_sha1": "13db0f3e75b8ba6e132a4b5091f80c961c95ee98",
+      "prompt_chars": 6674,
+      "expected": {
+        "verdict": "defect",
+        "defect_class": "contradiction",
+        "discriminating": [
+          "narration_segment",
+          "frame_layouts.ff"
+        ],
+        "why": "原文这句是丙说的，且丙始终不在画内。第二镜把旁白前缀写成甲，画面里又只有甲且没有开口动作——声音归属被改到了另一个角色身上，属于改变关键关系，不是措辞差异。",
+        "must_preserve": [
+          "声音归属：丙",
+          "甲只作听者",
+          "丙仍在画外"
+        ]
+      },
+      "status": "dry",
+      "issues": [],
+      "issues_count": 0,
+      "blocking_count": 0,
+      "elapsed_sec": 0.0
+    },
+    {
+      "sample": "voice_broken",
+      "contract": "new",
+      "prompt_sha1": "37724d885f0b46f0f764e7098fef32c269a3d8d9",
+      "prompt_chars": 7813,
+      "expected": {
+        "verdict": "defect",
+        "defect_class": "contradiction",
+        "discriminating": [
+          "narration_segment",
+          "frame_layouts.ff"
+        ],
+        "why": "原文这句是丙说的，且丙始终不在画内。第二镜把旁白前缀写成甲，画面里又只有甲且没有开口动作——声音归属被改到了另一个角色身上，属于改变关键关系，不是措辞差异。",
+        "must_preserve": [
+          "声音归属：丙",
+          "甲只作听者",
+          "丙仍在画外"
+        ]
+      },
+      "status": "dry",
+      "issues": [],
+      "issues_count": 0,
+      "blocking_count": 0,
+      "elapsed_sec": 0.0
+    }
+  ]
+}

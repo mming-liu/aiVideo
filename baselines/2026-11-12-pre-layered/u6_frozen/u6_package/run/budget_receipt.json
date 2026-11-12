@@ -1,0 +1,56 @@
+{
+  "recorded_at": "2026-11-10T23:16:23",
+  "package": ".pytest_tmp\\u1_u5_closeout_20261110\\u6_package\\audit_package.json",
+  "revision": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
+  "provider": "agent_plan",
+  "model": "deepseek-v4.1-flash",
+  "authorized_total": 1,
+  "used_before": 0,
+  "remaining_before": 1,
+  "sends": 1,
+  "sends_known": true,
+  "send_state": "failed",
+  "sends_source": "attempts",
+  "remaining_after": 0,
+  "audit_status": null,
+  "verdict": "BLOCK",
+  "commit_status": "BLOCK",
+  "evidence_complete": true,
+  "evidence_dimensions": {
+    "authorization_chain": true,
+    "transport_trace_known": true,
+    "response_complete": false,
+    "chain_problems": [],
+    "note": "四个维度彼此独立：授权链可关联 ≠ 传输轨迹可判定 ≠ 响应完整 ≠ 审计有结论；evidence_complete 只表示本次该核的项都核到了"
+  },
+  "evidence_problems": [],
+  "call_ids": [
+    "ca5463609e38d4594"
+  ],
+  "logic_calls": 1,
+  "attempt_ids": [
+    "att_3a65655d326f4b7f"
+  ],
+  "authorization": {
+    "send_state": "failed",
+    "claimed": true,
+    "claimed_at": "2026-11-10T23:16:16+08:00",
+    "claim_run_id": "20261110T231615-12932",
+    "claim_pid": 12932,
+    "claim_call_id": "ca5463609e38d4594",
+    "claim_out_root": ".pytest_tmp\\u1_u5_closeout_20261110\\u6_package\\run",
+    "binding_digest": "7e57cbec2e9cc6b6f1b642e4b5411cda",
+    "attempts": 1,
+    "attempt_ids": [
+      "att_3a65655d326f4b7f"
+    ],
+    "outcomes": 1,
+    "send_attempted": true,
+    "finished": true,
+    "result_status": "BLOCK",
+    "state_dir": "C:\\myFloders\\git\\aiVideo\\.p1a_exp\\step01_delivery_20261028\\audit_authorizations\\auth_c06fb3858b9e193421b652ddd271cbb7",
+    "authorization_id": "u6-audit-s01a-20261110-2318",
+    "write_errors": []
+  },
+  "note": "sends = 实际进入 SDK 发送边界的尝试数（attempt 记录）；logic_calls = 逻辑调用台账行数，**不是**发送次数。send_state=reserved 表示授权已被占用、但确认没有发送；send_state=unknown 表示发送边界附近中断，次数/结果不明且授权不可重用。"
+}

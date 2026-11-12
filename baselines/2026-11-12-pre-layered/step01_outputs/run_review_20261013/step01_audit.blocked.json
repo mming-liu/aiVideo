@@ -1,0 +1,287 @@
+{
+  "input_revision": "2e14cf20a28c178aed11d16f0a65395b659111ee822bef2abeb374f13c1b5e7b",
+  "rule_version": "2026-09-23.4",
+  "rule_source_fingerprint": "cee944f742feee13",
+  "prompt_source_fingerprint": "4437ad8f358de67a",
+  "audit_scope": "final_after_deterministic_fixes",
+  "audit_prompt_version": "e58cade47b34",
+  "audit_focus_version": "066a87e6da63",
+  "audit_temperature": 0.0,
+  "run_id": "20260929T170325-118040",
+  "status": "ok",
+  "model": "deepseek-v4.1-flash",
+  "channel_provider": "agent_plan",
+  "schema_deviations": [],
+  "usage": {
+    "input_tokens": 23193,
+    "output_tokens": 25426,
+    "reasoning_tokens": 23369,
+    "total_tokens": 48619
+  },
+  "error": "",
+  "issues": [
+    {
+      "code": "model_audit_KF_STAGE_MISMATCH",
+      "severity": "visual_risk",
+      "message": "同一镜头内关键帧提前演出尾帧结果，动画时序自相矛盾，无法按序执行；建议：kf2只保留“跃上船头踞蹲、小舟猛地一沉”，酒壶仍在手、听香仍俯身伏于股间，脱手与歪身留到4-5秒",
+      "shot_id": "4",
+      "frame_id": "kf2",
+      "entity_id": "杨旭",
+      "field_path": "keyframes[1].desc",
+      "evidence": "kf2(t=2.5)写“杨旭仰卧酒壶脱手，听香身子一歪”，而本镜motion_desc把“听香身子一歪、杨旭右手酒壶脱手”排在4-5秒",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "4",
+          "field_path": "keyframes[1].desc"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "frame_layouts.kfs[1][1].props"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "frame_layouts.kfs[1][2].pose"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_PROP_CONTINUITY",
+      "severity": "visual_risk",
+      "message": "道具在无事件依据下消失，后续镜头（6/7/9/10/11/12）青丝披散失去来源，跨镜状态链断裂；建议：motion_desc补“杨旭抓住听香头发、步摇碰落坠水、青丝披散”，lf_desc同步，lf移除步摇",
+      "shot_id": "4",
+      "frame_id": "lf",
+      "entity_id": "听香",
+      "field_path": "frame_layouts.lf[2].props",
+      "evidence": "lf仍列props“步摇”，同一镜prompt却写“青丝披散”；原文“把她头上的步摇碰落……掉入水中，一头秀发顿时如瀑布般披落”全程无对应事件",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "4",
+          "field_path": "motion_desc"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "lf_desc"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "frame_layouts.lf[2].props"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_MISSING_REQUIRED_FACT",
+      "severity": "visual_risk",
+      "message": "观众不知张十三为何隐瞒死讯并连夜离庄，结尾悬念钩子失效；建议：在镜头8张十三确认死亡后补一句内心独白/旁白，承载“数年心血、大计刚有希望”的动机",
+      "shot_id": "8",
+      "frame_id": "ff",
+      "entity_id": "张十三",
+      "field_path": "narration_segment",
+      "evidence": "规划required_facts第5条与end_hook要求呈现“三年苦心栽培，大计刚刚有点希望”，全13镜台词/旁白/画面均无承载",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "8",
+          "field_path": "narration_segment"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_FF_RESULT_LEAK",
+      "severity": "advisory",
+      "message": "首帧已演完前2秒动作，动作起点缺失，ff与kf1重复；建议：ff只保留“水面波分浪裂、水下隐现人影”的准备态，窜出与按舷留到kf1",
+      "shot_id": "4",
+      "frame_id": "ff",
+      "entity_id": "刺客",
+      "field_path": "frame_layouts.ff[0].pose",
+      "evidence": "ff写“神秘人从水中窜出，双手按向船舷”，而motion_desc把“波分浪裂、窜出、一按船舷”列为前2秒过程动作",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "4",
+          "field_path": "ff_desc"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "frame_layouts.ff[0].pose"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_FF_RESULT_LEAK",
+      "severity": "advisory",
+      "message": "首帧提前呈现后段动作，本镜过程无起点，与前镜lf（抓船舷）不衔接；建议：ff/kf1中听香改为“抓住船舷/呆立”，指水面留到4-6秒",
+      "shot_id": "8",
+      "frame_id": "ff",
+      "entity_id": "听香",
+      "field_path": "frame_layouts.ff[1].pose",
+      "evidence": "ff与kf1均写听香“指着水面”，而motion_desc把“听香指着水面，颤声回答”排在4-6秒",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "8",
+          "field_path": "ff_desc"
+        },
+        {
+          "shot_id": "8",
+          "field_path": "frame_layouts.ff[1].pose"
+        },
+        {
+          "shot_id": "8",
+          "field_path": "keyframes[0].desc"
+        },
+        {
+          "shot_id": "8",
+          "field_path": "frame_layouts.kfs[0][1].pose"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_PROP_CONTINUITY",
+      "severity": "advisory",
+      "message": "武器持有状态不可追踪，无法校验刺入后是否持续持有、是否随人带离；建议：在ff、kf1、kf2的刺客props补“寒光（短刃）”，入水后随人离开画面",
+      "shot_id": "5",
+      "frame_id": "kf1",
+      "entity_id": "刺客",
+      "field_path": "frame_layouts.kfs[0][0].props",
+      "evidence": "prompt写“右手一扬，手中一道寒光”，但刺客在ff/kf1/kf2/lf的props全为空，武器从未登记",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.ff[0].props"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.kfs[0][0].props"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.kfs[1][0].props"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_CHARACTER_CONSISTENCY",
+      "severity": "advisory",
+      "message": "同一角色跨镜外观标签不一致，生成形象漂移，刺杀段人物不连贯；建议：统一杨旭角色标签，镜头4、5补回“弱冠之年…素白色轻袍，头戴平定四方巾”",
+      "shot_id": "4",
+      "frame_id": "ff",
+      "entity_id": "杨旭",
+      "field_path": "prompt",
+      "evidence": "镜头4、5的杨旭标签为“国字脸…脸型轮廓分明，鼻梁挺直”，镜头1/2/3/6为“弱冠之年…素白色轻袍，头戴平定四方巾”",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "4",
+          "field_path": "prompt"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "prompt"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_TEXT_DUPLICATION",
+      "severity": "advisory",
+      "message": "重复括注污染画面描述，生成语义冗余、易被误读为两个物体；建议：删除重复的一份括注，只保留一次",
+      "shot_id": "5",
+      "frame_id": "ff",
+      "entity_id": "寒光",
+      "field_path": "ff_desc",
+      "evidence": "ff_desc与prompt均连续两次出现“（寒光是独立物体，不是从角色身上长出来的）”",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "5",
+          "field_path": "ff_desc"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "prompt"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_TEXT_DUPLICATION",
+      "severity": "advisory",
+      "message": "重复字使色调与嗅觉描述产生歧义，影响画面生成；建议：统一改为“冷蓝与红黑色调”，并修正镜头6“怪味的味道”的重复用词",
+      "shot_id": "6",
+      "frame_id": "ff",
+      "entity_id": "场景",
+      "field_path": "prompt",
+      "evidence": "镜头6/8/9 prompt均写“冷蓝与红红黑色调”（“红红”重复）；镜头6另有“一股怪味的味道”（“味”重复）",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "6",
+          "field_path": "prompt"
+        },
+        {
+          "shot_id": "8",
+          "field_path": "prompt"
+        },
+        {
+          "shot_id": "9",
+          "field_path": "prompt"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_TIMELINE_REGRESSION",
+      "severity": "advisory",
+      "message": "结尾空镜时间倒退，与主线时间线冲突，观众误判事件仍在发生；建议：改为余波渐息的水纹与零星蛙声，不复现已完成的震荡、跃水动作",
+      "shot_id": "13",
+      "frame_id": "ff",
+      "entity_id": "水湾",
+      "field_path": "motion_desc",
+      "evidence": "本镜置于张十三驾车离庄之后，却重演“水纹剧烈震荡，摇碎一湾月亮”与“蛙儿从荷叶跃入水中”（已在镜头5 lf、镜头6 lf完成）",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "13",
+          "field_path": "motion_desc"
+        },
+        {
+          "shot_id": "13",
+          "field_path": "ff_desc"
+        },
+        {
+          "shot_id": "13",
+          "field_path": "keyframes[0].desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_FUTURE_STATE_LEAK",
+      "severity": "advisory",
+      "message": "情绪标签与画面矛盾，提前预告尚未发生的刺杀，误导氛围生成；建议：删除该标签或改为“闲适悠然、暮色清凉”",
+      "shot_id": "1",
+      "frame_id": "ff",
+      "entity_id": "场景",
+      "field_path": "prompt",
+      "evidence": "prompt末尾写“危机一触即发，暗流涌动，惊觉对峙”，与ff/lf所述闲适黄昏、杨旭吹箫、老汉牵牛的画面内容相反",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "1",
+          "field_path": "prompt"
+        }
+      ],
+      "repairable": true
+    }
+  ],
+  "created_at": "2026-09-29T17:14:30"
+}

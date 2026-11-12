@@ -1,0 +1,3738 @@
+{
+ "schema": "candidate_edit.v1",
+ "plan_sha256": "adf956d23a68969229971644cf1c17d036a74ecc4d183bb67675ee2be3f89043",
+ "source_sha256": "be243078a69ffa4c4880b61210a378af72e4cc99ae72c805c9f9991f519e6876",
+ "shots": [
+  {
+   "edit_id": "d1a-shot-01",
+   "sources": [
+    {
+     "index": 1,
+     "sha256": "07fd4404c9f9cbd631c20ff23d7638d584a3eb383eb7f5cd960c12a42f94994e"
+    }
+   ],
+   "reason": "shot 1：改为 4.5s 纯荷塘黄昏远景空镜，消除空船舱突兀穿帮",
+   "target": {
+    "index": 1,
+    "plan_refs": {
+     "beats": [
+      1
+     ],
+     "lines": []
+    },
+    "narration_segment": "",
+    "subtitle": "",
+    "scene": "照月湾荷塘",
+    "location": "照月湾荷塘",
+    "main_subject": "荷塘全景",
+    "prompt": "黄昏照月湾荷塘大远景，五六亩水湾遍植碧绿荷叶，粉白荷花点缀其间，夕阳半沉远山，暖橙与烟红铺满画面，水面倒映霞光泛金红波光；镜头位于荷塘对岸高处，仅见荷塘、水面与远山夕阳，画面中无任何人物",
+    "motion_desc": "镜头全程缓慢向前推近，微风吹拂荷叶轻晃，水面波光流动；黄昏暖光连续，画外悠扬笛声传来；画面始终为空镜，不出现人物",
+    "ff_desc": "黄昏荷塘大远景，夕阳半沉远山，荷叶连绵、花苞随风轻摆，水面泛金红波光，画面空无一人；镜头位于荷塘对岸高处，仅见荷塘、水面与远山夕阳",
+    "lf_desc": "镜头缓慢推近后，黄昏荷塘大远景延续：夕阳更低、金红波光更盛，荷叶与花苞随风轻摆，画面空无一人；景别仍为大远景，仅见荷塘、水面与远山夕阳",
+    "context_bridge": "开场建立照月湾荷塘黄昏环境",
+    "audio_cue": "人声=无；音效=晚风拂荷叶沙沙声、远处蝉鸣渐歇、箫音清越悠扬；背景音乐=古风弦乐轻柔铺底",
+    "fx_effect": "金色扬尘微粒在夕照中漂浮",
+    "color_tone": "暖金焦褐",
+    "cam_idx": 1,
+    "clip_transition": "淡入转场，时长0.3s；镜头缓慢推近，模糊转场，转场时长0.3s",
+    "duration_sec": 4.5,
+    "variation_type": "large",
+    "frame_layouts": {
+     "ff": [],
+     "lf": [],
+     "kfs": [
+      [],
+      [],
+      []
+     ]
+    },
+    "keyframes": [
+     {
+      "t_sec": 1.0,
+      "stage": "pre",
+      "desc": "黄昏荷塘大远景，夕阳半沉远山，荷叶连绵、花苞轻摆，水面泛金红波光，空无一人"
+     },
+     {
+      "t_sec": 3.0,
+      "stage": "approach",
+      "desc": "镜头缓慢推近，夕阳更低、金红波光更盛，荷叶随风轻摆，空无一人；景别仍为大远景"
+     },
+     {
+      "t_sec": 4.05,
+      "stage": "after",
+      "desc": "推近结束，黄昏荷塘大远景，夕阳与水面波光连续，荷叶轻晃，空无一人"
+     }
+    ],
+    "content": "",
+    "camera_movement": "缓慢推近",
+    "framing": "",
+    "lighting_color": "",
+    "duration": 4.5,
+    "negative_prompt": "",
+    "hook": "",
+    "time_stamp": "",
+    "subject_direction": "",
+    "char_layout": [],
+    "timecode": {
+     "start": 0.0,
+     "end": 4.5
+    },
+    "platform_label": "AI生成",
+    "core_keywords": [
+     "荷塘全景",
+     "黄昏荷塘",
+     "全景",
+     "小舟隐于",
+     "荷花丛中"
+    ],
+    "keyframe_sample_count": 3,
+    "movement_speed_multiplier": 0.3,
+    "blank_hold_duration": 0,
+    "is_empty_scene": true
+   }
+  },
+  {
+   "edit_id": "d1a-shot-02",
+   "sources": [
+    {
+     "index": 2,
+     "sha256": "d844c92751bac549793aeeac453f8019bdf5d957d6bc6ad128fb3983b1e34c9f"
+    }
+   ],
+   "reason": "原样继承（身份与哈希不变）",
+   "target": {
+    "index": 2,
+    "plan_refs": {
+     "beats": [
+      2
+     ],
+     "lines": []
+    },
+    "narration_segment": "旁白：杨家的主人姓杨名旭，字文轩，今年刚及弱冠。",
+    "subtitle": "旁白：杨家的主人姓杨名旭，字文轩，今年刚及弱冠。",
+    "scene": "照月湾荷塘",
+    "location": "照月湾荷塘",
+    "main_subject": "杨旭、听香",
+    "prompt": "[杨旭: 国字脸，脸型清秀，剑眉星目，鼻梁挺直，黑发束冠，身姿挺拔，素白色轻袍，头戴平定四方巾，赤着双脚] 中近景，一叶小舟（长4.5米宽1.3米）船头，杨旭国字脸清秀，剑眉星目，鼻梁挺直，黑发束冠，素白色轻袍，头戴平定四方巾，赤着双脚盘膝而坐，双手持竹箫斜置胸前，尚未凑近唇边，随即抵唇按孔吹奏；听香鹅蛋脸杏眼桃腮，黑发挽慵懒美人髻斜插步摇，一袭春衫，立于其侧撑一柄油纸伞，面朝杨旭；船身半掩于碧绿荷叶间，夕照暖光从画左斜照，水面波光粼粼",
+    "motion_desc": "前2秒：杨旭双手持竹箫斜置胸前，尚未凑近唇边；2-4秒：他将竹箫抵唇、手指按孔，箫音流转；4-6秒：听香微侧身倾听，油纸伞面轻转，步摇轻晃",
+    "ff_desc": "中近景，杨旭盘坐船头，双手持竹箫斜置胸前尚未凑近唇边（欲吹起始态），听香正面撑伞立于身侧，夕照暖光",
+    "lf_desc": "中近景，杨旭盘坐船头，竹箫抵唇、手指按箫孔吹奏（吹奏终态），听香微侧身倾听、油纸伞面微转，步摇轻晃，夕照暖光",
+    "context_bridge": "从小舟探出荷花丛的远景推近至船头人物，紧接着延续前镜动作与构图，自然过渡到本镜。",
+    "audio_cue": "人声=旁白男声沉稳清朗，语速平缓；音效=箫音清越、油纸伞轻转竹骨声、水波轻拍船舷；背景音乐=古风弦乐轻柔",
+    "fx_effect": "水面涟漪微荡",
+    "color_tone": "暖金焦褐",
+    "cam_idx": 2,
+    "clip_transition": "硬切0.2s",
+    "duration_sec": 6.25,
+    "variation_type": "medium",
+    "frame_layouts": {
+     "ff": [
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "画中偏左",
+       "pose": "盘坐持箫胸前",
+       "gaze_target": "画右",
+       "props": [
+        "竹箫"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "盘坐",
+        "持箫未吹"
+       ]
+      },
+      {
+       "name": "听香",
+       "on_screen": true,
+       "position": "画右",
+       "pose": "撑伞站立",
+       "gaze_target": "杨旭",
+       "props": [
+        "油纸伞"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "中舱船板"
+       },
+       "states": [
+        "站立",
+        "春衫整洁"
+       ]
+      }
+     ],
+     "lf": [
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "画中偏左",
+       "pose": "盘坐吹箫按孔",
+       "gaze_target": "画右",
+       "props": [
+        "竹箫"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "盘坐",
+        "吹奏"
+       ]
+      },
+      {
+       "name": "听香",
+       "on_screen": true,
+       "position": "画右",
+       "pose": "侧身撑伞",
+       "gaze_target": "杨旭",
+       "props": [
+        "油纸伞"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "中舱船板"
+       },
+       "states": [
+        "侧身",
+        "步摇轻晃"
+       ]
+      }
+     ],
+     "kfs": [
+      [
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画中偏左",
+        "pose": "盘坐持箫胸前",
+        "gaze_target": "画右",
+        "props": [
+         "竹箫"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "盘坐",
+         "持箫未吹"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "撑伞站立",
+        "gaze_target": "杨旭",
+        "props": [
+         "油纸伞"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "中舱船板"
+        },
+        "states": [
+         "站立"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画中偏左",
+        "pose": "抵唇按孔",
+        "gaze_target": "画右",
+        "props": [
+         "竹箫"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "盘坐",
+         "吹奏"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "撑伞站立",
+        "gaze_target": "杨旭",
+        "props": [
+         "油纸伞"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "中舱船板"
+        },
+        "states": [
+         "站立"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画中偏左",
+        "pose": "盘坐吹箫按孔",
+        "gaze_target": "画右",
+        "props": [
+         "竹箫"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "吹奏"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "侧身撑伞",
+        "gaze_target": "杨旭",
+        "props": [
+         "油纸伞"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "中舱船板"
+        },
+        "states": [
+         "侧身",
+         "步摇轻晃"
+        ]
+       }
+      ]
+     ]
+    },
+    "keyframes": [
+     {
+      "desc": "中近景，杨旭素白色轻袍盘坐船头，双手持竹箫斜置胸前，尚未凑近唇边；听香一袭春衫正面撑油纸伞立于其侧，夕照暖光从画左斜照，荷叶环绕小舟",
+      "stage": "pre",
+      "t_sec": 1.5
+     },
+     {
+      "desc": "杨旭将竹箫抵唇、手指按箫孔，箫音流转；听香一袭春衫正面撑伞立于其侧，夕照暖光从画左斜照",
+      "stage": "approach",
+      "t_sec": 3.0
+     },
+     {
+      "desc": "杨旭素白色轻袍盘坐船头，竹箫抵唇、手指按孔吹奏；听香一袭春衫微侧身倾听，伞面微转，步摇轻晃，夕照暖光从画左斜照",
+      "stage": "react",
+      "t_sec": 5.0
+     }
+    ],
+    "content": "",
+    "camera_movement": "固定机位",
+    "framing": "",
+    "lighting_color": "",
+    "duration": 6.25,
+    "negative_prompt": "",
+    "hook": "",
+    "time_stamp": "",
+    "subject_direction": "",
+    "char_layout": [
+     {
+      "name": "杨旭",
+      "position": "画中偏左",
+      "facing": "盘坐持箫胸前",
+      "role": "主",
+      "surface": ""
+     },
+     {
+      "name": "听香",
+      "position": "画右",
+      "facing": "撑伞站立",
+      "role": "次",
+      "surface": ""
+     }
+    ],
+    "timecode": {
+     "start": 4.5,
+     "end": 10.75
+    },
+    "core_keywords": [
+     "杨旭、听香",
+     "杨旭盘坐",
+     "船头持箫",
+     "欲吹",
+     "听香撑伞"
+    ],
+    "keyframe_sample_count": 2,
+    "movement_speed_multiplier": 0.5,
+    "blank_hold_duration": 1.5
+   }
+  },
+  {
+   "edit_id": "d1a-shot-03",
+   "sources": [
+    {
+     "index": 3,
+     "sha256": "ca31ea2e5d8c077c8c2a0f94192c915f42de9fbbcad4636c87af10aa7c02f7db"
+    }
+   ],
+   "reason": "原样继承（身份与哈希不变）",
+   "target": {
+    "index": 3,
+    "plan_refs": {
+     "beats": [
+      3
+     ],
+     "lines": []
+    },
+    "narration_segment": "旁白：前几日往泰州府去时，杨公子也不会花了两百贯宝钞的，高价把她买下",
+    "subtitle": "旁白：前几日往泰州府去时，杨公子也不会花了两百贯宝钞的，高价把她买下",
+    "scene": "照月湾荷塘",
+    "location": "照月湾荷塘",
+    "main_subject": "杨旭、听香",
+    "prompt": "[杨旭: 国字脸，脸型清秀，剑眉星目，鼻梁挺直，黑发束冠，身姿挺拔，素白色轻袍，头戴平定四方巾，赤着双脚] 中近景，敞口木舟（宽1.4米，可容3人）中舱，杨旭素白色轻袍盘坐，右手提青瓷酒壶，左手自然垂放，面带得意之色；听香一袭春衫跪坐其侧，双手捧酒盏递向杨旭，眉眼含笑，步摇斜插；舱中炭炉上温着酒，船板上摆着嫩藕片、虾子、桑椹盘；夕照余晖从画右斜照，暖橙色调",
+    "motion_desc": "前2秒：听香捧盏递向杨旭提壶欲斟；2-4秒：杨旭斟酒入盏，听香含笑依偎其肩；4-6秒：杨旭举盏就唇，听香以袖掩口轻笑",
+    "ff_desc": "听香一袭春衫跪坐画右捧盏递向杨旭素白色轻袍盘坐画中偏左，右手提青瓷酒壶、左手自然垂放，夕照暖光",
+    "lf_desc": "杨旭素白色轻袍盘坐画中偏左举盏就唇，听香一袭春衫依偎其肩以袖掩口轻笑，青瓷酒壶搁在船板，夕照暖光笼罩舱中",
+    "context_bridge": "从吹箫中景切至舱中斟酒近景，紧接着延续前镜动作与构图，自然过渡到本镜。",
+    "audio_cue": "人声=旁白男声沉稳，略带调侃；音效=酒液入盏声、瓷盏轻碰、炭炉噼啪；背景音乐=古风弦乐轻快",
+    "fx_effect": "炭炉火星轻飘",
+    "color_tone": "暖金焦褐",
+    "cam_idx": 3,
+    "clip_transition": "硬切0.2s",
+    "duration_sec": 8.38,
+    "variation_type": "medium",
+    "frame_layouts": {
+     "ff": [
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "画中偏左",
+       "pose": "盘坐提壶",
+       "gaze_target": "听香",
+       "props": [
+        "青瓷酒壶"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "中舱船板"
+       },
+       "states": [
+        "盘坐",
+        "得意"
+       ]
+      },
+      {
+       "name": "听香",
+       "on_screen": true,
+       "position": "画右",
+       "pose": "跪坐捧盏",
+       "gaze_target": "杨旭",
+       "props": [
+        "酒盏"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "中舱船板"
+       },
+       "states": [
+        "跪坐",
+        "含笑"
+       ]
+      }
+     ],
+     "lf": [
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "画中偏左",
+       "pose": "盘坐举盏",
+       "gaze_target": "画右",
+       "props": [
+        "酒盏"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "中舱船板"
+       },
+       "states": [
+        "举盏就唇"
+       ]
+      },
+      {
+       "name": "听香",
+       "on_screen": true,
+       "position": "画右",
+       "pose": "依偎其肩",
+       "gaze_target": "杨旭",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "中舱船板"
+       },
+       "states": [
+        "依偎",
+        "以袖掩口"
+       ]
+      }
+     ],
+     "kfs": [
+      [
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画中偏左",
+        "pose": "盘坐提壶",
+        "gaze_target": "听香",
+        "props": [
+         "青瓷酒壶"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "中舱船板"
+        },
+        "states": [
+         "盘坐"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "跪坐捧盏",
+        "gaze_target": "杨旭",
+        "props": [
+         "酒盏"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "中舱船板"
+        },
+        "states": [
+         "跪坐"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画中偏左",
+        "pose": "盘坐斟酒",
+        "gaze_target": "听香",
+        "props": [
+         "青瓷酒壶",
+         "酒盏"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "中舱船板"
+        },
+        "states": [
+         "斟酒"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "含笑依偎",
+        "gaze_target": "杨旭",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "中舱船板"
+        },
+        "states": [
+         "依偎"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画中偏左",
+        "pose": "盘坐举盏就唇",
+        "gaze_target": "画右",
+        "props": [
+         "酒盏"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "中舱船板"
+        },
+        "states": [
+         "举盏就唇"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "依偎其肩以袖掩口",
+        "gaze_target": "杨旭",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "中舱船板"
+        },
+        "states": [
+         "以袖掩口轻笑"
+        ]
+       }
+      ]
+     ]
+    },
+    "keyframes": [
+     {
+      "desc": "听香一袭春衫跪坐画右捧酒盏递向杨旭，杨旭素白色轻袍盘坐画中偏左右手提青瓷酒壶，船板摆着嫩藕虾子桑椹，夕照暖光",
+      "stage": "pre",
+      "t_sec": 1.5
+     },
+     {
+      "desc": "杨旭斟酒入盏，听香含笑依偎其肩，炭炉火星轻飘，暖橙光笼罩舱中",
+      "stage": "approach",
+      "t_sec": 3.0
+     },
+     {
+      "desc": "杨旭举盏就唇，听香以袖掩口轻笑，青瓷酒壶搁在船板，暖橙夕照笼罩舱中",
+      "stage": "climax",
+      "t_sec": 5.0
+     }
+    ],
+    "content": "",
+    "camera_movement": "环绕镜",
+    "framing": "",
+    "lighting_color": "",
+    "duration": 8.38,
+    "negative_prompt": "",
+    "hook": "",
+    "time_stamp": "",
+    "subject_direction": "",
+    "char_layout": [
+     {
+      "name": "杨旭",
+      "position": "画中偏左",
+      "facing": "盘坐提壶",
+      "role": "主",
+      "surface": ""
+     },
+     {
+      "name": "听香",
+      "position": "画右",
+      "facing": "跪坐捧盏",
+      "role": "次",
+      "surface": ""
+     }
+    ],
+    "timecode": {
+     "start": 10.75,
+     "end": 19.13
+    },
+    "core_keywords": [
+     "杨旭、听香",
+     "听香跪坐",
+     "捧盏递向",
+     "杨旭右手",
+     "提酒壶"
+    ],
+    "keyframe_sample_count": 2,
+    "movement_speed_multiplier": 0.5,
+    "blank_hold_duration": 1.5
+   }
+  },
+  {
+   "edit_id": "d1a-shot-04",
+   "sources": [
+    {
+     "index": 4,
+     "sha256": "13bb892e92c49e97528d5788a74c897e976bd528e6c6d9e1cf6bef6c01a0cead"
+    }
+   ],
+   "reason": "原样继承（身份与哈希不变）",
+   "target": {
+    "index": 4,
+    "plan_refs": {
+     "beats": [
+      4
+     ],
+     "lines": []
+    },
+    "narration_segment": "旁白：杨文轩杨公子又参加府学，一举考中了诸生（秀才）",
+    "subtitle": "旁白：杨文轩杨公子又参加府学，一举考中了诸生（秀才）",
+    "scene": "照月湾荷塘",
+    "location": "照月湾荷塘",
+    "main_subject": "杨旭",
+    "prompt": "[杨旭: 国字脸，脸型清秀，剑眉星目，鼻梁挺直，黑发束冠，身姿挺拔，素白色轻袍，头戴平定四方巾，赤着双脚] 近景，敞口木舟（宽1.4米，可容3人）船头，杨旭素白色轻袍盘坐，左手持钓杆垂向湖面，右手提青瓷酒壶，仰望画上方星空，面带怡然自得；船板散落酒盏、桑椹盘，荷叶环绕，弦月斜挂天边，冷蓝星光与暖橙余晖交织；画面上方叠化半透明虚影：少年杨旭素白色轻袍双手接过账册与钥匙、店铺田产轮廓、府学榜文上「诸生」二字，虚影淡薄如烟，不夺主体",
+    "motion_desc": "前2秒：杨旭仰头望星，右手提壶；2-4秒：他饮一口酒，左手钓杆轻颤；4-6秒：鱼线绷直，他低头看向画下方水面",
+    "ff_desc": "杨旭素白色轻袍盘坐船头仰望画上方星空，左手钓杆垂湖，右手提青瓷酒壶，画面上方浮起账册钥匙与榜文虚影",
+    "lf_desc": "杨旭素白色轻袍盘坐船头低头看向画下方水面，鱼线绷直，钓杆弯成弧，右手仍提青瓷酒壶，画面上方榜文虚影渐淡，弦月斜挂天边",
+    "context_bridge": "从舱中斟酒切至船头独坐望星，紧接着延续前镜动作与构图，自然过渡到本镜。",
+    "audio_cue": "人声=旁白男声沉稳；音效=鱼线绷紧声、水波轻响、夜虫低鸣；背景音乐=古风弦乐舒缓",
+    "fx_effect": "星光点点",
+    "color_tone": "冷蓝",
+    "cam_idx": 2,
+    "clip_transition": "硬切0.2s",
+    "duration_sec": 6.0,
+    "variation_type": "medium",
+    "frame_layouts": {
+     "ff": [
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "画中",
+       "pose": "盘坐仰头",
+       "gaze_target": "画上",
+       "props": [
+        "钓杆",
+        "青瓷酒壶"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "盘坐",
+        "仰望"
+       ]
+      }
+     ],
+     "lf": [
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "画中",
+       "pose": "盘坐低头",
+       "gaze_target": "画下",
+       "props": [
+        "钓杆",
+        "青瓷酒壶"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "低头",
+        "钓杆弯曲"
+       ]
+      }
+     ],
+     "kfs": [
+      [
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画中",
+        "pose": "盘坐仰头",
+        "gaze_target": "画上",
+        "props": [
+         "钓杆",
+         "青瓷酒壶"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "仰望"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画中",
+        "pose": "盘坐举壶就唇",
+        "gaze_target": "画上",
+        "props": [
+         "钓杆",
+         "青瓷酒壶"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "饮酒",
+         "钓杆轻颤"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画中",
+        "pose": "盘坐低头",
+        "gaze_target": "画下",
+        "props": [
+         "钓杆",
+         "青瓷酒壶"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "低头",
+         "钓杆弯曲"
+        ]
+       }
+      ]
+     ]
+    },
+    "keyframes": [
+     {
+      "desc": "杨旭素白色轻袍盘坐船头仰望画上方星空，左手钓杆垂向湖面，右手提青瓷酒壶，画面上方浮起账册钥匙与榜文虚影，弦月斜挂",
+      "stage": "pre",
+      "t_sec": 1.5
+     },
+     {
+      "desc": "他饮一口酒，左手钓杆轻颤，画面上方榜文虚影渐显，冷蓝星光洒落船头",
+      "stage": "approach",
+      "t_sec": 3.0
+     },
+     {
+      "desc": "杨旭低头看向画下方水面，鱼线绷直，钓杆弯成弧，右手仍提青瓷酒壶，画面上方榜文虚影渐淡",
+      "stage": "react",
+      "t_sec": 4.5
+     }
+    ],
+    "content": "",
+    "camera_movement": "环绕",
+    "framing": "",
+    "lighting_color": "",
+    "duration": 6.0,
+    "negative_prompt": "",
+    "hook": "",
+    "time_stamp": "",
+    "subject_direction": "",
+    "char_layout": [
+     {
+      "name": "杨旭",
+      "position": "画中",
+      "facing": "盘坐仰头",
+      "role": "主",
+      "surface": "船头"
+     }
+    ],
+    "timecode": {
+     "start": 19.13,
+     "end": 25.13
+    },
+    "core_keywords": [
+     "杨旭",
+     "杨旭盘坐",
+     "船头仰望",
+     "星空",
+     "左手钓杆"
+    ],
+    "keyframe_sample_count": 2,
+    "movement_speed_multiplier": 0.5,
+    "blank_hold_duration": 1.5
+   }
+  },
+  {
+   "edit_id": "d1a-shot-05",
+   "sources": [
+    {
+     "index": 5,
+     "sha256": "d2a0953cc6de8d1568f8978db5976be0e7721f200a91cd5c41dc20ba5eda9364"
+    }
+   ],
+   "reason": "原样继承（身份与哈希不变）",
+   "target": {
+    "index": 5,
+    "plan_refs": {
+     "beats": [
+      5
+     ],
+     "lines": []
+    },
+    "narration_segment": "",
+    "subtitle": "",
+    "scene": "照月湾荷塘",
+    "location": "照月湾荷塘",
+    "main_subject": "神秘人",
+    "prompt": "[神秘人: 身形精瘦，一身水湿黑衣，面目隐于暗处不辨] 中景，小舟一侧水面，神秘人一身水湿黑衣从水中探出上半身，双手按船舷，面目隐于暗处不辨，水珠沿发梢滴落；小舟（长4.5米宽1.3米）船身倾斜，荷叶被水波推开；冷蓝月光映照水面，船头杨旭素白轻袍背影可见",
+    "motion_desc": "前2秒：水面波纹剧烈震荡，神秘人双手按船舷；2-4秒：他借力腾身跃上船头，双足踞蹲船舷；4-6秒：敞口木舟（长4.5米宽1.3米，可容2-3人）向他方向猛地一沉，他身形稳如磐石；船头听香一袭春衫跪坐，双手攥紧膝上衣角、肩头微缩，目光惊惧盯向画右船舷",
+    "ff_desc": "水面波纹震荡，神秘人一身水湿黑衣在画中水面双手按船舷，上半身探出水面，面目隐于暗处不辨；船头杨旭素白色轻袍盘坐背影可见，其侧听香一袭春衫跪坐、双手攥紧膝上衣角、肩头微缩",
+    "lf_desc": "神秘人一身水湿黑衣踞蹲画右船舷，敞口木舟（长4.5米宽1.3米，可容2-3人）向他方向倾斜，水珠沿黑衣滴落船板；船头杨旭素白色轻袍盘坐背影可见，其侧听香一袭春衫跪坐、双手攥紧膝上衣角、肩头微缩、目光惊惧盯向画右船舷的神秘人",
+    "context_bridge": "从杨旭低头看鱼线切至水面异动，紧接着延续前镜动作与构图，自然过渡到本镜。",
+    "audio_cue": "人声=无；音效=水波炸裂声、船板受压吱呀声、水珠滴落；背景音乐=紧张弦乐骤起",
+    "fx_effect": "水花四溅",
+    "color_tone": "冷蓝",
+    "cam_idx": 3,
+    "clip_transition": "硬切0.2s",
+    "duration_sec": 6.0,
+    "variation_type": "large",
+    "frame_layouts": {
+     "ff": [
+      {
+       "name": "神秘人",
+       "on_screen": true,
+       "position": "画中水面",
+       "pose": "双手按船舷",
+       "gaze_target": "画左",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船舷外侧水面"
+       },
+       "states": [
+        "半身出水",
+        "水湿黑衣"
+       ]
+      },
+      {
+       "name": "听香",
+       "on_screen": true,
+       "position": "船头",
+       "pose": "跪坐攥紧衣角",
+       "gaze_target": "画右水面",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "跪坐",
+        "肩头微缩",
+        "一袭春衫"
+       ]
+      },
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "船头",
+       "pose": "盘坐背影",
+       "gaze_target": "画右水面",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "盘坐",
+        "背影",
+        "素白轻袍"
+       ]
+      }
+     ],
+     "lf": [
+      {
+       "name": "神秘人",
+       "on_screen": true,
+       "position": "画右船舷",
+       "pose": "踞蹲",
+       "gaze_target": "画左",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船舷"
+       },
+       "states": [
+        "踞蹲",
+        "水珠滴落"
+       ]
+      },
+      {
+       "name": "听香",
+       "on_screen": true,
+       "position": "船头",
+       "pose": "跪坐攥紧衣角",
+       "gaze_target": "画右神秘人",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "跪坐",
+        "肩头微缩",
+        "目光惊惧",
+        "一袭春衫"
+       ]
+      },
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "船头",
+       "pose": "盘坐背影",
+       "gaze_target": "画右水面",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "盘坐",
+        "背影",
+        "素白轻袍"
+       ]
+      }
+     ],
+     "kfs": [
+      [
+       {
+        "name": "神秘人",
+        "on_screen": true,
+        "position": "画中水面",
+        "pose": "双手按船舷",
+        "gaze_target": "画左",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船舷外侧水面"
+        },
+        "states": [
+         "半身出水"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "跪坐攥紧衣角",
+        "gaze_target": "画右水面",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "跪坐",
+         "肩头微缩"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "盘坐背影",
+        "gaze_target": "画右水面",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "盘坐",
+         "背影",
+         "素白轻袍"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "神秘人",
+        "on_screen": true,
+        "position": "画右船舷",
+        "pose": "踞蹲",
+        "gaze_target": "画左",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船舷"
+        },
+        "states": [
+         "踞蹲"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "跪坐攥紧衣角",
+        "gaze_target": "画右神秘人",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "跪坐",
+         "目光惊惧"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "盘坐背影",
+        "gaze_target": "画右水面",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "盘坐",
+         "背影",
+         "素白轻袍"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "神秘人",
+        "on_screen": true,
+        "position": "画右船舷",
+        "pose": "踞蹲稳身",
+        "gaze_target": "画左",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船舷"
+        },
+        "states": [
+         "身形稳如磐石",
+         "水珠滴落"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "跪坐攥紧衣角",
+        "gaze_target": "画右神秘人",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "跪坐",
+         "肩头微缩",
+         "目光惊惧"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "盘坐背影",
+        "gaze_target": "画右水面",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "盘坐",
+         "背影",
+         "素白轻袍"
+        ]
+       }
+      ]
+     ]
+    },
+    "keyframes": [
+     {
+      "desc": "神秘人一身水湿黑衣从画中水面探出上半身，双手按船舷，水珠沿发梢滴落，冷蓝月光映水面",
+      "stage": "pre",
+      "t_sec": 1.5
+     },
+     {
+      "desc": "神秘人借力腾身跃上船头，双足踞蹲画右船舷，水珠滴落船板",
+      "stage": "approach",
+      "t_sec": 3.5
+     },
+     {
+      "desc": "敞口木舟（长4.5米宽1.3米，可容2-3人）向他方向猛地一沉，他身形稳如磐石踞蹲船舷，水珠沿黑衣滴落",
+      "stage": "climax",
+      "t_sec": 5.0
+     }
+    ],
+    "content": "",
+    "camera_movement": "固定机位",
+    "framing": "",
+    "lighting_color": "",
+    "duration": 6.0,
+    "negative_prompt": "",
+    "hook": "",
+    "time_stamp": "",
+    "subject_direction": "",
+    "char_layout": [
+     {
+      "name": "神秘人",
+      "position": "画中水面",
+      "facing": "双手按船舷",
+      "role": "主",
+      "surface": "船舷"
+     },
+     {
+      "name": "听香",
+      "position": "船头",
+      "facing": "跪坐攥紧衣角",
+      "role": "次",
+      "surface": "船头"
+     },
+     {
+      "name": "杨旭",
+      "position": "船头",
+      "facing": "盘坐背影",
+      "role": "次",
+      "surface": "船头"
+     }
+    ],
+    "timecode": {
+     "start": 25.13,
+     "end": 31.13
+    },
+    "core_keywords": [
+     "神秘人",
+     "水面波纹",
+     "震荡",
+     "神秘人双",
+     "手按船舷"
+    ],
+    "keyframe_sample_count": 3,
+    "movement_speed_multiplier": 0.3,
+    "blank_hold_duration": 1.5
+   }
+  },
+  {
+   "edit_id": "d1a-shot-06",
+   "sources": [
+    {
+     "index": 6,
+     "sha256": "cfc2f9f991eba276ad4139ceb6392222ef0a4381c709d6c54919ba6d6eb126e7"
+    }
+   ],
+   "reason": "原样继承（身份与哈希不变）",
+   "target": {
+    "index": 6,
+    "plan_refs": {
+     "beats": [
+      5
+     ],
+     "lines": []
+    },
+    "narration_segment": "",
+    "subtitle": "",
+    "scene": "照月湾荷塘",
+    "location": "照月湾荷塘",
+    "main_subject": "神秘人、杨旭",
+    "prompt": "[杨旭: 国字脸，脸型清秀，剑眉星目，鼻梁挺直，黑发束冠，身姿挺拔] [神秘人: 身形精瘦，一身水湿黑衣，面目隐于暗处不辨] 中近景，敞口木舟（宽1.4米，可容3人）船头，神秘人踞蹲船舷，右手扬起一道寒光（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）短刃，刃尖指向画左杨旭心口；杨旭素白色轻袍盘坐，左手钓杆垂落，右手酒壶，面露惊愕；冷蓝月光勾勒神秘人轮廓，寒光如弦月清冷",
+    "motion_desc": "前2秒：神秘人右手扬刃蓄势；2-4秒：短刃疾刺向杨旭心口，寒光一闪；4-5秒：刃尖没入，杨旭身体一震",
+    "ff_desc": "神秘人踞蹲船舷右手扬刃，杨旭盘坐惊愕，寒光映月",
+    "lf_desc": "短刃没入杨旭心口，杨旭身体后仰，酒壶脱手",
+    "context_bridge": "从神秘人跃上船舷切至扬刃刺出，紧接着延续前镜动作与构图，自然过渡到本镜。",
+    "audio_cue": "人声=无；音效=利刃破风声、衣料撕裂声、杨旭闷哼；背景音乐=紧张弦乐重击",
+    "fx_effect": "寒光一闪",
+    "color_tone": "冷蓝",
+    "cam_idx": 3,
+    "clip_transition": "硬切0.2s；叠化，0.5s",
+    "duration_sec": 5.0,
+    "variation_type": "large",
+    "frame_layouts": {
+     "ff": [
+      {
+       "name": "神秘人",
+       "on_screen": true,
+       "position": "画右船舷",
+       "pose": "踞蹲扬刃",
+       "gaze_target": "画左杨旭",
+       "props": [
+        "短刃"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船舷"
+       },
+       "states": [
+        "踞蹲",
+        "扬刃"
+       ]
+      },
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "船头",
+       "pose": "盘坐惊愕",
+       "gaze_target": "画右神秘人",
+       "props": [
+        "钓杆",
+        "青瓷酒壶"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "盘坐",
+        "惊愕"
+       ]
+      }
+     ],
+     "lf": [
+      {
+       "name": "神秘人",
+       "on_screen": true,
+       "position": "画右船舷",
+       "pose": "踞蹲推刃",
+       "gaze_target": "画左杨旭",
+       "props": [
+        "短刃"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船舷"
+       },
+       "states": [
+        "推刃"
+       ]
+      },
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "船头",
+       "pose": "后仰",
+       "gaze_target": "画右神秘人",
+       "props": [
+        "钓杆"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "后仰",
+        "心口中刃"
+       ]
+      }
+     ],
+     "kfs": [
+      [
+       {
+        "name": "神秘人",
+        "on_screen": true,
+        "position": "画右船舷",
+        "pose": "踞蹲扬刃",
+        "gaze_target": "画左杨旭",
+        "props": [
+         "短刃"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船舷"
+        },
+        "states": [
+         "扬刃"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "盘坐惊愕",
+        "gaze_target": "画右神秘人",
+        "props": [
+         "钓杆",
+         "青瓷酒壶"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "惊愕"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "神秘人",
+        "on_screen": true,
+        "position": "画右船舷",
+        "pose": "踞蹲疾刺",
+        "gaze_target": "画左杨旭",
+        "props": [
+         "短刃"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船舷"
+        },
+        "states": [
+         "疾刺"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "身体后仰",
+        "gaze_target": "画右神秘人",
+        "props": [
+         "钓杆",
+         "青瓷酒壶"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "后仰"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "神秘人",
+        "on_screen": true,
+        "position": "画右船舷",
+        "pose": "踞蹲推刃",
+        "gaze_target": "画左杨旭",
+        "props": [
+         "短刃"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船舷"
+        },
+        "states": [
+         "推刃"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "身体一震后仰",
+        "gaze_target": "画右神秘人",
+        "props": [
+         "钓杆"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "一震",
+         "心口中刃"
+        ]
+       }
+      ]
+     ]
+    },
+    "keyframes": [
+     {
+      "desc": "神秘人踞蹲船舷右手扬短刃，刃尖指向画左杨旭心口，杨旭盘坐惊愕，冷蓝月光勾勒轮廓",
+      "stage": "pre",
+      "t_sec": 1.0
+     },
+     {
+      "desc": "短刃疾刺向杨旭心口，寒光一闪，杨旭身体后仰",
+      "stage": "approach",
+      "t_sec": 3.0
+     },
+     {
+      "desc": "刃尖没入，杨旭身体一震，酒壶脱手，寒光映月",
+      "stage": "climax",
+      "t_sec": 4.5
+     }
+    ],
+    "content": "",
+    "camera_movement": "环绕镜",
+    "framing": "",
+    "lighting_color": "",
+    "duration": 5.0,
+    "negative_prompt": "",
+    "hook": "",
+    "time_stamp": "",
+    "subject_direction": "",
+    "char_layout": [
+     {
+      "name": "神秘人",
+      "position": "画右船舷",
+      "facing": "踞蹲扬刃",
+      "role": "主",
+      "surface": "船舷"
+     },
+     {
+      "name": "杨旭",
+      "position": "船头",
+      "facing": "盘坐惊愕",
+      "role": "次",
+      "surface": "船头"
+     }
+    ],
+    "timecode": {
+     "start": 31.13,
+     "end": 36.13
+    },
+    "core_keywords": [
+     "神秘人、杨旭",
+     "神秘人踞",
+     "蹲船舷右",
+     "手扬刃",
+     "杨旭盘坐"
+    ],
+    "keyframe_sample_count": 3,
+    "movement_speed_multiplier": 0.3,
+    "blank_hold_duration": 1.5
+   }
+  },
+  {
+   "edit_id": "d1a-shot-07",
+   "sources": [
+    {
+     "index": 7,
+     "sha256": "8bf8f2ede79a84800cb3ec3da4931e85231e87d33a655942751a4275d39d0a64"
+    }
+   ],
+   "reason": "原样继承（身份与哈希不变）",
+   "target": {
+    "index": 7,
+    "plan_refs": {
+     "beats": [
+      5
+     ],
+     "lines": []
+    },
+    "narration_segment": "",
+    "subtitle": "",
+    "scene": "照月湾荷塘",
+    "location": "照月湾荷塘",
+    "main_subject": "神秘人、杨旭",
+    "prompt": "[杨旭: 国字脸，脸型清秀，剑眉星目，鼻梁挺直，黑发束冠，身姿挺拔] [神秘人: 身形精瘦，一身水湿黑衣，面目隐于暗处不辨] 特写，敞口木舟（宽1.4米，可容3人）船头，神秘人右手反握短刃（刃尖带血）双腿一弹倒纵入水，身影没入水中只余水花；杨旭素白色轻袍仰倒船板，心口衣料暗红洇痕，左手钓杆垂落船舷，右手酒壶倾倒酒水洒在甲板；冷蓝月光下水面波纹剧烈震荡，摇碎一湾月亮",
+    "motion_desc": "前2秒：神秘人双腿一弹倒纵离船；2-4秒：身影没入水中，水花四溅；4-5秒：水面波纹扩散，杨旭仰倒船板不动",
+    "ff_desc": "神秘人右手反握带血短刃、双腿屈弹半起身，杨旭素白色轻袍仰倒船板心口暗红",
+    "lf_desc": "水面波纹扩散，神秘人不见踪影，杨旭素白色轻袍仰倒船板、心口衣料暗红洇痕持续可见，左手钓杆垂落船舷，右手酒壶倾倒酒水洒在甲板，冷蓝月光摇碎一湾月亮",
+    "context_bridge": "从短刃没入心口切至刺客遁水，紧接着延续前镜动作与构图，自然过渡到本镜。",
+    "audio_cue": "人声=无；音效=入水闷响、水花四溅、酒水洒落甲板；背景音乐=紧张弦乐渐弱",
+    "fx_effect": "水花四溅、水面涟漪",
+    "color_tone": "冷蓝",
+    "cam_idx": 2,
+    "clip_transition": "硬切0.2s；淡入淡出，镜头拉远，自然过渡，转场时长0.5s",
+    "duration_sec": 5.0,
+    "variation_type": "large",
+    "frame_layouts": {
+     "ff": [
+      {
+       "name": "神秘人",
+       "on_screen": true,
+       "position": "画右船舷",
+       "pose": "屈腿欲纵",
+       "gaze_target": "画右",
+       "props": [
+        "短刃"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船舷"
+       },
+       "states": [
+        "屈腿"
+       ]
+      },
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "船头",
+       "pose": "仰倒",
+       "gaze_target": "无",
+       "props": [
+        "钓杆"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "仰倒",
+        "心口暗红"
+       ]
+      }
+     ],
+     "lf": [
+      {
+       "name": "神秘人",
+       "on_screen": false,
+       "position": "画右水面下",
+       "pose": "没入水中",
+       "gaze_target": "无",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "水面下"
+       },
+       "states": [
+        "不见踪影"
+       ]
+      },
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "船头",
+       "pose": "仰倒",
+       "gaze_target": "无",
+       "props": [
+        "钓杆"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "仰倒",
+        "心口暗红"
+       ]
+      }
+     ],
+     "kfs": [
+      [
+       {
+        "name": "神秘人",
+        "on_screen": true,
+        "position": "画右船舷",
+        "pose": "屈腿欲纵",
+        "gaze_target": "画右",
+        "props": [
+         "短刃"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船舷"
+        },
+        "states": [
+         "屈腿"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "仰倒",
+        "gaze_target": "无",
+        "props": [
+         "钓杆"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "仰倒",
+         "心口暗红"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "神秘人",
+        "on_screen": false,
+        "position": "画右水面下",
+        "pose": "没入水中",
+        "gaze_target": "无",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "水面下"
+        },
+        "states": [
+         "不见踪影"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "仰倒",
+        "gaze_target": "无",
+        "props": [
+         "钓杆"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "仰倒",
+         "心口暗红"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "神秘人",
+        "on_screen": false,
+        "position": "画右水面下",
+        "pose": "没入水中不见踪影",
+        "gaze_target": "无",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "水面下"
+        },
+        "states": [
+         "不见踪影"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "仰倒船板不动",
+        "gaze_target": "无",
+        "props": [
+         "钓杆",
+         "酒壶"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "仰倒",
+         "心口暗红"
+        ]
+       }
+      ]
+     ]
+    },
+    "keyframes": [
+     {
+      "desc": "神秘人双腿屈弹倒纵离船，杨旭仰倒船板心口暗红，钓杆垂落船舷，冷蓝月光",
+      "stage": "pre",
+      "t_sec": 1.0
+     },
+     {
+      "desc": "神秘人身影没入水中水花四溅，水面波纹扩散，杨旭仰倒船板不动",
+      "stage": "exit",
+      "t_sec": 3.5
+     },
+     {
+      "t_sec": 4.5,
+      "stage": "after",
+      "desc": "水面波纹扩散，杨旭素白色轻袍仰倒船板不动，心口衣料暗红洇痕持续可见，左手钓杆垂落船舷，冷蓝月光摇碎一湾月亮"
+     }
+    ],
+    "content": "",
+    "camera_movement": "中景",
+    "framing": "",
+    "lighting_color": "",
+    "duration": 5.0,
+    "negative_prompt": "",
+    "hook": "",
+    "time_stamp": "",
+    "subject_direction": "",
+    "char_layout": [
+     {
+      "name": "神秘人",
+      "position": "画右船舷",
+      "facing": "屈腿欲纵",
+      "role": "主",
+      "surface": "船舷"
+     },
+     {
+      "name": "杨旭",
+      "position": "船头",
+      "facing": "仰倒",
+      "role": "次",
+      "surface": "船头"
+     }
+    ],
+    "timecode": {
+     "start": 36.13,
+     "end": 41.13
+    },
+    "core_keywords": [
+     "神秘人、杨旭",
+     "神秘人双",
+     "腿屈弹半",
+     "起身",
+     "杨旭仰倒"
+    ],
+    "keyframe_sample_count": 3,
+    "movement_speed_multiplier": 0.3,
+    "blank_hold_duration": 1.5
+   }
+  },
+  {
+   "edit_id": "d1a-shot-08",
+   "sources": [
+    {
+     "index": 8,
+     "sha256": "b762aca8dd40d3fd5ce932d5deaaaee990bb85e53b5454a9728a16a08cc89b41"
+    }
+   ],
+   "reason": "shot 8：删除「画外听香」被误登记为 on_screen 的布局条目（正文写画外，源数据矛盾）",
+   "target": {
+    "index": 8,
+    "plan_refs": {
+     "beats": [
+      6
+     ],
+     "lines": []
+    },
+    "narration_segment": "旁白：那跃上船来的人青衣小帽打扮，正是杨旭的贴身伴当张十三",
+    "subtitle": "旁白：那跃上船来的人青衣小帽打扮，正是杨旭的贴身伴当张十三",
+    "scene": "湾堤岸边",
+    "location": "湾堤岸边",
+    "main_subject": "张十三",
+    "prompt": "[张十三: 脸型瘦削，细长丹凤眼，眼神精明，黑发束髻，青衣小帽] 中景，湾堤岸边，画外听香尖叫传来，张十三脸型瘦削，细长丹凤眼，黑发束髻，青衣小帽，闻声急奔至堤边纵身跃起，衣摆翻飞，手中灯盏已脱手落地；远处小舟（长4.5米宽1.3米）泊于水面，船头杨旭素白身影仰倒；冷蓝月光与堤上灯火交织",
+    "motion_desc": "前2秒：张十三在堤上纵身跃起；2-4秒：他飞掠一丈多远，落向船梢；4-6秒：双足踏船梢，敞口木舟（长4.5米宽1.3米，可容2-3人）剧烈摇晃",
+    "ff_desc": "画外听香欲呼传来，张十三青衣小帽立于堤边闻声急奔、屈膝半起身，灯盏脱手落地",
+    "lf_desc": "张十三青衣小帽双足踏船梢，敞口木舟（长4.5米宽1.3米，可容2-3人）摇晃，他俯身看向画左船头杨旭素白色轻袍仰倒、心口衣料暗红洇痕持续可见，冷蓝月光与堤上灯火交织",
+    "context_bridge": "从刺客遁水切至岸边张十三闻声赶来",
+    "audio_cue": "人声=旁白男声沉稳；音效=衣袂破风声、落地船板闷响、小舟摇晃水声；背景音乐=紧张弦乐",
+    "fx_effect": "灯火摇曳",
+    "color_tone": "冷蓝",
+    "cam_idx": 2,
+    "clip_transition": "淡入淡出，0.5s；淡入淡出，镜头拉远，自然过渡，转场时长0.5s",
+    "duration_sec": 7.12,
+    "variation_type": "large",
+    "frame_layouts": {
+     "ff": [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画中堤边",
+       "pose": "闻声急奔屈膝欲跃",
+       "gaze_target": "画右小舟",
+       "props": [],
+       "support": {
+        "id": "堤岸",
+        "kind": "土堤",
+        "surface": "堤面"
+       },
+       "states": [
+        "屈膝",
+        "灯盏脱手"
+       ]
+      }
+     ],
+     "lf": [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画右船梢",
+       "pose": "俯身站立",
+       "gaze_target": "画左船头",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船梢"
+       },
+       "states": [
+        "俯身",
+        "小舟摇晃"
+       ]
+      },
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "画左",
+       "pose": "素白色轻袍仰倒、心口衣料暗红洇痕持续",
+       "gaze_target": "无",
+       "props": [
+        "钓杆"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "仰倒",
+        "心口暗红",
+        "在场"
+       ]
+      }
+     ],
+     "kfs": [
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画中堤边",
+        "pose": "闻声急奔屈膝欲跃",
+        "gaze_target": "画右小舟",
+        "props": [],
+        "support": {
+         "id": "堤岸",
+         "kind": "土堤",
+         "surface": "堤面"
+        },
+        "states": [
+         "屈膝"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "水面",
+        "pose": "尖叫传来",
+        "gaze_target": "画面内",
+        "props": [],
+        "support": {
+         "id": "堤岸",
+         "kind": "土堤",
+         "surface": "堤面"
+        },
+        "states": [
+         "在场"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画中空中",
+        "pose": "飞掠腾空",
+        "gaze_target": "画右船梢",
+        "props": [],
+        "support": {
+         "id": "空中",
+         "kind": "半空",
+         "surface": "无"
+        },
+        "states": [
+         "飞掠"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画右船梢",
+        "pose": "俯身站立",
+        "gaze_target": "画左船头",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船梢"
+        },
+        "states": [
+         "俯身"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画左",
+        "pose": "素白色轻袍仰倒、心口衣料暗红洇痕持续",
+        "gaze_target": "无",
+        "props": [
+         "钓杆"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "仰倒",
+         "心口暗红",
+         "在场"
+        ]
+       }
+      ]
+     ]
+    },
+    "keyframes": [
+     {
+      "desc": "画外听香尖叫传来，张十三青衣小帽立于堤边闻声急奔屈膝欲跃，灯盏脱手落地，远处小舟泊于水面",
+      "stage": "pre",
+      "t_sec": 1.5
+     },
+     {
+      "desc": "张十三飞掠一丈多远，落向船梢，衣摆翻飞",
+      "stage": "approach",
+      "t_sec": 3.0
+     },
+     {
+      "desc": "张十三双足踏船梢俯身，小舟剧烈摇晃，他看向画左船头杨旭",
+      "stage": "react",
+      "t_sec": 4.5
+     }
+    ],
+    "content": "",
+    "camera_movement": "固定机位",
+    "framing": "",
+    "lighting_color": "",
+    "duration": 7.12,
+    "negative_prompt": "",
+    "hook": "",
+    "time_stamp": "",
+    "subject_direction": "",
+    "char_layout": [
+     {
+      "name": "张十三",
+      "position": "画中堤边",
+      "facing": "闻声急奔屈膝欲跃",
+      "role": "主",
+      "surface": "岸边"
+     }
+    ],
+    "timecode": {
+     "start": 41.13,
+     "end": 48.25
+    },
+    "core_keywords": [
+     "张十三",
+     "张十三立",
+     "于堤边屈",
+     "膝半起身",
+     "灯盏脱手"
+    ],
+    "keyframe_sample_count": 3,
+    "movement_speed_multiplier": 0.3,
+    "blank_hold_duration": 1.5
+   }
+  },
+  {
+   "edit_id": "d1a-shot-09",
+   "sources": [
+    {
+     "index": 9,
+     "sha256": "b00523d8b97d7a0f490870afb8a10cd8e0a0f110f5083f6edb06dfbad870951e"
+    }
+   ],
+   "reason": "原样继承（身份与哈希不变）",
+   "target": {
+    "index": 9,
+    "plan_refs": {
+     "beats": [
+      6,
+      7
+     ],
+     "lines": []
+    },
+    "narration_segment": "",
+    "subtitle": "",
+    "scene": "照月湾荷塘",
+    "location": "照月湾荷塘",
+    "main_subject": "张十三、杨旭",
+    "prompt": "[张十三: 脸型瘦削，细长丹凤眼，眼神精明，黑发束髻，青衣小帽] 中近景，敞口木舟（宽1.4米，可容3人）船头，张十三青衣小帽俯身查看杨旭素白色轻袍仰倒船板，心口衣料暗红洇痕，双目紧闭，钓杆垂落船舷；张十三面色凝重，细长丹凤眼圆睁，双手微微发抖；冷蓝月光照在二人身上，船板酒渍反光",
+    "motion_desc": "前2秒：张十三俯身探杨旭鼻息；2-4秒：他手指触到心口红痕，脸色骤变凝重；4-6秒：他猛地直起身，双拳紧握",
+    "ff_desc": "张十三俯身探向杨旭鼻息，杨旭仰倒心口暗红",
+    "lf_desc": "张十三直起身双拳紧握，面色凝重，杨旭仰倒不动",
+    "context_bridge": "从张十三落船梢切至俯身查看",
+    "audio_cue": "人声=无；音效=衣料摩擦声、张十三粗重呼吸；背景音乐=低沉弦乐",
+    "fx_effect": "无",
+    "color_tone": "冷蓝",
+    "cam_idx": 3,
+    "clip_transition": "淡入淡出，0.5s",
+    "duration_sec": 6.0,
+    "variation_type": "medium",
+    "frame_layouts": {
+     "ff": [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画右",
+       "pose": "俯身探息",
+       "gaze_target": "杨旭",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船板"
+       },
+       "states": [
+        "俯身"
+       ]
+      },
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "画左",
+       "pose": "仰倒",
+       "gaze_target": "无",
+       "props": [
+        "钓杆"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "仰倒",
+        "心口暗红",
+        "双目紧闭"
+       ]
+      }
+     ],
+     "lf": [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画右",
+       "pose": "直身握拳",
+       "gaze_target": "画左",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船板"
+       },
+       "states": [
+        "直身",
+        "脸色铁青"
+       ]
+      },
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "画左",
+       "pose": "仰倒",
+       "gaze_target": "无",
+       "props": [
+        "钓杆"
+       ],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "仰倒",
+        "心口暗红",
+        "双目紧闭"
+       ]
+      }
+     ],
+     "kfs": [
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "俯身探息",
+        "gaze_target": "杨旭",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "俯身"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画左",
+        "pose": "仰倒",
+        "gaze_target": "无",
+        "props": [
+         "钓杆"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "仰倒",
+         "心口暗红"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "俯身手指触到心口红痕",
+        "gaze_target": "画左杨旭心口",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "俯身",
+         "脸色骤变凝重"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画左",
+        "pose": "仰倒",
+        "gaze_target": "无",
+        "props": [
+         "钓杆"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "仰倒",
+         "心口暗红",
+         "双目紧闭"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "直身握拳",
+        "gaze_target": "画左",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "直身",
+         "脸色铁青"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画左",
+        "pose": "仰倒",
+        "gaze_target": "无",
+        "props": [
+         "钓杆"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "仰倒",
+         "心口暗红"
+        ]
+       }
+      ]
+     ]
+    },
+    "keyframes": [
+     {
+      "desc": "张十三俯身探向杨旭鼻息，杨旭仰倒船板心口暗红双目紧闭，冷蓝月光",
+      "stage": "pre",
+      "t_sec": 1.5
+     },
+     {
+      "t_sec": 3.0,
+      "stage": "approach",
+      "desc": "张十三俯身船头，手指触到杨旭心口衣料暗红洇痕，脸色骤变凝重，细长丹凤眼圆睁，杨旭素白色轻袍仰倒船板双目紧闭，钓杆垂落船舷，冷蓝月光照在二人身上"
+     },
+     {
+      "desc": "张十三直起身双拳紧握脸色铁青，杨旭仰倒不动，船板酒渍反光",
+      "stage": "react",
+      "t_sec": 4.0
+     }
+    ],
+    "content": "",
+    "camera_movement": "环绕镜",
+    "framing": "",
+    "lighting_color": "",
+    "duration": 6.0,
+    "negative_prompt": "",
+    "hook": "",
+    "time_stamp": "",
+    "subject_direction": "",
+    "char_layout": [
+     {
+      "name": "张十三",
+      "position": "画右",
+      "facing": "俯身探息",
+      "role": "主",
+      "surface": ""
+     },
+     {
+      "name": "杨旭",
+      "position": "画左",
+      "facing": "仰倒",
+      "role": "次",
+      "surface": ""
+     }
+    ],
+    "timecode": {
+     "start": 48.25,
+     "end": 54.25
+    },
+    "core_keywords": [
+     "张十三、杨旭",
+     "张十三俯",
+     "身探向杨",
+     "旭鼻息",
+     "杨旭仰倒"
+    ],
+    "keyframe_sample_count": 2,
+    "movement_speed_multiplier": 0.5,
+    "blank_hold_duration": 1.5
+   }
+  },
+  {
+   "edit_id": "d1a-shot-10",
+   "sources": [
+    {
+     "index": 10,
+     "sha256": "fa3c06d21c25a9fcdd7a247f3639d6b216ab85806fe2e731cdce564e3986e481"
+    }
+   ],
+   "reason": "原样继承（身份与哈希不变）",
+   "target": {
+    "index": 10,
+    "plan_refs": {
+     "beats": [
+      7
+     ],
+     "lines": []
+    },
+    "narration_segment": "",
+    "subtitle": "",
+    "scene": "照月湾荷塘",
+    "location": "照月湾荷塘",
+    "main_subject": "张十三、听香",
+    "prompt": "[张十三: 脸型瘦削，细长丹凤眼，眼神精明，黑发束髻，青衣小帽] 中景，敞口木舟（宽1.4米，可容3人）中舱，张十三青衣小帽背对画右听香，右手尚未扬起；听香一袭春衫披头散发，脸色苍白，嘴唇濡湿带红，双手撑船板；杨旭素白身影仰倒画左船头，心口暗红；冷蓝月光下船板狼藉",
+    "motion_desc": "前2秒：张十三猛地转身扬手；2-3秒：反手一掌扇在听香脸上；3-5秒：听香头偏向一侧，半边脸木然",
+    "ff_desc": "张十三背对听香站立、右手尚未扬起，听香披头散发撑坐船板",
+    "lf_desc": "听香头偏向一侧，半边脸红肿，张十三收手怒视",
+    "context_bridge": "从张十三直身握拳切至转向听香，紧接着延续前镜动作与构图，自然过渡到本镜。",
+    "audio_cue": "人声=无；音效=清脆耳光声、听香短促惊呼；背景音乐=紧张弦乐重击",
+    "fx_effect": "无",
+    "color_tone": "冷蓝",
+    "cam_idx": 3,
+    "clip_transition": "硬切0.2s",
+    "duration_sec": 5.0,
+    "variation_type": "large",
+    "frame_layouts": {
+     "ff": [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画左",
+       "pose": "背身站立",
+       "gaze_target": "听香",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船板"
+       },
+       "states": [
+        "背身",
+        "手未扬"
+       ]
+      },
+      {
+       "name": "听香",
+       "on_screen": true,
+       "position": "画右",
+       "pose": "撑船板",
+       "gaze_target": "张十三",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船板"
+       },
+       "states": [
+        "披头散发",
+        "脸色苍白"
+       ]
+      }
+     ],
+     "lf": [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画左",
+       "pose": "收手怒视",
+       "gaze_target": "听香",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船板"
+       },
+       "states": [
+        "收手",
+        "怒视"
+       ]
+      },
+      {
+       "name": "听香",
+       "on_screen": true,
+       "position": "画右",
+       "pose": "头偏一侧",
+       "gaze_target": "画下",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船板"
+       },
+       "states": [
+        "头偏",
+        "半边脸红肿"
+       ]
+      }
+     ],
+     "kfs": [
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画左",
+        "pose": "背身站立",
+        "gaze_target": "听香",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "背身",
+         "手未扬"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "撑船板",
+        "gaze_target": "张十三",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "披头散发"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画左",
+        "pose": "仰倒画左心口暗红",
+        "gaze_target": "无",
+        "props": [
+         "钓杆"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "仰倒",
+         "心口暗红",
+         "双目紧闭",
+         "在场"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画左",
+        "pose": "收手怒视",
+        "gaze_target": "听香",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "收手"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "头偏一侧",
+        "gaze_target": "画下",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "头偏",
+         "半边脸红肿"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画左",
+        "pose": "收手怒视",
+        "gaze_target": "画右听香",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "收手",
+         "怒视"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "头偏向一侧，双手撑船板",
+        "gaze_target": "画下",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "头偏",
+         "半边脸木然",
+         "脸颊红肿",
+         "披头散发"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画左",
+        "pose": "素白色轻袍仰倒画左船头心口暗红",
+        "gaze_target": "无",
+        "props": [
+         "钓杆"
+        ],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "仰倒",
+         "心口暗红",
+         "双目紧闭",
+         "在场"
+        ]
+       }
+      ]
+     ]
+    },
+    "keyframes": [
+     {
+      "desc": "张十三背对听香站立、右手尚未扬起，听香披头散发撑坐船板脸色苍白，杨旭仰倒画左心口暗红",
+      "stage": "pre",
+      "t_sec": 1.0
+     },
+     {
+      "desc": "张十三反手一掌扇在听香脸上，听香头偏向一侧半边脸红肿",
+      "stage": "climax",
+      "t_sec": 2.5
+     },
+     {
+      "t_sec": 4.0,
+      "stage": "react",
+      "desc": "听香头偏向一侧，半边脸木然，脸颊红肿，披头散发垂落，双手仍撑船板；张十三青衣小帽收手怒视画右，杨旭素白色轻袍仰倒画左船头心口暗红，冷蓝月光下船板狼藉"
+     }
+    ],
+    "content": "",
+    "camera_movement": "环绕镜",
+    "framing": "",
+    "lighting_color": "",
+    "duration": 5.0,
+    "negative_prompt": "",
+    "hook": "",
+    "time_stamp": "",
+    "subject_direction": "",
+    "char_layout": [
+     {
+      "name": "张十三",
+      "position": "画左",
+      "facing": "背身站立",
+      "role": "主",
+      "surface": ""
+     },
+     {
+      "name": "听香",
+      "position": "画右",
+      "facing": "撑船板",
+      "role": "次",
+      "surface": "船板"
+     }
+    ],
+    "timecode": {
+     "start": 54.25,
+     "end": 59.25
+    },
+    "core_keywords": [
+     "张十三、听香",
+     "张十三转",
+     "身扬手",
+     "听香披头",
+     "散发撑船"
+    ],
+    "keyframe_sample_count": 3,
+    "movement_speed_multiplier": 0.3,
+    "blank_hold_duration": 1.5
+   }
+  },
+  {
+   "edit_id": "d1a-shot-11",
+   "sources": [
+    {
+     "index": 11,
+     "sha256": "5f0fbf47ea56813a59892950101634c4d515b27fc1c6feeb99939139f907dc82"
+    }
+   ],
+   "reason": "原样继承（身份与哈希不变）",
+   "target": {
+    "index": 11,
+    "plan_refs": {
+     "beats": [
+      7
+     ],
+     "lines": []
+    },
+    "narration_segment": "",
+    "subtitle": "",
+    "scene": "照月湾荷塘",
+    "location": "照月湾荷塘",
+    "main_subject": "张十三、听香",
+    "prompt": "[张十三: 脸型瘦削，细长丹凤眼，眼神精明，黑发束髻，青衣小帽] 中近景，敞口木舟（宽1.4米，可容3人）中舱，张十三青衣小帽压低身形逼近听香耳畔，细长丹凤眼厉色，右手食指竖于唇前；听香一袭春衫披头散发，半边脸红肿，双手捂嘴后缩，连连点头；杨旭素白身影仰倒画左船头，心口暗红；冷蓝月光下二人对峙",
+    "motion_desc": "前2秒：张十三压低身形逼近听香耳畔，右手竖指封口；2-4秒：他低声厉色开口，目光扫向岸边；4-5秒：听香双手捂嘴、连连点头，不敢出声",
+    "ff_desc": "张十三压低身形逼近听香耳畔，右手食指竖于唇前，目露警告；听香双手捂脸后缩，身子紧贴船板",
+    "lf_desc": "听香双手捂嘴连连点头，张十三直身扫视岸边；冷蓝月光下二人对峙",
+    "context_bridge": "从掌掴切至低声威胁，紧接着延续前镜动作与构图，自然过渡到本镜。",
+    "audio_cue": "人声=张十三压低嗓音厉色威胁；音效=衣料摩擦、听香抽泣；背景音乐=低沉弦乐",
+    "fx_effect": "无",
+    "color_tone": "冷蓝",
+    "cam_idx": 3,
+    "clip_transition": "硬切0.2s；淡入淡出，镜头拉远，自然过渡，转场时长0.5s",
+    "duration_sec": 5.0,
+    "variation_type": "medium",
+    "frame_layouts": {
+     "ff": [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画左",
+       "pose": "俯身竖指",
+       "gaze_target": "听香",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船板"
+       },
+       "states": [
+        "俯身",
+        "厉色"
+       ]
+      },
+      {
+       "name": "听香",
+       "on_screen": true,
+       "position": "画右",
+       "pose": "捂脸后缩",
+       "gaze_target": "张十三",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船板"
+       },
+       "states": [
+        "捂脸",
+        "半边脸红肿"
+       ]
+      },
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "船头",
+       "pose": "仰倒",
+       "gaze_target": "画上",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "仰倒",
+        "心口暗红",
+        "素白轻袍"
+       ]
+      }
+     ],
+     "lf": [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画左",
+       "pose": "直身扫视",
+       "gaze_target": "画右岸边",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船板"
+       },
+       "states": [
+        "直身"
+       ]
+      },
+      {
+       "name": "听香",
+       "on_screen": true,
+       "position": "画右",
+       "pose": "点头",
+       "gaze_target": "张十三",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船板"
+       },
+       "states": [
+        "点头",
+        "半边脸红肿"
+       ]
+      },
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "船头",
+       "pose": "仰倒",
+       "gaze_target": "画上",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "仰倒",
+        "心口暗红",
+        "素白轻袍"
+       ]
+      }
+     ],
+     "kfs": [
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画左",
+        "pose": "俯身竖指",
+        "gaze_target": "听香",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "俯身",
+         "厉色"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "捂脸后缩",
+        "gaze_target": "张十三",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "捂脸",
+         "半边脸红肿"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "仰倒",
+        "gaze_target": "画上",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "仰倒",
+         "心口暗红",
+         "素白轻袍"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画左",
+        "pose": "俯身竖指开口",
+        "gaze_target": "听香",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "俯身",
+         "厉色"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "捂脸后缩",
+        "gaze_target": "张十三",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "后缩",
+         "半边脸红肿"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "仰倒",
+        "gaze_target": "画上",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "仰倒",
+         "心口暗红",
+         "素白轻袍"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画左",
+        "pose": "直身扫视",
+        "gaze_target": "画右岸边",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "直身"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画右",
+        "pose": "点头",
+        "gaze_target": "张十三",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船板"
+        },
+        "states": [
+         "点头",
+         "半边脸红肿"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "仰倒",
+        "gaze_target": "画上",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "仰倒",
+         "心口暗红",
+         "素白轻袍"
+        ]
+       }
+      ]
+     ]
+    },
+    "keyframes": [
+     {
+      "desc": "张十三青衣小帽俯身逼近听香，右手食指竖于唇前，细长丹凤眼厉色；听香一袭春衫披头散发，半边脸红肿，双手捂脸后缩；杨旭素白身影仰倒画左船头，心口暗红，冷蓝月光",
+      "stage": "pre",
+      "t_sec": 1.5
+     },
+     {
+      "desc": "张十三低声厉色开口，右手食指仍竖于唇前，听香身子后缩，双手捂脸，半边脸红肿，一袭春衫；杨旭素白身影仰倒画左船头，心口暗红，冷蓝月光",
+      "stage": "approach",
+      "t_sec": 3.0
+     },
+     {
+      "desc": "听香连连点头，张十三直身扫视画右岸边，青衣小帽；听香一袭春衫披头散发，半边脸红肿，双手垂落；杨旭素白身影仰倒画左船头，心口暗红，冷蓝月光",
+      "stage": "react",
+      "t_sec": 4.0
+     }
+    ],
+    "content": "",
+    "camera_movement": "环绕镜",
+    "framing": "",
+    "lighting_color": "",
+    "duration": 5.0,
+    "negative_prompt": "",
+    "hook": "",
+    "time_stamp": "",
+    "subject_direction": "",
+    "char_layout": [
+     {
+      "name": "张十三",
+      "position": "画左",
+      "facing": "俯身竖指",
+      "role": "主",
+      "surface": ""
+     },
+     {
+      "name": "听香",
+      "position": "画右",
+      "facing": "捂脸后缩",
+      "role": "次",
+      "surface": ""
+     },
+     {
+      "name": "杨旭",
+      "position": "船头",
+      "facing": "仰倒",
+      "role": "次",
+      "surface": "船头"
+     }
+    ],
+    "timecode": {
+     "start": 59.25,
+     "end": 64.25
+    },
+    "core_keywords": [
+     "张十三、听香",
+     "张十三俯",
+     "身逼近听",
+     "竖指于唇"
+    ],
+    "keyframe_sample_count": 2,
+    "movement_speed_multiplier": 0.5,
+    "blank_hold_duration": 1.5
+   }
+  },
+  {
+   "edit_id": "d1a-shot-12",
+   "sources": [
+    {
+     "index": 12,
+     "sha256": "c00f0ac7d2e1350912cbc404149f11f3a632a94f891a4d74f2b1ff05404770a7"
+    }
+   ],
+   "reason": "原样继承（身份与哈希不变）",
+   "target": {
+    "index": 12,
+    "plan_refs": {
+     "beats": [
+      8
+     ],
+     "lines": [
+      1
+     ]
+    },
+    "narration_segment": "张十三道：公子爷吃醉了酒，险些跌落水中",
+    "subtitle": "张十三道：公子爷吃醉了酒，险些跌落水中",
+    "scene": "湾堤岸边",
+    "location": "湾堤岸边",
+    "main_subject": "张十三",
+    "prompt": "[张十三: 脸型瘦削，细长丹凤眼，眼神精明，黑发束髻，青衣小帽] 中景，敞口木舟（宽1.4米，可容3人）船梢，张十三青衣小帽立于船梢，面朝画右岸边，神色沉稳，身形半挡船头；岸边堤上三四个庄仆（粗布短褐，手持灯笼、叉子、粪铲）举灯张望；杨旭素白身影仰倒船头，被张十三背影与船舱侧板遮住，岸上视角不可见；冷蓝月光与灯笼暖光交织",
+    "motion_desc": "前2秒：张十三立于船梢拱手；2-4秒：他漫声开口，庄仆们举灯哄笑；4-6秒：张十三抬手叫住正要散去的庄仆，吩咐把公子马车赶到水边来，庄仆应声转身去赶车",
+    "ff_desc": "张十三青衣小帽立于船梢拱手面朝画右岸边，身形半挡船头，庄仆举灯张望",
+    "lf_desc": "张十三青衣小帽立于船梢，抬起的右手尚未落下，目送画右岸边应声去赶车的庄仆，灯笼暖光随脚步移向堤后，目光微闪；船头杨旭素白身影仍被其背影遮挡，冷蓝月光洒在船梢",
+    "context_bridge": "从张十三扫视岸边切至向庄仆解释",
+    "audio_cue": "人声=张十三沉稳漫声，庄仆哄笑；音效=灯笼晃动、脚步杂沓；背景音乐=低沉弦乐",
+    "fx_effect": "灯火摇曳",
+    "color_tone": "冷蓝",
+    "cam_idx": 2,
+    "clip_transition": "淡入淡出，0.5s",
+    "duration_sec": 6.0,
+    "variation_type": "medium",
+    "frame_layouts": {
+     "ff": [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画左船梢",
+       "pose": "拱手站立，身形半挡船头",
+       "gaze_target": "画右岸边",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船梢"
+       },
+       "states": [
+        "站立",
+        "拱手"
+       ]
+      },
+      {
+       "name": "群演",
+       "on_screen": true,
+       "position": "画右堤上",
+       "pose": "张望",
+       "gaze_target": "画左张十三",
+       "props": [
+        "灯笼",
+        "叉子",
+        "粪铲"
+       ],
+       "support": {
+        "id": "堤岸",
+        "kind": "土堤",
+        "surface": "堤面"
+       },
+       "states": [
+        "站立"
+       ]
+      }
+     ],
+     "lf": [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画左船梢",
+       "pose": "站立，右手抬起未落，目送",
+       "gaze_target": "画右岸边",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船梢"
+       },
+       "states": [
+        "站立",
+        "抬手",
+        "目光微闪"
+       ]
+      },
+      {
+       "name": "群演",
+       "on_screen": true,
+       "position": "画右堤上",
+       "pose": "应声转身去赶车",
+       "gaze_target": "画右",
+       "props": [
+        "灯笼",
+        "叉子",
+        "粪铲"
+       ],
+       "support": {
+        "id": "堤岸",
+        "kind": "土堤",
+        "surface": "堤面"
+       },
+       "states": [
+        "转身"
+       ]
+      },
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "画右",
+       "pose": "素白身影仍被其背影遮挡",
+       "gaze_target": "画上",
+       "props": [],
+       "support": {
+        "id": "boat_1",
+        "kind": "平底敞口采莲小舟",
+        "surface": "船头平坦处"
+       },
+       "states": [
+        "仰倒",
+        "心口暗红",
+        "素白轻袍",
+        "在场"
+       ]
+      }
+     ],
+     "kfs": [
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画左船梢",
+        "pose": "拱手站立，身形半挡船头",
+        "gaze_target": "画右岸边",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船梢"
+        },
+        "states": [
+         "拱手"
+        ]
+       },
+       {
+        "name": "群演",
+        "on_screen": true,
+        "position": "画右堤上",
+        "pose": "张望",
+        "gaze_target": "画左张十三",
+        "props": [
+         "灯笼",
+         "叉子",
+         "粪铲"
+        ],
+        "support": {
+         "id": "堤岸",
+         "kind": "土堤",
+         "surface": "堤面"
+        },
+        "states": [
+         "张望"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画左船梢",
+        "pose": "拱手开口漫声",
+        "gaze_target": "画右岸边",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船梢"
+        },
+        "states": [
+         "开口"
+        ]
+       },
+       {
+        "name": "群演",
+        "on_screen": true,
+        "position": "画右堤上",
+        "pose": "哄笑",
+        "gaze_target": "画左张十三",
+        "props": [
+         "灯笼",
+         "叉子",
+         "粪铲"
+        ],
+        "support": {
+         "id": "堤岸",
+         "kind": "土堤",
+         "surface": "堤面"
+        },
+        "states": [
+         "哄笑"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画左船梢",
+        "pose": "站立，右手抬起未落，目送",
+        "gaze_target": "画右岸边",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船梢"
+        },
+        "states": [
+         "抬手",
+         "目送"
+        ]
+       },
+       {
+        "name": "群演",
+        "on_screen": true,
+        "position": "画右堤上",
+        "pose": "应声转身去赶车",
+        "gaze_target": "画右",
+        "props": [
+         "灯笼",
+         "叉子",
+         "粪铲"
+        ],
+        "support": {
+         "id": "堤岸",
+         "kind": "土堤",
+         "surface": "堤面"
+        },
+        "states": [
+         "转身"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "船头",
+        "pose": "素白身影仍被其背影遮挡",
+        "gaze_target": "画上",
+        "props": [],
+        "support": {
+         "id": "boat_1",
+         "kind": "平底敞口采莲小舟",
+         "surface": "船头平坦处"
+        },
+        "states": [
+         "仰倒",
+         "心口暗红",
+         "素白轻袍",
+         "在场"
+        ]
+       }
+      ]
+     ]
+    },
+    "keyframes": [
+     {
+      "desc": "张十三青衣小帽立于船梢拱手面朝画右岸边，身形半挡船头，庄仆举灯张望",
+      "stage": "pre",
+      "t_sec": 1.5
+     },
+     {
+      "desc": "张十三拱手开口漫声，庄仆们举灯哄笑",
+      "stage": "react",
+      "t_sec": 3.0
+     },
+     {
+      "desc": "庄仆们应声转身去赶车，张十三目光微闪，灯笼暖光渐远，船头杨旭素白身影仍被其背影遮挡",
+      "stage": "exit",
+      "t_sec": 4.5
+     }
+    ],
+    "content": "",
+    "camera_movement": "中景",
+    "framing": "",
+    "lighting_color": "",
+    "duration": 6.0,
+    "negative_prompt": "",
+    "hook": "",
+    "time_stamp": "",
+    "subject_direction": "",
+    "char_layout": [
+     {
+      "name": "张十三",
+      "position": "画左船梢",
+      "facing": "拱手站立，身形半挡船头",
+      "role": "主",
+      "surface": "船梢"
+     },
+     {
+      "name": "群演",
+      "position": "画右堤上",
+      "facing": "张望",
+      "role": "次",
+      "surface": ""
+     }
+    ],
+    "timecode": {
+     "start": 64.25,
+     "end": 70.25
+    },
+    "core_keywords": [
+     "张十三",
+     "张十三立",
+     "于船梢拱",
+     "庄仆举灯",
+     "张望"
+    ],
+    "keyframe_sample_count": 2,
+    "movement_speed_multiplier": 0.5,
+    "blank_hold_duration": 1.5
+   }
+  },
+  {
+   "edit_id": "d1a-shot-13",
+   "sources": [
+    {
+     "index": 13,
+     "sha256": "f859b9be6f3685e210ad0570c113bd26716ab0a838b2d98bf54c5eae440b0df1"
+    }
+   ],
+   "reason": "原样继承（身份与哈希不变）",
+   "target": {
+    "index": 13,
+    "plan_refs": {
+     "beats": [
+      8
+     ],
+     "lines": []
+    },
+    "narration_segment": "",
+    "subtitle": "",
+    "scene": "湾堤岸边",
+    "location": "湾堤岸边",
+    "main_subject": "张十三、听香",
+    "prompt": "[张十三: 脸型瘦削，细长丹凤眼，眼神精明，黑发束髻，青衣小帽] [杨旭: 国字脸，脸型清秀，剑眉星目，鼻梁挺直，黑发束冠，身姿挺拔] [听香: 鹅蛋脸，柳叶眉，桃花眼，樱桃小嘴，一头乌黑青丝挽慵懒美人髻，斜插一枝步摇，一袭春衫] 中景，湾堤岸边，张十三青衣小帽驾两轮带篷马车（长3.5米宽1.6米高2.0米），车厢内杨旭素白色轻袍仰卧、心口衣料暗红洇痕，听香一袭春衫披头散发倚坐其侧；马车疾驰，车轮扬起尘土，别庄大门洞开在画左后方；冷蓝夜色，车篷灯笼摇晃",
+    "motion_desc": "前2秒：张十三扬鞭催马；2-4秒：马车疾驰冲出大门；4-5秒：车影投入茫茫夜色",
+    "ff_desc": "张十三坐于车辕扬鞭，马车停在门前，车厢内杨旭素白色轻袍仰卧、心口暗红洇痕，听香一袭春衫披头散发倚坐其侧",
+    "lf_desc": "马车疾驰远去，车影没入夜色，尘土未落，车厢内杨旭素白色轻袍仰卧、心口衣料暗红洇痕，听香一袭春衫披头散发倚坐其侧，车篷灯笼摇晃",
+    "context_bridge": "从庄仆散去切至张十三驾车离开",
+    "audio_cue": "人声=无；音效=马蹄疾驰声、车轮碾地声、鞭响；背景音乐=紧张弦乐渐强",
+    "fx_effect": "马踏飞尘",
+    "color_tone": "冷蓝",
+    "cam_idx": 1,
+    "clip_transition": "硬切0.2s；淡入淡出，镜头拉远，自然过渡，转场时长0.5s",
+    "duration_sec": 5.0,
+    "variation_type": "large",
+    "frame_layouts": {
+     "ff": [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画中车辕",
+       "pose": "坐辕扬鞭",
+       "gaze_target": "画右",
+       "props": [
+        "马鞭"
+       ],
+       "support": {
+        "id": "cart_1",
+        "kind": "两轮带篷载客马车",
+        "surface": "车辕"
+       },
+       "states": [
+        "坐辕"
+       ]
+      },
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "画中车厢",
+       "pose": "仰卧",
+       "gaze_target": "无",
+       "props": [],
+       "support": {
+        "id": "cart_1",
+        "kind": "两轮带篷载客马车",
+        "surface": "车厢内"
+       },
+       "states": [
+        "仰卧",
+        "心口暗红"
+       ]
+      },
+      {
+       "name": "听香",
+       "on_screen": true,
+       "position": "画中车厢",
+       "pose": "倚坐",
+       "gaze_target": "画下",
+       "props": [],
+       "support": {
+        "id": "cart_1",
+        "kind": "两轮带篷载客马车",
+        "surface": "车厢内"
+       },
+       "states": [
+        "倚坐",
+        "披头散发"
+       ]
+      }
+     ],
+     "lf": [
+      {
+       "name": "张十三",
+       "on_screen": true,
+       "position": "画中车辕",
+       "pose": "驾车疾驰",
+       "gaze_target": "画右",
+       "props": [
+        "马鞭"
+       ],
+       "support": {
+        "id": "cart_1",
+        "kind": "两轮带篷载客马车",
+        "surface": "车辕"
+       },
+       "states": [
+        "驾车"
+       ]
+      },
+      {
+       "name": "杨旭",
+       "on_screen": true,
+       "position": "画中车厢",
+       "pose": "仰卧",
+       "gaze_target": "无",
+       "props": [],
+       "support": {
+        "id": "cart_1",
+        "kind": "两轮带篷载客马车",
+        "surface": "车厢内"
+       },
+       "states": [
+        "仰卧",
+        "心口暗红"
+       ]
+      },
+      {
+       "name": "听香",
+       "on_screen": true,
+       "position": "画中车厢",
+       "pose": "倚坐",
+       "gaze_target": "画下",
+       "props": [],
+       "support": {
+        "id": "cart_1",
+        "kind": "两轮带篷载客马车",
+        "surface": "车厢内"
+       },
+       "states": [
+        "倚坐",
+        "披头散发"
+       ]
+      }
+     ],
+     "kfs": [
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画中车辕",
+        "pose": "坐辕扬鞭",
+        "gaze_target": "画右",
+        "props": [
+         "马鞭"
+        ],
+        "support": {
+         "id": "cart_1",
+         "kind": "两轮带篷载客马车",
+         "surface": "车辕"
+        },
+        "states": [
+         "坐辕"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画中车厢",
+        "pose": "仰卧",
+        "gaze_target": "无",
+        "props": [],
+        "support": {
+         "id": "cart_1",
+         "kind": "两轮带篷载客马车",
+         "surface": "车厢内"
+        },
+        "states": [
+         "仰卧",
+         "心口暗红"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画中车厢",
+        "pose": "倚坐",
+        "gaze_target": "画下",
+        "props": [],
+        "support": {
+         "id": "cart_1",
+         "kind": "两轮带篷载客马车",
+         "surface": "车厢内"
+        },
+        "states": [
+         "倚坐"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画中车辕",
+        "pose": "驾车疾驰扬鞭",
+        "gaze_target": "画右",
+        "props": [
+         "马鞭"
+        ],
+        "support": {
+         "id": "cart_1",
+         "kind": "两轮带篷载客马车",
+         "surface": "车辕"
+        },
+        "states": [
+         "驾车疾驰"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画中车厢",
+        "pose": "仰卧",
+        "gaze_target": "无",
+        "props": [],
+        "support": {
+         "id": "cart_1",
+         "kind": "两轮带篷载客马车",
+         "surface": "车厢内"
+        },
+        "states": [
+         "仰卧",
+         "心口暗红"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画中车厢",
+        "pose": "倚坐",
+        "gaze_target": "画下",
+        "props": [],
+        "support": {
+         "id": "cart_1",
+         "kind": "两轮带篷载客马车",
+         "surface": "车厢内"
+        },
+        "states": [
+         "倚坐",
+         "披头散发"
+        ]
+       }
+      ],
+      [
+       {
+        "name": "张十三",
+        "on_screen": true,
+        "position": "画中车辕",
+        "pose": "驾车疾驰",
+        "gaze_target": "画右",
+        "props": [
+         "马鞭"
+        ],
+        "support": {
+         "id": "cart_1",
+         "kind": "两轮带篷载客马车",
+         "surface": "车辕"
+        },
+        "states": [
+         "驾车"
+        ]
+       },
+       {
+        "name": "杨旭",
+        "on_screen": true,
+        "position": "画中车厢",
+        "pose": "仰卧",
+        "gaze_target": "无",
+        "props": [],
+        "support": {
+         "id": "cart_1",
+         "kind": "两轮带篷载客马车",
+         "surface": "车厢内"
+        },
+        "states": [
+         "仰卧",
+         "心口暗红"
+        ]
+       },
+       {
+        "name": "听香",
+        "on_screen": true,
+        "position": "画中车厢",
+        "pose": "倚坐",
+        "gaze_target": "画下",
+        "props": [],
+        "support": {
+         "id": "cart_1",
+         "kind": "两轮带篷载客马车",
+         "surface": "车厢内"
+        },
+        "states": [
+         "倚坐"
+        ]
+       }
+      ]
+     ]
+    },
+    "keyframes": [
+     {
+      "desc": "张十三坐于车辕扬鞭，马车停在别庄门前，听香披头散发倚坐车厢",
+      "stage": "pre",
+      "t_sec": 1.5
+     },
+     {
+      "t_sec": 3.0,
+      "stage": "climax",
+      "desc": "马车疾驰冲出大门，车轮扬起尘土，张十三青衣小帽坐于车辕扬鞭催马，车厢内听香一袭春衫披头散发倚坐，车篷灯笼摇晃，冷蓝夜色"
+     },
+     {
+      "desc": "马车疾驰冲出大门，车轮扬起尘土，车影投入夜色",
+      "stage": "exit",
+      "t_sec": 4.0
+     }
+    ],
+    "content": "",
+    "camera_movement": "固定机位",
+    "framing": "",
+    "lighting_color": "",
+    "duration": 5.0,
+    "negative_prompt": "",
+    "hook": "",
+    "time_stamp": "",
+    "subject_direction": "",
+    "char_layout": [
+     {
+      "name": "张十三",
+      "position": "画中车辕",
+      "facing": "坐辕扬鞭",
+      "role": "主",
+      "surface": "车辕"
+     },
+     {
+      "name": "杨旭",
+      "position": "画中车厢",
+      "facing": "仰卧",
+      "role": "次",
+      "surface": "车厢内"
+     },
+     {
+      "name": "听香",
+      "position": "画中车厢",
+      "facing": "倚坐",
+      "role": "次",
+      "surface": "车厢内"
+     }
+    ],
+    "timecode": {
+     "start": 70.25,
+     "end": 75.25
+    },
+    "core_keywords": [
+     "张十三、听香",
+     "张十三坐",
+     "于车辕扬",
+     "马车停在",
+     "门前"
+    ],
+    "keyframe_sample_count": 3,
+    "movement_speed_multiplier": 0.3,
+    "blank_hold_duration": 1.5
+   }
+  }
+ ]
+}

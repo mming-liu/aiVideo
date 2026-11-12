@@ -1,0 +1,451 @@
+{
+  "input_revision": "92c80008823b9e237b4547137b55acd1d6448cd8d02b87e0fe9ee2c1bfb45b7d",
+  "rule_version": "2026-09-23.4",
+  "rule_source_fingerprint": "31f919561d24b17d",
+  "duration_band": {
+    "min": 60.0,
+    "max": 90.0,
+    "target_min": 70.0,
+    "target_max": 80.0
+  },
+  "prompt_source_fingerprint": "913442d59ede3471",
+  "audit_scope": "final_after_deterministic_fixes",
+  "audit_prompt_version": "b30a73da0b0b",
+  "audit_focus_version": "066a87e6da63",
+  "audit_temperature": 0.0,
+  "run_id": "20261108T222543-23920",
+  "status": "ok",
+  "model": "deepseek-v4.1-flash",
+  "channel_provider": "agent_plan",
+  "schema_deviations": [],
+  "usage": {
+    "input_tokens": 51936,
+    "output_tokens": 23131,
+    "reasoning_tokens": 20154,
+    "total_tokens": 75067
+  },
+  "error": "",
+  "issues": [
+    {
+      "code": "model_audit_NARRATION_TEXT_ERROR",
+      "severity": "warning",
+      "message": "旁白插入“的，”且与规划文本不符，语义断裂，观众听到错误断句。；建议：改为“宝钞的高价”，删去“的，”。",
+      "shot_id": "3",
+      "frame_id": "ff",
+      "entity_id": "narration",
+      "field_path": "narration_segment",
+      "evidence": "宝钞的，高价",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "3",
+          "field_path": "narration_segment"
+        }
+      ],
+      "repairable": true,
+      "_downgraded_locked_only": true
+    },
+    {
+      "code": "model_audit_CROSS_FIELD_CONFLICT",
+      "severity": "visual_risk",
+      "message": "与ff_desc“左手提青瓷酒壶”相反；且听香仍捧盏递来，杨旭首帧已持盏矛盾。；建议：统一手别，删杨旭首帧酒盏，盏留在听香手中。",
+      "shot_id": "3",
+      "frame_id": "ff",
+      "entity_id": "杨旭",
+      "field_path": "prompt",
+      "evidence": "右手提青瓷酒壶，左手持酒盏",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "3",
+          "field_path": "prompt"
+        },
+        {
+          "shot_id": "3",
+          "field_path": "ff_desc"
+        },
+        {
+          "shot_id": "3",
+          "field_path": "frame_layouts.ff[0].props"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_PROP_CONTINUITY",
+      "severity": "advisory",
+      "message": "镜4尾帧与镜6首帧杨旭均持钓杆，镜5全程缺钓杆，道具连续断裂。；建议：在ff/lf杨旭props补“钓杆”。",
+      "shot_id": "5",
+      "frame_id": "ff",
+      "entity_id": "杨旭",
+      "field_path": "frame_layouts.ff[2].props",
+      "evidence": "props 为空，未列钓杆",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.ff[2].props"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.lf[2].props"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_CHARACTER_PRESENCE_MISSING",
+      "severity": "visual_risk",
+      "message": "prompt与ff_desc均有杨旭背影，关键帧三帧却无杨旭，中间过程人物消失。；建议：在kfs[0]/[1]/[2]增补杨旭条目。",
+      "shot_id": "5",
+      "frame_id": "kf1",
+      "entity_id": "杨旭",
+      "field_path": "frame_layouts.kfs[0]",
+      "evidence": "关键帧出镜列表无杨旭条目",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.kfs[0]"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.kfs[1]"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.kfs[2]"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_PROMPT_DUPLICATE_TEXT",
+      "severity": "advisory",
+      "message": "同一括号说明连续重复，提示词冗余，可能干扰生成权重分配。；建议：删除一份重复括号句。",
+      "shot_id": "6",
+      "frame_id": "ff",
+      "entity_id": "神秘人",
+      "field_path": "prompt",
+      "evidence": "（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "6",
+          "field_path": "prompt"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_PROP_LAYOUT_MISSING",
+      "severity": "advisory",
+      "message": "lf_desc写右手酒壶倾倒酒水，布局仅列钓杆未列酒壶，尾帧道具状态不一致。；建议：在lf杨旭props补“酒壶”或改为落地道具。",
+      "shot_id": "7",
+      "frame_id": "lf",
+      "entity_id": "杨旭",
+      "field_path": "frame_layouts.lf[1].props",
+      "evidence": "钓杆",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "7",
+          "field_path": "frame_layouts.lf[1].props"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_FF_RESULT_LEAK",
+      "severity": "visual_risk",
+      "message": "首帧已完成motion前2秒的“猛地转身扬手”，过程动作提前，正片会重复。；建议：首帧改为背对听香、手未扬起。",
+      "shot_id": "10",
+      "frame_id": "ff",
+      "entity_id": "张十三",
+      "field_path": "ff_desc",
+      "evidence": "转身扬手",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "10",
+          "field_path": "ff_desc"
+        },
+        {
+          "shot_id": "10",
+          "field_path": "frame_layouts.ff[0].pose"
+        },
+        {
+          "shot_id": "10",
+          "field_path": "frame_layouts.ff[0].states"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_UNSUPPORTED_PROP",
+      "severity": "visual_risk",
+      "message": "原文张十三无刀；且lf_desc写“右手仍按刀柄”，与ff/motion左手按刀柄矛盾，布局props也无刀。；建议：删除刀柄描写，或明确腰刀并统一左右手与布局。",
+      "shot_id": "11",
+      "frame_id": "ff",
+      "entity_id": "张十三",
+      "field_path": "prompt",
+      "evidence": "左手按在腰间刀柄上",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "11",
+          "field_path": "prompt"
+        },
+        {
+          "shot_id": "11",
+          "field_path": "ff_desc"
+        },
+        {
+          "shot_id": "11",
+          "field_path": "lf_desc"
+        },
+        {
+          "shot_id": "11",
+          "field_path": "motion_desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_CHARACTER_PRESENCE_MISSING",
+      "severity": "visual_risk",
+      "message": "prompt写杨旭素白身影仰倒画左船头，布局全程缺尸体，与镜10/12/13在场状态断裂。；建议：在ff/lf/kfs中增补仰倒的杨旭条目。",
+      "shot_id": "11",
+      "frame_id": "ff",
+      "entity_id": "杨旭",
+      "field_path": "frame_layouts.ff",
+      "evidence": "frame_layouts 各帧无杨旭条目",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "11",
+          "field_path": "frame_layouts.ff"
+        },
+        {
+          "shot_id": "11",
+          "field_path": "frame_layouts.lf"
+        },
+        {
+          "shot_id": "11",
+          "field_path": "frame_layouts.kfs[0]"
+        },
+        {
+          "shot_id": "11",
+          "field_path": "frame_layouts.kfs[1]"
+        },
+        {
+          "shot_id": "11",
+          "field_path": "frame_layouts.kfs[2]"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_KF_STATE_CONFLICT",
+      "severity": "visual_risk",
+      "message": "与motion“吩咐把公子马车赶到水边来，庄仆应声转身去赶车”及lf“应声去赶车的庄仆”矛盾。；建议：改为“庄仆们应声转身去赶车”。",
+      "shot_id": "12",
+      "frame_id": "kf3",
+      "entity_id": "群演",
+      "field_path": "keyframes[2].desc",
+      "evidence": "庄仆们转身散去",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "12",
+          "field_path": "keyframes[2].desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_LF_SCOPE_CONFLICT",
+      "severity": "advisory",
+      "message": "同一尾帧又说车厢内杨旭听香细节；远景没入夜色时无法同框看见车内人物。；建议：二选一：只保留车影没入夜色，或改近景车厢内。",
+      "shot_id": "13",
+      "frame_id": "lf",
+      "entity_id": "听香",
+      "field_path": "lf_desc",
+      "evidence": "车影没入夜色",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "13",
+          "field_path": "lf_desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_APPEARANCE_STATE_CONFLICT",
+      "severity": "advisory",
+      "message": "与ff/lf“披头散发”矛盾；步摇已在刺杀时落水，外观提示会生成错误发式。；建议：prompt改为披头散发、无步摇。",
+      "shot_id": "13",
+      "frame_id": "lf",
+      "entity_id": "听香",
+      "field_path": "prompt",
+      "evidence": "一头乌黑青丝挽慵懒美人髻，斜插一枝步摇",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "13",
+          "field_path": "prompt"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_KF_STAGE_MISMATCH",
+      "severity": "visual_risk",
+      "message": "镜1-4关键帧后两帧使用approach/after/react/climax等非法stage，无法按pre/process/result对齐。；建议：各关键帧后两帧改为process/result。",
+      "shot_id": "1",
+      "frame_id": "kf2",
+      "entity_id": "scene",
+      "field_path": "keyframes[1].stage",
+      "evidence": "approach",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "1",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "1",
+          "field_path": "keyframes[2].stage"
+        },
+        {
+          "shot_id": "2",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "2",
+          "field_path": "keyframes[2].stage"
+        },
+        {
+          "shot_id": "3",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "3",
+          "field_path": "keyframes[2].stage"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "keyframes[2].stage"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_KF_STAGE_MISMATCH",
+      "severity": "visual_risk",
+      "message": "镜5-8关键帧后两帧使用approach/climax/exit/react/after等非法stage。；建议：各关键帧后两帧改为process/result。",
+      "shot_id": "5",
+      "frame_id": "kf2",
+      "entity_id": "scene",
+      "field_path": "keyframes[1].stage",
+      "evidence": "approach",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "5",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "keyframes[2].stage"
+        },
+        {
+          "shot_id": "6",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "6",
+          "field_path": "keyframes[2].stage"
+        },
+        {
+          "shot_id": "7",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "7",
+          "field_path": "keyframes[2].stage"
+        },
+        {
+          "shot_id": "8",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "8",
+          "field_path": "keyframes[2].stage"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_KF_STAGE_MISMATCH",
+      "severity": "visual_risk",
+      "message": "镜9-13关键帧后两帧使用approach/react/climax/exit等非法stage。；建议：各关键帧后两帧改为process/result。",
+      "shot_id": "9",
+      "frame_id": "kf2",
+      "entity_id": "scene",
+      "field_path": "keyframes[1].stage",
+      "evidence": "approach",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "9",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "9",
+          "field_path": "keyframes[2].stage"
+        },
+        {
+          "shot_id": "10",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "10",
+          "field_path": "keyframes[2].stage"
+        },
+        {
+          "shot_id": "11",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "11",
+          "field_path": "keyframes[2].stage"
+        },
+        {
+          "shot_id": "12",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "12",
+          "field_path": "keyframes[2].stage"
+        },
+        {
+          "shot_id": "13",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "13",
+          "field_path": "keyframes[2].stage"
+        }
+      ],
+      "repairable": true
+    }
+  ],
+  "character_aliases": [],
+  "created_at": "2026-11-08T22:28:57"
+}

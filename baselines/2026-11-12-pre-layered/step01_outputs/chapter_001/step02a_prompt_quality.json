@@ -1,0 +1,53 @@
+{
+  "warning_count": 5,
+  "warnings": [
+    {
+      "category": "image_video_directive_leak",
+      "shot": 1,
+      "field": "lf_desc",
+      "message": "video-only terms in image prompt: ['推近']"
+    },
+    {
+      "category": "image_video_directive_leak",
+      "shot": 1,
+      "field": "keyframes[0].desc",
+      "message": "video-only terms in image prompt: ['推近']"
+    },
+    {
+      "code": "offscreen_entity_in_prompt",
+      "entity": "杨旭",
+      "reason": "off_screen",
+      "category": "image_final_prompt_offscreen_entity",
+      "shot": 8,
+      "field": "ff_desc_full",
+      "frame": "first_frame"
+    },
+    {
+      "code": "offscreen_entity_in_prompt",
+      "entity": "听香",
+      "reason": "off_screen",
+      "category": "image_final_prompt_offscreen_entity",
+      "shot": 8,
+      "field": "lf_desc_full",
+      "frame": "last_frame"
+    },
+    {
+      "code": "offscreen_entity_in_prompt",
+      "entity": "杨旭",
+      "reason": "off_screen",
+      "category": "image_final_prompt_offscreen_entity",
+      "shot": 12,
+      "field": "ff_desc_full",
+      "frame": "first_frame"
+    }
+  ],
+  "source": "step02a.image_prompt_quality",
+  "report_type": "prompt_precheck",
+  "status": "PASS",
+  "skill_contract": [
+    "byted-ark-seedream-skill",
+    "qianwen-image-generation"
+  ],
+  "rule_version": "2026-09-23.4",
+  "script_revision": "51978e8b92f6bf7c877acd9f51103312383e793332b2bce730cf9ecdb7140172"
+}

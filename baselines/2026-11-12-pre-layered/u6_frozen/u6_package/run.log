@@ -1,0 +1,46 @@
+[INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[HARD_FIX] 本轮路径: Constraint 框架
+[CONSTRAINT] 修复 131 处 (top: prop_spatial_anchor=43, kf_pose_anchor=32, v6_43_prompt_enforcement=18, final_quality_normalizer=9, kf_blood_monotonic=6)
+[CONSTRAINT-WARN] prop_spatial_anchor@shot2（另 42 处）: 道具 油纸伞 方位缺失，禁止自动注入默认方位
+[CONSTRAINT-WARN] kf_pose_anchor@shot1（另 31 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[CONSTRAINT-WARN] v6_43_prompt_enforcement@shot1（另 16 处）: 关键帧与 ff 文本重叠 0.82；保留事件原文，交 audit/LLM 改写
+[CONSTRAINT-WARN] final_quality_normalizer@shot3（另 8 处）: 船只/水面镜头含位移或腾空动作，但缺少明确的承重面或稳定状态；保留原文，交 audit 判断，禁止自动追加“人物稳定位于船板”。
+[CONSTRAINT-WARN] kf_frame_redundancy@shot2（另 3 处）: 镜头2 kf1 与 ff 相似度 44%; 拉开姿态/角度或下一轮重生（否则图片必复刻 ff）
+[CONSTRAINT-WARN] kf_time_window_alignment@shot3（另 1 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[CONSTRAINT-WARN] axis_jump@shot3（另 1 处）: 方向翻转缺乏机位证据，保留原文交由 audit
+[CONSTRAINT-WARN] cross_shot_continuity@shot9（另 1 处）: LF→FF 状态跳变（时序倒流）
+[CONSTRAINT-WARN] frame_layouts_required@shot1（另 1 处）: shot 1 frame_layouts.ff 为空（应至少 1 条角色入镜条目）。
+[CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[CONSTRAINT-WARN] opening_hook@shot1: 前 1/3 镜缺少爆点词：仅提示，不注入固定情绪措辞
+[CONSTRAINT-WARN] threat_gaze_coupling@shot5: 具体站位与视线方向冲突，保留原文交由 audit
+[CONSTRAINT-WARN] camera_movement_fill@shot9: 连续 3 镜 camera_movement='环绕镜'，镜头语言单调
+[CONSTRAINT-WARN] dialogue_density@script: 对白镜 1/13 = 7%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[CONSTRAINT-WARN] shot_count_bounds@script: 场景数 7 > 上限 5（场景过多=频繁转场，单章 60-90s 不易把控）。
+[CONSTRAINT-WARN] 合计 119 条告警 / 15 类约束
+{"status": "VALIDATED", "revision": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7", "candidate_sha256": "3f88a060082173ca36cdcb6f14f94002843d502fe09930812ea13dc3bf42321f", "chapter": 1, "chapter_dir": "C:\\myFloders\\git\\aiVideo\\.pytest_tmp\\u1_u5_closeout_20261110\\u6_package\\run\\output\\锦衣夜行\\part_01_杀青州\\chapter_001", "audit_channel": ["agent_plan", "deepseek-v4.1-flash"], "plan_dialogue_lines": 1, "hook_included": false, "call_ledger": "C:\\myFloders\\git\\aiVideo\\.pytest_tmp\\u1_u5_closeout_20261110\\u6_package\\run\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\step01_calls.jsonl", "authorization": {"send_state": "not_sent", "claimed": false, "claimed_at": null, "claim_run_id": null, "claim_pid": null, "claim_call_id": null, "claim_out_root": null, "binding_digest": null, "attempts": 0, "attempt_ids": [], "outcomes": 0, "send_attempted": false, "finished": false, "result_status": null, "registered": true, "authorization_id": "u6-audit-s01a-20261110-2318"}, "binding_digest": "7e57cbec2e9cc6b6f1b642e4b5411cda", "would_send": 1}
+[CONSTRAINT] 修复 131 处 (top: prop_spatial_anchor=43, kf_pose_anchor=32, v6_43_prompt_enforcement=18, final_quality_normalizer=9, kf_blood_monotonic=6)
+[CONSTRAINT-WARN] prop_spatial_anchor@shot2（另 42 处）: 道具 油纸伞 方位缺失，禁止自动注入默认方位
+[CONSTRAINT-WARN] kf_pose_anchor@shot1（另 31 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[CONSTRAINT-WARN] v6_43_prompt_enforcement@shot1（另 16 处）: 关键帧与 ff 文本重叠 0.82；保留事件原文，交 audit/LLM 改写
+[CONSTRAINT-WARN] final_quality_normalizer@shot3（另 8 处）: 船只/水面镜头含位移或腾空动作，但缺少明确的承重面或稳定状态；保留原文，交 audit 判断，禁止自动追加“人物稳定位于船板”。
+[CONSTRAINT-WARN] kf_frame_redundancy@shot2（另 3 处）: 镜头2 kf1 与 ff 相似度 44%; 拉开姿态/角度或下一轮重生（否则图片必复刻 ff）
+[CONSTRAINT-WARN] kf_time_window_alignment@shot3（另 1 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[CONSTRAINT-WARN] axis_jump@shot3（另 1 处）: 方向翻转缺乏机位证据，保留原文交由 audit
+[CONSTRAINT-WARN] cross_shot_continuity@shot9（另 1 处）: LF→FF 状态跳变（时序倒流）
+[CONSTRAINT-WARN] frame_layouts_required@shot1（另 1 处）: shot 1 frame_layouts.ff 为空（应至少 1 条角色入镜条目）。
+[CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[CONSTRAINT-WARN] opening_hook@shot1: 前 1/3 镜缺少爆点词：仅提示，不注入固定情绪措辞
+[CONSTRAINT-WARN] threat_gaze_coupling@shot5: 具体站位与视线方向冲突，保留原文交由 audit
+[CONSTRAINT-WARN] camera_movement_fill@shot9: 连续 3 镜 camera_movement='环绕镜'，镜头语言单调
+[CONSTRAINT-WARN] dialogue_density@script: 对白镜 1/13 = 7%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[CONSTRAINT-WARN] shot_count_bounds@script: 场景数 7 > 上限 5（场景过多=频繁转场，单章 60-90s 不易把控）。
+[CONSTRAINT-WARN] 合计 119 条告警 / 15 类约束
+[AUDIT] 本次审计可用 600s（无总预算约束（未 start 或预算 0），用上限 600s）｜总预算剩余 未知 秒｜截止时刻 不限
+[AUDIT] 最终语义审计第 1 次调用（provider=agent_plan，model=deepseek-v4.1-flash）
+[AUDIT] 第 1 次返回：耗时 7.2s，max_completion_tokens=64000，timeout=600s（本次可用 不限），output=None（思维链 None），truncated=False，success=False
+[COMMIT] x final semantic audit request_failed: Agent Plan 提交失败[transport_connect]: HTTPSConnectionPool(host='opencode.ai', port=443): Max retries exceeded with url: /zen/go/v1/chat/completions (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate is not yet valid (_ssl.c:1081)')))（尝试 1/1，已用 7.2s；重试预算 30s）（调用失败 != 0 issue，直接 BLOCK）
+[COMMIT] 审计调用失败（request_failed）——本次**不登记欠账台账**：「没有可用审计结论」不是稿件的语义欠账，登记会污染选稿台账；陈旧清单已降级为诊断字段 last_known_blocking（0 条）
+[SNAPSHOT] 配对审计/恢复清单写入失败（恢复将不可用）: 缺少计划（chapter_outline.cache.json）——无法冻结计划身份
+  [COMMIT] x BLOCK：final semantic audit request_failed: Agent Plan 提交失败[transport_connect]: HTTPSConnectionPool(host='opencode.ai', port=443): Max retries exceeded with url: /zen/go/v1/chat/completions (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate is not yet valid (_ssl.c:1081)')))（尝试 1/1，已用 7.2s；重试预算 30s）
+  [COMMIT] 三份正式产物未替换（step01_commit.json 标记为 BLOCK）
+{"status": "BLOCK", "revision": null, "summary": {"status": "BLOCK", "detail": "final semantic audit request_failed: Agent Plan 提交失败[transport_connect]: HTTPSConnectionPool(host='opencode.ai', port=443): Max retries exceeded with url: /zen/go/v1/chat/completions (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate is not yet valid (_ssl.c:1081)')))（尝试 1/1，已用 7.2s；重试预算 30s）", "blocking": [{"code": "audit_call_failed", "severity": "blocking", "shot_id": null, "transient": true, "message": "final semantic audit request_failed（调用失败 != 0 issue；本条为本次终局原因，不是稿件缺陷清单）"}], "repair_outcome": "", "audit_repair_rounds": 0}, "chapter_dir": "C:\\myFloders\\git\\aiVideo\\.pytest_tmp\\u1_u5_closeout_20261110\\u6_package\\run\\output\\锦衣夜行\\part_01_杀青州\\chapter_001", "artifacts": {"script_result.json": {"exists": false, "sha256": ""}, "step01_quality.json": {"exists": false, "sha256": ""}, "step01_audit.json": {"exists": false, "sha256": ""}, "step01_commit.json": {"exists": true, "sha256": "ba0ede6b75c3ce6e98d6f39beb72750fea42ee91fac971b3fc7bd20998f5a904"}}, "call_ledger": "C:\\myFloders\\git\\aiVideo\\.pytest_tmp\\u1_u5_closeout_20261110\\u6_package\\run\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\step01_calls.jsonl", "call_rows": 1, "evidence": {"complete": true, "problems": [], "send_state": "failed", "sent": true, "response_expected": true, "ledger": "C:\\myFloders\\git\\aiVideo\\.pytest_tmp\\u1_u5_closeout_20261110\\u6_package\\run\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\step01_calls.jsonl", "ledger_rows": 1, "call_ids": ["ca5463609e38d4594"], "bodies_verified": 1, "audit_rounds": 1, "run_ids": ["20261110T231615-12932"], "attempts": 1, "attempt_ids": ["att_3a65655d326f4b7f"], "attempt_call_ids": ["ca5463609e38d4594"], "authorization_chain": {"ok": true, "problems": []}}, "evidence_complete": true, "budget_receipt": ".pytest_tmp\\u1_u5_closeout_20261110\\u6_package\\run\\budget_receipt.json", "send_state": "failed", "sends": 1, "authorization": {"send_state": "failed", "claimed": true, "claimed_at": "2026-11-10T23:16:16+08:00", "claim_run_id": "20261110T231615-12932", "claim_pid": 12932, "claim_call_id": "ca5463609e38d4594", "claim_out_root": ".pytest_tmp\\u1_u5_closeout_20261110\\u6_package\\run", "binding_digest": "7e57cbec2e9cc6b6f1b642e4b5411cda", "attempts": 1, "attempt_ids": ["att_3a65655d326f4b7f"], "outcomes": 1, "send_attempted": true, "finished": true, "result_status": "BLOCK", "state_dir": "C:\\myFloders\\git\\aiVideo\\.p1a_exp\\step01_delivery_20261028\\audit_authorizations\\auth_c06fb3858b9e193421b652ddd271cbb7", "authorization_id": "u6-audit-s01a-20261110-2318"}, "budget": {"remaining_before": 1, "consumed": 1, "sends_known": true, "send_state": "failed", "remaining_after": 0}}
