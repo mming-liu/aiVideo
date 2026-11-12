@@ -16,8 +16,6 @@ Auth: Authorization: Bearer {VOLCENGINE_API_KEY}
 https://www.volcengine.com/docs/82379/1520758
 """
 
-import base64
-import mimetypes
 import os
 import re
 import time
@@ -27,6 +25,7 @@ from typing import Optional
 
 import requests
 
+from .media_io import encode_media as _encode_media, media_kind as _media_kind
 from .models import (
     OBS_EXPIRED,
     OBS_FAILED,
@@ -113,8 +112,9 @@ _HIGH_KEYWORDS = (
     "锁定五官", "不能", "不得",
 )
 _LOW_KEYWORDS = (
-    "【色彩氛围】", "视觉衔接", "画面无任何字幕", "整段视频每一帧都保持",
-    "禁止在画面中叠加", "禁止任何人物", "连续接续", "风格收束",
+    "【色彩氛围】", "【时间窗】", "【氛围】", "视觉衔接", "画面无任何字幕",
+    "整段视频每一帧都保持", "禁止在画面中叠加", "禁止任何人物", "连续接续",
+    "风格收束",
 )
 
 
@@ -238,23 +238,8 @@ def _seedance_compress_prompt(full_prompt: str, max_chars: int,
 _POLL_TRANSIENT_TOLERANCE = 5
 
 
-def _encode_media(path: Optional[str]) -> Optional[str]:
-    """读取本地文件，返回 base64 data URL（Seedance 接受 data URI）."""
-    if not path:
-        return None
-    try:
-        p = os.path.abspath(path)
-        if not os.path.isfile(p):
-            return None
-        mime, _ = mimetypes.guess_type(p)
-        if not mime:
-            mime = "image/png"
-        with open(p, "rb") as f:
-            raw = f.read()
-        b64 = base64.b64encode(raw).decode("ascii")
-        return f"data:{mime};base64,{b64}"
-    except Exception:
-        return None
+# _encode_media / _media_kind 已上移 _video_gen.media_io（volcengine / agent_plan
+# 共用）：视频参考按真实 mime 编码，未知扩展名仍回退 image/png。
 
 
 # _clamp_duration / _RES_ORDER / _resolve_resolution 已上移 shared/model_caps.py
@@ -469,6 +454,10 @@ class VolcengineVideoService(VideoGenerationService):
             items.append({"type": "image", "kind": "image", "role": role,
                           "source_path": str(path)})
 
+        def _video(path, role):
+            items.append({"type": "video", "kind": "video", "role": role,
+                          "source_path": str(path)})
+
         def _audio_item():
             if not req.reference_audio:
                 return
@@ -481,35 +470,83 @@ class VolcengineVideoService(VideoGenerationService):
             items.append({"type": "audio", "kind": "audio", "role": "reference_audio",
                           "source_path": str(req.reference_audio)})
 
-        # ---- 全模态参考生视频（r2v）：reference_paths → reference_image ----
+        # ---- 全模态参考生视频（r2v）：图片 → reference_image；视频 → reference_video ----
         if req.reference_paths:
-            if not cap.supports_reference_image:
+            if not (cap.supports_reference_image
+                    or getattr(cap, "supports_video_reference", False)):
                 raise VideoCapabilityError(
                     "role_unsupported",
-                    f"{model} 不支持参考生视频（role=reference_image，仅 Seedance 2.5/2.0 系列）。"
+                    f"{model} 不支持参考生视频（role=reference_image/reference_video，"
+                    f"仅 Seedance 2.5/2.0 系列）。"
                     f"r2v 模式请将 VOLCENGINE_I2V_MODEL 设为 2.0/2.5 模型",
                     field_path="references[role=reference]")
-            from shared.ref_compose import get_ref_limit
-            ref_limit = get_ref_limit(model)
+            from shared.ref_compose import get_ref_limit, get_video_ref_limit
             ref_paths = [p for p in (req.reference_paths or []) if p]
             missing = [p for p in ref_paths if not Path(p).is_file()]
             if missing:
                 raise VideoCapabilityError(
                     "material_missing", f"参考素材不存在: {missing}",
                     field_path="references")
-            if len(ref_paths) > ref_limit:
+            # T1：按媒体类型分流。图片走 reference_image（可拼表压缩）；
+            # 视频走 reference_video（不能拼进图片参考表，超限显式丢弃）。
+            image_paths = [p for p in ref_paths if _media_kind(p) != "video"]
+            video_paths = [p for p in ref_paths if _media_kind(p) == "video"]
+            if image_paths and not cap.supports_reference_image:
+                raise VideoCapabilityError(
+                    "role_unsupported",
+                    f"{model} 不支持 role=reference_image；请改用支持参考图的模型",
+                    field_path="references[role=reference_image]")
+            if video_paths and not getattr(cap, "supports_video_reference", False):
+                # 能力位缺失：不静默把视频当图片发。丢弃视频、保留图片参考；
+                # 若没有图片可用则 fail-closed（上游 continuity 已按能力位回退尾帧）。
+                modifications.append({
+                    "kind": "param_dropped", "field": "reference_video",
+                    "reason": f"{model} 不支持 reference_video",
+                    "dropped": [Path(p).name for p in video_paths]})
+                _verbose_write(
+                    f"  [镜头{req.clip_index}] [WARN] {model} 不支持视频参考，"
+                    f"已丢弃 {len(video_paths)} 个视频参考")
+                video_paths = []
+            elif video_paths and not getattr(cap, "video_reference_local_base64", False):
+                raise VideoCapabilityError(
+                    "video_reference_requires_url",
+                    f"{model} 不支持本地视频 Base64，reference_video 需公网 URL/素材 ID；"
+                    f"本地视频请改用 2.0 系列或回退尾帧 I2V",
+                    field_path="references[role=reference_video]")
+            if not image_paths and not video_paths:
+                raise VideoCapabilityError(
+                    "video_reference_unsupported",
+                    f"{model} 不支持 reference_video，且没有可用的图片参考；"
+                    f"禁止发送空参考请求",
+                    field_path="references[role=reference_video]")
+            # 图片：沿用既有容量收敛（拼表无损压缩）
+            ref_limit = get_ref_limit(model)
+            if len(image_paths) > ref_limit:
                 modifications.append({
                     "kind": "reference_compose", "reason": "reference_capacity",
-                    "from": len(ref_paths), "to": ref_limit, "model": model,
-                    "sources": [Path(p).name for p in ref_paths]})
+                    "from": len(image_paths), "to": ref_limit, "model": model,
+                    "sources": [Path(p).name for p in image_paths]})
                 items.append({"type": "image", "kind": "image", "role": "reference_image",
-                              "compose": ref_paths, "limit": ref_limit,
+                              "compose": image_paths, "limit": ref_limit,
                               "tag": f"r2v{req.clip_index}"})
-                _verbose_write(f"  [镜头{req.clip_index}] 参考图 {len(ref_paths)} 张超上限 "
+                _verbose_write(f"  [镜头{req.clip_index}] 参考图 {len(image_paths)} 张超上限 "
                                f"{ref_limit}，无损压缩为 {ref_limit} 张")
             else:
-                for ref_path in ref_paths:
+                for ref_path in image_paths:
                     _image(ref_path, "reference_image")
+            # 视频：不能拼表，超上限显式丢弃并记账
+            video_limit = get_video_ref_limit(model)
+            if video_limit and len(video_paths) > video_limit:
+                dropped = video_paths[video_limit:]
+                modifications.append({
+                    "kind": "reference_video_capacity", "reason": "reference_video_capacity",
+                    "from": len(video_paths), "to": video_limit, "model": model,
+                    "dropped": [Path(p).name for p in dropped]})
+                _verbose_write(f"  [镜头{req.clip_index}] 视频参考 {len(video_paths)} 个超上限 "
+                               f"{video_limit}，丢弃 {len(dropped)} 个")
+                video_paths = video_paths[:video_limit]
+            for ref_path in video_paths:
+                _video(ref_path, "reference_video")
             _audio_item()
             return items, modifications
 
@@ -615,6 +652,9 @@ class VolcengineVideoService(VideoGenerationService):
             if item.get("type") == "audio":
                 content.append({"type": "audio_url", "audio_url": {"url": url},
                                 "role": item.get("role")})
+            elif item.get("type") == "video":
+                content.append({"type": "video_url", "video_url": {"url": url},
+                                "role": item.get("role")})
             else:
                 content.append({"type": "image_url", "image_url": {"url": url},
                                 "role": item.get("role")})
@@ -681,7 +721,8 @@ class VolcengineVideoService(VideoGenerationService):
             if item["type"] == "text":
                 _verbose_write(f"[DEBUG] video_submit: content[{i}] text len={len(item['text'])}")
             else:
-                u = item.get("image_url") or item.get("audio_url") or {}
+                u = (item.get("image_url") or item.get("audio_url")
+                     or item.get("video_url") or {})
                 raw = str(u.get("url", ""))
                 _verbose_write(f"[DEBUG] video_submit: content[{i}] {item['type']} "
                                f"role={item.get('role')}, len={len(raw)}")

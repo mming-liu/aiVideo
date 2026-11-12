@@ -12,6 +12,7 @@ legacy Step01 aggregate prompt.
 from __future__ import annotations
 
 import copy
+import re
 import sys
 from pathlib import Path
 
@@ -26,9 +27,87 @@ from shared.quality_gate import attach_gate_metadata
 
 
 _MOVEMENT_WORDS = (
-    "推镜", "推近", "拉镜", "拉远", "跟拍", "摇镜", "移镜", "环绕",
-    "仰拍", "俯拍", "固定机位", "固定镜头",
+    "推镜", "推近", "推进", "拉镜", "拉远", "拉出", "跟拍", "摇镜", "摇摄",
+    "移镜", "横移", "环绕", "仰拍", "俯拍", "仰角", "俯角",
+    "固定机位", "固定镜头", "静态锁定",
 )
+
+# 相互矛盾的运镜组合：固定机位 + 任何运动、推 + 拉、仰 + 俯。
+# 官方口径是「一个镜头尽量只 1 种运镜」+「避免相互冲突的镜头运动
+# （如固定机位 + 快速环绕）」；单条连续长镜 + 时间窗的顺序多运镜是允许的。
+_LOCK_WORDS = ("固定机位", "固定镜头", "静态锁定")
+_PUSH_WORDS = ("推镜", "推近", "推进")
+_PULL_WORDS = ("拉镜", "拉远", "拉出")
+_UP_WORDS = ("仰拍", "仰角")
+_DOWN_WORDS = ("俯拍", "俯角")
+
+# 时间窗标记：0-5s / 5-12秒 / 【时间窗】 / 【时间分段】
+_TIME_WINDOW_RE = re.compile(
+    r"\d+(?:\.\d+)?\s*[-–~至到]\s*\d+(?:\.\d+)?\s*(?:s|秒)")
+# 顺序标记：「先…再/又/随后/接着」或显式连接词
+_SEQUENCE_WORDS = ("随后", "接着", "然后", "继而", "紧接着", "最后")
+_SEQUENCE_RE = re.compile(r"先[^。；;]{0,20}(?:再|又|随后|接着)")
+
+
+def _has_any(text: str, words) -> bool:
+    return any(w in text for w in words)
+
+
+def _camera_movements(text: str) -> list[str]:
+    return sorted({w for w in _MOVEMENT_WORDS if w in (text or "")})
+
+
+def _has_time_window(text: str) -> bool:
+    return bool(_TIME_WINDOW_RE.search(text or "")) or any(
+        m in (text or "") for m in ("【时间窗", "【时间分段】", "时间窗"))
+
+
+def _has_sequence_marker(text: str) -> bool:
+    return _has_any(text or "", _SEQUENCE_WORDS) or bool(
+        _SEQUENCE_RE.search(text or ""))
+
+
+def _has_conflicting_movements(text: str) -> bool:
+    """固定机位 + 运动 = 必然冲突；推/拉、仰/俯只在**无时间窗/顺序**时算冲突.
+
+    官方点名的冲突是「固定机位 + 快速环绕」这类同时成立的组合。推近→拉远、
+    仰拍→俯拍在有时间窗/顺序标记时是合法的连续变化，不应一刀切报警。
+    """
+    text = text or ""
+    locked = _has_any(text, _LOCK_WORDS)
+    others = [m for m in _camera_movements(text) if m not in _LOCK_WORDS]
+    if locked and others:
+        return True
+    if _has_time_window(text) or _has_sequence_marker(text):
+        return False
+    if _has_any(text, _PUSH_WORDS) and _has_any(text, _PULL_WORDS):
+        return True
+    if _has_any(text, _UP_WORDS) and _has_any(text, _DOWN_WORDS):
+        return True
+    return False
+
+
+def _camera_stacking_issue(prompt: str) -> dict | None:
+    """单镜多运镜的判定（T3）.
+
+    只在这两种情况下报警：
+    1. 运镜相互矛盾（固定机位 + 运动；无时间窗/顺序时的推 + 拉、仰 + 俯）；
+    2. 多运镜但**既无时间窗也无顺序标记**（模型无法判断先后，易抖动）。
+
+    「一条连续镜头 + 0-5s/5-12s 时间窗」的顺序多运镜放行——这是官方 2.5
+    长镜案例的合法形态。返回值只进 warning 报告，**不改变 blocking 语义**。
+    """
+    moves = _camera_movements(prompt)
+    if len(moves) <= 1:
+        return None
+    if _has_conflicting_movements(prompt):
+        return {"reason": "conflicting",
+                "message": f"single shot has conflicting camera movements: {moves}"}
+    if not (_has_time_window(prompt) or _has_sequence_marker(prompt)):
+        return {"reason": "unordered_multi_move",
+                "message": f"single shot has multiple camera movements without "
+                           f"time window/sequence marker: {moves}"}
+    return None
 
 
 def collect_video_prompt_quality(script: dict) -> dict:
@@ -81,12 +160,15 @@ def collect_video_prompt_quality(script: dict) -> dict:
                 "shot": idx,
                 "message": f"video prompt {len(prompt)} > cap {prompt_cap}",
             })
-        moves = sorted({w for w in _MOVEMENT_WORDS if w in prompt})
-        if len(moves) > 1:
+        moves = _camera_movements(prompt)
+        issue = _camera_stacking_issue(prompt)
+        if issue:
             warnings.append({
                 "category": "video_camera_stacking",
                 "shot": idx,
-                "message": f"single shot has multiple camera movements: {moves}",
+                "message": issue["message"],
+                "reason": issue["reason"],
+                "movements": moves,
             })
         try:
             duration = float(shot.get("duration_sec") or 0)

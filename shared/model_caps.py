@@ -68,6 +68,9 @@ class SeedanceCap:
     supports_reference_audio:  role=reference_audio 参考音频
     supports_seed:             seed 参数（可复现）
     i2v_frames_ratio_adaptive: 首帧/首尾帧场景 ratio 是否强制 adaptive（Seedance 2.5）
+    supports_video_reference:  role=reference_video 原生视频参考（2.0/2.5）
+    video_reference_local_base64: 本地视频能否直接以 base64 data URL 提交
+        （2.0 系列可；2.5 官方只接受公网 URL / 素材 ID）
     """
     duration_range: tuple[int, int]
     resolutions: tuple[str, ...]
@@ -83,6 +86,11 @@ class SeedanceCap:
     # 2026-11-01：官方能力表明确 Seedance 1.0 Pro Fast 只支持首帧图生视频，
     # 不支持首尾帧；请求层据此丢弃 last_frame，避免发不兼容素材。
     supports_last_frame: bool = True
+    # 2026-11-12（T1）：Seedance 2.0/2.5 官方支持 role=reference_video
+    # （参考视频的运镜/动作/光影）。2.5 单次最多 10 个视频参考；2.0 系列按
+    # 官方 skill 模型矩阵为视频参考能力开启，但本地视频 Base64 仅旧模型支持。
+    supports_video_reference: bool = False
+    video_reference_local_base64: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -117,12 +125,19 @@ SEEDANCE_CAPS: list[tuple[str, SeedanceCap]] = [
     # 从未真正下发 seed，同时又在不支持 seed 的型号上声称可复现。
     # 注意官方同句限定：相同请求 + 相同 seed 只产生**类似**结果，不保证完全一致；
     # 因此 seed 可用于"固定变量做对照"，不能当作"同 seed 必然复现"的依据。
-    ("seedance-2-5", SeedanceCap((4, 30), ("480p", "720p"), True, True, True, False, True)),
+    ("seedance-2-5", SeedanceCap((4, 30), ("480p", "720p"), True, True, True, False, True,
+                                  supports_video_reference=True)),
     # 2026-11-01（S07）：2.0 系列参考音频能力位按官方矩阵改为 True；实际发送仍受
     # provider 场景守卫限制（reference_audio 只进 r2v 分支），i2v 会显式丢弃并记账。
-    ("seedance-2-0-fast", SeedanceCap((4, 15), ("480p", "720p"), True, True, True, False, False)),
-    ("seedance-2-0-mini", SeedanceCap((4, 15), ("480p", "720p"), True, True, True, False, False)),
-    ("seedance-2-0", SeedanceCap((4, 15), ("480p", "720p", "1080p", "4k"), True, True, True, False, False)),
+    ("seedance-2-0-fast", SeedanceCap((4, 15), ("480p", "720p"), True, True, True, False, False,
+                                       supports_video_reference=True,
+                                       video_reference_local_base64=True)),
+    ("seedance-2-0-mini", SeedanceCap((4, 15), ("480p", "720p"), True, True, True, False, False,
+                                       supports_video_reference=True,
+                                       video_reference_local_base64=True)),
+    ("seedance-2-0", SeedanceCap((4, 15), ("480p", "720p", "1080p", "4k"), True, True, True, False, False,
+                                  supports_video_reference=True,
+                                  video_reference_local_base64=True)),
     ("seedance-1-5-pro", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, True, False, False, False,
                                      supports_draft=True, supports_flex_tier=True)),
     ("seedance-1-5", SeedanceCap((4, 12), ("480p", "720p", "1080p"), False, False, False, False, False)),
@@ -161,6 +176,21 @@ def get_seedance_cap(model: str | None, default: SeedanceCap | None = None) -> S
         if pat in m:
             return cap
     return default or DEFAULT_SEEDANCE_CAP
+
+
+def seedance_supports_video_reference(model: str | None = None) -> bool:
+    """该 Seedance 模型是否支持 role=reference_video（原生视频参考）."""
+    return bool(get_seedance_cap(model).supports_video_reference)
+
+
+def seedance_supports_local_video_reference(model: str | None = None) -> bool:
+    """该模型是否支持**本地视频**以 base64 data URL 作为视频参考.
+
+    2.5 官方仅接受公网 URL / 素材 ID，本地文件不能直接 Base64；跨镜连续性
+    拿到的上一镜视频是本地文件，因此 2.5 走不了这条可选路径（会回退尾帧 I2V）。
+    """
+    cap = get_seedance_cap(model)
+    return bool(cap.supports_video_reference and cap.video_reference_local_base64)
 
 
 # ---------------------------------------------------------------------------

@@ -105,7 +105,9 @@ def derive_media_mode(roles) -> str:
     norm: list[str] = []
     for r in roles or ():
         r = str(r or "")
-        norm.append("reference" if r in ("reference_image", "reference_audio", "reference")
+        norm.append("reference"
+                    if r in ("reference_image", "reference_audio", "reference_video",
+                             "reference")
                     else r)
     if not norm:
         return "none"
@@ -301,6 +303,8 @@ def reference_labels(items) -> list:
             label = "视频终点画面（尾帧），动作结束后画面落在该构图"
         elif role == "reference_image":
             label = "参考图，人物/场景/道具以它为准"
+        elif role == "reference_video":
+            label = "参考视频，运镜/动作节奏/光影变化以它为准"
         else:
             label = "参考素材"
         out.append("参考图%d：%s" % (i, label))

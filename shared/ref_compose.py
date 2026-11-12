@@ -16,6 +16,9 @@
   - MiniMax-H3: 全能参考 图≤9 / 混合≤12 文件；首尾帧专用槽 0~2（官方文档 2026-08）
   - Seedance 2.5: 图≤30（官方对比表 2026-08）；Seedance 2.0: 参考素材约 12
     注：模型 ID 用破折号（doubao-seedance-2-5-*），模式必须用 -2-5 而非 -2.5 才匹配得上
+  - Seedance 2.5 视频参考≤10（官方 skill 模型矩阵）；2.0 系列按官方 skill
+    默认 3 个。视频参考**不参与**拼图压缩（视频不能拼进图片参考表），超限
+    只能显式丢弃并记账。
 
 未注册模型回退到环境变量 IMAGE_MAX_REFS（默认 3）。
 """
@@ -111,6 +114,25 @@ def get_ref_limit(model: str | None, default: int | None = None) -> int:
         return default
     m = normalize_model_name(model)
     for pat, lim in MODEL_REF_LIMITS:
+        if pat in m:
+            return lim
+    return default
+
+
+# (模型名子串, 视频参考上限)。顺序敏感：具体在前。
+# 视频不能像图片那样拼表压缩，超限只能显式丢弃并记账。
+MODEL_VIDEO_REF_LIMITS: list[tuple[str, int]] = [
+    ("seedance-2-5", 10),
+    ("seedance-2-0", 3),
+]
+
+
+def get_video_ref_limit(model: str | None, default: int = 3) -> int:
+    """按模型名查原生视频参考上限；未注册返回 default."""
+    if not model:
+        return default
+    m = normalize_model_name(model)
+    for pat, lim in MODEL_VIDEO_REF_LIMITS:
         if pat in m:
             return lim
     return default

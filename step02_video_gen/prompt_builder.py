@@ -548,12 +548,16 @@ def _build_r2v_purpose_list(shot: dict, registry: dict = None,
                             characters: list | None = None,
                             ref_paths: list | None = None,
                             max_chars: int | None = None) -> str:
-    """构建 r2v 参考图逐图用途清单（seedance2-skill @引用语义吸收）.
+    """构建 r2v 参考素材逐项用途清单（seedance2-skill @引用语义吸收）.
 
     与运行时 _build_reference_list（豆包模板吸收）不同：后者只声明首帧/尾帧/
-    关键帧的时间语义；本函数针对 r2v 模式给**每一张参考图**标注具体用途
-    （人物形象/场景/道具/一致性），实现 seedance2-skill 的「@图片N 作为XX」。
-    无注册表信息时回退为通用「一致性参考」声明，不丢原有语义。
+    关键帧的时间语义；本函数针对 r2v 模式给**每一张参考图/视频**标注具体用途
+    （人物形象/场景/道具/一致性；视频参考的运镜/动作/光影），实现
+    seedance2-skill 的「@图片N 作为XX / @视频N 参考运镜」。无注册表信息时回退
+    为通用「一致性参考」声明，不丢原有语义。
+
+    T1（2026-11）：ref_paths 可混有视频；图片与视频**分开编号**（图N / 视频N），
+    视频不参与人物/场景/道具分类，也不参与图片拼表容量。
 
     v6.103（总计划阶段 7 / 工作包 C）：每张图额外写出**禁止继承边界**
     （`_R2V_KIND_INHERIT_EXCLUDE`），减少背景/姿势/构图/白底/拼表布局的污染。
@@ -572,15 +576,32 @@ def _build_r2v_purpose_list(shot: dict, registry: dict = None,
     """
     registry = registry if registry is not None else _load_character_registry()
     characters = characters or []
+    # T1：reference_paths 现在可能混有视频（原生 reference_video）。图片与视频
+    # 分开编号（图N / 视频N），与官方「@图片1 / @视频1」的指代方式一致；视频
+    # 不能走 _classify_reference_purpose 的人物/场景/道具分类。
+    try:
+        from _video_gen.media_io import media_kind as _media_kind
+    except Exception:  # pragma: no cover - 兼容极简导入环境
+        def _media_kind(_p):
+            return "image"
+
+    image_paths: list[str] = []
+    video_paths: list[str] = []
+    for p in (ref_paths or []):
+        if not p or not Path(p).exists():
+            continue
+        if _media_kind(str(p)) == "video":
+            video_paths.append(p)
+        else:
+            image_paths.append(p)
+
     refs = []
     excludes = []
     char_refs = 0
     # v6.24：图N = 参考图列表第N张（与 provider media 顺序一致，同 happyhorse [Image N]）。
     # 修正 v6.22 缺陷：旧实现只数角色肖像，遇到前置首帧/场景参考图时编号错位。
     idx = 0
-    for p in (ref_paths or []):
-        if not p or not Path(p).exists():
-            continue
+    for p in image_paths:
         # 编号必须**按实际提交顺序连续**：不存在的路径直接跳过、不占号
         # （否则会出现「图3 缺失」导致模型把图4 当图3）。
         idx += 1
@@ -592,26 +613,36 @@ def _build_r2v_purpose_list(shot: dict, registry: dict = None,
         excl = _reference_inherit_exclude(kind)
         if excl:
             excludes.append(f"  图{idx}{excl}")
-    if not refs:
+
+    video_refs = []
+    for i, p in enumerate(video_paths, start=1):
+        video_refs.append(
+            f"- 视频{i}（{Path(p).name}）：参考 视频{i} 的运镜方式、动作节奏与光影变化；"
+            f"主体身份与场景以文字及图片参考为准，不要照搬视频中的角色与场景")
+
+    if not refs and not video_refs:
         return ""
 
     head_lines = [
         # 紧凑模板（非 step01 吸收计划 §5.4）：**不为每张图重复大段通用说明**——
         # 通用语义压到一行，逐图信息全部落在各自的「图N」行上。
-        "【参考图用途】图N 严格对应参考图列表第N张（含场景/道具占位），按各自标注取用。",
+        "【参考图用途】图N 严格对应参考图列表第N张（仅图片，含场景/道具占位）；"
+        "视频N 严格对应参考视频列表第N个（与图片分开编号），按各自标注取用。",
     ]
     isolation = _MULTI_CHAR_ISOLATION if char_refs >= 2 else ""
 
-    def _compose_parts(iso: str, base_refs: list, extra: list) -> str:
+    def _compose_parts(iso: str, base_refs: list, videos: list, extra: list) -> str:
         parts = list(head_lines)
         if iso:
             parts.append("  " + iso)
         parts.extend(base_refs)
+        parts.extend(videos)
         parts.extend(extra)
         return "\n".join(parts)
 
     kept_excludes = list(excludes)
-    out = _compose_parts(isolation, refs, kept_excludes)
+    kept_videos = list(video_refs)
+    out = _compose_parts(isolation, refs, kept_videos, kept_excludes)
     # v6.111（审核 P2-7）：**必须区分 `None` 与 `0`**。
     #
     # `0` 是合法预算——`r2v_reference_budget()` 返回 `max(0, cap - 20 - used)`，
@@ -623,13 +654,17 @@ def _build_r2v_purpose_list(shot: dict, registry: dict = None,
         # ① 先丢「排除项细节」——**逐条从后往前丢**，尽量多保留几张图的边界。
         # 整块丢会让前几张图的边界也一起消失，收益明显更小。
         while kept_excludes and len(
-                _compose_parts(isolation, refs, kept_excludes)) > max_chars:
+                _compose_parts(isolation, refs, kept_videos, kept_excludes)) > max_chars:
             kept_excludes.pop()
-        out = _compose_parts(isolation, refs, kept_excludes)
+        # ② 再丢视频参考的细节行（视频指代是新增信息，优先级低于图片身份）
+        while kept_videos and len(
+                _compose_parts(isolation, refs, kept_videos, kept_excludes)) > max_chars:
+            kept_videos.pop()
+        out = _compose_parts(isolation, refs, kept_videos, kept_excludes)
         if len(out) > max_chars:
-            # ② 再丢「跨角色隔离」
-            out = _compose_parts("", refs, kept_excludes)
-        # ③ 图号与用途永不裁掉；仍超预算由 provider 的句级压缩兜底
+            # ③ 再丢「跨角色隔离」
+            out = _compose_parts("", refs, kept_videos, kept_excludes)
+        # ④ 图号与用途永不裁掉；仍超预算由 provider 的句级压缩兜底
     return out
 
 
@@ -1168,6 +1203,89 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     return prompt
 
 
+# ---------------------------------------------------------------------------
+# T2（2026-11）：单条连续长镜 + 多节拍 → 时间窗分段（低权重）
+# ---------------------------------------------------------------------------
+# 官方 2.5 长镜案例是「一条连续镜头 + 0-5s/5-12s/12-20s 时间窗」，不是把
+# 推/拉/摇/移堆成一句。这里只在镜头**显式声明连续长镜**且 motion_desc 有
+# ≥2 个有效节拍时生成时间窗段；普通分镜/单节拍镜头不注入，避免凭空改结构。
+_CONTINUOUS_SHOT_MARKERS = (
+    "连续镜头", "一条连续镜头", "一镜到底", "长镜头", "连续长镜",
+    "不切剪", "避免切剪", "不剪辑",
+)
+
+
+def _is_continuous_long_shot(shot: dict) -> bool:
+    """镜头是否显式声明「单条连续长镜」且有多个节拍."""
+    probe = " ".join(str(shot.get(k) or "")
+                     for k in ("camera_movement", "motion_desc", "prompt"))
+    if not any(m in probe for m in _CONTINUOUS_SHOT_MARKERS):
+        return False
+    return count_effective_segments(build_motion_segments(shot)) >= 2
+
+
+def _build_time_window_block(shot: dict) -> str:
+    """生成时间窗分段（0-5s / 5-12s …）的运镜/动作描述；不满足条件返回空串.
+
+    低权重：块内用「，」而不是「；」连接，让 `_seedance_compress_prompt` 把它
+    视为单句（含【时间窗】标签），超 500 字时优先整段砍掉，不挤占高权重的
+    起点/动作/终点与参考图编号。
+    """
+    if not _is_continuous_long_shot(shot):
+        return ""
+    segs = build_motion_segments(shot)
+    seg_text = format_motion_segments(segs, style="en_s")
+    if not seg_text:
+        return ""
+    seg_text = seg_text.replace("；", "，")
+    camera = str(shot.get("camera_movement") or "").strip()
+    # 注意：不要在这里写「禁止/保持」——provider 的句级权重把含这些词的句子
+    # 判为高权重；时间窗必须落在低权重段，超长时优先被砍。
+    head = "【时间窗】单条连续镜头，无切剪"
+    if camera:
+        head += f"，运镜：{camera}"
+    return head + "，按时间窗顺序推进：" + seg_text
+
+
+# ---------------------------------------------------------------------------
+# T4（2026-11）：类型化氛围/情绪自然语言 enrichment（低权重）
+# ---------------------------------------------------------------------------
+# 官方强调用类型化氛围（欧洲文艺电影/复古香港电影/恐怖片）和描述性情绪语句，
+# 而不是只给「色彩氛围」结构化标签。这里从镜头已有的 genre/atmosphere/emotion/
+# color_tone 文本判定类型，命中才注入；不命中不凭空编类型。
+_ATMOSPHERE_TYPE_HINTS = (
+    (("恐怖", "惊悚", "诡异", "阴森", "凶灵"),
+     "恐怖片氛围：冷调阴影、压迫构图、克制的突然静默"),
+    (("悬疑", "冷蓝", "暗红", "阴冷", "灰暗", "压抑", "危机", "惊变"),
+     "悬疑片氛围：高对比光影、局部遮挡、克制的紧张感"),
+    (("武侠", "江湖", "刀", "剑", "古风", "侠"),
+     "东方武侠电影氛围：风尘、衣袂与金属反光"),
+    (("爱情", "温柔", "柔和", "缠绵", "眷恋"),
+     "文艺爱情片氛围：柔和自然光、浅景深、细腻呼吸感"),
+    (("复古", "港风", "民国", "旧上海"),
+     "复古电影氛围：颗粒感、暖黄钨丝灯、低饱和"),
+    (("科幻", "未来", "机械", "赛博", "霓虹"),
+     "科幻电影氛围：冷蓝霓虹、硬质高光、雾气体积光"),
+)
+
+
+def _build_atmosphere_enrichment(shot: dict) -> str:
+    """按镜头类型线索注入氛围/情绪自然语言；无类型线索返回空串.
+
+    只读 shot 字段（不依赖 script），保证运行时 prompt、质量报告和缓存哈希
+    看到的是同一份输入。
+    """
+    probe = " ".join(str(shot.get(k) or "")
+                     for k in ("genre", "atmosphere", "emotion", "color_tone"))
+    if not probe.strip():
+        return ""
+    for keys, phrase in _ATMOSPHERE_TYPE_HINTS:
+        if any(k in probe for k in keys):
+            return (f"【氛围】{phrase}，情绪用可观察的面部与肢体细节表现"
+                    f"（眼神、嘴角、呼吸、手指），不用抽象形容词。")
+    return ""
+
+
 def _build_seedance_concise_prompt(shot: dict, characters: list | None = None) -> str:
     """Seedance 专用精简 prompt（2026-08-20，方案 2 上游精简）.
 
@@ -1209,13 +1327,19 @@ def _build_seedance_concise_prompt(shot: dict, characters: list | None = None) -
         parts.append(f"【视频中段】{motion_desc}")
     if lf_desc:
         parts.append(f"【视频终点】{lf_desc}")
-    # v6.58 (Phase C-2): 精简路径下也加时间分段（Seedance 2.0+ 官方支持）
-    # —— 但 500 字硬约束下必须控成本：仅 2-3 段 + 分段文本简短时加
-    motion_segs = build_motion_segments(shot)
-    if 2 <= count_effective_segments(motion_segs) <= 4:
-        seg_text = format_motion_segments(motion_segs, style="en_s")  # Seedance 2.0 推荐英文 's'
-        if seg_text and len(seg_text) <= 80:
-            parts.append(f"【时间分段】{seg_text}")
+    # T2（2026-11）：单条连续长镜 + 多节拍 → 时间窗分段（0-5s/5-12s…）。
+    # 命中时用它替代普通【时间分段】（避免两段重复）；未命中保持旧行为。
+    time_window = _build_time_window_block(shot)
+    if time_window:
+        parts.append(time_window)
+    else:
+        # v6.58 (Phase C-2): 精简路径下也加时间分段（Seedance 2.0+ 官方支持）
+        # —— 但 500 字硬约束下必须控成本：仅 2-3 段 + 分段文本简短时加
+        motion_segs = build_motion_segments(shot)
+        if 2 <= count_effective_segments(motion_segs) <= 4:
+            seg_text = format_motion_segments(motion_segs, style="en_s")  # Seedance 2.0 推荐英文 's'
+            if seg_text and len(seg_text) <= 80:
+                parts.append(f"【时间分段】{seg_text}")
     # 背景音效（audio_cue 单行）——对话/音色留给视频模型自己理解。
     # S17-1：无声模型（Seedance 1.0 pro）注入音效指令只会白占 500 字上限，
     # 且模型根本不会生成声音；按 active_video_supports_audio() 门控。
@@ -1223,6 +1347,10 @@ def _build_seedance_concise_prompt(shot: dict, characters: list | None = None) -
     audio_cue = shot.get("audio_cue", "").strip()
     if audio_cue and active_video_supports_audio():
         parts.append(f"（背景音效：{audio_cue}）")
+    # T4（2026-11）：类型化氛围/情绪自然语言 enrichment（低权重，压缩先砍）。
+    atmosphere = _build_atmosphere_enrichment(shot)
+    if atmosphere:
+        parts.append(atmosphere)
     return "\n".join(parts)
 
 
@@ -1243,13 +1371,18 @@ def derive_attempt_seed(base_seed: int | None, retry_attempt: int = 0) -> int | 
 def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
                   characters: list | None = None,
                   continuity_ref_image: str | None = None, mode: str = "A",
-                  retry_attempt: int = 0):
+                  retry_attempt: int = 0,
+                  continuity_ref_video: str | None = None):
     """构建 VideoGenerationRequest.
 
     frame_paths: [首帧路径, 尾帧路径(可选), 中间关键帧...]
       模式A（关键帧模式）用：首帧+尾帧->双锚定，多帧->多关键帧叙事。
     continuity_ref_image: 模式B时传入上一镜视频尾帧路径作为 I2V 参考图，
       替代本镜首帧（不再生成 start_frame 图片）。
+    continuity_ref_video: 可选的原生视频参考（上一镜视频）。仅当当前 Seedance
+      模型能力位支持**本地视频** Base64 时才启用；否则静默回退现有帧/尾帧路径。
+      启用时该镜切到 reference 模式（图片 + reference_video），由 provider 发
+      `video_url` / role=reference_video，不再把视频当图片。
     mode: "A"（关键帧模式）或 "B"（I2V 连续接续模式）。
       模式B时跳过 frame_paths 首帧解析，直接用 continuity_ref_image 作 image_path。
     """
@@ -1270,6 +1403,21 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         from _video_gen.models import VideoCapabilityError
         raise VideoCapabilityError(_conflict["code"], _conflict["message"],
                                    field_path=_conflict["field_path"])
+
+    # T1：原生视频参考能力门控。只有当前模型支持**本地视频** Base64 时才把
+    # 上一镜视频接进 reference 模式；否则保持现有 image/尾帧路径（静默回退，
+    # 不改既有连续性）。显式 first_last/first_only 策略优先，不被视频参考改写。
+    _video_ref_path: str | None = None
+    if (continuity_ref_video and policy in ("auto", "reference")
+            and _reference_mode() != "text"):
+        from shared.model_caps import (active_video_model,
+                                       seedance_supports_local_video_reference)
+        if seedance_supports_local_video_reference(active_video_model()):
+            _p = Path(str(continuity_ref_video))
+            if _p.is_file():
+                from _video_gen.media_io import media_kind as _media_kind
+                if _media_kind(str(_p)) == "video":
+                    _video_ref_path = str(_p)
 
     # 注入导演风格前缀（如果有配置）
     cinematic_prefix = (
@@ -1335,11 +1483,12 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         # 文生视频模式：完全不使用任何参考图（强制 T2V）
         reference_paths = []
         pass
-    elif _reference_mode() == "r2v":
-        # R2V 模式：所有参考图都进 reference_paths（参考生视频，角色/道具/场景一致性锚定），
-        # 不传首帧/尾帧/关键帧。此前 r2v 参考图被按位置塞进 image_path/last_frame/
-        # extra_keyframes（首帧/尾帧时间语义），而 bailian R2V 只看 reference_paths——
-        # 参考图语义从未真正到达 provider。此处显式归位。
+    elif _reference_mode() == "r2v" or _video_ref_path:
+        # R2V 模式：所有参考素材都进 reference_paths（参考生视频，角色/道具/场景
+        # 一致性锚定 + 可选的原生视频参考），不传首帧/尾帧/关键帧。此前 r2v 参考图
+        # 被按位置塞进 image_path/last_frame/extra_keyframes（首帧/尾帧时间语义），
+        # 而 bailian R2V 只看 reference_paths——参考图语义从未真正到达 provider。
+        # 此处显式归位。
         # 参考图由本函数权威收集（出镜角色肖像，视角匹配，最多5个）：
         # 调用方传 frame_paths 时收集的是不存在的 keyframes/ 子目录（step02b 旧逻辑），
         # 或与 bailian「reference_paths ≤5」约定冲突的首帧/尾帧/关键帧——一律忽略，
@@ -1350,6 +1499,10 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         reference_paths = _collect_r2v_references(
             shot, characters=characters or [], registry=_load_character_registry(),
         )
+        # T1：视频参考追加在图片之后（provider 按图片 → 视频顺序下发，
+        # 与「图N / 视频N」分开编号一致）。视频不能走图片容量压缩。
+        if _video_ref_path and _video_ref_path not in reference_paths:
+            reference_paths = list(reference_paths) + [_video_ref_path]
         if not reference_paths:
             raise RuntimeError(
                 f"[Shot {shot.get('index', '?')}] r2v 模式未收集到任何参考图，"
@@ -1359,11 +1512,20 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         # 在记录里显式声明 role claim，避免报告把语言引导写成已发首帧角色。
         _ff_path = str(first_frame_file(shot.get("index", 0)))
         _ff_in_refs = any(str(p) == _ff_path for p in reference_paths)
+        try:
+            from _video_gen.media_io import media_kind as _media_kind
+        except Exception:
+            def _media_kind(_p):
+                return "image"
         _media_selection = {
             "mode": "r2v",
             "policy": policy,
             "media_mode": "reference",
-            "items": [{"path": str(p), "role": "reference_image"} for p in reference_paths],
+            "items": [{
+                "path": str(p),
+                "role": ("reference_video" if _media_kind(str(p)) == "video"
+                         else "reference_image"),
+            } for p in reference_paths],
             "dropped": [],
             "modifications": [],
             "role_claims": ({"first_frame": "reference"} if _ff_in_refs else {}),
@@ -1422,7 +1584,8 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     # S17-2：触发条件按**能力**而非硬编码 provider 名——Seedance 系（volcengine /
     # agent_plan）统一走同一份素材计划；其他 provider 仍保留各自分支。
     from shared.model_caps import active_video_is_seedance
-    if _reference_mode() == "image" and active_video_is_seedance():
+    if (_reference_mode() == "image" and active_video_is_seedance()
+            and not _video_ref_path):
         from shared.model_caps import active_video_model, get_seedance_cap
         _cap = get_seedance_cap(active_video_model())
         _plan = plan_image_media(
@@ -1461,7 +1624,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     # 参考图清单声明（豆包模板吸收 #1）：在路径解析完成后再注入，
     # 让视频模型明确每张参考图的语义（首帧起点/尾帧终点/关键帧/r2v 一致性参考）。
     # text 模式无参考图返回空串，不改变现有 text 模式 prompt 形态。
-    if _reference_mode() == "r2v":
+    if _reference_mode() == "r2v" or _video_ref_path:
         # r2v：给每张参考图标注具体用途（人物形象/场景/一致性），
         # 实现 seedance2-skill 的「@图片N 作为XX」逐图语义声明。
         # v6.103：把本镜的**剩余字符预算**传下去——模型 cap 减去已组装的
@@ -1496,9 +1659,9 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     except Exception:
         _seed = None
 
-    # 把 r2v 模式实际提交的参考图列表缓存到 shot，让 submit_poll._get_shot_hash
-    # 把 r2v 参考图变化纳入哈希（换角色肖像/场景资产图应触发重生成）
-    if _reference_mode() == "r2v":
+    # 把 r2v / 原生视频参考实际提交的参考列表缓存到 shot，让 submit_poll._get_shot_hash
+    # 把参考素材变化纳入哈希（换角色肖像/场景资产图/上一镜视频应触发重生成）
+    if _reference_mode() == "r2v" or _video_ref_path:
         shot["_r2v_refs_cache"] = list(reference_paths or [])
 
     # 运镜指令：step01 端的 camera_movement 结构化字段（中文运镜词）

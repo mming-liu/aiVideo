@@ -115,6 +115,40 @@ def extract_tail_frame(
     return str(out_path)
 
 
+# ---- 原生视频参考（T1）----
+
+def resolve_video_reference(previous_video_path: str | Path | None,
+                            *, model: str | None = None) -> dict:
+    """上一生成视频作为原生 ``reference_video`` 的**可选**路径.
+
+    返回 ``{"path": str|None, "reason": str, "model": str|None}``：
+
+    - 能力具备（Seedance 2.0 系列，且支持本地视频 Base64）→ ``path`` 为视频路径；
+    - 2.5（官方只接受公网 URL/素材 ID）或 1.x（无视频参考）→ ``path=None``，
+      ``reason=video_reference_unsupported``，调用方回退现有尾帧 I2V；
+    - 文件缺失 → ``reason=previous_video_missing``。
+
+    本函数**不**自动启用视频参考：调用方把返回的 ``path`` 显式传给
+    ``prompt_builder._make_request(continuity_ref_video=...)`` 才生效。
+    """
+    from shared.model_caps import (active_video_model,
+                                   seedance_supports_local_video_reference)
+
+    resolved_model = model or active_video_model()
+    if not previous_video_path:
+        return {"path": None, "reason": "no_previous_video", "model": resolved_model}
+    p = Path(previous_video_path)
+    if not p.is_file():
+        return {"path": None, "reason": "previous_video_missing", "model": resolved_model}
+    from _video_gen.media_io import media_kind
+    if media_kind(str(p)) != "video":
+        return {"path": None, "reason": "not_a_video", "model": resolved_model}
+    if not seedance_supports_local_video_reference(resolved_model):
+        return {"path": None, "reason": "video_reference_unsupported",
+                "model": resolved_model}
+    return {"path": str(p), "reason": "ok", "model": resolved_model}
+
+
 # ---- 连续链状态机 ----
 
 class ContinuityTracker:
@@ -138,6 +172,8 @@ class ContinuityTracker:
 
         # 状态
         self.last_tail_frame_path: str | None = None
+        # T1：上一镜视频路径（供原生视频参考的可选路径；能力不具备时不启用）
+        self.last_video_path: str | None = None
 
         # 调度记录：{shot_idx: "A" | "B"}，供 merge 阶段查询
         self._mode_log: dict[int, str] = {}
@@ -174,12 +210,16 @@ class ContinuityTracker:
         # 提取尾帧
         tail = extract_tail_frame(video_path, self._tail_dir, idx)
         self.last_tail_frame_path = tail
+        # T1：记录上一镜视频，供能力具备时走原生视频参考（不替代尾帧提取）
+        vp = Path(video_path)
+        self.last_video_path = str(vp) if vp.is_file() else None
 
         return tail
 
     def reset_chain(self) -> None:
         """重置连续链（钩子镜头结束后调用）."""
         self.last_tail_frame_path = None
+        self.last_video_path = None
 
     # ---- 查询 ----
 
@@ -196,6 +236,11 @@ class ContinuityTracker:
         if self.last_tail_frame_path and Path(self.last_tail_frame_path).exists():
             return self.last_tail_frame_path
         return None
+
+    def get_video_reference(self, *, model: str | None = None) -> str | None:
+        """获取当前可用的原生视频参考路径（能力不具备时 None）."""
+        resolved = resolve_video_reference(self.last_video_path, model=model)
+        return resolved.get("path")
 
     # ---- 持久化（供 merge 阶段读取） ----
 

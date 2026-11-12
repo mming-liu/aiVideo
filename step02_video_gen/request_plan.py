@@ -161,6 +161,10 @@ ROLE_CANONICAL = {
     "reference": ROLE_REFERENCE,
     "reference_image": ROLE_REFERENCE,
     "reference_audio": ROLE_REFERENCE,
+    # T1（2026-11）：原生视频参考是 reference 的一种；冻结契约只认规范角色，
+    # 不把 reference_video 当未知角色在 POST 前拒收。
+    "reference_video": ROLE_REFERENCE,
+    "video": ROLE_REFERENCE,
     "image": ROLE_REFERENCE,
     "audio": ROLE_REFERENCE,
 }
