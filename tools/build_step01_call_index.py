@@ -34,6 +34,30 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SCHEMA = "step01_call_index.v1"
 
+#: 每个批次的**授权链**（来源 / 范围 / 上限 / 是否已核实）。
+#:
+#: 2026-11-12 复核：索引必须能回答「这批发次获得了哪次授权」，而不只是消耗统计。
+#: 盘上只有 S06 报告的自述口径；复跑批次没有任何授权记录——那 20 次只能确认
+#: 「发生了真实发送」，**不能**判定属于原八次额度之内或之外，因此标 `unverified`。
+CAMPAIGN_AUTHORIZATION = {
+    "s06_ab": {
+        "source": "docs/step01-s06-contract-ab-2026-11-12.md",
+        "declared_scope": "审计对照 6 次 + 受限修订 1 次 + 终局审计 1 次",
+        "declared_limit": 8,
+        "status": "declared_in_report",
+        "note": ("报告自述「实际发送 8 次，未超出授权」；独立授权凭证（工单/收据）"
+                 "不在盘上，属报告自述口径"),
+    },
+    "s06_ab_rerun": {
+        "source": None,
+        "declared_scope": None,
+        "declared_limit": None,
+        "status": "unverified",
+        "note": ("无报告、无授权记录、无预算凭据。只能确认「盘上有 20 次真实发送」，"
+                 "不能判定它获得过哪次授权、也不能判定是否超出原八次额度"),
+    },
+}
+
 #: 阶段一 A/B 对照的样本顺序（与当时运行脚本一致；只作导航，样本内容从夹具读取）
 AB_SAMPLES = ("time_ellipsis_legal", "state_broken", "voice_broken")
 
@@ -117,6 +141,8 @@ def _ab_calls(run_dir: Path, base: Path) -> list:
                            "原始响应未落盘，只有解析结果"),
             },
             "repo_head": meta.get("repo_head"),
+            "budget_record": {"available": False,
+                              "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"},
             "candidate_identity": None,
         })
     return calls
@@ -249,6 +275,8 @@ def _rerun_calls(run_dir: Path, base: Path) -> list:
             "raw_response": {"available": False,
                              "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"},
             "repo_head": meta.get("repo_head"),
+            "budget_record": {"available": False,
+                              "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"},
             "candidate_identity": None,
         })
     return calls
@@ -331,10 +359,16 @@ def _campaign(campaign_id: str, source: str, calls: list, note: str = "") -> dic
             elapsed += float(c.get("elapsed_sec") or 0)
         except (TypeError, ValueError):
             pass
+    auth = dict(CAMPAIGN_AUTHORIZATION.get(campaign_id) or {
+        "source": None, "declared_scope": None, "declared_limit": None,
+        "status": "unverified", "note": "该批次没有授权链记录",
+    })
+    auth["observed_sends"] = len(calls)
     return {
         "campaign_id": campaign_id,
         "source": source,
         "note": note,
+        "authorization": auth,
         "calls": len(calls),
         "elapsed_sec_total": round(elapsed, 1),
         "usage_total": usage,
@@ -412,6 +446,18 @@ def _md(index: dict) -> str:
         out.append("")
         if camp.get("note"):
             out.append("> %s" % camp["note"])
+            out.append("")
+        auth = camp.get("authorization") or {}
+        if auth:
+            out.append("**授权链**：来源 `%s`；声明范围 %s；声明上限 %s；实发 %s；"
+                       "核实状态 **%s**"
+                       % (auth.get("source") or "—",
+                          auth.get("declared_scope") or "—",
+                          auth.get("declared_limit"),
+                          auth.get("observed_sends"), auth.get("status")))
+            if auth.get("note"):
+                out.append("")
+                out.append("> %s" % auth["note"])
             out.append("")
         if camp.get("error"):
             out.append("**缺失**：%s" % camp["error"])

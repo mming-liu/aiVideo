@@ -388,6 +388,12 @@ def _fix_vague_anchor(shot: dict) -> int:
         # 1) 模糊数量词 + 武器 → 追加否定反例
         def _replace_anchor(m):
             vague, target = m.group(1), m.group(2)
+            # 2026-11-12 复核：**幂等**。此前无条件追加，于是「已经有一份说明」的
+            # prompt 每跑一次就多一份——模型按审计要求删掉重复括号后，约束又加回去，
+            # 修复被后处理撤销（U6 镜 6 实测：合并后 1 份，后处理后 2 份）。
+            _tail = m.string[m.end():m.end() + 16]
+            if "独立物体" in _tail:
+                return m.group(0)
             return f"{vague}{target}（{target}是独立物体，不是从角色身上长出来的）"
         new_text = _ANCHOR_VAGUE_KW.sub(_replace_anchor, text)
         # 2) "仅露双眼" 类 → 追加"不是上半身出水"

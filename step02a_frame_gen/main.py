@@ -85,13 +85,22 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
             raise SystemExit(2)
         # M05（2026-11-12 复核 P2）：身份通过还不够——计划内部的最终提示与参考摘要
         # 也必须仍能复算出来，否则会出现「计划验收通过、发送内容没采用计划」。
-        from step02a_frame_gen.execution_plan import verify_plan_execution
-        _exec_issues = verify_plan_execution(
-            visual_plan, characters=script.get("characters") or [])
-        if _exec_issues:
+        # 第二轮复核补充：自洽**不等于**合法，还要核变化范围（保护/授权/理由）
+        # 与覆盖范围（请求的镜头与帧必须都在计划里）。
+        from step02a_frame_gen.execution_plan import (
+            verify_plan_changes,
+            verify_plan_coverage,
+            verify_plan_execution,
+        )
+        _plan_problems = (
+            verify_plan_execution(visual_plan, characters=script.get("characters") or [])
+            + verify_plan_changes(visual_plan, script)
+            + verify_plan_coverage(visual_plan, only_indices=only_indices, frames=frames)
+        )
+        if _plan_problems:
             logger = get_logger(chapter_dir() / "step02a.log", console_level="INFO")
-            logger.error("[PLAN] 计划执行参数与最终提示/参考不一致，拒绝发送生成: "
-                         f"{_exec_issues[:3]}")
+            logger.error("[PLAN] 计划执行参数/变化范围/覆盖范围未通过，拒绝发送生成: "
+                         f"{_plan_problems[:3]}")
             raise SystemExit(2)
         _planned_shots = {int(s.get("shot_index")) for s in visual_plan.get("shots") or []
                           if s.get("status") != "blocked"}
@@ -127,6 +136,9 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
     if hook and hook.get("prompt"):
         if only_indices is None or 0 in only_indices:
             hook["index"] = 0
+            if scope is not None and 0 not in _plan_units:
+                logger.error("[PLAN] 钩子不在画面计划内，计划模式不得回退原稿，拒绝生成")
+                raise SystemExit(2)
             tasks_spec.append((0, _plan_units.get(0, hook), False))
     for shot in shots:
         idx = shot["index"]
@@ -138,6 +150,11 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
             os.getenv("STEP02A_USE_CONTINUITY_FRAME", "0").strip() == "1"
             and idx >= 2
         )
+        # 计划模式（给了 scope）下**不允许回退原稿**：覆盖检查已在上面拦过一次，
+        # 这里再兜一层——缺单元就拒收，绝不拿原稿 `shot` 顶替。
+        if scope is not None and idx not in _plan_units:
+            logger.error(f"[PLAN] 镜头 {idx} 不在画面计划内，计划模式不得回退原稿，拒绝生成")
+            raise SystemExit(2)
         tasks_spec.append((idx, _plan_units.get(idx, shot), skip_first))
 
     sem = asyncio.Semaphore(concurrency)

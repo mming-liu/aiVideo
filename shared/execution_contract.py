@@ -864,6 +864,18 @@ def _changes_version_issues(binding: Any) -> list[dict]:
     return issues
 
 
+def diff_script_paths(before: dict, after: dict) -> list[dict]:
+    """对外暴露的**路径级差异**（与 :func:`validate_execution_changes` 同一实现）.
+
+    2026-11-12 复核：计划侧需要把「候选相对原稿改了什么」写进 `binding.changes`，
+    否则消费前的授权校验会把每条合法变化都判成 `change_reason_missing`。差异实现
+    只有一份，避免计划侧另写一套路径比较。
+    """
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return []
+    return _diff(before, after)
+
+
 def validate_execution_changes(before: dict, after: dict, *, binding: dict,
                                allowed_changes: list[str],
                                protection: dict | None = None) -> list[dict]:

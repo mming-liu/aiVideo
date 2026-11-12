@@ -10,6 +10,14 @@
       "campaign_id": "s06_ab",
       "source": "baselines/2026-11-12-pre-layered/s06_ab",
       "note": "S06 报告所称的八次发送：6 次审计 A/B + 1 次受限修订 + 1 次终局审计",
+      "authorization": {
+        "source": "docs/step01-s06-contract-ab-2026-11-12.md",
+        "declared_scope": "审计对照 6 次 + 受限修订 1 次 + 终局审计 1 次",
+        "declared_limit": 8,
+        "status": "declared_in_report",
+        "note": "报告自述「实际发送 8 次，未超出授权」；独立授权凭证（工单/收据）不在盘上，属报告自述口径",
+        "observed_sends": 8
+      },
       "calls": 8,
       "elapsed_sec_total": 983.0,
       "usage_total": {
@@ -73,6 +81,10 @@
             "reason": "运行脚本只保存 `raw_text[:400]`，而该批记录的 `raw_head` 为空；原始响应未落盘，只有解析结果"
           },
           "repo_head": "7286516",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -117,6 +129,10 @@
             "reason": "运行脚本只保存 `raw_text[:400]`，而该批记录的 `raw_head` 为空；原始响应未落盘，只有解析结果"
           },
           "repo_head": "7286516",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -173,6 +189,10 @@
             "reason": "运行脚本只保存 `raw_text[:400]`，而该批记录的 `raw_head` 为空；原始响应未落盘，只有解析结果"
           },
           "repo_head": "7286516",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -235,6 +255,10 @@
             "reason": "运行脚本只保存 `raw_text[:400]`，而该批记录的 `raw_head` 为空；原始响应未落盘，只有解析结果"
           },
           "repo_head": "7286516",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -285,6 +309,10 @@
             "reason": "运行脚本只保存 `raw_text[:400]`，而该批记录的 `raw_head` 为空；原始响应未落盘，只有解析结果"
           },
           "repo_head": "7286516",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -329,6 +357,10 @@
             "reason": "运行脚本只保存 `raw_text[:400]`，而该批记录的 `raw_head` 为空；原始响应未落盘，只有解析结果"
           },
           "repo_head": "7286516",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -527,6 +559,14 @@
       "campaign_id": "s06_ab_rerun",
       "source": ".pytest_tmp/s06",
       "note": "S06 之后的复跑批次（现场数据，未纳入版本管理）；不计入报告的八次口径",
+      "authorization": {
+        "source": null,
+        "declared_scope": null,
+        "declared_limit": null,
+        "status": "unverified",
+        "note": "无报告、无授权记录、无预算凭据。只能确认「盘上有 20 次真实发送」，不能判定它获得过哪次授权、也不能判定是否超出原八次额度",
+        "observed_sends": 20
+      },
       "calls": 20,
       "elapsed_sec_total": 2021.1,
       "usage_total": {
@@ -590,6 +630,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -640,6 +684,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -690,6 +738,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -740,6 +792,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -796,6 +852,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -852,6 +912,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -896,6 +960,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -952,6 +1020,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -1008,6 +1080,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -1052,6 +1128,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -1096,6 +1176,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -1140,6 +1224,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -1190,6 +1278,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -1240,6 +1332,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -1290,6 +1386,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -1334,6 +1434,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -1384,6 +1488,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -1440,6 +1548,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -1490,6 +1602,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         },
         {
@@ -1546,6 +1662,10 @@
             "reason": "同批次脚本只保存 `raw_head[:400]`，该批同样为空"
           },
           "repo_head": "0a2bcc4",
+          "budget_record": {
+            "available": false,
+            "reason": "该批次未走预算凭据机制（无 budget_receipt.json）"
+          },
           "candidate_identity": null
         }
       ]

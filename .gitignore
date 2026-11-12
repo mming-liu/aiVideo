@@ -144,6 +144,8 @@ tests/step01_script_gen/*
 # 2026-11-12 M02/M03：修订入口与已确认问题台账的契约用例（干净检出可运行）
 !tests/step01_script_gen/test_m02_revision_entry.py
 !tests/step01_script_gen/test_issue_ledger.py
+# 2026-11-12 复核第三轮：后处理不得撤销已授权修复（景别最长匹配 + 锚点幂等）
+!tests/step01_script_gen/constraints/test_m02_postprocess_no_revert.py
 !tests/step01_script_gen/test_repair_target_rollback.py
 !tests/step01_script_gen/test_step01_commit.py
 !tests/step01_script_gen/test_plan_phase_e_commit_chain.py
@@ -183,6 +185,8 @@ tests/_text_gen/*
 tests/step01_script_gen/constraints/*
 !tests/step01_script_gen/constraints/test_facing_to_gaze.py
 !tests/step01_script_gen/constraints/test_ff_lf_temporal.py
+# 2026-11-12 复核第三轮：后处理不得撤销已授权修复（景别最长匹配 + 锚点幂等）
+!tests/step01_script_gen/constraints/test_m02_postprocess_no_revert.py
 !tests/enhancements/
 tests/enhancements/*
 !tests/enhancements/test_subtitle_contract.py

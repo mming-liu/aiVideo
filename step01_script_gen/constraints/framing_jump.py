@@ -63,6 +63,22 @@ class FramingJumpConstraint(InterShotConstraint):
     def _check_pair(self, prev, curr, ctx, prev_idx, curr_idx):
         if not isinstance(prev, dict) or not isinstance(curr, dict):
             return None
+        # 2026-11-12 复核：本轮**被授权改写**的镜头不得在后处理里再被改写。
+        # 实测（U6）：审计要求把镜 1 的 prompt 从「大特写」改成「大远景」，
+        # 修复轮已改对，本约束却因相邻景别跨度把它替换回原值——修复被静默撤销。
+        # 该镜头仍由下一轮审计按 `shot_size_jump` 报 warning，不在这里硬拧。
+        try:
+            _repairing = getattr(ctx, "repair_shot_indices", frozenset())
+            if _repairing and int(prev.get("index", -1)) in _repairing:
+                return None
+        except (TypeError, ValueError):
+            pass
+        # 2026-11-12 复核（投影）：**最终落盘前只报不改**。`project_for_commit` 会
+        # 走 `finalize_step01_script` → `run_hard_fix(is_final_pass=True)`，若这里再
+        # 改写 prompt，本轮已接受的修复会在投影阶段被撤销（实测：大远景 → 特写）。
+        # 景别跨度本就由 `validation._check_shot_size_jump` 报 warning，交审计/人工。
+        if getattr(ctx, "is_final_pass", False):
+            return None
         # 场景切换豁免
         if _is_scene_switch(prev, curr):
             return None

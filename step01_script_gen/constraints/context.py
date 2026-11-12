@@ -49,6 +49,10 @@ class ConstraintContext:
     video_model_caps: dict = field(default_factory=dict)
     is_in_repair_loop: bool = False
     is_final_pass: bool = False
+    #: 本轮修复**被授权改写**的镜头序号集合（`shot_<n>` → n）。
+    #: 2026-11-12 复核：修复轮里模型已按授权改写这些镜头，后处理约束不得再把它们
+    #: 改回去（`framing_jump` 曾把「大特写 → 大远景」的修复替换回原值）。
+    repair_shot_indices: frozenset = frozenset()
 
     def __post_init__(self) -> None:
         """自动从 script 推导 shots/hook 引用（如未显式传入）."""
@@ -72,6 +76,7 @@ class ConstraintContext:
         markers: Optional["ElementMarkers"] = None,
         is_in_repair_loop: bool = False,
         is_final_pass: bool = False,
+        repair_shot_indices=None,
     ) -> "ConstraintContext":
         """便捷工厂：从 script dict 构造 context.
 
@@ -102,6 +107,7 @@ class ConstraintContext:
             markers=markers,
             is_in_repair_loop=is_in_repair_loop,
             is_final_pass=is_final_pass,
+            repair_shot_indices=frozenset(int(i) for i in (repair_shot_indices or ())),
         )
 
     # ------------------------------------------------------------------

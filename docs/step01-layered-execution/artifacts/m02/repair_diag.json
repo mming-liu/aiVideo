@@ -42,7 +42,7 @@
       "reason": "",
       "origin_reason": "",
       "evidence_removed": [],
-      "audit_field_touched": 3,
+      "audit_field_touched": 5,
       "audit_touched_ids": [
         [
           "7",
@@ -53,12 +53,20 @@
           "FF_RESULT_LEAK"
         ],
         [
+          "1",
+          "state_contradiction"
+        ],
+        [
+          "6",
+          "TEXT_REPETITION"
+        ],
+        [
           "7",
           "prop_state"
         ]
       ],
       "revision_before": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
-      "revision_after": "abfd217dae61e9f8604ab95e3654a91893c2d2a3b53ba68f54d310c460efc88a",
+      "revision_after": "56fc1e96f8ffa7c1f765d1e64eb479bedf3ea729213071e86390085299534fd5",
       "effect_conflict": null,
       "related_readback": {
         "targets": [
@@ -403,14 +411,7 @@
           "beyond_declared": []
         }
       },
-      "postprocess_reverted": {
-        "shot_1": [
-          "prompt"
-        ],
-        "shot_6": [
-          "prompt"
-        ]
-      }
+      "postprocess_reverted": {}
     }
   ],
   "block": []

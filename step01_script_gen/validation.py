@@ -5301,12 +5301,20 @@ def _extract_shot_directions(text: str) -> list[str]:
 
 
 def _shot_size_level(shot: dict) -> str | None:
-    """提取镜头景别（prompt 开头格式「[景别]」），返回等级名."""
+    """提取镜头景别（prompt 开头格式「[景别]」），返回等级名.
+
+    2026-11-12 复核：此前按 `_SHOT_SIZE_ORDER` 的**词表顺序**取第一个子串命中，
+    而 `远景` 排在 `大远景` 之前、`特写` 排在 `大特写` 之前——于是「大远景」被判成
+    `远景`、「大特写」被判成 `特写`。`framing_jump` 随后做 `replace("远景","特写")`，
+    作用在「大远景」上恰好还原成「大特写」，把审计刚修好的 prompt 改回原值。
+    改为**最长匹配**：同一位置有多个候选时取更长的那个。
+    """
     prompt = shot.get("prompt", "") or ""
+    best: str | None = None
     for sz in _SHOT_SIZE_ORDER:
-        if sz in prompt:
-            return sz
-    return None
+        if sz in prompt and (best is None or len(sz) > len(best)):
+            best = sz
+    return best
 
 
 def _check_axis_crossing(shots: list[dict], hook: dict = None) -> dict:

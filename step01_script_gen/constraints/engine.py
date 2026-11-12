@@ -171,6 +171,7 @@ def run_hard_fix(
     novel_text: str = "",
     on_constraint_done: Optional[Callable[[str, Any], None]] = None,
     repair_effects: Any = None,
+    repair_shot_indices=None,
 ) -> Any:
     """main.py 用的便捷入口：跑硬修复层.
 
@@ -219,6 +220,7 @@ def run_hard_fix(
             is_in_repair_loop=is_in_repair_loop,
             is_final_pass=is_final_pass,
             novel_text=novel_text,
+            repair_shot_indices=repair_shot_indices,
         )
         # §14 P1：把**只读**效果视图挂到 context 上（缺省 None = 逐字不变）。
         # 走 context 而不是给 34 个约束各加一个构造参数；视图是冻结的，约束只读。

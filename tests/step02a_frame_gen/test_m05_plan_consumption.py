@@ -20,7 +20,12 @@ import pytest
 
 import shared.vimax_bridge as vb
 from step02a_frame_gen import main as m
-from step02a_frame_gen.execution_plan import build_visual_plan, verify_plan_execution
+from step02a_frame_gen.execution_plan import (
+    build_visual_plan,
+    verify_plan_changes,
+    verify_plan_coverage,
+    verify_plan_execution,
+)
 
 FIXTURES = Path(__file__).resolve().parents[1] / "shared" / "fixtures" / "execution_contract"
 
@@ -49,22 +54,68 @@ def _setup(monkeypatch, tmp_path):
 
 def test_generation_consumes_the_planned_execution_unit(monkeypatch, tmp_path):
     family, script, script_path, seen = _setup(monkeypatch, tmp_path)
-    planned_ff = "计划改写：阿岚立于船坞，右手握锤，船底裂缝清晰可见"
-    candidate = {"shots": [{"index": 1, "ff_desc": planned_ff}]}
+    planned_prompt = "计划改写：船坞全景，阿岚立于船底旁，锤与木屑清晰可见"
+    candidate = {"shots": [{"index": 1, "prompt": planned_prompt}]}
 
     plan = build_visual_plan(script, scope=family["scope"], only_indices={1},
                              candidate=candidate)
-    assert plan["shots"][0]["execution"]["unit"]["ff_desc"] == planned_ff
+    assert plan["shots"][0]["execution"]["unit"]["prompt"] == planned_prompt
     assert verify_plan_execution(plan, characters=script.get("characters") or []) == []
+    assert verify_plan_changes(plan, script) == []
 
     asyncio.run(m.gen_all_frames(script_path, tmp_path / "work",
                                  only_indices={1}, visual_plan=plan,
                                  scope=family["scope"]))
 
     assert seen, "桩生成器必须被调用"
-    assert seen[0]["ff_desc"] == planned_ff, "生成侧必须收到计划里的执行参数"
+    assert seen[0]["prompt"] == planned_prompt, "生成侧必须收到计划里的执行参数"
     # 原稿没被计划改写污染
-    assert script["shots"][0]["ff_desc"] != planned_ff
+    assert script["shots"][0]["prompt"] != planned_prompt
+
+
+def test_protected_field_change_is_refused_even_if_plan_is_self_consistent(
+        monkeypatch, tmp_path):
+    """单元与提示一起改（自洽）也不能绕过上游保护：`ff_desc` 属 Step01 权限."""
+    family, script, script_path, seen = _setup(monkeypatch, tmp_path)
+    forged = "伪造：把首帧描述也一起改掉"
+    plan = build_visual_plan(script, scope=family["scope"], only_indices={1})
+    plan["shots"][0]["execution"]["unit"]["ff_desc"] = forged
+    # 让计划内部保持自洽：帧提示按改后的单元重算
+    from step02a_frame_gen.execution_plan import _frame_prompt
+    for frame in plan["shots"][0]["frames"]:
+        prompt, _err = _frame_prompt(plan["shots"][0]["execution"]["unit"],
+                                     script.get("characters") or [], frame["kind"])
+        frame["prompt"] = prompt
+
+    assert verify_plan_execution(plan, characters=script.get("characters") or []) == []
+    issues = verify_plan_changes(plan, script)
+    # `ff_desc` 属 Step01 语义权限：要么按受保护字段拒、要么按「语义未验证」拒，
+    # 两者都是「计划自洽也不能放行」——这里只锁「必须被拒且指向该路径」。
+    assert issues, "单元与提示一起改也必须被拒"
+    assert {i["path"] for i in issues} == {"shots[0].ff_desc"}, issues
+    assert {i["code"] for i in issues} <= {"protected_field_change",
+                                           "semantic_change_unverified"}, issues
+
+    with pytest.raises(SystemExit):
+        asyncio.run(m.gen_all_frames(script_path, tmp_path / "work",
+                                     only_indices={1}, visual_plan=plan,
+                                     scope=family["scope"]))
+    assert seen == [], "保护字段被改写时不得发起生成"
+
+
+def test_requested_shot_outside_the_plan_is_refused(monkeypatch, tmp_path):
+    """计划只覆盖镜 1，却请求镜 1+2 → 覆盖检查拒收，且零调用（不回退原稿）."""
+    family, script, script_path, seen = _setup(monkeypatch, tmp_path)
+    plan = build_visual_plan(script, scope=family["scope"], only_indices={1})
+
+    issues = verify_plan_coverage(plan, only_indices={1, 2}, frames=None)
+    assert [i["code"] for i in issues] == ["plan_coverage_missing_shot"], issues
+
+    with pytest.raises(SystemExit):
+        asyncio.run(m.gen_all_frames(script_path, tmp_path / "work",
+                                     only_indices={1, 2}, visual_plan=plan,
+                                     scope=family["scope"]))
+    assert seen == []
 
 
 def test_plan_prompt_drift_is_refused_before_send(monkeypatch, tmp_path):

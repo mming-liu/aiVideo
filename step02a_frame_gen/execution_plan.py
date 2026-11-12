@@ -334,10 +334,21 @@ def build_visual_plan(script: dict, *, scope: dict, stage: str = VISUAL_PLAN_STA
         binding, checked_paths=VISUAL_GUARDED_PATHS, findings=semantic,
         checker=CHECKER_VERSION)
     binding["allowed_changes"] = list(VISUAL_ALLOWED_CHANGES)
+    # 始终走 `apply_execution_candidate`：它**先深拷贝**再合并，避免计划构建过程中
+    # 的运行期写入（`_scene_match` 等由参考收集器写进 shot 的缓存）污染调用方稿件。
+    planned = apply_execution_candidate(script, candidate)
+    # 2026-11-12 复核：候选相对原稿改了哪些路径必须写进绑定——消费前的
+    # `validate_execution_changes` 要求每条合法变化都带理由，否则一律
+    # `change_reason_missing`。差异实现与校验同一份（`diff_script_paths`）。
+    if candidate:
+        from shared.execution_contract import diff_script_paths
+        binding["changes"] = [
+            {"path": item["path"], "reason": "execution_candidate"}
+            for item in diff_script_paths(script, planned)
+        ]
     unresolved = list(binding.get("unresolved") or [])
     feedback = list(binding.get("feedback") or [])
 
-    planned = apply_execution_candidate(script, candidate) if candidate else script
     units = ([planned["hook"]] if isinstance(planned.get("hook"), dict) else []) + \
             [s for s in (planned.get("shots") or []) if isinstance(s, dict)]
     if only_indices is not None:
@@ -381,7 +392,9 @@ def build_visual_plan(script: dict, *, scope: dict, stage: str = VISUAL_PLAN_STA
             # 此前计划只做验收、生成仍从原稿 `script` 取 `shot` 重新构建请求，
             # 于是「计划通过、发送内容没采用计划」可以同时成立。这里把合并后的
             # 单元整份带进计划，`gen_all_frames` 直接把它交给 `gen_shot_frames`。
-            "execution": {"unit": copy.deepcopy(unit)},
+            # `_` 前缀是运行期缓存（如 `_scene_match`），不进计划、也不参与差异比较。
+            "execution": {"unit": {k: v for k, v in copy.deepcopy(unit).items()
+                                   if not str(k).startswith("_")}},
             "status": "blocked" if any(i.get("code") in {
                 "prompt_contradiction", "required_character_missing",
                 "reference_capacity"} for i in shot_issues) else "planned",
@@ -539,6 +552,97 @@ def verify_plan_execution(plan: dict, *, characters: list | None = None,
                         "code": "plan_reference_drift", "severity": "reject",
                         "path": f"visual_plan.{frame.get('frame_id')}.references",
                         "message": f"参考文件在计划之后被替换：{path}"})
+    return issues
+
+
+def verify_plan_changes(plan: dict, script: dict, *,
+                        protection: dict | None = None) -> list[dict]:
+    """消费前：计划单元相对**冻结原稿**的变化必须仍在授权与保护范围内.
+
+    2026-11-12 复核：`verify_plan_execution` 只能证明「计划自洽」——单元和提示一起
+    变化时，内部一致性检查完全无法独立守住上游内容保护。这里把计划代表的合并结果
+    还原成一份稿件，交给 :func:`shared.execution_contract.validate_execution_changes`
+    逐路径判定：受保护字段、需语义证据字段、越界字段、缺理由字段四类都会被拒。
+    """
+    from shared.execution_contract import validate_execution_changes
+
+    binding = (plan or {}).get("execution_binding")
+    if not isinstance(binding, dict):
+        return [{"code": "execution_binding_missing", "severity": "reject",
+                 "path": "visual_plan.execution_binding",
+                 "message": "画面计划没有执行绑定，无法核对变化范围"}]
+    units: dict[int, dict] = {}
+    for entry in (plan or {}).get("shots") or []:
+        if not isinstance(entry, dict):
+            continue
+        unit = ((entry.get("execution") or {}).get("unit"))
+        if isinstance(unit, dict):
+            try:
+                units[int(entry.get("shot_index"))] = unit
+            except (TypeError, ValueError):
+                continue
+    after = copy.deepcopy(script)
+    if isinstance(after.get("shots"), list):
+        after["shots"] = [
+            {k: v for k, v in units[int(s.get("index", -1))].items()
+             if not str(k).startswith("_")}
+            if int(s.get("index", -1)) in units else s
+            for s in after["shots"] if isinstance(s, dict)]
+    if isinstance(after.get("hook"), dict) and 0 in units:
+        after["hook"] = {k: v for k, v in units[0].items()
+                         if not str(k).startswith("_")}
+    allowed = list((plan or {}).get("allowed_changes") or VISUAL_ALLOWED_CHANGES)
+    return validate_execution_changes(script, after, binding=binding,
+                                      allowed_changes=allowed,
+                                      protection=protection)
+
+
+def verify_plan_coverage(plan: dict, *, only_indices: set | None = None,
+                         frames: set | None = None) -> list[dict]:
+    """消费前：**请求的镜头与帧必须都在计划里**，否则拒绝发送（不允许回退原稿）.
+
+    2026-11-12 复核：任务构造此前是 `_plan_units.get(idx, shot)`——显式请求的镜头
+    没被计划覆盖时仍会用原稿生成。计划模式下缺单元必须零调用拒收。
+    """
+    issues: list[dict] = []
+    entries: dict[int, dict] = {}
+    for entry in (plan or {}).get("shots") or []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            entries[int(entry.get("shot_index"))] = entry
+        except (TypeError, ValueError):
+            continue
+    wanted = sorted(int(i) for i in only_indices) if only_indices is not None \
+        else sorted(entries)
+    for idx in wanted:
+        entry = entries.get(idx)
+        if entry is None:
+            issues.append({"code": "plan_coverage_missing_shot", "severity": "reject",
+                           "path": f"visual_plan.shots[{idx}]",
+                           "message": f"镜头 {idx} 不在画面计划内，计划模式不得回退原稿"})
+            continue
+        if not frames:
+            continue
+        labels = {str(f.get("frame")) for f in entry.get("frames") or []
+                  if isinstance(f, dict)}
+        kinds = {str(f.get("kind")) for f in entry.get("frames") or []
+                 if isinstance(f, dict)}
+        for token in frames:
+            token = str(token)
+            if token in ("ff", "lf"):
+                ok = token in labels
+            elif token == "kf":
+                ok = "kf" in kinds
+            elif token.startswith("kf"):
+                ok = token in labels
+            else:
+                ok = True
+            if not ok:
+                issues.append({"code": "plan_coverage_missing_frame",
+                               "severity": "reject",
+                               "path": f"visual_plan.shots[{idx}].frames",
+                               "message": f"镜头 {idx} 的计划里没有请求的帧 {token}"})
     return issues
 
 

@@ -101,21 +101,70 @@ def _bridge_text(script: dict) -> str:
     return "\n".join(p for p in parts if p)
 
 
-def _process_carriers(script: dict) -> list[str]:
-    """镜头里**实际呈现的过程载体**（动作分段 / 关键帧），不依赖计划标签.
+def _shot_has_process(shot: dict) -> bool:
+    """该镜是否自带可演的过程（动作分段 ≥2 或有关键帧）——结构判据，不看词表."""
+    segments = _MOTION_SEGMENT_RE.findall(_text(shot.get("motion_desc")))
+    keyframes = shot.get("keyframes")
+    return len(segments) >= 2 or (isinstance(keyframes, list) and bool(keyframes))
 
-    2026-11-12 复核反例：`起因 → 结果` 的合法省略（约定赴城 → 离开 → 次日到达）
-    被 `causal_gap` 判成 reject，理由只是 `causal_chain` 少了「行动」标签——而两个
-    镜头各自都有两段动作。**标签缺失是计划结构问题，不是镜头缺少过程**，所以判据
-    必须先看稿子里有没有过程载体。
+
+#: 关联判定里不承担内容的 2 字组合（避免「的了」「是在」这类把任意两镜连起来）。
+_LINK_STOP_BIGRAMS = frozenset({
+    "的了", "是在", "在的", "了一", "这个", "那个", "什么", "没有", "一个",
+    "之后", "之前", "然后", "接着", "于是", "已经", "正在", "起来", "出来",
+})
+
+
+def _content_bigrams(text: str) -> set[str]:
+    """中文内容 2 字组合（去掉空白/标点与停用组合）.
+
+    不用分词器：本模块只做确定性检查，不引入外部依赖；2 字组合对「城门」这类
+    实体/地点足够稳，且对措辞漂移（「抵达」↔「站定」）保持一定的鲁棒性。
     """
-    out: list[str] = []
-    for shot in _iter_shots(script):
-        segments = _MOTION_SEGMENT_RE.findall(_text(shot.get("motion_desc")))
-        keyframes = shot.get("keyframes")
-        if len(segments) >= 2 or (isinstance(keyframes, list) and keyframes):
-            out.append("shot:%s" % (shot.get("index"),))
+    cleaned = re.sub(r"[\s\W_]+", "", str(text or ""), flags=re.UNICODE)
+    out = set()
+    for i in range(len(cleaned) - 1):
+        gram = cleaned[i:i + 2]
+        if gram not in _LINK_STOP_BIGRAMS:
+            out.add(gram)
     return out
+
+
+def _shares_content(text: str, anchor: str) -> bool:
+    """两段文本是否共享至少一个内容 2 字组合."""
+    a = _content_bigrams(anchor)
+    if not a:
+        return False
+    return bool(a & _content_bigrams(text))
+
+
+def _process_carriers(script: dict, *, anchors: list[str] | None = None) -> tuple[list[str], list[str]]:
+    """把过程载体分成**与被质疑的因果相关**和**无法建立关联**两组.
+
+    2026-11-12 复核反例（第二例）：原输入 `time_ellipsis_lost / reject`，**只增加一个
+    无关镜头**（关键帧画一只鸟），原问题没有任何变化，拒收却消失了——因为旧实现把
+    全稿任意关键帧都当成过程证据。过程证据必须绑定到被质疑的事实/事件/镜头上。
+
+    关联规则：载体镜的文本与 `causal_chain` 里**起因/结果**任一条目共享至少一个内容
+    2 字组合。建立不了关联的载体**不算证据**，如实记进 `unlinked`（待语义裁决），
+    裁决与「完全没有载体」时保持一致。
+
+    Returns:
+        `(linked, unlinked)`，元素形如 `shot:3`。
+    """
+    linked: list[str] = []
+    unlinked: list[str] = []
+    anchor_list = [a for a in (anchors or []) if _text(a)]
+    for shot in _iter_shots(script):
+        if not _shot_has_process(shot):
+            continue
+        label = "shot:%s" % (shot.get("index"),)
+        text = _shot_fields(shot)
+        if anchor_list and any(_shares_content(text, a) for a in anchor_list):
+            linked.append(label)
+        else:
+            unlinked.append(label)
+    return linked, unlinked
 
 
 def _issue(code: str, path: str, message: str, *, family: str, **fields) -> dict:
@@ -282,7 +331,14 @@ def _check_causal_and_time(script: dict) -> list[dict]:
         return []
     # 标签缺失先作为**结构证据**记录（advisory），不再直接拒收：合法省略的镜头
     # 往往有完整过程，只是计划没写「行动」标签。
-    carriers = _process_carriers(script)
+    #
+    # 但过程证据必须**绑定到被质疑的因果**：无关镜头（例如新增一镜鸟的关键帧）
+    # 不得把拒收豁免掉。建立不了关联的载体只记进 `unlinked_carriers`，不算证据，
+    # 裁决与「完全没有载体」时一致。
+    anchors = [text for role, text, _i in roles
+               if text and (_role_matches(role, _CAUSE_ROLES)
+                            or _role_matches(role, _RESULT_ROLES))]
+    linked, unlinked = _process_carriers(script, anchors=anchors)
     findings = [_issue(
         "causal_gap", "chapter_outline.causal_chain",
         "因果链只有起因与结果、没有行动/过程标签：结果缺少显式执行路径（结构记录）",
@@ -290,17 +346,19 @@ def _check_causal_and_time(script: dict) -> list[dict]:
         severity="advisory",
         expected_roles=["起因", "行动", "结果"],
         actual_roles=[role for role, _t, _i in roles],
-        carrier_evidence=carriers,
+        carrier_evidence=linked,
+        unlinked_carriers=unlinked,
     )]
-    # 只有在**稿子里也没有过程载体**时，才把「结果已断言完成」判成删过程。
-    if (not carriers and not _has_temporal_marker(script)
+    # 只有**与被质疑因果相关**的过程载体才能豁免；无关载体不改变裁决。
+    if (not linked and not _has_temporal_marker(script)
             and _has_completion_marker(script)):
         findings.append(_issue(
             "time_ellipsis_lost", "chapter_outline.narration_lines",
-            "结果状态已断言完成，但全稿既没有时间推进标记也没有过程载体；"
+            "结果状态已断言完成，但全稿既没有时间推进标记、也没有与该结果相关的过程载体；"
             "这是删除时间/过程后只留结果，不是合法的常规省略",
             family="temporal_ellipsis",
             missing=["temporal_marker", "process_carrier"],
+            unlinked_carriers=unlinked,
         ))
     return findings
 

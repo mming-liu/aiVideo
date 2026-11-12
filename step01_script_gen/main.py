@@ -6143,21 +6143,40 @@ def _declared_repair_paths(issues, tid: str) -> set:
     return out
 
 
+def _flatten_exact_paths(obj, prefix: str = "") -> dict:
+    """**保留下标**的扁平化（`frame_layouts.ff.0.props`），用于逐路径比较.
+
+    `repair_fields.flatten_paths` 把列表下标归一成 `*`（适合做「同类叶子」统计），
+    但授权面记的是**精确下标**（`frame_layouts.ff.0.props`），两者匹配不上。复核
+    要求「布局列表也纳入投影后差异检查」，所以这里另给一份保留下标的实现。
+    """
+    out: dict = {}
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            key_path = "%s.%s" % (prefix, key) if prefix else str(key)
+            out.update(_flatten_exact_paths(value, key_path))
+    elif isinstance(obj, list):
+        for i, value in enumerate(obj):
+            out.update(_flatten_exact_paths(value, "%s.%d" % (prefix, i)))
+    else:
+        out[prefix] = obj
+    return out
+
+
 def _authorized_changes_lost(merged: "dict | None", after: dict,
                              allowed_by_target: dict | None) -> dict:
     """合并后**已授权**的改动被后处理改回/改写的清单（M02）.
 
     `merged` 是「合并后、后处理前」的快照（只含 LLM 的写入），`after` 是本轮结束时的
-    稿件。逐目标、逐授权路径比较两者的扁平化取值：凡授权路径上的值被后处理改动，
-    都记进来。
+    稿件。逐目标、逐授权路径比较两者的取值：凡授权路径上的值被后处理改动，都记进来。
 
     ⚠️ 这里**只记账、不改变接受判据**。接受与否仍由
     `_repair_acceptance_decision` 的既有闸门决定；把「后处理抵消」直接升级成拒绝，
     等于在没有判别证据的情况下改准入语义（须走 M09 的正式门禁裁决）。
-    已知适用面：`prompt` 这类会被后处理 writer 重写的聚合字段——S06/U6 实测里
-    模型对 `prompt` 的修复没有落到稿子上，而当时**没有任何台账记录**这件事。
+    已知适用面：`prompt` 这类会被后处理 writer 重写的聚合字段，以及
+    `frame_layouts.*` 这类会被约束层重建的列表——2026-11-12 复核要求两者都覆盖。
     """
-    from step01_script_gen.repair_fields import flatten_paths, path_allowed, shot_by_target
+    from step01_script_gen.repair_fields import path_allowed, shot_by_target
     out: dict = {}
     for tid, allowed in (allowed_by_target or {}).items():
         if not allowed:
@@ -6166,7 +6185,7 @@ def _authorized_changes_lost(merged: "dict | None", after: dict,
         _a = shot_by_target(after, tid)
         if not isinstance(_b, dict) or not isinstance(_a, dict):
             continue
-        _fb, _fa = flatten_paths(_b), flatten_paths(_a)
+        _fb, _fa = _flatten_exact_paths(_b), _flatten_exact_paths(_a)
         _lost = sorted(p for p, v in _fb.items()
                        if path_allowed(p, allowed) and _fa.get(p) != v)
         if _lost:
@@ -9054,11 +9073,21 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 责任粒度止于那一个约束），`repair_effects` 把本轮的只读效果视图交给约束，
         # 让「按类别别名重建一个已被授权删掉的条目」这件事在**写入侧**就被拦下。
         from step01_script_gen.constraints import run_hard_fix as _hfix
+        # 2026-11-12 复核：把**本轮被授权改写的镜头**告诉约束层。后处理不得把
+        # 授权修复改回去（`framing_jump` 曾把「大特写 → 大远景」替换回原值）。
+        _repair_indices = set()
+        for _tid in picked:
+            _bare = str(_tid)[5:] if str(_tid).startswith("shot_") else str(_tid)
+            try:
+                _repair_indices.add(int(_bare))
+            except (TypeError, ValueError):
+                continue
         try:
             script = _hfix(script, is_in_repair_loop=True, is_final_pass=False,
                            novel_text=novel_text,
                            on_constraint_done=_effect_ledger.observe_writer,
-                           repair_effects=_effect_view)
+                           repair_effects=_effect_view,
+                           repair_shot_indices=_repair_indices)
         except Exception as _hfx:
             # 同上：环境故障不降级（否则约束链没跑完仍继续往下走）
             from step01_script_gen.constraints.engine import ENV_FAULT_TYPES

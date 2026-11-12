@@ -148,6 +148,70 @@ def test_legitimate_candidate_refinement_keeps_baseline_green():
     assert codes_of(check_script_semantics(merged)) == []
 
 
+# ---------------------------------------------------------------------------
+# 过程载体必须**绑定到被质疑的因果**（2026-11-12 复核第二例）
+# ---------------------------------------------------------------------------
+def _causal_base() -> dict:
+    """起因 → 结果，没有过程载体、没有时间标记，结果已断言完成."""
+    return {
+        "chapter_outline": {
+            "causal_chain": ["起因：甲与乙约定赴城", "结果：乙已抵达城门"],
+            "narration_lines": [],
+            "main_events": [],
+        },
+        "shots": [
+            {"index": 1, "duration_sec": 5.0, "ff_desc": "院中，甲与乙相对而立",
+             "lf_desc": "甲拱手", "motion_desc": "甲拱手",
+             "prompt": "院中", "narration_segment": "", "context_bridge": ""},
+        ],
+        "total_duration": 5.0,
+    }
+
+
+def _add_shot(script: dict, shot: dict) -> dict:
+    out = copy.deepcopy(script)
+    out["shots"].append(shot)
+    out["total_duration"] = sum(float(s.get("duration_sec") or 0)
+                                for s in out["shots"])
+    return out
+
+
+def test_causal_verdict_is_not_changed_by_an_unrelated_process_shot():
+    """只加一镜无关的鸟，原问题（结果失去过程与时间依据）不得因此消失."""
+    base = _causal_base()
+    assert codes_of(check_script_semantics(base)) == ["causal_gap", "time_ellipsis_lost"]
+
+    with_bird = _add_shot(base, {
+        "index": 2, "duration_sec": 3.0, "ff_desc": "枯枝上停着一只鸟",
+        "lf_desc": "鸟振翅飞走", "motion_desc": "鸟停在枝头",
+        "prompt": "枯枝", "narration_segment": "", "context_bridge": "",
+        "keyframes": [{"t_sec": 1.0, "desc": "一只鸟停在枯枝"}],
+    })
+    codes = codes_of(check_script_semantics(with_bird))
+    assert codes == ["causal_gap", "time_ellipsis_lost"], codes
+
+    gap = next(f for f in check_script_semantics(with_bird)
+               if f["code"] == "causal_gap")
+    assert gap["severity"] == "advisory"
+    assert gap["carrier_evidence"] == []
+    assert gap["unlinked_carriers"] == ["shot:2"]
+
+
+def test_related_process_shot_does_exempt_the_reject():
+    """同一结果有**相关**过程载体时，才允许豁免拒收（只留结构 advisory）."""
+    base = _causal_base()
+    related = _add_shot(base, {
+        "index": 2, "duration_sec": 5.0, "ff_desc": "城门下空无一人",
+        "lf_desc": "乙站定城门下", "motion_desc": "前2秒：乙推门；后3秒：乙站定",
+        "prompt": "城门", "narration_segment": "", "context_bridge": "",
+    })
+    findings = check_script_semantics(related)
+    assert codes_of(findings) == ["causal_gap"], findings
+    gap = findings[0]
+    assert gap["carrier_evidence"] == ["shot:2"]
+    assert gap["unlinked_carriers"] == []
+
+
 def test_candidate_paths_reports_only_new_findings():
     family = _family("offscreen_voice")
     baseline_candidate = family["baseline"]["execution"]["candidate"]

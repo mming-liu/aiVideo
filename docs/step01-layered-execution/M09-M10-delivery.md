@@ -21,10 +21,10 @@
 | 模块 | 状态 | 交付物 / 证据 | 未完成部分 |
 |---|---|---|---|
 | **M01** 冻结证据与归因 | **完成（离线）** | `M01-evidence-and-attribution.md`、`tools/build_step01_call_index.py`、`artifacts/m01/call_index.{json,md}`、`tests/tools/test_step01_call_index.py`（4 条） | 当前 `time_ellipsis_legal` 未再真实发送 → 模型表现记为未验证 |
-| **M02** 修订入口 | **完成（离线）** | `M02-revision-entry.md`、`repair_fields.frame_layout_companions`、台账 `authorization`/`postprocess_reverted`、`tests/step01_script_gen/test_m02_revision_entry.py`（7 条）、`tools/build_m02_u6_candidate.py`、`artifacts/m02/*` | 真实模型遵从、多轮收敛未验证 |
+| **M02** 修订入口 | **完成（离线）** | `M02-revision-entry.md`、`repair_fields.frame_layout_companions`、台账 `authorization`/`postprocess_reverted`、`tests/step01_script_gen/test_m02_revision_entry.py`（7 条）、`tests/step01_script_gen/constraints/test_m02_postprocess_no_revert.py`（6 条）、`tools/build_m02_u6_candidate.py`、`artifacts/m02/*`；**复核第三轮**：两处后处理撤销已定位并修掉，U6 候选 `touched=5`、7 处变化、`postprocess_reverted={}`、投影 7/7 成立 | 真实模型遵从、多轮收敛未验证 |
 | **M03** 裁决与残余 | **完成（离线、影子）** | `M03-issue-ledger.md`、`step01_script_gen/issue_ledger.py`、`artifacts/m03/issue_status.{json,md}`、`tests/step01_script_gen/test_issue_ledger.py`（9 条）；**复核 P4**：`execution_semantics` 不再因缺「行动」标签拒收合法省略 | 未接进提交门（准入语义变更，走 §4 GATE） |
 | **M04** 共用执行绑定 | **既有能力，回归通过** | `shared/execution_contract.py`、`shared/execution_semantics.py`、`tests/shared/test_execution_contract.py` / `test_execution_semantics.py` | 未新增；绑定字段未覆盖 M02 新台账（两者职责不同，未合并） |
-| **M05** 画面计划与素材 | **部分（复核后已补主缺口）** | 画面计划：`step02a_frame_gen/execution_plan.py`（S03）；**计划已成为生成参数来源**（`execution.unit` + `verify_plan_execution` + `gen_all_frames` 消费，见 `review-round2-2026-11-12.md` §2）；素材 bank：`shared/assets_bank.py` | **缺素材导入工具**：无「来源/许可/摘要/用途/继承与排除/派生/候选状态」记录（§3 M05） |
+| **M05** 画面计划与素材 | **部分（复核后已补主缺口）** | 画面计划：`step02a_frame_gen/execution_plan.py`（S03）；**计划已成为生成参数来源**（`execution.unit` + `verify_plan_execution` + `gen_all_frames` 消费）；**复核第三轮补充**：`verify_plan_changes`（保护/授权/理由）与 `verify_plan_coverage`（镜头与帧覆盖），缺失即零调用拒收 | **缺素材导入工具**：无「来源/许可/摘要/用途/继承与排除/派生/候选状态」记录（§3 M05） |
 | **M06** 参考绑定与提示词 | **部分** | 首帧用途口径修正 + `tests/step02_video_gen/test_m06_reference_purpose.py`（3 条） | 提示词构建**早于**参考清单定稿，读不到最终列表（§3 M06） |
 | **M07** 声音与时长 | **既有能力，回归通过** | `shared/voice_preparation.py`、`step03_tts_audio/main.py`、`tests/step03_tts_audio/test_voice_preparation.py` | 真实 TTS 音色/质量未验证 |
 | **M08** 合并与恢复 | **既有能力，回归通过** | `step04_merge/timeline.py`、`tests/step04_merge/test_timeline_acceptance_s06.py`、`artifacts/s06/sample.mp4` | 真实成片、发布中断/并发事务未验证 |
