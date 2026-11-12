@@ -1,4 +1,6 @@
-# 版本化受控快照必须字节级保真。
-# baselines/.../manifest.json 里的 sha256 按原始字节计算；core.autocrlf=true 会在
-# checkout 时把 LF 改成 CRLF，导致干净 checkout 后 --verify 全部失配。
+# 版本化受控快照与三族夹具必须字节级保真。
+# 它们的 manifest.json 按文件原始字节记录 sha256；core.autocrlf=true 会在 add 时把
+# CRLF 规范化成 LF、在 checkout 时再转回 CRLF，两种方向都会让摘要失配。
+# -text 禁止任何 eol 转换，保证干净 checkout 后 --verify 与夹具字节校验仍成立。
 baselines/** -text
+tests/shared/fixtures/execution_contract/** -text
