@@ -1,8 +1,10 @@
 # 进度记录：S02 补齐 + S03–S08 离线贯通
 
 > 分支：`contract/step01-layered-execution`；基线 HEAD：`78ebbb1`（master 已合并）。
-> 全程离线：未发起真实/付费模型或媒体调用；未改正式门禁语义；未采纳正式产物；
-> 未执行 GATE；未做任何 git 写操作（提交由外部代理代做）。
+> 本轮施工全程离线：未发起真实/付费模型或媒体调用；未采纳正式产物；提交由外部代理代做。
+> **合并后口径（用户裁决 2026-11-12）**：代码统一覆盖原有 Step01 结果，系统只有一套行为，
+> 不区分生产/离线、正式/候选两套准入语义；逐项责任见 S07，上一版结果留档见
+> `baselines/2026-11-12-pre-layered/`。
 > Python：`C:/Users/ee54/AppData/Local/Python/pythoncore-3.14-64/python.exe`（3.14.2，
 > pytest 9.1.1）；所有 pytest 使用独立 `--basetemp` + `-p no:cacheprovider`。
 
@@ -15,7 +17,7 @@
 - [x] S04：冻结请求执行要求、片段映射、四类路由、桩响应贯通
 - [x] S05：四类声音来源、实测/窗口冲突、身份一致性、反馈
 - [x] S06：时间轴验收、合成后复核、可播放样片
-- [x] S07：候选重验、影子比较、正式门禁切换清单（不切换）
+- [x] S07：候选重验、同一冻结输入对照、责任与门禁现状（合并后统一生效）
 - [x] S08：离线差异/收益/未运行记录
 
 ## S02：执行合同补齐
@@ -110,7 +112,7 @@
 - **输入摘要**：Stub video manifest + 三族影子输入；S01 责任表。
 - **实现**：`shared/candidate_inputs.py::revalidate_candidate_inputs` 并在
   `step04_merge.timeline.resolve_merge_candidates` 消费前二次核对；
-  `tools/shadow_compare_step01_blockers.py`；正式门禁切换清单。
+  `tools/shadow_compare_step01_blockers.py`；合并后责任与门禁现状（S07）。
 - **命令/读数**：
   ```powershell
   python -m pytest tests/integration/test_s07_shadow_and_candidate_revalidation.py -q --basetemp=.pytest_tmp/s07_module -p no:cacheprovider
@@ -180,5 +182,6 @@ python -m pytest tests/shared/test_execution_contract.py `
 ## 剩余与下一步
 
 - 真实 Step01/02a/02b/TTS 验证需另行授权；建议按 S08 `not_run.md` 的止损条件执行。
-- 正式门禁切换需用户逐项裁决；本轮不执行。
+- 合并后系统只有一套行为；逐项责任与生效状态见 S07。Step01 提交门严重度未改写，
+  上一版结果留档见 `baselines/2026-11-12-pre-layered/`。
 - 旧产物/旧入口按兼容规则处理，未据此宣称新验收通过。

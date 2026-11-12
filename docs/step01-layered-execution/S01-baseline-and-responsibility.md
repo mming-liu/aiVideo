@@ -95,7 +95,7 @@ C:/Users/ee54/AppData/Local/Python/pythoncore-3.14-64/python.exe -m pytest `
 - `revision_route.route_decision` 走 `default`，不进入 carrier/source 专属修订；
 - `repair_targets=None`，`_collect_repair_warnings` 把它归入 `"global"`，`_repair_shot_warnings` 的 `shot_items` 只收 `shot_*`/`hook`，因此**不会**因这一条发起整镜定向重写；
 - 它仍会保留为 blocking，最终由提交点 BLOCK。这正是“诊断位置 ≠ 可执行修订位置”的现状：现行系统能阻止提交，但不能自动、合法地补内容。
-- 目标责任划分：Step01 不靠拉长镜头/补无依据内容凑 60s；S05 用实际 TTS 时长、S06 用真实媒体时间轴报告差额，内容确需变化时再回 Step01。正式门禁语义变更属于 S07 GATE，本轮不切换。
+- 目标责任划分：Step01 不靠拉长镜头/补无依据内容凑 60s；S05 用实际 TTS 时长、S06 用真实媒体时间轴报告差额，内容确需变化时再回 Step01。合并后由 S07 责任表统一记录；Step01 提交门严重度沿用配置事实源。
 
 **本轮实际执行的离线探针范围**：用构造的 9s 短稿调用
 `quality_issues._duration_budget_issues`、`is_blocking` 与 `revision_route.route_decision`，
@@ -149,7 +149,7 @@ D8 的 commit manifest 读数是验收案例，不是本轮实测。
 
 **R3 未知/缺口**：
 - 原始 R3 承诺文本、验收金标准与逐项责任人未在仓库内找到；本表不能替代原承诺核对。
-- `plan_preflight` / `fact_atomicity` 仍是影子路径；若 S03–S06 依赖它们作为生产门，必须先补接线与真实入口证据。
+- `plan_preflight` / `fact_atomicity` 仍未接入实际入口；若后续要依赖它们，必须先补接线与真实入口证据。
 - 本轮没有真实模型/媒体调用，不能证明模型对 `source_revision.v2` 或审计规则的遵从。
 
 ## 4. 三个样本族与实算摘要
@@ -181,7 +181,7 @@ D8 的 commit manifest 读数是验收案例，不是本轮实测。
 **未验证（本轮明确不做）**：
 - 任何真实 Step01/02a/02b/03/04 模型或媒体调用；本轮全部离线。
 - `plan_preflight` / `fact_atomicity` 的生产接线与真实入口行为。
-- 正式门禁语义切换、正式产物采纳、S07 GATE 裁决（只产出切换清单）。
+- 真实媒体样片之外的内容质量验证；正式产物采纳未执行。
 - ~~三个样本族的语义检查器尚未实现~~：**2026-11-12 已补齐**，见
   `shared/execution_semantics.py` 与 `tests/shared/test_execution_semantics.py`
   （11 passed；基线过、变异六个 code 自动检出）。
@@ -190,5 +190,5 @@ D8 的 commit manifest 读数是验收案例，不是本轮实测。
 **下一步**：
 1. S03 消费 S02 的绑定/变化接口，把 `visual_plan.json` 作为候选产物；用 `offscreen_voice` 族做“画外声音错误出镜”入口反例。
 2. S05/S06 用 `voice_timing` 族把实际 TTS 时长与窗口冲突、原生对轨核验接入执行预算/时间轴。
-3. S07 在 master 合并后接通候选链路，逐项记录原 Step01 阻断在下游的接收与终局；正式门禁切换仍需逐项 GATE。
+3. S07 已随合并接通候选链路并逐项记录原 Step01 阻断在下游的接收与终局；合并后责任现状见 S07。
 4. 若要证明 R3 的生产行为，补真实入口或冻结回放证据；不要用本轮 67 passed 代替。

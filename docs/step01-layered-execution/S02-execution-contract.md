@@ -1,7 +1,7 @@
 # S02：`shared/execution_contract.py` 执行合同（R1/R2/R3 补齐）
 
 > 本文件记录 S02 的实现语义、真实装载入口、自动语义检查器、绕过封堵与离线读数。
-> 未改变 Step01 正式门禁语义，未采纳正式产物，未发起模型/媒体调用。
+> 未改写 Step01 提交门严重度，未采纳正式产物，未发起模型/媒体调用。合并后系统只有一套行为，本合同的检查对所有调用一致生效。
 > S01 的责任表与样本族见 [S01-baseline-and-responsibility.md](S01-baseline-and-responsibility.md)。
 >
 > 本轮补齐上一轮四个缺口：真实非测试调用点、`expected.codes` 自动检查器、
@@ -187,10 +187,10 @@ C:/Users/ee54/AppData/Local/Python/pythoncore-3.14-64/python.exe -m pytest `
 
 - **已接入真实入口**：Step02a `--plan-only` 与真实生成前都构建/重验绑定；S04 冻结请求
   带 `requirements.execution`；S05/S06 消费各自报告。合同从「存在」变为「入口强制」。
-- **不改正式门禁语义**：`shared/execution_contract.py` 不修改 Step01 的 quality/audit/
-  commit 判定；正式切换清单属于 S07（只产出清单，不执行切换）。
+- **Step01 判定逻辑未改写**：`shared/execution_contract.py` 不修改 Step01 的 quality/audit/
+  commit 判定；合并后已生效的责任现状见 S07。
 - **旧产物**：没有 `execution_binding.v1` 字段的旧产物按旧入口规则处理，不能据此认定
-  已通过新验收（S07 迁移时显式选择正式/候选输入）。
+  已通过新验收（入口显式指定输入来源，并在消费前复核摘要）。
 - **语义限制**：`validate_execution_changes` 只能证明字段/权限/摘要层面；台词改写、
   事实等价、因果是否成立等自然语言判断仍由内容合同与人工/模型复核承担。
 - **受验证字段不是禁止细化**：合法执行细化仍可改 `prompt`/构图，但必须由真实入口

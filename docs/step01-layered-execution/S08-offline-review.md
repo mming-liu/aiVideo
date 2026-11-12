@@ -8,11 +8,11 @@
 | 交付 | 路径 |
 |---|---|
 | 语义稿 vs 执行计划差异 | `artifacts/s08/semantic_execution_diff.md` / `.json` |
-| 现行 vs 新责任影子比较 | `artifacts/s08/shadow/shadow_compare.md` / `.json` |
+| 现行 vs 新责任对照 | `artifacts/s08/shadow/shadow_compare.md` / `.json` |
 | 收益指标表 | `artifacts/s08/benefit_metrics.md` / `.json` |
 | 未运行记录与真实验证建议 | `artifacts/s08/not_run.md` |
 | 可播放样片（S06） | `artifacts/s06/sample.mp4` + `timeline_acceptance.json` |
-| 正式门禁切换清单（只清单） | `S07-formal-gate-switch-checklist.md` |
+| 责任与门禁现状（合并后已生效） | `S07-formal-gate-switch-checklist.md` |
 
 ## 2. 工程贯通读数（离线代理）
 
@@ -42,7 +42,7 @@
 - Step02a：未运行；先 plan-only 核帧数，再按帧数/重抽上限小范围执行；
 - Step02b：未运行；每次付费调用须人工确认，不得用桩结果冒充；
 - TTS：未运行；保留旧音频分支，先复用再比较；
-- 正式门禁切换/正式产物采纳：未执行，需用户裁决。
+- 正式产物采纳：未执行。合并后责任与门禁现状见 S07。
 
 ## 5. 复现
 
