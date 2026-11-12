@@ -1322,3 +1322,146 @@ def apply_scoped_field_updates(
         out["duration_sec"] = out["duration"]
 
     return out, ""
+
+
+# ---------------------------------------------------------------------------
+# S04（2026-11-11）：**关联检查范围**与**回读**
+# ---------------------------------------------------------------------------
+# 问题不在「授权面太窄」，而在「授权面只覆盖被点名的那一处」：改首帧准备态时，
+# 首帧布局（`frame_layouts.ff`）与对应关键帧是**同一件事的另一半**。此前这一半既不
+# 进提示、也不在验收里单独回读，于是模型只改描述 → 布局与描述不一致 → 下一轮审计
+# 报「跨字段矛盾」→ 又变成一条新问题。
+#
+# 这里只提供**确定性的检查面**：哪些字段必须一起核对。授权面仍由
+# `allowed_repair_fields` 决定——检查面 ≠ 授权面，二者不得混用。
+
+_FRAME_DESC_TO_LAYOUT = {"ff": "frame_layouts.ff", "lf": "frame_layouts.lf"}
+
+
+def _kf_index(path: str) -> "int | None":
+    """`keyframes[N].desc` / `frame_layouts.kfs[N]...` → N；其它返回 None."""
+    m = re.match(r"^(?:keyframes|frame_layouts\.kfs)\[(\d+)\]", str(path or "").strip())
+    return int(m.group(1)) if m else None
+
+
+def _desc_path_of_frame(frame_id: str, kf_index: "int | None" = None) -> str:
+    if frame_id == "ff":
+        return "ff_desc"
+    if frame_id == "lf":
+        return "lf_desc"
+    if frame_id.startswith("kf") and kf_index is not None:
+        return "keyframes[%d].desc" % kf_index
+    return ""
+
+
+def related_check_fields(paths, shot: dict) -> dict:
+    """授权路径 → **必须一起核对**的关联字段（S04）.
+
+    只返回该镜头里**真实存在**的路径：关联字段不存在时不给死路径（否则回读永远
+    是「未变」，看起来像通过）。
+
+    映射是结构性的，不依赖具体作品：
+      · `ff_desc` / `lf_desc`             → 同帧布局列表 `frame_layouts.ff` / `.lf`
+      · `keyframes[N].desc`               → `frame_layouts.kfs[N]`、`keyframes[N].stage`
+      · `keyframes[N].stage`              → `keyframes[N].desc`、`frame_layouts.kfs[N]`
+      · `frame_layouts.ff` / `.lf`（含条目）→ 对应描述字段
+      · `frame_layouts.kfs[N]`（含条目）  → `keyframes[N].desc`
+      · 任意 `*.props`                    → 同一帧的描述字段（道具状态是两侧的事）
+    """
+    out: dict = {}
+    for raw in sorted({str(p).strip() for p in (paths or []) if str(p).strip()}):
+        related: list = []
+        norm = _norm_keep_index(raw)
+        base = norm.split(".")[0]
+        kf = _kf_index(raw)
+        if base == "ff_desc":
+            related.append("frame_layouts.ff")
+        elif base == "lf_desc":
+            related.append("frame_layouts.lf")
+        elif base == "keyframes" and kf is not None:
+            related.extend(["frame_layouts.kfs[%d]" % kf,
+                            "keyframes[%d].stage" % kf])
+        elif base == "frame_layouts":
+            parts = norm.split(".")
+            frame = parts[1] if len(parts) > 1 else ""
+            if frame in _FRAME_DESC_TO_LAYOUT:
+                related.append(_desc_path_of_frame(frame))
+            elif frame == "kfs" and kf is not None:
+                related.append("keyframes[%d].desc" % kf)
+        if norm.endswith("props"):
+            parts = norm.split(".")
+            frame = parts[1] if len(parts) > 1 else ""
+            if frame in _FRAME_DESC_TO_LAYOUT:
+                related.append(_desc_path_of_frame(frame))
+            elif frame == "kfs" and kf is not None:
+                related.append("keyframes[%d].desc" % kf)
+        keep = []
+        for path in related:
+            # 用**归一形态**比较：目标写 `keyframes[0].stage`，关联列表里可能写成
+            # `keyframes.0.stage`；直接比字符串会把目标自己当成关联字段。
+            if path and _norm_keep_index(path) != norm and path not in keep \
+                    and _path_exists_in_shot(path, shot):
+                keep.append(path)
+        if keep:
+            out[raw] = keep
+    return out
+
+
+def _read_path_value(shot: dict, path: str):
+    cur = shot
+    for seg in _norm_keep_index(path).split("."):
+        if isinstance(cur, dict):
+            if seg not in cur:
+                return _MISSING
+            cur = cur[seg]
+        elif isinstance(cur, list):
+            if not seg.isdigit() or int(seg) >= len(cur):
+                return _MISSING
+            cur = cur[int(seg)]
+        else:
+            return _MISSING
+    return cur
+
+
+def related_readback(before: dict, after: dict, related: dict) -> dict:
+    """目标与关联字段的**回读**（S04）：只报事实，不判语义.
+
+    语义是否真的修好，由重验（`collect_structured_issues` / 提交点审计）判定；
+    这里回答两件事：① 目标字段本身变没变；② 关联字段跟着变没变。
+    「目标变了、关联字段没变」＝半条修复，调用方据此点名范围不足。
+    """
+    rows: list = []
+    per_target: dict = {}
+    for target, paths in (related or {}).items():
+        _old_t = _read_path_value(before, target)
+        _new_t = _read_path_value(after, target)
+        target_changed = (_old_t is _MISSING or _new_t is _MISSING
+                          or _old_t != _new_t)
+        changed_n = 0
+        unchanged_fields: list = []
+        changed_fields: list = []
+        for path in paths:
+            old = _read_path_value(before, path)
+            new = _read_path_value(after, path)
+            changed = old is _MISSING or new is _MISSING or old != new
+            if changed:
+                changed_n += 1
+                changed_fields.append(path)
+            else:
+                unchanged_fields.append(path)
+            rows.append({"target": target, "field": path, "changed": bool(changed)})
+        per_target[target] = {
+            "target_changed": bool(target_changed),
+            "checked": len(paths),
+            "changed": changed_n,
+            "unchanged": len(paths) - changed_n,
+            "changed_fields": changed_fields,
+            "unchanged_fields": unchanged_fields,
+        }
+    return {
+        "checked": len(rows),
+        "changed": sum(r["changed"] for r in rows),
+        "unchanged": len(rows) - sum(r["changed"] for r in rows),
+        "rows": rows,
+        "targets": per_target,
+    }

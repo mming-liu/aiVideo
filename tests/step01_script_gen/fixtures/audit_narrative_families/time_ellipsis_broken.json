@@ -1,0 +1,49 @@
+{
+  "family": "time_ellipsis",
+  "case_id": "broken_time_jump_drops_causal_link",
+  "expected": {
+    "verdict": "defect",
+    "defect_class": "unclear",
+    "discriminating": ["context_bridge", "narration_segment"],
+    "why": "时间跳跃本身合法，但被省略的恰恰是观众必须知道的关系：乙是送信人，三日后却跪在敌营、信在敌方案上——「送出/被擒/投敌」这三种可能，前文一句都没交代，观众无法判断乙的立场。这是信息缺失，不是「时间跳跃不合法」。",
+    "must_preserve": ["乙接过信", "信在第三日后位于敌营案上", "乙的立场仍需可推断"]
+  },
+  "novel": "甲把密信交给乙，命他连夜送出。三日后，敌营中军帐里，乙跪在案前，案上摊着那封密信。",
+  "plan": {},
+  "script": {
+    "shots": [
+      {
+        "index": 1, "duration_sec": 6.0, "main_subject": "甲与乙",
+        "scene": "堂内·夜", "location": "堂内", "clip_transition": "硬切",
+        "context_bridge": "",
+        "ff_desc": "甲把一封信递向乙",
+        "lf_desc": "乙接过信，转身出门",
+        "motion_desc": "前3秒：甲递信；后3秒：乙接信转身",
+        "prompt": "[中景] 堂内，甲把密信递给乙，乙接过转身",
+        "narration_segment": "甲：连夜送出，不得有误。",
+        "frame_layouts": {"ff": [{"name": "甲", "on_screen": true, "position": "案前", "pose": "递信", "gaze_target": "乙", "props": ["密信"]},
+                                 {"name": "乙", "on_screen": true, "position": "堂中", "pose": "伸手", "gaze_target": "密信", "props": []}],
+                          "lf": [{"name": "甲", "on_screen": true, "position": "案前", "pose": "站立", "gaze_target": "门口", "props": []},
+                                 {"name": "乙", "on_screen": true, "position": "门口", "pose": "转身", "gaze_target": "门外", "props": ["密信"]}],
+                          "kfs": []},
+        "keyframes": []
+      },
+      {
+        "index": 2, "duration_sec": 6.0, "main_subject": "乙",
+        "scene": "敌营中军帐", "location": "帐内", "clip_transition": "淡出黑场，0.5s",
+        "context_bridge": "三日后",
+        "ff_desc": "乙跪在案前，案上摊着一封拆开的信",
+        "lf_desc": "乙伏地不动",
+        "motion_desc": "前3秒：乙跪定；后3秒：乙伏地",
+        "prompt": "[中景] 敌营帐内，乙跪在案前，案上摊着拆开的密信",
+        "narration_segment": "",
+        "frame_layouts": {"ff": [{"name": "乙", "on_screen": true, "position": "案前", "pose": "跪", "gaze_target": "地面", "props": []}],
+                          "lf": [{"name": "乙", "on_screen": true, "position": "案前", "pose": "伏地", "gaze_target": "地面", "props": []}],
+                          "kfs": []},
+        "keyframes": []
+      }
+    ],
+    "hook": null,
+    "total_duration": 12.0
+  }
+}

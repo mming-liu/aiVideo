@@ -541,6 +541,18 @@ def _write_budget_receipt(out_root: Path, pkg_path: Path, pkg: dict, *,
         "send_state": send_state,
         "sends_source": "attempts" if attempts_known else "unknown",
         "remaining_after": remaining_after,
+        # S05（2026-11-11）：三个预算读数**分别标来源**。收据此前只有数字：
+        # 「包内声明的初始额度」「授权已用量」「扣掉本次发送后的剩余」三者在同一层
+        # 平铺，读数的人分不清哪个是事实、哪个是派生。
+        "budget_sources": {
+            "authorized_total": "package.budget.authorized_total",
+            "used_before": "package.budget.used",
+            "remaining_before": "package.budget.remaining",
+            "sends": "attempts" if attempts_known else "unknown",
+            "remaining_after": ("derived: remaining_before - sends"
+                                if remaining_after is not None else "unknown"),
+            "audit_status": "commit_summary.audit_status" if summary.get("audit_status") else "unknown",
+        },
         "audit_status": summary.get("audit_status"),
         "verdict": summary.get("status"),
         "commit_status": summary.get("status"),

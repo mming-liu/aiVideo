@@ -10,7 +10,7 @@
     "quality_report": "tests/step01_script_gen/fixtures/step01_audit_min/quality.json",
     "quality_sha256": "319185260c07cfff6cc8788d90682d7221db66d2fc31361d6bf648ab7a6acd5e",
     "quality_status": "PASS",
-    "revision": "9a02374ddea3f4ff4cc85ab46081f911f0030190d7dfd0c90de796df19d2aca2",
+    "revision": "52a3d3559802e92b712192da6ef7ad8e0f98b7c310e2affd0e9dd935012670c3",
     "shot_count": 12
   },
   "effective_config": {
@@ -34,8 +34,8 @@
     "status": "fixture"
   },
   "audit_contract": {
-    "rule_source_fingerprint": "fe260ed333647ca7",
-    "audit_prompt_version": "adb3e6fe905c",
+    "rule_source_fingerprint": "df0dbf3fa10ee903",
+    "audit_prompt_version": "365141f9f5cc",
     "duration_band": {
       "min": 60,
       "max": 120,

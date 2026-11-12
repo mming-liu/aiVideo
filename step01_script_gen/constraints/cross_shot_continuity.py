@@ -1,13 +1,14 @@
 """K2. 跨镜衔接约束（v6.51 新增）.
 
 扫描相邻镜头对，检测 4 类衔接问题：
-  1. scene 切换缺转场：场景变了但 clip_transition 是硬切 → 改淡入淡出
+  1. scene 切换缺转场：场景变了但 clip_transition 为空 → 补中性「硬切」；
+     已有显式转场（含硬切）**不改写**（S02：硬切是合法剪辑表达）
   2. LF→FF 状态跳变：上镜 LF 角色终态 vs 下镜 FF 同角色初态，明显矛盾 → WARN
   3. narration 连续重复：相邻镜 narration_segment 重复度 > 70% → WARN
   4. LF 同态重复：相邻镜 LF 描述同主题（如 shot10/10.5 都写"马车驶出"）→ WARN
 
-severity=WARN：只标记+确定性修复（转场补填），不触发 regen。
-幂等：修复后 shot 含修复标记（转场已是淡入淡出/已加 transition note）。
+severity=WARN：只标记+确定性修复（补空转场），不触发 regen。
+幂等：修复后 shot 含修复标记（转场已显式声明）。
 """
 from __future__ import annotations
 
@@ -58,7 +59,7 @@ class CrossShotContinuityConstraint(Constraint):
             if not isinstance(curr, dict) or not isinstance(next_shot, dict):
                 continue
 
-            # --- 检测 1: 场景切换缺转场（scene 不同 OR location 空间词切换） ---
+            # --- 检测 1: 场景切换处的转场声明（S02：不再替换合法硬切） ---
             curr_scene = curr.get("scene", "") or ""
             next_scene = next_shot.get("scene", "") or ""
             curr_loc = curr.get("location", "") or ""
@@ -66,10 +67,12 @@ class CrossShotContinuityConstraint(Constraint):
             is_scene_diff = bool(curr_scene and next_scene and curr_scene != next_scene)
             is_loc_switch = self._is_location_space_switch(curr_loc, next_loc)
             if is_scene_diff or is_loc_switch:
-                ct = next_shot.get("clip_transition", "") or ""
-                if "硬切" in ct or not ct:
-                    old_ct = ct
-                    next_shot["clip_transition"] = "淡入淡出，0.5s"
+                ct = (next_shot.get("clip_transition", "") or "").strip()
+                if not ct:
+                    # 只补一个**不宣称软过渡**的中性值：硬切是合法表达，缺省时它是最少
+                    # 断言的一种。此前这里写「淡入淡出，0.5s」，等于替创作者决定剪辑
+                    # 方式，还把「场景变了」误当成「需要柔性转场」。
+                    next_shot["clip_transition"] = "硬切"
                     if is_scene_diff:
                         detail = f"场景切换：{curr_scene} → {next_scene}"
                     else:
@@ -80,11 +83,13 @@ class CrossShotContinuityConstraint(Constraint):
                             shot_index=next_shot.get("index"),
                             action="fix_transition",
                             target="clip_transition",
-                            before=old_ct or "（空）",
-                            after="淡入淡出，0.5s",
+                            before="（空）",
+                            after="硬切",
                             detail=detail,
                         )
                     )
+                # 已有显式转场（含「硬切」）→ 合法的剪辑表达，不改写、不记缺陷。
+                # 淡入淡出同样不证明因果或时间关系成立，故也不据此判「已修好」。
 
             # --- 检测 2: LF→FF 状态跳变（WARN-only，不硬改） ---
             curr_lf = curr.get("lf_desc", "") or ""

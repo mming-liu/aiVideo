@@ -375,3 +375,15 @@ output_step01_*/
 !tests/step01_script_gen/test_concurrent_extract_timeout.py
 !tests/step04_merge/test_ffmpeg_timeout.py
 !tests/step01_script_gen/test_scene_compliance_narration_coverage.py
+# 2026-11-11（Step01 S01–S05）：审计上下文补齐、影子裁决、内容身份与关联检查的
+# 离线回归——沿用逐条放行，不放开整个目录。
+!tests/step01_script_gen/test_audit_narrative_context.py
+!tests/step01_script_gen/test_audit_adjudication.py
+!tests/step01_script_gen/test_audit_content_identity.py
+!tests/step01_script_gen/test_repair_related_fields.py
+# 2026-11-11：S01 内容与裁决基线（交付物）。
+!docs/step01-s01-audit-baseline-2026-11-11.md
+# 2026-11-12：S06 有限对照报告（交付物）。
+!docs/step01-s06-contract-ab-2026-11-12.md
+# 2026-11-12（Step01 S07）：重复文本 / 景别矛盾 / 道具与状态链的确定性检查回归。
+!tests/step01_script_gen/test_script_findings.py

@@ -2805,6 +2805,39 @@ def _final_audit_identity(script: dict, novel_text: str, plan: "dict | None",
         metadata=_final_audit_metadata(script, run_id=run_id), model=model)
 
 
+def _final_audit_source_identity(script: dict, novel_text: str, plan: "dict | None",
+                                 model: "str | None" = None) -> str:
+    """**来源身份**：不含定向项（focus）的内容身份，供恢复入口在**不重建质量门**时核对.
+
+    为什么需要第二把尺子（S05，2026-11-11）：完整请求身份包含 `audit_focus`，而
+    focus 由当轮确定性质量门派生——恢复入口 dry-run 不允许重跑质量门（那会拉起
+    配置与检查器），于是它算不出完整身份，只能退回「revision + 指纹」这几条弱判据，
+    **原文或计划换了也照样复用**。来源身份覆盖「原文 + 计划 + 送审稿 + 规则/提示版本
+    + 时长带 + 通道/模型」，这些在恢复时全都可以从冻结清单与快照重算。
+    """
+    import hashlib as _hashlib
+    import json as _json
+    from shared.quality_gate import compute_script_revision
+    from step01_script_gen.audit import audit_prompt_version, resolve_audit_channel
+
+    _provider, _chan_model = resolve_audit_channel()
+    blob = {
+        "novel_sha256": _hashlib.sha256((novel_text or "").encode("utf-8")).hexdigest(),
+        "plan": plan or {},
+        "script_revision": compute_script_revision(script),
+        "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
+        "prompt_source_fingerprint": PROMPT_SOURCE_FINGERPRINT,
+        "audit_scope": STEP01_AUDIT_SCOPE,
+        "audit_prompt_version": audit_prompt_version(),
+        "duration_band": duration_band(),
+        "channel_provider": _provider or "",
+        "model": _chan_model or model or "",
+    }
+    return _hashlib.sha256(
+        _json.dumps(blob, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
 def _memoizable_final_audit(audit: "dict | None") -> "dict | None":
     """可进「循环内复用」memo 的审计结论——**只有真的跑出结论的**才返回原对象.
 
@@ -2833,6 +2866,9 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
     from step01_script_gen.audit import run_same_model_audit_with_status
 
     metadata = _final_audit_metadata(script, run_id=run_id)
+    # 定向项只解析一次：请求里发的那一份、身份里算的那一份必须是同一份，
+    # 否则「身份相同」与「请求逐字相同」会分家（S05）。
+    _focus_now = focus or _final_audit_focus(script, None)
     _metrics_inc("calls.final_audit")
     _allow, _deadline, _to_info = _audit_budget_allowance()
     _logger.info("[AUDIT] 本次审计可用 %ss（%s）｜总预算剩余 %s 秒｜截止时刻 %s"
@@ -2843,7 +2879,7 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
         novel_text, plan, script, model=model,
         timeout_sec=int(_to_info.get("cap") or AUDIT_TIMEOUT_CAP_SEC),
         deadline_ts=_deadline,
-        audit_focus=focus or _final_audit_focus(script, None),
+        audit_focus=_focus_now,
         metadata=metadata,
     )
     # v6.134：parse_failed 有界重试后的**真实**调用次数（audit.AuditResult.attempts）。
@@ -2856,9 +2892,12 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
     if _deviations:
         _logger.warn("[AUDIT] 响应体与 AUDIT_SCHEMA 有偏离（已归一，结论仍可用）: "
                      + "；".join(_deviations))
-    return {
+    payload = {
         **metadata,
         "status": result.status,
+        # S05（2026-11-11）：同一事实用**同一个名字**贯穿三处（审计 payload / 提交摘要 /
+        # 预算收据）。`status` 保留给既有消费者；`audit_status` 是贯通字段。
+        "audit_status": result.status,
         "model": getattr(result, "channel_model", "") or model,
         "channel_provider": getattr(result, "channel_provider", "") or "",
         "schema_deviations": _deviations,
@@ -2893,9 +2932,45 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
         **({"completion": getattr(result, "completion", None)}
            if getattr(result, "completion", None) is not None else {}),
     }
+    # S05（2026-11-11）：把「这条结论对应哪一份请求」写进产物本身。
+    #   · `content_identity` = 完整请求身份（含定向项），提交循环据此判复用；
+    #   · `source_identity`  = 不含定向项的内容身份，恢复入口据此判失配。
+    # 两者都是**内容**身份：`run_id` 已从请求字节里剔除（见 `audit._DIAGNOSTIC_METADATA_KEYS`），
+    # 同一份冻结输入重跑得到同一个值。
+    payload["content_identity"] = _final_audit_identity(
+        script, novel_text, plan, _focus_now, model, run_id)
+    payload["source_identity"] = _final_audit_source_identity(
+        script, novel_text, plan, model)
+    # S03：影子裁决报告（诊断产物，不参与准入、不改写 payload）
+    _write_audit_adjudication(payload, script)
+    return payload
 
 
 _AUDIT_DIAG_NAME = "step01_audit_rounds.json"
+#: S03（2026-11-11）：影子裁决报告的产物名。**诊断产物**：不参与准入、不被
+#: `_reusable_final_audit` 读取，也不影响 blocking 计数——正式采纳仍由现行门禁决定。
+_ADJUDICATION_NAME = "step01_audit_adjudication.json"
+
+
+def _write_audit_adjudication(audit: dict, script: dict) -> None:
+    """把本轮审计结论写成影子裁决报告（S03）.
+
+    失败一律只 WARN：裁决报告是**诊断**，不能因为它写不出去就改变本轮结论。
+    处置语义见 `step01_script_gen.audit_adjudication` 的模块文档。
+    """
+    _off = str(os.getenv("STEP01_AUDIT_ADJUDICATION", "1") or "").strip().lower()
+    if _off in ("0", "false", "off", "no"):
+        return
+    try:
+        from step01_script_gen.audit_adjudication import (
+            build_shadow_report, dump_report, render_report_text)
+        report = build_shadow_report(audit, script, context={"source": "final_audit"})
+        dump_report(CHAPTER_DIR / _ADJUDICATION_NAME, report)
+        _logger.info(render_report_text(report).replace("\n", " ｜ "))
+    except Exception as exc:
+        _logger.warn(f"[ADJUDICATION] 影子裁决报告写入失败（不影响结论）: {exc}")
+
+
 # 台账保留条数：单条约等于一次审计的完整 issue 列表（约 10KB），40 条 ≈ 400KB 封顶。
 _AUDIT_DIAG_KEEP = max(5, int(os.getenv("AUDIT_DIAG_KEEP", "40") or "40"))
 
@@ -3046,15 +3121,28 @@ def _record_repair_diag(*, run_id: str, attempt: int, records: list) -> None:
         _logger.warn(f"[REPAIR] 修复轮诊断台账写入失败（不影响结论）: {exc}")
 
 
-def _reusable_final_audit(script: dict) -> "dict | None":
+def _reusable_final_audit(script: dict, *, expected_identity: "str | None" = None,
+                          expected_source_identity: "str | None" = None) -> "dict | None":
     """旧审计可复用的条件：**revision + 规则指纹 + audit scope 全部相同且为 ok**.
 
     总计划 §1.1 的既定决策。三者任一不同都必须重新审计——否则等于拿旧规则/旧稿
     的结论给新稿盖章。`created_at`/`run_id` 只是诊断字段，不参与复用判定。
+
+    S05（2026-11-11）：上述三条**只看稿子与规则，看不到原文和计划**。同一份分镜
+    配上不同原文、或计划换了，revision 与指纹都可能一致，于是旧结论照样被复用。
+    现在把内容身份并进判据：
+
+      · `expected_identity`        —— 完整请求身份（提交循环用，含定向项）；
+      · `expected_source_identity` —— 不含定向项的来源身份（恢复入口用）。
+
+    给了期望身份就**必须逐字相符**；旧审计没有身份字段时判「复用证据不足」并拒收，
+    **不得**退回 revision 弱判据冒充核验。不给期望身份只保留给历史调用与单测
+    （生产入口必须传）。
     """
     from shared.quality_gate import compute_script_revision
 
     revision = compute_script_revision(script)
+    _reject_reason = ""
     # v6.109（总计划 §1.3「同一 revision 不通过反复调用 full audit 获取一次偶然
     # PASS」）：BLOCK 时审计其实**已经跑过**并给出了未决条目，只是没写成正式产物。
     # 若下一次运行又拿到同一 revision，重新调用全量审计就是抽签——两次审计结论不同
@@ -3076,6 +3164,24 @@ def _reusable_final_audit(script: dict) -> "dict | None":
         # 只复用**真的跑出结论**的审计；调用失败（超时/解析失败）不得被冻结复用。
         if str(audit.get("status") or "").strip().lower() != "ok":
             continue
+        # S05：内容身份（原文/计划/送审稿/契约/定向项）——给了期望值就必须逐字相符。
+        # 旧审计没有这个字段 ⇒ 复用证据不足，明确拒收（不退回弱判据）。
+        if expected_identity is not None:
+            _got = str(audit.get("content_identity") or "").strip()
+            if not _got:
+                _reject_reason = _reject_reason or "旧审计缺少 content_identity（复用证据不足）"
+                continue
+            if _got != expected_identity:
+                _reject_reason = _reject_reason or "content_identity 不匹配（原文/计划/定向项/契约已变）"
+                continue
+        if expected_source_identity is not None:
+            _got_src = str(audit.get("source_identity") or "").strip()
+            if not _got_src:
+                _reject_reason = _reject_reason or "旧审计缺少 source_identity（复用证据不足）"
+                continue
+            if _got_src != expected_source_identity:
+                _reject_reason = _reject_reason or "source_identity 不匹配（原文/计划/契约已变）"
+                continue
         if str(audit.get("input_revision") or "").strip() != revision:
             continue
         if str(audit.get("rule_source_fingerprint") or "").strip() != RULE_SOURCE_FINGERPRINT:
@@ -3104,6 +3210,8 @@ def _reusable_final_audit(script: dict) -> "dict | None":
             if str(audit.get("model") or "").strip() != _chan_model:
                 continue
         return audit
+    if _reject_reason:
+        _logger.warn("[COMMIT] 旧审计不可复用：%s" % _reject_reason)
     return None
 
 
@@ -3746,7 +3854,11 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             _reuse_source = "in_loop"
             _audit_reused = True
         else:
-            audit = _reusable_final_audit(script)
+            # S05：把**内容身份**一起交给复用判定（原文/计划/定向项/契约都要对上）
+            audit = _reusable_final_audit(
+                script, expected_identity=_audit_identity,
+                expected_source_identity=_final_audit_source_identity(
+                    script, novel_text, plan, audit_model))
             _audit_reused = audit is not None
             if _audit_reused:
                 _reuse_source = "disk"
@@ -4044,6 +4156,11 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         blocking = blocking or [{"code": "revision_changed_after_audit",
                                  "severity": "blocking", "message": summary["detail"]}]
 
+    # S05（2026-11-11）：审计的**实际结论状态**贯通到提交摘要、提交清单与额度收据。
+    # 此前它只在 BLOCK 分支里作为局部变量存在，COMMITTED 的 `step01_commit.json`
+    # 因此写着空 `audit_status`——事后无法区分「审计跑成功」与「没有可用审计」。
+    summary["audit_status"] = str((audit or {}).get("status") or "")
+
     if blocking or not audit_ok:
         summary["blocking"] = blocking
         summary["detail"] = summary["detail"] or (
@@ -4062,6 +4179,8 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         blocking, _audit_status, _audit_call_failed = _terminal_blocking_records(
             audit, blocking)
         summary["blocking"] = blocking
+        # S05：终局状态以**本次实际审计**为准（含「调用失败」这类非 ok 值）
+        summary["audit_status"] = _audit_status
         if _audit_call_failed:
             summary["last_known_blocking"] = _stale_blocking
             summary["last_known_blocking_note"] = (
@@ -4158,7 +4277,10 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             rule_source_fingerprint=RULE_SOURCE_FINGERPRINT,
             rule_version=RULE_VERSION, audit_scope=STEP01_AUDIT_SCOPE,
             prompt_source_fingerprint=PROMPT_SOURCE_FINGERPRINT,
-            chapter_dir=CHAPTER_DIR, status="COMMITTED")
+            chapter_dir=CHAPTER_DIR, status="COMMITTED",
+            # S05：COMMITTED 也记审计实际状态——空字符串只表示「没有可用审计」，
+            # 不能和「审计跑成功」混为一谈。
+            audit_status=str(summary.get("audit_status") or ""))
         write_step01_commit_manifest(CHAPTER_DIR, manifest)
         # 正式路径再自验一次（含 manifest）
         committed_script = json.loads(OUTPUT_FILE.read_text(encoding="utf-8"))
@@ -5500,6 +5622,35 @@ def _apply_shot_replacements(script: dict, replacements: list,
                     f"[REPAIR] shot {sid}: 授权字段实际改动 {len(_changed)} 处 "
                     f"（keyframes {_kf_delta[0]}->{_kf_delta[1]}）: {_changed[:8]}"
                 )
+            # S04（2026-11-11）：**关联字段回读**。改首帧准备态时，首帧布局与对应
+            # 关键帧是同一件事的另一半；只改描述会让两者不一致，下一轮审计再报一条
+            # 「跨字段矛盾」。这里把「哪些关联字段跟着变了」记进台账——语义是否真的
+            # 修好仍由重验与提交点审计判定，这里不代替它们下结论。
+            try:
+                from step01_script_gen.repair_fields import (
+                    related_check_fields as _rcf, related_readback as _rrb)
+                _rel = _rcf(allowed, target)
+                if _rel:
+                    _rb = _rrb(target, new_shot, _rel)
+                    _logger.info(
+                        "[REPAIR] shot %s: 关联字段回读 %d 处（变 %d / 未变 %d）: %s"
+                        % (sid, _rb["checked"], _rb["changed"], _rb["unchanged"],
+                           [r["field"] for r in _rb["rows"] if r["changed"]][:6]))
+                    # S04「越权回填」：模型改了关联字段、但那条路径不在本轮授权面里，
+                    # 于是被原样回填。这里只报**事实**（请求过、已回填）；「该字段是否
+                    # 确实需要改」由重验与提交点审计判定，不由这条日志下结论。
+                    _related_all = {q for ps in _rel.values() for q in ps}
+                    _gap = [p for p in (_echoed or [])
+                            if any(p == q or p.startswith(q + ".") or q.startswith(p + ".")
+                                   for q in _related_all)]
+                    if _gap:
+                        _logger.warn(
+                            "[REPAIR] shot %s: 模型请求改动关联字段但不在授权范围"
+                            "（已回填；是否确需改动由重验判定）: %s"
+                            % (sid, sorted(_gap)[:4]))
+            except Exception as _rb_err:
+                _logger.warn("[REPAIR] shot %s: 关联字段回读失败（不影响本镜提交）: %s"
+                             % (sid, _rb_err))
         # duration_sec 是派生值：授权合并后再同步，避免被回填成旧时长。
         if _raw_updates is not None and isinstance(new_shot, dict) and new_shot.get("duration") != target.get("duration"):
             new_shot["duration_sec"] = new_shot["duration"]
@@ -7303,6 +7454,117 @@ def _repair_skill_sections(picked: dict, audit_by_shot: dict | None = None) -> t
     return sections, False
 
 
+def _related_check_fields_for(target: str, allowed, shots_by_id: dict) -> list:
+    """S04：该目标的**关联检查面**（扁平去重；不含授权字段本身）.
+
+    检查面 ≠ 授权面：这里只声明「哪些字段会被一起核对」，授权仍由
+    `allowed_repair_fields` 决定。取不到镜头对象或映射失败时返回空表（不阻塞修复）。
+    """
+    from step01_script_gen.repair_fields import related_check_fields
+
+    shot = (shots_by_id or {}).get(target) or {}
+    try:
+        mapping = related_check_fields(allowed, shot)
+    except Exception:
+        return []
+    return sorted({p for ps in mapping.values() for p in ps})
+
+
+def _round_related_readback(before: dict, after: dict, allowed_by_target: dict,
+                            *, model_shots: "dict | None" = None,
+                            novel_text: str = "") -> dict:
+    """S04：一轮修复的**四栏台账**（模型请求 / 实际应用 / 越权回填 / 投影后残余）.
+
+    只报事实：改描述却不动同帧布局，说明这半条修复没做完——语义是否真的修好仍由
+    本轮的 `resolved` / 重验与提交点审计判定，这里不代替它们下结论。
+
+    `model_shots`：模型**原始**返回的镜头（`shot_replacements[].shot`）。给了它才能
+    区分「模型请求改了什么」与「授权后实际改了什么」；没给时该栏为空表并标注依据。
+    """
+    from step01_script_gen.repair_fields import (related_check_fields, related_readback,
+                                                 shot_by_target)
+
+    rows: list = []
+    for tid, allowed in (allowed_by_target or {}).items():
+        _b = shot_by_target(before, tid)
+        _a = shot_by_target(after, tid)
+        if not isinstance(_b, dict) or not isinstance(_a, dict):
+            continue
+        _rel = related_check_fields(allowed, _b)
+        if not _rel:
+            continue
+        _applied = related_readback(_b, _a, _rel)["targets"]
+        _model = (model_shots or {}).get(tid)
+        if _model is None:
+            # `allowed_by_target` 的键是 `shot_4` / `hook`，模型返回的是裸 id
+            _bare = str(tid)[5:] if str(tid).startswith("shot_") else str(tid)
+            _model = (model_shots or {}).get(_bare)
+        _requested = (related_readback(_b, _model, _rel)["targets"]
+                      if isinstance(_model, dict) else {})
+        for _tid2, _info in _applied.items():
+            _req = (_requested.get(_tid2) or {}).get("changed_fields") or []
+            _app = _info.get("changed_fields") or []
+            rows.append({
+                "target": _tid2,
+                "target_changed": bool(_info.get("target_changed")),
+                "requested": _req,                       # 模型请求变化
+                "applied": _app,                         # 实际应用变化
+                "reverted": [p for p in _req if p not in _app],   # 越权回填
+                "half_repaired": bool(_info.get("target_changed")
+                                      and _info.get("unchanged_fields")),
+                "unchanged_fields": _info.get("unchanged_fields") or [],
+            })
+    # 投影后残余：把本轮结果跑一次 project_for_commit，看关联字段是否被投影再改
+    residual = _projection_related_residual(after, allowed_by_target, novel_text)
+    half = [{"target": r["target"], "fields": r["unchanged_fields"]}
+            for r in rows if r["half_repaired"]]
+    return {"targets": rows,
+            "requested_basis": ("shot_replacements[].shot" if model_shots
+                                else "unavailable"),
+            "checked": sum(len(r["applied"]) + len(r["unchanged_fields"]) for r in rows),
+            "changed": sum(len(r["applied"]) for r in rows),
+            "reverted": sum(len(r["reverted"]) for r in rows),
+            "half_repaired": half,
+            "residual_after_projection": residual}
+
+
+def _projection_related_residual(script: dict, allowed_by_target: dict,
+                                 novel_text: str = "") -> dict:
+    """投影后回读：`project_for_commit` 之后关联字段还剩哪些改动.
+
+    投影会做派生字段同步与 hard-fix 归一化，**可能再次改写**关联字段；只看合并后的
+    状态会漏掉这一层。失败不改变本轮结论，只把 `error` 记进台账。
+    """
+    from step01_script_gen.repair_fields import (related_check_fields, related_readback,
+                                                 shot_by_target)
+    if not allowed_by_target:
+        return {"checked": 0, "changed": 0, "rows": [], "note": "no_related_scope"}
+    try:
+        projected, errs = project_for_commit(script, novel_text, label="修复轮回读")
+    except Exception as exc:                     # noqa: BLE001 - 诊断失败不改结论
+        return {"checked": 0, "changed": 0, "rows": [], "error": str(exc)[:160]}
+    if errs:
+        return {"checked": 0, "changed": 0, "rows": [],
+                "error": "; ".join(str(e) for e in errs)[:160]}
+    rows: list = []
+    for tid, allowed in (allowed_by_target or {}).items():
+        _a = shot_by_target(script, tid)
+        _p = shot_by_target(projected, tid)
+        if not isinstance(_a, dict) or not isinstance(_p, dict):
+            continue
+        _rel = related_check_fields(allowed, _a)
+        if not _rel:
+            continue
+        for _tid2, _info in related_readback(_a, _p, _rel)["targets"].items():
+            rows.append({"target": _tid2,
+                         "changed_fields": _info.get("changed_fields") or [],
+                         "unchanged_fields": _info.get("unchanged_fields") or []})
+    return {"checked": sum(len(r["changed_fields"]) + len(r["unchanged_fields"])
+                           for r in rows),
+            "changed": sum(len(r["changed_fields"]) for r in rows),
+            "rows": rows}
+
+
 def _repair_shot_warnings(script: dict, novel_text: str,
                           bank=None, objects_bank=None,
                           model: str | None = None,
@@ -7536,6 +7798,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             return script
         import copy as _copy_repair
         _round_before_script = _copy_repair.deepcopy(script)
+        # S04：模型原始返回的镜头（本轮若没走到替换解析就保持空表，台账据此标依据）
+        _model_shots_round: dict = {}
         _locked_before = _locked_repair_signature(script)
         _locked_after_patch = _locked_before
         # §14 P1：本轮**效果账本**——四个冻结节点里的前两个（原候选 / 授权合并后）
@@ -8105,6 +8369,10 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 "audit_issues": _audit_by_shot.get(_tid, []),
                 # **只允许改这些字段**；其余字段逐字照抄原镜
                 "allowed_fields": sorted(_allowed_by_target[_tid]),
+                # S04：这些字段会被**一起核对**（不是授权面）。改描述却不改同帧布局，
+                # 会让两者不一致并在下一轮被当成新问题；模型可以据此一次改到位。
+                "related_check_fields": _related_check_fields_for(
+                    _tid, _allowed_by_target[_tid], shots_by_id),
                 "warnings": _ws,
             }
         # §14 P3：**冲突 issue 进下一修复请求**的承载层——`_feedback_json["conflicts"]`
@@ -8496,6 +8764,14 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 目标集合比较必须用同一口径，否则每个 picked 目标都会被判「缺失」。
         _expected_ids = {str(t)[5:] if str(t).startswith("shot_") else str(t)
                          for t in picked}
+        # S04（2026-11-11）：留一份**模型原始返回**的镜头，供四栏台账区分
+        # 「模型请求改了什么」与「授权后实际改了什么」。只认完整镜头替换；
+        # 窄字段补丁没有完整对象，台账会如实标 requested_basis。
+        _model_shots_round = {
+            str(_it.get("shot_id")): _it.get("shot")
+            for _it in (_repls or [])
+            if isinstance(_it, dict) and isinstance(_it.get("shot"), dict)
+        }
         merged, _n_applied, _rejected = _apply_shot_replacements(
             script, _repls, set(picked), hook_replacement=_hook_repl,
             allowed_by_target=_allowed_by_target,
@@ -9188,6 +9464,16 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     # 这里落完整事实（mechanism/writer/first_revert/bindings）。
                     # 消费者：`step01_repair_rounds.json` 的读者与离线回放。
                     "effect_conflict": (_decision.get("effect_conflict") or None),
+                    # S04（2026-11-11）：四栏台账——模型请求 / 实际应用 / 越权回填 /
+                    # 投影后残余。消费方据此看「半条修复」，不必自己推。
+                    "related_readback": _round_related_readback(
+                        _round_before_script, script, _allowed_by_target,
+                        model_shots=_model_shots_round, novel_text=novel_text),
+                    # S04：**合并前**被拒的条目（越权字段补丁等）进台账。
+                    # 这类拒绝不经过 `merge_authorized`，因此不会出现在回读的
+                    # `reverted` 里；不单独记，台账就会漏掉「模型想改但被挡在门外」
+                    # 这一半事实（2026-11-12 实跑：shot7/shot11 因 keyframes 被拒）。
+                    "rejected": list(_rejected or [])[:6],
                 })
             except Exception as _diag_err:
                 _logger.warn(f"[REPAIR] 修复轮诊断记录失败（不影响结论）: {_diag_err}")
