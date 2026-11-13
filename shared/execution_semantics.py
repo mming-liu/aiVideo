@@ -108,63 +108,50 @@ def _shot_has_process(shot: dict) -> bool:
     return len(segments) >= 2 or (isinstance(keyframes, list) and bool(keyframes))
 
 
-#: 关联判定里不承担内容的 2 字组合（避免「的了」「是在」这类把任意两镜连起来）。
-_LINK_STOP_BIGRAMS = frozenset({
-    "的了", "是在", "在的", "了一", "这个", "那个", "什么", "没有", "一个",
-    "之后", "之前", "然后", "接着", "于是", "已经", "正在", "起来", "出来",
-})
+#: `shot.plan_refs` 里表示「本镜承载了哪些计划条目」的键（事件契约的既有字段）。
+_PLAN_REF_KEYS = ("beats", "lines", "facts", "events")
 
 
-def _content_bigrams(text: str) -> set[str]:
-    """中文内容 2 字组合（去掉空白/标点与停用组合）.
+def _explicit_plan_refs(shot: dict) -> dict:
+    """该镜的**显式计划引用**（`plan_refs`）；没有就返回空 dict.
 
-    不用分词器：本模块只做确定性检查，不引入外部依赖；2 字组合对「城门」这类
-    实体/地点足够稳，且对措辞漂移（「抵达」↔「站定」）保持一定的鲁棒性。
+    2026-11-12 复核（第三轮）：过程载体**不得**用文本相似度判断是否与被质疑的因果
+    相关——「城门上方一只鸟飞过」与结果共享地点就会被误判成相关过程。项目里已经有
+    显式绑定：`shot.plan_refs` 声明本镜承载的节拍/台词（事件履约契约，见
+    `main.py` 的 `plan_refs` 契约门）。承载关系只认这一份结构化声明。
     """
-    cleaned = re.sub(r"[\s\W_]+", "", str(text or ""), flags=re.UNICODE)
-    out = set()
-    for i in range(len(cleaned) - 1):
-        gram = cleaned[i:i + 2]
-        if gram not in _LINK_STOP_BIGRAMS:
-            out.add(gram)
-    return out
+    refs = shot.get("plan_refs")
+    if not isinstance(refs, dict):
+        return {}
+    return {k: v for k, v in refs.items()
+            if k in _PLAN_REF_KEYS and isinstance(v, list) and v}
 
 
-def _shares_content(text: str, anchor: str) -> bool:
-    """两段文本是否共享至少一个内容 2 字组合."""
-    a = _content_bigrams(anchor)
-    if not a:
-        return False
-    return bool(a & _content_bigrams(text))
-
-
-def _process_carriers(script: dict, *, anchors: list[str] | None = None) -> tuple[list[str], list[str]]:
-    """把过程载体分成**与被质疑的因果相关**和**无法建立关联**两组.
-
-    2026-11-12 复核反例（第二例）：原输入 `time_ellipsis_lost / reject`，**只增加一个
-    无关镜头**（关键帧画一只鸟），原问题没有任何变化，拒收却消失了——因为旧实现把
-    全稿任意关键帧都当成过程证据。过程证据必须绑定到被质疑的事实/事件/镜头上。
-
-    关联规则：载体镜的文本与 `causal_chain` 里**起因/结果**任一条目共享至少一个内容
-    2 字组合。建立不了关联的载体**不算证据**，如实记进 `unlinked`（待语义裁决），
-    裁决与「完全没有载体」时保持一致。
+def _process_carriers(script: dict) -> tuple[list[str], list[str], list[str]]:
+    """按**显式 `plan_refs`** 划分过程载体.
 
     Returns:
-        `(linked, unlinked)`，元素形如 `shot:3`。
+        `(bound_with_process, bound_without_process, unbound)`，元素形如 `shot:3`。
+
+    - `bound_*`：该镜声明了 `plan_refs`，即计划明确说「本镜承载这些节拍/台词」；
+    - `unbound`：没有显式绑定。**它既不能当豁免证据，也不能据此认定因果缺失**，
+      裁决交给语义评阅（`needs_semantic_review`）。
+
+    这样「加一镜无关的鸟」既不会改变裁决（它没有 `plan_refs`），也不会被当成
+    「匹配失败 ⇒ 因果缺失」的证据。
     """
-    linked: list[str] = []
-    unlinked: list[str] = []
-    anchor_list = [a for a in (anchors or []) if _text(a)]
+    bound_with: list[str] = []
+    bound_without: list[str] = []
+    unbound: list[str] = []
     for shot in _iter_shots(script):
-        if not _shot_has_process(shot):
-            continue
         label = "shot:%s" % (shot.get("index"),)
-        text = _shot_fields(shot)
-        if anchor_list and any(_shares_content(text, a) for a in anchor_list):
-            linked.append(label)
+        if not _explicit_plan_refs(shot):
+            unbound.append(label)
+        elif _shot_has_process(shot):
+            bound_with.append(label)
         else:
-            unlinked.append(label)
-    return linked, unlinked
+            bound_without.append(label)
+    return bound_with, bound_without, unbound
 
 
 def _issue(code: str, path: str, message: str, *, family: str, **fields) -> dict:
@@ -233,11 +220,29 @@ def _role_matches(role: str, candidates: tuple) -> bool:
     return bool(role) and any(role == c or role.startswith(c) for c in candidates)
 
 
-def _has_temporal_marker(script: dict) -> bool:
-    text = "\n".join([_all_shot_text(script),
-                      _bridge_text(script),
-                      str(_outline(script).get("narration_lines") or ""),
-                      str(_outline(script).get("main_events") or "")])
+def _has_temporal_marker(script: dict, *, shot_indices: set | None = None) -> bool:
+    """全稿是否有时间推进标记.
+
+    2026-11-12 复核（第三轮）：时间标记也要**按镜头范围**核对——其他场景里的
+    「次日」不应影响当前问题。给出 `shot_indices` 时，只统计这些镜头自身的正文与
+    `context_bridge`；章节级的 `narration_lines` / `main_events` 仍计入（它们与
+    `causal_chain` 同属章节级事实）。
+    """
+    shot_texts = []
+    for shot in _iter_shots(script):
+        if shot_indices is not None:
+            try:
+                if int(shot.get("index", -1)) not in shot_indices:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        shot_texts.append(_shot_fields(shot))
+        shot_texts.append(_text(shot.get("context_bridge")))
+    outline = _outline(script)
+    text = "\n".join(shot_texts + [
+        str(outline.get("narration_lines") or ""),
+        str(outline.get("main_events") or ""),
+    ])
     return any(re.search(pattern, text, re.I) for pattern in DEFAULT_TEMPORAL_MARKERS)
 
 
@@ -329,16 +334,13 @@ def _check_causal_and_time(script: dict) -> list[dict]:
     has_cause = any(_role_matches(role, _CAUSE_ROLES) for role, _t, _i in roles)
     if not (has_result and has_cause and not has_action):
         return []
-    # 标签缺失先作为**结构证据**记录（advisory），不再直接拒收：合法省略的镜头
-    # 往往有完整过程，只是计划没写「行动」标签。
+    # 标签缺失先作为**结构证据**记录（advisory），不直接拒收。
     #
-    # 但过程证据必须**绑定到被质疑的因果**：无关镜头（例如新增一镜鸟的关键帧）
-    # 不得把拒收豁免掉。建立不了关联的载体只记进 `unlinked_carriers`，不算证据，
-    # 裁决与「完全没有载体」时一致。
-    anchors = [text for role, text, _i in roles
-               if text and (_role_matches(role, _CAUSE_ROLES)
-                            or _role_matches(role, _RESULT_ROLES))]
-    linked, unlinked = _process_carriers(script, anchors=anchors)
+    # 承载关系**只认显式绑定**（`shot.plan_refs`）：文本相似度不足以证明某镜承载了
+    # 被质疑的因果——「城门上方一只鸟飞过」会与结果共享地点而被误判成相关过程。
+    # 没有显式绑定时输出 `needs_semantic_review`：既不豁免，也不认定因果缺失。
+    bound_with, bound_without, unbound = _process_carriers(script)
+    binding_status = "bound" if (bound_with or bound_without) else "unbound"
     findings = [_issue(
         "causal_gap", "chapter_outline.causal_chain",
         "因果链只有起因与结果、没有行动/过程标签：结果缺少显式执行路径（结构记录）",
@@ -346,19 +348,34 @@ def _check_causal_and_time(script: dict) -> list[dict]:
         severity="advisory",
         expected_roles=["起因", "行动", "结果"],
         actual_roles=[role for role, _t, _i in roles],
-        carrier_evidence=linked,
-        unlinked_carriers=unlinked,
+        binding_status=binding_status,
+        carrier_evidence=bound_with,
+        bound_without_process=bound_without,
+        unbound_shots=unbound,
+        needs_semantic_review=(binding_status == "unbound"),
     )]
-    # 只有**与被质疑因果相关**的过程载体才能豁免；无关载体不改变裁决。
-    if (not linked and not _has_temporal_marker(script)
+    if binding_status == "unbound":
+        # 没有显式绑定：不豁免（不能拿它证明过程存在），也不认定缺失（不能拿
+        # 匹配失败当证据）。状态留给语义评阅。
+        return findings
+    bound_indices = set()
+    for label in bound_with + bound_without:
+        try:
+            bound_indices.add(int(str(label).split(":")[1]))
+        except (IndexError, ValueError):
+            continue
+    # 只有**已绑定镜头**里有过程载体才能豁免；时间标记也只在已绑定镜头范围内核对。
+    if (not bound_with
+            and not _has_temporal_marker(script, shot_indices=bound_indices)
             and _has_completion_marker(script)):
         findings.append(_issue(
             "time_ellipsis_lost", "chapter_outline.narration_lines",
-            "结果状态已断言完成，但全稿既没有时间推进标记、也没有与该结果相关的过程载体；"
+            "结果状态已断言完成，但已绑定镜头里既没有过程载体、也没有时间推进标记；"
             "这是删除时间/过程后只留结果，不是合法的常规省略",
             family="temporal_ellipsis",
             missing=["temporal_marker", "process_carrier"],
-            unlinked_carriers=unlinked,
+            bound_shots=sorted(bound_indices),
+            unbound_shots=unbound,
         ))
     return findings
 

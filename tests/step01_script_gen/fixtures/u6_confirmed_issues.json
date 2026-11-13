@@ -1,7 +1,7 @@
 {
   "schema": "confirmed_issue_set.v1",
   "source": "docs/step01-s01-audit-baseline-2026-11-11.md#3",
-  "note": "S01 冻结语义裁决表（U6 主线）。这是历史事故的独立回归数据：身份与处置来自人工裁决，不含正文全文。",
+  "note": "S01 冻结语义裁决表（U6 主线）。这是历史事故的独立回归数据：身份与处置来自人工裁决，不含正文全文。 residual_probe 是逐问题残余检查的显式探针（U6 回归数据，不是生产判据）。",
   "candidate": {
     "path": "baselines/2026-11-12-pre-layered/u6_frozen/candidate_d1a/candidate.json",
     "revision": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
@@ -24,7 +24,11 @@
       "field_path": "lf_desc",
       "disposition": "confirmed",
       "evidence": "右手酒壶倾倒",
-      "why": "shot6 已写酒壶脱手，原文「丢了酒囊」，尾帧不能又回到右手。"
+      "why": "shot6 已写酒壶脱手，原文「丢了酒囊」，尾帧不能又回到右手。",
+      "residual_probe": {
+        "shot_id": "7",
+        "text": "右手酒壶"
+      }
     },
     {
       "id": "u6-03",
@@ -42,7 +46,11 @@
       "field_path": "ff_desc",
       "disposition": "confirmed",
       "evidence": "右手食指竖于唇前",
-      "why": "motion 前 2 秒才是竖指封口，首帧提前画完过程动作。"
+      "why": "motion 前 2 秒才是竖指封口，首帧提前画完过程动作。",
+      "residual_probe": {
+        "shot_id": "11",
+        "text": "食指竖于唇前"
+      }
     },
     {
       "id": "u6-05",
@@ -51,7 +59,11 @@
       "field_path": "prompt",
       "disposition": "confirmed",
       "evidence": "大特写",
-      "why": "同镜 ff/lf/motion 均为大远景空镜，prompt 写大特写自相矛盾。"
+      "why": "同镜 ff/lf/motion 均为大远景空镜，prompt 写大特写自相矛盾。",
+      "residual_probe": {
+        "shot_id": "1",
+        "text": "大特写"
+      }
     },
     {
       "id": "u6-06",
@@ -60,7 +72,12 @@
       "field_path": "prompt",
       "disposition": "confirmed",
       "evidence": "同一括号说明连写两遍",
-      "why": "逐字重复，确定性可证。"
+      "why": "逐字重复，确定性可证。",
+      "residual_probe": {
+        "shot_id": "6",
+        "text": "寒光是独立物体",
+        "max_count": 1
+      }
     },
     {
       "id": "u6-07",
@@ -78,7 +95,11 @@
       "field_path": "ff_desc",
       "disposition": "confirmed",
       "evidence": "披头散发撑坐船板",
-      "why": "原文步摇在掌掴同时被碰落；首帧在掌掴前，应是挽髻。"
+      "why": "原文步摇在掌掴同时被碰落；首帧在掌掴前，应是挽髻。",
+      "residual_probe": {
+        "shot_id": "10",
+        "text": "披头散发"
+      }
     },
     {
       "id": "u6-09",
@@ -87,7 +108,11 @@
       "field_path": "ff_desc",
       "disposition": "confirmed",
       "evidence": "右手提青瓷酒壶",
-      "why": "shot3 尾帧写壶搁在船板，与本镜提壶矛盾；根因在 shot3 偏离原文。"
+      "why": "shot3 尾帧写壶搁在船板，与本镜提壶矛盾；根因在 shot3 偏离原文。",
+      "residual_probe": {
+        "shot_id": "4",
+        "text": "右手提青瓷酒壶"
+      }
     },
     {
       "id": "u6-10",
@@ -96,7 +121,12 @@
       "field_path": "ff_desc",
       "disposition": "confirmed",
       "evidence": "右手反握带血短刃",
-      "why": "原文没有拔刃动作：短刃应留在心口、刺客空手入水。"
+      "why": "原文没有拔刃动作：短刃应留在心口、刺客空手入水。",
+      "residual_probe": {
+        "shot_id": "7",
+        "text": "反握",
+        "and_text": "短刃"
+      }
     }
   ]
 }

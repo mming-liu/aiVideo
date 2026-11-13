@@ -869,6 +869,13 @@ def allowed_repair_fields(warnings, audit_issues=None, *,
                     _p["field_path"],
                     frame_id=str(getattr(issue, "frame_id", "") or ""),
                     entity_id=str(getattr(issue, "entity_id", "") or "")))
+                # 复核第四轮：帧描述被点名时，**同镜的聚合 prompt 也纳入授权**。
+                # `prompt` 是逐帧描述与动作的聚合稿，帧描述改对而 prompt 留着旧说法，
+                # 下游请求仍会带着矛盾（U6 镜 7 实测：ff_desc 改成「双手空空」，
+                # prompt 仍写「右手反握短刃」）。这是显式扩大，台账 `beyond_declared`
+                # 会逐条记录；非目标镜头与锁定字段不受影响。
+                if _frame_id_of_desc_path(_p["field_path"]):
+                    allowed_exact.add("prompt")
             continue
         if _is_structural_code(code):
             structural = True

@@ -151,19 +151,25 @@ def test_legitimate_candidate_refinement_keeps_baseline_green():
 # ---------------------------------------------------------------------------
 # 过程载体必须**绑定到被质疑的因果**（2026-11-12 复核第二例）
 # ---------------------------------------------------------------------------
-def _causal_base() -> dict:
-    """起因 → 结果，没有过程载体、没有时间标记，结果已断言完成."""
+def _causal_base(*, bound: bool = False, process: bool = False) -> dict:
+    """起因 → 结果，没有「行动」标签.
+
+    `bound` 控制镜头是否带显式计划绑定（`plan_refs`）；`process` 控制是否有动作分段。
+    """
+    shot = {"index": 1, "duration_sec": 5.0, "ff_desc": "院中，甲与乙相对而立",
+            "lf_desc": "甲拱手", "motion_desc": "甲拱手",
+            "prompt": "院中", "narration_segment": "", "context_bridge": ""}
+    if process:
+        shot["motion_desc"] = "前2秒：甲拱手；后2秒：甲转身"
+    if bound:
+        shot["plan_refs"] = {"beats": [1], "lines": []}
     return {
         "chapter_outline": {
             "causal_chain": ["起因：甲与乙约定赴城", "结果：乙已抵达城门"],
             "narration_lines": [],
             "main_events": [],
         },
-        "shots": [
-            {"index": 1, "duration_sec": 5.0, "ff_desc": "院中，甲与乙相对而立",
-             "lf_desc": "甲拱手", "motion_desc": "甲拱手",
-             "prompt": "院中", "narration_segment": "", "context_bridge": ""},
-        ],
+        "shots": [shot],
         "total_duration": 5.0,
     }
 
@@ -176,40 +182,58 @@ def _add_shot(script: dict, shot: dict) -> dict:
     return out
 
 
-def test_causal_verdict_is_not_changed_by_an_unrelated_process_shot():
-    """只加一镜无关的鸟，原问题（结果失去过程与时间依据）不得因此消失."""
+def test_unbound_carrier_is_pending_not_exempt_and_not_rejected():
+    """没有显式绑定时：不豁免、也不认定因果缺失，状态交给语义评阅."""
     base = _causal_base()
-    assert codes_of(check_script_semantics(base)) == ["causal_gap", "time_ellipsis_lost"]
-
-    with_bird = _add_shot(base, {
-        "index": 2, "duration_sec": 3.0, "ff_desc": "枯枝上停着一只鸟",
-        "lf_desc": "鸟振翅飞走", "motion_desc": "鸟停在枝头",
-        "prompt": "枯枝", "narration_segment": "", "context_bridge": "",
-        "keyframes": [{"t_sec": 1.0, "desc": "一只鸟停在枯枝"}],
-    })
-    codes = codes_of(check_script_semantics(with_bird))
-    assert codes == ["causal_gap", "time_ellipsis_lost"], codes
-
-    gap = next(f for f in check_script_semantics(with_bird)
-               if f["code"] == "causal_gap")
-    assert gap["severity"] == "advisory"
-    assert gap["carrier_evidence"] == []
-    assert gap["unlinked_carriers"] == ["shot:2"]
-
-
-def test_related_process_shot_does_exempt_the_reject():
-    """同一结果有**相关**过程载体时，才允许豁免拒收（只留结构 advisory）."""
-    base = _causal_base()
-    related = _add_shot(base, {
-        "index": 2, "duration_sec": 5.0, "ff_desc": "城门下空无一人",
-        "lf_desc": "乙站定城门下", "motion_desc": "前2秒：乙推门；后3秒：乙站定",
-        "prompt": "城门", "narration_segment": "", "context_bridge": "",
-    })
-    findings = check_script_semantics(related)
+    findings = check_script_semantics(base)
     assert codes_of(findings) == ["causal_gap"], findings
     gap = findings[0]
-    assert gap["carrier_evidence"] == ["shot:2"]
-    assert gap["unlinked_carriers"] == []
+    assert gap["binding_status"] == "unbound"
+    assert gap["needs_semantic_review"] is True
+
+
+def test_unrelated_process_shot_does_not_change_an_unbound_verdict():
+    """加一镜共享地点、但没有 `plan_refs` 的鸟，裁决不变（不得据此豁免）."""
+    base = _causal_base()
+    with_bird = _add_shot(base, {
+        "index": 2, "duration_sec": 3.0, "ff_desc": "城门上方一只鸟飞过",
+        "lf_desc": "鸟振翅飞走", "motion_desc": "前1秒：鸟掠过；后1秒：鸟飞远",
+        "prompt": "城门", "narration_segment": "", "context_bridge": "",
+        "keyframes": [{"t_sec": 1.0, "desc": "一只鸟掠过城门"}],
+    })
+    assert codes_of(check_script_semantics(base)) == codes_of(
+        check_script_semantics(with_bird)) == ["causal_gap"]
+    gap = check_script_semantics(with_bird)[0]
+    assert gap["carrier_evidence"] == []
+    assert "shot:2" in gap["unbound_shots"]
+
+
+def test_bound_carrier_with_process_exempts_the_reject():
+    """已绑定镜头里有过程载体 → 只留结构 advisory."""
+    findings = check_script_semantics(_causal_base(bound=True, process=True))
+    assert codes_of(findings) == ["causal_gap"], findings
+    gap = findings[0]
+    assert gap["binding_status"] == "bound"
+    assert gap["carrier_evidence"] == ["shot:1"]
+
+
+def test_bound_without_process_still_rejects():
+    """已绑定镜头里既无过程、也无时间标记 → 仍然是删过程."""
+    findings = check_script_semantics(_causal_base(bound=True, process=False))
+    assert codes_of(findings) == ["causal_gap", "time_ellipsis_lost"], findings
+
+
+def test_temporal_marker_outside_the_bound_shots_does_not_exempt():
+    """未绑定镜头里的「次日」不影响当前问题（时间标记按镜头范围核对）."""
+    base = _causal_base(bound=True, process=False)
+    with_marker = _add_shot(base, {
+        "index": 2, "duration_sec": 3.0, "ff_desc": "另一处场景",
+        "lf_desc": "场景延续", "motion_desc": "场景空镜",
+        "prompt": "别处", "narration_segment": "",
+        "context_bridge": "次日，别处",
+    })
+    codes = codes_of(check_script_semantics(with_marker))
+    assert codes == ["causal_gap", "time_ellipsis_lost"], codes
 
 
 def test_candidate_paths_reports_only_new_findings():

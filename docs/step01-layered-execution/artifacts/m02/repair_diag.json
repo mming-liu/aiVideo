@@ -66,7 +66,7 @@
         ]
       ],
       "revision_before": "84ff4112e6f6649489d7571bc0a1df73b2800247c902b8bd8bf07780ee514dc7",
-      "revision_after": "56fc1e96f8ffa7c1f765d1e64eb479bedf3ea729213071e86390085299534fd5",
+      "revision_after": "80e103ad99476cdf051f52dccad9d1214b8181fc802435d006f77e8475a75fe2",
       "effect_conflict": null,
       "related_readback": {
         "targets": [
@@ -381,7 +381,8 @@
             "ff_desc",
             "frame_layouts.ff.0.on_screen",
             "frame_layouts.ff.0.pose",
-            "frame_layouts.ff.0.props"
+            "frame_layouts.ff.0.props",
+            "prompt"
           ],
           "declared": [
             "ff_desc",
@@ -389,7 +390,8 @@
           ],
           "beyond_declared": [
             "frame_layouts.ff.0.on_screen",
-            "frame_layouts.ff.0.props"
+            "frame_layouts.ff.0.props",
+            "prompt"
           ]
         },
         "shot_1": {

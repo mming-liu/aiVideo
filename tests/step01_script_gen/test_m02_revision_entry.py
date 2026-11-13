@@ -198,7 +198,10 @@ def test_joint_layout_fix_is_accepted_and_authorization_is_recorded(
     assert "frame_layouts.lf.0.props" in auth["beyond_declared"]
     # 收窄边界：只到同帧该实体的叶子，不放开整镜、不放开别的帧。
     assert not any(p.startswith("frame_layouts.ff") for p in auth["allowed"])
-    assert "prompt" not in auth["allowed"]
+    # 复核第四轮：帧描述被点名时，同镜聚合 `prompt` 显式纳入授权（台账可查）；
+    # 跨帧聚合的 `motion_desc` 仍不在授权面内。
+    assert "prompt" in auth["allowed"]
+    assert "prompt" in auth["beyond_declared"]
     assert "motion_desc" not in auth["allowed"]
 
 
@@ -215,7 +218,7 @@ def test_unrelated_whole_shot_change_is_rejected_with_full_reason(
     """
     payload = {"shot_replacements": [{"shot_id": "1", "updates": [
         {"field_path": "lf_desc", "value": "甲右手提着木杖拄地"},
-        {"field_path": "prompt", "value": "[特写] 院中，甲横杖而立"}]}]}
+        {"field_path": "motion_desc", "value": "前2秒：甲横杖而立；后3秒：甲转身"}]}]}
     m, svc = _env(monkeypatch, tmp_path, payload)
     out, diag, blocks = _run(m)
 
@@ -225,10 +228,11 @@ def test_unrelated_whole_shot_change_is_rejected_with_full_reason(
     assert rec["reason"] == "rejected_by_validation"
     # 拒绝原因不能只剩一句「未通过校验」：要指名是哪条路径越权。
     assert rec["rejected"], rec
-    assert any("prompt" in r and "越权" in r for r in rec["rejected"]), rec["rejected"]
+    assert any("motion_desc" in r and "越权" in r for r in rec["rejected"]), rec["rejected"]
     # 被拒的轮次不得改动原稿
     assert out["shots"][0]["lf_desc"] == _script()["shots"][0]["lf_desc"]
     assert out["shots"][0]["prompt"] == _script()["shots"][0]["prompt"]
+    assert out["shots"][0]["motion_desc"] == _script()["shots"][0]["motion_desc"]
 
 
 def test_whole_shot_echo_keeps_unrelated_change_out_of_the_script(
@@ -239,7 +243,7 @@ def test_whole_shot_echo_keeps_unrelated_change_out_of_the_script(
     授权面。与窄补丁的「整条拒收」是两种不同的保护方式，结果都是原稿那一处不变。
     """
     changed = _shot(1, lf_desc="甲右手提着木杖拄地",
-                    prompt="[特写] 院中，甲横杖而立")
+                    motion_desc="前2秒：甲横杖而立；后3秒：甲转身")
     payload = {"shot_replacements": [{"shot_id": "1", "shot": changed}]}
     m, svc = _env(monkeypatch, tmp_path, payload)
     out, diag, blocks = _run(m)
@@ -248,10 +252,9 @@ def test_whole_shot_echo_keeps_unrelated_change_out_of_the_script(
     assert out["shots"][0]["lf_desc"] == "甲右手提着木杖拄地"
     # 未授权的那句**不得落到稿子上**（后处理可能改写 prompt 的其它部分，
     # 所以按「越权内容不在」判，而不是按整串相等判）。
-    assert "[特写]" not in str(out["shots"][0].get("prompt") or "")
-    assert "横杖" not in str(out["shots"][0].get("prompt") or "")
-    # 授权面逐条可查：prompt 不在其中，所以它只能被回填
-    assert "prompt" not in rec["authorization"]["shot_1"]["allowed"]
+    assert out["shots"][0]["motion_desc"] == _script()["shots"][0]["motion_desc"]
+    # 整镜回显里未授权的内容被回填：`motion_desc` 不在授权面内。
+    assert "motion_desc" not in rec["authorization"]["shot_1"]["allowed"]
 
 
 # ---------------------------------------------------------------------------

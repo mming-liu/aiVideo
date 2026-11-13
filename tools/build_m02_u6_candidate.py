@@ -35,6 +35,8 @@ NOVEL_CANDIDATES = (
     ROOT / "output/锦衣夜行/part_01_杀青州/chapter_001/_resume/novel_aba1adc22826.txt",
 )
 OUT = ROOT / ".pytest_tmp/m02_u6_out"
+#: 逐问题残余探针（U6 人工裁决集；`residual_probe` 字段）。
+CONFIRMED_FIXTURE = ROOT / "tests/step01_script_gen/fixtures/u6_confirmed_issues.json"
 TMP = Path(tempfile.mkdtemp(prefix="m02u6_"))
 os.environ["OUTPUT_BASE"] = str(TMP / "output")
 sys.path.insert(0, str(ROOT))
@@ -68,6 +70,11 @@ def build_payload(cand):
     l7 = str(s7["lf_desc"]).replace("右手酒壶倾倒酒水洒在甲板",
                                     "青瓷酒壶滚落甲板，酒水洒在甲板", 1)
     f11 = str(s11["ff_desc"]).replace("右手食指竖于唇前", "右手尚未抬起", 1)
+    # 复核第四轮：帧描述改对后，同镜聚合 prompt 必须跟着改，否则下游请求仍带矛盾。
+    p7 = (str(s7["prompt"])
+          .replace("右手反握短刃（刃尖带血）", "双手空空", 1)
+          .replace("右手酒壶倾倒酒水洒在甲板", "青瓷酒壶滚落甲板，酒水洒在甲板", 1))
+    p11 = str(s11["prompt"]).replace("右手食指竖于唇前", "右手尚未抬起", 1)
 
     # 同帧布局：刺客手里的短刃要跟着 ff_desc 一起消失；首帧姿态跟着描述改。
     ff7 = s7["frame_layouts"]["ff"]
@@ -84,13 +91,56 @@ def build_payload(cand):
             {"shot_id": "7", "updates": [
                 {"field_path": "ff_desc", "value": f7},
                 {"field_path": "lf_desc", "value": l7},
+                {"field_path": "prompt", "value": p7},
                 {"field_path": "frame_layouts.ff.%d.props" % killer_idx, "value": []}]},
             {"shot_id": "11", "updates": [
                 {"field_path": "ff_desc", "value": f11},
+                {"field_path": "prompt", "value": p11},
                 {"field_path": "frame_layouts.ff.%d.pose" % zhang_idx,
                  "value": "俯身未抬手"}]},
         ]
     }
+
+
+def _shot_text(shot: dict) -> str:
+    """镜头**全部相关字段**的合并文本（逐问题残余检查的扫描面）."""
+    parts = [str(shot.get(k) or "") for k in
+             ("prompt", "ff_desc", "lf_desc", "motion_desc", "narration_segment")]
+    parts.append(json.dumps(shot.get("frame_layouts") or {}, ensure_ascii=False))
+    return "\n".join(parts)
+
+
+def _issue_residuals(fixture: dict, revised: dict, targets: list) -> list:
+    """逐条原问题在**全部相关字段**上是否仍存在（复核第四轮要求）.
+
+    探针来自夹具的 `residual_probe`（`shot_id` + `text`，可选 `and_text` /
+    `max_count`）。这是 U6 回归数据的显式断言，不是生产判据。
+    """
+    shots = {str(s.get("index")): s for s in (revised.get("shots") or [])}
+    target_ids = {str(t).replace("shot_", "") for t in (targets or [])}
+    rows = []
+    for issue in fixture.get("issues") or []:
+        probe = issue.get("residual_probe")
+        if not isinstance(probe, dict):
+            continue
+        sid = str(probe.get("shot_id") or "")
+        shot = shots.get(sid) or {}
+        text = _shot_text(shot) if shot else ""
+        needle = str(probe.get("text") or "")
+        count = text.count(needle) if needle else 0
+        if probe.get("and_text"):
+            count = min(count, text.count(str(probe["and_text"])))
+        limit = int(probe.get("max_count", 0))
+        residual = count > limit
+        rows.append({
+            "id": issue.get("id"),
+            "shot_id": sid,
+            "probe": needle + ("+" + str(probe["and_text"]) if probe.get("and_text") else ""),
+            "hits": count,
+            "residual": residual,
+            "in_round": sid in target_ids,
+        })
+    return rows
 
 
 class _Svc:
@@ -182,6 +232,10 @@ def main():
                 proj_residual.append((idx, field, "字段在投影后被改写"))
     dec = next((r for r in diag if isinstance(r, dict) and "accepted" in r), {})
     lost = dec.get("postprocess_reverted") or {}
+    # 复核第四轮：**逐问题残余**——已接受变化保留 ≠ 原问题解决。按夹具里的
+    # `residual_probe` 在全部相关字段（prompt/ff/lf/motion/布局）上重新扫一遍。
+    fixture = json.loads(CONFIRMED_FIXTURE.read_text(encoding="utf-8"))
+    residuals = _issue_residuals(fixture, revised, dec.get("targets") or [])
     md = ["# U6 离线修订候选（M02，桩响应经实际入口）", "",
           "- 原稿：`%s`（sha256 `%s`）" % (
               CAND.relative_to(ROOT).as_posix(),
@@ -238,6 +292,33 @@ def main():
             md.append("- 镜 %s / `%s`：%s" % (idx, field, why))
     else:
         md.append("本轮接受的 %d 处变化在投影后**全部**成立（逐字段比对）。" % len(rows))
+    md.append("")
+    md += ["## 逐问题残余（全部相关字段）", ""]
+    if not residuals:
+        md.append("（夹具未提供 `residual_probe`，本栏为空）")
+    else:
+        md.append("已接受的变化保留，**不等于**原问题解决。下表按夹具的 `residual_probe` "
+                  "在 `prompt` / `ff_desc` / `lf_desc` / `motion_desc` / `frame_layouts` "
+                  "全部相关字段上重新扫描：")
+        md.append("")
+        md.append("| 问题 | 镜头 | 探针 | 命中 | 结论 | 本轮是否入轮 |")
+        md.append("|---|---|---|---|---|---|")
+        for row in residuals:
+            verdict = "**仍有残余**" if row["residual"] else "已消除"
+            md.append("| %s | %s | `%s` | %d | %s | %s |" % (
+                row["id"], row["shot_id"], row["probe"], row["hits"], verdict,
+                "是" if row["in_round"] else "**未处理（未入轮）**"))
+        md.append("")
+        n_res = sum(1 for r in residuals if r["residual"])
+        n_in = sum(1 for r in residuals if r["in_round"])
+        md.append("小计：%d 条探针，已消除 %d，仍有残余 %d；其中本轮入轮 %d 条，"
+                  "未入轮 %d 条（按 M02 的容量上限，留待下一轮）。"
+                  % (len(residuals), len(residuals) - n_res, n_res, n_in,
+                     len(residuals) - n_in))
+        md.append("")
+        md.append("> 「未入轮」是**未处理**，不是「已修复」。保护关系（旁白/说话人/"
+                  "状态链/在场关系）由投影与 `validate_execution_changes` 另行核对，"
+                  "不在本表里重复计。")
     md.append("")
     (OUT / "diff.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     print(json.dumps({

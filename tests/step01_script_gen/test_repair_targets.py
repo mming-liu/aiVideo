@@ -113,7 +113,7 @@ def test_pairs_authorize_the_whole_linked_field_set():
     allowed = allowed_repair_fields([], [issue], target_shot_id="shot_5",
                                     shots_by_id=_shots(5))
     assert allowed == {"keyframes.2.desc", "keyframes.2.stage",
-                       "frame_layouts.kfs.2.0.props"}
+                       "frame_layouts.kfs.2.0.props", "prompt"}
     assert "keyframes.*.desc" not in allowed, (
         "成对目标必须**精确到下标**：点名 kf2 不得授权同镜其他关键帧"
     )
@@ -147,7 +147,7 @@ def test_audit_payload_keeps_repair_targets_through_the_commit_path():
     allowed = allowed_repair_fields([], issues, target_shot_id="shot_5",
                                     shots_by_id=_shots(5))
     assert allowed == {"keyframes.2.desc", "keyframes.2.stage",
-                       "frame_layouts.kfs.2.0.props"}
+                       "frame_layouts.kfs.2.0.props", "prompt"}
 
 
 def test_audit_payload_legacy_entry_without_the_field_stays_legacy():
@@ -453,9 +453,12 @@ def test_localization_field_and_code_table_do_not_authorize():
     # M02 起唯一允许的扩展是**同帧布局条目**的 props/on_screen——同一事实在布局里
     # 还有一份，只改描述会留下矛盾；它不改变「授权来自成对目标」这条判据。
     assert "ff_desc" not in allowed, "定位字段不得进授权"
-    assert "prompt" not in allowed and "motion_desc" not in allowed, "code 表不得进授权"
+    assert "code" not in allowed and "motion_desc" not in allowed, "code 表不得进授权"
     assert "lf_desc" in allowed
-    assert all(p == "lf_desc" or p.startswith("frame_layouts.lf.") for p in allowed), allowed
+    # 复核第四轮：帧描述被点名 → 同镜聚合 `prompt` 一并授权（台账 beyond_declared 可查）。
+    assert "prompt" in allowed
+    assert all(p in ("lf_desc", "prompt") or p.startswith("frame_layouts.lf.")
+               for p in allowed), allowed
 
 
 def test_pair_pointing_at_a_foreign_shot_does_not_authorize_this_shot():
@@ -548,7 +551,8 @@ def test_cross_shot_issue_reaches_every_group_member():
                                         shots_by_id=_shots(5, 7, 8, 9))
         assert "ff_desc" in allowed, f"{_tid} 应拿到 ff_desc 授权"
         # M02：同帧布局条目随描述互授（同一事实的另一份），除此之外不得越界。
-        assert all(p == "ff_desc" or p.startswith("frame_layouts.ff.") for p in allowed), \
+        assert all(p in ("ff_desc", "prompt") or p.startswith("frame_layouts.ff.")
+                   for p in allowed), \
             (_tid, allowed)
 
 
@@ -942,7 +946,8 @@ def test_shot5_notation_is_canonicalized_and_authorizes():
             target_shot_id="shot_5", shots_by_id=_shots(5))
 
     assert _allowed(_shot5_pairs) == _allowed(_bare_pairs) == {
-        "keyframes.2.desc", "keyframes.2.stage", "frame_layouts.kfs.2.0.props"}
+        "keyframes.2.desc", "keyframes.2.stage", "frame_layouts.kfs.2.0.props",
+        "prompt"}
 
 
 def test_alias_notations_cover_the_common_variants():

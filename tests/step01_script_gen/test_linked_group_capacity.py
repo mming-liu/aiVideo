@@ -247,9 +247,10 @@ def test_member_without_own_warnings_gets_the_issue_context(monkeypatch):
         assert "双目紧闭" in _ai[0]["evidence"], _ai[0]
     _allowed4 = _fb["shot_4"]["allowed_fields"]
     assert "ff_desc" in _allowed4, _allowed4
-    # M02：同帧布局条目随描述互授；除此之外不得越界。
-    assert all(p == "ff_desc" or p.startswith("frame_layouts.ff.") for p in _allowed4), \
-        _allowed4
+    # M02：同帧布局条目随描述互授；复核第四轮起，帧描述被点名时同镜聚合
+    # `prompt` 也一并授权（台账 beyond_declared 可查）。除此之外不得越界。
+    assert all(p in ("ff_desc", "prompt") or p.startswith("frame_layouts.ff.")
+               for p in _allowed4), _allowed4
     # 自身无告警的成员在逐镜块里要明确指路（否则模型面对空「问题:」无从下手）
     assert "本镜自身无告警" in _h.prompt_text()
 
