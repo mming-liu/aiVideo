@@ -33,8 +33,11 @@
 1. **关闭必须有证据**：`fixed_evidence` 缺 `kind`/`detail` 直接抛 `LedgerError`，
    不静默降级；「本次没报出」本身不足以关闭。
 2. **撤销必须留依据**：缺 `reason` 或 `adjudicator` 即拒收。
-3. **身份按（镜头, 字段）归并**，不含 `code`——同一事实换 code 是实测行为
-   （`PROP_CONTINUITY` → `STATE_CHAIN_CONFLICT`），按 code 比会记成「消失 + 新增」。
+3. **身份按（镜头, 字段, 事实）归并**：不含 `code` 作为主身份——同一事实换 code
+   是实测行为（`PROP_CONTINUITY` → `STATE_CHAIN_CONFLICT`），按 code 比会记成
+   「消失 + 新增」。事实指纹取 evidence（缺失时用 code 兜底）；同一 (镜头, 字段)
+   存在多个不同事实时才用指纹消歧，唯一事实保留字段级匹配，避免 evidence 措辞
+   增删细节把「仍被报出」误判成漏报。
 
 人工判为 `legal_expression` / `improvement` / `undecided` 的条目只记状态，
 **不进**「确认缺陷」的分子分母。

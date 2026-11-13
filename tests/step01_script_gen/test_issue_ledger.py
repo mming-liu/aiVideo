@@ -6,7 +6,7 @@
   · 关闭必须有确定性复核证据或重新裁决；
   · 撤销必须给 reason + adjudicator；
   · 人工判为非缺陷的条目不计入确认缺陷统计；
-  · 身份按（镜头, 字段）归并，code 漂移不改变身份。
+  · 身份按（镜头, 字段, 事实）归并，code 漂移不改变身份；同字段不同事实不合并。
 """
 from __future__ import annotations
 
@@ -112,9 +112,37 @@ def test_no_observation_input_cannot_be_read_as_not_detected():
 
 
 def test_identity_requires_shot_and_field():
-    assert issue_identity({"shot_id": "7", "field_path": "lf_desc"}) == ("7", "lf_desc")
+    assert issue_identity({"shot_id": "7", "field_path": "lf_desc",
+                           "evidence": "右手酒壶倾倒"}) == (
+        "7", "lf_desc", "evidence:右手酒壶倾倒")
     with pytest.raises(LedgerError):
         issue_identity({"shot_id": "", "field_path": "lf_desc"})
+
+
+def test_same_field_different_facts_are_not_merged():
+    """同字段两条不同事实：身份不同；观察只命中其中一条时不得把另一条也算报出."""
+    first = _issue(id="a", evidence="右手酒壶倾倒")
+    second = _issue(id="b", evidence="左手反握短刃")
+    assert issue_identity(first) != issue_identity(second)
+
+    ledger = build_issue_ledger(
+        [first, second], [_observed(evidence="右手酒壶倾倒")],
+        candidate_revision="rev1")
+    rows = _rows(ledger)
+    assert rows["a"]["status"] == STATUS_STILL_REPORTED
+    assert rows["b"]["status"] == STATUS_NOT_DETECTED
+    assert rows["b"]["observed_codes"] == []
+    assert ledger["summary"]["still_reported"] == 1
+
+
+def test_code_is_not_the_primary_identity_but_distinguishes_missing_evidence():
+    """code 漂移不改变事实身份；但两侧都没有 evidence 时用 code 兜底区分."""
+    same_fact_new_code = _issue(id="a", code="STATE_CHAIN_CONFLICT",
+                                evidence="右手酒壶倾倒")
+    assert issue_identity(_issue(id="b", evidence="右手酒壶倾倒")) == \
+        issue_identity(same_fact_new_code)
+    assert issue_identity(_issue(id="c", code="A", evidence="")) != \
+        issue_identity(_issue(id="d", code="B", evidence=""))
 
 
 def test_unknown_disposition_is_rejected():

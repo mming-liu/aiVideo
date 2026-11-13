@@ -21,7 +21,9 @@
   （抛 `LedgerError`，不静默降级）。
 - **身份按「镜头 + 字段 + 事实」归并，不按 code 归并。** 同一事实在两次审计里可能
   换 code（实测 `PROP_CONTINUITY` → `STATE_CHAIN_CONFLICT`），按 code 比会把同一
-  问题记成「消失 + 新增」。
+  问题记成「消失 + 新增」；但同一字段上的**不同事实**必须分开，否则任意一条命中
+  都会把另一条记成仍被报出。事实指纹取 evidence（缺失时用 code 兜底），匹配时只在
+  同一字段存在多个事实时才用它消歧，避免措辞差异误伤唯一事实。
 - **不是缺陷的条目不算漏报。** 人工已裁决为「已有合法表达」「改进建议」「证据不足」
   的条目，只记录状态，不参与「确认缺陷重报率」的分子分母。
 
@@ -57,17 +59,54 @@ def _s(value) -> str:
     return str(value if value is not None else "").strip()
 
 
-def issue_identity(item: dict) -> tuple[str, str]:
-    """稳定身份：`(shot_id, field_path)`，两者都归一成裸字符串.
+def _norm_fact(value) -> str:
+    """事实指纹的归一化：去空白、小写（只做确定性规范化，不做语义猜测）."""
+    return "".join(str(value if value is not None else "").split()).lower()
 
-    刻意**不含 code**：同一事实换 code 是实测行为（`PROP_CONTINUITY` ↔
-    `STATE_CHAIN_CONFLICT`），按 code 比会把同一问题记成「消失 + 新增」。
+
+def _fact_fingerprint(item: dict) -> str:
+    """事实指纹：优先 evidence；没有 evidence 时退回 code（仅作区分，不冒充证据）."""
+    evidence = _norm_fact(item.get("evidence"))
+    if evidence:
+        return "evidence:" + evidence
+    code = _norm_fact(item.get("code"))
+    return ("code:" + code) if code else ""
+
+
+def issue_identity(item: dict) -> tuple[str, str, str]:
+    """稳定身份：`(shot_id, field_path, fact_fingerprint)`.
+
+    - **不含 code 作为主身份**：同一事实换 code 是实测行为（`PROP_CONTINUITY` ↔
+      `STATE_CHAIN_CONFLICT`），按 code 比会把同一问题记成「消失 + 新增」。
+    - **含事实指纹**：同一字段上的两个不同事实（不同 evidence）不能合并成同一身份，
+      否则任意一条命中都会把另一条记成 `still_reported`。evidence 缺失时用 code
+      指纹兜底区分，但匹配侧仍把「无 evidence」当作弱事实处理（见
+      :func:`_facts_match`），不让 code 漂移误伤同一事实。
     """
     shot = _s(item.get("shot_id"))
     field = _s(item.get("field_path"))
     if not shot or not field:
         raise LedgerError("身份不完整：需要非空 shot_id 与 field_path，实际=%r" % (item,))
-    return shot, field
+    return shot, field, _fact_fingerprint(item)
+
+
+def _facts_match(confirmed_fact: str, observed: dict) -> bool:
+    """同一字段下判断观察项是否指向该确认事实.
+
+    只有两侧都有事实指纹时才做区分：evidence 完全一致，或一方是另一方的子串
+    （实测同一事实的措辞会增删细节）。任一侧没有 evidence/code 指纹时视为
+    「无法区分」——由调用方按字段唯一性决定是否回退到字段级匹配。
+    """
+    observed_fact = _fact_fingerprint(observed)
+    if not confirmed_fact or not observed_fact:
+        return False
+    if confirmed_fact == observed_fact:
+        return True
+    if confirmed_fact.startswith("evidence:") and observed_fact.startswith("evidence:"):
+        a = confirmed_fact[len("evidence:"):]
+        b = observed_fact[len("evidence:"):]
+        return a in b or b in a
+    return False
 
 
 def _normalize_issue(item: dict, *, source: str) -> dict:
@@ -78,9 +117,10 @@ def _normalize_issue(item: dict, *, source: str) -> dict:
     if disposition not in DISPOSITIONS:
         raise LedgerError("未知处置 %r（允许：%s）" % (disposition, ", ".join(DISPOSITIONS)))
     return {
-        "id": _s(item.get("id")) or "%s@%s" % ident,
+        "id": _s(item.get("id")) or "%s@%s" % (ident[0], ident[1]),
         "shot_id": ident[0],
         "field_path": ident[1],
+        "fact_fingerprint": ident[2],
         "code": _s(item.get("code")),
         "disposition": disposition,
         "evidence": _s(item.get("evidence")),
@@ -110,23 +150,36 @@ def build_issue_ledger(confirmed: Iterable[dict], observed: Iterable[dict] | Non
     rows: list[dict] = []
     observed_items = None if observed is None else list(observed)
 
-    # 观察侧按身份索引；同一身份多条时保留第一条并把其余记进 `extra`
+    # 观察侧按「镜头 + 字段」索引；同一字段下是否指向同一事实由事实指纹再判。
     seen: dict[tuple[str, str], list] = {}
     for item in observed_items or []:
         try:
             key = issue_identity(item)
         except LedgerError:
             continue
-        seen.setdefault(key, []).append(item)
+        seen.setdefault((key[0], key[1]), []).append(item)
 
-    for raw in confirmed or []:
-        issue = _normalize_issue(raw, source="confirmed")
-        ident = (issue["shot_id"], issue["field_path"])
-        hits = seen.get(ident) or []
+    normalized = [_normalize_issue(raw, source="confirmed") for raw in confirmed or []]
+    # 同一 (镜头, 字段) 下有几个不同事实：>1 时才需要事实指纹消歧；
+    # 唯一事实保留旧的字段级匹配，避免 evidence 措辞差异把「仍被报出」误判成漏报。
+    facts_by_field: dict[tuple[str, str], set[str]] = {}
+    for issue in normalized:
+        facts_by_field.setdefault(
+            (issue["shot_id"], issue["field_path"]), set()).add(issue["fact_fingerprint"])
+
+    for issue in normalized:
+        field_key = (issue["shot_id"], issue["field_path"])
+        field_hits = seen.get(field_key) or []
+        if len(facts_by_field[field_key]) > 1:
+            hits = [h for h in field_hits
+                    if _facts_match(issue["fact_fingerprint"], h)]
+        else:
+            hits = field_hits
         row = {
             "id": issue["id"],
             "shot_id": issue["shot_id"],
             "field_path": issue["field_path"],
+            "fact_fingerprint": issue["fact_fingerprint"],
             "code": issue["code"],
             "disposition": issue["disposition"],
             "evidence": issue["evidence"],
