@@ -163,6 +163,8 @@ tests/step02b_video_gen/*
 # 2026-11-13 F2：r2v 拼表隔离（plan-only / 候选写路径）
 !tests/step02b_video_gen/test_plan_only_isolation.py
 !tests/step02b_video_gen/test_candidate_isolation_r2v.py
+# 2026-11-13 F3：执行要求问题不得被缓存命中绕过
+!tests/step02b_video_gen/test_cache_requirements_gate.py
 !tests/step01_script_gen/test_p0_fault_injection.py
 !tests/step01_script_gen/test_plan_revision_v2_wiring.py
 # 2026-10-30（R01）：Step01 审计收口的最小回归集——仅这 4 个文件 + SSE 桩 + 夹具。

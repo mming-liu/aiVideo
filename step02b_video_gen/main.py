@@ -262,31 +262,40 @@ async def _process_one_shot_skip_frames(
     _visual_plan = _load_visual_plan(shots_dir.parent)
     _reqs = _execution_requirements(shot, script, _visual_plan, frame_paths,
                                     str(active_video_model() or ""))
-    if _reqs.get("issues"):
-        logger.warn(f"  [Shot {idx}] 执行要求问题: {_reqs['issues'][:3]}")
-
-    # Cache check（§V2 改动 4）：prompt_hash + 产物检查 + 冻结请求关系
-    shot_hash = _get_shot_hash(shot, script, shot_dir=frames_dir)
-    _frozen_for_cache = None
-    if policy != "auto" and REFERENCE_MODE == "image":
-        _frozen_for_cache, _ = build_frozen_for_shot(
-            shot=shot, script=script, video_adapter=video_adapter,
-            frame_paths=frame_paths, mode="A",
-            provider=os.getenv("VIDEO_PROVIDER", ""),
-            model_id=active_video_model(), execution_requirements=_reqs)
-    _cache = cache_decision(shot, script, shot_dir, video_path, clip_path=_clip_dst,
-                            force=force, shot_hash=shot_hash,
-                            frozen_request=_frozen_for_cache,
-                            require_exact=(policy != "auto"))
-    if _cache["hit"]:
-        logger.info(f"  [Shot {idx}] Cache hit({_cache['relation']}), skip: {_cache['reason']}")
-        return None
-    if _cache["reason"] == "clip 产物缺失" and _clip_dst is not None:
-        # R3：视频本体与 prompt_hash 完好、只有 clips/ 副本缺失 ⇒ 本地补拷，零远端 POST。
-        if repair_missing_clip(shot_dir, video_path, _clip_dst):
-            logger.info(f"  [Shot {idx}] Clip 缺失但视频完好，本地补拷 clips/（0 次远端提交）")
+    _req_issues = list(_reqs.get("issues") or [])
+    if _req_issues:
+        logger.warn(f"  [Shot {idx}] 执行要求问题: {_req_issues[:3]}")
+    else:
+        # 只有要求干净时才允许走缓存：否则命中旧产物会绕过提交路径上的
+        # `validate_requirements`，把本应被拦的视频直接复用（F3）。
+        # 缓存检查（§V2 改动 4）：prompt_hash + 产物检查 + 冻结请求关系
+        shot_hash = _get_shot_hash(shot, script, shot_dir=frames_dir)
+        _frozen_for_cache = None
+        if policy != "auto" and REFERENCE_MODE == "image":
+            _frozen_for_cache, _ = build_frozen_for_shot(
+                shot=shot, script=script, video_adapter=video_adapter,
+                frame_paths=frame_paths, mode="A",
+                provider=os.getenv("VIDEO_PROVIDER", ""),
+                model_id=active_video_model(), execution_requirements=_reqs)
+        _cache = cache_decision(shot, script, shot_dir, video_path, clip_path=_clip_dst,
+                                force=force, shot_hash=shot_hash,
+                                frozen_request=_frozen_for_cache,
+                                require_exact=(policy != "auto"))
+        if _cache["hit"]:
+            logger.info(f"  [Shot {idx}] Cache hit({_cache['relation']}), skip: {_cache['reason']}")
             return None
-        logger.warn(f"  [Shot {idx}] Clip 缺失且本地补拷失败，回退为重新生成")
+        if _cache["reason"] == "clip 产物缺失" and _clip_dst is not None:
+            # R3：视频本体与 prompt_hash 完好、只有 clips/ 副本缺失 ⇒ 本地补拷，零远端 POST。
+            if repair_missing_clip(shot_dir, video_path, _clip_dst):
+                logger.info(f"  [Shot {idx}] Clip 缺失但视频完好，本地补拷 clips/（0 次远端提交）")
+                return None
+            logger.warn(f"  [Shot {idx}] Clip 缺失且本地补拷失败，回退为重新生成")
+
+    if _req_issues:
+        # 跳过缓存后仍按同一入口提交；提交路径会在 prepare 后执行
+        # `validate_requirements` 并拒收（零 POST），不会静默复用旧产物。
+        shot_hash = _get_shot_hash(shot, script, shot_dir=frames_dir)
+        logger.warn(f"  [Shot {idx}] 执行要求未通过，跳过缓存，交给 validate_requirements 拒收")
 
     return await _submit_video(
         shot, shot_dir, video_path, frame_paths, shot_hash,
