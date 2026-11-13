@@ -316,6 +316,8 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
     # r2v: resolve the actual references now.  `_r2v_refs_cache` is a runtime
     # underscore field and is stripped on save, so relying on it here caused
     # portrait/asset changes to be silently ignored after a restart.
+    # 2026-11-13（F2）：哈希是**纯读**路径——`materialize=False` 只收集源参考，
+    # 不拼参考表、不落盘；此前这里会经 `fit_refs` 往生产 `shots/` 写 ref_sheet。
     if os.getenv("VIDEO_REFERENCE_MODE", "").strip().lower() == "r2v":
         try:
             from step02_video_gen.prompt_builder import (
@@ -323,7 +325,7 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
             )
             _refs = _collect_r2v_references(
                 shot, characters=script.get("characters") or [],
-                registry=_load_character_registry(),
+                registry=_load_character_registry(), materialize=False,
             )
             for _ref in _refs:
                 _fp = Path(_ref)
@@ -445,8 +447,12 @@ def build_frozen_for_shot(*, shot, script, video_adapter, frame_paths, mode,
                           continuity_ref_image=None, shot_dir=None, script_revision=None,
                           scope=None, provider=None, model_id=None, prompt=None,
                           requirements=None, prepared=None,
-                          execution_requirements=None):
-    """按**当前输入**组装冻结请求（提交冻结与缓存关系核对共用同一份组装）。"""
+                          execution_requirements=None, ref_sheet_dir=None):
+    """按**当前输入**组装冻结请求（提交冻结与缓存关系核对共用同一份组装）。
+
+    ``ref_sheet_dir`` 是 r2v 超限参考表的落盘目录（attempt / 临时目录）；不给时
+    由 `_make_request` 使用系统临时目录，**绝不**写生产 ``shots/``（F2）。
+    """
     from step02_video_gen import request_plan as rp
     from step02_video_gen.prompt_builder import _build_prompt, _make_request
     from shared.model_caps import active_video_model
@@ -456,7 +462,8 @@ def build_frozen_for_shot(*, shot, script, video_adapter, frame_paths, mode,
     req = _make_request(video_adapter, prompt, frame_paths, shot,
                         characters=script.get("characters", []),
                         continuity_ref_image=continuity_ref_image, mode=mode,
-                        retry_attempt=_read_qc_retry_state(shot_dir)["count"] if shot_dir is not None else 0)
+                        retry_attempt=_read_qc_retry_state(shot_dir)["count"] if shot_dir is not None else 0,
+                        **({"ref_sheet_dir": ref_sheet_dir} if ref_sheet_dir is not None else {}))
     frozen = rp.build_frozen_request(
         req, shot=shot,
         scope=scope if scope is not None else {"chapter": _chapter_index_safe()},
@@ -1449,6 +1456,7 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
 
     req = make_request(video_adapter, prompt, frame_paths, shot, characters=characters,
                        continuity_ref_image=continuity_ref_image, mode=mode,
+                       ref_sheet_dir=attempt / "refs",
                        **({"retry_attempt": _read_qc_retry_state(shot_dir)["count"]}
                           if production_output else {}))
     # 候选落盘路径 + 执行上下文（适配器原样透传请求对象；provider 据此下载进 attempt）

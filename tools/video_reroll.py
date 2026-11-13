@@ -147,7 +147,8 @@ def cmd_plan(args) -> int:
     only = parse_shot_selector(args.shots)
     chapter = args.chapter if args.chapter is not None else 1
     plan = build_plan(script, shots_dir, only_indices=only, chapter=chapter,
-                      provider=args.provider or "", model_id=args.model)
+                      provider=args.provider or "", model_id=args.model,
+                      ref_work_dir=out_root / "refs")
     plan["script"] = str(Path(args.script).resolve())
     plans_dir = out_root / "plans"
     plans_dir.mkdir(parents=True, exist_ok=True)

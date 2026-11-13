@@ -366,7 +366,8 @@ def _execution_requirements(shot: dict, script: dict, visual_plan: dict | None,
 def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
                chapter: int, provider: str, model_id: str | None = None,
                precheck_ledger: Path | None = None,
-               visual_plan: dict | None = None) -> dict:
+               visual_plan: dict | None = None,
+               ref_work_dir: Path | None = None) -> dict:
     """只组装**冻结请求 + 结构预检**（零网络、零生成 POST，§V2「plan-only+force 仍零网络」）。
 
     M4：image 模式下额外做首尾帧 SHA-256 / 差异度预检；给了
@@ -375,6 +376,9 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
 
     注意：provider 的压缩/合规改写只在实际 prepare 时发生，因此这里冻结的是
     "组装完成、尚未 provider 化"的事实，``semantic_preflight=unverified``。
+
+    ``ref_work_dir``：r2v 超限参考表的落盘根（plan-only 传候选实验根）。**不给**
+    时 `_make_request` 用系统临时目录，绝不写生产 ``shots/``（F2）。
     """
     from shared.model_caps import active_video_model
     from shared.video_media_plan import active_media_policy
@@ -451,7 +455,9 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
             frozen, _req = build_frozen_for_shot(
                 shot=shot, script=script, video_adapter=None, frame_paths=frame_paths,
                 mode="A", scope={"chapter": chapter}, provider=provider,
-                model_id=resolved_model, execution_requirements=_reqs)
+                model_id=resolved_model, execution_requirements=_reqs,
+                ref_sheet_dir=((Path(ref_work_dir) / str(idx))
+                               if ref_work_dir is not None else None))
             # S04：预检走与实发相同的 prepare 链路（纯离线，不提交）。
             try:
                 from _video_gen import create_service
@@ -470,7 +476,9 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
                             shot=shot, script=script, video_adapter=None, frame_paths=frame_paths,
                             mode="A", scope={"chapter": chapter}, provider=provider,
                             model_id=resolved_model, prepared=_prepared,
-                            execution_requirements=_reqs)
+                            execution_requirements=_reqs,
+                            ref_sheet_dir=((Path(ref_work_dir) / str(idx))
+                                           if ref_work_dir is not None else None))
                         _prepared_status = "prepared"
             except (SystemCameraError, VideoCapabilityError) as _prep_exc:
                 # 确定阻断：系统段冲突/超长、provider 能力不足
@@ -531,7 +539,13 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
 
 
 def _plan_only(options, script: dict, shots_dir: Path, chapter: int) -> int:
-    """plan-only：零网络规划，落计划文件到候选实验根（不写正式产物）。"""
+    """plan-only：零网络规划，落计划文件到候选实验根（不写正式产物）。
+
+    2026-11-13（F2）：plan-only 也做 production snapshot 前后比对——r2v 参考表
+    拼表等写路径一旦误落正式 ``shots/``，必须显式报 ``production_write_detected``，
+    不能只写候选 ``plans/`` 就当隔离成立。
+    """
+    from shared import enhancement_io as _eio
     from shared.enhancement_io import package_root
     from step02b_video_gen import cli
 
@@ -540,15 +554,24 @@ def _plan_only(options, script: dict, shots_dir: Path, chapter: int) -> int:
     out_root.mkdir(parents=True, exist_ok=True)
     only_indices = parse_shot_selector(options.shots)
     ledger = out_root / "step02b_frame_precheck.json"
+    before = production_snapshot(chapter)
     plan = build_plan(script, shots_dir, only_indices=only_indices, chapter=chapter,
                       provider=str(os.getenv("VIDEO_PROVIDER", "")),
-                      precheck_ledger=ledger)
+                      precheck_ledger=ledger, ref_work_dir=out_root / "refs")
     path = out_root / f"plan_{len(list(out_root.glob('plan_*.json'))) + 1:04d}.json"
     path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"plan": str(path), "ready": plan["ready"], "blocked": plan["blocked"],
-                      "frame_precheck_ledger": str(ledger),
-                      "estimated_generations": plan["estimated_generations"],
-                      "network_calls": 0}, ensure_ascii=False))
+    changes = snapshot_changes(before, production_snapshot(chapter))
+    payload = {"plan": str(path), "ready": plan["ready"], "blocked": plan["blocked"],
+               "frame_precheck_ledger": str(ledger),
+               "estimated_generations": plan["estimated_generations"],
+               "production_unchanged": not any(changes.values()),
+               "network_calls": 0}
+    if any(changes.values()):
+        payload["isolation_violation"] = changes
+        payload["code"] = "production_write_detected"
+        print(json.dumps(payload, ensure_ascii=False))
+        return _eio.EXIT_TOOL_FAIL
+    print(json.dumps(payload, ensure_ascii=False))
     return 0
 
 

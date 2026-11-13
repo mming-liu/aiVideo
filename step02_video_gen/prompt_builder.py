@@ -1382,7 +1382,8 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
                   characters: list | None = None,
                   continuity_ref_image: str | None = None, mode: str = "A",
                   retry_attempt: int = 0,
-                  continuity_ref_video: str | None = None):
+                  continuity_ref_video: str | None = None,
+                  ref_sheet_dir: Path | str | None = None):
     """构建 VideoGenerationRequest.
 
     frame_paths: [首帧路径, 尾帧路径(可选), 中间关键帧...]
@@ -1395,6 +1396,8 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
       `video_url` / role=reference_video，不再把视频当图片。
     mode: "A"（关键帧模式）或 "B"（I2V 连续接续模式）。
       模式B时跳过 frame_paths 首帧解析，直接用 continuity_ref_image 作 image_path。
+    ref_sheet_dir: r2v 超限参考表的落盘目录（attempt / 临时目录）。**绝不**默认写
+      生产 ``shots/``；未给时 `_collect_r2v_references` 使用系统临时目录。
     """
     from _video_gen import VideoGenerationRequest
     from shared.video_media_plan import (active_media_policy, derive_media_mode,
@@ -1508,6 +1511,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         last_frame_image_path = None
         reference_paths = _collect_r2v_references(
             shot, characters=characters or [], registry=_load_character_registry(),
+            **({"sheet_dir": ref_sheet_dir} if ref_sheet_dir is not None else {}),
         )
         # T1：视频参考追加在图片之后（provider 按图片 → 视频顺序下发，
         # 与「图N / 视频N」分开编号一致）。视频不能走图片容量压缩。
@@ -1695,7 +1699,9 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
 
 def _collect_r2v_references(shot: dict, characters: list | None = None,
                             registry: dict | None = None,
-                            limit: int = 5) -> list[str]:
+                            limit: int = 5,
+                            sheet_dir: Path | str | None = None,
+                            materialize: bool = True) -> list[str]:
     """收集 r2v 模式的参考图（角色肖像 + 场景资产 + 道具资产，最多 limit 个）.
 
     参考图来源（优先级：场景环境 → 出镜角色肖像 → 出镜道具）：
@@ -1711,6 +1717,10 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
     与 _select_best_reference 的区别：后者为图生图（首帧/尾帧）选单张最优，
     且可能回退到风格锚点；r2v 需要多张并只认角色肖像/场景/道具资产
     （风格锚点对角色一致性无意义）。返回空列表时由 _make_request 降级为纯文生视频。
+
+    ``sheet_dir`` 是超限参考表的落盘目录（attempt / 临时目录），**绝不写生产
+    ``shots/``**；未给时使用系统临时目录。``materialize=False`` 是**纯读**模式：
+    不拼表、不落盘，只返回未压缩的源参考列表，供缓存哈希等只读消费者使用。
     """
     registry = registry if registry is not None else _load_character_registry()
 
@@ -1942,8 +1952,23 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
         ("chars", list(char_refs)),
         ("props", list(prop_refs)),
     ]
-    from shared.paths import shot_work_dir
-    sheet_dir = shot_work_dir(shot.get("index", 0))
+    # 2026-11-13（F2）：拼表目录**不得**是生产 `shots/`——plan-only/候选运行也会
+    # 走到这里，写进正式目录就是越界副作用。目录由调用方给 attempt/临时根；未给时
+    # 用系统临时目录。`materialize=False` 的只读消费者（缓存哈希）完全不拼表。
+    raw_refs: list[str] = []
+    for _p in head_refs + [p for _name, _items in buckets for p in _items]:
+        if _p and _p not in raw_refs and Path(_p).exists():
+            raw_refs.append(_p)
+    if not materialize:
+        _log_r2v_collect(
+            f"r2v 参考图纯读收集（镜头{shot.get('index', '?')}）: {len(raw_refs)} 张，不落盘")
+        return raw_refs
+    if sheet_dir is None:
+        import tempfile
+        sheet_dir = Path(tempfile.mkdtemp(prefix="aivideo_r2v_refs_"))
+        _log_r2v_collect(f"  未指定参考表目录，使用临时目录: {sheet_dir}")
+    else:
+        sheet_dir = Path(sheet_dir)
     refs = head_refs + fit_refs(
         buckets, max(1, media_limit - len(head_refs)), sheet_dir, f"r2v{shot.get('index', 0)}",
     )
