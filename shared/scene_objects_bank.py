@@ -357,9 +357,13 @@ def _ratio_trusts_width(obj: dict) -> bool:
 
 
 def boat_width_text(shot: dict, scene_objects: dict) -> str:
-    """本镜船宽文本「宽X米」：scene_objects 动态优先，未命中走兜底常量.
+    """本镜船宽文本「宽X米」：**只取输入里的有效规格**，没有就返回空串.
 
     T1 boat_width（窄身→宽X米）消费。
+
+    2026-11-13（S02）：此前未命中规格时回退 `宽1.4米` 兜底常量——那是在**没有来源**
+    的情况下往正文里写尺寸。改为返回空串，由调用方跳过改写：缺规格就保留原描述，
+    需要尺寸时由上游修订补，不由后处理编造。
     """
     spec = resolve_boat_spec(shot, scene_objects)
     if spec and spec.get("width_m") and _ratio_trusts_width(spec):
@@ -367,7 +371,7 @@ def boat_width_text(shot: dict, scene_objects: dict) -> str:
             return f"宽{float(spec['width_m']):g}米"
         except (TypeError, ValueError):
             pass
-    return f"宽{BOAT_FALLBACK_WIDTH_M:g}米"
+    return ""
 
 
 def _boat_display_name(spec: dict | None) -> str:
@@ -381,13 +385,14 @@ def _boat_display_name(spec: dict | None) -> str:
 def build_boat_replacement(shot: dict, scene_objects: dict) -> str:
     """v6_43 规则1 的替换文本：小舟 → 敞口木舟/舴艋舟（长X米宽Y米[，可容N人]）.
 
-    尺寸优先 scene_objects（含 B5 比例后验）；未命中任何船规格时回退
-    中性文本「敞口木舟（宽1.4米，可容3人）」——不再把舴艋舟强加给其他小说。
+    尺寸优先 scene_objects（含 B5 比例后验）。**未命中任何船规格时返回空串**：
+    2026-11-13（S02）起不再回退「宽1.4米，可容3人」——那是无来源的尺寸与载客量，
+    会写进正文并被下游当成事实。没有规格就不替换，保留原文。
     """
     spec = resolve_boat_spec(shot, scene_objects)
     boat_name = _boat_display_name(spec)
     if not spec:
-        return f"{boat_name}（宽{BOAT_FALLBACK_WIDTH_M:g}米，可容3人）"
+        return ""
     length, width = spec.get("length_m"), spec.get("width_m")
     if width and not _ratio_trusts_width(spec):
         width = None  # 比例离谱：宽度不可信，不写

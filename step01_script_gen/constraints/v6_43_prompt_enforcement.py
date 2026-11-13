@@ -400,8 +400,11 @@ def _fix_vague_anchor(shot: dict) -> int:
         if "仅露双眼" in new_text and "不是上半身" not in new_text:
             new_text = new_text.replace("仅露双眼", "仅露双眼（不是上半身出水）", 1)
             fixed += 1
-        # 3) "潜伏水下" 类 → 追加"严格只露头顶 Xcm"
-        if re.search(r"潜伏水下", new_text) and "约 2cm" not in new_text:
+        # 3) "潜伏水下" 类 → 只有**输入已给出露头高度**时才补说明
+        #    2026-11-13（S02）：此前无条件追加「仅头顶约 2cm 露出水面」，等于替
+        #    输入决定水下姿态与高度。没有来源的高度不写，保留原文交 audit。
+        if re.search(r"潜伏水下", new_text) and "不是上半身" not in new_text \
+                and re.search(r"约?\s*\d+(?:\.\d+)?\s*(?:cm|厘米)", new_text):
             new_text = re.sub(
                 r"潜伏水下([^，。、\n]{0,8})",
                 r"潜伏水下\1（仅头顶约 2cm 露出水面，不是上半身出水）",
@@ -627,7 +630,9 @@ class V643PromptEnforcementConstraint(Constraint):
             if _repl.count("（") != _repl.count("）") or _repl.count("(") != _repl.count(")"):
                 _repl = _repl.split("（")[0].split("(")[0].rstrip("，, ") or "敞口木舟"
             _seen_boat_spec = _has_boat_spec(out)
-            for pat in _BOAT_PATTERNS:
+            # 2026-11-13（S02）：没有输入规格时 `build_boat_replacement` 返回空串，
+            # 此时**不做任何替换**——保留原文，不编造尺寸/载客量。
+            for pat in (_BOAT_PATTERNS if boat_repl else []):
                 # v6.62（09-06）防叠：替换点紧邻前缀已是「舴艋/无篷/窄身」形制词时
                 # 不整词替换（原文「舴艋小舟」→「舴艋无篷舴艋舟」重复实测）——
                 # 只补尺寸段（含闭合括号），形制词由前缀 + 原文剩余字构成。

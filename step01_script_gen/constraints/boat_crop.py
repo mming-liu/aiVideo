@@ -37,9 +37,14 @@ _BOAT_CROP_PATTERNS = (
 
 
 class BoatCropConstraint(Constraint):
-    """V. 船体裁切短语剥离：命中「延伸出画外/只露出一部分/船X在画外」→ 剥离.
+    """V. 船体裁切短语**只报不改**：命中「延伸出画外/只露出一部分/船X在画外」.
 
-    severity=WARN: 短语剥离是确定性改写，无副作用。
+    severity=WARN.
+
+    2026-11-13（S02）：此前直接删除这类短语。裁切是**输入里的合法构图**（例如「船尾
+    在画外」正是为了让船体不压人物比例），后处理无权判定它「不该存在」；真正需要
+    全船入画时，那属于构图要求，应由计划/修订表达并走既有反馈，而不是在确定性层
+    静默删字。现在只记录冲突，交 audit / 修订轮处理。
     """
 
     name = "boat_crop_strip"
@@ -53,28 +58,21 @@ class BoatCropConstraint(Constraint):
                 v = shot.get(fld)
                 if not isinstance(v, str) or not v:
                     continue
-                new_v = v
-                for pat in _BOAT_CROP_PATTERNS:
-                    new_v = pat.sub("", new_v)
-                # 仅当确实剥离了内容时才做后续清理（避免无修改时也加句号）
-                if new_v == v:
+                hits = [m.group(0) for pat in _BOAT_CROP_PATTERNS
+                        for m in pat.finditer(v)]
+                if not hits:
                     continue
-                # 剥离后若仍有孤立半括号（极端文本），一并清掉
-                if new_v.count("（") != new_v.count("）"):
-                    new_v = re.sub(r"[（）]", "", new_v)
-                # 清理残留空段/多余标点
-                new_v = re.sub(r"[，,。]{2,}", "。", new_v)
-                new_v = new_v.strip("。，, ") + ("。" if new_v.strip() else "")
-                if new_v != v:
-                    shot[fld] = new_v
-                    repairs.append(
-                        RepairRecord(
-                            constraint_name=self.name,
-                            shot_index=idx,
-                            action="rewrite",
-                            target=fld,
-                            before=v,
-                            after=new_v,
-                        )
+                repairs.append(
+                    RepairRecord(
+                        constraint_name=self.name,
+                        shot_index=idx,
+                        action="warn",
+                        target=fld,
+                        before=v[:120],
+                        after=v[:120],
+                        detail=("检测到船体裁切描述 %s：裁切可能是有意的构图，"
+                                "保留原文交 audit/修订轮判断，不自动删除。"
+                                % "、".join(h.strip() for h in hits[:3])),
                     )
+                )
         return repairs

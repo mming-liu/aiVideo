@@ -438,7 +438,7 @@ _SCENE_OBJECT = {
     "properties": {
         "identifier": {
             "type": "string",
-            "description": "物体名称（跨章节保持一致，如：照月湾小舟、青石马车）",
+            "description": "物体名称（跨章节保持一致，如：<地点A>的<载具>、<材质>马车）",
         },
         "category": {
             "type": "string",
@@ -518,11 +518,11 @@ _SCENE_ASSET = {
     "properties": {
         "identifier": {
             "type": "string",
-            "description": "场景名称（跨章节保持一致，如：照月湾小舟、杨府别庄大门）",
+            "description": "场景名称（跨章节保持一致，如：<地点A>的<载具/场所>、<宅院B>大门）",
         },
         "location": {
             "type": "string",
-            "description": "物理地点（如：照月湾荷花丛中、云河镇杨府别庄大门外）",
+            "description": "物理地点（如：<地点A>的<标志物>旁、<宅院B>大门外）",
         },
         "time_of_day": {
             "type": "string",
@@ -547,7 +547,7 @@ _SCENE_ASSET = {
         "consistent_terms": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "跨镜头统一称呼（如：[\"照月湾荷花丛中\", \"荷花荡\"]）",
+            "description": "跨镜头统一称呼（如：[\"<地点A>的<标志物>旁\", \"<简称>\"]）",
         },
         "is_new": {
             "type": "boolean",

@@ -42,10 +42,22 @@ _RE_LONG_NO_CANOPY = re.compile(r"(长\d+(?:\.\d+)?米)无篷")
 _RE_NARROW_BARE = re.compile(r"窄身")
 
 
+#: 判定「这段文本说的是船」的名词（只在命中时才可以改写「窄身」等船体形制词）。
+_BOAT_NOUNS = ("船", "舟", "艇", "舢板", "舴艋", "筏")
+
+
+def _mentions_boat(text: str) -> bool:
+    return any(noun in text for noun in _BOAT_NOUNS)
+
+
 class BoatWidthConstraint(Constraint):
     """T1. 船体宽度：检测「窄身」/无宽度 → 补「宽W米」（W 取 scene_objects 船规格）.
 
     severity=WARN: 船宽补全是确定性改写.
+
+    2026-11-13（S02）两条约束：
+    ① **没有输入规格就不改写**（`boat_width_text` 返回空串 → 跳过）；
+    ② 「窄身」只在**该字段确实在说船**时处理——「窄身机甲」不是船，不得删除。
     """
 
     name = "boat_width"
@@ -58,6 +70,9 @@ class BoatWidthConstraint(Constraint):
         scene_objects = scene_objects.get("scene_objects") or {} if isinstance(scene_objects, dict) else {}
         for shot, is_hook, idx in self.iter_shots_and_hook(ctx):
             width_txt = boat_width_text(shot, scene_objects)
+            # 没有来源的尺寸不写（S02）。
+            if not width_txt:
+                continue
             # 收集要改写的字段（含 kf.desc——v6.41+ kf 描述漏修）
             fld_text: list[tuple[str, str]] = []
             for fld in self.fields:
@@ -74,6 +89,9 @@ class BoatWidthConstraint(Constraint):
             for fld, v in fld_text:
                 # 幂等：已含宽度或宽身则跳过
                 if re.search(r"宽\d", v) or "宽身" in v:
+                    continue
+                # 该字段不在说船：形制词不属于船体，保留原文（S02）。
+                if not _mentions_boat(v):
                     continue
                 new_v = v
                 # ① 「长X米窄身」 → 「长X米宽W米」

@@ -249,8 +249,9 @@ def analyze_shot_distribution(script: dict, novel_text: str) -> dict:
     if not shots:
         return {"status": "error", "message": "未找到任何分镜"}
 
-    # 1. 高潮关键词库（单源 climax_words；通用半跨小说 + 特化词经
-    #    script["meta"]["climax_keywords"] 注入，未提供时走锦衣夜行第一章兜底）
+    # 1. 高潮关键词库（单源 climax_words；通用词 + 特化词经
+    #    script["meta"]["climax_keywords"] 注入，未提供时用通用词表兜底——
+    #    兜底表是通用词，不含任何作品专名）
     climax_keywords = climax_words_for_gap(script)
 
     # 2. 检查高潮覆盖情况
