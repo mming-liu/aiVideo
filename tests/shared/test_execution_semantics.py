@@ -164,10 +164,11 @@ def _causal_base(*, bound: bool = False, process: bool = False) -> dict:
     if process:
         shot["motion_desc"] = "前2秒：甲拱手；后2秒：甲转身"
     if bound:
-        shot["plan_refs"] = {"beats": [1], "lines": []}
+        shot["plan_refs"] = {"beats": [1, 2], "lines": []}
     return {
         "chapter_outline": {
-            "causal_chain": ["起因：甲与乙约定赴城", "结果：乙已抵达城门"],
+            "causal_chain": ["起因：甲与乙约定赴城（B1）",
+                             "结果：乙已抵达城门（B2）"],
             "narration_lines": [],
             "main_events": [],
             "shot_beats": ["节拍：甲与乙约定赴城", "节拍：乙抵达城门"],
@@ -297,6 +298,72 @@ def test_prefixed_plan_ref_is_invalid_and_not_binding():
     assert gap["invalid_refs"] == [{"shot": "shot:1", "kind": "beats",
                                     "value": "B1", "reason": "not_a_number"}]
     assert gap["needs_semantic_review"] is True
+
+
+# ---------------------------------------------------------------------------
+# 过程/时间证据必须绑定到**被质疑的具体关系**（2026-11-13 复核）
+# ---------------------------------------------------------------------------
+def test_unrelated_real_beat_with_process_does_not_exempt():
+    """鸟镜头引用**真实存在但不属于该关系**的节拍，仍不能豁免.
+
+    2026-11-13 复核复现：第二条真实节拍「鸟展翅飞走」+ 两个不同时刻关键帧，
+    引用与过程都有效，却没有承载「旅人入城」。
+    """
+    base = _causal_base(bound=True, process=False)
+    base["chapter_outline"]["shot_beats"].append("节拍：鸟展翅飞走")
+    with_bird = _add_shot(base, {
+        "index": 2, "duration_sec": 3.0, "ff_desc": "城门上方一只鸟飞过",
+        "lf_desc": "鸟振翅飞走", "motion_desc": "鸟掠过",
+        "prompt": "城门", "narration_segment": "", "context_bridge": "",
+        "keyframes": [{"t_sec": 0.0, "stage": "pre", "desc": "鸟落在城垛"},
+                      {"t_sec": 1.0, "stage": "after", "desc": "鸟振翅飞走"}],
+        "plan_refs": {"beats": [3], "lines": []},
+    })
+    findings = check_script_semantics(with_bird)
+    assert codes_of(findings) == ["causal_gap", "time_ellipsis_lost"], findings
+    gap = findings[0]
+    assert gap["relation_status"] == "bound"
+    assert gap["relation_units"] == {"beats": [1, 2]}
+    assert gap["carrier_evidence"] == []
+    assert "shot:2" not in gap["relation_carriers"]
+
+
+def test_unrelated_chapter_event_time_marker_does_not_exempt():
+    """仅在章节 `main_events` 增加「次日，远方的渔民出海」不影响本关系."""
+    script = _causal_base(bound=True, process=False)
+    script["chapter_outline"]["main_events"] = ["次日，远方的渔民出海"]
+    assert codes_of(check_script_semantics(script)) == [
+        "causal_gap", "time_ellipsis_lost"]
+
+
+def test_unresolved_relation_is_evidence_insufficient():
+    """因果链条目没有显式单位身份 → 明确证据不足，不按全章范围判."""
+    script = _causal_base(bound=True, process=True)
+    script["chapter_outline"]["causal_chain"] = [
+        "起因：甲与乙约定同行", "结果：乙已经到达"]
+    findings = check_script_semantics(script)
+    assert codes_of(findings) == ["causal_gap"], findings
+    gap = findings[0]
+    assert gap["relation_status"] == "unresolved"
+    assert gap["needs_semantic_review"] is True
+    assert gap["unresolved_relations"] == ["甲与乙约定同行", "乙已经到达"]
+
+
+def test_relation_time_marker_in_carrier_scope_exempts():
+    """关系承载镜头里的「次日」是合法时间证据."""
+    script = _causal_base(bound=True, process=False)
+    script["shots"][0]["context_bridge"] = "次日，乙抵达城门"
+    assert codes_of(check_script_semantics(script)) == ["causal_gap"]
+
+
+def test_result_without_carrier_is_evidence_insufficient():
+    """关系能解析、但**结果单位没有承载镜头** → 关系未在成片定位，不判拒收."""
+    script = _causal_base(bound=True, process=False)
+    script["shots"][0]["plan_refs"] = {"beats": [1], "lines": []}
+    findings = check_script_semantics(script)
+    assert codes_of(findings) == ["causal_gap"], findings
+    assert findings[0]["relation_status"] == "no_carrier"
+    assert findings[0]["result_carriers"] == []
 
 
 def test_candidate_paths_reports_only_new_findings():

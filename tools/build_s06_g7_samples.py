@@ -148,8 +148,13 @@ def build() -> dict:
             _locked_repair_signature(sample["merged"])
             != _locked_repair_signature(sample["after"]))
         target_lost = bool(merged_ok and not after_ok)
+        # 证据层级：`record_only_rejects` 只代表「postprocess_reverted 记账规则本身
+        # 是否拒收」；保护违规是否被现行链路拦下，要看**既有保护门**
+        # （`locked_changed`）。两者分开写，不把推演冒充实测。
         verdicts = {
-            "current_record_only": False,
+            "record_only_rejects": False,
+            "existing_protection_gate_rejects": bool(locked_changed),
+            "current_chain_rejects": bool(locked_changed),
             "R1_any_residual": bool(record),
             "R2_target_loss": target_lost,
             "R2_plus_protection": bool(target_lost or locked_changed),
@@ -178,8 +183,17 @@ def build() -> dict:
         "schema": "s06.g7_decision_samples.v1",
         "note": "三个匿名受控样本；记账/目标/保护三类判据均为真实函数；不读盘、不调模型。",
         "rows": rows,
+        "evidence_level": {
+            "record": "actual_function:main._authorized_changes_lost",
+            "target": "actual_function:main._audit_issue_resolved",
+            "protection": "actual_function:main._locked_repair_signature",
+            "gate_verdicts": ("deduced_from_rules:三例的候选门组合结果；"
+                              "未走完整提交入口"),
+        },
         "candidate_rules": {
-            "current_record_only": "不因 postprocess_reverted 拒绝（现状）",
+            "record_only_rejects": "postprocess_reverted 记账规则本身不拒收",
+            "existing_protection_gate_rejects": (
+                "既有保护门：_locked_repair_signature 变化 → 本轮拒绝"),
             "R1_any_residual": "postprocess_reverted 非空 → 拒绝",
             "R2_target_loss": "合并后目标已达成、后处理后未达成 → 拒绝",
             "R2_plus_protection": "R2 或 _locked_repair_signature 变化 → 拒绝",
@@ -194,9 +208,11 @@ def _markdown(report: dict) -> str:
         "> 生成：`python tools/build_s06_g7_samples.py`（离线、零模型调用）",
         "> 记账=`main._authorized_changes_lost`；目标=`main._audit_issue_resolved`；",
         "> 保护=`main._locked_repair_signature`。三个样本均为匿名受控快照。",
+        "> **证据层级**：三个判据是真实函数；候选门的组合结果按规则推演，",
+        "> **未走完整提交入口**（G7 的现状列 = 记账规则 + 既有保护门，不是提交点实测）。",
         "",
-        "| 样本 | postprocess_reverted | 目标丢失 | 保护字段变化 | 现状 | R1 任何残余 | R2 目标丢失 | R2+保护 | 应然 |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| 样本 | postprocess_reverted | 目标丢失 | 保护字段变化 | 记账规则 | 现行保护门 | R1 任何残余 | R2 目标丢失 | R2+保护 | 应然 |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for row in report["rows"]:
         rec = row["postprocess_reverted"]
@@ -208,7 +224,8 @@ def _markdown(report: dict) -> str:
 
         lines.append(
             f"| {row['id']} | {rec_txt} | {_cell(row['target_lost'])} | "
-            f"{_cell(row['locked_field_changed'])} | {_cell(v['current_record_only'])} | "
+            f"{_cell(row['locked_field_changed'])} | {_cell(v['record_only_rejects'])} | "
+            f"{_cell(v['existing_protection_gate_rejects'])} | "
             f"{_cell(v['R1_any_residual'])} | {_cell(v['R2_target_loss'])} | "
             f"{_cell(v['R2_plus_protection'])} | {row['expected']} |")
     lines += [
@@ -238,11 +255,14 @@ def _markdown(report: dict) -> str:
     lines += [
         "## 结论（供裁决）",
         "",
-        "- **现状（只记账）**：B 的目标丢失不会被拒收——记账存在，但不影响准入。",
+        "- **记账规则本身**：三例都不拒收——`postprocess_reverted` 只是记录。",
+        "- **现行保护门**：C 的保护违规会被既有 `locked_changed` 拦下；A/B 不触发保护门。"
+        "所以「现状」是：A 过、B 过（目标丢失未被拦）、C 拒。",
         "- **R1（任何残余都拒）**：A 的等价派生被误拒——授权路径被后处理改写不等于目标丢失。",
         "- **R2（仅目标丢失拒）**：A 过、B 拒；但 C 的保护违规不在授权路径上，"
         "`postprocess_reverted` 为空，需要既有 `locked_changed` 保护门单独拦截。",
-        "- **R2 + 既有保护门**：三个样本均符合应然结果。",
+        "- **R2 + 既有保护门**：三个样本均符合应然结果（**仅证明这组三例的判据组合**，"
+        "不是真实提交入口的最终读数）。",
         "",
         "因此 G7 的裁决对象应写成「**按目标丢失接门，并保留既有保护门**」，"
         "而不是「按任何残余接门」。",

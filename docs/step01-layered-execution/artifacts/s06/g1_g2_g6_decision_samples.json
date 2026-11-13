@@ -4,6 +4,10 @@
   "g1": {
     "id": "G1_issue_closed",
     "question": "issue_ledger.closed 是否接进提交门（阻塞问题必须有证据关闭）",
+    "evidence_level": {
+      "ledger": "actual_function:build_issue_ledger",
+      "gate_verdicts": "deduced_from_rule:未走真实提交入口"
+    },
     "samples": [
       {
         "id": "G1_a_silent",
@@ -28,8 +32,8 @@
         },
         "current_gate_resolved": 1,
         "G1_gate_resolved": 0,
-        "current_gate_verdict": "accept（把沉默读成已解决）",
-        "G1_gate_verdict": "reject（无关闭证据）"
+        "current_gate_verdict": "推演 accept（把沉默读成已解决）",
+        "G1_gate_verdict": "推演 reject（无关闭证据）"
       },
       {
         "id": "G1_b_evidence",
@@ -58,11 +62,11 @@
         },
         "current_gate_resolved": 1,
         "G1_gate_resolved": 1,
-        "current_gate_verdict": "accept",
-        "G1_gate_verdict": "accept"
+        "current_gate_verdict": "推演 accept",
+        "G1_gate_verdict": "推演 accept"
       }
     ],
-    "recommendation": "只对**阻塞级**确认问题要求 closed=True；非阻塞条目继续只记账。样本 G1_a 是唯一行为差异：现行门接受、G1 门拒绝。"
+    "recommendation": "只对**阻塞级**确认问题要求 closed=True；非阻塞条目继续只记账。样本 G1_a 是唯一行为差异：按规则推演为现行门接受、G1 门拒绝；真实提交入口的最终结果尚未验证（见 evidence_level）。"
   },
   "g2": {
     "id": "G2_framing_jump",

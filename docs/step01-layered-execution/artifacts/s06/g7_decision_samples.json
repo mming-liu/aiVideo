@@ -27,7 +27,9 @@
       "target_lost": false,
       "locked_field_changed": false,
       "verdicts": {
-        "current_record_only": false,
+        "record_only_rejects": false,
+        "existing_protection_gate_rejects": false,
+        "current_chain_rejects": false,
         "R1_any_residual": true,
         "R2_target_loss": false,
         "R2_plus_protection": false
@@ -58,7 +60,9 @@
       "target_lost": true,
       "locked_field_changed": false,
       "verdicts": {
-        "current_record_only": false,
+        "record_only_rejects": false,
+        "existing_protection_gate_rejects": false,
+        "current_chain_rejects": false,
         "R1_any_residual": true,
         "R2_target_loss": true,
         "R2_plus_protection": true
@@ -85,15 +89,24 @@
       "target_lost": false,
       "locked_field_changed": true,
       "verdicts": {
-        "current_record_only": false,
+        "record_only_rejects": false,
+        "existing_protection_gate_rejects": true,
+        "current_chain_rejects": true,
         "R1_any_residual": false,
         "R2_target_loss": false,
         "R2_plus_protection": true
       }
     }
   ],
+  "evidence_level": {
+    "record": "actual_function:main._authorized_changes_lost",
+    "target": "actual_function:main._audit_issue_resolved",
+    "protection": "actual_function:main._locked_repair_signature",
+    "gate_verdicts": "deduced_from_rules:三例的候选门组合结果；未走完整提交入口"
+  },
   "candidate_rules": {
-    "current_record_only": "不因 postprocess_reverted 拒绝（现状）",
+    "record_only_rejects": "postprocess_reverted 记账规则本身不拒收",
+    "existing_protection_gate_rejects": "既有保护门：_locked_repair_signature 变化 → 本轮拒绝",
     "R1_any_residual": "postprocess_reverted 非空 → 拒绝",
     "R2_target_loss": "合并后目标已达成、后处理后未达成 → 拒绝",
     "R2_plus_protection": "R2 或 _locked_repair_signature 变化 → 拒绝"

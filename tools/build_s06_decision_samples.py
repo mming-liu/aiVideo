@@ -68,9 +68,15 @@ def g1_samples() -> dict:
     evidence_row = _row(with_evidence)
     # 现行提交门：resolved = before_keys - after_keys（main.py:6672）。
     # 「本轮没报出」⇒ 该 key 从 after 消失 ⇒ 现行门把它算作 1 条 resolved。
+    # ⚠️ 证据层级：下面两列是**按规则推演**（台账状态 + 关闭规则），**没有**走真实
+    # 提交入口；真实提交点的最终结果仍需在提交链上验证。生成器不把推演写成实测。
     return {
         "id": "G1_issue_closed",
         "question": "issue_ledger.closed 是否接进提交门（阻塞问题必须有证据关闭）",
+        "evidence_level": {
+            "ledger": "actual_function:build_issue_ledger",
+            "gate_verdicts": "deduced_from_rule:未走真实提交入口",
+        },
         "samples": [
             {
                 "id": "G1_a_silent",
@@ -78,8 +84,8 @@ def g1_samples() -> dict:
                 "ledger": silent_row,
                 "current_gate_resolved": 1,
                 "G1_gate_resolved": 1 if silent_row["closed"] else 0,
-                "current_gate_verdict": "accept（把沉默读成已解决）",
-                "G1_gate_verdict": "reject（无关闭证据）",
+                "current_gate_verdict": "推演 accept（把沉默读成已解决）",
+                "G1_gate_verdict": "推演 reject（无关闭证据）",
             },
             {
                 "id": "G1_b_evidence",
@@ -87,13 +93,14 @@ def g1_samples() -> dict:
                 "ledger": evidence_row,
                 "current_gate_resolved": 1,
                 "G1_gate_resolved": 1 if evidence_row["closed"] else 0,
-                "current_gate_verdict": "accept",
-                "G1_gate_verdict": "accept",
+                "current_gate_verdict": "推演 accept",
+                "G1_gate_verdict": "推演 accept",
             },
         ],
         "recommendation": (
             "只对**阻塞级**确认问题要求 closed=True；非阻塞条目继续只记账。"
-            "样本 G1_a 是唯一行为差异：现行门接受、G1 门拒绝。"),
+            "样本 G1_a 是唯一行为差异：按规则推演为现行门接受、G1 门拒绝；"
+            "真实提交入口的最终结果尚未验证（见 evidence_level）。"),
     }
 
 
@@ -249,7 +256,9 @@ def _markdown(report: dict) -> str:
         "",
         f"裁决问题：{g1['question']}",
         "",
-        "| 样本 | 台账状态 | closed | 现行门 resolved | G1 门 resolved | 现行门 | G1 门 |",
+        f"证据层级：{json.dumps(g1.get('evidence_level') or {}, ensure_ascii=False)}",
+        "",
+        "| 样本 | 台账状态 | closed | 现行门 resolved（推演） | G1 门 resolved（推演） | 现行门（推演） | G1 门（推演） |",
         "|---|---|---|---|---|---|---|",
     ]
     for s in g1["samples"]:

@@ -8,10 +8,13 @@
 
 - ``causal_gap``：``chapter_outline.causal_chain`` 有 ``结果`` 角色却缺 ``行动``
   角色——结果没有执行路径；
-- ``time_ellipsis_lost``：出现上述因果缺口，且**已绑定镜头**里没有任何时间推进
-  标记/过程载体，结果状态却已断言完成——这是「删掉过程与时间，只留结果」，不是
-  合法省略。承载关系先按 `shot.plan_refs` 解析到**本稿计划的实际条目**（节拍/
-  台词/事实/事件编号必须存在），解析失败的引用不参与裁决（2026-11-13 S03）；
+- ``time_ellipsis_lost``：出现上述因果缺口，且**承载该因果关系的镜头**里没有
+  任何时间推进标记/过程载体，结果状态却已断言完成——这是「删掉过程与时间，只留
+  结果」，不是合法省略。检查器先按 `causal_chain` 条目里的**显式单位身份**
+  （`B2`/`F1`/`事件3`，或与计划单位正文完全相等）解析关系；再按
+  `shot.plan_refs` 定位承载镜头，过程与时间证据都限定在该范围。解析失败或结果
+  没有承载镜头 → 证据不足（advisory + `needs_semantic_review`），不按全章范围判
+  （2026-11-13 S03 目标关系）；
 - ``offscreen_speaker_visible``：声音单元标为画外，说话人却出现在可见布局
   （``frame_layouts`` / ``visual_plan.visible_characters``），且没有合法的口型分离
   豁免；
@@ -310,13 +313,172 @@ def _role_matches(role: str, candidates: tuple) -> bool:
     return bool(role) and any(role == c or role.startswith(c) for c in candidates)
 
 
-def _has_temporal_marker(script: dict, *, shot_indices: set | None = None) -> bool:
-    """全稿是否有时间推进标记.
+#: 因果链条目里的**显式单位引用**：`B2` / `节拍2` / `F1` / `事实1` / `事件3` / `台词1`。
+#: 只认这些显式编号；**不按文本相似度猜关系**（2026-11-12 第三/四轮教训：
+#: 「城门上方一只鸟飞过」会与结果共享地点而被误判成相关过程）。
+_CAUSAL_REF_PATTERNS = (
+    ("beats", re.compile(r"(?:节拍|(?<![A-Za-z])B)\s*[（(]?\s*(\d+)")),
+    ("facts", re.compile(r"(?:事实|(?<![A-Za-z])F)\s*[（(]?\s*(\d+)")),
+    ("events", re.compile(r"事件\s*[（(]?\s*(\d+)")),
+    ("lines", re.compile(r"(?:台词|(?<![A-Za-z])D)\s*[（(]?\s*(\d+)")),
+)
 
-    2026-11-12 复核（第三轮）：时间标记也要**按镜头范围**核对——其他场景里的
-    「次日」不应影响当前问题。给出 `shot_indices` 时，只统计这些镜头自身的正文与
-    `context_bridge`；章节级的 `narration_lines` / `main_events` 仍计入（它们与
-    `causal_chain` 同属章节级事实）。
+
+def _identity_text(value: Any) -> str:
+    """身份比较用的归一化：去空白/标点，只留内容字符.
+
+    只用于**完全相等**的身份匹配（因果链条目正文 == 某个计划单位正文），
+    不做相似度、不做子串包含——那正是被复核否决的「猜关系」。
+    """
+    return re.sub(r"[\s，。、；：:（）()\[\]【】“”\"'｜|→\-—]+", "", str(value or ""))
+
+
+def _beat_body(beat: Any) -> str:
+    """节拍正文（去掉 `节拍：` 前缀与 `｜` 段）."""
+    text = str(beat or "").strip()
+    if text.startswith("节拍："):
+        text = text[len("节拍："):]
+    return text.split("｜")[0].strip()
+
+
+def _fact_claim(fact: Any) -> str:
+    """事实正文（去掉 `｜原文证据/承载` 段）."""
+    return str(fact or "").split("｜")[0].strip()
+
+
+def _beat_fact_refs(beat: Any) -> set[int]:
+    """节拍 `事实：F1、F2` 段里的显式事实编号."""
+    for part in str(beat or "").split("｜"):
+        part = part.strip()
+        if part.startswith("事实："):
+            return {int(x) for x in re.findall(r"\d+", part)}
+    return set()
+
+
+def _relation_units(outline: dict, roles: list[tuple[str, str, int]]
+                    ) -> tuple[dict[str, set[int]], list[str], dict[str, set[int]]]:
+    """把因果链条目解析到**计划单位身份**（节拍/事实/事件/台词）.
+
+    Returns:
+        `(units, unresolved, result_units)`：
+        - `units = {kind: {编号}}`：整条关系（起因/行动/结果）的单位（1 起算）；
+        - `unresolved`：无法建立唯一身份的条目正文；
+        - `result_units`：**结果条目**解析到的单位——结果没有承载镜头时，关系
+          在成片里没有被定位，必须按证据不足处理。
+
+    身份来源只有两种，都是显式的：
+      ① 条目里的编号引用（`B2` / `节拍2` / `F1` / `事实1` / `事件3` / `台词1`）；
+      ② 条目正文与某个计划单位正文**完全相等**（归一化标点后）。
+    两者都没有 → 该条目 unresolved，调用方必须输出「证据不足」，不得按全章范围判。
+    """
+    limits = {
+        "beats": _ref_target_count(outline, "shot_beats") or 0,
+        "facts": _ref_target_count(outline, "fact_uids") or 0,
+        "events": _ref_target_count(outline, "main_events") or 0,
+        "lines": _ref_target_count(outline, "dialogue_lines") or 0,
+    }
+    units: dict[str, set[int]] = {}
+    result_units: dict[str, set[int]] = {}
+    unresolved: list[str] = []
+    for role, text, _i in roles:
+        is_result = _role_matches(role, _RESULT_ROLES)
+        # ① 正文完全相等 → 内容身份（最稳：节拍插入/重编号不影响）。
+        exact: dict[str, set[int]] = {}
+        body = _identity_text(text)
+        if body:
+            for kind, values, extractor in (
+                    ("beats", outline.get("shot_beats") or [], _beat_body),
+                    ("facts", outline.get("required_facts") or [], _fact_claim),
+                    ("events", outline.get("main_events") or [], str)):
+                for number, value in enumerate(values, 1):
+                    if body == _identity_text(extractor(value)):
+                        exact.setdefault(kind, set()).add(number)
+        # ② 条目里的显式编号引用。
+        refs: dict[str, set[int]] = {}
+        for kind, pattern in _CAUSAL_REF_PATTERNS:
+            for match in pattern.finditer(text):
+                number = int(match.group(1))
+                if 1 <= number <= limits[kind]:
+                    refs.setdefault(kind, set()).add(number)
+        # 内容身份与编号引用冲突 ⇒ 身份不唯一，交证据不足（不选边站）。
+        if exact and refs and exact != refs:
+            unresolved.append(text)
+            continue
+        chosen = exact or refs
+        if not chosen:
+            unresolved.append(text)
+            continue
+        for kind, numbers in chosen.items():
+            units.setdefault(kind, set()).update(numbers)
+            if is_result:
+                result_units.setdefault(kind, set()).update(numbers)
+    return units, unresolved, result_units
+
+
+def _shot_by_index(script: dict, index: int) -> dict:
+    for shot in _iter_shots(script):
+        try:
+            if int(shot.get("index")) == index:
+                return shot
+        except (TypeError, ValueError):
+            continue
+    return {}
+
+
+def _unit_carrier_shots(script: dict, units: dict[str, set[int]]) -> set[int]:
+    """计划单位身份 → 承载它的镜头序号集合（只认显式 `plan_refs` / 节拍事实段）."""
+    outline = _outline(script)
+    fact_beats: set[int] = set()
+    for number, beat in enumerate(outline.get("shot_beats") or [], 1):
+        if _beat_fact_refs(beat) & units.get("facts", set()):
+            fact_beats.add(number)
+    carriers: set[int] = set()
+    for shot in _iter_shots(script):
+        refs, _invalid = _resolve_plan_refs(shot, outline)
+        hit = (
+            bool(set(refs.get("beats", [])) & (units.get("beats", set()) | fact_beats))
+            or bool(set(refs.get("facts", [])) & units.get("facts", set()))
+            or bool(set(refs.get("events", [])) & units.get("events", set()))
+            or bool(set(refs.get("lines", [])) & units.get("lines", set()))
+        )
+        if hit:
+            try:
+                carriers.add(int(shot.get("index")))
+            except (TypeError, ValueError):
+                continue
+    return carriers
+
+
+def _relation_time_texts(outline: dict, units: dict[str, set[int]]) -> list[str]:
+    """与被质疑关系**显式绑定**的章节级时间文本（不读无关条目）.
+
+    - 关系解析到的事件正文（仅这些事件，不是全部 `main_events`）；
+    - `fact_refs` 指向关系事实的旁白正文（实际播出文本）。
+    节拍/事实正文不算：它们是计划声明，不是成片里的时间证据。
+    """
+    texts: list[str] = []
+    events = outline.get("main_events") or []
+    for number in sorted(units.get("events", set())):
+        if 1 <= number <= len(events):
+            texts.append(str(events[number - 1]))
+    for line in outline.get("narration_lines") or []:
+        if not isinstance(line, dict):
+            continue
+        refs = {int(x) for x in (line.get("fact_refs") or [])
+                if isinstance(x, int) or (isinstance(x, str) and x.isdigit())}
+        if refs & units.get("facts", set()):
+            texts.append(str(line.get("text") or ""))
+    return [t for t in texts if t]
+
+
+def _has_temporal_marker(script: dict, *, shot_indices: set | None = None,
+                         extra_texts: list[str] | None = None) -> bool:
+    """时间推进标记是否出现在**指定范围**内.
+
+    2026-11-12 复核（第三轮）：时间标记要按镜头范围核对。
+    2026-11-13 复核（S03 目标关系）：章节级文本也**只计入显式绑定到被质疑关系**
+    的那些（`extra_texts`）；不再把整章 `main_events` / `narration_lines` 拼进来
+    ——「仅在 main_events 增加『次日，远方的渔民出海』」不应影响另一个因果关系的裁决。
     """
     shot_texts = []
     for shot in _iter_shots(script):
@@ -328,18 +490,29 @@ def _has_temporal_marker(script: dict, *, shot_indices: set | None = None) -> bo
                 continue
         shot_texts.append(_shot_fields(shot))
         shot_texts.append(_text(shot.get("context_bridge")))
-    outline = _outline(script)
-    text = "\n".join(shot_texts + [
-        str(outline.get("narration_lines") or ""),
-        str(outline.get("main_events") or ""),
-    ])
+    text = "\n".join(shot_texts + list(extra_texts or []))
     return any(re.search(pattern, text, re.I) for pattern in DEFAULT_TEMPORAL_MARKERS)
 
 
-def _has_completion_marker(script: dict) -> bool:
-    text = "\n".join([str(_outline(script).get("causal_chain") or ""),
-                      str(_outline(script).get("main_events") or ""),
-                      _all_shot_text(script)])
+def _has_completion_marker(script: dict, *, shot_indices: set | None = None,
+                           extra_texts: list[str] | None = None) -> bool:
+    """结果状态是否已断言完成（默认全稿；给定范围时只看该范围）."""
+    if shot_indices is None and extra_texts is None:
+        text = "\n".join([str(_outline(script).get("causal_chain") or ""),
+                          str(_outline(script).get("main_events") or ""),
+                          _all_shot_text(script)])
+        return any(marker in text for marker in DEFAULT_COMPLETION_MARKERS)
+    parts: list[str] = []
+    for shot in _iter_shots(script):
+        if shot_indices is not None:
+            try:
+                if int(shot.get("index", -1)) not in shot_indices:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        parts.append(_shot_fields(shot))
+    parts.extend(extra_texts or [])
+    text = "\n".join(parts)
     return any(marker in text for marker in DEFAULT_COMPLETION_MARKERS)
 
 
@@ -432,6 +605,30 @@ def _check_causal_and_time(script: dict) -> list[dict]:
     # 承载关系，逐条记入 `invalid_refs`，不得用它豁免。
     bound_with, bound_without, unbound, invalid_refs = _process_carriers(script)
     binding_status = "bound" if (bound_with or bound_without) else "unbound"
+
+    # 2026-11-13（S03 目标关系）：先取得被质疑关系对应的计划单位身份（节拍/事实/
+    # 事件/台词），再把过程与时间证据**限定到这些单位的承载镜头**。拿不到唯一身份
+    # （或结果在成片里没有承载镜头）时明确输出「证据不足」，不按全章范围判，也不
+    # 静默豁免——准入处理沿用既定裁决边界（只出 advisory + needs_semantic_review）。
+    units, unresolved, result_units = _relation_units(outline, roles)
+    carrier_indices = _unit_carrier_shots(script, units)
+    result_carriers = _unit_carrier_shots(script, result_units)
+    if not units or unresolved:
+        relation_status = "unresolved"
+    elif not result_carriers:
+        relation_status = "no_carrier"
+    else:
+        relation_status = "bound"
+    relation_scope = {kind: sorted(values) for kind, values in units.items()}
+    relation_process = [
+        "shot:%s" % index for index in sorted(carrier_indices)
+        if _shot_has_process(_shot_by_index(script, index))
+    ]
+    relation_time_texts = _relation_time_texts(outline, units)
+    # 「结果状态已断言完成」只看**结果条目自身**（+ 关系绑定文本），不看全章——
+    # 否则无关镜头里的「已完成」也会替这条关系作证。
+    result_texts = [text for role, text, _i in roles
+                    if _role_matches(role, _RESULT_ROLES)]
     findings = [_issue(
         "causal_gap", "chapter_outline.causal_chain",
         "因果链只有起因与结果、没有行动/过程标签：结果缺少显式执行路径（结构记录）",
@@ -440,33 +637,39 @@ def _check_causal_and_time(script: dict) -> list[dict]:
         expected_roles=["起因", "行动", "结果"],
         actual_roles=[role for role, _t, _i in roles],
         binding_status=binding_status,
-        carrier_evidence=bound_with,
+        relation_status=relation_status,
+        relation_units=relation_scope,
+        unresolved_relations=unresolved,
+        relation_carriers=["shot:%s" % i for i in sorted(carrier_indices)],
+        result_carriers=["shot:%s" % i for i in sorted(result_carriers)],
+        carrier_evidence=relation_process,
         bound_without_process=bound_without,
         unbound_shots=unbound,
         invalid_refs=invalid_refs,
-        needs_semantic_review=(binding_status == "unbound" or bool(invalid_refs)),
+        needs_semantic_review=(
+            binding_status == "unbound" or bool(invalid_refs)
+            or relation_status != "bound"),
     )]
-    if binding_status == "unbound":
-        # 没有显式绑定：不豁免（不能拿它证明过程存在），也不认定缺失（不能拿
-        # 匹配失败当证据）。状态留给语义评阅。
+    if relation_status != "bound":
+        # 关系无法唯一解析 / 结果没有承载镜头：既不豁免（不能证明过程存在），
+        # 也不认定缺失（不能拿无法解析当证据）。证据不足交语义评阅。
         return findings
-    bound_indices = set()
-    for label in bound_with + bound_without:
-        try:
-            bound_indices.add(int(str(label).split(":")[1]))
-        except (IndexError, ValueError):
-            continue
-    # 只有**已绑定镜头**里有过程载体才能豁免；时间标记也只在已绑定镜头范围内核对。
-    if (not bound_with
-            and not _has_temporal_marker(script, shot_indices=bound_indices)
-            and _has_completion_marker(script)):
+    # 只有**关系承载镜头**里的过程载体才能豁免；时间标记也只在关系范围内核对
+    # （章节级只计入显式绑定到该关系的事件/旁白，见 `_relation_time_texts`）。
+    if (not relation_process
+            and not _has_temporal_marker(script, shot_indices=carrier_indices,
+                                         extra_texts=relation_time_texts)
+            and _has_completion_marker(script, shot_indices=carrier_indices,
+                                       extra_texts=result_texts + relation_time_texts)):
         findings.append(_issue(
             "time_ellipsis_lost", "chapter_outline.narration_lines",
-            "结果状态已断言完成，但已绑定镜头里既没有过程载体、也没有时间推进标记；"
-            "这是删除时间/过程后只留结果，不是合法的常规省略",
+            "结果状态已断言完成，但**承载该因果关系的镜头**里既没有过程载体、"
+            "也没有时间推进标记；这是删除时间/过程后只留结果，不是合法的常规省略",
             family="temporal_ellipsis",
             missing=["temporal_marker", "process_carrier"],
-            bound_shots=sorted(bound_indices),
+            relation_units=relation_scope,
+            bound_shots=sorted(carrier_indices),
+            process_carriers=relation_process,
             unbound_shots=unbound,
             invalid_refs=invalid_refs,
         ))

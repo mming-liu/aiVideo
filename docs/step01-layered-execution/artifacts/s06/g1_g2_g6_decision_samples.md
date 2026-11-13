@@ -6,12 +6,14 @@
 
 裁决问题：issue_ledger.closed 是否接进提交门（阻塞问题必须有证据关闭）
 
-| 样本 | 台账状态 | closed | 现行门 resolved | G1 门 resolved | 现行门 | G1 门 |
-|---|---|---|---|---|---|---|
-| 本轮审计没有再次报出（模型沉默） | not_detected_this_round | False | 1 | 0 | accept（把沉默读成已解决） | reject（无关闭证据） |
-| 有确定性复核证据关闭 | fixed_with_evidence | True | 1 | 1 | accept | accept |
+证据层级：{"ledger": "actual_function:build_issue_ledger", "gate_verdicts": "deduced_from_rule:未走真实提交入口"}
 
-建议：只对**阻塞级**确认问题要求 closed=True；非阻塞条目继续只记账。样本 G1_a 是唯一行为差异：现行门接受、G1 门拒绝。
+| 样本 | 台账状态 | closed | 现行门 resolved（推演） | G1 门 resolved（推演） | 现行门（推演） | G1 门（推演） |
+|---|---|---|---|---|---|---|
+| 本轮审计没有再次报出（模型沉默） | not_detected_this_round | False | 1 | 0 | 推演 accept（把沉默读成已解决） | 推演 reject（无关闭证据） |
+| 有确定性复核证据关闭 | fixed_with_evidence | True | 1 | 1 | 推演 accept | 推演 accept |
+
+建议：只对**阻塞级**确认问题要求 closed=True；非阻塞条目继续只记账。样本 G1_a 是唯一行为差异：按规则推演为现行门接受、G1 门拒绝；真实提交入口的最终结果尚未验证（见 evidence_level）。
 
 ## G2：景别跨度 > 2 级的自动改写
 
