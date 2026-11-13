@@ -1730,7 +1730,13 @@ async def _submit_video(
     from shared.paths import chapter_dir
     from step02_video_gen.prompt_builder import _build_prompt, _make_request
 
-    logger = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+    # 候选模式的提交/轮询日志必须落 attempt 的实验日志目录；否则候选运行会写
+    # 正式 `chapter_dir/step02.log`，破坏 production snapshot 的逐字节隔离。
+    _candidate_log_dir = (getattr(candidate_context, "log_dir", None)
+                          if candidate_context is not None else None)
+    logger = get_logger(
+        (Path(_candidate_log_dir) if _candidate_log_dir else chapter_dir()) / "step02.log",
+        console_level="INFO")
 
     prompt = _build_prompt(shot, script, mode=mode)
     characters = script.get("characters", [])
