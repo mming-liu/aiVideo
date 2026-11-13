@@ -1,6 +1,6 @@
 # S06 决策包：具体样本与行为影响（2026-11-13）
 
-> 基线：`96f3cc3` + 本包 S02–S05 修复（工作树）。
+> 基线：`96f3cc3` + 本包 S02–S05 补修（提交 `53d83fc`）。
 > 范围：只提供裁决材料，**不改变任何门禁默认行为**；全部离线、零模型调用。
 > 样本生成器：
 > - `tools/build_s06_decision_samples.py` → `artifacts/s06/g1_g2_g6_decision_samples.{json,md}`
