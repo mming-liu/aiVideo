@@ -165,6 +165,21 @@ def main():
         encoding="utf-8")
 
     rows = _diff_rows(cand, revised)
+    # 复核第三轮：**投影后残余**——本轮接受的变化在 `project_for_commit` 之后是否
+    # 仍然成立。此前只验证到「本轮被接受」，没有验证「落盘投影不撤销已接受修复」。
+    projected, proj_errors = m.project_for_commit(revised, novel)
+    proj_map = {str(s.get("index")): s for s in projected.get("shots") or []}
+    proj_residual = []
+    for idx, field, _before, after in rows:
+        shot = proj_map.get(str(idx)) or {}
+        if field.startswith("frame_layouts."):
+            key = field.split(".")[1]
+            now = (shot.get("frame_layouts") or {}).get(key)
+            if json.dumps(now, ensure_ascii=False) != after:
+                proj_residual.append((idx, field, "布局在投影后被改写"))
+        else:
+            if str(shot.get(field)) != after:
+                proj_residual.append((idx, field, "字段在投影后被改写"))
     dec = next((r for r in diag if isinstance(r, dict) and "accepted" in r), {})
     lost = dec.get("postprocess_reverted") or {}
     md = ["# U6 离线修订候选（M02，桩响应经实际入口）", "",
@@ -212,6 +227,17 @@ def main():
                   "只把冲突记账并放进影子评估清单。")
     else:
         md.append("（无）")
+    md.append("")
+    md += ["## 投影后残余（`project_for_commit`）", ""]
+    if proj_errors:
+        md.append("投影报告错误：%s" % proj_errors)
+    elif proj_residual:
+        md.append("下列已接受的变化在投影后被改写：")
+        md.append("")
+        for idx, field, why in proj_residual:
+            md.append("- 镜 %s / `%s`：%s" % (idx, field, why))
+    else:
+        md.append("本轮接受的 %d 处变化在投影后**全部**成立（逐字段比对）。" % len(rows))
     md.append("")
     (OUT / "diff.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     print(json.dumps({
