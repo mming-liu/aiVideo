@@ -598,11 +598,17 @@ def verify_plan_changes(plan: dict, script: dict, *,
 
 
 def verify_plan_coverage(plan: dict, *, only_indices: set | None = None,
-                         frames: set | None = None) -> list[dict]:
+                         frames: set | None = None,
+                         script: dict | None = None) -> list[dict]:
     """消费前：**请求的镜头与帧必须都在计划里**，否则拒绝发送（不允许回退原稿）.
 
     2026-11-12 复核：任务构造此前是 `_plan_units.get(idx, shot)`——显式请求的镜头
     没被计划覆盖时仍会用原稿生成。计划模式下缺单元必须零调用拒收。
+
+    2026-11-13 复核补充（F1）：`only_indices is None` 表示**全量运行**，此时必须用
+    完整稿 `script["shots"]` 的全集比较，而不是计划自己的条目——否则计划漏掉的
+    镜头不会出现在 `wanted` 里，主入口随后又把 `only_indices` 收窄为计划镜头，
+    漏镜就被静默跳过。只有显式给出 `only_indices` 时才保留「只核请求范围」语义。
     """
     issues: list[dict] = []
     entries: dict[int, dict] = {}
@@ -613,8 +619,16 @@ def verify_plan_coverage(plan: dict, *, only_indices: set | None = None,
             entries[int(entry.get("shot_index"))] = entry
         except (TypeError, ValueError):
             continue
-    wanted = sorted(int(i) for i in only_indices) if only_indices is not None \
-        else sorted(entries)
+    if only_indices is not None:
+        wanted = sorted(int(i) for i in only_indices)
+    elif isinstance(script, dict):
+        wanted = sorted({
+            int(shot.get("index"))
+            for shot in (script.get("shots") or [])
+            if isinstance(shot, dict) and shot.get("index") is not None
+        })
+    else:
+        wanted = sorted(entries)
     for idx in wanted:
         entry = entries.get(idx)
         if entry is None:

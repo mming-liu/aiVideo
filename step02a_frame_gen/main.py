@@ -95,7 +95,8 @@ async def gen_all_frames(script_path: Path, work_dir: Path, force: bool = False,
         _plan_problems = (
             verify_plan_execution(visual_plan, characters=script.get("characters") or [])
             + verify_plan_changes(visual_plan, script)
-            + verify_plan_coverage(visual_plan, only_indices=only_indices, frames=frames)
+            + verify_plan_coverage(visual_plan, only_indices=only_indices,
+                                   frames=frames, script=script)
         )
         if _plan_problems:
             logger = get_logger(chapter_dir() / "step02a.log", console_level="INFO")

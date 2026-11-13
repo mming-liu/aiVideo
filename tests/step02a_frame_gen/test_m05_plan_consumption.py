@@ -118,6 +118,29 @@ def test_requested_shot_outside_the_plan_is_refused(monkeypatch, tmp_path):
     assert seen == []
 
 
+def test_full_run_with_shot_missing_from_plan_is_refused(monkeypatch, tmp_path):
+    """全量运行（`only_indices=None`）必须拿完整稿镜头全集比较计划（F1）.
+
+    计划只覆盖镜 1+2，稿件还有镜 3；此前的覆盖检查在 `only_indices=None` 时只
+    遍历计划自己的条目，漏镜不报，主入口又把 `only_indices` 收窄为计划镜头，
+    于是镜 3 被静默跳过。现在必须在发送前报 `plan_coverage_missing_shot` 且零调用。
+    """
+    family, script, script_path, seen = _setup(monkeypatch, tmp_path)
+    frames = {"ff", "lf"}
+    plan = build_visual_plan(script, scope=family["scope"], only_indices={1, 2},
+                             frames=frames)
+
+    issues = verify_plan_coverage(plan, only_indices=None, frames=frames, script=script)
+    assert [i["code"] for i in issues] == ["plan_coverage_missing_shot"], issues
+    assert "镜头 3" in issues[0]["message"], issues
+
+    with pytest.raises(SystemExit):
+        asyncio.run(m.gen_all_frames(script_path, tmp_path / "work",
+                                     only_indices=None, frames=frames,
+                                     visual_plan=plan, scope=family["scope"]))
+    assert seen == [], "计划漏镜的全量运行必须零调用拒收"
+
+
 def test_plan_prompt_drift_is_refused_before_send(monkeypatch, tmp_path):
     family, script, script_path, seen = _setup(monkeypatch, tmp_path)
     plan = build_visual_plan(script, scope=family["scope"], only_indices={1})
