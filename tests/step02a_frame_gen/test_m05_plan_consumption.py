@@ -170,6 +170,36 @@ def test_missing_reference_file_is_reported(tmp_path):
     assert "plan_reference_missing" in codes, issues
 
 
+def test_reference_entry_without_path_is_reported(tmp_path):
+    """F4：参考条目缺 path 不得静默跳过，必须报 plan_reference_missing."""
+    from step02a_frame_gen.execution_plan import _frame_prompt
+    unit = {"index": 1, "ff_desc": "x"}
+    prompt, _err = _frame_prompt(unit, [], "ff")
+    plan = {"shots": [{"shot_index": 1,
+                       "execution": {"unit": unit},
+                       "frames": [{"frame": "ff", "kind": "ff", "prompt": prompt,
+                                   "references": [{"sha256": "0" * 64,
+                                                   "role": "scene"}]}]}]}
+    issues = verify_plan_execution(plan, check_reference_files=True)
+    assert [i["code"] for i in issues] == ["plan_reference_missing"], issues
+
+
+def test_reference_entry_without_sha_is_reported(tmp_path):
+    """F4：参考条目缺 sha256 同样按参考缺失拒收（文件存在也不能跳过）."""
+    from step02a_frame_gen.execution_plan import _frame_prompt
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(b"ref")
+    unit = {"index": 1, "ff_desc": "x"}
+    prompt, _err = _frame_prompt(unit, [], "ff")
+    plan = {"shots": [{"shot_index": 1,
+                       "execution": {"unit": unit},
+                       "frames": [{"frame": "ff", "kind": "ff", "prompt": prompt,
+                                   "references": [{"path": str(ref),
+                                                   "role": "scene"}]}]}]}
+    issues = verify_plan_execution(plan, check_reference_files=True)
+    assert [i["code"] for i in issues] == ["plan_reference_missing"], issues
+
+
 def test_plan_without_execution_block_is_refused():
     plan = {"shots": [{"shot_index": 1, "frames": []}]}
     issues = verify_plan_execution(plan)

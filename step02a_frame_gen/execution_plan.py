@@ -537,7 +537,19 @@ def verify_plan_execution(plan: dict, *, characters: list | None = None,
                     continue
                 expected = str(ref.get("sha256") or "")
                 path = str(ref.get("path") or "")
-                if not expected or not path:
+                if not path:
+                    # F4：缺 path/sha 不能静默跳过——否则被篡改的计划删掉字段
+                    # 就能绕过参考摘要重算。缺任一项都按参考缺失拒收。
+                    issues.append({
+                        "code": "plan_reference_missing", "severity": "reject",
+                        "path": f"visual_plan.{frame.get('frame_id')}.references",
+                        "message": "参考条目缺少 path，无法核对参考身份"})
+                    continue
+                if not expected:
+                    issues.append({
+                        "code": "plan_reference_missing", "severity": "reject",
+                        "path": f"visual_plan.{frame.get('frame_id')}.references",
+                        "message": f"参考条目缺少 sha256，无法核对参考身份：{path}"})
                     continue
                 target = _Path(path)
                 if not target.is_file():
