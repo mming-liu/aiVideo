@@ -290,8 +290,12 @@ def test_reference_change_invalidates_frame(tmp_path):
     assert before != after, "参考图内容变化必须让旧帧失效"
 
 
-def test_boat_relative_width_anchor(tmp_path, monkeypatch):
-    """category=船 的物体注入相对宽度锚（肩宽三倍），不依赖绝对米数."""
+def test_boat_size_anchor_uses_only_sourced_attributes(tmp_path, monkeypatch):
+    """S04（2026-11-13）：只注入有来源的名称/形制/长宽，不再补肩宽比例或裁切构图.
+
+    旧契约注入「船宽约为人物肩宽的三倍」「只画船头/船舷局部…船体向画外延伸」——
+    两段都没有输入来源（S04 复核点名），必须删除。
+    """
     import json
     chapter = tmp_path / "chapter_x"
     chapter.mkdir()
@@ -302,12 +306,24 @@ def test_boat_relative_width_anchor(tmp_path, monkeypatch):
         json.dumps(script, ensure_ascii=False), encoding="utf-8")
     # 兼容带参调用（script_file() 会以 chapter_dir(chapter) 形式间接调用）
     monkeypatch.setattr("shared.paths.chapter_dir", lambda *a, **k: chapter)
-    shot = {"location": "小舟上", "ff_desc": "杨旭仰卧船头"}
-    out = _inject_object_size_anchor(shot, "杨旭仰卧船头")
+    shot = {"location": "小舟上", "ff_desc": "近景，甲仰卧船头"}
+    out = _inject_object_size_anchor(shot, "近景，甲仰卧船头")
     assert "舴艋舟" in out
-    assert "肩宽的三倍" in out
-    # 2026-11-08：措辞已收敛为"落脚空档"（船宽锚不再承诺"两侧"）
-    assert "落脚空档" in out
+    assert "长7" in out and "宽1.6" in out
+    assert "肩宽" not in out
+    assert "只画船头" not in out and "向画外延伸" not in out
+
+
+def test_boat_size_anchor_does_not_strip_sizes_without_a_source(tmp_path, monkeypatch):
+    """S04（2026-11-13）：未命中 scene_objects 时不得先删掉 desc 里的尺寸."""
+    chapter = tmp_path / "chapter_x"
+    chapter.mkdir()
+    (chapter / "script_result.json").write_text(
+        '{"scene_objects": {}}', encoding="utf-8")
+    monkeypatch.setattr("shared.paths.chapter_dir", lambda *a, **k: chapter)
+    shot = {"location": "码头", "ff_desc": "渡船（长6米）靠岸"}
+    out = _inject_object_size_anchor(shot, "渡船（长6米）靠岸")
+    assert out == "渡船（长6米）靠岸"
 
 
 # ── A1/A3. 肖像裁切 + 参考表标签 ───────────────────────────────────

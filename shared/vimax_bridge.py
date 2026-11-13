@@ -2021,11 +2021,6 @@ def _inject_object_size_anchor(shot: dict, text: str) -> str:
     loc = shot.get("location", "") or shot.get("scene", "") or ""
     if not loc:
         return text
-    # v6.52：剥离 desc 内嵌的 LLM 尺寸残留——「（宽1.4米，可容3人）」「（长6米
-    # 宽1.4米无篷舴艋舟）」与 scene_objects 注入的尺寸自相矛盾（16:34 脚本
-    # 实测 6 处 1.4米 vs 注入 1.6米），模型两侧都不信、船宽随机抽奖。
-    # 尺寸一律以本函数注入的 scene_objects 锚为准。幂等：剥完再跑无变化。
-    text = re.sub(r"[（(][^（）()]*\d+(?:\.\d+)?米[^（）()]*[）)]", "", text)
     try:
         from shared.paths import script_file
         from shared.scene_objects_bank import iter_matched_scene_objects
@@ -2062,26 +2057,30 @@ def _inject_object_size_anchor(shot: dict, text: str) -> str:
                 except (TypeError, ValueError):
                     width = None
             if not length and not width:
-                return text
+                continue
+            # v6.52：剥离 desc 内嵌的 LLM 尺寸残留——「（宽1.4米，可容3人）」「（长6米
+            # 宽1.4米无篷舴艋舟）」与 scene_objects 注入的尺寸自相矛盾（16:34 脚本
+            # 实测 6 处 1.4米 vs 注入 1.6米），模型两侧都不信、船宽随机抽奖。
+            # 尺寸一律以本函数注入的 scene_objects 锚为准。幂等：剥完再跑无变化。
+            # 2026-11-13（S04 复核）：只在**确实有来源尺寸要注入**时才剥离——旧实现
+            # 在匹配前无条件剥，未命中 scene_objects 时尺寸被删且无替代（内容净丢失）。
+            text = re.sub(r"[（(][^（）()]*\d+(?:\.\d+)?米[^（）()]*[）)]", "", text)
             # 只注入尺寸/称呼，不注入容量结构（避免与画面描述冲突）。
             # S25：正向 prompt 不出现“无篷”二字（扩散模型对“篷/舟”名词
             # 激活强于“无”），展示名统一改成“敞口”。
             _display_name = str(name).replace("无船篷", "敞口").replace("无篷", "敞口")
             _display_subtype = str(subtype).replace("无船篷", "敞口").replace("无篷", "敞口")
             size_desc = f"该{_display_name}为{_display_subtype}{'，长' + str(length) + '米' if length else ''}{'、宽' + str(width) + '米' if width else ''}"
-            # v6.52 船宽相对锚：绝对米数对图片模型无效（P22 精确空间约束无解，
-            # hook ff「宽1.6米」照画 0.6 米实测），改用相对人体的语义锚。
-            if (obj.get("category") or "") == "船":
-                size_desc += "，船宽约为人物肩宽的三倍，人物在船板上坐、站或躺卧时仍有落脚空档"
-                # 无篷形制反向锚：「舴艋舟」易被联想成乌篷船（hook ff 实测画出
-                # 大竹篷遮挡舱面）——subtype 带「无篷」时显式钉死敞舱。
-                if "无篷" in subtype or "无篷" in name:
-                    size_desc += "，敞口无遮挡，舱面完全敞开可见"
-            # 近景/中景构图提示（08-09 首帧船太小）：图片模型对纯数字尺寸不敏感
-            # （「长6.0米」不认），且全船入画会压缩人物比例。用镜头语言替代：
-            # 近景/中景只画船头/船舷局部、人物占画面放大，从构图比例暗示船大。
-            if "近景" in text or "中景" in text or "中近景" in text:
-                size_desc += "，镜头取近景构图，只画船头/船舷局部，人物占画面比例放大，船体向画外延伸暗示全船长宽"
+            # 2026-11-13（S04 复核）：这里只保留**有来源**的属性（名称/形制/长宽）。
+            # 旧实现还追加过两段无依据假设，已删除：
+            #   ① 「船宽约为人物肩宽的三倍，…仍有落脚空档」——肩宽比例没有输入来源，
+            #      且与绝对米数并存时会给出两套互相打架的尺度；
+            #   ② 命中「近景/中景/中近景」就「只画船头/船舷局部，船体向画外延伸」——
+            #      裁切与构图是输入/计划的决定，不能由下游按景别词补造。
+            # 无篷形制反向锚仍有来源（subtype/name 里的「无篷」），保留：
+            # 「舴艋舟」易被联想成乌篷船（hook ff 实测画出大竹篷遮挡舱面）。
+            if "无篷" in subtype or "无篷" in name:
+                size_desc += "，敞口无遮挡，舱面完全敞开可见"
             if size_desc not in text:
                 return f"{text}。{size_desc}"
         return text

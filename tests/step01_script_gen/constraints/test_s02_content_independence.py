@@ -56,13 +56,22 @@ def test_no_rewrite_when_the_shot_has_no_spec():
 
 
 # ---------------------------------------------------------------------------
-# 2. 「窄身」只在说船时处理
+# 2. 「窄身」只在能证明属于船时处理
 # ---------------------------------------------------------------------------
 def test_narrow_body_of_a_non_boat_object_is_preserved():
     shot = {"prompt": "窄身机甲立于废墟", "location": "废墟"}
     before = shot["prompt"]
     BoatWidthConstraint().apply(_ctx([shot], _BOAT_SPEC))
     assert shot["prompt"] == before, "「窄身机甲」不是船，形制词不得被删"
+
+
+def test_narrow_body_of_another_object_sharing_the_frame_is_preserved():
+    """2026-11-13 复核反例：同框有船，也不得把别的实体的「窄身」删掉."""
+    shot = {"prompt": "窄身机甲站在小舟旁。", "location": "小舟"}
+    before = shot["prompt"]
+    repairs = BoatWidthConstraint().apply(_ctx([shot], _BOAT_SPEC))
+    assert shot["prompt"] == before, "「窄身机甲」与船同框仍属于机甲，不得删除"
+    assert any(r.action == "warn" for r in repairs), "归属不明应记录待评阅项"
 
 
 def test_narrow_body_of_a_boat_is_still_rewritten_with_a_spec():
@@ -104,6 +113,25 @@ def test_underwater_pose_with_an_input_height_gets_the_note():
     assert "不是上半身出水" in shot["ff_desc"]
 
 
+def test_underwater_pose_keeps_the_input_height_instead_of_forcing_2cm():
+    """2026-11-13 复核反例：输入已给 5cm，不得再写「约 2cm」与之矛盾."""
+    shot = {"ff_desc": "潜伏水下，仅头顶约5cm露出", "prompt": ""}
+    _fix_vague_anchor(shot)
+    assert "5cm" in shot["ff_desc"]
+    assert "2cm" not in shot["ff_desc"]
+    assert "不是上半身出水" in shot["ff_desc"]
+
+
+def test_underwater_cm_value_of_another_entity_is_not_borrowed():
+    """2026-11-13 复核反例：10cm 属于探针，不能当成露头高度."""
+    shot = {"ff_desc": "潜水员潜伏水下，手持长10cm的探针", "prompt": ""}
+    warns = []
+    _fix_vague_anchor(shot, warnings=warns)
+    assert shot["ff_desc"] == "潜水员潜伏水下，手持长10cm的探针"
+    assert "露出水面" not in shot["ff_desc"]
+    assert warns and warns[0].action == "warn", "归属不明应记录待评阅项"
+
+
 # ---------------------------------------------------------------------------
 # 5. 船只替换不再无条件生效
 # ---------------------------------------------------------------------------
@@ -112,3 +140,14 @@ def test_boat_replacement_is_skipped_without_a_spec():
     V643PromptEnforcementConstraint().apply(_ctx([shot]))
     assert "一叶小舟" in shot["ff_desc"]
     assert "敞口木舟" not in shot["ff_desc"]
+
+
+def test_boat_replacement_preserves_the_input_name_and_form():
+    """2026-11-13 复核反例：subtype=封闭式救生艇 不得被改写成「敞口木舟」."""
+    spec = {"救生艇": {"category": "船", "subtype": "封闭式救生艇",
+                       "length_m": 6, "width_m": 2}}
+    text = build_boat_replacement(
+        {"prompt": "小舟靠岸", "location": "救生艇"}, spec)
+    assert text.startswith("封闭式救生艇")
+    assert "长6米" in text and "宽2米" in text
+    assert "敞口木舟" not in text

@@ -155,6 +155,8 @@ def _causal_base(*, bound: bool = False, process: bool = False) -> dict:
     """起因 → 结果，没有「行动」标签.
 
     `bound` 控制镜头是否带显式计划绑定（`plan_refs`）；`process` 控制是否有动作分段。
+    2026-11-13（S03）：`plan_refs` 必须解析到**真实计划条目**，所以夹具自带
+    `shot_beats`——没有目标列表时任何 `beats` 引用都不可核验（= 未绑定）。
     """
     shot = {"index": 1, "duration_sec": 5.0, "ff_desc": "院中，甲与乙相对而立",
             "lf_desc": "甲拱手", "motion_desc": "甲拱手",
@@ -168,6 +170,8 @@ def _causal_base(*, bound: bool = False, process: bool = False) -> dict:
             "causal_chain": ["起因：甲与乙约定赴城", "结果：乙已抵达城门"],
             "narration_lines": [],
             "main_events": [],
+            "shot_beats": ["节拍：甲与乙约定赴城", "节拍：乙抵达城门"],
+            "dialogue_lines": [],
         },
         "shots": [shot],
         "total_duration": 5.0,
@@ -234,6 +238,65 @@ def test_temporal_marker_outside_the_bound_shots_does_not_exempt():
     })
     codes = codes_of(check_script_semantics(with_marker))
     assert codes == ["causal_gap", "time_ellipsis_lost"], codes
+
+
+# ---------------------------------------------------------------------------
+# 引用必须先解析到真实计划条目（2026-11-13 复核第四例）
+# ---------------------------------------------------------------------------
+def test_invalid_plan_ref_does_not_change_the_reject():
+    """bird 镜头 + keyframes + `plan_refs.beats=[999]` 不得改变拒收.
+
+    2026-11-13 复核复现：旧实现把任意非空引用当成绑定、把关键帧存在当成过程
+    证据，于是加一镜无关的鸟就让 `time_ellipsis_lost` 消失。
+    """
+    base = _causal_base(bound=True, process=False)
+    with_bird = _add_shot(base, {
+        "index": 2, "duration_sec": 3.0, "ff_desc": "城门上方一只鸟飞过",
+        "lf_desc": "鸟振翅飞走", "motion_desc": "鸟掠过",
+        "prompt": "城门", "narration_segment": "", "context_bridge": "",
+        "keyframes": [{"t_sec": 1.0, "desc": "一只鸟掠过城门"}],
+        "plan_refs": {"beats": [999], "lines": []},
+    })
+    findings = check_script_semantics(with_bird)
+    assert codes_of(findings) == ["causal_gap", "time_ellipsis_lost"], findings
+    gap = findings[0]
+    assert "shot:2" in gap["unbound_shots"]
+    assert gap["invalid_refs"] == [{"shot": "shot:2", "kind": "beats",
+                                    "value": 999, "reason": "out_of_range"}]
+    assert gap["carrier_evidence"] == []
+
+
+def test_single_keyframe_is_not_process_evidence():
+    """单个关键帧只是静态定格，不构成过程证据."""
+    script = _causal_base(bound=True, process=False)
+    script["shots"][0]["keyframes"] = [{"t_sec": 1.0, "desc": "定格"}]
+    assert codes_of(check_script_semantics(script)) == [
+        "causal_gap", "time_ellipsis_lost"]
+
+
+def test_keyframe_sequence_is_process_evidence():
+    """≥2 个时刻/阶段不同的关键帧构成时间序列，可作过程载体."""
+    script = _causal_base(bound=True, process=False)
+    script["shots"][0]["keyframes"] = [
+        {"t_sec": 0.0, "stage": "pre", "desc": "甲抬手"},
+        {"t_sec": 2.0, "stage": "after", "desc": "甲拱手"},
+    ]
+    findings = check_script_semantics(script)
+    assert codes_of(findings) == ["causal_gap"], findings
+    assert findings[0]["carrier_evidence"] == ["shot:1"]
+
+
+def test_prefixed_plan_ref_is_invalid_and_not_binding():
+    """`"B1"` 不是有效编号（契约要求只填数字）→ 不可解析、不参与承载."""
+    script = _causal_base(bound=False)
+    script["shots"][0]["plan_refs"] = {"beats": ["B1"], "lines": []}
+    findings = check_script_semantics(script)
+    assert codes_of(findings) == ["causal_gap"]
+    gap = findings[0]
+    assert gap["binding_status"] == "unbound"
+    assert gap["invalid_refs"] == [{"shot": "shot:1", "kind": "beats",
+                                    "value": "B1", "reason": "not_a_number"}]
+    assert gap["needs_semantic_review"] is True
 
 
 def test_candidate_paths_reports_only_new_findings():

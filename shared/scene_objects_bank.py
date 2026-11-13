@@ -321,11 +321,12 @@ def iter_matched_scene_objects(
     return matched
 
 
-def resolve_boat_spec(shot: dict, scene_objects: dict) -> dict | None:
-    """找本镜关联的船类场景物体（v6_43 规则1 / T1 boat_width 的尺寸来源）.
+def resolve_boat_spec_entry(shot: dict, scene_objects: dict) -> tuple[str, dict] | None:
+    """找本镜关联的船类场景物体，返回 `(登记名, 条目)`；未命中返回 None.
 
     判定：category 含「船/舟」，或 name/subtype 含「舟」。
-    未命中返回 None（调用方走 BOAT_FALLBACK_WIDTH_M 兜底）。
+    登记名是 scene_objects 的键——条目本身可能没有 identifier/subtype，
+    展示名需要它兜底（2026-11-13 S02：替换文本必须保留输入名称，不得自造）。
     """
     loc = str(shot.get("location", "") or shot.get("scene", "") or "")
     probe = " ".join(filter(None, [
@@ -340,8 +341,17 @@ def resolve_boat_spec(shot: dict, scene_objects: dict) -> dict | None:
         subtype = str(obj.get("subtype", ""))
         if ("船" in category or "舟" in category
                 or "舟" in subtype or "舟" in name):
-            return obj
+            return (name, obj)
     return None
+
+
+def resolve_boat_spec(shot: dict, scene_objects: dict) -> dict | None:
+    """找本镜关联的船类场景物体条目（v6_43 规则1 / T1 boat_width 的尺寸来源）.
+
+    未命中返回 None（调用方不写尺寸，保留原文）。
+    """
+    entry = resolve_boat_spec_entry(shot, scene_objects)
+    return entry[1] if entry else None
 
 
 def _ratio_trusts_width(obj: dict) -> bool:
@@ -374,24 +384,40 @@ def boat_width_text(shot: dict, scene_objects: dict) -> str:
     return ""
 
 
-def _boat_display_name(spec: dict | None) -> str:
-    """只有本章显式提取出“舴艋”时才保留该形制，否则用中性“敞口木舟”。"""
-    raw = ""
-    if isinstance(spec, dict):
-        raw = str(spec.get("subtype") or spec.get("identifier") or "")
-    return "舴艋舟" if "舴艋" in raw else "敞口木舟"
+def _boat_display_name(spec: dict | None, registry_name: str = "") -> str:
+    """船体展示名：**保留输入里的名称/形制/材质**，只做有来源的规范化.
+
+    2026-11-13（S02 复核）：此前把所有不含「舴艋」的规格统一命名为「敞口木舟」
+    ——船型、材质、开闭状态全是补造的（实测 subtype=封闭式救生艇 → 「敞口木舟」）。
+    现在按输入优先级取：subtype（形制/材质）→ identifier（登记名）→ 库键。
+    三者都没有 → 空串，调用方不替换（没有名称就不改写）。
+    """
+    if not isinstance(spec, dict):
+        return ""
+    for value in (spec.get("subtype"), spec.get("identifier"), registry_name):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
 
 
 def build_boat_replacement(shot: dict, scene_objects: dict) -> str:
-    """v6_43 规则1 的替换文本：小舟 → 敞口木舟/舴艋舟（长X米宽Y米[，可容N人]）.
+    """v6_43 规则1 的替换文本：船名/形制（长X米宽Y米[，可容N人]）.
 
     尺寸优先 scene_objects（含 B5 比例后验）。**未命中任何船规格时返回空串**：
     2026-11-13（S02）起不再回退「宽1.4米，可容3人」——那是无来源的尺寸与载客量，
     会写进正文并被下游当成事实。没有规格就不替换，保留原文。
+
+    2026-11-13（S02 复核）：展示名保留输入里的名称/形制/材质（见
+    `_boat_display_name`）；尺寸/容量只取条目里的有源字段并规范化格式，不再把
+    非「舴艋」规格一律改写成「敞口木舟」。
     """
-    spec = resolve_boat_spec(shot, scene_objects)
-    boat_name = _boat_display_name(spec)
-    if not spec:
+    entry = resolve_boat_spec_entry(shot, scene_objects)
+    if not entry:
+        return ""
+    registry_name, spec = entry
+    boat_name = _boat_display_name(spec, registry_name)
+    if not boat_name:
         return ""
     length, width = spec.get("length_m"), spec.get("width_m")
     if width and not _ratio_trusts_width(spec):

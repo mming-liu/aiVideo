@@ -1,0 +1,150 @@
+{
+  "schema": "s06.decision_samples.v1",
+  "note": "G1/G2/G6 各真实函数样本；不读盘、不调模型。",
+  "g1": {
+    "id": "G1_issue_closed",
+    "question": "issue_ledger.closed 是否接进提交门（阻塞问题必须有证据关闭）",
+    "samples": [
+      {
+        "id": "G1_a_silent",
+        "label": "本轮审计没有再次报出（模型沉默）",
+        "ledger": {
+          "status": "not_detected_this_round",
+          "closed": false,
+          "close_basis": null,
+          "note": "本次未报出，不等于已解决；关闭需要修订证据或重新裁决",
+          "summary": {
+            "total": 1,
+            "confirmed": 1,
+            "still_reported": 0,
+            "not_detected": 1,
+            "needs_reverify": 0,
+            "fixed_with_evidence": 0,
+            "withdrawn": 0,
+            "closed": 0,
+            "non_defect": 0,
+            "confirmed_closed_ratio": "0/1"
+          }
+        },
+        "current_gate_resolved": 1,
+        "G1_gate_resolved": 0,
+        "current_gate_verdict": "accept（把沉默读成已解决）",
+        "G1_gate_verdict": "reject（无关闭证据）"
+      },
+      {
+        "id": "G1_b_evidence",
+        "label": "有确定性复核证据关闭",
+        "ledger": {
+          "status": "fixed_with_evidence",
+          "closed": true,
+          "close_basis": {
+            "kind": "deterministic_probe",
+            "detail": "窄身机甲 已不在 ff_desc",
+            "candidate_revision": "rev-evidence"
+          },
+          "note": "",
+          "summary": {
+            "total": 1,
+            "confirmed": 1,
+            "still_reported": 0,
+            "not_detected": 0,
+            "needs_reverify": 0,
+            "fixed_with_evidence": 1,
+            "withdrawn": 0,
+            "closed": 1,
+            "non_defect": 0,
+            "confirmed_closed_ratio": "1/1"
+          }
+        },
+        "current_gate_resolved": 1,
+        "G1_gate_resolved": 1,
+        "current_gate_verdict": "accept",
+        "G1_gate_verdict": "accept"
+      }
+    ],
+    "recommendation": "只对**阻塞级**确认问题要求 closed=True；非阻塞条目继续只记账。样本 G1_a 是唯一行为差异：现行门接受、G1 门拒绝。"
+  },
+  "g2": {
+    "id": "G2_framing_jump",
+    "question": "景别跨度 > 2 级时，后处理是否继续自动改写前镜景别",
+    "sample": {
+      "shots": [
+        {
+          "index": 1,
+          "prompt_before": "[大特写] 甲的手指按在门闩上",
+          "prompt_after": "[全景] 甲的手指按在门闩上"
+        },
+        {
+          "index": 2,
+          "prompt": "[远景] 山谷与长河"
+        }
+      ],
+      "constraint_repairs": [
+        {
+          "shot": 1,
+          "before": "[大特写] 甲的手指按在门闩上",
+          "after": "[全景] 甲的手指按在门闩上"
+        }
+      ],
+      "validation_warnings": [
+        "镜头1→2: 景别「大特写」→「远景」跳跃幅度 6 级（>2 级）——特写直接跳大远景观感割裂，建议中间补过渡景别（镜头组接规则33）。"
+      ]
+    },
+    "options": [
+      {
+        "id": "G2_a_rewrite",
+        "label": "保留自动改写（现状）",
+        "behavior": "前镜「大特写」被改成「全景」；audit 不再收到这条跨度提示",
+        "risk": "用户/审计刻意选择的近景被后处理改掉；与修复轮已授权镜头冲突"
+      },
+      {
+        "id": "G2_b_warn_only",
+        "label": "只报 warning，不改写",
+        "behavior": "前镜保持「大特写」；validation 仍报 6 级跨度，交审计/人工决定",
+        "risk": "跨度可能留在成片里；需要审计或人工接住这条 warning"
+      }
+    ],
+    "recommendation": "G2_b：`_check_shot_size_jump` 已经产出同一条 warning，后处理不再二次改写；先做影子对照再决定是否保留自动改写。"
+  },
+  "g6": {
+    "id": "G6_voice_two_states",
+    "question": "声音是否拆「准备态（声明）/ 视频后确认态（实测）」两态",
+    "sample": {
+      "declared_sec": 5.0,
+      "actual_sec": 5.0,
+      "verified": false,
+      "measurement": "not_measured",
+      "shot_window_sec": 4.0,
+      "semantic_codes": [
+        "audio_window_overflow"
+      ],
+      "semantic_findings": [
+        {
+          "code": "audio_window_overflow",
+          "severity": "reject",
+          "message": "独立声音单元 'v1' 实测 5.00s 超过单元窗口 4.00s"
+        },
+        {
+          "code": "audio_window_overflow",
+          "severity": "reject",
+          "message": "镜头 1 的独立声音合计 5.00s 超过可用窗口 4.00s（差 1.00s）"
+        }
+      ]
+    },
+    "options": [
+      {
+        "id": "G6_a_single_state",
+        "label": "维持单态（现状）",
+        "behavior": "声明值写进 actual_sec；消费方若不看 verified，会把声明当实测（本样本直接产出 audio_window_overflow/reject）",
+        "risk": "未实测的内容按实测拒收；准备阶段的超窗与成片超窗混在一起"
+      },
+      {
+        "id": "G6_b_two_states",
+        "label": "拆准备态/确认态",
+        "behavior": "准备态只写 declared_sec 与窗口预算；确认态只在 verified=True 时写 actual_sec，消费方按状态路由",
+        "risk": "需要改 audio_policy / voice_preparation / execution_semantics 的消费方"
+      }
+    ],
+    "recommendation": "G6_b：准备态允许「计划超窗」作为规划问题报告，确认态才按实测时长拒收；拆分后 `execution_semantics` 只消费 verified=True 的 actual_sec。"
+  }
+}

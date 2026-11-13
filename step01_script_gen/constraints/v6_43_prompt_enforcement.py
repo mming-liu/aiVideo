@@ -372,13 +372,77 @@ def _fix_handle_ambiguity(shot: dict) -> int:
 
 # _ANCHOR_VAGUE_KW 已在顶部 import 自 prompt_semantic.registry
 
+#: 水下姿态的露头高度必须**绑定到头/头顶**才算有来源。
+#: 2026-11-13（S02 复核）：「长10cm的探针」「手持5cm的刀」里的数值属于别的实体，
+#: 不能借来当露头高度；「仅头顶约5cm露出」这类才是输入已给出的姿态高度。
+_HEAD_WATER_HEIGHT_RES = (
+    # 「头顶露出水面约5cm」/「头部浮出约 5 厘米」
+    re.compile(
+        r"(?:头顶|头顶部|头部|脑袋)[^，。、\n]{0,8}?"
+        r"(?:露出|露头|出水|浮出)[^，。、\n]{0,6}?"
+        r"约?\s*\d+(?:\.\d+)?\s*(?:cm|厘米)"),
+    # 「仅头顶约5cm露出」/「头顶约 5 厘米露出水面」
+    re.compile(
+        r"(?:头顶|头顶部|头部|脑袋)[^，。、\n]{0,6}?"
+        r"约?\s*\d+(?:\.\d+)?\s*(?:cm|厘米)"
+        r"[^，。、\n]{0,6}?(?:露出|露头|出水|水面|水上)"),
+)
+_ANY_CM_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:cm|厘米)")
+_UNDERWATER_POSE_RE = re.compile(r"潜伏水下")
+_SENTENCE_BREAK_RE = re.compile(r"[。！？!?\n]")
 
-def _fix_vague_anchor(shot: dict) -> int:
+
+def _sentence_span(text: str, pos: int) -> tuple[int, int]:
+    """`pos` 所在句的 `(start, end)`（以句末标点/换行为界）."""
+    start = 0
+    for match in _SENTENCE_BREAK_RE.finditer(text, 0, pos):
+        start = match.end()
+    end = len(text)
+    match = _SENTENCE_BREAK_RE.search(text, pos)
+    if match:
+        end = match.start()
+    return start, end
+
+
+def _underwater_height_note_pos(text: str) -> int | None:
+    """「潜伏水下」句里**有来源的露头高度**的结束位置；没有就返回 None.
+
+    只认同一句内「头/头顶 + 露出水面 + 厘米数值」的绑定；数值属于其他实体、
+    或只写姿态不写高度时返回 None（调用方保留原文，不补造高度）。
+    """
+    pose = _UNDERWATER_POSE_RE.search(text or "")
+    if not pose:
+        return None
+    start, end = _sentence_span(text, pose.start())
+    sentence = text[start:end]
+    for pattern in _HEAD_WATER_HEIGHT_RES:
+        match = pattern.search(sentence)
+        if match:
+            return start + match.end()
+    return None
+
+
+def _has_unattributed_cm_in_underwater_sentence(text: str) -> bool:
+    """「潜伏水下」句里有厘米数值，但没有绑定到头/头顶的露头高度."""
+    pose = _UNDERWATER_POSE_RE.search(text or "")
+    if not pose:
+        return False
+    start, end = _sentence_span(text, pose.start())
+    sentence = text[start:end]
+    return bool(_ANY_CM_RE.search(sentence)) and not any(
+        pattern.search(sentence) for pattern in _HEAD_WATER_HEIGHT_RES)
+
+
+def _fix_vague_anchor(shot: dict, warnings: list | None = None) -> int:
     """Rule 8：模糊数量词 + 危险锚点 → 追加精确空间方位（治"匕首长头上"）.
 
     例：
       "一点刀尖" → "一点刀尖（刀尖位于[目标]头顶正上方约 1cm，不是从[目标]头里长出来的）"
       "仅露双眼" → "仅露双眼（不是上半身出水）"
+
+    水下姿态（2026-11-13 S02 复核）：只在**输入已把厘米数值绑到头/头顶露出水面**
+    时补否定说明，且不写新数值；数值归属不明（道具尺寸等）→ 保留原文并记
+    `action="warn"` 待评阅项，不借值、不补造。
     """
     fixed = 0
     for field in ("ff_desc", "prompt"):
@@ -399,18 +463,25 @@ def _fix_vague_anchor(shot: dict) -> int:
         # 2) "仅露双眼" 类 → 追加"不是上半身出水"
         if "仅露双眼" in new_text and "不是上半身" not in new_text:
             new_text = new_text.replace("仅露双眼", "仅露双眼（不是上半身出水）", 1)
-            fixed += 1
-        # 3) "潜伏水下" 类 → 只有**输入已给出露头高度**时才补说明
-        #    2026-11-13（S02）：此前无条件追加「仅头顶约 2cm 露出水面」，等于替
-        #    输入决定水下姿态与高度。没有来源的高度不写，保留原文交 audit。
-        if re.search(r"潜伏水下", new_text) and "不是上半身" not in new_text \
-                and re.search(r"约?\s*\d+(?:\.\d+)?\s*(?:cm|厘米)", new_text):
-            new_text = re.sub(
-                r"潜伏水下([^，。、\n]{0,8})",
-                r"潜伏水下\1（仅头顶约 2cm 露出水面，不是上半身出水）",
-                new_text, count=1
-            )
-            fixed += 1
+        # 3) "潜伏水下" 类 → 只有**输入已给出可归属的露头高度**时才补否定说明
+        #    2026-11-13（S02 复核）：此前只要字段里出现任意厘米数就追加固定
+        #    「仅头顶约 2cm 露出水面」——「手持长10cm的探针」会借走道具的数值，
+        #    「仅头顶约5cm露出」则被改成 2cm 与原文矛盾。现在只认**绑定到头/头顶**
+        #    的高度，只追加否定说明，不写数值、不改原文数值；无法确定归属时保留
+        #    原文并记录待评阅项。
+        if "不是上半身" not in new_text:
+            note_pos = _underwater_height_note_pos(new_text)
+            if note_pos is not None:
+                new_text = (new_text[:note_pos] + "（不是上半身出水）"
+                            + new_text[note_pos:])
+            elif warnings is not None and _has_unattributed_cm_in_underwater_sentence(new_text):
+                warnings.append(RepairRecord(
+                    constraint_name="v6_43_prompt_enforcement",
+                    shot_index=shot.get("index"),
+                    action="warn", target=field, before=text[:120], after=text[:120],
+                    detail=("水下姿态旁有厘米数值，但无法确定它属于哪个实体/哪种空间"
+                            "关系（可能是道具尺寸）；保留原文交 audit，不补造露头高度。"),
+                ))
         if new_text != text:
             shot[field] = new_text
             fixed += 1
@@ -524,7 +595,7 @@ class V643PromptEnforcementConstraint(Constraint):
                 fixed += _fix_handle_ambiguity(shot)
             # Rule 8：锚点位置约束（"一点X" 模糊数量词追加空间方位）
             if _rule_enabled("VAGUE_ANCHOR"):
-                fixed += _fix_vague_anchor(shot)
+                fixed += _fix_vague_anchor(shot, warnings=warnings)
             # Rule 9：模糊方位词替换（"回首"→"侧头凝望"）
             if _rule_enabled("VAGUE_DIRECTION"):
                 fixed += _fix_vague_direction(shot)

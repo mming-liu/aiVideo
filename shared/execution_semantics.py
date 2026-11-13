@@ -8,8 +8,10 @@
 
 - ``causal_gap``：``chapter_outline.causal_chain`` 有 ``结果`` 角色却缺 ``行动``
   角色——结果没有执行路径；
-- ``time_ellipsis_lost``：出现上述因果缺口，且全稿没有任何时间推进标记/过程载体，
-  结果状态却已断言完成——这是「删掉过程与时间，只留结果」，不是合法省略；
+- ``time_ellipsis_lost``：出现上述因果缺口，且**已绑定镜头**里没有任何时间推进
+  标记/过程载体，结果状态却已断言完成——这是「删掉过程与时间，只留结果」，不是
+  合法省略。承载关系先按 `shot.plan_refs` 解析到**本稿计划的实际条目**（节拍/
+  台词/事实/事件编号必须存在），解析失败的引用不参与裁决（2026-11-13 S03）；
 - ``offscreen_speaker_visible``：声音单元标为画外，说话人却出现在可见布局
   （``frame_layouts`` / ``visual_plan.visible_characters``），且没有合法的口型分离
   豁免；
@@ -102,56 +104,144 @@ def _bridge_text(script: dict) -> str:
 
 
 def _shot_has_process(shot: dict) -> bool:
-    """该镜是否自带可演的过程（动作分段 ≥2 或有关键帧）——结构判据，不看词表."""
+    """该镜是否自带可演的过程（动作分段 ≥2 或**关键帧序列**）——结构判据，不看词表.
+
+    2026-11-13（S03 复核）：旧口径把「有关键帧」直接当成过程证据，于是给一镜
+    无关的鸟加一张定格关键帧，就能豁免因果缺失。单个关键帧只是静态定格；只有
+    ≥2 个时刻/阶段不同的关键帧才构成时间序列（过程）。
+    """
     segments = _MOTION_SEGMENT_RE.findall(_text(shot.get("motion_desc")))
-    keyframes = shot.get("keyframes")
-    return len(segments) >= 2 or (isinstance(keyframes, list) and bool(keyframes))
+    return len(segments) >= 2 or _keyframe_sequence(shot)
 
 
-#: `shot.plan_refs` 里表示「本镜承载了哪些计划条目」的键（事件契约的既有字段）。
-_PLAN_REF_KEYS = ("beats", "lines", "facts", "events")
+def _keyframe_sequence(shot: dict) -> bool:
+    """关键帧是否构成**时间序列**（≥2 帧且时刻/阶段不同）."""
+    frames = shot.get("keyframes")
+    if not isinstance(frames, list):
+        return False
+    marks: set[str] = set()
+    for frame in frames:
+        if not isinstance(frame, dict) or not _text(frame.get("desc")):
+            continue
+        moment = frame.get("t_sec")
+        if moment is None:
+            moment = _text(frame.get("stage")) or _text(frame.get("moment"))
+        marks.add(str(moment))
+    return len(marks) >= 2
 
 
-def _explicit_plan_refs(shot: dict) -> dict:
-    """该镜的**显式计划引用**（`plan_refs`）；没有就返回空 dict.
+#: `plan_refs` 里表示「本镜承载了哪些计划条目」的键，以及各自在
+#: `chapter_outline` 里的目标列表（编号按 1 起算）。目标列表是**本稿自带的计划
+#: 结构**，不读盘、不调模型；缺失 = 引用不可核验。
+_PLAN_REF_TARGETS = (
+    ("beats", "shot_beats", "节拍"),
+    ("lines", "dialogue_lines", "台词"),
+    ("facts", "fact_uids", "事实"),
+    ("events", "main_events", "事件"),
+)
 
-    2026-11-12 复核（第三轮）：过程载体**不得**用文本相似度判断是否与被质疑的因果
-    相关——「城门上方一只鸟飞过」与结果共享地点就会被误判成相关过程。项目里已经有
-    显式绑定：`shot.plan_refs` 声明本镜承载的节拍/台词（事件履约契约，见
-    `main.py` 的 `plan_refs` 契约门）。承载关系只认这一份结构化声明。
+
+def _coerce_ref_number(value: Any) -> int | None:
+    """`plan_refs` 的编号 → int；只认整数与 ASCII 数字串.
+
+    带前缀的 `"B1"` / 浮点 / bool 都不是有效引用（生成契约要求只填数字；带前缀
+    由 `plan_feasibility.check_event_contract` 报 `plan_refs_not_a_number`）。
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text and text.isascii() and text.isdigit():
+            return int(text)
+    return None
+
+
+def _ref_target_count(outline: dict, target_key: str) -> int | None:
+    """计划目标列表的条目数；列表缺失/不可读返回 None（引用不可核验）."""
+    value = outline.get(target_key)
+    if isinstance(value, list):
+        return len(value)
+    return None
+
+
+def _resolve_plan_refs(shot: dict, outline: dict) -> tuple[dict, list[dict]]:
+    """把 `plan_refs` 解析到**本稿计划的实际条目**上.
+
+    Returns:
+        `(resolved, invalid)`：
+        - `resolved`：`{kind: [number, ...]}`，只含目标确实存在的引用；
+        - `invalid`：`[{"kind", "value", "reason"}]`，目标缺失/越界/类型非法。
+
+    「非空引用」不等于绑定：`beats=[999]` 在没有第 999 条节拍时不能证明本镜
+    承载了任何计划条目。只有解析成功的引用才进入承载关系（2026-11-13 S03）。
     """
     refs = shot.get("plan_refs")
     if not isinstance(refs, dict):
-        return {}
-    return {k: v for k, v in refs.items()
-            if k in _PLAN_REF_KEYS and isinstance(v, list) and v}
+        return {}, []
+    resolved: dict[str, list[int]] = {}
+    invalid: list[dict] = []
+    for kind, target_key, _label in _PLAN_REF_TARGETS:
+        if kind not in refs:
+            continue
+        raw = refs.get(kind)
+        if not isinstance(raw, list):
+            invalid.append({"kind": kind, "value": raw, "reason": "not_a_list"})
+            continue
+        count = _ref_target_count(outline, target_key)
+        for value in raw:
+            number = _coerce_ref_number(value)
+            if number is None:
+                invalid.append({"kind": kind, "value": value,
+                                "reason": "not_a_number"})
+                continue
+            if count is None:
+                invalid.append({"kind": kind, "value": value,
+                                "reason": "target_missing"})
+                continue
+            if number < 1 or number > count:
+                invalid.append({"kind": kind, "value": value,
+                                "reason": "out_of_range"})
+                continue
+            resolved.setdefault(kind, []).append(number)
+    return resolved, invalid
 
 
-def _process_carriers(script: dict) -> tuple[list[str], list[str], list[str]]:
-    """按**显式 `plan_refs`** 划分过程载体.
+def _process_carriers(script: dict) -> tuple[list[str], list[str], list[str], list[dict]]:
+    """按**解析成功的显式 `plan_refs`** 划分过程载体.
 
     Returns:
-        `(bound_with_process, bound_without_process, unbound)`，元素形如 `shot:3`。
+        `(bound_with_process, bound_without_process, unbound, invalid_refs)`，
+        镜头标签形如 `shot:3`；`invalid_refs` 逐条给出
+        `{"shot", "kind", "value", "reason"}`。
 
-    - `bound_*`：该镜声明了 `plan_refs`，即计划明确说「本镜承载这些节拍/台词」；
-    - `unbound`：没有显式绑定。**它既不能当豁免证据，也不能据此认定因果缺失**，
-      裁决交给语义评阅（`needs_semantic_review`）。
-
-    这样「加一镜无关的鸟」既不会改变裁决（它没有 `plan_refs`），也不会被当成
-    「匹配失败 ⇒ 因果缺失」的证据。
+    - `bound_*`：至少一条引用**解析到真实计划条目**——计划明确说「本镜承载
+      这些节拍/台词」；
+    - `unbound`：没有可解析的引用（没声明，或声明的目标不存在）。**它既不能当
+      豁免证据，也不能据此认定因果缺失**，裁决交给语义评阅
+      （`needs_semantic_review`）；
+    - `invalid_refs`：声明了但目标缺失/越界/类型非法的引用，单独记录。无效引用
+      **不改变裁决**——2026-11-13 S03 复核：`beats=[999]` 曾被当成绑定，给一镜
+      无关的鸟加关键帧就抹掉了 `time_ellipsis_lost`。
     """
+    outline = _outline(script)
     bound_with: list[str] = []
     bound_without: list[str] = []
     unbound: list[str] = []
+    invalid_refs: list[dict] = []
     for shot in _iter_shots(script):
         label = "shot:%s" % (shot.get("index"),)
-        if not _explicit_plan_refs(shot):
+        resolved, invalid = _resolve_plan_refs(shot, outline)
+        for item in invalid:
+            invalid_refs.append({"shot": label, **item})
+        if not resolved:
             unbound.append(label)
         elif _shot_has_process(shot):
             bound_with.append(label)
         else:
             bound_without.append(label)
-    return bound_with, bound_without, unbound
+    return bound_with, bound_without, unbound, invalid_refs
 
 
 def _issue(code: str, path: str, message: str, *, family: str, **fields) -> dict:
@@ -338,8 +428,9 @@ def _check_causal_and_time(script: dict) -> list[dict]:
     #
     # 承载关系**只认显式绑定**（`shot.plan_refs`）：文本相似度不足以证明某镜承载了
     # 被质疑的因果——「城门上方一只鸟飞过」会与结果共享地点而被误判成相关过程。
-    # 没有显式绑定时输出 `needs_semantic_review`：既不豁免，也不认定因果缺失。
-    bound_with, bound_without, unbound = _process_carriers(script)
+    # 2026-11-13（S03）：绑定前先把引用**解析到真实计划条目**；解析失败的引用不参与
+    # 承载关系，逐条记入 `invalid_refs`，不得用它豁免。
+    bound_with, bound_without, unbound, invalid_refs = _process_carriers(script)
     binding_status = "bound" if (bound_with or bound_without) else "unbound"
     findings = [_issue(
         "causal_gap", "chapter_outline.causal_chain",
@@ -352,7 +443,8 @@ def _check_causal_and_time(script: dict) -> list[dict]:
         carrier_evidence=bound_with,
         bound_without_process=bound_without,
         unbound_shots=unbound,
-        needs_semantic_review=(binding_status == "unbound"),
+        invalid_refs=invalid_refs,
+        needs_semantic_review=(binding_status == "unbound" or bool(invalid_refs)),
     )]
     if binding_status == "unbound":
         # 没有显式绑定：不豁免（不能拿它证明过程存在），也不认定缺失（不能拿
@@ -376,6 +468,7 @@ def _check_causal_and_time(script: dict) -> list[dict]:
             missing=["temporal_marker", "process_carrier"],
             bound_shots=sorted(bound_indices),
             unbound_shots=unbound,
+            invalid_refs=invalid_refs,
         ))
     return findings
 

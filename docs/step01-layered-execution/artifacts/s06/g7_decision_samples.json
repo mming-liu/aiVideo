@@ -1,0 +1,101 @@
+{
+  "schema": "s06.g7_decision_samples.v1",
+  "note": "三个匿名受控样本；记账/目标/保护三类判据均为真实函数；不读盘、不调模型。",
+  "rows": [
+    {
+      "id": "A_equivalent_derivation",
+      "label": "等价派生：授权路径被后处理改写，但修复目标仍达成",
+      "producer": "step01_script_gen.constraints.v6_43_prompt_enforcement._fix_vague_anchor",
+      "expected": "accept",
+      "merged_text": {
+        "prompt": "刺客潜伏水下，仅露双眼。",
+        "ff_desc": "甲立在渡口。",
+        "narration_segment": "甲走过石阶。"
+      },
+      "after_text": {
+        "prompt": "刺客潜伏水下，仅露双眼（不是上半身出水）。",
+        "ff_desc": "甲立在渡口。",
+        "narration_segment": "甲走过石阶。"
+      },
+      "postprocess_reverted": {
+        "1": [
+          "prompt"
+        ]
+      },
+      "target_achieved_in_merged": true,
+      "target_achieved_after": true,
+      "target_lost": false,
+      "locked_field_changed": false,
+      "verdicts": {
+        "current_record_only": false,
+        "R1_any_residual": true,
+        "R2_target_loss": false,
+        "R2_plus_protection": false
+      }
+    },
+    {
+      "id": "B_target_loss",
+      "label": "目标丢失：授权删除被后处理改回修前值",
+      "producer": "synthetic revert（修前快照回填；用于验证目标丢失判据）",
+      "expected": "reject",
+      "merged_text": {
+        "prompt": "",
+        "ff_desc": "机甲立在废墟。",
+        "narration_segment": "甲走过石阶。"
+      },
+      "after_text": {
+        "prompt": "",
+        "ff_desc": "窄身机甲立在废墟。",
+        "narration_segment": "甲走过石阶。"
+      },
+      "postprocess_reverted": {
+        "1": [
+          "ff_desc"
+        ]
+      },
+      "target_achieved_in_merged": true,
+      "target_achieved_after": false,
+      "target_lost": true,
+      "locked_field_changed": false,
+      "verdicts": {
+        "current_record_only": false,
+        "R1_any_residual": true,
+        "R2_target_loss": true,
+        "R2_plus_protection": true
+      }
+    },
+    {
+      "id": "C_protection_violation",
+      "label": "保护违规：后处理改了锁定字段（旁白），授权路径未变",
+      "producer": "synthetic locked-field change（用于验证保护门；正式链路由 locked_changed 拦）",
+      "expected": "reject",
+      "merged_text": {
+        "prompt": "甲快步走过石阶。",
+        "ff_desc": "甲立在渡口。",
+        "narration_segment": "甲走过石阶。"
+      },
+      "after_text": {
+        "prompt": "甲快步走过石阶。",
+        "ff_desc": "甲立在渡口。",
+        "narration_segment": "甲走过长阶。"
+      },
+      "postprocess_reverted": {},
+      "target_achieved_in_merged": true,
+      "target_achieved_after": true,
+      "target_lost": false,
+      "locked_field_changed": true,
+      "verdicts": {
+        "current_record_only": false,
+        "R1_any_residual": false,
+        "R2_target_loss": false,
+        "R2_plus_protection": true
+      }
+    }
+  ],
+  "candidate_rules": {
+    "current_record_only": "不因 postprocess_reverted 拒绝（现状）",
+    "R1_any_residual": "postprocess_reverted 非空 → 拒绝",
+    "R2_target_loss": "合并后目标已达成、后处理后未达成 → 拒绝",
+    "R2_plus_protection": "R2 或 _locked_repair_signature 变化 → 拒绝"
+  }
+}
