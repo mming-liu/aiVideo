@@ -1,6 +1,6 @@
-# S06（G1/G2）决策样本
+# S06（G1/G2/G6）决策样本
 
-> 生成：`python tools/build_s06_g1_g2_samples.py`（离线、零模型调用）
+> 生成：`python tools/build_s06_decision_samples.py`（离线、零模型调用）
 
 ## G1：`issue_ledger.closed` 接提交门
 
