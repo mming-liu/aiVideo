@@ -15,14 +15,22 @@ vimax_bridge 组装 ff_desc_final / lf_desc_final 之后、提交图片模型之
 fail-fast 策略：默认（PROMPT_CONTRADICTION_STRICT=1）发现矛盾即抛
 PromptContradictionError，让该帧生成当场失败——调试期额度换质量，
 矛盾 prompt 重试 N 次也是同一结果；设 0 降级为告警放行。
+
+**词表与内容无关**（2026-11-14）：四组词原先写死在函数体里，且是从某一本书的
+真实 prompt 提炼的措辞——换书即失效。现已外置到
+`shared/prompt_contradiction_lexicon.py`（通用中文视觉词汇作默认值，项目级
+覆盖走 `PROMPT_CONTRA_LEXICON`），判据本身只保留**结构**：
+「同 holder 的持有/否认」「禁令禁掉前文需要的东西」「前态与伤情结束态同现」。
 """
 from __future__ import annotations
 
 import os
 import re
 
-# 刃器同义类：持有/否认判定时「匕首≈刀≈短刃」视为同类
-_BLADE_WORDS = ("匕首", "短刃", "短刀", "刀", "剑")
+from shared import prompt_contradiction_lexicon as _lex
+
+# 刃器同义类：持有/否认判定时「匕首≈刀≈短刃」视为同类（默认值，可被词表覆盖）
+_BLADE_WORDS = _lex.DEFAULTS["blade_terms"]
 
 
 class PromptContradictionError(RuntimeError):
@@ -57,11 +65,13 @@ def _weapon_denial(prompt: str) -> list[tuple[str, str]]:
     return out
 
 
-def _is_blade(w: str) -> bool:
-    return any(w in b or b in w for b in _BLADE_WORDS)
+def _is_blade(w: str, blade_terms=None) -> bool:
+    return any(w in b or b in w for b in (blade_terms or _BLADE_WORDS))
 
 
-def _check_weapon_contradiction(prompt: str) -> list[str]:
+def _check_weapon_contradiction(prompt: str, lex: dict | None = None) -> list[str]:
+    lex = lex or _lex.current()
+    blades = lex["blade_terms"]
     issues: list[str] = []
     denials = _weapon_denial(prompt)
     no_weapon_holders = {h for h, w in denials if w == "武器"}
@@ -71,37 +81,76 @@ def _check_weapon_contradiction(prompt: str) -> list[str]:
             issues.append(f"对称矛盾：断言「{weapon}在{holder}手中」又断言「{holder}手中没有武器」")
             continue
         for h, w in denied_weapons:
-            if h == holder and (_is_blade(weapon) and _is_blade(w) or weapon == w):
+            if h == holder and (_is_blade(weapon, blades) and _is_blade(w, blades) or weapon == w):
                 issues.append(f"对称矛盾：断言「{weapon}在{holder}手中」又断言「{holder}手中没有{w}」")
     return issues
 
 
-def _check_shadow_contradiction(prompt: str) -> list[str]:
-    """禁黑影/人影 + 前文描述需要黑影 → 对称矛盾.
+def _ignored_spans(text: str, ignores) -> list[tuple[int, int]]:
+    """`text` 里属于"忽略子串"的区间（命中落在这些区间内就不算禁令命中）."""
+    spans: list[tuple[int, int]] = []
+    for ign in ignores or ():
+        start = text.find(ign)
+        while start >= 0:
+            spans.append((start, start + len(ign)))
+            start = text.find(ign, start + 1)
+    return spans
+
+
+def _banned_terms(clause: str, lex: dict) -> list[str]:
+    """从「禁止…」子句里取被禁名词（`explicit` 查表 / `enumerate` 机械切词）."""
+    if lex["prohibition_mode"] == "explicit":
+        return list(lex["prohibition_terms"])
+    # enumerate：按非汉字切分，剥掉标记词与动词/量词前缀，留 2–4 字名词，
+    # 去掉过泛词（人物/画面/文字…）。切词必然有噪声，所以默认不启用。
+    noise = [lex["prohibition_clause_marker"]] + list(lex["prohibition_token_prefixes"])
+    stop = set(lex["prohibition_stop_terms"])
+    out: list[str] = []
+    for seg in re.split(r"[^\u4e00-\u9fff]+", clause):
+        for word in noise:
+            seg = seg.replace(word, "")
+        if 2 <= len(seg) <= 4 and seg not in stop and seg not in out:
+            out.append(seg)
+    return out
+
+
+def _check_prohibition_conflict(prompt: str, lex: dict | None = None) -> list[str]:
+    """禁令条款禁掉前文正要出现的东西（禁黑影 + 需要黑影 → 对称矛盾）.
 
     样本：「画右水中一道黑影上浮」（剧情伏笔）+「禁止出现任何其他人物、
     黑影、人影」→ 模型按禁令抹掉黑影，伏笔丢失。
 
-    v6.50 精度修订：威胁不可见模板（style_prefix）在威胁源为黑影时会
-    故意只禁「人影」保留「黑影」——此时仅当 ①禁令含「黑影」本身，或
-    ②描述需要的是「人影」而禁令禁「人影」才算矛盾；「描述用黑影 +
-    禁令只禁人影」是设计内组合，放行。
+    判据是**结构**的：找出「禁止」子句里被禁的实体，再看同一个实体是否出现在
+    子句之前（前文描述要它）。`真人` 这类风格前缀造成的跨词命中按词表排除。
     """
-    # 懒惰量词：取禁令子句里**最先出现**的被禁词（贪婪会把「黑影」吞进
-    # 填充符、误取后面的「人影」——「禁止…黑影、人影」须判 banned=黑影）。
-    # 人影带 (?<!真)：风格前缀「古风真人影视剧」跨词含「人影」子串，须排除。
-    m = re.search(r"禁止[^\n。]{0,24}?(黑影|(?<!真)人影)", prompt)
-    if not m:
+    lex = lex or _lex.current()
+    marker = lex["prohibition_clause_marker"]
+    start = prompt.find(marker)
+    if start < 0:
         return []
-    banned = m.group(1)
-    head = prompt[: m.start()]
-    needs_shadow = re.search(r"(一道|一团)?黑影", head) is not None
-    needs_figure = re.search(r"(?<!真)人影", head) is not None
-    if banned == "黑影" and needs_shadow:
-        return ["对称矛盾：前文描述需要「黑影」（剧情威胁伏笔），禁止条款又禁掉它"]
-    if banned == "人影" and needs_figure:
-        return ["对称矛盾：前文描述需要「人影」，禁止条款又禁掉它"]
+    clause = prompt[start:start + int(lex["prohibition_clause_max_chars"])]
+    for stop in ("。", "\n", "；", ";", "！", "!"):
+        cut = clause.find(stop)
+        if cut > 0:
+            clause = clause[:cut]
+    head = prompt[:start]
+    ignores = lex["prohibition_ignore_substrings"]
+    spans = _ignored_spans(head, ignores)
+    # 只认「确实写在这条禁令里」的实体：词表是候选集，条款才是事实来源。
+    for term in (t for t in _banned_terms(clause, lex) if t in clause):
+        pos = head.find(term)
+        while pos >= 0:
+            # 与忽略子串**有重叠**即不算命中：`真人影视剧` 跨词会切出「人影」，
+            # 这个词来自风格前缀，不是被禁的实体。
+            if not any(pos < b and pos + len(term) > a for a, b in spans):
+                return ["prohibition_conflict（对称矛盾）：前文描述需要「%s」，"
+                        "禁止条款又禁掉它" % term]
+            pos = head.find(term, pos + 1)
     return []
+
+
+#: 兼容旧名：语义已泛化为「任意禁令实体」，不只是黑影。
+_check_shadow_contradiction = _check_prohibition_conflict
 
 
 def _check_duplicate_block(prompt: str) -> list[str]:
@@ -134,32 +183,47 @@ def _check_double_punctuation(prompt: str) -> list[str]:
     return []
 
 
-def _check_ff_lf_stage_conflict(prompt: str) -> list[str]:
-    """v6.x.x（08-30 实抽）：ff 既含"动作起始态"前置词 + 伤锚完整结束词 → 矛盾.
+def _check_ff_lf_stage_conflict(prompt: str, lex: dict | None = None) -> list[str]:
+    """ff 既含「动作起始态」前置词 + 伤情结束态（且落在身体/衣物上）→ 矛盾.
 
-    现场：hook.prompt 字段同时含"杨旭闭目吟哦/仰卧未觉"（前态）和
-    "伤处白袍心口一片暗红血迹洇开"（后态）——模型拿到自相矛盾的 prompt
-    自由发挥成"船里灌水/听香在船外"画面。F10 词表已在 step01 校验层
-    补 4 个词（08-30），这里是 step02a 提交前最后一道 fail-fast 兜底。
+    现场：prompt 同时含「闭目吟哦/仰卧未觉」（前态）和「伤处…心口一片暗红血迹
+    洇开」（后态）——模型拿到自相矛盾的 prompt，自由发挥成"船里灌水/人在船外"。
 
-    判定策略（避免误伤）：**仅当 ff 同时含"前置词" + "伤锚结束词"才报**。
-    - 纯前态（"闭目吟哦"+无伤锚）→ 不报
-    - 纯后态（"伤处白袍"+无前态词）→ 不报
-    - 前后态同现 → 报 "ff_lf_stage_conflict"
+    判定策略（避免误伤）：三个条件同时成立才报——
+
+    1. 存在前态词（还没发生/将要发生）；
+    2. 存在伤情结束态词，**且**该词左右 `injury_anchor_window` 字内出现身体或
+       衣物词（"桌上一滩血"不算"角色已被刺"的画面）；
+    3. 前态词与伤情词的间距 ≤ `pre_state_max_distance`（同一个人同一段描写，
+       隔了整段的两处描述不构成自相矛盾）。
+
+    纯前态、纯后态、以及伤情不在人身上的情形都不报。
     """
-    if not prompt:
+    lex = lex or _lex.current()
+    pre_pos = []
+    for term in lex["pre_state_terms"]:
+        start = prompt.find(term)
+        while start >= 0:
+            pre_pos.append((start, start + len(term), term))
+            start = prompt.find(term, start + 1)
+    if not pre_pos:
         return []
-    # 前态词：杨旭/受害者"还没受伤"语义
-    pre_state = ("闭目", "未觉", "尚未", "即将入", "即将没入", "未刺",
-                 "蓄势", "潜伏", "伏于", "蛰伏")
-    # 伤锚完整句（与 F10 _POST_STATE_WORDS 补的 4 词 + 历史锚句对齐）
-    injury_anchor = ("伤处白袍", "一片暗红血迹洇开", "血痕清晰可见",
-                     "暗红痕迹洇开", "心口洇开大片暗红", "胸口已刺入")
-    has_pre = any(w in prompt for w in pre_state)
-    has_anchor = any(w in prompt for w in injury_anchor)
-    if has_pre and has_anchor:
-        return ["ff_lf_stage_conflict（ff 同时含前态词+伤锚结束词，"
-                "如「角色A闭目吟哦」+「肩头青衫一片暗红血迹洇开」→ 矛盾）"]
+    window = int(lex["injury_anchor_window"])
+    limit = int(lex["pre_state_max_distance"])
+    body = lex["body_or_garment_terms"]
+    for term in lex["injury_terms"]:
+        pos = prompt.find(term)
+        while pos >= 0:
+            seg = prompt[max(0, pos - window):pos + len(term) + window]
+            if any(b in seg for b in body):
+                for a, b, pre in pre_pos:
+                    # 两段之间的**净间距**（重叠记 0）——隔了整段的两处描写不算矛盾
+                    gap = max(0, pos - b, a - (pos + len(term)))
+                    if gap <= limit:
+                        return ["ff_lf_stage_conflict（ff 同时含前态词「%s」"
+                                "与伤情结束态「%s」，模型无法同时满足）"
+                                % (pre, term)]
+            pos = prompt.find(term, pos + 1)
     return []
 
 
@@ -167,12 +231,13 @@ def find_contradictions(prompt: str) -> list[str]:
     """检测 prompt 内确定性自相矛盾，返回问题描述列表（空 = 通过）."""
     if not prompt or not isinstance(prompt, str):
         return []
+    lex = _lex.current()
     issues: list[str] = []
-    issues += _check_weapon_contradiction(prompt)
-    issues += _check_shadow_contradiction(prompt)
+    issues += _check_weapon_contradiction(prompt, lex)
+    issues += _check_prohibition_conflict(prompt, lex)
     issues += _check_duplicate_block(prompt)
     issues += _check_double_punctuation(prompt)
-    issues += _check_ff_lf_stage_conflict(prompt)
+    issues += _check_ff_lf_stage_conflict(prompt, lex)
     return issues
 
 

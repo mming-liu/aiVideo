@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import os
 import subprocess
@@ -180,6 +181,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out-dir", default="docs/step01-layered-execution/artifacts",
                     help="报告输出目录（默认 docs/.../artifacts）")
     ap.add_argument("--no-write", action="store_true", help="只打印 JSON，不写报告")
+    # 报告名里的日期戳**不再写死**：写死会让第二天重跑覆盖同一份文件、
+    # 让"最新体检"变成"某一天的体检"，也让回归无法断言产出文件名。
+    ap.add_argument("--stamp", default=_dt.date.today().isoformat(),
+                    help="报告文件名日期戳，默认今天（YYYY-MM-DD）")
     args = ap.parse_args(argv)
     root = Path(args.root).resolve()
     report = audit(root)
@@ -191,13 +196,14 @@ def main(argv: list[str] | None = None) -> int:
     if not out_dir.is_absolute():
         out_dir = _ROOT / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "workspace-size-audit-2026-11-14.json").write_text(
+    stamp = args.stamp
+    (out_dir / ("workspace-size-audit-%s.json" % stamp)).write_text(
         payload, encoding="utf-8")
-    (out_dir / "workspace-size-audit-2026-11-14.md").write_text(
+    (out_dir / ("workspace-size-audit-%s.md" % stamp)).write_text(
         _markdown(report), encoding="utf-8")
     print("total: %s / %d files" % (_human(report["total"]["bytes"]),
                                     report["total"]["files"]))
-    print("report: %s" % (out_dir / "workspace-size-audit-2026-11-14.md"))
+    print("report: %s" % (out_dir / ("workspace-size-audit-%s.md" % stamp)))
     return 0
 
 

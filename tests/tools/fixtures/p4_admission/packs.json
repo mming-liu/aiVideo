@@ -1,0 +1,65 @@
+{
+  "schema": "p4_admission_pack.v1",
+  "note": "P4 准入核对的夹具。人物用「某人/另一人」占位，地点用「北岸仓库」这类通用名词；不含任何具体作品原文。新增场景 = 加 pack，不改判据代码。",
+  "packs": [
+    {
+      "id": "obligation_id_and_text",
+      "why": "核验记录里义务编号写错（'1' 而不是代码给定的 'claim'）、正文是改写而非原文——这正是 P4 报告要解释的那类拒收。四个机械变体应该给出可预测的裁定。",
+      "novel": "雨下了三天。仓库管理员某人去年递了辞呈。账目随后由另一人接管。北岸仓库还有货位。",
+      "fact": {
+        "uid": "f01",
+        "claim": "某人去年递了辞呈，账目随后由另一人接管",
+        "evidence": "仓库管理员某人去年递了辞呈。账目随后由另一人接管。"
+      },
+      "carrier": {"uid": "n01", "kind": "narration"},
+      "beat": {"uid": "b01", "text": "某人放下辞呈", "purpose": "交代"},
+      "record": {
+        "source_verdict": "supported",
+        "fact_verdict": "supported",
+        "obligation": {
+          "obligation_id": "1",
+          "text": "某人辞了职，账目后来换了人管",
+          "verdict": "supported",
+          "reason": "载体覆盖了主张"
+        },
+        "voice": {"speaker": "某人", "source_kind": "novel_speech"}
+      },
+      "expect": {
+        "original": {"admitted": false, "problems_include": ["verify_obligation_unknown_id"]},
+        "id_fixed": {"admitted": false, "problems_include": ["verify_obligation_text_substituted"]},
+        "id_text_fixed": {"admitted": true, "problems_include": []},
+        "wrong_id": {"admitted": false, "problems_include": ["verify_obligation_unknown_id"]},
+        "wrong_text": {"admitted": false, "problems_include": ["verify_obligation_text_substituted"]}
+      },
+      "note": "original/id_fixed 都缺 id，因此同时带 verify_obligation_missing —— 断言用「包含」而非「相等」，避免把顺带的共现代码写死成契约。"
+    },
+    {
+      "id": "source_span_not_in_catalog",
+      "why": "来源引用写成原文句子而不是目录编号时，整条运行都要被拒（不是「悄悄当成 supported」）。这是「引用不能冒充已展示内容」在准入层的落点。",
+      "novel": "雨下了三天。仓库管理员某人去年递了辞呈。账目随后由另一人接管。北岸仓库还有货位。",
+      "fact": {
+        "uid": "f01",
+        "claim": "某人去年递了辞呈，账目随后由另一人接管",
+        "evidence": "仓库管理员某人去年递了辞呈。账目随后由另一人接管。"
+      },
+      "carrier": {"uid": "n01", "kind": "narration"},
+      "beat": {"uid": "b01", "text": "某人放下辞呈", "purpose": "交代"},
+      "record": {
+        "source_verdict": "supported",
+        "fact_verdict": "supported",
+        "source_spans_use_raw_text": true,
+        "obligation": {
+          "obligation_id": "claim",
+          "text": "某人去年递了辞呈，账目随后由另一人接管",
+          "verdict": "supported",
+          "reason": "载体覆盖了主张"
+        },
+        "voice": {"speaker": "某人", "source_kind": "novel_speech"}
+      },
+      "expect": {
+        "run_error_includes": ["verify_source_reference_invalid"]
+      },
+      "note": "来源引用非法时 runs[].raw_error 有值、variants 为空——这条钉住「解析阶段就拒」，而不是逐变体拒。"
+    }
+  ]
+}

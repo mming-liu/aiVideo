@@ -179,8 +179,63 @@ python -m pytest tests/shared/test_execution_contract.py `
 # 84 passed
 ```
 
+## R5 → R6：冻结身份可复现化与词表外置（2026-11-14）
+
+R5 作为待送审对象期间发现两个问题，都落在**判据层**，分镜内容一条没动：
+
+1. **`quality_sha256` 不可复现**（缺陷）。`validation.py` 规则 13.7 把角色名集合
+   直接拼进 advisory 文案，集合迭代顺序随 `PYTHONHASHSEED` 变 → 同一份分镜重建两次
+   得到两个质量摘要（`cb08db51…` / `7fbc5863…`）。冻结身份的承诺是"别人能重算出同一个
+   摘要"，这条一度不成立。修法：拼消息前 `sorted(known_chars)`。
+2. **矛盾自检词表绑作品**（通用性）。`shared/prompt_contradiction.py` 里两组词是从
+   2026-08 某本书的真实 prompt 提炼的措辞（`伤处白袍`/`暗红血迹洇开`、`黑影/人影`），
+   换一本书就永远不触发。拆成数据层 `shared/prompt_contradiction_lexicon.py`
+   （通用默认表 + `add`/`set` 增量覆盖 + 未知键报错 + mtime 缓存）+ 判据层只留结构。
+
+| 项 | R5 | R6 |
+|---|---|---|
+| `candidate_sha256` | `e6c0b9bc…` | `e6c0b9bc…`（**相同**，证明只改判据） |
+| `quality_sha256` | 每次不同 | `9843de08eba47e0d…`（三个种子同一值） |
+| `rule_source_fingerprint` | — | `d3ab095ffa4c501a` |
+| `rule_version` | `2026-09-23.4` | `2026-11-14.1` |
+| **`binding_digest`** | — | **`e19acd18bab2f47798288113879689ba`** |
+| 质量门 | PASS / hard 0 / visual_risk 0 | 同（advisory 77） |
+
+- 精度取舍有实测依据：第一版把静态血迹词（`暗红`/`血迹`/`伤处`）也算"伤情结束态"，
+  在真实候选上立刻误报 6 段（`心口暗红；张十三右手尚未扬起`）。静态血迹表示"伤一直在"，
+  与"尚未发生"不冲突；只有"刺入/洇开/渗血/中刀"这类**此刻正在发生**的词才构成矛盾。
+  默认表据此收窄，原因写进代码注释与用例。
+- 行为等价：旧版（`git show HEAD:...`）与新版在 342 段语料（13 镜的 prompt/ff/lf/
+  motion/keyframes/layout + Step02a `--plan-only` 真实组装 prompt + 历史快照）上
+  逐段对比，命中 0 / 0，**裁决不一致 0**。
+- 夹具同步泛化：`tests/shared/fixtures/prompt_contradiction/packs.json` 5 pack / 17 case
+  → **7 pack / 24 case**，新增 `prohibition_generic`（`烟雾`）与 `stage_generic`（`枪伤渗血`），
+  家族 `shadow` 更名 `prohibition`（判据早已泛化，名字不该再绑"黑影"）。
+- 四个零回归脚本补齐用例（53 条）：`diagnose_video_gaps` 15、`workspace_size_audit` 19、
+  `reparse_final_audit` 9、`p4_admission_check` 10。顺带修两处可测性缺陷——
+  `workspace_size_audit` 报告名日期写死（改为 `--stamp` 默认今天）、
+  `reparse_final_audit` 只能遍历真实产物（改为 `--path` / `--chapter-dir`，不给参数沿用旧行为）。
+- 审计包实测仍零发送：`--print-binding-digest` = `e19acd18…`；`--dry-run` → `VALIDATED` /
+  `would_send=0`；未授权 `-Execute` → exit 2 `authorization_required`；
+  `STEP01_AUDIT_AUTHORIZED=1` 但 `remaining=0` → exit 2 `budget_exhausted`。
+- R6 下 S07 三项防呆复验通过：分镜字节未变（`shot2_ff_hash` = `06ab04ab252884f8`）、
+  `step02a --plan-only` 读数与 R5 一致（`model_sends=0`、`prompt_preflight=ok`）。
+
+细节与完整读数见 `U6-r6-freeze-2026-11-14.md`。
+
 ## 剩余与下一步
 
+- **R6 停在 S03 之前，等 S02 单次授权**。需新 `authorization_id`（不得复用 R1–R5）、
+  `binding_digest` 逐字填 `e19acd18bab2f47798288113879689ba`、`budget.remaining` 改 1。
+  拿到授权后才跑 S03 隔离审计 → S04 → S05 → S06 → S07 → S08。
+- **`tests/step01_script_gen` 47 条套件隔离红**（既有问题，非本轮引入）。唯一失败形态
+  是 `production_context.ContextError: chapter_dir_mismatch`：`main.py::_create_adoption_receipt`
+  的 `formal_chapter` 取自测试 patch 过的 `CHAPTER_DIR`，而 `output_base_override` 取自
+  环境变量 `OUTPUT_BASE`（conftest 全局设为 `.pytest_tmp`，测试未 patch），凭据自相矛盾。
+  已验证：单独跑全绿、两半区各自 1362 / 1894 passed。修法是让该函数从 `CHAPTER_DIR`
+  反推而非读环境变量，但会动 47 个用例的共同夹具，需单独一轮。
+- **`prompt_contradiction` 是否纳入 `RULE_SOURCE_FINGERPRINT`** 待裁决：目前 `shared/prompt_contradiction.py`
+  不在指纹清单内，改了它指纹不变。纳入会再次改写所有已采纳报告的身份。
 - 真实 Step01/02a/02b/TTS 验证需另行授权；建议按 S08 `not_run.md` 的止损条件执行。
 - 合并后系统只有一套行为；逐项责任与生效状态见 S07。Step01 提交门严重度未改写，
   上一版结果留档见 `baselines/2026-11-12-pre-layered/`。

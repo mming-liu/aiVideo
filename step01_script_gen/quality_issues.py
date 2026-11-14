@@ -17,7 +17,7 @@ from typing import Iterable
 
 from step01_script_gen.subject_attribution import leading_named_span
 
-RULE_VERSION = "2026-09-23.4"
+RULE_VERSION = "2026-11-14.1"
 RULE_IMPLEMENTATION = "evidence-gated-writes-v1"
 
 

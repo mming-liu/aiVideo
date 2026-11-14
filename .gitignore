@@ -241,6 +241,8 @@ tests/enhancements/*
 !tests/step01_script_gen/test_script_preflight.py
 # 2026-11-14 U6 R5：修复闭环（缺陷→授权修复→复查）的夹具与契约用例
 !tests/step01_script_gen/test_repair_loop_contract.py
+# 2026-11-14 U6 R6：质量报告必须逐字节可复现（集合迭代顺序曾让 quality_sha256 漂移）
+!tests/step01_script_gen/test_quality_report_determinism.py
 # 187 条回归还含 source_revision 与 presentation_contract 两个受影响的既有套件；
 # 不放行它们，干净检出只能复现部分读数。source_revision 的夹具来自 legacy_semantic。
 !tests/step01_script_gen/test_source_revision.py
@@ -315,6 +317,8 @@ tests/tts/*
 !tests/shared/test_video_prompt_system.py
 # 2026-11-14：prompt 矛盾自检的夹具制回归（原内联版写死作品人名，已按 pack 重建）
 !tests/shared/test_prompt_contradiction_contract.py
+# 2026-11-14 U6 R6：矛盾自检的**词表层**（默认值内容无关 + 项目级覆盖 + 缓存/校验）
+!tests/shared/test_prompt_contradiction_lexicon.py
 !tests/shared/test_frame_prompt_camera.py
 # 2026-11-01：本轮离线修复的契约用例**入库**（与上面"只可见不提交"不同）。
 # 仍需逐级放行父目录，再排除目录内容，最后精确放行文件。
@@ -326,6 +330,19 @@ tests/tools/*
 !tests/tools/test_vision_check.py
 # 2026-11-02：Studio 工作台（tools/studio_server.py）离线用例入库。
 !tests/tools/test_studio_server.py
+# 2026-11-14 U6 R6：`tools/` 下四个门禁/诊断脚本此前**零回归**（诊断缺片归因、
+# 工作区体积体检、审计响应重解析、P4 准入核对）。这四个都只读或只写临时目录，
+# 用例可完全离线跑；夹具数据随仓库交付，否则干净检出跑不到它们。
+!tests/tools/test_diagnose_video_gaps.py
+!tests/tools/test_workspace_size_audit.py
+!tests/tools/test_reparse_final_audit.py
+!tests/tools/test_p4_admission_check.py
+!tests/tools/p4_admission_builder.py
+!tests/tools/fixtures/
+tests/tools/fixtures/*
+!tests/tools/fixtures/p4_admission/
+tests/tools/fixtures/p4_admission/*
+!tests/tools/fixtures/p4_admission/packs.json
 !tests/step02a_frame_gen/
 tests/step02a_frame_gen/*
 !tests/step02a_frame_gen/test_step02a_offline_fixups.py

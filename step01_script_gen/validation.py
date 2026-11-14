@@ -6193,7 +6193,11 @@ def _check_frame_desc_anchors(text: str, label: str,
                 )
 
     # --- D. 出镜角色服装色重述（规则13.7） ---
-    onstage = [c for c in known_chars if c and c in text]
+    # `known_chars` 是集合（见下方 `_check_ff_desc_anchors` 的构造），**必须排序后
+    # 再拼消息**：集合迭代顺序随 PYTHONHASHSEED 变化，未排序时同一份脚本在不同
+    # 进程里会产出字面不同的 advisory，`quality_sha256` 于是每次重建都不一样
+    # （2026-11-14 实测：同一候选两次重建得到两个不同的摘要，冻结身份不可复现）。
+    onstage = [c for c in sorted(known_chars) if c and c in text]
     missing_dress = []
     for c in onstage:
         dyn = char_dress.get(c, "") or ""

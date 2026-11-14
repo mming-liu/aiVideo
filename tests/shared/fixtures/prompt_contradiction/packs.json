@@ -6,7 +6,10 @@
       "id": "weapon_possession",
       "family": "weapon",
       "why": "同一 holder 既被断言「持有刃器」又被断言「手中没有武器/刃器」——模型无法同时满足，只能抽奖。",
-      "discriminating": ["同 holder 的持有断言", "同 holder 的否认断言"],
+      "discriminating": [
+        "同 holder 的持有断言",
+        "同 holder 的否认断言"
+      ],
       "cases": [
         {
           "id": "legal_denial_only",
@@ -23,13 +26,17 @@
         {
           "id": "defect_possession_vs_denial",
           "prompt": "【道具锚定】乙某的匕首在甲某手中（场景：水面）。【武器归属】武器（短刃、刀、剑）只能由乙某持有。甲某手中没有武器，没有刀，没有剑，没有短刃。",
-          "expect": ["weapon"],
+          "expect": [
+            "weapon"
+          ],
           "why": "同一个人既「匕首在手中」又「手中没有武器」。"
         },
         {
           "id": "defect_blade_class_alias",
           "prompt": "短刃在甲某手中，刃口朝下。甲某手中没有刀。",
-          "expect": ["weapon"],
+          "expect": [
+            "weapon"
+          ],
           "why": "短刃≈刀属同类刃器：否认「刀」即否认「短刃」，仍是对称矛盾。"
         },
         {
@@ -42,14 +49,19 @@
     },
     {
       "id": "shadow_ban",
-      "family": "shadow",
-      "why": "前文剧情需要「黑影/人影」，禁止条款又把它禁掉——模型会按禁令抹掉伏笔。",
-      "discriminating": ["禁令前是否提到黑影/人影", "禁令首词是黑影还是人影"],
+      "family": "prohibition",
+      "why": "禁令条款禁掉前文正要出现的东西——模型只能二选一，「剧情伏笔」与「禁止条款」同时成立时必丢一个。",
+      "discriminating": [
+        "禁令前是否提到黑影/人影",
+        "禁令首词是黑影还是人影"
+      ],
       "cases": [
         {
           "id": "defect_needs_shadow_but_banned",
           "prompt": "画右水中一道黑影上浮，激起细微波纹直逼船头。【人物数量限制】画面中只允许出现以下角色：甲某、乙某。禁止出现任何其他人物、黑影、人影。",
-          "expect": ["shadow"],
+          "expect": [
+            "prohibition"
+          ],
           "why": "需要黑影 + 禁令含黑影。"
         },
         {
@@ -70,12 +82,16 @@
       "id": "duplicate_block",
       "family": "duplicate",
       "why": "同一段描述被整体注入两遍（模板拼接的典型事故），模型会把两遍当两个事实。",
-      "discriminating": ["≥24 字窗口是否非重叠重复"],
+      "discriminating": [
+        "≥24 字窗口是否非重叠重复"
+      ],
       "cases": [
         {
           "id": "defect_block_injected_twice",
           "prompt": "甲某：国字脸，剑眉星目，黑发束冠，身姿挺拔，弱冠之年，身着素白色轻袍，头戴方巾，赤脚。乙某跪坐船头。甲某：国字脸，剑眉星目，黑发束冠，身姿挺拔，弱冠之年，身着素白色轻袍，头戴方巾，赤脚。该小舟为窄身无篷舟。",
-          "expect": ["duplicate"],
+          "expect": [
+            "duplicate"
+          ],
           "why": "角色描述块整块出现两次，超出 24 字窗口且不重叠。"
         },
         {
@@ -96,18 +112,24 @@
       "id": "punctuation",
       "family": "punctuation",
       "why": "「。。」「，，」是模板拼接痕迹，说明两个字段被硬接在一起。",
-      "discriminating": ["连续重复标点"],
+      "discriminating": [
+        "连续重复标点"
+      ],
       "cases": [
         {
           "id": "defect_double_period",
           "prompt": "水面渐渐平复。。乙某跪坐船头。",
-          "expect": ["punctuation"],
+          "expect": [
+            "punctuation"
+          ],
           "why": "双句号。"
         },
         {
           "id": "defect_double_comma",
           "prompt": "甲某起身，，乙某退开半步。",
-          "expect": ["punctuation"],
+          "expect": [
+            "punctuation"
+          ],
           "why": "双逗号。"
         },
         {
@@ -122,12 +144,17 @@
       "id": "ff_lf_stage",
       "family": "stage",
       "why": "首帧同时写了「动作还没开始」的前态词和「事情已经完成」的伤锚结束句——模型会自己选一个，选错就废一帧。",
-      "discriminating": ["前态词", "伤锚结束词"],
+      "discriminating": [
+        "前态词",
+        "伤锚结束词"
+      ],
       "cases": [
         {
           "id": "defect_pre_state_plus_finished_anchor",
           "prompt": "甲某素白袍袒腹仰卧船头，仰面朝上双目紧闭，闭目吟哦。乙某潜伏在舟侧水下，仅露头部。伤处白袍心口一片暗红血迹洇开，血痕清晰可见。",
-          "expect": ["stage"],
+          "expect": [
+            "stage"
+          ],
           "why": "前态（闭目/潜伏）+ 完成态伤锚同现。"
         },
         {
@@ -141,6 +168,76 @@
           "prompt": "乙某已没入水中。甲某仰卧不动，伤处白袍心口一片暗红血迹洇开，血痕清晰可见。",
           "expect": [],
           "why": "纯后态，没有前态词。"
+        }
+      ]
+    },
+    {
+      "id": "prohibition_generic",
+      "family": "prohibition",
+      "why": "被禁实体不限于黑影/人影：任何「前文要它、禁令禁它」的组合都是同一类矛盾。",
+      "discriminating": [
+        "禁令里出现的名词",
+        "该名词是否出现在禁令之前"
+      ],
+      "cases": [
+        {
+          "id": "defect_smoke_banned_but_needed",
+          "prompt": "画左墙角一团烟雾沿地皮漫开，贴地向门口推。禁止出现任何额外烟雾、火星。",
+          "expect": [
+            "prohibition"
+          ],
+          "why": "前文要烟雾（镜头主体），禁令又禁掉烟雾。"
+        },
+        {
+          "id": "legal_ban_without_need",
+          "prompt": "甲某推门进屋，室内陈设简单，条案上一只茶盏。禁止出现任何额外烟雾、火星。",
+          "expect": [],
+          "why": "禁令里的实体前文没有出现，不构成矛盾。"
+        },
+        {
+          "id": "legal_term_inside_ignore_substring",
+          "prompt": "古风真人影视剧质感，甲某立于门内。禁止出现任何人影、文字水印。",
+          "expect": [],
+          "why": "「人影」是风格前缀「真人影视剧」的跨词产物，不是被禁的实体（词表忽略子串）。"
+        }
+      ]
+    },
+    {
+      "id": "stage_generic",
+      "family": "stage",
+      "why": "同一段描写里既说「还没发生/将要发生」，又说伤情**此刻正在发生**——两句话不可能同时为真。判据只认起始体/过程体伤情词，静态血迹色不算。",
+      "discriminating": [
+        "前态词",
+        "起始体伤情词",
+        "伤情是否落在身体/衣物上",
+        "两者间距"
+      ],
+      "cases": [
+        {
+          "id": "defect_pre_state_plus_fresh_wound",
+          "prompt": "乙某闭目靠在车门上，右臂枪伤渗血，袖口一片暗红。",
+          "expect": [
+            "stage"
+          ],
+          "why": "「闭目」是前态，同一句又说伤口正在渗血。"
+        },
+        {
+          "id": "legal_pre_state_plus_static_blood",
+          "prompt": "乙某闭目靠在车门上，脚边地面有一处早已干涸的暗红血迹。",
+          "expect": [],
+          "why": "静态血迹表示伤一直在，与「闭目」不冲突（真实候选上的误报就出在这里）。"
+        },
+        {
+          "id": "legal_fresh_wound_without_pre_state",
+          "prompt": "乙某右臂枪伤渗血，袖口暗红，目光垂向地面。",
+          "expect": [],
+          "why": "只有后态、没有前态词。"
+        },
+        {
+          "id": "legal_far_apart",
+          "prompt": "乙某闭目靠在车门上，风从半开的车窗灌进来，吹得帘子贴住门框又松开，远处传来断续的脚步声，有人在走廊尽头停下又走开，甲某从楼梯口上来，袖口带灰，乙某右臂枪伤渗血。",
+          "expect": [],
+          "why": "两处描写净间距超过阈值，属两段独立描述，不是自相矛盾。"
         }
       ]
     }

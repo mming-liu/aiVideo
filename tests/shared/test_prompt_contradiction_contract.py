@@ -10,9 +10,12 @@
 * 机制：本文件只做「取 prompt → 跑判据 → 把消息映射回判据族 → 与预期比较」；
 * 换作品/换章节 = 换或加 pack，本文件与判据代码都不改。
 
-覆盖 5 个判据族：`weapon`（持有/否认对称矛盾）、`shadow`（禁黑影与需要黑影冲突）、
-`duplicate`（≥24 字块重复注入）、`punctuation`（「。。」「，，」）、
-`stage`（ff 前态词 + 伤锚结束词）。
+覆盖 5 个判据族：`weapon`（持有/否认对称矛盾）、`prohibition`（禁令禁掉前文需要
+的实体）、`duplicate`（≥24 字块重复注入）、`punctuation`（「。。」「，，」）、
+`stage`（前态词 + 刚刚成立的伤情）。
+
+词表已外置到 `shared/prompt_contradiction_lexicon.py`：本文件比的是**判据族**，
+换题材（古装/现代/科幻）只加 pack 与词表覆盖，不改判据代码。
 """
 from __future__ import annotations
 
@@ -39,10 +42,10 @@ from _content_binding import assert_obj_clean     # noqa: E402
 PACKS = TESTS_DIR / "shared" / "fixtures" / "prompt_contradiction" / "packs.json"
 SCHEMA = "prompt_contradiction_pack.v1"
 
-FAMILIES = {"weapon", "shadow", "duplicate", "punctuation", "stage"}
+FAMILIES = {"weapon", "prohibition", "duplicate", "punctuation", "stage"}
 
 #: {packs 路径: JSON 规范化文本 sha256[:16]}——受控夹具只读。
-FROZEN = "d3ba1fede2438ee7"
+FROZEN = "7e640cbf4c198c82"
 
 
 def _dump(obj) -> str:
@@ -73,8 +76,10 @@ def kinds(issues: list[str]) -> list[str]:
             out.add("punctuation")
         elif "ff_lf_stage_conflict" in text:
             out.add("stage")
+        elif "prohibition_conflict" in text:
+            out.add("prohibition")
         elif "对称矛盾" in text:
-            out.add("shadow" if ("黑影" in text or "人影" in text) else "weapon")
+            out.add("weapon")
         else:
             out.add("unknown:" + text[:24])
     return sorted(out)
