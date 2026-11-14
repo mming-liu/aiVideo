@@ -1,0 +1,262 @@
+{
+ "schema": "u6_r2_rebuild.v1",
+ "candidate_in": "C:\\myFloders\\git\\aiVideo\\.dsh\\u6_closeout_20261110\\candidate_d1a\\candidate.json",
+ "candidate_out": "C:\\myFloders\\git\\aiVideo\\.dsh\\u6_closeout_20261110\\r2\\candidate_r2.json",
+ "revision": "278a5193065f77621cc36431aea23f643b31c401b234ef86d6bbfeef31da10a8",
+ "revision_recheck": "278a5193065f77621cc36431aea23f643b31c401b234ef86d6bbfeef31da10a8",
+ "candidate_sha256": "343091594e5577594f586ff18cad8001aadb6911b30354c08cd6f0836f6f28e9",
+ "quality_status": "PASS",
+ "quality_hard_count": 0,
+ "quality_visual_risk_count": 0,
+ "quality_fingerprint": "db08353ea107b486",
+ "quality_revision": "278a5193065f77621cc36431aea23f643b31c401b234ef86d6bbfeef31da10a8",
+ "changed_shots": [
+  1,
+  4,
+  5,
+  6,
+  7,
+  10,
+  11,
+  13
+ ],
+ "shot2_diff_count": 0,
+ "shot8_readback_clean": true,
+ "shot_count": 13,
+ "duration_sec": 75.25,
+ "edits": [
+  {
+   "shot": 1,
+   "field": "prompt",
+   "old": "大特写",
+   "new": "大远景"
+  },
+  {
+   "shot": 4,
+   "field": "ff_desc",
+   "old": "右手提青瓷酒壶",
+   "new": "右手正伸向船板青瓷酒壶（拿起起始态）"
+  },
+  {
+   "shot": 4,
+   "field": "motion_desc",
+   "old": "前2秒：杨旭仰头望星，右手提壶",
+   "new": "前2秒：杨旭从船板提起青瓷酒壶、仰头望星"
+  },
+  {
+   "shot": 4,
+   "field": "ff.杨旭.pose",
+   "old": "盘坐仰头",
+   "new": "盘坐仰头、右手伸向酒壶"
+  },
+  {
+   "shot": 4,
+   "field": "ff.杨旭.props",
+   "old": "青瓷酒壶",
+   "new": "append"
+  },
+  {
+   "shot": 5,
+   "field": "prompt",
+   "old": "船头杨旭素白轻袍背影可见",
+   "new": "船头杨旭素白轻袍背影可见，左手持钓杆垂向湖面"
+  },
+  {
+   "shot": 5,
+   "field": "ff.杨旭.props",
+   "old": "钓杆",
+   "new": "append"
+  },
+  {
+   "shot": 5,
+   "field": "lf.杨旭.props",
+   "old": "钓杆",
+   "new": "append"
+  },
+  {
+   "shot": 6,
+   "field": "prompt",
+   "old": "（寒光是独立物体，不是从角色身上长出来的）（寒光是独立物体，不是从角色身上长出来的）",
+   "new": "（寒光是独立物体，不是从角色身上长出来的）"
+  },
+  {
+   "shot": 7,
+   "field": "ff_desc",
+   "old": "神秘人右手反握带血短刃、双腿屈弹半起身",
+   "new": "神秘人右手反握带血短刃（刃上带血、刚离杨旭心口）、双腿屈弹半起身"
+  },
+  {
+   "shot": 7,
+   "field": "lf_desc",
+   "old": "右手酒壶倾倒酒水洒在甲板",
+   "new": "右手酒壶倒在船板，酒水汩汩洒出"
+  },
+  {
+   "shot": 7,
+   "field": "prompt",
+   "old": "右手酒壶倾倒酒水洒在甲板",
+   "new": "右手酒壶已倒在船板，酒水汩汩洒出"
+  },
+  {
+   "shot": 7,
+   "field": "motion_desc",
+   "old": "前2秒：神秘人双腿一弹倒纵离船",
+   "new": "前2秒：神秘人从杨旭心口拔出短刃、反握带血刃后双腿一弹倒纵离船"
+  },
+  {
+   "shot": 10,
+   "field": "ff_desc",
+   "old": "听香披头散发撑坐船板",
+   "new": "听香发髻已散、步摇已失、披头散发撑坐船板"
+  },
+  {
+   "shot": 10,
+   "field": "motion_desc",
+   "old": "前2秒：张十三猛地转身扬手",
+   "new": "前2秒：听香抬手摸到散落长发、发觉步摇已失，张十三猛地转身扬手"
+  },
+  {
+   "shot": 11,
+   "field": "ff_desc",
+   "old": "右手食指竖于唇前",
+   "new": "右手尚未抬起、食指未竖"
+  },
+  {
+   "shot": 11,
+   "field": "ff.张十三.pose",
+   "old": "俯身竖指",
+   "new": "俯身未竖指"
+  },
+  {
+   "shot": 11,
+   "field": "keyframes[0].desc",
+   "old": "右手食指竖于唇前",
+   "new": "右手尚未抬起"
+  },
+  {
+   "shot": 13,
+   "field": "prompt",
+   "old": "中景，湾堤岸边，张十三青衣小帽驾两轮带篷马车（长3.5米宽1.6米高2.0米），车厢内杨旭素白色轻袍仰卧、心口衣料暗红洇痕，听香一袭春衫披头散发倚坐其侧；马车疾驰，车轮扬起尘土，别庄大门洞开在画左后方；冷蓝夜色，车篷灯笼摇晃",
+   "new": "中景，别庄门前，张十三青衣小帽与听香一左一右将杨旭从船板扶起、半扶半抬走向两轮带篷马车（长3.5米宽1.6米高2.0米）车厢踏板，杨旭素白色轻袍半倚、心口衣料暗红洇痕，听香一袭春衫披头散发；马车停在门前，车轮旁尘土未起；冷蓝夜色，车篷灯笼摇晃"
+  },
+  {
+   "shot": 13,
+   "field": "ff_desc",
+   "old": "张十三坐于车辕扬鞭，马车停在门前，车厢内杨旭素白色轻袍仰卧、心口暗红洇痕，听香一袭春衫披头散发倚坐其侧",
+   "new": "马车停在别庄门前，张十三与听香一左一右搀扶杨旭走向车厢踏板，杨旭素白色轻袍半倚、心口暗红洇痕，听香一袭春衫披头散发"
+  },
+  {
+   "shot": 13,
+   "field": "motion_desc",
+   "old": "前2秒：张十三扬鞭催马；2-4秒：马车疾驰冲出大门；4-5秒：车影投入茫茫夜色",
+   "new": "前2秒：张十三与听香将杨旭从船板扶起、半扶半抬走向马车；2-4秒：两人合力将杨旭托上车厢踏板、送入车厢；4-5秒：张十三跳上车辕抄起马鞭，马车启动"
+  },
+  {
+   "shot": 13,
+   "field": "lf_desc",
+   "old": "马车疾驰远去，车影没入夜色，尘土未落，车厢内杨旭素白色轻袍仰卧、心口衣料暗红洇痕，听香一袭春衫披头散发倚坐其侧，车篷灯笼摇晃",
+   "new": "马车启动驶离门前，车轮扬起尘土，车厢内杨旭素白色轻袍仰卧、心口衣料暗红洇痕，听香一袭春衫披头散发倚坐其侧，张十三坐于车辕扬鞭，车篷灯笼摇晃"
+  },
+  {
+   "shot": 13,
+   "field": "ff.张十三.position",
+   "old": "画中车辕",
+   "new": "画左车厢踏板旁"
+  },
+  {
+   "shot": 13,
+   "field": "ff.张十三.pose",
+   "old": "坐辕扬鞭",
+   "new": "搀扶杨旭"
+  },
+  {
+   "shot": 13,
+   "field": "ff.张十三.support",
+   "old": {
+    "id": "cart_1",
+    "kind": "两轮带篷载客马车",
+    "surface": "车辕"
+   },
+   "new": {
+    "id": "cart_1",
+    "kind": "两轮带篷载客马车",
+    "surface": "地面"
+   }
+  },
+  {
+   "shot": 13,
+   "field": "ff.杨旭.position",
+   "old": "画中车厢",
+   "new": "画中车厢踏板旁"
+  },
+  {
+   "shot": 13,
+   "field": "ff.杨旭.pose",
+   "old": "仰卧",
+   "new": "半倚被搀扶"
+  },
+  {
+   "shot": 13,
+   "field": "ff.杨旭.support",
+   "old": {
+    "id": "cart_1",
+    "kind": "两轮带篷载客马车",
+    "surface": "车厢内"
+   },
+   "new": {
+    "id": "cart_1",
+    "kind": "两轮带篷载客马车",
+    "surface": "车厢踏板"
+   }
+  },
+  {
+   "shot": 13,
+   "field": "ff.听香.position",
+   "old": "画中车厢",
+   "new": "画右车厢踏板旁"
+  },
+  {
+   "shot": 13,
+   "field": "ff.听香.pose",
+   "old": "倚坐",
+   "new": "搀扶杨旭"
+  },
+  {
+   "shot": 13,
+   "field": "ff.听香.support",
+   "old": {
+    "id": "cart_1",
+    "kind": "两轮带篷载客马车",
+    "surface": "车厢内"
+   },
+   "new": {
+    "id": "cart_1",
+    "kind": "两轮带篷载客马车",
+    "surface": "地面"
+   }
+  },
+  {
+   "shot": 13,
+   "field": "keyframes[0].desc",
+   "old": "张十三坐于车辕扬鞭，马车停在别庄门前，听香披头散发倚坐车厢",
+   "new": "马车停在别庄门前，张十三与听香一左一右搀扶杨旭走向车厢踏板"
+  },
+  {
+   "shot": 13,
+   "field": "keyframes[1].desc",
+   "old": "马车疾驰冲出大门，车轮扬起尘土",
+   "new": "两人合力将杨旭托上车厢踏板、送入车厢"
+  },
+  {
+   "shot": 13,
+   "field": "keyframes[2].desc",
+   "old": "马车疾驰冲出大门，车轮扬起尘土",
+   "new": "张十三跳上车辕扬鞭，马车启动驶离，车轮扬起尘土"
+  }
+ ],
+ "diff_count": 42,
+ "written": {
+  "candidate_r2_sha256": "343091594e5577594f586ff18cad8001aadb6911b30354c08cd6f0836f6f28e9",
+  "quality_r2_sha256": "aa71ded36521acbeb3c0ef3dd9a3a618f6105cd949c03d214614ade926ca66a1"
+ }
+}
