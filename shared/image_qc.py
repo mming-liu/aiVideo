@@ -791,6 +791,33 @@ _GROUNDING_PROMPT = (
     "Do NOT count reflections, shadows, or painted figures. No other text."
 )
 
+#: 2026-11-14 Step B：opencode 视觉通道的**受控**瞬态重试。
+#: 只对 429（限流）/502/503/504 与瞬态 SSL/ConnectionError 退避；
+#: 400/401/403/404 等客户端/鉴权错误立即失败（重试只会掩盖配置问题）。
+#: 次数由 `QC_VISION_HTTP_RETRIES` 控制（默认 2 次重试 = 最多 3 次尝试）。
+_QC_HTTP_RETRY_STATUS = frozenset({429, 502, 503, 504})
+_QC_HTTP_RETRY_BACKOFF = (2.0, 5.0)
+
+
+def _qc_http_retries() -> int:
+    raw = os.getenv("QC_VISION_HTTP_RETRIES", "2")
+    try:
+        return max(0, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _qc_retry_after(resp) -> float | None:
+    """读取 `Retry-After`（秒）；缺失/非法返回 None（由调用方用默认退避）."""
+    headers = getattr(resp, "headers", None) or {}
+    raw = headers.get("Retry-After") or headers.get("retry-after")
+    if raw is None:
+        return None
+    try:
+        return max(0.0, float(str(raw).strip()))
+    except (TypeError, ValueError):
+        return None
+
 
 def _opencode_vision_chat(frame_path: str | Path, prompt: str) -> str:
     """OpenCode Go 视觉通道（QC_PROVIDER=opencode 时唯一渠道）.
@@ -798,6 +825,10 @@ def _opencode_vision_chat(frame_path: str | Path, prompt: str) -> str:
     deepseek-v4.1-flash 在 opencode go /models 声明支持 image/png|jpeg|webp 输入，
     因此图片 QC 不再绕 ds-vision-skill router（其 agnes 单次超时 300s，是 QC 慢的
     主因），直接复用文本通道的 key / base_url / 会话头。
+
+    2026-11-14 Step B：429/5xx/瞬态 SSL 断开按 `QC_VISION_HTTP_RETRIES`
+    （默认 2）退避重试，优先遵循 `Retry-After`，否则 2s → 5s。客户端/鉴权
+    错误（400/401/403/404…）**不重试**——那不是瞬态故障。
     """
     base = (os.getenv("AGENT_PLAN_TEXT_BASE_URL")
             or os.getenv("AGENT_PLAN_BASE_URL") or "").rstrip("/")
@@ -806,32 +837,51 @@ def _opencode_vision_chat(frame_path: str | Path, prompt: str) -> str:
         raise RuntimeError(
             "opencode 视觉质检未配置：需要 AGENT_PLAN_TEXT_BASE_URL + AGENT_PLAN_API_KEY")
     data_url = _ark_image_data_url(frame_path)
-    resp = requests.post(
-        f"{base}/chat/completions",
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "x-opencode-session": _QC_SESSION_ID,
-        },
-        json={
-            "model": QC_OPENCODE_MODEL,
-            "messages": [{"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": data_url}},
-                {"type": "text", "text": prompt},
-            ]}],
-            "temperature": 0,
-            "max_tokens": _ARK_MAX_TOKENS,
-            "reasoning_effort": "none",
-        },
-        timeout=QC_OPENCODE_TIMEOUT_SEC,
-    )
-    if resp.status_code != 200:
-        raise RuntimeError(f"opencode {resp.status_code}: {resp.text[:200]}")
-    data = resp.json()
-    content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
-    if not content:
-        raise RuntimeError("opencode 返回空内容")
-    return content
+    retries = _qc_http_retries()
+    last_err = ""
+    for attempt in range(retries + 1):
+        try:
+            resp = requests.post(
+                f"{base}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                    "x-opencode-session": _QC_SESSION_ID,
+                },
+                json={
+                    "model": QC_OPENCODE_MODEL,
+                    "messages": [{"role": "user", "content": [
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                        {"type": "text", "text": prompt},
+                    ]}],
+                    "temperature": 0,
+                    "max_tokens": _ARK_MAX_TOKENS,
+                    "reasoning_effort": "none",
+                },
+                timeout=QC_OPENCODE_TIMEOUT_SEC,
+            )
+        except (requests.exceptions.SSLError,
+                requests.exceptions.ConnectionError) as exc:
+            last_err = f"opencode 传输异常: {exc}"
+            if attempt >= retries:
+                raise RuntimeError(last_err) from exc
+            delay = _QC_HTTP_RETRY_BACKOFF[min(attempt, len(_QC_HTTP_RETRY_BACKOFF) - 1)]
+            time.sleep(delay)
+            continue
+        if resp.status_code == 200:
+            data = resp.json()
+            content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+            if not content:
+                raise RuntimeError("opencode 返回空内容")
+            return content
+        last_err = f"opencode {resp.status_code}: {resp.text[:200]}"
+        if resp.status_code not in _QC_HTTP_RETRY_STATUS or attempt >= retries:
+            raise RuntimeError(last_err)
+        delay = _qc_retry_after(resp)
+        if delay is None:
+            delay = _QC_HTTP_RETRY_BACKOFF[min(attempt, len(_QC_HTTP_RETRY_BACKOFF) - 1)]
+        time.sleep(delay)
+    raise RuntimeError(last_err)
 
 
 def _vision_chat(frame_path: str | Path, prompt: str) -> str:

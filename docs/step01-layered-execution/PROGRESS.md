@@ -292,6 +292,23 @@ R5 作为待送审对象期间发现两个问题，都落在**判据层**，分�
 `post_budget` 26、`disk_governance` 12、`plan_only_isolation` 5、`post_budget_outcomes` 8 passed。
 G1 判别力已用「旧豁免临时加回」验证：同一动态用例从 BLOCK 变 COMMITTED。
 
+## 2026-11-14 Step A + Step B（Post-R6 终版首批）
+
+详见 `StepA-StepB-20261114.md`。
+
+- **Step A（零调用）**：全盘一级项对账 **5.324 GB / 16,940 files**（delta=0；计划预估的
+  7GB+ 未复现，仓库内无 `.venv`/`node_modules`/`.browsers`）。清理 `.pytest_tmp`
+  （3.27 GB）+ `output/step01_run_review/20261013`（555.8 MB）+ `output/video/motion_fixtures`
+  （40.9 MB）+ `output/video/_enhancement` 内容（156.4 MB，留空壳）+ `.dsh` 淘汰轮次后，
+  降至 **1.386 GB / 8,154 files**（释放 3.938 GB；另 `%TEMP%` 45.7 MB）。
+  30 个保护文件 + 2 棵 `global/` 资产树 SHA-256 **全部未变**；`shots/2/first_frame.png`
+  与账本 `33/172` 未动。
+- **Step B（1 次逻辑 QC / 0 图片 POST）**：`_opencode_vision_chat` 增加
+  429/5xx/瞬态 SSL 受控退避（默认 2 次重试，400/401/403/404 不重试），
+  `test_image_qc_retry.py` **6 passed**。shot 2 FF 走 `maybe_qc_sync` + `write_sidecar`
+  补验：**`qc_passed`**（1 条 warning：左手手指轻微模糊），图片 sha `4089f234…`、
+  内容哈希 `06ab04ab252884f8`、账本 `33→33` 均未变。**U6 S07/S08 收口。**
+
 ## 剩余与下一步
 
 - **shot 2 FF 的 QC 重检待通道恢复**：重跑

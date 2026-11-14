@@ -405,6 +405,8 @@ tests/step02_video_gen/*
 !tests/shared/test_vimax_bridge_v6321.py
 !tests/shared/test_scene_identity_match.py
 !tests/shared/test_post_budget.py
+# 2026-11-14 Step B：opencode 视觉通道 429/5xx/SSL 受控退避（离线单测，干净检出可跑）
+!tests/shared/test_image_qc_retry.py
 !tests/shared/test_image_qc_kf_prompt.py
 !tests/shared/test_hook_shot0_v661.py
 
