@@ -1,0 +1,220 @@
+{
+  "started": "2026-11-14T14:07:00.741265",
+  "batches": [
+    {
+      "batch": 1,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 2,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 3,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 4,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 5,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 6,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 7,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 8,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 9,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 10,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 11,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 12,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 13,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 14,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 15,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 16,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 17,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 18,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 19,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 20,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 21,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 22,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 23,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 24,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 25,
+      "size": 10,
+      "rc": 2,
+      "aborted": false,
+      "gone": 10,
+      "archive_intact": true
+    },
+    {
+      "batch": 26,
+      "size": 6,
+      "rc": 2,
+      "aborted": false,
+      "gone": 6,
+      "archive_intact": true
+    }
+  ],
+  "total": 256,
+  "stopped_early": false,
+  "finished": "2026-11-14T14:08:25.330825",
+  "remaining_files": 0,
+  "resumed": "2026-11-14T14:08:17.928544",
+  "recycle_bin_entries_for_sources": 256,
+  "rc_note": "SHFileOperationW 返回 2 但文件确实进入回收站，已用 $I 元数据核实；成功判据=文件移走+归档完好"
+}
