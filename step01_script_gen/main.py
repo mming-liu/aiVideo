@@ -3934,11 +3934,29 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                     "[COMMIT] 本轮 %d 条审计项落在未改动镜头（增量作用域），已降级为 warning"
                     % _delta_downgraded)
         blocking = _audit_blocking_records(audit) + _q_blocking
-        # 2026-11-14 S06 G1（批准，仅阻塞级）：上一轮 blocking 问题本轮不再报出时，
-        # **必须有确定性关闭证据**（判据证据已不在稿件中）才能算解决；否则是
-        # 「模型沉默」而不是「已修复」——直接 BLOCK，不把沉默读成通过。
+        # 2026-11-14 S06 G1（批准，仅阻塞级）+ P1/G1（完整裁决）：
+        # **上一轮 blocking 本轮不再报出 ≠ 已修复**——必须有确定性关闭依据。
         # 证据是自由文本、从未字面出现在稿件里时 `_audit_issue_resolved` 返回 True
         # （无法区分），这类条目不在本闸门可判范围内，保持既有语义。
+        #
+        # 关闭依据有且只有两类，都是**确定性**的：
+        #   (a) 判据证据已不在稿件中（`_audit_issue_resolved`）；
+        #   (b) 该身份有一轮**通过验收**的修复记账（`_audit_attempted`）——
+        #       该集合只在 `_round_ok` 为真、且未被「零改善回退」撤销后才写入，
+        #       因此它是「修复被真实验收」的记录，而不是「模型动过手」的记录。
+        # 为什么要 (b)：配对/跨字段问题的正确终态就是**证据留在上游字段**
+        # （如 ff_desc 的来源描述必须原样保留，缺陷在 frame_layouts 里）——
+        # 只认 (a) 会把这类合法关闭判成未关闭，修复永远无法收敛
+        # （实测 4 个提交路径用例因此恒 BLOCK）。旧豁免
+        # `_audit_issue_field_touched` 不是这个意思：它只证明字段被改过、
+        # 不证明改对了，仍然不作依据。
+        #
+        # 两个旧豁免按计划移除：
+        #   · 「判据证据缺失/过短就跳过」→ 改为**保留未关闭**（待复核）：
+        #     缺证据不能反证已修复；`_audit_issue_resolved` 对无证据返回 False，
+        #     自然落进未闭合，不再被静默放行；
+        #   · 「目标字段被改动就豁免」→ 改动只证明模型动过手，不证明改对；
+        #     字段改动降级为**诊断**，不再充当关闭依据。
         if _prev_audit_issues:
             _now_ids_g1 = {
                 _audit_issue_identity(_i)
@@ -3947,17 +3965,8 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                 _pi for _pi in _prev_audit_issues
                 if is_blocking(_pi)
                 and _audit_issue_identity(_pi) not in _now_ids_g1
-                # 只有「判据证据可判」的条目才进本闸门：证据缺失/过短时无法区分
-                # 「已修」与「模型沉默」，保持既有语义（不凭沉默定罪，也不放行
-                # 有证据却仍在稿中的情况）。
-                and _audit_evidence_text(_pi) is not None
                 and not _audit_issue_resolved(script, _pi)
-                # 授权修复目标字段确实被改过 = 有确定性关闭依据（证据可保留，
-                # 例如「来源见证必须完整保留」的成对修复）；只有「没改字段、只靠
-                # 模型沉默」才算未闭合。
-                and not (_prev_audit_script is not None
-                         and _audit_issue_field_touched(
-                             _prev_audit_script, script, _pi))]
+                and _audit_issue_identity(_pi) not in _audit_attempted]
             if _g1_unclosed:
                 for _pi in _g1_unclosed:
                     blocking.append({
@@ -3967,11 +3976,13 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                         "frame_id": getattr(_pi, "frame_id", "") or "",
                         "entity_id": getattr(_pi, "entity_id", "") or "",
                         "field_path": getattr(_pi, "field_path", "") or "",
-                        "message": ("上一轮 blocking 本轮未再报出，但判据证据仍在稿件中"
-                                    "（模型沉默 ≠ 已修复；G1 门禁）"),
+                        "message": ("上一轮 blocking 本轮未再报出，但缺少确定性关闭依据"
+                                    "（判据证据仍在稿件中，或证据不可判/缺失——"
+                                    "模型沉默、仅改字段都不等于已修复；G1 门禁）"),
                     })
                 summary["detail"] = (
-                    "G1：上一轮 %d 条 blocking 本轮未再报出且无关闭证据（证据仍在稿件中）"
+                    "G1：上一轮 %d 条 blocking 本轮未再报出且无确定性关闭依据"
+                    "（证据仍在稿中或不可判；blocking 必须有依据关闭）"
                     % len(_g1_unclosed))
                 _logger.warn("[COMMIT] x %s" % summary["detail"])
                 break
@@ -6688,6 +6699,21 @@ def _kf_structural_violations(before_script: dict, after_script: dict,
     return out
 
 
+def _g7_merged_state(merged_script, novel_text) -> "dict | None":
+    """G7：算「合并后、后处理前」的确定性 state，供确定性 target-loss 检查.
+
+    失败不影响修复轮（返回 None ⇒ 只跳过确定性侧 target-loss，审计侧照旧）。
+    """
+    if not isinstance(merged_script, dict):
+        return None
+    try:
+        return _collect_repair_warnings(merged_script, novel_text)
+    except Exception as exc:
+        _logger.warn("[REPAIR] G7 合并后确定性状态计算失败"
+                     "（跳过确定性 target-loss）: %s" % exc)
+        return None
+
+
 def _repair_acceptance_decision(before_state: dict | None,
                                 after_state: dict | None,
                                 audit_issues: list[Issue] | None,
@@ -6700,7 +6726,8 @@ def _repair_acceptance_decision(before_state: dict | None,
                                 kf_structural_violations: list | None = None,
                                 layout_structural_violations: list | None = None,
                                 audit_attempted: set | None = None,
-                                merged_script: dict | None = None) -> dict:
+                                merged_script: dict | None = None,
+                                merged_state: dict | None = None) -> dict:
     """Pure acceptance decision for one targeted-repair round.
 
     Required conditions:
@@ -6766,6 +6793,15 @@ def _repair_acceptance_decision(before_state: dict | None,
                     _post_merge_target_lost.append(_audit_issue_identity(_i))
             except Exception:
                 continue
+    # 2026-11-14 P1/G7（覆盖确定性目标）：审计目标之外，**确定性 blocking** 也要按
+    # 「合并后已达成、后处理后丢失」检查。只要 merged 的确定性 state 里该 key 已
+    # 不出现（确定性复核通过），而最终 script_after 的 state 里又出现，就是管线
+    # 自己的确定性步骤把已授权修复抵消掉，与审计目标同等拒收。
+    if isinstance(merged_state, dict) and before_keys:
+        _merged_keys = _blocking_record_keys(merged_state, _reindexed)
+        for _k in sorted((before_keys - _merged_keys) & after_keys):
+            if _k not in _post_merge_target_lost:
+                _post_merge_target_lost.append(_k)
     accepted = (
         not checker_failed
         and not new_blocking
@@ -9306,7 +9342,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 kf_structural_violations=_kf_struct,
                 layout_structural_violations=_layout_struct,
                 audit_attempted=audit_attempted,
-                merged_script=_post_merge_snapshot)
+                merged_script=_post_merge_snapshot,
+                merged_state=_g7_merged_state(_post_merge_snapshot, novel_text))
             _logger.info(
                 "[REPAIR] 接受条件: "
                 f"before={_decision['before']}+audit{_decision['audit_targets']} "
@@ -9487,7 +9524,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                             layout_structural_violations=frame_layout_structural_violations(
                                 _round_before_script, _merged_try,
                                 _allowed_by_target, set(picked)),
-                            merged_script=_merged_try)
+                            merged_script=_merged_try,
+                            merged_state=_g7_merged_state(_merged_try, novel_text))
                     except Exception as _try_err:
                         _logger.warn(f"[REPAIR] 按目标回退尝试失败（退回整轮回退）: {_try_err}")
                         _dec_try = None

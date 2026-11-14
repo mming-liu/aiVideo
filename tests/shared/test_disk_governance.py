@@ -58,3 +58,37 @@ def test_no_large_images_outside_fixtures_tracked():
         if size > 500_000:
             bad.append((rel, size))
     assert bad == [], "非夹具位置的大体积位图不得被 git 跟踪：%s" % bad[:5]
+
+
+def _governance_violation(rel: str, size: int) -> str | None:
+    """判定一个被跟踪文件是否违反体积门禁（纯函数，供正反例单测复用）.
+
+    与上面三条真实仓库断言共用同一套规则；返回值是违规类别名，`None` 表示合法。
+    """
+    if rel.startswith("output_step01_"):
+        return "historical_output_snapshot"
+    if rel.endswith("step01_replan_rounds.jsonl"):
+        return "runtime_large_jsonl"
+    if rel.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+        if rel.startswith(_IMAGE_ALLOW_PREFIXES):
+            return None
+        if size > 500_000:
+            return "large_image_outside_fixtures"
+    return None
+
+
+@pytest.mark.parametrize("rel,size,expect", [
+    # 应拒绝样本
+    ("output_step01_n03fix_20261105/锦衣夜行/x.png", 10, "historical_output_snapshot"),
+    ("output/锦衣夜行/ch1/step01_replan_rounds.jsonl", 10, "runtime_large_jsonl"),
+    ("output/锦衣夜行/ch1/images/a.png", 800_000, "large_image_outside_fixtures"),
+    # 合法样本（受控夹具 / 文档 / 技能资产的明确例外）
+    ("tests/fixtures/a.png", 800_000, None),
+    ("docs/artifacts/a.png", 800_000, None),
+    ("skills/x/assets/a.png", 1_000_000, None),
+    # 合法样本（小位图、非位图）
+    ("output/锦衣夜行/ch1/small.png", 100_000, None),
+    ("step01_script_gen/main.py", 10, None),
+])
+def test_governance_guard_positive_and_negative_samples(rel, size, expect):
+    assert _governance_violation(rel, size) == expect

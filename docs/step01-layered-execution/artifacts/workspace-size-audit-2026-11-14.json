@@ -1,25 +1,25 @@
 {
  "root": "C:\\myFloders\\git\\aiVideo",
  "total": {
-  "bytes": 2268708888,
-  "files": 14122
+  "bytes": 2281208934,
+  "files": 15513
  },
  "by_top_dir": {
   "output": {
-   "bytes": 1739491298,
-   "files": 9248
+   "bytes": 1740535087,
+   "files": 9276
   },
   "reference_skills": {
    "bytes": 356312413,
    "files": 1302
   },
   ".git": {
-   "bytes": 63829735,
-   "files": 88
+   "bytes": 64008709,
+   "files": 124
   },
   "tests": {
-   "bytes": 26508460,
-   "files": 1078
+   "bytes": 26650436,
+   "files": 1084
   },
   "skills": {
    "bytes": 23742976,
@@ -30,16 +30,24 @@
    "files": 1
   },
   "step01_script_gen": {
-   "bytes": 8617849,
-   "files": 326
+   "bytes": 9245337,
+   "files": 327
   },
   "锦衣夜行_77119小说.txt.bak": {
    "bytes": 8140463,
    "files": 1
   },
+  ".pytest_tmp": {
+   "bytes": 7796517,
+   "files": 1300
+  },
+  ".dsh": {
+   "bytes": 5709432,
+   "files": 136
+  },
   "docs": {
-   "bytes": 5293960,
-   "files": 423
+   "bytes": 5301103,
+   "files": 424
   },
   "tools": {
    "bytes": 5249744,
@@ -52,10 +60,6 @@
   "baselines": {
    "bytes": 4806103,
    "files": 164
-  },
-  ".dsh": {
-   "bytes": 3097201,
-   "files": 124
   },
   ".agents": {
    "bytes": 1256634,
@@ -85,12 +89,12 @@
    "bytes": 336861,
    "files": 22
   },
+  "step03_tts_audio": {
+   "bytes": 223745,
+   "files": 10
+  },
   "step02a_frame_gen": {
    "bytes": 219671,
-   "files": 9
-  },
-  "step03_tts_audio": {
-   "bytes": 213495,
    "files": 9
   },
   "_image_gen": {
@@ -104,6 +108,10 @@
   "vimax": {
    "bytes": 142984,
    "files": 53
+  },
+  ".p1a_exp": {
+   "bytes": 136936,
+   "files": 91
   },
   "step02b_video_gen": {
    "bytes": 124216,
@@ -120,10 +128,6 @@
   "problems.md": {
    "bytes": 71174,
    "files": 1
-  },
-  ".p1a_exp": {
-   "bytes": 60718,
-   "files": 90
   },
   ".env.content": {
    "bytes": 35156,
@@ -142,7 +146,7 @@
    "files": 7
   },
   ".gitignore": {
-   "bytes": 21985,
+   "bytes": 22100,
    "files": 1
   },
   "sync.mjs": {
@@ -192,6 +196,10 @@
   ".zcode": {
    "bytes": 6002,
    "files": 2
+  },
+  ".pytest_cache": {
+   "bytes": 5345,
+   "files": 5
   },
   "skill_spy.txt": {
    "bytes": 4075,
@@ -252,38 +260,38 @@
  },
  "by_category": {
   "ignored_production_output": {
-   "bytes": 1739491298,
-   "files": 9248
+   "bytes": 1740535087,
+   "files": 9276
   },
   "other_untracked": {
-   "bytes": 414095376,
-   "files": 3019
+   "bytes": 422477759,
+   "files": 4319
   },
   "git_internal": {
-   "bytes": 63829735,
-   "files": 88
+   "bytes": 64008709,
+   "files": 124
   },
   "git_tracked": {
-   "bytes": 40692524,
-   "files": 1360
+   "bytes": 40898975,
+   "files": 1374
   },
   "ignored_agent_staging": {
-   "bytes": 10599955,
-   "files": 407
+   "bytes": 13288404,
+   "files": 420
   }
  },
  "by_b_source": {
   "B4_output_accumulation": {
-   "bytes": 1739491298,
-   "files": 9248
+   "bytes": 1740535087,
+   "files": 9276
   },
   "B5_git_objects_and_promo_assets": {
-   "bytes": 82554787,
-   "files": 103
+   "bytes": 82733876,
+   "files": 139
   },
   "B3_baselines_and_agent_staging": {
-   "bytes": 10599955,
-   "files": 407
+   "bytes": 13288404,
+   "files": 420
   },
   "B1_output_step01_snapshots": {
    "bytes": 6216,
@@ -368,7 +376,7 @@
   },
   {
    "path": ".",
-   "bytes": 20427623,
+   "bytes": 20427738,
    "files": 28
   },
   {
@@ -513,7 +521,7 @@
   },
   {
    "path": "output/锦衣夜行/part_01_杀青州/chapter_001/step01.log",
-   "bytes": 11114259
+   "bytes": 11154581
   },
   {
    "path": "output/锦衣夜行/part_01_杀青州/chapter_001/snapshots/step01_20261107_231721.log",
@@ -564,5 +572,5 @@
    "bytes": 8140463
   }
  ],
- "tracked_files": 1526
+ "tracked_files": 1540
 }

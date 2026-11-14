@@ -6,6 +6,21 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+# ---- 输出编码：统一 UTF-8（2026-11-14）----
+# Windows 控制台/重定向管道默认按 ANSI 代码页（简中为 GBK/cp936）输出，而调用方
+# （pytest 用 `text=True, encoding="utf-8"` 读取）按 UTF-8 解码 ⇒ 中文断言全部
+# 变成乱码（`[INFO] δ�Ǽ�����Ȩ`），3 个启动脚本用例因此恒失败，与本脚本逻辑无关。
+# 这里把「PowerShell 自身写管道」与「子进程 python 的输出」一并钉到 UTF-8：
+#   · [Console]::OutputEncoding —— PowerShell 写重定向输出时用的编码；
+#   · $OutputEncoding          —— 向原生命令传参/读取时的编码；
+#   · PYTHONIOENCODING/PYTHONUTF8 —— 子进程 python 的 stdout/stderr 编码。
+# 只改编码，不改任何校验/发送语义。
+$__utf8 = New-Object System.Text.UTF8Encoding $false
+try { [Console]::OutputEncoding = $__utf8 } catch { }
+$OutputEncoding = $__utf8
+$env:PYTHONIOENCODING = 'utf-8'
+$env:PYTHONUTF8 = '1'
+
 # ---- 授权登记根：真实启动固定用仓库登记根（不接受外部重定向）----
 # 生产解析不读环境变量；这里只清掉测试专用的注入变量，避免测试 shim 带进真实运行。
 Remove-Item Env:STEP01_TEST_AUTH_ROOT -ErrorAction SilentlyContinue

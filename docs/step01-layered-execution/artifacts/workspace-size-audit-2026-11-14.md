@@ -1,26 +1,27 @@
 # 工作区体积体检（只读）
 
 - 根目录：`C:\myFloders\git\aiVideo`
-- 合计：**2.1 GB / 14122 文件**
-- git 跟踪文件：1526
+- 合计：**2.1 GB / 15513 文件**
+- git 跟踪文件：1540
 
 ## 顶层目录
 
 | 目录 | 体积 | 文件数 |
 |---|---:|---:|
-| `output` | 1.6 GB | 9248 |
+| `output` | 1.6 GB | 9276 |
 | `reference_skills` | 339.8 MB | 1302 |
-| `.git` | 60.9 MB | 88 |
-| `tests` | 25.3 MB | 1078 |
+| `.git` | 61.0 MB | 124 |
+| `tests` | 25.4 MB | 1084 |
 | `skills` | 22.6 MB | 338 |
 | `锦衣夜行_77119小说.txt` | 11.4 MB | 1 |
-| `step01_script_gen` | 8.2 MB | 326 |
+| `step01_script_gen` | 8.8 MB | 327 |
 | `锦衣夜行_77119小说.txt.bak` | 7.8 MB | 1 |
-| `docs` | 5.0 MB | 423 |
+| `.pytest_tmp` | 7.4 MB | 1300 |
+| `.dsh` | 5.4 MB | 136 |
+| `docs` | 5.1 MB | 424 |
 | `tools` | 5.0 MB | 124 |
 | `shared` | 4.8 MB | 196 |
 | `baselines` | 4.6 MB | 164 |
-| `.dsh` | 3.0 MB | 124 |
 | `.agents` | 1.2 MB | 161 |
 | `.claude` | 1.0 MB | 143 |
 | `step02_video_gen` | 633.9 KB | 22 |
@@ -28,21 +29,21 @@
 | `step04_merge` | 461.4 KB | 20 |
 | `_text_gen` | 399.1 KB | 28 |
 | `tts` | 329.0 KB | 22 |
+| `step03_tts_audio` | 218.5 KB | 10 |
 | `step02a_frame_gen` | 214.5 KB | 9 |
-| `step03_tts_audio` | 208.5 KB | 9 |
 | `_image_gen` | 208.0 KB | 18 |
 | `.aiVideo` | 204.4 KB | 35 |
 | `vimax` | 139.6 KB | 53 |
+| `.p1a_exp` | 133.7 KB | 91 |
 | `step02b_video_gen` | 121.3 KB | 6 |
 | `.acl-reports` | 120.8 KB | 6 |
 | `references` | 113.4 KB | 18 |
 | `problems.md` | 69.5 KB | 1 |
-| `.p1a_exp` | 59.3 KB | 90 |
 | `.env.content` | 34.3 KB | 1 |
 | `AGENTS.md` | 32.6 KB | 1 |
 | `__pycache__` | 32.4 KB | 3 |
 | `.idea` | 23.5 KB | 7 |
-| `.gitignore` | 21.5 KB | 1 |
+| `.gitignore` | 21.6 KB | 1 |
 | `sync.mjs` | 20.3 KB | 1 |
 | `scene_compliance.py` | 14.9 KB | 1 |
 | `README.md` | 13.7 KB | 1 |
@@ -55,6 +56,7 @@
 | `CLAUDE.md` | 7.7 KB | 1 |
 | `d12_work` | 6.1 KB | 4 |
 | `.zcode` | 5.9 KB | 2 |
+| `.pytest_cache` | 5.2 KB | 5 |
 | `skill_spy.txt` | 4.0 KB | 1 |
 | `skills-lock.json` | 3.8 KB | 1 |
 | `_verify_review.py` | 3.3 KB | 1 |
@@ -74,19 +76,19 @@
 
 | 类别 | 体积 | 文件数 |
 |---|---:|---:|
-| ignored_production_output | 1.6 GB | 9248 |
-| other_untracked | 394.9 MB | 3019 |
-| git_internal | 60.9 MB | 88 |
-| git_tracked | 38.8 MB | 1360 |
-| ignored_agent_staging | 10.1 MB | 407 |
+| ignored_production_output | 1.6 GB | 9276 |
+| other_untracked | 402.9 MB | 4319 |
+| git_internal | 61.0 MB | 124 |
+| git_tracked | 39.0 MB | 1374 |
+| ignored_agent_staging | 12.7 MB | 420 |
 
 ## B1–B5 膨胀源
 
 | 编号 | 体积 | 文件数 |
 |---|---:|---:|
-| B4_output_accumulation | 1.6 GB | 9248 |
-| B5_git_objects_and_promo_assets | 78.7 MB | 103 |
-| B3_baselines_and_agent_staging | 10.1 MB | 407 |
+| B4_output_accumulation | 1.6 GB | 9276 |
+| B5_git_objects_and_promo_assets | 78.9 MB | 139 |
+| B3_baselines_and_agent_staging | 12.7 MB | 420 |
 | B1_output_step01_snapshots | 6.1 KB | 4 |
 
 ## Top 30 目录
