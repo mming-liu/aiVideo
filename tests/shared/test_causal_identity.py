@@ -71,13 +71,36 @@ def test_identity_out_of_range_is_invalid():
     assert out["problems"][0]["path"].endswith("causal_chain[1]")
 
 
-def test_identity_conflict_between_body_and_ref_is_unresolved():
-    """正文身份指向 B2、编号却写 B1 ⇒ 不选边站，交证据不足."""
+def test_identity_conflict_between_body_and_ref_is_invalid():
+    """正文身份指向 B2、编号却写 B1 ⇒ 身份互相矛盾（invalid）."""
     plan = _plan(["结果：乙到达（B1）"],
                  ["节拍：甲出门", "节拍：乙到达"])
     out = validate_causal_identity(plan)
-    assert out["status"] == "unresolved"
+    assert out["status"] == "invalid"
+    assert out["conflicts"] and out["conflicts"][0]["text"] == "乙到达（B1）"
     assert out["unresolved"] == ["乙到达（B1）"]
+
+
+def test_identity_ambiguous_body_match_is_unresolved():
+    """正文同时匹配两条节拍 ⇒ 歧义，不得把两个候选都纳入身份集合."""
+    plan = _plan(["结果：乙到达"],
+                 ["节拍：乙到达", "节拍：乙到达"])
+    out = validate_causal_identity(plan)
+    assert out["status"] == "unresolved"
+    assert out["units"] == {}
+    assert out["ambiguous"] and out["ambiguous"][0]["candidates"] == {
+        "beats": [1, 2]}
+
+
+def test_explicit_unresolved_marker_wins_over_body_match():
+    """已写「未落节拍」的条目不得在下一阶段按正文重新解析成 resolved."""
+    plan = _plan(["结果：乙到达（%s）" % CAUSAL_UNRESOLVED_MARK],
+                 ["节拍：乙到达", "节拍：乙到达"])
+    out = validate_causal_identity(plan)
+    assert out["status"] == "unresolved"
+    assert out["units"] == {}
+    assert out["explicit_unresolved"] == [
+        "乙到达（%s）" % CAUSAL_UNRESOLVED_MARK]
 
 
 def _apply_remap(plan: dict, old: list, new: list) -> list[str]:
@@ -144,6 +167,29 @@ def test_remap_duplicate_bodies_marks_unresolved():
                          ["节拍：乙到达", "节拍：乙到达"])
     assert CAUSAL_UNRESOLVED_MARK in plan["causal_chain"][0]
     assert notes
+    # 重映射的失效标记必须**跨阶段保持**：下一阶段不得按正文重新解析成 resolved。
+    out = validate_causal_identity(plan)
+    assert out["status"] == "unresolved"
+    assert out["units"] == {}
+    assert out["explicit_unresolved"] and \
+        CAUSAL_UNRESOLVED_MARK in out["explicit_unresolved"][0]
+
+
+def test_remap_duplicate_bodies_stays_unresolved_through_relation_check():
+    """串联 重映射 → 身份校验 → 关系检查：歧义不得在关系检查里被"解决"."""
+    plan = _plan(["起因：甲出门（B1）", "结果：乙到达（B2）"],
+                 ["节拍：甲出门", "节拍：乙到达"])
+    _apply_remap(plan, ["节拍：甲出门", "节拍：乙到达"],
+                 ["节拍：乙到达", "节拍：乙到达"])
+    assert validate_causal_identity(plan)["status"] == "unresolved"
+    script = _script(plan, [1, 2])
+    findings = check_script_semantics(script)
+    assert codes_of(findings) == ["causal_gap"]
+    gap = findings[0]
+    assert gap["relation_status"] == "unresolved"
+    assert gap["identity_status"] == "unresolved"
+    assert gap["needs_semantic_review"] is True
+    assert gap["relation_note"].startswith("该项未完成语义判定")
 
 
 def test_remap_keeps_entries_without_refs_untouched():

@@ -97,6 +97,14 @@ test_works_on_hook_via_enforce_all}`（无规格时保留原形制）。
   `relation_note="该项未完成语义判定"`；`time_ellipsis_lost` 不触发，**不新增拒收**。
   实际准入影响记录在 `docs/step01-layered-execution/artifacts/s03/identity_shadow_diff.{json,md}`
   （旧稿 vs 新稿 vs 新稿+鸟节拍），正式采纳按既定决策处理，本包不改变默认门禁。
+- **歧义状态跨阶段保留**（2026-11-14 复核）：
+  - `remap_causal_refs` 写出的「未落节拍」在 `validate_causal_identity` 里**保持失效**，
+    不再按正文重新解析成 resolved；
+  - 正文匹配到同类多个候选（如同一正文的两条节拍）→ `ambiguous`（unresolved），
+    不把候选全部纳入身份集合；
+  - 内容身份与编号引用冲突 → `invalid`（与函数文档契约一致，此前误报 unresolved）；
+  - 串联测试覆盖「重映射 → 身份校验 → 关系检查」，断言最终 `relation_status`
+    与 advisory 状态。
 
 ## S04 正向提示与下游消费（两处无依据注入已删）
 
@@ -139,7 +147,7 @@ test_works_on_hook_via_enforce_all}`（无规格时保留原形制）。
 | G2 | 大特写→远景 | 现状改写成「全景」；validation 已报 6 级 warning | 约束/校验真实 |
 | G6 | 声明 5s / 窗口 4s / 无音轨 | `actual_sec=5.0`、`verified=False`，仍产出 `audio_window_overflow` | 准备/语义真实 |
 | G7 | 等价派生 / 目标丢失 / 保护违规 | A 记账过/保护过/R1 误拒；B R2 拒；C 保护门拒 | 三判据真实；门禁组合**推演** |
-| G3 | 参考清单先行（1 例，隔离样本） | 参考清单不变；正文可新增「参考绑定」段 | 隔离样本；未接线生产 |
+| G3 | 参考清单先行（1 例 × 3 分支，隔离样本） | 参考清单不变；绑定逐项对应；两条真实 prepare 通过，full_prompt 记 pending | 隔离样本；未接线生产 |
 
 - G7 的「现状」列已拆成「记账规则」与「现行保护门」：C 的保护违规由既有
   `locked_changed` 拒，不是记账规则拒；B 的目标丢失两者都不拦。

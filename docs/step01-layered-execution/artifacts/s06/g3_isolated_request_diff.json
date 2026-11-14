@@ -1,59 +1,285 @@
 {
-  "schema": "s06.g3_isolated_request_diff.v1",
-  "evidence_level": "isolated_sample:真实 build_frozen_for_shot 构建两版请求；候选正文为工具内追加，未接线生产",
-  "current_chain": [
-    "build_frozen_for_shot 先构建正文与参考清单",
-    "prepare_request 冻结实际生效参考",
-    "再用 prepared 重建冻结请求"
-  ],
-  "samples": {
-    "current": {
-      "prompt": "高清国漫二次元漫剧画风，精致厚涂人物上色，清晰干净黑色轮廓线， 细腻皮肤质感， 发丝分层精细， 柔和电影级漫反射光影， 浅景深虚化背景， 古风/都市小说人物适配， 动态张力强， 衣物布料褶皱真实， 环境细节丰富， 氛围感色调统一， 4K高细节渲染， 全程锁定人物五官、 发型、 服饰；9:16画幅，画面无任何字幕、文字、水印、logo、图标；禁止在画面中叠加文字。\n【场景环境】渡口\n【人物站位清单】本镜头开场画面包含以下角色，必须在开场画面中正确出现，不得缺失、错位或替换为他人，位置/朝向/动作与视频起点描述一致，角色间视线方向相互吻合；各角色情绪用具体面部与肢体动作表现（瞪眼/垂眸/攥拳/肩背起伏等），禁止抽象情绪词。\n- 甲：渡口，站立\n【视频起点】甲站在渡口，手里提着灯笼，望向江面。\n【视频中段】甲抬手把灯笼举高。\n【视频终点】甲抬头，灯笼举高。\n【人物一致性约束】首帧到尾帧全程保持相同人物：甲的服装、发型、五官必须完全一致，禁止中途换装或整形。\n【场景一致性约束】画面场景始终保持在渡口，禁止场景突变或场景跳跃。\n【动作连贯性】视频画面从首帧到尾帧必须平滑过渡：首帧画面状态是中段动作的起点，尾帧画面状态是中段动作的终点，三个阶段的动作必须连贯，禁止画面突然跳变或人物突然消失。\n音频只保留贴合画面的环境音效（风声、水声、虫鸣、衣料与器物声等），禁止任何人声、旁白、对话、歌声。\n整段视频每一帧都保持高清国漫二次元漫剧风格，首尾画风完全一致，禁止中途转为真人写实照片、低模糊画质、五官崩坏或任何非本片画风的画面。\n\n【参考图用途】图N 严格对应参考图列表第N张（仅图片，含场景/道具占位）；视频N 严格对应参考视频列表第N个（与图片分开编号），按各自标注取用。\n- 图1（portrait_jia.png）：角色「甲」人物形象参考，图中人物五官、发型、服装以参考图为准\n  图1；只取身份、五官、脸型、发型、服装与配饰，不取背景、姿势、构图、机位、原图光线与文字",
-      "reference_paths": [
-        "portrait_jia.png"
-      ],
-      "reference_roles": [
-        "reference_image"
-      ],
-      "frozen_prompt": "高清国漫二次元漫剧画风，精致厚涂人物上色，清晰干净黑色轮廓线， 细腻皮肤质感， 发丝分层精细， 柔和电影级漫反射光影， 浅景深虚化背景， 古风/都市小说人物适配， 动态张力强， 衣物布料褶皱真实， 环境细节丰富， 氛围感色调统一， 4K高细节渲染， 全程锁定人物五官、 发型、 服饰；9:16画幅，画面无任何字幕、文字、水印、logo、图标；禁止在画面中叠加文字。\n【场景环境】渡口\n【人物站位清单】本镜头开场画面包含以下角色，必须在开场画面中正确出现，不得缺失、错位或替换为他人，位置/朝向/动作与视频起点描述一致，角色间视线方向相互吻合；各角色情绪用具体面部与肢体动作表现（瞪眼/垂眸/攥拳/肩背起伏等），禁止抽象情绪词。\n- 甲：渡口，站立\n【视频起点】甲站在渡口，手里提着灯笼，望向江面。\n【视频中段】甲抬手把灯笼举高。\n【视频终点】甲抬头，灯笼举高。\n【人物一致性约束】首帧到尾帧全程保持相同人物：甲的服装、发型、五官必须完全一致，禁止中途换装或整形。\n【场景一致性约束】画面场景始终保持在渡口，禁止场景突变或场景跳跃。\n【动作连贯性】视频画面从首帧到尾帧必须平滑过渡：首帧画面状态是中段动作的起点，尾帧画面状态是中段动作的终点，三个阶段的动作必须连贯，禁止画面突然跳变或人物突然消失。\n音频只保留贴合画面的环境音效（风声、水声、虫鸣、衣料与器物声等），禁止任何人声、旁白、对话、歌声。\n整段视频每一帧都保持高清国漫二次元漫剧风格，首尾画风完全一致，禁止中途转为真人写实照片、低模糊画质、五官崩坏或任何非本片画风的画面。\n\n【参考图用途】图N 严格对应参考图列表第N张（仅图片，含场景/道具占位）；视频N 严格对应参考视频列表第N个（与图片分开编号），按各自标注取用。\n- 图1（portrait_jia.png）：角色「甲」人物形象参考，图中人物五官、发型、服装以参考图为准\n  图1；只取身份、五官、脸型、发型、服装与配饰，不取背景、姿势、构图、机位、原图光线与文字",
-      "frozen_references": [
+  "schema": "s06.g3_isolated_request_diff.v2",
+  "evidence_level": "isolated_sample:真实 build_frozen_for_shot + 真实 provider.prepare_request（零提交）；候选绑定段为工具内追加，未接线生产",
+  "branches": {
+    "seedance_concise": {
+      "branch": "seedance_concise（从 shot 重建，调用方 prompt 不生效）",
+      "env": {
+        "VIDEO_PROVIDER": "agent_plan",
+        "VIDEO_REFERENCE_MODE": "r2v",
+        "VIDEO_MEDIA_POLICY": "auto"
+      },
+      "current": {
+        "prompt_tail": "只取与本镜头明确匹配的主体特征，不得据此决定新人物、新场景或新动作\n  图2；只取身份、五官、脸型、发型、服装与配饰，不取背景、姿势、构图、机位、原图光线与文字",
+        "references": [
+          {
+            "ref_id": "r1",
+            "role": "reference_image",
+            "kind": "image",
+            "name": "first_frame.png"
+          },
+          {
+            "ref_id": "r2",
+            "role": "reference_image",
+            "kind": "image",
+            "name": "portrait_jia.png"
+          }
+        ],
+        "prepared_status": "prepared",
+        "prepared_reason": ""
+      },
+      "candidate": {
+        "block": "【参考绑定】参考图1=本镜首帧（起始构图）；参考图2=甲（角色外观）",
+        "prompt_tail": "  图1；只取与本镜头明确匹配的主体特征，不得据此决定新人物、新场景或新动作\n  图2；只取身份、五官、脸型、发型、服装与配饰，不取背景、姿势、构图、机位、原图光线与文字\n【参考绑定】参考图1=本镜首帧（起始构图）；参考图2=甲（角色外观）",
+        "references": [
+          {
+            "ref_id": "r1",
+            "role": "reference_image",
+            "kind": "image",
+            "name": "first_frame.png"
+          },
+          {
+            "ref_id": "r2",
+            "role": "reference_image",
+            "kind": "image",
+            "name": "portrait_jia.png"
+          }
+        ],
+        "prepared_status": "prepared",
+        "prepared_reason": "",
+        "modifications": [
+          {
+            "kind": "system_camera",
+            "origin": "system_camera",
+            "camera_movement": "固定机位",
+            "position": "head",
+            "provider": ""
+          }
+        ]
+      },
+      "checks": {
+        "reference_list_unchanged": true,
+        "block_survives_prepare": true,
+        "bindings_one_to_one": true,
+        "binding_count": 2,
+        "reference_count": 2
+      },
+      "per_item": [
         {
-          "role": "reference",
-          "kind": null,
-          "name": "portrait_jia.png"
+          "index": 1,
+          "ref": {
+            "ref_id": "r1",
+            "role": "reference_image",
+            "kind": "image",
+            "name": "first_frame.png"
+          },
+          "expected": "参考图1=本镜首帧（起始构图）",
+          "in_final_prompt": true
+        },
+        {
+          "index": 2,
+          "ref": {
+            "ref_id": "r2",
+            "role": "reference_image",
+            "kind": "image",
+            "name": "portrait_jia.png"
+          },
+          "expected": "参考图2=甲（角色外观）",
+          "in_final_prompt": true
         }
-      ],
-      "frozen_media_mode": "reference"
+      ]
     },
-    "candidate": {
-      "prompt": "高清国漫二次元漫剧画风，精致厚涂人物上色，清晰干净黑色轮廓线， 细腻皮肤质感， 发丝分层精细， 柔和电影级漫反射光影， 浅景深虚化背景， 古风/都市小说人物适配， 动态张力强， 衣物布料褶皱真实， 环境细节丰富， 氛围感色调统一， 4K高细节渲染， 全程锁定人物五官、 发型、 服饰；9:16画幅，画面无任何字幕、文字、水印、logo、图标；禁止在画面中叠加文字。\n【场景环境】渡口\n【人物站位清单】本镜头开场画面包含以下角色，必须在开场画面中正确出现，不得缺失、错位或替换为他人，位置/朝向/动作与视频起点描述一致，角色间视线方向相互吻合；各角色情绪用具体面部与肢体动作表现（瞪眼/垂眸/攥拳/肩背起伏等），禁止抽象情绪词。\n- 甲：渡口，站立\n【视频起点】甲站在渡口，手里提着灯笼，望向江面。\n【视频中段】甲抬手把灯笼举高。\n【视频终点】甲抬头，灯笼举高。\n【人物一致性约束】首帧到尾帧全程保持相同人物：甲的服装、发型、五官必须完全一致，禁止中途换装或整形。\n【场景一致性约束】画面场景始终保持在渡口，禁止场景突变或场景跳跃。\n【动作连贯性】视频画面从首帧到尾帧必须平滑过渡：首帧画面状态是中段动作的起点，尾帧画面状态是中段动作的终点，三个阶段的动作必须连贯，禁止画面突然跳变或人物突然消失。\n音频只保留贴合画面的环境音效（风声、水声、虫鸣、衣料与器物声等），禁止任何人声、旁白、对话、歌声。\n整段视频每一帧都保持高清国漫二次元漫剧风格，首尾画风完全一致，禁止中途转为真人写实照片、低模糊画质、五官崩坏或任何非本片画风的画面。\n\n【参考图用途】图N 严格对应参考图列表第N张（仅图片，含场景/道具占位）；视频N 严格对应参考视频列表第N个（与图片分开编号），按各自标注取用。\n- 图1（portrait_jia.png）：角色「甲」人物形象参考，图中人物五官、发型、服装以参考图为准\n  图1；只取身份、五官、脸型、发型、服装与配饰，不取背景、姿势、构图、机位、原图光线与文字\n【参考绑定】参考图1=甲（角色外观）",
-      "reference_paths": [
-        "portrait_jia.png"
-      ],
-      "reference_roles": [
-        "reference_image"
-      ],
-      "frozen_prompt": "高清国漫二次元漫剧画风，精致厚涂人物上色，清晰干净黑色轮廓线， 细腻皮肤质感， 发丝分层精细， 柔和电影级漫反射光影， 浅景深虚化背景， 古风/都市小说人物适配， 动态张力强， 衣物布料褶皱真实， 环境细节丰富， 氛围感色调统一， 4K高细节渲染， 全程锁定人物五官、 发型、 服饰；9:16画幅，画面无任何字幕、文字、水印、logo、图标；禁止在画面中叠加文字。\n【场景环境】渡口\n【人物站位清单】本镜头开场画面包含以下角色，必须在开场画面中正确出现，不得缺失、错位或替换为他人，位置/朝向/动作与视频起点描述一致，角色间视线方向相互吻合；各角色情绪用具体面部与肢体动作表现（瞪眼/垂眸/攥拳/肩背起伏等），禁止抽象情绪词。\n- 甲：渡口，站立\n【视频起点】甲站在渡口，手里提着灯笼，望向江面。\n【视频中段】甲抬手把灯笼举高。\n【视频终点】甲抬头，灯笼举高。\n【人物一致性约束】首帧到尾帧全程保持相同人物：甲的服装、发型、五官必须完全一致，禁止中途换装或整形。\n【场景一致性约束】画面场景始终保持在渡口，禁止场景突变或场景跳跃。\n【动作连贯性】视频画面从首帧到尾帧必须平滑过渡：首帧画面状态是中段动作的起点，尾帧画面状态是中段动作的终点，三个阶段的动作必须连贯，禁止画面突然跳变或人物突然消失。\n音频只保留贴合画面的环境音效（风声、水声、虫鸣、衣料与器物声等），禁止任何人声、旁白、对话、歌声。\n整段视频每一帧都保持高清国漫二次元漫剧风格，首尾画风完全一致，禁止中途转为真人写实照片、低模糊画质、五官崩坏或任何非本片画风的画面。\n\n【参考图用途】图N 严格对应参考图列表第N张（仅图片，含场景/道具占位）；视频N 严格对应参考视频列表第N个（与图片分开编号），按各自标注取用。\n- 图1（portrait_jia.png）：角色「甲」人物形象参考，图中人物五官、发型、服装以参考图为准\n  图1；只取身份、五官、脸型、发型、服装与配饰，不取背景、姿势、构图、机位、原图光线与文字\n【参考绑定】参考图1=甲（角色外观）\n\n【参考图用途】图N 严格对应参考图列表第N张（仅图片，含场景/道具占位）；视频N 严格对应参考视频列表第N个（与图片分开编号），按各自标注取用。\n- 图1（portrait_jia.png）：角色「甲」人物形象参考，图中人物五官、发型、服装以参考图为准\n  图1；只取身份、五官、脸型、发型、服装与配饰，不取背景、姿势、构图、机位、原图光线与文字",
-      "frozen_references": [
+    "full_prompt": {
+      "branch": "full_prompt（sanitize + ensure_prefix）",
+      "env": {
+        "VIDEO_PROVIDER": "bailian",
+        "VIDEO_REFERENCE_MODE": "image",
+        "VIDEO_MEDIA_POLICY": "auto"
+      },
+      "current": {
+        "prompt_tail": "生成，禁止与参考图冲突：参考图1：视频起点画面（首帧），本镜头画面从这里开始，人物位置与构图以它为基准；参考图2：视频终点画面（尾帧），动作结束后画面落在该构图",
+        "references": [
+          {
+            "ref_id": "r1",
+            "role": "first_frame",
+            "kind": "",
+            "name": "first_frame.png"
+          },
+          {
+            "ref_id": "r2",
+            "role": "last_frame",
+            "kind": "",
+            "name": "last_frame.png"
+          }
+        ],
+        "prepared_status": "not_ready",
+        "prepared_reason": "BailianVideoService 未实现 prepare_request（prepared 入口不可用）"
+      },
+      "candidate": {
+        "block": "【参考绑定】参考图1=本镜首帧（起始构图）；参考图2=本镜尾帧（终态）",
+        "prompt_tail": "所示内容生成，禁止与参考图冲突：参考图1：视频起点画面（首帧），本镜头画面从这里开始，人物位置与构图以它为基准；参考图2：视频终点画面（尾帧），动作结束后画面落在该构图\n【参考绑定】参考图1=本镜首帧（起始构图）；参考图2=本镜尾帧（终态）",
+        "references": [
+          {
+            "ref_id": "r1",
+            "role": "first_frame",
+            "kind": "",
+            "name": "first_frame.png"
+          },
+          {
+            "ref_id": "r2",
+            "role": "last_frame",
+            "kind": "",
+            "name": "last_frame.png"
+          }
+        ],
+        "prepared_status": "not_ready",
+        "prepared_reason": "BailianVideoService 未实现 prepare_request（prepared 入口不可用）",
+        "modifications": []
+      },
+      "checks": {
+        "reference_list_unchanged": true,
+        "block_survives_prepare": true,
+        "bindings_one_to_one": true,
+        "binding_count": 2,
+        "reference_count": 2
+      },
+      "per_item": [
         {
-          "role": "reference",
-          "kind": null,
-          "name": "portrait_jia.png"
+          "index": 1,
+          "ref": {
+            "ref_id": "r1",
+            "role": "first_frame",
+            "kind": "",
+            "name": "first_frame.png"
+          },
+          "expected": "参考图1=本镜首帧（起始构图）",
+          "in_final_prompt": true
+        },
+        {
+          "index": 2,
+          "ref": {
+            "ref_id": "r2",
+            "role": "last_frame",
+            "kind": "",
+            "name": "last_frame.png"
+          },
+          "expected": "参考图2=本镜尾帧（终态）",
+          "in_final_prompt": true
         }
-      ],
-      "frozen_media_mode": "reference"
+      ]
+    },
+    "first_last_image": {
+      "branch": "first_last_image（build_motion_prompt，从 shot 重建）",
+      "env": {
+        "VIDEO_PROVIDER": "volcengine",
+        "VIDEO_REFERENCE_MODE": "image",
+        "VIDEO_MEDIA_POLICY": "first_last"
+      },
+      "current": {
+        "prompt_tail": "下参考图，严格按其所示内容生成，禁止与参考图冲突：参考图1：视频起点画面（首帧），本镜头画面从这里开始；参考图2：视频终点画面（尾帧），动作结束后画面落在该构图",
+        "references": [
+          {
+            "ref_id": "r1",
+            "role": "first_frame",
+            "kind": "image",
+            "name": "first_frame.png"
+          },
+          {
+            "ref_id": "r2",
+            "role": "last_frame",
+            "kind": "image",
+            "name": "last_frame.png"
+          }
+        ],
+        "prepared_status": "prepared",
+        "prepared_reason": ""
+      },
+      "candidate": {
+        "block": "【参考绑定】参考图1=本镜首帧（起始构图）；参考图2=本镜尾帧（终态）",
+        "prompt_tail": "成使用以下参考图，严格按其所示内容生成，禁止与参考图冲突：参考图1：视频起点画面（首帧），本镜头画面从这里开始；参考图2：视频终点画面（尾帧），动作结束后画面落在该构图\n【参考绑定】参考图1=本镜首帧（起始构图）；参考图2=本镜尾帧（终态）",
+        "references": [
+          {
+            "ref_id": "r1",
+            "role": "first_frame",
+            "kind": "image",
+            "name": "first_frame.png"
+          },
+          {
+            "ref_id": "r2",
+            "role": "last_frame",
+            "kind": "image",
+            "name": "last_frame.png"
+          }
+        ],
+        "prepared_status": "prepared",
+        "prepared_reason": "",
+        "modifications": [
+          {
+            "kind": "system_camera",
+            "origin": "system_camera",
+            "camera_movement": "固定机位",
+            "position": "head",
+            "provider": ""
+          },
+          {
+            "kind": "media_policy",
+            "policy": "first_last",
+            "dropped_keyframes": 0
+          }
+        ]
+      },
+      "checks": {
+        "reference_list_unchanged": true,
+        "block_survives_prepare": true,
+        "bindings_one_to_one": true,
+        "binding_count": 2,
+        "reference_count": 2
+      },
+      "per_item": [
+        {
+          "index": 1,
+          "ref": {
+            "ref_id": "r1",
+            "role": "first_frame",
+            "kind": "image",
+            "name": "first_frame.png"
+          },
+          "expected": "参考图1=本镜首帧（起始构图）",
+          "in_final_prompt": true
+        },
+        {
+          "index": 2,
+          "ref": {
+            "ref_id": "r2",
+            "role": "last_frame",
+            "kind": "image",
+            "name": "last_frame.png"
+          },
+          "expected": "参考图2=本镜尾帧（终态）",
+          "in_final_prompt": true
+        }
+      ]
     }
   },
-  "diff": {
-    "prompt_added_block": true,
-    "added_block": "【参考绑定】参考图1=甲（角色外观）",
-    "reference_list_unchanged": true,
-    "frozen_prompt_changed": true,
-    "reference_count": 1,
-    "binding_count": 1
+  "summary": {
+    "branches": [
+      "seedance_concise",
+      "full_prompt",
+      "first_last_image"
+    ],
+    "all_reference_lists_unchanged": true,
+    "all_bindings_one_to_one": true,
+    "prepared_branches": [
+      "seedance_concise",
+      "first_last_image"
+    ],
+    "unprepared_branches": [
+      "full_prompt"
+    ]
   },
   "limits": [
     "候选正文只在工具内追加，未接线生产；真实收益需实跑对照。",
+    "bailian 未实现 prepare_request，full_prompt 分支的最终参考清单取自冻结请求（生产同路径记 pending_verification），不是 provider 实测。",
     "样本使用隔离角色肖像/首帧，不读真实资产库；不代表真实资产分布。"
   ]
 }

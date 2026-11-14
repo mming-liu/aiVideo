@@ -356,20 +356,32 @@ def _beat_fact_refs(beat: Any) -> set[int]:
 
 
 def _relation_units(outline: dict, roles: list[tuple[str, str, int]]
-                    ) -> tuple[dict[str, set[int]], list[str], dict[str, set[int]]]:
+                    ) -> tuple[dict[str, set[int]], list[str],
+                               dict[str, set[int]], dict]:
     """把因果链条目解析到**计划单位身份**（节拍/事实/事件/台词）.
 
     Returns:
-        `(units, unresolved, result_units)`：
+        `(units, unresolved, result_units, diagnostics)`：
         - `units = {kind: {编号}}`：整条关系（起因/行动/结果）的单位（1 起算）；
-        - `unresolved`：无法建立唯一身份的条目正文；
+        - `unresolved`：无法建立**唯一**身份的条目正文（显式失效/歧义/冲突/
+          无身份四类都算）；
         - `result_units`：**结果条目**解析到的单位——结果没有承载镜头时，关系
-          在成片里没有被定位，必须按证据不足处理。
+          在成片里没有被定位，必须按证据不足处理；
+        - `diagnostics`：`{"explicit_unresolved": [...], "ambiguous": [...],
+          "conflicts": [...], "no_identity": [...]}`，供 `validate_causal_identity`
+          区分状态（歧义/冲突/旧稿）。
 
     身份来源只有两种，都是显式的：
       ① 条目里的编号引用（`B2` / `节拍2` / `F1` / `事实1` / `事件3` / `台词1`）；
       ② 条目正文与某个计划单位正文**完全相等**（归一化标点后）。
-    两者都没有 → 该条目 unresolved，调用方必须输出「证据不足」，不得按全章范围判。
+
+    2026-11-14 复核（跨阶段保留歧义）：
+      - 条目里已有显式失效标记 `未落节拍` ⇒ 直接按 unresolved，**不再**按正文
+        重新解析（否则重映射识别的歧义会在下一阶段被"重新解决"）；
+      - 正文匹配到**同类多个候选**（如同一正文的两条节拍）⇒ 歧义，不得把候选
+        全部塞进身份集合；
+      - 内容身份与编号引用冲突 ⇒ 记 `conflicts`（状态 invalid），不是普通
+        unresolved。
     """
     limits = {
         "beats": _ref_target_count(outline, "shot_beats") or 0,
@@ -380,8 +392,16 @@ def _relation_units(outline: dict, roles: list[tuple[str, str, int]]
     units: dict[str, set[int]] = {}
     result_units: dict[str, set[int]] = {}
     unresolved: list[str] = []
+    diagnostics: dict = {"explicit_unresolved": [], "ambiguous": [],
+                         "conflicts": [], "no_identity": []}
     for role, text, _i in roles:
         is_result = _role_matches(role, _RESULT_ROLES)
+        # ⓪ 显式失效标记优先：重映射已判定「没有唯一对应节拍」，不得按正文
+        #    重新解析成 resolved（2026-11-14 复核反例）。
+        if CAUSAL_UNRESOLVED_MARK in str(text or ""):
+            diagnostics["explicit_unresolved"].append(text)
+            unresolved.append(text)
+            continue
         # ① 正文完全相等 → 内容身份（最稳：节拍插入/重编号不影响）。
         #    比较前先去掉条目里的 `（Bk）` 引用，否则带引用的条目永远无法与
         #    节拍正文完全相等。
@@ -395,6 +415,14 @@ def _relation_units(outline: dict, roles: list[tuple[str, str, int]]
                 for number, value in enumerate(values, 1):
                     if body == _identity_text(extractor(value)):
                         exact.setdefault(kind, set()).add(number)
+        # ①b 同类多候选 ⇒ 歧义：不把候选全部纳入，也不选边站。
+        ambiguous_kinds = {kind: sorted(numbers)
+                           for kind, numbers in exact.items() if len(numbers) > 1}
+        if ambiguous_kinds:
+            diagnostics["ambiguous"].append({"text": text,
+                                             "candidates": ambiguous_kinds})
+            unresolved.append(text)
+            continue
         # ② 条目里的显式编号引用。
         refs: dict[str, set[int]] = {}
         for kind, pattern in _CAUSAL_REF_PATTERNS:
@@ -402,22 +430,28 @@ def _relation_units(outline: dict, roles: list[tuple[str, str, int]]
                 number = int(match.group(1))
                 if 1 <= number <= limits[kind]:
                     refs.setdefault(kind, set()).add(number)
-        # 内容身份与编号引用冲突 ⇒ 身份不唯一，交证据不足（不选边站）。
+        # 内容身份与编号引用冲突 ⇒ 身份互相矛盾（invalid，不是普通 unresolved）。
         # 只在**同一类单位**上比较：正文同时等于某节拍与某事件是正常的
         # （main_events 常与节拍正文同文），不是冲突。
         if exact and refs and any(
                 kind in refs and exact[kind] != refs[kind] for kind in exact):
+            diagnostics["conflicts"].append({
+                "text": text,
+                "exact": {k: sorted(v) for k, v in exact.items()},
+                "refs": {k: sorted(v) for k, v in refs.items()},
+            })
             unresolved.append(text)
             continue
         chosen = exact or refs
         if not chosen:
+            diagnostics["no_identity"].append(text)
             unresolved.append(text)
             continue
         for kind, numbers in chosen.items():
             units.setdefault(kind, set()).update(numbers)
             if is_result:
                 result_units.setdefault(kind, set()).update(numbers)
-    return units, unresolved, result_units
+    return units, unresolved, result_units, diagnostics
 
 
 def _shot_by_index(script: dict, index: int) -> dict:
@@ -482,15 +516,16 @@ def validate_causal_identity(outline: dict) -> dict:
 
     Returns:
         `{"status": "resolved" | "unresolved" | "invalid", "units", "unresolved",
-          "problems"}`：
-        - `resolved`：每条因果条目都解析到至少一个计划单位；
-        - `unresolved`：有条目没有显式身份（旧稿 / 生成端未标注）——**不是**
-          内容缺陷，是「该项未完成语义判定」，准入影响走影子差异；
+          "problems", "ambiguous", "conflicts", "explicit_unresolved"}`：
+        - `resolved`：每条因果条目都解析到**唯一**的计划单位；
+        - `unresolved`：有条目没有显式身份（旧稿 / 生成端未标注）、正文匹配到
+          多个候选（歧义），或带显式失效标记「未落节拍」——**不是**内容缺陷，
+          是「该项未完成语义判定」，准入影响走影子差异；
         - `invalid`：有条目引用了不存在的单位编号（越界），或同一条目里
-          内容身份与编号引用冲突。
+          内容身份与编号引用冲突（身份互相矛盾）。
     """
     roles = _causal_roles(outline)
-    units, unresolved, _result_units = _relation_units(outline, roles)
+    units, unresolved, _result_units, diagnostics = _relation_units(outline, roles)
     limits = _causal_limits(outline)
     problems: list[dict] = []
     for role, text, index in roles:
@@ -502,12 +537,17 @@ def validate_causal_identity(outline: dict) -> dict:
                     "message": ("因果链条目引用了不存在的单位 %s%d（共 %d 条）"
                                 % (kind, number, limits[kind])),
                 })
-    status = "invalid" if problems else ("unresolved" if unresolved else "resolved")
+    conflicts = diagnostics.get("conflicts") or []
+    status = ("invalid" if (problems or conflicts)
+              else ("unresolved" if unresolved else "resolved"))
     return {
         "status": status,
         "units": {kind: sorted(values) for kind, values in units.items()},
         "unresolved": unresolved,
         "problems": problems,
+        "ambiguous": diagnostics.get("ambiguous") or [],
+        "conflicts": conflicts,
+        "explicit_unresolved": diagnostics.get("explicit_unresolved") or [],
     }
 
 
@@ -752,7 +792,7 @@ def _check_causal_and_time(script: dict) -> list[dict]:
     # （或结果在成片里没有承载镜头）时明确输出「证据不足」，不按全章范围判，也不
     # 静默豁免——准入处理沿用既定裁决边界（只出 advisory + needs_semantic_review）。
     identity = validate_causal_identity(outline)
-    units, unresolved, result_units = _relation_units(outline, roles)
+    units, unresolved, result_units, _diagnostics = _relation_units(outline, roles)
     carrier_indices = _unit_carrier_shots(script, units)
     result_carriers = _unit_carrier_shots(script, result_units)
     if not units or unresolved:
@@ -784,7 +824,10 @@ def _check_causal_and_time(script: dict) -> list[dict]:
                        if relation_status == "unresolved" else ""),
         relation_units=relation_scope,
         unresolved_relations=unresolved,
+        identity_status=identity.get("status"),
         identity_problems=identity.get("problems") or [],
+        identity_ambiguous=identity.get("ambiguous") or [],
+        identity_conflicts=identity.get("conflicts") or [],
         relation_carriers=["shot:%s" % i for i in sorted(carrier_indices)],
         result_carriers=["shot:%s" % i for i in sorted(result_carriers)],
         carrier_evidence=relation_process,

@@ -13,7 +13,7 @@
 |---|---|---|---|
 | G1 `issue_ledger.closed` 接提交门 | **已有**（2 例） | 沉默 vs 有证据关闭的 resolved 差异 | 台账真实；门禁**推演** |
 | G2 `framing_jump` 自动改写 | **已有**（1 例） | 大特写→全景的改写 vs 只报 warning | 约束/校验真实 |
-| G3 先定稿参考、再构建正文 | **已有**（1 例，隔离样本） | 参考清单不变；正文可新增「参考绑定」段 | 隔离样本；未接线生产 |
+| G3 先定稿参考、再构建正文 | **已有**（1 例 × 3 分支，隔离样本） | 参考清单不变；绑定逐项对应；两条真实 prepare 通过，full_prompt 记 pending | 隔离样本；未接线生产 |
 | G6 声音两态 | **已有**（1 例） | 声明值被当成实测 → `audio_window_overflow` | 准备/语义真实 |
 | G7 `postprocess_reverted` 接门 | **已有**（3 例） | 等价派生 / 目标丢失 / 保护违规 | 判据真实；门禁组合**推演** |
 
@@ -66,19 +66,26 @@
 于是正文构建时读不到 `prepare_request` 才定稿的参考清单，正文里无法声明
 「参考图 k 是谁/什么」。
 
-**隔离样本**（`tools/build_s06_g3_isolated_diff.py`，真实 `build_frozen_for_shot`，
-离线、零模型调用；**未接线生产**）：
+**隔离样本 v2**（`tools/build_s06_g3_isolated_diff.py`，真实
+`build_frozen_for_shot` + 真实 provider `prepare_request`，零提交、零模型调用；
+**未接线生产**）。同一镜头走三条正文构建分支，各自先定稿参考清单再追加绑定：
 
-| 字段 | 当前 | 候选 |
-|---|---|---|
-| `request.prompt` | 只有画面描述 + 参考图用途清单 | 末尾追加 `【参考绑定】参考图1=甲（角色外观）` |
-| `reference_paths` | `portrait_jia.png` | 相同（参考清单不变） |
-| `references[*].role` | `reference_image` | 相同 |
-| `frozen.media_mode` | `reference` | 相同 |
-| 冻结正文 | 无参考绑定 | 含参考绑定（`frozen_prompt_changed=true`） |
+| 分支 | 正文路径 | 参考清单 | prepare（零提交） | 绑定逐项对应 |
+|---|---|---|---|---|
+| `seedance_concise` | Seedance 精简正文（agent_plan，r2v） | 首帧 + 角色肖像（2 项） | **prepared** | 是 |
+| `full_prompt` | 完整提示（bailian，image） | 首帧 + 尾帧（2 项） | `not_ready`（bailian 未实现 prepare_request） | 是（以冻结 references 为准） |
+| `first_last_image` | `first_last+image` 运动正文（volcengine） | 首帧 + 尾帧（2 项） | **prepared** | 是 |
 
-- 样本只回答「结构上能不能把参考绑定写进正文」；**不回答模型是否因此改善**。
-- 候选正文是工具内追加，尚未实现「参考清单先行」的生产链路；正式默认行为不变。
+每条分支核对：
+
+- 候选正文按**最终参考清单**逐项写 `参考图k=身份/用途`，编号与清单第 k 项一致；
+- 参考清单在候选前后**不变**（角色/文件名逐项相同）；
+- 两条真实 prepare 分支：绑定段经 provider `prepare_request` 后仍在最终正文里；
+- `full_prompt` 分支的 provider 未实现 `prepare_request`，按生产同一路径记
+  `pending_verification`，不冒充已准备。
+
+- 样本只回答「结构上参考绑定能否进正文并通过真实 prepare」；**不回答模型是否
+  因此改善**。候选正文是工具内追加，正式默认行为不变。
 - 限制：样本使用隔离角色肖像/首帧，不读真实资产库；真实收益需实跑对照。
 - 产物：`artifacts/s06/g3_isolated_request_diff.{json,md}`。
 
@@ -149,6 +156,8 @@ C:/Users/ee54/AppData/Local/Python/pythoncore-3.14-64/python.exe tools/build_s06
 # R2_plus_protection_matches_expected=true（A accept / B reject / C reject）
 
 C:/Users/ee54/AppData/Local/Python/pythoncore-3.14-64/python.exe tools/build_s06_g3_isolated_diff.py
-# prompt_added_block=true；reference_list_unchanged=true；frozen_prompt_changed=true
+# 三分支：seedance_concise / full_prompt / first_last_image
+# all_reference_lists_unchanged=true；all_bindings_one_to_one=true
+# prepared：seedance_concise + first_last_image；full_prompt（bailian）记 not_ready
 # 输出：artifacts/s06/g3_isolated_request_diff.{json,md}
 ```
