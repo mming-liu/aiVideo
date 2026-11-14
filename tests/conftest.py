@@ -16,6 +16,7 @@
 """
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -114,92 +115,65 @@ def _no_external_transport(request):
 # 相互独立**——`shared/enhancement_io.py:763` 记录其 sha256、`:894` 再读回复核，
 # `attempts/<case>/frozen/` 的「来源变了它不变」正是任务包不可变语义的前提。改成硬链接
 # 等于让冻结副本随来源一起变，静默破坏该语义。**故不做**（登记为待办，需独立裁决）。
+#: 测试侧按 PID 命名的隔离根前缀（见 tests/enhancements/test_motion_*.py）。
 _STALE_TMP_PREFIXES = ("motion_revise_", "motion_cli_", "motion_fixtures_")
 
 #: 单个日志文件的会话级上限；超过就在会话开始时截断（保留一行说明，不删文件本身）
 _TEST_LOG_CAP_BYTES = 10 * 1024 * 1024
 
+# 回收策略（2026-11-14 修正）：
+# 旧实现的「单次会话删除预算 20 个**文件**」比一个隔离根（约 1,599 文件）还小，
+# 于是任何遗留根都超过预算、永远不回收——`.pytest_tmp` 因此涨到 122.9 GB。
+# 现改为**根数 + 时间**预算，并加保留窗口：
+#   - 只回收「进程已退出」的 PID 根；
+#   - 每个前缀保留最近 _REAP_KEEP_LATEST 个（便于复盘）；
+#   - 其余候选必须早于 _REAP_MIN_AGE_SEC（默认 6 小时）；
+#   - 单次最多回收 _REAP_MAX_ROOTS 个根 / _REAP_TIME_BUDGET_SEC 秒；
+#   - 同时回收旧 `--basetemp` 会话目录与 %TEMP%/pytest-of-<user>/pytest-N，
+#     避免 pytest 的 `tmp_path_retention_policy=none`（刻意关闭）造成无界累积。
+_REAP_MIN_AGE_SEC = 6 * 3600
+_REAP_KEEP_LATEST = 2
+_REAP_MAX_ROOTS = 50
+_REAP_TIME_BUDGET_SEC = 20.0
 
-def _pid_is_alive(pid: int) -> bool:
-    """尽力判断 PID 是否仍存活（判不了就当存活，宁可留着也不误删）."""
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        try:
-            import ctypes
 
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            handle = ctypes.windll.kernel32.OpenProcess(
-                PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-            if not handle:
-                return False
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return True
-        except Exception:
-            return True
+def _pytest_tmp_base() -> Path | None:
+    """`%TEMP%/pytest-of-<user>`（pytest 自己的 tmp_path 根）；不可得返回 None."""
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
+        import getpass
+        import tempfile
+
+        return Path(tempfile.gettempdir()) / ("pytest-of-%s" % getpass.getuser())
     except Exception:
-        return True
-    return True
+        return None
 
 
-def _count_files_bounded(path, limit: int = 21) -> int:
-    n = 0
+def _current_basetemp(pytestconfig) -> Path | None:
+    """本轮 `--basetemp` 目录（可能很旧且被复用，绝不能回收）."""
     try:
-        for _root, _dirs, files in os.walk(path):
-            n += len(files)
-            if n >= limit:
-                return n
-    except OSError:
-        return limit
-    return n
+        value = getattr(pytestconfig.option, "basetemp", None)
+        return Path(value).resolve() if value else None
+    except Exception:
+        return None
 
 
-def _reap_stale_pid_dirs(root, current_pid: int) -> list:
-    """删掉**非本进程且进程已退出**的 PID 隔离根；返回保留的目录名.
+def _reap_planned(plan: dict, *, max_roots: int, time_budget: float) -> tuple:
+    """按预算执行回收；返回 `(已回收根数, 保留的目录名)`."""
+    from shared.test_scratch import remove_tree
 
-    R3-6 环境修正：safe-delete 在沙箱里可能拿不到 bulk lock；旧写法对任意
-    大小的遗留根直接 `shutil.rmtree`，会 `SystemExit: 1` 并让整个会话在
-    setup 阶段失败。这里把**单次会话删除预算**限制在 20 个文件以内；超过
-    预算或删除被安全守卫拒绝时，保留目录、继续测试（不绕过守卫）。
-    """
-    import shutil
-
+    removed = 0
     survivors: list = []
-    budget = 20
-    try:
-        children = list(root.iterdir())
-    except OSError:
-        return survivors
-    for child in children:
-        if not child.is_dir():
+    started = time.monotonic()
+    for item in plan.get("reap") or []:
+        if removed >= max_roots or (time.monotonic() - started) > time_budget:
+            survivors.append(item.path.name)
             continue
-        prefix = next((p for p in _STALE_TMP_PREFIXES if child.name.startswith(p)), None)
-        if prefix is None:
-            continue
-        suffix = child.name[len(prefix):]
-        if not suffix.isdigit():
-            continue
-        pid = int(suffix)
-        if pid == current_pid or _pid_is_alive(pid):
-            survivors.append(child.name)
-            continue
-        n = _count_files_bounded(child, budget + 1)
-        if n > budget:
-            survivors.append(child.name)
-            continue
-        try:
-            shutil.rmtree(child)
-            budget -= n
-        except BaseException:
-            # 安全守卫拒绝/锁不可得：保留现场，不把环境故障升级为会话失败。
-            survivors.append(child.name)
-    return survivors
+        ok, _method = remove_tree(item.path, permanent=True)
+        if ok:
+            removed += 1
+        else:
+            survivors.append(item.path.name)
+    return removed, survivors
 
 
 def _truncate_oversized_test_logs(root) -> int:
@@ -224,16 +198,49 @@ def _truncate_oversized_test_logs(root) -> int:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _reap_stale_test_scratch():
-    """会话开始回收上一轮遗留的 PID 隔离根 + 截断超限测试日志（见本节说明）."""
+def _reap_stale_test_scratch(pytestconfig):
+    """会话开始回收上一轮遗留测试临时产物 + 截断超限测试日志（见本节说明）."""
+    from shared.test_scratch import (
+        plan_basetemp_reap,
+        plan_pid_reap,
+        plan_pytest_tmp_reap,
+    )
+
     root = _TMP_OUT
-    if not root.exists():
-        yield
-        return
     current_pid = os.getpid()
-    survivors = _reap_stale_pid_dirs(root, current_pid)
-    truncated = _truncate_oversized_test_logs(root)
-    if survivors or truncated:
-        print("[conftest] 磁盘治理：保留活动 PID 目录 %d 个，截断超限日志 %d 个"
-              % (len(survivors), truncated))
+    base = _current_basetemp(pytestconfig)
+    removed = 0
+    survivors: list = []
+    if root.exists():
+        removed_pid, survivors_pid = _reap_planned(
+            plan_pid_reap(root, current_pid=current_pid,
+                          prefixes=_STALE_TMP_PREFIXES,
+                          min_age_sec=_REAP_MIN_AGE_SEC,
+                          keep_latest=_REAP_KEEP_LATEST),
+            max_roots=_REAP_MAX_ROOTS, time_budget=_REAP_TIME_BUDGET_SEC)
+        removed += removed_pid
+        survivors += survivors_pid
+        removed_base, survivors_base = _reap_planned(
+            plan_basetemp_reap(root, min_age_sec=_REAP_MIN_AGE_SEC,
+                               keep_latest=_REAP_KEEP_LATEST,
+                               prefixes=_STALE_TMP_PREFIXES,
+                               exclude={base} if base else set()),
+            max_roots=max(0, _REAP_MAX_ROOTS - removed),
+            time_budget=_REAP_TIME_BUDGET_SEC)
+        removed += removed_base
+        survivors += survivors_base
+    pytest_tmp_base = _pytest_tmp_base()
+    if pytest_tmp_base is not None and pytest_tmp_base.exists():
+        removed_pt, survivors_pt = _reap_planned(
+            plan_pytest_tmp_reap(pytest_tmp_base,
+                                 min_age_sec=_REAP_MIN_AGE_SEC,
+                                 keep_latest=_REAP_KEEP_LATEST),
+            max_roots=max(0, _REAP_MAX_ROOTS - removed),
+            time_budget=_REAP_TIME_BUDGET_SEC)
+        removed += removed_pt
+        survivors += survivors_pt
+    truncated = _truncate_oversized_test_logs(root) if root.exists() else 0
+    if removed or survivors or truncated:
+        print("[conftest] 磁盘治理：回收遗留根 %d 个，保留 %d 个，截断超限日志 %d 个"
+              % (removed, len(survivors), truncated))
     yield
