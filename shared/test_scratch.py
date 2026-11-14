@@ -35,6 +35,22 @@ DEFAULT_MIN_AGE_SEC = 6 * 3600
 #: 单次扫描最多统计的文件数（避免在超大目录上卡死）。
 _SIZE_SCAN_FILE_CAP = 200_000
 
+#: 长期保留标记：目录内含这些文件名时，自动回收一律跳过（**安全网**）。
+#: 长期候选/审计包/探针证据应放在 `.pytest_tmp` **之外**（如 `.dsh/`、
+#: `baselines/`）；这个标记只防误删，不改变「pytest 临时目录不承载长期证据」
+#: 的约定（2026-11-14 复核：U6 包曾放在 `.pytest_tmp`，整目录清理后需从
+#: `baselines/2026-11-12-pre-layered/u6_frozen/` 恢复）。
+KEEP_MARKERS = (".keep", "KEEP")
+
+
+def has_keep_marker(path) -> bool:
+    """目录是否带长期保留标记（`.keep` / `KEEP`）."""
+    try:
+        base = Path(path)
+        return any((base / name).exists() for name in KEEP_MARKERS)
+    except OSError:
+        return True          # 判不了就保留，宁可留着也不误删
+
 
 @dataclass
 class ScratchCandidate:
@@ -173,12 +189,17 @@ def plan_pid_reap(root, *, current_pid: int | None = None,
     current_pid = os.getpid() if current_pid is None else current_pid
     candidates: list[ScratchCandidate] = []
     active: list[ScratchCandidate] = []
+    protected: list[ScratchCandidate] = []
     try:
         children = list(root.iterdir())
     except OSError:
         return {"reap": [], "keep": [], "active": [], "recent": []}
     for child in children:
         if not child.is_dir():
+            continue
+        if has_keep_marker(child):
+            protected.append(_candidate(child, "pid_root",
+                                        reason="keep_sentinel", measure=measure))
             continue
         parsed = parse_pid_root(child.name, prefixes)
         if parsed is None:
@@ -193,7 +214,8 @@ def plan_pid_reap(root, *, current_pid: int | None = None,
     reap, keep, recent = _split_reap_keep(
         candidates, now=now, min_age_sec=min_age_sec,
         keep_latest=keep_latest, key=lambda c: str(c.path.name).rsplit("_", 1)[0])
-    return {"reap": reap, "keep": keep, "active": active, "recent": recent}
+    return {"reap": reap, "keep": protected + keep,
+            "active": active, "recent": recent}
 
 
 def plan_basetemp_reap(root, *, min_age_sec: float = DEFAULT_MIN_AGE_SEC,
@@ -211,6 +233,7 @@ def plan_basetemp_reap(root, *, min_age_sec: float = DEFAULT_MIN_AGE_SEC,
     root = Path(root)
     excluded = {Path(p).resolve() for p in (exclude or set())}
     candidates: list[ScratchCandidate] = []
+    protected: list[ScratchCandidate] = []
     try:
         children = list(root.iterdir())
     except OSError:
@@ -219,6 +242,10 @@ def plan_basetemp_reap(root, *, min_age_sec: float = DEFAULT_MIN_AGE_SEC,
         if not child.is_dir():
             continue
         if parse_pid_root(child.name, prefixes) is not None:
+            continue
+        if has_keep_marker(child):
+            protected.append(_candidate(child, "basetemp",
+                                        reason="keep_sentinel", measure=measure))
             continue
         try:
             if child.resolve() in excluded:
@@ -229,7 +256,7 @@ def plan_basetemp_reap(root, *, min_age_sec: float = DEFAULT_MIN_AGE_SEC,
     reap, keep, recent = _split_reap_keep(
         candidates, now=now, min_age_sec=min_age_sec,
         keep_latest=keep_latest, key=lambda c: "basetemp")
-    return {"reap": reap, "keep": keep, "recent": recent}
+    return {"reap": reap, "keep": protected + keep, "recent": recent}
 
 
 def plan_pytest_tmp_reap(base, *, min_age_sec: float = DEFAULT_MIN_AGE_SEC,
@@ -240,17 +267,23 @@ def plan_pytest_tmp_reap(base, *, min_age_sec: float = DEFAULT_MIN_AGE_SEC,
     now = time.time() if now is None else now
     base = Path(base)
     candidates: list[ScratchCandidate] = []
+    protected: list[ScratchCandidate] = []
     try:
         children = list(base.iterdir())
     except OSError:
         return {"reap": [], "keep": [], "recent": []}
     for child in children:
-        if child.is_dir() and child.name.startswith("pytest-"):
-            candidates.append(_candidate(child, "pytest_tmp", measure=measure))
+        if not (child.is_dir() and child.name.startswith("pytest-")):
+            continue
+        if has_keep_marker(child):
+            protected.append(_candidate(child, "pytest_tmp",
+                                        reason="keep_sentinel", measure=measure))
+            continue
+        candidates.append(_candidate(child, "pytest_tmp", measure=measure))
     reap, keep, recent = _split_reap_keep(
         candidates, now=now, min_age_sec=min_age_sec,
         keep_latest=keep_latest, key=lambda c: "pytest")
-    return {"reap": reap, "keep": keep, "recent": recent}
+    return {"reap": reap, "keep": protected + keep, "recent": recent}
 
 
 # ---------------------------------------------------------------------------

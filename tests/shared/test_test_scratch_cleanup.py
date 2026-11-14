@@ -101,6 +101,30 @@ def test_remove_tree_permanent_and_recycle(tmp_path, monkeypatch):
     assert target3.exists(), "回收站不可用时不得回退到永久删除"
 
 
+def test_keep_sentinel_protects_old_basetemp(tmp_path):
+    """`.keep` 标记的目录即使很旧也不得回收（长期证据安全网）."""
+    keep = _make_dir(tmp_path, "u6_closeout", age_sec=10 * 3600)
+    (keep / ".keep").write_text("long-lived evidence\n", encoding="utf-8")
+    old = _make_dir(tmp_path, "run_old", age_sec=10 * 3600)
+    plan = ts.plan_basetemp_reap(tmp_path, min_age_sec=6 * 3600,
+                                 keep_latest=0)
+    reap_names = {item.path.name for item in plan["reap"]}
+    keep_names = {item.path.name for item in plan["keep"]}
+    assert reap_names == {old.name}
+    assert keep_names == {keep.name}
+    assert plan["keep"][0].reason == "keep_sentinel"
+
+
+def test_keep_sentinel_protects_dead_pid_root(tmp_path, monkeypatch):
+    root = _make_dir(tmp_path, "motion_revise_111", age_sec=10 * 3600)
+    (root / "KEEP").write_text("do not reap\n", encoding="utf-8")
+    monkeypatch.setattr(ts, "pid_is_alive", lambda pid: False)
+    plan = ts.plan_pid_reap(tmp_path, current_pid=os.getpid(),
+                            min_age_sec=6 * 3600, keep_latest=0)
+    assert plan["reap"] == []
+    assert [item.path.name for item in plan["keep"]] == ["motion_revise_111"]
+
+
 def test_tool_dry_run_then_apply(tmp_path):
     root = tmp_path / "pytest_tmp"
     root.mkdir()
