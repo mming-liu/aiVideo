@@ -561,12 +561,29 @@ def _plan_only(options, script: dict, shots_dir: Path, chapter: int) -> int:
     experiment_id = cli.resolve_experiment_root(options.candidate_root, chapter=chapter)
     out_root = package_root("video", experiment_id, chapter) / "plans"
     out_root.mkdir(parents=True, exist_ok=True)
+
+    # WP1b（2026-11-14）：plan-only 对章目录必须**真正**零写入。正式入口已在 main()
+    # 里设好候选日志上下文；这里再兜一层——万一被别的入口直接调用，也不能让
+    # vimax_bridge 之类按 chapter_dir() 建 step02.log（那一笔就会被 snapshot 判成
+    # production_write_detected，exit 3）。
+    from shared import log_utils as _log_utils
+    if _log_utils.current_log_dir() is None:
+        _log_utils.set_log_context(out_root.parent / "logs")
+
     only_indices = parse_shot_selector(options.shots)
     ledger = out_root / "step02b_frame_precheck.json"
     before = production_snapshot(chapter)
-    plan = build_plan(script, shots_dir, only_indices=only_indices, chapter=chapter,
-                      provider=str(os.getenv("VIDEO_PROVIDER", "")),
-                      precheck_ledger=ledger, ref_work_dir=out_root / "refs")
+    # 参考表/清单落点也钉到实验根：拼表逻辑只认参数，不知道"现在是只读预检"，
+    # 不钉就会重写正式 shots/N/ref_compose_*.json（只差时间戳，但字节变了）。
+    from shared import ref_compose as _ref_compose
+    _prev_ref_dir = _ref_compose.current_ref_dir()
+    _ref_compose.set_ref_dir_context(out_root / "refs")
+    try:
+        plan = build_plan(script, shots_dir, only_indices=only_indices, chapter=chapter,
+                          provider=str(os.getenv("VIDEO_PROVIDER", "")),
+                          precheck_ledger=ledger, ref_work_dir=out_root / "refs")
+    finally:
+        _ref_compose.set_ref_dir_context(_prev_ref_dir)
     path = out_root / f"plan_{len(list(out_root.glob('plan_*.json'))) + 1:04d}.json"
     path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     changes = snapshot_changes(before, production_snapshot(chapter))

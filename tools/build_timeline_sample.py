@@ -200,7 +200,8 @@ def main(argv=None) -> int:
         "sample_path": str(rendered.resolve()),
     }
     target = root / "timeline_acceptance.json"
-    target.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(target, report, ensure_ascii=False, indent=2)
     print(json.dumps({"sample": str(rendered), "acceptance_status": acceptance["status"],
                       "rendered_status": rendered_check["status"],
                       "total_sec": acceptance["duration"]["total_sec"],

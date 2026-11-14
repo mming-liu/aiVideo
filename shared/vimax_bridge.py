@@ -72,11 +72,17 @@ __all__ = [
 
 # 静默日志: 桥接日志写入 step02.log，不污染控制台
 def _bridge_log(msg: str):
-    """写入文件日志."""
+    """写入文件日志.
+
+    2026-11-14（U6-FIN WP1b）：落点必须走 :func:`shared.log_utils.resolve_log_file`。
+    旧写法硬编码 `chapter_dir()/step02.log`，于是 `step02b --plan-only` 一碰哈希
+    计算就往**正式章目录**建了 step02.log，被 production snapshot 判成
+    `production_write_detected`（exit 3）——plan-only 的"零写入"其实只是没写产物。
+    """
     try:
         from shared.tee_logger import get_logger
-        from shared.paths import chapter_dir
-        log = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+        from shared.log_utils import resolve_log_file
+        log = get_logger(resolve_log_file("step02.log"), console_level="INFO")
         log.verbose(msg)
     except Exception:
         pass
@@ -3841,11 +3847,10 @@ async def _gen_first_frame_async(
     ff_path = shot_dir / FIRST_FRAME_FILENAME
     ff_hash_path = shot_dir / "frame_hash.txt"
 
-    # 日志输出到 step02.log，不污染控制台
+    # 日志输出到 step02.log，不污染控制台（候选上下文优先，见 log_utils.resolve_log_file）
     from shared.tee_logger import get_logger
-    from shared.paths import chapter_dir
-    _log_dir = chapter_dir()
-    logger = get_logger(_log_dir / "step02.log", console_level="INFO")
+    from shared.log_utils import resolve_log_file
+    logger = get_logger(resolve_log_file("step02.log"), console_level="INFO")
 
     ff_desc = shot.get("ff_desc", "").strip()
     if not ff_desc:
@@ -4061,11 +4066,10 @@ async def _gen_last_frame_async(
     # 共用一个文件会互相覆盖，导致每次运行都误判失效、双双重做
     lf_hash_path = shot_dir / "last_frame_hash.txt"
 
-    # 日志输出到 step02.log，不污染控制台
+    # 日志输出到 step02.log，不污染控制台（候选上下文优先，见 log_utils.resolve_log_file）
     from shared.tee_logger import get_logger
-    from shared.paths import chapter_dir
-    _log_dir = chapter_dir()
-    logger = get_logger(_log_dir / "step02.log", console_level="INFO")
+    from shared.log_utils import resolve_log_file
+    logger = get_logger(resolve_log_file("step02.log"), console_level="INFO")
 
     lf_desc = shot.get("lf_desc", "").strip()
     if not lf_desc:
@@ -4379,10 +4383,10 @@ async def _gen_keyframes_async(
     shot_dir = shots_dir / str(idx)
     shot_dir.mkdir(parents=True, exist_ok=True)
 
-    # 日志
+    # 日志（候选上下文优先，见 log_utils.resolve_log_file）
     from shared.tee_logger import get_logger
-    from shared.paths import chapter_dir
-    _kf_logger = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+    from shared.log_utils import resolve_log_file
+    _kf_logger = get_logger(resolve_log_file("step02.log"), console_level="INFO")
 
     keyframes_data = shot.get("keyframes", [])
     if not keyframes_data:

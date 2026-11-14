@@ -115,3 +115,48 @@ def test_plan_only_reports_production_write_detected(tmp_path, monkeypatch):
     rc = main._plan_only(options, _script(), tmp_path / "shots", 1)
 
     assert rc == eio.EXIT_TOOL_FAIL
+
+
+def test_plan_only_bridge_log_never_lands_in_production(tmp_path, monkeypatch):
+    """U6-FIN WP1b：plan-only 期间桥接日志不得落正式章目录（step02.log → exit 3）.
+
+    2026-11-14 R6 S05 实测：`--plan-only --candidate-root` 只写候选 plans/，
+    但 `vimax_bridge._bridge_log` 硬编码 `chapter_dir()/step02.log`，一碰哈希计算
+    就在正式章目录建了 step02.log，被 production snapshot 判成
+    `production_write_detected`（exit 3）。这里把章目录与快照指到同一棵树，
+    保证"日志落点"和"隔离判据"看的是同一个位置，测试才有判别力。
+    """
+    from shared import log_utils
+    from shared import paths as shared_paths
+    from shared import vimax_bridge
+
+    prod = _production_tree(tmp_path)
+    monkeypatch.setattr(shared_paths, "chapter_dir", lambda *a, **k: prod)
+    monkeypatch.setattr(main, "production_snapshot", _snapshot_of(prod))
+
+    pkg = tmp_path / "candidate_pkg"
+    monkeypatch.setattr(cli, "resolve_experiment_root",
+                        lambda root, chapter=None: "exp")
+    monkeypatch.setattr(eio, "package_root",
+                        lambda package, experiment_id, chapter=None: pkg)
+
+    def _build_plan_needs_log(*args, **kwargs):
+        # 真实 plan 计算里 _get_shot_hash/_get_frame_content_hash 会走这条日志
+        vimax_bridge._bridge_log("  [HASH] shot_1 首帧内容哈希计算")
+        return {"shots": [], "ready": 1, "blocked": 0,
+                "estimated_generations": 1, "network_calls": 0}
+
+    monkeypatch.setattr(main, "build_plan", _build_plan_needs_log)
+
+    # 候选模式的日志上下文（main() 在进入 _plan_only 前就已设置）
+    log_utils.set_log_context(pkg / "logs")
+    try:
+        options = SimpleNamespace(
+            candidate_root=str(tmp_path / "candidate" / "exp" / "video"), shots="1")
+        rc = main._plan_only(options, _script(), tmp_path / "shots", 1)
+    finally:
+        log_utils.set_log_context(None)
+
+    assert rc == 0, "plan-only 必须 exit 0（日志外溢会把隔离判据打成 exit 3）"
+    assert not (prod / "step02.log").exists(), "桥接日志不得写进正式章目录"
+    assert (pkg / "logs" / "step02.log").is_file(), "日志应落候选实验根"

@@ -102,8 +102,9 @@ def _probe_playable(path: Path) -> dict:
 def build(out: Path, *, sample: Path | None = None) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     diff = semantic_execution_diff()
-    (out / "semantic_execution_diff.json").write_text(
-        json.dumps(diff, ensure_ascii=False, indent=2), encoding="utf-8")
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(out / "semantic_execution_diff.json", diff,
+                     ensure_ascii=False, indent=2)
     _write_diff_md(diff, out / "semantic_execution_diff.md")
     shadow = build_shadow(out / "shadow")
     sample_info = _probe_playable(sample) if sample else {"exists": False}
@@ -163,8 +164,9 @@ def build(out: Path, *, sample: Path | None = None) -> dict:
         },
         "real_benefit": "unverified",
     }
-    (out / "benefit_metrics.json").write_text(
-        json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(out / "benefit_metrics.json", metrics,
+                     ensure_ascii=False, indent=2)
     _write_metrics_md(metrics, shadow, out / "benefit_metrics.md")
     _write_not_run(out / "not_run.md")
     return {"diff": diff, "shadow": shadow, "metrics": metrics}

@@ -89,9 +89,9 @@ def _sha256_file(path: Path) -> str:
 
 
 def _write_json(path: Path, value) -> None:
+    from shared.json_io import atomic_dump_json
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=1),
-                          encoding="utf-8")
+    atomic_dump_json(path, value, ensure_ascii=False, indent=1)
 
 
 def _write_text(path: Path, text: str) -> None:

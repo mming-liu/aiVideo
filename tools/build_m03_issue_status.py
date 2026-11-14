@@ -58,8 +58,8 @@ def main(argv=None) -> int:
     }
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "issue_status.json").write_text(
-        json.dumps(ledger, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(out / "issue_status.json", ledger, ensure_ascii=False, indent=2)
     (out / "issue_status.md").write_text(render_markdown(ledger), encoding="utf-8")
     print(json.dumps(ledger["summary"], ensure_ascii=False, indent=1))
     return 0

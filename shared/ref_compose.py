@@ -32,6 +32,35 @@ from pathlib import Path
 from shared.model_alias import normalize_model_name
 from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
 
+#: 参考表/清单落点上下文（None = 调用方给的目录）。
+#:
+#: 2026-11-14（U6-FIN WP1b）：`step02b --plan-only` 只该做结构预检，实测却把
+#: `ref_compose_ff/lf.json` 重写进了**正式** `vimax_working/shots/N/`（内容只差
+#: 一个 `at` 时间戳），被 production snapshot 判成 `production_write_detected`。
+#: 拼表逻辑本身没法从参数上知道"现在是只读预检"，因此这里给一个进程级落点覆盖，
+#: 由 plan-only 入口设置——与 `shared/log_utils.set_log_context` 同一套思路：
+#: **候选/预检上下文优先，否则用调用方传入的目录**。
+_REF_DIR_CONTEXT: dict = {"dir": None}
+
+
+def set_ref_dir_context(path) -> None:
+    """把参考表/清单落点改到实验目录（plan-only 用；None = 恢复调用方目录）."""
+    _REF_DIR_CONTEXT["dir"] = Path(path) if path else None
+
+
+def current_ref_dir():
+    return _REF_DIR_CONTEXT["dir"]
+
+
+def _resolve_sheet_dir(sheet_dir) -> Path:
+    """落点解析：有上下文时映射到 `<上下文>/<原目录名>`，保持每镜一层的结构."""
+    base = _REF_DIR_CONTEXT["dir"]
+    path = Path(sheet_dir)
+    if base is None:
+        return path
+    return base / path.name
+
+
 # (模型名子串, 参考图上限)。顺序敏感：具体在前，泛化在后。
 MODEL_REF_LIMITS: list[tuple[str, int]] = [
     # --- 火山免费预置模型（带日期后缀，先匹配先命中）---
@@ -545,7 +574,7 @@ def fit_refs(
     if limit <= 0:
         return []
 
-    sheet_dir = Path(sheet_dir)
+    sheet_dir = _resolve_sheet_dir(sheet_dir)
     try:
         sheet_dir.mkdir(parents=True, exist_ok=True)
     except Exception:
@@ -628,7 +657,7 @@ def fit_flat(
         return fit_refs([("all", valid)], limit, sheet_dir, sheet_tag)
     keep = limit - 1
     try:
-        sheet_dir = Path(sheet_dir)
+        sheet_dir = _resolve_sheet_dir(sheet_dir)
         sheet_dir.mkdir(parents=True, exist_ok=True)
         out = str(sheet_dir / f"ref_sheet_{sheet_tag}_extra.png")
         stitched, _layout = _atomic_reference_sheet(valid[keep:], out, kind="extra")

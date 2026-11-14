@@ -355,6 +355,22 @@ def _plan_frame_state(unit: dict, shot_dir: Path, characters: list,
         return "generate"
 
 
+def _report_image_budget() -> dict:
+    """报告图片预算门禁的绑定点位（plan-only 也必须看得见）.
+
+    2026-11-14 R6 S07 那个洞有一半是"看不见"：漏传 `STEP02A_IMAGE_BUDGET_TOTAL`
+    时输出里没有任何预算字段，护栏是否生效只能靠事后翻账本才发现。这里把
+    绑定来源（env / 账本自动发现）、已用/上限/剩余显式写进预检结果。
+
+    用 `describe`（只读、不建锁文件）而不是 `usage`：plan-only 对章目录必须零写入。
+    """
+    try:
+        from shared import post_budget
+        return post_budget.describe("image")
+    except Exception as exc:                                  # noqa: BLE001
+        return {"enabled": False, "error": str(exc)[:300]}
+
+
 def _plan_only_report(script: dict, work_dir: Path, only_indices, frames,
                       scope: dict | None = None) -> dict:
     """零网络账单预检：列出本次会生成多少张肖像/场景/道具/分镜帧.
@@ -523,6 +539,7 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames,
             "images_total": total,
         },
         "writes": _writes,
+        "image_budget": _report_image_budget(),
         "assembled_prompts": assembled_prompts,
         "prompt_stage": "assembled_pre_adapter",
         "prompt_preflight": {"status": "blocked" if prompt_problems else "ok",

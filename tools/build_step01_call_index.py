@@ -524,8 +524,8 @@ def main(argv=None) -> int:
     index = build(args)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "call_index.json").write_text(
-        json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(out / "call_index.json", index, ensure_ascii=False, indent=2)
     (out / "call_index.md").write_text(_md(index), encoding="utf-8")
     print(json.dumps({"out": str(out), "calls": index["totals"]["calls"],
                       "by_phase": index["totals"]["sends_by_phase"],

@@ -254,10 +254,33 @@ R5 作为待送审对象期间发现两个问题，都落在**判据层**，分�
   （构建脚本多写 `"\n"`，生产走 `atomic_dump_json`）。**本轮不重冻结**
   （会作废刚 PASS 的审计身份），改为 R7 及以后修构建工具。
 
+## U6-FIN（WP1–WP3）：三个遗留点已工程根治（2026-11-14）
+
+详见 `U6-fin-wp1-wp3-2026-11-14.md`。零真实生成调用。
+
+| 遗留点 | 根治 | 证据 |
+|---|---|---|
+| 漏传 `STEP02A_IMAGE_BUDGET_TOTAL` → 护栏静默旁路（§6.2） | `post_budget` 四级启用判据：**章目录有账本即自动绑定并取文件内上限**；只有显式 `TOTAL=0` 才关闭；`reset()` 不再碰自动发现的账本；新增只读 `describe()` 并把 `image_budget` 写进 step02a 预检输出 | 真实章零环境变量：`{"source":"ledger_autodiscovered","limit":172,"used":33,"remaining":139}` |
+| `--plan-only` 写正式目录 → exit 3（§4.1/§8.4） | **两条写路径都堵**：① 4 处 `step02.log` 落点改走 `log_utils.resolve_log_file`（另有 5 处同类）；② `ref_compose` 新增落点上下文，参考表与 `ref_compose_*.json` 改落实验根 | 真实命令：修日志后仍 exit 3（`ref_compose_*.json` 被改），两条都修后 **exit 0 / `production_unchanged=true`** |
+| 构建工具手写 `json.dumps + "\n"`（§4.3/§8.2） | 12 个 `tools/build_*` / `freeze_*` 统一 `shared.json_io.atomic_dump_json`，并加 14 条棘轮扫描 | `atomic_dump_json` 实测无尾换行；棘轮 14 passed |
+| `shot 2 FF` QC 429（§6.3） | 脚本加"图片 sha + 内容哈希前置校验"、"0 图片 POST 以账本 used 前后一致为证"、"首调即停不重试" | 本次 1 次调用即停，仍是 429；图片字节/账本/侧车全未变 |
+
+**`RULE_SOURCE_FINGERPRINT` 保持 `d3ab095ffa4c501a`**：`shared/style_prefix.py` 的同类日志
+改动会让指纹变成 `b449ff65bd60378d`（实测），已**主动回退**，留到 R7。
+
+回归：`tests/tools` 168、`tests/shared` 1457 passed（14 failed 全为删除审计门，5 个文件
+单独跑全绿）、`tests/step02a_frame_gen` 105、`tests/step02b_video_gen` 74→（14 failed 中
+除 13 条审计门外，1 条 `test_candidate_cli`/`test_media_plan_wp4`/`test_production_trace`
+的既有红已 stash 到 `bd00238` 验证与本次无关）、`tests/step02_video_gen` 74、
+`tests/step03_tts_audio` 47。
+
 ## 剩余与下一步
 
 - **shot 2 FF 的 QC 重检待通道恢复**：重跑
-  `python .dsh/u6_closeout_20261110/r6_s07_shot2_qc.py`，不涉及任何图片再生成。
+  `python .dsh/u6_closeout_20261110/r6_s07_shot2_qc.py`（首调即停，一次调用 1 次 QC），
+  不涉及任何图片再生成、不动账本。
+- **`shared/style_prefix.py` 的日志落点**：因会让 Step01 指纹变更而保留原状，
+  建议在 R7 重冻结时连同日志上下文一起收口。
 - **架构口径（用户 2026-11-14 拍板）**：`shared/prompt_contradiction.py` 与
   `tools/script_preflight.py` 当前**不**纳入 `RULE_SOURCE_FINGERPRINT`，不开启
   R7 重冻结；`script_preflight` 作为打包前固定零调用预检，待本章走完再议主门合入。

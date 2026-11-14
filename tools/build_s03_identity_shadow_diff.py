@@ -186,8 +186,9 @@ def main(argv=None) -> int:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     report = build_report()
-    (out_dir / "identity_shadow_diff.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(out_dir / "identity_shadow_diff.json", report,
+                     ensure_ascii=False, indent=2)
     (out_dir / "identity_shadow_diff.md").write_text(
         _markdown(report), encoding="utf-8")
     print(json.dumps(report["admission_delta"], ensure_ascii=False, indent=2))

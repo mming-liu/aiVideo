@@ -123,8 +123,8 @@ def _qc_video_product_result(video_path: Path, shot_idx: int, expected_duration:
     不污染正式 ``step02.log``）。
     """
     from shared.tee_logger import get_logger
-    from shared.paths import chapter_dir
-    logger = get_logger(log_path or (chapter_dir() / "step02.log"), console_level="INFO")
+    from shared.log_utils import resolve_log_file
+    logger = get_logger(log_path or resolve_log_file("step02.log"), console_level="INFO")
     checks: list[dict] = []
     try:
         if not video_path.exists() or video_path.stat().st_size <= 20 * 1024:
@@ -1790,8 +1790,9 @@ async def _process_one_shot(
     提交走 prepared 入口，一次尝试至多一个生成 POST）。
     """
     from shared.tee_logger import get_logger
-    from shared.paths import chapter_dir
-    logger = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+    from shared.log_utils import resolve_log_file
+    # 候选模式下本函数曾经硬编码正式章目录日志：日志上下文优先（log_utils 唯一判据）
+    logger = get_logger(resolve_log_file("step02.log"), console_level="INFO")
 
     idx = shot["index"]
     shot_dir = shots_dir / str(idx)

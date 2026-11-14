@@ -178,11 +178,11 @@ def _branch_run(branch: dict, tmp: Path, assets: dict) -> dict:
     shot_work.mkdir(parents=True, exist_ok=True)
     (shot_work / "first_frame.png").write_bytes(Path(assets["ff"]).read_bytes())
     (shot_work / "last_frame.png").write_bytes(Path(assets["lf"]).read_bytes())
-    (work / "character_portraits_registry.json").write_text(
-        json.dumps({"甲": {"front": {"path": assets["portrait"],
-                                    "description": "青衫少年"}}},
-                   ensure_ascii=False),
-        encoding="utf-8")
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(work / "character_portraits_registry.json",
+                     {"甲": {"front": {"path": assets["portrait"],
+                                       "description": "青衫少年"}}},
+                     ensure_ascii=False)
 
     shot = {
         "index": 1, "duration_sec": 5.0,
@@ -428,9 +428,9 @@ def main(argv=None) -> int:
     with tempfile.TemporaryDirectory(prefix="g3_iso_",
                                      ignore_cleanup_errors=True) as tmp:
         report = build_report(Path(tmp))
-    (out_dir / "g3_isolated_request_diff.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8")
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(out_dir / "g3_isolated_request_diff.json", report,
+                     ensure_ascii=False, indent=2)
     (out_dir / "g3_isolated_request_diff.md").write_text(
         _markdown(report), encoding="utf-8")
     print(json.dumps(report["summary"], ensure_ascii=False, indent=2))

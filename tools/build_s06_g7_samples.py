@@ -282,8 +282,9 @@ def main(argv=None) -> int:
     report = build()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "g7_decision_samples.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(out / "g7_decision_samples.json", report,
+                     ensure_ascii=False, indent=2)
     (out / "g7_decision_samples.md").write_text(_markdown(report), encoding="utf-8")
     ok = all(
         (row["verdicts"]["R2_plus_protection"] is (row["expected"] == "reject"))

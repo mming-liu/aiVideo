@@ -347,6 +347,9 @@ tests/tools/fixtures/p4_admission/*
 # 写 .tmp 再 unlink），凭据结构校验拆出 `production_context.validate_receipt()`。
 # 这两条契约是本轮改出来的生产入口，用例必须随仓库走，否则干净检出验不到。
 !tests/tools/test_production_context.py
+# 2026-11-14 U6-FIN WP1c：构建/冻结脚本的手写 JSON 落盘棘轮——防"多写一个尾部
+# 换行导致同一份内容两个 SHA-256"再次复发，用例必须随仓库走。
+!tests/tools/test_json_artifact_serialization.py
 !tests/step02a_frame_gen/
 tests/step02a_frame_gen/*
 !tests/step02a_frame_gen/test_step02a_offline_fixups.py

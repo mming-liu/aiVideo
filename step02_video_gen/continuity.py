@@ -101,14 +101,14 @@ def extract_tail_frame(
         if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
             stderr_tail = proc.stderr[-300:] if proc.stderr else "(no stderr)"
             from shared.tee_logger import get_logger
-            from shared.paths import chapter_dir
-            log = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+            from shared.log_utils import resolve_log_file
+            log = get_logger(resolve_log_file("step02.log"), console_level="INFO")
             log.verbose(f"  [TAIL] shot_{shot_idx} extract failed: {stderr_tail}")
             return None
     except Exception as e:
         from shared.tee_logger import get_logger
-        from shared.paths import chapter_dir
-        log = get_logger(chapter_dir() / "step02.log", console_level="INFO")
+        from shared.log_utils import resolve_log_file
+        log = get_logger(resolve_log_file("step02.log"), console_level="INFO")
         log.verbose(f"  [TAIL] shot_{shot_idx} ffmpeg error: {e}")
         return None
 

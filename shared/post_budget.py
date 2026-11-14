@@ -3,10 +3,19 @@
 
 与 Step01 的 shared/send_budget.py 同构，但面向 POST 次数：
 
-- 只有显式设置 *_BUDGET_TOTAL > 0 才启用；未设置时完全无行为变化。
+- 启用条件（U6-FIN WP1a 起：账本存在即启用，未设环境变量不再等于裸奔）：
+  1. 显式设置 *_BUDGET_TOTAL > 0 → 按该上限启用（显式覆盖一切）；
+  2. 显式设置 *_BUDGET_TOTAL <= 0 → 显式关闭（唯一合法的"我不想要门禁"写法）；
+  3. 未设置 *_BUDGET_TOTAL 但章节目录下已有账本（默认名见 _KINDS）→
+     **自动绑定该账本并读取其 limit 作为上限**（`source=ledger_autodiscovered`）；
+  4. 都没有 → 不启用，行为与历史版本一致。
+  2026-11-14 R6 S07 实测事故：人手漏传 `STEP02A_IMAGE_BUDGET_TOTAL` 时，
+  章目录里明明躺着 `used=31/limit=172` 的账本，护栏却被静默旁路。自动发现
+  就是堵这个洞——"账本在、门禁就在"，只有显式写 0 才能关。
 - 账本落在章节目录（或 *_BUDGET_FILE），每次发送前原子检查并 +1；
   进程内 threading 锁 + 跨进程文件锁（Windows msvcrt / POSIX fcntl）。
-- 文件损坏/不可读 ⇒ 拒绝发送（fail-closed）。
+- 文件损坏/不可读 ⇒ 拒绝发送（fail-closed）。自动发现到的账本即使上限读不出
+  也照样启用（limit=0 交由 :func:`_read` 判死），不会因为"读不懂"而放行。
 - 上游明确返回额度耗尽（403 SetLimitExceeded / QuotaExceeded）时写入熔断标记，
   重启后仍拒绝发送；需显式 reset 或人工删账本。
 
@@ -64,20 +73,73 @@ def _int(value, default: int = 0) -> int:
         return default
 
 
-def _config(kind: str):
-    """返回 (ledger_path | None, limit)；未启用返回 (None, 0)."""
+def _limit_from_ledger(path: Path) -> int:
+    """从已有账本读上限；读不出返回 0（由 :func:`_read` 兜底 fail-closed）.
+
+    只认正整数。`limit` 是当前口径，`budget_total` / `total` 兼容早期手写账本。
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    if not isinstance(data, dict):
+        return 0
+    for key in ("limit", "budget_total", "total"):
+        value = data.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            continue
+        return value
+    return 0
+
+
+def _default_ledger(default_name: str) -> Path:
+    from shared.paths import chapter_dir
+    return Path(chapter_dir()) / default_name
+
+
+def _config_detail(kind: str, *, discover: bool = True) -> dict:
+    """解析账本路径与上限；返回 {path, limit, source}.
+
+    source 取值：`env`（显式上限）/ `explicit_off`（显式 0 关闭）/
+    `ledger_env_file`（只给了 FILE，上限取自该账本）/
+    `ledger_autodiscovered`（环境变量全空，章目录里已有账本）/
+    `disabled`（无账本、也没给配置）.
+
+    `discover=False` 只认显式启用：破坏性操作（如 :func:`reset`）绝不能顺手
+    删掉一个"只是恰好存在"的真实账本。
+    """
     try:
         env_file, env_total, default_name = _KINDS[kind]
     except KeyError as exc:
         raise ValueError("未知预算类型: %r" % kind) from exc
-    limit = _int(os.getenv(env_total), 0)
-    if limit <= 0:
-        return None, 0
-    raw = (os.getenv(env_file) or "").strip()
-    if raw:
-        return Path(raw), limit
-    from shared.paths import chapter_dir
-    return Path(chapter_dir()) / default_name, limit
+    explicit_file = (os.getenv(env_file) or "").strip()
+    raw_total = os.getenv(env_total)
+    explicit_total = raw_total is not None and str(raw_total).strip() != ""
+    if explicit_total:
+        limit = _int(raw_total, 0)
+        if limit <= 0:
+            return {"path": None, "limit": 0, "source": "explicit_off"}
+        path = Path(explicit_file) if explicit_file else _default_ledger(default_name)
+        return {"path": path, "limit": limit, "source": "env"}
+    if not discover:
+        return {"path": None, "limit": 0, "source": "disabled"}
+    if explicit_file:
+        path = Path(explicit_file)
+        if not path.exists():
+            return {"path": None, "limit": 0, "source": "disabled"}
+        return {"path": path, "limit": _limit_from_ledger(path),
+                "source": "ledger_env_file"}
+    path = _default_ledger(default_name)
+    if not path.exists():
+        return {"path": None, "limit": 0, "source": "disabled"}
+    return {"path": path, "limit": _limit_from_ledger(path),
+            "source": "ledger_autodiscovered"}
+
+
+def _config(kind: str, *, discover: bool = True):
+    """返回 (ledger_path | None, limit)；未启用返回 (None, 0)."""
+    detail = _config_detail(kind, discover=discover)
+    return detail["path"], detail["limit"]
 
 
 def _empty_outcomes() -> dict:
@@ -285,18 +347,61 @@ def quota_exhausted(kind: str) -> str:
 
 
 def usage(kind: str) -> dict:
-    """读取当前账本（诊断/报告用）；未启用返回 {}."""
-    path, limit = _config(kind)
+    """读取当前账本（诊断/报告用）；未启用返回 {}.
+
+    额外回报 `budget_source`，让调用方/日志能分辨"环境变量显式启用"与
+    "账本自动发现"——2026-11-14 的漏传事故正是因为这两者在输出上不可分辨。
+    """
+    detail = _config_detail(kind)
+    path, limit = detail["path"], detail["limit"]
     if path is None:
         return {}
     try:
         with _LOCK, _file_lock(path):
             data = _read(path, kind, limit)
     except PostBudgetExhausted as exc:
-        return {"error": str(exc), "path": str(path), "limit": limit}
+        return {"error": str(exc), "path": str(path), "limit": limit,
+                "budget_source": detail["source"]}
     data.setdefault("limit", limit)
     data["path"] = str(path)
+    data["budget_source"] = detail["source"]
     return data
+
+
+def describe(kind: str, *, discover: bool = True) -> dict:
+    """只读窗口：这次会不会有门禁、绑到哪个账本、还剩多少.
+
+    **不建锁文件、不写盘**——plan-only / 预检必须用它。:func:`usage` 会开
+    `*.json.lock`，在"只读预检对章目录零写入"的场合下那是一笔多余写操作。
+
+    不可读/字段非法时不抛异常，改为在返回值里带 `error`，由调用方决定是否阻断
+    （真正的发送门禁仍由 :func:`acquire` 的 fail-closed 兜底）。
+    """
+    detail = _config_detail(kind, discover=discover)
+    path = detail["path"]
+    if path is None:
+        return {"enabled": False, "source": detail["source"]}
+    info = {"enabled": True, "source": detail["source"],
+            "path": str(path), "limit": detail["limit"]}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:                                  # noqa: BLE001
+        info["error"] = "账本不可读：%s" % exc
+        return info
+    if not isinstance(data, dict):
+        info["error"] = "账本不是 JSON 对象"
+        return info
+    used = data.get("used")
+    limit = data.get("limit")
+    info["used"] = used
+    info["pending"] = data.get("pending", 0)
+    if isinstance(limit, int) and not isinstance(limit, bool):
+        info["limit"] = limit
+    info["quota_exhausted"] = str(data.get("quota_exhausted") or "")
+    if (isinstance(used, int) and not isinstance(used, bool)
+            and isinstance(info.get("limit"), int)):
+        info["remaining"] = max(0, info["limit"] - used)
+    return info
 
 
 #: 预算结果分类 → 请求事件名（终局事件只由真实终局触发）。
@@ -403,11 +508,15 @@ def clear_quota(kind: str) -> None:
 
 
 def reset(kind=None) -> None:
-    """测试/人工重置：清内存标记并删除账本（含锁文件）."""
+    """测试/人工重置：清内存标记并删除账本（含锁文件）.
+
+    **只删显式启用的账本**（环境变量给了上限的那些）：自动发现出来的真实账本
+    不在删除范围内——否则一次 `reset()` 就能抹掉生产账本。
+    """
     kinds = [kind] if kind else list(_KINDS)
     for item in kinds:
         _QUOTA.pop(item, None)
-        path, _limit = _config(item)
+        path, _limit = _config(item, discover=False)
         if path is None:
             continue
         for target in (path, path.with_suffix(path.suffix + '.lock'),
@@ -425,5 +534,6 @@ def is_quota_error(text) -> bool:
 
 
 __all__ = ["OUTCOMES", "PostBudgetExhausted", "acquire", "clear_quota",
-           "is_quota_error", "mark_quota_exhausted", "migrate", "quota_exhausted",
-           "record", "record_qc_rejected", "reclassify", "reset", "usage"]
+           "describe", "is_quota_error", "mark_quota_exhausted", "migrate",
+           "quota_exhausted", "record", "record_qc_rejected", "reclassify",
+           "reset", "usage"]

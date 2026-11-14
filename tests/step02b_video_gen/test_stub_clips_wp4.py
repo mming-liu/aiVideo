@@ -90,4 +90,13 @@ def test_thirteen_stub_clips_match_formal_durations(tmp_path):
         assert abs(got - dur) < 0.06, "shot %d 时长 %.3f ≠ %.3f" % (idx, got, dur)
         total += got
 
-    assert abs(total - 75.25) < 0.2, "总时长 %.2f ≠ 75.25" % total
+    # 2026-11-14（U6-FIN）：原先这里写死 `abs(total - 75.25) < 0.2`。那个字面量是
+    # **上一版正式稿**的合计时长；R6 采纳新稿后镜头时长变化，合计变成 76.75，
+    # 用例就红了——而它红的理由和"桩片段没按正式时长生成"毫无关系（逐镜断言已覆盖）。
+    # 写死总量等于给每次合法改稿埋一颗雷，故改为按当前正式稿推导，另留一个粗粒度
+    # 区间兜底（防止"13 个 0.1 秒片段"这种整体崩坏也能过）。
+    expected_total = sum(dur for _, dur in expected)
+    assert abs(total - expected_total) < 0.2, (
+        "桩片段合计 %.2f ≠ 正式稿时长合计 %.2f" % (total, expected_total))
+    assert 30.0 <= expected_total <= 300.0, (
+        "正式稿合计时长 %.2f 秒明显异常（不在 30–300 的合理区间）" % expected_total)

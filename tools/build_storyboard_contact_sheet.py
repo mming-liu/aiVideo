@@ -301,10 +301,8 @@ def build(chapter: int | None = None, *, out_dir: Path | None = None,
     write_dir.mkdir(parents=True, exist_ok=True)
     if not json_only:
         render(rows, manifest, cell=cell, out_dir=write_dir)
-    tmp_json = write_dir / f".{SHEET_JSON}.tmp-{os.getpid()}"
-    tmp_json.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-                        encoding="utf-8")
-    os.replace(tmp_json, write_dir / SHEET_JSON)
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(write_dir / SHEET_JSON, manifest, ensure_ascii=False, indent=2)
     return manifest
 
 

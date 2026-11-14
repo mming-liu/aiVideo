@@ -208,11 +208,15 @@ def main():
         repair_diag=diag, block_reasons=blocks,
         retry_state={}, audit_attempted=set(), defer_targets=set())
 
-    (OUT / "candidate.revised.json").write_text(
-        json.dumps(revised, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    (OUT / "repair_diag.json").write_text(
-        json.dumps({"diag": diag, "block": blocks}, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8")
+    # WP1c（2026-11-14）：统一走 shared.json_io.atomic_dump_json。手写
+    # `json.dumps(...) + "\n"` 会给候选稿多写 1 个尾部换行，而生产侧
+    # （step01 atomic_dump_json）不写——同一份内容两个 SHA-256，
+    # 核对时只能靠 `dict` 相等去解释，属于自己制造的身份噪声。
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(OUT / "candidate.revised.json", revised,
+                     ensure_ascii=False, indent=2)
+    atomic_dump_json(OUT / "repair_diag.json", {"diag": diag, "block": blocks},
+                     ensure_ascii=False, indent=2)
 
     rows = _diff_rows(cand, revised)
     # 复核第三轮：**投影后残余**——本轮接受的变化在 `project_for_commit` 之后是否

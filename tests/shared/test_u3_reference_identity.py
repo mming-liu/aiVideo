@@ -226,3 +226,56 @@ def test_write_review_preview(tmp_path, monkeypatch):
     (evidence / "u3_review.json").write_text(
         json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
     assert (evidence / "u3_review.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# U6-FIN WP1b：参考表落点上下文（plan-only 不得重写正式 shots/N/ref_compose_*.json）
+# ---------------------------------------------------------------------------
+def _three_buckets(fx):
+    """3 个类别、总数 5 —— 超过 limit=3，走"多类别拼表 + 写 ref_compose 清单"分支.
+
+    单类别 `limit=1` 分支不写清单，用它测不到本次要钉的那条写路径。
+    """
+    return [("scene", [fx["scene"]]),
+            ("chars", fx["portraits"]),
+            ("props", fx["props"])]
+
+
+def test_ref_dir_context_redirects_sheets_and_compose_report(tmp_path):
+    """设了上下文后，参考表与 ref_compose 清单全部落上下文目录，源目录保持空.
+
+    2026-11-14 R6 收尾实测：`step02b --plan-only` 把 `ref_compose_ff/lf.json`
+    重写回正式 `vimax_working/shots/2/`（内容只差 `at` 时间戳），production
+    snapshot 因此报 `production_write_detected`。拼表逻辑只认参数、不知道
+    "现在是只读预检"，所以由入口设上下文来兜。
+    """
+    fx = _fixtures(tmp_path, chars=3)
+    production_dir = tmp_path / "shots" / "2"
+    production_dir.mkdir(parents=True)
+    redirect = tmp_path / "candidate" / "refs" / "2"
+
+    rc.set_ref_dir_context(tmp_path / "candidate" / "refs")
+    try:
+        composed = rc.fit_refs(_three_buckets(fx), 3, production_dir, "ff")
+    finally:
+        rc.set_ref_dir_context(None)
+
+    assert composed, "拼表应当成功"
+    report = json.loads((redirect / "ref_compose_ff.json").read_text(encoding="utf-8"))
+    assert report["tag"] == "ff" and report["included"] == 5
+    # 拼出来的参考表（在 redirect 下）必须为 composed 里的每一项
+    sheets = [p for p in composed if Path(p).parent == redirect]
+    assert sheets, "至少有一张拼合参考表应落在实验目录"
+    assert all(Path(p).exists() for p in sheets)
+    assert list(production_dir.iterdir()) == [], "正式目录必须一个文件都没多"
+
+
+def test_ref_dir_context_is_off_by_default(tmp_path):
+    """未设上下文 → 行为与历史版本一致（落调用方给的目录）."""
+    fx = _fixtures(tmp_path, chars=3)
+    target = tmp_path / "shots" / "1"
+    composed = rc.fit_refs(_three_buckets(fx), 3, target, "lf")
+    assert composed
+    assert (target / "ref_compose_lf.json").is_file()
+    assert any(p.name.startswith("ref_sheet_") for p in target.iterdir())
+    assert rc.current_ref_dir() is None

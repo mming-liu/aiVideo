@@ -132,7 +132,8 @@ def main(argv=None) -> int:
     payload = build(root=root, sources=args.source, inputs=args.input,
                     ledgers=args.ledger, commands=args.command, readings=readings)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(out, payload, ensure_ascii=False, indent=2)
     print(json.dumps({"status": "FROZEN", "out": str(out),
                       "files": len(payload["files"]), "missing": payload["missing"],
                       "ledger_rows": [x.get("rows") for x in payload["ledgers"]]},
