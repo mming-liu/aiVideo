@@ -1,4 +1,5 @@
 """step03_tts_audio - TTS audio generation entry point"""
+import json
 import sys
 from pathlib import Path
 import os

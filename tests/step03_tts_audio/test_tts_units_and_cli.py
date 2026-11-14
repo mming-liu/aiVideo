@@ -266,3 +266,15 @@ def test_main_plan_only_writes_units_and_calls_no_provider(tmp_path, monkeypatch
     assert not (attempt / "manifest.json").exists()
     assert not (attempt / "outputs").exists()
     assert not (tmp_path / "out").exists() or not list((tmp_path / "out").rglob("*.mp3"))
+
+    # S05 声音准备报告（所需/实际/窗口/冲突）必须真的落盘。
+    # 2026-11-14 实测：`main.py` 只写了 `import json as _json` 却没在模块顶部
+    # `import json`，第 422 行的 `json.dumps` 抛 NameError，被下面的 `except`
+    # 吞成一条 warn —— 于是这份报告在 plan-only 里**从来没被写出来过**，而日志
+    # 仍然一片正常。断言文件存在，才挡得住"报告静默缺失"。
+    vp_file = cand / "plan" / "voice_preparation.json"
+    assert vp_file.is_file(), "plan-only 必须落 voice_preparation.json（S05 报告）"
+    vp = json.loads(vp_file.read_text(encoding="utf-8"))
+    assert vp["schema"] == "voice_preparation.v1"
+    assert isinstance(vp.get("codes"), list)
+    assert vp.get("feedback")

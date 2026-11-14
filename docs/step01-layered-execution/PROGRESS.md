@@ -223,11 +223,44 @@ R5 作为待送审对象期间发现两个问题，都落在**判据层**，分�
 
 细节与完整读数见 `U6-r6-freeze-2026-11-14.md`。
 
+## R6 的 S03–S08（2026-11-14 已执行完毕）
+
+授权 `u6-audit-r6-20261114-0655`（`granted_by=user`、`max_sends=1`、
+`binding_digest=e19acd18…`）。**S03 一次通过**：`audit_status=ok`、`blocking=[]`、
+8 条意见全是 advisory、耗时 423.8 s、`truncated=False`，只发了 1 次请求
+（`remaining 1→0`、`attempts=1`）。
+
+| 阶段 | 结果 |
+|---|---|
+| S04 隔离提交 | `COMMITTED`，正式目录零改动 |
+| S05 零调用预检 | 02b `ready=1/blocked=0/network_calls=0`；03 五声音单元、时间线 75.25 s、零 provider；身份核对 11 项全绿 |
+| S06 正式采纳 | `COMMITTED`、`reused_audit=true`、`adoption=updated`；生产 revision `0afa8074…`、质量 PASS（hard 0 / visual 0 / advisory 78）；台账仍 31 行（**没有新调用**） |
+| S07 受控图片 | plan-only `images_total=2/model_sends=0`；实跑 **2 次图片 POST**；账本 `31→33/172`；shot 2 FF **0 次 POST** 且 sha 未变 |
+| S08 | 本段 + `U6-r6-S03-S08-closeout-2026-11-14.md` |
+
+- **S05 抓到并修掉一个真缺陷**：`step03_tts_audio/main.py` 顶部没有 `import json`
+  （只有局部 `import json as _json`），§422 的 `json.dumps` 抛 `NameError` 被
+  `except` 吞成 warn —— 结果是**声音准备报告在 plan-only 里从来没被写出来过**。
+  补一行导入 + 3 条断言（已验证去掉导入会红），`test_tts_units_and_cli.py` 11 passed。
+- **唯一未完成项**：shot 2 FF 的只读 QC 重检 3 次全部 429（视觉通道限流），
+  QC 结论**未取得**，sidecar 记 `qc_call_failed`（fail-closed，不会假通过）。
+  图片本身 0 次 POST、字节未变；通道恢复后重跑 `.dsh/.../r6_s07_shot2_qc.py` 即可。
+- **一处操作失误已如实记账**：S07 实跑时漏设 `STEP02A_IMAGE_BUDGET_TOTAL`，
+  预算护栏当时没有生效（只靠 `QC_MAX_ATTEMPTS=2` 兜底），实际只发了 2 次；
+  事后按 2 条 `image_saved` + 2 条 `status=200` 的证据用 `post_budget` 自身 API
+  补记到 33，未按估算改数。
+- **一处序列化差异**：包内 `quality_sha256=9843de08…` 与采纳后文件不同，
+  但 `json.loads()` 后 dict 完全相等，只差 1 个尾部 `\r\n`
+  （构建脚本多写 `"\n"`，生产走 `atomic_dump_json`）。**本轮不重冻结**
+  （会作废刚 PASS 的审计身份），改为 R7 及以后修构建工具。
+
 ## 剩余与下一步
 
-- **R6 停在 S03 之前，等 S02 单次授权**。需新 `authorization_id`（不得复用 R1–R5）、
-  `binding_digest` 逐字填 `e19acd18bab2f47798288113879689ba`、`budget.remaining` 改 1。
-  拿到授权后才跑 S03 隔离审计 → S04 → S05 → S06 → S07 → S08。
+- **shot 2 FF 的 QC 重检待通道恢复**：重跑
+  `python .dsh/u6_closeout_20261110/r6_s07_shot2_qc.py`，不涉及任何图片再生成。
+- **架构口径（用户 2026-11-14 拍板）**：`shared/prompt_contradiction.py` 与
+  `tools/script_preflight.py` 当前**不**纳入 `RULE_SOURCE_FINGERPRINT`，不开启
+  R7 重冻结；`script_preflight` 作为打包前固定零调用预检，待本章走完再议主门合入。
 - **本机删除审计门会让"大套件一次跑"变红，这是环境策略而非用例失败**（2026-11-14 更正）。
   唯一失败形态是 `[safe-delete]…CONFIRM_REQUIRED {count:≥50, threshold:50}` →
   进程被 `SystemExit(1)` 打断，失败条数与该标记条数一一对应。
