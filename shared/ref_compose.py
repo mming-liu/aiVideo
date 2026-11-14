@@ -540,6 +540,8 @@ def fit_refs(
     sheet_dir: Path | str,
     sheet_tag: str,
     omissions: list[dict] | None = None,
+    *,
+    dry_run: bool = False,
 ) -> list[str]:
     """把分组参考图无损压缩到 limit 个名额.
 
@@ -551,6 +553,10 @@ def fit_refs(
 
     omissions: 本次**主动省略**的参考类别及依据（如「特写帧不注入场景资产图」）。
         省略必须带理由，写进组合报告；没有依据的省略不允许静默发生。
+
+    dry_run: 只计算「会返回哪些路径」，**不建目录、不拼图、不写报告**。供
+        `--plan-only` 与生成链共用同一组合顺序；若上一次生成留下的参考表还在，
+        路径与字节摘要与实跑一致，缓存判据因此同源（2026-11-14 Step D）。
 
     Returns:
         ≤limit 个路径的列表。极端兜底（拼图全部失败）时裁剪到 limit 并保留
@@ -575,10 +581,11 @@ def fit_refs(
         return []
 
     sheet_dir = _resolve_sheet_dir(sheet_dir)
-    try:
-        sheet_dir.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
+    if not dry_run:
+        try:
+            sheet_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
 
     def _sheet(name: str, paths: list[str], kind: str | None = None) -> str:
         # 文件名后缀仅作向后兼容的**辅助**线索；成员身份与区域以 refmap sidecar
@@ -589,6 +596,22 @@ def fit_refs(
             if names:
                 suffix = "_" + "+".join(names)
         out = str(sheet_dir / f"ref_sheet_{sheet_tag}_{name}{suffix}.png")
+        if dry_run:
+            # 只预测路径：不拼图、不落盘。参考表是**内容寻址**的（成员路径+字节
+            # 摘要后缀），这里用同一算法算出目标名；上一轮生成过则文件仍在，
+            # 摘要可复用，缓存判据与实跑同源。
+            h = hashlib.sha256()
+            for item in paths:
+                p = Path(item)
+                h.update(str(p).encode("utf-8"))
+                try:
+                    h.update(hashlib.sha256(p.read_bytes()).digest())
+                except OSError:
+                    h.update(b"unreadable")
+            target = Path(out)
+            target = target.with_name(
+                target.stem + "_" + h.hexdigest()[:20] + target.suffix)
+            return str(target)
         stitched, _layout = _atomic_reference_sheet(paths, out, kind=kind or name)
         return stitched if stitched else ""
 
@@ -638,8 +661,9 @@ def fit_refs(
     if len(composed) > limit:
         dropped = [{"path": p, "reason": "limit_truncation"} for p in composed[limit:]]
         composed = composed[:limit]
-    _write_compose_report(sheet_dir, sheet_tag, clean, composed, omissions, dropped,
-                          included=len(flat))
+    if not dry_run:
+        _write_compose_report(sheet_dir, sheet_tag, clean, composed, omissions, dropped,
+                              included=len(flat))
     return composed
 
 

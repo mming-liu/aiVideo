@@ -309,6 +309,28 @@ G1 判别力已用「旧豁免临时加回」验证：同一动态用例从 BLOC
   补验：**`qc_passed`**（1 条 warning：左手手指轻微模糊），图片 sha `4089f234…`、
   内容哈希 `06ab04ab252884f8`、账本 `33→33` 均未变。**U6 S07/S08 收口。**
 
+## 2026-11-15 Step C + Step D（零调用）
+
+详见 `StepC-StepD-20261115.md`。
+
+- **C1–C7 入主门**：判据迁到 `shared/script_preflight.py`，`quality_issues` 直接消费；
+  五类判据（C1/C6 hard、C4/C5/C7 advisory）；`RULE_VERSION`/`QUALITY_RULE_VERSION`
+  升到 **2026-11-14.2**，指纹 `d3ab095ffa4c501a → fdbc4c5bf56cdefa`。
+- **零调用重签**：`production_context.py --refresh-gate` exit 0、`model_sends=0`；
+  `script_result.json` 字节未变（`3273672c…`），commit/adoption 已写 `gate_refresh`；
+  `verify_step01_commit_manifest` → COMMITTED。
+- **隔离审计基线**：`STEP01_BASELINE_CHAPTER_DIR` / 包内 `baseline_chapter_dir`
+  显式只读；未声明不读现场产物。
+- **合跑 flake**：`tests/shared` + 3 个 step01 文件，正反两序各 **1616 passed / 1 skipped**；
+  17 条 flake 当前未复现，未改夹具。
+- **Step 02a 受保护帧防删**：`.lock_frame*` 标记与 `STEP02A_PROTECTED_FRAMES`；9 处删帧
+  全部走 `_del_frame_unless_protected`；`test_frame_protection.py` **8 passed**。
+- **plan-only 同源/零写入**：`fit_refs(dry_run=True)` 只预测内容寻址路径；
+  `step02a --plan-only --shots 1,2` 实跑 **exit 0 / PRODUCTION_UNCHANGED=true**。
+  帧状态：shot 1 FF、shot 2 FF cached；shot 1 LF、shot 2 LF **generate**（旧产物，
+  U7 需按实际数量生成）。
+- **G3 未合入**（Step 02b 正文参考绑定契约改动，留待下一工作项）。
+
 ## 剩余与下一步
 
 - **shot 2 FF 的 QC 重检待通道恢复**：重跑

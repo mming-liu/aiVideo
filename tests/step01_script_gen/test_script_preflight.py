@@ -187,3 +187,35 @@ def test_run_is_order_independent():
     first = _scoped(script, set(pack["scope"]))
     second = _scoped(script, set(pack["scope"]))
     assert first == second
+
+
+# ---------------------------------------------------------------------------
+# 5. 2026-11-14 Step C：主质量门与预检共用同一实现
+# ---------------------------------------------------------------------------
+
+def test_main_quality_gate_consumes_the_same_preflight_judgements():
+    """C1/C4/C5/C6/C7 进主门后，`collect_structured_issues` 必须给出同一结论.
+
+    这条不复制规则：期望值直接来自 `pf.run()`（同一 `shared/script_preflight.py`）。
+    若主门另写一份判据、或漏接某一类，这里会红。
+    """
+    from step01_script_gen import quality_issues as qi
+
+    cases = [
+        ("presence_peak_frame_drop", "defect_exit_evidence_removed"),
+        ("location_drift_elsewhere", "defect_cut_to_other_place"),
+        ("stage_completed_desc", "defect_pre_but_completed"),
+        ("duplicate_cross_field", "defect_verbatim_injection"),
+        ("image_prompt_camera_leak", "defect_camera_word_in_desc"),
+    ]
+    packs = builder.load_packs()
+    for pack_id, case_id in cases:
+        script = builder.build_case(packs[pack_id], case_id)["script"]
+        expected = {i["code"]: i["severity"] for i in pf.run(script)
+                    if i["code"] in qi._PREFLIGHT_GATE_CODES}
+        issues, checker_failed, _ = qi.collect_structured_issues(script, set(), set())
+        got = {i.code: i.severity for i in issues
+               if i.code in qi._PREFLIGHT_GATE_CODES}
+        assert not checker_failed, (pack_id, case_id)
+        assert expected, "夹具必须真的触发该判据：%s::%s" % (pack_id, case_id)
+        assert got == expected, (pack_id, case_id, got, expected)

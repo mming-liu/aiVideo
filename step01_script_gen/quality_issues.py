@@ -17,7 +17,7 @@ from typing import Iterable
 
 from step01_script_gen.subject_attribution import leading_named_span
 
-RULE_VERSION = "2026-11-14.1"
+RULE_VERSION = "2026-11-14.2"
 RULE_IMPLEMENTATION = "evidence-gated-writes-v1"
 
 
@@ -64,6 +64,12 @@ def _compute_rule_source_fingerprint() -> str:
         project / "shared" / "quality_gate.py",
         project / "shared" / "semantic_barrier.py",
         project / "_text_gen" / "deepseek_schema.py",
+        # 2026-11-14 Step C：脚本级确定性预检（C1/C4/C5/C6/C7）与矛盾词表进入
+        # 主质量门后，它们就是「什么算 blocking / 什么能修」的一部分——只改判据
+        # 而不改本文件时，旧质量报告/审计必须失效，否则会被错误复用。
+        project / "shared" / "script_preflight.py",
+        project / "shared" / "prompt_contradiction.py",
+        project / "shared" / "prompt_contradiction_lexicon.py",
     ]
     # v6.112（总计划 §1.3 / 审核 P2-5 后半段）：判定实现还有两处成建制的目录——
     # `constraints/`（70+ 条硬修复 + engine + rules_index）与 `prompt_semantic/`
@@ -1568,6 +1574,41 @@ def _text_integrity_issues(script: dict) -> list[Issue]:
     return issues
 
 
+#: 2026-11-14 Step C：并入主质量门的脚本级预检判据（与 `tools/script_preflight.py`
+#: 共用 `shared/script_preflight.py` 同一实现）。
+#: C1/C6 在预检里就是 hard（确定性结构事实）；C4/C5/C7 保持 advisory——它们在
+#: R4/R5/R6 实盘零误报，但仍是启发式措辞判据，先以 advisory 进报告；是否升级为
+#: blocking 需另做跨内容校准，不在本轮擅自收紧准入。
+_PREFLIGHT_GATE_CODES = (
+    "layout_presence_gap",
+    "duplicate_injection",
+    "location_drift",
+    "stage_progress_mismatch",
+    "image_prompt_leak",
+)
+
+
+def _script_preflight_issues(script: dict) -> list[Issue]:
+    """`shared.script_preflight.run()` 的达阈判据 → 主质量门 `Issue`."""
+    from shared import script_preflight
+    out: list[Issue] = []
+    for rec in script_preflight.run(script):
+        if not isinstance(rec, dict):
+            continue
+        code = str(rec.get("code") or "")
+        if code not in _PREFLIGHT_GATE_CODES:
+            continue
+        severity = str(rec.get("severity") or "advisory")
+        out.append(Issue(
+            code=code, severity=severity,
+            message=str(rec.get("message") or ""),
+            shot_id=rec.get("shot"),
+            frame_id=str(rec.get("frame") or ""),
+            field_path=code,
+            repairable=severity in ("hard", "visual_risk")))
+    return out
+
+
 def collect_structured_issues(script: dict, blocking_categories: set[str],
                               video_only_categories: set[str],
                               checklist_runner=None) -> tuple[list[Issue], bool, str]:
@@ -1651,6 +1692,17 @@ def collect_structured_issues(script: dict, blocking_categories: set[str],
     # v6.98（2026-09-22 审核 P0-3）：语义/结构写入与时间写入**同一时点**判定。
     issues.extend(_semantic_write_audit_issues(script))
     issues.extend(final_time_invariant_issues(script))
+    # 2026-11-14 Step C：脚本级确定性预检（C1/C4/C5/C6/C7）——与
+    # `tools/script_preflight.py` 共用 `shared/script_preflight.py` 同一实现。
+    # 检测器异常 = 该脚本没有被检测，不能当成「没问题」（与跨字段检测同口径）。
+    try:
+        issues.extend(_script_preflight_issues(script))
+    except Exception as exc:
+        checker_failed = True
+        issues.append(Issue(
+            "CHECK_FAILED", "hard",
+            "脚本级预检异常（禁止按 PASS 处理）: %s" % exc,
+            repairable=False))
     # Stable dedupe.
     seen = set()
     out = []

@@ -181,11 +181,24 @@ def _frame_prompt(unit: dict, characters: list[dict], kind: str) -> tuple[str, s
 
 
 def _frame_refs(unit: dict, characters: list[dict], kind: str) -> list[dict]:
-    from shared.vimax_bridge import _collect_frame_refs_for_shot
+    """画面计划里的参考图清单（**只读**：不拼图、不写报告）.
 
-    paths = _collect_frame_refs_for_shot(
+    2026-11-14 Step D：此前调用 `_collect_frame_refs_for_shot`（内部走
+    `_compose_frame_refs_by_category` → `fit_refs` 非 dry-run），构建计划时
+    会把 `ref_compose_*.json`/参考表写进正式 shots 目录——`--plan-only` 的
+    "零写入"因此不成立。这里改为同一 buckets + `fit_refs(dry_run=True)`：
+    只预测路径，路径与生成链同源，但不落盘。
+    """
+    from shared.vimax_bridge import _collect_frame_refs_for_shot, shot_work_dir
+    from shared.ref_compose import active_image_ref_limit, fit_refs
+
+    data = _collect_frame_refs_for_shot(
         unit, characters, limit=12,
-        for_frame="尾帧" if kind == "lf" else "首帧")
+        for_frame="尾帧" if kind == "lf" else "首帧", return_buckets=True)
+    tag = "lf" if kind == "lf" else "ff"
+    paths = fit_refs(data["buckets"], active_image_ref_limit(),
+                     shot_work_dir(unit.get("index", 0)), tag,
+                     omissions=data.get("omissions"), dry_run=True)
     return _ref_entries(list(paths or []))
 
 

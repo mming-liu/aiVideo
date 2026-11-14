@@ -690,6 +690,20 @@ def main(argv=None) -> int:
     os.environ["STEP01_LOG_PATH"] = str(out_root / "step01.log")
     os.environ["TEXT_CALL_LEDGER"] = str(out_root / "step01_calls.jsonl")
 
+    # 2026-11-14 Step C：隔离审计的**只读基线章目录**。候选根里没有 COMMITTED
+    # 基线，M1.2 增量作用域会退化成全量审计；包内可显式声明生产章目录，只读
+    # 加载后计算 changed_shot_ids。未声明 = 旧行为（不读任何现场产物）。
+    baseline = str(pkg.get("baseline_chapter_dir") or "").strip()
+    if baseline:
+        baseline_path = Path(baseline)
+        if not baseline_path.is_absolute():
+            baseline_path = (root / baseline_path).resolve()
+        if not baseline_path.is_dir():
+            return _refuse("baseline_invalid",
+                           "baseline_chapter_dir 不存在或不是目录: %s" % baseline_path,
+                           would_send=0)
+        os.environ["STEP01_BASELINE_CHAPTER_DIR"] = str(baseline_path)
+
     sys.path.insert(0, str(root))
     if not args.dry_run:
         # 复核 P1：`budget.unlimited` 必须核**实际**通道（provider/模型/端点），

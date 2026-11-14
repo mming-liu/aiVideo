@@ -2309,12 +2309,30 @@ def _shot_semantic_digest(shot: dict) -> str:
     return _hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _baseline_chapter_dir():
+    """增量审计作用域的**只读基线章目录**.
+
+    默认 = 当前章目录（普通生产提交：基线就是上一次 COMMITTED 的稿子）。
+    隔离审计（`tools/audit_frozen_candidate.py`）在候选根里没有 COMMITTED 基线，
+    由包内 `baseline_chapter_dir` 或 `STEP01_BASELINE_CHAPTER_DIR` **显式声明**
+    生产章目录，只读加载后计算 `_active_audit_scope`。
+
+    只认显式声明：普通 pytest 单元测试/无声明运行绝不读取现场产物，避免测试
+    依赖开发机上的 `.tmp`/`output`（AGENTS.md「内容无关性与夹具」）。
+    """
+    raw = (os.getenv("STEP01_BASELINE_CHAPTER_DIR") or "").strip()
+    if raw:
+        return Path(raw)
+    return CHAPTER_DIR
+
+
 def _committed_baseline_script():
-    """读取当前章节目录里已 COMMITTED 的基线稿；不可用/未验证时返回 None."""
+    """读取基线章目录里已 COMMITTED 的稿；不可用/未验证时返回 None."""
     import json as _json
     from shared.quality_gate import verify_step01_commit_manifest
-    path = CHAPTER_DIR / "script_result.json"
-    manifest_path = CHAPTER_DIR / "step01_commit.json"
+    base_dir = _baseline_chapter_dir()
+    path = base_dir / "script_result.json"
+    manifest_path = base_dir / "step01_commit.json"
     if not path.exists() or not manifest_path.exists():
         return None
     try:
@@ -2322,7 +2340,7 @@ def _committed_baseline_script():
         if str(manifest.get("status") or "") != "COMMITTED":
             return None
         script = _json.loads(path.read_text(encoding="utf-8"))
-        verify_step01_commit_manifest(CHAPTER_DIR, script, stage="step01",
+        verify_step01_commit_manifest(base_dir, script, stage="step01",
                                       expected_chapter=NOVEL_CHAPTER)
         return script
     except Exception:

@@ -322,7 +322,7 @@ def _plan_frame_state(unit: dict, shot_dir: Path, characters: list,
         _collect_frame_refs_for_shot, _get_frame_content_hash,
         _is_action_shot, is_empty_scene,
     )
-    from shared.ref_compose import active_image_ref_limit, fit_flat
+    from shared.ref_compose import active_image_ref_limit, fit_refs
 
     idx = int(unit.get("index", 0))
     is_ff = frame_kind == "first_frame"
@@ -331,19 +331,26 @@ def _plan_frame_state(unit: dict, shot_dir: Path, characters: list,
     if not path.is_file() or not hash_path.is_file():
         return "generate"
     try:
-        refs = _collect_frame_refs_for_shot(
-            unit, characters, limit=5, for_frame="首帧" if is_ff else "尾帧")
-        if not is_ff:
+        limit = active_image_ref_limit()
+        if is_ff:
+            # 与 `_compose_frame_refs_by_category`（生成链首帧）同一组合：分类
+            # buckets + fit_refs(tag="ff")；dry_run 只预测路径、不拼图不写报告。
+            _ff = _collect_frame_refs_for_shot(
+                unit, characters, limit=5, for_frame="首帧", return_buckets=True)
+            refs = fit_refs(_ff["buckets"], limit, shot_dir, "ff",
+                            omissions=_ff.get("omissions"), dry_run=True)
+        else:
             ff = shot_dir / FIRST_FRAME_FILENAME
             if not ff.is_file():
                 return "generate"
-            refs = [str(ff)] + [p for p in refs if p != str(ff)]
-        limit = active_image_ref_limit()
-        valid = [p for p in refs if p and Path(p).exists()]
-        if len(valid) > limit:
-            # fit_flat 会落盘内容寻址参考表；plan-only 不写盘，保守按文件存在计。
-            return "cached"
-        refs = fit_flat(refs, limit, shot_dir, f"shot{idx}_{'ff' if is_ff else 'lf'}")
+            # 与 `gen_shot_frames` 的尾帧完全一致：首帧整图 + 分类 buckets 一次压缩。
+            # dry_run 只预测路径、不拼图不落盘；上一轮生成留下的参考表仍在时，
+            # 路径与字节摘要与实跑同源，缓存判据不会因组合方式不同而漂移。
+            _lf = _collect_frame_refs_for_shot(
+                unit, characters, limit=5, for_frame="尾帧", return_buckets=True)
+            buckets = [("frame", [str(ff)])] + list(_lf["buckets"])
+            refs = fit_refs(buckets, limit, shot_dir, f"shot{idx}_lf",
+                            omissions=_lf.get("omissions"), dry_run=True)
         lock = "no_layout" if (not is_ff or _is_action_shot(unit, characters)) else "layout"
         current = _get_frame_content_hash(
             unit, is_empty_scene(unit, characters), refs,
@@ -585,6 +592,17 @@ def main():
     # 运行范围必须在 script_file()/chapter_dir() 之前生效（本入口的章级路径全部惰性解析）
     scope = apply_scope(args.chapter, args.book, args.book_name)
 
+    # 2026-11-14 Step D：plan-only 对章目录必须零写入。`_bridge_log` 走
+    # `resolve_log_file`，未设上下文时会往章目录追加 `step02.log`。在任何
+    # 质量门/哈希计算之前把日志根钉到临时目录，结束恢复进程级上下文。
+    _plan_log_ctx = None
+    if args.plan_only:
+        import tempfile
+        from shared import log_utils as _log_utils
+        if _log_utils.current_log_dir() is None:
+            _plan_log_ctx = tempfile.mkdtemp(prefix="step02a_plan_logs_")
+            _log_utils.set_log_context(_plan_log_ctx)
+
     only_indices = parse_shot_selector(args.shots)
 
     # 帧选择解析：--all-frames=全部帧；--frames=精确选择；均未给=默认 Mode A/B
@@ -639,19 +657,26 @@ def main():
         raise
 
     if args.plan_only:
-        with open(script_path, "r", encoding="utf-8") as _sf_plan:
-            _script_plan = json.load(_sf_plan)
-        _report = _plan_only_report(_script_plan, work_dir, only_indices, frames,
-                                    scope=scope)
-        print(json.dumps(_report, ensure_ascii=False, indent=2))
-        if args.plan_out:
-            from step02a_frame_gen.execution_plan import write_visual_plan
-            _target = write_visual_plan(_report["visual_plan"], Path(args.plan_out))
-            logger.info(f"[PLAN] 候选画面计划已写出: {_target}")
-        if (_report.get("prompt_preflight") or {}).get("status") == "blocked" \
-                or _report.get("visual_plan_status") == "blocked":
-            raise SystemExit(2)
-        return
+        try:
+            with open(script_path, "r", encoding="utf-8") as _sf_plan:
+                _script_plan = json.load(_sf_plan)
+            _report = _plan_only_report(_script_plan, work_dir, only_indices, frames,
+                                        scope=scope)
+            print(json.dumps(_report, ensure_ascii=False, indent=2))
+            if args.plan_out:
+                from step02a_frame_gen.execution_plan import write_visual_plan
+                _target = write_visual_plan(_report["visual_plan"], Path(args.plan_out))
+                logger.info(f"[PLAN] 候选画面计划已写出: {_target}")
+            if (_report.get("prompt_preflight") or {}).get("status") == "blocked" \
+                    or _report.get("visual_plan_status") == "blocked":
+                raise SystemExit(2)
+            return
+        finally:
+            if _plan_log_ctx is not None:
+                from shared import log_utils as _log_utils
+                _log_utils.set_log_context(None)
+                # 目录不在这里删：tee_logger 仍持有 step02.log 句柄（Windows
+                # 无法 unlink）；它是 %TEMP% 下的一个小目录，进程退出后可清理。
 
     logger.info(f"[INFO] step02a_frame_gen start")
     logger.info(f"  script: {script_path}")

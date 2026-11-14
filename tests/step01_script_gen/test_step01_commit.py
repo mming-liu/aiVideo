@@ -1522,3 +1522,32 @@ def test_adoption_receipt_writes_once_after_verification_passes(tmp_path, monkey
     assert written["script_revision"] == "rev-test"
     assert written["source_run_id"] == "run-test"
     assert written["formal_chapter"] == str(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-14 Step C：隔离审计的显式只读基线
+# ---------------------------------------------------------------------------
+def test_baseline_chapter_dir_is_explicit_and_does_not_fall_back(
+        chapter, monkeypatch, tmp_path):
+    """`STEP01_BASELINE_CHAPTER_DIR` 显式声明后只读该目录；未声明才用 CHAPTER_DIR.
+
+    隔离审计（candidate 根没有 COMMITTED 基线）靠这条读生产章的已采纳稿来计算
+    M1.2 增量作用域；普通 pytest / 未声明运行不得去读现场产物。
+    """
+    import step01_script_gen.main as m
+    from step01_script_gen.quality_issues import RULE_SOURCE_FINGERPRINT
+
+    _fake_audit(monkeypatch, lambda s, n: _audit_payload(
+        s, scope=m.STEP01_AUDIT_SCOPE, fingerprint=RULE_SOURCE_FINGERPRINT))
+    m._commit_step01_outputs(_script(), "")
+    assert m._committed_baseline_script() is not None, "当前章的已提交稿应可读"
+
+    other = tmp_path / "baseline_other"
+    other.mkdir()
+    monkeypatch.setenv("STEP01_BASELINE_CHAPTER_DIR", str(other))
+    assert m._baseline_chapter_dir() == other
+    assert m._committed_baseline_script() is None, (
+        "显式声明基线后不得回落到 CHAPTER_DIR（否则隔离审计仍读现场产物）")
+
+    monkeypatch.delenv("STEP01_BASELINE_CHAPTER_DIR")
+    assert m._baseline_chapter_dir() == m.CHAPTER_DIR

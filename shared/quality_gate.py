@@ -25,7 +25,7 @@ from typing import Any
 from shared.paths import STEP01_ARTIFACT_FILES, STEP01_COMMIT_FILENAME
 
 
-QUALITY_RULE_VERSION = "2026-11-14.1"
+QUALITY_RULE_VERSION = "2026-11-14.2"
 
 
 class QualityGateError(RuntimeError):

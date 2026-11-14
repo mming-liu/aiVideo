@@ -365,6 +365,8 @@ tests/step02a_frame_gen/*
 !tests/step02a_frame_gen/test_image_prompt_quality.py
 !tests/step02a_frame_gen/test_keyframe_acceptance.py
 !tests/step02a_frame_gen/test_image_retry_cap.py
+# 2026-11-14 Step D：受保护帧防删 + fit_refs(dry_run) 零写入（干净检出可跑）
+!tests/step02a_frame_gen/test_frame_protection.py
 !tests/step02a_frame_gen/test_subset_working_dir.py
 # 2026-11-08：WP3 收口。9372cb9 只写了本条 allowlist 却没把用例入库，
 # 后写的 `tests/step02a_frame_gen/*` 又把它盖掉——这次连文件一起提交。

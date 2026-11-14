@@ -15,6 +15,7 @@ v3: 摄像机分组 + 镜头分解 + 首帧锚定 + 尾帧生成 + 视觉衔接
 """
 
 import asyncio
+import fnmatch
 import json
 import os
 import re
@@ -1198,6 +1199,79 @@ def _del_frame_and_hash(frame_path, hash_path, label, idx, logger):
     except Exception:
         pass
     logger.verbose(f"  [FRAME] {label} shot_{idx} QC critical，已删坏帧+哈希，重新生成")
+
+
+#: 2026-11-14 Step D：受保护帧标记（只影响「删不删」，不影响生成与 QC）。
+_PROTECTED_FRAME_MARKER = ".lock_frame"
+
+
+def _protected_frames_env() -> list[str]:
+    raw = os.getenv("STEP02A_PROTECTED_FRAMES") or ""
+    return [part.strip().lower() for part in re.split(r"[,;]", raw) if part.strip()]
+
+
+def _frame_is_protected(shot: dict, frame_path, frame_kind: str = "",
+                        kf_index: int | None = None) -> bool:
+    """该帧是否被显式锁定：受保护帧即使 QC critical 也不得删除原图.
+
+    两种声明方式（都只影响删除动作）：
+
+    1. 镜头目录标记文件（推荐，按镜头/按帧）：
+       `.lock_frame`（整镜）或 `.lock_frame_<frame_kind>`
+       （`first_frame` / `last_frame` / `keyframe_<i>`）；
+    2. 环境变量 `STEP02A_PROTECTED_FRAMES`（逗号/分号分隔）：
+       - `<shot_index>:<frame_kind>[:<kf_index>]`，如 `2:first_frame`；
+       - 路径 glob（对完整路径与文件名各匹配一次），如 `*first_frame.png`。
+
+    未声明 = 旧行为（QC critical 仍按 B7 删帧重抽）。
+    """
+    path = Path(frame_path)
+    shot_dir = path.parent
+    kind = str(frame_kind or "")
+    markers = [_PROTECTED_FRAME_MARKER]
+    if kind:
+        markers.append("%s_%s" % (_PROTECTED_FRAME_MARKER, kind))
+    if kind == "keyframe" and kf_index is not None:
+        markers.append("%s_keyframe_%d" % (_PROTECTED_FRAME_MARKER, int(kf_index)))
+    for name in markers:
+        if (shot_dir / name).exists():
+            return True
+
+    idx = str((shot or {}).get("index") if isinstance(shot, dict) else "")
+    for token in _protected_frames_env():
+        if ":" in token:
+            parts = token.split(":")
+            if parts[0] != idx:
+                continue
+            if len(parts) >= 2 and parts[1] and parts[1] != kind:
+                continue
+            if len(parts) >= 3 and parts[2]:
+                try:
+                    if int(parts[2]) != int(kf_index):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            return True
+        if (fnmatch.fnmatch(path.as_posix().lower(), token)
+                or fnmatch.fnmatch(path.name.lower(), token)):
+            return True
+    return False
+
+
+def _del_frame_unless_protected(shot, frame_path, hash_path, label, idx, logger,
+                                frame_kind: str = "",
+                                kf_index: int | None = None) -> bool:
+    """QC critical 的删帧动作：受保护帧只告警、不删；返回是否真的删除.
+
+    返回 True = 已删除（调用方继续重抽）；False = 受保护，调用方必须保留原图。
+    """
+    if _frame_is_protected(shot, frame_path, frame_kind, kf_index):
+        logger.verbose(
+            f"  [FRAME] {label} shot_{idx} 受保护，QC critical 不删原图"
+            "（sidecar 已记录，交人工复核）")
+        return False
+    _del_frame_and_hash(frame_path, hash_path, label, idx, logger)
+    return True
 
 
 def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
@@ -3935,8 +4009,11 @@ async def _gen_first_frame_async(
                     # 让 attempt 走到 1 触发 variation[1]——缓存的图本身就是原
                     # prompt 画的"已失败一次"，再用 variation[0] 画没意义。
                     if await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene):
-                        _del_frame_and_hash(ff_path, ff_hash_path, "首帧", idx, logger)
-                        continue
+                        if _del_frame_unless_protected(
+                                shot, ff_path, ff_hash_path, "首帧", idx, logger,
+                                "first_frame"):
+                            continue
+                        return str(ff_path)
                     else:
                         return str(ff_path)
                 else:
@@ -3944,14 +4021,20 @@ async def _gen_first_frame_async(
             elif script_mtime is not None and ff_path.stat().st_mtime >= script_mtime:
                 if _validate_frame(str(ff_path)):
                     if await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene):
-                        _del_frame_and_hash(ff_path, ff_hash_path, "首帧", idx, logger)
-                        continue
+                        if _del_frame_unless_protected(
+                                shot, ff_path, ff_hash_path, "首帧", idx, logger,
+                                "first_frame"):
+                            continue
+                        return str(ff_path)
                     else:
                         return str(ff_path)
             elif script_mtime is None and _validate_frame(str(ff_path)):
                 if await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene):
-                    _del_frame_and_hash(ff_path, ff_hash_path, "首帧", idx, logger)
-                    continue
+                    if _del_frame_unless_protected(
+                            shot, ff_path, ff_hash_path, "首帧", idx, logger,
+                            "first_frame"):
+                        continue
+                    return str(ff_path)
                 else:
                     return str(ff_path)
 
@@ -3985,16 +4068,11 @@ async def _gen_first_frame_async(
                                         characters, empty_scene, idx):
                     pass  # 修复成功：哈希未删（下次缓存命中即修好的图），继续 spatial fallback
                 elif attempt < max_retries:
-                    # 还有下一次 attempt → 删帧重抽（B7 修复）
-                    logger.verbose(f"  [FRAME] 首帧 shot_{idx} QC critical，删帧重生成")
-                    try:
-                        Path(ff_path).unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                    try:
-                        Path(ff_hash_path).unlink(missing_ok=True)
-                    except Exception:
-                        pass
+                    # 还有下一次 attempt → 删帧重抽（B7 修复）；受保护帧不删。
+                    if not _del_frame_unless_protected(
+                            shot, ff_path, ff_hash_path, "首帧", idx, logger,
+                            "first_frame"):
+                        return str(ff_path)
                     continue
                 else:
                     # 末次尝试仍 critical → 保留最不差一版（attempts_exhausted 留痕），
@@ -4141,8 +4219,11 @@ async def _gen_last_frame_async(
                     # B7：缓存命中但 QC critical → 删帧+删哈希，下次重生成
                     # v6.x.x P1 修：continue 让 attempt 走到 1 触发 variation[1]
                     if await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene):
-                        _del_frame_and_hash(lf_path, lf_hash_path, "尾帧", idx, logger)
-                        continue
+                        if _del_frame_unless_protected(
+                                shot, lf_path, lf_hash_path, "尾帧", idx, logger,
+                                "last_frame"):
+                            continue
+                        return str(lf_path)
                     else:
                         return str(lf_path)
                 else:
@@ -4150,15 +4231,21 @@ async def _gen_last_frame_async(
             elif script_mtime is not None and lf_path.stat().st_mtime >= script_mtime:
                 if _validate_frame(str(lf_path)):
                     if await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene):
-                        _del_frame_and_hash(lf_path, lf_hash_path, "尾帧", idx, logger)
-                        continue
+                        if _del_frame_unless_protected(
+                                shot, lf_path, lf_hash_path, "尾帧", idx, logger,
+                                "last_frame"):
+                            continue
+                        return str(lf_path)
                     else:
                         return str(lf_path)
             elif script_mtime is None and _validate_frame(str(lf_path)):
                 if _validate_frame(str(lf_path)):
                     if await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene):
-                        _del_frame_and_hash(lf_path, lf_hash_path, "尾帧", idx, logger)
-                        continue
+                        if _del_frame_unless_protected(
+                                shot, lf_path, lf_hash_path, "尾帧", idx, logger,
+                                "last_frame"):
+                            continue
+                        return str(lf_path)
                     else:
                         return str(lf_path)
 
@@ -4198,16 +4285,11 @@ async def _gen_last_frame_async(
                                         characters, empty_scene, idx):
                     return str(lf_path)
                 elif attempt < max_retries:
-                    # 还有下一次 attempt → 删帧重抽（B7 修复）
-                    logger.verbose(f"  [FRAME] 尾帧 shot_{idx} QC critical，删帧重生成")
-                    try:
-                        Path(lf_path).unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                    try:
-                        Path(lf_hash_path).unlink(missing_ok=True)
-                    except Exception:
-                        pass
+                    # 还有下一次 attempt → 删帧重抽（B7 修复）；受保护帧不删。
+                    if not _del_frame_unless_protected(
+                            shot, lf_path, lf_hash_path, "尾帧", idx, logger,
+                            "last_frame"):
+                        return str(lf_path)
                     continue
                 else:
                     # 末次尝试仍 critical → 保留最不差一版（attempts_exhausted 留痕），
@@ -4443,8 +4525,12 @@ async def _gen_keyframes_async(
                                                  characters, empty_scene,
                                                  prompt=shot.get(f"kf_{i}_desc_final"),
                                                  kf_index=i):
-                            _del_frame_and_hash(kf_path, kf_hash_path, f"关键帧{i}", idx, _kf_logger)
-                            continue
+                            if _del_frame_unless_protected(
+                                    shot, kf_path, kf_hash_path, f"关键帧{i}", idx,
+                                    _kf_logger, "keyframe", i):
+                                continue
+                            kf_paths.append(str(kf_path))
+                            break
                         else:
                             kf_paths.append(str(kf_path))
                             break
@@ -4456,8 +4542,12 @@ async def _gen_keyframes_async(
                                                  characters, empty_scene,
                                                  prompt=shot.get(f"kf_{i}_desc_final"),
                                                  kf_index=i):
-                            _del_frame_and_hash(kf_path, kf_hash_path, f"关键帧{i}", idx, _kf_logger)
-                            continue
+                            if _del_frame_unless_protected(
+                                    shot, kf_path, kf_hash_path, f"关键帧{i}", idx,
+                                    _kf_logger, "keyframe", i):
+                                continue
+                            kf_paths.append(str(kf_path))
+                            break
                         else:
                             kf_paths.append(str(kf_path))
                             break
@@ -4466,8 +4556,12 @@ async def _gen_keyframes_async(
                                              characters, empty_scene,
                                              prompt=shot.get(f"kf_{i}_desc_final"),
                                              kf_index=i):
-                        _del_frame_and_hash(kf_path, kf_hash_path, f"关键帧{i}", idx, _kf_logger)
-                        continue
+                        if _del_frame_unless_protected(
+                                shot, kf_path, kf_hash_path, f"关键帧{i}", idx,
+                                _kf_logger, "keyframe", i):
+                            continue
+                        kf_paths.append(str(kf_path))
+                        break
                     else:
                         kf_paths.append(str(kf_path))
                         break
@@ -4612,15 +4706,11 @@ async def _gen_keyframes_async(
                         kf_paths.append(str(kf_path))
                         break
                     if attempt < max_retries:
-                        _kf_logger.verbose(f"  [KEYFRAME] shot_{idx} keyframe_{i} QC critical，删帧重生成")
-                        try:
-                            Path(kf_path).unlink(missing_ok=True)
-                        except Exception:
-                            pass
-                        try:
-                            Path(kf_hash_path).unlink(missing_ok=True)
-                        except Exception:
-                            pass
+                        if not _del_frame_unless_protected(
+                                shot, kf_path, kf_hash_path, f"关键帧{i}", idx,
+                                _kf_logger, "keyframe", i):
+                            kf_paths.append(str(kf_path))
+                            break
                         continue
                     # 末次仍 critical → 保留（与 ff/lf 对齐：坏图比没图好）
                     _kf_logger.verbose(f"  [QC] shot_{idx} keyframe_{i} {attempt+1} 次尝试均 critical，"
