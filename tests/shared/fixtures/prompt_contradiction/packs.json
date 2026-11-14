@@ -1,0 +1,148 @@
+{
+  "schema": "prompt_contradiction_pack.v1",
+  "note": "shared.prompt_contradiction 的显式样本包。所有人物与场景均为匿名占位（甲某/乙某），不含任何具体作品词；换作品/换章节 = 换或加 pack，判据代码与测试都不改。expect 的取值是**判据族**（weapon/shadow/duplicate/punctuation/stage），由测试把消息映射回族，避免断言文案。",
+  "packs": [
+    {
+      "id": "weapon_possession",
+      "family": "weapon",
+      "why": "同一 holder 既被断言「持有刃器」又被断言「手中没有武器/刃器」——模型无法同时满足，只能抽奖。",
+      "discriminating": ["同 holder 的持有断言", "同 holder 的否认断言"],
+      "cases": [
+        {
+          "id": "legal_denial_only",
+          "prompt": "甲某手中没有武器，没有刀，没有剑。乙某右手握刀。",
+          "expect": [],
+          "why": "只有否认、没有同 holder 的持有断言，属于正常的「限定某人空手」。"
+        },
+        {
+          "id": "legal_consistent_holder",
+          "prompt": "乙某右手所握匕首寒光如月。【武器归属】甲某手中没有武器，没有刀，没有剑。",
+          "expect": [],
+          "why": "持有与否认分属不同 holder，取值一致。"
+        },
+        {
+          "id": "defect_possession_vs_denial",
+          "prompt": "【道具锚定】乙某的匕首在甲某手中（场景：水面）。【武器归属】武器（短刃、刀、剑）只能由乙某持有。甲某手中没有武器，没有刀，没有剑，没有短刃。",
+          "expect": ["weapon"],
+          "why": "同一个人既「匕首在手中」又「手中没有武器」。"
+        },
+        {
+          "id": "defect_blade_class_alias",
+          "prompt": "短刃在甲某手中，刃口朝下。甲某手中没有刀。",
+          "expect": ["weapon"],
+          "why": "短刃≈刀属同类刃器：否认「刀」即否认「短刃」，仍是对称矛盾。"
+        },
+        {
+          "id": "legal_denial_of_other_holder",
+          "prompt": "短刃在甲某手中。乙某手中没有刀。",
+          "expect": [],
+          "why": "同类刃器但 holder 不同，不构成矛盾。"
+        }
+      ]
+    },
+    {
+      "id": "shadow_ban",
+      "family": "shadow",
+      "why": "前文剧情需要「黑影/人影」，禁止条款又把它禁掉——模型会按禁令抹掉伏笔。",
+      "discriminating": ["禁令前是否提到黑影/人影", "禁令首词是黑影还是人影"],
+      "cases": [
+        {
+          "id": "defect_needs_shadow_but_banned",
+          "prompt": "画右水中一道黑影上浮，激起细微波纹直逼船头。【人物数量限制】画面中只允许出现以下角色：甲某、乙某。禁止出现任何其他人物、黑影、人影。",
+          "expect": ["shadow"],
+          "why": "需要黑影 + 禁令含黑影。"
+        },
+        {
+          "id": "legal_banned_but_not_needed",
+          "prompt": "甲某与乙某对坐舱中，灯影摇曳。禁止出现任何其他人物、黑影、人影。",
+          "expect": [],
+          "why": "禁令前没有黑影需求，禁令只是限制无关人员。"
+        },
+        {
+          "id": "legal_needs_shadow_ban_lists_figure_only",
+          "prompt": "画右水中一道黑影上浮，仅露半截。禁止出现任何其他人影。",
+          "expect": [],
+          "why": "设计内组合：威胁源是黑影，禁令只禁人影——保留黑影是刻意的。"
+        }
+      ]
+    },
+    {
+      "id": "duplicate_block",
+      "family": "duplicate",
+      "why": "同一段描述被整体注入两遍（模板拼接的典型事故），模型会把两遍当两个事实。",
+      "discriminating": ["≥24 字窗口是否非重叠重复"],
+      "cases": [
+        {
+          "id": "defect_block_injected_twice",
+          "prompt": "甲某：国字脸，剑眉星目，黑发束冠，身姿挺拔，弱冠之年，身着素白色轻袍，头戴方巾，赤脚。乙某跪坐船头。甲某：国字脸，剑眉星目，黑发束冠，身姿挺拔，弱冠之年，身着素白色轻袍，头戴方巾，赤脚。该小舟为窄身无篷舟。",
+          "expect": ["duplicate"],
+          "why": "角色描述块整块出现两次，超出 24 字窗口且不重叠。"
+        },
+        {
+          "id": "legal_varied_phrasing",
+          "prompt": "夜色水面，一叶无篷小舟静泊，甲某袒腹仰卧船头，仰面朝上双目紧闭。画右水中一道黑影蛰伏，仅一截刃尖微露水面。",
+          "expect": [],
+          "why": "同一批事实只出现一次，措辞不同，无 24 字重复。"
+        },
+        {
+          "id": "legal_below_judging_length",
+          "prompt": "甲某立于船头。乙某随后。",
+          "expect": [],
+          "why": "短于判据的最小长度（48 字），不做重复判定，避免误伤短模板。"
+        }
+      ]
+    },
+    {
+      "id": "punctuation",
+      "family": "punctuation",
+      "why": "「。。」「，，」是模板拼接痕迹，说明两个字段被硬接在一起。",
+      "discriminating": ["连续重复标点"],
+      "cases": [
+        {
+          "id": "defect_double_period",
+          "prompt": "水面渐渐平复。。乙某跪坐船头。",
+          "expect": ["punctuation"],
+          "why": "双句号。"
+        },
+        {
+          "id": "defect_double_comma",
+          "prompt": "甲某起身，，乙某退开半步。",
+          "expect": ["punctuation"],
+          "why": "双逗号。"
+        },
+        {
+          "id": "legal_single_punctuation",
+          "prompt": "水面渐渐平复。乙某跪坐船头。",
+          "expect": [],
+          "why": "标点正常。"
+        }
+      ]
+    },
+    {
+      "id": "ff_lf_stage",
+      "family": "stage",
+      "why": "首帧同时写了「动作还没开始」的前态词和「事情已经完成」的伤锚结束句——模型会自己选一个，选错就废一帧。",
+      "discriminating": ["前态词", "伤锚结束词"],
+      "cases": [
+        {
+          "id": "defect_pre_state_plus_finished_anchor",
+          "prompt": "甲某素白袍袒腹仰卧船头，仰面朝上双目紧闭，闭目吟哦。乙某潜伏在舟侧水下，仅露头部。伤处白袍心口一片暗红血迹洇开，血痕清晰可见。",
+          "expect": ["stage"],
+          "why": "前态（闭目/潜伏）+ 完成态伤锚同现。"
+        },
+        {
+          "id": "legal_pure_pre_state",
+          "prompt": "甲某素白袍袒腹仰卧船头，仰面朝上双目紧闭，闭目吟哦。乙某潜伏在舟侧水下，仅露头部。",
+          "expect": [],
+          "why": "纯前态，没有结束句。"
+        },
+        {
+          "id": "legal_pure_post_state",
+          "prompt": "乙某已没入水中。甲某仰卧不动，伤处白袍心口一片暗红血迹洇开，血痕清晰可见。",
+          "expect": [],
+          "why": "纯后态，没有前态词。"
+        }
+      ]
+    }
+  ]
+}

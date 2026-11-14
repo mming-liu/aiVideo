@@ -128,6 +128,13 @@ tests/*
 # 此前被 `tests/*` 一并挡掉。仅放行这一个文件，其余仍不入库。
 !tests/conftest.py
 !tests/verification_helpers.py
+# 2026-11-14 内容无关性棘轮：作品词清单、基线快照与门禁用例。
+# 这是 AGENTS.md「内容无关性与夹具」在测试语料侧的落点，干净检出必须能跑。
+!tests/_content_binding.py
+!tests/test_content_binding_ratchet.py
+!tests/fixtures/
+tests/fixtures/*
+!tests/fixtures/content_binding_baseline.json
 !tests/step01_script_gen/
 tests/step01_script_gen/*
 !tests/step01_script_gen/fixtures/
@@ -226,6 +233,14 @@ tests/enhancements/*
 # 2026-10-24：P3 拆分进入真实修订入口的离线矩阵 + 匿名样本夹具（随仓库交付）
 !tests/step01_script_gen/test_p3_split_entry.py
 !tests/step01_script_gen/p3_entry_fixtures.py
+# 2026-11-14 U6 R5：脚本级确定性预检（漏在镜角色 / 道具链 / 乐器跨字段 / 地点漂移 /
+# 关键帧 stage 与进度 / 跨字段重复注入）。按项目夹具制交付：样本包在
+# `fixtures/script_preflight/**`（已由上面的 fixtures 白名单放行），这里放行构造器与
+# 消费测试——否则干净检出只能跑到内联那版，夹具本身不被执行。
+!tests/step01_script_gen/script_preflight_builder.py
+!tests/step01_script_gen/test_script_preflight.py
+# 2026-11-14 U6 R5：修复闭环（缺陷→授权修复→复查）的夹具与契约用例
+!tests/step01_script_gen/test_repair_loop_contract.py
 # 187 条回归还含 source_revision 与 presentation_contract 两个受影响的既有套件；
 # 不放行它们，干净检出只能复现部分读数。source_revision 的夹具来自 legacy_semantic。
 !tests/step01_script_gen/test_source_revision.py
@@ -298,6 +313,8 @@ tests/tts/*
 !tests/shared/test_media_policy.py
 !tests/shared/test_shot_motion_checks.py
 !tests/shared/test_video_prompt_system.py
+# 2026-11-14：prompt 矛盾自检的夹具制回归（原内联版写死作品人名，已按 pack 重建）
+!tests/shared/test_prompt_contradiction_contract.py
 !tests/shared/test_frame_prompt_camera.py
 # 2026-11-01：本轮离线修复的契约用例**入库**（与上面"只可见不提交"不同）。
 # 仍需逐级放行父目录，再排除目录内容，最后精确放行文件。

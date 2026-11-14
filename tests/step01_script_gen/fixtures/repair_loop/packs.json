@@ -1,0 +1,144 @@
+{
+  "schema": "repair_loop_pack.v1",
+  "note": "「缺陷 → 授权修复 → 复查」闭环的显式样本包。每例声明：合法基线、把基线变成缺陷的字段级变异、以及审计点名后允许的修复改动（含授权路径）。三步都用同一套确定性判据复查，因此这一族与小说内容无关：换作品 = 换 aliases 或换 pack。人物一律匿名占位（甲/乙/丙）。",
+  "packs": [
+    {
+      "id": "peak_frame_actor_dropped",
+      "why": "关键帧序列里某在镜角色「在—不在—在」，中间帧漏人；修复必须只动被点名的那一帧。",
+      "source_codes": ["layout_presence_gap"],
+      "shots": [
+        {
+          "index": 3,
+          "location": "院中",
+          "scene": "院中·夜",
+          "ff_desc": "三人同立于院中",
+          "lf_desc": "三人再次同框",
+          "motion_desc": "前段：丙转身退开；后段：丙折返",
+          "prompt": "院中，三人同立",
+          "kfs": [
+            [{"name": "甲"}, {"name": "乙"}, {"name": "丙"}],
+            [{"name": "甲"}, {"name": "乙"}, {"name": "丙"}],
+            [{"name": "甲"}, {"name": "乙"}, {"name": "丙"}]
+          ],
+          "keyframes": [
+            {"desc": "三人同立于院中", "stage": "pre", "t_sec": 0.0},
+            {"desc": "丙抬手按在剑柄上", "stage": "approach", "t_sec": 2.0},
+            {"desc": "三人再次同框", "stage": "end", "t_sec": 4.0}
+          ]
+        }
+      ],
+      "defect": {
+        "patches": [
+          {"shot": 0, "path": "frame_layouts.kfs[1]", "value": [{"name": "甲"}, {"name": "乙"}]}
+        ],
+        "expect_codes": ["layout_presence_gap"]
+      },
+      "repair": {
+        "patches": [
+          {"shot": 0, "path": "frame_layouts.kfs[1]",
+           "value": [{"name": "甲"}, {"name": "乙"}, {"name": "丙"}]}
+        ],
+        "allowed": ["frame_layouts.kfs[1]"]
+      },
+      "aliases": {"甲": "阿大", "乙": "阿二", "丙": "阿三"}
+    },
+    {
+      "id": "shot_cut_to_other_place",
+      "why": "镜内硬切到 location 之外的地点；修复应重写这一句，而不是把 location 改成新地点（那会连带毁掉上一镜的连续性）。",
+      "source_codes": ["location_drift"],
+      "shots": [
+        {
+          "index": 13,
+          "location": "堤岸",
+          "scene": "堤岸·夜",
+          "ff_desc": "车马沿堤岸行过",
+          "lf_desc": "车影远去",
+          "motion_desc": "车马沿堤岸缓缓行过，渐渐远去",
+          "prompt": "堤岸夜色，车马行过",
+          "kfs": [[{"name": "甲"}]],
+          "keyframes": [
+            {"desc": "硬切至一柱香之后的堤岸官道，车影远去", "stage": "end", "t_sec": 2.0}
+          ]
+        }
+      ],
+      "defect": {
+        "patches": [
+          {"shot": 0, "path": "keyframes[0].desc",
+           "value": "硬切至一柱香之后的驿站大门，车影进入夜色"}
+        ],
+        "expect_codes": ["location_drift"]
+      },
+      "repair": {
+        "patches": [
+          {"shot": 0, "path": "keyframes[0].desc",
+           "value": "一柱香之后，车马沿堤岸官道渐渐远去"}
+        ],
+        "allowed": ["keyframes[0].desc"]
+      },
+      "aliases": {"甲": "阿大"}
+    },
+    {
+      "id": "verbatim_block_injection",
+      "why": "同一段描述被整块搬进另一个字段，step02a 会硬阻断；修复是把重复的那段改写掉，而不是删掉事实。",
+      "source_codes": ["duplicate_injection"],
+      "shots": [
+        {
+          "index": 5,
+          "location": "水面",
+          "scene": "水面·晨",
+          "ff_desc": "",
+          "lf_desc": "",
+          "motion_desc": "舟身猛地一沉，他身形稳如磐石",
+          "prompt": "画面开始，船身长约四米五、宽约一米三，船板上积着浅浅一层水，映着天光"
+        }
+      ],
+      "defect": {
+        "patches": [
+          {"shot": 0, "path": "motion_desc",
+           "value": "另外，船身长约四米五、宽约一米三，船板上积着浅浅一层水，映着天光，他身形稳如磐石"}
+        ],
+        "expect_codes": ["duplicate_injection"]
+      },
+      "repair": {
+        "patches": [
+          {"shot": 0, "path": "motion_desc", "value": "舟身骤然下沉，他稳住身形不动"}
+        ],
+        "allowed": ["motion_desc"]
+      },
+      "aliases": {}
+    },
+    {
+      "id": "pre_stage_but_completed",
+      "why": "stage=pre 的帧被写成了完成态；修复要把描述改回「还没开始」，而不是改 stage（改 stage 会让时间轴错位）。",
+      "source_codes": ["stage_progress_mismatch"],
+      "shots": [
+        {
+          "index": 5,
+          "location": "舱内",
+          "scene": "舱内·夜",
+          "ff_desc": "甲立于舱门前",
+          "lf_desc": "甲抬手扶门",
+          "motion_desc": "甲来到舱门前，抬手扶门",
+          "prompt": "舱内，甲立于门前",
+          "kfs": [[]],
+          "keyframes": [
+            {"desc": "甲立于船头，尚未抬脚", "stage": "pre", "t_sec": 0.0}
+          ]
+        }
+      ],
+      "defect": {
+        "patches": [
+          {"shot": 0, "path": "keyframes[0].desc", "value": "甲已踏入舱内，伸手接扶"}
+        ],
+        "expect_codes": ["stage_progress_mismatch"]
+      },
+      "repair": {
+        "patches": [
+          {"shot": 0, "path": "keyframes[0].desc", "value": "甲抬手扶住舱门框，尚未迈步"}
+        ],
+        "allowed": ["keyframes[0].desc"]
+      },
+      "aliases": {"甲": "阿大"}
+    }
+  ]
+}

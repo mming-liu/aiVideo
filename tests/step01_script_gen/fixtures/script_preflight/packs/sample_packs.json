@@ -1,0 +1,443 @@
+{
+  "schema": "script_preflight_pack.v1",
+  "note": "脚本级确定性预检（tools/script_preflight.py）的显式样本包。角色、地点、道具、台词与预期全部在这里；构造器 script_preflight_builder.py 只负责展开字段结构、套用声明的字段级变异、校验内容无关性，不内置任何故事内容或章节答案。换小说/章节 = 新增或替换一份 pack，构造器与消费测试均不改。",
+  "packs": [
+    {
+      "id": "presence_peak_frame_drop",
+      "family": "C1",
+      "code": "layout_presence_gap",
+      "scope": ["layout_presence_gap"],
+      "why": "关键帧序列里某在镜角色「在—不在—在」，中间帧缺席且描述无离场证据 ⇒ 出图会漏人。",
+      "discriminating": ["frame_layouts.kfs", "keyframes[].desc"],
+      "shots": [
+        {
+          "index": 3,
+          "location": "院中",
+          "scene": "院中·夜",
+          "ff_desc": "三人同立于院中",
+          "lf_desc": "三人再次同框",
+          "motion_desc": "前段：丙离开院中；后段：丙折返",
+          "prompt": "院中，三人同立",
+          "kfs": [
+            [{"name": "甲"}, {"name": "乙"}, {"name": "丙"}],
+            [{"name": "甲"}, {"name": "乙"}],
+            [{"name": "甲"}, {"name": "乙"}, {"name": "丙"}]
+          ],
+          "keyframes": [
+            {"desc": "三人同立于院中", "stage": "pre", "t_sec": 0.0},
+            {"desc": "丙已离开院中，只剩甲乙相对", "stage": "approach", "t_sec": 2.0},
+            {"desc": "丙折返，三人再次同框", "stage": "end", "t_sec": 4.0}
+          ]
+        }
+      ],
+      "cases": [
+        {
+          "id": "legal_exit_documented",
+          "kind": "legal",
+          "patches": [],
+          "expected": {"issues": []},
+          "why": "中间帧描述写了「离开院中」，缺席有依据，不报。"
+        },
+        {
+          "id": "defect_exit_evidence_removed",
+          "kind": "defect",
+          "patches": [
+            {"shot": 0, "path": "keyframes[1].desc", "value": "丙抬手按在剑柄上"}
+          ],
+          "expected": {
+            "issues": [
+              {"code": "layout_presence_gap", "shot": 3, "frame": "kf1", "severity": "hard"}
+            ]
+          },
+          "why": "只删掉离场依据，layout 不动 ⇒ 同一缺席从「有依据」变成「漏画」。"
+        }
+      ]
+    },
+    {
+      "id": "presence_edge_absence",
+      "family": "C1",
+      "code": "layout_presence_gap",
+      "scope": ["layout_presence_gap"],
+      "why": "首帧或尾帧缺席不属于「中间帧漏人」；这条口径防止每镜结尾都被误报。",
+      "discriminating": ["frame_layouts.kfs"],
+      "shots": [
+        {
+          "index": 4,
+          "location": "院中",
+          "scene": "院中·夜",
+          "ff_desc": "甲乙同立",
+          "lf_desc": "甲独处院中",
+          "motion_desc": "乙躬身退开",
+          "prompt": "院中，甲乙同立",
+          "kfs": [
+            [{"name": "甲"}, {"name": "乙"}],
+            [{"name": "甲"}, {"name": "乙"}],
+            [{"name": "甲"}]
+          ],
+          "keyframes": [
+            {"desc": "甲乙同立院中", "stage": "pre", "t_sec": 0.0},
+            {"desc": "甲乙相对而立", "stage": "approach", "t_sec": 2.0},
+            {"desc": "甲独处院中", "stage": "end", "t_sec": 4.0}
+          ]
+        }
+      ],
+      "cases": [
+        {
+          "id": "legal_tail_frame_absence",
+          "kind": "legal",
+          "patches": [],
+          "expected": {"issues": []},
+          "why": "只在最后一帧缺席，且这是「在—不在」而非「在—不在—在」，不报。"
+        }
+      ]
+    },
+    {
+      "id": "prop_release_documented",
+      "family": "C2",
+      "code": "prop_chain_break",
+      "scope": ["prop_chain_break"],
+      "why": "镜内道具从有到无，目标帧描述必须能看出它是怎么脱手的。",
+      "discriminating": ["frame_layouts.kfs[].props", "keyframes[].desc"],
+      "shots": [
+        {
+          "index": 5,
+          "location": "舱内",
+          "scene": "舱内·夜",
+          "ff_desc": "甲举壶就口",
+          "lf_desc": "甲将酒壶放在案上",
+          "motion_desc": "甲饮尽，俯身把酒壶放在案上",
+          "prompt": "舱内，甲举壶饮酒",
+          "kfs": [
+            [{"name": "甲", "props": ["酒壶"]}],
+            [{"name": "甲", "props": ["酒壶"]}],
+            [{"name": "甲"}]
+          ],
+          "keyframes": [
+            {"desc": "甲举壶就口", "stage": "pre", "t_sec": 0.0},
+            {"desc": "甲仰头饮尽", "stage": "approach", "t_sec": 2.0},
+            {"desc": "甲将酒壶放在案上，双手垂落", "stage": "end", "t_sec": 4.0}
+          ]
+        }
+      ],
+      "cases": [
+        {
+          "id": "legal_release_evidence",
+          "kind": "legal",
+          "patches": [],
+          "expected": {"issues": []},
+          "why": "「放在」属释放证据，道具消失有依据。"
+        },
+        {
+          "id": "defect_release_evidence_removed",
+          "kind": "defect",
+          "patches": [
+            {"shot": 0, "path": "keyframes[2].desc", "value": "甲垂手而立"}
+          ],
+          "expected": {
+            "issues": [
+              {"code": "prop_chain_break", "shot": 5, "frame": "kf2", "severity": "advisory"}
+            ]
+          },
+          "why": "只删释放证据，道具凭空消失 ⇒ 断链。"
+        }
+      ]
+    },
+    {
+      "id": "prop_cross_shot_resume",
+      "family": "C2",
+      "code": "prop_chain_break",
+      "scope": ["prop_chain_break"],
+      "why": "跨镜只在「上一镜有 → 本镜没有 → 下一镜又有」时报 advisory；本镜只是没再用记 info，不进告警。",
+      "discriminating": ["frame_layouts.lf", "frame_layouts.ff"],
+      "shots": [
+        {
+          "index": 1,
+          "location": "船头",
+          "scene": "船头·晨",
+          "ff_desc": "甲持钓杆立于船头",
+          "lf_desc": "甲收杆坐回船板，钓杆仍在手",
+          "motion_desc": "甲持杆静候，随后收杆落座",
+          "prompt": "船头，甲持杆而立",
+          "ff": [{"name": "甲", "props": ["钓杆"]}],
+          "lf": [{"name": "甲", "props": ["钓杆"]}]
+        },
+        {
+          "index": 2,
+          "location": "船头",
+          "scene": "船头·晨",
+          "ff_desc": "甲空手立于船头",
+          "lf_desc": "甲俯身看水",
+          "motion_desc": "甲空手走向船舷，俯身看水",
+          "prompt": "船头，甲空手而立",
+          "ff": [{"name": "甲", "props": ["钓杆"]}],
+          "lf": [{"name": "甲"}]
+        },
+        {
+          "index": 3,
+          "location": "船头",
+          "scene": "船头·晨",
+          "ff_desc": "甲重新取杆在手",
+          "lf_desc": "甲持杆而坐",
+          "motion_desc": "甲自船板取杆，重新持杆坐下",
+          "prompt": "船头，甲持杆而坐",
+          "ff": [{"name": "甲", "props": ["钓杆"]}],
+          "lf": [{"name": "甲", "props": ["钓杆"]}]
+        }
+      ],
+      "cases": [
+        {
+          "id": "legal_state_carried",
+          "kind": "legal",
+          "patches": [],
+          "expected": {"issues": []},
+          "why": "道具状态在三镜之间连续继承，不该有任何 finding。"
+        },
+        {
+          "id": "defect_gap_then_resume",
+          "kind": "defect",
+          "patches": [
+            {"shot": 1, "path": "frame_layouts.ff[0].props", "value": []}
+          ],
+          "expected": {
+            "issues": [
+              {"code": "prop_chain_break", "shot": 2, "frame": "ff", "severity": "advisory"}
+            ]
+          },
+          "why": "本镜首帧少了钓杆、下一镜首帧又出现 ⇒ 断了又回来。"
+        },
+        {
+          "id": "noise_not_reused",
+          "kind": "defect",
+          "patches": [
+            {"shot": 1, "path": "frame_layouts.ff[0].props", "value": []},
+            {"shot": 2, "path": "frame_layouts.ff[0].props", "value": []}
+          ],
+          "expected": {
+            "issues": [
+              {"code": "prop_chain_break", "shot": 2, "frame": "ff", "severity": "info"}
+            ]
+          },
+          "why": "此后不再出现 = 正常叙事取舍，只记 info，不计入告警数。"
+        }
+      ]
+    },
+    {
+      "id": "entity_class_instrument",
+      "family": "C3",
+      "code": "entity_class_conflict",
+      "scope": ["entity_class_conflict"],
+      "why": "同一实体类（乐器/载具）在同一镜的音效与画面字段里取到不同值。",
+      "discriminating": ["audio_cue", "motion_desc"],
+      "shots": [
+        {
+          "index": 1,
+          "location": "船头",
+          "scene": "船头·夜",
+          "audio_cue": "音效=箫声清越悠扬",
+          "ff_desc": "甲坐于船头",
+          "lf_desc": "甲垂目不动",
+          "motion_desc": "箫声自水面缓缓传来",
+          "prompt": "船头，甲独坐"
+        }
+      ],
+      "cases": [
+        {
+          "id": "legal_same_instrument",
+          "kind": "legal",
+          "patches": [],
+          "expected": {"issues": []},
+          "why": "音效与画面都写箫，取值一致。"
+        },
+        {
+          "id": "defect_instrument_mismatch",
+          "kind": "defect",
+          "patches": [
+            {"shot": 0, "path": "motion_desc", "value": "笛声自水面缓缓传来"}
+          ],
+          "expected": {
+            "issues": [
+              {"code": "entity_class_conflict", "shot": 1, "frame": "audio/visual", "severity": "advisory"}
+            ]
+          },
+          "why": "只改画面的乐器名，音效仍是箫 ⇒ 同类实体内讧。"
+        }
+      ]
+    },
+    {
+      "id": "location_drift_elsewhere",
+      "family": "C4",
+      "code": "location_drift",
+      "scope": ["location_drift"],
+      "why": "镜内出现「硬切/转至…」+ 与 location 不同的地点 ⇒ 一镜里偷偷换了地方，尾帧与下一镜接不上。",
+      "discriminating": ["location", "keyframes[].desc"],
+      "shots": [
+        {
+          "index": 13,
+          "location": "堤岸",
+          "scene": "堤岸·夜",
+          "ff_desc": "车马沿堤岸行过",
+          "lf_desc": "车影远去",
+          "motion_desc": "车马沿堤岸缓缓行过，渐渐远去",
+          "prompt": "堤岸夜色，车马行过",
+          "kfs": [[{"name": "甲"}]],
+          "keyframes": [
+            {"desc": "硬切至一柱香之后的堤岸官道，车影远去", "stage": "end", "t_sec": 2.0}
+          ]
+        }
+      ],
+      "cases": [
+        {
+          "id": "legal_same_place_cut",
+          "kind": "legal",
+          "patches": [],
+          "expected": {"issues": []},
+          "why": "硬切之后仍在堤岸，地点未变。"
+        },
+        {
+          "id": "defect_cut_to_other_place",
+          "kind": "defect",
+          "patches": [
+            {"shot": 0, "path": "keyframes[0].desc",
+             "value": "硬切至一柱香之后的驿站大门，车影进入夜色"}
+          ],
+          "expected": {
+            "issues": [
+              {"code": "location_drift", "shot": 13, "frame": "kf0", "severity": "advisory"}
+            ]
+          },
+          "why": "同一句硬切，落点从堤岸换成驿站大门 ⇒ 镜内漂移。"
+        }
+      ]
+    },
+    {
+      "id": "stage_completed_desc",
+      "family": "C5",
+      "code": "stage_progress_mismatch",
+      "scope": ["stage_progress_mismatch"],
+      "why": "stage=pre 表示动作之前，描述却写成完成态 ⇒ 帧在时间轴上的位置与内容矛盾。",
+      "discriminating": ["keyframes[].stage", "keyframes[].desc"],
+      "shots": [
+        {
+          "index": 5,
+          "location": "舱内",
+          "scene": "舱内·夜",
+          "ff_desc": "甲立于舱门前",
+          "lf_desc": "甲抬手扶门",
+          "motion_desc": "甲来到舱门前，抬手扶门",
+          "prompt": "舱内，甲立于门前",
+          "kfs": [[]],
+          "keyframes": [
+            {"desc": "甲立于船头，尚未抬脚", "stage": "pre", "t_sec": 0.0}
+          ]
+        }
+      ],
+      "cases": [
+        {
+          "id": "legal_pre_not_started",
+          "kind": "legal",
+          "patches": [],
+          "expected": {"issues": []},
+          "why": "pre 帧描述是「尚未抬脚」，确实还没开始。"
+        },
+        {
+          "id": "defect_pre_but_completed",
+          "kind": "defect",
+          "patches": [
+            {"shot": 0, "path": "keyframes[0].desc", "value": "甲已踏入舱内，伸手接扶"}
+          ],
+          "expected": {
+            "issues": [
+              {"code": "stage_progress_mismatch", "shot": 5, "frame": "kf0", "severity": "advisory"}
+            ]
+          },
+          "why": "stage 仍是 pre，描述却已「已踏入」⇒ 进度矛盾。"
+        }
+      ]
+    },
+    {
+      "id": "duplicate_cross_field",
+      "family": "C6",
+      "code": "duplicate_injection",
+      "scope": ["duplicate_injection"],
+      "why": "同一镜两个字段出现非重叠的 24 字逐字重复 ⇒ step02a 真实入口会判 visual_plan_blocked 并拒绝出图，属硬阻断。",
+      "discriminating": ["prompt", "ff_desc", "lf_desc", "motion_desc"],
+      "shots": [
+        {
+          "index": 5,
+          "location": "水面",
+          "scene": "水面·晨",
+          "ff_desc": "",
+          "lf_desc": "",
+          "motion_desc": "舟身猛地一沉，他身形稳如磐石",
+          "prompt": "画面开始，船身长约四米五、宽约一米三，船板上积着浅浅一层水，映着天光"
+        }
+      ],
+      "cases": [
+        {
+          "id": "legal_reworded",
+          "kind": "legal",
+          "patches": [],
+          "expected": {"issues": []},
+          "why": "同一事实只在 prompt 里出现一次，motion 用不同措辞。"
+        },
+        {
+          "id": "defect_verbatim_injection",
+          "kind": "defect",
+          "patches": [
+            {"shot": 0, "path": "motion_desc",
+             "value": "另外，船身长约四米五、宽约一米三，船板上积着浅浅一层水，映着天光，他身形稳如磐石"}
+          ],
+          "expected": {
+            "issues": [
+              {"code": "duplicate_injection", "shot": 5, "frame": "prompt/ff/lf/motion", "severity": "hard"}
+            ]
+          },
+          "why": "把 prompt 里的同一段描述整块搬进 motion ⇒ 24 字滑窗命中两次。"
+        }
+      ]
+    },
+    {
+      "id": "image_prompt_camera_leak",
+      "family": "C7",
+      "code": "image_prompt_leak",
+      "scope": ["image_prompt_leak"],
+      "why": "图片提示词里出现运镜/时长/转场词——图生成模型不理解这些，写进去只会污染画面。",
+      "discriminating": ["ff_desc", "lf_desc", "keyframes[].desc"],
+      "shots": [
+        {
+          "index": 1,
+          "location": "船头",
+          "scene": "船头·晨",
+          "ff_desc": "甲立于船头，手扶舷边",
+          "lf_desc": "甲转身面向岸边",
+          "motion_desc": "甲扶舷而立，随后转身",
+          "prompt": "船头，甲扶舷而立",
+          "kfs": [[]],
+          "keyframes": [{"desc": "甲扶舷而立", "stage": "pre", "t_sec": 0.0}]
+        }
+      ],
+      "cases": [
+        {
+          "id": "legal_visual_only",
+          "kind": "legal",
+          "patches": [],
+          "expected": {"issues": []},
+          "why": "三个帧描述都只写可见事实，无运镜词。"
+        },
+        {
+          "id": "defect_camera_word_in_desc",
+          "kind": "defect",
+          "patches": [
+            {"shot": 0, "path": "ff_desc", "value": "甲立于船头，镜头缓缓推近"}
+          ],
+          "expected": {
+            "issues": [
+              {"code": "image_prompt_leak", "shot": 1, "frame": "ff_desc", "severity": "advisory"}
+            ]
+          },
+          "why": "首帧描述写进运镜词「推近」⇒ 图片提示词泄漏视频指令。"
+        }
+      ]
+    }
+  ]
+}
