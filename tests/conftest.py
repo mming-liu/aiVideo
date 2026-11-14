@@ -132,6 +132,8 @@ _TEST_LOG_CAP_BYTES = 10 * 1024 * 1024
 #   - 同时回收旧 `--basetemp` 会话目录与 %TEMP%/pytest-of-<user>/pytest-N，
 #     避免 pytest 的 `tmp_path_retention_policy=none`（刻意关闭）造成无界累积。
 _REAP_MIN_AGE_SEC = 6 * 3600
+#: basetemp / pytest-of-* 的窗口更短：单轮测试产物更大，2 小时外即可回收。
+_REAP_BASETEMP_MIN_AGE_SEC = 2 * 3600
 _REAP_KEEP_LATEST = 2
 _REAP_MAX_ROOTS = 50
 _REAP_TIME_BUDGET_SEC = 20.0
@@ -221,7 +223,7 @@ def _reap_stale_test_scratch(pytestconfig):
         removed += removed_pid
         survivors += survivors_pid
         removed_base, survivors_base = _reap_planned(
-            plan_basetemp_reap(root, min_age_sec=_REAP_MIN_AGE_SEC,
+            plan_basetemp_reap(root, min_age_sec=_REAP_BASETEMP_MIN_AGE_SEC,
                                keep_latest=_REAP_KEEP_LATEST,
                                prefixes=_STALE_TMP_PREFIXES,
                                exclude={base} if base else set()),
@@ -233,7 +235,7 @@ def _reap_stale_test_scratch(pytestconfig):
     if pytest_tmp_base is not None and pytest_tmp_base.exists():
         removed_pt, survivors_pt = _reap_planned(
             plan_pytest_tmp_reap(pytest_tmp_base,
-                                 min_age_sec=_REAP_MIN_AGE_SEC,
+                                 min_age_sec=_REAP_BASETEMP_MIN_AGE_SEC,
                                  keep_latest=_REAP_KEEP_LATEST),
             max_roots=max(0, _REAP_MAX_ROOTS - removed),
             time_budget=_REAP_TIME_BUDGET_SEC)
