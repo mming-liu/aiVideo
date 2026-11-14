@@ -107,6 +107,38 @@ def _now() -> str:
 # ---------------------------------------------------------------------------
 # 1) 凭据
 # ---------------------------------------------------------------------------
+def validate_receipt(raw, *, path: str = "") -> dict:
+    """**不落盘**的结构校验：入参是已解析的凭据字典，身份核对仍在 :func:`verify`.
+
+    分成"读盘"与"校验"两步，是为了让**写凭据的一方**能在写之前就把结构验完：
+    先写 `.tmp` 再验证、失败再删掉，会在失败路径上产生一次删除——在带删除审计的
+    环境里这次删除会顶替掉真正的错误（进程被审计中断，看到的是"退出码 1"
+    而不是"凭据第几个字段不对"）。2026-11-14 在 47 条用例上实测到过这种遮蔽。
+    """
+    if not isinstance(raw, dict):
+        raise ContextError("receipt_not_object", "采纳凭据不是 JSON 对象", path=path)
+    if str(raw.get("schema") or "") != RECEIPT_SCHEMA:
+        raise ContextError("receipt_schema_mismatch",
+                           "采纳凭据 schema 不是 %s：%r" % (RECEIPT_SCHEMA, raw.get("schema")),
+                           path=path)
+    status = str(raw.get("status") or "")
+    if status != "adopted_and_verified":
+        raise ContextError("receipt_not_adopted",
+                           "采纳凭据 status 不是 adopted_and_verified：%r" % status,
+                           path=path)
+    for key in ("formal_chapter", "output_base_override", "script_revision", "scope"):
+        if not raw.get(key):
+            raise ContextError("receipt_field_missing", "采纳凭据缺字段 %s" % key,
+                               path=path, field=key)
+    if not isinstance(raw.get("scope"), dict):
+        raise ContextError("receipt_field_invalid", "scope 不是对象", path=path)
+    if not isinstance(raw.get("formal_sha256"), dict) or \
+            not raw["formal_sha256"].get("script_result.json"):
+        raise ContextError("receipt_field_missing",
+                           "采纳凭据缺 formal_sha256['script_result.json']", path=path)
+    return raw
+
+
 def load_receipt(path) -> dict:
     """读并校验采纳凭据；只做**结构**校验，身份核对在 :func:`verify` 里."""
     p = Path(path)
@@ -118,27 +150,7 @@ def load_receipt(path) -> dict:
     except json.JSONDecodeError as exc:
         raise ContextError("receipt_not_json", "采纳凭据不是合法 JSON：%s" % exc,
                            path=str(p)) from exc
-    if not isinstance(raw, dict):
-        raise ContextError("receipt_not_object", "采纳凭据不是 JSON 对象", path=str(p))
-    if str(raw.get("schema") or "") != RECEIPT_SCHEMA:
-        raise ContextError("receipt_schema_mismatch",
-                           "采纳凭据 schema 不是 %s：%r" % (RECEIPT_SCHEMA, raw.get("schema")),
-                           path=str(p))
-    status = str(raw.get("status") or "")
-    if status != "adopted_and_verified":
-        raise ContextError("receipt_not_adopted",
-                           "采纳凭据 status 不是 adopted_and_verified：%r" % status,
-                           path=str(p))
-    for key in ("formal_chapter", "output_base_override", "script_revision", "scope"):
-        if not raw.get(key):
-            raise ContextError("receipt_field_missing", "采纳凭据缺字段 %s" % key,
-                               path=str(p), field=key)
-    if not isinstance(raw.get("scope"), dict):
-        raise ContextError("receipt_field_invalid", "scope 不是对象", path=str(p))
-    if not isinstance(raw.get("formal_sha256"), dict) or \
-            not raw["formal_sha256"].get("script_result.json"):
-        raise ContextError("receipt_field_missing",
-                           "采纳凭据缺 formal_sha256['script_result.json']", path=str(p))
+    validate_receipt(raw, path=str(p))
     raw["_receipt_path"] = str(p)
     raw["_receipt_sha256"] = _sha256_file(p)
     return raw

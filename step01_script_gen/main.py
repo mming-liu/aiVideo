@@ -3481,10 +3481,16 @@ def project_for_commit(script: dict, novel_text: str = "", *, label: str = "落�
 
 
 def _create_adoption_receipt(revision: str, run_id: str) -> str:
-    """首次采纳：按现有 schema 生成凭据，**先落临时文件并 verify，通过才换名**.
+    """首次采纳：按现有 schema 生成凭据，**先验后写**，通过才落正式文件.
 
-    缺失的身份信息显式写 null/说明，不编造；verify 失败则删除临时文件并返回
-    create_failed——绝不留一份自称 adopted_and_verified 却没核验过的凭据。
+    缺失的身份信息显式写 null/说明，不编造；核验失败直接返回 create_failed，
+    **不产生任何文件写入**——绝不留一份自称 adopted_and_verified 却没核验过的凭据。
+
+    为什么不是"先写 .tmp 再 verify、失败删掉"（2026-11-14 改）：失败路径上的那次
+    删除会把真正的失败原因顶掉。实测形态：`verify` 报 chapter_dir_mismatch → 走
+    unlink → 在带删除审计的环境里进程被审计中断，调用方看到的是退出码 1，而
+    "凭据为什么建不出来"这句话根本没进日志。核验不需要文件在盘上（verify 只核
+    env/路径/摘要/清单），所以结构校验与身份核验都可以在内存里做完。
     """
     import hashlib as _hashlib
     from pathlib import Path as _Path
@@ -3522,17 +3528,16 @@ def _create_adoption_receipt(revision: str, run_id: str) -> str:
                           "rule_version": RULE_VERSION},
         "previous_receipt": None,
     }
-    tmp = ch / "step01_adoption.json.tmp"
-    tmp.write_text(json.dumps(receipt, ensure_ascii=False, indent=1), encoding="utf-8")
     try:
-        _pc.load_receipt(tmp)
+        _pc.validate_receipt(receipt)
         _pc.verify(receipt, apply=False)
     except Exception as exc:                                  # noqa: BLE001
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        return "create_failed:%s" % exc
+        # 带上稳定 code（ContextError.code）：调用方与日志按 code 判读，
+        # 不必从中文消息里猜是哪一类失败。
+        _code = str(getattr(exc, "code", "") or exc.__class__.__name__)
+        return "create_failed:%s: %s" % (_code, exc)
+    tmp = ch / "step01_adoption.json.tmp"
+    tmp.write_text(json.dumps(receipt, ensure_ascii=False, indent=1), encoding="utf-8")
     tmp.replace(ch / "step01_adoption.json")
     return "created"
 

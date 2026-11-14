@@ -343,6 +343,10 @@ tests/tools/fixtures/*
 !tests/tools/fixtures/p4_admission/
 tests/tools/fixtures/p4_admission/*
 !tests/tools/fixtures/p4_admission/packs.json
+# 2026-11-14 采纳凭据：`_create_adoption_receipt` 改为"先验后写"（失败路径不再
+# 写 .tmp 再 unlink），凭据结构校验拆出 `production_context.validate_receipt()`。
+# 这两条契约是本轮改出来的生产入口，用例必须随仓库走，否则干净检出验不到。
+!tests/tools/test_production_context.py
 !tests/step02a_frame_gen/
 tests/step02a_frame_gen/*
 !tests/step02a_frame_gen/test_step02a_offline_fixups.py

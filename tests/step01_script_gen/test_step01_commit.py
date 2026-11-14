@@ -1462,3 +1462,62 @@ def test_repair_finalize_error_keeps_baseline(chapter, monkeypatch):
     assert "repair pass broke the timeline" in summary["detail"]
     assert rounds["n"] == 1 and calls["n"] == 1, "拒收后不得再发修复/审计调用"
     assert script["shots"][1]["prompt"] == baseline_prompt, "修复前的基线必须保留"
+
+
+# ---------------------------------------------------------------------------
+# 采纳凭据：先验后写（2026-11-14）
+# ---------------------------------------------------------------------------
+def _four_artifacts(ch: Path) -> None:
+    for name in ("script_result.json", "step01_quality.json",
+                 "step01_audit.json", "step01_commit.json"):
+        (ch / name).write_text("{}", encoding="utf-8")
+
+
+def test_adoption_receipt_failure_leaves_no_file_behind(tmp_path, monkeypatch):
+    """核验失败时**一个文件都不写**（既无正式凭据，也无 .tmp）。
+
+    旧实现"先写 .tmp 再 verify、失败就 unlink"：失败路径上的那次删除会顶掉真正
+    的失败原因——在带删除审计的环境里进程被审计中断，调用方看到退出码 1，
+    "凭据为什么建不出来"这句话根本没进日志（2026-11-14 全量跑实测形态）。
+    """
+    import step01_script_gen.main as m
+
+    _four_artifacts(tmp_path)
+    monkeypatch.setattr(m, "CHAPTER_DIR", tmp_path)
+    status = m._create_adoption_receipt("rev-test", "run-test")
+    assert status.startswith("create_failed:"), status
+    assert "chapter_dir_mismatch" in status, (
+        "失败原因必须是路径不一致本身，而不是被清理动作掩盖")
+    assert not (tmp_path / "step01_adoption.json").exists()
+    assert not (tmp_path / "step01_adoption.json.tmp").exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
+        ["script_result.json", "step01_quality.json",
+         "step01_audit.json", "step01_commit.json"])
+
+
+def test_adoption_receipt_writes_once_after_verification_passes(tmp_path, monkeypatch):
+    """核验通过才落盘，且不残留 .tmp（写入只有一次，rename 而非拷贝）."""
+    import step01_script_gen.main as m
+    from tools import production_context as pc
+
+    _four_artifacts(tmp_path)
+    monkeypatch.setattr(m, "CHAPTER_DIR", tmp_path)
+    seen = {}
+
+    def fake_verify(receipt, *, apply=True):
+        seen["called"] = True
+        seen["formal_chapter"] = receipt["formal_chapter"]
+        # 核验发生在落盘之前：此刻正式文件必须还不存在
+        seen["existed_before_write"] = (tmp_path / "step01_adoption.json").exists()
+        return {}
+
+    monkeypatch.setattr(pc, "verify", fake_verify)
+    status = m._create_adoption_receipt("rev-test", "run-test")
+    assert status == "created", status
+    assert seen["called"] is True
+    assert seen["existed_before_write"] is False
+    assert not (tmp_path / "step01_adoption.json.tmp").exists()
+    written = json.loads((tmp_path / "step01_adoption.json").read_text(encoding="utf-8"))
+    assert written["script_revision"] == "rev-test"
+    assert written["source_run_id"] == "run-test"
+    assert written["formal_chapter"] == str(tmp_path)
