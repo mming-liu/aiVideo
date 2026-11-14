@@ -142,5 +142,9 @@ PRODUCTION_UNCHANGED=true   # 章目录全部文件 name/size/mtime 前后一致
 1. **G3 未合入**（见 D3）；Step 02b 正文仍无法按最终参考清单声明 `参考图k`。
 2. **shot 1 LF / shot 2 LF 为 generate**（见 D2 表），U7 需按实际数量生成。
 3. `tests/shared` 合跑 17 条 flake **未复现**，未做夹具修改；需在复现环境再定位。
-4. Step E（G6 声音两态）未开始；Step F 需按批次单独确认费用。
-5. 本轮未重跑全量 `tests/step01_script_gen`；C/D 按受影响入口分组验证。
+4. Step E（G6 声音两态）：`shared/voice_preparation.py` 与
+   `shared/execution_semantics.py` **已实现** prepared/confirmed 两态与
+   planned-overflow 分离（S06 落地）；尚未接线的是 **Step03 真实 TTS 后的
+   confirmed 回写**与 **Step04 正式合并的 confirmed 门禁**。
+5. Step F 需按批次单独确认费用；本轮未发起任何真实生成。
+6. 本轮未重跑全量 `tests/step01_script_gen`；C/D 按受影响入口分组验证。
