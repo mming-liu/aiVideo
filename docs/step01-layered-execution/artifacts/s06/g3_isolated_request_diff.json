@@ -60,6 +60,8 @@
       "checks": {
         "reference_list_unchanged": true,
         "block_survives_prepare": true,
+        "block_survives_prepare_status": "verified",
+        "block_in_frozen_prompt": true,
         "bindings_one_to_one": true,
         "binding_count": 2,
         "reference_count": 2
@@ -138,7 +140,9 @@
       },
       "checks": {
         "reference_list_unchanged": true,
-        "block_survives_prepare": true,
+        "block_survives_prepare": null,
+        "block_survives_prepare_status": "unverified_provider_no_prepare",
+        "block_in_frozen_prompt": true,
         "bindings_one_to_one": true,
         "binding_count": 2,
         "reference_count": 2
@@ -231,6 +235,8 @@
       "checks": {
         "reference_list_unchanged": true,
         "block_survives_prepare": true,
+        "block_survives_prepare_status": "verified",
+        "block_in_frozen_prompt": true,
         "bindings_one_to_one": true,
         "binding_count": 2,
         "reference_count": 2
@@ -274,6 +280,13 @@
       "first_last_image"
     ],
     "unprepared_branches": [
+      "full_prompt"
+    ],
+    "prepare_verified_branches": [
+      "seedance_concise",
+      "first_last_image"
+    ],
+    "prepare_unverified_branches": [
       "full_prompt"
     ]
   },

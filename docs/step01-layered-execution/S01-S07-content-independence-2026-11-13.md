@@ -2,7 +2,10 @@
 
 基线 `9c63583`；本包提交见文末。范围按用户计划 S01–S07，视频模型选择后置。
 2026-11-13 复核后，S02/S03/S04/S05 的确认缺口已按复核意见补修；S06 已补
-G1/G2/G6/G7 的具体样本（G3 仍缺差异样本）；S07 仍为阶段报告。
+G1/G2/G6/G7 的具体样本；2026-11-14 复核后 S03 歧义跨阶段保留、G3 三分支
+隔离样本已出。**当前状态：离线修复与决策材料交付完成，进入既定裁决阶段**
+（G1/G7 门禁接线、G2 自动改写去留、G3 生产接线、G6 声音两态、旧稿准入口径；
+G4 按具体候选单独审批，视频模型选择继续后置）。
 
 ## S01 基线与决策对齐
 
@@ -12,7 +15,7 @@ G1/G2/G6/G7 的具体样本（G3 仍缺差异样本）；S07 仍为阶段报告�
 |---|---|
 | 起始提交 | `9c63583` |
 | 上一轮提交 | `2a91d7e`（复核第四轮：显式 `plan_refs` 承载绑定 + 逐问题残余）、`96f3cc3`（S02 内容无关性首版） |
-| 本轮提交 | `a2b6621`（S05 计划消费入口 + S03 身份生产/重映射 + G3 隔离样本 + 合并归因）；上一轮 `95d5760`（S03 目标关系 + S05 完整链路 + S06 证据层级） |
+| 本轮提交 | `3e7b0ad`（S03 歧义跨阶段保留 + G3 三分支真实 prepare 对照）、`2d51b92`（长期证据 `.keep` 安全网 + 临时目录约定）；更早 `a2b6621`（S05 计划消费入口 + S03 身份生产/重映射 + G3 首版 + 合并归因） |
 | 未入库工作树 | `.gitignore`、`docs/dsh-handoff/`、`start_studio.bat`、`.workbuddy/`、`baselines/**/__pycache__/` 属**他方**改动，本包未触碰 |
 
 ### 脏工作树归属
@@ -26,7 +29,7 @@ G1/G2/G6/G7 的具体样本（G3 仍缺差异样本）；S07 仍为阶段报告�
 |---|---|---|---|
 | G1 问题关闭接提交门 | **未接线**：`issue_ledger.closed` 只产出影子台账，`quality_gate`/提交门未消费 | `step01_script_gen/issue_ledger.py`、`shared/quality_gate.py` | 是否对阻塞问题要求关闭证据 |
 | G2 景别规则 | **已改三项**（不是「全部未改」）：`530fdbb` 起 `_shot_size_level` 改最长匹配、`framing_jump` 在修复轮跳过被授权镜头、final pass 只报不改；**跨度规则本身仍在** | `step01_script_gen/validation.py`、`constraints/framing_jump.py` | 跨度自动改写是否整体取消 |
-| G3 参考定稿顺序 | 未做：最终参考清单未成为 `prepare_request` 正文的唯一来源 | `shared/vimax_bridge.py`、`_video_gen/volcengine_provider.py` | 是否改正文构建 |
+| G3 参考定稿顺序 | 隔离样本已出：3 条正文分支、参考清单逐项对应、2 条真实 prepare 通过、full_prompt 记 pending；生产接线未做 | `tools/build_s06_g3_isolated_diff.py`、`shared/vimax_bridge.py`、`_video_gen/*_provider.py` | 是否改正文构建（裁决阶段） |
 | G4 正式采纳 | 未做（离线候选） | `artifacts/m02/*` | 对具体候选审批 |
 | G5 `ADDED_DIALOGUE` | 沿用已冻结决定，未改 | — | 无 |
 | G6 声音两态 | 未拆：`build_voice_preparation` 仍是单态 | `shared/voice_preparation.py` | 是否拆准备态/确认态 |
@@ -157,7 +160,8 @@ test_works_on_hook_via_enforce_all}`（无规格时保留原形制）。
 ## S07 交付与限制
 
 - 本轮提交内容：S02–S05 补修 + S03 身份生产/重映射 + S05 计划消费入口 +
-  S06 样本与决策包 + 合并失败归因 + 本文件。
+  S06 样本与决策包 + 合并失败归因 + 临时产物治理（`cbff266`、`ef2ab0c`）+
+  长期证据 `.keep` 安全网（`2d51b92`）+ 本文件。
 - **合并运行失败归因（2026-11-14）**：`tests/step02_video_gen` 在
   `tests/step02b_video_gen/test_step02b_report_wp5.py` 之前运行时，后者失败
   `FileNotFoundError: chapter_001/step02b_quality.json`。最小触发组合：
@@ -168,8 +172,9 @@ test_works_on_hook_via_enforce_all}`（无规格时保留原形制）。
   涉及文件与基线 `43de241` **逐字节相同**（`git diff` 为空），属测试顺序依赖，
   不是本包引入；已在测试内补 `_vq.chapter_dir` 绑定后修复，完整合并套件
   **1735 passed / 8 skipped**。
-- 已知限制：G1/G3/G4/G6/G7 未实施（决策材料见 S06）；G3 只有隔离样本、
-  未接线生产；S06 的 G4（正式采纳）仍无样本；真实模型/媒体调用未执行。
+- 已知限制：G1/G2/G3/G6/G7 未实施（决策材料见 S06，进入裁决阶段）；
+  G3 只有隔离样本、未接线生产；S06 的 G4（正式采纳）按具体候选单独审批；
+  真实模型/媒体调用未执行（模型效果仍待真实对照）。
 - 内容收益：本包只证明「已确认的无来源补写/删除路径不再发生，且修好的内容能沿
   受限修订→投影→画面计划→计划消费入口到达生成器桩」；未做真实模型对照，
   不据此宣称画面质量提升。

@@ -19,6 +19,26 @@
 
 ---
 
+## 0.5 裁决阶段总表（2026-11-14）
+
+> 状态：离线修复与决策材料已交付，进入**裁决阶段**。本表只给建议与影响，
+> **不改变任何默认门禁**；采纳与否由用户逐项确认。G4 按具体候选单独审批；
+> 视频模型选择继续后置。
+
+| 决策 | 现状/证据 | 建议 | 采纳后的改动点与影响 | 需确认 |
+|---|---|---|---|---|
+| G1 `issue_ledger.closed` 接提交门 | 台账真实；门禁推演：沉默样本现行门接受、G1 门拒绝 | 只对**阻塞级**确认问题要求 `closed=True`；非阻塞继续只记账 | 提交门新增 closed 判据；沉默样本从 accept 变 reject | 是否接门、是否仅阻塞级 |
+| G7 `postprocess_reverted` 接门 | 三判据真实；组合推演：A 记账过/保护过/R1 误拒；B R2 拒；C 保护门拒 | **按目标丢失接门 + 保留既有保护门**（不按任何残余） | 提交门新增 target-loss 判据；R1 类等价派生不得误拒 | 是否接门、是否保留保护门组合 |
+| G2 `framing_jump` 自动改写 | 1 例：大特写→远景被自动改写成「全景」；validation 已报 6 级 warning | **改为只报不改**，先做影子对照 | 提示不再自动改景别；输出提示变化，需回归受影响镜头 | 是否停止自动改写 |
+| G3 参考清单先行 | 1 例 × 3 分支：2 条真实 prepare 通过且绑定逐项对应；`full_prompt` 记 `not_ready`（provider 无 prepare） | **先在隔离分支实现，再裁决是否接生产** | 改 `build_frozen_for_shot` / `prepare_request` 顺序；全部视频请求受影响，需全量回归 | 是否进入生产接线、full_prompt 分支如何处理 |
+| G6 声音两态 | 1 例：声明 5s 写入 `actual_sec`、`verified=False`，仍产出 `audio_window_overflow` | **拆准备态/确认态**：准备态只写声明值与窗口预算，确认态才写实测 | 改 `audio_policy` / `voice_preparation` / `execution_semantics` 消费方 | 是否拆两态、超窗报告口径 |
+| 旧稿准入口径 | 影子差异：旧稿 `unresolved` 只出 `causal_gap` advisory + `needs_semantic_review`，不新增拒收 | **保持 advisory，不在本包收紧正式准入**；若正式采纳要求身份，另走影子评估与裁决 | 不改门禁；新稿身份生产已接线（`（Bk）` + 重映射） | 正式采纳是否要求身份、何时切换 |
+
+- G3 报告字段语义：`block_survives_prepare` 为三态（`true`/`false`/`null`），
+  `null` 表示 provider 无 `prepare_request`、**未验证**；另有
+  `block_survives_prepare_status` 与 `block_in_frozen_prompt` 供机器读取。
+- 本表所有"推演"结论只到判据组合层；真实提交入口/真实模型效果仍需后续验证。
+
 ## 1. G1：`issue_ledger.closed` 接提交门
 
 样本（`build_issue_ledger`，真实函数）：
@@ -83,6 +103,10 @@
 - 两条真实 prepare 分支：绑定段经 provider `prepare_request` 后仍在最终正文里；
 - `full_prompt` 分支的 provider 未实现 `prepare_request`，按生产同一路径记
   `pending_verification`，不冒充已准备。
+- **报告字段语义**：`block_survives_prepare` 为三态——`true`=经 prepare 后仍在
+  最终正文、`false`=prepare 后丢失、`null`=provider 无 `prepare_request`、**未验证**；
+  `block_survives_prepare_status` 给出 `verified` / `unverified_provider_no_prepare`，
+  `block_in_frozen_prompt` 记录冻结正文是否含绑定段。机器读取不得把 `null` 当 `true`。
 
 - 样本只回答「结构上参考绑定能否进正文并通过真实 prepare」；**不回答模型是否
   因此改善**。候选正文是工具内追加，正式默认行为不变。
@@ -143,6 +167,8 @@
 4. G6：拆两态；准备态与确认态分别消费。
 5. G3：隔离差异样本已出（§3）；正式接线前先裁决「参考绑定进正文」的产品语义，
    再在隔离分支实现「参考清单先行」并做真实模型对照。
+6. 旧稿准入口径：保持 advisory（不新增拒收）；正式采纳是否要求身份另走影子评估。
+7. G4：按具体候选单独审批；视频模型选择继续后置。
 
 ## 7. 证据
 

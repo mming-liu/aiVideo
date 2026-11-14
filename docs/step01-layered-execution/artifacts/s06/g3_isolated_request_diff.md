@@ -19,6 +19,7 @@
   图2；只取身份、五官、脸型、发型、服装与配饰，不取背景、姿势、构图、机位、原图光线与文字
 【参考绑定】参考图1=本镜首帧（起始构图）；参考图2=甲（角色外观）`
 - 参考清单不变：True；绑定逐项对应：True；绑定数=2 / 参考数=2
+- 绑定经 prepare 后仍成立：是（verified）；冻结正文含绑定：True
 - prepare：prepared
 
 - 参考图1：first_frame.png（reference_image）→ `参考图1=本镜首帧（起始构图）` 在最终正文=True
@@ -31,6 +32,7 @@
 - 候选正文尾部：`所示内容生成，禁止与参考图冲突：参考图1：视频起点画面（首帧），本镜头画面从这里开始，人物位置与构图以它为基准；参考图2：视频终点画面（尾帧），动作结束后画面落在该构图
 【参考绑定】参考图1=本镜首帧（起始构图）；参考图2=本镜尾帧（终态）`
 - 参考清单不变：True；绑定逐项对应：True；绑定数=2 / 参考数=2
+- 绑定经 prepare 后仍成立：未验证（unverified_provider_no_prepare）；冻结正文含绑定：True
 - prepare：not_ready（BailianVideoService 未实现 prepare_request（prepared 入口不可用））
 
 - 参考图1：first_frame.png（first_frame）→ `参考图1=本镜首帧（起始构图）` 在最终正文=True
@@ -43,6 +45,7 @@
 - 候选正文尾部：`成使用以下参考图，严格按其所示内容生成，禁止与参考图冲突：参考图1：视频起点画面（首帧），本镜头画面从这里开始；参考图2：视频终点画面（尾帧），动作结束后画面落在该构图
 【参考绑定】参考图1=本镜首帧（起始构图）；参考图2=本镜尾帧（终态）`
 - 参考清单不变：True；绑定逐项对应：True；绑定数=2 / 参考数=2
+- 绑定经 prepare 后仍成立：是（verified）；冻结正文含绑定：True
 - prepare：prepared
 
 - 参考图1：first_frame.png（first_frame）→ `参考图1=本镜首帧（起始构图）` 在最终正文=True
@@ -52,6 +55,7 @@
 
 - 三分支参考清单均不变：True；绑定逐项对应：True。
 - 真实 `prepare_request` 可用分支：seedance_concise、first_last_image；不可用：full_prompt。
+- 绑定经 prepare 验证：seedance_concise、first_last_image；未验证（provider 无 prepare）：full_prompt。
 - 不可用分支按生产同一路径记 `pending_verification`，不冒充已准备。
 - 本样本只回答「结构上参考绑定能否进正文并通过 prepare」；不回答模型是否因此改善。
 

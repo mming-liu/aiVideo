@@ -274,9 +274,15 @@ def _branch_run(branch: dict, tmp: Path, assets: dict) -> dict:
             "reference_list_unchanged": (
                 [(r.get("role"), r.get("name")) for r in refs]
                 == [(r.get("role"), r.get("name")) for r in candidate_refs]),
+            # 三态：True=经 prepare 后仍在最终正文；False=prepare 后丢失；
+            # None=provider 无 prepare_request，**未验证**（不得写成 true）。
             "block_survives_prepare": (
-                candidate_prepared["status"] != "prepared"
-                or block in candidate_prepared["prompt"]),
+                block in candidate_prepared["prompt"]
+                if candidate_prepared["status"] == "prepared" else None),
+            "block_survives_prepare_status": (
+                "verified" if candidate_prepared["status"] == "prepared"
+                else "unverified_provider_no_prepare"),
+            "block_in_frozen_prompt": block in str(candidate_frozen.prompt or ""),
             "bindings_one_to_one": (
                 len(per_item) == len(candidate_refs)
                 and all(item["in_final_prompt"] for item in per_item)),
@@ -311,6 +317,12 @@ def build_report(tmp: Path) -> dict:
             "unprepared_branches": [
                 name for name, b in branches.items()
                 if b["current"]["prepared_status"] != "prepared"],
+            "prepare_verified_branches": [
+                name for name, b in branches.items()
+                if b["checks"]["block_survives_prepare"] is True],
+            "prepare_unverified_branches": [
+                name for name, b in branches.items()
+                if b["checks"]["block_survives_prepare"] is None],
         },
         "limits": [
             "候选正文只在工具内追加，未接线生产；真实收益需实跑对照。",
@@ -319,6 +331,15 @@ def build_report(tmp: Path) -> dict:
             "样本使用隔离角色肖像/首帧，不读真实资产库；不代表真实资产分布。",
         ],
     }
+
+
+def _tri(value) -> str:
+    """三态显示：True/False/None（None=未验证）."""
+    if value is True:
+        return "是"
+    if value is False:
+        return "否"
+    return "未验证"
 
 
 def _markdown(report: dict) -> str:
@@ -353,6 +374,10 @@ def _markdown(report: dict) -> str:
                 b["checks"]["bindings_one_to_one"],
                 b["checks"]["binding_count"],
                 b["checks"]["reference_count"]),
+            "- 绑定经 prepare 后仍成立：%s（%s）；冻结正文含绑定：%s" % (
+                _tri(b["checks"]["block_survives_prepare"]),
+                b["checks"]["block_survives_prepare_status"],
+                b["checks"]["block_in_frozen_prompt"]),
             "- prepare：%s%s" % (
                 b["candidate"]["prepared_status"],
                 ("（%s）" % b["candidate"]["prepared_reason"]
@@ -376,6 +401,9 @@ def _markdown(report: dict) -> str:
         "- 真实 `prepare_request` 可用分支：%s；不可用：%s。"
         % ("、".join(summary["prepared_branches"]) or "无",
            "、".join(summary["unprepared_branches"]) or "无"),
+        "- 绑定经 prepare 验证：%s；未验证（provider 无 prepare）：%s。"
+        % ("、".join(summary["prepare_verified_branches"]) or "无",
+           "、".join(summary["prepare_unverified_branches"]) or "无"),
         "- 不可用分支按生产同一路径记 `pending_verification`，不冒充已准备。",
         "- 本样本只回答「结构上参考绑定能否进正文并通过 prepare」；"
         "不回答模型是否因此改善。",
