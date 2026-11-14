@@ -274,6 +274,24 @@ R5 作为待送审对象期间发现两个问题，都落在**判据层**，分�
 的既有红已 stash 到 `bd00238` 验证与本次无关）、`tests/step02_video_gen` 74、
 `tests/step03_tts_audio` 47。
 
+## 2026-11-14 复核整改（P1×3 / P2×2 / 规范×2）
+
+详见 `P1-P3_复核整改_20261114.md`。零真实生成调用，正式采纳身份未动。
+
+| 复核项 | 处置 |
+|---|---|
+| 预算静默关闭（显式 FILE 缺失 / 非法 TOTAL） | `PostBudgetConfigError`：只有整数 `0` 关闭；其余显式配置错误 fail-closed；`describe` 与 `acquire` 共用 `_validate_ledger` |
+| G1 把「改过字段」当关闭依据 | `_g1_unclosed_issues` 纯函数，只认三类独立证据：证据消失 / 同一 `(镜头, family)` 确定性检查转干净（两侧都跑完）/ 点名实体从目标布局消失；`_audit_attempted` 不再参与 |
+| G7 检查异常跳过保护 | 收集失败返回 `checker_failed` 状态，验收新增 `postprocess_check_failed` 独立拒收 |
+| 预检与门禁口径不一致 | 同上，`describe` 不再用账本 `limit` 单独算剩余 |
+| plan-only 日志上下文不恢复 | `try/finally` 恢复进程级上下文（正常/异常路径） |
+| 三份测试未入库 | `.gitignore` 放行 `test_g1_g7_gates` / `test_final_audit_reuse_inloop` / `test_repair_shot_replacements` |
+| 磁盘守卫规则副本 | `_tracked_violations()` 成为真实守卫唯一入口并调用 `_governance_violation` |
+
+读数：G1/G7 **10 passed**；相关 step01 合跑 90 / 87 / 67 / 57 / 57 passed；
+`post_budget` 26、`disk_governance` 12、`plan_only_isolation` 5、`post_budget_outcomes` 8 passed。
+G1 判别力已用「旧豁免临时加回」验证：同一动态用例从 BLOCK 变 COMMITTED。
+
 ## 剩余与下一步
 
 - **shot 2 FF 的 QC 重检待通道恢复**：重跑

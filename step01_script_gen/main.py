@@ -3828,8 +3828,14 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
     # 2026-11-14 S06 G1：上一轮 blocking 问题对象（不只是身份）——本轮若不再报出，
     # 必须有确定性证据证明已修，否则按「模型沉默 ≠ 已修复」拒收。
     _prev_audit_issues: list = []
-    # 上一轮审计时的稿件快照：用于区分「授权目标字段确实被改过」与「只靠沉默」。
+    # G1 的结构化关闭依据基线：上一轮修复前的稿件快照（实体出现→消失的转变
+    # 只能拿两版对照，不能只看当前稿）。deepcopy 与 `_prev_audit_issues` 同步。
     _prev_audit_script: dict | None = None
+    # G1 的**独立关闭依据**：上一轮确定性质量门的 blocking 身份 `(镜头, family)`
+    # 与"那一轮检查是否真的跑完"。只有「同一问题的确定性检查由报出转为干净」才算
+    # 关闭——历史尝试记录（`_audit_attempted`）不作依据（2026-11-14 复核）。
+    _prev_det_families: set = set()
+    _prev_det_checked = False
     # v6.140（修复 3，九审根因 3）：本 run **暂缓**的联动组成员——某轮零解决且
     # 失败者是联动组时整组暂缓，剩余预算继续修其他目标；组问题留待提交门按
     # BLOCK（不做半条修复）。止损从「全局停机」限定到「失败组」。
@@ -3944,34 +3950,35 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         # 证据是自由文本、从未字面出现在稿件里时 `_audit_issue_resolved` 返回 True
         # （无法区分），这类条目不在本闸门可判范围内，保持既有语义。
         #
-        # 关闭依据有且只有两类，都是**确定性**的：
+        # 关闭依据只有三类，都必须**独立于"模型动过手"**：
         #   (a) 判据证据已不在稿件中（`_audit_issue_resolved`）；
-        #   (b) 该身份有一轮**通过验收**的修复记账（`_audit_attempted`）——
-        #       该集合只在 `_round_ok` 为真、且未被「零改善回退」撤销后才写入，
-        #       因此它是「修复被真实验收」的记录，而不是「模型动过手」的记录。
-        # 为什么要 (b)：配对/跨字段问题的正确终态就是**证据留在上游字段**
-        # （如 ff_desc 的来源描述必须原样保留，缺陷在 frame_layouts 里）——
-        # 只认 (a) 会把这类合法关闭判成未关闭，修复永远无法收敛
-        # （实测 4 个提交路径用例因此恒 BLOCK）。旧豁免
-        # `_audit_issue_field_touched` 不是这个意思：它只证明字段被改过、
-        # 不证明改对了，仍然不作依据。
+        #   (b) **同一 (镜头, family) 的确定性检查**上一轮报出、本轮干净
+        #       （两侧都真的跑完，checker_failed 不算）。这是"同一问题换了一个
+        #       确定性判据复核通过"，不是尝试记录；
+        #   (c) 问题点名的实体在修复前的目标布局里存在、修复后消失
+        #       （`_audit_issue_structurally_removed`，结构化内容事实）。
         #
-        # 两个旧豁免按计划移除：
-        #   · 「判据证据缺失/过短就跳过」→ 改为**保留未关闭**（待复核）：
-        #     缺证据不能反证已修复；`_audit_issue_resolved` 对无证据返回 False，
-        #     自然落进未闭合，不再被静默放行；
-        #   · 「目标字段被改动就豁免」→ 改动只证明模型动过手，不证明改对；
-        #     字段改动降级为**诊断**，不再充当关闭依据。
+        # 明确**不再**接受「字段触达 / 历史尝试」当关闭依据（2026-11-14 复核）：
+        # `_audit_attempted` 只记录"模型改过被点名的字段、且那一轮通过了验收"，
+        # 而验收本身可以靠字段触达兜底——于是"改字段 → 修复轮接受 → 下轮审计沉默"
+        # 就能豁免 G1。`_audit_attempted` 仍保留给兜底记账（同一身份只记一次），
+        # 但不再参与本闸门。
+        #
+        # 旧豁免「判据证据缺失/过短就跳过」也已移除：缺证据不能反证已修复，
+        # 落进未闭合（待复核）。
         if _prev_audit_issues:
             _now_ids_g1 = {
                 _audit_issue_identity(_i)
                 for _i in _audit_payload_to_issues(audit) if is_blocking(_i)}
-            _g1_unclosed = [
-                _pi for _pi in _prev_audit_issues
-                if is_blocking(_pi)
-                and _audit_issue_identity(_pi) not in _now_ids_g1
-                and not _audit_issue_resolved(script, _pi)
-                and _audit_issue_identity(_pi) not in _audit_attempted]
+            _now_det_families = {_record_family_identity(_r) for _r in _q_blocking
+                                 if isinstance(_r, dict)}
+            _now_det_checked = not bool(quality.get("checker_failed"))
+            _g1_unclosed = _g1_unclosed_issues(
+                _prev_audit_issues, _now_ids_g1, script,
+                prev_det_families=_prev_det_families,
+                now_det_families=_now_det_families,
+                det_checked=_prev_det_checked and _now_det_checked,
+                prev_script=_prev_audit_script)
             if _g1_unclosed:
                 for _pi in _g1_unclosed:
                     blocking.append({
@@ -3982,12 +3989,14 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                         "entity_id": getattr(_pi, "entity_id", "") or "",
                         "field_path": getattr(_pi, "field_path", "") or "",
                         "message": ("上一轮 blocking 本轮未再报出，但缺少确定性关闭依据"
-                                    "（判据证据仍在稿件中，或证据不可判/缺失——"
-                                    "模型沉默、仅改字段都不等于已修复；G1 门禁）"),
+                                    "（判据证据仍在稿件中，且同一问题的确定性检查"
+                                    "本轮没有由报出转为干净——模型沉默、仅改字段、"
+                                    "历史尝试都不等于已修复；G1 门禁）"),
                     })
                 summary["detail"] = (
                     "G1：上一轮 %d 条 blocking 本轮未再报出且无确定性关闭依据"
-                    "（证据仍在稿中或不可判；blocking 必须有依据关闭）"
+                    "（证据仍在稿中或不可判，且无确定性复核通过；"
+                    "blocking 必须有依据关闭）"
                     % len(_g1_unclosed))
                 _logger.warn("[COMMIT] x %s" % summary["detail"])
                 break
@@ -4034,6 +4043,12 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             _prev_audit_script = _copy_g1.deepcopy(script)
         except Exception:
             _prev_audit_script = None
+        # G1 的独立关闭依据基线：本轮（修复前）确定性质量门的 blocking 身份，
+        # 以及检查是否真的跑完。下一轮审计若对同一 (镜头, family) 沉默，
+        # 只有"确定性检查由报出转为干净"才算有依据关闭。
+        _prev_det_families = {_record_family_identity(_r) for _r in _q_blocking
+                              if isinstance(_r, dict)}
+        _prev_det_checked = not bool(quality.get("checker_failed"))
         if _attempt >= STEP01_AUDIT_REPAIR_MAX_ROUNDS:
             summary["detail"] = (
                 "达到 %d 个修复轮上限后仍有 %d 条 blocking"
@@ -6151,6 +6166,22 @@ _AUDIT_FAMILY_PATTERNS: tuple = (
 )
 
 
+def _issue_family(code) -> str:
+    """问题代码 → **跨轮稳定 family**（审计条目与确定性检查共用同一份归并表）.
+
+    同一语义问题跨轮换名是实测常态（`FUTURE_STATE` → `FUTURE_STATE_IN_FF` →
+    `result_shown_in_ff`，2026-09-26 20:49 run 四轮四名）。G1 的独立关闭依据要
+    在「审计条目」与「确定性检查记录」之间比对同一问题，必须共用这一份归并。
+    """
+    text = str(code or "")
+    lower = text.lower()
+    family = text[len("model_audit_"):] if lower.startswith("model_audit_") else text
+    for fam, keys in _AUDIT_FAMILY_PATTERNS:
+        if any(k in lower for k in keys):
+            return fam
+    return family
+
+
 def _audit_issue_identity(issue) -> tuple:
     """audit 问题的**跨轮稳定身份** `(shot, family)`.
 
@@ -6159,14 +6190,101 @@ def _audit_issue_identity(issue) -> tuple:
     同镜同族的两个不同问题会被视为同一身份——对「兜底记账只记一次」这是
     保守方向（少记功绩），可接受。
     """
-    code = str(getattr(issue, "code", "") or "")
-    lower = code.lower()
-    family = code[len("model_audit_"):] if lower.startswith("model_audit_") else code
-    for fam, keys in _AUDIT_FAMILY_PATTERNS:
-        if any(k in lower for k in keys):
-            family = fam
-            break
-    return (str(_issue_shot_index(issue)), family)
+    return (str(_issue_shot_index(issue)),
+            _issue_family(getattr(issue, "code", "")))
+
+
+def _record_family_identity(rec: dict) -> tuple:
+    """确定性质量门记录 → `(镜头, family)`；与 `_audit_issue_identity` 同口径.
+
+    G1 用它回答「上一轮报出的审计问题，有没有一条**同一问题**的确定性检查
+    曾经报出、本轮已经干净」——这是独立于「模型动过手」的关闭依据。
+    """
+    from step01_script_gen.repair_fields import _shot_index_of
+    return (str(_shot_index_of((rec or {}).get("shot_id"))),
+            _issue_family((rec or {}).get("code")))
+
+
+def _layout_entity_names(script: dict, issue) -> set:
+    """该 issue 点名的镜头/帧里，`frame_layouts` 出现过的实体名集合."""
+    shot = _issue_target_shot(script, issue)
+    if not isinstance(shot, dict):
+        return set()
+    fl = shot.get("frame_layouts")
+    if not isinstance(fl, dict):
+        return set()
+    fid = str(getattr(issue, "frame_id", "") or "")
+    frames: list = []
+    if fid.startswith("kf"):
+        try:
+            idx = int(fid[2:])
+        except ValueError:
+            idx = -1
+        kfs = fl.get("kfs")
+        if isinstance(kfs, list):
+            frames = [kfs[idx]] if 0 <= idx < len(kfs) else list(kfs)
+    elif fid in ("ff", "lf"):
+        frames = [fl.get(fid)]
+    else:
+        frames = [fl.get("ff"), fl.get("lf")] + list(fl.get("kfs") or [])
+    names: set = set()
+    for frame in frames:
+        for entry in frame or []:
+            if isinstance(entry, dict):
+                name = str(entry.get("name") or "").strip()
+                if name:
+                    names.add(name)
+    return names
+
+
+def _audit_issue_structurally_removed(before_script, after_script, issue) -> bool:
+    """问题点名的实体**修复前在目标布局里、修复后消失**（确定性内容事实）.
+
+    这是独立于「模型动过手」的关闭依据：`entity_id` 是问题自己声明的实体，
+    `frame_layouts` 是结构化事实源，出现→消失的转变由代码核对。修复前就不存在
+    的实体不适用（那可能是「缺失」类问题，不能反过来当成已解决）。
+    """
+    name = str(getattr(issue, "entity_id", "") or "").strip()
+    if not name or not isinstance(before_script, dict):
+        return False
+    return (name in _layout_entity_names(before_script, issue)
+            and name not in _layout_entity_names(after_script, issue))
+
+
+def _g1_unclosed_issues(prev_issues, now_ids, script, *,
+                        prev_det_families, now_det_families,
+                        det_checked: bool, prev_script=None) -> list:
+    """G1：上一轮 blocking 本轮沉默、且没有确定性关闭依据的条目（纯函数）.
+
+    关闭依据只有三类，都必须独立于「模型动过手」：
+      (a) 判据证据已不在当前稿件中（`_audit_issue_resolved`）；
+      (b) **同一 (镜头, family) 的确定性检查**上一轮报出、本轮干净，且两侧都
+          真的跑完（`det_checked`）；
+      (c) 问题点名的实体在修复前的目标布局里存在、修复后消失
+          （`_audit_issue_structurally_removed`）——结构化内容事实。
+
+    ⚠️ 这里**刻意不接受**「已尝试 / 字段触达」集合：那只证明模型动过手、且
+    那一轮验收（本身可被触达兜底满足）通过，不证明问题已修复。2026-11-14
+    复核给出的反例正是「改字段 → 修复轮接受 → 下轮审计沉默」被旧豁免放行。
+    """
+    now = set(now_ids or ())
+    prev_det = set(prev_det_families or ())
+    now_det = set(now_det_families or ())
+    out: list = []
+    for issue in prev_issues or ():
+        if not is_blocking(issue):
+            continue
+        ident = _audit_issue_identity(issue)
+        if ident in now:
+            continue
+        if _audit_issue_resolved(script, issue):
+            continue
+        if det_checked and ident in prev_det and ident not in now_det:
+            continue
+        if _audit_issue_structurally_removed(prev_script, script, issue):
+            continue
+        out.append(issue)
+    return out
 
 
 def _audit_evidence_text(issue) -> str | None:
@@ -6707,16 +6825,18 @@ def _kf_structural_violations(before_script: dict, after_script: dict,
 def _g7_merged_state(merged_script, novel_text) -> "dict | None":
     """G7：算「合并后、后处理前」的确定性 state，供确定性 target-loss 检查.
 
-    失败不影响修复轮（返回 None ⇒ 只跳过确定性侧 target-loss，审计侧照旧）。
+    `None` 只表示**没有合并快照**（调用方未提供，向后兼容）；收集器**失败**
+    返回带 `checker_failed=True` 的状态，由 `_repair_acceptance_decision` 判
+    `postprocess_check_failed` 拒收——"检查没做完"不能当成"没有 target-loss"。
     """
     if not isinstance(merged_script, dict):
         return None
     try:
         return _collect_repair_warnings(merged_script, novel_text)
     except Exception as exc:
-        _logger.warn("[REPAIR] G7 合并后确定性状态计算失败"
-                     "（跳过确定性 target-loss）: %s" % exc)
-        return None
+        _logger.warn("[REPAIR] G7 合并后确定性状态计算失败（本轮拒收）: %s" % exc)
+        return {"issues": [], "checker_failed": True,
+                "error": "merged_state_failed: %s" % exc}
 
 
 def _repair_acceptance_decision(before_state: dict | None,
@@ -6747,6 +6867,8 @@ def _repair_acceptance_decision(before_state: dict | None,
         删证据能让检测器闭嘴，但那是改写检测输入，不是修复；
       * **增删 KF 的结构修复通过了 §1.1 验收**（v6.104）——KF 落在镜内且按时段
         单调、`motion_desc` 的原事件文本仍在且顺序不变（授权 KF 列表的配套代价）；
+      * **G7 的合并后确定性检查真的跑完**（`merged_state["checker_failed"]` 为假）——
+        检查未完成按 `postprocess_check_failed` 拒收，不静默跳过 target-loss；
       * at least one target issue (deterministic or audit) is verifiably gone.
     """
     # v6.104.1：帧数变了的镜头，kf 类 issue 按「该镜的该类问题」比较（位置序号
@@ -6758,6 +6880,11 @@ def _repair_acceptance_decision(before_state: dict | None,
     new_blocking = after_keys - before_keys
     checker_failed = bool((before_state or {}).get("checker_failed")
                           or (after_state or {}).get("checker_failed"))
+    # 2026-11-14 复核 P2：G7 的**合并后**检查没跑完（收集器异常/内部 checker_failed）
+    # 是独立拒收状态——旧实现返回 None 后静默跳过确定性 target-loss，等于把
+    # "检查未完成"当成"没有丢失"。
+    merged_checker_failed = bool(isinstance(merged_state, dict)
+                                 and merged_state.get("checker_failed"))
     audit_targets = [i for i in (audit_issues or []) if is_blocking(i)]
     # v6.102：audit 判据必须是「**本轮新**解决」——`_audit_issue_resolved` 本身幂等，
     # 拿它当轮内功绩会让空转轮次靠陈旧计数通过验收。
@@ -6809,6 +6936,7 @@ def _repair_acceptance_decision(before_state: dict | None,
                 _post_merge_target_lost.append(_k)
     accepted = (
         not checker_failed
+        and not merged_checker_failed
         and not new_blocking
         and not locked_changed
         and not _non_target
@@ -6822,6 +6950,8 @@ def _repair_acceptance_decision(before_state: dict | None,
     reason = ""
     if checker_failed:
         reason = "checker_failed"
+    elif merged_checker_failed:
+        reason = "postprocess_check_failed"
     elif new_blocking:
         reason = "new_blocking"
     elif _post_merge_target_lost:
@@ -6864,6 +6994,8 @@ def _repair_acceptance_decision(before_state: dict | None,
         # 「已尝试未核实」集合，同一身份第二轮起不再给兜底分。
         "audit_touched_ids": _touched_ids,
         "checker_failed": checker_failed,
+        # 2026-11-14 复核 P2：G7 合并后检查未完成（独立于 before/after 的 checker_failed）。
+        "merged_checker_failed": merged_checker_failed,
         "locked_changed": bool(locked_changed),
         "non_target_changed": _non_target,
         "locked_by_llm_changed": _locked_by_llm,

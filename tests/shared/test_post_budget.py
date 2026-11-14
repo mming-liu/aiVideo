@@ -247,3 +247,82 @@ def test_reset_never_deletes_auto_discovered_ledger(tmp_path):
 
     assert ledger.exists(), "自动发现出来的真实账本不在 reset 的删除范围"
     assert json.loads(ledger.read_text(encoding="utf-8"))["used"] == 33
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-14 复核 P1：显式配置无效应报错，不得静默关闭门禁
+# ---------------------------------------------------------------------------
+def test_explicit_file_without_ledger_is_an_error_not_a_silent_off(
+        monkeypatch, tmp_path):
+    """只给 BUDGET_FILE、文件不存在 ⇒ 报配置错误；不能当成"没配"放行.
+
+    旧行为返回 `enabled=false`、`acquire()` 返回 0 直接发送——护栏整条消失。
+    """
+    missing = tmp_path / "nope" / "budget.json"
+    monkeypatch.setenv("STEP02A_IMAGE_BUDGET_FILE", str(missing))
+
+    with pytest.raises(post_budget.PostBudgetConfigError) as excinfo:
+        post_budget.acquire("image")
+    assert excinfo.value.source == "ledger_env_file_missing"
+
+    described = post_budget.describe("image")
+    assert described["enabled"] is True
+    assert described["source"] == "ledger_env_file_missing"
+    assert "不存在" in described["error"]
+
+    used = post_budget.usage("image")
+    assert "不存在" in used["error"]
+    assert not missing.exists(), "被拒的预检不得顺手创建账本"
+
+
+@pytest.mark.parametrize("bad_total", ["abc", "3.0", "-1"])
+def test_invalid_explicit_total_is_rejected(monkeypatch, tmp_path, bad_total):
+    """非法 TOTAL（非整数/负数）不是"显式关闭"：只有整数 0 才关."""
+    monkeypatch.setenv("STEP02A_IMAGE_BUDGET_TOTAL", bad_total)
+
+    with pytest.raises(post_budget.PostBudgetConfigError) as excinfo:
+        post_budget.acquire("image")
+    assert excinfo.value.source == "invalid_total"
+    assert post_budget.describe("image")["enabled"] is True
+    assert "error" in post_budget.describe("image")
+
+
+def test_negative_total_does_not_disable_the_gate(monkeypatch, tmp_path):
+    """负数曾被当成 `explicit_off`；现在必须报错，且不得扣减/建账."""
+    chapter = tmp_path / "chapter_001"
+    _write_ledger(chapter / "step02a_image_budget.json", _valid_ledger(4, 5))
+    monkeypatch.setenv("STEP02A_IMAGE_BUDGET_TOTAL", "-2")
+
+    with pytest.raises(post_budget.PostBudgetConfigError):
+        post_budget.acquire("image")
+    data = json.loads((chapter / "step02a_image_budget.json").read_text(encoding="utf-8"))
+    assert data["used"] == 4
+
+
+def test_describe_reports_the_same_identity_error_as_acquire(monkeypatch, tmp_path):
+    """预检与发送门禁口径一致：显式 TOTAL 与账本 limit 不符时两边都报错.
+
+    旧 describe 直接用账本 limit 算 remaining，预检显示"还有额度"，
+    实际 acquire 会因身份不一致拒收。
+    """
+    chapter = tmp_path / "chapter_001"
+    _write_ledger(chapter / "step02a_image_budget.json", _valid_ledger(1, 172))
+    monkeypatch.setenv("STEP02A_IMAGE_BUDGET_TOTAL", "3")
+
+    described = post_budget.describe("image")
+    assert "error" in described, described
+    assert "身份不一致" in described["error"]
+    assert "remaining" not in described
+    with pytest.raises(post_budget.PostBudgetExhausted):
+        post_budget.acquire("image")
+
+
+def test_describe_never_creates_lock_file(monkeypatch, tmp_path):
+    """只读预检对章目录零写入（plan-only 的硬约束）."""
+    chapter = tmp_path / "chapter_001"
+    ledger = chapter / "step02a_image_budget.json"
+    _write_ledger(ledger, _valid_ledger(2, 5))
+
+    described = post_budget.describe("image")
+    assert described["remaining"] == 3
+    assert not ledger.with_suffix(ledger.suffix + ".lock").exists()

@@ -566,39 +566,46 @@ def _plan_only(options, script: dict, shots_dir: Path, chapter: int) -> int:
     # 里设好候选日志上下文；这里再兜一层——万一被别的入口直接调用，也不能让
     # vimax_bridge 之类按 chapter_dir() 建 step02.log（那一笔就会被 snapshot 判成
     # production_write_detected，exit 3）。
+    #
+    # 2026-11-14 复核 P2：兜底上下文必须在退出时**恢复**。它是进程级全局状态，
+    # 不恢复会让同进程的下一次调用（例如另一个实验根）继续把日志写进第一次的目录。
     from shared import log_utils as _log_utils
-    if _log_utils.current_log_dir() is None:
+    _prev_log_dir = _log_utils.current_log_dir()
+    if _prev_log_dir is None:
         _log_utils.set_log_context(out_root.parent / "logs")
-
-    only_indices = parse_shot_selector(options.shots)
-    ledger = out_root / "step02b_frame_precheck.json"
-    before = production_snapshot(chapter)
-    # 参考表/清单落点也钉到实验根：拼表逻辑只认参数，不知道"现在是只读预检"，
-    # 不钉就会重写正式 shots/N/ref_compose_*.json（只差时间戳，但字节变了）。
-    from shared import ref_compose as _ref_compose
-    _prev_ref_dir = _ref_compose.current_ref_dir()
-    _ref_compose.set_ref_dir_context(out_root / "refs")
     try:
-        plan = build_plan(script, shots_dir, only_indices=only_indices, chapter=chapter,
-                          provider=str(os.getenv("VIDEO_PROVIDER", "")),
-                          precheck_ledger=ledger, ref_work_dir=out_root / "refs")
-    finally:
-        _ref_compose.set_ref_dir_context(_prev_ref_dir)
-    path = out_root / f"plan_{len(list(out_root.glob('plan_*.json'))) + 1:04d}.json"
-    path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
-    changes = snapshot_changes(before, production_snapshot(chapter))
-    payload = {"plan": str(path), "ready": plan["ready"], "blocked": plan["blocked"],
-               "frame_precheck_ledger": str(ledger),
-               "estimated_generations": plan["estimated_generations"],
-               "production_unchanged": not any(changes.values()),
-               "network_calls": 0}
-    if any(changes.values()):
-        payload["isolation_violation"] = changes
-        payload["code"] = "production_write_detected"
+        only_indices = parse_shot_selector(options.shots)
+        ledger = out_root / "step02b_frame_precheck.json"
+        before = production_snapshot(chapter)
+        # 参考表/清单落点也钉到实验根：拼表逻辑只认参数，不知道"现在是只读预检"，
+        # 不钉就会重写正式 shots/N/ref_compose_*.json（只差时间戳，但字节变了）。
+        from shared import ref_compose as _ref_compose
+        _prev_ref_dir = _ref_compose.current_ref_dir()
+        _ref_compose.set_ref_dir_context(out_root / "refs")
+        try:
+            plan = build_plan(script, shots_dir, only_indices=only_indices, chapter=chapter,
+                              provider=str(os.getenv("VIDEO_PROVIDER", "")),
+                              precheck_ledger=ledger, ref_work_dir=out_root / "refs")
+        finally:
+            _ref_compose.set_ref_dir_context(_prev_ref_dir)
+        path = out_root / f"plan_{len(list(out_root.glob('plan_*.json'))) + 1:04d}.json"
+        path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+        changes = snapshot_changes(before, production_snapshot(chapter))
+        payload = {"plan": str(path), "ready": plan["ready"], "blocked": plan["blocked"],
+                   "frame_precheck_ledger": str(ledger),
+                   "estimated_generations": plan["estimated_generations"],
+                   "production_unchanged": not any(changes.values()),
+                   "network_calls": 0}
+        if any(changes.values()):
+            payload["isolation_violation"] = changes
+            payload["code"] = "production_write_detected"
+            print(json.dumps(payload, ensure_ascii=False))
+            return _eio.EXIT_TOOL_FAIL
         print(json.dumps(payload, ensure_ascii=False))
-        return _eio.EXIT_TOOL_FAIL
-    print(json.dumps(payload, ensure_ascii=False))
-    return 0
+        return 0
+    finally:
+        if _prev_log_dir is None:
+            _log_utils.set_log_context(None)
 
 
 def _resume(options) -> int:

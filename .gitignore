@@ -1,4 +1,4 @@
-﻿# API 密钥（包含敏感信息，绝对不能提交）
+# API 密钥（包含敏感信息，绝对不能提交）
 .env
 .env.keys
 # 密钥文件的所有备份变体（如 .env.keys.bak.20261018-104737），防止再次误提交
@@ -243,6 +243,12 @@ tests/enhancements/*
 !tests/step01_script_gen/test_repair_loop_contract.py
 # 2026-11-14 U6 R6：质量报告必须逐字节可复现（集合迭代顺序曾让 quality_sha256 漂移）
 !tests/step01_script_gen/test_quality_report_determinism.py
+# 2026-11-14 复核 P1：G1/G7 门禁与两处被修正的夹具**必须随仓库交付**。
+# 只写报告不放行文件，等于干净检出无法复现「3 passed / 两份夹具已修正」——
+# 工作树干净并不能证明测试已交付。
+!tests/step01_script_gen/test_g1_g7_gates.py
+!tests/step01_script_gen/test_final_audit_reuse_inloop.py
+!tests/step01_script_gen/test_repair_shot_replacements.py
 # 187 条回归还含 source_revision 与 presentation_contract 两个受影响的既有套件；
 # 不放行它们，干净检出只能复现部分读数。source_revision 的夹具来自 legacy_semantic。
 !tests/step01_script_gen/test_source_revision.py

@@ -129,6 +129,7 @@ def _fake_audit(monkeypatch, payload_factory):
             Issue(code=str(i.get("code")), severity="visual_risk",
                   message=str(i.get("message") or ""), shot_id=i.get("shot_id"),
                   frame_id=str(i.get("frame_id") or ""),
+                  entity_id=str(i.get("entity_id") or ""),
                   field_path=str(i.get("field_path") or ""),
                   evidence=str(i.get("evidence") or ""),
                   # v6.119：成对目标必须跟着走——生产转换器

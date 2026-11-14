@@ -5,13 +5,17 @@
 
 - 启用条件（U6-FIN WP1a 起：账本存在即启用，未设环境变量不再等于裸奔）：
   1. 显式设置 *_BUDGET_TOTAL > 0 → 按该上限启用（显式覆盖一切）；
-  2. 显式设置 *_BUDGET_TOTAL <= 0 → 显式关闭（唯一合法的"我不想要门禁"写法）；
+  2. 显式设置 *_BUDGET_TOTAL = 0 → 显式关闭（唯一合法的"我不想要门禁"写法）；
   3. 未设置 *_BUDGET_TOTAL 但章节目录下已有账本（默认名见 _KINDS）→
      **自动绑定该账本并读取其 limit 作为上限**（`source=ledger_autodiscovered`）；
   4. 都没有 → 不启用，行为与历史版本一致。
   2026-11-14 R6 S07 实测事故：人手漏传 `STEP02A_IMAGE_BUDGET_TOTAL` 时，
   章目录里明明躺着 `used=31/limit=172` 的账本，护栏却被静默旁路。自动发现
   就是堵这个洞——"账本在、门禁就在"，只有显式写 0 才能关。
+- **显式配置无效 ≠ 没配置**：`*_BUDGET_TOTAL` 不是整数或为负数、或显式
+  `*_BUDGET_FILE` 指向的账本不存在时，抛 :class:`PostBudgetConfigError`
+  （fail-closed），不退回"不启用"。:func:`describe` 把同一错误降级成
+  `enabled=True + error` 放进只读预检，避免预检与实际门禁口径不一致。
 - 账本落在章节目录（或 *_BUDGET_FILE），每次发送前原子检查并 +1；
   进程内 threading 锁 + 跨进程文件锁（Windows msvcrt / POSIX fcntl）。
 - 文件损坏/不可读 ⇒ 拒绝发送（fail-closed）。自动发现到的账本即使上限读不出
@@ -66,11 +70,18 @@ class PostBudgetExhausted(RuntimeError):
     """预算/额度已耗尽：调用方必须在发送前停止."""
 
 
-def _int(value, default: int = 0) -> int:
-    try:
-        return int(str(value).strip())
-    except (TypeError, ValueError):
-        return default
+class PostBudgetConfigError(PostBudgetExhausted):
+    """**显式**预算配置无效（不是"没配置"）：不得当成关闭门禁.
+
+    典型来源：`*_BUDGET_TOTAL` 写了非整数/负数，或显式 `*_BUDGET_FILE`
+    指向的账本不存在。这类配置说明调用方**想要门禁但写错了**，静默退回
+    "不启用"会让护栏整条消失（R6 S07 的同类事故）。`source` 供只读预检
+    回报错误位置。
+    """
+
+    def __init__(self, message: str, *, source: str = "invalid_config") -> None:
+        super().__init__(message)
+        self.source = source
 
 
 def _limit_from_ledger(path: Path) -> int:
@@ -105,6 +116,9 @@ def _config_detail(kind: str, *, discover: bool = True) -> dict:
     `ledger_autodiscovered`（环境变量全空，章目录里已有账本）/
     `disabled`（无账本、也没给配置）.
 
+    显式配置写错时抛 :class:`PostBudgetConfigError`，**不**退回 `disabled`：
+    "我配了但没生效"与"我没配"是两件事，前者静默放行等于护栏消失。
+
     `discover=False` 只认显式启用：破坏性操作（如 :func:`reset`）绝不能顺手
     删掉一个"只是恰好存在"的真实账本。
     """
@@ -114,10 +128,21 @@ def _config_detail(kind: str, *, discover: bool = True) -> dict:
         raise ValueError("未知预算类型: %r" % kind) from exc
     explicit_file = (os.getenv(env_file) or "").strip()
     raw_total = os.getenv(env_total)
-    explicit_total = raw_total is not None and str(raw_total).strip() != ""
-    if explicit_total:
-        limit = _int(raw_total, 0)
-        if limit <= 0:
+    if raw_total is not None and str(raw_total).strip() != "":
+        text = str(raw_total).strip()
+        try:
+            limit = int(text)
+        except (TypeError, ValueError) as exc:
+            raise PostBudgetConfigError(
+                "%s=%r 不是整数：显式预算配置无效（拒绝发送）；"
+                "确需关闭门禁请显式写 0" % (env_total, raw_total),
+                source="invalid_total") from exc
+        if limit < 0:
+            raise PostBudgetConfigError(
+                "%s=%r 为负数：显式预算配置无效（拒绝发送）；"
+                "确需关闭门禁请显式写 0" % (env_total, raw_total),
+                source="invalid_total")
+        if limit == 0:
             return {"path": None, "limit": 0, "source": "explicit_off"}
         path = Path(explicit_file) if explicit_file else _default_ledger(default_name)
         return {"path": path, "limit": limit, "source": "env"}
@@ -126,7 +151,11 @@ def _config_detail(kind: str, *, discover: bool = True) -> dict:
     if explicit_file:
         path = Path(explicit_file)
         if not path.exists():
-            return {"path": None, "limit": 0, "source": "disabled"}
+            raise PostBudgetConfigError(
+                "%s=%s 指向的账本不存在：显式配置未生效（拒绝发送，"
+                "不会静默关闭门禁）；确需关闭请显式设置 %s=0"
+                % (env_file, explicit_file, env_total),
+                source="ledger_env_file_missing")
         return {"path": path, "limit": _limit_from_ledger(path),
                 "source": "ledger_env_file"}
     path = _default_ledger(default_name)
@@ -187,22 +216,14 @@ def _normalize_outcomes(data: dict, used: int) -> dict:
     return data
 
 
-def _read(path: Path, kind: str, expected_limit: int) -> dict:
-    """读取并严格校验账本；缺失返回初始状态；字段损坏/身份不符一律拒绝.
+def _validate_ledger(data, kind: str, expected_limit: int) -> dict:
+    """校验账本内容与本次身份；非法一律抛 `PostBudgetExhausted`.
 
-    不允许 used 缺失/负数/字符串被当成 0（那会静默恢复额度），也不允许
-    账本 limit 与本次 TOTAL 不一致（那会在恢复时静默扩大/缩小预算）。
+    纯函数（不读盘、不写盘）：`_read` 与只读的 :func:`describe` 共用同一份
+    判据，避免"预检按账本上限显示剩余、发送时却因身份不一致拒收"。
     """
-    if not path.exists():
-        return {"kind": kind, "used": 0, "limit": int(expected_limit),
-                "quota_exhausted": "", "schema_version": SCHEMA_VERSION,
-                "outcomes": _empty_outcomes(), "pending": 0}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise PostBudgetExhausted("预算账本不可读（拒绝发送）: %s" % exc) from exc
     if not isinstance(data, dict):
-        raise PostBudgetExhausted("预算账本不是 JSON 对象（拒绝发送）: %s" % path)
+        raise PostBudgetExhausted("预算账本不是 JSON 对象（拒绝发送）")
     if data.get("kind") != kind:
         raise PostBudgetExhausted(
             "预算账本身份不符：kind=%r，期望 %r（拒绝发送）"
@@ -225,6 +246,23 @@ def _read(path: Path, kind: str, expected_limit: int) -> dict:
         raise PostBudgetExhausted("预算账本 quota_exhausted 非法（拒绝发送）")
     data["quota_exhausted"] = str(quota or "")
     return _normalize_outcomes(data, used)
+
+
+def _read(path: Path, kind: str, expected_limit: int) -> dict:
+    """读取并严格校验账本；缺失返回初始状态；字段损坏/身份不符一律拒绝.
+
+    不允许 used 缺失/负数/字符串被当成 0（那会静默恢复额度），也不允许
+    账本 limit 与本次 TOTAL 不一致（那会在恢复时静默扩大/缩小预算）。
+    """
+    if not path.exists():
+        return {"kind": kind, "used": 0, "limit": int(expected_limit),
+                "quota_exhausted": "", "schema_version": SCHEMA_VERSION,
+                "outcomes": _empty_outcomes(), "pending": 0}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise PostBudgetExhausted("预算账本不可读（拒绝发送）: %s" % exc) from exc
+    return _validate_ledger(data, kind, expected_limit)
 
 
 def _write(path: Path, data: dict) -> None:
@@ -318,7 +356,11 @@ def mark_quota_exhausted(kind: str, message: str) -> None:
     text = str(message or "quota exhausted")[:500]
     _QUOTA[kind] = text
     _event("account_refused", kind, None, source="quota_marker", detail=text)
-    path, _limit = _config(kind)
+    try:
+        path, _limit = _config(kind)
+    except PostBudgetExhausted:
+        # 配置无效时没有可写账本；内存熔断标记已置，仍然拒绝后续发送。
+        return
     if path is None:
         return
     with _LOCK, _file_lock(path):
@@ -329,10 +371,13 @@ def mark_quota_exhausted(kind: str, message: str) -> None:
 
 
 def quota_exhausted(kind: str) -> str:
-    """返回熔断原因（空=未熔断）；账本损坏按熔断处理（fail-closed）."""
+    """返回熔断原因（空=未熔断）；账本损坏/配置无效按熔断处理（fail-closed）."""
     if _QUOTA.get(kind):
         return _QUOTA[kind]
-    path, _limit = _config(kind)
+    try:
+        path, _limit = _config(kind)
+    except PostBudgetExhausted as exc:
+        return str(exc)
     if path is None:
         return ""
     try:
@@ -351,8 +396,13 @@ def usage(kind: str) -> dict:
 
     额外回报 `budget_source`，让调用方/日志能分辨"环境变量显式启用"与
     "账本自动发现"——2026-11-14 的漏传事故正是因为这两者在输出上不可分辨。
+    显式配置无效时返回 `error`（fail-closed），不伪装成"未启用"。
     """
-    detail = _config_detail(kind)
+    try:
+        detail = _config_detail(kind)
+    except PostBudgetExhausted as exc:
+        return {"error": str(exc),
+                "budget_source": getattr(exc, "source", "invalid_config")}
     path, limit = detail["path"], detail["limit"]
     if path is None:
         return {}
@@ -374,10 +424,19 @@ def describe(kind: str, *, discover: bool = True) -> dict:
     **不建锁文件、不写盘**——plan-only / 预检必须用它。:func:`usage` 会开
     `*.json.lock`，在"只读预检对章目录零写入"的场合下那是一笔多余写操作。
 
-    不可读/字段非法时不抛异常，改为在返回值里带 `error`，由调用方决定是否阻断
+    与 :func:`acquire` 共用同一份校验（:func:`_validate_ledger`）：身份不符/
+    字段非法/显式配置无效都在这里报 `error`，不会出现"预检显示还有剩余、
+    发送时却被拒收"。不可读/非法时不抛异常，由调用方决定是否阻断
     （真正的发送门禁仍由 :func:`acquire` 的 fail-closed 兜底）。
     """
-    detail = _config_detail(kind, discover=discover)
+    try:
+        detail = _config_detail(kind, discover=discover)
+    except PostBudgetExhausted as exc:
+        # 显式配置无效 = 想要门禁但没生效：enabled 保持 True + error，
+        # 避免消费方把"没生效"读成"本来就不需要门禁"。
+        return {"enabled": True,
+                "source": getattr(exc, "source", "invalid_config"),
+                "error": str(exc)}
     path = detail["path"]
     if path is None:
         return {"enabled": False, "source": detail["source"]}
@@ -388,19 +447,16 @@ def describe(kind: str, *, discover: bool = True) -> dict:
     except Exception as exc:                                  # noqa: BLE001
         info["error"] = "账本不可读：%s" % exc
         return info
-    if not isinstance(data, dict):
-        info["error"] = "账本不是 JSON 对象"
+    try:
+        data = _validate_ledger(data, kind, detail["limit"])
+    except PostBudgetExhausted as exc:
+        info["error"] = str(exc)
         return info
-    used = data.get("used")
-    limit = data.get("limit")
-    info["used"] = used
-    info["pending"] = data.get("pending", 0)
-    if isinstance(limit, int) and not isinstance(limit, bool):
-        info["limit"] = limit
-    info["quota_exhausted"] = str(data.get("quota_exhausted") or "")
-    if (isinstance(used, int) and not isinstance(used, bool)
-            and isinstance(info.get("limit"), int)):
-        info["remaining"] = max(0, info["limit"] - used)
+    info["used"] = data["used"]
+    info["pending"] = data["pending"]
+    info["limit"] = data["limit"]
+    info["quota_exhausted"] = data["quota_exhausted"]
+    info["remaining"] = max(0, data["limit"] - data["used"])
     return info
 
 
@@ -516,7 +572,11 @@ def reset(kind=None) -> None:
     kinds = [kind] if kind else list(_KINDS)
     for item in kinds:
         _QUOTA.pop(item, None)
-        path, _limit = _config(item, discover=False)
+        try:
+            path, _limit = _config(item, discover=False)
+        except PostBudgetExhausted:
+            # 显式配置无效时没有可安全删除的账本：跳过（本函数只做显式清理）。
+            continue
         if path is None:
             continue
         for target in (path, path.with_suffix(path.suffix + '.lock'),
@@ -533,7 +593,7 @@ def is_quota_error(text) -> bool:
     return any(marker in lowered for marker in _QUOTA_ERROR_MARKERS)
 
 
-__all__ = ["OUTCOMES", "PostBudgetExhausted", "acquire", "clear_quota",
-           "describe", "is_quota_error", "mark_quota_exhausted", "migrate",
-           "quota_exhausted", "record", "record_qc_rejected", "reclassify",
-           "reset", "usage"]
+__all__ = ["OUTCOMES", "PostBudgetConfigError", "PostBudgetExhausted", "acquire",
+           "clear_quota", "describe", "is_quota_error", "mark_quota_exhausted",
+           "migrate", "quota_exhausted", "record", "record_qc_rejected",
+           "reclassify", "reset", "usage"]

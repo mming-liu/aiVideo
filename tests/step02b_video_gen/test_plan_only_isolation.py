@@ -160,3 +160,69 @@ def test_plan_only_bridge_log_never_lands_in_production(tmp_path, monkeypatch):
     assert rc == 0, "plan-only 必须 exit 0（日志外溢会把隔离判据打成 exit 3）"
     assert not (prod / "step02.log").exists(), "桥接日志不得写进正式章目录"
     assert (pkg / "logs" / "step02.log").is_file(), "日志应落候选实验根"
+
+
+def test_plan_only_fallback_log_context_is_scoped_to_each_call(tmp_path, monkeypatch):
+    """复核 P2：兜底日志上下文是**进程级**状态，退出时必须恢复.
+
+    旧实现只在为空时设置、从不恢复：同进程第二次直接调用 `_plan_only`（另一个
+    实验根）时上下文仍指向第一次的目录，日志会串根。这里连续跑两次不同候选根，
+    断言各自落自己的目录、且调用结束后恢复为 None。
+    """
+    from shared import log_utils
+
+    prod = _production_tree(tmp_path)
+    monkeypatch.setattr(main, "production_snapshot", _snapshot_of(prod))
+    monkeypatch.setattr(cli, "resolve_experiment_root",
+                        lambda root, chapter=None: "exp")
+    roots = iter([tmp_path / "pkg_a", tmp_path / "pkg_b"])
+    monkeypatch.setattr(eio, "package_root",
+                        lambda package, experiment_id, chapter=None: next(roots))
+
+    resolved: list[Path] = []
+
+    def _build_plan_records_log(*args, **kwargs):
+        resolved.append(log_utils.resolve_log_file("step02.log"))
+        return {"shots": [], "ready": 1, "blocked": 0,
+                "estimated_generations": 1, "network_calls": 0}
+
+    monkeypatch.setattr(main, "build_plan", _build_plan_records_log)
+    log_utils.set_log_context(None)
+    options = SimpleNamespace(
+        candidate_root=str(tmp_path / "candidate" / "exp" / "video"), shots="1")
+
+    assert main._plan_only(options, _script(), tmp_path / "shots", 1) == 0
+    assert main._plan_only(options, _script(), tmp_path / "shots", 1) == 0
+
+    assert resolved[0].parent == tmp_path / "pkg_a" / "logs", resolved
+    assert resolved[1].parent == tmp_path / "pkg_b" / "logs", resolved
+    assert log_utils.current_log_dir() is None, "退出时必须恢复进程级日志上下文"
+
+
+def test_plan_only_restores_log_context_on_failure(tmp_path, monkeypatch):
+    """异常路径也必须恢复上下文（不能把进程留在候选目录里）."""
+    from shared import log_utils
+
+    prod = _production_tree(tmp_path)
+    monkeypatch.setattr(main, "production_snapshot", _snapshot_of(prod))
+    monkeypatch.setattr(cli, "resolve_experiment_root",
+                        lambda root, chapter=None: "exp")
+    monkeypatch.setattr(eio, "package_root",
+                        lambda package, experiment_id, chapter=None: tmp_path / "pkg")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("build_plan failed")
+
+    monkeypatch.setattr(main, "build_plan", _boom)
+    log_utils.set_log_context(None)
+    options = SimpleNamespace(
+        candidate_root=str(tmp_path / "candidate" / "exp" / "video"), shots="1")
+
+    try:
+        main._plan_only(options, _script(), tmp_path / "shots", 1)
+    except RuntimeError:
+        pass
+    else:                                                     # pragma: no cover
+        raise AssertionError("build_plan 失败必须抛出，不得静默返回成功")
+
+    assert log_utils.current_log_dir() is None

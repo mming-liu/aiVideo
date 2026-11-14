@@ -26,7 +26,7 @@ def test_actual_repair_request_consumes_serialized_example(commit_env,monkeypatc
     def audit(current,n):
         holder["script"]=copy.deepcopy(current)
         sid=str(current["shots"][0]["index"])
-        issues=[] if not _has_phantom(current) else [{"code":"model_audit_LAYOUT_PHANTOM_ENTITY","severity":"visual_risk","shot_id":sid,"field_path":"ff_desc","evidence":"小厮","message":"删除多余条目","repair_targets":[{"shot_id":sid,"field_path":"frame_layouts.kfs[0]"}]}]
+        issues=[] if not _has_phantom(current) else [{"code":"model_audit_LAYOUT_PHANTOM_ENTITY","severity":"visual_risk","shot_id":sid,"entity_id":"小厮","field_path":"ff_desc","evidence":"小厮","message":"删除多余条目","repair_targets":[{"shot_id":sid,"field_path":"frame_layouts.kfs[0]"}]}]
         return _audit_payload(current,issues=issues,scope=m.STEP01_AUDIT_SCOPE,fingerprint=RULE_SOURCE_FINGERPRINT)
     _fake_audit(monkeypatch,audit)
     monkeypatch.setattr(m,"create_service",lambda *a,**k:Service(holder))
