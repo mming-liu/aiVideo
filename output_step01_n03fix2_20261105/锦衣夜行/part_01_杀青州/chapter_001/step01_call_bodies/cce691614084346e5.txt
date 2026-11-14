@@ -1,1 +1,0 @@
-{"fact_updates": [{"fact_uid": "f02", "claim": "杨旭十六岁接手家业", "evidence": ["src_aba1adc22826c283_1027"]}, {"fact_uid": "f03", "claim": "杨旭守孝三年后考中秀才", "evidence": ["src_aba1adc22826c283_1240"]}], "core_updates": {}}

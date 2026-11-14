@@ -1,1 +1,0 @@
-{"fact_updates": [{"fact_uid": "f02", "claim": "杨旭十六岁接手家业，四年后已跻身青州十大豪门", "evidence": ["src_aba1adc22826c283_1027", "src_aba1adc22826c283_1148"]}], "core_updates": {}}

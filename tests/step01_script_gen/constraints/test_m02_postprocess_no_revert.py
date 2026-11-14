@@ -46,23 +46,24 @@ def _pair_script(prev_prompt: str, curr_prompt: str) -> dict:
 
 
 def test_framing_jump_does_not_rewrite_a_shot_under_repair():
-    """本轮被授权改写的镜头：`framing_jump` 不得把它改回去."""
+    """本轮被授权改写的镜头：`framing_jump` 不得把它改回去（G2：只报不改）."""
     script = _pair_script("黄昏荷塘大远景，空无一人", "[中近景] 船头，人物立")
     ctx = ConstraintContext.from_script(
         script, is_in_repair_loop=True, repair_shot_indices={1})
     repairs = FramingJumpConstraint().apply(ctx)
-    assert repairs == []
     assert script["shots"][0]["prompt"] == "黄昏荷塘大远景，空无一人"
+    assert all(r.action == "warn" for r in repairs)
 
 
-def test_framing_jump_still_rewrites_shots_outside_the_round():
-    """不在本轮修复范围内的镜头，行为保持原样（规则本身没有被取消）."""
+def test_framing_jump_never_rewrites_shots_outside_the_round():
+    """G2 裁决（2026-11-14）：所有镜头都只报不改，不再静默改写景别."""
     script = _pair_script("黄昏荷塘大远景，空无一人", "[中近景] 船头，人物立")
     ctx = ConstraintContext.from_script(
         script, is_in_repair_loop=True, repair_shot_indices={2})
     repairs = FramingJumpConstraint().apply(ctx)
-    assert repairs, "非本轮目标的景别跨度仍应被处理"
-    assert "大远景" not in script["shots"][0]["prompt"]
+    assert repairs, "景别跨度仍应被报告"
+    assert all(r.action == "warn" for r in repairs)
+    assert script["shots"][0]["prompt"] == "黄昏荷塘大远景，空无一人"
 
 
 def test_framing_jump_never_rewrites_on_the_final_pass():

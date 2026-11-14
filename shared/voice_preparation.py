@@ -148,6 +148,8 @@ def build_voice_preparation(script: dict, *, scope: dict, windows: dict | None =
     audio_paths = audio_paths or {}
     units: list[dict] = []
     conflicts: list[dict] = []
+    # 2026-11-14 S06 G6：准备态的「计划超窗」是规划问题，不是实测拒收。
+    planning: list[dict] = []
     by_shot: dict[Any, list[dict]] = {}
     for i, raw in enumerate(units_raw):
         if not isinstance(raw, dict):
@@ -161,7 +163,14 @@ def build_voice_preparation(script: dict, *, scope: dict, windows: dict | None =
         probe_error = ""
         if audio_paths:
             measured, probe_error = _probe_duration(path)
-        actual = measured if measured is not None else declared
+        # 2026-11-14 S06 G6：准备态不把声明值冒充实测值。
+        # - 有本地探测 → confirmed（实测优先）；
+        # - 输入自带 verified=true + actual_sec → confirmed（源侧已核实）；
+        # - 其余 → prepared（计划值进 declared_sec，规划问题不拒收）。
+        raw_actual = _number(raw.get("actual_sec"))
+        raw_verified = raw.get("verified") is True and raw_actual is not None
+        actual = measured if measured is not None else (raw_actual if raw_verified else None)
+        state = "confirmed" if actual is not None else "prepared"
         window = _number(windows.get(str(shot_index))) if windows else None
         if window is None:
             shot = shots.get(shot_index) or {}
@@ -179,6 +188,9 @@ def build_voice_preparation(script: dict, *, scope: dict, windows: dict | None =
             "required_playback_sec": declared,
             "declared_sec": declared,
             "actual_sec": actual,
+            # 2026-11-14 S06 G6：两态显式化——prepared=只有计划声明值，
+            # confirmed=有实测（本地探测或源侧 verified=true + actual_sec）。
+            "state": state,
             "available_window_sec": effective_window,
             "shot_audio_window_sec": window,
             "unit_window_sec": unit_window,
@@ -205,14 +217,26 @@ def build_voice_preparation(script: dict, *, scope: dict, windows: dict | None =
                     "shot_index": shot_index, "path": f"voice_units[{i}].verified",
                     "message": "原生对白未核实完整性（不能仅凭音轨存在判通过）",
                 })
-        if kind in ("tts_dialogue", "narration") and effective_window is not None \
-                and actual is not None and actual > effective_window + 1e-9:
-            conflicts.append({
-                "code": "audio_window_overflow", "unit_id": uid,
-                "shot_index": shot_index, "path": f"voice_units[{i}].actual_sec",
-                "message": f"{uid} 实际 {actual:.2f}s 超过可用窗口 {effective_window:.2f}s",
-                "overflow_sec": round(actual - effective_window, 6),
-            })
+        if kind in ("tts_dialogue", "narration") and effective_window is not None:
+            timing = actual if state == "confirmed" else declared
+            if timing is not None and timing > effective_window + 1e-9:
+                if state == "confirmed" and actual is not None:
+                    conflicts.append({
+                        "code": "audio_window_overflow", "unit_id": uid,
+                        "shot_index": shot_index, "path": f"voice_units[{i}].actual_sec",
+                        "message": f"{uid} 实测 {actual:.2f}s 超过可用窗口 {effective_window:.2f}s",
+                        "state": "confirmed",
+                        "overflow_sec": round(actual - effective_window, 6),
+                    })
+                else:
+                    planning.append({
+                        "code": "audio_window_overflow_planned", "unit_id": uid,
+                        "shot_index": shot_index, "path": f"voice_units[{i}].declared_sec",
+                        "message": (f"{uid} 计划时长 {declared:.2f}s 超过可用窗口 "
+                                    f"{effective_window:.2f}s（尚未实测，按规划问题上报）"),
+                        "state": "prepared",
+                        "overflow_sec": round(declared - effective_window, 6),
+                    })
     # 逐镜：两种对白来源 / 独立声音合计超窗 / 缺音轨 / 有声音要求但无单元。
     for shot_index, items in by_shot.items():
         kinds = {u["kind"] for u in items}
@@ -232,16 +256,33 @@ def build_voice_preparation(script: dict, *, scope: dict, windows: dict | None =
                     "message": "需要独立音轨的声音单元没有音频产物",
                 })
         independent = [u for u in items if u["kind"] in ("tts_dialogue", "narration")]
-        total = sum(u["actual_sec"] or 0.0 for u in independent)
+        confirmed_units = [u for u in independent if u.get("state") == "confirmed"]
+        planned_units = [u for u in independent if u.get("state") != "confirmed"]
+        confirmed_total = sum(u["actual_sec"] or 0.0 for u in confirmed_units)
+        planned_total = sum(u["declared_sec"] or 0.0 for u in planned_units)
+        total = confirmed_total + planned_total
         window = independent[0]["shot_audio_window_sec"] if independent else None
         if window is not None and total > window + 1e-9:
-            conflicts.append({
-                "code": "audio_window_overflow", "shot_index": shot_index,
-                "unit_ids": [u["unit_id"] for u in independent],
-                "path": f"shots[{shot_index}].audio_window",
-                "message": f"镜头 {shot_index} 独立声音合计 {total:.2f}s 超过窗口 {window:.2f}s",
-                "overflow_sec": round(total - window, 6),
-            })
+            if confirmed_total > window + 1e-9:
+                conflicts.append({
+                    "code": "audio_window_overflow", "shot_index": shot_index,
+                    "unit_ids": [u["unit_id"] for u in confirmed_units],
+                    "path": f"shots[{shot_index}].audio_window",
+                    "message": (f"镜头 {shot_index} 独立声音实测合计 {confirmed_total:.2f}s "
+                                f"超过窗口 {window:.2f}s"),
+                    "state": "confirmed",
+                    "overflow_sec": round(confirmed_total - window, 6),
+                })
+            else:
+                planning.append({
+                    "code": "audio_window_overflow_planned", "shot_index": shot_index,
+                    "unit_ids": [u["unit_id"] for u in independent],
+                    "path": f"shots[{shot_index}].audio_window",
+                    "message": (f"镜头 {shot_index} 独立声音计划合计 {total:.2f}s "
+                                f"超过窗口 {window:.2f}s（尚未实测，按规划问题上报）"),
+                    "state": "prepared",
+                    "overflow_sec": round(total - window, 6),
+                })
     # 图外旁白必须有自己的 TTS 音轨；对白可能由视频原生发声（是否独立由音频策略
     # 决定），所以没有 voice_units 不能一概判缺。旁白缺失才是确定缺口。
     requires_voice = bool(narration)
@@ -256,6 +297,7 @@ def build_voice_preparation(script: dict, *, scope: dict, windows: dict | None =
         confirmation = {"code": NO_AUDIO_CONFIRMATION, "status": "confirmed",
                         "reason": "计划没有对白/旁白条目，执行准备确认无声音要求"}
     codes = sorted({c["code"] for c in conflicts})
+    planning_codes = sorted({c["code"] for c in planning})
     return {
         "schema": SCHEMA,
         "status": "blocked" if conflicts else "ready",
@@ -264,6 +306,9 @@ def build_voice_preparation(script: dict, *, scope: dict, windows: dict | None =
         "units": units,
         "conflicts": conflicts,
         "codes": codes,
+        # 准备态的规划问题（不阻断）：计划超窗、未实测等。
+        "planning_issues": planning,
+        "planning_codes": planning_codes,
         "no_audio_confirmation": confirmation,
         "by_shot": {str(k): [u["unit_id"] for u in v] for k, v in by_shot.items()},
         "unverified": [u["unit_id"] for u in units if not u["verified"]],
@@ -284,10 +329,12 @@ def measure_units(report: dict, audio_paths: dict) -> dict:
         unit["audio_sha256"] = _sha256_file(str(path))
         if duration is None:
             unit["verified"] = False
+            unit["state"] = "prepared"
             unit["measurement"] = error
             continue
         unit["actual_sec"] = duration
         unit["verified"] = True
+        unit["state"] = "confirmed"
         unit["measurement"] = "ffprobe"
     updated["unverified"] = [u["unit_id"] for u in updated.get("units") or []
                              if not u.get("verified")]

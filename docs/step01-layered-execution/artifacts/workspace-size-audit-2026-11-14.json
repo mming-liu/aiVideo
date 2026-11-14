@@ -1,0 +1,572 @@
+{
+ "root": "C:\\myFloders\\git\\aiVideo",
+ "total": {
+  "bytes": 2267591580,
+  "files": 14070
+ },
+ "by_top_dir": {
+  "output": {
+   "bytes": 1739491298,
+   "files": 9248
+  },
+  "reference_skills": {
+   "bytes": 356312413,
+   "files": 1302
+  },
+  ".git": {
+   "bytes": 63440501,
+   "files": 48
+  },
+  "tests": {
+   "bytes": 26508460,
+   "files": 1078
+  },
+  "skills": {
+   "bytes": 23742976,
+   "files": 338
+  },
+  "锦衣夜行_77119小说.txt": {
+   "bytes": 11979761,
+   "files": 1
+  },
+  "step01_script_gen": {
+   "bytes": 8617849,
+   "files": 326
+  },
+  "锦衣夜行_77119小说.txt.bak": {
+   "bytes": 8140463,
+   "files": 1
+  },
+  "docs": {
+   "bytes": 5267245,
+   "files": 419
+  },
+  "tools": {
+   "bytes": 5249744,
+   "files": 124
+  },
+  "shared": {
+   "bytes": 5075242,
+   "files": 196
+  },
+  "baselines": {
+   "bytes": 4806103,
+   "files": 164
+  },
+  ".dsh": {
+   "bytes": 2353385,
+   "files": 114
+  },
+  ".agents": {
+   "bytes": 1256634,
+   "files": 161
+  },
+  ".claude": {
+   "bytes": 1076395,
+   "files": 143
+  },
+  "step02_video_gen": {
+   "bytes": 649065,
+   "files": 22
+  },
+  "_video_gen": {
+   "bytes": 551581,
+   "files": 24
+  },
+  "step04_merge": {
+   "bytes": 472461,
+   "files": 20
+  },
+  "_text_gen": {
+   "bytes": 408729,
+   "files": 28
+  },
+  "tts": {
+   "bytes": 336861,
+   "files": 22
+  },
+  "step02a_frame_gen": {
+   "bytes": 219671,
+   "files": 9
+  },
+  "step03_tts_audio": {
+   "bytes": 213495,
+   "files": 9
+  },
+  "_image_gen": {
+   "bytes": 212978,
+   "files": 18
+  },
+  ".aiVideo": {
+   "bytes": 209320,
+   "files": 35
+  },
+  "vimax": {
+   "bytes": 142984,
+   "files": 53
+  },
+  "step02b_video_gen": {
+   "bytes": 124216,
+   "files": 6
+  },
+  ".acl-reports": {
+   "bytes": 123738,
+   "files": 6
+  },
+  "references": {
+   "bytes": 116129,
+   "files": 18
+  },
+  "problems.md": {
+   "bytes": 71174,
+   "files": 1
+  },
+  ".p1a_exp": {
+   "bytes": 60718,
+   "files": 90
+  },
+  ".workbuddy": {
+   "bytes": 42541,
+   "files": 2
+  },
+  ".env.content": {
+   "bytes": 35156,
+   "files": 1
+  },
+  "AGENTS.md": {
+   "bytes": 33420,
+   "files": 1
+  },
+  "__pycache__": {
+   "bytes": 33133,
+   "files": 3
+  },
+  ".idea": {
+   "bytes": 24038,
+   "files": 7
+  },
+  ".gitignore": {
+   "bytes": 21901,
+   "files": 1
+  },
+  "sync.mjs": {
+   "bytes": 20819,
+   "files": 1
+  },
+  "scene_compliance.py": {
+   "bytes": 15271,
+   "files": 1
+  },
+  "README.md": {
+   "bytes": 13986,
+   "files": 1
+  },
+  "storyboard_refs.py": {
+   "bytes": 13526,
+   "files": 1
+  },
+  "todolist.md": {
+   "bytes": 12879,
+   "files": 1
+  },
+  "DOCUMENTATION.md": {
+   "bytes": 12866,
+   "files": 1
+  },
+  "aivideo_governance_plan.md": {
+   "bytes": 12542,
+   "files": 1
+  },
+  "KICKOFF.json": {
+   "bytes": 11506,
+   "files": 1
+  },
+  ".opencode": {
+   "bytes": 10961,
+   "files": 1
+  },
+  "CLAUDE.md": {
+   "bytes": 7862,
+   "files": 1
+  },
+  "d12_work": {
+   "bytes": 6216,
+   "files": 4
+  },
+  ".zcode": {
+   "bytes": 6002,
+   "files": 2
+  },
+  "skill_spy.txt": {
+   "bytes": 4075,
+   "files": 1
+  },
+  "skills-lock.json": {
+   "bytes": 3854,
+   "files": 1
+  },
+  "_verify_review.py": {
+   "bytes": 3359,
+   "files": 1
+  },
+  "pytest.ini": {
+   "bytes": 2699,
+   "files": 1
+  },
+  "conftest.py": {
+   "bytes": 2628,
+   "files": 1
+  },
+  ".env.keys": {
+   "bytes": 2163,
+   "files": 1
+  },
+  "skill_character_asset.txt": {
+   "bytes": 1753,
+   "files": 1
+  },
+  "requirements.txt": {
+   "bytes": 1281,
+   "files": 1
+  },
+  "_verify_review.out.txt": {
+   "bytes": 984,
+   "files": 1
+  },
+  ".codex": {
+   "bytes": 959,
+   "files": 2
+  },
+  "start_studio.bat": {
+   "bytes": 923,
+   "files": 1
+  },
+  ".gitattributes": {
+   "bytes": 557,
+   "files": 1
+  },
+  ".mcp.json": {
+   "bytes": 127,
+   "files": 1
+  },
+  "unused.wav": {
+   "bytes": 4,
+   "files": 1
+  }
+ },
+ "by_category": {
+  "ignored_production_output": {
+   "bytes": 1739491298,
+   "files": 9248
+  },
+  "other_untracked": {
+   "bytes": 414136101,
+   "files": 3024
+  },
+  "git_internal": {
+   "bytes": 63440501,
+   "files": 48
+  },
+  "git_tracked": {
+   "bytes": 40625000,
+   "files": 1351
+  },
+  "ignored_agent_staging": {
+   "bytes": 9898680,
+   "files": 399
+  }
+ },
+ "by_b_source": {
+  "B4_output_accumulation": {
+   "bytes": 1739491298,
+   "files": 9248
+  },
+  "B5_git_objects_and_promo_assets": {
+   "bytes": 82165469,
+   "files": 63
+  },
+  "B3_baselines_and_agent_staging": {
+   "bytes": 9898680,
+   "files": 399
+  },
+  "B1_output_step01_snapshots": {
+   "bytes": 6216,
+   "files": 4
+  }
+ },
+ "top_dirs": [
+  {
+   "path": "output/video/锦衣夜行/part_01_杀青州/chapter_001",
+   "bytes": 146935491,
+   "files": 78
+  },
+  {
+   "path": "output/step01_run_review/20261013_073508/approved_rerun/full_rerun_20261015T144500",
+   "bytes": 80653012,
+   "files": 21
+  },
+  {
+   "path": "output/step01_run_review/20261013_073508/approved_rerun/repair_real",
+   "bytes": 80342705,
+   "files": 42
+  },
+  {
+   "path": "output/step01_run_review/20261013_073508/approved_rerun/full_rerun_20261014T132449",
+   "bytes": 79630189,
+   "files": 26
+  },
+  {
+   "path": "output/step01_run_review/20261013_073508/approved_rerun/repair_real_v2",
+   "bytes": 78781913,
+   "files": 19
+  },
+  {
+   "path": "output/step01_run_review/20261013_073508/approved_rerun/full_rerun_20261017T011833",
+   "bytes": 78295618,
+   "files": 22
+  },
+  {
+   "path": "output/step01_run_review/20261013_073508/approved_rerun/full_rerun_20261017T051336",
+   "bytes": 78253651,
+   "files": 19
+  },
+  {
+   "path": "output/step01_run_review/20261013_073508/approved_rerun/full_rerun_20261014T135444",
+   "bytes": 77491835,
+   "files": 31
+  },
+  {
+   "path": "output/video/_enhancement/_delivery/20261006T224054_ch1_hybrid_run/pre",
+   "bytes": 77355216,
+   "files": 8
+  },
+  {
+   "path": ".git/objects/pack",
+   "bytes": 62841972,
+   "files": 3
+  },
+  {
+   "path": "output/video/motion_fixtures/assets/fonts",
+   "bytes": 42902404,
+   "files": 2
+  },
+  {
+   "path": "output/锦衣夜行/part_01_杀青州/chapter_001/_enhancement/shot1_style_compare",
+   "bytes": 35684593,
+   "files": 9
+  },
+  {
+   "path": "output/video/锦衣夜行/part_01_杀青州/chapter_001/clips",
+   "bytes": 26672306,
+   "files": 8
+  },
+  {
+   "path": "output/video/锦衣夜行/part_01_杀青州/chapter_001/agens-clips",
+   "bytes": 21804201,
+   "files": 10
+  },
+  {
+   "path": "output/video/锦衣夜行/part_01_杀青州/chapter_001/images",
+   "bytes": 21311121,
+   "files": 80
+  },
+  {
+   "path": ".",
+   "bytes": 20427539,
+   "files": 28
+  },
+  {
+   "path": "output/video/锦衣夜行/part_01_杀青州/chapter_001/snapshots",
+   "bytes": 19206944,
+   "files": 78
+  },
+  {
+   "path": "output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/2",
+   "bytes": 18882332,
+   "files": 24
+  },
+  {
+   "path": "skills/seedance-2.0/assets",
+   "bytes": 18702510,
+   "files": 13
+  },
+  {
+   "path": "reference_skills/Seedance2-Storyboard-Generator/素材",
+   "bytes": 17450038,
+   "files": 4
+  },
+  {
+   "path": "output/video/锦衣夜行/global/scenes_bank/照月湾水湾",
+   "bytes": 16455142,
+   "files": 3
+  },
+  {
+   "path": "output/video/锦衣夜行/global/scenes_bank/照月湾岸边",
+   "bytes": 15696941,
+   "files": 4
+  },
+  {
+   "path": "output/锦衣夜行/part_01_杀青州/chapter_001/vimax_working/shots/1",
+   "bytes": 15237630,
+   "files": 18
+  },
+  {
+   "path": "output/锦衣夜行/global/scenes_bank/照月湾荷塘",
+   "bytes": 15116062,
+   "files": 3
+  },
+  {
+   "path": "reference_skills/Seedance2-Storyboard-Generator/鲁智深项目/assert",
+   "bytes": 15041390,
+   "files": 9
+  },
+  {
+   "path": "output/video/锦衣夜行/global/scenes_bank/照月湾小舟",
+   "bytes": 14976137,
+   "files": 4
+  },
+  {
+   "path": "output/video/锦衣夜行/global/scenes_bank/云河镇郊野田埂",
+   "bytes": 14913725,
+   "files": 3
+  },
+  {
+   "path": "output/video/锦衣夜行/global/scenes_bank/杨府别庄内院",
+   "bytes": 14078403,
+   "files": 3
+  },
+  {
+   "path": "output/video/锦衣夜行/global/scenes_bank/照月湾",
+   "bytes": 13713322,
+   "files": 3
+  },
+  {
+   "path": "output/video/锦衣夜行/global/scenes_bank/照月湾荷塘",
+   "bytes": 13364992,
+   "files": 4
+  }
+ ],
+ "top_files": [
+  {
+   "path": "output/video/锦衣夜行/part_01_杀青州/chapter_001/step01.log",
+   "bytes": 77395518
+  },
+  {
+   "path": "output/step01_run_review/20261013_073508/approved_rerun/full_rerun_20261017T051336/step01.log",
+   "bytes": 76894166
+  },
+  {
+   "path": "output/step01_run_review/20261013_073508/approved_rerun/full_rerun_20261017T011833/step01.log",
+   "bytes": 76590575
+  },
+  {
+   "path": "output/step01_run_review/20261013_073508/approved_rerun/full_rerun_20261015T144500/step01.log",
+   "bytes": 76133310
+  },
+  {
+   "path": "output/step01_run_review/20261013_073508/approved_rerun/full_rerun_20261014T135444/step01.log",
+   "bytes": 76127489
+  },
+  {
+   "path": "output/step01_run_review/20261013_073508/approved_rerun/full_rerun_20261014T132449/step01.log",
+   "bytes": 75564493
+  },
+  {
+   "path": "output/step01_run_review/20261013_073508/approved_rerun/repair_real_v2/step01.log",
+   "bytes": 75474504
+  },
+  {
+   "path": "output/step01_run_review/20261013_073508/approved_rerun/repair_real/full_step01.log",
+   "bytes": 75467511
+  },
+  {
+   "path": "output/video/_enhancement/_delivery/20261006T224054_ch1_hybrid_run/pre/step01.log",
+   "bytes": 75410652
+  },
+  {
+   "path": ".git/objects/pack/pack-904db089073ca1e14a7709ae64d7996b63729a54.pack",
+   "bytes": 62598384
+  },
+  {
+   "path": "output/video/motion_fixtures/assets/fonts/NotoSerifSC-VF.ttf",
+   "bytes": 25129160
+  },
+  {
+   "path": "output/video/motion_fixtures/assets/fonts/NotoSansSC-VF.ttf",
+   "bytes": 17773244
+  },
+  {
+   "path": "output/video/锦衣夜行/part_01_杀青州/chapter_001/step01_replan_rounds.jsonl",
+   "bytes": 15423800
+  },
+  {
+   "path": "output/video/锦衣夜行/part_01_杀青州/chapter_001/step01.log.bak_pre_v6102",
+   "bytes": 12825199
+  },
+  {
+   "path": "output/video/锦衣夜行/part_01_杀青州/chapter_001/step01.log.bak_pre_v6101",
+   "bytes": 12039002
+  },
+  {
+   "path": "锦衣夜行_77119小说.txt",
+   "bytes": 11979761
+  },
+  {
+   "path": "output/video/锦衣夜行/part_01_杀青州/chapter_001/step01.log.bak_pre_v699",
+   "bytes": 11216335
+  },
+  {
+   "path": "output/锦衣夜行/part_01_杀青州/chapter_001/step01.log",
+   "bytes": 11114259
+  },
+  {
+   "path": "output/锦衣夜行/part_01_杀青州/chapter_001/snapshots/step01_20261107_231721.log",
+   "bytes": 10617862
+  },
+  {
+   "path": "output/video/锦衣夜行/part_01_杀青州/chapter_001/step01.log.bak_pre_v698",
+   "bytes": 10445541
+  },
+  {
+   "path": "output/锦衣夜行/part_01_杀青州/chapter_001/_enhancement/shot1_style_compare/shot1_ink_painting_video.mp4",
+   "bytes": 10254025
+  },
+  {
+   "path": "output/锦衣夜行/part_01_杀青州/chapter_001/_enhancement/shot1_check/video/attempts/shot01-20261101T222553-4112-040100/shots/shot_01/video.mp4",
+   "bytes": 10254025
+  },
+  {
+   "path": "output/锦衣夜行/part_01_杀青州/chapter_001/_enhancement/shot1_check/video/attempts/shot01-20261101T222553-4112-040100/outputs/clip_1.mp4",
+   "bytes": 10254025
+  },
+  {
+   "path": "output/锦衣夜行/part_01_杀青州/chapter_001/_enhancement/s14_after_frames/video/attempts/shot01-20261101T160827-18028-555600/shots/shot_01/video.mp4",
+   "bytes": 9696186
+  },
+  {
+   "path": "output/锦衣夜行/part_01_杀青州/chapter_001/_enhancement/s14_after_frames/video/attempts/shot01-20261101T160827-18028-555600/outputs/clip_1.mp4",
+   "bytes": 9696186
+  },
+  {
+   "path": "output/锦衣夜行/part_01_杀青州/chapter_001/_enhancement/s14_after_frames/video/attempts/shot01-20261101T170323-23452-494100/shots/shot_01/video.mp4",
+   "bytes": 9602885
+  },
+  {
+   "path": "output/锦衣夜行/part_01_杀青州/chapter_001/_enhancement/s14_after_frames/video/attempts/shot01-20261101T170323-23452-494100/outputs/clip_1.mp4",
+   "bytes": 9602885
+  },
+  {
+   "path": "reference_skills/Micro-Drama-Skills/projects/MV-001_frg/characters/程序员_ref.jpeg",
+   "bytes": 8448448
+  },
+  {
+   "path": "output/step01_ab/20261018T135622/iso/d/runner/ch1_content_slots_g/step01_replan_rounds.jsonl",
+   "bytes": 8246724
+  },
+  {
+   "path": "锦衣夜行_77119小说.txt.bak",
+   "bytes": 8140463
+  }
+ ],
+ "tracked_files": 1517
+}

@@ -3,11 +3,13 @@
 8-22 跑批实测：shot 1 全景 → shot 2 中近景（3 级跳跃）报"景别跳跃幅度 3 级
 （>2 级）"。
 
-修法：扫相邻镜景别跨度 > 2 级，强制把前镜 framing 替换为后镜的相邻景别
-（中近景→中景过渡），减小跨度。
+2026-11-14 S06 G2 裁决：**只报不改（report-only）**。此前本约束会把前镜 framing
+替换为后镜的相邻景别；实测（U6）该改写会静默篡改剧本景别/机位，甚至把修复轮
+已改对的景别替换回原值。现在只记录 warning（`RepairRecord(action="warn")`），
+剧本原文一个字不动；景别跨度由 `validation._check_shot_size_jump` 报 warning，
+交审计/人工评阅。
 
 豁免：场景切换 / 打斗镜（与 _check_shot_size_jump 同口径）。
-幂等：相邻景别 ≤ 2 级时跳过。
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from step01_script_gen.validation import _is_combat_shot, _shot_size_level
 from ._base_classes import InterShotConstraint
-from .types import RepairRecord, Severity
+from .types import RepairRecord, Severity, Violation
 
 
 _SHOT_SIZE_ORDER = [
@@ -35,25 +37,10 @@ def _is_scene_switch(s1: dict, s2: dict) -> bool:
     return bool(loc1 and loc2 and loc1 != loc2)
 
 
-def _adjacent_framing_for(lv2: str) -> str | None:
-    """挑与 lv2 相邻 1 级的景别（朝 lv1 方向靠近）.
-
-    若 lv1 > lv2 (远景→特写方向)，新 framing 取 max(0, d2-1).
-    若 lv1 < lv2 (特写→远景方向)，新 framing 取 min(len-1, d2+1).
-    """
-    if lv2 not in _SHOT_SIZE_ORDER:
-        return None
-    d2 = _SHOT_SIZE_ORDER.index(lv2)
-    # 假设 lv1 比 lv2 远（更远→更近），所以取 d2-1
-    adj_idx = max(0, d2 - 1)
-    return _SHOT_SIZE_ORDER[adj_idx]
-
-
 class FramingJumpConstraint(InterShotConstraint):
-    """W10. 景别跳跃：相邻景别跨度 > 2 级 → 前镜改相邻景别.
+    """W10. 景别跳跃：相邻景别跨度 > 2 级 → **只报 warning，不改写**.
 
-    severity=WARN: 景别跳跃可由后续 repair round 修.
-    repair_marker=None: 幂等由"再次扫描跨度 ≤ 2"保证.
+    severity=WARN: 景别跳跃交审计/人工或后续 repair round 处理。
     """
 
     name = "framing_jump"
@@ -63,20 +50,7 @@ class FramingJumpConstraint(InterShotConstraint):
     def _check_pair(self, prev, curr, ctx, prev_idx, curr_idx):
         if not isinstance(prev, dict) or not isinstance(curr, dict):
             return None
-        # 2026-11-12 复核：本轮**被授权改写**的镜头不得在后处理里再被改写。
-        # 实测（U6）：审计要求把镜 1 的 prompt 从「大特写」改成「大远景」，
-        # 修复轮已改对，本约束却因相邻景别跨度把它替换回原值——修复被静默撤销。
-        # 该镜头仍由下一轮审计按 `shot_size_jump` 报 warning，不在这里硬拧。
-        try:
-            _repairing = getattr(ctx, "repair_shot_indices", frozenset())
-            if _repairing and int(prev.get("index", -1)) in _repairing:
-                return None
-        except (TypeError, ValueError):
-            pass
-        # 2026-11-12 复核（投影）：**最终落盘前只报不改**。`project_for_commit` 会
-        # 走 `finalize_step01_script` → `run_hard_fix(is_final_pass=True)`，若这里再
-        # 改写 prompt，本轮已接受的修复会在投影阶段被撤销（实测：大远景 → 特写）。
-        # 景别跨度本就由 `validation._check_shot_size_jump` 报 warning，交审计/人工。
+        # 2026-11-12 复核（投影）：最终落盘前只报不改（与 G2 裁决一致）。
         if getattr(ctx, "is_final_pass", False):
             return None
         # 场景切换豁免
@@ -100,23 +74,30 @@ class FramingJumpConstraint(InterShotConstraint):
             return None
         if abs(d1 - d2) <= 2:
             return None
-        # 跨度 > 2：把 prev framing 改为与 curr 相邻（更近一档）
-        new_lv1 = _adjacent_framing_for(lv2)
-        if not new_lv1 or new_lv1 == lv1:
-            return None
-        prompt = prev.get("prompt", "") or ""
-        if new_lv1 in prompt:
-            return None
-        new_prompt = prompt.replace(lv1, new_lv1, 1)
-        if new_prompt == prompt:
-            return None
-        before = prompt
-        prev["prompt"] = new_prompt
+        # 跨度 > 2：只报不改（G2：不静默篡改剧本景别/机位）。
+        prompt = str(prev.get("prompt", "") or "")
+        message = (
+            f"相邻镜景别跨度 {abs(d1 - d2)} 级（{lv1} → {lv2}，>2）："
+            "只报不改，交审计/人工评阅，禁止自动改写景别"
+        )
+        try:
+            ctx.record_violation(Violation(
+                constraint_name=self.name,
+                severity=Severity.WARN,
+                shot_index=prev.get("index", prev_idx),
+                field="prompt",
+                message=message,
+                evidence=prompt[-120:],
+                repaired=False,
+            ))
+        except Exception:
+            pass
         return RepairRecord(
             constraint_name=self.name,
             shot_index=prev_idx,
-            action="rewrite",
+            action="warn",
             target="prompt",
-            before=before,
-            after=new_prompt,
+            before=prompt,
+            after=prompt,
+            detail=message,
         )

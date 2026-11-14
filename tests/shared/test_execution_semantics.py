@@ -130,6 +130,22 @@ def test_audio_window_overflow_isolated():
     assert codes == ["audio_window_overflow"]
 
 
+def test_audio_window_overflow_planned_is_advisory():
+    """G6：未实测（prepared）的计划超窗只报 advisory，不按实测拒收."""
+    family = _family("voice_timing")
+    baseline = family["baseline"]
+    mutated = copy.deepcopy(baseline["script"])
+    unit = mutated["chapter_outline"]["voice_units"][1]
+    unit.pop("verified", None)
+    unit["actual_sec"] = 3.4          # 计划声明值，未实测
+    findings = check_script_semantics(mutated)
+    planned = [f for f in findings if f["code"] == "audio_window_overflow_planned"]
+    assert planned, findings
+    assert all(f.get("severity") == "advisory" for f in planned)
+    assert all(f.get("state") == "prepared" for f in planned)
+    assert not [f for f in findings if f["code"] == "audio_window_overflow"]
+
+
 def test_native_dialogue_unverified_isolated():
     family = _family("voice_timing")
     baseline = family["baseline"]

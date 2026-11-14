@@ -39,6 +39,24 @@
   `block_survives_prepare_status` 与 `block_in_frozen_prompt` 供机器读取。
 - 本表所有"推演"结论只到判据组合层；真实提交入口/真实模型效果仍需后续验证。
 
+## 0.6 P1 接线完成记录（2026-11-14）
+
+六项裁决已按获批口径接线（G3 仍按裁决留在隔离分支，不切生产主干）：
+
+| 决策 | 落地位置 | 行为变化 |
+|---|---|---|
+| G1 `closed` 接提交门 | `main.py` `_commit_step01_outputs` 审计轮（`_prev_audit_issues` / `_prev_audit_script`） | 上一轮 blocking 本轮不再报出、判据证据可判且授权目标字段未改动 → BLOCK（`blocking_unclosed_without_evidence`）；非阻塞不拦 |
+| G7 `postprocess_reverted` 接门 | `main.py` `_repair_acceptance_decision(merged_script=...)` | 合并后目标已达成、后处理后丢失 → 拒绝（`postprocess_target_lost`）；保留既有保护门，不按残余一刀切 |
+| G2 自动改写 | `constraints/framing_jump.py` | 改为 `action="warn"` + violation 记录，剧本景别/机位一字不改 |
+| G6 声音两态 | `shared/voice_preparation.py`、`shared/execution_semantics.py` | 单元新增 `state`（prepared/confirmed）；准备态计划超窗 → `audio_window_overflow_planned`（advisory，不阻断），确认态实测超窗才 `audio_window_overflow`（reject） |
+| 旧稿准入口径 | 无改动 | 保持 advisory，不新增追溯性拒收 |
+
+- 最终规则指纹：**`RULE_SOURCE_FINGERPRINT = db08353ea107b486`**（接线前 `593deea03c7cddc6`；`RULE_VERSION=2026-09-23.4` 未变）。
+- 回归：`tests/step01_script_gen` **4285 passed / 278 skipped / 4 xfailed / 0 failed**；
+  `tests/shared + tests/integration + tests/step02a/02b/02_video` **1748 passed / 8 skipped / 0 failed**。
+- 说明：G1 只对「判据证据可判」的阻塞条目生效；证据缺失/过短或证据文本从未字面出现在稿件的条目保持既有语义（不凭沉默定罪，也不放行有证据却仍在稿中的情况）。G7 的 target-loss 判定复用 `_audit_issue_resolved`（合并后 vs 后处理后）。
+- 后续（未完成）：G3 在隔离分支调整 `build_frozen_for_shot` / `prepare_request` 顺序并跑全量视频请求回归，产出前后 diff 后再裁决是否合入 master。
+
 ## 1. G1：`issue_ledger.closed` 接提交门
 
 样本（`build_issue_ledger`，真实函数）：

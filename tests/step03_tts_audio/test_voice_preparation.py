@@ -53,6 +53,24 @@ def test_baseline_ready_and_mutation_codes_detected():
     assert all(r["route"] == "voice_execution" for r in routed)
 
 
+def test_plan_stage_overflow_is_planning_not_blocking():
+    """G6：准备态（未实测）的计划超窗只进 planning_issues，不阻断 status."""
+    family = _family()
+    script = copy.deepcopy(family["baseline"]["script"])
+    unit = script["chapter_outline"]["voice_units"][1]
+    unit.pop("verified", None)
+    unit["actual_sec"] = 3.4          # 计划声明值，未实测
+    report = build_voice_preparation(script, scope=family["scope"], windows=_windows())
+    assert report["status"] == "ready"
+    assert report["codes"] == []
+    assert "audio_window_overflow_planned" in report["planning_codes"]
+    by_id = {u["unit_id"]: u for u in report["units"]}
+    assert by_id["d02"]["state"] == "prepared"
+    assert by_id["d02"]["actual_sec"] is None      # 声明值不冒充实测
+    assert by_id["d02"]["declared_sec"] == 3.4
+    assert by_id["n01"]["state"] == "confirmed"    # 源侧 verified=true 保留确认态
+
+
 def test_dual_dialogue_source_and_text_identity_route_step01():
     family = _family()
     script = copy.deepcopy(family["baseline"]["script"])

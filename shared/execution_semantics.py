@@ -47,6 +47,7 @@ KNOWN_CODES = frozenset({
     "offscreen_speaker_visible",
     "listener_reaction_missing",
     "audio_window_overflow",
+    "audio_window_overflow_planned",
     "native_dialogue_unverified",
 })
 
@@ -1007,6 +1008,27 @@ def _check_listener_reactions(script: dict, units: list, shots: dict) -> list[di
     return findings
 
 
+def _unit_timing(unit: dict) -> tuple[float | None, str]:
+    """声音单元的时长与状态：``(seconds, state)``.
+
+    2026-11-14 S06 G6 裁决：**准备态/确认态分离**。
+
+    - ``confirmed``：``verified is True`` 且 ``actual_sec`` 是有效数字——用实测时长；
+    - ``prepared``：尚未实测（或未核实）——用计划声明时长（``declared_sec`` /
+      ``required_playback_sec`` / 兼容旧数据的 ``actual_sec``）做**规划**判断。
+
+    准备态超窗只报规划问题（``audio_window_overflow_planned``，advisory），
+    不按实测拒收；确认态超窗才是 ``audio_window_overflow``（reject）。
+    """
+    verified = unit.get("verified") is True
+    actual = _number(unit.get("actual_sec"))
+    declared = _number(unit.get("declared_sec") or unit.get("required_playback_sec"))
+    if verified and actual is not None:
+        return actual, "confirmed"
+    fallback = declared if declared is not None else actual
+    return fallback, "prepared"
+
+
 def _check_audio(script: dict) -> list[dict]:
     outline = _outline(script)
     units = outline.get("voice_units")
@@ -1016,7 +1038,7 @@ def _check_audio(script: dict) -> list[dict]:
     shots = {s.get("index"): s for s in _iter_shots(script)}
     windows = script.get("audio_windows")
     windows = windows if isinstance(windows, dict) else {}
-    by_shot: dict[Any, list[dict]] = {}
+    by_shot: dict[Any, list[tuple[dict, float | None, str]]] = {}
     for i, unit in enumerate(units):
         if not isinstance(unit, dict):
             continue
@@ -1035,36 +1057,65 @@ def _check_audio(script: dict) -> list[dict]:
                 ))
             continue
         if kind in ("tts_dialogue", "narration"):
-            if actual is not None and window is not None and actual > window + 1e-9:
-                findings.append(_issue(
-                    "audio_window_overflow",
-                    f"chapter_outline.voice_units[{i}].actual_sec",
-                    f"独立声音单元 {unit.get('unit_id')!r} 实测 {actual:.2f}s "
-                    f"超过单元窗口 {window:.2f}s",
-                    family="voice_timing", unit_id=unit.get("unit_id"),
-                    shot_index=unit.get("shot_index"),
-                    actual_sec=actual, window_sec=window,
-                    overflow_sec=round(actual - window, 6),
-                ))
-            by_shot.setdefault(unit.get("shot_index"), []).append(unit)
+            secs, state = _unit_timing(unit)
+            if secs is not None and window is not None and secs > window + 1e-9:
+                if state == "confirmed":
+                    findings.append(_issue(
+                        "audio_window_overflow",
+                        f"chapter_outline.voice_units[{i}].actual_sec",
+                        f"独立声音单元 {unit.get('unit_id')!r} 实测 {secs:.2f}s "
+                        f"超过单元窗口 {window:.2f}s",
+                        family="voice_timing", unit_id=unit.get("unit_id"),
+                        shot_index=unit.get("shot_index"), state=state,
+                        actual_sec=secs, window_sec=window,
+                        overflow_sec=round(secs - window, 6),
+                    ))
+                else:
+                    findings.append(_issue(
+                        "audio_window_overflow_planned",
+                        f"chapter_outline.voice_units[{i}].declared_sec",
+                        f"独立声音单元 {unit.get('unit_id')!r} 计划时长 {secs:.2f}s "
+                        f"超过单元窗口 {window:.2f}s（尚未实测，按规划问题上报）",
+                        family="voice_timing", severity="advisory", unit_id=unit.get("unit_id"),
+                        shot_index=unit.get("shot_index"), state=state,
+                        declared_sec=secs, window_sec=window,
+                        overflow_sec=round(secs - window, 6),
+                    ))
+            by_shot.setdefault(unit.get("shot_index"), []).append((unit, secs, state))
     # 逐镜合计：独立 TTS + 旁白共享同一镜头可用窗口。
     for shot_index, items in by_shot.items():
-        actual_total = sum(_number(u.get("actual_sec")) or 0.0 for u in items)
+        confirmed_total = sum(sec for _u, sec, state in items
+                              if state == "confirmed" and sec is not None)
+        planned_total = sum(sec for _u, sec, state in items
+                            if state == "prepared" and sec is not None)
+        total = confirmed_total + planned_total
         limit = _number(windows.get(str(shot_index))) if windows else None
         if limit is None:
             shot = shots.get(shot_index) or {}
             limit = _number(shot.get("duration_sec"))
-        if limit is None or actual_total <= limit + 1e-9:
+        if limit is None or total <= limit + 1e-9:
             continue
-        findings.append(_issue(
-            "audio_window_overflow", f"shots[{shot_index}].audio_window",
-            f"镜头 {shot_index} 的独立声音合计 {actual_total:.2f}s 超过可用窗口 "
-            f"{limit:.2f}s（差 {actual_total - limit:.2f}s）",
-            family="voice_timing", shot_index=shot_index,
-            unit_ids=[u.get("unit_id") for u in items],
-            actual_sec=round(actual_total, 6), window_sec=round(limit, 6),
-            overflow_sec=round(actual_total - limit, 6),
-        ))
+        if confirmed_total > limit + 1e-9:
+            findings.append(_issue(
+                "audio_window_overflow", f"shots[{shot_index}].audio_window",
+                f"镜头 {shot_index} 的独立声音实测合计 {confirmed_total:.2f}s 超过可用窗口 "
+                f"{limit:.2f}s（差 {confirmed_total - limit:.2f}s）",
+                family="voice_timing", shot_index=shot_index, state="confirmed",
+                unit_ids=[u.get("unit_id") for u, _s, st in items if st == "confirmed"],
+                actual_sec=round(confirmed_total, 6), window_sec=round(limit, 6),
+                overflow_sec=round(confirmed_total - limit, 6),
+            ))
+        else:
+            findings.append(_issue(
+                "audio_window_overflow_planned", f"shots[{shot_index}].audio_window",
+                f"镜头 {shot_index} 的独立声音计划合计 {total:.2f}s 超过可用窗口 "
+                f"{limit:.2f}s（尚未实测，按规划问题上报）",
+                family="voice_timing", severity="advisory", shot_index=shot_index,
+                state="prepared",
+                unit_ids=[u.get("unit_id") for u, _s, _st in items],
+                declared_sec=round(total, 6), window_sec=round(limit, 6),
+                overflow_sec=round(total - limit, 6),
+            ))
     return findings
 
 
