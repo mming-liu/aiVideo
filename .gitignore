@@ -1,4 +1,4 @@
-# API 密钥（包含敏感信息，绝对不能提交）
+﻿# API 密钥（包含敏感信息，绝对不能提交）
 .env
 .env.keys
 # 密钥文件的所有备份变体（如 .env.keys.bak.20261018-104737），防止再次误提交
@@ -146,6 +146,8 @@ tests/step01_script_gen/*
 !tests/step01_script_gen/test_issue_ledger.py
 # 2026-11-12 复核第三轮：后处理不得撤销已授权修复（景别最长匹配 + 锚点幂等）
 !tests/step01_script_gen/constraints/test_m02_postprocess_no_revert.py
+# 2026-11-13 S02：后处理不得编造无来源内容
+!tests/step01_script_gen/constraints/test_s02_content_independence.py
 !tests/step01_script_gen/test_repair_target_rollback.py
 !tests/step01_script_gen/test_step01_commit.py
 !tests/step01_script_gen/test_plan_phase_e_commit_chain.py
@@ -194,6 +196,8 @@ tests/step01_script_gen/constraints/*
 !tests/step01_script_gen/constraints/test_ff_lf_temporal.py
 # 2026-11-12 复核第三轮：后处理不得撤销已授权修复（景别最长匹配 + 锚点幂等）
 !tests/step01_script_gen/constraints/test_m02_postprocess_no_revert.py
+# 2026-11-13 S02：后处理不得编造无来源内容
+!tests/step01_script_gen/constraints/test_s02_content_independence.py
 !tests/enhancements/
 tests/enhancements/*
 !tests/enhancements/test_subtitle_contract.py
@@ -440,11 +444,32 @@ output_step01_*/
 !tests/step01_script_gen/narrative_family_builder.py
 !tests/step01_script_gen/test_narrative_family_genericity.py
 
-# 2026-11-13 S02：后处理不得编造无来源内容
-!tests/step01_script_gen/constraints/test_s02_content_independence.py
+# 2026-11-13：dsh 下发交接区。此前任务书/结果/会话日志都落在项目外
+# （~/.workbuddy/dsh_bridge/runs/ 与 ~/.dsh/）或被忽略的 .pytest_tmp/，
+# 用户在当前项目工作区里找不到。此目录作为项目内可见的交接索引，
+# 按项目「逐条白名单」约定放行（/docs/* 默认排除所有 docs 直接子项）。
+# 本地状态快照（workspace.json 备份等）不入库，仍留在 .pytest_tmp/dsh_tasks/。
+!docs/dsh-handoff/
+!docs/dsh-handoff/**
+
+# 2026-11-14：历史记忆归档索引。用户指出旧记忆绝大部分过时/不正确，
+# 要求统一收到项目里、后续不再往 memory 写项目记忆。
+# 只放行索引两件（README + MANIFEST）入库；256 份历史原文在项目内本地可见，
+# 但不入库，避免把已判过时的内容塞进版本库。是否全量入库待用户裁决。
+!docs/memory-archive/
+!docs/memory-archive/README.md
+!docs/memory-archive/MANIFEST.md
+!docs/memory-archive/CLEANUP-CANDIDATES.md
+!docs/memory-archive/CLEANUP-RESULT.json
+docs/memory-archive/workbuddy-workspace/
+docs/memory-archive/claude-project-memory/
 
 # 2026-11-13 S05：后处理内容到达最终提示/生成器桩（跨内容消费链）
 !tests/integration/test_s05_content_chain.py
 
 # 2026-11-14 S03：因果链单位身份的生产校验与修订重映射
 !tests/shared/test_causal_identity.py
+
+# 本地/运行时文件，不入库（参考 AGENTS.md 纪律与 .pytest_tmp 同性质）
+start_studio.bat
+.dsh/

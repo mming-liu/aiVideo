@@ -1,5 +1,10 @@
 # QC 修复决策树（v6.x.x，2026-08-30）
 
+> ⚠️ **旧记忆路径已失效（2026-11-14）**：本文第 116/119 行引用的
+> `~/.claude/projects/C--myFloders-git-aiVideo/memory/*.md` 已停止维护并归档，
+> 绝大部分内容过时/不正确；原文见 [docs/memory-archive/](../docs/memory-archive/README.md)
+> （仅历史检索，不作现状依据）。当前以代码、生效配置与 `docs/` 专题文档为准。
+
 > `build_repair_plan` 决策速查：哪些 QC critical 走 i2i 红框修图（edit），哪些走重新抽卡（regen）。
 >
 > 维护人：本会话（08-30 末次汇总）

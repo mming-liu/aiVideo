@@ -67,6 +67,6 @@ Claude 负责 aiVideo 的实施、测试、运行与交付。目标与授权以�
 
 文件、命令和专题入口见 [AGENTS.md「按任务查阅」](AGENTS.md#按任务查阅)。涉及视频请求、Step03/04、媒体检查或字幕对齐时，读取其中的完整增强计划及适用工作包。
 
-开始实施或核查前，读项目记忆索引 `C:\Users\ee54\.claude\projects\C--myFloders-git-aiVideo\memory\MEMORY.md`（不存在则跳过），按索引查相关基线和陷阱；历史记录须核对适用条件。现场状态与执行记录放专题文档。
+开始实施或核查前，以当前代码、最终生效配置、`AGENTS.md` 及本文件为准；历史记忆原文已归档至 [docs/memory-archive/README.md](docs/memory-archive/README.md)，其绝大部分内容已过时或不正确，**只供历史检索，不作为现状依据**，不得再按旧索引读取基线或陷阱。项目记忆不再写入任何 `memory/` 目录，现场状态、决策与执行记录统一写项目内 `docs/` 专题文档。
 
 维护本文件时，每条规则保留一个责任位置；共享规则链接到 AGENTS.md。

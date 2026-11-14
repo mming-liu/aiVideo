@@ -144,7 +144,7 @@ Codex 收到执行反馈后独立核对上述交付映射，合理调整原规�
 
 ## 按任务查阅
 
-下列入口用于定位当前实现；引用前核对文件及其时效。运行命令只作导航，不构成运行授权。开始实施或核查前先读「项目记忆」行的索引：它给出当前基线与仍有效的规则、陷阱和恢复路径；记忆只作线索，与代码、生效配置或本文件冲突时以代码与配置为准（当前基线见其中 `_baseline-2026-10-23.md`）。
+下列入口用于定位当前实现；引用前核对文件及其时效。运行命令只作导航，不构成运行授权。**现状判断只以当前代码、最终生效配置和本文件为准**；历史记忆不再作为实施前必读入口，旧记忆原文已归档至 [docs/memory-archive/](docs/memory-archive/README.md)（只供历史检索，其绝大部分内容已过时或不准确，不得据此判断现状）。项目记忆不再写入 `memory/` 目录，统一记录在项目内 `docs/` 专题文档。
 
 | 任务 | 查阅入口 |
 |---|---|
@@ -156,7 +156,7 @@ Codex 收到执行反馈后独立核对上述交付映射，合理调整原规�
 | 通道、模型与有效配置 | `_text_gen/`、`_image_gen/`、`_video_gen/`、`tts/` 内的 `__init__.py`、`service.py`、`config.py` 及 provider；配置文件只作来源之一 |
 | 章节与输出路径 | `shared/chapter_reader.py`、`shared/paths.py`、`shared/run_scope.py` |
 | 实施规则 | [CLAUDE.md](CLAUDE.md) 的职责、工作准则与工作包执行章节 |
-| 项目记忆（当前基线、长期规则与陷阱） | `C:\Users\ee54\.claude\projects\C--myFloders-git-aiVideo\memory\MEMORY.md`（Claude Code 项目记忆，机器本地路径，不存在则跳过；`~/.claude/projects/C--myFloders-git-aiVideo/memory/` 同指）：索引 → 当前基线、费用与操作硬规则、本机陷阱、恢复路径；`.archive/` 只供历史检索，不用于判断现状 |
+| 历史记忆归档（**非现状依据**） | [docs/memory-archive/README.md](docs/memory-archive/README.md)：2026-11-14 从 `.workbuddy/memory/` 与 `~/.claude/projects/C--myFloders-git-aiVideo/memory/` 全量收录的历史原文，附 [MANIFEST.md](docs/memory-archive/MANIFEST.md) 逐文件清单。用户已判定绝大部分过时/不正确，**只供历史检索**，不得据此判断当前实现、配置或授权 |
 | 问题史、待办与取证 | [problems.md](problems.md)、[TODOLIST.md](TODOLIST.md)、`docs/`、`docs/archive/`；真实运行先找对应日志和冻结产物 |
 | 使用说明与旧实现资料 | [README.md](README.md)、[DOCUMENTATION.md](DOCUMENTATION.md)、[原 AGENTS 项目参考记录](references/agents-project-reference.md)；涉及旧供应商决策、额度策略或历史行为时按条件查阅，再核对当前授权与实现 |
 

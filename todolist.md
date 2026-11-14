@@ -1,5 +1,10 @@
 # TODO 待办清单
 
+> ⚠️ **旧记忆路径已失效（2026-11-14）**：本文下方引用的
+> `~/.claude/projects/C--myFloders-git-aiVideo/memory/` 与 `memory/*.md` 已停止维护并归档，
+> 用户判定绝大部分内容过时/不正确。原文见 [docs/memory-archive/](docs/memory-archive/README.md)
+> （仅历史检索，不作现状依据）；当前以代码、生效配置、`AGENTS.md`/`CLAUDE.md` 与 `docs/` 专题文档为准。
+
 > 记录**尚未完成**的修复、待验证项、待决策事项。
 > 已解决问题与历史存档见 **[problems.md](problems.md)**；各版本演进细节原记于 `memory/`（v6.50→v6.54.1）。
 > 最近更新：2026-10-01（补记 09-30 之后的现状与 plan carrier 复核；本清单正文的迭代条目仍是 2026-08-29 那次整版重写）
