@@ -65,6 +65,12 @@ def test_step02b_report_is_produced_by_the_real_writer(tmp_path, monkeypatch):
               int(round(float(shot["duration_sec"]) * FPS)))
 
     from step02_video_gen.video_prompt_quality import write_video_product_quality
+    # 该模块在**导入时**就绑定了 `from shared.paths import chapter_dir`；
+    # 如果前面的测试已经导入过它，只 monkeypatch `shared.paths.chapter_dir`
+    # 不会影响模块内的旧绑定，报告会写到真实章节目录（测试顺序依赖）。
+    # 这里把模块内绑定也指向隔离目录。
+    import step02_video_gen.video_prompt_quality as _vq
+    monkeypatch.setattr(_vq, "chapter_dir", lambda *a, **k: chapter)
     payload = write_video_product_quality(script, work)
     assert payload["status"] == "PASS", payload.get("missing")
     assert payload["report_type"] == "product_acceptance"

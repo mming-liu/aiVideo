@@ -1,0 +1,70 @@
+{
+  "schema": "s03.identity_shadow_diff.v1",
+  "purpose": "旧稿无身份 vs 新稿带身份：准入差异只记录，不改变默认门禁；正式采纳影响按既定裁决处理",
+  "samples": {
+    "old_no_identity": {
+      "codes": [
+        "causal_gap"
+      ],
+      "relation_status": "unresolved",
+      "relation_note": "该项未完成语义判定（因果链条目没有显式单位身份）",
+      "relation_units": {},
+      "relation_carriers": [],
+      "carrier_evidence": [],
+      "needs_semantic_review": true
+    },
+    "new_identity": {
+      "codes": [
+        "causal_gap",
+        "time_ellipsis_lost"
+      ],
+      "relation_status": "bound",
+      "relation_note": "",
+      "relation_units": {
+        "beats": [
+          1,
+          2
+        ],
+        "events": [
+          1,
+          2
+        ]
+      },
+      "relation_carriers": [
+        "shot:1"
+      ],
+      "carrier_evidence": [],
+      "needs_semantic_review": false
+    },
+    "new_identity_plus_bird": {
+      "codes": [
+        "causal_gap",
+        "time_ellipsis_lost"
+      ],
+      "relation_status": "bound",
+      "relation_note": "",
+      "relation_units": {
+        "beats": [
+          1,
+          2
+        ],
+        "events": [
+          1,
+          2
+        ]
+      },
+      "relation_carriers": [
+        "shot:1"
+      ],
+      "carrier_evidence": [],
+      "needs_semantic_review": false
+    }
+  },
+  "admission_delta": {
+    "old_no_identity_time_ellipsis_lost": false,
+    "new_identity_time_ellipsis_lost": true,
+    "old_plan_formal_admission": "不变（只出 causal_gap advisory；time_ellipsis_lost 未触发，不新增拒收）",
+    "bird_beat_changes_verdict": false,
+    "bird_in_relation_carriers": false
+  }
+}

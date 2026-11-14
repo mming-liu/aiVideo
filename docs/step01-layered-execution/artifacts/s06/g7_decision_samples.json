@@ -29,7 +29,7 @@
       "verdicts": {
         "record_only_rejects": false,
         "existing_protection_gate_rejects": false,
-        "current_chain_rejects": false,
+        "deduced_current_chain_rejects": false,
         "R1_any_residual": true,
         "R2_target_loss": false,
         "R2_plus_protection": false
@@ -62,7 +62,7 @@
       "verdicts": {
         "record_only_rejects": false,
         "existing_protection_gate_rejects": false,
-        "current_chain_rejects": false,
+        "deduced_current_chain_rejects": false,
         "R1_any_residual": true,
         "R2_target_loss": true,
         "R2_plus_protection": true
@@ -91,7 +91,7 @@
       "verdicts": {
         "record_only_rejects": false,
         "existing_protection_gate_rejects": true,
-        "current_chain_rejects": true,
+        "deduced_current_chain_rejects": true,
         "R1_any_residual": false,
         "R2_target_loss": false,
         "R2_plus_protection": true

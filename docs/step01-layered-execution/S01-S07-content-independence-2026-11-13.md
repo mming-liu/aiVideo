@@ -69,11 +69,23 @@ test_works_on_hook_via_enforce_all}`（无规格时保留原形制）。
   **不参与承载关系**（`shared/execution_semantics._resolve_plan_refs`）。
 - **目标级关联**（2026-11-13 复核）：
   - 先从 `causal_chain` 条目取得**显式单位身份**：编号引用（`B2`/`F1`/`事件3`）或与计划
-    单位正文**完全相等**；内容身份与编号冲突 → 不选边站，记 unresolved。
+    单位正文**完全相等**（比较前先去掉条目里的引用）；内容身份与编号在同一类单位上
+    冲突 → 不选边站，记 unresolved。
   - 再按 `plan_refs` / 节拍 `事实：` 段定位承载镜头；**过程与时间证据都限定在该范围**。
     章节级时间文本只计入显式绑定到该关系的事件/旁白，不再拼整章 `main_events`。
   - 关系无法唯一解析、或结果单位没有承载镜头 → 明确输出 `relation_status`
     （`unresolved`/`no_carrier`）+ `needs_semantic_review`，只出 advisory，不按全章判。
+- **身份生产与修订维护**（2026-11-14 复核，最小链路已贯通）：
+  - 生成端：`step01_script_gen/outline.py` 的 `causal_chain` 规则要求每条末尾写
+    `（Bk）`（真实节拍编号；无对应节拍写「（未落节拍）」）。
+  - 校验：`execution_semantics.validate_causal_identity` 输出
+    `resolved`/`unresolved`/`invalid`（越界编号记 `causal_ref_out_of_range`）。
+  - 修订重映射：`execution_semantics.remap_causal_refs` 按**正文完全相等**把旧编号
+    映射到新编号；删除/拆分/重复正文 → 改「未落节拍」并留说明。已接线到
+    `outline.apply_replan_ops`（插入/替换/拆分节拍）与
+    `plan_feasibility.normalize_plan_ranges`（承载范围展开）。
+  - 测试：`tests/shared/test_causal_identity.py` 15 条，覆盖校验、插入/删除/重排/
+    拆分/重复正文重映射，以及 `apply_replan_ops` 真实入口插入后的身份维护。
 - **过程证据**：动作分段 ≥2，或 ≥2 个时刻/阶段不同的关键帧序列；单个关键帧只是静态
   定格，不再算过程证据。
 - 复核复现（匿名）：原稿 `time_ellipsis_lost/reject`；加一镜鸟（真实节拍 B3 + 两关键帧）
@@ -81,8 +93,10 @@ test_works_on_hook_via_enforce_all}`（无规格时保留原形制）。
   也不再改变裁决。
 - 夹具 `temporal_ellipsis.json` 的因果链条目补了 `（B1）/（B2）/（B3）` 身份，
   变异版 `plan_refs` 修正为真实节拍，摘要已更新到 `manifest.json`。
-- **生产侧限制**：当前 generation 提示不强制因果链写单位身份；没有身份的旧稿按
-  「证据不足」处理。这是本轮明确的边界，不把 fallback 写成已生效的自动拒收。
+- **旧稿影子差异**（2026-11-14）：没有身份的旧稿只出 `causal_gap` advisory，并带
+  `relation_note="该项未完成语义判定"`；`time_ellipsis_lost` 不触发，**不新增拒收**。
+  实际准入影响记录在 `docs/step01-layered-execution/artifacts/s03/identity_shadow_diff.{json,md}`
+  （旧稿 vs 新稿 vs 新稿+鸟节拍），正式采纳按既定决策处理，本包不改变默认门禁。
 
 ## S04 正向提示与下游消费（两处无依据注入已删）
 
@@ -94,21 +108,26 @@ test_works_on_hook_via_enforce_all}`（无规格时保留原形制）。
 - 受影响测试已迁移：`tests/shared/test_frame_prompt_v652.py` 改为断言有源尺寸 +
   不含肩宽/裁切锚；新增「无来源时不剥离尺寸」用例。
 
-## S05 完整链路（受限修订 → 投影 → 画面计划 → 生成器桩）
+## S05 完整链路（受限修订 → 投影 → 画面计划 → **计划消费入口**）
 
 - 重写 `tests/integration/test_s05_content_chain.py`，走完整承诺链：
   1. **受限修订入口** `main._repair_shot_warnings`（授权字段 + 合法桩响应）；
   2. **提交投影** `main.project_for_commit`（产出最终 revision）；
   3. Step01 落盘 `script_result.json`；
   4. **画面计划构建** `execution_plan.build_visual_plan`；
-  5. **计划模式变更保护/覆盖检查** `validate_plan_identity` /
-     `verify_plan_changes` / `verify_plan_coverage`；
-  6. **真实逐帧入口** `_gen_first_frame_async` → 生成器桩。
+  5. **计划消费入口** `gen_all_frames(visual_plan=..., scope=...)`——内部
+     `validate_plan_identity` / `verify_plan_execution` / `verify_plan_changes` /
+     `verify_plan_coverage`，并把计划里的 `execution.unit` 交给 `gen_shot_frames`
+     （不再拿 `projected["shots"]` 直接调逐帧入口）；
+  6. 生成器桩记录最终提示。
 - 两个样本有实质差异：`river` 连续 1 镜、画面载体；`harbor` 非连续编号 2/5/9、
   旁白+画面载体、两种船型、不同因果身份。
-- 断言：计划绑定的 `script_revision` 与投影稿一致；生成器桩收到的就是计划里的最终提示；
-  后处理修好的宽度/形制到达最终提示；其他实体形制、无关注入不出现。
-- **完成状态**：受限修订→投影→画面计划→逐帧消费已贯通；真实模型生成仍未执行。
+- **入口断言**（6 条测试）：
+  - 合法计划调整（尾帧运镜「缓慢推近」）经 `execution.unit` 到达生成器；
+  - 计划提示漂移 / 保护字段越权 / 覆盖缺失时，`gen_all_frames` 拒收且生成器**零调用**；
+  - 计划绑定的 `script_revision` 与投影稿一致；生成器桩收到的是计划里的最终提示；
+  - 后处理修好的宽度/形制到达最终提示；其他实体形制、无关注入不出现。
+- **完成状态**：受限修订→投影→画面计划→计划消费→逐帧生成已贯通；真实模型生成仍未执行。
 
 ## S06 决策包（样本与证据层级已更正）
 
@@ -120,7 +139,7 @@ test_works_on_hook_via_enforce_all}`（无规格时保留原形制）。
 | G2 | 大特写→远景 | 现状改写成「全景」；validation 已报 6 级 warning | 约束/校验真实 |
 | G6 | 声明 5s / 窗口 4s / 无音轨 | `actual_sec=5.0`、`verified=False`，仍产出 `audio_window_overflow` | 准备/语义真实 |
 | G7 | 等价派生 / 目标丢失 / 保护违规 | A 记账过/保护过/R1 误拒；B R2 拒；C 保护门拒 | 三判据真实；门禁组合**推演** |
-| G3 | **未出** | 需先实现「参考清单先行」再出逐字段 diff | — |
+| G3 | 参考清单先行（1 例，隔离样本） | 参考清单不变；正文可新增「参考绑定」段 | 隔离样本；未接线生产 |
 
 - G7 的「现状」列已拆成「记账规则」与「现行保护门」：C 的保护违规由既有
   `locked_changed` 拒，不是记账规则拒；B 的目标丢失两者都不拦。
@@ -129,10 +148,20 @@ test_works_on_hook_via_enforce_all}`（无规格时保留原形制）。
 
 ## S07 交付与限制
 
-- 本轮提交内容：S02–S05 补修 + 入库用例 + S06 样本与决策包 + 本文件。
-- 已知限制：G1/G3/G4/G6/G7 未实施（决策材料见 S06）；G3 差异样本未出；
-  S06 的 G4（正式采纳）仍无样本；真实模型/媒体调用未执行；
-  S03 的生产计划尚不强制因果链单位身份（旧稿按证据不足处理）。
+- 本轮提交内容：S02–S05 补修 + S03 身份生产/重映射 + S05 计划消费入口 +
+  S06 样本与决策包 + 合并失败归因 + 本文件。
+- **合并运行失败归因（2026-11-14）**：`tests/step02_video_gen` 在
+  `tests/step02b_video_gen/test_step02b_report_wp5.py` 之前运行时，后者失败
+  `FileNotFoundError: chapter_001/step02b_quality.json`。最小触发组合：
+  `test_seedance_prompt_practices.py` + `test_step02b_report_wp5.py`（1 failed）。
+  根因：`step02_video_gen.video_prompt_quality` 在**导入时**绑定
+  `from shared.paths import chapter_dir`；前一个测试导入过它之后，后一个测试只
+  monkeypatch `shared.paths.chapter_dir`，模块内旧绑定仍写真实章节目录。
+  涉及文件与基线 `43de241` **逐字节相同**（`git diff` 为空），属测试顺序依赖，
+  不是本包引入；已在测试内补 `_vq.chapter_dir` 绑定后修复，完整合并套件
+  **1735 passed / 8 skipped**。
+- 已知限制：G1/G3/G4/G6/G7 未实施（决策材料见 S06）；G3 只有隔离样本、
+  未接线生产；S06 的 G4（正式采纳）仍无样本；真实模型/媒体调用未执行。
 - 内容收益：本包只证明「已确认的无来源补写/删除路径不再发生，且修好的内容能沿
-  受限修订→投影→画面计划→生成器桩到达最终提示」；未做真实模型对照，
+  受限修订→投影→画面计划→计划消费入口到达生成器桩」；未做真实模型对照，
   不据此宣称画面质量提升。

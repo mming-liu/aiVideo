@@ -154,7 +154,9 @@ def build() -> dict:
         verdicts = {
             "record_only_rejects": False,
             "existing_protection_gate_rejects": bool(locked_changed),
-            "current_chain_rejects": bool(locked_changed),
+            # 只做「签名比较」推导，未走真实提交入口；字段名带 deduced，
+            # 避免把推演读成实测。
+            "deduced_current_chain_rejects": bool(locked_changed),
             "R1_any_residual": bool(record),
             "R2_target_loss": target_lost,
             "R2_plus_protection": bool(target_lost or locked_changed),

@@ -1,18 +1,22 @@
 # -*- coding: utf-8 -*-
-"""S05：受限修订 → 提交投影 → 画面计划 → 生成器桩的**完整链路**（跨内容离线回放）.
+"""S05：受限修订 → 提交投影 → 画面计划 → **计划消费入口** → 生成器桩.
 
-2026-11-13 复核要求：逐帧提示消费只证明了一段。本文件把同一候选及其身份贯穿：
+2026-11-14 复核要求：上一版只证明「同一稿件分别构建的提示一致」，生成仍拿
+`projected["shots"]` 直接调用逐帧入口，计划里的 `execution.unit` 不是数据来源。
+本文件改走真实入口 `step02a_frame_gen.main.gen_all_frames`（计划模式）：
 
-1. **受限修订入口** `main._repair_shot_warnings`（授权字段 + 桩响应）；
-2. **提交投影** `main.project_for_commit`（唯一实现；产出最终 revision）；
-3. Step01 落盘的 `script_result.json` 被 Step02a 读取；
-4. **画面计划构建** `execution_plan.build_visual_plan`；
-5. **计划模式变更保护/覆盖检查** `validate_plan_identity` / `verify_plan_changes` /
-   `verify_plan_coverage`；
-6. **真实逐帧入口** `_gen_first_frame_async` → 生成器桩。
+1. 受限修订 `main._repair_shot_warnings`（授权字段 + 桩响应）；
+2. 提交投影 `main.project_for_commit`；
+3. Step01 落盘 `script_result.json`；
+4. 画面计划构建 `execution_plan.build_visual_plan`；
+5. **计划消费入口** `gen_all_frames(visual_plan=..., scope=...)`——内部
+   `validate_plan_identity` / `verify_plan_execution` / `verify_plan_changes` /
+   `verify_plan_coverage`，并把 `execution.unit` 交给生成器；
+6. 生成器桩记录最终提示。
 
-两个匿名样本在内容关系、镜头编号（连续/非连续）、载体分布（旁白/对白/画面）
-上有实质差异；断言只针对有来源/无来源与链路身份，不绑定任何小说或章节。
+两类入口断言：
+- 合法计划调整（布局姿态）实际到达生成器；
+- 计划提示漂移 / 保护违规 / 覆盖缺失时，生成器**零调用**（SystemExit）。
 """
 from __future__ import annotations
 
@@ -79,7 +83,7 @@ def _sample_river() -> dict:
 
 
 def _sample_harbor() -> dict:
-    """非连续编号（2/5/9）；关系 = 出行→到达；旁白+对白载体；两种船型."""
+    """非连续编号（2/5/9）；关系 = 出行→到达；旁白+画面载体；两种船型."""
     a, b = "丙", "丁"
     shots = [
         _shot(2, chars=[a], location="港湾渔船", scene="港湾", subject=a,
@@ -166,10 +170,13 @@ class _TextSvc:
 
 
 class _Adapter:
-    """生成器桩：记录真实入口交给适配器的最终提示."""
+    """生成器桩：`gen_all_frames` 通过 `ImageGeneratorAiVideoAdapter` 创建它."""
+
+    instances: list["_Adapter"] = []
 
     def __init__(self):
         self.prompts: list[str] = []
+        _Adapter.instances.append(self)
 
     async def generate_single_image(self, **kwargs):
         self.prompts.append(str(kwargs.get("prompt") or ""))
@@ -205,7 +212,8 @@ def _patch_value(sample: dict, shot: dict) -> str:
     return str(shot[field]).replace(patch["from"], patch["to"], 1)
 
 
-def _run_chain(sample: dict, tmp_path, monkeypatch) -> dict:
+def _prepare_chain(sample: dict, tmp_path, monkeypatch) -> dict:
+    """受限修订 → 投影 → 落盘 → 画面计划；返回可供入口消费的计划与路径."""
     import step01_script_gen.main as m
 
     monkeypatch.setenv("OUTPUT_BASE", str(tmp_path / "output"))
@@ -250,11 +258,11 @@ def _run_chain(sample: dict, tmp_path, monkeypatch) -> dict:
     assert errors == []
     assert projected.get("script_revision")
 
-    # Step01 的消费形态：提交投影后的 script_result.json（Step02a 读取它做尺寸锚）。
     chapter = tmp_path / ("chapter_%03d" % sample["scope"]["chapter"])
     chapter.mkdir(parents=True, exist_ok=True)
-    (chapter / "script_result.json").write_text(
-        json.dumps(projected, ensure_ascii=False), encoding="utf-8")
+    script_path = chapter / "script_result.json"
+    script_path.write_text(json.dumps(projected, ensure_ascii=False),
+                           encoding="utf-8")
     monkeypatch.setattr("shared.paths.chapter_dir", lambda *a, **k: chapter)
 
     from step02a_frame_gen.execution_plan import (
@@ -272,56 +280,155 @@ def _run_chain(sample: dict, tmp_path, monkeypatch) -> dict:
     assert verify_plan_changes(plan, projected) == []
     assert verify_plan_coverage(plan, only_indices=indices, frames={"ff"},
                                 script=projected) == []
-
-    from shared import vimax_bridge as vb
-    adapter = _Adapter()
-    shots = {int(s["index"]): s for s in projected["shots"]}
-    plan_prompts = {}
-    for entry in plan["shots"]:
-        idx = int(entry["shot_index"])
-        frame = next(f for f in entry["frames"] if f.get("kind") == "ff")
-        plan_prompts[idx] = frame["prompt"]
-        ok = asyncio.run(vb._gen_first_frame_async(
-            adapter, tmp_path / "shots", dict(shots[idx]), False,
-            script_mtime=None, reference_paths=[], max_retries=0,
-            characters=projected["characters"]))
-        assert ok
     return {
-        "revised": revised,
+        "sample": sample,
         "projected": projected,
         "plan": plan,
-        "plan_prompts": plan_prompts,
-        "adapter_prompts": adapter.prompts,
+        "chapter": chapter,
+        "script_path": script_path,
+        "indices": indices,
         "decision": decision,
-        "calls": svc.calls,
     }
 
 
+def _run_gen_all_frames(prepared: dict, tmp_path, monkeypatch, *,
+                        plan: dict | None = None,
+                        only_indices: set | None = None,
+                        frames: set | None = None,
+                        expect_exit: bool = False) -> list[str]:
+    """通过真实计划消费入口 `gen_all_frames` 生成；返回适配器收到的提示."""
+    from step02a_frame_gen.main import gen_all_frames
+    import shared.vimax_adapters as adapters
+
+    _Adapter.instances.clear()
+    monkeypatch.setattr(adapters, "ImageGeneratorAiVideoAdapter", _Adapter)
+
+    # 参考资产收集与计划消费无关：保持离线、不触发额外生成。
+    def _refs_stub(*a, **k):
+        if k.get("return_buckets"):
+            return {"buckets": [], "omissions": []}
+        return []
+
+    monkeypatch.setattr("shared.vimax_bridge._collect_frame_refs_for_shot",
+                        _refs_stub)
+
+    kwargs = dict(
+        script_path=prepared["script_path"],
+        work_dir=tmp_path / "work",
+        force=False,
+        only_indices=(prepared["indices"] if only_indices is None
+                      else only_indices),
+        frames=frames or {"ff"},
+        concurrency=1,
+        visual_plan=plan if plan is not None else prepared["plan"],
+        scope=prepared["sample"]["scope"],
+    )
+    if expect_exit:
+        with pytest.raises(SystemExit):
+            asyncio.run(gen_all_frames(**kwargs))
+        return []
+    asyncio.run(gen_all_frames(**kwargs))
+    return [p for inst in _Adapter.instances for p in inst.prompts]
+
+
+def _plan_prompts(plan: dict) -> dict[int, str]:
+    out: dict[int, str] = {}
+    for entry in plan["shots"]:
+        idx = int(entry["shot_index"])
+        frame = next(f for f in entry["frames"] if f.get("kind") == "ff")
+        out[idx] = frame["prompt"]
+    return out
+
+
 @pytest.mark.parametrize("name", sorted(_SAMPLES))
-def test_full_chain_reaches_generator_with_same_identity(name, tmp_path, monkeypatch):
+def test_full_chain_reaches_generator_via_plan_entry(name, tmp_path, monkeypatch):
     sample = _SAMPLES[name]
-    out = _run_chain(sample, tmp_path, monkeypatch)
-    projected = out["projected"]
-    plan = out["plan"]
+    prepared = _prepare_chain(sample, tmp_path, monkeypatch)
+    plan = prepared["plan"]
+    projected = prepared["projected"]
+
+    prompts = _run_gen_all_frames(prepared, tmp_path, monkeypatch)
 
     # 身份贯穿：计划绑定的是同一份投影稿 / revision。
     binding = plan.get("execution_binding") or {}
     source = binding.get("source") or {}
     assert source.get("script_revision") == projected.get("script_revision")
-    assert len(out["adapter_prompts"]) == len(projected["shots"])
-    # 生成器桩收到的就是计划里的最终提示（同一次组装，不再另拼一份）。
-    for idx, prompt in out["plan_prompts"].items():
-        assert prompt in out["adapter_prompts"], idx
+    assert len(prompts) == len(projected["shots"])
+    # 生成器桩收到的就是计划里的最终提示（计划单元是数据来源）。
+    for idx, prompt in _plan_prompts(plan).items():
+        assert prompt in prompts, idx
 
     # 内容：后处理修好的内容到达最终提示；其他实体的形制不被误删。
-    prompts = "\n".join(out["adapter_prompts"])
-    assert sample["expect"]["width"] in prompts
+    joined = "\n".join(prompts)
+    assert sample["expect"]["width"] in joined
     for term in sample["expect"]["no_terms"]:
-        assert term not in prompts, (term, prompts)
+        assert term not in joined, (term, joined)
 
-    # 计划模式的变更保护与覆盖检查都通过（上面的 assert 已逐项核过），
-    # 这里再确认「不是空计划」：每个请求镜头都有一帧。
-    assert {int(e["shot_index"]) for e in plan["shots"]} == {
-        int(s["index"]) for s in projected["shots"]}
     # 修订决策确实记录了本轮前后身份（同一候选身份，不是事后补造）。
-    assert out["decision"]["revision_before"] != out["decision"]["revision_after"]
+    assert prepared["decision"]["revision_before"] != \
+        prepared["decision"]["revision_after"]
+
+
+def test_legal_plan_adjustment_reaches_generator(tmp_path, monkeypatch):
+    """合法计划调整（运镜）必须经 `execution.unit` 到达生成器."""
+    sample = _SAMPLES["river"]
+    prepared = _prepare_chain(sample, tmp_path, monkeypatch)
+    from step02a_frame_gen.execution_plan import build_visual_plan
+    shot = prepared["projected"]["shots"][0]
+    plan = build_visual_plan(
+        prepared["projected"], scope=sample["scope"],
+        only_indices=prepared["indices"], frames={"lf"},
+        candidate={"shots": [{"index": shot["index"],
+                              "camera_movement": "缓慢推近"}]})
+    assert plan.get("status") != "blocked", {
+        "unresolved": plan.get("unresolved"),
+        "shot_issues": [e.get("issues") for e in plan.get("shots") or []],
+    }
+    # 尾帧生成要求首帧存在（生产约束）：预置一张首帧，不让它参与本断言。
+    ff_dir = tmp_path / "work" / "shots" / str(shot["index"])
+    ff_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 64), (18, 24, 30)).save(ff_dir / "first_frame.png")
+    prompts = _run_gen_all_frames(prepared, tmp_path, monkeypatch, plan=plan,
+                                  frames={"lf"})
+    assert prompts
+    assert "构图需按尾帧描述重新布局" in "\n".join(prompts), \
+        "计划单元的运镜调整没有到达生成器"
+
+
+def _corrupt_drift(prepared: dict) -> dict:
+    plan = json.loads(json.dumps(prepared["plan"], ensure_ascii=False))
+    frame = next(f for f in plan["shots"][0]["frames"] if f.get("kind") == "ff")
+    frame["prompt"] = frame["prompt"] + "【计划漂移】"
+    return plan
+
+
+def _corrupt_protection(prepared: dict) -> dict:
+    plan = json.loads(json.dumps(prepared["plan"], ensure_ascii=False))
+    plan["shots"][0]["execution"]["unit"]["narration_segment"] = "被越权改写的旁白"
+    return plan
+
+
+@pytest.mark.parametrize("corrupt", [_corrupt_drift, _corrupt_protection])
+def test_plan_violations_make_zero_generator_calls(corrupt, tmp_path, monkeypatch):
+    sample = _SAMPLES["river"]
+    prepared = _prepare_chain(sample, tmp_path, monkeypatch)
+    plan = corrupt(prepared)
+    prompts = _run_gen_all_frames(prepared, tmp_path, monkeypatch, plan=plan,
+                                  expect_exit=True)
+    assert prompts == []
+    assert not [p for inst in _Adapter.instances for p in inst.prompts]
+
+
+def test_plan_coverage_missing_makes_zero_generator_calls(tmp_path, monkeypatch):
+    """计划只覆盖部分镜头时，全量运行必须零调用拒收（不回退原稿）."""
+    sample = _SAMPLES["harbor"]
+    prepared = _prepare_chain(sample, tmp_path, monkeypatch)
+    from step02a_frame_gen.execution_plan import build_visual_plan
+    partial = build_visual_plan(prepared["projected"],
+                                scope=sample["scope"],
+                                only_indices={2}, frames={"ff"})
+    prompts = _run_gen_all_frames(prepared, tmp_path, monkeypatch,
+                                  plan=partial, only_indices=None,
+                                  expect_exit=True)
+    assert prompts == []
+    assert not [p for inst in _Adapter.instances for p in inst.prompts]

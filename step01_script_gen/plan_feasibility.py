@@ -2695,6 +2695,12 @@ def normalize_plan_ranges(plan):
     # ---- ③ 应用：新节拍表 + 声明字段重映射（其余字段一个字节不动） ----
     _out = dict(plan)
     _out["shot_beats"] = [r.render() for r in _new_beats]
+    # S03（2026-11-14）：节拍被拆分/重编号后，因果链的 `（Bk）` 身份同步重映射；
+    # 找不到唯一对应节拍的引用改成「未落节拍」并留说明。
+    from shared.execution_semantics import remap_causal_refs
+    for _causal_note in remap_causal_refs(
+            _out, plan.get("shot_beats") or [], _out["shot_beats"]):
+        print("[WARN] %s" % _causal_note)
     if _sites:
         _new_facts = list(_facts)
         for _i, _si, _seg in _sites:

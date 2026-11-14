@@ -160,7 +160,10 @@ OUTLINE_PROMPT = """
   对白是时长的最大一项，**必须给画面动作/反应/过场留出时间**——每场只留最关键的一两句，
   不要把整段对话都列进来。**选多了本集就装不下**：会被预算门打回重选（反馈会带上代码
   算出的秒数），白费一轮；更严重的是会把整集挤爆。
-- causal_chain: 每个关键转折必须具备起因→行动→结果→悬念
+- causal_chain: 每个关键转折必须具备起因→行动→结果→悬念；**每条末尾用「（Bk）」
+  标注它对应的节拍编号**（k 按 `shot_beats` 顺序、必须真实存在；一条因果对应多条
+  节拍时写「（B2、B3）」）。下游按这个身份把过程/时间证据限定到该关系；确实没有
+  对应节拍时写「（未落节拍）」，不得省略标注。
 - character_motives: 说明角色为什么这样做，并附原文证据
 - shot_beats: 覆盖每条 main_events，按原文顺序排列；每个节拍只承载一条主要信息，标出信息目的和证据；
   末尾必须标**载体**（v6.138 事件履约契约）：`载体：台词k` = 由 `dialogue_lines` 第 k 句承载
@@ -5849,6 +5852,11 @@ def apply_replan_ops(plan: dict, ops, novel_text: str) -> tuple:
                 out.append(_rendered[0])
         out.extend(_insert_ops.get(_i) or [])       # 插在该节拍**之后**
     new["shot_beats"] = out
+    # S03（2026-11-14）：节拍表变了（插入/删除/重排/拆分）⇒ 因果链的 `（Bk）`
+    # 身份必须跟着重映射；找不到唯一对应节拍的引用改成「未落节拍」并留说明。
+    from shared.execution_semantics import remap_causal_refs
+    for _causal_note in remap_causal_refs(new, beats_in, out):
+        print("[WARN] %s" % _causal_note)
     # 本批**改写过**的条目（改写的 + 插入的）——原文证据只核这些（见下方说明）
     _changed = ([t for _k, _ts in _edit_ops.values() for t in _ts]
                 + [t for _ts in _insert_ops.values() for t in _ts])

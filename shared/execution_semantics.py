@@ -383,8 +383,10 @@ def _relation_units(outline: dict, roles: list[tuple[str, str, int]]
     for role, text, _i in roles:
         is_result = _role_matches(role, _RESULT_ROLES)
         # ① 正文完全相等 → 内容身份（最稳：节拍插入/重编号不影响）。
+        #    比较前先去掉条目里的 `（Bk）` 引用，否则带引用的条目永远无法与
+        #    节拍正文完全相等。
         exact: dict[str, set[int]] = {}
-        body = _identity_text(text)
+        body = _identity_text(_strip_causal_refs(text))
         if body:
             for kind, values, extractor in (
                     ("beats", outline.get("shot_beats") or [], _beat_body),
@@ -401,7 +403,10 @@ def _relation_units(outline: dict, roles: list[tuple[str, str, int]]
                 if 1 <= number <= limits[kind]:
                     refs.setdefault(kind, set()).add(number)
         # 内容身份与编号引用冲突 ⇒ 身份不唯一，交证据不足（不选边站）。
-        if exact and refs and exact != refs:
+        # 只在**同一类单位**上比较：正文同时等于某节拍与某事件是正常的
+        # （main_events 常与节拍正文同文），不是冲突。
+        if exact and refs and any(
+                kind in refs and exact[kind] != refs[kind] for kind in exact):
             unresolved.append(text)
             continue
         chosen = exact or refs
@@ -423,6 +428,142 @@ def _shot_by_index(script: dict, index: int) -> dict:
         except (TypeError, ValueError):
             continue
     return {}
+
+
+#: 因果链条目里「没有对应节拍」的显式标记（生成端在无节拍可指时写它）。
+CAUSAL_UNRESOLVED_MARK = "未落节拍"
+
+
+def _causal_ref_spans(text: str) -> list[tuple[int, int, str, int]]:
+    """因果链条目里的 `(start, end, kind, number)` 引用片段（按位置排序）."""
+    spans: list[tuple[int, int, str, int]] = []
+    for kind, pattern in _CAUSAL_REF_PATTERNS:
+        for match in pattern.finditer(str(text or "")):
+            spans.append((match.start(), match.end(), kind, int(match.group(1))))
+    spans.sort()
+    return spans
+
+
+def _causal_limits(outline: dict) -> dict[str, int]:
+    return {
+        "beats": _ref_target_count(outline, "shot_beats") or 0,
+        "facts": _ref_target_count(outline, "fact_uids") or 0,
+        "events": _ref_target_count(outline, "main_events") or 0,
+        "lines": _ref_target_count(outline, "dialogue_lines") or 0,
+    }
+
+
+def _strip_causal_refs(text: str) -> str:
+    """去掉因果条目里的编号引用（含残留空括号与「未落节拍」标记）.
+
+    内容身份比较必须用**去掉引用后的正文**：`结果：乙到达（B2）` 的正文是
+    「乙到达」，否则带引用的条目永远无法与节拍正文完全相等。
+    """
+    raw = str(text or "")
+    spans = _causal_ref_spans(raw)
+    if not spans:
+        body = raw
+    else:
+        buf: list[str] = []
+        pos = 0
+        for start, end, _kind, _number in spans:
+            buf.append(raw[pos:start])
+            pos = end
+        buf.append(raw[pos:])
+        body = "".join(buf)
+    # 先去掉「未落节拍」标记，再清掉因此留下的空括号。
+    body = body.replace(CAUSAL_UNRESOLVED_MARK, "")
+    body = body.replace("（）", "").replace("()", "")
+    return body
+
+
+def validate_causal_identity(outline: dict) -> dict:
+    """校验因果链的单位身份（计划生成后的第一道核验）.
+
+    Returns:
+        `{"status": "resolved" | "unresolved" | "invalid", "units", "unresolved",
+          "problems"}`：
+        - `resolved`：每条因果条目都解析到至少一个计划单位；
+        - `unresolved`：有条目没有显式身份（旧稿 / 生成端未标注）——**不是**
+          内容缺陷，是「该项未完成语义判定」，准入影响走影子差异；
+        - `invalid`：有条目引用了不存在的单位编号（越界），或同一条目里
+          内容身份与编号引用冲突。
+    """
+    roles = _causal_roles(outline)
+    units, unresolved, _result_units = _relation_units(outline, roles)
+    limits = _causal_limits(outline)
+    problems: list[dict] = []
+    for role, text, index in roles:
+        for _start, _end, kind, number in _causal_ref_spans(text):
+            if not 1 <= number <= limits[kind]:
+                problems.append({
+                    "code": "causal_ref_out_of_range",
+                    "path": f"chapter_outline.causal_chain[{index}]",
+                    "message": ("因果链条目引用了不存在的单位 %s%d（共 %d 条）"
+                                % (kind, number, limits[kind])),
+                })
+    status = "invalid" if problems else ("unresolved" if unresolved else "resolved")
+    return {
+        "status": status,
+        "units": {kind: sorted(values) for kind, values in units.items()},
+        "unresolved": unresolved,
+        "problems": problems,
+    }
+
+
+def remap_causal_refs(plan: dict, old_beats: list, new_beats: list) -> list[str]:
+    """节拍表变更后重映射 `causal_chain` 里的 `（Bk）` 编号；返回作废说明.
+
+    修订会插入/删除/重排/拆分节拍，而 `causal_chain` 里的编号是**按位置**写的。
+    这里按**正文完全相等**把旧编号映射到新编号（插入/删除/重排都适用）：
+
+    - 旧节拍仍存在（可能换了位置）→ 改成新编号；
+    - 旧节拍被删除、改写或拆分（正文不再唯一存在）→ 该引用改成
+      `未落节拍`，并记一条说明，交计划层重新标注；
+    - 重复正文无法唯一映射 → 同样未落节拍（不猜）。
+
+    不按文本相似度猜关系；只认完全相等的正文身份。
+    """
+    if not isinstance(plan, dict):
+        return []
+    old_bodies = [_identity_text(_beat_body(b)) for b in (old_beats or [])]
+    new_bodies = [_identity_text(_beat_body(b)) for b in (new_beats or [])]
+    counts: dict[str, int] = {}
+    for body in new_bodies:
+        if body:
+            counts[body] = counts.get(body, 0) + 1
+    new_index = {body: i for i, body in enumerate(new_bodies, 1)
+                 if body and counts.get(body) == 1}
+    chain = plan.get("causal_chain")
+    if not isinstance(chain, list):
+        return []
+    notes: list[str] = []
+    out: list = []
+    for entry_index, entry in enumerate(chain, 1):
+        text = str(entry or "")
+        spans = [s for s in _causal_ref_spans(text) if s[2] == "beats"]
+        if not spans:
+            out.append(entry)
+            continue
+        buf: list[str] = []
+        pos = 0
+        for start, end, _kind, number in spans:
+            buf.append(text[pos:start])
+            body = (old_bodies[number - 1]
+                    if 1 <= number <= len(old_bodies) else "")
+            new_number = new_index.get(body) if body else None
+            if new_number:
+                buf.append("B%d" % new_number)
+            else:
+                buf.append(CAUSAL_UNRESOLVED_MARK)
+                notes.append(
+                    "causal_chain[%d] 的 B%d 在节拍变更后找不到唯一对应节拍 ⇒ 未落节拍"
+                    % (entry_index, number))
+            pos = end
+        buf.append(text[pos:])
+        out.append("".join(buf))
+    plan["causal_chain"] = out
+    return notes
 
 
 def _unit_carrier_shots(script: dict, units: dict[str, set[int]]) -> set[int]:
@@ -610,6 +751,7 @@ def _check_causal_and_time(script: dict) -> list[dict]:
     # 事件/台词），再把过程与时间证据**限定到这些单位的承载镜头**。拿不到唯一身份
     # （或结果在成片里没有承载镜头）时明确输出「证据不足」，不按全章范围判，也不
     # 静默豁免——准入处理沿用既定裁决边界（只出 advisory + needs_semantic_review）。
+    identity = validate_causal_identity(outline)
     units, unresolved, result_units = _relation_units(outline, roles)
     carrier_indices = _unit_carrier_shots(script, units)
     result_carriers = _unit_carrier_shots(script, result_units)
@@ -638,8 +780,11 @@ def _check_causal_and_time(script: dict) -> list[dict]:
         actual_roles=[role for role, _t, _i in roles],
         binding_status=binding_status,
         relation_status=relation_status,
+        relation_note=("该项未完成语义判定（因果链条目没有显式单位身份）"
+                       if relation_status == "unresolved" else ""),
         relation_units=relation_scope,
         unresolved_relations=unresolved,
+        identity_problems=identity.get("problems") or [],
         relation_carriers=["shot:%s" % i for i in sorted(carrier_indices)],
         result_carriers=["shot:%s" % i for i in sorted(result_carriers)],
         carrier_evidence=relation_process,
@@ -938,6 +1083,7 @@ def check_candidate_paths(script: dict, before: dict, after: dict) -> list[dict]
 __all__ = [
     "CHECKER_VERSION",
     "KNOWN_CODES",
+    "CAUSAL_UNRESOLVED_MARK",
     "DEFAULT_TEMPORAL_MARKERS",
     "DEFAULT_REACTION_CUES",
     "DEFAULT_LIPSYNC_DISABLED_CUES",
@@ -947,4 +1093,6 @@ __all__ = [
     "check_execution_semantics",
     "check_candidate_paths",
     "codes_of",
+    "remap_causal_refs",
+    "validate_causal_identity",
 ]

@@ -13,7 +13,7 @@
 |---|---|---|---|
 | G1 `issue_ledger.closed` 接提交门 | **已有**（2 例） | 沉默 vs 有证据关闭的 resolved 差异 | 台账真实；门禁**推演** |
 | G2 `framing_jump` 自动改写 | **已有**（1 例） | 大特写→全景的改写 vs 只报 warning | 约束/校验真实 |
-| G3 先定稿参考、再构建正文 | **未出样本** | 结构性改造；差异字段见 §3 | — |
+| G3 先定稿参考、再构建正文 | **已有**（1 例，隔离样本） | 参考清单不变；正文可新增「参考绑定」段 | 隔离样本；未接线生产 |
 | G6 声音两态 | **已有**（1 例） | 声明值被当成实测 → `audio_window_overflow` | 准备/语义真实 |
 | G7 `postprocess_reverted` 接门 | **已有**（3 例） | 等价派生 / 目标丢失 / 保护违规 | 判据真实；门禁组合**推演** |
 
@@ -54,7 +54,7 @@
 - 建议：G2 只报不改。`_check_shot_size_jump` 已产出同一条 warning；先做影子对照，
   再决定是否保留自动改写。
 
-## 3. G3：先定稿参考、再构建正文（未出差异样本）
+## 3. G3：先定稿参考、再构建正文（隔离样本已出）
 
 当前链路（已核对）：
 
@@ -64,16 +64,23 @@
 3. `:484` 再用 `prepared` 重建冻结请求。
 
 于是正文构建时读不到 `prepare_request` 才定稿的参考清单，正文里无法声明
-「参考图 k 是谁/什么」。**要出的差异样本**（尚未生成）：
+「参考图 k 是谁/什么」。
 
-| 字段 | 当前 | 改后 |
+**隔离样本**（`tools/build_s06_g3_isolated_diff.py`，真实 `build_frozen_for_shot`，
+离线、零模型调用；**未接线生产**）：
+
+| 字段 | 当前 | 候选 |
 |---|---|---|
-| `request.prompt` | 只有画面描述 | 含 `【参考绑定】参考图1=甲（身份/外观）…` |
-| `prepared.references[*].role` | 有 | 有，且与正文逐项对应 |
-| 受影响面 | 全部视频请求 | 全部视频请求（需回归） |
+| `request.prompt` | 只有画面描述 + 参考图用途清单 | 末尾追加 `【参考绑定】参考图1=甲（角色外观）` |
+| `reference_paths` | `portrait_jia.png` | 相同（参考清单不变） |
+| `references[*].role` | `reference_image` | 相同 |
+| `frozen.media_mode` | `reference` | 相同 |
+| 冻结正文 | 无参考绑定 | 含参考绑定（`frozen_prompt_changed=true`） |
 
-- 未出样本的原因：改后链路尚不存在；需要先在隔离分支实现「参考清单先行」，
-  再用同一镜头冻结两版请求做逐字段 diff。**本轮不把设想写成已证收益。**
+- 样本只回答「结构上能不能把参考绑定写进正文」；**不回答模型是否因此改善**。
+- 候选正文是工具内追加，尚未实现「参考清单先行」的生产链路；正式默认行为不变。
+- 限制：样本使用隔离角色肖像/首帧，不读真实资产库；真实收益需实跑对照。
+- 产物：`artifacts/s06/g3_isolated_request_diff.{json,md}`。
 
 ## 4. G6：声音「准备态 / 视频后确认态」
 
@@ -127,7 +134,8 @@
 2. G7：按「目标丢失 + 既有保护门」接门，不按任何残余。
 3. G2：改为只报不改，先做影子对照。
 4. G6：拆两态；准备态与确认态分别消费。
-5. G3：先实现隔离分支的「参考清单先行」，再出逐字段差异样本，之后裁决。
+5. G3：隔离差异样本已出（§3）；正式接线前先裁决「参考绑定进正文」的产品语义，
+   再在隔离分支实现「参考清单先行」并做真实模型对照。
 
 ## 7. 证据
 
@@ -139,4 +147,8 @@ C:/Users/ee54/AppData/Local/Python/pythoncore-3.14-64/python.exe tools/build_s06
 
 C:/Users/ee54/AppData/Local/Python/pythoncore-3.14-64/python.exe tools/build_s06_g7_samples.py
 # R2_plus_protection_matches_expected=true（A accept / B reject / C reject）
+
+C:/Users/ee54/AppData/Local/Python/pythoncore-3.14-64/python.exe tools/build_s06_g3_isolated_diff.py
+# prompt_added_block=true；reference_list_unchanged=true；frozen_prompt_changed=true
+# 输出：artifacts/s06/g3_isolated_request_diff.{json,md}
 ```
