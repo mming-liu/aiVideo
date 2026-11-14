@@ -1,8 +1,8 @@
 {
  "root": "C:\\myFloders\\git\\aiVideo",
  "total": {
-  "bytes": 2267591580,
-  "files": 14070
+  "bytes": 2268708888,
+  "files": 14122
  },
  "by_top_dir": {
   "output": {
@@ -14,8 +14,8 @@
    "files": 1302
   },
   ".git": {
-   "bytes": 63440501,
-   "files": 48
+   "bytes": 63829735,
+   "files": 88
   },
   "tests": {
    "bytes": 26508460,
@@ -38,8 +38,8 @@
    "files": 1
   },
   "docs": {
-   "bytes": 5267245,
-   "files": 419
+   "bytes": 5293960,
+   "files": 423
   },
   "tools": {
    "bytes": 5249744,
@@ -54,8 +54,8 @@
    "files": 164
   },
   ".dsh": {
-   "bytes": 2353385,
-   "files": 114
+   "bytes": 3097201,
+   "files": 124
   },
   ".agents": {
    "bytes": 1256634,
@@ -125,10 +125,6 @@
    "bytes": 60718,
    "files": 90
   },
-  ".workbuddy": {
-   "bytes": 42541,
-   "files": 2
-  },
   ".env.content": {
    "bytes": 35156,
    "files": 1
@@ -146,7 +142,7 @@
    "files": 7
   },
   ".gitignore": {
-   "bytes": 21901,
+   "bytes": 21985,
    "files": 1
   },
   "sync.mjs": {
@@ -260,20 +256,20 @@
    "files": 9248
   },
   "other_untracked": {
-   "bytes": 414136101,
-   "files": 3024
+   "bytes": 414095376,
+   "files": 3019
   },
   "git_internal": {
-   "bytes": 63440501,
-   "files": 48
+   "bytes": 63829735,
+   "files": 88
   },
   "git_tracked": {
-   "bytes": 40625000,
-   "files": 1351
+   "bytes": 40692524,
+   "files": 1360
   },
   "ignored_agent_staging": {
-   "bytes": 9898680,
-   "files": 399
+   "bytes": 10599955,
+   "files": 407
   }
  },
  "by_b_source": {
@@ -282,12 +278,12 @@
    "files": 9248
   },
   "B5_git_objects_and_promo_assets": {
-   "bytes": 82165469,
-   "files": 63
+   "bytes": 82554787,
+   "files": 103
   },
   "B3_baselines_and_agent_staging": {
-   "bytes": 9898680,
-   "files": 399
+   "bytes": 10599955,
+   "files": 407
   },
   "B1_output_step01_snapshots": {
    "bytes": 6216,
@@ -372,7 +368,7 @@
   },
   {
    "path": ".",
-   "bytes": 20427539,
+   "bytes": 20427623,
    "files": 28
   },
   {
@@ -568,5 +564,5 @@
    "bytes": 8140463
   }
  ],
- "tracked_files": 1517
+ "tracked_files": 1526
 }

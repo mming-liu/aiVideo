@@ -1,8 +1,8 @@
 # 工作区体积体检（只读）
 
 - 根目录：`C:\myFloders\git\aiVideo`
-- 合计：**2.1 GB / 14070 文件**
-- git 跟踪文件：1517
+- 合计：**2.1 GB / 14122 文件**
+- git 跟踪文件：1526
 
 ## 顶层目录
 
@@ -10,17 +10,17 @@
 |---|---:|---:|
 | `output` | 1.6 GB | 9248 |
 | `reference_skills` | 339.8 MB | 1302 |
-| `.git` | 60.5 MB | 48 |
+| `.git` | 60.9 MB | 88 |
 | `tests` | 25.3 MB | 1078 |
 | `skills` | 22.6 MB | 338 |
 | `锦衣夜行_77119小说.txt` | 11.4 MB | 1 |
 | `step01_script_gen` | 8.2 MB | 326 |
 | `锦衣夜行_77119小说.txt.bak` | 7.8 MB | 1 |
-| `docs` | 5.0 MB | 419 |
+| `docs` | 5.0 MB | 423 |
 | `tools` | 5.0 MB | 124 |
 | `shared` | 4.8 MB | 196 |
 | `baselines` | 4.6 MB | 164 |
-| `.dsh` | 2.2 MB | 114 |
+| `.dsh` | 3.0 MB | 124 |
 | `.agents` | 1.2 MB | 161 |
 | `.claude` | 1.0 MB | 143 |
 | `step02_video_gen` | 633.9 KB | 22 |
@@ -38,12 +38,11 @@
 | `references` | 113.4 KB | 18 |
 | `problems.md` | 69.5 KB | 1 |
 | `.p1a_exp` | 59.3 KB | 90 |
-| `.workbuddy` | 41.5 KB | 2 |
 | `.env.content` | 34.3 KB | 1 |
 | `AGENTS.md` | 32.6 KB | 1 |
 | `__pycache__` | 32.4 KB | 3 |
 | `.idea` | 23.5 KB | 7 |
-| `.gitignore` | 21.4 KB | 1 |
+| `.gitignore` | 21.5 KB | 1 |
 | `sync.mjs` | 20.3 KB | 1 |
 | `scene_compliance.py` | 14.9 KB | 1 |
 | `README.md` | 13.7 KB | 1 |
@@ -76,18 +75,18 @@
 | 类别 | 体积 | 文件数 |
 |---|---:|---:|
 | ignored_production_output | 1.6 GB | 9248 |
-| other_untracked | 395.0 MB | 3024 |
-| git_internal | 60.5 MB | 48 |
-| git_tracked | 38.7 MB | 1351 |
-| ignored_agent_staging | 9.4 MB | 399 |
+| other_untracked | 394.9 MB | 3019 |
+| git_internal | 60.9 MB | 88 |
+| git_tracked | 38.8 MB | 1360 |
+| ignored_agent_staging | 10.1 MB | 407 |
 
 ## B1–B5 膨胀源
 
 | 编号 | 体积 | 文件数 |
 |---|---:|---:|
 | B4_output_accumulation | 1.6 GB | 9248 |
-| B5_git_objects_and_promo_assets | 78.4 MB | 63 |
-| B3_baselines_and_agent_staging | 9.4 MB | 399 |
+| B5_git_objects_and_promo_assets | 78.7 MB | 103 |
+| B3_baselines_and_agent_staging | 10.1 MB | 407 |
 | B1_output_step01_snapshots | 6.1 KB | 4 |
 
 ## Top 30 目录
