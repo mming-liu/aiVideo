@@ -74,6 +74,13 @@ def build_regen_feedback(script: dict, novel_text: str = "",
         lines.append(f"- {label} {len(warns)}处（{shot_str}）：{first}")
     body = "\n".join(lines)
     return (
-        "\n\n# 本地校验反馈（来自分镜检查表，请针对性修正；「N处」=命中镜头数，括号内=镜头号）\n"
+        "\n\n# 不可动字段（任何修复都不得触碰）\n"
+        "- narration_segment/subtitle 逐字锁定：不得增删改任何字符（含标点）；"
+        "旁白类缺陷只可整体回退到 narration_lines[k] 原文，不得就地改写。\n"
+        "- 改任何镜的状态描述（ff_desc/lf_desc/keyframes）前，先核对上一镜 lf 终态——"
+        "不得修复一镜、引入新的状态断裂（道具离手/复得必须有中间动作镜）。\n"
+        "- 无声音镜头的留白属 sound_design 决策：缺「留白」声明时在 audio_cue 补"
+        "「留白（目的：…）」，不得为此给 narration_segment 加台词。\n"
+        "\n# 本地校验反馈（来自分镜检查表，请针对性修正；「N处」=命中镜头数，括号内=镜头号）\n"
         + body + "\n"
     )

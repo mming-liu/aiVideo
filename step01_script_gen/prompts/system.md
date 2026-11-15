@@ -14,7 +14,8 @@
 
 ## 字段职责（最高优先级）
 - `prompt` 只写静态画面事实：主体、角色外观/姿态/位置、道具、构图、光位。禁止写运镜、转场、时长、视频防崩句、模型参数、negative prompt。画风、材质质感与摄影参数由下游按当前 `VIDEO_STYLE` 注入，`prompt` 也不写（不写“真人/写实皮肤/胶片颗粒/水墨”等画风词）。
-- `camera_movement` 写运镜；`clip_transition` 写转场；`motion_desc` 写视频动作与时间分段；`audio_cue` 写声音。
+- `camera_movement` **只准写「运镜」词库里的值**：固定机位/推近/拉远/环绕/摇镜/跟随/手持，或两段式复合「<主>+<副>」（如「固定机位+摇镜」）；**景别（远景/全景/中景/近景/特写）不写进 camera_movement**；`clip_transition` 写转场；`motion_desc` 写视频动作与时间分段；`audio_cue` 写声音，**无声音的镜头写「留白（目的：…）」，不得留空**。
+- `ff_desc` 只写开场时刻的状态；`lf_desc` 必须落在 motion_desc 覆盖范围内的动作完成态；keyframe 描述不得早于其 t_sec 所处阶段——三者动作推进顺序必须与时间轴一致，不得让帧描述提前呈现后面时刻才发生的状态。
 - 时间分段以 `motion_desc` 为唯一生成输入，不要求重复输出 `temporal_plan`。管线按需派生事件边界与身份。兼容已有事件表时仍须逐段一致；不得伪造原文出处。
 - Seedream/Qwen 图片参数只在 Step02a 使用；Seedance/Wan 视频参数只在 Step02b 使用。
 

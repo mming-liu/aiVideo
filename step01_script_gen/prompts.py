@@ -205,6 +205,7 @@ def _build_cinematic_vocab() -> str:
     # v6.43 精简：删 10 个与 knowledge_skills 重复的分类，保留 9 个独有
     sections = [
         ("景别", _format_kv(storyboard_refs.SHOT_SIZES)),
+        ("运镜", _format_kv(storyboard_refs.CAMERA_MOVEMENTS)),
         ("景深/对焦", _format_kv(storyboard_refs.DEPTH_OF_FIELD)),
         ("色调", _format_kv(storyboard_refs.COLOR_PALETTES)),
         ("古代服饰", _format_kv(storyboard_refs.ANCIENT_COSTUMES)),
@@ -866,7 +867,9 @@ def render_execution_contract(plan) -> str:
                      "承载它的节拍展开的其余镜头 narration_segment 留空；"
                      "**严禁在逗号处把单句旁白切到多镜**（首镜停在逗号上会被判"
                      "「句中截断」，整稿判 plan_refs_narration_missing）；"
-                     "**严禁用节拍概述或改写句替代 Nk 原文**。\n"
+                     "**严禁用节拍概述或改写句替代 Nk 原文**；"
+                     "**逐字 = 不增删任何字符（含标点）**——把原文没有的标点插进旁白"
+                     "（如「宝钞的高价」写成「宝钞的，高价」）同样判逐字漂移。\n"
                      "  ② **有内部句末标点**（多句）⇒ 才可以把承载它的节拍展开成 2-4 个"
                      "镜头、按**句末**分句讲完（每镜都收在句末，不得截句）。\n"
                      "同一镜可以同时有台词与旁白——该镜同时声明承载台词的那条节拍与"
