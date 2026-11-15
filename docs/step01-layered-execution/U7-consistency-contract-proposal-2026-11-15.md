@@ -325,3 +325,44 @@ upsert 条目。**不可确定性修复**（无法替模型造正文），判拒
 被拒。候选改动：`required_facts` 增加两档判据（**主线因果 / 背景**，背景档 partial
 放行），修复轮问题清单可砍半、聚焦真问题（8 条里唯一的结构真伤是 b05 时间线倒错
 ——背景信息插在亲热与刺杀之间，正确修法是挪到 B2 段而非删）。是否落地待用户裁决。
+
+## 11. §10.6 裁决落地：两档判据 + 修复额度放宽（2026-11-15 第 4 轮，用户批准）
+
+### 11.1 背景档两档判据
+
+`required_facts` **不动字符串格式**（承载/证据/修订不变量三处解析零风险），另立
+**计划级字段** `background_facts: ["f02", ...]`（已登记必保留事实的 uid 编号）：
+
+- **schema**（`_text_gen/deepseek_schema.py`）：OUTLINE_SCHEMA 增加可选属性
+  （`additionalProperties: False` 下必须显式登记，否则模型无法输出）；
+- **结构校验**（`outline.py outline_structure_problems`）：类型 / 重复 / 未知编号
+  三类畸形各有出口（`structure_background_facts_type/_duplicate/_unknown_uid`）；
+  编号核验优先用 `presentation.fact_uids` 声明表，缺省按 `f%02d` 序列；
+- **验收门控**（`shared/content_verification.py _fact_axis_problems`）：档位读取
+  口径 = 视图 `plan_basis.background_facts` 优先、回退 `plan` 参数（两个验收入口
+  ——完整验收与隔离展示验收——同口径）；**只放行 `partial`**，
+  contradicted（说反）与 unknown（判不了）照旧拒收；
+- **缺省从严（fail-closed）**：不声明 = 全部主线档，行为与改动前完全一致；
+- **规则版本**：`DEFAULT_RULE_VERSION` → `content_verification.v5.background_tier.1`
+  （判据行为变化，旧版本核验记录按既有口径强制重新核验）；
+- **核验模型不感知档位**：tier 走 plan_basis（计划侧元数据），核验请求只取
+  `uid/.claim/.evidence`——避免模型看到"这是背景档"而放宽自己的裁决。
+
+### 11.2 修复额度放宽（用户批准）
+
+`plan_revision.DEFAULT_MAX_CALLS` 3 → **4**（单一来源，
+`outline.DEFAULT_REVISION_MAX_CALLS` 同源引用自动跟随）。实测依据：
+run 20261115T122229 第 3 轮因声明缺失 `new:n05` 被拒即停，而拒收信息已能精确定位、
+再给一轮大概率能补上。
+
+### 11.3 回归与重签
+
+- 新测试：`tests/shared/test_content_verification.py` §⑤ +5（背景档 partial 放行 /
+  缺省从严 / contradicted·unknown 照拒 / plan_basis 与 plan 双口径 /
+  plan 参数单独驱动）；`tests/step01_script_gen/test_background_fact_tier.py`
+  新建 10 条（结构三类畸形 / 声明表编号 / schema 允许与拒收 / 额度=4 与批准出处）；
+- 回归：`tests/shared/` 全套 0 失败（1 skip），大纲/修订/拆分接线 145 passed；
+- chapter_001 零调用重签：干跑比对 `step01_quality.json` **0 值差**，
+  正式重签 `7c0977f3f1aca95c → d423edafaa6072fb`，`model_sends=0`，
+  `script_sha1` 未变。指纹失效来源：`deepseek_schema.py` 在 RULE 清单内
+  （OUTLINE_SCHEMA 加字段）；`content_verification.py` 不在清单（验收层非质量门层）。

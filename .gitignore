@@ -178,6 +178,8 @@ tests/step02b_video_gen/*
 !tests/step02b_video_gen/test_production_trace.py
 !tests/step01_script_gen/test_p0_fault_injection.py
 !tests/step01_script_gen/test_plan_revision_v2_wiring.py
+# 2026-11-15 §10.6：背景档两档判据的结构/契约/额度判据（随代码入库）
+!tests/step01_script_gen/test_background_fact_tier.py
 # 2026-10-30（R01）：Step01 审计收口的最小回归集——仅这 4 个文件 + SSE 桩 + 夹具。
 # 其余 tests/ 仍不入库；放行必须写在 tests/* 与 tests/step01_script_gen/* 之后。
 !tests/step01_script_gen/test_audit_entry_subprocess.py
