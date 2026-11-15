@@ -330,7 +330,13 @@ def test_all_length_mismatch_rejections_export_feedback_retry(monkeypatch):
 
 
 def test_mixed_rejection_classes_keep_stop_semantics(monkeypatch):
-    """混合拒因（长度类 + 越权字段）⇒ **不**导出反馈重试（v6.137 停止语义不变）."""
+    """混合拒因（配对形状 + 越权字段）⇒ **逐项**结构化反馈（M03 契约变更）.
+
+    v6.137 旧契约是「混合一律停止、不导出反馈」；M03 施工包改为「混合拒因
+    逐项处理，工程故障优先阻断依赖动作」。这里两类都**不是**工程故障：配对
+    形状允许一次纠正，保护字段越权保留基线且重验继续完整执行。因此状态里
+    必须同时留两条生产者记录，且只发放一次答卷纠正机会。
+    """
     _over = _complete_shot(5)
     _over["scene"] = "越权改动"          # shot 5 只授权 prompt → 越权拒
     _h = _Harness(monkeypatch,
@@ -345,7 +351,12 @@ def test_mixed_rejection_classes_keep_stop_semantics(monkeypatch):
         retry_state=_rs)
     _u = _unusable(_h.diag)
     assert _u and _u[-1]["reason"] == "rejected_by_validation", _h.diag
-    assert "feedback" not in _rs, _rs
+    recs = _rs.get("feedback_records") or []
+    assert len(recs) >= 2, "混合拒因必须逐项保留: %s" % _rs
+    assert "pair_shape_invalid" in {r["code"] for r in recs}, recs
+    assert _rs.get("terminal") is False, "两类都不是工程故障"
+    assert _rs.get("correction_granted") is True
+    assert _rs.get("used_correction") is True
 
 
 def test_assembly_length_message_carries_counts_and_remediation():

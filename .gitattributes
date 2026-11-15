@@ -17,3 +17,7 @@ docs/step01-layered-execution/step01_fix_verify_20261115i_evidence.json -text
 docs/step01-layered-execution/step01-runs-a-to-j-block-reasons-2026-11-15.md -text
 docs/step01-layered-execution/step01_runs_a_to_j_evidence.json -text
 docs/step01-layered-execution/step01-solved-unsolved-and-verification-issues-2026-11-15.md -text
+# M01：run j 阶段归因回放证据（CRLF 原始字节，覆盖重跑 sha256 一致）
+docs/step01-layered-execution/run_j_attribution_replay.json -text
+# M05：由回放工具生成的修订前后可读稿（LF 原始字节，重跑一致）
+docs/step01-layered-execution/run_j_attribution_draft_diff.md -text

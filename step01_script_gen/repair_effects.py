@@ -646,6 +646,10 @@ class RepairEffectLedger:
     # S03 补正：本轮点名目标。四节点的帧结构快照按它取，而不是只按 effects 取；
     # 纯补帧（零条目增删效果）同样要被后处理结构观测覆盖。
     frame_targets: set = field(default_factory=set)
+    # M01：本轮逐目标授权集合。每个节点按它冻结授权路径的值指纹，供
+    # `repair_attribution.attribute_field_loss` 定位「首次改动的 writer」。
+    # 不传时快照为空表，归因仍可给出模型写入/事务回滚，只是无法定位 writer。
+    allowed_by_target: dict = field(default_factory=dict)
 
     # ---- 四个冻结节点 ----------------------------------------------------
 
@@ -726,7 +730,8 @@ class RepairEffectLedger:
             round_id=self.round_id, source_revision=self.source_revision,
             effects=[e for e in self.effects
                      if str(e.get("shot_id")) in keep],
-            nodes=list(self.nodes), frame_targets=set(self.frame_targets))
+            nodes=list(self.nodes), frame_targets=set(self.frame_targets),
+            allowed_by_target=dict(self.allowed_by_target))
 
     def structure_changes(self) -> list:
         """哪些**后处理**节点改变了本轮点名目标的帧结构.
@@ -800,6 +805,8 @@ class RepairEffectLedger:
             # S03 补正：每个节点冻结帧结构状态，供 structure_changes() 定位
             # 「哪个 writer 让 frame_locator 失效」。
             "frame_structure": {},
+            # M01：授权路径的值指纹（只按 allowed_by_target 取，不含未授权字段）。
+            "authorized_paths": {},
         }
         try:
             if self.effects:
@@ -809,6 +816,11 @@ class RepairEffectLedger:
             node["digests"] = self._digests(script)
             node["frame_structure"] = _frame_structure_snapshot(
                 script, self.effects, self.frame_targets)
+            if self.allowed_by_target:
+                from step01_script_gen.repair_attribution import (
+                    authorized_path_snapshot)
+                node["authorized_paths"] = authorized_path_snapshot(
+                    script, self.allowed_by_target)
         except Exception as exc:                      # noqa: BLE001 - 见上
             node["error"] = "%s: %s" % (type(exc).__name__, exc)
         self.nodes.append(node)

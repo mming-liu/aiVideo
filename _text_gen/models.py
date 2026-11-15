@@ -101,6 +101,10 @@ class TextGenerationResult:
     #: 这一次调用的**唯一标识**（由 `_text_gen.service` 的工厂代理在调用前置入）。
     #: 只用于留档与追溯（完整正文按它归档、修订轮按它关联），**不参与生成语义**。
     call_id: str = ""
+    #: M04（2026-11-15）：provider 自报的**阶段时刻**（响应头 / SSE 首事件 /
+    #: 终态收完），只作观测，不参与任何判据。取不到就是 None——禁止估算填充。
+    #: 非流式通道、或未埋点的 provider 不填。
+    timing: Optional[dict] = None
 
 
 def truncated_result(

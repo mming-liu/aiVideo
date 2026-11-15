@@ -2914,6 +2914,20 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
         audit_focus=_focus_now,
         metadata=metadata,
     )
+    # M04：四项读数分别记（剩余预算 / 审计允许时长 / 服务端等待 / 流式耗时）。
+    # 只进 metrics 与日志，**不改 payload 形状**（单次成功产物与历史逐字一致）。
+    _budget_timing = _audit_budget_timing(
+        result, allowance_sec=_allow,
+        left_sec=_to_info.get("left"), phase="final_audit")
+    _metrics_set("audit.budget_timing", _budget_timing)
+    _logger.info(
+        "[AUDIT][BUDGET] 剩余预算=%s｜审计允许=%ss｜服务端等待=%ss｜"
+        "流式耗时=%s（来源=%s）"
+        % (_budget_timing["remaining_budget_sec"],
+           _budget_timing["audit_allowance_sec"],
+           _budget_timing["server_wait_sec"],
+           _budget_timing["stream_elapsed_sec"],
+           _budget_timing["stream_timing_source"]))
     # v6.134：parse_failed 有界重试后的**真实**调用次数（audit.AuditResult.attempts）。
     # 仅 ≠1 时进产物——单次成功的 payload 形状与历史完全一致（同 raw_text_head 口径）。
     _attempts = int(getattr(result, "attempts", 1) or 1)
@@ -4075,8 +4089,25 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                    len(_audit_blocking_records(audit)), len(_q_blocking))
             )
             break
-        if _budget_exceeded():
-            summary["detail"] = "总预算超时，停止 final audit 修复轮"
+        # M04：提交层的每一轮修复同样要能容纳「本轮动作 + 最终审计 + 收尾」。
+        # 不足即冻结候选并给 `budget_exhausted` 明确终局，不把「时间不够」
+        # 写成「内容不可行」，也不借用上一轮审计结论。
+        _adm_commit = _action_budget_admission(
+            "commit_repair_round", _action_cost_sec("repair"))
+        if _budget_exceeded() or not _adm_commit.get("allowed"):
+            _freeze_commit = _freeze_budget_exhausted(
+                script, action="commit_repair_round",
+                admission=_adm_commit, run_id=run_id)
+            _metrics_set("budget.frozen_candidate", _freeze_commit)
+            summary["repair_outcome"] = "budget_exhausted"
+            summary["detail"] = (
+                "预算不足：剩余 %.1fs < 本轮修复 %.1fs + 最终审计 %.1fs + 收尾 %.1fs；"
+                "已保存冻结候选（%s），停止 final audit 修复轮"
+                % (float(_adm_commit.get("remaining_budget_sec") or 0),
+                   float(_adm_commit.get("action_cost_sec") or 0),
+                   float(_adm_commit.get("audit_cap_sec") or 0),
+                   float(_adm_commit.get("commit_reserve_sec") or 0),
+                   _freeze_commit.get("output_root") or "隔离根"))
             _logger.warn(f"[COMMIT] {summary['detail']}")
             break
         # v6.119（用户口径）：进修复轮**之前**先查成对目标契约——不可执行就显式
@@ -4157,12 +4188,27 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             # 正式产物/sidecar，而本轮刚跑完的审计**根本没写盘**，于是下一轮照旧
             # POST（实测同指纹两次调用、白花 133.5 秒）。现在由循环内的
             # `_audit_memo`（按**请求身份**索引）兜住这条路径。
-            if (_retry_state.get("feedback")
+            # M03：只有**结构化状态明确发放了一次答卷纠正机会**、且不是终局时
+            # 才续跑。`feedback` 文本只作展示，不再充当判据；工程故障 / 重复
+            # 拒因 / 一次机会已用完都在发请求之前终局。
+            # 窄兼容通道：只有 v6.137 遗留格式（外部桩手写 `feedback`、完全
+            # 没有 `feedback_records`）才按旧信号续跑。生产路径的
+            # `_repair_shot_warnings` 一律写结构化状态，不会走这条，也不把文本
+            # 当分类依据。
+            _legacy_pending = (bool(_retry_state.get("feedback"))
+                               and not _retry_state.get("feedback_records")
+                               and not _retry_state.get("terminal"))
+            _grant = (bool(_retry_state.get("correction_granted"))
+                      or _legacy_pending)
+            if (_grant and not _retry_state.get("terminal")
                     and _attempt + 1 < STEP01_AUDIT_REPAIR_MAX_ROUNDS):
                 _logger.warn(
-                    "[COMMIT] 修复轮被拒（new_blocking）但带反馈重试待跑"
-                    "（剔除 %s）→ 下一轮继续"
-                    % (_retry_state.get("excluded"),))
+                    "[COMMIT] 修复轮带结构化反馈重试待跑"
+                    "（codes=%s，剔除 %s，revision=%s）→ 下一轮继续"
+                    % ([r.get("code") for r in
+                        (_retry_state.get("feedback_records") or [])],
+                       _retry_state.get("excluded"),
+                       str(_retry_state.get("source_revision") or "")[:12]))
                 continue
             _call_failed = [r for r in _repair_diag if r.get("kind") == "call_failed"]
             # v6.133（2026-09-26 复核补口）：**"响应不可用"与"没改动稿件"也要分开**。
@@ -5506,31 +5552,20 @@ def _repair_answer_example(shots_by_id: dict, picked, allowed_by_target=None,
             continue
         replacement = {"shot_id": str(target_id).removeprefix("shot_"), "shot": shots_by_id[target_id]}
         if allowed_by_target is not None and compact:
-            _allowed_c = allowed_by_target.get(target_id, set())
-            _tops = []
-            for _p in sorted(_allowed_c):
-                _top = str(_p).split(".")[0].split("[")[0]
-                # 结构字段不给字符串占位：keyframes / frame_layouts 的占位值会诱导
-                # 模型把列表写成字符串（2026-11-07 实跑：round 3 因此 patch_unusable，
-                # 报“字段 keyframes 的值类型不匹配”）。补帧走 keyframe_additions。
-                if _top == "keyframes":
-                    continue
-                if _top and _top not in _tops:
-                    _tops.append(_top)
+            # M02：由**同一份结构化授权记录**生成示例。三条旧缺陷一并修掉：
+            # ①不再把精确叶子路径提升为顶层父字段；②占位值按当前稿件结构取
+            # 类型；③补帧许可复用守卫的权威判断 `_whole_kfs_authorized`。
+            from step01_script_gen.repair_authorization import (
+                repair_authorization_spec)
+            _spec = repair_authorization_spec(
+                shots_by_id[target_id],
+                allowed_by_target.get(target_id, set()))
             replacement = {"shot_id": replacement["shot_id"]}
-            if _tops:
-                # 占位值必须**类型正确**：列表字段给列表、数字字段给数字，
-                # 否则模型会照抄一个字符串（实测 round 3 patch_unusable）。
-                _ph = {"frame_layouts": [{"name": "<在场角色>",
-                                          "on_screen": True,
-                                          "pose": "<姿态>"}],
-                       "duration": 3.0}
+            if _spec["writable_paths"]:
                 replacement["updates"] = [
-                    {"field_path": _t,
-                     "value": _ph.get(_t, "<按该问题改写后的完整字段文本>")}
-                    for _t in _tops[:5]]
-            if ("keyframes" in _allowed_c
-                    or any(str(_p).startswith("frame_layouts.kfs") for _p in _allowed_c)):
+                    {"field_path": _p, "value": _spec["placeholders"][_p]}
+                    for _p in _spec["writable_paths"]]
+            if _spec["keyframe_additions_allowed"]:
                 replacement["keyframe_additions"] = [{
                     "frame": {"t_sec": "<该缺段中点（秒）>",
                               "stage": "pre|approach|climax|react|exit|after",
@@ -5622,7 +5657,8 @@ def _apply_shot_replacements(script: dict, replacements: list,
                              hook_replacement: dict | None = None,
                              allowed_by_target: dict | None = None,
                              expected_targets: set | None = None,
-                             *, frame_mappings_out: dict | None = None) -> tuple[dict, int, list]:
+                             *, frame_mappings_out: dict | None = None,
+                             rejections_out: list | None = None) -> tuple[dict, int, list]:
     """把「完整镜头替换」**逐目标**应用到被点名的镜头（v6.86 用户决定 A1）.
 
     语义（v6.86 起）：
@@ -5642,15 +5678,49 @@ def _apply_shot_replacements(script: dict, replacements: list,
     Returns:
         (merged_script, 成功替换数, 拒绝原因列表)；
         一个都没提交时返回**原脚本**且计数为 0
+
+    M03：`rejections_out` 给定时额外导出**生产者分类**的结构化拒收记录
+    （`target/phase/code/field_path/allowed_paths/retryable/details`）。自由文本
+    仍留在 `rejected` 里供日志与台账展示，分类判据一律不读文本。
     """
     import copy as _copy
     # S02 补正：映射输出容器按单次调用初始化；失败目标不残留上一次调用的结果。
     if isinstance(frame_mappings_out, dict):
         frame_mappings_out.clear()
+    if isinstance(rejections_out, list):
+        rejections_out.clear()
     merged = _copy.deepcopy(script)
     rejected: list[str] = []
     staged: list[tuple[dict, dict, str]] = []
     _seen_ids: set = set()
+    from step01_script_gen.repair_feedback import (
+        PHASE_APPLY, PHASE_ENGINEERING, feedback_record)
+
+    def _reject(code, text, *, sid="", field_path="", allowed=None,
+                phase=PHASE_APPLY, details=None) -> None:
+        """拒收的**唯一**出口：字符串供展示，结构化记录供 M03 判据."""
+        rejected.append(str(text))
+        if isinstance(rejections_out, list):
+            _tgt = "hook" if str(sid) in ("0", "hook") else (
+                "shot_%s" % sid if str(sid) else "")
+            rejections_out.append(feedback_record(
+                code=code, target=_tgt, phase=phase,
+                field_path=field_path,
+                allowed_paths=sorted(str(a) for a in (allowed or ())),
+                details=details or {}, text=str(text)))
+
+    def _first_path(raw) -> str:
+        """从答卷的**结构化数据**里取首个提交路径（不解析错误文本）."""
+        if isinstance(raw, dict):
+            for k in raw:
+                return str(k)
+        if isinstance(raw, list):
+            for it in raw:
+                if isinstance(it, dict) and it.get("field_path"):
+                    return str(it["field_path"])
+                if isinstance(it, dict) and "frame" in it:
+                    return "keyframe_additions[].frame"
+        return ""
     # S02：帧来源映射按目标导出，只在本目标通过装配/授权合并/替换校验后写入。
     from step01_script_gen.repair_fields import (
         _norm_keep_index, compose_frame_mappings,
@@ -5670,7 +5740,7 @@ def _apply_shot_replacements(script: dict, replacements: list,
 
     def _stage(item: dict, *, force_hook: bool = False) -> None:
         if not isinstance(item, dict):
-            rejected.append("条目不是对象")
+            _reject("shape_invalid", "条目不是对象")
             return
         sid = _norm_target_id(item.get("shot_id"))
         new_shot = item.get("shot")
@@ -5685,28 +5755,32 @@ def _apply_shot_replacements(script: dict, replacements: list,
                   and len(_patch_forms) <= 1)
         if (not forms or (len(forms) != 1 and not _combo)
                 or any(item.get(k) is None for k in forms)):
-            rejected.append("同一目标只能提供一种替换形态（updates 与 keyframe_additions 可并用）")
+            _reject("shape_invalid",
+                    "同一目标只能提供一种替换形态（updates 与 keyframe_additions 可并用）",
+                    sid=sid, details={"forms": list(forms)})
             return
         if "shot" in forms and not isinstance(new_shot, dict):
-            rejected.append("shot 必须是对象")
+            _reject("shape_invalid", "shot 必须是对象", sid=sid)
             return
         if "shot" not in forms and set(item) != {"shot_id", *forms}:
-            rejected.append("窄字段补丁条目含未知字段")
+            _reject("shape_invalid", "窄字段补丁条目含未知字段", sid=sid)
             return
         if not sid:
-            rejected.append("shot_id 为空")
+            _reject("shape_invalid", "shot_id 为空")
             return
         if sid in ("0", "hook") and not force_hook:
             # v6.83（二次审核发现 3）：hook 的字段要求与普通镜头不同（无
             # scene/location），必须由 `hook_replacement` 承载；塞进
             # `shot_replacements` 会按 `_SHOT` 校验出一个字段语义不符的对象。
-            rejected.append("hook 替换必须用 hook_replacement 承载，不得放进 shot_replacements")
+            _reject("shape_invalid",
+                    "hook 替换必须用 hook_replacement 承载，不得放进 shot_replacements",
+                    sid=sid)
             return
         if force_hook:
             sid = "hook"
         target = _find(sid)
         if target is None:
-            rejected.append(f"shot {sid} 未被点名或不存在")
+            _reject("target_not_picked", f"shot {sid} 未被点名或不存在", sid=sid)
             return
         # S02：本轮基线的帧列表，映射的「原帧坐标」以它为准。
         _base_kfs = ((target.get("frame_layouts") or {}).get("kfs") or [])
@@ -5715,19 +5789,24 @@ def _apply_shot_replacements(script: dict, replacements: list,
         _asm_map: dict = {}
         _update_map: dict | None = None      # 基线 → 更新后（未装配前）
         if sid in _seen_ids:
-            rejected.append(f"shot {sid} 重复出现（每个目标恰好一次，后者丢弃）")
+            _reject("shape_invalid",
+                    f"shot {sid} 重复出现（每个目标恰好一次，后者丢弃）", sid=sid)
             return
         # v6.86（用户决定 A1）：`expected_targets` 的成员校验下沉到**单条目**——
         # 「不在本轮点名集合内」是这一条的问题，不该否决别的目标。
         if expected_targets is not None and sid not in {str(t) for t in expected_targets}:
-            rejected.append(f"shot {sid} 不在本轮点名集合内（该条丢弃）")
+            _reject("target_not_picked",
+                    f"shot {sid} 不在本轮点名集合内（该条丢弃）", sid=sid,
+                    allowed=sorted(str(t) for t in (expected_targets or ())))
             return
         allowed = None
         if isinstance(allowed_by_target, dict):
             allowed = allowed_by_target.get(f"shot_{sid}", allowed_by_target.get(sid))
             if allowed is None and not force_hook:
                 # 授权集合缺失 = 该目标没有明确字段路径 → 不得走定向修复
-                rejected.append(f"shot {sid}: 本轮未授权任何字段（问题未点名字段路径）")
+                _reject("unauthorized_path",
+                        f"shot {sid}: 本轮未授权任何字段（问题未点名字段路径）",
+                        sid=sid)
                 return
             allowed = allowed or set()
         # 窄字段补丁（Scoped Field Patch）：当模型返回 `updates`（或 `field_patches`）
@@ -5737,7 +5816,16 @@ def _apply_shot_replacements(script: dict, replacements: list,
         if new_shot is None and _raw_updates is not None:
             new_shot, _why = _apply_scoped_field_updates(target, _raw_updates, allowed=allowed)
             if _why:
-                rejected.append(f"shot {sid}: {_why}")
+                # M03：路径 / 授权集合来自**答卷与授权记录的结构化数据**，
+                # `_why` 只是展示文本，不参与 code 判定。
+                _reject("unauthorized_path", f"shot {sid}: {_why}", sid=sid,
+                        field_path=_first_path(_raw_updates), allowed=allowed,
+                        details={"submitted_paths": (
+                            [str(k) for k in _raw_updates]
+                            if isinstance(_raw_updates, dict)
+                            else [str(x.get("field_path") or "")
+                                  for x in (_raw_updates or [])
+                                  if isinstance(x, dict)])})
                 return
         # 2026-09-27（用户决定）：联动修复的**成对数据**形状——模型只给
         # 「帧 + 对应布局」，代码按时间顺序把两半装进同一声序号。缺任一半即拒收。
@@ -5748,13 +5836,17 @@ def _apply_shot_replacements(script: dict, replacements: list,
             _dup_why = _duplicate_keyframe_additions(
                 _kf_base, item.get("keyframe_additions"))
             if _dup_why:
-                rejected.append(f"shot {sid}: {_dup_why}")
+                _reject("pair_shape_invalid", f"shot {sid}: {_dup_why}", sid=sid,
+                        field_path="keyframe_additions", allowed=allowed)
                 return
             new_shot, _why = _assemble_keyframe_additions(
                 _kf_base, item.get("keyframe_additions"),
                 frame_mapping_out=_asm_map)
             if _why:
-                rejected.append(f"shot {sid}: {_why}")
+                _reject("pair_shape_invalid", f"shot {sid}: {_why}", sid=sid,
+                        field_path=_first_path(item.get("keyframe_additions")),
+                        allowed=allowed,
+                        details={"kind": "keyframe_additions"})
                 return
         # v6.91（用户决定，2026-09-22）：提交前把**未授权路径从原镜强制回填**。
         #
@@ -5833,10 +5925,37 @@ def _apply_shot_replacements(script: dict, replacements: list,
                     _logger.info(
                         "[REPAIR] shot %s: duration %.2f->%.2f，镜内时间轴按 %.3f 等比缩放"
                         % (sid, _old_d, _new_d, _new_d / _old_d))
+        # M03：`code` 由**结构化事实**判定，不解析 `_validate_replacement_shot`
+        # 的原因文本（文本只用于展示）。
+        #   ① 帧数与布局数不等 → 配对形状错误（可纠正）
+        #   ② 授权 diff 有越权项 → 保护字段越权（保留基线，重验继续完整执行）
+        #   ③ 其余 → 值/形状不合法（可纠正）
+        _vr_code = "shape_invalid"
+        _vr_path = ""
+        if isinstance(new_shot, dict):
+            _vk = new_shot.get("keyframes")
+            _vl = (new_shot.get("frame_layouts") or {}).get("kfs") \
+                if isinstance(new_shot.get("frame_layouts"), dict) else None
+            if isinstance(_vk, list) and isinstance(_vl, list) \
+                    and len(_vk) != len(_vl):
+                _vr_code = "pair_shape_invalid"
+                _vr_path = "frame_layouts.kfs"
+            elif allowed is not None:
+                from step01_script_gen.repair_fields import (
+                    check_replacement_authorized as _cra)
+                if _cra(target, new_shot, allowed):
+                    _vr_code = "protected_field"
+                    try:
+                        _diff = canonical_path_diff(target, new_shot)
+                        _vr_path = str(_diff[0]) if _diff else ""
+                    except Exception:
+                        _vr_path = ""
         reason = _validate_replacement_shot(target, new_shot, is_hook=force_hook,
                                             allowed=allowed)
         if reason:
-            rejected.append(f"shot {sid}: {reason}")
+            _reject(_vr_code, f"shot {sid}: {reason}", sid=sid,
+                    field_path=_vr_path, allowed=allowed,
+                    details={"validator": "_validate_replacement_shot"})
             return
         # S02 补正（2026-11-15）------------------------------------------------
         # 来源链分两段，且都必须**可验证**：
@@ -5898,20 +6017,26 @@ def _apply_shot_replacements(script: dict, replacements: list,
         else:
             _pre = identity_frame_mapping(len(_base_kfs))
         if _pre is None:
-            rejected.append(f"shot {sid}: {_identity_reason}")
+            _reject("frame_identity_unproven", f"shot {sid}: {_identity_reason}",
+                    sid=sid, field_path="frame_layouts.kfs", allowed=allowed,
+                    details={"stage": "update_identity"})
             return
 
         # ② 装配阶段 ---------------------------------------------------------
         if _has_additions:
             if not _asm_map or _pre["after_count"] != _asm_map.get("before_count"):
-                rejected.append(
-                    f"shot {sid}: 装配来源与更新阶段来源不连续，无法组合帧映射")
+                _reject("engineering_failure",
+                        f"shot {sid}: 装配来源与更新阶段来源不连续，无法组合帧映射",
+                        sid=sid, phase=PHASE_ENGINEERING,
+                        details={"stage": "assembly_continuity"})
                 return
             _stage_map = compose_frame_mappings(_pre, _asm_map)
             if len(_final_kfs) != _asm_map.get("after_count") \
                     or len(_final_kf) != _asm_map.get("after_count"):
-                rejected.append(
-                    f"shot {sid}: 授权合并回填了装配后的帧结构，来源链失效")
+                _reject("engineering_failure",
+                        f"shot {sid}: 授权合并回填了装配后的帧结构，来源链失效",
+                        sid=sid, phase=PHASE_ENGINEERING,
+                        details={"stage": "assembly_post_merge"})
                 return
         else:
             _stage_map = _pre
@@ -5920,8 +6045,12 @@ def _apply_shot_replacements(script: dict, replacements: list,
         _map_why = validate_frame_mapping(
             _stage_map, len(_base_kfs), len(_final_kfs))
         if _map_why or len(_final_kf) != len(_final_kfs):
-            rejected.append(
-                f"shot {sid}: 帧映射未通过最终核对（{_map_why or '帧数与布局数不一致'}）")
+            _reject("engineering_failure",
+                    f"shot {sid}: 帧映射未通过最终核对"
+                    f"（{_map_why or '帧数与布局数不一致'}）",
+                    sid=sid, phase=PHASE_ENGINEERING,
+                    details={"stage": "mapping_final_check",
+                             "why": str(_map_why or "")})
             return
         _seen_ids.add(sid)
         staged.append((target, new_shot, sid))
@@ -5955,6 +6084,8 @@ def _apply_shot_replacements(script: dict, replacements: list,
     #   - 锁定字段签名（`_locked_repair_signature`）
     # 缺项如今只作为**如实回报**出现在 `rejected` 里，不再否决已提交的目标。
     if not staged:
+        if not rejected:
+            _reject("shape_invalid", "未提供任何替换条目")
         return script, 0, rejected or ["未提供任何替换条目"]
 
     for _target, _new, _sid in staged:
@@ -8138,15 +8269,45 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     # 装不下第二轮；调用方（提交层）传同一个 dict 进来：入口预载上一轮的
     # 「剔除目标+反馈」并清空（消费），出口在 new_blocking 终拒时回填新状态，
     # 由调用方决定是否用下一次 attempt 续跑（预算仍由外层 §1.1 上限管住）。
-    _rejected_targets: set = set(retry_state.get("excluded") or [])         if retry_state else set()
-    _retry_feedback = str(retry_state.get("feedback") or "")         if retry_state else ""
-    _retry_used = bool(_retry_feedback)
+    # M03（2026-11-15）：**结构化反馈状态**。`retry_state` 是调用方持有的跨
+    # attempt 容器；入口先取快照再清空，判据一律读结构化字段，自由文本只作展示。
+    # revision 身份：反馈必须绑定同一份冻结基线稿；跨稿一律丢弃，绝不借用上一轮
+    # 的裁决结果冒充本轮通过。
+    from step01_script_gen.repair_feedback import (
+        render_feedback as _render_fb,
+        plan_feedback_state as _plan_fb,
+        transaction_feedback_records as _tx_records,
+        answer_signature as _answer_sig,
+        feedback_record as _fb_record,
+    )
+    _retry_state_snapshot: dict = dict(retry_state or {})
+    try:
+        from shared.quality_gate import compute_script_revision as _csr_entry
+        _entry_revision = str(_csr_entry(script) or "")
+    except Exception:
+        _entry_revision = ""
+    _prior_revision = str(_retry_state_snapshot.get("source_revision") or "")
+    _revision_mismatch = bool(_prior_revision and _entry_revision
+                              and _prior_revision != _entry_revision)
+    if _revision_mismatch:
+        _logger.warn("[REPAIR] 反馈 source_revision 与本轮基线不符（%s ≠ %s）→ "
+                     "丢弃跨稿反馈，不借用上一轮裁决"
+                     % (_prior_revision[:12], _entry_revision[:12]))
+        _retry_state_snapshot = {}
+    _retry_records = [dict(r) for r in
+                      (_retry_state_snapshot.get("feedback_records") or [])
+                      if isinstance(r, dict)]
+    _rejected_targets: set = set(_retry_state_snapshot.get("excluded") or [])
+    _retry_feedback = (_render_fb(_retry_records)
+                       or str(_retry_state_snapshot.get("feedback") or ""))
+    _retry_used = (bool(_retry_state_snapshot.get("used_correction"))
+                   or bool(_retry_state_snapshot.get("terminal")))
+    _retry_terminal = bool(_retry_state_snapshot.get("terminal"))
     # §14 P3：**跨轮/跨调用**的布局效果冲突——上一次已发出去的冲突反馈。
     # 「相同冲突且请求信息无变化 ⇒ 停止盲修并封存残余」要能跨调用判出来：提交路径
     # 每次只给 `max_rounds=1`，同一对话的第二次请求是**下一次 attempt**，只能借
     # `retry_state` 携带。额度与截止沿用既有实现（这里**不改重试上限**）。
-    _effect_conflict_prev = dict(retry_state.get("layout_conflict") or {}) \
-        if retry_state else {}
+    _effect_conflict_prev = dict(_retry_state_snapshot.get("layout_conflict") or {})
     if retry_state:
         retry_state.clear()
     # v6.140（修复 3，九审根因 3）：调用方传来的**本 run 暂缓目标**（失败联动组
@@ -8157,6 +8318,24 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     # S03：上一轮因**体积**被暂缓的目标，本轮优先装（否则永远排在队尾饿死）。
     _carry_deferred: set = set()
     for _round in range(1, _rounds + 1):
+        # M03：**工程故障 / 重复拒因 / 一次纠正机会已用完** ⇒ 在发请求之前终局。
+        # 「停止」必须是发请求**之前**的动作，否则只是事后描述。
+        if _retry_terminal:
+            _stop_msg = ("修复反馈终局（%s）：不再发起新的修复请求；基线原样保留，"
+                         "残余按原样交给提交点判 BLOCK"
+                         % (_retry_state_snapshot.get("stop_reason") or "terminal"))
+            _logger.error("[REPAIR] " + _stop_msg)
+            if block_reasons is not None:
+                block_reasons.append(_stop_msg)
+            if repair_diag is not None:
+                repair_diag.append({
+                    "repair_round": _round, "kind": "feedback_terminal",
+                    "stop_reason": _retry_state_snapshot.get("stop_reason") or "",
+                    "feedback_records": _retry_records,
+                    "source_revision": _prior_revision,
+                    "sealed_before_send": True,
+                })
+            return script
         # S02/S03：本轮事务的帧来源映射，绑定本轮基线稿，每轮重新生成。
         # 装配/授权合并/守卫/效果登记/按目标回退重验共用这一份。
         _frame_mappings: dict = {}
@@ -8308,6 +8487,11 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             return script
         import copy as _copy_repair
         _round_before_script = _copy_repair.deepcopy(script)
+        # M01：四阶段归因快照。B 在「后处理结束 / 事务裁决前」取，C 在按目标回退后取；
+        # 两者都必须在 `script = _round_before_script`（整轮回退）之前落定，否则
+        # 诊断会把事务回滚算成后处理抵消（run j 的 36 字段即由此而来）。
+        _postprocess_snapshot: "dict | None" = None
+        _post_rollback_snapshot: "dict | None" = None
         # S04：模型原始返回的镜头（本轮若没走到替换解析就保持空表，台账据此标依据）
         _model_shots_round: dict = {}
         _locked_before = _locked_repair_signature(script)
@@ -8859,6 +9043,15 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         if not _allowed_by_target:
             _logger.warn("[REPAIR] 无任何目标具备明确字段授权，跳过本轮定向修复")
             return script
+        # M02：同一份结构化授权记录，驱动两处请求说明、compact 答卷示例与应用校验。
+        # 生成的是「当前稿上可实际应用的具体路径」，不是父字段或通配路径。
+        from step01_script_gen.repair_authorization import (
+            repair_authorization_spec as _auth_spec_fn,
+            render_authorization_guidance as _auth_guidance_fn)
+        _auth_spec_by_target = {
+            str(tid): _auth_spec_fn(shots_by_id.get(tid) or {}, paths)
+            for tid, paths in _allowed_by_target.items()}
+        _auth_guidance = _auth_guidance_fn(_auth_spec_by_target)
         # v6.155（2026-10-04 实测根因，台账 §19.2）：入轮目标里若**没有任何一个**目标
         # 能改到本轮 blocking 点名的字段，这一轮**注定零产出**——章 2 实测：5 条 blocking
         # 的 `repair_targets` 全空 ⇒ 零授权，修复轮照样发起了一次调用，模型按审计建议改了
@@ -8934,6 +9127,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "优先只返回被点名镜头的窄字段补丁 `updates`（路径和值），无需重抄未改字段。格式："
             f"{_repair_answer_example(shots_by_id, picked, _allowed_by_target, compact=True)}\n"
             "上面是本次授权字段与当前值的 JSON 示例；只提交需要修改的授权路径。`updates` 可为路径到值的字典，或 field_path/value 列表；未提交的字段由代码保留。完整 shot 替换必须单独使用；`updates` 与 `keyframe_additions` **可以在同一目标上并用**（先落字段补丁，再装配新帧）。\n"
+            f"{_auth_guidance}"
             "**hook 必须放在 `hook_replacement` 里**（它与普通镜头字段不同，无 scene/location），"
             "普通镜头放 `shot_replacements`；两个键都可为空数组/省略。\n"
             # 2026-09-27（用户决定）：缺帧这类**联动**修复改「成对数据」形状——
@@ -9093,6 +9287,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             "优先返回被点名镜头的窄字段补丁 `updates`（路径和值）。格式："
             f"{_repair_answer_example(shots_by_id, picked, _allowed_by_target, compact=True)}\n"
             "上面是本次授权字段与当前值的 JSON 示例；只提交需要修改的授权路径。`updates` 可为路径到值的字典，或 field_path/value 列表；未提交的字段由代码保留。完整 shot 替换必须单独使用；`updates` 与 `keyframe_additions` **可以在同一目标上并用**（先落字段补丁，再装配新帧）。\n"
+            f"{_auth_guidance}"
             "hook 放 hook_replacement，普通镜头放 shot_replacements，两者都可为空；"
             "shot_id 用裸镜号（\"10\"，不是 \"shot_10\"）；"
             "每个被点名镜头恰好出现一次（重复/遗漏/多出则整批回滚）。"
@@ -9298,11 +9493,13 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             for _it in (_repls or [])
             if isinstance(_it, dict) and isinstance(_it.get("shot"), dict)
         }
+        _rej_records: list = []   # M03：生产者分类的结构化拒收
         merged, _n_applied, _rejected = _apply_shot_replacements(
             script, _repls, set(picked), hook_replacement=_hook_repl,
             allowed_by_target=_allowed_by_target,
             expected_targets=_expected_ids,
-            frame_mappings_out=_frame_mappings)
+            frame_mappings_out=_frame_mappings,
+            rejections_out=_rej_records)
         # 映射绑定本轮基线 revision；跨 revision 的映射在消费前会被丢弃。
         for _mp in _frame_mappings.values():
             if isinstance(_mp, dict):
@@ -9323,25 +9520,25 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                                     detail="；".join(_rejected_details[:3]),
                                     raw_head=result.text,
                                     extra={"rejected": list(_rejected),
-                                           "authorization": _auth_ledger})
-            # 2026-11-15（run 20261115T134330 实测）：**配对表长度类拒绝**是模型可
-            # 自行纠正的格式错误，不属于 v6.137 注释里「换个目标重发也解决不了」的
-            # 系统性越权——导出带反馈的重试状态（全量被拒且拒因同一类 ⇒ 不剔除目标，
-            # 下一轮同一批目标带反馈重发；审计经 _audit_memo 复用，不增审计调用），
-            # 预算仍由外层 §1.1 的 attempt 上限管住；其余拒因保持原停止语义。
-            _pair_len = [d for d in _rejected_details
-                         if ("长度不等" in d) or ("长度" in d and "≠" in d)]
-            if (retry_state is not None and _pair_len
-                    and len(_pair_len) == len(_rejected_details)):
+                                           "authorization": _auth_ledger,
+                                           "feedback_records": _rej_records})
+            # M03：拒收原因由**应用器生产者**分类，不再靠「长度不等」之类的
+            # 自由文本子串猜测。工程故障（帧映射内部失配等）优先终局；
+            # 每个冻结目标集合最多发放一次答卷纠正机会。
+            if retry_state is not None:
+                _apply_plan = _plan_fb(
+                    records=_rej_records,
+                    prior_state=_retry_state_snapshot,
+                    frozen_targets=sorted(picked),
+                    source_revision=_effect_revision,
+                    answer_sig=_answer_sig(_repls))
                 retry_state.clear()
-                retry_state.update({"feedback": (
-                    "\n**上一轮补丁全部被校验拒收（配对表长度不一致）**：\n"
-                    "- %s\n"
-                    "- 整表替换 `frame_layouts` 时，它的 `ff/lf/kfs` 必须与镜头的 "
-                    "`keyframes` 数目一一同序对应（`kfs[i]` 是第 i 个关键帧的布局）；\n"
-                    "- 缺帧/缺段**不要**整表重写 `kfs`——只给 `keyframe_additions`"
-                    "（`frame` 与 `layout` 成对），由代码按 t_sec 装配。\n"
-                    % "；".join(_rejected_details[:3]))})
+                retry_state.update(_apply_plan)
+                _logger.warn(
+                    "[REPAIR] 替换拒收反馈：codes=%s correction=%s terminal=%s"
+                    % ([r.get("code") for r in _rej_records],
+                       _apply_plan.get("correction_granted"),
+                       _apply_plan.get("terminal")))
             return script
         _logger.info(f"[REPAIR] 应用完整镜头替换 {_n_applied} 镜")
         # M02：留一份「合并后、后处理前」的深拷贝——后处理是在**同一个对象**上
@@ -9407,6 +9604,11 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         except Exception as _eff_err:
             _effect_records = []
             _logger.warn("[REPAIR] 布局效果登记失败（本轮按无效果处理）: %s" % _eff_err)
+        # M01：授权集合在请求构造阶段（本函数前段）才生成，账本构造时它还不存在。
+        # 在 merged 节点与第一个 writer 观测之前补上，让此后每个节点都冻结本轮
+        # 授权路径的值指纹；缺了它就无法定位「首次把合并后取值改掉」的责任 writer。
+        # candidate 节点早于授权生成，其基线快照由诊断阶段单独按同一集合计算。
+        _effect_ledger.allowed_by_target = dict(_allowed_by_target or {})
         _effect_ledger.freeze_merged(merged, _effect_records)
         if _effect_records:
             _logger.info(
@@ -9597,6 +9799,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         _effect_ledger.observe_writer(WRITER_RESTORE_UNTARGETED, script)
         # §14 P1 节点④：**最终重验后**——下面取的就是本轮接受判据所依据的那份稿子。
         _effect_ledger.freeze_reverify(script, _effect_revision)
+        # M01 阶段 B：后处理全部结束、**事务裁决之前**的唯一权威稿。
+        # 此后 `script` 可能被按目标回退或整轮回退改写，诊断不能再拿它当 B。
+        _postprocess_snapshot = copy.deepcopy(script)
         # S03 补正：后处理来源核验。writer 若插入/删除/重排帧，或观测回调被
         # `apply_constraints` 吞成 warn，都不得继续消费旧定位符——生成结构化
         # 违例，与布局守卫共用同一个事务否决项（不是只打日志）。
@@ -9923,6 +10128,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                         _dec_try = None
                     if _dec_try and _dec_try.get("accepted") and not _dec_try.get("new_blocking"):
                         script = _try_script
+                        # M01 阶段 C：按目标回退后的稿（未发生回退时保持 None，
+                        # 诊断会把 C 视同 B，不虚构一个阶段）。
+                        _post_rollback_snapshot = copy.deepcopy(script)
                         _decision = _dec_try
                         _round_ok = True
                         # S03 补正：台账要写**最终保留稿**的映射，而不是回退前的
@@ -10090,6 +10298,34 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             try:
                 from shared.quality_gate import (
                     compute_script_revision as _csr_diag)
+                # ---- M01：四阶段归因（只读事实，不改变任何接受判据）----
+                # A=合并后 / B=后处理结束、裁决前 / C=按目标回退后 / D=最终稿。
+                # 逐 writer 的授权路径快照由账本节点提供，用来定位首次改动的 writer。
+                _attr = {"fields": {}, "summary": {}}
+                try:
+                    from step01_script_gen.repair_attribution import (
+                        authorized_path_snapshot as _aps,
+                        attribute_field_loss as _afl)
+                    _b_snap = _postprocess_snapshot or script
+                    _c_snap = _post_rollback_snapshot or _b_snap
+                    _attr = _afl(snapshots={
+                        "baseline": _aps(_round_before_script, _allowed_by_target),
+                        "merged": _aps(_post_merge_snapshot, _allowed_by_target),
+                        "postprocess": _aps(_b_snap, _allowed_by_target),
+                        "post_rollback": _aps(_c_snap, _allowed_by_target),
+                        "final": _aps(script, _allowed_by_target),
+                    }, writer_nodes=_effect_ledger.nodes,
+                        preview_scripts={
+                            "baseline": _round_before_script,
+                            "merged": _post_merge_snapshot,
+                            "postprocess": _b_snap,
+                            "post_rollback": _c_snap,
+                            "final": script,
+                        })
+                except Exception as _attr_err:                 # noqa: BLE001
+                    _attr = {"fields": {}, "summary": {},
+                             "error": "%s: %s" % (type(_attr_err).__name__,
+                                                  _attr_err)}
                 repair_diag.append({
                     "repair_round": _round,
                     "targets": sorted(picked),
@@ -10134,8 +10370,28 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     "authorization": _auth_ledger,
                     # M02：**已授权的改动有没有落到稿子上**。只记账、不改判据；
                     # 空字典 = 本轮授权路径上的值没有被后处理改动。
+                    # M01：旧实现比较「合并后 → 已整轮回退的最终稿」，把模型写入、
+                    # writer 改写与事务回滚混成一项（run j 的 36 字段）。现固定为
+                    # A→B（后处理抵消），事务回滚 B→D 另记，逐字段见 field_attribution。
                     "postprocess_reverted": _authorized_changes_lost(
-                        _post_merge_snapshot, script, _allowed_by_target),
+                        _post_merge_snapshot,
+                        _postprocess_snapshot or script, _allowed_by_target),
+                    "transaction_rollback": _authorized_changes_lost(
+                        _postprocess_snapshot or _post_merge_snapshot,
+                        script, _allowed_by_target),
+                    "field_attribution": _attr.get("fields") or {},
+                    "field_attribution_summary": _attr.get("summary") or {},
+                    "field_attribution_error": _attr.get("error") or "",
+                    "attribution_stages": {
+                        "baseline": _csr_diag(_round_before_script),
+                        "merged": _csr_diag(_post_merge_snapshot)
+                                  if isinstance(_post_merge_snapshot, dict) else "",
+                        "postprocess": _csr_diag(_postprocess_snapshot)
+                                       if isinstance(_postprocess_snapshot, dict) else "",
+                        "final": _csr_diag(script),
+                        "postprocess_captured": _postprocess_snapshot is not None,
+                        "post_rollback_captured": _post_rollback_snapshot is not None,
+                    },
                     # S03 补正：帧来源核验的可评阅证据（映射来源 / 定位符完整性 /
                     # writer 结构变化 / 观测回调错误 / 回退撤销的效果数）。
                     "frame_mappings": {
@@ -10158,6 +10414,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                         {"node": n.get("node"), "writer": n.get("writer"),
                          "reverted": n.get("reverted") or [],
                          "frame_structure": n.get("frame_structure") or {},
+                         # M01：只记观测条数，不把整份授权路径快照写进台账。
+                         "authorized_paths_observed": len(
+                             n.get("authorized_paths") or {}),
                          "error": n.get("error") or ""}
                         for n in _effect_ledger.as_records()],
                     "effects_rolled_back": int(_decision.get("effects_rolled_back") or 0),
@@ -10236,28 +10495,78 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             # 都引入了新 blocking；把非肇事成员也排除，会让"整组回退"退化为
             # "整组放弃"（重试轮名额被白吃，剩余目标无人修）。
             _remaining = [p for p in picked if p not in _offend_raw]
-            _retry_fb_text = ""
+            # M03：事务拒收的反馈由**裁决生产者**分类。new_blocking 只剔除真实
+            # 肇事目标（`_offend_raw`），其余目标各带一条可纠正记录；其余 reason
+            # 按策略表映射，工程故障（checker / writer 观测 / 定位符失效）优先终局。
+            _tx_recs: list = []
             if (_decision.get("reason") == "new_blocking"
                     and _offend_raw and _remaining):
-                _retry_fb_text = (
-                    "\n**上一轮补丁被拒（带反馈重试）**：\n"
-                    "- 目标 %s 的补丁引入了新 blocking（%s），**该目标已从本轮移除**，"
-                    "不要再输出它；\n"
-                    "- 其余目标（%s）上一轮的补丁**未通过验收**（问题证据仍在稿中），"
-                    "请给出真正消除矛盾的修改，不是换一种说法复述现状。\n"
-                    % (sorted(_offend_raw),
-                       str(_nb_keys_round[:2])[:200],
-                       sorted(_remaining)))
-                if retry_state is not None:
-                    retry_state.clear()
-                    retry_state.update({"excluded": sorted(_offend_raw),
-                                        "feedback": _retry_fb_text})
-            if (not _retry_used and _retry_fb_text):
+                for _t in _remaining:
+                    _tx_recs.append(_fb_record(
+                        code="new_blocking", target=str(_t),
+                        phase="transaction",
+                        field_path="",
+                        allowed_paths=sorted(str(a) for a in
+                                             (_allowed_by_target.get(_t) or ())),
+                        details={"offending_targets": sorted(_offend_raw),
+                                 "new_blocking_keys": _nb_keys_round[:2]},
+                        text="目标 %s 的补丁引入新 blocking，已剔除；其余目标"
+                             "上一轮补丁未通过验收" % sorted(_offend_raw)))
+            else:
+                _tx_recs = _tx_records(
+                    reason=str(_origin_reason or _decision.get("reason") or ""),
+                    targets=sorted(picked), offending=sorted(_offend_raw),
+                    allowed_by_target=_allowed_by_target,
+                    frame_locator_issues=list(_frame_locator_issues or []),
+                    observation_errors=list(_ledger_obs_errors or []),
+                    details={"resolved": int(_decision.get("resolved") or 0),
+                             "new_blocking": int(_decision.get("new_blocking") or 0),
+                             "checker_failed": bool(_decision.get("checker_failed")),
+                             "accepted": False,
+                             "source_revision": _effect_revision})
+            # 诊断写回**同一条事务记录**：台账消费者按 `rounds[-1]` 取事务
+            # 记录，追加一条带 `repair_round` 的独立记录会把它顶掉（既有回放
+            # 测试实锤）。结构化反馈是这一轮事务的一部分，不是新的一轮。
+            if repair_diag is not None:
+                for _d in reversed(repair_diag):
+                    if "groups" in _d and _d.get("repair_round") == _round:
+                        _d["feedback_records"] = _tx_recs
+                        _d["feedback_phase"] = "transaction"
+                        _d["feedback_source_revision"] = _effect_revision
+                        break
+            # 状态裁决与 `retry_state` 是否传入无关：GAP 路径（max_rounds>=2、
+            # 不传 retry_state）原本就靠内层 `continue` 重试一次，不能被 M03
+            # 顺手掐掉。只有**写入**跨 attempt 容器才需要 retry_state。
+            _tx_plan = _plan_fb(
+                records=_tx_recs,
+                prior_state=_retry_state_snapshot,
+                frozen_targets=sorted(picked),
+                source_revision=_effect_revision,
+                answer_sig=_answer_sig(_repls),
+                excluded_override=(sorted(_offend_raw)
+                                   if (_decision.get("reason") == "new_blocking"
+                                       and _offend_raw) else None))
+            if retry_state is not None:
+                # §14 P3 的 `layout_conflict`（含 sealed）在这一轮可能刚写入；
+                # 结构化反馈不得把它 clear 掉，否则封存会在下一次调用失效。
+                _conflict_carry = dict(retry_state.get("layout_conflict") or {})
+                retry_state.clear()
+                retry_state.update(_tx_plan)
+                if _conflict_carry:
+                    retry_state["layout_conflict"] = _conflict_carry
+            _logger.warn(
+                "[REPAIR] 事务拒收反馈：reason=%s codes=%s correction=%s terminal=%s"
+                % (_origin_reason,
+                   [r.get("code") for r in _tx_recs],
+                   _tx_plan.get("correction_granted"),
+                   _tx_plan.get("terminal")))
+            if (not _retry_used and _tx_plan.get("correction_granted")
+                    and _round < _rounds):
                 _retry_used = True
                 _rejected_targets |= set(_offend_raw)
-                _retry_feedback = _retry_fb_text
+                _retry_feedback = _tx_plan.get("feedback") or ""
                 _logger.warn(
-                    "[REPAIR] 带反馈重试：剔除肇事目标 %s，其余 %s 重新修复（仅一次）"
+                    "[REPAIR] 带反馈重试（结构化）：剔除 %s，其余 %s 重新修复（仅一次）"
                     % (sorted(_offend_round), sorted(_remaining)))
                 continue
             # 本轮已被回退 → 停止（其余原因：再发下一批没有意义）
@@ -10270,6 +10579,35 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 "[REPAIR] 本轮无任何可测量改善（resolved=0 / 字段触达=0）→ "
                 "回退本轮并停止后续轮次（继续发只会重复同一批目标）"
             )
+            # M03：「合法应用但目标未解决」= 真实残余，不是工程故障，也不发
+            # 新的答卷纠正。把残余结构化交给提交层与外部证据，不写虚假 PASS。
+            _residual = _tx_records(
+                reason="no_target_resolved", targets=sorted(picked),
+                allowed_by_target=_allowed_by_target,
+                details={"resolved": int(_decision.get("resolved") or 0),
+                         "audit_field_touched": int(
+                             _decision.get("audit_field_touched") or 0),
+                         "before": int(_decision.get("before") or 0),
+                         "after": int(_decision.get("after") or 0),
+                         "source_revision": _effect_revision})
+            if repair_diag is not None:
+                for _d in reversed(repair_diag):
+                    if "groups" in _d and _d.get("repair_round") == _round:
+                        _d["feedback_records"] = _residual
+                        _d["feedback_phase"] = "transaction_residual"
+                        _d["feedback_source_revision"] = _effect_revision
+                        break
+            _res_plan = _plan_fb(
+                records=_residual, prior_state=_retry_state_snapshot,
+                frozen_targets=sorted(picked),
+                source_revision=_effect_revision,
+                answer_sig=_answer_sig(_repls))
+            if retry_state is not None:
+                _conflict_carry = dict(retry_state.get("layout_conflict") or {})
+                retry_state.clear()
+                retry_state.update(_res_plan)
+                if _conflict_carry:
+                    retry_state["layout_conflict"] = _conflict_carry
             return script
         _metrics_inc("repair.rounds_accepted")
         # §14 P3：**通过验收的轮次**才把效果交出去（`effect_state`）。
@@ -11038,6 +11376,138 @@ def _audit_budget_allowance() -> tuple:
         "why": ("上限 %ss 受剩余总预算约束（剩余 %.1fs - 收尾预留 %ss）"
                 % (cap, left, AUDIT_COMMIT_RESERVE_SEC)),
     }
+
+
+# ---------------------------------------------------------------------------
+# M04（2026-11-15）：审计预算准入 / 冻结候选 / 四项计时
+#
+# 缺口：`_audit_budget_allowance()` 只在审计**即将开始时**截短额度，前序的
+# 额外生成 / 再生成 / 修复可以把时间烧到只剩 126s（run i），再抬总预算也补不回
+# 完整审计。这里在**每个额外动作启动之前**先按「本次动作 + 最终生效审计上限 +
+# 提交收尾」判定；不足即保存冻结候选与 `budget_exhausted` 明确终局。
+# ---------------------------------------------------------------------------
+def _final_audit_reserve_config(*, include_runtime: bool = False) -> dict:
+    """最终生效的审计配置身份。
+
+    默认**只含稳定项**，供冻结候选与续验比对；`include_runtime=True` 另带
+    随时刻变化的读数（剩余预算 / 本次审计允许时长），**不得**进配置指纹。
+    """
+    _allow, _deadline, _to_info = _audit_budget_allowance()
+    cfg = {
+        "audit_timeout_cap_sec": int(_to_info.get("cap") or AUDIT_TIMEOUT_CAP_SEC),
+        "commit_reserve_sec": AUDIT_COMMIT_RESERVE_SEC,
+        "total_budget_sec": _total_budget_sec(),
+        "audit_scope": STEP01_AUDIT_SCOPE,
+        "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
+    }
+    if include_runtime:
+        cfg["audit_allowance_sec"] = int(_allow)
+        cfg["left_sec"] = _budget_left_sec()
+    return cfg
+
+
+def _action_cost_sec(kind: str) -> float:
+    """「本次动作」的保守耗时 = 该动作**最终生效的超时上限**（最坏情况）。
+
+    取的是配置上限，不是猜出来的预估：regen 走通道超时，修复轮走
+    `_repair_timeout_sec()`。任何取不到的情形回退到通道默认 300s。
+    """
+    if str(kind) == "repair":
+        try:
+            return float(_repair_timeout_sec() or 300)
+        except Exception:
+            return 300.0
+    try:
+        return float(os.getenv("AGENT_PLAN_TEXT_TIMEOUT_SEC", "300") or 300)
+    except (TypeError, ValueError):
+        return 300.0
+
+
+def _action_budget_admission(action: str, action_cost_sec: float) -> dict:
+    """用**既有预算函数**的读数跑纯函数准入，不另造一套剩余预算计算."""
+    from step01_script_gen.repair_budget import admit_action
+    cfg = _final_audit_reserve_config()
+    adm = admit_action(
+        remaining_budget_sec=_budget_left_sec(),
+        action_cost_sec=action_cost_sec,
+        audit_cap_sec=cfg["audit_timeout_cap_sec"],
+        commit_reserve_sec=cfg["commit_reserve_sec"])
+    rec = adm.as_record()
+    rec["action"] = str(action or "")
+    rec["audit_config"] = cfg
+    return rec
+
+
+def _budget_freeze_root(run_id: str = "") -> str:
+    """冻结候选的**隔离根**：永远在 `.dsh/` 下，不碰 `./output` 正式产物."""
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(_root, ".dsh", "step01_budget_frozen",
+                        str(run_id or "default").strip() or "default")
+
+
+def _freeze_budget_exhausted(script: dict, *, action: str, admission: dict,
+                             run_id: str = "") -> dict:
+    """预算不足：保存冻结候选 + 稿件到隔离根，返回 `budget_exhausted` 记录.
+
+    记录里**不含任何旧审计结果**（`prior_audit_reused=False`）；续验必须重新
+    跑完整审计 / 提交链，不借用旧结论冒充本轮通过。
+    """
+    from step01_script_gen.repair_budget import freeze_candidate
+    from shared.json_io import atomic_dump_json as _dump
+    _run = str(run_id or "").strip() or _step01_run_id()
+    _root = _budget_freeze_root(_run)
+    _meta = _final_audit_metadata(script, run_id=_run)
+    rec = freeze_candidate(
+        script=script, input_revision=str(_meta.get("input_revision") or ""),
+        audit_config=admission.get("audit_config") or {},
+        rule_fingerprint=str(_meta.get("rule_source_fingerprint") or ""),
+        admission=admission, action=action, output_root=_root)
+    try:
+        os.makedirs(_root, exist_ok=True)
+        _dump(os.path.join(_root, "frozen_candidate.json"), rec)
+        _dump(os.path.join(_root, "frozen_script.json"), script)
+        rec["files"] = ["frozen_candidate.json", "frozen_script.json"]
+        rec["written"] = True
+    except Exception as _e:
+        rec["written"] = False
+        rec["write_error"] = "%s: %s" % (type(_e).__name__, _e)
+        _logger.warn("[BUDGET] 冻结候选落盘失败（终局不变）: %s" % _e)
+    _logger.error("[BUDGET] %s 准入失败（剩余 %.1fs < 需要 %.1fs）→ "
+                  "budget_exhausted；冻结候选=%s"
+                  % (action, float(admission.get("remaining_budget_sec") or 0),
+                     float(admission.get("required_sec") or 0), _root))
+    return rec
+
+
+def _verify_budget_resume(record: dict, script: dict, *,
+                          admission: dict | None = None) -> dict:
+    """冻结稿续验：三项身份核对通过才允许进入现有完整审计 / 提交链."""
+    from step01_script_gen.repair_budget import verify_frozen_candidate
+    _meta = _final_audit_metadata(script)
+    return verify_frozen_candidate(
+        record, script=script,
+        input_revision=str(_meta.get("input_revision") or ""),
+        audit_config=_final_audit_reserve_config(),
+        rule_fingerprint=str(_meta.get("rule_source_fingerprint") or ""),
+        budget_admission=admission)
+
+
+def _audit_budget_timing(result, *, allowance_sec, left_sec,
+                         phase: str = "final_audit") -> dict:
+    """把四项读数**分别**记成结构化台账项；不可得为 None 且标来源."""
+    from step01_script_gen.repair_budget import budget_timing_record
+    _t = dict(getattr(result, "timing", None) or {})
+    rec = budget_timing_record(
+        remaining_budget_sec=left_sec,
+        audit_allowance_sec=allowance_sec,
+        server_wait_sec=_t.get("server_wait_sec"),
+        stream_elapsed_sec=_t.get("stream_elapsed_sec"),
+        stream_timing_source=_t.get("stream_timing_source")
+        or "provider_not_instrumented",
+        phase=phase)
+    rec["provider_timing"] = _t.get("provider_timing")
+    rec["attempts"] = int(getattr(result, "attempts", 1) or 1)
+    return rec
 
 
 def _early_stop_score() -> float:
@@ -12915,7 +13385,12 @@ def main() -> None:
 
         # v6.7: 镜头数严重超限时收敛重生成（独立于 gap_analysis，默认开启）
         # v6.70.3: 超总预算 → 跳过可选修复轮（失败即保留原版语义，跳过无数据风险）
-        if SHOT_COUNT_REGEN_ENABLED and not _budget_exceeded():
+        # M04：额外动作启动**之前**为最终审计预留完整时间（不是等到审计开始时
+        # 才截短额度）。动作耗时取最终生效的通道超时上限，保守按最坏情况算。
+        _adm_regen = (_action_budget_admission(
+            "regen_over_limit", _action_cost_sec("regen"))
+            if SHOT_COUNT_REGEN_ENABLED else {"allowed": False})
+        if SHOT_COUNT_REGEN_ENABLED and _adm_regen.get("allowed"):
             _timing_mark("pre_regen_over_limit")
             from step01_script_gen.outline import outline_to_anchor as _o2a
             script = _regen_over_limit(
@@ -12932,14 +13407,21 @@ def main() -> None:
             _timing_mark("regen_over_limit")
         elif SHOT_COUNT_REGEN_ENABLED:
             _timing_mark("regen_over_limit", status="skipped_budget")
-            _logger.warn("[BUDGET] 总预算超时，跳过镜头超限收敛轮（保留当前稿）")
-            _console("  [预算] 总预算超时，跳过镜头超限收敛轮")
+            _freeze_regen = _freeze_budget_exhausted(
+                script, action="regen_over_limit", admission=_adm_regen)
+            _metrics_set("budget.frozen_candidate", _freeze_regen)
+            _logger.warn("[BUDGET] 跳过镜头超限收敛轮（保留当前稿；终局=%s）"
+                         % _freeze_regen.get("terminal"))
+            _console("  [预算] 未给最终审计留下完整时间，冻结候选后停止额外生成")
 
         # v6.84（二次审核发现 1，P0）：**结构收敛轮**——单镜内容需求超 cap /
         # 时长低于下限。这两类缺陷字段级修复轮修不了（不是文本问题，是镜头切分
         # 问题），此前只有报告没有收敛路径，必然带着 BLOCK 落盘。这里让 LLM
         # **重做 shot-plan**（超限段落拆成多个完整子镜；过短镜头并入相邻剧情）。
-        if SHOT_COUNT_REGEN_ENABLED and not _budget_exceeded():
+        _adm_structural = (_action_budget_admission(
+            "regen_structural_over_limit", _action_cost_sec("regen"))
+            if SHOT_COUNT_REGEN_ENABLED else {"allowed": False})
+        if SHOT_COUNT_REGEN_ENABLED and _adm_structural.get("allowed"):
             _timing_mark("pre_regen_structural")
             from step01_script_gen.outline import outline_to_anchor as _o2a
             # v6.128：结构收敛轮的道具候选短提示同样默认关闭（用户 2026-09-25 决定）
@@ -12957,6 +13439,10 @@ def main() -> None:
             _timing_mark("regen_structural")
         elif SHOT_COUNT_REGEN_ENABLED:
             _timing_mark("regen_structural", status="skipped_budget")
+            _freeze_structural = _freeze_budget_exhausted(
+                script, action="regen_structural_over_limit",
+                admission=_adm_structural)
+            _metrics_set("budget.frozen_candidate", _freeze_structural)
 
         # v6.73: same-model independent audit before targeted repair.
         _audit_issues = []
@@ -12981,6 +13467,19 @@ def main() -> None:
                     deadline_ts=_deadline,
                 )
                 _audit_issues = _audit_result.issues
+                # M04：中间轮审计同样分别记四项读数（不进产物，只进 metrics/日志）。
+                _mid_timing = _audit_budget_timing(
+                    _audit_result, allowance_sec=_allow,
+                    left_sec=_to_info.get("left"), phase="mid_pipeline")
+                _metrics_set("audit.budget_timing_mid", _mid_timing)
+                _logger.info(
+                    "[AUDIT][BUDGET] mid_pipeline 剩余预算=%s｜审计允许=%ss｜"
+                    "服务端等待=%ss｜流式耗时=%s（来源=%s）"
+                    % (_mid_timing["remaining_budget_sec"],
+                       _mid_timing["audit_allowance_sec"],
+                       _mid_timing["server_wait_sec"],
+                       _mid_timing["stream_elapsed_sec"],
+                       _mid_timing["stream_timing_source"]))
                 _metrics_set("audit.status", _audit_result.status)
                 _metrics_set("audit.issues", len(_audit_issues))
                 # v6.112：中间轮审计也进同一个台账（phase 区分），
@@ -13037,7 +13536,10 @@ def main() -> None:
         # v6.35（08-15，P18 闭环）：GAP 通过后仍存在的高价值告警（开篇冲突/
         # 爆点密度/威胁源朝向/关键帧质量/内容密度等）→ 定向修复轮，只重写
         # 告警镜头（此前这些 WARN 纯打印落盘，无人修，带伤进 step02）。
-        if REPAIR_ROUNDS_ENABLED and not _budget_exceeded():
+        _adm_repair = (_action_budget_admission(
+            "repair_rounds", _action_cost_sec("repair"))
+            if REPAIR_ROUNDS_ENABLED else {"allowed": False})
+        if REPAIR_ROUNDS_ENABLED and _adm_repair.get("allowed"):
             _timing_mark("pre_repair_rounds")
             script = _repair_shot_warnings(
                 script, novel_text,
@@ -13048,8 +13550,12 @@ def main() -> None:
             _timing_mark("repair_rounds")
         elif REPAIR_ROUNDS_ENABLED:
             _timing_mark("repair_rounds", status="skipped_budget")
-            _logger.warn("[BUDGET] 总预算超时，跳过定向修复轮（保留当前稿，告警仍会落 SAVE-WARN）")
-            _console("  [预算] 总预算超时，跳过定向修复轮")
+            _freeze_repair = _freeze_budget_exhausted(
+                script, action="repair_rounds", admission=_adm_repair)
+            _metrics_set("budget.frozen_candidate", _freeze_repair)
+            _logger.warn("[BUDGET] 跳过定向修复轮（保留当前稿，告警仍会落 SAVE-WARN；"
+                         "终局=%s）" % _freeze_repair.get("terminal"))
+            _console("  [预算] 未给最终审计留下完整时间，跳过定向修复轮")
 
         # 后处理：注入全局配置 + 合规过滤 + 敏感词校验
         script = _post_process(script)

@@ -1041,12 +1041,24 @@ class AgentPlanTextService(TextGenerationService):
         cap: 本次请求的 max_completion_tokens，仅用于截断错误文案（v6.62.5）。
         allow_truncated: 见 TextGenerationRequest.allow_truncated（v6.62.6）。
         """
+        # M04：把 provider 已经量到的阶段时刻挂到结果上（只作观测，不改判据）。
+        # `trace` 由 `_send_once` / `_send_sse` 就地填充；非流式或没拿到响应头时
+        # 相应字段缺失，调用方如实记 None，不许反推或估算。
+        def _with_timing(res):
+            if trace:
+                _t = {k: trace.get(k) for k in (
+                    "headers_at", "first_byte_at", "first_event_at",
+                    "done_at", "events") if trace.get(k) is not None}
+                if _t:
+                    res.timing = _t
+            return res
+
         try:
             data = resp.json()
         except Exception as e:
-            return TextGenerationResult(
+            return _with_timing(TextGenerationResult(
                 success=False, error=f"响应 JSON 解析失败: {e} ({resp.text[:200]})"
-            )
+            ))
 
         # 阶段轨迹的第二段：**响应体里自报的思考用量**——它回答"这次到底有没有在思考"，
         # 也是判断"不发强度字段时网关给的是哪一档"的唯一现场证据（不靠猜）。
@@ -1063,10 +1075,10 @@ class AgentPlanTextService(TextGenerationService):
                 pass          # 轨迹失败不影响解析（真正的解析错误在下面各自返回）
         choices = data.get("choices") or []
         if not choices:
-            return TextGenerationResult(
+            return _with_timing(TextGenerationResult(
                 success=False,
                 error=f"响应中无 choices: {str(data)[:300]}",
-            )
+            ))
         message = choices[0].get("message") or {}
         text = message.get("content") or ""
         finish = choices[0].get("finish_reason")
@@ -1091,7 +1103,7 @@ class AgentPlanTextService(TextGenerationService):
             # 按「不可重试」处置并直接终局（2026-09-28 审计实测 BLOCK）。
             # 截断的正确归类是 `truncated=True`：换一次采样就可能不再截断。
             if finish == "length":
-                return truncated_result(
+                return _with_timing(truncated_result(
                     text="",
                     usage=usage,
                     allow_truncated=allow_truncated,
@@ -1100,15 +1112,15 @@ class AgentPlanTextService(TextGenerationService):
                         f"Agent Plan 输出被截断且正文为空（finish_reason=length, "
                         f"model={model}, max_completion_tokens={cap}）"
                     ),
-                )
-            return TextGenerationResult(
+                ))
+            return _with_timing(TextGenerationResult(
                 success=False,
                 usage=usage,
                 error=(
                     f"Agent Plan 返回文本为空（model={model}, "
                     f"finish_reason={finish}, full={str(data)[:200]}）"
                 ),
-            )
+            ))
 
         # v6.62.5（09-08）截断不再静默成功 —— 这是「多次 JSON 解析失败」的根因。
         # 旧实现只在 text **为空** 时才看 finish_reason；非空但被截断的半个 JSON
@@ -1126,7 +1138,7 @@ class AgentPlanTextService(TextGenerationService):
             # 列表项；v6.62.5 无条件硬失败把这条真实抢救路径也掐了（截断 → 上层
             # return [] → 物体库零增量），属于过度收敛。
             # 分支落法收敛到 models.truncated_result（4 个 provider 同一份）。
-            return truncated_result(
+            return _with_timing(truncated_result(
                 text=text,
                 usage=usage,
                 allow_truncated=allow_truncated,
@@ -1138,10 +1150,11 @@ class AgentPlanTextService(TextGenerationService):
                     f"如为全脚本生成，请调高 AGENT_PLAN_TEXT_MAX_TOKENS："
                     f"实测 11 镜全脚本约需 26k tokens。"
                 ),
-            )
+            ))
 
-        return TextGenerationResult(success=True, text=text, usage=usage,
-                                    finish_reason=str(finish or ""))
+        return _with_timing(TextGenerationResult(
+            success=True, text=text, usage=usage,
+            finish_reason=str(finish or "")))
 
     def _error_from_response(
         self, resp: requests.Response, last_error: str

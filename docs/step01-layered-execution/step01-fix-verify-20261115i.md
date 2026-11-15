@@ -112,12 +112,20 @@ shot 6: 越权字段补丁：'keyframes' 不在本轮授权集合 [...] 内
 注意：拒因是**授权合并阶段**的越权检查，不是「帧来源无法证明」，也不是旧守卫的
 「字段被改写」。因此本轮没有复现 run h 那种按同下标比较的误报场景。
 
-**（d）终局为何仍 BLOCK**
+**（d）终局为何仍 BLOCK（M01 已撤回「writer 回退」归因）**
 
-唯一提交的目标 `shot_4` 的 36 个字段被既有后处理 writer 列入
-`postprocess_reverted` 全数回退，最终 `resolved=0`、`accepted=false`、
-`reason=no_target_resolved`，`[COMMIT]` 记为「提交前修复轮零改善」。这是**模型答卷
-零有效改善 + 既有后处理回退**，不是布局守卫误判，也不由本包改动引起。
+初版把 `postprocess_reverted` 的 36 个字段读成「既有后处理 writer 全数回退」。
+**该归因已撤回**：该字段在事务裁决之后才计算，拒收分支已执行
+`script = _round_before_script`，比较的是「合并后 A vs 已整轮回退的最终稿 D」。
+M01 离线回放（`run_j_attribution_replay.json`）证实 36 个字段**全部**属事务回滚：
+34 个模型改动在后处理阶段逐字保留，另 2 个虽被 `identity_unification` /
+`v6_43_prompt_enforcement` 改动，也随整轮回退一并消失；纯 writer 回退为 0。
+
+真实终局仍是 `resolved=0`、`accepted=false`、`reason=no_target_resolved`。原因是
+**补丁没有解决原问题**：shot_4 原问题 `model_audit_STATE_CHAIN_CONFLICT` 要求
+「首帧保持发髻 + `motion_desc` 补抓发碰落步摇事件」，答卷却把 `ff_desc` 写成
+「秀发披散」、`motion_desc` 只改服装与饮酒措辞，未补所要求事件；确定性 checker
+90 → 87 仅少 3 条。不是布局守卫误判，也不是后处理抹除；历史日志保持原样。
 
 ## 5. 结论分层：哪些被真实运行证明，哪些没有
 

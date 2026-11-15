@@ -1,0 +1,1153 @@
+{
+  "generator": "tools/replay_run_j_attribution.py",
+  "status": "ok",
+  "scope": "M01 离线阶段归因回放；零模型调用、零正式产物写入",
+  "run": "step01_fix_verify_20261115j（run j）",
+  "input_sha256": {
+    "script_result_20261115_175552.json": "2259c5aaed5263ff8a0054bf06a0b791502cb7af3893a885228f8a303b62b557",
+    "c1abb36fe6f7042f5.txt": "4881372d596d0ef842848704e94b2c6f62ec128d3c7217a5b2283a5b1cf3c985",
+    "step01_repair_rounds.json": "e288649a275a8e203a78aac148b38905df5e250dc1bfab3e4182bf2b92de9580",
+    "step01_audit.blocked.json": "24c878638758afa92792c94eb92a6352f6d2ea90adbef10e1902372a2df38141",
+    "novel_resume": "aba1adc22826c2834754af529b6235e3bd4a5428b59a45c10353f5483ce854c3"
+  },
+  "input_mtimes": {
+    "script_result_20261115_175552.json": "2026-11-15T17:55:52+08:00",
+    "c1abb36fe6f7042f5.txt": "2026-11-15T17:55:51+08:00",
+    "step01_repair_rounds.json": "2026-11-15T17:55:52+08:00",
+    "step01_audit.blocked.json": "2026-11-15T17:55:52+08:00"
+  },
+  "frozen_revision": "d8781a99ab9e9befa1663ffb5393488b0d3f88954c7ea603dac631e389d6809f",
+  "revision_identity_ok": true,
+  "historical_outcome": {
+    "accepted": false,
+    "reason": "no_target_resolved",
+    "resolved": 0,
+    "revision_before": "d8781a99ab9e9befa1663ffb5393488b0d3f88954c7ea603dac631e389d6809f",
+    "revision_after": "d8781a99ab9e9befa1663ffb5393488b0d3f88954c7ea603dac631e389d6809f",
+    "postprocess_reverted_shot4_count": 36,
+    "note": "历史台账未保存后处理结束时（B）的授权路径快照，故其 36 字段无法区分 writer 改写与事务回滚；本回放不改写该历史记录。"
+  },
+  "replace_entry": {
+    "applied": 1,
+    "rejected": [
+      "shot 1: 越权字段补丁：'frame_layouts' 不在本轮授权集合 ['camera_movement', 'char_layout', 'ff_desc', 'frame_layouts.ff.0.props', 'frame_layouts.ff.0.states', 'frame_layouts.kfs.0.0.props', 'frame_layouts.kfs.1.0.props', 'frame_layouts.lf.*.props', 'frame_layouts.lf.0.props', 'keyframes.*.desc', 'keyframes.0.desc', 'lf_desc', 'motion_desc', 'prompt'] 内",
+      "shot 5: 越权字段补丁：'keyframes' 不在本轮授权集合 ['duration', 'ff_desc', 'keyframes.*.desc', 'keyframes.*.stage', 'keyframes.*.t_sec', 'lf_desc', 'motion_desc', 'prompt'] 内",
+      "shot 6: 越权字段补丁：'keyframes' 不在本轮授权集合 ['char_layout', 'duration', 'ff_desc', 'frame_layouts', 'frame_layouts.kfs.1', 'keyframes.*.desc', 'keyframes.1.desc', 'keyframes.1.stage', 'lf_desc', 'motion_desc', 'prompt'] 内"
+    ],
+    "exported_mapping": {
+      "shot_4": {
+        "before_count": 3,
+        "after_count": 3,
+        "old_to_new": [
+          0,
+          1,
+          2
+        ],
+        "added_indices": [],
+        "source": "keyframe_structure"
+      }
+    }
+  },
+  "postprocess_writers": [
+    "inject_global_config_into_script",
+    "write_timeline_from_durations",
+    "post_fix_shot_prompts",
+    "run_hard_fix(87 constraints)",
+    "restore_untargeted"
+  ],
+  "postprocess_errors": [],
+  "stage_revisions": {
+    "baseline": "d8781a99ab9e9befa1663ffb5393488b0d3f88954c7ea603dac631e389d6809f",
+    "merged": "1fb800c3bbb4c1d8793303a2c781fe141b210a5ac1e4df2a82806804d61cbec5",
+    "postprocess": "2343b1131f6d4dc35e0a5966df594211731c6fd653eb001c8724618806e7838f",
+    "final": "d8781a99ab9e9befa1663ffb5393488b0d3f88954c7ea603dac631e389d6809f"
+  },
+  "a_to_b_postprocess_reverted": {
+    "shot_4": [
+      "char_layout.0.facing",
+      "motion_desc"
+    ]
+  },
+  "b_to_d_transaction_rollback": {
+    "shot_4": [
+      "char_layout.0.facing",
+      "char_layout.0.surface",
+      "char_layout.1.surface",
+      "ff_desc",
+      "frame_layouts.ff.0.gaze_target",
+      "frame_layouts.ff.0.pose",
+      "frame_layouts.ff.0.states.0",
+      "frame_layouts.ff.1.states.0",
+      "frame_layouts.ff.1.states.1",
+      "frame_layouts.kfs.0.0.gaze_target",
+      "frame_layouts.kfs.0.0.pose",
+      "frame_layouts.kfs.0.0.states.0",
+      "frame_layouts.kfs.0.1.states.0",
+      "frame_layouts.kfs.0.1.states.1",
+      "frame_layouts.kfs.1.0.gaze_target",
+      "frame_layouts.kfs.1.0.pose",
+      "frame_layouts.kfs.1.0.states.0",
+      "frame_layouts.kfs.1.0.states.1",
+      "frame_layouts.kfs.1.1.states.0",
+      "frame_layouts.kfs.1.1.states.1",
+      "frame_layouts.kfs.2.0.gaze_target",
+      "frame_layouts.kfs.2.0.pose",
+      "frame_layouts.kfs.2.0.states.0",
+      "frame_layouts.kfs.2.0.states.1",
+      "frame_layouts.kfs.2.0.states.2",
+      "frame_layouts.kfs.2.1.states.0",
+      "frame_layouts.kfs.2.1.states.1",
+      "frame_layouts.lf.0.gaze_target",
+      "frame_layouts.lf.0.pose",
+      "frame_layouts.lf.0.states.0",
+      "frame_layouts.lf.0.states.1",
+      "frame_layouts.lf.0.states.2",
+      "frame_layouts.lf.1.states.0",
+      "frame_layouts.lf.1.states.1",
+      "lf_desc",
+      "motion_desc"
+    ]
+  },
+  "field_attribution_summary": {
+    "model_written": 36,
+    "writer_changed": 2,
+    "writer_reverted": 0,
+    "transaction_rolled_back": 36,
+    "writer_changed_and_rolled_back": 2,
+    "kept": 0,
+    "postprocess_only": 0,
+    "total": 36
+  },
+  "target_problem_analysis": {
+    "shot4_issue_codes": [
+      "model_audit_STATE_CHAIN_CONFLICT"
+    ],
+    "shot4_issue_field_paths": [
+      "frame_layouts.ff[1].states"
+    ],
+    "patch_touched_fields": [
+      "ff_desc",
+      "motion_desc"
+    ],
+    "patch_motion_desc_added_grab_event": false,
+    "patch_ff_desc_still_declared_hair_down": true,
+    "historical_resolved": 0,
+    "historical_reason": "no_target_resolved",
+    "note": "原问题建议「首帧保持发髻 + motion_desc 补抓发碰落步摇事件」；回放中的补丁文本与确定性 checker 读数用于判断补丁是否命中该要求，不改写历史裁决，也不作内容质量结论。"
+  },
+  "historical_36_fields_attribution": {
+    "char_layout.0.facing": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "writer_changed",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": true,
+      "first_writer": "identity_unification",
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "cde7fbe7df2850e7",
+        "merged": "6ed11a48da639c39",
+        "postprocess": "db6d81d132acf645",
+        "post_rollback": "db6d81d132acf645",
+        "final": "cde7fbe7df2850e7"
+      },
+      "values": {
+        "baseline": "\"袒腹仰卧\"",
+        "merged": "\"袒腹仰卧船头\"",
+        "postprocess": "\"袒腹仰卧船头，左手钓杆垂向画右湖面，右手提酒壶\"",
+        "final": "\"袒腹仰卧\""
+      }
+    },
+    "char_layout.0.surface": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "12ae32cb1ec02d01",
+        "merged": "97c4158b24f58460",
+        "postprocess": "97c4158b24f58460",
+        "post_rollback": "97c4158b24f58460",
+        "final": "12ae32cb1ec02d01"
+      },
+      "values": {
+        "baseline": "\"\"",
+        "merged": "\"船头\"",
+        "postprocess": "\"船头\"",
+        "final": "\"\""
+      }
+    },
+    "char_layout.1.surface": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "12ae32cb1ec02d01",
+        "merged": "3c27e56111b64c75",
+        "postprocess": "3c27e56111b64c75",
+        "post_rollback": "3c27e56111b64c75",
+        "final": "12ae32cb1ec02d01"
+      },
+      "values": {
+        "baseline": "\"\"",
+        "merged": "\"中舱\"",
+        "postprocess": "\"中舱\"",
+        "final": "\"\""
+      }
+    },
+    "ff_desc": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "f182455277a26732",
+        "merged": "35286ba55aaf251b",
+        "postprocess": "35286ba55aaf251b",
+        "post_rollback": "35286ba55aaf251b",
+        "final": "f182455277a26732"
+      },
+      "values": {
+        "baseline": "\"杨旭袒腹仰卧船头，左手钓杆垂湖面，右手提酒壶，听香伏于股间，平底敞口采莲小舟（长4.5米宽1.3米，可容2-3人）轻浮\"",
+        "merged": "\"杨旭素白色轻袍袒腹仰卧船头，左手钓杆垂向画右湖面，右手提酒壶，听香一袭春衫秀发披散伏于股间，平底敞口采莲小舟（长4.5米宽1.3米，可容2-3人）轻浮，冷蓝星光\"",
+        "postprocess": "\"杨旭素白色轻袍袒腹仰卧船头，左手钓杆垂向画右湖面，右手提酒壶，听香一袭春衫秀发披散伏于股间，平底敞口采莲小舟（长4.5米宽1.3米，可容2-3人）轻浮，冷蓝星光\"",
+        "final": "\"杨旭袒腹仰卧船头，左手钓杆垂湖面，右手提酒壶，听香伏于股间，平底敞口采莲小舟（长4.5米宽1.3米，可容2-3人）轻浮\""
+      }
+    },
+    "frame_layouts.ff.0.gaze_target": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "15a92b922403fb90",
+        "merged": "efcb488b9ae8e759",
+        "postprocess": "efcb488b9ae8e759",
+        "post_rollback": "efcb488b9ae8e759",
+        "final": "15a92b922403fb90"
+      },
+      "values": {
+        "baseline": "\"画上\"",
+        "merged": "\"画上方星空\"",
+        "postprocess": "\"画上方星空\"",
+        "final": "\"画上\""
+      }
+    },
+    "frame_layouts.ff.0.pose": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "cde7fbe7df2850e7",
+        "merged": "db6d81d132acf645",
+        "postprocess": "db6d81d132acf645",
+        "post_rollback": "db6d81d132acf645",
+        "final": "cde7fbe7df2850e7"
+      },
+      "values": {
+        "baseline": "\"袒腹仰卧\"",
+        "merged": "\"袒腹仰卧船头，左手钓杆垂向画右湖面，右手提酒壶\"",
+        "postprocess": "\"袒腹仰卧船头，左手钓杆垂向画右湖面，右手提酒壶\"",
+        "final": "\"袒腹仰卧\""
+      }
+    },
+    "frame_layouts.ff.0.states.0": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "78c4cb6b02a89171",
+        "merged": "a532cf328602c92a",
+        "postprocess": "a532cf328602c92a",
+        "post_rollback": "a532cf328602c92a",
+        "final": "78c4cb6b02a89171"
+      },
+      "values": {
+        "baseline": "\"素白轻袍散开\"",
+        "merged": "\"素白色轻袍散开\"",
+        "postprocess": "\"素白色轻袍散开\"",
+        "final": "\"素白轻袍散开\""
+      }
+    },
+    "frame_layouts.ff.1.states.0": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "789bf991573329ba",
+        "merged": "16683c1df2bf7773",
+        "postprocess": "16683c1df2bf7773",
+        "post_rollback": "16683c1df2bf7773",
+        "final": "789bf991573329ba"
+      },
+      "values": {
+        "baseline": "\"秀发披散\"",
+        "merged": "\"一袭春衫\"",
+        "postprocess": "\"一袭春衫\"",
+        "final": "\"秀发披散\""
+      }
+    },
+    "frame_layouts.ff.1.states.1": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "2b4aa0d2ec4e68fb",
+        "merged": "789bf991573329ba",
+        "postprocess": "789bf991573329ba",
+        "post_rollback": "789bf991573329ba",
+        "final": "2b4aa0d2ec4e68fb"
+      },
+      "values": {
+        "baseline": "\"春衫\"",
+        "merged": "\"秀发披散\"",
+        "postprocess": "\"秀发披散\"",
+        "final": "\"春衫\""
+      }
+    },
+    "frame_layouts.kfs.0.0.gaze_target": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "15a92b922403fb90",
+        "merged": "efcb488b9ae8e759",
+        "postprocess": "efcb488b9ae8e759",
+        "post_rollback": "efcb488b9ae8e759",
+        "final": "15a92b922403fb90"
+      },
+      "values": {
+        "baseline": "\"画上\"",
+        "merged": "\"画上方星空\"",
+        "postprocess": "\"画上方星空\"",
+        "final": "\"画上\""
+      }
+    },
+    "frame_layouts.kfs.0.0.pose": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "cde7fbe7df2850e7",
+        "merged": "db6d81d132acf645",
+        "postprocess": "db6d81d132acf645",
+        "post_rollback": "db6d81d132acf645",
+        "final": "cde7fbe7df2850e7"
+      },
+      "values": {
+        "baseline": "\"袒腹仰卧\"",
+        "merged": "\"袒腹仰卧船头，左手钓杆垂向画右湖面，右手提酒壶\"",
+        "postprocess": "\"袒腹仰卧船头，左手钓杆垂向画右湖面，右手提酒壶\"",
+        "final": "\"袒腹仰卧\""
+      }
+    },
+    "frame_layouts.kfs.0.0.states.0": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "78c4cb6b02a89171",
+        "merged": "a532cf328602c92a",
+        "postprocess": "a532cf328602c92a",
+        "post_rollback": "a532cf328602c92a",
+        "final": "78c4cb6b02a89171"
+      },
+      "values": {
+        "baseline": "\"素白轻袍散开\"",
+        "merged": "\"素白色轻袍散开\"",
+        "postprocess": "\"素白色轻袍散开\"",
+        "final": "\"素白轻袍散开\""
+      }
+    },
+    "frame_layouts.kfs.0.1.states.0": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "789bf991573329ba",
+        "merged": "16683c1df2bf7773",
+        "postprocess": "16683c1df2bf7773",
+        "post_rollback": "16683c1df2bf7773",
+        "final": "789bf991573329ba"
+      },
+      "values": {
+        "baseline": "\"秀发披散\"",
+        "merged": "\"一袭春衫\"",
+        "postprocess": "\"一袭春衫\"",
+        "final": "\"秀发披散\""
+      }
+    },
+    "frame_layouts.kfs.0.1.states.1": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "2b4aa0d2ec4e68fb",
+        "merged": "789bf991573329ba",
+        "postprocess": "789bf991573329ba",
+        "post_rollback": "789bf991573329ba",
+        "final": "2b4aa0d2ec4e68fb"
+      },
+      "values": {
+        "baseline": "\"春衫\"",
+        "merged": "\"秀发披散\"",
+        "postprocess": "\"秀发披散\"",
+        "final": "\"春衫\""
+      }
+    },
+    "frame_layouts.kfs.1.0.gaze_target": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "15a92b922403fb90",
+        "merged": "efcb488b9ae8e759",
+        "postprocess": "efcb488b9ae8e759",
+        "post_rollback": "efcb488b9ae8e759",
+        "final": "15a92b922403fb90"
+      },
+      "values": {
+        "baseline": "\"画上\"",
+        "merged": "\"画上方星空\"",
+        "postprocess": "\"画上方星空\"",
+        "final": "\"画上\""
+      }
+    },
+    "frame_layouts.kfs.1.0.pose": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "8ba308337074d484",
+        "merged": "f5fe38e4fbcc1aee",
+        "postprocess": "f5fe38e4fbcc1aee",
+        "post_rollback": "f5fe38e4fbcc1aee",
+        "final": "8ba308337074d484"
+      },
+      "values": {
+        "baseline": "\"仰卧举壶饮酒\"",
+        "merged": "\"仰卧船头举壶饮酒，左手钓杆垂向画右湖面\"",
+        "postprocess": "\"仰卧船头举壶饮酒，左手钓杆垂向画右湖面\"",
+        "final": "\"仰卧举壶饮酒\""
+      }
+    },
+    "frame_layouts.kfs.1.0.states.0": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "78c4cb6b02a89171",
+        "merged": "a532cf328602c92a",
+        "postprocess": "a532cf328602c92a",
+        "post_rollback": "a532cf328602c92a",
+        "final": "78c4cb6b02a89171"
+      },
+      "values": {
+        "baseline": "\"素白轻袍散开\"",
+        "merged": "\"素白色轻袍散开\"",
+        "postprocess": "\"素白色轻袍散开\"",
+        "final": "\"素白轻袍散开\""
+      }
+    },
+    "frame_layouts.kfs.1.0.states.1": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "<missing>",
+        "merged": "cbb9e481ff077729",
+        "postprocess": "cbb9e481ff077729",
+        "post_rollback": "cbb9e481ff077729",
+        "final": "<missing>"
+      },
+      "values": {
+        "baseline": "<missing>",
+        "merged": "\"赤足\"",
+        "postprocess": "\"赤足\"",
+        "final": "<missing>"
+      }
+    },
+    "frame_layouts.kfs.1.1.states.0": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "789bf991573329ba",
+        "merged": "16683c1df2bf7773",
+        "postprocess": "16683c1df2bf7773",
+        "post_rollback": "16683c1df2bf7773",
+        "final": "789bf991573329ba"
+      },
+      "values": {
+        "baseline": "\"秀发披散\"",
+        "merged": "\"一袭春衫\"",
+        "postprocess": "\"一袭春衫\"",
+        "final": "\"秀发披散\""
+      }
+    },
+    "frame_layouts.kfs.1.1.states.1": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "2b4aa0d2ec4e68fb",
+        "merged": "789bf991573329ba",
+        "postprocess": "789bf991573329ba",
+        "post_rollback": "789bf991573329ba",
+        "final": "2b4aa0d2ec4e68fb"
+      },
+      "values": {
+        "baseline": "\"春衫\"",
+        "merged": "\"秀发披散\"",
+        "postprocess": "\"秀发披散\"",
+        "final": "\"春衫\""
+      }
+    },
+    "frame_layouts.kfs.2.0.gaze_target": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "15a92b922403fb90",
+        "merged": "efcb488b9ae8e759",
+        "postprocess": "efcb488b9ae8e759",
+        "post_rollback": "efcb488b9ae8e759",
+        "final": "15a92b922403fb90"
+      },
+      "values": {
+        "baseline": "\"画上\"",
+        "merged": "\"画上方星空\"",
+        "postprocess": "\"画上方星空\"",
+        "final": "\"画上\""
+      }
+    },
+    "frame_layouts.kfs.2.0.pose": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "e3555073d1ad172c",
+        "merged": "6d540e1b30402f4a",
+        "postprocess": "6d540e1b30402f4a",
+        "post_rollback": "6d540e1b30402f4a",
+        "final": "e3555073d1ad172c"
+      },
+      "values": {
+        "baseline": "\"仰卧双腿绷直\"",
+        "merged": "\"仰卧船头双腿绷直，右手酒壶微倾，左手钓杆垂向画右湖面\"",
+        "postprocess": "\"仰卧船头双腿绷直，右手酒壶微倾，左手钓杆垂向画右湖面\"",
+        "final": "\"仰卧双腿绷直\""
+      }
+    },
+    "frame_layouts.kfs.2.0.states.0": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "9c6337a4923c3be5",
+        "merged": "a532cf328602c92a",
+        "postprocess": "a532cf328602c92a",
+        "post_rollback": "a532cf328602c92a",
+        "final": "9c6337a4923c3be5"
+      },
+      "values": {
+        "baseline": "\"呼吸急促\"",
+        "merged": "\"素白色轻袍散开\"",
+        "postprocess": "\"素白色轻袍散开\"",
+        "final": "\"呼吸急促\""
+      }
+    },
+    "frame_layouts.kfs.2.0.states.1": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "dc4eb0708dbda6b0",
+        "merged": "9c6337a4923c3be5",
+        "postprocess": "9c6337a4923c3be5",
+        "post_rollback": "9c6337a4923c3be5",
+        "final": "dc4eb0708dbda6b0"
+      },
+      "values": {
+        "baseline": "\"脚趾弯起\"",
+        "merged": "\"呼吸急促\"",
+        "postprocess": "\"呼吸急促\"",
+        "final": "\"脚趾弯起\""
+      }
+    },
+    "frame_layouts.kfs.2.0.states.2": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "<missing>",
+        "merged": "dc4eb0708dbda6b0",
+        "postprocess": "dc4eb0708dbda6b0",
+        "post_rollback": "dc4eb0708dbda6b0",
+        "final": "<missing>"
+      },
+      "values": {
+        "baseline": "<missing>",
+        "merged": "\"脚趾弯起\"",
+        "postprocess": "\"脚趾弯起\"",
+        "final": "<missing>"
+      }
+    },
+    "frame_layouts.kfs.2.1.states.0": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "789bf991573329ba",
+        "merged": "16683c1df2bf7773",
+        "postprocess": "16683c1df2bf7773",
+        "post_rollback": "16683c1df2bf7773",
+        "final": "789bf991573329ba"
+      },
+      "values": {
+        "baseline": "\"秀发披散\"",
+        "merged": "\"一袭春衫\"",
+        "postprocess": "\"一袭春衫\"",
+        "final": "\"秀发披散\""
+      }
+    },
+    "frame_layouts.kfs.2.1.states.1": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "2b4aa0d2ec4e68fb",
+        "merged": "789bf991573329ba",
+        "postprocess": "789bf991573329ba",
+        "post_rollback": "789bf991573329ba",
+        "final": "2b4aa0d2ec4e68fb"
+      },
+      "values": {
+        "baseline": "\"春衫\"",
+        "merged": "\"秀发披散\"",
+        "postprocess": "\"秀发披散\"",
+        "final": "\"春衫\""
+      }
+    },
+    "frame_layouts.lf.0.gaze_target": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "15a92b922403fb90",
+        "merged": "efcb488b9ae8e759",
+        "postprocess": "efcb488b9ae8e759",
+        "post_rollback": "efcb488b9ae8e759",
+        "final": "15a92b922403fb90"
+      },
+      "values": {
+        "baseline": "\"画上\"",
+        "merged": "\"画上方星空\"",
+        "postprocess": "\"画上方星空\"",
+        "final": "\"画上\""
+      }
+    },
+    "frame_layouts.lf.0.pose": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "e3555073d1ad172c",
+        "merged": "6d540e1b30402f4a",
+        "postprocess": "6d540e1b30402f4a",
+        "post_rollback": "6d540e1b30402f4a",
+        "final": "e3555073d1ad172c"
+      },
+      "values": {
+        "baseline": "\"仰卧双腿绷直\"",
+        "merged": "\"仰卧船头双腿绷直，右手酒壶微倾，左手钓杆垂向画右湖面\"",
+        "postprocess": "\"仰卧船头双腿绷直，右手酒壶微倾，左手钓杆垂向画右湖面\"",
+        "final": "\"仰卧双腿绷直\""
+      }
+    },
+    "frame_layouts.lf.0.states.0": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "9c6337a4923c3be5",
+        "merged": "a532cf328602c92a",
+        "postprocess": "a532cf328602c92a",
+        "post_rollback": "a532cf328602c92a",
+        "final": "9c6337a4923c3be5"
+      },
+      "values": {
+        "baseline": "\"呼吸急促\"",
+        "merged": "\"素白色轻袍散开\"",
+        "postprocess": "\"素白色轻袍散开\"",
+        "final": "\"呼吸急促\""
+      }
+    },
+    "frame_layouts.lf.0.states.1": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "78c4cb6b02a89171",
+        "merged": "9c6337a4923c3be5",
+        "postprocess": "9c6337a4923c3be5",
+        "post_rollback": "9c6337a4923c3be5",
+        "final": "78c4cb6b02a89171"
+      },
+      "values": {
+        "baseline": "\"素白轻袍散开\"",
+        "merged": "\"呼吸急促\"",
+        "postprocess": "\"呼吸急促\"",
+        "final": "\"素白轻袍散开\""
+      }
+    },
+    "frame_layouts.lf.0.states.2": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "<missing>",
+        "merged": "dc4eb0708dbda6b0",
+        "postprocess": "dc4eb0708dbda6b0",
+        "post_rollback": "dc4eb0708dbda6b0",
+        "final": "<missing>"
+      },
+      "values": {
+        "baseline": "<missing>",
+        "merged": "\"脚趾弯起\"",
+        "postprocess": "\"脚趾弯起\"",
+        "final": "<missing>"
+      }
+    },
+    "frame_layouts.lf.1.states.0": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "789bf991573329ba",
+        "merged": "16683c1df2bf7773",
+        "postprocess": "16683c1df2bf7773",
+        "post_rollback": "16683c1df2bf7773",
+        "final": "789bf991573329ba"
+      },
+      "values": {
+        "baseline": "\"秀发披散\"",
+        "merged": "\"一袭春衫\"",
+        "postprocess": "\"一袭春衫\"",
+        "final": "\"秀发披散\""
+      }
+    },
+    "frame_layouts.lf.1.states.1": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "2b4aa0d2ec4e68fb",
+        "merged": "789bf991573329ba",
+        "postprocess": "789bf991573329ba",
+        "post_rollback": "789bf991573329ba",
+        "final": "2b4aa0d2ec4e68fb"
+      },
+      "values": {
+        "baseline": "\"春衫\"",
+        "merged": "\"秀发披散\"",
+        "postprocess": "\"秀发披散\"",
+        "final": "\"春衫\""
+      }
+    },
+    "lf_desc": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": false,
+      "first_writer": null,
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "ff8b00ba04bff596",
+        "merged": "67b57613fc8a199c",
+        "postprocess": "67b57613fc8a199c",
+        "post_rollback": "67b57613fc8a199c",
+        "final": "ff8b00ba04bff596"
+      },
+      "values": {
+        "baseline": "\"杨旭双腿绷直脚趾弯起，呼吸急促，酒壶微倾，听香伏于股间云鬓频动，平底敞口采莲小舟（长4.5米宽1.3米，可容2-3人）浮沉\"",
+        "merged": "\"杨旭素白色轻袍袒腹仰卧船头，双腿绷直脚趾弯起，呼吸急促，右手酒壶微倾，左手钓杆垂向画右湖面；听香一袭春衫秀发披散伏于股间云鬓频动，平底敞口采莲小舟（长4.5米宽1.3米，可容2-3人）浮沉，冷蓝星光\"",
+        "postprocess": "\"杨旭素白色轻袍袒腹仰卧船头，双腿绷直脚趾弯起，呼吸急促，右手酒壶微倾，左手钓杆垂向画右湖面；听香一袭春衫秀发披散伏于股间云鬓频动，平底敞口采莲小舟（长4.5米宽1.3米，可容2-3人）浮沉，冷蓝星光\"",
+        "final": "\"杨旭双腿绷直脚趾弯起，呼吸急促，酒壶微倾，听香伏于股间云鬓频动，平底敞口采莲小舟（长4.5米宽1.3米，可容2-3人）浮沉\""
+      }
+    },
+    "motion_desc": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "writer_changed",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": true,
+      "first_writer": "v6_43_prompt_enforcement",
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "898c46982b9951cc",
+        "merged": "e8fe0149252fea35",
+        "postprocess": "603a8e5443cc8ea9",
+        "post_rollback": "603a8e5443cc8ea9",
+        "final": "898c46982b9951cc"
+      },
+      "values": {
+        "baseline": "\"前2秒：固定机位，杨旭袒腹仰卧，听香伏于股间，平底敞口采莲小舟（长4.5米宽1.3米，可容2-3人）轻浮；2-4秒：杨旭仰望画上方星空，饮一口酒，小舟受力浮沉；4秒后：杨旭双腿渐渐绷直，脚趾弯起，呼吸急促，酒壶微倾\"",
+        "merged": "\"前2秒：固定机位，杨旭素白色轻袍袒腹仰卧船头，听香一袭春衫伏于股间，小舟轻浮；2-4秒：杨旭仰望画上方星空，举壶饮一口酒，小舟受力浮沉；4秒后：杨旭双腿渐渐绷直，脚趾弯起，呼吸急促，酒壶微倾\"",
+        "postprocess": "\"前2秒：固定机位，杨旭素白色轻袍袒腹仰卧船头，听香一袭春衫伏于股间，平底敞口采莲小舟（长4.5米宽1.3米，可容2-3人）轻浮；2-4秒：杨旭仰望画上方星空，举壶饮一口酒，小舟受力浮沉；4秒后：杨旭双腿渐渐绷直，脚趾弯起，呼吸急促，...",
+        "final": "\"前2秒：固定机位，杨旭袒腹仰卧，听香伏于股间，平底敞口采莲小舟（长4.5米宽1.3米，可容2-3人）轻浮；2-4秒：杨旭仰望画上方星空，饮一口酒，小舟受力浮沉；4秒后：杨旭双腿渐渐绷直，脚趾弯起，呼吸急促，酒壶微倾\""
+      }
+    }
+  },
+  "historical_36_fields_by_stage": {
+    "transaction_rollback": 36
+  },
+  "historical_36_fields_not_seen": [],
+  "audit_issue_codes": [
+    "model_audit_FF_RESULT_LEAK",
+    "model_audit_PROP_CONTINUITY",
+    "model_audit_STATE_CHAIN_CONFLICT",
+    "model_audit_DIALOGUE_TEXT_ERROR",
+    "model_audit_STATE_CHAIN_CONFLICT",
+    "model_audit_STATE_CHAIN_CONFLICT",
+    "model_audit_PROP_CONTINUITY",
+    "model_audit_VOICE_SPEAKER_MISMATCH"
+  ],
+  "shot4_original_issues": [
+    {
+      "code": "model_audit_STATE_CHAIN_CONFLICT",
+      "field_path": "frame_layouts.ff[1].states",
+      "message": "上一镜听香仍是“美人髻插步摇”，本镜首帧直接变成“秀发披散”，中间没有抓发或步摇掉落事件，观众无法理解发型突变。；建议：首帧保持“美人髻插步摇”，在 motion_desc 补杨旭抓发碰落步摇导致披散，再让 lf 呈披散。"
+    }
+  ],
+  "writer_changed_fields": {
+    "shot_4:char_layout.0.facing": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "writer_changed",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": true,
+      "first_writer": "identity_unification",
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "cde7fbe7df2850e7",
+        "merged": "6ed11a48da639c39",
+        "postprocess": "db6d81d132acf645",
+        "post_rollback": "db6d81d132acf645",
+        "final": "cde7fbe7df2850e7"
+      },
+      "values": {
+        "baseline": "\"袒腹仰卧\"",
+        "merged": "\"袒腹仰卧船头\"",
+        "postprocess": "\"袒腹仰卧船头，左手钓杆垂向画右湖面，右手提酒壶\"",
+        "final": "\"袒腹仰卧\""
+      }
+    },
+    "shot_4:motion_desc": {
+      "stage": "transaction_rollback",
+      "stages": [
+        "model_written",
+        "writer_changed",
+        "transaction_rolled_back"
+      ],
+      "model_written": true,
+      "writer_changed": true,
+      "first_writer": "v6_43_prompt_enforcement",
+      "transaction_rolled_back": true,
+      "digests": {
+        "baseline": "898c46982b9951cc",
+        "merged": "e8fe0149252fea35",
+        "postprocess": "603a8e5443cc8ea9",
+        "post_rollback": "603a8e5443cc8ea9",
+        "final": "898c46982b9951cc"
+      },
+      "values": {
+        "baseline": "\"前2秒：固定机位，杨旭袒腹仰卧，听香伏于股间，平底敞口采莲小舟（长4.5米宽1.3米，可容2-3人）轻浮；2-4秒：杨旭仰望画上方星空，饮一口酒，小舟受力浮沉；4秒后：杨旭双腿渐渐绷直，脚趾弯起，呼吸急促，酒壶微倾\"",
+        "merged": "\"前2秒：固定机位，杨旭素白色轻袍袒腹仰卧船头，听香一袭春衫伏于股间，小舟轻浮；2-4秒：杨旭仰望画上方星空，举壶饮一口酒，小舟受力浮沉；4秒后：杨旭双腿渐渐绷直，脚趾弯起，呼吸急促，酒壶微倾\"",
+        "postprocess": "\"前2秒：固定机位，杨旭素白色轻袍袒腹仰卧船头，听香一袭春衫伏于股间，平底敞口采莲小舟（长4.5米宽1.3米，可容2-3人）轻浮；2-4秒：杨旭仰望画上方星空，举壶饮一口酒，小舟受力浮沉；4秒后：杨旭双腿渐渐绷直，脚趾弯起，呼吸急促，...",
+        "final": "\"前2秒：固定机位，杨旭袒腹仰卧，听香伏于股间，平底敞口采莲小舟（长4.5米宽1.3米，可容2-3人）轻浮；2-4秒：杨旭仰望画上方星空，饮一口酒，小舟受力浮沉；4秒后：杨旭双腿渐渐绷直，脚趾弯起，呼吸急促，酒壶微倾\""
+      }
+    }
+  },
+  "model_changes_survived_postprocess": 34,
+  "deterministic_warnings_delta": {
+    "before_count": 90,
+    "after_count": 87,
+    "codes_before": [
+      "action_load",
+      "action_overlap",
+      "body_purification",
+      "char_layout_surface",
+      "character_entrance",
+      "dialogue_length",
+      "duplicate_injection",
+      "emotion_visualization",
+      "ff_desc_anchors",
+      "ff_lf_completeness",
+      "ff_motion_timeline",
+      "forbidden_abstract",
+      "gaze_direction",
+      "image_prompt_leak",
+      "intra_shot_camera_conflict",
+      "keyframes_quality",
+      "kf_event_window_mismatch",
+      "kf_temporal_consistency",
+      "lighting_position",
+      "opening_hook",
+      "platform_compliance",
+      "pose_continuity",
+      "presence_insufficient_diag",
+      "prop_possession_consistency",
+      "punch_density",
+      "shot_size_jump",
+      "shot_transition",
+      "transition_keywords",
+      "wide_shot_facial"
+    ],
+    "codes_after": [
+      "action_load",
+      "action_overlap",
+      "axis_crossing",
+      "body_purification",
+      "char_layout_surface",
+      "character_entrance",
+      "dialogue_length",
+      "duplicate_injection",
+      "emotion_visualization",
+      "ff_desc_anchors",
+      "ff_lf_completeness",
+      "ff_motion_timeline",
+      "forbidden_abstract",
+      "gaze_direction",
+      "image_prompt_leak",
+      "intra_shot_camera_conflict",
+      "keyframes_quality",
+      "kf_event_window_mismatch",
+      "kf_temporal_consistency",
+      "lighting_position",
+      "opening_hook",
+      "platform_compliance",
+      "pose_continuity",
+      "presence_insufficient_diag",
+      "prop_possession_consistency",
+      "punch_density",
+      "shot_size_jump",
+      "shot_transition",
+      "transition_keywords",
+      "wide_shot_facial"
+    ]
+  },
+  "conclusion": {
+    "historical_36_all_transaction_rollback": true,
+    "writer_changed_in_historical_36": 2,
+    "pure_writer_reverts_in_historical_36": 0,
+    "note": "历史 postprocess_reverted 的 36 字段来自「合并后 → 已整轮回退的最终稿」，不能归因到后处理 writer。回放显示模型改动在后处理阶段基本保留；历史裁决 resolved=0 / no_target_resolved 属目标未解决，应沿原问题与补丁内容调查，而不是先改 writer。本回放未重跑真实模型、未改写任何历史台账。"
+  }
+}

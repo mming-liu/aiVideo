@@ -186,6 +186,12 @@ tests/step02b_video_gen/*
 !tests/step01_script_gen/test_kf_frame_identity.py
 # 2026-11-15 补正 S03：真实 _repair_shot_warnings 事务入口验收（零模型）
 !tests/step01_script_gen/test_kf_frame_identity_transaction.py
+# 2026-11-15 M01：授权路径四阶段归因（匿名自足夹具，干净检出可运行）
+!tests/step01_script_gen/test_repair_attribution.py
+# 2026-11-15 M03：有界结构化反馈（匿名自足夹具，零模型 / 零网络）
+!tests/step01_script_gen/test_repair_feedback.py
+# 2026-11-15 M04：预算准入与冻结稿续验（模拟时钟，零模型 / 零网络）
+!tests/step01_script_gen/test_repair_budget.py
 # 2026-10-30（R01）：Step01 审计收口的最小回归集——仅这 4 个文件 + SSE 桩 + 夹具。
 # 其余 tests/ 仍不入库；放行必须写在 tests/* 与 tests/step01_script_gen/* 之后。
 !tests/step01_script_gen/test_audit_entry_subprocess.py

@@ -100,7 +100,8 @@
 | **B 答卷/授权不一致** | 模型仍反复整表覆盖 `frame_layouts` / `keyframes`，`kfs` 长度不等、整表与 `keyframe_additions` 混用、越权路径 | e 的 `raw_text_head`、h 的 `rejected`、j 的 4 个 shot 全 `updates` 且 `keyframe_additions=0` |
 | **B 协议设计** | 授权粒度不统一（j 的 `shot_4` 允许整表 `frame_layouts`，`shot_1/5` 只给叶子）；prompt 约 20 条硬约束 / 三种表达形态；「联动一次改全」与「只授权叶子」有张力 | `authorization` 字段、`main.py:8931–8963` |
 | **B 闭环** | 事务级拒因是否回灌下一轮请求无入口验收；run j 只有 1 轮修复轮，模型没有第二次机会 | 补正包 §8 留口 |
-| **C 既有后处理** | `shot_4` 的 36 个字段被后处理 writer 全数回退 → `resolved=0 / no_target_resolved` | run j `postprocess_reverted` |
+| ~~C 既有后处理~~（M01 已撤回） | 「36 字段被 writer 全数回退」是诊断时点缺陷造成的误读：实为事务整轮回退；34 项模型改动在后处理阶段逐字保留，纯 writer 回退 0 项 | `run_j_attribution_replay.json` |
+| **B 补丁未命中问题** | shot_4 答卷未补 `STATE_CHAIN_CONFLICT` 要求的抓发／步摇掉落事件，反而把 `ff_desc` 写成「秀发披散」；确定性 checker 90→87、`resolved=0` → `no_target_resolved` | 同上 `target_problem_analysis` |
 | **D 通道** | 最终语义审计 SSE 墙钟超时：g 186s、i 126s；总预算已提到 1200s，i 仍在后续 run 复现 | `step01_commit.json` 的 `audit_call_failed / transient=true` |
 | **C 既有测试** | `tests/step01_script_gen/` 全目录 **14 个失败**稳定落在 5 个 `test_plan_phase_*.py`（单独跑同样 14 failed / 105 passed） | 与本包 diff hunk 无依赖关系，属既有失败，未修 |
 | **测试覆盖** | `tests/` 全量**只做收集**（7560 tests collected），未运行；此前 `-x` 因缺 `dashscope` 停止的记录本轮未独立复验 | 不写成「全量全绿」 |
@@ -129,7 +130,7 @@
 | g | 审计 186s 墙钟超时（SSE 4800 事件未收完） | §12.1⑦ 总预算 900→1200s；**但 i 仍复现** |
 | h | 守卫帧索引错配误判（保留条目后移被报改写）+ 模型整表/additions 混用 | 补正包修守卫；**混用/越权属 B 类未消除** |
 | i | 审计 126s 超时，**0 修复轮**，链未走到守卫 | 经用户批准重跑 run j 才进入修复轮 |
-| j | 越权整表补丁 3 条被拒 + 后处理回退 36 字段 → `no_target_resolved` | 未解决；也未触发合法补帧 |
+| j | 越权整表补丁 3 条被拒 + shot_4 补丁未命中原问题 → `no_target_resolved`；36 字段差异实为事务回滚（M01 撤回「writer 回退」旧归因） | 未解决；也未触发合法补帧 |
 
 ### 3.2 交付 / 回归过程中自身遇到的问题（均已定位并修复）
 

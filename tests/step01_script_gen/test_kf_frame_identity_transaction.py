@@ -130,19 +130,27 @@ class _TxHarness:
         self.blocks: list = []
         self.calls = {"n": 0}
         self.writer_nodes: list = []
+        # M03：捕获**实际发出的请求文本**，并支持同一份冻结稿上的跨调用链路。
+        # 计数器放在 harness 而非 _Svc 实例上——`create_service()` 每次调用都会
+        # 新建实例，答卷序列与请求序列必须跨 attempt 连续。
+        self.requests: list = []
+        self.outputs: list = []
+        self.states: list = []
         _logs, _calls, _nodes = self.logs, self.calls, self.writer_nodes
+        _requests = self.requests
 
         payloads = [json.dumps(a, ensure_ascii=False) if not isinstance(a, str) else a
                     for a in answers]
 
         class _Svc:
-            def __init__(self):
-                self.i = 0
-
             def generate(self, req):
+                idx = _calls["n"]
                 _calls["n"] += 1
-                text = payloads[min(self.i, len(payloads) - 1)]
-                self.i += 1
+                _ui = getattr(req, "user_inputs", None) or []
+                _requests.append("\n".join(
+                    str(x.get("content") or "") for x in _ui
+                    if isinstance(x, dict)))
+                text = payloads[min(idx, len(payloads) - 1)]
 
                 class _R:
                     success = True
@@ -209,10 +217,16 @@ class _TxHarness:
         self.issues = list(issues)
         self.monkeypatch = monkeypatch
 
-    def run(self):
+    def run(self, retry_state=None):
+        # 每次都从**同一份冻结稿**进入（用户 M03：冻结输入、不借用上一轮稿），
+        # 只有 `retry_state` 在两次调用之间传递。
         self.out = self.m._repair_shot_warnings(
             copy.deepcopy(self.script), "novel", audit_issues=self.issues,
-            max_rounds=1, repair_diag=self.diag, block_reasons=self.blocks)
+            max_rounds=1, repair_diag=self.diag, block_reasons=self.blocks,
+            retry_state=retry_state)
+        self.outputs.append(self.out)
+        if retry_state is not None:
+            self.states.append(copy.deepcopy(retry_state))
         return self
 
     @property
@@ -439,3 +453,208 @@ def test_observation_error_enters_adjudication(monkeypatch, tmp_path):
     assert any("观测回调失败" in x for x in rec["frame_locator_integrity"]), \
         rec["frame_locator_integrity"]
     assert rec["accepted"] is False, "观测失败不得继续消费旧定位符"
+
+
+def _mutate_authorized_pose(script):
+    """M01：后处理 writer 把模型写入的一个**授权叶子**改回（不改帧结构）."""
+    for s in script.get("shots") or []:
+        if str(s.get("index")) != "5":
+            continue
+        kfs = (s.get("frame_layouts") or {}).get("kfs") or []
+        if len(kfs) > 1 and kfs[1]:
+            kfs[1][0]["pose"] = "writer 改回"
+    return script
+
+
+# ---------------------------------------------------------------------------
+# ⑨ M01：整轮回退不得算成「后处理 writer 抵消」（run j 的确定性反例）
+# ---------------------------------------------------------------------------
+def test_m01_rollback_is_not_attributed_to_postprocess(monkeypatch, tmp_path):
+    """布局违例 → 单目标整轮回退；writer 一根手指都没动，差异全属事务回滚."""
+    item = _insert_frame(5)
+    item["updates"] = [
+        {"field_path": "frame_layouts.kfs.1",
+         "value": [_entry("乙", "被偷偷改写"), _entry("甲", "姿态1")]}]
+    h = _TxHarness(
+        monkeypatch, tmp_path=tmp_path,
+        answers=[_answer(item)], issues=[_issue(5)],
+        warnings_fn=_warnings_fn(frame_threshold={"5": 3})).run()
+
+    rec = h.tx
+    assert rec["accepted"] is False, rec
+    stages = rec["attribution_stages"]
+    assert stages["postprocess_captured"] is True
+    assert stages["baseline"] == stages["final"], "整轮必须回到基线"
+    assert stages["merged"] == stages["postprocess"], "writer 未改动"
+    # 旧实现在回滚之后才比较 A→D，会把这 15 个字段全记成 postprocess_reverted
+    assert rec["postprocess_reverted"] == {}, rec["postprocess_reverted"]
+    assert rec["transaction_rollback"], "回滚差异必须另记"
+    summary = rec["field_attribution_summary"]
+    assert summary["writer_changed"] == 0, summary
+    assert summary["transaction_rolled_back"] >= 1, summary
+    assert summary["writer_reverted"] == 0, summary
+    for paths in (rec["field_attribution"] or {}).values():
+        for r in paths.values():
+            assert r["stage"] == "transaction_rollback", r
+            assert r["first_writer"] is None, r
+    assert any(n.get("authorized_paths_observed", 0) > 0
+               for n in rec["effect_ledger_nodes"]), "逐 writer 授权路径观测必须生效"
+
+
+# ---------------------------------------------------------------------------
+# ⑩ M01：writer 真改写时只报该字段，并定位到首次改动的约束
+# ---------------------------------------------------------------------------
+def test_m01_writer_revert_names_first_changing_writer(monkeypatch, tmp_path):
+    h = _TxHarness(
+        monkeypatch, tmp_path=tmp_path,
+        answers=[_answer(_insert_frame(5))], issues=[_issue(5)],
+        warnings_fn=_warnings_fn(frame_threshold={"5": 3}),
+        writer_mutator=_mutate_authorized_pose).run()
+
+    rec = h.tx
+    assert rec["accepted"] is True, rec
+    assert rec["transaction_rollback"] == {}, rec["transaction_rollback"]
+    assert rec["postprocess_reverted"] == {
+        "shot_5": ["frame_layouts.kfs.1.0.pose"]}, rec["postprocess_reverted"]
+    summary = rec["field_attribution_summary"]
+    assert summary["writer_reverted"] == 1, summary
+    assert summary["writer_changed"] == 1, summary
+    assert summary["transaction_rolled_back"] == 0, summary
+    assert summary["kept"] >= 1, summary
+    r = rec["field_attribution"]["shot_5"]["frame_layouts.kfs.1.0.pose"]
+    assert r["stage"] == "writer_reverted", r
+    assert r["first_writer"] == "constraints.run_hard_fix", r
+    assert r["model_written"] is True and r["writer_changed"] is True
+
+
+# ---------------------------------------------------------------------------
+# M03：真实 `_repair_shot_warnings` 入口的有界反馈闭环
+#   首次答卷被拒 → 基线保留 → 反馈进入下一次实际请求 → 合法响应应用 →
+#   后处理 → 重验 → 最终返回稿
+# ---------------------------------------------------------------------------
+def _illegal_answer():
+    """越权父字段补丁：`subtitle` 不在 `_issue(5)` 的授权面内."""
+    return {"shot_id": "5", "updates": [
+        {"field_path": "subtitle", "value": "越权改写字幕"}]}
+
+
+def test_m03_two_call_feedback_closed_loop(monkeypatch, tmp_path):
+    """同一份冻结稿上的两轮链路，请求 / 答卷 / 裁决 / revision 逐项对应."""
+    from shared.quality_gate import compute_script_revision
+
+    h = _TxHarness(
+        monkeypatch, tmp_path=tmp_path,
+        answers=[_answer(_illegal_answer()), _answer(_insert_frame(5))],
+        issues=[_issue(5)],
+        warnings_fn=_warnings_fn(frame_threshold={"5": 3}))
+
+    state: dict = {}
+    h.run(retry_state=state)                     # ① 首次拒收
+    first = h.states[0]
+    assert h.calls["n"] == 1 and len(h.requests) == 1
+    assert compute_script_revision(h.outputs[0]) == compute_script_revision(_BASE), \
+        "首次拒收必须保留基线，一个字都不能留在稿上"
+    assert first["correction_granted"] is True and first["terminal"] is False
+    codes = [r["code"] for r in first["feedback_records"]]
+    assert "unauthorized_path" in codes, codes
+    r0 = first["feedback_records"][0]
+    assert r0["field_path"] == "subtitle" and r0["allowed_paths"], r0
+    assert first["source_revision"] == compute_script_revision(_BASE)
+    assert any(d.get("kind") == "patch_unusable"
+               for d in h.diag), [d.get("kind") for d in h.diag]
+
+    h.run(retry_state=state)                     # ② 带反馈的第二次实际请求
+    assert h.calls["n"] == 2 and len(h.requests) == 2
+    assert "上一轮修复反馈（结构化" in h.requests[1]
+    assert "unauthorized_path" in h.requests[1]
+    assert "subtitle" in h.requests[1], "具体越权路径必须进入下一次请求"
+    assert "上一轮修复反馈" not in h.requests[0], "首次请求不得凭空带反馈"
+    # 反馈绑定的 revision 与第二次进入的冻结稿一致
+    assert h.states[0]["source_revision"] == compute_script_revision(_BASE)
+
+    rec = h.tx
+    assert rec["accepted"] is True, (rec.get("reason"), rec.get("origin_reason"))
+    assert rec["resolved"] >= 1
+    assert len(h.shots()["5"]["keyframes"]) == 3
+    assert len(h.shots()["5"]["frame_layouts"]["kfs"]) == 3
+    assert rec["frame_mappings"]["shot_5"]["source"] == "assembly"
+    assert rec["frame_locator_integrity"] == []
+    assert compute_script_revision(h.outputs[1]) != compute_script_revision(_BASE), \
+        "最终返回稿必须含本轮合法修复，不能又是基线"
+
+
+def test_m03_duplicate_rejection_stops_before_third_request(monkeypatch, tmp_path):
+    """同一补丁 + 相同拒因 ⇒ 停止该目标；第三次在发请求之前终局."""
+    from shared.quality_gate import compute_script_revision
+    h = _TxHarness(
+        monkeypatch, tmp_path=tmp_path,
+        answers=[_answer(_illegal_answer()), _answer(_illegal_answer()),
+                 _answer(_insert_frame(5))],
+        issues=[_issue(5)],
+        warnings_fn=_warnings_fn(frame_threshold={"5": 3}))
+    state: dict = {}
+    h.run(retry_state=state)
+    h.run(retry_state=state)
+    assert h.calls["n"] == 2
+    assert h.states[1]["terminal"] is True, h.states[1]
+    assert h.states[1]["stop_reason"] in (
+        "duplicate_rejection", "correction_budget_exhausted"), h.states[1]
+
+    h.run(retry_state=state)
+    assert h.calls["n"] == 2, "终局之后不得再发任何修复请求"
+    assert any(d.get("kind") == "feedback_terminal"
+               and d.get("sealed_before_send") is True
+               for d in h.diag), [d.get("kind") for d in h.diag]
+    assert compute_script_revision(h.outputs[2]) == compute_script_revision(_BASE)
+
+
+def test_m03_engineering_failure_blocks_dependent_action(monkeypatch, tmp_path):
+    """writer 观测异常属工程故障：优先阻断依赖动作，不再发第二次请求."""
+    h = _TxHarness(
+        monkeypatch, tmp_path=tmp_path,
+        answers=[_answer(_insert_frame(5)), _answer(_insert_frame(5))],
+        issues=[_issue(5)],
+        warnings_fn=_warnings_fn(frame_threshold={"5": 3}),
+        writer_error=True)
+    state: dict = {}
+    h.run(retry_state=state)
+    assert h.calls["n"] == 1
+    rec = h.tx
+    assert rec["accepted"] is False and rec["writer_observation_errors"]
+    assert state["terminal"] is True and state["stop_reason"] == "engineering_failure"
+    codes = [r["code"] for r in state["feedback_records"]]
+    assert "engineering_failure" in codes, codes
+    assert any(r["phase"] == "engineering"
+               for r in rec["feedback_records"]), \
+        "工程故障记录必须落在同一条事务诊断里"
+
+    h.run(retry_state=state)
+    assert h.calls["n"] == 1, "工程故障终局之后不得发起依赖动作"
+    assert any(d.get("kind") == "feedback_terminal" for d in h.diag)
+
+
+def test_m03_revision_mismatch_drops_cross_draft_feedback(monkeypatch, tmp_path):
+    """跨稿反馈一律丢弃，绝不借用上一轮裁决冒充本轮通过."""
+    from step01_script_gen.repair_feedback import feedback_record
+
+    h = _TxHarness(
+        monkeypatch, tmp_path=tmp_path,
+        answers=[_answer(_insert_frame(5))],
+        issues=[_issue(5)],
+        warnings_fn=_warnings_fn(frame_threshold={"5": 3}))
+    stale = {
+        "feedback_records": [feedback_record(
+            code="unauthorized_path", target="shot_5",
+            field_path="subtitle", text="旧稿反馈")],
+        "feedback": "\n**上一轮修复反馈（结构化）**：旧稿反馈\n",
+        "source_revision": "NOT_THE_FROZEN_DRAFT",
+        "used_correction": False,
+        "correction_granted": True,
+        "terminal": False,
+    }
+    h.run(retry_state=stale)
+    assert h.calls["n"] == 1
+    assert "上一轮修复反馈" not in h.requests[0], \
+        "revision 不符的反馈不得进入本轮请求"
+    assert any("source_revision 与本轮基线不符" in x for x in h.logs), h.logs
+    assert h.out["shots"][0]["subtitle"] == "字幕原文"

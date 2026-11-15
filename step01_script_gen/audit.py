@@ -683,6 +683,9 @@ class AuditResult:
     # 形状 `[{"identifier": str, "aliases": [str], "evidence": str}]`，已归一。
     # **空表 = 未声明任何身份关系**（旧响应缺该键的兼容读法），不是「声明了没关系」。
     character_aliases: list = field(default_factory=list)
+    # M04（2026-11-15）：本次审计的**观测计时**（客户端等待 / 流式耗时 / 来源）。
+    # 只作台账读数，不参与任何判据；取不到就是 None，禁止估算填充。
+    timing: dict | None = None
 
 
 #: A3 补全的单次上限与输出上限（有界：不为补一个字段把请求撑大）
@@ -1113,7 +1116,10 @@ def run_same_model_audit_with_status(
                     "总预算不足：本次审计剩余可用 %.1fs < 最小可用 %.0fs —— "
                     "未发出请求（发出也只会挤占提交收尾余量）"
                     % (_left, _min_useful),
-                    attempts=_attempts, failed_attempts=_failed_attempts, **_chan)
+                    attempts=_attempts, failed_attempts=_failed_attempts,
+                    timing={"server_wait_sec": None, "stream_elapsed_sec": None,
+                            "stream_timing_source": "no_request_sent",
+                            "provider_timing": None}, **_chan)
             _req = _dc.replace(req, timeout_sec=int(min(timeout_sec, _left)))
         _attempts += 1
         # v6.134：审计调用自报家门——provider 里是所有调用共用的一句硬编码
@@ -1132,7 +1138,11 @@ def run_same_model_audit_with_status(
             # 崩出提交链——按调用失败处置（不重试：异常多为结构性，重试不收敛）。
             return AuditResult("request_failed", [], f"audit call raised: {exc}",
                                attempts=_attempts, failed_attempts=_failed_attempts,
-                               **_chan)
+                               timing={"server_wait_sec": round(
+                                           _time.time() - _t_call, 3),
+                                       "stream_elapsed_sec": None,
+                                       "stream_timing_source": "provider_not_instrumented",
+                                       "provider_timing": None}, **_chan)
         # v6.118：usage 原样带走（取不到 None），供台账记录实际消耗。
         # 重试后记的是**最后一次**调用的用量；前面各次的用量进 failed_attempts，
         # 合计 = failed_attempts 各次 + 顶层 usage。
@@ -1141,6 +1151,19 @@ def run_same_model_audit_with_status(
         # 成功的审计一声不响，只能靠 submit/response 两个时间戳反推耗时（run 01 的 144s
         # 就是这么反推的）。失败时它同时是重采样判据的输入，位置不变、只上移。
         _dur = _time.time() - _t_call
+        # M04：四项计时里的两项在此落地——客户端等待（`server_wait_sec`）与
+        # provider 自报的流式耗时。`stream_elapsed_sec` 只在真正走了 SSE 事件流
+        # （trace 里有 `events`）时才有值；非流式 / 未埋点一律 None + 标来源。
+        _provider_timing = getattr(result, "timing", None) or {}
+        _stream_done = (_provider_timing.get("done_at")
+                        if "events" in _provider_timing else None)
+        _timing_obs = {
+            "server_wait_sec": round(_dur, 3),
+            "stream_elapsed_sec": _stream_done,
+            "stream_timing_source": ("agent_plan_trace" if _stream_done is not None
+                                     else "provider_not_instrumented"),
+            "provider_timing": _provider_timing or None,
+        }
         _u = _usage or {}
         _out = _u.get("output_tokens") or _u.get("completion_tokens")
         _rsn = _u.get("reasoning_tokens")
@@ -1208,7 +1231,7 @@ def run_same_model_audit_with_status(
                                str(getattr(result, "error", "") or ""),
                                str(getattr(result, "text", "") or ""), usage=_usage,
                                attempts=_attempts, failed_attempts=_failed_attempts,
-                               **_chan)
+                               timing=_timing_obs, **_chan)
         # §14 P2：issues 与身份关系声明**同一次解析**（`_parse_audit_payload`）——
         # 各自再解一遍会出现「一个说 parse_failed、另一个说 ok」的分叉。
         parsed, status, _character_aliases = _parse_audit_payload(result.text)
@@ -1217,7 +1240,8 @@ def run_same_model_audit_with_status(
         if _attempts > _parse_retries:
             return AuditResult(status, [], "audit output is not valid JSON or lacks issues[]",
                                result.text, usage=_usage, attempts=_attempts,
-                               failed_attempts=_failed_attempts, **_chan)
+                               failed_attempts=_failed_attempts,
+                               timing=_timing_obs, **_chan)
         # v6.134.1（审核）：这一轮是被重试**覆盖**的失败尝试——必须留档，否则
         # 「重试后成功」路径上坏响应与首次用量双双消失（attempts=2 只能说明发生过）。
         # 头部封顶与 main._DIAG_RAW_HEAD_MAX 同值（2000 字符）。
@@ -1278,7 +1302,7 @@ def run_same_model_audit_with_status(
             _comp_rec["response_len"] = len(_txt)
     return AuditResult("ok", out, schema_deviations=_deviations, usage=_usage,
                        attempts=_attempts, failed_attempts=_failed_attempts,
-                       completion=_comp_rec,
+                       completion=_comp_rec, timing=_timing_obs,
                        character_aliases=_character_aliases, **_chan)
 
 
