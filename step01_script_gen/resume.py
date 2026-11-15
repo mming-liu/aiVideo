@@ -243,7 +243,8 @@ def apply_config(man: dict) -> None:
 
 
 def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
-        hook_max_attempts: int = 4) -> int:
+        hook_max_attempts: int = 4, audit_repair_rounds: int = 1,
+        no_hook: bool = False) -> int:
     man = _read_json(Path(manifest_path))
     # 审计副本可以不在正式章节目录里（避免发布前改正式产物）
     os.environ["STEP01_AUDIT_SOURCE"] = str(man.get("audit_path") or "")
@@ -255,9 +256,15 @@ def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
     validate_static(man)
     apply_config(man)
     validate_semantic(man)
+    # 2026-11-16：冻结续验的钩子/修复范围（在 import main 之前生效）。
+    os.environ["HOOK_MAX_ATTEMPTS"] = str(int(hook_max_attempts))
+    if no_hook:
+        os.environ["HOOK_ENABLED"] = "0"
 
     import step01_script_gen.main as m
     from shared.config import duration_band
+    # 续验只允许“1 次修复 + 1 次最终审计”：显式覆盖 import 期常量。
+    m.STEP01_AUDIT_REPAIR_MAX_ROUNDS = max(0, int(audit_repair_rounds))
 
     chapter = Path(man["chapter_dir"]).resolve()
     got = Path(str(m.CHAPTER_DIR)).resolve()
@@ -377,6 +384,10 @@ def main(argv=None) -> int:
                     help="冻结续验的发送边界总尝试上限（0=不限；含内部重试）")
     ap.add_argument("--hook-max-attempts", type=int, default=4,
                     help="钩子分类请求尝试上限（发送边界；默认 4）")
+    ap.add_argument("--audit-repair-rounds", type=int, default=1,
+                    help="续验的定向修复轮上限（默认 1；随后 1 次最终审计）")
+    ap.add_argument("--no-hook", action="store_true",
+                    help="续验跳过钩子阶段（HOOK_ENABLED=0）")
     ap.add_argument("--build", action="store_true",
                     help="由现有产物生成清单（需 --snapshot）")
     ap.add_argument("--chapter-dir", default="", help="--build 时的章节目录")
@@ -400,7 +411,9 @@ def main(argv=None) -> int:
             return 0
         return run(args.manifest, dry_run=args.dry_run,
                    max_sends=args.max_sends,
-                   hook_max_attempts=args.hook_max_attempts)
+                   hook_max_attempts=args.hook_max_attempts,
+                   audit_repair_rounds=args.audit_repair_rounds,
+                   no_hook=args.no_hook)
     except ResumeError as exc:
         print("[RESUME] 拒绝恢复: %s" % exc, file=sys.stderr)
         return 3

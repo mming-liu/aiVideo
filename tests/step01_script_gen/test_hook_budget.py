@@ -27,3 +27,9 @@ def test_hook_max_sends_module_override_wins(monkeypatch):
     monkeypatch.setattr(m, "HOOK_MAX_SENDS", 1)
     monkeypatch.setenv("HOOK_MAX_SENDS", "3")
     assert m._hook_max_sends() == 1, "显式改写模块常量视为强制覆盖"
+
+
+def test_hook_max_attempts_config_bounds():
+    """钩子请求尝试预算的默认值在 0..6（发送边界由 CallCounter 执行）."""
+    from shared import config as c
+    assert 0 <= c.HOOK_MAX_ATTEMPTS <= 6

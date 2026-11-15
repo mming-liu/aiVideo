@@ -182,6 +182,15 @@ except ValueError:
     HOOK_MAX_SENDS = 3
 if HOOK_MAX_SENDS < 0 or HOOK_MAX_SENDS > 3:
     raise ValueError("HOOK_MAX_SENDS must be within 0..3; got %r" % HOOK_MAX_SENDS)
+#: 钩子**实际 HTTP 请求尝试**预算（含 provider 内部传输重试；2026-11-16 复核）。
+#: 与 `HOOK_MAX_SENDS`（逻辑生成次数）分层：逻辑上限管"生成几次钩子"，
+#: 本上限管"发出去多少次请求"。默认 4 = 初次 + 3 次连接重试的现有上限。
+try:
+    HOOK_MAX_ATTEMPTS = int(str(os.getenv("HOOK_MAX_ATTEMPTS", "4")).strip() or "4")
+except ValueError:
+    HOOK_MAX_ATTEMPTS = 4
+if HOOK_MAX_ATTEMPTS < 0 or HOOK_MAX_ATTEMPTS > 6:
+    raise ValueError("HOOK_MAX_ATTEMPTS must be within 0..6; got %r" % HOOK_MAX_ATTEMPTS)
 COMPLIANCE_STRICT = os.getenv("COMPLIANCE_STRICT", "0").strip() == "1"
 COMPLIANCE_AUTO_FIX = os.getenv("COMPLIANCE_AUTO_FIX", "1").strip() == "1"
 GAP_ANALYSIS_ENABLED = os.getenv("GAP_ANALYSIS_ENABLED", "1").strip() == "1"

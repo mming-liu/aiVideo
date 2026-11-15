@@ -15,6 +15,7 @@ if str(_ROOT) not in sys.path:
 from shared.send_cap import (  # noqa: E402
     CallCounter, SendBudgetExceeded, is_hook_request,
 )
+from tools.run_step01_from_verified_plan import _summarize_ledger  # noqa: E402
 
 
 class _Resp:
@@ -109,3 +110,18 @@ def test_hook_attempts_and_responses_are_counted_separately(tmp_path):
     c("u", **_hook_kw())
     assert c.attempts == 3 and c.responses_received == 3
     assert c.hook_attempts == 2 and c.hook_responses == 2
+
+
+def test_ledger_summary_classifies_stages(tmp_path):
+    p = tmp_path / "step01_calls.jsonl"
+    rows = [
+        {"schema": "storyboard_script", "ok": True, "call_id": "c1"},
+        {"schema": "hook_shot", "ok": False, "call_id": "c2"},
+        {"schema": "script_audit", "ok": True, "call_id": "c3"},
+        {"schema": "repair_shot_replacements", "ok": True, "call_id": "c4"},
+    ]
+    p.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    out = _summarize_ledger(p)
+    assert [x["stage"] for x in out] == ["body_generation", "hook", "audit", "repair"]
+    assert [x["ok"] for x in out] == [True, False, True, True]
+    assert _summarize_ledger(tmp_path / "missing.jsonl") == []

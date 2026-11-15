@@ -1,0 +1,133 @@
+{
+ "schema": "step01.run_log.corrected/1",
+ "derived_from": [
+  "run_log.json",
+  "step01_commit.json",
+  "step01_calls.jsonl",
+  "step01_audit.blocked.json",
+  "step01_budget_frozen/<run_id>/frozen_script.json"
+ ],
+ "run_id": "20261116T003059-8920",
+ "logical_calls": [
+  {
+   "schema": "storyboard_script",
+   "stage": "body_generation",
+   "ok": true,
+   "prompt_chars": 45736,
+   "response_chars": 41494,
+   "call_id": "cc19af1c76e2f413a"
+  },
+  {
+   "schema": "hook_shot",
+   "stage": "hook",
+   "ok": false,
+   "prompt_chars": 20854,
+   "response_chars": 0,
+   "call_id": "cda2c7c497fd84a82"
+  },
+  {
+   "schema": "script_audit",
+   "stage": "audit",
+   "ok": true,
+   "prompt_chars": 103120,
+   "response_chars": 6868,
+   "call_id": "c381edd3b63a341f7"
+  }
+ ],
+ "logical_call_count": 3,
+ "http_attempts": 6,
+ "responses_received": 2,
+ "hook_attempts": 4,
+ "hook_responses": 0,
+ "hook_failures_ssl": 4,
+ "ledger_rows": 3,
+ "frozen_candidate": {
+  "path": ".dsh\\step01_budget_frozen\\20261116T003059-8920\\frozen_script.json",
+  "sha256": "932af1afd8652213e208c1c02d9f6a8f561c3c73b13c54d53efb2c5110a00767",
+  "shots": 13,
+  "shots_total_sec": 87.13
+ },
+ "audit": {
+  "status": "ok",
+  "issues": 11,
+  "source": "step01_audit.blocked.json",
+  "blocking": [
+   {
+    "code": "model_audit_NARRATION_TEXT_ERROR",
+    "shot_id": "5",
+    "severity": "warning"
+   },
+   {
+    "code": "model_audit_FRAME_LAYOUT_MISSING_ENTITIES",
+    "shot_id": "1",
+    "severity": "visual_risk"
+   },
+   {
+    "code": "model_audit_MISSING_REQUIRED_ACTOR",
+    "shot_id": "7",
+    "severity": "visual_risk"
+   },
+   {
+    "code": "model_audit_CAUSAL_TRIGGER_MISSING",
+    "shot_id": "8",
+    "severity": "visual_risk"
+   },
+   {
+    "code": "model_audit_MISSING_REQUIRED_ACTOR",
+    "shot_id": "11",
+    "severity": "advisory"
+   },
+   {
+    "code": "model_audit_LAYOUT_VISIBILITY_CONFLICT",
+    "shot_id": "0",
+    "severity": "advisory"
+   },
+   {
+    "code": "model_audit_PROP_CONTINUITY",
+    "shot_id": "7",
+    "severity": "advisory"
+   },
+   {
+    "code": "model_audit_FF_RESULT_LEAK",
+    "shot_id": "9",
+    "severity": "advisory"
+   },
+   {
+    "code": "model_audit_SCENE_LOCATION_MISMATCH",
+    "shot_id": "13",
+    "severity": "advisory"
+   },
+   {
+    "code": "model_audit_PROP_MISPLACED",
+    "shot_id": "5",
+    "severity": "advisory"
+   },
+   {
+    "code": "model_audit_PROP_CONTINUITY",
+    "shot_id": "13",
+    "severity": "advisory"
+   }
+  ]
+ },
+ "commit": {
+  "status": "BLOCK",
+  "detail": "预算不足：剩余 582.7s < 本轮修复 180.0s + 最终审计 600.0s + 收尾 60.0s；已保存冻结候选（C:\\myFloders\\git\\aiVideo\\.dsh\\step01_budget_frozen\\20261116T003059-8920），停止 final audit 修复轮",
+  "blocking_count": 13
+ },
+ "budget": {
+  "total_budget_sec": 1200.0,
+  "remaining_sec": 582.7,
+  "required_sec": 840.0,
+  "action_cost_sec": 180.0,
+  "audit_cap_sec": 600.0,
+  "commit_reserve_sec": 60.0,
+  "action": "commit_repair_round",
+  "reason": "budget_exhausted"
+ },
+ "order_contract": {
+  "plan_refs_declared": 13,
+  "shots": 13,
+  "lines_order": "D1->D2->D3",
+  "violation": false
+ }
+}

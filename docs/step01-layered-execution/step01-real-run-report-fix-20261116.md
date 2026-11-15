@@ -38,9 +38,13 @@
     `audit_status/blocking_count`；
   - manifest 新增 `hook_max_sends`（逻辑生成上限，默认 1）与
     `hook_max_attempts`（请求尝试上限，默认 4）。
-- `step01_script_gen/resume.py`：冻结续验新增 `--max-sends` 与
-  `--hook-max-attempts`；在发送边界执行总尝试与钩子分类上限，预算耗尽输出
-  `send_budget_exhausted` 并保留现场（不重抛）。
+- `shared/config.py` 新增 `HOOK_MAX_ATTEMPTS`（0..6，默认 4）；**`main.py` 保持字节不变**
+  （原因见 §4.1：`PROMPT_SOURCE_FINGERPRINT` 哈希整个 `main.py`，改它会作废已有审计的
+  `source_identity`）。钩子请求尝试上限在发送边界由 `CallCounter` 执行；逻辑生成上限
+  仍由 `HOOK_MAX_SENDS` 控制。
+- `step01_script_gen/resume.py`：冻结续验新增 `--max-sends`、`--hook-max-attempts`、
+  `--audit-repair-rounds`（默认 1）、`--no-hook`；在发送边界执行总尝试与钩子分类上限，
+  预算耗尽输出 `send_budget_exhausted` 并保留现场（不重抛）。
 - 夹具 `fixtures/step01-run-k-fixed-plan-manifest.json` 显式写入
   `hook_max_sends=1`、`hook_max_attempts=4`。
 
@@ -55,6 +59,27 @@
 5. 钩子尝试/响应分别计数。
 
 全量 `tests/step01_script_gen` 与 `tests/shared` 读数见 §6（本轮运行后回填）。
+
+### 3.1 冻结续验预检发现（真实原因）
+
+- 恢复入口 dry-run 首次复核报 `source_identity 不匹配（原文/计划/契约已变）`。
+- 逐项对账：`RULE_SOURCE_FINGERPRINT`、`audit_prompt_version`、`audit_focus_version`、
+  通道、时长带、原文、计划、`script_revision` 全部一致；唯一变化是
+  `PROMPT_SOURCE_FINGERPRINT`（`e57bdcf27c4b80e4` → `e299709b953fd5f2`）。
+- 根因：`_compute_prompt_source_fingerprint`（`quality_issues.py:169-195`）哈希
+  `prompts.py` / `outline.py` / **整个 `main.py`** / `prompts/`；本轮在 `main.py` 里加
+  `_hook_max_attempts()` 这个**非提示词**辅助函数，改变了文件字节，进而改变了
+  `PROMPT_SOURCE_FINGERPRINT`，而 `_final_audit_source_identity`（`main.py:2862-2876`）
+  又把它并入 `source_identity`，导致审计被正确但**无必要**地判为不可复用。
+- 这与既有合同冲突：`test_audit_reuse_ignores_the_prompt_source_fingerprint`
+  （`test_step01_commit.py:1047`）与 `_compute_prompt_source_fingerprint` 的注释都声明
+  该指纹**不参与**复用判定；但 `source_identity` 路径实际包含了它。
+- 本轮处置：`HOOK_MAX_ATTEMPTS` 只放 `shared/config.py`（不在提示词指纹内），
+  `main.py` 回退到审计产物的字节状态；恢复入口 dry-run 重新得到
+  `audit_reusable=true`、`audit_issues=11`。
+- 遗留缺陷（建议后续单独修）：`source_identity` 应剔除 `PROMPT_SOURCE_FINGERPRINT`，
+  或把提示词指纹收窄到真正的提示词内容；否则任何 `main.py` 非提示词改动都会作废
+  历史审计。本次不扩大改动，以免影响已冻结身份。
 
 ## 4. 冻结续验准备
 
@@ -75,8 +100,8 @@
 
 ## 6. 回归读数
 
-- 全量 `tests/step01_script_gen`：**4527 passed, 294 skipped, 4 xfailed, 0 failed, 0 error**
-  （含新增 `test_send_counter.py` 5 条）。
+- 全量 `tests/step01_script_gen`：**4529 passed, 294 skipped, 4 xfailed, 0 failed, 0 error**
+  （含新增 `test_send_counter.py` 6 条、`test_hook_budget.py` 3 条）。
 - 计数修正前后对比：旧报告 `sends=2 / ledger=0 / shots=0`；新逻辑读数为
   `attempts=6 / responses_received=2 / hook_attempts=4 / hook_responses=0 /
   ledger_rows=3 / shots=13 / audit.status=ok / audit.issues=11 / commit.detail=预算不足…`。

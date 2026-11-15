@@ -31,6 +31,37 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+_STAGE_BY_SCHEMA = {
+    "storyboard_script": "body_generation",
+    "hook_shot": "hook",
+    "script_audit": "audit",
+    "repair_shot_replacements": "repair",
+}
+
+
+def _stage_of(schema: str) -> str:
+    return _STAGE_BY_SCHEMA.get(str(schema or ""), "other")
+
+
+def _summarize_ledger(path: Path) -> list:
+    """把台账行归并为“逻辑调用 + 阶段”；台账缺失/坏行不抛错."""
+    rows = []
+    if not path.exists():
+        return rows
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        rows.append({"schema": row.get("schema"),
+                     "stage": _stage_of(row.get("schema")),
+                     "ok": row.get("ok"),
+                     "prompt_chars": row.get("prompt_chars"),
+                     "response_chars": row.get("response_chars"),
+                     "call_id": row.get("call_id")})
+    return rows
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--input-manifest", required=True)
@@ -77,6 +108,7 @@ def main() -> int:
         "VOICE_ADAPTATION_ENABLED": "1" if manifest.get("voice_adaptation_enabled") else "0",
         # 钩子分类预算（P05 实测 3 次钩子会挤占审计/修复；固定计划运行默认 1）
         "HOOK_MAX_SENDS": str(manifest.get("hook_max_sends", 1)),
+        "HOOK_MAX_ATTEMPTS": str(manifest.get("hook_max_attempts", 4)),
         "SCRIPT_CANDIDATE_TOPK": "1",
         "SCRIPT_PARSE_RETRIES": "1",
         "GAP_ANALYSIS_ENABLED": "0",
@@ -163,7 +195,8 @@ def main() -> int:
         json.dumps({"outline": plan}, ensure_ascii=False), encoding="utf-8")
 
     guard = CallCounter(real_post, cap=args.max_sends, log_dir=out / "calls",
-                        hook_cap=manifest.get("hook_max_attempts", 4))
+                        hook_cap=int(manifest.get("hook_max_attempts",
+                                                 os.environ.get("HOOK_MAX_ATTEMPTS", 4) or 4)))
     requests.post = guard
     started = time.monotonic()
     error = ""
@@ -191,13 +224,7 @@ def main() -> int:
     audit = _read("step01_audit.json") or _read("step01_audit.blocked.json")
     # BLOCK 时 `script_result.json` 不存在；候选在 `.dsh/step01_budget_frozen/<run_id>/`
     _frozen = None
-    _run_id = str((manifest_out or {}).get("run_id") or "")
-    if script is None and _run_id:
-        _fp = ROOT / ".dsh" / "step01_budget_frozen" / _run_id / "frozen_script.json"
-        if _fp.exists():
-            script = json.loads(_fp.read_text(encoding="utf-8"))
-            _frozen = {"run_id": _run_id, "path": str(_fp)}
-    # C03：恢复清单必须实际生成且可静态装载（隔离根有计划缓存时才可能）
+    # ---- 恢复清单（先算，供冻结候选回退使用）----
     _recovery = {"path": "", "loadable": False, "error": ""}
     _snap_dir = chapter / "snapshots"
     _resume_snaps = sorted(_snap_dir.glob("step01_resume_*.json")) if _snap_dir.is_dir() else []
@@ -210,30 +237,57 @@ def main() -> int:
             _recovery["loadable"] = True
         except Exception as _exc:  # noqa: BLE001
             _recovery["error"] = "%s: %s" % (type(_exc).__name__, _exc)
-    # 台账实际写在章节目录（main.py: set_ledger_path(CHAPTER_DIR/step01_calls.jsonl)），
-    # 不是 `out/calls`——旧报告读错路径，才出现 ledger_rows=0。
-    ledger = chapter / "step01_calls.jsonl"
-    _logical = []
-    if ledger.exists():
-        for _line in ledger.read_text(encoding="utf-8").splitlines():
+    # ---- BLOCK 候选回退：budget_frozen → resume manifest snapshot → snapshots ----
+    _frozen = None
+    _run_id = str((manifest_out or {}).get("run_id") or "")
+    if script is None:
+        _cands = []
+        if _run_id:
+            _cands.append((ROOT / ".dsh" / "step01_budget_frozen" / _run_id
+                           / "frozen_script.json", "budget_frozen"))
+        if _recovery.get("path"):
             try:
-                _row = json.loads(_line)
-            except ValueError:
-                continue
-            _logical.append({"schema": _row.get("schema"), "ok": _row.get("ok"),
-                             "prompt_chars": _row.get("prompt_chars"),
-                             "response_chars": _row.get("response_chars")})
+                _man = json.loads(Path(_recovery["path"]).read_text(encoding="utf-8"))
+                if _man.get("snapshot_path"):
+                    _cands.append((Path(_man["snapshot_path"]), "resume_manifest"))
+            except Exception:  # noqa: BLE001
+                pass
+        if _snap_dir.is_dir():
+            _snaps = sorted(_snap_dir.glob("script_result_*.json"))
+            if _snaps:
+                _cands.append((_snaps[-1], "snapshot"))
+        for _fp, _src in _cands:
+            if _fp and Path(_fp).exists():
+                script = json.loads(Path(_fp).read_text(encoding="utf-8"))
+                _frozen = {"run_id": _run_id, "path": str(_fp), "source": _src}
+                break
+    # ---- 台账（真实落点是章节目录；不是 out/calls）----
+    ledger = chapter / "step01_calls.jsonl"
+    _logical = _summarize_ledger(ledger)
     ledger_rows = len(_logical)
     shots = (script or {}).get("shots") or []
     _commit_detail = str((manifest_out or {}).get("detail")
                          or (manifest_out or {}).get("status_detail") or "")
-    _audit_status = ((audit or {}).get("status")
+    # ---- 审计：正式文件 → blocked → commit manifest ----
+    _audit = audit
+    _audit_source = ""
+    if _audit is not None:
+        _audit_source = ("step01_audit.json" if (chapter / "step01_audit.json").exists()
+                         else "step01_audit.blocked.json")
+    elif manifest_out:
+        _audit_source = "commit_manifest"
+    _audit_status = ((_audit or {}).get("status")
                      or (manifest_out or {}).get("audit_status"))
-    _audit_issues = (len((audit or {}).get("issues") or [])
-                     if audit else (manifest_out or {}).get("blocking_count"))
+    _blocking = [{"code": x.get("code"), "shot_id": x.get("shot_id"),
+                  "severity": x.get("severity"),
+                  "message": str(x.get("message") or "")[:160]}
+                 for x in ((_audit or {}).get("issues")
+                           or (manifest_out or {}).get("blocking") or [])]
+    _audit_issues = len(_blocking)
     report.update({
         "elapsed_sec": elapsed, "error": error, "calls": guard.calls,
-        "attempts": guard.attempts, "responses_received": guard.responses_received,
+        "http_attempts": guard.attempts,
+        "responses_received": guard.responses_received,
         "hook_attempts": guard.hook_attempts, "hook_responses": guard.hook_responses,
         "blocked": guard.blocked, "hook_blocked": guard.hook_blocked,
         "logical_calls": _logical, "ledger_rows": ledger_rows,
@@ -252,7 +306,8 @@ def main() -> int:
                     "hard_count": (quality or {}).get("hard_count"),
                     "visual_risk_count": (quality or {}).get("visual_risk_count"),
                     "blocking_categories": (quality or {}).get("blocking_categories")},
-        "audit": {"status": _audit_status, "issues": _audit_issues},
+        "audit": {"status": _audit_status, "issues": _audit_issues,
+                  "source": _audit_source, "blocking": _blocking},
         "commit_manifest_path": str(chapter / "step01_commit.json"),
         "script_path": str(_frozen["path"] if _frozen else chapter / "script_result.json"),
     })
@@ -260,7 +315,7 @@ def main() -> int:
                                       encoding="utf-8")
     print(json.dumps({"commit": report["commit"]["status"], "shots": report["script"]["shots"],
                       "sec": report["script"]["shots_total_sec"],
-                      "attempts": guard.attempts,
+                      "http_attempts": guard.attempts,
                       "responses_received": guard.responses_received,
                       "hook_attempts": guard.hook_attempts,
                       "hook_responses": guard.hook_responses,
