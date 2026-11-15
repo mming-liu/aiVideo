@@ -1,11 +1,11 @@
 {
  "candidate": {
   "path": "C:\\myFloders\\git\\aiVideo\\docs\\step01-layered-execution\\fixtures\\step01-run-k-plan-voice-order-fixed.json",
-  "sha256": "b666d283fa362b04a9598a2e0237febf130618c602782ef9a899333870afc753"
+  "sha256": "08bcc91d4423693b4ee444b790d5318a36da77854fe31d92de615d9441d7b728"
  },
  "novel": {
-  "path": "C:\\myFloders\\git\\aiVideo\\锦衣夜行_77119小说.txt",
-  "sha256": "5cea5ad4d02e93ba5e52aef1ff7bf358a5d8bd6445de8aeb662ecd5a60a4c422",
+  "path": "C:\\myFloders\\git\\aiVideo\\docs\\step01-layered-execution\\fixtures\\step01-run-k-chapter-001.txt",
+  "sha256": "aba1adc22826c2834754af529b6235e3bd4a5428b59a45c10353f5483ce854c3",
   "digest": "aba1adc22826c2834754af529b6235e3bd4a5428b59a45c10353f5483ce854c3"
  },
  "plan_digest": "3f4b1aab64b32846e23f2d2743dacd123a17d6a36ff1758eae1d0f962f1ba575",
@@ -16,17 +16,17 @@
   "chapter": 1
  },
  "budget": {
-  "min": 30,
-  "max": 60,
-  "target_min": 40,
-  "target_max": 50
+  "min": 60,
+  "max": 90,
+  "target_min": 70,
+  "target_max": 80
  },
  "channel": {
   "provider": "agent_plan",
   "model": "deepseek-v4.1-flash"
  },
- "max_tokens": 32768,
+ "max_tokens": 49152,
  "parse_retries": 2,
  "voice_adaptation_enabled": false,
- "note": "P05 固定计划：run k 修订计划经承载顺序投影（D2→D1 修正），旧核验记录已摘除，需重新核验"
+ "note": "P05 固定计划：run k 修订计划经承载顺序投影；计划核验已于 2026-11-15 重新执行（1 次发送），记录已挂"
 }

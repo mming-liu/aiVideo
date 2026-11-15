@@ -1,0 +1,432 @@
+{
+  "manifest_version": 1,
+  "duration_band": {
+    "min": 60.0,
+    "max": 90.0,
+    "target_min": 70.0,
+    "target_max": 80.0
+  },
+  "status": "BLOCK",
+  "run_id": "20261115T224743-6080",
+  "created_at": "2026-11-15T22:55:06",
+  "script_revision": "146dd9e3b3fdf5d77a64eadfa7a9d99adefaa378843f21e9b735a14fe17ee917",
+  "rule_source_fingerprint": "8050857f18c1877f",
+  "rule_version": "2026-11-14.2",
+  "prompt_source_fingerprint": "ba3c01c7fb1fa657",
+  "audit_scope": "final_after_deterministic_fixes",
+  "blocking_count": 18,
+  "blocking_truncated": false,
+  "blocking": [
+    {
+      "code": "model_audit_CAUSAL_ORDER_CONFLICT",
+      "severity": "visual_risk",
+      "message": "佃仆在镜头12末尾已离开去赶马车，但镜头13才播放张十三命令“去把公子的马车赶到水边来”，受令者不在场且动作早于命令。；建议：删去镜头12末的离开动作，改为佃仆哄笑点头、仍立岸堤等候，把赶车留到镜头13命令之后。",
+      "shot_id": "12",
+      "frame_id": "lf",
+      "entity_id": "佃仆",
+      "field_path": "motion_desc",
+      "evidence": "转身去赶马车",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "12",
+          "field_path": "motion_desc"
+        },
+        {
+          "shot_id": "12",
+          "field_path": "lf_desc"
+        },
+        {
+          "shot_id": "12",
+          "field_path": "keyframes[1].desc"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 0-2s「荷湾水面平静，荷叶轻摇」没有**按时间归属**它的关键帧（本镜 0 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 1，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「荷湾水面平静，荷叶轻摇」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 1,
+      "frame_id": "seg0",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[0] 0-2s = 荷湾水面平静，荷叶轻摇",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 1,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 1,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 2-4s「小舟自荷丛深处缓缓驶出，荷叶向两侧分开」没有**按时间归属**它的关键帧（本镜 0 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 3，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「小舟自荷丛深处缓缓驶出，荷叶向两侧分开」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 1,
+      "frame_id": "seg1",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[1] 2-4s = 小舟自荷丛深处缓缓驶出，荷叶向两侧分开",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 1,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 1,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 4-5s「舟身停稳于荷丛间，水面涟漪扩散」没有**按时间归属**它的关键帧（本镜 0 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 4.5，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「舟身停稳于荷丛间，水面涟漪扩散」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 1,
+      "frame_id": "seg2",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[2] 4-5s = 舟身停稳于荷丛间，水面涟漪扩散",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 1,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 1,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 2-4s「箫声止，杨旭放下紫竹箫搁于膝上」没有**按时间归属**它的关键帧（本镜 2 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 3，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「箫声止，杨旭放下紫竹箫搁于膝上」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 2,
+      "frame_id": "seg1",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[1] 2-4s = 箫声止，杨旭放下紫竹箫搁于膝上",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 2,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 2,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 2-4s「他缓缓抬眼望向画上方天边」没有**按时间归属**它的关键帧（本镜 2 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 3，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「他缓缓抬眼望向画上方天边」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 3,
+      "frame_id": "seg1",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[1] 2-4s = 他缓缓抬眼望向画上方天边",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 3,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 3,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_event_window_mismatch",
+      "severity": "visual_risk",
+      "message": "kf1 位于 4-8.62s，但内容更匹配 2-4s 的事件。**必须动作**：把该帧 desc 改写成描写**本时段**[4-8.62s] 的事件（该时段内容：「唇角微扬，收回目光」），不得再描写 2-4s 的事件（「他缓缓抬眼望向画上方天边」），也不得改动该帧的 t_sec。",
+      "shot_id": 3,
+      "frame_id": "kf1",
+      "entity_id": "",
+      "field_path": "keyframes.desc",
+      "evidence": "杨旭抬眼望向画上方天边，唇角微扬，手指停在膝头，背景荷叶虚化",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "3",
+          "field_path": "keyframes[1].desc"
+        },
+        {
+          "shot_id": "3",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "3",
+          "field_path": "frame_layouts.kfs[1]"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 4-5.88s「收回视线，箫横于胸前」没有**按时间归属**它的关键帧（本镜 2 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 4.94，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「收回视线，箫横于胸前」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 4,
+      "frame_id": "seg2",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[2] 4-5.88s = 收回视线，箫横于胸前",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 4,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 4,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 2-4s「她抬眸望向画左船头方向」没有**按时间归属**它的关键帧（本镜 2 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 3，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「她抬眸望向画左船头方向」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 5,
+      "frame_id": "seg1",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[1] 2-4s = 她抬眸望向画左船头方向",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 5,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 5,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 2-4s「杨旭放下酒壶，伸手揽住听香肩头」没有**按时间归属**它的关键帧（本镜 2 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 3，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「杨旭放下酒壶，伸手揽住听香肩头」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 6,
+      "frame_id": "seg1",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[1] 2-4s = 杨旭放下酒壶，伸手揽住听香肩头",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 6,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 6,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 2-3s「神秘人推臂一送，双腿一弹」没有**按时间归属**它的关键帧（本镜 3 帧 / 4 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 2.5，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「神秘人推臂一送，双腿一弹」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 8,
+      "frame_id": "seg2",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[2] 2-3s = 神秘人推臂一送，双腿一弹",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 8,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 8,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 2-4s「张十三自岸上飞掠落于船梢，屈膝稳住」没有**按时间归属**它的关键帧（本镜 2 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 3，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「张十三自岸上飞掠落于船梢，屈膝稳住」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 9,
+      "frame_id": "seg1",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[1] 2-4s = 张十三自岸上飞掠落于船梢，屈膝稳住",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 9,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 9,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 4-4.5s「他扼紧双腕，牙根紧咬」没有**按时间归属**它的关键帧（本镜 2 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 4.25，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「他扼紧双腕，牙根紧咬」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 10,
+      "frame_id": "seg2",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[2] 4-4.5s = 他扼紧双腕，牙根紧咬",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 10,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 10,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_event_window_mismatch",
+      "severity": "visual_risk",
+      "message": "kf1 位于 2-4s，但内容更匹配 4-4.5s 的事件。**必须动作**：把该帧 desc 改写成描写**本时段**[2-4s] 的事件（该时段内容：「他缓缓收回手，脸色转为凝重」），不得再描写 4-4.5s 的事件（「他扼紧双腕，牙根紧咬」），也不得改动该帧的 t_sec。",
+      "shot_id": 10,
+      "frame_id": "kf1",
+      "entity_id": "",
+      "field_path": "keyframes.desc",
+      "evidence": "张十三收回手扼紧双腕，脸色铁青牙根紧咬，杨旭仰倒其侧心口暗红洇痕",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "10",
+          "field_path": "keyframes[1].desc"
+        },
+        {
+          "shot_id": "10",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "10",
+          "field_path": "frame_layouts.kfs[1]"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 2-4s「听香半边脸被打偏，捂脸呆住」没有**按时间归属**它的关键帧（本镜 2 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 3，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「听香半边脸被打偏，捂脸呆住」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 11,
+      "frame_id": "seg1",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[1] 2-4s = 听香半边脸被打偏，捂脸呆住",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 11,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 11,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 2-4s「张十三抬手示意，沉声开口」没有**按时间归属**它的关键帧（本镜 2 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 3，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「张十三抬手示意，沉声开口」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 12,
+      "frame_id": "seg1",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[1] 2-4s = 张十三抬手示意，沉声开口",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 12,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 12,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 2-4s「听香伸手托住杨旭腿弯」没有**按时间归属**它的关键帧（本镜 2 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 3，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「听香伸手托住杨旭腿弯」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 13,
+      "frame_id": "seg1",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[1] 2-4s = 听香伸手托住杨旭腿弯",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 13,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 13,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_segment_missing",
+      "severity": "visual_risk",
+      "message": "motion 时段 2-4s「车轮碾过土路扬起尘土」没有**按时间归属**它的关键帧（本镜 2 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 keyframes **新增 1 帧**（t_sec 取 3，即该段中点；time_ratio = 段中点 / duration_sec），desc 描写**该段动作**，并在 frame_layouts.kfs **按同序号追加等长条目**（两表长度必须始终相等）；② 若已有帧与相邻段**时间/内容错位**（帧文案写的是别段事件，或它正落在两段交界），**允许一并调整**该帧的 t_sec、desc 与对应的 frame_layouts.kfs 条目——但**只搬 t_sec 不改文案**、或只补不调，都会把同一条缺陷挪到相邻段（实测：1-2s 的「反手一掌」被画在 2.5s、文案写「掌风扫向」）。**裁决口径**：只要满足「每个需帧时段都有一帧、且该帧文案描写它自己那段」，①②怎么组合都算修好——同一帧若另有`kf_event_window_mismatch`（那条要求不改 t_sec），照它的要求**改写文案 + 为本段补帧**即可，不必搬 t_sec。**新增帧的 desc 怎么写**：必须**逐字嵌入**本时段的动作短语（「车轮碾过土路扬起尘土」这类原词要出现），并且**不要复述别的时段**的动作词——新帧文案若更像相邻段，会被判 `kf_event_window_mismatch`（公共角色名/场景名不算动作，判据只认动作与状态的重叠）。**禁止**改写、删除或合并 motion_desc 来消除本条——那只会让告警消失，动作证据并没有增加。",
+      "shot_id": 14,
+      "frame_id": "seg1",
+      "entity_id": "",
+      "field_path": "keyframes",
+      "evidence": "seg[1] 2-4s = 车轮碾过土路扬起尘土",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": 14,
+          "field_path": "keyframes"
+        },
+        {
+          "shot_id": 14,
+          "field_path": "frame_layouts.kfs"
+        }
+      ],
+      "repairable": true
+    }
+  ],
+  "audit_status": "ok",
+  "detail": "预算不足：剩余 581.1s < 本轮修复 180.0s + 最终审计 600.0s + 收尾 60.0s；已保存冻结候选（C:\\myFloders\\git\\aiVideo\\.dsh\\step01_budget_frozen\\20261115T224743-6080），停止 final audit 修复轮",
+  "artifacts": {}
+}

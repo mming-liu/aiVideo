@@ -1,0 +1,114 @@
+{
+ "stage": "run",
+ "sends_used": 4,
+ "sends_refused": 0,
+ "sends": [
+  {
+   "n": 1,
+   "url": "https://opencode.ai/inference/go/openai/v1/chat/completions"
+  },
+  {
+   "n": 2,
+   "url": "https://opencode.ai/inference/go/openai/v1/chat/completions"
+  },
+  {
+   "n": 3,
+   "url": "https://opencode.ai/inference/go/openai/v1/chat/completions"
+  },
+  {
+   "n": 4,
+   "url": "https://opencode.ai/inference/go/openai/v1/chat/completions"
+  }
+ ],
+ "budget": {
+  "max_sends": 4,
+  "repair_rounds": 2,
+  "audit_rounds": 2
+ },
+ "plan_acceptance_codes": [],
+ "phases": [
+  {
+   "phase": "repair",
+   "round": 1,
+   "changed": true,
+   "status": null
+  },
+  {
+   "phase": "commit",
+   "round": null,
+   "changed": null,
+   "status": "BLOCK"
+  }
+ ],
+ "commit": {
+  "status": "BLOCK",
+  "detail": "达到 1 个修复轮上限后仍有 18 条 blocking（审计 3 + 确定性质量门 15）"
+ },
+ "audit_rounds": [
+  {
+   "round": 1,
+   "status": "ok",
+   "blocking_count": 1,
+   "blocking": [
+    [
+     "5",
+     "model_audit_STATE_CHAIN_CONFLICT"
+    ]
+   ],
+   "input_revision": "86fcf14086c4",
+   "usage": {
+    "input_tokens": 55748,
+    "output_tokens": 17758,
+    "reasoning_tokens": 16803,
+    "total_tokens": 73506
+   }
+  },
+  {
+   "round": 2,
+   "status": "ok",
+   "blocking_count": 3,
+   "blocking": [
+    [
+     "4",
+     "model_audit_FF_RESULT_LEAK"
+    ],
+    [
+     "5",
+     "model_audit_FF_RESULT_LEAK"
+    ],
+    [
+     "6",
+     "model_audit_KF_TIMING_CONFLICT"
+    ]
+   ],
+   "input_revision": "978b9b45782a",
+   "usage": {
+    "input_tokens": 56364,
+    "output_tokens": 27515,
+    "reasoning_tokens": 25512,
+    "total_tokens": 83879
+   }
+  }
+ ],
+ "repair_rounds": [
+  {},
+  {
+   "targets": [
+    "shot_1",
+    "shot_4",
+    "shot_5",
+    "shot_6"
+   ],
+   "groups": [
+    [
+     "shot_5"
+    ]
+   ],
+   "accepted": true,
+   "resolved": 0,
+   "new_blocking_keys": [],
+   "rolled_back_groups": []
+  }
+ ],
+ "blocked_snapshot": "evidence/p04_final_candidate.json（修后稿快照）"
+}

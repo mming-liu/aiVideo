@@ -1,0 +1,352 @@
+{
+  "manifest_version": 1,
+  "duration_band": {
+    "min": 60.0,
+    "max": 90.0,
+    "target_min": 70.0,
+    "target_max": 80.0
+  },
+  "status": "BLOCK",
+  "run_id": "20261115T230023-16948",
+  "created_at": "2026-11-15T23:12:32",
+  "script_revision": "978b9b45782a6f35efa0e87430f96c2728545956ab76fb029c07f21f751f6ff2",
+  "rule_source_fingerprint": "8050857f18c1877f",
+  "rule_version": "2026-11-14.2",
+  "prompt_source_fingerprint": "ba3c01c7fb1fa657",
+  "audit_scope": "final_after_deterministic_fixes",
+  "blocking_count": 18,
+  "blocking_truncated": false,
+  "blocking": [
+    {
+      "code": "model_audit_FF_RESULT_LEAK",
+      "severity": "visual_risk",
+      "message": "上一镜听香仍是美人髻插步摇，本镜动作开始前已秀发披散；motion未展示杨旭抓发、步摇碰落，结果提前。；建议：ff改回美人髻插步摇，motion补抓发碰落步摇，再在lf呈现秀发披散；同步布局与prompt。",
+      "shot_id": "4",
+      "frame_id": "ff",
+      "entity_id": "听香",
+      "field_path": "ff_desc",
+      "evidence": "秀发披散",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "4",
+          "field_path": "ff_desc"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "motion_desc"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "prompt"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "frame_layouts.ff[1].states"
+        },
+        {
+          "shot_id": "4",
+          "field_path": "frame_layouts.kfs[0][1].states"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_FF_RESULT_LEAK",
+      "severity": "visual_risk",
+      "message": "刺客尚未显形，听香却已抓船舷受惊；原文是刺客跃上船后她才身子一歪抓住船舷，反应提前。；建议：ff改为伏于股间；motion在刺客跃上船时补听香身子一歪抓船舷；同步布局与prompt。",
+      "shot_id": "5",
+      "frame_id": "ff",
+      "entity_id": "听香",
+      "field_path": "ff_desc",
+      "evidence": "伏于中舱双手抓住船舷",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "5",
+          "field_path": "ff_desc"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "motion_desc"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "prompt"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.ff[1].pose"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.ff[1].states"
+        },
+        {
+          "shot_id": "5",
+          "field_path": "frame_layouts.kfs[0][1].pose"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "model_audit_KF_TIMING_CONFLICT",
+      "severity": "visual_risk",
+      "message": "motion前2秒已完成飞掠、2-4秒应俯身查看，但3.0秒关键帧仍写飞掠落船，过程重叠。；建议：将该关键帧改为俯身查看，pose同步改为俯身。",
+      "shot_id": "6",
+      "frame_id": "kf1",
+      "entity_id": "张十三",
+      "field_path": "keyframes[1].desc",
+      "evidence": "张十三飞掠落船梢",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "6",
+          "field_path": "keyframes[1].desc"
+        },
+        {
+          "shot_id": "6",
+          "field_path": "frame_layouts.kfs[1][0].pose"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "duplicate_injection",
+      "severity": "hard",
+      "message": "描述块跨字段重复注入（ff_desc ↔ motion_desc）：「，平底敞口采莲小舟（长4.5米宽1.3米，可容2…」整块搬运",
+      "shot_id": 1,
+      "frame_id": "prompt/ff/lf/motion",
+      "entity_id": "",
+      "field_path": "duplicate_injection",
+      "evidence": "",
+      "related_shot_ids": [],
+      "repair_targets": null,
+      "repairable": true
+    },
+    {
+      "code": "duplicate_injection",
+      "severity": "hard",
+      "message": "描述块跨字段重复注入（lf_desc ↔ motion_desc）：「平底敞口采莲小舟（长4.5米宽1.3米，可容2-…」整块搬运",
+      "shot_id": 1,
+      "frame_id": "prompt/ff/lf/motion",
+      "entity_id": "",
+      "field_path": "duplicate_injection",
+      "evidence": "",
+      "related_shot_ids": [],
+      "repair_targets": null,
+      "repairable": true
+    },
+    {
+      "code": "duplicate_injection",
+      "severity": "hard",
+      "message": "描述块跨字段重复注入（lf_desc ↔ motion_desc）：「以口喂酒，二人调笑，平底敞口采莲小舟（长4.5米…」整块搬运",
+      "shot_id": 3,
+      "frame_id": "prompt/ff/lf/motion",
+      "entity_id": "",
+      "field_path": "duplicate_injection",
+      "evidence": "",
+      "related_shot_ids": [],
+      "repair_targets": null,
+      "repairable": true
+    },
+    {
+      "code": "duplicate_injection",
+      "severity": "hard",
+      "message": "描述块跨字段重复注入（prompt ↔ ff_desc）：「平底敞口采莲小舟（长4.5米宽1.3米，可容2-…」整块搬运",
+      "shot_id": 4,
+      "frame_id": "prompt/ff/lf/motion",
+      "entity_id": "",
+      "field_path": "duplicate_injection",
+      "evidence": "",
+      "related_shot_ids": [],
+      "repair_targets": null,
+      "repairable": true
+    },
+    {
+      "code": "duplicate_injection",
+      "severity": "hard",
+      "message": "描述块跨字段重复注入（prompt ↔ lf_desc）：「平底敞口采莲小舟（长4.5米宽1.3米，可容2-…」整块搬运",
+      "shot_id": 4,
+      "frame_id": "prompt/ff/lf/motion",
+      "entity_id": "",
+      "field_path": "duplicate_injection",
+      "evidence": "",
+      "related_shot_ids": [],
+      "repair_targets": null,
+      "repairable": true
+    },
+    {
+      "code": "duplicate_injection",
+      "severity": "hard",
+      "message": "描述块跨字段重复注入（prompt ↔ motion_desc）：「平底敞口采莲小舟（长4.5米宽1.3米，可容2-…」整块搬运",
+      "shot_id": 4,
+      "frame_id": "prompt/ff/lf/motion",
+      "entity_id": "",
+      "field_path": "duplicate_injection",
+      "evidence": "",
+      "related_shot_ids": [],
+      "repair_targets": null,
+      "repairable": true
+    },
+    {
+      "code": "duplicate_injection",
+      "severity": "hard",
+      "message": "描述块跨字段重复注入（ff_desc ↔ motion_desc）：「伏于股间，平底敞口采莲小舟（长4.5米宽1.3米…」整块搬运",
+      "shot_id": 4,
+      "frame_id": "prompt/ff/lf/motion",
+      "entity_id": "",
+      "field_path": "duplicate_injection",
+      "evidence": "",
+      "related_shot_ids": [],
+      "repair_targets": null,
+      "repairable": true
+    },
+    {
+      "code": "duplicate_injection",
+      "severity": "hard",
+      "message": "描述块跨字段重复注入（lf_desc ↔ motion_desc）：「，平底敞口采莲小舟（长4.5米宽1.3米，可容2…」整块搬运",
+      "shot_id": 4,
+      "frame_id": "prompt/ff/lf/motion",
+      "entity_id": "",
+      "field_path": "duplicate_injection",
+      "evidence": "",
+      "related_shot_ids": [],
+      "repair_targets": null,
+      "repairable": true
+    },
+    {
+      "code": "duplicate_injection",
+      "severity": "hard",
+      "message": "描述块跨字段重复注入（prompt ↔ ff_desc）：「夜色荷塘，平底敞口采莲小舟（长4.5米宽1.3米…」整块搬运",
+      "shot_id": 5,
+      "frame_id": "prompt/ff/lf/motion",
+      "entity_id": "",
+      "field_path": "duplicate_injection",
+      "evidence": "",
+      "related_shot_ids": [],
+      "repair_targets": null,
+      "repairable": true
+    },
+    {
+      "code": "duplicate_injection",
+      "severity": "hard",
+      "message": "描述块跨字段重复注入（prompt ↔ motion_desc）：「，平底敞口采莲小舟（长4.5米宽1.3米，可容2…」整块搬运",
+      "shot_id": 6,
+      "frame_id": "prompt/ff/lf/motion",
+      "entity_id": "",
+      "field_path": "duplicate_injection",
+      "evidence": "",
+      "related_shot_ids": [],
+      "repair_targets": null,
+      "repairable": true
+    },
+    {
+      "code": "kf_temporal_consistency",
+      "severity": "visual_risk",
+      "message": "镜头5 神秘人在 0.8–2.5s 显式入场，但该时段没有入场/遮挡过程（别处的声明不能解释这一段）",
+      "shot_id": "5",
+      "frame_id": "",
+      "entity_id": "",
+      "field_path": "kf_temporal_consistency",
+      "evidence": "",
+      "related_shot_ids": [],
+      "repair_targets": null,
+      "repairable": true
+    },
+    {
+      "code": "kf_event_window_mismatch",
+      "severity": "visual_risk",
+      "message": "kf1 位于 2-4s，但内容更匹配 0-2s 的事件。**必须动作**：把该帧 desc 改写成描写**本时段**[2-4s] 的事件（该时段内容：「张十三俯身就着星光查看画左杨旭，面色凝重」），不得再描写 0-2s 的事件（「固定机位，张十三从岸堤飞掠上船梢，平底敞口采莲小舟（长4.5」），也不得改动该帧的 t_sec。",
+      "shot_id": 6,
+      "frame_id": "kf1",
+      "entity_id": "",
+      "field_path": "keyframes.desc",
+      "evidence": "张十三飞掠落船梢，小舟剧烈摇晃，听香抓船舷，杨旭仰卧心口暗红",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "6",
+          "field_path": "keyframes[1].desc"
+        },
+        {
+          "shot_id": "6",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "6",
+          "field_path": "frame_layouts.kfs[1]"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_event_window_mismatch",
+      "severity": "visual_risk",
+      "message": "kf1 位于 2-4s，但内容更匹配 0-2s 的事件。**必须动作**：把该帧 desc 改写成描写**本时段**[2-4s] 的事件（该时段内容：「马车沿画右道路疾驰，车轮扬起尘土」），不得再描写 0-2s 的事件（「固定机位，别庄大门洞开，马车从门内疾驰而出」），也不得改动该帧的 t_sec。",
+      "shot_id": 10,
+      "frame_id": "kf1",
+      "entity_id": "",
+      "field_path": "keyframes.desc",
+      "evidence": "马车从门内疾驰而出，张十三坐车辕握缰，车轮滚动，大门灯笼暖光映照",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "10",
+          "field_path": "keyframes[1].desc"
+        },
+        {
+          "shot_id": "10",
+          "field_path": "keyframes[1].stage"
+        },
+        {
+          "shot_id": "10",
+          "field_path": "frame_layouts.kfs[1]"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "kf_event_window_mismatch",
+      "severity": "visual_risk",
+      "message": "kf2 位于 4-5s，但内容更匹配 2-4s 的事件。**必须动作**：把该帧 desc 改写成描写**本时段**[4-5s] 的事件（该时段内容：「马车迅速投入茫茫夜色，渐远」），不得再描写 2-4s 的事件（「马车沿画右道路疾驰，车轮扬起尘土」），也不得改动该帧的 t_sec。",
+      "shot_id": 10,
+      "frame_id": "kf2",
+      "entity_id": "",
+      "field_path": "keyframes.desc",
+      "evidence": "马车沿画右道路疾驰远去，投入茫茫夜色，车轮扬起尘土，张十三坐车辕握缰",
+      "related_shot_ids": [],
+      "repair_targets": [
+        {
+          "shot_id": "10",
+          "field_path": "keyframes[2].desc"
+        },
+        {
+          "shot_id": "10",
+          "field_path": "keyframes[2].stage"
+        },
+        {
+          "shot_id": "10",
+          "field_path": "frame_layouts.kfs[2]"
+        }
+      ],
+      "repairable": true
+    },
+    {
+      "code": "intra_shot_camera_conflict",
+      "severity": "visual_risk",
+      "message": "camera_movement 为「固定机位」，但要求「推近」；固定机位与运动镜头互斥",
+      "shot_id": 1,
+      "frame_id": "",
+      "entity_id": "",
+      "field_path": "motion_desc",
+      "evidence": "motion_desc：前2秒：固定机位 / camera_movement：推近",
+      "related_shot_ids": [],
+      "repair_targets": null,
+      "repairable": true
+    }
+  ],
+  "audit_status": "ok",
+  "detail": "达到 1 个修复轮上限后仍有 18 条 blocking（审计 3 + 确定性质量门 15）",
+  "artifacts": {}
+}

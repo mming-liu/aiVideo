@@ -1,0 +1,35 @@
+{
+ "novel": {
+  "path": "C:\\myFloders\\git\\aiVideo\\锦衣夜行_77119小说.txt",
+  "sha256": "5cea5ad4d02e93ba5e52aef1ff7bf358a5d8bd6445de8aeb662ecd5a60a4c422"
+ },
+ "scope": {
+  "novel_name": "锦衣夜行",
+  "book_index": 1,
+  "book_name": "杀青州",
+  "chapter": 1
+ },
+ "script": {
+  "path": "C:\\myFloders\\git\\aiVideo\\.dsh\\step01_fix_verify_20261115j\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\snapshots\\script_result_20261115_175552.json",
+  "sha256": "2259c5aaed5263ff8a0054bf06a0b791502cb7af3893a885228f8a303b62b557"
+ },
+ "plan": {
+  "path": "C:\\myFloders\\git\\aiVideo\\docs\\step01-layered-execution\\fixtures\\step01-run-j-plan.json",
+  "sha256": "ab60e25e32b578a311a11dd9e5ec65169b6b7f3a0e39f5644b0a9595dff50a06"
+ },
+ "issues": {
+  "path": "C:\\myFloders\\git\\aiVideo\\.dsh\\step01_fix_verify_20261115j\\output\\锦衣夜行\\part_01_杀青州\\chapter_001\\step01_audit.blocked.json",
+  "sha256": "24c878638758afa92792c94eb92a6352f6d2ea90adbef10e1902372a2df38141"
+ },
+ "budget": {
+  "max_sends": 4,
+  "repair_rounds": 2,
+  "audit_rounds": 2
+ },
+ "channel": {
+  "provider": "agent_plan",
+  "model": "deepseek-v4.1-flash"
+ },
+ "output_base": "C:\\myFloders\\git\\aiVideo\\.dsh\\step01_p04_run_20261115",
+ "note": "P04 固定输入：run j 冻结稿 + 冻结审计问题 + run j 计划（记录已通过当前验收）"
+}

@@ -1,0 +1,50 @@
+{
+ "plan_id": "828760d3ca36",
+ "shots": 14,
+ "shots_with_plan_refs": 14,
+ "dialogue_order": [
+  {
+   "shot": 11,
+   "plan_refs": {
+    "beats": [
+     9
+    ],
+    "lines": [
+     1
+    ]
+   },
+   "lines": [
+    "D1"
+   ]
+  },
+  {
+   "shot": 12,
+   "plan_refs": {
+    "beats": [
+     10
+    ],
+    "lines": [
+     2
+    ]
+   },
+   "lines": [
+    "D2"
+   ]
+  },
+  {
+   "shot": 13,
+   "plan_refs": {
+    "beats": [
+     11
+    ],
+    "lines": [
+     3
+    ]
+   },
+   "lines": [
+    "D3"
+   ]
+  }
+ ],
+ "event_contract": "passed（日志无 lines_order_violation）"
+}

@@ -22,6 +22,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
+class SendBudgetExceeded(BaseException):
+    """发送上限阻断（**不是** RuntimeError：候选循环的 `except RuntimeError` 会把它
+    当成"生成失败可重试"吞掉，预算耗尽必须直接终止并保留检查点）."""
+
+
 class CallCounter:
     """Count every provider POST; block after cap. No response rewriting."""
 
@@ -40,7 +45,7 @@ class CallCounter:
             (self.log_dir / ("blocked_%02d.json" % self.blocked)).write_text(
                 json.dumps({"reason": "cap %d" % self.cap}, ensure_ascii=False, indent=1),
                 encoding="utf-8")
-            raise RuntimeError("调用上限阻断：cap %d" % self.cap)
+            raise SendBudgetExceeded("调用上限阻断：cap %d" % self.cap)
         self.attempts += 1
         t0 = time.monotonic()
         try:
@@ -192,6 +197,9 @@ def main() -> int:
     error = ""
     try:
         m.main()
+    except SendBudgetExceeded as exc:
+        # 预算耗尽：**不重抛**——保存检查点、写报告（候选/产物按现状保留）
+        error = "send_budget_exhausted: %s" % exc
     except BaseException as exc:  # noqa: BLE001
         error = "%s: %s" % (type(exc).__name__, exc)
         raise
