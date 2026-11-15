@@ -120,7 +120,11 @@ def delta_field_violations(delta, allowed_fields) -> list:
             "path": field,
             "reason": "本轮通道不允许修改 %s（允许：%s）"
                       % (field, "、".join(sorted(allowed)) or "无"),
-            "fix": "改回本轮通道允许的字段；跨通道修改会被拒收",
+            "fix": "改回本轮通道允许的字段；跨通道修改会被拒收"
+                   + ("；`evidence_updates` 是**原文出处轴**，delta 通道改不了——"
+                      "出处不支持主张的修复由系统在核验后经 source_basis 通道自动发起，"
+                      "本轮不要碰它，也不要试图绕道改主张正文"
+                      if field == "evidence_updates" else ""),
         })
     return probs
 

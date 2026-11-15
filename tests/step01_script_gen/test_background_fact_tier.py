@@ -118,15 +118,16 @@ def test_outline_schema_rejects_non_list_background_facts():
 
 
 # ---------------------------------------------------------------------------
-# 额度（2026-11-15 用户批准：4 次）
+# 额度（2026-11-15 用户批准：先 4，同日第 2 次批准 6）
 # ---------------------------------------------------------------------------
-def test_revision_budget_default_raised_to_four():
-    """内容修复轮额度批准：DEFAULT_MAX_CALLS 3 → 4（第 4 次给内容修复留回旋）."""
-    assert DEFAULT_MAX_CALLS == 4
+def test_revision_budget_default_raised_to_six():
+    """内容修复轮额度批准：3 → 4 → 6（run 131952c 实测 4/4 用满仍剩两条主线 partial）."""
+    assert DEFAULT_MAX_CALLS == 6
 
 
 def test_budget_json_roundtrip_mentions_approval():
-    """批准出处可追溯：常量上方注释记录了 run 20261115T122229 的实测依据."""
+    """批准出处可追溯：常量上方注释记录了两次实测 run 依据."""
     src = (Path(__file__).resolve().parents[2]
            / "step01_script_gen" / "plan_revision.py").read_text(encoding="utf-8")
-    assert "20261115T122229" in src and "DEFAULT_MAX_CALLS = 4" in src
+    assert "20261115T122229" in src and "20261115T131952" in src
+    assert "DEFAULT_MAX_CALLS = 6" in src

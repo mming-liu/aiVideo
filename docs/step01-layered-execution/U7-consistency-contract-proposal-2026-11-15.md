@@ -366,3 +366,48 @@ run 20261115T122229 第 3 轮因声明缺失 `new:n05` 被拒即停，而拒收�
   正式重签 `7c0977f3f1aca95c → d423edafaa6072fb`，`model_sends=0`，
   `script_sha1` 未变。指纹失效来源：`deepseek_schema.py` 在 RULE 清单内
   （OUTLINE_SCHEMA 加字段）；`content_verification.py` 不在清单（验收层非质量门层）。
+
+## 12. Step01 全流程连续实测 6 轮（2026-11-15 下午，隔离根 b–h）
+
+额度批准（4→6）落地后连续 6 轮真实全流程（agent_plan / deepseek-v4.1-flash，
+全部授权订阅通道，正式章零接触）。**每轮都比上一轮走得更远，终局各不相同**：
+
+| run | 终局 | 关键事实 |
+|---|---|---|
+| b (`131952`) | plan 层 delta 违约 | 首版+2 轮 applied，第 4 轮槽位 `repair_slot_conflict`（f06/f08 同写 b05 不同文本） |
+| c (`131952c`) | plan 层额度耗尽 | 槽位轮 slots_applied（冲突规则引导生效，模型合并 f06+f08）；4/4 用满剩 f04/f09 partial |
+| d (`131952d`) | plan 契约无效 | 额度 5 轮没耗尽；终局是**主张-原文对齐**：f05「短刀」脑补、f02「便」因果拼接 |
+| e (`134330`) | commit 层补丁校验 | **plan 层首次收敛到 0 残余**；正文 11 镜 63.8s；终局 kfs 长度不匹配一轮即 BLOCK |
+| f (`140440`) | commit 层 G1 | 14 镜 81.1s；`MISSING_CAUSAL_EVENT`→`ACTION_CAUSALITY_GAP` 同镜换名被判「未再报出」 |
+| g (`140440g`) | **资源层**（非内容） | plan 0/10（首次零问题）；审计只剩 186s 墙钟（实际需 274–420s）SSE 未收完 |
+| h (`140440h`) | commit 层修复质量 | 12 镜 70.6s（时长带内）；修复轮 `layout_structure_invalid` 零改善终停 |
+
+### 12.1 本轮落地的确定性修复（全部带测试，回归全绿）
+
+1. **槽位同载体冲突规则**（`plan_content_repair.py`）：答卷指令+拒收信息带「合并文本」
+   出路——run c 直接生效（模型把 f06+f08 合并进 b05 一段文本）；
+2. **修订额度 4→6**（用户批准）：run d/e 均未再耗尽；
+3. **主张不得超出证据**（`outline.py` 契约）：f02/f05 违规形状写成显式规则；
+4. **route_field_violation 带通道指引**（`revision_route.py`）：evidence_updates 拒收
+   信息指明「出处轴走 source_basis 通道」；
+5. **kfs 长度校验信息带计数+修法**；`rejected_by_validation` 全量且拒因全为
+   配对表长度类时**导出带反馈重试**（v6.137 通道复用，混合拒因保持停止语义）；
+6. **G1 causal 族归并**（`_AUDIT_FAMILY_PATTERNS` 首位加 `causality_gap`）：
+   `MISSING_CAUSAL_EVENT`/`ACTION_CAUSALITY_GAP` 同族，跨轮换名不再误判；
+7. **总预算 900→1200s**（`STEP01_TOTAL_BUDGET_SEC` 默认值）：给最终语义审计留足
+   480s 余量。
+
+### 12.2 收敛态势与剩余瓶颈
+
+失败层逐轮后移：plan delta 契约 → plan 额度 → 主张质量 → commit 补丁校验 →
+G1 身份匹配 → 资源预算 → 修复补丁质量。**plan 层已两次零残余收敛**（e/g），
+逐字承载、时长带、事实核验全部就位。剩余瓶颈收敛到**单点**：
+
+- **修复轮补丁质量**（h）：模型给的 kf 补帧条目形状不过 `frame_layout_structural_violations`
+  （纯增删+条目形状验收）→ 零改善终停。判据本身正确（不伪造布局语义），
+  这是 deepseek-v4.1-flash 在 repair 答卷上的能力边界——候选出路：
+  (a) 修复轮换更强模型/开 thinking（成本决策）；(b) 补帧条目形状验收失败时把
+  具体违例回灌重试（本轮已为长度类开了先例，形状类可照搬）；(c) 接受零改善
+  BLOCK 并人工接管（现行 fail-closed 行为）。
+
+6 轮 + 7 项修复的完整证据链保留在 `.dsh/step01_full_20261115{b..h}/`。

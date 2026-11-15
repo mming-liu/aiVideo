@@ -263,3 +263,24 @@ def test_g1_deterministic_check_going_clean_is_a_valid_closure(chapter, monkeypa
 
     assert calls["n"] == 2
     assert summary["status"] == "COMMITTED", summary
+
+
+def test_causality_codes_share_one_family_across_renames():
+    """run 20261115T140440 实测：`MISSING_CAUSAL_EVENT` → `ACTION_CAUSALITY_GAP`
+    同镜换名，G1 曾判「未再报出」——causal 族归并后必须视为同一身份（重新报出）."""
+    import step01_script_gen.main as m
+
+    _prev = _issue_obj(code="model_audit_MISSING_CAUSAL_EVENT")
+    _now = _issue_obj(code="model_audit_ACTION_CAUSALITY_GAP")
+    assert (m._issue_family("model_audit_MISSING_CAUSAL_EVENT")
+            == m._issue_family("model_audit_ACTION_CAUSALITY_GAP")
+            == "causality_gap"), (m._issue_family("model_audit_MISSING_CAUSAL_EVENT"),
+                                  m._issue_family("model_audit_ACTION_CAUSALITY_GAP"))
+    _ident_prev = m._audit_issue_identity(_prev)
+    _ident_now = m._audit_issue_identity(_now)
+    assert _ident_prev == _ident_now, (_ident_prev, _ident_now)
+    # 重新报出（身份在 now 集合里）⇒ 不进未关闭清单
+    assert m._g1_unclosed_issues(
+        [_prev], {_ident_now}, {"shots": [{"index": 1, "prompt": "原样"}]},
+        prev_det_families=set(), now_det_families=set(),
+        det_checked=True) == []

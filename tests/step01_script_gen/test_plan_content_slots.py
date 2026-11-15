@@ -542,6 +542,9 @@ def test_two_slots_on_the_same_visual_merge_or_conflict():
                     "text": "改法二", "target_uid": "b01"}])
     _d, _p = pcr.compile_delta(_view, _slots, _diff)
     assert _d is None and [x["code"] for x in _p] == ["repair_slot_conflict"], _p
+    # 2026-11-15 实测 run 20261115T131952：拒收信息带修复指引（合并文本/换载体），
+    # 进下一轮反馈时模型知道出路，不再盲试。
+    assert "完全一致" in str(_p[0].get("detail") or _p[0]), _p
     _same = _answ([{"slot_id": "slot:fact:f02", "action": pcr.ACT_REWRITE,
                     "text": "同一改法", "target_uid": "b01"},
                    {"slot_id": "slot:fact:f05", "action": pcr.ACT_REWRITE,
@@ -942,3 +945,10 @@ def test_a_missing_uid_on_an_entity_path_is_still_an_identity_failure():
     assert not any("计划级聚合问题" in x for x in _found["unexpressible"]), _found["unexpressible"]
     _ok, _why, _ctx = o._content_slots_applicable(_f["plan"], [_bad])
     assert _ctx["state"] == pcr.STATE_UNKNOWN_TARGET, _ctx["state"]
+
+
+def test_slot_rule_head_carries_same_carrier_collision_rule():
+    """答卷指令必须告诉模型：同载体不许两槽写不同内容，合并文本是出路
+    （2026-11-15 实测第 4 轮 repair_slot_conflict 终局的 prompt 侧修复）。"""
+    _rule = pcr._render_slot_rule()
+    assert "不许把同一个" in _rule and "完全一致" in _rule, _rule[:400]

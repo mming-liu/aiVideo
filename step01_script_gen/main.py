@@ -5454,7 +5454,11 @@ def _assemble_keyframe_additions(target: dict, additions) -> tuple:
         lkfs.insert(idx, layout)
 
     if len(kfs) != len(lkfs):
-        return None, "装配后 keyframes 与 frame_layouts.kfs 长度不等"
+        return None, ("装配后 keyframes（%d 项）与 frame_layouts.kfs（%d 项）长度不等——"
+                      "整表替换 frame_layouts 时 kfs 必须与 keyframes 一一同序对应"
+                      "（kfs[i] 是第 i 个关键帧的布局）；缺帧/缺段请用 "
+                      "keyframe_additions（frame 与 layout 成对）补，不要整表重写 kfs"
+                      % (len(kfs), len(lkfs)))
     return out, ""
 
 
@@ -6171,6 +6175,10 @@ def _blocking_record_keys(state: dict | None,
 #: 归并才能比对「同一问题」，这是触达兜底单次记账与跨轮身份比对的事实源。
 #: 匹配子串、大小写不敏感、具体在前；都不命中 → family = 代码本身（保守不归并）。
 _AUDIT_FAMILY_PATTERNS: tuple = (
+    # 2026-11-15（run 20261115T140440 实测）：`MISSING_CAUSAL_EVENT` →
+    # `ACTION_CAUSALITY_GAP` 同镜换名被 G1 判「未再报出」。causal 族必须在
+    # `missing` 之前——前者同时含两个关键字，族归并取首个命中。
+    ("causality_gap", ("causal",)),
     ("future_state_in_frame", ("future_state", "result_shown", "_in_ff",
                                "_in_pre", "premature", "state_in_")),
     ("state_contradiction", ("contradict", "inconsistency", "mismatch",
@@ -9156,11 +9164,30 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 _logger.info(f"[REPAIR] 部分提交说明: {_info_only[:2]}")
         if _n_applied <= 0:
             _logger.warn("[WARN] 定向修复替换镜头均未通过校验，保留原版（未做任何后处理）")
+            _rejected_details = [str(x) for x in _rejected]
             _record_repair_unusable(repair_diag, _round, reason="rejected_by_validation",
-                                    detail="；".join(str(x) for x in _rejected[:3]),
+                                    detail="；".join(_rejected_details[:3]),
                                     raw_head=result.text,
                                     extra={"rejected": list(_rejected),
                                            "authorization": _auth_ledger})
+            # 2026-11-15（run 20261115T134330 实测）：**配对表长度类拒绝**是模型可
+            # 自行纠正的格式错误，不属于 v6.137 注释里「换个目标重发也解决不了」的
+            # 系统性越权——导出带反馈的重试状态（全量被拒且拒因同一类 ⇒ 不剔除目标，
+            # 下一轮同一批目标带反馈重发；审计经 _audit_memo 复用，不增审计调用），
+            # 预算仍由外层 §1.1 的 attempt 上限管住；其余拒因保持原停止语义。
+            _pair_len = [d for d in _rejected_details
+                         if ("长度不等" in d) or ("长度" in d and "≠" in d)]
+            if (retry_state is not None and _pair_len
+                    and len(_pair_len) == len(_rejected_details)):
+                retry_state.clear()
+                retry_state.update({"feedback": (
+                    "\n**上一轮补丁全部被校验拒收（配对表长度不一致）**：\n"
+                    "- %s\n"
+                    "- 整表替换 `frame_layouts` 时，它的 `ff/lf/kfs` 必须与镜头的 "
+                    "`keyframes` 数目一一同序对应（`kfs[i]` 是第 i 个关键帧的布局）；\n"
+                    "- 缺帧/缺段**不要**整表重写 `kfs`——只给 `keyframe_additions`"
+                    "（`frame` 与 `layout` 成对），由代码按 t_sec 装配。\n"
+                    % "；".join(_rejected_details[:3]))})
             return script
         _logger.info(f"[REPAIR] 应用完整镜头替换 {_n_applied} 镜")
         # M02：留一份「合并后、后处理前」的深拷贝——后处理是在**同一个对象**上
@@ -10672,12 +10699,17 @@ def _timing_dump(path) -> None:
 
 
 def _total_budget_sec() -> float:
-    """run 总预算（v6.70.3 默认 900s；0 = 不限时）."""
+    """run 总预算（v6.70.3 起默认 900s；2026-11-15 提到 1200s；0 = 不限时）.
+
+    2026-11-15（run 20261115T140440g 实测）：900s 下 plan/修复阶段方差一大，
+    最终语义审计只剩 186s 墙钟（审计实际耗时 274–420s）→ SSE 未收完按调用失败
+    BLOCK——内容全对、纯粹时间不够。1200s 给审计留足 480s 余量。
+    """
     import os as _os
     try:
-        _v = float(_os.getenv("STEP01_TOTAL_BUDGET_SEC", "900"))
+        _v = float(_os.getenv("STEP01_TOTAL_BUDGET_SEC", "1200"))
     except ValueError:
-        _v = 900.0
+        _v = 1200.0
     return _v
 
 
