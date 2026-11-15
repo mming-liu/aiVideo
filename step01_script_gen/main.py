@@ -46,6 +46,7 @@ from shared.config import (
     PROP_ASSET_EXTRACTION_ENABLED,
     COMPLIANCE_STRICT, COMPLIANCE_AUTO_FIX,
     HOOK_ENABLED,
+    HOOK_MAX_SENDS,
     GAP_ANALYSIS_ENABLED, GAP_MAX_REGEN_ATTEMPTS,
     SHOT_COUNT_REGEN_ENABLED,
     REPAIR_ROUNDS_ENABLED,
@@ -55,6 +56,8 @@ from shared.config import (
 # import 期 HOOK_ENABLED 快照：调用方/测试显式改写模块常量时视为强制覆盖，
 # 运行期判定让位于它；否则按调用时 env 重算（S16-1 根因 B）。
 _HOOK_ENABLED_DEFAULT = HOOK_ENABLED
+#: 钩子分类预算的 import 期快照（运行期以 env 为准，见 `_hook_max_sends`）。
+_HOOK_MAX_SENDS_DEFAULT = HOOK_MAX_SENDS
 
 # v6.23：大纲两阶段开关（ShortVideoDirector director-outline 吸收，默认开启）
 OUTLINE_ENABLED = os.getenv("OUTLINE_ENABLED", "1").strip() == "1"
@@ -3344,6 +3347,23 @@ def _is_hook_enabled() -> bool:
     if raw is None:
         return bool(HOOK_ENABLED)
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _hook_max_sends() -> int:
+    """运行期读取**钩子分类发送预算**（0..3；缺失/非法回退 import 期常量）.
+
+    2026-11-15（P05 实测）：钩子初始 1 次 + 重复重试 2 次 = 3 次，全部走同一通道；
+    固定输入验证需要把它收窄（如 1），否则审计/修复额度会被钩子挤占。
+    """
+    if HOOK_MAX_SENDS != _HOOK_MAX_SENDS_DEFAULT:
+        return max(0, int(HOOK_MAX_SENDS))
+    raw = os.environ.get("HOOK_MAX_SENDS")
+    if raw is None:
+        return max(0, int(HOOK_MAX_SENDS))
+    try:
+        return max(0, min(3, int(str(raw).strip())))
+    except (TypeError, ValueError):
+        return max(0, int(HOOK_MAX_SENDS))
 
 
 def _sync_missing_onscreen_layout_entries(script: dict) -> int:
@@ -13641,7 +13661,9 @@ def main() -> None:
         #   - 步骤③ _hook_dup_hits 比对时 shots 列表未变（避免 race）
         # ========================================================================
         _forbidden_lines: list[str] | None = None
-        if HOOK_ENABLED:
+        if HOOK_ENABLED and _hook_max_sends() > 0:
+            #: 钩子分类预算（初始 1 次 + 重复重试；上限 `_hook_max_sends()`）
+            _hook_sends = 0
             # ===== ① 提取 forbidden_lines（assert 保护调用顺序）=====
             _shots_for_hook = script.get("shots", [])
             assert _shots_for_hook, (
@@ -13663,6 +13685,7 @@ def main() -> None:
                 objects_bank=scene_objects_bank,
                 forbidden_lines=_forbidden_lines,  # 必传参数，v6.32 强约束
             )
+            _hook_sends += 1
             _timing_mark("hook_generation", ok=hook is not None)
 
             if hook:
@@ -13689,7 +13712,8 @@ def main() -> None:
                 # 穿帮（观众刚在钩子听到、又在下个镜头原样听到）。
                 _dup_hits = _hook_dup_hits()
                 _regen_attempt = 0
-                while _dup_hits and _regen_attempt < 2:
+                while (_dup_hits and _regen_attempt < 2
+                       and _hook_sends < _hook_max_sends()):
                     _regen_attempt += 1
                     _hook_line_prev = _speech_body(hook.get("narration_segment", ""))
                     _logger.warn(
@@ -13708,6 +13732,7 @@ def main() -> None:
                         novel_text, bank=character_bank, objects_bank=scene_objects_bank,
                         forbidden_lines=_forbidden_lines, dup_note=_dup_note,
                     )
+                    _hook_sends += 1
                     if not _hook_retry:
                         break  # 重生成失败，保留原钩子
                     hook = _hook_retry

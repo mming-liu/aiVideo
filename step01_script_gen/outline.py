@@ -1811,6 +1811,10 @@ PLAN_FIX_CAPABILITY = {
     "structure_narration_type": ("ops", "narration_lines"),
     "structure_narration_item": ("ops", "narration_lines"),
     "structure_hook_spoken_type": ("ops", "hook_spoken"),
+    # 背景事实表（`background_facts`）的结构错：声明键整表重给（整份计划重写可表达）
+    "structure_background_facts_type": ("plan_field", "background_facts"),
+    "structure_background_facts_duplicate": ("plan_field", "background_facts"),
+    "structure_background_facts_unknown_uid": ("plan_field", "background_facts"),
     # ---- 验收链本身的停止分支：判不了 / 根本没法核 ----
     "acceptance_incomplete": ("plan_field", "plan"),
     "plan_missing": ("plan_field", "plan"),

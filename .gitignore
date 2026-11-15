@@ -543,3 +543,11 @@ docs/memory-archive/claude-project-memory/
 # 本地/运行时文件，不入库（参考 AGENTS.md 纪律与 .pytest_tmp 同性质）
 start_studio.bat
 .dsh/
+!tests/step01_script_gen/test_plan_phase_d_wiring.py
+!tests/step01_script_gen/test_plan_phase_g_rejection_feedback.py
+!tests/step01_script_gen/test_plan_phase_h_call_evidence.py
+!tests/step01_script_gen/test_plan_phase_j_capability.py
+!tests/step01_script_gen/test_plan_phase_k_baseline_and_capability.py
+!tests/step01_script_gen/test_replay_transactions.py
+!tests/step01_script_gen/test_plan_voice_order_cache.py
+!tests/step01_script_gen/test_hook_budget.py

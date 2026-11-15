@@ -273,6 +273,9 @@ def _run_manifest(manifest: dict, *, dry_run: bool, max_sends_override: int | No
 
     script = json.loads(Path(checked["script"]["path"]).read_text(encoding="utf-8-sig"))
     plan = json.loads(Path(checked["plan"]["path"]).read_text(encoding="utf-8-sig"))
+    # C03：隔离根写入**既有格式**的计划缓存——提交点的恢复清单据此冻结计划身份
+    (chapter_dir / "chapter_outline.cache.json").write_text(
+        json.dumps({"outline": plan}, ensure_ascii=False), encoding="utf-8")
     payload = json.loads(Path(checked["issues"]["path"]).read_text(encoding="utf-8-sig"))
     if isinstance(payload, list):
         payload = {"issues": payload}
@@ -319,29 +322,39 @@ def _run_manifest(manifest: dict, *, dry_run: bool, max_sends_override: int | No
     block: list = []
     retry_state: dict = {}
     try:
-        # ---- 阶段 A：用**冻结审计问题**复现一次修复任务（1 轮）----
+        # ---- 阶段 A：冻结问题修复轮（**共享 retry_state**，首轮拒收后下一请求带真实反馈）----
         script_now = copy.deepcopy(script)
         repair_rounds = max(0, int(budget["repair_rounds"]))
-        if repair_rounds >= 1:
+        _repairs_used = 0
+        for _idx in range(repair_rounds):
             before = compute_script_revision(script_now)
             script_now = m._repair_shot_warnings(
                 copy.deepcopy(script_now), novel_text,
                 model=(checked.get("channel") or {}).get("model") or None,
-                audit_issues=issues,
+                # 冻结问题只喂第一轮；后续轮靠真实警告与上一轮拒收反馈
+                audit_issues=issues if _idx == 0 else [],
                 max_rounds=1,
                 repair_diag=diag,
                 block_reasons=block,
                 retry_state=retry_state,
             )
             after = compute_script_revision(script_now)
-            report["phases"].append({"phase": "repair", "round": 1,
+            _repairs_used += 1
+            report["phases"].append({"phase": "repair", "round": _idx + 1,
                                      "before": before, "after": after,
-                                     "changed": before != after})
+                                     "changed": before != after,
+                                     "feedback_carried": bool(
+                                         retry_state.get("feedback_records")
+                                         or retry_state.get("feedback"))})
+            # 没有变化且没有可续跑的纠正授权 ⇒ 不再空转（预算留给提交点审计）
+            if before == after and not retry_state.get("correction_granted"):
+                break
 
         # ---- 阶段 B：完整审计 + 隔离提交（复用唯一提交点）----
         # 提交点循环最多 `audit_rounds` 次审计；其内部修复轮上限 = 剩余修复预算，
         # 且不超过 `audit_rounds - 1`（最后一轮审计后不再修）。
-        _inner_repairs = max(0, min(repair_rounds - 1, int(budget["audit_rounds"]) - 1))
+        _inner_repairs = max(0, min(repair_rounds - _repairs_used,
+                                    int(budget["audit_rounds"]) - 1))
         m.STEP01_AUDIT_REPAIR_MAX_ROUNDS = _inner_repairs
         final, summary = m._commit_step01_outputs(
             script_now, novel_text, plan=plan, label="固定输入回放提交")
@@ -359,6 +372,21 @@ def _run_manifest(manifest: dict, *, dry_run: bool, max_sends_override: int | No
         report["sends_refused"] = counter["refused"]
         report["repair_diag"] = diag
         report["block_reasons"] = block
+        # C03：恢复清单实际生成且可静态装载
+        _snap_dir = chapter_dir / "snapshots"
+        _resume_snaps = (sorted(_snap_dir.glob("step01_resume_*.json"))
+                         if _snap_dir.is_dir() else [])
+        _recovery = {"path": str(_resume_snaps[-1]) if _resume_snaps else "",
+                     "loadable": False}
+        if _resume_snaps:
+            try:
+                from step01_script_gen import resume as _resume_mod
+                _man = json.loads(_resume_snaps[-1].read_text(encoding="utf-8"))
+                _resume_mod.validate_static(_man)
+                _recovery["loadable"] = True
+            except Exception as _exc:  # noqa: BLE001
+                _recovery["error"] = "%s: %s" % (type(_exc).__name__, _exc)
+        report["recovery"] = _recovery
         (output_base / "replay_report.json").write_text(
             json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     return report

@@ -173,6 +173,15 @@ SCRIPT_CANDIDATE_MODELS = [
     if m.strip()
 ]
 HOOK_ENABLED = os.getenv("HOOK_ENABLED", "1").strip() == "1"
+#: 钩子**分类发送预算**（2026-11-15 P05 实测：初始 1 次 + 重复重试 2 次 = 3 次，挤占了
+#: 审计/修复额度）。默认 3 = 改造前行为；固定输入验证可用 `HOOK_MAX_SENDS=1` 收窄。
+#: 0 = 不生成钩子（等价于关闭，但保留 `HOOK_ENABLED` 的语义分层）。
+try:
+    HOOK_MAX_SENDS = int(str(os.getenv("HOOK_MAX_SENDS", "3")).strip() or "3")
+except ValueError:
+    HOOK_MAX_SENDS = 3
+if HOOK_MAX_SENDS < 0 or HOOK_MAX_SENDS > 3:
+    raise ValueError("HOOK_MAX_SENDS must be within 0..3; got %r" % HOOK_MAX_SENDS)
 COMPLIANCE_STRICT = os.getenv("COMPLIANCE_STRICT", "0").strip() == "1"
 COMPLIANCE_AUTO_FIX = os.getenv("COMPLIANCE_AUTO_FIX", "1").strip() == "1"
 GAP_ANALYSIS_ENABLED = os.getenv("GAP_ANALYSIS_ENABLED", "1").strip() == "1"

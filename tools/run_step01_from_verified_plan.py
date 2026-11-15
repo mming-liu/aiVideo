@@ -113,6 +113,8 @@ def main() -> int:
         "DURATION_TARGET_MIN_SEC": str(budget["target_min"]),
         "DURATION_TARGET_MAX_SEC": str(budget["target_max"]),
         "VOICE_ADAPTATION_ENABLED": "1" if manifest.get("voice_adaptation_enabled") else "0",
+        # 钩子分类预算（P05 实测 3 次钩子会挤占审计/修复；固定计划运行默认 1）
+        "HOOK_MAX_SENDS": str(manifest.get("hook_max_sends", 1)),
         "SCRIPT_CANDIDATE_TOPK": "1",
         "SCRIPT_PARSE_RETRIES": "1",
         "GAP_ANALYSIS_ENABLED": "0",
@@ -191,6 +193,13 @@ def main() -> int:
         m.gen_hook_script = lambda *a, **k: captured_hook.get("hook")
     call_ledger.set_ledger_path(out / "calls" / "step01_calls.jsonl")
 
+    # **计划缓存**（C03）：隔离章节目录写入既有格式的计划缓存，提交点的
+    # 恢复清单（snapshots/step01_resume_*.json）才能冻结计划身份。
+    _chapter_dir = Path(m.CHAPTER_DIR)
+    _chapter_dir.mkdir(parents=True, exist_ok=True)
+    (_chapter_dir / "chapter_outline.cache.json").write_text(
+        json.dumps({"outline": plan}, ensure_ascii=False), encoding="utf-8")
+
     guard = CallCounter(real_post, cap=args.max_sends, log_dir=out / "calls")
     requests.post = guard
     started = time.monotonic()
@@ -217,6 +226,19 @@ def main() -> int:
     manifest_out = _read("step01_commit.json")
     quality = _read("step01_quality.json")
     audit = _read("step01_audit.json")
+    # C03：恢复清单必须实际生成且可静态装载（隔离根有计划缓存时才可能）
+    _recovery = {"path": "", "loadable": False, "error": ""}
+    _snap_dir = chapter / "snapshots"
+    _resume_snaps = sorted(_snap_dir.glob("step01_resume_*.json")) if _snap_dir.is_dir() else []
+    if _resume_snaps:
+        _recovery["path"] = str(_resume_snaps[-1])
+        try:
+            from step01_script_gen import resume as _resume
+            _man = json.loads(_resume_snaps[-1].read_text(encoding="utf-8"))
+            _resume.validate_static(_man)
+            _recovery["loadable"] = True
+        except Exception as _exc:  # noqa: BLE001
+            _recovery["error"] = "%s: %s" % (type(_exc).__name__, _exc)
     ledger = out / "calls" / "step01_calls.jsonl"
     ledger_rows = len(ledger.read_text(encoding="utf-8").splitlines()) if ledger.exists() else 0
     shots = (script or {}).get("shots") or []
@@ -225,6 +247,7 @@ def main() -> int:
         "attempts": guard.attempts, "transmitted": guard.transmitted,
         "blocked": guard.blocked, "ledger_rows": ledger_rows,
         "chapter_dir": str(chapter),
+        "recovery": _recovery,
         "commit": {"status": (manifest_out or {}).get("status"),
                    "detail": (manifest_out or {}).get("status_detail") or ""},
         "hook_present": bool((script or {}).get("hook")),
