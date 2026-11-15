@@ -1540,3 +1540,75 @@ def test_quote_style_variants_do_not_break_the_verbatim_source_gate():
     # 判别：正文真的不同时仍不相等（不是"什么都放行"）
     assert cv._norm("他道清寒幽冷的光芒‘噗’地一声便刺入。") != cv._norm(_novel)
     assert cv._norm(_novel + "多出的字") != cv._norm(_novel)
+
+
+# ---------------------------------------------------------------------------
+# ⑤ 背景档 partial 放行（2026-11-15 §10.6 两档判据；rule v5.background_tier.1）
+# ---------------------------------------------------------------------------
+def _two_fact_view(background=None):
+    """双事实视图：f01（主线）/ f02（可标背景档）；`background` 写进 plan_basis."""
+    _v = _view(claims=["周明去年递了辞呈", "账目随后由林青接管"])
+    if background is not None:
+        _v["plan_basis"] = dict(_v.get("plan_basis") or {},
+                                background_facts=background)
+    return _v
+
+
+def _unsupported_uids(probs):
+    return sorted(x["uid"] for x in probs if x["code"] == "verify_fact_unsupported")
+
+
+def test_background_partial_is_released_and_causal_partial_is_not():
+    """背景档 f02 partial ⇒ 放行；主线档 f01 partial 照旧拒收（同一份记录）."""
+    _v = _two_fact_view(background=["f02"])
+    _plan = cv.view_candidate(_v, _v)
+    _rec = _record(_v, verdict=cv.VERDICT_PARTIAL)
+    _got = _unsupported_uids(cv.verification_problems(
+        _rec, _v, plan=_plan, novel_text=_NOVEL, novel_digest=_NOVEL_DIGEST))
+    assert "f01" in _got and "f02" not in _got, _got
+
+
+def test_without_background_declaration_partial_is_still_rejected():
+    """缺省（未声明 background_facts）＝ 全部主线档：partial 照旧拒收（fail-closed）."""
+    _v = _two_fact_view()
+    _plan = cv.view_candidate(_v, _v)
+    _rec = _record(_v, verdict=cv.VERDICT_PARTIAL)
+    _got = _unsupported_uids(cv.verification_problems(
+        _rec, _v, plan=_plan, novel_text=_NOVEL, novel_digest=_NOVEL_DIGEST))
+    assert _got == ["f01", "f02"], _got
+
+
+def test_background_contradicted_and_unknown_are_still_rejected():
+    """放行**只限 partial**：背景档说反（contradicted）/判不了（unknown）照旧拒收."""
+    for _verdict, _code in ((cv.VERDICT_CONTRADICTED, "verify_fact_unsupported"),
+                            (cv.VERDICT_UNKNOWN, "verify_fact_unknown")):
+        _v = _two_fact_view(background=["f02"])
+        _plan = cv.view_candidate(_v, _v)
+        _rec = _record(_v, verdict=_verdict)
+        _got = cv.verification_problems(
+            _rec, _v, plan=_plan, novel_text=_NOVEL, novel_digest=_NOVEL_DIGEST)
+        _uids = [x["uid"] for x in _got if x["code"] == _code]
+        assert "f02" in _uids, (_verdict, _got)
+
+
+def test_background_uids_reader_prefers_plan_basis_over_plan():
+    """读取口径：`plan_basis.background_facts` 优先，视图没有时回退 `plan`."""
+    _v = _two_fact_view(background=["f02"])
+    _plan = cv.view_candidate(_v, _v)
+    # plan_basis 缺席时回退 plan 参数（同一候选的两份投影）
+    _v2 = _two_fact_view()
+    _got = cv._background_uids(_v2, _plan)
+    assert _got == frozenset({"f02"}), _got
+    # 都没有 ⇒ 空集
+    assert cv._background_uids(_two_fact_view(), None) == frozenset()
+
+
+def test_background_release_via_plan_parameter_alone():
+    """视图 plan_basis 缺席时，`plan.background_facts` 也能驱动放行（两个入口同口径）."""
+    _v = _two_fact_view()
+    _plan = cv.view_candidate(_v, _v)
+    _plan["background_facts"] = ["f02"]
+    _rec = _record(_v, verdict=cv.VERDICT_PARTIAL, digest=cv.plan_digest_of(_plan))
+    _got = _unsupported_uids(cv.verification_problems(
+        _rec, _v, plan=_plan, novel_text=_NOVEL, novel_digest=_NOVEL_DIGEST))
+    assert "f02" not in _got and "f01" in _got, _got

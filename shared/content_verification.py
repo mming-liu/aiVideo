@@ -58,7 +58,10 @@ EXECUTABLE_VERDICTS = (VERDICT_SUPPORTED,)
 #: `evidence[]`（每项一个载体 + 一段逐字正文），于是"对白＋画面各表达一部分"这种
 #: **联合承载**能被无损记录。旧规则的记录**不许复用**——版本变了就重新核验
 #: （`seed` / 缓存读回 / 最终验收三处都按它判）。
-DEFAULT_RULE_VERSION = "content_verification.v5.span_checkpoints.2"
+DEFAULT_RULE_VERSION = "content_verification.v5.background_tier.1"
+#: 版本 bump 记录（2026-11-15 §10.6 两档判据）：验收判据行为变化——**背景档**事实的
+#: `partial` 载体裁决放行（不再判 `verify_fact_unsupported`）。旧版本记录的结论语义
+#: 不再同版，按既有口径强制重新核验。
 
 #: 一次运行里最多核验几份计划摘要（首版 + 3 次修订）。
 MAX_VERIFICATIONS_PER_RUN = 4
@@ -1397,7 +1400,26 @@ def fact_identity_problems(record, view) -> list:
     return _p
 
 
-def _fact_axis_problems(record, view) -> list:
+def _background_uids(view, plan=None) -> frozenset:
+    """**背景档**事实 uid 集合：视图 `plan_basis.background_facts` 优先，回退 `plan`.
+
+    两处必须是**同一候选的两个投影**（工作包 1 第 1 条）；都取不到 ⇒ 空集
+    （fail-closed：没有声明就没有放行，缺省全部按主线档全量核验）。
+    """
+    src = None
+    if isinstance(view, dict):
+        _pb = view.get("plan_basis")
+        if isinstance(_pb, dict) and "background_facts" in _pb:
+            src = _pb.get("background_facts")
+    if src is None and isinstance(plan, dict):
+        src = plan.get("background_facts")
+    if not isinstance(src, list):
+        return frozenset()
+    return frozenset(str(x).strip() for x in src
+                     if isinstance(x, str) and x.strip())
+
+
+def _fact_axis_problems(record, view, *, background_uids=frozenset()) -> list:
     """**载体轴**：`supported` 的事实必须给出**逐字出自实际载体正文**的支持片段.
 
     抽出来是因为它有两个入口：完整验收（`verification_problems`）与**隔离展示任务**
@@ -1417,6 +1439,15 @@ def _fact_axis_problems(record, view) -> list:
                                    "事实 %s 无法判定支持关系（unknown）——**不能**据此判通过；"
                                    "缺信息要补齐或换载体" % _fu))
                 else:
+                    if _v == VERDICT_PARTIAL and _fu in background_uids:
+                        # **背景档 partial 放行**（2026-11-15 §10.6 两档判据）：
+                        # 不承担主线因果解释责任的纯背景事实（人物过往履历等），
+                        # 载体只表达了一半不进修复轮耗额度。实测
+                        # run 20261115T122229：f02/f03 两条背景 partial 与主线问题
+                        # 混进同一轮修复请求，模型试图一个 delta 全修、under-defined
+                        # 被拒。**只放行 `partial`**——说反（contradicted）与判不了
+                        # （unknown）照旧拒收：说反比缺一半严重，与档位无关。
+                        continue
                     _p.append(_rec("verify_fact_unsupported", "verification", _fu,
                                    "事实 %s 的实际载体**没有完整表达**这条事实（%s）：%s%s"
                                    % (_fu, _v,
@@ -1494,7 +1525,8 @@ def display_problems(record, view, *, decomposition=None) -> list:
     _p = display_record_integrity_problems(record, view, decomposition=decomposition)
     if _p:
         return _p
-    _p += _fact_axis_problems(record, view)
+    _p += _fact_axis_problems(record, view,
+                              background_uids=_background_uids(view))
     return _p
 
 
@@ -1734,7 +1766,8 @@ def verification_problems(record, view, *, decomposition=None,
                 _p.append(_rec("verify_source_span_unverifiable", "verification", _fu,
                                "事实 %s 的来源片段无法核对（没有原文正文）——"
                                "支持片段必须能在本次冻结原文里定位" % _fu))
-    _p += _fact_axis_problems(record, view)
+    _p += _fact_axis_problems(record, view,
+                              background_uids=_background_uids(view, plan))
 
     # ---- 义务轴：整项 `supported` 必须覆盖该事实的**全部**义务（v2 新增，与上面三轴分账）----
     _p += obligation_axis_problems(record, view, decomposition=decomposition)

@@ -72,6 +72,7 @@ OUTLINE_PROMPT = """
   "key_scenes": ["关键场景1", "场景2", ...],
   "required_facts": ["事实A｜原文证据：“原文原句”｜承载：B2/台词1",
                      "事实B｜原文证据：“原文原句”｜承载：B7/画面"],
+  "background_facts": ["f02"],
   "causal_chain": ["起因→行动→结果→悬念"],
   "character_motives": ["角色：想做什么；为什么；原文证据：..."],
   "shot_beats": ["节拍：...｜本镜信息目的：...｜原文依据：...｜载体：台词k 或 旁白k 或 画面"],
@@ -113,6 +114,14 @@ OUTLINE_PROMPT = """
   （让镜头真的拍出来）；② 在 `dialogue_lines` 里选一句**人物台词**把它说出口
   （逐字来自原文；**旁白/叙述句不算台词**，不得把叙述文字改标成台词），并按编号声明承载；
   ③ 本集确实拍不出也说不出口，就**不要列进 required_facts**。
+  **背景档**（2026-11-15 §10.6 两档判据，可选）：**不承担主线因果解释责任**的纯背景
+  事实（人物过往履历、身世细节——观众不知道也不影响看懂本集因果），登记后可在计划里
+  另立 `"background_facts": ["f02", ...]`（**已登记事实的编号**，按 required_facts
+  顺序 f01/f02/…）声明为背景档：背景档事实表达不完整（partial）时**放行**，不再进
+  修复轮耗额度。**主线因果事实（身份揭示、动作因果、结局走向）不许列入**——判据对
+  它们照旧全量核验；声明了不在清单里的编号会被拒收。不声明就全部按主线档（缺省从严）。
+  注意：背景档**不是逃避表达的借口**——能表达就表达，它只是承认「这条信息观众
+  不知道也不影响看懂」的登记选择；说反了（contradicted）照样拒收。
   **第三种承载：图外旁白**（2026-09-30 复核第 6 轮裁决）——原文**叙述**里必须让观众知道、
    **画面又拍不出来**的内容（身份、年龄、来历、前情），可以由图外旁白讲出来：把它写成
   `narration_lines` 里的一条（**原文叙述的完整句子，逐字**），让某条节拍标 `载体：旁白k`，
@@ -1291,6 +1300,38 @@ def outline_structure_problems(plan) -> list:
     if "hook_spoken" in plan and not isinstance(plan.get("hook_spoken"), list):
         _rec("structure_hook_spoken_type", "hook", None, "hook_spoken",
              "`hook_spoken` 必须是数组（v3 契约）")
+
+    # ---- 背景档声明（2026-11-15 §10.6 两档判据；可选字段，缺席 = 全部主线档）----
+    _bg = plan.get("background_facts")
+    if _bg is not None:
+        if not isinstance(_bg, list) or any(
+                not isinstance(x, str) or not x.strip() for x in _bg):
+            _rec("structure_background_facts_type", "plan", None, "background_facts",
+                 "`background_facts` 必须是**逐项非空字符串**的数组（必保留事实的"
+                 "编号，如 [\"f02\",\"f03\"]；现在是 %s）" % type(_bg).__name__)
+        else:
+            _dup = sorted({x for x in _bg if _bg.count(x) > 1})
+            if _dup:
+                _rec("structure_background_facts_duplicate", "plan", None,
+                     "background_facts",
+                     "`background_facts` 有重复 uid：%s——同一事实声明两次没有意义"
+                     % _dup)
+            _rf = plan.get("required_facts")
+            _n_facts = len(_rf) if isinstance(_rf, list) else 0
+            _pres = plan.get("presentation")
+            _decl = _pres.get("fact_uids") if isinstance(_pres, dict) else None
+            if (isinstance(_decl, list) and len(_decl) == _n_facts
+                    and all(isinstance(x, str) and x.strip() for x in _decl)):
+                _known = [str(x).strip() for x in _decl]
+            else:
+                _known = ["f%02d" % _i for _i in range(1, _n_facts + 1)]
+            _unk = [x for x in _bg if x.strip() not in _known]
+            if _unk:
+                _rec("structure_background_facts_unknown_uid", "plan", None,
+                     "background_facts",
+                     "`background_facts` 引用了不存在的事实编号：%s（现有 %s）"
+                     "——背景档只收**已登记**的必保留事实编号"
+                     % (_unk, _known))
     return _with_protocol_fields(_out)
 
 
