@@ -328,7 +328,16 @@ def _plan_frame_state(unit: dict, shot_dir: Path, characters: list,
     is_ff = frame_kind == "first_frame"
     path = shot_dir / (FIRST_FRAME_FILENAME if is_ff else LAST_FRAME_FILENAME)
     hash_path = shot_dir / ("frame_hash.txt" if is_ff else "last_frame_hash.txt")
-    if not path.is_file() or not hash_path.is_file():
+    if not path.is_file():
+        return "generate"
+    # U7 收口（2026-11-15）：锁保帧防覆写已接入生成链（哈希失配/--force 均保留
+    # 原图）——plan 口径同步：锁定且原图可读 ⇒ 真实运行零 POST，报 locked，
+    # 不得计入 generate（否则预检账单会虚增待生成量）。
+    from shared.vimax_bridge import _frame_is_protected, _validate_frame
+    if (_frame_is_protected(unit, path, frame_kind)
+            and _validate_frame(str(path))):
+        return "locked"
+    if not hash_path.is_file():
         return "generate"
     try:
         limit = active_image_ref_limit()
@@ -383,7 +392,9 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames,
     """零网络账单预检：列出本次会生成多少张肖像/场景/道具/分镜帧.
 
     计数口径：肖像/场景/道具按文件存在性；分镜帧按“文件存在 + 内容哈希匹配”
-    判断（与生成器缓存判据一致），哈希不匹配的旧帧计为 generate。参考图超
+    判断（与生成器缓存判据一致），哈希不匹配的旧帧计为 generate；
+    **锁保帧**（.lock_frame 且原图可读）计为 locked——真实运行零 POST
+    （U7 收口：防覆写护栏保证哈希失配/--force 不重画锁保原图）。参考图超
     模型上限时不落盘参考表，保守退回文件存在性判断。
     """
     import json
@@ -555,7 +566,8 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames,
         "visual_plan_status": visual_plan.get("status", "blocked"),
         "visual_plan_issues": plan_issues,
         "execution_binding": visual_plan.get("execution_binding"),
-        "note": "分镜帧按文件存在 + 内容哈希判断；哈希不匹配的旧帧计为 generate",
+        "note": "分镜帧按文件存在 + 内容哈希判断；哈希不匹配的旧帧计为 generate；"
+                "锁保帧（.lock_frame）计为 locked（真实运行保留原图，零 POST）",
     }
 
 

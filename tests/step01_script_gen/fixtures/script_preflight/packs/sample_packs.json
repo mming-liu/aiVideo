@@ -381,6 +381,18 @@
           "why": "同一事实只在 prompt 里出现一次，motion 用不同措辞。"
         },
         {
+          "id": "legal_ff_lf_shared_appearance",
+          "kind": "legal",
+          "patches": [
+            {"shot": 0, "path": "ff_desc",
+             "value": "他立于渡口，主角面容：方正轮廓，眉目疏朗，鬓发束整，神情沉静，远眺江面。"},
+            {"shot": 0, "path": "lf_desc",
+             "value": "主角面容：方正轮廓，眉目疏朗，鬓发束整，神情沉静，转身回望，衣角微动。"}
+          ],
+          "expected": {"issues": []},
+          "why": "首尾帧合法复用同一角色外观描述（同人同貌是硬要求）——ff↔lf 整块复用豁免，不得判缺陷。"
+        },
+        {
           "id": "defect_verbatim_injection",
           "kind": "defect",
           "patches": [

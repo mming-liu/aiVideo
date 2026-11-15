@@ -1274,6 +1274,27 @@ def _del_frame_unless_protected(shot, frame_path, hash_path, label, idx, logger,
     return True
 
 
+def _keep_protected_frame(shot, frame_path, frame_kind: str, logger, label, idx,
+                          kf_index: int | None = None) -> bool:
+    """受保护帧防覆写：原图存在、锁定且可读 ⇒ 不重新生成（--force 也不覆写）.
+
+    2026-11-15（U7 收口）：``.lock_frame`` 原先只拦「QC critical 删帧」——哈希
+    失配（如参考表落点/fit_refs 调整改变哈希键）与 ``--force`` 仍会原位覆写已
+    验收原图。锁保语义补全为「**不删、也不覆写**」：确需重生时由人工移除
+    标记文件（或解除 STEP02A_PROTECTED_FRAMES）。原图不可读（损坏/截断）
+    时不拦，允许照常重生成。
+    """
+    path = Path(frame_path)
+    if not path.exists() or not _frame_is_protected(shot, frame_path, frame_kind, kf_index):
+        return False
+    if not _validate_frame(str(path)):
+        logger.verbose(f"  [FRAME] {label} shot_{idx} 已锁定但原图不可读，按未锁定处理重新生成")
+        return False
+    logger.verbose(f"  [FRAME] {label} shot_{idx} 受保护：跳过重新生成，保留原图"
+                   "（哈希失配/--force 不覆写锁保帧；确需重生请删除 .lock_frame 标记）")
+    return True
+
+
 def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
                             reference_paths: list | None = None,
                             lock_kind: str = "layout",
@@ -3998,6 +4019,10 @@ async def _gen_first_frame_async(
     if action_lock is not None:
         gen_kwargs["lock_prompt"] = action_lock
 
+    # U7 收口（2026-11-15）：锁保帧防覆写——已验收原图不因哈希失配/--force 被重画。
+    if _keep_protected_frame(shot, ff_path, "first_frame", logger, "首帧", idx):
+        return str(ff_path)
+
     for attempt in range(max_retries + 1):
         if ff_path.exists() and not force and attempt == 0:
             # 检查哈希文件是否存在且匹配
@@ -4209,6 +4234,10 @@ async def _gen_last_frame_async(
     # S04：生成与 --plan-only 预检共用同一组装入口。
     lf_desc_full = compose_frame_prompt(shot, characters, "last_frame", desc=lf_desc)
     # ---- lf prompt 组装结束 ----
+
+    # U7 收口（2026-11-15）：锁保帧防覆写——已验收原图不因哈希失配/--force 被重画。
+    if _keep_protected_frame(shot, lf_path, "last_frame", logger, "尾帧", idx):
+        return str(lf_path)
 
     for attempt in range(max_retries + 1):
         if lf_path.exists() and not force and attempt == 0:
@@ -4513,7 +4542,13 @@ async def _gen_keyframes_async(
             shot, empty_scene, reference_paths, lock_kind="no_layout",
             extra_fields={"kf_desc": kf_desc, "kf_t": time_ratio},
             characters=characters, frame_kind="keyframe")
-        
+
+        # U7 收口（2026-11-15）：锁保帧防覆写——已验收原图不因哈希失配/--force 被重画。
+        if _keep_protected_frame(shot, kf_path, "keyframe", _kf_logger,
+                                 f"关键帧{i}", idx, kf_index=i):
+            kf_paths.append(str(kf_path))
+            continue
+
         for attempt in range(max_retries + 1):
             if kf_path.exists() and not force and attempt == 0:
                 if kf_hash_path.exists():

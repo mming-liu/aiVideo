@@ -22,6 +22,14 @@ def _png(path: Path, color=(200, 40, 40)) -> Path:
     return path
 
 
+def _big_png(path: Path, color=(200, 40, 40)) -> Path:
+    """≥5KB 的帧图（`_validate_frame` 的最小尺寸阈值）."""
+    frame = _png(path, color)
+    with open(frame, "ab") as f:
+        f.write(b"\x00" * 6000)
+    return frame
+
+
 class _Logger:
     def __init__(self):
         self.lines: list[str] = []
@@ -125,3 +133,54 @@ def test_plan_frame_state_does_not_write_sheets(tmp_path, monkeypatch):
     assert not list(shot_dir.glob("ref_sheet_*"))
     assert not (shot_dir / "ref_compose_ff.json").exists()
     assert frame.exists()
+
+
+# ---------------------------------------------------------------------------
+# U7 收口（2026-11-15）：锁保帧防覆写——`.lock_frame` 不只拦删除，
+# 哈希失配 / --force 的原位覆写也必须被拦住。
+# ---------------------------------------------------------------------------
+
+def test_keep_protected_frame_keeps_valid_locked_original(tmp_path):
+    frame = _big_png(tmp_path / "first_frame.png")
+    (tmp_path / ".lock_frame").write_text("approved", encoding="utf-8")
+    logger = _Logger()
+    assert vimax_bridge._keep_protected_frame(
+        _shot(2), frame, "first_frame", logger, "首帧", 2) is True
+    assert any("受保护" in line for line in logger.lines)
+
+
+def test_keep_protected_frame_not_locked_or_missing(tmp_path):
+    logger = _Logger()
+    # 未锁：不拦
+    frame = _png(tmp_path / "first_frame.png")
+    assert vimax_bridge._keep_protected_frame(
+        _shot(2), frame, "first_frame", logger, "首帧", 2) is False
+    # 锁了但文件不存在：不拦
+    (tmp_path / ".lock_frame").write_text("x", encoding="utf-8")
+    assert vimax_bridge._keep_protected_frame(
+        _shot(2), tmp_path / "first_frame.png", "first_frame", logger, "首帧", 2) is False
+
+
+def test_keep_protected_frame_corrupt_original_falls_through(tmp_path):
+    """锁了但原图损坏/过小（不可读）→ 保护不生效，允许照常重生成."""
+    frame = tmp_path / "first_frame.png"
+    frame.parent.mkdir(parents=True, exist_ok=True)
+    frame.write_bytes(b"\x89PNG\r\n\x1a\n")  # 8 字节假 PNG，低于 _validate_frame 阈值
+    (tmp_path / ".lock_frame").write_text("x", encoding="utf-8")
+    logger = _Logger()
+    assert vimax_bridge._keep_protected_frame(
+        _shot(2), frame, "first_frame", logger, "首帧", 2) is False
+    assert any("不可读" in line for line in logger.lines)
+
+
+def test_plan_frame_state_reports_locked_without_generation(tmp_path):
+    """锁定且原图可读 ⇒ plan 报 locked（真实运行零 POST），不计入 generate."""
+    from step02a_frame_gen import main as step02a_main
+
+    shot_dir = tmp_path / "shots" / "2"
+    shot_dir.mkdir(parents=True)
+    _big_png(shot_dir / "first_frame.png")
+    (shot_dir / ".lock_frame").write_text("approved", encoding="utf-8")
+    # 哈希文件缺失（或写个必然失配的值）都应报 locked 而非 generate
+    state = step02a_main._plan_frame_state(_shot(2), shot_dir, [], "first_frame")
+    assert state == "locked"

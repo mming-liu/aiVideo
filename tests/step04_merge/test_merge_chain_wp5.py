@@ -165,6 +165,21 @@ def test_step04_merge_produces_final_mp4(tmp_path, monkeypatch):
         _voice(audio, str(unit["text"]), str(NARRATOR_VOICE.get("id", "")))
         narration_ids.append(n)
 
+    # 3.5) Step E 声音准入：真实合成完成后，按 step03 同一口径落 confirmed
+    # 状态（正式合成门禁读 chapter_001/voice_state.json，缺失/漂移一律拒收）。
+    from shared import voice_state as vs
+    tracks = [{"unit_id": "shot-%d" % idx, "kind": "tts_dialogue",
+               "shot_index": idx, "path": str(paths.audio_file(idx))}
+              for idx in dialogue_shots]
+    tracks += [{"unit_id": "narration-N%d" % n, "kind": "narration",
+                "path": str(paths.narration_audio_file(n))}
+               for n in narration_ids]
+    report_vs = vs.build_voice_state(script, tracks=tracks, scope={"chapter": 1},
+                                     script_revision=rev, source="test_stub")
+    assert report_vs["state"] == "confirmed", report_vs["blocking"]
+    from shared.json_io import atomic_dump_json
+    atomic_dump_json(ch / vs.FILENAME, report_vs)
+
     # 4) 真实合并入口
     import step04_merge.main as m
     # 章号常量是 import 期求值；本用例只对 chapter_001 副本出片，必须钉住副本章号，

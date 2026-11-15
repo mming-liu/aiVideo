@@ -140,7 +140,31 @@ def _prepare(tmp_path: Path):
         "VOLCENGINE_I2V_MODEL": "doubao-seedance-1-0-pro-250528",
         "PYTHONPATH": str(_REPO),
     }
+    _write_voice_state(ch, revision)
     return ch, env
+
+
+def _write_voice_state(ch: Path, revision: str) -> None:
+    """Step E 声音准入预置：stub 片段无音轨 ⇒ voice_required=True，
+    正式合成门禁要求 confirmed 的 voice_state.json（真实 WAV + ffprobe 探时长）."""
+    import wave
+    from shared import voice_state as vs
+    audio = ch / "audio" / "narration_N1.wav"
+    audio.parent.mkdir(parents=True, exist_ok=True)
+    w = wave.open(str(audio), "wb")
+    w.setnchannels(1)
+    w.setsampwidth(2)
+    w.setframerate(16000)
+    w.writeframes(b"\x00\x00" * 16000 * 2)  # 2 秒静音
+    w.close()
+    report = vs.build_voice_state(
+        {"script_revision": revision},
+        tracks=[{"unit_id": "narration-N1", "kind": "narration",
+                 "path": str(audio)}],
+        script_revision=revision, source="test_stub")
+    assert report["state"] == "confirmed", report["blocking"]
+    (ch / vs.FILENAME).write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def test_step04_subset_merge_encodes_isolated_outputs(tmp_path):

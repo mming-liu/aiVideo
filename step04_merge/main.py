@@ -1043,6 +1043,31 @@ def _shot_audio_hashes(valid_shots, resolve) -> dict:
   return hashes
 
 
+def _assert_voice_gate(chapter_dir, *, script_revision: str, voice_required: bool,
+                       dry_run: bool) -> dict:
+  """Step E 声音准入的唯一接线点（Step 04 正式合成入口）.
+
+  正式合成（``dry_run=False``）要求 ``voice_state.json`` 为 ``confirmed`` 且
+  ``script_revision`` 与本次正式稿一致；``prepared`` / 缺失 / 版本漂移一律
+  fail-closed 拒收（``VoiceStateError``）。``--dry-run`` 只推演时间线，不消费
+  音频字节，允许在 ``prepared`` 下继续，但仍把差异打进日志。
+  """
+  from shared import voice_state
+  try:
+    report = voice_state.assert_voice_state(
+        Path(chapter_dir) / voice_state.FILENAME, script_revision=script_revision,
+        voice_required=voice_required, dry_run=dry_run)
+  except voice_state.VoiceStateError as exc:
+    _logger.error("[VOICE-STATE] 拒收（%s）：%s" % (exc.code, exc.message))
+    raise
+  _logger.info("[VOICE-STATE] status=%s gate=%s units=%d/%d revision=%s reasons=%s"
+               % (report.get("status"), report.get("gate"),
+                  report.get("units_confirmed"), report.get("units_required"),
+                  str(report.get("script_revision") or "")[:12],
+                  report.get("reasons") or []))
+  return report
+
+
 def main(options=None):
   """step04 入口。``options=None`` 时取模块顶部已解析的 ``_options``（不二次解析）."""
   opts = options if options is not None else _options
@@ -1368,6 +1393,15 @@ def _run_merge(options, attempt):
         "[WARN] 本模式的对白不是独立音轨（原生发声），其开口时间**无法探测**："
         "旁白起点是按**估时**避让的，不保证与原生语音不重叠。"
         "需要精确错峰请在 tts_mix 模式（独立对白轨，时长可实测）下合并。")
+
+  # 6.4 声音准入（Step E）：正式合成要求本章有声单元处于 confirmed，且绑定
+  # revision 与本次正式稿一致。prepared/缺失/版本漂移一律 fail-closed 拒收；
+  # --dry-run 允许在 prepared 下推演时间线（不消费音频字节），差异进报告。
+  _voice_required = bool(_policy.tts_required or _policy.narration_tts_required
+                         or _narr_for_policy)
+  _voice_gate = _assert_voice_gate(
+      CHAPTER_DIR, script_revision=script_revision,
+      voice_required=_voice_required, dry_run=_dry_run)
 
   # 6.5 动效叠加（--motion-plan）：局部时间 → 镜头窗内绝对时间；越界/重复/跨 revision 拒收
   overlays = ()

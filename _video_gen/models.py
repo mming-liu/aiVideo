@@ -53,6 +53,9 @@ class VideoGenerationRequest:
     #: {"mode", "items":[{path,role}], "dropped":[...], "modifications":[...]}。
     #: 只作解释性事实，不参与 request_key；provider 会把它并进 PreparedVideoRequest.modifications。
     media_selection: Optional[dict] = None
+    #: G3（参考清单先行）：``参考图k=身份`` 绑定清单与正文绑定段。
+    #: 只作解释性事实（正文已含该段），不单独参与 request_key。
+    ref_binding: Optional[dict] = None
 
     def __post_init__(self):
         if self.extra_keyframe_paths is None:

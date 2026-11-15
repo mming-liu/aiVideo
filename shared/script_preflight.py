@@ -29,7 +29,9 @@
   C4 `location_drift`        镜内关键帧描述出现「硬切/转至/来到…」+ 与 `location`
                              不一致的地点词 → advisory
   C5 `stage_progress_mismatch` stage=`pre` 但该帧描述已是完成态（已/完成/结束）→ advisory
-  C6 `duplicate_injection`   跨字段 24 字重复注入（step02a 真实入口的硬阻断判据）→ hard
+  C6 `duplicate_injection`   字段内 24 字重复注入 / 非首尾帧字段的跨字段整块搬运
+                             （step02a 真实入口的硬阻断判据）→ hard；
+                             ff↔lf 同块复用（同人同貌）属合法复用，豁免
   C7 `image_prompt_leak`     图片提示词里的运镜词泄漏等 → advisory
 """
 from __future__ import annotations
@@ -312,19 +314,80 @@ def check_stage_progress(shot: dict) -> list[dict]:
     return issues
 
 
+#: C6 逐字段自检的字段与 frame 标签（每个字段在真实入口都是独立成段的 prompt 素材）
+_C6_FIELDS = (("prompt", "prompt"), ("ff_desc", "ff"), ("lf_desc", "lf"),
+              ("motion_desc", "motion"))
+_C6_JOIN_LABEL = "prompt/ff/lf/motion"
+
+
+def _duplicate_cross_field(texts: dict) -> list[str]:
+    """跨字段 ≥24 字整块搬运（ff↔lf 合法复用豁免）.
+
+    2026-11-15 修订：首尾帧**合法复用**同一角色外观描述（同人同貌是硬要求）
+    不得判缺陷——豁免 ff_desc↔lf_desc 这一对；其余字段对的整块逐字搬运
+    （如把 prompt 里的描述段原样搬进 motion_desc）是模板拼接事故，保留 hard。
+    """
+    fields = [k for k, _lbl in _C6_FIELDS if _norm(texts.get(k))]
+    issues: list[str] = []
+    for i, a in enumerate(fields):
+        for b in fields[i + 1:]:
+            if {a, b} == {"ff_desc", "lf_desc"}:
+                continue  # 首尾帧同人同貌 = 合法复用，不是重复注入
+            ta, tb = texts.get(a) or "", texts.get(b) or ""
+            for p in range(0, max(0, len(ta) - 24 + 1)):
+                win = ta[p:p + 24]
+                if win and win in tb:
+                    issues.append("描述块跨字段重复注入（%s ↔ %s）：「%s…」整块搬运"
+                                  % (a, b, win[:24]))
+                    break
+    return issues
+
+
 def check_duplicate_injection(shot: dict) -> list[dict]:
-    """C6：跨字段 24 字重复注入（step02a 真实入口的硬阻断判据）."""
+    """C6：字段内确定性矛盾/重复注入 + 跨字段整块搬运（step02a 真实入口的硬阻断判据）.
+
+    2026-11-15 修订（Step E 收口用户复核意见）：原先把 prompt/ff_desc/lf_desc/
+    motion_desc 四字段拼成**一份**文本再跑 find_contradictions——
+
+      · 首尾帧合法复用同一角色外观描述（同人同貌）被 24 字重复块判成 hard；
+      · ff 持械、lf 弃械这类**合法时序推进**会被「持有/否认」判据误伤；
+      · ff 前态 + lf 伤情结束态会被 ff_lf_stage_conflict 误伤。
+
+    根因：真实入口从不把两个字段拼成同一份提交 prompt——图片侧 ff/lf 各自
+    独立提交（`_build_final_frame_prompt` 单字段成稿）；视频侧 motion_desc 与
+    prompt 处处是二选一（`motion_desc or prompt`），从不并拼。跨字段拼接
+    只会制造假阳性。
+
+    新口径：**逐字段**自检（与 step02a 真实入口逐帧 prompt 检查同一语义，
+    字段内部矛盾/重复注入 → hard，frame 标签为字段名）；跨字段整块搬运
+    另走 `_duplicate_cross_field`（ff↔lf 豁免，其余保留 hard，frame 标签
+    沿用「prompt/ff/lf/motion」以保持台账口径兼容）。
+    """
     from shared.prompt_contradiction import find_contradictions
     idx = int(shot.get("index") or 0)
-    text = "\n".join(_norm(shot.get(k)) for k in
-                     ("prompt", "ff_desc", "lf_desc", "motion_desc"))
-    return [{
-        "code": "duplicate_injection",
-        "severity": "hard",
-        "shot": idx,
-        "frame": "prompt/ff/lf/motion",
-        "message": str(p),
-    } for p in (find_contradictions(text) or [])]
+    texts = {k: _norm(shot.get(k)) for k, _lbl in _C6_FIELDS}
+    issues: list[dict] = []
+    for key, label in _C6_FIELDS:
+        text = texts.get(key)
+        if not text:
+            continue
+        for p in (find_contradictions(text) or []):
+            issues.append({
+                "code": "duplicate_injection",
+                "severity": "hard",
+                "shot": idx,
+                "frame": label,
+                "message": str(p),
+            })
+    for p in _duplicate_cross_field(texts):
+        issues.append({
+            "code": "duplicate_injection",
+            "severity": "hard",
+            "shot": idx,
+            "frame": _C6_JOIN_LABEL,
+            "message": p,
+        })
+    return issues
 
 
 def check_image_prompt(script: dict) -> list[dict]:

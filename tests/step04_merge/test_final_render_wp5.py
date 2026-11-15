@@ -2,7 +2,8 @@
 """WP5：13 段桩片的**真实合并**（ffmpeg 真合成，零模型调用）.
 
 走生产入口：step04_merge.timeline.MergeTimeline -> backends.ffmpeg.render
-（内部 validate -> compile_graph -> ffmpeg），产出 1440x2560、约 75.25s 的 mp4。
+（内部 validate -> compile_graph -> ffmpeg），产出 1440x2560、约 75–77s（按当前
+正式稿时长）的 mp4。
 """
 from __future__ import annotations
 
@@ -102,8 +103,11 @@ def test_thirteen_clips_render_to_final_mp4(tmp_path):
         clips=tuple(clips),
         boundary_transitions=(),   # 13 段全部硬切（无转场）
     )
-    # 13 镜 75.25s 经 24fps 量化后为 75.29s（逐镜取整累计）
-    assert abs(timeline.total_duration_sec - 75.25) < 0.15
+    # 量化口径：total_duration_sec == 逐镜 duration_sec（frames/fps）之和
+    # （R6 新稿 76.75s；不再写死具体时长，防正式稿修订后测试失真）
+    expected = sum(c.duration_sec for c in clips)
+    assert abs(timeline.total_duration_sec - expected) < 1e-6
+    assert 30.0 <= timeline.total_duration_sec <= 300.0
 
     out = tmp_path / "final.mp4"
     render(timeline, out, tmp_path / "work")
@@ -116,4 +120,4 @@ def test_thirteen_clips_render_to_final_mp4(tmp_path):
     assert (int(video["width"]), int(video["height"])) == (WIDTH, HEIGHT)
     dur = float(info["format"]["duration"])
     assert abs(dur - timeline.total_duration_sec) < 0.2, "成片时长 %.2f" % dur
-    assert abs(dur - 75.25) < 0.2
+    assert abs(dur - timeline.total_duration_sec) < 0.2

@@ -50,7 +50,7 @@ _ALERT = {"hard", "advisory"}
 
 #: {pack 文件: JSON 规范化文本 sha256[:16]}——受控夹具只读，改语料必须同步改摘要。
 FROZEN = {
-    "packs/sample_packs.json": "0d804ed69a02517c",
+    "packs/sample_packs.json": "4f71f8849c04142e",
 }
 
 

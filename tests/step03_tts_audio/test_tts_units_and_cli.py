@@ -278,3 +278,13 @@ def test_main_plan_only_writes_units_and_calls_no_provider(tmp_path, monkeypatch
     assert vp["schema"] == "voice_preparation.v1"
     assert isinstance(vp.get("codes"), list)
     assert vp.get("feedback")
+
+    # Step E：plan-only 未做真实合成 ⇒ 章节声音状态必须是 prepared（显式声明原因），
+    # 绝不能因为「文件恰好都在」就把准备态写成 confirmed。
+    vs_file = cand / "plan" / "voice_state.json"
+    assert vs_file.is_file(), "plan-only 必须落 voice_state.json（章节声音状态）"
+    vs_state = json.loads(vs_file.read_text(encoding="utf-8"))
+    assert vs_state["schema"] == "voice_state.v1"
+    assert vs_state["state"] == "prepared"
+    assert "plan_only_no_synthesis" in [b.get("code")
+                                        for b in vs_state.get("blocking") or []]

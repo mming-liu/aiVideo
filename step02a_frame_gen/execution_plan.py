@@ -203,7 +203,8 @@ def _frame_refs(unit: dict, characters: list[dict], kind: str) -> list[dict]:
 
 
 def _ref_entries(paths: list) -> list[dict]:
-    entries: list[dict] = []
+    entries: list[dict]
+    entries = []
     for raw in paths:
         if not raw:
             continue
@@ -218,6 +219,15 @@ def _ref_entries(paths: list) -> list[dict]:
             role = "keyframe"
         elif "portrait" in name or "characters_bank" in str(path).lower():
             role = "design_reference"
+        # U7 收口（2026-11-15）：`ref_sheet_*` 是 fit_refs 在**真实生成期**按
+        # buckets 确定性拼出的派生参考表——计划（plan-only/视觉计划）构建于
+        # 生成之前，拼表必然不在盘上。把它当「素材未准备」判 blocked 是假阻断：
+        # 真实运行在消费前就会把它拼出来（shots/3、shots/4 的既有拼表正是上轮
+        # 实跑的产物）。标记 prepared=None + materialized_at_execution：
+        # 不进 unresolved，但要显式可见（不得静默消失）。
+        # 真实源资产（肖像/场景/道具 bank/帧图）仍按 is_file() 判定，缺失照样
+        # fail-closed 拒收。
+        is_sheet = name.startswith("ref_sheet")
         entries.append({
             "role": role,
             "path": str(path),
@@ -225,7 +235,8 @@ def _ref_entries(paths: list) -> list[dict]:
                         else "连续性/构图参考" if role in ("first_frame", "last_frame")
                         else "参考"),
             "sha256": _sha256_file(path),
-            "prepared": path.is_file(),
+            "prepared": (None if is_sheet else path.is_file()),
+            **({"materialized_at_execution": True} if is_sheet else {}),
         })
     return entries
 
@@ -294,10 +305,17 @@ def _frame_entry(unit: dict, characters: list[dict], kind: str, model: str,
         "kf": "关键帧时刻的中间状态",
     }[kind]
     unresolved: list[dict] = []
+    pending_materialization: list[dict] = []
     for ref in refs:
-        if not ref.get("prepared"):
+        prepared = ref.get("prepared")
+        if prepared is False:
+            # 真实源资产缺失：生成前必须解决，fail-closed 拒收。
             unresolved.append({"code": "reference_unprepared", "path": ref.get("path"),
                                "message": f"参考素材尚未准备: {ref.get('path')}"})
+        elif prepared is None:
+            # 执行期自物化的派生参考表（fit_refs 拼表）：可见但不阻断。
+            pending_materialization.append({"code": "reference_materialized_at_execution",
+                                            "path": ref.get("path")})
     if prompt_error:
         unresolved.append({"code": "frame_prompt_unavailable", "path": f"shots[{idx}].{kind}",
                            "message": prompt_error})
@@ -316,6 +334,7 @@ def _frame_entry(unit: dict, characters: list[dict], kind: str, model: str,
         "visible_props": _visible_props(unit),
         "status": "blocked" if unresolved else "planned",
         "unresolved": unresolved,
+        "pending_materialization": pending_materialization,
     }
 
 

@@ -164,7 +164,63 @@ def _run_candidate(*, candidate_root, attempt_id, experiment_id, scope, revision
         except Exception as _vp_exc:  # noqa: BLE001 - 报告失败不掩盖合成结果，但必须可见
             eio.append_event(attempt, "voice_preparation_failed",
                              message=str(_vp_exc)[:500])
+        # Step E：候选运行也是**真实合成**，但状态落 attempt 内（不写正式章目录）。
+        try:
+            _paths = {a.unit_id: str(a.path) for a in artifacts}
+            _tracks = [{
+                "unit_id": u.unit_id,
+                "kind": "narration" if str(getattr(u, "kind", "")) == "narration"
+                        else "tts_dialogue",
+                "shot_index": getattr(u, "shot_index", None),
+                "path": _paths.get(u.unit_id, ""),
+            } for u in units if u.unit_id in _paths]
+            _vs, _vs_path = _write_voice_state(
+                script=script, scope=scope, revision=revision, tracks=_tracks,
+                target_dir=attempt, source="step03.candidate_synthesis")
+            eio.append_event(attempt, "voice_state_written",
+                             state=_vs.get("state"), path=str(_vs_path),
+                             units=len(_vs.get("units") or []))
+        except Exception as _vs_exc:  # noqa: BLE001
+            eio.append_event(attempt, "voice_state_failed",
+                             message=str(_vs_exc)[:500])
         return artifacts
+
+
+def _voice_state_tracks(required: list, narr_entries: list) -> list[dict]:
+    """本章成片必需音轨 → 声音状态登记项（单元身份与生成器同源）."""
+    tracks: list[dict] = []
+    for shot in required or []:
+        try:
+            idx = int(shot.get("index", 0))
+        except (TypeError, ValueError):
+            continue
+        tracks.append({"unit_id": "shot-%d" % idx, "kind": "tts_dialogue",
+                       "shot_index": idx, "path": str(audio_file(idx))})
+    for entry in narr_entries or []:
+        try:
+            index = int(entry.get("index", 0))
+        except (TypeError, ValueError):
+            continue
+        tracks.append({"unit_id": "narration-N%d" % index, "kind": "narration",
+                       "shot_index": entry.get("shot_index"),
+                       "path": str(narration_audio_file(index))})
+    return tracks
+
+
+def _write_voice_state(*, script: dict, scope: dict, revision: str,
+                       tracks: list[dict], target_dir, source: str,
+                       prepared_reason: str = "") -> tuple[dict, Path]:
+    """把章节声音状态落盘（两态：真实合成完成=confirmed，其余=prepared）."""
+    from shared import voice_state as vs
+    from shared.json_io import atomic_dump_json
+
+    state = vs.build_voice_state(
+        script, tracks=tracks, scope=scope, script_revision=revision,
+        source=source, prepared_reason=prepared_reason)
+    target = Path(target_dir) / vs.FILENAME
+    target.parent.mkdir(parents=True, exist_ok=True)
+    atomic_dump_json(target, state, ensure_ascii=False, indent=2)
+    return state, target
 
 
 def _write_step03_quality(script: dict, required: list, narr_entries: list) -> dict:
@@ -426,6 +482,22 @@ def main(options=None):
                          % (_vp_path, _vp.get("status"), _vp.get("codes")))
         except Exception as _vp_exc:  # noqa: BLE001 - 规划失败要显式报出
             _logger.warn("[PLAN] 声音准备报告失败: %s" % _vp_exc)
+        # Step E：plan-only **没有**真实合成 ⇒ 章节声音状态显式落 prepared
+        # （不是「合成失败」，是「还没合成」；Step04 正式合成会据此拒收）。
+        try:
+            from step01_script_gen.plan_feasibility import shot_needs_dialogue_track
+            _audio_units = ([hook] if hook else []) + shots
+            _plan_required = [s for s in _audio_units
+                              if shot_needs_dialogue_track(s, plan)]
+            _vs, _vs_path = _write_voice_state(
+                script=gen_script, scope=scope, revision=revision,
+                tracks=_voice_state_tracks(_plan_required, _narr_entries),
+                target_dir=Path(candidate_root) / "plan",
+                source="plan_only", prepared_reason="plan_only_no_synthesis")
+            _logger.info("[PLAN] 章节声音状态: %s state=%s（%d 条音轨登记，未合成）"
+                         % (_vs_path, _vs.get("state"), len(_vs.get("units") or [])))
+        except Exception as _vs_exc:  # noqa: BLE001 - 状态缺失必须可见
+            _logger.warn("[PLAN] 章节声音状态写入失败: %s" % _vs_exc)
         # M4：精准分轨（期望集合与生成/消费同一判据，不读盘、不合成）。
         from step03_tts_audio.track_cleanup import expected_tracks
         _expected = expected_tracks(gen_script, only_indices=only_indices,
@@ -519,6 +591,25 @@ def main(options=None):
         sys.exit(1)
     _logger.info(
         f"[OK] TTS 完成：对白轨 {len(required)} 镜、旁白轨 {len(_narr_entries)} 条音频齐全")
+
+    # Step E：真实合成完成且音轨齐全后，把章节声音状态显式升级为 confirmed
+    # （含每条音轨的文件摘要与绑定 revision）。时长不可读/文件为空/摘要不可算
+    # 时**不**升级——build_voice_state 会把具体原因写进 blocking。
+    try:
+        _vs, _vs_path = _write_voice_state(
+            script=script, scope=scope, revision=revision,
+            tracks=_voice_state_tracks(required, _narr_entries),
+            target_dir=CHAPTER_DIR, source="step03.real_synthesis")
+        _logger.info("[STEP03-VOICE-STATE] state=%s units=%d blocking=%d path=%s"
+                     % (_vs.get("state"), len(_vs.get("units") or []),
+                        len(_vs.get("blocking") or []), _vs_path))
+        if _vs.get("state") != "confirmed":
+            _logger.error(
+                "[ERROR] 章节声音状态未达 confirmed（%s）——step04 正式合成会拒收：%s"
+                % (_vs.get("counts"),
+                   [b.get("code") for b in (_vs.get("blocking") or [])][:6]))
+    except Exception as _vs_exc:  # noqa: BLE001 - 状态写不出必须可见，但不掩盖已生成音轨
+        _logger.error("[ERROR] 章节声音状态写入失败（step04 会按缺失拒收）: %s" % _vs_exc)
     try:
         _pq = _write_step03_quality(script, required, _narr_entries)
         _logger.info(f"[STEP03-QUALITY] status={_pq.get('status')} "

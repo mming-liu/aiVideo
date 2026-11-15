@@ -1660,6 +1660,30 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         if ref_list:
             full_prompt = full_prompt + "\n\n" + ref_list
 
+    # G3（参考清单先行）：参考清单在上一段**已经定稿**（r2v 的 reference_paths /
+    # image 的首帧+尾帧+关键帧），这里只按同一份清单追加 `参考图k=身份` 绑定段。
+    # 清单与绑定记到请求上，供冻结记录与预检核对「prepare 前后一致」三态。
+    _ref_items: list = []
+    _ref_binding: dict = {}
+    try:
+        from step02_video_gen import ref_manifest as _ref_manifest
+        _ref_items = _ref_manifest.collect_manifest(
+            shot=shot, image_path=image_path,
+            last_frame_image_path=last_frame_image_path,
+            extra_keyframe_paths=extra_keyframe_paths,
+            reference_paths=reference_paths,
+            registry=_load_character_registry(), characters=characters or [])
+        full_prompt, _ref_block = _ref_manifest.apply_binding(full_prompt, _ref_items)
+        _ref_binding = {
+            "schema": _ref_manifest.SCHEMA,
+            "items": _ref_items,
+            "block": _ref_block,
+            # 请求侧正文含绑定段（prepare 之前的唯一事实，供三态核对比对）
+            "block_in_request_prompt": bool(_ref_block) and _ref_block in full_prompt,
+        }
+    except Exception as _rb_exc:                             # noqa: BLE001
+        _log_r2v_collect("参考绑定段构建失败（不阻断提交，记空清单）: %s" % _rb_exc)
+
     # v6.35（08-15，P18 遗留）：固定 seed——由镜头序号 + prompt 哈希派生。
     # 此前 seed 恒 None → 每次提交纯抽卡：QC 判坏后重提交拿到全新随机结果，
     # 好坏反复横跳，同一镜头 A/B 测试 prompt 改进也无法对照。固定 seed 后
@@ -1694,6 +1718,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         seed=_seed,
         camera_movement=camera_movement,
         media_selection=_media_selection,
+        ref_binding=_ref_binding or None,
     )
 
 
