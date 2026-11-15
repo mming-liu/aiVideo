@@ -2,14 +2,23 @@
 
 启用两条，都要求**唯一解**，不满足就保持原值、交统一验收拒收，并记 `skipped` 原因：
 
-**R0：修引用身份拼写**（漏写 `new:` 前缀）。只改引用里的 UID，不改正文、来源、
+**R0：修引用身份拼写**（漏写 `new:` 前缀）。只改引用里的 id 值，不改正文、来源、
 说话人、实体数量、顺序或事实主张。六条件：
-1. 本轮声明：`new:X` 出现在**本轮 delta 对应集合**的 `upsert` 里；
+1. 本轮声明：`new:X` 出现在**本轮 delta 对应集合**的 `upsert` 里（按引用 `kind`
+   锁定集合：visual→`beats`、screen_card→`screen_cards`（身份键 `card_id`）、
+   dialogue/narration→对应单元集合）；
 2. 旧身份冲突：基线与合并后集合都**不存在** `X`；
-3. 类型：引用的声音类型与声明集合一致（narration ↔ narration_units 等）；
-4. 唯一性：只有一个符合条件的 `new:X`；
-5. 形状：引用本身是 `{kind, uid}` 形状的字典（不借机清洗其他非法字段）；
-6. 范围：只替换 UID。
+3. 类型：引用的载体 `kind` 与声明集合一致（narration ↔ narration_units、
+   visual ↔ beats 等）；
+4. 唯一性：按 `kind` 锁定集合后只有一个符合条件的 `new:X`；
+5. 形状：引用本身是 `{kind, 单一 id 键}` 形状的字典（不借机清洗其他非法字段）；
+6. 范围：只替换 id 值（写在它原来的键上，不归一写法）。
+
+2026-11-15（真实调用验证）：R0 此前只覆盖声音引用（narration/dialogue），而
+`voice_ref`/载体的 `kind=visual` 是**合法形状**（声画共镜），真实修订第 3 轮
+`beats[new:b08].voice_ref {"kind":"visual","uid":"b08"}`（指自己刚 upsert 的
+`new:b08`）因不在覆盖范围被 `view_voice_ref_dangling` 拒收——本轮把 R0 推广到
+全部四种载体 kind，并新增 `screen_cards[].beat_uid`（普通字符串引用节拍）这一位置。
 
 **R1'：基线权威的逐字重复归并**。模型常把一句已有声音"重新写一遍"成新单元
 （正文逐字相同、换了 uid），再把节拍/载体改指新单元——旧单元因此无人播放，
@@ -41,6 +50,18 @@ from . import presentation_contract as pc
 TEMP = pc.DELTA_TEMP_UID_PREFIX
 _COLL = {pc.KIND_NARRATION: "narration_units", pc.KIND_DIALOGUE: "dialogue_units"}
 
+#: 引用 `kind` → (可 upsert 的实体集合, 身份键)。R0 的候选池：四种合法载体 kind
+#: 各对应一个模型可声明的集合；卡片的身份键是 `card_id`（与 `pc.DELTA_ID_KEY` 同源口径）。
+_KIND_POOL = {
+    pc.KIND_VISUAL: ("beats", "uid"),
+    pc.KIND_CARD: ("screen_cards", "card_id"),
+    pc.KIND_DIALOGUE: ("dialogue_units", "uid"),
+    pc.KIND_NARRATION: ("narration_units", "uid"),
+}
+
+#: 引用上可能承载 id 的键（与 `pc._ID_READ_KEYS` 同源口径；规范键优先，见 `_ref_target`）。
+_REF_KEY_FIELDS = ("uid", "card_id", "beat_uid")
+
 
 def _uid(ref) -> str:
     if isinstance(ref, dict):
@@ -63,6 +84,72 @@ def _declared(delta, kind) -> set:
     if not isinstance(ups, dict):
         return set()
     return {str(u.get("uid")) for u in (ups.get(_COLL[kind]) or []) if isinstance(u, dict)}
+
+
+def _collection_ids(view, key, id_field) -> set:
+    """视图里某个实体集合的**全部身份**（字符串才收；卡片按 `card_id` 读）。"""
+    out = set()
+    for e in (view.get(key) or []) if isinstance(view, dict) else []:
+        if isinstance(e, dict):
+            v = e.get(id_field)
+            if isinstance(v, str) and v:
+                out.add(v)
+    return out
+
+
+def _all_ids(view) -> set:
+    """视图里**全部四类实体**的身份（R0 条件 2 的「旧身份」全集）。"""
+    out = set(_units(view))
+    out |= _collection_ids(view, "beats", "uid")
+    out |= _collection_ids(view, "screen_cards", "card_id")
+    return out
+
+
+def _declared_temp(delta) -> dict:
+    """本轮 `upsert` 声明的**临时身份**：kind → 已剥 `new:` 前缀的裸 uid 集合。
+
+    只认带 `TEMP` 前缀的声明（模型正确声明的部分）；集合身份键按 `_KIND_POOL`
+    读（卡片 `card_id`，其余 `uid`）。
+    """
+    ups = (delta or {}).get("upsert") if isinstance(delta, dict) else None
+    out = {}
+    if not isinstance(ups, dict):
+        return {k: set() for k in _KIND_POOL}
+    for kind, (key, idf) in _KIND_POOL.items():
+        s = set()
+        for e in (ups.get(key) or []):
+            if isinstance(e, dict):
+                v = e.get(idf)
+                if isinstance(v, str) and v.startswith(TEMP):
+                    s.add(v[len(TEMP):])
+        out[kind] = s
+    return out
+
+
+def _ref_target(ref) -> tuple:
+    """载体引用 → `(承载 id 的键名, uid)`。规范键优先（与 `pc.ref_uid` 同源口径）：
+    visual 按 `beat_uid`、screen_card 按 `card_id`、声音按 `uid`；其余键兜底。"""
+    kind = str(ref.get("kind") or "")
+    canon = {pc.KIND_VISUAL: "beat_uid", pc.KIND_CARD: "card_id"}.get(kind, "uid")
+    for k in [canon] + [x for x in _REF_KEY_FIELDS if x != canon]:
+        v = ref.get(k)
+        if isinstance(v, str) and v:
+            return k, v
+    return "", ""
+
+
+def _carrier_ref(ref):
+    """载体引用**形状**校验：dict、kind 合法、恰好 `kind` + 一个 id 键、无多余字段。
+
+    通过 ⇒ 返回 `(id 键名, uid)`；否则 `None`（原样保留，不借机清洗）。
+    与旧 `_sound_ref` 的差异：不再把合法的 visual/screen_card 引用当成「形状非法」。
+    """
+    if not isinstance(ref, dict) or str(ref.get("kind") or "") not in _KIND_POOL:
+        return None
+    idf, uid = _ref_target(ref)
+    if not idf or not uid or set(ref) != {"kind", idf}:
+        return None
+    return idf, uid
 
 
 def _deleted_uids(delta) -> set:
@@ -353,26 +440,29 @@ def _sound_ref(ref) -> bool:
     return kind in _COLL and isinstance(uid, str) and bool(uid.strip())
 
 
-def _plan_fix(uid, kind_hint, *, existing, base_ids, declared_n, declared_d, notes, where):
-    """返回修正后的 uid 或原值；所有拒绝理由写进 notes（不改判据）。"""
+def _plan_fix(uid, kind_hint, *, existing, base_ids, declared, notes, where):
+    """返回修正后的 uid 或原值；所有拒绝理由写进 notes（不改判据）。
+
+    `declared` 是 `_declared_temp(delta)` 的产物（kind → 裸 uid 集合）；`kind_hint`
+    是引用自带的载体 kind（锁定候选集合）。类型不一致与未声明分开记，诊断时能看出
+    「指错了集合」还是「压根没声明」。
+    """
     if not uid:
         return uid
     if uid in existing or uid in base_ids:
         return uid                                   # 条件 2：不是临时身份
-    cands = []
-    if uid in declared_n:
-        cands.append(pc.KIND_NARRATION)
-    if uid in declared_d:
-        cands.append(pc.KIND_DIALOGUE)
-    if len(cands) != 1:                              # 条件 1/4
-        notes.append({"rule": "R0_skipped", "uid": uid, "where": where,
-                      "why": "本轮未声明或无唯一候选（候选数=%d）" % len(cands)})
-        return uid
-    kind = cands[0]
-    if kind_hint and kind_hint != kind:              # 条件 3
-        notes.append({"rule": "R0_skipped", "uid": uid, "where": where,
-                      "why": "类型不一致：引用=%s 声明=%s" % (kind_hint, kind)})
-        return uid
+    if kind_hint:
+        if uid not in declared.get(kind_hint, ()):   # 条件 3：kind 锁定的集合没声明
+            notes.append({"rule": "R0_skipped", "uid": uid, "where": where,
+                          "why": "类型不一致：引用=%s 但该集合未声明 new:%s"
+                                 % (kind_hint, uid)})
+            return uid
+    else:
+        cands = [k for k, s in declared.items() if uid in s]
+        if len(cands) != 1:                          # 条件 1/4：无 kind 提示须唯一解
+            notes.append({"rule": "R0_skipped", "uid": uid, "where": where,
+                          "why": "本轮未声明或无唯一候选（候选数=%d）" % len(cands)})
+            return uid
     notes.append({"rule": "R0_temp_prefix", "uid": uid, "where": where,
                   "detail": "%s → %s%s" % (where, TEMP, uid)})
     return TEMP + uid
@@ -383,22 +473,23 @@ def reconcile(view: dict, *, base_view: dict | None = None, delta: dict | None =
 
     v = copy.deepcopy(view)
     notes: list = []
-    existing = set(_units(v))
-    base_ids = set(_units(base_view or {}))
-    declared_n = {u[len(TEMP):] for u in _declared(delta, pc.KIND_NARRATION) if u.startswith(TEMP)}
-    declared_d = {u[len(TEMP):] for u in _declared(delta, pc.KIND_DIALOGUE) if u.startswith(TEMP)}
+    existing = _all_ids(v)
+    base_ids = _all_ids(base_view or {})
+    declared = _declared_temp(delta)
 
-    # ---- 声音引用（节拍 voice_ref）----
+    # ---- 载体引用（节拍 voice_ref；四种合法 kind 全覆盖）----
     for b in v.get("beats") or []:
         ref = b.get("voice_ref")
-        if not _sound_ref(ref):                       # 非法形状：原样保留
+        shape = _carrier_ref(ref)
+        if shape is None:                             # 非法形状：原样保留
             continue
+        idf, old = shape
         kind = str(ref.get("kind") or "")
-        new_uid = _plan_fix(_uid(ref), kind, existing=existing, base_ids=base_ids,
-                            declared_n=declared_n, declared_d=declared_d, notes=notes,
+        new_uid = _plan_fix(old, kind, existing=existing, base_ids=base_ids,
+                            declared=declared, notes=notes,
                             where="beats[%s].voice_ref" % _uid(b))
-        if new_uid != _uid(ref):
-            b["voice_ref"] = dict(ref, uid=new_uid)
+        if new_uid != old:
+            b["voice_ref"] = dict(ref, **{idf: new_uid})
 
     # ---- 事实载体（列表形状）----
     for fb in v.get("fact_bindings") or []:
@@ -406,16 +497,30 @@ def reconcile(view: dict, *, base_view: dict | None = None, delta: dict | None =
             continue
         out = []
         for c in (fb.get("carriers") or []):
-            if not _sound_ref(c):                     # 含 beat_uid/card_id 混入：原样保留
+            shape = _carrier_ref(c)
+            if shape is None:                         # 含 beat_uid/card_id 混入：原样保留
                 out.append(c)
                 continue
-            old = _uid(c)
-            new_uid = _plan_fix(old, str(c.get("kind") or ""), existing=existing,
-                                base_ids=base_ids, declared_n=declared_n, declared_d=declared_d,
-                                notes=notes,
+            idf, old = shape
+            kind = str(c.get("kind") or "")
+            new_uid = _plan_fix(old, kind, existing=existing, base_ids=base_ids,
+                                declared=declared, notes=notes,
                                 where="fact_bindings[%s]" % str(fb.get("fact_uid")))
-            out.append(dict(c, uid=new_uid) if new_uid != old else c)
+            out.append(dict(c, **{idf: new_uid}) if new_uid != old else c)
         fb["carriers"] = out
+
+    # ---- 卡片挂点（普通字符串引用节拍；2026-11-15 新增位置）----
+    for c in v.get("screen_cards") or []:
+        if not isinstance(c, dict):
+            continue
+        bu = c.get("beat_uid")
+        if not isinstance(bu, str) or not bu.strip():
+            continue
+        nu = _plan_fix(bu, pc.KIND_VISUAL, existing=existing, base_ids=base_ids,
+                       declared=declared, notes=notes,
+                       where="screen_cards[%s].beat_uid" % str(c.get("card_id") or ""))
+        if nu != bu:
+            c["beat_uid"] = nu
 
     # ---- 钩子（**字典形状**：spoken_uids 是**对白**引用，carriers 走声音引用形状）----
     hk = v.get("hook_bindings")
@@ -428,7 +533,7 @@ def reconcile(view: dict, *, base_view: dict | None = None, delta: dict | None =
                     fixed_spoken.append(uid)
                     continue
                 nu = _plan_fix(uid, pc.KIND_DIALOGUE, existing=existing, base_ids=base_ids,
-                               declared_n=declared_n, declared_d=declared_d, notes=notes,
+                               declared=declared, notes=notes,
                                where="hook_bindings.spoken_uids")
                 fixed_spoken.append(nu)
             hk["spoken_uids"] = fixed_spoken
@@ -436,14 +541,16 @@ def reconcile(view: dict, *, base_view: dict | None = None, delta: dict | None =
         if isinstance(carriers, list):
             out = []
             for c in carriers:
-                if not _sound_ref(c):
+                shape = _carrier_ref(c)
+                if shape is None:
                     out.append(c)
                     continue
-                old = _uid(c)
-                nu = _plan_fix(old, str(c.get("kind") or ""), existing=existing,
-                               base_ids=base_ids, declared_n=declared_n, declared_d=declared_d,
-                               notes=notes, where="hook_bindings.carriers")
-                out.append(dict(c, uid=nu) if nu != old else c)
+                idf, old = shape
+                kind = str(c.get("kind") or "")
+                nu = _plan_fix(old, kind, existing=existing, base_ids=base_ids,
+                               declared=declared, notes=notes,
+                               where="hook_bindings.carriers")
+                out.append(dict(c, **{idf: nu}) if nu != old else c)
             hk["carriers"] = out
     elif isinstance(hk, list):
         notes.append({"rule": "R0_skipped", "uid": "", "where": "hook_bindings",

@@ -261,6 +261,8 @@ tests/shared/*
 !tests/shared/test_presentation_contract.py
 # 2026-10-30（R05/F5）：授权链身份关联的判别测试。
 !tests/shared/test_audit_authorization_chain.py
+# 2026-11-15：delta.v1 R0 全 kind 通用化的契约回归入库（对应 shared/delta_reconcile.py 修改）。
+!tests/shared/test_delta_reconcile_r0.py
 # 2026-11-08：本轮修复涉及的契约回归**入库**（干净 clone 可复现同一套 0 failed）
 !tests/_text_gen/test_agent_plan_provider.py
 !tests/_text_gen/test_agent_plan_guard.py
