@@ -230,6 +230,123 @@ def entries_at(script, target: str, locator: str):
     return _layout_frame_lists(shot).get(locator)
 
 
+# ---------------------------------------------------------------------------
+# S03 补正：后处理 writer 的帧结构观测与定位符完整性
+# ---------------------------------------------------------------------------
+# 本轮实际可达的 writer（main.py 修复轮节点）：
+#   GLOBAL_STYLE / TIMELINE / POST_FIX / INJURY_ANCHOR / RESTORE_UNTARGETED
+#     —— 只改文本或派生字段，不改 `keyframes` / `frame_layouts.kfs` 的帧数与顺序；
+#   HARD_FIX（constraints）
+#     —— `frame_spec_repair` 会在 `len(kfs) != len(keyframes)` 时 append/pop 布局帧；
+#        `identity_unification` 只重建条目、不改帧数。
+# 因此「确有插入/删除」的只有 HARD_FIX 的 frame_spec_repair 支路；来源变换无法
+# 由该约束输出时，统一按**定位符失效**处理并保留基线，不猜新坐标。
+FRAME_STRUCTURE_WRITERS: dict = {
+    "WRITER_GLOBAL_STYLE": "structure_preserving",
+    "WRITER_TIMELINE": "structure_preserving",
+    "WRITER_POST_FIX": "structure_preserving",
+    "WRITER_HARD_FIX": "frame_count_align",
+    "WRITER_INJURY_ANCHOR": "structure_preserving",
+    "WRITER_RESTORE_UNTARGETED": "structure_preserving",
+}
+
+
+def frame_structure_state(shot) -> tuple:
+    """一镜的帧身份状态：`(kfs 数, keyframes 数, 不含 t_sec 的身份序列)`.
+
+    只取 `(desc, stage)` 作身份序列：`write_timeline_from_durations`、
+    `kf_window_alignment` 等确定性归一化会改 `t_sec`，但不改变「哪一帧是哪一帧」。
+    帧数变化或身份序列变化 = 插入/删除/重排，定位符不再可信。
+    """
+    if not isinstance(shot, dict):
+        return (None, None, ())
+    fl = shot.get("frame_layouts")
+    kfs = fl.get("kfs") if isinstance(fl, dict) else None
+    kf = shot.get("keyframes")
+    seq = tuple((str(x.get("desc") or ""), str(x.get("stage") or ""))
+                for x in kf if isinstance(x, dict)) if isinstance(kf, list) else ()
+    return (len(kfs) if isinstance(kfs, list) else None,
+            len(kf) if isinstance(kf, list) else None,
+            seq if isinstance(kf, list) and len(seq) == len(kf) else None)
+
+
+def _frame_structure_snapshot(script, effects, frame_targets=None) -> dict:
+    """本轮要盯住帧结构的目标：已登记效果的目标 ∪ 有来源映射的点名目标.
+
+    S03 补正：纯中间补帧**不会**产生布局条目增删效果，但仍有装配来源映射
+    （`after_count` / `old_to_new`）。只按 `effects` 取目标，会把这类「零效果
+    但有位移」的目标漏在四节点观测之外——后处理 writer 在这类目标上擅自插帧
+    就没人发现。所以账本从候选节点起就按**本轮点名目标**取结构快照。
+    """
+    tids = {str(e.get("shot_id") or "") for e in effects or []}
+    tids |= {str(t) for t in frame_targets or ()}
+    out: dict = {}
+    for tid in sorted(t for t in tids if t):
+        out[tid] = frame_structure_state(shot_by_target(script, tid))
+    return out
+
+
+def _mapping_for(maps: dict, tid: str):
+    """同一目标在台账里可能写成 `shot_5` 或 `5`，两种键都认."""
+    mp = maps.get(tid)
+    if mp is None:
+        mp = maps.get(tid[5:]) if tid.startswith("shot_") \
+            else maps.get("shot_" + tid)
+    return mp
+
+
+def _target_keys(tid: str) -> set:
+    return ({tid, tid[5:]} if tid.startswith("shot_")
+            else {tid, "shot_" + tid})
+
+
+def frame_locator_integrity(merged, final, effects, *,
+                            frame_mappings=None) -> list:
+    """合并后 → 最终重验稿：帧来源与已登记效果的 `frame_locator` 是否仍成立.
+
+    返回可直接进入事务否决项的诊断列表。任何帧数变化、身份序列变化、定位符
+    越界都明确拒收；不尝试按布局相似度猜新坐标。
+
+    S03 补正：**没有登记效果不等于没有帧来源**。存在来源映射的目标一律核验
+    「合并后 → 最终稿」的帧结构与 `after_count`，覆盖纯补帧/纯位移场景。
+    """
+    import re as _re
+    out: list = []
+    maps = frame_mappings if isinstance(frame_mappings, dict) else {}
+    checked: set = set()
+
+    def _check(tid: str, loc: str, mp) -> None:
+        bm = frame_structure_state(shot_by_target(merged, tid))
+        am = frame_structure_state(shot_by_target(final, tid))
+        if bm != am:
+            out.append("%s: 后处理改变了帧结构（%s → %s），帧来源无法核验，"
+                       "%s本轮保留基线"
+                       % (tid, bm[:2], am[:2],
+                          ("效果定位符 %s " % loc) if loc else ""))
+            return
+        hit = _re.fullmatch(r"frame_layouts\.kfs\[(\d+)\]", loc)
+        if hit and (bm[0] is None or int(hit.group(1)) >= bm[0]):
+            out.append("%s: 效果定位符 %s 越出候选帧数 %s" % (tid, loc, bm[0]))
+        if mp is not None and bm[0] is not None and mp.get("after_count") != bm[0]:
+            out.append("%s: 最终稿帧数 %d 与本轮来源映射 after_count=%s 不符"
+                       % (tid, bm[0], mp.get("after_count")))
+
+    for e in effects or []:
+        tid = str(e.get("shot_id") or "")
+        if not tid:
+            continue
+        checked |= _target_keys(tid)
+        _check(tid, str(e.get("frame_locator") or ""), _mapping_for(maps, tid))
+    # 无效果但有来源映射（纯补帧）的目标同样必须核验，避免 writer 插帧绕过映射。
+    for tid, mp in maps.items():
+        tid = str(tid)
+        if not isinstance(mp, dict) or checked & _target_keys(tid):
+            continue
+        checked |= _target_keys(tid)
+        _check(tid, "", mp)
+    return out
+
+
 def _effect_key(effect: dict) -> tuple:
     return (str(effect.get("shot_id") or ""), str(effect.get("frame_locator") or ""))
 
@@ -255,14 +372,18 @@ def _violation_names_frame(message: str, target: str, locator: str) -> bool:
     return not nxt.isdigit()
 
 
-def blocked_frames(before, merged, allowed_by_target: dict, targets: list) -> set:
-    """跑**现有结构守卫**，返回「不得登记效果」的 `(目标, 帧)` 集合.
+def blocked_frames(before, merged, allowed_by_target: dict, targets: list,
+                   *, frame_mappings=None, revision=None) -> set:
+    """跑**现有结构守卫**，返回「不得登记效果」的 `(目标, 帧)` 集合（**原坐标**）.
 
     归属不出来的违例 → **整个目标**的帧都不登记（fail-closed：宁可少记一条效果，
     也不把一条没通过守卫的改动记成「已授权效果」）。
+    S03：守卫与效果登记消费**同一份**帧映射与同一份基线 revision，避免
+    「守卫按位移后坐标放行、效果却按插入前坐标登记」的错位。
     """
     violations = frame_layout_structural_violations(
-        before, merged, allowed_by_target, targets)
+        before, merged, allowed_by_target, targets,
+        frame_mappings=frame_mappings, revision=revision)
     blocked: set = set()
     unattributable: set = set()
     for tid in targets:
@@ -282,8 +403,30 @@ def blocked_frames(before, merged, allowed_by_target: dict, targets: list) -> se
     return blocked
 
 
+def _mapped_locator(locator: str, mapping) -> str:
+    """原坐标帧路径 → 候选（合并后）坐标帧路径；非 kfs 路径保持原样.
+
+    只做**坐标投影**，不做内容比对或身份猜测；映射无效时由守卫负责拒收。
+    """
+    import re as _re
+    if not isinstance(mapping, dict):
+        return str(locator)
+    hit = _re.fullmatch(r"frame_layouts\.kfs\[(\d+)\]", str(locator))
+    if not hit:
+        return str(locator)
+    i = int(hit.group(1))
+    o2n = list(mapping.get("old_to_new") or [])
+    if not (0 <= i < len(o2n)):
+        return str(locator)
+    try:
+        return "frame_layouts.kfs[%d]" % int(o2n[i])
+    except (TypeError, ValueError):
+        return str(locator)
+
+
 def build_layout_effects(before, merged, allowed_by_target, source_revision,
-                         *, round_id: str = "") -> list:
+                         *, round_id: str = "", frame_mappings=None,
+                         revision=None) -> list:
     """登记本轮**已授权且已应用**的帧子列表增删（**请求应用事实**）.
 
     Args:
@@ -316,11 +459,18 @@ def build_layout_effects(before, merged, allowed_by_target, source_revision,
     targets = [str(t) for t in (allowed_by_target or {})]
     if not targets:
         return out
-    blocked = blocked_frames(before, merged, allowed_by_target, targets)
+    blocked = blocked_frames(before, merged, allowed_by_target, targets,
+                             frame_mappings=frame_mappings,
+                             revision=revision if revision is not None
+                             else source_revision)
+    _all_maps = frame_mappings if isinstance(frame_mappings, dict) else {}
 
     for tid in targets:
         if (tid, None) in blocked:
             continue
+        _mapping = _all_maps.get(tid)
+        if _mapping is None and str(tid).startswith("shot_"):
+            _mapping = _all_maps.get(str(tid)[5:])
         allowed = [str(a) for a in (allowed_by_target.get(tid) or ())]
         if not allowed:
             continue
@@ -335,7 +485,9 @@ def build_layout_effects(before, merged, allowed_by_target, source_revision,
                 continue
             if (tid, locator) in blocked:
                 continue
-            new = listed_merged.get(locator)
+            # S03：候选帧按来源映射取；授权与 blocked 仍按**原坐标**解释。
+            cand_locator = _mapped_locator(locator, _mapping)
+            new = listed_merged.get(cand_locator)
             if not isinstance(new, list):
                 continue
             if _canon_list(entries) == _canon_list(new):
@@ -344,11 +496,11 @@ def build_layout_effects(before, merged, allowed_by_target, source_revision,
             if not removed and not added:
                 continue
             kept_names = {_entry_name(e) for e in new}
-            out.append({
+            _rec = {
                 "round_id": str(round_id or ""),
                 "source_revision": str(source_revision or ""),
                 "shot_id": tid,
-                "frame_locator": locator,
+                "frame_locator": cand_locator,
                 "before_digest": list_digest(entries),
                 "merged_digest": list_digest(new),
                 "before_signature": entry_signature(entries),
@@ -366,7 +518,11 @@ def build_layout_effects(before, merged, allowed_by_target, source_revision,
                                        if _frame_target_spelled(locator, [a])],
                 "merged_entries": [dict(e) if isinstance(e, dict) else e
                                    for e in new],
-            })
+            }
+            if cand_locator != locator:
+                # 旧效果记录没有这个字段：消费端按 frame_locator（== 原坐标）读取。
+                _rec["source_frame_locator"] = locator
+            out.append(_rec)
     return out
 
 
@@ -487,6 +643,9 @@ class RepairEffectLedger:
     source_revision: str = ""
     effects: list = field(default_factory=list)
     nodes: list = field(default_factory=list)
+    # S03 补正：本轮点名目标。四节点的帧结构快照按它取，而不是只按 effects 取；
+    # 纯补帧（零条目增删效果）同样要被后处理结构观测覆盖。
+    frame_targets: set = field(default_factory=set)
 
     # ---- 四个冻结节点 ----------------------------------------------------
 
@@ -553,6 +712,66 @@ class RepairEffectLedger:
         return {_effect_id(r) for r in
                 detect_reverted_layout_effects(self.effects, script)}
 
+    def filtered_view(self, keep_targets):
+        """按目标回退后：下游只接收**最终保留稿**对应的有效效果.
+
+        历史节点（含回退前的冻结点与 writer 观测）原样保留，供台账如实记录；
+        返回的视图只是把已回退目标的 `effects` 摘掉，避免 `classify_effect_outcome`
+        拿一份「已被撤销的授权效果」去解释新稿子。
+        """
+        keep = {str(t) for t in keep_targets}
+        keep |= {"shot_%s" % (t[5:] if t.startswith("shot_") else t)
+                 for t in list(keep)}
+        return RepairEffectLedger(
+            round_id=self.round_id, source_revision=self.source_revision,
+            effects=[e for e in self.effects
+                     if str(e.get("shot_id")) in keep],
+            nodes=list(self.nodes), frame_targets=set(self.frame_targets))
+
+    def structure_changes(self) -> list:
+        """哪些**后处理**节点改变了本轮点名目标的帧结构.
+
+        S03 补正：后处理若插入/删除/重排帧，`frame_locator` 与来源映射的
+        `after_count` 就不再指向同一帧。这里只**观测事实**，由事务裁决决定
+        是否拒收（见 main 的 `_frame_locator_integrity` 消费点）。
+
+        基线是**授权合并后**那个节点：`candidate → merged` 的帧数变化来自
+        合法补帧装配本身，不是 writer 干的，不能算成后处理结构变化。
+        """
+        out: list = []
+        prev = None
+        for node in self.nodes:
+            now = node.get("frame_structure") or {}
+            if node.get("node") == NODE_MERGED:
+                prev = now
+                continue
+            if prev is None:
+                continue
+            for tid in sorted(set(prev) | set(now)):
+                if tid not in prev:
+                    # 上一个节点还没建立该目标的观测基线（例如旧调用方只在
+                    # 合并后才传入 frame_targets），这是「基线建立」不是结构变化。
+                    continue
+                if tid not in now:
+                    out.append({"writer": node.get("writer") or
+                                node.get("node") or "?",
+                                "node": node.get("node"), "target": tid,
+                                "from": prev.get(tid), "to": None})
+                    continue
+                if prev.get(tid) != now.get(tid):
+                    out.append({"writer": node.get("writer") or
+                                node.get("node") or "?",
+                                "node": node.get("node"), "target": tid,
+                                "from": prev.get(tid), "to": now.get(tid)})
+            prev = now
+        return out
+
+    def observation_errors(self) -> list:
+        """观测回调被吞成 warn 的异常——必须进入裁决，不能只留日志."""
+        return [{"writer": n.get("writer") or n.get("node") or "?",
+                 "error": n["error"]}
+                for n in self.nodes if n.get("error")]
+
     def as_records(self) -> list:
         """台账用的扁平记录（跨轮只作证据；新轮重新依据新基线生成）."""
         return [{k: v for k, v in n.items()} for n in self.nodes]
@@ -578,6 +797,9 @@ class RepairEffectLedger:
             "reverted": [],
             "changed_frames": [],
             "digests": {},
+            # S03 补正：每个节点冻结帧结构状态，供 structure_changes() 定位
+            # 「哪个 writer 让 frame_locator 失效」。
+            "frame_structure": {},
         }
         try:
             if self.effects:
@@ -585,6 +807,8 @@ class RepairEffectLedger:
                                                                   script)
             node["changed_frames"] = self._changed(prev, script)
             node["digests"] = self._digests(script)
+            node["frame_structure"] = _frame_structure_snapshot(
+                script, self.effects, self.frame_targets)
         except Exception as exc:                      # noqa: BLE001 - 见上
             node["error"] = "%s: %s" % (type(exc).__name__, exc)
         self.nodes.append(node)

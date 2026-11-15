@@ -1,0 +1,205 @@
+{
+  "status": "ok",
+  "schema_version": "2026-11-15-frame-identity-supplement-v1",
+  "run_id": "20261115T144433-11820",
+  "frozen_revision_recomputed": "a1671c1756b50e2785b36e04ec149a65eaee95a6371d4e78b8c4af78eaeba588",
+  "frozen_revision_declared": "a1671c1756b50e2785b36e04ec149a65eaee95a6371d4e78b8c4af78eaeba588",
+  "commit_revision": "a1671c1756b50e2785b36e04ec149a65eaee95a6371d4e78b8c4af78eaeba588",
+  "revision_identity_ok": true,
+  "input_sha256": {
+    "frozen_script": "cc24493e1af95a560e089ac59c2c20569aeb5673cb1c387b4e187f23cf05ba69",
+    "round1_answer": "a444cb11d9a0e742575cbe9fb14e864a6be889ca9fdbdd40b1ed53add574aeb6",
+    "round2_answer": "376f12fac3a2480f9a1341a6a60f4072f4b1e0ae6227a7d85621e89a5b119e11",
+    "audit": "7685786ce4e9690c573819ae46a961956ede59b6c64ad5ed9aaa8b36637b6032",
+    "commit": "8f58ac09f1050d8813496ab1910ab5b96c4e45d7a924f62f1cdc3f9773e63629",
+    "metrics": "6a883380f76818a8bc64002243344fc40c301375d87e0b8fb68567a1c21340e1",
+    "log": "006587ff01775510bd86cf70abbd5f4545289eb1ff347cb3937fe91cae03b3cd"
+  },
+  "shot5_declared_authorized_paths": [
+    "prompt",
+    "ff_desc",
+    "lf_desc",
+    "frame_layouts.ff",
+    "frame_layouts.lf",
+    "frame_layouts.kfs[0]",
+    "frame_layouts.kfs[1]"
+  ],
+  "rebuilt_allowed_note": "审计 issue 的 repair_targets 只给出叶子路径；事务中的 _allowed_by_target 另由确定性检查器的结构码并入整表 KF 路径。此处按 step01.log:1471 实测的 6 处改动重建，是**重建值**，不是台账里直接读出的原始集合。",
+  "expression_difference": {
+    "round1": "窄 updates 改写 frame_layouts.kfs.1 + keyframe_additions 追加",
+    "round2_original": "整表替换 frame_layouts + keyframes（无 keyframe_additions）；三条关键帧 desc/stage/t_sec 全部重写，时间轴改为 [1.0,3.0,4.5]",
+    "derived_assembly_sample": "只给 keyframe_additions（frame+layout 成对），由装配器按 t_sec 中间插入；不含任何整表替换，也不含布局内容相似度推导"
+  },
+  "historical_outcome": {
+    "source": "冻结台账 step01_metrics.json / step01_commit.json + step01.log",
+    "note": "这是 run h 当时的**历史终局**，按冻结证据如实抄录；本包不重跑 _repair_shot_warnings，也不因后续守卫修复而改写它。",
+    "decision_chain": [
+      {
+        "line": 710,
+        "text": "[2026-11-15 14:55:47] [REPAIR] 应用完整镜头替换 4 镜"
+      },
+      {
+        "line": 957,
+        "text": "[2026-11-15 14:55:47] [REPAIR] 新增 blocking 1 条（**按目标回退前**记录）: [['prop_possession_consistency', '2', '*', '杨旭', 'frame_layouts.kfs.*.*.props']]  定位=['shot_2']"
+      },
+      {
+        "line": 1190,
+        "text": "[2026-11-15 14:55:47] [REPAIR] 按目标回退 ['shot_2'] 后仍未通过验收（reason=layout_structure_invalid resolved=5 字段触达=3 new=0）→ 整轮回退"
+      },
+      {
+        "line": 1193,
+        "text": "[2026-11-15 14:55:47] [REPAIR] 修复未满足接受条件（reason=new_blocking, resolved=7, 字段触达=4, new=1, checker_failed=False, locked_changed=False），回退本轮修复"
+      },
+      {
+        "line": 1209,
+        "text": "[2026-11-15 14:55:47] [REPAIR] 带反馈重试：剔除肇事目标 ['shot_2']，其余 ['shot_5', 'shot_7', 'shot_8'] 重新修复（仅一次）"
+      },
+      {
+        "line": 1210,
+        "text": "[2026-11-15 14:55:47] [COMMIT] 修复轮被拒（new_blocking）但带反馈重试待跑（剔除 ['shot_2']）→ 下一轮继续"
+      },
+      {
+        "line": 1473,
+        "text": "[2026-11-15 14:56:43] [REPAIR] 替换被拒 3 条: ['shot 1: 装配后 keyframes（3 项）与 frame_layouts.kfs（4 项）长度不等——整表替换 frame_layouts 时 kfs 必须与 keyframes 一一同序对应（kfs[i] 是第 i 个关键帧的布局）；缺帧/缺段请用 keyframe_additions（frame 与 layout 成对）补，不要整表重写 kfs', 'shot 7: keyframe_additions[0] 与已存在帧时刻重复（t_sec=4.5）——同一响应里不得既整表替换又追加同一帧；请只用其中一种表达', 'shot 8: keyframe_additions[0] 与已存在帧时刻重复（t_sec=4.5）——同一响应里不得既整表替换又追加同一帧；请只用其中一种表达']"
+      },
+      {
+        "line": 1475,
+        "text": "[2026-11-15 14:56:43] [REPAIR] 应用完整镜头替换 1 镜"
+      },
+      {
+        "line": 1978,
+        "text": "[2026-11-15 14:56:43] [REPAIR] 按目标回退 ['shot_5'] 后仍未通过验收（reason=no_target_resolved resolved=0 字段触达=0 new=0）→ 整轮回退"
+      },
+      {
+        "line": 1981,
+        "text": "[2026-11-15 14:56:43] [REPAIR] 修复未满足接受条件（reason=layout_structure_invalid, resolved=2, 字段触达=0, new=0, checker_failed=False, locked_changed=False），回退本轮修复"
+      },
+      {
+        "line": 1997,
+        "text": "[2026-11-15 14:56:44] [COMMIT] 提交前修复轮零改善（稿件未变；上一轮事务 accepted=False resolved=2 reason=layout_structure_invalid），停止修复"
+      },
+      {
+        "line": 2126,
+        "text": "[2026-11-15 14:56:44] [BLOCK] 分镜脚本**未提交**（三份正式产物保持上一版）：提交前修复轮零改善（稿件未变；上一轮事务 accepted=False resolved=2 reason=layout_structure_invalid），停止修复"
+      }
+    ],
+    "last_decision": {
+      "accepted": false,
+      "reason": "layout_structure_invalid",
+      "before": 21,
+      "after": 19,
+      "resolved": 2,
+      "new_blocking": 0,
+      "new_blocking_keys": [],
+      "resolved_keys": [
+        [
+          "kf_event_window_mismatch",
+          "5",
+          "*",
+          "",
+          "keyframes.desc"
+        ],
+        [
+          "kf_segment_missing",
+          "5",
+          "seg2",
+          "",
+          "keyframes"
+        ]
+      ],
+      "reindexed_kf_shots": [
+        "5"
+      ],
+      "audit_targets": 3,
+      "audit_field_touched": 0,
+      "audit_touched_ids": [],
+      "checker_failed": false,
+      "merged_checker_failed": false,
+      "locked_changed": false,
+      "non_target_changed": [],
+      "locked_by_llm_changed": [],
+      "evidence_removed": [],
+      "kf_structural_violations": [],
+      "layout_structural_violations": [
+        "shot_5: frame_layouts.kfs[1]「杨旭」的字段被改写（本帧只授权增删条目；改字段要写该条目字段的叶子路径）：{\"gaze_target\": \"画右\", \"name\": \"杨旭\", \"on_screen\": true, \"pose\": \"仰卧未及反应 -> {\"gaze_target\": \"画上\", \"name\": \"杨旭\", \"on_screen\": true, \"pose\": \"袒腹仰卧\",",
+        "shot_5: frame_layouts.kfs[1]「神秘人」的字段被改写（本帧只授权增删条目；改字段要写该条目字段的叶子路径）：{\"gaze_target\": \"画左\", \"name\": \"神秘人\", \"on_screen\": true, \"pose\": \"踞蹲船舷\" -> {\"gaze_target\": \"画左\", \"name\": \"神秘人\", \"on_screen\": true, \"pose\": \"双手按舷，"
+      ],
+      "postprocess_target_lost": []
+    },
+    "commit_outcome": {
+      "status": "failed",
+      "outcome_code": "commit_blocked",
+      "commit": {
+        "attempts": 1,
+        "blocked": 1
+      }
+    }
+  },
+  "round2_original_whole_table": {
+    "expression": "整表替换 frame_layouts + keyframes（无 keyframe_additions）",
+    "before_frame_count": 2,
+    "after_frame_count": 3,
+    "preserved_keyframe_full_structures": 0,
+    "keyframe_structure_mapping": null,
+    "keyframe_structure_mapping_validation": "无：保留关键帧完整结构不存在逐字恒等落点（desc/stage/t_sec 被改写）",
+    "identity_verdict": "无法证明：布局内容逐字后移只证明内容保留，关键帧身份字段同时改写 ⇒ 原帧与候选帧对应关系歧义",
+    "guard_without_mapping": [
+      "shot_5: 帧结构变化（基线 kfs 2 / 候选 kfs 3）但缺少可验证的来源映射——本轮布局改动不予验收；补帧请用 updates + keyframe_additions，整表替换须保留关键帧完整结构"
+    ],
+    "apply_entry": {
+      "entry": "_apply_shot_replacements（实际替换/授权合并入口）",
+      "applied": 0,
+      "rejected": [
+        "shot 5: 帧来源无法证明：整表替换须逐字保留关键帧完整结构，或改用 updates（叶子）+ keyframe_additions 表达补帧"
+      ],
+      "exported_mapping": null,
+      "baseline_kept": true
+    },
+    "verdict": "来源链无法建立 ⇒ 进入 staged 前明确拒收并保留基线；不再退回同下标比较，也不按布局内容猜映射"
+  },
+  "derived_assembly_sample": {
+    "sample_id": "DERIVED-R2-ASSEMBLY-01",
+    "sample_sha256": "c6584896a3b6eab35395bc3c86b79621d6b00b9d0008b5f1000d11a3129169a4",
+    "sample_sha256_basis": "json.dumps(ensure_ascii=False, sort_keys=True, separators=(',',':')).encode('utf-8') 的 sha256",
+    "derivation_note": "取第 2 轮答卷新增帧的 desc/stage 与对应布局内容，仅把 t_sec 设为 2.0 以产生合法中间插入；这是**重建样本**，不是历史产物，也不代表原始答卷通过。",
+    "apply_entry": {
+      "entry": "_apply_shot_replacements（实际替换/授权合并入口）",
+      "applied": 1,
+      "rejected": [],
+      "exported_mapping": {
+        "before_count": 2,
+        "after_count": 3,
+        "old_to_new": [
+          0,
+          2
+        ],
+        "added_indices": [
+          1
+        ],
+        "source": "assembly",
+        "source_revision": "a1671c1756b50e2785b36e04ec149a65eaee95a6371d4e78b8c4af78eaeba588"
+      },
+      "mapping_validation": "",
+      "revision_binding_note": "单独调用替换入口时映射尚无 source_revision；回放显式重放事务循环的 revision 绑定步骤后再校验。"
+    },
+    "guard_without_mapping": [
+      "shot_5: 帧结构变化（基线 kfs 2 / 候选 kfs 3）但缺少可验证的来源映射——本轮布局改动不予验收；补帧请用 updates + keyframe_additions，整表替换须保留关键帧完整结构"
+    ],
+    "guard_with_mapping": [],
+    "layout_effects_count": 0,
+    "verdict": "来源由装配操作证明 ⇒ 守卫通过；纯中间补帧为纯位移，零条目增删效果属预期"
+  },
+  "round1": {
+    "expression": "窄 updates 改写 frame_layouts.kfs.1 + keyframe_additions 追加",
+    "additions_count": 1,
+    "original_kfs1_was_rewritten_by_updates": true,
+    "note": "按操作来源映射规格，原帧 1 的字段被 updates 改写属真实改写，不是索引位移误报；本包不为此放宽判据。"
+  },
+  "post_fix_offline_adjudication": {
+    "scope": "仅守卫 / 替换入口 / 效果登记的离线实算，非事务级重跑",
+    "original_round2_answer": "rejected_identity_unprovable",
+    "derived_assembly_answer": "accepted_with_assembly_source",
+    "note": "与 historical_outcome 分列：修复后裁决不覆盖、不改写 run h 历史终局；事务级入口的合法/拒收/回退证据另见 test_kf_frame_identity_transaction.py。"
+  },
+  "scope_note": "离线、纯内存：真实模型调用 0，正式产物写入 0，未改任何 .dsh/ 现场产物；不调用布局内容推导函数，不以内容相似度证明帧来源。"
+}

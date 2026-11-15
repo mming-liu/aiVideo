@@ -5396,8 +5396,15 @@ from step01_script_gen.repair_fields import (merge_authorized as _merge_authoriz
                                           MODEL_AUDIT_WARNING_PREFIX)
 
 
-def _assemble_keyframe_additions(target: dict, additions) -> tuple:
+def _assemble_keyframe_additions(target: dict, additions,
+                                 *, frame_mapping_out: dict | None = None) -> tuple:
     """把「帧 + 对应布局」的**成对数据**装配进完整镜头 → `(new_shot, 拒绝原因)`.
+
+    S02（2026-11-15）：可选、仅关键字的 `frame_mapping_out` 就地写入**帧来源映射**
+    （`before_count/after_count/old_to_new/added_indices`）。返回元组保持不变。
+    身份由**装配前的下标**贯穿：`_sources[j]` 记候选第 j 帧来自哪个原帧，
+    `None` 表示本轮新增。时间字段只用来定插入点，不参与身份判定。
+    仅在装配成功时写入；中途失败由调用方作废候选、映射与效果。
 
     2026-09-27（用户决定）：缺段这类**联动**修复不再要求模型返回一个自洽的完整
     镜头。实测模型会把 `keyframes` 加到 4 而 `frame_layouts.kfs` 留在 3 →
@@ -5408,6 +5415,9 @@ def _assemble_keyframe_additions(target: dict, additions) -> tuple:
     **代码只做配对与装配**：不从邻帧或 `motion_desc` 猜测人物姿态/持物等布局
     语义（那样的回填等于伪造布局）。缺任一半 → 拒收并记明原因。
     """
+    # S02 补正：输出容器按**单次调用**初始化，失败目标不留上一轮/上一目标的旧映射。
+    if isinstance(frame_mapping_out, dict):
+        frame_mapping_out.clear()
     if not isinstance(additions, list) or not additions:
         return None, "keyframe_additions 必须是非空列表"
     import copy as _copy
@@ -5422,6 +5432,9 @@ def _assemble_keyframe_additions(target: dict, additions) -> tuple:
     lkfs = _fl.get("kfs") if isinstance(_fl, dict) else None
     if not isinstance(lkfs, list):
         return None, "目标镜头没有 frame_layouts.kfs 列表"
+    # S02：装配前的原帧来源序号；与 kfs/lkfs 同步插入，保持三表同长。
+    _before_count = len(kfs)
+    _sources: list = list(range(_before_count))
     try:
         dur = float(out.get("duration_sec") or out.get("duration") or 0)
     except (TypeError, ValueError):
@@ -5452,6 +5465,7 @@ def _assemble_keyframe_additions(target: dict, additions) -> tuple:
                 break
         kfs.insert(idx, frame)
         lkfs.insert(idx, layout)
+        _sources.insert(idx, None)      # 新增帧没有原帧来源
 
     if len(kfs) != len(lkfs):
         return None, ("装配后 keyframes（%d 项）与 frame_layouts.kfs（%d 项）长度不等——"
@@ -5459,6 +5473,21 @@ def _assemble_keyframe_additions(target: dict, additions) -> tuple:
                       "（kfs[i] 是第 i 个关键帧的布局）；缺帧/缺段请用 "
                       "keyframe_additions（frame 与 layout 成对）补，不要整表重写 kfs"
                       % (len(kfs), len(lkfs)))
+    if isinstance(frame_mapping_out, dict):
+        _old_to_new: list = [None] * _before_count
+        _added: list = []
+        for _j, _src in enumerate(_sources):
+            if _src is None:
+                _added.append(_j)
+            else:
+                _old_to_new[_src] = _j
+        frame_mapping_out.update({
+            "before_count": _before_count,
+            "after_count": len(_sources),
+            "old_to_new": _old_to_new,
+            "added_indices": _added,
+            "source": "assembly",
+        })
     return out, ""
 
 
@@ -5592,7 +5621,8 @@ def _apply_shot_replacements(script: dict, replacements: list,
                              picked: set[str],
                              hook_replacement: dict | None = None,
                              allowed_by_target: dict | None = None,
-                             expected_targets: set | None = None) -> tuple[dict, int, list]:
+                             expected_targets: set | None = None,
+                             *, frame_mappings_out: dict | None = None) -> tuple[dict, int, list]:
     """把「完整镜头替换」**逐目标**应用到被点名的镜头（v6.86 用户决定 A1）.
 
     语义（v6.86 起）：
@@ -5614,10 +5644,19 @@ def _apply_shot_replacements(script: dict, replacements: list,
         一个都没提交时返回**原脚本**且计数为 0
     """
     import copy as _copy
+    # S02 补正：映射输出容器按单次调用初始化；失败目标不残留上一次调用的结果。
+    if isinstance(frame_mappings_out, dict):
+        frame_mappings_out.clear()
     merged = _copy.deepcopy(script)
     rejected: list[str] = []
     staged: list[tuple[dict, dict, str]] = []
     _seen_ids: set = set()
+    # S02：帧来源映射按目标导出，只在本目标通过装配/授权合并/替换校验后写入。
+    from step01_script_gen.repair_fields import (
+        _norm_keep_index, compose_frame_mappings,
+        derive_frame_mapping_from_keyframes, identity_frame_mapping,
+        validate_frame_mapping, verify_frame_identity_by_authorized_leaves)
+    _stage_mappings: dict = {}
 
     def _find(sid: str):
         if sid in ("0", "hook"):
@@ -5669,6 +5708,12 @@ def _apply_shot_replacements(script: dict, replacements: list,
         if target is None:
             rejected.append(f"shot {sid} 未被点名或不存在")
             return
+        # S02：本轮基线的帧列表，映射的「原帧坐标」以它为准。
+        _base_kfs = ((target.get("frame_layouts") or {}).get("kfs") or [])
+        _base_keyframes = target.get("keyframes") or []
+        _kf_base = target
+        _asm_map: dict = {}
+        _update_map: dict | None = None      # 基线 → 更新后（未装配前）
         if sid in _seen_ids:
             rejected.append(f"shot {sid} 重复出现（每个目标恰好一次，后者丢弃）")
             return
@@ -5706,7 +5751,8 @@ def _apply_shot_replacements(script: dict, replacements: list,
                 rejected.append(f"shot {sid}: {_dup_why}")
                 return
             new_shot, _why = _assemble_keyframe_additions(
-                _kf_base, item.get("keyframe_additions"))
+                _kf_base, item.get("keyframe_additions"),
+                frame_mapping_out=_asm_map)
             if _why:
                 rejected.append(f"shot {sid}: {_why}")
                 return
@@ -5792,8 +5838,94 @@ def _apply_shot_replacements(script: dict, replacements: list,
         if reason:
             rejected.append(f"shot {sid}: {reason}")
             return
+        # S02 补正（2026-11-15）------------------------------------------------
+        # 来源链分两段，且都必须**可验证**：
+        #   ① 字段更新 / 整表替换：基线 → 更新后（`_pre`）
+        #   ② 成对补帧装配：更新后 → 候选（`_asm_map`）
+        # 任一段无法建立 ⇒ 目标**在进入 staged 前**拒收、保留基线。旧实现「不导出
+        # 映射 + 守卫退回同下标比较」无法保证拒收（缺映射时新增的空布局帧会被
+        # 静默放过），已取消。
+        # 布局内容一律**不参与**来源推导：整表替换只认保留关键帧完整结构，或
+        # 帧数不变时逐帧证明「差异只在授权叶子」。
+        _final_kfs = ((new_shot.get("frame_layouts") or {}).get("kfs") or []) \
+            if isinstance(new_shot, dict) else []
+        _final_kf = new_shot.get("keyframes") or [] if isinstance(new_shot, dict) else []
+        _has_additions = item.get("keyframe_additions") is not None
+        _has_updates = _raw_updates is not None
+        _has_full_shot = "shot" in forms
+        # 「更新阶段」的实际落点：有装配时取装配前快照（_kf_base），无装配时取
+        # **授权合并后的最终候选**（new_shot）。旧代码一律取 _kf_base，而它在没有
+        # keyframe_additions 时仍等于 target（基线），整表替换因此被误判成「帧结构
+        # 没变」→ 拿到恒等映射 → 直到最终核对才因计数不符被拦，拒因也不是结构化
+        # 的「来源无法证明」。S03 补正要求来源链不成立时在 staged 前明确拒收。
+        _update_stage = _kf_base if _has_additions else new_shot
+        _pre_kfs = ((_update_stage.get("frame_layouts") or {}).get("kfs") or []) \
+            if isinstance(_update_stage, dict) else []
+        _pre_kf = _update_stage.get("keyframes") or [] \
+            if isinstance(_update_stage, dict) else []
+        _identity_reason = (
+            "帧来源无法证明：整表替换须逐字保留关键帧完整结构，或改用 "
+            "updates（叶子）+ keyframe_additions 表达补帧")
+
+        # ① 更新阶段 ---------------------------------------------------------
+        _pre = None
+        if _has_full_shot:
+            # 用**合并后**的关键帧判身份（`merge_authorized` 会把未授权帧列表
+            # 回填成基线值，合并前的值不是最终候选）。
+            _pre = derive_frame_mapping_from_keyframes(_base_keyframes, _final_kf)
+            if (_pre is None and len(_final_kfs) == len(_base_kfs)
+                    and len(_final_kf) == len(_base_keyframes)
+                    and verify_frame_identity_by_authorized_leaves(
+                        _base_keyframes, _final_kf, allowed)):
+                _pre = identity_frame_mapping(len(_base_kfs))
+        elif _has_updates:
+            _paths: list = []
+            if isinstance(_raw_updates, dict):
+                _paths = [str(k) for k in _raw_updates]
+            elif isinstance(_raw_updates, list):
+                _paths = [str(x.get("field_path") or "") for x in _raw_updates
+                          if isinstance(x, dict)]
+            _whole_container = any(
+                _norm_keep_index(p) in ("keyframes", "frame_layouts",
+                                        "frame_layouts.kfs") for p in _paths)
+            if _whole_container or len(_pre_kfs) != len(_base_kfs) \
+                    or len(_pre_kf) != len(_base_keyframes):
+                # 更新阶段改变了帧结构 ⇒ 先取得可验证映射，再与插入映射组合。
+                _pre = derive_frame_mapping_from_keyframes(_base_keyframes, _pre_kf)
+            else:
+                # 窄补丁只写具体叶子，索引身份由代码构造保证。
+                _pre = identity_frame_mapping(len(_base_kfs))
+        else:
+            _pre = identity_frame_mapping(len(_base_kfs))
+        if _pre is None:
+            rejected.append(f"shot {sid}: {_identity_reason}")
+            return
+
+        # ② 装配阶段 ---------------------------------------------------------
+        if _has_additions:
+            if not _asm_map or _pre["after_count"] != _asm_map.get("before_count"):
+                rejected.append(
+                    f"shot {sid}: 装配来源与更新阶段来源不连续，无法组合帧映射")
+                return
+            _stage_map = compose_frame_mappings(_pre, _asm_map)
+            if len(_final_kfs) != _asm_map.get("after_count") \
+                    or len(_final_kf) != _asm_map.get("after_count"):
+                rejected.append(
+                    f"shot {sid}: 授权合并回填了装配后的帧结构，来源链失效")
+                return
+        else:
+            _stage_map = _pre
+
+        # ③ 最终核对 ---------------------------------------------------------
+        _map_why = validate_frame_mapping(
+            _stage_map, len(_base_kfs), len(_final_kfs))
+        if _map_why or len(_final_kf) != len(_final_kfs):
+            rejected.append(
+                f"shot {sid}: 帧映射未通过最终核对（{_map_why or '帧数与布局数不一致'}）")
+            return
         _seen_ids.add(sid)
         staged.append((target, new_shot, sid))
+        _stage_mappings[sid] = _stage_map
 
     for _item in replacements or []:
         _stage(_item)
@@ -5829,6 +5961,14 @@ def _apply_shot_replacements(script: dict, replacements: list,
         _target.clear()
         _target.update(_new)
     committed = len(staged)
+
+    # S02：只有真正提交成功的目标才导出映射；被拒目标不留下有效映射。
+    if isinstance(frame_mappings_out, dict):
+        for _sid, _mp in _stage_mappings.items():
+            if _mp is None:
+                continue
+            _key = "hook" if str(_sid) in ("0", "hook") else "shot_%s" % _sid
+            frame_mappings_out[_key] = _mp
 
     if expected_targets is not None:
         got = {_sid for _, _, _sid in staged}
@@ -8017,6 +8157,11 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     # S03：上一轮因**体积**被暂缓的目标，本轮优先装（否则永远排在队尾饿死）。
     _carry_deferred: set = set()
     for _round in range(1, _rounds + 1):
+        # S02/S03：本轮事务的帧来源映射，绑定本轮基线稿，每轮重新生成。
+        # 装配/授权合并/守卫/效果登记/按目标回退重验共用这一份。
+        _frame_mappings: dict = {}
+        _frame_mappings_guard: dict = {}   # 守卫/效果/重验消费的同一份映射
+        _frame_mappings_final: dict = {}   # 台账记录**最终保留稿**对应的映射
         _excluded_all = _rejected_targets | _defer   # v6.140：每轮重算（见上）
         # §14 P3：**已封存的布局效果冲突 ⇒ 不再发请求**。
         #
@@ -8185,8 +8330,12 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 自身」的 revision——两者在 BEST-GUARD 路径上必然不同，传错会让效果的版本
         # 身份绑到另一份稿子上（`remap_layout_effects` 的核对随之全部失效）。
         _effect_revision = _csr_eff(_round_before_script)
+        # S03 补正：四节点从「原候选」起就按**本轮点名目标**冻结帧结构，而不是
+        # 只按已登记效果取目标。纯中间补帧没有布局条目增删效果，但仍有装配来源
+        # 映射；漏掉它，后处理 writer 在这类目标上插帧就没有任何节点能观测到。
         _effect_ledger = RepairEffectLedger(round_id=str(_round),
-                                            source_revision=_effect_revision)
+                                            source_revision=_effect_revision,
+                                            frame_targets=set(picked))
         _effect_ledger.freeze_candidate(_round_before_script, _effect_revision)
         _effect_bindings: dict = {}
         _effect_view = None
@@ -9152,7 +9301,12 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         merged, _n_applied, _rejected = _apply_shot_replacements(
             script, _repls, set(picked), hook_replacement=_hook_repl,
             allowed_by_target=_allowed_by_target,
-            expected_targets=_expected_ids)
+            expected_targets=_expected_ids,
+            frame_mappings_out=_frame_mappings)
+        # 映射绑定本轮基线 revision；跨 revision 的映射在消费前会被丢弃。
+        for _mp in _frame_mappings.values():
+            if isinstance(_mp, dict):
+                _mp["source_revision"] = _effect_revision
         if _rejected:
             # v6.87：`_rejected` 里既可能是真被拒的条目，也可能是「某目标未返回替换
             # （其余已提交）」这类**信息性**回报（A1 逐目标提交后新出现）。分开打。
@@ -9233,15 +9387,23 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # v6.154（复核之二十 P1）：**帧子列表**被逐字点名时只允许纯增删条目
         # （保留条目逐字不变、相对顺序不变、非点名帧不动）。与 kf 闸门同时算、
         # 同源基线（都只看 LLM 的写入，不看管线自己的确定性清洗）。
+        # S03 补正：**不再过滤**异常映射后退回同下标比较。跨 revision、缺映射、
+        # 来源歧义一律由守卫产出结构化违例，直接进入本轮事务否决项；守卫与
+        # 效果登记消费同一份映射、同一份基线 revision。
+        _frame_mappings_guard = dict(_frame_mappings)
+        _frame_mappings_final = dict(_frame_mappings_guard)
         _layout_struct_after_patch = frame_layout_structural_violations(
-            _round_before_script, merged, _allowed_by_target, set(picked))
+            _round_before_script, merged, _allowed_by_target, set(picked),
+            frame_mappings=_frame_mappings_guard, revision=_effect_revision)
         # §14 P1 节点②：**授权合并后**就是效果的基线——它只含 LLM 的写入。
         # 只登记「被逐字点名的帧子列表」上、且已过上述结构守卫的增删；
         # 之后每个后处理 writer 跑完再冻一次，看这条已授权效果有没有被抵消。
         try:
             _effect_records = build_layout_effects(
                 _round_before_script, merged, _allowed_by_target,
-                _effect_revision, round_id=str(_round))
+                _effect_revision, round_id=str(_round),
+                frame_mappings=_frame_mappings_guard,
+                revision=_effect_revision)
         except Exception as _eff_err:
             _effect_records = []
             _logger.warn("[REPAIR] 布局效果登记失败（本轮按无效果处理）: %s" % _eff_err)
@@ -9435,6 +9597,34 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         _effect_ledger.observe_writer(WRITER_RESTORE_UNTARGETED, script)
         # §14 P1 节点④：**最终重验后**——下面取的就是本轮接受判据所依据的那份稿子。
         _effect_ledger.freeze_reverify(script, _effect_revision)
+        # S03 补正：后处理来源核验。writer 若插入/删除/重排帧，或观测回调被
+        # `apply_constraints` 吞成 warn，都不得继续消费旧定位符——生成结构化
+        # 违例，与布局守卫共用同一个事务否决项（不是只打日志）。
+        _frame_locator_issues: list = []
+        try:
+            from step01_script_gen.repair_effects import (
+                frame_locator_integrity as _fli)
+            _frame_locator_issues = _fli(
+                _post_merge_snapshot, script, _effect_ledger.effects,
+                frame_mappings=_frame_mappings_guard)
+        except Exception as _fli_err:
+            _frame_locator_issues = [
+                "帧定位符完整性核验失败（视为失效）: %s" % _fli_err]
+        _ledger_obs_errors = _effect_ledger.observation_errors()
+        _ledger_struct_changes = _effect_ledger.structure_changes()
+        for _obs in _ledger_obs_errors:
+            _frame_locator_issues.append(
+                "后处理观测回调失败（writer=%s）：%s；本轮布局效果不予采信"
+                % (_obs["writer"], _obs["error"]))
+        if _frame_locator_issues:
+            _layout_struct_after_patch = list(_layout_struct_after_patch) \
+                + _frame_locator_issues
+            _logger.warn("[REPAIR] 帧定位符完整性否决 %d 条（结构变化 %d / "
+                         "观测错误 %d）: %s"
+                         % (len(_frame_locator_issues),
+                            len(_ledger_struct_changes),
+                            len(_ledger_obs_errors),
+                            _frame_locator_issues[:3]))
 
         _round_ok = False   # v6.101：本轮事务是否被接受
         _no_gain = False    # v6.102：本轮是否「通过验收但零改善」
@@ -9683,6 +9873,24 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     try:
                         _try_script = _restore_targets(script, _round_before_script, _offend)
                         _merged_try = _restore_targets(merged, _round_before_script, _offend)
+                        # S03：回退目标已恢复基线 ⇒ 恒等映射；其余目标保留各自映射。
+                        # 同步撤销回退目标的映射与效果，避免「回退后仍按位移坐标比较」。
+                        from step01_script_gen.repair_fields import (
+                            identity_frame_mapping as _identity_frame_mapping)
+                        _offend_keys: set = set()
+                        for _t_key in _offend:
+                            _s_key = str(_t_key)
+                            _offend_keys.add(_s_key)
+                            _offend_keys.add("shot_%s" % (
+                                _s_key[5:] if _s_key.startswith("shot_") else _s_key))
+                        _try_mappings = {
+                            _k: _v for _k, _v in _frame_mappings_guard.items()
+                            if _k not in _offend_keys}
+                        for _t_rb in _offend:
+                            _s_b = _shot_by_target_id(_round_before_script, _t_rb) or {}
+                            _try_mappings[_t_rb] = _identity_frame_mapping(
+                                len((_s_b.get("frame_layouts") or {}).get("kfs") or []),
+                                source_revision=_effect_revision)
                         # v6.143（P4）：锁定字段判据必须**按回退后的稿子重算**。
                         # 传原来的轮级 `_locked_changed` 会让 locked 型拒绝在回退后
                         # 依然为真（它描述的是**回退前**那一版），按目标回退永远过不了
@@ -9705,7 +9913,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                                 _allowed_by_target, set(picked), novel_text),
                             layout_structural_violations=frame_layout_structural_violations(
                                 _round_before_script, _merged_try,
-                                _allowed_by_target, set(picked)),
+                                _allowed_by_target, set(picked),
+                                frame_mappings=_try_mappings,
+                                revision=_effect_revision),
                             merged_script=_merged_try,
                             merged_state=_g7_merged_state(_merged_try, novel_text))
                     except Exception as _try_err:
@@ -9715,6 +9925,26 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                         script = _try_script
                         _decision = _dec_try
                         _round_ok = True
+                        # S03 补正：台账要写**最终保留稿**的映射，而不是回退前的
+                        # 装配映射——否则「回退目标已恢复恒等映射」在证据里看不见，
+                        # 下游会把一份已被撤销的位移坐标当成事实继续消费。
+                        _frame_mappings_final = dict(_try_mappings)
+                        # S03 补正：回退目标的效果与映射同步撤销。历史节点留在
+                        # 原账本里（回退前事实），下游归因只拿「最终保留稿」的视图。
+                        _kept_targets = set(picked) - set(_offend)
+                        _ledger_view = _effect_ledger.filtered_view(_kept_targets)
+                        _dropped = len(_effect_ledger.effects) - len(_ledger_view.effects)
+                        _decision["effects_rolled_back"] = _dropped
+                        try:
+                            _effect_outcome = classify_effect_outcome(
+                                _ledger_view, script,
+                                bindings=dict(_effect_bindings))
+                            _decision["effect_conflict"] = _effect_outcome or {}
+                        except Exception as _eff_rb:
+                            _logger.warn("[REPAIR] 回退后效果归因重算失败: %s" % _eff_rb)
+                        if _dropped:
+                            _logger.info("[REPAIR] 按目标回退同步撤销 %d 条已登记效果"
+                                         % _dropped)
                         # v6.139：决策换成了按目标回退后的版本，兜底记账身份同步
                         _touched_ids_round = list(_dec_try.get("audit_touched_ids") or [])
                         # 决策换了，no-gain 判据必须跟着重算（否则会拿被否决那轮
@@ -9906,6 +10136,31 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     # 空字典 = 本轮授权路径上的值没有被后处理改动。
                     "postprocess_reverted": _authorized_changes_lost(
                         _post_merge_snapshot, script, _allowed_by_target),
+                    # S03 补正：帧来源核验的可评阅证据（映射来源 / 定位符完整性 /
+                    # writer 结构变化 / 观测回调错误 / 回退撤销的效果数）。
+                    "frame_mappings": {
+                        str(k): {kk: vv for kk, vv in v.items()
+                                 if kk in ("source", "source_revision",
+                                           "before_count", "after_count",
+                                           "old_to_new", "added_indices")}
+                        for k, v in _frame_mappings_final.items()
+                        if isinstance(v, dict)},
+                    # S03 补正：合并后布局守卫的**原始违例**（含按目标回退前的
+                    # 起因），与 origin_reason 互为佐证；不随按目标回退被覆盖。
+                    "layout_structural_violations": list(
+                        _layout_struct_after_patch or []),
+                    "frame_locator_integrity": list(_frame_locator_issues),
+                    "writer_structure_changes": _ledger_struct_changes,
+                    "writer_observation_errors": _ledger_obs_errors,
+                    # 四节点（① 原候选 / ② 授权合并 / ③ 逐 writer / ④ 最终重验）
+                    # 的精简证据：节点类型、责任 writer、撤销记录、帧结构状态。
+                    "effect_ledger_nodes": [
+                        {"node": n.get("node"), "writer": n.get("writer"),
+                         "reverted": n.get("reverted") or [],
+                         "frame_structure": n.get("frame_structure") or {},
+                         "error": n.get("error") or ""}
+                        for n in _effect_ledger.as_records()],
+                    "effects_rolled_back": int(_decision.get("effects_rolled_back") or 0),
                 })
             except Exception as _diag_err:
                 _logger.warn(f"[REPAIR] 修复轮诊断记录失败（不影响结论）: {_diag_err}")

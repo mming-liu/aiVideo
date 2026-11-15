@@ -1132,6 +1132,200 @@ def check_replacement_authorized(before: dict, after: dict, allowed) -> str:
 _LAYOUT_FRAME_LIST_KEYS: tuple = ("ff", "lf")
 
 
+# ---------------------------------------------------------------------------
+# 帧来源映射（S02/S03，2026-11-15）
+#
+# 补帧是**在中间插入**：`kfs[i]` 这个路径在插入后指向的已经不是原来那一帧。
+# 守卫、效果登记、按目标回退重验原来都按同下标比较，于是「插入新帧 + 原帧
+# 逐字后移」被判成「保留条目被改写」（run h 实测两条误报，resolved=2 仍回退）。
+#
+# 身份以**装配前的原帧下标**贯穿本轮事务；候选坐标由 `old_to_new` 给出。
+# 映射只能由代码执行的插入操作生成，或在整表替换时由逐字恒等唯一推导，
+# 模型答卷不得提供或覆盖。布局内容只用于保护校验，不做相似度打分。
+# ---------------------------------------------------------------------------
+
+# 来源标记：映射**只能由代码**生成。模型答卷不提供、也不能覆盖它。
+#   · assembly            —— `keyframe_additions` 的插入操作序列（最强来源）
+#   · keyframe_structure  —— 整表替换时由「保留关键帧完整结构」得到的唯一对应
+#   · identity            —— 帧数不变且逐帧来源可由授权叶子差异证明
+_FRAME_MAPPING_SOURCES = frozenset({"assembly", "keyframe_structure", "identity"})
+# 整表容器授权会掩盖重排，不能用来证明「同下标即同一原帧」。
+_WHOLE_FRAME_CONTAINERS = frozenset({"keyframes", "frame_layouts",
+                                     "frame_layouts.kfs"})
+
+
+def identity_frame_mapping(count: int, *, source_revision: str = "") -> dict:
+    """无帧结构变化时的恒等映射（旧入口兼容）."""
+    n = count if type(count) is int and count >= 0 else 0
+    mp = {"before_count": n, "after_count": n,
+          "old_to_new": list(range(n)), "added_indices": [],
+          "source": "identity"}
+    if source_revision:
+        mp["source_revision"] = str(source_revision)
+    return mp
+
+
+def _strict_index_list(value):
+    """`[int, ...]` 或 `None`。**拒绝 bool / float / str 的隐式转换**."""
+    if not isinstance(value, (list, tuple)):
+        return None
+    out = []
+    for x in value:
+        if type(x) is not int:
+            return None
+        out.append(x)
+    return out
+
+
+def validate_frame_mapping(mapping, before_count: int, after_count: int,
+                           *, expected_revision: str | None = None) -> str:
+    """返回空串表示可用；否则返回明确拒因（fail-closed，绝不放行）.
+
+    S02 补正：所有计数与下标必须 `type(x) is int`（`int(False)==0`、
+    `int(2.9)==2` 曾让 `[False, 2.9]` 冒充 `[0, 2]`）；额外校验代码来源标记
+    与本轮基线 revision。映射异常由调用方**直接否决**，不得过滤后退回同下标比较。
+    """
+    if not isinstance(mapping, dict):
+        return "帧映射不是对象"
+    if mapping.get("source") not in _FRAME_MAPPING_SOURCES:
+        return "帧映射缺少代码生成的来源标记（source）"
+    bc, ac = mapping.get("before_count"), mapping.get("after_count")
+    if type(bc) is not int or type(ac) is not int:
+        return "帧映射计数不是整数（拒绝布尔值与隐式转换）"
+    o2n = _strict_index_list(mapping.get("old_to_new"))
+    added = _strict_index_list(mapping.get("added_indices"))
+    if o2n is None or added is None:
+        return "帧映射下标不是整数（拒绝布尔值、浮点与字符串）"
+    if expected_revision is not None:
+        rev = mapping.get("source_revision")
+        if not isinstance(rev, str) or rev != str(expected_revision):
+            return ("帧映射与本轮基线 revision 不符（映射 %r / 本轮 %s）"
+                    % (rev, expected_revision))
+    if bc != before_count or ac != after_count:
+        return ("帧映射计数与稿件不符（基线 %d / 候选 %d，映射 %d / %d）"
+                % (before_count, after_count, bc, ac))
+    if ac < bc or len(added) != ac - bc:
+        return "帧映射新增帧数与计数不符"
+    if len(o2n) != bc:
+        return "帧映射未完整覆盖原帧"
+    if len(set(o2n)) != len(o2n) or len(set(added)) != len(added):
+        return "帧映射目标下标重复"
+    if any(j < 0 or j >= ac for j in o2n + added):
+        return "帧映射目标下标越界"
+    if set(o2n) & set(added):
+        return "帧映射的新增位置与保留位置重叠"
+    if sorted(o2n + added) != list(range(ac)):
+        return "帧映射未覆盖候选帧全集"
+    if o2n != sorted(o2n):
+        return "帧映射改变了原帧相对顺序"
+    if added != sorted(added):
+        return "帧映射新增位置未按候选顺序"
+    if bc != ac and mapping.get("source") == "identity":
+        return "帧结构已变化但来源标记为恒等映射"
+    return ""
+
+
+def _canon_obj(obj) -> str:
+    import json as _json
+    return _json.dumps(obj, ensure_ascii=False, sort_keys=True)
+
+
+def _unique_order_mapping(before_items, after_items):
+    """逐字恒等 + 唯一递增落点；重复 / 同时改写 / 顺序不一致 / 缺落点 → None.
+
+    **不是相似度匹配**：内容只作完整性证据，不做打分。
+    """
+    if not isinstance(before_items, list) or not isinstance(after_items, list):
+        return None
+    candidates = [_canon_obj(x) for x in after_items]
+    old_to_new, used, cursor = [], set(), -1
+    for item in before_items:
+        key = _canon_obj(item)
+        hits = [j for j, c in enumerate(candidates)
+                if c == key and j > cursor and j not in used]
+        if len(hits) != 1:
+            return None
+        old_to_new.append(hits[0])
+        used.add(hits[0])
+        cursor = hits[0]
+    return {"before_count": len(before_items), "after_count": len(after_items),
+            "old_to_new": old_to_new,
+            "added_indices": [j for j in range(len(after_items)) if j not in used]}
+
+
+def derive_frame_mapping_from_keyframes(before_keyframes, after_keyframes,
+                                        *, source_revision: str = ""):
+    """整表替换时**唯一**允许的来源推导：保留关键帧**完整结构**.
+
+    与旧版 `derive_frame_mapping(before_kfs, after_kfs)` 的区别：布局内容不再
+    承担来源证明——同一候选 `[A, B改, B]` 曾在布局推导下得到 `[0,2]` 而放行，
+    用操作来源 `[0,1]` 却正确报出改写，**相同内容两种裁决**。现在只认关键帧
+    对象逐字恒等且落点唯一；身份字段（desc/t_sec/stage）被改写即返回 `None`。
+    """
+    mp = _unique_order_mapping(before_keyframes, after_keyframes)
+    if mp is None:
+        return None
+    mp["source"] = "keyframe_structure"
+    if source_revision:
+        mp["source_revision"] = str(source_revision)
+    return mp
+
+
+def compose_frame_mappings(pre: dict, post: dict) -> dict:
+    """`pre`（基线→更新后）与 `post`（更新后→候选）组合成单次来源链.
+
+    字段更新若改变帧结构，必须先取得可验证的 `pre`，再与装配插入的 `post`
+    组合；否则「同长度」不足以证明恒等来源。
+    """
+    pre_o2n = list(pre["old_to_new"])
+    post_o2n = list(post["old_to_new"])
+    added = sorted([post_o2n[j] for j in pre.get("added_indices") or []]
+                   + list(post.get("added_indices") or []))
+    out = {"before_count": pre["before_count"], "after_count": post["after_count"],
+           "old_to_new": [post_o2n[j] for j in pre_o2n],
+           "added_indices": added,
+           "source": "assembly" if post.get("source") == "assembly"
+                     else post.get("source")}
+    if pre.get("source_revision"):
+        out["source_revision"] = pre["source_revision"]
+    if post.get("source_revision"):
+        out["source_revision"] = post["source_revision"]
+    return out
+
+
+def verify_frame_identity_by_authorized_leaves(before_keyframes,
+                                                after_keyframes, allowed) -> bool:
+    """帧数不变时，逐帧证明「同下标即同一原帧」.
+
+    只有当每个差异叶子都落在授权面内、且授权面**没有**整表容器路径（那种授权
+    会掩盖重排）时，恒等来源才算可验证。`allow` 为空时不成立。
+    """
+    allowed_str = {str(a or "").strip() for a in (allowed or ())}
+    if not allowed_str or (allowed_str & _WHOLE_FRAME_CONTAINERS):
+        return False
+    if not isinstance(before_keyframes, list) or not isinstance(after_keyframes, list):
+        return False
+    if len(before_keyframes) != len(after_keyframes):
+        return False
+
+    def _walk(b, a, prefix):
+        if b == a:
+            return True
+        if path_allowed(prefix, allowed_str):
+            return True
+        if isinstance(b, dict) and isinstance(a, dict):
+            return all(_walk(b.get(k), a.get(k), "%s.%s" % (prefix, k))
+                       for k in sorted(set(b) | set(a)))
+        if isinstance(b, list) and isinstance(a, list):
+            return (len(b) == len(a)
+                    and all(_walk(x, y, "%s.%d" % (prefix, i))
+                            for i, (x, y) in enumerate(zip(b, a))))
+        return False
+
+    return all(_walk(b, a, "keyframes.%d" % i)
+               for i, (b, a) in enumerate(zip(before_keyframes, after_keyframes)))
+
+
 def _canon_entry(e) -> str:
     import json as _json
     return _json.dumps(e, ensure_ascii=False, sort_keys=True)
@@ -1297,12 +1491,18 @@ def _unauthorized_value_edits(path: str, before, after, allowed) -> list:
     return ["%s 未被点名却被改动（授权面：%s）" % (path, sorted(allowed)[:4])]
 
 
-def frame_layout_structural_violations(before_script: dict, after_script: dict,
-                                       allowed_by_target: dict | None,
-                                       picked) -> list:
-    """被点名的帧子列表**只允许纯增删条目**；返回 `<目标名>: <违例>`（同 `_kf_structural_violations` 形状）."""
+def _frame_layout_structural_violations_core(before_script, after_script,
+                                             allowed_by_target, picked,
+                                             skip_targets=None) -> list:
+    """（内部主体）**按同一坐标**比较帧子列表；返回 `<目标名>: <违例>`.
+
+    调用方负责把候选稿投影到基线坐标（见 `frame_layout_structural_violations`）。
+    本主体保持 v6.154 的既有判据逐字不变，便于回归比对。
+    """
     out: list = []
     for tid in picked or ():
+        if skip_targets and tid in skip_targets:
+            continue
         allowed = {str(a) for a in ((allowed_by_target or {}).get(tid) or ())}
         if not allowed:
             continue
@@ -1356,6 +1556,144 @@ def frame_layout_structural_violations(before_script: dict, after_script: dict,
                            % (tid, _path))
                 continue
             out.extend("%s: %s" % (tid, m) for m in _pure_entry_edits(_path, _entries, _new))
+    return out
+
+
+def _whole_kfs_authorized(allowed) -> bool:
+    """授权面是否包含「整帧列表」级补帧授权（不含具体下标）.
+
+    补帧要能落到候选稿，`_merge_authorized` 必须留下长度变化：只有整表
+    `keyframes` / `frame_layouts` / `frame_layouts.kfs` 被授权时，新增帧才不会被
+    回填掉。守卫据此独立复核，与替换入口同一口径。
+    """
+    for a_raw in allowed or ():
+        a = str(a_raw or "").strip()
+        if not a or _has_explicit_index(a):
+            continue
+        if _norm(a) in ("keyframes", "frame_layouts", "frame_layouts.kfs"):
+            return True
+    return False
+
+
+def frame_layout_structural_violations(before_script: dict, after_script: dict,
+                                       allowed_by_target: dict | None,
+                                       picked,
+                                       *, frame_mappings: dict | None = None,
+                                       revision: str | None = None) -> list:
+    """被点名的帧子列表**只允许纯增删条目**（S03：补帧后的帧身份对齐）.
+
+    `frame_mappings` 只能由本轮装配/授权合并**由代码**生成，形状见
+    `identity_frame_mapping`，且必须带 `source` 与 `source_revision`。
+
+    有映射时把候选稿的 `kfs` **投影回原坐标**再交给既有主体；新增帧单独核对
+    补帧授权与形状。**前置条件不满足一律结构化拒收，不再退回同下标比较**：
+
+      · 帧数变化但映射缺失 / 类型非法 / 计数不符 / 下标重复越界 / 顺序改变；
+      · 映射与本轮 `revision` 不符（旧实现「过滤后走旧比较」已被取消）；
+      · `keyframe_structure` 来源需重新推导关键帧完整结构并逐项一致；
+      · 新增帧没有整表补帧授权、也没有被逐字点名。
+
+    **仅当帧结构未变且没有映射时**沿用旧的同坐标比较（旧入口兼容）。
+    """
+    import copy as _copy
+    import re as _re
+
+    mappings = frame_mappings if isinstance(frame_mappings, dict) else {}
+    aligned = after_script
+    mapped: dict = {}
+    invalid: set = set()
+    out: list = []
+    for tid in picked or ():
+        mp = mappings.get(tid)
+        if mp is None and str(tid).startswith("shot_"):
+            mp = mappings.get(str(tid)[5:])
+        b = shot_by_target(before_script, tid)
+        a = shot_by_target(after_script, tid)
+        bk = (b.get("frame_layouts") or {}).get("kfs") if isinstance(b, dict) else None
+        ak = (a.get("frame_layouts") or {}).get("kfs") if isinstance(a, dict) else None
+        bkf = b.get("keyframes") if isinstance(b, dict) else None
+        akf = a.get("keyframes") if isinstance(a, dict) else None
+        structural = (
+            (isinstance(bk, list) and isinstance(ak, list) and len(bk) != len(ak))
+            or (isinstance(bkf, list) and isinstance(akf, list)
+                and len(bkf) != len(akf)))
+        allowed = {str(x) for x in ((allowed_by_target or {}).get(tid) or ())}
+
+        if mp is None:
+            if structural:
+                invalid.add(tid)
+                out.append(
+                    "%s: 帧结构变化（基线 kfs %s / 候选 kfs %s）但缺少可验证的"
+                    "来源映射——本轮布局改动不予验收；补帧请用 "
+                    "updates + keyframe_additions，整表替换须保留关键帧完整结构"
+                    % (tid, len(bk) if isinstance(bk, list) else "?",
+                       len(ak) if isinstance(ak, list) else "?"))
+            continue                     # 无结构变化、无映射 → 旧坐标（兼容）
+        if not isinstance(bk, list) or not isinstance(ak, list):
+            # hook / 无帧布局的目标：恒等空映射不构成结构改动，按旧行为跳过。
+            if (bk is None and ak is None and not bkf and not akf
+                    and mp.get("before_count") == 0):
+                continue
+            invalid.add(tid)
+            out.append("%s: 帧映射存在但稿件缺 kfs 列表——本轮布局改动不予验收" % tid)
+            continue
+        why = validate_frame_mapping(mp, len(bk), len(ak),
+                                    expected_revision=revision)
+        if why:
+            invalid.add(tid)
+            out.append("%s: 帧映射无效（%s）——本轮布局改动不予验收" % (tid, why))
+            continue
+        if structural and mp.get("source") == "identity":
+            invalid.add(tid)
+            out.append("%s: 帧结构已变化但来源标记为恒等映射——本轮布局改动不予验收"
+                       % tid)
+            continue
+        if mp.get("source") == "keyframe_structure":
+            recheck = derive_frame_mapping_from_keyframes(bkf, akf)
+            if (recheck is None
+                    or recheck["old_to_new"] != list(mp["old_to_new"])
+                    or recheck["added_indices"] != list(mp["added_indices"])):
+                invalid.add(tid)
+                out.append("%s: 关键帧完整结构无法复现映射所声明的来源"
+                           "——本轮布局改动不予验收" % tid)
+                continue
+        # 新增帧：补帧授权 + 形状，二者缺一不可。
+        # 授权只认「整表补帧授权」。逐字点名 `kfs[i]` 的语义是「该帧只许增删
+        # 条目」，不是「凭空新增一帧」；且授权路径按**原坐标**解释，拿候选下标
+        # 去撞会错配到被点名的保留帧上，把越权新增静默放行（本包实测反例）。
+        _kfs_authorized = _whole_kfs_authorized(allowed)
+        for _j in mp["added_indices"]:
+            j = int(_j)
+            path = "frame_layouts.kfs[%d]" % j
+            if not _kfs_authorized:
+                out.append("%s: %s 新增帧未获授权（补帧需授权整张 "
+                           "keyframes / frame_layouts.kfs；逐字点名 kfs[i] 只授权"
+                           "该帧增删条目）" % (tid, path))
+            out.extend("%s: %s" % (tid, m)
+                       for m in _new_frame_entry_problems(path, ak[j]))
+        if aligned is after_script:
+            aligned = _copy.deepcopy(after_script)
+        _as = shot_by_target(aligned, tid)
+        _as.setdefault("frame_layouts", {})["kfs"] = [ak[int(j)] for j in mp["old_to_new"]]
+        mapped[tid] = (mp, ak)
+
+    for msg in _frame_layout_structural_violations_core(
+            before_script, aligned, allowed_by_target, picked,
+            skip_targets=invalid):
+        tid = str(msg).split(": ", 1)[0]
+        pair = mapped.get(tid)
+        if not pair:
+            out.append(msg)
+            continue
+        mp, _ = pair
+        hit = _re.search(r"kfs\[(\d+)\]", str(msg))
+        if hit:
+            i = int(hit.group(1))
+            if 0 <= i < len(mp["old_to_new"]):
+                out.append("%s（帧映射：原 kfs[%d] → 候选 kfs[%d]）"
+                           % (msg, i, int(mp["old_to_new"][i])))
+                continue
+        out.append(msg)
     return out
 
 

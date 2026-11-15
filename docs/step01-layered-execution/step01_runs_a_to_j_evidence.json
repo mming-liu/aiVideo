@@ -1,0 +1,761 @@
+{
+  "generated_at": "2026-11-15T18:08:50+08:00",
+  "scope": "只读盘点 .dsh 下 a-j 共 10 个 step01 run 的现场台账",
+  "source": "各 run 的 console.log / step01_calls.jsonl / step01_metrics.json / step01_commit.json / step01_repair_rounds.json",
+  "note": "a-d 停在计划层无章节目录；i 无 repair_rounds；g/i 的 blocking_count=1 是通道故障占位",
+  "runs": {
+    "a (前史)": {
+      "dir": "step01_full_20261115",
+      "label": "a (前史)",
+      "exists": true,
+      "exit_code": "exit=1"
+    },
+    "b": {
+      "dir": "step01_full_20261115b",
+      "label": "b",
+      "exists": true,
+      "exit_code": "exit=1"
+    },
+    "c": {
+      "dir": "step01_full_20261115c",
+      "label": "c",
+      "exists": true,
+      "exit_code": "exit=1"
+    },
+    "d": {
+      "dir": "step01_full_20261115d",
+      "label": "d",
+      "exists": true,
+      "exit_code": "exit=1"
+    },
+    "e": {
+      "dir": "step01_full_20261115e",
+      "label": "e",
+      "exists": true,
+      "exit_code": "exit=0",
+      "calls_total": 17,
+      "calls_ok": {
+        "True": 17
+      },
+      "calls_by_schema": {
+        "scene_analysis": 1,
+        "characters": 1,
+        "scene_objects": 1,
+        "chapter_outline": 1,
+        "plan_revision_delta_v1": 1,
+        "content_verification": 4,
+        "source_basis_revision": 1,
+        "plan_content_repair_answer": 2,
+        "storyboard_script": 1,
+        "scene_assets": 1,
+        "props": 1,
+        "script_audit": 1,
+        "repair_shot_replacements": 1
+      },
+      "call_errors": [],
+      "metrics_calls": {
+        "script_generation": 1,
+        "final_audit": 1,
+        "repair_round": 1
+      },
+      "metrics_repair": {},
+      "metrics_status": "failed",
+      "shot_count": null,
+      "duration": null,
+      "commit_status": "BLOCK",
+      "commit_blocking_count": 17,
+      "commit_reason_keys": [
+        "blocking_count",
+        "blocking_truncated",
+        "blocking"
+      ],
+      "commit_outcome": "null",
+      "blocking_sample": [
+        "{\"code\": \"model_audit_STATE_CHAIN_CONFLICT\", \"severity\": \"visual_risk\", \"message\": \"本镜 ff 布局中听香执壶斟酒、杨旭持酒杯，prompt 却让杨旭提酒壶，生成会与布局冲突。；建议：将 prompt 改为“听香执壶斟酒，杨旭持杯”，与 frame_layouts 保持一致。\", \"shot_id\": \"3\", \"",
+        "{\"code\": \"model_audit_STATE_CHAIN_CONFLICT\", \"severity\": \"visual_risk\", \"message\": \"张十三在岸上举灯，支撑物却被标为一叶小舟，岸上站位与支撑关系矛盾。；建议：把支撑物改为湾堤地面/岸地，并同步修正对应关键帧。\", \"shot_id\": \"7\", \"frame_id\": \"ff\", \"entity_id\": \"张十三",
+        "{\"code\": \"model_audit_STATE_CHAIN_CONFLICT\", \"severity\": \"visual_risk\", \"message\": \"庄仆在湾堤岸上张望，支撑物却是一叶小舟，与画面空间关系冲突。；建议：把庄仆各帧支撑物改为湾堤地面/岸地。\", \"shot_id\": \"10\", \"frame_id\": \"ff\", \"entity_id\": \"庄仆\", \"field_"
+      ],
+      "blocking_kinds": {
+        "kf_segment_missing": 11,
+        "model_audit_STATE_CHAIN_CONFLICT": 3,
+        "duplicate_injection": 2,
+        "model_audit_SCENE_LOCATION_MISMATCH": 1
+      },
+      "has_repair_rounds": true,
+      "decisions": [],
+      "has_audit_blocked": true,
+      "audit_blocked_type": "dict",
+      "audit_blocked_keys": [
+        "input_revision",
+        "rule_version",
+        "rule_source_fingerprint",
+        "duration_band",
+        "prompt_source_fingerprint",
+        "audit_scope",
+        "audit_prompt_version",
+        "audit_focus_version",
+        "audit_temperature",
+        "run_id",
+        "status",
+        "audit_status",
+        "model",
+        "channel_provider",
+        "schema_deviations",
+        "usage",
+        "error",
+        "issues",
+        "character_aliases",
+        "created_at"
+      ]
+    },
+    "f": {
+      "dir": "step01_full_20261115f",
+      "label": "f",
+      "exists": true,
+      "exit_code": "exit=0",
+      "calls_total": 15,
+      "calls_ok": {
+        "True": 15
+      },
+      "calls_by_schema": {
+        "scene_analysis": 1,
+        "characters": 1,
+        "scene_objects": 1,
+        "chapter_outline": 1,
+        "plan_revision_delta_v1": 3,
+        "content_verification": 2,
+        "storyboard_script": 1,
+        "props": 1,
+        "scene_assets": 1,
+        "script_audit": 2,
+        "repair_shot_replacements": 1
+      },
+      "call_errors": [],
+      "metrics_calls": {
+        "script_generation": 1,
+        "final_audit": 2,
+        "repair_round": 1
+      },
+      "metrics_repair": {
+        "decisions": 1,
+        "last_decision": {
+          "accepted": true,
+          "reason": "",
+          "before": 14,
+          "after": 13,
+          "resolved": 1,
+          "new_blocking": 0,
+          "new_blocking_keys": [],
+          "resolved_keys": [
+            [
+              "layout_presence_gap",
+              "1",
+              "kf1",
+              "",
+              "layout_presence_gap"
+            ]
+          ],
+          "reindexed_kf_shots": [],
+          "audit_targets": 1,
+          "audit_field_touched": 0,
+          "audit_touched_ids": [],
+          "checker_failed": false,
+          "merged_checker_failed": false,
+          "locked_changed": false,
+          "non_target_changed": [],
+          "locked_by_llm_changed": [],
+          "evidence_removed": [],
+          "kf_structural_violations": [],
+          "layout_structural_violations": [],
+          "postprocess_target_lost": []
+        },
+        "rejected": 1,
+        "accepted_after_target_rollback": 1,
+        "rounds_accepted": 1
+      },
+      "metrics_status": "failed",
+      "shot_count": null,
+      "duration": null,
+      "commit_status": "BLOCK",
+      "commit_blocking_count": 24,
+      "commit_reason_keys": [
+        "blocking_count",
+        "blocking_truncated",
+        "blocking"
+      ],
+      "commit_outcome": "null",
+      "blocking_sample": [
+        "{\"code\": \"model_audit_ACTION_CAUSALITY_GAP\", \"severity\": \"visual_risk\", \"message\": \"尾帧只有捂唇发颤，没有尖叫或呼救；下一镜张十三“闻声赶来”缺少声源，观众无法知道他为何飞掠上船。；建议：在lf_desc与motion_desc补听香的凄厉尖叫或呼救，使下一镜闻声赶来成立。\", \"shot_id\": \"8\", \"f",
+        "{\"code\": \"duplicate_injection\", \"severity\": \"hard\", \"message\": \"描述块跨字段重复注入（ff_desc ↔ motion_desc）：「平底敞口采莲小舟（长4.5米宽1.3米，可容2-…」整块搬运\", \"shot_id\": 1, \"frame_id\": \"prompt/ff/lf/motion\", \"entity_id\": \"\", \"f",
+        "{\"code\": \"kf_segment_missing\", \"severity\": \"visual_risk\", \"message\": \"motion 时段 4-5s「听香身子一歪，杨旭仰卧未及反应」没有**按时间归属**它的关键帧（本镜 3 帧 / 3 个需要独立帧的时段）。**必须动作**（①或②，也可并用；验收口径是**每个需帧时段都有一帧、且该帧文案描写的是它自己那段**）：① 在 ke"
+      ],
+      "blocking_kinds": {
+        "duplicate_injection": 14,
+        "kf_segment_missing": 3,
+        "model_audit_ACTION_CAUSALITY_GAP": 1,
+        "kf_event_window_mismatch": 1,
+        "blocking_unclosed_without_evidence": 1
+      },
+      "has_repair_rounds": true,
+      "decisions": [
+        {
+          "round": 1,
+          "accepted": true,
+          "resolved": 1,
+          "reason": "",
+          "origin_reason": "postprocess_target_lost",
+          "violations": null,
+          "rejected_count": 0,
+          "rejected": [],
+          "frame_mappings": null,
+          "frame_locator_integrity": null,
+          "writer_structure_changes_count": 0,
+          "effects_count": 0
+        }
+      ],
+      "has_audit_blocked": true,
+      "audit_blocked_type": "dict",
+      "audit_blocked_keys": [
+        "input_revision",
+        "rule_version",
+        "rule_source_fingerprint",
+        "duration_band",
+        "prompt_source_fingerprint",
+        "audit_scope",
+        "audit_prompt_version",
+        "audit_focus_version",
+        "audit_temperature",
+        "run_id",
+        "status",
+        "audit_status",
+        "model",
+        "channel_provider",
+        "schema_deviations",
+        "usage",
+        "error",
+        "issues",
+        "character_aliases",
+        "created_at"
+      ]
+    },
+    "g": {
+      "dir": "step01_full_20261115g",
+      "label": "g",
+      "exists": true,
+      "exit_code": "exit=0",
+      "calls_total": 18,
+      "calls_ok": {
+        "True": 17,
+        "False": 1
+      },
+      "calls_by_schema": {
+        "scene_analysis": 1,
+        "characters": 1,
+        "scene_objects": 1,
+        "chapter_outline": 1,
+        "plan_revision_delta_v1": 2,
+        "content_verification": 4,
+        "plan_content_repair_answer": 1,
+        "storyboard_script": 1,
+        "scene_assets": 1,
+        "props": 1,
+        "script_audit": 3,
+        "repair_shot_replacements": 1
+      },
+      "call_errors": [
+        "[agent_plan] 墙钟上限 186.000s 内未返回 ⇒ 按失败处置；**未宣称远端已取消**，迟到的响应不会被采纳、写盘或重发｜阶段轨迹：指纹=2b3ef27a379bea0d｜强度=low（要求 'low'）｜关联ID=a5ac43c6af016c41-LAX｜响应头 22.896s｜SSE 首事件 No"
+      ],
+      "metrics_calls": {
+        "script_generation": 1,
+        "final_audit": 2,
+        "repair_round": 1
+      },
+      "metrics_repair": {
+        "decisions": 1,
+        "last_decision": {
+          "accepted": true,
+          "reason": "",
+          "before": 12,
+          "after": 10,
+          "resolved": 2,
+          "new_blocking": 0,
+          "new_blocking_keys": [],
+          "resolved_keys": [
+            [
+              "kf_segment_missing",
+              "1",
+              "seg1",
+              "",
+              "keyframes"
+            ],
+            [
+              "kf_segment_missing",
+              "3",
+              "seg1",
+              "",
+              "keyframes"
+            ]
+          ],
+          "reindexed_kf_shots": [
+            "1",
+            "3"
+          ],
+          "audit_targets": 2,
+          "audit_field_touched": 1,
+          "audit_touched_ids": [
+            [
+              "3",
+              "FF_RESULT_LEAK"
+            ]
+          ],
+          "checker_failed": false,
+          "merged_checker_failed": false,
+          "locked_changed": false,
+          "non_target_changed": [],
+          "locked_by_llm_changed": [],
+          "evidence_removed": [],
+          "kf_structural_violations": [],
+          "layout_structural_violations": [],
+          "postprocess_target_lost": []
+        },
+        "rejected": 1,
+        "accepted_after_target_rollback": 1,
+        "rounds_accepted": 1
+      },
+      "metrics_status": "failed",
+      "shot_count": null,
+      "duration": null,
+      "commit_status": "BLOCK",
+      "commit_blocking_count": 1,
+      "commit_reason_keys": [
+        "blocking_count",
+        "blocking_truncated",
+        "blocking"
+      ],
+      "commit_outcome": "null",
+      "blocking_sample": [
+        "{\"code\": \"audit_call_failed\", \"severity\": \"blocking\", \"shot_id\": null, \"transient\": true, \"message\": \"final semantic audit request_failed（调用失败 != 0 issue；本条为本次终局原因，不是稿件缺陷清单）\"}"
+      ],
+      "blocking_kinds": {
+        "audit_call_failed": 1
+      },
+      "has_repair_rounds": true,
+      "decisions": [
+        {
+          "round": 1,
+          "accepted": true,
+          "resolved": 2,
+          "reason": "",
+          "origin_reason": "new_blocking",
+          "violations": null,
+          "rejected_count": 0,
+          "rejected": [],
+          "frame_mappings": null,
+          "frame_locator_integrity": null,
+          "writer_structure_changes_count": 0,
+          "effects_count": 0
+        }
+      ],
+      "has_audit_blocked": true,
+      "audit_blocked_type": "dict",
+      "audit_blocked_keys": [
+        "input_revision",
+        "rule_version",
+        "rule_source_fingerprint",
+        "duration_band",
+        "prompt_source_fingerprint",
+        "audit_scope",
+        "audit_prompt_version",
+        "audit_focus_version",
+        "audit_temperature",
+        "run_id",
+        "status",
+        "audit_status",
+        "model",
+        "channel_provider",
+        "schema_deviations",
+        "usage",
+        "error",
+        "issues",
+        "character_aliases",
+        "created_at"
+      ]
+    },
+    "h": {
+      "dir": "step01_full_20261115h",
+      "label": "h",
+      "exists": true,
+      "exit_code": "exit=0",
+      "calls_total": 16,
+      "calls_ok": {
+        "True": 16
+      },
+      "calls_by_schema": {
+        "scene_analysis": 1,
+        "characters": 1,
+        "scene_objects": 1,
+        "chapter_outline": 1,
+        "plan_revision_delta_v1": 4,
+        "content_verification": 2,
+        "storyboard_script": 1,
+        "scene_assets": 1,
+        "props": 1,
+        "script_audit": 1,
+        "repair_shot_replacements": 2
+      },
+      "call_errors": [],
+      "metrics_calls": {
+        "script_generation": 1,
+        "final_audit": 1,
+        "repair_round": 2
+      },
+      "metrics_repair": {
+        "decisions": 2,
+        "last_decision": {
+          "accepted": false,
+          "reason": "layout_structure_invalid",
+          "before": 21,
+          "after": 19,
+          "resolved": 2,
+          "new_blocking": 0,
+          "new_blocking_keys": [],
+          "resolved_keys": [
+            [
+              "kf_event_window_mismatch",
+              "5",
+              "*",
+              "",
+              "keyframes.desc"
+            ],
+            [
+              "kf_segment_missing",
+              "5",
+              "seg2",
+              "",
+              "keyframes"
+            ]
+          ],
+          "reindexed_kf_shots": [
+            "5"
+          ],
+          "audit_targets": 3,
+          "audit_field_touched": 0,
+          "audit_touched_ids": [],
+          "checker_failed": false,
+          "merged_checker_failed": false,
+          "locked_changed": false,
+          "non_target_changed": [],
+          "locked_by_llm_changed": [],
+          "evidence_removed": [],
+          "kf_structural_violations": [],
+          "layout_structural_violations": [
+            "shot_5: frame_layouts.kfs[1]「杨旭」的字段被改写（本帧只授权增删条目；改字段要写该条目字段的叶子路径）：{\"gaze_target\": \"画右\", \"name\": \"杨旭\", \"on_screen\": true, \"pose\": \"仰卧未及反应 -> {\"gaze_target\": \"画上\", \"name\": \"杨旭\", \"on_screen\": true, \"pose\": \"袒腹仰卧\",",
+            "shot_5: frame_layouts.kfs[1]「神秘人」的字段被改写（本帧只授权增删条目；改字段要写该条目字段的叶子路径）：{\"gaze_target\": \"画左\", \"name\": \"神秘人\", \"on_screen\": true, \"pose\": \"踞蹲船舷\" -> {\"gaze_target\": \"画左\", \"name\": \"神秘人\", \"on_screen\": true, \"pose\": \"双手按舷，"
+          ],
+          "postprocess_target_lost": []
+        },
+        "rejected": 2
+      },
+      "metrics_status": "failed",
+      "shot_count": null,
+      "duration": null,
+      "commit_status": "BLOCK",
+      "commit_blocking_count": 33,
+      "commit_reason_keys": [
+        "blocking_count",
+        "blocking_truncated",
+        "blocking"
+      ],
+      "commit_outcome": "null",
+      "blocking_sample": [
+        "{\"code\": \"model_audit_FF_RESULT_LEAK\", \"severity\": \"visual_risk\", \"message\": \"首帧已呈现“放下竹箫”的结果，motion_desc却计划2-4秒才缓缓放下；动作起点矛盾，后续叩箫失去过程。；建议：ff_desc改为竹箫仍在手中/唇边；同步keyframes[0].desc与frame_layouts.ff[0].pose",
+        "{\"code\": \"model_audit_STATE_CHAIN_CONFLICT\", \"severity\": \"visual_risk\", \"message\": \"原文此时听香云鬓花颜、步摇尚在；镜头7才步摇落水、秀发披落。提前披发使后续道具状态无来源。；建议：改为听香云鬓高挽、斜插步摇俯身；同步本镜lf_desc、prompt、关键帧与布局，保留镜头7落水。\", \"shot_id\": \"4\"",
+        "{\"code\": \"model_audit_REQUIRED_INFO_MISSING\", \"severity\": \"visual_risk\", \"message\": \"车厢内只写听香，未写杨旭尸体；观众不知道张十三驾车载尸回城，结尾“载尸”钩子丢失。；建议：在车厢内补杨旭仰卧/盖布尸体；同步ff_desc、lf_desc，并在ff/lf布局增加杨旭条目。\", \"shot_id\": \"12\", \""
+      ],
+      "blocking_kinds": {
+        "duplicate_injection": 9,
+        "kf_segment_missing": 4,
+        "model_audit_FF_RESULT_LEAK": 3,
+        "model_audit_STATE_CHAIN_CONFLICT": 2,
+        "model_audit_REQUIRED_INFO_MISSING": 1,
+        "kf_event_window_mismatch": 1
+      },
+      "has_repair_rounds": true,
+      "decisions": [
+        {
+          "round": 1,
+          "accepted": false,
+          "resolved": 7,
+          "reason": "new_blocking",
+          "origin_reason": "new_blocking",
+          "violations": null,
+          "rejected_count": 0,
+          "rejected": [],
+          "frame_mappings": null,
+          "frame_locator_integrity": null,
+          "writer_structure_changes_count": 0,
+          "effects_count": 0
+        },
+        {
+          "round": 1,
+          "accepted": false,
+          "resolved": 2,
+          "reason": "layout_structure_invalid",
+          "origin_reason": "layout_structure_invalid",
+          "violations": null,
+          "rejected_count": 4,
+          "rejected": [
+            "shot 1: 装配后 keyframes（3 项）与 frame_layouts.kfs（4 项）长度不等——整表替换 frame_layouts 时 kfs 必须与 keyframes 一一同序对应（kfs[i] 是第 i 个关键帧的布局）；缺帧/缺段请用 keyframe_additions（frame 与 layout 成对）补，不要整表重写 kfs",
+            "shot 7: keyframe_additions[0] 与已存在帧时刻重复（t_sec=4.5）——同一响应里不得既整表替换又追加同一帧；请只用其中一种表达",
+            "shot 8: keyframe_additions[0] 与已存在帧时刻重复（t_sec=4.5）——同一响应里不得既整表替换又追加同一帧；请只用其中一种表达",
+            "目标 ['1', '7', '8'] 本轮未返回替换（其余 1 个目标已提交）"
+          ],
+          "frame_mappings": null,
+          "frame_locator_integrity": null,
+          "writer_structure_changes_count": 0,
+          "effects_count": 0
+        }
+      ],
+      "has_audit_blocked": true,
+      "audit_blocked_type": "dict",
+      "audit_blocked_keys": [
+        "input_revision",
+        "rule_version",
+        "rule_source_fingerprint",
+        "duration_band",
+        "prompt_source_fingerprint",
+        "audit_scope",
+        "audit_prompt_version",
+        "audit_focus_version",
+        "audit_temperature",
+        "run_id",
+        "status",
+        "audit_status",
+        "model",
+        "channel_provider",
+        "schema_deviations",
+        "usage",
+        "error",
+        "issues",
+        "character_aliases",
+        "created_at"
+      ]
+    },
+    "i": {
+      "dir": "step01_fix_verify_20261115i",
+      "label": "i",
+      "exists": true,
+      "exit_code": "exit=0",
+      "calls_total": 20,
+      "calls_ok": {
+        "True": 19,
+        "False": 1
+      },
+      "calls_by_schema": {
+        "scene_analysis": 1,
+        "characters": 1,
+        "scene_objects": 1,
+        "chapter_outline": 1,
+        "plan_revision_delta_v1": 6,
+        "content_verification": 4,
+        "storyboard_script": 1,
+        "split_over_cap_shot": 1,
+        "scene_assets": 1,
+        "props": 1,
+        "script_audit": 2
+      },
+      "call_errors": [
+        "[agent_plan] 墙钟上限 126.000s 内未返回 ⇒ 按失败处置；**未宣称远端已取消**，迟到的响应不会被采纳、写盘或重发｜阶段轨迹：指纹=4e8f1a87de3a2eca｜强度=low（要求 'low'）｜关联ID=a5ad46dbaa5907f2-LAX｜响应头 8.913s｜SSE 首事件 Non"
+      ],
+      "metrics_calls": {
+        "script_generation": 1,
+        "split_shot": 1,
+        "final_audit": 1
+      },
+      "metrics_repair": {},
+      "metrics_status": "failed",
+      "shot_count": null,
+      "duration": null,
+      "commit_status": "BLOCK",
+      "commit_blocking_count": 1,
+      "commit_reason_keys": [
+        "blocking_count",
+        "blocking_truncated",
+        "blocking"
+      ],
+      "commit_outcome": "null",
+      "blocking_sample": [
+        "{\"code\": \"audit_call_failed\", \"severity\": \"blocking\", \"shot_id\": null, \"transient\": true, \"message\": \"final semantic audit request_failed（调用失败 != 0 issue；本条为本次终局原因，不是稿件缺陷清单）\"}"
+      ],
+      "blocking_kinds": {
+        "audit_call_failed": 1
+      },
+      "has_repair_rounds": false,
+      "has_audit_blocked": true,
+      "audit_blocked_type": "dict",
+      "audit_blocked_keys": [
+        "input_revision",
+        "rule_version",
+        "rule_source_fingerprint",
+        "duration_band",
+        "prompt_source_fingerprint",
+        "audit_scope",
+        "audit_prompt_version",
+        "audit_focus_version",
+        "audit_temperature",
+        "run_id",
+        "status",
+        "audit_status",
+        "model",
+        "channel_provider",
+        "schema_deviations",
+        "usage",
+        "error",
+        "issues",
+        "character_aliases",
+        "created_at"
+      ]
+    },
+    "j": {
+      "dir": "step01_fix_verify_20261115j",
+      "label": "j",
+      "exists": true,
+      "exit_code": "exit=0",
+      "calls_total": 14,
+      "calls_ok": {
+        "True": 14
+      },
+      "calls_by_schema": {
+        "scene_analysis": 1,
+        "characters": 1,
+        "scene_objects": 1,
+        "chapter_outline": 1,
+        "plan_revision_delta_v1": 1,
+        "content_verification": 3,
+        "plan_content_repair_answer": 1,
+        "storyboard_script": 1,
+        "props": 1,
+        "scene_assets": 1,
+        "script_audit": 1,
+        "repair_shot_replacements": 1
+      },
+      "call_errors": [],
+      "metrics_calls": {
+        "script_generation": 1,
+        "final_audit": 1,
+        "repair_round": 1
+      },
+      "metrics_repair": {
+        "decisions": 1,
+        "last_decision": {
+          "accepted": false,
+          "reason": "no_target_resolved",
+          "before": 11,
+          "after": 11,
+          "resolved": 0,
+          "new_blocking": 0,
+          "new_blocking_keys": [],
+          "resolved_keys": [],
+          "reindexed_kf_shots": [],
+          "audit_targets": 2,
+          "audit_field_touched": 0,
+          "audit_touched_ids": [],
+          "checker_failed": false,
+          "merged_checker_failed": false,
+          "locked_changed": false,
+          "non_target_changed": [],
+          "locked_by_llm_changed": [],
+          "evidence_removed": [],
+          "kf_structural_violations": [],
+          "layout_structural_violations": [],
+          "postprocess_target_lost": []
+        },
+        "rejected": 1
+      },
+      "metrics_status": "failed",
+      "shot_count": null,
+      "duration": null,
+      "commit_status": "BLOCK",
+      "commit_blocking_count": 18,
+      "commit_reason_keys": [
+        "blocking_count",
+        "blocking_truncated",
+        "blocking"
+      ],
+      "commit_outcome": "null",
+      "blocking_sample": [
+        "{\"code\": \"model_audit_FF_RESULT_LEAK\", \"severity\": \"visual_risk\", \"message\": \"首帧准备态已写“吹箫”，但 motion_desc 写明2-4秒才出现吹箫姿态，首帧提前呈现过程动作，且与 ff_desc“持钓杆”不一致。；建议：将首帧状态改为“持箫待吹/未吹”，或把 motion_desc 的吹箫起点提前到首帧并统一 ff",
+        "{\"code\": \"model_audit_PROP_CONTINUITY\", \"severity\": \"visual_risk\", \"message\": \"motion_desc 要求杨旭吹箫，但本镜 prompt 与各帧道具列表只列“钓杆”，没有箫，画面无法执行吹箫动作。；建议：在 motion_desc 或道具列表中补“箫”，或删去吹箫动作只保留持钓杆。\", \"shot_id\": \"1\", ",
+        "{\"code\": \"duplicate_injection\", \"severity\": \"hard\", \"message\": \"描述块跨字段重复注入（ff_desc ↔ motion_desc）：「，平底敞口采莲小舟（长4.5米宽1.3米，可容2…」整块搬运\", \"shot_id\": 1, \"frame_id\": \"prompt/ff/lf/motion\", \"entity_id\": \"\", \"f"
+      ],
+      "blocking_kinds": {
+        "duplicate_injection": 10,
+        "kf_event_window_mismatch": 3,
+        "model_audit_FF_RESULT_LEAK": 1,
+        "model_audit_PROP_CONTINUITY": 1,
+        "kf_temporal_consistency": 1,
+        "prop_possession_consistency": 1,
+        "intra_shot_camera_conflict": 1
+      },
+      "has_repair_rounds": true,
+      "decisions": [
+        {
+          "round": 1,
+          "accepted": false,
+          "resolved": 0,
+          "reason": "no_target_resolved",
+          "origin_reason": "no_target_resolved",
+          "violations": [],
+          "rejected_count": 4,
+          "rejected": [
+            "shot 1: 越权字段补丁：'frame_layouts' 不在本轮授权集合 ['camera_movement', 'char_layout', 'ff_desc', 'frame_layouts.ff.0.props', 'frame_layouts.ff.0.states', 'frame_layouts.kfs.0.0.props', 'frame_layouts.kfs.1.0.props', 'frame_layouts.",
+            "shot 5: 越权字段补丁：'keyframes' 不在本轮授权集合 ['duration', 'ff_desc', 'keyframes.*.desc', 'keyframes.*.stage', 'keyframes.*.t_sec', 'lf_desc', 'motion_desc', 'prompt'] 内",
+            "shot 6: 越权字段补丁：'keyframes' 不在本轮授权集合 ['char_layout', 'duration', 'ff_desc', 'frame_layouts', 'frame_layouts.kfs.1', 'keyframes.*.desc', 'keyframes.1.desc', 'keyframes.1.stage', 'lf_desc', 'motion_desc', 'prompt'] 内",
+            "目标 ['1', '5', '6'] 本轮未返回替换（其余 1 个目标已提交）"
+          ],
+          "frame_mappings": {
+            "shot_4": {
+              "before_count": 3,
+              "after_count": 3,
+              "old_to_new": [
+                0,
+                1,
+                2
+              ],
+              "added_indices": [],
+              "source": "keyframe_structure",
+              "source_revision": "d8781a99ab9e9befa1663ffb5393488b0d3f88954c7ea603dac631e389d6809f"
+            }
+          },
+          "frame_locator_integrity": [],
+          "writer_structure_changes_count": 0,
+          "effects_count": 0
+        }
+      ],
+      "has_audit_blocked": true,
+      "audit_blocked_type": "dict",
+      "audit_blocked_keys": [
+        "input_revision",
+        "rule_version",
+        "rule_source_fingerprint",
+        "duration_band",
+        "prompt_source_fingerprint",
+        "audit_scope",
+        "audit_prompt_version",
+        "audit_focus_version",
+        "audit_temperature",
+        "run_id",
+        "status",
+        "audit_status",
+        "model",
+        "channel_provider",
+        "schema_deviations",
+        "usage",
+        "error",
+        "issues",
+        "character_aliases",
+        "created_at"
+      ]
+    }
+  }
+}

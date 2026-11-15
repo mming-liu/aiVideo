@@ -6,3 +6,14 @@ baselines/** -text
 # 三族受控夹具由会话生成为 LF，manifest.json 的 sha256 按 LF 字节记录。
 # 强制 LF 可避免 autocrlf=true 在 checkout 时写成 CRLF 使字节校验失败。
 tests/shared/fixtures/execution_contract/** text eol=lf
+
+# 2026-11-15 帧身份对齐补正包：回放证据与专题记录按工作树原始字节登记 sha256，
+# 与 baselines/ 同理，禁止 autocrlf 在 add/checkout 时改写（否则干净检出后指纹失配）。
+docs/step01-layered-execution/kf-frame-identity-alignment-2026-11-15.md -text
+docs/step01-layered-execution/U7-consistency-contract-proposal-2026-11-15.md -text
+docs/step01-layered-execution/run_h_frame_identity_replay.json -text
+docs/step01-layered-execution/step01-fix-verify-20261115i.md -text
+docs/step01-layered-execution/step01_fix_verify_20261115i_evidence.json -text
+docs/step01-layered-execution/step01-runs-a-to-j-block-reasons-2026-11-15.md -text
+docs/step01-layered-execution/step01_runs_a_to_j_evidence.json -text
+docs/step01-layered-execution/step01-solved-unsolved-and-verification-issues-2026-11-15.md -text
