@@ -242,7 +242,8 @@ def apply_config(man: dict) -> None:
     os.environ["OUTPUT_BASE"] = str(Path(man["chapter_dir"]).parent.parent.parent)
 
 
-def run(manifest_path, *, dry_run: bool = False) -> int:
+def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
+        hook_max_attempts: int = 4) -> int:
     man = _read_json(Path(manifest_path))
     # 审计副本可以不在正式章节目录里（避免发布前改正式产物）
     os.environ["STEP01_AUDIT_SOURCE"] = str(man.get("audit_path") or "")
@@ -312,24 +313,56 @@ def run(manifest_path, *, dry_run: bool = False) -> int:
 
     if not m._acquire_step01_lock():
         raise ResumeError("章节锁被占用（另有 Step01 在跑同一章）")
+    # 2026-11-16：冻结续验的发送边界上限（总尝试 + 钩子分类尝试；0=不限）。
+    _real_post = None
+    _guard = None
+    if max_sends and int(max_sends) > 0:
+        import requests as _requests
+        from shared.send_cap import CallCounter, SendBudgetExceeded
+        _real_post = _requests.post
+        _guard = CallCounter(_real_post, cap=int(max_sends),
+                             log_dir=chapter / "calls",
+                             hook_cap=int(hook_max_attempts))
+        _requests.post = _guard
     try:
         from shared.call_ledger import set_ledger_path
         set_ledger_path(chapter / "step01_calls.jsonl")
         bank = m.CharacterBank(); bank.load()
         objects = m.SceneObjectsBank(); objects.load()
-        _result, summary = m._commit_step01_outputs(
-            script, novel_text,
-            plan=plan, hook_ctx={"bank": bank, "objects_bank": objects},
-            audit_model=man["channel_model"] or None,
-            label="恢复运行", source_revision=man["script_revision"])
+        try:
+            _result, summary = m._commit_step01_outputs(
+                script, novel_text,
+                plan=plan, hook_ctx={"bank": bank, "objects_bank": objects},
+                audit_model=man["channel_model"] or None,
+                label="恢复运行", source_revision=man["script_revision"])
+        except SendBudgetExceeded as exc:
+            print(json.dumps({
+                "status": "BLOCK", "reason": "send_budget_exhausted",
+                "detail": str(exc),
+                "attempts": _guard.attempts,
+                "responses_received": _guard.responses_received,
+                "hook_attempts": _guard.hook_attempts,
+                "hook_responses": _guard.hook_responses,
+                "hook_blocked": _guard.hook_blocked,
+            }, ensure_ascii=False, indent=1))
+            return 2
         out = {"status": summary.get("status"), "run_id": summary.get("run_id"),
                "repair_outcome": summary.get("repair_outcome"),
                "reused_audit": summary.get("reused_audit"),
                "blocking": summary.get("blocking"),
                "source_revision": man["script_revision"]}
+        if _guard is not None:
+            out.update({"attempts": _guard.attempts,
+                        "responses_received": _guard.responses_received,
+                        "hook_attempts": _guard.hook_attempts,
+                        "hook_responses": _guard.hook_responses,
+                        "hook_blocked": _guard.hook_blocked})
         print(json.dumps(out, ensure_ascii=False, indent=1))
         return 0 if out["status"] == "COMMITTED" else 2
     finally:
+        if _real_post is not None:
+            import requests as _requests
+            _requests.post = _real_post
         try:
             m._release_step01_lock()
         except Exception:
@@ -340,6 +373,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Step01 从冻结修订点恢复")
     ap.add_argument("--manifest", required=True, help="step01_resume.json 路径")
     ap.add_argument("--dry-run", action="store_true", help="只核验身份，不调用模型")
+    ap.add_argument("--max-sends", type=int, default=0,
+                    help="冻结续验的发送边界总尝试上限（0=不限；含内部重试）")
+    ap.add_argument("--hook-max-attempts", type=int, default=4,
+                    help="钩子分类请求尝试上限（发送边界；默认 4）")
     ap.add_argument("--build", action="store_true",
                     help="由现有产物生成清单（需 --snapshot）")
     ap.add_argument("--chapter-dir", default="", help="--build 时的章节目录")
@@ -361,7 +398,9 @@ def main(argv=None) -> int:
             out.write_text(json.dumps(man, ensure_ascii=False, indent=1), encoding="utf-8")
             print(str(out))
             return 0
-        return run(args.manifest, dry_run=args.dry_run)
+        return run(args.manifest, dry_run=args.dry_run,
+                   max_sends=args.max_sends,
+                   hook_max_attempts=args.hook_max_attempts)
     except ResumeError as exc:
         print("[RESUME] 拒绝恢复: %s" % exc, file=sys.stderr)
         return 3

@@ -22,47 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
-class SendBudgetExceeded(BaseException):
-    """发送上限阻断（**不是** RuntimeError：候选循环的 `except RuntimeError` 会把它
-    当成"生成失败可重试"吞掉，预算耗尽必须直接终止并保留检查点）."""
-
-
-class CallCounter:
-    """Count every provider POST; block after cap. No response rewriting."""
-
-    def __init__(self, transport, *, cap, log_dir):
-        self.transport = transport
-        self.cap = int(cap)
-        self.log_dir = Path(log_dir)
-        self.attempts = 0
-        self.transmitted = 0
-        self.blocked = 0
-        self.calls = []
-
-    def __call__(self, url, **kw):
-        if self.attempts >= self.cap:
-            self.blocked += 1
-            (self.log_dir / ("blocked_%02d.json" % self.blocked)).write_text(
-                json.dumps({"reason": "cap %d" % self.cap}, ensure_ascii=False, indent=1),
-                encoding="utf-8")
-            raise SendBudgetExceeded("调用上限阻断：cap %d" % self.cap)
-        self.attempts += 1
-        t0 = time.monotonic()
-        try:
-            resp = self.transport(url, **kw)
-        except BaseException as exc:
-            self.calls.append({"n": self.attempts, "transmitted": False,
-                               "error": "%s: %s" % (type(exc).__name__, exc),
-                               "elapsed_sec": round(time.monotonic() - t0, 1)})
-            raise
-        self.transmitted += 1
-        payload = kw.get("json") if isinstance(kw.get("json"), dict) else {}
-        self.calls.append({"n": self.attempts, "transmitted": True,
-                           "model": payload.get("model"),
-                           "max": payload.get("max_completion_tokens"),
-                           "status": getattr(resp, "status_code", None),
-                           "elapsed_sec": round(time.monotonic() - t0, 1)})
-        return resp
+from shared.send_cap import (  # noqa: E402
+    CallCounter, SendBudgetExceeded, is_hook_request as _is_hook_request,
+)
 
 
 def _sha(path: Path) -> str:
@@ -200,7 +162,8 @@ def main() -> int:
     (_chapter_dir / "chapter_outline.cache.json").write_text(
         json.dumps({"outline": plan}, ensure_ascii=False), encoding="utf-8")
 
-    guard = CallCounter(real_post, cap=args.max_sends, log_dir=out / "calls")
+    guard = CallCounter(real_post, cap=args.max_sends, log_dir=out / "calls",
+                        hook_cap=manifest.get("hook_max_attempts", 4))
     requests.post = guard
     started = time.monotonic()
     error = ""
@@ -225,7 +188,15 @@ def main() -> int:
     script = _read("script_result.json")
     manifest_out = _read("step01_commit.json")
     quality = _read("step01_quality.json")
-    audit = _read("step01_audit.json")
+    audit = _read("step01_audit.json") or _read("step01_audit.blocked.json")
+    # BLOCK 时 `script_result.json` 不存在；候选在 `.dsh/step01_budget_frozen/<run_id>/`
+    _frozen = None
+    _run_id = str((manifest_out or {}).get("run_id") or "")
+    if script is None and _run_id:
+        _fp = ROOT / ".dsh" / "step01_budget_frozen" / _run_id / "frozen_script.json"
+        if _fp.exists():
+            script = json.loads(_fp.read_text(encoding="utf-8"))
+            _frozen = {"run_id": _run_id, "path": str(_fp)}
     # C03：恢复清单必须实际生成且可静态装载（隔离根有计划缓存时才可能）
     _recovery = {"path": "", "loadable": False, "error": ""}
     _snap_dir = chapter / "snapshots"
@@ -239,37 +210,62 @@ def main() -> int:
             _recovery["loadable"] = True
         except Exception as _exc:  # noqa: BLE001
             _recovery["error"] = "%s: %s" % (type(_exc).__name__, _exc)
-    ledger = out / "calls" / "step01_calls.jsonl"
-    ledger_rows = len(ledger.read_text(encoding="utf-8").splitlines()) if ledger.exists() else 0
+    # 台账实际写在章节目录（main.py: set_ledger_path(CHAPTER_DIR/step01_calls.jsonl)），
+    # 不是 `out/calls`——旧报告读错路径，才出现 ledger_rows=0。
+    ledger = chapter / "step01_calls.jsonl"
+    _logical = []
+    if ledger.exists():
+        for _line in ledger.read_text(encoding="utf-8").splitlines():
+            try:
+                _row = json.loads(_line)
+            except ValueError:
+                continue
+            _logical.append({"schema": _row.get("schema"), "ok": _row.get("ok"),
+                             "prompt_chars": _row.get("prompt_chars"),
+                             "response_chars": _row.get("response_chars")})
+    ledger_rows = len(_logical)
     shots = (script or {}).get("shots") or []
+    _commit_detail = str((manifest_out or {}).get("detail")
+                         or (manifest_out or {}).get("status_detail") or "")
+    _audit_status = ((audit or {}).get("status")
+                     or (manifest_out or {}).get("audit_status"))
+    _audit_issues = (len((audit or {}).get("issues") or [])
+                     if audit else (manifest_out or {}).get("blocking_count"))
     report.update({
         "elapsed_sec": elapsed, "error": error, "calls": guard.calls,
-        "attempts": guard.attempts, "transmitted": guard.transmitted,
-        "blocked": guard.blocked, "ledger_rows": ledger_rows,
+        "attempts": guard.attempts, "responses_received": guard.responses_received,
+        "hook_attempts": guard.hook_attempts, "hook_responses": guard.hook_responses,
+        "blocked": guard.blocked, "hook_blocked": guard.hook_blocked,
+        "logical_calls": _logical, "ledger_rows": ledger_rows,
         "chapter_dir": str(chapter),
         "recovery": _recovery,
+        "frozen_candidate": _frozen,
         "commit": {"status": (manifest_out or {}).get("status"),
-                   "detail": (manifest_out or {}).get("status_detail") or ""},
+                   "detail": _commit_detail},
         "hook_present": bool((script or {}).get("hook")),
         "script": {"shots": len(shots),
                    "shots_total_sec": round(sum(float(s.get("duration_sec") or 0) for s in shots), 2),
                    "hook_sec": round(float(((script or {}).get("hook") or {}).get("duration_sec") or 0), 2),
-                   "revision": (script or {}).get("script_revision")},
+                   "revision": ((script or {}).get("script_revision")
+                                or (manifest_out or {}).get("script_revision"))},
         "quality": {"status": (quality or {}).get("status"),
                     "hard_count": (quality or {}).get("hard_count"),
                     "visual_risk_count": (quality or {}).get("visual_risk_count"),
                     "blocking_categories": (quality or {}).get("blocking_categories")},
-        "audit": {"status": (audit or {}).get("status"),
-                  "issues": len((audit or {}).get("issues") or [])},
+        "audit": {"status": _audit_status, "issues": _audit_issues},
         "commit_manifest_path": str(chapter / "step01_commit.json"),
-        "script_path": str(chapter / "script_result.json"),
+        "script_path": str(_frozen["path"] if _frozen else chapter / "script_result.json"),
     })
     (out / "run_log.json").write_text(json.dumps(report, ensure_ascii=False, indent=1),
                                       encoding="utf-8")
     print(json.dumps({"commit": report["commit"]["status"], "shots": report["script"]["shots"],
                       "sec": report["script"]["shots_total_sec"],
-                      "sends": guard.transmitted, "attempts": guard.attempts,
-                      "blocked": guard.blocked, "ledger": ledger_rows}, ensure_ascii=False))
+                      "attempts": guard.attempts,
+                      "responses_received": guard.responses_received,
+                      "hook_attempts": guard.hook_attempts,
+                      "hook_responses": guard.hook_responses,
+                      "blocked": guard.blocked, "hook_blocked": guard.hook_blocked,
+                      "ledger": ledger_rows}, ensure_ascii=False))
     return 0 if report["commit"]["status"] == "COMMITTED" else 2
 
 

@@ -551,3 +551,4 @@ start_studio.bat
 !tests/step01_script_gen/test_replay_transactions.py
 !tests/step01_script_gen/test_plan_voice_order_cache.py
 !tests/step01_script_gen/test_hook_budget.py
+!tests/step01_script_gen/test_send_counter.py
