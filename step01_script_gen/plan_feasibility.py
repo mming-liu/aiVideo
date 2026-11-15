@@ -2149,6 +2149,187 @@ def carrier_relation_problems(beats, n_lines: int, n_narration: int = 0) -> tupl
 
 
 # ---------------------------------------------------------------------------
+# 计划顺序：`dialogue_lines` 的数组次序 = D 编号次序，必须与节拍承载次序一致
+#
+# 2026-11-15（run k 实测）：初始计划把台词按"清单次序"排列（先谎称、后威胁），
+# 而节拍按叙事次序承载（威胁 B9 → 谎称 B10）。生成侧 `check_event_contract` 用
+# `dialogue_lines` 的**数组位置**编 D 号、按正文实际落点判"后位台词不得先出现"，
+# 于是**忠实执行节拍的候选必然被判 `lines_order_violation`**（3/3 实测）。
+#
+# 判据与修法分两层（工作包 P02）：
+#   · `voice_order_records`：只报**关系矛盾**（承载次序唯一且与数组序不一致）；
+#   · `apply_voice_order_projection`：承载次序唯一且引用可安全重映射时，把数组、
+#     编号与全部 D 引用一起改到同一顺序。
+# 多重承载 / 孤儿 / 悬空**不在这里拒收**（各有既有判据），也不自动排序——顺序
+# 不唯一时保留原计划；"歧义即停"只停**自动修正**，是否拒收仍由实际契约问题决定。
+# ---------------------------------------------------------------------------
+
+VOICE_ORDER_CODE = "voice_order_conflict"
+_VOICE_ORDER_BASIS = (
+    "计划顺序：`dialogue_lines` 的数组次序就是 D 编号次序；生成侧按 D 号判"
+    "「后位台词不得先出现」，两份顺序必须一致")
+
+
+def _dialogue_carrier_order(plan) -> tuple:
+    """每条台词的**唯一**承载节拍号 → `({D号: B号}, "")`；不可判时 `(None, 原因)`.
+
+    不可判的原因**不在这里报错**：孤儿 / 重复载体 / 悬空各有既有判据
+    （`carrier_relation_records` / `evaluate_plan`），这里只决定"能不能据此排序"。
+    """
+    if not isinstance(plan, dict):
+        return None, "not_a_plan"
+    _raw = plan.get("dialogue_lines")
+    _lines = plan_dialogue_lines(plan)
+    if not _lines:
+        return None, "no_dialogue"
+    # 原始数组与规范化读数条数不一致（空项/非字符串）⇒ 结构判据负责，这里不猜序号
+    if not isinstance(_raw, list) or len(_raw) != len(_lines):
+        return None, "dialogue_lines_shape"
+    _beats = [str(b).strip() for b in (plan.get("shot_beats") or []) if str(b).strip()]
+    if not _beats:
+        return None, "no_beats"
+    _recs = [BeatRecord.parse(b) for b in _beats]
+    if not any(r.has(BEAT_SEG_CARRIER) for r in _recs):
+        return None, "no_carrier_contract"      # 旧计划无可核 ≠ 被破坏
+    _by_line = {i: [] for i in range(1, len(_lines) + 1)}
+    for _i, _r in enumerate(_recs, 1):
+        _kind, _k = _r.carrier()
+        if _kind == "invalid":
+            return None, "carrier_invalid"      # 既有判据报
+        if _kind != "dialogue":
+            continue
+        if _k is None or not 1 <= _k <= len(_lines):
+            return None, "carrier_dangling"     # 既有判据报
+        _by_line[_k].append(_i)
+    for _k, _bs in _by_line.items():
+        if not _bs:
+            return None, "carrier_missing"      # 孤儿：既有判据报
+        if len(_bs) > 1:
+            return None, "carrier_ambiguous"    # 多重承载：合法输入，不据此拒收
+    return {k: v[0] for k, v in _by_line.items()}, ""
+
+
+def voice_order_records(plan) -> list:
+    """**数组序 vs 承载序**一致性判据：只报关系矛盾（承载次序唯一时）."""
+    _order, _why = _dialogue_carrier_order(plan)
+    if _order is None:
+        return []
+    _n = len(_order)
+    _seq = [_order[i] for i in range(1, _n + 1)]
+    if _seq == sorted(_seq):
+        return []
+    _out, _max_b, _max_i = [], 0, None
+    for _i in range(1, _n + 1):
+        _b = _order[_i]
+        if _b < _max_b:
+            _out.append(_problem_record(
+                VOICE_ORDER_CODE, "dialogue", _i,
+                "dialogue_lines[%d]" % (_i - 1),
+                "D%d 的承载节拍是 B%d，但按数组次序它排在承载 B%d 的 D%d 之后"
+                "——数组序与节拍承载序冲突" % (_i, _b, _max_b, _max_i),
+                _VOICE_ORDER_BASIS))
+        else:
+            _max_b, _max_i = _b, _i
+    return _out
+
+
+def _remap_voice_index_refs(text, old_to_new) -> str:
+    """声明文本里的 `台词k` 序号 → 新编号；**只换序号数字**，其余字符原样."""
+    _out, _pos = [], 0
+    for _s, _e, _ns, _ne, _beat, _kind, _idx in iter_decl_refs(text):
+        if _kind != "台词" or _idx is None or _idx not in old_to_new:
+            continue
+        _seg = text[_s:_e]
+        _digits = list(re.finditer(r"\d+", _seg))
+        if not _digits:
+            continue
+        _last = _digits[-1]
+        _a, _b = _s + _last.start(), _s + _last.end()
+        if _a < _pos:
+            continue
+        _out.append(text[_pos:_a])
+        _out.append(str(old_to_new[_idx]))
+        _pos = _b
+    if not _out:
+        return text
+    _out.append(text[_pos:])
+    return "".join(_out)
+
+
+def _remap_fact_voice_refs(fact, old_to_new) -> str:
+    """事实条目的「承载：」段里的 `台词k` → 新编号（正文与原文证据逐字保留）."""
+    _segs = str(fact).split("｜")
+    _hit = False
+    for _i, _seg in enumerate(_segs):
+        if _seg.strip().startswith(FACT_CARRIER_SEG):
+            _new = _remap_voice_index_refs(_seg, old_to_new)
+            if _new != _seg:
+                _segs[_i] = _new
+                _hit = True
+    return "｜".join(_segs) if _hit else str(fact)
+
+
+def apply_voice_order_projection(plan) -> tuple:
+    """确定性重排（唯一可确定时）：`dialogue_lines` 与全部 D 引用改到同一顺序.
+
+    Returns `(plan, info)`；`info = {"changed", "reason", "mapping"}`。只改编号与引用，
+    不改台词文本、说话人、事实正文、节拍正文/证据；不唯一或不可安全重映射时**原样返回**。
+    幂等：重排后再次调用 `changed=False`。
+    """
+    _order, _why = _dialogue_carrier_order(plan)
+    if _order is None:
+        return plan, {"changed": False, "reason": _why, "mapping": {}}
+    _n = len(_order)
+    _seq = [_order[i] for i in range(1, _n + 1)]
+    if _seq == sorted(_seq):
+        return plan, {"changed": False, "reason": "already_ordered", "mapping": {}}
+    _new_order = sorted(range(1, _n + 1), key=lambda i: _order[i])
+    _old_to_new = {old: new for new, old in enumerate(_new_order, 1)}
+    _pres = plan.get("presentation")
+    if isinstance(_pres, dict) and _pres:
+        _uids = _pres.get("dialogue_uids")
+        if _uids is not None and (not isinstance(_uids, list) or len(_uids) != _n):
+            return plan, {"changed": False, "reason": "presentation_dialogue_uids_shape",
+                          "mapping": {}}
+    _va = plan.get("voice_adaptations")
+    if isinstance(_va, dict):
+        for _e in (_va.get("entries") or []):
+            if (isinstance(_e, dict) and str(_e.get("kind") or "") == "dialogue"
+                    and isinstance(_e.get("index"), int)
+                    and _e["index"] not in _old_to_new):
+                return plan, {"changed": False, "reason": "voice_adaptation_index_unknown",
+                              "mapping": {}}
+    _new = copy.deepcopy(plan)
+    _new["dialogue_lines"] = [plan_dialogue_lines(plan)[old - 1] for old in _new_order]
+    _beats = []
+    for _b in (plan.get("shot_beats") or []):
+        _r = BeatRecord.parse(str(_b))
+        _kind, _k = _r.carrier()
+        if _kind == "dialogue" and _k in _old_to_new:
+            _r.set_carrier("dialogue", _old_to_new[_k])
+        _beats.append(_r.render())
+    _new["shot_beats"] = _beats
+    if isinstance(_new.get("required_facts"), list):
+        _new["required_facts"] = [_remap_fact_voice_refs(f, _old_to_new)
+                                  for f in _new["required_facts"]]
+    if str(_new.get("hook_carrier") or ""):
+        _new["hook_carrier"] = _remap_voice_index_refs(str(_new["hook_carrier"]),
+                                                       _old_to_new)
+    _va2 = _new.get("voice_adaptations")
+    if isinstance(_va2, dict):
+        for _e in (_va2.get("entries") or []):
+            if (isinstance(_e, dict) and str(_e.get("kind") or "") == "dialogue"
+                    and isinstance(_e.get("index"), int)):
+                _e["index"] = _old_to_new[_e["index"]]
+    _pres2 = _new.get("presentation")
+    if isinstance(_pres2, dict) and isinstance(_pres2.get("dialogue_uids"), list):
+        _uids = _pres2["dialogue_uids"]
+        _pres2["dialogue_uids"] = [_uids[old - 1] for old in _new_order]
+    return _new, {"changed": True, "reason": "projected",
+                  "mapping": {str(o): _old_to_new[o] for o in _new_order}}
+
+
+# ---------------------------------------------------------------------------
 # 计划契约：必保留事实与钩子的**承载**（2026-09-30 复核裁决）
 #
 # 复核原话：「另做**不依赖 ops 的计划验收函数**，供首版、重选版和缓存版共用。
@@ -3534,24 +3715,28 @@ def plan_contract_records(plan, *, novel_text: str = "",
     """
     if not isinstance(plan, dict) or not plan:
         return []            # 计划缺失/字段缺失由 `evaluate_plan` 的 fail-closed 判
+    # **顺序契约先于模式分派**（2026-11-15 run k）：两种模式共用 `dialogue_lines`
+    # 的数组编号与节拍「载体：台词k」；承载次序唯一且与数组序不一致时必须显式报出，
+    # 不能等生成侧按 D 号判首次出现序才失败。
+    _voice_order = voice_order_records(plan)
     # **按模式分派**（主专题 §2）：v6 的 `screen_hybrid` 读**结构化关系**
     # （`presentation.fact_bindings`），不再解析 `｜承载：…` 文案——旧文案在新模式里
     # 只是显示，不另作权威判据。v5 走下面的旧路径，一个字都不改。
     if _plan_contract_version(plan) >= PRESENTATION_MIN_VERSION:
-        return presentation_records(plan, novel_text=novel_text,
+        return _voice_order + presentation_records(plan, novel_text=novel_text,
                                 verification=(plan or {}).get("plan_verification"),
                                 require_verification=require_verification)
     from shared.fact_metadata import LEGACY_ACCEPTANCE_FIELD, LEGACY_ACCEPTANCE_VERSION
     _semantic = LEGACY_ACCEPTANCE_FIELD in plan
     if _semantic and plan[LEGACY_ACCEPTANCE_FIELD] != LEGACY_ACCEPTANCE_VERSION:
-        return [_problem_record("planning_acceptance_version_invalid", "plan", None,
-                                LEGACY_ACCEPTANCE_FIELD, "未知的计划验收版本") ]
+        return _voice_order + [_problem_record("planning_acceptance_version_invalid", "plan", None,
+                                LEGACY_ACCEPTANCE_FIELD, "未知的计划验收版本")]
     facts = [str(f) for f in (plan.get("required_facts") or [])]
     if not facts:
-        return []            # 必保留事实清单本身为空 = 计划不合格，归 `_validate_outline`
+        return _voice_order   # 必保留事实清单本身为空 = 计划不合格，归 `_validate_outline`
     beats = [str(b) for b in (plan.get("shot_beats") or [])]
     lines = plan_dialogue_lines(plan)
-    problems: list = []
+    problems: list = list(_voice_order)
     # **格式先于承载语义**：分隔符写错（`；载体：` / `|载体：` / `｜载体:`）时
     # `BeatRecord.carrier()` 读不到载体段，后面每条事实都会误报「该节拍没有标载体」。
     # 先把可执行的格式修法放在最前面，报告层不必让模型从一串语义失败里反推分隔符。

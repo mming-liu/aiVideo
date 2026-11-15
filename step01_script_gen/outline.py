@@ -2814,6 +2814,15 @@ def complete_candidate(view, novel_text, verification=None, *, context=None,
         _plan = dict(_plan)
         from shared.content_verification import VERIFICATION_CONTEXT_KEY
         _plan[VERIFICATION_CONTEXT_KEY] = context
+    # **顺序投影先于核验**（2026-11-15）：承载次序唯一且与数组序不一致时，先把
+    # `dialogue_lines` 与全部 D 引用改到同一顺序，再算内容身份/挂核验记录——
+    # 否则核验记录会绑在旧编号上，验收时又被判摘要不符（提前绑定旧身份）。
+    from step01_script_gen.plan_feasibility import apply_voice_order_projection
+    _plan, _voice_order = apply_voice_order_projection(_plan)
+    if _voice_order.get("changed"):
+        _plan = dict(_plan)
+        _plan.pop("plan_verification", None)
+        _plan.pop("verification_rejected", None)
     if verification is not None:
         from step01_script_gen.content_verify import attach_verification
         from shared.carrier_entailment import PROTOCOL, protocol_of
@@ -4164,6 +4173,14 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
                     "detail": _d, "call_id": _call_id, "evidence": _ev}
         _plan = dict(_new or plan)
         _plan["plan_replan"] = _info
+        # 顺序投影先于核验（见 `complete_candidate` 同一条口径）
+        from step01_script_gen.plan_feasibility import apply_voice_order_projection
+        _plan, _voice_order = apply_voice_order_projection(_plan)
+        if _voice_order.get("changed"):
+            _plan = dict(_plan)
+            _plan.pop("plan_verification", None)
+            _plan.pop("verification_rejected", None)
+            _ev["voice_order"] = _voice_order
         if verification is not None:
             from step01_script_gen.content_verify import attach_verification
             _plan = attach_verification(_plan, verification)
@@ -4304,6 +4321,14 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
     # **候选统一入口**（复核第 32 轮第 2 条）：候选也要先规范化，再验收、再算指纹——
     # 否则"规范化就能修的候选"会被当成没修（同一份计划两套判据）。
     _candidate = normalize_plan_ranges(_new)[0]
+    # 顺序投影先于核验（同一口径）：投影后旧记录作废，由下面按新摘要重新核验
+    from step01_script_gen.plan_feasibility import apply_voice_order_projection
+    _candidate, _voice_order = apply_voice_order_projection(_candidate)
+    if _voice_order.get("changed"):
+        _candidate = dict(_candidate)
+        _candidate.pop("plan_verification", None)
+        _candidate.pop("verification_rejected", None)
+        _ev["voice_order"] = _voice_order
     if verification is not None:
         from step01_script_gen.content_verify import attach_verification
         _candidate = attach_verification(_candidate, verification)
@@ -4449,10 +4474,18 @@ def run_plan_revision(plan, novel_text: str, *, model=None, base_prompt=None,
     就以它为准；`run_deadline_at` 仍一并传入，只在没给 `budget` 时用于开表。
     """
     from step01_script_gen.plan_revision import RevisionBudget, RevisionController
-    from step01_script_gen.plan_feasibility import normalize_plan_ranges
+    from step01_script_gen.plan_feasibility import (apply_voice_order_projection,
+                                                    normalize_plan_ranges)
     # **统一候选入口**（复核第 32 轮第 2 条）：首版、缓存版、每次修订候选都先规范化，
     # 再验收、再算指纹。"只需规范化即可通过"的计划因此**零调用**通过。
     _plan0 = normalize_plan_ranges(plan)[0]
+    # **顺序投影先于 attach_verification**（2026-11-15）：首版/缓存版同样要过这一道；
+    # 投影后旧核验记录绑的是旧摘要，摘掉后由下面的 attach 按新摘要重新核验。
+    _plan0, _voice_order0 = apply_voice_order_projection(_plan0)
+    if _voice_order0.get("changed") and isinstance(_plan0, dict):
+        _plan0 = dict(_plan0)
+        _plan0.pop("plan_verification", None)
+        _plan0.pop("verification_rejected", None)
     _split_actions = ({str(x) for x in allowed_repair_actions}
                       if allowed_repair_actions is not None else set())
     if "split_fact" in _split_actions and _split_actions != {"split_fact"}:
@@ -4862,12 +4895,31 @@ def generate_outline_result(novel_text: str, model: str | None = None,
             # 传副本：避免就地规范化的实现顺带改写 `cached["outline"]` 原始对象。
             if isinstance(_cached_plan, dict):
                 _cached_plan = normalize_plan_ranges(dict(_cached_plan))[0]
+                # **顺序投影**（2026-11-15）：缓存计划同样先按承载次序校正编号。
+                # 投影改变了计划 ⇒ 旧核验记录绑的是旧摘要，摘掉后由统一流程按新摘要
+                # 重新核验；缓存本身仍可复用为**待核验候选**（`verification_reused=False`）。
+                from step01_script_gen.plan_feasibility import apply_voice_order_projection
+                _cached_plan, _voice_order_cache = apply_voice_order_projection(_cached_plan)
+                if _voice_order_cache.get("changed"):
+                    _cached_plan = dict(_cached_plan)
+                    _cached_plan.pop("plan_verification", None)
+                    _cached_plan.pop("verification_rejected", None)
+                    _ver_reusable = False
+                    res["cache"]["voice_order_projected"] = _voice_order_cache
             # 工作包 §4 C：可执行缓存**只放通过统一验收的版本**——历史失败元数据
             # （`plan_replan` 里的 result/detail）不能当成本轮验收的替代品。
             _cached_problems = ([]
                                 if not isinstance(_cached_plan, dict)
                                 else (plan_acceptance_problems(_cached_plan, novel_text) or []))
             _cached_ok = (isinstance(_cached_plan, dict) and not _cached_problems)
+            # 投影过的缓存计划**本轮还没有核验记录**（旧记录已作废）：只要剩下的问题
+            # 全是 `verify_record_missing`，就把它当**待核验候选**复用，交统一流程重新
+            # 核验；其它问题仍按原口径拒收并留档（不因投影放过内容问题）。
+            _cached_reusable = bool(_cached_ok) or (
+                bool(res["cache"].get("voice_order_projected"))
+                and isinstance(_cached_plan, dict)
+                and all(str(x.get("code") or "") == "verify_record_missing"
+                        for x in _cached_problems))
             # **内容与外层必须一致**（工作包 1 第 5 条）：外层键说 hybrid、内容却是
             # legacy（或反过来）时命中缓存，等于拿一份**没经过新协议**的计划当新模式的
             # 计划下发——而且验收链已经按新规则判过"通过"了，问题更隐蔽。
@@ -4882,7 +4934,7 @@ def generate_outline_result(novel_text: str, model: str | None = None,
                     "expected": _mode, "got": _content_mode,
                     "plan_contract_version": _cv_got}
             if (isinstance(cached, dict) and cached.get("source_hash") == cache_key
-                    and _cv_got == _expect_contract and _cached_ok
+                    and _cv_got == _expect_contract and _cached_reusable
                     and _mode_consistent
                     and _validate_outline(cached.get("outline"), novel_text)):
                 print(f"[CACHE] 复用章节大纲: {cache_path}")

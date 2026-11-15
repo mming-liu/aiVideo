@@ -1,0 +1,43 @@
+{
+ "affected": {
+  "passed": 298,
+  "xfailed": 2,
+  "failed": 0,
+  "junit": "docs/step01-layered-execution/evidence/20261115-p06/junit_affected.xml",
+  "note": "计划/修订/缓存/修复入口相关用例 + 本包新增用例"
+ },
+ "step01_full": {
+  "passed": 4499,
+  "failed": 14,
+  "skipped": 294,
+  "xfailed": 4,
+  "failed_ids": [
+   "tests.step01_script_gen.test_plan_phase_d_wiring::test_d02_an_invalid_first_version_is_not_executable",
+   "tests.step01_script_gen.test_plan_phase_d_wiring::test_d02_a_carrier_revision_runs_through_the_controller",
+   "tests.step01_script_gen.test_plan_phase_d_wiring::test_d05_a_call_class_failure_stays_the_terminal_even_with_a_baseline[illegal_response]",
+   "tests.step01_script_gen.test_plan_phase_g_rejection_feedback::test_g07_a_first_version_that_keeps_failing_exhausts_the_same_quota",
+   "tests.step01_script_gen.test_plan_phase_g_rejection_feedback::test_g08_the_first_version_retry_spends_the_same_quota_as_revisions",
+   "tests.step01_script_gen.test_plan_phase_g_rejection_feedback::test_g09_the_diagnosis_carries_the_concrete_reason_and_the_retry_feedback",
+   "tests.step01_script_gen.test_plan_phase_g_rejection_feedback::test_g13_the_revision_rounds_reach_the_log",
+   "tests.step01_script_gen.test_plan_phase_g_rejection_feedback::test_g14_the_diagnosis_keeps_every_round_rejection",
+   "tests.step01_script_gen.test_plan_phase_h_call_evidence::test_h05_the_round_archive_records_ids_fingerprints_and_full_results",
+   "tests.step01_script_gen.test_plan_phase_h_call_evidence::test_h06_the_first_version_attempt_is_archived_too",
+   "tests.step01_script_gen.test_plan_phase_h_call_evidence::test_h07_an_archive_failure_during_revision_still_decides",
+   "tests.step01_script_gen.test_plan_phase_j_capability::test_j04_a_full_plan_that_breaks_the_structure_is_rejected_with_the_field",
+   "tests.step01_script_gen.test_plan_phase_j_capability::test_j05_a_full_plan_that_is_not_json_is_rejected",
+   "tests.step01_script_gen.test_plan_phase_k_baseline_and_capability::test_k05_every_producer_code_is_classified"
+  ],
+  "note": "跳过项为历史 harness 缺失（.tmp/run_lifecycle.py），非本包引入"
+ },
+ "baseline_d816a09": {
+  "failed": 14,
+  "same_ids": true,
+  "junit": "docs/step01-layered-execution/evidence/20261115-p06/junit_baseline_d816a09_14.xml",
+  "note": "同一批测试文件在 d816a09 工作树上同条件复现 14/14 失败 ⇒ 既有失败，非本包新增"
+ },
+ "shared": {
+  "passed": 1505,
+  "skipped": 1
+ },
+ "real_sends": 0
+}
