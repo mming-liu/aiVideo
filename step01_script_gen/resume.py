@@ -316,6 +316,18 @@ def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
     if not isinstance(plan, dict):
         raise ResumeError("冻结计划文件里没有 outline（plan_path 不是大纲缓存？）")
 
+    # M2.3 / CP1（2026-11-16）：**计划已核验**（静态 + 语义 + 冻结身份全过）——
+    # 阶段边界即落盘。恢复入口从这里往下才可能花调用，落一个检查点让"卡在哪一步"
+    # 变成可读数据。
+    try:
+        from shared import step01_checkpoint as _ckpt
+        _ckpt.write(chapter, _ckpt.CP1_PLAN_VERIFIED, script=script,
+                    extra={"run_id": man.get("run_id"),
+                           "plan_sha256": man.get("plan_sha256"),
+                           "novel_sha256": man.get("novel_sha256")})
+    except Exception:                              # noqa: BLE001
+        pass
+
     # 审计复用是"本次恢复还要不要再花一次审计"的唯一判据：按真实入口问一句。
     # S05：核的是**内容身份**（原文 + 计划 + 送审稿 + 规则/提示版本 + 时长带 + 通道），
     # 而不只是 revision/指纹——原文或计划换了也照样复用是此前的漏洞。旧审计没有
@@ -353,7 +365,10 @@ def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
         from shared.send_cap import CallCounter, SendBudgetExceeded
         from shared.outbound_guard import install as _install_guard
         _real_post = _requests.post
-        _guard = CallCounter(_real_post, cap=int(max_sends),
+        # M3.2：`transport=None` ⇒ 守卫内部持有 `requests.Session`（连接池复用 +
+        # 瞬态 SSL 后重建池）。守卫自身用 `session.post` 发送，不会与上面的
+        # `requests.post = guard` 形成递归。
+        _guard = CallCounter(None, cap=int(max_sends),
                              log_dir=chapter / "calls",
                              hook_cap=int(hook_max_attempts))
         _requests.post = _guard

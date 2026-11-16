@@ -556,3 +556,5 @@ start_studio.bat
 !tests/step01_script_gen/test_reuse_miss_reason.py
 !tests/step01_script_gen/test_repair_round_persist.py
 !tests/shared/test_outbound_guard.py
+!tests/shared/test_step01_checkpoint.py
+!tests/step01_script_gen/test_paired_budget_precheck.py

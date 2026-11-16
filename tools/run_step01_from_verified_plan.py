@@ -151,6 +151,14 @@ def main() -> int:
                                           encoding="utf-8")
         raise SystemExit("计划验收未通过：%s" % codes)
     pf.check_plan_before_generation(dict(plan), chapter_dir=out, novel_text=novel)
+    # M2.3 / CP1：计划已核验（验收码为空 + 生成前统一门通过）——阶段边界即落盘
+    try:
+        from shared import step01_checkpoint as _ckpt
+        report["checkpoint_cp1"] = _ckpt.write(
+            out, _ckpt.CP1_PLAN_VERIFIED,
+            extra={"plan_digest": digest, "novel_digest": ndig})
+    except Exception:                              # noqa: BLE001
+        pass
     if args.dry_run:
         report["dry_run_ok"] = True
         (out / "run_log.json").write_text(json.dumps(report, ensure_ascii=False, indent=1),
@@ -194,7 +202,7 @@ def main() -> int:
     (_chapter_dir / "chapter_outline.cache.json").write_text(
         json.dumps({"outline": plan}, ensure_ascii=False), encoding="utf-8")
 
-    guard = CallCounter(real_post, cap=args.max_sends, log_dir=out / "calls",
+    guard = CallCounter(None, cap=args.max_sends, log_dir=out / "calls",
                         hook_cap=int(manifest.get("hook_max_attempts",
                                                  os.environ.get("HOOK_MAX_ATTEMPTS", 4) or 4)))
     requests.post = guard

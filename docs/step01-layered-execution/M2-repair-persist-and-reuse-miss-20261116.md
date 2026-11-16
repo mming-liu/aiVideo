@@ -72,6 +72,47 @@
 | `tools/run_step01_from_verified_plan.py` | 同上；`run_log.json` 的 `logical_calls` 改为**分类计数**，原台账明细更名 `ledger_calls` |
 | `shared/send_cap.py` | 变为兼容外壳：`CallCounter` 委托 `OutboundGuard`，`SendBudgetExceeded` 与 `SendBlocked` **是同一个类**（既有 `except` 照旧命中） |
 
+### M2.2b 成对额度预检（`step01_script_gen/main.py`）
+
+`_paired_repair_budget()` 给出「修复 + 修后复审」这一对的剩余额度读数：
+
+* `remaining_repair` / `remaining_audit`：按阶段剩余；
+* `remaining_total`：全局剩余；
+* `short`：任一阶段 < 1 **或** 全局 < 2（两层共用一个池时，"各 ≥1" 并不等于
+  "能跑两条"）。
+
+提交循环在**发起修复调用之前**查它；`short=True` 时先 `_persist_repair_round()`
+保存当前稿，再以 `repair_outcome=budget_exhausted` 停止，**不发起孤儿修复**。
+未安装守卫时三项都是 `None`、`short=False`——行为逐字不变。
+
+### M2.3 CP1–CP4 阶段检查点（`shared/step01_checkpoint.py`）
+
+| 检查点 | 落盘位置 | 时机 |
+|---|---|---|
+| `CP1_PLAN_VERIFIED` | `resume.py`（计划/原文/时长带/通道核验后）、运行器（验收码为空 + 生成前统一门通过后） | 进入生成前 |
+| `CP2_CANDIDATE_GENERATED` | `_commit_step01_outputs` 入口（候选已 finalize） | 提交点起点 |
+| `CP3_INITIAL_AUDIT_DONE` | 首轮审计 ok 之后（`_attempt == 0`） | 首轮审计完成 |
+| `CP4_REPAIR_ROUND_K_DONE` | `_persist_repair_round()` 内（按轮次 `_r{k}` 分文件） | 每轮修复采纳 |
+
+- 文件名固定 `snapshots/cp_<stage>.json`，另写指针索引
+  `snapshots/_checkpoints.json`（按 `written_at` 微秒精度取最近，**不靠 mtime 猜**）；
+- 写盘后读回校验 `compute_script_revision` 一致；
+- **写失败只告警**，不打断提交。
+
+### M3.2 连接池生产接线（`resume.py` / 运行器）
+
+`CallCounter(None, …)` ⇒ 守卫内部持有 `requests.Session` 并负责重建；守卫用
+`session.post` 发送，与 `requests.post = guard` 不构成递归。重试判定仍归
+`_text_gen/retry_policy.py`。
+
+### M3.1 SSE 覆盖（核对结论：**已具备**）
+
+`_text_gen/agent_plan_provider.py` 的 `_stream_requested()` 在
+`AGENT_PLAN_TEXT_STREAM=auto`（默认）下按「prompt ≥ 20,000 字符 或
+max_tokens ≥ 32,000」开协议流式。实测五类长调用都过线：分镜生成 45,736 字符、
+审计 103,120 字符、钩子 20,854 字符；22:35 的修后终审实测走流式 162.4s。
+**不需要新写实现**，本轮只做覆盖核对与记录。
+
 ## 2. 验收（Phase M-A 门禁两项）
 
 
@@ -89,8 +130,8 @@
 
 | 套件 | 读数 |
 |---|---|
-| 新增用例 | **28 passed**（M2.2/M2.3 共 16 + M2.1 共 12） |
-| `tests/shared` + `tests/step01_script_gen` | **6066 passed, 295 skipped, 4 xfailed, 0 failed** |
+| 新增用例 | **39 passed**（M2.2/M2.3 16 + M2.1 12 + 检查点 6 + 成对预检 5） |
+| `tests/shared` + `tests/step01_script_gen`（全量） | **6077 passed, 295 skipped, 4 xfailed, 0 failed** |
 | `tests/step01_script_gen`（M2.1 落地前，M2.2/M2.3 阶段读数） | 4549 passed, 294 skipped, 4 xfailed |
 | 既有复用/身份/事务回归（`test_audit_content_identity` / `test_duration_band` / `test_replay_transactions`） | 27 passed |
 
@@ -98,12 +139,12 @@
 
 1. **`step01_resume.json` 指针化**：需要 `resume` 接受「快照 revision ≠ 审计
    revision + `requires_fresh_audit`」这一合法状态（当前 `build_manifest` 会拒）。
-2. **成对额度预检**（计划 M2 第 2 项后半）：进入修复轮前要求剩余额度覆盖
-   「1 次修复 + 1 次修后复审」，否则直接 `budget_exhausted` 不发起孤儿调用。
-   M2.1 已提供 `OutboundGuard.remaining_logical()` / `remaining_attempts()` 与
-   模块级 `remaining_logical()`；**预检本身尚未接线**（下一步）。
-3. **CP1–CP4 检查点**（计划 M2 第 3 项前半）：本批只落了 CP4 的"修复轮"部分。
-4. **`content_identity` 真实失配点**：仍未定案（见
+   在它落地前，`--resume` 仍只认「同 revision 的快照+审计」这一对。
+2. **`content_identity` 真实失配点**：仍未定案（见
    [step01-frozen-resume-verification-20261116.md](step01-frozen-resume-verification-20261116.md)
    §3.1 更正）。现有可疑项只剩 `audit_focus` 的内容——它由当轮确定性质量门派生，
-   而质量门阻断清单在两次运行之间确实变了。诊断已就位，下次复现可直接读键。
+   而质量门阻断清单在两次运行之间确实变了。诊断已就位（`last_reuse_miss()`），
+   下次复现可直接读键。
+3. **检查点续跑调度器**：CP1–CP4 已能如实落盘，但"从 `PAUSED_AT_CPk` 自动续跑"
+   的调度逻辑（读 `_checkpoints.json` → 决定从哪一步开始）尚未接线；当前由
+   `resume` + `--max-sends` 人工控制。

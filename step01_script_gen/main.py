@@ -3772,6 +3772,17 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                      "blocking": [], "reused_audit": False, "detail": ""}
     _metrics_inc("commit.attempts")
 
+    # M2.3 / CP2（2026-11-16）：**候选已生成并 finalize**——阶段边界即落盘。
+    # 之后任何阶段被预算/网络/上限拦下，都不必重新生成正文。
+    try:
+        from shared import step01_checkpoint as _ckpt
+        summary["checkpoint_cp2"] = _ckpt.write(
+            CHAPTER_DIR, _ckpt.CP2_CANDIDATE_GENERATED, script=script,
+            extra={"run_id": run_id, "label": label,
+                   "source_revision": source_revision}, log=_logger)
+    except Exception:                              # noqa: BLE001
+        pass
+
     # v6.125（用户 2026-09-25 决定，第 1 项）：BLOCK 时必须**同时**登记「进入提交点
     # 的原稿 revision」。
     #
@@ -4064,6 +4075,17 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             _logger.warn(f"[COMMIT] x {summary['detail']}（调用失败 != 0 issue，直接 BLOCK）")
             break
         audit_ok = True
+        # M2.3 / CP3（2026-11-16）：**首轮审计完成**——阶段边界即落盘（含复用轮）。
+        # 只记首轮：后续轮次由 CP4（修复轮）承担，避免同一份稿反复写大文件。
+        if _attempt == 0:
+            try:
+                from shared import step01_checkpoint as _ckpt
+                summary["checkpoint_cp3"] = _ckpt.write(
+                    CHAPTER_DIR, _ckpt.CP3_INITIAL_AUDIT_DONE, script=script,
+                    audit=audit, extra={"run_id": run_id, "round": 1,
+                                        "reused": bool(_audit_reused)}, log=_logger)
+            except Exception:                      # noqa: BLE001
+                pass
         # blocking = 审计条目 ∪ 确定性质量门条目（两者都必须被修掉才算通过）
         if _contracts_ok:
             _downgraded = _downgrade_locked_only_audit_issues(audit, contracts_ok=True)
@@ -4249,6 +4271,22 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         _before_rev = compute_script_revision(script)
         _repair_diag: list = []
         _repair_block_reasons: list = []
+        # M2.2b（2026-11-16）：**成对额度预检**。修复与"修后复审"是一对：剩余额度
+        # 不足以覆盖两条时，发起修复只会产出一份没人复审的孤儿稿（19:01 实测：
+        # 修复 accepted 后第 3 次调用被 cap 拦下，成果只留在内存）。这里先保存当前
+        # 快照再报 budget_exhausted，不发起注定无法闭环的调用。
+        _paired = _paired_repair_budget()
+        if _paired["short"]:
+            _persist_repair_round(script, round_no=_attempt, audit=audit,
+                                  novel_text=novel_text)
+            summary["repair_outcome"] = "budget_exhausted"
+            summary["budget_paired_precheck"] = _paired
+            summary["detail"] = (
+                "成对额度预检不通过：剩余修复 %s 次 / 剩余复审 %s 次，不足以覆盖"
+                "「1 次修复 + 1 次修后复审」→ 不发起孤儿修复；已保存当前稿快照"
+                % (_paired["remaining_repair"], _paired["remaining_audit"]))
+            _logger.warn("[COMMIT] " + summary["detail"])
+            break
         repaired = _repair_shot_warnings(
             script, novel_text,
             bank=(hook_ctx or {}).get("bank"),
@@ -11098,6 +11136,15 @@ def _persist_repair_round(script: dict, *, round_no: int, audit: "dict | None" =
             "novel_chars": len(novel_text or ""),
         })
         _adj(snap_dir / REPAIR_ROUND_POINTER, rec, ensure_ascii=False, indent=2)
+        # M2.3 / CP4：第 k 轮修复已完成——同一份稿同时进检查点索引
+        try:
+            from shared import step01_checkpoint as _ckpt
+            rec["checkpoint"] = _ckpt.write(
+                OUTPUT_FILE.parent, _ckpt.CP4_REPAIR_ROUND_K_DONE, script=script,
+                audit=audit, round_no=int(round_no),
+                extra={"run_id": _step01_run_id()}, log=_logger)
+        except Exception:                          # noqa: BLE001
+            pass
         _logger.info("[SNAPSHOT] 修复轮 %d 采纳稿已落盘（%s，revision=%s）——复审前即持久化"
                      % (int(round_no), path.name, rev[:12]))
     except Exception as _e:                       # noqa: BLE001
@@ -11107,6 +11154,30 @@ def _persist_repair_round(script: dict, *, round_no: int, audit: "dict | None" =
                          "不可恢复）: %s" % (int(round_no), _e))
         except Exception:
             pass
+    return rec
+
+
+def _paired_repair_budget() -> dict:
+    """**成对额度预检读数**（M2.2b）：修复 + 修后复审各需 1 次逻辑调用.
+
+    没有安装 `OutboundGuard` 时两项都是 `None`（= 不限），`short=False`——
+    未接管预算的调用方行为逐字不变。
+    """
+    rec = {"remaining_repair": None, "remaining_audit": None, "short": False,
+           "required": {"repair": 1, "audit": 1}}
+    try:
+        from shared.outbound_guard import remaining_logical as _rem
+        _r = _rem("repair")
+        _a = _rem("audit")
+        _g = _rem()          # 全局剩余（两层共用一个池时，"各 ≥1" 并不等于 "能跑两条"）
+    except Exception:                              # noqa: BLE001
+        return rec
+    rec["remaining_repair"] = _r
+    rec["remaining_audit"] = _a
+    rec["remaining_total"] = _g
+    rec["short"] = ((_r is not None and _r < 1)
+                    or (_a is not None and _a < 1)
+                    or (_g is not None and _g < 2))
     return rec
 
 
