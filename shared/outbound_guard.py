@@ -247,10 +247,23 @@ class OutboundGuard:
             return None
         return max(0, self.total_logical - sum(int(v or 0) for v in self.logical_calls.values()))
 
-    def remaining_attempts(self):
-        if not self.total_attempts:
-            return None
-        return max(0, self.total_attempts - sum(int(v or 0) for v in self.http_attempts.values()))
+    def remaining_attempts(self, phase: str | None = None):
+        """剩余网络尝试额度（None = 不限）.
+
+        给了 `phase` 时取「该阶段上限余额」与「全局余额」的**较小值**：两层都在
+        发前判定，任一层先耗尽就会拦，所以余额必须按较紧的那层算。
+        """
+        _total = None
+        if self.total_attempts:
+            _total = max(0, self.total_attempts
+                         - sum(int(v or 0) for v in self.http_attempts.values()))
+        if phase is None:
+            return _total
+        cap = self.phase_attempts.get(str(phase))
+        if cap is None:
+            return _total
+        _phase = max(0, int(cap) - int(self.http_attempts.get(str(phase)) or 0))
+        return _phase if _total is None else min(_phase, _total)
 
 
 def _is_transient(exc: BaseException) -> bool:
@@ -292,6 +305,12 @@ def begin_for_schema(schema_name) -> str:
 def remaining_logical(phase: str | None = None):
     guard = _CURRENT
     return None if guard is None else guard.remaining_logical(phase)
+
+
+def remaining_attempts(phase: str | None = None):
+    """剩余网络尝试额度（模块级；未安装守卫时 None = 不限）."""
+    guard = _CURRENT
+    return None if guard is None else guard.remaining_attempts(phase)
 
 
 def snapshot() -> dict:

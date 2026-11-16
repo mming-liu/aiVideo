@@ -115,6 +115,33 @@ def _archive_body(call_id: str, text: str) -> dict:
                 "response_bytes": len(_raw), "archive_error": str(exc)}
 
 
+def _archive_prompt(call_id: str, text: str) -> dict:
+    """把**请求正文**写成 `<call_id>.prompt.txt`（M-A3，2026-11-17）.
+
+    为什么单独归档请求：`final_audit_request_identity` 哈希的就是
+    `{params, user_prompt}`。此前只存响应，于是"审计身份失配"只能靠量长度差去猜
+    （2026-11-16 19:00 那次：重建请求 102,077 字符 vs 记录 103,120 字符，差 +1,043，
+    却定位不到第一个不同字符）。存下请求体后，下次失配可直接 diff 出首处差异。
+    """
+    _dir = bodies_dir()
+    if _dir is None:
+        return {"prompt_path": "", "prompt_sha256": "", "prompt_bytes": 0,
+                "prompt_archive_error": "未设台账路径（不落盘）"}
+    _raw = (text or "").encode("utf-8")
+    _path = Path(_dir) / ("%s.prompt.txt" % (call_id or "unknown"))
+    try:
+        Path(_dir).mkdir(parents=True, exist_ok=True)
+        with open(_path, "wb") as f:
+            f.write(_raw)
+        return {"prompt_path": str(_path),
+                "prompt_sha256": hashlib.sha256(_raw).hexdigest(),
+                "prompt_bytes": len(_raw), "prompt_archive_error": ""}
+    except OSError as exc:
+        print("[WARN] 请求体留档失败（**证据缺失**）：%s（call_id=%s）" % (exc, call_id))
+        return {"prompt_path": str(_path), "prompt_sha256": "", "prompt_bytes": len(_raw),
+                "prompt_archive_error": str(exc)}
+
+
 def _append_row(line: str, call_id: str) -> bool:
     """把一行追加进台账；失败 ⇒ **明确告警**并返回 False（绝不影响生成）.
 
@@ -177,6 +204,17 @@ def record_call(provider: str, req, result, *, elapsed_ms: float,
         }
         _rec.update(_arch)
         _rec.update(_describe(req))
+        # M-A3（2026-11-17）：**审计请求体**单独归档。只对 `script_audit` 做——
+        # 它的身份就是 `{params, user_prompt}`，失配时必须能逐字 diff；
+        # 其它阶段每次存一份几十 KB 的 prompt 只会撑大工作区。
+        _schema = getattr(req, "json_schema", None)
+        _sname = (_schema or {}).get("name") if isinstance(_schema, dict) else ""
+        if _sname == "script_audit":
+            try:
+                _rec.update(_archive_prompt(
+                    str(call_id or ""), str(getattr(req, "user_prompt", "") or "")))
+            except Exception as _pe:                            # noqa: BLE001
+                _rec["prompt_archive_error"] = "%s: %s" % (type(_pe).__name__, _pe)
         _line = json.dumps(_rec, ensure_ascii=False)
         _append_row(_line, str(call_id or ""))
         return str(call_id or "")

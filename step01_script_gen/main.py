@@ -4271,10 +4271,10 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         _before_rev = compute_script_revision(script)
         _repair_diag: list = []
         _repair_block_reasons: list = []
-        # M2.2b（2026-11-16）：**成对额度预检**。修复与"修后复审"是一对：剩余额度
-        # 不足以覆盖两条时，发起修复只会产出一份没人复审的孤儿稿（19:01 实测：
-        # 修复 accepted 后第 3 次调用被 cap 拦下，成果只留在内存）。这里先保存当前
-        # 快照再报 budget_exhausted，不发起注定无法闭环的调用。
+        # M2.2b（2026-11-16，2026-11-17 补双层）：**成对额度预检**。修复与"修后复审"
+        # 是一对：两层（逻辑调用 / 网络尝试）任一不足以覆盖两条时，发起修复只会产出
+        # 一份没人复审的孤儿稿（19:01 实测：修复 accepted 后第 3 次调用被 cap 拦下，
+        # 成果只留在内存）。这里先保存当前快照再报 budget_exhausted，不发起孤儿调用。
         _paired = _paired_repair_budget()
         if _paired["short"]:
             _persist_repair_round(script, round_no=_attempt, audit=audit,
@@ -4282,9 +4282,16 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             summary["repair_outcome"] = "budget_exhausted"
             summary["budget_paired_precheck"] = _paired
             summary["detail"] = (
-                "成对额度预检不通过：剩余修复 %s 次 / 剩余复审 %s 次，不足以覆盖"
-                "「1 次修复 + 1 次修后复审」→ 不发起孤儿修复；已保存当前稿快照"
-                % (_paired["remaining_repair"], _paired["remaining_audit"]))
+                "成对额度预检不通过（不足项：%s）：逻辑 修复 %s / 复审 %s / 全局 %s；"
+                "尝试 修复 %s / 复审 %s / 全局 %s——不足以覆盖「1 次修复 + 1 次修后"
+                "复审」→ 不发起孤儿修复；已保存当前稿快照"
+                % (", ".join(_paired.get("short_on") or []),
+                   _paired.get("remaining_logical_repair"),
+                   _paired.get("remaining_logical_audit"),
+                   _paired.get("remaining_logical_total"),
+                   _paired.get("remaining_attempts_repair"),
+                   _paired.get("remaining_attempts_audit"),
+                   _paired.get("remaining_attempts_total")))
             _logger.warn("[COMMIT] " + summary["detail"])
             break
         repaired = _repair_shot_warnings(
@@ -4451,6 +4458,18 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         # finalize/契约两道门，若随后的复审被发送上限或网络拦下，本轮成果不得丢失。
         summary["repair_round_snapshot"] = _persist_repair_round(
             _cand, round_no=_attempt + 1, audit=audit, novel_text=novel_text)
+        # M-A2（2026-11-17，用户复核第 3 条）：**采纳稿持久化失败必须阻断后续调用**。
+        # "写失败只告警"对辅助检查点可以，对"已花钱且已采纳的修复稿"不行——继续发
+        # 修后复审，只会产出一份无法恢复的结论。这里直接停，并把原因写进终局。
+        if not (summary["repair_round_snapshot"] or {}).get("written"):
+            _why = (summary["repair_round_snapshot"] or {}).get("error") or "unknown"
+            summary["repair_outcome"] = "repair_snapshot_failed"
+            summary["detail"] = (
+                "修复稿已采纳但**落盘失败**（%s）→ 停止后续调用：继续复审只会产出一份"
+                "无法恢复的结论。请检查磁盘/权限后重跑" % _why)
+            _logger.error("[COMMIT] x " + summary["detail"])
+            _console("  [COMMIT] 修复稿落盘失败 → 停止（不发起修后复审）")
+            break
         script = _cand
 
     # ---- 写后不可变守卫：audit 前后 revision 必须相同 ----
@@ -11145,6 +11164,61 @@ def _persist_repair_round(script: dict, *, round_no: int, audit: "dict | None" =
                 extra={"run_id": _step01_run_id()}, log=_logger)
         except Exception:                          # noqa: BLE001
             pass
+        # M-A2（2026-11-17）：写**双块恢复清单**——`audited`（旧审计只证明那一份稿）
+        # + `pending_candidate`（本轮采纳稿，`requires_fresh_audit=true`）+ `next_action`。
+        # 这样"从待复审稿恢复"是一条有据可查的路径，而不是靠人记"快照在 snapshots/"。
+        try:
+            from step01_script_gen import resume as _resume
+            _aud_rev = str((audit or {}).get("input_revision") or "")
+            _audited = None
+            if _aud_rev:
+                for _cand in sorted(snap_dir.glob("script_result_*.json"))[-20:]:
+                    try:
+                        _s = json.loads(_cand.read_text(encoding="utf-8"))
+                        if isinstance(_s.get("script"), dict):
+                            _s = _s["script"]
+                        if _csr(_s) == _aud_rev:
+                            _audited = _cand
+                            break
+                    except Exception:              # noqa: BLE001
+                        continue
+            _audit_path = str(os.getenv("STEP01_AUDIT_SOURCE") or "").strip()
+            if not _audit_path:
+                for _n in ("step01_audit.json", "step01_audit.blocked.json"):
+                    _p = OUTPUT_FILE.parent / _n
+                    if _p.is_file():
+                        _audit_path = str(_p)
+                        break
+            _novel_src = ""
+            if novel_text:
+                _nd = OUTPUT_FILE.parent / "_resume"
+                _nd.mkdir(parents=True, exist_ok=True)
+                _ndig = hashlib.sha256(novel_text.encode("utf-8")).hexdigest()
+                _np = _nd / ("novel_%s.txt" % _ndig[:12])
+                if not _np.exists():
+                    _np.write_bytes(novel_text.encode("utf-8"))
+                _novel_src = str(_np)
+            if _audited and _audit_path and _novel_src:
+                _man = _resume.build_pending_manifest(
+                    OUTPUT_FILE.parent, audited_snapshot_path=_audited,
+                    audit_path=_audit_path, pending_path=path,
+                    round_no=int(round_no), novel_text_path=_novel_src)
+                _mp = OUTPUT_FILE.parent / _resume.MANIFEST_NAME
+                _adj(_mp, _man, ensure_ascii=False, indent=2)
+                rec["resume_manifest"] = {"path": str(_mp), "written": True,
+                                          "next_action": _man.get("next_action")}
+            else:
+                rec["resume_manifest"] = {
+                    "written": False,
+                    "reason": ("缺少已审稿快照/审计/原文之一（audited=%s audit=%s novel=%s）"
+                               % (bool(_audited), bool(_audit_path), bool(_novel_src)))}
+        except Exception as _me:                   # noqa: BLE001
+            rec["resume_manifest"] = {"written": False,
+                                      "reason": "%s: %s" % (type(_me).__name__, _me)}
+        try:
+            _adj(snap_dir / REPAIR_ROUND_POINTER, rec, ensure_ascii=False, indent=2)
+        except Exception:                          # noqa: BLE001
+            pass
         _logger.info("[SNAPSHOT] 修复轮 %d 采纳稿已落盘（%s，revision=%s）——复审前即持久化"
                      % (int(round_no), path.name, rev[:12]))
     except Exception as _e:                       # noqa: BLE001
@@ -11158,26 +11232,58 @@ def _persist_repair_round(script: dict, *, round_no: int, audit: "dict | None" =
 
 
 def _paired_repair_budget() -> dict:
-    """**成对额度预检读数**（M2.2b）：修复 + 修后复审各需 1 次逻辑调用.
+    """**成对额度预检读数**（M2.2b，2026-11-17 补双层）.
 
-    没有安装 `OutboundGuard` 时两项都是 `None`（= 不限），`short=False`——
+    「一次修复 + 一次修后复审」这一对，**两层都要够**：
+
+    | 层 | 读数 | 判据 |
+    |---|---|---|
+    | 逻辑调用 | `remaining_logical(repair/audit/全局)` | 各 ≥1，且全局 ≥2 |
+    | 网络尝试 | `remaining_attempts(repair/audit/全局)` | 各 ≥1，且全局 ≥2 |
+
+    为什么要补第二层（用户 2026-11-17 复核）：`--max-sends 1` 只配了
+    **HTTP 尝试上限**，逻辑层没有上限 ⇒ 旧实现 `short=False` 放行，直到修复请求
+    撞到发送守卫才被拦。那证明了"发送上限有效"，但没证明"成对准入有效"。
+    现在两层任一不足都在**发起修复之前**拦下。
+
+    未安装 `OutboundGuard` 时全部读数为 `None`（= 不限）、`short=False`——
     未接管预算的调用方行为逐字不变。
     """
-    rec = {"remaining_repair": None, "remaining_audit": None, "short": False,
+    rec = {"remaining_logical_repair": None, "remaining_logical_audit": None,
+           "remaining_logical_total": None,
+           "remaining_attempts_repair": None, "remaining_attempts_audit": None,
+           "remaining_attempts_total": None,
+           "short": False, "short_on": [],
            "required": {"repair": 1, "audit": 1}}
     try:
-        from shared.outbound_guard import remaining_logical as _rem
-        _r = _rem("repair")
-        _a = _rem("audit")
-        _g = _rem()          # 全局剩余（两层共用一个池时，"各 ≥1" 并不等于 "能跑两条"）
+        from shared.outbound_guard import remaining_logical as _rem_logical
+        from shared.outbound_guard import remaining_attempts as _rem_attempts
+        _lr, _la, _lg = _rem_logical("repair"), _rem_logical("audit"), _rem_logical()
+        _ar, _aa, _ag = (_rem_attempts("repair"), _rem_attempts("audit"),
+                         _rem_attempts())
     except Exception:                              # noqa: BLE001
         return rec
-    rec["remaining_repair"] = _r
-    rec["remaining_audit"] = _a
-    rec["remaining_total"] = _g
-    rec["short"] = ((_r is not None and _r < 1)
-                    or (_a is not None and _a < 1)
-                    or (_g is not None and _g < 2))
+    rec.update({
+        "remaining_logical_repair": _lr, "remaining_logical_audit": _la,
+        "remaining_logical_total": _lg,
+        "remaining_attempts_repair": _ar, "remaining_attempts_audit": _aa,
+        "remaining_attempts_total": _ag,
+    })
+    short_on = []
+    if _lr is not None and _lr < 1:
+        short_on.append("logical_repair")
+    if _la is not None and _la < 1:
+        short_on.append("logical_audit")
+    if _lg is not None and _lg < 2:
+        short_on.append("logical_total")
+    if _ar is not None and _ar < 1:
+        short_on.append("attempts_repair")
+    if _aa is not None and _aa < 1:
+        short_on.append("attempts_audit")
+    if _ag is not None and _ag < 2:
+        short_on.append("attempts_total")
+    rec["short_on"] = short_on
+    rec["short"] = bool(short_on)
     return rec
 
 
