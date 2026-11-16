@@ -558,3 +558,4 @@ start_studio.bat
 !tests/shared/test_outbound_guard.py
 !tests/shared/test_step01_checkpoint.py
 !tests/step01_script_gen/test_paired_budget_precheck.py
+!docs/studio-ui-x5-20261117.md
