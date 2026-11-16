@@ -299,6 +299,39 @@ class Studio:
         return out
 
     # ------------------------------------------------------------- 总览数据
+    # ------------------------------------------------------- CP1–CP4 断点
+    def checkpoints(self) -> dict:
+        """Step01 的四个阶段检查点状态（X5：断点可视化）.
+
+        只读 `snapshots/_checkpoints.json` 索引（`shared.step01_checkpoint` 写入），
+        不猜"最新目录"、不读 mtime。缺失 = 该阶段还没到过。
+        """
+        from shared import step01_checkpoint as ck
+
+        idx_path = self.chapter / "snapshots" / ck.INDEX_NAME
+        try:
+            idx = json.loads(idx_path.read_text(encoding="utf-8"))
+        except Exception:
+            idx = {}
+        if not isinstance(idx, dict):
+            idx = {}
+        stages = {}
+        for stage in ck.STAGES:
+            keys = [k for k in idx if str(k) == stage or str(k).startswith(stage + "_")]
+            latest_key = max(keys, key=lambda k: str((idx.get(k) or {}).get("written_at") or ""),
+                             default="")
+            rec = idx.get(latest_key) or {}
+            stages[stage] = {
+                "present": bool(latest_key),
+                "key": latest_key,
+                "path": rec.get("path") or "",
+                "revision": str(rec.get("revision") or "")[:16],
+                "written_at": rec.get("written_at") or "",
+                "round": rec.get("round"),
+            }
+        return {"ok": True, "index_path": str(idx_path), "stages": stages,
+                "latest": ck.latest(self.chapter) or {}, "model_sends": 0}
+
     def overview(self) -> dict:
         from shared.quality_gate import per_shot_revisions
 
@@ -312,11 +345,13 @@ class Studio:
         for unit in self.units():
             idx = int(unit.get("index", 0))
             frames = {}
+            _locks = self._lock_state(idx)
             for kind in FRAME_KINDS:
                 info = self.frame_state(unit, kind)
                 counts[info["state"]] = counts.get(info["state"], 0) + 1
                 frames[kind] = {k: v for k, v in info.items()}
                 frames[kind]["url"] = ("/media?path=" + str(Path(info["image"]))) if info["image_exists"] else None
+                frames[kind]["locked"] = bool(_locks.get(kind))
             shots.append({
                 "index": idx,
                 "duration": unit.get("duration_sec") or unit.get("duration"),
@@ -331,6 +366,9 @@ class Studio:
             })
         return {
             "schema": OVERVIEW_SCHEMA,
+            # X5（2026-11-17）：CP1–CP4 断点状态随 overview 一起轮询，页面 5 秒内
+            # 自动反映"跑到哪一步"，不必再去翻 snapshots/ 目录。
+            "checkpoints": self.checkpoints(),
             "chapter": {
                 "novel": (self.receipt.get("scope") or {}).get("novel"),
                 "book_index": (self.receipt.get("scope") or {}).get("book_index"),
@@ -486,6 +524,9 @@ class Studio:
         unit = self.unit(shot)
         idx = int(unit.get("index", 0))
         frames = {kind: self.frame_state(unit, kind) for kind in FRAME_KINDS}
+        _locks = self._lock_state(idx)
+        for kind in FRAME_KINDS:
+            frames[kind]["locked"] = bool(_locks.get(kind))
         media = {}
         for kind, info in frames.items():
             media[kind] = (("/media?path=" + str(Path(info["image"])))
@@ -503,6 +544,7 @@ class Studio:
             "prompts": self._assembled_prompts(unit),
             "media_policy": self.media_policy(unit),
             "keep": self.is_kept("step01", shot),
+            "lock": _locks,
             "revision": per_shot_revisions(self.script()).get(idx),
             "editable": list(STEP01_EDITABLE),
             "model_sends": 0,
@@ -645,6 +687,50 @@ class Studio:
                                  "formal_sha256": adoption.get("formal_sha256") or {}})
             result.update(written=written, backup=str(backup))
             return result
+
+    # -------------------------------------------------------- step02a 锁保帧
+    def _lock_marker(self, kind: str) -> str:
+        """锁保标记名（与 `shared.vimax_bridge._frame_is_protected` 同源）.
+
+        标记文件是**受保护帧**的唯一声明方式：QC critical 不删原图、
+        `--force` 不覆写。这里不另起一套命名，直接读那个常量。
+        """
+        from shared.vimax_bridge import _PROTECTED_FRAME_MARKER as _base
+        frame_kind = {"ff": "first_frame", "lf": "last_frame"}.get(kind, "")
+        return _base + (("_" + frame_kind) if frame_kind else "")
+
+    def _lock_state(self, shot: int) -> dict:
+        """该镜的锁保状态（整镜 / 首帧 / 尾帧）——只读，不创建任何文件."""
+        d = self.shot_dir(int(shot))
+        whole = (d / self._lock_marker("")).is_file()
+        return {"shot": whole,
+                "ff": whole or (d / self._lock_marker("ff")).is_file(),
+                "lf": whole or (d / self._lock_marker("lf")).is_file(),
+                "whole": whole}
+
+    def frame_lock(self, shot: int, kind: str, locked: bool) -> dict:
+        """写入/移除锁保标记（X5：点击即锁，不用手改 JSON 或建文件）.
+
+        `kind=""` 表示**整镜**锁保（`.lock_frame`）；`ff`/`lf` 写
+        `.lock_frame_first_frame` / `.lock_frame_last_frame`。
+        解除只删对应标记，不碰原图与哈希。
+        """
+        kind = str(kind or "")
+        if kind and kind not in FRAME_KINDS:
+            raise StudioError("frame_kind_invalid", "kind 必须是 ff/lf 或空（整镜）")
+        with self.lock:
+            unit = self.unit(int(shot))
+            idx = int(unit.get("index", 0))
+            d = self.shot_dir(idx)
+            d.mkdir(parents=True, exist_ok=True)
+            path = d / self._lock_marker(kind)
+            if locked:
+                path.write_text("locked by studio %s" % _now() + chr(10), encoding="utf-8")
+            else:
+                path.unlink(missing_ok=True)
+            return {"ok": True, "shot": idx, "kind": kind, "locked": bool(locked),
+                    "marker": str(path), "markers": self._lock_state(idx),
+                    "model_sends": 0}
 
     # ------------------------------------------------------ step02a 帧动作
     def frame_keep(self, shot: int, kind: str) -> dict:
@@ -798,6 +884,8 @@ class StudioHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"ok": True, **self.studio.review(shot)})
             if parsed.path == "/api/step03":
                 return self._json(200, self.studio.step03())
+            if parsed.path == "/api/checkpoints":
+                return self._json(200, self.studio.checkpoints())
             if parsed.path == "/media":
                 return self._media(parse_qs(parsed.query))
             if parsed.path == "/favicon.ico":
@@ -833,6 +921,10 @@ class StudioHandler(BaseHTTPRequestHandler):
             if parsed.path in ("/api/frame/regen", "/api/frame/invalidate_hash"):
                 return self._json(200, self.studio.frame_regen(
                     int(payload.get("shot") or 0), str(payload.get("kind") or "")))
+            if parsed.path == "/api/frame/lock":
+                return self._json(200, self.studio.frame_lock(
+                    int(payload.get("shot") or 0), str(payload.get("kind") or ""),
+                    bool(payload.get("locked"))))
             if parsed.path == "/api/shot/merge":
                 return self._json(200, self.studio.merge_shot(
                     int(payload.get("shot") or 0)))

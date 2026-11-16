@@ -384,3 +384,78 @@ def test_http_merge_shot_with_stub_ffmpeg(http_server, monkeypatch):
     assert Path(out["output"]).is_file()
     assert out["model_sends"] == 0
 
+
+# ---------------------------------------------------------------------------
+# 7) X5：锁保帧（点击即锁）与 CP1–CP4 断点
+# ---------------------------------------------------------------------------
+def test_frame_lock_writes_marker_and_review_reports_it(studio):
+    from shared.vimax_bridge import _frame_is_protected
+
+    _write_frame(studio, "ff")
+    out = studio.frame_lock(1, "ff", True)
+    assert out["ok"] is True and out["locked"] is True
+    marker = studio.shot_dir(1) / ".lock_frame_first_frame"
+    assert marker.is_file()
+    assert studio.review(1)["frames"]["ff"]["locked"] is True
+
+    # 与生成链同源：这个标记必须真的被 `_frame_is_protected` 认出来，
+    # 否则"点了锁"只是写了个没人读的文件。
+    assert _frame_is_protected({}, studio.shot_dir(1) / "first_frame.png",
+                               "first_frame") is True
+
+    out2 = studio.frame_lock(1, "ff", False)
+    assert out2["locked"] is False
+    assert not marker.exists()
+    assert studio.review(1)["frames"]["ff"]["locked"] is False
+    assert _frame_is_protected({}, studio.shot_dir(1) / "first_frame.png",
+                               "first_frame") is False
+
+
+def test_whole_shot_lock_covers_both_frames(studio):
+    _write_frame(studio, "ff")
+    _write_frame(studio, "lf")
+    studio.frame_lock(1, "", True)
+    locks = studio._lock_state(1)
+    assert locks["whole"] is True
+    assert locks["ff"] is True and locks["lf"] is True
+    assert studio.review(1)["lock"]["whole"] is True
+
+
+def test_frame_lock_rejects_unknown_kind(studio):
+    with pytest.raises(ss.StudioError):
+        studio.frame_lock(1, "kf", True)
+
+
+def test_checkpoints_reports_cp_stages(studio):
+    from shared import step01_checkpoint as ck
+
+    info = studio.checkpoints()
+    assert info["ok"] is True
+    assert all(v["present"] is False for v in info["stages"].values())
+
+    ck.write(studio.chapter, ck.CP1_PLAN_VERIFIED)
+    ck.write(studio.chapter, ck.CP4_REPAIR_ROUND_K_DONE, round_no=2)
+    info = studio.checkpoints()
+    assert info["stages"][ck.CP1_PLAN_VERIFIED]["present"] is True
+    cp4 = info["stages"][ck.CP4_REPAIR_ROUND_K_DONE]
+    assert cp4["present"] is True and cp4["round"] == 2
+    assert str(info["latest"].get("key") or "").startswith(ck.CP4_REPAIR_ROUND_K_DONE)
+    # overview 里也带断点，页面轮询即可反映"跑到哪一步"
+    assert "checkpoints" in studio.overview()
+
+
+def test_http_checkpoints_and_frame_lock(http_server):
+    base, studio = http_server
+    with _get(base + "/api/checkpoints") as res:
+        payload = json.loads(res.read().decode("utf-8"))
+    assert payload["ok"] is True and "stages" in payload
+
+    body = json.dumps({"shot": 1, "kind": "lf", "locked": True}).encode("utf-8")
+    request = urllib.request.Request(
+        base + "/api/frame/lock", data=body,
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=10) as res:
+        out = json.loads(res.read().decode("utf-8"))
+    assert out["ok"] is True and out["locked"] is True
+    assert (studio.shot_dir(1) / ".lock_frame_last_frame").is_file()
+

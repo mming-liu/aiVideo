@@ -270,6 +270,30 @@
       ])
     ]));
 
+    // X5：CP1–CP4 断点状态（随 overview 每 5 秒轮询自动更新，不用翻 snapshots/）
+    var cps = (ov.checkpoints && ov.checkpoints.stages) || {};
+    var cpBox = h("div", { class: "row", style: "flex-wrap:wrap;gap:8px;margin-top:8px" });
+    ["CP1_PLAN_VERIFIED", "CP2_CANDIDATE_GENERATED",
+     "CP3_INITIAL_AUDIT_DONE", "CP4_REPAIR_ROUND_K_DONE"].forEach(function (name) {
+      var st = cps[name] || {};
+      var tip = st.present
+        ? (st.key + " · " + (st.written_at || "") + " · rev " + (st.revision || ""))
+        : "未到达";
+      cpBox.appendChild(h("span", {
+        class: "badge " + (st.present ? "ok" : ""),
+        title: tip,
+        text: name.split("_")[0] + (st.present ? " ✅" : " ⚪")
+      }));
+    });
+    view.appendChild(h("div", { class: "card" }, [
+      h("div", { class: "row" }, [
+        h("b", { text: "断点（CP1–CP4）" }),
+        h("div", { class: "spacer" }),
+        h("span", { class: "sub", text: (ov.checkpoints && ov.checkpoints.index_path) || "尚无检查点" })
+      ]),
+      cpBox
+    ]));
+
     var table = h("table", { class: "shots" });
     table.appendChild(h("thead", {}, [h("tr", {}, [
       h("th", { text: "镜号" }), h("th", { text: "时长" }), h("th", { text: "台词 / 旁白" }),
@@ -426,6 +450,14 @@
               if (!window.confirm("将备份并移除 shot " + shot.index + " 的" + label + "，下次预检判为 generate。继续？")) return;
               frameAction("/api/frame/regen", shot.index, kind, "已标记重抽（旧图已备份）");
             }
+          }),
+          // X5：点击即锁——写 `.lock_frame_first_frame` / `_last_frame`，
+          // 与生成链 `_frame_is_protected` 同源（QC critical 不删、--force 不覆写）
+          h("button", {
+            type: "button", class: frame.locked ? "" : "ghost",
+            text: frame.locked ? "🔒 已锁保（点击解锁）" : "🔓 锁保此帧",
+            disabled: !frame.image_exists,
+            onclick: function () { frameLock(shot.index, kind, !frame.locked); }
           })
         ]));
         if (shot.prompts && shot.prompts[kind]) {
@@ -658,6 +690,16 @@
     api(path, { shot: shot, kind: kind })
       .then(function (res) {
         toast(okText + (res.backup ? "（备份：" + res.backup.split("\\").pop() + "）" : ""));
+        return refresh();
+      })
+      .catch(function (err) { toast(err.message, true); });
+  }
+
+  // X5：锁保/解锁（写 .lock_frame 标记；不删原图、不动哈希）
+  function frameLock(shot, kind, locked) {
+    api("/api/frame/lock", { shot: shot, kind: kind, locked: !!locked })
+      .then(function () {
+        toast(locked ? "已锁保（QC 不删、--force 不覆写）" : "已解除锁保");
         return refresh();
       })
       .catch(function (err) { toast(err.message, true); });
