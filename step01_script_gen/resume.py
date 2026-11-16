@@ -242,6 +242,28 @@ def apply_config(man: dict) -> None:
     os.environ["OUTPUT_BASE"] = str(Path(man["chapter_dir"]).parent.parent.parent)
 
 
+def _ensure_send_budget_file(path: Path) -> bool:
+    """恢复入口首次运行时初始化零预算文件；已存在则原样保留（跨恢复不清零）。
+
+    根因（2026-11-16 冻结稿续验）：本入口只设置 ``STEP01_SEND_BUDGET_FILE``
+    指向章节目录，却从未创建文件；``shared.send_budget.allow()`` 读不到文件
+    即 fail-closed「发送预算文件不可读（拒绝发送）」，导致修复/审计在发送边界
+    被拒、零 HTTP 尝试就 BLOCK。主流程会预置该文件，恢复入口是后加的路径，
+    漏了这一步。仅在文件不存在时写 ``{sends:0,repairs:0,audits:0}``。
+
+    返回 True 表示本次新建，False 表示文件已存在（未改动）。
+    """
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"sends": 0, "repairs": 0, "audits": 0},
+                   ensure_ascii=False, indent=1),
+        encoding="utf-8",
+    )
+    return True
+
+
 def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
         hook_max_attempts: int = 4, audit_repair_rounds: int = 1,
         no_hook: bool = False) -> int:
@@ -251,6 +273,8 @@ def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
     # 本包 §5：跨恢复发送预算（文件在章节目录，重启不清零）。
     if not os.getenv("STEP01_SEND_BUDGET_FILE"):
         os.environ["STEP01_SEND_BUDGET_FILE"] = str(Path(man["chapter_dir"]) / "step01_send_budget.json")
+    if not dry_run:
+        _ensure_send_budget_file(Path(os.environ["STEP01_SEND_BUDGET_FILE"]))
     # 顺序不可交换：静态校验不得 import shared.quality_gate（它会拉起
     # shared.config，DURATION_* 从此锁死），必须先改 env 再做语义校验。
     validate_static(man)
