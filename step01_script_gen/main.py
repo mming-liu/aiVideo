@@ -3170,8 +3170,130 @@ def _record_repair_diag(*, run_id: str, attempt: int, records: list) -> None:
         _logger.warn(f"[REPAIR] 修复轮诊断台账写入失败（不影响结论）: {exc}")
 
 
+def _reuse_miss_key(audit: dict, *, revision: str,
+                    expected_identity: "str | None",
+                    expected_source_identity: "str | None",
+                    expected_identity_without_focus: "str | None") -> str:
+    """**复用失配键**（M2.3，2026-11-16）："" = 可复用；否则第一个失配项的名字.
+
+    只做判定与命名，不写日志、不读盘——这样单测能直接钉住"到底哪一项不符"。
+    为什么需要它：`19:00` 与 `22:35` 两次都只留下一句
+    「content_identity 不匹配（原文/计划/定向项/契约已变）」，四个可能原因被
+    挤在一句话里，导致文档把根因误归因到"确定性层改了内容身份"（已证伪）。
+    现在把每一项单独命名，并把**定向项**从其余四项里分出来：
+    给了 `expected_identity_without_focus`（同稿同契约、focus 置空的身份）时，
+    若盘上身份恰好等于它 ⇒ 失配点只可能是 `audit_focus`。
+    """
+    if str(audit.get("status") or "").strip().lower() != "ok":
+        return "status_not_ok"
+    # S05：内容身份（原文/计划/送审稿/契约/定向项）——给了期望值就必须逐字相符。
+    if expected_identity is not None:
+        _got = str(audit.get("content_identity") or "").strip()
+        if not _got:
+            return "content_identity_missing"
+        if _got != expected_identity:
+            if expected_identity_without_focus and _got == expected_identity_without_focus:
+                return "audit_focus"
+            return "content_identity"
+    if expected_source_identity is not None:
+        _got_src = str(audit.get("source_identity") or "").strip()
+        if not _got_src:
+            return "source_identity_missing"
+        if _got_src != expected_source_identity:
+            return "source_identity"
+    if str(audit.get("input_revision") or "").strip() != revision:
+        return "input_revision"
+    if str(audit.get("rule_source_fingerprint") or "").strip() != RULE_SOURCE_FINGERPRINT:
+        return "rule_source_fingerprint"
+    if not duration_band_matches(audit):
+        return "duration_band"
+    if str(audit.get("audit_scope") or "").strip() != STEP01_AUDIT_SCOPE:
+        return "audit_scope"
+    # v6.111：提示词/focus 版本也要一致（改提示词后旧结论不得复用）。
+    from step01_script_gen.audit import audit_prompt_version as _apv
+    if str(audit.get("audit_prompt_version") or "") != _apv():
+        return "audit_prompt_version"
+    if str(audit.get("audit_focus_version") or "") != _audit_focus_version():
+        return "audit_focus_version"
+    # v6.117：审计**通道**也是被审对象的一部分（配了专用通道后旧通道结论不复用）。
+    from step01_script_gen.audit import resolve_audit_channel as _rac
+    _chan_provider, _chan_model = _rac()
+    if _chan_provider is not None:
+        if str(audit.get("channel_provider") or "").strip().lower() != _chan_provider:
+            return "channel_provider"
+        if str(audit.get("model") or "").strip() != _chan_model:
+            return "channel_model"
+    return ""
+
+
+#: 失配键 → 人读文案（日志与文档共用一套措辞，避免再出现"四因一句"）
+_REUSE_MISS_TEXT = {
+    "status_not_ok": "旧审计没有结论（status != ok）",
+    "content_identity_missing": "旧审计缺少 content_identity（复用证据不足）",
+    "content_identity": "content_identity 不匹配（原文/计划/送审稿/契约已变）",
+    "audit_focus": "content_identity 仅因定向项不同（audit_focus 已变）",
+    "source_identity_missing": "旧审计缺少 source_identity（复用证据不足）",
+    "source_identity": "source_identity 不匹配（原文/计划/契约已变）",
+    "input_revision": "送审稿 revision 不同",
+    "rule_source_fingerprint": "规则源码指纹不同",
+    "duration_band": "时长带不同",
+    "audit_scope": "审计范围不同",
+    "audit_prompt_version": "审计提示词版本不同",
+    "audit_focus_version": "定向项版本不同",
+    "channel_provider": "审计通道 provider 不同",
+    "channel_model": "审计通道 model 不同",
+}
+
+#: 最近一次复用判定的失配读数（诊断用；进程内最后一次覆盖）
+_LAST_REUSE_MISS: dict = {}
+
+
+def last_reuse_miss() -> dict:
+    """最近一次 `_reusable_final_audit` 的失配读数（空 dict = 最近一次可复用/未判定）."""
+    return dict(_LAST_REUSE_MISS)
+
+
+def _record_reuse_miss(key: str, audit: dict, *, src, revision: str = "") -> None:
+    """把失配键与**两边读数**记进 `_LAST_REUSE_MISS`，并留一行可检索日志."""
+    from step01_script_gen.audit import audit_prompt_version as _apv
+    from step01_script_gen.audit import resolve_audit_channel as _rac
+    _cp, _cm = _rac()
+    _vals = {
+        "input_revision": {"audit": str(audit.get("input_revision") or "")[:16],
+                           "expected": str(revision or "")[:16]},
+        "rule_source_fingerprint": {
+            "audit": str(audit.get("rule_source_fingerprint") or ""),
+            "expected": str(RULE_SOURCE_FINGERPRINT)},
+        "audit_scope": {"audit": str(audit.get("audit_scope") or ""),
+                        "expected": str(STEP01_AUDIT_SCOPE)},
+        "duration_band": {"audit": dict(audit.get("duration_band") or {})},
+        "audit_prompt_version": {"audit": str(audit.get("audit_prompt_version") or ""),
+                                 "expected": str(_apv())},
+        "audit_focus_version": {"audit": str(audit.get("audit_focus_version") or ""),
+                                "expected": str(_audit_focus_version())},
+        "channel_provider": {"audit": str(audit.get("channel_provider") or ""),
+                             "expected": str(_cp or "")},
+        "channel_model": {"audit": str(audit.get("model") or ""),
+                          "expected": str(_cm or "")},
+    }
+    _LAST_REUSE_MISS.clear()
+    _LAST_REUSE_MISS.update({
+        "key": key,
+        "text": _REUSE_MISS_TEXT.get(key, key),
+        "source": str(src),
+        "audit_revision": str(audit.get("input_revision") or "")[:16],
+        "detail": dict({"field": key}, **(_vals.get(key) or {})),
+    })
+    try:
+        _logger.warn("[COMMIT] 旧审计不可复用：%s｜key=%s｜审计=%s"
+                     % (_REUSE_MISS_TEXT.get(key, key), key, str(src)))
+    except Exception:
+        pass
+
+
 def _reusable_final_audit(script: dict, *, expected_identity: "str | None" = None,
-                          expected_source_identity: "str | None" = None) -> "dict | None":
+                          expected_source_identity: "str | None" = None,
+                          expected_identity_without_focus: "str | None" = None) -> "dict | None":
     """旧审计可复用的条件：**revision + 规则指纹 + audit scope 全部相同且为 ok**.
 
     总计划 §1.1 的既定决策。三者任一不同都必须重新审计——否则等于拿旧规则/旧稿
@@ -3210,54 +3332,16 @@ def _reusable_final_audit(script: dict, *, expected_identity: "str | None" = Non
         audit = _read_json_quiet(_src)
         if not audit:
             continue
-        # 只复用**真的跑出结论**的审计；调用失败（超时/解析失败）不得被冻结复用。
-        if str(audit.get("status") or "").strip().lower() != "ok":
+        # M2.3：逐项判定并**命名**失配键（"哪一项不符"必须是数据，不是猜）。
+        _miss = _reuse_miss_key(
+            audit, revision=revision, expected_identity=expected_identity,
+            expected_source_identity=expected_source_identity,
+            expected_identity_without_focus=expected_identity_without_focus)
+        if _miss:
+            _record_reuse_miss(_miss, audit, src=_src, revision=revision)
+            _reject_reason = _reject_reason or _REUSE_MISS_TEXT.get(_miss, _miss)
             continue
-        # S05：内容身份（原文/计划/送审稿/契约/定向项）——给了期望值就必须逐字相符。
-        # 旧审计没有这个字段 ⇒ 复用证据不足，明确拒收（不退回弱判据）。
-        if expected_identity is not None:
-            _got = str(audit.get("content_identity") or "").strip()
-            if not _got:
-                _reject_reason = _reject_reason or "旧审计缺少 content_identity（复用证据不足）"
-                continue
-            if _got != expected_identity:
-                _reject_reason = _reject_reason or "content_identity 不匹配（原文/计划/定向项/契约已变）"
-                continue
-        if expected_source_identity is not None:
-            _got_src = str(audit.get("source_identity") or "").strip()
-            if not _got_src:
-                _reject_reason = _reject_reason or "旧审计缺少 source_identity（复用证据不足）"
-                continue
-            if _got_src != expected_source_identity:
-                _reject_reason = _reject_reason or "source_identity 不匹配（原文/计划/契约已变）"
-                continue
-        if str(audit.get("input_revision") or "").strip() != revision:
-            continue
-        if str(audit.get("rule_source_fingerprint") or "").strip() != RULE_SOURCE_FINGERPRINT:
-            continue
-        if not duration_band_matches(audit):
-            continue
-        if str(audit.get("audit_scope") or "").strip() != STEP01_AUDIT_SCOPE:
-            continue
-        # v6.111：提示词/focus 版本也要一致——否则「改了审计提示词」之后旧结论
-        # 仍会被当成有效（审核 P2-5）。
-        from step01_script_gen.audit import audit_prompt_version as _apv
-        if str(audit.get("audit_prompt_version") or "") != _apv():
-            continue
-        if str(audit.get("audit_focus_version") or "") != _audit_focus_version():
-            continue
-        # v6.117（方案 A）：审计**通道**也是被审对象的一部分——配了审计专用通道后，
-        # 旧通道（agent_plan，schema 被降级成 json_object）产出的结论不得复用，否则
-        # 切换通道在「同 revision」（缓存命中 / BEST-GUARD 路径）上**完全不生效**：
-        # 稿子没变 → revision 相同 → 直接拿旧通道的结论盖章。
-        # 未配置专用通道时不加这条判据：与既有复用规则逐字一致（零行为变化）。
-        from step01_script_gen.audit import resolve_audit_channel as _rac
-        _chan_provider, _chan_model = _rac()
-        if _chan_provider is not None:
-            if str(audit.get("channel_provider") or "").strip().lower() != _chan_provider:
-                continue
-            if str(audit.get("model") or "").strip() != _chan_model:
-                continue
+        _LAST_REUSE_MISS.clear()
         return audit
     if _reject_reason:
         _logger.warn("[COMMIT] 旧审计不可复用：%s" % _reject_reason)
@@ -3940,7 +4024,10 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             audit = _reusable_final_audit(
                 script, expected_identity=_audit_identity,
                 expected_source_identity=_final_audit_source_identity(
-                    script, novel_text, plan, audit_model))
+                    script, novel_text, plan, audit_model),
+                # M2.3：同稿同契约、仅定向项不同时把失配点精确归到 audit_focus
+                expected_identity_without_focus=_final_audit_identity(
+                    script, novel_text, plan, [], audit_model, run_id))
             _audit_reused = audit is not None
             if _audit_reused:
                 _reuse_source = "disk"
@@ -4322,6 +4409,10 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             _console("  [COMMIT] 修复稿破坏事件履约契约 → 不采纳（保留基线）")
             break
         summary["repair_outcome"] = "improved"
+        # M2.2（2026-11-16）：**先落盘再复审**——采纳即快照。修复已经花钱且通过
+        # finalize/契约两道门，若随后的复审被发送上限或网络拦下，本轮成果不得丢失。
+        summary["repair_round_snapshot"] = _persist_repair_round(
+            _cand, round_no=_attempt + 1, audit=audit, novel_text=novel_text)
         script = _cand
 
     # ---- 写后不可变守卫：audit 前后 revision 必须相同 ----
@@ -10953,6 +11044,70 @@ def _snapshot_run_artifacts(script: dict | None = None, *, audit: dict | None = 
             _logger.warn(f"[SNAPSHOT] 快照失败（不影响主流程）: {_snap_e}")
         except Exception:
             pass
+
+
+#: 修复轮快照前缀（M2.2）。固定名字便于事后按轮次定位，不参与 `script_result_*`
+#: 的轮转（后者是「跑批快照」，本组是「修复事务的采纳凭据」）。
+REPAIR_ROUND_PREFIX = "repair_round_"
+#: 指向最近一次已采纳修复轮快照的指针文件（同目录，原子替换）。
+REPAIR_ROUND_POINTER = "_repair_round_pointer.json"
+
+
+def _persist_repair_round(script: dict, *, round_no: int, audit: "dict | None" = None,
+                          novel_text: str = "") -> dict:
+    """**修复轮落盘不变量**（M2.2，2026-11-16）：采纳即落盘，先落盘再复审.
+
+    实测教训（2026-11-16 19:01 与 22:35 两次）：定向修复已经花钱且
+    `accepted=true / resolved=1`，随后「修后复审」被发送上限或网络拦下，修后稿
+    只存在于内存 → 整轮成果丢失，下一次只能从头再花 3 次调用。这里在
+    `script = _cand` **之前**把它原子写入 `snapshots/repair_round_{k}.json`，
+    并原子写指针 `snapshots/_repair_round_pointer.json`。
+
+    为什么不直接改 `step01_resume.json`：`resume.build_manifest` 有一条硬不变量
+    ——快照与审计必须同一 revision（`resume.py` 的 `build_manifest` 会直接抛
+    `ResumeError`）。修后稿 revision 已变、盘上审计仍是修前那份，写进正式清单会
+    让 `resume --dry-run` 失败。因此这里只落「快照 + 指针」，并把
+    `requires_fresh_audit=True` 写成**数据**（"这份稿必须重审"），而不是靠人记。
+
+    返回写入记录；**任何失败都不抛**（快照是保护性副作用，不能反过来打断提交）。
+    """
+    rec: dict = {"round": int(round_no), "path": "", "revision": "", "written": False,
+                 "requires_fresh_audit": True, "error": ""}
+    try:
+        from shared.json_io import atomic_dump_json as _adj
+        from shared.quality_gate import compute_script_revision as _csr
+        import hashlib
+        snap_dir = OUTPUT_FILE.parent / "snapshots"
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        path = snap_dir / ("%s%02d.json" % (REPAIR_ROUND_PREFIX, int(round_no)))
+        _adj(path, script, ensure_ascii=False, indent=2)
+        rev = _csr(script)
+        # 读回核验：写盘成功但内容不是这份稿 = 更危险（后续会拿它当基线）。
+        _back = json.loads(path.read_text(encoding="utf-8"))
+        if _csr(_back) != rev:
+            raise RuntimeError("快照读回 revision 不一致")
+        rec.update({
+            "path": str(path),
+            "revision": rev,
+            "written": True,
+            "script_sha256": hashlib.sha256(
+                json.dumps(script, ensure_ascii=False, sort_keys=True)
+                .encode("utf-8")).hexdigest(),
+            "audit_path": str((audit or {}).get("_path") or ""),
+            "audit_revision": str((audit or {}).get("input_revision") or ""),
+            "novel_chars": len(novel_text or ""),
+        })
+        _adj(snap_dir / REPAIR_ROUND_POINTER, rec, ensure_ascii=False, indent=2)
+        _logger.info("[SNAPSHOT] 修复轮 %d 采纳稿已落盘（%s，revision=%s）——复审前即持久化"
+                     % (int(round_no), path.name, rev[:12]))
+    except Exception as _e:                       # noqa: BLE001
+        rec["error"] = "%s: %s" % (type(_e).__name__, _e)
+        try:
+            _logger.warn("[SNAPSHOT] 修复轮 %d 采纳稿落盘失败（复审仍继续，但本次成果"
+                         "不可恢复）: %s" % (int(round_no), _e))
+        except Exception:
+            pass
+    return rec
 
 
 def _pid_is_alive(pid: int) -> bool:

@@ -30,12 +30,44 @@
 ## 3. 根因分析
 
 ### 3.1 首轮审计为何未复用（`reused_audit=false`）
+
 预检 dry-run 判定 `audit_reusable=true`，但正式 commit 时两次报
 `旧审计不可复用：content_identity 不匹配（原文/计划/定向项/契约已变）`。
-原因：恢复入口会重跑**确定性修复层**（本轮修 111 处），修后稿与首轮审计所依据的
-冻结稿 content_identity 已不同，故首轮审计不可复用 —— 预检表"复用首轮审计、
-只做 1 修复 + 1 终审 = 2 调用"的前提在正式流程中不成立，实际需要
-"终审 1 + 修复 + 修后终审" = 3 次调用。
+
+**本节初版归因（2026-11-16 19:05）已被证伪，现更正如下。**
+
+初版写的是「恢复入口重跑确定性修复层，修后稿与首轮审计所依据的冻结稿
+content_identity 已不同」。2026-11-16 22:18 的零调用复核（在冻结快照上直接跑
+`constraints.engine.run_hard_fix`）给出相反读数：
+
+| 读数 | 修复层前 | 修复层后 |
+|---|---|---|
+| `compute_script_revision` | `e8f637620605c0d0…` | `e8f637620605c0d0…`（**相同**） |
+| `_final_audit_source_identity` | 同左 | **相同** |
+| `content_identity`（同 focus、`audit_focus=[]`） | `2d444336…` | `2d444336…`（**相同**） |
+
+且该层**幂等**：第二遍零改动；第一遍的 4 处差异全部是 `_merge_candidate` /
+`_run_metadata` 这两个下划线簿记键（落盘时被 `_strip_runtime_fields` 剥掉），
+不进入 prompt 字节。所以「确定性层改了内容身份」不成立。
+
+**仍未定位的部分（如实记账）**：盘上审计的 `content_identity=1af6773e…` 与本次
+重算值（含 `audit_focus` 为 `73f08ff3…`、不含为 `2d444336…`）都不相等，而
+原文摘要、计划摘要（`3f4b1aab…`）、`rule_source_fingerprint`（`8050857f…`）、
+`prompt_source_fingerprint`（`e57bdcf2…`）、审计提示词版本、focus 版本、时长带、
+通道全部逐字相符。剩下的可疑项只有 **`audit_focus` 的内容**——它由当轮确定性
+质量门派生，而质量门的阻断清单在 00:38（13 条）与 19:01（10 条）之间确实变了。
+这属于 L1「判据代码变 → 身份变」的同一机制，尚需一次带诊断的复现才能定案。
+
+**已落地的补救**：`_reusable_final_audit` 现在对每一项**单独命名**
+（`input_revision` / `rule_source_fingerprint` / `duration_band` / `audit_scope` /
+`audit_prompt_version` / `audit_focus_version` / `channel_provider` /
+`channel_model` / `content_identity` / `audit_focus`），并把「同稿同契约、只有
+定向项不同」从 `content_identity` 里单独分出来；失配读数存进
+`main.last_reuse_miss()`，下次复现可直接读出精确键与两边取值，不必再从一句话里猜。
+
+> 结论口径：预检的「2 次调用」前提**并未被证明成立或不成立**——初版给出的否证
+> 理由是错的；现在改为「复现时由 `reuse_miss_reason` 给出精确键」。本轮实跑最终
+> 用了 3 次调用（终审 + 修复 + 修后终审），这一点不受归因更正影响。
 
 ### 3.2 预算 cap 2 命中
 `--max-sends 2` 是硬上限（用户明令不得放宽）。终审 1 与修复各用 1 次，
@@ -63,3 +95,28 @@
   端点 `https://opencode.ai/inference/go/openai/v1/chat/completions`（订阅端点核验通过）。
 - 正式产物零替换；冻结稿零污染；历史现场只读；`.dsh/` 隔离留痕。
 - 零调用修复（resume 初始化缺口 + 单测）待提交。
+
+## 6. 追加执行：3 次调用续跑（2026-11-16 22:35–22:40）
+
+用户批准「直接批准 3 次调用重跑」后按预检参数执行（`--max-sends 3`、
+`--hook-max-attempts 0`、`--audit-repair-rounds 1`、`--no-hook`、
+`STEP01_TOTAL_BUDGET_SEC=1800`、`HOOK_ENABLED=0`、传输重试 0）。命令与原始输出见
+`.dsh/step01_frozen_resume_20261116_cap3/`（`console.log`、`exit_code.txt`）。
+
+| 项 | 读数 | 证据 |
+|---|---|---|
+| 终审调用 1 | 成功，119.1s，2,715 字符 | 台账第 7 行 |
+| 定向修复 | 成功，15.8s，4,318 字符 | 台账第 8 行 |
+| 修后终审 | 成功，162.4s，3,039 字符 | 台账第 9 行 |
+| 计数 | `attempts=3` / `responses_received=3` / `hook_attempts=0` | console |
+| 终局 | `BLOCK` / `blocking_count=9` / `audit_status=ok` | `step01_commit.json` |
+| 终局原因 | G1：上一轮 1 条 blocking 本轮未再报出且无确定性关闭依据 | manifest `detail` |
+| run_id | `20261116T223459-28284` | 同上 |
+| 正式产物 | 未替换（`output/…/chapter_001` 仍 `COMMITTED`，blocking=0） | 目录 mtime |
+| 冻结稿 | 未污染（SHA `932af1af…` 不变） | `.dsh/step01_budget_frozen/` |
+
+**本次暴露的新缺口（已由 M2.2 修复）**：修后终审**成功**之后，提交点判定 BLOCK，
+而 `22:39:59` 只写了 `step01_audit.blocked.json` / `_adjudication` / `_rounds` /
+`calls` / `commit` / `log`，**没有新的 `snapshots/script_result_*.json`**——即这一轮
+"终审 + 修复 + 修后终审"三次付费调用的成果中，**修后稿本体再次未落盘**。
+这与 `19:01` 丢稿是同一机制，已在 M2.2（`_persist_repair_round`）修复。
