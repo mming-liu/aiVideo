@@ -198,6 +198,9 @@ def main() -> int:
                         hook_cap=int(manifest.get("hook_max_attempts",
                                                  os.environ.get("HOOK_MAX_ATTEMPTS", 4) or 4)))
     requests.post = guard
+    # M2.1：装进进程内安装点，`_text_gen` 的**逻辑调用层**才会登记（未安装 = no-op）
+    from shared.outbound_guard import install as _install_guard
+    _prev_guard = _install_guard(guard.guard)
     started = time.monotonic()
     error = ""
     try:
@@ -209,6 +212,7 @@ def main() -> int:
         error = "%s: %s" % (type(exc).__name__, exc)
         raise
     finally:
+        _install_guard(_prev_guard)
         requests.post = real_post
         elapsed = round(time.monotonic() - started, 1)
 
@@ -284,13 +288,19 @@ def main() -> int:
                  for x in ((_audit or {}).get("issues")
                            or (manifest_out or {}).get("blocking") or [])]
     _audit_issues = len(_blocking)
+    _snap = guard.snapshot()
     report.update({
         "elapsed_sec": elapsed, "error": error, "calls": guard.calls,
-        "http_attempts": guard.attempts,
-        "responses_received": guard.responses_received,
+        # M2.1 三指标：逻辑调用 / 网络尝试 / 收到响应（`transmitted` 不再出现）
+        "logical_calls": _snap["logical_calls"],
+        "logical_total": _snap["logical_total"],
+        "http_attempts": _snap["http_attempts"],
+        "http_attempts_total": _snap["http_attempts_total"],
+        "responses_received": _snap["responses_received"],
+        "responses_total": _snap["responses_total"],
         "hook_attempts": guard.hook_attempts, "hook_responses": guard.hook_responses,
         "blocked": guard.blocked, "hook_blocked": guard.hook_blocked,
-        "logical_calls": _logical, "ledger_rows": ledger_rows,
+        "ledger_calls": _logical, "ledger_rows": ledger_rows,
         "chapter_dir": str(chapter),
         "recovery": _recovery,
         "frozen_candidate": _frozen,

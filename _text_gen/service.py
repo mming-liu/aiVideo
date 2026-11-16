@@ -108,7 +108,13 @@ class _LedgeredService(TextGenerationService):
         # 未配置 STEP01_SEND_BUDGET_FILE 时不生效（零行为变化）。
         from shared.send_budget import allow as _budget_allow
         _schema = getattr(req, "json_schema", None)
-        _budget_allow((_schema or {}).get("name") if isinstance(_schema, dict) else "")
+        _schema_name = (_schema or {}).get("name") if isinstance(_schema, dict) else ""
+        _budget_allow(_schema_name)
+        # M2.1：**逻辑调用层**在这里登记（一次 generate = 一次逻辑调用；provider
+        # 内部的重试由发送边界记成多次 http_attempts）。未安装 `OutboundGuard`
+        # 时 `begin_for_schema` 直接返回，零行为变化。
+        from shared.outbound_guard import begin_for_schema as _begin_phase
+        _begin_phase(_schema_name)
         _req = bind_request(req, _cid)
         _t0 = _t.monotonic()
         _res = None

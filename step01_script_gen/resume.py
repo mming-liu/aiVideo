@@ -347,14 +347,19 @@ def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
     # 2026-11-16：冻结续验的发送边界上限（总尝试 + 钩子分类尝试；0=不限）。
     _real_post = None
     _guard = None
+    _prev_guard = None
     if max_sends and int(max_sends) > 0:
         import requests as _requests
         from shared.send_cap import CallCounter, SendBudgetExceeded
+        from shared.outbound_guard import install as _install_guard
         _real_post = _requests.post
         _guard = CallCounter(_real_post, cap=int(max_sends),
                              log_dir=chapter / "calls",
                              hook_cap=int(hook_max_attempts))
         _requests.post = _guard
+        # M2.1：装进进程内安装点——`_text_gen` 的**逻辑调用层**才会登记
+        # （未安装时 `begin_for_schema` 是 no-op，计数只剩尝试层）。
+        _prev_guard = _install_guard(_guard.guard)
     try:
         from shared.call_ledger import set_ledger_path
         set_ledger_path(chapter / "step01_calls.jsonl")
@@ -383,7 +388,10 @@ def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
                "blocking": summary.get("blocking"),
                "source_revision": man["script_revision"]}
         if _guard is not None:
+            _snap = _guard.snapshot()
             out.update({"attempts": _guard.attempts,
+                        "http_attempts": _snap["http_attempts"],
+                        "logical_calls": _snap["logical_calls"],
                         "responses_received": _guard.responses_received,
                         "hook_attempts": _guard.hook_attempts,
                         "hook_responses": _guard.hook_responses,
@@ -391,6 +399,9 @@ def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
         print(json.dumps(out, ensure_ascii=False, indent=1))
         return 0 if out["status"] == "COMMITTED" else 2
     finally:
+        if _prev_guard is not None or _guard is not None:
+            from shared.outbound_guard import install as _install_guard
+            _install_guard(_prev_guard)
         if _real_post is not None:
             import requests as _requests
             _requests.post = _real_post

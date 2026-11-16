@@ -1,116 +1,98 @@
 # -*- coding: utf-8 -*-
 """发送边界预算（Step01 固定输入运行器 / 冻结恢复共用）.
 
-两层计数：
-* 总请求尝试 `attempts` / 收到 HTTP 响应 `responses_received`；
-* 钩子分类尝试 `hook_attempts` / 钩子响应 `hook_responses`。
+**兼容外壳**：实现已统一到 `shared/outbound_guard.OutboundGuard`（M2.1）。
+本模块只保留既有名字与构造签名，避免运行器/恢复入口/单测同时改动：
 
-异常（SSL/连接/超时）不能证明请求未发出，所以只把"拿到 HTTP 响应"记为
-`responses_received`；预算一律按**请求尝试**扣减。
+* `CallCounter(transport, cap=…, log_dir=…, hook_cap=…)` —— 旧的"只数尝试"视图；
+* `SendBudgetExceeded` —— 与 `SendBlocked` 是**同一个类**（`except` 照旧命中）；
+* `is_hook_request` —— 钩子请求分类（提示词标记，不靠 URL/顺序猜）。
+
+新代码请直接用 `shared.outbound_guard.OutboundGuard`：它同时提供
+`logical_calls` / `http_attempts` / `responses_received` 三指标，并在
+`begin()` 处就拦住逻辑调用层。
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
-import time
 
+from shared.outbound_guard import (  # noqa: F401  (re-export)
+    OutboundGuard, SendBlocked, is_hook_request, phase_of_schema,
+)
 
-class SendBudgetExceeded(BaseException):
-    """发送上限阻断（**不是** RuntimeError：候选循环的 `except RuntimeError` 会把它
-    当成"生成失败可重试"吞掉，预算耗尽必须直接终止并保留检查点）."""
-
-
-def _request_messages(kw) -> tuple[str, str]:
-    """从 provider POST 参数里取出 system/user 文本（json= 或 data= 两种形态）."""
-    raw = kw.get("json")
-    if isinstance(raw, dict):
-        msgs = raw.get("messages") or []
-    else:
-        data = kw.get("data")
-        if isinstance(data, (bytes, bytearray)):
-            data = data.decode("utf-8", "replace")
-        try:
-            obj = json.loads(data) if isinstance(data, str) else {}
-        except (TypeError, ValueError):
-            obj = {}
-        msgs = obj.get("messages") if isinstance(obj, dict) else []
-    sys_parts, user_parts = [], []
-    for m in msgs or []:
-        if not isinstance(m, dict):
-            continue
-        content = m.get("content")
-        if isinstance(content, list):
-            content = " ".join(str(c.get("text") or "") if isinstance(c, dict)
-                               else str(c) for c in content)
-        content = str(content or "")
-        if m.get("role") == "system":
-            sys_parts.append(content)
-        elif m.get("role") == "user":
-            user_parts.append(content)
-    return "\n".join(sys_parts), "\n".join(user_parts)
-
-
-def is_hook_request(kw) -> bool:
-    """钩子请求分类：系统提示词 / 用户提示词的稳定标记（不靠 URL 或顺序猜）."""
-    sys_text, user_text = _request_messages(kw)
-    return ("短视频脚本大师" in sys_text) or ("钩子分镜" in user_text)
+#: 旧名字 = 同一个异常类（不是子类）：`except SendBudgetExceeded` 必须能接住
+#: `OutboundGuard` 抛出的阻断，否则预算耗尽会被当成普通异常继续重试。
+SendBudgetExceeded = SendBlocked
 
 
 class CallCounter:
-    """Count every provider POST at the **send boundary**; block after caps."""
+    """**旧视图**：`attempts` / `responses_received` / 钩子分类计数.
+
+    委托给 `OutboundGuard`：`cap` 是**总尝试上限**（含 provider 内部重试），
+    `hook_cap` 是钩子分类的尝试上限。逻辑调用层请改用 `OutboundGuard.begin()`。
+    """
 
     def __init__(self, transport, *, cap, log_dir, hook_cap=None):
         self.transport = transport
         self.cap = int(cap)
         self.hook_cap = None if hook_cap is None else int(hook_cap)
         self.log_dir = Path(log_dir)
-        self.attempts = 0
-        self.responses_received = 0
-        self.hook_attempts = 0
-        self.hook_responses = 0
-        self.blocked = 0
-        self.hook_blocked = 0
-        self.calls = []
+        self._guard = OutboundGuard(
+            transport=transport, total_attempts=self.cap,
+            phase_attempts=({"hook": self.hook_cap} if self.hook_cap is not None else None),
+            log_dir=self.log_dir)
 
-    def _block(self, reason: str, name: str):
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-        (self.log_dir / name).write_text(
-            json.dumps({"reason": reason}, ensure_ascii=False, indent=1),
-            encoding="utf-8")
-        raise SendBudgetExceeded(reason)
-
+    # ---- 发送边界 --------------------------------------------------------
     def __call__(self, url, **kw):
-        hook = is_hook_request(kw)
-        if self.attempts >= self.cap:
-            self.blocked += 1
-            self._block("调用上限阻断：cap %d" % self.cap,
-                        "blocked_%02d.json" % self.blocked)
-        if hook and self.hook_cap is not None and self.hook_attempts >= self.hook_cap:
-            self.hook_blocked += 1
-            self._block("钩子请求尝试上限阻断：hook_cap %d" % self.hook_cap,
-                        "blocked_hook_%02d.json" % self.hook_blocked)
-        self.attempts += 1
-        if hook:
-            self.hook_attempts += 1
-        t0 = time.monotonic()
-        try:
-            resp = self.transport(url, **kw)
-        except BaseException as exc:
-            self.calls.append({"n": self.attempts,
-                               "kind": "hook" if hook else "other",
-                               "response_received": False,
-                               "error": "%s: %s" % (type(exc).__name__, exc),
-                               "elapsed_sec": round(time.monotonic() - t0, 1)})
-            raise
-        self.responses_received += 1
-        if hook:
-            self.hook_responses += 1
-        payload = kw.get("json") if isinstance(kw.get("json"), dict) else {}
-        self.calls.append({"n": self.attempts,
-                           "kind": "hook" if hook else "other",
-                           "response_received": True,
-                           "model": payload.get("model"),
-                           "max": payload.get("max_completion_tokens"),
-                           "status": getattr(resp, "status_code", None),
-                           "elapsed_sec": round(time.monotonic() - t0, 1)})
-        return resp
+        return self._guard(url, **kw)
+
+    # ---- 旧读数（对外契约保持不变） --------------------------------------
+    @property
+    def attempts(self) -> int:
+        return sum(int(v or 0) for v in self._guard.http_attempts.values())
+
+    @property
+    def responses_received(self) -> int:
+        return sum(int(v or 0) for v in self._guard.responses_received.values())
+
+    @property
+    def hook_attempts(self) -> int:
+        return int(self._guard.http_attempts.get("hook") or 0)
+
+    @property
+    def hook_responses(self) -> int:
+        return int(self._guard.responses_received.get("hook") or 0)
+
+    @property
+    def blocked(self) -> int:
+        return int(self._guard.blocked)
+
+    @property
+    def hook_blocked(self) -> int:
+        return int(self._guard.blocked_by_phase.get("hook") or 0)
+
+    @property
+    def calls(self) -> list:
+        return self._guard.calls
+
+    # ---- 新视图（三指标 + 逻辑层） ---------------------------------------
+    @property
+    def guard(self) -> OutboundGuard:
+        """底层守卫（供运行器 `install()`，让逻辑调用层真正生效）."""
+        return self._guard
+
+    def snapshot(self) -> dict:
+        return self._guard.snapshot()
+
+    def begin(self, phase: str = "other") -> str:
+        return self._guard.begin(phase)
+
+    def remaining_logical(self, phase=None):
+        return self._guard.remaining_logical(phase)
+
+    def remaining_attempts(self):
+        return self._guard.remaining_attempts()
+
+
+__all__ = ["CallCounter", "OutboundGuard", "SendBlocked", "SendBudgetExceeded",
+           "is_hook_request", "phase_of_schema"]
