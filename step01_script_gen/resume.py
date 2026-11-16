@@ -266,7 +266,7 @@ def _ensure_send_budget_file(path: Path) -> bool:
 
 def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
         hook_max_attempts: int = 4, audit_repair_rounds: int = 1,
-        no_hook: bool = False) -> int:
+        no_hook: bool = False, accept_fresh_audit: bool = False) -> int:
     man = _read_json(Path(manifest_path))
     # 审计副本可以不在正式章节目录里（避免发布前改正式产物）
     os.environ["STEP01_AUDIT_SOURCE"] = str(man.get("audit_path") or "")
@@ -336,21 +336,34 @@ def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
         script, novel_text, plan, man.get("channel_model"))
     reusable = m._reusable_final_audit(script, expected_source_identity=expected_source)
     if reusable is None:
-        raise ResumeError(
-            "审计不可复用（内容身份 / 原文 / 计划 / revision / 规则指纹 / 时长带 / "
-            "scope / 提示版本 / 通道任一不符，或旧审计缺少身份字段）——拒绝恢复；"
-            "请核对清单身份，或明确接受重新审计后再跑")
+        # M2.3（2026-11-16）：**代码变更后必然走到这里**。`PROMPT_SOURCE_FINGERPRINT`
+        # 哈希整个 `main.py`，改一行注释就换身份——旧审计按契约确实不可复用。此前
+        # 只报一句"拒绝恢复"，等于把"必须重审"和"清单坏了"混为一谈。现在：
+        #   · 默认仍 fail-closed（不悄悄花一次审计）；
+        #   · `--accept-fresh-audit` 显式接受"本轮重新审计"，并打印失配键。
+        _miss = m.last_reuse_miss()
+        if not accept_fresh_audit:
+            raise ResumeError(
+                "审计不可复用（key=%s：%s）——拒绝恢复；确需在代码/输入变更后重审，"
+                "请加 `--accept-fresh-audit`"
+                % (_miss.get("key") or "unknown", _miss.get("text") or ""))
+        print(json.dumps({"status": "AUDIT_WILL_BE_REFRESHED",
+                          "reuse_miss": _miss}, ensure_ascii=False, indent=1))
 
     if dry_run:
         print(json.dumps({
             "ok": True, "chapter_dir": str(chapter), "run_id": man["run_id"],
             "script_revision": man["script_revision"],
-            "audit_reusable": True, "audit_issues": len(reusable.get("issues") or []),
+            # M2.3：不可复用时如实报 false（旧实现硬写 True，等于让预检表撒谎）
+            "audit_reusable": reusable is not None,
+            "audit_issues": len((reusable or {}).get("issues") or []),
+            "reuse_miss": (m.last_reuse_miss() or {}).get("key", ""),
             "novel_sha256": man["novel_sha256"][:16],
             "plan": str(plan_path.name), "plan_sha256": man["plan_sha256"][:16],
             "duration_band": man["duration_band"],
             "channel": [man["channel_provider"], man["channel_model"]],
-            "next": "commit（含定向修复；审计复用，不重复调用）",
+            "next": ("commit（含定向修复；审计复用，不重复调用）" if reusable is not None
+                     else "commit（旧审计不可复用 → 本轮重新审计 1 次）"),
         }, ensure_ascii=False, indent=1))
         return 0
 
@@ -438,6 +451,8 @@ def main(argv=None) -> int:
                     help="续验的定向修复轮上限（默认 1；随后 1 次最终审计）")
     ap.add_argument("--no-hook", action="store_true",
                     help="续验跳过钩子阶段（HOOK_ENABLED=0）")
+    ap.add_argument("--accept-fresh-audit", action="store_true",
+                    help="允许在旧审计不可复用时继续（本轮重新审计）；默认 fail-closed")
     ap.add_argument("--build", action="store_true",
                     help="由现有产物生成清单（需 --snapshot）")
     ap.add_argument("--chapter-dir", default="", help="--build 时的章节目录")
@@ -463,6 +478,7 @@ def main(argv=None) -> int:
                    max_sends=args.max_sends,
                    hook_max_attempts=args.hook_max_attempts,
                    audit_repair_rounds=args.audit_repair_rounds,
+                   accept_fresh_audit=args.accept_fresh_audit,
                    no_hook=args.no_hook)
     except ResumeError as exc:
         print("[RESUME] 拒绝恢复: %s" % exc, file=sys.stderr)

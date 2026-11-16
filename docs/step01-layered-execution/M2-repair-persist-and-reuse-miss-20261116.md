@@ -135,7 +135,50 @@ max_tokens ≥ 32,000」开协议流式。实测五类长调用都过线：分�
 | `tests/step01_script_gen`（M2.1 落地前，M2.2/M2.3 阶段读数） | 4549 passed, 294 skipped, 4 xfailed |
 | 既有复用/身份/事务回归（`test_audit_content_identity` / `test_duration_band` / `test_replay_transactions`） | 27 passed |
 
-## 3. 未完成 / 后续
+## 4. 真实单次调用验证（2026-11-16 23:53–23:56）
+
+命令（隔离根 `.dsh/step01_m2_single_call_20261116/`）：
+
+```powershell
+$env:STEP01_TOTAL_BUDGET_SEC="1800"; $env:HOOK_ENABLED="0"
+$env:TEXT_TRANSPORT_RETRIES="0"; $env:TEXT_TRANSPORT_CONNECT_RETRIES="0"
+$env:AGENT_PLAN_TEXT_STREAM="1"
+python -m step01_script_gen.resume --manifest <003848 清单> `
+  --max-sends 1 --hook-max-attempts 0 --audit-repair-rounds 1 --no-hook `
+  --accept-fresh-audit
+```
+
+| 项 | 读数 | 证据 |
+|---|---|---|
+| 真实调用 | **1 次**：`script_audit` ok，**161.8s**，流式（`agent_plan_trace`），输出 23,922 tokens | 台账第 10 行 |
+| 守卫阻断 | 修复调用在**发出前**被拦：`网络尝试总量上限阻断：1/1`（台账第 11 行 2ms / 0 字符） | console + 台账 |
+| 三指标 | `attempts=1` / `responses_received=1` / `hook_attempts=0` | console |
+| CP1 | `snapshots/cp_CP1_PLAN_VERIFIED.json`（151,466 B，23:53:49） | 目录 |
+| CP2 | `snapshots/cp_CP2_CANDIDATE_GENERATED.json`（151,418 B，23:53:49） | 目录 |
+| CP3 | `snapshots/cp_CP3_INITIAL_AUDIT_DONE.json`（153,614 B，23:56:32） | 目录 |
+| 复用失配键 | 预检阶段 `source_identity`；提交点 `content_identity` | 日志 |
+| 终局 | `BLOCK` / `send_budget_exhausted` / 1 轮 11 条 blocking（审计 1 + 确定性 10） | console |
+
+**结论**：M2.1 的双层账本、M3.2 的 Session 发送、M2.3 的 CP1–CP3 落盘、以及
+「修后复审」的额度语义，在真实链路上一次跑通；阻断发生在**字节发出之前**
+（第 11 条台账 2ms、0 字符），符合 fail-closed 设计。
+
+### 4.1 一个被这次运行坐实的机制
+
+预检阶段报 `source_identity` 不匹配、提交点报 `content_identity` 不匹配——两者
+同一根因：**`PROMPT_SOURCE_FINGERPRINT` 哈希整个 `main.py`**，本轮为实现 M2 改了
+`main.py`，旧审计按契约失效。这不是 bug，而是 L1 要解决的问题（改一行注释/加一个
+函数就作废全部审计报告）。本轮的应对是新增 `resume --accept-fresh-audit`：
+默认仍 fail-closed，显式加该开关才允许"本轮重新审计"，并把失配键打印出来。
+
+## 5. 提交与合并
+
+- `4c2bd71` M2.2 + M2.3（修复轮落盘 + 复用失配诊断）
+- `484f280` M2.1（统一出站守卫）
+- `df5d8ac` M2.2b + CP1–CP4 + M3.2 接线
+- 推送：`origin/master`（Gitee）与 `github/master` 均 `98d3edb..df5d8ac`。
+
+## 6. 未完成 / 后续
 
 1. **`step01_resume.json` 指针化**：需要 `resume` 接受「快照 revision ≠ 审计
    revision + `requires_fresh_audit`」这一合法状态（当前 `build_manifest` 会拒）。
