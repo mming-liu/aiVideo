@@ -138,3 +138,11 @@ content_identity 已不同」。2026-11-16 22:18 的零调用复核（在冻结�
 `calls` / `commit` / `log`，**没有新的 `snapshots/script_result_*.json`**——即这一轮
 "终审 + 修复 + 修后终审"三次付费调用的成果中，**修后稿本体再次未落盘**。
 这与 `19:01` 丢稿是同一机制，已在 M2.2（`_persist_repair_round`）修复。
+
+## 7. 结案（2026-11-18）
+
+用户明确指令：冻结稿续验闭环**就此结案**，不再发起那 1 次受控复审调用。
+依据：正式章 `chapter_001` 已 `COMMITTED`（`step01_commit.json` script revision
+`0afa8074…`、blocking=0），M-A1/A2/A3 机制已由单测与离线复核闭环；
+`.dsh/step01_budget_frozen` 及 19:00/22:35 现场作为历史证据**只读保留**，
+不再修改、不再追加调用。

@@ -311,6 +311,14 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
             from shared.paths import is_core_keyframe_file
             candidates.extend(sorted(p for p in Path(shot_dir).glob("keyframe_*.png")
                                      if is_core_keyframe_file(p)))
+            # 2026-11-18 O1：只哈希策略后实际会下发的帧；被 first_only/first_last
+            # 丢弃的 lf/kf 变化不得让可复用视频失效。
+            try:
+                from shared.video_media_plan import filter_frame_paths_by_policy
+                candidates = [Path(p) for p in filter_frame_paths_by_policy(
+                    [str(p) for p in candidates], _policy)]
+            except Exception:  # noqa: BLE001 - 过滤不可用时保持旧行为
+                pass
             for _fp in candidates:
                 key_parts.append(_file_digest(_fp))
         except Exception:

@@ -22,6 +22,7 @@ provider 随后按模型能力把素材裁成 2 张（甚至用 kf0/kf2 顶替�
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 #: 合法策略值。非法值在解析期抛 ValueError（配置错误，确定性失败，不静默降级）。
 VALID_MEDIA_POLICIES = ("auto", "first_last", "first_only", "reference")
@@ -330,6 +331,46 @@ def video_consumes_intermediate_frames() -> bool:
     if not any(pat in normalized for pat, _ in SEEDANCE_CAPS):
         return True     # 未注册型号：保守按会消费处理
     return bool(get_seedance_cap(model).supports_reference_image)
+
+
+def filter_frame_paths_by_policy(frame_paths, policy: str | None = None) -> list[str]:
+    """按生效策略过滤帧文件（缓存哈希与执行要求共用，2026-11-18 O1）.
+
+    - ``first_only``：只留 first_frame；
+    - ``first_last``：留 first_frame / last_frame；
+    - ``reference``：有 keyframe 时只留 keyframe，否则留 first/last；
+    - ``auto``：当前视频模型不消费中间关键帧时丢掉 keyframe，其余保持。
+
+    被策略丢弃的素材不得进入 ``prompt_hash`` 或 ``requirements.references``，
+    否则改一张不会下发的 lf/kf 也会让可复用视频失效。
+    """
+    policy = (policy or active_media_policy()).strip().lower()
+    entries = []
+    for raw in frame_paths or []:
+        path = str(raw)
+        name = Path(path).name.lower()
+        if "first_frame" in name:
+            role = "first_frame"
+        elif "last_frame" in name:
+            role = "last_frame"
+        elif "keyframe" in name:
+            role = "keyframe"
+        else:
+            role = "reference"
+        entries.append((role, path))
+
+    if policy == "first_only":
+        keep = {"first_frame"}
+    elif policy == "first_last":
+        keep = {"first_frame", "last_frame"}
+    elif policy == "reference":
+        has_kf = any(role == "keyframe" for role, _ in entries)
+        keep = {"keyframe"} if has_kf else {"first_frame", "last_frame"}
+    else:  # auto（及未知值按保守旧行为）
+        keep = {"first_frame", "last_frame", "keyframe", "reference"}
+        if not video_consumes_intermediate_frames():
+            keep.discard("keyframe")
+    return [path for role, path in entries if role in keep]
 
 
 def default_frame_selection(policy: str | None = None) -> set[str]:

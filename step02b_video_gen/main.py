@@ -812,26 +812,42 @@ def _assert_step02a_scope(report: dict, only_indices, script: dict) -> None:
     from shared.video_media_plan import active_media_policy
 
     scope = (report or {}).get("scope") or {}
-    # S02：成品报告必须与当前素材策略同一口径；旧报告（无 media_policy）只在 auto 下沿用。
     _current_policy = active_media_policy()
-    _report_policy = scope.get("media_policy")
-    if _report_policy is None:
-        if _current_policy != "auto":
-            raise QualityGateError(
-                "step02a 成品报告缺少 media_policy（旧报告），当前策略 %s 需重跑 step02a"
-                % _current_policy)
-    elif str(_report_policy) != _current_policy:
-        raise QualityGateError(
-            "step02a 成品报告策略 %s 与当前策略 %s 不一致，需重跑 step02a"
-            % (_report_policy, _current_policy))
-    scoped = {int(i) for i in (scope.get("shots") or [])}
-    if not scoped:
-        return
     wanted = set(only_indices) if only_indices is not None else None
     if wanted is None:
         wanted = {int(s.get("index", 0)) for s in script.get("shots", [])}
         if script.get("hook"):
             wanted.add(0)
+    # 2026-11-18 O2：报告可带**逐镜策略**（shot 1 auto / shot 2 first_only）。
+    # 有 policies 时按本次请求的每个镜头核它自己的策略；没有时才退回全报告
+    # 单一 media_policy 的旧口径。
+    _policies = scope.get("policies")
+    if isinstance(_policies, dict) and _policies:
+        for idx in sorted(wanted):
+            declared = _policies.get(str(idx))
+            if declared is None:
+                raise QualityGateError(
+                    "step02a 验收缺少 shot %s 的逐镜策略（报告覆盖 %s）"
+                    % (idx, sorted(_policies)))
+            if str(declared) != _current_policy:
+                raise QualityGateError(
+                    "step02a shot %s 策略 %s 与当前策略 %s 不一致，需重跑 step02a"
+                    % (idx, declared, _current_policy))
+    else:
+        # S02：成品报告必须与当前素材策略同一口径；旧报告（无 media_policy）只在 auto 下沿用。
+        _report_policy = scope.get("media_policy")
+        if _report_policy is None:
+            if _current_policy != "auto":
+                raise QualityGateError(
+                    "step02a 成品报告缺少 media_policy（旧报告），当前策略 %s 需重跑 step02a"
+                    % _current_policy)
+        elif str(_report_policy) != _current_policy:
+            raise QualityGateError(
+                "step02a 成品报告策略 %s 与当前策略 %s 不一致，需重跑 step02a"
+                % (_report_policy, _current_policy))
+    scoped = {int(i) for i in (scope.get("shots") or [])}
+    if not scoped:
+        return
     missing = sorted(wanted - scoped)
     if missing:
         raise QualityGateError(

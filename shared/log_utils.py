@@ -26,9 +26,13 @@ def resolve_log_file(log_file: str = "step02b.log") -> Path:
     """**唯一**的日志落点判据（候选上下文优先，否则章目录）."""
     base = _LOG_CONTEXT["log_dir"]
     if base is not None:
-        return Path(base) / log_file
-    from shared.paths import chapter_dir
-    return chapter_dir() / log_file
+        path = Path(base) / log_file
+    else:
+        from shared.paths import chapter_dir
+        path = chapter_dir() / log_file
+    # M1：read_only RunContext 下 step01.log 物理改到 devnull，不追加冻结目录。
+    from shared.run_context import guard_log_path
+    return guard_log_path(path)
 
 
 def verbose_write(msg: str, log_file: str = "step02b.log") -> None:

@@ -279,6 +279,7 @@ tests/enhancements/*
 # 其余 tests/shared/ 仍保持本地（不入库）。
 !tests/shared/
 tests/shared/*
+!tests/shared/test_run_context.py
 !tests/shared/test_fact_split.py
 !tests/shared/test_presentation_contract.py
 # 2026-10-30（R05/F5）：授权链身份关联的判别测试。
@@ -423,6 +424,10 @@ tests/step02_video_gen/*
 # 2026-11-17 S02：缓存消费同源、旧快照过渡、有声 payload 对照
 !tests/step02_video_gen/test_cache_legacy_snapshot_transition.py
 !tests/step02_video_gen/test_voiced_payload_compare.py
+# 2026-11-18 O1：按 media_policy 过滤参考帧/缓存哈希
+!tests/step02_video_gen/test_policy_frame_identity.py
+# 2026-11-18 O2：step02a --verify-only 与逐镜策略门禁
+!tests/step02a_frame_gen/test_verify_only.py
 !tests/shared/test_cache_and_card_handoff.py
 !tests/shared/test_plan_revision_delta_end_to_end.py
 !tests/shared/test_content_verification.py
@@ -562,6 +567,8 @@ start_studio.bat
 !tests/step01_script_gen/test_send_counter.py
 !tests/step01_script_gen/test_resume_budget_init.py
 !tests/step01_script_gen/test_reuse_miss_reason.py
+# 2026-11-18 M4：送审前预审门/注入幂等
+!tests/step01_script_gen/test_commit_gate_pre_audit.py
 !tests/step01_script_gen/test_repair_round_persist.py
 !tests/shared/test_outbound_guard.py
 !tests/shared/test_step01_checkpoint.py

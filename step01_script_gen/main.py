@@ -81,6 +81,12 @@ from step01_script_gen.quality_issues import (
     Issue, collect_structured_issues, is_blocking, RULE_VERSION, RULE_SOURCE_FINGERPRINT,
     PROMPT_SOURCE_FINGERPRINT,
 )
+from step01_script_gen.commit_gate import REUSE_MISS_TEXT as _REUSE_MISS_TEXT
+# M1（2026-11-18）：入口安装不可变 RunContext；STEP01_READ_ONLY=1 时
+# step01.log 落点改 devnull、章节目录 JSON 写直接拒绝（探针零写入）。
+from shared.run_context import RunContext as _RunContext, install as _install_run_context
+_RUN_CONTEXT = _install_run_context(_RunContext.from_env())
+
 CHAPTER_DIR = chapter_dir()
 OUTPUT_FILE = script_file()
 SCRIPT_FILE = OUTPUT_FILE
@@ -2901,6 +2907,27 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
     from step01_script_gen.audit import run_same_model_audit_with_status
 
     metadata = _final_audit_metadata(script, run_id=run_id)
+    # M4（2026-11-18）：严格模式下先跑送审前确定性预审门，硬伤不送 LLM 终审。
+    from step01_script_gen.commit_gate import pre_audit_enabled, pre_audit_gate
+    if pre_audit_enabled():
+        _pre = pre_audit_gate(script)
+        if not _pre["ok"]:
+            _logger.warn(
+                "[AUDIT] 送审前确定性预审门拒绝：hard=%d（%s）"
+                % (len(_pre["hard"]),
+                   ", ".join(str(f.get("code")) for f in _pre["hard"][:5])))
+            return {
+                **metadata,
+                "status": "blocked",
+                "audit_status": "blocked",
+                "model": model or "",
+                "channel_provider": "",
+                "schema_deviations": [],
+                "usage": None,
+                "error": "pre_audit_hard: %d deterministic finding(s)"
+                         % len(_pre["hard"]),
+                "issues": _pre["hard"],
+            }
     # 定向项只解析一次：请求里发的那一份、身份里算的那一份必须是同一份，
     # 否则「身份相同」与「请求逐字相同」会分家（S05）。
     _focus_now = focus or _final_audit_focus(script, None)
@@ -3232,23 +3259,6 @@ def _reuse_miss_key(audit: dict, *, revision: str,
 
 
 #: 失配键 → 人读文案（日志与文档共用一套措辞，避免再出现"四因一句"）
-_REUSE_MISS_TEXT = {
-    "status_not_ok": "旧审计没有结论（status != ok）",
-    "content_identity_missing": "旧审计缺少 content_identity（复用证据不足）",
-    "content_identity": "content_identity 不匹配（原文/计划/送审稿/契约已变）",
-    "audit_focus": "content_identity 仅因定向项不同（audit_focus 已变）",
-    "source_identity_missing": "旧审计缺少 source_identity（复用证据不足）",
-    "source_identity": "source_identity 不匹配（原文/计划/契约已变）",
-    "input_revision": "送审稿 revision 不同",
-    "rule_source_fingerprint": "规则源码指纹不同",
-    "duration_band": "时长带不同",
-    "audit_scope": "审计范围不同",
-    "audit_prompt_version": "审计提示词版本不同",
-    "audit_focus_version": "定向项版本不同",
-    "channel_provider": "审计通道 provider 不同",
-    "channel_model": "审计通道 model 不同",
-}
-
 #: 最近一次复用判定的失配读数（诊断用；进程内最后一次覆盖）
 _LAST_REUSE_MISS: dict = {}
 
@@ -11237,59 +11247,9 @@ def _persist_repair_round(script: dict, *, round_no: int, audit: "dict | None" =
 
 
 def _paired_repair_budget() -> dict:
-    """**成对额度预检读数**（M2.2b，2026-11-17 补双层）.
-
-    「一次修复 + 一次修后复审」这一对，**两层都要够**：
-
-    | 层 | 读数 | 判据 |
-    |---|---|---|
-    | 逻辑调用 | `remaining_logical(repair/audit/全局)` | 各 ≥1，且全局 ≥2 |
-    | 网络尝试 | `remaining_attempts(repair/audit/全局)` | 各 ≥1，且全局 ≥2 |
-
-    为什么要补第二层（用户 2026-11-17 复核）：`--max-sends 1` 只配了
-    **HTTP 尝试上限**，逻辑层没有上限 ⇒ 旧实现 `short=False` 放行，直到修复请求
-    撞到发送守卫才被拦。那证明了"发送上限有效"，但没证明"成对准入有效"。
-    现在两层任一不足都在**发起修复之前**拦下。
-
-    未安装 `OutboundGuard` 时全部读数为 `None`（= 不限）、`short=False`——
-    未接管预算的调用方行为逐字不变。
-    """
-    rec = {"remaining_logical_repair": None, "remaining_logical_audit": None,
-           "remaining_logical_total": None,
-           "remaining_attempts_repair": None, "remaining_attempts_audit": None,
-           "remaining_attempts_total": None,
-           "short": False, "short_on": [],
-           "required": {"repair": 1, "audit": 1}}
-    try:
-        from shared.outbound_guard import remaining_logical as _rem_logical
-        from shared.outbound_guard import remaining_attempts as _rem_attempts
-        _lr, _la, _lg = _rem_logical("repair"), _rem_logical("audit"), _rem_logical()
-        _ar, _aa, _ag = (_rem_attempts("repair"), _rem_attempts("audit"),
-                         _rem_attempts())
-    except Exception:                              # noqa: BLE001
-        return rec
-    rec.update({
-        "remaining_logical_repair": _lr, "remaining_logical_audit": _la,
-        "remaining_logical_total": _lg,
-        "remaining_attempts_repair": _ar, "remaining_attempts_audit": _aa,
-        "remaining_attempts_total": _ag,
-    })
-    short_on = []
-    if _lr is not None and _lr < 1:
-        short_on.append("logical_repair")
-    if _la is not None and _la < 1:
-        short_on.append("logical_audit")
-    if _lg is not None and _lg < 2:
-        short_on.append("logical_total")
-    if _ar is not None and _ar < 1:
-        short_on.append("attempts_repair")
-    if _aa is not None and _aa < 1:
-        short_on.append("attempts_audit")
-    if _ag is not None and _ag < 2:
-        short_on.append("attempts_total")
-    rec["short_on"] = short_on
-    rec["short"] = bool(short_on)
-    return rec
+    """兼容壳：实现已迁到 ``repair_loop.paired_repair_budget``（M1，2026-11-18）."""
+    from step01_script_gen.repair_loop import paired_repair_budget
+    return paired_repair_budget()
 
 
 def _pid_is_alive(pid: int) -> bool:

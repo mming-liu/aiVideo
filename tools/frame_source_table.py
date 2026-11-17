@@ -81,8 +81,11 @@ def _frame_rows(shot_dir: Path, idx: int, acceptance: dict | None) -> list[dict]
     outputs = ((acceptance or {}).get("outputs") or {}).get(str(idx)) or {}
     scope = (acceptance or {}).get("scope") or {}
     revision = (acceptance or {}).get("script_revision")
-    policy = scope.get("media_policy")
-    need = ((scope.get("requirements") or {}).get("frames") or [])
+    # O2：报告可带逐镜策略；优先取本镜，旧报告才退回全报告单一策略。
+    _policies = scope.get("policies") or {}
+    policy = _policies.get(str(idx)) or scope.get("media_policy")
+    _req = (scope.get("requirements") or {}).get(str(idx)) or {}
+    need = _req.get("frames") or []
     rows = []
     candidates = []
     ff = shot_dir / FIRST_FRAME_FILENAME

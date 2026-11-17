@@ -41,6 +41,9 @@ def prepare_json_swap(path, obj, **kwargs) -> Path:
     Returns: 临时文件路径（交给 `commit_json_swap` 或 `discard_json_swap`）。
     """
     path = Path(path)
+    # M1：read_only RunContext 下章节目录内的 JSON 写必须在打开文件前失败。
+    from shared.run_context import assert_writable
+    assert_writable(path)
     tmp_path = _swap_tmp_path(path)
     try:
         with open(tmp_path, "w", encoding="utf-8") as f:

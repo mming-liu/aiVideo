@@ -40,6 +40,12 @@ _OFFICIAL_NAMES = ("script_result.json", "step01_audit.json", "step01_quality.js
 _PRODUCTION_OUTPUT = ROOT / "output"
 
 
+def compute_script_revision(script: dict) -> str:
+    """模块级导出（测试可替换）；延迟 import，避免在隔离根确定前冻结项目配置."""
+    from shared.quality_gate import compute_script_revision as _impl
+    return _impl(script)
+
+
 class SendBudgetExceeded(RuntimeError):
     """发送上限已用尽（在**发送边界**抛出；已发出的请求照样计数）."""
 
@@ -442,8 +448,8 @@ def replay(script_path: Path, issues_path: Path, out_path: Path,
         if _orig_logger is not None:
             m._logger = _orig_logger
 
-    before_rev = m.compute_script_revision(script)
-    after_rev = m.compute_script_revision(repaired)
+    before_rev = compute_script_revision(script)
+    after_rev = compute_script_revision(repaired)
     report = {
         "diagnostic": True,
         "note": note or "诊断回放（输入非生产审计输出）",

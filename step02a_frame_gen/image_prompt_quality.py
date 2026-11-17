@@ -158,10 +158,13 @@ def _keyframes_consumed_by_video() -> bool:
     return video_consumes_intermediate_frames()
 
 
-def write_image_product_quality(script: dict, work_dir: Path, *,
-                                  only_indices=None, require_keyframes=None,
-                                  media_policy=None) -> dict:
-    """Validate actual Step02a frame products and write acceptance report.
+def build_image_product_quality(script: dict, work_dir: Path, *,
+                                 only_indices=None, require_keyframes=None,
+                                 media_policy=None) -> dict:
+    """Validate actual Step02a frame products and **build** the acceptance payload.
+
+    2026-11-18 O2：拆出纯构建函数，``--verify-only`` 可在不写盘、不生图、不跑
+    视觉 QC 的前提下复用同一份判据；``write_image_product_quality`` 保持原签名。
 
     only_indices: 只核验这些镜头（--shots 子集运行）；None=全章。
     require_keyframes: None ⇒ 全章运行按旧行为要求关键帧；子集运行按当前视频
@@ -249,5 +252,16 @@ def write_image_product_quality(script: dict, work_dir: Path, *,
                                    "keyframes": bool(require_keyframes)}},
     }
     attach_gate_metadata(payload, script, stage="step02a.product_acceptance")
-    atomic_dump_json(chapter_dir() / "step02a_quality.json", payload, ensure_ascii=False, indent=2)
+    return payload
+
+
+def write_image_product_quality(script: dict, work_dir: Path, *,
+                                 only_indices=None, require_keyframes=None,
+                                 media_policy=None) -> dict:
+    """构建并原子写入正式 ``step02a_quality.json``（原入口，签名不变）."""
+    payload = build_image_product_quality(
+        script, work_dir, only_indices=only_indices,
+        require_keyframes=require_keyframes, media_policy=media_policy)
+    atomic_dump_json(chapter_dir() / "step02a_quality.json", payload,
+                     ensure_ascii=False, indent=2)
     return payload

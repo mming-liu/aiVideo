@@ -127,6 +127,14 @@ def _start_end_state(shot: dict) -> dict:
 
 
 def _reference_facts(frame_paths: list, reference_mode: str) -> dict:
+    # 2026-11-18 O1：只记录**策略后实际会下发**的素材；被丢弃的 lf/kf 不得
+    # 进入 requirements（它整体进 request_key），否则改未用素材也会让缓存失效。
+    try:
+        from shared.video_media_plan import filter_frame_paths_by_policy
+        frame_paths = filter_frame_paths_by_policy(
+            list(frame_paths or []), os.getenv("VIDEO_MEDIA_POLICY", "auto"))
+    except Exception:  # noqa: BLE001 - 过滤不可用时保持旧行为，不静默丢素材
+        frame_paths = list(frame_paths or [])
     materials = []
     for i, path in enumerate(frame_paths or []):
         name = Path(str(path)).name.lower()

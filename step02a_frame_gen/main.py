@@ -598,6 +598,12 @@ def main():
                              "不发任何生成请求")
     parser.add_argument("--plan-out", default=None,
                         help="把候选 visual_plan.json 写到显式路径（plan-only 与真实入口共用）")
+    parser.add_argument("--verify-only", action="store_true",
+                        help="零生成/零视觉 QC：按锁定且通过 QC 的资产重建并合并产品验收报告")
+    parser.add_argument("--verify-shots", default="1,2",
+                        help="--verify-only 的镜头范围（默认 1,2）")
+    parser.add_argument("--verify-policies", default="1:auto,2:first_only",
+                        help="--verify-only 的逐镜策略，如 1:auto,2:first_only")
     add_scope_arguments(parser)
     args = parser.parse_args()
 
@@ -630,6 +636,22 @@ def main():
     frames = _default_frames(frames, args.all_frames)
     script_path = script_file()
     work_dir = wd()
+
+    if getattr(args, "verify_only", False):
+        from step02a_frame_gen.verify_acceptance import run_verify_only
+        _policies = {}
+        for part in str(args.verify_policies or "").split(","):
+            if ":" not in part:
+                continue
+            _k, _v = part.split(":", 1)
+            try:
+                _policies[int(_k)] = _v.strip()
+            except ValueError:
+                continue
+        raise SystemExit(run_verify_only(
+            script_path, work_dir,
+            shots=parse_shot_selector(args.verify_shots),
+            policies=_policies))
 
     logger = (_ConsoleLogger() if args.plan_only
               else get_logger(chapter_dir() / "step02a.log", console_level="INFO"))
