@@ -97,7 +97,7 @@ class FrozenVideoRequest:
             "prompt": self.prompt,
             "parameters": {k: self.parameters.get(k) for k in sorted(self.parameters)},
             "references": [r.key_facts() for r in self.references],
-            "requirements": self.requirements,
+            "requirements": _requirements_for_key(self.requirements),
             "source": {"scope": self.source.get("scope"),
                        "script_revision": self.source.get("script_revision"),
                        "shot_id": self.source.get("shot_id")},
@@ -108,6 +108,34 @@ class FrozenVideoRequest:
         from shared.enhancement_io import canonical_json_digest
         self.request_key = canonical_json_digest(self.key_facts())
         return self.request_key
+
+
+def _requirements_for_key(requirements) -> dict:
+    """返回**进 key 的副本**：精确剔除诊断文本 `execution.audio.policy.reason`.
+
+    为什么（2026-11-17 S02 补正，用户回放复现）：`merge_into_frozen()` 把完整执行
+    要求放进 `requirements.execution`，而 `requirements` 整体进 `request_key`。
+    无声模型下切换 `MERGE_AUDIO_MODE` 时**有效策略不变**（都是 `tts_mix`），只有
+    `reason` 文案不同（`model ... has no native audio` vs `MERGE_AUDIO_MODE=tts_mix`），
+    却会让 key 变化、把本可复用的视频判成 `mismatch`。
+
+    这里只剔这一条：`audio.policy` 的其余字段（`native_voice` / `tts_required` /
+    `effective_merge_mode` / `narration_tts_required`）与**其它任何同名 `reason`**
+    一律原样保留（它们可能确实改变模型输入）。
+    """
+    if not isinstance(requirements, dict):
+        return requirements
+    import copy as _copy
+
+    out = _copy.deepcopy(requirements)
+    execution = out.get("execution")
+    if isinstance(execution, dict):
+        audio = execution.get("audio")
+        if isinstance(audio, dict):
+            policy = audio.get("policy")
+            if isinstance(policy, dict):
+                policy.pop("reason", None)
+    return out
 
 
 def new_request_id() -> str:

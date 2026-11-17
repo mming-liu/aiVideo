@@ -565,3 +565,4 @@ start_studio.bat
 !tests/shared/test_audit_prompt_archive.py
 !docs/aivideo_medium_long_term_plan.md
 !tests/step02_video_gen/test_generation_requirements_audio.py
+!tests/step02_video_gen/test_request_key_audio_reason.py
