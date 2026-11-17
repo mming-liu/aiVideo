@@ -69,6 +69,24 @@ content_identity 已不同」。2026-11-16 22:18 的零调用复核（在冻结�
 > 理由是错的；现在改为「复现时由 `reuse_miss_reason` 给出精确键」。本轮实跑最终
 > 用了 3 次调用（终审 + 修复 + 修后终审），这一点不受归因更正影响。
 
+**2026-11-18 定案（零调用复核）**：19:00 试图复用的旧审计来自 00:38
+（run `20261116T003059-8920`），其 `input_revision=e8f63762`；19:00 本次稿件是
+`64a347a4`（run `20261116T185814-15860`）。**两者不是同一稿**。因此：
+
+- 此前把两次审计请求的 103,120 vs 100,845 字符差当作「同稿 context 多出
+  1,043 字符」的前提不成立——差值是不同稿件的正文差，不是运行期派生字段；
+- `content_identity` 判定先于 `input_revision`，把真实原因遮成了
+  「原文/计划/定向项/契约已变」；已把**具体契约项前移**
+  （`input_revision` / 规则指纹 / 时长带 / scope / 提示词版本 / focus 版本 /
+  通道），聚合身份只作兜底；
+- 回归用例：`tests/step01_script_gen/test_reuse_miss_reason.py`
+  `test_revision_mismatch_is_not_masked_by_content_identity`（revision 不同且
+  `content_identity` 不同 ⇒ `input_revision`）、
+  `test_prompt_version_is_not_masked_by_content_identity`。
+
+00:38 **同稿请求体**与重建值仍有 1,043 字符残差，属另一个问题（请求体归档已上线，
+下次同稿复现可直接 diff），不影响 19:00 复用失配的定案。
+
 ### 3.2 预算 cap 2 命中
 `--max-sends 2` 是硬上限（用户明令不得放宽）。终审 1 与修复各用 1 次，
 修后终审是第 3 次，被发送边界拒绝。这是**预算阻断**，不是稿件内容终审失败 ——

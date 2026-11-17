@@ -183,11 +183,11 @@ python -m step01_script_gen.resume --manifest <003848 清单> `
 1. **`step01_resume.json` 指针化**：需要 `resume` 接受「快照 revision ≠ 审计
    revision + `requires_fresh_audit`」这一合法状态（当前 `build_manifest` 会拒）。
    在它落地前，`--resume` 仍只认「同 revision 的快照+审计」这一对。
-2. **`content_identity` 真实失配点**：仍未定案（见
-   [step01-frozen-resume-verification-20261116.md](step01-frozen-resume-verification-20261116.md)
-   §3.1 更正）。现有可疑项只剩 `audit_focus` 的内容——它由当轮确定性质量门派生，
-   而质量门阻断清单在两次运行之间确实变了。诊断已就位（`last_reuse_miss()`），
-   下次复现可直接读键。
+2. **`content_identity` 真实失配点**：**已定案（2026-11-18）**——19:00 复用的
+   00:38 审计属于 `e8f63762`，19:00 稿件是 `64a347a4`，首因是 `input_revision`
+   不同；`content_identity` 先判的顺序遮蔽了它。已把具体契约项前移并补回归用例，
+   详见 [step01-frozen-resume-verification-20261116.md](step01-frozen-resume-verification-20261116.md)
+   §3.1 与 `test_reuse_miss_reason.py`。
 3. **检查点续跑调度器**：CP1–CP4 已能如实落盘，但"从 `PAUSED_AT_CPk` 自动续跑"
    的调度逻辑（读 `_checkpoints.json` → 决定从哪一步开始）尚未接线；当前由
    `resume` + `--max-sends` 人工控制。

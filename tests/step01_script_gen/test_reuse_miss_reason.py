@@ -155,3 +155,17 @@ def _write(chapter, name: str, payload: dict) -> None:
     import json
 
     (chapter / name).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+def test_revision_mismatch_is_not_masked_by_content_identity():
+    """19:00 定案：不同稿件先报 input_revision，不能被聚合身份遮住。"""
+    script = _script()
+    payload = _payload(script, input_revision="deadbeef",
+                       content_identity="cid-from-other-script")
+    assert _key(payload, script=script) == "input_revision"
+
+
+def test_prompt_version_is_not_masked_by_content_identity():
+    script = _script()
+    payload = _payload(script, audit_prompt_version="old",
+                       content_identity="cid-from-other-script")
+    assert _key(payload, script=script) == "audit_prompt_version"

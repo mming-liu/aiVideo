@@ -3186,21 +3186,11 @@ def _reuse_miss_key(audit: dict, *, revision: str,
     """
     if str(audit.get("status") or "").strip().lower() != "ok":
         return "status_not_ok"
-    # S05：内容身份（原文/计划/送审稿/契约/定向项）——给了期望值就必须逐字相符。
-    if expected_identity is not None:
-        _got = str(audit.get("content_identity") or "").strip()
-        if not _got:
-            return "content_identity_missing"
-        if _got != expected_identity:
-            if expected_identity_without_focus and _got == expected_identity_without_focus:
-                return "audit_focus"
-            return "content_identity"
-    if expected_source_identity is not None:
-        _got_src = str(audit.get("source_identity") or "").strip()
-        if not _got_src:
-            return "source_identity_missing"
-        if _got_src != expected_source_identity:
-            return "source_identity"
+    # 2026-11-18：**具体契约项先于聚合身份**。`content_identity` 包含稿件 revision，
+    # 若先比它，任何 revision/规则/提示词变化都会被笼统报成 content_identity——
+    # 19:00 的失配就是这样被误读成「同稿的隐藏字段变了」，实际是送审稿 revision
+    # 不同（00:38 审计 e8f63762 vs 19:00 稿件 64a347a4）。先报具体键，聚合身份
+    # 只在其余项全同、仍不相等时才作为「原文/计划/契约内容变化」的兜底。
     if str(audit.get("input_revision") or "").strip() != revision:
         return "input_revision"
     if str(audit.get("rule_source_fingerprint") or "").strip() != RULE_SOURCE_FINGERPRINT:
@@ -3223,6 +3213,21 @@ def _reuse_miss_key(audit: dict, *, revision: str,
             return "channel_provider"
         if str(audit.get("model") or "").strip() != _chan_model:
             return "channel_model"
+    # S05：内容身份（原文/计划/送审稿/契约/定向项）——给了期望值就必须逐字相符。
+    if expected_identity is not None:
+        _got = str(audit.get("content_identity") or "").strip()
+        if not _got:
+            return "content_identity_missing"
+        if _got != expected_identity:
+            if expected_identity_without_focus and _got == expected_identity_without_focus:
+                return "audit_focus"
+            return "content_identity"
+    if expected_source_identity is not None:
+        _got_src = str(audit.get("source_identity") or "").strip()
+        if not _got_src:
+            return "source_identity_missing"
+        if _got_src != expected_source_identity:
+            return "source_identity"
     return ""
 
 
