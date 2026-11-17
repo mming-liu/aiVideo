@@ -418,10 +418,24 @@ def generation_requirements() -> dict:
     ``MERGE_AUDIO_MODE`` 只在"对白由视频模型原生发声"的通道上改变 payload/声音
     （§V1：只影响 Step03/04 处理时属于后处理，不进视频生成 key）。判据不可得时
     **保守进 key**（宁可多失效一次，也不静默漏失效）。
+
+    2026-11-17（S02，用户复核）：判据从**provider 级**改为
+    `provider 级原生发声 且 **模型级确实有声**`。
+
+    为什么必须加后半个条件：`active_video_uses_native_voice()` 只按 provider 分类
+    （volcengine → True），而 `volcengine` 下 `doubao-seedance-1-0-pro-*` 是**无声**
+    模型（`supports_generate_audio=False`）。旧判据于是把
+    `{"audio_policy": "native"}` 写进冻结请求——而 `requirements` 整体进
+    `request_key`（`request_plan.key_facts()`），结果是：**payload 一字未变，仅切换
+    `MERGE_AUDIO_MODE` 就会让视频缓存 key 失效**，白白重生成。
+    无声模型没有原生音轨可混，`MERGE_AUDIO_MODE` 对它不可能改变任何输入，
+    因此不得进 key。
     """
     try:
-        from shared.model_caps import active_video_uses_native_voice
-        native = bool(active_video_uses_native_voice())
+        from shared.model_caps import (active_video_supports_audio,
+                                       active_video_uses_native_voice)
+        native = bool(active_video_uses_native_voice()) and bool(
+            active_video_supports_audio())
     except Exception:  # noqa: BLE001
         native = True
     return ({"audio_policy": os.getenv("MERGE_AUDIO_MODE", "native")} if native else {})
