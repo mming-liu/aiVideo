@@ -294,6 +294,24 @@ def test_http_keep_endpoint(http_server):
     assert body["ok"] is True and body["keep"] is True
     assert studio.is_kept("step01", "1")
 
+
+def test_http_plan_returns_per_shot_frames_zero_sends(http_server):
+    """X5-03 的数据源：/api/plan 逐镜 shot_frames 且 model_sends=0（前端只读渲染）."""
+    base, _studio = http_server
+    request = urllib.request.Request(
+        base + "/api/plan", data=b"{}",
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=10) as res:
+        body = json.loads(res.read().decode("utf-8"))
+    assert body["ok"] is True
+    assert body["model_sends"] == 0
+    report = body["report"]
+    rows = report["shot_frames"]
+    assert [row["shot"] for row in rows] == [1]
+    assert rows[0]["ff"] in ("generate", "cached", "locked")
+    assert rows[0]["lf"] in ("generate", "cached", "locked")
+    assert "images_total" in report["totals"]
+
 # ---------------------------------------------------------------------------
 # 7) 素材策略 / 单镜审校 / 别名端点 / 单镜合成
 # ---------------------------------------------------------------------------

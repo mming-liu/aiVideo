@@ -168,6 +168,8 @@ tests/step01_script_gen/*
 # 2026-11-15 P02/P03：计划顺序契约（判据+投影+生产接线）与固定输入修复入口的契约用例
 !tests/step01_script_gen/test_plan_voice_order.py
 !tests/step01_script_gen/test_replay_fixed_input.py
+# 2026-11-17 M-A2：resume.run() pending_candidate dry-run 端到端（零调用）
+!tests/step01_script_gen/test_resume_run_pending.py
 !tests/step02b_video_gen/
 tests/step02b_video_gen/*
 !tests/step02b_video_gen/test_frame_contract.py
