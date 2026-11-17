@@ -48,7 +48,8 @@ from shared.paths import (
 from shared.tee_logger import get_logger
 from step02_video_gen.submit_poll import (
     _submit_video, _get_shot_hash, _failed_videos, cache_decision,
-    build_frozen_for_shot, resume_candidate_attempt, repair_missing_clip,
+    build_frozen_for_shot, build_prepared_facts, read_frozen_snapshot,
+    resume_candidate_attempt, repair_missing_clip, _script_revision,
 )
 from shared.vimax_adapters import VideoGeneratorAiVideoAdapter
 from shared.shot_selector import parse_shot_selector
@@ -263,39 +264,65 @@ async def _process_one_shot_skip_frames(
     _reqs = _execution_requirements(shot, script, _visual_plan, frame_paths,
                                     str(active_video_model() or ""))
     _req_issues = list(_reqs.get("issues") or [])
+    shot_hash = _get_shot_hash(shot, script, shot_dir=frames_dir)
+    _prepared_facts = None
     if _req_issues:
         logger.warn(f"  [Shot {idx}] 执行要求问题: {_req_issues[:3]}")
+        # 跳过缓存后仍按同一入口提交；提交路径会在 prepare 后执行
+        # `validate_requirements` 并拒收（零 POST），不会静默复用旧产物。
+        logger.warn(f"  [Shot {idx}] 执行要求未通过，跳过缓存，交给 validate_requirements 拒收")
     else:
         # 只有要求干净时才允许走缓存：否则命中旧产物会绕过提交路径上的
         # `validate_requirements`，把本应被拦的视频直接复用（F3）。
-        # 缓存检查（§V2 改动 4）：prompt_hash + 产物检查 + 冻结请求关系
-        shot_hash = _get_shot_hash(shot, script, shot_dir=frames_dir)
-        _frozen_for_cache = None
-        if policy != "auto" and REFERENCE_MODE == "image":
-            _frozen_for_cache, _ = build_frozen_for_shot(
+        # S02-C1：缓存关系核对与提交同源——先 prepare 一次，失败即终局。
+        _cache = None
+        if REFERENCE_MODE == "image":
+            from step02_video_gen.submit_poll import build_prepared_facts
+            from shared.run_scope import current_scope_identity
+            _scope = dict(getattr(candidate_context, "scope", None)
+                          or current_scope_identity())
+            _rev = str(getattr(candidate_context, "script_revision", "")
+                       or _script_revision(script))
+            _prepared_facts = build_prepared_facts(
                 shot=shot, script=script, video_adapter=video_adapter,
-                frame_paths=frame_paths, mode="A",
+                frame_paths=frame_paths, mode="A", scope=_scope,
+                script_revision=_rev,
                 provider=os.getenv("VIDEO_PROVIDER", ""),
-                model_id=active_video_model(), execution_requirements=_reqs)
-        _cache = cache_decision(shot, script, shot_dir, video_path, clip_path=_clip_dst,
-                                force=force, shot_hash=shot_hash,
-                                frozen_request=_frozen_for_cache,
-                                require_exact=(policy != "auto"))
-        if _cache["hit"]:
+                model_id=active_video_model(),
+                execution_requirements=_reqs,
+                candidate_context=candidate_context)
+            if _prepared_facts.status == "prepared":
+                _cache = cache_decision(
+                    shot, script, shot_dir, video_path, clip_path=_clip_dst,
+                    force=force, shot_hash=shot_hash,
+                    frozen_request=_prepared_facts.frozen,
+                    require_exact=(policy != "auto"))
+            elif _prepared_facts.status == "unsupported":
+                # 旧兼容只允许"没有快照"；有快照但无法核对 ⇒ 不得 legacy 命中。
+                if read_frozen_snapshot(shot_dir) is None:
+                    _cache = cache_decision(
+                        shot, script, shot_dir, video_path, clip_path=_clip_dst,
+                        force=force, shot_hash=shot_hash, frozen_request=None)
+                else:
+                    logger.warn(f"  [Shot {idx}] 快照存在但 provider 无 prepared 入口，"
+                                f"拒绝按 legacy 复用")
+            else:
+                logger.warn(f"  [Shot {idx}] prepare 失败，跳过缓存: "
+                            f"{(_prepared_facts.error or {}).get('code')}")
+        else:
+            # r2v/text 无帧级冻结关系：保持旧行为（无快照/无请求 ⇒ legacy）。
+            _cache = cache_decision(shot, script, shot_dir, video_path,
+                                    clip_path=_clip_dst, force=force,
+                                    shot_hash=shot_hash, frozen_request=None)
+        if _cache is not None and _cache["hit"]:
             logger.info(f"  [Shot {idx}] Cache hit({_cache['relation']}), skip: {_cache['reason']}")
             return None
-        if _cache["reason"] == "clip 产物缺失" and _clip_dst is not None:
+        if _cache is not None and _cache["reason"] == "clip 产物缺失" and _clip_dst is not None:
             # R3：视频本体与 prompt_hash 完好、只有 clips/ 副本缺失 ⇒ 本地补拷，零远端 POST。
             if repair_missing_clip(shot_dir, video_path, _clip_dst):
                 logger.info(f"  [Shot {idx}] Clip 缺失但视频完好，本地补拷 clips/（0 次远端提交）")
                 return None
             logger.warn(f"  [Shot {idx}] Clip 缺失且本地补拷失败，回退为重新生成")
-
-    if _req_issues:
-        # 跳过缓存后仍按同一入口提交；提交路径会在 prepare 后执行
-        # `validate_requirements` 并拒收（零 POST），不会静默复用旧产物。
-        shot_hash = _get_shot_hash(shot, script, shot_dir=frames_dir)
-        logger.warn(f"  [Shot {idx}] 执行要求未通过，跳过缓存，交给 validate_requirements 拒收")
 
     return await _submit_video(
         shot, shot_dir, video_path, frame_paths, shot_hash,
@@ -303,6 +330,7 @@ async def _process_one_shot_skip_frames(
         continuity_ref_image=None, mode="A",
         candidate_context=candidate_context,
         execution_requirements=_reqs,
+        prepared_facts=_prepared_facts,
     )
 
 
@@ -376,7 +404,8 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
                chapter: int, provider: str, model_id: str | None = None,
                precheck_ledger: Path | None = None,
                visual_plan: dict | None = None,
-               ref_work_dir: Path | None = None) -> dict:
+               ref_work_dir: Path | None = None,
+               scope: dict | None = None) -> dict:
     """只组装**冻结请求 + 结构预检**（零网络、零生成 POST，§V2「plan-only+force 仍零网络」）。
 
     M4：image 模式下额外做首尾帧 SHA-256 / 差异度预检；给了
@@ -394,15 +423,27 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
     from step02_video_gen import request_plan as rp
 
     _policy = active_media_policy()
+    from shared.run_scope import current_scope_identity, scope_identity
+    _scope = dict(scope_identity(scope)) if scope is not None else dict(current_scope_identity())
     resolved_model = model_id if model_id is not None else str(active_video_model() or "")
+    if visual_plan is None:
+        # S02-C1：提交路径读的是 Step02a 落盘的 visual_plan.json；plan-only 必须
+        # 优先消费同一份，否则执行要求摘要不同、key 永远不同源。
+        _on_disk = Path(shots_dir).parent / "visual_plan.json"
+        if _on_disk.is_file():
+            try:
+                _loaded = json.loads(_on_disk.read_text(encoding="utf-8"))
+                visual_plan = _loaded if isinstance(_loaded, dict) else None
+            except Exception:
+                visual_plan = None
     if visual_plan is None:
         try:
             from step02a_frame_gen.execution_plan import build_visual_plan
-            _scope = {"chapter": chapter,
-                      "book_index": script.get("book_index") or 1,
-                      "book_name": script.get("book_name") or ""}
+            _plan_scope = {"chapter": chapter,
+                           "book_index": script.get("book_index") or 1,
+                           "book_name": script.get("book_name") or ""}
             visual_plan = build_visual_plan(
-                script, scope=_scope, only_indices=only_indices)
+                script, scope=_plan_scope, only_indices=only_indices)
         except Exception:
             visual_plan = None
     entries: list[dict] = []
@@ -463,7 +504,7 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
         try:
             frozen, _req = build_frozen_for_shot(
                 shot=shot, script=script, video_adapter=None, frame_paths=frame_paths,
-                mode="A", scope={"chapter": chapter}, provider=provider,
+                mode="A", scope=_scope, provider=provider,
                 model_id=resolved_model, execution_requirements=_reqs,
                 ref_sheet_dir=((Path(ref_work_dir) / str(idx))
                                if ref_work_dir is not None else None))
@@ -483,7 +524,7 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
                     else:
                         frozen, _req = build_frozen_for_shot(
                             shot=shot, script=script, video_adapter=None, frame_paths=frame_paths,
-                            mode="A", scope={"chapter": chapter}, provider=provider,
+                            mode="A", scope=_scope, provider=provider,
                             model_id=resolved_model, prepared=_prepared,
                             execution_requirements=_reqs,
                             ref_sheet_dir=((Path(ref_work_dir) / str(idx))
@@ -547,7 +588,8 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
             "network_calls": 0}
 
 
-def _plan_only(options, script: dict, shots_dir: Path, chapter: int) -> int:
+def _plan_only(options, script: dict, shots_dir: Path, chapter: int,
+               scope: dict | None = None) -> int:
     """plan-only：零网络规划，落计划文件到候选实验根（不写正式产物）。
 
     2026-11-13（F2）：plan-only 也做 production snapshot 前后比对——r2v 参考表
@@ -585,7 +627,8 @@ def _plan_only(options, script: dict, shots_dir: Path, chapter: int) -> int:
         try:
             plan = build_plan(script, shots_dir, only_indices=only_indices, chapter=chapter,
                               provider=str(os.getenv("VIDEO_PROVIDER", "")),
-                              precheck_ledger=ledger, ref_work_dir=out_root / "refs")
+                              precheck_ledger=ledger, ref_work_dir=out_root / "refs",
+                              scope=scope)
         finally:
             _ref_compose.set_ref_dir_context(_prev_ref_dir)
         path = out_root / f"plan_{len(list(out_root.glob('plan_*.json'))) + 1:04d}.json"
@@ -907,7 +950,8 @@ def main(options=None):
         if not options.candidate_root:
             logger.error("[ERROR] --plan-only 必须配合 --candidate-root 使用")
             raise SystemExit(2)
-        raise SystemExit(_plan_only(options, script, shots_dir, scope["chapter"]))
+        raise SystemExit(_plan_only(options, script, shots_dir, scope["chapter"],
+                                    scope=scope))
 
     # r2v/text 模式不需要帧图片（r2v 参考图来自角色肖像注册表，非帧）
     if REFERENCE_MODE in ("r2v", "text"):

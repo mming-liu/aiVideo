@@ -80,11 +80,15 @@ class StudioError(RuntimeError):
 class Studio:
     """一个 chapter 的审校会话：读产物、写补丁、记锁定状态."""
 
-    def __init__(self, receipt_path, *, novel_file: str | None = None):
+    def __init__(self, receipt_path, *, novel_file: str | None = None,
+                 voice_plan: str | None = None, video_bill: str | None = None):
         from tools import production_context as pc
 
         self.pc = pc
         self.novel_file = novel_file
+        # S06：显式报告路径，不按 mtime 猜"最新目录"。
+        self.voice_plan = str(voice_plan) if voice_plan else None
+        self.video_bill = str(video_bill) if video_bill else None
         self.receipt_path = Path(receipt_path).resolve()
         self.receipt = pc.load_receipt(self.receipt_path)
         # 必须在 import 任何阶段模块之前生效（shared.config 是 import 期求值）。
@@ -625,6 +629,127 @@ class Studio:
                 "files": files, "warnings": warnings, "note": note,
                 "model_sends": 0}
 
+    # ------------------------------------------------------ S06 报告读取/展示
+    @staticmethod
+    def _read_json_soft(path: Path):
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def video_table(self) -> dict:
+        """逐镜视频与冻结快照；报告 revision 与当前稿不一致即 stale。"""
+        current = str(self.receipt.get("script_revision") or "")
+        rows = []
+        for unit in self.units():
+            idx = int(unit.get("index", 0))
+            shot_dir = self.shot_dir(idx)
+            snap = self._read_json_soft(shot_dir / "frozen_request.json")
+            video = shot_dir / "video.mp4"
+            snap = snap if isinstance(snap, dict) else None
+            snap_rev = str(((snap or {}).get("source") or {}).get("script_revision") or "")
+            if not video.is_file():
+                state = "snapshot_only" if snap else "missing"
+            elif snap is None:
+                state = "legacy"
+            elif current and snap_rev and snap_rev != current:
+                state = "stale_identity"
+            else:
+                state = "present"
+            rows.append({
+                "shot": idx,
+                "video_exists": video.is_file(),
+                "url": ("/media?path=" + str(video)) if video.is_file() else None,
+                "bytes": video.stat().st_size if video.is_file() else 0,
+                "request_key": str((snap or {}).get("request_key") or ""),
+                "media_mode": str((snap or {}).get("media_mode") or ""),
+                "snapshot_revision": snap_rev,
+                "current_revision": current,
+                "stale": bool(current and snap_rev and snap_rev != current),
+                "state": state,
+            })
+        counts = {k: sum(1 for r in rows if r["state"] == k)
+                  for k in ("present", "legacy", "stale_identity", "snapshot_only", "missing")}
+        return {"ok": True, "stage": "step02b", "current_revision": current,
+                "rows": rows, "counts": counts, "model_sends": 0}
+
+    def voice_table(self) -> dict:
+        """声音单元：优先显式 Step03 计划；缺失时退回脚本派生并标 report_missing。"""
+        current = str(self.receipt.get("script_revision") or "")
+        plan_path = Path(self.voice_plan) if self.voice_plan else None
+        report_missing = True
+        report_revision = current
+        source = "script_derived"
+        units = []
+        if plan_path is not None and plan_path.is_file():
+            data = self._read_json_soft(plan_path)
+            if isinstance(data, dict) and isinstance(data.get("units"), list):
+                units = [u for u in data["units"] if isinstance(u, dict)]
+                report_revision = str(data.get("script_revision") or "")
+                report_missing = False
+                source = "step03_plan"
+        if not units:
+            units = list((self.step03() or {}).get("units") or [])
+        from shared.paths import audio_file, narration_audio_file
+        rows = []
+        for u in units:
+            kind = str(u.get("kind") or "")
+            text = str(u.get("text") or "")
+            locator = str(u.get("locator") or u.get("source_locator") or "")
+            idx = u.get("source_index")
+            if idx is None:
+                import re
+                m = re.search(r"\[(\d+)\]", locator)
+                idx = int(m.group(1)) if m else None
+            if kind == "narration" and idx is not None:
+                audio = narration_audio_file(int(idx))
+            elif idx is not None:
+                audio = audio_file(int(idx))
+            else:
+                audio = None
+            rows.append({
+                "unit_id": str(u.get("unit_id") or ""),
+                "kind": kind,
+                "shot": idx,
+                "locator": locator,
+                "text": text,
+                "chars": int(u.get("chars") or len(text)),
+                "window": u.get("planned_window"),
+                "est_sec": u.get("est_sec"),
+                "voice_profile_id": str(u.get("voice_profile_id") or ""),
+                "model_id": str(u.get("model_id") or ""),
+                "speaker": str(u.get("speaker") or ""),
+                "audio_exists": bool(audio and audio.is_file()),
+                "audio_path": str(audio) if audio else "",
+                "report_revision": report_revision,
+                "current_revision": current,
+                "stale": bool(report_revision and current and report_revision != current),
+            })
+        return {"ok": True, "stage": "step03", "source": source,
+                "report_missing": report_missing, "report_revision": report_revision,
+                "current_revision": current, "rows": rows,
+                "unit_count": len(rows),
+                "chars_total": sum(r["chars"] for r in rows), "model_sends": 0}
+
+    def cost_prep(self) -> dict:
+        """只读费用准备视图；固定声明不构成调用授权。"""
+        bill = None
+        source = "missing"
+        if self.video_bill and Path(self.video_bill).is_file():
+            bill = self._read_json_soft(Path(self.video_bill))
+            source = "cache_bill" if isinstance(bill, dict) else "invalid"
+        videos = self.video_table()
+        voices = self.voice_table()
+        return {"ok": True, "stage": "cost", "authorization": "not_granted",
+                "bill_source": source, "bill": bill,
+                "derived": {
+                    "videos_missing": sum(1 for r in videos["rows"] if not r["video_exists"]),
+                    "voice_units": voices["unit_count"],
+                    "voice_units_missing": sum(1 for r in voices["rows"] if not r["audio_exists"]),
+                },
+                "note": "只读准备视图，不构成 Step02b 生成授权；真实调用需单独人工确认",
+                "model_sends": 0}
+
     # ------------------------------------------------------------- 锁定动作
     def set_keep(self, stage: str, key: str, keep: bool) -> dict:
         if stage not in KEEP_STAGES:
@@ -884,6 +1009,12 @@ class StudioHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"ok": True, **self.studio.review(shot)})
             if parsed.path == "/api/step03":
                 return self._json(200, self.studio.step03())
+            if parsed.path == "/api/video":
+                return self._json(200, self.studio.video_table())
+            if parsed.path == "/api/voice":
+                return self._json(200, self.studio.voice_table())
+            if parsed.path == "/api/cost":
+                return self._json(200, self.studio.cost_prep())
             if parsed.path == "/api/checkpoints":
                 return self._json(200, self.studio.checkpoints())
             if parsed.path == "/media":
@@ -1003,6 +1134,10 @@ def main(argv=None) -> int:
     parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认仅回环）")
     parser.add_argument("--port", type=int, default=8765, help="监听端口")
     parser.add_argument("--novel-file", default=None, help="重签门禁时读取的原文文件")
+    parser.add_argument("--voice-plan", default=None,
+                        help="Step03 speech_units.json（显式路径，不按 mtime 猜）")
+    parser.add_argument("--video-bill", default=None,
+                        help="S05 cache_bill.json（显式路径，费用准备区只读展示）")
     parser.add_argument("--no-open", action="store_true", help="启动后不自动打开浏览器")
     args = parser.parse_args(argv)
 
@@ -1010,7 +1145,8 @@ def main(argv=None) -> int:
         print("拒绝启动：工作台会改写正式产物，只允许监听回环地址。", file=sys.stderr)
         return 2
 
-    studio = Studio(args.receipt, novel_file=args.novel_file)
+    studio = Studio(args.receipt, novel_file=args.novel_file,
+                    voice_plan=args.voice_plan, video_bill=args.video_bill)
     StudioHandler.studio = studio
     httpd = ThreadingHTTPServer((args.host, args.port), StudioHandler)
     url = "http://%s:%d" % (args.host, args.port)

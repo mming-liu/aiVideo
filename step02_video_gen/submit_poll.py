@@ -267,7 +267,10 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
         f"model={active_video_model() or ''}",
         f"ref_mode={os.getenv('VIDEO_REFERENCE_MODE', '')}",
         f"model_voice={os.getenv('VIDEO_MODEL_VOICE', '1')}",
-        f"merge_audio={os.getenv('MERGE_AUDIO_MODE', 'native')}",
+        # S02-C1（2026-11-17 用户回放）：MERGE_AUDIO_MODE 只影响后处理/声音合同，
+        # **不改变视频模型输入**。有声模型的失效由 request_key 里的 audio_policy /
+        # effective_merge_mode 承担；无声模型不得因它抖动，否则 key 稳定也会在
+        # prompt_hash 这一层被判 mismatch。
         f"duration={shot.get('duration_sec') or shot.get('duration') or ''}",
         f"resolution={_resolution}",
         # 与 _make_request 实际发送内容同源：画风前缀（含 9:16 画幅）+ 当前画风负向词
@@ -457,15 +460,29 @@ def _script_revision(script) -> str:
         return ""
 
 
+def _scope_identity_safe() -> dict:
+    """当前运行范围身份（chapter/book_index/book_name）；失败时退回章号。"""
+    try:
+        from shared.run_scope import current_scope_identity
+        return dict(current_scope_identity())
+    except Exception:  # noqa: BLE001 - 路径未初始化时仍给最小身份
+        return {"chapter": _chapter_index_safe()}
+
+
 def build_frozen_for_shot(*, shot, script, video_adapter, frame_paths, mode,
                           continuity_ref_image=None, shot_dir=None, script_revision=None,
                           scope=None, provider=None, model_id=None, prompt=None,
                           requirements=None, prepared=None,
-                          execution_requirements=None, ref_sheet_dir=None):
+                          execution_requirements=None, ref_sheet_dir=None,
+                          capability_revision=None):
     """按**当前输入**组装冻结请求（提交冻结与缓存关系核对共用同一份组装）。
 
     ``ref_sheet_dir`` 是 r2v 超限参考表的落盘目录（attempt / 临时目录）；不给时
     由 `_make_request` 使用系统临时目录，**绝不**写生产 ``shots/``（F2）。
+
+    2026-11-17 S02-C1：``prepared`` 给定时，``provider/model_id/capability_revision``
+    也取 prepared 的事实——提交路径就是这样冻结的；此前只覆盖 prompt/参数/素材，
+    会让 plan-only 与提交的 ``request_key`` 差一个 ``capability_revision``（非空 hash）。
     """
     from step02_video_gen import request_plan as rp
     from step02_video_gen.prompt_builder import _build_prompt, _make_request
@@ -478,19 +495,130 @@ def build_frozen_for_shot(*, shot, script, video_adapter, frame_paths, mode,
                         continuity_ref_image=continuity_ref_image, mode=mode,
                         retry_attempt=_read_qc_retry_state(shot_dir)["count"] if shot_dir is not None else 0,
                         **({"ref_sheet_dir": ref_sheet_dir} if ref_sheet_dir is not None else {}))
+    if prepared is not None:
+        provider = str(getattr(prepared, "provider", "") or provider or "")
+        model_id = str(getattr(prepared, "model_id", "") or model_id or "")
+        capability_revision = (getattr(prepared, "capability_revision", None)
+                               or capability_revision)
     frozen = rp.build_frozen_request(
         req, shot=shot,
-        scope=scope if scope is not None else {"chapter": _chapter_index_safe()},
+        scope=scope if scope is not None else _scope_identity_safe(),
         script_revision=(script_revision if script_revision is not None
                          else _script_revision(script)),
         provider=provider or str(os.getenv("VIDEO_PROVIDER", "")),
         model_id=model_id or str(active_video_model() or ""),
         requirements=requirements if requirements is not None else generation_requirements(),
-        prepared=prepared)
+        prepared=prepared, capability_revision=capability_revision)
     if execution_requirements is not None:
         from step02_video_gen.execution_requirements import merge_into_frozen
         merge_into_frozen(frozen, execution_requirements)
     return frozen, req
+
+
+@dataclass
+class PreparedFacts:
+    """一次准备的结构化结果（缓存关系核对与提交共用；禁止二次 prepare）。
+
+    - ``prepared``：provider 实际生效的请求事实已冻结；
+    - ``unsupported``：provider 未实现 prepared 入口（旧兼容分支）；
+    - ``blocked``：请求组装或 prepare 确定失败（必须单次终局，不再准备）。
+    """
+
+    status: str
+    req: object | None = None
+    prepared: object | None = None
+    frozen: object | None = None
+    error: dict | None = None
+
+
+def _prepare_error(exc, *, stage: str) -> dict:
+    fields = getattr(exc, "fields", None)
+    field_path = fields.get("field_path") if isinstance(fields, dict) else None
+    return {
+        "code": str(getattr(exc, "code", "") or type(exc).__name__),
+        "message": str(getattr(exc, "message", "") or exc)[:500],
+        "field_path": field_path,
+        "stage": stage,
+    }
+
+
+def _service_supports_prepared(svc) -> bool:
+    if svc is None or not callable(getattr(svc, "prepare_request", None)):
+        return False
+    fn = getattr(svc, "supports_prepared", None)
+    if not callable(fn):
+        return True
+    try:
+        return bool(fn())
+    except Exception:  # noqa: BLE001 - 能力查询失败按不支持处理（fail-closed）
+        return False
+
+
+def build_prepared_facts(*, shot, script, video_adapter, frame_paths, mode,
+                         scope=None, script_revision=None, provider=None,
+                         model_id=None, execution_requirements=None,
+                         candidate_context=None, ref_sheet_dir=None) -> PreparedFacts:
+    """组装 + prepare 一次，返回结构化事实；失败不再重试（S02-C1）。
+
+    与提交路径同源：``provider/model_id/capability_revision`` 取 prepared；执行要求
+    并入 frozen 后重算 key。缓存消费者与提交入口共用本函数的结果，避免
+    「缓存里 prepare 失败、提交里再 prepare 成功」的分叉。
+    """
+    from shared.model_caps import active_video_model
+
+    _scope = dict(scope) if scope is not None else _scope_identity_safe()
+    _revision = (script_revision if script_revision is not None
+                 else _script_revision(script))
+    _provider = str(provider or os.getenv("VIDEO_PROVIDER", "") or "")
+    _model = str(model_id or active_video_model() or "")
+
+    # 1) 组装请求（一次）
+    try:
+        _frozen0, req = build_frozen_for_shot(
+            shot=shot, script=script, video_adapter=video_adapter,
+            frame_paths=frame_paths, mode=mode, scope=_scope,
+            script_revision=_revision, provider=_provider, model_id=_model,
+            requirements=generation_requirements(),
+            ref_sheet_dir=ref_sheet_dir)
+    except Exception as exc:  # noqa: BLE001 - 组装失败是确定阻断，结构化返回
+        return PreparedFacts(status="blocked", error=_prepare_error(exc, stage="request_assembly"))
+
+    # 2) provider prepared 能力
+    svc = _video_service_for(video_adapter)
+    if not _service_supports_prepared(svc):
+        return PreparedFacts(
+            status="unsupported", req=req,
+            error={"code": "prepared_unsupported",
+                   "message": f"{type(svc).__name__ if svc else 'no-service'} 未实现 prepared 入口",
+                   "field_path": None, "stage": "prepared_capability"})
+
+    # 3) prepare（无提交）；失败即终局，不在这里重试
+    try:
+        prepared = svc.prepare_request(req, candidate_context)
+    except Exception as exc:  # noqa: BLE001 - 确定失败：结构化返回，交统一落盘
+        return PreparedFacts(status="blocked", req=req,
+                             error=_prepare_error(exc, stage="prepare"))
+    if not prepared.is_ready():
+        return PreparedFacts(
+            status="blocked", req=req, prepared=prepared,
+            error={"code": "prepared_not_ready",
+                   "message": str(getattr(prepared, "unsupported_reason", "")
+                                  or "prepared_not_ready")[:500],
+                   "field_path": None, "stage": "prepare"})
+
+    # 4) 以 prepared 为事实源冻结，再并入执行要求
+    try:
+        frozen, _ = build_frozen_for_shot(
+            shot=shot, script=script, video_adapter=video_adapter,
+            frame_paths=frame_paths, mode=mode, scope=_scope,
+            script_revision=_revision, provider=_provider, model_id=_model,
+            requirements=generation_requirements(), prepared=prepared,
+            execution_requirements=execution_requirements,
+            ref_sheet_dir=ref_sheet_dir)
+    except Exception as exc:  # noqa: BLE001
+        return PreparedFacts(status="blocked", req=req, prepared=prepared,
+                             error=_prepare_error(exc, stage="frozen_assembly"))
+    return PreparedFacts(status="prepared", req=req, prepared=prepared, frozen=frozen)
 
 
 def record_submitted_duration(shot: dict, prepared) -> None:
@@ -1430,7 +1558,7 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
                                   poll_semaphore, script: dict, idx: int, prompt: str,
                                   characters: list, continuity_ref_image, mode: str,
                                   candidate_context, logger, make_request, production_output=False,
-                                  execution_requirements=None):
+                                  execution_requirements=None, prepared_facts=None):
     """候选模式提交：**一次尝试 = 至多一个生成 POST**（计划 §V1/§V2 改动 1/2/6）。
 
     与旧路的区别（本函数是候选模式的**唯一**提交入口）：
@@ -1468,78 +1596,125 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
                          f"不得复用（请用新的 attempt_id 重新生成）",
                          code="attempt_identity_conflict")
 
-    req = make_request(video_adapter, prompt, frame_paths, shot, characters=characters,
-                       continuity_ref_image=continuity_ref_image, mode=mode,
-                       ref_sheet_dir=attempt / "refs",
-                       **({"retry_attempt": _read_qc_retry_state(shot_dir)["count"]}
-                          if production_output else {}))
-    # 候选落盘路径 + 执行上下文（适配器原样透传请求对象；provider 据此下载进 attempt）
-    if not production_output:
-        req.candidate_path = str(video_path)
-        req.execution_context = ExecutionContext.from_candidate_context(
-            candidate_context, candidate_path=video_path)
-
-    svc = _video_service_for(video_adapter)
-    if svc is None or not callable(getattr(svc, "prepare_request", None)) \
-            or not svc.supports_prepared():
-        va.open_attempt(package_root, attempt_id, request_key="", scope=scope,
-                        script_revision=script_revision,
+    if prepared_facts is not None and prepared_facts.status in ("blocked", "unsupported"):
+        # S02-C1：缓存路径已经确定失败/不支持——在这里单次终局，禁止二次 prepare。
+        _err = dict(prepared_facts.error or {})
+        _code = str(_err.get("code") or "preflight_blocked")
+        _msg = str(_err.get("message") or _code)
+        va.open_attempt(package_root, attempt_id,
+                        request_key=(getattr(prepared_facts.frozen, "request_key", "") or ""),
+                        scope=scope, script_revision=script_revision,
                         provider=str(os.getenv("VIDEO_PROVIDER", "")), model_id="")
-        eio.append_event(attempt, "prepared_unsupported",
-                         reason=f"{type(svc).__name__ if svc else 'no-service'} 未实现 prepared 入口",
-                         code="prepared_unsupported")
-        return _fail("prepared_unsupported: provider 未实现 prepare/create_prepared_task，"
-                     "拒绝降级提交", code="prepared_unsupported")
+        eio.append_event(attempt, "preflight_blocked", code=_code, message=_msg,
+                         stage=_err.get("stage"), field_path=_err.get("field_path"))
+        return _fail(f"{_code}: {_msg}", code=_code)
 
-    # ---- prepare（无提交）：实际生效文本/参数/参考 ----
-    try:
-        prepared = svc.prepare_request(req, candidate_context)
-        # S08：实际时长以 prepared 为准回填；装不下计划即阻断（不静默改故事时长）。
-        record_submitted_duration(shot, prepared)
-    except VideoCapabilityError as exc:
-        va.open_attempt(package_root, attempt_id, request_key="", scope=scope,
-                        script_revision=script_revision,
-                        provider=str(os.getenv("VIDEO_PROVIDER", "")), model_id="")
-        eio.append_event(attempt, "preflight_blocked", code=exc.code,
-                         message=exc.message, field_path=exc.fields.get("field_path"))
-        return _fail(f"preflight_blocked({exc.code}): {exc.message}", code=exc.code)
-    except SystemCameraError as exc:
-        va.open_attempt(package_root, attempt_id, request_key="", scope=scope,
-                        script_revision=script_revision,
-                        provider=str(os.getenv("VIDEO_PROVIDER", "")), model_id="")
-        eio.append_event(attempt, "preflight_blocked", code=exc.code,
-                         message=exc.message)
-        return _fail(f"preflight_blocked({exc.code}): {exc.message}", code=exc.code)
-    if not prepared.is_ready():
-        eio.append_event(attempt, "preflight_blocked", code="prepared_unsupported",
-                         message=prepared.unsupported_reason)
-        return _fail(f"prepared_unsupported: {prepared.unsupported_reason}",
-                     code="prepared_unsupported")
-
-    # ---- 冻结"真正会发出去的请求"：以 **prepared 的实际事实**为准 ----
-    # （只回填 prompt 是不够的：时长/声音开关/参考角色等仍取原请求，会记下与提交
-    #   不符的值，而 request_key 照样"相同"——见 2026-10-03 复核 P1-4。）
-    frozen = rp.build_frozen_request(
-        req, shot=shot, scope=scope, script_revision=script_revision,
-        provider=prepared.provider, model_id=prepared.model_id,
-        capability_revision=prepared.capability_revision,
-        requirements=generation_requirements(), prepared=prepared)
-    if execution_requirements is not None:
-        from step02_video_gen.execution_requirements import (
-            merge_into_frozen, validate_requirements,
-        )
-        merge_into_frozen(frozen, execution_requirements)
-        _exec_problems = validate_requirements(frozen, execution_requirements)
-        if _exec_problems:
+    if prepared_facts is not None and prepared_facts.status == "prepared":
+        # S02-C1：复用缓存路径已经完成的 prepare 事实；不再调用 prepare_request()。
+        req = prepared_facts.req
+        prepared = prepared_facts.prepared
+        frozen = prepared_facts.frozen
+        svc = _video_service_for(video_adapter)
+        if not production_output:
+            req.candidate_path = str(video_path)
+            req.execution_context = ExecutionContext.from_candidate_context(
+                candidate_context, candidate_path=video_path)
+        try:
+            record_submitted_duration(shot, prepared)
+        except VideoCapabilityError as exc:
             va.open_attempt(package_root, attempt_id, request_key=frozen.request_key,
                             scope=scope, script_revision=script_revision,
                             provider=prepared.provider, model_id=prepared.model_id)
-            eio.append_event(attempt, "execution_requirements_blocked",
-                             problems=_exec_problems)
-            return _fail(f"execution_requirements: {_exec_problems[:2]}",
-                         code=(_exec_problems[0].get("code")
-                               or "execution_requirements_blocked"))
-    prepared.request_key = frozen.request_key
+            eio.append_event(attempt, "preflight_blocked", code=exc.code,
+                             message=exc.message,
+                             field_path=exc.fields.get("field_path"))
+            return _fail(f"preflight_blocked({exc.code}): {exc.message}", code=exc.code)
+        if execution_requirements is not None:
+            from step02_video_gen.execution_requirements import validate_requirements
+            _exec_problems = validate_requirements(frozen, execution_requirements)
+            if _exec_problems:
+                va.open_attempt(package_root, attempt_id, request_key=frozen.request_key,
+                                scope=scope, script_revision=script_revision,
+                                provider=prepared.provider, model_id=prepared.model_id)
+                eio.append_event(attempt, "execution_requirements_blocked",
+                                 problems=_exec_problems)
+                return _fail(f"execution_requirements: {_exec_problems[:2]}",
+                             code=(_exec_problems[0].get("code")
+                                   or "execution_requirements_blocked"))
+        prepared.request_key = frozen.request_key
+    else:
+        req = make_request(video_adapter, prompt, frame_paths, shot, characters=characters,
+                           continuity_ref_image=continuity_ref_image, mode=mode,
+                           ref_sheet_dir=attempt / "refs",
+                           **({"retry_attempt": _read_qc_retry_state(shot_dir)["count"]}
+                              if production_output else {}))
+        # 候选落盘路径 + 执行上下文（适配器原样透传请求对象；provider 据此下载进 attempt）
+        if not production_output:
+            req.candidate_path = str(video_path)
+            req.execution_context = ExecutionContext.from_candidate_context(
+                candidate_context, candidate_path=video_path)
+
+        svc = _video_service_for(video_adapter)
+        if svc is None or not callable(getattr(svc, "prepare_request", None)) \
+                or not svc.supports_prepared():
+            va.open_attempt(package_root, attempt_id, request_key="", scope=scope,
+                            script_revision=script_revision,
+                            provider=str(os.getenv("VIDEO_PROVIDER", "")), model_id="")
+            eio.append_event(attempt, "prepared_unsupported",
+                             reason=f"{type(svc).__name__ if svc else 'no-service'} 未实现 prepared 入口",
+                             code="prepared_unsupported")
+            return _fail("prepared_unsupported: provider 未实现 prepare/create_prepared_task，"
+                         "拒绝降级提交", code="prepared_unsupported")
+
+        # ---- prepare（无提交）：实际生效文本/参数/参考 ----
+        try:
+            prepared = svc.prepare_request(req, candidate_context)
+            # S08：实际时长以 prepared 为准回填；装不下计划即阻断（不静默改故事时长）。
+            record_submitted_duration(shot, prepared)
+        except VideoCapabilityError as exc:
+            va.open_attempt(package_root, attempt_id, request_key="", scope=scope,
+                            script_revision=script_revision,
+                            provider=str(os.getenv("VIDEO_PROVIDER", "")), model_id="")
+            eio.append_event(attempt, "preflight_blocked", code=exc.code,
+                             message=exc.message, field_path=exc.fields.get("field_path"))
+            return _fail(f"preflight_blocked({exc.code}): {exc.message}", code=exc.code)
+        except SystemCameraError as exc:
+            va.open_attempt(package_root, attempt_id, request_key="", scope=scope,
+                            script_revision=script_revision,
+                            provider=str(os.getenv("VIDEO_PROVIDER", "")), model_id="")
+            eio.append_event(attempt, "preflight_blocked", code=exc.code,
+                             message=exc.message)
+            return _fail(f"preflight_blocked({exc.code}): {exc.message}", code=exc.code)
+        if not prepared.is_ready():
+            eio.append_event(attempt, "preflight_blocked", code="prepared_unsupported",
+                             message=prepared.unsupported_reason)
+            return _fail(f"prepared_unsupported: {prepared.unsupported_reason}",
+                         code="prepared_unsupported")
+
+        # ---- 冻结"真正会发出去的请求"：以 **prepared 的实际事实**为准 ----
+        # （只回填 prompt 是不够的：时长/声音开关/参考角色等仍取原请求，会记下与提交
+        #   不符的值，而 request_key 照样"相同"——见 2026-10-03 复核 P1-4。）
+        frozen = rp.build_frozen_request(
+            req, shot=shot, scope=scope, script_revision=script_revision,
+            provider=prepared.provider, model_id=prepared.model_id,
+            capability_revision=prepared.capability_revision,
+            requirements=generation_requirements(), prepared=prepared)
+        if execution_requirements is not None:
+            from step02_video_gen.execution_requirements import (
+                merge_into_frozen, validate_requirements,
+            )
+            merge_into_frozen(frozen, execution_requirements)
+            _exec_problems = validate_requirements(frozen, execution_requirements)
+            if _exec_problems:
+                va.open_attempt(package_root, attempt_id, request_key=frozen.request_key,
+                                scope=scope, script_revision=script_revision,
+                                provider=prepared.provider, model_id=prepared.model_id)
+                eio.append_event(attempt, "execution_requirements_blocked",
+                                 problems=_exec_problems)
+                return _fail(f"execution_requirements: {_exec_problems[:2]}",
+                             code=(_exec_problems[0].get("code")
+                                   or "execution_requirements_blocked"))
+        prepared.request_key = frozen.request_key
     # S02：prepared 是下发事实源；冻结记录必须与它一致（prompt 逐字、其余规范化）。
     _mismatch = rp.verify_prepared_frozen(prepared, frozen)
     if _mismatch:
@@ -1731,6 +1906,7 @@ async def _submit_video(
     mode: str = "A",
     candidate_context=None,
     execution_requirements=None,
+    prepared_facts=None,
 ) -> asyncio.Task | None:
     """提交视频任务并返回轮询 task.
 
@@ -1762,7 +1938,8 @@ async def _submit_video(
             script=script, idx=idx, prompt=prompt, characters=characters,
             continuity_ref_image=continuity_ref_image, mode=mode,
             candidate_context=candidate_context, logger=logger,
-            make_request=_make_request, execution_requirements=execution_requirements)
+            make_request=_make_request, execution_requirements=execution_requirements,
+            prepared_facts=prepared_facts)
 
     from types import SimpleNamespace
     from shared.paths import production_video_attempts_root
@@ -1770,7 +1947,7 @@ async def _submit_video(
     root = production_video_attempts_root(shot_dir)
     ctx = SimpleNamespace(
         package_root=root, attempt_dir=root / "attempts" / va.new_attempt_id("production"),
-        scope={"chapter": _chapter_index_safe()}, script_revision=_script_revision(script))
+        scope=_scope_identity_safe(), script_revision=_script_revision(script))
     try:
         return await _submit_video_candidate(
             shot=shot, shot_dir=shot_dir, video_path=video_path, frame_paths=frame_paths,
@@ -1778,7 +1955,7 @@ async def _submit_video(
             script=script, idx=idx, prompt=prompt, characters=characters,
             continuity_ref_image=continuity_ref_image, mode=mode, candidate_context=ctx,
             logger=logger, make_request=_make_request, production_output=True,
-            execution_requirements=execution_requirements)
+            execution_requirements=execution_requirements, prepared_facts=prepared_facts)
     except Exception as exc:
         # Includes post-submit persistence failure: never turn it into another POST.
         _failed_videos[idx].append({"attempt": str(ctx.attempt_dir),

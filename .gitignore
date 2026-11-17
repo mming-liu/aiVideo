@@ -179,6 +179,9 @@ tests/step02b_video_gen/*
 !tests/step02b_video_gen/test_candidate_isolation_r2v.py
 # 2026-11-13 F3：执行要求问题不得被缓存命中绕过
 !tests/step02b_video_gen/test_cache_requirements_gate.py
+# 2026-11-17 S02-C1：缓存消费者与提交同源 + plan/submit key 一致
+!tests/step02b_video_gen/test_cache_consumer_prepared.py
+!tests/step02b_video_gen/test_plan_submit_key_same.py
 # 2026-11-13 F5：生产入口 trace 回归（离线，无模型/媒体质量声明）
 !tests/step02b_video_gen/test_production_trace.py
 !tests/step01_script_gen/test_p0_fault_injection.py
@@ -417,6 +420,9 @@ tests/step02_video_gen/*
 !tests/step02_video_gen/test_m06_reference_purpose.py
 # 2026-11-13 F2：r2v 拼表只落 attempt/临时目录，缓存哈希纯读
 !tests/step02_video_gen/test_r2v_sheet_isolation.py
+# 2026-11-17 S02：缓存消费同源、旧快照过渡、有声 payload 对照
+!tests/step02_video_gen/test_cache_legacy_snapshot_transition.py
+!tests/step02_video_gen/test_voiced_payload_compare.py
 !tests/shared/test_cache_and_card_handoff.py
 !tests/shared/test_plan_revision_delta_end_to_end.py
 !tests/shared/test_content_verification.py

@@ -120,7 +120,8 @@
     { id: "step02a", label: "02a 首尾帧" },
     { id: "step02b", label: "02b 视频" },
     { id: "step03", label: "03 语音" },
-    { id: "step04", label: "04 成片" }
+    { id: "step04", label: "04 成片" },
+    { id: "cost", label: "费用准备" }
   ];
 
   function h(tag, props, kids) {
@@ -483,6 +484,133 @@
   }
 
   // ---------------------------------------------------------------- 02b/03/04
+  function reportBadge(stale, missing, label) {
+    if (missing) return h("span", { class: "badge warn", text: label + "：报告缺失" });
+    if (stale) return h("span", { class: "badge warn", text: label + "：身份过期" });
+    return h("span", { class: "badge ok", text: label + "：身份一致" });
+  }
+
+  function renderVideoTable() {
+    var view = document.getElementById("view");
+    view.textContent = "";
+    api("/api/video").then(function (res) {
+      var c = res.counts || {};
+      view.appendChild(h("div", { class: "card" }, [
+        h("h3", { text: "分镜视频与冻结请求" }),
+        h("div", { class: "sub", text: "present " + (c.present || 0) +
+          " · legacy " + (c.legacy || 0) + " · stale " + (c.stale_identity || 0) +
+          " · 仅有快照 " + (c.snapshot_only || 0) + " · 缺失 " + (c.missing || 0) })
+      ]));
+      var table = h("table", { class: "shots" });
+      table.appendChild(h("thead", {}, [h("tr", {}, [
+        h("th", { text: "镜" }), h("th", { text: "视频" }), h("th", { text: "大小" }),
+        h("th", { text: "media_mode" }), h("th", { text: "request_key" }),
+        h("th", { text: "报告 revision" }), h("th", { text: "状态" })
+      ])]));
+      var tbody = h("tbody", {});
+      (res.rows || []).forEach(function (r) {
+        tbody.appendChild(h("tr", {}, [
+          h("td", {}, [h("span", { class: "idx", text: "#" + r.shot })]),
+          h("td", {}, [r.video_exists
+            ? h("a", { href: r.url, target: "_blank", text: "播放" })
+            : h("span", { class: "sub", text: "无" })]),
+          h("td", { text: r.bytes ? Math.round(r.bytes / 1024) + " KB" : "—" }),
+          h("td", { text: r.media_mode || "—" }),
+          h("td", {}, [h("span", { class: "sub", text: (r.request_key || "—").slice(0, 12) })]),
+          h("td", {}, [h("span", { class: "sub", text: (r.snapshot_revision || "—").slice(0, 12) })]),
+          h("td", {}, [reportBadge(r.stale, r.state === "missing", "身份")])
+        ]));
+      });
+      table.appendChild(tbody);
+      view.appendChild(h("div", { class: "table-wrap" }, [table]));
+    }).catch(function (err) {
+      view.textContent = "";
+      view.appendChild(emptyBox("视频表加载失败：" + err.message));
+    });
+  }
+
+  function renderVoiceTable() {
+    var view = document.getElementById("view");
+    view.textContent = "";
+    api("/api/voice").then(function (res) {
+      view.appendChild(h("div", { class: "card" }, [
+        h("h3", { text: "声音单元与合成身份" }),
+        h("div", { class: "sub", text: (res.unit_count || 0) + " 个单元 / " +
+          (res.chars_total || 0) + " 字符 · 来源 " + (res.source || "?") }),
+        h("div", { class: "row", style: "margin-top:6px" }, [
+          reportBadge(!!res.stale, !!res.report_missing, "报告")
+        ])
+      ]));
+      var table = h("table", { class: "shots" });
+      table.appendChild(h("thead", {}, [h("tr", {}, [
+        h("th", { text: "unit" }), h("th", { text: "类型" }), h("th", { text: "镜" }),
+        h("th", { text: "说话人" }), h("th", { text: "文本" }), h("th", { text: "窗口" }),
+        h("th", { text: "voice_id" }), h("th", { text: "模型" }),
+        h("th", { text: "字符" }), h("th", { text: "音轨" })
+      ])]));
+      var tbody = h("tbody", {});
+      (res.rows || []).forEach(function (r) {
+        var win = Array.isArray(r.window) ? (r.window[0] + "–" + r.window[1] + "s") : "—";
+        tbody.appendChild(h("tr", {}, [
+          h("td", {}, [h("span", { class: "idx", text: r.unit_id || "?" })]),
+          h("td", { text: r.kind || "—" }),
+          h("td", { text: r.shot === null || r.shot === undefined ? "—" : r.shot }),
+          h("td", { text: r.speaker || "—" }),
+          h("td", {}, [cellText(r.text)]),
+          h("td", { text: win }),
+          h("td", {}, [h("span", { class: "sub", text: r.voice_profile_id || "—" })]),
+          h("td", {}, [h("span", { class: "sub", text: r.model_id || "—" })]),
+          h("td", { text: r.chars }),
+          h("td", { text: r.audio_exists ? "有" : "待合成" })
+        ]));
+      });
+      table.appendChild(tbody);
+      view.appendChild(h("div", { class: "table-wrap" }, [table]));
+    }).catch(function (err) {
+      view.textContent = "";
+      view.appendChild(emptyBox("声音表加载失败：" + err.message));
+    });
+  }
+
+  function renderCost() {
+    var view = document.getElementById("view");
+    view.textContent = "";
+    api("/api/cost").then(function (res) {
+      var bill = res.bill || null;
+      var rows = [
+        ["授权状态", res.authorization === "not_granted" ? "未授权（只读视图）" : String(res.authorization)],
+        ["账单来源", res.bill_source || "missing"]
+      ];
+      if (bill) {
+        rows.push(["就绪生成数", String(bill.ready_generations)]);
+        rows.push(["就绪时长", String(bill.ready_duration_sec) + "s"]);
+        rows.push(["参考帧数", String(bill.ready_references)]);
+        rows.push(["全章 blocked", String((bill.full_chapter || {}).blocked)]);
+        rows.push(["单价", String((bill.billing || {}).price || "pending")]);
+        rows.push(["自动重试 / 人工上限",
+          String((bill.billing || {}).automatic_retries) + " / " +
+          String((bill.billing || {}).human_approved_attempt_cap)]);
+      }
+      rows.push(["缺视频镜头", String((res.derived || {}).videos_missing)]);
+      rows.push(["声音单元 / 待合成",
+        String((res.derived || {}).voice_units) + " / " +
+        String((res.derived || {}).voice_units_missing)]);
+      view.appendChild(h("div", { class: "card" }, [
+        h("h3", { text: "费用准备（只读）" }),
+        h("div", { class: "list" }, rows.map(function (kv) {
+          return h("div", { class: "item" }, [
+            h("span", { class: "n", text: kv[0] }),
+            h("span", { class: "p", text: kv[1] })
+          ]);
+        })),
+        h("div", { class: "sub", style: "margin-top:8px", text: res.note || "" })
+      ]));
+    }).catch(function (err) {
+      view.textContent = "";
+      view.appendChild(emptyBox("费用视图加载失败：" + err.message));
+    });
+  }
+
   function renderMedia(ov, kind) {
     var view = document.getElementById("view");
     view.textContent = "";
@@ -670,8 +798,9 @@
     if (!ov) return;
     if (state.tab === "step01") renderStep01(ov);
     else if (state.tab === "step02a") renderStep02a(ov);
-    else if (state.tab === "step02b") renderMedia(ov, "step02b");
-    else if (state.tab === "step03") renderStep03(ov);
+    else if (state.tab === "step02b") renderVideoTable();
+    else if (state.tab === "step03") renderVoiceTable();
+    else if (state.tab === "cost") renderCost();
     else renderMedia(ov, "step04");
   }
 

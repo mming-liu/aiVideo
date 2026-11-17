@@ -477,3 +477,71 @@ def test_http_checkpoints_and_frame_lock(http_server):
     assert out["ok"] is True and out["locked"] is True
     assert (studio.shot_dir(1) / ".lock_frame_last_frame").is_file()
 
+
+# ---------------------------------------------------------------------------
+# 7) S06 视频/声音/费用展示
+# ---------------------------------------------------------------------------
+def test_video_table_reports_stale_identity(studio):
+    shot_dir = studio.shot_dir(1)
+    shot_dir.mkdir(parents=True, exist_ok=True)
+    (shot_dir / "frozen_request.json").write_text(json.dumps({
+        "request_key": "k" * 64, "media_mode": "first",
+        "source": {"script_revision": "old-revision"}}), encoding="utf-8")
+    row = studio.video_table()["rows"][0]
+    assert row["state"] == "snapshot_only" and row["video_exists"] is False
+
+    (shot_dir / "video.mp4").write_bytes(b"v" * (21 * 1024))
+    table = studio.video_table()
+    row = table["rows"][0]
+    assert row["state"] == "stale_identity" and row["stale"] is True
+    assert table["model_sends"] == 0
+
+
+def test_voice_table_missing_report_then_plan(studio, tmp_path):
+    table = studio.voice_table()
+    assert table["source"] == "script_derived"
+    assert table["report_missing"] is True
+    assert table["model_sends"] == 0
+
+    plan = tmp_path / "speech_units.json"
+    plan.write_text(json.dumps({
+        "script_revision": studio.receipt.get("script_revision"),
+        "units": [{"unit_id": "narration-N1", "kind": "narration",
+                   "text": "旁白一句。", "chars": 5, "locator": "narration_lines[1]",
+                   "planned_window": [0.0, 2.0],
+                   "voice_profile_id": "legacy-voice-1", "model_id": "m-1",
+                   "speaker": ""}]}, ensure_ascii=False), encoding="utf-8")
+    studio.voice_plan = str(plan)
+    table = studio.voice_table()
+    assert table["source"] == "step03_plan"
+    assert table["report_missing"] is False
+    assert table["unit_count"] == 1
+    assert table["rows"][0]["audio_exists"] is False
+    assert table["rows"][0]["stale"] is False
+
+
+def test_cost_prep_readonly(studio, tmp_path):
+    bill = tmp_path / "cache_bill.json"
+    bill.write_text(json.dumps({
+        "ready_generations": 2, "ready_duration_sec": 12, "ready_references": 3,
+        "full_chapter": {"blocked": 11},
+        "billing": {"price": "pending_provider_quote",
+                    "automatic_retries": 3, "human_approved_attempt_cap": 1}}),
+        encoding="utf-8")
+    studio.video_bill = str(bill)
+    res = studio.cost_prep()
+    assert res["authorization"] == "not_granted"
+    assert res["bill_source"] == "cache_bill"
+    assert res["bill"]["ready_generations"] == 2
+    assert res["model_sends"] == 0
+
+
+def test_http_video_voice_cost_and_plan_stage(http_server):
+    base, studio = http_server
+    for path in ("/api/video", "/api/voice", "/api/cost"):
+        with _get(base + path) as res:
+            payload = json.loads(res.read().decode("utf-8"))
+        assert payload["ok"] is True, path
+        assert payload["model_sends"] == 0, path
+    # /api/plan 仍是 Step02a 的 POST 入口；阶段归属由返回体声明。
+    assert studio.plan_step02a(None)["stage"] == "step02a"
