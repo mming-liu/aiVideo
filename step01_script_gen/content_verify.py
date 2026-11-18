@@ -37,11 +37,14 @@ from shared.content_verification import (CLAIM_OBLIGATION_ID as _CLAIM_ID,
                                          VERDICTS, DEFAULT_RULE_VERSION,
                                          frozen_obligations)
 
+from shared.revision_questions import render_revision_questions
+
 SYSTEM_PROMPT = ("你是内容核验员。你要分别核验下面的内容；另按请求核对整份计划的前后依赖，不要混为一谈："
                  "(1) 给定的**原文**是否支持这条**主张**；"
                  "(2) 观众从**实际展示正文**里能不能完整得到这条主张；"
                  "(3) 这条声音是不是原文里**人物说的话**、说话人是谁。"
-                 "只输出纯JSON，不要解释。")
+                 "只输出纯JSON，不要解释。"
+                 + render_revision_questions())
 
 # Response shape remains v1; this revision makes the existing semantic-carrier
 # policy explicit. Old judge records must not silently survive the new request.

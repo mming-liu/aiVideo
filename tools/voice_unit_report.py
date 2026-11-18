@@ -22,13 +22,18 @@ from shared.quality_gate import compute_script_revision
 from shared.run_scope import current_scope_identity
 
 
-def build_report(script: dict, *, plan_dir: Path | None = None) -> dict:
+def build_report(script: dict, *, plan_dir: Path | None = None,
+                 audio_mode: str | None = None) -> dict:
+    from shared.audible_speech import missing_audible_speech_units
+    from step01_script_gen.plan_feasibility import voice_units
     from step03_tts_audio.shot_tts import build_speech_units
     from tts.synthesis_job import request_key_for
 
     revision = str(script.get("script_revision") or compute_script_revision(script))
     units = build_speech_units(script, scope=current_scope_identity(),
                                script_revision=revision)
+    bindings = {(r.get("kind"), r.get("index")): r
+                for r in voice_units(script.get("chapter_outline"), script.get("shots"))}
     rows = []
     for unit in units:
         if unit.kind == "narration":
@@ -44,6 +49,12 @@ def build_report(script: dict, *, plan_dir: Path | None = None) -> dict:
         else:
             cache_state = "present_unverified"
         window = getattr(unit, "planned_window", None)
+        if unit.kind == "dialogue":
+            binding = next((r for r in bindings.values()
+                            if r.get("kind") == "dialogue"
+                            and str(unit.source_index) in (r.get("shot_indexes") or [])), {})
+        else:
+            binding = bindings.get((unit.kind, unit.source_index)) or {}
         rows.append({
             "unit_id": unit.unit_id,
             "kind": unit.kind,
@@ -52,6 +63,9 @@ def build_report(script: dict, *, plan_dir: Path | None = None) -> dict:
             "source_locator": unit.source_locator,
             "source_index": unit.source_index,
             "shot_index": unit.source_index if unit.kind == "dialogue" else None,
+            "shot_indexes": list(binding.get("shot_indexes") or []),
+            "declared_shot": binding.get("declared_shot"),
+            "est_sec": binding.get("est_sec"),
             "voice_role": getattr(unit, "voice_role", "") or "",
             "voice_profile_id": unit.voice_profile_id,
             "model_id": unit.model_id,
@@ -81,6 +95,8 @@ def build_report(script: dict, *, plan_dir: Path | None = None) -> dict:
         "unit_count": len(rows),
         "total_chars": sum(r["chars"] for r in rows),
         "units": rows,
+        "audible_warnings": missing_audible_speech_units(
+            script, units=units, audio_mode=audio_mode),
         "voice_preparation": prep,
         "provider_calls": 0,
     }
@@ -101,6 +117,15 @@ def _md(report: dict) -> str:
             cs=r["cache_state"]))
     lines += ["", "汇总：%d 个单元 / %d 字符；provider 调用 0。" % (
         report["unit_count"], report["total_chars"])]
+    warnings = report.get("audible_warnings") or []
+    lines += ["", "## 声音承载告警", ""]
+    if not warnings:
+        lines.append("无 missing_audible_speech_unit。")
+    else:
+        for w in warnings:
+            lines.append("- shot %s（%s）：%s；声明：%s" % (
+                w.get("shot"), w.get("field"), w.get("code"),
+                (w.get("declaration") or "").replace("|", "\\|")))
     return "\n".join(lines) + "\n"
 
 
@@ -108,13 +133,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="精确声音清单（只读）")
     parser.add_argument("--chapter-dir", default=None)
     parser.add_argument("--plan-dir", default=None)
+    parser.add_argument("--audio-mode", default=None,
+                        help="声音合同（如 tts_mix；默认读 MERGE_AUDIO_MODE）")
     parser.add_argument("--out-json", required=True)
     parser.add_argument("--out-md", default=None)
     args = parser.parse_args()
 
     ch = Path(args.chapter_dir) if args.chapter_dir else chapter_dir()
     script = json.loads((ch / "script_result.json").read_text(encoding="utf-8"))
-    report = build_report(script, plan_dir=Path(args.plan_dir) if args.plan_dir else None)
+    report = build_report(script, plan_dir=Path(args.plan_dir) if args.plan_dir else None,
+                          audio_mode=args.audio_mode)
     out = Path(args.out_json)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

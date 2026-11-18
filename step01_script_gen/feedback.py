@@ -73,6 +73,7 @@ def build_regen_feedback(script: dict, novel_text: str = "",
             first = first[:per_line_chars] + "…"
         lines.append(f"- {label} {len(warns)}处（{shot_str}）：{first}")
     body = "\n".join(lines)
+    from shared.revision_questions import render_revision_questions
     return (
         "\n\n# 不可动字段（任何修复都不得触碰）\n"
         "- narration_segment/subtitle 逐字锁定：不得增删改任何字符（含标点）；"
@@ -82,5 +83,5 @@ def build_regen_feedback(script: dict, novel_text: str = "",
         "- 无声音镜头的留白属 sound_design 决策：缺「留白」声明时在 audio_cue 补"
         "「留白（目的：…）」，不得为此给 narration_segment 加台词。\n"
         "\n# 本地校验反馈（来自分镜检查表，请针对性修正；「N处」=命中镜头数，括号内=镜头号）\n"
-        + body + "\n"
+        + body + render_revision_questions() + "\n"
     )

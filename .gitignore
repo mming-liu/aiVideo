@@ -280,6 +280,8 @@ tests/enhancements/*
 !tests/shared/
 tests/shared/*
 !tests/shared/test_run_context.py
+!tests/shared/test_audible_speech.py
+!tests/shared/test_revision_questions.py
 !tests/shared/test_fact_split.py
 !tests/shared/test_presentation_contract.py
 # 2026-10-30（R05/F5）：授权链身份关联的判别测试。

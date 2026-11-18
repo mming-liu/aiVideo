@@ -442,7 +442,16 @@ def check_rules(shot: dict) -> list[dict]:
     return out
 
 
-def run(script: dict, include_rules: bool = False) -> list[dict]:
+def check_missing_audible_speech(script: dict, units=None, *,
+                                 audio_mode: str | None = None) -> list[dict]:
+    """共享声音承载判据（R7）：voice_unit_report 与预检消费同一实现."""
+    from shared.audible_speech import missing_audible_speech_units
+    return missing_audible_speech_units(script, units, audio_mode=audio_mode)
+
+
+def run(script: dict, include_rules: bool = False, *,
+        include_audible_speech: bool = False, speech_units=None,
+        audio_mode: str | None = None) -> list[dict]:
     shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
     issues: list[dict] = []
     for pos, shot in enumerate(shots):
@@ -457,5 +466,8 @@ def run(script: dict, include_rules: bool = False) -> list[dict]:
         if include_rules:
             issues.extend(check_rules(shot))
     issues.extend(check_image_prompt(script))
+    if include_audible_speech:
+        issues.extend(check_missing_audible_speech(
+            script, speech_units, audio_mode=audio_mode))
     return issues
 

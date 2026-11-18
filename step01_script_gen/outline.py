@@ -878,9 +878,11 @@ def replan_dialogue_within_budget(plan, rep, novel_text, *, model=None,
     _base = base_prompt or (_REVISION_NOVEL_PROMPT if _ops_mode else OUTLINE_PROMPT
                             ).format(novel_text=novel_text[:PROMPT_MAX_CHARS],
                                      beat_edit_rule=_BEAT_EDIT_RULE["revision"])
+    from shared.revision_questions import render_revision_questions
     _prompt = (_base + "\n"
                + _budget_feedback_block(rep, plan, novel_text, route=_route)
-               + _rejection_feedback_block(rejections))
+               + _rejection_feedback_block(rejections)
+               + render_revision_questions())
     try:
         service = create_service()
         result = service.generate(TextGenerationRequest(
@@ -3949,10 +3951,12 @@ def revise_plan_full(plan, problems, novel_text, *, model=None, base_prompt=None
     # **逐字基线必须进请求**（复核之十一 P1）：规则说"必须逐字保持不变"，就得让模型
     # 看得见要保留的原值——否则两份只有 `causal_chain` 不同的计划发出**完全相同**的
     # 请求，同一份响应必然对其中一份报 `core_field_changed`（实测复现）。
+    from shared.revision_questions import render_revision_questions
     _prompt = chr(10).join([_base, _rule,
                             _revision_feedback_block(problems, plan),
                             _rejection_feedback_block(rejections),
-                            render_plan_baseline(plan)])
+                            render_plan_baseline(plan),
+                            render_revision_questions()])
     try:
         service = create_service()
         result = service.generate(TextGenerationRequest(
