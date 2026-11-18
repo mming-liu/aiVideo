@@ -536,6 +536,41 @@ def test_cost_prep_readonly(studio, tmp_path):
     assert res["model_sends"] == 0
 
 
+def test_bill_freshness_detects_revision_policy_and_key(studio, tmp_path):
+    from shared.quality_gate import compute_script_revision
+
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"shots": [{"shot_index": 1, "request_key": "k1"}]}),
+                    encoding="utf-8")
+    (studio.chapter / "step02a_quality.json").write_text(json.dumps({
+        "scope": {"shots": [1], "policies": {"1": "auto"}}}), encoding="utf-8")
+    bill = {
+        "chapter": str(studio.chapter),
+        "script_revision": compute_script_revision(studio.script()),
+        "policies": {"1": "auto"},
+        "request_keys": {"1": "k1"},
+        "plan_paths": {"1": str(plan)},
+    }
+    fresh = studio._bill_freshness(bill)
+    assert fresh["state"] == "fresh", fresh
+    assert fresh["reasons"] == []
+    for mutate, expected in (
+            (lambda b: b.__setitem__("chapter", str(tmp_path / "other")),
+             "chapter_mismatch"),
+            (lambda b: b.__setitem__("script_revision", "deadbeef"),
+             "script_revision_mismatch"),
+            (lambda b: b["policies"].__setitem__("1", "first_last"),
+             "policy_mismatch:shot1"),
+            (lambda b: b["request_keys"].__setitem__("1", "k2"),
+             "request_key_mismatch:shot1")):
+        import copy
+        broken = copy.deepcopy(bill)
+        mutate(broken)
+        stale = studio._bill_freshness(broken)
+        assert stale["state"] == "stale"
+        assert expected in stale["reasons"], (expected, stale["reasons"])
+
+
 def test_http_video_voice_cost_and_plan_stage(http_server):
     base, studio = http_server
     for path in ("/api/video", "/api/voice", "/api/cost"):

@@ -204,7 +204,8 @@ def _check_keyframe_hallucination(frame_path: str) -> dict:
             "verified": False, "reason": state.get("reason") or status}
 
 
-def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> str:
+def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None, *,
+                   media_policy: str | None = None) -> str:
     """
     计算分镜的哈希值，用于判断是否需要重新生成视频。
 
@@ -254,7 +255,7 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None) -> st
 
     from shared.model_caps import active_video_model
     from shared.video_media_plan import active_media_policy
-    _policy = active_media_policy()
+    _policy = media_policy or active_media_policy()
     _resolution = (
         shot.get("resolution")
         or os.getenv("VOLCENGINE_VIDEO_RESOLUTION", "")

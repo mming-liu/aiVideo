@@ -360,6 +360,7 @@ tests/tools/*
 !tests/tools/test_step01_call_index.py
 !tests/tools/test_vision_check.py
 # 2026-11-02：Studio 工作台（tools/studio_server.py）离线用例入库。
+!tests/tools/test_cache_bill.py
 !tests/tools/test_studio_server.py
 # 2026-11-14 U6 R6：`tools/` 下四个门禁/诊断脚本此前**零回归**（诊断缺片归因、
 # 工作区体积体检、审计响应重解析、P4 准入核对）。这四个都只读或只写临时目录，

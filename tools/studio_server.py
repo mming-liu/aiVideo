@@ -731,6 +731,63 @@ class Studio:
                 "unit_count": len(rows),
                 "chars_total": sum(r["chars"] for r in rows), "model_sends": 0}
 
+    def _bill_freshness(self, bill: dict) -> dict:
+        """账单是否仍适用于当前稿：章节 / revision / 策略 / request_key（2026-11-18）."""
+        from shared.quality_gate import compute_script_revision
+
+        if not isinstance(bill, dict):
+            return {"state": "unknown", "reasons": ["bill_missing"], "checked": {}}
+        reasons: list[str] = []
+        checked: dict = {}
+        bill_ch = Path(str(bill.get("chapter") or "")).resolve()
+        checked["chapter"] = {"bill": str(bill_ch), "current": str(self.chapter)}
+        if bill_ch != self.chapter.resolve():
+            reasons.append("chapter_mismatch")
+        try:
+            current_rev = compute_script_revision(self.script())
+        except Exception as exc:  # noqa: BLE001 - 当前稿不可读要如实报告
+            current_rev = ""
+            reasons.append("current_script_unreadable: %s" % exc)
+        bill_rev = str(bill.get("script_revision") or "")
+        checked["script_revision"] = {"bill": bill_rev, "current": current_rev}
+        if not bill_rev:
+            reasons.append("script_revision_missing")
+        elif current_rev and bill_rev != current_rev:
+            reasons.append("script_revision_mismatch")
+        report = self._read_json_soft(self.chapter / "step02a_quality.json") or {}
+        scope = report.get("scope") or {}
+        current_policies = scope.get("policies") or {}
+        bill_policies = bill.get("policies") or {}
+        checked["policies"] = {"bill": bill_policies, "current": current_policies}
+        if not current_policies:
+            reasons.append("admission_policies_missing")
+        else:
+            for shot, policy in bill_policies.items():
+                if str(current_policies.get(str(shot))) != str(policy):
+                    reasons.append("policy_mismatch:shot%s" % shot)
+        try:
+            from shared.video_media_plan import active_media_policy
+            checked["current_env_policy"] = active_media_policy()
+        except Exception:  # noqa: BLE001
+            checked["current_env_policy"] = ""
+        for shot, key in (bill.get("request_keys") or {}).items():
+            plan_path = (bill.get("plan_paths") or {}).get(str(shot))
+            if not plan_path or not Path(plan_path).is_file():
+                reasons.append("plan_missing:shot%s" % shot)
+                continue
+            plan = self._read_json_soft(Path(plan_path)) or {}
+            entry = next((e for e in plan.get("shots") or []
+                          if int(e.get("shot_index") or -1) == int(shot)), None)
+            current_key = (entry or {}).get("request_key")
+            checked["request_key:shot%s" % shot] = {
+                "bill": key, "current": current_key}
+            if not current_key or current_key != key:
+                reasons.append("request_key_mismatch:shot%s" % shot)
+        state = "fresh" if not reasons else "stale"
+        return {"state": state, "reasons": reasons, "checked": checked,
+                "note": ("账单仍适用于当前稿" if state == "fresh"
+                         else "账单已过期或不适用于当前稿，请重新生成后再审批")}
+
     def cost_prep(self) -> dict:
         """只读费用准备视图；固定声明不构成调用授权。"""
         bill = None
@@ -738,10 +795,11 @@ class Studio:
         if self.video_bill and Path(self.video_bill).is_file():
             bill = self._read_json_soft(Path(self.video_bill))
             source = "cache_bill" if isinstance(bill, dict) else "invalid"
+        freshness = self._bill_freshness(bill)
         videos = self.video_table()
         voices = self.voice_table()
         return {"ok": True, "stage": "cost", "authorization": "not_granted",
-                "bill_source": source, "bill": bill,
+                "bill_source": source, "bill": bill, "freshness": freshness,
                 "derived": {
                     "videos_missing": sum(1 for r in videos["rows"] if not r["video_exists"]),
                     "voice_units": voices["unit_count"],

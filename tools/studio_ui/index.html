@@ -577,11 +577,20 @@
     view.textContent = "";
     api("/api/cost").then(function (res) {
       var bill = res.bill || null;
+      var fresh = res.freshness || {};
       var rows = [
         ["授权状态", res.authorization === "not_granted" ? "未授权（只读视图）" : String(res.authorization)],
-        ["账单来源", res.bill_source || "missing"]
+        ["账单来源", res.bill_source || "missing"],
+        ["账单时效", fresh.state === "fresh" ? "适用当前稿"
+          : (fresh.state === "stale" ? "已过期 / 不适用于当前稿" : "无法核对")],
+        ["时效原因", (fresh.reasons || []).length ? fresh.reasons.join("；") : "—"]
       ];
       if (bill) {
+        var ck = fresh.checked || {};
+        rows.push(["核对", "chapter=" + ((ck.chapter || {}).current ? "ok" : "?")
+          + " · revision=" + ((ck.script_revision || {}).bill === (ck.script_revision || {}).current ? "ok" : "diff")
+          + " · policy=" + ((ck.policies || {}).bill ? "已核" : "?")
+          + " · key=" + Object.keys(ck).filter(function (k) { return k.indexOf("request_key:") === 0; }).length]);
         rows.push(["就绪生成数", String(bill.ready_generations)]);
         rows.push(["就绪时长", String(bill.ready_duration_sec) + "s"]);
         rows.push(["参考帧数", String(bill.ready_references)]);
