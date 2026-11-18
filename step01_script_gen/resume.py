@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -218,6 +219,304 @@ def build_pending_manifest(chapter_dir, *, audited_snapshot_path, audit_path,
     return man
 
 
+#: 修复轮指针（M2.2 写入，M2.4 自动消费）。与 `main.REPAIR_ROUND_POINTER` 同名；
+#: 这里不 import main，避免恢复入口在 apply_config 之前拉起模块常量。
+REPAIR_POINTER_NAME = "_repair_round_pointer.json"
+
+
+def _read_json_checked(path, what: str) -> dict:
+    try:
+        data = _read_json(path)
+    except Exception as exc:                      # noqa: BLE001
+        raise ResumeError("%s 不可解析: %s: %s"
+                          % (what, type(exc).__name__, exc))
+    if not isinstance(data, dict):
+        raise ResumeError("%s 不是对象" % what)
+    return data
+
+
+def _pointer_hint_manifest(pointer: dict) -> dict:
+    """指针自带的 `resume_manifest` 只作**身份提示**，不作为必需依赖."""
+    hint = pointer.get("resume_manifest")
+    if not isinstance(hint, dict) or not hint.get("path"):
+        return {}
+    p = Path(str(hint["path"]))
+    if not p.is_file():
+        return {}
+    try:
+        data = _read_json(p)
+    except Exception:                             # noqa: BLE001
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _pointer_pending_path(chapter: Path, pointer: dict) -> Path:
+    raw = str(pointer.get("path") or "").strip()
+    if not raw:
+        raise ResumeError("修复轮指针缺少快照 path（fail-closed）")
+    pending = Path(raw).resolve()
+    if not pending.is_file():
+        raise ResumeError("指针指向的待复审稿不存在（fail-closed）: %s" % pending)
+    snap_root = (chapter / "snapshots").resolve()
+    try:
+        pending.relative_to(snap_root)
+    except ValueError:
+        raise ResumeError("指针快照不在本章 snapshots/ 下（fail-closed）: %s" % pending)
+    return pending
+
+
+def _pointer_audit(chapter: Path, pointer: dict, hint: dict) -> tuple:
+    """按「指针字段 → 提示清单 → 章节标准审计名」找一份 **ok** 审计.
+
+    任何候选存在但不可读/不是 ok 都记录下来；只有找到 status=ok 且带
+    input_revision 的那一份才返回。全部失败 → ResumeError（不猜路径）。
+    """
+    candidates = []
+    for value in (pointer.get("audit_path"), hint.get("audit_path")):
+        if value:
+            candidates.append(Path(str(value)))
+    candidates.extend([chapter / "step01_audit.json",
+                       chapter / "step01_audit.blocked.json"])
+    seen = set()
+    problems = []
+    for cand in candidates:
+        try:
+            rp = cand.resolve()
+        except Exception:                         # noqa: BLE001
+            continue
+        if rp in seen:
+            continue
+        seen.add(rp)
+        if not rp.is_file():
+            continue
+        try:
+            audit = _read_json_checked(rp, "审计文件")
+        except ResumeError as exc:
+            problems.append(str(exc))
+            continue
+        status = str(audit.get("status") or "").strip().lower()
+        rev = str(audit.get("input_revision") or "")
+        if status != "ok":
+            problems.append("%s status=%s" % (rp.name, audit.get("status")))
+            continue
+        if not rev:
+            problems.append("%s 缺少 input_revision" % rp.name)
+            continue
+        pointer_rev = str(pointer.get("audit_revision") or "")
+        if pointer_rev and rev != pointer_rev:
+            problems.append("%s input_revision=%s 与指针 audit_revision=%s 不符"
+                            % (rp.name, rev[:12], pointer_rev[:12]))
+            continue
+        return rp, audit
+    raise ResumeError("找不到与指针配对的 ok 审计文件（%s）"
+                      % ("; ".join(problems) or "缺失"))
+
+
+def _pointer_audited_snapshot(chapter: Path, hint: dict, audit: dict) -> Path:
+    """按审计 `input_revision` 精确找已审快照；找不到 → fail-closed."""
+    from shared.quality_gate import compute_script_revision
+
+    audit_rev = str(audit.get("input_revision") or "")
+    candidates = []
+    if hint.get("snapshot_path"):
+        candidates.append(Path(str(hint["snapshot_path"])))
+    audited = hint.get("audited")
+    if isinstance(audited, dict) and audited.get("snapshot_path"):
+        candidates.append(Path(str(audited["snapshot_path"])))
+    candidates.extend(sorted((chapter / "snapshots").glob("script_result_*.json")))
+    seen = set()
+    for cand in candidates:
+        try:
+            rp = cand.resolve()
+        except Exception:                         # noqa: BLE001
+            continue
+        if rp in seen or not rp.is_file():
+            continue
+        seen.add(rp)
+        try:
+            script = _read_json(rp)
+            if isinstance(script.get("script"), dict):
+                script = script["script"]
+            rev = compute_script_revision(script)
+        except Exception:                         # noqa: BLE001
+            continue
+        if rev == audit_rev:
+            return rp
+    raise ResumeError("找不到与审计 input_revision=%s 配对的已审快照（fail-closed）"
+                      % audit_rev[:12])
+
+
+def _pointer_novel_text(chapter: Path, hint: dict) -> Path:
+    """冻结原文：优先提示清单；否则**恰好一份** `_resume/novel_*.txt`.
+
+    没有提示清单且存在多份冻结原文时，无法证明哪一份属于本指针 →
+    fail-closed（绝不按文件名/时间猜）。
+    """
+    hint_path = None
+    if hint.get("novel_text_path"):
+        try:
+            hint_path = Path(str(hint["novel_text_path"])).resolve()
+        except Exception:                         # noqa: BLE001
+            hint_path = None
+    if hint_path is not None and hint_path.is_file():
+        want = str(hint.get("novel_sha256") or "")
+        if want and _sha256_file(hint_path) != want:
+            raise ResumeError("提示清单的冻结原文摘要不符: %s" % hint_path)
+        return hint_path
+    found = sorted((chapter / "_resume").glob("novel_*.txt"))
+    found = [p for p in found if p.is_file()]
+    if not found:
+        raise ResumeError("找不到冻结原文（_resume/novel_*.txt）——拒绝猜路径")
+    if len(found) > 1:
+        raise ResumeError("存在 %d 份冻结原文且指针未给出唯一路径（fail-closed）: %s"
+                          % (len(found), ", ".join(p.name for p in found[:5])))
+    return found[0]
+
+
+def _pointer_plan(chapter: Path, hint: dict) -> Path:
+    hint_path = None
+    if hint.get("plan_path"):
+        try:
+            hint_path = Path(str(hint["plan_path"])).resolve()
+        except Exception:                         # noqa: BLE001
+            hint_path = None
+    if hint_path is not None and hint_path.is_file():
+        want = str(hint.get("plan_sha256") or "")
+        if want and _sha256_file(hint_path) != want:
+            raise ResumeError("提示清单的冻结计划摘要不符: %s" % hint_path)
+        return hint_path
+    plan = chapter / "chapter_outline.cache.json"
+    if plan.is_file():
+        return plan
+    raise ResumeError("找不到冻结计划（chapter_outline.cache.json）——拒绝猜路径")
+
+
+def _auto_pointer_identity(chapter: Path, pointer: dict, audit: dict,
+                           hint: dict) -> dict:
+    """恢复身份：提示清单 → 进程环境 → 章节目录形状（不绑定具体作品）."""
+    band = hint.get("duration_band") or audit.get("duration_band")
+    if not isinstance(band, dict) or set(band) != {"min", "max",
+                                                   "target_min", "target_max"}:
+        raise ResumeError("指针/审计缺少合法的 duration_band（fail-closed）: %r"
+                          % (band,))
+    book_name = (hint.get("book_name") or os.getenv("BOOK_NAME") or "")
+    if not book_name:
+        part = chapter.parent.name
+        m = re.match(r"part_\d+_(.+)$", part)
+        book_name = m.group(1) if m else part
+    novel_name = hint.get("novel_name") or os.getenv("NOVEL_NAME") or chapter.parent.parent.name
+    try:
+        book_index = int(hint.get("book_index") or os.getenv("BOOK_INDEX", "1") or 1)
+    except (TypeError, ValueError):
+        raise ResumeError("BOOK_INDEX/提示清单 book_index 非法（fail-closed）")
+    try:
+        novel_chapter = int(hint.get("novel_chapter")
+                            or os.getenv("NOVEL_CHAPTER", "1") or 1)
+    except (TypeError, ValueError):
+        raise ResumeError("NOVEL_CHAPTER/提示清单 novel_chapter 非法（fail-closed）")
+    return {
+        "chapter_dir": str(chapter),
+        "duration_band": dict(band),
+        "novel_name": str(novel_name),
+        "book_name": str(book_name),
+        "book_index": book_index,
+        "novel_chapter": novel_chapter,
+        "run_id": str(hint.get("run_id") or pointer.get("run_id")
+                      or audit.get("run_id") or ""),
+        "channel_provider": str(hint.get("channel_provider")
+                                or audit.get("channel_provider") or ""),
+        "channel_model": str(hint.get("channel_model")
+                             or audit.get("model") or ""),
+    }
+
+
+def build_auto_pointer_manifest(chapter_dir) -> dict:
+    """从章节目录自动发现 `_repair_round_pointer.json`，构造等效 pending 清单.
+
+    M2.4（2026-11-18）：显式清单缺失时，指针就是「有一份修后稿等待重审」的
+    数据化声明。合法性逐项核验，任何一项不成立都 fail-closed：
+
+      * 指针可解析、`written=true`、无写入错误；
+      * `requires_fresh_audit=true`（否则不得构造重审候选）；
+      * 快照在 `snapshots/` 下、存在、revision 与指针一致；
+      * 审计 status=ok 且 `input_revision` 与指针/快照配对；
+      * 已审快照按 revision 精确找到；冻结原文/计划存在且摘要可核；
+      * 待复审稿 revision != 已审稿 revision（同稿不得误判需重审）。
+
+    本函数只读；返回的清单由 `run()` 继续走既有 `validate_static` /
+    `validate_semantic` / `_reusable_final_audit` 判据，不跳过任何身份校验。
+    """
+    chapter = Path(chapter_dir).resolve()
+    pointer_path = chapter / "snapshots" / REPAIR_POINTER_NAME
+    if not pointer_path.is_file():
+        raise ResumeError("缺少显式清单，且未发现修复轮指针: %s" % pointer_path)
+    pointer = _read_json_checked(pointer_path, "修复轮指针")
+    if pointer.get("written") is not True:
+        raise ResumeError("修复轮指针未标记 written=true（fail-closed）")
+    if str(pointer.get("error") or "").strip():
+        raise ResumeError("修复轮指针记录了写入错误（fail-closed）: %s"
+                          % pointer["error"])
+    if pointer.get("requires_fresh_audit") is not True:
+        raise ResumeError("修复轮指针 requires_fresh_audit 不是 true"
+                          "（拒绝构造重审候选）")
+    if not str(pointer.get("revision") or "").strip():
+        raise ResumeError("修复轮指针缺少 revision（fail-closed）")
+    try:
+        round_no = int(pointer.get("round"))
+    except (TypeError, ValueError):
+        raise ResumeError("修复轮指针 round 非法（fail-closed）: %r"
+                          % (pointer.get("round"),))
+    if round_no < 1:
+        raise ResumeError("修复轮指针 round 必须 >=1（fail-closed）: %r" % round_no)
+
+    hint = _pointer_hint_manifest(pointer)
+    pending = _pointer_pending_path(chapter, pointer)
+    audit_path, audit = _pointer_audit(chapter, pointer, hint)
+    identity = _auto_pointer_identity(chapter, pointer, audit, hint)
+
+    # 必须在 import shared.quality_gate 之前把清单身份写进 env：DURATION_* 是
+    # import 期常量（与 validate_static 的既有顺序约束同源）。
+    apply_config(identity)
+    from shared.quality_gate import compute_script_revision
+
+    pscript = _read_json(pending)
+    if isinstance(pscript.get("script"), dict):
+        pscript = pscript["script"]
+    pending_rev = compute_script_revision(pscript)
+    if pending_rev != str(pointer["revision"]):
+        raise ResumeError("指针快照 revision 不符：实算 %s != 指针 %s（fail-closed）"
+                          % (pending_rev[:12], str(pointer["revision"])[:12]))
+    if pending_rev == str(audit.get("input_revision") or ""):
+        raise ResumeError("指针快照与已审稿同 revision（%s）：不需要重审，"
+                          "拒绝构造 pending 候选" % pending_rev[:12])
+
+    audited_snapshot = _pointer_audited_snapshot(chapter, hint, audit)
+    novel_text = _pointer_novel_text(chapter, hint)
+    plan_path = _pointer_plan(chapter, hint)
+
+    man = build_pending_manifest(
+        chapter, audited_snapshot_path=audited_snapshot, audit_path=audit_path,
+        pending_path=pending, round_no=round_no, novel_text_path=novel_text,
+        plan_path=plan_path, run_id=identity["run_id"])
+    man["auto_pointer"] = {
+        "source": "repair_round_pointer",
+        "pointer_path": str(pointer_path),
+        "pointer_round": round_no,
+        "pending_revision": pending_rev,
+        "audited_revision": str(audit.get("input_revision") or ""),
+    }
+    return man
+
+
+def _read_paused_checked(chapter: Path) -> dict | None:
+    """读 PAUSED 暂停态：缺失 → None；损坏 → ResumeError（fail-closed）."""
+    from shared import step01_checkpoint as _ckpt
+    try:
+        return _ckpt.read_paused(chapter)
+    except _ckpt.CheckpointError as exc:
+        raise ResumeError("PAUSED 检查点非法（fail-closed）: %s" % exc)
+
+
 def validate_static(man: dict) -> None:
     """**不导入任何项目模块**的基础校验（必须在 apply_config 之前跑）.
 
@@ -347,10 +646,16 @@ def load_pending_script(man: dict) -> tuple:
                     % (rev[:12], pending.get("round")))
 
 
-def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
+def run(manifest, *, dry_run: bool = False, max_sends: int = 0,
         hook_max_attempts: int = 4, audit_repair_rounds: int = 1,
-        no_hook: bool = False, accept_fresh_audit: bool = False) -> int:
-    man = _read_json(Path(manifest_path))
+        no_hook: bool = False, accept_fresh_audit: bool = False,
+        source: str = "") -> int:
+    """执行恢复；`manifest` 可以是清单路径，也可以是已构造的清单 dict.
+
+    dict 入口供 M2.4 自动指针复用：自动发现只负责构造**等效清单**，后续仍走
+    本函数完全相同的静态/语义/审计复用判据，不跳过任何身份校验。
+    """
+    man = manifest if isinstance(manifest, dict) else _read_json(Path(manifest))
     # 审计副本可以不在正式章节目录里（避免发布前改正式产物）
     os.environ["STEP01_AUDIT_SOURCE"] = str(man.get("audit_path") or "")
     # 本包 §5：跨恢复发送预算（文件在章节目录，重启不清零）。
@@ -361,6 +666,9 @@ def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
     # 顺序不可交换：静态校验不得 import shared.quality_gate（它会拉起
     # shared.config，DURATION_* 从此锁死），必须先改 env 再做语义校验。
     validate_static(man)
+    # M2.3（2026-11-18）：PAUSED 暂停态在**改 env / import main 之前**读取。
+    # 缺失 = 没有暂停；存在但损坏 = fail-closed（不能悄悄当成没有）。
+    _paused = _read_paused_checked(Path(man["chapter_dir"]))
     apply_config(man)
     validate_semantic(man)
     # 2026-11-16：冻结续验的钩子/修复范围（在 import main 之前生效）。
@@ -392,6 +700,34 @@ def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
     _pending_script, _pending_note = load_pending_script(man)
     if _pending_script is not None:
         script = _pending_script
+
+    # M2.3（2026-11-18）：消费 PAUSED 暂停态，给出**可读续跑起点**。
+    # 这里只做身份核对 + 打印决策；审计复用/pending 判据仍在下面原样执行，
+    # 不因为「停在 CP3」就跳过任何审计身份校验。
+    _resume_from = ""
+    if _paused is not None:
+        _paused_rev = str(_paused.get("revision") or "")
+        _allowed_revs = {str(man.get("script_revision") or "")}
+        if isinstance(_pending, dict):
+            _allowed_revs.add(str(_pending.get("script_revision") or ""))
+        _allowed_revs.discard("")
+        if not _paused_rev or _paused_rev not in _allowed_revs:
+            raise ResumeError(
+                "PAUSED 检查点 revision=%s 与清单快照/待复审稿不符（%s）："
+                "拒绝按错误身份续跑"
+                % (_paused_rev[:12],
+                   ", ".join(sorted(r[:12] for r in _allowed_revs)) or "无"))
+        _resume_from = str(_paused.get("resume_from") or "")
+        if not _resume_from:
+            raise ResumeError("PAUSED 检查点缺少 resume_from（fail-closed）")
+        print(json.dumps({
+            "status": "RESUME_FROM_%s" % _resume_from,
+            "paused_stage": _paused.get("stage"),
+            "checkpoint_stage": _paused.get("checkpoint_stage"),
+            "paused_run_id": _paused.get("run_id"),
+            "paused_revision": _paused_rev[:16],
+            "resume_source": source or "manifest",
+        }, ensure_ascii=False, indent=1))
 
     # 冻结原文与计划：恢复必须在**同一份**输入与计划上继续，而不是读"当前"的。
     # **不调用 read_chapter**：场景缓存缺失时它会调模型，dry-run 就不能保证零调用。
@@ -452,7 +788,7 @@ def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
     if dry_run:
         _rev_out = (str((_pending or {}).get("script_revision") or man["script_revision"])
                     if _pending_note else str(man["script_revision"]))
-        print(json.dumps({
+        _dry = {
             "ok": True, "chapter_dir": str(chapter), "run_id": man["run_id"],
             "script_revision": _rev_out,
             # M2.3：不可复用时如实报 false（旧实现硬写 True，等于让预检表撒谎）
@@ -469,7 +805,14 @@ def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
             "next": (_pending_note or
                      ("commit（含定向修复；审计复用，不重复调用）" if reusable is not None
                       else "commit（旧审计不可复用 → 本轮重新审计 1 次）")),
-        }, ensure_ascii=False, indent=1))
+        }
+        # 默认路径（无 PAUSED / 无自动指针）输出逐字不变；只有新逻辑生效时才追加。
+        if _paused is not None:
+            _dry["resume_from"] = _resume_from
+            _dry["paused_stage"] = _paused.get("stage") or ""
+        if source:
+            _dry["discovery"] = source
+        print(json.dumps(_dry, ensure_ascii=False, indent=1))
         return 0
 
     if not m._acquire_step01_lock():
@@ -546,7 +889,8 @@ def run(manifest_path, *, dry_run: bool = False, max_sends: int = 0,
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Step01 从冻结修订点恢复")
-    ap.add_argument("--manifest", required=True, help="step01_resume.json 路径")
+    ap.add_argument("--manifest", default="",
+                    help="step01_resume.json 路径；省略时从 --chapter-dir 自动发现修复轮指针")
     ap.add_argument("--dry-run", action="store_true", help="只核验身份，不调用模型")
     ap.add_argument("--max-sends", type=int, default=0,
                     help="冻结续验的发送边界总尝试上限（0=不限；含内部重试）")
@@ -560,7 +904,8 @@ def main(argv=None) -> int:
                     help="允许在旧审计不可复用时继续（本轮重新审计）；默认 fail-closed")
     ap.add_argument("--build", action="store_true",
                     help="由现有产物生成清单（需 --snapshot）")
-    ap.add_argument("--chapter-dir", default="", help="--build 时的章节目录")
+    ap.add_argument("--chapter-dir", default="",
+                    help="章节目录（--build 输出或自动发现指针）")
     ap.add_argument("--snapshot", default="", help="--build 时显式指定快照文件")
     ap.add_argument("--audit", default="", help="--build 时显式指定配对审计文件")
     ap.add_argument("--plan", default="", help="--build 时显式指定冻结计划文件")
@@ -569,6 +914,9 @@ def main(argv=None) -> int:
     args = ap.parse_args(list(argv or sys.argv[1:]))
     try:
         if args.build:
+            if not args.manifest:
+                print("[RESUME] --build 需要 --manifest <输出路径>", file=sys.stderr)
+                return 3
             man = build_manifest(args.chapter_dir or os.getcwd(),
                                  snapshot_path=args.snapshot,
                                  audit_path=(args.audit or None),
@@ -579,12 +927,33 @@ def main(argv=None) -> int:
             out.write_text(json.dumps(man, ensure_ascii=False, indent=1), encoding="utf-8")
             print(str(out))
             return 0
-        return run(args.manifest, dry_run=args.dry_run,
+        if args.manifest:
+            return run(args.manifest, dry_run=args.dry_run,
+                       max_sends=args.max_sends,
+                       hook_max_attempts=args.hook_max_attempts,
+                       audit_repair_rounds=args.audit_repair_rounds,
+                       accept_fresh_audit=args.accept_fresh_audit,
+                       no_hook=args.no_hook)
+        # M2.4（2026-11-18）：显式清单缺失 → 从章节目录自动发现修复轮指针。
+        chapter = Path(args.chapter_dir or os.getcwd()).resolve()
+        man = build_auto_pointer_manifest(chapter)
+        _auto = man.get("auto_pointer") or {}
+        print(json.dumps({
+            "status": "AUTO_POINTER_FOUND",
+            "chapter_dir": str(chapter),
+            "pointer": _auto.get("pointer_path") or "",
+            "pointer_round": _auto.get("pointer_round"),
+            "pending_revision": str(
+                (man.get("pending_candidate") or {}).get("script_revision") or "")[:16],
+            "audited_revision": str(_auto.get("audited_revision") or "")[:16],
+            "next_action": man.get("next_action") or "",
+        }, ensure_ascii=False, indent=1))
+        return run(man, dry_run=args.dry_run,
                    max_sends=args.max_sends,
                    hook_max_attempts=args.hook_max_attempts,
                    audit_repair_rounds=args.audit_repair_rounds,
                    accept_fresh_audit=args.accept_fresh_audit,
-                   no_hook=args.no_hook)
+                   no_hook=args.no_hook, source="auto_pointer")
     except ResumeError as exc:
         print("[RESUME] 拒绝恢复: %s" % exc, file=sys.stderr)
         return 3

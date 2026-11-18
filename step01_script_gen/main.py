@@ -2907,15 +2907,45 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
     from step01_script_gen.audit import run_same_model_audit_with_status
 
     metadata = _final_audit_metadata(script, run_id=run_id)
-    # M4（2026-11-18）：严格模式下先跑送审前确定性预审门，硬伤不送 LLM 终审。
-    from step01_script_gen.commit_gate import pre_audit_enabled, pre_audit_gate
+    # M4（2026-11-18）：严格模式下先跑送审前确定性预审门；发现 hard 时**先经
+    # 已有 run_hard_fix 做一次确定性局部自愈**（不调 LLM），再按三态决定：
+    #   healed            → 只把修复稿交还调用方（本函数不写盘、不采纳）；
+    #   needs_llm_repair  → 保持 blocked 原语义，交既有修复轮，不放宽判据；
+    #   unresolved        → 保持 blocked 原语义，给出可读原因。
+    from step01_script_gen.commit_gate import (heal_pre_audit_hard,
+                                               pre_audit_enabled)
     if pre_audit_enabled():
-        _pre = pre_audit_gate(script)
-        if not _pre["ok"]:
+        _heal = heal_pre_audit_hard(script)
+        _heal_status = str(_heal.get("status") or "")
+        if _heal_status == "healed":
             _logger.warn(
-                "[AUDIT] 送审前确定性预审门拒绝：hard=%d（%s）"
-                % (len(_pre["hard"]),
-                   ", ".join(str(f.get("code")) for f in _pre["hard"][:5])))
+                "[AUDIT] 送审前确定性预审门：局部自愈成功（hard %d→0，repairs=%d）"
+                "——修复稿交由调用方决定是否送审，本函数不写盘、不采纳"
+                % (len(_heal.get("hard_before") or []),
+                   len(_heal.get("repairs") or [])))
+            return {
+                **metadata,
+                "status": "pre_audit_healed",
+                "audit_status": "pre_audit_healed",
+                "model": model or "",
+                "channel_provider": "",
+                "schema_deviations": [],
+                "usage": None,
+                "error": "",
+                "issues": list(_heal.get("hard_before") or []),
+                "healed_script": _heal.get("script"),
+                "healed_report": {
+                    "repairs": _heal.get("repairs") or [],
+                    "hard_before": len(_heal.get("hard_before") or []),
+                    "hard_after": len(_heal.get("hard_after") or []),
+                },
+            }
+        if _heal_status in ("needs_llm_repair", "unresolved"):
+            _hard_left = list(_heal.get("hard_after")
+                              or _heal.get("hard_before") or [])
+            _logger.warn(
+                "[AUDIT] 送审前确定性预审门拒绝：status=%s（%s）"
+                % (_heal_status, _heal.get("reason") or ""))
             return {
                 **metadata,
                 "status": "blocked",
@@ -2924,10 +2954,17 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
                 "channel_provider": "",
                 "schema_deviations": [],
                 "usage": None,
-                "error": "pre_audit_hard: %d deterministic finding(s)"
-                         % len(_pre["hard"]),
-                "issues": _pre["hard"],
+                # 保留既有 `pre_audit_hard` 前缀（原入口判据不变），三态细节
+                # 放 `pre_audit_status` / `reason`，消费方可区分「需修复轮」与
+                # 「无法判定」。
+                "error": "pre_audit_hard: %d deterministic finding(s); "
+                         "status=%s; %s"
+                         % (len(_hard_left), _heal_status,
+                            _heal.get("reason") or ""),
+                "issues": _hard_left,
+                "pre_audit_status": _heal_status,
             }
+        # clean → 继续原有终审请求（strict 模式下 hard 已被确定性层消掉）
     # 定向项只解析一次：请求里发的那一份、身份里算的那一份必须是同一份，
     # 否则「身份相同」与「请求逐字相同」会分家（S05）。
     _focus_now = focus or _final_audit_focus(script, None)
@@ -4033,6 +4070,9 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
     # 定向项变了、规则/提示版本变了、档位或通道变了，身份都会变 ⇒ 自然重审。
     # **失败**的审计不进 memo（失败不能冒充可复用结论）。
     _audit_memo: dict = {}
+    # T2（2026-11-18）：strict 预审门的「healed」修复稿由**调用方显式决定**是否
+    # 消费。这里只允许每轮提交消费一次，避免自愈→送审→又自愈的循环。
+    _pre_audit_heal_used = False
     for _attempt in range(0 if _dlg_skip_audit else STEP01_AUDIT_REPAIR_MAX_ROUNDS + 1):
         quality = _build_step01_quality_gate(script, novel_text)
         _timing_mark("commit_quality", status=quality.get("status"))
@@ -4064,6 +4104,52 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                 audit = _run_final_semantic_audit(
                     script, novel_text, plan, model=audit_model,
                     focus=_audit_focus_now, run_id=run_id)
+                # T2（2026-11-18）：strict 预审门报告 `healed` 时，修复稿只是
+                # **建议**——由这里显式决定是否消费到本轮内存稿。消费后必须重算
+                # 质量门/定向项/审计身份再送审，避免拿旧身份复用或错配 CP3。
+                if str(audit.get("status") or "") == "pre_audit_healed":
+                    _healed_script = audit.get("healed_script")
+                    if isinstance(_healed_script, dict) and not _pre_audit_heal_used:
+                        _pre_audit_heal_used = True
+                        script = _healed_script
+                        _healed_meta = {
+                            "hard_before": len(audit.get("issues") or []),
+                            "repairs": len((audit.get("healed_report") or {})
+                                           .get("repairs") or []),
+                        }
+                        summary["pre_audit_healed"] = _healed_meta
+                        _logger.warn(
+                            "[COMMIT] 送审前确定性局部自愈已消费到本轮内存稿"
+                            "（不写正式产物）：hard %d→0，repairs=%d；重算身份后送审"
+                            % (_healed_meta["hard_before"], _healed_meta["repairs"]))
+                        quality = _build_step01_quality_gate(script, novel_text)
+                        _timing_mark("commit_quality", status=quality.get("status"))
+                        _q_blocking = _quality_blocking_records(quality)
+                        _audit_focus_now = _final_audit_focus(script, quality)
+                        _audit_identity = _final_audit_identity(
+                            script, novel_text, plan, _audit_focus_now,
+                            audit_model, run_id)
+                        audit = _run_final_semantic_audit(
+                            script, novel_text, plan, model=audit_model,
+                            focus=_audit_focus_now, run_id=run_id)
+                        if str(audit.get("status") or "") == "pre_audit_healed":
+                            audit = {
+                                **audit,
+                                "status": "blocked",
+                                "audit_status": "blocked",
+                                "error": ("pre_audit_hard: 自愈后再次要求自愈"
+                                          "（拒绝循环，保持 blocked）"),
+                                "pre_audit_status": "unresolved",
+                            }
+                    else:
+                        audit = {
+                            **audit,
+                            "status": "blocked",
+                            "audit_status": "blocked",
+                            "error": ("pre_audit_hard: 自愈稿不可用或本轮已自愈过"
+                                      "（拒绝循环，保持 blocked）"),
+                            "pre_audit_status": "unresolved",
+                        }
                 _timing_mark("commit_audit", status=audit.get("status"))
                 # 只把**真的跑出结论**、且身份可复核的审计放进 memo。
                 _memo = _memoizable_final_audit(audit)
@@ -4238,7 +4324,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         # 写成「内容不可行」，也不借用上一轮审计结论。
         _adm_commit = _action_budget_admission(
             "commit_repair_round", _action_cost_sec("repair"))
-        if _budget_exceeded() or not _adm_commit.get("allowed"):
+        if _budget_exceeded_with_pause("commit_repair_round") or not _adm_commit.get("allowed"):
             _freeze_commit = _freeze_budget_exhausted(
                 script, action="commit_repair_round",
                 admission=_adm_commit, run_id=run_id)
@@ -8556,7 +8642,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 调用点（`main` 里 `REPAIR_ROUNDS_ENABLED and not _budget_exceeded()`）
         # 只保证「开始修的时候没超预算」，挡不住多轮叠加把单次 run 拖到 20 分钟
         # （第十四次重跑已经 12 分钟）。已完成的轮次保留，只是不再发下一批。
-        if _round > 1 and _budget_exceeded():
+        if _round > 1 and _budget_exceeded_with_pause("repair_round"):
             _logger.warn("[BUDGET] 总预算超时，停止后续定向修复轮（已通过的轮次保留）")
             return script
         per_shot_dict = _collect_repair_warnings(script, novel_text)
@@ -11631,6 +11717,76 @@ def _budget_exceeded() -> bool:
     return (_t.time() - _STEP_TIMING_T0) > _total_budget_sec()
 
 
+def _paused_checkpoint_enabled() -> bool:
+    """PAUSED 落盘开关（T1，默认关闭 = 入口行为与改造前逐字一致）.
+
+    只控制「超时是否把最新 CP 记成 PAUSED」这一保护性副作用；不控制
+    `STEP01_TOTAL_BUDGET_SEC` 的判定与默认值（仍默认 1200s，0=不限时）。
+    """
+    return str(os.getenv("STEP01_PAUSED_CHECKPOINT", "")).strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _record_budget_pause(reason: str, *, run_id: str = "") -> dict:
+    """超时/预算不足时把**最近完成的 CP** 记为 PAUSED；失败只告警，不抛.
+
+    记录字段：`stage`（暂停态）、`checkpoint_stage`（四态）、`resume_from`
+    （CP1–CP4）、`run_id`、`revision`、`written_at`、`reason`。写入落在
+    `snapshots/_paused.json`，不碰四态索引——`latest()` 的正常语义保持不变。
+    """
+    rec: dict = {"written": False, "skipped": False, "reason": reason, "error": ""}
+    if not _paused_checkpoint_enabled():
+        rec["skipped"] = True
+        rec["detail"] = "STEP01_PAUSED_CHECKPOINT 未启用（默认行为不变）"
+        return rec
+    try:
+        from shared import step01_checkpoint as _ckpt
+        _latest = _ckpt.latest(CHAPTER_DIR)
+        if not _latest:
+            rec["detail"] = "没有已完成阶段检查点，无法记录 PAUSED"
+            return rec
+        _key = str(_latest.get("key") or "")
+        _cp = _key
+        if _key.startswith(_ckpt.CP4_REPAIR_ROUND_K_DONE + "_r"):
+            _cp = _ckpt.CP4_REPAIR_ROUND_K_DONE
+        _elapsed = None
+        if _STEP_TIMING_T0 is not None:
+            import time as _t
+            _elapsed = round(max(0.0, _t.time() - _STEP_TIMING_T0), 1)
+        rec.update(_ckpt.write_paused(
+            CHAPTER_DIR, _cp,
+            run_id=str(run_id or _step01_run_id()),
+            revision=str(_latest.get("revision") or ""),
+            reason=reason,
+            extra={"checkpoint_key": _key,
+                   "budget_sec": _total_budget_sec(),
+                   "elapsed_sec": _elapsed},
+            log=_logger))
+        rec["reason"] = reason
+        if rec.get("written"):
+            _logger.warn("[BUDGET] 已记录 PAUSED 检查点（%s，续跑起点 %s）"
+                         % (rec.get("stage"), rec.get("resume_from")))
+    except Exception as _e:                       # noqa: BLE001
+        rec["error"] = "%s: %s" % (type(_e).__name__, _e)
+        try:
+            _logger.warn("[BUDGET] PAUSED 检查点写入失败（不改变超时结论）: %s" % _e)
+        except Exception:
+            pass
+    return rec
+
+
+def _budget_exceeded_with_pause(reason: str) -> bool:
+    """`_budget_exceeded()` 的接线壳：超时先落 PAUSED，再返回同一结论.
+
+    未超时零副作用；`STEP01_PAUSED_CHECKPOINT` 未启用时与 `_budget_exceeded()`
+    逐字等价（只多一次不写盘的开关判断）。
+    """
+    if not _budget_exceeded():
+        return False
+    _record_budget_pause(reason)
+    return True
+
+
 def _planning_deadline_at(cap_sec=None):
     """整次 Step 01 的**规划截止时刻**（monotonic 绝对时刻；工作包 §4 B）.
 
@@ -13769,7 +13925,8 @@ def main() -> None:
                 len(_audit_models) == 1
                 and os.getenv("SINGLE_MODEL_AUDIT", "1").strip() == "1"
             )
-            if _audit_enabled and not _budget_exceeded():
+            _budget_hit_mid = _budget_exceeded_with_pause("mid_pipeline_audit")
+            if _audit_enabled and not _budget_hit_mid:
                 from step01_script_gen.audit import run_same_model_audit_with_status
                 _metrics_inc("calls.audit")
                 _allow, _deadline, _to_info = _audit_budget_allowance()
