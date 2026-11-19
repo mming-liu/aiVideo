@@ -335,6 +335,46 @@ def voice_seconds(entries, kind=None) -> float:
                      if kind is None or e.get("kind") == kind), 2)
 
 
+def _voice_span_override(plan, entry, shots, declared_shots):
+    """可声明的跨镜延续：原句完整登记在首镜，允许声音延到相邻后续镜.
+
+    计划字段：``voice_spans = {"N2": ["3","4"]}``（键为声音 id）。
+    只接受**连续、存在、首镜已声明且首镜正文完整包含该句**的范围；
+    其余（跳镜、倒序、越界、首镜未登记全文）一律 ``ValueError`` 拒收。
+    """
+    spans = (plan or {}).get("voice_spans")
+    if not isinstance(spans, dict):
+        return None
+    raw = spans.get(str(entry.get("id") or ""))
+    if raw is None:
+        raw = spans.get(str(entry.get("index")))
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        raw = raw.get("shots")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("voice_span_invalid: %s 需要非空镜头数组" % entry.get("id"))
+    try:
+        ids = [str(int(x)) for x in raw]
+    except (TypeError, ValueError):
+        raise ValueError("voice_span_invalid: %s 镜头号必须是整数" % entry.get("id"))
+    pos = {str(s.get("index")): i for i, s in enumerate(shots or [])
+           if isinstance(s, dict) and s.get("index") is not None}
+    if any(sid not in pos for sid in ids):
+        raise ValueError("voice_span_invalid: %s 含不存在镜头 %s" % (entry.get("id"), ids))
+    if len(set(ids)) != len(ids):
+        raise ValueError("voice_span_invalid: %s 镜头重复 %s" % (entry.get("id"), ids))
+    ordered = [pos[sid] for sid in ids]
+    if ordered != list(range(ordered[0], ordered[0] + len(ordered))):
+        raise ValueError("voice_span_invalid: %s 必须连续，得到 %s" % (entry.get("id"), ids))
+    if ids[0] not in {str(x) for x in declared_shots}:
+        raise ValueError("voice_span_invalid: %s 首镜 %s 未声明承载" % (entry.get("id"), ids[0]))
+    first = next(s for s in shots if str(s.get("index")) == ids[0])
+    if str(entry.get("text") or "") not in str(first.get("narration_segment") or ""):
+        raise ValueError("voice_span_invalid: %s 首镜未完整登记原句" % entry.get("id"))
+    return ids
+
+
 def voice_units(plan, shots) -> list:
     """声音条目 → **镜头或连续片段**（成片里的实际落点）——生成验收与音轨消费共用.
 
@@ -423,6 +463,9 @@ def voice_units(plan, shots) -> list:
             if _cand and all(_shot_pos[_cand[_i + 1]] == _shot_pos[_cand[_i]] + 1
                              for _i in range(len(_cand) - 1)):
                 _span = _cand
+        _override = _voice_span_override(plan, e, _shots, _sids)
+        if _override is not None:
+            _span = _override
         out.append({"kind": e["kind"], "index": e["index"], "id": e["id"],
                     "text": e["text"], "source": e["source"],
                     "fact_refs": list(e["fact_refs"]),

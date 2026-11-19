@@ -573,6 +573,7 @@ start_studio.bat
 # 2026-11-18 M4：送审前预审门/注入幂等
 !tests/step01_script_gen/test_commit_gate_pre_audit.py
 !tests/step01_script_gen/test_content_duration_spoken_text.py
+!tests/step01_script_gen/test_voice_spans.py
 !tests/step01_script_gen/test_repair_round_persist.py
 !tests/shared/test_outbound_guard.py
 !tests/shared/test_step01_checkpoint.py

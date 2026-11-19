@@ -25,15 +25,21 @@ from shared.run_scope import current_scope_identity
 def build_report(script: dict, *, plan_dir: Path | None = None,
                  audio_mode: str | None = None) -> dict:
     from shared.audible_speech import missing_audible_speech_units
-    from step01_script_gen.plan_feasibility import voice_units
-    from step03_tts_audio.shot_tts import build_speech_units
+    from step01_script_gen.plan_feasibility import layout_voice_entries, voice_units
+    from step03_tts_audio.shot_tts import _compute_voice_windows, build_speech_units
     from tts.synthesis_job import request_key_for
 
-    revision = str(script.get("script_revision") or compute_script_revision(script))
+    # 2026-11-19：候选文件可能残留正式稿 revision；报告以**重算值**为准，
+    # 并把文件内旧值单独记账，禁止把候选单元标在正式稿身份下。
+    computed_revision = compute_script_revision(script)
+    file_revision = str(script.get("script_revision") or "")
+    revision = computed_revision
     units = build_speech_units(script, scope=current_scope_identity(),
                                script_revision=revision)
-    bindings = {(r.get("kind"), r.get("index")): r
-                for r in voice_units(script.get("chapter_outline"), script.get("shots"))}
+    vrecs = voice_units(script.get("chapter_outline"), script.get("shots"))
+    bindings = {(r.get("kind"), r.get("index")): r for r in vrecs}
+    win, _ = _compute_voice_windows(script, script.get("shots") or [])
+    tracks, layout_problems = layout_voice_entries(vrecs, win)
     rows = []
     for unit in units:
         if unit.kind == "narration":
@@ -53,8 +59,12 @@ def build_report(script: dict, *, plan_dir: Path | None = None,
             binding = next((r for r in bindings.values()
                             if r.get("kind") == "dialogue"
                             and str(unit.source_index) in (r.get("shot_indexes") or [])), {})
+            track = next((t for t in tracks if t.get("kind") == "dialogue"
+                          and t.get("index") == binding.get("index")), {})
         else:
             binding = bindings.get((unit.kind, unit.source_index)) or {}
+            track = next((t for t in tracks if t.get("kind") == unit.kind
+                          and t.get("index") == unit.source_index), {})
         rows.append({
             "unit_id": unit.unit_id,
             "kind": unit.kind,
@@ -74,6 +84,8 @@ def build_report(script: dict, *, plan_dir: Path | None = None,
             "provider": unit.provider,
             "script_revision": unit.script_revision,
             "planned_window": list(window) if isinstance(window, (list, tuple)) else None,
+            "layout_window": ([track.get("start"), track.get("end")]
+                              if track else None),
             "request_key": key,
             "audio_path": str(out),
             "audio_exists": out.is_file(),
@@ -92,9 +104,12 @@ def build_report(script: dict, *, plan_dir: Path | None = None,
         "schema": "voice_unit_report.v1",
         "scope": current_scope_identity(),
         "script_revision": revision,
+        "file_script_revision": file_revision,
+        "revision_mismatch": bool(file_revision and file_revision != revision),
         "unit_count": len(rows),
         "total_chars": sum(r["chars"] for r in rows),
         "units": rows,
+        "layout_problems": layout_problems,
         "audible_warnings": missing_audible_speech_units(
             script, units=units, audio_mode=audio_mode),
         "voice_preparation": prep,
@@ -107,7 +122,7 @@ def _md(report: dict) -> str:
              "| unit | 类型 | 全文 | 字符 | 来源 | 窗口 | voice_id | 模型 | speaker | key(前12) | 音轨/缓存 |",
              "|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in report["units"]:
-        win = r.get("planned_window")
+        win = r.get("layout_window") or r.get("planned_window")
         win_s = "%.2f–%.2fs" % (win[0], win[1]) if win else "-"
         lines.append("| {u} | {k} | {t} | {c} | {s} | {w} | {v} | {m} | {sp} | {key} | {a}/{cs} |".format(
             u=r["unit_id"], k=r["kind"], t=r["text"].replace("|", "\\|"),
@@ -115,8 +130,9 @@ def _md(report: dict) -> str:
             v=r["voice_profile_id"], m=r["model_id"], sp=r["speaker"] or "-",
             key=(r["request_key"] or "-")[:12], a="有" if r["audio_exists"] else "无",
             cs=r["cache_state"]))
-    lines += ["", "汇总：%d 个单元 / %d 字符；provider 调用 0。" % (
-        report["unit_count"], report["total_chars"])]
+    lines += ["", "汇总：%d 个单元 / %d 字符；排版问题 %d；provider 调用 0。" % (
+        report["unit_count"], report["total_chars"],
+        len(report.get("layout_problems") or []))]
     warnings = report.get("audible_warnings") or []
     lines += ["", "## 声音承载告警", ""]
     if not warnings:

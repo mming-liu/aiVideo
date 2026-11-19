@@ -43,33 +43,54 @@ def _speech_declarations(shot: dict) -> list[dict]:
     return out
 
 
+def _story_role(shot: dict, plan: dict, characters) -> str:
+    """从**剧本对白绑定**取故事角色；provider speaker 不能替代人物身份."""
+    try:
+        from shared.audio_identity import dialogue_speech_text
+        from step03_tts_audio.shot_tts import resolve_shot_speaker
+        raw, _text = dialogue_speech_text(shot, plan, characters)
+        if raw is None:
+            return ""
+        return str(resolve_shot_speaker(shot, raw, characters, plan).get("role") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _actual_units(script: dict, units, voice_unit_records):
+    error = ""
     if units is None:
         try:
             from step03_tts_audio.shot_tts import build_speech_units
             units = build_speech_units(script)
-        except Exception:  # noqa: BLE001
-            units = []
+        except Exception as exc:  # noqa: BLE001
+            return [], "audible_speech_readback_failed: %s" % exc
     if voice_unit_records is None:
         try:
             from step01_script_gen.plan_feasibility import voice_units
             voice_unit_records = voice_units(
                 script.get("chapter_outline"), script.get("shots") or [])
-        except Exception:  # noqa: BLE001
-            voice_unit_records = []
+        except Exception as exc:  # noqa: BLE001
+            return [], "audible_speech_readback_failed: %s" % exc
     by_narr = {(r.get("kind"), r.get("index")): r for r in voice_unit_records or []}
+    plan = script.get("chapter_outline") or {}
+    characters = script.get("characters") or []
+    shot_by_idx = {int(s.get("index") or 0): s
+                   for s in (script.get("shots") or []) if isinstance(s, dict)}
     actual = []
     for u in units or []:
         kind = str(getattr(u, "kind", "") or "")
         sidx = getattr(u, "source_index", None)
-        role = str(getattr(u, "voice_role", "") or getattr(u, "speaker", "") or "")
+        role = str(getattr(u, "voice_role", "") or "")
         text = str(getattr(u, "text", "") or "")
         if kind == "dialogue":
             try:
-                actual.append({"kind": "dialogue", "shot": int(sidx),
-                               "role": role, "text": text})
+                idx = int(sidx)
             except (TypeError, ValueError):
                 continue
+            # 故事角色只从剧本绑定取；provider 的 speaker 是音色标识，不参与人物核对。
+            actual.append({"kind": "dialogue", "shot": idx,
+                           "role": _story_role(shot_by_idx.get(idx) or {}, plan, characters),
+                           "text": text})
         elif kind == "narration":
             rec = by_narr.get(("narration", sidx)) or {}
             for sid in rec.get("shot_indexes") or []:
@@ -78,7 +99,7 @@ def _actual_units(script: dict, units, voice_unit_records):
                                    "role": role, "text": text})
                 except (TypeError, ValueError):
                     continue
-    return actual
+    return actual, error
 
 
 def missing_audible_speech_units(script: dict, units=None, *,
@@ -89,14 +110,38 @@ def missing_audible_speech_units(script: dict, units=None, *,
     if mode != "tts_mix":
         return []
     shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
-    actual = _actual_units(script, units, voice_unit_records)
+    actual, readback_error = _actual_units(script, units, voice_unit_records)
+    if readback_error:
+        return [{
+            "code": "audible_speech_readback_failed",
+            "severity": "hard",
+            "shot": "",
+            "field": "",
+            "speaker_hint": "",
+            "declaration": "",
+            "detail": readback_error,
+            "actual_units_on_shot": 0,
+        }]
     warnings = []
     for shot in shots:
         idx = int(shot.get("index") or 0)
+        lines = (shot.get("plan_refs") or {}).get("lines") or []
+        has_dialogue = any(a["shot"] == idx and a["kind"] == "dialogue" for a in actual)
+        # 结构化对白引用：不依赖 audio_cue/motion 的自由文本关键词。
+        if lines and not has_dialogue:
+            warnings.append({
+                "code": "missing_audible_speech_unit",
+                "severity": "hard",
+                "shot": idx,
+                "field": "plan_refs.lines",
+                "speaker_hint": "",
+                "declaration": "plan_refs.lines=%s" % list(lines),
+                "detail": "剧本对白绑定要求该镜有对白，但实际 SpeechUnit 缺失",
+                "actual_units_on_shot": len([a for a in actual if a["shot"] == idx]),
+            })
         decls = _speech_declarations(shot)
         if not decls:
             continue
-        lines = (shot.get("plan_refs") or {}).get("lines") or []
         for d in decls:
             hint = d.get("speaker_hint") or ""
             if d.get("requires_dialogue"):

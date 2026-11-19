@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """R7：声音承载回读告警（2026-11-19 修：消费真实 SpeechUnit）."""
 from __future__ import annotations
 
@@ -65,11 +65,47 @@ def test_only_unrelated_narration_does_not_cover_dialogue():
 
 
 def test_wrong_role_on_same_shot_is_warned():
-    script = _script(_shot(11, audio="人声=张十三压低嗓音厉色威胁"))
+    script = _script(_shot(11, audio="人声=张十三压低嗓音厉色威胁",
+                           motion="他低声厉色开口"))
+    script["characters"] = [{"name": "张十三", "identifier": "张十三"}, {"name": "听香", "identifier": "听香"}]
+    script["shots"][0]["narration_segment"] = "听香道：你若不想吃官司，便听我吩咐"
     warnings = missing_audible_speech_units(
-        script, units=[_unit("dialogue", 11, role="听香", text="无关台词")],
+        script, units=[_unit("dialogue", 11, role="voice-A", text="无关台词")],
         voice_unit_records=[], audio_mode="tts_mix")
     assert warnings and "角色" in warnings[0]["detail"]
+
+
+def test_story_role_is_read_from_script_not_provider_speaker():
+    script = _script(_shot(11, audio="人声=张十三压低嗓音厉色威胁"))
+    script["characters"] = [{"name": "张十三", "identifier": "张十三"}, {"name": "听香", "identifier": "听香"}]
+    script["shots"][0]["narration_segment"] = "张十三道：你若不想吃官司，便听我吩咐"
+    unit = _unit("dialogue", 11, role="", text="你若不想吃官司，便听我吩咐")
+    unit.speaker = "voice-A"
+    warnings = missing_audible_speech_units(
+        script, units=[unit], voice_unit_records=[], audio_mode="tts_mix")
+    assert warnings == []
+
+
+def test_structured_lines_without_free_text_still_hard():
+    script = _script(_shot(11, lines=[1]))
+    warnings = missing_audible_speech_units(
+        script, units=[], voice_unit_records=[], audio_mode="tts_mix")
+    assert warnings and warnings[0]["severity"] == "hard"
+    assert warnings[0]["field"] == "plan_refs.lines"
+
+
+def test_readback_failure_is_not_reported_as_missing_dialogue(monkeypatch):
+    import step03_tts_audio.shot_tts as shot_tts
+
+    def _boom(script):
+        raise RuntimeError("unit build failed")
+
+    monkeypatch.setattr(shot_tts, "build_speech_units", _boom)
+    script = _script(_shot(11, lines=[1]))
+    warnings = missing_audible_speech_units(script, units=None,
+                                            voice_unit_records=[],
+                                            audio_mode="tts_mix")
+    assert [w["code"] for w in warnings] == ["audible_speech_readback_failed"]
 
 
 def test_structured_dialogue_contract_can_be_hard():
@@ -109,3 +145,4 @@ def test_preflight_consumes_same_warning():
     issues = preflight_run(script, include_audible_speech=True,
                            speech_units=[], audio_mode="tts_mix")
     assert any(i["code"] == "missing_audible_speech_unit" for i in issues)
+
