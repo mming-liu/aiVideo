@@ -46,6 +46,29 @@ NARRATOR_VOICE = {"id": "sambert-zhihao-003", "gender": "male", "age_range": "mi
 CHARACTER_VOICES = [v for v in AVAILABLE_VOICES if v["id"] != NARRATOR_VOICE["id"]]
 
 
+NARRATOR_ROLE = "Narrator"
+
+
+class VoicePoolExhaustedError(RuntimeError):
+    """严格唯一性下无可用音色；禁止静默复用他人/旁白音色."""
+
+    def __init__(self, message: str, *, occupied=None, remaining: int = 0):
+        super().__init__(message)
+        self.occupied = dict(occupied or {})
+        self.remaining = int(remaining)
+        self.field_path = "voice"
+
+    def payload(self) -> dict:
+        return {"code": "voice_pool_exhausted", "message": str(self),
+                "occupied_roles": sorted(self.occupied),
+                "remaining": self.remaining, "field_path": self.field_path}
+
+
+def strict_unique() -> bool:
+    return str(os.getenv("VOICE_STRICT_UNIQUE", "1")).strip().lower() not in (
+        "0", "false", "off", "no")
+
+
 class _LegacyVoicePool:
     """Sambert 旧音色池的分配算法（**只作为混入**，不是第二个注册表）.
 
@@ -94,7 +117,17 @@ class _LegacyVoicePool:
                 print(f"[INFO] 新角色 '{character_name}' 分配音色: {new_voice['id']} ({new_voice['style']}, gender={gender}, age={age_range})")
                 return new_voice
 
-        # 音色池耗尽：按角色名哈希确定性分配，优先匹配性别
+        # 音色池耗尽：严格模式禁止按 MD5 复用他人音色。
+        if strict_unique():
+            with self._lock:
+                occupied = dict(self.mapping)
+                remaining = [v for v in CHARACTER_VOICES
+                             if v["id"] not in self.used_voice_ids]
+            raise VoicePoolExhaustedError(
+                "角色 %r 无可用音色（已占用 %d/%d；剩余 %d）——严格唯一性禁止复用他人音色"
+                % (character_name, len(occupied), len(CHARACTER_VOICES), len(remaining)),
+                occupied=occupied, remaining=len(remaining))
+        # 非严格兼容：按角色名哈希确定性分配，优先匹配性别
         # 优先尝试性别匹配
         if gender:
             candidates = [v for v in CHARACTER_VOICES if v.get("gender") == gender.lower() and v["id"] not in self.used_voice_ids]
@@ -309,6 +342,34 @@ class VoiceRegistry(_LegacyVoicePool):
                 provider=provider, speaker=name, legal=sorted(legal_set))
         return ""
 
+    def _ensure_narrator_profile(self, work: str, provider: str,
+                                 legal_sorted: list, mapping_version: str) -> None:
+        """旁白先占一个 speaker，使角色分配时天然避开旁白声线."""
+        bucket = self._in_work(work)
+        if NARRATOR_ROLE in bucket:
+            return
+        used = self._used_speakers(work, exclude_role=NARRATOR_ROLE)
+        free = [x for x in legal_sorted if x not in used]
+        if legal_sorted and not free:
+            if strict_unique():
+                raise VoicePoolExhaustedError(
+                    "旁白无可用 speaker（已占用 %s）——拒绝与角色共用声线"
+                    % sorted(used), occupied={r: v.get("speaker")
+                                              for r, v in bucket.items()},
+                    remaining=0)
+            free = list(legal_sorted)
+        chosen = free[0] if free else ""
+        bucket[NARRATOR_ROLE] = {
+            "schema_version": PROFILE_SCHEMA,
+            "voice_profile_id": _profile_id(work, NARRATOR_ROLE, provider, chosen),
+            "provider": str(provider or ""),
+            "speaker": chosen,
+            "mapping_version": str(mapping_version or ""),
+            "role_id": NARRATOR_ROLE,
+            "work_id": work,
+        }
+        self.save()
+
     def profile_for(self, role_id: str, *, provider: str, legal_speakers=(),
                     work_id: Optional[str] = None, mapping_version: str = "",
                     speaker: Optional[str] = None, voice_profile_id: str = "") -> dict:
@@ -327,6 +388,10 @@ class VoiceRegistry(_LegacyVoicePool):
             raise ValueError("profile_for 需要 role_id（角色/单元标识），收到空值")
         legal_sorted = sorted({str(x) for x in (legal_speakers or ())})
         with self._lock:
+            if role != NARRATOR_ROLE:
+                # 旁白先占坑：角色分配时 used 已含旁白 speaker，天然避开。
+                self._ensure_narrator_profile(work, provider, legal_sorted,
+                                              mapping_version)
             bucket = self._in_work(work)
             existing = bucket.get(role)
             if existing:
@@ -348,11 +413,27 @@ class VoiceRegistry(_LegacyVoicePool):
                 return dict(existing)
 
             chosen = str(speaker or "").strip()
+            used = self._used_speakers(work, exclude_role=role)
             if chosen:
                 self.validate_speaker(chosen, provider=provider, legal=legal_sorted)
+                if chosen in used:
+                    raise VoicePoolExhaustedError(
+                        "角色 %r 请求的 speaker %r 已被其他角色/旁白占用"
+                        % (role, chosen),
+                        occupied={r: v.get("speaker") for r, v in bucket.items()
+                                  if r != role},
+                        remaining=0)
             elif legal_sorted:
-                used = self._used_speakers(work, exclude_role=role)
-                free = [x for x in legal_sorted if x not in used] or legal_sorted
+                free = [x for x in legal_sorted if x not in used]
+                if not free:
+                    if strict_unique():
+                        raise VoicePoolExhaustedError(
+                            "角色 %r 无可用 speaker（合法集合 %s 已被占用）"
+                            % (role, legal_sorted),
+                            occupied={r: v.get("speaker")
+                                      for r, v in bucket.items() if r != role},
+                            remaining=0)
+                    free = list(legal_sorted)
                 digest = hashlib.md5(("%s|%s" % (work, role)).encode("utf-8")).hexdigest()
                 chosen = free[int(digest, 16) % len(free)]
             rec = {

@@ -343,6 +343,7 @@ tests/enhancements/*
 tests/tts/*
 !tests/tts/__init__.py
 !tests/tts/test_voice_registry_contract.py
+!tests/tts/test_voice_uniqueness.py
 !tests/shared/test_video_media_plan.py
 # 2026-11-02：素材策略（参考图 vs 首尾帧）契约用例入库。
 !tests/shared/test_media_policy.py

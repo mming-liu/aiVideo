@@ -303,9 +303,29 @@ def _window_of(shot: dict) -> Optional[tuple]:
     return (0.0, dur) if dur > 0 else None
 
 
+def canonical_character_role(role: str, characters) -> str:
+    """把称呼/别名归一为 characters 表的规范 identifier（如存在）."""
+    name = str(role or "").strip()
+    if not name:
+        return ""
+    for c in characters or []:
+        if not isinstance(c, dict):
+            continue
+        ident = str(c.get("identifier") or c.get("name") or "").strip()
+        if not ident:
+            continue
+        aliases = c.get("aliases") or []
+        if name == ident or name in {str(a) for a in aliases}:
+            return ident
+        amap = c.get("alias_map")
+        if isinstance(amap, dict) and str(amap.get(name) or "") == ident:
+            return ident
+    return name
+
+
 def dialogue_speech_unit(shot: dict, *, scope: dict, script_revision: str,
                          voice: dict, provider_name: str, text: str,
-                         strict: bool = True) -> SpeechUnit:
+                         strict: bool = True, voice_role: str = "") -> SpeechUnit:
     """单镜对白 → `SpeechUnit`（身份字段一次给全；缺字段由 normalize_unit 报）."""
     idx = int((shot or {}).get("index", 0) or 0)
     legacy = voice.get("legacy_voice")
@@ -313,7 +333,7 @@ def dialogue_speech_unit(shot: dict, *, scope: dict, script_revision: str,
         unit_id="shot-%d" % idx, kind="dialogue", text=text,
         scope=dict(scope), script_revision=str(script_revision),
         source_locator="shots[%d]" % idx, planned_window=_window_of(shot),
-        source_index=idx,
+        source_index=idx, voice_role=str(voice_role or ""),
         voice_profile_id=str(voice.get("voice_profile_id") or ""),
         provider=str(provider_name), model_id=str(voice.get("model_id") or ""),
         model_revision=str(getattr(tts_config, "MODEL_REVISION", "") or ""),
@@ -487,11 +507,13 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
         if raw_for_speaker is None or not text:
             continue
         role = resolve_shot_speaker(shot, raw_for_speaker, characters, plan)["role"]
+        role = canonical_character_role(role, characters)
         gender, age = _detect_speaker_attributes(role, characters)
         voice = resolve_voice(registry, role_id=role, provider_name=name, caps=caps,
                               gender=gender, age_range=age)
         out.append(dialogue_speech_unit(shot, scope=scope, script_revision=revision,
-                                        voice=voice, provider_name=name, text=text))
+                                        voice=voice, provider_name=name, text=text,
+                                        voice_role=role))
 
     if entries:
         _win, _ = _compute_voice_windows(script, shots)
@@ -501,6 +523,8 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
             if i not in _kept_narr:
                 continue
             role = roles[i - 1]
+            if role != NARRATOR_ROLE:
+                role = canonical_character_role(role, characters)
             gender, age = _detect_speaker_attributes(role, characters)
             voice = resolve_voice(registry, role_id=NARRATOR_ROLE if role == "narrator" else role,
                                   provider_name=name, caps=caps, gender=gender, age_range=age)
@@ -521,6 +545,44 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
 
 
 # ---------------------------------------------------------------- 缓存判定
+
+def check_voice_uniqueness(units, registry, characters) -> dict:
+    """1 规范角色 ↔ 1 音色，且角色不与旁白撞音（只读）."""
+    role_voice: dict[str, set] = {}
+    voice_role: dict[str, set] = {}
+    narrator_voices: set = set()
+    for u in units or []:
+        kind = str(getattr(u, "kind", "") or "")
+        role = str(getattr(u, "voice_role", "") or "")
+        if kind == "narration" and not role:
+            role = NARRATOR_ROLE
+        if role and role != NARRATOR_ROLE:
+            role = canonical_character_role(role, characters)
+        voice = str(getattr(u, "voice_profile_id", "") or
+                    getattr(u, "model_id", "") or getattr(u, "speaker", "") or "")
+        if not role or not voice:
+            continue
+        role_voice.setdefault(role, set()).add(voice)
+        voice_role.setdefault(voice, set()).add(role)
+        if role == NARRATOR_ROLE:
+            narrator_voices.add(voice)
+    conflicts = []
+    for role, voices in sorted(role_voice.items()):
+        if len(voices) > 1:
+            conflicts.append({"code": "role_multiple_voices", "role": role,
+                              "voices": sorted(voices)})
+    for voice, roles in sorted(voice_role.items()):
+        if len(roles) > 1:
+            conflicts.append({"code": "voice_multiple_roles", "voice": voice,
+                              "roles": sorted(roles)})
+    for voice in sorted(narrator_voices):
+        chars = sorted(r for r in voice_role.get(voice, set()) if r != NARRATOR_ROLE)
+        if chars:
+            conflicts.append({"code": "narrator_voice_collision",
+                              "voice": voice, "roles": chars})
+    return {"ok": not conflicts, "conflicts": conflicts,
+            "roles": {r: sorted(v) for r, v in sorted(role_voice.items())}}
+
 
 def _cache_hit(output_path: Path, unit: SpeechUnit, request_key: str) -> bool:
     """缓存命中判据（**新 profile/参数不复用旧 `.voice`**，§T2a）.

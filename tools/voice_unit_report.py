@@ -26,7 +26,9 @@ def build_report(script: dict, *, plan_dir: Path | None = None,
                  audio_mode: str | None = None) -> dict:
     from shared.audible_speech import missing_audible_speech_units
     from step01_script_gen.plan_feasibility import layout_voice_entries, voice_units
-    from step03_tts_audio.shot_tts import _compute_voice_windows, build_speech_units
+    from step03_tts_audio.shot_tts import (
+        _compute_voice_windows, build_speech_units, check_voice_uniqueness,
+    )
     from tts.synthesis_job import request_key_for
 
     # 2026-11-19：候选文件可能残留正式稿 revision；报告以**重算值**为准，
@@ -110,6 +112,8 @@ def build_report(script: dict, *, plan_dir: Path | None = None,
         "total_chars": sum(r["chars"] for r in rows),
         "units": rows,
         "layout_problems": layout_problems,
+        "voice_uniqueness": check_voice_uniqueness(
+            units, None, script.get("characters") or []),
         "audible_warnings": missing_audible_speech_units(
             script, units=units, audio_mode=audio_mode),
         "voice_preparation": prep,
@@ -130,9 +134,13 @@ def _md(report: dict) -> str:
             v=r["voice_profile_id"], m=r["model_id"], sp=r["speaker"] or "-",
             key=(r["request_key"] or "-")[:12], a="有" if r["audio_exists"] else "无",
             cs=r["cache_state"]))
-    lines += ["", "汇总：%d 个单元 / %d 字符；排版问题 %d；provider 调用 0。" % (
+    uniq = report.get("voice_uniqueness") or {}
+    lines += ["", "汇总：%d 个单元 / %d 字符；排版问题 %d；声音唯一性=%s；provider 调用 0。" % (
         report["unit_count"], report["total_chars"],
-        len(report.get("layout_problems") or []))]
+        len(report.get("layout_problems") or []),
+        "ok" if uniq.get("ok") else "conflict")]
+    for c in uniq.get("conflicts") or []:
+        lines.append("- 唯一性冲突：%s" % json.dumps(c, ensure_ascii=False))
     warnings = report.get("audible_warnings") or []
     lines += ["", "## 声音承载告警", ""]
     if not warnings:
