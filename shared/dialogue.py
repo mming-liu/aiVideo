@@ -49,6 +49,14 @@ _SPEAKER_TRAIL_VERB_RE = re.compile(
 
 
 
+_NARRATION_LABEL_RE = re.compile(r"^\s*(?:旁白|画外音|内心旁白)\s*[:：]\s*")
+
+
+def strip_narration_label(text: str) -> str:
+    """去掉“旁白：/画外音：”等**不播出**标签；时长与 TTS 正文共用."""
+    return _NARRATION_LABEL_RE.sub("", (text or "").strip()).strip()
+
+
 def strip_speaker_prefix(narration: str,
                          characters: Optional[List[dict]] = None) -> str:
     """Return only the spoken line, removing 「角色+说话动词+：」 prefix."""

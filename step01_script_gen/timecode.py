@@ -523,7 +523,9 @@ def _shot_content_duration(shot: dict, fps: float, shot_cap: float) -> float:
     alongside speech and closed motion ranges. Projection and execution share
     this calculation; over-cap content still belongs to the structural gate.
     """
-    text = str(shot.get("narration_segment") or "")
+    # 2026-11-19：时长按**实际播出正文**估算；“旁白：”只是显示标签，不占发声时间。
+    from shared.dialogue import strip_narration_label
+    text = strip_narration_label(str(shot.get("narration_segment") or ""))
     motion = _extract_motion_duration(str(shot.get("motion_desc") or "")) or 0.0
     speech = _estimate_duration(text) if text.strip() else 0.0
     declared = shot.get("duration_sec")
