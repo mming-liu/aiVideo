@@ -617,11 +617,12 @@ class V643PromptEnforcementConstraint(Constraint):
     def _log_repair_count(self, count: int) -> None:
         """把 fixed 计数写入 log（替代旧的 return int）."""
         if count:
+            from shared.tee_logger import get_logger
             try:
-                from shared.tee_logger import get_logger
                 get_logger().info(f"[CONSTRAINT] v6_43_prompt_enforcement 修复 {count} 处")
-            except Exception:
-                pass
+            except Exception as _degrade_exc:
+                from shared.degrade import note_degraded as _note_degraded
+                _note_degraded("step01_script_gen/constraints/v6_43_prompt_enforcement.py:_log_repair_count", _degrade_exc)
 
     def _run_semantic_normalizer(self, shot: dict, is_hook: bool) -> int:
         """调用 prompt_semantic.PromptSemanticNormalizer 处理 3 类语义问题.

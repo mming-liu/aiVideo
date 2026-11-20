@@ -390,8 +390,8 @@ class SplitContinuityConstraint(Constraint):
                             target=field,
                             detail=f"{name} 已失能，禁止安排聆听反应",
                         ))
+            from step01_script_gen.validation import _fix_emotion_visualization
             try:
-                from step01_script_gen.validation import _fix_emotion_visualization
                 for field in ("prompt", "ff_desc", "lf_desc", "motion_desc"):
                     value = str(shot.get(field) or "")
                     fixed = _fix_emotion_visualization(value)
@@ -404,8 +404,9 @@ class SplitContinuityConstraint(Constraint):
                             target=field,
                             detail="拆分续写后补情绪可视化",
                         ))
-            except Exception:
-                pass
+            except Exception as _degrade_exc:
+                from shared.degrade import note_degraded as _note_degraded
+                _note_degraded("step01_script_gen/constraints/split_continuity.py:apply", _degrade_exc)
         return repairs
 
 

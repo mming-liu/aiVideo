@@ -256,13 +256,14 @@ def assert_no_contradictions(prompt: str, label: str = "") -> None:
         return
     prefix = f"[{label}] " if label else ""
     detail = "；".join(issues)
+    from shared.tee_logger import get_logger
     try:
-        from shared.tee_logger import get_logger
         log = get_logger()
         if log:
             log.warn(f"{prefix}[CONTRADICTION] prompt 自相矛盾: {detail}")
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("shared/prompt_contradiction.py:assert_no_contradictions", _degrade_exc)
     if strict_mode():
         raise PromptContradictionError(f"{prefix}prompt 自相矛盾（fail-fast，"
                                        f"设 PROMPT_CONTRADICTION_STRICT=0 可降级放行）: {detail}")

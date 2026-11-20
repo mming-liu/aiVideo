@@ -2686,15 +2686,16 @@ def _extract_char_layout(
                 if pos:
                     seg += (f"，位于{pos}" if pose else pos)
                 # 朝向：extract_orientation 有(主体,目标) → 面向{目标}
+                from shared.style_prefix import extract_orientation
                 try:
-                    from shared.style_prefix import extract_orientation
                     orient = extract_orientation(scan, characters)
                     for subject, target in orient:
                         if subject == ident:
                             seg += f"（面向{target}）"
                             break
-                except Exception:
-                    pass
+                except Exception as _degrade_exc:
+                    from shared.degrade import note_degraded as _note_degraded
+                    _note_degraded("shared/vimax_bridge.py:_extract_char_layout", _degrade_exc)
             # v6.52 前景体型锚：前景机位 + 动态入场姿态（探出/跃上/扑出/破水…）
             # 或威胁源时，图片模型按前景透视把该角色画成巨人（hook ff 神秘人
             # 手臂比船宽还长实测）。相对体型锚压回正常人体比例。只挂本角色

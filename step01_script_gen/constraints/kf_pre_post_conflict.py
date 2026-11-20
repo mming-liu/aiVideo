@@ -98,12 +98,13 @@ class KfPrePostConflictConstraint(Constraint):
             # 关键词时间猜想不适用，报了也是噪声。
             motion = str(shot.get("motion_desc") or "").strip()
             if motion:
+                from step01_script_gen.validation import _parse_motion_time_segments
                 try:
-                    from step01_script_gen.validation import _parse_motion_time_segments
                     if _parse_motion_time_segments(motion, dur):
                         continue
-                except Exception:
-                    pass
+                except Exception as _degrade_exc:
+                    from shared.degrade import note_degraded as _note_degraded
+                    _note_degraded("step01_script_gen/constraints/kf_pre_post_conflict.py:apply", _degrade_exc)
 
             kfs = shot.get("keyframes") or []
             if not isinstance(kfs, list):

@@ -145,8 +145,8 @@ def detect_and_log(constraints: list) -> List[Conflict]:
     conflicts = detect_conflicts(constraints)
     if not conflicts:
         return conflicts
+    from shared.tee_logger import get_logger
     try:
-        from shared.tee_logger import get_logger
         log = get_logger()
         log.warn(
             f"[CONFLICT] 检测到 {len(conflicts)} 对约束冲突（PoC，只警告不阻断）:"
@@ -157,6 +157,7 @@ def detect_and_log(constraints: list) -> List[Conflict]:
             )
         if len(conflicts) > 10:
             log.warn(f"  ... 还有 {len(conflicts) - 10} 条未列出")
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/constraints/conflict_detector.py:detect_and_log", _degrade_exc)
     return conflicts

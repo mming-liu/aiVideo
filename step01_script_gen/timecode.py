@@ -371,11 +371,12 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
         # 但 shot_b.lf 是同一文本深拷贝 → ff==lf 必现；prompt 深拷贝 → 相邻
         # 相似度 1.00（14:22 run shot11.5/12.5 实测）。按"后半镜"（part_i=1）
         # 差异化：景别 +1、过肩、情绪递进、焦点、lf 缓推兜底。
+        from step01_script_gen.split_visuals import differentiate_split_visuals
         try:
-            from step01_script_gen.split_visuals import differentiate_split_visuals
             differentiate_split_visuals(shot, shot_b, part_i=1)
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/timecode.py:_do_pre_split_oversized_shots", _degrade_exc)
         # A split cannot establish a new wound, costume or visible subject.
         # Preserve the child content; continuity belongs to content review.
         # v6.77：删除重复的差异化调用——此前同一函数内被调了两次
@@ -386,8 +387,8 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
         #   b) 后镜终点推进：jaccard(a.lf, b.lf) < 0.85
         # （b.ff=a.lf 接续是分镜设计，不算重复。）差异化后仍不达标（如静态水面
         # 场景只有换景别词的伪差异化）⇒ 保留单镜长时长，视频生成端 clamp 兜底。
+        from shared.split_similarity import jaccard_bigram as _jb_verify
         try:
-            from shared.split_similarity import jaccard_bigram as _jb_verify
             _a_lf = shot.get("lf_desc") or ""
             _b_ff = shot_b.get("ff_desc") or ""
             _b_lf = shot_b.get("lf_desc") or ""
@@ -396,8 +397,9 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
                         or _jb_verify(_a_lf, _b_lf) >= 0.85):
                     i += 1
                     continue
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/timecode.py:_do_pre_split_oversized_shots", _degrade_exc)
         # shot_a 留前半段
         shots[i]["narration_segment"] = text[:split_at].strip()
         if shots[i].get("subtitle"):
@@ -406,8 +408,8 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
         # verbatim.  When each half carries an explicit speaker, promote that
         # speaker to main_subject so downstream character anchors do not treat
         # a listener or corpse as the shot subject.
+        from step01_script_gen.split_visuals import extract_speaker as _extract_split_speaker
         try:
-            from step01_script_gen.split_visuals import extract_speaker as _extract_split_speaker
             _split_char_names = [
                 str(item.get("name") or "").strip()
                 for item in (shots[i].get("char_layout") or [])
@@ -423,8 +425,9 @@ def _do_pre_split_oversized_shots(shots: list, shot_cap: float) -> int:
             if _split_speaker:
                 shots[i]["main_subject"] = _speaker_a or _split_speaker
                 shot_b["main_subject"] = _speaker_b or _split_speaker
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/timecode.py:_do_pre_split_oversized_shots", _degrade_exc)
         shots[i]["_split_to"] = shot_b["index"]
         # 插入到 i+1
         shots.insert(i + 1, shot_b)

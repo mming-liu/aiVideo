@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Optional, Tuple, Type
+from typing import Any, Callable, Optional, Tuple, Type
 
 from .types import RepairReport
 from .context import ConstraintContext
@@ -46,23 +46,26 @@ def fail_closed_types() -> tuple:
     合同读不出来 = 约束没有生效，必须显式失败。
     """
     types = list(ENV_FAULT_TYPES)
+    from shared.voice_adaptation import (AdaptationConfigError,
+                                         AdaptationInvalidError)
     try:
-        from shared.voice_adaptation import (AdaptationConfigError,
-                                             AdaptationInvalidError)
         types.extend([AdaptationInvalidError, AdaptationConfigError])
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/constraints/engine.py:fail_closed_types", _degrade_exc)
+    from shared.presentation_contract import PresentationContractError
     try:
-        from shared.presentation_contract import PresentationContractError
         types.append(PresentationContractError)
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/constraints/engine.py:fail_closed_types", _degrade_exc)
     return tuple(types)
 
 
 def _raise_env_fault(where: str, exc: BaseException) -> None:
     """环境故障显式上报（先留可定位的一行 ERROR，再原样抛出保留原始 traceback）."""
     try:
+        # import 留在 try 内：日志模块本身坏掉时也必须抛出**原异常**（不改失败语义）
         from shared.tee_logger import get_logger
         _log = get_logger()
         if _log is not None:
@@ -70,9 +73,9 @@ def _raise_env_fault(where: str, exc: BaseException) -> None:
                 f"[CONSTRAINT] {where} 无法执行：环境故障 {type(exc).__name__}: {exc}"
                 f"——该约束本轮**没有生效**，禁止带着缺失的修复继续（fail-closed）"
             )
-    except Exception:
-        # 日志不可用时也必须抛；这里只保证「先留痕」尽力而为，不改变失败语义
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/constraints/engine.py:_raise_env_fault", _degrade_exc)
     raise exc
 
 
@@ -126,12 +129,13 @@ def apply_constraints(
             # 「保留原版 + warn」继续（那是内容/实现问题，不该让整章崩掉）。
             if isinstance(e, fail_closed_types()):
                 _raise_env_fault(f"约束 {c.name}", e)
+            from shared.tee_logger import get_logger
             try:
-                from shared.tee_logger import get_logger
                 get_logger().warn(f"[CONSTRAINT] {c.name} 异常: {e}")
-            except Exception:
-                # logger 不可用时也静默（测试场景）
-                pass
+            except Exception as _degrade_exc:
+                # logger 不可用时不再静默（测试场景也会登记降级）
+                from shared.degrade import note_degraded as _note_degraded
+                _note_degraded("step01_script_gen/constraints/engine.py:apply_constraints", _degrade_exc)
 
     # 取出每个 Constraint 上报的违例
     report.violations_remaining = ctx.drain_violations()
@@ -152,14 +156,15 @@ def _announce_path() -> None:
     if _PATH_ANNOUNCED:
         return
     _PATH_ANNOUNCED = True
+    from shared.tee_logger import get_logger
     try:
-        from shared.tee_logger import get_logger
         log = get_logger()
         if log is None:
             return
         log.info("[HARD_FIX] 本轮路径: Constraint 框架")
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/constraints/engine.py:_announce_path", _degrade_exc)
 
 
 def run_hard_fix(
@@ -199,15 +204,16 @@ def run_hard_fix(
         - is_final_pass: 标记 _compute_timecodes 之后，确保 RuntimeExtendConstraint 时长拉伸生效
     """
     if os.getenv("HARD_FIX_USE_OLD", "").strip() == "1":
+        from shared.tee_logger import get_logger
         try:
-            from shared.tee_logger import get_logger
             get_logger().warn(
                 "[HARD_FIX] HARD_FIX_USE_OLD=1 已失效：旧 _hard_fix_* 路径已于 "
                 "2026-09-12 删除（新约束只在 Constraint 框架，旧路径回退即降级）。"
                 "按 Constraint 框架执行。请 unset 该环境变量。"
             )
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/constraints/engine.py:run_hard_fix", _degrade_exc)
     _announce_path()
     try:
         # 一次性：在新框架首次启用时跑一次冲突检测（v6.42 PoC）
@@ -234,8 +240,8 @@ def run_hard_fix(
         else:
             report = apply_constraints(ctx)
         # 日志：报告修复次数 + HARD 未解决数
+        from shared.tee_logger import get_logger
         try:
-            from shared.tee_logger import get_logger
             log = get_logger()
             # get_logger() 声明返回 Optional[TeeLogger]，未初始化时（pytest / 非 main
             # 调用）返回 None。此前直接 log.info(...) 抛 AttributeError，被下面的
@@ -283,8 +289,9 @@ def run_hard_fix(
                     + ", ".join(f"{v.constraint_name}@shot{v.shot_index}" for v in hard_unresolved[:5]),
                     warn=True,
                 )
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/constraints/engine.py:run_hard_fix", _degrade_exc)
         # v6.98（2026-09-22 审核 P0-4 复核确认）：**run_hard_fix 里不再调 LLM**。
         #
         # 原实现在约束循环**全部结束之后**调 `trigger_regen_and_merge()`——也就是
@@ -308,11 +315,12 @@ def run_hard_fix(
         # 「原版 + 空 report」，等于把「什么都没修」伪装成「无需修复」。
         if isinstance(e, fail_closed_types()):
             _raise_env_fault("硬修复层（run_hard_fix）", e)
+        from shared.tee_logger import get_logger
         try:
-            from shared.tee_logger import get_logger
             get_logger().warn(f"[CONSTRAINT] 新框架失败: {e}，保留原版")
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/constraints/engine.py:run_hard_fix", _degrade_exc)
         return (script, RepairReport()) if return_report else script
 
 
@@ -329,8 +337,9 @@ def _maybe_run_conflict_detect_once() -> None:
     if _CONFLICT_DETECT_DONE:
         return
     _CONFLICT_DETECT_DONE = True
+    from .conflict_detector import detect_and_log
     try:
-        from .conflict_detector import detect_and_log
         detect_and_log(ALL_CONSTRAINTS)
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/constraints/engine.py:_maybe_run_conflict_detect_once", _degrade_exc)

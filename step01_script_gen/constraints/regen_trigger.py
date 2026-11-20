@@ -103,13 +103,14 @@ def trigger_regen_if_needed(
         if _REGEN_ATTEMPTS.get((v.constraint_name, v.shot_index), 0) < 2
     ]
     if not fresh:
+        from shared.tee_logger import get_logger
         try:
-            from shared.tee_logger import get_logger
             get_logger().warn(
                 f"[REGEN] {len(hard_unresolved)} 条违例均已重试 ≥2 次仍在场，跳过 regen（防空转）"
             )
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/constraints/regen_trigger.py:trigger_regen_if_needed", _degrade_exc)
         return None
 
     prompt = build_regen_prompt(fresh)
@@ -117,8 +118,8 @@ def trigger_regen_if_needed(
         return None
 
     # 日志：报告触发信息
+    from shared.tee_logger import get_logger
     try:
-        from shared.tee_logger import get_logger
         log = get_logger()
         log.warn(
             f"[REGEN] 触发局部 regen: {len(fresh)} 条 HARD 违例"
@@ -130,8 +131,9 @@ def trigger_regen_if_needed(
         if len(fresh) > 5:
             log.warn(f"  ... 还有 {len(fresh) - 5} 条")
         log.info(f"[REGEN] 反馈 prompt（前 500 字）:\n{prompt[:500]}")
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/constraints/regen_trigger.py:trigger_regen_if_needed", _degrade_exc)
 
     if auto_call_llm is None:
         auto_call_llm = os.getenv("REGEN_AUTO_TRIGGER", "0").strip() == "1"
@@ -169,11 +171,12 @@ def trigger_regen_if_needed(
         if result and result.success and result.text:
             return result.text
     except Exception as e:
+        from shared.tee_logger import get_logger
         try:
-            from shared.tee_logger import get_logger
             get_logger().warn(f"[REGEN] LLM 调用失败: {e}")
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/constraints/regen_trigger.py:trigger_regen_if_needed", _degrade_exc)
     return None
 
 
@@ -193,13 +196,14 @@ def _safe_parse_regen_json(text: str) -> Optional[dict]:
     if not isinstance(text, str) or not text.strip():
         return None
     # 先尝试 safe_parse_json_object
+    from shared.utils.json_repair import safe_parse_json_object
     try:
-        from shared.utils.json_repair import safe_parse_json_object
         result = safe_parse_json_object(text)
         if isinstance(result, dict):
             return result
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/constraints/regen_trigger.py:_safe_parse_regen_json", _degrade_exc)
     # 兜底：找 {…} 区间 + 修中文标点
     try:
         s = text.find("{")
@@ -345,22 +349,24 @@ def trigger_regen_and_merge(
     # 解析
     regen_output = _safe_parse_regen_json(llm_text)
     if regen_output is None:
+        from shared.tee_logger import get_logger
         try:
-            from shared.tee_logger import get_logger
             get_logger().warn("[REGEN] LLM 输出 JSON 解析失败，保留原版")
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/constraints/regen_trigger.py:trigger_regen_and_merge", _degrade_exc)
         return script
 
     # merge
+    from shared.tee_logger import get_logger
     try:
-        from shared.tee_logger import get_logger
         get_logger().info(
             f"[REGEN] merge 回原 script: target_shots={target_indices}, "
             f"regen_shots={len(regen_output.get('shots', []))}"
         )
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/constraints/regen_trigger.py:trigger_regen_and_merge", _degrade_exc)
 
     merged = merge_regen_into_script(
         script, regen_output, target_shot_indices=target_indices,

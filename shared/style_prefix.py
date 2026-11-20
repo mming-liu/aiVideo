@@ -467,14 +467,15 @@ def sanitize_prompt(prompt: str, verbose: bool = False) -> str:
     """替换可能触发内容审核的敏感词（复用 shared.content_safety 权威词表）."""
     out = _safety_sanitize(prompt)
     if verbose and out != prompt:
+        from shared.tee_logger import get_logger
         try:
-            from shared.tee_logger import get_logger
             from shared.paths import chapter_dir
             get_logger(chapter_dir() / "step02.log").verbose(
                 f"  [合规] prompt 已替换敏感词"
             )
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("shared/style_prefix.py:sanitize_prompt", _degrade_exc)
     return out
 
 
@@ -494,11 +495,12 @@ def sanitize_script_shots(script: dict, verbose: bool = True) -> dict:
             val = shot.get(field, "")
             if val:
                 shot[field] = sanitize_prompt(val, verbose=verbose)
+        from shared.alias_map import alias_walk_shot
         try:
-            from shared.alias_map import alias_walk_shot
             alias_walk_shot(shot)
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("shared/style_prefix.py:sanitize_script_shots", _degrade_exc)
     return script
 
 

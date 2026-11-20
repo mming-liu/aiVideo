@@ -116,16 +116,17 @@ class CameraMovementFillConstraint(Constraint):
     @staticmethod
     def _pick_tail(shot: dict) -> str:
         """按角色运镜 registry 选 tail；未命中 → 固定机位（检查认可的默认）."""
+        from .camera_variety import _CAMERA_BY_SHOT_ROLE
         try:
-            from .camera_variety import _CAMERA_BY_SHOT_ROLE
             for label, tail, cond in _CAMERA_BY_SHOT_ROLE:
                 try:
                     if cond(shot):
                         return tail
                 except Exception:
                     continue
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/constraints/camera_movement_fill.py:_pick_tail", _degrade_exc)
         return "。固定机位"
 
     @staticmethod

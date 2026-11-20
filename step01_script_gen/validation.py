@@ -796,11 +796,12 @@ def _check_grounding(shot: dict, novel_text: str) -> bool:
     # 2026-09-26（审核）：还原逻辑抽为 `shared.content_safety.
     # restore_narration_substitutions` 共享——台词完整性门（plan_feasibility）需要
     # 同一语义，各抄一份必然漂移。
+    from shared.content_safety import restore_narration_substitutions as _restore
     try:
-        from shared.content_safety import restore_narration_substitutions as _restore
         narration_clean = _restore(narration_clean)
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/validation.py:_check_grounding", _degrade_exc)
     if len(narration_clean) < 5:
         # 台词体太短（如「住嘴！」）无法切 5 字子串，退化为直接查原文
         return narration_clean in novel_clean
@@ -3468,7 +3469,7 @@ def _check_focal_switch(shots: list[dict], hook: dict = None) -> dict:
         if not has_dir:
             warnings.append(
                 f"{_shot_tag(label, idx)}: 切换拍摄对象缺方向，"
-                f"应写清「从{人物}手部/左侧/右侧」+「前推/环绕」"
+                f"应写清「从{{人物}}手部/左侧/右侧」+「前推/环绕」"
             )
 
     for shot in shots:
@@ -4761,13 +4762,14 @@ def post_fix_shot_prompts(script: dict) -> dict:
         # 被时间屏障视为时间字段，晚写会让已派生的 timecode 失配
         # （`test_late_constraints_do_not_write_time_fields_via_variable_subscript`
         # 正是拦这个）。早段清理既保住功能，也不越界。
+        from shared.content_safety import collapse_repetition as _collapse_rep
         try:
-            from shared.content_safety import collapse_repetition as _collapse_rep
             _cleaned = _collapse_rep(motion_desc)
             if _cleaned != motion_desc:
                 shot["motion_desc"] = motion_desc = _cleaned
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/validation.py:post_fix_shot_prompts", _degrade_exc)
         # 3.2（2026-09-12 P1 修正）：prompt 末尾截断残片——只针对**已知残片形态**
         # 精确剔除。此前的「最后一个句读后 ≤30 字一律截除」会误删合法短句
         # （实测误删：「角色C站在船头。他看向远方」「张三拔刀。刀光一闪」）。
@@ -5273,11 +5275,13 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
     # main._post_process 才注入，_validate_script 校验时永远缺失 → 4×2 次误报。
     # 提前到校验前注入：inject_global_config_into_script 幂等（不覆盖已有字段），
     # 后续 _post_process 再跑一次无副作用，且让校验能检查真实注入值。
+    from shared import style_prefix as _sp
     try:
-        from shared import style_prefix as _sp
         _sp.inject_global_config_into_script(script)
-    except Exception:
-        pass  # 注入失败则维持原状，_validate_script 会提示缺失（可接受的降级）
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/validation.py:parse_response", _degrade_exc)
+        # 注入失败则维持原状，_validate_script 会提示缺失（可接受的降级）
 
     _validate_script(script)
     return script
@@ -6841,6 +6845,9 @@ def _check_kf_time_window_alignment(shots: list[dict], hook: dict = None) -> dic
             # 立刻触发 `kf_event_window_mismatch`（实测：模型补了帧但 desc 写的是
             # 别的时段的内容 → 补帧换来一条新阻塞）。
             _seg_txts = []
+            # 2026-11-19 第 1 包 M05：此前 `_seg_texts` 从未定义（8afed79 起），NameError
+            # 被下方 try 吞掉，缺段内容提示一直为空。
+            _seg_texts = _split_motion_to_seg_texts(motion, segs, float(dur))
             for _i in missing_seg_indices:
                 _t = ""
                 try:

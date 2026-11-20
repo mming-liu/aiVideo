@@ -1045,11 +1045,11 @@ def _keyframe_timeline_issues(shot: dict, shot_id) -> list[Issue]:
     # an earlier or later event.
     motion = str(shot.get("motion_desc") or "").strip()
     if motion and len(timed) >= 2:
+        # 2026-09-27：归属与错位判据改走**唯一判据** `kf_coverage.analyze`
+        # ——同一函数也是 `kf_event_order` 与 `_check_kf_time_window_alignment`
+        # 的判据来源，三处不再各持一套口径。阈值未动（0.45 / 0.12）。
+        from step01_script_gen.kf_coverage import analyze as _analyze_kf_coverage
         try:
-            # 2026-09-27：归属与错位判据改走**唯一判据** `kf_coverage.analyze`
-            # ——同一函数也是 `kf_event_order` 与 `_check_kf_time_window_alignment`
-            # 的判据来源，三处不再各持一套口径。阈值未动（0.45 / 0.12）。
-            from step01_script_gen.kf_coverage import analyze as _analyze_kf_coverage
             scene_prefix = str(shot.get("ff_desc") or "").split("，", 1)[0].strip()
             if scene_prefix:
                 scene_prefix += "，"
@@ -1085,8 +1085,9 @@ def _keyframe_timeline_issues(shot: dict, shot_id) -> list[Issue]:
                         # validate_repair_targets 拒成「无授权」）。
                         repair_targets=_kf_mismatch_targets(shot, shot_id, _slot.index),
                     ))
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/quality_issues.py:_keyframe_timeline_issues", _degrade_exc)
 
     return issues
 
