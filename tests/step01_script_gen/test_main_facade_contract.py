@@ -138,3 +138,36 @@ def test_build_owner_table_prefers_first_module_for_duplicates():
     a.only_a, b.only_b = 1, 2
     table = _facade.build_owner_table([a, b])
     assert table["shared"] is a and table["only_a"] is a and table["only_b"] is b
+
+
+# --------------------------------------------------------------------------- 2026-11-19 复核 P2-5
+def test_original_cache_does_not_leak_across_patch_sessions(fake):
+    """patch 正常退出后，所属模块自己更新了值；再次经门面覆盖并删除，应恢复为新值."""
+    assert fake.rt.COUNTER == 0
+    with mock.patch(_PKG + ".front.COUNTER", 5):
+        assert fake.rt.COUNTER == 5
+    assert fake.rt.COUNTER == 0
+    fake.rt.COUNTER = 10                    # 所属模块内部更新（不经门面）
+    fake.front.COUNTER = 20
+    del fake.front.COUNTER
+    assert fake.rt.COUNTER == 10, "应恢复为本次覆盖前的值 10，而不是上一会话缓存的 0"
+
+
+def test_cache_cleared_after_monkeypatch_undo_too(fake):
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(fake.front, "COUNTER", 7)
+    fake.rt.bump()                          # 所属模块内部改写为 1
+    fake.front.COUNTER = 99
+    del fake.front.COUNTER
+    assert fake.rt.COUNTER == 1
+
+
+def test_nested_patch_keeps_cache_until_outermost_exit(fake):
+    with mock.patch(_PKG + ".front.COUNTER", 1):
+        with mock.patch(_PKG + ".front.COUNTER", 2):
+            pass
+        assert fake.rt.COUNTER == 1
+        del fake.front.COUNTER              # 外层会话内删除：恢复会话开始前的原值
+        assert fake.rt.COUNTER == 0
+        fake.front.COUNTER = 1              # 让 mock 退出时的 setattr 正常进行
+    assert fake.rt.COUNTER == 0
