@@ -51,6 +51,7 @@ from step01_script_gen.repair_authorization import (  # noqa: E402
     repair_authorization_spec as _auth_spec)
 from step01_script_gen.repair_fields import (  # noqa: E402
     apply_scoped_field_updates as _apply_updates, path_allowed as _allowed)
+from tests.verification_helpers import step01_getsource  # noqa: E402
 
 
 def _m02_shot():
@@ -171,7 +172,7 @@ def test_m02_full_shot_compatibility_is_preserved():
 
 
 def test_m02_both_request_sites_render_the_same_guidance():
-    src = _inspect.getsource(m._repair_shot_warnings)
+    src = step01_getsource(m._repair_shot_warnings)
     assert src.count('f"{_auth_guidance}"') == 2, "两处请求构造都要带授权说明"
     assert "_auth_spec_by_target" in src
     g = _guidance({"shot_5": _auth_spec(_m02_shot(), {"ff_desc"})})
