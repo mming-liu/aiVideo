@@ -8652,6 +8652,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             #   ② 在提示里命令模型改 narration_segment，而 allowed_fields 里
             #      这些字段已被 _split_executable_allowed 剥掉 → 模型一动手就
             #      「越权字段补丁」，整轮 rejected_by_validation（run17 r1 实测）。
+            # 2026-11-19 第 1 包 M04-b：此前缺这条 import，NameError 被下方 except 吞掉，
+            # 预过滤从 1e368c6 起从未生效。
+            from step01_script_gen.repair_fields import allowed_repair_fields
             _shots_by_id_audit = {"shot_%s" % _s.get("index"): _s
                                   for _s in (script.get("shots") or [])
                                   if isinstance(_s, dict)}
