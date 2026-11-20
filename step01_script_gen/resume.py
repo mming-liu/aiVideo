@@ -743,14 +743,15 @@ def run(manifest, *, dry_run: bool = False, max_sends: int = 0,
     # M2.3 / CP1（2026-11-16）：**计划已核验**（静态 + 语义 + 冻结身份全过）——
     # 阶段边界即落盘。恢复入口从这里往下才可能花调用，落一个检查点让"卡在哪一步"
     # 变成可读数据。
+    from shared import step01_checkpoint as _ckpt
     try:
-        from shared import step01_checkpoint as _ckpt
         _ckpt.write(chapter, _ckpt.CP1_PLAN_VERIFIED, script=script,
                     extra={"run_id": man.get("run_id"),
                            "plan_sha256": man.get("plan_sha256"),
                            "novel_sha256": man.get("novel_sha256")})
-    except Exception:                              # noqa: BLE001
-        pass
+    except Exception as _degrade_exc:  # noqa: BLE001
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/resume.py:run", _degrade_exc)
 
     # 审计复用是"本次恢复还要不要再花一次审计"的唯一判据：按真实入口问一句。
     # S05：核的是**内容身份**（原文 + 计划 + 送审稿 + 规则/提示版本 + 时长带 + 通道），

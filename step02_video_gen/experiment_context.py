@@ -48,19 +48,17 @@ def upstream_status(chapter_dir_path: Path, script: dict) -> dict:
     out = {"upstream_gate_status": "upstream_blocked",
            "upstream_audit_revision": "",
            "upstream_blocking_count": None}
+    from shared.quality_gate import require_step01_upstream
     try:
-        # v6.111（审核 P2-6）：**两道门都要过**才算 eligible。只验 manifest 时
-        # 「三份产物摘要一致」成立但 quality/audit 未必 PASS，会把不 eligible 的
-        # 上游标成 eligible。与真实生成走同一对检查（`require_step01_upstream`）。
-        from shared.quality_gate import require_step01_upstream
         manifest = require_step01_upstream(
             Path(chapter_dir_path), script, stage="step01")
         out["upstream_gate_status"] = "eligible"
         out["upstream_audit_revision"] = str(manifest.get("script_revision") or "")
         out["upstream_blocking_count"] = int(manifest.get("blocking_count") or 0)
         return out
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step02_video_gen/experiment_context.py:upstream_status", _degrade_exc)
     # gate 未通过时仍尽量给出审计 revision 与 blocking 数（诊断用）
     try:
         audit = json.loads(

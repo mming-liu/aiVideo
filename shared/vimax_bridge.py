@@ -80,13 +80,14 @@ def _bridge_log(msg: str):
     计算就往**正式章目录**建了 step02.log，被 production snapshot 判成
     `production_write_detected`（exit 3）——plan-only 的"零写入"其实只是没写产物。
     """
+    from shared.tee_logger import get_logger
     try:
-        from shared.tee_logger import get_logger
         from shared.log_utils import resolve_log_file
         log = get_logger(resolve_log_file("step02.log"), console_level="INFO")
         log.verbose(msg)
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("shared/vimax_bridge.py:_bridge_log", _degrade_exc)
 
 # v6.x 重抽多样性：per-attempt prompt 微扰动菜单。
 # 仅在 QC 重试时按 attempt 下标取模追加到 desc_full 尾部，**仅局部变量**——
@@ -1027,14 +1028,15 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
             # 免检必须留痕；已有 sidecar 保持原样（它是上一张图的历史身份）。
             _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} "
                         f"sidecar 已绑定当前图，免检")
+            from shared import request_events
             try:
-                from shared import request_events
                 request_events.emit("qc_not_run", kind="image_qc",
                                     frame={"path": str(frame_path),
                                            "sha256": pre_digest or ""},
                                     reason="sidecar_settled")
-            except Exception:
-                pass
+            except Exception as _degrade_exc:
+                from shared.degrade import note_degraded as _note_degraded
+                _note_degraded("shared/vimax_bridge.py:_maybe_qc_frame", _degrade_exc)
             return False
         if not result.ok:
             # 调用失败：写结构化 qc_call_failed（含旧结果历史），下次仍会重检。
@@ -1097,11 +1099,12 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
                             f"[{i.severity}]{i.category} {i.description}" for i in result.issues))
             # M0.3：把刚生成、已被质检拒收的图片从 generated_ok 改判为 qc_rejected。
             # 只在账本启用时有副作用；无 generated_ok 可扣时返回 False（不制造负计数）。
+            from shared import post_budget
             try:
-                from shared import post_budget
                 post_budget.record_qc_rejected("image")
-            except Exception:
-                pass
+            except Exception as _degrade_exc:
+                from shared.degrade import note_degraded as _note_degraded
+                _note_degraded("shared/vimax_bridge.py:_maybe_qc_frame", _degrade_exc)
             return True
         if result.has_hallucination:
             _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 检出问题: "

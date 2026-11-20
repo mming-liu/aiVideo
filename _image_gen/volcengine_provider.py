@@ -186,12 +186,13 @@ class VolcengineImageService(ImageGenerationService):
 
         def _record(outcome: str) -> None:
             """回写本次已发送 POST 的终局分类；账本错误不得掩盖生成结果."""
+            from shared import post_budget, request_events
             try:
-                from shared import post_budget, request_events
                 post_budget.record("image", outcome,
                                    request_id=request_events.current_request_id())
-            except Exception:
-                pass
+            except Exception as _degrade_exc:
+                from shared.degrade import note_degraded as _note_degraded
+                _note_degraded("_image_gen/volcengine_provider.py:_record", _degrade_exc)
 
         def _send(payload: dict):
             nonlocal _attempts
@@ -444,8 +445,8 @@ class VolcengineImageService(ImageGenerationService):
                 f.write(img_bytes)
 
             # U4：图片事件带内容摘要——预算只说明「发了几次」，这里说明「换回了哪张图」。
+            import hashlib as _hashlib
             try:
-                import hashlib as _hashlib
                 from shared import request_events
                 request_events.emit(
                     "image_saved", kind="image",
@@ -453,32 +454,35 @@ class VolcengineImageService(ImageGenerationService):
                            "sha256": _hashlib.sha256(img_bytes).hexdigest(),
                            "bytes": len(img_bytes)},
                     shot_id=req.shot_index, frame=req.frame_desc or "")
-            except Exception:
-                pass
+            except Exception as _degrade_exc:
+                from shared.degrade import note_degraded as _note_degraded
+                _note_degraded("_image_gen/volcengine_provider.py:_download", _degrade_exc)
 
             size_kb = len(img_bytes) / 1024
             if model_idx > 0:
                 _verbose_write(f"  [INFO] 图片已回退到模型: {self._model_queue[model_idx]}")
             _verbose_write(f"  [镜头{req.shot_index}] [OK] {frame_label}已保存 -> "
                   f"{save_path} ({size_kb:.1f} KB)")
+            from shared import post_budget, request_events
             try:
-                from shared import post_budget, request_events
                 post_budget.record("image", "generated_ok",
                                    request_id=request_events.current_request_id())
-            except Exception:
-                pass
+            except Exception as _degrade_exc:
+                from shared.degrade import note_degraded as _note_degraded
+                _note_degraded("_image_gen/volcengine_provider.py:_download", _degrade_exc)
             return ImageGenerationResult(
                 success=True,
                 save_path=save_path,
                 image_url=img_url,
             )
         except Exception as e:
+            from shared import post_budget, request_events
             try:
-                from shared import post_budget, request_events
                 post_budget.record("image", "transport_failed",
                                    request_id=request_events.current_request_id())
                 request_events.emit("image_download_failed", kind="image",
                                     detail=str(e)[:300])
-            except Exception:
-                pass
+            except Exception as _degrade_exc:
+                from shared.degrade import note_degraded as _note_degraded
+                _note_degraded("_image_gen/volcengine_provider.py:_download", _degrade_exc)
             return ImageGenerationResult(success=False, error=f"下载失败: {e}")

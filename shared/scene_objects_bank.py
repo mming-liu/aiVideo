@@ -148,11 +148,12 @@ class SceneObjectsBank:
     def _stamp_run_id(self, data: dict, run_id: str, call_ids=None) -> dict:
         """把来源记到**副本** `data` 的 meta 与本次登记过的条目上（不改 `self._data`）."""
         data.setdefault("meta", {})["last_run_id"] = run_id
+        from datetime import datetime
         try:
-            from datetime import datetime
             data["meta"]["last_written_at"] = datetime.now().isoformat(timespec="seconds")
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("shared/scene_objects_bank.py:_stamp_run_id", _degrade_exc)
         _cids = [str(c) for c in (call_ids or []) if str(c or "").strip()]
         for _k in self._touched:
             _o = data.get("objects", {}).get(_k)

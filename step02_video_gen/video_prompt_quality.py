@@ -142,9 +142,9 @@ def collect_video_prompt_quality(script: dict) -> dict:
             warnings.append({"category": "video_prompt_build", "shot": idx,
                              "message": str(exc)})
             continue
+        from shared.prompt_facts import (
+            project_video_facts, audit_prompt_against_projection)
         try:
-            from shared.prompt_facts import (
-                project_video_facts, audit_prompt_against_projection)
             _proj = project_video_facts(shot, work.get("characters"))
             if _proj.get("spec_present"):
                 for p in audit_prompt_against_projection(
@@ -152,8 +152,9 @@ def collect_video_prompt_quality(script: dict) -> dict:
                     p.update({"category": "video_final_prompt_offscreen_entity",
                               "shot": idx})
                     warnings.append(p)
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step02_video_gen/video_prompt_quality.py:collect_video_prompt_quality", _degrade_exc)
         if prompt_cap and len(prompt) > prompt_cap:
             warnings.append({
                 "category": "video_prompt_length",

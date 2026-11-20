@@ -36,8 +36,8 @@ from shared.paths import FIRST_FRAME_FILENAME, first_frame_file
 _MODEL_VOICE = os.getenv("VIDEO_MODEL_VOICE", "1").strip() == "1"
 # 运行时检测当前视频模型是否原生有声：无声模型时 _MODEL_VOICE 强制为 False，
 # 后续对话/背景音指令自动跳过。
+from shared.model_caps import active_video_supports_audio
 try:
-    from shared.model_caps import active_video_supports_audio
     if not active_video_supports_audio():
         _MODEL_VOICE = False
         import logging as _logging
@@ -45,8 +45,10 @@ try:
             "[prompt_builder] 当前视频模型不支持 generate_audio，"
             "自动关闭对话/背景音指令注入（仅注入纯画面描述）"
         )
-except Exception:
-    pass  # 加载失败时保持 env 决定
+except Exception as _degrade_exc:
+    from shared.degrade import note_degraded as _note_degraded
+    _note_degraded("step02_video_gen/prompt_builder.py:<module>", _degrade_exc)
+    # 加载失败时保持 env 决定
 
 # 参考图模式: "image" = 图生视频（需帧图片），"text" = 纯文生视频（默认）
 _REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
@@ -244,16 +246,17 @@ def _load_character_registry() -> dict:
 
     注册表格式：{角色名: {front/side/back: {path, description}}}.
     """
+    from shared.paths import vimax_working_dir
     try:
-        from shared.paths import vimax_working_dir
         registry_path = vimax_working_dir() / "character_portraits_registry.json"
         if registry_path.exists():
             with open(registry_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if data:
                 return data if isinstance(data, dict) else {}
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step02_video_gen/prompt_builder.py:_load_character_registry", _degrade_exc)
     # 回退：全书级 CharacterBank（跨章持久化，路径为绝对路径）
     try:
         from shared.character_bank import CharacterBank
@@ -808,8 +811,8 @@ def _build_character_layout_block(shot: dict, characters: list) -> str:
     """
     # G02：优先用事实投影的 on_screen 实体；不再用 ff_desc 里出现名字的
     # 文本探测把离屏/回忆角色塞进开场清单。
+    from shared.prompt_facts import project_frame_facts
     try:
-        from shared.prompt_facts import project_frame_facts
         _proj = project_frame_facts(shot, "first_frame", characters)
         if _proj.get("entities"):
             _lines = []
@@ -831,8 +834,9 @@ def _build_character_layout_block(shot: dict, characters: list) -> str:
                 "（瞪眼/垂眸/攥拳/肩背起伏等），禁止抽象情绪词。\n"
                 + "\n".join(_lines)
             )
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step02_video_gen/prompt_builder.py:_build_character_layout_block", _degrade_exc)
 
     probe = " ".join([shot.get("ff_desc", ""), shot.get("main_subject", "")])
     # 结构化站位（规则51/站位台吸收 v6.35）优先：shot.char_layout 已由 LLM 显式给出
@@ -1043,13 +1047,14 @@ def _build_prompt(shot: dict, script: dict, mode: str = "A") -> str:
     # 4.1d 道具空间方位锚定（A3 修复 08-10）：同框手持道具各写落点，防视频模型
     # 自由摆放重叠（酒壶钓杆叠一起）。复用 step02a 的 _extract_prop_layout 从
     # shot 文本提取道具方位（钓杆在左手/酒壶在右手），视频起点/中段/终点共用。
+    from shared.vimax_bridge import _extract_prop_layout
     try:
-        from shared.vimax_bridge import _extract_prop_layout
         prop_anchor = _extract_prop_layout(shot, characters)
         if prop_anchor:
             parts.append(prop_anchor)
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step02_video_gen/prompt_builder.py:_build_prompt", _degrade_exc)
 
     # 4.2 首帧画面描述（视频起点）
     if ff_desc:

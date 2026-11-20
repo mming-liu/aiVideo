@@ -247,13 +247,14 @@ def _preflight_unit(unit: dict, characters: list[dict], frames: set[str] | None,
     idx = unit.get("index", 0)
     text = "\n".join(_text(unit.get(k)) for k in ("prompt", "ff_desc", "lf_desc",
                                                   "motion_desc"))
+    from shared.prompt_contradiction import find_contradictions
     try:
-        from shared.prompt_contradiction import find_contradictions
         for problem in find_contradictions(text):
             issues.append({"code": "prompt_contradiction", "shot_index": idx,
                            "path": f"shots[{idx}].prompt", "message": problem})
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step02a_frame_gen/execution_plan.py:_preflight_unit", _degrade_exc)
     kinds = _frame_kinds(frames)
     for kind in kinds:
         if kind == "kf":

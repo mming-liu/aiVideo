@@ -470,21 +470,23 @@ class TtsCandidateContext:
 def _tool(name: str) -> str:
     """ffmpeg / ffprobe 定位：优先复用共享定位器，退回 PATH 与 FFMPEG_BIN_DIR."""
     if name == "ffmpeg":
+        from shared.media_inspect import ffmpeg_executable
         try:
-            from shared.media_inspect import ffmpeg_executable
             exe = ffmpeg_executable()
             if exe:
                 return exe
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("tts/synthesis_job.py:_tool", _degrade_exc)
     else:
+        from shared.media_inspect import ffprobe_executable
         try:
-            from shared.media_inspect import ffprobe_executable
             exe = ffprobe_executable()
             if exe:
                 return exe
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("tts/synthesis_job.py:_tool", _degrade_exc)
     exe = shutil.which(name)
     if exe:
         return exe

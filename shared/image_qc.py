@@ -169,16 +169,17 @@ def _shot_characters(shot: dict, characters: list | None,
                      kf_index: int | None = None) -> str:
     """提取本镜应出现的人物：优先本帧 on_screen spec，老章回退文本。"""
     if frame_kind:
+        from shared.prompt_facts import project_frame_facts
         try:
-            from shared.prompt_facts import project_frame_facts
             proj = project_frame_facts(shot, frame_kind, characters,
                                        kf_index=kf_index)
             names = [str(e.get("name") or "").strip()
                      for e in (proj.get("entities") or []) if str(e.get("name") or "").strip()]
             if proj.get("spec_present"):
                 return "、".join(dict.fromkeys(names)) if names else "无"
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("shared/image_qc.py:_shot_characters", _degrade_exc)
     names: list[str] = []
     for key in ("main_subject", "characters", "character"):
         v = shot.get(key)
@@ -616,15 +617,16 @@ def should_run_qc(frame_path: Path) -> bool:
 
 
 def _emit_qc_event(status: str, frame_path, image: dict, **fields) -> None:
+    from shared import request_events
     try:
-        from shared import request_events
         request_events.emit(status, kind="image_qc",
                             frame={"path": str(frame_path),
                                    "sha256": image.get("sha256", ""),
                                    "bytes": image.get("bytes", 0)},
                             **fields)
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("shared/image_qc.py:_emit_qc_event", _degrade_exc)
 
 
 def write_sidecar(frame_path: Path, result: QcResult, *,
@@ -1046,8 +1048,8 @@ def _expected_persons(shot: dict, frame_kind: str, characters: list | None, kf_i
     # （prompt 名单 2 人、QC 期望 0）——只有「条目存在且全员 off_screen」才
     # 是可信 0；空桶/缺桶按 prompt 同口径回退 char_layout。
     if isinstance(shot.get("frame_layouts"), dict):
+        from shared.frame_spec import get_frame_spec, is_on_screen
         try:
-            from shared.frame_spec import get_frame_spec, is_on_screen
             spec_entries = [e for e in get_frame_spec(
                 shot, frame_kind, kf_index=kf_index) if isinstance(e, dict)]
             if spec_entries:
@@ -1061,8 +1063,9 @@ def _expected_persons(shot: dict, frame_kind: str, characters: list | None, kf_i
                 if isinstance(it, dict) and str(it.get("name", "")).strip()
             ]
             return len(names) if names else None
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("shared/image_qc.py:_expected_persons", _degrade_exc)
     # 老章降级
     names = [str(it.get("name", "")).strip() for it in (shot.get("char_layout") or [])
              if isinstance(it, dict) and str(it.get("name", "")).strip()]
@@ -1074,15 +1077,16 @@ def _expected_persons(shot: dict, frame_kind: str, characters: list | None, kf_i
     from step01_script_gen.prompt_semantic import THREAT_VISIBILITY_KEYWORDS as _THREAT
     has_threat_name = any(n in _THREAT for n in names)
     if has_threat_name:
+        from shared.vimax_bridge import _threat_visible_in
         try:
-            from shared.vimax_bridge import _threat_visible_in
             # v6.56：desc 解析走 frame_narrative_desc 统一入口——和
             # build_claim_checks / _claim_text 同源，消灭「lf 期望人数判
             # 可见 vs 逐句断言判不可见」的对账互斥。
             if _threat_visible_in(frame_narrative_desc(shot, frame_kind), characters) is not True:
                 names = [n for n in names if n not in _THREAT]
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("shared/image_qc.py:_expected_persons", _degrade_exc)
     return len(names)
 
 
@@ -1551,16 +1555,17 @@ def _assert_duplicate_chars(persons: list[dict], expected: int | None,
             observed[c] = observed.get(c, 0) + 1
     _active_chars = characters or []
     if shot is not None and frame_kind:
+        from shared.prompt_facts import project_frame_facts
         try:
-            from shared.prompt_facts import project_frame_facts
             _proj = project_frame_facts(shot, frame_kind, characters, kf_index)
             _names = {str(e.get("name") or "").strip()
                       for e in (_proj.get("entities") or [])}
             if _names:
                 _active_chars = [c for c in (characters or [])
                                  if str((c or {}).get("identifier") or "").strip() in _names]
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("shared/image_qc.py:_assert_duplicate_chars", _degrade_exc)
     roster_text = " ".join(
         str((c or {}).get("static_features", "")) + str((c or {}).get("dynamic_features", ""))
         for c in _active_chars)
@@ -1774,16 +1779,14 @@ def build_claim_checks(shot: dict, frame_kind: str) -> list[dict]:
     # 的视觉断言（听香在中舱边缘/神秘人半身浸水中）。剥掉【】标记保留内容。
     text = re.sub(r"【[^】]*】", "", text)
     text = re.sub(r"identity locked[^，。]*", "", text)
+    from shared.vimax_bridge import _inject_object_size_anchor
     try:
-        # 尺寸锚（有来源的名称/形制/长宽）注入在组装期、不在 ff_desc 字段——此处
-        # 单独取回作为断言（船宽类失败的通用覆盖）。2026-11-13（S04）：肩宽比例
-        # 锚已删除（无来源假设），这里只回读仍存在的有源尺寸行。
-        from shared.vimax_bridge import _inject_object_size_anchor
         size_line = _inject_object_size_anchor(shot, "")
         if size_line.strip("。"):
             text = text + "。" + size_line
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("shared/image_qc.py:build_claim_checks", _degrade_exc)
 
     qs: list[dict] = []
     # 常真规则（规则类，非补丁）：首帧 = 动作开始前

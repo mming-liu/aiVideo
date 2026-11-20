@@ -131,8 +131,8 @@ class _LedgeredService(TextGenerationService):
                 pass
             raise
         finally:
+            from shared.call_ledger import record_call
             try:                       # 台账**绝不影响生成**（写失败只丢记录）
-                from shared.call_ledger import record_call
                 if _res is None:       # provider 抛异常也算一次失败调用
                     _res = TextGenerationResult(success=False, error="exception")
                 # 调用方（修订轮/提取器）从结果上取它来关联证据；幂等赋值，不改语义
@@ -146,8 +146,9 @@ class _LedgeredService(TextGenerationService):
                             elapsed_ms=(_t.monotonic() - _t0) * 1000.0,
                             model_default=str(getattr(self._inner, "_model", "") or ""),
                             call_id=_cid)
-            except Exception:
-                pass
+            except Exception as _degrade_exc:
+                from shared.degrade import note_degraded as _note_degraded
+                _note_degraded("_text_gen/service.py:generate", _degrade_exc)
 
 
 def create_service(provider: Optional[str] = None) -> TextGenerationService:

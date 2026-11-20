@@ -314,12 +314,13 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None, *,
                                      if is_core_keyframe_file(p)))
             # 2026-11-18 O1：只哈希策略后实际会下发的帧；被 first_only/first_last
             # 丢弃的 lf/kf 变化不得让可复用视频失效。
+            from shared.video_media_plan import filter_frame_paths_by_policy
             try:
-                from shared.video_media_plan import filter_frame_paths_by_policy
                 candidates = [Path(p) for p in filter_frame_paths_by_policy(
                     [str(p) for p in candidates], _policy)]
-            except Exception:  # noqa: BLE001 - 过滤不可用时保持旧行为
-                pass
+            except Exception as _degrade_exc:  # noqa: BLE001 - 过滤不可用时保持旧行为
+                from shared.degrade import note_degraded as _note_degraded
+                _note_degraded("step02_video_gen/submit_poll.py:_get_shot_hash", _degrade_exc)
             for _fp in candidates:
                 key_parts.append(_file_digest(_fp))
         except Exception:
@@ -331,10 +332,10 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None, *,
     # 2026-11-13（F2）：哈希是**纯读**路径——`materialize=False` 只收集源参考，
     # 不拼参考表、不落盘；此前这里会经 `fit_refs` 往生产 `shots/` 写 ref_sheet。
     if os.getenv("VIDEO_REFERENCE_MODE", "").strip().lower() == "r2v":
+        from step02_video_gen.prompt_builder import (
+            _collect_r2v_references, _load_character_registry,
+        )
         try:
-            from step02_video_gen.prompt_builder import (
-                _collect_r2v_references, _load_character_registry,
-            )
             _refs = _collect_r2v_references(
                 shot, characters=script.get("characters") or [],
                 registry=_load_character_registry(), materialize=False,
@@ -343,8 +344,9 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None, *,
                 _fp = Path(_ref)
                 if _fp.exists():
                     key_parts.append(_file_digest(_fp))
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step02_video_gen/submit_poll.py:_get_shot_hash", _degrade_exc)
     key = "|".join(key_parts)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
@@ -1867,8 +1869,8 @@ async def _create_prepared_task_once(svc, prepared, candidate_context, *, attemp
             return
         if not tid:
             return
+        import time as _t
         try:
-            import time as _t
             from shared import enhancement_io as eio
 
             def _already_recorded() -> bool:
@@ -1891,8 +1893,9 @@ async def _create_prepared_task_once(svc, prepared, candidate_context, *, attemp
                     return
                 eio.append_event(Path(attempt), "late_task_id", task_id=str(tid),
                                  generation_id=generation_id)
-        except Exception:  # noqa: BLE001 - 落盘失败不阻断主流程（主协程仍按 unknown 记）
-            pass
+        except Exception as _degrade_exc:  # noqa: BLE001 - 落盘失败不阻断主流程（主协程仍按 unknown 记）
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step02_video_gen/submit_poll.py:_persist_late", _degrade_exc)
 
     cfut.add_done_callback(_persist_late)
     try:

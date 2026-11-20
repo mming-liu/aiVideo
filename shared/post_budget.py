@@ -310,11 +310,12 @@ def _file_lock(path: Path):
 
 def _event(event_name: str, kind: str, request_id: str | None, **fields) -> None:
     """请求事件是证据，不是发送前提：任何异常都不得改变预算语义."""
+    from shared import request_events
     try:
-        from shared import request_events
         request_events.emit(event_name, request_id=request_id or "", kind=kind, **fields)
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("shared/post_budget.py:_event", _degrade_exc)
 
 
 def acquire(kind: str, amount: int = 1, request_id: str | None = None) -> int:

@@ -249,11 +249,12 @@ def _check_fps_consistency(script: dict) -> None:
     在 _compute_timecodes 之后调用——timeline 此时才存在。分镜时长 × fps 若
     不对齐整数帧，视频生成会多/少一帧导致卡顿。只 WARN 不阻断。
     """
+    from shared.style_prefix import validate_fps_consistency
     try:
-        from shared.style_prefix import validate_fps_consistency
         validate_fps_consistency(script)
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/main.py:_check_fps_consistency", _degrade_exc)
 
 
 # ============================================================================
@@ -3175,11 +3176,12 @@ def _record_audit_diag(audit: "dict | None", *, phase: str, round_index: int,
     if reuse_source:
         rec["reuse_source"] = str(reuse_source)
     if not rec["input_revision"] and script is not None:
+        from shared.quality_gate import compute_script_revision
         try:
-            from shared.quality_gate import compute_script_revision
             rec["input_revision"] = compute_script_revision(script)
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/main.py:_record_audit_diag", _degrade_exc)
     try:
         from shared.json_io import atomic_dump_json
         path = CHAPTER_DIR / _AUDIT_DIAG_NAME
@@ -3826,14 +3828,15 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
 
     # M2.3 / CP2（2026-11-16）：**候选已生成并 finalize**——阶段边界即落盘。
     # 之后任何阶段被预算/网络/上限拦下，都不必重新生成正文。
+    from shared import step01_checkpoint as _ckpt
     try:
-        from shared import step01_checkpoint as _ckpt
         summary["checkpoint_cp2"] = _ckpt.write(
             CHAPTER_DIR, _ckpt.CP2_CANDIDATE_GENERATED, script=script,
             extra={"run_id": run_id, "label": label,
                    "source_revision": source_revision}, log=_logger)
-    except Exception:                              # noqa: BLE001
-        pass
+    except Exception as _degrade_exc:  # noqa: BLE001
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/main.py:_commit_step01_outputs", _degrade_exc)
 
     # v6.125（用户 2026-09-25 决定，第 1 项）：BLOCK 时必须**同时**登记「进入提交点
     # 的原稿 revision」。
@@ -4179,14 +4182,15 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         # M2.3 / CP3（2026-11-16）：**首轮审计完成**——阶段边界即落盘（含复用轮）。
         # 只记首轮：后续轮次由 CP4（修复轮）承担，避免同一份稿反复写大文件。
         if _attempt == 0:
+            from shared import step01_checkpoint as _ckpt
             try:
-                from shared import step01_checkpoint as _ckpt
                 summary["checkpoint_cp3"] = _ckpt.write(
                     CHAPTER_DIR, _ckpt.CP3_INITIAL_AUDIT_DONE, script=script,
                     audit=audit, extra={"run_id": run_id, "round": 1,
                                         "reused": bool(_audit_reused)}, log=_logger)
-            except Exception:                      # noqa: BLE001
-                pass
+            except Exception as _degrade_exc:  # noqa: BLE001
+                from shared.degrade import note_degraded as _note_degraded
+                _note_degraded("step01_script_gen/main.py:_commit_step01_outputs", _degrade_exc)
         # blocking = 审计条目 ∪ 确定性质量门条目（两者都必须被修掉才算通过）
         if _contracts_ok:
             _downgraded = _downgrade_locked_only_audit_issues(audit, contracts_ok=True)
@@ -4848,11 +4852,12 @@ def _ensure_hook_quality(script: dict, *, novel_text: str, bank=None,
         validate_hook(script["hook"], script.get("characters", []))
     except Exception as _e:
         _logger.warn(f"[WARN] 重生钩子修复/校验异常（不阻断）: {_e}")
+    from step01_script_gen.timecode import sync_hook_timeline as _sync_hk
     try:
-        from step01_script_gen.timecode import sync_hook_timeline as _sync_hk
         _sync_hk(script)
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/main.py:_ensure_hook_quality", _degrade_exc)
     remaining = _collect_hook_issues(script)
     _metrics_set("hook.final_issues", len(remaining))
     # v6.84（09-21 重跑发现）：钩子时长可能在门内被改（`sync_hook_timeline` 按
@@ -11257,14 +11262,15 @@ def _persist_repair_round(script: dict, *, round_no: int, audit: "dict | None" =
         })
         _adj(snap_dir / REPAIR_ROUND_POINTER, rec, ensure_ascii=False, indent=2)
         # M2.3 / CP4：第 k 轮修复已完成——同一份稿同时进检查点索引
+        from shared import step01_checkpoint as _ckpt
         try:
-            from shared import step01_checkpoint as _ckpt
             rec["checkpoint"] = _ckpt.write(
                 OUTPUT_FILE.parent, _ckpt.CP4_REPAIR_ROUND_K_DONE, script=script,
                 audit=audit, round_no=int(round_no),
                 extra={"run_id": _step01_run_id()}, log=_logger)
-        except Exception:                          # noqa: BLE001
-            pass
+        except Exception as _degrade_exc:  # noqa: BLE001
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/main.py:_persist_repair_round", _degrade_exc)
         # M-A2（2026-11-17）：写**双块恢复清单**——`audited`（旧审计只证明那一份稿）
         # + `pending_candidate`（本轮采纳稿，`requires_fresh_audit=true`）+ `next_action`。
         # 这样"从待复审稿恢复"是一条有据可查的路径，而不是靠人记"快照在 snapshots/"。
@@ -12291,11 +12297,12 @@ def _generate_script_candidates(
         # 2026-11-07（P1-5，候选解析入口）：按**实际旁白落点**校正 plan_refs——只改
         # 声明、不改正文。必须在绑定身份之后（复核要机器读得懂 plan_id），并且
         # 只有「复核违例数不上升」时才保留（见 normalize_plan_refs 内的回滚闸门）。
+        from step01_script_gen.plan_feasibility import normalize_plan_refs as _norm_refs
         try:
-            from step01_script_gen.plan_feasibility import normalize_plan_refs as _norm_refs
             _norm_refs(_cand, outline)
-        except Exception:
-            pass
+        except Exception as _degrade_exc:
+            from shared.degrade import note_degraded as _note_degraded
+            _note_degraded("step01_script_gen/main.py:_gen_one_candidate", _degrade_exc)
         try:
             _ct_ok, _ct_viol, _ct_declared = check_event_contract(
                 _cand, outline, require_declaration=True)
@@ -13407,11 +13414,12 @@ def main() -> None:
     _timing_start()  # v6.70.3: 阶段计时起点（拿锁成功 = 本 run 独占计时器）
     # 每次模型调用记一条**带 run_id** 的台账（2026-10-02 复核：metrics.calls 全空、
     # 日志里也没有 run_id，事后无法对账）。落点：章节目录的 step01_calls.jsonl。
+    from shared.call_ledger import set_ledger_path
     try:
-        from shared.call_ledger import set_ledger_path
         set_ledger_path(CHAPTER_DIR / "step01_calls.jsonl")
-    except Exception:
-        pass
+    except Exception as _degrade_exc:
+        from shared.degrade import note_degraded as _note_degraded
+        _note_degraded("step01_script_gen/main.py:main", _degrade_exc)
 
     try:
         # 无声视频模型告警：VIDEO_MODEL_VOICE=1（对话交给视频模型）但当前模型不生成语音时，
@@ -13660,8 +13668,8 @@ def main() -> None:
                 f"（{_best_score['detail']}）"
             )
             # 其余候选存盘供调试
+            import copy as _cp
             try:
-                import copy as _cp
                 from shared.json_io import atomic_dump_json as _adj
                 _cand_dir = CHAPTER_DIR / "candidates"
                 _cand_dir.mkdir(parents=True, exist_ok=True)
@@ -13669,8 +13677,9 @@ def main() -> None:
                     _cpath = _cand_dir / f"candidate_{_ci+1}_score{int(_cs['total'])}.json"
                     _adj(_cpath, _strip_runtime_fields(_cp.deepcopy(_cscript)),
                          ensure_ascii=False, indent=2)
-            except Exception:
-                pass
+            except Exception as _degrade_exc:
+                from shared.degrade import note_degraded as _note_degraded
+                _note_degraded("step01_script_gen/main.py:main", _degrade_exc)
 
         # ========== 差距分析（v5.0 新增）==========
         # 若差距过大，重新生成（最多2次）
