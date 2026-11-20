@@ -1779,6 +1779,9 @@ def build_claim_checks(shot: dict, frame_kind: str) -> list[dict]:
     # 的视觉断言（听香在中舱边缘/神秘人半身浸水中）。剥掉【】标记保留内容。
     text = re.sub(r"【[^】]*】", "", text)
     text = re.sub(r"identity locked[^，。]*", "", text)
+    # 尺寸锚（有来源的名称/形制/长宽）注入在组装期、不在 ff_desc 字段——此处
+    # 单独取回作为断言（船宽类失败的通用覆盖）。2026-11-13（S04）：肩宽比例
+    # 锚已删除（无来源假设），这里只回读仍存在的有源尺寸行。
     from shared.vimax_bridge import _inject_object_size_anchor
     try:
         size_line = _inject_object_size_anchor(shot, "")

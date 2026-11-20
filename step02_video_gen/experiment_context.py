@@ -48,6 +48,9 @@ def upstream_status(chapter_dir_path: Path, script: dict) -> dict:
     out = {"upstream_gate_status": "upstream_blocked",
            "upstream_audit_revision": "",
            "upstream_blocking_count": None}
+    # v6.111（审核 P2-6）：**两道门都要过**才算 eligible。只验 manifest 时
+    # 「三份产物摘要一致」成立但 quality/audit 未必 PASS，会把不 eligible 的
+    # 上游标成 eligible。与真实生成走同一对检查（`require_step01_upstream`）。
     from shared.quality_gate import require_step01_upstream
     try:
         manifest = require_step01_upstream(
