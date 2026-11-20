@@ -1007,8 +1007,8 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
         else:
             prompt = shot.get("ff_desc_final") or shot.get("lf_desc_final")
     try:
-        from shared.image_qc import (frame_identity, qc_state, sidecar_path,
-                                     write_sidecar)
+        from shared.image_qc import (frame_identity, maybe_qc_sync, qc_state,
+                                     sidecar_path, write_sidecar)
         # U4：QC 开始前记录图片摘要——写回时再次核对，期间换图则结果记 qc_stale，
         # 绝不给新图写有效 PASS。
         pre = frame_identity(frame_path)
