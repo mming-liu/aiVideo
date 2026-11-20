@@ -1,0 +1,1586 @@
+[
+ {
+  "path": ".aiVideo/update_skills.py",
+  "code": "F401",
+  "name": "json",
+  "count": 1
+ },
+ {
+  "path": ".aiVideo/update_skills.py",
+  "code": "F401",
+  "name": "os",
+  "count": 1
+ },
+ {
+  "path": ".aiVideo/update_skills.py",
+  "code": "F401",
+  "name": "skills_loader.has_local_skill",
+  "count": 1
+ },
+ {
+  "path": ".aiVideo/update_skills.py",
+  "code": "F401",
+  "name": "skills_loader.load_skill",
+  "count": 1
+ },
+ {
+  "path": "_image_gen/bailian_provider.py",
+  "code": "F401",
+  "name": "shared.error_fmt.parse_retry_after",
+  "count": 1
+ },
+ {
+  "path": "_text_gen/agent_plan_provider.py",
+  "code": "F401",
+  "name": "hashlib",
+  "count": 1
+ },
+ {
+  "path": "_text_gen/agnes_provider.py",
+  "code": "F401",
+  "name": "time",
+  "count": 1
+ },
+ {
+  "path": "_video_gen/agnes_provider.py",
+  "code": "F401",
+  "name": "mimetypes",
+  "count": 1
+ },
+ {
+  "path": "_video_gen/agnes_provider.py",
+  "code": "F401",
+  "name": "shared.paths.chapter_dir",
+  "count": 4
+ },
+ {
+  "path": "_video_gen/bailian_provider.py",
+  "code": "F401",
+  "name": "os",
+  "count": 1
+ },
+ {
+  "path": "_video_gen/bailian_provider.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "_video_gen/service.py",
+  "code": "F401",
+  "name": ".models.STATUS_PREPARED_UNSUPPORTED",
+  "count": 1
+ },
+ {
+  "path": "_video_gen/volcengine_provider.py",
+  "code": "F401",
+  "name": ".models.MaterialRef",
+  "count": 1
+ },
+ {
+  "path": "_video_gen/volcengine_provider.py",
+  "code": "F811",
+  "name": "MaterialRef",
+  "count": 1
+ },
+ {
+  "path": "_video_gen/volcengine_provider.py",
+  "code": "F811",
+  "name": "plan_image_media",
+  "count": 1
+ },
+ {
+  "path": "scene_compliance.py",
+  "code": "F401",
+  "name": "typing.Any",
+  "count": 1
+ },
+ {
+  "path": "shared/audio_identity.py",
+  "code": "F401",
+  "name": "os",
+  "count": 1
+ },
+ {
+  "path": "shared/chapter_reader.py",
+  "code": "F401",
+  "name": "os",
+  "count": 1
+ },
+ {
+  "path": "shared/character_bank.py",
+  "code": "F401",
+  "name": "os",
+  "count": 1
+ },
+ {
+  "path": "shared/character_bank.py",
+  "code": "F401",
+  "name": "re",
+  "count": 1
+ },
+ {
+  "path": "shared/content_policy_fix.py",
+  "code": "F401",
+  "name": "os",
+  "count": 1
+ },
+ {
+  "path": "shared/content_policy_fix.py",
+  "code": "F401",
+  "name": "shared.content_safety.sanitize",
+  "count": 1
+ },
+ {
+  "path": "shared/env_guard.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "shared/media_inputs.py",
+  "code": "F401",
+  "name": "shared.paths.chapter_index",
+  "count": 1
+ },
+ {
+  "path": "shared/motion_render/overlay.py",
+  "code": "F401",
+  "name": ".schema.SOURCE_KIND_FIXTURE",
+  "count": 1
+ },
+ {
+  "path": "shared/motion_render/schema.py",
+  "code": "F401",
+  "name": "shared.media_contract.MERGE_FPS",
+  "count": 1
+ },
+ {
+  "path": "shared/motion_render/schema.py",
+  "code": "F401",
+  "name": "typing.Callable",
+  "count": 1
+ },
+ {
+  "path": "shared/motion_render/schema.py",
+  "code": "F401",
+  "name": "typing.Iterable",
+  "count": 1
+ },
+ {
+  "path": "shared/quality_gate.py",
+  "code": "F401",
+  "name": "typing.Any",
+  "count": 1
+ },
+ {
+  "path": "shared/screen_cards/layout.py",
+  "code": "F401",
+  "name": "math",
+  "count": 1
+ },
+ {
+  "path": "shared/screen_cards/plan.py",
+  "code": "F401",
+  "name": ".layout.LayoutError",
+  "count": 1
+ },
+ {
+  "path": "shared/screen_cards/plan.py",
+  "code": "F401",
+  "name": ".layout.load_font",
+  "count": 1
+ },
+ {
+  "path": "shared/screen_cards/plan.py",
+  "code": "F401",
+  "name": ".layout.wrap_lines",
+  "count": 1
+ },
+ {
+  "path": "shared/screen_cards/plan.py",
+  "code": "F401",
+  "name": "os",
+  "count": 1
+ },
+ {
+  "path": "shared/screen_cards/plan.py",
+  "code": "F811",
+  "name": "LayoutError",
+  "count": 2
+ },
+ {
+  "path": "shared/screen_cards/plan.py",
+  "code": "F811",
+  "name": "os",
+  "count": 1
+ },
+ {
+  "path": "shared/style_prefix.py",
+  "code": "F401",
+  "name": "copy",
+  "count": 1
+ },
+ {
+  "path": "shared/style_prefix.py",
+  "code": "F401",
+  "name": "dataclasses.asdict",
+  "count": 1
+ },
+ {
+  "path": "shared/style_prefix.py",
+  "code": "F401",
+  "name": "dataclasses.field",
+  "count": 1
+ },
+ {
+  "path": "shared/style_prefix.py",
+  "code": "F401",
+  "name": "json",
+  "count": 1
+ },
+ {
+  "path": "shared/style_prefix.py",
+  "code": "F401",
+  "name": "shared.content_safety.SENSITIVE_SUBSTITUTIONS",
+  "count": 1
+ },
+ {
+  "path": "shared/style_prefix.py",
+  "code": "F401",
+  "name": "shared.content_safety.WEAPON_HIDDEN_WORDS",
+  "count": 1
+ },
+ {
+  "path": "shared/style_prefix.py",
+  "code": "F401",
+  "name": "shared.content_safety.WEAPON_STAB_VERBS",
+  "count": 1
+ },
+ {
+  "path": "shared/style_prefix.py",
+  "code": "F401",
+  "name": "shared.content_safety.WEAPON_VISIBLE_WORDS",
+  "count": 1
+ },
+ {
+  "path": "shared/style_prefix.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "shared/subject_state.py",
+  "code": "F401",
+  "name": "shared.vimax_bridge._KF_POSE_STATES",
+  "count": 1
+ },
+ {
+  "path": "shared/tee_logger.py",
+  "code": "F401",
+  "name": "sys",
+  "count": 1
+ },
+ {
+  "path": "shared/vimax_adapters.py",
+  "code": "F401",
+  "name": "shared.style_prefix.IMAGE_HALLUCINATION_LOCK_PROMPT",
+  "count": 1
+ },
+ {
+  "path": "shared/vimax_adapters.py",
+  "code": "F401",
+  "name": "shared.style_prefix.IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT",
+  "count": 1
+ },
+ {
+  "path": "shared/vimax_adapters.py",
+  "code": "F401",
+  "name": "shared.style_prefix.video_negative_prompt",
+  "count": 1
+ },
+ {
+  "path": "shared/vimax_adapters.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "shared/vimax_bridge.py",
+  "code": "F401",
+  "name": "asyncio",
+  "count": 1
+ },
+ {
+  "path": "shared/vimax_bridge.py",
+  "code": "F401",
+  "name": "pathlib.Path",
+  "count": 1
+ },
+ {
+  "path": "shared/vimax_bridge.py",
+  "code": "F401",
+  "name": "shared.content_safety.ACTION_RESULT_WORDS",
+  "count": 1
+ },
+ {
+  "path": "shared/vimax_bridge.py",
+  "code": "F401",
+  "name": "shared.image_qc.sidecar_path",
+  "count": 1
+ },
+ {
+  "path": "shared/vimax_bridge.py",
+  "code": "F401",
+  "name": "shared.paths.script_file",
+  "count": 1
+ },
+ {
+  "path": "shared/vimax_bridge.py",
+  "code": "F401",
+  "name": "shared.paths.vimax_working_dir",
+  "count": 1
+ },
+ {
+  "path": "shared/vimax_bridge.py",
+  "code": "F401",
+  "name": "step01_script_gen.prompt_semantic.THREAT_STAB_VERBS",
+  "count": 1
+ },
+ {
+  "path": "shared/vimax_bridge.py",
+  "code": "F401",
+  "name": "typing.List",
+  "count": 1
+ },
+ {
+  "path": "skills/seedance-2.0/scripts/eval_run.py",
+  "code": "F401",
+  "name": "sys",
+  "count": 1
+ },
+ {
+  "path": "skills/seedance-2.0/scripts/prompt_lint.py",
+  "code": "F401",
+  "name": "sys",
+  "count": 1
+ },
+ {
+  "path": "skills/seedance-2.0/scripts/validate_skills.py",
+  "code": "F401",
+  "name": "sys",
+  "count": 1
+ },
+ {
+  "path": "skills/skill-prompt-generator/core/cross_domain_generator.py",
+  "code": "F401",
+  "name": "re",
+  "count": 1
+ },
+ {
+  "path": "skills/skill-prompt-generator/core/cross_domain_generator.py",
+  "code": "F401",
+  "name": "typing.List",
+  "count": 1
+ },
+ {
+  "path": "skills/skill-prompt-generator/core/cross_domain_generator.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "skills/skill-prompt-generator/core/cross_domain_query.py",
+  "code": "F401",
+  "name": "json",
+  "count": 1
+ },
+ {
+  "path": "skills/skill-prompt-generator/core/cross_domain_query.py",
+  "code": "F401",
+  "name": "typing.Any",
+  "count": 1
+ },
+ {
+  "path": "skills/skill-prompt-generator/core/cross_domain_query.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "skills/skill-prompt-generator/core/cross_domain_query.py",
+  "code": "F401",
+  "name": "typing.Set",
+  "count": 1
+ },
+ {
+  "path": "skills/skill-prompt-generator/core/yaml_sampler.py",
+  "code": "F401",
+  "name": "typing.Any",
+  "count": 1
+ },
+ {
+  "path": "skills/skill-prompt-generator/element_db.py",
+  "code": "F401",
+  "name": "re",
+  "count": 1
+ },
+ {
+  "path": "skills/skill-prompt-generator/element_db.py",
+  "code": "F401",
+  "name": "typing.Tuple",
+  "count": 1
+ },
+ {
+  "path": "skills/skill-prompt-generator/framework_loader.py",
+  "code": "F401",
+  "name": "typing.Any",
+  "count": 1
+ },
+ {
+  "path": "skills/skill-prompt-generator/framework_loader.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/__init__.py",
+  "code": "F401",
+  "name": ".punch_density.PunchDensityConstraint",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/__init__.py",
+  "code": "F401",
+  "name": "shared.semantic_barrier.AUDIT_SEGMENT_START",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/__init__.py",
+  "code": "F811",
+  "name": "SelfReviewConstraint",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/axis_jump.py",
+  "code": "F401",
+  "name": "step01_script_gen.scene_anchors.get_scene_type",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/axis_jump.py",
+  "code": "F401",
+  "name": "step01_script_gen.scene_anchors.is_horizontal_scene",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/climax_completeness.py",
+  "code": "F401",
+  "name": "random",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/conflict_detector.py",
+  "code": "F401",
+  "name": "dataclasses.field",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/conflict_detector.py",
+  "code": "F401",
+  "name": "os",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/conflict_detector.py",
+  "code": "F401",
+  "name": "re",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/dialogue_density.py",
+  "code": "F401",
+  "name": ".dialogue_grounding._extract_dialogue_in_range",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/dialogue_density.py",
+  "code": "F401",
+  "name": ".dialogue_grounding._locate_shot_in_novel",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/dsl/loader.py",
+  "code": "F401",
+  "name": "pathlib.Path",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/dsl/loader.py",
+  "code": "F401",
+  "name": "sys",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/dsl/loader.py",
+  "code": "F401",
+  "name": "typing.Any",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/final_quality_normalizer.py",
+  "code": "F401",
+  "name": "shared.utils.text.text_integrity_errors",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/framing_prefix_fill.py",
+  "code": "F401",
+  "name": "re",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/framing_variety.py",
+  "code": "F401",
+  "name": "re",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/kf_event_order.py",
+  "code": "F401",
+  "name": "re",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/kf_event_order.py",
+  "code": "F401",
+  "name": "shared.kf_time.get_kf_t_sec",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/kf_event_order.py",
+  "code": "F401",
+  "name": "shared.kf_time.set_kf_t_sec",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/kf_event_order.py",
+  "code": "F401",
+  "name": "step01_script_gen.kf_coverage.clean",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/kf_event_order.py",
+  "code": "F401",
+  "name": "step01_script_gen.kf_coverage.closeness",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/kf_event_order.py",
+  "code": "F401",
+  "name": "step01_script_gen.kf_coverage.event_overlap",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/kf_event_order.py",
+  "code": "F401",
+  "name": "step01_script_gen.kf_coverage.in_window",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/kf_event_order.py",
+  "code": "F401",
+  "name": "step01_script_gen.kf_coverage.match_score",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/kf_event_order.py",
+  "code": "F401",
+  "name": "step01_script_gen.kf_coverage.segments",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/opening_empty_shot_cap.py",
+  "code": "F401",
+  "name": "copy",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/opening_empty_shot_insert.py",
+  "code": "F401",
+  "name": "copy",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/regen_trigger.py",
+  "code": "F401",
+  "name": ".types.Severity",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/v6_43_prompt_enforcement.py",
+  "code": "F401",
+  "name": "step01_script_gen.prompt_semantic.HANDLE_PROPS",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/v6_43_prompt_enforcement.py",
+  "code": "F401",
+  "name": "step01_script_gen.scene_anchors.get_scene_type",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/constraints/v6_43_prompt_enforcement.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/content_verify.py",
+  "code": "F401",
+  "name": "shared.content_verification.DISPLAY_TASK_SCHEMA",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/content_verify.py",
+  "code": "F401",
+  "name": "shared.content_verification.display_carriers",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/content_verify.py",
+  "code": "F401",
+  "name": "shared.content_verification.expected_obligations",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/content_verify.py",
+  "code": "F401",
+  "name": "shared.content_verification.record_shape_problems",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/content_verify.py",
+  "code": "F401",
+  "name": "step01_script_gen.outline.create_service",
+  "count": 2
+ },
+ {
+  "path": "step01_script_gen/content_verify.py",
+  "code": "F811",
+  "name": "PresentationContractError",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/gap_analysis.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F401",
+  "name": "contextlib.redirect_stdout",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F401",
+  "name": "itertools",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F401",
+  "name": "json",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F401",
+  "name": "shared.config.BOOK_INDEX",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F401",
+  "name": "shared.config.COMPLIANCE_STRICT",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F401",
+  "name": "shutil",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F401",
+  "name": "step01_script_gen.asset_extractor.extract_props",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F401",
+  "name": "step01_script_gen.asset_extractor.extract_scene_assets",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F401",
+  "name": "step01_script_gen.object_extractor.extract_scene_objects",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F401",
+  "name": "step01_script_gen.prompts._load_local_skill_context",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F811",
+  "name": "_is_structural_code",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F811",
+  "name": "_target_id_of",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F811",
+  "name": "build_hook_prompt",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F811",
+  "name": "build_prompt",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/main.py",
+  "code": "F811",
+  "name": "validate_repair_targets",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/outline.py",
+  "code": "F401",
+  "name": "shared.config.DURATION_MAX_SEC",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/outline.py",
+  "code": "F401",
+  "name": "shared.config.DURATION_MIN_SEC",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/outline.py",
+  "code": "F401",
+  "name": "shared.presentation_contract.MODE_HYBRID",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/outline.py",
+  "code": "F401",
+  "name": "shared.presentation_contract.plan_basis",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/outline.py",
+  "code": "F401",
+  "name": "shared.presentation_contract.ref_uid",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/outline.py",
+  "code": "F401",
+  "name": "shared.presentation_contract.view_problems",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/outline.py",
+  "code": "F401",
+  "name": "step01_script_gen.plan_content_repair",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/outline.py",
+  "code": "F401",
+  "name": "step01_script_gen.plan_feasibility.REPLAN_OP_KEYS",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/outline.py",
+  "code": "F401",
+  "name": "step01_script_gen.plan_feasibility.evaluate_plan",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/outline.py",
+  "code": "F401",
+  "name": "step01_script_gen.plan_feasibility.plan_contract_problems",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/outline.py",
+  "code": "F401",
+  "name": "step01_script_gen.plan_feasibility.plan_narration_entries",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/outline.py",
+  "code": "F811",
+  "name": "plan_contract_problems",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/plan_content_repair.py",
+  "code": "F401",
+  "name": "shared.presentation_contract.KIND_DIALOGUE",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/plan_content_repair.py",
+  "code": "F401",
+  "name": "shared.presentation_contract.KIND_NARRATION",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/plan_content_repair.py",
+  "code": "F401",
+  "name": "shared.presentation_contract.ref_uid",
+  "count": 3
+ },
+ {
+  "path": "step01_script_gen/plan_feasibility.py",
+  "code": "F401",
+  "name": "step01_script_gen.timecode.MIN_SHOT_DURATION",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/entities.py",
+  "code": "F401",
+  "name": "dataclasses.replace",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/extractor.py",
+  "code": "F401",
+  "name": ".entities.REL_BELOW",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/extractor.py",
+  "code": "F401",
+  "name": ".entities.REL_INSIDE",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/extractor.py",
+  "code": "F401",
+  "name": ".registry.THREAT_KEYWORDS",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/extractor.py",
+  "code": "F401",
+  "name": ".registry.WEAPON_KEYWORDS",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/extractor.py",
+  "code": "F401",
+  "name": ".registry.classify_pose",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/extractor.py",
+  "code": "F401",
+  "name": ".registry.get_surfaces",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/extractor.py",
+  "code": "F401",
+  "name": ".registry.is_known_prop",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/extractor.py",
+  "code": "F401",
+  "name": "re",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/extractor.py",
+  "code": "F401",
+  "name": "step01_script_gen.scene_anchors.BASE_POS_WORDS",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/extractor.py",
+  "code": "F401",
+  "name": "step01_script_gen.scene_anchors.scene_anchors_for",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/extractor.py",
+  "code": "F401",
+  "name": "typing.Tuple",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": ".entities.PROP_STATE_DROPPED",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": ".entities.PROP_STATE_FLOATING",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": ".entities.PROP_STATE_HANGING",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": ".entities.PROP_STATE_HELD",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": ".entities.PROP_STATE_LEANING",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": ".entities.Prop",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": ".entities.REL_ABOVE",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": ".entities.REL_FLOAT",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": ".entities.REL_IN_WATER",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": ".entities.REL_ON",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": ".entities.SpatialRelation",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": ".registry.classify_pose",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": ".registry.get_surfaces",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": ".registry.is_weapon_name",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/prompt_semantic/physics.py",
+  "code": "F401",
+  "name": "dataclasses.field",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/quality_issues.py",
+  "code": "F401",
+  "name": "shared.content_safety.WEAPON_WORDS",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/quality_issues.py",
+  "code": "F401",
+  "name": "typing.Iterable",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/repair_effects.py",
+  "code": "F401",
+  "name": "typing.Any",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "math",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "re",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "shared.constants.DEFAULT_VIDEO_DURATION_FALLBACK",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "shared.kf_time.is_middle_kf",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "shared.kf_time.set_kf_stage",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "shared.kf_time.set_kf_t_sec",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "shared.kf_time.sort_kfs_by_t",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "shared.kf_time.stage_to_index",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "shared.motion_segments.TIME_SEG_RE",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "shared.motion_segments.mentions_duration",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "step01_script_gen.prompt_semantic.BLOOD_STATE_WORDS",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "step01_script_gen.prompt_semantic.INJURY_ANCHOR_TAIL",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "step01_script_gen.prompt_semantic.INJURY_ANCHOR_WORDS",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "step01_script_gen.prompt_semantic.PROP_REGISTRY",
+  "count": 1
+ },
+ {
+  "path": "step01_script_gen/validation.py",
+  "code": "F401",
+  "name": "step01_script_gen.prompt_semantic.STRONG_INJURY_ANCHORS",
+  "count": 1
+ },
+ {
+  "path": "step02_video_gen/execution_requirements.py",
+  "code": "F401",
+  "name": "shared.model_caps.active_video_model",
+  "count": 1
+ },
+ {
+  "path": "step02_video_gen/prompt_builder.py",
+  "code": "F401",
+  "name": "shared.style_prefix",
+  "count": 1
+ },
+ {
+  "path": "step02_video_gen/prompt_builder.py",
+  "code": "F401",
+  "name": "tts.voice_registry.AVAILABLE_VOICES",
+  "count": 1
+ },
+ {
+  "path": "step02_video_gen/submit_poll.py",
+  "code": "F401",
+  "name": "shared.config.VIDEO_CONCURRENCY",
+  "count": 1
+ },
+ {
+  "path": "step02_video_gen/submit_poll.py",
+  "code": "F401",
+  "name": "shared.constants.VIDEO_SUBMIT_RETRIES",
+  "count": 1
+ },
+ {
+  "path": "step02_video_gen/submit_poll.py",
+  "code": "F401",
+  "name": "step02_video_gen.prompt_builder._build_prompt",
+  "count": 1
+ },
+ {
+  "path": "step02_video_gen/submit_poll.py",
+  "code": "F401",
+  "name": "step02_video_gen.prompt_builder._make_request",
+  "count": 1
+ },
+ {
+  "path": "step02a_frame_gen/main.py",
+  "code": "F401",
+  "name": "json",
+  "count": 1
+ },
+ {
+  "path": "step02a_frame_gen/main.py",
+  "code": "F401",
+  "name": "shared.paths.script_file",
+  "count": 1
+ },
+ {
+  "path": "step02a_frame_gen/main.py",
+  "code": "F401",
+  "name": "shared.paths.vimax_working_dir",
+  "count": 1
+ },
+ {
+  "path": "step02a_frame_gen/main.py",
+  "code": "F811",
+  "name": "script_file",
+  "count": 1
+ },
+ {
+  "path": "step02b_video_gen/main.py",
+  "code": "F401",
+  "name": "step02_video_gen.submit_poll.build_prepared_facts",
+  "count": 1
+ },
+ {
+  "path": "step03_tts_audio/main.py",
+  "code": "F401",
+  "name": "step01_script_gen.plan_feasibility.plan_narration_entries",
+  "count": 1
+ },
+ {
+  "path": "step03_tts_audio/main.py",
+  "code": "F401",
+  "name": "step03_tts_audio.cli.ENV_CANDIDATE_ROOT",
+  "count": 1
+ },
+ {
+  "path": "step03_tts_audio/shot_tts.py",
+  "code": "F401",
+  "name": "shared.dialogue.strip_speaker_prefix",
+  "count": 1
+ },
+ {
+  "path": "step03_tts_audio/shot_tts.py",
+  "code": "F401",
+  "name": "time",
+  "count": 1
+ },
+ {
+  "path": "step03_tts_audio/shot_tts.py",
+  "code": "F401",
+  "name": "tts.voice_registry.AVAILABLE_VOICES",
+  "count": 1
+ },
+ {
+  "path": "step04_merge/backends/ffmpeg.py",
+  "code": "F401",
+  "name": "shared.media_contract.quantize_frame_count",
+  "count": 1
+ },
+ {
+  "path": "step04_merge/main.py",
+  "code": "F401",
+  "name": "shared.json_io.discard_json_swap",
+  "count": 1
+ },
+ {
+  "path": "step04_merge/main.py",
+  "code": "F401",
+  "name": "shared.media_contract.LEGAL_XFADE_TRANSITIONS",
+  "count": 1
+ },
+ {
+  "path": "step04_merge/main.py",
+  "code": "F401",
+  "name": "shared.paths.audio_file",
+  "count": 2
+ },
+ {
+  "path": "step04_merge/main.py",
+  "code": "F401",
+  "name": "shared.paths.clip_file",
+  "count": 1
+ },
+ {
+  "path": "step04_merge/main.py",
+  "code": "F401",
+  "name": "subprocess",
+  "count": 1
+ },
+ {
+  "path": "step04_merge/main.py",
+  "code": "F811",
+  "name": "audio_file",
+  "count": 2
+ },
+ {
+  "path": "step04_merge/main.py",
+  "code": "F811",
+  "name": "clip_file",
+  "count": 1
+ },
+ {
+  "path": "step04_merge/screen_cards.py",
+  "code": "F401",
+  "name": "shared.screen_cards.plan.card_relations",
+  "count": 1
+ },
+ {
+  "path": "step04_merge/screen_cards.py",
+  "code": "F401",
+  "name": "shared.screen_cards.plan.segment_overlays",
+  "count": 1
+ },
+ {
+  "path": "step04_merge/timeline.py",
+  "code": "F401",
+  "name": "math",
+  "count": 1
+ },
+ {
+  "path": "tools/audit_frozen_candidate.py",
+  "code": "F401",
+  "name": "urllib.parse.urlsplit",
+  "count": 1
+ },
+ {
+  "path": "tools/bench_reasoning.py",
+  "code": "F401",
+  "name": "step01_script_gen.prompts.SYSTEM_PROMPT",
+  "count": 1
+ },
+ {
+  "path": "tools/bench_text_provider_ab.py",
+  "code": "F401",
+  "name": "re",
+  "count": 1
+ },
+ {
+  "path": "tools/build_s08_report.py",
+  "code": "F401",
+  "name": "shared.voice_preparation.build_voice_preparation",
+  "count": 1
+ },
+ {
+  "path": "tools/build_s08_report.py",
+  "code": "F401",
+  "name": "shutil",
+  "count": 1
+ },
+ {
+  "path": "tools/build_s08_report.py",
+  "code": "F401",
+  "name": "step02a_frame_gen.execution_plan.build_visual_plan",
+  "count": 1
+ },
+ {
+  "path": "tools/cache_bill.py",
+  "code": "F401",
+  "name": "hashlib",
+  "count": 1
+ },
+ {
+  "path": "tools/frame_source_table.py",
+  "code": "F401",
+  "name": "os",
+  "count": 1
+ },
+ {
+  "path": "tools/freeze_step01_evidence.py",
+  "code": "F401",
+  "name": "sys",
+  "count": 1
+ },
+ {
+  "path": "tools/production_context.py",
+  "code": "F401",
+  "name": "shared.quality_gate.QualityGateError",
+  "count": 1
+ },
+ {
+  "path": "tools/run_step01_from_verified_plan.py",
+  "code": "F401",
+  "name": "shared.send_cap.is_hook_request",
+  "count": 1
+ },
+ {
+  "path": "tools/tts_candidate.py",
+  "code": "F401",
+  "name": "step03_tts_audio.shot_tts.current_scope",
+  "count": 1
+ },
+ {
+  "path": "tools/verify_merge_timeline.py",
+  "code": "F401",
+  "name": "step04_merge.srt_gen.build_srt_plan",
+  "count": 1
+ },
+ {
+  "path": "tts/synthesis_job.py",
+  "code": "F401",
+  "name": "tts.models.KIND_DIALOGUE",
+  "count": 1
+ },
+ {
+  "path": "tts/voice_design.py",
+  "code": "F401",
+  "name": "dataclasses.field",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/_int_coerce.py",
+  "code": "F401",
+  "name": "typing.List",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/camera.py",
+  "code": "F401",
+  "name": "typing.Any",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/camera.py",
+  "code": "F401",
+  "name": "typing.Dict",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/camera.py",
+  "code": "F401",
+  "name": "typing.Tuple",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/camera.py",
+  "code": "F401",
+  "name": "typing.Union",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/character.py",
+  "code": "F401",
+  "name": "PIL.Image",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/character.py",
+  "code": "F401",
+  "name": "typing.List",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/character.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/character.py",
+  "code": "F401",
+  "name": "typing.Union",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/environment.py",
+  "code": "F401",
+  "name": "PIL.Image",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/environment.py",
+  "code": "F401",
+  "name": "typing.Dict",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/environment.py",
+  "code": "F401",
+  "name": "typing.List",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/environment.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/environment.py",
+  "code": "F401",
+  "name": "typing.Union",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/event.py",
+  "code": "F401",
+  "name": "typing.Dict",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/event.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/event.py",
+  "code": "F401",
+  "name": "typing.Union",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/frame.py",
+  "code": "F401",
+  "name": "typing.Dict",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/frame.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/frame.py",
+  "code": "F401",
+  "name": "typing.Tuple",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/frame.py",
+  "code": "F401",
+  "name": "typing.Union",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/image_output.py",
+  "code": "F401",
+  "name": "typing.List",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/image_output.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/scene.py",
+  "code": "F401",
+  "name": "typing.Literal",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/scene.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/scene.py",
+  "code": "F401",
+  "name": "typing.Tuple",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/shot_description.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/shot_description.py",
+  "code": "F401",
+  "name": "typing.Tuple",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/video_output.py",
+  "code": "F401",
+  "name": "PIL.Image",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/video_output.py",
+  "code": "F401",
+  "name": "asyncio",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/video_output.py",
+  "code": "F401",
+  "name": "typing.List",
+  "count": 1
+ },
+ {
+  "path": "vimax/interfaces/video_output.py",
+  "code": "F401",
+  "name": "typing.Optional",
+  "count": 1
+ }
+]

@@ -1,0 +1,2 @@
+# 开发 / 门禁依赖（不进运行环境）。安装：pip install -r requirements-dev.txt
+ruff==0.17.5
