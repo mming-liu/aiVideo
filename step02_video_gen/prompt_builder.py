@@ -1766,7 +1766,8 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
     # r2v 若不传首帧，视频模型只能拿场景资产图+站姿肖像自由发挥构图，
     # 造成时间错（黄昏）、船大小错、人物缺失、动作假跳（code-audit 08-05）。
     # 首帧存在时以它为构图锚点，并在组装时替代场景资产图的环境锚定（避免时间冲突）。
-    composition_refs: list[str] = []
+    composition_refs: list[str] = []          # 只放真实首帧
+    identity_fallback_refs: list[str] = []    # 首帧缺失时的肖像兜底（身份参考）
     try:
         from shared.paths import first_frame_file as _fff
         from shared.paths import vimax_working_dir
@@ -1780,12 +1781,17 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
             # 人物缺失、动作假跳）。_find_fallback_reference 已写好但从未接线，这里
             # 在首帧缺失时调用它：从角色注册表找本镜出镜角色的肖像作构图锚点
             # （空镜返回 None，降级纯文生视频）。
+            #
+            # 2026-11-19 复核 P2：肖像只能提供**身份/外观**，提供不了当前场景、时间
+            # 与动作起点。它不能占首帧构图锚点的位置，也不能让场景资产图被排除——
+            # 否则首帧缺失时最终参考只剩一张肖像。兜底肖像改记为身份参考，进角色组。
             _fallback = _find_fallback_reference(
                 vimax_working_dir(), shot=shot, characters=characters or [],
             )
             if _fallback:
-                composition_refs = [_fallback]
-                _log_r2v_collect(f"  首帧缺失，fallback 参考图: {Path(_fallback).name}")
+                identity_fallback_refs = [_fallback]
+                _log_r2v_collect(f"  首帧缺失，身份兜底参考图: {Path(_fallback).name}"
+                                 f"（只作外观参考，场景资产图照常注入）")
     except Exception as e:
         _log_r2v_collect(f"  首帧构图锚点收集异常: {e}")
 
@@ -1980,7 +1986,7 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
     buckets = [
         ("scene", ([scene_refs[0]] if scene_refs and not composition_refs else [])
          + list(space_refs)),
-        ("chars", list(char_refs)),
+        ("chars", list(dict.fromkeys(identity_fallback_refs + list(char_refs)))),
         ("props", list(prop_refs)),
     ]
     # 2026-11-13（F2）：拼表目录**不得**是生产 `shots/`——plan-only/候选运行也会
