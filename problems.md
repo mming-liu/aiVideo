@@ -22,7 +22,7 @@
 > KF 时序、拆镜与索引、硬修复幂等），可按根因查；但**不要**据它判断"当前还有什么问题"。
 > 文末新增「2026-10-01 现状与 plan carrier 判据复核」一节，记录晚于 09-30 的读数与结论。
 
-> ✅ **引用路径更正（2026-10-01 复核第 15 轮）**：本文与 `TODOLIST.md` 引用的 `memory/*.md`
+> ✅ **引用路径更正（2026-10-01 复核第 15 轮）**：本文与 `todolist.md` 引用的 `memory/*.md`
 > **并未丢失**——它们不在**仓库**里，而在 **Claude 项目级记忆目录**：
 > `~/.claude/projects/C--myFloders-git-aiVideo/memory/`（绝对路径 `C:\Users\<用户>\.claude\projects\C--myFloders-git-aiVideo\memory\`）。
 > 此前判成「已缺失」，是因为只查了仓库、`git ls-files memory` 与**用户级** `~/.claude/memory`

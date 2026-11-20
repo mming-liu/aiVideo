@@ -95,7 +95,7 @@
 - 网文 1 章 ≠ 红果 1 集：密集章拆 2-3 集、水字数章合并；按冲突密度重组
 - 三阶段：LLM 能力验证（extract_section_range + 冲突密度判断）→ 多集输出+路径改造 → 入口主键迁移
 - 触发条件：A 方案跑通 2-3 章稳定 + 用户明确要求
-- （详细设计与风险表见 git 历史版 TODOLIST.md；原 `memory redguo-60-90s-episode-standard.md` **已缺失**）
+- （详细设计与风险表见 git 历史版 todolist.md；原 `memory redguo-60-90s-episode-standard.md` **已缺失**）
 
 ---
 

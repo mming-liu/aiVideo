@@ -159,7 +159,7 @@ Codex 收到执行反馈后独立核对上述交付映射，合理调整原规�
 | 章节与输出路径 | `shared/chapter_reader.py`、`shared/paths.py`、`shared/run_scope.py` |
 | 实施规则 | [CLAUDE.md](CLAUDE.md) 的职责、工作准则与工作包执行章节 |
 | 历史记忆归档（**非现状依据**） | [docs/memory-archive/README.md](docs/memory-archive/README.md)：2026-11-14 从 `.workbuddy/memory/` 与 `~/.claude/projects/C--myFloders-git-aiVideo/memory/` 全量收录的历史原文，附 [MANIFEST.md](docs/memory-archive/MANIFEST.md) 逐文件清单。用户已判定绝大部分过时/不正确，**只供历史检索**，不得据此判断当前实现、配置或授权 |
-| 问题史、待办与取证 | [problems.md](problems.md)、[TODOLIST.md](TODOLIST.md)、`docs/`、`docs/archive/`；真实运行先找对应日志和冻结产物 |
+| 问题史、待办与取证 | [problems.md](problems.md)、[todolist.md](todolist.md)、`docs/`、`docs/archive/`；真实运行先找对应日志和冻结产物 |
 | 使用说明与旧实现资料 | [README.md](README.md)、[DOCUMENTATION.md](DOCUMENTATION.md)、[原 AGENTS 项目参考记录](references/agents-project-reference.md)；涉及旧供应商决策、额度策略或历史行为时按条件查阅，再核对当前授权与实现 |
 
 文档维护时把规则放在唯一责任章节；新增限制优先合并现有规则，避免把同一含义重复追加。不在本文件累积模型参数表、现场默认值或逐轮事故记录。

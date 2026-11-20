@@ -74,7 +74,7 @@ python step04_merge/main.py
 
 ```
 小说文本 (.txt)
-    → step01__script_gen/main.py → script_result.json（分镜 + 旁白 + 角色）
+    → step01_script_gen/main.py  → script_result.json（分镜 + 旁白 + 角色）
     → step02a_frame_gen/main.py  → 首帧/尾帧/关键帧图片
     → step02b_video_gen/main.py  → vimax_working/shots/<idx>/video.mp4
     → step03_tts_audio/main.py   → audio/narration.mp3
@@ -173,9 +173,8 @@ python step04_merge/main.py
 
 | 变量 | 说明 | 默认值 |
 |-----|------|-------|
-| `FFMPEG_BIN_FFMPEG_` | FFmpeg 路径 | 系统 PATH |
+| `FFMPEG_BIN_DIR` | FFmpeg 所在目录（留空走系统 PATH） | 系统 PATH |
 | `FFMPEG_AUDIO_VOLUME` | 旁白音量增益 | `5dB` |
-| `OPENING_` | 开场标题 | `0` 关闭 |
 | `CLIP_SOURCE` | 视频来源 | `vimax` |
 | `MERGE_MODE` | 合并模式（2026-08 起仅 native） | `native` |
 | `VIDEO_MODEL_VOICE` | 视频模型自带语音（对话/背景音） | `1` |
